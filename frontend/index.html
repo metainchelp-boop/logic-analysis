@@ -210,7 +210,7 @@
                                 setShowAddModal={setShowAddModal}
                                 selectedKeyword={selectedKeyword}
                                 setSelectedKeyword={setSelectedKeyword}
-                                selectedProduct={setSelectedProduct}
+                                setSelectedProduct={setSelectedProduct}
                                 showNotification={showNotification}
                             />
                         ) : activeTab === 'realtime' ? (
@@ -251,7 +251,7 @@
 
         // ==================== 일간 랭킹추적 ====================
         function DailyTracking({ products, setProducts, showAddModal, setShowAddModal,
-                                  selectedKeyword, setSelectedKeyword, selectedProduct, showNotification }) {
+                                  selectedKeyword, setSelectedKeyword, setSelectedProduct, showNotification }) {
             return (
                 <div>
                     {/* 요약 카드 */}
