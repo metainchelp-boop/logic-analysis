@@ -2,10 +2,12 @@
 로직 분석 프로그램 v2 - 백엔드 API 서버
 FastAPI 기반
 """
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, field_validator
 from typing import Optional, List
 from datetime import datetime
 import os
@@ -36,7 +38,6 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
         # API 키 검증
         provided_key = request.headers.get("X-API-Key", "")
         if provided_key != API_KEY:
-            from fastapi.responses import JSONResponse
             return JSONResponse(
                 status_code=401,
                 content={"success": False, "error": "인증 실패: 유효한 API 키가 필요합니다."}
@@ -64,10 +65,29 @@ from kakao_notify import (
     generate_daily_report_text
 )
 
+@asynccontextmanager
+async def lifespan(app):
+    # Startup
+    missing = []
+    if not os.getenv("NAVER_CLIENT_ID"):
+        missing.append("NAVER_CLIENT_ID")
+    if not os.getenv("NAVER_CLIENT_SECRET"):
+        missing.append("NAVER_CLIENT_SECRET")
+    if missing:
+        logger.warning(f"⚠️ 필수 환경변수 미설정: {', '.join(missing)} — 순위 조회 기능이 동작하지 않습니다.")
+    if not API_KEY:
+        logger.warning("⚠️ API_KEY 미설정 — 인증 없이 모든 요청 허용됩니다. (개발 모드)")
+    init_db()
+    start_scheduler()
+    yield
+    # Shutdown
+    stop_scheduler()
+
 app = FastAPI(
     title="로직 분석 프로그램 v2",
-    description="네이버 쇴핑 키워드 분석 + 상품 노출 순위 추적",
-    version="2.0.0"
+    description="네이버 쇼핑 키워드 분석 + 상품 노출 순위 추적",
+    version="2.0.0",
+    lifespan=lifespan,
 )
 
 # CORS 설정 - 허용 도메인 제한
@@ -90,7 +110,8 @@ class ProductAddRequest(BaseModel):
     product_url: str
     keywords: List[str]
 
-    @validator('product_url')
+    @field_validator('product_url')
+    @classmethod
     def validate_url(cls, v):
         if not v or len(v) > 2000:
             raise ValueError('유효한 상품 URL을 입력하세요')
@@ -98,7 +119,8 @@ class ProductAddRequest(BaseModel):
             raise ValueError('URL은 http:// 또는 https://로 시작해야 합니다')
         return v
 
-    @validator('keywords')
+    @field_validator('keywords')
+    @classmethod
     def validate_keywords(cls, v):
         if not v or len(v) == 0:
             raise ValueError('키워드를 1개 이상 입력하세요')
@@ -114,13 +136,15 @@ class RankCheckRequest(BaseModel):
     product_url: str
     check_type: str = "realtime"  # realtime | daily
 
-    @validator('keyword')
+    @field_validator('keyword')
+    @classmethod
     def validate_keyword(cls, v):
         if not v or not v.strip() or len(v) > 100:
             raise ValueError('유효한 키워드를 입력하세요 (1~100자)')
         return v.strip()
 
-    @validator('product_url')
+    @field_validator('product_url')
+    @classmethod
     def validate_url(cls, v):
         if not v or not v.startswith(('http://', 'https://')):
             raise ValueError('유효한 상품 URL을 입력하세요')
@@ -135,7 +159,8 @@ class NotificationSettingsRequest(BaseModel):
     receiver_phone: Optional[str] = None
     report_time: Optional[str] = None  # "HH:MM" 형식
 
-    @validator('receiver_phone')
+    @field_validator('receiver_phone')
+    @classmethod
     def validate_phone(cls, v):
         if v is not None and v != "":
             cleaned = re.sub(r'[^0-9]', '', v)
@@ -143,7 +168,8 @@ class NotificationSettingsRequest(BaseModel):
                 raise ValueError('유효한 전화번호 형식이 아닙니다 (예: 01012345678)')
         return v
 
-    @validator('report_time')
+    @field_validator('report_time')
+    @classmethod
     def validate_report_time(cls, v):
         if v is not None and v != "":
             match = re.match(r'^(\d{1,2}):(\d{2})$', v)
@@ -156,26 +182,6 @@ class NotificationSettingsRequest(BaseModel):
 
 
 # ==================== API 엔드포인트 ====================
-
-@app.on_event("startup")
-async def startup():
-    # 환경변수 검증
-    missing = []
-    if not os.getenv("NAVER_CLIENT_ID"):
-        missing.append("NAVER_CLIENT_ID")
-    if not os.getenv("NAVER_CLIENT_SECRET"):
-        missing.append("NAVER_CLIENT_SECRET")
-    if missing:
-        logger.warning(f"⚠️ 필수 환경변수 미설정: {', '.join(missing)} — 순위 조회 기능이 동작하지 않습니다.")
-    if not API_KEY:
-        logger.warning("⚠️ API_KEY 미설정 — 인증 없이 모든 요청 허용됩니다. (개발 모드)")
-
-    init_db()
-    start_scheduler()
-
-@app.on_event("shutdown")
-async def shutdown():
-    stop_scheduler()
 
 
 # --- 실시간 순위 조회 ---
@@ -251,8 +257,8 @@ async def track_product(req: ProductAddRequest, background_tasks: BackgroundTask
         raise HTTPException(status_code=500, detail=f"상품 등록 실패: {str(e)}")
 
 
-async def run_initial_rank_check(product_id: int, product_url: str, keyword_ids: List[dict]):
-    """초기 순위 체크 (백그라운드)"""
+def run_initial_rank_check(product_id: int, product_url: str, keyword_ids: List[dict]):
+    """초기 순위 체크 (백그라운드 - sync로 실행하여 스레드풀 활용)"""
     for kw_info in keyword_ids:
         try:
             rank, page, competitors = find_product_rank(
@@ -271,7 +277,7 @@ async def run_initial_rank_check(product_id: int, product_url: str, keyword_ids:
             if competitors:
                 save_competitor_snapshot(kw_info["keyword_id"], competitors[:5])
         except Exception as e:
-            print(f"초기 순위 체크 실패 [{kw_info['keyword']}]: {e}")
+            logger.error(f""초기 순위 체크 실패 [{kw_info['keyword']}]: {e}")
 
 
 # --- 추적 상품 목록 ---
@@ -307,6 +313,7 @@ async def add_keyword(req: KeywordAddRequest):
 @app.get("/api/rank/history/{keyword_id}")
 async def rank_history(keyword_id: int, days: int = 30):
     """키워드별 순위 변동 이력 (최근 N일)"""
+    days = min(max(days, 1), 365)
     history = get_ranking_history(keyword_id, days=days)
     return {"success": True, "data": history}
 
@@ -409,6 +416,7 @@ async def test_notification():
 @app.get("/api/notify/logs")
 async def notify_logs(limit: int = 20):
     """알림 발송 이력 조회"""
+    limit = min(max(limit, 1), 100)
     logs = get_notification_logs(limit)
     return {"success": True, "data": logs}
 
