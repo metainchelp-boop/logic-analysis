@@ -93,15 +93,21 @@ def search_naver_shopping_api(keyword: str, display: int = 100, start: int = 1, 
         "X-Naver-Client-Secret": NAVER_CLIENT_SECRET,
     }
 
-    try:
-        response = requests.get(url, params=params, headers=headers, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        logger.info(f"API 검색 '{keyword}': {data.get('total', 0)}건 중 {len(data.get('items', []))}건 조회")
-        return data
-    except requests.exceptions.RequestException as e:
-        logger.error(f"네이버 API 요청 실패: {e}")
-        return {"error": str(e), "items": [], "total": 0}
+    max_retries = 2
+    for attempt in range(max_retries + 1):
+        try:
+            response = requests.get(url, params=params, headers=headers, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            logger.info(f"API 검색 '{keyword}': {data.get('total', 0)}건 중 {len(data.get('items', []))}건 조회")
+            return data
+        except requests.exceptions.RequestException as e:
+            if attempt < max_retries:
+                logger.warning(f"네이버 API 재시도 ({attempt + 1}/{max_retries}): {e}")
+                time.sleep(0.5 * (attempt + 1))
+            else:
+                logger.error(f"네이버 API 요청 실패 (재시도 소진): {e}")
+                return {"error": str(e), "items": [], "total": 0}
 
 
 def _parse_api_item(item: Dict, rank: int) -> Dict:
@@ -318,33 +324,39 @@ def get_keyword_volume(keywords: List[str]) -> List[Dict]:
         "showDetail": "1",
     }
 
-    try:
-        response = requests.get(url, params=params, headers=headers, timeout=10)
-        response.raise_for_status()
-        data = response.json()
+    max_retries = 2
+    for attempt in range(max_retries + 1):
+        try:
+            response = requests.get(url, params=params, headers=headers, timeout=10)
+            response.raise_for_status()
+            data = response.json()
 
-        results = []
-        keyword_data_list = data.get("keywordList", [])
-        for kd in keyword_data_list:
-            # 요청한 키워드만 필터 (연관 키워드 제외)
-            rel_keyword = kd.get("relKeyword", "")
-            if rel_keyword in keywords:
-                results.append({
-                    "keyword": rel_keyword,
-                    "monthlyPcQcCnt": _safe_int(kd.get("monthlyPcQcCnt")),
-                    "monthlyMobileQcCnt": _safe_int(kd.get("monthlyMobileQcCnt")),
-                    "monthlyAvePcClkCnt": _safe_float(kd.get("monthlyAvePcClkCnt")),
-                    "monthlyAveMobileClkCnt": _safe_float(kd.get("monthlyAveMobileClkCnt")),
-                    "plAvgDepth": _safe_int(kd.get("plAvgDepth")),
-                    "compIdx": kd.get("compIdx", ""),
-                })
+            results = []
+            keyword_data_list = data.get("keywordList", [])
+            for kd in keyword_data_list:
+                # 요청한 키워드만 필터 (연관 키워드 제외)
+                rel_keyword = kd.get("relKeyword", "")
+                if rel_keyword in keywords:
+                    results.append({
+                        "keyword": rel_keyword,
+                        "monthlyPcQcCnt": _safe_int(kd.get("monthlyPcQcCnt")),
+                        "monthlyMobileQcCnt": _safe_int(kd.get("monthlyMobileQcCnt")),
+                        "monthlyAvePcClkCnt": _safe_float(kd.get("monthlyAvePcClkCnt")),
+                        "monthlyAveMobileClkCnt": _safe_float(kd.get("monthlyAveMobileClkCnt")),
+                        "plAvgDepth": _safe_int(kd.get("plAvgDepth")),
+                        "compIdx": kd.get("compIdx", ""),
+                    })
 
-        logger.info(f"키워드 볼륨 조회: {len(results)}/{len(keywords)}건")
-        return results
+            logger.info(f"키워드 볼륨 조회: {len(results)}/{len(keywords)}건")
+            return results
 
-    except requests.exceptions.RequestException as e:
-        logger.error(f"검색광고 API 요청 실패: {e}")
-        return []
+        except requests.exceptions.RequestException as e:
+            if attempt < max_retries:
+                logger.warning(f"검색광고 API 재시도 ({attempt + 1}/{max_retries}): {e}")
+                time.sleep(0.5 * (attempt + 1))
+            else:
+                logger.error(f"검색광고 API 요청 실패 (재시도 소진): {e}")
+                return []
 
 
 def _safe_int(val) -> int:
@@ -368,7 +380,14 @@ def _safe_float(val) -> float:
         return float(val)
     if isinstance(val, str):
         cleaned = re.sub(r'[^0-9.]', '', val)
-        return float(cleaned) if cleaned else 0.0
+        # 다중 소수점 방지: 첫 번째 소수점만 유지
+        parts = cleaned.split('.')
+        if len(parts) > 2:
+            cleaned = parts[0] + '.' + ''.join(parts[1:])
+        try:
+            return float(cleaned) if cleaned else 0.0
+        except ValueError:
+            return 0.0
     return 0.0
 
 
