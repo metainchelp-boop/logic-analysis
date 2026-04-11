@@ -22,12 +22,29 @@ jobs:
           target: "/root/logic-analysis-deploy/"
           overwrite: true
 
-      - name: Verify deployment
+      - name: Deploy backend to VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          source: "backend/*"
+          target: "/root/logic-analysis-deploy/"
+          overwrite: true
+
+      - name: Restart backend service
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
-            ls -la /root/logic-analysis-deploy/frontend/index.html
+            cd /root/logic-analysis-deploy
+            ls -la frontend/index.html backend/
+            if [ -f docker-compose.yml ]; then
+              docker compose restart backend
+              echo "Backend container restarted at $(date)"
+            else
+              echo "No docker-compose.yml found, skipping container restart"
+            fi
             echo "Deployment successful at $(date)"
