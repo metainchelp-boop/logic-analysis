@@ -5,36 +5,44 @@ window.StrategicAnalysisSection = function StrategicAnalysisSection(props) {
   if (!recommendation) return null;
 
   return (
-    <div className="section">
+    <div className="section fade-in">
       <h2 className="section-title">🎯 1페이지 진입 전략 비교 분석</h2>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '20px', marginTop: '20px' }}>
-        <div style={{ backgroundColor: '#fff', border: '1px solid #e5e7eb', borderRadius: '12px', padding: '20px' }}>
-          <h3 style={{ fontSize: '14px', fontWeight: '600', color: '#333', marginBottom: '16px' }}>💰 가격 분석 (상위 5개)</h3>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #f0f0f0' }}>
-              <span style={{ fontSize: '13px', color: '#666' }}>평균 가격</span>
-              <span style={{ fontSize: '13px', fontWeight: '600', color: '#333' }}>{avgTop5Price}</span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #f0f0f0' }}>
-              <span style={{ fontSize: '13px', color: '#666' }}>가격 범위</span>
-              <span style={{ fontSize: '13px', fontWeight: '600', color: '#333' }}>{priceRange}</span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0' }}>
-              <span style={{ fontSize: '13px', color: '#666' }}>월간 검색량</span>
-              <span style={{ fontSize: '13px', fontWeight: '600', color: '#333' }}>{monthlyVolume}회</span>
-            </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '24px' }}>
+        {/* Price Analysis Card */}
+        <div className="score-card" style={{ borderLeftColor: '#4f46e5' }}>
+          <h4 style={{ fontSize: '14px', fontWeight: '700', color: '#1f2937', marginBottom: '16px' }}>💰 가격 분석 (상위 5개)</h4>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0' }}>
+            {[
+              { label: '평균 가격', value: avgTop5Price },
+              { label: '가격 범위', value: priceRange },
+              { label: '월간 검색량', value: monthlyVolume + '회' }
+            ].map(function(item, idx) {
+              return (
+                <div key={idx} style={{
+                  display: 'flex', justifyContent: 'space-between',
+                  padding: '10px 0',
+                  borderBottom: idx < 2 ? '1px solid #f1f5f9' : 'none'
+                }}>
+                  <span style={{ fontSize: '13px', color: '#6b7280' }}>{item.label}</span>
+                  <span style={{ fontSize: '13px', fontWeight: '700', color: '#1f2937' }}>{item.value}</span>
+                </div>
+              );
+            })}
           </div>
         </div>
 
-        <div style={{ backgroundColor: '#fff', border: '1px solid #e5e7eb', borderRadius: '12px', padding: '20px' }}>
-          <h3 style={{ fontSize: '14px', fontWeight: '600', color: '#333', marginBottom: '16px' }}>🏢 주요 브랜드/판매처</h3>
+        {/* Brand Analysis Card */}
+        <div className="score-card" style={{ borderLeftColor: '#7c3aed' }}>
+          <h4 style={{ fontSize: '14px', fontWeight: '700', color: '#1f2937', marginBottom: '16px' }}>🏢 주요 브랜드/판매처</h4>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
             {mainBrands.split(', ').map(function(brand, idx) {
               return (
                 <span key={idx} style={{
-                  padding: '6px 12px', backgroundColor: '#f0f7ff', borderRadius: '20px',
-                  fontSize: '12px', color: '#1976d2', border: '1px solid #b3d9ff'
+                  padding: '6px 14px',
+                  background: 'linear-gradient(135deg, #ede9fe, #e0e7ff)',
+                  borderRadius: '999px', fontSize: '12px', fontWeight: '600',
+                  color: '#4f46e5', border: '1px solid #c7d2fe'
                 }}>{brand}</span>
               );
             })}
@@ -42,16 +50,20 @@ window.StrategicAnalysisSection = function StrategicAnalysisSection(props) {
         </div>
       </div>
 
-      <div style={{
-        marginTop: '24px', backgroundColor: '#f0fdf4', border: '2px solid #86efac',
-        borderLeft: '6px solid #16a34a', borderRadius: '8px', padding: '16px',
-        fontSize: '13px', color: '#333', lineHeight: '1.7'
-      }}>
-        <strong style={{ display: 'block', marginBottom: '8px', color: '#16a34a', fontSize: '14px' }}>
-          📌 진입 전략 추천
-        </strong>
-        {recommendation}
+      {/* Recommendation */}
+      <div className="rec-card success">
+        <div className="rec-top">
+          <h4 style={{ color: '#065f46' }}>📌 진입 전략 추천</h4>
+          <span className="type-badge success">전략</span>
+        </div>
+        <p style={{ lineHeight: '1.7', color: '#374151' }}>{recommendation}</p>
       </div>
+
+      <style>{`
+        @media (max-width: 768px) {
+          .section > div[style*="1fr 1fr"] { grid-template-columns: 1fr !important; }
+        }
+      `}</style>
     </div>
   );
 };

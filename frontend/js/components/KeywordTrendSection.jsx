@@ -5,177 +5,98 @@ window.KeywordTrendSection = function KeywordTrendSection(props) {
   if (!mainKeyword || !subKeyword || mainVolume === undefined || subVolume === undefined) return null;
 
   const maxVolume = Math.max(mainVolume, subVolume) || 1;
-  const mainPercent = (mainVolume / maxVolume) * 100;
-  const subPercent = (subVolume / maxVolume) * 100;
+  const mainBarH = Math.max(8, (mainVolume / maxVolume) * 120);
+  const subBarH = Math.max(8, (subVolume / maxVolume) * 120);
 
-  const getDifficultyLabel = (difficulty) => {
-    if (difficulty <= 20) return '매우 낮음';
-    if (difficulty <= 40) return '낮음';
-    if (difficulty <= 60) return '중간';
-    if (difficulty <= 80) return '높음';
-    return '매우 높음';
+  var getDiffBadge = function(color) {
+    if (!color) return { bg: '#f1f5f9', text: '#64748b', label: '-' };
+    if (color === '#16a34a' || color === '#22c55e') return { bg: '#ecfdf5', text: '#059669', label: '낮음' };
+    if (color === '#f59e0b' || color === '#eab308') return { bg: '#fffbeb', text: '#d97706', label: '중간' };
+    if (color === '#dc2626' || color === '#ef4444' || color === '#ea580c') return { bg: '#fef2f2', text: '#dc2626', label: '높음' };
+    return { bg: '#f1f5f9', text: '#64748b', label: '-' };
   };
 
+  var mainBadge = getDiffBadge(mainDiffColor);
+  var subBadge = getDiffBadge(subDiffColor);
+
   return (
-    <div className="section">
+    <div className="section fade-in">
       <h2 className="section-title">📈 키워드 검색량 비교 및 진입 난이도</h2>
 
-      <div className="keyword-trend-content">
-        {/* Left: Volume Comparison */}
-        <div className="keyword-trend-left">
-          <h3 style={{ fontSize: '14px', fontWeight: '600', marginBottom: '20px', color: '#333' }}>
-            검색량 비교
-          </h3>
-
-          <div style={{ marginBottom: '28px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-              <span style={{ fontSize: '13px', fontWeight: '500', color: '#333' }}>{mainKeyword}</span>
-              <span style={{ fontSize: '13px', fontWeight: '600', color: '#1976d2' }}>{fmt(mainVolume)}</span>
-            </div>
-            <div style={{
-              width: '100%',
-              height: '24px',
-              backgroundColor: '#e3f2fd',
-              borderRadius: '4px',
-              overflow: 'hidden'
-            }}>
-              <div style={{
-                width: `${mainPercent}%`,
-                height: '100%',
-                backgroundColor: '#1976d2',
-                transition: 'width 0.3s ease',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'flex-end',
-                paddingRight: '8px',
-                color: '#fff',
-                fontSize: '11px',
-                fontWeight: '600'
-              }}>
-                {Math.round(mainPercent)}%
-              </div>
-            </div>
-          </div>
-
+      <div className="card" style={{ padding: '24px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+          {/* Left: Volume Comparison Bar Chart */}
           <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-              <span style={{ fontSize: '13px', fontWeight: '500', color: '#333' }}>{subKeyword}</span>
-              <span style={{ fontSize: '13px', fontWeight: '600', color: '#8b5cf6' }}>{fmt(subVolume)}</span>
-            </div>
+            <p style={{ margin: '0 0 14px', fontSize: '12px', color: '#6b7280', fontWeight: '600' }}>월간 검색량 비교</p>
             <div style={{
-              width: '100%',
-              height: '24px',
-              backgroundColor: '#f3e5f5',
-              borderRadius: '4px',
-              overflow: 'hidden'
+              background: '#f9fafb', borderRadius: '10px', padding: '20px',
+              border: '1px solid #e5e7eb'
             }}>
+              <div style={{ display: 'flex', alignItems: 'flex-end', gap: '24px', height: '140px', marginBottom: '12px', justifyContent: 'center' }}>
+                <div style={{ flex: '0 0 40%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                  <div style={{
+                    width: '100%', height: mainBarH + 'px',
+                    background: 'linear-gradient(180deg, #4f46e5 0%, #3730a3 100%)',
+                    borderRadius: '8px 8px 0 0', transition: 'height 0.5s ease'
+                  }}></div>
+                  <p style={{ margin: '8px 0 0', fontSize: '13px', fontWeight: '700', color: '#1f2937' }}>{fmt(mainVolume)}</p>
+                </div>
+                <div style={{ flex: '0 0 40%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                  <div style={{
+                    width: '100%', height: subBarH + 'px',
+                    background: 'linear-gradient(180deg, #10b981 0%, #047857 100%)',
+                    borderRadius: '8px 8px 0 0', transition: 'height 0.5s ease'
+                  }}></div>
+                  <p style={{ margin: '8px 0 0', fontSize: '13px', fontWeight: '700', color: '#1f2937' }}>{fmt(subVolume)}</p>
+                </div>
+              </div>
+              <div style={{ fontSize: '11px', color: '#6b7280', display: 'flex', gap: '20px', justifyContent: 'center' }}>
+                <span><span style={{ display: 'inline-block', width: '12px', height: '12px', background: '#4f46e5', borderRadius: '3px', marginRight: '6px', verticalAlign: 'middle' }}></span>{mainKeyword}</span>
+                <span><span style={{ display: 'inline-block', width: '12px', height: '12px', background: '#10b981', borderRadius: '3px', marginRight: '6px', verticalAlign: 'middle' }}></span>{subKeyword}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Right: Difficulty */}
+          <div>
+            <p style={{ margin: '0 0 14px', fontSize: '12px', color: '#6b7280', fontWeight: '600' }}>진입 난이도 분석</p>
+            <div style={{
+              background: '#f9fafb', borderRadius: '10px', padding: '20px',
+              border: '1px solid #e5e7eb'
+            }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingBottom: '12px', borderBottom: '1px solid #e5e7eb' }}>
+                  <span style={{ fontWeight: '600', color: '#374151', fontSize: '14px' }}>{mainKeyword}</span>
+                  <span style={{
+                    background: mainBadge.bg, color: mainBadge.text,
+                    padding: '3px 12px', borderRadius: '6px', fontSize: '11px', fontWeight: '700'
+                  }}>{mainBadge.label}</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span style={{ fontWeight: '600', color: '#374151', fontSize: '14px' }}>{subKeyword}</span>
+                  <span style={{
+                    background: subBadge.bg, color: subBadge.text,
+                    padding: '3px 12px', borderRadius: '6px', fontSize: '11px', fontWeight: '700'
+                  }}>{subBadge.label}</span>
+                </div>
+              </div>
+
               <div style={{
-                width: `${subPercent}%`,
-                height: '100%',
-                backgroundColor: '#8b5cf6',
-                transition: 'width 0.3s ease',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'flex-end',
-                paddingRight: '8px',
-                color: '#fff',
-                fontSize: '11px',
-                fontWeight: '600'
+                marginTop: '16px', padding: '10px 12px',
+                background: '#fff', borderRadius: '6px', border: '1px solid #e5e7eb',
+                fontSize: '12px', color: '#6b7280', lineHeight: '1.6'
               }}>
-                {Math.round(subPercent)}%
+                <strong>난이도 범위:</strong><br/>
+                🟢 낮음(0-40) → 🟡 중간(40-60) → 🔴 높음(60-100)
               </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Right: Difficulty Analysis */}
-        <div className="keyword-trend-right">
-          <h3 style={{ fontSize: '14px', fontWeight: '600', marginBottom: '20px', color: '#333' }}>
-            진입 난이도
-          </h3>
-
-          <div style={{ marginBottom: '24px' }}>
-            <div style={{ marginBottom: '12px' }}>
-              <div style={{ fontSize: '13px', fontWeight: '500', color: '#333', marginBottom: '8px' }}>
-                {mainKeyword}
-              </div>
-              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                <div style={{
-                  flex: 1,
-                  height: '20px',
-                  backgroundColor: '#f0f0f0',
-                  borderRadius: '4px',
-                  overflow: 'hidden'
-                }}>
-                  <div style={{
-                    width: `${mainDifficulty}%`,
-                    height: '100%',
-                    backgroundColor: mainDiffColor,
-                    transition: 'width 0.3s ease'
-                  }}></div>
-                </div>
-                <span className={`badge ${mainDiffColor === '#dc2626' ? 'badge-red' : mainDiffColor === '#ea580c' ? 'badge-orange' : mainDiffColor === '#f59e0b' ? 'badge-yellow' : 'badge-green'}`}
-                  style={{ whiteSpace: 'nowrap', fontSize: '11px' }}>
-                  {getDifficultyLabel(mainDifficulty)}
-                </span>
-              </div>
-            </div>
-
-            <div>
-              <div style={{ fontSize: '13px', fontWeight: '500', color: '#333', marginBottom: '8px' }}>
-                {subKeyword}
-              </div>
-              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                <div style={{
-                  flex: 1,
-                  height: '20px',
-                  backgroundColor: '#f0f0f0',
-                  borderRadius: '4px',
-                  overflow: 'hidden'
-                }}>
-                  <div style={{
-                    width: `${subDifficulty}%`,
-                    height: '100%',
-                    backgroundColor: subDiffColor,
-                    transition: 'width 0.3s ease'
-                  }}></div>
-                </div>
-                <span className={`badge ${subDiffColor === '#dc2626' ? 'badge-red' : subDiffColor === '#ea580c' ? 'badge-orange' : subDiffColor === '#f59e0b' ? 'badge-yellow' : 'badge-green'}`}
-                  style={{ whiteSpace: 'nowrap', fontSize: '11px' }}>
-                  {getDifficultyLabel(subDifficulty)}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div style={{
-            padding: '12px',
-            backgroundColor: '#f8f9fa',
-            borderRadius: '4px',
-            fontSize: '12px',
-            color: '#666',
-            lineHeight: '1.5'
-          }}>
-            <strong>난이도 범위:</strong>
-            <div style={{ marginTop: '6px' }}>
-              🟢 낮음(0-40) → 🟡 중간(40-60) → 🔴 높음(60-100)
             </div>
           </div>
         </div>
       </div>
 
       <style>{`
-        .keyword-trend-content {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 32px;
-          margin-top: 20px;
-        }
         @media (max-width: 768px) {
-          .keyword-trend-content {
-            grid-template-columns: 1fr;
-            gap: 24px;
-          }
+          .card > div[style*="grid-template-columns: 1fr 1fr"] { grid-template-columns: 1fr !important; }
         }
       `}</style>
     </div>

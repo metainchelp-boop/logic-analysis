@@ -1,4 +1,4 @@
-/* TopBar — 상단 헤더 */
+/* TopBar — 상단 헤더 (보라색 그라디언트) */
 window.TopBar = function TopBar({ health }) {
     return (
         <header className="top-bar">
@@ -6,7 +6,7 @@ window.TopBar = function TopBar({ health }) {
                 <div className="logo">
                     <span className="logo-dot" />
                     로직 분석
-                    <span style={{ fontSize: 11, color: '#94a3b8', fontWeight: 400, marginLeft: 2 }}>v2.1</span>
+                    <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.6)', fontWeight: 400, marginLeft: 4 }}>v2.2</span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                     <span className={`status-chip ${health ? '' : 'offline'}`}>

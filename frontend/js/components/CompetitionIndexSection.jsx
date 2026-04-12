@@ -4,119 +4,73 @@ window.CompetitionIndexSection = function CompetitionIndexSection(props) {
 
   if (compIndex === undefined || compIndex === null) return null;
 
-  const progressPercent = Math.min(100, (compIndex / 100) * 100);
+  const maxIdx = 100;
+  const barPercent = Math.min(100, (compIndex / maxIdx) * 100);
 
   return (
-    <div className="section">
+    <div className="section fade-in">
       <h2 className="section-title">🎯 키워드 경쟁강도 분석</h2>
 
-      <div className="competition-content">
-        {/* Left column: Competition Index */}
-        <div className="competition-left">
-          <div style={{ marginBottom: '24px' }}>
-            <div style={{ fontSize: '48px', fontWeight: '700', color: compColor, marginBottom: '8px' }}>
-              {fmt(compIndex)}
-            </div>
-            <div style={{ fontSize: '13px', color: '#666', marginBottom: '12px' }}>경쟁강도 지수</div>
-
-            {/* Progress bar */}
+      <div className="card" style={{ padding: '24px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+          {/* Left: Competition Index Gauge */}
+          <div>
+            <p style={{ margin: '0 0 10px', fontSize: '12px', color: '#6b7280', fontWeight: '600' }}>경쟁강도 지수</p>
             <div style={{
-              width: '100%',
-              height: '12px',
-              backgroundColor: '#f0f0f0',
-              borderRadius: '6px',
-              overflow: 'hidden',
-              marginBottom: '12px'
+              background: '#fff', borderRadius: '10px', padding: '16px',
+              border: '1px solid #e5e7eb'
             }}>
-              <div style={{
-                width: `${progressPercent}%`,
-                height: '100%',
-                backgroundColor: compColor,
-                transition: 'width 0.3s ease'
-              }}></div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+                <span style={{ fontSize: '28px', fontWeight: '800', color: compColor }}>{fmt(compIndex)}</span>
+                <span className="gauge-label" style={{
+                  background: compColor, color: '#fff',
+                  padding: '4px 14px', borderRadius: '999px',
+                  fontSize: '11px', fontWeight: '700'
+                }}>
+                  {compLabel}
+                </span>
+              </div>
+              <div className="progress-bar" style={{ height: '10px' }}>
+                <div className="progress-fill" style={{
+                  width: barPercent + '%',
+                  background: compColor,
+                  transition: 'width 0.5s ease'
+                }}></div>
+              </div>
             </div>
+          </div>
 
-            {/* Competition label badge */}
-            <div>
-              <span className={`badge ${compLabel === '블루오션' ? 'badge-blue' : 'badge-red'}`}>
-                {compLabel}
-              </span>
+          {/* Right: Market Stats */}
+          <div>
+            <p style={{ margin: '0 0 10px', fontSize: '12px', color: '#6b7280', fontWeight: '600' }}>시장 현황</p>
+            <div style={{
+              background: '#fff', borderRadius: '10px', padding: '16px',
+              border: '1px solid #e5e7eb', fontSize: '13px', lineHeight: '2', color: '#374151'
+            }}>
+              <p style={{ margin: 0 }}><strong>상품 수:</strong> {fmt(productCount)}개</p>
+              <p style={{ margin: 0 }}><strong>검색량:</strong> {fmt(searchVolume)}회/월</p>
+              <p style={{ margin: 0 }}><strong>평균 클릭수:</strong> {typeof avgCtr === 'number' ? avgCtr.toFixed(1) : avgCtr}회</p>
             </div>
           </div>
         </div>
 
-        {/* Right column: Market Stats */}
-        <div className="competition-right">
-          <div className="stat-mini">
-            <div className="stat-label">상품 수</div>
-            <div className="stat-value">{fmt(productCount)}개</div>
+        {/* Interpretation */}
+        {interpretation && (
+          <div style={{
+            marginTop: '16px', padding: '12px 16px',
+            background: '#fff', borderRadius: '8px',
+            borderLeft: '4px solid ' + compColor,
+            fontSize: '13px', color: '#374151', lineHeight: '1.6'
+          }}>
+            {interpretation}
           </div>
-          <div className="stat-mini">
-            <div className="stat-label">월간 검색량</div>
-            <div className="stat-value">{fmt(searchVolume)}회/월</div>
-          </div>
-          <div className="stat-mini">
-            <div className="stat-label">평균 클릭수</div>
-            <div className="stat-value">{typeof avgCtr === 'number' ? avgCtr.toFixed(1) : avgCtr}회</div>
-          </div>
-        </div>
+        )}
       </div>
 
-      {/* Interpretation */}
-      {interpretation && (
-        <div style={{
-          padding: '16px',
-          backgroundColor: '#f8f9fa',
-          borderLeft: `4px solid ${compColor}`,
-          borderRadius: '4px',
-          marginTop: '20px',
-          fontSize: '13px',
-          color: '#333',
-          lineHeight: '1.6'
-        }}>
-          {interpretation}
-        </div>
-      )}
-
       <style>{`
-        .competition-content {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 32px;
-          margin-top: 20px;
-        }
-        .competition-left {
-          display: flex;
-          align-items: flex-start;
-        }
-        .competition-right {
-          display: grid;
-          grid-template-columns: repeat(3, 1fr);
-          gap: 16px;
-        }
-        .stat-mini {
-          padding: 12px;
-          background: #f8f9fa;
-          border-radius: 6px;
-          text-align: center;
-        }
-        .stat-label {
-          font-size: 12px;
-          color: #999;
-          margin-bottom: 6px;
-        }
-        .stat-value {
-          font-size: 18px;
-          font-weight: 700;
-          color: #333;
-        }
         @media (max-width: 768px) {
-          .competition-content {
-            grid-template-columns: 1fr;
-            gap: 20px;
-          }
-          .competition-right {
-            grid-template-columns: 1fr;
+          .section .card > div:first-child {
+            grid-template-columns: 1fr !important;
           }
         }
       `}</style>
