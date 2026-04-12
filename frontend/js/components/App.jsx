@@ -303,54 +303,54 @@ window.App = function App() {
             /* 순위 추적 */
             React.createElement(RankTrackingSection, { products: products, refreshProducts: loadProducts }),
 
-            /* 키워드 검색량 */
-            volumeData && React.createElement(KeywordVolumeSection, { keyword: searchedKeyword, data: volumeData }),
-
-            /* 경쟁강도 분석 */
-            analysisData && analysisData.competitionIndex && React.createElement('div', { id: 'sec-competition' },
-                React.createElement(CompetitionIndexSection, { data: analysisData.competitionIndex })
+            /* ===== ROW 1: 키워드 검색량 + 연관 키워드 (1:1) ===== */
+            (volumeData || relatedData) && React.createElement('div', { className: 'section-row' },
+                volumeData && React.createElement(KeywordVolumeSection, { keyword: searchedKeyword, data: volumeData }),
+                relatedData && React.createElement(RelatedKeywordsSection, { data: relatedData })
             ),
 
-            /* 시장 규모 추정 */
+            /* ===== ROW 2: 경쟁강도 + 키워드 트렌드 (1:1) ===== */
+            analysisData && (analysisData.competitionIndex || analysisData.keywordTrend) && React.createElement('div', { className: 'section-row' },
+                analysisData.competitionIndex && React.createElement('div', { id: 'sec-competition' },
+                    React.createElement(CompetitionIndexSection, { data: analysisData.competitionIndex })
+                ),
+                analysisData.keywordTrend && React.createElement('div', { id: 'sec-trend' },
+                    React.createElement(KeywordTrendSection, { data: analysisData.keywordTrend })
+                )
+            ),
+
+            /* ===== 시장 규모 추정 (풀 와이드) ===== */
             analysisData && analysisData.marketRevenue && React.createElement('div', { id: 'sec-market' },
                 React.createElement(MarketRevenueSection, { data: analysisData.marketRevenue })
             ),
 
-            /* 연관 키워드 */
-            relatedData && React.createElement(RelatedKeywordsSection, { data: relatedData }),
-
-            /* 키워드 트렌드 */
-            analysisData && analysisData.keywordTrend && React.createElement('div', { id: 'sec-trend' },
-                React.createElement(KeywordTrendSection, { data: analysisData.keywordTrend })
-            ),
-
-            /* 골든 키워드 */
+            /* ===== 골든 키워드 (풀 와이드) ===== */
             analysisData && analysisData.goldenKeyword && React.createElement('div', { id: 'sec-golden' },
                 React.createElement(GoldenKeywordCard, { data: analysisData.goldenKeyword })
             ),
 
-            /* 광고주 정보 */
-            analysisData && analysisData.advertiserInfo && React.createElement(AdvertiserInfoCard, { data: analysisData.advertiserInfo }),
+            /* ===== ROW 3: 광고주 정보 + 카테고리 분석 (1:1) ===== */
+            analysisData && (analysisData.advertiserInfo || analysisData.categoryAnalysis) && React.createElement('div', { className: 'section-row' },
+                analysisData.advertiserInfo && React.createElement(AdvertiserInfoCard, { data: analysisData.advertiserInfo }),
+                analysisData.categoryAnalysis && React.createElement(CategoryAnalysisSection, { data: analysisData.categoryAnalysis })
+            ),
 
-            /* 카테고리 분석 */
-            analysisData && analysisData.categoryAnalysis && React.createElement(CategoryAnalysisSection, { data: analysisData.categoryAnalysis }),
-
-            /* 키워드 & 태그 분석 */
+            /* ===== 키워드 & 태그 분석 (풀 와이드) ===== */
             analysisData && analysisData.keywordTags && React.createElement(KeywordTagSection, { data: analysisData.keywordTags }),
 
-            /* 경쟁사 비교표 */
+            /* ===== 경쟁사 비교표 (풀 와이드) ===== */
             analysisData && analysisData.competitorTable && React.createElement('div', { id: 'sec-competitor' },
                 React.createElement(CompetitorTableSection, { data: analysisData.competitorTable })
             ),
 
-            /* 판매량 추정 */
-            analysisData && analysisData.salesEstimation && React.createElement('div', { id: 'sec-sales' },
-                React.createElement(SalesEstimationSection, { data: analysisData.salesEstimation })
-            ),
-
-            /* 진입 전략 */
-            analysisData && analysisData.strategicAnalysis && React.createElement('div', { id: 'sec-strategy' },
-                React.createElement(StrategicAnalysisSection, { data: analysisData.strategicAnalysis })
+            /* ===== ROW 4: 판매량 추정 + 진입 전략 (1:1) ===== */
+            analysisData && (analysisData.salesEstimation || analysisData.strategicAnalysis) && React.createElement('div', { className: 'section-row' },
+                analysisData.salesEstimation && React.createElement('div', { id: 'sec-sales' },
+                    React.createElement(SalesEstimationSection, { data: analysisData.salesEstimation })
+                ),
+                analysisData.strategicAnalysis && React.createElement('div', { id: 'sec-strategy' },
+                    React.createElement(StrategicAnalysisSection, { data: analysisData.strategicAnalysis })
+                )
             ),
 
             /* SEO 진단 */

@@ -24,7 +24,7 @@ window.KeywordTrendSection = function KeywordTrendSection(props) {
       <h2 className="section-title">📈 키워드 검색량 비교 및 진입 난이도</h2>
 
       <div className="card" style={{ padding: '24px' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+        <div className="trend-inner-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
           {/* Left: Volume Comparison Bar Chart */}
           <div>
             <p style={{ margin: '0 0 14px', fontSize: '12px', color: '#6b7280', fontWeight: '600' }}>월간 검색량 비교</p>
@@ -95,8 +95,13 @@ window.KeywordTrendSection = function KeywordTrendSection(props) {
       </div>
 
       <style>{`
+        .section-row .trend-inner-grid {
+          grid-template-columns: 1fr !important;
+        }
         @media (max-width: 768px) {
-          .card > div[style*="grid-template-columns: 1fr 1fr"] { grid-template-columns: 1fr !important; }
+          .trend-inner-grid {
+            grid-template-columns: 1fr !important;
+          }
         }
       `}</style>
     </div>

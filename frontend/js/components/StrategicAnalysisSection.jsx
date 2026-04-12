@@ -8,7 +8,7 @@ window.StrategicAnalysisSection = function StrategicAnalysisSection(props) {
     <div className="section fade-in">
       <h2 className="section-title">🎯 1페이지 진입 전략 비교 분석</h2>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '24px' }}>
+      <div className="strategy-inner-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
         {/* Price Analysis Card */}
         <div className="score-card" style={{ borderLeftColor: '#4f46e5' }}>
           <h4 style={{ fontSize: '14px', fontWeight: '700', color: '#1f2937', marginBottom: '16px' }}>💰 가격 분석 (상위 5개)</h4>
@@ -60,8 +60,13 @@ window.StrategicAnalysisSection = function StrategicAnalysisSection(props) {
       </div>
 
       <style>{`
+        .section-row .strategy-inner-grid {
+          grid-template-columns: 1fr !important;
+        }
         @media (max-width: 768px) {
-          .section > div[style*="1fr 1fr"] { grid-template-columns: 1fr !important; }
+          .strategy-inner-grid {
+            grid-template-columns: 1fr !important;
+          }
         }
       `}</style>
     </div>

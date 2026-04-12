@@ -12,7 +12,7 @@ window.CompetitionIndexSection = function CompetitionIndexSection(props) {
       <h2 className="section-title">🎯 키워드 경쟁강도 분석</h2>
 
       <div className="card" style={{ padding: '24px' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+        <div className="comp-inner-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
           {/* Left: Competition Index Gauge */}
           <div>
             <p style={{ margin: '0 0 10px', fontSize: '12px', color: '#6b7280', fontWeight: '600' }}>경쟁강도 지수</p>
@@ -68,8 +68,11 @@ window.CompetitionIndexSection = function CompetitionIndexSection(props) {
       </div>
 
       <style>{`
+        .section-row .comp-inner-grid {
+          grid-template-columns: 1fr !important;
+        }
         @media (max-width: 768px) {
-          .section .card > div:first-child {
+          .comp-inner-grid {
             grid-template-columns: 1fr !important;
           }
         }

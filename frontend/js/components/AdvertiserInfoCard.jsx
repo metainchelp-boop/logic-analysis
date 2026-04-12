@@ -12,7 +12,7 @@ window.AdvertiserInfoCard = function AdvertiserInfoCard(props) {
   return (
     <div className="section fade-in">
       <h2 className="section-title">📢 광고 경쟁 정보</h2>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>
         {items.map(function(item, idx) {
           return (
             <div key={idx} style={{
@@ -31,13 +31,8 @@ window.AdvertiserInfoCard = function AdvertiserInfoCard(props) {
       </div>
 
       <style>{`
-        @media (max-width: 768px) {
-          .section > div[style*="repeat(4"] {
-            grid-template-columns: repeat(2, 1fr) !important;
-          }
-        }
         @media (max-width: 480px) {
-          .section > div[style*="repeat(4"] {
+          .section > div[style*="repeat(2"] {
             grid-template-columns: 1fr !important;
           }
         }
