@@ -32,43 +32,46 @@ jobs:
           target: "/root/logic-analysis-deploy/"
           overwrite: true
 
-      - name: Install dependencies and restart backend
+      - name: Diagnose and deploy backend
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 120s
           script: |
+            set -e
             cd /root/logic-analysis-deploy
+            echo "=== 1. 배포된 파일 확인 ==="
             ls -la frontend/index.html backend/
 
-            if [ ! -f docker-compose.yml ]; then
-              echo "No docker-compose.yml found, skipping"
-              exit 0
-            fi
+            echo "=== 2. Docker 설정 파일 확인 ==="
+            cat docker-compose.yml 2>/dev/null || echo "docker-compose.yml 없음"
+            echo "---"
+            cat Dockerfile 2>/dev/null || echo "Dockerfile 없음 (root)"
+            echo "---"
+            cat backend/Dockerfile 2>/dev/null || echo "backend/Dockerfile 없음"
 
-            # 컨테이너 이름 확인
-            CONTAINER=$(docker compose ps -q backend 2>/dev/null)
+            echo "=== 3. 실행 중인 컨테이너 ==="
+            docker compose ps 2>/dev/null || docker ps
 
-            if [ -n "$CONTAINER" ] && [ -f backend/requirements.txt ]; then
-              echo "Installing Python dependencies inside container..."
-              docker compose exec -T backend pip install --break-system-packages -r /app/backend/requirements.txt 2>/dev/null || \
-              docker compose exec -T backend pip install -r /app/backend/requirements.txt 2>/dev/null || \
-              docker compose exec -T backend pip install --break-system-packages -r backend/requirements.txt 2>/dev/null || \
-              docker compose exec -T backend pip install -r requirements.txt 2>/dev/null || \
-              echo "Warning: pip install inside container failed, trying rebuild..."
-            fi
-
-            # 컨테이너에 Dockerfile이 있으면 rebuild, 없으면 restart
-            if [ -f Dockerfile ] || [ -f backend/Dockerfile ]; then
-              echo "Rebuilding and restarting backend..."
-              docker compose up -d --build backend
+            echo "=== 4. 컨테이너 내부 파일 확인 ==="
+            CONTAINER=$(docker compose ps -q backend 2>/dev/null || docker ps -q --filter "name=logic" | head -1)
+            if [ -n "$CONTAINER" ]; then
+              echo "Container ID: $CONTAINER"
+              docker exec $CONTAINER ls -la /app/ 2>/dev/null || docker exec $CONTAINER ls -la / 2>/dev/null || echo "파일 목록 확인 실패"
+              docker exec $CONTAINER cat /app/requirements.txt 2>/dev/null || echo "requirements.txt 없음"
+              docker exec $CONTAINER pip list 2>/dev/null | grep -i "apscheduler\|fastapi\|uvicorn" || echo "패키지 목록 확인 실패"
+              echo "--- 실행 중인 프로세스 ---"
+              docker exec $CONTAINER ps aux 2>/dev/null || echo "ps 실행 실패"
             else
-              echo "Restarting backend container..."
-              docker compose restart backend
+              echo "실행 중인 컨테이너 없음"
             fi
 
-            # 컨테이너 상태 확인
-            sleep 3
-            docker compose ps backend
-            echo "Deployment successful at $(date)"
+            echo "=== 5. Nginx 설정 확인 ==="
+            cat /etc/nginx/sites-enabled/logic* 2>/dev/null || \
+            cat /etc/nginx/conf.d/logic* 2>/dev/null || \
+            grep -r "logic" /etc/nginx/ 2>/dev/null | head -20 || \
+            echo "Nginx 설정 찾을 수 없음"
+
+            echo "=== 진단 완료 ==="
