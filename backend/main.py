@@ -12,6 +12,7 @@ from typing import Optional, List
 from datetime import datetime
 import os
 import re
+import time
 import uvicorn
 import logging
 
@@ -277,7 +278,7 @@ def run_initial_rank_check(product_id: int, product_url: str, keyword_ids: List[
             if competitors:
                 save_competitor_snapshot(kw_info["keyword_id"], competitors[:5])
         except Exception as e:
-            logger.error(f""초기 순위 체크 실패 [{kw_info['keyword']}]: {e}")
+            logger.error(f"초기 순위 체크 실패 [{kw_info['keyword']}]: {e}")
 
 
 # --- 추적 상품 목록 ---
@@ -438,6 +439,335 @@ async def preview_report():
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"리포트 생성 실패: {str(e)}")
+
+
+# ==================== 보고서 내보내기 API ====================
+
+class ReportExportRequest(BaseModel):
+    format: str = "json"  # json | csv
+    date_range: int = 30  # 최근 N일
+
+@app.post("/api/report/export")
+async def export_report(req: ReportExportRequest):
+    """순위 데이터 보고서 내보내기"""
+    try:
+        products = get_all_tracked_products()
+        report_data = []
+
+        for p in products:
+            keywords = get_keywords_for_product(p["id"])
+            for kw in keywords:
+                history = get_ranking_history(kw["id"], days=req.date_range)
+                report_data.append({
+                    "product_name": p.get("product_name", ""),
+                    "store_name": p.get("store_name", ""),
+                    "keyword": kw["keyword"],
+                    "latest_rank": kw.get("latest_rank"),
+                    "history_count": len(history),
+                    "history": history,
+                })
+
+        if req.format == "csv":
+            import csv, io
+            output = io.StringIO()
+            writer = csv.writer(output)
+            writer.writerow(["상품명", "스토어", "키워드", "순위", "페이지", "체크타입", "체크일시"])
+            for item in report_data:
+                for h in item["history"]:
+                    writer.writerow([
+                        item["product_name"], item["store_name"], item["keyword"],
+                        h.get("rank_position", ""), h.get("page_number", ""),
+                        h.get("check_type", ""), h.get("checked_at", ""),
+                    ])
+            return {
+                "success": True,
+                "data": {"format": "csv", "content": output.getvalue(),
+                         "generated_at": datetime.now().isoformat()}
+            }
+
+        return {
+            "success": True,
+            "data": {"format": "json", "items": report_data,
+                     "total_products": len(products),
+                     "total_keywords": sum(len(get_keywords_for_product(p["id"])) for p in products),
+                     "generated_at": datetime.now().isoformat()}
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"보고서 생성 실패: {str(e)}")
+
+
+# ==================== SEO 종합 진단 API ====================
+
+class SeoAnalysisRequest(BaseModel):
+    product_url: str
+    keyword: str
+
+@app.post("/api/seo/analyze")
+async def seo_analyze(req: SeoAnalysisRequest):
+    """상품 SEO 종합 진단"""
+    try:
+        product_info = get_product_info(req.product_url)
+        product_name = product_info.get("product_name", "")
+
+        # 1. 상품명 키워드 포함 여부
+        keyword_in_title = req.keyword.lower() in product_name.lower()
+        title_length = len(product_name)
+
+        # 2. 가격 경쟁력 분석
+        rank, page, competitors = find_product_rank(
+            keyword=req.keyword, product_url=req.product_url, max_pages=2
+        )
+        my_price = product_info.get("price", 0)
+        comp_prices = [c.get("price", 0) for c in competitors if c.get("price", 0) > 0]
+        avg_comp_price = sum(comp_prices) / len(comp_prices) if comp_prices else 0
+        price_score = 0
+        if my_price > 0 and avg_comp_price > 0:
+            ratio = my_price / avg_comp_price
+            if ratio <= 0.85:
+                price_score = 100
+            elif ratio <= 1.0:
+                price_score = 80
+            elif ratio <= 1.15:
+                price_score = 60
+            elif ratio <= 1.3:
+                price_score = 40
+            else:
+                price_score = 20
+
+        # 3. 상품명 최적화 점수
+        title_score = 0
+        if keyword_in_title:
+            title_score += 40
+        if 20 <= title_length <= 50:
+            title_score += 30
+        elif 10 <= title_length <= 70:
+            title_score += 20
+        else:
+            title_score += 10
+        # 특수문자 과다 체크
+        special_chars = sum(1 for c in product_name if c in '!@#$%^&*()[]{}|<>★☆♥♡')
+        if special_chars <= 2:
+            title_score += 30
+        elif special_chars <= 5:
+            title_score += 15
+
+        # 4. 순위 점수
+        rank_score = 0
+        if rank:
+            if rank <= 10:
+                rank_score = 100
+            elif rank <= 20:
+                rank_score = 80
+            elif rank <= 40:
+                rank_score = 60
+            elif rank <= 100:
+                rank_score = 40
+            else:
+                rank_score = 20
+
+        # 5. 종합 점수
+        total_score = int(title_score * 0.3 + price_score * 0.25 + rank_score * 0.35 + (30 if product_info.get("image_url") else 0) * 0.1)
+
+        # 6. 개선 제안 생성
+        suggestions = []
+        if not keyword_in_title:
+            suggestions.append(f"상품명에 '{req.keyword}' 키워드를 포함시키세요.")
+        if title_length < 15:
+            suggestions.append("상품명이 너무 짧습니다. 핵심 키워드를 추가하세요.")
+        elif title_length > 60:
+            suggestions.append("상품명이 길어 가독성이 낮을 수 있습니다.")
+        if special_chars > 3:
+            suggestions.append("특수문자 사용을 줄이면 검색 노출에 유리합니다.")
+        if my_price > avg_comp_price * 1.2 and avg_comp_price > 0:
+            suggestions.append(f"경쟁 상품 대비 가격이 높습니다 (평균 {int(avg_comp_price):,}원).")
+        if not rank:
+            suggestions.append("200위 내 미노출 — 키워드 재설정 또는 상품명 최적화가 필요합니다.")
+        if not suggestions:
+            suggestions.append("전반적으로 양호합니다. 리뷰 확보에 집중하세요.")
+
+        return {
+            "success": True,
+            "data": {
+                "product_info": product_info,
+                "keyword": req.keyword,
+                "scores": {
+                    "total": total_score,
+                    "title": title_score,
+                    "price": price_score,
+                    "rank": rank_score,
+                    "detail": {
+                        "keyword_in_title": keyword_in_title,
+                        "title_length": title_length,
+                        "special_chars": special_chars,
+                        "current_rank": rank,
+                        "my_price": my_price,
+                        "avg_competitor_price": int(avg_comp_price),
+                    }
+                },
+                "suggestions": suggestions,
+                "competitors": competitors[:5],
+                "analyzed_at": datetime.now().isoformat(),
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"SEO 분석 실패: {str(e)}")
+
+
+# ==================== 연관/황금 키워드 API ====================
+
+class RelatedKeywordRequest(BaseModel):
+    keyword: str
+
+@app.post("/api/keywords/related")
+async def related_keywords(req: RelatedKeywordRequest):
+    """연관 키워드 + 황금 키워드 분석"""
+    try:
+        # 네이버 검색광고 API에서 연관 키워드 가져오기
+        from naver_crawler import (
+            get_keyword_volume as _get_kw_vol,
+            SEARCHAD_API_KEY, SEARCHAD_SECRET_KEY, SEARCHAD_CUSTOMER_ID,
+            _generate_searchad_signature, _safe_int, _safe_float
+        )
+        import requests as req_lib
+
+        all_keywords = []
+
+        # 검색광고 API 연관 키워드 조회
+        if SEARCHAD_API_KEY and SEARCHAD_SECRET_KEY and SEARCHAD_CUSTOMER_ID:
+            uri = "/keywordstool"
+            method = "GET"
+            timestamp = str(int(time.time() * 1000))
+            signature = _generate_searchad_signature(timestamp, method, uri)
+
+            url = f"https://api.searchad.naver.com{uri}"
+            headers = {
+                "X-Timestamp": timestamp,
+                "X-API-KEY": SEARCHAD_API_KEY,
+                "X-Customer": SEARCHAD_CUSTOMER_ID,
+                "X-Signature": signature,
+            }
+            params = {"hintKeywords": req.keyword, "showDetail": "1"}
+
+            resp = req_lib.get(url, params=params, headers=headers, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+
+            for kd in data.get("keywordList", []):
+                rel_kw = kd.get("relKeyword", "")
+                pc = _safe_int(kd.get("monthlyPcQcCnt"))
+                mobile = _safe_int(kd.get("monthlyMobileQcCnt"))
+                total_volume = pc + mobile
+                comp_idx = kd.get("compIdx", "")
+
+                # 황금키워드 판별: 검색량 적당 + 경쟁 낮음
+                is_golden = (
+                    100 <= total_volume <= 5000 and
+                    comp_idx in ("낮음", "LOW", "")
+                )
+
+                all_keywords.append({
+                    "keyword": rel_kw,
+                    "monthlyPcQcCnt": pc,
+                    "monthlyMobileQcCnt": mobile,
+                    "totalVolume": total_volume,
+                    "compIdx": comp_idx,
+                    "isGolden": is_golden,
+                    "monthlyAvePcClkCnt": _safe_float(kd.get("monthlyAvePcClkCnt")),
+                    "monthlyAveMobileClkCnt": _safe_float(kd.get("monthlyAveMobileClkCnt")),
+                })
+
+        # 정렬: 황금키워드 우선, 그 다음 검색량순
+        golden = sorted([k for k in all_keywords if k["isGolden"]], key=lambda x: -x["totalVolume"])
+        others = sorted([k for k in all_keywords if not k["isGolden"]], key=lambda x: -x["totalVolume"])
+
+        return {
+            "success": True,
+            "data": {
+                "seed_keyword": req.keyword,
+                "golden_keywords": golden[:20],
+                "related_keywords": others[:30],
+                "total_found": len(all_keywords),
+                "analyzed_at": datetime.now().isoformat(),
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"연관 키워드 분석 실패: {str(e)}")
+
+
+# ==================== 상품명 키워드 분석 API ====================
+
+class ProductNameAnalysisRequest(BaseModel):
+    product_names: List[str]  # 분석할 상품명 목록
+    keyword: str = ""  # 기준 키워드 (선택)
+
+@app.post("/api/product-name/analyze")
+async def analyze_product_names(req: ProductNameAnalysisRequest):
+    """상품명에서 키워드 추출 및 빈도 분석"""
+    try:
+        import re as re_mod
+        from collections import Counter
+
+        all_words = []
+        name_analyses = []
+
+        for name in req.product_names[:50]:  # 최대 50개
+            # 특수문자 제거 후 단어 분리
+            cleaned = re_mod.sub(r'[^\w\s가-힣a-zA-Z0-9]', ' ', name)
+            words = [w.strip() for w in cleaned.split() if len(w.strip()) >= 2]
+            all_words.extend(words)
+
+            # 개별 상품명 분석
+            analysis = {
+                "original": name,
+                "word_count": len(words),
+                "char_count": len(name),
+                "words": words,
+                "has_keyword": req.keyword.lower() in name.lower() if req.keyword else None,
+                "special_char_count": sum(1 for c in name if c in '!@#$%^&*()[]{}|<>★☆♥♡~'),
+            }
+            name_analyses.append(analysis)
+
+        # 빈도 분석
+        word_freq = Counter(all_words)
+        top_keywords = [
+            {"word": word, "count": count, "ratio": round(count / len(req.product_names) * 100, 1)}
+            for word, count in word_freq.most_common(30)
+        ]
+
+        # 2글자 조합 (바이그램) 분석
+        bigrams = []
+        for name in req.product_names[:50]:
+            cleaned = re_mod.sub(r'[^\w\s가-힣a-zA-Z0-9]', ' ', name)
+            words = [w.strip() for w in cleaned.split() if len(w.strip()) >= 2]
+            for i in range(len(words) - 1):
+                bigrams.append(f"{words[i]} {words[i+1]}")
+
+        bigram_freq = Counter(bigrams)
+        top_bigrams = [
+            {"phrase": phrase, "count": count}
+            for phrase, count in bigram_freq.most_common(15)
+        ]
+
+        # 평균 상품명 길이
+        avg_length = sum(len(n) for n in req.product_names) / len(req.product_names) if req.product_names else 0
+
+        return {
+            "success": True,
+            "data": {
+                "total_analyzed": len(req.product_names),
+                "avg_name_length": round(avg_length, 1),
+                "top_keywords": top_keywords,
+                "top_bigrams": top_bigrams,
+                "name_analyses": name_analyses[:20],
+                "keyword_coverage": (
+                    round(sum(1 for a in name_analyses if a["has_keyword"]) / len(name_analyses) * 100, 1)
+                    if req.keyword and name_analyses else None
+                ),
+                "analyzed_at": datetime.now().isoformat(),
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"상품명 분석 실패: {str(e)}")
 
 
 # --- 헬스체크 ---

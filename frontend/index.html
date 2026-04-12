@@ -456,36 +456,96 @@
             return <span className={`badge-rank ${trend}`}>{label}</span>;
         }
 
+        // API 호출 헬퍼
+        async function apiCall(url, options = {}) {
+            try {
+                const resp = await fetch(`${API_BASE}${url}`, {
+                    headers: { 'Content-Type': 'application/json', ...options.headers },
+                    ...options
+                });
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                return await resp.json();
+            } catch (e) {
+                console.warn('API 호출 실패:', url, e);
+                return null;
+            }
+        }
+
         // 순위 추적 페이지
         function RankTrackingPage() {
             const [activeTab, setActiveTab] = useState('daily');
+            const [products, setProducts] = useState([]);
             const [showProductModal, setShowProductModal] = useState(false);
             const [showChartModal, setShowChartModal] = useState(false);
-            const [showRealtimeForm, setShowRealtimeForm] = useState(false);
             const [selectedProduct, setSelectedProduct] = useState(null);
+            const [selectedKeyword, setSelectedKeyword] = useState(null);
             const [realtimeKeyword, setRealtimeKeyword] = useState('');
+            const [realtimeUrl, setRealtimeUrl] = useState('');
             const [realtimeResult, setRealtimeResult] = useState(null);
+            const [realtimeLoading, setRealtimeLoading] = useState(false);
+            const [newProductUrl, setNewProductUrl] = useState('');
+            const [newKeywords, setNewKeywords] = useState('');
+            const [addLoading, setAddLoading] = useState(false);
+            const [historyData, setHistoryData] = useState([]);
             const chartRef = useRef(null);
             const chartInstance = useRef(null);
 
+            // 상품 목록 로드
             useEffect(() => {
-                if (showChartModal && chartRef.current && selectedProduct) {
+                loadProducts();
+            }, []);
+
+            const loadProducts = async () => {
+                const res = await apiCall('/api/products');
+                if (res && res.success) {
+                    setProducts(res.data);
+                } else {
+                    setProducts(DEMO_DATA.trackedProducts.map(p => ({
+                        ...p, product_name: p.name, image_url: p.imageUrl,
+                        keywords: p.keywords.map((k, i) => ({id: i+1, keyword: k.keyword, latest_rank: k.rank}))
+                    })));
+                }
+            };
+
+            // 차트 이력 로드
+            useEffect(() => {
+                if (showChartModal && selectedKeyword) {
+                    (async () => {
+                        const res = await apiCall(`/api/rank/history/${selectedKeyword.id}?days=30`);
+                        if (res && res.success && res.data.length > 0) {
+                            setHistoryData(res.data);
+                        } else {
+                            setHistoryData([
+                                {rank_position: 20, checked_at: '2026-04-01'},
+                                {rank_position: 18, checked_at: '2026-04-03'},
+                                {rank_position: 15, checked_at: '2026-04-05'},
+                                {rank_position: 16, checked_at: '2026-04-07'},
+                                {rank_position: 14, checked_at: '2026-04-09'},
+                                {rank_position: 12, checked_at: '2026-04-11'},
+                            ]);
+                        }
+                    })();
+                }
+            }, [showChartModal, selectedKeyword]);
+
+            useEffect(() => {
+                if (showChartModal && chartRef.current && historyData.length > 0) {
                     const ctx = chartRef.current.getContext('2d');
                     if (chartInstance.current) {
                         chartInstance.current.destroy();
                     }
 
-                    const chartKey = `${selectedProduct.name}|${selectedProduct.keywords[0].keyword}`;
-                    const historyData = DEMO_DATA.rankHistory[chartKey] || [20, 19, 18, 17, 16, 15, 16, 17, 18, 20];
+                    const labels = historyData.map(h => (h.checked_at || '').slice(5, 10));
+                    const dataPoints = historyData.map(h => h.rank_position);
 
                     chartInstance.current = new Chart(ctx, {
                         type: 'line',
                         data: {
-                            labels: ['D-9', 'D-8', 'D-7', 'D-6', 'D-5', 'D-4', 'D-3', 'D-2', 'D-1', '오늘'],
+                            labels: labels,
                             datasets: [
                                 {
-                                    label: '순위',
-                                    data: historyData,
+                                    label: selectedKeyword?.keyword || '순위',
+                                    data: dataPoints,
                                     borderColor: '#667eea',
                                     backgroundColor: 'rgba(102, 126, 234, 0.1)',
                                     borderWidth: 3,
@@ -545,34 +605,52 @@
             }, [showChartModal, selectedProduct]);
 
             const handleRealtimeSearch = async () => {
-                if (!realtimeKeyword.trim()) return;
-
-                try {
-                    const response = await fetch(`${API_BASE}/api/rank/realtime?keyword=${encodeURIComponent(realtimeKeyword)}`);
-                    if (response.ok) {
-                        const data = await response.json();
-                        setRealtimeResult(data);
-                    } else {
-                        // 데모 데이터로 폴백
-                        setRealtimeResult({
-                            keyword: realtimeKeyword,
-                            results: [
-                                { rank: 3, name: 'Smart Watch Pro 시리즈', category: 'Electronics', rating: 4.8 },
-                                { rank: 8, name: 'Competitor Product 1', category: 'Electronics', rating: 4.5 },
-                                { rank: 15, name: 'Competitor Product 2', category: 'Premium', rating: 4.7 }
-                            ]
-                        });
-                    }
-                } catch (error) {
-                    console.warn('실시간 순위 조회 실패, 데모 데이터 사용:', error);
+                if (!realtimeKeyword.trim() || !realtimeUrl.trim()) return;
+                setRealtimeLoading(true);
+                const res = await apiCall('/api/rank/check', {
+                    method: 'POST',
+                    body: JSON.stringify({ keyword: realtimeKeyword, product_url: realtimeUrl })
+                });
+                if (res && res.success) {
+                    setRealtimeResult(res.data);
+                } else {
                     setRealtimeResult({
-                        keyword: realtimeKeyword,
-                        results: [
-                            { rank: 3, name: 'Smart Watch Pro 시리즈', category: 'Electronics', rating: 4.8 },
-                            { rank: 8, name: 'Competitor Product 1', category: 'Electronics', rating: 4.5 }
-                        ]
+                        keyword: realtimeKeyword, rank_position: null,
+                        analysis: '조회에 실패했습니다. URL과 키워드를 확인해주세요.',
+                        top_competitors: []
                     });
                 }
+                setRealtimeLoading(false);
+            };
+
+            const handleAddProduct = async () => {
+                if (!newProductUrl.trim() || !newKeywords.trim()) return;
+                setAddLoading(true);
+                const keywords = newKeywords.split(',').map(k => k.trim()).filter(k => k);
+                const res = await apiCall('/api/products/track', {
+                    method: 'POST',
+                    body: JSON.stringify({ product_url: newProductUrl, keywords })
+                });
+                if (res && res.success) {
+                    setShowProductModal(false);
+                    setNewProductUrl('');
+                    setNewKeywords('');
+                    await loadProducts();
+                }
+                setAddLoading(false);
+            };
+
+            const handleDeleteProduct = async (productId) => {
+                if (!confirm('이 상품을 삭제하시겠습니까?')) return;
+                const res = await apiCall(`/api/products/${productId}`, { method: 'DELETE' });
+                if (res && res.success) {
+                    await loadProducts();
+                }
+            };
+
+            const handleRefreshRank = async (productId) => {
+                await apiCall(`/api/rank/refresh/${productId}`, { method: 'POST' });
+                alert('순위 재체크를 시작했습니다. 잠시 후 새로고침하세요.');
             };
 
             return (
@@ -607,139 +685,123 @@
                             <div className="grid grid-cols-3 gap-4 mb-6">
                                 <div className="glassmorphism p-5 rounded-lg">
                                     <div className="text-gray-600 text-sm font-medium mb-2">추적 중인 상품</div>
-                                    <div className="text-3xl font-bold text-gray-900">{DEMO_DATA.trackedProducts.length}</div>
+                                    <div className="text-3xl font-bold text-gray-900">{products.length}</div>
                                 </div>
                                 <div className="glassmorphism p-5 rounded-lg">
                                     <div className="text-gray-600 text-sm font-medium mb-2">추적 중인 키워드</div>
                                     <div className="text-3xl font-bold text-gray-900">
-                                        {DEMO_DATA.trackedProducts.reduce((sum, p) => sum + p.keywords.length, 0)}
+                                        {products.reduce((sum, p) => sum + (p.keywords || []).length, 0)}
                                     </div>
                                 </div>
                                 <div className="glassmorphism p-5 rounded-lg">
-                                    <div className="text-gray-600 text-sm font-medium mb-2">오늘 순위 변동</div>
-                                    <div className="text-3xl font-bold text-red-600">-2위</div>
+                                    <div className="text-gray-600 text-sm font-medium mb-2">상품 등록</div>
+                                    <button onClick={() => setShowProductModal(true)} className="btn btn-primary btn-sm mt-1">+ 새 상품</button>
                                 </div>
                             </div>
 
                             {/* 상품 카드 목록 */}
                             <div className="space-y-4 mb-6">
-                                {DEMO_DATA.trackedProducts.map((product) => (
+                                {products.map((product) => (
                                     <div key={product.id} className="glassmorphism p-5 rounded-lg">
                                         <div className="flex justify-between items-start mb-4">
                                             <div className="flex gap-4 flex-1">
-                                                <img src={product.imageUrl} alt={product.name} className="w-24 h-24 rounded-lg object-cover" />
+                                                {product.image_url && <img src={product.image_url} alt={product.product_name} className="w-24 h-24 rounded-lg object-cover" />}
                                                 <div className="flex-1">
-                                                    <h3 className="font-bold text-lg text-gray-900 mb-2">{product.name}</h3>
-                                                    <div className="text-sm text-gray-600 mb-2">월 예상 매출: <span className="font-semibold text-gray-900">{(product.monthlyRevenue / 1000000).toFixed(1)}M</span></div>
-                                                    <div className="text-sm text-gray-600">최근 업데이트: {product.lastUpdate}</div>
+                                                    <h3 className="font-bold text-lg text-gray-900 mb-2">{product.product_name || '상품명 로딩 중...'}</h3>
+                                                    <div className="text-sm text-gray-600 mb-2">스토어: <span className="font-semibold text-gray-900">{product.store_name || '-'}</span></div>
+                                                    <div className="text-sm text-gray-600">등록일: {(product.created_at || '').slice(0, 10)}</div>
                                                 </div>
                                             </div>
-                                            <button
-                                                onClick={() => { setSelectedProduct(product); setShowChartModal(true); }}
-                                                className="btn btn-sm btn-primary"
-                                            >
-                                                이력 보기
-                                            </button>
+                                            <div className="flex gap-2">
+                                                <button onClick={() => handleRefreshRank(product.id)} className="btn btn-sm btn-secondary">🔄 재체크</button>
+                                                <button onClick={() => handleDeleteProduct(product.id)} className="btn btn-sm" style={{background:'#fee2e2',color:'#dc2626'}}>삭제</button>
                                         </div>
 
                                         {/* 키워드 순위 배지 */}
                                         <div className="flex flex-wrap gap-3">
-                                            {product.keywords.map((kw, idx) => (
-                                                <div key={idx} className="flex items-center gap-2 bg-gray-100 px-3 py-2 rounded-lg">
+                                            {(product.keywords || []).map((kw, idx) => (
+                                                <div key={idx}
+                                                    className="flex items-center gap-2 bg-gray-100 px-3 py-2 rounded-lg cursor-pointer hover:bg-purple-100"
+                                                    onClick={() => { setSelectedProduct(product); setSelectedKeyword(kw); setShowChartModal(true); }}
+                                                >
                                                     <span className="text-sm text-gray-700"><strong>{kw.keyword}</strong></span>
-                                                    <span className="text-sm font-bold text-gray-900">#{kw.rank}</span>
-                                                    <RankTrendBadge prevRank={kw.prevRank} currentRank={kw.rank} />
+                                                    <span className="text-sm font-bold text-gray-900">
+                                                        {kw.latest_rank ? `#${kw.latest_rank}` : '미확인'}
+                                                    </span>
+                                                    <span className="text-xs text-purple-500">📈 이력</span>
                                                 </div>
                                             ))}
                                         </div>
                                     </div>
                                 ))}
-                            </div>
-
-                            {/* 경쟁상품 비교 */}
-                            <div className="glassmorphism p-5 rounded-lg">
-                                <h3 className="font-bold text-lg text-gray-900 mb-4">경쟁 상품 분석</h3>
-                                <div className="overflow-x-auto">
-                                    <table className="w-full text-sm">
-                                        <thead className="table-header">
-                                            <tr>
-                                                <th className="text-left py-3 px-4">순위</th>
-                                                <th className="text-left py-3 px-4">상품명</th>
-                                                <th className="text-left py-3 px-4">카테고리</th>
-                                                <th className="text-right py-3 px-4">평균 매출</th>
-                                                <th className="text-center py-3 px-4">평점</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {DEMO_DATA.competitors.map((comp, idx) => (
-                                                <tr key={idx} className="table-row">
-                                                    <td className="py-3 px-4 font-bold text-purple-600">#{comp.rank}</td>
-                                                    <td className="py-3 px-4">{comp.name}</td>
-                                                    <td className="py-3 px-4 text-gray-600">{comp.category}</td>
-                                                    <td className="py-3 px-4 text-right font-semibold">{(comp.avgSales / 1000000).toFixed(1)}M</td>
-                                                    <td className="py-3 px-4 text-center">
-                                                        <span className="text-yellow-500">★</span> {comp.rating.toFixed(1)}
-                                                    </td>
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
-                                </div>
-
-                                <div className="mt-4 p-4 bg-blue-50 border-l-4 border-blue-400 rounded">
-                                    <p className="text-sm text-blue-900">
-                                        <strong>AI 분석 코멘트:</strong> 1위 제품(Galaxy Watch 6 Classic)과 경쟁하려면 마케팅 강화 및 리뷰 확보가 필수입니다. 가격대 경쟁력 확보와 함께 고객 만족도 개선에 집중하세요.
-                                    </p>
-                                </div>
-                            </div>
-
-                            {/* 상품 등록 버튼 */}
-                            <div className="mt-6 flex gap-3">
-                                <button onClick={() => setShowProductModal(true)} className="btn btn-primary">
-                                    + 상품 등록
-                                </button>
-                            </div>
                         </div>
                     ) : (
                         <div>
                             {/* 실시간 순위 조회 */}
                             <div className="glassmorphism p-6 rounded-lg mb-6">
-                                <h3 className="font-bold text-lg text-gray-900 mb-4">키워드 실시간 순위 조회</h3>
-                                <div className="flex gap-3">
+                                <h3 className="font-bold text-lg text-gray-900 mb-4">키워드 + 상품 URL 실시간 순위 조회</h3>
+                                <div className="space-y-3">
                                     <input
                                         type="text"
-                                        placeholder="조회할 키워드 입력"
+                                        placeholder="키워드 입력 (예: 스마트 워치)"
                                         value={realtimeKeyword}
                                         onChange={(e) => setRealtimeKeyword(e.target.value)}
-                                        onKeyPress={(e) => e.key === 'Enter' && handleRealtimeSearch()}
-                                        className="form-input flex-1"
+                                        className="form-input"
                                     />
-                                    <button onClick={handleRealtimeSearch} className="btn btn-primary">
-                                        검색
+                                    <input
+                                        type="url"
+                                        placeholder="상품 URL (https://smartstore.naver.com/...)"
+                                        value={realtimeUrl}
+                                        onChange={(e) => setRealtimeUrl(e.target.value)}
+                                        onKeyPress={(e) => e.key === 'Enter' && handleRealtimeSearch()}
+                                        className="form-input"
+                                    />
+                                    <button onClick={handleRealtimeSearch} disabled={realtimeLoading} className="btn btn-primary w-full">
+                                        {realtimeLoading ? '조회 중...' : '순위 조회'}
                                     </button>
                                 </div>
                             </div>
 
                             {/* 실시간 결과 */}
                             {realtimeResult && (
-                                <div className="glassmorphism p-6 rounded-lg">
-                                    <h4 className="font-semibold text-gray-900 mb-4">"{realtimeResult.keyword}" 검색 결과</h4>
-                                    <div className="space-y-3">
-                                        {realtimeResult.results.map((result, idx) => (
-                                            <div key={idx} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                                                <div className="flex items-center gap-3">
-                                                    <div className="w-10 h-10 bg-gradient-to-br from-purple-400 to-purple-600 rounded-lg flex items-center justify-center text-white font-bold text-sm">
-                                                        #{result.rank}
-                                                    </div>
-                                                    <div>
-                                                        <div className="font-semibold text-gray-900">{result.name}</div>
-                                                        <div className="text-xs text-gray-600">{result.category}</div>
-                                                    </div>
-                                                </div>
-                                                <div className="text-yellow-500">★ {result.rating.toFixed(1)}</div>
+                                <div className="space-y-4">
+                                    <div className="glassmorphism p-6 rounded-lg">
+                                        <h4 className="font-semibold text-gray-900 mb-4">"{realtimeResult.keyword}" 순위 결과</h4>
+                                        <div className="text-center py-4">
+                                            <div className="text-5xl font-black text-purple-600 mb-2">
+                                                {realtimeResult.rank_position ? `${realtimeResult.rank_position}위` : '미발견'}
                                             </div>
-                                        ))}
+                                            {realtimeResult.page_number && (
+                                                <div className="text-gray-600">페이지 {realtimeResult.page_number}</div>
+                                            )}
+                                        </div>
+                                        {realtimeResult.analysis && (
+                                            <div className="mt-4 p-4 bg-blue-50 border-l-4 border-blue-400 rounded">
+                                                <p className="text-sm text-blue-900">{realtimeResult.analysis}</p>
+                                            </div>
+                                        )}
                                     </div>
+                                    {realtimeResult.top_competitors && realtimeResult.top_competitors.length > 0 && (
+                                        <div className="glassmorphism p-6 rounded-lg">
+                                            <h4 className="font-semibold text-gray-900 mb-3">상위 경쟁 상품</h4>
+                                            <div className="space-y-2">
+                                                {realtimeResult.top_competitors.slice(0, 5).map((c, i) => (
+                                                    <div key={i} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                                                        <div className="flex items-center gap-3">
+                                                            <div className="w-8 h-8 bg-purple-600 rounded flex items-center justify-center text-white font-bold text-sm">
+                                                                {c.rank}
+                                                            </div>
+                                                            <div>
+                                                                <div className="font-semibold text-gray-900 text-sm">{(c.product_name || '').slice(0, 30)}</div>
+                                                                <div className="text-xs text-gray-500">{c.store_name}</div>
+                                                            </div>
+                                                        </div>
+                                                        <div className="text-sm font-semibold">{(c.price || 0).toLocaleString()}원</div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
                             )}
                         </div>
@@ -751,20 +813,15 @@
                             <div className="glassmorphism rounded-lg max-w-2xl w-full p-6 max-h-[80vh] overflow-y-auto">
                                 <div className="flex justify-between items-center mb-4">
                                     <h3 className="font-bold text-lg text-gray-900">
-                                        {selectedProduct?.name} - 순위 이력
+                                        {selectedProduct?.product_name} — "{selectedKeyword?.keyword}" 순위 이력
                                     </h3>
-                                    <button
-                                        onClick={() => setShowChartModal(false)}
-                                        className="text-gray-400 hover:text-gray-600 text-2xl"
-                                    >
-                                        ×
-                                    </button>
+                                    <button onClick={() => { setShowChartModal(false); setHistoryData([]); }} className="text-gray-400 hover:text-gray-600 text-2xl">×</button>
                                 </div>
                                 <div className="chart-container">
                                     <canvas ref={chartRef}></canvas>
                                 </div>
                                 <div className="text-center mt-4">
-                                    <p className="text-sm text-gray-600">최근 10일간 순위 변동 추이</p>
+                                    <p className="text-sm text-gray-600">최근 30일간 순위 변동 추이 (낮을수록 좋음)</p>
                                 </div>
                             </div>
                         </div>
@@ -776,32 +833,23 @@
                             <div className="glassmorphism rounded-lg max-w-xl w-full p-6">
                                 <div className="flex justify-between items-center mb-4">
                                     <h3 className="font-bold text-lg text-gray-900">상품 등록</h3>
-                                    <button
-                                        onClick={() => setShowProductModal(false)}
-                                        className="text-gray-400 hover:text-gray-600 text-2xl"
-                                    >
-                                        ×
-                                    </button>
+                                    <button onClick={() => setShowProductModal(false)} className="text-gray-400 hover:text-gray-600 text-2xl">×</button>
                                 </div>
                                 <div className="space-y-4">
                                     <div>
-                                        <label className="block text-sm font-semibold text-gray-700 mb-1">상품명</label>
-                                        <input type="text" placeholder="상품명 입력" className="form-input" />
+                                        <label className="block text-sm font-semibold text-gray-700 mb-1">상품 URL (네이버 스마트스토어)</label>
+                                        <input type="url" placeholder="https://smartstore.naver.com/..." value={newProductUrl}
+                                            onChange={(e) => setNewProductUrl(e.target.value)} className="form-input" />
                                     </div>
                                     <div>
-                                        <label className="block text-sm font-semibold text-gray-700 mb-1">추적할 키워드</label>
-                                        <input type="text" placeholder="쉼표로 구분" className="form-input" />
-                                    </div>
-                                    <div>
-                                        <label className="block text-sm font-semibold text-gray-700 mb-1">상품 링크 (옵션)</label>
-                                        <input type="url" placeholder="https://..." className="form-input" />
+                                        <label className="block text-sm font-semibold text-gray-700 mb-1">추적할 키워드 (쉼표 구분)</label>
+                                        <input type="text" placeholder="스마트워치, 저가 워치, 운동 워치" value={newKeywords}
+                                            onChange={(e) => setNewKeywords(e.target.value)} className="form-input" />
                                     </div>
                                     <div className="flex gap-3 mt-6">
-                                        <button onClick={() => setShowProductModal(false)} className="btn btn-secondary flex-1">
-                                            취소
-                                        </button>
-                                        <button onClick={() => setShowProductModal(false)} className="btn btn-primary flex-1">
-                                            등록
+                                        <button onClick={() => setShowProductModal(false)} className="btn btn-secondary flex-1">취소</button>
+                                        <button onClick={handleAddProduct} disabled={addLoading} className="btn btn-primary flex-1">
+                                            {addLoading ? '등록 중...' : '등록'}
                                         </button>
                                     </div>
                                 </div>
@@ -883,12 +931,27 @@
 
                 setLoading(true);
                 try {
-                    const response = await fetch(`${API_BASE}/api/keyword/analyze?keyword=${encodeURIComponent(keyword)}`);
-                    if (response.ok) {
-                        const data = await response.json();
-                        setResult(data);
+                    const res = await apiCall('/api/keyword/volume', {
+                        method: 'POST',
+                        body: JSON.stringify([keyword])
+                    });
+                    if (res && res.success && res.data && res.data.length > 0) {
+                        const kd = res.data[0];
+                        const totalVol = (kd.monthlyPcQcCnt || 0) + (kd.monthlyMobileQcCnt || 0);
+                        const compMap = {'HIGH':'높음','MEDIUM':'보통','LOW':'낮음','높음':'높음','보통':'보통','낮음':'낮음'};
+                        setResult({
+                            keyword: kd.keyword || keyword,
+                            searchVolume: { pc: kd.monthlyPcQcCnt || 0, mobile: kd.monthlyMobileQcCnt || 0 },
+                            totalSearchVolume: totalVol,
+                            products: 0,
+                            competitionRate: kd.compIdx === 'HIGH' || kd.compIdx === '높음' ? 0.8 : kd.compIdx === 'MEDIUM' || kd.compIdx === '보통' ? 0.5 : 0.2,
+                            competitionGrade: compMap[kd.compIdx] || '보통',
+                            page1AvgSales: totalVol * 300,
+                            page2AvgSales: totalVol * 40,
+                            entryRecommend: totalVol < 3000 && (kd.compIdx === 'LOW' || kd.compIdx === '낮음') ? '추천' : totalVol > 50000 ? '비추천' : '보통',
+                            entryReason: totalVol < 3000 ? '검색량이 적고 경쟁이 낮아 진입 기회가 있습니다.' : totalVol > 50000 ? '검색량이 매우 많으나 경쟁이 치열합니다.' : '적당한 검색량과 경쟁 수준입니다.',
+                        });
                     } else {
-                        // 데모 데이터로 폴백
                         setResult(DEMO_DATA.keywordAnalysis);
                     }
                 } catch (error) {
@@ -985,22 +1048,34 @@
 
                 setLoading(true);
                 try {
-                    const response = await fetch(`${API_BASE}/api/keyword/related?keyword=${encodeURIComponent(keyword)}`);
-                    if (response.ok) {
-                        const data = await response.json();
-                        setResults(data);
+                    const res = await apiCall('/api/keywords/related', {
+                        method: 'POST',
+                        body: JSON.stringify({ keyword })
+                    });
+                    if (res && res.success) {
+                        const compMap = {'HIGH':'높음','MEDIUM':'보통','LOW':'낮음','높음':'높음','보통':'보통','낮음':'낮음'};
+                        const golden = (res.data.golden_keywords || []).map(k => ({
+                            keyword: k.keyword,
+                            searchVolume: k.totalVolume,
+                            competitionRate: k.compIdx === 'HIGH' ? 0.8 : k.compIdx === 'MEDIUM' ? 0.5 : 0.2,
+                            competitionGrade: compMap[k.compIdx] || '낮음',
+                            expectedMonthlyRevenue: Math.round(k.totalVolume * 0.02 * 30000),
+                            estimationNote: '전환율 2%, 객단가 30,000원 기준'
+                        }));
+                        const related = (res.data.related_keywords || []).map(k => ({
+                            keyword: k.keyword,
+                            searchVolume: k.totalVolume,
+                            products: 0,
+                            competitionRate: k.compIdx === 'HIGH' ? 0.8 : k.compIdx === 'MEDIUM' ? 0.5 : 0.2,
+                            competitionGrade: compMap[k.compIdx] || '보통',
+                        }));
+                        setResults({ goldenKeywords: golden, relatedKeywords: related });
                     } else {
-                        setResults({
-                            relatedKeywords: DEMO_DATA.relatedKeywords,
-                            goldenKeywords: DEMO_DATA.goldenKeywords
-                        });
+                        setResults({ relatedKeywords: DEMO_DATA.relatedKeywords, goldenKeywords: DEMO_DATA.goldenKeywords });
                     }
                 } catch (error) {
                     console.warn('연관키워드 API 호출 실패:', error);
-                    setResults({
-                        relatedKeywords: DEMO_DATA.relatedKeywords,
-                        goldenKeywords: DEMO_DATA.goldenKeywords
-                    });
+                    setResults({ relatedKeywords: DEMO_DATA.relatedKeywords, goldenKeywords: DEMO_DATA.goldenKeywords });
                 }
                 setLoading(false);
             };
@@ -1136,10 +1211,32 @@
 
                 setLoading(true);
                 try {
-                    const response = await fetch(`${API_BASE}/api/keyword/product-names?keyword=${encodeURIComponent(keyword)}`);
-                    if (response.ok) {
-                        const data = await response.json();
-                        setResult(data);
+                    // 먼저 네이버 검색 API로 상품명 수집 후 분석
+                    const searchRes = await apiCall('/api/rank/check', {
+                        method: 'POST',
+                        body: JSON.stringify({ keyword, product_url: 'https://smartstore.naver.com/placeholder' })
+                    });
+                    const productNames = (searchRes && searchRes.data && searchRes.data.top_competitors)
+                        ? searchRes.data.top_competitors.map(c => c.product_name).filter(n => n)
+                        : [];
+
+                    if (productNames.length > 0) {
+                        const analysisRes = await apiCall('/api/product-name/analyze', {
+                            method: 'POST',
+                            body: JSON.stringify({ product_names: productNames, keyword })
+                        });
+                        if (analysisRes && analysisRes.success) {
+                            const d = analysisRes.data;
+                            setResult({
+                                keyword,
+                                keywordFrequency: (d.top_keywords || []).map(k => ({ word: k.word, count: k.count })),
+                                categoryDistribution: (d.top_bigrams || []).slice(0, 5).map(b => ({ category: b.phrase, count: b.count })),
+                                recommendedTitle: `[${keyword}] ${(d.top_keywords || []).slice(0, 4).map(k => k.word).join(' ')}`,
+                                recommendedKeywords: (d.top_keywords || []).slice(0, 5).map(k => k.word),
+                            });
+                        } else {
+                            setResult(DEMO_DATA.productNameAnalysis);
+                        }
                     } else {
                         setResult(DEMO_DATA.productNameAnalysis);
                     }
@@ -1285,15 +1382,44 @@
                 }
             }, [result]);
 
+            const [seoKeyword, setSeoKeyword] = useState('');
+
             const handleAnalyze = async () => {
-                if (!url.trim()) return;
+                if (!url.trim() || !seoKeyword.trim()) return;
 
                 setLoading(true);
                 try {
-                    const response = await fetch(`${API_BASE}/api/seo/diagnose?url=${encodeURIComponent(url)}`);
-                    if (response.ok) {
-                        const data = await response.json();
-                        setResult(data);
+                    const res = await apiCall('/api/seo/analyze', {
+                        method: 'POST',
+                        body: JSON.stringify({ product_url: url, keyword: seoKeyword })
+                    });
+                    if (res && res.success) {
+                        const d = res.data;
+                        const s = d.scores;
+                        // 등급 계산
+                        let grade = 'F', gradeDesc = '개선 필요';
+                        if (s.total >= 80) { grade = 'A'; gradeDesc = '우수 - 현재 전략 유지'; }
+                        else if (s.total >= 60) { grade = 'B'; gradeDesc = '양호 - 개선의 여지 있음'; }
+                        else if (s.total >= 40) { grade = 'C'; gradeDesc = '보통 - 적극적 개선 필요'; }
+                        else if (s.total >= 20) { grade = 'D'; gradeDesc = '미흡 - 전면 재검토 필요'; }
+
+                        setResult({
+                            url,
+                            relevance: s.title,
+                            trust: s.price,
+                            popularity: s.rank,
+                            grade,
+                            gradeDescription: gradeDesc,
+                            scores: [
+                                { item: '상품명 최적화', score: s.title },
+                                { item: '가격 경쟁력', score: s.price },
+                                { item: '순위 점수', score: s.rank },
+                                { item: '키워드 포함', score: s.detail.keyword_in_title ? 90 : 20 },
+                                { item: '상품명 길이', score: s.detail.title_length >= 20 && s.detail.title_length <= 50 ? 80 : 50 },
+                                { item: '특수문자 사용', score: Math.max(0, 100 - s.detail.special_chars * 15) },
+                            ],
+                            actions: d.suggestions || [],
+                        });
                     } else {
                         setResult(DEMO_DATA.seoDiagnosis);
                     }
@@ -1311,25 +1437,30 @@
 
             return (
                 <div className="fade-in space-y-6">
-                    {/* URL 입력 */}
+                    {/* URL + 키워드 입력 */}
                     <div className="glassmorphism p-6 rounded-lg">
                         <h2 className="font-bold text-lg text-gray-900 mb-4">SEO 종합 진단</h2>
-                        <div className="flex gap-3">
+                        <div className="space-y-3">
                             <input
                                 type="url"
-                                placeholder="상품 URL 입력 (https://...)"
+                                placeholder="상품 URL 입력 (https://smartstore.naver.com/...)"
                                 value={url}
                                 onChange={(e) => setUrl(e.target.value)}
-                                onKeyPress={(e) => e.key === 'Enter' && handleAnalyze()}
-                                className="form-input flex-1"
+                                className="form-input"
                             />
-                            <button
-                                onClick={handleAnalyze}
-                                disabled={loading}
-                                className="btn btn-primary"
-                            >
-                                {loading ? '분석 중...' : '진단'}
-                            </button>
+                            <div className="flex gap-3">
+                                <input
+                                    type="text"
+                                    placeholder="분석 기준 키워드"
+                                    value={seoKeyword}
+                                    onChange={(e) => setSeoKeyword(e.target.value)}
+                                    onKeyPress={(e) => e.key === 'Enter' && handleAnalyze()}
+                                    className="form-input flex-1"
+                                />
+                                <button onClick={handleAnalyze} disabled={loading} className="btn btn-primary">
+                                    {loading ? '분석 중...' : '진단'}
+                                </button>
+                            </div>
                         </div>
                     </div>
 
@@ -1400,29 +1531,56 @@
 
         // 알림톡 설정 페이지
         function NotificationPage() {
-            const [enabled, setEnabled] = useState(true);
-            const [frequency, setFrequency] = useState('daily');
-            const [rankThreshold, setRankThreshold] = useState(5);
-            const [recipients, setRecipients] = useState([
-                { id: 1, name: '홍길동', phone: '010-1234-5678' },
-                { id: 2, name: '김영희', phone: '010-2345-6789' }
-            ]);
-            const [newRecipient, setNewRecipient] = useState({ name: '', phone: '' });
-            const [recentLogs, setRecentLogs] = useState([
-                { id: 1, date: '2026-04-11 10:30', product: 'Smart Watch Pro', recipient: '홍길동', status: '성공' },
-                { id: 2, date: '2026-04-10 15:20', product: 'Wireless Earbuds', recipient: '김영희', status: '성공' },
-                { id: 3, date: '2026-04-09 09:15', product: 'Smart Watch Pro', recipient: '홍길동', status: '실패' }
-            ]);
+            const [enabled, setEnabled] = useState(false);
+            const [phone, setPhone] = useState('');
+            const [reportTime, setReportTime] = useState('09:00');
+            const [solapiConfigured, setSolapiConfigured] = useState(false);
+            const [recentLogs, setRecentLogs] = useState([]);
+            const [testLoading, setTestLoading] = useState(false);
+            const [saveLoading, setSaveLoading] = useState(false);
 
-            const handleAddRecipient = () => {
-                if (newRecipient.name && newRecipient.phone && recipients.length < 10) {
-                    setRecipients([...recipients, { id: recipients.length + 1, ...newRecipient }]);
-                    setNewRecipient({ name: '', phone: '' });
+            useEffect(() => {
+                loadSettings();
+                loadLogs();
+            }, []);
+
+            const loadSettings = async () => {
+                const res = await apiCall('/api/notify/settings');
+                if (res && res.success) {
+                    setEnabled(res.data.notify_enabled || false);
+                    setPhone(res.data.receiver_phone || '');
+                    setReportTime(res.data.report_time || '09:00');
+                    setSolapiConfigured(res.data.solapi_configured || false);
                 }
             };
 
-            const handleRemoveRecipient = (id) => {
-                setRecipients(recipients.filter(r => r.id !== id));
+            const loadLogs = async () => {
+                const res = await apiCall('/api/notify/logs?limit=10');
+                if (res && res.success) {
+                    setRecentLogs(res.data || []);
+                }
+            };
+
+            const handleSaveSettings = async () => {
+                setSaveLoading(true);
+                await apiCall('/api/notify/settings', {
+                    method: 'PUT',
+                    body: JSON.stringify({ notify_enabled: enabled, receiver_phone: phone, report_time: reportTime })
+                });
+                setSaveLoading(false);
+                alert('설정이 저장되었습니다.');
+            };
+
+            const handleTestNotification = async () => {
+                setTestLoading(true);
+                const res = await apiCall('/api/notify/test', { method: 'POST' });
+                if (res && res.success) {
+                    alert('테스트 알림이 발송되었습니다.');
+                } else {
+                    alert('테스트 발송 실패: ' + (res?.error || res?.data?.error || '알 수 없는 오류'));
+                }
+                setTestLoading(false);
+                loadLogs();
             };
 
             return (
@@ -1441,131 +1599,77 @@
                         </div>
                     </div>
 
-                    {enabled && (
-                        <>
-                            {/* 발송 주기 */}
-                            <div className="glassmorphism p-6 rounded-lg">
-                                <h3 className="font-bold text-lg text-gray-900 mb-4">발송 주기</h3>
-                                <div className="space-y-2">
-                                    {[
-                                        { value: 'instant', label: '즉시' },
-                                        { value: 'daily', label: '일간 (매일 9:00)' },
-                                        { value: 'weekly', label: '주간 (매주 월요일)' },
-                                        { value: 'monthly', label: '월간 (매월 1일)' }
-                                    ].map((option) => (
-                                        <label key={option.value} className="flex items-center gap-3 cursor-pointer p-2 hover:bg-gray-50 rounded">
-                                            <input
-                                                type="radio"
-                                                name="frequency"
-                                                value={option.value}
-                                                checked={frequency === option.value}
-                                                onChange={(e) => setFrequency(e.target.value)}
-                                                className="w-4 h-4"
-                                            />
-                                            <span className="text-gray-700">{option.label}</span>
-                                        </label>
-                                    ))}
-                                </div>
+                    {/* Solapi 상태 */}
+                    <div className="glassmorphism p-6 rounded-lg">
+                        <div className="flex items-center gap-3">
+                            <span className={`badge-rank ${solapiConfigured ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                                {solapiConfigured ? '✓ Solapi 연동됨' : '✗ Solapi 미설정'}
+                            </span>
+                            {!solapiConfigured && (
+                                <span className="text-sm text-gray-600">환경변수(SOLAPI_API_KEY 등)를 서버에 설정하세요.</span>
+                            )}
+                        </div>
+                    </div>
+
+                    {/* 수신 설정 */}
+                    <div className="glassmorphism p-6 rounded-lg">
+                        <h3 className="font-bold text-lg text-gray-900 mb-4">수신 설정</h3>
+                        <div className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-semibold text-gray-700 mb-1">수신자 전화번호</label>
+                                <input type="tel" placeholder="01012345678" value={phone}
+                                    onChange={(e) => setPhone(e.target.value)} className="form-input" />
                             </div>
-
-                            {/* 알림 조건 */}
-                            <div className="glassmorphism p-6 rounded-lg">
-                                <h3 className="font-bold text-lg text-gray-900 mb-4">알림 조건</h3>
-                                <label className="text-gray-700">
-                                    순위 변동 <strong>{rankThreshold}</strong>위 이상일 때 알림
-                                </label>
-                                <input
-                                    type="range"
-                                    min="1"
-                                    max="20"
-                                    value={rankThreshold}
-                                    onChange={(e) => setRankThreshold(parseInt(e.target.value))}
-                                    className="w-full mt-2"
-                                />
+                            <div>
+                                <label className="block text-sm font-semibold text-gray-700 mb-1">일일 리포트 발송 시간</label>
+                                <input type="time" value={reportTime}
+                                    onChange={(e) => setReportTime(e.target.value)} className="form-input" />
                             </div>
-
-                            {/* 수신자 관리 */}
-                            <div className="glassmorphism p-6 rounded-lg">
-                                <h3 className="font-bold text-lg text-gray-900 mb-4">수신자 관리 ({recipients.length}/10)</h3>
-
-                                {/* 수신자 목록 */}
-                                <div className="space-y-2 mb-6">
-                                    {recipients.map((recipient) => (
-                                        <div key={recipient.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                                            <div>
-                                                <div className="font-semibold text-gray-900">{recipient.name}</div>
-                                                <div className="text-sm text-gray-600">{recipient.phone}</div>
-                                            </div>
-                                            <button
-                                                onClick={() => handleRemoveRecipient(recipient.id)}
-                                                className="text-red-600 hover:text-red-800 font-semibold"
-                                            >
-                                                삭제
-                                            </button>
-                                        </div>
-                                    ))}
-                                </div>
-
-                                {/* 새 수신자 추가 */}
-                                {recipients.length < 10 && (
-                                    <div className="space-y-3 p-4 bg-gray-50 rounded-lg">
-                                        <h4 className="font-semibold text-gray-900">새 수신자 추가</h4>
-                                        <input
-                                            type="text"
-                                            placeholder="이름"
-                                            value={newRecipient.name}
-                                            onChange={(e) => setNewRecipient({ ...newRecipient, name: e.target.value })}
-                                            className="form-input"
-                                        />
-                                        <input
-                                            type="tel"
-                                            placeholder="전화번호 (010-0000-0000)"
-                                            value={newRecipient.phone}
-                                            onChange={(e) => setNewRecipient({ ...newRecipient, phone: e.target.value })}
-                                            className="form-input"
-                                        />
-                                        <button
-                                            onClick={handleAddRecipient}
-                                            className="btn btn-primary w-full"
-                                        >
-                                            추가
-                                        </button>
-                                    </div>
-                                )}
+                            <div className="flex gap-3">
+                                <button onClick={handleSaveSettings} disabled={saveLoading} className="btn btn-primary flex-1">
+                                    {saveLoading ? '저장 중...' : '설정 저장'}
+                                </button>
+                                <button onClick={handleTestNotification} disabled={testLoading} className="btn btn-secondary flex-1">
+                                    {testLoading ? '발송 중...' : '테스트 발송'}
+                                </button>
                             </div>
+                        </div>
+                    </div>
 
-                            {/* 최근 발송 이력 */}
-                            <div className="glassmorphism p-6 rounded-lg">
-                                <h3 className="font-bold text-lg text-gray-900 mb-4">최근 발송 이력</h3>
-                                <div className="overflow-x-auto">
-                                    <table className="w-full text-sm">
-                                        <thead className="table-header">
-                                            <tr>
-                                                <th className="text-left py-3 px-4">발송시간</th>
-                                                <th className="text-left py-3 px-4">상품</th>
-                                                <th className="text-left py-3 px-4">수신자</th>
-                                                <th className="text-center py-3 px-4">상태</th>
+                    {/* 최근 발송 이력 */}
+                    <div className="glassmorphism p-6 rounded-lg">
+                        <h3 className="font-bold text-lg text-gray-900 mb-4">최근 발송 이력</h3>
+                        {recentLogs.length === 0 ? (
+                            <p className="text-gray-500 text-sm">발송 이력이 없습니다.</p>
+                        ) : (
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-sm">
+                                    <thead className="table-header">
+                                        <tr>
+                                            <th className="text-left py-3 px-4">발송시간</th>
+                                            <th className="text-left py-3 px-4">유형</th>
+                                            <th className="text-left py-3 px-4">수신자</th>
+                                            <th className="text-center py-3 px-4">상태</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {recentLogs.map((log) => (
+                                            <tr key={log.id} className="table-row">
+                                                <td className="py-3 px-4 text-gray-600">{(log.sent_at || '').slice(0, 16)}</td>
+                                                <td className="py-3 px-4 font-semibold">{log.log_type}</td>
+                                                <td className="py-3 px-4">{log.receiver_phone || '-'}</td>
+                                                <td className="py-3 px-4 text-center">
+                                                    <span className={`badge-rank ${log.status === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                                                        {log.status === 'success' ? '성공' : '실패'}
+                                                    </span>
+                                                </td>
                                             </tr>
-                                        </thead>
-                                        <tbody>
-                                            {recentLogs.map((log) => (
-                                                <tr key={log.id} className="table-row">
-                                                    <td className="py-3 px-4 text-gray-600">{log.date}</td>
-                                                    <td className="py-3 px-4 font-semibold">{log.product}</td>
-                                                    <td className="py-3 px-4">{log.recipient}</td>
-                                                    <td className="py-3 px-4 text-center">
-                                                        <span className={`badge-rank ${log.status === '성공' ? 'badge-rank-up' : 'badge-rank-down'}`}>
-                                                            {log.status}
-                                                        </span>
-                                                    </td>
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
-                                </div>
+                                        ))}
+                                    </tbody>
+                                </table>
                             </div>
-                        </>
-                    )}
+                        )}
+                    </div>
                 </div>
             );
         }
@@ -1587,8 +1691,48 @@
                 );
             };
 
-            const handleDownload = () => {
-                alert(`${reportType} 보고서 (${format === 'pdf' ? 'PDF' : 'Excel'}) 생성 완료!\n기간: ${period} / 브랜드: ${brandName || '미설정'}`);
+            const [exportLoading, setExportLoading] = useState(false);
+            const [previewData, setPreviewData] = useState(null);
+
+            const handleDownload = async () => {
+                setExportLoading(true);
+                const periodDays = { week: 7, month: 30, quarter: 90, year: 365 };
+                const res = await apiCall('/api/report/export', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        format: format === 'excel' ? 'csv' : 'json',
+                        date_range: periodDays[period] || 30
+                    })
+                });
+                if (res && res.success) {
+                    if (format === 'excel' && res.data.content) {
+                        // CSV 다운로드
+                        const blob = new Blob([res.data.content], { type: 'text/csv;charset=utf-8;' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url; a.download = `report_${new Date().toISOString().slice(0,10)}.csv`;
+                        a.click(); URL.revokeObjectURL(url);
+                    } else {
+                        // JSON 미리보기
+                        setPreviewData(res.data);
+                        const blob = new Blob([JSON.stringify(res.data, null, 2)], { type: 'application/json' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url; a.download = `report_${new Date().toISOString().slice(0,10)}.json`;
+                        a.click(); URL.revokeObjectURL(url);
+                    }
+                    alert('보고서가 다운로드되었습니다!');
+                } else {
+                    alert('보고서 생성에 실패했습니다.');
+                }
+                setExportLoading(false);
+            };
+
+            const handlePreview = async () => {
+                const res = await apiCall('/api/notify/preview');
+                if (res && res.success) {
+                    setPreviewData(res.data);
+                }
             };
 
             return (
@@ -1716,9 +1860,18 @@
                             </p>
                         </div>
                         <div className="flex gap-3">
-                            <button className="btn btn-secondary flex-1">미리보기</button>
-                            <button onClick={handleDownload} className="btn btn-primary flex-1">다운로드</button>
+                            <button onClick={handlePreview} className="btn btn-secondary flex-1">미리보기</button>
+                            <button onClick={handleDownload} disabled={exportLoading} className="btn btn-primary flex-1">
+                                {exportLoading ? '생성 중...' : '다운로드'}
+                            </button>
                         </div>
+                        {previewData && (
+                            <div className="mt-4 p-4 bg-gray-50 rounded-lg max-h-64 overflow-y-auto">
+                                <pre className="text-xs text-gray-700 whitespace-pre-wrap">
+                                    {previewData.report_text || JSON.stringify(previewData, null, 2).slice(0, 2000)}
+                                </pre>
+                            </div>
+                        )}
                     </div>
                 </div>
             );
