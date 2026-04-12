@@ -5,2026 +5,1039 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>로직 분석 v2 - 네이버 쇼핑 키워드 분석 & 순위 추적</title>
 
-    <!-- React & ReactDOM -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-
-    <!-- Babel Standalone (JSX 변환용) -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
-
-    <!-- Chart.js -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-
-    <!-- Tailwind CSS -->
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css" rel="stylesheet">
-
-    <!-- Noto Sans KR 폰트 -->
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700;900&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 
     <style>
-        * {
-            font-family: 'Noto Sans KR', sans-serif;
-        }
-
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
         body {
-            margin: 0;
-            padding: 0;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            color: #1a202c;
+            font-family: 'Noto Sans KR', -apple-system, sans-serif;
+            background: #f8f9fb;
+            color: #1e293b;
+            line-height: 1.6;
+            -webkit-font-smoothing: antialiased;
+        }
+        #root { min-height: 100vh; }
+
+        /* 유틸리티 */
+        .container { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+        .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
+
+        /* 헤더 */
+        .top-bar {
+            background: #fff;
+            border-bottom: 1px solid #e8ecf1;
+            position: sticky; top: 0; z-index: 50;
+        }
+        .top-bar-inner {
+            display: flex; align-items: center; justify-content: space-between;
+            height: 64px;
+        }
+        .logo { font-weight: 700; font-size: 17px; color: #0f172a; display: flex; align-items: center; gap: 8px; }
+        .logo-dot { width: 8px; height: 8px; border-radius: 50%; background: #3b82f6; }
+        .status-chip {
+            font-size: 11px; font-weight: 600; padding: 3px 10px;
+            border-radius: 999px; background: #ecfdf5; color: #059669;
+        }
+        .status-chip.offline { background: #fef2f2; color: #dc2626; }
+
+        /* 검색바 */
+        .search-section { background: #fff; border-bottom: 1px solid #e8ecf1; padding: 20px 0 24px; }
+        .search-wrapper {
+            display: flex; gap: 10px; align-items: center;
+        }
+        .search-input {
+            flex: 1; height: 48px; padding: 0 18px;
+            border: 2px solid #e2e8f0; border-radius: 10px;
+            font-size: 15px; font-family: inherit;
+            transition: border-color .2s, box-shadow .2s;
+            outline: none; background: #fff;
+        }
+        .search-input:focus { border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,.12); }
+        .search-input::placeholder { color: #94a3b8; }
+        .btn-search {
+            height: 48px; padding: 0 28px;
+            background: #3b82f6; color: #fff; border: none; border-radius: 10px;
+            font-size: 15px; font-weight: 600; cursor: pointer;
+            transition: background .2s;
+            font-family: inherit; white-space: nowrap;
+        }
+        .btn-search:hover { background: #2563eb; }
+        .btn-search:disabled { background: #94a3b8; cursor: not-allowed; }
+
+        /* 섹션 공통 */
+        .section { padding: 32px 0; }
+        .section + .section { border-top: 1px solid #f1f5f9; }
+        .section-title {
+            font-size: 18px; font-weight: 700; color: #0f172a;
+            margin-bottom: 20px; display: flex; align-items: center; gap: 8px;
+        }
+        .section-title .icon {
+            width: 28px; height: 28px; border-radius: 6px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 14px; flex-shrink: 0;
+        }
+        .section-subtitle { font-size: 13px; color: #64748b; margin-bottom: 16px; }
+
+        /* 카드 */
+        .card {
+            background: #fff; border-radius: 12px;
+            border: 1px solid #e8ecf1;
+            padding: 20px;
+            transition: box-shadow .2s;
+        }
+        .card:hover { box-shadow: 0 2px 12px rgba(0,0,0,.05); }
+        .card-grid { display: grid; gap: 16px; }
+        .card-grid-4 { grid-template-columns: repeat(4, 1fr); }
+        .card-grid-3 { grid-template-columns: repeat(3, 1fr); }
+        .card-grid-2 { grid-template-columns: repeat(2, 1fr); }
+        @media (max-width: 900px) {
+            .card-grid-4, .card-grid-3 { grid-template-columns: repeat(2, 1fr); }
+        }
+        @media (max-width: 600px) {
+            .card-grid-4, .card-grid-3, .card-grid-2 { grid-template-columns: 1fr; }
         }
 
-        #root {
-            min-height: 100vh;
+        /* 스탯 카드 */
+        .stat-label { font-size: 12px; font-weight: 500; color: #64748b; margin-bottom: 4px; }
+        .stat-value { font-size: 28px; font-weight: 700; color: #0f172a; line-height: 1.2; }
+        .stat-sub { font-size: 12px; color: #94a3b8; margin-top: 4px; }
+        .stat-icon {
+            width: 40px; height: 40px; border-radius: 10px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 18px; margin-bottom: 10px;
         }
+        .stat-icon.blue { background: #eff6ff; }
+        .stat-icon.green { background: #ecfdf5; }
+        .stat-icon.amber { background: #fffbeb; }
+        .stat-icon.purple { background: #faf5ff; }
 
-        /* 글래스모피즘 카드 */
-        .glassmorphism {
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255, 255, 255, 0.2);
-            border-radius: 12px;
+        /* 배지 */
+        .badge {
+            display: inline-flex; align-items: center; gap: 4px;
+            padding: 3px 10px; border-radius: 999px;
+            font-size: 11px; font-weight: 600;
         }
+        .badge-blue { background: #eff6ff; color: #2563eb; }
+        .badge-green { background: #ecfdf5; color: #059669; }
+        .badge-amber { background: #fffbeb; color: #d97706; }
+        .badge-red { background: #fef2f2; color: #dc2626; }
+        .badge-purple { background: #faf5ff; color: #7c3aed; }
+        .badge-gray { background: #f1f5f9; color: #64748b; }
+        .badge-gold { background: #fef9c3; color: #a16207; border: 1px solid #fde047; }
 
-        .dark-glassmorphism {
-            background: rgba(30, 30, 48, 0.8);
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 12px;
-            color: #e2e8f0;
-        }
-
-        /* 차트 컨테이너 */
-        .chart-container {
-            position: relative;
-            height: 300px;
-            margin: 20px 0;
-        }
-
-        /* 배지 스타일 */
-        .badge-rank {
-            display: inline-block;
-            padding: 4px 12px;
-            border-radius: 20px;
-            font-size: 12px;
-            font-weight: 600;
-        }
-
-        .badge-rank-up {
-            background-color: #fee2e2;
-            color: #dc2626;
-        }
-
-        .badge-rank-down {
-            background-color: #dbeafe;
-            color: #2563eb;
-        }
-
-        .badge-rank-same {
-            background-color: #f3f4f6;
-            color: #6b7280;
-        }
-
-        /* 경쟁강도 배지 */
-        .competition-very-low {
-            background-color: #d1fae5;
-            color: #065f46;
-        }
-
-        .competition-low {
-            background-color: #bfdbfe;
-            color: #1e40af;
-        }
-
-        .competition-medium {
-            background-color: #fef08a;
-            color: #713f12;
-        }
-
-        .competition-high {
-            background-color: #fed7aa;
-            color: #92400e;
-        }
-
-        .competition-very-high {
-            background-color: #fecaca;
-            color: #7f1d1d;
-        }
-
-        /* 진입 추천 배지 */
-        .recommend-good {
-            background-color: #d1fae5;
-            color: #065f46;
-        }
-
-        .recommend-neutral {
-            background-color: #fef08a;
-            color: #713f12;
-        }
-
-        .recommend-bad {
-            background-color: #fecaca;
-            color: #7f1d1d;
-        }
-
-        /* 모달 */
-        .modal-backdrop {
-            background-color: rgba(0, 0, 0, 0.7);
-            backdrop-filter: blur(5px);
-        }
-
-        /* 사이드바 아이콘 */
-        .sidebar-icon {
-            display: inline-block;
-            margin-right: 8px;
-            font-size: 18px;
-        }
-
-        /* 토글 스위치 */
-        .toggle-switch {
-            position: relative;
-            display: inline-block;
-            width: 50px;
-            height: 24px;
-        }
-
-        .toggle-switch input {
-            opacity: 0;
-            width: 0;
-            height: 0;
-        }
-
-        .toggle-slider {
-            position: absolute;
-            cursor: pointer;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background-color: #ccc;
-            transition: .4s;
-            border-radius: 24px;
-        }
-
-        .toggle-slider:before {
-            position: absolute;
-            content: "";
-            height: 18px;
-            width: 18px;
-            left: 3px;
-            bottom: 3px;
-            background-color: white;
-            transition: .4s;
-            border-radius: 50%;
-        }
-
-        input:checked + .toggle-slider {
-            background-color: #667eea;
-        }
-
-        input:checked + .toggle-slider:before {
-            transform: translateX(26px);
-        }
-
-        /* 폼 입력 */
-        .form-input {
-            width: 100%;
-            padding: 10px 12px;
-            border: 1px solid #e5e7eb;
-            border-radius: 6px;
-            font-family: 'Noto Sans KR', sans-serif;
-            font-size: 14px;
-            transition: border-color 0.2s;
-        }
-
-        .form-input:focus {
-            outline: none;
-            border-color: #667eea;
-            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
-        }
+        /* 테이블 */
+        .table-wrap { overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th { text-align: left; font-weight: 600; color: #64748b; padding: 10px 12px; border-bottom: 2px solid #e8ecf1; font-size: 12px; text-transform: uppercase; letter-spacing: .02em; }
+        td { padding: 10px 12px; border-bottom: 1px solid #f1f5f9; color: #334155; }
+        tr:hover td { background: #f8fafc; }
 
         /* 버튼 */
         .btn {
-            padding: 10px 20px;
-            border-radius: 6px;
-            font-size: 14px;
-            font-weight: 600;
-            border: none;
-            cursor: pointer;
-            transition: all 0.2s;
-            font-family: 'Noto Sans KR', sans-serif;
+            display: inline-flex; align-items: center; gap: 6px;
+            padding: 8px 16px; border-radius: 8px;
+            font-size: 13px; font-weight: 600; cursor: pointer;
+            border: 1px solid transparent; font-family: inherit;
+            transition: all .15s;
+        }
+        .btn-primary { background: #3b82f6; color: #fff; }
+        .btn-primary:hover { background: #2563eb; }
+        .btn-secondary { background: #fff; color: #334155; border-color: #e2e8f0; }
+        .btn-secondary:hover { background: #f8fafc; border-color: #cbd5e1; }
+        .btn-danger { background: #fff; color: #dc2626; border-color: #fecaca; }
+        .btn-danger:hover { background: #fef2f2; }
+        .btn-sm { padding: 5px 12px; font-size: 12px; }
+        .btn:disabled { opacity: .5; cursor: not-allowed; }
+
+        /* 입력 폼 */
+        .form-group { margin-bottom: 14px; }
+        .form-label { display: block; font-size: 12px; font-weight: 600; color: #64748b; margin-bottom: 6px; }
+        .form-input {
+            width: 100%; height: 40px; padding: 0 12px;
+            border: 1.5px solid #e2e8f0; border-radius: 8px;
+            font-size: 14px; font-family: inherit; outline: none;
+            transition: border-color .2s;
+        }
+        .form-input:focus { border-color: #3b82f6; }
+
+        /* 차트 */
+        .chart-box { position: relative; height: 260px; margin-top: 12px; }
+
+        /* 프로그레스 바 */
+        .progress-bar { height: 6px; border-radius: 999px; background: #e8ecf1; overflow: hidden; }
+        .progress-fill { height: 100%; border-radius: 999px; transition: width .3s; }
+
+        /* 로딩 */
+        .spinner {
+            width: 20px; height: 20px; border: 2.5px solid #e2e8f0;
+            border-top-color: #3b82f6; border-radius: 50%;
+            animation: spin .7s linear infinite; display: inline-block;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* 빈 상태 */
+        .empty-state {
+            text-align: center; padding: 48px 20px; color: #94a3b8;
+        }
+        .empty-state .empty-icon { font-size: 40px; margin-bottom: 12px; opacity: .5; }
+        .empty-state p { font-size: 14px; }
+
+        /* 순위 변동 */
+        .rank-up { color: #dc2626; }
+        .rank-down { color: #2563eb; }
+        .rank-same { color: #94a3b8; }
+
+        /* 섹션 앵커 네비 */
+        .anchor-nav {
+            display: flex; gap: 4px; flex-wrap: wrap;
+        }
+        .anchor-btn {
+            padding: 6px 14px; border-radius: 999px;
+            font-size: 12px; font-weight: 500; cursor: pointer;
+            border: 1px solid #e8ecf1; background: #fff; color: #475569;
+            transition: all .15s; font-family: inherit;
+        }
+        .anchor-btn:hover, .anchor-btn.active { background: #0f172a; color: #fff; border-color: #0f172a; }
+
+        /* 토글 */
+        .toggle { position: relative; display: inline-block; width: 44px; height: 24px; }
+        .toggle input { opacity: 0; width: 0; height: 0; }
+        .toggle-track {
+            position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+            background: #cbd5e1; border-radius: 24px; cursor: pointer; transition: .3s;
+        }
+        .toggle-track::before {
+            content: ""; position: absolute; height: 18px; width: 18px;
+            left: 3px; bottom: 3px; background: #fff; border-radius: 50%; transition: .3s;
+        }
+        .toggle input:checked + .toggle-track { background: #3b82f6; }
+        .toggle input:checked + .toggle-track::before { transform: translateX(20px); }
+
+        /* 스코어 링 */
+        .score-ring {
+            width: 80px; height: 80px; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 22px; font-weight: 700; margin: 0 auto 8px;
         }
 
-        .btn-primary {
-            background-color: #667eea;
-            color: white;
+        /* 탭 */
+        .tab-bar { display: flex; gap: 0; border-bottom: 2px solid #e8ecf1; margin-bottom: 20px; }
+        .tab-btn {
+            padding: 10px 20px; font-size: 13px; font-weight: 600;
+            color: #94a3b8; background: none; border: none; cursor: pointer;
+            border-bottom: 2px solid transparent; margin-bottom: -2px;
+            font-family: inherit; transition: all .15s;
         }
+        .tab-btn:hover { color: #475569; }
+        .tab-btn.active { color: #0f172a; border-bottom-color: #0f172a; }
 
-        .btn-primary:hover {
-            background-color: #5568d3;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
-        }
+        /* 알림/에러 메시지 */
+        .alert { padding: 12px 16px; border-radius: 8px; font-size: 13px; margin-bottom: 16px; }
+        .alert-info { background: #eff6ff; color: #1e40af; border: 1px solid #bfdbfe; }
+        .alert-error { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
+        .alert-success { background: #ecfdf5; color: #065f46; border: 1px solid #a7f3d0; }
 
-        .btn-secondary {
-            background-color: #f3f4f6;
-            color: #1f2937;
-            border: 1px solid #d1d5db;
-        }
+        /* 페이드인 애니메이션 */
+        .fade-in { animation: fadeIn .4s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 
-        .btn-secondary:hover {
-            background-color: #e5e7eb;
-        }
-
-        .btn-sm {
-            padding: 6px 12px;
-            font-size: 13px;
-        }
-
-        /* 애니메이션 */
-        @keyframes fadeIn {
-            from {
-                opacity: 0;
-                transform: translateY(10px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        .fade-in {
-            animation: fadeIn 0.3s ease-out;
-        }
-
-        /* 테이블 스타일 */
-        .table-header {
-            background-color: #f9fafb;
-            font-weight: 600;
-            border-bottom: 2px solid #e5e7eb;
-        }
-
-        .table-row {
-            border-bottom: 1px solid #e5e7eb;
-            transition: background-color 0.2s;
-        }
-
-        .table-row:hover {
-            background-color: #f9fafb;
-        }
+        /* 푸터 */
+        .footer { padding: 32px 0; text-align: center; font-size: 12px; color: #94a3b8; }
     </style>
 </head>
 <body>
-    <div id="root"></div>
+<div id="root"></div>
 
-    <script type="text/babel">
-        const { useState, useEffect, useRef } = React;
+<script type="text/babel">
+    const { useState, useEffect, useRef, useCallback, useMemo } = React;
 
-        // API 설정
-        const API_BASE = '';
+    // ==================== API 헬퍼 ====================
+    const API_BASE = '/api';
+    const api = {
+        get: (url) => fetch(`${API_BASE}${url}`).then(r => r.json()),
+        post: (url, body) => fetch(`${API_BASE}${url}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        }).then(r => r.json()),
+        put: (url, body) => fetch(`${API_BASE}${url}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        }).then(r => r.json()),
+        del: (url) => fetch(`${API_BASE}${url}`, { method: 'DELETE' }).then(r => r.json()),
+    };
 
-        // 데모 데이터
-        const DEMO_DATA = {
-            trackedProducts: [
-                {
-                    id: 1,
-                    name: 'Smart Watch Pro 시리즈',
-                    imageUrl: 'https://via.placeholder.com/120x120?text=Watch',
-                    keywords: [
-                        { keyword: '스마트 워치', rank: 12, prevRank: 8, trend: 'down' },
-                        { keyword: '안드로이드 스마트 워치', rank: 5, prevRank: 5, trend: 'same' },
-                        { keyword: '저가 스마트 워치', rank: 23, prevRank: 28, trend: 'up' }
-                    ],
-                    monthlyRevenue: 8500000,
-                    topKeywordRevenue: 3200000,
-                    lastUpdate: '2026-04-11 14:32:00'
-                },
-                {
-                    id: 2,
-                    name: 'Wireless Earbuds Max',
-                    imageUrl: 'https://via.placeholder.com/120x120?text=Earbuds',
-                    keywords: [
-                        { keyword: '무선 이어폰', rank: 45, prevRank: 42, trend: 'down' },
-                        { keyword: '블루투스 이어폰 추천', rank: 18, prevRank: 20, trend: 'up' },
-                        { keyword: '저렴한 이어폰', rank: 67, prevRank: 65, trend: 'down' }
-                    ],
-                    monthlyRevenue: 5200000,
-                    topKeywordRevenue: 1800000,
-                    lastUpdate: '2026-04-11 14:15:00'
-                }
-            ],
-            rankHistory: {
-                'Smart Watch Pro 시리즈|스마트 워치': [12, 11, 12, 10, 8, 9, 10, 12, 13, 12],
-                'Smart Watch Pro 시리즈|안드로이드 스마트 워치': [5, 4, 5, 5, 5, 6, 5, 5, 5, 5],
-                'Wireless Earbuds Max|무선 이어폰': [45, 48, 46, 44, 43, 45, 46, 47, 45, 45]
-            },
-            competitors: [
-                { rank: 1, name: 'Galaxy Watch 6 Classic', category: 'Electronics', avgSales: 22500000, rating: 4.8 },
-                { rank: 2, name: 'Apple Watch Ultra', category: 'Premium', avgSales: 28900000, rating: 4.9 },
-                { rank: 3, name: 'Garmin Epix', category: 'Sports Watch', avgSales: 15600000, rating: 4.7 },
-                { rank: 4, name: '샤오미 Watch S3', category: 'Budget', avgSales: 6800000, rating: 4.5 },
-                { rank: 5, name: 'Fitbit Sense 2', category: 'Health', avgSales: 9200000, rating: 4.6 }
-            ],
-            keywordAnalysis: {
-                keyword: '스마트 워치',
-                searchVolume: { pc: 12500, mobile: 38200 },
-                totalSearchVolume: 50700,
-                products: 547849,
-                competitionRate: 0.61,
-                competitionGrade: '높음',
-                page1AvgSales: 15200000,
-                page2AvgSales: 2100000,
-                entryRecommend: '보통',
-                entryReason: '검색량이 많으나 경쟁이 매우 심함. 충분한 마케팅 자원이 필요함.'
-            },
-            relatedKeywords: [
-                { keyword: '스마트 워치 추천', searchVolume: 28100, products: 234567, competitionRate: 0.58, competitionGrade: '높음' },
-                { keyword: '저렴한 스마트 워치', searchVolume: 18900, products: 156234, competitionRate: 0.45, competitionGrade: '보통' },
-                { keyword: '안드로이드 스마트 워치', searchVolume: 12340, products: 89234, competitionRate: 0.52, competitionGrade: '높음' },
-                { keyword: '여성 스마트 워치', searchVolume: 9870, products: 123456, competitionRate: 0.48, competitionGrade: '보통' },
-                { keyword: '스마트 워치 가격 비교', searchVolume: 8760, products: 78234, competitionRate: 0.41, competitionGrade: '보통' },
-                { keyword: '스마트 워치 배터리 오래', searchVolume: 6540, products: 45678, competitionRate: 0.35, competitionGrade: '낮음' },
-                { keyword: '아이폰 스마트 워치', searchVolume: 5430, products: 98765, competitionRate: 0.62, competitionGrade: '높음' },
-                { keyword: '스마트 워치 갤러리', searchVolume: 4320, products: 12345, competitionRate: 0.28, competitionGrade: '낮음' },
-                { keyword: '운동용 스마트 워치', searchVolume: 3210, products: 54321, competitionRate: 0.49, competitionGrade: '보통' },
-                { keyword: '스마트 워치 페이스', searchVolume: 2100, products: 23456, competitionRate: 0.32, competitionGrade: '낮음' }
-            ],
-            goldenKeywords: [
-                {
-                    keyword: '스마트 워치 배터리 오래',
-                    searchVolume: 6540,
-                    competitionRate: 0.35,
-                    competitionGrade: '낮음',
-                    expectedMonthlyRevenue: 390000,
-                    estimationNote: '전환율 2%, 객단가 30,000원 기준'
-                },
-                {
-                    keyword: '스마트 워치 갤러리',
-                    searchVolume: 4320,
-                    competitionRate: 0.28,
-                    competitionGrade: '낮음',
-                    expectedMonthlyRevenue: 259200,
-                    estimationNote: '전환율 2%, 객단가 30,000원 기준'
-                }
-            ],
-            productNameAnalysis: {
-                keyword: '스마트 워치',
-                keywordFrequency: [
-                    { word: '스마트', count: 38 },
-                    { word: '워치', count: 38 },
-                    { word: '추천', count: 22 },
-                    { word: '방수', count: 18 },
-                    { word: '운동', count: 16 },
-                    { word: '배터리', count: 14 },
-                    { word: '안드로이드', count: 12 },
-                    { word: '가격', count: 10 },
-                    { word: '여성용', count: 8 },
-                    { word: 'GPS', count: 7 }
-                ],
-                categoryDistribution: [
-                    { category: '디지털 기기', count: 28 },
-                    { category: '스포츠/야외', count: 18 },
-                    { category: '패션', count: 22 },
-                    { category: '건강', count: 15 },
-                    { category: '기타', count: 17 }
-                ],
-                recommendedTitle: '[스마트 워치 추천] 방수 배터리 오래 안드로이드 호환',
-                recommendedKeywords: ['스마트 워치', '방수 워치', '배터리 오래', '저가 워치', '운동 워치']
-            },
-            seoDiagnosis: {
-                url: 'https://example.com/product/smart-watch',
-                relevance: 78,
-                trust: 65,
-                popularity: 82,
-                grade: 'B',
-                gradeDescription: '양호 - 개선의 여지 있음',
-                scores: [
-                    { item: '키워드 관련성', score: 85 },
-                    { item: '콘텐츠 품질', score: 72 },
-                    { item: '백링크 수', score: 60 },
-                    { item: '도메인 권력', score: 68 },
-                    { item: '로딩 속도', score: 88 },
-                    { item: '모바일 최적화', score: 82 }
-                ],
-                actions: [
-                    '상품 설명에 주요 키워드 2-3회 더 자연스럽게 삽입',
-                    '외부 고품질 백링크 3개 이상 확보',
-                    '상품 리뷰 및 Q&A 컨텐츠 증대',
-                    '이미지 최적화 및 ALT 텍스트 추가',
-                    '구조화된 데이터(스키마) 마크업 추가'
-                ]
-            }
+    // ==================== 유틸 ====================
+    const fmt = (n) => n != null ? Number(n).toLocaleString() : '-';
+    const compLabel = (c) => ({ '낮음': '낮음', 'LOW': '낮음', '보통': '보통', 'MEDIUM': '보통', '높음': '높음', 'HIGH': '높음', '': '-' }[c] || c || '-');
+    const compClass = (c) => {
+        const low = ['낮음', 'LOW', ''];
+        const mid = ['보통', 'MEDIUM'];
+        if (low.includes(c)) return 'badge-green';
+        if (mid.includes(c)) return 'badge-amber';
+        return 'badge-red';
+    };
+
+    // ==================== 공통 컴포넌트 ====================
+
+    function LoadingSpinner({ text = '분석 중...' }) {
+        return <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 20, justifyContent: 'center', color: '#64748b', fontSize: 14 }}>
+            <span className="spinner" />{text}
+        </div>;
+    }
+
+    function EmptyState({ icon = '📊', text = '데이터가 없습니다' }) {
+        return <div className="empty-state"><div className="empty-icon">{icon}</div><p>{text}</p></div>;
+    }
+
+    function StatCard({ icon, iconColor, label, value, sub }) {
+        return (
+            <div className="card">
+                <div className={`stat-icon ${iconColor}`}>{icon}</div>
+                <div className="stat-label">{label}</div>
+                <div className="stat-value">{value}</div>
+                {sub && <div className="stat-sub">{sub}</div>}
+            </div>
+        );
+    }
+
+    // ==================== 상단 헤더 ====================
+    function TopBar({ health }) {
+        return (
+            <header className="top-bar">
+                <div className="container top-bar-inner">
+                    <div className="logo">
+                        <span className="logo-dot" />
+                        로직 분석
+                        <span style={{ fontSize: 11, color: '#94a3b8', fontWeight: 400, marginLeft: 2 }}>v2.1</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <span className={`status-chip ${health ? '' : 'offline'}`}>
+                            {health ? '● 정상 운영' : '○ 연결 확인 중'}
+                        </span>
+                    </div>
+                </div>
+            </header>
+        );
+    }
+
+    // ==================== 통합 검색바 ====================
+    function SearchBar({ onSearch, loading }) {
+        const [keyword, setKeyword] = useState('');
+        const handleSubmit = (e) => {
+            e.preventDefault();
+            if (keyword.trim()) onSearch(keyword.trim());
+        };
+        return (
+            <div className="search-section">
+                <div className="container">
+                    <form onSubmit={handleSubmit} className="search-wrapper">
+                        <input
+                            className="search-input"
+                            type="text"
+                            placeholder="분석할 키워드를 입력하세요 (예: 스마트워치, 가습기, 텀블러)"
+                            value={keyword}
+                            onChange={e => setKeyword(e.target.value)}
+                        />
+                        <button className="btn-search" type="submit" disabled={loading || !keyword.trim()}>
+                            {loading ? <><span className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} /> 분석 중</> : '키워드 분석'}
+                        </button>
+                    </form>
+                </div>
+            </div>
+        );
+    }
+
+    // ==================== 대시보드 요약 ====================
+    function DashboardSummary({ products, searchResult }) {
+        const totalKeywords = products.reduce((sum, p) => sum + (p.keywords?.length || 0), 0);
+        const allRanks = products.flatMap(p => (p.keywords || []).map(k => k.latest_rank)).filter(Boolean);
+        const avgRank = allRanks.length > 0 ? Math.round(allRanks.reduce((a, b) => a + b, 0) / allRanks.length) : null;
+
+        return (
+            <div className="section fade-in">
+                <div className="container">
+                    <div className="card-grid card-grid-4">
+                        <StatCard icon="📦" iconColor="blue" label="추적 상품" value={products.length} sub="등록된 상품 수" />
+                        <StatCard icon="🔑" iconColor="green" label="추적 키워드" value={totalKeywords} sub="모니터링 중" />
+                        <StatCard icon="📈" iconColor="amber" label="평균 순위" value={avgRank ? `${avgRank}위` : '-'} sub={avgRank ? (avgRank <= 20 ? '상위권' : avgRank <= 50 ? '중위권' : '개선 필요') : '데이터 없음'} />
+                        <StatCard icon="🔍" iconColor="purple" label="연관 키워드" value={searchResult ? fmt(searchResult.total_found) : '-'} sub={searchResult ? `${searchResult.golden_keywords?.length || 0}개 황금키워드` : '키워드 검색 필요'} />
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    // ==================== 순위 추적 섹션 ====================
+    function RankTrackingSection({ products, refreshProducts }) {
+        const [showAddForm, setShowAddForm] = useState(false);
+        const [newUrl, setNewUrl] = useState('');
+        const [newKeywords, setNewKeywords] = useState('');
+        const [adding, setAdding] = useState(false);
+        const [refreshing, setRefreshing] = useState({});
+        const [expandedProduct, setExpandedProduct] = useState(null);
+        const [historyData, setHistoryData] = useState({});
+
+        const handleAdd = async () => {
+            if (!newUrl || !newKeywords) return;
+            setAdding(true);
+            try {
+                const kws = newKeywords.split(',').map(k => k.trim()).filter(Boolean);
+                await api.post('/products/track', { product_url: newUrl, keywords: kws });
+                setNewUrl(''); setNewKeywords(''); setShowAddForm(false);
+                refreshProducts();
+            } catch (e) { alert('등록 실패: ' + e.message); }
+            setAdding(false);
         };
 
-        // 경쟁강도 배지 컴포넌트
-        function CompetitionBadge({ grade }) {
-            const gradeMap = {
-                '매우 낮음': { class: 'competition-very-low', label: '매우 낮음' },
-                '낮음': { class: 'competition-low', label: '낮음' },
-                '보통': { class: 'competition-medium', label: '보통' },
-                '높음': { class: 'competition-high', label: '높음' },
-                '매우 높음': { class: 'competition-very-high', label: '매우 높음' }
-            };
-            const style = gradeMap[grade] || gradeMap['보통'];
-            return <span className={`badge-rank ${style.class}`}>{style.label}</span>;
-        }
+        const handleRefresh = async (productId) => {
+            setRefreshing(prev => ({ ...prev, [productId]: true }));
+            await api.post(`/rank/refresh/${productId}`);
+            setTimeout(() => {
+                refreshProducts();
+                setRefreshing(prev => ({ ...prev, [productId]: false }));
+            }, 5000);
+        };
 
-        // 진입 추천 배지 컴포넌트
-        function RecommendBadge({ recommend }) {
-            const recommendMap = {
-                '추천': { class: 'recommend-good', label: '✓ 추천' },
-                '보통': { class: 'recommend-neutral', label: '△ 보통' },
-                '비추천': { class: 'recommend-bad', label: '✗ 비추천' }
-            };
-            const style = recommendMap[recommend] || recommendMap['보통'];
-            return <span className={`badge-rank ${style.class}`}>{style.label}</span>;
-        }
+        const handleDelete = async (productId) => {
+            if (!confirm('이 상품을 삭제하시겠습니까?')) return;
+            await api.del(`/products/${productId}`);
+            refreshProducts();
+        };
 
-        // 순위 변동 배지 컴포넌트
-        function RankTrendBadge({ prevRank, currentRank }) {
-            let trend, label;
-            if (currentRank < prevRank) {
-                trend = 'badge-rank-up';
-                label = `↑${prevRank - currentRank}`;
-            } else if (currentRank > prevRank) {
-                trend = 'badge-rank-down';
-                label = `↓${currentRank - prevRank}`;
-            } else {
-                trend = 'badge-rank-same';
-                label = '→';
-            }
-            return <span className={`badge-rank ${trend}`}>{label}</span>;
-        }
+        const loadHistory = async (keywordId) => {
+            if (historyData[keywordId]) return;
+            const res = await api.get(`/rank/history/${keywordId}?days=30`);
+            if (res.success) setHistoryData(prev => ({ ...prev, [keywordId]: res.data }));
+        };
 
-        // API 호출 헬퍼
-        async function apiCall(url, options = {}) {
-            try {
-                const resp = await fetch(`${API_BASE}${url}`, {
-                    headers: { 'Content-Type': 'application/json', ...options.headers },
-                    ...options
-                });
-                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-                return await resp.json();
-            } catch (e) {
-                console.warn('API 호출 실패:', url, e);
-                return null;
-            }
-        }
-
-        // 순위 추적 페이지
-        function RankTrackingPage() {
-            const [activeTab, setActiveTab] = useState('daily');
-            const [products, setProducts] = useState([]);
-            const [showProductModal, setShowProductModal] = useState(false);
-            const [showChartModal, setShowChartModal] = useState(false);
-            const [selectedProduct, setSelectedProduct] = useState(null);
-            const [selectedKeyword, setSelectedKeyword] = useState(null);
-            const [realtimeKeyword, setRealtimeKeyword] = useState('');
-            const [realtimeUrl, setRealtimeUrl] = useState('');
-            const [realtimeResult, setRealtimeResult] = useState(null);
-            const [realtimeLoading, setRealtimeLoading] = useState(false);
-            const [newProductUrl, setNewProductUrl] = useState('');
-            const [newKeywords, setNewKeywords] = useState('');
-            const [addLoading, setAddLoading] = useState(false);
-            const [historyData, setHistoryData] = useState([]);
-            const chartRef = useRef(null);
-            const chartInstance = useRef(null);
-
-            // 상품 목록 로드
-            useEffect(() => {
-                loadProducts();
-            }, []);
-
-            const loadProducts = async () => {
-                const res = await apiCall('/api/products');
-                if (res && res.success) {
-                    setProducts(res.data);
-                } else {
-                    setProducts(DEMO_DATA.trackedProducts.map(p => ({
-                        ...p, product_name: p.name, image_url: p.imageUrl,
-                        keywords: p.keywords.map((k, i) => ({id: i+1, keyword: k.keyword, latest_rank: k.rank}))
-                    })));
-                }
-            };
-
-            // 차트 이력 로드
-            useEffect(() => {
-                if (showChartModal && selectedKeyword) {
-                    (async () => {
-                        const res = await apiCall(`/api/rank/history/${selectedKeyword.id}?days=30`);
-                        if (res && res.success && res.data.length > 0) {
-                            setHistoryData(res.data);
-                        } else {
-                            setHistoryData([
-                                {rank_position: 20, checked_at: '2026-04-01'},
-                                {rank_position: 18, checked_at: '2026-04-03'},
-                                {rank_position: 15, checked_at: '2026-04-05'},
-                                {rank_position: 16, checked_at: '2026-04-07'},
-                                {rank_position: 14, checked_at: '2026-04-09'},
-                                {rank_position: 12, checked_at: '2026-04-11'},
-                            ]);
-                        }
-                    })();
-                }
-            }, [showChartModal, selectedKeyword]);
-
-            useEffect(() => {
-                if (showChartModal && chartRef.current && historyData.length > 0) {
-                    const ctx = chartRef.current.getContext('2d');
-                    if (chartInstance.current) {
-                        chartInstance.current.destroy();
-                    }
-
-                    const labels = historyData.map(h => (h.checked_at || '').slice(5, 10));
-                    const dataPoints = historyData.map(h => h.rank_position);
-
-                    chartInstance.current = new Chart(ctx, {
-                        type: 'line',
-                        data: {
-                            labels: labels,
-                            datasets: [
-                                {
-                                    label: selectedKeyword?.keyword || '순위',
-                                    data: dataPoints,
-                                    borderColor: '#667eea',
-                                    backgroundColor: 'rgba(102, 126, 234, 0.1)',
-                                    borderWidth: 3,
-                                    fill: true,
-                                    tension: 0.4,
-                                    pointBackgroundColor: '#667eea',
-                                    pointBorderColor: '#fff',
-                                    pointBorderWidth: 2,
-                                    pointRadius: 5,
-                                    pointHoverRadius: 7
-                                }
-                            ]
-                        },
-                        options: {
-                            responsive: true,
-                            maintainAspectRatio: false,
-                            plugins: {
-                                legend: {
-                                    labels: {
-                                        font: { family: "'Noto Sans KR', sans-serif", size: 14, weight: '600' },
-                                        color: '#1f2937'
-                                    }
-                                }
-                            },
-                            scales: {
-                                y: {
-                                    reverse: true,
-                                    beginAtZero: true,
-                                    max: 100,
-                                    ticks: {
-                                        font: { family: "'Noto Sans KR', sans-serif" },
-                                        color: '#6b7280'
-                                    },
-                                    grid: {
-                                        color: 'rgba(0, 0, 0, 0.05)'
-                                    }
-                                },
-                                x: {
-                                    ticks: {
-                                        font: { family: "'Noto Sans KR', sans-serif", size: 12 },
-                                        color: '#6b7280'
-                                    },
-                                    grid: {
-                                        display: false
-                                    }
-                                }
-                            }
-                        }
-                    });
-                }
-
-                return () => {
-                    if (chartInstance.current && showChartModal === false) {
-                        chartInstance.current.destroy();
-                    }
-                };
-            }, [showChartModal, selectedProduct]);
-
-            const handleRealtimeSearch = async () => {
-                if (!realtimeKeyword.trim() || !realtimeUrl.trim()) return;
-                setRealtimeLoading(true);
-                const res = await apiCall('/api/rank/check', {
-                    method: 'POST',
-                    body: JSON.stringify({ keyword: realtimeKeyword, product_url: realtimeUrl })
-                });
-                if (res && res.success) {
-                    setRealtimeResult(res.data);
-                } else {
-                    setRealtimeResult({
-                        keyword: realtimeKeyword, rank_position: null,
-                        analysis: '조회에 실패했습니다. URL과 키워드를 확인해주세요.',
-                        top_competitors: []
-                    });
-                }
-                setRealtimeLoading(false);
-            };
-
-            const handleAddProduct = async () => {
-                if (!newProductUrl.trim() || !newKeywords.trim()) return;
-                setAddLoading(true);
-                const keywords = newKeywords.split(',').map(k => k.trim()).filter(k => k);
-                const res = await apiCall('/api/products/track', {
-                    method: 'POST',
-                    body: JSON.stringify({ product_url: newProductUrl, keywords })
-                });
-                if (res && res.success) {
-                    setShowProductModal(false);
-                    setNewProductUrl('');
-                    setNewKeywords('');
-                    await loadProducts();
-                }
-                setAddLoading(false);
-            };
-
-            const handleDeleteProduct = async (productId) => {
-                if (!confirm('이 상품을 삭제하시겠습니까?')) return;
-                const res = await apiCall(`/api/products/${productId}`, { method: 'DELETE' });
-                if (res && res.success) {
-                    await loadProducts();
-                }
-            };
-
-            const handleRefreshRank = async (productId) => {
-                await apiCall(`/api/rank/refresh/${productId}`, { method: 'POST' });
-                alert('순위 재체크를 시작했습니다. 잠시 후 새로고침하세요.');
-            };
-
-            return (
-                <div className="fade-in">
-                    {/* 탭 네비게이션 */}
-                    <div className="flex gap-4 mb-6 border-b border-gray-300">
-                        <button
-                            onClick={() => setActiveTab('daily')}
-                            className={`pb-3 px-1 font-semibold text-sm transition-colors ${
-                                activeTab === 'daily'
-                                    ? 'border-b-2 border-purple-600 text-purple-600'
-                                    : 'text-gray-600 hover:text-gray-800'
-                            }`}
-                        >
-                            📊 일간 랭킹 추적
-                        </button>
-                        <button
-                            onClick={() => setActiveTab('realtime')}
-                            className={`pb-3 px-1 font-semibold text-sm transition-colors ${
-                                activeTab === 'realtime'
-                                    ? 'border-b-2 border-purple-600 text-purple-600'
-                                    : 'text-gray-600 hover:text-gray-800'
-                            }`}
-                        >
-                            ⚡ 실시간 순위 조회
+        return (
+            <div className="section" id="sec-rank">
+                <div className="container">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+                        <div className="section-title" style={{ marginBottom: 0 }}>
+                            <span className="icon" style={{ background: '#eff6ff' }}>📊</span>
+                            순위 추적
+                        </div>
+                        <button className="btn btn-primary btn-sm" onClick={() => setShowAddForm(!showAddForm)}>
+                            {showAddForm ? '취소' : '+ 상품 등록'}
                         </button>
                     </div>
 
-                    {activeTab === 'daily' ? (
-                        <div>
-                            {/* 요약 카드 */}
-                            <div className="grid grid-cols-3 gap-4 mb-6">
-                                <div className="glassmorphism p-5 rounded-lg">
-                                    <div className="text-gray-600 text-sm font-medium mb-2">추적 중인 상품</div>
-                                    <div className="text-3xl font-bold text-gray-900">{products.length}</div>
-                                </div>
-                                <div className="glassmorphism p-5 rounded-lg">
-                                    <div className="text-gray-600 text-sm font-medium mb-2">추적 중인 키워드</div>
-                                    <div className="text-3xl font-bold text-gray-900">
-                                        {products.reduce((sum, p) => sum + (p.keywords || []).length, 0)}
-                                    </div>
-                                </div>
-                                <div className="glassmorphism p-5 rounded-lg">
-                                    <div className="text-gray-600 text-sm font-medium mb-2">상품 등록</div>
-                                    <button onClick={() => setShowProductModal(true)} className="btn btn-primary btn-sm mt-1">+ 새 상품</button>
-                                </div>
+                    {showAddForm && (
+                        <div className="card fade-in" style={{ marginBottom: 16 }}>
+                            <div className="form-group">
+                                <label className="form-label">상품 URL</label>
+                                <input className="form-input" placeholder="https://smartstore.naver.com/..." value={newUrl} onChange={e => setNewUrl(e.target.value)} />
                             </div>
-
-                            {/* 상품 카드 목록 */}
-                            <div className="space-y-4 mb-6">
-                                {products.map((product) => (
-                                    <div key={product.id} className="glassmorphism p-5 rounded-lg">
-                                        <div className="flex justify-between items-start mb-4">
-                                            <div className="flex gap-4 flex-1">
-                                                {product.image_url && <img src={product.image_url} alt={product.product_name} className="w-24 h-24 rounded-lg object-cover" />}
-                                                <div className="flex-1">
-                                                    <h3 className="font-bold text-lg text-gray-900 mb-2">{product.product_name || '상품명 로딩 중...'}</h3>
-                                                    <div className="text-sm text-gray-600 mb-2">스토어: <span className="font-semibold text-gray-900">{product.store_name || '-'}</span></div>
-                                                    <div className="text-sm text-gray-600">등록일: {(product.created_at || '').slice(0, 10)}</div>
-                                                </div>
-                                            </div>
-                                            <div className="flex gap-2">
-                                                <button onClick={() => handleRefreshRank(product.id)} className="btn btn-sm btn-secondary">🔄 재체크</button>
-                                                <button onClick={() => handleDeleteProduct(product.id)} className="btn btn-sm" style={{background:'#fee2e2',color:'#dc2626'}}>삭제</button>
-                                        </div>
-
-                                        {/* 키워드 순위 배지 */}
-                                        <div className="flex flex-wrap gap-3">
-                                            {(product.keywords || []).map((kw, idx) => (
-                                                <div key={idx}
-                                                    className="flex items-center gap-2 bg-gray-100 px-3 py-2 rounded-lg cursor-pointer hover:bg-purple-100"
-                                                    onClick={() => { setSelectedProduct(product); setSelectedKeyword(kw); setShowChartModal(true); }}
-                                                >
-                                                    <span className="text-sm text-gray-700"><strong>{kw.keyword}</strong></span>
-                                                    <span className="text-sm font-bold text-gray-900">
-                                                        {kw.latest_rank ? `#${kw.latest_rank}` : '미확인'}
-                                                    </span>
-                                                    <span className="text-xs text-purple-500">📈 이력</span>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
-                                    </div>
-                                ))}
+                            <div className="form-group">
+                                <label className="form-label">추적 키워드 (쉼표로 구분)</label>
+                                <input className="form-input" placeholder="스마트워치, 블루투스 이어폰" value={newKeywords} onChange={e => setNewKeywords(e.target.value)} />
+                            </div>
+                            <button className="btn btn-primary" onClick={handleAdd} disabled={adding}>
+                                {adding ? '등록 중...' : '상품 등록'}
+                            </button>
                         </div>
-                        </div>
+                    )}
+
+                    {products.length === 0 ? (
+                        <EmptyState icon="📦" text="추적 중인 상품이 없습니다. 상품을 등록해보세요." />
                     ) : (
-                        <div>
-                            {/* 실시간 순위 조회 */}
-                            <div className="glassmorphism p-6 rounded-lg mb-6">
-                                <h3 className="font-bold text-lg text-gray-900 mb-4">키워드 + 상품 URL 실시간 순위 조회</h3>
-                                <div className="space-y-3">
-                                    <input
-                                        type="text"
-                                        placeholder="키워드 입력 (예: 스마트 워치)"
-                                        value={realtimeKeyword}
-                                        onChange={(e) => setRealtimeKeyword(e.target.value)}
-                                        className="form-input"
-                                    />
-                                    <input
-                                        type="url"
-                                        placeholder="상품 URL (https://smartstore.naver.com/...)"
-                                        value={realtimeUrl}
-                                        onChange={(e) => setRealtimeUrl(e.target.value)}
-                                        onKeyPress={(e) => e.key === 'Enter' && handleRealtimeSearch()}
-                                        className="form-input"
-                                    />
-                                    <button onClick={handleRealtimeSearch} disabled={realtimeLoading} className="btn btn-primary w-full">
-                                        {realtimeLoading ? '조회 중...' : '순위 조회'}
-                                    </button>
-                                </div>
-                            </div>
-
-                            {/* 실시간 결과 */}
-                            {realtimeResult && (
-                                <div className="space-y-4">
-                                    <div className="glassmorphism p-6 rounded-lg">
-                                        <h4 className="font-semibold text-gray-900 mb-4">"{realtimeResult.keyword}" 순위 결과</h4>
-                                        <div className="text-center py-4">
-                                            <div className="text-5xl font-black text-purple-600 mb-2">
-                                                {realtimeResult.rank_position ? `${realtimeResult.rank_position}위` : '미발견'}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                            {products.map(p => (
+                                <div className="card fade-in" key={p.id}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16 }}>
+                                        <div style={{ display: 'flex', gap: 14, flex: 1, minWidth: 0 }}>
+                                            {p.image_url && <img src={p.image_url} alt="" style={{ width: 56, height: 56, borderRadius: 8, objectFit: 'cover', flexShrink: 0 }} />}
+                                            <div style={{ minWidth: 0 }}>
+                                                <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                    {p.product_name || '상품명 로딩 중'}
+                                                </div>
+                                                <div style={{ fontSize: 12, color: '#64748b' }}>{p.store_name || '-'}</div>
+                                                {p.price > 0 && <div style={{ fontSize: 13, fontWeight: 600, color: '#0f172a', marginTop: 2 }}>{fmt(p.price)}원</div>}
                                             </div>
-                                            {realtimeResult.page_number && (
-                                                <div className="text-gray-600">페이지 {realtimeResult.page_number}</div>
-                                            )}
                                         </div>
-                                        {realtimeResult.analysis && (
-                                            <div className="mt-4 p-4 bg-blue-50 border-l-4 border-blue-400 rounded">
-                                                <p className="text-sm text-blue-900">{realtimeResult.analysis}</p>
-                                            </div>
-                                        )}
+                                        <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                                            <button className="btn btn-secondary btn-sm" onClick={() => handleRefresh(p.id)} disabled={refreshing[p.id]}>
+                                                {refreshing[p.id] ? '체크 중' : '↻ 순위체크'}
+                                            </button>
+                                            <button className="btn btn-danger btn-sm" onClick={() => handleDelete(p.id)}>삭제</button>
+                                        </div>
                                     </div>
-                                    {realtimeResult.top_competitors && realtimeResult.top_competitors.length > 0 && (
-                                        <div className="glassmorphism p-6 rounded-lg">
-                                            <h4 className="font-semibold text-gray-900 mb-3">상위 경쟁 상품</h4>
-                                            <div className="space-y-2">
-                                                {realtimeResult.top_competitors.slice(0, 5).map((c, i) => (
-                                                    <div key={i} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                                                        <div className="flex items-center gap-3">
-                                                            <div className="w-8 h-8 bg-purple-600 rounded flex items-center justify-center text-white font-bold text-sm">
-                                                                {c.rank}
-                                                            </div>
-                                                            <div>
-                                                                <div className="font-semibold text-gray-900 text-sm">{(c.product_name || '').slice(0, 30)}</div>
-                                                                <div className="text-xs text-gray-500">{c.store_name}</div>
-                                                            </div>
-                                                        </div>
-                                                        <div className="text-sm font-semibold">{(c.price || 0).toLocaleString()}원</div>
-                                                    </div>
-                                                ))}
-                                            </div>
+
+                                    {(p.keywords || []).length > 0 && (
+                                        <div className="table-wrap" style={{ marginTop: 14 }}>
+                                            <table>
+                                                <thead><tr><th>키워드</th><th>현재 순위</th><th>페이지</th><th>최근 체크</th></tr></thead>
+                                                <tbody>
+                                                    {p.keywords.map(k => (
+                                                        <tr key={k.id} style={{ cursor: 'pointer' }} onClick={() => { setExpandedProduct(p.id === expandedProduct ? null : p.id); loadHistory(k.id); }}>
+                                                            <td style={{ fontWeight: 500 }}>{k.keyword}</td>
+                                                            <td>
+                                                                {k.latest_rank ? (
+                                                                    <span style={{ fontWeight: 700, color: k.latest_rank <= 10 ? '#059669' : k.latest_rank <= 40 ? '#d97706' : '#dc2626' }}>
+                                                                        {k.latest_rank}위
+                                                                    </span>
+                                                                ) : <span className="badge badge-gray">미노출</span>}
+                                                            </td>
+                                                            <td>{k.latest_rank ? `${Math.ceil(k.latest_rank / 40)}P` : '-'}</td>
+                                                            <td style={{ fontSize: 12, color: '#94a3b8' }}>{k.last_checked ? new Date(k.last_checked).toLocaleString('ko') : '-'}</td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
                                         </div>
                                     )}
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            </div>
+        );
+    }
+
+    // ==================== 키워드 분석 결과 (검색량) ====================
+    function KeywordVolumeSection({ keyword, data }) {
+        if (!data || !data.length) return null;
+
+        const item = data[0];
+        const pc = item?.monthlyPcQcCnt || 0;
+        const mobile = item?.monthlyMobileQcCnt || 0;
+        const total = pc + mobile;
+
+        return (
+            <div className="section fade-in" id="sec-volume">
+                <div className="container">
+                    <div className="section-title">
+                        <span className="icon" style={{ background: '#ecfdf5' }}>🔍</span>
+                        키워드 검색량 — <span style={{ color: '#3b82f6' }}>{keyword}</span>
+                    </div>
+                    <div className="card-grid card-grid-3">
+                        <div className="card" style={{ textAlign: 'center' }}>
+                            <div className="stat-label">월간 총 검색량</div>
+                            <div className="stat-value" style={{ color: '#3b82f6' }}>{fmt(total)}</div>
+                        </div>
+                        <div className="card" style={{ textAlign: 'center' }}>
+                            <div className="stat-label">PC 검색량</div>
+                            <div className="stat-value">{fmt(pc)}</div>
+                            <div className="stat-sub">{total > 0 ? Math.round(pc / total * 100) : 0}%</div>
+                        </div>
+                        <div className="card" style={{ textAlign: 'center' }}>
+                            <div className="stat-label">모바일 검색량</div>
+                            <div className="stat-value">{fmt(mobile)}</div>
+                            <div className="stat-sub">{total > 0 ? Math.round(mobile / total * 100) : 0}%</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    // ==================== 연관/황금 키워드 섹션 ====================
+    function RelatedKeywordsSection({ data }) {
+        const [tab, setTab] = useState('golden');
+        if (!data) return null;
+
+        const goldenList = data.golden_keywords || [];
+        const relatedList = data.related_keywords || [];
+        const displayList = tab === 'golden' ? goldenList : relatedList;
+
+        return (
+            <div className="section fade-in" id="sec-related">
+                <div className="container">
+                    <div className="section-title">
+                        <span className="icon" style={{ background: '#fef9c3' }}>💎</span>
+                        연관 키워드 분석
+                        <span style={{ fontSize: 13, fontWeight: 400, color: '#64748b', marginLeft: 8 }}>
+                            총 {fmt(data.total_found)}개 발견
+                        </span>
+                    </div>
+
+                    <div className="tab-bar">
+                        <button className={`tab-btn ${tab === 'golden' ? 'active' : ''}`} onClick={() => setTab('golden')}>
+                            황금 키워드 ({goldenList.length})
+                        </button>
+                        <button className={`tab-btn ${tab === 'related' ? 'active' : ''}`} onClick={() => setTab('related')}>
+                            연관 키워드 ({relatedList.length})
+                        </button>
+                    </div>
+
+                    {displayList.length === 0 ? (
+                        <EmptyState icon="💎" text={tab === 'golden' ? '황금 키워드가 없습니다 (검색량 100~5,000 + 경쟁 낮음 조건)' : '연관 키워드가 없습니다'} />
+                    ) : (
+                        <div className="table-wrap">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th style={{ width: 40 }}>#</th>
+                                        <th>키워드</th>
+                                        <th>월간 검색량</th>
+                                        <th>PC</th>
+                                        <th>모바일</th>
+                                        <th>경쟁강도</th>
+                                        {tab === 'golden' && <th>추천</th>}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {displayList.map((k, i) => (
+                                        <tr key={k.keyword}>
+                                            <td style={{ color: '#94a3b8' }}>{i + 1}</td>
+                                            <td style={{ fontWeight: 500 }}>
+                                                {k.keyword}
+                                                {k.isGolden && <span className="badge badge-gold" style={{ marginLeft: 6 }}>황금</span>}
+                                            </td>
+                                            <td style={{ fontWeight: 600 }}>{fmt(k.totalVolume)}</td>
+                                            <td>{fmt(k.monthlyPcQcCnt)}</td>
+                                            <td>{fmt(k.monthlyMobileQcCnt)}</td>
+                                            <td><span className={`badge ${compClass(k.compIdx)}`}>{compLabel(k.compIdx)}</span></td>
+                                            {tab === 'golden' && <td><span className="badge badge-green">진입 추천</span></td>}
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+                </div>
+            </div>
+        );
+    }
+
+    // ==================== SEO 진단 섹션 ====================
+    function SeoDiagnosisSection({ keyword }) {
+        const [productUrl, setProductUrl] = useState('');
+        const [result, setResult] = useState(null);
+        const [loading, setLoading] = useState(false);
+
+        const handleAnalyze = async () => {
+            if (!productUrl || !keyword) return;
+            setLoading(true);
+            try {
+                const res = await api.post('/seo/analyze', { product_url: productUrl, keyword });
+                if (res.success) setResult(res.data);
+                else alert(res.detail || 'SEO 분석 실패');
+            } catch (e) { alert('SEO 분석 실패: ' + e.message); }
+            setLoading(false);
+        };
+
+        const scoreColor = (s) => s >= 70 ? '#059669' : s >= 40 ? '#d97706' : '#dc2626';
+        const scoreBg = (s) => s >= 70 ? '#ecfdf5' : s >= 40 ? '#fffbeb' : '#fef2f2';
+
+        return (
+            <div className="section fade-in" id="sec-seo">
+                <div className="container">
+                    <div className="section-title">
+                        <span className="icon" style={{ background: '#faf5ff' }}>🏥</span>
+                        SEO 종합 진단
+                    </div>
+
+                    <div className="card" style={{ marginBottom: 16 }}>
+                        <div style={{ display: 'flex', gap: 10 }}>
+                            <input className="form-input" placeholder="분석할 상품 URL을 입력하세요" value={productUrl} onChange={e => setProductUrl(e.target.value)} style={{ flex: 1 }} />
+                            <button className="btn btn-primary" onClick={handleAnalyze} disabled={loading || !productUrl || !keyword}>
+                                {loading ? '분석 중...' : 'SEO 진단'}
+                            </button>
+                        </div>
+                        {keyword && <div style={{ fontSize: 12, color: '#64748b', marginTop: 8 }}>기준 키워드: <strong>{keyword}</strong></div>}
+                    </div>
+
+                    {loading && <LoadingSpinner text="SEO 분석 중..." />}
+
+                    {result && !loading && (
+                        <div className="fade-in">
+                            <div className="card-grid card-grid-4" style={{ marginBottom: 16 }}>
+                                {[
+                                    { label: '종합 점수', value: result.scores.total, icon: '📊' },
+                                    { label: '상품명', value: result.scores.title, icon: '📝' },
+                                    { label: '가격 경쟁력', value: result.scores.price, icon: '💰' },
+                                    { label: '순위 점수', value: result.scores.rank, icon: '📈' },
+                                ].map((item, i) => (
+                                    <div className="card" key={i} style={{ textAlign: 'center' }}>
+                                        <div style={{ fontSize: 20, marginBottom: 6 }}>{item.icon}</div>
+                                        <div className="score-ring" style={{ background: scoreBg(item.value), color: scoreColor(item.value), width: 64, height: 64, fontSize: 18 }}>
+                                            {item.value}
+                                        </div>
+                                        <div style={{ fontSize: 12, fontWeight: 600, color: '#64748b' }}>{item.label}</div>
+                                    </div>
+                                ))}
+                            </div>
+
+                            {result.suggestions?.length > 0 && (
+                                <div className="card">
+                                    <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 10 }}>💡 개선 제안</div>
+                                    {result.suggestions.map((s, i) => (
+                                        <div key={i} style={{ padding: '8px 0', borderBottom: i < result.suggestions.length - 1 ? '1px solid #f1f5f9' : 'none', fontSize: 13, color: '#334155', display: 'flex', gap: 8 }}>
+                                            <span style={{ color: '#3b82f6', flexShrink: 0 }}>•</span>{s}
+                                        </div>
+                                    ))}
                                 </div>
                             )}
                         </div>
                     )}
-
-                    {/* 차트 모달 */}
-                    {showChartModal && (
-                        <div className="fixed inset-0 modal-backdrop flex items-center justify-center z-50 p-4">
-                            <div className="glassmorphism rounded-lg max-w-2xl w-full p-6 max-h-[80vh] overflow-y-auto">
-                                <div className="flex justify-between items-center mb-4">
-                                    <h3 className="font-bold text-lg text-gray-900">
-                                        {selectedProduct?.product_name} — "{selectedKeyword?.keyword}" 순위 이력
-                                    </h3>
-                                    <button onClick={() => { setShowChartModal(false); setHistoryData([]); }} className="text-gray-400 hover:text-gray-600 text-2xl">×</button>
-                                </div>
-                                <div className="chart-container">
-                                    <canvas ref={chartRef}></canvas>
-                                </div>
-                                <div className="text-center mt-4">
-                                    <p className="text-sm text-gray-600">최근 30일간 순위 변동 추이 (낮을수록 좋음)</p>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* 상품 등록 모달 */}
-                    {showProductModal && (
-                        <div className="fixed inset-0 modal-backdrop flex items-center justify-center z-50 p-4">
-                            <div className="glassmorphism rounded-lg max-w-xl w-full p-6">
-                                <div className="flex justify-between items-center mb-4">
-                                    <h3 className="font-bold text-lg text-gray-900">상품 등록</h3>
-                                    <button onClick={() => setShowProductModal(false)} className="text-gray-400 hover:text-gray-600 text-2xl">×</button>
-                                </div>
-                                <div className="space-y-4">
-                                    <div>
-                                        <label className="block text-sm font-semibold text-gray-700 mb-1">상품 URL (네이버 스마트스토어)</label>
-                                        <input type="url" placeholder="https://smartstore.naver.com/..." value={newProductUrl}
-                                            onChange={(e) => setNewProductUrl(e.target.value)} className="form-input" />
-                                    </div>
-                                    <div>
-                                        <label className="block text-sm font-semibold text-gray-700 mb-1">추적할 키워드 (쉼표 구분)</label>
-                                        <input type="text" placeholder="스마트워치, 저가 워치, 운동 워치" value={newKeywords}
-                                            onChange={(e) => setNewKeywords(e.target.value)} className="form-input" />
-                                    </div>
-                                    <div className="flex gap-3 mt-6">
-                                        <button onClick={() => setShowProductModal(false)} className="btn btn-secondary flex-1">취소</button>
-                                        <button onClick={handleAddProduct} disabled={addLoading} className="btn btn-primary flex-1">
-                                            {addLoading ? '등록 중...' : '등록'}
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    )}
                 </div>
-            );
-        }
+            </div>
+        );
+    }
 
-        // 키워드 분석 페이지
-        function KeywordAnalysisPage() {
-            const [keyword, setKeyword] = useState('');
-            const [result, setResult] = useState(null);
-            const [loading, setLoading] = useState(false);
-            const chartRef = useRef(null);
-            const chartInstance = useRef(null);
+    // ==================== 상품명 분석 섹션 ====================
+    function ProductNameSection({ keyword }) {
+        const [names, setNames] = useState('');
+        const [result, setResult] = useState(null);
+        const [loading, setLoading] = useState(false);
 
-            useEffect(() => {
-                if (result && chartRef.current) {
-                    const ctx = chartRef.current.getContext('2d');
-                    if (chartInstance.current) {
-                        chartInstance.current.destroy();
-                    }
+        const handleAnalyze = async () => {
+            const nameList = names.split('\n').map(n => n.trim()).filter(Boolean);
+            if (nameList.length === 0) return;
+            setLoading(true);
+            try {
+                const res = await api.post('/product-name/analyze', { product_names: nameList, keyword: keyword || '' });
+                if (res.success) setResult(res.data);
+            } catch (e) { alert('분석 실패'); }
+            setLoading(false);
+        };
 
-                    chartInstance.current = new Chart(ctx, {
-                        type: 'bar',
-                        data: {
-                            labels: ['1페이지 평균', '2페이지 평균'],
-                            datasets: [
-                                {
-                                    label: '평균 매출액',
-                                    data: [result.page1AvgSales / 1000000, result.page2AvgSales / 1000000],
-                                    backgroundColor: ['#667eea', '#764ba2']
-                                }
-                            ]
-                        },
-                        options: {
-                            responsive: true,
-                            maintainAspectRatio: false,
-                            plugins: {
-                                legend: {
-                                    labels: {
-                                        font: { family: "'Noto Sans KR', sans-serif", size: 12, weight: '600' },
-                                        color: '#1f2937'
-                                    }
-                                }
-                            },
-                            scales: {
-                                y: {
-                                    ticks: {
-                                        font: { family: "'Noto Sans KR', sans-serif" },
-                                        color: '#6b7280',
-                                        callback: function(value) {
-                                            return value.toFixed(0) + 'M';
-                                        }
-                                    },
-                                    grid: {
-                                        color: 'rgba(0, 0, 0, 0.05)'
-                                    }
-                                },
-                                x: {
-                                    ticks: {
-                                        font: { family: "'Noto Sans KR', sans-serif", size: 12 },
-                                        color: '#6b7280'
-                                    },
-                                    grid: {
-                                        display: false
-                                    }
-                                }
-                            }
-                        }
-                    });
-                }
-            }, [result]);
-
-            const handleSearch = async () => {
-                if (!keyword.trim()) return;
-
-                setLoading(true);
-                try {
-                    const res = await apiCall('/api/keyword/volume', {
-                        method: 'POST',
-                        body: JSON.stringify([keyword])
-                    });
-                    if (res && res.success && res.data && res.data.length > 0) {
-                        const kd = res.data[0];
-                        const totalVol = (kd.monthlyPcQcCnt || 0) + (kd.monthlyMobileQcCnt || 0);
-                        const compMap = {'HIGH':'높음','MEDIUM':'보통','LOW':'낮음','높음':'높음','보통':'보통','낮음':'낮음'};
-                        setResult({
-                            keyword: kd.keyword || keyword,
-                            searchVolume: { pc: kd.monthlyPcQcCnt || 0, mobile: kd.monthlyMobileQcCnt || 0 },
-                            totalSearchVolume: totalVol,
-                            products: 0,
-                            competitionRate: kd.compIdx === 'HIGH' || kd.compIdx === '높음' ? 0.8 : kd.compIdx === 'MEDIUM' || kd.compIdx === '보통' ? 0.5 : 0.2,
-                            competitionGrade: compMap[kd.compIdx] || '보통',
-                            page1AvgSales: totalVol * 300,
-                            page2AvgSales: totalVol * 40,
-                            entryRecommend: totalVol < 3000 && (kd.compIdx === 'LOW' || kd.compIdx === '낮음') ? '추천' : totalVol > 50000 ? '비추천' : '보통',
-                            entryReason: totalVol < 3000 ? '검색량이 적고 경쟁이 낮아 진입 기회가 있습니다.' : totalVol > 50000 ? '검색량이 매우 많으나 경쟁이 치열합니다.' : '적당한 검색량과 경쟁 수준입니다.',
-                        });
-                    } else {
-                        setResult(DEMO_DATA.keywordAnalysis);
-                    }
-                } catch (error) {
-                    console.warn('키워드 분석 API 호출 실패:', error);
-                    setResult(DEMO_DATA.keywordAnalysis);
-                }
-                setLoading(false);
-            };
-
-            return (
-                <div className="fade-in space-y-6">
-                    {/* 검색 입력 */}
-                    <div className="glassmorphism p-6 rounded-lg">
-                        <h2 className="font-bold text-lg text-gray-900 mb-4">키워드 분석</h2>
-                        <div className="flex gap-3">
-                            <input
-                                type="text"
-                                placeholder="분석할 키워드 입력"
-                                value={keyword}
-                                onChange={(e) => setKeyword(e.target.value)}
-                                onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
-                                className="form-input flex-1"
+        return (
+            <div className="section fade-in" id="sec-productname">
+                <div className="container">
+                    <div className="section-title">
+                        <span className="icon" style={{ background: '#fef2f2' }}>📝</span>
+                        상품명 키워드 분석
+                    </div>
+                    <div className="card" style={{ marginBottom: 16 }}>
+                        <div className="form-group">
+                            <label className="form-label">상품명 목록 (한 줄에 하나씩)</label>
+                            <textarea
+                                style={{ width: '100%', height: 100, padding: 12, border: '1.5px solid #e2e8f0', borderRadius: 8, fontFamily: 'inherit', fontSize: 13, resize: 'vertical', outline: 'none' }}
+                                placeholder="경쟁 상품명을 한 줄에 하나씩 입력하세요..."
+                                value={names} onChange={e => setNames(e.target.value)}
                             />
-                            <button
-                                onClick={handleSearch}
-                                disabled={loading}
-                                className="btn btn-primary"
-                            >
-                                {loading ? '분석 중...' : '분석'}
-                            </button>
                         </div>
+                        <button className="btn btn-primary" onClick={handleAnalyze} disabled={loading || !names.trim()}>
+                            {loading ? '분석 중...' : '상품명 분석'}
+                        </button>
                     </div>
 
-                    {/* 결과 */}
                     {result && (
-                        <div className="space-y-4">
-                            {/* 기본 통계 */}
-                            <div className="grid grid-cols-2 gap-4">
-                                <div className="glassmorphism p-5 rounded-lg">
-                                    <div className="text-sm text-gray-600 mb-1">월간 검색량 (PC)</div>
-                                    <div className="text-3xl font-bold text-gray-900">{result.searchVolume.pc.toLocaleString()}</div>
+                        <div className="fade-in">
+                            <div className="card-grid card-grid-3" style={{ marginBottom: 16 }}>
+                                <div className="card" style={{ textAlign: 'center' }}>
+                                    <div className="stat-label">분석 상품 수</div>
+                                    <div className="stat-value">{result.total_analyzed}</div>
                                 </div>
-                                <div className="glassmorphism p-5 rounded-lg">
-                                    <div className="text-sm text-gray-600 mb-1">월간 검색량 (모바일)</div>
-                                    <div className="text-3xl font-bold text-gray-900">{result.searchVolume.mobile.toLocaleString()}</div>
+                                <div className="card" style={{ textAlign: 'center' }}>
+                                    <div className="stat-label">평균 상품명 길이</div>
+                                    <div className="stat-value">{result.avg_name_length}자</div>
                                 </div>
-                                <div className="glassmorphism p-5 rounded-lg">
-                                    <div className="text-sm text-gray-600 mb-1">판매 중인 상품 수</div>
-                                    <div className="text-3xl font-bold text-gray-900">{result.products.toLocaleString()}</div>
-                                </div>
-                                <div className="glassmorphism p-5 rounded-lg">
-                                    <div className="text-sm text-gray-600 mb-1">경쟁 강도</div>
-                                    <div className="flex items-center gap-2">
-                                        <span className="text-2xl font-bold">{(result.competitionRate * 100).toFixed(0)}%</span>
-                                        <CompetitionBadge grade={result.competitionGrade} />
-                                    </div>
+                                <div className="card" style={{ textAlign: 'center' }}>
+                                    <div className="stat-label">키워드 포함률</div>
+                                    <div className="stat-value">{result.keyword_coverage != null ? `${result.keyword_coverage}%` : '-'}</div>
                                 </div>
                             </div>
 
-                            {/* 매출 비교 차트 */}
-                            <div className="glassmorphism p-6 rounded-lg">
-                                <h3 className="font-bold text-gray-900 mb-4">1페이지 vs 2페이지 평균 매출</h3>
-                                <div className="chart-container">
-                                    <canvas ref={chartRef}></canvas>
-                                </div>
-                            </div>
-
-                            {/* 진입 추천 */}
-                            <div className="glassmorphism p-6 rounded-lg">
-                                <div className="flex items-start gap-4">
-                                    <div>
-                                        <h3 className="font-bold text-gray-900 mb-2">진입 추천 판단</h3>
-                                        <RecommendBadge recommend={result.entryRecommend} />
+                            {result.top_keywords?.length > 0 && (
+                                <div className="card">
+                                    <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 12 }}>📊 자주 사용된 키워드 TOP 15</div>
+                                    <div className="table-wrap">
+                                        <table>
+                                            <thead><tr><th>#</th><th>키워드</th><th>등장 횟수</th><th>사용 비율</th></tr></thead>
+                                            <tbody>
+                                                {result.top_keywords.slice(0, 15).map((k, i) => (
+                                                    <tr key={k.word}>
+                                                        <td style={{ color: '#94a3b8' }}>{i + 1}</td>
+                                                        <td style={{ fontWeight: 500 }}>{k.word}</td>
+                                                        <td>{k.count}회</td>
+                                                        <td>
+                                                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                                                <div className="progress-bar" style={{ flex: 1, maxWidth: 100 }}>
+                                                                    <div className="progress-fill" style={{ width: `${Math.min(k.ratio, 100)}%`, background: '#3b82f6' }} />
+                                                                </div>
+                                                                <span style={{ fontSize: 12 }}>{k.ratio}%</span>
+                                                            </div>
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
                                     </div>
-                                    <div className="flex-1">
-                                        <p className="text-sm text-gray-700">{result.entryReason}</p>
-                                    </div>
                                 </div>
-                            </div>
+                            )}
                         </div>
                     )}
                 </div>
-            );
-        }
+            </div>
+        );
+    }
 
-        // 연관키워드 + 황금키워드 페이지
-        function RelatedKeywordsPage() {
-            const [keyword, setKeyword] = useState('');
-            const [results, setResults] = useState(null);
-            const [loading, setLoading] = useState(false);
+    // ==================== 보고서 섹션 ====================
+    function ReportSection() {
+        const [format, setFormat] = useState('json');
+        const [days, setDays] = useState(30);
+        const [data, setData] = useState(null);
+        const [loading, setLoading] = useState(false);
 
-            const handleSearch = async () => {
-                if (!keyword.trim()) return;
+        const handleExport = async () => {
+            setLoading(true);
+            try {
+                const res = await api.post('/report/export', { format, date_range: days });
+                if (res.success) setData(res.data);
+            } catch (e) { alert('보고서 생성 실패'); }
+            setLoading(false);
+        };
 
-                setLoading(true);
-                try {
-                    const res = await apiCall('/api/keywords/related', {
-                        method: 'POST',
-                        body: JSON.stringify({ keyword })
-                    });
-                    if (res && res.success) {
-                        const compMap = {'HIGH':'높음','MEDIUM':'보통','LOW':'낮음','높음':'높음','보통':'보통','낮음':'낮음'};
-                        const golden = (res.data.golden_keywords || []).map(k => ({
-                            keyword: k.keyword,
-                            searchVolume: k.totalVolume,
-                            competitionRate: k.compIdx === 'HIGH' ? 0.8 : k.compIdx === 'MEDIUM' ? 0.5 : 0.2,
-                            competitionGrade: compMap[k.compIdx] || '낮음',
-                            expectedMonthlyRevenue: Math.round(k.totalVolume * 0.02 * 30000),
-                            estimationNote: '전환율 2%, 객단가 30,000원 기준'
-                        }));
-                        const related = (res.data.related_keywords || []).map(k => ({
-                            keyword: k.keyword,
-                            searchVolume: k.totalVolume,
-                            products: 0,
-                            competitionRate: k.compIdx === 'HIGH' ? 0.8 : k.compIdx === 'MEDIUM' ? 0.5 : 0.2,
-                            competitionGrade: compMap[k.compIdx] || '보통',
-                        }));
-                        setResults({ goldenKeywords: golden, relatedKeywords: related });
-                    } else {
-                        setResults({ relatedKeywords: DEMO_DATA.relatedKeywords, goldenKeywords: DEMO_DATA.goldenKeywords });
-                    }
-                } catch (error) {
-                    console.warn('연관키워드 API 호출 실패:', error);
-                    setResults({ relatedKeywords: DEMO_DATA.relatedKeywords, goldenKeywords: DEMO_DATA.goldenKeywords });
-                }
-                setLoading(false);
-            };
+        const handleDownloadCSV = () => {
+            if (!data?.content) return;
+            const bom = '\uFEFF';
+            const blob = new Blob([bom + data.content], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `로직분석_보고서_${new Date().toISOString().slice(0, 10)}.csv`;
+            a.click();
+            URL.revokeObjectURL(url);
+        };
 
-            return (
-                <div className="fade-in space-y-6">
-                    {/* 검색 입력 */}
-                    <div className="glassmorphism p-6 rounded-lg">
-                        <h2 className="font-bold text-lg text-gray-900 mb-4">연관키워드 & 황금키워드</h2>
-                        <div className="flex gap-3">
-                            <input
-                                type="text"
-                                placeholder="검색할 키워드 입력"
-                                value={keyword}
-                                onChange={(e) => setKeyword(e.target.value)}
-                                onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
-                                className="form-input flex-1"
-                            />
-                            <button
-                                onClick={handleSearch}
-                                disabled={loading}
-                                className="btn btn-primary"
-                            >
-                                {loading ? '검색 중...' : '검색'}
-                            </button>
-                        </div>
+        return (
+            <div className="section fade-in" id="sec-report">
+                <div className="container">
+                    <div className="section-title">
+                        <span className="icon" style={{ background: '#eff6ff' }}>📄</span>
+                        보고서 내보내기
                     </div>
-
-                    {/* 결과 */}
-                    {results && (
-                        <div className="space-y-4">
-                            {/* 황금키워드 */}
-                            <div className="space-y-3">
-                                <h3 className="font-bold text-lg text-gray-900">✨ 황금키워드</h3>
-                                {results.goldenKeywords.map((gkw, idx) => (
-                                    <div key={idx} className="glassmorphism p-6 rounded-lg border-2 border-yellow-300">
-                                        <div className="flex justify-between items-start mb-3">
-                                            <div>
-                                                <h4 className="font-bold text-lg text-gray-900">{gkw.keyword}</h4>
-                                                <div className="text-sm text-gray-600 mt-1">
-                                                    검색량: <span className="font-semibold text-gray-900">{gkw.searchVolume.toLocaleString()}</span> / 경쟁강도: <CompetitionBadge grade={gkw.competitionGrade} />
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <div className="p-4 bg-yellow-50 rounded-lg">
-                                            <div className="text-sm text-gray-700 mb-2">예상 월 매출: <span className="font-bold text-gray-900">{(gkw.expectedMonthlyRevenue).toLocaleString()}원</span></div>
-                                            <div className="text-xs text-gray-600">{gkw.estimationNote}</div>
-                                        </div>
-                                    </div>
-                                ))}
+                    <div className="card">
+                        <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                            <div className="form-group" style={{ marginBottom: 0 }}>
+                                <label className="form-label">형식</label>
+                                <select className="form-input" style={{ width: 120 }} value={format} onChange={e => setFormat(e.target.value)}>
+                                    <option value="json">JSON</option>
+                                    <option value="csv">CSV</option>
+                                </select>
                             </div>
+                            <div className="form-group" style={{ marginBottom: 0 }}>
+                                <label className="form-label">기간</label>
+                                <select className="form-input" style={{ width: 120 }} value={days} onChange={e => setDays(Number(e.target.value))}>
+                                    <option value={7}>최근 7일</option>
+                                    <option value={14}>최근 14일</option>
+                                    <option value={30}>최근 30일</option>
+                                    <option value={90}>최근 90일</option>
+                                </select>
+                            </div>
+                            <button className="btn btn-primary" onClick={handleExport} disabled={loading}>
+                                {loading ? '생성 중...' : '보고서 생성'}
+                            </button>
+                            {data?.format === 'csv' && (
+                                <button className="btn btn-secondary" onClick={handleDownloadCSV}>📥 CSV 다운로드</button>
+                            )}
+                        </div>
 
-                            {/* 연관키워드 테이블 */}
-                            <div className="glassmorphism p-6 rounded-lg">
-                                <h3 className="font-bold text-lg text-gray-900 mb-4">연관키워드 TOP 10</h3>
-                                <div className="overflow-x-auto">
-                                    <table className="w-full text-sm">
-                                        <thead className="table-header">
-                                            <tr>
-                                                <th className="text-left py-3 px-4">순위</th>
-                                                <th className="text-left py-3 px-4">키워드</th>
-                                                <th className="text-right py-3 px-4">검색량</th>
-                                                <th className="text-right py-3 px-4">상품수</th>
-                                                <th className="text-center py-3 px-4">경쟁강도</th>
-                                            </tr>
-                                        </thead>
+                        {data && data.format === 'json' && (
+                            <div style={{ marginTop: 16 }}>
+                                <div style={{ display: 'flex', gap: 16, marginBottom: 12 }}>
+                                    <span className="badge badge-blue">상품 {data.total_products}개</span>
+                                    <span className="badge badge-green">키워드 {data.total_keywords}개</span>
+                                    <span className="badge badge-gray">{data.generated_at?.slice(0, 10)}</span>
+                                </div>
+                                <div className="table-wrap" style={{ maxHeight: 300, overflow: 'auto' }}>
+                                    <table>
+                                        <thead><tr><th>상품명</th><th>키워드</th><th>최근 순위</th><th>이력 수</th></tr></thead>
                                         <tbody>
-                                            {results.relatedKeywords.map((rkw, idx) => (
-                                                <tr key={idx} className="table-row">
-                                                    <td className="py-3 px-4 font-bold text-purple-600">#{idx + 1}</td>
-                                                    <td className="py-3 px-4 font-semibold">{rkw.keyword}</td>
-                                                    <td className="py-3 px-4 text-right">{rkw.searchVolume.toLocaleString()}</td>
-                                                    <td className="py-3 px-4 text-right">{rkw.products.toLocaleString()}</td>
-                                                    <td className="py-3 px-4 text-center">
-                                                        <CompetitionBadge grade={rkw.competitionGrade} />
-                                                    </td>
+                                            {(data.items || []).map((item, i) => (
+                                                <tr key={i}>
+                                                    <td style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.product_name}</td>
+                                                    <td>{item.keyword}</td>
+                                                    <td style={{ fontWeight: 600 }}>{item.latest_rank ? `${item.latest_rank}위` : '-'}</td>
+                                                    <td>{item.history_count}건</td>
                                                 </tr>
                                             ))}
                                         </tbody>
                                     </table>
                                 </div>
                             </div>
-                        </div>
-                    )}
-                </div>
-            );
-        }
-
-        // 상품명 키워드 분석 페이지
-        function ProductKeywordPage() {
-            const [keyword, setKeyword] = useState('');
-            const [result, setResult] = useState(null);
-            const [loading, setLoading] = useState(false);
-            const categoryChartRef = useRef(null);
-            const categoryChartInstance = useRef(null);
-
-            useEffect(() => {
-                if (result && categoryChartRef.current) {
-                    const ctx = categoryChartRef.current.getContext('2d');
-                    if (categoryChartInstance.current) {
-                        categoryChartInstance.current.destroy();
-                    }
-
-                    categoryChartInstance.current = new Chart(ctx, {
-                        type: 'doughnut',
-                        data: {
-                            labels: result.categoryDistribution.map(cd => cd.category),
-                            datasets: [
-                                {
-                                    data: result.categoryDistribution.map(cd => cd.count),
-                                    backgroundColor: ['#667eea', '#764ba2', '#f093fb', '#4facfe', '#43e97b']
-                                }
-                            ]
-                        },
-                        options: {
-                            responsive: true,
-                            maintainAspectRatio: false,
-                            plugins: {
-                                legend: {
-                                    labels: {
-                                        font: { family: "'Noto Sans KR', sans-serif", size: 12, weight: '600' },
-                                        color: '#1f2937'
-                                    }
-                                }
-                            }
-                        }
-                    });
-                }
-            }, [result]);
-
-            const handleSearch = async () => {
-                if (!keyword.trim()) return;
-
-                setLoading(true);
-                try {
-                    // 먼저 네이버 검색 API로 상품명 수집 후 분석
-                    const searchRes = await apiCall('/api/rank/check', {
-                        method: 'POST',
-                        body: JSON.stringify({ keyword, product_url: 'https://smartstore.naver.com/placeholder' })
-                    });
-                    const productNames = (searchRes && searchRes.data && searchRes.data.top_competitors)
-                        ? searchRes.data.top_competitors.map(c => c.product_name).filter(n => n)
-                        : [];
-
-                    if (productNames.length > 0) {
-                        const analysisRes = await apiCall('/api/product-name/analyze', {
-                            method: 'POST',
-                            body: JSON.stringify({ product_names: productNames, keyword })
-                        });
-                        if (analysisRes && analysisRes.success) {
-                            const d = analysisRes.data;
-                            setResult({
-                                keyword,
-                                keywordFrequency: (d.top_keywords || []).map(k => ({ word: k.word, count: k.count })),
-                                categoryDistribution: (d.top_bigrams || []).slice(0, 5).map(b => ({ category: b.phrase, count: b.count })),
-                                recommendedTitle: `[${keyword}] ${(d.top_keywords || []).slice(0, 4).map(k => k.word).join(' ')}`,
-                                recommendedKeywords: (d.top_keywords || []).slice(0, 5).map(k => k.word),
-                            });
-                        } else {
-                            setResult(DEMO_DATA.productNameAnalysis);
-                        }
-                    } else {
-                        setResult(DEMO_DATA.productNameAnalysis);
-                    }
-                } catch (error) {
-                    console.warn('상품명 분석 API 호출 실패:', error);
-                    setResult(DEMO_DATA.productNameAnalysis);
-                }
-                setLoading(false);
-            };
-
-            return (
-                <div className="fade-in space-y-6">
-                    {/* 검색 입력 */}
-                    <div className="glassmorphism p-6 rounded-lg">
-                        <h2 className="font-bold text-lg text-gray-900 mb-4">상품명 키워드 분석</h2>
-                        <div className="flex gap-3">
-                            <input
-                                type="text"
-                                placeholder="분석할 키워드 입력"
-                                value={keyword}
-                                onChange={(e) => setKeyword(e.target.value)}
-                                onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
-                                className="form-input flex-1"
-                            />
-                            <button
-                                onClick={handleSearch}
-                                disabled={loading}
-                                className="btn btn-primary"
-                            >
-                                {loading ? '분석 중...' : '분석'}
-                            </button>
-                        </div>
+                        )}
                     </div>
-
-                    {/* 결과 */}
-                    {result && (
-                        <div className="space-y-4">
-                            {/* 키워드 빈도 */}
-                            <div className="glassmorphism p-6 rounded-lg">
-                                <h3 className="font-bold text-lg text-gray-900 mb-4">키워드 빈도 분석</h3>
-                                <div className="space-y-2">
-                                    {result.keywordFrequency.map((item, idx) => (
-                                        <div key={idx} className="flex items-center gap-3">
-                                            <div className="w-20 font-semibold text-gray-700">{item.word}</div>
-                                            <div className="flex-1 h-8 bg-gray-200 rounded-full overflow-hidden">
-                                                <div
-                                                    className="h-full bg-gradient-to-r from-purple-500 to-pink-500 flex items-center justify-end pr-2"
-                                                    style={{ width: `${(item.count / result.keywordFrequency[0].count) * 100}%` }}
-                                                >
-                                                    <span className="text-white font-bold text-sm">{item.count}</span>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-
-                            {/* 카테고리 분포 */}
-                            <div className="glassmorphism p-6 rounded-lg">
-                                <h3 className="font-bold text-lg text-gray-900 mb-4">카테고리 분포</h3>
-                                <div className="chart-container">
-                                    <canvas ref={categoryChartRef}></canvas>
-                                </div>
-                            </div>
-
-                            {/* 최적화 추천 */}
-                            <div className="glassmorphism p-6 rounded-lg">
-                                <h3 className="font-bold text-lg text-gray-900 mb-3">최적화 추천 상품명</h3>
-                                <div className="p-4 bg-purple-50 border-l-4 border-purple-500 rounded-lg mb-4">
-                                    <p className="font-semibold text-gray-900">{result.recommendedTitle}</p>
-                                </div>
-                                <div>
-                                    <p className="text-sm text-gray-600 mb-3">추천 포함 키워드:</p>
-                                    <div className="flex flex-wrap gap-2">
-                                        {result.recommendedKeywords.map((kw, idx) => (
-                                            <span key={idx} className="px-3 py-1 bg-purple-100 text-purple-700 rounded-full text-sm font-semibold">
-                                                {kw}
-                                            </span>
-                                        ))}
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    )}
                 </div>
-            );
-        }
+            </div>
+        );
+    }
 
-        // SEO 진단 페이지
-        function SeoDiagnosisPage() {
-            const [url, setUrl] = useState('');
-            const [result, setResult] = useState(null);
-            const [loading, setLoading] = useState(false);
-            const radarChartRef = useRef(null);
-            const radarChartInstance = useRef(null);
+    // ==================== 알림 설정 섹션 (간략) ====================
+    function NotificationSection() {
+        const [settings, setSettings] = useState(null);
+        const [loading, setLoading] = useState(true);
 
-            useEffect(() => {
-                if (result && radarChartRef.current) {
-                    const ctx = radarChartRef.current.getContext('2d');
-                    if (radarChartInstance.current) {
-                        radarChartInstance.current.destroy();
-                    }
-
-                    radarChartInstance.current = new Chart(ctx, {
-                        type: 'radar',
-                        data: {
-                            labels: ['적합도', '신뢰도', '인기도'],
-                            datasets: [
-                                {
-                                    label: 'SEO 점수',
-                                    data: [result.relevance, result.trust, result.popularity],
-                                    borderColor: '#667eea',
-                                    backgroundColor: 'rgba(102, 126, 234, 0.2)',
-                                    borderWidth: 2,
-                                    pointBackgroundColor: '#667eea',
-                                    pointBorderColor: '#fff',
-                                    pointBorderWidth: 2
-                                }
-                            ]
-                        },
-                        options: {
-                            responsive: true,
-                            maintainAspectRatio: false,
-                            plugins: {
-                                legend: {
-                                    labels: {
-                                        font: { family: "'Noto Sans KR', sans-serif", size: 12, weight: '600' },
-                                        color: '#1f2937'
-                                    }
-                                }
-                            },
-                            scales: {
-                                r: {
-                                    max: 100,
-                                    ticks: {
-                                        font: { family: "'Noto Sans KR', sans-serif" },
-                                        color: '#6b7280'
-                                    }
-                                }
-                            }
-                        }
-                    });
-                }
-            }, [result]);
-
-            const [seoKeyword, setSeoKeyword] = useState('');
-
-            const handleAnalyze = async () => {
-                if (!url.trim() || !seoKeyword.trim()) return;
-
-                setLoading(true);
-                try {
-                    const res = await apiCall('/api/seo/analyze', {
-                        method: 'POST',
-                        body: JSON.stringify({ product_url: url, keyword: seoKeyword })
-                    });
-                    if (res && res.success) {
-                        const d = res.data;
-                        const s = d.scores;
-                        // 등급 계산
-                        let grade = 'F', gradeDesc = '개선 필요';
-                        if (s.total >= 80) { grade = 'A'; gradeDesc = '우수 - 현재 전략 유지'; }
-                        else if (s.total >= 60) { grade = 'B'; gradeDesc = '양호 - 개선의 여지 있음'; }
-                        else if (s.total >= 40) { grade = 'C'; gradeDesc = '보통 - 적극적 개선 필요'; }
-                        else if (s.total >= 20) { grade = 'D'; gradeDesc = '미흡 - 전면 재검토 필요'; }
-
-                        setResult({
-                            url,
-                            relevance: s.title,
-                            trust: s.price,
-                            popularity: s.rank,
-                            grade,
-                            gradeDescription: gradeDesc,
-                            scores: [
-                                { item: '상품명 최적화', score: s.title },
-                                { item: '가격 경쟁력', score: s.price },
-                                { item: '순위 점수', score: s.rank },
-                                { item: '키워드 포함', score: s.detail.keyword_in_title ? 90 : 20 },
-                                { item: '상품명 길이', score: s.detail.title_length >= 20 && s.detail.title_length <= 50 ? 80 : 50 },
-                                { item: '특수문자 사용', score: Math.max(0, 100 - s.detail.special_chars * 15) },
-                            ],
-                            actions: d.suggestions || [],
-                        });
-                    } else {
-                        setResult(DEMO_DATA.seoDiagnosis);
-                    }
-                } catch (error) {
-                    console.warn('SEO 진단 API 호출 실패:', error);
-                    setResult(DEMO_DATA.seoDiagnosis);
-                }
+        useEffect(() => {
+            api.get('/notify/settings').then(res => {
+                if (res.success) setSettings(res.data);
                 setLoading(false);
-            };
+            }).catch(() => setLoading(false));
+        }, []);
 
-            const getGradeColor = (grade) => {
-                const colors = { 'A': 'text-green-600', 'B': 'text-blue-600', 'C': 'text-yellow-600', 'D': 'text-orange-600', 'F': 'text-red-600' };
-                return colors[grade] || 'text-gray-600';
-            };
+        const toggleNotify = async (enabled) => {
+            const res = await api.put('/notify/settings', { notify_enabled: enabled });
+            if (res.success) setSettings(res.data);
+        };
 
-            return (
-                <div className="fade-in space-y-6">
-                    {/* URL + 키워드 입력 */}
-                    <div className="glassmorphism p-6 rounded-lg">
-                        <h2 className="font-bold text-lg text-gray-900 mb-4">SEO 종합 진단</h2>
-                        <div className="space-y-3">
-                            <input
-                                type="url"
-                                placeholder="상품 URL 입력 (https://smartstore.naver.com/...)"
-                                value={url}
-                                onChange={(e) => setUrl(e.target.value)}
-                                className="form-input"
-                            />
-                            <div className="flex gap-3">
-                                <input
-                                    type="text"
-                                    placeholder="분석 기준 키워드"
-                                    value={seoKeyword}
-                                    onChange={(e) => setSeoKeyword(e.target.value)}
-                                    onKeyPress={(e) => e.key === 'Enter' && handleAnalyze()}
-                                    className="form-input flex-1"
-                                />
-                                <button onClick={handleAnalyze} disabled={loading} className="btn btn-primary">
-                                    {loading ? '분석 중...' : '진단'}
-                                </button>
-                            </div>
-                        </div>
+        if (loading) return null;
+        if (!settings) return null;
+
+        return (
+            <div className="section" id="sec-notify">
+                <div className="container">
+                    <div className="section-title">
+                        <span className="icon" style={{ background: '#fffbeb' }}>🔔</span>
+                        알림 설정
                     </div>
-
-                    {/* 결과 */}
-                    {result && (
-                        <div className="space-y-4">
-                            {/* 종합 등급 */}
-                            <div className="glassmorphism p-6 rounded-lg">
-                                <div className="flex items-center gap-6">
-                                    <div>
-                                        <div className={`text-7xl font-black ${getGradeColor(result.grade)}`}>
-                                            {result.grade}
-                                        </div>
-                                    </div>
-                                    <div className="flex-1">
-                                        <h3 className="text-2xl font-bold text-gray-900 mb-1">SEO 평가: {result.gradeDescription}</h3>
-                                        <p className="text-gray-600 text-sm">전체적인 SEO 최적화 수준입니다.</p>
-                                    </div>
-                                </div>
-                            </div>
-
-                            {/* 레이더 차트 */}
-                            <div className="glassmorphism p-6 rounded-lg">
-                                <h3 className="font-bold text-lg text-gray-900 mb-4">3축 평가</h3>
-                                <div className="chart-container">
-                                    <canvas ref={radarChartRef}></canvas>
-                                </div>
-                            </div>
-
-                            {/* 세부 점수 */}
-                            <div className="glassmorphism p-6 rounded-lg">
-                                <h3 className="font-bold text-lg text-gray-900 mb-4">세부 항목 점수</h3>
-                                <div className="space-y-3">
-                                    {result.scores.map((score, idx) => (
-                                        <div key={idx} className="flex items-center gap-4">
-                                            <div className="w-32 text-sm font-semibold text-gray-700">{score.item}</div>
-                                            <div className="flex-1 h-6 bg-gray-200 rounded-full overflow-hidden">
-                                                <div
-                                                    className="h-full bg-gradient-to-r from-purple-500 to-pink-500"
-                                                    style={{ width: `${score.score}%` }}
-                                                />
-                                            </div>
-                                            <div className="w-12 text-right font-bold text-gray-900">{score.score}/100</div>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-
-                            {/* 개선 액션 플랜 */}
-                            <div className="glassmorphism p-6 rounded-lg">
-                                <h3 className="font-bold text-lg text-gray-900 mb-4">🎯 개선 액션 플랜</h3>
-                                <ol className="space-y-3">
-                                    {result.actions.map((action, idx) => (
-                                        <li key={idx} className="flex gap-3">
-                                            <div className="flex-shrink-0 w-6 h-6 rounded-full bg-purple-600 text-white flex items-center justify-center text-sm font-bold">
-                                                {idx + 1}
-                                            </div>
-                                            <p className="text-gray-700 pt-0.5">{action}</p>
-                                        </li>
-                                    ))}
-                                </ol>
-                            </div>
-                        </div>
-                    )}
-                </div>
-            );
-        }
-
-        // 알림톡 설정 페이지
-        function NotificationPage() {
-            const [enabled, setEnabled] = useState(false);
-            const [phone, setPhone] = useState('');
-            const [reportTime, setReportTime] = useState('09:00');
-            const [solapiConfigured, setSolapiConfigured] = useState(false);
-            const [recentLogs, setRecentLogs] = useState([]);
-            const [testLoading, setTestLoading] = useState(false);
-            const [saveLoading, setSaveLoading] = useState(false);
-
-            useEffect(() => {
-                loadSettings();
-                loadLogs();
-            }, []);
-
-            const loadSettings = async () => {
-                const res = await apiCall('/api/notify/settings');
-                if (res && res.success) {
-                    setEnabled(res.data.notify_enabled || false);
-                    setPhone(res.data.receiver_phone || '');
-                    setReportTime(res.data.report_time || '09:00');
-                    setSolapiConfigured(res.data.solapi_configured || false);
-                }
-            };
-
-            const loadLogs = async () => {
-                const res = await apiCall('/api/notify/logs?limit=10');
-                if (res && res.success) {
-                    setRecentLogs(res.data || []);
-                }
-            };
-
-            const handleSaveSettings = async () => {
-                setSaveLoading(true);
-                await apiCall('/api/notify/settings', {
-                    method: 'PUT',
-                    body: JSON.stringify({ notify_enabled: enabled, receiver_phone: phone, report_time: reportTime })
-                });
-                setSaveLoading(false);
-                alert('설정이 저장되었습니다.');
-            };
-
-            const handleTestNotification = async () => {
-                setTestLoading(true);
-                const res = await apiCall('/api/notify/test', { method: 'POST' });
-                if (res && res.success) {
-                    alert('테스트 알림이 발송되었습니다.');
-                } else {
-                    alert('테스트 발송 실패: ' + (res?.error || res?.data?.error || '알 수 없는 오류'));
-                }
-                setTestLoading(false);
-                loadLogs();
-            };
-
-            return (
-                <div className="fade-in space-y-6">
-                    {/* 알림 활성화 */}
-                    <div className="glassmorphism p-6 rounded-lg">
-                        <div className="flex items-center justify-between">
+                    <div className="card">
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <div>
-                                <h3 className="font-bold text-lg text-gray-900">알림 활성화</h3>
-                                <p className="text-sm text-gray-600 mt-1">알림톡을 통해 순위 변동을 받아보세요</p>
+                                <div style={{ fontWeight: 600, fontSize: 14 }}>일일 리포트 알림</div>
+                                <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>
+                                    {settings.report_time || '09:00'}에 순위 변동 리포트를 발송합니다
+                                </div>
                             </div>
-                            <label className="toggle-switch">
-                                <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-                                <span className="toggle-slider"></span>
+                            <label className="toggle">
+                                <input type="checkbox" checked={settings.notify_enabled || false} onChange={e => toggleNotify(e.target.checked)} />
+                                <span className="toggle-track" />
                             </label>
                         </div>
-                    </div>
-
-                    {/* Solapi 상태 */}
-                    <div className="glassmorphism p-6 rounded-lg">
-                        <div className="flex items-center gap-3">
-                            <span className={`badge-rank ${solapiConfigured ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                                {solapiConfigured ? '✓ Solapi 연동됨' : '✗ Solapi 미설정'}
-                            </span>
-                            {!solapiConfigured && (
-                                <span className="text-sm text-gray-600">환경변수(SOLAPI_API_KEY 등)를 서버에 설정하세요.</span>
-                            )}
-                        </div>
-                    </div>
-
-                    {/* 수신 설정 */}
-                    <div className="glassmorphism p-6 rounded-lg">
-                        <h3 className="font-bold text-lg text-gray-900 mb-4">수신 설정</h3>
-                        <div className="space-y-4">
-                            <div>
-                                <label className="block text-sm font-semibold text-gray-700 mb-1">수신자 전화번호</label>
-                                <input type="tel" placeholder="01012345678" value={phone}
-                                    onChange={(e) => setPhone(e.target.value)} className="form-input" />
-                            </div>
-                            <div>
-                                <label className="block text-sm font-semibold text-gray-700 mb-1">일일 리포트 발송 시간</label>
-                                <input type="time" value={reportTime}
-                                    onChange={(e) => setReportTime(e.target.value)} className="form-input" />
-                            </div>
-                            <div className="flex gap-3">
-                                <button onClick={handleSaveSettings} disabled={saveLoading} className="btn btn-primary flex-1">
-                                    {saveLoading ? '저장 중...' : '설정 저장'}
-                                </button>
-                                <button onClick={handleTestNotification} disabled={testLoading} className="btn btn-secondary flex-1">
-                                    {testLoading ? '발송 중...' : '테스트 발송'}
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-
-                    {/* 최근 발송 이력 */}
-                    <div className="glassmorphism p-6 rounded-lg">
-                        <h3 className="font-bold text-lg text-gray-900 mb-4">최근 발송 이력</h3>
-                        {recentLogs.length === 0 ? (
-                            <p className="text-gray-500 text-sm">발송 이력이 없습니다.</p>
-                        ) : (
-                            <div className="overflow-x-auto">
-                                <table className="w-full text-sm">
-                                    <thead className="table-header">
-                                        <tr>
-                                            <th className="text-left py-3 px-4">발송시간</th>
-                                            <th className="text-left py-3 px-4">유형</th>
-                                            <th className="text-left py-3 px-4">수신자</th>
-                                            <th className="text-center py-3 px-4">상태</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {recentLogs.map((log) => (
-                                            <tr key={log.id} className="table-row">
-                                                <td className="py-3 px-4 text-gray-600">{(log.sent_at || '').slice(0, 16)}</td>
-                                                <td className="py-3 px-4 font-semibold">{log.log_type}</td>
-                                                <td className="py-3 px-4">{log.receiver_phone || '-'}</td>
-                                                <td className="py-3 px-4 text-center">
-                                                    <span className={`badge-rank ${log.status === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                                                        {log.status === 'success' ? '성공' : '실패'}
-                                                    </span>
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
+                        {!settings.solapi_configured && (
+                            <div className="alert alert-info" style={{ marginTop: 12, marginBottom: 0 }}>
+                                솔라피 API가 설정되지 않았습니다. 알림을 사용하려면 환경변수를 설정하세요.
                             </div>
                         )}
                     </div>
                 </div>
-            );
-        }
+            </div>
+        );
+    }
 
-        // 보고서 페이지
-        function ReportsPage() {
-            const [reportType, setReportType] = useState('keyword');
-            const [format, setFormat] = useState('pdf');
-            const [period, setPeriod] = useState('month');
-            const [includeItems, setIncludeItems] = useState(['summary', 'detailed', 'chart']);
-            const [brandName, setBrandName] = useState('');
-            const [brandColor, setBrandColor] = useState('#667eea');
+    // ==================== 메인 앱 ====================
+    function App() {
+        const [health, setHealth] = useState(false);
+        const [products, setProducts] = useState([]);
+        const [searchLoading, setSearchLoading] = useState(false);
+        const [searchedKeyword, setSearchedKeyword] = useState('');
 
-            const handleItemToggle = (item) => {
-                setIncludeItems(
-                    includeItems.includes(item)
-                        ? includeItems.filter(i => i !== item)
-                        : [...includeItems, item]
-                );
-            };
+        // 검색 결과
+        const [volumeData, setVolumeData] = useState(null);
+        const [relatedData, setRelatedData] = useState(null);
 
-            const [exportLoading, setExportLoading] = useState(false);
-            const [previewData, setPreviewData] = useState(null);
+        // 헬스체크
+        useEffect(() => {
+            api.get('/health').then(res => setHealth(res.status === 'ok')).catch(() => setHealth(false));
+        }, []);
 
-            const handleDownload = async () => {
-                setExportLoading(true);
-                const periodDays = { week: 7, month: 30, quarter: 90, year: 365 };
-                const res = await apiCall('/api/report/export', {
-                    method: 'POST',
-                    body: JSON.stringify({
-                        format: format === 'excel' ? 'csv' : 'json',
-                        date_range: periodDays[period] || 30
-                    })
-                });
-                if (res && res.success) {
-                    if (format === 'excel' && res.data.content) {
-                        // CSV 다운로드
-                        const blob = new Blob([res.data.content], { type: 'text/csv;charset=utf-8;' });
-                        const url = URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        a.href = url; a.download = `report_${new Date().toISOString().slice(0,10)}.csv`;
-                        a.click(); URL.revokeObjectURL(url);
-                    } else {
-                        // JSON 미리보기
-                        setPreviewData(res.data);
-                        const blob = new Blob([JSON.stringify(res.data, null, 2)], { type: 'application/json' });
-                        const url = URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        a.href = url; a.download = `report_${new Date().toISOString().slice(0,10)}.json`;
-                        a.click(); URL.revokeObjectURL(url);
-                    }
-                    alert('보고서가 다운로드되었습니다!');
-                } else {
-                    alert('보고서 생성에 실패했습니다.');
-                }
-                setExportLoading(false);
-            };
+        // 상품 목록 로드
+        const loadProducts = useCallback(() => {
+            api.get('/products').then(res => {
+                if (res.success) setProducts(res.data);
+            }).catch(() => {});
+        }, []);
 
-            const handlePreview = async () => {
-                const res = await apiCall('/api/notify/preview');
-                if (res && res.success) {
-                    setPreviewData(res.data);
-                }
-            };
+        useEffect(() => { loadProducts(); }, [loadProducts]);
 
-            return (
-                <div className="fade-in space-y-6">
-                    {/* 보고서 유형 */}
-                    <div className="glassmorphism p-6 rounded-lg">
-                        <h3 className="font-bold text-lg text-gray-900 mb-4">보고서 유형</h3>
-                        <div className="space-y-2">
-                            {[
-                                { value: 'keyword', label: '키워드 분석 보고서' },
-                                { value: 'ranking', label: '순위 추적 보고서' },
-                                { value: 'seo', label: 'SEO 진단 보고서' }
-                            ].map((option) => (
-                                <label key={option.value} className="flex items-center gap-3 cursor-pointer p-2 hover:bg-gray-50 rounded">
-                                    <input
-                                        type="radio"
-                                        name="reportType"
-                                        value={option.value}
-                                        checked={reportType === option.value}
-                                        onChange={(e) => setReportType(e.target.value)}
-                                        className="w-4 h-4"
-                                    />
-                                    <span className="text-gray-700">{option.label}</span>
-                                </label>
+        // 통합 검색
+        const handleSearch = async (keyword) => {
+            setSearchLoading(true);
+            setSearchedKeyword(keyword);
+            setVolumeData(null);
+            setRelatedData(null);
+
+            try {
+                // 병렬로 검색량 + 연관키워드 호출
+                const [volRes, relRes] = await Promise.all([
+                    api.post('/keyword/volume', [keyword]).catch(() => null),
+                    api.post('/keywords/related', { keyword }).catch(() => null),
+                ]);
+
+                if (volRes?.success) setVolumeData(volRes.data);
+                if (relRes?.success) setRelatedData(relRes.data);
+            } catch (e) {
+                console.error('검색 오류:', e);
+            }
+            setSearchLoading(false);
+        };
+
+        // 앵커 네비게이션
+        const sections = [
+            { id: 'sec-rank', label: '순위 추적' },
+            { id: 'sec-volume', label: '검색량', show: !!volumeData },
+            { id: 'sec-related', label: '연관 키워드', show: !!relatedData },
+            { id: 'sec-seo', label: 'SEO 진단' },
+            { id: 'sec-productname', label: '상품명 분석' },
+            { id: 'sec-report', label: '보고서' },
+            { id: 'sec-notify', label: '알림' },
+        ].filter(s => s.show !== false);
+
+        const scrollTo = (id) => {
+            document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        };
+
+        return (
+            <div>
+                <TopBar health={health} />
+                <SearchBar onSearch={handleSearch} loading={searchLoading} />
+
+                {/* 앵커 네비 */}
+                <div style={{ background: '#fff', borderBottom: '1px solid #e8ecf1', padding: '10px 0', position: 'sticky', top: 64, zIndex: 40 }}>
+                    <div className="container">
+                        <div className="anchor-nav">
+                            {sections.map(s => (
+                                <button key={s.id} className="anchor-btn" onClick={() => scrollTo(s.id)}>{s.label}</button>
                             ))}
-                        </div>
-                    </div>
-
-                    {/* 포함 항목 */}
-                    <div className="glassmorphism p-6 rounded-lg">
-                        <h3 className="font-bold text-lg text-gray-900 mb-4">포함 항목</h3>
-                        <div className="space-y-2">
-                            {[
-                                { value: 'summary', label: '요약 분석' },
-                                { value: 'detailed', label: '상세 데이터' },
-                                { value: 'chart', label: '차트 & 그래프' },
-                                { value: 'recommendation', label: '개선 권고사항' }
-                            ].map((option) => (
-                                <label key={option.value} className="flex items-center gap-3 cursor-pointer p-2 hover:bg-gray-50 rounded">
-                                    <input
-                                        type="checkbox"
-                                        checked={includeItems.includes(option.value)}
-                                        onChange={() => handleItemToggle(option.value)}
-                                        className="w-4 h-4"
-                                    />
-                                    <span className="text-gray-700">{option.label}</span>
-                                </label>
-                            ))}
-                        </div>
-                    </div>
-
-                    {/* 기간 설정 */}
-                    <div className="glassmorphism p-6 rounded-lg">
-                        <h3 className="font-bold text-lg text-gray-900 mb-4">기간 설정</h3>
-                        <select value={period} onChange={(e) => setPeriod(e.target.value)} className="form-input">
-                            <option value="week">지난 7일</option>
-                            <option value="month">지난 30일</option>
-                            <option value="quarter">지난 분기</option>
-                            <option value="year">지난 1년</option>
-                        </select>
-                    </div>
-
-                    {/* 형식 선택 */}
-                    <div className="glassmorphism p-6 rounded-lg">
-                        <h3 className="font-bold text-lg text-gray-900 mb-4">다운로드 형식</h3>
-                        <div className="space-y-2">
-                            {[
-                                { value: 'pdf', label: 'PDF 형식' },
-                                { value: 'excel', label: 'Excel 형식' }
-                            ].map((option) => (
-                                <label key={option.value} className="flex items-center gap-3 cursor-pointer p-2 hover:bg-gray-50 rounded">
-                                    <input
-                                        type="radio"
-                                        name="format"
-                                        value={option.value}
-                                        checked={format === option.value}
-                                        onChange={(e) => setFormat(e.target.value)}
-                                        className="w-4 h-4"
-                                    />
-                                    <span className="text-gray-700">{option.label}</span>
-                                </label>
-                            ))}
-                        </div>
-                    </div>
-
-                    {/* 브랜드 설정 */}
-                    <div className="glassmorphism p-6 rounded-lg">
-                        <h3 className="font-bold text-lg text-gray-900 mb-4">브랜드 설정</h3>
-                        <div className="space-y-3">
-                            <div>
-                                <label className="block text-sm font-semibold text-gray-700 mb-1">브랜드명</label>
-                                <input
-                                    type="text"
-                                    placeholder="회사/브랜드명"
-                                    value={brandName}
-                                    onChange={(e) => setBrandName(e.target.value)}
-                                    className="form-input"
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-sm font-semibold text-gray-700 mb-1">브랜드 컬러</label>
-                                <div className="flex gap-3">
-                                    <input
-                                        type="color"
-                                        value={brandColor}
-                                        onChange={(e) => setBrandColor(e.target.value)}
-                                        className="w-16 h-10 rounded cursor-pointer"
-                                    />
-                                    <input
-                                        type="text"
-                                        value={brandColor}
-                                        onChange={(e) => setBrandColor(e.target.value)}
-                                        className="form-input flex-1"
-                                    />
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    {/* 미리보기 & 다운로드 */}
-                    <div className="glassmorphism p-6 rounded-lg">
-                        <div className="p-4 bg-purple-50 border-l-4 border-purple-500 rounded-lg mb-4">
-                            <p className="text-sm text-purple-900">
-                                <strong>미리보기:</strong> {reportType === 'keyword' ? '키워드' : reportType === 'ranking' ? '순위 추적' : 'SEO 진단'} 보고서가 생성됩니다.
-                            </p>
-                        </div>
-                        <div className="flex gap-3">
-                            <button onClick={handlePreview} className="btn btn-secondary flex-1">미리보기</button>
-                            <button onClick={handleDownload} disabled={exportLoading} className="btn btn-primary flex-1">
-                                {exportLoading ? '생성 중...' : '다운로드'}
-                            </button>
-                        </div>
-                        {previewData && (
-                            <div className="mt-4 p-4 bg-gray-50 rounded-lg max-h-64 overflow-y-auto">
-                                <pre className="text-xs text-gray-700 whitespace-pre-wrap">
-                                    {previewData.report_text || JSON.stringify(previewData, null, 2).slice(0, 2000)}
-                                </pre>
-                            </div>
-                        )}
-                    </div>
-                </div>
-            );
-        }
-
-        // 시스템 상태 페이지
-        function SystemStatusPage() {
-            return (
-                <div className="fade-in space-y-4">
-                    <div className="glassmorphism p-5 rounded-lg">
-                        <div className="flex justify-between items-center mb-2">
-                            <h4 className="font-semibold text-gray-900">API 서버</h4>
-                            <span className="badge-rank bg-green-100 text-green-800">정상</span>
-                        </div>
-                        <p className="text-sm text-gray-600">logic.metainc.co.kr</p>
-                    </div>
-                    <div className="glassmorphism p-5 rounded-lg">
-                        <div className="flex justify-between items-center mb-2">
-                            <h4 className="font-semibold text-gray-900">네이버 API</h4>
-                            <span className="badge-rank bg-green-100 text-green-800">정상</span>
-                        </div>
-                        <p className="text-sm text-gray-600">일일 할당량: 1,234 / 10,000</p>
-                    </div>
-                    <div className="glassmorphism p-5 rounded-lg">
-                        <div className="flex justify-between items-center mb-2">
-                            <h4 className="font-semibold text-gray-900">데이터 동기화</h4>
-                            <span className="badge-rank bg-blue-100 text-blue-800">진행 중</span>
-                        </div>
-                        <p className="text-sm text-gray-600">마지막 업데이트: 2분 전</p>
-                    </div>
-                </div>
-            );
-        }
-
-        // 메인 앱 컴포넌트
-        function App() {
-            const [sidebarOpen, setSidebarOpen] = useState(true);
-            const [currentPage, setCurrentPage] = useState('rank-tracking');
-
-            useEffect(() => {
-                const handleHashChange = () => {
-                    const hash = window.location.hash.slice(1) || '/rank-tracking';
-                    const page = hash.startsWith('/') ? hash.slice(1) : hash;
-                    setCurrentPage(page || 'rank-tracking');
-                };
-
-                window.addEventListener('hashchange', handleHashChange);
-                handleHashChange();
-                return () => window.removeEventListener('hashchange', handleHashChange);
-            }, []);
-
-            const navigateTo = (page) => {
-                window.location.hash = `#/${page}`;
-            };
-
-            const menuItems = [
-                { id: 'rank-tracking', label: '순위 추적', icon: '📊' },
-                { id: 'keyword-analysis', label: '키워드 분석', icon: '🔍' },
-                { id: 'related-keywords', label: '연관/황금 키워드', icon: '🔗' },
-                { id: 'product-keyword', label: '상품명 분석', icon: '📝' },
-                { id: 'seo-diagnosis', label: 'SEO 진단', icon: '🏥' },
-                { id: 'notification', label: '알림톡 설정', icon: '🔔' },
-                { id: 'reports', label: '보고서', icon: '📄' }
-            ];
-
-            const renderPage = () => {
-                switch (currentPage) {
-                    case 'rank-tracking':
-                        return <RankTrackingPage />;
-                    case 'keyword-analysis':
-                        return <KeywordAnalysisPage />;
-                    case 'related-keywords':
-                        return <RelatedKeywordsPage />;
-                    case 'product-keyword':
-                        return <ProductKeywordPage />;
-                    case 'seo-diagnosis':
-                        return <SeoDiagnosisPage />;
-                    case 'notification':
-                        return <NotificationPage />;
-                    case 'reports':
-                        return <ReportsPage />;
-                    default:
-                        return <RankTrackingPage />;
-                }
-            };
-
-            return (
-                <div className="flex h-screen bg-gradient-to-br from-purple-600 via-indigo-600 to-purple-800">
-                    {/* 사이드바 */}
-                    <div
-                        className={`${
-                            sidebarOpen ? 'w-64' : 'w-20'
-                        } dark-glassmorphism transition-all duration-300 flex flex-col border-r border-purple-500/20`}
-                    >
-                        <div className="p-4 border-b border-purple-400/20">
-                            <div className="flex items-center gap-3">
-                                <div className="text-2xl">📊</div>
-                                {sidebarOpen && <span className="font-bold text-white">로직 분석 v2</span>}
-                            </div>
-                        </div>
-
-                        <nav className="flex-1 p-3 space-y-2">
-                            {menuItems.map((item) => (
-                                <button
-                                    key={item.id}
-                                    onClick={() => navigateTo(item.id)}
-                                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all ${
-                                        currentPage === item.id
-                                            ? 'bg-purple-500/40 text-white'
-                                            : 'text-gray-300 hover:bg-purple-500/20 hover:text-white'
-                                    }`}
-                                >
-                                    <span className="text-xl flex-shrink-0">{item.icon}</span>
-                                    {sidebarOpen && <span className="text-sm font-medium">{item.label}</span>}
-                                </button>
-                            ))}
-                        </nav>
-
-                        <div className="p-3 border-t border-purple-400/20">
-                            <div className="p-3 bg-purple-500/20 rounded-lg">
-                                <div className="text-xs text-gray-300 font-semibold mb-2">⚙️ 시스템 상태</div>
-                                {sidebarOpen && <SystemStatusPage />}
-                            </div>
-                        </div>
-
-                        <div className="p-3 border-t border-purple-400/20">
-                            <button
-                                onClick={() => setSidebarOpen(!sidebarOpen)}
-                                className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-purple-500/30 text-white hover:bg-purple-500/40 transition-all"
-                            >
-                                <span className="text-lg">{sidebarOpen ? '◀' : '▶'}</span>
-                                {sidebarOpen && <span className="text-xs font-medium">접기</span>}
-                            </button>
-                        </div>
-                    </div>
-
-                    {/* 메인 콘텐츠 */}
-                    <div className="flex-1 overflow-auto">
-                        <div className="p-6">
-                            <div className="max-w-7xl mx-auto">
-                                {renderPage()}
-                            </div>
                         </div>
                     </div>
                 </div>
-            );
-        }
 
-        // React 렌더링
-        const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<App />);
-    </script>
+                {/* 대시보드 요약 */}
+                <DashboardSummary products={products} searchResult={relatedData} />
+
+                {/* 검색 로딩 */}
+                {searchLoading && (
+                    <div className="section">
+                        <div className="container">
+                            <LoadingSpinner text={`"${searchedKeyword}" 분석 중... 약 5~10초 소요됩니다`} />
+                        </div>
+                    </div>
+                )}
+
+                {/* 순위 추적 */}
+                <RankTrackingSection products={products} refreshProducts={loadProducts} />
+
+                {/* 키워드 검색량 */}
+                {volumeData && <KeywordVolumeSection keyword={searchedKeyword} data={volumeData} />}
+
+                {/* 연관/황금 키워드 */}
+                {relatedData && <RelatedKeywordsSection data={relatedData} />}
+
+                {/* SEO 진단 */}
+                <SeoDiagnosisSection keyword={searchedKeyword} />
+
+                {/* 상품명 분석 */}
+                <ProductNameSection keyword={searchedKeyword} />
+
+                {/* 보고서 */}
+                <ReportSection />
+
+                {/* 알림 설정 */}
+                <NotificationSection />
+
+                {/* 푸터 */}
+                <footer className="footer">
+                    <div className="container">
+                        © 2026 메타인크 — 로직 분석 v2.1 | 네이버 쇼핑 키워드 분석 & 순위 추적
+                    </div>
+                </footer>
+            </div>
+        );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+</script>
 </body>
 </html>
