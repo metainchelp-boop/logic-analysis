@@ -12,6 +12,7 @@
 import requests
 import hashlib
 import hmac
+import base64
 import time
 import re
 import os
@@ -277,14 +278,14 @@ def get_product_info(product_url: str) -> Dict:
 # ==================== 네이버 검색광고 API (키워드 볼륨) ====================
 
 def _generate_searchad_signature(timestamp: str, method: str, uri: str) -> str:
-    """검색광고 API HMAC-SHA256 서명 생성"""
+    """검색광고 API HMAC-SHA256 서명 생성 (base64 인코딩)"""
     message = f"{timestamp}.{method}.{uri}"
     signature = hmac.new(
         SEARCHAD_SECRET_KEY.encode('utf-8'),
         message.encode('utf-8'),
         hashlib.sha256
-    ).hexdigest()
-    return signature
+    ).digest()
+    return base64.b64encode(signature).decode('utf-8')
 
 
 def get_keyword_volume(keywords: List[str]) -> List[Dict]:

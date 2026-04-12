@@ -613,6 +613,33 @@ async def seo_analyze(req: SeoAnalysisRequest):
         raise HTTPException(status_code=500, detail=f"SEO 분석 실패: {str(e)}")
 
 
+# ==================== 상품 검색 API (키워드로 쇼핑 상품 조회) ====================
+
+class ProductSearchRequest(BaseModel):
+    keyword: str
+    count: int = 40
+
+@app.post("/api/products/search")
+async def search_products(req: ProductSearchRequest):
+    """네이버 쇼핑에서 키워드로 상품 검색 (상위 N개)"""
+    try:
+        from naver_crawler import search_naver_shopping_api, _parse_api_item
+        result = search_naver_shopping_api(req.keyword, display=min(req.count, 100))
+        items = result.get("items", [])
+        products = [_parse_api_item(item, idx + 1) for idx, item in enumerate(items)]
+        return {
+            "success": True,
+            "data": {
+                "keyword": req.keyword,
+                "total": result.get("total", 0),
+                "products": products,
+                "searched_at": datetime.now().isoformat(),
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"상품 검색 실패: {str(e)}")
+
+
 # ==================== 연관/황금 키워드 API ====================
 
 class RelatedKeywordRequest(BaseModel):
@@ -632,25 +659,36 @@ async def related_keywords(req: RelatedKeywordRequest):
 
         all_keywords = []
 
-        # 검색광고 API 연관 키워드 조회
+        # 검색광고 API 연관 키워드 조회 (retry 포함)
         if SEARCHAD_API_KEY and SEARCHAD_SECRET_KEY and SEARCHAD_CUSTOMER_ID:
             uri = "/keywordstool"
             method = "GET"
-            timestamp = str(int(time.time() * 1000))
-            signature = _generate_searchad_signature(timestamp, method, uri)
-
             url = f"https://api.searchad.naver.com{uri}"
-            headers = {
-                "X-Timestamp": timestamp,
-                "X-API-KEY": SEARCHAD_API_KEY,
-                "X-Customer": SEARCHAD_CUSTOMER_ID,
-                "X-Signature": signature,
-            }
             params = {"hintKeywords": req.keyword, "showDetail": "1"}
-
-            resp = req_lib.get(url, params=params, headers=headers, timeout=10)
-            resp.raise_for_status()
-            data = resp.json()
+            data = {}
+            max_retries = 2
+            for attempt in range(max_retries + 1):
+                try:
+                    timestamp = str(int(time.time() * 1000))
+                    signature = _generate_searchad_signature(timestamp, method, uri)
+                    headers = {
+                        "X-Timestamp": timestamp,
+                        "X-API-KEY": SEARCHAD_API_KEY,
+                        "X-Customer": SEARCHAD_CUSTOMER_ID,
+                        "X-Signature": signature,
+                    }
+                    resp = req_lib.get(url, params=params, headers=headers, timeout=10)
+                    resp.raise_for_status()
+                    data = resp.json()
+                    break
+                except Exception as retry_err:
+                    if attempt < max_retries:
+                        import logging as _log
+                        _log.getLogger(__name__).warning(f"검색광고 API 재시도 ({attempt+1}/{max_retries}): {retry_err}")
+                        time.sleep(0.5)
+                    else:
+                        import logging as _log
+                        _log.getLogger(__name__).warning(f"검색광고 API 요청 실패 (재시도 소진): {retry_err}")
 
             for kd in data.get("keywordList", []):
                 rel_kw = kd.get("relKeyword", "")
