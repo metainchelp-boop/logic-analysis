@@ -32,7 +32,7 @@ jobs:
           target: "/root/logic-analysis-deploy/"
           overwrite: true
 
-      - name: Restart backend service
+      - name: Install dependencies and restart backend
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -41,10 +41,34 @@ jobs:
           script: |
             cd /root/logic-analysis-deploy
             ls -la frontend/index.html backend/
-            if [ -f docker-compose.yml ]; then
-              docker compose restart backend
-              echo "Backend container restarted at $(date)"
-            else
-              echo "No docker-compose.yml found, skipping container restart"
+
+            if [ ! -f docker-compose.yml ]; then
+              echo "No docker-compose.yml found, skipping"
+              exit 0
             fi
+
+            # 컨테이너 이름 확인
+            CONTAINER=$(docker compose ps -q backend 2>/dev/null)
+
+            if [ -n "$CONTAINER" ] && [ -f backend/requirements.txt ]; then
+              echo "Installing Python dependencies inside container..."
+              docker compose exec -T backend pip install --break-system-packages -r /app/backend/requirements.txt 2>/dev/null || \
+              docker compose exec -T backend pip install -r /app/backend/requirements.txt 2>/dev/null || \
+              docker compose exec -T backend pip install --break-system-packages -r backend/requirements.txt 2>/dev/null || \
+              docker compose exec -T backend pip install -r requirements.txt 2>/dev/null || \
+              echo "Warning: pip install inside container failed, trying rebuild..."
+            fi
+
+            # 컨테이너에 Dockerfile이 있으면 rebuild, 없으면 restart
+            if [ -f Dockerfile ] || [ -f backend/Dockerfile ]; then
+              echo "Rebuilding and restarting backend..."
+              docker compose up -d --build backend
+            else
+              echo "Restarting backend container..."
+              docker compose restart backend
+            fi
+
+            # 컨테이너 상태 확인
+            sleep 3
+            docker compose ps backend
             echo "Deployment successful at $(date)"
