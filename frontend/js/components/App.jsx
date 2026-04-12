@@ -73,12 +73,12 @@ window.App = function App() {
                 var compLevel = compIdx < 0.5 ? '블루오션 (진입 적기)' : compIdx < 1.0 ? '보통 (경쟁 중간)' : '레드오션 (경쟁 치열)';
                 var compColor = compIdx < 0.5 ? '#16a34a' : compIdx < 1.0 ? '#d97706' : '#dc2626';
                 analysis.competitionIndex = {
-                    compIndex: compIdx,
+                    compIndex: parseFloat(compIdx),
                     compLabel: compLevel,
                     compColor: compColor,
-                    productCount: fmt(productCount) + '개',
-                    searchVolume: fmt(totalVol) + '회/월',
-                    avgCtr: vol ? ((vol.monthlyAvePcClkCnt || 0) + (vol.monthlyAveMobileClkCnt || 0)).toFixed(1) + '회' : '-',
+                    productCount: productCount,
+                    searchVolume: totalVol,
+                    avgCtr: vol ? (vol.monthlyAvePcClkCnt || 0) + (vol.monthlyAveMobileClkCnt || 0) : 0,
                     interpretation: compIdx < 0.5
                         ? '시장에 상품이 부족한 상태입니다. 지금이 시장 진입의 최고 기회입니다.'
                         : compIdx < 1.0
@@ -130,10 +130,10 @@ window.App = function App() {
                 analysis.goldenKeyword = {
                     name: gk.keyword,
                     score: gk.score || (gk.totalVolume ? Math.round(gk.totalVolume / 100) : 0),
-                    volume: fmt(gk.totalVolume),
+                    volume: gk.totalVolume || 0,
                     competition: compLabel(gk.compIdx),
-                    ctr: gk.monthlyAvePcClkCnt ? (gk.monthlyAvePcClkCnt + gk.monthlyAveMobileClkCnt).toFixed(1) + '회' : '-',
-                    clicks: fmt(Math.round((gk.totalVolume || 0) * 0.05)),
+                    ctr: gk.monthlyAvePcClkCnt ? (gk.monthlyAvePcClkCnt + gk.monthlyAveMobileClkCnt) : 0,
+                    clicks: Math.round((gk.totalVolume || 0) * 0.05),
                     reason: '검색량 ' + fmt(gk.totalVolume) + '회로 틈새 수요가 확실합니다. 경쟁강도가 낮아 진입하기 좋은 키워드입니다.',
                 };
             }

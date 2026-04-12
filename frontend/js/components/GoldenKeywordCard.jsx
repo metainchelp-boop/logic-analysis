@@ -60,7 +60,7 @@ window.GoldenKeywordCard = function GoldenKeywordCard(props) {
           border: '1px solid rgba(255, 255, 255, 0.2)'
         }}>
           <div style={{ fontSize: '11px', opacity: 0.85, marginBottom: '8px' }}>월간 검색량</div>
-          <div style={{ fontSize: '18px', fontWeight: '700' }}>{fmt(volume)}</div>
+          <div style={{ fontSize: '18px', fontWeight: '700' }}>{fmt(volume)}회</div>
         </div>
 
         <div style={{
@@ -81,8 +81,8 @@ window.GoldenKeywordCard = function GoldenKeywordCard(props) {
           backdropFilter: 'blur(10px)',
           border: '1px solid rgba(255, 255, 255, 0.2)'
         }}>
-          <div style={{ fontSize: '11px', opacity: 0.85, marginBottom: '8px' }}>평균 CTR</div>
-          <div style={{ fontSize: '18px', fontWeight: '700' }}>{(ctr * 100).toFixed(2)}%</div>
+          <div style={{ fontSize: '11px', opacity: 0.85, marginBottom: '8px' }}>평균 클릭수</div>
+          <div style={{ fontSize: '18px', fontWeight: '700' }}>{typeof ctr === 'number' ? ctr.toFixed(1) : ctr}회</div>
         </div>
 
         <div style={{
@@ -93,7 +93,7 @@ window.GoldenKeywordCard = function GoldenKeywordCard(props) {
           border: '1px solid rgba(255, 255, 255, 0.2)'
         }}>
           <div style={{ fontSize: '11px', opacity: 0.85, marginBottom: '8px' }}>월간 클릭수</div>
-          <div style={{ fontSize: '18px', fontWeight: '700' }}>{fmt(clicks)}</div>
+          <div style={{ fontSize: '18px', fontWeight: '700' }}>{fmt(clicks)}회</div>
         </div>
       </div>
 

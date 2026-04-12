@@ -49,15 +49,15 @@ window.CompetitionIndexSection = function CompetitionIndexSection(props) {
         <div className="competition-right">
           <div className="stat-mini">
             <div className="stat-label">상품 수</div>
-            <div className="stat-value">{fmt(productCount)}</div>
+            <div className="stat-value">{fmt(productCount)}개</div>
           </div>
           <div className="stat-mini">
             <div className="stat-label">월간 검색량</div>
-            <div className="stat-value">{fmt(searchVolume)}</div>
+            <div className="stat-value">{fmt(searchVolume)}회/월</div>
           </div>
           <div className="stat-mini">
-            <div className="stat-label">평균 CTR</div>
-            <div className="stat-value">{(avgCtr * 100).toFixed(2)}%</div>
+            <div className="stat-label">평균 클릭수</div>
+            <div className="stat-value">{typeof avgCtr === 'number' ? avgCtr.toFixed(1) : avgCtr}회</div>
           </div>
         </div>
       </div>
