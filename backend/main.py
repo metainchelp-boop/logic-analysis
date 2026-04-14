@@ -1,6 +1,6 @@
 """
-로직 분석 프로그램 v2 - 백엔드 API 서버
-FastAPI 기반
+로직 분석 프로그램 v3 - 백엔드 API 서버
+FastAPI 기반 - 에이전시 버전 (로그인/권한/광고주관리/보고서)
 """
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
@@ -16,12 +16,17 @@ import time
 import uvicorn
 import logging
 
+# v3 신규 모듈 임포트
+from auth import router as auth_router, init_auth_db
+from clients import router as clients_router, init_clients_db
+from reports import router as reports_router, init_reports_db
+
 logger = logging.getLogger(__name__)
 
 # API 키 인증
 API_KEY = os.getenv("API_KEY", "")
 # 인증 면제 경로
-AUTH_EXEMPT_PATHS = ["/api/health", "/docs", "/openapi.json", "/redoc"]
+AUTH_EXEMPT_PATHS = ["/api/health", "/docs", "/openapi.json", "/redoc", "/api/auth/login", "/api/reports/view/"]
 
 
 class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
@@ -79,6 +84,9 @@ async def lifespan(app):
     if not API_KEY:
         logger.warning("⚠️ API_KEY 미설정 — 인증 없이 모든 요청 허용됩니다. (개발 모드)")
     init_db()
+    init_auth_db()
+    init_clients_db()
+    init_reports_db()
     start_scheduler()
     yield
     # Shutdown
@@ -87,7 +95,7 @@ async def lifespan(app):
 app = FastAPI(
     title="로직 분석 프로그램 v2",
     description="네이버 쇼핑 키워드 분석 + 상품 노출 순위 추적",
-    version="2.0.0",
+    version="3.0.0",
     lifespan=lifespan,
 )
 
@@ -103,6 +111,11 @@ app.add_middleware(
 
 # API 키 인증 미들웨어 등록
 app.add_middleware(ApiKeyAuthMiddleware)
+
+# v3 라우터 등록 (인증/광고주/보고서)
+app.include_router(auth_router)
+app.include_router(clients_router)
+app.include_router(reports_router)
 
 
 # ==================== 요청/응답 모델 ====================
@@ -808,10 +821,225 @@ async def analyze_product_names(req: ProductNameAnalysisRequest):
         raise HTTPException(status_code=500, detail=f"상품명 분석 실패: {str(e)}")
 
 
+# ==================== 광고주 맞춤 분석 리포트 API ====================
+
+class AdvertiserAnalysisRequest(BaseModel):
+    keyword: str
+    product_url: str
+
+    @field_validator('keyword')
+    @classmethod
+    def validate_keyword(cls, v):
+        if not v or not v.strip() or len(v) > 100:
+            raise ValueError('유효한 키워드를 입력하세요 (1~100자)')
+        return v.strip()
+
+    @field_validator('product_url')
+    @classmethod
+    def validate_url(cls, v):
+        if not v or not v.startswith(('http://', 'https://')):
+            raise ValueError('유효한 상품 URL을 입력하세요')
+        return v
+
+@app.post("/api/advertiser/analyze")
+async def advertiser_analyze(req: AdvertiserAnalysisRequest):
+    """광고주 맞춤 분석 리포트: 순위 현황 + 경쟁사 비교 + 1페이지 진입 전략"""
+    try:
+        from naver_crawler import search_naver_shopping_api, _parse_api_item
+
+        # 1) 광고주 상품 정보 조회
+        product_info = get_product_info(req.product_url)
+
+        # 2) 키워드로 순위 검색
+        rank, page, top_competitors = find_product_rank(
+            keyword=req.keyword, product_url=req.product_url, max_pages=4
+        )
+
+        # 3) 상위 40개 상품 가져오기 (1페이지 분석용)
+        shop_result = search_naver_shopping_api(req.keyword, display=40)
+        shop_items = shop_result.get("items", [])
+        page1_products = [_parse_api_item(item, idx + 1) for idx, item in enumerate(shop_items)]
+
+        # 4) 경쟁사 비교 분석 데이터 구성
+        my_price = product_info.get("price", 0)
+        my_name = product_info.get("product_name", "")
+
+        competitor_comparison = []
+        prices = []
+        review_counts = []
+        name_lengths = []
+
+        for p in page1_products[:20]:
+            has_keyword = req.keyword.lower() in p.get("product_name", "").lower()
+            comp_item = {
+                "rank": p["rank"],
+                "product_name": p["product_name"],
+                "store_name": p["store_name"],
+                "price": p["price"],
+                "brand": p.get("brand", ""),
+                "category": p.get("category2") or p.get("category1") or "-",
+                "image_url": p.get("image_url", ""),
+                "product_type": p.get("product_type", ""),
+                "has_keyword_in_name": has_keyword,
+                "name_length": len(p["product_name"]),
+            }
+            competitor_comparison.append(comp_item)
+            if p["price"] > 0:
+                prices.append(p["price"])
+            name_lengths.append(len(p["product_name"]))
+
+        # 통계 계산
+        avg_price = int(sum(prices) / len(prices)) if prices else 0
+        min_price = min(prices) if prices else 0
+        max_price = max(prices) if prices else 0
+        avg_name_length = round(sum(name_lengths) / len(name_lengths), 1) if name_lengths else 0
+        keyword_in_name_ratio = round(
+            sum(1 for c in competitor_comparison if c["has_keyword_in_name"]) / len(competitor_comparison) * 100, 1
+        ) if competitor_comparison else 0
+
+        # 5) 1페이지 진입 전략 분석
+        strategies = []
+
+        # 가격 전략
+        if my_price > 0 and avg_price > 0:
+            price_ratio = my_price / avg_price
+            if price_ratio > 1.2:
+                strategies.append({
+                    "area": "가격",
+                    "status": "개선 필요",
+                    "severity": "high",
+                    "current": f"{my_price:,}원",
+                    "target": f"{avg_price:,}원 이하",
+                    "detail": f"경쟁 상품 평균가 대비 {round((price_ratio - 1) * 100)}% 높음. 가격 조정 또는 할인 이벤트를 검토하세요."
+                })
+            elif price_ratio > 1.0:
+                strategies.append({
+                    "area": "가격",
+                    "status": "보통",
+                    "severity": "medium",
+                    "current": f"{my_price:,}원",
+                    "target": f"{avg_price:,}원 이하",
+                    "detail": f"경쟁 상품 평균가와 비슷한 수준입니다. 추가 할인이나 묶음 판매를 고려하세요."
+                })
+            else:
+                strategies.append({
+                    "area": "가격",
+                    "status": "양호",
+                    "severity": "low",
+                    "current": f"{my_price:,}원",
+                    "target": f"현재 유지",
+                    "detail": f"경쟁 상품 평균가({avg_price:,}원)보다 낮아 가격 경쟁력이 있습니다."
+                })
+        elif my_price == 0:
+            strategies.append({
+                "area": "가격",
+                "status": "확인 불가",
+                "severity": "medium",
+                "current": "정보 없음",
+                "target": f"평균 {avg_price:,}원 참고",
+                "detail": "상품 가격 정보를 불러올 수 없습니다. URL을 확인하세요."
+            })
+
+        # 상품명 전략
+        my_has_keyword = req.keyword.lower() in my_name.lower() if my_name else False
+        my_name_len = len(my_name)
+        if not my_has_keyword:
+            strategies.append({
+                "area": "상품명 키워드",
+                "status": "개선 필요",
+                "severity": "high",
+                "current": "미포함",
+                "target": f"'{req.keyword}' 포함",
+                "detail": f"상품명에 '{req.keyword}' 키워드가 없습니다. 1페이지 상품의 {keyword_in_name_ratio}%가 키워드를 포함하고 있습니다."
+            })
+        else:
+            strategies.append({
+                "area": "상품명 키워드",
+                "status": "양호",
+                "severity": "low",
+                "current": "포함됨",
+                "target": "유지",
+                "detail": f"상품명에 '{req.keyword}' 키워드가 잘 포함되어 있습니다."
+            })
+
+        if my_name_len > 0 and (my_name_len < 15 or my_name_len > 60):
+            strategies.append({
+                "area": "상품명 길이",
+                "status": "개선 필요",
+                "severity": "medium",
+                "current": f"{my_name_len}자",
+                "target": f"20~50자 (평균 {avg_name_length}자)",
+                "detail": "1페이지 상품의 평균 상품명 길이는 {:.0f}자입니다. 적절한 길이로 조정하세요.".format(avg_name_length)
+            })
+
+        # 카테고리 전략
+        if page1_products:
+            cat_map = {}
+            for p in page1_products[:20]:
+                cat = p.get("category2") or p.get("category1") or "기타"
+                cat_map[cat] = cat_map.get(cat, 0) + 1
+            top_cat = max(cat_map, key=cat_map.get) if cat_map else "-"
+            strategies.append({
+                "area": "카테고리",
+                "status": "참고",
+                "severity": "info",
+                "current": product_info.get("category", "-"),
+                "target": top_cat,
+                "detail": f"1페이지 상위 상품의 주요 카테고리는 '{top_cat}'입니다. 카테고리 설정을 확인하세요."
+            })
+
+        # 전체 종합 점수 계산
+        score = 50
+        if rank:
+            if rank <= 10:
+                score += 30
+            elif rank <= 40:
+                score += 15
+            elif rank <= 100:
+                score += 5
+        if my_has_keyword:
+            score += 10
+        if my_price > 0 and avg_price > 0 and my_price <= avg_price:
+            score += 10
+        score = min(score, 100)
+
+        return {
+            "success": True,
+            "data": {
+                "keyword": req.keyword,
+                "product_url": req.product_url,
+                "product_info": product_info,
+                "ranking": {
+                    "current_rank": rank,
+                    "page_number": page,
+                    "total_searched": len(page1_products),
+                    "is_on_page1": rank is not None and rank <= 40,
+                },
+                "competitor_comparison": {
+                    "items": competitor_comparison,
+                    "stats": {
+                        "avg_price": avg_price,
+                        "min_price": min_price,
+                        "max_price": max_price,
+                        "avg_name_length": avg_name_length,
+                        "keyword_in_name_ratio": keyword_in_name_ratio,
+                    },
+                },
+                "entry_strategy": {
+                    "overall_score": score,
+                    "strategies": strategies,
+                },
+                "analyzed_at": datetime.now().isoformat(),
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"광고주 분석 실패: {str(e)}")
+
+
 # --- 헬스체크 ---
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "version": "2.1.0", "timestamp": datetime.now().isoformat()}
+    return {"status": "ok", "version": "3.0.0", "timestamp": datetime.now().isoformat()}
 
 
 if __name__ == "__main__":

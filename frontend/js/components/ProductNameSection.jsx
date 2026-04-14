@@ -1,9 +1,25 @@
 /* ProductNameSection — 상품명 키워드 분석 */
-window.ProductNameSection = function ProductNameSection({ keyword }) {
-    const { useState } = React;
+window.ProductNameSection = function ProductNameSection({ keyword, shopProducts }) {
+    const { useState, useEffect } = React;
     const [names, setNames] = useState('');
     const [result, setResult] = useState(null);
     const [loading, setLoading] = useState(false);
+
+    // 검색 결과의 1페이지 상품명 자동 채우기 + 자동 분석
+    useEffect(function() {
+        if (shopProducts && shopProducts.length > 0) {
+            var productNames = shopProducts.map(function(p) { return p.product_name; }).filter(Boolean);
+            setNames(productNames.join('\n'));
+            // 자동 분석 실행
+            if (productNames.length > 0) {
+                setLoading(true);
+                setResult(null);
+                api.post('/product-name/analyze', { product_names: productNames, keyword: keyword || '' })
+                    .then(function(res) { if (res.success) setResult(res.data); setLoading(false); })
+                    .catch(function() { setLoading(false); });
+            }
+        }
+    }, [shopProducts, keyword]);
 
     const handleAnalyze = async () => {
         const nameList = names.split('\n').map(n => n.trim()).filter(Boolean);

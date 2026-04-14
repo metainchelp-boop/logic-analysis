@@ -9,6 +9,7 @@ window.CompetitionIndexSection = function CompetitionIndexSection(props) {
 
   return (
     <div className="section fade-in">
+      <div className="container">
       <h2 className="section-title">🎯 키워드 경쟁강도 분석</h2>
 
       <div className="card" style={{ padding: '24px' }}>
@@ -68,15 +69,13 @@ window.CompetitionIndexSection = function CompetitionIndexSection(props) {
       </div>
 
       <style>{`
-        .section-row .comp-inner-grid {
-          grid-template-columns: 1fr !important;
-        }
         @media (max-width: 768px) {
           .comp-inner-grid {
             grid-template-columns: 1fr !important;
           }
         }
       `}</style>
+      </div>
     </div>
   );
 };

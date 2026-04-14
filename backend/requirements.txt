@@ -3,3 +3,6 @@ uvicorn[standard]==0.30.6
 pydantic==2.9.0
 requests==2.32.3
 apscheduler==3.10.4
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+bcrypt==4.0.1

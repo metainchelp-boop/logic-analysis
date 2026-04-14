@@ -1,9 +1,14 @@
 /* SeoDiagnosisSection — SEO 종합 진단 */
-window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword }) {
-    const { useState } = React;
+window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl: parentProductUrl }) {
+    const { useState, useEffect } = React;
     const [productUrl, setProductUrl] = useState('');
     const [result, setResult] = useState(null);
     const [loading, setLoading] = useState(false);
+
+    // 상단 검색바에서 입력된 상품 URL 자동 기입
+    useEffect(function() {
+        if (parentProductUrl) setProductUrl(parentProductUrl);
+    }, [parentProductUrl]);
 
     const handleAnalyze = async () => {
         if (!productUrl || !keyword) return;

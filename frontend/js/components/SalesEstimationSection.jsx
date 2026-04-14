@@ -6,6 +6,7 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
 
   return (
     <div className="section fade-in">
+      <div className="container">
       <h2 className="section-title">📈 판매량 추정 & 성장 시뮬레이션</h2>
 
       {/* Summary Cards */}
@@ -53,6 +54,7 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
 
       <div className="market-note" style={{ marginTop: '12px' }}>
         ⚠️ 순위별 클릭률(CTR)을 기반으로 추정한 값이며, 실제 판매량은 상품 경쟁력, 리뷰, 가격 등에 따라 달라질 수 있습니다.
+      </div>
       </div>
     </div>
   );

@@ -6,6 +6,7 @@ window.StrategicAnalysisSection = function StrategicAnalysisSection(props) {
 
   return (
     <div className="section fade-in">
+      <div className="container">
       <h2 className="section-title">🎯 1페이지 진입 전략 비교 분석</h2>
 
       <div className="strategy-inner-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
@@ -60,15 +61,13 @@ window.StrategicAnalysisSection = function StrategicAnalysisSection(props) {
       </div>
 
       <style>{`
-        .section-row .strategy-inner-grid {
-          grid-template-columns: 1fr !important;
-        }
         @media (max-width: 768px) {
           .strategy-inner-grid {
             grid-template-columns: 1fr !important;
           }
         }
       `}</style>
+      </div>
     </div>
   );
 };

@@ -1,25 +1,57 @@
-/* App — 메인 앱 컴포넌트 */
+/* App — 메인 앱 컴포넌트 (v3 에이전시) */
 window.App = function App() {
     const { useState, useEffect, useCallback } = React;
+
+    /* ==================== 인증 상태 ==================== */
+    const [currentUser, setCurrentUser] = useState(null);
+    const [authToken, setAuthToken] = useState(null);
+    const [authChecking, setAuthChecking] = useState(true);
+    const [currentPage, setCurrentPage] = useState('analysis');
+
+    /* ==================== 기존 상태 (hooks는 반드시 조건문 전에) ==================== */
     const [health, setHealth] = useState(false);
     const [products, setProducts] = useState([]);
     const [searchLoading, setSearchLoading] = useState(false);
     const [searchedKeyword, setSearchedKeyword] = useState('');
-
-    // 검색 결과
     const [volumeData, setVolumeData] = useState(null);
     const [relatedData, setRelatedData] = useState(null);
-
-    // 종합 분석 결과
     const [analysisData, setAnalysisData] = useState(null);
-
-    // 상품 검색 결과 (상위 40개)
     const [shopProducts, setShopProducts] = useState(null);
+    const [advertiserReport, setAdvertiserReport] = useState(null);
+    const [advertiserLoading, setAdvertiserLoading] = useState(false);
+    const [searchedProductUrl, setSearchedProductUrl] = useState('');
+    const [companyName, setCompanyName] = useState('');
+
+    var saveAuth = function(user, token) {
+        setCurrentUser(user); setAuthToken(token);
+        try { sessionStorage.setItem('logic_token', token); sessionStorage.setItem('logic_user', JSON.stringify(user)); } catch(e) {}
+    };
+    var clearAuth = function() {
+        setCurrentUser(null); setAuthToken(null); setCurrentPage('analysis');
+        try { sessionStorage.removeItem('logic_token'); sessionStorage.removeItem('logic_user'); } catch(e) {}
+    };
+
+    useEffect(function() {
+        try {
+            var savedToken = sessionStorage.getItem('logic_token');
+            if (savedToken) {
+                fetch('/api/auth/me', { headers: { 'Authorization': 'Bearer ' + savedToken } })
+                    .then(function(r) { return r.json(); })
+                    .then(function(data) {
+                        if (data && data.id) { setCurrentUser(data); setAuthToken(savedToken); }
+                        else if (data && data.success && data.user) { setCurrentUser(data.user); setAuthToken(savedToken); }
+                        setAuthChecking(false);
+                    }).catch(function() { setAuthChecking(false); });
+            } else { setAuthChecking(false); }
+        } catch(e) { setAuthChecking(false); }
+    }, []);
 
     // 헬스체크
     useEffect(function() {
-        api.get('/health').then(function(res) { setHealth(res.status === 'ok'); }).catch(function() { setHealth(false); });
-    }, []);
+        if (currentUser) {
+            api.get('/health').then(function(res) { setHealth(res.status === 'ok'); }).catch(function() { setHealth(false); });
+        }
+    }, [currentUser]);
 
     // 상품 목록 로드
     var loadProducts = useCallback(function() {
@@ -28,16 +60,34 @@ window.App = function App() {
         }).catch(function() {});
     }, []);
 
-    useEffect(function() { loadProducts(); }, [loadProducts]);
+    useEffect(function() { if (currentUser) loadProducts(); }, [loadProducts, currentUser]);
+
+    if (authChecking) return React.createElement('div', { style: { display:'flex', justifyContent:'center', alignItems:'center', height:'100vh', background:'linear-gradient(135deg,#6C5CE7,#a29bfe)' } },
+        React.createElement('div', { style: { color:'#fff', fontSize:18 } }, '로딩 중...'));
+    if (!currentUser) return React.createElement(window.LoginPage, { onLogin: saveAuth });
 
     // 통합 검색
-    var handleSearch = function(keyword) {
+    var handleSearch = function(keyword, productUrl, inputCompanyName) {
+        if (inputCompanyName !== undefined) setCompanyName(inputCompanyName);
         setSearchLoading(true);
         setSearchedKeyword(keyword);
+        setSearchedProductUrl(productUrl || '');
         setVolumeData(null);
         setRelatedData(null);
         setAnalysisData(null);
         setShopProducts(null);
+        setAdvertiserReport(null);
+
+        // 광고주 상품 URL이 있으면 광고주 분석 API 호출
+        if (productUrl) {
+            setAdvertiserLoading(true);
+            api.post('/advertiser/analyze', { keyword: keyword, product_url: productUrl })
+                .then(function(res) {
+                    if (res && res.success) setAdvertiserReport(res.data);
+                    setAdvertiserLoading(false);
+                })
+                .catch(function() { setAdvertiserLoading(false); });
+        }
 
         // 병렬로 3개 API 호출
         Promise.all([
@@ -248,6 +298,7 @@ window.App = function App() {
 
     // 앵커 네비게이션
     var sections = [
+        { id: 'sec-advertiser', label: '광고주 리포트', show: !!(advertiserReport || advertiserLoading) },
         { id: 'sec-rank', label: '순위 추적' },
         { id: 'sec-volume', label: '검색량', show: !!volumeData },
         { id: 'sec-competition', label: '경쟁강도', show: !!(analysisData && analysisData.competitionIndex) },
@@ -269,13 +320,64 @@ window.App = function App() {
         if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
     };
 
+    /* ==================== Topbar 공통 스타일 ==================== */
+    var navBtn = function(active) {
+        return { background: active ? 'rgba(59,130,246,0.9)' : 'rgba(255,255,255,0.08)', color: active ? '#fff' : 'rgba(255,255,255,0.75)', border: active ? 'none' : '1px solid rgba(255,255,255,0.12)', padding: '6px 14px', borderRadius: 8, cursor: 'pointer', fontSize: 13, fontWeight: active ? 600 : 400, transition: 'all 0.2s' };
+    };
+    var navUserStyle = { color: 'rgba(255,255,255,0.7)', fontSize: 13 };
+    var navLogoutStyle = { background: 'rgba(239,68,68,0.15)', color: '#fca5a5', border: '1px solid rgba(239,68,68,0.2)', padding: '6px 14px', borderRadius: 8, cursor: 'pointer', fontSize: 13 };
+
+    var renderTopbar = function(activePage) {
+        return React.createElement('div', { className: 'topbar' },
+            React.createElement('div', { className: 'container', style: { display:'flex', alignItems:'center', justifyContent:'space-between', height: 56 } },
+                React.createElement('div', { style: { display:'flex', alignItems:'center', gap:14 } },
+                    React.createElement('span', { style: { fontSize:18, fontWeight:700, color:'#fff', cursor:'pointer', letterSpacing:'-0.02em' }, onClick: function() { setCurrentPage('analysis'); } }, '🔍 로직 분석'),
+                    React.createElement('span', { style: { fontSize:11, color:'rgba(255,255,255,0.4)', background:'rgba(255,255,255,0.06)', padding:'2px 8px', borderRadius:10 } }, 'v3.0'),
+                    activePage === 'analysis' && health && React.createElement('span', { style: { background:'rgba(16,185,129,0.2)', color:'#34d399', fontSize:11, padding:'2px 8px', borderRadius:10 } }, '● 정상'),
+                    React.createElement('button', { onClick: function(){setCurrentPage('analysis');}, style: navBtn(activePage === 'analysis') }, '📊 분석'),
+                    React.createElement('button', { onClick: function(){setCurrentPage('clients');}, style: navBtn(activePage === 'clients') }, '📋 광고주'),
+                    React.createElement('button', { onClick: function(){setCurrentPage('management');}, style: navBtn(activePage === 'management') }, '🏢 업체관리'),
+                    React.createElement('button', { onClick: function(){setCurrentPage('reports');}, style: navBtn(activePage === 'reports') }, '📑 보고서'),
+                    (currentUser.role === 'admin' || currentUser.role === 'superadmin') && React.createElement('button', { onClick: function(){setCurrentPage('users');}, style: navBtn(activePage === 'users') }, '👥 직원')
+                ),
+                React.createElement('div', { style: { display:'flex', alignItems:'center', gap:12 } },
+                    React.createElement('span', { style: navUserStyle }, currentUser.name || currentUser.username),
+                    React.createElement('button', { onClick: clearAuth, style: navLogoutStyle }, '로그아웃')
+                )
+            )
+        );
+    };
+
+    /* ==================== 페이지별 콘텐츠 렌더링 ==================== */
+    if (currentPage === 'management') return React.createElement('div', null,
+        renderTopbar('management'),
+        React.createElement(window.ClientDashboard, { currentUser: currentUser, token: authToken })
+    );
+
+    if (currentPage === 'clients') return React.createElement('div', null,
+        renderTopbar('clients'),
+        React.createElement(window.ClientsPage, { currentUser: currentUser, token: authToken })
+    );
+
+    if (currentPage === 'users' && (currentUser.role === 'admin' || currentUser.role === 'superadmin')) return React.createElement('div', null,
+        renderTopbar('users'),
+        React.createElement(window.UserManagementPage, { currentUser: currentUser, token: authToken })
+    );
+
+    if (currentPage === 'reports') return React.createElement('div', null,
+        renderTopbar('reports'),
+        React.createElement(window.ReportsPage, { currentUser: currentUser, token: authToken })
+    );
+
+    /* ==================== 메인 분석 페이지 ==================== */
     return (
         React.createElement('div', null,
-            React.createElement(TopBar, { health: health }),
+            /* 네비게이션 바 */
+            renderTopbar('analysis'),
             React.createElement(SearchBar, { onSearch: handleSearch, loading: searchLoading }),
 
             /* 앵커 네비 */
-            React.createElement('div', { style: { background: '#fff', borderBottom: '1px solid #e8ecf1', padding: '10px 0', position: 'sticky', top: 64, zIndex: 40 } },
+            React.createElement('div', { style: { background: '#fff', borderBottom: '1px solid #e8ecf1', padding: '10px 0' } },
                 React.createElement('div', { className: 'container' },
                     React.createElement('div', { className: 'anchor-nav' },
                         sections.map(function(s) {
@@ -285,7 +387,18 @@ window.App = function App() {
                 )
             ),
 
-            /* 종합 요약 카드 (검색 후 표시) */
+            /* 광고주 리포트 */
+            advertiserLoading && React.createElement('div', { id: 'sec-advertiser', className: 'section' },
+                React.createElement('div', { className: 'container' },
+                    React.createElement(LoadingSpinner, { text: '광고주 맞춤 분석 중... 약 10~15초 소요됩니다' })
+                )
+            ),
+            advertiserReport && !advertiserLoading && React.createElement(AdvertiserReportSection, { data: advertiserReport }),
+
+            /* 순위 추적 */
+            React.createElement(RankTrackingSection, { products: products, refreshProducts: loadProducts, searchedKeyword: searchedKeyword, searchedProductUrl: searchedProductUrl }),
+
+            /* 종합 요약 카드 */
             analysisData && analysisData.summaryCards && React.createElement('div', { id: 'sec-summary' },
                 React.createElement(SummaryCardsSection, { data: analysisData.summaryCards })
             ),
@@ -300,67 +413,64 @@ window.App = function App() {
                 )
             ),
 
-            /* 순위 추적 */
-            React.createElement(RankTrackingSection, { products: products, refreshProducts: loadProducts }),
+            /* 광고주 정보 */
+            analysisData && analysisData.advertiserInfo && React.createElement(AdvertiserInfoCard, { data: analysisData.advertiserInfo }),
 
-            /* ===== ROW 1: 키워드 검색량 + 연관 키워드 (1:1) ===== */
-            (volumeData || relatedData) && React.createElement('div', { className: 'section-row' },
-                volumeData && React.createElement(KeywordVolumeSection, { keyword: searchedKeyword, data: volumeData }),
-                relatedData && React.createElement(RelatedKeywordsSection, { data: relatedData })
-            ),
+            /* 키워드 검색량 */
+            volumeData && React.createElement(KeywordVolumeSection, { keyword: searchedKeyword, data: volumeData }),
 
-            /* ===== ROW 2: 경쟁강도 + 키워드 트렌드 (1:1) ===== */
-            analysisData && (analysisData.competitionIndex || analysisData.keywordTrend) && React.createElement('div', { className: 'section-row' },
-                analysisData.competitionIndex && React.createElement('div', { id: 'sec-competition' },
-                    React.createElement(CompetitionIndexSection, { data: analysisData.competitionIndex })
-                ),
-                analysisData.keywordTrend && React.createElement('div', { id: 'sec-trend' },
-                    React.createElement(KeywordTrendSection, { data: analysisData.keywordTrend })
-                )
-            ),
-
-            /* ===== 시장 규모 추정 (풀 와이드) ===== */
+            /* 시장 규모 추정 */
             analysisData && analysisData.marketRevenue && React.createElement('div', { id: 'sec-market' },
                 React.createElement(MarketRevenueSection, { data: analysisData.marketRevenue })
             ),
 
-            /* ===== 골든 키워드 (풀 와이드) ===== */
+            /* 경쟁강도 분석 */
+            analysisData && analysisData.competitionIndex && React.createElement('div', { id: 'sec-competition' },
+                React.createElement(CompetitionIndexSection, { data: analysisData.competitionIndex })
+            ),
+
+            /* 연관 키워드 */
+            relatedData && React.createElement(RelatedKeywordsSection, { data: relatedData }),
+
+            /* 키워드 트렌드 */
+            analysisData && analysisData.keywordTrend && React.createElement('div', { id: 'sec-trend' },
+                React.createElement(KeywordTrendSection, { data: analysisData.keywordTrend })
+            ),
+
+            /* 골든 키워드 */
             analysisData && analysisData.goldenKeyword && React.createElement('div', { id: 'sec-golden' },
                 React.createElement(GoldenKeywordCard, { data: analysisData.goldenKeyword })
             ),
 
-            /* ===== ROW 3: 광고주 정보 + 카테고리 분석 (1:1) ===== */
-            analysisData && (analysisData.advertiserInfo || analysisData.categoryAnalysis) && React.createElement('div', { className: 'section-row' },
-                analysisData.advertiserInfo && React.createElement(AdvertiserInfoCard, { data: analysisData.advertiserInfo }),
-                analysisData.categoryAnalysis && React.createElement(CategoryAnalysisSection, { data: analysisData.categoryAnalysis })
-            ),
+            /* SEO 진단 */
+            React.createElement(SeoDiagnosisSection, { keyword: searchedKeyword, productUrl: searchedProductUrl }),
 
-            /* ===== 키워드 & 태그 분석 (풀 와이드) ===== */
-            analysisData && analysisData.keywordTags && React.createElement(KeywordTagSection, { data: analysisData.keywordTags }),
-
-            /* ===== 경쟁사 비교표 (풀 와이드) ===== */
+            /* 경쟁사 비교표 */
             analysisData && analysisData.competitorTable && React.createElement('div', { id: 'sec-competitor' },
                 React.createElement(CompetitorTableSection, { data: analysisData.competitorTable })
             ),
 
-            /* ===== ROW 4: 판매량 추정 + 진입 전략 (1:1) ===== */
-            analysisData && (analysisData.salesEstimation || analysisData.strategicAnalysis) && React.createElement('div', { className: 'section-row' },
-                analysisData.salesEstimation && React.createElement('div', { id: 'sec-sales' },
-                    React.createElement(SalesEstimationSection, { data: analysisData.salesEstimation })
-                ),
-                analysisData.strategicAnalysis && React.createElement('div', { id: 'sec-strategy' },
-                    React.createElement(StrategicAnalysisSection, { data: analysisData.strategicAnalysis })
-                )
+            /* 판매량 추정 */
+            analysisData && analysisData.salesEstimation && React.createElement('div', { id: 'sec-sales' },
+                React.createElement(SalesEstimationSection, { data: analysisData.salesEstimation })
             ),
 
-            /* SEO 진단 */
-            React.createElement(SeoDiagnosisSection, { keyword: searchedKeyword }),
-
             /* 상품명 분석 */
-            React.createElement(ProductNameSection, { keyword: searchedKeyword }),
+            React.createElement(ProductNameSection, { keyword: searchedKeyword, shopProducts: shopProducts }),
+
+            /* 카테고리 분석 */
+            analysisData && analysisData.categoryAnalysis && React.createElement(CategoryAnalysisSection, { data: analysisData.categoryAnalysis }),
+
+            /* 키워드 & 태그 분석 */
+            analysisData && analysisData.keywordTags && React.createElement(KeywordTagSection, { data: analysisData.keywordTags }),
+
+            /* 진입 전략 */
+            analysisData && analysisData.strategicAnalysis && React.createElement('div', { id: 'sec-strategy' },
+                React.createElement(StrategicAnalysisSection, { data: analysisData.strategicAnalysis })
+            ),
 
             /* 보고서 */
-            React.createElement(ReportSection, null),
+            React.createElement(ReportSection, { keyword: searchedKeyword, companyName: companyName }),
 
             /* 알림 설정 */
             React.createElement(NotificationSection, null),
@@ -368,7 +478,7 @@ window.App = function App() {
             /* 푸터 */
             React.createElement('footer', { className: 'footer' },
                 React.createElement('div', { className: 'container' },
-                    '© 2026 메타인크 — 로직 분석 v2.1 | 네이버 쇼핑 키워드 분석 & 순위 추적'
+                    '© 2026 메타인크 — 로직 분석 v3.0 | 네이버 쇼핑 키워드 분석 & 순위 추적'
                 )
             )
         )

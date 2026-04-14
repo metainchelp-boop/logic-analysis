@@ -1,6 +1,6 @@
 /* RankTrackingSection — 순위 추적 */
-window.RankTrackingSection = function RankTrackingSection({ products, refreshProducts }) {
-    const { useState } = React;
+window.RankTrackingSection = function RankTrackingSection({ products, refreshProducts, searchedKeyword, searchedProductUrl }) {
+    const { useState, useEffect, useRef } = React;
     const [showAddForm, setShowAddForm] = useState(false);
     const [newUrl, setNewUrl] = useState('');
     const [newKeywords, setNewKeywords] = useState('');
@@ -8,6 +8,63 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
     const [refreshing, setRefreshing] = useState({});
     const [expandedProduct, setExpandedProduct] = useState(null);
     const [historyData, setHistoryData] = useState({});
+    const lastAutoRegistered = useRef('');
+
+    // 검색 시 상품 URL이 있으면 자동 등록 + 자동 순위체크
+    useEffect(function() {
+        if (!searchedKeyword || !searchedProductUrl) return;
+        var key = searchedProductUrl + '::' + searchedKeyword;
+        if (lastAutoRegistered.current === key) return;
+        lastAutoRegistered.current = key;
+
+        // 이미 등록된 상품인지 확인
+        var existingProduct = products.find(function(p) {
+            return p.product_url === searchedProductUrl;
+        });
+
+        if (existingProduct) {
+            // 이미 등록됨 → 바로 순위체크 실행
+            setRefreshing(function(prev) { var n = {}; for (var k in prev) n[k] = prev[k]; n[existingProduct.id] = true; return n; });
+            api.post('/rank/refresh/' + existingProduct.id)
+                .then(function() {
+                    setTimeout(function() {
+                        refreshProducts();
+                        setRefreshing(function(prev) { var n = {}; for (var k in prev) n[k] = prev[k]; n[existingProduct.id] = false; return n; });
+                    }, 5000);
+                })
+                .catch(function() {
+                    setRefreshing(function(prev) { var n = {}; for (var k in prev) n[k] = prev[k]; n[existingProduct.id] = false; return n; });
+                });
+            return;
+        }
+
+        // 신규 등록 → 등록 후 products 재조회 → 순위체크
+        api.post('/products/track', { product_url: searchedProductUrl, keywords: [searchedKeyword] })
+            .then(function() {
+                // 등록 완료 후 1초 대기 → products 재조회하여 ID 확보
+                setTimeout(function() {
+                    api.get('/products').then(function(prodRes) {
+                        var prodList = (prodRes && prodRes.success && prodRes.data) ? prodRes.data : [];
+                        var newProduct = prodList.find(function(p) { return p.product_url === searchedProductUrl; });
+                        refreshProducts();
+                        if (newProduct) {
+                            setRefreshing(function(prev) { var n = {}; for (var k in prev) n[k] = prev[k]; n[newProduct.id] = true; return n; });
+                            api.post('/rank/refresh/' + newProduct.id)
+                                .then(function() {
+                                    setTimeout(function() {
+                                        refreshProducts();
+                                        setRefreshing(function(prev) { var n = {}; for (var k in prev) n[k] = prev[k]; n[newProduct.id] = false; return n; });
+                                    }, 5000);
+                                })
+                                .catch(function() {
+                                    setRefreshing(function(prev) { var n = {}; for (var k in prev) n[k] = prev[k]; n[newProduct.id] = false; return n; });
+                                });
+                        }
+                    }).catch(function() { refreshProducts(); });
+                }, 1000);
+            })
+            .catch(function() {});
+    }, [searchedKeyword, searchedProductUrl]);
 
     const handleAdd = async () => {
         if (!newUrl || !newKeywords) return;

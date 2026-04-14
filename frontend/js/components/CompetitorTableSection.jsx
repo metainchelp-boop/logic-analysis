@@ -14,6 +14,7 @@ window.CompetitorTableSection = function CompetitorTableSection(props) {
 
   return (
     <div className="section fade-in">
+      <div className="container">
       <h2 className="section-title">📋 경쟁사 비교표 (상위 {items.length}개)</h2>
 
       <div className="table-wrap" style={{ maxHeight: '600px', overflowY: 'auto' }}>
@@ -55,6 +56,7 @@ window.CompetitorTableSection = function CompetitorTableSection(props) {
             })}
           </tbody>
         </table>
+      </div>
       </div>
     </div>
   );

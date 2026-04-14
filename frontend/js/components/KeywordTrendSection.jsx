@@ -21,6 +21,7 @@ window.KeywordTrendSection = function KeywordTrendSection(props) {
 
   return (
     <div className="section fade-in">
+      <div className="container">
       <h2 className="section-title">📈 키워드 검색량 비교 및 진입 난이도</h2>
 
       <div className="card" style={{ padding: '24px' }}>
@@ -95,15 +96,13 @@ window.KeywordTrendSection = function KeywordTrendSection(props) {
       </div>
 
       <style>{`
-        .section-row .trend-inner-grid {
-          grid-template-columns: 1fr !important;
-        }
         @media (max-width: 768px) {
           .trend-inner-grid {
             grid-template-columns: 1fr !important;
           }
         }
       `}</style>
+      </div>
     </div>
   );
 };

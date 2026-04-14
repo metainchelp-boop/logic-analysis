@@ -1,58 +1,59 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>로직 분석 v2 - 네이버 쇼핑 키워드 분석 & 순위 추적</title>
-
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-
-    <!-- 스타일시트 -->
-    <link rel="stylesheet" href="css/styles.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>로직 분석 v3 - 네이버 쇼핑 키워드 분석 & 순위 추적</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <!-- 스타일시트 -->
+  <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
-<div id="root"></div>
-
-<!-- 유틸리티 (일반 JS) -->
-<script src="js/utils.js"></script>
-
-<!-- 컴포넌트 (JSX — Babel 변환) -->
-<script type="text/babel" src="js/components/LoadingSpinner.jsx"></script>
-<script type="text/babel" src="js/components/EmptyState.jsx"></script>
-<script type="text/babel" src="js/components/StatCard.jsx"></script>
-<script type="text/babel" src="js/components/TopBar.jsx"></script>
-<script type="text/babel" src="js/components/SearchBar.jsx"></script>
-<script type="text/babel" src="js/components/DashboardSummary.jsx"></script>
-<script type="text/babel" src="js/components/RankTrackingSection.jsx"></script>
-<script type="text/babel" src="js/components/KeywordVolumeSection.jsx"></script>
-<script type="text/babel" src="js/components/RelatedKeywordsSection.jsx"></script>
-<script type="text/babel" src="js/components/SeoDiagnosisSection.jsx"></script>
-<script type="text/babel" src="js/components/ProductNameSection.jsx"></script>
-<script type="text/babel" src="js/components/ReportSection.jsx"></script>
-<script type="text/babel" src="js/components/NotificationSection.jsx"></script>
-
-<!-- 신규 분석 컴포넌트 (구 보고서 기능 복원) -->
-<script type="text/babel" src="js/components/CompetitionIndexSection.jsx"></script>
-<script type="text/babel" src="js/components/MarketRevenueSection.jsx"></script>
-<script type="text/babel" src="js/components/KeywordTrendSection.jsx"></script>
-<script type="text/babel" src="js/components/GoldenKeywordCard.jsx"></script>
-<script type="text/babel" src="js/components/AdvertiserInfoCard.jsx"></script>
-<script type="text/babel" src="js/components/SummaryCardsSection.jsx"></script>
-<script type="text/babel" src="js/components/CategoryAnalysisSection.jsx"></script>
-<script type="text/babel" src="js/components/KeywordTagSection.jsx"></script>
-<script type="text/babel" src="js/components/SeoDetailSection.jsx"></script>
-<script type="text/babel" src="js/components/ProductNameOptSection.jsx"></script>
-<script type="text/babel" src="js/components/ReviewAnalysisSection.jsx"></script>
-<script type="text/babel" src="js/components/DetailPageQualitySection.jsx"></script>
-<script type="text/babel" src="js/components/SalesEstimationSection.jsx"></script>
-<script type="text/babel" src="js/components/CompetitorTableSection.jsx"></script>
-<script type="text/babel" src="js/components/StrategicAnalysisSection.jsx"></script>
-
-<!-- 메인 앱 (항상 마지막에 로드) -->
-<script type="text/babel" src="js/components/App.jsx"></script>
+  <div id="root"></div>
+  <!-- 유틸리티 (일반 JS) -->
+  <script src="js/utils.js"></script>
+  <!-- 컴포넌트 (JSX → Babel 변환) -->
+  <script type="text/babel" src="js/components/LoadingSpinner.jsx"></script>
+  <script type="text/babel" src="js/components/EmptyState.jsx"></script>
+  <script type="text/babel" src="js/components/StatCard.jsx"></script>
+  <script type="text/babel" src="js/components/TopBar.jsx"></script>
+  <script type="text/babel" src="js/components/SearchBar.jsx?v=3.0"></script>
+  <script type="text/babel" src="js/components/DashboardSummary.jsx"></script>
+  <script type="text/babel" src="js/components/RankTrackingSection.jsx"></script>
+  <script type="text/babel" src="js/components/KeywordVolumeSection.jsx"></script>
+  <script type="text/babel" src="js/components/RelatedKeywordsSection.jsx"></script>
+  <script type="text/babel" src="js/components/SeoDiagnosisSection.jsx"></script>
+  <script type="text/babel" src="js/components/ProductNameSection.jsx"></script>
+  <script type="text/babel" src="js/components/ReportSection.jsx"></script>
+  <script type="text/babel" src="js/components/NotificationSection.jsx"></script>
+  <!-- 신규 분석 컴포넌트 -->
+  <script type="text/babel" src="js/components/CompetitionIndexSection.jsx"></script>
+  <script type="text/babel" src="js/components/MarketRevenueSection.jsx"></script>
+  <script type="text/babel" src="js/components/KeywordTrendSection.jsx"></script>
+  <script type="text/babel" src="js/components/GoldenKeywordCard.jsx"></script>
+  <script type="text/babel" src="js/components/AdvertiserInfoCard.jsx"></script>
+  <script type="text/babel" src="js/components/SummaryCardsSection.jsx"></script>
+  <script type="text/babel" src="js/components/CategoryAnalysisSection.jsx"></script>
+  <script type="text/babel" src="js/components/KeywordTagSection.jsx"></script>
+  <script type="text/babel" src="js/components/SeoDetailSection.jsx"></script>
+  <script type="text/babel" src="js/components/ProductNameOptSection.jsx"></script>
+  <script type="text/babel" src="js/components/ReviewAnalysisSection.jsx"></script>
+  <script type="text/babel" src="js/components/DetailPageQualitySection.jsx"></script>
+  <script type="text/babel" src="js/components/SalesEstimationSection.jsx"></script>
+  <script type="text/babel" src="js/components/CompetitorTableSection.jsx"></script>
+  <script type="text/babel" src="js/components/StrategicAnalysisSection.jsx"></script>
+  <script type="text/babel" src="js/components/AdvertiserReportSection.jsx?v=3.0"></script>
+  <!-- v3 신규 페이지 컴포넌트 (에이전시 기능) -->
+  <script type="text/babel" src="js/components/LoginPage.jsx?v=3.0"></script>
+  <script type="text/babel" src="js/components/ClientsPage.jsx?v=3.0"></script>
+  <script type="text/babel" src="js/components/UserManagementPage.jsx?v=3.0"></script>
+  <script type="text/babel" src="js/components/ReportsPage.jsx?v=3.0"></script>
+  <script type="text/babel" src="js/components/ClientDashboard.jsx?v=3.0"></script>
+  <!-- 메인 앱 (항상 맨 마지막에 로드) -->
+  <script type="text/babel" src="js/components/App.jsx?v=3.0"></script>
 </body>
 </html>

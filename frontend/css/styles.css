@@ -11,15 +11,15 @@ body {
 #root { min-height: 100vh; }
 
 /* ===== 유틸리티 ===== */
-.container { max-width: 1200px; margin: 0 auto; padding: 0 20px; }
+.container { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
 .hidden { display: none !important; }
 
-/* ===== 헤더 (보라색 그라디언트) ===== */
-.top-bar {
-    background: linear-gradient(135deg, #4f46e5 0%, #9333ea 100%);
+/* ===== 헤더 ===== */
+.top-bar, .topbar {
+    background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
     position: sticky; top: 0; z-index: 50;
-    box-shadow: 0 4px 20px rgba(79, 70, 229, 0.3);
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
 }
 .top-bar-inner {
     display: flex; align-items: center; justify-content: space-between;
@@ -393,39 +393,11 @@ tr.rank-highlight { background: #fef3c7 !important; font-weight: 600; }
     font-size: 11px; font-weight: 700; color: #fff;
 }
 
-/* ===== 섹션 2컬럼 그리드 행 ===== */
-.section-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 20px;
+/* ===== 섹션 그룹 (세로 나열) ===== */
+.section-group {
     max-width: 1200px;
     margin: 0 auto;
-    padding: 0 20px;
-}
-.section-row > * {
-    min-width: 0; /* 그리드 오버플로우 방지 */
-}
-.section-row .section {
-    padding: 12px 0;
-}
-.section-row .container {
-    max-width: 100%;
-    padding: 0;
-}
-
-/* 3:2 비율 행 (넓은 왼쪽 + 좁은 오른쪽) */
-.section-row.ratio-3-2 {
-    grid-template-columns: 3fr 2fr;
-}
-
-/* 2:3 비율 행 (좁은 왼쪽 + 넓은 오른쪽) */
-.section-row.ratio-2-3 {
-    grid-template-columns: 2fr 3fr;
-}
-
-/* section-row 내부 market-summary 조정 */
-.section-row .market-summary-grid {
-    grid-template-columns: 1fr !important;
+    padding: 0 24px;
 }
 
 /* ===== 페이드인 애니메이션 ===== */
@@ -451,21 +423,12 @@ tr.rank-highlight { background: #fef3c7 !important; font-weight: 600; }
     .card-grid-4 { grid-template-columns: repeat(2, 1fr); }
     .card-grid-3 { grid-template-columns: repeat(2, 1fr); }
 
-    .section-row, .section-row.ratio-3-2, .section-row.ratio-2-3 {
-        grid-template-columns: 1fr;
-        padding: 0 12px;
-    }
 }
 
 /* ===== 반응형 — 모바일 (≤ 768px) ===== */
 @media (max-width: 768px) {
-    .container { padding: 0 12px; }
+    .container, .section-group { padding: 0 12px; }
     body { font-size: 14px; }
-
-    .section-row, .section-row.ratio-3-2, .section-row.ratio-2-3 {
-        grid-template-columns: 1fr;
-        padding: 0 12px;
-    }
 
     .top-bar-inner { height: 56px; }
     .logo { font-size: 16px; }

@@ -13,6 +13,7 @@ window.MarketRevenueSection = function MarketRevenueSection(props) {
 
   return (
     <div className="section fade-in">
+      <div className="container">
       <h2 className="section-title">📊 대표 키워드 시장 규모 추정 (상위 40개 상품)</h2>
 
       {/* Summary Cards - Report Style */}
@@ -64,6 +65,7 @@ window.MarketRevenueSection = function MarketRevenueSection(props) {
 
       <div className="market-note">
         ※ 추정치 안내: 검색량 x 순위별 CTR(클릭률) x 전환율(3.5%)로 계산된 예상치입니다. 실제 매출과 차이가 있을 수 있으며, 참고 지표로 활용해 주세요.
+      </div>
       </div>
     </div>
   );

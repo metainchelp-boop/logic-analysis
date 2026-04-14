@@ -9,6 +9,7 @@ window.KeywordTagSection = function KeywordTagSection(props) {
 
   return (
     <div className="section fade-in">
+      <div className="container">
       <h2 className="section-title">🔍 키워드 & 태그 분석</h2>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: '24px' }}>
@@ -77,6 +78,7 @@ window.KeywordTagSection = function KeywordTagSection(props) {
           }
         }
       `}</style>
+      </div>
     </div>
   );
 };

@@ -8,6 +8,7 @@ window.CategoryAnalysisSection = function CategoryAnalysisSection(props) {
 
   return (
     <div className="section fade-in">
+      <div className="container">
       <h2 className="section-title">📂 카테고리 등록 분석</h2>
 
       {verdict && (
@@ -42,6 +43,7 @@ window.CategoryAnalysisSection = function CategoryAnalysisSection(props) {
             );
           })}
         </div>
+      </div>
       </div>
     </div>
   );

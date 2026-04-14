@@ -11,6 +11,7 @@ window.SummaryCardsSection = function SummaryCardsSection(props) {
 
   return (
     <div className="section fade-in">
+      <div className="container">
       <div style={{
         display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)',
         gap: '16px'
@@ -38,6 +39,7 @@ window.SummaryCardsSection = function SummaryCardsSection(props) {
           }
         }
       `}</style>
+      </div>
     </div>
   );
 };
