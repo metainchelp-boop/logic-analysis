@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 # API 키 인증
 API_KEY = os.getenv("API_KEY", "")
 # 인증 면제 경로
-AUTH_EXEMPT_PATHS = ["/api/health", "/docs", "/openapi.json", "/redoc", "/api/auth/login", "/api/reports/view/"]
+AUTH_EXEMPT_PATHS = ["/api/health", "/docs", "/openapi.json", "/redoc", "/api/auth/login", "/api/auth/sso", "/api/reports/view/"]
 
 
 class ApiKeyAuthMiddleware(BaseHTTPMiddleware):

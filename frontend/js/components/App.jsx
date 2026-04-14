@@ -33,6 +33,35 @@ window.App = function App() {
 
     useEffect(function() {
         try {
+            // SSO: URL에 sso_token 파라미터가 있으면 웹전산 SSO 로그인 처리
+            var urlParams = new URLSearchParams(window.location.search);
+            var ssoToken = urlParams.get('sso_token');
+            if (ssoToken) {
+                // URL에서 sso_token 파라미터 제거 (보안)
+                urlParams.delete('sso_token');
+                var newUrl = window.location.pathname;
+                var remaining = urlParams.toString();
+                if (remaining) newUrl += '?' + remaining;
+                window.history.replaceState({}, '', newUrl);
+
+                // SSO API 호출
+                fetch('/api/auth/sso', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ token: ssoToken })
+                })
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    if (data && data.success && data.token && data.user) {
+                        saveAuth(data.user, data.token);
+                    }
+                    setAuthChecking(false);
+                })
+                .catch(function() { setAuthChecking(false); });
+                return;
+            }
+
+            // 기존 세션 복원
             var savedToken = sessionStorage.getItem('logic_token');
             if (savedToken) {
                 fetch('/api/auth/me', { headers: { 'Authorization': 'Bearer ' + savedToken } })

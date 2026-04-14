@@ -6,6 +6,7 @@ JWT-based authentication with SQLite database, bcrypt hashing, and role-based ac
 import os
 import sqlite3
 import logging
+import httpx
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 from enum import Enum
@@ -28,6 +29,9 @@ DB_PATH = os.getenv("DB_PATH", "/tmp/logic_analysis.db")
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "logic-analysis-secret-key-2026")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = 24
+
+# 웹전산 SSO configuration
+WEBJEONSAN_API_BASE = os.getenv("WEBJEONSAN_API_BASE", "http://metainc01.cafe24.com")
 
 # Password hashing configuration
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -76,6 +80,10 @@ class UserResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class SsoRequest(BaseModel):
+    token: str = Field(..., min_length=1)
 
 
 class LoginResponse(BaseModel):
@@ -634,3 +642,105 @@ async def delete_existing_user(
     except Exception as e:
         logger.error(f"Failed to delete user: {str(e)}")
         raise HTTPException(status_code=500, detail="사용자 삭제 중 오류가 발생했습니다.")
+
+
+# ============================================================================
+# SSO: 웹전산 로그인 연동
+# ============================================================================
+
+@router.post("/sso", response_model=LoginResponse)
+async def sso_login(request: SsoRequest) -> LoginResponse:
+    """
+    웹전산(metainc.co.kr) SSO 로그인.
+    웹전산 JWT 토큰을 받아 → 웹전산 API로 유효성 검증 → 로직분석 자체 토큰 발급.
+    """
+    try:
+        wj_token = request.token
+        # "Bearer " 접두사가 있으면 제거
+        if wj_token.startswith("Bearer "):
+            wj_token = wj_token[7:]
+
+        # 1) 웹전산 JWT에서 사용자 정보 디코딩 (서명 검증 없이 payload만 읽기)
+        try:
+            payload = jwt.get_unverified_claims(wj_token)
+        except Exception:
+            raise HTTPException(status_code=401, detail="유효하지 않은 웹전산 토큰입니다.")
+
+        # 2) 웹전산 API로 토큰 유효성 검증
+        is_valid = False
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    f"{WEBJEONSAN_API_BASE}/api/distribute/info",
+                    headers={"Authorization": f"Bearer {wj_token}"}
+                )
+                is_valid = resp.status_code == 200
+        except Exception as e:
+            logger.warning(f"웹전산 API 호출 실패: {str(e)}")
+            # API 호출 실패 시 토큰 payload만으로 진행 (만료 시간 체크)
+            import time
+            exp = payload.get("exp")
+            if exp and float(exp) > time.time():
+                is_valid = True
+
+        if not is_valid:
+            raise HTTPException(status_code=401, detail="웹전산 토큰이 만료되었거나 유효하지 않습니다.")
+
+        # 3) 웹전산 토큰에서 사용자 정보 추출
+        wj_username = payload.get("sub") or payload.get("username") or payload.get("id") or "unknown"
+        wj_name = payload.get("name") or payload.get("employeeName") or wj_username
+
+        # 4) 로직분석 DB에서 사용자 조회 또는 자동 생성
+        #    우선순위: 기존 동일 username → wj_ 접두사 계정 → 신규 생성
+        user = get_user_by_username(wj_username)  # 기존 계정과 동일한 username 먼저 확인
+        if user:
+            logger.info(f"SSO: 기존 계정으로 로그인 - {wj_username}")
+        else:
+            user = get_user_by_username(f"wj_{wj_username}")  # wj_ 접두사 계정 확인
+
+        if not user:
+            # 웹전산 사용자를 로직분석 DB에 자동 생성 (기본 역할: manager)
+            try:
+                import secrets
+                random_pw = secrets.token_urlsafe(16)
+                user = create_user(
+                    username=f"wj_{wj_username}",
+                    password=random_pw,
+                    name=f"{wj_name} (웹전산)",
+                    role="manager"
+                )
+                if user:
+                    logger.info(f"SSO: 웹전산 사용자 자동 생성 - wj_{wj_username}")
+                else:
+                    logger.error(f"SSO: create_user returned None for wj_{wj_username}")
+                    raise HTTPException(status_code=500, detail=f"사용자 자동 생성에 실패했습니다. (username: wj_{wj_username})")
+            except HTTPException:
+                raise
+            except Exception as create_err:
+                logger.error(f"SSO: 사용자 생성 중 예외 - {type(create_err).__name__}: {str(create_err)}")
+                raise HTTPException(status_code=500, detail=f"사용자 생성 오류: {str(create_err)}")
+
+        if not user.get("is_active"):
+            raise HTTPException(status_code=403, detail="비활성화된 계정입니다.")
+
+        # 5) 로직분석 자체 JWT 토큰 발급
+        token = create_access_token(data={"user_id": user["id"]})
+
+        user_response = UserResponse(
+            id=user["id"],
+            username=user["username"],
+            name=user["name"],
+            role=user["role"],
+            is_active=user["is_active"],
+            created_at=user["created_at"],
+        )
+
+        logger.info(f"SSO login success: {user['username']} (from 웹전산 {wj_username})")
+
+        return LoginResponse(success=True, token=token, user=user_response)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"SSO login failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="SSO 로그인 처리 중 오류가 발생했습니다.")
