@@ -33,34 +33,6 @@ window.App = function App() {
 
     useEffect(function() {
         try {
-            // SSO: URL에 sso_token 파라미터가 있으면 웹전산 SSO 로그인 처리
-            var urlParams = new URLSearchParams(window.location.search);
-            var ssoToken = urlParams.get('sso_token');
-            if (ssoToken) {
-                // URL에서 sso_token 파라미터 제거 (보안)
-                urlParams.delete('sso_token');
-                var newUrl = window.location.pathname;
-                var remaining = urlParams.toString();
-                if (remaining) newUrl += '?' + remaining;
-                window.history.replaceState({}, '', newUrl);
-
-                // SSO API 호출
-                fetch('/api/auth/sso', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ token: ssoToken })
-                })
-                .then(function(r) { return r.json(); })
-                .then(function(data) {
-                    if (data && data.success && data.token && data.user) {
-                        saveAuth(data.user, data.token);
-                    }
-                    setAuthChecking(false);
-                })
-                .catch(function() { setAuthChecking(false); });
-                return;
-            }
-
             // 기존 세션 복원
             var savedToken = sessionStorage.getItem('logic_token');
             if (savedToken) {
@@ -422,7 +394,12 @@ window.App = function App() {
                     React.createElement(LoadingSpinner, { text: '광고주 맞춤 분석 중... 약 10~15초 소요됩니다' })
                 )
             ),
-            advertiserReport && !advertiserLoading && React.createElement(AdvertiserReportSection, { data: advertiserReport }),
+            advertiserReport && !advertiserLoading && React.createElement('div', null,
+                React.createElement(AdvertiserReportSection, { data: advertiserReport }),
+                React.createElement('div', { className: 'container' },
+                    React.createElement(AiFeedbackCard, { section: 'advertiser', keyword: searchedKeyword, data: advertiserReport })
+                )
+            ),
 
             /* 순위 추적 */
             React.createElement(RankTrackingSection, { products: products, refreshProducts: loadProducts, searchedKeyword: searchedKeyword, searchedProductUrl: searchedProductUrl }),
@@ -446,42 +423,72 @@ window.App = function App() {
             analysisData && analysisData.advertiserInfo && React.createElement(AdvertiserInfoCard, { data: analysisData.advertiserInfo }),
 
             /* 키워드 검색량 */
-            volumeData && React.createElement(KeywordVolumeSection, { keyword: searchedKeyword, data: volumeData }),
+            volumeData && React.createElement('div', null,
+                React.createElement(KeywordVolumeSection, { keyword: searchedKeyword, data: volumeData }),
+                React.createElement('div', { className: 'container' },
+                    React.createElement(AiFeedbackCard, { section: 'volume', keyword: searchedKeyword, data: volumeData })
+                )
+            ),
 
             /* 시장 규모 추정 */
             analysisData && analysisData.marketRevenue && React.createElement('div', { id: 'sec-market' },
-                React.createElement(MarketRevenueSection, { data: analysisData.marketRevenue })
+                React.createElement(MarketRevenueSection, { data: analysisData.marketRevenue }),
+                React.createElement('div', { className: 'container' },
+                    React.createElement(AiFeedbackCard, { section: 'market', keyword: searchedKeyword, data: analysisData.marketRevenue })
+                )
             ),
 
             /* 경쟁강도 분석 */
             analysisData && analysisData.competitionIndex && React.createElement('div', { id: 'sec-competition' },
-                React.createElement(CompetitionIndexSection, { data: analysisData.competitionIndex })
+                React.createElement(CompetitionIndexSection, { data: analysisData.competitionIndex }),
+                React.createElement('div', { className: 'container' },
+                    React.createElement(AiFeedbackCard, { section: 'competition', keyword: searchedKeyword, data: analysisData.competitionIndex })
+                )
             ),
 
             /* 연관 키워드 */
-            relatedData && React.createElement(RelatedKeywordsSection, { data: relatedData }),
+            relatedData && React.createElement('div', null,
+                React.createElement(RelatedKeywordsSection, { data: relatedData }),
+                React.createElement('div', { className: 'container' },
+                    React.createElement(AiFeedbackCard, { section: 'related', keyword: searchedKeyword, data: relatedData })
+                )
+            ),
 
             /* 키워드 트렌드 */
             analysisData && analysisData.keywordTrend && React.createElement('div', { id: 'sec-trend' },
-                React.createElement(KeywordTrendSection, { data: analysisData.keywordTrend })
+                React.createElement(KeywordTrendSection, { data: analysisData.keywordTrend }),
+                React.createElement('div', { className: 'container' },
+                    React.createElement(AiFeedbackCard, { section: 'trend', keyword: searchedKeyword, data: analysisData.keywordTrend })
+                )
             ),
 
             /* 골든 키워드 */
             analysisData && analysisData.goldenKeyword && React.createElement('div', { id: 'sec-golden' },
-                React.createElement(GoldenKeywordCard, { data: analysisData.goldenKeyword })
+                React.createElement(GoldenKeywordCard, { data: analysisData.goldenKeyword }),
+                React.createElement('div', { className: 'container' },
+                    React.createElement(AiFeedbackCard, { section: 'golden', keyword: searchedKeyword, data: analysisData.goldenKeyword })
+                )
             ),
 
             /* SEO 진단 */
-            React.createElement(SeoDiagnosisSection, { keyword: searchedKeyword, productUrl: searchedProductUrl }),
+            React.createElement('div', null,
+                React.createElement(SeoDiagnosisSection, { keyword: searchedKeyword, productUrl: searchedProductUrl })
+            ),
 
             /* 경쟁사 비교표 */
             analysisData && analysisData.competitorTable && React.createElement('div', { id: 'sec-competitor' },
-                React.createElement(CompetitorTableSection, { data: analysisData.competitorTable })
+                React.createElement(CompetitorTableSection, { data: analysisData.competitorTable }),
+                React.createElement('div', { className: 'container' },
+                    React.createElement(AiFeedbackCard, { section: 'competitor', keyword: searchedKeyword, data: analysisData.competitorTable })
+                )
             ),
 
             /* 판매량 추정 */
             analysisData && analysisData.salesEstimation && React.createElement('div', { id: 'sec-sales' },
-                React.createElement(SalesEstimationSection, { data: analysisData.salesEstimation })
+                React.createElement(SalesEstimationSection, { data: analysisData.salesEstimation }),
+                React.createElement('div', { className: 'container' },
+                    React.createElement(AiFeedbackCard, { section: 'sales', keyword: searchedKeyword, data: analysisData.salesEstimation })
+                )
             ),
 
             /* 상품명 분석 */
@@ -495,7 +502,10 @@ window.App = function App() {
 
             /* 진입 전략 */
             analysisData && analysisData.strategicAnalysis && React.createElement('div', { id: 'sec-strategy' },
-                React.createElement(StrategicAnalysisSection, { data: analysisData.strategicAnalysis })
+                React.createElement(StrategicAnalysisSection, { data: analysisData.strategicAnalysis }),
+                React.createElement('div', { className: 'container' },
+                    React.createElement(AiFeedbackCard, { section: 'strategy', keyword: searchedKeyword, data: analysisData.strategicAnalysis })
+                )
             ),
 
             /* 보고서 */

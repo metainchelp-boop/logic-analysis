@@ -35,9 +35,14 @@ window.UserManagementPage = function UserManagementPage(props) {
       method: 'GET',
       headers: { 'Authorization': 'Bearer ' + token }
     })
-    .then(function(r) { return r.json(); })
+    .then(function(r) {
+      if (!r.ok) throw new Error('서버 오류 (' + r.status + ')');
+      return r.json();
+    })
     .then(function(data) {
-      setUsers(data.users || []);
+      // 백엔드가 배열을 직접 반환하므로 배열/객체 모두 처리
+      var userList = Array.isArray(data) ? data : (data.users || []);
+      setUsers(userList);
       setMessage('');
     })
     .catch(function(e) {
@@ -68,6 +73,12 @@ window.UserManagementPage = function UserManagementPage(props) {
       return;
     }
 
+    // 신규 등록 시 비밀번호 필수 검증
+    if (!editingUser && (!formData.password || formData.password.length < 6)) {
+      setMessage('비밀번호를 6자 이상 입력하세요.');
+      return;
+    }
+
     var url = editingUser ? '/api/auth/users/' + editingUser.id : '/api/auth/users';
     var method = editingUser ? 'PUT' : 'POST';
     var body = {
@@ -88,7 +99,14 @@ window.UserManagementPage = function UserManagementPage(props) {
       },
       body: JSON.stringify(body)
     })
-    .then(function(r) { return r.json(); })
+    .then(function(r) {
+      if (!r.ok) {
+        return r.json().then(function(err) {
+          throw new Error(err.detail || '등록 실패 (' + r.status + ')');
+        });
+      }
+      return r.json();
+    })
     .then(function(data) {
       setMessage(editingUser ? '사용자 수정 완료' : '사용자 추가 완료');
       handleCloseModal();

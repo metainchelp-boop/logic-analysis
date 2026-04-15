@@ -208,18 +208,7 @@ window.ClientDashboard = function ClientDashboard({ onBack }) {
 
     /* ==================== 렌더링 ==================== */
     return (
-        <div style={{ minHeight: '100vh', background: '#f0f2f5' }}>
-            {/* 상단 바 */}
-            <div className="topbar">
-                <div className="container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                        <span style={{ fontSize: 20, fontWeight: 700, color: '#fff', cursor: 'pointer' }} onClick={onBack}>🔍 로직 분석</span>
-                        <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.7)' }}>업체 관리</span>
-                        <button onClick={onBack} style={{ background: 'rgba(255,255,255,0.15)', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}>📊 분석으로 돌아가기</button>
-                    </div>
-                </div>
-            </div>
-
+        <div style={{ minHeight: 'calc(100vh - 60px)', background: '#f0f2f5' }}>
             <div className="container" style={{ display: 'flex', gap: 20, paddingTop: 20, minHeight: 'calc(100vh - 80px)' }}>
                 {/* 좌측: 업체 목록 */}
                 <div style={{ width: 300, flexShrink: 0 }}>

@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel, field_validator
-from typing import Optional, List
+from typing import Optional, List, Any, Union
 from datetime import datetime
 import os
 import re
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 # API 키 인증
 API_KEY = os.getenv("API_KEY", "")
 # 인증 면제 경로
-AUTH_EXEMPT_PATHS = ["/api/health", "/docs", "/openapi.json", "/redoc", "/api/auth/login", "/api/auth/sso", "/api/reports/view/"]
+AUTH_EXEMPT_PATHS = ["/api/health", "/docs", "/openapi.json", "/redoc", "/api/auth/login", "/api/reports/view/"]
 
 
 class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
@@ -1034,6 +1034,89 @@ async def advertiser_analyze(req: AdvertiserAnalysisRequest):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"광고주 분석 실패: {str(e)}")
+
+
+# --- AI 피드백 ---
+class AiFeedbackRequest(BaseModel):
+    section: str  # 섹션 이름 (volume, competition, trend, golden, competitor, sales, strategy, seo, productname)
+    keyword: str  # 분석 키워드
+    data: Any     # 해당 섹션의 분석 데이터 (dict 또는 list)
+
+@app.post("/api/ai/feedback")
+async def ai_feedback(req: AiFeedbackRequest):
+    """Claude AI 기반 섹션별 분석 피드백 생성"""
+    try:
+        import anthropic
+
+        api_key = os.getenv("ANTHROPIC_API_KEY", "")
+        if not api_key:
+            return {"success": False, "error": "ANTHROPIC_API_KEY가 설정되지 않았습니다."}
+
+        client = anthropic.Anthropic(api_key=api_key)
+
+        section_prompts = {
+            "volume": "PC/모바일 검색 비율, CTR, CPC 효율성을 수치로 분석하고 광고 vs SEO 투자 판단 근거를 제시하세요.",
+            "competition": "상품 수 대비 검색량, 브랜드 비율을 분석하고 1페이지 진입을 위한 현실적 목표(리뷰수, 판매건수)를 제시하세요.",
+            "market": "월 거래액, 마진율, BEP 시나리오를 분석하세요.",
+            "related": "구매의도/정보탐색/브랜드 키워드를 분류하고 공략 우선순위와 활용법을 제시하세요.",
+            "trend": "시즌성, 성장 추세를 분석하고 광고/재고/SEO 최적 타이밍을 제시하세요.",
+            "golden": "검색량 대비 경쟁도가 낮은 키워드 우선순위와 상품명 최적화 예시를 제시하세요.",
+            "competitor": "경쟁사 가격/리뷰/상품명을 비교하고 차별화 전략을 제시하세요.",
+            "sales": "순위별 매출 시나리오와 투자 대비 수익률(ROAS)을 분석하세요.",
+            "strategy": "가격/상품명/카테고리/리뷰별 개선 우선순위와 1주~3개월 실행 계획을 제시하세요.",
+            "seo": "적합도/인기도/신뢰도 관점에서 진단하고 상품명 수정 예시 등 즉시 실행 액션을 제시하세요.",
+            "productname": "핵심키워드 위치, 길이(40~60자), 속성 조합을 평가하고 최적화 상품명 예시 2개를 제시하세요.",
+            "advertiser": "순위/가격/경쟁사 현황을 진단하고 즉시/1개월/3개월 액션 플랜을 제시하세요.",
+        }
+
+        section_label = section_prompts.get(req.section, "분석 데이터를 바탕으로 개선점과 전략을 제안해주세요.")
+
+        import json
+        data_str = json.dumps(req.data, ensure_ascii=False, default=str)
+        if len(data_str) > 2000:
+            data_str = data_str[:2000] + "...(생략)"
+
+        system_prompt = """당신은 메타아이앤씨(METAINC) 시니어 네이버 쇼핑 마케팅 컨설턴트입니다.
+네이버 쇼핑 알고리즘(적합도·인기도·신뢰도)에 정통합니다.
+
+작성 원칙:
+- 광고주에게 1:1로 브리핑하듯 자연스러운 대화체로 작성하세요.
+- 항목을 딱딱하게 나누지 말고, 현황 진단에서 핵심 이슈, 실행 전략까지 하나의 흐름으로 이어지게 서술하세요.
+- 반드시 데이터 수치를 인용하며, 근거 없는 추상적 표현은 쓰지 마세요.
+- 아이콘, 이모지, 특수기호(**, ##)는 사용하지 마세요.
+- 마지막에 'METAINC 인사이트'로 차별화 기회 한 가지를 짧게 덧붙이세요.
+- 전체 분량은 10~15줄 내외로, 읽기 편한 문단 형태로 작성하세요."""
+
+        message = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=800,
+            messages=[{
+                "role": "user",
+                "content": f"""키워드 '{req.keyword}'의 [{req.section}] 데이터:
+{data_str}
+
+{section_label}
+브리핑하듯 자연스럽게 이어서 작성하세요."""
+            }],
+            system=system_prompt
+        )
+
+        feedback_text = message.content[0].text if message.content else ""
+
+        return {
+            "success": True,
+            "data": {
+                "section": req.section,
+                "keyword": req.keyword,
+                "feedback": feedback_text,
+                "generated_at": datetime.now().isoformat()
+            }
+        }
+    except ImportError:
+        return {"success": False, "error": "anthropic 패키지가 설치되지 않았습니다. pip install anthropic"}
+    except Exception as e:
+        logger.error(f"AI 피드백 생성 실패: {str(e)}")
+        return {"success": False, "error": f"AI 피드백 생성 실패: {str(e)}"}
 
 
 # --- 헬스체크 ---

@@ -10,6 +10,12 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
     const [historyData, setHistoryData] = useState({});
     const lastAutoRegistered = useRef('');
 
+    // 검색 컨텍스트(광고주)가 바뀌면 순위 히스토리 캐시 초기화
+    useEffect(function() {
+        setHistoryData({});
+        setExpandedProduct(null);
+    }, [searchedProductUrl, searchedKeyword]);
+
     // 검색 시 상품 URL이 있으면 자동 등록 + 자동 순위체크
     useEffect(function() {
         if (!searchedKeyword || !searchedProductUrl) return;
@@ -128,11 +134,16 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                     </div>
                 )}
 
-                {products.length === 0 ? (
-                    <EmptyState icon="📦" text="추적 중인 상품이 없습니다. 상품을 등록해보세요." />
+                {/* 현재 분석 중인 광고주 상품만 필터링 */}
+                {(function() {
+                    var filtered = searchedProductUrl
+                        ? products.filter(function(p) { return p.product_url === searchedProductUrl; })
+                        : products;
+                    return filtered.length === 0 ? (
+                    <EmptyState icon="📦" text={searchedProductUrl ? "현재 분석 중인 상품의 순위 추적 데이터를 불러오는 중입니다." : "추적 중인 상품이 없습니다. 상품을 등록해보세요."} />
                 ) : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                        {products.map(p => (
+                        {filtered.map(p => (
                             <div className="card fade-in" key={p.id}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16 }}>
                                     <div style={{ display: 'flex', gap: 14, flex: 1, minWidth: 0 }}>
@@ -179,7 +190,8 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                             </div>
                         ))}
                     </div>
-                )}
+                )
+                    ; })()}
             </div>
         </div>
     );
