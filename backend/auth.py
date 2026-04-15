@@ -399,10 +399,15 @@ async def get_current_user(request: Request) -> Dict[str, Any]:
 
 
 def require_role(*roles: str):
-    """FastAPI Depends that checks if current user has required role."""
+    """FastAPI Depends that checks if current user has required role.
+    superadmin은 모든 admin 권한을 포함합니다."""
 
     async def role_checker(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
-        if current_user.get("role") not in roles:
+        user_role = current_user.get("role", "")
+        # superadmin은 admin 권한 포함
+        if user_role == "superadmin" and UserRole.ADMIN in roles:
+            return current_user
+        if user_role not in roles:
             raise HTTPException(
                 status_code=403,
                 detail="접근 권한이 없습니다.",

@@ -42,7 +42,7 @@ class ClientBase(BaseModel):
     naver_store_url: Optional[str] = Field(default="", max_length=500, description="네이버 스토어 URL")
     main_keywords: Optional[str] = Field(default="", description="주요 키워드 (쉼표 구분)")
     notes: Optional[str] = Field(default="", description="메모")
-    status: Optional[str] = Field(default="active", regex="^(active|paused|terminated)$", description="상태")
+    status: Optional[str] = Field(default="active", pattern="^(active|paused|terminated)$", description="상태")
 
     @validator("contact_email")
     def validate_email(cls, v):
@@ -75,7 +75,7 @@ class ClientUpdate(BaseModel):
     naver_store_url: Optional[str] = Field(None, max_length=500)
     main_keywords: Optional[str] = Field(None)
     notes: Optional[str] = Field(None)
-    status: Optional[str] = Field(None, regex="^(active|paused|terminated)$")
+    status: Optional[str] = Field(None, pattern="^(active|paused|terminated)$")
 
     @validator("contact_email")
     def validate_email(cls, v):
@@ -245,8 +245,10 @@ def search_clients(
     per_page: int = 20,
     search: Optional[str] = None,
     status: Optional[str] = None,
+    user_id: int = None,
+    is_admin: bool = False,
 ) -> tuple[List[Dict[str, Any]], int]:
-    """Search clients with pagination and filters"""
+    """Search clients with pagination and filters (유저별 격리)"""
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -254,6 +256,11 @@ def search_clients(
             # Build query
             query = "SELECT * FROM clients WHERE 1=1"
             params = []
+
+            # 유저별 격리 (admin은 전체 조회)
+            if not is_admin and user_id is not None:
+                query += " AND created_by = ?"
+                params.append(user_id)
 
             if search:
                 search_term = f"%{search}%"
@@ -404,37 +411,44 @@ def delete_client(client_id: int) -> bool:
         raise
 
 
-def get_client_stats() -> Dict[str, int]:
-    """Get client statistics for dashboard"""
+def get_client_stats(user_id: int = None, is_admin: bool = False) -> Dict[str, int]:
+    """Get client statistics for dashboard (유저별 격리)"""
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
 
+            # 유저별 필터 조건
+            where = ""
+            params = []
+            if not is_admin and user_id is not None:
+                where = " AND created_by = ?"
+                params = [user_id]
+
             # Total clients
-            cursor.execute("SELECT COUNT(*) as count FROM clients")
+            cursor.execute("SELECT COUNT(*) as count FROM clients WHERE 1=1" + where, params)
             total = cursor.fetchone()["count"]
 
             # Clients by status
             cursor.execute(
-                "SELECT COUNT(*) as count FROM clients WHERE status = 'active'"
+                "SELECT COUNT(*) as count FROM clients WHERE status = 'active'" + where, params
             )
             active = cursor.fetchone()["count"]
 
             cursor.execute(
-                "SELECT COUNT(*) as count FROM clients WHERE status = 'paused'"
+                "SELECT COUNT(*) as count FROM clients WHERE status = 'paused'" + where, params
             )
             paused = cursor.fetchone()["count"]
 
             cursor.execute(
-                "SELECT COUNT(*) as count FROM clients WHERE status = 'terminated'"
+                "SELECT COUNT(*) as count FROM clients WHERE status = 'terminated'" + where, params
             )
             terminated = cursor.fetchone()["count"]
 
             # Recent 30 days
             thirty_days_ago = (datetime.now() - timedelta(days=30)).isoformat()
             cursor.execute(
-                "SELECT COUNT(*) as count FROM clients WHERE created_at > ?",
-                (thirty_days_ago,),
+                "SELECT COUNT(*) as count FROM clients WHERE created_at > ?" + where,
+                [thirty_days_ago] + params,
             )
             recent_30days = cursor.fetchone()["count"]
 
@@ -459,7 +473,7 @@ async def list_clients(
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
     search: Optional[str] = Query(None),
-    status: Optional[str] = Query(None, regex="^(active|paused|terminated)?$"),
+    status: Optional[str] = Query(None, pattern="^(active|paused|terminated)?$"),
     current_user: Dict = Depends(get_current_user),
 ):
     """
@@ -471,11 +485,14 @@ async def list_clients(
     - status: 상태 필터 (active, paused, terminated)
     """
     try:
+        _is_adm = current_user.get("role") in ("admin", "superadmin")
         clients, total = search_clients(
             page=page,
             per_page=per_page,
             search=search,
             status=status,
+            user_id=current_user["id"],
+            is_admin=_is_adm,
         )
 
         total_pages = (total + per_page - 1) // per_page
@@ -620,7 +637,8 @@ async def get_stats(
 ):
     """Get client statistics for dashboard"""
     try:
-        stats = get_client_stats()
+        _is_adm = current_user.get("role") in ("admin", "superadmin")
+        stats = get_client_stats(user_id=current_user["id"], is_admin=_is_adm)
         return ClientStatsResponse(success=True, stats=stats)
     except Exception as e:
         logger.error(f"Error getting client stats: {str(e)}")

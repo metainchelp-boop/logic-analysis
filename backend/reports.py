@@ -12,7 +12,8 @@ from typing import Optional, List, Dict, Any
 import hashlib
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query, StaticFiles
+from fastapi import APIRouter, Depends, HTTPException, Query
+from starlette.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
@@ -857,9 +858,13 @@ async def list_reports(
         conn = get_db()
         cursor = conn.cursor()
 
-        # Build query
-        where_clauses = ["created_by = ?"]
-        params = [current_user["id"]]
+        # Build query (관리자는 전체 열람, 일반 유저는 본인 것만)
+        _is_adm = current_user.get("role") in ("admin", "superadmin")
+        where_clauses = []
+        params = []
+        if not _is_adm:
+            where_clauses.append("created_by = ?")
+            params.append(current_user["id"])
 
         if client_id:
             where_clauses.append("client_id = ?")
@@ -870,7 +875,7 @@ async def list_reports(
             search_term = f"%{search}%"
             params.extend([search_term, search_term])
 
-        where_clause = " AND ".join(where_clauses)
+        where_clause = " AND ".join(where_clauses) if where_clauses else "1=1"
 
         # Get total count
         cursor.execute(f"SELECT COUNT(*) as count FROM reports WHERE {where_clause}", params)

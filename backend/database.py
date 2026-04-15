@@ -35,6 +35,7 @@ def init_db():
                 image_url TEXT DEFAULT '',
                 price INTEGER DEFAULT 0,
                 product_id TEXT DEFAULT '',
+                user_id INTEGER DEFAULT 0,
                 created_at TEXT DEFAULT (datetime('now', 'localtime')),
                 updated_at TEXT DEFAULT (datetime('now', 'localtime'))
             );
@@ -99,6 +100,7 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_rankings_checked_at ON rankings(checked_at);
             CREATE INDEX IF NOT EXISTS idx_competitor_keyword_id ON competitor_snapshots(keyword_id);
             CREATE INDEX IF NOT EXISTS idx_notification_logs_sent_at ON notification_logs(sent_at);
+            CREATE INDEX IF NOT EXISTS idx_tracked_products_user_id ON tracked_products(user_id);
 
             -- 알림 설정 기본 행 삽입 (없으면)
             INSERT OR IGNORE INTO notification_settings (id, notify_enabled, receiver_phone, report_time)
@@ -117,14 +119,15 @@ def init_db():
 
 def add_tracked_product(product_url: str, product_name: str = None,
                         store_name: str = None, image_url: str = None,
-                        price: int = None, product_id: str = None) -> int:
-    """추적 상품 등록, 중복이면 업데이트 후 ID 반환"""
+                        price: int = None, product_id: str = None,
+                        user_id: int = 0) -> int:
+    """추적 상품 등록, 중복이면 업데이트 후 ID 반환 (user_id별 격리)"""
     conn = _get_conn()
     try:
-        # 기존 상품 확인 (URL 기준)
+        # 기존 상품 확인 (URL + user_id 기준)
         row = conn.execute(
-            "SELECT id FROM tracked_products WHERE product_url = ?",
-            (product_url,)
+            "SELECT id FROM tracked_products WHERE product_url = ? AND user_id = ?",
+            (product_url, user_id)
         ).fetchone()
 
         if row:
@@ -144,33 +147,42 @@ def add_tracked_product(product_url: str, product_name: str = None,
         else:
             cursor = conn.execute("""
                 INSERT INTO tracked_products
-                    (product_url, product_name, store_name, image_url, price, product_id)
-                VALUES (?, ?, ?, ?, ?, ?)
+                    (product_url, product_name, store_name, image_url, price, product_id, user_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
             """, (product_url, product_name or '', store_name or '',
-                  image_url or '', price or 0, product_id or ''))
+                  image_url or '', price or 0, product_id or '', user_id))
             conn.commit()
             return cursor.lastrowid
     finally:
         conn.close()
 
 
-def get_all_tracked_products() -> List[Dict]:
-    """추적 중인 상품 전체 목록"""
+def get_all_tracked_products(user_id: int = None, is_admin: bool = False) -> List[Dict]:
+    """추적 중인 상품 목록 (user_id별 격리, admin은 전체 조회)"""
     conn = _get_conn()
     try:
-        rows = conn.execute(
-            "SELECT * FROM tracked_products ORDER BY created_at DESC"
-        ).fetchall()
+        if is_admin or user_id is None:
+            rows = conn.execute(
+                "SELECT * FROM tracked_products ORDER BY created_at DESC"
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM tracked_products WHERE user_id = ? ORDER BY created_at DESC",
+                (user_id,)
+            ).fetchall()
         return [dict(r) for r in rows]
     finally:
         conn.close()
 
 
-def delete_tracked_product(product_id: int):
-    """추적 상품 삭제 (CASCADE로 키워드/순위/경쟁자 모두 삭제)"""
+def delete_tracked_product(product_id: int, user_id: int = None, is_admin: bool = False):
+    """추적 상품 삭제 (CASCADE로 키워드/순위/경쟁자 모두 삭제, 소유권 확인)"""
     conn = _get_conn()
     try:
-        conn.execute("DELETE FROM tracked_products WHERE id = ?", (product_id,))
+        if is_admin or user_id is None:
+            conn.execute("DELETE FROM tracked_products WHERE id = ?", (product_id,))
+        else:
+            conn.execute("DELETE FROM tracked_products WHERE id = ? AND user_id = ?", (product_id, user_id))
         conn.commit()
     finally:
         conn.close()
@@ -419,17 +431,27 @@ def get_notification_logs(limit: int = 20) -> List[Dict]:
 
 # ==================== 일일 리포트용 데이터 수집 ====================
 
-def get_all_keywords_with_products() -> List[Dict]:
-    """모든 키워드와 상품 정보 조인"""
+def get_all_keywords_with_products(user_id: int = None, is_admin: bool = False) -> List[Dict]:
+    """모든 키워드와 상품 정보 조인 (user_id별 격리)"""
     conn = _get_conn()
     try:
-        rows = conn.execute("""
-            SELECT tk.id as keyword_id, tk.keyword, tk.product_id,
-                   tp.product_name, tp.store_name, tp.product_url
-            FROM tracked_keywords tk
-            JOIN tracked_products tp ON tk.product_id = tp.id
-            ORDER BY tp.id, tk.id
-        """).fetchall()
+        if is_admin or user_id is None:
+            rows = conn.execute("""
+                SELECT tk.id as keyword_id, tk.keyword, tk.product_id,
+                       tp.product_name, tp.store_name, tp.product_url
+                FROM tracked_keywords tk
+                JOIN tracked_products tp ON tk.product_id = tp.id
+                ORDER BY tp.id, tk.id
+            """).fetchall()
+        else:
+            rows = conn.execute("""
+                SELECT tk.id as keyword_id, tk.keyword, tk.product_id,
+                       tp.product_name, tp.store_name, tp.product_url
+                FROM tracked_keywords tk
+                JOIN tracked_products tp ON tk.product_id = tp.id
+                WHERE tp.user_id = ?
+                ORDER BY tp.id, tk.id
+            """, (user_id,)).fetchall()
         return [dict(r) for r in rows]
     finally:
         conn.close()

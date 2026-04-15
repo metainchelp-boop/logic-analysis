@@ -17,7 +17,8 @@ import uvicorn
 import logging
 
 # v3 신규 모듈 임포트
-from auth import router as auth_router, init_auth_db
+from fastapi import Depends
+from auth import router as auth_router, init_auth_db, get_current_user
 from clients import router as clients_router, init_clients_db
 from reports import router as reports_router, init_reports_db
 
@@ -116,6 +117,13 @@ app.add_middleware(ApiKeyAuthMiddleware)
 app.include_router(auth_router)
 app.include_router(clients_router)
 app.include_router(reports_router)
+
+
+# ==================== 유저 격리 헬퍼 ====================
+
+def _is_admin(user: dict) -> bool:
+    """관리자(admin/superadmin) 여부 확인"""
+    return user.get("role") in ("admin", "superadmin")
 
 
 # ==================== 요청/응답 모델 ====================
@@ -230,14 +238,14 @@ async def check_rank(req: RankCheckRequest):
 
 # --- 상품 추적 등록 ---
 @app.post("/api/products/track")
-async def track_product(req: ProductAddRequest, background_tasks: BackgroundTasks):
-    """상품 + 키워드 추적 등록"""
+async def track_product(req: ProductAddRequest, background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
+    """상품 + 키워드 추적 등록 (유저별 격리)"""
     try:
         # 상품 정보 가져오기
         product_info = get_product_info(req.product_url)
         product_id_str = extract_product_id_from_url(req.product_url)
 
-        # DB에 상품 등록
+        # DB에 상품 등록 (user_id 포함)
         db_product_id = add_tracked_product(
             product_url=req.product_url,
             product_name=product_info.get("product_name"),
@@ -245,6 +253,7 @@ async def track_product(req: ProductAddRequest, background_tasks: BackgroundTask
             image_url=product_info.get("image_url"),
             price=product_info.get("price"),
             product_id=product_id_str,
+            user_id=current_user["id"],
         )
 
         # 키워드 등록
@@ -296,9 +305,9 @@ def run_initial_rank_check(product_id: int, product_url: str, keyword_ids: List[
 
 # --- 추적 상품 목록 ---
 @app.get("/api/products")
-async def list_products():
-    """추적 중인 상품 목록"""
-    products = get_all_tracked_products()
+async def list_products(current_user: dict = Depends(get_current_user)):
+    """추적 중인 상품 목록 (유저별 격리)"""
+    products = get_all_tracked_products(user_id=current_user["id"], is_admin=_is_admin(current_user))
     result = []
     for p in products:
         keywords = get_keywords_for_product(p["id"])
@@ -309,9 +318,9 @@ async def list_products():
 
 # --- 상품 삭제 ---
 @app.delete("/api/products/{product_id}")
-async def remove_product(product_id: int):
-    """추적 상품 삭제"""
-    delete_tracked_product(product_id)
+async def remove_product(product_id: int, current_user: dict = Depends(get_current_user)):
+    """추적 상품 삭제 (소유권 확인)"""
+    delete_tracked_product(product_id, user_id=current_user["id"], is_admin=_is_admin(current_user))
     return {"success": True, "message": "상품이 삭제되었습니다."}
 
 
@@ -342,9 +351,9 @@ async def competitors(keyword_id: int):
 
 # --- 수동 순위 체크 ---
 @app.post("/api/rank/refresh/{product_id}")
-async def refresh_rank(product_id: int, background_tasks: BackgroundTasks):
+async def refresh_rank(product_id: int, background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
     """특정 상품의 모든 키워드 순위 재체크"""
-    products = get_all_tracked_products()
+    products = get_all_tracked_products(user_id=current_user["id"], is_admin=_is_admin(current_user))
     product = next((p for p in products if p["id"] == product_id), None)
     if not product:
         raise HTTPException(status_code=404, detail="상품을 찾을 수 없습니다.")
@@ -461,10 +470,10 @@ class ReportExportRequest(BaseModel):
     date_range: int = 30  # 최근 N일
 
 @app.post("/api/report/export")
-async def export_report(req: ReportExportRequest):
-    """순위 데이터 보고서 내보내기"""
+async def export_report(req: ReportExportRequest, current_user: dict = Depends(get_current_user)):
+    """순위 데이터 보고서 내보내기 (유저별 격리)"""
     try:
-        products = get_all_tracked_products()
+        products = get_all_tracked_products(user_id=current_user["id"], is_admin=_is_admin(current_user))
         report_data = []
 
         for p in products:
