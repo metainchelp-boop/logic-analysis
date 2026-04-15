@@ -523,6 +523,39 @@ async def export_report(req: ReportExportRequest, current_user: dict = Depends(g
 
 # ==================== SEO 종합 진단 API ====================
 
+class DetailPageAnalysisRequest(BaseModel):
+    product_url: str
+
+@app.post("/api/seo/detail-page")
+async def detail_page_analyze(req: DetailPageAnalysisRequest):
+    """상세페이지 품질 분석 — Bright Data 프록시 경유"""
+    try:
+        from naver_crawler import fetch_detail_page_html, analyze_detail_page
+
+        html = fetch_detail_page_html(req.product_url)
+        if not html:
+            return {
+                "success": False,
+                "detail": "상세페이지 HTML을 가져올 수 없습니다. 프록시 설정을 확인하세요."
+            }
+
+        result = analyze_detail_page(html, req.product_url)
+        if not result.get("success"):
+            return {"success": False, "detail": result.get("error", "분석 실패")}
+
+        return {
+            "success": True,
+            "data": {
+                "metrics": result["metrics"],
+                "scores": result["scores"],
+                "suggestions": result["suggestions"],
+            }
+        }
+    except Exception as e:
+        logger.error(f"상세페이지 분석 오류: {e}")
+        raise HTTPException(status_code=500, detail=f"상세페이지 분석 실패: {str(e)}")
+
+
 class SeoAnalysisRequest(BaseModel):
     product_url: str
     keyword: str

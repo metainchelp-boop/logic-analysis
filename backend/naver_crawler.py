@@ -29,6 +29,11 @@ SEARCHAD_API_KEY = os.getenv("SEARCHAD_API_KEY", "")
 SEARCHAD_SECRET_KEY = os.getenv("SEARCHAD_SECRET_KEY", "")
 SEARCHAD_CUSTOMER_ID = os.getenv("SEARCHAD_CUSTOMER_ID", "")
 
+# Bright Data 프록시 (상세페이지 크롤링용)
+BRD_API_KEY = os.getenv("NAVER_BRD_API_KEY", "")
+BRD_API_URL = os.getenv("NAVER_BRD_API_URL", "")
+BRD_API_ZONE = os.getenv("NAVER_BRD_API_ZONE", "")
+
 
 # ==================== 유틸리티 ====================
 
@@ -443,3 +448,251 @@ def generate_rank_analysis(current_rank: Optional[int], previous_rank: Optional[
 
     comments.append("ℹ️ 네이버 공식 API 기준 순위이며, 실제 검색 노출 순위와 차이가 있을 수 있습니다.")
     return " ".join(comments)
+
+
+# ==================== 상세페이지 크롤링 & 분석 ====================
+
+def _build_brd_proxies() -> Optional[Dict]:
+    """Bright Data 프록시 설정 빌드"""
+    if not BRD_API_KEY or not BRD_API_URL:
+        return None
+    # BRD_API_URL: 호스트:포트 형태 (예: brd.superproxy.io:22225)
+    # BRD_API_ZONE: 존 이름 (예: residential_proxy1)
+    # BRD_API_KEY: 인증 비밀번호
+    if BRD_API_ZONE:
+        proxy_url = f"http://{BRD_API_ZONE}:{BRD_API_KEY}@{BRD_API_URL}"
+    else:
+        proxy_url = f"http://{BRD_API_KEY}@{BRD_API_URL}"
+    return {"http": proxy_url, "https": proxy_url}
+
+
+def fetch_detail_page_html(product_url: str) -> Optional[str]:
+    """
+    스마트스토어/네이버 상품 상세페이지 HTML 가져오기
+    1차: Bright Data 프록시 경유
+    2차: 직접 요청 (fallback)
+    """
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
+    }
+
+    # 1차: Bright Data 프록시
+    proxies = _build_brd_proxies()
+    if proxies:
+        try:
+            logger.info(f"Bright Data 프록시로 상세페이지 요청: {product_url[:60]}...")
+            resp = requests.get(product_url, headers=headers, proxies=proxies, timeout=30, verify=False)
+            if resp.status_code == 200 and len(resp.text) > 1000:
+                logger.info(f"상세페이지 HTML 수신 성공: {len(resp.text)}자")
+                return resp.text
+            else:
+                logger.warning(f"프록시 응답 비정상: status={resp.status_code}, len={len(resp.text)}")
+        except Exception as e:
+            logger.warning(f"Bright Data 프록시 요청 실패: {e}")
+
+    # 2차: 직접 요청 (VPS에서는 보통 418 차단됨)
+    try:
+        logger.info(f"직접 요청 시도: {product_url[:60]}...")
+        resp = requests.get(product_url, headers=headers, timeout=15)
+        if resp.status_code == 200 and len(resp.text) > 1000:
+            logger.info(f"직접 요청 성공: {len(resp.text)}자")
+            return resp.text
+        else:
+            logger.warning(f"직접 요청 실패: status={resp.status_code}")
+    except Exception as e:
+        logger.warning(f"직접 요청 실패: {e}")
+
+    return None
+
+
+def analyze_detail_page(html: str, product_url: str = "") -> Dict:
+    """
+    상세페이지 HTML을 분석하여 품질 지표를 추출
+    Returns: {
+        success: bool,
+        metrics: { ... },
+        scores: { ... },
+        suggestions: [ ... ]
+    }
+    """
+    try:
+        from bs4 import BeautifulSoup
+    except ImportError:
+        return {"success": False, "error": "beautifulsoup4 미설치"}
+
+    soup = BeautifulSoup(html, "lxml")
+
+    # ── 1. 이미지 분석 ──
+    all_imgs = soup.find_all("img")
+    # 상세페이지 영역 이미지 (상품 상세 설명 내부)
+    detail_area = soup.find("div", {"class": re.compile(r"detail|product.?detail|content_detail|se-viewer|_detail_content", re.I)})
+    if not detail_area:
+        detail_area = soup.find("div", {"id": re.compile(r"detail|content|product_detail", re.I)})
+    detail_imgs = detail_area.find_all("img") if detail_area else []
+
+    # 이미지 소스 중 실제 상품 이미지 필터링 (아이콘/로고 제외)
+    product_imgs = []
+    for img in (detail_imgs if detail_imgs else all_imgs):
+        src = img.get("src", "") or img.get("data-src", "") or ""
+        # 작은 아이콘이나 트래킹 픽셀 제외
+        width = img.get("width", "")
+        height = img.get("height", "")
+        if width and str(width).isdigit() and int(width) < 50:
+            continue
+        if height and str(height).isdigit() and int(height) < 50:
+            continue
+        if src and ("shop-phinf" in src or "simage" in src or "phinf" in src or "blogpfthumb" in src or ".jpg" in src.lower() or ".png" in src.lower() or ".webp" in src.lower()):
+            product_imgs.append(src)
+
+    total_images = len(product_imgs) if product_imgs else max(len(detail_imgs), 0)
+
+    # ── 2. 텍스트 콘텐츠 분석 ──
+    # 상세페이지 내 텍스트 추출
+    if detail_area:
+        detail_text = detail_area.get_text(separator=" ", strip=True)
+    else:
+        # body 전체에서 nav, header, footer 제외
+        body = soup.find("body")
+        if body:
+            for tag in body.find_all(["nav", "header", "footer", "script", "style"]):
+                tag.decompose()
+            detail_text = body.get_text(separator=" ", strip=True)
+        else:
+            detail_text = soup.get_text(separator=" ", strip=True)
+    text_length = len(detail_text)
+
+    # ── 3. 동영상 분석 ──
+    videos = soup.find_all(["video", "iframe"])
+    video_count = 0
+    for v in videos:
+        src = v.get("src", "") or v.get("data-src", "") or ""
+        if "youtube" in src.lower() or "naver" in src.lower() or "vimeo" in src.lower() or v.name == "video":
+            video_count += 1
+    # 네이버 SmartEditor 동영상 감지
+    video_divs = soup.find_all("div", {"class": re.compile(r"se-video|_video|movie", re.I)})
+    video_count += len(video_divs)
+
+    # ── 4. 테이블/스펙 정보 분석 ──
+    tables = soup.find_all("table")
+    has_spec_table = any(
+        "스펙" in (t.get_text() or "") or "사양" in (t.get_text() or "") or "size" in (t.get_text() or "").lower()
+        for t in tables
+    ) if tables else False
+    table_count = len(tables)
+
+    # ── 5. 구매/배송 정보 감지 ──
+    full_text_lower = html.lower()
+    has_delivery_info = any(kw in full_text_lower for kw in ["무료배송", "당일출고", "당일발송", "로켓배송", "오늘출발"])
+    has_return_info = any(kw in full_text_lower for kw in ["교환", "반품", "환불", "100%"])
+    has_gift_info = any(kw in full_text_lower for kw in ["사은품", "증정", "선물", "덤"])
+
+    # ── 6. 신뢰 요소 감지 ──
+    has_certification = any(kw in full_text_lower for kw in ["인증", "kc인증", "haccp", "iso", "특허", "수상", "선정"])
+    has_review_section = any(kw in full_text_lower for kw in ["구매후기", "리뷰", "고객후기", "사용후기"])
+
+    # ── 7. GIF/애니메이션 감지 ──
+    gif_count = len([img for img in all_imgs if ".gif" in (img.get("src", "") or "").lower()])
+
+    # ── 8. 페이지 총 크기 (대략적 스크롤 깊이) ──
+    html_size_kb = round(len(html) / 1024, 1)
+
+    # ── 점수 산출 ──
+    scores = {}
+
+    # 이미지 점수 (최적: 10~25장)
+    if total_images >= 10 and total_images <= 25:
+        scores["images"] = 100
+    elif total_images >= 5:
+        scores["images"] = 60 + min((total_images - 5) * 8, 40)
+    elif total_images >= 1:
+        scores["images"] = total_images * 12
+    else:
+        scores["images"] = 0
+
+    # 텍스트 점수 (최적: 500~3000자)
+    if text_length >= 500 and text_length <= 3000:
+        scores["text"] = 100
+    elif text_length >= 200:
+        scores["text"] = 50 + min((text_length - 200) * 0.15, 50)
+    elif text_length > 0:
+        scores["text"] = max(text_length // 5, 5)
+    else:
+        scores["text"] = 0
+
+    # 동영상 점수
+    scores["video"] = min(video_count * 50, 100) if video_count > 0 else 0
+
+    # 정보 완성도 점수
+    info_score = 0
+    if has_delivery_info: info_score += 25
+    if has_return_info: info_score += 25
+    if has_certification: info_score += 30
+    if has_spec_table or table_count > 0: info_score += 20
+    scores["info"] = min(info_score, 100)
+
+    # 신뢰 요소 점수
+    trust_score = 0
+    if has_certification: trust_score += 40
+    if has_review_section: trust_score += 30
+    if has_gift_info: trust_score += 15
+    if gif_count > 0 or video_count > 0: trust_score += 15
+    scores["trust"] = min(trust_score, 100)
+
+    # 종합 점수 (가중치)
+    total = round(
+        scores["images"] * 0.30 +
+        scores["text"] * 0.20 +
+        scores["video"] * 0.15 +
+        scores["info"] * 0.20 +
+        scores["trust"] * 0.15
+    )
+    scores["total"] = min(total, 100)
+
+    # ── 개선 제안 생성 ──
+    suggestions = []
+    if total_images < 5:
+        suggestions.append({"priority": "high", "area": "이미지", "text": f"상세페이지 이미지가 {total_images}장으로 부족합니다. 경쟁력 있는 상세페이지는 최소 10장 이상의 고화질 이미지를 사용합니다. 제품 사진, 사용 장면, 사이즈 비교, 패키지 등을 추가하세요."})
+    elif total_images < 10:
+        suggestions.append({"priority": "medium", "area": "이미지", "text": f"이미지 {total_images}장은 양호하지만, TOP 상품들은 평균 15~20장을 사용합니다. 사용 후기 이미지, 디테일 컷을 추가하면 전환율이 올라갑니다."})
+
+    if text_length < 200:
+        suggestions.append({"priority": "high", "area": "텍스트 콘텐츠", "text": f"상세 설명 텍스트가 {text_length}자로 매우 부족합니다. 제품 특장점, 사용법, 주의사항 등 최소 500자 이상의 설명을 추가하세요."})
+    elif text_length < 500:
+        suggestions.append({"priority": "medium", "area": "텍스트 콘텐츠", "text": f"텍스트 {text_length}자는 기본 수준입니다. 소재별 상세 설명, Q&A, 비교표 등을 추가하여 500자 이상으로 보강하세요."})
+
+    if video_count == 0:
+        suggestions.append({"priority": "medium", "area": "동영상", "text": "동영상이 없습니다. 제품 사용 영상 또는 언박싱 영상을 추가하면 상세페이지 체류 시간이 평균 2배 이상 증가하고, 전환율이 15~30% 상승합니다."})
+
+    if not has_delivery_info:
+        suggestions.append({"priority": "medium", "area": "배송 정보", "text": "무료배송/당일출고 등 배송 관련 정보가 명시되지 않았습니다. 배송 혜택을 상세페이지 상단에 강조하면 구매 결정에 큰 영향을 줍니다."})
+
+    if not has_return_info:
+        suggestions.append({"priority": "low", "area": "교환/반품", "text": "교환·반품·환불 정책이 명시되지 않았습니다. '100% 환불 보장' 등의 문구는 구매 장벽을 낮추는 핵심 요소입니다."})
+
+    if not has_certification:
+        suggestions.append({"priority": "medium", "area": "신뢰 요소", "text": "인증서, 수상 이력, 특허 등 신뢰 요소가 감지되지 않았습니다. KC인증, HACCP, 수상 배지 등이 있다면 상세페이지에 반드시 배치하세요."})
+
+    if not has_review_section:
+        suggestions.append({"priority": "low", "area": "리뷰 섹션", "text": "상세페이지 내 구매 후기 섹션이 없습니다. 대표 리뷰를 상세페이지에 직접 삽입하면 소셜 프루프 효과로 전환율이 향상됩니다."})
+
+    return {
+        "success": True,
+        "metrics": {
+            "total_images": total_images,
+            "text_length": text_length,
+            "video_count": video_count,
+            "table_count": table_count,
+            "gif_count": gif_count,
+            "html_size_kb": html_size_kb,
+            "has_delivery_info": has_delivery_info,
+            "has_return_info": has_return_info,
+            "has_gift_info": has_gift_info,
+            "has_certification": has_certification,
+            "has_review_section": has_review_section,
+            "has_spec_table": has_spec_table,
+        },
+        "scores": scores,
+        "suggestions": suggestions,
+    }
