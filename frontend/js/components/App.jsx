@@ -118,43 +118,110 @@ window.App = function App() {
             // ==================== 분석 데이터 계산 ====================
             var analysis = {};
 
-            // 1. 경쟁강도 계산
+            // 1. 경쟁강도 계산 (백분율 변환)
             if (productCount > 0 && totalVol > 0) {
-                var compIdx = (productCount / totalVol).toFixed(2);
-                var compLevel = compIdx < 0.5 ? '블루오션 (진입 적기)' : compIdx < 1.0 ? '보통 (경쟁 중간)' : '레드오션 (경쟁 치열)';
-                var compColor = compIdx < 0.5 ? '#16a34a' : compIdx < 1.0 ? '#d97706' : '#dc2626';
+                var rawIdx = productCount / totalVol;
+                // 백분율 변환: rawIdx 0→0%, 0.5→30%, 1.0→50%, 2.0→70%, 5.0→90%, 10+→98%
+                // 로그 스케일로 자연스럽게 매핑
+                var compPercent = Math.min(98, Math.round(Math.log10(rawIdx * 10 + 1) / Math.log10(101) * 100));
+                compPercent = Math.max(2, compPercent);
+
+                var compLevel, compColor;
+                if (compPercent <= 30) {
+                    compLevel = '블루오션';
+                    compColor = '#059669';
+                } else if (compPercent <= 70) {
+                    compLevel = '보통';
+                    compColor = '#d97706';
+                } else {
+                    compLevel = '레드오션';
+                    compColor = '#dc2626';
+                }
+
+                // 전문 코멘트 2~3줄 (실제 데이터 기반)
+                var avgCtrVal = vol ? (vol.monthlyAvePcClkCnt || 0) + (vol.monthlyAveMobileClkCnt || 0) : 0;
+                var compComment = '';
+                if (compPercent <= 30) {
+                    compComment = '월간 검색량 ' + fmt(totalVol) + '회 대비 등록 상품 ' + fmt(productCount) + '개로, 공급이 수요를 따라가지 못하는 시장입니다. ';
+                    compComment += '신규 진입 시 상위 노출 가능성이 높으며, 상품 등록만으로도 검색 트래픽을 확보할 수 있는 최적의 타이밍입니다.';
+                    if (avgCtrVal > 0) compComment += ' 평균 클릭수 ' + avgCtrVal.toFixed(1) + '회로 구매 의향이 높은 키워드입니다.';
+                } else if (compPercent <= 70) {
+                    compComment = '월간 검색량 ' + fmt(totalVol) + '회에 상품 ' + fmt(productCount) + '개가 경쟁 중인 시장입니다. ';
+                    compComment += '진입은 가능하지만, 가격 경쟁력·리뷰 확보·상품명 최적화 등 차별화 전략이 필요합니다. ';
+                    compComment += '상위 10위 이내 진입을 목표로 SEO 최적화에 집중하세요.';
+                } else {
+                    compComment = '월간 검색량 ' + fmt(totalVol) + '회 대비 상품 ' + fmt(productCount) + '개로, 공급 과잉 상태의 치열한 시장입니다. ';
+                    compComment += '기존 상위 셀러들이 리뷰·판매 실적을 선점하고 있어, 동일 키워드로의 진입은 높은 광고비를 수반합니다. ';
+                    compComment += '세부 키워드(롱테일) 전략이나 틈새 카테고리를 공략하는 것을 권장합니다.';
+                }
+
                 analysis.competitionIndex = {
-                    compIndex: parseFloat(compIdx),
+                    compIndex: parseFloat(rawIdx.toFixed(2)),
+                    compPercent: compPercent,
                     compLabel: compLevel,
                     compColor: compColor,
                     productCount: productCount,
                     searchVolume: totalVol,
-                    avgCtr: vol ? (vol.monthlyAvePcClkCnt || 0) + (vol.monthlyAveMobileClkCnt || 0) : 0,
-                    interpretation: compIdx < 0.5
-                        ? '시장에 상품이 부족한 상태입니다. 지금이 시장 진입의 최고 기회입니다.'
-                        : compIdx < 1.0
-                        ? '경쟁이 적당한 시장입니다. 차별화 전략으로 진입이 가능합니다.'
-                        : '경쟁이 치열한 시장입니다. 명확한 차별화 포인트가 필요합니다.',
+                    avgCtr: avgCtrVal,
+                    interpretation: compComment,
                 };
             }
 
-            // 2. 시장 규모 추정
+            // 2. 시장 규모 추정 (CTR × 전환율 기반)
             if (prods.length > 0) {
                 var prices = prods.map(function(p) { return p.price; }).filter(function(p) { return p > 0; });
                 var avgPrice = prices.length > 0 ? Math.round(prices.reduce(function(a, b) { return a + b; }, 0) / prices.length) : 0;
-                var estimatedMarketSize = avgPrice * totalVol;
+
+                // 순위별 CTR (업계 벤치마크)
+                var getCTR = function(rank) {
+                    if (rank === 1) return 0.08;
+                    if (rank === 2) return 0.06;
+                    if (rank === 3) return 0.05;
+                    if (rank === 4) return 0.04;
+                    if (rank === 5) return 0.03;
+                    if (rank <= 10) return 0.015;
+                    if (rank <= 20) return 0.008;
+                    if (rank <= 40) return 0.003;
+                    return 0.001;
+                };
+                var conversionRate = 0.035; // 전환율 3.5%
+
+                var topProductsList = prods.slice(0, 40).map(function(p) {
+                    var ctr = getCTR(p.rank);
+                    var estSales = Math.max(1, Math.round(totalVol * ctr * conversionRate));
+                    return {
+                        rank: p.rank,
+                        name: p.product_name,
+                        store: p.store_name,
+                        price: p.price,
+                        priceStr: fmt(p.price) + '원',
+                        ctr: ctr,
+                        estMonthlySales: estSales,
+                        estMonthlySalesStr: fmt(estSales) + '건',
+                        estRevenue: p.price * estSales,
+                        estRevenueStr: fmt(p.price * estSales) + '원',
+                    };
+                });
+
+                // 전체 시장 규모 = 상위 20개 상품 추정 매출 합산
+                var totalMarketRevenue = topProductsList.slice(0, 20).reduce(function(sum, p) {
+                    return sum + p.estRevenue;
+                }, 0);
+
                 analysis.marketRevenue = {
                     avgPrice: fmt(avgPrice) + '원',
-                    estimatedMonthly: fmt(estimatedMarketSize) + '원',
-                    topProducts: prods.slice(0, 40).map(function(p) {
-                        var estSales = Math.max(1, Math.round(totalVol / Math.pow(p.rank, 0.8) * 0.1));
+                    estimatedMonthly: fmt(totalMarketRevenue) + '원',
+                    conversionRate: '3.5%',
+                    calculationMethod: 'CTR × 전환율',
+                    topProducts: topProductsList.map(function(p) {
                         return {
                             rank: p.rank,
-                            name: p.product_name,
-                            store: p.store_name,
-                            price: fmt(p.price) + '원',
-                            estMonthlySales: fmt(estSales) + '건',
-                            estRevenue: fmt(p.price * estSales) + '원',
+                            name: p.name,
+                            store: p.store,
+                            price: p.priceStr,
+                            ctr: (p.ctr * 100).toFixed(1) + '%',
+                            estMonthlySales: p.estMonthlySalesStr,
+                            estRevenue: p.estRevenueStr,
                         };
                     }),
                 };
@@ -175,17 +242,34 @@ window.App = function App() {
                 };
             }
 
-            // 4. 골든 키워드
+            // 4. 골든 키워드 (스토어명 필터링 적용)
             if (rd && rd.golden_keywords && rd.golden_keywords.length > 0) {
-                var gk = rd.golden_keywords[0];
+                // 스토어명이 아닌 키워드만 필터 (백엔드에서 이미 필터하지만 이중 안전장치)
+                var filteredGolden = rd.golden_keywords.filter(function(gk) {
+                    return !gk.isStoreName;
+                });
+                var gk = filteredGolden.length > 0 ? filteredGolden[0] : rd.golden_keywords[0];
+
+                var gkVolume = gk.totalVolume || 0;
+                var gkClicks = gk.monthlyAvePcClkCnt ? (gk.monthlyAvePcClkCnt + gk.monthlyAveMobileClkCnt) : 0;
+                var gkClickRate = gkVolume > 0 ? ((gkClicks / gkVolume) * 100).toFixed(1) : 0;
+
+                // 디테일한 추천 이유 생성
+                var gkReason = '"' + gk.keyword + '"은(는) 월간 검색량 ' + fmt(gkVolume) + '회로 안정적인 수요가 존재합니다. ';
+                if (gkClicks > 0) {
+                    gkReason += '평균 클릭수 ' + gkClicks.toFixed(1) + '회(클릭률 ' + gkClickRate + '%)로 구매 의도가 높은 키워드입니다. ';
+                }
+                gkReason += '경쟁강도 "' + compLabel(gk.compIdx) + '" 수준이라 상위 노출 진입 비용이 낮습니다. ';
+                gkReason += '메인 키워드 "' + keyword + '"의 세부 키워드로 상품명에 함께 포함시키면 추가 유입을 확보할 수 있습니다.';
+
                 analysis.goldenKeyword = {
                     name: gk.keyword,
-                    score: gk.score || (gk.totalVolume ? Math.round(gk.totalVolume / 100) : 0),
-                    volume: gk.totalVolume || 0,
+                    score: gk.score || (gkVolume ? Math.round(gkVolume / 100) : 0),
+                    volume: gkVolume,
                     competition: compLabel(gk.compIdx),
-                    ctr: gk.monthlyAvePcClkCnt ? (gk.monthlyAvePcClkCnt + gk.monthlyAveMobileClkCnt) : 0,
-                    clicks: Math.round((gk.totalVolume || 0) * 0.05),
-                    reason: '검색량 ' + fmt(gk.totalVolume) + '회로 틈새 수요가 확실합니다. 경쟁강도가 낮아 진입하기 좋은 키워드입니다.',
+                    ctr: gkClicks,
+                    clicks: Math.round(gkVolume * 0.05),
+                    reason: gkReason,
                 };
             }
 
@@ -236,9 +320,67 @@ window.App = function App() {
                 };
             }
 
-            // 9. 경쟁사 비교표
+            // 9. 경쟁사 비교표 (종합점수 포함)
             if (prods.length > 0) {
+                // 상위 20개 평균가격 (가격 경쟁력 계산용)
+                var compPrices = prods.slice(0, 20).map(function(p) { return p.price; }).filter(function(p) { return p > 0; });
+                var avgCompPrice = compPrices.length > 0 ? compPrices.reduce(function(a, b) { return a + b; }, 0) / compPrices.length : 0;
+                // 최다 카테고리 (카테고리 적합도 계산용)
+                var catCounts = {};
+                prods.slice(0, 20).forEach(function(p) {
+                    var cat = p.category2 || p.category1 || '';
+                    if (cat) catCounts[cat] = (catCounts[cat] || 0) + 1;
+                });
+                var topCat = '';
+                var topCatCount = 0;
+                Object.keys(catCounts).forEach(function(k) { if (catCounts[k] > topCatCount) { topCat = k; topCatCount = catCounts[k]; } });
+
                 analysis.competitorTable = prods.slice(0, 20).map(function(p) {
+                    // --- 종합점수 계산 (백엔드 SEO 로직과 동일 가중치) ---
+                    // 1. 상품명 (15%) — 키워드 포함 여부
+                    var kwInTitle = keyword.toLowerCase().split(' ').some(function(w) { return p.product_name.toLowerCase().indexOf(w) >= 0; });
+                    var nameLen = p.product_name.length;
+                    var titleSc = (kwInTitle ? 40 : 0) + (nameLen >= 20 && nameLen <= 50 ? 30 : nameLen >= 10 ? 20 : 10) + 20;
+
+                    // 2. 가격 경쟁력 (12%)
+                    var priceSc = 50;
+                    if (p.price > 0 && avgCompPrice > 0) {
+                        var pr = p.price / avgCompPrice;
+                        priceSc = pr <= 0.85 ? 100 : pr <= 1.0 ? 80 : pr <= 1.15 ? 60 : pr <= 1.3 ? 40 : 20;
+                    }
+
+                    // 3. 순위 (15%)
+                    var rankSc = p.rank <= 10 ? 100 : p.rank <= 20 ? 80 : p.rank <= 40 ? 60 : 40;
+
+                    // 4. 리뷰 추정 (12%)
+                    var reviewSc = p.rank <= 5 ? 95 : p.rank <= 10 ? 80 : p.rank <= 20 ? 60 : 40;
+
+                    // 5. 평점 추정 (8%)
+                    var ratingSc = p.rank <= 10 ? 90 : p.rank <= 20 ? 75 : p.rank <= 40 ? 60 : 45;
+
+                    // 6. 판매실적 추정 (10%)
+                    var salesSc = p.rank <= 5 ? 95 : p.rank <= 10 ? 80 : p.rank <= 20 ? 60 : 40;
+
+                    // 7. 카테고리 적합도 (8%)
+                    var pCat = p.category2 || p.category1 || '';
+                    var catSc = pCat === topCat ? 100 : pCat ? 60 : 20;
+
+                    // 8. 브랜드 (8%)
+                    var brandSc = (p.brand ? 40 : 0) + (p.store_name ? 30 : 0) + (p.product_url && p.product_url.indexOf('smartstore.naver.com') >= 0 ? 30 : 0);
+                    brandSc = Math.min(brandSc, 100);
+
+                    // 9. 네이버페이 (6%)
+                    var npSc = p.product_url && p.product_url.indexOf('smartstore.naver.com') >= 0 ? 100 : 50;
+
+                    // 10. 최신성 (6%)
+                    var freshSc = p.rank <= 20 ? 80 : p.rank <= 40 ? 60 : 40;
+
+                    var totalSc = Math.round(
+                        titleSc * 0.15 + priceSc * 0.12 + rankSc * 0.15 +
+                        reviewSc * 0.12 + ratingSc * 0.08 + salesSc * 0.10 +
+                        catSc * 0.08 + brandSc * 0.08 + npSc * 0.06 + freshSc * 0.06
+                    );
+
                     return {
                         rank: p.rank,
                         name: p.product_name,
@@ -247,23 +389,25 @@ window.App = function App() {
                         brand: p.brand || '-',
                         category: p.category2 || p.category1 || '-',
                         image: p.image_url,
+                        seoScore: totalSc,
                     };
                 });
             }
 
-            // 10. 판매량 추정 & 성장 시뮬레이션
+            // 10. 판매량 추정 & 성장 시뮬레이션 (CTR × 전환율 3.5% 통일)
             if (prods.length > 0 && totalVol > 0) {
                 var top10 = prods.slice(0, 10);
                 var avgP = Math.round(top10.reduce(function(s, p) { return s + p.price; }, 0) / top10.length);
+                var cv = 0.035; // 전환율 3.5%
                 analysis.salesEstimation = {
                     avgPrice: fmt(avgP) + '원',
                     monthlySearches: fmt(totalVol),
-                    estimatedCTR: '2~5%',
+                    estimatedCTR: 'CTR × 3.5%',
                     simulations: [
-                        { rank: 1, estSales: Math.round(totalVol * 0.08), revenue: fmt(Math.round(totalVol * 0.08 * avgP)) + '원' },
-                        { rank: 5, estSales: Math.round(totalVol * 0.03), revenue: fmt(Math.round(totalVol * 0.03 * avgP)) + '원' },
-                        { rank: 10, estSales: Math.round(totalVol * 0.015), revenue: fmt(Math.round(totalVol * 0.015 * avgP)) + '원' },
-                        { rank: 20, estSales: Math.round(totalVol * 0.008), revenue: fmt(Math.round(totalVol * 0.008 * avgP)) + '원' },
+                        { rank: 1, estSales: Math.round(totalVol * 0.08 * cv), revenue: fmt(Math.round(totalVol * 0.08 * cv * avgP)) + '원' },
+                        { rank: 5, estSales: Math.round(totalVol * 0.03 * cv), revenue: fmt(Math.round(totalVol * 0.03 * cv * avgP)) + '원' },
+                        { rank: 10, estSales: Math.round(totalVol * 0.015 * cv), revenue: fmt(Math.round(totalVol * 0.015 * cv * avgP)) + '원' },
+                        { rank: 20, estSales: Math.round(totalVol * 0.008 * cv), revenue: fmt(Math.round(totalVol * 0.008 * cv * avgP)) + '원' },
                     ],
                 };
             }
@@ -299,7 +443,7 @@ window.App = function App() {
 
     // 앵커 네비게이션
     var sections = [
-        { id: 'sec-advertiser', label: '광고주 리포트', show: !!(advertiserReport || advertiserLoading) },
+        { id: 'sec-strategy', label: '진입전략', show: !!(advertiserReport || advertiserLoading || (analysisData && analysisData.strategicAnalysis)) },
         { id: 'sec-rank', label: '순위 추적' },
         { id: 'sec-volume', label: '검색량', show: !!volumeData },
         { id: 'sec-competition', label: '경쟁강도', show: !!(analysisData && analysisData.competitionIndex) },
@@ -309,7 +453,6 @@ window.App = function App() {
         { id: 'sec-golden', label: '골든키워드', show: !!(analysisData && analysisData.goldenKeyword) },
         { id: 'sec-competitor', label: '경쟁사', show: !!(analysisData && analysisData.competitorTable) },
         { id: 'sec-sales', label: '판매추정', show: !!(analysisData && analysisData.salesEstimation) },
-        { id: 'sec-strategy', label: '진입전략', show: !!(analysisData && analysisData.strategicAnalysis) },
         { id: 'sec-seo', label: 'SEO 진단' },
         { id: 'sec-productname', label: '상품명 분석' },
         { id: 'sec-report', label: '보고서' },
@@ -336,9 +479,7 @@ window.App = function App() {
                     React.createElement('span', { style: { fontSize:11, color:'rgba(255,255,255,0.4)', background:'rgba(255,255,255,0.06)', padding:'2px 8px', borderRadius:10 } }, 'v3.0'),
                     activePage === 'analysis' && health && React.createElement('span', { style: { background:'rgba(16,185,129,0.2)', color:'#34d399', fontSize:11, padding:'2px 8px', borderRadius:10 } }, '● 정상'),
                     React.createElement('button', { onClick: function(){setCurrentPage('analysis');}, style: navBtn(activePage === 'analysis') }, '📊 분석'),
-                    React.createElement('button', { onClick: function(){setCurrentPage('clients');}, style: navBtn(activePage === 'clients') }, '📋 광고주'),
                     React.createElement('button', { onClick: function(){setCurrentPage('management');}, style: navBtn(activePage === 'management') }, '🏢 업체관리'),
-                    React.createElement('button', { onClick: function(){setCurrentPage('reports');}, style: navBtn(activePage === 'reports') }, '📑 보고서'),
                     (currentUser.role === 'admin' || currentUser.role === 'superadmin') && React.createElement('button', { onClick: function(){setCurrentPage('users');}, style: navBtn(activePage === 'users') }, '👥 직원')
                 ),
                 React.createElement('div', { style: { display:'flex', alignItems:'center', gap:12 } },
@@ -355,19 +496,9 @@ window.App = function App() {
         React.createElement(window.ClientDashboard, { currentUser: currentUser, token: authToken })
     );
 
-    if (currentPage === 'clients') return React.createElement('div', null,
-        renderTopbar('clients'),
-        React.createElement(window.ClientsPage, { currentUser: currentUser, token: authToken })
-    );
-
     if (currentPage === 'users' && (currentUser.role === 'admin' || currentUser.role === 'superadmin')) return React.createElement('div', null,
         renderTopbar('users'),
         React.createElement(window.UserManagementPage, { currentUser: currentUser, token: authToken })
-    );
-
-    if (currentPage === 'reports') return React.createElement('div', null,
-        renderTopbar('reports'),
-        React.createElement(window.ReportsPage, { currentUser: currentUser, token: authToken })
     );
 
     /* ==================== 메인 분석 페이지 ==================== */
@@ -388,16 +519,10 @@ window.App = function App() {
                 )
             ),
 
-            /* 광고주 리포트 */
-            advertiserLoading && React.createElement('div', { id: 'sec-advertiser', className: 'section' },
+            /* 1페이지 진입 전략 비교 분석 (통합) — 로딩 */
+            advertiserLoading && !advertiserReport && React.createElement('div', { id: 'sec-strategy', className: 'section' },
                 React.createElement('div', { className: 'container' },
-                    React.createElement(LoadingSpinner, { text: '광고주 맞춤 분석 중... 약 10~15초 소요됩니다' })
-                )
-            ),
-            advertiserReport && !advertiserLoading && React.createElement('div', null,
-                React.createElement(AdvertiserReportSection, { data: advertiserReport }),
-                React.createElement('div', { className: 'container' },
-                    React.createElement(AiFeedbackCard, { section: 'advertiser', keyword: searchedKeyword, data: advertiserReport })
+                    React.createElement(LoadingSpinner, { text: '1페이지 진입 전략 분석 중... 약 10~15초 소요됩니다' })
                 )
             ),
 
@@ -426,7 +551,7 @@ window.App = function App() {
             volumeData && React.createElement('div', null,
                 React.createElement(KeywordVolumeSection, { keyword: searchedKeyword, data: volumeData }),
                 React.createElement('div', { className: 'container' },
-                    React.createElement(AiFeedbackCard, { section: 'volume', keyword: searchedKeyword, data: volumeData })
+                    React.createElement(AiFeedbackCard, { section: 'volume', keyword: searchedKeyword, data: volumeData, autoDelay: 3000 })
                 )
             ),
 
@@ -434,7 +559,7 @@ window.App = function App() {
             analysisData && analysisData.marketRevenue && React.createElement('div', { id: 'sec-market' },
                 React.createElement(MarketRevenueSection, { data: analysisData.marketRevenue }),
                 React.createElement('div', { className: 'container' },
-                    React.createElement(AiFeedbackCard, { section: 'market', keyword: searchedKeyword, data: analysisData.marketRevenue })
+                    React.createElement(AiFeedbackCard, { section: 'market', keyword: searchedKeyword, data: analysisData.marketRevenue, autoDelay: 5000 })
                 )
             ),
 
@@ -442,7 +567,7 @@ window.App = function App() {
             analysisData && analysisData.competitionIndex && React.createElement('div', { id: 'sec-competition' },
                 React.createElement(CompetitionIndexSection, { data: analysisData.competitionIndex }),
                 React.createElement('div', { className: 'container' },
-                    React.createElement(AiFeedbackCard, { section: 'competition', keyword: searchedKeyword, data: analysisData.competitionIndex })
+                    React.createElement(AiFeedbackCard, { section: 'competition', keyword: searchedKeyword, data: analysisData.competitionIndex, autoDelay: 7000 })
                 )
             ),
 
@@ -450,7 +575,7 @@ window.App = function App() {
             relatedData && React.createElement('div', null,
                 React.createElement(RelatedKeywordsSection, { data: relatedData }),
                 React.createElement('div', { className: 'container' },
-                    React.createElement(AiFeedbackCard, { section: 'related', keyword: searchedKeyword, data: relatedData })
+                    React.createElement(AiFeedbackCard, { section: 'related', keyword: searchedKeyword, data: relatedData, autoDelay: 9000 })
                 )
             ),
 
@@ -458,7 +583,7 @@ window.App = function App() {
             analysisData && analysisData.keywordTrend && React.createElement('div', { id: 'sec-trend' },
                 React.createElement(KeywordTrendSection, { data: analysisData.keywordTrend }),
                 React.createElement('div', { className: 'container' },
-                    React.createElement(AiFeedbackCard, { section: 'trend', keyword: searchedKeyword, data: analysisData.keywordTrend })
+                    React.createElement(AiFeedbackCard, { section: 'trend', keyword: searchedKeyword, data: analysisData.keywordTrend, autoDelay: 11000 })
                 )
             ),
 
@@ -466,7 +591,7 @@ window.App = function App() {
             analysisData && analysisData.goldenKeyword && React.createElement('div', { id: 'sec-golden' },
                 React.createElement(GoldenKeywordCard, { data: analysisData.goldenKeyword }),
                 React.createElement('div', { className: 'container' },
-                    React.createElement(AiFeedbackCard, { section: 'golden', keyword: searchedKeyword, data: analysisData.goldenKeyword })
+                    React.createElement(AiFeedbackCard, { section: 'golden', keyword: searchedKeyword, data: analysisData.goldenKeyword, autoDelay: 13000 })
                 )
             ),
 
@@ -479,7 +604,7 @@ window.App = function App() {
             analysisData && analysisData.competitorTable && React.createElement('div', { id: 'sec-competitor' },
                 React.createElement(CompetitorTableSection, { data: analysisData.competitorTable }),
                 React.createElement('div', { className: 'container' },
-                    React.createElement(AiFeedbackCard, { section: 'competitor', keyword: searchedKeyword, data: analysisData.competitorTable })
+                    React.createElement(AiFeedbackCard, { section: 'competitor', keyword: searchedKeyword, data: analysisData.competitorTable, autoDelay: 15000 })
                 )
             ),
 
@@ -487,7 +612,7 @@ window.App = function App() {
             analysisData && analysisData.salesEstimation && React.createElement('div', { id: 'sec-sales' },
                 React.createElement(SalesEstimationSection, { data: analysisData.salesEstimation }),
                 React.createElement('div', { className: 'container' },
-                    React.createElement(AiFeedbackCard, { section: 'sales', keyword: searchedKeyword, data: analysisData.salesEstimation })
+                    React.createElement(AiFeedbackCard, { section: 'sales', keyword: searchedKeyword, data: analysisData.salesEstimation, autoDelay: 17000 })
                 )
             ),
 
@@ -500,13 +625,33 @@ window.App = function App() {
             /* 키워드 & 태그 분석 */
             analysisData && analysisData.keywordTags && React.createElement(KeywordTagSection, { data: analysisData.keywordTags }),
 
-            /* 진입 전략 */
-            analysisData && analysisData.strategicAnalysis && React.createElement('div', { id: 'sec-strategy' },
-                React.createElement(StrategicAnalysisSection, { data: analysisData.strategicAnalysis }),
+            /* 1페이지 진입 전략 비교 분석 (통합) */
+            (advertiserReport || (analysisData && analysisData.strategicAnalysis)) && !advertiserLoading && React.createElement('div', null,
+                React.createElement(EntryStrategySection, {
+                    advertiserData: advertiserReport,
+                    strategicData: analysisData && analysisData.strategicAnalysis,
+                    keyword: searchedKeyword
+                }),
                 React.createElement('div', { className: 'container' },
-                    React.createElement(AiFeedbackCard, { section: 'strategy', keyword: searchedKeyword, data: analysisData.strategicAnalysis })
+                    React.createElement(AiFeedbackCard, {
+                        section: 'strategy',
+                        keyword: searchedKeyword,
+                        data: { advertiserReport: advertiserReport, strategicAnalysis: analysisData && analysisData.strategicAnalysis },
+                        autoDelay: 1000
+                    })
                 )
             ),
+
+            /* 업체 등록/저장 */
+            analysisData && React.createElement(SaveToClientSection, {
+                keyword: searchedKeyword,
+                productUrl: searchedProductUrl,
+                analysisData: analysisData,
+                volumeData: volumeData,
+                relatedData: relatedData,
+                shopProducts: shopProducts,
+                advertiserReport: advertiserReport,
+            }),
 
             /* 보고서 */
             React.createElement(ReportSection, { keyword: searchedKeyword, companyName: companyName }),

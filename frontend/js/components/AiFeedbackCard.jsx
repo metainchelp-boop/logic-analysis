@@ -1,24 +1,27 @@
-/* AiFeedbackCard — METAINC AI 피드백 카드 컴포넌트 */
+/* AiFeedbackCard — METAINC AI 피드백 카드 컴포넌트 (자동 실행) */
 window.AiFeedbackCard = function AiFeedbackCard(props) {
-    var useState = React.useState;
-    var section = props.section;     // 섹션 ID (volume, competition 등)
-    var keyword = props.keyword;     // 분석 키워드
-    var data = props.data;           // 해당 섹션 분석 데이터
+    var section = props.section;
+    var keyword = props.keyword;
+    var data = props.data;
+    var autoDelay = props.autoDelay || 0;
 
-    var _loading = useState(false);
+    var _loading = React.useState(false);
     var loading = _loading[0];
     var setLoading = _loading[1];
 
-    var _feedback = useState(null);
+    var _feedback = React.useState(null);
     var feedback = _feedback[0];
     var setFeedback = _feedback[1];
 
-    var _error = useState('');
+    var _error = React.useState('');
     var error = _error[0];
     var setError = _error[1];
 
-    var fetchFeedback = function() {
-        if (loading || !keyword || !data) return;
+    var _lastKeyword = React.useRef('');
+
+    if (!keyword || !data) return null;
+
+    var doFetch = function() {
         setLoading(true);
         setError('');
         setFeedback(null);
@@ -28,24 +31,36 @@ window.AiFeedbackCard = function AiFeedbackCard(props) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ section: section, keyword: keyword, data: data })
         }).then(function(r) {
-            if (!r.ok) throw new Error('서버 응답 오류 (' + r.status + '). 잠시 후 다시 시도해주세요.');
+            if (!r.ok) throw new Error('서버 응답 오류 (' + r.status + ')');
             var ct = r.headers.get('content-type') || '';
-            if (ct.indexOf('application/json') === -1) throw new Error('서버가 일시적으로 응답할 수 없습니다. 잠시 후 다시 시도해주세요.');
+            if (ct.indexOf('application/json') === -1) throw new Error('서버 응답 오류');
             return r.json();
         }).then(function(res) {
             if (res && res.success && res.data) {
                 setFeedback(res.data.feedback);
             } else {
-                setError((res && res.error) || 'METAINC AI 피드백 생성에 실패했습니다.');
+                setError((res && res.error) || 'AI 피드백 생성 실패');
             }
             setLoading(false);
         }).catch(function(e) {
-            setError('METAINC AI 피드백 요청 실패: ' + (e.message || '네트워크 오류'));
+            setError('AI 피드백 요청 실패: ' + (e.message || '네트워크 오류'));
             setLoading(false);
         });
     };
 
-    if (!keyword || !data) return null;
+    /* 키워드가 변경되면 자동 실행 (딜레이 적용) */
+    React.useEffect(function() {
+        if (!keyword || !data) return;
+        if (_lastKeyword.current === keyword) return;
+        _lastKeyword.current = keyword;
+        setFeedback(null);
+        setError('');
+
+        var timer = setTimeout(function() {
+            doFetch();
+        }, autoDelay);
+        return function() { clearTimeout(timer); };
+    }, [keyword, data]);
 
     return React.createElement('div', {
         style: {
@@ -69,7 +84,7 @@ window.AiFeedbackCard = function AiFeedbackCard(props) {
                 }, 'METAINC AI 피드백')
             ),
             !feedback && !loading && React.createElement('button', {
-                onClick: fetchFeedback,
+                onClick: doFetch,
                 style: {
                     background: 'linear-gradient(135deg, #0ea5e9, #0284c7)',
                     color: '#fff',

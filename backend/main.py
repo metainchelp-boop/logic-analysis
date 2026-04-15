@@ -21,6 +21,7 @@ from fastapi import Depends
 from auth import router as auth_router, init_auth_db, get_current_user
 from clients import router as clients_router, init_clients_db
 from reports import router as reports_router, init_reports_db
+from client_dashboard import router as cd_router, init_client_dashboard_db
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +89,7 @@ async def lifespan(app):
     init_auth_db()
     init_clients_db()
     init_reports_db()
+    init_client_dashboard_db()
     start_scheduler()
     yield
     # Shutdown
@@ -117,6 +119,7 @@ app.add_middleware(ApiKeyAuthMiddleware)
 app.include_router(auth_router)
 app.include_router(clients_router)
 app.include_router(reports_router)
+app.include_router(cd_router)
 
 
 # ==================== 유저 격리 헬퍼 ====================
@@ -526,37 +529,56 @@ class SeoAnalysisRequest(BaseModel):
 
 @app.post("/api/seo/analyze")
 async def seo_analyze(req: SeoAnalysisRequest):
-    """상품 SEO 종합 진단"""
+    """상품 SEO 종합 진단 — 10개 평가지표"""
     try:
         product_info = get_product_info(req.product_url)
         product_name = product_info.get("product_name", "")
+        product_url = req.product_url or ""
 
-        # 1. 상품명 키워드 포함 여부
-        keyword_in_title = req.keyword.lower() in product_name.lower()
-        title_length = len(product_name)
-
-        # 2. 가격 경쟁력 분석
         rank, page, competitors = find_product_rank(
             keyword=req.keyword, product_url=req.product_url, max_pages=2
         )
+
+        # get_product_info 실패 시 (스마트스토어 ID ≠ nvMid) → 키워드 검색에서 productId로 보완
+        if not product_name:
+            from naver_crawler import extract_product_id_from_url as _extract_pid
+            from naver_crawler import extract_store_name_from_url as _extract_store
+            from naver_crawler import search_products as _sp
+            target_pid = _extract_pid(req.product_url) or ""
+            target_store = _extract_store(req.product_url) or ""
+            _prods = _sp(req.keyword, max_results=200)
+            for _p in _prods:
+                p_url = _p.get("product_url", "")
+                p_pid = _p.get("product_id", "")
+                # 매칭 1: productId가 URL에 포함 (find_product_rank와 동일 방식)
+                matched = target_pid and (target_pid in p_url or target_pid == p_pid)
+                # 매칭 2: 스토어명이 URL에 포함
+                if not matched and target_store:
+                    matched = target_store.lower() in p_url.lower()
+                if matched:
+                    product_name = _p.get("product_name", "")
+                    product_info["product_name"] = product_name
+                    product_info["price"] = _p.get("price", 0)
+                    product_info["image_url"] = _p.get("image_url", "")
+                    product_info["store_name"] = _p.get("store_name", "") or target_store
+                    product_info["brand"] = _p.get("brand", "")
+                    product_info["category1"] = _p.get("category1", "")
+                    product_info["category2"] = _p.get("category2", "")
+                    logger.info(f"SEO 보완 매칭 성공: {product_name[:30]} (pid: {target_pid})")
+                    break
+
+        # --- 기본 데이터 수집 ---
+        keyword_in_title = req.keyword.lower() in product_name.lower() if product_name else False
+        title_length = len(product_name)
+        special_chars = sum(1 for c in product_name if c in '!@#$%^&*()[]{}|<>★☆♥♡')
+
         my_price = product_info.get("price", 0)
         comp_prices = [c.get("price", 0) for c in competitors if c.get("price", 0) > 0]
         avg_comp_price = sum(comp_prices) / len(comp_prices) if comp_prices else 0
-        price_score = 0
-        if my_price > 0 and avg_comp_price > 0:
-            ratio = my_price / avg_comp_price
-            if ratio <= 0.85:
-                price_score = 100
-            elif ratio <= 1.0:
-                price_score = 80
-            elif ratio <= 1.15:
-                price_score = 60
-            elif ratio <= 1.3:
-                price_score = 40
-            else:
-                price_score = 20
 
-        # 3. 상품명 최적화 점수
+        # --- 10개 평가지표 계산 ---
+
+        # 1. 상품명 최적화 (15%)
         title_score = 0
         if keyword_in_title:
             title_score += 40
@@ -566,14 +588,28 @@ async def seo_analyze(req: SeoAnalysisRequest):
             title_score += 20
         else:
             title_score += 10
-        # 특수문자 과다 체크
-        special_chars = sum(1 for c in product_name if c in '!@#$%^&*()[]{}|<>★☆♥♡')
         if special_chars <= 2:
             title_score += 30
         elif special_chars <= 5:
             title_score += 15
 
-        # 4. 순위 점수
+        # 2. 가격 경쟁력 (12%)
+        price_score = 0
+        price_ratio = 0
+        if my_price > 0 and avg_comp_price > 0:
+            price_ratio = round(my_price / avg_comp_price, 2)
+            if price_ratio <= 0.85:
+                price_score = 100
+            elif price_ratio <= 1.0:
+                price_score = 80
+            elif price_ratio <= 1.15:
+                price_score = 60
+            elif price_ratio <= 1.3:
+                price_score = 40
+            else:
+                price_score = 20
+
+        # 3. 검색 순위 (15%)
         rank_score = 0
         if rank:
             if rank <= 10:
@@ -587,25 +623,182 @@ async def seo_analyze(req: SeoAnalysisRequest):
             else:
                 rank_score = 20
 
-        # 5. 종합 점수
-        total_score = int(title_score * 0.3 + price_score * 0.25 + rank_score * 0.35 + (30 if product_info.get("image_url") else 0) * 0.1)
+        # 4. 리뷰 추정 점수 (12%) — 순위 구간별 업계 평균 기반
+        review_score = 0
+        est_reviews = 0
+        if rank:
+            if rank <= 5:
+                est_reviews = 500
+                review_score = 95
+            elif rank <= 10:
+                est_reviews = 200
+                review_score = 80
+            elif rank <= 20:
+                est_reviews = 80
+                review_score = 60
+            elif rank <= 40:
+                est_reviews = 30
+                review_score = 40
+            elif rank <= 100:
+                est_reviews = 10
+                review_score = 25
+            else:
+                est_reviews = 3
+                review_score = 10
+        # 미노출 상품
+        if not rank:
+            review_score = 5
+            est_reviews = 0
 
-        # 6. 개선 제안 생성
+        # 5. 상품 평점 추정 (8%) — 상위권 상품은 평점이 높은 경향
+        rating_score = 0
+        est_rating = 0.0
+        if rank:
+            if rank <= 10:
+                est_rating = 4.7
+                rating_score = 90
+            elif rank <= 20:
+                est_rating = 4.5
+                rating_score = 75
+            elif rank <= 40:
+                est_rating = 4.3
+                rating_score = 60
+            elif rank <= 100:
+                est_rating = 4.0
+                rating_score = 45
+            else:
+                est_rating = 3.8
+                rating_score = 30
+        if not rank:
+            est_rating = 0
+            rating_score = 5
+
+        # 6. 판매실적 추정 (10%) — 순위 기반 CTR × 전환율 역산
+        sales_score = 0
+        est_monthly_sales = 0
+        if rank:
+            # 키워드 볼륨 조회
+            try:
+                vol_data = get_keyword_volume([req.keyword])
+                vol = vol_data[0] if vol_data else None
+                total_vol = (vol.get("monthlyPcQcCnt", 0) + vol.get("monthlyMobileQcCnt", 0)) if vol else 0
+            except Exception:
+                total_vol = 0
+
+            ctr_map = {1: 0.08, 2: 0.06, 3: 0.05, 4: 0.04, 5: 0.03}
+            ctr = ctr_map.get(rank, 0.015 if rank <= 10 else 0.008 if rank <= 20 else 0.003 if rank <= 40 else 0.001)
+            est_monthly_sales = max(1, round(total_vol * ctr * 0.035)) if total_vol > 0 else 0
+
+            if est_monthly_sales >= 100:
+                sales_score = 95
+            elif est_monthly_sales >= 50:
+                sales_score = 80
+            elif est_monthly_sales >= 20:
+                sales_score = 60
+            elif est_monthly_sales >= 5:
+                sales_score = 40
+            elif est_monthly_sales >= 1:
+                sales_score = 20
+        if not rank:
+            sales_score = 5
+
+        # 7. 카테고리 적합도 (8%)
+        category_score = 0
+        product_category = product_info.get("category2", "") or product_info.get("category1", "")
+        if product_category:
+            # 경쟁사 카테고리 중 가장 많은 것과 비교
+            comp_cats = [c.get("category2", "") or c.get("category1", "") for c in competitors if c.get("category2") or c.get("category1")]
+            if comp_cats:
+                from collections import Counter
+                most_common_cat = Counter(comp_cats).most_common(1)[0][0] if comp_cats else ""
+                if product_category == most_common_cat:
+                    category_score = 100
+                elif product_category in " ".join(comp_cats):
+                    category_score = 60
+                else:
+                    category_score = 30
+            else:
+                category_score = 50  # 비교 불가
+        else:
+            category_score = 20
+
+        # 8. 판매처/브랜드 파워 (8%)
+        brand_score = 0
+        product_brand = product_info.get("brand", "")
+        is_smartstore = "smartstore.naver.com" in product_url
+        if product_brand:
+            brand_score += 40
+        if is_smartstore:
+            brand_score += 30  # 스마트스토어 = 네이버 플랫폼 우대
+        if product_info.get("store_name"):
+            brand_score += 30
+        brand_score = min(brand_score, 100)
+
+        # 9. 네이버페이 여부 (6%)
+        naverpay_score = 0
+        has_naverpay = is_smartstore  # 스마트스토어는 기본 네이버페이
+        if has_naverpay:
+            naverpay_score = 100
+        else:
+            # 외부 쇼핑몰도 네이버페이 연동 가능 (확인 불가하므로 50점)
+            naverpay_score = 50
+
+        # 10. 최신성 점수 (6%) — 순위 기반 간접 추정
+        freshness_score = 0
+        if rank:
+            if rank <= 20:
+                freshness_score = 80  # 상위 노출 = 최근 활성화 가능성 높음
+            elif rank <= 40:
+                freshness_score = 60
+            elif rank <= 100:
+                freshness_score = 40
+            else:
+                freshness_score = 20
+        if not rank:
+            freshness_score = 10
+
+        # --- 종합 점수 (가중 합산) ---
+        weights = {
+            'title': 0.15, 'price': 0.12, 'rank': 0.15,
+            'review': 0.12, 'rating': 0.08, 'sales': 0.10,
+            'category': 0.08, 'brand': 0.08, 'naverpay': 0.06,
+            'freshness': 0.06
+        }
+        total_score = int(
+            title_score * weights['title'] +
+            price_score * weights['price'] +
+            rank_score * weights['rank'] +
+            review_score * weights['review'] +
+            rating_score * weights['rating'] +
+            sales_score * weights['sales'] +
+            category_score * weights['category'] +
+            brand_score * weights['brand'] +
+            naverpay_score * weights['naverpay'] +
+            freshness_score * weights['freshness']
+        )
+
+        # --- 개선 제안 ---
         suggestions = []
         if not keyword_in_title:
             suggestions.append(f"상품명에 '{req.keyword}' 키워드를 포함시키세요.")
         if title_length < 15:
-            suggestions.append("상품명이 너무 짧습니다. 핵심 키워드를 추가하세요.")
+            suggestions.append("상품명이 너무 짧습니다. 핵심 키워드와 속성을 추가하세요.")
         elif title_length > 60:
-            suggestions.append("상품명이 길어 가독성이 낮을 수 있습니다.")
+            suggestions.append("상품명이 너무 길면 가독성이 떨어집니다. 50자 이내를 권장합니다.")
         if special_chars > 3:
             suggestions.append("특수문자 사용을 줄이면 검색 노출에 유리합니다.")
-        if my_price > avg_comp_price * 1.2 and avg_comp_price > 0:
-            suggestions.append(f"경쟁 상품 대비 가격이 높습니다 (평균 {int(avg_comp_price):,}원).")
+        if price_ratio > 1.2 and avg_comp_price > 0:
+            suggestions.append(f"경쟁 상품 대비 가격이 {int((price_ratio-1)*100)}% 높습니다. 가격 조정을 검토하세요.")
         if not rank:
             suggestions.append("200위 내 미노출 — 키워드 재설정 또는 상품명 최적화가 필요합니다.")
+        if review_score < 50:
+            suggestions.append("리뷰 수가 부족합니다. 구매 후기 이벤트나 포토리뷰 유도를 추천합니다.")
+        if not has_naverpay:
+            suggestions.append("네이버페이 연동 시 구매 전환율과 노출 순위가 개선됩니다.")
+        if brand_score < 50:
+            suggestions.append("브랜드명을 등록하고 스마트스토어 입점을 고려하세요.")
         if not suggestions:
-            suggestions.append("전반적으로 양호합니다. 리뷰 확보에 집중하세요.")
+            suggestions.append("전반적으로 양호합니다! 리뷰 확보와 찜 유도에 집중하세요.")
 
         return {
             "success": True,
@@ -617,6 +810,13 @@ async def seo_analyze(req: SeoAnalysisRequest):
                     "title": title_score,
                     "price": price_score,
                     "rank": rank_score,
+                    "review": review_score,
+                    "rating": rating_score,
+                    "sales": sales_score,
+                    "category": category_score,
+                    "brand": brand_score,
+                    "naverpay": naverpay_score,
+                    "freshness": freshness_score,
                     "detail": {
                         "keyword_in_title": keyword_in_title,
                         "title_length": title_length,
@@ -624,8 +824,17 @@ async def seo_analyze(req: SeoAnalysisRequest):
                         "current_rank": rank,
                         "my_price": my_price,
                         "avg_competitor_price": int(avg_comp_price),
+                        "price_ratio": price_ratio,
+                        "est_reviews": est_reviews,
+                        "est_rating": est_rating,
+                        "est_monthly_sales": est_monthly_sales,
+                        "has_naverpay": has_naverpay,
+                        "is_smartstore": is_smartstore,
+                        "product_brand": product_brand,
+                        "product_category": product_category,
                     }
                 },
+                "weights": weights,
                 "suggestions": suggestions,
                 "competitors": competitors[:5],
                 "analyzed_at": datetime.now().isoformat(),
@@ -712,6 +921,31 @@ async def related_keywords(req: RelatedKeywordRequest):
                         import logging as _log
                         _log.getLogger(__name__).warning(f"검색광고 API 요청 실패 (재시도 소진): {retry_err}")
 
+            # 스토어명/사업자명 필터용 패턴
+            import re as _re
+            # 스토어명/브랜드명 패턴: 영문+숫자 조합(shop123), 한글 고유명사 느낌(OO상사, OO몰)
+            store_suffixes = ['스토어', '몰', '마켓', '샵', 'store', 'shop', 'mall', 'market',
+                              '공식', '본사', '직영', '판매', '무역', '상사', '유통', '컴퍼니',
+                              '코리아', '글로벌', '엔터', '그룹', '홈', '닷컴', '.com', '.co.kr']
+
+            def _is_likely_store_name(kw, seed):
+                """스토어명/사업자명일 가능성이 높은 키워드 필터링"""
+                kw_lower = kw.lower().strip()
+                seed_lower = seed.lower().strip()
+                # 1. 시드 키워드의 핵심 단어가 포함되지 않으면 노이즈
+                seed_words = [w for w in seed_lower.split() if len(w) >= 2]
+                has_seed_match = any(w in kw_lower for w in seed_words) if seed_words else (seed_lower in kw_lower)
+                # 2. 스토어/사업자 접미사 체크
+                has_store_suffix = any(s in kw_lower for s in store_suffixes)
+                # 3. 영문만으로 구성된 짧은 키워드 (브랜드명 가능성)
+                is_short_english = len(kw) <= 12 and _re.match(r'^[a-zA-Z0-9]+$', kw)
+                # 스토어명 판정: 시드 키워드와 무관 + 스토어 접미사 포함, 또는 시드와 무관한 영문 단독
+                if has_store_suffix and not has_seed_match:
+                    return True
+                if is_short_english and not has_seed_match:
+                    return True
+                return False
+
             for kd in data.get("keywordList", []):
                 rel_kw = kd.get("relKeyword", "")
                 pc = _safe_int(kd.get("monthlyPcQcCnt"))
@@ -719,10 +953,18 @@ async def related_keywords(req: RelatedKeywordRequest):
                 total_volume = pc + mobile
                 comp_idx = kd.get("compIdx", "")
 
-                # 황금키워드 판별: 검색량 적당 + 경쟁 낮음
+                # 스토어명/사업자명 필터
+                is_store = _is_likely_store_name(rel_kw, req.keyword)
+
+                # 황금키워드 판별: 검색량 적당 + 경쟁 낮음 + 스토어명 아님 + 시드 키워드 관련성
+                seed_words = [w for w in req.keyword.lower().split() if len(w) >= 2]
+                has_relevance = any(w in rel_kw.lower() for w in seed_words) if seed_words else (req.keyword.lower() in rel_kw.lower())
+
                 is_golden = (
                     100 <= total_volume <= 5000 and
-                    comp_idx in ("낮음", "LOW", "")
+                    comp_idx in ("낮음", "LOW", "") and
+                    not is_store and
+                    has_relevance
                 )
 
                 all_keywords.append({
@@ -732,6 +974,7 @@ async def related_keywords(req: RelatedKeywordRequest):
                     "totalVolume": total_volume,
                     "compIdx": comp_idx,
                     "isGolden": is_golden,
+                    "isStoreName": is_store,
                     "monthlyAvePcClkCnt": _safe_float(kd.get("monthlyAvePcClkCnt")),
                     "monthlyAveMobileClkCnt": _safe_float(kd.get("monthlyAveMobileClkCnt")),
                 })
@@ -859,6 +1102,30 @@ async def advertiser_analyze(req: AdvertiserAnalysisRequest):
         # 1) 광고주 상품 정보 조회
         product_info = get_product_info(req.product_url)
 
+        # get_product_info 실패 시 (스마트스토어 ID ≠ nvMid) → 키워드 검색에서 productId로 보완
+        if not product_info.get("product_name"):
+            from naver_crawler import extract_product_id_from_url as _extract_pid
+            from naver_crawler import extract_store_name_from_url as _extract_store
+            from naver_crawler import search_products as _sp
+            target_pid = _extract_pid(req.product_url) or ""
+            target_store = _extract_store(req.product_url) or ""
+            _prods = _sp(req.keyword, max_results=200)
+            for _p in _prods:
+                p_url = _p.get("product_url", "")
+                p_pid = _p.get("product_id", "")
+                matched = target_pid and (target_pid in p_url or target_pid == p_pid)
+                if not matched and target_store:
+                    matched = target_store.lower() in p_url.lower()
+                if matched:
+                    product_info["product_name"] = _p.get("product_name", "")
+                    product_info["price"] = _p.get("price", 0)
+                    product_info["image_url"] = _p.get("image_url", "")
+                    product_info["store_name"] = _p.get("store_name", "") or target_store
+                    product_info["brand"] = _p.get("brand", "")
+                    product_info["category"] = _p.get("category2") or _p.get("category1") or ""
+                    logger.info(f"광고주분석 보완 매칭 성공: {product_info['product_name'][:30]} (pid: {target_pid})")
+                    break
+
         # 2) 키워드로 순위 검색
         rank, page, top_competitors = find_product_rank(
             keyword=req.keyword, product_url=req.product_url, max_pages=4
@@ -906,96 +1173,321 @@ async def advertiser_analyze(req: AdvertiserAnalysisRequest):
             sum(1 for c in competitor_comparison if c["has_keyword_in_name"]) / len(competitor_comparison) * 100, 1
         ) if competitor_comparison else 0
 
-        # 5) 1페이지 진입 전략 분석
+        # 5) 마케터 관점 심층 전략 분석
         strategies = []
-
-        # 가격 전략
-        if my_price > 0 and avg_price > 0:
-            price_ratio = my_price / avg_price
-            if price_ratio > 1.2:
-                strategies.append({
-                    "area": "가격",
-                    "status": "개선 필요",
-                    "severity": "high",
-                    "current": f"{my_price:,}원",
-                    "target": f"{avg_price:,}원 이하",
-                    "detail": f"경쟁 상품 평균가 대비 {round((price_ratio - 1) * 100)}% 높음. 가격 조정 또는 할인 이벤트를 검토하세요."
-                })
-            elif price_ratio > 1.0:
-                strategies.append({
-                    "area": "가격",
-                    "status": "보통",
-                    "severity": "medium",
-                    "current": f"{my_price:,}원",
-                    "target": f"{avg_price:,}원 이하",
-                    "detail": f"경쟁 상품 평균가와 비슷한 수준입니다. 추가 할인이나 묶음 판매를 고려하세요."
-                })
-            else:
-                strategies.append({
-                    "area": "가격",
-                    "status": "양호",
-                    "severity": "low",
-                    "current": f"{my_price:,}원",
-                    "target": f"현재 유지",
-                    "detail": f"경쟁 상품 평균가({avg_price:,}원)보다 낮아 가격 경쟁력이 있습니다."
-                })
-        elif my_price == 0:
-            strategies.append({
-                "area": "가격",
-                "status": "확인 불가",
-                "severity": "medium",
-                "current": "정보 없음",
-                "target": f"평균 {avg_price:,}원 참고",
-                "detail": "상품 가격 정보를 불러올 수 없습니다. URL을 확인하세요."
-            })
-
-        # 상품명 전략
         my_has_keyword = req.keyword.lower() in my_name.lower() if my_name else False
         my_name_len = len(my_name)
-        if not my_has_keyword:
-            strategies.append({
-                "area": "상품명 키워드",
-                "status": "개선 필요",
-                "severity": "high",
-                "current": "미포함",
-                "target": f"'{req.keyword}' 포함",
-                "detail": f"상품명에 '{req.keyword}' 키워드가 없습니다. 1페이지 상품의 {keyword_in_name_ratio}%가 키워드를 포함하고 있습니다."
-            })
+
+        # ── 경쟁사 패턴 심층 분석 ──
+        top5 = page1_products[:5] if page1_products else []
+        top10 = page1_products[:10] if page1_products else []
+
+        # 가격대 분포 분석
+        price_bands = {"저가": 0, "중가": 0, "고가": 0}
+        if avg_price > 0:
+            for p in prices:
+                if p < avg_price * 0.7:
+                    price_bands["저가"] += 1
+                elif p > avg_price * 1.3:
+                    price_bands["고가"] += 1
+                else:
+                    price_bands["중가"] += 1
+        dominant_band = max(price_bands, key=price_bands.get) if any(price_bands.values()) else "중가"
+
+        # 브랜드 집중도 분석
+        brand_map = {}
+        store_map = {}
+        for p in page1_products[:20]:
+            b = p.get("brand") or ""
+            s = p.get("store_name") or ""
+            if b:
+                brand_map[b] = brand_map.get(b, 0) + 1
+            if s:
+                store_map[s] = store_map.get(s, 0) + 1
+        top_brands = sorted(brand_map.items(), key=lambda x: -x[1])[:3]
+        top_stores = sorted(store_map.items(), key=lambda x: -x[1])[:3]
+        brand_concentration = (top_brands[0][1] / 20 * 100) if top_brands else 0
+
+        # 카테고리 분석
+        cat_map = {}
+        for p in page1_products[:20]:
+            cat = p.get("category2") or p.get("category1") or "기타"
+            cat_map[cat] = cat_map.get(cat, 0) + 1
+        top_cat = max(cat_map, key=cat_map.get) if cat_map else "-"
+        cat_share = round(cat_map.get(top_cat, 0) / max(len(page1_products[:20]), 1) * 100)
+
+        # 상품명 키워드 위치 패턴 분석
+        kw_front_count = 0  # 키워드가 상품명 앞부분(30%)에 위치
+        kw_total = 0
+        for p in page1_products[:20]:
+            pname = p.get("product_name", "")
+            kw_pos = pname.lower().find(req.keyword.lower())
+            if kw_pos >= 0:
+                kw_total += 1
+                if kw_pos < len(pname) * 0.3:
+                    kw_front_count += 1
+
+        # 상위 5개 공통 키워드 패턴 추출
+        from collections import Counter
+        all_words = []
+        for p in top5:
+            words = p.get("product_name", "").replace("[", " ").replace("]", " ").replace("/", " ").split()
+            all_words.extend([w for w in words if len(w) >= 2 and w.lower() != req.keyword.lower()])
+        common_words = [w for w, c in Counter(all_words).most_common(8) if c >= 2]
+
+        # TOP5 평균가
+        top5_prices = [p["price"] for p in top5 if p.get("price", 0) > 0]
+        top5_avg = int(sum(top5_prices) / len(top5_prices)) if top5_prices else avg_price
+
+        # ── 전략 1: 가격 포지셔닝 & 소구점 전략 ──
+        price_insights = []
+        price_actions = []
+        if my_price > 0 and avg_price > 0:
+            price_ratio = my_price / avg_price
+            top5_ratio = my_price / top5_avg if top5_avg > 0 else 1
+            if price_ratio > 1.2:
+                price_insights.append(f"현재 가격({my_price:,}원)이 경쟁 평균({avg_price:,}원) 대비 {round((price_ratio-1)*100)}% 높습니다. 이 가격대에서는 '프리미엄 소구'가 필수입니다.")
+                price_insights.append(f"1페이지 가격 분포: 저가 {price_bands['저가']}개 | 중가 {price_bands['중가']}개 | 고가 {price_bands['고가']}개 — {dominant_band} 상품이 지배적입니다.")
+                price_actions.append("프리미엄 전략: 상세페이지에 '원재료 차별화', '제조 공정', '인증' 등 가격 정당성을 시각적으로 어필하세요.")
+                price_actions.append(f"가격 심리 전략: {avg_price:,}원대 쿠폰(첫구매 할인, 리뷰 적립)으로 실구매가를 경쟁가 수준으로 맞추세요.")
+                price_actions.append("묶음/세트 구성으로 개당 단가를 낮추면 가격 비교에서 유리해집니다.")
+            elif price_ratio < 0.8:
+                price_insights.append(f"현재 가격({my_price:,}원)이 경쟁 평균({avg_price:,}원) 대비 {round((1-price_ratio)*100)}% 저렴합니다. 가성비를 핵심 소구점으로 활용하세요.")
+                price_insights.append(f"TOP5 평균({top5_avg:,}원)과 비교하면 진입 장벽이 낮아 초기 판매량 확보에 유리합니다.")
+                price_actions.append("상품명/썸네일에 '가성비', '최저가', '특가' 등 가격 메리트를 직접 표기하세요.")
+                price_actions.append("저가 포지션의 약점(품질 의심)을 상세페이지 리뷰 섹션과 인증서로 보완하세요.")
+                price_actions.append(f"마진 여유가 있다면 '무료배송' 또는 '사은품 증정'으로 전환율을 높이세요.")
+            else:
+                price_insights.append(f"현재 가격({my_price:,}원)이 경쟁 평균({avg_price:,}원)과 유사한 적정가 구간입니다.")
+                price_insights.append(f"가격 차별화가 어려운 구간이므로 '비가격 경쟁력'이 핵심입니다.")
+                price_actions.append("같은 가격이면 '무료배송', '당일출고', '사은품'이 클릭률을 좌우합니다.")
+                price_actions.append("네이버페이 적립, 카드 즉시할인 등 체감 할인 요소를 적극 활용하세요.")
+                price_actions.append("후기 수가 적다면 '리뷰 이벤트'로 초기 신뢰도를 확보하는 게 가격보다 중요합니다.")
         else:
-            strategies.append({
-                "area": "상품명 키워드",
-                "status": "양호",
-                "severity": "low",
-                "current": "포함됨",
-                "target": "유지",
-                "detail": f"상품명에 '{req.keyword}' 키워드가 잘 포함되어 있습니다."
-            })
+            price_insights.append(f"상품 가격 정보를 확인할 수 없습니다. 1페이지 평균가는 {avg_price:,}원입니다.")
+            price_actions.append(f"경쟁 상품 가격대({min_price:,}~{max_price:,}원)를 참고해 포지셔닝을 결정하세요.")
+            price_actions.append(f"TOP5 평균가({top5_avg:,}원) 이하로 진입하면 초기 클릭률 확보에 유리합니다.")
 
-        if my_name_len > 0 and (my_name_len < 15 or my_name_len > 60):
-            strategies.append({
-                "area": "상품명 길이",
-                "status": "개선 필요",
-                "severity": "medium",
-                "current": f"{my_name_len}자",
-                "target": f"20~50자 (평균 {avg_name_length}자)",
-                "detail": "1페이지 상품의 평균 상품명 길이는 {:.0f}자입니다. 적절한 길이로 조정하세요.".format(avg_name_length)
-            })
+        # 가격 전략별 추천 광고 품목
+        price_recs = []
+        if my_price > 0 and avg_price > 0 and my_price / avg_price > 1.2:
+            price_recs = [
+                {"name": "체험단 마케팅", "reason": "프리미엄 가격의 정당성을 실사용 후기로 증명하여 구매 전환율을 높일 수 있습니다."},
+                {"name": "고객 참여형 이벤트", "reason": "알림받기·리뷰 이벤트로 가격 부담을 상쇄하는 혜택을 제공하세요."},
+                {"name": "올해의 시상·수상·선정 상패", "reason": "수상 이력은 프리미엄 가격의 가장 강력한 근거입니다. 썸네일과 상세페이지에 배치하세요."},
+            ]
+        elif my_price > 0 and avg_price > 0 and my_price / avg_price < 0.8:
+            price_recs = [
+                {"name": "쇼핑검색광고", "reason": "가격 경쟁력이 있으므로 광고 노출만 확보하면 클릭률과 전환율이 높을 수 있습니다."},
+                {"name": "CPA 리워드 마케팅", "reason": "저렴한 가격 + 리워드 혜택으로 초기 구매 건수를 빠르게 쌓을 수 있습니다."},
+                {"name": "성과형 디스플레이 광고", "reason": "가성비 소구로 넓은 타겟에게 노출 시 전환 효율이 높습니다."},
+            ]
+        else:
+            price_recs = [
+                {"name": "고객 참여형 이벤트", "reason": "비슷한 가격대에서는 리뷰 이벤트·알림받기로 체감 혜택을 만들어 차별화하세요."},
+                {"name": "마케팅 메세지", "reason": "기존 고객에게 재구매 유도 메세지를 발송하여 반복 매출을 확보하세요."},
+            ]
 
-        # 카테고리 전략
-        if page1_products:
-            cat_map = {}
-            for p in page1_products[:20]:
-                cat = p.get("category2") or p.get("category1") or "기타"
-                cat_map[cat] = cat_map.get(cat, 0) + 1
-            top_cat = max(cat_map, key=cat_map.get) if cat_map else "-"
-            strategies.append({
-                "area": "카테고리",
-                "status": "참고",
-                "severity": "info",
-                "current": product_info.get("category", "-"),
-                "target": top_cat,
-                "detail": f"1페이지 상위 상품의 주요 카테고리는 '{top_cat}'입니다. 카테고리 설정을 확인하세요."
-            })
+        strategies.append({
+            "area": "가격 포지셔닝 & 소구점",
+            "icon": "💰",
+            "severity": "high" if my_price > 0 and avg_price > 0 and my_price / avg_price > 1.2 else "low" if my_price > 0 and avg_price > 0 and my_price / avg_price < 0.8 else "medium",
+            "insights": price_insights,
+            "actions": price_actions,
+            "recommendations": price_recs,
+        })
+
+        # ── 전략 2: 상품명 SEO 최적화 전략 ──
+        seo_insights = []
+        seo_actions = []
+        if my_name:
+            if my_has_keyword:
+                kw_pos = my_name.lower().find(req.keyword.lower())
+                pos_pct = round(kw_pos / max(len(my_name), 1) * 100)
+                seo_insights.append(f"핵심 키워드 '{req.keyword}'가 상품명의 {pos_pct}% 지점에 위치합니다." + (" 앞부분 배치로 SEO에 유리합니다." if pos_pct < 30 else " 가능하면 앞부분(30% 이내)에 배치하면 노출 확률이 높아집니다."))
+            else:
+                seo_insights.append(f"상품명에 '{req.keyword}' 키워드가 없습니다. 1페이지 상품 중 {keyword_in_name_ratio}%가 포함하고 있어 필수 삽입이 필요합니다.")
+                seo_actions.append(f"상품명 앞부분에 '{req.keyword}'를 반드시 추가하세요. 키워드 앞부분 배치가 검색 노출에 가장 큰 영향을 줍니다.")
+
+            seo_insights.append(f"현재 상품명 길이: {my_name_len}자 (1페이지 평균: {avg_name_length:.0f}자)")
+            if kw_total > 0:
+                seo_insights.append(f"1페이지 상품 중 {round(kw_front_count/max(kw_total,1)*100)}%가 키워드를 상품명 앞쪽에 배치하고 있습니다.")
+
+            if common_words:
+                seo_actions.append(f"TOP5 상품에서 반복 등장하는 키워드: [{', '.join(common_words[:5])}] — 이 중 빠진 단어가 있다면 상품명에 추가를 검토하세요.")
+            seo_actions.append(f"네이버 쇼핑은 상품명 앞 40자를 중요하게 봅니다. 핵심 키워드를 앞에, 부가 정보(용량, 수량)는 뒤에 배치하세요.")
+            seo_actions.append("특수문자(★, ●, ♥)는 네이버 알고리즘에서 감점 요인입니다. 대괄호[  ]와 슬래시만 사용하세요.")
+        else:
+            seo_insights.append("상품명 정보를 불러올 수 없습니다.")
+            if common_words:
+                seo_actions.append(f"1페이지 TOP5 공통 키워드: [{', '.join(common_words[:5])}] — 상품명 작성 시 참고하세요.")
+
+        seo_recs = [
+            {"name": "SEO 최적화", "reason": "상품명·카테고리·속성값 전반을 전문가가 진단하고 최적화하여 자연 검색 노출을 극대화합니다."},
+            {"name": "쇼핑검색광고 자동입찰 프로그램", "reason": "SEO 최적화와 병행하면 자연 순위 + 광고 순위 동시 노출로 CTR을 2~3배 높일 수 있습니다."},
+        ]
+        if not my_has_keyword:
+            seo_recs.append({"name": "쇼핑검색광고", "reason": "상품명 최적화 전까지 광고로 즉시 노출을 확보하여 판매 데이터를 축적하세요."})
+
+        strategies.append({
+            "area": "상품명 SEO 최적화",
+            "icon": "🔍",
+            "severity": "high" if not my_has_keyword else "low",
+            "insights": seo_insights,
+            "actions": seo_actions,
+            "recommendations": seo_recs,
+        })
+
+        # ── 전략 3: 경쟁 환경 & 차별화 방향 ──
+        comp_insights = []
+        comp_actions = []
+        if top_brands:
+            brand_names = ', '.join([f"{b[0]}({b[1]}개)" for b in top_brands])
+            comp_insights.append(f"상위 노출 브랜드: {brand_names}")
+            if brand_concentration >= 30:
+                comp_insights.append(f"상위 1개 브랜드가 {brand_concentration:.0f}%를 점유 — 브랜드 독점형 시장입니다. 정면 경쟁보다 틈새 소구가 유효합니다.")
+                comp_actions.append("독점 브랜드와 다른 USP(Unique Selling Point)를 찾으세요. 예: 소량 패키지, 특수 원재료, 지역 특산, 수제/프리미엄 등")
+            else:
+                comp_insights.append(f"특정 브랜드 독점 없이 다양한 셀러가 경쟁 중 — 신규 진입 기회가 열려 있습니다.")
+                comp_actions.append("브랜드 파워보다 '상세페이지 퀄리티'와 '리뷰 수'가 승부를 가릅니다.")
+
+        if top_stores:
+            store_names = ', '.join([s[0] for s in top_stores[:3]])
+            comp_insights.append(f"주요 경쟁 스토어: {store_names}")
+
+        comp_insights.append(f"주요 카테고리: '{top_cat}' (점유율 {cat_share}%)")
+        if cat_share >= 70:
+            comp_actions.append(f"카테고리를 '{top_cat}'으로 반드시 맞추세요. 다른 카테고리 설정 시 노출 자체가 불리합니다.")
+        else:
+            comp_actions.append(f"'{top_cat}' 카테고리가 가장 많지만 다양한 카테고리가 공존합니다. 상품 특성에 맞는 카테고리를 선택하되, 상위 상품과 같은 카테고리면 유리합니다.")
+
+        if rank:
+            if rank <= 10:
+                comp_actions.append("이미 1페이지 상위권입니다. 현재 포지션을 유지하면서 클릭률(CTR)과 전환율 개선에 집중하세요.")
+            elif rank <= 40:
+                target_rank = max(1, rank - 10)
+                comp_actions.append(f"현재 {rank}위로 1페이지 내 위치합니다. {target_rank}위권 진입을 목표로 리뷰 확보와 판매량 부스팅이 필요합니다.")
+            else:
+                comp_actions.append(f"현재 {rank}위(1페이지 밖)입니다. 네이버 쇼핑 광고(파워링크/쇼핑검색광고)로 초기 노출을 확보한 뒤, 판매 실적으로 자연 순위를 끌어올리는 2단계 전략을 추천합니다.")
+        else:
+            comp_actions.append("검색 결과에 노출되지 않고 있습니다. 네이버 쇼핑 광고 집행 + 상품명 최적화를 동시에 진행해 초기 데이터를 쌓으세요.")
+
+        comp_recs = []
+        if not rank or rank > 40:
+            comp_recs = [
+                {"name": "쇼핑검색광고", "reason": "1페이지 밖이라면 광고가 가장 빠른 노출 확보 수단입니다. 초기 판매 실적을 쌓아 자연 순위를 끌어올리세요."},
+                {"name": "외부 플랫폼 광고", "reason": "쿠팡·토스·당근 등 외부 채널로 유입 경로를 다변화하면 네이버 의존도를 낮추고 총 매출을 키울 수 있습니다."},
+                {"name": "성과형 디스플레이 광고", "reason": "네이버 메인·서브 지면에 배너 노출로 브랜드 인지도와 스토어 유입을 동시에 확보합니다."},
+            ]
+        elif rank > 10:
+            comp_recs = [
+                {"name": "쇼핑검색광고 자동입찰 프로그램", "reason": "자동입찰로 효율적인 광고비 운용 + 상위 노출을 유지하여 자연 순위 상승을 가속화합니다."},
+                {"name": "외부 매체 광고", "reason": "모비온·구글GDN·메타광고로 리타겟팅하면 이탈 고객을 재유입하여 전환율을 높입니다."},
+                {"name": "픽셀 설치", "reason": "고객 모수를 확보하면 리타겟팅 광고의 정확도가 올라가 광고 효율이 크게 개선됩니다."},
+            ]
+        else:
+            comp_recs = [
+                {"name": "언론 기사", "reason": "상위권 유지 단계에서는 뉴스 기사 배포로 브랜드 신뢰도를 강화하여 경쟁사와 격차를 벌리세요."},
+                {"name": "올해의 시상·수상·선정 상패", "reason": "수상 이력 확보 시 썸네일·상세페이지에 배치하면 클릭률과 전환율 모두 상승합니다."},
+                {"name": "SNS 영상 광고", "reason": "유튜브·인스타그램 영상으로 브랜드 팬층을 확보하면 자연 검색량 자체가 증가합니다."},
+            ]
+
+        strategies.append({
+            "area": "경쟁 환경 & 차별화 방향",
+            "icon": "⚔️",
+            "severity": "high" if (not rank or rank > 40) else "medium" if rank > 10 else "low",
+            "insights": comp_insights,
+            "actions": comp_actions,
+            "recommendations": comp_recs,
+        })
+
+        # ── 전략 4: 전환율 극대화 (상세페이지 & 리뷰) ──
+        conv_insights = []
+        conv_actions = []
+        if rank and rank <= 40:
+            conv_insights.append(f"1페이지에 노출되고 있으나, 노출 → 클릭 → 구매 전환 파이프라인에서 각 단계의 이탈을 최소화해야 합니다.")
+        else:
+            conv_insights.append("노출이 확보되면 전환율이 매출을 결정합니다. 미리 상세페이지와 리뷰를 준비해두세요.")
+
+        conv_actions.append("썸네일 최적화: 1페이지 경쟁 상품과 나란히 놓고 비교해보세요. 흰 배경 + 제품 클로즈업 + 핵심 문구 1줄이 클릭률이 가장 높습니다.")
+        conv_actions.append("상세페이지 첫 3스크롤이 구매를 결정합니다. ①핵심 베네핏 ②사용 후기/인증 ③스펙 비교표 순서로 구성하세요.")
+        conv_actions.append("리뷰 30개 이상이 전환율 임계점입니다. 초기에 '포토리뷰 이벤트'로 빠르게 확보하세요. 텍스트 리뷰보다 포토리뷰가 2.3배 전환에 기여합니다.")
+        conv_actions.append("구매 결정 장벽을 낮추세요: '100% 환불 보장', '무료 교환', '당일 출고' 문구가 전환율을 평균 15~25% 높입니다.")
+
+        conv_recs = [
+            {"name": "체험단 마케팅", "reason": "실사용 포토리뷰가 누적되면 상세페이지 체류 시간과 구매 전환율이 동시에 상승합니다."},
+            {"name": "고객 참여형 이벤트", "reason": "리뷰 이벤트로 포토리뷰 30개 이상을 빠르게 확보하세요. 전환율 임계점을 돌파하는 가장 효율적인 방법입니다."},
+            {"name": "CPA 리워드 마케팅", "reason": "구매 완료 시 리워드를 제공하면 초기 판매 건수를 빠르게 확보하고 리뷰도 동시에 쌓을 수 있습니다."},
+            {"name": "픽셀 설치", "reason": "방문 고객 데이터를 수집하면 리타겟팅 광고로 이탈 고객을 재전환할 수 있어 전환율이 크게 개선됩니다."},
+        ]
+
+        strategies.append({
+            "area": "전환율 극대화 전략",
+            "icon": "🎯",
+            "severity": "medium",
+            "insights": conv_insights,
+            "actions": conv_actions,
+            "recommendations": conv_recs,
+        })
+
+        # ── 전략 5: 실행 로드맵 (즉시/1주/1개월) ──
+        roadmap_actions = []
+        # 즉시
+        immediate = []
+        if not my_has_keyword:
+            immediate.append(f"상품명에 '{req.keyword}' 키워드 추가")
+        if my_price > 0 and avg_price > 0 and my_price / avg_price > 1.2:
+            immediate.append("첫구매 쿠폰 또는 할인 이벤트 설정")
+        immediate.append("썸네일 이미지 경쟁사 대비 점검 및 개선")
+        immediate.append("배송 정보(당일출고, 무료배송) 확인 및 강조")
+        roadmap_actions.append(f"[즉시 실행] {' / '.join(immediate)}")
+
+        # 1주 내
+        week1 = ["포토리뷰 이벤트 기획 및 시작", "상세페이지 상단 3스크롤 리뉴얼"]
+        if not rank or rank > 40:
+            week1.append("네이버 쇼핑검색광고 세팅 (일예산 3~5만원 권장)")
+        roadmap_actions.append(f"[1주 내] {' / '.join(week1)}")
+
+        # 1개월 내
+        month1 = ["리뷰 30개 이상 확보 목표", "검색 순위 변동 모니터링 (본 도구 활용)"]
+        if rank and rank <= 40:
+            month1.append(f"목표 순위: {max(1, rank-10)}위권 진입")
+        else:
+            month1.append("목표: 1페이지(40위 이내) 진입")
+        roadmap_actions.append(f"[1개월 내] {' / '.join(month1)}")
+
+        roadmap_recs = []
+        if not rank or rank > 40:
+            roadmap_recs = [
+                {"name": "쇼핑검색광고", "reason": "[즉시] 1페이지 미노출 상태에서 가장 빠르게 노출을 확보하는 핵심 수단입니다."},
+                {"name": "체험단 마케팅", "reason": "[1주 내] 리뷰 0건에서 시작한다면, 체험단으로 포토리뷰 10~20개를 2주 내 확보하세요."},
+                {"name": "SEO 최적화", "reason": "[즉시~1주] 상품명·카테고리·속성 최적화는 모든 전략의 기반입니다. 가장 먼저 진행하세요."},
+                {"name": "마케팅 메세지", "reason": "[1개월] 구매 고객에게 재구매·리뷰 유도 메세지를 발송하여 지속 성장 구조를 만드세요."},
+            ]
+        elif rank > 10:
+            roadmap_recs = [
+                {"name": "쇼핑검색광고 자동입찰 프로그램", "reason": "[즉시] 효율적 입찰로 광고비를 절감하면서 상위 노출을 유지하세요."},
+                {"name": "고객 참여형 이벤트", "reason": "[1주 내] 리뷰 이벤트로 전환율 임계점(30개)을 돌파하세요."},
+                {"name": "외부 매체 광고", "reason": "[1개월] 리타겟팅으로 이탈 고객을 재유입하여 매출을 극대화하세요."},
+            ]
+        else:
+            roadmap_recs = [
+                {"name": "SNS 영상 광고", "reason": "[1주 내] 상위권 유지 중이므로 브랜드 인지도를 키워 자연 검색량을 늘리세요."},
+                {"name": "언론 기사", "reason": "[1개월] 뉴스 기사로 브랜드 권위를 확보하면 경쟁사 진입 장벽이 됩니다."},
+                {"name": "올해의 시상·수상·선정 상패", "reason": "[1개월] 수상 배지를 썸네일에 표시하면 CTR이 평균 20% 이상 상승합니다."},
+            ]
+
+        strategies.append({
+            "area": "실행 로드맵",
+            "icon": "📋",
+            "severity": "info",
+            "insights": [
+                f"'{req.keyword}' 키워드로 1페이지 진입/상위권 달성을 위한 단계별 실행 계획입니다.",
+                "각 단계를 순서대로 실행하면 가장 효율적으로 순위를 개선할 수 있습니다."
+            ],
+            "actions": roadmap_actions,
+            "recommendations": roadmap_recs,
+        })
 
         # 전체 종합 점수 계산
         score = 50

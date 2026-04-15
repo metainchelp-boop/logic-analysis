@@ -1,7 +1,7 @@
 /* RelatedKeywordsSection — 연관/황금 키워드 */
 window.RelatedKeywordsSection = function RelatedKeywordsSection({ data }) {
     const { useState } = React;
-    const [tab, setTab] = useState('golden');
+    const [tab, setTab] = useState('related');
     if (!data) return null;
 
     const goldenList = data.golden_keywords || [];
@@ -20,11 +20,11 @@ window.RelatedKeywordsSection = function RelatedKeywordsSection({ data }) {
                 </div>
 
                 <div className="tab-bar">
-                    <button className={`tab-btn ${tab === 'golden' ? 'active' : ''}`} onClick={() => setTab('golden')}>
-                        황금 키워드 ({goldenList.length})
-                    </button>
                     <button className={`tab-btn ${tab === 'related' ? 'active' : ''}`} onClick={() => setTab('related')}>
                         연관 키워드 ({relatedList.length})
+                    </button>
+                    <button className={`tab-btn ${tab === 'golden' ? 'active' : ''}`} onClick={() => setTab('golden')}>
+                        황금 키워드 ({goldenList.length})
                     </button>
                 </div>
 
