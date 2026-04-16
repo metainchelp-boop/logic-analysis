@@ -524,22 +524,30 @@ async def export_report(req: ReportExportRequest, current_user: dict = Depends(g
 # ==================== SEO 종합 진단 API ====================
 
 class DetailPageAnalysisRequest(BaseModel):
-    product_url: str
+    html: str
+    product_url: Optional[str] = ""
 
 @app.post("/api/seo/detail-page")
 async def detail_page_analyze(req: DetailPageAnalysisRequest):
-    """상세페이지 품질 분석 — Bright Data 프록시 경유"""
+    """상세페이지 품질 분석 — 사용자가 업로드한 HTML 직접 분석"""
     try:
-        from naver_crawler import fetch_detail_page_html, analyze_detail_page
+        from naver_crawler import analyze_detail_page
 
-        html = fetch_detail_page_html(req.product_url)
-        if not html:
+        html = (req.html or "").strip()
+        if not html or len(html) < 100:
             return {
                 "success": False,
-                "detail": "상세페이지 HTML을 가져올 수 없습니다. 프록시 설정을 확인하세요."
+                "detail": "HTML 내용이 비어있거나 너무 짧습니다. 상세페이지의 HTML 전체를 업로드해주세요."
             }
 
-        result = analyze_detail_page(html, req.product_url)
+        # HTML 용량 상한(10MB)
+        if len(html) > 10 * 1024 * 1024:
+            return {
+                "success": False,
+                "detail": "HTML 용량이 너무 큽니다 (최대 10MB)."
+            }
+
+        result = analyze_detail_page(html, req.product_url or "")
         if not result.get("success"):
             return {"success": False, "detail": result.get("error", "분석 실패")}
 

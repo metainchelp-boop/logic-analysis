@@ -29,10 +29,14 @@ SEARCHAD_API_KEY = os.getenv("SEARCHAD_API_KEY", "")
 SEARCHAD_SECRET_KEY = os.getenv("SEARCHAD_SECRET_KEY", "")
 SEARCHAD_CUSTOMER_ID = os.getenv("SEARCHAD_CUSTOMER_ID", "")
 
-# Bright Data 프록시 (상세페이지 크롤링용)
+# Bright Data 프록시 (상세페이지 크롤링용 - fallback)
 BRD_API_KEY = os.getenv("NAVER_BRD_API_KEY", "")
 BRD_API_URL = os.getenv("NAVER_BRD_API_URL", "")
 BRD_API_ZONE = os.getenv("NAVER_BRD_API_ZONE", "")
+
+# ScrapingBee API (상세페이지 크롤링 주 수단)
+SCRAPINGBEE_API_KEY = os.getenv("SCRAPINGBEE_API_KEY", "")
+SCRAPINGBEE_API_URL = "https://app.scrapingbee.com/api/v1/"
 
 
 # ==================== 유틸리티 ====================
@@ -452,13 +456,401 @@ def generate_rank_analysis(current_rank: Optional[int], previous_rank: Optional[
 
 # ==================== 상세페이지 크롤링 & 분석 ====================
 
-def _build_brd_proxies() -> Optional[Dict]:
-    """Bright Data 프록시 설정 빌드"""
+def _get_realistic_headers(referer: str = "") -> Dict:
+    """최신 Chrome 브라우저를 모방하는 현실적인 HTTP 헤더"""
+    h = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"Windows"',
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1",
+    }
+    if referer:
+        h["Referer"] = referer
+        h["Sec-Fetch-Site"] = "same-origin"
+    return h
+
+
+def _extract_smartstore_info(product_url: str) -> Tuple[Optional[str], Optional[str]]:
+    """스마트스토어 URL에서 store_name과 product_no 추출"""
+    # https://smartstore.naver.com/{store_name}/products/{product_no}
+    match = re.search(r'smartstore\.naver\.com/([^/]+)/products/(\d+)', product_url)
+    if match:
+        return match.group(1), match.group(2)
+    # 브랜드스토어: brand.naver.com/{store}/products/{no}
+    match = re.search(r'brand\.naver\.com/([^/]+)/products/(\d+)', product_url)
+    if match:
+        return match.group(1), match.group(2)
+    return None, None
+
+
+def _extract_next_data_html(raw_html: str, product_url: str = "") -> Optional[str]:
+    """
+    스마트스토어 HTML의 <script id="__NEXT_DATA__"> 에서 상품 JSON을 추출하여
+    분석 가능한 HTML로 변환. 429/200 상관없이 __NEXT_DATA__가 있으면 실제 상품 페이지.
+    """
+    import json as _json
+    match = re.search(r'<script\s+id="__NEXT_DATA__"[^>]*>(.*?)</script>', raw_html, re.DOTALL)
+    if not match:
+        return None
+    try:
+        next_data = _json.loads(match.group(1))
+    except Exception:
+        return None
+
+    # props.pageProps 안에 상품 데이터가 있음
+    page_props = next_data.get("props", {}).get("pageProps", {})
+    if not page_props:
+        return None
+
+    # 여러 가능한 키에서 상품 정보 추출
+    product = page_props.get("product", {}) or page_props.get("productDetail", {}) or {}
+    if not product and "initialState" in page_props:
+        # 일부 버전에서는 initialState.product
+        product = page_props.get("initialState", {}).get("product", {}) or {}
+
+    # 상품명
+    name = product.get("name", "") or page_props.get("product", {}).get("name", "")
+    if not name:
+        # 상품 데이터가 없으면 rate-limit 페이지
+        logger.info("__NEXT_DATA__ 있지만 상품 정보 없음 — rate-limit 페이지일 수 있음")
+        return None
+
+    # 상품 이미지
+    images = product.get("productImages", []) or []
+    img_tags = ""
+    for img in images:
+        url = img.get("url", "") if isinstance(img, dict) else str(img)
+        if url:
+            if not url.startswith("http"):
+                url = f"https:{url}" if url.startswith("//") else url
+            img_tags += f'<img src="{url}" class="product-image">\n'
+
+    # 대표 이미지 추가
+    representative = product.get("representImage", {})
+    if isinstance(representative, dict) and representative.get("url"):
+        rep_url = representative["url"]
+        if not rep_url.startswith("http"):
+            rep_url = f"https:{rep_url}" if rep_url.startswith("//") else rep_url
+        img_tags = f'<img src="{rep_url}" class="product-image">\n' + img_tags
+
+    # 상세 설명 (HTML)
+    detail_html = ""
+    detail_content = product.get("detailContents", {})
+    if isinstance(detail_content, dict):
+        detail_html = detail_content.get("detailContentText", "") or detail_content.get("editorContent", "") or ""
+    elif isinstance(detail_content, str):
+        detail_html = detail_content
+
+    # 옵션/스펙
+    options = product.get("optionCombinations", []) or product.get("options", {}).get("optionCombinations", [])
+    spec_html = ""
+    if options:
+        spec_html = '<table class="spec-table"><tr><th>옵션</th><th>사양</th></tr>'
+        for opt in options[:20]:
+            opt_name = opt.get("optionName1", "") or opt.get("name", "")
+            opt_val = opt.get("optionName2", "") or str(opt.get("price", ""))
+            spec_html += f"<tr><td>{opt_name}</td><td>{opt_val}</td></tr>"
+        spec_html += "</table>"
+
+    # 배송
+    delivery = product.get("delivery", {}) or page_props.get("delivery", {}) or {}
+    delivery_html = ""
+    if delivery:
+        fee_info = delivery.get("deliveryFee", {})
+        if isinstance(fee_info, dict):
+            base_fee = fee_info.get("baseFee", -1)
+            if base_fee == 0:
+                delivery_html += '<span>무료배송</span> '
+        if delivery.get("todayDispatch"):
+            delivery_html += '<span>당일출고</span> '
+        if delivery.get("quickDelivery"):
+            delivery_html += '<span>오늘출발</span>'
+
+    # 교환/반품
+    after_service = product.get("afterServiceInfo", {}) or {}
+    return_html = ""
+    if after_service:
+        guide = after_service.get("afterServiceGuideContent", "")
+        if guide:
+            return_html = f'<div class="return-info">교환/반품 안내: {guide}</div>'
+
+    # 인증
+    certs = product.get("certifications", []) or []
+    cert_html = ""
+    for c in certs:
+        cn = c.get("name", "") if isinstance(c, dict) else str(c)
+        if cn:
+            cert_html += f'<span class="certification">{cn} 인증</span> '
+
+    # 리뷰 수
+    review_data = page_props.get("reviewAmount", {}) or product.get("reviewAmount", {}) or {}
+    review_count = review_data.get("totalReviewCount", 0) if isinstance(review_data, dict) else 0
+
+    # 카테고리
+    category = product.get("category", {}) or {}
+    cat_name = category.get("wholeCategoryName", "") or ""
+
+    # 태그
+    tags = product.get("seoInfo", {}).get("sellerTags", []) or []
+    tag_html = " ".join([f'#{t.get("text", "")}' for t in tags if isinstance(t, dict)])
+
+    # HTML 조립
+    html = f"""<!DOCTYPE html>
+<html lang="ko">
+<head><title>{name}</title></head>
+<body>
+<div class="product-detail">
+  <h1>{name}</h1>
+  {f'<div class="category">{cat_name}</div>' if cat_name else ''}
+  <div class="product-images">{img_tags}</div>
+  <div class="delivery-section">{delivery_html}</div>
+  {f'<div class="return-section">{return_html}</div>' if return_html else ''}
+  {spec_html}
+  {f'<div class="certification-section">{cert_html}</div>' if cert_html else ''}
+  {f'<div class="review-section">구매후기 {review_count}건</div>' if review_count > 0 else ''}
+  {f'<div class="tag-section">{tag_html}</div>' if tag_html else ''}
+  <div class="detail_content" id="product_detail">
+    {detail_html}
+  </div>
+</div>
+</body>
+</html>"""
+    logger.info(f"__NEXT_DATA__ → HTML 변환 완료: 이미지 {len(images)}장, 텍스트 {len(detail_html)}자, 리뷰 {review_count}건")
+    return html
+
+
+def _fetch_smartstore_api(product_url: str) -> Optional[str]:
+    """
+    스마트스토어 내부 API로 상품 상세 정보 가져오기 (JSON → 가상 HTML 변환)
+    네이버 차단 우회: API 엔드포인트는 HTML 페이지보다 차단이 느슨함
+    """
+    store_name, product_no = _extract_smartstore_info(product_url)
+    if not store_name or not product_no:
+        logger.info(f"스마트스토어 URL 아님, API 스킵: {product_url[:60]}")
+        return None
+
+    # 스마트스토어 내부 API 엔드포인트들
+    api_endpoints = [
+        f"https://smartstore.naver.com/i/v1/stores/{store_name}/products/{product_no}",
+        f"https://m.smartstore.naver.com/i/v1/stores/{store_name}/products/{product_no}",
+    ]
+
+    api_headers = {
+        "User-Agent": "Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "ko-KR,ko;q=0.9",
+        "Referer": f"https://smartstore.naver.com/{store_name}/products/{product_no}",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-origin",
+    }
+
+    for endpoint in api_endpoints:
+        try:
+            logger.info(f"스마트스토어 API 시도: {endpoint[:80]}")
+            resp = requests.get(endpoint, headers=api_headers, timeout=15)
+            logger.info(f"스마트스토어 API 응답: status={resp.status_code}, len={len(resp.text)}")
+            if resp.status_code == 200 and len(resp.text) > 500:
+                data = resp.json()
+                html = _convert_smartstore_json_to_html(data, product_url)
+                if html and len(html) > 500:
+                    logger.info(f"스마트스토어 API 성공: JSON→HTML {len(html)}자")
+                    return html
+        except Exception as e:
+            logger.warning(f"스마트스토어 API 실패 ({endpoint[:50]}): {e}")
+    return None
+
+
+def _convert_smartstore_json_to_html(data: Dict, product_url: str = "") -> Optional[str]:
+    """스마트스토어 JSON 응답을 분석 가능한 HTML로 변환"""
+    try:
+        # 상품 기본 정보
+        channel = data.get("channel", {})
+        product = data.get("product", {}) or data.get("contents", {})
+        name = data.get("name", "") or product.get("name", "")
+
+        # 상세 설명 HTML
+        detail_html = ""
+        detail_content = data.get("detailContents", {}) or product.get("detailContents", {})
+        if isinstance(detail_content, dict):
+            detail_html = detail_content.get("detailContentText", "") or detail_content.get("editorContent", "") or ""
+        elif isinstance(detail_content, str):
+            detail_html = detail_content
+
+        # 상품 이미지
+        images = data.get("productImages", []) or product.get("productImages", [])
+        img_tags = ""
+        for img in images:
+            url = img.get("url", "") if isinstance(img, dict) else str(img)
+            if url:
+                if not url.startswith("http"):
+                    url = f"https:{url}" if url.startswith("//") else f"https://shop-phinf.pstatic.net{url}"
+                img_tags += f'<img src="{url}" class="product-image">\n'
+
+        # 옵션/스펙 정보
+        options = data.get("optionCombinations", []) or data.get("options", [])
+        spec_html = ""
+        if options:
+            spec_html = '<table class="spec-table"><tr><th>옵션</th><th>가격</th></tr>'
+            for opt in options[:20]:
+                opt_name = opt.get("optionName1", "") or opt.get("name", "")
+                opt_price = opt.get("price", "")
+                spec_html += f"<tr><td>{opt_name}</td><td>{opt_price}</td></tr>"
+            spec_html += "</table>"
+
+        # 배송 정보
+        delivery = data.get("delivery", {}) or {}
+        delivery_html = ""
+        if delivery:
+            fee = delivery.get("deliveryFee", {})
+            if isinstance(fee, dict) and fee.get("baseFee", 0) == 0:
+                delivery_html += '<span class="delivery-info">무료배송</span> '
+            delivery_type = delivery.get("deliveryType", "")
+            if delivery_type:
+                delivery_html += f'<span class="delivery-type">{delivery_type}</span> '
+            today_dispatch = delivery.get("todayDispatch", False)
+            if today_dispatch:
+                delivery_html += '<span class="delivery-today">당일출고</span>'
+
+        # 반품/교환 정보
+        after_service = data.get("afterServiceInfo", {}) or {}
+        return_html = ""
+        if after_service:
+            return_policy = after_service.get("afterServiceTelephoneNumber", "")
+            return_guide = after_service.get("afterServiceGuideContent", "")
+            if return_guide:
+                return_html = f'<div class="return-info">교환/반품 안내: {return_guide}</div>'
+
+        # 인증 정보
+        certifications = data.get("certifications", []) or data.get("seoInfo", {}).get("certifications", [])
+        cert_html = ""
+        if certifications:
+            for cert in certifications:
+                cert_name = cert.get("name", "") if isinstance(cert, dict) else str(cert)
+                cert_html += f'<span class="certification">{cert_name} 인증</span> '
+
+        # 리뷰 수
+        review_count = data.get("reviewAmount", {}).get("totalReviewCount", 0) if isinstance(data.get("reviewAmount"), dict) else 0
+
+        # HTML 조립
+        html = f"""<!DOCTYPE html>
+<html lang="ko">
+<head><title>{name}</title></head>
+<body>
+<div class="product-detail">
+  <h1>{name}</h1>
+  <div class="product-images">{img_tags}</div>
+  <div class="delivery-section">{delivery_html}</div>
+  {f'<div class="return-section">{return_html}</div>' if return_html else ''}
+  {spec_html}
+  {f'<div class="certification-section">{cert_html}</div>' if cert_html else ''}
+  {f'<div class="review-section">구매후기 {review_count}건</div>' if review_count > 0 else ''}
+  <div class="detail_content" id="product_detail">
+    {detail_html}
+  </div>
+</div>
+</body>
+</html>"""
+        return html
+    except Exception as e:
+        logger.warning(f"JSON→HTML 변환 실패: {e}")
+        return None
+
+
+def _fetch_via_scrapingbee(target_url: str, render_js: bool = False, stealth: bool = False) -> Optional[str]:
+    """
+    ScrapingBee API로 페이지 가져오기 (주 수단)
+    - 한국 IP 지원
+    - 자동 프록시 로테이션
+    - 선택적 JS 렌더링
+    - transparent_status_code=True로 실제 응답 수용
+    """
+    if not SCRAPINGBEE_API_KEY:
+        return None
+    try:
+        params = {
+            "api_key": SCRAPINGBEE_API_KEY,
+            "url": target_url,
+            "render_js": "true" if render_js else "false",
+            "block_resources": "false",
+            "country_code": "kr",
+            "transparent_status_code": "true",  # ScrapingBee가 500 덮어쓰지 않도록
+        }
+        if stealth:
+            params["stealth_proxy"] = "true"  # 가장 강력한 우회 모드 (75 credits)
+        else:
+            params["premium_proxy"] = "true"  # 25 credits
+
+        logger.info(f"ScrapingBee 요청: {target_url[:60]}... render_js={render_js}, stealth={stealth}")
+        resp = requests.get(SCRAPINGBEE_API_URL, params=params, timeout=120)
+
+        # ScrapingBee 에러/크레딧 헤더 확인
+        sb_err = resp.headers.get("Spb-error-code") or resp.headers.get("Spb-error")
+        sb_cost = resp.headers.get("Spb-cost")
+        sb_credit_remaining = resp.headers.get("Spb-remaining-api-calls") or resp.headers.get("Spb-remaining-calls")
+        if sb_credit_remaining:
+            logger.info(f"ScrapingBee 남은 크레딧: {sb_credit_remaining}, 이번 비용: {sb_cost}")
+
+        # HTML 본문이 충분하면 수용 (status와 무관)
+        if len(resp.text) > 1000 and "<html" in resp.text.lower():
+            logger.info(f"ScrapingBee 응답 수용: status={resp.status_code}, {len(resp.text)}자")
+            return resp.text
+        else:
+            logger.warning(f"ScrapingBee 응답 비정상: status={resp.status_code}, len={len(resp.text)}, err={sb_err}, body={resp.text[:300]}")
+    except Exception as e:
+        logger.warning(f"ScrapingBee 요청 실패: {e}")
+    return None
+
+
+def _fetch_via_brd_api(target_url: str) -> Optional[str]:
+    """Bright Data Web Unlocker API로 페이지 가져오기"""
     if not BRD_API_KEY or not BRD_API_URL:
         return None
-    # BRD_API_URL: 호스트:포트 형태 (예: brd.superproxy.io:22225)
-    # BRD_API_ZONE: 존 이름 (예: residential_proxy1)
-    # BRD_API_KEY: 인증 비밀번호
+    try:
+        api_headers = {
+            "Authorization": f"Bearer {BRD_API_KEY}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "zone": BRD_API_ZONE or "naver_logic",
+            "url": target_url,
+            "format": "raw",
+            "method": "GET",
+            "country": "kr",
+        }
+        logger.info(f"Bright Data API 요청: {target_url[:60]}... zone={payload['zone']}")
+        resp = requests.post(BRD_API_URL, json=payload, headers=api_headers, timeout=60)
+        # 응답 헤더에서 Bright Data 에러 확인
+        brd_err = resp.headers.get("x-brd-err-code") or resp.headers.get("x-brd-error-code")
+        brd_err_msg = resp.headers.get("x-brd-err-msg") or ""
+        if brd_err:
+            logger.warning(f"Bright Data 에러: code={brd_err}, msg={brd_err_msg}")
+        if resp.status_code == 200 and len(resp.text) > 1000:
+            logger.info(f"Bright Data API 성공: {len(resp.text)}자")
+            return resp.text
+        else:
+            logger.warning(f"Bright Data API 응답 비정상: status={resp.status_code}, len={len(resp.text)}, headers={dict(resp.headers)}, body={resp.text[:300]}")
+    except Exception as e:
+        logger.warning(f"Bright Data API 요청 실패: {e}")
+    return None
+
+
+def _build_brd_proxies() -> Optional[Dict]:
+    """Bright Data 프록시 설정 빌드 (프록시 방식 fallback용)"""
+    if not BRD_API_KEY or not BRD_API_URL:
+        return None
+    if "api.brightdata.com" in BRD_API_URL:
+        return None
     if BRD_API_ZONE:
         proxy_url = f"http://{BRD_API_ZONE}:{BRD_API_KEY}@{BRD_API_URL}"
     else:
@@ -469,40 +861,72 @@ def _build_brd_proxies() -> Optional[Dict]:
 def fetch_detail_page_html(product_url: str) -> Optional[str]:
     """
     스마트스토어/네이버 상품 상세페이지 HTML 가져오기
-    1차: Bright Data 프록시 경유
-    2차: 직접 요청 (fallback)
+    1차: ScrapingBee (주 수단, 한국 IP + premium proxy)
+    2차: ScrapingBee JS 렌더링 (일반 모드 실패 시)
+    3차: 스마트스토어 내부 JSON API
+    4차: 향상된 직접 요청
+    5차: Bright Data (fallback)
     """
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
-    }
+    # 1차: ScrapingBee premium (기본, 25 credits, transparent_status_code로 429도 수용)
+    html = _fetch_via_scrapingbee(product_url, render_js=False, stealth=False)
+    if html:
+        next_data_html = _extract_next_data_html(html, product_url)
+        if next_data_html:
+            logger.info("ScrapingBee 결과에서 __NEXT_DATA__ 추출 성공")
+            return next_data_html
+        if "<html" in html.lower() and len(html) > 5000:
+            return html
 
-    # 1차: Bright Data 프록시
-    proxies = _build_brd_proxies()
-    if proxies:
-        try:
-            logger.info(f"Bright Data 프록시로 상세페이지 요청: {product_url[:60]}...")
-            resp = requests.get(product_url, headers=headers, proxies=proxies, timeout=30, verify=False)
-            if resp.status_code == 200 and len(resp.text) > 1000:
-                logger.info(f"상세페이지 HTML 수신 성공: {len(resp.text)}자")
+    # 2차: ScrapingBee stealth (75 credits, 가장 강력한 우회)
+    html = _fetch_via_scrapingbee(product_url, render_js=False, stealth=True)
+    if html:
+        next_data_html = _extract_next_data_html(html, product_url)
+        if next_data_html:
+            return next_data_html
+        if "<html" in html.lower() and len(html) > 5000:
+            return html
+
+    # 3차: ScrapingBee stealth + JS 렌더링 (80 credits, 최후의 수단)
+    html = _fetch_via_scrapingbee(product_url, render_js=True, stealth=True)
+    if html:
+        next_data_html = _extract_next_data_html(html, product_url)
+        if next_data_html:
+            return next_data_html
+        if "<html" in html.lower() and len(html) > 5000:
+            return html
+
+    # 3차: 스마트스토어 내부 JSON API
+    html = _fetch_smartstore_api(product_url)
+    if html:
+        return html
+
+    # 4차: 향상된 직접 요청
+    headers = _get_realistic_headers(referer="https://search.shopping.naver.com/")
+    try:
+        logger.info(f"향상된 직접 요청 시도: {product_url[:60]}...")
+        session = requests.Session()
+        session.headers.update(headers)
+        resp = session.get(product_url, timeout=15, allow_redirects=True)
+
+        if len(resp.text) > 1000:
+            next_data_html = _extract_next_data_html(resp.text, product_url)
+            if next_data_html:
+                logger.info(f"__NEXT_DATA__ 파싱 성공: {len(next_data_html)}자")
+                return next_data_html
+            if resp.status_code == 200:
+                logger.info(f"향상된 직접 요청 성공: {len(resp.text)}자")
                 return resp.text
             else:
-                logger.warning(f"프록시 응답 비정상: status={resp.status_code}, len={len(resp.text)}")
-        except Exception as e:
-            logger.warning(f"Bright Data 프록시 요청 실패: {e}")
-
-    # 2차: 직접 요청 (VPS에서는 보통 418 차단됨)
-    try:
-        logger.info(f"직접 요청 시도: {product_url[:60]}...")
-        resp = requests.get(product_url, headers=headers, timeout=15)
-        if resp.status_code == 200 and len(resp.text) > 1000:
-            logger.info(f"직접 요청 성공: {len(resp.text)}자")
-            return resp.text
+                logger.warning(f"향상된 직접 요청: status={resp.status_code}, __NEXT_DATA__ 없음")
         else:
-            logger.warning(f"직접 요청 실패: status={resp.status_code}")
+            logger.warning(f"향상된 직접 요청 실패: status={resp.status_code}, len={len(resp.text)}")
     except Exception as e:
-        logger.warning(f"직접 요청 실패: {e}")
+        logger.warning(f"향상된 직접 요청 실패: {e}")
+
+    # 5차: Bright Data API (fallback)
+    html = _fetch_via_brd_api(product_url)
+    if html:
+        return html
 
     return None
 
@@ -527,9 +951,11 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
     # ── 1. 이미지 분석 ──
     all_imgs = soup.find_all("img")
     # 상세페이지 영역 이미지 (상품 상세 설명 내부)
-    detail_area = soup.find("div", {"class": re.compile(r"detail|product.?detail|content_detail|se-viewer|_detail_content", re.I)})
+    detail_area = soup.find("div", {"class": re.compile(r"detail|product.?detail|content_detail|se-viewer|_detail_content|detail_content", re.I)})
     if not detail_area:
         detail_area = soup.find("div", {"id": re.compile(r"detail|content|product_detail", re.I)})
+    if not detail_area:
+        detail_area = soup.find("div", {"class": "product-detail"})
     detail_imgs = detail_area.find_all("img") if detail_area else []
 
     # 이미지 소스 중 실제 상품 이미지 필터링 (아이콘/로고 제외)
