@@ -637,7 +637,7 @@ window.App = function App() {
                         section: 'strategy',
                         keyword: searchedKeyword,
                         data: { advertiserReport: advertiserReport, strategicAnalysis: analysisData && analysisData.strategicAnalysis },
-                        autoDelay: 1000
+                        autoDelay: 20000
                     })
                 )
             ),
@@ -662,7 +662,7 @@ window.App = function App() {
             /* 푸터 */
             React.createElement('footer', { className: 'footer' },
                 React.createElement('div', { className: 'container' },
-                    '© 2026 메타인크 — 로직 분석 v3.0 | 네이버 쇼핑 키워드 분석 & 순위 추적'
+                    '© 2026 메타아이앤씨 — 로직 분석 v3.6 | 네이버 쇼핑 키워드 분석 & 순위 추적'
                 )
             )
         )

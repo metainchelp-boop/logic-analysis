@@ -18,6 +18,7 @@ window.AiFeedbackCard = function AiFeedbackCard(props) {
     var setError = _error[1];
 
     var _lastKeyword = React.useRef('');
+    var _timerRef = React.useRef(null);
 
     if (!keyword || !data) return null;
 
@@ -48,19 +49,50 @@ window.AiFeedbackCard = function AiFeedbackCard(props) {
         });
     };
 
-    /* 키워드가 변경되면 자동 실행 (딜레이 적용) */
+    /* 키워드가 변경되면 자동 실행 (딜레이 적용) — 데이터가 실제로 준비된 경우만 */
     React.useEffect(function() {
         if (!keyword || !data) return;
+
+        /* 키워드가 바뀌었으면 타이머/상태 초기화 */
+        if (_lastKeyword.current && _lastKeyword.current !== keyword) {
+            if (_timerRef.current) { clearTimeout(_timerRef.current); _timerRef.current = null; }
+            _lastKeyword.current = '';
+        }
+
+        /* 데이터에 의미 있는 값이 하나라도 있는지 확인 (비동기 로딩 중인 null 데이터 방지) */
+        var hasContent = false;
+        if (Array.isArray(data)) {
+            hasContent = data.length > 0;
+        } else if (typeof data === 'object') {
+            hasContent = Object.values(data).some(function(v) {
+                if (v == null) return false;
+                if (Array.isArray(v)) return v.length > 0;
+                if (typeof v === 'object') return Object.keys(v).length > 0;
+                return true;
+            });
+        } else {
+            hasContent = true;
+        }
+        if (!hasContent) return;
+
         if (_lastKeyword.current === keyword) return;
         _lastKeyword.current = keyword;
         setFeedback(null);
         setError('');
 
-        var timer = setTimeout(function() {
+        /* 타이머를 ref에 저장 — 부모 재렌더링으로 인한 cleanup에 영향받지 않음 */
+        _timerRef.current = setTimeout(function() {
+            _timerRef.current = null;
             doFetch();
         }, autoDelay);
-        return function() { clearTimeout(timer); };
     }, [keyword, data]);
+
+    /* 언마운트 시에만 타이머 정리 */
+    React.useEffect(function() {
+        return function() {
+            if (_timerRef.current) clearTimeout(_timerRef.current);
+        };
+    }, []);
 
     return React.createElement('div', {
         style: {

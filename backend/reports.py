@@ -703,7 +703,7 @@ def generate_report_html(
 
         <!-- Footer -->
         <div class="footer">
-            <div class="footer-brand">로직분석 by 메타인크</div>
+            <div class="footer-brand">로직분석 by 메타아이앤씨</div>
             <div class="footer-text">네이버 쇼핑 키워드 분석 및 순위 추적 솔루션</div>
             <div class="footer-text" style="font-size: 11px; opacity: 0.75; margin-top: 12px;">
                 이 보고서는 AI 기반 분석으로 생성되었습니다. 정확한 정보는 네이버 쇼핑 검색 결과를 참고하세요.
