@@ -55,6 +55,8 @@ jobs:
                   - "127.0.0.1:5050:5050"
                 env_file:
                   - .env
+                environment:
+                  - TZ=Asia/Seoul
                 volumes:
                   - ./data:/app/data
                 logging:

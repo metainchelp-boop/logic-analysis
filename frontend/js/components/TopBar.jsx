@@ -3,10 +3,9 @@ window.TopBar = function TopBar({ health }) {
     return (
         <header className="top-bar">
             <div className="container top-bar-inner">
-                <div className="logo">
-                    <span className="logo-dot" />
-                    로직 분석
-                    <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.6)', fontWeight: 400, marginLeft: 4 }}>v2.2</span>
+                <div className="logo" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <img src="/img/logo_dark.png" alt="META INC" style={{ height: 28, width: 'auto' }} />
+                    <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', fontWeight: 400 }}>v3.9</span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                     <span className={`status-chip ${health ? '' : 'offline'}`}>

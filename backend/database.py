@@ -15,10 +15,11 @@ DB_PATH = os.getenv("DB_PATH", "logic_analysis.db")
 
 def _get_conn() -> sqlite3.Connection:
     """SQLite 연결 생성 (WAL 모드, row_factory 설정)"""
-    conn = sqlite3.connect(DB_PATH, timeout=10)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA busy_timeout=30000")
     return conn
 
 
@@ -101,6 +102,31 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_competitor_keyword_id ON competitor_snapshots(keyword_id);
             CREATE INDEX IF NOT EXISTS idx_notification_logs_sent_at ON notification_logs(sent_at);
             CREATE INDEX IF NOT EXISTS idx_tracked_products_user_id ON tracked_products(user_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_tracked_products_url_user ON tracked_products(product_url, user_id);
+
+            -- v3.9.6 성능 인덱스 (clients/client_analyses/client_rank_history 인덱스는 각 모듈 init에서 생성)
+
+            -- API 사용량 로그 (v3.9.13)
+            CREATE TABLE IF NOT EXISTS api_usage_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                endpoint TEXT NOT NULL DEFAULT 'feedback-all',
+                keyword TEXT DEFAULT '',
+                client_name TEXT DEFAULT '',
+                client_id INTEGER DEFAULT 0,
+                call_type TEXT DEFAULT 'manual',
+                model TEXT DEFAULT '',
+                input_tokens INTEGER DEFAULT 0,
+                output_tokens INTEGER DEFAULT 0,
+                total_tokens INTEGER DEFAULT 0,
+                cost_usd REAL DEFAULT 0,
+                cost_krw INTEGER DEFAULT 0,
+                user_id INTEGER DEFAULT 0,
+                status TEXT DEFAULT 'success',
+                error_message TEXT DEFAULT '',
+                called_at TEXT DEFAULT (datetime('now', 'localtime'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_api_usage_called_at ON api_usage_logs(called_at);
+            CREATE INDEX IF NOT EXISTS idx_api_usage_client ON api_usage_logs(client_id);
 
             -- 알림 설정 기본 행 삽입 (없으면)
             INSERT OR IGNORE INTO notification_settings (id, notify_enabled, receiver_phone, report_time)
@@ -121,7 +147,7 @@ def add_tracked_product(product_url: str, product_name: str = None,
                         store_name: str = None, image_url: str = None,
                         price: int = None, product_id: str = None,
                         user_id: int = 0) -> int:
-    """추적 상품 등록, 중복이면 업데이트 후 ID 반환 (user_id별 격리)"""
+    """추적 상품 등록, 중복이면 업데이트 후 ID 반환 (user_id별 격리, 레이스 컨디션 방지)"""
     conn = _get_conn()
     try:
         # 기존 상품 확인 (URL + user_id 기준)
@@ -153,6 +179,14 @@ def add_tracked_product(product_url: str, product_name: str = None,
                   image_url or '', price or 0, product_id or '', user_id))
             conn.commit()
             return cursor.lastrowid
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        # 레이스 컨디션으로 중복 삽입된 경우 기존 ID 반환
+        row = conn.execute(
+            "SELECT id FROM tracked_products WHERE product_url = ? AND user_id = ?",
+            (product_url, user_id)
+        ).fetchone()
+        return row["id"] if row else 0
     finally:
         conn.close()
 
@@ -453,5 +487,113 @@ def get_all_keywords_with_products(user_id: int = None, is_admin: bool = False) 
                 ORDER BY tp.id, tk.id
             """, (user_id,)).fetchall()
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+# ==================== API 사용량 로깅 (v3.9.13) ====================
+
+def save_api_usage_log(endpoint: str, keyword: str = "", client_name: str = "",
+                       client_id: int = 0, call_type: str = "manual",
+                       model: str = "", input_tokens: int = 0, output_tokens: int = 0,
+                       cost_usd: float = 0, user_id: int = 0,
+                       status: str = "success", error_message: str = ""):
+    """API 호출 사용량 기록"""
+    total_tokens = input_tokens + output_tokens
+    cost_krw = int(cost_usd * 1400)
+    conn = _get_conn()
+    try:
+        conn.execute("""
+            INSERT INTO api_usage_logs
+            (endpoint, keyword, client_name, client_id, call_type, model,
+             input_tokens, output_tokens, total_tokens, cost_usd, cost_krw,
+             user_id, status, error_message)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (endpoint, keyword, client_name, client_id, call_type, model,
+              input_tokens, output_tokens, total_tokens, cost_usd, cost_krw,
+              user_id, status, error_message))
+        conn.commit()
+    except Exception as e:
+        logger.error(f"API 사용량 로그 저장 실패: {e}")
+    finally:
+        conn.close()
+
+
+def get_api_usage_summary(days: int = 30) -> dict:
+    """API 사용량 요약 (오늘/이번달/일별 추이)"""
+    conn = _get_conn()
+    try:
+        today = datetime.now().strftime("%Y-%m-%d")
+
+        # 오늘 요약
+        today_row = conn.execute("""
+            SELECT COUNT(*) as calls,
+                   COALESCE(SUM(input_tokens), 0) as input_tokens,
+                   COALESCE(SUM(output_tokens), 0) as output_tokens,
+                   COALESCE(SUM(cost_krw), 0) as cost_krw
+            FROM api_usage_logs
+            WHERE date(called_at) = ?
+        """, (today,)).fetchone()
+
+        # 이번 달 요약
+        month_start = datetime.now().strftime("%Y-%m-01")
+        month_row = conn.execute("""
+            SELECT COUNT(*) as calls,
+                   COALESCE(SUM(input_tokens), 0) as input_tokens,
+                   COALESCE(SUM(output_tokens), 0) as output_tokens,
+                   COALESCE(SUM(cost_krw), 0) as cost_krw
+            FROM api_usage_logs
+            WHERE date(called_at) >= ?
+        """, (month_start,)).fetchone()
+
+        # 일별 추이
+        since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+        daily_rows = conn.execute("""
+            SELECT date(called_at) as day,
+                   COUNT(*) as calls,
+                   COALESCE(SUM(input_tokens), 0) as input_tokens,
+                   COALESCE(SUM(output_tokens), 0) as output_tokens,
+                   COALESCE(SUM(cost_krw), 0) as cost_krw
+            FROM api_usage_logs
+            WHERE date(called_at) >= ?
+            GROUP BY date(called_at)
+            ORDER BY day
+        """, (since,)).fetchall()
+
+        # 업체별 요약 (이번 달)
+        client_rows = conn.execute("""
+            SELECT client_name, client_id,
+                   COUNT(*) as calls,
+                   COALESCE(SUM(cost_krw), 0) as cost_krw,
+                   COUNT(DISTINCT keyword) as keyword_count
+            FROM api_usage_logs
+            WHERE date(called_at) >= ? AND client_name != ''
+            GROUP BY client_name
+            ORDER BY cost_krw DESC
+        """, (month_start,)).fetchall()
+
+        # 최근 호출 로그 (최근 50건)
+        log_rows = conn.execute("""
+            SELECT id, endpoint, keyword, client_name, call_type, model,
+                   input_tokens, output_tokens, cost_krw, status, error_message,
+                   called_at
+            FROM api_usage_logs
+            ORDER BY id DESC
+            LIMIT 50
+        """).fetchall()
+
+        avg_cost = 0
+        if dict(month_row)["calls"] > 0:
+            avg_cost = int(dict(month_row)["cost_krw"] / dict(month_row)["calls"])
+
+        return {
+            "today": dict(today_row),
+            "month": dict(month_row),
+            "avg_cost": avg_cost,
+            "daily_avg_cost": int(dict(month_row)["cost_krw"] / max(days, 1)),
+            "daily": [dict(r) for r in daily_rows],
+            "clients": [dict(r) for r in client_rows],
+            "logs": [dict(r) for r in log_rows],
+        }
     finally:
         conn.close()

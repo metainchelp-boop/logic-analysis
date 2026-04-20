@@ -4,20 +4,7 @@ window.CompetitorTableSection = function CompetitorTableSection(props) {
   var items = Array.isArray(props.data) ? props.data : (props.data.competitors || []);
   if (items.length === 0) return null;
 
-  var getRankBadge = function(rank) {
-    if (rank <= 3) {
-      var cls = rank === 1 ? 'gold' : rank === 2 ? 'silver' : 'bronze';
-      return React.createElement('span', { className: 'rank-badge ' + cls }, rank);
-    }
-    return rank;
-  };
-
-  var scoreColor = function(s) {
-    return s >= 70 ? '#059669' : s >= 40 ? '#d97706' : '#dc2626';
-  };
-  var scoreBg = function(s) {
-    return s >= 70 ? '#ecfdf5' : s >= 40 ? '#fffbeb' : '#fef2f2';
-  };
+  // getRankBadge, scoreColor, scoreBg → utils.js 전역 함수 사용
 
   // 종합점수 존재 여부 확인
   var hasScore = items.some(function(item) { return typeof item.seoScore === 'number'; });
@@ -33,7 +20,7 @@ window.CompetitorTableSection = function CompetitorTableSection(props) {
         </div>
       )}
 
-      <div className="table-wrap" style={{ maxHeight: '600px', overflowY: 'auto' }}>
+      <div className="table-wrap" style={{ maxHeight: '1200px', overflowY: 'auto' }}>
         <table style={{ minWidth: hasScore ? '900px' : '800px' }}>
           <thead>
             <tr>

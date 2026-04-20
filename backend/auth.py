@@ -22,10 +22,39 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 
 # Database configuration
-DB_PATH = os.getenv("DB_PATH", "/tmp/logic_analysis.db")
+DB_PATH = os.getenv("DB_PATH", "logic_analysis.db")
 
 # JWT configuration
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "logic-analysis-secret-key-2026")
+_secret_file = os.path.join(os.path.dirname(os.path.abspath(DB_PATH)), ".jwt_secret")
+
+def _get_or_create_secret():
+    """파일 기반 JWT 시크릿: 최초 실행 시 랜덤 생성 후 저장, 이후 재사용"""
+    # 1순위: 환경변수
+    env_secret = os.getenv("JWT_SECRET_KEY")
+    if env_secret:
+        return env_secret
+    # 2순위: 파일에서 로드 (이전에 생성된 랜덤 시크릿)
+    try:
+        if os.path.exists(_secret_file):
+            with open(_secret_file, "r") as f:
+                secret = f.read().strip()
+                if len(secret) >= 32:
+                    return secret
+    except Exception:
+        pass
+    # 3순위: 새로 생성 후 저장
+    import secrets as _secrets
+    new_secret = _secrets.token_hex(32)
+    try:
+        with open(_secret_file, "w") as f:
+            f.write(new_secret)
+        os.chmod(_secret_file, 0o600)
+        logger.info("JWT 시크릿 자동 생성 완료 (.jwt_secret)")
+    except Exception as e:
+        logger.warning(f"JWT 시크릿 파일 저장 실패 (메모리에서만 사용): {e}")
+    return new_secret
+
+SECRET_KEY = _get_or_create_secret()
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = 24
 
@@ -121,15 +150,20 @@ def init_auth_db():
                 name TEXT DEFAULT '',
                 role TEXT DEFAULT 'viewer',
                 is_active INTEGER DEFAULT 1,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                created_at TEXT DEFAULT (datetime('now','localtime')),
+                updated_at TEXT DEFAULT (datetime('now','localtime'))
             )
         """)
 
         # Insert default admin if not exists
         cursor.execute("SELECT id FROM users WHERE username = ?", ("yoosub92",))
         if cursor.fetchone() is None:
-            default_password = "56073291"
+            default_password = os.getenv("DEFAULT_ADMIN_PASSWORD", "")
+            if not default_password:
+                import secrets as _pw_secrets
+                default_password = _pw_secrets.token_urlsafe(12)
+                logger.warning(f"⚠️ DEFAULT_ADMIN_PASSWORD 미설정 — 임시 비밀번호 생성됨: {default_password}")
+                logger.warning("⚠️ 로그인 후 반드시 비밀번호를 변경하세요!")
             password_hash = hash_password(default_password)
             cursor.execute(
                 """
@@ -149,6 +183,18 @@ def init_auth_db():
             conn.commit()
             logger.info("Default admin user created successfully")
 
+        # 로그인 이력 테이블
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS login_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                username TEXT NOT NULL,
+                login_at TEXT DEFAULT (datetime('now','localtime')),
+                ip_address TEXT DEFAULT ''
+            )
+        """)
+
+        conn.commit()
         conn.close()
         logger.info("Authentication database initialized successfully")
 
@@ -292,7 +338,7 @@ def update_user(user_id: int, **kwargs) -> Optional[Dict[str, Any]]:
         conn = _get_db_connection()
         cursor = conn.cursor()
 
-        # Build update query dynamically
+        # Build update query dynamically (화이트리스트 검증)
         allowed_fields = {"name", "role", "is_active"}
         update_fields = {k: v for k, v in kwargs.items() if k in allowed_fields and v is not None}
 
@@ -301,6 +347,12 @@ def update_user(user_id: int, **kwargs) -> Optional[Dict[str, Any]]:
             return get_user_by_id(user_id)
 
         update_fields["updated_at"] = datetime.now().isoformat()
+
+        # 안전: 키 이름이 화이트리스트 + "updated_at"만 허용
+        safe_keys = allowed_fields | {"updated_at"}
+        for k in update_fields.keys():
+            if k not in safe_keys:
+                raise ValueError(f"허용되지 않은 필드: {k}")
 
         set_clause = ", ".join([f"{k} = ?" for k in update_fields.keys()])
         values = list(update_fields.values()) + [user_id]
@@ -398,16 +450,25 @@ async def get_current_user(request: Request) -> Dict[str, Any]:
     return user
 
 
-def require_role(*roles: str):
+def require_role(*roles):
     """FastAPI Depends that checks if current user has required role.
-    superadmin은 모든 admin 권한을 포함합니다."""
+    superadmin/admin은 모든 권한을 포함합니다.
+    roles는 문자열 또는 리스트 모두 허용."""
+
+    # roles가 리스트 하나로 전달된 경우 평탄화
+    flat_roles = []
+    for r in roles:
+        if isinstance(r, (list, tuple)):
+            flat_roles.extend(r)
+        else:
+            flat_roles.append(r)
 
     async def role_checker(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
         user_role = current_user.get("role", "")
-        # superadmin은 admin 권한 포함
-        if user_role == "superadmin" and UserRole.ADMIN in roles:
+        # admin/superadmin은 모든 권한 포함
+        if user_role in (UserRole.ADMIN, "superadmin"):
             return current_user
-        if user_role not in roles:
+        if user_role not in flat_roles:
             raise HTTPException(
                 status_code=403,
                 detail="접근 권한이 없습니다.",
@@ -425,7 +486,7 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
 @router.post("/login", response_model=LoginResponse)
-async def login(request: LoginRequest) -> LoginResponse:
+async def login(request: LoginRequest, request_obj: Request) -> LoginResponse:
     """
     User login endpoint.
     Returns JWT token and user information.
@@ -457,6 +518,22 @@ async def login(request: LoginRequest) -> LoginResponse:
             is_active=user["is_active"],
             created_at=user["created_at"],
         )
+
+        # 로그인 이력 저장
+        try:
+            ip = request_obj.client.host if hasattr(request_obj, 'client') and request_obj.client else ''
+        except Exception:
+            ip = ''
+        try:
+            log_conn = _get_db_connection()
+            log_conn.execute(
+                "INSERT INTO login_logs (user_id, username, login_at, ip_address) VALUES (?, ?, ?, ?)",
+                (user["id"], user["username"], datetime.now().isoformat(), ip)
+            )
+            log_conn.commit()
+            log_conn.close()
+        except Exception as log_err:
+            logger.warning(f"로그인 이력 저장 실패: {log_err}")
 
         logger.info(f"User logged in: {user['username']}")
 
@@ -586,6 +663,10 @@ async def update_existing_user(
         if not user:
             raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다.")
 
+        # admin이 자기 자신의 role을 변경하는 것 방지
+        if user_id == current_user["id"] and request.role and request.role != current_user.get("role"):
+            raise HTTPException(status_code=400, detail="자신의 권한은 변경할 수 없습니다.")
+
         updated_user = update_user(
             user_id, name=request.name, role=request.role, is_active=request.is_active
         )
@@ -628,9 +709,27 @@ async def delete_existing_user(
         if not user:
             raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다.")
 
+        # 삭제 전: 해당 직원의 업체/추적상품을 관리자(현재 유저)에게 재배정
+        try:
+            reassign_conn = _get_db_connection()
+            admin_id = current_user["id"]
+            reassign_conn.execute(
+                "UPDATE clients SET created_by = ? WHERE created_by = ?",
+                (admin_id, user_id)
+            )
+            reassign_conn.execute(
+                "UPDATE tracked_products SET user_id = ? WHERE user_id = ?",
+                (admin_id, user_id)
+            )
+            reassign_conn.commit()
+            reassign_conn.close()
+            logger.info(f"Reassigned user {user_id} data to admin {admin_id}")
+        except Exception as reassign_err:
+            logger.warning(f"데이터 재배정 실패: {reassign_err}")
+
         if delete_user(user_id):
             logger.info(f"User deleted by admin {current_user['username']}: {user['username']}")
-            return MessageResponse(success=True, message="사용자가 삭제되었습니다.")
+            return MessageResponse(success=True, message="사용자가 삭제되었습니다. 업체/상품이 관리자에게 재배정되었습니다.")
         else:
             raise HTTPException(status_code=500, detail="사용자 삭제 중 오류가 발생했습니다.")
 
@@ -639,3 +738,84 @@ async def delete_existing_user(
     except Exception as e:
         logger.error(f"Failed to delete user: {str(e)}")
         raise HTTPException(status_code=500, detail="사용자 삭제 중 오류가 발생했습니다.")
+
+
+class AdminResetPasswordRequest(BaseModel):
+    new_password: str = Field(..., min_length=6)
+
+
+@router.put("/users/{user_id}/reset-password", response_model=MessageResponse)
+async def admin_reset_password(
+    user_id: int,
+    request: AdminResetPasswordRequest,
+    current_user: Dict[str, Any] = Depends(require_role(UserRole.ADMIN)),
+) -> MessageResponse:
+    """관리자가 특정 사용자의 비밀번호를 리셋 (admin 전용)"""
+    try:
+        user = get_user_by_id(user_id)
+        if not user:
+            raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다.")
+        if update_user_password(user_id, request.new_password):
+            logger.info(f"Admin {current_user['username']} reset password for user ID={user_id}")
+            return MessageResponse(success=True, message="비밀번호가 리셋되었습니다.")
+        else:
+            raise HTTPException(status_code=500, detail="비밀번호 리셋 중 오류가 발생했습니다.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Admin password reset failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="비밀번호 리셋 중 오류가 발생했습니다.")
+
+
+@router.get("/users/analysis-counts")
+async def get_analysis_counts(
+    current_user: Dict[str, Any] = Depends(require_role(UserRole.ADMIN)),
+):
+    """유저별 분석 실행 횟수 조회 (관리자 전용).
+    clients.created_by → user_id 기준으로 client_analyses 건수를 카운팅."""
+    try:
+        conn = _get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """SELECT c.created_by AS user_id, COUNT(ca.id) AS cnt
+               FROM client_analyses ca
+               JOIN clients c ON ca.client_id = c.id
+               GROUP BY c.created_by"""
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        # { user_id: count } 형태로 반환
+        counts = {}
+        for r in rows:
+            counts[str(r[0])] = r[1]
+        return {"success": True, "data": counts}
+    except Exception as e:
+        logger.error(f"분석 횟수 조회 실패: {e}")
+        return {"success": False, "error": f"분석 횟수 조회 실패: {str(e)}", "data": {}}
+
+
+@router.get("/users/{user_id}/login-logs")
+async def get_login_logs(
+    user_id: int,
+    days: int = 7,
+    current_user: Dict[str, Any] = Depends(require_role(UserRole.ADMIN)),
+):
+    """특정 직원의 최근 로그인 이력 조회 (관리자 전용)"""
+    try:
+        conn = _get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """SELECT id, login_at, ip_address FROM login_logs
+               WHERE user_id = ? AND login_at >= datetime('now', '-' || ? || ' days')
+               ORDER BY login_at DESC LIMIT 50""",
+            (user_id, days),
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return {
+            "success": True,
+            "data": [{"id": r[0], "login_at": r[1], "ip_address": r[2]} for r in rows],
+        }
+    except Exception as e:
+        logger.error(f"로그인 이력 조회 실패: {e}")
+        return {"success": False, "data": []}

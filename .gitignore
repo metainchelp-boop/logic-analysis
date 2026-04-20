@@ -4,3 +4,7 @@ __pycache__/
 .DS_Store
 *.db
 .env
+
+# 쿠팡 관련 (비활성, 롤백됨)
+backend/coupang*.py
+frontend/js/components/CoupangAnalysisSection.jsx

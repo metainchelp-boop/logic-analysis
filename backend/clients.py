@@ -11,7 +11,7 @@ from typing import Optional, List, Dict, Any
 from contextlib import contextmanager
 
 from fastapi import APIRouter, HTTPException, Query, Depends, status
-from pydantic import BaseModel, Field, EmailStr, validator
+from pydantic import BaseModel, Field, validator
 
 from auth import get_current_user, require_role
 
@@ -152,10 +152,11 @@ class ClientStatsResponse(BaseModel):
 @contextmanager
 def get_db_connection():
     """Context manager for database connections"""
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     # Enable WAL mode for better concurrent access
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
     try:
         yield conn
         conn.commit()
@@ -188,8 +189,8 @@ def init_clients_db():
                     notes TEXT DEFAULT '',
                     status TEXT DEFAULT 'active',
                     created_by INTEGER NOT NULL,
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                    created_at TEXT DEFAULT (datetime('now','localtime')),
+                    updated_at TEXT DEFAULT (datetime('now','localtime'))
                 )
             """)
 
@@ -271,8 +272,9 @@ def search_clients(
                 query += " AND status = ?"
                 params.append(status)
 
-            # Get total count
-            count_query = query.replace("SELECT *", "SELECT COUNT(*) as count", 1)
+            # Get total count — WHERE 절만 추출하여 안전하게 COUNT 쿼리 생성
+            where_idx = query.find(" WHERE ")
+            count_query = "SELECT COUNT(*) as count FROM clients" + (query[where_idx:] if where_idx >= 0 else "")
             cursor.execute(count_query, params)
             total = cursor.fetchone()["count"]
 
@@ -299,6 +301,15 @@ def create_client(
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
+
+            # URL 중복 등록 경고 (같은 유저가 같은 스토어 URL 재등록 방지)
+            if data.naver_store_url:
+                dup = cursor.execute(
+                    "SELECT id, name FROM clients WHERE naver_store_url = ? AND created_by = ? AND status = 'active'",
+                    (data.naver_store_url, created_by)
+                ).fetchone()
+                if dup:
+                    raise ValueError(f"이미 동일한 스토어 URL로 등록된 업체가 있습니다: {dup['name']} (ID: {dup['id']})")
 
             cursor.execute("""
                 INSERT INTO clients (
@@ -379,7 +390,7 @@ def update_client(
                 params.append(data.status)
 
             # Always update updated_at
-            updates.append("updated_at = CURRENT_TIMESTAMP")
+            updates.append("updated_at = datetime('now','localtime')")
 
             if updates:
                 query = f"UPDATE clients SET {', '.join(updates)} WHERE id = ?"
@@ -465,8 +476,25 @@ def get_client_stats(user_id: int = None, is_admin: bool = False) -> Dict[str, i
 
 
 # ============================================================================
-# API Endpoints
+# API Endpoints (라우트 순서 중요: /stats/summary를 /{client_id} 보다 앞에 정의)
 # ============================================================================
+
+@router.get("/stats/summary", response_model=ClientStatsResponse)
+async def get_stats(
+    current_user: Dict = Depends(get_current_user),
+):
+    """Get client statistics for dashboard"""
+    try:
+        _is_adm = current_user.get("role") in ("admin", "superadmin")
+        stats = get_client_stats(user_id=current_user["id"], is_admin=_is_adm)
+        return ClientStatsResponse(success=True, stats=stats)
+    except Exception as e:
+        logger.error(f"Error getting client stats: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail="통계를 불러올 수 없습니다",
+        )
+
 
 @router.get("", response_model=ClientListResponse)
 async def list_clients(
@@ -508,9 +536,18 @@ async def list_clients(
     except Exception as e:
         logger.error(f"Error listing clients: {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=500,
             detail="클라이언트 목록을 불러올 수 없습니다",
         )
+
+
+def _check_ownership(client, current_user):
+    """업체 소유권 확인. admin은 전체 접근 가능, 그 외는 created_by 일치 필수."""
+    if current_user.get("role") in ("admin", "superadmin"):
+        return True
+    if client and client.get("created_by") == current_user.get("id"):
+        return True
+    raise HTTPException(status_code=403, detail="해당 업체에 대한 접근 권한이 없습니다.")
 
 
 @router.get("/{client_id}", response_model=ClientDetailResponse)
@@ -518,7 +555,7 @@ async def get_client(
     client_id: int,
     current_user: Dict = Depends(get_current_user),
 ):
-    """Get client detail by ID"""
+    """Get client detail by ID (소유권 검증)"""
     try:
         client = get_client_by_id(client_id)
         if not client:
@@ -526,6 +563,7 @@ async def get_client(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="클라이언트를 찾을 수 없습니다",
             )
+        _check_ownership(client, current_user)
 
         return ClientDetailResponse(success=True, client=client)
     except HTTPException:
@@ -578,9 +616,14 @@ async def update_existing_client(
 ):
     """
     Update an existing client.
-    Requires admin or manager role.
+    Requires admin or manager role + 소유권 검증.
     """
     try:
+        existing = get_client_by_id(client_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail="클라이언트를 찾을 수 없습니다")
+        _check_ownership(existing, current_user)
+
         client = update_client(client_id, client_data)
 
         return ClientUpdateResponse(
@@ -605,13 +648,18 @@ async def update_existing_client(
 async def delete_existing_client(
     client_id: int,
     current_user: Dict = Depends(get_current_user),
-    role_check: None = Depends(require_role(["admin"])),
+    role_check: None = Depends(require_role(["admin", "manager"])),
 ):
     """
     Delete a client.
-    Requires admin role only.
+    Requires admin or manager role + 소유권 검증.
     """
     try:
+        existing = get_client_by_id(client_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail="클라이언트를 찾을 수 없습니다")
+        _check_ownership(existing, current_user)
+
         delete_client(client_id)
 
         return ClientDeleteResponse(
@@ -628,23 +676,6 @@ async def delete_existing_client(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="클라이언트 삭제에 실패했습니다",
-        )
-
-
-@router.get("/stats/summary", response_model=ClientStatsResponse)
-async def get_stats(
-    current_user: Dict = Depends(get_current_user),
-):
-    """Get client statistics for dashboard"""
-    try:
-        _is_adm = current_user.get("role") in ("admin", "superadmin")
-        stats = get_client_stats(user_id=current_user["id"], is_admin=_is_adm)
-        return ClientStatsResponse(success=True, stats=stats)
-    except Exception as e:
-        logger.error(f"Error getting client stats: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="통계를 불러올 수 없습니다",
         )
 
 

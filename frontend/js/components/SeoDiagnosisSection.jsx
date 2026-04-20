@@ -1,5 +1,5 @@
 /* SeoDiagnosisSection — SEO 종합 진단 (10개 평가지표) + 상세페이지 품질 진단 (HTML 직접 업로드 방식 + 북마클릿) */
-window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl: parentProductUrl }) {
+window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl: parentProductUrl, competitorData }) {
     const { useState, useEffect, useRef } = React;
     const [productUrl, setProductUrl] = useState('');
     const [result, setResult] = useState(null);
@@ -128,9 +128,7 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl:
     /* ── 북마클릿: 스마트스토어 페이지에서 클릭하면 HTML을 클립보드에 복사 ── */
     const bookmarkletCode = "javascript:(function(){try{var h=document.documentElement.outerHTML;navigator.clipboard.writeText(h).then(function(){alert('✅ HTML '+Math.round(h.length/1024)+'KB 복사 완료!\\n\\n로직분석 페이지의 \"📋 HTML 붙여넣기\" 버튼을 눌러 붙여넣으세요.');}).catch(function(e){var t=document.createElement('textarea');t.value=h;document.body.appendChild(t);t.select();document.execCommand('copy');document.body.removeChild(t);alert('✅ HTML '+Math.round(h.length/1024)+'KB 복사 완료! 로직분석에 붙여넣으세요.');});}catch(e){alert('❌ 복사 실패: '+e.message);}})();";
 
-    /* ── 공통 유틸 ── */
-    const scoreColor = (s) => s >= 70 ? '#059669' : s >= 40 ? '#d97706' : '#dc2626';
-    const scoreBg = (s) => s >= 70 ? '#ecfdf5' : s >= 40 ? '#fffbeb' : '#fef2f2';
+    /* ── 공통 유틸 (scoreColor, scoreBg → utils.js 전역 사용) ── */
     const scoreLabel = (s) => s >= 70 ? '양호' : s >= 40 ? '보통' : '개선필요';
     const scoreGradient = (s) => s >= 70 ? 'linear-gradient(90deg, #34d399, #059669)' : s >= 40 ? 'linear-gradient(90deg, #fbbf24, #d97706)' : 'linear-gradient(90deg, #f87171, #dc2626)';
     const priorityColor = (p) => p === 'high' ? '#dc2626' : p === 'medium' ? '#d97706' : '#6b7280';
@@ -198,6 +196,8 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl:
                                 </div>
                             )}
                         </div>
+
+                        {/* 경쟁사 비교표는 container 밖에서 렌더링 (너비 맞춤) */}
 
                         {/* 10개 지표 상세 바 차트 */}
                         <div className="card" style={{ marginBottom: 16 }}>
@@ -606,6 +606,11 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl:
                 )}
 
             </div>
+
+            {/* 경쟁사 비교표 — container 밖에서 렌더링하여 다른 섹터와 동일 너비 */}
+            {competitorData && React.createElement('div', { id: 'sec-competitor' },
+                React.createElement(CompetitorTableSection, { data: competitorData })
+            )}
         </div>
     );
 };

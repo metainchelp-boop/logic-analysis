@@ -13,7 +13,7 @@ window.AdvertiserInfoCard = function AdvertiserInfoCard(props) {
     <div className="section fade-in">
       <div className="container">
       <h2 className="section-title">📢 광고 경쟁 정보</h2>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>
+      <div className="card-grid card-grid-2" style={{ gap: '12px' }}>
         {items.map(function(item, idx) {
           return (
             <div key={idx} style={{
@@ -31,13 +31,7 @@ window.AdvertiserInfoCard = function AdvertiserInfoCard(props) {
         })}
       </div>
 
-      <style>{`
-        @media (max-width: 480px) {
-          .section > .container > div[style*="repeat(2"] {
-            grid-template-columns: 1fr !important;
-          }
-        }
-      `}</style>
+      {/* 반응형은 styles.css .card-grid-2에서 처리 */}
       </div>
     </div>
   );

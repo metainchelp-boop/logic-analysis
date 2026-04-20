@@ -4,17 +4,12 @@ window.MarketRevenueSection = function MarketRevenueSection(props) {
 
   if (!topProducts || topProducts.length === 0) return null;
 
-  var getRankBadge = function(rank) {
-    if (rank === 1) return React.createElement('span', { className: 'rank-badge gold' }, '1');
-    if (rank === 2) return React.createElement('span', { className: 'rank-badge silver' }, '2');
-    if (rank === 3) return React.createElement('span', { className: 'rank-badge bronze' }, '3');
-    return rank;
-  };
+  // getRankBadge → utils.js 전역 함수 사용
 
   return (
     <div className="section fade-in">
       <div className="container">
-      <h2 className="section-title">📊 대표 키워드 시장 규모 추정 (상위 20개 상품)</h2>
+      <h2 className="section-title">📊 대표 키워드 시장 규모 추정 (상위 40개 상품)</h2>
 
       {/* Summary Cards */}
       <div className="market-summary-grid">
@@ -26,13 +21,13 @@ window.MarketRevenueSection = function MarketRevenueSection(props) {
         <div className="market-summary-card green">
           <p className="ms-label">💰 월간 예상 시장규모</p>
           <p className="ms-value">{estimatedMonthly}</p>
-          <p className="ms-sub">상위 20개 상품 추정 매출 합산</p>
+          <p className="ms-sub">상위 40개 상품 추정 매출 합산</p>
         </div>
       </div>
 
       {/* Rank Revenue Table */}
       <h3 style={{ fontSize: '15px', fontWeight: '700', color: '#1e293b', marginBottom: '12px' }}>🏆 순위별 예상 월 매출</h3>
-      <div className="table-wrap" style={{ maxHeight: '520px', overflowY: 'auto', border: '1px solid #e5e7eb', borderRadius: '12px' }}>
+      <div className="table-wrap" style={{ maxHeight: '1200px', overflowY: 'auto', border: '1px solid #e5e7eb', borderRadius: '12px' }}>
         <table>
           <thead>
             <tr>
@@ -46,7 +41,7 @@ window.MarketRevenueSection = function MarketRevenueSection(props) {
             </tr>
           </thead>
           <tbody>
-            {topProducts.slice(0, 20).map(function(item, idx) {
+            {topProducts.map(function(item, idx) {
               return (
                 <tr key={idx} className={item.rank <= 3 ? 'rank-highlight' : ''}>
                   <td style={{ textAlign: 'center' }}>{getRankBadge(item.rank)}</td>

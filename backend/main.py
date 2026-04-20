@@ -8,8 +8,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel, field_validator
-from typing import Optional, List, Any, Union
-from datetime import datetime
+from typing import Optional, List, Dict, Any
+from datetime import datetime, date
 import os
 import re
 import time
@@ -18,7 +18,7 @@ import logging
 
 # v3 신규 모듈 임포트
 from fastapi import Depends
-from auth import router as auth_router, init_auth_db, get_current_user
+from auth import router as auth_router, init_auth_db, get_current_user, require_role, UserRole
 from clients import router as clients_router, init_clients_db
 from reports import router as reports_router, init_reports_db
 from client_dashboard import router as cd_router, init_client_dashboard_db
@@ -96,7 +96,7 @@ async def lifespan(app):
     stop_scheduler()
 
 app = FastAPI(
-    title="로직 분석 프로그램 v2",
+    title="로직 분석 프로그램 v3",
     description="네이버 쇼핑 키워드 분석 + 상품 노출 순위 추적",
     version="3.0.0",
     lifespan=lifespan,
@@ -127,6 +127,27 @@ app.include_router(cd_router)
 def _is_admin(user: dict) -> bool:
     """관리자(admin/superadmin) 여부 확인"""
     return user.get("role") in ("admin", "superadmin")
+
+
+def _verify_keyword_ownership(keyword_id: int, current_user: dict):
+    """키워드 → 상품 → 사용자 소유권 체인 검증"""
+    if _is_admin(current_user):
+        return True
+    from database import _get_conn
+    conn = _get_conn()
+    try:
+        row = conn.execute("""
+            SELECT tp.user_id FROM tracked_keywords tk
+            JOIN tracked_products tp ON tk.product_id = tp.id
+            WHERE tk.id = ?
+        """, (keyword_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="키워드를 찾을 수 없습니다.")
+        if row["user_id"] != current_user.get("id"):
+            raise HTTPException(status_code=403, detail="해당 데이터에 대한 접근 권한이 없습니다.")
+        return True
+    finally:
+        conn.close()
 
 
 # ==================== 요청/응답 모델 ====================
@@ -211,13 +232,13 @@ class NotificationSettingsRequest(BaseModel):
 
 # --- 실시간 순위 조회 ---
 @app.post("/api/rank/check")
-async def check_rank(req: RankCheckRequest):
-    """키워드 + 상품URL로 실시간 순위 조회"""
+async def check_rank(req: RankCheckRequest, current_user: dict = Depends(get_current_user)):
+    """키워드 + 상품URL로 실시간 순위 조회 (인증 필수, viewer 제한은 handleSearch에서 관리)"""
     try:
         rank, page, competitors = find_product_rank(
             keyword=req.keyword,
             product_url=req.product_url,
-            max_pages=2
+            max_pages=10
         )
         product_info = get_product_info(req.product_url)
         analysis = generate_rank_analysis(rank, None, competitors, product_info)
@@ -290,7 +311,7 @@ def run_initial_rank_check(product_id: int, product_url: str, keyword_ids: List[
             rank, page, competitors = find_product_rank(
                 keyword=kw_info["keyword"],
                 product_url=product_url,
-                max_pages=2
+                max_pages=10
             )
             save_ranking(
                 product_id=product_id,
@@ -309,12 +330,45 @@ def run_initial_rank_check(product_id: int, product_url: str, keyword_ids: List[
 # --- 추적 상품 목록 ---
 @app.get("/api/products")
 async def list_products(current_user: dict = Depends(get_current_user)):
-    """추적 중인 상품 목록 (유저별 격리)"""
+    """추적 중인 상품 목록 (유저별 격리) + 빈 상품 정보 즉시 재조회"""
+    import sqlite3
+    from database import DB_PATH
+
     products = get_all_tracked_products(user_id=current_user["id"], is_admin=_is_admin(current_user))
     result = []
     for p in products:
         keywords = get_keywords_for_product(p["id"])
         p["keywords"] = keywords
+
+        # 상품명이 비어있으면 즉시 재조회하여 응답에 반영 + DB 업데이트
+        if not p.get("product_name") or p["product_name"].strip() == '':
+            try:
+                # 추적 키워드 중 첫 번째를 검색어로 사용 (API 매칭 정확도 향상)
+                search_keyword = keywords[0]["keyword"] if keywords and isinstance(keywords[0], dict) else (keywords[0] if keywords else "")
+                info = get_product_info(p["product_url"], keyword=search_keyword)
+                if info.get("product_name"):
+                    p["product_name"] = info["product_name"]
+                    p["store_name"] = info["store_name"]
+                    p["image_url"] = info["image_url"]
+                    p["price"] = info["price"]
+                    # DB 업데이트
+                    conn = sqlite3.connect(DB_PATH, timeout=10)
+                    try:
+                        conn.execute("PRAGMA busy_timeout=30000")
+                        conn.execute("""
+                            UPDATE tracked_products SET
+                                product_name=?, store_name=?, image_url=?, price=?,
+                                updated_at=datetime('now','localtime')
+                            WHERE id=?
+                        """, (info["product_name"], info["store_name"],
+                              info["image_url"], info["price"], p["id"]))
+                        conn.commit()
+                        logger.info(f"상품 정보 즉시 재조회 성공: ID={p['id']} → {info['product_name'][:30]}")
+                    finally:
+                        conn.close()
+            except Exception as e:
+                logger.warning(f"상품 정보 즉시 재조회 실패: ID={p['id']}: {e}")
+
         result.append(p)
     return {"success": True, "data": result}
 
@@ -329,16 +383,21 @@ async def remove_product(product_id: int, current_user: dict = Depends(get_curre
 
 # --- 키워드 추가 ---
 @app.post("/api/keywords/add")
-async def add_keyword(req: KeywordAddRequest):
-    """기존 상품에 키워드 추가"""
+async def add_keyword(req: KeywordAddRequest, current_user: dict = Depends(get_current_user)):
+    """기존 상품에 키워드 추가 (소유권 검증)"""
+    # 상품 소유권 확인
+    products = get_all_tracked_products(user_id=current_user["id"], is_admin=_is_admin(current_user))
+    if not any(p["id"] == req.product_id for p in products):
+        raise HTTPException(status_code=403, detail="해당 상품에 대한 접근 권한이 없습니다.")
     kid = add_tracked_keyword(req.product_id, req.keyword)
     return {"success": True, "data": {"keyword_id": kid, "keyword": req.keyword}}
 
 
 # --- 순위 이력 조회 ---
 @app.get("/api/rank/history/{keyword_id}")
-async def rank_history(keyword_id: int, days: int = 30):
-    """키워드별 순위 변동 이력 (최근 N일)"""
+async def rank_history(keyword_id: int, days: int = 30, current_user: dict = Depends(get_current_user)):
+    """키워드별 순위 변동 이력 (소유권 검증)"""
+    _verify_keyword_ownership(keyword_id, current_user)
     days = min(max(days, 1), 365)
     history = get_ranking_history(keyword_id, days=days)
     return {"success": True, "data": history}
@@ -346,8 +405,9 @@ async def rank_history(keyword_id: int, days: int = 30):
 
 # --- 경쟁 상품 조회 ---
 @app.get("/api/competitors/{keyword_id}")
-async def competitors(keyword_id: int):
-    """키워드별 상위 경쟁 상품"""
+async def competitors(keyword_id: int, current_user: dict = Depends(get_current_user)):
+    """키워드별 상위 경쟁 상품 (소유권 검증)"""
+    _verify_keyword_ownership(keyword_id, current_user)
     comps = get_latest_competitors(keyword_id)
     return {"success": True, "data": comps}
 
@@ -373,9 +433,13 @@ async def refresh_rank(product_id: int, background_tasks: BackgroundTasks, curre
 
 # --- 키워드 볼륨 조회 ---
 @app.post("/api/keyword/volume")
-async def keyword_volume(keywords: List[str]):
-    """키워드 검색량 조회 (네이버 검색광고 API)"""
+async def keyword_volume(keywords: List[str], current_user: dict = Depends(get_current_user)):
+    """키워드 검색량 조회 (인증 필수)"""
     try:
+        # 키워드 길이 제한 (100자 초과 방지)
+        keywords = [k[:100] for k in keywords[:20] if k and k.strip()]
+        if not keywords:
+            return {"success": False, "detail": "유효한 키워드를 입력해주세요."}
         data = get_keyword_volume(keywords)
         return {"success": True, "data": data}
     except Exception as e:
@@ -386,8 +450,8 @@ async def keyword_volume(keywords: List[str]):
 
 # --- 알림 설정 조회 ---
 @app.get("/api/notify/settings")
-async def get_notify_settings():
-    """현재 알림 설정 조회"""
+async def get_notify_settings(current_user: dict = Depends(require_role(UserRole.ADMIN))):
+    """현재 알림 설정 조회 (인증 필수)"""
     settings = get_notification_settings()
     return {
         "success": True,
@@ -400,8 +464,8 @@ async def get_notify_settings():
 
 # --- 알림 설정 변경 ---
 @app.put("/api/notify/settings")
-async def update_notify_settings(req: NotificationSettingsRequest):
-    """알림 설정 변경"""
+async def update_notify_settings(req: NotificationSettingsRequest, current_user: dict = Depends(require_role(UserRole.ADMIN))):
+    """알림 설정 변경 (admin 전용)"""
     try:
         settings = update_notification_settings(
             notify_enabled=req.notify_enabled,
@@ -429,8 +493,8 @@ async def update_notify_settings(req: NotificationSettingsRequest):
 
 # --- 테스트 알림 발송 ---
 @app.post("/api/notify/test")
-async def test_notification():
-    """테스트 알림 발송"""
+async def test_notification(current_user: dict = Depends(require_role(UserRole.ADMIN))):
+    """테스트 알림 발송 (admin 전용)"""
     try:
         result = send_test_notification()
         return {"success": result.get("success", False), "data": result}
@@ -440,8 +504,8 @@ async def test_notification():
 
 # --- 알림 발송 이력 ---
 @app.get("/api/notify/logs")
-async def notify_logs(limit: int = 20):
-    """알림 발송 이력 조회"""
+async def notify_logs(limit: int = 20, current_user: dict = Depends(require_role(UserRole.ADMIN))):
+    """알림 발송 이력 조회 (admin 전용)"""
     limit = min(max(limit, 1), 100)
     logs = get_notification_logs(limit)
     return {"success": True, "data": logs}
@@ -449,8 +513,8 @@ async def notify_logs(limit: int = 20):
 
 # --- 리포트 미리보기 ---
 @app.get("/api/notify/preview")
-async def preview_report():
-    """현재 데이터 기반 리포트 미리보기"""
+async def preview_report(current_user: dict = Depends(require_role(UserRole.ADMIN))):
+    """현재 데이터 기반 리포트 미리보기 (admin 전용)"""
     try:
         rank_data = collect_daily_rank_changes()
         report_text = generate_daily_report_text(rank_data)
@@ -528,8 +592,8 @@ class DetailPageAnalysisRequest(BaseModel):
     product_url: Optional[str] = ""
 
 @app.post("/api/seo/detail-page")
-async def detail_page_analyze(req: DetailPageAnalysisRequest):
-    """상세페이지 품질 분석 — 사용자가 업로드한 HTML 직접 분석"""
+async def detail_page_analyze(req: DetailPageAnalysisRequest, current_user: dict = Depends(get_current_user)):
+    """상세페이지 품질 분석 (인증 필수)"""
     try:
         from naver_crawler import analyze_detail_page
 
@@ -569,15 +633,15 @@ class SeoAnalysisRequest(BaseModel):
     keyword: str
 
 @app.post("/api/seo/analyze")
-async def seo_analyze(req: SeoAnalysisRequest):
-    """상품 SEO 종합 진단 — 10개 평가지표"""
+async def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_current_user)):
+    """상품 SEO 종합 진단 (인증 필수)"""
     try:
         product_info = get_product_info(req.product_url)
         product_name = product_info.get("product_name", "")
         product_url = req.product_url or ""
 
         rank, page, competitors = find_product_rank(
-            keyword=req.keyword, product_url=req.product_url, max_pages=2
+            keyword=req.keyword, product_url=req.product_url, max_pages=10
         )
 
         # get_product_info 실패 시 (스마트스토어 ID ≠ nvMid) → 키워드 검색에서 productId로 보완
@@ -892,8 +956,8 @@ class ProductSearchRequest(BaseModel):
     count: int = 40
 
 @app.post("/api/products/search")
-async def search_products(req: ProductSearchRequest):
-    """네이버 쇼핑에서 키워드로 상품 검색 (상위 N개)"""
+async def search_products(req: ProductSearchRequest, current_user: dict = Depends(get_current_user)):
+    """네이버 쇼핑에서 키워드로 상품 검색 (인증 필수)"""
     try:
         from naver_crawler import search_naver_shopping_api, _parse_api_item
         result = search_naver_shopping_api(req.keyword, display=min(req.count, 100))
@@ -918,8 +982,8 @@ class RelatedKeywordRequest(BaseModel):
     keyword: str
 
 @app.post("/api/keywords/related")
-async def related_keywords(req: RelatedKeywordRequest):
-    """연관 키워드 + 황금 키워드 분석"""
+async def related_keywords(req: RelatedKeywordRequest, current_user: dict = Depends(get_current_user)):
+    """연관 키워드 + 황금 키워드 분석 (인증 필수)"""
     try:
         # 네이버 검색광고 API에서 연관 키워드 가져오기
         from naver_crawler import (
@@ -1045,8 +1109,8 @@ class ProductNameAnalysisRequest(BaseModel):
     keyword: str = ""  # 기준 키워드 (선택)
 
 @app.post("/api/product-name/analyze")
-async def analyze_product_names(req: ProductNameAnalysisRequest):
-    """상품명에서 키워드 추출 및 빈도 분석"""
+async def analyze_product_names(req: ProductNameAnalysisRequest, current_user: dict = Depends(get_current_user)):
+    """상품명에서 키워드 추출 및 빈도 분석 (인증 필수)"""
     try:
         import re as re_mod
         from collections import Counter
@@ -1135,8 +1199,8 @@ class AdvertiserAnalysisRequest(BaseModel):
         return v
 
 @app.post("/api/advertiser/analyze")
-async def advertiser_analyze(req: AdvertiserAnalysisRequest):
-    """광고주 맞춤 분석 리포트: 순위 현황 + 경쟁사 비교 + 1페이지 진입 전략"""
+async def advertiser_analyze(req: AdvertiserAnalysisRequest, current_user: dict = Depends(get_current_user)):
+    """광고주 맞춤 분석 리포트 (인증 필수)"""
     try:
         from naver_crawler import search_naver_shopping_api, _parse_api_item
 
@@ -1169,11 +1233,11 @@ async def advertiser_analyze(req: AdvertiserAnalysisRequest):
 
         # 2) 키워드로 순위 검색
         rank, page, top_competitors = find_product_rank(
-            keyword=req.keyword, product_url=req.product_url, max_pages=4
+            keyword=req.keyword, product_url=req.product_url, max_pages=10
         )
 
         # 3) 상위 40개 상품 가져오기 (1페이지 분석용)
-        shop_result = search_naver_shopping_api(req.keyword, display=40)
+        shop_result = search_naver_shopping_api(req.keyword, display=80)
         shop_items = shop_result.get("items", [])
         page1_products = [_parse_api_item(item, idx + 1) for idx, item in enumerate(shop_items)]
 
@@ -1186,7 +1250,7 @@ async def advertiser_analyze(req: AdvertiserAnalysisRequest):
         review_counts = []
         name_lengths = []
 
-        for p in page1_products[:20]:
+        for p in page1_products[:80]:
             has_keyword = req.keyword.lower() in p.get("product_name", "").lower()
             comp_item = {
                 "rank": p["rank"],
@@ -1220,7 +1284,7 @@ async def advertiser_analyze(req: AdvertiserAnalysisRequest):
         my_name_len = len(my_name)
 
         # ── 경쟁사 패턴 심층 분석 ──
-        top5 = page1_products[:5] if page1_products else []
+        top5 = page1_products[:10] if page1_products else []
         top10 = page1_products[:10] if page1_products else []
 
         # 가격대 분포 분석
@@ -1238,7 +1302,7 @@ async def advertiser_analyze(req: AdvertiserAnalysisRequest):
         # 브랜드 집중도 분석
         brand_map = {}
         store_map = {}
-        for p in page1_products[:20]:
+        for p in page1_products[:80]:
             b = p.get("brand") or ""
             s = p.get("store_name") or ""
             if b:
@@ -1247,20 +1311,21 @@ async def advertiser_analyze(req: AdvertiserAnalysisRequest):
                 store_map[s] = store_map.get(s, 0) + 1
         top_brands = sorted(brand_map.items(), key=lambda x: -x[1])[:3]
         top_stores = sorted(store_map.items(), key=lambda x: -x[1])[:3]
-        brand_concentration = (top_brands[0][1] / 20 * 100) if top_brands else 0
+        total_analyzed = min(len(page1_products), 80)
+        brand_concentration = (top_brands[0][1] / max(total_analyzed, 1) * 100) if top_brands else 0
 
         # 카테고리 분석
         cat_map = {}
-        for p in page1_products[:20]:
+        for p in page1_products[:80]:
             cat = p.get("category2") or p.get("category1") or "기타"
             cat_map[cat] = cat_map.get(cat, 0) + 1
         top_cat = max(cat_map, key=cat_map.get) if cat_map else "-"
-        cat_share = round(cat_map.get(top_cat, 0) / max(len(page1_products[:20]), 1) * 100)
+        cat_share = round(cat_map.get(top_cat, 0) / max(total_analyzed, 1) * 100)
 
         # 상품명 키워드 위치 패턴 분석
         kw_front_count = 0  # 키워드가 상품명 앞부분(30%)에 위치
         kw_total = 0
-        for p in page1_products[:20]:
+        for p in page1_products[:80]:
             pname = p.get("product_name", "")
             kw_pos = pname.lower().find(req.keyword.lower())
             if kw_pos >= 0:
@@ -1276,7 +1341,7 @@ async def advertiser_analyze(req: AdvertiserAnalysisRequest):
             all_words.extend([w for w in words if len(w) >= 2 and w.lower() != req.keyword.lower()])
         common_words = [w for w, c in Counter(all_words).most_common(8) if c >= 2]
 
-        # TOP5 평균가
+        # TOP10 평균가
         top5_prices = [p["price"] for p in top5 if p.get("price", 0) > 0]
         top5_avg = int(sum(top5_prices) / len(top5_prices)) if top5_prices else avg_price
 
@@ -1294,7 +1359,7 @@ async def advertiser_analyze(req: AdvertiserAnalysisRequest):
                 price_actions.append("묶음/세트 구성으로 개당 단가를 낮추면 가격 비교에서 유리해집니다.")
             elif price_ratio < 0.8:
                 price_insights.append(f"현재 가격({my_price:,}원)이 경쟁 평균({avg_price:,}원) 대비 {round((1-price_ratio)*100)}% 저렴합니다. 가성비를 핵심 소구점으로 활용하세요.")
-                price_insights.append(f"TOP5 평균({top5_avg:,}원)과 비교하면 진입 장벽이 낮아 초기 판매량 확보에 유리합니다.")
+                price_insights.append(f"TOP10 평균({top5_avg:,}원)과 비교하면 진입 장벽이 낮아 초기 판매량 확보에 유리합니다.")
                 price_actions.append("상품명/썸네일에 '가성비', '최저가', '특가' 등 가격 메리트를 직접 표기하세요.")
                 price_actions.append("저가 포지션의 약점(품질 의심)을 상세페이지 리뷰 섹션과 인증서로 보완하세요.")
                 price_actions.append(f"마진 여유가 있다면 '무료배송' 또는 '사은품 증정'으로 전환율을 높이세요.")
@@ -1307,7 +1372,7 @@ async def advertiser_analyze(req: AdvertiserAnalysisRequest):
         else:
             price_insights.append(f"상품 가격 정보를 확인할 수 없습니다. 1페이지 평균가는 {avg_price:,}원입니다.")
             price_actions.append(f"경쟁 상품 가격대({min_price:,}~{max_price:,}원)를 참고해 포지셔닝을 결정하세요.")
-            price_actions.append(f"TOP5 평균가({top5_avg:,}원) 이하로 진입하면 초기 클릭률 확보에 유리합니다.")
+            price_actions.append(f"TOP10 평균가({top5_avg:,}원) 이하로 진입하면 초기 클릭률 확보에 유리합니다.")
 
         # 가격 전략별 추천 광고 품목
         price_recs = []
@@ -1355,13 +1420,13 @@ async def advertiser_analyze(req: AdvertiserAnalysisRequest):
                 seo_insights.append(f"1페이지 상품 중 {round(kw_front_count/max(kw_total,1)*100)}%가 키워드를 상품명 앞쪽에 배치하고 있습니다.")
 
             if common_words:
-                seo_actions.append(f"TOP5 상품에서 반복 등장하는 키워드: [{', '.join(common_words[:5])}] — 이 중 빠진 단어가 있다면 상품명에 추가를 검토하세요.")
+                seo_actions.append(f"TOP10 상품에서 반복 등장하는 키워드: [{', '.join(common_words[:5])}] — 이 중 빠진 단어가 있다면 상품명에 추가를 검토하세요.")
             seo_actions.append(f"네이버 쇼핑은 상품명 앞 40자를 중요하게 봅니다. 핵심 키워드를 앞에, 부가 정보(용량, 수량)는 뒤에 배치하세요.")
             seo_actions.append("특수문자(★, ●, ♥)는 네이버 알고리즘에서 감점 요인입니다. 대괄호[  ]와 슬래시만 사용하세요.")
         else:
             seo_insights.append("상품명 정보를 불러올 수 없습니다.")
             if common_words:
-                seo_actions.append(f"1페이지 TOP5 공통 키워드: [{', '.join(common_words[:5])}] — 상품명 작성 시 참고하세요.")
+                seo_actions.append(f"1페이지 TOP10 공통 키워드: [{', '.join(common_words[:5])}] — 상품명 작성 시 참고하세요.")
 
         seo_recs = [
             {"name": "SEO 최적화", "reason": "상품명·카테고리·속성값 전반을 전문가가 진단하고 최적화하여 자연 검색 노출을 극대화합니다."},
@@ -1585,8 +1650,8 @@ class AiFeedbackRequest(BaseModel):
     data: Any     # 해당 섹션의 분석 데이터 (dict 또는 list)
 
 @app.post("/api/ai/feedback")
-async def ai_feedback(req: AiFeedbackRequest):
-    """Claude AI 기반 섹션별 분석 피드백 생성"""
+async def ai_feedback(req: AiFeedbackRequest, current_user: dict = Depends(get_current_user)):
+    """Claude AI 기반 섹션별 분석 피드백 생성 (인증 필수)"""
     try:
         import anthropic
 
@@ -1659,6 +1724,169 @@ async def ai_feedback(req: AiFeedbackRequest):
     except Exception as e:
         logger.error(f"AI 피드백 생성 실패: {str(e)}")
         return {"success": False, "error": f"AI 피드백 생성 실패: {str(e)}"}
+
+
+# --- AI 피드백 통합 (1회 호출) ---
+class AiFeedbackAllRequest(BaseModel):
+    keyword: str
+    sections: Dict[str, Any]  # {"volume": {...}, "competition": {...}, ...}
+    client_name: Optional[str] = ""
+    client_id: Optional[int] = 0
+    call_type: Optional[str] = "manual"
+
+@app.post("/api/ai/feedback-all")
+async def ai_feedback_all(req: AiFeedbackAllRequest, current_user: dict = Depends(get_current_user)):
+    """Claude AI 기반 통합 분석 피드백 — 전 섹션을 1회 API 호출로 생성"""
+    try:
+        import anthropic, json
+
+        api_key = os.getenv("ANTHROPIC_API_KEY", "")
+        if not api_key:
+            return {"success": False, "error": "ANTHROPIC_API_KEY가 설정되지 않았습니다."}
+
+        client = anthropic.Anthropic(api_key=api_key)
+
+        section_labels = {
+            "volume": ("검색량 분석", "PC/모바일 검색 비율, CTR, CPC 효율성을 수치로 분석하고 광고 vs SEO 투자 판단 근거를 제시하세요."),
+            "market": ("시장 규모", "월 거래액, 마진율, BEP 시나리오를 분석하세요."),
+            "competition": ("경쟁강도", "상품 수 대비 검색량, 브랜드 비율을 분석하고 1페이지 진입을 위한 현실적 목표(리뷰수, 판매건수)를 제시하세요."),
+            "related": ("연관 키워드", "구매의도/정보탐색/브랜드 키워드를 분류하고 공략 우선순위와 활용법을 제시하세요."),
+            "trend": ("키워드 트렌드", "시즌성, 성장 추세를 분석하고 광고/재고/SEO 최적 타이밍을 제시하세요."),
+            "golden": ("골든 키워드", "검색량 대비 경쟁도가 낮은 키워드 우선순위와 상품명 최적화 예시를 제시하세요."),
+            "competitor": ("경쟁사 비교", "경쟁사 가격/리뷰/상품명을 비교하고 차별화 전략을 제시하세요."),
+            "sales": ("판매량 추정", "순위별 매출 시나리오와 투자 대비 수익률(ROAS)을 분석하세요."),
+            "strategy": ("진입 전략", "가격/상품명/카테고리/리뷰별 개선 우선순위와 1주~3개월 실행 계획을 제시하세요."),
+        }
+
+        # 데이터가 있는 섹션만 프롬프트에 포함
+        section_blocks = []
+        for sec_key, sec_data in req.sections.items():
+            if sec_data is None:
+                continue
+            label_info = section_labels.get(sec_key)
+            if not label_info:
+                continue
+            label, instruction = label_info
+            data_str = json.dumps(sec_data, ensure_ascii=False, default=str)
+            if len(data_str) > 1500:
+                data_str = data_str[:1500] + "...(생략)"
+            section_blocks.append(f"[{label}]\n데이터: {data_str}\n분석 지시: {instruction}")
+
+        if not section_blocks:
+            return {"success": False, "error": "분석할 데이터가 없습니다."}
+
+        combined_data = "\n\n---\n\n".join(section_blocks)
+
+        system_prompt = """당신은 메타아이앤씨(METAINC) 시니어 네이버 쇼핑 마케팅 컨설턴트입니다.
+네이버 쇼핑 알고리즘(적합도·인기도·신뢰도)에 정통합니다.
+
+작성 원칙:
+- 광고주에게 1:1로 브리핑하듯 자연스러운 대화체로 작성하세요.
+- 각 섹션별로 [섹션명] 구분자를 사용하되, 내용은 자연스럽게 서술하세요.
+- 반드시 데이터 수치를 인용하며, 근거 없는 추상적 표현은 쓰지 마세요.
+- 아이콘, 이모지, 특수기호(**, ##)는 사용하지 마세요.
+- 각 섹션은 5~8줄 내외로, 현황→핵심 이슈→실행 전략 흐름으로 작성하세요.
+- 마지막에 'METAINC 종합 인사이트'로 전체 요약과 핵심 액션 3가지를 짧게 정리하세요."""
+
+        message = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=4000,
+            messages=[{
+                "role": "user",
+                "content": f"""키워드 '{req.keyword}'에 대한 전체 분석 데이터입니다.
+각 섹션별로 분석 피드백을 작성해주세요.
+
+{combined_data}
+
+각 섹션을 [섹션명] 형태로 구분하여, 광고주 브리핑 형식으로 작성하세요."""
+            }],
+            system=system_prompt
+        )
+
+        full_text = message.content[0].text if message.content else ""
+
+        # API 사용량 로깅 (v3.9.13)
+        try:
+            from database import save_api_usage_log
+            usage = message.usage  # input_tokens, output_tokens
+            inp_tok = getattr(usage, 'input_tokens', 0)
+            out_tok = getattr(usage, 'output_tokens', 0)
+            cost = (inp_tok * 3 + out_tok * 15) / 1_000_000  # Sonnet 4 pricing
+            save_api_usage_log(
+                endpoint="feedback-all",
+                keyword=req.keyword,
+                client_name=getattr(req, 'client_name', '') or '',
+                client_id=getattr(req, 'client_id', 0) or 0,
+                call_type=getattr(req, 'call_type', 'manual') or 'manual',
+                model="claude-sonnet-4-20250514",
+                input_tokens=inp_tok,
+                output_tokens=out_tok,
+                cost_usd=cost,
+                user_id=current_user.get("id", 0),
+                status="success"
+            )
+        except Exception as log_err:
+            logger.warning(f"API 사용량 로깅 실패 (무시): {log_err}")
+
+        # 섹션별로 분리하여 반환
+        import re
+        feedback_dict = {}
+        # [섹션명] 패턴으로 분리
+        parts = re.split(r'\[([^\]]+)\]', full_text)
+        # parts[0]은 첫 구분자 이전 텍스트 (보통 빈 문자열)
+        # parts[1]=섹션명, parts[2]=내용, parts[3]=섹션명, parts[4]=내용, ...
+        label_to_key = {v[0]: k for k, v in section_labels.items()}
+        label_to_key["METAINC 종합 인사이트"] = "summary"
+        for i in range(1, len(parts) - 1, 2):
+            sec_name = parts[i].strip()
+            sec_content = parts[i + 1].strip() if i + 1 < len(parts) else ""
+            matched_key = label_to_key.get(sec_name, sec_name)
+            feedback_dict[matched_key] = sec_content
+
+        # 파싱 실패 시 전체 텍스트를 summary로 반환
+        if not feedback_dict:
+            feedback_dict["summary"] = full_text
+
+        return {
+            "success": True,
+            "data": {
+                "keyword": req.keyword,
+                "feedbacks": feedback_dict,
+                "full_text": full_text,
+                "generated_at": datetime.now().isoformat()
+            }
+        }
+    except ImportError:
+        return {"success": False, "error": "anthropic 패키지가 설치되지 않았습니다. pip install anthropic"}
+    except Exception as e:
+        logger.error(f"AI 통합 피드백 생성 실패: {str(e)}")
+        # 실패도 로깅
+        try:
+            from database import save_api_usage_log
+            save_api_usage_log(
+                endpoint="feedback-all", keyword=req.keyword,
+                model="claude-sonnet-4-20250514",
+                user_id=current_user.get("id", 0),
+                status="error", error_message=str(e)[:200]
+            )
+        except Exception:
+            pass
+        return {"success": False, "error": f"AI 통합 피드백 생성 실패: {str(e)}"}
+
+
+# --- API 사용량 조회 (superadmin 전용, v3.9.13) ---
+@app.get("/api/admin/api-usage")
+async def get_api_usage(current_user: dict = Depends(get_current_user)):
+    """API 사용량 대시보드 데이터 — yoosub92 전용"""
+    if current_user.get("username") != "yoosub92":
+        raise HTTPException(status_code=403, detail="접근 권한이 없습니다.")
+    try:
+        from database import get_api_usage_summary
+        data = get_api_usage_summary(days=30)
+        return {"success": True, "data": data}
+    except Exception as e:
+        logger.error(f"API 사용량 조회 실패: {e}")
+        return {"success": False, "error": str(e)}
 
 
 # --- 헬스체크 ---

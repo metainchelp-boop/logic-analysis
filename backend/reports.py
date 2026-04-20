@@ -6,15 +6,36 @@ Generates shareable HTML reports from keyword analysis data
 import sqlite3
 import json
 import os
-from datetime import datetime
+from collections import defaultdict
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 import hashlib
 import uuid
+import html as html_module
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+
+# ===== 인메모리 레이트 리밋 (공개 보고서 조회용) =====
+_view_tracker = defaultdict(list)
+
+def _check_view_rate(ip: str, limit: int = 30, window_sec: int = 60) -> bool:
+    """IP 기준 분당 최대 limit회 허용. 초과 시 False 반환."""
+    now = datetime.now()
+    cutoff = now - timedelta(seconds=window_sec)
+    _view_tracker[ip] = [t for t in _view_tracker[ip] if t > cutoff]
+    if len(_view_tracker[ip]) >= limit:
+        return False
+    _view_tracker[ip].append(now)
+    # 오래된 IP 엔트리 정리 (메모리 누적 방지)
+    if len(_view_tracker) > 1000:
+        stale_ips = [k for k, v in _view_tracker.items() if not v or v[-1] < cutoff]
+        for k in stale_ips:
+            del _view_tracker[k]
+    return True
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from starlette.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from auth import get_current_user, require_role
@@ -87,7 +108,7 @@ def init_reports_db():
             status TEXT DEFAULT 'generated',
             views INTEGER DEFAULT 0,
             created_by INTEGER NOT NULL,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            created_at TEXT DEFAULT (datetime('now','localtime')),
             FOREIGN KEY (client_id) REFERENCES clients(id),
             FOREIGN KEY (created_by) REFERENCES users(id)
         )
@@ -125,7 +146,7 @@ def init_reports_db():
 
 def generate_report_hash() -> str:
     """Generate unique report hash for public sharing"""
-    return hashlib.md5(f"{uuid.uuid4()}{datetime.now()}".encode()).hexdigest()[:16]
+    return hashlib.sha256(f"{uuid.uuid4()}{datetime.now()}".encode()).hexdigest()[:32]
 
 
 def format_korean_number(num: int) -> str:
@@ -153,6 +174,11 @@ def generate_report_html(
     Returns:
         Complete HTML document as string
     """
+
+    # XSS 방지 — 사용자 입력값 이스케이프
+    keyword = html_module.escape(keyword)
+    product_url = html_module.escape(product_url)
+    client_name = html_module.escape(client_name)
 
     # Extract data from report_data, with sensible defaults
     monthly_search = report_data.get("monthly_search_volume", 0)
@@ -186,7 +212,7 @@ def generate_report_html(
                     price_text = price
                 else:
                     price_text = f"₩{int(price):,}"
-            except:
+            except (ValueError, TypeError):
                 price_text = price
 
             # Determine rank color
@@ -720,10 +746,7 @@ def generate_report_html(
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
 
-@router.on_event("startup")
-async def startup():
-    """Initialize database on startup"""
-    init_reports_db()
+# on_event("startup") 제거 — main.py lifespan에서 init_reports_db() 호출됨
 
 
 @router.post("/generate")
@@ -768,12 +791,16 @@ async def generate_report(
         client_name = "클라이언트"
 
         if request.client_id:
-            # Optionally fetch client name from database
+            # 업체 소유권 검증 + 이름 조회
             conn = get_db()
             cursor = conn.cursor()
-            cursor.execute("SELECT name FROM clients WHERE id = ?", (request.client_id,))
+            cursor.execute("SELECT name, created_by FROM clients WHERE id = ?", (request.client_id,))
             result = cursor.fetchone()
             if result:
+                _is_adm = current_user.get("role") in ("admin", "superadmin")
+                if not _is_adm and result["created_by"] != current_user["id"]:
+                    conn.close()
+                    raise HTTPException(status_code=403, detail={"success": False, "message": "해당 업체에 대한 접근 권한이 없습니다."})
                 client_name = result["name"]
             conn.close()
 
@@ -793,28 +820,33 @@ async def generate_report(
 
         # Save to database
         conn = get_db()
-        cursor = conn.cursor()
-
-        cursor.execute("""
-            INSERT INTO reports (
-                client_id, title, keyword, product_url, report_data,
-                report_hash, html_filename, status, created_by
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            request.client_id,
-            title,
-            request.keyword,
-            request.product_url or "",
-            json.dumps(request.data, ensure_ascii=False),
-            report_hash,
-            html_filename,
-            "generated",
-            current_user["id"]
-        ))
-
-        conn.commit()
-        report_id = cursor.lastrowid
-        conn.close()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO reports (
+                    client_id, title, keyword, product_url, report_data,
+                    report_hash, html_filename, status, created_by
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                request.client_id,
+                title,
+                request.keyword,
+                request.product_url or "",
+                json.dumps(request.data, ensure_ascii=False),
+                report_hash,
+                html_filename,
+                "generated",
+                current_user["id"]
+            ))
+            conn.commit()
+            report_id = cursor.lastrowid
+        except Exception as db_err:
+            # DB 실패 시 고아 HTML 파일 제거
+            if html_path.exists():
+                html_path.unlink(missing_ok=True)
+            raise db_err
+        finally:
+            conn.close()
 
         return {
             "success": True,
@@ -871,8 +903,9 @@ async def list_reports(
             params.append(client_id)
 
         if search:
-            where_clauses.append("(keyword LIKE ? OR title LIKE ?)")
-            search_term = f"%{search}%"
+            where_clauses.append("(keyword LIKE ? ESCAPE '\\' OR title LIKE ? ESCAPE '\\')")
+            escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            search_term = f"%{escaped}%"
             params.extend([search_term, search_term])
 
         where_clause = " AND ".join(where_clauses) if where_clauses else "1=1"
@@ -922,12 +955,21 @@ async def get_report(
         conn = get_db()
         cursor = conn.cursor()
 
-        cursor.execute("""
-            SELECT id, client_id, title, keyword, product_url, status, views,
-                   report_hash, created_at, created_by
-            FROM reports
-            WHERE id = ? AND created_by = ?
-        """, (report_id, current_user["id"]))
+        _is_adm = current_user.get("role") in ("admin", "superadmin")
+        if _is_adm:
+            cursor.execute("""
+                SELECT id, client_id, title, keyword, product_url, status, views,
+                       report_hash, created_at, created_by
+                FROM reports
+                WHERE id = ?
+            """, (report_id,))
+        else:
+            cursor.execute("""
+                SELECT id, client_id, title, keyword, product_url, status, views,
+                       report_hash, created_at, created_by
+                FROM reports
+                WHERE id = ? AND created_by = ?
+            """, (report_id, current_user["id"]))
 
         report = cursor.fetchone()
         conn.close()
@@ -953,12 +995,16 @@ async def get_report(
 
 
 @router.get("/view/{report_hash}")
-async def view_public_report(report_hash: str):
+async def view_public_report(report_hash: str, request: Request):
     """
-    Public report view (NO AUTHENTICATION REQUIRED)
+    Public report view (레이트 리밋 적용, 분당 30회 제한)
     Returns HTML content and increments view count
     """
     try:
+        # 레이트 리밋 체크
+        client_ip = request.client.host if request.client else "unknown"
+        if not _check_view_rate(client_ip):
+            raise HTTPException(status_code=429, detail="요청이 너무 많습니다. 잠시 후 다시 시도해주세요.")
         conn = get_db()
         cursor = conn.cursor()
 
@@ -1008,8 +1054,7 @@ async def view_public_report(report_hash: str):
 @router.delete("/{report_id}")
 async def delete_report(
     report_id: int,
-    current_user: dict = Depends(get_current_user),
-    role: str = Depends(lambda: require_role(["admin", "manager"]))
+    current_user: dict = Depends(require_role(["admin", "manager"]))
 ):
     """
     Delete a report (admin/manager only)
@@ -1019,9 +1064,9 @@ async def delete_report(
         conn = get_db()
         cursor = conn.cursor()
 
-        # Get report
+        # Get report + 소유권 확인
         cursor.execute("""
-            SELECT id, html_filename FROM reports WHERE id = ?
+            SELECT id, html_filename, created_by FROM reports WHERE id = ?
         """, (report_id,))
 
         report = cursor.fetchone()
@@ -1030,6 +1075,14 @@ async def delete_report(
             raise HTTPException(
                 status_code=404,
                 detail={"success": False, "message": "보고서를 찾을 수 없습니다."}
+            )
+
+        # 관리자가 아니면 본인 보고서만 삭제 가능
+        _is_adm = current_user.get("role") in ("admin", "superadmin")
+        if not _is_adm and report["created_by"] != current_user["id"]:
+            raise HTTPException(
+                status_code=403,
+                detail={"success": False, "message": "다른 직원의 보고서는 삭제할 수 없습니다."}
             )
 
         # Delete HTML file

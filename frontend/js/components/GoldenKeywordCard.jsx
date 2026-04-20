@@ -25,7 +25,7 @@ window.GoldenKeywordCard = function GoldenKeywordCard(props) {
           </div>
 
           {/* Stat Cards */}
-          <div style={{
+          <div className="golden-stats-grid" style={{
             display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px',
             marginBottom: '20px', position: 'relative', zIndex: 1
           }}>
@@ -76,14 +76,7 @@ window.GoldenKeywordCard = function GoldenKeywordCard(props) {
             </div>
           )}
 
-          <style>{`
-            @media (max-width: 768px) {
-              .golden-card > div:nth-child(2) { grid-template-columns: repeat(2, 1fr) !important; }
-            }
-            @media (max-width: 480px) {
-              .golden-card > div:nth-child(2) { grid-template-columns: 1fr !important; }
-            }
-          `}</style>
+          {/* 반응형은 styles.css .golden-stats-grid에서 처리 */}
         </div>
       </div>
     </div>

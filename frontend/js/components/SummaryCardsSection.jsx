@@ -12,10 +12,7 @@ window.SummaryCardsSection = function SummaryCardsSection(props) {
   return (
     <div className="section fade-in">
       <div className="container">
-      <div style={{
-        display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)',
-        gap: '16px'
-      }}>
+      <div className="card-grid card-grid-4">
         {cards.map(function(c, i) {
           return (
             <div key={i} className="card" style={{ padding: '20px' }}>
@@ -26,19 +23,7 @@ window.SummaryCardsSection = function SummaryCardsSection(props) {
           );
         })}
       </div>
-
-      <style>{`
-        @media (max-width: 900px) {
-          .section > div[style*="grid-template-columns: repeat(4"] {
-            grid-template-columns: repeat(2, 1fr) !important;
-          }
-        }
-        @media (max-width: 480px) {
-          .section > div[style*="grid-template-columns: repeat(4"] {
-            grid-template-columns: 1fr !important;
-          }
-        }
-      `}</style>
+      {/* 반응형은 styles.css .card-grid-4에서 처리 */}
       </div>
     </div>
   );

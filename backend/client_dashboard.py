@@ -11,20 +11,24 @@ import os
 import json
 import logging
 
-from auth import get_current_user
+from auth import get_current_user, require_role
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/cd", tags=["client-dashboard"])
 
-DB_PATH = os.getenv("DB_PATH", "logic_data.db")
+DB_PATH = os.getenv("DB_PATH", "logic_analysis.db")
 
 
 def _get_conn():
-    conn = sqlite3.connect(DB_PATH, timeout=10)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA busy_timeout=30000")
+    conn.execute("PRAGMA cache_size=-8000")       # 8MB 캐시 (기본 2MB)
+    conn.execute("PRAGMA temp_store=MEMORY")       # 임시 테이블 메모리 사용
+    conn.execute("PRAGMA mmap_size=67108864")      # 64MB 메모리 매핑
     return conn
 
 
@@ -33,6 +37,22 @@ def _is_admin(user) -> bool:
         return user["role"] in ("admin", "superadmin")
     except (KeyError, TypeError):
         return False
+
+
+def _verify_client_access(conn, client_id: int, current_user: dict):
+    """업체 소유권 확인. admin/viewer는 통과, manager는 created_by 확인.
+    업체가 없으면 404, 권한 없으면 403 반환."""
+    row = conn.execute("SELECT id, created_by FROM clients WHERE id = ?", (client_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="업체를 찾을 수 없습니다.")
+    if _is_admin(current_user):
+        return row
+    # viewer는 전체 업체 조회(읽기) 가능
+    if current_user.get("role") == "viewer":
+        return row
+    if row["created_by"] != current_user.get("id"):
+        raise HTTPException(status_code=403, detail="해당 업체에 대한 접근 권한이 없습니다.")
+    return row
 
 
 def init_client_dashboard_db():
@@ -109,6 +129,30 @@ def init_client_dashboard_db():
             ON client_rank_history(client_id, keyword, checked_at)
         """)
 
+        # 순위 이력 조회 최적화 인덱스
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_client_rank_daily
+            ON client_rank_history(client_id, keyword, check_type)
+        """)
+
+        # 성능 최적화 인덱스 추가
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ca_client_id
+            ON client_analyses(client_id)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ca_client_keyword_date
+            ON client_analyses(client_id, keyword, analyzed_date DESC)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_crh_client_id
+            ON client_rank_history(client_id)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_clients_status
+            ON clients(status, updated_at DESC)
+        """)
+
         conn.commit()
         logger.info("[ClientDashboard] DB tables initialized")
     except Exception as e:
@@ -156,7 +200,7 @@ class SaveRankRequest(BaseModel):
 # ==================== 빠른 업체 등록 (분석 탭에서) ====================
 
 @router.post("/quick-register")
-async def quick_register(req: QuickRegisterRequest, current_user: dict = Depends(get_current_user)):
+async def quick_register(req: QuickRegisterRequest, current_user: dict = Depends(require_role(["admin", "manager"]))):
     """분석 결과와 함께 업체를 빠르게 등록 (신규 또는 기존 업체에 분석 추가)"""
     conn = _get_conn()
     try:
@@ -204,6 +248,10 @@ async def quick_register(req: QuickRegisterRequest, current_user: dict = Depends
         conn.commit()
         return {"success": True, "message": msg, "client_id": client_id}
     except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         logger.error(f"[quick-register] {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
@@ -214,7 +262,8 @@ def _save_analysis_internal(conn, client_id, keyword, product_url,
                             analysis_data, volume_data, related_data,
                             shop_products, advertiser_data, today, now,
                             report_html=''):
-    """분석 결과 내부 저장 함수 (일자별 UPSERT)"""
+    """분석 결과 내부 저장 함수 (일자별 UPSERT)
+    주의: 호출자가 conn.commit()을 담당합니다."""
     params = (
         product_url,
         json.dumps(analysis_data or {}, ensure_ascii=False),
@@ -253,64 +302,75 @@ def _save_analysis_internal(conn, client_id, keyword, product_url,
 
 @router.get("/my-clients")
 async def my_clients(current_user: dict = Depends(get_current_user)):
-    """등록된 업체 목록 + 최근 분석 요약 (사용자별 격리)"""
+    """등록된 업체 목록 + 사이드바용 요약 (경량화 버전)
+    admin/viewer=전체, manager=본인"""
     conn = _get_conn()
     try:
         user_id = current_user["id"]
         is_adm = _is_admin(current_user)
+        user_role = current_user.get("role", "viewer")
 
-        if is_adm:
-            clients = conn.execute("""
-                SELECT c.*,
-                    (SELECT COUNT(*) FROM client_analyses ca WHERE ca.client_id = c.id) as analysis_count,
-                    (SELECT MAX(ca.updated_at) FROM client_analyses ca WHERE ca.client_id = c.id) as last_analyzed
-                FROM clients c
-                WHERE c.status = 'active'
-                ORDER BY c.updated_at DESC
-            """).fetchall()
-        else:
-            clients = conn.execute("""
-                SELECT c.*,
-                    (SELECT COUNT(*) FROM client_analyses ca WHERE ca.client_id = c.id) as analysis_count,
-                    (SELECT MAX(ca.updated_at) FROM client_analyses ca WHERE ca.client_id = c.id) as last_analyzed
-                FROM clients c
-                WHERE c.status = 'active' AND c.created_by = ?
-                ORDER BY c.updated_at DESC
-            """, (user_id,)).fetchall()
+        # 1) 업체 목록 + 집계를 단일 LEFT JOIN 쿼리로 처리
+        base_where = "c.status = 'active'"
+        params = []
+        if not (is_adm or user_role == "viewer"):
+            base_where += " AND c.created_by = ?"
+            params.append(user_id)
 
+        clients = conn.execute(f"""
+            SELECT c.id, c.name, c.business_name, c.main_keywords,
+                   c.naver_store_url, c.status, c.created_by,
+                   c.created_at, c.updated_at,
+                   COALESCE(ca_agg.analysis_count, 0) AS analysis_count,
+                   ca_agg.last_analyzed,
+                   COALESCE(ca_agg.unique_keyword_count, 0) AS unique_keyword_count,
+                   COALESCE(ca_agg.total_analysis_days, 0) AS total_analysis_days
+            FROM clients c
+            LEFT JOIN (
+                SELECT client_id,
+                       COUNT(*) AS analysis_count,
+                       MAX(updated_at) AS last_analyzed,
+                       COUNT(DISTINCT keyword) AS unique_keyword_count,
+                       COUNT(DISTINCT analyzed_date) AS total_analysis_days
+                FROM client_analyses
+                GROUP BY client_id
+            ) ca_agg ON ca_agg.client_id = c.id
+            WHERE {base_where}
+            ORDER BY c.updated_at DESC
+        """, params).fetchall()
+
+        if not clients:
+            return {"success": True, "data": []}
+
+        # 2) 최근 순위만 경량 조회 (키워드별 최신 1건씩)
+        client_ids = [c['id'] for c in clients]
+        placeholders = ','.join('?' * len(client_ids))
+
+        all_ranks = conn.execute(f"""
+            SELECT r.client_id, r.keyword, r.rank_position, r.checked_at
+            FROM client_rank_history r
+            INNER JOIN (
+                SELECT client_id, keyword, MAX(id) AS max_id
+                FROM client_rank_history
+                WHERE client_id IN ({placeholders})
+                GROUP BY client_id, keyword
+            ) latest ON r.id = latest.max_id
+        """, client_ids).fetchall()
+
+        ranks_map = {}
+        for r in all_ranks:
+            r_dict = dict(r)
+            cid = r_dict.pop('client_id')
+            ranks_map.setdefault(cid, []).append(r_dict)
+
+        # 3) 결과 조립 — 사이드바에 필요한 필드만 반환
         result = []
         for c in clients:
             row = dict(c)
-            # 이 업체에 저장된 분석 키워드 목록 (최신순)
-            analyses = conn.execute("""
-                SELECT keyword, product_url, analyzed_date, updated_at
-                FROM client_analyses
-                WHERE client_id = ?
-                ORDER BY analyzed_date DESC, updated_at DESC
-            """, (c['id'],)).fetchall()
-            row['analyzed_keywords'] = [dict(a) for a in analyses]
-
-            # 고유 키워드 목록
-            unique_keywords = list(set(a['keyword'] for a in analyses))
-            row['unique_keyword_count'] = len(unique_keywords)
-
-            # 총 분석 일수
-            unique_dates = list(set(a['analyzed_date'] for a in analyses if a['analyzed_date']))
-            row['total_analysis_days'] = len(unique_dates)
-
-            # 최근 순위 요약
-            latest_ranks = conn.execute("""
-                SELECT keyword, rank_position, checked_at
-                FROM client_rank_history
-                WHERE client_id = ?
-                AND id IN (
-                    SELECT MAX(id) FROM client_rank_history
-                    WHERE client_id = ?
-                    GROUP BY keyword
-                )
-            """, (c['id'], c['id'])).fetchall()
-            row['latest_ranks'] = [dict(r) for r in latest_ranks]
-
+            cid = c['id']
+            row['latest_ranks'] = ranks_map.get(cid, [])
+            # 사이드바 호환용 빈 리스트 (상세는 별도 API에서 로드)
+            row['analyzed_keywords'] = []
             result.append(row)
 
         return {"success": True, "data": result}
@@ -321,20 +381,49 @@ async def my_clients(current_user: dict = Depends(get_current_user)):
         conn.close()
 
 
+# ==================== 등록된 업체 간략 목록 (라우트 순서 중요: /{client_id} 보다 위) ====================
+
+@router.get("/registered-clients")
+async def registered_clients(current_user: dict = Depends(get_current_user)):
+    """분석 탭에서 업체 선택 드롭다운용 간략 목록"""
+    conn = _get_conn()
+    try:
+        user_id = current_user["id"]
+        is_adm = _is_admin(current_user)
+
+        user_role = current_user.get("role", "viewer")
+
+        # admin/viewer → 전체 업체, manager → 본인 등록분만
+        if is_adm or user_role == "viewer":
+            rows = conn.execute(
+                "SELECT id, name, main_keywords FROM clients WHERE status = 'active' ORDER BY name ASC"
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, name, main_keywords FROM clients WHERE status = 'active' AND created_by = ? ORDER BY name ASC",
+                (user_id,)
+            ).fetchall()
+
+        return {"success": True, "data": [dict(r) for r in rows]}
+    except Exception as e:
+        logger.error(f"[registered-clients] {e}")
+        return {"success": False, "data": [], "error": str(e)}
+    finally:
+        conn.close()
+
+
 # ==================== 분석 결과 저장/조회 ====================
 
 @router.post("/analyze")
-async def save_analysis(req: SaveAnalysisRequest, current_user: dict = Depends(get_current_user)):
-    """분석 결과 저장 (일자별 누적 — 같은 날 같은 키워드는 업데이트)"""
+async def save_analysis(req: SaveAnalysisRequest, current_user: dict = Depends(require_role(["admin", "manager"]))):
+    """분석 결과 저장 (admin/manager 전용, 일자별 누적)"""
     conn = _get_conn()
     try:
         now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         today = date.today().isoformat()
 
-        # 업체 존재 확인
-        client = conn.execute("SELECT id FROM clients WHERE id = ?", (req.client_id,)).fetchone()
-        if not client:
-            raise HTTPException(status_code=404, detail="업체를 찾을 수 없습니다.")
+        # 업체 존재 + 소유권 확인
+        _verify_client_access(conn, req.client_id, current_user)
 
         _save_analysis_internal(conn, req.client_id, req.keyword, req.product_url or '',
                                 req.analysis_data, req.volume_data, req.related_data,
@@ -357,8 +446,16 @@ async def save_analysis(req: SaveAnalysisRequest, current_user: dict = Depends(g
         conn.commit()
         return {"success": True, "message": "분석 결과가 저장되었습니다."}
     except HTTPException:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         raise
     except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         logger.error(f"[save-analysis] {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
@@ -367,19 +464,35 @@ async def save_analysis(req: SaveAnalysisRequest, current_user: dict = Depends(g
 
 @router.get("/{client_id}/analysis")
 async def get_analysis(client_id: int, keyword: Optional[str] = None,
+                       summary: bool = False,
                        current_user: dict = Depends(get_current_user)):
-    """저장된 분석 결과 조회 (일자별 히스토리)"""
+    """저장된 분석 결과 조회 (일자별 히스토리, 최근 90일 제한, 소유권 검증)
+    summary=true: 키워드 목록용 경량 응답 (JSON 본문 제외)"""
     conn = _get_conn()
     try:
+        _verify_client_access(conn, client_id, current_user)
+
+        if summary:
+            # 경량 모드: 키워드 pill 버튼에 필요한 최소 데이터만
+            rows = conn.execute("""
+                SELECT keyword, product_url, analyzed_date, updated_at,
+                       CASE WHEN report_html != '' AND report_html IS NOT NULL THEN 1 ELSE 0 END AS has_report_html
+                FROM client_analyses
+                WHERE client_id=?
+                ORDER BY analyzed_date DESC, updated_at DESC
+                LIMIT 200
+            """, (client_id,)).fetchall()
+            return {"success": True, "data": [dict(r) for r in rows]}
+
         if keyword:
             rows = conn.execute(
-                "SELECT * FROM client_analyses WHERE client_id=? AND keyword=? ORDER BY analyzed_date DESC",
+                "SELECT * FROM client_analyses WHERE client_id=? AND keyword=? ORDER BY analyzed_date DESC LIMIT 90",
                 (client_id, keyword)
             ).fetchall()
             return {"success": True, "data": [_parse_analysis_row(r) for r in rows]}
         else:
             rows = conn.execute(
-                "SELECT * FROM client_analyses WHERE client_id=? ORDER BY analyzed_date DESC, updated_at DESC",
+                "SELECT * FROM client_analyses WHERE client_id=? ORDER BY analyzed_date DESC, updated_at DESC LIMIT 200",
                 (client_id,)
             ).fetchall()
             return {"success": True, "data": [_parse_analysis_row(r) for r in rows]}
@@ -393,34 +506,46 @@ async def get_analysis(client_id: int, keyword: Optional[str] = None,
 @router.get("/{client_id}/history")
 async def get_analysis_history(client_id: int, keyword: str,
                                current_user: dict = Depends(get_current_user)):
-    """특정 키워드의 일자별 분석 히스토리 (트렌드 보기용)"""
+    """특정 키워드의 일자별 분석 히스토리 (트렌드 보기용, 소유권 검증)"""
     conn = _get_conn()
     try:
+        _verify_client_access(conn, client_id, current_user)
         rows = conn.execute("""
             SELECT analyzed_date, analysis_json, volume_json, updated_at
             FROM client_analyses
             WHERE client_id = ? AND keyword = ?
             ORDER BY analyzed_date ASC
+            LIMIT 180
         """, (client_id, keyword)).fetchall()
 
         history = []
         for r in rows:
             try:
                 ad = json.loads(r['analysis_json'] or '{}')
-            except:
+            except (json.JSONDecodeError, TypeError):
                 ad = {}
             try:
                 vd = json.loads(r['volume_json'] or '{}')
-            except:
+            except (json.JSONDecodeError, TypeError):
                 vd = {}
+            # 광고주 정보
+            ai = ad.get('advertiserInfo', {})
+            pc_clicks = ai.get('pcClicks', '-')
+            mobile_clicks = ai.get('mobileClicks', '-')
+            ad_comp_idx = ai.get('compIdx', '-')
+
+            # 경쟁강도 정보
+            ci = ad.get('competitionIndex', {})
+
             history.append({
                 'date': r['analyzed_date'],
                 'updated_at': r['updated_at'],
                 'search_volume': ad.get('summaryCards', {}).get('totalVolume', '-'),
-                'product_count': ad.get('summaryCards', {}).get('productCount', '-'),
-                'comp_level': ad.get('summaryCards', {}).get('compLevel', '-'),
-                'comp_index': ad.get('competitionIndex', {}).get('compIndex', None),
-                'avg_price': ad.get('marketRevenue', {}).get('avgPrice', '-'),
+                'pc_clicks': pc_clicks,
+                'mobile_clicks': mobile_clicks,
+                'comp_index': ci.get('compIndex', None),
+                'comp_percent': ci.get('compPercent', None),
+                'ad_comp_idx': ad_comp_idx,
                 'market_size': ad.get('marketRevenue', {}).get('estimatedMonthly', '-'),
             })
 
@@ -457,8 +582,8 @@ def _parse_analysis_row(row, include_html=False):
 # ==================== 업체 삭제 ====================
 
 @router.delete("/{client_id}")
-async def delete_client(client_id: int, current_user: dict = Depends(get_current_user)):
-    """업체 삭제 (본인 소유만 가능, 관련 분석/순위 데이터도 함께 삭제)"""
+async def delete_client(client_id: int, current_user: dict = Depends(require_role(["admin", "manager"]))):
+    """업체 삭제 (admin/manager, 관련 분석/순위 데이터도 함께 삭제)"""
     conn = _get_conn()
     try:
         user_id = current_user["id"]
@@ -494,9 +619,10 @@ async def delete_client(client_id: int, current_user: dict = Depends(get_current
 @router.get("/{client_id}/report-html")
 async def get_report_html(client_id: int, keyword: str, date: str,
                           current_user: dict = Depends(get_current_user)):
-    """특정 일자의 저장된 HTML 보고서 반환"""
+    """특정 일자의 저장된 HTML 보고서 반환 (소유권 검증)"""
     conn = _get_conn()
     try:
+        _verify_client_access(conn, client_id, current_user)
         row = conn.execute(
             "SELECT report_html FROM client_analyses WHERE client_id=? AND keyword=? AND analyzed_date=?",
             (client_id, keyword, date)
@@ -516,18 +642,40 @@ async def get_report_html(client_id: int, keyword: str, date: str,
 # ==================== 순위 추적 이력 ====================
 
 @router.post("/rank-save")
-async def save_rank(req: SaveRankRequest, current_user: dict = Depends(get_current_user)):
-    """순위 체크 결과 저장 (일자별 누적)"""
+async def save_rank(req: SaveRankRequest, current_user: dict = Depends(require_role(["admin", "manager"]))):
+    """순위 체크 결과 저장 (admin/manager 전용, 소유권 검증, 당일 중복 시 UPDATE)"""
     conn = _get_conn()
     try:
-        conn.execute("""
-            INSERT INTO client_rank_history
-            (client_id, keyword, product_url, rank_position, page_number, check_type)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (req.client_id, req.keyword, req.product_url,
-              req.rank_position, req.page_number, req.check_type))
-        conn.commit()
-        return {"success": True, "message": "순위 기록이 저장되었습니다."}
+        _verify_client_access(conn, req.client_id, current_user)
+        today = date.today().isoformat()
+
+        # 같은 날 같은 체크 타입의 기존 기록 확인 (product_url NULL 안전 처리)
+        product_url = req.product_url or ''
+        check_type = req.check_type or 'manual'
+        existing = conn.execute(
+            """SELECT id FROM client_rank_history
+               WHERE client_id=? AND keyword=? AND DATE(checked_at)=? AND check_type=?""",
+            (req.client_id, req.keyword, today, check_type)
+        ).fetchone()
+
+        if existing:
+            # 기존 기록 업데이트
+            conn.execute("""
+                UPDATE client_rank_history
+                SET rank_position=?, page_number=?, checked_at=datetime('now','localtime')
+                WHERE id=?
+            """, (req.rank_position, req.page_number, existing['id']))
+            conn.commit()
+            return {"success": True, "message": "순위 기록이 업데이트되었습니다."}
+        else:
+            conn.execute("""
+                INSERT INTO client_rank_history
+                (client_id, keyword, product_url, rank_position, page_number, check_type)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (req.client_id, req.keyword, product_url,
+                  req.rank_position, req.page_number, check_type))
+            conn.commit()
+            return {"success": True, "message": "순위 기록이 저장되었습니다."}
     except Exception as e:
         logger.error(f"[save-rank] {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -538,9 +686,10 @@ async def save_rank(req: SaveRankRequest, current_user: dict = Depends(get_curre
 @router.get("/{client_id}/rank-history")
 async def get_rank_history(client_id: int, keyword: Optional[str] = None, days: int = 90,
                            current_user: dict = Depends(get_current_user)):
-    """순위 추적 이력 조회"""
+    """순위 추적 이력 조회 (소유권 검증)"""
     conn = _get_conn()
     try:
+        _verify_client_access(conn, client_id, current_user)
         if keyword:
             rows = conn.execute("""
                 SELECT * FROM client_rank_history
@@ -565,32 +714,6 @@ async def get_rank_history(client_id: int, keyword: Optional[str] = None, days: 
 
 
 # ==================== 등록된 업체 목록 (분석 탭용 - 간략) ====================
-
-@router.get("/registered-clients")
-async def registered_clients(current_user: dict = Depends(get_current_user)):
-    """분석 탭에서 업체 선택 드롭다운용 간략 목록"""
-    conn = _get_conn()
-    try:
-        user_id = current_user["id"]
-        is_adm = _is_admin(current_user)
-
-        if is_adm:
-            rows = conn.execute(
-                "SELECT id, name, main_keywords FROM clients WHERE status = 'active' ORDER BY name ASC"
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT id, name, main_keywords FROM clients WHERE status = 'active' AND created_by = ? ORDER BY name ASC",
-                (user_id,)
-            ).fetchall()
-
-        return {"success": True, "data": [dict(r) for r in rows]}
-    except Exception as e:
-        logger.error(f"[registered-clients] {e}")
-        return {"success": True, "data": []}
-    finally:
-        conn.close()
-
 
 # ==================== 일일 조회 제한 ====================
 

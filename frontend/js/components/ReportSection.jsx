@@ -1,11 +1,18 @@
 /* ReportSection — 보고서 내보내기 (DOM 복제 HTML + JSON/CSV) */
-window.ReportSection = function ReportSection() {
-    const { useState } = React;
+window.ReportSection = function ReportSection(props) {
+    var propKeyword = props && props.keyword || '';
+    var propCompanyName = props && props.companyName || '';
+    const { useState, useEffect } = React;
     const [format, setFormat] = useState('html');
     const [days, setDays] = useState(30);
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(false);
-    const [companyName, setCompanyName] = useState('');
+    const [companyName, setCompanyName] = useState(propCompanyName);
+
+    /* props에서 업체명이 바뀌면 반영 */
+    useEffect(function() {
+        if (propCompanyName) setCompanyName(propCompanyName);
+    }, [propCompanyName]);
 
     /* HTML 보고서 — 현재 페이지 DOM 복제 */
     var handleHtmlExport = function() {

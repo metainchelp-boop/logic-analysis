@@ -163,11 +163,11 @@ window.LoginPage = function LoginPage(props) {
   return React.createElement('div', { style: styles.container },
     React.createElement('div', { style: styles.card },
       React.createElement('div', { style: styles.header },
-        React.createElement('div', { style: styles.logo }, '🔍'),
+        React.createElement('img', { src: '/img/logo_light.png', alt: 'META INC', style: { height:48, width:'auto', marginBottom:16 } }),
         React.createElement('div', { style: styles.title }, '로직 분석'),
         React.createElement('div', { style: styles.subtitle }, '네이버 쇼핑 키워드 분석 & 순위 추적'),
         React.createElement('div', { style: { marginTop: '16px' } },
-          React.createElement('span', { style: styles.badge }, 'v3.0 에이전시')
+          React.createElement('span', { style: styles.badge }, (window.APP_VERSION || 'v3.9') + ' 에이전시')
         )
       ),
       errorValue && React.createElement('div', { style: styles.error }, errorValue),

@@ -25,20 +25,59 @@ window.UserManagementPage = function UserManagementPage(props) {
   var message = _useState5[0];
   var setMessage = _useState5[1];
 
-  // Fetch users on mount
+  var _useState6 = useState(null);
+  var expandedUserId = _useState6[0];
+  var setExpandedUserId = _useState6[1];
+
+  var _useState7 = useState([]);
+  var loginLogs = _useState7[0];
+  var setLoginLogs = _useState7[1];
+
+  var _useState8 = useState(false);
+  var logsLoading = _useState8[0];
+  var setLogsLoading = _useState8[1];
+
+  var _useState9 = useState({});
+  var analysisCounts = _useState9[0];
+  var setAnalysisCounts = _useState9[1];
+
+  var _useState10 = useState('all');
+  var roleFilter = _useState10[0];
+  var setRoleFilter = _useState10[1];
+
+  // Fetch users + analysis counts on mount
   useEffect(function() {
     fetchUsers();
+    fetchAnalysisCounts();
   }, []);
 
+  var toggleLoginLogs = function(userId) {
+    if (expandedUserId === userId) {
+      setExpandedUserId(null);
+      setLoginLogs([]);
+      return;
+    }
+    setExpandedUserId(userId);
+    setLogsLoading(true);
+    setLoginLogs([]);
+    api.get('/auth/users/' + userId + '/login-logs?days=7')
+    .then(function(data) {
+      if (data.success) setLoginLogs(data.data || []);
+      setLogsLoading(false);
+    })
+    .catch(function() { setLogsLoading(false); });
+  };
+
+  var fetchAnalysisCounts = function() {
+    api.get('/auth/users/analysis-counts')
+    .then(function(data) {
+      if (data.success) setAnalysisCounts(data.data || {});
+    })
+    .catch(function() {});
+  };
+
   var fetchUsers = function() {
-    fetch('/api/auth/users', {
-      method: 'GET',
-      headers: { 'Authorization': 'Bearer ' + token }
-    })
-    .then(function(r) {
-      if (!r.ok) throw new Error('서버 오류 (' + r.status + ')');
-      return r.json();
-    })
+    api.get('/auth/users')
     .then(function(data) {
       // 백엔드가 배열을 직접 반환하므로 배열/객체 모두 처리
       var userList = Array.isArray(data) ? data : (data.users || []);
@@ -46,7 +85,7 @@ window.UserManagementPage = function UserManagementPage(props) {
       setMessage('');
     })
     .catch(function(e) {
-      setMessage('사용자 조회 실패: ' + e.message);
+      setMessage('사용자 조회 실패: ' + (e.message || '네트워크 오류'));
     });
   };
 
@@ -91,29 +130,40 @@ window.UserManagementPage = function UserManagementPage(props) {
       body.password = formData.password;
     }
 
-    fetch(url, {
-      method: method,
-      headers: {
-        'Authorization': 'Bearer ' + token,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(body)
-    })
-    .then(function(r) {
-      if (!r.ok) {
-        return r.json().then(function(err) {
-          throw new Error(err.detail || '등록 실패 (' + r.status + ')');
-        });
-      }
-      return r.json();
-    })
+    var apiCall = editingUser
+      ? api.put('/auth/users/' + editingUser.id, body)
+      : api.post('/auth/users', body);
+
+    apiCall
     .then(function(data) {
+      if (data && data.success === false) {
+        setMessage('저장 실패: ' + (data.detail || '알 수 없는 오류'));
+        return;
+      }
+      // 수정 모드에서 비밀번호가 입력된 경우 → 비밀번호 리셋 API 추가 호출
+      if (editingUser && formData.password && formData.password.length >= 6) {
+        api.put('/auth/users/' + editingUser.id + '/reset-password', { new_password: formData.password })
+        .then(function(pwRes) {
+          if (pwRes && pwRes.success) {
+            setMessage('사용자 수정 + 비밀번호 변경 완료');
+          } else {
+            setMessage('사용자 수정 완료 (비밀번호 변경 실패: ' + (pwRes.detail || '오류') + ')');
+          }
+          handleCloseModal();
+          fetchUsers();
+        }).catch(function() {
+          setMessage('사용자 수정 완료 (비밀번호 변경 실패)');
+          handleCloseModal();
+          fetchUsers();
+        });
+        return;
+      }
       setMessage(editingUser ? '사용자 수정 완료' : '사용자 추가 완료');
       handleCloseModal();
       fetchUsers();
     })
     .catch(function(e) {
-      setMessage('저장 실패: ' + e.message);
+      setMessage('저장 실패: ' + (e.message || '네트워크 오류'));
     });
   };
 
@@ -125,17 +175,17 @@ window.UserManagementPage = function UserManagementPage(props) {
 
     if (!window.confirm(username + ' 사용자를 삭제하시겠습니까?')) return;
 
-    fetch('/api/auth/users/' + userId, {
-      method: 'DELETE',
-      headers: { 'Authorization': 'Bearer ' + token }
-    })
-    .then(function(r) { return r.json(); })
+    api.del('/auth/users/' + userId)
     .then(function(data) {
+      if (data && data.success === false) {
+        setMessage('삭제 실패: ' + (data.detail || '알 수 없는 오류'));
+        return;
+      }
       setMessage('사용자 삭제 완료');
       fetchUsers();
     })
     .catch(function(e) {
-      setMessage('삭제 실패: ' + e.message);
+      setMessage('삭제 실패: ' + (e.message || '네트워크 오류'));
     });
   };
 
@@ -197,6 +247,34 @@ window.UserManagementPage = function UserManagementPage(props) {
       }
     }, message),
 
+    /* 권한별 필터 탭 */
+    React.createElement('div', { style: { display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' } },
+      [
+        { key: 'all', label: '전체', color: '#6B21A8' },
+        { key: 'admin', label: '관리자', color: '#8B5CF6' },
+        { key: 'manager', label: '매니저', color: '#3B82F6' },
+        { key: 'viewer', label: '뷰어', color: '#9CA3AF' }
+      ].map(function(tab) {
+        var isActive = roleFilter === tab.key;
+        var count = tab.key === 'all' ? users.length : users.filter(function(u) { return u.role === tab.key; }).length;
+        return React.createElement('button', {
+          key: tab.key,
+          onClick: function() { setRoleFilter(tab.key); },
+          style: {
+            padding: '8px 20px',
+            borderRadius: '8px',
+            border: isActive ? '2px solid ' + tab.color : '1px solid #e5e7eb',
+            background: isActive ? tab.color : '#fff',
+            color: isActive ? '#fff' : '#374151',
+            fontSize: '13px',
+            fontWeight: isActive ? '700' : '500',
+            cursor: 'pointer',
+            transition: 'all 0.15s'
+          }
+        }, tab.label + ' (' + count + ')');
+      })
+    ),
+
     React.createElement('div', {
       style: {
         overflowX: 'auto',
@@ -219,49 +297,99 @@ window.UserManagementPage = function UserManagementPage(props) {
             React.createElement('th', { style: { padding: '12px', textAlign: 'left', fontWeight: 'bold', color: '#6B21A8' } }, '역할'),
             React.createElement('th', { style: { padding: '12px', textAlign: 'left', fontWeight: 'bold', color: '#6B21A8' } }, '상태'),
             React.createElement('th', { style: { padding: '12px', textAlign: 'left', fontWeight: 'bold', color: '#6B21A8' } }, '등록일'),
+            React.createElement('th', { style: { padding: '12px', textAlign: 'center', fontWeight: 'bold', color: '#6B21A8' } }, '분석 횟수'),
             React.createElement('th', { style: { padding: '12px', textAlign: 'left', fontWeight: 'bold', color: '#6B21A8' } }, '액션')
           )
         ),
         React.createElement('tbody', {},
-          users.map(function(user, idx) {
-            return React.createElement('tr', {
-              key: user.id,
-              style: {
-                backgroundColor: idx % 2 === 0 ? 'white' : '#F9F5FF',
-                borderBottom: '1px solid #E9D5FF'
-              }
-            },
-              React.createElement('td', { style: { padding: '12px' } }, user.username),
-              React.createElement('td', { style: { padding: '12px' } }, user.name),
-              React.createElement('td', { style: { padding: '12px' } }, getRoleBadge(user.role)),
-              React.createElement('td', { style: { padding: '12px' } }, getStatusBadge(user.status || 'active')),
-              React.createElement('td', { style: { padding: '12px', fontSize: '12px', color: '#666' } }, new Date(user.createdAt).toLocaleDateString('ko-KR')),
-              React.createElement('td', { style: { padding: '12px' } },
-                React.createElement('button', {
-                  onClick: function() { handleOpenModal(user); },
-                  style: {
-                    backgroundColor: '#8B5CF6',
-                    color: 'white',
-                    border: 'none',
-                    padding: '6px 12px',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                    fontSize: '12px',
-                    marginRight: '6px'
-                  }
-                }, '수정'),
-                user.id !== currentUser.id && React.createElement('button', {
-                  onClick: function() { handleDeleteUser(user.id, user.username); },
-                  style: {
-                    backgroundColor: '#EF4444',
-                    color: 'white',
-                    border: 'none',
-                    padding: '6px 12px',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                    fontSize: '12px'
-                  }
-                }, '삭제')
+          users.filter(function(u) { return roleFilter === 'all' || u.role === roleFilter; }).map(function(user, idx) {
+            var isExpanded = expandedUserId === user.id;
+            return React.createElement(React.Fragment, { key: user.id },
+              React.createElement('tr', {
+                style: {
+                  backgroundColor: isExpanded ? '#EDE9FE' : (idx % 2 === 0 ? 'white' : '#F9F5FF'),
+                  borderBottom: '1px solid #E9D5FF',
+                  cursor: 'pointer'
+                },
+                onClick: function() { toggleLoginLogs(user.id); }
+              },
+                React.createElement('td', { style: { padding: '12px' } }, user.username),
+                React.createElement('td', { style: { padding: '12px' } }, user.name),
+                React.createElement('td', { style: { padding: '12px' } }, getRoleBadge(user.role)),
+                React.createElement('td', { style: { padding: '12px' } }, getStatusBadge(user.status || 'active')),
+                React.createElement('td', { style: { padding: '12px', fontSize: '12px', color: '#666' } }, new Date(user.createdAt).toLocaleDateString('ko-KR')),
+                React.createElement('td', { style: { padding: '12px', textAlign: 'center' } },
+                  React.createElement('span', {
+                    style: {
+                      display: 'inline-block',
+                      minWidth: 36,
+                      padding: '4px 10px',
+                      borderRadius: 999,
+                      fontSize: 13,
+                      fontWeight: 700,
+                      color: (analysisCounts[String(user.id)] || 0) > 0 ? '#6c5ce7' : '#94a3b8',
+                      background: (analysisCounts[String(user.id)] || 0) > 0 ? '#ede9fe' : '#f1f5f9'
+                    }
+                  }, String(analysisCounts[String(user.id)] || 0) + '건')
+                ),
+                React.createElement('td', { style: { padding: '12px' } },
+                  React.createElement('button', {
+                    onClick: function(e) { e.stopPropagation(); handleOpenModal(user); },
+                    style: {
+                      backgroundColor: '#8B5CF6',
+                      color: 'white',
+                      border: 'none',
+                      padding: '6px 12px',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      fontSize: '12px',
+                      marginRight: '6px'
+                    }
+                  }, '수정'),
+                  user.id !== currentUser.id && React.createElement('button', {
+                    onClick: function(e) { e.stopPropagation(); handleDeleteUser(user.id, user.username); },
+                    style: {
+                      backgroundColor: '#EF4444',
+                      color: 'white',
+                      border: 'none',
+                      padding: '6px 12px',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      fontSize: '12px'
+                    }
+                  }, '삭제')
+                )
+              ),
+              isExpanded && React.createElement('tr', { key: user.id + '-logs' },
+                React.createElement('td', { colSpan: 7, style: { padding: '16px 20px', background: '#F5F3FF', borderBottom: '2px solid #C4B5FD' } },
+                  React.createElement('div', { style: { fontSize: 13, fontWeight: 600, color: '#6B21A8', marginBottom: 8 } },
+                    '📋 최근 7일 접속 이력 — ' + user.name + ' (' + user.username + ')'
+                  ),
+                  logsLoading
+                    ? React.createElement('div', { style: { fontSize: 13, color: '#888' } }, '로딩 중...')
+                    : loginLogs.length === 0
+                      ? React.createElement('div', { style: { fontSize: 13, color: '#94a3b8' } }, '최근 7일간 접속 기록이 없습니다.')
+                      : React.createElement('table', { style: { width: '100%', fontSize: 12, borderCollapse: 'collapse' } },
+                          React.createElement('thead', null,
+                            React.createElement('tr', null,
+                              React.createElement('th', { style: { padding: '6px 10px', textAlign: 'left', color: '#6B21A8', borderBottom: '1px solid #DDD6FE' } }, '접속 일시'),
+                              React.createElement('th', { style: { padding: '6px 10px', textAlign: 'left', color: '#6B21A8', borderBottom: '1px solid #DDD6FE' } }, 'IP 주소')
+                            )
+                          ),
+                          React.createElement('tbody', null,
+                            loginLogs.map(function(log) {
+                              return React.createElement('tr', { key: log.id },
+                                React.createElement('td', { style: { padding: '5px 10px', borderBottom: '1px solid #EDE9FE' } },
+                                  new Date(log.login_at).toLocaleString('ko-KR')
+                                ),
+                                React.createElement('td', { style: { padding: '5px 10px', borderBottom: '1px solid #EDE9FE', color: '#64748b' } },
+                                  log.ip_address || '-'
+                                )
+                              );
+                            })
+                          )
+                        )
+                )
               )
             );
           })

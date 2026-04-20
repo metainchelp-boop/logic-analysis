@@ -218,9 +218,10 @@ window.SaveToClientSection = function SaveToClientSection({
             onClick: function(e) { if (e.target === e.currentTarget) closeModal(); }
         },
             React.createElement('div', {
+                className: 'responsive-modal',
                 style: {
                     background: '#fff', borderRadius: 16, padding: 28, width: 420,
-                    maxWidth: '90vw', boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
+                    maxWidth: '92vw', boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
                 }
             },
                 /* 헤더 */

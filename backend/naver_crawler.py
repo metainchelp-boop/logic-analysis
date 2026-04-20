@@ -182,7 +182,7 @@ def search_products(keyword: str, max_results: int = 200) -> List[Dict]:
 # ==================== 상품 순위 찾기 ====================
 
 def find_product_rank(keyword: str, product_url: str,
-                      max_pages: int = 2) -> Tuple[Optional[int], Optional[int], List[Dict]]:
+                      max_pages: int = 10) -> Tuple[Optional[int], Optional[int], List[Dict]]:
     """
     키워드 검색에서 특정 상품의 순위를 찾는다. (공식 API 기반)
 
@@ -242,10 +242,12 @@ def find_product_rank(keyword: str, product_url: str,
 
 # ==================== 상품 정보 조회 ====================
 
-def get_product_info(product_url: str) -> Dict:
+def get_product_info(product_url: str, keyword: str = "") -> Dict:
     """
     상품 URL에서 상품 정보 가져오기
-    - 웹 스크래핑 대신 URL 파싱 + API 검색으로 정보 수집
+    - 1차: 추적 키워드로 네이버 쇼핑 API 검색 → URL/productId 매칭 (빠르고 안정적)
+    - 2차: 스토어명으로 네이버 쇼핑 API 검색 → productId 매칭 (폴백)
+    - 3차: 상품 페이지 직접 방문 → og:meta 파싱 (VPS에서 429 가능성 있음)
     """
     product_id = extract_product_id_from_url(product_url) or ""
     store_name = extract_store_name_from_url(product_url) or ""
@@ -261,25 +263,104 @@ def get_product_info(product_url: str) -> Dict:
         "rating": 0,
     }
 
-    # 스토어명이 있으면 스토어명으로 API 검색하여 상품 정보 보완
-    if store_name:
-        try:
-            api_result = search_naver_shopping_api(store_name, display=20)
-            for item in api_result.get("items", []):
-                item_pid = str(item.get("productId", ""))
-                item_link = item.get("link", "")
+    def _match_item(item):
+        """API 검색 결과 아이템이 대상 상품과 매칭되는지 확인"""
+        item_pid = str(item.get("productId", ""))
+        item_link = item.get("link", "")
+        item_mall = (item.get("mallName", "") or "").lower()
+        # productId 매칭 또는 URL에 productId 포함
+        if product_id and ((item_pid == product_id) or (product_id in item_link)):
+            return True
+        # 스토어명 + 상품 링크에 스토어 슬러그 포함
+        if store_name and store_name.lower() in item_link.lower():
+            return True
+        return False
 
-                # productId 또는 URL로 매칭
-                if (product_id and item_pid == product_id) or \
-                   (product_id and product_id in item_link):
-                    result["product_name"] = re.sub(r'<[^>]+>', '', item.get("title", ""))
-                    result["image_url"] = item.get("image", "")
-                    result["price"] = int(item.get("lprice", 0))
-                    result["store_name"] = item.get("mallName", store_name)
-                    logger.info(f"상품 정보 조회 성공: {result['product_name'][:30]}")
+    def _fill_from_item(item):
+        """API 검색 결과에서 상품 정보 채우기"""
+        result["product_name"] = re.sub(r'<[^>]+>', '', item.get("title", ""))
+        result["image_url"] = item.get("image", "")
+        result["price"] = int(item.get("lprice", 0) or 0)
+        result["store_name"] = item.get("mallName", store_name) or store_name
+
+    # ===== 1차: 추적 키워드로 네이버 쇼핑 API 검색 (1000위까지, 가장 빠르고 안정적) =====
+    if keyword:
+        try:
+            total_checked = 0
+            for page_start in [1, 101, 201, 301, 401, 501, 601, 701, 801, 901]:
+                api_result = search_naver_shopping_api(keyword, display=100, start=page_start)
+                items = api_result.get("items", [])
+                if not items:
                     break
+                total_checked += len(items)
+                for item in items:
+                    if _match_item(item):
+                        _fill_from_item(item)
+                        logger.info(f"상품 정보 키워드 검색 성공: '{keyword}' → {result['product_name'][:30]} (start={page_start})")
+                        return result
+            logger.info(f"상품 정보 키워드 검색 미매칭: '{keyword}' (검색 범위: {total_checked}건)")
         except Exception as e:
-            logger.warning(f"상품 정보 API 조회 실패: {e}")
+            logger.warning(f"상품 정보 키워드 검색 실패: {e}")
+
+    # ===== 2차: 스토어명으로 네이버 쇼핑 API 검색 =====
+    if not result["product_name"] and store_name and product_id:
+        try:
+            api_result = search_naver_shopping_api(store_name, display=100)
+            for item in api_result.get("items", []):
+                if _match_item(item):
+                    _fill_from_item(item)
+                    logger.info(f"상품 정보 스토어 검색 성공: '{store_name}' → {result['product_name'][:30]}")
+                    return result
+        except Exception as e:
+            logger.warning(f"상품 정보 스토어 검색 실패: {e}")
+
+    # ===== 3차: 상품 페이지 직접 접근 (VPS에서 429 가능성 있지만 시도) =====
+    if not result["product_name"]:
+        try:
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml",
+                "Accept-Language": "ko-KR,ko;q=0.9",
+            }
+            resp = requests.get(product_url, headers=headers, timeout=5, allow_redirects=True)
+            if resp.status_code == 200 and len(resp.text) > 500:
+                og_title = re.search(r'<meta\s+property=["\']og:title["\']\s+content=["\']([^"\']+)["\']', resp.text)
+                if not og_title:
+                    og_title = re.search(r'content=["\']([^"\']+)["\']\s+property=["\']og:title["\']', resp.text)
+                if og_title:
+                    result["product_name"] = og_title.group(1).strip()
+                    if " : " in result["product_name"]:
+                        result["product_name"] = result["product_name"].split(" : ")[0].strip()
+
+                og_image = re.search(r'<meta\s+property=["\']og:image["\']\s+content=["\']([^"\']+)["\']', resp.text)
+                if not og_image:
+                    og_image = re.search(r'content=["\']([^"\']+)["\']\s+property=["\']og:image["\']', resp.text)
+                if og_image:
+                    result["image_url"] = og_image.group(1).strip()
+
+                og_price = re.search(r'<meta\s+property=["\']product:price:amount["\']\s+content=["\']([^"\']+)["\']', resp.text)
+                if not og_price:
+                    og_price = re.search(r'content=["\']([^"\']+)["\']\s+property=["\']product:price:amount["\']', resp.text)
+                if og_price:
+                    try:
+                        result["price"] = int(float(og_price.group(1).replace(",", "")))
+                    except (ValueError, TypeError):
+                        pass
+
+                og_site = re.search(r'<meta\s+property=["\']og:site_name["\']\s+content=["\']([^"\']+)["\']', resp.text)
+                if not og_site:
+                    og_site = re.search(r'content=["\']([^"\']+)["\']\s+property=["\']og:site_name["\']', resp.text)
+                if og_site:
+                    result["store_name"] = og_site.group(1).strip()
+
+                if result["product_name"]:
+                    logger.info(f"상품 정보 페이지 파싱 성공: {result['product_name'][:40]}")
+                    return result
+        except Exception as e:
+            logger.warning(f"상품 페이지 직접 접근 실패: {e}")
+
+    if not result["product_name"]:
+        logger.warning(f"상품 정보 조회 최종 실패: {product_url}")
 
     return result
 

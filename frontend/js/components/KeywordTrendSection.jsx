@@ -95,13 +95,7 @@ window.KeywordTrendSection = function KeywordTrendSection(props) {
         </div>
       </div>
 
-      <style>{`
-        @media (max-width: 768px) {
-          .trend-inner-grid {
-            grid-template-columns: 1fr !important;
-          }
-        }
-      `}</style>
+      {/* 반응형은 styles.css에서 처리 */}
       </div>
     </div>
   );

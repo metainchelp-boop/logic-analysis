@@ -61,7 +61,7 @@ window.CompetitionIndexSection = function CompetitionIndexSection(props) {
         </div>
 
         {/* 시장 현황 카드 3개 */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 16 }}>
+        <div className="comp-detail-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 16 }}>
           <div style={{ background: '#f8fafc', borderRadius: 10, padding: '14px 16px', textAlign: 'center', border: '1px solid #e2e8f0' }}>
             <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>등록 상품수</div>
             <div style={{ fontSize: 20, fontWeight: 800, color: '#1e293b' }}>{fmt(productCount)}<span style={{ fontSize: 12, fontWeight: 400 }}>개</span></div>

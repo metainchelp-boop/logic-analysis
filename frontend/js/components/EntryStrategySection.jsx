@@ -23,8 +23,8 @@ window.EntryStrategySection = function EntryStrategySection(props) {
     var mainBrands = stData.mainBrands || '';
     var recommendation = stData.recommendation || '';
 
-    // 상위 5개만 추출
-    var top5Items = compItems.slice(0, 5);
+    // 상위 10개 추출
+    var top5Items = compItems.slice(0, 10);
 
     /* 헬퍼 함수들 */
     var severityColor = function(s) {
@@ -147,7 +147,7 @@ window.EntryStrategySection = function EntryStrategySection(props) {
             /* === 1. 경쟁사 상위 5개 비교표 === */
             React.createElement('div', { style: { marginBottom: 28 } },
                 React.createElement('h3', { style: { fontSize: 16, fontWeight: 700, color: '#1f2937', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 6 } },
-                    React.createElement('span', null, '\uD83C\uDFC6'), ' 1. 경쟁사 상위 5개 비교표'
+                    React.createElement('span', null, '\uD83C\uDFC6'), ' 1. 경쟁사 상위 10개 비교표'
                 ),
 
                 /* 시장 요약 카드 */
