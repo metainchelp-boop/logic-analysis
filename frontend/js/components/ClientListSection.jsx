@@ -1,7 +1,7 @@
 /* ClientListSection — 메인 분석 페이지 업체 리스트 (v3.7)
  * 등록된 업체 카드를 가나다순으로 표시하고, 클릭 시 자동 분석 실행
  */
-window.ClientListSection = function ClientListSection({ onClientClick }) {
+window.ClientListSection = function ClientListSection({ onClientClick, onNavigateToClient }) {
     var useState = React.useState;
     var useEffect = React.useEffect;
     var useCallback = React.useCallback;
@@ -83,14 +83,11 @@ window.ClientListSection = function ClientListSection({ onClientClick }) {
             return (a.name || '').localeCompare(b.name || '', 'ko');
         });
 
-    /* 카드 클릭 핸들러 */
-    var handleCardClick = function(client) {
-        var params = getClientAnalysisParams(client);
-        if (!params) {
-            alert('이 업체는 분석에 사용할 키워드 정보가 없습니다.\n\n업체관리에서 대표 키워드를 등록하거나 먼저 수동 분석을 한 번 진행해주세요.');
-            return;
+    /* 업체 상세 보기 핸들러 — 진행중 업체 탭 상세 화면으로 이동 */
+    var handleViewClient = function(client) {
+        if (onNavigateToClient) {
+            onNavigateToClient(client.name || '', client.naver_store_url || '');
         }
-        if (onClientClick) onClientClick(params);
     };
 
     /* ==================== 렌더링 ==================== */
@@ -103,10 +100,10 @@ window.ClientListSection = function ClientListSection({ onClientClick }) {
                 React.createElement('div', null,
                     React.createElement('h2', {
                         style: { fontSize: 20, fontWeight: 700, color: '#1e293b', margin: 0, display: 'flex', alignItems: 'center', gap: 8 }
-                    }, '🏢 등록 업체 바로 분석', clients.length > 0 && React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#6366f1', marginLeft: 4 } }, '(' + clients.length + '개)')),
+                    }, '🏢 등록 업체', clients.length > 0 && React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#6366f1', marginLeft: 4 } }, '(' + clients.length + '개)')),
                     React.createElement('p', {
                         style: { fontSize: 13, color: '#64748b', margin: '4px 0 0 0' }
-                    }, '업체 카드를 클릭하면 마지막 분석 정보로 즉시 재분석됩니다.')
+                    }, '업체 상세 보기를 클릭하면 분석 이력과 순위를 확인할 수 있습니다.')
                 ),
                 React.createElement('input', {
                     type: 'text',
@@ -157,26 +154,25 @@ window.ClientListSection = function ClientListSection({ onClientClick }) {
             !loading && filtered.length > 0 && React.createElement('div', {
                 style: {
                     display: 'grid',
-                    gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
+                    gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))',
                     gap: 14
                 }
             },
                 filtered.map(function(client) {
-                    var repKeyword = getRepresentativeKeyword(client);
                     var lastDate = getLastAnalyzedText(client);
-                    var analyzeCount = (client.analyzed_keywords || []).length;
 
                     return React.createElement('div', {
                         key: client.id,
-                        onClick: function() { handleCardClick(client); },
                         style: {
                             background: '#fff',
                             border: '1px solid #e2e8f0',
                             borderRadius: 12,
                             padding: '16px 18px',
-                            cursor: 'pointer',
                             transition: 'all 0.15s ease',
-                            boxShadow: '0 1px 2px rgba(0,0,0,0.04)'
+                            boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            justifyContent: 'space-between'
                         },
                         onMouseEnter: function(e) {
                             e.currentTarget.style.borderColor = '#6c5ce7';
@@ -189,57 +185,33 @@ window.ClientListSection = function ClientListSection({ onClientClick }) {
                             e.currentTarget.style.transform = 'translateY(0)';
                         }
                     },
-                        /* 업체명 */
-                        React.createElement('div', {
-                            style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }
-                        },
+                        /* 업체명 + 마지막 분석 */
+                        React.createElement('div', null,
                             React.createElement('div', {
-                                style: { fontSize: 15, fontWeight: 700, color: '#1e293b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }
+                                style: { fontSize: 15, fontWeight: 700, color: '#1e293b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: 6 }
                             }, client.name || '(이름 없음)'),
-                            analyzeCount > 0 && React.createElement('span', {
-                                style: {
-                                    fontSize: 10,
-                                    fontWeight: 600,
-                                    color: '#6c5ce7',
-                                    background: '#ede9fe',
-                                    padding: '2px 8px',
-                                    borderRadius: 999,
-                                    marginLeft: 8,
-                                    whiteSpace: 'nowrap'
-                                }
-                            }, analyzeCount + '건')
+                            React.createElement('div', {
+                                style: { fontSize: 11, color: '#dc2626', marginBottom: 12 }
+                            }, '마지막 분석: ' + lastDate)
                         ),
 
-                        /* 대표 키워드 */
-                        React.createElement('div', {
-                            style: { fontSize: 12, color: '#64748b', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }
-                        },
-                            React.createElement('span', { style: { color: '#94a3b8' } }, '🔑'),
-                            React.createElement('span', {
-                                style: { fontWeight: 600, color: '#475569', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
-                            }, repKeyword)
-                        ),
-
-                        /* 마지막 분석 */
-                        React.createElement('div', {
-                            style: { fontSize: 11, color: '#94a3b8', display: 'flex', alignItems: 'center', gap: 6 }
-                        },
-                            React.createElement('span', null, '📅'),
-                            React.createElement('span', null, '마지막 분석: ' + lastDate)
-                        ),
-
-                        /* 클릭 안내 */
-                        React.createElement('div', {
+                        /* 업체 상세 보기 버튼 */
+                        React.createElement('button', {
+                            onClick: function() { handleViewClient(client); },
                             style: {
-                                marginTop: 10,
-                                paddingTop: 10,
-                                borderTop: '1px dashed #e2e8f0',
-                                fontSize: 11,
-                                color: '#6c5ce7',
+                                display: 'block',
+                                width: '100%',
+                                textAlign: 'center',
+                                background: '#6c5ce7',
+                                color: '#fff',
+                                border: 'none',
+                                padding: '8px 0',
+                                borderRadius: 8,
+                                fontSize: 12,
                                 fontWeight: 600,
-                                textAlign: 'right'
+                                cursor: 'pointer'
                             }
-                        }, '클릭하여 분석 →')
+                        }, '업체 상세 보기 →')
                     );
                 })
             )

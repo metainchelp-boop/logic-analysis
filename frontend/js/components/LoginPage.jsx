@@ -29,26 +29,35 @@ window.LoginPage = function LoginPage(props) {
       return;
     }
 
-    window.api.post('/auth/login', {
-      username: usernameValue,
-      password: passwordValue
-    }).then(function(response) {
+    // 로그인 요청 (15초 타임아웃)
+    var controller = new AbortController();
+    var timeout = setTimeout(function() { controller.abort(); }, 15000);
+
+    fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: usernameValue, password: passwordValue }),
+      signal: controller.signal
+    }).then(function(r) {
+      clearTimeout(timeout);
+      return r.json().then(function(body) { body._status = r.status; return body; });
+    }).then(function(data) {
       setLoading(false);
-      var data = response.data || response;
+      if (data._status !== 200 || data.success === false) {
+        setError(data.detail || data.message || '아이디 또는 비밀번호가 올바르지 않습니다.');
+        return;
+      }
       if (props.onLogin) {
         props.onLogin(data.user, data.token);
       }
     }).catch(function(err) {
+      clearTimeout(timeout);
       setLoading(false);
-      var message = '로그인에 실패했습니다';
-      if (err.response && err.response.data && err.response.data.message) {
-        message = err.response.data.message;
-      } else if (err.detail) {
-        message = err.detail;
-      } else if (err.message) {
-        message = err.message;
+      if (err.name === 'AbortError') {
+        setError('서버 응답 시간 초과 — 잠시 후 다시 시도해주세요.');
+      } else {
+        setError('네트워크 오류 — 인터넷 연결을 확인해주세요.');
       }
-      setError(message);
     });
   };
 

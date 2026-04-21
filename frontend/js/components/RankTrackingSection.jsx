@@ -50,62 +50,8 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
             });
     }, [searchedKeyword, searchedProductUrl, canEdit]);
 
-    // 검색 시 상품 URL이 있으면 자동 등록 + 자동 순위체크 (뷰어는 제외)
-    useEffect(function() {
-        if (canEdit === false) return; // 뷰어는 자동 등록/순위체크 금지
-        if (!searchedKeyword || !searchedProductUrl) return;
-        var key = searchedProductUrl + '::' + searchedKeyword;
-        if (lastAutoRegistered.current === key) return;
-        lastAutoRegistered.current = key;
-
-        // 이미 등록된 상품인지 확인 (ref로 최신 products 참조)
-        var existingProduct = productsRef.current.find(function(p) {
-            return p.product_url === searchedProductUrl;
-        });
-
-        if (existingProduct) {
-            // 이미 등록됨 → 바로 순위체크 실행
-            setRefreshing(function(prev) { var n = {}; for (var k in prev) n[k] = prev[k]; n[existingProduct.id] = true; return n; });
-            api.post('/rank/refresh/' + existingProduct.id)
-                .then(function() {
-                    setTimeout(function() {
-                        refreshProducts();
-                        setRefreshing(function(prev) { var n = {}; for (var k in prev) n[k] = prev[k]; n[existingProduct.id] = false; return n; });
-                    }, 5000);
-                })
-                .catch(function() {
-                    setRefreshing(function(prev) { var n = {}; for (var k in prev) n[k] = prev[k]; n[existingProduct.id] = false; return n; });
-                });
-            return;
-        }
-
-        // 신규 등록 → 등록 후 products 재조회 → 순위체크
-        api.post('/products/track', { product_url: searchedProductUrl, keywords: [searchedKeyword] })
-            .then(function() {
-                // 등록 완료 후 1초 대기 → products 재조회하여 ID 확보
-                setTimeout(function() {
-                    api.get('/products').then(function(prodRes) {
-                        var prodList = (prodRes && prodRes.success && prodRes.data) ? prodRes.data : [];
-                        var newProduct = prodList.find(function(p) { return p.product_url === searchedProductUrl; });
-                        refreshProducts();
-                        if (newProduct) {
-                            setRefreshing(function(prev) { var n = {}; for (var k in prev) n[k] = prev[k]; n[newProduct.id] = true; return n; });
-                            api.post('/rank/refresh/' + newProduct.id)
-                                .then(function() {
-                                    setTimeout(function() {
-                                        refreshProducts();
-                                        setRefreshing(function(prev) { var n = {}; for (var k in prev) n[k] = prev[k]; n[newProduct.id] = false; return n; });
-                                    }, 5000);
-                                })
-                                .catch(function() {
-                                    setRefreshing(function(prev) { var n = {}; for (var k in prev) n[k] = prev[k]; n[newProduct.id] = false; return n; });
-                                });
-                        }
-                    }).catch(function() { refreshProducts(); });
-                }, 1000);
-            })
-            .catch(function() {});
-    }, [searchedKeyword, searchedProductUrl, canEdit]);
+    // 자동 등록 + 자동 순위체크 제거 — 수동 버튼으로만 실행 (서버 부하 방지)
+    // 기존 DB 데이터(스케줄러 수집분)만 표시, 필요시 사용자가 직접 새로고침
 
     const handleAdd = async () => {
         if (!newUrl || !newKeywords) return;
@@ -271,14 +217,6 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                         ? products.filter(function(p) { return p.product_url === searchedProductUrl; })
                         : products;
 
-                    // 모든 상품의 키워드를 평탄하게 펼침
-                    var allKeywords = [];
-                    filtered.forEach(function(p) {
-                        (p.keywords || []).forEach(function(k) {
-                            allKeywords.push({ keyword: k, product: p });
-                        });
-                    });
-
                     if (filtered.length === 0) return (
                         <EmptyState icon="📦" text={searchedProductUrl ? "해당 상품의 순위 추적 데이터가 아직 없습니다. 상품이 등록되면 자동으로 표시됩니다." : "추적 중인 상품이 없습니다. 상품을 등록해보세요."} />
                     );
@@ -342,62 +280,102 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                         );
                     }
 
-                    /* ===== 메인 분석 탭 (전체 상품) → 카드 4열 그리드 ===== */
+                    /* ===== 메인 분석 탭 (전체 상품) → 상품별 그룹 카드 2열 ===== */
                     return (
                     <div className="card-grid card-grid-4">
-                        {allKeywords.map(function(item) {
-                            var k = item.keyword;
-                            var p = item.product;
-                            var rk = k.latest_rank;
-                            var rkLabel = rk ? (rk <= 10 ? '상위권' : rk <= 40 ? '중위권' : '하위권') : '미노출';
-                            var pg = rk ? Math.ceil(rk / 40) : 0;
-                            var badgeBg = rk ? (rk <= 10 ? '#ecfdf5' : rk <= 40 ? '#fffbeb' : '#fef2f2') : '#f1f5f9';
-                            var badgeColor = rk ? (rk <= 10 ? '#059669' : rk <= 40 ? '#d97706' : '#dc2626') : '#94a3b8';
-                            var rankColor = rk ? (rk <= 10 ? '#059669' : rk <= 40 ? '#d97706' : '#dc2626') : '#94a3b8';
+                        {filtered.map(function(p) {
+                            var kws = p.keywords || [];
                             return React.createElement('div', {
-                                key: k.id,
+                                key: p.id,
                                 className: 'card fade-in',
                                 style: { padding: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }
                             },
+                                /* 상품 헤더 */
                                 React.createElement('div', {
-                                    style: { height: 42, background: 'linear-gradient(135deg, #f0f9ff, #eff6ff)', display: 'flex', alignItems: 'center', padding: '0 12px', gap: 10, borderBottom: '1px solid #e2e8f0', cursor: onNavigateToClient ? 'pointer' : 'default' },
-                                    onClick: onNavigateToClient ? function(e) { e.stopPropagation(); onNavigateToClient(p.store_name || '', p.product_url || ''); } : undefined,
-                                    title: onNavigateToClient ? '클릭하여 업체관리에서 상세 보기' : ''
+                                    style: { display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', background: 'linear-gradient(135deg, #f0f9ff, #eff6ff)', borderBottom: '1px solid #e2e8f0' }
                                 },
-                                    p.image_url && React.createElement('img', { src: p.image_url, alt: '', style: { width: 32, height: 32, borderRadius: 6, objectFit: 'cover', flexShrink: 0 } }),
-                                    React.createElement('span', { style: { fontSize: 12, color: onNavigateToClient ? '#4f46e5' : '#475569', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, fontWeight: 600 } }, p.product_name || '상품'),
-                                    onNavigateToClient && React.createElement('span', { style: { fontSize: 11, color: '#818cf8', flexShrink: 0, fontWeight: 600 } }, '→')
-                                ),
-                                React.createElement('div', {
-                                    style: { padding: '10px 14px', flex: 1, cursor: 'pointer' },
-                                    onClick: function() { setExpandedProduct(p.id === expandedProduct ? null : p.id); loadHistory(k.id); }
-                                },
-                                    React.createElement('div', { style: { fontSize: 14, fontWeight: 700, marginBottom: 4 } }, k.keyword),
-                                    React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 6 } },
-                                        React.createElement('span', { style: { fontSize: 24, fontWeight: 800, letterSpacing: '-1px', color: rankColor } }, rk ? rk + '위' : '미노출'),
-                                        pg > 0 && React.createElement('span', { style: { fontSize: 12, color: '#475569', fontWeight: 600 } }, pg + '페이지')
-                                    )
-                                ),
-                                React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 14px', background: '#f8fafc', borderTop: '1px solid #f1f5f9' } },
-                                    React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
-                                        React.createElement('span', { style: { fontSize: 10, padding: '2px 7px', borderRadius: 4, fontWeight: 700, background: badgeBg, color: badgeColor } }, rkLabel),
-                                        React.createElement('span', { style: { fontSize: 11, color: '#64748b', fontWeight: 500 } }, p.store_name || '-')
+                                    p.image_url && React.createElement('img', {
+                                        src: p.image_url, alt: '',
+                                        style: { width: 40, height: 40, borderRadius: 8, objectFit: 'cover', flexShrink: 0 }
+                                    }),
+                                    React.createElement('div', {
+                                        style: { minWidth: 0, flex: 1, cursor: onNavigateToClient ? 'pointer' : 'default' },
+                                        onClick: onNavigateToClient ? function() { onNavigateToClient(p.store_name || '', p.product_url || ''); } : undefined,
+                                        title: onNavigateToClient ? '클릭하여 업체관리에서 상세 보기' : ''
+                                    },
+                                        React.createElement('div', {
+                                            style: { fontSize: 13, fontWeight: 700, color: onNavigateToClient ? '#4f46e5' : '#1e293b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
+                                        },
+                                            p.product_name || '상품',
+                                            onNavigateToClient && React.createElement('span', { style: { fontSize: 11, color: '#818cf8', marginLeft: 6, fontWeight: 400 } }, '→ 업체관리')
+                                        ),
+                                        React.createElement('div', { style: { fontSize: 11, color: '#64748b', marginTop: 1 } },
+                                            p.store_name || '-'
+                                        )
                                     ),
-                                    canEdit !== false && React.createElement('div', { style: { display: 'flex', gap: 4 } },
+                                    canEdit !== false && React.createElement('div', { style: { display: 'flex', gap: 4, flexShrink: 0 } },
                                         React.createElement('button', {
                                             className: 'btn btn-secondary btn-sm',
-                                            style: { fontSize: 10, padding: '2px 6px', lineHeight: '1.4' },
+                                            style: { fontSize: 11, padding: '4px 8px', lineHeight: '1.4' },
                                             onClick: function(e) { e.stopPropagation(); handleRefresh(p.id); },
                                             disabled: refreshing[p.id],
                                             title: '순위 체크'
-                                        }, refreshing[p.id] ? '...' : '↻'),
+                                        }, refreshing[p.id] ? '체크 중' : '↻ 순위체크'),
                                         React.createElement('button', {
                                             className: 'btn btn-danger btn-sm',
-                                            style: { fontSize: 10, padding: '2px 6px', lineHeight: '1.4' },
+                                            style: { fontSize: 11, padding: '4px 8px', lineHeight: '1.4' },
                                             onClick: function(e) { e.stopPropagation(); handleDelete(p.id); },
                                             title: '상품 삭제'
                                         }, '✕')
                                     )
+                                ),
+                                /* 키워드 테이블 */
+                                kws.length > 0 && React.createElement('div', { style: { overflowX: 'auto', overflowY: kws.length > 5 ? 'auto' : 'visible', maxHeight: kws.length > 5 ? 180 : 'none' } },
+                                    React.createElement('table', { style: { width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' } },
+                                        React.createElement('colgroup', null,
+                                            React.createElement('col', { style: { width: '50%' } }),
+                                            React.createElement('col', { style: { width: '30%' } }),
+                                            React.createElement('col', { style: { width: '20%' } })
+                                        ),
+                                        React.createElement('thead', null,
+                                            React.createElement('tr', { style: { background: '#fafbfc' } },
+                                                React.createElement('th', { style: { fontSize: 10, color: '#94a3b8', fontWeight: 600, textAlign: 'left', padding: '6px 10px 3px', letterSpacing: '0.5px' } }, '키워드'),
+                                                React.createElement('th', { style: { fontSize: 10, color: '#94a3b8', fontWeight: 600, textAlign: 'left', padding: '6px 6px 3px', letterSpacing: '0.5px' } }, '순위'),
+                                                React.createElement('th', { style: { fontSize: 10, color: '#94a3b8', fontWeight: 600, textAlign: 'left', padding: '6px 6px 3px', letterSpacing: '0.5px' } }, '구분')
+                                            )
+                                        ),
+                                        React.createElement('tbody', null,
+                                            kws.map(function(k) {
+                                                var rk = k.latest_rank;
+                                                var rankColor = rk ? (rk <= 10 ? '#059669' : rk <= 40 ? '#d97706' : '#dc2626') : '#94a3b8';
+                                                var rkLabel = rk ? (rk <= 10 ? '상위권' : rk <= 40 ? '중위권' : '하위권') : '미노출';
+                                                var badgeBg = rk ? (rk <= 10 ? '#ecfdf5' : rk <= 40 ? '#fffbeb' : '#fef2f2') : '#f1f5f9';
+                                                var badgeColor = rk ? (rk <= 10 ? '#059669' : rk <= 40 ? '#d97706' : '#dc2626') : '#94a3b8';
+                                                var pg = rk ? Math.ceil(rk / 40) : 0;
+                                                return React.createElement('tr', {
+                                                    key: k.id,
+                                                    style: { cursor: 'pointer', borderTop: '1px solid #f1f5f9' },
+                                                    onClick: function() { setExpandedProduct(p.id === expandedProduct ? null : p.id); loadHistory(k.id); }
+                                                },
+                                                    React.createElement('td', { style: { padding: '6px 10px', fontSize: 12, fontWeight: 600, color: '#1e293b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, k.keyword),
+                                                    React.createElement('td', { style: { padding: '6px 6px', whiteSpace: 'nowrap' } },
+                                                        React.createElement('span', { style: { fontSize: 13, fontWeight: 800, letterSpacing: '-0.5px', color: rankColor } }, rk ? rk + '위' : '미노출'),
+                                                        pg > 0 && React.createElement('span', { style: { fontSize: 9, padding: '1px 4px', borderRadius: 3, fontWeight: 700, background: '#f1f5f9', color: '#64748b', marginLeft: 4 } }, pg + 'P')
+                                                    ),
+                                                    React.createElement('td', { style: { padding: '6px 6px', whiteSpace: 'nowrap' } },
+                                                        React.createElement('span', { style: { fontSize: 9, padding: '2px 5px', borderRadius: 4, fontWeight: 700, background: badgeBg, color: badgeColor } }, rkLabel)
+                                                    )
+                                                );
+                                            })
+                                        )
+                                    )
+                                ),
+                                /* 푸터: 스토어명 + 키워드 개수 */
+                                React.createElement('div', {
+                                    style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 11, padding: '6px 14px', background: '#fafbfc', borderTop: '1px solid #f1f5f9' }
+                                },
+                                    React.createElement('span', { style: { color: '#64748b', fontWeight: 600 } }, p.store_name || '-'),
+                                    React.createElement('span', { style: { color: '#94a3b8', fontWeight: 500 } }, '추적 키워드 ' + kws.length + '개')
                                 )
                             );
                         })}

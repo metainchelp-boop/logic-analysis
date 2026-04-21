@@ -2,7 +2,7 @@
 window.StatCard = function StatCard({ icon, iconColor, label, value, sub }) {
     return (
         <div className="card">
-            <div className={`stat-icon ${iconColor}`}>{icon}</div>
+            {icon && <div className={`stat-icon ${iconColor}`}>{icon}</div>}
             <div className="stat-label">{label}</div>
             <div className="stat-value">{value}</div>
             {sub && <div className="stat-sub">{sub}</div>}

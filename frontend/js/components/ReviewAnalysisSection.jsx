@@ -12,14 +12,19 @@ window.ReviewAnalysisSection = function ReviewAnalysisSection(props) {
 
   if (!reviewCount || !rating || !wishCount) return null;
 
-  const renderMetricCard = (title, emoji, bgColor, borderColor, value) => {
+  // HTML에서 추출된 실제 리뷰 데이터 (상세페이지 품질 진단 시)
+  const html = props.htmlReviewData || null;
+  const hasHtmlData = html && (html.reviewCount != null || html.rating != null || html.wishCount != null);
+
+  const renderMetricCard = (title, emoji, bgColor, borderColor, value, htmlValue, unit) => {
     return (
       <div style={{
         backgroundColor: bgColor,
         border: `2px solid ${borderColor}`,
         borderRadius: '12px',
         padding: '16px',
-        minHeight: '200px'
+        minHeight: '200px',
+        position: 'relative'
       }}>
         <div style={{
           fontSize: '13px',
@@ -34,29 +39,85 @@ window.ReviewAnalysisSection = function ReviewAnalysisSection(props) {
           <span>{title}</span>
         </div>
 
-        <div style={{
-          fontSize: '28px',
-          fontWeight: '700',
-          color: '#1f2937',
-          marginBottom: '12px'
-        }}>
-          {fmt(value.adv)}
-        </div>
-
-        <div style={{
-          fontSize: '12px',
-          color: '#666',
-          marginBottom: '12px',
-          paddingBottom: '12px',
-          borderBottom: '1px solid rgba(0, 0, 0, 0.1)'
-        }}>
-          <div style={{ marginBottom: '4px' }}>
-            <strong>평균:</strong> {fmt(value.avg)}
-          </div>
+        {/* HTML 실제 데이터가 있으면 실제 값을 크게 표시 */}
+        {htmlValue != null ? (
           <div>
-            <strong>상위5:</strong> {fmt(value.top5)}
+            <div style={{
+              display: 'inline-block',
+              backgroundColor: '#059669',
+              color: '#fff',
+              fontSize: '10px',
+              fontWeight: '700',
+              padding: '2px 8px',
+              borderRadius: '10px',
+              marginBottom: '8px'
+            }}>
+              실제 데이터
+            </div>
+            <div style={{
+              fontSize: '28px',
+              fontWeight: '700',
+              color: '#059669',
+              marginBottom: '8px'
+            }}>
+              {fmt(htmlValue)}{unit || ''}
+            </div>
+            <div style={{
+              fontSize: '11px',
+              color: '#888',
+              marginBottom: '12px',
+              paddingBottom: '12px',
+              borderBottom: '1px solid rgba(0, 0, 0, 0.1)'
+            }}>
+              <div style={{ marginBottom: '3px', color: '#999' }}>
+                <span style={{ textDecoration: 'line-through' }}>추정: {fmt(value.adv)}</span>
+              </div>
+              <div style={{ marginBottom: '3px' }}>
+                <strong>경쟁 평균:</strong> {fmt(value.avg)}
+              </div>
+              <div>
+                <strong>상위5:</strong> {fmt(value.top5)}
+              </div>
+            </div>
           </div>
-        </div>
+        ) : (
+          <div>
+            <div style={{
+              display: 'inline-block',
+              backgroundColor: '#94a3b8',
+              color: '#fff',
+              fontSize: '10px',
+              fontWeight: '700',
+              padding: '2px 8px',
+              borderRadius: '10px',
+              marginBottom: '8px'
+            }}>
+              추정치
+            </div>
+            <div style={{
+              fontSize: '28px',
+              fontWeight: '700',
+              color: '#1f2937',
+              marginBottom: '12px'
+            }}>
+              {fmt(value.adv)}
+            </div>
+            <div style={{
+              fontSize: '12px',
+              color: '#666',
+              marginBottom: '12px',
+              paddingBottom: '12px',
+              borderBottom: '1px solid rgba(0, 0, 0, 0.1)'
+            }}>
+              <div style={{ marginBottom: '4px' }}>
+                <strong>평균:</strong> {fmt(value.avg)}
+              </div>
+              <div>
+                <strong>상위5:</strong> {fmt(value.top5)}
+              </div>
+            </div>
+          </div>
+        )}
 
         <div style={{
           fontSize: '12px',
@@ -70,11 +131,48 @@ window.ReviewAnalysisSection = function ReviewAnalysisSection(props) {
   };
 
   return (
-    <div className="section">
+    <div className="section" style={{ maxWidth: '1200px', margin: '0 auto', padding: '12px 24px' }}>
       <h2 className="section-title">⭐ 리뷰 & 찜 분석</h2>
 
+      {/* HTML 실제 데이터 안내 배너 */}
+      {hasHtmlData && (
+        <div style={{
+          background: 'linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%)',
+          border: '1px solid #6ee7b7',
+          borderRadius: '8px',
+          padding: '10px 16px',
+          marginTop: '12px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          fontSize: '13px',
+          color: '#065f46'
+        }}>
+          <span style={{ fontSize: '16px' }}>✅</span>
+          <span><strong>상세페이지 HTML에서 실제 리뷰 데이터를 추출했습니다.</strong> 초록색 값이 실제 수치입니다.</span>
+        </div>
+      )}
+
+      {!hasHtmlData && (
+        <div style={{
+          background: '#f8fafc',
+          border: '1px dashed #cbd5e1',
+          borderRadius: '8px',
+          padding: '10px 16px',
+          marginTop: '12px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          fontSize: '12px',
+          color: '#64748b'
+        }}>
+          <span style={{ fontSize: '14px' }}>💡</span>
+          <span>위의 <strong>상세페이지 품질 진단</strong>에 HTML을 업로드하면, 실제 리뷰수/평점/찜수를 추출하여 표시합니다.</span>
+        </div>
+      )}
+
       {/* Comparison Cards Grid */}
-      <div style={{
+      <div className="review-cards-grid" style={{
         display: 'grid',
         gridTemplateColumns: 'repeat(3, 1fr)',
         gap: '20px',
@@ -84,23 +182,29 @@ window.ReviewAnalysisSection = function ReviewAnalysisSection(props) {
         {renderMetricCard(
           '리뷰수',
           '💬',
-          '#dbeafe',
-          '#93c5fd',
-          reviewCount
+          hasHtmlData && html.reviewCount != null ? '#dcfce7' : '#dbeafe',
+          hasHtmlData && html.reviewCount != null ? '#86efac' : '#93c5fd',
+          reviewCount,
+          html ? html.reviewCount : null,
+          '건'
         )}
         {renderMetricCard(
           '평점',
           '⭐',
-          '#e9d5ff',
-          '#d8b4fe',
-          rating
+          hasHtmlData && html.rating != null ? '#dcfce7' : '#e9d5ff',
+          hasHtmlData && html.rating != null ? '#86efac' : '#d8b4fe',
+          rating,
+          html ? html.rating : null,
+          '점'
         )}
         {renderMetricCard(
           '찜수',
           '💛',
-          '#fef3c7',
-          '#fcd34d',
-          wishCount
+          hasHtmlData && html.wishCount != null ? '#dcfce7' : '#fef3c7',
+          hasHtmlData && html.wishCount != null ? '#86efac' : '#fcd34d',
+          wishCount,
+          html ? html.wishCount : null,
+          '건'
         )}
       </div>
 

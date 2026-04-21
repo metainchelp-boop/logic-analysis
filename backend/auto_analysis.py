@@ -534,8 +534,14 @@ tr:hover {{ background:#fafbfc; }}
 
 
 # ==================== 전체 분석 실행 (스케줄러에서 호출) ====================
-def run_single_analysis(client_id: int, client_name: str, keyword: str, product_url: str = '') -> dict:
-    """단일 키워드 전체 분석 → DB 저장까지 (스케줄러에서 호출)"""
+def run_single_analysis(client_id: int, client_name: str, keyword: str, product_url: str = '',
+                        cached_prods: list = None, cached_total: int = 0, cached_vol: dict = None,
+                        cached_related: dict = None) -> dict:
+    """단일 키워드 전체 분석 → DB 저장까지 (스케줄러에서 호출)
+
+    cached_prods/cached_total/cached_vol/cached_related가 제공되면
+    해당 데이터를 재사용하여 API 호출을 건너뜀 (통합 스케줄러용)
+    """
     import sqlite3, os
 
     from naver_crawler import get_keyword_volume, search_products, find_product_rank
@@ -544,36 +550,39 @@ def run_single_analysis(client_id: int, client_name: str, keyword: str, product_
     today = datetime.now().strftime('%Y-%m-%d')
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-    # 1. 검색량 조회
-    vol_data = {}
-    try:
-        vol_list = get_keyword_volume([keyword])
-        if vol_list and len(vol_list) > 0:
-            vol_data = vol_list[0]
-    except Exception as e:
-        logger.warning(f"  [{keyword}] 검색량 조회 실패: {e}")
-    time.sleep(1)
+    # 1. 검색량 조회 (캐시 없으면 API 호출)
+    vol_data = cached_vol or {}
+    if not vol_data:
+        try:
+            vol_list = get_keyword_volume([keyword])
+            if vol_list and len(vol_list) > 0:
+                vol_data = vol_list[0]
+        except Exception as e:
+            logger.warning(f"  [{keyword}] 검색량 조회 실패: {e}")
+        time.sleep(1)
 
-    # 2. 상품 검색 (API total 포함)
-    prods = []
-    total_shop_products = 0
-    try:
-        from naver_crawler import search_naver_shopping_api, _parse_api_item
-        shop_result = search_naver_shopping_api(keyword, display=40)
-        total_shop_products = shop_result.get("total", 0)
-        items = shop_result.get("items", [])
-        prods = [_parse_api_item(item, idx + 1) for idx, item in enumerate(items)]
-    except Exception as e:
-        logger.warning(f"  [{keyword}] 상품 검색 실패: {e}")
-    time.sleep(1)
+    # 2. 상품 검색 (캐시 없으면 API 호출)
+    prods = cached_prods if cached_prods is not None else []
+    total_shop_products = cached_total if cached_total > 0 else 0
+    if cached_prods is None:
+        try:
+            from naver_crawler import search_naver_shopping_api, _parse_api_item
+            shop_result = search_naver_shopping_api(keyword, display=40)
+            total_shop_products = shop_result.get("total", 0)
+            items = shop_result.get("items", [])
+            prods = [_parse_api_item(item, idx + 1) for idx, item in enumerate(items)]
+        except Exception as e:
+            logger.warning(f"  [{keyword}] 상품 검색 실패: {e}")
+        time.sleep(1)
 
-    # 3. 연관 키워드
-    related_data = {}
-    try:
-        related_data = get_related_keywords(keyword)
-    except Exception as e:
-        logger.warning(f"  [{keyword}] 연관 키워드 조회 실패: {e}")
-    time.sleep(1)
+    # 3. 연관 키워드 (캐시 없으면 API 호출)
+    related_data = cached_related or {}
+    if not related_data:
+        try:
+            related_data = get_related_keywords(keyword)
+        except Exception as e:
+            logger.warning(f"  [{keyword}] 연관 키워드 조회 실패: {e}")
+        time.sleep(1)
 
     # 4. 전체 분석 계산 (App.jsx handleSearch 동일, 네이버 API total 전달)
     analysis = compute_full_analysis(keyword, vol_data, prods, related_data,
@@ -621,9 +630,9 @@ def run_single_analysis(client_id: int, client_name: str, keyword: str, product_
             """, (client_id, keyword) + params[:7] + (today, now, now))
 
         # 순위 추적 (당일 중복 방지 — 일자별 1회 원칙)
+        # cached_prods가 있으면 캐시에서 순위 검색 (API 호출 없음)
         if product_url and prods:
             try:
-                # 오늘 이미 순위 기록이 있는지 확인
                 existing_rank = conn.execute(
                     """SELECT id FROM client_rank_history
                        WHERE client_id=? AND keyword=? AND DATE(checked_at)=?""",
@@ -631,7 +640,11 @@ def run_single_analysis(client_id: int, client_name: str, keyword: str, product_
                 ).fetchone()
 
                 if not existing_rank:
-                    rank, page, _ = find_product_rank(keyword, product_url, max_pages=2)
+                    if cached_prods is not None:
+                        from naver_crawler import find_product_rank_from_cache
+                        rank, page, _ = find_product_rank_from_cache(keyword, product_url, prods)
+                    else:
+                        rank, page, _ = find_product_rank(keyword, product_url, max_pages=2)
                     if rank:
                         conn.execute("""
                             INSERT INTO client_rank_history
@@ -642,7 +655,8 @@ def run_single_analysis(client_id: int, client_name: str, keyword: str, product_
                     logger.info(f"  [{keyword}] 오늘 순위 기록 이미 존재 — 스킵")
             except Exception as e:
                 logger.warning(f"  [{keyword}] 순위 추적 실패: {e}")
-            time.sleep(1)
+            if cached_prods is None:
+                time.sleep(1)
 
         conn.commit()
     except Exception as e:

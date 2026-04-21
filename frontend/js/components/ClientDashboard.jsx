@@ -681,13 +681,13 @@ window.ClientDashboard = function ClientDashboard({ currentUser, onRunAnalysis, 
                                                 color: viewMode === 'history' ? '#fff' : '#475569',
                                                 border: viewMode === 'history' ? 'none' : '1px solid #e2e8f0',
                                             }}>일자별 추이 ({analysisHistory.length}일)</button>
-                                        {rankHistory.length > 0 && <button onClick={function() { setViewMode('rank'); }}
+                                        <button onClick={function() { setViewMode('rank'); }}
                                             style={{
                                                 padding: '8px 18px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer',
                                                 background: viewMode === 'rank' ? '#1B2A4A' : '#fff',
                                                 color: viewMode === 'rank' ? '#fff' : '#475569',
                                                 border: viewMode === 'rank' ? 'none' : '1px solid #e2e8f0',
-                                            }}>순위 이력 ({rankHistory.length}건)</button>}
+                                            }}>순위 이력 ({rankHistory.length}건)</button>
                                         <div style={{ flex: 1 }} />
                                     </div>
 
@@ -814,6 +814,13 @@ window.ClientDashboard = function ClientDashboard({ currentUser, onRunAnalysis, 
                                                     )}
                                                 </div>
                                             </div>
+                                            {rankHistory.length === 0 ? (
+                                                <div style={{ textAlign: 'center', padding: 40, color: '#94a3b8', fontSize: 13 }}>
+                                                    <div style={{ fontSize: 32, marginBottom: 12 }}>📊</div>
+                                                    <div style={{ fontWeight: 600, marginBottom: 6, color: '#64748b' }}>아직 수집된 순위 데이터가 없습니다</div>
+                                                    <div>스케줄러가 6시간 간격으로 자동 수집하며, 매일 오전 7시 전체 분석 시에도 함께 수집됩니다.</div>
+                                                </div>
+                                            ) : (
                                             <div className="table-wrap">
                                                 <table>
                                                     <thead><tr><th>날짜</th><th>순위</th><th>유형</th></tr></thead>
@@ -839,6 +846,7 @@ window.ClientDashboard = function ClientDashboard({ currentUser, onRunAnalysis, 
                                                     </tbody>
                                                 </table>
                                             </div>
+                                            )}
                                         </div>
                                     )}
                                 </div>

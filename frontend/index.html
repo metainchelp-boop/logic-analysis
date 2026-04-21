@@ -17,26 +17,27 @@
   <!-- 폰트 (display=swap 으로 FOUT 허용, 로딩 중 시스템 폰트 표시) -->
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <!-- 스타일시트 -->
-  <link rel="stylesheet" href="css/styles.css?v=3.9.11">
+  <link rel="stylesheet" href="css/styles.css?v=4.0.4">
 </head>
 <body>
   <div id="root"></div>
   <!-- 유틸리티 (일반 JS) -->
-  <script src="js/utils.js?v=3.9.11"></script>
+  <script src="js/utils.js?v=4.0.4"></script>
   <!-- 에러 경계 (빈 화면 방지 — App 전에 로드) -->
   <script src="js/components/ErrorBoundary.jsx?v=3.9.11"></script>
+  <!-- 섹션별 에러 경계 (개별 섹션 오류 격리) -->
+  <script src="js/components/SectionErrorBoundary.jsx?v=3.9.21"></script>
   <!-- 컴포넌트 (JSX → Babel 변환) -->
   <script type="text/babel" src="js/components/AiFeedbackAllSection.jsx?v=3.9.11"></script>
   <script type="text/babel" src="js/components/LoadingSpinner.jsx?v=3.9.11"></script>
   <script type="text/babel" src="js/components/EmptyState.jsx?v=3.9.11"></script>
   <script type="text/babel" src="js/components/StatCard.jsx?v=3.9.11"></script>
-  <script type="text/babel" src="js/components/TopBar.jsx?v=3.9.11"></script>
-  <script type="text/babel" src="js/components/SearchBar.jsx?v=3.9.11"></script>
+  <script type="text/babel" src="js/components/SearchBar.jsx?v=4.0.4"></script>
   <script type="text/babel" src="js/components/DashboardSummary.jsx?v=3.9.11"></script>
   <script type="text/babel" src="js/components/RankTrackingSection.jsx?v=3.9.11"></script>
   <script type="text/babel" src="js/components/KeywordVolumeSection.jsx?v=3.9.11"></script>
   <script type="text/babel" src="js/components/RelatedKeywordsSection.jsx?v=3.9.11"></script>
-  <script type="text/babel" src="js/components/SeoDiagnosisSection.jsx?v=3.9.11"></script>
+  <script type="text/babel" src="js/components/SeoDiagnosisSection.jsx?v=4.0.4"></script>
   <script type="text/babel" src="js/components/ProductNameSection.jsx?v=3.9.11"></script>
   <script type="text/babel" src="js/components/ReportSection.jsx?v=3.9.11"></script>
   <script type="text/babel" src="js/components/NotificationSection.jsx?v=3.9.11"></script>
@@ -53,10 +54,9 @@
   <script type="text/babel" src="js/components/ProductNameOptSection.jsx?v=3.9.11"></script>
   <script type="text/babel" src="js/components/ReviewAnalysisSection.jsx?v=3.9.11"></script>
   <script type="text/babel" src="js/components/DetailPageQualitySection.jsx?v=3.9.11"></script>
+  <script type="text/babel" src="js/components/HtmlDetailAnalysisSection.jsx?v=4.0.4"></script>
   <script type="text/babel" src="js/components/SalesEstimationSection.jsx?v=3.9.11"></script>
   <script type="text/babel" src="js/components/CompetitorTableSection.jsx?v=3.9.11"></script>
-  <script type="text/babel" src="js/components/StrategicAnalysisSection.jsx?v=3.9.11"></script>
-  <script type="text/babel" src="js/components/AdvertiserReportSection.jsx?v=3.9.11"></script>
   <script type="text/babel" src="js/components/EntryStrategySection.jsx?v=3.9.11"></script>
   <script type="text/babel" src="js/components/ApiUsageSection.jsx?v=3.9.14"></script>
   <script type="text/babel" src="js/components/SaveToClientSection.jsx?v=3.9.14"></script>
@@ -67,6 +67,6 @@
   <script type="text/babel" src="js/components/ClientDashboard.jsx?v=3.9.14"></script>
   <script type="text/babel" src="js/components/UserGuidePage.jsx?v=3.9.14"></script>
   <!-- 메인 앱 (항상 맨 마지막에 로드) -->
-  <script type="text/babel" src="js/components/App.jsx?v=3.9.14"></script>
+  <script type="text/babel" src="js/components/App.jsx?v=4.0.4"></script>
 </body>
 </html>

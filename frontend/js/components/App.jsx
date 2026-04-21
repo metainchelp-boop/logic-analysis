@@ -44,6 +44,8 @@ window.App = function App() {
     const [shopProducts, setShopProducts] = useState(null);
     const [advertiserReport, setAdvertiserReport] = useState(null);
     const [advertiserLoading, setAdvertiserLoading] = useState(false);
+    const [htmlReviewData, setHtmlReviewData] = useState(null);
+    const [htmlDetailResult, setHtmlDetailResult] = useState(null);
     const [searchedProductUrl, setSearchedProductUrl] = useState('');
     const [companyName, setCompanyName] = useState('');
 
@@ -180,10 +182,10 @@ window.App = function App() {
     if (!currentUser) return React.createElement(window.LoginPage, { onLogin: saveAuth });
 
     // 수동 검색 (SearchBar 제출): 업체 자동연동 해제
-    var handleManualSearch = function(keyword, productUrl, inputCompanyName) {
+    var handleManualSearch = function(keyword, productUrl, inputCompanyName, htmlInput) {
         setCurrentClientId(null);
         setAutoSaveStatus('');
-        handleSearch(keyword, productUrl, inputCompanyName);
+        handleSearch(keyword, productUrl, inputCompanyName, htmlInput);
     };
 
     // 상품 URL 정리 — 불필요한 추적 파라미터 제거
@@ -202,8 +204,8 @@ window.App = function App() {
         } catch(e) { return url; }
     };
 
-    // 통합 검색
-    var handleSearch = function(keyword, productUrl, inputCompanyName) {
+    // 통합 검색 (htmlInput: 검색바에서 입력된 HTML — 상세페이지 분석 + 리뷰 추출에 사용)
+    var handleSearch = function(keyword, productUrl, inputCompanyName, htmlInput) {
         // Viewer 일일 분석 횟수 체크 (백엔드 연동)
         if (currentUser && currentUser.role === 'viewer') {
             api.get('/cd/usage/check').then(function(usageRes) {
@@ -213,19 +215,21 @@ window.App = function App() {
                 }
                 // 제한 내 → 카운트 증가 후 실제 분석 실행
                 api.post('/cd/usage/increment').then(function() {
-                    _doSearch(keyword, productUrl, inputCompanyName);
+                    _doSearch(keyword, productUrl, inputCompanyName, htmlInput);
                 }).catch(function() {
-                    _doSearch(keyword, productUrl, inputCompanyName);
+                    _doSearch(keyword, productUrl, inputCompanyName, htmlInput);
                 });
             }).catch(function() {
-                _doSearch(keyword, productUrl, inputCompanyName);
+                _doSearch(keyword, productUrl, inputCompanyName, htmlInput);
             });
             return;
         }
-        _doSearch(keyword, productUrl, inputCompanyName);
+        // 관리자/매니저도 수동 분석 카운팅
+        api.post('/cd/usage/increment').catch(function() {});
+        _doSearch(keyword, productUrl, inputCompanyName, htmlInput);
     };
 
-    var _doSearch = function(keyword, productUrl, inputCompanyName) {
+    var _doSearch = function(keyword, productUrl, inputCompanyName, htmlInput) {
         if (inputCompanyName !== undefined) setCompanyName(inputCompanyName);
         var cleanedUrl = cleanProductUrl(productUrl);
         setSearchLoading(true);
@@ -236,6 +240,30 @@ window.App = function App() {
         setAnalysisData(null);
         setShopProducts(null);
         setAdvertiserReport(null);
+        setHtmlReviewData(null);
+        setHtmlDetailResult(null);
+
+        // 검색바에서 HTML이 입력되었으면 상세페이지 분석 + 리뷰 데이터 추출 (비동기)
+        if (htmlInput && htmlInput.length >= 100) {
+            api.post('/seo/detail-page', { html: htmlInput, product_url: productUrl || '' })
+                .then(function(res) {
+                    if (res && res.success && res.data) {
+                        // 전체 상세페이지 분석 결과 저장 (점수, 지표, 체크리스트, 제안)
+                        setHtmlDetailResult(res.data);
+                        // 리뷰 데이터 추출 성공 시 state 업데이트
+                        if (res.data.reviewData) {
+                            setHtmlReviewData(res.data.reviewData);
+                        }
+                        toast.success('상세페이지 HTML 분석 완료');
+                    } else if (res && !res.success) {
+                        toast.error('상세페이지 분석 실패: ' + (res.detail || '서버 오류'));
+                    }
+                })
+                .catch(function(e) {
+                    console.warn('HTML 상세페이지 분석 실패:', e.message);
+                    toast.error('상세페이지 분석 요청 실패 — ' + (e.message || '네트워크 오류'));
+                });
+        }
 
         // 광고주 상품 URL이 있으면 광고주 분석 API 호출
         if (productUrl) {
@@ -613,6 +641,173 @@ window.App = function App() {
                 };
             }
 
+            // 12. 리뷰 분석 (상위 상품 기반 추정)
+            if (prods.length >= 5) {
+                var top5 = prods.slice(0, 5);
+                var top20 = prods.slice(0, 20);
+                var allProds = prods.slice(0, 80);
+
+                // 리뷰 수 추정 (순위 기반 로그 감소 모델)
+                var estReviews = function(rank) { return Math.max(1, Math.round(2000 / Math.pow(rank, 0.7))); };
+                var advReview = cleanedUrl ? (function() {
+                    var advProd = prods.find(function(p) { return p.product_url && cleanedUrl && p.product_url.indexOf(cleanedUrl) >= 0; });
+                    return advProd ? estReviews(advProd.rank) : estReviews(40);
+                })() : estReviews(40);
+                var avgReview = Math.round(top20.reduce(function(s, p) { return s + estReviews(p.rank); }, 0) / top20.length);
+                var top5Review = Math.round(top5.reduce(function(s, p) { return s + estReviews(p.rank); }, 0) / top5.length);
+
+                // 평점 추정 (상위 4.5~4.9, 하위 4.0~4.5)
+                var estRating = function(rank) { return Math.round((4.9 - (rank - 1) * 0.012) * 10) / 10; };
+                var advRating = cleanedUrl ? (function() {
+                    var advProd = prods.find(function(p) { return p.product_url && cleanedUrl && p.product_url.indexOf(cleanedUrl) >= 0; });
+                    return advProd ? estRating(advProd.rank) : estRating(40);
+                })() : estRating(40);
+                var avgRating = Math.round(top20.reduce(function(s, p) { return s + estRating(p.rank); }, 0) / top20.length * 10) / 10;
+                var top5Rating = Math.round(top5.reduce(function(s, p) { return s + estRating(p.rank); }, 0) / top5.length * 10) / 10;
+
+                // 찜 수 추정
+                var estWish = function(rank) { return Math.max(5, Math.round(500 / Math.pow(rank, 0.6))); };
+                var advWish = cleanedUrl ? (function() {
+                    var advProd = prods.find(function(p) { return p.product_url && cleanedUrl && p.product_url.indexOf(cleanedUrl) >= 0; });
+                    return advProd ? estWish(advProd.rank) : estWish(40);
+                })() : estWish(40);
+                var avgWish = Math.round(top20.reduce(function(s, p) { return s + estWish(p.rank); }, 0) / top20.length);
+                var top5Wish = Math.round(top5.reduce(function(s, p) { return s + estWish(p.rank); }, 0) / top5.length);
+
+                var reviewGap = avgReview > 0 ? Math.round(((advReview - avgReview) / avgReview) * 100) : 0;
+                var ratingGap = avgRating > 0 ? Math.round(((advRating - avgRating) / avgRating) * 100) : 0;
+                var wishGap = avgWish > 0 ? Math.round(((advWish - avgWish) / avgWish) * 100) : 0;
+
+                analysis.reviewAnalysis = {
+                    reviewCount: { adv: advReview, avg: avgReview, top5: top5Review, gapColor: reviewGap >= 0 ? '#16a34a' : '#dc2626', gapLabel: (reviewGap >= 0 ? '+' : '') + reviewGap + '%' },
+                    rating: { adv: advRating.toFixed(1), avg: avgRating.toFixed(1), top5: top5Rating.toFixed(1), gapColor: ratingGap >= 0 ? '#16a34a' : '#dc2626', gapLabel: (ratingGap >= 0 ? '+' : '') + ratingGap + '%' },
+                    wishCount: { adv: advWish, avg: avgWish, top5: top5Wish, gapColor: wishGap >= 0 ? '#16a34a' : '#dc2626', gapLabel: (wishGap >= 0 ? '+' : '') + wishGap + '%' },
+                    reviewGapPercent: reviewGap,
+                    ratingGapPercent: ratingGap,
+                    wishGapPercent: wishGap,
+                    strategy: reviewGap < 0
+                        ? '리뷰 수가 경쟁 평균보다 부족합니다. 체험단/구매 후기 이벤트를 통해 리뷰를 확보하세요.'
+                        : '리뷰 수가 경쟁 평균 이상입니다. 평점 관리에 집중하세요.'
+                };
+            }
+
+            // 13. SEO 상세 분석 (상품URL 있을 때)
+            if (cleanedUrl && prods.length > 0) {
+                var advProd = prods.find(function(p) { return p.product_url && cleanedUrl && p.product_url.indexOf(cleanedUrl) >= 0; });
+                if (advProd) {
+                    var kwWords = keyword.toLowerCase().split(/\s+/);
+                    var titleLower = advProd.product_name.toLowerCase();
+                    var kwInTitle = kwWords.every(function(w) { return titleLower.indexOf(w) >= 0; });
+                    var titleLen = advProd.product_name.length;
+                    var isSmartStore = advProd.product_url && advProd.product_url.indexOf('smartstore.naver.com') >= 0;
+                    var hasBrand = !!advProd.brand;
+                    var hasCategory = !!(advProd.category2 || advProd.category1);
+
+                    var relScore = (kwInTitle ? 40 : 0) + (titleLen >= 20 && titleLen <= 50 ? 30 : titleLen >= 10 ? 15 : 5) + (hasCategory ? 30 : 10);
+                    var trustScore = (isSmartStore ? 35 : 15) + (hasBrand ? 30 : 10) + (advProd.rank <= 20 ? 35 : advProd.rank <= 40 ? 20 : 10);
+                    var popScore = (advProd.rank <= 5 ? 40 : advProd.rank <= 10 ? 30 : advProd.rank <= 20 ? 20 : 10)
+                        + (advProd.rank <= 10 ? 30 : advProd.rank <= 20 ? 20 : 10)
+                        + (advProd.rank <= 10 ? 30 : advProd.rank <= 30 ? 20 : 10);
+
+                    analysis.seoDetail = {
+                        relevance: {
+                            score: relScore,
+                            items: [
+                                { pass: kwInTitle, label: '키워드 "' + keyword + '"이(가) 상품명에 포함됨' },
+                                { pass: titleLen >= 20 && titleLen <= 50, label: '상품명 길이 적절 (' + titleLen + '자)' },
+                                { pass: hasCategory, label: '카테고리 정보 존재: ' + (advProd.category2 || advProd.category1 || '없음') },
+                                { pass: kwWords.length > 1 && kwInTitle, label: '복합 키워드 완전 포함' }
+                            ]
+                        },
+                        trustworthy: {
+                            score: trustScore,
+                            items: [
+                                { pass: isSmartStore, label: '네이버 스마트스토어 입점' },
+                                { pass: hasBrand, label: '브랜드 등록: ' + (advProd.brand || '미등록') },
+                                { pass: advProd.rank <= 20, label: '상위 노출 달성 (현재 ' + advProd.rank + '위)' },
+                                { pass: isSmartStore, label: '네이버페이 결제 지원' }
+                            ]
+                        },
+                        popularity: {
+                            score: popScore,
+                            items: [
+                                { pass: advProd.rank <= 10, label: '검색 결과 상위 10위 이내 (' + advProd.rank + '위)' },
+                                { pass: advProd.rank <= 20, label: '추정 리뷰 수 경쟁력 있음' },
+                                { pass: advProd.rank <= 10, label: '추정 판매량 상위권' },
+                                { pass: advProd.rank <= 30, label: '찜 수 평균 이상 추정' }
+                            ]
+                        }
+                    };
+
+                    // 14. 상세페이지 품질 진단
+                    var dpScores = [
+                        { label: '상품명 최적화', score: kwInTitle ? (titleLen >= 20 && titleLen <= 50 ? 95 : 70) : 30, maxScore: 100, color: '#6366f1' },
+                        { label: '가격 경쟁력', score: (function() { var avgP = prods.slice(0, 20).reduce(function(s, p) { return s + p.price; }, 0) / 20; return advProd.price <= avgP ? 85 : advProd.price <= avgP * 1.2 ? 60 : 35; })(), maxScore: 100, color: '#22c55e' },
+                        { label: '브랜드/스토어 신뢰도', score: (hasBrand ? 40 : 0) + (isSmartStore ? 40 : 20) + 10, maxScore: 100, color: '#f59e0b' },
+                        { label: '카테고리 적합도', score: hasCategory ? 80 : 30, maxScore: 100, color: '#06b6d4' },
+                        { label: '검색 노출 순위', score: advProd.rank <= 5 ? 95 : advProd.rank <= 10 ? 80 : advProd.rank <= 20 ? 60 : advProd.rank <= 40 ? 40 : 20, maxScore: 100, color: '#ec4899' }
+                    ];
+                    var dpTotal = Math.round(dpScores.reduce(function(s, b) { return s + b.score; }, 0) / dpScores.length);
+                    var dpGrade = dpTotal >= 80 ? 'A등급' : dpTotal >= 60 ? 'B등급' : dpTotal >= 40 ? 'C등급' : 'D등급';
+                    var dpGradeColor = dpTotal >= 80 ? '#dcfce7' : dpTotal >= 60 ? '#dbeafe' : dpTotal >= 40 ? '#fef3c7' : '#fee2e2';
+
+                    analysis.detailPageQuality = {
+                        totalScore: dpTotal,
+                        grade: dpGrade,
+                        gradeColor: dpGradeColor,
+                        scoreBars: dpScores,
+                        checklist: [
+                            { category: '상품명', items: [
+                                { pass: kwInTitle, text: '메인 키워드 포함' },
+                                { pass: titleLen >= 20, text: '상품명 20자 이상' },
+                                { pass: titleLen <= 50, text: '상품명 50자 이하 (과도하지 않음)' }
+                            ]},
+                            { category: '가격/혜택', items: [
+                                { pass: advProd.price > 0, text: '정상 가격 등록' },
+                                { pass: isSmartStore, text: '네이버페이 지원' }
+                            ]},
+                            { category: '신뢰도', items: [
+                                { pass: hasBrand, text: '브랜드 등록 완료' },
+                                { pass: isSmartStore, text: '스마트스토어 입점' },
+                                { pass: hasCategory, text: '정확한 카테고리 설정' }
+                            ]}
+                        ],
+                        comment: dpTotal >= 80 ? '상세페이지 품질이 우수합니다. 현재 전략을 유지하세요.' : dpTotal >= 60 ? '전반적으로 양호하나 일부 개선이 필요합니다.' : '상세페이지 개선이 시급합니다. 상품명과 가격 경쟁력을 우선 확인하세요.'
+                    };
+
+                    // 15. 상품명 SEO 최적화 제안
+                    var nameIssues = [];
+                    nameIssues.push({ pass: kwInTitle, text: kwInTitle ? '메인 키워드 "' + keyword + '" 포함됨' : '메인 키워드 "' + keyword + '" 미포함 — 상품명에 추가 필요' });
+                    nameIssues.push({ pass: titleLen >= 20 && titleLen <= 50, text: titleLen < 20 ? '상품명이 너무 짧음 (' + titleLen + '자) — 20자 이상 권장' : titleLen > 50 ? '상품명이 너무 김 (' + titleLen + '자) — 50자 이하 권장' : '상품명 길이 적절 (' + titleLen + '자)' });
+
+                    var hasSpecialChars = /[★☆♥♡●○■□▶◀※@#$%^&*]/.test(advProd.product_name);
+                    nameIssues.push({ pass: !hasSpecialChars, text: hasSpecialChars ? '특수문자/이모지 포함 — SEO에 불리할 수 있음' : '불필요한 특수문자 없음' });
+
+                    var hasDuplicateWords = (function() {
+                        var words = advProd.product_name.split(/\s+/);
+                        var seen = {};
+                        return words.some(function(w) { if (seen[w]) return true; seen[w] = true; return false; });
+                    })();
+                    nameIssues.push({ pass: !hasDuplicateWords, text: hasDuplicateWords ? '중복 단어 존재 — 제거 권장' : '중복 단어 없음' });
+
+                    // 추천 상품명 생성
+                    var suggested = advProd.product_name;
+                    if (!kwInTitle) {
+                        suggested = keyword + ' ' + advProd.product_name;
+                        if (suggested.length > 50) suggested = suggested.substring(0, 50);
+                    }
+
+                    analysis.productNameOpt = {
+                        currentName: advProd.product_name,
+                        issues: nameIssues,
+                        suggestedName: suggested !== advProd.product_name ? suggested : null,
+                        marketerComment: kwInTitle
+                            ? '상품명에 메인 키워드가 포함되어 있어 기본적인 SEO는 충족합니다. 연관 키워드를 추가하면 노출이 더 개선될 수 있습니다.'
+                            : '상품명에 메인 키워드 "' + keyword + '"가 없습니다. 상품명 앞부분에 키워드를 배치하면 검색 노출이 크게 개선됩니다.'
+                    };
+                }
+            }
+
             setAnalysisData(Object.keys(analysis).length > 0 ? analysis : null);
             setSearchLoading(false);
         }).catch(function(e) {
@@ -812,11 +1007,11 @@ window.App = function App() {
     };
 
     /* ==================== 홈에서 검색 시 분석 탭으로 전환하는 핸들러 ==================== */
-    var handleHomeSearch = function(keyword, productUrl, inputCompanyName) {
+    var handleHomeSearch = function(keyword, productUrl, inputCompanyName, htmlInput) {
         setCurrentClientId(null);
         setAutoSaveStatus('');
         setCurrentPage('analysis');
-        handleSearch(keyword, productUrl, inputCompanyName);
+        handleSearch(keyword, productUrl, inputCompanyName, htmlInput);
     };
 
     /* ==================== 페이지별 콘텐츠 렌더링 ==================== */
@@ -842,7 +1037,8 @@ window.App = function App() {
 
         /* 등록 업체 리스트 */
         React.createElement(window.ClientListSection, {
-            onClientClick: handleClientClick
+            onClientClick: handleClientClick,
+            onNavigateToClient: handleNavigateToClient
         }),
 
         /* 푸터 */
@@ -924,11 +1120,15 @@ window.App = function App() {
             !searchedProductUrl && React.createElement(DashboardSummary, { products: products, searchResult: relatedData }),
 
             /* 순위 추적 */
-            React.createElement(RankTrackingSection, { products: products, refreshProducts: loadProducts, searchedKeyword: searchedKeyword, searchedProductUrl: searchedProductUrl, onNavigateToClient: handleNavigateToClient, canEdit: currentUser.role !== 'viewer' }),
+            React.createElement(window.SectionErrorBoundary, { name: '순위 추적' },
+                React.createElement(RankTrackingSection, { products: products, refreshProducts: loadProducts, searchedKeyword: searchedKeyword, searchedProductUrl: searchedProductUrl, onNavigateToClient: handleNavigateToClient, canEdit: currentUser.role !== 'viewer' })
+            ),
 
             /* 종합 요약 카드 */
-            analysisData && analysisData.summaryCards && React.createElement('div', { id: 'sec-summary' },
-                React.createElement(SummaryCardsSection, { data: analysisData.summaryCards })
+            analysisData && analysisData.summaryCards && React.createElement(window.SectionErrorBoundary, { name: '종합 요약' },
+                React.createElement('div', { id: 'sec-summary' },
+                    React.createElement(SummaryCardsSection, { data: analysisData.summaryCards })
+                )
             ),
 
             /* 검색 전 안내 (아무 데이터도 없을 때) */
@@ -953,86 +1153,150 @@ window.App = function App() {
                 )
             ),
 
-            /* 광고주 정보 */
-            analysisData && analysisData.advertiserInfo && React.createElement(AdvertiserInfoCard, { data: analysisData.advertiserInfo }),
+            /* ==================== 리뉴얼 섹터 순서 (시안 v4.0 기준 21블록) ==================== */
 
-            /* 키워드 검색량 */
-            volumeData && React.createElement(KeywordVolumeSection, { keyword: searchedKeyword, data: volumeData }),
-
-            /* 시장 규모 추정 */
-            analysisData && analysisData.marketRevenue && React.createElement('div', { id: 'sec-market' },
-                React.createElement(MarketRevenueSection, { data: analysisData.marketRevenue })
+            /* 1. 광고주 정보 */
+            analysisData && analysisData.advertiserInfo && React.createElement(window.SectionErrorBoundary, { name: '광고주 정보' },
+                React.createElement(AdvertiserInfoCard, { data: analysisData.advertiserInfo })
             ),
 
-            /* 판매량 추정 (순위별 예상 월 매출 아래) */
-            analysisData && analysisData.salesEstimation && React.createElement('div', { id: 'sec-sales' },
-                React.createElement(SalesEstimationSection, { data: analysisData.salesEstimation })
+            /* 2. 키워드 검색량 */
+            volumeData && React.createElement(window.SectionErrorBoundary, { name: '키워드 검색량' },
+                React.createElement(KeywordVolumeSection, { keyword: searchedKeyword, data: volumeData })
             ),
 
-            /* 경쟁강도 분석 */
-            analysisData && analysisData.competitionIndex && React.createElement('div', { id: 'sec-competition' },
-                React.createElement(CompetitionIndexSection, { data: analysisData.competitionIndex })
+            /* 3. 시장 규모 & 매출 추정 */
+            analysisData && analysisData.marketRevenue && React.createElement(window.SectionErrorBoundary, { name: '시장 규모' },
+                React.createElement('div', { id: 'sec-market' },
+                    React.createElement(MarketRevenueSection, { data: analysisData.marketRevenue })
+                )
             ),
 
-            /* 연관 키워드 */
-            relatedData && React.createElement(RelatedKeywordsSection, { data: relatedData }),
-
-            /* 키워드 트렌드 */
-            analysisData && analysisData.keywordTrend && React.createElement('div', { id: 'sec-trend' },
-                React.createElement(KeywordTrendSection, { data: analysisData.keywordTrend })
+            /* 4. 판매량 추정 */
+            analysisData && analysisData.salesEstimation && React.createElement(window.SectionErrorBoundary, { name: '판매량 추정' },
+                React.createElement('div', { id: 'sec-sales' },
+                    React.createElement(SalesEstimationSection, { data: analysisData.salesEstimation })
+                )
             ),
 
-            /* 골든 키워드 */
-            analysisData && analysisData.goldenKeyword && React.createElement('div', { id: 'sec-golden' },
-                React.createElement(GoldenKeywordCard, { data: analysisData.goldenKeyword })
+            /* 5. 경쟁강도 분석 */
+            analysisData && analysisData.competitionIndex && React.createElement(window.SectionErrorBoundary, { name: '경쟁강도' },
+                React.createElement('div', { id: 'sec-competition' },
+                    React.createElement(CompetitionIndexSection, { data: analysisData.competitionIndex })
+                )
             ),
 
-            /* SEO 진단 (경쟁사 비교표 포함) — 분석탭(키워드만)에서는 숨김, 업체 분석 시 노출 */
-            searchedProductUrl && React.createElement('div', null,
+            /* 6. 연관 키워드 */
+            relatedData && React.createElement(window.SectionErrorBoundary, { name: '연관 키워드' },
+                React.createElement(RelatedKeywordsSection, { data: relatedData })
+            ),
+
+            /* 7. 키워드 트렌드 */
+            analysisData && analysisData.keywordTrend && React.createElement(window.SectionErrorBoundary, { name: '키워드 트렌드' },
+                React.createElement('div', { id: 'sec-trend' },
+                    React.createElement(KeywordTrendSection, { data: analysisData.keywordTrend })
+                )
+            ),
+
+            /* 8. 골든 키워드 */
+            analysisData && analysisData.goldenKeyword && React.createElement(window.SectionErrorBoundary, { name: '골든 키워드' },
+                React.createElement('div', { id: 'sec-golden' },
+                    React.createElement(GoldenKeywordCard, { data: analysisData.goldenKeyword })
+                )
+            ),
+
+            /* 9. 경쟁사 비교표 (상위 80개) */
+            analysisData && analysisData.competitorTable && React.createElement(window.SectionErrorBoundary, { name: '경쟁사 비교표' },
+                React.createElement(window.CompetitorTableSection, { data: analysisData.competitorTable })
+            ),
+
+            /* 10. SEO 종합 진단 (독립 — 상세페이지 품질 진단은 #12 DetailPageQualitySection으로 분리) */
+            searchedProductUrl && React.createElement(window.SectionErrorBoundary, { name: 'SEO 진단' },
                 React.createElement(SeoDiagnosisSection, { keyword: searchedKeyword, productUrl: searchedProductUrl, competitorData: analysisData && analysisData.competitorTable })
             ),
 
-            /* 상품명 분석 — 분석탭(키워드만)에서는 숨김, 업체 분석 시 노출 */
-            searchedProductUrl && React.createElement(ProductNameSection, { keyword: searchedKeyword, shopProducts: shopProducts }),
+            /* 11. SEO 상세 분석 */
+            analysisData && analysisData.seoDetail && React.createElement(window.SectionErrorBoundary, { name: 'SEO 상세' },
+                React.createElement(window.SeoDetailSection, { data: analysisData.seoDetail })
+            ),
 
-            /* 키워드 & 태그 분석 (상품명 분석 바로 아래) */
-            analysisData && analysisData.keywordTags && React.createElement(KeywordTagSection, { data: analysisData.keywordTags }),
+            /* 12. 상세페이지 품질 진단 (경쟁사 데이터 기반) */
+            analysisData && analysisData.detailPageQuality && React.createElement(window.SectionErrorBoundary, { name: '상세페이지 품질' },
+                React.createElement(window.DetailPageQualitySection, { data: analysisData.detailPageQuality })
+            ),
 
-            /* 카테고리 분석 */
-            analysisData && analysisData.categoryAnalysis && React.createElement(CategoryAnalysisSection, { data: analysisData.categoryAnalysis }),
+            /* 12-B. 상세페이지 HTML 분석 결과 (검색바 HTML 입력 시) */
+            htmlDetailResult && React.createElement(window.SectionErrorBoundary, { name: '상세페이지 HTML 분석' },
+                React.createElement(window.HtmlDetailAnalysisSection, { data: htmlDetailResult })
+            ),
 
-            /* 1페이지 진입 전략 비교 분석 (통합) */
-            (advertiserReport || (analysisData && analysisData.strategicAnalysis)) && !advertiserLoading && React.createElement(EntryStrategySection, {
-                advertiserData: advertiserReport,
-                strategicData: analysisData && analysisData.strategicAnalysis,
-                keyword: searchedKeyword
-            }),
+            /* 13. 리뷰 & 찜 분석 (HTML 실제 데이터 추출 — 상세페이지 품질 바로 아래) */
+            analysisData && analysisData.reviewAnalysis && React.createElement(window.SectionErrorBoundary, { name: '리뷰 분석' },
+                React.createElement(window.ReviewAnalysisSection, { data: analysisData.reviewAnalysis, htmlReviewData: htmlReviewData })
+            ),
 
-            /* AI 종합 분석 리포트 (1회 통합 호출) */
-            analysisData && React.createElement(AiFeedbackAllSection, {
-                keyword: searchedKeyword,
-                analysisData: analysisData,
-                volumeData: volumeData,
-                relatedData: relatedData,
-                advertiserReport: advertiserReport
-            }),
+            /* 14. 상품명 분석 */
+            searchedProductUrl && React.createElement(window.SectionErrorBoundary, { name: '상품명 분석' },
+                React.createElement(ProductNameSection, { keyword: searchedKeyword, shopProducts: shopProducts })
+            ),
 
-            /* 업체 등록/저장 (viewer는 숨김) */
-            analysisData && currentUser.role !== 'viewer' && React.createElement(SaveToClientSection, {
-                keyword: searchedKeyword,
-                productUrl: searchedProductUrl,
-                analysisData: analysisData,
-                volumeData: volumeData,
-                relatedData: relatedData,
-                shopProducts: shopProducts,
-                advertiserReport: advertiserReport,
-            }),
+            /* 15. 상품명 SEO 최적화 제안 */
+            analysisData && analysisData.productNameOpt && React.createElement(window.SectionErrorBoundary, { name: '상품명 최적화' },
+                React.createElement(window.ProductNameOptSection, { data: analysisData.productNameOpt })
+            ),
 
-            /* 보고서 — 분석탭(키워드만)에서는 숨김, 업체 분석 시 노출 */
-            searchedProductUrl && React.createElement(ReportSection, { keyword: searchedKeyword, companyName: companyName }),
+            /* 16. 키워드 & 태그 분석 */
+            analysisData && analysisData.keywordTags && React.createElement(window.SectionErrorBoundary, { name: '키워드 태그' },
+                React.createElement(KeywordTagSection, { data: analysisData.keywordTags })
+            ),
 
-            /* 알림 설정 (admin/superadmin만 — API가 admin 전용) */
-            (currentUser.role === 'admin' || currentUser.role === 'superadmin') && React.createElement(NotificationSection, null),
+            /* 17. 카테고리 분석 */
+            analysisData && analysisData.categoryAnalysis && React.createElement(window.SectionErrorBoundary, { name: '카테고리 분석' },
+                React.createElement(CategoryAnalysisSection, { data: analysisData.categoryAnalysis })
+            ),
+
+            /* 18. 1페이지 진입 전략 비교 분석 */
+            (advertiserReport || (analysisData && analysisData.strategicAnalysis)) && !advertiserLoading && React.createElement(window.SectionErrorBoundary, { name: '진입 전략' },
+                React.createElement(EntryStrategySection, {
+                    advertiserData: advertiserReport,
+                    strategicData: analysisData && analysisData.strategicAnalysis,
+                    keyword: searchedKeyword
+                })
+            ),
+
+            /* 19. AI 종합 분석 리포트 */
+            analysisData && React.createElement(window.SectionErrorBoundary, { name: 'AI 종합 분석' },
+                React.createElement(AiFeedbackAllSection, {
+                    keyword: searchedKeyword,
+                    analysisData: analysisData,
+                    volumeData: volumeData,
+                    relatedData: relatedData,
+                    advertiserReport: advertiserReport
+                })
+            ),
+
+            /* 20. 업체 등록/저장 (viewer는 숨김) */
+            analysisData && currentUser.role !== 'viewer' && React.createElement(window.SectionErrorBoundary, { name: '업체 저장' },
+                React.createElement(SaveToClientSection, {
+                    keyword: searchedKeyword,
+                    productUrl: searchedProductUrl,
+                    analysisData: analysisData,
+                    volumeData: volumeData,
+                    relatedData: relatedData,
+                    shopProducts: shopProducts,
+                    advertiserReport: advertiserReport,
+                })
+            ),
+
+            /* 21. 보고서 출력 */
+            searchedProductUrl && React.createElement(window.SectionErrorBoundary, { name: '보고서' },
+                React.createElement(ReportSection, { keyword: searchedKeyword, companyName: companyName })
+            ),
+
+            /* 알림 설정 (admin/superadmin만) */
+            (currentUser.role === 'admin' || currentUser.role === 'superadmin') && React.createElement(window.SectionErrorBoundary, { name: '알림 설정' },
+                React.createElement(NotificationSection, null)
+            ),
 
             /* 푸터 */
             React.createElement('footer', { className: 'footer' },

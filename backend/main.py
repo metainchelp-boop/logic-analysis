@@ -11,10 +11,15 @@ from pydantic import BaseModel, field_validator
 from typing import Optional, List, Dict, Any
 from datetime import datetime, date
 import os
-import re
 import time
-import uvicorn
 import logging
+
+# 타임존 설정 (Docker 컨테이너 UTC 대응 — KST 강제)
+os.environ.setdefault('TZ', 'Asia/Seoul')
+try:
+    time.tzset()
+except AttributeError:
+    pass  # Windows에서는 tzset 미지원
 
 # v3 신규 모듈 임포트
 from fastapi import Depends
@@ -25,8 +30,9 @@ from client_dashboard import router as cd_router, init_client_dashboard_db
 
 logger = logging.getLogger(__name__)
 
-# API 키 인증
+# API 키 인증 (빈 문자열이면 명시적 DEV_MODE 필요)
 API_KEY = os.getenv("API_KEY", "")
+_DEV_MODE = os.getenv("DEV_MODE", "").lower() in ("1", "true", "yes")
 # 인증 면제 경로
 AUTH_EXEMPT_PATHS = ["/api/health", "/docs", "/openapi.json", "/redoc", "/api/auth/login", "/api/reports/view/"]
 
@@ -40,7 +46,7 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
         # OPTIONS (CORS preflight)는 통과
         if request.method == "OPTIONS":
             return await call_next(request)
-        # API 키 미설정 시 인증 비활성화 (개발 모드)
+        # API 키 미설정 → JWT 인증에 위임 (라우트 레벨에서 get_current_user가 보호)
         if not API_KEY:
             return await call_next(request)
         # API 키 검증
@@ -56,9 +62,7 @@ from database import (
     init_db, add_tracked_product, get_all_tracked_products,
     delete_tracked_product, add_tracked_keyword, get_keywords_for_product,
     save_ranking, get_ranking_history, save_competitor_snapshot,
-    get_latest_competitors,
-    get_notification_settings, update_notification_settings,
-    get_notification_logs
+    get_notification_settings, update_notification_settings
 )
 from naver_crawler import (
     find_product_rank, get_product_info,
@@ -66,12 +70,7 @@ from naver_crawler import (
     get_keyword_volume
 )
 from scheduler import start_scheduler, stop_scheduler, reschedule_report
-from kakao_notify import (
-    is_configured as is_solapi_configured,
-    send_test_notification,
-    collect_daily_rank_changes,
-    generate_daily_report_text
-)
+from kakao_notify import is_configured as is_solapi_configured
 
 @asynccontextmanager
 async def lifespan(app):
@@ -84,7 +83,7 @@ async def lifespan(app):
     if missing:
         logger.warning(f"⚠️ 필수 환경변수 미설정: {', '.join(missing)} — 순위 조회 기능이 동작하지 않습니다.")
     if not API_KEY:
-        logger.warning("⚠️ API_KEY 미설정 — 인증 없이 모든 요청 허용됩니다. (개발 모드)")
+        logger.warning("⚠️ API_KEY 미설정 — API 키 미들웨어 비활성화 (JWT 인증은 라우트 레벨에서 동작)")
     init_db()
     init_auth_db()
     init_clients_db()
@@ -196,10 +195,6 @@ class RankCheckRequest(BaseModel):
             raise ValueError('유효한 상품 URL을 입력하세요')
         return v
 
-class KeywordAddRequest(BaseModel):
-    product_id: int
-    keyword: str
-
 class NotificationSettingsRequest(BaseModel):
     notify_enabled: Optional[bool] = None
     receiver_phone: Optional[str] = None
@@ -257,7 +252,8 @@ async def check_rank(req: RankCheckRequest, current_user: dict = Depends(get_cur
             }
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"순위 조회 실패: {str(e)}")
+        logger.error(f"순위 조회 실패: {e}")
+        raise HTTPException(status_code=500, detail="순위 조회 중 오류가 발생했습니다.")
 
 
 # --- 상품 추적 등록 ---
@@ -301,7 +297,8 @@ async def track_product(req: ProductAddRequest, background_tasks: BackgroundTask
             }
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"상품 등록 실패: {str(e)}")
+        logger.error(f"상품 등록 실패: {e}")
+        raise HTTPException(status_code=500, detail="상품 등록 중 오류가 발생했습니다.")
 
 
 def run_initial_rank_check(product_id: int, product_url: str, keyword_ids: List[dict]):
@@ -330,46 +327,92 @@ def run_initial_rank_check(product_id: int, product_url: str, keyword_ids: List[
 # --- 추적 상품 목록 ---
 @app.get("/api/products")
 async def list_products(current_user: dict = Depends(get_current_user)):
-    """추적 중인 상품 목록 (유저별 격리) + 빈 상품 정보 즉시 재조회"""
+    """추적 중인 상품 목록 (유저별 격리)
+    최적화: 빈 상품 정보 재조회를 백그라운드로 분리, 키워드 벌크 조회"""
     import sqlite3
     from database import DB_PATH
 
     products = get_all_tracked_products(user_id=current_user["id"], is_admin=_is_admin(current_user))
-    result = []
-    for p in products:
-        keywords = get_keywords_for_product(p["id"])
-        p["keywords"] = keywords
 
-        # 상품명이 비어있으면 즉시 재조회하여 응답에 반영 + DB 업데이트
+    # --- 최적화: 키워드를 벌크로 한 번에 조회 ---
+    if products:
+        product_ids = [p["id"] for p in products]
+        conn = sqlite3.connect(DB_PATH, timeout=10)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout=30000")
+        try:
+            placeholders = ','.join('?' * len(product_ids))
+            all_keywords = conn.execute(f"""
+                SELECT tk.*,
+                    (SELECT r.rank_position FROM rankings r
+                     WHERE r.keyword_id = tk.id
+                     ORDER BY r.checked_at DESC LIMIT 1) as latest_rank,
+                    (SELECT r.checked_at FROM rankings r
+                     WHERE r.keyword_id = tk.id
+                     ORDER BY r.checked_at DESC LIMIT 1) as last_checked
+                FROM tracked_keywords tk
+                WHERE tk.product_id IN ({placeholders})
+                ORDER BY tk.created_at ASC
+            """, product_ids).fetchall()
+
+            # product_id별로 그룹핑
+            kw_map = {}
+            for kw in all_keywords:
+                kw_dict = dict(kw)
+                pid = kw_dict['product_id']
+                kw_map.setdefault(pid, []).append(kw_dict)
+        finally:
+            conn.close()
+    else:
+        kw_map = {}
+
+    result = []
+    needs_info_update = []  # 빈 상품명 목록 (백그라운드 처리용)
+
+    for p in products:
+        p["keywords"] = kw_map.get(p["id"], [])
+
+        # 상품명이 비어있으면 목록에 추가 (응답은 즉시 반환, 업데이트는 백그라운드)
         if not p.get("product_name") or p["product_name"].strip() == '':
-            try:
-                # 추적 키워드 중 첫 번째를 검색어로 사용 (API 매칭 정확도 향상)
-                search_keyword = keywords[0]["keyword"] if keywords and isinstance(keywords[0], dict) else (keywords[0] if keywords else "")
-                info = get_product_info(p["product_url"], keyword=search_keyword)
-                if info.get("product_name"):
-                    p["product_name"] = info["product_name"]
-                    p["store_name"] = info["store_name"]
-                    p["image_url"] = info["image_url"]
-                    p["price"] = info["price"]
-                    # DB 업데이트
-                    conn = sqlite3.connect(DB_PATH, timeout=10)
-                    try:
-                        conn.execute("PRAGMA busy_timeout=30000")
-                        conn.execute("""
-                            UPDATE tracked_products SET
-                                product_name=?, store_name=?, image_url=?, price=?,
-                                updated_at=datetime('now','localtime')
-                            WHERE id=?
-                        """, (info["product_name"], info["store_name"],
-                              info["image_url"], info["price"], p["id"]))
-                        conn.commit()
-                        logger.info(f"상품 정보 즉시 재조회 성공: ID={p['id']} → {info['product_name'][:30]}")
-                    finally:
-                        conn.close()
-            except Exception as e:
-                logger.warning(f"상품 정보 즉시 재조회 실패: ID={p['id']}: {e}")
+            needs_info_update.append(p)
 
         result.append(p)
+
+    # 빈 상품 정보는 백그라운드에서 업데이트 (응답 지연 방지)
+    if needs_info_update:
+        from starlette.background import BackgroundTask
+
+        async def _update_empty_products(items):
+            for p in items:
+                try:
+                    keywords = p.get("keywords", [])
+                    search_keyword = keywords[0]["keyword"] if keywords and isinstance(keywords[0], dict) else ""
+                    info = get_product_info(p["product_url"], keyword=search_keyword)
+                    if info.get("product_name"):
+                        conn2 = sqlite3.connect(DB_PATH, timeout=10)
+                        try:
+                            conn2.execute("PRAGMA busy_timeout=30000")
+                            conn2.execute("""
+                                UPDATE tracked_products SET
+                                    product_name=?, store_name=?, image_url=?, price=?,
+                                    updated_at=datetime('now','localtime')
+                                WHERE id=?
+                            """, (info["product_name"], info["store_name"],
+                                  info["image_url"], info["price"], p["id"]))
+                            conn2.commit()
+                            logger.info(f"[bg] 상품 정보 재조회 성공: ID={p['id']} → {info['product_name'][:30]}")
+                        finally:
+                            conn2.close()
+                except Exception as e:
+                    logger.warning(f"[bg] 상품 정보 재조회 실패: ID={p['id']}: {e}")
+
+        background_tasks_obj = BackgroundTask(_update_empty_products, needs_info_update)
+        from starlette.responses import JSONResponse
+        return JSONResponse(
+            content={"success": True, "data": result},
+            background=background_tasks_obj
+        )
+
     return {"success": True, "data": result}
 
 
@@ -381,18 +424,6 @@ async def remove_product(product_id: int, current_user: dict = Depends(get_curre
     return {"success": True, "message": "상품이 삭제되었습니다."}
 
 
-# --- 키워드 추가 ---
-@app.post("/api/keywords/add")
-async def add_keyword(req: KeywordAddRequest, current_user: dict = Depends(get_current_user)):
-    """기존 상품에 키워드 추가 (소유권 검증)"""
-    # 상품 소유권 확인
-    products = get_all_tracked_products(user_id=current_user["id"], is_admin=_is_admin(current_user))
-    if not any(p["id"] == req.product_id for p in products):
-        raise HTTPException(status_code=403, detail="해당 상품에 대한 접근 권한이 없습니다.")
-    kid = add_tracked_keyword(req.product_id, req.keyword)
-    return {"success": True, "data": {"keyword_id": kid, "keyword": req.keyword}}
-
-
 # --- 순위 이력 조회 ---
 @app.get("/api/rank/history/{keyword_id}")
 async def rank_history(keyword_id: int, days: int = 30, current_user: dict = Depends(get_current_user)):
@@ -401,15 +432,6 @@ async def rank_history(keyword_id: int, days: int = 30, current_user: dict = Dep
     days = min(max(days, 1), 365)
     history = get_ranking_history(keyword_id, days=days)
     return {"success": True, "data": history}
-
-
-# --- 경쟁 상품 조회 ---
-@app.get("/api/competitors/{keyword_id}")
-async def competitors(keyword_id: int, current_user: dict = Depends(get_current_user)):
-    """키워드별 상위 경쟁 상품 (소유권 검증)"""
-    _verify_keyword_ownership(keyword_id, current_user)
-    comps = get_latest_competitors(keyword_id)
-    return {"success": True, "data": comps}
 
 
 # --- 수동 순위 체크 ---
@@ -443,7 +465,8 @@ async def keyword_volume(keywords: List[str], current_user: dict = Depends(get_c
         data = get_keyword_volume(keywords)
         return {"success": True, "data": data}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"키워드 볼륨 조회 실패: {str(e)}")
+        logger.error(f"키워드 볼륨 조회 실패: {e}")
+        raise HTTPException(status_code=500, detail="키워드 볼륨 조회 중 오류가 발생했습니다.")
 
 
 # ==================== 알림톡 API ====================
@@ -488,46 +511,8 @@ async def update_notify_settings(req: NotificationSettingsRequest, current_user:
 
         return {"success": True, "data": settings}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"설정 변경 실패: {str(e)}")
-
-
-# --- 테스트 알림 발송 ---
-@app.post("/api/notify/test")
-async def test_notification(current_user: dict = Depends(require_role(UserRole.ADMIN))):
-    """테스트 알림 발송 (admin 전용)"""
-    try:
-        result = send_test_notification()
-        return {"success": result.get("success", False), "data": result}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"테스트 알림 실패: {str(e)}")
-
-
-# --- 알림 발송 이력 ---
-@app.get("/api/notify/logs")
-async def notify_logs(limit: int = 20, current_user: dict = Depends(require_role(UserRole.ADMIN))):
-    """알림 발송 이력 조회 (admin 전용)"""
-    limit = min(max(limit, 1), 100)
-    logs = get_notification_logs(limit)
-    return {"success": True, "data": logs}
-
-
-# --- 리포트 미리보기 ---
-@app.get("/api/notify/preview")
-async def preview_report(current_user: dict = Depends(require_role(UserRole.ADMIN))):
-    """현재 데이터 기반 리포트 미리보기 (admin 전용)"""
-    try:
-        rank_data = collect_daily_rank_changes()
-        report_text = generate_daily_report_text(rank_data)
-        return {
-            "success": True,
-            "data": {
-                "report_text": report_text,
-                "rank_data": rank_data,
-                "generated_at": datetime.now().isoformat()
-            }
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"리포트 생성 실패: {str(e)}")
+        logger.error(f"설정 변경 실패: {e}")
+        raise HTTPException(status_code=500, detail="설정 변경 중 오류가 발생했습니다.")
 
 
 # ==================== 보고서 내보내기 API ====================
@@ -582,7 +567,8 @@ async def export_report(req: ReportExportRequest, current_user: dict = Depends(g
                      "generated_at": datetime.now().isoformat()}
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"보고서 생성 실패: {str(e)}")
+        logger.error(f"보고서 생성 실패: {e}")
+        raise HTTPException(status_code=500, detail="보고서 생성 중 오류가 발생했습니다.")
 
 
 # ==================== SEO 종합 진단 API ====================
@@ -625,7 +611,8 @@ async def detail_page_analyze(req: DetailPageAnalysisRequest, current_user: dict
         }
     except Exception as e:
         logger.error(f"상세페이지 분석 오류: {e}")
-        raise HTTPException(status_code=500, detail=f"상세페이지 분석 실패: {str(e)}")
+        logger.error(f"상세페이지 분석 실패: {e}")
+        raise HTTPException(status_code=500, detail="상세페이지 분석 중 오류가 발생했습니다.")
 
 
 class SeoAnalysisRequest(BaseModel):
@@ -946,7 +933,8 @@ async def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_
             }
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"SEO 분석 실패: {str(e)}")
+        logger.error(f"SEO 분석 실패: {e}")
+        raise HTTPException(status_code=500, detail="SEO 분석 중 오류가 발생했습니다.")
 
 
 # ==================== 상품 검색 API (키워드로 쇼핑 상품 조회) ====================
@@ -960,7 +948,7 @@ async def search_products(req: ProductSearchRequest, current_user: dict = Depend
     """네이버 쇼핑에서 키워드로 상품 검색 (인증 필수)"""
     try:
         from naver_crawler import search_naver_shopping_api, _parse_api_item
-        result = search_naver_shopping_api(req.keyword, display=min(req.count, 100))
+        result = search_naver_shopping_api(req.keyword, display=min(req.count, 100), retry_on_429=True)
         items = result.get("items", [])
         products = [_parse_api_item(item, idx + 1) for idx, item in enumerate(items)]
         return {
@@ -973,7 +961,8 @@ async def search_products(req: ProductSearchRequest, current_user: dict = Depend
             }
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"상품 검색 실패: {str(e)}")
+        logger.error(f"상품 검색 실패: {e}")
+        raise HTTPException(status_code=500, detail="상품 검색 중 오류가 발생했습니다.")
 
 
 # ==================== 연관/황금 키워드 API ====================
@@ -1099,7 +1088,8 @@ async def related_keywords(req: RelatedKeywordRequest, current_user: dict = Depe
             }
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"연관 키워드 분석 실패: {str(e)}")
+        logger.error(f"연관 키워드 분석 실패: {e}")
+        raise HTTPException(status_code=500, detail="연관 키워드 분석 중 오류가 발생했습니다.")
 
 
 # ==================== 상품명 키워드 분석 API ====================
@@ -1175,7 +1165,8 @@ async def analyze_product_names(req: ProductNameAnalysisRequest, current_user: d
             }
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"상품명 분석 실패: {str(e)}")
+        logger.error(f"상품명 분석 실패: {e}")
+        raise HTTPException(status_code=500, detail="상품명 분석 중 오류가 발생했습니다.")
 
 
 # ==================== 광고주 맞춤 분석 리포트 API ====================
@@ -1640,90 +1631,8 @@ async def advertiser_analyze(req: AdvertiserAnalysisRequest, current_user: dict 
             }
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"광고주 분석 실패: {str(e)}")
-
-
-# --- AI 피드백 ---
-class AiFeedbackRequest(BaseModel):
-    section: str  # 섹션 이름 (volume, competition, trend, golden, competitor, sales, strategy, seo, productname)
-    keyword: str  # 분석 키워드
-    data: Any     # 해당 섹션의 분석 데이터 (dict 또는 list)
-
-@app.post("/api/ai/feedback")
-async def ai_feedback(req: AiFeedbackRequest, current_user: dict = Depends(get_current_user)):
-    """Claude AI 기반 섹션별 분석 피드백 생성 (인증 필수)"""
-    try:
-        import anthropic
-
-        api_key = os.getenv("ANTHROPIC_API_KEY", "")
-        if not api_key:
-            return {"success": False, "error": "ANTHROPIC_API_KEY가 설정되지 않았습니다."}
-
-        client = anthropic.Anthropic(api_key=api_key)
-
-        section_prompts = {
-            "volume": "PC/모바일 검색 비율, CTR, CPC 효율성을 수치로 분석하고 광고 vs SEO 투자 판단 근거를 제시하세요.",
-            "competition": "상품 수 대비 검색량, 브랜드 비율을 분석하고 1페이지 진입을 위한 현실적 목표(리뷰수, 판매건수)를 제시하세요.",
-            "market": "월 거래액, 마진율, BEP 시나리오를 분석하세요.",
-            "related": "구매의도/정보탐색/브랜드 키워드를 분류하고 공략 우선순위와 활용법을 제시하세요.",
-            "trend": "시즌성, 성장 추세를 분석하고 광고/재고/SEO 최적 타이밍을 제시하세요.",
-            "golden": "검색량 대비 경쟁도가 낮은 키워드 우선순위와 상품명 최적화 예시를 제시하세요.",
-            "competitor": "경쟁사 가격/리뷰/상품명을 비교하고 차별화 전략을 제시하세요.",
-            "sales": "순위별 매출 시나리오와 투자 대비 수익률(ROAS)을 분석하세요.",
-            "strategy": "가격/상품명/카테고리/리뷰별 개선 우선순위와 1주~3개월 실행 계획을 제시하세요.",
-            "seo": "적합도/인기도/신뢰도 관점에서 진단하고 상품명 수정 예시 등 즉시 실행 액션을 제시하세요.",
-            "productname": "핵심키워드 위치, 길이(40~60자), 속성 조합을 평가하고 최적화 상품명 예시 2개를 제시하세요.",
-            "advertiser": "순위/가격/경쟁사 현황을 진단하고 즉시/1개월/3개월 액션 플랜을 제시하세요.",
-        }
-
-        section_label = section_prompts.get(req.section, "분석 데이터를 바탕으로 개선점과 전략을 제안해주세요.")
-
-        import json
-        data_str = json.dumps(req.data, ensure_ascii=False, default=str)
-        if len(data_str) > 2000:
-            data_str = data_str[:2000] + "...(생략)"
-
-        system_prompt = """당신은 메타아이앤씨(METAINC) 시니어 네이버 쇼핑 마케팅 컨설턴트입니다.
-네이버 쇼핑 알고리즘(적합도·인기도·신뢰도)에 정통합니다.
-
-작성 원칙:
-- 광고주에게 1:1로 브리핑하듯 자연스러운 대화체로 작성하세요.
-- 항목을 딱딱하게 나누지 말고, 현황 진단에서 핵심 이슈, 실행 전략까지 하나의 흐름으로 이어지게 서술하세요.
-- 반드시 데이터 수치를 인용하며, 근거 없는 추상적 표현은 쓰지 마세요.
-- 아이콘, 이모지, 특수기호(**, ##)는 사용하지 마세요.
-- 마지막에 'METAINC 인사이트'로 차별화 기회 한 가지를 짧게 덧붙이세요.
-- 전체 분량은 10~15줄 내외로, 읽기 편한 문단 형태로 작성하세요."""
-
-        message = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=800,
-            messages=[{
-                "role": "user",
-                "content": f"""키워드 '{req.keyword}'의 [{req.section}] 데이터:
-{data_str}
-
-{section_label}
-브리핑하듯 자연스럽게 이어서 작성하세요."""
-            }],
-            system=system_prompt
-        )
-
-        feedback_text = message.content[0].text if message.content else ""
-
-        return {
-            "success": True,
-            "data": {
-                "section": req.section,
-                "keyword": req.keyword,
-                "feedback": feedback_text,
-                "generated_at": datetime.now().isoformat()
-            }
-        }
-    except ImportError:
-        return {"success": False, "error": "anthropic 패키지가 설치되지 않았습니다. pip install anthropic"}
-    except Exception as e:
-        logger.error(f"AI 피드백 생성 실패: {str(e)}")
-        return {"success": False, "error": f"AI 피드백 생성 실패: {str(e)}"}
+        logger.error(f"광고주 분석 실패: {e}")
+        raise HTTPException(status_code=500, detail="광고주 분석 중 오류가 발생했습니다.")
 
 
 # --- AI 피드백 통합 (1회 호출) ---
@@ -1859,7 +1768,7 @@ async def ai_feedback_all(req: AiFeedbackAllRequest, current_user: dict = Depend
     except ImportError:
         return {"success": False, "error": "anthropic 패키지가 설치되지 않았습니다. pip install anthropic"}
     except Exception as e:
-        logger.error(f"AI 통합 피드백 생성 실패: {str(e)}")
+        logger.error(f"AI 통합 피드백 생성 실패: {e}")
         # 실패도 로깅
         try:
             from database import save_api_usage_log
@@ -1867,11 +1776,11 @@ async def ai_feedback_all(req: AiFeedbackAllRequest, current_user: dict = Depend
                 endpoint="feedback-all", keyword=req.keyword,
                 model="claude-sonnet-4-20250514",
                 user_id=current_user.get("id", 0),
-                status="error", error_message=str(e)[:200]
+                status="error", error_message=str(e)[:200]  # 내부 로그용
             )
         except Exception:
             pass
-        return {"success": False, "error": f"AI 통합 피드백 생성 실패: {str(e)}"}
+        return {"success": False, "error": "AI 통합 피드백 생성 중 오류가 발생했습니다."}
 
 
 # --- API 사용량 조회 (superadmin 전용, v3.9.13) ---
@@ -1886,7 +1795,7 @@ async def get_api_usage(current_user: dict = Depends(get_current_user)):
         return {"success": True, "data": data}
     except Exception as e:
         logger.error(f"API 사용량 조회 실패: {e}")
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": "API 사용량 조회 중 오류가 발생했습니다."}
 
 
 # --- 헬스체크 ---

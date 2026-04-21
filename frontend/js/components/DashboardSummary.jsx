@@ -1,19 +1,30 @@
-/* DashboardSummary — 대시보드 요약 카드 */
+/* DashboardSummary — 대시보드 요약 카드 (v2) */
 window.DashboardSummary = function DashboardSummary({ products, searchResult }) {
-    const totalKeywords = products.reduce((sum, p) => sum + (p.keywords?.length || 0), 0);
-    const allRanks = products.flatMap(p => (p.keywords || []).map(k => k.latest_rank)).filter(Boolean);
-    const avgRank = allRanks.length > 0 ? Math.round(allRanks.reduce((a, b) => a + b, 0) / allRanks.length) : null;
+    var useState = React.useState;
+    var useEffect = React.useEffect;
 
-    return (
-        <div className="section fade-in">
-            <div className="container">
-                <div className="card-grid card-grid-4">
-                    <StatCard icon="📦" iconColor="blue" label="추적 상품" value={products.length} sub="등록된 상품 수" />
-                    <StatCard icon="🔑" iconColor="green" label="추적 키워드" value={totalKeywords} sub="모니터링 중" />
-                    <StatCard icon="📈" iconColor="amber" label="평균 순위" value={avgRank ? `${avgRank}위` : '-'} sub={avgRank ? (avgRank <= 20 ? '상위권' : avgRank <= 50 ? '중위권' : '개선 필요') : '데이터 없음'} />
-                    <StatCard icon="🔍" iconColor="purple" label="연관 키워드" value={searchResult ? fmt(searchResult.total_found) : '-'} sub={searchResult ? `${searchResult.golden_keywords?.length || 0}개 황금키워드` : '키워드 검색 필요'} />
-                </div>
-            </div>
-        </div>
+    var _s1 = useState(0); var analysisCount = _s1[0]; var setAnalysisCount = _s1[1];
+    var _s2 = useState(0); var reportCount = _s2[0]; var setReportCount = _s2[1];
+
+    useEffect(function() {
+        api.get('/cd/today-stats').then(function(res) {
+            if (res && res.success && res.data) {
+                setAnalysisCount(res.data.analysis_count || 0);
+                setReportCount(res.data.report_count || 0);
+            }
+        }).catch(function() {});
+    }, []);
+
+    var totalKeywords = products.reduce(function(sum, p) { return sum + ((p.keywords && p.keywords.length) || 0); }, 0);
+
+    return React.createElement('div', { className: 'section fade-in' },
+        React.createElement('div', { className: 'container' },
+            React.createElement('div', { className: 'card-grid card-grid-4' },
+                React.createElement(StatCard, { label: '추적 상품', value: products.length, sub: '등록된 상품 수' }),
+                React.createElement(StatCard, { label: '추적 키워드', value: totalKeywords, sub: '모니터링 중' }),
+                React.createElement(StatCard, { label: '당일 분석', value: analysisCount, sub: '수동 분석 횟수' }),
+                React.createElement(StatCard, { label: '보고서 출력', value: reportCount, sub: '당일 출력 건수' })
+            )
+        )
     );
 };

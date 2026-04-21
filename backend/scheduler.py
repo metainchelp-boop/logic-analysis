@@ -1,11 +1,14 @@
 """
-로직 분석 프로그램 v2 - 스케줄러 모듈
-APScheduler 기반 자동 순위 체크, 일일 리포트, 업체 자동 분석
+로직 분석 프로그램 v3 - 스케줄러 모듈
+APScheduler 기반 통합 스케줄러
+- 08:00 순위 추적 (홈탭 + 업체, 키워드당 1회 API, 결과 캐시)
+- 09:00 전체 분석 + HTML 보고서 (08시 캐시 재사용, API 추가 호출 없음)
+- 일일 API 호출: ~147회 (기존 25,000+에서 99% 절감)
 """
 import logging
 import time
 import json
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
@@ -15,48 +18,63 @@ logger = logging.getLogger(__name__)
 # 글로벌 스케줄러 인스턴스
 _scheduler: BackgroundScheduler = None
 
+# 08시 순위 추적에서 캐시한 API 결과 → 09시 분석에서 재사용
+_api_cache = {}       # {keyword: {"prods": [...], "total": int}}
+_api_cache_date = ""  # 캐시 날짜 (당일만 유효)
+
 
 def start_scheduler():
-    """스케줄러 시작 — 앱 시작 시 호출"""
+    """스케줄러 시작 — 앱 시작 시 호출 (멀티 워커 환경에서 1개만 실행)"""
     global _scheduler
     if _scheduler and _scheduler.running:
         logger.warning("스케줄러가 이미 실행 중입니다.")
         return
 
+    # 멀티 워커 환경: 파일 잠금으로 하나의 워커만 스케줄러 실행
+    import fcntl
+    try:
+        _lock = open('/tmp/.scheduler.lock', 'w')
+        fcntl.flock(_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        # 잠금 획득 — 이 워커가 스케줄러 담당
+        globals()['_scheduler_lock'] = _lock  # GC 방지
+    except (IOError, OSError):
+        logger.info("⏭ 스케줄러 — 다른 워커에서 이미 실행 중, 건너뜀")
+        return
+
     _scheduler = BackgroundScheduler(timezone="Asia/Seoul")
 
-    # 1) 자동 순위 체크 — 매 6시간
+    # 1) 순위 추적 — 매일 08:00 (홈탭 + 업체, 키워드당 1회 API, 결과 캐시)
     _scheduler.add_job(
-        _run_scheduled_rank_check,
-        trigger=IntervalTrigger(hours=6),
-        id="rank_check",
-        name="자동 순위 체크",
+        _run_rank_tracking,
+        trigger=CronTrigger(hour=8, minute=0),
+        id="rank_tracking",
+        name="순위 추적 (08:00)",
         replace_existing=True,
         max_instances=1,
     )
 
-    # 2) 일일 리포트 발송 — 기본 09:00 (알림 설정에서 변경 가능)
+    # 2) 전체 분석 + 보고서 — 매일 09:00 (08시 캐시 재사용)
+    _scheduler.add_job(
+        _run_daily_analysis,
+        trigger=CronTrigger(hour=9, minute=0),
+        id="daily_analysis",
+        name="전체 분석 + 보고서 (09:00)",
+        replace_existing=True,
+        max_instances=1,
+    )
+
+    # 3) 일일 리포트 발송 — 10:00 (분석 완료 후 발송)
     _scheduler.add_job(
         _run_daily_report,
-        trigger=CronTrigger(hour=9, minute=0),
+        trigger=CronTrigger(hour=10, minute=0),
         id="daily_report",
-        name="일일 리포트 발송",
-        replace_existing=True,
-        max_instances=1,
-    )
-
-    # 3) 업체 자동 분석 — 매일 오전 07:00 (모든 업체의 키워드 전체 분석 + HTML 보고서)
-    _scheduler.add_job(
-        _run_daily_client_analysis,
-        trigger=CronTrigger(hour=7, minute=0),
-        id="daily_client_analysis",
-        name="업체 자동 분석 (전체)",
+        name="일일 리포트 발송 (10:00)",
         replace_existing=True,
         max_instances=1,
     )
 
     _scheduler.start()
-    logger.info("✅ 스케줄러 시작 (순위체크: 6시간, 리포트: 09:00, 업체분석: 07:00)")
+    logger.info("✅ 스케줄러 시작 (순위: 08:00, 분석: 09:00, 리포트: 10:00)")
 
 
 def stop_scheduler():
@@ -85,55 +103,301 @@ def reschedule_report(hour: int, minute: int):
         logger.error(f"리포트 스케줄 변경 실패: {e}")
 
 
-# ==================== 스케줄 작업 함수 ====================
+# ==================== 08:00 순위 추적 ====================
 
-def _run_scheduled_rank_check():
-    """스케줄된 전체 상품 순위 체크"""
+def _collect_all_keywords(conn):
+    """홈탭 추적 상품 + 업체 키워드 수집 (공통 유틸)"""
+    from database import get_all_tracked_products, get_keywords_for_product
+
+    # 홈탭 추적 상품 키워드
+    home_products = get_all_tracked_products() or []
+    home_keyword_map = {}  # {keyword: [(product, kw_info), ...]}
+    for product in home_products:
+        keywords = get_keywords_for_product(product["id"])
+        for kw_info in keywords:
+            kw = kw_info["keyword"].strip()
+            if kw:
+                if kw not in home_keyword_map:
+                    home_keyword_map[kw] = []
+                home_keyword_map[kw].append((product, kw_info))
+
+    # 업체 키워드
+    clients = conn.execute(
+        "SELECT id, name, main_keywords, naver_store_url FROM clients WHERE status = 'active'"
+    ).fetchall()
+
+    client_keyword_map = {}  # {client_id: [keywords]}
+    all_client_keywords = set()
+
+    for client in clients:
+        cid = client['id']
+        keywords_str = client['main_keywords'] or ''
+        kw_set = set(k.strip() for k in keywords_str.split(',') if k.strip())
+
+        past = conn.execute(
+            "SELECT DISTINCT keyword FROM client_analyses WHERE client_id = ?", (cid,)
+        ).fetchall()
+        for row in past:
+            kw = row['keyword'].strip()
+            if kw:
+                kw_set.add(kw)
+
+        client_keyword_map[cid] = list(kw_set)
+        all_client_keywords.update(kw_set)
+
+    all_keywords = set(home_keyword_map.keys()) | all_client_keywords
+    return home_keyword_map, clients, client_keyword_map, all_keywords
+
+
+def _run_rank_tracking():
+    """
+    08:00 순위 추적 — 모든 키워드를 1회씩 API 호출, 결과를 캐시에 저장.
+    홈탭 순위 + 업체 순위를 동시에 처리.
+    여유 있게 키워드당 3초 간격 → 147개 기준 약 7분 소요.
+    """
+    global _api_cache, _api_cache_date
+    import sqlite3
+    import os
+
+    DB_PATH = os.getenv("DB_PATH", "logic_analysis.db")
+    today = date.today().isoformat()
+
+    logger.info(f"🔍 순위 추적 시작 ({datetime.now().strftime('%H:%M')})")
+
     try:
-        from database import (
-            get_all_tracked_products, get_keywords_for_product,
-            save_ranking, save_competitor_snapshot,
-            get_latest_ranking_for_keyword
+        from naver_crawler import (
+            search_naver_shopping_api, _parse_api_item,
+            find_product_rank_from_cache
         )
-        from naver_crawler import find_product_rank
+        from database import save_ranking, save_competitor_snapshot
 
-        products = get_all_tracked_products()
-        if not products:
-            logger.info("추적 중인 상품이 없습니다. 스케줄 순위 체크 건너뜀.")
+        conn = sqlite3.connect(DB_PATH, timeout=10)
+        conn.row_factory = sqlite3.Row
+
+        home_keyword_map, clients, client_keyword_map, all_keywords = _collect_all_keywords(conn)
+
+        if not all_keywords:
+            logger.info("  추적 키워드 없음. 순위 추적 건너뜀.")
+            conn.close()
             return
 
-        total_checked = 0
-        for product in products:
-            keywords = get_keywords_for_product(product["id"])
-            for kw_info in keywords:
-                try:
-                    rank, page, competitors = find_product_rank(
-                        keyword=kw_info["keyword"],
-                        product_url=product["product_url"],
-                        max_pages=2
-                    )
-                    save_ranking(
-                        product_id=product["id"],
-                        keyword_id=kw_info["id"],
-                        keyword=kw_info["keyword"],
-                        rank_position=rank,
-                        page_number=page,
-                        check_type="scheduled"
-                    )
-                    if competitors:
-                        save_competitor_snapshot(kw_info["id"], competitors[:5])
-                    total_checked += 1
-                except Exception as e:
-                    logger.error(f"순위 체크 실패 [{product['product_name']}:{kw_info['keyword']}]: {e}")
+        logger.info(f"  📋 키워드 {len(all_keywords)}개 순위 추적 시작 (홈탭: {len(home_keyword_map)}, 업체: {len(set().union(*client_keyword_map.values()) if client_keyword_map else set())})")
 
-                # API 호출 간격 조절
-                import time
-                time.sleep(1)
+        # 캐시 초기화
+        _api_cache = {}
+        _api_cache_date = today
 
-        logger.info(f"✅ 스케줄 순위 체크 완료: {total_checked}건")
+        total_api_calls = 0
+        total_rank_saved = 0
+        total_errors = 0
+
+        for keyword in sorted(all_keywords):
+            try:
+                # ── API 1회 호출: 상품 100개 ──
+                shop_result = search_naver_shopping_api(keyword, display=100)
+                total_api_calls += 1
+                items = shop_result.get("items", [])
+                total_shop = shop_result.get("total", 0)
+                prods = [_parse_api_item(item, i + 1) for i, item in enumerate(items)]
+
+                # 09시 분석용 캐시 저장
+                _api_cache[keyword] = {"prods": prods, "total": total_shop}
+
+                # ── 홈탭 순위 저장 ──
+                if keyword in home_keyword_map:
+                    for product, kw_info in home_keyword_map[keyword]:
+                        try:
+                            rank, page, competitors = find_product_rank_from_cache(
+                                keyword, product["product_url"], prods
+                            )
+                            save_ranking(
+                                product_id=product["id"],
+                                keyword_id=kw_info["id"],
+                                keyword=keyword,
+                                rank_position=rank,
+                                page_number=page,
+                                check_type="scheduled"
+                            )
+                            if competitors:
+                                save_competitor_snapshot(kw_info["id"], competitors[:5])
+                            total_rank_saved += 1
+                        except Exception as e:
+                            logger.error(f"  ❌ 홈탭 순위 저장 실패 [{product.get('product_name','')}:{keyword}]: {e}")
+
+                # ── 업체 순위 저장 ──
+                for client in clients:
+                    cid = client['id']
+                    product_url = client['naver_store_url'] or ''
+                    if not product_url or keyword not in client_keyword_map.get(cid, []):
+                        continue
+                    try:
+                        rank, page, _ = find_product_rank_from_cache(keyword, product_url, prods)
+                        _save_client_rank(conn, cid, keyword, product_url, rank, page, "scheduled")
+                        total_rank_saved += 1
+                    except Exception as e:
+                        logger.error(f"  ❌ 업체 순위 저장 실패 [{client['name']}:{keyword}]: {e}")
+
+                # 여유 있는 API 간격 (3초 — 429 방지)
+                time.sleep(3)
+
+            except Exception as e:
+                total_errors += 1
+                logger.error(f"  ❌ [{keyword}] 순위 추적 실패: {e}")
+                time.sleep(2)
+
+        conn.close()
+        logger.info(
+            f"✅ 순위 추적 완료: API {total_api_calls}회, "
+            f"순위 {total_rank_saved}건 저장, 실패 {total_errors}건 "
+            f"(캐시 {len(_api_cache)}개 키워드 → 09시 분석 대기)"
+        )
 
     except Exception as e:
-        logger.error(f"스케줄 순위 체크 전체 실패: {e}")
+        logger.error(f"❌ 순위 추적 전체 실패: {e}")
+
+
+# ==================== 09:00 전체 분석 + 보고서 ====================
+
+def _run_daily_analysis():
+    """
+    09:00 전체 분석 + HTML 보고서 — 08시 캐시된 상품 데이터를 재사용.
+    쇼핑 API 추가 호출 없음 (검색광고 API만 사용: 검색량 + 연관 키워드).
+    캐시 미스 시에만 쇼핑 API 호출 (fallback).
+    """
+    global _api_cache, _api_cache_date
+    import sqlite3
+    import os
+
+    DB_PATH = os.getenv("DB_PATH", "logic_analysis.db")
+    today = date.today().isoformat()
+
+    logger.info(f"📊 전체 분석 + 보고서 생성 시작 ({datetime.now().strftime('%H:%M')})")
+
+    # 캐시 유효성 확인
+    cache_valid = (_api_cache_date == today and len(_api_cache) > 0)
+    if cache_valid:
+        logger.info(f"  ✅ 08시 캐시 유효 — {len(_api_cache)}개 키워드 재사용 (쇼핑 API 호출 0회)")
+    else:
+        logger.warning(f"  ⚠️ 08시 캐시 없음 — 쇼핑 API 직접 호출로 fallback")
+
+    try:
+        from naver_crawler import (
+            search_naver_shopping_api, _parse_api_item,
+            get_keyword_volume
+        )
+        from auto_analysis import run_single_analysis, get_related_keywords
+
+        conn = sqlite3.connect(DB_PATH, timeout=10)
+        conn.row_factory = sqlite3.Row
+
+        # 활성 업체 + 키워드 수집
+        clients = conn.execute(
+            "SELECT id, name, main_keywords, naver_store_url FROM clients WHERE status = 'active'"
+        ).fetchall()
+
+        client_keyword_map = {}
+        for client in clients:
+            cid = client['id']
+            keywords_str = client['main_keywords'] or ''
+            kw_set = set(k.strip() for k in keywords_str.split(',') if k.strip())
+
+            past = conn.execute(
+                "SELECT DISTINCT keyword FROM client_analyses WHERE client_id = ?", (cid,)
+            ).fetchall()
+            for row in past:
+                kw = row['keyword'].strip()
+                if kw:
+                    kw_set.add(kw)
+
+            client_keyword_map[cid] = list(kw_set)
+
+        if not clients:
+            logger.info("  등록된 활성 업체가 없습니다. 분석 건너뜀.")
+            conn.close()
+            return
+
+        total_analyzed = 0
+        total_errors = 0
+        total_fallback_api = 0
+
+        for client in clients:
+            cid = client['id']
+            client_name = client['name']
+            product_url = client['naver_store_url'] or ''
+            keywords = client_keyword_map.get(cid, [])
+
+            if not keywords:
+                continue
+
+            logger.info(f"  📊 [{client_name}] 키워드 {len(keywords)}개 분석 시작")
+
+            for keyword in keywords:
+                try:
+                    # 08시 캐시에서 상품 데이터 가져오기
+                    cached = _api_cache.get(keyword) if cache_valid else None
+
+                    if cached:
+                        prods = cached["prods"]
+                        total_shop = cached["total"]
+                    else:
+                        # 캐시 미스 — fallback API 호출
+                        shop_result = search_naver_shopping_api(keyword, display=100)
+                        items = shop_result.get("items", [])
+                        total_shop = shop_result.get("total", 0)
+                        prods = [_parse_api_item(item, i + 1) for i, item in enumerate(items)]
+                        total_fallback_api += 1
+                        time.sleep(2)
+
+                    # 검색량 조회 (검색광고 API — 별도 할당량)
+                    vol_data = {}
+                    try:
+                        vol_list = get_keyword_volume([keyword])
+                        if vol_list and len(vol_list) > 0:
+                            vol_data = vol_list[0]
+                    except Exception:
+                        pass
+
+                    # 연관 키워드 조회 (검색광고 API)
+                    related_data = {}
+                    try:
+                        related_data = get_related_keywords(keyword)
+                    except Exception:
+                        pass
+
+                    # 캐시된 데이터로 분석 실행 (쇼핑 API 추가 호출 없음)
+                    run_single_analysis(
+                        client_id=cid,
+                        client_name=client_name,
+                        keyword=keyword,
+                        product_url=product_url,
+                        cached_prods=prods,
+                        cached_total=total_shop,
+                        cached_vol=vol_data,
+                        cached_related=related_data,
+                    )
+                    total_analyzed += 1
+                    logger.info(f"    ✅ [{keyword}] 분석 완료")
+
+                    # 검색광고 API 간격 (1초)
+                    time.sleep(1)
+
+                except Exception as e:
+                    total_errors += 1
+                    logger.error(f"    ❌ [{client_name}:{keyword}] 분석 실패: {e}")
+                    time.sleep(1)
+
+        conn.close()
+
+        # 캐시 정리 (메모리 해제)
+        _api_cache.clear()
+
+        logger.info(
+            f"✅ 전체 분석 완료: 분석 {total_analyzed}건, 실패 {total_errors}건"
+            f"{f', fallback API {total_fallback_api}회' if total_fallback_api > 0 else ''}"
+        )
+
+    except Exception as e:
+        logger.error(f"❌ 전체 분석 실패: {e}")
 
 
 def _run_daily_report():
@@ -192,92 +456,27 @@ def _run_daily_report():
             pass
 
 
-def _run_daily_client_analysis():
-    """
-    업체 자동 분석 — 모든 활성 업체의 키워드를 전체 분석 + HTML 보고서 생성하여 일자별 누적 저장
-    매일 오전 07:00 KST 실행
-    auto_analysis.run_single_analysis() 사용 (분석 탭과 동일한 11가지 분석 + HTML 보고서)
-    """
-    import sqlite3
-    import os
-
-    DB_PATH = os.getenv("DB_PATH", "logic_analysis.db")
+def _save_client_rank(conn, client_id, keyword, product_url, rank, page, check_type="scheduled"):
+    """업체 순위를 client_rank_history에 저장 (당일 중복 시 UPDATE)"""
     today = date.today().isoformat()
+    existing = conn.execute(
+        """SELECT id FROM client_rank_history
+           WHERE client_id=? AND keyword=? AND DATE(checked_at)=? AND check_type=?""",
+        (client_id, keyword, today, check_type)
+    ).fetchone()
 
-    logger.info(f"🔄 업체 자동 분석 시작 ({today}) — 전체 분석 + HTML 보고서")
+    if existing:
+        conn.execute("""
+            UPDATE client_rank_history
+            SET rank_position=?, page_number=?, checked_at=datetime('now','localtime')
+            WHERE id=?
+        """, (rank, page, existing['id']))
+    else:
+        conn.execute("""
+            INSERT INTO client_rank_history
+            (client_id, keyword, product_url, rank_position, page_number, check_type)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (client_id, keyword, product_url or '', rank, page, check_type))
+    conn.commit()
 
-    try:
-        from auto_analysis import run_single_analysis
 
-        # 1) 모든 활성 업체 조회
-        conn = sqlite3.connect(DB_PATH, timeout=10)
-        conn.row_factory = sqlite3.Row
-        clients = conn.execute(
-            "SELECT id, name, main_keywords, naver_store_url FROM clients WHERE status = 'active'"
-        ).fetchall()
-
-        # 2) 각 업체별로 기존 분석 이력에서 추가 키워드도 수집
-        client_keyword_map = {}
-        for client in clients:
-            cid = client['id']
-            keywords_str = client['main_keywords'] or ''
-            base_keywords = set(k.strip() for k in keywords_str.split(',') if k.strip())
-
-            # DB에 이미 분석된 적 있는 키워드도 포함
-            past_keywords = conn.execute(
-                "SELECT DISTINCT keyword FROM client_analyses WHERE client_id = ?", (cid,)
-            ).fetchall()
-            for row in past_keywords:
-                kw = row['keyword'].strip()
-                if kw:
-                    base_keywords.add(kw)
-
-            client_keyword_map[cid] = list(base_keywords)
-
-        conn.close()
-
-        if not clients:
-            logger.info("등록된 활성 업체가 없습니다. 자동 분석 건너뜀.")
-            return
-
-        total_analyzed = 0
-        total_errors = 0
-
-        for client in clients:
-            client_id = client['id']
-            client_name = client['name']
-            product_url = client['naver_store_url'] or ''
-            keywords = client_keyword_map.get(client_id, [])
-
-            if not keywords:
-                continue
-
-            logger.info(f"📊 [{client_name}] 키워드 {len(keywords)}개 전체 분석 시작")
-
-            for keyword in keywords:
-                try:
-                    result = run_single_analysis(
-                        client_id=client_id,
-                        client_name=client_name,
-                        keyword=keyword,
-                        product_url=product_url,
-                    )
-                    total_analyzed += 1
-                    logger.info(
-                        f"  ✅ [{client_name}:{keyword}] 전체 분석 완료 "
-                        f"(검색량:{result.get('total_vol',0)}, 상품:{result.get('product_count',0)}, "
-                        f"HTML:{'O' if result.get('has_report') else 'X'})"
-                    )
-
-                    # API 호출 간격 조절 (10초) — 차단/제한 방지를 위한 충분한 대기
-                    time.sleep(10)
-
-                except Exception as e:
-                    total_errors += 1
-                    logger.error(f"  ❌ [{client_name}:{keyword}] 분석 실패: {e}")
-                    time.sleep(5)
-
-        logger.info(f"✅ 업체 자동 분석 완료: 성공 {total_analyzed}건, 실패 {total_errors}건")
-
-    except Exception as e:
-        logger.error(f"❌ 업체 자동 분석 전체 실패: {e}")

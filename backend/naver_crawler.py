@@ -77,13 +77,14 @@ def extract_store_name_from_url(url: str) -> Optional[str]:
 
 # ==================== 네이버 쇼핑 공식 API ====================
 
-def search_naver_shopping_api(keyword: str, display: int = 100, start: int = 1, sort: str = "sim") -> Dict:
+def search_naver_shopping_api(keyword: str, display: int = 100, start: int = 1, sort: str = "sim", retry_on_429: bool = False) -> Dict:
     """
     네이버 검색 API - 쇼핑 검색
 
     - display: 한 번에 가져올 결과 수 (최대 100)
     - start: 시작 위치 (최대 1000)
     - sort: sim(유사도순), date(날짜순), asc(가격낮은순), dsc(가격높은순)
+    - retry_on_429: True면 429 시 대기 후 재시도 (수동 분석용)
 
     ⚠️ sort=sim은 실제 네이버쇼핑 노출 순위(rel)와 다름
     """
@@ -103,10 +104,19 @@ def search_naver_shopping_api(keyword: str, display: int = 100, start: int = 1, 
         "X-Naver-Client-Secret": NAVER_CLIENT_SECRET,
     }
 
-    max_retries = 2
+    max_retries = 3 if retry_on_429 else 2
     for attempt in range(max_retries + 1):
         try:
             response = requests.get(url, params=params, headers=headers, timeout=10)
+            # 429 Too Many Requests
+            if response.status_code == 429:
+                if retry_on_429 and attempt < max_retries:
+                    wait_sec = 2.0 * (attempt + 1)
+                    logger.warning(f"네이버 API 429 — {wait_sec}초 대기 후 재시도 ({attempt + 1}/{max_retries}) (keyword: {keyword})")
+                    time.sleep(wait_sec)
+                    continue
+                logger.warning(f"네이버 API 429 Rate Limit — 건너뜀 (keyword: {keyword})")
+                return {"error": "API 요청 한도 초과", "items": [], "total": 0}
             response.raise_for_status()
             data = response.json()
             logger.info(f"API 검색 '{keyword}': {data.get('total', 0)}건 중 {len(data.get('items', []))}건 조회")
@@ -114,7 +124,7 @@ def search_naver_shopping_api(keyword: str, display: int = 100, start: int = 1, 
         except requests.exceptions.RequestException as e:
             if attempt < max_retries:
                 logger.warning(f"네이버 API 재시도 ({attempt + 1}/{max_retries}): {e}")
-                time.sleep(0.5 * (attempt + 1))
+                time.sleep(1.0 * (attempt + 1))
             else:
                 logger.error(f"네이버 API 요청 실패 (재시도 소진): {e}")
                 return {"error": str(e), "items": [], "total": 0}
@@ -237,6 +247,50 @@ def find_product_rank(keyword: str, product_url: str,
             return product["rank"], page_number, top_competitors
 
     logger.info(f"상품 미발견: '{keyword}' (검색 범위: {len(products)}개)")
+    return None, None, top_competitors
+
+
+def find_product_rank_from_cache(keyword: str, product_url: str,
+                                  cached_products: List[Dict]) -> Tuple[Optional[int], Optional[int], List[Dict]]:
+    """
+    이미 조회된 상품 목록(cached_products)에서 순위를 찾는다. (API 호출 없음)
+    스케줄러 통합 작업에서 1회 API 호출 결과를 재사용하기 위한 함수.
+
+    Returns:
+        (rank_position, page_number, top_competitors)
+    """
+    if not cached_products:
+        return None, None, []
+
+    target_product_id = extract_product_id_from_url(product_url)
+    target_store_name = extract_store_name_from_url(product_url)
+    top_competitors = cached_products[:5]
+
+    for product in cached_products:
+        matched = False
+
+        # 1순위: productId(nvMid) 완전 일치
+        if target_product_id and product.get("product_id"):
+            if target_product_id == product["product_id"]:
+                matched = True
+
+        # 2순위: productId가 URL에 포함
+        if not matched and target_product_id and product.get("product_url"):
+            if target_product_id in product["product_url"]:
+                matched = True
+
+        # 3순위: 스토어명 일치 + productId 부분 매칭
+        if not matched and target_store_name and product.get("store_name"):
+            if target_store_name.lower() == product["store_name"].lower():
+                if target_product_id and target_product_id in str(product.get("product_url", "")):
+                    matched = True
+
+        if matched:
+            page_number = (product["rank"] - 1) // 40 + 1
+            logger.info(f"[캐시] 상품 발견! '{keyword}' → {product['rank']}위 (페이지 {page_number})")
+            return product["rank"], page_number, top_competitors
+
+    logger.info(f"[캐시] 상품 미발견: '{keyword}' (검색 범위: {len(cached_products)}개)")
     return None, None, top_competitors
 
 
@@ -415,10 +469,14 @@ def get_keyword_volume(keywords: List[str]) -> List[Dict]:
         "showDetail": "1",
     }
 
-    max_retries = 2
+    max_retries = 3
     for attempt in range(max_retries + 1):
         try:
             response = requests.get(url, params=params, headers=headers, timeout=10)
+            # 429 Too Many Requests 전용 처리
+            if response.status_code == 429:
+                logger.warning(f"검색광고 API 429 Rate Limit — 즉시 건너뜀")
+                return []
             response.raise_for_status()
             data = response.json()
 
@@ -444,7 +502,7 @@ def get_keyword_volume(keywords: List[str]) -> List[Dict]:
         except requests.exceptions.RequestException as e:
             if attempt < max_retries:
                 logger.warning(f"검색광고 API 재시도 ({attempt + 1}/{max_retries}): {e}")
-                time.sleep(0.5 * (attempt + 1))
+                time.sleep(1.0 * (attempt + 1))
             else:
                 logger.error(f"검색광고 API 요청 실패 (재시도 소진): {e}")
                 return []
@@ -926,19 +984,6 @@ def _fetch_via_brd_api(target_url: str) -> Optional[str]:
     return None
 
 
-def _build_brd_proxies() -> Optional[Dict]:
-    """Bright Data 프록시 설정 빌드 (프록시 방식 fallback용)"""
-    if not BRD_API_KEY or not BRD_API_URL:
-        return None
-    if "api.brightdata.com" in BRD_API_URL:
-        return None
-    if BRD_API_ZONE:
-        proxy_url = f"http://{BRD_API_ZONE}:{BRD_API_KEY}@{BRD_API_URL}"
-    else:
-        proxy_url = f"http://{BRD_API_KEY}@{BRD_API_URL}"
-    return {"http": proxy_url, "https": proxy_url}
-
-
 def fetch_detail_page_html(product_url: str) -> Optional[str]:
     """
     스마트스토어/네이버 상품 상세페이지 HTML 가져오기
@@ -1102,7 +1147,79 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
     # ── 7. GIF/애니메이션 감지 ──
     gif_count = len([img for img in all_imgs if ".gif" in (img.get("src", "") or "").lower()])
 
-    # ── 8. 페이지 총 크기 (대략적 스크롤 깊이) ──
+    # ── 8. 리뷰수 / 평점 / 찜수 추출 (SmartStore HTML) ──
+    actual_review_count = None
+    actual_rating = None
+    actual_wish_count = None
+
+    # 방법 1: JSON-LD (schema.org Product)
+    import json as _json
+    ld_scripts = soup.find_all("script", {"type": "application/ld+json"})
+    for sc in ld_scripts:
+        try:
+            ld = _json.loads(sc.string or "")
+            if isinstance(ld, list):
+                ld = next((x for x in ld if x.get("@type") == "Product"), None)
+            if ld and ld.get("@type") == "Product":
+                ar = ld.get("aggregateRating", {})
+                if ar.get("reviewCount"):
+                    actual_review_count = int(ar["reviewCount"])
+                if ar.get("ratingValue"):
+                    actual_rating = round(float(ar["ratingValue"]), 1)
+        except Exception:
+            pass
+
+    # 방법 2: window.__PRELOADED_STATE__ (Naver SmartStore SPA)
+    if actual_review_count is None:
+        preloaded_match = re.search(r'window\.__PRELOADED_STATE__\s*=\s*({.+?})\s*;?\s*</script>', html, re.DOTALL)
+        if preloaded_match:
+            try:
+                state = _json.loads(preloaded_match.group(1))
+                # 리뷰 카운트
+                product_info = state.get("product", {}).get("A", {})
+                if not product_info:
+                    product_info = state.get("product", {})
+                rc = product_info.get("reviewCount") or product_info.get("totalReviewCount")
+                if rc is not None:
+                    actual_review_count = int(rc)
+                rt = product_info.get("reviewScore") or product_info.get("averageReviewScore")
+                if rt is not None:
+                    actual_rating = round(float(rt), 1)
+                wc = product_info.get("wishCount") or product_info.get("zzimCount")
+                if wc is not None:
+                    actual_wish_count = int(wc)
+            except Exception:
+                pass
+
+    # 방법 3: HTML 패턴 매칭 (리뷰 탭 카운트 등)
+    if actual_review_count is None:
+        # "리뷰 123" or "구매후기(456)" 패턴
+        review_pattern = re.search(r'(?:리뷰|구매후기|상품평)[^\d]{0,10}([\d,]+)\s*(?:건|개)?', html)
+        if review_pattern:
+            try:
+                actual_review_count = int(review_pattern.group(1).replace(",", ""))
+            except Exception:
+                pass
+
+    if actual_rating is None:
+        # "4.8점" or "평점 4.8" 패턴
+        rating_pattern = re.search(r'(?:평점|별점|rating)[^\d]{0,10}(\d\.\d)', html)
+        if rating_pattern:
+            try:
+                actual_rating = round(float(rating_pattern.group(1)), 1)
+            except Exception:
+                pass
+
+    if actual_wish_count is None:
+        # "찜 123" or "찜하기 456" 패턴
+        wish_pattern = re.search(r'(?:찜|zzim|wish)[^\d]{0,10}([\d,]+)', html, re.I)
+        if wish_pattern:
+            try:
+                actual_wish_count = int(wish_pattern.group(1).replace(",", ""))
+            except Exception:
+                pass
+
+    # ── 9. 페이지 총 크기 (대략적 스크롤 깊이) ──
     html_size_kb = round(len(html) / 1024, 1)
 
     # ── 점수 산출 ──
@@ -1184,6 +1301,16 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
     if not has_review_section:
         suggestions.append({"priority": "low", "area": "리뷰 섹션", "text": "상세페이지 내 구매 후기 섹션이 없습니다. 대표 리뷰를 상세페이지에 직접 삽입하면 소셜 프루프 효과로 전환율이 향상됩니다."})
 
+    # reviewData: 실제 HTML에서 추출된 리뷰/평점/찜수 (없으면 None)
+    review_data = None
+    if actual_review_count is not None or actual_rating is not None or actual_wish_count is not None:
+        review_data = {
+            "reviewCount": actual_review_count,
+            "rating": actual_rating,
+            "wishCount": actual_wish_count,
+            "source": "html"
+        }
+
     return {
         "success": True,
         "metrics": {
@@ -1202,4 +1329,5 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
         },
         "scores": scores,
         "suggestions": suggestions,
+        "reviewData": review_data,
     }

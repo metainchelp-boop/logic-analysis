@@ -1,7 +1,10 @@
 /* ===== 로직 분석 — API 헬퍼 & 유틸리티 ===== */
 
 // ===== 앱 버전 (한 곳에서 관리) =====
-var APP_VERSION = window.APP_VERSION = 'v3.9.14';
+var APP_VERSION = window.APP_VERSION = 'v4.0.4';
+
+// ===== 401 중복 새로고침 방지 플래그 =====
+var _isAuthRedirecting = false;
 
 // ===== 토스트 알림 시스템 =====
 var toast = (function() {
@@ -55,9 +58,20 @@ function _handleResponse(r) {
     if (!r.ok) {
         var status = r.status;
         if (status === 401) {
-            toast.error('인증이 만료되었습니다. 다시 로그인해주세요.');
-            try { sessionStorage.removeItem('logic_token'); sessionStorage.removeItem('logic_user'); } catch(e) {}
-            setTimeout(function() { location.reload(); }, 1500);
+            // 세션 만료로 리로드하는 조건:
+            // 1) 로그인 API가 아닐 것 (로그인 실패 401은 정상)
+            // 2) 현재 토큰이 있을 것 (비로그인 상태면 리로드 불필요)
+            // 3) 아직 리다이렉트 중이 아닐 것 (중복 방지)
+            var isLoginRequest = r.url && r.url.indexOf('/auth/login') !== -1;
+            var hasToken = false;
+            try { hasToken = !!sessionStorage.getItem('logic_token'); } catch(e) {}
+            if (!isLoginRequest && hasToken && !_isAuthRedirecting) {
+                _isAuthRedirecting = true;
+                toast.error('인증이 만료되었습니다. 다시 로그인해주세요.');
+                try { sessionStorage.removeItem('logic_token'); sessionStorage.removeItem('logic_user'); } catch(e) {}
+                setTimeout(function() { location.reload(); }, 1500);
+                return Promise.resolve({ success: false, detail: '인증 만료' });
+            }
         } else if (status === 403) {
             toast.error('접근 권한이 없습니다.');
         } else if (status >= 500) {

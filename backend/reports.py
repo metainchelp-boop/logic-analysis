@@ -34,7 +34,6 @@ def _check_view_rate(ip: str, limit: int = 30, window_sec: int = 60) -> bool:
     return True
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from starlette.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
@@ -1108,13 +1107,3 @@ async def delete_report(
             detail={"success": False, "message": f"보고서 삭제 중 오류가 발생했습니다: {str(e)}"}
         )
 
-
-# Mount static files for serving HTML reports
-def mount_reports_static(app):
-    """
-    Call this function in your main FastAPI app to mount the reports static files
-    Example in main.py:
-        from backend_reports import mount_reports_static
-        mount_reports_static(app)
-    """
-    app.mount("/api/reports/static", StaticFiles(directory="reports"), name="reports")
