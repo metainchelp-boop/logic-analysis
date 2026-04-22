@@ -4,76 +4,93 @@ window.CompetitionIndexSection = function CompetitionIndexSection(props) {
 
   if (compPercent === undefined && compIndex === undefined) return null;
 
-  // 백분율 값 (신규 데이터면 compPercent 사용, 레거시면 compIndex 기반 계산)
   var pct = typeof compPercent === 'number' ? compPercent : Math.min(98, Math.round(Math.log10(compIndex * 10 + 1) / Math.log10(101) * 100));
+
+  /* 지표 카드 색상 매핑 */
+  var metricCards = [
+    { label: '등록 상품수', value: fmt(productCount), unit: '개', bg: '#fef2f2', color: '#dc2626' },
+    { label: '월간 검색량', value: fmt(searchVolume), unit: '회', bg: '#eff6ff', color: '#2563eb' },
+    { label: '평균 클릭수', value: typeof avgCtr === 'number' ? avgCtr.toFixed(1) : avgCtr, unit: '회', bg: '#f0fdf4', color: '#16a34a' }
+  ];
 
   return (
     <div className="section fade-in">
       <div className="container">
-      <h2 className="section-title">🎯 키워드 경쟁강도 분석</h2>
+      <div className="section-title">
+        <span className="icon" style={{ background: '#fef2f2' }}>⚔️</span>
+        키워드 경쟁강도 분석
+      </div>
+      <div className="section-line"></div>
+      <p className="section-subtitle">상품 수 대비 검색량으로 경쟁 수준을 판단합니다</p>
 
-      <div className="card" style={{ padding: '24px' }}>
-        {/* 상단: 백분율 + 라벨 */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
-            <span style={{ fontSize: 36, fontWeight: 800, color: compColor }}>{pct}%</span>
-            <span style={{
-              background: compColor, color: '#fff',
-              padding: '5px 16px', borderRadius: 999,
-              fontSize: 13, fontWeight: 700
-            }}>
-              {compLabel}
-            </span>
-          </div>
-          <div style={{ textAlign: 'right', fontSize: 12, color: '#6b7280', lineHeight: 1.8 }}>
-            <div>경쟁지수: {fmt(compIndex)}</div>
-            <div>(상품수 ÷ 검색량)</div>
-          </div>
-        </div>
-
-        {/* 가로 막대 차트 — 3구간 */}
-        <div style={{ marginBottom: 20 }}>
-          <div style={{ position: 'relative', height: 32, borderRadius: 8, overflow: 'hidden', background: '#f1f5f9' }}>
-            {/* 3구간 배경 */}
-            <div style={{ position: 'absolute', top: 0, left: 0, width: '30%', height: '100%', background: 'linear-gradient(90deg, #d1fae5, #a7f3d0)', borderRight: '2px solid #fff' }} />
-            <div style={{ position: 'absolute', top: 0, left: '30%', width: '40%', height: '100%', background: 'linear-gradient(90deg, #fef3c7, #fde68a)', borderRight: '2px solid #fff' }} />
-            <div style={{ position: 'absolute', top: 0, left: '70%', width: '30%', height: '100%', background: 'linear-gradient(90deg, #fecaca, #fca5a5)' }} />
-
-            {/* 현재 위치 마커 */}
+      <div className="card" style={{ padding: '24px', borderRadius: '16px' }}>
+        {/* 상단: 도넛차트 + 라벨 */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+            {/* conic-gradient 도넛 */}
             <div style={{
-              position: 'absolute', top: -2, left: 'calc(' + pct + '% - 14px)',
-              width: 28, height: 36, borderRadius: 6,
-              background: compColor, border: '3px solid #fff',
-              boxShadow: '0 2px 8px rgba(0,0,0,0.25)',
+              width: 80, height: 80, borderRadius: '50%',
+              background: 'conic-gradient(' + compColor + ' ' + (pct * 3.6) + 'deg, #f1f5f9 0deg)',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              transition: 'left 0.8s ease'
+              flexShrink: 0
             }}>
-              <span style={{ color: '#fff', fontSize: 10, fontWeight: 800 }}>{pct}</span>
+              <div style={{
+                width: 60, height: 60, borderRadius: '50%', background: '#fff',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 22, fontWeight: 800, color: compColor
+              }}>
+                {pct}
+              </div>
+            </div>
+            <div>
+              <span style={{
+                display: 'inline-block', background: compColor, color: '#fff',
+                padding: '5px 16px', borderRadius: 999, fontSize: 14, fontWeight: 700
+              }}>
+                {compLabel}
+              </span>
+              <div style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>경쟁지수: {fmt(compIndex)}</div>
             </div>
           </div>
-          {/* 구간 라벨 */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, fontSize: 11, color: '#94a3b8' }}>
-            <span>0%</span>
-            <span style={{ position: 'relative', left: '-5%' }}>블루오션 (30%)</span>
-            <span>보통 (70%)</span>
-            <span>레드오션 (100%)</span>
+        </div>
+
+        {/* 3구간 바 */}
+        <div style={{ marginBottom: 24 }}>
+          <div style={{ position: 'relative', height: 36, borderRadius: 18, overflow: 'hidden' }}>
+            <div style={{ position: 'absolute', top: 0, left: 0, width: '30%', height: '100%', background: 'linear-gradient(90deg, #d1fae5, #a7f3d0)' }} />
+            <div style={{ position: 'absolute', top: 0, left: '30%', width: '40%', height: '100%', background: 'linear-gradient(90deg, #fef3c7, #fde68a)' }} />
+            <div style={{ position: 'absolute', top: 0, left: '70%', width: '30%', height: '100%', background: 'linear-gradient(90deg, #fecaca, #fca5a5)' }} />
+            <div style={{
+              position: 'absolute', top: 2, left: 'calc(' + pct + '% - 16px)',
+              width: 32, height: 32, borderRadius: 16,
+              background: compColor, border: '3px solid #fff',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              color: '#fff', fontSize: 11, fontWeight: 800,
+              transition: 'left 0.8s ease'
+            }}>
+              {pct}
+            </div>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontSize: 11, color: '#94a3b8' }}>
+            <span style={{ color: '#10b981' }}>블루오션</span>
+            <span style={{ color: '#f59e0b' }}>보통</span>
+            <span style={{ color: '#ef4444' }}>레드오션</span>
           </div>
         </div>
 
-        {/* 시장 현황 카드 3개 */}
-        <div className="comp-detail-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 16 }}>
-          <div style={{ background: '#f8fafc', borderRadius: 10, padding: '14px 16px', textAlign: 'center', border: '1px solid #e2e8f0' }}>
-            <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>등록 상품수</div>
-            <div style={{ fontSize: 20, fontWeight: 800, color: '#1e293b' }}>{fmt(productCount)}<span style={{ fontSize: 12, fontWeight: 400 }}>개</span></div>
-          </div>
-          <div style={{ background: '#f8fafc', borderRadius: 10, padding: '14px 16px', textAlign: 'center', border: '1px solid #e2e8f0' }}>
-            <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>월간 검색량</div>
-            <div style={{ fontSize: 20, fontWeight: 800, color: '#1e293b' }}>{fmt(searchVolume)}<span style={{ fontSize: 12, fontWeight: 400 }}>회</span></div>
-          </div>
-          <div style={{ background: '#f8fafc', borderRadius: 10, padding: '14px 16px', textAlign: 'center', border: '1px solid #e2e8f0' }}>
-            <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>평균 클릭수</div>
-            <div style={{ fontSize: 20, fontWeight: 800, color: '#1e293b' }}>{typeof avgCtr === 'number' ? avgCtr.toFixed(1) : avgCtr}<span style={{ fontSize: 12, fontWeight: 400 }}>회</span></div>
-          </div>
+        {/* 핵심 지표 — 컬러 배경 */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 16 }}>
+          {metricCards.map(function(m, i) {
+            return (
+              <div key={i} style={{ background: m.bg, borderRadius: 12, padding: 16, textAlign: 'center' }}>
+                <div style={{ fontSize: 11, color: '#64748b', fontWeight: 600, marginBottom: 6 }}>{m.label}</div>
+                <div style={{ fontSize: 24, fontWeight: 800, color: m.color }}>
+                  {m.value}<span style={{ fontSize: 12, fontWeight: 400 }}>{m.unit}</span>
+                </div>
+              </div>
+            );
+          })}
         </div>
 
         {/* 전문 코멘트 */}

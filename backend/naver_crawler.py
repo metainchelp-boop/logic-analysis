@@ -1165,59 +1165,140 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
                 if ar.get("reviewCount"):
                     actual_review_count = int(ar["reviewCount"])
                 if ar.get("ratingValue"):
-                    actual_rating = round(float(ar["ratingValue"]), 1)
+                    actual_rating = round(float(ar["ratingValue"]), 2)
+                logger.info(f"[리뷰추출] 방법1 JSON-LD: 리뷰={actual_review_count}, 평점={actual_rating}")
         except Exception:
             pass
 
     # 방법 2: window.__PRELOADED_STATE__ (Naver SmartStore SPA)
-    if actual_review_count is None:
-        preloaded_match = re.search(r'window\.__PRELOADED_STATE__\s*=\s*({.+?})\s*;?\s*</script>', html, re.DOTALL)
-        if preloaded_match:
-            try:
-                state = _json.loads(preloaded_match.group(1))
-                # 리뷰 카운트
-                product_info = state.get("product", {}).get("A", {})
-                if not product_info:
-                    product_info = state.get("product", {})
+    # 각 필드 독립 체크 (방법 1에서 일부만 추출된 경우에도 나머지 보완)
+    preloaded_match = re.search(r'window\.__PRELOADED_STATE__\s*=\s*({.+?})\s*;?\s*</script>', html, re.DOTALL)
+    if preloaded_match:
+        try:
+            state = _json.loads(preloaded_match.group(1))
+            product_info = state.get("product", {}).get("A", {})
+            if not product_info:
+                product_info = state.get("product", {})
+            if actual_review_count is None:
                 rc = product_info.get("reviewCount") or product_info.get("totalReviewCount")
                 if rc is not None:
                     actual_review_count = int(rc)
+            if actual_rating is None:
                 rt = product_info.get("reviewScore") or product_info.get("averageReviewScore")
                 if rt is not None:
-                    actual_rating = round(float(rt), 1)
+                    actual_rating = round(float(rt), 2)
+            if actual_wish_count is None:
                 wc = product_info.get("wishCount") or product_info.get("zzimCount")
                 if wc is not None:
                     actual_wish_count = int(wc)
-            except Exception:
-                pass
+            logger.info(f"[리뷰추출] 방법2 PRELOADED: 리뷰={actual_review_count}, 평점={actual_rating}, 찜={actual_wish_count}")
+        except Exception:
+            pass
 
-    # 방법 3: HTML 패턴 매칭 (리뷰 탭 카운트 등)
+    # 방법 3: BeautifulSoup 텍스트 기반 추출 (HTML 태그 제거 후 패턴 매칭)
+    # 북마클릿으로 복사한 DOM은 태그가 섞여있어 raw HTML 정규식이 실패할 수 있음
+    # 전략: 모든 매칭을 찾아서 가장 큰 값을 사용 (총 리뷰수가 항상 가장 큼)
+    page_text = soup.get_text(separator=" ", strip=True) if soup else ""
+
     if actual_review_count is None:
-        # "리뷰 123" or "구매후기(456)" 패턴
-        review_pattern = re.search(r'(?:리뷰|구매후기|상품평)[^\d]{0,10}([\d,]+)\s*(?:건|개)?', html)
-        if review_pattern:
+        review_candidates = []
+        # 텍스트에서 모든 "리뷰 N" 패턴을 찾아 후보 수집
+        for pat in [
+            r'(?:리뷰|구매후기|상품평|review)\s*(\d[\d,]*)',
+            r'(?:리뷰|구매후기|상품평)\s*\(\s*(\d[\d,]*)\s*\)',
+            r'(?:리뷰|구매후기|상품평)\s*:\s*(\d[\d,]*)',
+        ]:
+            for m in re.finditer(pat, page_text, re.I):
+                try:
+                    review_candidates.append(int(m.group(1).replace(",", "")))
+                except Exception:
+                    pass
+        # raw HTML에서도 태그 사이 숫자 추출
+        for m in re.finditer(r'(?:리뷰|구매후기|상품평)(?:[^<]*(?:<[^>]*>)[^<]*){0,5}?([\d,]+)', html):
             try:
-                actual_review_count = int(review_pattern.group(1).replace(",", ""))
+                val = int(m.group(1).replace(",", ""))
+                if val > 0:
+                    review_candidates.append(val)
             except Exception:
                 pass
+        # 가장 큰 값 = 총 리뷰수
+        if review_candidates:
+            actual_review_count = max(review_candidates)
 
     if actual_rating is None:
-        # "4.8점" or "평점 4.8" 패턴
-        rating_pattern = re.search(r'(?:평점|별점|rating)[^\d]{0,10}(\d\.\d)', html)
-        if rating_pattern:
+        rating_candidates = []
+        # 1) 라벨이 있는 패턴 (평점, 별점, 총 평점, 구매자 평점 등)
+        for pat in [
+            r'(?:평점|별점|rating|평균\s*평점|총\s*평점|구매자\s*(?:총\s*)?평점)\s*(\d\.\d\d?)',
+            r'(\d\.\d\d?)\s*(?:점|\/\s*5)',
+        ]:
+            for m in re.finditer(pat, page_text, re.I):
+                try:
+                    val = round(float(m.group(1)), 2)
+                    if 1.0 <= val <= 5.0:
+                        rating_candidates.append(val)
+                except Exception:
+                    pass
+        # 2) 리뷰 수 근처에서 X.XX 숫자 찾기 (스마트스토어는 라벨 없이 숫자만 표시)
+        #    "리뷰" 텍스트 전후 200자 범위에서 소수점 숫자 추출
+        for review_m in re.finditer(r'(?:리뷰|구매후기|상품평)', page_text, re.I):
+            start = max(0, review_m.start() - 100)
+            end = min(len(page_text), review_m.end() + 200)
+            nearby_text = page_text[start:end]
+            for num_m in re.finditer(r'(?<!\d)(\d\.\d\d?)(?!\d)', nearby_text):
+                try:
+                    val = round(float(num_m.group(1)), 2)
+                    if 1.0 <= val <= 5.0:
+                        rating_candidates.append(val)
+                except Exception:
+                    pass
+        # 3) raw HTML: 별점 관련 class/aria 속성 근처 숫자
+        for m in re.finditer(r'(?:star|rating|score|평점|별점)(?:[^>]*>)\s*(\d\.\d\d?)', html, re.I):
             try:
-                actual_rating = round(float(rating_pattern.group(1)), 1)
+                val = round(float(m.group(1)), 2)
+                if 1.0 <= val <= 5.0:
+                    rating_candidates.append(val)
+            except Exception:
+                pass
+        # 4) raw HTML: blind/sr-only 접근성 텍스트에서 평점 추출
+        for m in re.finditer(r'class="[^"]*blind[^"]*"[^>]*>[^<]*?(\d\.\d\d?)', html, re.I):
+            try:
+                val = round(float(m.group(1)), 2)
+                if 1.0 <= val <= 5.0:
+                    rating_candidates.append(val)
             except Exception:
                 pass
 
+        logger.info(f"[리뷰추출] 방법3 평점 후보: {rating_candidates}")
+
+        # 평점 결정: 소수점 2자리 값 우선, 같으면 최빈값
+        if rating_candidates:
+            from collections import Counter
+            two_decimal = [r for r in rating_candidates if round(r * 100) % 10 != 0]
+            if two_decimal:
+                actual_rating = Counter(two_decimal).most_common(1)[0][0]
+            else:
+                actual_rating = Counter(rating_candidates).most_common(1)[0][0]
+
     if actual_wish_count is None:
-        # "찜 123" or "찜하기 456" 패턴
-        wish_pattern = re.search(r'(?:찜|zzim|wish)[^\d]{0,10}([\d,]+)', html, re.I)
-        if wish_pattern:
-            try:
-                actual_wish_count = int(wish_pattern.group(1).replace(",", ""))
-            except Exception:
-                pass
+        wish_candidates = []
+        # "찜" 단독이 아닌, "찜하기", "찜한 상품", "찜 수" 등 명확한 패턴만 매칭
+        for pat in [
+            r'(?:찜하기|찜한\s*상품|찜\s*수)\s*(\d[\d,]*)',
+            r'(?:찜|zzim|wish)\s+(\d[\d,]+)',  # "찜" 뒤에 공백+숫자 (최소 2자리)
+        ]:
+            for m in re.finditer(pat, page_text, re.I):
+                try:
+                    val = int(m.group(1).replace(",", ""))
+                    if val > 0:  # 0은 무시
+                        wish_candidates.append(val)
+                except Exception:
+                    pass
+        # 가장 큰 값 = 총 찜수 (0 제외)
+        if wish_candidates:
+            actual_wish_count = max(wish_candidates)
+
+    logger.info(f"[리뷰추출] 최종결과: 리뷰={actual_review_count}, 평점={actual_rating}, 찜={actual_wish_count}")
 
     # ── 9. 페이지 총 크기 (대략적 스크롤 깊이) ──
     html_size_kb = round(len(html) / 1024, 1)

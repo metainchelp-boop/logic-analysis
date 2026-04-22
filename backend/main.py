@@ -607,6 +607,7 @@ async def detail_page_analyze(req: DetailPageAnalysisRequest, current_user: dict
                 "metrics": result["metrics"],
                 "scores": result["scores"],
                 "suggestions": result["suggestions"],
+                "reviewData": result.get("reviewData"),
             }
         }
     except Exception as e:

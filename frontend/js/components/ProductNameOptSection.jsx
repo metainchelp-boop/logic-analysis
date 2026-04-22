@@ -4,140 +4,178 @@ window.ProductNameOptSection = function ProductNameOptSection(props) {
 
   if (!currentName) return null;
 
+  const cardBase = {
+    background: '#fff',
+    borderRadius: 16,
+    padding: 24,
+    border: '1px solid #e2e8f0',
+    boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+    marginBottom: 20
+  };
+
   return (
-    <div className="section">
-      <h2 className="section-title">✏️ 상품명 SEO 최적화</h2>
-
-      {/* Current Product Name */}
-      <div style={{ marginBottom: '20px' }}>
-        <div style={{
-          fontSize: '12px',
-          fontWeight: '600',
-          color: '#666',
-          marginBottom: '8px'
-        }}>
-          현재 상품명
+    <div className="section fade-in">
+      <div className="container">
+        <div className="section-title">
+          <span className="icon" style={{ background: 'linear-gradient(135deg, #eef2ff, #dbeafe)' }}>✏️</span>
+          상품명 SEO 최적화
         </div>
-        <div style={{
-          backgroundColor: '#f3f4f6',
-          border: '1px solid #d1d5db',
-          borderRadius: '8px',
-          padding: '14px 16px',
-          fontSize: '15px',
-          color: '#333',
-          wordBreak: 'break-word',
-          lineHeight: '1.6'
-        }}>
-          {currentName}
-        </div>
-      </div>
+        <div className="section-line"></div>
+        <p className="section-subtitle">키워드 배치와 가독성을 개선합니다</p>
 
-      {/* Issues List */}
-      {issues && issues.length > 0 && (
-        <div style={{ marginBottom: '20px' }}>
+        {/* Current Product Name */}
+        <div style={cardBase}>
           <div style={{
-            fontSize: '12px',
-            fontWeight: '600',
-            color: '#dc2626',
-            marginBottom: '8px'
+            fontSize: 11,
+            fontWeight: 600,
+            color: '#94a3b8',
+            textTransform: 'uppercase',
+            letterSpacing: '0.05em',
+            marginBottom: 10
           }}>
-            개선 필요 항목
+            현재 상품명
           </div>
           <div style={{
-            backgroundColor: '#fee2e2',
-            border: '2px solid #fca5a5',
-            borderLeft: '6px solid #dc2626',
-            borderRadius: '8px',
-            padding: '14px 16px'
+            background: '#f8fafc',
+            border: '1px solid #e2e8f0',
+            borderRadius: 12,
+            padding: '14px 16px',
+            fontSize: 15,
+            color: '#0f172a',
+            wordBreak: 'break-word',
+            lineHeight: 1.6
           }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {currentName}
+          </div>
+        </div>
+
+        {/* Issues Checklist */}
+        {issues && issues.length > 0 && (
+          <div style={cardBase}>
+            <div style={{
+              fontSize: 11,
+              fontWeight: 600,
+              color: '#94a3b8',
+              textTransform: 'uppercase',
+              letterSpacing: '0.05em',
+              marginBottom: 14
+            }}>
+              개선 항목 체크리스트
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {issues.map((item, idx) => (
                 <div key={idx} style={{
                   display: 'flex',
                   alignItems: 'flex-start',
-                  gap: '10px',
-                  fontSize: '13px',
-                  color: '#333'
+                  gap: 12,
+                  padding: '12px 14px',
+                  background: item.pass ? '#f0fdf4' : '#fef2f2',
+                  borderRadius: 12,
+                  border: item.pass ? '1px solid #bbf7d0' : '1px solid #fecaca'
                 }}>
                   <span style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    minWidth: '20px',
-                    height: '20px',
-                    marginTop: '1px',
-                    fontSize: '16px',
+                    fontSize: 18,
+                    lineHeight: '20px',
                     flexShrink: 0
                   }}>
-                    {item.pass ? '✅' : '⚠️'}
+                    {item.pass ? '✅' : '❌'}
                   </span>
-                  <span>{item.text}</span>
+                  <span style={{
+                    fontSize: 13,
+                    color: '#0f172a',
+                    lineHeight: 1.5
+                  }}>{item.text}</span>
                 </div>
               ))}
             </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* Suggested Product Name */}
-      {suggestedName && (
-        <div style={{ marginBottom: '20px' }}>
+        {/* Suggested Product Name */}
+        {suggestedName && (
           <div style={{
-            fontSize: '12px',
-            fontWeight: '600',
-            color: '#16a34a',
-            marginBottom: '8px'
+            ...cardBase,
+            background: 'linear-gradient(135deg, #f0fdf4, #ecfdf5)',
+            border: '1px solid #bbf7d0'
           }}>
-            제안 상품명
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              marginBottom: 12
+            }}>
+              <span style={{
+                padding: '4px 12px',
+                borderRadius: 999,
+                fontSize: 12,
+                fontWeight: 700,
+                background: '#10b981',
+                color: '#fff'
+              }}>추천</span>
+              <span style={{
+                fontSize: 11,
+                fontWeight: 600,
+                color: '#10b981',
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em'
+              }}>제안 상품명</span>
+            </div>
+            <div style={{
+              background: '#fff',
+              border: '1px solid #bbf7d0',
+              borderRadius: 12,
+              padding: '14px 16px',
+              fontSize: 15,
+              color: '#0f172a',
+              wordBreak: 'break-word',
+              lineHeight: 1.6,
+              fontWeight: 600
+            }}>
+              {suggestedName}
+            </div>
           </div>
-          <div style={{
-            backgroundColor: '#dcfce7',
-            border: '2px solid #86efac',
-            borderLeft: '6px solid #16a34a',
-            borderRadius: '8px',
-            padding: '14px 16px',
-            fontSize: '15px',
-            color: '#333',
-            wordBreak: 'break-word',
-            lineHeight: '1.6',
-            fontWeight: '500'
-          }}>
-            {suggestedName}
-          </div>
-        </div>
-      )}
+        )}
 
-      {/* Marketer Comment */}
-      {marketerComment && (
-        <div>
+        {/* Marketer Comment */}
+        {marketerComment && (
           <div style={{
-            fontSize: '12px',
-            fontWeight: '600',
-            color: '#0284c7',
-            marginBottom: '8px'
+            ...cardBase,
+            background: 'linear-gradient(135deg, #eef2ff, #e0f2fe)',
+            border: '1px solid #bfdbfe',
+            marginBottom: 0
           }}>
-            마케터 코멘트
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              marginBottom: 12
+            }}>
+              <span style={{
+                padding: '4px 12px',
+                borderRadius: 999,
+                fontSize: 12,
+                fontWeight: 700,
+                background: '#4f46e5',
+                color: '#fff'
+              }}>AI</span>
+              <span style={{
+                fontSize: 11,
+                fontWeight: 600,
+                color: '#4f46e5',
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em'
+              }}>마케터 코멘트</span>
+            </div>
+            <div style={{
+              fontSize: 13,
+              color: '#0f172a',
+              lineHeight: 1.7
+            }}>
+              {marketerComment}
+            </div>
           </div>
-          <div style={{
-            backgroundColor: '#e0f2fe',
-            border: '2px solid #7dd3fc',
-            borderLeft: '6px solid #0284c7',
-            borderRadius: '8px',
-            padding: '14px 16px',
-            fontSize: '13px',
-            color: '#333',
-            lineHeight: '1.6'
-          }}>
-            {marketerComment}
-          </div>
-        </div>
-      )}
-
-      <style>{`
-        .product-name-section {
-          margin-top: 20px;
-        }
-      `}</style>
+        )}
+      </div>
     </div>
   );
 };

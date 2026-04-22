@@ -4,53 +4,115 @@ window.KeywordTagSection = function KeywordTagSection(props) {
 
   if (!topKeywords || topKeywords.length === 0) return null;
 
+  const maxVolume = Math.max.apply(null, topKeywords.map(function(kw) { return typeof kw.volume === 'number' ? kw.volume : 0; })) || 1;
+
   return (
     <div className="section fade-in">
       <div className="container">
-      <h2 className="section-title">🔍 키워드 & 태그 분석</h2>
+        <div className="section-title">
+          <span className="icon" style={{ background: 'linear-gradient(135deg, #eef2ff, #dbeafe)' }}>🏷️</span>
+          키워드 &amp; 태그 분석
+        </div>
+        <div className="section-line"></div>
+        <p className="section-subtitle">상품명에서 자주 쓰이는 키워드를 분석합니다</p>
 
-      <div className="card" style={{ padding: '24px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-          <h3 style={{ fontSize: '14px', fontWeight: '700', color: '#4f46e5', margin: 0 }}>
-            💬 상품명 주요 키워드 TOP {Math.min(topKeywords.length, 15)}
-          </h3>
-          <span style={{ fontSize: 12, color: '#6b7280' }}>총 {fmt(totalFound)}개 발견</span>
+        <div style={{
+          background: '#fff',
+          borderRadius: 16,
+          padding: 24,
+          border: '1px solid #e2e8f0',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.04)'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: '#0f172a' }}>
+              💬 상품명 주요 키워드 TOP {Math.min(topKeywords.length, 15)}
+            </div>
+            <span style={{
+              padding: '4px 12px',
+              borderRadius: 999,
+              fontSize: 12,
+              fontWeight: 700,
+              background: 'linear-gradient(135deg, #eef2ff, #dbeafe)',
+              color: '#4f46e5'
+            }}>총 {fmt(totalFound)}개 발견</span>
+          </div>
+
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr style={{ background: 'linear-gradient(135deg, #4f46e5, #7c3aed)' }}>
+                  <th style={{ color: '#fff', fontWeight: 600, fontSize: 12 }}>#</th>
+                  <th style={{ color: '#fff', fontWeight: 600, fontSize: 12 }}>키워드</th>
+                  <th style={{ color: '#fff', fontWeight: 600, fontSize: 12 }}>검색량</th>
+                  <th style={{ color: '#fff', fontWeight: 600, fontSize: 12 }}>경쟁도</th>
+                  <th style={{ color: '#fff', fontWeight: 600, fontSize: 12 }}>비중</th>
+                </tr>
+              </thead>
+              <tbody>
+                {topKeywords.map(function(kw, idx) {
+                  var barPercent = typeof kw.volume === 'number' ? Math.round((kw.volume / maxVolume) * 100) : 0;
+                  return (
+                    <tr key={idx} style={{ background: idx % 2 === 0 ? '#fff' : '#f8fafc' }}>
+                      <td>
+                        <span style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          width: 28,
+                          height: 28,
+                          background: kw.isGolden
+                            ? 'linear-gradient(135deg, #f59e0b, #d97706)'
+                            : 'linear-gradient(135deg, #4f46e5, #7c3aed)',
+                          color: '#fff',
+                          borderRadius: '50%',
+                          fontSize: 11,
+                          fontWeight: 700
+                        }}>{idx + 1}</span>
+                      </td>
+                      <td style={{ fontWeight: 600, color: '#0f172a', fontSize: 13 }}>
+                        {kw.keyword}
+                        {kw.isGolden && <span style={{ marginLeft: 6 }}>👑</span>}
+                      </td>
+                      <td style={{ fontSize: 13, color: '#0f172a' }}>{fmt(kw.volume)}</td>
+                      <td>
+                        <span style={{
+                          padding: '4px 12px',
+                          borderRadius: 999,
+                          fontSize: 12,
+                          fontWeight: 700,
+                          background: kw.comp === '낮음' ? '#ecfdf5' : kw.comp === '높음' ? '#fef2f2' : '#fffbeb',
+                          color: kw.comp === '낮음' ? '#10b981' : kw.comp === '높음' ? '#ef4444' : '#f59e0b'
+                        }}>{kw.comp}</span>
+                      </td>
+                      <td style={{ minWidth: 120 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <div style={{
+                            flex: 1,
+                            height: 8,
+                            borderRadius: 8,
+                            background: '#f1f5f9',
+                            overflow: 'hidden'
+                          }}>
+                            <div style={{
+                              width: barPercent + '%',
+                              height: '100%',
+                              borderRadius: 8,
+                              background: kw.isGolden
+                                ? 'linear-gradient(135deg, #f59e0b, #d97706)'
+                                : 'linear-gradient(135deg, #4f46e5, #7c3aed)',
+                              transition: 'width 0.3s ease'
+                            }}></div>
+                          </div>
+                          <span style={{ fontSize: 11, color: '#64748b', minWidth: 32, textAlign: 'right' }}>{barPercent}%</span>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          {topKeywords.map(function(kw, idx) {
-            return (
-              <div key={idx} style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                padding: '10px 14px',
-                background: kw.isGolden ? 'linear-gradient(135deg, #fefce8, #fef9c3)' : '#f9fafb',
-                borderRadius: '8px',
-                border: kw.isGolden ? '1px solid #fbbf24' : '1px solid #e5e7eb',
-                transition: 'transform 0.15s'
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  <span style={{
-                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                    width: '26px', height: '26px',
-                    background: kw.isGolden ? 'linear-gradient(135deg, #f59e0b, #d97706)' : 'linear-gradient(135deg, #4f46e5, #7c3aed)',
-                    color: '#fff', borderRadius: '50%', fontSize: '11px', fontWeight: '700'
-                  }}>{idx + 1}</span>
-                  <span style={{ fontSize: '13px', fontWeight: '600', color: '#1f2937' }}>
-                    {kw.keyword}
-                    {kw.isGolden && <span style={{ marginLeft: '6px' }}>👑</span>}
-                  </span>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '12px', color: '#6b7280' }}>
-                  <span>검색량: {kw.volume}</span>
-                  <span className={'badge ' + (kw.comp === '낮음' ? 'badge-green' : kw.comp === '높음' ? 'badge-red' : 'badge-amber')}
-                    style={{ fontSize: '10px', padding: '2px 8px' }}>
-                    {kw.comp}
-                  </span>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
       </div>
     </div>
   );

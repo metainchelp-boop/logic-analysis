@@ -175,6 +175,8 @@ window.ReportSection = function ReportSection(props) {
                     <span className="icon" style={{ background: '#eff6ff' }}>📄</span>
                     보고서 내보내기
                 </div>
+                <div className="section-line"></div>
+                <p className="section-subtitle">분석 결과를 HTML/JSON/CSV로 다운로드합니다</p>
                 <div className="card">
                     <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
                         <div className="form-group" style={{ marginBottom: 0 }}>

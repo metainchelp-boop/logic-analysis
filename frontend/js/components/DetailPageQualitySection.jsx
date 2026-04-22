@@ -5,8 +5,14 @@ window.DetailPageQualitySection = function DetailPageQualitySection(props) {
   if (totalScore === undefined) return null;
 
   return (
-    <div className="section">
-      <h2 className="section-title">🎯 상세페이지 품질 점수 진단</h2>
+    <div className="section fade-in">
+      <div className="container">
+      <div className="section-title">
+        <span className="icon" style={{ background: '#fef2f2' }}>🎯</span>
+        상세페이지 품질 점수 진단
+      </div>
+      <div className="section-line"></div>
+      <p className="section-subtitle">전환율에 영향을 미치는 상세페이지 품질을 평가합니다</p>
 
       {/* Score Header */}
       <div style={{
@@ -200,11 +206,7 @@ window.DetailPageQualitySection = function DetailPageQualitySection(props) {
         </div>
       )}
 
-      <style>{`
-        .detail-quality-section {
-          margin-top: 20px;
-        }
-      `}</style>
+      </div>
     </div>
   );
 };
