@@ -103,12 +103,13 @@ def get_gender_ratio(keyword: str, category_code: str) -> dict:
     results = data["results"]
     gender_data = {}
     for item in results:
-        group = item.get("group", "")
-        ratio_list = item.get("data", [])
-        if ratio_list:
-            # 마지막(최신) 데이터 포인트 사용
-            ratio = ratio_list[-1].get("ratio", 0)
-            gender_data[group] = round(ratio, 1)
+        data_points = item.get("data", [])
+        for pt in data_points:
+            group = pt.get("group", "")
+            ratio = pt.get("ratio", 0)
+            if group:
+                gender_data[group] = round(ratio, 1)  # 마지막(최신) 데이터 포인트가 덮어씀
+    logger.info(f"성별 원본 데이터: {gender_data}")
 
     male = gender_data.get("m", 0)
     female = gender_data.get("f", 0)
@@ -143,11 +144,13 @@ def get_age_ratio(keyword: str, category_code: str) -> dict:
     results = data["results"]
     age_data = {}
     for item in results:
-        group = item.get("group", "")
-        ratio_list = item.get("data", [])
-        if ratio_list:
-            ratio = ratio_list[-1].get("ratio", 0)
-            age_data[group] = round(ratio, 1)
+        data_points = item.get("data", [])
+        for pt in data_points:
+            group = pt.get("group", "")
+            ratio = pt.get("ratio", 0)
+            if group:
+                age_data[group] = round(ratio, 1)  # 마지막(최신) 데이터 포인트가 덮어씀
+    logger.info(f"연령대 원본 데이터: {age_data}")
 
     # 그룹명 매핑 (API는 10, 20, 30, 40, 50, 60 반환)
     total = sum(age_data.values()) or 1
