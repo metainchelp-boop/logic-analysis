@@ -378,6 +378,74 @@ async def check_rank(req: RankCheckRequest, current_user: dict = Depends(get_cur
         raise HTTPException(status_code=500, detail="순위 조회 중 오류가 발생했습니다.")
 
 
+# --- 키워드별 노출 순위 분석 ---
+class KeywordExposureRequest(BaseModel):
+    product_url: str
+    product_name: str = ""
+
+@app.post("/api/rank/keyword-exposure")
+async def keyword_exposure(req: KeywordExposureRequest, current_user: dict = Depends(get_current_user)):
+    """상품명에서 키워드를 추출하고 각 키워드별 노출 순위를 조회"""
+    import re, concurrent.futures
+    try:
+        # 상품명 확보
+        product_name = req.product_name
+        if not product_name:
+            info = get_product_info(req.product_url)
+            product_name = info.get("product_name", "")
+        if not product_name:
+            return {"success": False, "detail": "상품명을 가져올 수 없습니다."}
+
+        # 상품명에서 키워드 토큰 추출
+        # 특수문자/괄호 제거, 숫자+단위 합치기
+        clean = re.sub(r'[^\w\s가-힣]', ' ', product_name)
+        tokens = [t for t in clean.split() if len(t) >= 2]
+
+        # 1단어 + 2단어 조합 키워드 생성
+        keywords = set()
+        for t in tokens:
+            # 순수 숫자만인 토큰 제외
+            if not re.match(r'^\d+$', t):
+                keywords.add(t)
+        for i in range(len(tokens) - 1):
+            combo = tokens[i] + ' ' + tokens[i+1]
+            if not re.match(r'^\d+\s\d+$', combo):
+                keywords.add(combo)
+
+        if not keywords:
+            return {"success": True, "data": {"product_name": product_name, "results": []}}
+
+        # 병렬로 순위 조회 (max_pages=3으로 제한 — 속도 최적화)
+        results = []
+        def check_one(kw):
+            try:
+                rank, page, _ = find_product_rank(kw, req.product_url, max_pages=3)
+                return {"keyword": kw, "rank": rank, "page": page}
+            except Exception:
+                return {"keyword": kw, "rank": None, "page": None}
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            futures = {executor.submit(check_one, kw): kw for kw in keywords}
+            for future in concurrent.futures.as_completed(futures):
+                results.append(future.result())
+
+        # 순위 있는 것 우선, 순위순 정렬
+        results.sort(key=lambda x: (x["rank"] is None, x["rank"] or 9999))
+
+        return {
+            "success": True,
+            "data": {
+                "product_name": product_name,
+                "total_keywords": len(keywords),
+                "exposed_count": sum(1 for r in results if r["rank"] is not None),
+                "results": results
+            }
+        }
+    except Exception as e:
+        logger.error(f"키워드 노출 분석 실패: {e}")
+        raise HTTPException(status_code=500, detail="키워드 노출 분석 중 오류가 발생했습니다.")
+
+
 # --- 상품 추적 등록 ---
 @app.post("/api/products/track")
 async def track_product(req: ProductAddRequest, background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):

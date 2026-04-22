@@ -12,15 +12,22 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
     const productsRef = useRef(products);
     productsRef.current = products;
 
-    // viewer 전용: 1회성 순위 조회 결과 (DB 저장 안 함)
+    // 1회성 순위 조회 결과 (DB 저장 안 함)
     const [tempRankResult, setTempRankResult] = useState(null);
     const [tempRankLoading, setTempRankLoading] = useState(false);
     const lastTempCheckKey = useRef('');
+
+    // 키워드별 노출 분석
+    const [exposureResult, setExposureResult] = useState(null);
+    const [exposureLoading, setExposureLoading] = useState(false);
+    const lastExposureKey = useRef('');
 
     // 검색 컨텍스트(광고주)가 바뀌면 순위 히스토리 캐시 초기화
     useEffect(function() {
         setHistoryData({});
         setExpandedProduct(null);
+        setExposureResult(null);
+        lastExposureKey.current = '';
     }, [searchedProductUrl, searchedKeyword]);
 
     // 검색 시 1회성 순위 조회 (DB 미저장)
@@ -48,6 +55,30 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                 setTempRankLoading(false);
             });
     }, [searchedKeyword, searchedProductUrl, canEdit]);
+
+    // 키워드별 노출 분석 (상품명 기반)
+    useEffect(function() {
+        if (!searchedProductUrl) {
+            setExposureResult(null);
+            return;
+        }
+        var key = 'exposure::' + searchedProductUrl;
+        if (lastExposureKey.current === key) return;
+        lastExposureKey.current = key;
+
+        setExposureLoading(true);
+        setExposureResult(null);
+        api.post('/rank/keyword-exposure', { product_url: searchedProductUrl })
+            .then(function(res) {
+                if (res && res.success && res.data) {
+                    setExposureResult(res.data);
+                }
+                setExposureLoading(false);
+            })
+            .catch(function() {
+                setExposureLoading(false);
+            });
+    }, [searchedProductUrl]);
 
     // 자동 등록 + 자동 순위체크 제거 — 수동 버튼으로만 실행 (서버 부하 방지)
     // 기존 DB 데이터(스케줄러 수집분)만 표시, 필요시 사용자가 직접 새로고침
@@ -198,8 +229,75 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                     </div>
                 )}
 
-                {/* viewer 1회성 순위 조회 결과 */}
+                {/* 실시간 순위 조회 결과 */}
                 {renderTempRankCard()}
+
+                {/* 키워드별 노출 분석 */}
+                {exposureLoading && (
+                    <div className="card fade-in" style={{ textAlign: 'center', padding: '24px 16px', color: '#64748b', marginTop: 16 }}>
+                        <div style={{ fontSize: 14 }}>키워드별 노출 순위 분석 중...</div>
+                        <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 4 }}>상품명에서 키워드를 추출하여 각각 순위를 조회하고 있습니다</div>
+                    </div>
+                )}
+                {exposureResult && !exposureLoading && (
+                    <div className="fade-in" style={{ marginTop: 16 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                            <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <span>🔎</span> 키워드별 노출 순위
+                            </div>
+                            <div style={{ display: 'flex', gap: 8 }}>
+                                <span style={{ padding: '4px 12px', borderRadius: 999, fontSize: 11, fontWeight: 700, background: '#ecfdf5', color: '#10b981' }}>
+                                    노출 {exposureResult.exposed_count}개
+                                </span>
+                                <span style={{ padding: '4px 12px', borderRadius: 999, fontSize: 11, fontWeight: 700, background: '#f1f5f9', color: '#64748b' }}>
+                                    전체 {exposureResult.total_keywords}개
+                                </span>
+                            </div>
+                        </div>
+                        <div className="card" style={{ padding: 0, overflow: 'hidden', borderRadius: 16 }}>
+                            <div style={{ maxHeight: 400, overflowY: 'auto' }}>
+                                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                    <thead>
+                                        <tr style={{ background: 'linear-gradient(135deg, #4f46e5, #7c3aed)' }}>
+                                            <th style={{ padding: '12px 16px', color: '#fff', fontSize: 12, fontWeight: 600, textAlign: 'center', width: 40 }}>#</th>
+                                            <th style={{ padding: '12px 16px', color: '#fff', fontSize: 12, fontWeight: 600, textAlign: 'left' }}>키워드</th>
+                                            <th style={{ padding: '12px 16px', color: '#fff', fontSize: 12, fontWeight: 600, textAlign: 'center', width: 80 }}>순위</th>
+                                            <th style={{ padding: '12px 16px', color: '#fff', fontSize: 12, fontWeight: 600, textAlign: 'center', width: 70 }}>페이지</th>
+                                            <th style={{ padding: '12px 16px', color: '#fff', fontSize: 12, fontWeight: 600, textAlign: 'center', width: 80 }}>상태</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {exposureResult.results.map(function(r, idx) {
+                                            var rankColor = r.rank ? (r.rank <= 10 ? '#059669' : r.rank <= 40 ? '#d97706' : '#dc2626') : '#94a3b8';
+                                            var statusLabel = r.rank ? (r.rank <= 10 ? '상위권' : r.rank <= 40 ? '1페이지' : '하위권') : '미노출';
+                                            var statusBg = r.rank ? (r.rank <= 10 ? '#ecfdf5' : r.rank <= 40 ? '#fffbeb' : '#fef2f2') : '#f8fafc';
+                                            return (
+                                                <tr key={idx} style={{ borderBottom: '1px solid #e2e8f0', background: idx % 2 === 0 ? '#fff' : '#f8fafc' }}>
+                                                    <td style={{ padding: '10px 16px', textAlign: 'center', fontSize: 12, color: '#94a3b8' }}>{idx + 1}</td>
+                                                    <td style={{ padding: '10px 16px', fontSize: 13, fontWeight: 600, color: '#0f172a' }}>{r.keyword}</td>
+                                                    <td style={{ padding: '10px 16px', textAlign: 'center', fontSize: 14, fontWeight: 700, color: rankColor }}>
+                                                        {r.rank ? r.rank + '위' : '-'}
+                                                    </td>
+                                                    <td style={{ padding: '10px 16px', textAlign: 'center', fontSize: 12, color: '#64748b' }}>
+                                                        {r.page ? r.page + 'P' : '-'}
+                                                    </td>
+                                                    <td style={{ padding: '10px 16px', textAlign: 'center' }}>
+                                                        <span style={{ padding: '3px 10px', borderRadius: 999, fontSize: 11, fontWeight: 700, background: statusBg, color: rankColor }}>
+                                                            {statusLabel}
+                                                        </span>
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        <div style={{ marginTop: 8, fontSize: 11, color: '#94a3b8', lineHeight: 1.6 }}>
+                            ※ 상품명에서 추출한 키워드별로 네이버 쇼핑 검색 순위를 조회한 결과입니다. 검색 범위: 상위 300개 상품
+                        </div>
+                    </div>
+                )}
 
                 {/* 등록된 상품 목록 (viewer에게는 숨김 — 1회성 조회만 표시) */}
                 {(function() {
