@@ -73,8 +73,18 @@ def start_scheduler():
         max_instances=1,
     )
 
+    # 4) DB 자동 백업 — 매일 00:30 (업체/광고주 데이터 보호)
+    _scheduler.add_job(
+        _run_daily_db_backup,
+        trigger=CronTrigger(hour=0, minute=30),
+        id="daily_db_backup",
+        name="DB 자동 백업 (00:30)",
+        replace_existing=True,
+        max_instances=1,
+    )
+
     _scheduler.start()
-    logger.info("✅ 스케줄러 시작 (순위: 08:00, 분석: 09:00, 리포트: 10:00)")
+    logger.info("✅ 스케줄러 시작 (순위: 08:00, 분석: 09:00, 리포트: 10:00, DB백업: 00:30)")
 
 
 def stop_scheduler():
@@ -480,3 +490,73 @@ def _save_client_rank(conn, client_id, keyword, product_url, rank, page, check_t
     conn.commit()
 
 
+# ==================== 00:30 DB 자동 백업 ====================
+
+def _run_daily_db_backup():
+    """매일 자정 30분에 DB 백업 수행.
+    업체(광고주) 데이터 보호를 위해 SQLite online backup API 사용."""
+    import sqlite3
+    import shutil
+    import os
+
+    DB_PATH = os.getenv("DB_PATH", "logic_analysis.db")
+
+    if not os.path.exists(DB_PATH):
+        logger.warning("[DB백업] DB 파일 없음, 백업 건너뜀")
+        return
+
+    db_size = os.path.getsize(DB_PATH)
+    if db_size < 4096:
+        logger.warning(f"[DB백업] DB 파일 비정상 크기 ({db_size} bytes), 백업 건너뜀")
+        return
+
+    backup_dir = os.path.join(os.path.dirname(os.path.abspath(DB_PATH)), "backups")
+    os.makedirs(backup_dir, exist_ok=True)
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = os.path.join(backup_dir, f"logic_analysis_backup_{ts}.db")
+
+    try:
+        # 업체 수 확인 (빈 DB 백업 방지)
+        conn = sqlite3.connect(DB_PATH, timeout=10)
+        row = conn.execute("SELECT COUNT(*) FROM clients").fetchone()
+        client_count = row[0] if row else 0
+        conn.close()
+
+        if client_count == 0:
+            logger.info("[DB백업] 업체 데이터 없음, 백업 건너뜀")
+            return
+
+        # SQLite online backup (WAL 안전)
+        src = sqlite3.connect(DB_PATH)
+        dst = sqlite3.connect(backup_path)
+        src.backup(dst)
+        dst.close()
+        src.close()
+
+        backup_size = os.path.getsize(backup_path)
+        logger.info(f"✅ [DB백업] 완료: {backup_path} ({backup_size:,} bytes, 업체 {client_count}건)")
+
+    except Exception as e:
+        logger.error(f"❌ [DB백업] 실패: {e}")
+        # fallback: 파일 복사
+        try:
+            shutil.copy2(DB_PATH, backup_path)
+            logger.info(f"✅ [DB백업] 파일 복사로 완료: {backup_path}")
+        except Exception as e2:
+            logger.error(f"❌ [DB백업] 파일 복사도 실패: {e2}")
+            return
+
+    # 오래된 백업 정리 (최대 14개 보관 = 약 2주)
+    try:
+        backups = sorted([
+            f for f in os.listdir(backup_dir)
+            if f.startswith("logic_analysis_backup_") and f.endswith(".db")
+        ])
+        while len(backups) > 14:
+            old = backups.pop(0)
+            old_path = os.path.join(backup_dir, old)
+            os.remove(old_path)
+            logger.info(f"  🗑️ [DB백업] 오래된 백업 삭제: {old}")
+    except Exception as e:
+        logger.warning(f"[DB백업] 정리 실패: {e}")

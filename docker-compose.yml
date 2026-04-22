@@ -1,0 +1,31 @@
+# logic-analysis 표준 Docker 구성
+# 사용법: docker compose up -d --build
+# 중요: .env 파일이 같은 디렉토리에 있어야 합니다.
+
+services:
+  app:
+    build: .
+    container_name: logic-analysis
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - TZ=Asia/Seoul
+      - DB_PATH=/app/data/logic_analysis.db
+    volumes:
+      # 중요: 이 볼륨이 업체(광고주) DB를 영속적으로 저장합니다.
+      # 절대로 이 경로를 변경하지 마세요!
+      - ./data:/app/data
+    ports:
+      - "127.0.0.1:5050:5050"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sqlite3,os,sys;db=os.getenv('DB_PATH','/app/data/logic_analysis.db');conn=sqlite3.connect(db,timeout=5);r=conn.execute('SELECT COUNT(*) FROM clients').fetchone();conn.close();print(f'OK: {r[0]} clients');sys.exit(0)"]
+      interval: 60s
+      timeout: 10s
+      start_period: 30s
+      retries: 3

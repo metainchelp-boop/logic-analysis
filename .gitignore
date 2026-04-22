@@ -4,6 +4,8 @@ __pycache__/
 .DS_Store
 *.db
 .env
+data/
+data/backups/
 
 # 쿠팡 관련 (비활성, 롤백됨)
 backend/coupang*.py

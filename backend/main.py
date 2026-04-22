@@ -72,6 +72,120 @@ from naver_crawler import (
 from scheduler import start_scheduler, stop_scheduler, reschedule_report
 from kakao_notify import is_configured as is_solapi_configured
 
+def _verify_db_integrity():
+    """앱 시작 시 DB 경로 및 데이터 무결성 검증.
+    볼륨 마운트 미스매치로 인한 데이터 손실을 조기에 감지한다."""
+    import sqlite3
+    db_path = os.getenv("DB_PATH", "logic_analysis.db")
+    db_dir = os.path.dirname(os.path.abspath(db_path))
+
+    logger.info(f"📂 DB 경로: {os.path.abspath(db_path)}")
+    logger.info(f"📂 DB 디렉토리: {db_dir}")
+
+    # 1) DB 디렉토리가 볼륨 마운트인지 확인 (/app/data 여야 함)
+    if not os.path.isdir(db_dir):
+        logger.error(f"❌ DB 디렉토리가 존재하지 않습니다: {db_dir}")
+        logger.error("   → Docker 볼륨 마운트를 확인하세요: -v /root/logic-analysis-deploy/data:/app/data")
+        return
+
+    # 2) DB 파일 존재 여부
+    if not os.path.exists(db_path):
+        logger.warning(f"⚠️ DB 파일이 없습니다 (신규 생성 예정): {db_path}")
+        return
+
+    # 3) DB 파일 크기 확인 (빈 DB 감지)
+    db_size = os.path.getsize(db_path)
+    logger.info(f"📊 DB 파일 크기: {db_size:,} bytes")
+    if db_size < 4096:
+        logger.warning(f"⚠️ DB 파일이 비정상적으로 작습니다 ({db_size} bytes). 데이터 손실 가능성!")
+
+    # 4) 핵심 테이블 데이터 수 확인
+    try:
+        conn = sqlite3.connect(db_path, timeout=10)
+        conn.row_factory = sqlite3.Row
+
+        tables_to_check = {
+            'clients': '업체(광고주)',
+            'users': '사용자',
+            'tracked_products': '추적 상품',
+            'client_analyses': '업체 분석 이력',
+        }
+
+        for table, label in tables_to_check.items():
+            try:
+                row = conn.execute(f"SELECT COUNT(*) as cnt FROM {table}").fetchone()
+                count = row['cnt'] if row else 0
+                if count == 0 and table == 'clients':
+                    logger.warning(f"⚠️ {label} 테이블이 비어있습니다! (이전 데이터 손실 가능성)")
+                else:
+                    logger.info(f"  ✅ {label}: {count}건")
+            except Exception:
+                logger.info(f"  ℹ️ {label} 테이블 미존재 (초기화 예정)")
+
+        conn.close()
+    except Exception as e:
+        logger.error(f"❌ DB 무결성 검증 실패: {e}")
+
+
+def _backup_db_on_startup():
+    """앱 시작 시 DB 자동 백업 (데이터가 있는 경우에만)"""
+    import sqlite3
+    import shutil
+    db_path = os.getenv("DB_PATH", "logic_analysis.db")
+
+    if not os.path.exists(db_path) or os.path.getsize(db_path) < 4096:
+        return
+
+    # clients 테이블에 데이터가 있을 때만 백업
+    try:
+        conn = sqlite3.connect(db_path, timeout=10)
+        row = conn.execute("SELECT COUNT(*) as cnt FROM clients").fetchone()
+        client_count = row[0] if row else 0
+        conn.close()
+
+        if client_count == 0:
+            logger.info("ℹ️ 업체 데이터 없음 — 시작 시 백업 건너뜀")
+            return
+    except Exception:
+        return
+
+    backup_dir = os.path.join(os.path.dirname(os.path.abspath(db_path)), "backups")
+    os.makedirs(backup_dir, exist_ok=True)
+
+    # 현재 시각 기반 백업 파일명
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = os.path.join(backup_dir, f"logic_analysis_backup_{ts}.db")
+
+    try:
+        # SQLite online backup API 사용 (WAL 안전)
+        src = sqlite3.connect(db_path)
+        dst = sqlite3.connect(backup_path)
+        src.backup(dst)
+        dst.close()
+        src.close()
+        logger.info(f"✅ DB 백업 완료: {backup_path} (업체 {client_count}건)")
+    except Exception as e:
+        # 백업 실패해도 fallback: shutil.copy2
+        try:
+            shutil.copy2(db_path, backup_path)
+            logger.info(f"✅ DB 백업 완료 (파일 복사): {backup_path}")
+        except Exception as e2:
+            logger.error(f"❌ DB 백업 실패: {e2}")
+
+    # 오래된 백업 정리 (최대 14개 = 약 2주분 보관)
+    try:
+        backups = sorted([
+            f for f in os.listdir(backup_dir)
+            if f.startswith("logic_analysis_backup_") and f.endswith(".db")
+        ])
+        while len(backups) > 14:
+            old = backups.pop(0)
+            os.remove(os.path.join(backup_dir, old))
+            logger.info(f"  🗑️ 오래된 백업 삭제: {old}")
+    except Exception:
+        pass
+
+
 @asynccontextmanager
 async def lifespan(app):
     # Startup
@@ -84,11 +198,19 @@ async def lifespan(app):
         logger.warning(f"⚠️ 필수 환경변수 미설정: {', '.join(missing)} — 순위 조회 기능이 동작하지 않습니다.")
     if not API_KEY:
         logger.warning("⚠️ API_KEY 미설정 — API 키 미들웨어 비활성화 (JWT 인증은 라우트 레벨에서 동작)")
+
+    # DB 무결성 검증 (테이블 초기화 전)
+    _verify_db_integrity()
+
     init_db()
     init_auth_db()
     init_clients_db()
     init_reports_db()
     init_client_dashboard_db()
+
+    # DB 무결성 검증 후 백업 (테이블 초기화 이후)
+    _backup_db_on_startup()
+
     start_scheduler()
     yield
     # Shutdown
