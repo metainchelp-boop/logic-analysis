@@ -48,6 +48,7 @@ window.App = function App() {
     const [htmlDetailResult, setHtmlDetailResult] = useState(null);
     const [searchedProductUrl, setSearchedProductUrl] = useState('');
     const [companyName, setCompanyName] = useState('');
+    const searchIdRef = React.useRef(0); // 비동기 요청 경합 방지용
 
     /* 업체 카드 클릭으로 시작된 분석 추적 (자동 저장용) */
     const [currentClientId, setCurrentClientId] = useState(null);
@@ -232,6 +233,7 @@ window.App = function App() {
     var _doSearch = function(keyword, productUrl, inputCompanyName, htmlInput) {
         if (inputCompanyName !== undefined) setCompanyName(inputCompanyName);
         var cleanedUrl = cleanProductUrl(productUrl);
+        var currentSearchId = ++searchIdRef.current; // 새 검색마다 ID 증가
         setSearchLoading(true);
         setSearchedKeyword(keyword);
         setSearchedProductUrl(cleanedUrl);
@@ -240,6 +242,7 @@ window.App = function App() {
         setAnalysisData(null);
         setShopProducts(null);
         setAdvertiserReport(null);
+        setAdvertiserLoading(false);
         setHtmlReviewData(null);
         setHtmlDetailResult(null);
 
@@ -247,10 +250,9 @@ window.App = function App() {
         if (htmlInput && htmlInput.length >= 100) {
             api.post('/seo/detail-page', { html: htmlInput, product_url: productUrl || '' })
                 .then(function(res) {
+                    if (searchIdRef.current !== currentSearchId) return; // 이미 다른 검색 시작됨
                     if (res && res.success && res.data) {
-                        // 전체 상세페이지 분석 결과 저장 (점수, 지표, 체크리스트, 제안)
                         setHtmlDetailResult(res.data);
-                        // 리뷰 데이터 추출 성공 시 state 업데이트
                         if (res.data.reviewData) {
                             setHtmlReviewData(res.data.reviewData);
                         }
@@ -260,6 +262,7 @@ window.App = function App() {
                     }
                 })
                 .catch(function(e) {
+                    if (searchIdRef.current !== currentSearchId) return;
                     console.warn('HTML 상세페이지 분석 실패:', e.message);
                     toast.error('상세페이지 분석 요청 실패 — ' + (e.message || '네트워크 오류'));
                 });
@@ -270,10 +273,14 @@ window.App = function App() {
             setAdvertiserLoading(true);
             api.post('/advertiser/analyze', { keyword: keyword, product_url: productUrl })
                 .then(function(res) {
+                    if (searchIdRef.current !== currentSearchId) return;
                     if (res && res.success) setAdvertiserReport(res.data);
                     setAdvertiserLoading(false);
                 })
-                .catch(function() { setAdvertiserLoading(false); });
+                .catch(function() {
+                    if (searchIdRef.current !== currentSearchId) return;
+                    setAdvertiserLoading(false);
+                });
         }
 
         // 병렬로 3개 API 호출
@@ -282,6 +289,8 @@ window.App = function App() {
             api.post('/keywords/related', { keyword: keyword }).catch(function() { return null; }),
             api.post('/products/search', { keyword: keyword, count: 80 }).catch(function() { return null; }),
         ]).then(function(results) {
+            if (searchIdRef.current !== currentSearchId) return; // 이미 다른 검색 시작됨
+
             var volRes = results[0];
             var relRes = results[1];
             var shopRes = results[2];
@@ -470,21 +479,42 @@ window.App = function App() {
                 compLevel: analysis.competitionIndex ? analysis.competitionIndex.compLabel : '-',
             };
 
-            // 7. 카테고리 분석
+            // 7. 카테고리 분석 (대>중>소 계층 경로)
             if (prods.length > 0) {
-                var catMap = {};
+                var fullpathMap = {};
+                var cat1Map = {};
+                var cat2Map = {};
+                var cat3Map = {};
                 prods.forEach(function(p) {
-                    var cat = p.category2 || p.category1 || '기타';
-                    catMap[cat] = (catMap[cat] || 0) + 1;
+                    var c1 = p.category1 || '';
+                    var c2 = p.category2 || '';
+                    var c3 = p.category3 || '';
+                    var parts = [c1, c2, c3].filter(function(x) { return x; });
+                    var fullPath = parts.length > 0 ? parts.join(' > ') : '기타';
+                    fullpathMap[fullPath] = (fullpathMap[fullPath] || 0) + 1;
+                    if (c1) cat1Map[c1] = (cat1Map[c1] || 0) + 1;
+                    if (c2) cat2Map[c2] = (cat2Map[c2] || 0) + 1;
+                    if (c3) cat3Map[c3] = (cat3Map[c3] || 0) + 1;
                 });
-                var categories = Object.keys(catMap).map(function(k) {
-                    return { name: k, count: catMap[k], ratio: Math.round(catMap[k] / prods.length * 100) };
+                var total = prods.length;
+                var categories = Object.keys(fullpathMap).map(function(k) {
+                    return { name: k, count: fullpathMap[k], ratio: Math.round(fullpathMap[k] / total * 100) };
                 }).sort(function(a, b) { return b.count - a.count; });
+                var makeLevelList = function(map) {
+                    return Object.keys(map).map(function(k) {
+                        return { name: k, count: map[k], ratio: Math.round(map[k] / total * 100) };
+                    }).sort(function(a, b) { return b.count - a.count; }).slice(0, 5);
+                };
                 var topCat = categories[0] || { name: '-', ratio: 0 };
                 analysis.categoryAnalysis = {
                     verdict: topCat.name + ' 카테고리에 ' + topCat.ratio + '% 등록',
                     mainCategory: topCat.name,
                     categories: categories.slice(0, 8),
+                    categoryLevels: {
+                        large: makeLevelList(cat1Map),
+                        medium: makeLevelList(cat2Map),
+                        small: makeLevelList(cat3Map),
+                    },
                 };
             }
 
@@ -812,6 +842,7 @@ window.App = function App() {
             setAnalysisData(Object.keys(analysis).length > 0 ? analysis : null);
             setSearchLoading(false);
         }).catch(function(e) {
+            if (searchIdRef.current !== currentSearchId) return;
             console.error('검색 오류:', e);
             toast.error('분석 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
             setSearchLoading(false);
