@@ -64,8 +64,10 @@ window.ReportSection = function ReportSection(props) {
                 });
             }
 
-            /* 클론에서 인터랙티브 요소 제거 + 반응형 클래스 부여 */
+            /* 클론에서 no-export / 인터랙티브 요소 제거 */
             captured.forEach(function(node) {
+                var noExport = node.querySelectorAll('.no-export');
+                noExport.forEach(function(el) { el.remove(); });
                 var btns = node.querySelectorAll('button, .btn');
                 btns.forEach(function(b) { b.remove(); });
                 var inputs = node.querySelectorAll('input, select, textarea');

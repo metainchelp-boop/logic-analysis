@@ -52,7 +52,7 @@ window.ProductNameSection = function ProductNameSection({ keyword, shopProducts 
                 <p className="section-subtitle">경쟁 상품명의 키워드 구성을 분석합니다</p>
 
                 {/* Textarea Input Card */}
-                <div style={{
+                <div className="no-export" style={{
                     background: '#fff',
                     borderRadius: 16,
                     padding: 24,
