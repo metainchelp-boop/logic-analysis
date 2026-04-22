@@ -33,7 +33,8 @@ window.ReportSection = function ReportSection(props) {
                     if (child.classList.contains('topbar')) return;
                     if (child.querySelector && child.querySelector('.anchor-nav')) return;
 
-                    /* 검색바 건너뛰기 (sticky top 스타일 또는 anchor-nav 포함) */
+                    /* 검색바 건너뛰기 */
+                    if (child.classList.contains('search-section')) return;
                     var style = child.getAttribute('style') || '';
                     if (style.indexOf('sticky') !== -1 && style.indexOf('top') !== -1 && child.querySelector && child.querySelector('.anchor-btn')) return;
 
