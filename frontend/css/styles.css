@@ -92,7 +92,7 @@ body {
     background: linear-gradient(135deg, #eef2ff, #dbeafe);
 }
 .section-title::after { display: none; }
-.section-subtitle { font-size: 12px; color: #64748b; margin-top: 2px; margin-bottom: 0; }
+.section-subtitle { display: none; }
 /* v5 그라데이션 라인 */
 .section-line {
     height: 2px;

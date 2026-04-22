@@ -29,7 +29,7 @@ window.CompetitorTableSection = function CompetitorTableSection(props) {
       )}
 
       <div className="card" style={{ padding: 0, overflow: 'hidden', borderRadius: 16 }}>
-        <div style={{ maxHeight: 1200, overflowY: 'auto' }}>
+        <div style={{ maxHeight: 580, overflowY: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: hasScore ? 900 : 800 }}>
             <thead>
               <tr style={{ background: 'linear-gradient(135deg, #4f46e5, #7c3aed)' }}>

@@ -58,6 +58,7 @@ window.RelatedKeywordsSection = function RelatedKeywordsSection({ data }) {
                     <EmptyState icon="💎" text={tab === 'golden' ? '황금 키워드가 없습니다 (검색량 100~5,000 + 경쟁 낮음 조건)' : '연관 키워드가 없습니다'} />
                 ) : (
                     <div className="card" style={{ padding: 0, overflow: 'hidden', borderRadius: 16 }}>
+                      <div style={{ maxHeight: 540, overflowY: 'auto' }}>
                         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                             <thead>
                                 <tr style={{ background: tab === 'golden' ? 'linear-gradient(135deg, #f59e0b, #d97706)' : 'linear-gradient(135deg, #4f46e5, #7c3aed)' }}>
@@ -112,6 +113,7 @@ window.RelatedKeywordsSection = function RelatedKeywordsSection({ data }) {
                                 })}
                             </tbody>
                         </table>
+                      </div>
                     </div>
                 )}
             </div>

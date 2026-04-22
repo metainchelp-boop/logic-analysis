@@ -523,7 +523,7 @@ window.App = function App() {
                 var allKws = (rd.golden_keywords || []).concat(rd.related_keywords || []);
                 analysis.keywordTags = {
                     topKeywords: allKws.slice(0, 15).map(function(k) {
-                        return { keyword: k.keyword, volume: fmt(k.totalVolume), comp: compLabel(k.compIdx), isGolden: k.isGolden };
+                        return { keyword: k.keyword, volume: k.totalVolume || 0, comp: compLabel(k.compIdx), isGolden: k.isGolden };
                     }),
                     totalFound: rd.total_found || allKws.length,
                 };

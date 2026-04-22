@@ -51,7 +51,7 @@ window.MarketRevenueSection = function MarketRevenueSection(props) {
         <span>🏆</span> 순위별 예상 월 매출
       </div>
       <div className="card" style={{ padding: 0, overflow: 'hidden', borderRadius: 16 }}>
-        <div style={{ maxHeight: 1200, overflowY: 'auto' }}>
+        <div style={{ maxHeight: 540, overflowY: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ background: 'linear-gradient(135deg, #4f46e5, #7c3aed)' }}>

@@ -37,7 +37,7 @@ window.KeywordTagSection = function KeywordTagSection(props) {
             }}>총 {fmt(totalFound)}개 발견</span>
           </div>
 
-          <div className="table-wrap">
+          <div className="table-wrap" style={{ maxHeight: 340, overflowY: 'auto' }}>
             <table>
               <thead>
                 <tr style={{ background: 'linear-gradient(135deg, #4f46e5, #7c3aed)' }}>
