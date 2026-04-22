@@ -1238,6 +1238,15 @@ window.App = function App() {
                 React.createElement(window.ReviewAnalysisSection, { data: analysisData.reviewAnalysis, htmlReviewData: htmlReviewData })
             ),
 
+            /* 13-B. 리뷰 텍스트 분석 (HTML에서 추출한 개별 리뷰) */
+            htmlReviewData && htmlReviewData.reviews && htmlReviewData.reviews.length > 0 && React.createElement(window.SectionErrorBoundary, { name: '리뷰 텍스트 분석' },
+                React.createElement(window.ReviewTextAnalysisSection, {
+                    data: htmlReviewData.reviewTextAnalysis,
+                    reviews: htmlReviewData.reviews,
+                    totalReviewCount: htmlReviewData.reviewCount
+                })
+            ),
+
             /* 14. 상품명 분석 */
             searchedProductUrl && React.createElement(window.SectionErrorBoundary, { name: '상품명 분석' },
                 React.createElement(ProductNameSection, { keyword: searchedKeyword, shopProducts: shopProducts })

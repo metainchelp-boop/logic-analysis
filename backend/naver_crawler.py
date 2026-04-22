@@ -1057,6 +1057,288 @@ def fetch_detail_page_html(product_url: str) -> Optional[str]:
     return None
 
 
+# ==================== 찜 수 API 조회 ====================
+
+def _fetch_wish_count_from_api(product_url: str) -> Optional[int]:
+    """
+    상품 URL에서 찜 수를 네이버 내부 API로 조회.
+    SmartStore 상품 페이지를 서버에서 fetch하여 __PRELOADED_STATE__ 또는
+    JSON 내 wishCount를 추출한다. 실패 시 None 반환.
+    비용: 없음 (일반 HTTP 요청)
+    """
+    if not product_url:
+        return None
+
+    try:
+        # 1) SmartStore URL에서 스토어명과 상품번호 추출
+        m = re.search(r'smartstore\.naver\.com/([^/]+)/products/(\d+)', product_url)
+        if not m:
+            # 네이버 쇼핑 URL에서 product ID 추출 시도
+            m2 = re.search(r'shopping\.naver\.com/.*?(\d{10,})', product_url)
+            if not m2:
+                return None
+            # 네이버 쇼핑 URL은 직접 조회 불가
+            return None
+
+        store_name = m.group(1)
+        product_no = m.group(2)
+
+        # 2) SmartStore 상품 페이지를 서버에서 fetch
+        url = f"https://smartstore.naver.com/{store_name}/products/{product_no}"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml',
+            'Accept-Language': 'ko-KR,ko;q=0.9',
+        }
+        resp = requests.get(url, headers=headers, timeout=10, allow_redirects=True)
+        resp.raise_for_status()
+        page_html = resp.text
+
+        # 3) __PRELOADED_STATE__ 에서 wishCount 검색
+        state_m = re.search(r'window\.__PRELOADED_STATE__\s*=\s*({.+?})\s*;?\s*</script>', page_html, re.DOTALL)
+        if state_m:
+            import json as _json
+            try:
+                state = _json.loads(state_m.group(1))
+                # 재귀 탐색
+                def _find(obj, depth=0):
+                    if depth > 6 or not isinstance(obj, dict):
+                        return None
+                    for k, v in obj.items():
+                        kl = k.lower()
+                        if kl in ('wishcount', 'zzimcount', 'keepcount', 'wishlistcount'):
+                            try:
+                                val = int(v)
+                                if val >= 0:
+                                    return val
+                            except (ValueError, TypeError):
+                                pass
+                        if isinstance(v, dict):
+                            r = _find(v, depth + 1)
+                            if r is not None:
+                                return r
+                    return None
+                wc = _find(state)
+                if wc is not None:
+                    logger.info(f"[찜수API] PRELOADED_STATE에서 찜수={wc} 추출 (store={store_name})")
+                    return wc
+            except Exception:
+                pass
+
+        # 4) raw HTML에서 JSON 키로 검색 (폴백)
+        for fm in re.finditer(r'"(?:wishCount|zzimCount|keepCount)"\s*:\s*(\d+)', page_html):
+            val = int(fm.group(1))
+            if val >= 0:
+                logger.info(f"[찜수API] raw JSON에서 찜수={val} 추출 (store={store_name})")
+                return val
+
+        logger.info(f"[찜수API] 찜수 추출 실패 (store={store_name}, product={product_no})")
+        return None
+
+    except Exception as e:
+        logger.warning(f"[찜수API] 요청 실패: {e}")
+        return None
+
+
+# ==================== 리뷰 텍스트 추출 & 분석 ====================
+
+_POSITIVE_KW = [
+    '맛있', '달콤', '신선', '좋아', '만족', '추천', '깔끔', '재구매', '또 사', '또사',
+    '감사', '훌륭', '최고', '완벽', '빠르', '맛나', '고소', '달달', '사랑', '행복',
+    '감동', '대박', '넉넉', '든든', '알찬', '탱글', '촉촉', '부드러', '예쁘', '좋은',
+    '잘 먹', '잘먹', '굿', '최상', '프리미엄', '고급', '두번째', '세번째',
+]
+_NEGATIVE_KW = [
+    '건조', '상한', '작은', '비싸', '불만', '실망', '별로', '느리', '부족', '딱딱',
+    '시큼', '못생', '파손', '상처', '곰팡이', '물러', '썩은', '찌그러', '깨진', '적은',
+    '양이', '냄새', '변색', '문제', '환불', '교환', '짜증', '후회', '아쉬', '아깝',
+]
+
+
+def _extract_reviews(soup, html: str) -> list:
+    """HTML에서 개별 구매자 리뷰 추출 (스마트스토어 상품 페이지)"""
+    reviews = []
+    seen_texts = set()  # 중복 방지
+
+    # ── 방법 1: BeautifulSoup — blind '평점' 스팬 기반 ──
+    for blind_span in soup.find_all('span', class_='blind'):
+        blind_text = blind_span.get_text(strip=True).replace(' ', '')
+        if '평점' not in blind_text:
+            continue
+
+        # 평점 추출: 부모의 직접 텍스트에서 숫자 추출
+        parent = blind_span.parent
+        if not parent:
+            continue
+        parent_text = parent.get_text(strip=True).replace(' ', '')
+        rating_m = re.search(r'평점(\d)', parent_text)
+        if not rating_m:
+            continue
+        rating = int(rating_m.group(1))
+        if rating < 1 or rating > 5:
+            continue
+
+        # 리뷰 아이템 컨테이너 찾기 (li > button 구조)
+        item = blind_span
+        for _ in range(15):
+            item = item.parent
+            if not item:
+                break
+            if item.name == 'li':
+                break
+        if not item or item.name != 'li':
+            continue
+
+        # 모든 하위 span에서 태그와 리뷰 텍스트 추출
+        tags = []
+        review_text = ''
+        for span in item.find_all('span'):
+            if 'blind' in (span.get('class') or []):
+                continue
+            # 자식 span이 3개 이상이면 래퍼 → 건너뜀
+            if len(span.find_all('span')) >= 3:
+                continue
+            text = span.get_text(strip=True).replace('\xa0', ' ')
+            if not text or text.isdigit() or len(text) < 2:
+                continue
+            text_clean = text.replace(' ', '')
+            if text_clean in ('평점', '이상품찜하기', '원가', '할인율', '판매가'):
+                continue
+            # "평점N" 패턴 필터 (예: "평점5", "평 점 5")
+            if re.match(r'^평\s*점\s*\d$', text):
+                continue
+            if 2 <= len(text) <= 12 and len(text) < 13:
+                if text not in tags:
+                    tags.append(text)
+            elif len(text) > 15 and len(text) > len(review_text):
+                review_text = text
+
+        if review_text and len(review_text) > 5:
+            text_key = review_text[:50]
+            if text_key not in seen_texts:
+                seen_texts.add(text_key)
+                # 감성 분류
+                pos = sum(1 for kw in _POSITIVE_KW if kw in review_text)
+                neg = sum(1 for kw in _NEGATIVE_KW if kw in review_text)
+                sentiment = 'negative' if neg > pos else ('positive' if pos > 0 else 'neutral')
+                reviews.append({
+                    'rating': rating,
+                    'tags': tags[:5],
+                    'text': review_text[:500],
+                    'sentiment': sentiment,
+                    'charCount': len(review_text),
+                })
+
+    # ── 방법 2: Regex 폴백 (BeautifulSoup 실패 시) ──
+    if not reviews:
+        page_text = soup.get_text(separator='|', strip=True) if soup else ''
+        for m in re.finditer(
+            r'>평\s*점\s*</span>\s*(\d)'
+            r'(.*?)'
+            r'</(?:button|li)>',
+            html, re.DOTALL
+        ):
+            rating = int(m.group(1))
+            block = m.group(2)
+            # 블록에서 태그 제거하여 텍스트 추출
+            block_text = re.sub(r'<[^>]+>', ' ', block)
+            block_text = re.sub(r'\s+', ' ', block_text).strip()
+            if len(block_text) < 10:
+                continue
+            # 짧은 토큰 = 태그, 긴 텍스트 = 리뷰
+            parts = [p.strip() for p in block_text.split('  ') if p.strip()]
+            tags = [p for p in parts if 2 <= len(p) <= 12][:5]
+            long_parts = [p for p in parts if len(p) > 15]
+            review_text = max(long_parts, key=len) if long_parts else block_text
+            if len(review_text) > 5:
+                text_key = review_text[:50]
+                if text_key not in seen_texts:
+                    seen_texts.add(text_key)
+                    pos = sum(1 for kw in _POSITIVE_KW if kw in review_text)
+                    neg = sum(1 for kw in _NEGATIVE_KW if kw in review_text)
+                    sentiment = 'negative' if neg > pos else ('positive' if pos > 0 else 'neutral')
+                    reviews.append({
+                        'rating': rating,
+                        'tags': tags,
+                        'text': review_text[:500],
+                        'sentiment': sentiment,
+                        'charCount': len(review_text),
+                    })
+
+    return reviews
+
+
+def _analyze_reviews(reviews: list) -> dict:
+    """추출된 리뷰 목록을 분석 (키워드, 감성, 태그 통계)"""
+    if not reviews:
+        return None
+
+    total = len(reviews)
+    avg_rating = round(sum(r['rating'] for r in reviews) / total, 1) if total else 0
+    avg_chars = round(sum(r['charCount'] for r in reviews) / total) if total else 0
+
+    # 감성 통계
+    pos_count = sum(1 for r in reviews if r['sentiment'] == 'positive')
+    neg_count = sum(1 for r in reviews if r['sentiment'] == 'negative')
+    neu_count = total - pos_count - neg_count
+    pos_ratio = round(pos_count / total * 100) if total else 0
+
+    # 키워드 빈도 분석
+    pos_kw_counts = {}
+    neg_kw_counts = {}
+    for r in reviews:
+        text = r['text']
+        for kw in _POSITIVE_KW:
+            if kw in text:
+                pos_kw_counts[kw] = pos_kw_counts.get(kw, 0) + 1
+        for kw in _NEGATIVE_KW:
+            if kw in text:
+                neg_kw_counts[kw] = neg_kw_counts.get(kw, 0) + 1
+
+    positive_keywords = sorted(pos_kw_counts.items(), key=lambda x: -x[1])[:10]
+    negative_keywords = sorted(neg_kw_counts.items(), key=lambda x: -x[1])[:10]
+
+    # 태그 빈도 분석
+    tag_counts = {}
+    for r in reviews:
+        for tag in r.get('tags', []):
+            tag_counts[tag] = tag_counts.get(tag, 0) + 1
+    tag_stats = sorted(tag_counts.items(), key=lambda x: -x[1])[:10]
+
+    # AI 인사이트 생성
+    insights = []
+    if positive_keywords:
+        top_pos = ', '.join(f'"{kw}"' for kw, _ in positive_keywords[:3])
+        insights.append(f'핵심 강점: {top_pos} 키워드가 자주 언급됩니다. 상세페이지에서 이 키워드를 더 강조하세요.')
+    if negative_keywords:
+        top_neg = ', '.join(f'"{kw}"' for kw, _ in negative_keywords[:3])
+        insights.append(f'개선 포인트: {top_neg} 관련 부정 언급이 있습니다. 상품 설명에 이에 대한 안내를 추가하세요.')
+    reorder_kws = ['재구매', '또 사', '또사', '두번째', '세번째']
+    reorder_count = sum(1 for r in reviews if any(kw in r['text'] for kw in reorder_kws))
+    if reorder_count > 0:
+        insights.append(f'재구매 의향: {reorder_count}건의 리뷰에서 재구매 언급 — 리뷰 이벤트로 이런 후기를 더 유도하세요.')
+    if avg_chars > 50:
+        insights.append(f'리뷰 품질: 평균 {avg_chars}자 — 상세 리뷰가 많아 신뢰도 높음. 포토리뷰 유도 시 전환율 상승 기대.')
+    elif avg_chars < 20:
+        insights.append(f'리뷰 품질: 평균 {avg_chars}자로 짧은 편 — 포토/텍스트 리뷰 이벤트로 상세 후기를 유도하세요.')
+
+    return {
+        'totalExtracted': total,
+        'avgRating': avg_rating,
+        'avgChars': avg_chars,
+        'sentiment': {
+            'positive': pos_count,
+            'negative': neg_count,
+            'neutral': neu_count,
+            'positiveRatio': pos_ratio,
+        },
+        'positiveKeywords': [{'keyword': kw, 'count': cnt} for kw, cnt in positive_keywords],
+        'negativeKeywords': [{'keyword': kw, 'count': cnt} for kw, cnt in negative_keywords],
+        'tagStats': [{'tag': tag, 'count': cnt} for tag, cnt in tag_stats],
+        'insights': insights,
+    }
+
+
 def analyze_detail_page(html: str, product_url: str = "") -> Dict:
     """
     상세페이지 HTML을 분석하여 품질 지표를 추출
@@ -1191,6 +1473,28 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
                 wc = product_info.get("wishCount") or product_info.get("zzimCount")
                 if wc is not None:
                     actual_wish_count = int(wc)
+            # wishCount가 product.A 최상위에 없으면 하위 객체 재귀 탐색
+            if actual_wish_count is None:
+                def _find_wish(obj, depth=0):
+                    if depth > 5 or not isinstance(obj, dict):
+                        return None
+                    for k, v in obj.items():
+                        kl = k.lower()
+                        if kl in ('wishcount', 'zzimcount', 'wish_count', 'zzim_count', 'wishlistcount', 'favoritecount'):
+                            try:
+                                val = int(v)
+                                if val > 0:
+                                    return val
+                            except (ValueError, TypeError):
+                                pass
+                        if isinstance(v, dict):
+                            r = _find_wish(v, depth + 1)
+                            if r:
+                                return r
+                    return None
+                wc_deep = _find_wish(state)
+                if wc_deep:
+                    actual_wish_count = wc_deep
             logger.info(f"[리뷰추출] 방법2 PRELOADED: 리뷰={actual_review_count}, 평점={actual_rating}, 찜={actual_wish_count}")
         except Exception:
             pass
@@ -1282,21 +1586,65 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
 
     if actual_wish_count is None:
         wish_candidates = []
-        # "찜" 단독이 아닌, "찜하기", "찜한 상품", "찜 수" 등 명확한 패턴만 매칭
+
+        # 방법 3-A: raw HTML에서 JSON 키로 직접 검색 (가장 신뢰도 높음)
+        # 페이지 내 어떤 script/JSON에든 "wishCount":30 또는 "zzimCount":30 형태가 있으면 추출
+        for m in re.finditer(r'"(?:wishCount|zzimCount|wish_count|zzim_count|wishListCount|favoriteCount)"\s*:\s*(\d+)', html, re.I):
+            try:
+                val = int(m.group(1))
+                if val > 0:
+                    wish_candidates.append(val)
+            except Exception:
+                pass
+
+        # 방법 3-B: raw HTML에서 "찜하기" blind/hidden 텍스트 근처 숫자 추출
+        # 스마트스토어 구조: <span class="blind">찜하기</span> ... <em>30</em>
+        for m in re.finditer(r'찜하기</(?:span|div|button|a)>(?:[^<]*<[^>]*>){0,8}?\s*(\d[\d,]*)\s*<', html):
+            try:
+                val = int(m.group(1).replace(",", ""))
+                if val > 0:
+                    wish_candidates.append(val)
+            except Exception:
+                pass
+
+        # 방법 3-C: 텍스트 기반 패턴 매칭 (기존 + 유연한 패턴 추가)
         for pat in [
             r'(?:찜하기|찜한\s*상품|찜\s*수)\s*(\d[\d,]*)',
-            r'(?:찜|zzim|wish)\s+(\d[\d,]+)',  # "찜" 뒤에 공백+숫자 (최소 2자리)
+            r'(?:찜|zzim|wish)\s+(\d[\d,]+)',
+            # "찜하기" 뒤 중간에 다른 텍스트가 있어도 30자 이내면 매칭
+            r'찜하기.{0,30}?(\d[\d,]+)',
+            # "관심상품" 패턴 (스마트스토어에서 찜 대신 사용하는 경우)
+            r'(?:관심상품|관심\s*상품)\s*(?:추가)?\s*(\d[\d,]*)',
         ]:
             for m in re.finditer(pat, page_text, re.I):
                 try:
                     val = int(m.group(1).replace(",", ""))
-                    if val > 0:  # 0은 무시
+                    if val > 0:
                         wish_candidates.append(val)
                 except Exception:
                     pass
+
+        # 방법 3-D: raw HTML에서 zzim/wish 관련 class 근처 숫자
+        for m in re.finditer(r'class="[^"]*(?:zzim|wish|bookmark|favorite)[^"]*"[^>]*>(?:[^<]*<[^>]*>){0,5}?\s*(\d[\d,]+)', html, re.I):
+            try:
+                val = int(m.group(1).replace(",", ""))
+                if val > 0:
+                    wish_candidates.append(val)
+            except Exception:
+                pass
+
+        logger.info(f"[리뷰추출] 방법3 찜 후보: {wish_candidates}")
+
         # 가장 큰 값 = 총 찜수 (0 제외)
         if wish_candidates:
             actual_wish_count = max(wish_candidates)
+
+    # ── 8-B. 찜 수 API 조회 (HTML에서 추출 실패 시) ──
+    if actual_wish_count is None and product_url:
+        api_wish = _fetch_wish_count_from_api(product_url)
+        if api_wish is not None:
+            actual_wish_count = api_wish
+            logger.info(f"[리뷰추출] 찜수 API 조회 성공: {actual_wish_count}")
 
     logger.info(f"[리뷰추출] 최종결과: 리뷰={actual_review_count}, 평점={actual_rating}, 찜={actual_wish_count}")
 
@@ -1382,14 +1730,21 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
     if not has_review_section:
         suggestions.append({"priority": "low", "area": "리뷰 섹션", "text": "상세페이지 내 구매 후기 섹션이 없습니다. 대표 리뷰를 상세페이지에 직접 삽입하면 소셜 프루프 효과로 전환율이 향상됩니다."})
 
+    # ── 리뷰 텍스트 추출 (개별 리뷰 본문 + 별점 + 태그) ──
+    extracted_reviews = _extract_reviews(soup, html)
+    review_text_analysis = _analyze_reviews(extracted_reviews) if extracted_reviews else None
+    logger.info(f"[리뷰추출] 개별 리뷰 {len(extracted_reviews)}건 추출")
+
     # reviewData: 실제 HTML에서 추출된 리뷰/평점/찜수 (없으면 None)
     review_data = None
-    if actual_review_count is not None or actual_rating is not None or actual_wish_count is not None:
+    if actual_review_count is not None or actual_rating is not None or actual_wish_count is not None or extracted_reviews:
         review_data = {
             "reviewCount": actual_review_count,
             "rating": actual_rating,
             "wishCount": actual_wish_count,
-            "source": "html"
+            "source": "html",
+            "reviews": extracted_reviews,
+            "reviewTextAnalysis": review_text_analysis,
         }
 
     return {

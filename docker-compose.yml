@@ -24,7 +24,7 @@ services:
         max-size: "10m"
         max-file: "3"
     healthcheck:
-      test: ["CMD", "python", "-c", "import sqlite3,os,sys;db=os.getenv('DB_PATH','/app/data/logic_analysis.db');conn=sqlite3.connect(db,timeout=5);r=conn.execute('SELECT COUNT(*) FROM clients').fetchone();conn.close();print(f'OK: {r[0]} clients');sys.exit(0)"]
+      test: ["CMD", "python", "-c", "import sqlite3,os,sys;db=os.getenv('DB_PATH','/app/data/logic_data.db');conn=sqlite3.connect(db,timeout=5);r=conn.execute('SELECT COUNT(*) FROM clients').fetchone();conn.close();print(f'OK: {r[0]} clients');sys.exit(0)"]
       interval: 60s
       timeout: 10s
       start_period: 30s
