@@ -23,9 +23,8 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
         setExpandedProduct(null);
     }, [searchedProductUrl, searchedKeyword]);
 
-    // viewer 전용: 검색 시 1회성 순위 조회 (DB 미저장)
+    // 검색 시 1회성 순위 조회 (DB 미저장)
     useEffect(function() {
-        if (canEdit !== false) return; // viewer만 해당
         if (!searchedKeyword || !searchedProductUrl) {
             setTempRankResult(null);
             return;
@@ -99,9 +98,8 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
         }
     };
 
-    // viewer 전용 1회성 순위 결과 블록 카드 렌더링
+    // 1회성 순위 결과 블록 카드 렌더링
     var renderTempRankCard = function() {
-        if (canEdit !== false) return null; // viewer만 해당
         if (!searchedProductUrl || !searchedKeyword) return null;
 
         // 로딩 중
@@ -137,7 +135,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                         (pInfo.store_name || '-') + (pInfo.price > 0 ? '  ·  ' + fmt(pInfo.price) + '원' : '')
                     )
                 ),
-                React.createElement('span', { style: { background: '#eff6ff', color: '#3b82f6', fontSize: 10, padding: '3px 8px', borderRadius: 6, flexShrink: 0, fontWeight: 500 } }, '1회성 조회')
+                React.createElement('span', { style: { background: '#eff6ff', color: '#3b82f6', fontSize: 10, padding: '3px 8px', borderRadius: 6, flexShrink: 0, fontWeight: 500 } }, '실시간 조회')
             ),
             // 핵심 지표 블록 카드 (4열 그리드 — 아래 요약 카드와 동일 레이아웃)
             React.createElement('div', { className: 'card-grid card-grid-4' },
