@@ -26,7 +26,17 @@ CACHE_MAX_SIZE = 200  # 최대 캐시 항목 수
 
 def _cache_key(keyword: str, category: str, related: list = None) -> str:
     """키워드+카테고리+연관키워드 조합으로 캐시 키 생성"""
-    rel = ",".join(sorted(related)) if related else ""
+    if related:
+        # related_keywords는 dict 리스트일 수 있음 ({"keyword": "...", ...})
+        keys = []
+        for r in related:
+            if isinstance(r, dict):
+                keys.append(r.get("keyword", str(r)))
+            else:
+                keys.append(str(r))
+        rel = ",".join(sorted(keys))
+    else:
+        rel = ""
     return f"{keyword}|{category}|{rel}"
 
 
