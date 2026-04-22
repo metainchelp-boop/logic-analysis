@@ -382,6 +382,7 @@ async def check_rank(req: RankCheckRequest, current_user: dict = Depends(get_cur
 class KeywordExposureRequest(BaseModel):
     product_url: str
     product_name: str = ""
+    keyword: str = ""
 
 @app.post("/api/rank/keyword-exposure")
 async def keyword_exposure(req: KeywordExposureRequest, current_user: dict = Depends(get_current_user)):
@@ -391,7 +392,7 @@ async def keyword_exposure(req: KeywordExposureRequest, current_user: dict = Dep
         # 상품명 확보
         product_name = req.product_name
         if not product_name:
-            info = get_product_info(req.product_url)
+            info = get_product_info(req.product_url, keyword=req.keyword)
             product_name = info.get("product_name", "")
         if not product_name:
             return {"success": False, "detail": "상품명을 가져올 수 없습니다."}

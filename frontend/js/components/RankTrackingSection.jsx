@@ -58,7 +58,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
 
     // 키워드별 노출 분석 (상품명 기반)
     useEffect(function() {
-        if (!searchedProductUrl) {
+        if (!searchedProductUrl || !searchedKeyword) {
             setExposureResult(null);
             return;
         }
@@ -68,17 +68,20 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
 
         setExposureLoading(true);
         setExposureResult(null);
-        api.post('/rank/keyword-exposure', { product_url: searchedProductUrl })
+        api.post('/rank/keyword-exposure', { product_url: searchedProductUrl, keyword: searchedKeyword })
             .then(function(res) {
                 if (res && res.success && res.data) {
                     setExposureResult(res.data);
+                } else if (res && !res.success) {
+                    toast.warn('키워드 노출 분석: ' + (res.detail || '상품명을 가져올 수 없습니다'));
                 }
                 setExposureLoading(false);
             })
             .catch(function() {
+                toast.error('키워드 노출 분석 요청 실패');
                 setExposureLoading(false);
             });
-    }, [searchedProductUrl]);
+    }, [searchedProductUrl, searchedKeyword]);
 
     // 자동 등록 + 자동 순위체크 제거 — 수동 버튼으로만 실행 (서버 부하 방지)
     // 기존 DB 데이터(스케줄러 수집분)만 표시, 필요시 사용자가 직접 새로고침
@@ -168,28 +171,11 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                 ),
                 React.createElement('span', { style: { background: '#eff6ff', color: '#3b82f6', fontSize: 10, padding: '3px 8px', borderRadius: 6, flexShrink: 0, fontWeight: 500 } }, '실시간 조회')
             ),
-            // 핵심 지표 블록 카드 (4열 그리드 — 아래 요약 카드와 동일 레이아웃)
-            React.createElement('div', { className: 'card-grid card-grid-4' },
+            // 핵심 지표 블록 카드 (3열 그리드)
+            React.createElement('div', { className: 'card-grid card-grid-3' },
                 React.createElement(StatCard, { icon: '🎯', iconColor: 'blue', label: '검색 키워드', value: d.keyword, sub: '분석 대상 키워드' }),
                 React.createElement(StatCard, { icon: '📊', iconColor: rank && rank > 0 ? (rank <= 10 ? 'green' : rank <= 40 ? 'amber' : 'red') : 'gray', label: '현재 순위', value: rank && rank > 0 ? rank + '위' : '미노출', sub: rankLabel }),
-                React.createElement(StatCard, { icon: '📄', iconColor: 'purple', label: '노출 페이지', value: pageNum > 0 ? pageNum + 'P' : '-', sub: pageNum > 0 ? (pageNum === 1 ? '1페이지 노출' : pageNum + '페이지 노출') : '검색 결과 없음' }),
-                React.createElement(StatCard, { icon: '🏆', iconColor: 'amber', label: '상위 경쟁사', value: d.top_competitors ? d.top_competitors.length + '개' : '0개', sub: '상위 노출 상품' })
-            ),
-            // 경쟁사 블록 카드 (상위 5개를 개별 카드로)
-            d.top_competitors && d.top_competitors.length > 0 && React.createElement('div', null,
-                React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: '#475569', marginBottom: 8 } }, '상위 경쟁 상품'),
-                React.createElement('div', { className: 'card-grid', style: { gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))' } },
-                    d.top_competitors.slice(0, 5).map(function(c, i) {
-                        return React.createElement('div', { className: 'card', key: i, style: { padding: '12px 14px' } },
-                            React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 } },
-                                React.createElement('span', { style: { fontSize: 11, fontWeight: 700, color: '#fff', background: '#4f46e5', borderRadius: 4, padding: '1px 6px', lineHeight: '1.6' } }, (i + 1) + '위'),
-                                React.createElement('span', { style: { fontSize: 11, color: '#64748b' } }, c.store_name || c.mall_name || '-')
-                            ),
-                            React.createElement('div', { style: { fontSize: 12, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: 4 } }, c.product_name || c.title || '-'),
-                            c.price && React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: '#0f172a' } }, fmt(c.price) + '원')
-                        );
-                    })
-                )
+                React.createElement(StatCard, { icon: '📄', iconColor: 'purple', label: '노출 페이지', value: pageNum > 0 ? pageNum + 'P' : '-', sub: pageNum > 0 ? (pageNum === 1 ? '1페이지 노출' : pageNum + '페이지 노출') : '검색 결과 없음' })
             ),
             // 안내 문구
             React.createElement('div', { style: { padding: '8px 12px', background: '#f8fafc', borderRadius: 6, fontSize: 11, color: '#94a3b8', lineHeight: '1.5' } },
