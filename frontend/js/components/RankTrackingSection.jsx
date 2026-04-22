@@ -171,11 +171,23 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                 ),
                 React.createElement('span', { style: { background: '#eff6ff', color: '#3b82f6', fontSize: 10, padding: '3px 8px', borderRadius: 6, flexShrink: 0, fontWeight: 500 } }, '실시간 조회')
             ),
-            // 핵심 지표 블록 카드 (3열 그리드)
+            // 핵심 지표 블록 카드 (3열 그리드 — 아이콘 없음)
             React.createElement('div', { className: 'card-grid card-grid-3' },
-                React.createElement(StatCard, { icon: '🎯', iconColor: 'blue', label: '검색 키워드', value: d.keyword, sub: '분석 대상 키워드' }),
-                React.createElement(StatCard, { icon: '📊', iconColor: rank && rank > 0 ? (rank <= 10 ? 'green' : rank <= 40 ? 'amber' : 'red') : 'gray', label: '현재 순위', value: rank && rank > 0 ? rank + '위' : '미노출', sub: rankLabel }),
-                React.createElement(StatCard, { icon: '📄', iconColor: 'purple', label: '노출 페이지', value: pageNum > 0 ? pageNum + 'P' : '-', sub: pageNum > 0 ? (pageNum === 1 ? '1페이지 노출' : pageNum + '페이지 노출') : '검색 결과 없음' })
+                React.createElement('div', { className: 'card', style: { padding: '16px 20px' } },
+                    React.createElement('div', { style: { fontSize: 11, color: '#64748b', marginBottom: 6 } }, '검색 키워드'),
+                    React.createElement('div', { style: { fontSize: 20, fontWeight: 800, color: '#0f172a' } }, d.keyword),
+                    React.createElement('div', { style: { fontSize: 11, color: '#94a3b8', marginTop: 4 } }, '분석 대상 키워드')
+                ),
+                React.createElement('div', { className: 'card', style: { padding: '16px 20px' } },
+                    React.createElement('div', { style: { fontSize: 11, color: '#64748b', marginBottom: 6 } }, '현재 순위'),
+                    React.createElement('div', { style: { fontSize: 20, fontWeight: 800, color: rankColor } }, rank && rank > 0 ? rank + '위' : '미노출'),
+                    React.createElement('div', { style: { fontSize: 11, color: '#94a3b8', marginTop: 4 } }, rankLabel)
+                ),
+                React.createElement('div', { className: 'card', style: { padding: '16px 20px' } },
+                    React.createElement('div', { style: { fontSize: 11, color: '#64748b', marginBottom: 6 } }, '노출 페이지'),
+                    React.createElement('div', { style: { fontSize: 20, fontWeight: 800, color: '#0f172a' } }, pageNum > 0 ? pageNum + 'P' : '-'),
+                    React.createElement('div', { style: { fontSize: 11, color: '#94a3b8', marginTop: 4 } }, pageNum > 0 ? (pageNum === 1 ? '1페이지 노출' : pageNum + '페이지 노출') : '검색 결과 없음')
+                )
             ),
             // 안내 문구
             React.createElement('div', { style: { padding: '8px 12px', background: '#f8fafc', borderRadius: 6, fontSize: 11, color: '#94a3b8', lineHeight: '1.5' } },
