@@ -864,7 +864,7 @@ window.App = function App() {
                 }
                 var relKws = [];
                 if (analysis.keywordTags && analysis.keywordTags.topKeywords) {
-                    relKws = analysis.keywordTags.topKeywords.map(function(k) { return { keyword: k.keyword, totalVolume: parseInt((k.volume || '0').replace(/,/g, '')) }; });
+                    relKws = analysis.keywordTags.topKeywords.map(function(k) { return { keyword: k.keyword, totalVolume: parseInt(String(k.volume || '0').replace(/,/g, '')) }; });
                 }
                 api.post('/datalab/analyze', { keyword: keyword, category1: cat1, related_keywords: relKws })
                     .then(function(dlRes) {
