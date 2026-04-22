@@ -4,6 +4,8 @@ datalab.py — 네이버 데이터랩 쇼핑인사이트 API 연동
 """
 import os
 import logging
+import time
+import threading
 import requests
 from datetime import datetime, timedelta
 from collections import defaultdict
@@ -14,6 +16,44 @@ NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID", "")
 NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET", "")
 
 DATALAB_BASE = "https://openapi.naver.com/v1/datalab/shopping"
+
+# ==================== 메모리 캐시 (TTL 1시간) ====================
+_cache = {}           # { cache_key: { "data": dict, "ts": float } }
+_cache_lock = threading.Lock()
+CACHE_TTL = 3600      # 1시간 (초)
+CACHE_MAX_SIZE = 200  # 최대 캐시 항목 수
+
+
+def _cache_key(keyword: str, category: str, related: list = None) -> str:
+    """키워드+카테고리+연관키워드 조합으로 캐시 키 생성"""
+    rel = ",".join(sorted(related)) if related else ""
+    return f"{keyword}|{category}|{rel}"
+
+
+def _cache_get(key: str):
+    """캐시에서 유효한 데이터 조회. 만료 시 None 반환"""
+    with _cache_lock:
+        entry = _cache.get(key)
+        if entry and (time.time() - entry["ts"]) < CACHE_TTL:
+            return entry["data"]
+        if entry:
+            del _cache[key]  # 만료된 항목 제거
+    return None
+
+
+def _cache_set(key: str, data: dict):
+    """캐시에 데이터 저장. 최대 크기 초과 시 가장 오래된 항목 제거"""
+    with _cache_lock:
+        # 크기 제한: 초과 시 만료된 항목부터 정리, 그래도 초과하면 가장 오래된 것 제거
+        if len(_cache) >= CACHE_MAX_SIZE:
+            now = time.time()
+            expired = [k for k, v in _cache.items() if (now - v["ts"]) >= CACHE_TTL]
+            for k in expired:
+                del _cache[k]
+            if len(_cache) >= CACHE_MAX_SIZE:
+                oldest_key = min(_cache, key=lambda k: _cache[k]["ts"])
+                del _cache[oldest_key]
+        _cache[key] = {"data": data, "ts": time.time()}
 
 # ==================== 네이버 쇼핑 카테고리 코드 매핑 ====================
 CATEGORY_MAP = {
@@ -514,13 +554,20 @@ def get_category_popular_keywords(keyword: str, category_code: str, related_keyw
 
 # ==================== 통합 분석 함수 ====================
 def analyze_datalab(keyword: str, category1: str = "", related_keywords: list = None) -> dict:
-    """모든 데이터랩 분석을 한 번에 실행"""
+    """모든 데이터랩 분석을 한 번에 실행 (1시간 TTL 메모리 캐시 적용)"""
     if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
         logger.warning("데이터랩: 네이버 API 키 미설정")
         return {}
 
+    # 캐시 확인
+    c_key = _cache_key(keyword, category1, related_keywords)
+    cached = _cache_get(c_key)
+    if cached:
+        logger.info(f"데이터랩 캐시 히트: keyword={keyword}")
+        return cached
+
     cat_code = _find_category_code(category1)
-    logger.info(f"데이터랩 분석 시작: keyword={keyword}, category={category1}→{cat_code}")
+    logger.info(f"데이터랩 분석 시작 (API 호출): keyword={keyword}, category={category1}→{cat_code}")
 
     result = {}
 
@@ -583,4 +630,10 @@ def analyze_datalab(keyword: str, category1: str = "", related_keywords: list = 
             logger.error(f"데이터랩 카테고리 키워드 오류: {e}")
 
     logger.info(f"데이터랩 분석 완료: {list(result.keys())}")
+
+    # 결과가 있으면 캐시에 저장
+    if result:
+        _cache_set(c_key, result)
+        logger.info(f"데이터랩 캐시 저장: keyword={keyword} (캐시 크기: {len(_cache)})")
+
     return result

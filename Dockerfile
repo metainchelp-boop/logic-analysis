@@ -36,5 +36,5 @@ sys.exit(0) if r[0]>=0 else sys.exit(1)" || exit 1
 EXPOSE 5050
 
 # gunicorn (멀티 워커)
-CMD ["gunicorn", "main:app", "-w", "3", "-k", "uvicorn.workers.UvicornWorker", \
+CMD ["gunicorn", "main:app", "-w", "6", "-k", "uvicorn.workers.UvicornWorker", \
      "--bind", "0.0.0.0:5050", "--timeout", "120", "--graceful-timeout", "30"]
