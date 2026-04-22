@@ -110,6 +110,85 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
         }}>
           ⚠️ 순위별 클릭률(CTR)을 기반으로 추정한 값이며, 실제 판매량은 상품 경쟁력, 리뷰, 가격 등에 따라 달라질 수 있습니다.
         </div>
+
+        {/* 리뷰 기반 매출 추정 */}
+        {props.reviewCount != null && props.reviewCount > 0 && props.productPrice > 0 && (function() {
+          var rc = props.reviewCount;
+          var price = props.productPrice;
+          var reviewRates = [
+            { label: '보수적 (5%)', rate: 0.05 },
+            { label: '평균 (3%)', rate: 0.03 },
+            { label: '적극적 (2%)', rate: 0.02 },
+          ];
+          var periods = [
+            { label: '3개월', months: 3 },
+            { label: '6개월', months: 6 },
+            { label: '12개월', months: 12 },
+          ];
+
+          return (
+            <div style={{ marginTop: 32 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                <span style={{ fontSize: 18 }}>📝</span>
+                <span style={{ fontSize: 16, fontWeight: 700, color: '#0f172a' }}>리뷰 기반 매출 추정</span>
+                <span style={{ padding: '3px 10px', borderRadius: 999, fontSize: 10, fontWeight: 700, background: '#ecfdf5', color: '#10b981' }}>NEW</span>
+              </div>
+              <p style={{ fontSize: 12, color: '#64748b', marginBottom: 16, lineHeight: 1.6 }}>
+                실제 리뷰 수({fmt(rc)}개)를 기반으로 판매량을 역산합니다. 리뷰 작성률에 따라 추정치가 달라집니다.
+              </p>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
+                {reviewRates.map(function(rr) {
+                  var totalSales = Math.round(rc / rr.rate);
+                  return (
+                    <div key={rr.label} style={{ ...v5Card, overflow: 'hidden' }}>
+                      <div style={{ padding: '14px 20px', background: rr.rate === 0.03 ? 'linear-gradient(135deg, #10b981, #059669)' : '#f8fafc', borderBottom: rr.rate === 0.03 ? 'none' : '1px solid #e2e8f0' }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: rr.rate === 0.03 ? '#fff' : '#475569' }}>
+                          {rr.label}
+                          {rr.rate === 0.03 && <span style={{ marginLeft: 8, padding: '2px 8px', borderRadius: 999, fontSize: 10, background: 'rgba(255,255,255,0.25)', color: '#fff' }}>추천</span>}
+                        </div>
+                        <div style={{ fontSize: 11, color: rr.rate === 0.03 ? 'rgba(255,255,255,0.8)' : '#94a3b8', marginTop: 2 }}>
+                          구매 {Math.round(1/rr.rate)}명 중 1명이 리뷰 작성
+                        </div>
+                      </div>
+                      <div style={{ padding: '16px 20px' }}>
+                        <div style={{ ...v5MetricRow }}>
+                          <span style={v5MetricLabel}>추정 총 판매량</span>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: '#10b981' }}>{fmt(totalSales)}건</span>
+                        </div>
+                        <div style={{ ...v5MetricRow }}>
+                          <span style={v5MetricLabel}>추정 총 매출</span>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: '#10b981' }}>{fmt(totalSales * price)}원</span>
+                        </div>
+                        {periods.map(function(p, pidx) {
+                          var monthlySales = Math.round(totalSales / p.months);
+                          var monthlyRev = monthlySales * price;
+                          return (
+                            <div key={p.months} style={pidx === periods.length - 1 ? v5MetricRowLast : v5MetricRow}>
+                              <span style={v5MetricLabel}>{p.label} 기준 월 매출</span>
+                              <span style={{ fontSize: 13, fontWeight: 700, color: '#0f172a' }}>{fmt(monthlyRev)}원</span>
+                            </div>
+                          );
+                        })}
+                        <div style={v5TotalRow}>
+                          <span style={v5TotalLabel}>월 평균 판매 (6개월)</span>
+                          <span style={{ fontSize: 15, fontWeight: 800, color: '#10b981' }}>{fmt(Math.round(totalSales / 6))}건</span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div style={{
+                marginTop: 16, padding: '12px 16px', background: '#ecfdf5', borderRadius: 12,
+                border: '1px solid #a7f3d0', fontSize: 12, color: '#065f46', lineHeight: 1.7, textAlign: 'center'
+              }}>
+                📊 리뷰 기반 추정은 실제 구매 데이터(리뷰)에서 역산하므로 CTR 기반보다 현실에 가깝습니다. 단, 상품 판매 기간에 따라 월 매출은 달라질 수 있습니다.
+              </div>
+            </div>
+          );
+        })()}
       </div>
     </div>
   );

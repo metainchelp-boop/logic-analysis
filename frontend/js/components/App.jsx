@@ -1221,7 +1221,7 @@ window.App = function App() {
             /* 4. 판매량 추정 */
             analysisData && analysisData.salesEstimation && React.createElement(window.SectionErrorBoundary, { name: '판매량 추정' },
                 React.createElement('div', { id: 'sec-sales' },
-                    React.createElement(SalesEstimationSection, { data: analysisData.salesEstimation })
+                    React.createElement(SalesEstimationSection, { data: analysisData.salesEstimation, reviewCount: htmlReviewData ? htmlReviewData.reviewCount : null, productPrice: analysisData.marketRevenue ? parseInt((analysisData.marketRevenue.avgPrice || '0').replace(/[^0-9]/g, '')) : 0 })
                 )
             ),
 
