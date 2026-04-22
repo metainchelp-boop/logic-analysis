@@ -117,10 +117,7 @@ window.ReportSection = function ReportSection(props) {
                 + '.report-header p { font-size: 14px; opacity: 0.85; }\n'
                 + '.report-footer { text-align: center; padding: 30px; color: #94a3b8; font-size: 12px; border-top: 1px solid #e2e8f0; margin-top: 40px; }\n'
                 + cssText
-                + '\n/* 테이블 가로 스크롤 방지 */\n'
-                + 'table { table-layout: fixed; word-break: break-word; }\n'
-                + 'div[style*="overflow"] { overflow: visible !important; }\n'
-                + '@media print { .report-header { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }\n'
+                + '\n@media print { .report-header { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }\n'
                 + '</style>\n</head>\n<body>\n'
                 + '<div class="report-header">\n'
                 + '  <h1>' + headerText + '</h1>\n'
