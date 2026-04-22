@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1200">
+<title>데이터랩 기능 시안 TOP 10</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, 'Pretendard', sans-serif; background: #f1f5f9; padding: 40px 20px; color: #0f172a; }
+h1 { text-align: center; margin-bottom: 12px; font-size: 24px; }
+h1 sub { font-size: 13px; color: #64748b; font-weight: 400; display: block; margin-top: 6px; }
+.mockup { background: #fff; border-radius: 20px; padding: 32px; margin: 32px auto; box-shadow: 0 1px 3px rgba(0,0,0,0.06); max-width: 960px; }
+.mockup-num { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; background: linear-gradient(135deg, #4f46e5, #7c3aed); color: #fff; font-size: 13px; font-weight: 800; margin-right: 8px; }
+.mockup-title { font-size: 17px; font-weight: 700; display: flex; align-items: center; margin-bottom: 4px; }
+.mockup-desc { font-size: 12px; color: #64748b; margin-bottom: 20px; margin-left: 36px; }
+.section-line { height: 3px; background: linear-gradient(90deg, #4f46e5, #7c3aed, #a78bfa); border-radius: 2px; margin-bottom: 20px; }
+
+/* 공통 카드 */
+.card { background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
+.card-grid { display: grid; gap: 12px; }
+.card-grid-3 { grid-template-columns: repeat(3, 1fr); }
+.card-grid-2 { grid-template-columns: repeat(2, 1fr); }
+
+/* 차트 영역 */
+.chart-placeholder { background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 12px; padding: 20px; position: relative; overflow: hidden; }
+
+/* 바 */
+.bar-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; }
+.bar-label { width: 80px; font-size: 12px; font-weight: 600; color: #475569; text-align: right; flex-shrink: 0; }
+.bar-wrap { flex: 1; height: 28px; background: #f1f5f9; border-radius: 8px; overflow: hidden; position: relative; }
+.bar-fill { height: 100%; border-radius: 8px; display: flex; align-items: center; justify-content: flex-end; padding-right: 10px; font-size: 11px; font-weight: 700; color: #fff; }
+.bar-val { width: 50px; font-size: 12px; font-weight: 700; color: #0f172a; text-align: right; flex-shrink: 0; }
+
+/* 트렌드 라인 차트 (CSS로 시뮬레이션) */
+.trend-chart { display: flex; align-items: flex-end; gap: 4px; height: 140px; padding: 0 8px; }
+.trend-bar { flex: 1; border-radius: 6px 6px 0 0; transition: height 0.3s; position: relative; }
+.trend-bar .label { position: absolute; bottom: -20px; left: 50%; transform: translateX(-50%); font-size: 9px; color: #94a3b8; white-space: nowrap; }
+.trend-bar .val { position: absolute; top: -18px; left: 50%; transform: translateX(-50%); font-size: 9px; font-weight: 700; color: #4f46e5; white-space: nowrap; }
+
+/* 도넛 */
+.donut-wrap { width: 120px; height: 120px; border-radius: 50%; position: relative; margin: 0 auto; }
+.donut-center { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); text-align: center; }
+
+/* 태그 */
+.tag { display: inline-flex; align-items: center; gap: 4px; padding: 6px 14px; border-radius: 8px; font-size: 12px; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<h1>📊 데이터랩 쇼핑인사이트 — 기능 시안 TOP 10
+<sub>각 기능이 로직 분석 프로그램에 어떻게 보이는지 미리보기</sub>
+</h1>
+
+<!-- ===== 1. 키워드 검색량 트렌드 ===== -->
+<div class="mockup">
+  <div class="mockup-title"><span class="mockup-num">1</span> 키워드 검색량 트렌드 (12개월)</div>
+  <div class="mockup-desc">분석 키워드의 최근 1년 월별 검색량 추이 — 성수기/비수기 한눈에 파악</div>
+  <div class="section-line"></div>
+
+  <div class="card" style="padding: 24px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+      <div style="font-size: 15px; font-weight: 700;">📈 "멜론" 검색량 추이</div>
+      <div style="display: flex; gap: 8px;">
+        <span class="tag" style="background: #eff6ff; color: #3b82f6;">최근 12개월</span>
+        <span class="tag" style="background: #ecfdf5; color: #10b981;">성수기: 6~8월</span>
+      </div>
+    </div>
+    <div class="trend-chart" style="margin-bottom: 28px;">
+      <div class="trend-bar" style="height: 25%; background: linear-gradient(180deg, #a5b4fc, #c7d2fe);"><span class="label">4월</span><span class="val">2.1만</span></div>
+      <div class="trend-bar" style="height: 35%; background: linear-gradient(180deg, #a5b4fc, #c7d2fe);"><span class="label">5월</span><span class="val">3.0만</span></div>
+      <div class="trend-bar" style="height: 85%; background: linear-gradient(180deg, #4f46e5, #7c3aed);"><span class="label">6월</span><span class="val">7.2만</span></div>
+      <div class="trend-bar" style="height: 100%; background: linear-gradient(180deg, #4f46e5, #7c3aed);"><span class="label">7월</span><span class="val">8.5만</span></div>
+      <div class="trend-bar" style="height: 90%; background: linear-gradient(180deg, #4f46e5, #7c3aed);"><span class="label">8월</span><span class="val">7.6만</span></div>
+      <div class="trend-bar" style="height: 45%; background: linear-gradient(180deg, #a5b4fc, #c7d2fe);"><span class="label">9월</span><span class="val">3.8만</span></div>
+      <div class="trend-bar" style="height: 20%; background: linear-gradient(180deg, #c7d2fe, #e0e7ff);"><span class="label">10월</span><span class="val">1.7만</span></div>
+      <div class="trend-bar" style="height: 12%; background: linear-gradient(180deg, #e0e7ff, #eef2ff);"><span class="label">11월</span><span class="val">1.0만</span></div>
+      <div class="trend-bar" style="height: 10%; background: linear-gradient(180deg, #e0e7ff, #eef2ff);"><span class="label">12월</span><span class="val">0.8만</span></div>
+      <div class="trend-bar" style="height: 8%; background: linear-gradient(180deg, #e0e7ff, #eef2ff);"><span class="label">1월</span><span class="val">0.7만</span></div>
+      <div class="trend-bar" style="height: 12%; background: linear-gradient(180deg, #e0e7ff, #eef2ff);"><span class="label">2월</span><span class="val">1.0만</span></div>
+      <div class="trend-bar" style="height: 18%; background: linear-gradient(180deg, #c7d2fe, #e0e7ff);"><span class="label">3월</span><span class="val">1.5만</span></div>
+    </div>
+    <div class="card-grid card-grid-3" style="margin-top: 8px;">
+      <div style="text-align: center; padding: 12px; background: #f8fafc; border-radius: 10px;">
+        <div style="font-size: 18px; font-weight: 800; color: #4f46e5;">8.5만</div>
+        <div style="font-size: 11px; color: #64748b;">최고 검색량 (7월)</div>
+      </div>
+      <div style="text-align: center; padding: 12px; background: #f8fafc; border-radius: 10px;">
+        <div style="font-size: 18px; font-weight: 800; color: #ef4444;">0.7만</div>
+        <div style="font-size: 11px; color: #64748b;">최저 검색량 (1월)</div>
+      </div>
+      <div style="text-align: center; padding: 12px; background: #f8fafc; border-radius: 10px;">
+        <div style="font-size: 18px; font-weight: 800; color: #10b981;">3.2만</div>
+        <div style="font-size: 11px; color: #64748b;">월 평균 검색량</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 2. 시즌별 수요 예측 ===== -->
+<div class="mockup">
+  <div class="mockup-title"><span class="mockup-num">2</span> 시즌별 수요 예측</div>
+  <div class="mockup-desc">검색 트렌드에서 성수기/비수기를 자동 분석하여 최적 진입 시점 안내</div>
+  <div class="section-line"></div>
+
+  <div class="card" style="padding: 24px;">
+    <div style="font-size: 15px; font-weight: 700; margin-bottom: 16px;">🗓️ 시즌 분석 결과</div>
+    <div class="card-grid card-grid-3" style="margin-bottom: 16px;">
+      <div style="background: linear-gradient(135deg, #fef3c7, #fde68a); border-radius: 14px; padding: 20px; text-align: center;">
+        <div style="font-size: 12px; font-weight: 700; color: #92400e; margin-bottom: 6px;">☀️ 성수기</div>
+        <div style="font-size: 22px; font-weight: 800; color: #d97706;">6~8월</div>
+        <div style="font-size: 11px; color: #92400e; margin-top: 4px;">평균 대비 +142%</div>
+      </div>
+      <div style="background: linear-gradient(135deg, #e0f2fe, #bae6fd); border-radius: 14px; padding: 20px; text-align: center;">
+        <div style="font-size: 12px; font-weight: 700; color: #0c4a6e; margin-bottom: 6px;">🌤️ 보통기</div>
+        <div style="font-size: 22px; font-weight: 800; color: #0284c7;">3~5월, 9월</div>
+        <div style="font-size: 11px; color: #0c4a6e; margin-top: 4px;">평균 수준</div>
+      </div>
+      <div style="background: linear-gradient(135deg, #f1f5f9, #e2e8f0); border-radius: 14px; padding: 20px; text-align: center;">
+        <div style="font-size: 12px; font-weight: 700; color: #475569; margin-bottom: 6px;">❄️ 비수기</div>
+        <div style="font-size: 22px; font-weight: 800; color: #64748b;">10~2월</div>
+        <div style="font-size: 11px; color: #475569; margin-top: 4px;">평균 대비 -68%</div>
+      </div>
+    </div>
+    <div style="background: #fffbeb; border: 1px solid #fde68a; border-radius: 10px; padding: 14px 18px; font-size: 13px; color: #92400e; line-height: 1.7;">
+      💡 <strong>추천:</strong> 5월 중 상품 등록 및 리뷰 확보 → 6월 성수기 진입 시 최대 효과. 현재(4월)가 준비 적기입니다.
+    </div>
+  </div>
+</div>
+
+<!-- ===== 3. PC vs 모바일 검색 비율 ===== -->
+<div class="mockup">
+  <div class="mockup-title"><span class="mockup-num">3</span> PC vs 모바일 검색 비율</div>
+  <div class="mockup-desc">해당 카테고리의 디바이스별 검색 비중 — 상세페이지 최적화 방향 결정</div>
+  <div class="section-line"></div>
+
+  <div class="card" style="padding: 24px;">
+    <div style="font-size: 15px; font-weight: 700; margin-bottom: 20px;">📱 디바이스별 검색 비율</div>
+    <div style="display: flex; align-items: center; gap: 40px;">
+      <div style="width: 160px; height: 160px; border-radius: 50%; background: conic-gradient(#4f46e5 0% 78%, #e2e8f0 78% 100%); position: relative; flex-shrink: 0;">
+        <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); width: 100px; height: 100px; background: #fff; border-radius: 50%; display: flex; flex-direction: column; align-items: center; justify-content: center;">
+          <div style="font-size: 24px; font-weight: 800; color: #4f46e5;">78%</div>
+          <div style="font-size: 10px; color: #64748b;">모바일</div>
+        </div>
+      </div>
+      <div style="flex: 1;">
+        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
+          <div style="width: 14px; height: 14px; border-radius: 4px; background: #4f46e5;"></div>
+          <span style="font-size: 14px; font-weight: 600;">모바일</span>
+          <span style="font-size: 20px; font-weight: 800; color: #4f46e5; margin-left: auto;">78%</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 20px;">
+          <div style="width: 14px; height: 14px; border-radius: 4px; background: #e2e8f0;"></div>
+          <span style="font-size: 14px; font-weight: 600;">PC</span>
+          <span style="font-size: 20px; font-weight: 800; color: #64748b; margin-left: auto;">22%</span>
+        </div>
+        <div style="background: #eff6ff; border-radius: 10px; padding: 12px 16px; font-size: 12px; color: #1e40af; line-height: 1.6;">
+          💡 모바일 비중이 78%로 높습니다. 상세페이지를 <strong>모바일 우선</strong>으로 제작하고, 썸네일도 모바일 화면에 최적화하세요.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 4. 성별 검색 비율 ===== -->
+<div class="mockup">
+  <div class="mockup-title"><span class="mockup-num">4</span> 성별 검색 비율</div>
+  <div class="mockup-desc">남성/여성 검색 비중으로 마케팅 타겟 설정</div>
+  <div class="section-line"></div>
+
+  <div class="card" style="padding: 24px;">
+    <div style="font-size: 15px; font-weight: 700; margin-bottom: 20px;">👥 성별 검색 비율</div>
+    <div style="display: flex; gap: 24px; align-items: center;">
+      <div style="flex: 1;">
+        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
+          <span style="font-size: 24px;">👩</span>
+          <span style="font-size: 14px; font-weight: 600; width: 40px;">여성</span>
+          <div style="flex: 1; height: 32px; background: #f1f5f9; border-radius: 8px; overflow: hidden;">
+            <div style="width: 72%; height: 100%; background: linear-gradient(90deg, #ec4899, #f472b6); border-radius: 8px; display: flex; align-items: center; justify-content: flex-end; padding-right: 10px;">
+              <span style="font-size: 13px; font-weight: 800; color: #fff;">72%</span>
+            </div>
+          </div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <span style="font-size: 24px;">👨</span>
+          <span style="font-size: 14px; font-weight: 600; width: 40px;">남성</span>
+          <div style="flex: 1; height: 32px; background: #f1f5f9; border-radius: 8px; overflow: hidden;">
+            <div style="width: 28%; height: 100%; background: linear-gradient(90deg, #3b82f6, #60a5fa); border-radius: 8px; display: flex; align-items: center; justify-content: flex-end; padding-right: 10px;">
+              <span style="font-size: 13px; font-weight: 800; color: #fff;">28%</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div style="background: #fdf2f8; border-radius: 10px; padding: 12px 16px; font-size: 12px; color: #9d174d; line-height: 1.6; margin-top: 16px;">
+      💡 여성 비중이 72%로 높습니다. 상세페이지와 광고 소재를 <strong>여성 타겟</strong>에 맞춰 제작하세요. 인스타그램 광고가 효과적입니다.
+    </div>
+  </div>
+</div>
+
+<!-- ===== 5. 연령대별 검색 비율 ===== -->
+<div class="mockup">
+  <div class="mockup-title"><span class="mockup-num">5</span> 연령대별 검색 비율</div>
+  <div class="mockup-desc">타겟 연령층 파악 → 광고 채널 및 톤앤매너 결정</div>
+  <div class="section-line"></div>
+
+  <div class="card" style="padding: 24px;">
+    <div style="font-size: 15px; font-weight: 700; margin-bottom: 20px;">📊 연령대별 검색 비율</div>
+    <div style="display: flex; align-items: flex-end; gap: 16px; height: 160px; margin-bottom: 12px; padding: 0 20px;">
+      <div style="flex: 1; text-align: center;">
+        <div style="height: 20px; background: linear-gradient(180deg, #c7d2fe, #e0e7ff); border-radius: 8px 8px 0 0; margin-bottom: 8px;"></div>
+        <div style="font-size: 14px; font-weight: 800; color: #94a3b8;">5%</div>
+        <div style="font-size: 11px; color: #94a3b8;">10대</div>
+      </div>
+      <div style="flex: 1; text-align: center;">
+        <div style="height: 60px; background: linear-gradient(180deg, #818cf8, #a5b4fc); border-radius: 8px 8px 0 0; margin-bottom: 8px;"></div>
+        <div style="font-size: 14px; font-weight: 800; color: #6366f1;">18%</div>
+        <div style="font-size: 11px; color: #64748b;">20대</div>
+      </div>
+      <div style="flex: 1; text-align: center;">
+        <div style="height: 120px; background: linear-gradient(180deg, #4f46e5, #6366f1); border-radius: 8px 8px 0 0; margin-bottom: 8px;"></div>
+        <div style="font-size: 14px; font-weight: 800; color: #4f46e5;">35%</div>
+        <div style="font-size: 11px; color: #0f172a; font-weight: 600;">30대 ⭐</div>
+      </div>
+      <div style="flex: 1; text-align: center;">
+        <div style="height: 100px; background: linear-gradient(180deg, #6366f1, #818cf8); border-radius: 8px 8px 0 0; margin-bottom: 8px;"></div>
+        <div style="font-size: 14px; font-weight: 800; color: #6366f1;">28%</div>
+        <div style="font-size: 11px; color: #64748b;">40대</div>
+      </div>
+      <div style="flex: 1; text-align: center;">
+        <div style="height: 40px; background: linear-gradient(180deg, #a5b4fc, #c7d2fe); border-radius: 8px 8px 0 0; margin-bottom: 8px;"></div>
+        <div style="font-size: 14px; font-weight: 800; color: #94a3b8;">11%</div>
+        <div style="font-size: 11px; color: #94a3b8;">50대</div>
+      </div>
+      <div style="flex: 1; text-align: center;">
+        <div style="height: 16px; background: linear-gradient(180deg, #c7d2fe, #e0e7ff); border-radius: 8px 8px 0 0; margin-bottom: 8px;"></div>
+        <div style="font-size: 14px; font-weight: 800; color: #94a3b8;">3%</div>
+        <div style="font-size: 11px; color: #94a3b8;">60대+</div>
+      </div>
+    </div>
+    <div style="background: #eef2ff; border-radius: 10px; padding: 12px 16px; font-size: 12px; color: #3730a3; line-height: 1.6;">
+      💡 핵심 타겟: <strong>30~40대 여성</strong> (전체의 63%). 네이버 블로그 체험단 + 인스타 릴스가 이 타겟에 가장 효과적입니다.
+    </div>
+  </div>
+</div>
+
+<!-- ===== 6. 관련 카테고리 트렌드 비교 ===== -->
+<div class="mockup">
+  <div class="mockup-title"><span class="mockup-num">6</span> 관련 카테고리 트렌드 비교</div>
+  <div class="mockup-desc">같은 대분류 내 카테고리별 검색량 비교 — 시장 전체 흐름 파악</div>
+  <div class="section-line"></div>
+
+  <div class="card" style="padding: 24px;">
+    <div style="font-size: 15px; font-weight: 700; margin-bottom: 16px;">📂 카테고리 트렌드 비교 <span style="font-size: 11px; color: #64748b; font-weight: 400;">식품 > 과일</span></div>
+    <div>
+      <div class="bar-row">
+        <span class="bar-label">멜론</span>
+        <div class="bar-wrap"><div class="bar-fill" style="width: 100%; background: linear-gradient(90deg, #4f46e5, #7c3aed);">100</div></div>
+        <span class="bar-val" style="color: #4f46e5;">100</span>
+      </div>
+      <div class="bar-row">
+        <span class="bar-label">수박</span>
+        <div class="bar-wrap"><div class="bar-fill" style="width: 85%; background: linear-gradient(90deg, #3b82f6, #60a5fa);">85</div></div>
+        <span class="bar-val">85</span>
+      </div>
+      <div class="bar-row">
+        <span class="bar-label">포도</span>
+        <div class="bar-wrap"><div class="bar-fill" style="width: 62%; background: linear-gradient(90deg, #6366f1, #818cf8);">62</div></div>
+        <span class="bar-val">62</span>
+      </div>
+      <div class="bar-row">
+        <span class="bar-label">복숭아</span>
+        <div class="bar-wrap"><div class="bar-fill" style="width: 55%; background: linear-gradient(90deg, #8b5cf6, #a78bfa);">55</div></div>
+        <span class="bar-val">55</span>
+      </div>
+      <div class="bar-row">
+        <span class="bar-label">망고</span>
+        <div class="bar-wrap"><div class="bar-fill" style="width: 38%; background: linear-gradient(90deg, #a78bfa, #c4b5fd);">38</div></div>
+        <span class="bar-val">38</span>
+      </div>
+    </div>
+    <div style="font-size: 10px; color: #94a3b8; margin-top: 8px; text-align: right;">※ 상대적 검색 관심도 (최대 100 기준)</div>
+  </div>
+</div>
+
+<!-- ===== 7. 경쟁 키워드 트렌드 비교 ===== -->
+<div class="mockup">
+  <div class="mockup-title"><span class="mockup-num">7</span> 경쟁 키워드 트렌드 비교</div>
+  <div class="mockup-desc">분석 키워드 vs 골든 키워드 vs 연관 키워드의 검색량 추이를 한눈에 비교</div>
+  <div class="section-line"></div>
+
+  <div class="card" style="padding: 24px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+      <div style="font-size: 15px; font-weight: 700;">📊 키워드 트렌드 비교</div>
+      <div style="display: flex; gap: 12px; font-size: 12px;">
+        <span style="display: flex; align-items: center; gap: 4px;"><span style="width: 12px; height: 3px; background: #4f46e5; border-radius: 2px;"></span> 멜론</span>
+        <span style="display: flex; align-items: center; gap: 4px;"><span style="width: 12px; height: 3px; background: #10b981; border-radius: 2px;"></span> 고당도 멜론</span>
+        <span style="display: flex; align-items: center; gap: 4px;"><span style="width: 12px; height: 3px; background: #f59e0b; border-radius: 2px;"></span> 하미과</span>
+      </div>
+    </div>
+    <div style="display: flex; gap: 8px; height: 120px; align-items: flex-end; margin-bottom: 8px;">
+      <!-- 6월 -->
+      <div style="flex: 1; display: flex; flex-direction: column; gap: 2px; align-items: center; justify-content: flex-end; height: 100%;">
+        <div style="width: 60%; height: 90%; background: #4f46e5; border-radius: 4px 4px 0 0; opacity: 0.8;"></div>
+        <div style="width: 60%; height: 60%; background: #10b981; border-radius: 4px 4px 0 0; opacity: 0.8; margin-top: -60%;"></div>
+      </div>
+      <div style="flex: 1; display: flex; flex-direction: column; gap: 2px; align-items: center; justify-content: flex-end; height: 100%;">
+        <div style="width: 60%; height: 100%; background: #4f46e5; border-radius: 4px 4px 0 0; opacity: 0.8;"></div>
+      </div>
+      <div style="flex: 1; display: flex; flex-direction: column; gap: 2px; align-items: center; justify-content: flex-end; height: 100%;">
+        <div style="width: 60%; height: 75%; background: #4f46e5; border-radius: 4px 4px 0 0; opacity: 0.8;"></div>
+      </div>
+      <div style="flex: 1; display: flex; flex-direction: column; gap: 2px; align-items: center; justify-content: flex-end; height: 100%;">
+        <div style="width: 60%; height: 35%; background: #4f46e5; border-radius: 4px 4px 0 0; opacity: 0.8;"></div>
+      </div>
+      <div style="flex: 1; display: flex; flex-direction: column; gap: 2px; align-items: center; justify-content: flex-end; height: 100%;">
+        <div style="width: 60%; height: 15%; background: #4f46e5; border-radius: 4px 4px 0 0; opacity: 0.8;"></div>
+      </div>
+      <div style="flex: 1; display: flex; flex-direction: column; gap: 2px; align-items: center; justify-content: flex-end; height: 100%;">
+        <div style="width: 60%; height: 10%; background: #4f46e5; border-radius: 4px 4px 0 0; opacity: 0.8;"></div>
+      </div>
+    </div>
+    <div style="display: flex; gap: 8px; font-size: 10px; color: #94a3b8; text-align: center;">
+      <div style="flex: 1;">6월</div><div style="flex: 1;">7월</div><div style="flex: 1;">8월</div><div style="flex: 1;">9월</div><div style="flex: 1;">10월</div><div style="flex: 1;">11월</div>
+    </div>
+    <div style="background: #f8fafc; border-radius: 10px; padding: 12px 16px; font-size: 12px; color: #475569; line-height: 1.6; margin-top: 16px;">
+      💡 "고당도 멜론"은 메인 키워드보다 경쟁이 낮으면서 <strong>성수기 트렌드가 유사</strong>합니다. 롱테일 키워드로 함께 공략하면 효과적입니다.
+    </div>
+  </div>
+</div>
+
+<!-- ===== 8. 전년 동기 대비 성장률 ===== -->
+<div class="mockup">
+  <div class="mockup-title"><span class="mockup-num">8</span> 전년 동기 대비 성장률</div>
+  <div class="mockup-desc">작년 같은 기간 대비 시장 성장/축소 판단</div>
+  <div class="section-line"></div>
+
+  <div class="card" style="padding: 24px;">
+    <div style="font-size: 15px; font-weight: 700; margin-bottom: 20px;">📈 전년 동기 대비</div>
+    <div class="card-grid card-grid-3">
+      <div style="text-align: center; padding: 20px; background: #ecfdf5; border-radius: 14px; border: 1px solid #a7f3d0;">
+        <div style="font-size: 11px; color: #065f46; margin-bottom: 6px;">검색량 변화</div>
+        <div style="font-size: 28px; font-weight: 800; color: #10b981;">+23%</div>
+        <div style="font-size: 11px; color: #065f46; margin-top: 4px;">전년 대비 성장</div>
+      </div>
+      <div style="text-align: center; padding: 20px; background: #f8fafc; border-radius: 14px; border: 1px solid #e2e8f0;">
+        <div style="font-size: 11px; color: #64748b; margin-bottom: 6px;">올해 (4월)</div>
+        <div style="font-size: 28px; font-weight: 800; color: #4f46e5;">2.6만</div>
+        <div style="font-size: 11px; color: #64748b; margin-top: 4px;">월간 검색량</div>
+      </div>
+      <div style="text-align: center; padding: 20px; background: #f8fafc; border-radius: 14px; border: 1px solid #e2e8f0;">
+        <div style="font-size: 11px; color: #64748b; margin-bottom: 6px;">작년 (4월)</div>
+        <div style="font-size: 28px; font-weight: 800; color: #94a3b8;">2.1만</div>
+        <div style="font-size: 11px; color: #64748b; margin-top: 4px;">월간 검색량</div>
+      </div>
+    </div>
+    <div style="background: #ecfdf5; border-radius: 10px; padding: 12px 16px; font-size: 12px; color: #065f46; line-height: 1.6; margin-top: 16px;">
+      💡 이 시장은 전년 대비 <strong>23% 성장</strong> 중입니다. 수요가 증가하는 시장이므로 진입 가치가 있습니다.
+    </div>
+  </div>
+</div>
+
+<!-- ===== 9. 요일별 검색 패턴 ===== -->
+<div class="mockup">
+  <div class="mockup-title"><span class="mockup-num">9</span> 요일별 검색 패턴</div>
+  <div class="mockup-desc">주간 데이터에서 요일별 패턴 분석 → 광고 노출 시간대 최적화</div>
+  <div class="section-line"></div>
+
+  <div class="card" style="padding: 24px;">
+    <div style="font-size: 15px; font-weight: 700; margin-bottom: 20px;">📅 요일별 검색 패턴</div>
+    <div style="display: flex; align-items: flex-end; gap: 12px; height: 120px; padding: 0 16px; margin-bottom: 12px;">
+      <div style="flex: 1; text-align: center;">
+        <div style="height: 100px; background: linear-gradient(180deg, #4f46e5, #7c3aed); border-radius: 8px 8px 0 0; margin-bottom: 6px;"></div>
+        <div style="font-size: 13px; font-weight: 800; color: #4f46e5;">18%</div>
+        <div style="font-size: 12px; font-weight: 600; color: #ef4444;">월 ⭐</div>
+      </div>
+      <div style="flex: 1; text-align: center;">
+        <div style="height: 85px; background: linear-gradient(180deg, #6366f1, #818cf8); border-radius: 8px 8px 0 0; margin-bottom: 6px;"></div>
+        <div style="font-size: 13px; font-weight: 800; color: #6366f1;">16%</div>
+        <div style="font-size: 12px; color: #64748b;">화</div>
+      </div>
+      <div style="flex: 1; text-align: center;">
+        <div style="height: 80px; background: linear-gradient(180deg, #818cf8, #a5b4fc); border-radius: 8px 8px 0 0; margin-bottom: 6px;"></div>
+        <div style="font-size: 13px; font-weight: 800; color: #818cf8;">15%</div>
+        <div style="font-size: 12px; color: #64748b;">수</div>
+      </div>
+      <div style="flex: 1; text-align: center;">
+        <div style="height: 75px; background: linear-gradient(180deg, #818cf8, #a5b4fc); border-radius: 8px 8px 0 0; margin-bottom: 6px;"></div>
+        <div style="font-size: 13px; font-weight: 800; color: #818cf8;">14%</div>
+        <div style="font-size: 12px; color: #64748b;">목</div>
+      </div>
+      <div style="flex: 1; text-align: center;">
+        <div style="height: 70px; background: linear-gradient(180deg, #a5b4fc, #c7d2fe); border-radius: 8px 8px 0 0; margin-bottom: 6px;"></div>
+        <div style="font-size: 13px; font-weight: 800; color: #a5b4fc;">13%</div>
+        <div style="font-size: 12px; color: #64748b;">금</div>
+      </div>
+      <div style="flex: 1; text-align: center;">
+        <div style="height: 55px; background: linear-gradient(180deg, #c7d2fe, #e0e7ff); border-radius: 8px 8px 0 0; margin-bottom: 6px;"></div>
+        <div style="font-size: 13px; font-weight: 800; color: #c7d2fe;">12%</div>
+        <div style="font-size: 12px; color: #64748b;">토</div>
+      </div>
+      <div style="flex: 1; text-align: center;">
+        <div style="height: 55px; background: linear-gradient(180deg, #c7d2fe, #e0e7ff); border-radius: 8px 8px 0 0; margin-bottom: 6px;"></div>
+        <div style="font-size: 13px; font-weight: 800; color: #c7d2fe;">12%</div>
+        <div style="font-size: 12px; color: #64748b;">일</div>
+      </div>
+    </div>
+    <div style="background: #eef2ff; border-radius: 10px; padding: 12px 16px; font-size: 12px; color: #3730a3; line-height: 1.6;">
+      💡 <strong>월~화요일</strong>에 검색이 집중됩니다. 광고 예산을 주 초반에 집중 배분하면 효율이 높습니다.
+    </div>
+  </div>
+</div>
+
+<!-- ===== 10. 카테고리 인기 키워드 TOP ===== -->
+<div class="mockup">
+  <div class="mockup-title"><span class="mockup-num">10</span> 카테고리 인기 키워드 TOP</div>
+  <div class="mockup-desc">해당 카테고리에서 현재 급상승 중인 키워드 → 상품 기획/키워드 확장에 활용</div>
+  <div class="section-line"></div>
+
+  <div class="card" style="padding: 24px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+      <div style="font-size: 15px; font-weight: 700;">🔥 카테고리 인기 키워드</div>
+      <span class="tag" style="background: #fef2f2; color: #ef4444;">식품 > 과일</span>
+    </div>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+      <div style="display: flex; align-items: center; gap: 10px; padding: 12px 16px; background: #fef2f2; border-radius: 10px;">
+        <span style="font-size: 14px; font-weight: 800; color: #ef4444; width: 24px;">1</span>
+        <span style="font-size: 13px; font-weight: 600;">킹스베리</span>
+        <span style="margin-left: auto; font-size: 11px; font-weight: 700; color: #ef4444; background: #fee2e2; padding: 2px 8px; border-radius: 4px;">🔺 +320%</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 10px; padding: 12px 16px; background: #fef2f2; border-radius: 10px;">
+        <span style="font-size: 14px; font-weight: 800; color: #ef4444; width: 24px;">2</span>
+        <span style="font-size: 13px; font-weight: 600;">애플망고</span>
+        <span style="margin-left: auto; font-size: 11px; font-weight: 700; color: #ef4444; background: #fee2e2; padding: 2px 8px; border-radius: 4px;">🔺 +180%</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 10px; padding: 12px 16px; background: #fff7ed; border-radius: 10px;">
+        <span style="font-size: 14px; font-weight: 800; color: #f59e0b; width: 24px;">3</span>
+        <span style="font-size: 13px; font-weight: 600;">고당도 멜론</span>
+        <span style="margin-left: auto; font-size: 11px; font-weight: 700; color: #f59e0b; background: #fef3c7; padding: 2px 8px; border-radius: 4px;">🔺 +95%</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 10px; padding: 12px 16px; background: #fff7ed; border-radius: 10px;">
+        <span style="font-size: 14px; font-weight: 800; color: #f59e0b; width: 24px;">4</span>
+        <span style="font-size: 13px; font-weight: 600;">샤인머스캣</span>
+        <span style="margin-left: auto; font-size: 11px; font-weight: 700; color: #f59e0b; background: #fef3c7; padding: 2px 8px; border-radius: 4px;">🔺 +72%</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 10px; padding: 12px 16px; background: #f8fafc; border-radius: 10px;">
+        <span style="font-size: 14px; font-weight: 800; color: #64748b; width: 24px;">5</span>
+        <span style="font-size: 13px; font-weight: 600;">제주 감귤</span>
+        <span style="margin-left: auto; font-size: 11px; font-weight: 700; color: #10b981; background: #ecfdf5; padding: 2px 8px; border-radius: 4px;">🔺 +45%</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 10px; padding: 12px 16px; background: #f8fafc; border-radius: 10px;">
+        <span style="font-size: 14px; font-weight: 800; color: #64748b; width: 24px;">6</span>
+        <span style="font-size: 13px; font-weight: 600;">논산 딸기</span>
+        <span style="margin-left: auto; font-size: 11px; font-weight: 700; color: #10b981; background: #ecfdf5; padding: 2px 8px; border-radius: 4px;">🔺 +38%</span>
+      </div>
+    </div>
+    <div style="background: #fff7ed; border-radius: 10px; padding: 12px 16px; font-size: 12px; color: #9a3412; line-height: 1.6; margin-top: 16px;">
+      💡 "킹스베리"가 현재 <strong>급상승 1위</strong>입니다. 관련 상품이 있다면 상품명에 키워드를 포함시키는 것을 추천합니다.
+    </div>
+  </div>
+</div>
+
+<div style="text-align: center; padding: 40px 0; color: #94a3b8; font-size: 13px;">
+  ※ 위 10가지 기능 시안을 확인하시고, 원하시는 기능과 배치 위치를 알려주세요.
+</div>
+
+</body>
+</html>

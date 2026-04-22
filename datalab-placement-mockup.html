@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>데이터랩 기능 배치 시안</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f1f5f9; color: #0f172a; line-height: 1.5; }
+
+.page-header {
+  background: linear-gradient(135deg, #1e293b, #334155);
+  color: #fff; padding: 32px 24px; text-align: center;
+}
+.page-header h1 { font-size: 22px; font-weight: 800; margin-bottom: 8px; }
+.page-header p { font-size: 14px; color: rgba(255,255,255,0.6); }
+
+.placement-group {
+  max-width: 960px; margin: 32px auto; padding: 0 16px;
+}
+.placement-label {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: linear-gradient(135deg, #4f46e5, #7c3aed);
+  color: #fff; padding: 8px 20px; border-radius: 10px 10px 0 0;
+  font-size: 13px; font-weight: 700;
+}
+.placement-desc {
+  background: #fff; border: 2px solid #4f46e5; border-radius: 0 12px 0 0;
+  padding: 12px 20px; font-size: 12px; color: #64748b; border-bottom: 2px dashed #c7d2fe;
+}
+
+/* 기존 섹터 미니 표시 */
+.existing-section {
+  background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 10px;
+  padding: 16px 20px; margin: 8px 0; text-align: center;
+  font-size: 13px; color: #94a3b8; font-weight: 600;
+}
+.existing-section .icon { margin-right: 6px; }
+
+/* 새 섹터 컨테이너 */
+.new-section {
+  background: #fff; border: 2px solid #10b981; border-radius: 16px;
+  margin: 12px 0; overflow: hidden; box-shadow: 0 2px 8px rgba(16,185,129,0.1);
+}
+.new-badge {
+  display: inline-block; background: #10b981; color: #fff;
+  font-size: 10px; font-weight: 800; padding: 3px 10px;
+  border-radius: 999px; margin-left: 8px; vertical-align: middle;
+}
+
+/* v5 공통 */
+.section-inner { padding: 24px; }
+.sec-title {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 17px; font-weight: 800; color: #0f172a; margin-bottom: 4px;
+}
+.sec-title .icon-box {
+  width: 36px; height: 36px; border-radius: 10px;
+  display: flex; align-items: center; justify-content: center; font-size: 18px;
+}
+.sec-line { height: 3px; background: linear-gradient(90deg, #4f46e5 0%, #a78bfa 50%, transparent 100%); border-radius: 2px; margin: 10px 0; }
+.sec-subtitle { font-size: 12px; color: #94a3b8; margin-bottom: 20px; }
+
+.card {
+  background: #fff; border-radius: 14px; border: 1px solid #e2e8f0;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+}
+
+/* 구분선 */
+.group-end { border-bottom: 2px solid #4f46e5; border-radius: 0 0 12px 12px; height: 4px; }
+
+/* ===== 시안 A: 성별 + 연령대 ===== */
+.demo-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+
+/* 성별 바 */
+.gender-bar-wrap { margin-top: 16px; }
+.gender-bar {
+  display: flex; height: 32px; border-radius: 10px; overflow: hidden; margin-bottom: 12px;
+}
+.gender-bar .male { background: linear-gradient(135deg, #4f46e5, #818cf8); display: flex; align-items: center; justify-content: center; color: #fff; font-size: 13px; font-weight: 700; }
+.gender-bar .female { background: linear-gradient(135deg, #ec4899, #f472b6); display: flex; align-items: center; justify-content: center; color: #fff; font-size: 13px; font-weight: 700; }
+.gender-legend { display: flex; gap: 24px; justify-content: center; }
+.gender-legend span { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #475569; font-weight: 600; }
+.gender-dot { width: 10px; height: 10px; border-radius: 50%; }
+
+/* 연령대 바 */
+.age-bars { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+.age-row { display: flex; align-items: center; gap: 10px; }
+.age-label { width: 48px; font-size: 12px; font-weight: 600; color: #475569; text-align: right; }
+.age-track { flex: 1; height: 24px; background: #f1f5f9; border-radius: 8px; position: relative; overflow: hidden; }
+.age-fill { height: 100%; border-radius: 8px; display: flex; align-items: center; padding-left: 10px; font-size: 11px; font-weight: 700; color: #fff; }
+.age-pct { width: 40px; font-size: 12px; font-weight: 700; color: #0f172a; text-align: right; }
+
+/* ===== 시안 B: 12개월 트렌드 (꺾은선) ===== */
+.trend-chart-area { position: relative; height: 200px; margin-top: 16px; }
+.trend-svg { width: 100%; height: 100%; }
+
+/* ===== 시안 C: 시즌 수요 예측 ===== */
+.season-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.season-card {
+  border-radius: 14px; padding: 20px 16px; text-align: center; border: 1px solid #e2e8f0;
+}
+.season-icon { font-size: 28px; margin-bottom: 8px; }
+.season-name { font-size: 13px; font-weight: 700; margin-bottom: 4px; }
+.season-period { font-size: 11px; color: #94a3b8; margin-bottom: 12px; }
+.season-index { font-size: 28px; font-weight: 800; }
+.season-label { font-size: 11px; color: #64748b; margin-top: 4px; }
+
+/* ===== 시안 D: 요일별 검색 패턴 ===== */
+.weekday-bars { display: flex; align-items: flex-end; gap: 8px; height: 160px; padding-top: 20px; }
+.weekday-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; height: 100%; justify-content: flex-end; }
+.weekday-bar { width: 100%; border-radius: 8px 8px 4px 4px; min-height: 8px; transition: height 0.3s; }
+.weekday-val { font-size: 11px; font-weight: 700; color: #4f46e5; }
+.weekday-label { font-size: 12px; font-weight: 600; color: #64748b; }
+
+/* ===== 시안 E: 전년 대비 성장률 ===== */
+.growth-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+.growth-card { border-radius: 14px; padding: 24px 20px; text-align: center; }
+.growth-period { font-size: 11px; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 12px; }
+.growth-value { font-size: 32px; font-weight: 800; margin-bottom: 4px; }
+.growth-sub { font-size: 12px; color: #64748b; }
+.growth-bar-wrap { margin-top: 12px; height: 6px; background: #e2e8f0; border-radius: 3px; overflow: hidden; }
+.growth-bar-fill { height: 100%; border-radius: 3px; }
+
+/* ===== 시안 F: 카테고리 인기 키워드 ===== */
+.cat-kw-list { display: flex; flex-direction: column; gap: 8px; }
+.cat-kw-row {
+  display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+  background: #f8fafc; border-radius: 10px; border: 1px solid #f1f5f9;
+}
+.cat-kw-rank {
+  width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 800; color: #fff; flex-shrink: 0;
+}
+.cat-kw-name { flex: 1; font-size: 14px; font-weight: 600; color: #0f172a; }
+.cat-kw-growth {
+  padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700;
+}
+.cat-kw-volume { font-size: 12px; color: #64748b; width: 80px; text-align: right; }
+</style>
+</head>
+<body>
+
+<div class="page-header">
+  <h1>📐 데이터랩 기능 배치 시안</h1>
+  <p>기존 로직 분석 프로그램 내 각 위치별 디자인 미리보기</p>
+</div>
+
+<!-- ============================================================ -->
+<!-- 배치 1: 종합 요약 바로 아래 — 시즌별 수요 예측 + 요일별 검색 패턴 -->
+<!-- ============================================================ -->
+<div class="placement-group">
+  <div class="placement-label">📍 배치 1 — 종합 요약 바로 아래</div>
+  <div class="placement-desc">종합 요약 카드 → <strong>시즌별 수요 예측</strong> → <strong>요일별 검색 패턴</strong> → 광고주 정보</div>
+
+  <div class="existing-section"><span class="icon">📊</span> 종합 요약 카드 (기존)</div>
+
+  <!-- 시즌별 수요 예측 -->
+  <div class="new-section">
+    <div class="section-inner">
+      <div class="sec-title">
+        <span class="icon-box" style="background: linear-gradient(135deg, #fef3c7, #fde68a);">🌤️</span>
+        시즌별 수요 예측
+        <span class="new-badge">DATALAB</span>
+      </div>
+      <div class="sec-line"></div>
+      <div class="sec-subtitle">데이터랩 쇼핑인사이트 기반 시즌 분석 — 키워드 "골프웨어" 예시</div>
+
+      <div class="season-cards">
+        <div class="season-card" style="background: linear-gradient(135deg, #fef3c7, #fff);">
+          <div class="season-icon">🌸</div>
+          <div class="season-name" style="color: #f59e0b;">봄 시즌</div>
+          <div class="season-period">3월 ~ 5월</div>
+          <div class="season-index" style="color: #f59e0b;">87</div>
+          <div class="season-label">수요 지수</div>
+          <div style="margin-top: 8px; padding: 4px 12px; background: #fef3c7; border-radius: 999px; display: inline-block; font-size: 11px; font-weight: 700; color: #92400e;">성수기</div>
+        </div>
+        <div class="season-card" style="background: linear-gradient(135deg, #dcfce7, #fff);">
+          <div class="season-icon">☀️</div>
+          <div class="season-name" style="color: #22c55e;">여름 시즌</div>
+          <div class="season-period">6월 ~ 8월</div>
+          <div class="season-index" style="color: #22c55e;">100</div>
+          <div class="season-label">수요 지수</div>
+          <div style="margin-top: 8px; padding: 4px 12px; background: #dcfce7; border-radius: 999px; display: inline-block; font-size: 11px; font-weight: 700; color: #166534;">최성수기 🔥</div>
+        </div>
+        <div class="season-card" style="background: linear-gradient(135deg, #fee2e2, #fff);">
+          <div class="season-icon">🍂</div>
+          <div class="season-name" style="color: #ef4444;">가을 시즌</div>
+          <div class="season-period">9월 ~ 11월</div>
+          <div class="season-index" style="color: #ef4444;">62</div>
+          <div class="season-label">수요 지수</div>
+          <div style="margin-top: 8px; padding: 4px 12px; background: #fee2e2; border-radius: 999px; display: inline-block; font-size: 11px; font-weight: 700; color: #991b1b;">보통</div>
+        </div>
+        <div class="season-card" style="background: linear-gradient(135deg, #dbeafe, #fff);">
+          <div class="season-icon">❄️</div>
+          <div class="season-name" style="color: #3b82f6;">겨울 시즌</div>
+          <div class="season-period">12월 ~ 2월</div>
+          <div class="season-index" style="color: #3b82f6;">35</div>
+          <div class="season-label">수요 지수</div>
+          <div style="margin-top: 8px; padding: 4px 12px; background: #dbeafe; border-radius: 999px; display: inline-block; font-size: 11px; font-weight: 700; color: #1e40af;">비수기</div>
+        </div>
+      </div>
+
+      <div style="margin-top: 16px; padding: 12px 16px; background: #fffbeb; border-radius: 10px; border: 1px solid #fde68a; font-size: 12px; color: #92400e; line-height: 1.7;">
+        💡 <strong>인사이트:</strong> 이 키워드는 여름(6~8월)에 검색량이 최고조에 달하는 계절성 키워드입니다. 최성수기 2~3개월 전부터 상품 준비 및 광고 세팅을 권장합니다.
+      </div>
+    </div>
+  </div>
+
+  <!-- 요일별 검색 패턴 -->
+  <div class="new-section">
+    <div class="section-inner">
+      <div class="sec-title">
+        <span class="icon-box" style="background: linear-gradient(135deg, #ede9fe, #ddd6fe);">📅</span>
+        요일별 검색 패턴
+        <span class="new-badge">DATALAB</span>
+      </div>
+      <div class="sec-line"></div>
+      <div class="sec-subtitle">최근 30일 기준 요일별 검색 트렌드</div>
+
+      <div class="card" style="padding: 24px;">
+        <div class="weekday-bars">
+          <div class="weekday-col">
+            <div class="weekday-val">78</div>
+            <div class="weekday-bar" style="height: 78%; background: linear-gradient(180deg, #818cf8, #4f46e5);"></div>
+            <div class="weekday-label">월</div>
+          </div>
+          <div class="weekday-col">
+            <div class="weekday-val">82</div>
+            <div class="weekday-bar" style="height: 82%; background: linear-gradient(180deg, #818cf8, #4f46e5);"></div>
+            <div class="weekday-label">화</div>
+          </div>
+          <div class="weekday-col">
+            <div class="weekday-val">85</div>
+            <div class="weekday-bar" style="height: 85%; background: linear-gradient(180deg, #818cf8, #4f46e5);"></div>
+            <div class="weekday-label">수</div>
+          </div>
+          <div class="weekday-col">
+            <div class="weekday-val">90</div>
+            <div class="weekday-bar" style="height: 90%; background: linear-gradient(180deg, #a78bfa, #7c3aed);"></div>
+            <div class="weekday-label" style="color: #7c3aed; font-weight: 700;">목</div>
+          </div>
+          <div class="weekday-col">
+            <div class="weekday-val">100</div>
+            <div class="weekday-bar" style="height: 100%; background: linear-gradient(180deg, #f472b6, #ec4899);"></div>
+            <div class="weekday-label" style="color: #ec4899; font-weight: 700;">금 🔥</div>
+          </div>
+          <div class="weekday-col">
+            <div class="weekday-val">92</div>
+            <div class="weekday-bar" style="height: 92%; background: linear-gradient(180deg, #a78bfa, #7c3aed);"></div>
+            <div class="weekday-label" style="color: #7c3aed; font-weight: 700;">토</div>
+          </div>
+          <div class="weekday-col">
+            <div class="weekday-val">65</div>
+            <div class="weekday-bar" style="height: 65%; background: linear-gradient(180deg, #94a3b8, #64748b);"></div>
+            <div class="weekday-label">일</div>
+          </div>
+        </div>
+        <div style="display: flex; justify-content: center; gap: 24px; margin-top: 16px; padding-top: 12px; border-top: 1px solid #f1f5f9;">
+          <span style="font-size: 12px; color: #64748b;">📈 최고: <strong style="color: #ec4899;">금요일</strong> (지수 100)</span>
+          <span style="font-size: 12px; color: #64748b;">📉 최저: <strong style="color: #64748b;">일요일</strong> (지수 65)</span>
+          <span style="font-size: 12px; color: #64748b;">💡 주말 전 금·토 집중 공략 추천</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="existing-section"><span class="icon">📢</span> 광고주 정보 (기존)</div>
+  <div class="group-end"></div>
+</div>
+
+
+<!-- ============================================================ -->
+<!-- 배치 2: 키워드 검색량 ↔ 시장 규모 사이 -->
+<!-- ============================================================ -->
+<div class="placement-group">
+  <div class="placement-label">📍 배치 2 — 키워드 검색량 ↔ 시장 규모 사이</div>
+  <div class="placement-desc">키워드 검색량 → <strong>성별 + 연령대별 검색 비율 (1줄 2칸)</strong> → <strong>12개월 검색량 트렌드 (꺾은선)</strong> → 시장 규모 & 매출 추정</div>
+
+  <div class="existing-section"><span class="icon">🔍</span> 키워드 검색량 (기존)</div>
+
+  <!-- 성별 + 연령대별 (1줄 2칸) -->
+  <div class="new-section">
+    <div class="section-inner">
+      <div class="sec-title">
+        <span class="icon-box" style="background: linear-gradient(135deg, #fce7f3, #fbcfe8);">👥</span>
+        검색 인구통계
+        <span class="new-badge">DATALAB</span>
+      </div>
+      <div class="sec-line"></div>
+      <div class="sec-subtitle">데이터랩 쇼핑인사이트 기반 성별·연령대 검색 비율</div>
+
+      <div class="demo-grid">
+        <!-- 성별 비율 -->
+        <div class="card" style="padding: 24px;">
+          <div style="font-size: 14px; font-weight: 700; color: #0f172a; margin-bottom: 16px; display: flex; align-items: center; gap: 6px;">
+            <span>⚤</span> 성별 검색 비율
+          </div>
+
+          <div class="gender-bar-wrap">
+            <div class="gender-bar">
+              <div class="male" style="width: 38%;">38%</div>
+              <div class="female" style="width: 62%;">62%</div>
+            </div>
+            <div class="gender-legend">
+              <span><span class="gender-dot" style="background: #4f46e5;"></span> 남성 38%</span>
+              <span><span class="gender-dot" style="background: #ec4899;"></span> 여성 62%</span>
+            </div>
+          </div>
+
+          <div style="margin-top: 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+            <div style="background: #eef2ff; border-radius: 10px; padding: 14px; text-align: center;">
+              <div style="font-size: 11px; color: #64748b; font-weight: 600; margin-bottom: 4px;">🧑 남성</div>
+              <div style="font-size: 22px; font-weight: 800; color: #4f46e5;">38%</div>
+            </div>
+            <div style="background: #fdf2f8; border-radius: 10px; padding: 14px; text-align: center;">
+              <div style="font-size: 11px; color: #64748b; font-weight: 600; margin-bottom: 4px;">👩 여성</div>
+              <div style="font-size: 22px; font-weight: 800; color: #ec4899;">62%</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 연령대별 비율 -->
+        <div class="card" style="padding: 24px;">
+          <div style="font-size: 14px; font-weight: 700; color: #0f172a; margin-bottom: 16px; display: flex; align-items: center; gap: 6px;">
+            <span>📊</span> 연령대별 검색 비율
+          </div>
+
+          <div class="age-bars">
+            <div class="age-row">
+              <div class="age-label">10대</div>
+              <div class="age-track"><div class="age-fill" style="width: 8%; background: linear-gradient(90deg, #94a3b8, #cbd5e1);">8%</div></div>
+              <div class="age-pct">8%</div>
+            </div>
+            <div class="age-row">
+              <div class="age-label">20대</div>
+              <div class="age-track"><div class="age-fill" style="width: 22%; background: linear-gradient(90deg, #818cf8, #a78bfa);">22%</div></div>
+              <div class="age-pct">22%</div>
+            </div>
+            <div class="age-row">
+              <div class="age-label">30대</div>
+              <div class="age-track"><div class="age-fill" style="width: 35%; background: linear-gradient(90deg, #4f46e5, #6366f1);">35%</div></div>
+              <div class="age-pct" style="color: #4f46e5; font-weight: 800;">35% 🔥</div>
+            </div>
+            <div class="age-row">
+              <div class="age-label">40대</div>
+              <div class="age-track"><div class="age-fill" style="width: 24%; background: linear-gradient(90deg, #7c3aed, #8b5cf6);">24%</div></div>
+              <div class="age-pct">24%</div>
+            </div>
+            <div class="age-row">
+              <div class="age-label">50대+</div>
+              <div class="age-track"><div class="age-fill" style="width: 11%; background: linear-gradient(90deg, #94a3b8, #cbd5e1);">11%</div></div>
+              <div class="age-pct">11%</div>
+            </div>
+          </div>
+
+          <div style="margin-top: 14px; padding: 10px 14px; background: #f0f4ff; border-radius: 8px; font-size: 11px; color: #4f46e5; font-weight: 600;">
+            🎯 핵심 타겟: 30대 여성 (전체의 약 21.7%)
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 12개월 검색량 트렌드 (꺾은선 그래프) -->
+  <div class="new-section">
+    <div class="section-inner">
+      <div class="sec-title">
+        <span class="icon-box" style="background: linear-gradient(135deg, #dbeafe, #bfdbfe);">📈</span>
+        키워드 검색량 트렌드
+        <span class="new-badge">DATALAB</span>
+      </div>
+      <div class="sec-line"></div>
+      <div class="sec-subtitle">최근 12개월 검색량 추이 — 데이터랩 쇼핑인사이트 기준</div>
+
+      <div class="card" style="padding: 24px;">
+        <!-- 상단 요약 카드 -->
+        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px;">
+          <div style="background: #f0f4ff; border-radius: 10px; padding: 12px; text-align: center;">
+            <div style="font-size: 10px; color: #64748b; font-weight: 600;">최고 지수</div>
+            <div style="font-size: 20px; font-weight: 800; color: #4f46e5;">100</div>
+            <div style="font-size: 10px; color: #94a3b8;">2025.07</div>
+          </div>
+          <div style="background: #fef2f2; border-radius: 10px; padding: 12px; text-align: center;">
+            <div style="font-size: 10px; color: #64748b; font-weight: 600;">최저 지수</div>
+            <div style="font-size: 20px; font-weight: 800; color: #ef4444;">32</div>
+            <div style="font-size: 10px; color: #94a3b8;">2025.12</div>
+          </div>
+          <div style="background: #f0fdf4; border-radius: 10px; padding: 12px; text-align: center;">
+            <div style="font-size: 10px; color: #64748b; font-weight: 600;">평균 지수</div>
+            <div style="font-size: 20px; font-weight: 800; color: #22c55e;">68</div>
+            <div style="font-size: 10px; color: #94a3b8;">12개월</div>
+          </div>
+          <div style="background: #fffbeb; border-radius: 10px; padding: 12px; text-align: center;">
+            <div style="font-size: 10px; color: #64748b; font-weight: 600;">변동폭</div>
+            <div style="font-size: 20px; font-weight: 800; color: #f59e0b;">68p</div>
+            <div style="font-size: 10px; color: #94a3b8;">최고-최저</div>
+          </div>
+        </div>
+
+        <!-- 꺾은선 그래프 (SVG) -->
+        <div style="position: relative;">
+          <svg viewBox="0 0 680 220" style="width: 100%; height: auto;">
+            <!-- 배경 그리드 -->
+            <line x1="40" y1="20" x2="40" y2="180" stroke="#f1f5f9" stroke-width="1"/>
+            <line x1="40" y1="180" x2="660" y2="180" stroke="#e2e8f0" stroke-width="1"/>
+            <line x1="40" y1="140" x2="660" y2="140" stroke="#f1f5f9" stroke-width="1" stroke-dasharray="4"/>
+            <line x1="40" y1="100" x2="660" y2="100" stroke="#f1f5f9" stroke-width="1" stroke-dasharray="4"/>
+            <line x1="40" y1="60" x2="660" y2="60" stroke="#f1f5f9" stroke-width="1" stroke-dasharray="4"/>
+            <line x1="40" y1="20" x2="660" y2="20" stroke="#f1f5f9" stroke-width="1" stroke-dasharray="4"/>
+
+            <!-- Y축 라벨 -->
+            <text x="32" y="184" fill="#94a3b8" font-size="10" text-anchor="end">0</text>
+            <text x="32" y="144" fill="#94a3b8" font-size="10" text-anchor="end">25</text>
+            <text x="32" y="104" fill="#94a3b8" font-size="10" text-anchor="end">50</text>
+            <text x="32" y="64" fill="#94a3b8" font-size="10" text-anchor="end">75</text>
+            <text x="32" y="24" fill="#94a3b8" font-size="10" text-anchor="end">100</text>
+
+            <!-- 그라데이션 영역 -->
+            <defs>
+              <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#4f46e5" stop-opacity="0.15"/>
+                <stop offset="100%" stop-color="#4f46e5" stop-opacity="0.01"/>
+              </linearGradient>
+            </defs>
+            <polygon
+              points="93,99.2 145,83.2 198,67.2 250,38.4 303,24 355,20.8 408,35.2 460,59.2 513,99.2 565,153.6 618,147.2 618,180 93,180"
+              fill="url(#areaGrad)"/>
+
+            <!-- 꺾은선 -->
+            <polyline
+              points="93,99.2 145,83.2 198,67.2 250,38.4 303,24 355,20.8 408,35.2 460,59.2 513,99.2 565,153.6 618,147.2"
+              fill="none" stroke="#4f46e5" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+
+            <!-- 데이터 포인트 -->
+            <circle cx="93" cy="99.2" r="4" fill="#fff" stroke="#4f46e5" stroke-width="2"/>
+            <circle cx="145" cy="83.2" r="4" fill="#fff" stroke="#4f46e5" stroke-width="2"/>
+            <circle cx="198" cy="67.2" r="4" fill="#fff" stroke="#4f46e5" stroke-width="2"/>
+            <circle cx="250" cy="38.4" r="4" fill="#fff" stroke="#4f46e5" stroke-width="2"/>
+            <circle cx="303" cy="24" r="5" fill="#fff" stroke="#4f46e5" stroke-width="2.5"/>
+            <circle cx="355" cy="20.8" r="6" fill="#4f46e5" stroke="#fff" stroke-width="2"/><!-- 최고점 -->
+            <circle cx="408" cy="35.2" r="4" fill="#fff" stroke="#4f46e5" stroke-width="2"/>
+            <circle cx="460" cy="59.2" r="4" fill="#fff" stroke="#4f46e5" stroke-width="2"/>
+            <circle cx="513" cy="99.2" r="4" fill="#fff" stroke="#4f46e5" stroke-width="2"/>
+            <circle cx="565" cy="153.6" r="5" fill="#ef4444" stroke="#fff" stroke-width="2"/><!-- 최저점 -->
+            <circle cx="618" cy="147.2" r="4" fill="#fff" stroke="#4f46e5" stroke-width="2"/>
+
+            <!-- 최고점 라벨 -->
+            <rect x="330" y="1" width="50" height="16" rx="4" fill="#4f46e5"/>
+            <text x="355" y="12" fill="#fff" font-size="9" font-weight="700" text-anchor="middle">100</text>
+
+            <!-- 최저점 라벨 -->
+            <rect x="542" y="160" width="46" height="16" rx="4" fill="#ef4444"/>
+            <text x="565" y="171" fill="#fff" font-size="9" font-weight="700" text-anchor="middle">32</text>
+
+            <!-- X축 월 라벨 -->
+            <text x="93" y="198" fill="#64748b" font-size="10" text-anchor="middle">4월</text>
+            <text x="145" y="198" fill="#64748b" font-size="10" text-anchor="middle">5월</text>
+            <text x="198" y="198" fill="#64748b" font-size="10" text-anchor="middle">6월</text>
+            <text x="250" y="198" fill="#64748b" font-size="10" text-anchor="middle">7월</text>
+            <text x="303" y="198" fill="#64748b" font-size="10" text-anchor="middle">8월</text>
+            <text x="355" y="198" fill="#4f46e5" font-size="10" font-weight="700" text-anchor="middle">9월</text>
+            <text x="408" y="198" fill="#64748b" font-size="10" text-anchor="middle">10월</text>
+            <text x="460" y="198" fill="#64748b" font-size="10" text-anchor="middle">11월</text>
+            <text x="513" y="198" fill="#64748b" font-size="10" text-anchor="middle">12월</text>
+            <text x="565" y="198" fill="#ef4444" font-size="10" font-weight="700" text-anchor="middle">1월</text>
+            <text x="618" y="198" fill="#64748b" font-size="10" text-anchor="middle">2월</text>
+          </svg>
+        </div>
+
+        <div style="margin-top: 12px; padding: 10px 16px; background: linear-gradient(135deg, #f0f9ff, #e0f2fe); border-radius: 10px; border: 1px solid #bae6fd; font-size: 12px; color: #0369a1; line-height: 1.7;">
+          📊 <strong>트렌드 요약:</strong> 검색량이 7~9월에 집중되는 계절성 키워드입니다. 현재(4월)는 상승 구간으로, 본격 성수기 진입 전 상품 준비가 필요합니다.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="existing-section"><span class="icon">💰</span> 시장 규모 & 매출 추정 (기존)</div>
+  <div class="group-end"></div>
+</div>
+
+
+<!-- ============================================================ -->
+<!-- 배치 3: 시장 규모 & 매출 추정 아래 — 전년 동기 대비 성장률 -->
+<!-- ============================================================ -->
+<div class="placement-group">
+  <div class="placement-label">📍 배치 3 — 시장 규모 & 매출 추정 아래</div>
+  <div class="placement-desc">시장 규모 & 매출 추정 → <strong>전년 동기 대비 성장률</strong> → 판매량 추정</div>
+
+  <div class="existing-section"><span class="icon">💰</span> 시장 규모 & 매출 추정 (기존)</div>
+
+  <div class="new-section">
+    <div class="section-inner">
+      <div class="sec-title">
+        <span class="icon-box" style="background: linear-gradient(135deg, #dcfce7, #bbf7d0);">📈</span>
+        전년 동기 대비 성장률
+        <span class="new-badge">DATALAB</span>
+      </div>
+      <div class="sec-line"></div>
+      <div class="sec-subtitle">데이터랩 쇼핑인사이트 기반 전년 대비 검색 트렌드 변화</div>
+
+      <div class="growth-cards">
+        <!-- 직전 1개월 -->
+        <div class="growth-card card">
+          <div class="growth-period">직전 1개월 대비</div>
+          <div style="font-size: 14px; color: '#64748b'; margin-bottom: 8px;">
+            <span style="color: #94a3b8; font-size: 12px;">2025.04 vs 2026.04</span>
+          </div>
+          <div class="growth-value" style="color: #22c55e;">+24.5%</div>
+          <div class="growth-sub">검색량 증가 추세</div>
+          <div class="growth-bar-wrap">
+            <div class="growth-bar-fill" style="width: 74.5%; background: linear-gradient(90deg, #22c55e, #4ade80);"></div>
+          </div>
+          <div style="margin-top: 10px; display: flex; justify-content: space-between; font-size: 11px; color: #94a3b8;">
+            <span>전년: 지수 62</span>
+            <span>올해: 지수 77</span>
+          </div>
+        </div>
+
+        <!-- 직전 3개월 -->
+        <div class="growth-card card" style="border: 2px solid #4f46e5;">
+          <div style="position: absolute; top: -1px; right: 16px; background: #4f46e5; color: #fff; font-size: 10px; font-weight: 700; padding: 2px 10px; border-radius: 0 0 6px 6px;">추천 기준</div>
+          <div class="growth-period">직전 3개월 평균</div>
+          <div style="font-size: 14px; margin-bottom: 8px;">
+            <span style="color: #94a3b8; font-size: 12px;">2025.02~04 vs 2026.02~04</span>
+          </div>
+          <div class="growth-value" style="color: #4f46e5;">+18.2%</div>
+          <div class="growth-sub">안정적 성장세 확인</div>
+          <div class="growth-bar-wrap">
+            <div class="growth-bar-fill" style="width: 68.2%; background: linear-gradient(90deg, #4f46e5, #818cf8);"></div>
+          </div>
+          <div style="margin-top: 10px; display: flex; justify-content: space-between; font-size: 11px; color: #94a3b8;">
+            <span>전년 평균: 58</span>
+            <span>올해 평균: 69</span>
+          </div>
+        </div>
+
+        <!-- 직전 12개월 -->
+        <div class="growth-card card">
+          <div class="growth-period">연간 (12개월) 평균</div>
+          <div style="font-size: 14px; margin-bottom: 8px;">
+            <span style="color: #94a3b8; font-size: 12px;">2024~2025 vs 2025~2026</span>
+          </div>
+          <div class="growth-value" style="color: #f59e0b;">+8.7%</div>
+          <div class="growth-sub">시장 규모 완만 성장</div>
+          <div class="growth-bar-wrap">
+            <div class="growth-bar-fill" style="width: 58.7%; background: linear-gradient(90deg, #f59e0b, #fbbf24);"></div>
+          </div>
+          <div style="margin-top: 10px; display: flex; justify-content: space-between; font-size: 11px; color: #94a3b8;">
+            <span>전년 평균: 61</span>
+            <span>올해 평균: 66</span>
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top: 16px; padding: 12px 16px; background: #f0fdf4; border-radius: 10px; border: 1px solid #a7f3d0; font-size: 12px; color: #065f46; line-height: 1.7;">
+        📈 <strong>성장 분석:</strong> 전년 대비 검색량이 꾸준히 증가하는 성장형 키워드입니다. 단기(1개월) 성장률이 장기 평균보다 높아 현재 상승 모멘텀이 강한 상태입니다.
+      </div>
+    </div>
+  </div>
+
+  <div class="existing-section"><span class="icon">💵</span> 판매량 추정 & 성장 시뮬레이션 (기존)</div>
+  <div class="group-end"></div>
+</div>
+
+
+<!-- ============================================================ -->
+<!-- 배치 4: 카테고리 분석 아래 — 카테고리 인기 키워드 TOP -->
+<!-- ============================================================ -->
+<div class="placement-group">
+  <div class="placement-label">📍 배치 4 — 카테고리 분석 아래</div>
+  <div class="placement-desc">카테고리 등록 분석 → <strong>카테고리 인기 키워드 TOP</strong> → 1페이지 진입 전략</div>
+
+  <div class="existing-section"><span class="icon">📂</span> 카테고리 등록 분석 (기존)</div>
+
+  <div class="new-section">
+    <div class="section-inner">
+      <div class="sec-title">
+        <span class="icon-box" style="background: linear-gradient(135deg, #fef3c7, #fde68a);">🏷️</span>
+        카테고리 인기 키워드 TOP
+        <span class="new-badge">DATALAB</span>
+      </div>
+      <div class="sec-line"></div>
+      <div class="sec-subtitle">분석 상품의 카테고리에서 최근 가장 많이 검색되는 키워드</div>
+
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+        <!-- 왼쪽: 인기 키워드 순위 -->
+        <div class="card" style="padding: 20px;">
+          <div style="font-size: 14px; font-weight: 700; color: #0f172a; margin-bottom: 14px; display: flex; align-items: center; gap: 6px;">
+            <span>🔥</span> 인기 키워드 순위
+          </div>
+
+          <div class="cat-kw-list">
+            <div class="cat-kw-row" style="background: linear-gradient(135deg, #fef9c3, #fffbeb);">
+              <span class="cat-kw-rank" style="background: #fbbf24;">1</span>
+              <span class="cat-kw-name">골프웨어 여성</span>
+              <span class="cat-kw-growth" style="background: #dcfce7; color: #16a34a;">▲ 32%</span>
+              <span class="cat-kw-volume">45,200</span>
+            </div>
+            <div class="cat-kw-row">
+              <span class="cat-kw-rank" style="background: #94a3b8;">2</span>
+              <span class="cat-kw-name">골프바지</span>
+              <span class="cat-kw-growth" style="background: #dcfce7; color: #16a34a;">▲ 18%</span>
+              <span class="cat-kw-volume">38,100</span>
+            </div>
+            <div class="cat-kw-row">
+              <span class="cat-kw-rank" style="background: #cd7f32;">3</span>
+              <span class="cat-kw-name">골프 티셔츠</span>
+              <span class="cat-kw-growth" style="background: #dcfce7; color: #16a34a;">▲ 25%</span>
+              <span class="cat-kw-volume">31,500</span>
+            </div>
+            <div class="cat-kw-row">
+              <span class="cat-kw-rank" style="background: #64748b;">4</span>
+              <span class="cat-kw-name">골프웨어 세트</span>
+              <span class="cat-kw-growth" style="background: #fef3c7; color: #d97706;">▲ 5%</span>
+              <span class="cat-kw-volume">22,800</span>
+            </div>
+            <div class="cat-kw-row">
+              <span class="cat-kw-rank" style="background: #64748b;">5</span>
+              <span class="cat-kw-name">골프 스커트</span>
+              <span class="cat-kw-growth" style="background: #fee2e2; color: #dc2626;">▼ 3%</span>
+              <span class="cat-kw-volume">19,400</span>
+            </div>
+          </div>
+          <div style="text-align: center; margin-top: 10px; font-size: 11px; color: #94a3b8;">스크롤하여 더 보기 ↓</div>
+        </div>
+
+        <!-- 오른쪽: 급상승 키워드 -->
+        <div class="card" style="padding: 20px;">
+          <div style="font-size: 14px; font-weight: 700; color: #0f172a; margin-bottom: 14px; display: flex; align-items: center; gap: 6px;">
+            <span>🚀</span> 급상승 키워드
+          </div>
+
+          <div class="cat-kw-list">
+            <div class="cat-kw-row" style="background: linear-gradient(135deg, #dcfce7, #f0fdf4); border: 1px solid #a7f3d0;">
+              <span class="cat-kw-rank" style="background: #22c55e;">1</span>
+              <span class="cat-kw-name">여름 골프웨어</span>
+              <span class="cat-kw-growth" style="background: #22c55e; color: #fff;">▲ 156%</span>
+              <span class="cat-kw-volume">12,300</span>
+            </div>
+            <div class="cat-kw-row">
+              <span class="cat-kw-rank" style="background: #22c55e;">2</span>
+              <span class="cat-kw-name">골프 냉감 티</span>
+              <span class="cat-kw-growth" style="background: #22c55e; color: #fff;">▲ 128%</span>
+              <span class="cat-kw-volume">8,700</span>
+            </div>
+            <div class="cat-kw-row">
+              <span class="cat-kw-rank" style="background: #22c55e;">3</span>
+              <span class="cat-kw-name">UV차단 골프복</span>
+              <span class="cat-kw-growth" style="background: #22c55e; color: #fff;">▲ 95%</span>
+              <span class="cat-kw-volume">6,200</span>
+            </div>
+            <div class="cat-kw-row">
+              <span class="cat-kw-rank" style="background: #4ade80;">4</span>
+              <span class="cat-kw-name">골프 반팔 폴로</span>
+              <span class="cat-kw-growth" style="background: #dcfce7; color: #16a34a;">▲ 72%</span>
+              <span class="cat-kw-volume">5,100</span>
+            </div>
+            <div class="cat-kw-row">
+              <span class="cat-kw-rank" style="background: #4ade80;">5</span>
+              <span class="cat-kw-name">골프 린넨 바지</span>
+              <span class="cat-kw-growth" style="background: #dcfce7; color: #16a34a;">▲ 58%</span>
+              <span class="cat-kw-volume">4,800</span>
+            </div>
+          </div>
+          <div style="text-align: center; margin-top: 10px; font-size: 11px; color: #94a3b8;">전월 대비 성장률 기준</div>
+        </div>
+      </div>
+
+      <div style="margin-top: 16px; padding: 12px 16px; background: #fffbeb; border-radius: 10px; border: 1px solid #fde68a; font-size: 12px; color: #92400e; line-height: 1.7;">
+        💡 <strong>활용 팁:</strong> 인기 키워드를 상품명이나 태그에 포함하면 노출 확률이 높아집니다. 급상승 키워드는 시즌 트렌드를 반영하므로 빠른 대응이 유리합니다.
+      </div>
+    </div>
+  </div>
+
+  <div class="existing-section"><span class="icon">🎯</span> 1페이지 진입 전략 비교 분석 (기존)</div>
+  <div class="group-end"></div>
+</div>
+
+<!-- 하단 안내 -->
+<div style="max-width: 960px; margin: 40px auto; padding: 20px 24px; text-align: center;">
+  <div style="background: #fff; border-radius: 16px; padding: 32px; border: 1px solid #e2e8f0; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+    <div style="font-size: 18px; font-weight: 800; color: #0f172a; margin-bottom: 8px;">📐 배치 요약</div>
+    <div style="font-size: 13px; color: #64748b; line-height: 2;">
+      <strong>배치 1</strong> (종합요약 아래): 시즌별 수요 예측 + 요일별 검색 패턴<br>
+      <strong>배치 2</strong> (키워드 검색량 ↔ 시장규모 사이): 성별·연령대별 비율 + 12개월 트렌드<br>
+      <strong>배치 3</strong> (시장규모 아래): 전년 동기 대비 성장률<br>
+      <strong>배치 4</strong> (카테고리 분석 아래): 카테고리 인기 키워드 TOP
+    </div>
+    <div style="margin-top: 16px; font-size: 12px; color: #94a3b8;">
+      ※ 모든 데이터는 네이버 데이터랩 쇼핑인사이트 API에서 실시간 연동됩니다.<br>
+      ※ 위 수치는 디자인 확인용 예시 데이터입니다.
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

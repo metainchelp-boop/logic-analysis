@@ -48,6 +48,7 @@ window.App = function App() {
     const [htmlDetailResult, setHtmlDetailResult] = useState(null);
     const [searchedProductUrl, setSearchedProductUrl] = useState('');
     const [companyName, setCompanyName] = useState('');
+    const [datalabData, setDatalabData] = useState(null);
     const searchIdRef = React.useRef(0); // 비동기 요청 경합 방지용
 
     /* 업체 카드 클릭으로 시작된 분석 추적 (자동 저장용) */
@@ -245,6 +246,7 @@ window.App = function App() {
         setAdvertiserLoading(false);
         setHtmlReviewData(null);
         setHtmlDetailResult(null);
+        setDatalabData(null);
 
         // 검색바에서 HTML이 입력되었으면 상세페이지 분석 + 리뷰 데이터 추출 (비동기)
         if (htmlInput && htmlInput.length >= 100) {
@@ -853,6 +855,28 @@ window.App = function App() {
 
             setAnalysisData(Object.keys(analysis).length > 0 ? analysis : null);
             setSearchLoading(false);
+
+            /* 데이터랩 쇼핑인사이트 비동기 호출 (분석 완료 후) */
+            (function() {
+                var cat1 = '';
+                if (analysis.categoryAnalysis && analysis.categoryAnalysis.categoryLevels && analysis.categoryAnalysis.categoryLevels.large && analysis.categoryAnalysis.categoryLevels.large.length > 0) {
+                    cat1 = analysis.categoryAnalysis.categoryLevels.large[0].name || '';
+                }
+                var relKws = [];
+                if (analysis.keywordTags && analysis.keywordTags.topKeywords) {
+                    relKws = analysis.keywordTags.topKeywords.map(function(k) { return { keyword: k.keyword, totalVolume: parseInt((k.volume || '0').replace(/,/g, '')) }; });
+                }
+                api.post('/datalab/analyze', { keyword: keyword, category1: cat1, related_keywords: relKws })
+                    .then(function(dlRes) {
+                        if (searchIdRef.current !== currentSearchId) return;
+                        if (dlRes && dlRes.success && dlRes.data) {
+                            setDatalabData(dlRes.data);
+                        }
+                    }).catch(function(e) {
+                        console.warn('데이터랩 조회 실패 (무시):', e);
+                    });
+            })();
+
         }).catch(function(e) {
             if (searchIdRef.current !== currentSearchId) return;
             console.error('검색 오류:', e);
@@ -964,7 +988,7 @@ window.App = function App() {
         { id: 'sec-sales', label: '판매추정', icon: '💵', show: !!(analysisData && analysisData.salesEstimation) },
         { id: 'sec-competition', label: '경쟁강도', icon: '⚔️', show: !!(analysisData && analysisData.competitionIndex) },
         { id: 'sec-related', label: '연관키워드', icon: '🔗', show: !!relatedData },
-        { id: 'sec-trend', label: '트렌드', icon: '📈', show: !!(analysisData && analysisData.keywordTrend) },
+        { id: 'sec-golden', label: '골든키워드', icon: '🌟', show: !!(analysisData && analysisData.goldenKeyword) },
         { id: 'sec-competitor', label: '경쟁사', icon: '🏆', show: !!(analysisData && analysisData.competitorTable) },
         { id: 'sec-seo', label: 'SEO 진단', icon: '🎯', show: !!searchedProductUrl },
         { id: 'sec-productname', label: '상품명', icon: '✏️', show: !!searchedProductUrl },
@@ -1177,6 +1201,16 @@ window.App = function App() {
                 )
             ),
 
+            /* [DATALAB] 시즌별 수요 예측 — 종합요약 바로 아래 */
+            datalabData && datalabData.season && React.createElement(window.SectionErrorBoundary, { name: '시즌별 수요' },
+                React.createElement(window.DatalabSeasonSection, { data: datalabData.season })
+            ),
+
+            /* [DATALAB] 요일별 검색 패턴 — 종합요약 바로 아래 */
+            datalabData && datalabData.weekday && React.createElement(window.SectionErrorBoundary, { name: '요일별 패턴' },
+                React.createElement(window.DatalabWeekdaySection, { data: datalabData.weekday })
+            ),
+
             /* 검색 전 안내 (아무 데이터도 없을 때) */
             !searchLoading && !analysisData && !volumeData && !searchedKeyword && React.createElement('div', { className: 'section' },
                 React.createElement('div', { className: 'container' },
@@ -1199,23 +1233,44 @@ window.App = function App() {
                 )
             ),
 
-            /* ==================== 리뉴얼 섹터 순서 (시안 v4.0 기준 21블록) ==================== */
+            /* ==================== 리뉴얼 섹터 순서 (v5.0 — 데이터랩 통합) ==================== */
 
             /* 1. 광고주 정보 */
             analysisData && analysisData.advertiserInfo && React.createElement(window.SectionErrorBoundary, { name: '광고주 정보' },
                 React.createElement(AdvertiserInfoCard, { data: analysisData.advertiserInfo })
             ),
 
+            /* ── 구분선: 검색량 분석 ── */
+            analysisData && React.createElement(window.SectionDivider, { label: '검색량 분석', icon: '🔍', color: '#4f46e5' }),
+
             /* 2. 키워드 검색량 */
             volumeData && React.createElement(window.SectionErrorBoundary, { name: '키워드 검색량' },
                 React.createElement(KeywordVolumeSection, { keyword: searchedKeyword, data: volumeData })
             ),
 
+            /* 2-A. [DATALAB] 성별 + 연령대별 검색 비율 */
+            datalabData && (datalabData.gender || datalabData.age) && React.createElement(window.SectionErrorBoundary, { name: '검색 인구통계' },
+                React.createElement(window.DatalabDemographicsSection, { data: datalabData })
+            ),
+
+            /* 2-B. [DATALAB] 12개월 검색량 트렌드 (꺾은선) */
+            datalabData && datalabData.trend && React.createElement(window.SectionErrorBoundary, { name: '검색량 트렌드' },
+                React.createElement(window.DatalabTrendSection, { data: datalabData.trend })
+            ),
+
+            /* ── 구분선: 시장 규모 분석 ── */
+            analysisData && analysisData.marketRevenue && React.createElement(window.SectionDivider, { label: '시장 규모 분석', icon: '💰', color: '#7c3aed' }),
+
             /* 3. 시장 규모 & 매출 추정 */
             analysisData && analysisData.marketRevenue && React.createElement(window.SectionErrorBoundary, { name: '시장 규모' },
                 React.createElement('div', { id: 'sec-market' },
-                    React.createElement(MarketRevenueSection, { data: analysisData.marketRevenue })
+                    React.createElement(MarketRevenueSection, { data: analysisData.marketRevenue, reviewCount: htmlReviewData ? htmlReviewData.reviewCount : null, productPrice: analysisData.marketRevenue ? parseInt((analysisData.marketRevenue.avgPrice || '0').replace(/[^0-9]/g, '')) : 0 })
                 )
+            ),
+
+            /* 3-A. [DATALAB] 전년 동기 대비 성장률 */
+            datalabData && datalabData.growth && React.createElement(window.SectionErrorBoundary, { name: '전년 성장률' },
+                React.createElement(window.DatalabGrowthSection, { data: datalabData.growth })
             ),
 
             /* 4. 판매량 추정 */
@@ -1224,6 +1279,9 @@ window.App = function App() {
                     React.createElement(SalesEstimationSection, { data: analysisData.salesEstimation, reviewCount: htmlReviewData ? htmlReviewData.reviewCount : null, productPrice: analysisData.marketRevenue ? parseInt((analysisData.marketRevenue.avgPrice || '0').replace(/[^0-9]/g, '')) : 0 })
                 )
             ),
+
+            /* ── 구분선: 경쟁 분석 ── */
+            analysisData && analysisData.competitionIndex && React.createElement(window.SectionDivider, { label: '경쟁 분석', icon: '⚔️', color: '#ef4444' }),
 
             /* 5. 경쟁강도 분석 */
             analysisData && analysisData.competitionIndex && React.createElement(window.SectionErrorBoundary, { name: '경쟁강도' },
@@ -1237,51 +1295,53 @@ window.App = function App() {
                 React.createElement(RelatedKeywordsSection, { data: relatedData })
             ),
 
-            /* 7. 키워드 트렌드 */
-            analysisData && analysisData.keywordTrend && React.createElement(window.SectionErrorBoundary, { name: '키워드 트렌드' },
-                React.createElement('div', { id: 'sec-trend' },
-                    React.createElement(KeywordTrendSection, { data: analysisData.keywordTrend })
-                )
-            ),
-
-            /* 8. 골든 키워드 */
+            /* 7. 골든 키워드 (키워드 트렌드 삭제 → 골든 키워드로 대체) */
             analysisData && analysisData.goldenKeyword && React.createElement(window.SectionErrorBoundary, { name: '골든 키워드' },
                 React.createElement('div', { id: 'sec-golden' },
                     React.createElement(GoldenKeywordCard, { data: analysisData.goldenKeyword })
                 )
             ),
 
-            /* 9. 경쟁사 비교표 (상위 80개) */
+            /* ── 구분선: 경쟁사 분석 ── */
+            analysisData && analysisData.competitorTable && React.createElement(window.SectionDivider, { label: '경쟁사 분석', icon: '🏆', color: '#f59e0b' }),
+
+            /* 8. 경쟁사 비교표 (상위 80개) */
             analysisData && analysisData.competitorTable && React.createElement(window.SectionErrorBoundary, { name: '경쟁사 비교표' },
                 React.createElement(window.CompetitorTableSection, { data: analysisData.competitorTable })
             ),
 
-            /* 10. SEO 종합 진단 (독립 — 상세페이지 품질 진단은 #12 DetailPageQualitySection으로 분리) */
+            /* ── 구분선: SEO 분석 ── */
+            searchedProductUrl && React.createElement(window.SectionDivider, { label: 'SEO 분석', icon: '🔧', color: '#059669' }),
+
+            /* 9. SEO 종합 진단 */
             searchedProductUrl && React.createElement(window.SectionErrorBoundary, { name: 'SEO 진단' },
                 React.createElement(SeoDiagnosisSection, { keyword: searchedKeyword, productUrl: searchedProductUrl, competitorData: analysisData && analysisData.competitorTable })
             ),
 
-            /* 11. SEO 상세 분석 */
+            /* 10. SEO 상세 분석 */
             analysisData && analysisData.seoDetail && React.createElement(window.SectionErrorBoundary, { name: 'SEO 상세' },
                 React.createElement(window.SeoDetailSection, { data: analysisData.seoDetail })
             ),
 
-            /* 12. 상세페이지 품질 진단 (경쟁사 데이터 기반) */
+            /* 11. 상세페이지 품질 진단 (경쟁사 데이터 기반) */
             analysisData && analysisData.detailPageQuality && React.createElement(window.SectionErrorBoundary, { name: '상세페이지 품질' },
                 React.createElement(window.DetailPageQualitySection, { data: analysisData.detailPageQuality })
             ),
 
-            /* 12-B. 상세페이지 HTML 분석 결과 (검색바 HTML 입력 시) */
+            /* 11-B. 상세페이지 HTML 분석 결과 (검색바 HTML 입력 시) */
             htmlDetailResult && React.createElement(window.SectionErrorBoundary, { name: '상세페이지 HTML 분석' },
                 React.createElement(window.HtmlDetailAnalysisSection, { data: htmlDetailResult })
             ),
 
-            /* 13. 리뷰 & 찜 분석 (HTML 실제 데이터 추출 — 상세페이지 품질 바로 아래) */
+            /* ── 구분선: 리뷰 분석 ── */
+            analysisData && analysisData.reviewAnalysis && React.createElement(window.SectionDivider, { label: '리뷰 분석', icon: '⭐', color: '#f59e0b' }),
+
+            /* 12. 리뷰 & 찜 분석 (HTML 실제 데이터 추출) */
             analysisData && analysisData.reviewAnalysis && React.createElement(window.SectionErrorBoundary, { name: '리뷰 분석' },
                 React.createElement(window.ReviewAnalysisSection, { data: analysisData.reviewAnalysis, htmlReviewData: htmlReviewData })
             ),
 
-            /* 13-B. 리뷰 텍스트 분석 (HTML에서 추출한 개별 리뷰) */
+            /* 12-B. 리뷰 텍스트 분석 (HTML에서 추출한 개별 리뷰) */
             htmlReviewData && htmlReviewData.reviews && htmlReviewData.reviews.length > 0 && React.createElement(window.SectionErrorBoundary, { name: '리뷰 텍스트 분석' },
                 React.createElement(window.ReviewTextAnalysisSection, {
                     data: htmlReviewData.reviewTextAnalysis,
@@ -1290,27 +1350,41 @@ window.App = function App() {
                 })
             ),
 
-            /* 14. 상품명 분석 */
+            /* ── 구분선: 상품명 & 키워드 최적화 ── */
+            searchedProductUrl && React.createElement(window.SectionDivider, { label: '상품명 & 키워드 최적화', icon: '✏️', color: '#4f46e5' }),
+
+            /* 13. 상품명 분석 */
             searchedProductUrl && React.createElement(window.SectionErrorBoundary, { name: '상품명 분석' },
                 React.createElement(ProductNameSection, { keyword: searchedKeyword, shopProducts: shopProducts })
             ),
 
-            /* 15. 상품명 SEO 최적화 제안 */
+            /* 14. 상품명 SEO 최적화 제안 */
             analysisData && analysisData.productNameOpt && React.createElement(window.SectionErrorBoundary, { name: '상품명 최적화' },
                 React.createElement(window.ProductNameOptSection, { data: analysisData.productNameOpt })
             ),
 
-            /* 16. 키워드 & 태그 분석 */
+            /* 15. 키워드 & 태그 분석 */
             analysisData && analysisData.keywordTags && React.createElement(window.SectionErrorBoundary, { name: '키워드 태그' },
                 React.createElement(KeywordTagSection, { data: analysisData.keywordTags })
             ),
 
-            /* 17. 카테고리 분석 */
+            /* ── 구분선: 카테고리 분석 ── */
+            analysisData && analysisData.categoryAnalysis && React.createElement(window.SectionDivider, { label: '카테고리 분석', icon: '📂', color: '#7c3aed' }),
+
+            /* 16. 카테고리 분석 */
             analysisData && analysisData.categoryAnalysis && React.createElement(window.SectionErrorBoundary, { name: '카테고리 분석' },
                 React.createElement(CategoryAnalysisSection, { data: analysisData.categoryAnalysis })
             ),
 
-            /* 18. 1페이지 진입 전략 비교 분석 */
+            /* 16-A. [DATALAB] 카테고리 인기 키워드 TOP */
+            datalabData && datalabData.categoryKeywords && React.createElement(window.SectionErrorBoundary, { name: '카테고리 인기 키워드' },
+                React.createElement(window.DatalabCategoryKeywordsSection, { data: datalabData.categoryKeywords })
+            ),
+
+            /* ── 구분선: 전략 & 리포트 ── */
+            analysisData && React.createElement(window.SectionDivider, { label: '전략 & 리포트', icon: '📋', color: '#059669' }),
+
+            /* 17. 1페이지 진입 전략 비교 분석 */
             (advertiserReport || (analysisData && analysisData.strategicAnalysis)) && !advertiserLoading && React.createElement(window.SectionErrorBoundary, { name: '진입 전략' },
                 React.createElement(EntryStrategySection, {
                     advertiserData: advertiserReport,

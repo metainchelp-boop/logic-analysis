@@ -1991,6 +1991,29 @@ async def get_api_usage(current_user: dict = Depends(get_current_user)):
         return {"success": False, "error": "API 사용량 조회 중 오류가 발생했습니다."}
 
 
+# ==================== 데이터랩 쇼핑인사이트 ====================
+
+class DatalabRequest(BaseModel):
+    keyword: str
+    category1: str = ""
+    related_keywords: list = []
+
+@app.post("/api/datalab/analyze")
+async def datalab_analyze(req: DatalabRequest, current_user: dict = Depends(get_current_user)):
+    """네이버 데이터랩 쇼핑인사이트 통합 분석 (인증 필수)"""
+    try:
+        from datalab import analyze_datalab
+        result = analyze_datalab(
+            keyword=req.keyword,
+            category1=req.category1,
+            related_keywords=[{"keyword": k} if isinstance(k, str) else k for k in req.related_keywords],
+        )
+        return {"success": True, "data": result}
+    except Exception as e:
+        logger.error(f"데이터랩 분석 실패: {e}")
+        return {"success": False, "detail": "데이터랩 분석 중 오류가 발생했습니다."}
+
+
 # --- 헬스체크 ---
 @app.get("/api/health")
 async def health():
