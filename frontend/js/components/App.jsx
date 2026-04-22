@@ -723,7 +723,19 @@ window.App = function App() {
 
             // 13. SEO 상세 분석 (상품URL 있을 때)
             if (prods.length > 0) {
-                var advProd = cleanedUrl ? prods.find(function(p) { return p.product_url && p.product_url.indexOf(cleanedUrl) >= 0; }) : null;
+                // URL 매칭: 전체 URL → 상품번호(숫자) 기반 폴백
+                var advProd = null;
+                if (cleanedUrl) {
+                    advProd = prods.find(function(p) { return p.product_url && p.product_url.indexOf(cleanedUrl) >= 0; });
+                    if (!advProd) {
+                        // 상품번호 추출 후 매칭 (URL 형식 차이 보완)
+                        var pidMatch = cleanedUrl.match(/\/products\/(\d+)/);
+                        if (pidMatch) {
+                            var pid = pidMatch[1];
+                            advProd = prods.find(function(p) { return p.product_url && p.product_url.indexOf(pid) >= 0; });
+                        }
+                    }
+                }
                 var targetProd = advProd || prods[0];
                 if (targetProd) {
                     var kwWords = keyword.toLowerCase().split(/\s+/);

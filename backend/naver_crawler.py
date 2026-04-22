@@ -1635,9 +1635,16 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
 
         logger.info(f"[리뷰추출] 방법3 찜 후보: {wish_candidates}")
 
-        # 가장 큰 값 = 총 찜수 (0 제외)
+        # 찜 수 결정: 최빈값 우선, 비정상 큰 값(10만 이상) 필터
         if wish_candidates:
-            actual_wish_count = max(wish_candidates)
+            # 10만 이상은 스토어 전체 찜수 등 비정상 값일 가능성 높음
+            filtered = [v for v in wish_candidates if v < 100000]
+            if not filtered:
+                filtered = wish_candidates  # 모두 10만 이상이면 원본 사용
+            # 최빈값 (가장 많이 등장한 값) 사용 — 여러 소스에서 동일 값이 나오면 신뢰도 높음
+            from collections import Counter as _Counter
+            most_common_val = _Counter(filtered).most_common(1)[0][0]
+            actual_wish_count = most_common_val
 
     # ── 8-B. 찜 수 API 조회 (HTML에서 추출 실패 시) ──
     if actual_wish_count is None and product_url:

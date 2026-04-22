@@ -64,7 +64,7 @@ window.ReportSection = function ReportSection(props) {
                 });
             }
 
-            /* 클론에서 인터랙티브 요소 제거 */
+            /* 클론에서 인터랙티브 요소 제거 + 반응형 클래스 부여 */
             captured.forEach(function(node) {
                 var btns = node.querySelectorAll('button, .btn');
                 btns.forEach(function(b) { b.remove(); });
@@ -75,6 +75,11 @@ window.ReportSection = function ReportSection(props) {
                     span.style.fontWeight = '600';
                     inp.parentNode.replaceChild(span, inp);
                 });
+                /* grid 레이아웃 요소에 반응형 클래스 추가 */
+                var gridEls = node.querySelectorAll('[style*="grid-template-columns"]');
+                gridEls.forEach(function(el) { el.classList.add('rpt-grid'); });
+                var flexEls = node.querySelectorAll('[style*="display: flex"], [style*="display:flex"]');
+                flexEls.forEach(function(el) { el.classList.add('rpt-flex'); });
             });
 
             /* CSS 수집 */
@@ -112,13 +117,41 @@ window.ReportSection = function ReportSection(props) {
                 + '.report-header p { font-size: 14px; opacity: 0.85; }\n'
                 + '.report-footer { text-align: center; padding: 30px; color: #94a3b8; font-size: 12px; border-top: 1px solid #e2e8f0; margin-top: 40px; }\n'
                 + cssText
-                + '\n@media print { .report-header { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }\n'
+                + '\n/* 반응형 — 모바일/태블릿/PC 대응 */\n'
+                + '@media (max-width: 768px) {\n'
+                + '  .report-header { padding: 24px 12px !important; }\n'
+                + '  .report-header h1 { font-size: 18px !important; }\n'
+                + '  .report-header p { font-size: 12px !important; }\n'
+                + '  .report-content { padding: 8px !important; }\n'
+                + '  .section, .card { padding: 12px !important; margin-bottom: 12px !important; }\n'
+                + '  .container { padding: 0 4px !important; }\n'
+                + '  .rpt-grid { grid-template-columns: 1fr !important; }\n'
+                + '  .rpt-flex { flex-wrap: wrap !important; }\n'
+                + '  .rpt-flex > div { min-width: 100% !important; flex: 1 1 100% !important; }\n'
+                + '  div[style*="grid-template-columns"] { grid-template-columns: 1fr !important; }\n'
+                + '  div[style*="display: flex"][style*="gap"] { flex-wrap: wrap !important; }\n'
+                + '  div[style*="display:flex"][style*="gap"] { flex-wrap: wrap !important; }\n'
+                + '  table { font-size: 11px !important; display: block !important; overflow-x: auto !important; }\n'
+                + '  table th, table td { padding: 6px 4px !important; white-space: nowrap !important; }\n'
+                + '  div[style*="font-size: 24px"], div[style*="font-size:24px"] { font-size: 18px !important; }\n'
+                + '  div[style*="font-size: 28px"], div[style*="font-size:28px"] { font-size: 20px !important; }\n'
+                + '  div[style*="font-size: 32px"], div[style*="font-size:32px"] { font-size: 22px !important; }\n'
+                + '  img { max-width: 100% !important; height: auto !important; }\n'
+                + '  .section-title { font-size: 15px !important; }\n'
+                + '  .report-footer { padding: 16px !important; }\n'
+                + '}\n'
+                + '@media (min-width: 769px) and (max-width: 1024px) {\n'
+                + '  .report-content { padding: 16px !important; }\n'
+                + '  .rpt-grid { grid-template-columns: 1fr 1fr !important; }\n'
+                + '  div[style*="grid-template-columns: 1fr 1fr 1fr"] { grid-template-columns: 1fr 1fr !important; }\n'
+                + '}\n'
+                + '@media print { .report-header { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }\n'
                 + '</style>\n</head>\n<body>\n'
                 + '<div class="report-header">\n'
                 + '  <h1>' + headerText + '</h1>\n'
                 + '  <p>' + dateStr + ' | 메타아이앤씨 로직 분석 시스템</p>\n'
                 + '</div>\n'
-                + '<div style="max-width:1200px; margin:0 auto; padding:20px;">\n'
+                + '<div class="report-content" style="max-width:1200px; margin:0 auto; padding:20px;">\n'
                 + bodyHtml
                 + '</div>\n'
                 + '<div class="report-footer">\n'
