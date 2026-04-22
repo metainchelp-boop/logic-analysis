@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1200">
+<title>키워드별 노출 순위 - 시안 3종</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, 'Pretendard', sans-serif; background: #f1f5f9; padding: 40px; color: #0f172a; }
+h1 { text-align: center; margin-bottom: 40px; font-size: 22px; color: #1e293b; }
+.mockup { background: #fff; border-radius: 20px; padding: 32px; margin-bottom: 48px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); max-width: 960px; margin-left: auto; margin-right: auto; }
+.mockup-label { display: inline-block; background: linear-gradient(135deg, #4f46e5, #7c3aed); color: #fff; font-size: 13px; font-weight: 700; padding: 6px 16px; border-radius: 999px; margin-bottom: 16px; }
+.mockup-title { font-size: 17px; font-weight: 700; margin-bottom: 6px; }
+.mockup-desc { font-size: 13px; color: #64748b; margin-bottom: 24px; line-height: 1.6; }
+
+/* ===== 시안 A: 요약 카드 + 2컬럼 칩 ===== */
+.a-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.a-title { font-size: 14px; font-weight: 700; display: flex; align-items: center; gap: 6px; }
+.a-badges { display: flex; gap: 8px; }
+.a-badge { padding: 4px 12px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+.a-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 20px; }
+.a-summary-card { background: #f8fafc; border-radius: 12px; padding: 16px; text-align: center; }
+.a-summary-card .num { font-size: 24px; font-weight: 800; }
+.a-summary-card .label { font-size: 11px; color: #64748b; margin-top: 4px; }
+.a-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.a-col-title { font-size: 12px; font-weight: 700; margin-bottom: 10px; display: flex; align-items: center; gap: 6px; }
+.a-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.a-chip { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 10px; font-size: 13px; font-weight: 600; }
+.a-chip .rank { font-size: 12px; font-weight: 800; padding: 2px 8px; border-radius: 6px; }
+
+/* ===== 시안 B: 노출 테이블 + 미노출 접기 ===== */
+.b-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.b-title { font-size: 14px; font-weight: 700; display: flex; align-items: center; gap: 6px; }
+.b-exposed-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; margin-bottom: 16px; }
+.b-card { border-radius: 12px; padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; }
+.b-kw { font-size: 13px; font-weight: 600; }
+.b-rank { font-size: 14px; font-weight: 800; }
+.b-rank-sub { font-size: 10px; color: #64748b; }
+.b-unexposed { background: #f8fafc; border-radius: 12px; padding: 14px 18px; }
+.b-unexposed-title { font-size: 12px; font-weight: 600; color: '#64748b'; cursor: pointer; display: flex; align-items: center; gap: 6px; }
+.b-unexposed-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.b-unexposed-chip { padding: 4px 12px; background: #e2e8f0; border-radius: 6px; font-size: 12px; color: #64748b; }
+
+/* ===== 시안 C: 바 차트 스타일 ===== */
+.c-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.c-title { font-size: 14px; font-weight: 700; display: flex; align-items: center; gap: 6px; }
+.c-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
+.c-row { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-radius: 10px; background: #f8fafc; }
+.c-kw { font-size: 13px; font-weight: 600; width: 140px; flex-shrink: 0; }
+.c-bar-wrap { flex: 1; height: 24px; background: #e2e8f0; border-radius: 6px; position: relative; overflow: hidden; }
+.c-bar { height: 100%; border-radius: 6px; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px; font-size: 11px; font-weight: 700; color: #fff; min-width: 40px; transition: width 0.5s ease; }
+.c-rank-label { font-size: 13px; font-weight: 700; width: 50px; text-align: right; flex-shrink: 0; }
+.c-divider { display: flex; align-items: center; gap: 10px; margin: 16px 0 12px; }
+.c-divider-line { flex: 1; height: 1px; background: #e2e8f0; }
+.c-divider-text { font-size: 11px; color: #94a3b8; font-weight: 600; }
+.c-unexposed-row { display: flex; align-items: center; gap: 12px; padding: 8px 16px; border-radius: 8px; }
+.c-unexposed-kw { font-size: 12px; color: #94a3b8; width: 140px; }
+.c-unexposed-label { font-size: 11px; color: #cbd5e1; }
+</style>
+</head>
+<body>
+
+<h1>🔎 키워드별 노출 순위 — 시안 비교</h1>
+
+<!-- ===== 시안 A ===== -->
+<div class="mockup">
+    <span class="mockup-label">시안 A</span>
+    <div class="mockup-title">요약 카드 + 2컬럼 칩 레이아웃</div>
+    <div class="mockup-desc">상단에 요약 지표 3개, 아래에 노출/미노출을 좌우 2컬럼으로 나눠서 칩(태그) 형태로 표시. 한눈에 비교 가능.</div>
+
+    <div style="border: 1px solid #e2e8f0; border-radius: 16px; padding: 24px;">
+        <div class="a-header">
+            <div class="a-title"><span>🔎</span> 키워드별 노출 순위</div>
+            <div class="a-badges">
+                <span class="a-badge" style="background: #ecfdf5; color: #10b981;">노출 4개</span>
+                <span class="a-badge" style="background: #fef2f2; color: #ef4444;">미노출 13개</span>
+                <span class="a-badge" style="background: #f1f5f9; color: #64748b;">전체 17개</span>
+            </div>
+        </div>
+
+        <div class="a-summary">
+            <div class="a-summary-card">
+                <div class="num" style="color: #10b981;">4</div>
+                <div class="label">노출 키워드</div>
+            </div>
+            <div class="a-summary-card">
+                <div class="num" style="color: #ef4444;">13</div>
+                <div class="label">미노출 키워드</div>
+            </div>
+            <div class="a-summary-card">
+                <div class="num" style="color: #4f46e5;">23.5%</div>
+                <div class="label">노출률</div>
+            </div>
+        </div>
+
+        <div class="a-columns">
+            <div>
+                <div class="a-col-title"><span style="color: #10b981;">●</span> 노출 키워드</div>
+                <div class="a-chips">
+                    <div class="a-chip" style="background: #ecfdf5; color: #059669;">
+                        엔즈몰 <span class="rank" style="background: #059669; color: #fff;">1위</span>
+                    </div>
+                    <div class="a-chip" style="background: #ecfdf5; color: #059669;">
+                        달콤한 메론 <span class="rank" style="background: #059669; color: #fff;">3위</span>
+                    </div>
+                    <div class="a-chip" style="background: #ecfdf5; color: #059669;">
+                        하미과 산지직송 <span class="rank" style="background: #059669; color: #fff;">3위</span>
+                    </div>
+                    <div class="a-chip" style="background: #fffbeb; color: #d97706;">
+                        멜론 <span class="rank" style="background: #d97706; color: #fff;">13위</span>
+                    </div>
+                </div>
+            </div>
+            <div>
+                <div class="a-col-title"><span style="color: #ef4444;">●</span> 미노출 키워드</div>
+                <div class="a-chips">
+                    <div class="a-chip" style="background: #f1f5f9; color: #94a3b8;">프리미엄 엔즈몰</div>
+                    <div class="a-chip" style="background: #f1f5f9; color: #94a3b8;">산지직송 신선과일</div>
+                    <div class="a-chip" style="background: #f1f5f9; color: #94a3b8;">고당도 멜론</div>
+                    <div class="a-chip" style="background: #f1f5f9; color: #94a3b8;">프리미엄</div>
+                    <div class="a-chip" style="background: #f1f5f9; color: #94a3b8;">신선과일</div>
+                    <div class="a-chip" style="background: #f1f5f9; color: #94a3b8;">고당도</div>
+                    <div class="a-chip" style="background: #f1f5f9; color: #94a3b8;">달콤한</div>
+                    <div class="a-chip" style="background: #f1f5f9; color: #94a3b8;">하미과</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ===== 시안 B ===== -->
+<div class="mockup">
+    <span class="mockup-label">시안 B</span>
+    <div class="mockup-title">노출 카드 그리드 + 미노출 접기</div>
+    <div class="mockup-desc">노출된 키워드만 카드형으로 강조. 미노출은 접힌 상태로 클릭하면 펼쳐짐. 핵심 정보만 즉시 확인 가능.</div>
+
+    <div style="border: 1px solid #e2e8f0; border-radius: 16px; padding: 24px;">
+        <div class="b-header">
+            <div class="b-title"><span>🔎</span> 키워드별 노출 순위</div>
+            <div class="a-badges">
+                <span class="a-badge" style="background: #ecfdf5; color: #10b981;">노출 4개</span>
+                <span class="a-badge" style="background: #f1f5f9; color: #64748b;">전체 17개</span>
+            </div>
+        </div>
+
+        <div class="b-exposed-grid">
+            <div class="b-card" style="background: linear-gradient(135deg, #ecfdf5, #d1fae5); border: 1px solid #a7f3d0;">
+                <div>
+                    <div class="b-kw" style="color: #059669;">엔즈몰</div>
+                    <div class="b-rank-sub">1페이지</div>
+                </div>
+                <div style="text-align: right;">
+                    <div class="b-rank" style="color: #059669;">1위</div>
+                    <div style="font-size: 10px; color: #10b981; font-weight: 600;">상위권</div>
+                </div>
+            </div>
+            <div class="b-card" style="background: linear-gradient(135deg, #ecfdf5, #d1fae5); border: 1px solid #a7f3d0;">
+                <div>
+                    <div class="b-kw" style="color: #059669;">달콤한 메론</div>
+                    <div class="b-rank-sub">1페이지</div>
+                </div>
+                <div style="text-align: right;">
+                    <div class="b-rank" style="color: #059669;">3위</div>
+                    <div style="font-size: 10px; color: #10b981; font-weight: 600;">상위권</div>
+                </div>
+            </div>
+            <div class="b-card" style="background: linear-gradient(135deg, #ecfdf5, #d1fae5); border: 1px solid #a7f3d0;">
+                <div>
+                    <div class="b-kw" style="color: #059669;">하미과 산지직송</div>
+                    <div class="b-rank-sub">1페이지</div>
+                </div>
+                <div style="text-align: right;">
+                    <div class="b-rank" style="color: #059669;">3위</div>
+                    <div style="font-size: 10px; color: #10b981; font-weight: 600;">상위권</div>
+                </div>
+            </div>
+            <div class="b-card" style="background: linear-gradient(135deg, #fffbeb, #fef3c7); border: 1px solid #fde68a;">
+                <div>
+                    <div class="b-kw" style="color: #d97706;">멜론</div>
+                    <div class="b-rank-sub">1페이지</div>
+                </div>
+                <div style="text-align: right;">
+                    <div class="b-rank" style="color: #d97706;">13위</div>
+                    <div style="font-size: 10px; color: #d97706; font-weight: 600;">1페이지</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="b-unexposed">
+            <div class="b-unexposed-title" style="color: #94a3b8;">
+                <span>▼</span> 미노출 키워드 13개
+            </div>
+            <div class="b-unexposed-chips">
+                <span class="b-unexposed-chip">프리미엄 엔즈몰</span>
+                <span class="b-unexposed-chip">산지직송 신선과일</span>
+                <span class="b-unexposed-chip">고당도 멜론</span>
+                <span class="b-unexposed-chip">프리미엄</span>
+                <span class="b-unexposed-chip">신선과일</span>
+                <span class="b-unexposed-chip">고당도</span>
+                <span class="b-unexposed-chip">달콤한</span>
+                <span class="b-unexposed-chip">하미과</span>
+                <span class="b-unexposed-chip">산지직송</span>
+                <span class="b-unexposed-chip">과일</span>
+                <span class="b-unexposed-chip">선물세트</span>
+                <span class="b-unexposed-chip">고당도 프리미엄</span>
+                <span class="b-unexposed-chip">메론 선물세트</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ===== 시안 C ===== -->
+<div class="mockup">
+    <span class="mockup-label">시안 C</span>
+    <div class="mockup-title">수평 바 차트 스타일</div>
+    <div class="mockup-desc">노출 키워드를 순위 기반 바 차트로 시각화. 순위가 높을수록 바가 길어짐. 미노출은 구분선 아래에 리스트로 표시.</div>
+
+    <div style="border: 1px solid #e2e8f0; border-radius: 16px; padding: 24px;">
+        <div class="c-header">
+            <div class="c-title"><span>🔎</span> 키워드별 노출 순위</div>
+            <div class="a-badges">
+                <span class="a-badge" style="background: #ecfdf5; color: #10b981;">노출 4개</span>
+                <span class="a-badge" style="background: #f1f5f9; color: #64748b;">전체 17개</span>
+            </div>
+        </div>
+
+        <div class="c-list">
+            <div class="c-row">
+                <div class="c-kw">엔즈몰</div>
+                <div class="c-bar-wrap">
+                    <div class="c-bar" style="width: 97%; background: linear-gradient(90deg, #10b981, #059669);">1위</div>
+                </div>
+                <div class="c-rank-label" style="color: #059669;">1위</div>
+            </div>
+            <div class="c-row">
+                <div class="c-kw">달콤한 메론</div>
+                <div class="c-bar-wrap">
+                    <div class="c-bar" style="width: 90%; background: linear-gradient(90deg, #10b981, #059669);">3위</div>
+                </div>
+                <div class="c-rank-label" style="color: #059669;">3위</div>
+            </div>
+            <div class="c-row">
+                <div class="c-kw">하미과 산지직송</div>
+                <div class="c-bar-wrap">
+                    <div class="c-bar" style="width: 90%; background: linear-gradient(90deg, #10b981, #059669);">3위</div>
+                </div>
+                <div class="c-rank-label" style="color: #059669;">3위</div>
+            </div>
+            <div class="c-row">
+                <div class="c-kw">멜론</div>
+                <div class="c-bar-wrap">
+                    <div class="c-bar" style="width: 60%; background: linear-gradient(90deg, #fbbf24, #d97706);">13위</div>
+                </div>
+                <div class="c-rank-label" style="color: #d97706;">13위</div>
+            </div>
+        </div>
+
+        <div class="c-divider">
+            <div class="c-divider-line"></div>
+            <div class="c-divider-text">미노출 13개 키워드</div>
+            <div class="c-divider-line"></div>
+        </div>
+
+        <div style="display: flex; flex-wrap: wrap; gap: 6px; padding: 0 8px;">
+            <span class="b-unexposed-chip">프리미엄 엔즈몰</span>
+            <span class="b-unexposed-chip">산지직송 신선과일</span>
+            <span class="b-unexposed-chip">고당도 멜론</span>
+            <span class="b-unexposed-chip">프리미엄</span>
+            <span class="b-unexposed-chip">신선과일</span>
+            <span class="b-unexposed-chip">고당도</span>
+            <span class="b-unexposed-chip">달콤한</span>
+            <span class="b-unexposed-chip">하미과</span>
+            <span class="b-unexposed-chip">산지직송</span>
+            <span class="b-unexposed-chip">과일</span>
+            <span class="b-unexposed-chip">선물세트</span>
+            <span class="b-unexposed-chip">고당도 프리미엄</span>
+            <span class="b-unexposed-chip">메론 선물세트</span>
+        </div>
+    </div>
+</div>
+
+<div style="text-align: center; padding: 40px 0; color: #94a3b8; font-size: 13px;">
+    ※ 위 3가지 시안 중 마음에 드는 것을 선택해주세요
+</div>
+
+</body>
+</html>

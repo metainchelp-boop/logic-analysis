@@ -225,7 +225,13 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                         <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 4 }}>상품명에서 키워드를 추출하여 각각 순위를 조회하고 있습니다</div>
                     </div>
                 )}
-                {exposureResult && !exposureLoading && (
+                {exposureResult && !exposureLoading && (function() {
+                    var exposed = exposureResult.results.filter(function(r) { return r.rank != null; });
+                    var unexposed = exposureResult.results.filter(function(r) { return r.rank == null; });
+                    var exposureRate = exposureResult.total_keywords > 0
+                        ? Math.round((exposureResult.exposed_count / exposureResult.total_keywords) * 100)
+                        : 0;
+                    return (
                     <div className="fade-in" style={{ marginTop: 16 }}>
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
                             <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -235,55 +241,81 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                                 <span style={{ padding: '4px 12px', borderRadius: 999, fontSize: 11, fontWeight: 700, background: '#ecfdf5', color: '#10b981' }}>
                                     노출 {exposureResult.exposed_count}개
                                 </span>
+                                <span style={{ padding: '4px 12px', borderRadius: 999, fontSize: 11, fontWeight: 700, background: '#fef2f2', color: '#ef4444' }}>
+                                    미노출 {unexposed.length}개
+                                </span>
                                 <span style={{ padding: '4px 12px', borderRadius: 999, fontSize: 11, fontWeight: 700, background: '#f1f5f9', color: '#64748b' }}>
                                     전체 {exposureResult.total_keywords}개
                                 </span>
                             </div>
                         </div>
-                        <div className="card" style={{ padding: 0, overflow: 'hidden', borderRadius: 16 }}>
-                            <div style={{ maxHeight: 400, overflowY: 'auto' }}>
-                                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                                    <thead>
-                                        <tr style={{ background: 'linear-gradient(135deg, #4f46e5, #7c3aed)' }}>
-                                            <th style={{ padding: '12px 16px', color: '#fff', fontSize: 12, fontWeight: 600, textAlign: 'center', width: 40 }}>#</th>
-                                            <th style={{ padding: '12px 16px', color: '#fff', fontSize: 12, fontWeight: 600, textAlign: 'left' }}>키워드</th>
-                                            <th style={{ padding: '12px 16px', color: '#fff', fontSize: 12, fontWeight: 600, textAlign: 'center', width: 80 }}>순위</th>
-                                            <th style={{ padding: '12px 16px', color: '#fff', fontSize: 12, fontWeight: 600, textAlign: 'center', width: 70 }}>페이지</th>
-                                            <th style={{ padding: '12px 16px', color: '#fff', fontSize: 12, fontWeight: 600, textAlign: 'center', width: 80 }}>상태</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {exposureResult.results.map(function(r, idx) {
-                                            var rankColor = r.rank ? (r.rank <= 10 ? '#059669' : r.rank <= 40 ? '#d97706' : '#dc2626') : '#94a3b8';
-                                            var statusLabel = r.rank ? (r.rank <= 10 ? '상위권' : r.rank <= 40 ? '1페이지' : '하위권') : '미노출';
-                                            var statusBg = r.rank ? (r.rank <= 10 ? '#ecfdf5' : r.rank <= 40 ? '#fffbeb' : '#fef2f2') : '#f8fafc';
-                                            return (
-                                                <tr key={idx} style={{ borderBottom: '1px solid #e2e8f0', background: idx % 2 === 0 ? '#fff' : '#f8fafc' }}>
-                                                    <td style={{ padding: '10px 16px', textAlign: 'center', fontSize: 12, color: '#94a3b8' }}>{idx + 1}</td>
-                                                    <td style={{ padding: '10px 16px', fontSize: 13, fontWeight: 600, color: '#0f172a' }}>{r.keyword}</td>
-                                                    <td style={{ padding: '10px 16px', textAlign: 'center', fontSize: 14, fontWeight: 700, color: rankColor }}>
-                                                        {r.rank ? r.rank + '위' : '-'}
-                                                    </td>
-                                                    <td style={{ padding: '10px 16px', textAlign: 'center', fontSize: 12, color: '#64748b' }}>
-                                                        {r.page ? r.page + 'P' : '-'}
-                                                    </td>
-                                                    <td style={{ padding: '10px 16px', textAlign: 'center' }}>
-                                                        <span style={{ padding: '3px 10px', borderRadius: 999, fontSize: 11, fontWeight: 700, background: statusBg, color: rankColor }}>
-                                                            {statusLabel}
-                                                        </span>
-                                                    </td>
-                                                </tr>
-                                            );
-                                        })}
-                                    </tbody>
-                                </table>
+
+                        {/* 요약 카드 3개 */}
+                        <div className="card-grid card-grid-3" style={{ marginBottom: 16 }}>
+                            <div className="card" style={{ textAlign: 'center', padding: '16px 12px' }}>
+                                <div style={{ fontSize: 24, fontWeight: 800, color: '#10b981' }}>{exposureResult.exposed_count}</div>
+                                <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>노출 키워드</div>
+                            </div>
+                            <div className="card" style={{ textAlign: 'center', padding: '16px 12px' }}>
+                                <div style={{ fontSize: 24, fontWeight: 800, color: '#ef4444' }}>{unexposed.length}</div>
+                                <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>미노출 키워드</div>
+                            </div>
+                            <div className="card" style={{ textAlign: 'center', padding: '16px 12px' }}>
+                                <div style={{ fontSize: 24, fontWeight: 800, color: '#4f46e5' }}>{exposureRate}%</div>
+                                <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>노출률</div>
                             </div>
                         </div>
-                        <div style={{ marginTop: 8, fontSize: 11, color: '#94a3b8', lineHeight: 1.6 }}>
+
+                        {/* 2컬럼: 노출 / 미노출 */}
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                            {/* 노출 키워드 */}
+                            <div>
+                                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                    <span style={{ color: '#10b981' }}>●</span> 노출 키워드
+                                </div>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                                    {exposed.map(function(r, idx) {
+                                        var chipBg = r.rank <= 10 ? '#ecfdf5' : r.rank <= 40 ? '#fffbeb' : '#fef2f2';
+                                        var chipColor = r.rank <= 10 ? '#059669' : r.rank <= 40 ? '#d97706' : '#dc2626';
+                                        var rankBg = r.rank <= 10 ? '#059669' : r.rank <= 40 ? '#d97706' : '#dc2626';
+                                        return (
+                                            <div key={idx} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 10, fontSize: 13, fontWeight: 600, background: chipBg, color: chipColor }}>
+                                                {r.keyword}
+                                                <span style={{ fontSize: 12, fontWeight: 800, padding: '2px 8px', borderRadius: 6, background: rankBg, color: '#fff' }}>{r.rank}위</span>
+                                            </div>
+                                        );
+                                    })}
+                                    {exposed.length === 0 && (
+                                        <div style={{ fontSize: 12, color: '#94a3b8' }}>노출된 키워드가 없습니다</div>
+                                    )}
+                                </div>
+                            </div>
+                            {/* 미노출 키워드 */}
+                            <div>
+                                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                    <span style={{ color: '#ef4444' }}>●</span> 미노출 키워드
+                                </div>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                                    {unexposed.map(function(r, idx) {
+                                        return (
+                                            <div key={idx} style={{ display: 'inline-flex', alignItems: 'center', padding: '8px 14px', borderRadius: 10, fontSize: 13, fontWeight: 600, background: '#f1f5f9', color: '#94a3b8' }}>
+                                                {r.keyword}
+                                            </div>
+                                        );
+                                    })}
+                                    {unexposed.length === 0 && (
+                                        <div style={{ fontSize: 12, color: '#94a3b8' }}>모든 키워드에 노출 중입니다</div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div style={{ marginTop: 12, fontSize: 11, color: '#94a3b8', lineHeight: 1.6 }}>
                             ※ 상품명에서 추출한 키워드별로 네이버 쇼핑 검색 순위를 조회한 결과입니다. 검색 범위: 상위 300개 상품
                         </div>
                     </div>
-                )}
+                    );
+                })()}
 
                 {/* 등록된 상품 목록 (viewer에게는 숨김 — 1회성 조회만 표시) */}
                 {(function() {

@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>리뷰 분석 시안 — 로직 분석 v4.4.1</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: 'Noto Sans KR', -apple-system, sans-serif;
+  background: #f1f5f9;
+  color: #1e293b;
+  padding: 32px 20px;
+}
+.container { max-width: 1100px; margin: 0 auto; }
+.note {
+  background: #fffbeb; border: 1px solid #fcd34d; border-radius: 12px;
+  padding: 16px 20px; margin-bottom: 24px; font-size: 13px; color: #92400e;
+  display: flex; align-items: center; gap: 10px;
+}
+.section {
+  background: #fff; border-radius: 16px; padding: 32px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.06); margin-bottom: 24px;
+}
+.section-title {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 18px; font-weight: 800; color: #1e293b; margin-bottom: 6px;
+}
+.section-title .icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 36px; height: 36px; border-radius: 10px; font-size: 18px;
+}
+.section-line {
+  height: 2px; background: linear-gradient(90deg, #7c3aed 0%, transparent 100%);
+  margin: 10px 0 8px; border-radius: 2px;
+}
+.section-subtitle { font-size: 13px; color: #64748b; margin-bottom: 20px; }
+
+/* ============ 리뷰 요약 카드 ============ */
+.summary-grid {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 28px;
+}
+.summary-card {
+  background: #f8fafc; border-radius: 14px; padding: 20px 16px; text-align: center;
+  border: 1px solid #e2e8f0;
+}
+.summary-card .label { font-size: 11px; font-weight: 600; color: #94a3b8; margin-bottom: 8px; }
+.summary-card .value { font-size: 28px; font-weight: 800; }
+.summary-card .sub { font-size: 11px; color: #94a3b8; margin-top: 4px; }
+
+/* ============ 키워드 분석 ============ */
+.keyword-section { margin-bottom: 28px; }
+.keyword-title {
+  font-size: 14px; font-weight: 700; color: #1e293b; margin-bottom: 14px;
+  display: flex; align-items: center; gap: 8px;
+}
+.keyword-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.keyword-box {
+  border-radius: 14px; padding: 20px; border: 1px solid #e2e8f0;
+}
+.keyword-box.positive { background: linear-gradient(135deg, #f0fdf4, #ecfdf5); border-color: #bbf7d0; }
+.keyword-box.negative { background: linear-gradient(135deg, #fef2f2, #fff5f5); border-color: #fecaca; }
+.keyword-box .box-title {
+  font-size: 13px; font-weight: 700; margin-bottom: 14px;
+  display: flex; align-items: center; gap: 6px;
+}
+.keyword-box.positive .box-title { color: #059669; }
+.keyword-box.negative .box-title { color: #dc2626; }
+
+.keyword-tag {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 14px; border-radius: 999px; font-size: 13px; font-weight: 600;
+  margin: 3px 4px;
+}
+.keyword-tag.pos { background: #dcfce7; color: #166534; }
+.keyword-tag.neg { background: #fee2e2; color: #991b1b; }
+.keyword-tag .count { font-size: 11px; font-weight: 700; opacity: 0.7; }
+
+/* ============ 고객 태그 분석 ============ */
+.tag-analysis { margin-bottom: 28px; }
+.tag-bar-group { display: flex; flex-direction: column; gap: 10px; }
+.tag-bar-row {
+  display: flex; align-items: center; gap: 12px;
+}
+.tag-bar-label { width: 80px; font-size: 13px; font-weight: 600; color: #475569; text-align: right; flex-shrink: 0; }
+.tag-bar-track { flex: 1; height: 28px; background: #f1f5f9; border-radius: 8px; overflow: hidden; position: relative; }
+.tag-bar-fill { height: 100%; border-radius: 8px; display: flex; align-items: center; padding-left: 12px; font-size: 11px; font-weight: 700; color: #fff; min-width: 40px; }
+.tag-bar-count { font-size: 12px; font-weight: 600; color: #64748b; width: 50px; text-align: left; }
+
+/* ============ AI 인사이트 ============ */
+.insight-box {
+  background: linear-gradient(135deg, #eef2ff, #e0e7ff);
+  border: 1px solid #c7d2fe; border-radius: 14px;
+  padding: 20px 24px; margin-bottom: 28px;
+}
+.insight-box .insight-title {
+  font-size: 13px; font-weight: 700; color: #4338ca; margin-bottom: 12px;
+  display: flex; align-items: center; gap: 8px;
+}
+.insight-list { list-style: none; }
+.insight-list li {
+  font-size: 13px; color: #312e81; line-height: 1.8;
+  padding-left: 20px; position: relative;
+}
+.insight-list li::before {
+  content: '→'; position: absolute; left: 0; color: #6366f1; font-weight: 700;
+}
+
+/* ============ 리뷰 목록 ============ */
+.review-list { display: flex; flex-direction: column; gap: 12px; }
+.review-card {
+  background: #f8fafc; border-radius: 12px; padding: 16px 20px;
+  border: 1px solid #e2e8f0; transition: all 0.2s;
+}
+.review-card:hover { border-color: #c7d2fe; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+.review-header {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+}
+.review-stars { color: #f59e0b; font-size: 13px; letter-spacing: 1px; }
+.review-tags { display: flex; gap: 4px; flex-wrap: wrap; }
+.review-tag-sm {
+  font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
+  background: #ede9fe; color: #6d28d9;
+}
+.review-sentiment {
+  margin-left: auto; font-size: 10px; font-weight: 700; padding: 2px 8px;
+  border-radius: 999px;
+}
+.review-sentiment.pos { background: #dcfce7; color: #166534; }
+.review-sentiment.neg { background: #fee2e2; color: #991b1b; }
+.review-sentiment.neu { background: #f1f5f9; color: #64748b; }
+.review-text {
+  font-size: 13px; color: #334155; line-height: 1.7;
+}
+.toggle-btn {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  width: 100%; padding: 10px; margin-top: 12px;
+  background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 10px;
+  font-size: 13px; font-weight: 600; color: #64748b; cursor: pointer;
+}
+.toggle-btn:hover { background: #f1f5f9; color: #475569; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<div class="note">
+  <span style="font-size:18px">📐</span>
+  <span><strong>시안 미리보기</strong> — 이 디자인은 '리뷰 & 찜 분석' 섹션 바로 아래에 위치합니다. 확인 후 수정 요청 또는 작업 요청해주세요.</span>
+</div>
+
+<!-- ============ 리뷰 텍스트 분석 섹션 ============ -->
+<div class="section">
+  <div class="section-title">
+    <span class="icon" style="background: linear-gradient(135deg, #fef3c7, #fde68a)">💬</span>
+    리뷰 텍스트 분석
+  </div>
+  <div class="section-line"></div>
+  <p class="section-subtitle">상세페이지 HTML에서 추출한 구매자 리뷰 분석 결과</p>
+
+  <!-- 1. 요약 카드 -->
+  <div class="summary-grid">
+    <div class="summary-card">
+      <div class="label">추출된 리뷰</div>
+      <div class="value" style="color:#7c3aed">12<span style="font-size:14px;color:#94a3b8">건</span></div>
+      <div class="sub">전체 450건 중</div>
+    </div>
+    <div class="summary-card">
+      <div class="label">평균 별점</div>
+      <div class="value" style="color:#f59e0b">4.9<span style="font-size:14px;color:#94a3b8">점</span></div>
+      <div class="sub">★★★★★</div>
+    </div>
+    <div class="summary-card">
+      <div class="label">긍정 비율</div>
+      <div class="value" style="color:#10b981">92<span style="font-size:14px;color:#94a3b8">%</span></div>
+      <div class="sub">11건 긍정 / 1건 혼합</div>
+    </div>
+    <div class="summary-card">
+      <div class="label">평균 글자수</div>
+      <div class="value" style="color:#3b82f6">67<span style="font-size:14px;color:#94a3b8">자</span></div>
+      <div class="sub">상세한 후기 비율 높음</div>
+    </div>
+  </div>
+
+  <!-- 2. 키워드 분석 (긍정 / 부정) -->
+  <div class="keyword-section">
+    <div class="keyword-title">📊 핵심 키워드 분석</div>
+    <div class="keyword-grid">
+      <div class="keyword-box positive">
+        <div class="box-title">👍 긍정 키워드</div>
+        <div>
+          <span class="keyword-tag pos">달콤 <span class="count">×6</span></span>
+          <span class="keyword-tag pos">신선 <span class="count">×5</span></span>
+          <span class="keyword-tag pos">맛있 <span class="count">×4</span></span>
+          <span class="keyword-tag pos">만족 <span class="count">×3</span></span>
+          <span class="keyword-tag pos">깔끔 <span class="count">×2</span></span>
+          <span class="keyword-tag pos">재구매 <span class="count">×2</span></span>
+        </div>
+      </div>
+      <div class="keyword-box negative">
+        <div class="box-title">👎 부정/개선 키워드</div>
+        <div>
+          <span class="keyword-tag neg">건조 <span class="count">×2</span></span>
+          <span class="keyword-tag neg">작은 <span class="count">×1</span></span>
+          <span class="keyword-tag neg">신맛 <span class="count">×1</span></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3. 고객 선택 태그 분석 -->
+  <div class="tag-analysis">
+    <div class="keyword-title">🏷️ 구매자 선택 태그 분석</div>
+    <div class="tag-bar-group">
+      <div class="tag-bar-row">
+        <div class="tag-bar-label">신선함</div>
+        <div class="tag-bar-track">
+          <div class="tag-bar-fill" style="width:100%; background: linear-gradient(90deg, #7c3aed, #a78bfa);">12건</div>
+        </div>
+        <div class="tag-bar-count">100%</div>
+      </div>
+      <div class="tag-bar-row">
+        <div class="tag-bar-label">적당해요</div>
+        <div class="tag-bar-track">
+          <div class="tag-bar-fill" style="width:58%; background: linear-gradient(90deg, #3b82f6, #93c5fd);">7건</div>
+        </div>
+        <div class="tag-bar-count">58%</div>
+      </div>
+      <div class="tag-bar-row">
+        <div class="tag-bar-label">신선해요</div>
+        <div class="tag-bar-track">
+          <div class="tag-bar-fill" style="width:42%; background: linear-gradient(90deg, #10b981, #6ee7b7);">5건</div>
+        </div>
+        <div class="tag-bar-count">42%</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4. AI 인사이트 -->
+  <div class="insight-box">
+    <div class="insight-title">🤖 AI 전략 인사이트</div>
+    <ul class="insight-list">
+      <li><strong>핵심 강점:</strong> "달콤", "신선" 키워드가 압도적 — 상세페이지에서 이 키워드를 더 강조하세요</li>
+      <li><strong>약점 포인트:</strong> "건조", "작은 크기" 언급 있음 — 상품 설명에 "가정용은 크기가 다양할 수 있습니다" 안내 추가 권장</li>
+      <li><strong>재구매 의향:</strong> "또 사먹을게요", "내년에도" 등 재구매 언급 비율 높음 — 리뷰 이벤트로 이런 후기를 더 유도하세요</li>
+      <li><strong>리뷰 품질:</strong> 평균 67자 — 상세 리뷰가 많아 신뢰도 높음, 포토리뷰 유도하면 전환율 상승 기대</li>
+    </ul>
+  </div>
+
+  <!-- 5. 리뷰 목록 -->
+  <div>
+    <div class="keyword-title">📋 추출된 리뷰 목록 <span style="font-size:11px;font-weight:500;color:#94a3b8;margin-left:4px">(HTML에서 추출된 12건)</span></div>
+    <div class="review-list">
+      <div class="review-card">
+        <div class="review-header">
+          <span class="review-stars">★★★★★</span>
+          <div class="review-tags">
+            <span class="review-tag-sm">신선함</span>
+            <span class="review-tag-sm">적당해요</span>
+          </div>
+          <span class="review-sentiment pos">긍정</span>
+        </div>
+        <div class="review-text">못난이 가정용 구매에 끝물이라 약간 건조하고 모양이 안 예쁜 것은 있지만 정말 달콤해요. 7인 가족이라 10킬로씩 사도 금방인데 종전에 다른 곳에서 구매한 것들은 너무 셔서 아주 오래 먹었거든요...</div>
+      </div>
+      <div class="review-card">
+        <div class="review-header">
+          <span class="review-stars">★★★★☆</span>
+          <div class="review-tags">
+            <span class="review-tag-sm">신선함</span>
+            <span class="review-tag-sm">적당해요</span>
+          </div>
+          <span class="review-sentiment pos">긍정</span>
+        </div>
+        <div class="review-text">하우스 가정용 한라봉 10kg 두 박스를 시켰어요. 올 1월부터 가정용 레드향 10kg 6박스 시켜 다 먹고 이제 한라봉으로 갈아탔네요. 신맛이 싫어서 일부러 하우스 한라봉을 시켰는데 신맛이 남아서 새콤달콤합니다~~</div>
+      </div>
+      <div class="review-card">
+        <div class="review-header">
+          <span class="review-stars">★★★★★</span>
+          <div class="review-tags">
+            <span class="review-tag-sm">신선함</span>
+            <span class="review-tag-sm">신선해요</span>
+          </div>
+          <span class="review-sentiment pos">긍정</span>
+        </div>
+        <div class="review-text">고민하다가 구입했는데 아주 만족스러워요!!!! 집에서 먹는 거라서 가정용으로 구입했는데, 흠도 없고 아주 깔끔한 상태로 잘 왔어요!!! 만족합니다</div>
+      </div>
+
+      <div class="toggle-btn">
+        ▼ 나머지 9건 더 보기
+      </div>
+    </div>
+  </div>
+
+</div>
+<!-- 섹션 끝 -->
+
+</div>
+</body>
+</html>
