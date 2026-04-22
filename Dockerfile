@@ -18,7 +18,7 @@ COPY backend/ .
 RUN mkdir -p /app/data /app/data/backups
 
 # 환경변수 기본값 — DB는 반드시 볼륨 마운트된 경로에 저장
-ENV DB_PATH=/app/data/logic_analysis.db
+ENV DB_PATH=/app/data/logic_data.db
 ENV TZ=Asia/Seoul
 ENV PYTHONUNBUFFERED=1
 

@@ -546,7 +546,7 @@ def run_single_analysis(client_id: int, client_name: str, keyword: str, product_
 
     from naver_crawler import get_keyword_volume, search_products, find_product_rank
 
-    DB_PATH = os.getenv("DB_PATH", "logic_analysis.db")
+    DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
     today = datetime.now().strftime('%Y-%m-%d')
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 

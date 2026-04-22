@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 
 # Database configuration
-DB_PATH = os.getenv("DB_PATH", "logic_analysis.db")
+DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
 
 # JWT configuration
 _secret_file = os.path.join(os.path.dirname(os.path.abspath(DB_PATH)), ".jwt_secret")

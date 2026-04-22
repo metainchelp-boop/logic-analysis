@@ -169,7 +169,7 @@ def _run_rank_tracking():
     import sqlite3
     import os
 
-    DB_PATH = os.getenv("DB_PATH", "logic_analysis.db")
+    DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
     today = date.today().isoformat()
 
     logger.info(f"🔍 순위 추적 시작 ({datetime.now().strftime('%H:%M')})")
@@ -278,7 +278,7 @@ def _run_daily_analysis():
     import sqlite3
     import os
 
-    DB_PATH = os.getenv("DB_PATH", "logic_analysis.db")
+    DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
     today = date.today().isoformat()
 
     logger.info(f"📊 전체 분석 + 보고서 생성 시작 ({datetime.now().strftime('%H:%M')})")
@@ -499,7 +499,7 @@ def _run_daily_db_backup():
     import shutil
     import os
 
-    DB_PATH = os.getenv("DB_PATH", "logic_analysis.db")
+    DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
 
     if not os.path.exists(DB_PATH):
         logger.warning("[DB백업] DB 파일 없음, 백업 건너뜀")

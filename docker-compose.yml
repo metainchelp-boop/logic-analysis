@@ -11,7 +11,7 @@ services:
       - .env
     environment:
       - TZ=Asia/Seoul
-      - DB_PATH=/app/data/logic_analysis.db
+      - DB_PATH=/app/data/logic_data.db
     volumes:
       # 중요: 이 볼륨이 업체(광고주) DB를 영속적으로 저장합니다.
       # 절대로 이 경로를 변경하지 마세요!

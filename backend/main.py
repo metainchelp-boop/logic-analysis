@@ -76,7 +76,7 @@ def _verify_db_integrity():
     """앱 시작 시 DB 경로 및 데이터 무결성 검증.
     볼륨 마운트 미스매치로 인한 데이터 손실을 조기에 감지한다."""
     import sqlite3
-    db_path = os.getenv("DB_PATH", "logic_analysis.db")
+    db_path = os.getenv("DB_PATH", "/app/data/logic_data.db")
     db_dir = os.path.dirname(os.path.abspath(db_path))
 
     logger.info(f"📂 DB 경로: {os.path.abspath(db_path)}")
@@ -131,7 +131,7 @@ def _backup_db_on_startup():
     """앱 시작 시 DB 자동 백업 (데이터가 있는 경우에만)"""
     import sqlite3
     import shutil
-    db_path = os.getenv("DB_PATH", "logic_analysis.db")
+    db_path = os.getenv("DB_PATH", "/app/data/logic_data.db")
 
     if not os.path.exists(db_path) or os.path.getsize(db_path) < 4096:
         return

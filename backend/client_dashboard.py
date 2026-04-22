@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/cd", tags=["client-dashboard"])
 
-DB_PATH = os.getenv("DB_PATH", "logic_analysis.db")
+DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
 
 
 def _get_conn():

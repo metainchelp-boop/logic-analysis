@@ -10,7 +10,7 @@ from typing import Optional, List, Dict, Any
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = os.getenv("DB_PATH", "logic_analysis.db")
+DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
 
 
 def _get_conn() -> sqlite3.Connection:

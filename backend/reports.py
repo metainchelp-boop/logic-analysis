@@ -41,7 +41,7 @@ from auth import get_current_user, require_role
 
 
 # Configuration
-DB_PATH = os.getenv("DB_PATH", "logic_analysis.db")
+DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
 REPORTS_DIR = Path("reports")
 REPORTS_DIR.mkdir(exist_ok=True)
 

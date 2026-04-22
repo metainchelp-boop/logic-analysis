@@ -21,7 +21,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Database configuration
-DB_PATH = os.getenv("DB_PATH", "logic_analysis.db")
+DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
 
 # APIRouter
 router = APIRouter(prefix="/api/clients", tags=["clients"])

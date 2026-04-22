@@ -12,7 +12,7 @@
 set -e
 
 DEPLOY_DIR="/root/logic-analysis-deploy"
-DB_PATH="$DEPLOY_DIR/data/logic_analysis.db"
+DB_PATH="$DEPLOY_DIR/data/logic_data.db"
 BACKUP_DIR="$DEPLOY_DIR/data/backups"
 FRONTEND_DEPLOY="$DEPLOY_DIR/frontend"
 
@@ -71,7 +71,7 @@ else
         --restart unless-stopped \
         --env-file "$DEPLOY_DIR/.env" \
         -e TZ=Asia/Seoul \
-        -e DB_PATH=/app/data/logic_analysis.db \
+        -e DB_PATH=/app/data/logic_data.db \
         -v "$DEPLOY_DIR/data:/app/data" \
         -p 127.0.0.1:5050:5050 \
         --log-driver json-file \
