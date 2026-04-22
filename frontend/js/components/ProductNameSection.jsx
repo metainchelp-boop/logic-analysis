@@ -101,21 +101,21 @@ window.ProductNameSection = function ProductNameSection({ keyword, shopProducts 
                             marginBottom: 20
                         }}>
                             <div style={metricCardStyle}>
-                                <div style={{ fontSize: 24, marginBottom: 8 }}>📦</div>
+                                <div style={{ fontSize: 18, marginBottom: 8 }}>📦</div>
                                 <div style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>분석 상품 수</div>
-                                <div style={{ fontSize: 28, fontWeight: 800, color: '#0f172a' }}>{result.total_analyzed}</div>
+                                <div style={{ fontSize: 18, fontWeight: 800, color: '#0f172a' }}>{result.total_analyzed}</div>
                                 <div style={{ fontSize: 12, color: '#64748b' }}>개</div>
                             </div>
                             <div style={metricCardStyle}>
-                                <div style={{ fontSize: 24, marginBottom: 8 }}>📏</div>
+                                <div style={{ fontSize: 18, marginBottom: 8 }}>📏</div>
                                 <div style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>평균 상품명 길이</div>
-                                <div style={{ fontSize: 28, fontWeight: 800, color: '#0f172a' }}>{result.avg_name_length}</div>
+                                <div style={{ fontSize: 18, fontWeight: 800, color: '#0f172a' }}>{result.avg_name_length}</div>
                                 <div style={{ fontSize: 12, color: '#64748b' }}>자</div>
                             </div>
                             <div style={metricCardStyle}>
-                                <div style={{ fontSize: 24, marginBottom: 8 }}>🎯</div>
+                                <div style={{ fontSize: 18, marginBottom: 8 }}>🎯</div>
                                 <div style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>키워드 포함률</div>
-                                <div style={{ fontSize: 28, fontWeight: 800, color: '#0f172a' }}>{result.keyword_coverage != null ? result.keyword_coverage : '-'}</div>
+                                <div style={{ fontSize: 18, fontWeight: 800, color: '#0f172a' }}>{result.keyword_coverage != null ? result.keyword_coverage : '-'}</div>
                                 <div style={{ fontSize: 12, color: '#64748b' }}>%</div>
                             </div>
                         </div>

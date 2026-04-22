@@ -58,7 +58,7 @@ window.ReviewTextAnalysisSection = function ReviewTextAnalysisSection(props) {
         /* 추출된 리뷰 */
         React.createElement('div', { style: { background: '#f8fafc', borderRadius: 14, padding: '20px 16px', textAlign: 'center', border: '1px solid #e2e8f0' } },
           React.createElement('div', { style: { fontSize: 11, fontWeight: 600, color: '#94a3b8', marginBottom: 8 } }, '추출된 리뷰'),
-          React.createElement('div', { style: { fontSize: 28, fontWeight: 800, color: '#7c3aed' } },
+          React.createElement('div', { style: { fontSize: 18, fontWeight: 800, color: '#7c3aed' } },
             fmt(data.totalExtracted),
             React.createElement('span', { style: { fontSize: 14, color: '#94a3b8' } }, '건')
           ),
@@ -67,7 +67,7 @@ window.ReviewTextAnalysisSection = function ReviewTextAnalysisSection(props) {
         /* 평균 별점 */
         React.createElement('div', { style: { background: '#f8fafc', borderRadius: 14, padding: '20px 16px', textAlign: 'center', border: '1px solid #e2e8f0' } },
           React.createElement('div', { style: { fontSize: 11, fontWeight: 600, color: '#94a3b8', marginBottom: 8 } }, '평균 별점'),
-          React.createElement('div', { style: { fontSize: 28, fontWeight: 800, color: '#f59e0b' } },
+          React.createElement('div', { style: { fontSize: 18, fontWeight: 800, color: '#f59e0b' } },
             data.avgRating,
             React.createElement('span', { style: { fontSize: 14, color: '#94a3b8' } }, '점')
           ),
@@ -76,7 +76,7 @@ window.ReviewTextAnalysisSection = function ReviewTextAnalysisSection(props) {
         /* 긍정 비율 */
         React.createElement('div', { style: { background: '#f8fafc', borderRadius: 14, padding: '20px 16px', textAlign: 'center', border: '1px solid #e2e8f0' } },
           React.createElement('div', { style: { fontSize: 11, fontWeight: 600, color: '#94a3b8', marginBottom: 8 } }, '긍정 비율'),
-          React.createElement('div', { style: { fontSize: 28, fontWeight: 800, color: '#10b981' } },
+          React.createElement('div', { style: { fontSize: 18, fontWeight: 800, color: '#10b981' } },
             data.sentiment.positiveRatio,
             React.createElement('span', { style: { fontSize: 14, color: '#94a3b8' } }, '%')
           ),
@@ -87,7 +87,7 @@ window.ReviewTextAnalysisSection = function ReviewTextAnalysisSection(props) {
         /* 평균 글자수 */
         React.createElement('div', { style: { background: '#f8fafc', borderRadius: 14, padding: '20px 16px', textAlign: 'center', border: '1px solid #e2e8f0' } },
           React.createElement('div', { style: { fontSize: 11, fontWeight: 600, color: '#94a3b8', marginBottom: 8 } }, '평균 글자수'),
-          React.createElement('div', { style: { fontSize: 28, fontWeight: 800, color: '#3b82f6' } },
+          React.createElement('div', { style: { fontSize: 18, fontWeight: 800, color: '#3b82f6' } },
             data.avgChars,
             React.createElement('span', { style: { fontSize: 14, color: '#94a3b8' } }, '자')
           ),

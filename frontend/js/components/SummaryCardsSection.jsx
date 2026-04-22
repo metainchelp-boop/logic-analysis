@@ -36,7 +36,7 @@ window.SummaryCardsSection = function SummaryCardsSection(props) {
                   textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8
                 }}>{c.label}</div>
                 <div style={{
-                  fontSize: 28, fontWeight: 800, color: c.color, lineHeight: 1.2
+                  fontSize: 24, fontWeight: 800, color: c.color, lineHeight: 1.2
                 }}>{c.value}</div>
                 {c.unit && <div style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>{c.unit}</div>}
               </div>

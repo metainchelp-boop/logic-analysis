@@ -62,7 +62,7 @@ window.HtmlDetailAnalysisSection = function HtmlDetailAnalysisSection({ data }) 
                                 width: 96, height: 96, borderRadius: '50%', background: '#fff',
                                 display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center'
                             }}>
-                                <div style={{ fontSize: 36, fontWeight: 800, color: getScoreColor(total) }}>{total}</div>
+                                <div style={{ fontSize: 28, fontWeight: 800, color: getScoreColor(total) }}>{total}</div>
                                 <div style={{ fontSize: 11, color: '#94a3b8' }}>/ 100</div>
                             </div>
                         </div>
@@ -101,9 +101,9 @@ window.HtmlDetailAnalysisSection = function HtmlDetailAnalysisSection({ data }) 
                                 textAlign: 'center', padding: 24, borderRadius: 16,
                                 background: '#fff', border: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(0,0,0,0.04)'
                             }}>
-                                <div style={{ fontSize: 24, marginBottom: 8 }}>{item.icon}</div>
+                                <div style={{ fontSize: 18, marginBottom: 8 }}>{item.icon}</div>
                                 <div style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', marginBottom: 6 }}>{item.label}</div>
-                                <div style={{ fontSize: 28, fontWeight: 800, color: item.good ? '#10b981' : '#ef4444' }}>{item.value}</div>
+                                <div style={{ fontSize: 24, fontWeight: 800, color: item.good ? '#10b981' : '#ef4444' }}>{item.value}</div>
                             </div>
                         ))}
                     </div>

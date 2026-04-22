@@ -140,7 +140,7 @@ window.EntryStrategySection = function EntryStrategySection(props) {
                 React.createElement('div', { style: { display: 'flex', gap: 12, alignItems: 'center' } },
                     /* 순위 배지 */
                     React.createElement('div', { style: { textAlign: 'center', padding: '10px 18px', background: '#f8fafc', borderRadius: 12, minWidth: 80, border: '1px solid #e2e8f0' } },
-                        React.createElement('div', { style: { fontSize: 24, fontWeight: 800, color: ranking.current_rank ? '#0f172a' : '#ef4444' } },
+                        React.createElement('div', { style: { fontSize: 18, fontWeight: 800, color: ranking.current_rank ? '#0f172a' : '#ef4444' } },
                             ranking.current_rank ? ranking.current_rank + '위' : '미노출'
                         ),
                         React.createElement('div', { style: { fontSize: 11, color: '#94a3b8', fontWeight: 600 } }, '현재 순위')
@@ -173,28 +173,28 @@ window.EntryStrategySection = function EntryStrategySection(props) {
                 /* 시장 요약 v5 MetricCard */
                 React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 16 } },
                     React.createElement('div', { style: Object.assign({}, v5Card, { textAlign: 'center', padding: 24 }) },
-                        React.createElement('div', { style: { fontSize: 24, marginBottom: 8 } }, '\uD83D\uDCB0'),
+                        React.createElement('div', { style: { fontSize: 18, marginBottom: 8 } }, '\uD83D\uDCB0'),
                         React.createElement('div', { style: { fontSize: 11, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', marginBottom: 6 } }, '평균 가격'),
-                        React.createElement('div', { style: { fontSize: 28, fontWeight: 800, color: '#0f172a' } },
+                        React.createElement('div', { style: { fontSize: 18, fontWeight: 800, color: '#0f172a' } },
                             compStats.avg_price ? fmt(compStats.avg_price) + '원' : avgTop5Price
                         )
                     ),
                     React.createElement('div', { style: Object.assign({}, v5Card, { textAlign: 'center', padding: 24 }) },
-                        React.createElement('div', { style: { fontSize: 24, marginBottom: 8 } }, '\uD83D\uDCC8'),
+                        React.createElement('div', { style: { fontSize: 18, marginBottom: 8 } }, '\uD83D\uDCC8'),
                         React.createElement('div', { style: { fontSize: 11, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', marginBottom: 6 } }, '가격 범위'),
                         React.createElement('div', { style: { fontSize: 18, fontWeight: 800, color: '#0f172a' } },
                             compStats.min_price ? fmt(compStats.min_price) + '~' + fmt(compStats.max_price) + '원' : priceRange
                         )
                     ),
                     React.createElement('div', { style: Object.assign({}, v5Card, { textAlign: 'center', padding: 24 }) },
-                        React.createElement('div', { style: { fontSize: 24, marginBottom: 8 } }, '\uD83D\uDD0D'),
+                        React.createElement('div', { style: { fontSize: 18, marginBottom: 8 } }, '\uD83D\uDD0D'),
                         React.createElement('div', { style: { fontSize: 11, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', marginBottom: 6 } }, '월간 검색량'),
-                        React.createElement('div', { style: { fontSize: 28, fontWeight: 800, color: '#4f46e5' } }, monthlyVolume + '회')
+                        React.createElement('div', { style: { fontSize: 18, fontWeight: 800, color: '#4f46e5' } }, monthlyVolume + '회')
                     ),
                     React.createElement('div', { style: Object.assign({}, v5Card, { textAlign: 'center', padding: 24 }) },
-                        React.createElement('div', { style: { fontSize: 24, marginBottom: 8 } }, '\uD83D\uDD24'),
+                        React.createElement('div', { style: { fontSize: 18, marginBottom: 8 } }, '\uD83D\uDD24'),
                         React.createElement('div', { style: { fontSize: 11, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', marginBottom: 6 } }, '키워드 포함률'),
-                        React.createElement('div', { style: { fontSize: 28, fontWeight: 800, color: '#7c3aed' } },
+                        React.createElement('div', { style: { fontSize: 18, fontWeight: 800, color: '#7c3aed' } },
                             compStats.keyword_in_name_ratio ? compStats.keyword_in_name_ratio + '%' : '-'
                         )
                     )
@@ -263,9 +263,9 @@ window.EntryStrategySection = function EntryStrategySection(props) {
                 React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 } },
                     /* 가격 격차 */
                     React.createElement('div', { style: Object.assign({}, v5Card, { padding: 24, textAlign: 'center' }) },
-                        React.createElement('div', { style: { fontSize: 24, marginBottom: 8 } }, '\uD83D\uDCB0'),
+                        React.createElement('div', { style: { fontSize: 18, marginBottom: 8 } }, '\uD83D\uDCB0'),
                         React.createElement('div', { style: { fontSize: 11, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', marginBottom: 6 } }, '가격 경쟁력'),
-                        React.createElement('div', { style: { fontSize: 28, fontWeight: 800, color: gapAnalysis.priceDiffPct <= 0 ? '#10b981' : gapAnalysis.priceDiffPct <= 10 ? '#f59e0b' : '#ef4444' } },
+                        React.createElement('div', { style: { fontSize: 18, fontWeight: 800, color: gapAnalysis.priceDiffPct <= 0 ? '#10b981' : gapAnalysis.priceDiffPct <= 10 ? '#f59e0b' : '#ef4444' } },
                             (gapAnalysis.priceDiffPct > 0 ? '+' : '') + gapAnalysis.priceDiffPct + '%'
                         ),
                         React.createElement('div', { style: { fontSize: 12, color: '#64748b', marginTop: 4 } },
@@ -274,9 +274,9 @@ window.EntryStrategySection = function EntryStrategySection(props) {
                     ),
                     /* 상위3개 vs 내 가격 */
                     React.createElement('div', { style: Object.assign({}, v5Card, { padding: 24, textAlign: 'center' }) },
-                        React.createElement('div', { style: { fontSize: 24, marginBottom: 8 } }, '\uD83E\uDD47'),
+                        React.createElement('div', { style: { fontSize: 18, marginBottom: 8 } }, '\uD83E\uDD47'),
                         React.createElement('div', { style: { fontSize: 11, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', marginBottom: 6 } }, 'TOP3 대비 가격'),
-                        React.createElement('div', { style: { fontSize: 28, fontWeight: 800, color: gapAnalysis.priceVsTop3Pct <= 0 ? '#10b981' : '#f59e0b' } },
+                        React.createElement('div', { style: { fontSize: 18, fontWeight: 800, color: gapAnalysis.priceVsTop3Pct <= 0 ? '#10b981' : '#f59e0b' } },
                             (gapAnalysis.priceVsTop3Pct > 0 ? '+' : '') + gapAnalysis.priceVsTop3Pct + '%'
                         ),
                         React.createElement('div', { style: { fontSize: 12, color: '#64748b', marginTop: 4 } },
@@ -285,9 +285,9 @@ window.EntryStrategySection = function EntryStrategySection(props) {
                     ),
                     /* 키워드 포함 여부 */
                     React.createElement('div', { style: Object.assign({}, v5Card, { padding: 24, textAlign: 'center' }) },
-                        React.createElement('div', { style: { fontSize: 24, marginBottom: 8 } }, '\uD83D\uDD24'),
+                        React.createElement('div', { style: { fontSize: 18, marginBottom: 8 } }, '\uD83D\uDD24'),
                         React.createElement('div', { style: { fontSize: 11, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', marginBottom: 6 } }, '키워드 포함'),
-                        React.createElement('div', { style: { fontSize: 28, fontWeight: 800, color: gapAnalysis.myHasKeyword ? '#10b981' : '#ef4444' } },
+                        React.createElement('div', { style: { fontSize: 18, fontWeight: 800, color: gapAnalysis.myHasKeyword ? '#10b981' : '#ef4444' } },
                             gapAnalysis.myHasKeyword ? '포함 \u2705' : '미포함 \u274C'
                         ),
                         React.createElement('div', { style: { fontSize: 12, color: '#64748b', marginTop: 4 } },
@@ -296,9 +296,9 @@ window.EntryStrategySection = function EntryStrategySection(props) {
                     ),
                     /* 1페이지 진입 여부 */
                     React.createElement('div', { style: Object.assign({}, v5Card, { padding: 24, textAlign: 'center' }) },
-                        React.createElement('div', { style: { fontSize: 24, marginBottom: 8 } }, '\uD83D\uDCC4'),
+                        React.createElement('div', { style: { fontSize: 18, marginBottom: 8 } }, '\uD83D\uDCC4'),
                         React.createElement('div', { style: { fontSize: 11, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', marginBottom: 6 } }, '1페이지 진입'),
-                        React.createElement('div', { style: { fontSize: 28, fontWeight: 800, color: gapAnalysis.isOnPage1 ? '#10b981' : '#ef4444' } },
+                        React.createElement('div', { style: { fontSize: 18, fontWeight: 800, color: gapAnalysis.isOnPage1 ? '#10b981' : '#ef4444' } },
                             gapAnalysis.isOnPage1 ? '진입 \u2705' : '미진입 \u274C'
                         ),
                         React.createElement('div', { style: { fontSize: 12, color: '#64748b', marginTop: 4 } },

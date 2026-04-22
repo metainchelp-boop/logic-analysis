@@ -26,19 +26,19 @@ window.KeywordVolumeSection = function KeywordVolumeSection({ keyword, data }) {
                         border: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(0,0,0,0.04)'
                     }}>
                         <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 20 }}>
-                            <span style={{ fontSize: 40, fontWeight: 800, color: '#4f46e5' }}>{fmt(total)}</span>
+                            <span style={{ fontSize: 24, fontWeight: 800, color: '#4f46e5' }}>{fmt(total)}</span>
                             <span style={{ fontSize: 14, color: '#64748b' }}>회/월</span>
                         </div>
 
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                             <div style={{ background: '#f0f4ff', borderRadius: 12, padding: 16 }}>
                                 <div style={{ fontSize: 11, color: '#64748b', fontWeight: 600, marginBottom: 4 }}>💻 PC 검색</div>
-                                <div style={{ fontSize: 22, fontWeight: 700, color: '#4f46e5' }}>{fmt(pc)}</div>
+                                <div style={{ fontSize: 18, fontWeight: 700, color: '#4f46e5' }}>{fmt(pc)}</div>
                                 <div style={{ fontSize: 12, color: '#94a3b8' }}>{pcRatio}%</div>
                             </div>
                             <div style={{ background: '#fffbeb', borderRadius: 12, padding: 16 }}>
                                 <div style={{ fontSize: 11, color: '#64748b', fontWeight: 600, marginBottom: 4 }}>📱 모바일</div>
-                                <div style={{ fontSize: 22, fontWeight: 700, color: '#f59e0b' }}>{fmt(mobile)}</div>
+                                <div style={{ fontSize: 18, fontWeight: 700, color: '#f59e0b' }}>{fmt(mobile)}</div>
                                 <div style={{ fontSize: 12, color: '#94a3b8' }}>{mobileRatio}%</div>
                             </div>
                         </div>

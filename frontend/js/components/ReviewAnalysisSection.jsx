@@ -83,7 +83,7 @@ window.ReviewAnalysisSection = function ReviewAnalysisSection(props) {
               marginBottom: 8
             }}>내 상품</div>
             <div style={{
-              fontSize: 24,
+              fontSize: 18,
               fontWeight: 800,
               color: hasHtmlData && htmlValue != null ? '#10b981' : '#0f172a'
             }}>{fmt(myVal)}</div>
@@ -103,7 +103,7 @@ window.ReviewAnalysisSection = function ReviewAnalysisSection(props) {
               marginBottom: 8
             }}>경쟁 평균</div>
             <div style={{
-              fontSize: 24,
+              fontSize: 18,
               fontWeight: 800,
               color: '#64748b'
             }}>{fmt(avgVal)}</div>
@@ -123,7 +123,7 @@ window.ReviewAnalysisSection = function ReviewAnalysisSection(props) {
               marginBottom: 8
             }}>상위 5</div>
             <div style={{
-              fontSize: 24,
+              fontSize: 18,
               fontWeight: 800,
               color: '#64748b'
             }}>{fmt(top5Val)}</div>

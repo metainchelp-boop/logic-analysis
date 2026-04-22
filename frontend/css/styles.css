@@ -124,7 +124,7 @@ body {
 
 /* ===== 스탯 카드 (보고서 스타일) ===== */
 .stat-label { font-size: 13px; font-weight: 500; color: #6b7280; margin-bottom: 6px; }
-.stat-value { font-size: 26px; font-weight: 700; color: #1f2937; line-height: 1.2; }
+.stat-value { font-size: 24px; font-weight: 700; color: #1f2937; line-height: 1.2; }
 .stat-value.indigo { color: #4f46e5; }
 .stat-value.purple { color: #9333ea; }
 .stat-value.green { color: #059669; }

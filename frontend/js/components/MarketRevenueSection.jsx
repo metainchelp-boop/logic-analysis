@@ -39,7 +39,7 @@ window.MarketRevenueSection = function MarketRevenueSection(props) {
                 textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8
               }}>{c.label}</div>
               <div style={{
-                fontSize: 32, fontWeight: 800, color: c.color, lineHeight: 1.2
+                fontSize: 24, fontWeight: 800, color: c.color, lineHeight: 1.2
               }}>{c.value}</div>
             </div>
           );

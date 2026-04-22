@@ -102,7 +102,7 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl:
                                         width: 96, height: 96, borderRadius: '50%', background: '#fff',
                                         display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center'
                                     }}>
-                                        <div style={{ fontSize: 36, fontWeight: 800, color: getScoreColor(result.scores.total) }}>{result.scores.total}</div>
+                                        <div style={{ fontSize: 28, fontWeight: 800, color: getScoreColor(result.scores.total) }}>{result.scores.total}</div>
                                         <div style={{ fontSize: 11, color: '#94a3b8' }}>/ 100</div>
                                     </div>
                                 </div>
@@ -149,8 +149,8 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl:
                                     { label: '추정 평점', value: result.scores.detail.est_rating ? result.scores.detail.est_rating.toFixed(1) : '-', icon: '⭐', color: '#f59e0b', bg: '#fffbeb' },
                                 ].map((item, i) => (
                                     <div key={i} className="card" style={{ textAlign: 'center', padding: '18px 12px', borderRadius: 14, background: item.bg }}>
-                                        <div style={{ fontSize: 20, marginBottom: 8 }}>{item.icon}</div>
-                                        <div style={{ fontSize: 20, fontWeight: 800, color: item.color }}>{item.value}</div>
+                                        <div style={{ fontSize: 18, marginBottom: 8 }}>{item.icon}</div>
+                                        <div style={{ fontSize: 14, fontWeight: 800, color: item.color }}>{item.value}</div>
                                         <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>{item.label}</div>
                                     </div>
                                 ))}

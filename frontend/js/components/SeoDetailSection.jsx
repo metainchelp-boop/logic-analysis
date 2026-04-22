@@ -41,7 +41,7 @@ window.SeoDetailSection = function SeoDetailSection(props) {
                   <div style={{
                     width: 48, height: 48, borderRadius: '50%',
                     background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    fontSize: 20, fontWeight: 800, color: getScoreColor(cat.data.score),
+                    fontSize: 18, fontWeight: 800, color: getScoreColor(cat.data.score),
                     boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
                   }}>
                     {cat.data.score}

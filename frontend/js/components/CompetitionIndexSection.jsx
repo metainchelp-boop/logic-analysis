@@ -37,7 +37,7 @@ window.CompetitionIndexSection = function CompetitionIndexSection(props) {
               <div style={{
                 width: 60, height: 60, borderRadius: '50%', background: '#fff',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: 22, fontWeight: 800, color: compColor
+                fontSize: 18, fontWeight: 800, color: compColor
               }}>
                 {pct}
               </div>
@@ -85,7 +85,7 @@ window.CompetitionIndexSection = function CompetitionIndexSection(props) {
             return (
               <div key={i} style={{ background: m.bg, borderRadius: 12, padding: 16, textAlign: 'center' }}>
                 <div style={{ fontSize: 11, color: '#64748b', fontWeight: 600, marginBottom: 6 }}>{m.label}</div>
-                <div style={{ fontSize: 24, fontWeight: 800, color: m.color }}>
+                <div style={{ fontSize: 18, fontWeight: 800, color: m.color }}>
                   {m.value}<span style={{ fontSize: 12, fontWeight: 400 }}>{m.unit}</span>
                 </div>
               </div>
