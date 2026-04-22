@@ -131,23 +131,6 @@ window.ReviewAnalysisSection = function ReviewAnalysisSection(props) {
           </div>
         </div>
 
-        {/* Gap */}
-        <div style={{
-          marginTop: 16,
-          textAlign: 'center'
-        }}>
-          <span style={{
-            display: 'inline-block',
-            padding: '4px 14px',
-            borderRadius: 999,
-            fontSize: 13,
-            fontWeight: 700,
-            background: gapBg,
-            color: gapColor
-          }}>
-            {gapArrow} {Math.abs(gap)}%
-          </span>
-        </div>
       </div>
     );
   };
