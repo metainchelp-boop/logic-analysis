@@ -310,6 +310,11 @@ tr.rank-highlight { background: #fef3c7 !important; font-weight: 600; }
     animation: spin .7s linear infinite; display: inline-block;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+.spinner-small {
+    width: 16px; height: 16px; border: 2px solid #e5e7eb;
+    border-top-color: #6366f1; border-radius: 50%;
+    animation: spin .7s linear infinite; display: inline-block;
+}
 
 /* ===== 빈 상태 ===== */
 .empty-state {

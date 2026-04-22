@@ -65,7 +65,7 @@ window.DatalabDemographicsSection = function DatalabDemographicsSection(props) {
                   </span>
                 </div>
                 {/* 수치 카드 */}
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div className="card-grid card-grid-2" style={{ gap: 10 }}>
                   <div style={{ background: '#eef2ff', borderRadius: 10, padding: 14, textAlign: 'center' }}>
                     <div style={{ fontSize: 11, color: '#64748b', fontWeight: 600, marginBottom: 4 }}>🧑 남성</div>
                     <div style={{ fontSize: 22, fontWeight: 800, color: '#4f46e5' }}>{gender.male}%</div>

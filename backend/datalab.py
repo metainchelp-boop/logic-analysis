@@ -348,7 +348,8 @@ def get_weekday_pattern(keyword: str, category_code: str) -> dict:
 
 # ==================== 전년 동기 대비 성장률 ====================
 def get_yoy_growth(keyword: str, category_code: str) -> dict:
-    """전년 동기 대비 1개월/3개월/12개월 성장률"""
+    """전년 동기 대비 1개월/3개월/12개월 성장률 (병렬 API 호출)"""
+    from concurrent.futures import ThreadPoolExecutor
     now = datetime.now()
     periods = [
         {"label": "1개월", "months": 1},
@@ -356,32 +357,44 @@ def get_yoy_growth(keyword: str, category_code: str) -> dict:
         {"label": "12개월", "months": 12},
     ]
 
-    results = []
+    # 6개 API 요청 본문을 미리 준비
+    api_tasks = []
     for p in periods:
-        # 올해 구간
         cur_end = now.strftime("%Y-%m-%d")
         cur_start = (now - timedelta(days=30 * p["months"])).strftime("%Y-%m-%d")
-        # 전년 동일 구간
         prev_end = (now - timedelta(days=365)).strftime("%Y-%m-%d")
         prev_start = (now - timedelta(days=365 + 30 * p["months"])).strftime("%Y-%m-%d")
 
-        # 올해 데이터
-        body_cur = {
-            "startDate": cur_start, "endDate": cur_end,
+        body_base = {
             "timeUnit": "month",
             "category": category_code,
             "keyword": [{"name": keyword, "param": [keyword]}],
         }
-        data_cur = _datalab_post("category/keywords", body_cur)
+        api_tasks.append({
+            "label": p["label"],
+            "cur_body": {**body_base, "startDate": cur_start, "endDate": cur_end},
+            "prev_body": {**body_base, "startDate": prev_start, "endDate": prev_end},
+            "cur_start": cur_start, "cur_end": cur_end,
+            "prev_start": prev_start, "prev_end": prev_end,
+        })
 
-        # 전년 데이터
-        body_prev = {
-            "startDate": prev_start, "endDate": prev_end,
-            "timeUnit": "month",
-            "category": category_code,
-            "keyword": [{"name": keyword, "param": [keyword]}],
-        }
-        data_prev = _datalab_post("category/keywords", body_prev)
+    # 6개 API를 병렬 호출 (순차 60초 → 병렬 ~10초)
+    def _fetch(body):
+        return _datalab_post("category/keywords", body)
+
+    all_bodies = []
+    for t in api_tasks:
+        all_bodies.append(t["cur_body"])
+        all_bodies.append(t["prev_body"])
+
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        api_results = list(executor.map(_fetch, all_bodies))
+
+    # 결과 조합
+    results = []
+    for i, t in enumerate(api_tasks):
+        data_cur = api_results[i * 2]
+        data_prev = api_results[i * 2 + 1]
 
         cur_avg = 0
         prev_avg = 0
@@ -400,12 +413,12 @@ def get_yoy_growth(keyword: str, category_code: str) -> dict:
             growth = 0
 
         results.append({
-            "label": p["label"],
+            "label": t["label"],
             "currentAvg": cur_avg,
             "previousAvg": prev_avg,
             "growth": growth,
-            "curPeriod": f'{cur_start} ~ {cur_end}',
-            "prevPeriod": f'{prev_start} ~ {prev_end}',
+            "curPeriod": f'{t["cur_start"]} ~ {t["cur_end"]}',
+            "prevPeriod": f'{t["prev_start"]} ~ {t["prev_end"]}',
         })
 
     return {"periods": results}

@@ -755,7 +755,7 @@ async def export_report(req: ReportExportRequest, current_user: dict = Depends(g
             "success": True,
             "data": {"format": "json", "items": report_data,
                      "total_products": len(products),
-                     "total_keywords": sum(len(get_keywords_for_product(p["id"])) for p in products),
+                     "total_keywords": len(report_data),
                      "generated_at": datetime.now().isoformat()}
         }
     except Exception as e:
@@ -1979,8 +1979,8 @@ async def ai_feedback_all(req: AiFeedbackAllRequest, current_user: dict = Depend
 # --- API 사용량 조회 (superadmin 전용, v3.9.13) ---
 @app.get("/api/admin/api-usage")
 async def get_api_usage(current_user: dict = Depends(get_current_user)):
-    """API 사용량 대시보드 데이터 — yoosub92 전용"""
-    if current_user.get("username") != "yoosub92":
+    """API 사용량 대시보드 데이터 — superadmin 전용"""
+    if current_user.get("role") != "superadmin":
         raise HTTPException(status_code=403, detail="접근 권한이 없습니다.")
     try:
         from database import get_api_usage_summary

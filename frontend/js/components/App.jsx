@@ -49,6 +49,7 @@ window.App = function App() {
     const [searchedProductUrl, setSearchedProductUrl] = useState('');
     const [companyName, setCompanyName] = useState('');
     const [datalabData, setDatalabData] = useState(null);
+    const [datalabLoading, setDatalabLoading] = useState(false);
     const searchIdRef = React.useRef(0); // 비동기 요청 경합 방지용
 
     /* 업체 카드 클릭으로 시작된 분석 추적 (자동 저장용) */
@@ -247,6 +248,7 @@ window.App = function App() {
         setHtmlReviewData(null);
         setHtmlDetailResult(null);
         setDatalabData(null);
+        setDatalabLoading(false);
 
         // 검색바에서 HTML이 입력되었으면 상세페이지 분석 + 리뷰 데이터 추출 (비동기)
         if (htmlInput && htmlInput.length >= 100) {
@@ -866,6 +868,7 @@ window.App = function App() {
                 if (analysis.keywordTags && analysis.keywordTags.topKeywords) {
                     relKws = analysis.keywordTags.topKeywords.map(function(k) { return { keyword: k.keyword, totalVolume: parseInt(String(k.volume || '0').replace(/,/g, '')) }; });
                 }
+                setDatalabLoading(true);
                 api.post('/datalab/analyze', { keyword: keyword, category1: cat1, related_keywords: relKws })
                     .then(function(dlRes) {
                         if (searchIdRef.current !== currentSearchId) return;
@@ -874,6 +877,8 @@ window.App = function App() {
                         }
                     }).catch(function(e) {
                         console.warn('데이터랩 조회 실패 (무시):', e);
+                    }).finally(function() {
+                        setDatalabLoading(false);
                     });
             })();
 
@@ -1061,7 +1066,7 @@ window.App = function App() {
                     React.createElement('button', { onClick: function(){setCurrentPage('management');}, style: navBtn(activePage === 'management') }, '🏢 진행중 업체'),
                     React.createElement('button', { onClick: function(){setCurrentPage('guide');}, style: navBtn(activePage === 'guide') }, '📖 설명서'),
                     (currentUser.role === 'admin' || currentUser.role === 'superadmin') && React.createElement('button', { onClick: function(){setCurrentPage('users');}, style: navBtn(activePage === 'users') }, '👥 직원'),
-                    currentUser.username === 'yoosub92' && React.createElement('button', { onClick: function(){setCurrentPage('settings');}, style: navBtn(activePage === 'settings') }, '⚙️ 설정')
+                    currentUser.role === 'superadmin' && React.createElement('button', { onClick: function(){setCurrentPage('settings');}, style: navBtn(activePage === 'settings') }, '⚙️ 설정')
                 ),
                 React.createElement('div', { className: 'topbar-user-area', style: { display:'flex', alignItems:'center', gap:8 } },
                     React.createElement('span', { style: _navUserStyle }, currentUser.name || currentUser.username),
@@ -1136,7 +1141,7 @@ window.App = function App() {
         React.createElement(window.UserManagementPage, { currentUser: currentUser, token: authToken })
     );
 
-    if (currentPage === 'settings' && currentUser.username === 'yoosub92') return React.createElement('div', null,
+    if (currentPage === 'settings' && currentUser.role === 'superadmin') return React.createElement('div', null,
         renderTopbar('settings'),
         React.createElement('div', { style: { maxWidth: 1000, margin: '0 auto', padding: '24px 16px' } },
             React.createElement(ApiUsageSection, null),
@@ -1198,6 +1203,16 @@ window.App = function App() {
             analysisData && analysisData.summaryCards && React.createElement(window.SectionErrorBoundary, { name: '종합 요약' },
                 React.createElement('div', { id: 'sec-summary' },
                     React.createElement(SummaryCardsSection, { data: analysisData.summaryCards })
+                )
+            ),
+
+            /* [DATALAB] 로딩 인디케이터 */
+            analysisData && !datalabData && datalabLoading && React.createElement('div', { className: 'section fade-in', style: { textAlign: 'center', padding: '24px 0' } },
+                React.createElement('div', { className: 'container' },
+                    React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, color: '#64748b', fontSize: 13 } },
+                        React.createElement('div', { className: 'spinner-small' }),
+                        '데이터랩 쇼핑인사이트 분석 중...'
+                    )
                 )
             ),
 
