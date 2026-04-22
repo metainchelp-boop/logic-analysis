@@ -242,17 +242,43 @@ def compute_full_analysis(keyword: str, vol_data: dict, prods: list, related_dat
         'compLevel': analysis.get('competitionIndex', {}).get('compLabel', '-'),
     }
 
-    # 7. 카테고리 분석
+    # 7. 카테고리 분석 (대>중>소 계층 경로)
     if prods:
-        cat_map = {}
+        # 전체 경로 분석
+        fullpath_map = {}
+        cat1_map = {}
+        cat2_map = {}
+        cat3_map = {}
         for p in prods:
-            cat = p.get('category2') or p.get('category1') or '기타'
-            cat_map[cat] = cat_map.get(cat, 0) + 1
-        categories = sorted([{'name': k, 'count': v, 'ratio': round(v / len(prods) * 100)} for k, v in cat_map.items()], key=lambda x: -x['count'])
+            c1 = p.get('category1', '') or ''
+            c2 = p.get('category2', '') or ''
+            c3 = p.get('category3', '') or ''
+            # 전체 경로 조합
+            parts = [x for x in [c1, c2, c3] if x]
+            full_path = ' > '.join(parts) if parts else '기타'
+            fullpath_map[full_path] = fullpath_map.get(full_path, 0) + 1
+            if c1: cat1_map[c1] = cat1_map.get(c1, 0) + 1
+            if c2: cat2_map[c2] = cat2_map.get(c2, 0) + 1
+            if c3: cat3_map[c3] = cat3_map.get(c3, 0) + 1
+
+        total = len(prods)
+        # 전체 경로 분포
+        categories = sorted([{'name': k, 'count': v, 'ratio': round(v / total * 100)} for k, v in fullpath_map.items()], key=lambda x: -x['count'])
+        # 레벨별 분포
+        cat1_list = sorted([{'name': k, 'count': v, 'ratio': round(v / total * 100)} for k, v in cat1_map.items()], key=lambda x: -x['count'])
+        cat2_list = sorted([{'name': k, 'count': v, 'ratio': round(v / total * 100)} for k, v in cat2_map.items()], key=lambda x: -x['count'])
+        cat3_list = sorted([{'name': k, 'count': v, 'ratio': round(v / total * 100)} for k, v in cat3_map.items()], key=lambda x: -x['count'])
+
         top_cat = categories[0] if categories else {'name': '-', 'ratio': 0}
         analysis['categoryAnalysis'] = {
             'verdict': f'{top_cat["name"]} 카테고리에 {top_cat["ratio"]}% 등록',
-            'mainCategory': top_cat['name'], 'categories': categories[:8],
+            'mainCategory': top_cat['name'],
+            'categories': categories[:8],
+            'categoryLevels': {
+                'large': cat1_list[:5],
+                'medium': cat2_list[:5],
+                'small': cat3_list[:5],
+            },
         }
 
     # 8. 키워드 태그
@@ -271,7 +297,7 @@ def compute_full_analysis(keyword: str, vol_data: dict, prods: list, related_dat
                 'rank': p.get('rank', '-'), 'name': p.get('product_name', ''),
                 'store': p.get('store_name', ''), 'price': fmt(p.get('price', 0)) + '원',
                 'brand': p.get('brand', '-'),
-                'category': p.get('category2') or p.get('category1') or '-',
+                'category': ' > '.join([x for x in [p.get('category1',''), p.get('category2',''), p.get('category3','')] if x]) or '-',
             })
 
     # 10. 판매량 추정

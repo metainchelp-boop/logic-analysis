@@ -1,6 +1,6 @@
 window.CategoryAnalysisSection = function CategoryAnalysisSection(props) {
   if (!props?.data) return null;
-  const { verdict, mainCategory, categories } = props.data;
+  const { verdict, mainCategory, categories, categoryLevels } = props.data;
 
   if (!categories || categories.length === 0) return null;
 
@@ -11,6 +11,38 @@ window.CategoryAnalysisSection = function CategoryAnalysisSection(props) {
     'linear-gradient(90deg, #c4b5fd, #ddd6fe)',
     'linear-gradient(90deg, #ddd6fe, #ede9fe)'
   ];
+
+  /* 레벨별 분포 차트 렌더링 */
+  var renderLevelChart = function(title, items, color) {
+    if (!items || items.length === 0) return null;
+    return (
+      <div style={{ flex: 1, minWidth: 200 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: '#0f172a', marginBottom: 12 }}>{title}</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {items.map(function(item, idx) {
+            return (
+              <div key={idx}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, alignItems: 'center' }}>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: '#334155' }}>{item.name}</span>
+                  <span style={{ fontSize: 11, color: '#64748b' }}>
+                    <span style={{ fontWeight: 700, color: color, marginRight: 3 }}>{item.count}개</span>
+                    ({item.ratio}%)
+                  </span>
+                </div>
+                <div style={{ height: 6, borderRadius: 6, background: '#f1f5f9', overflow: 'hidden' }}>
+                  <div style={{
+                    width: item.ratio + '%', height: '100%', borderRadius: 6,
+                    background: color, opacity: 1 - idx * 0.15,
+                    transition: 'width 0.8s ease'
+                  }}></div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className="section fade-in">
@@ -41,12 +73,31 @@ window.CategoryAnalysisSection = function CategoryAnalysisSection(props) {
           </div>
         )}
 
+        {/* 레벨별 분포 (대/중/소) */}
+        {categoryLevels && (categoryLevels.large?.length > 0 || categoryLevels.medium?.length > 0 || categoryLevels.small?.length > 0) && (
+          <div style={{
+            background: '#fff', borderRadius: 16, padding: 24,
+            border: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+            marginBottom: 20
+          }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a', marginBottom: 20 }}>
+              카테고리 레벨별 분포
+            </div>
+            <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
+              {renderLevelChart('대카테고리', categoryLevels.large, '#4f46e5')}
+              {renderLevelChart('중카테고리', categoryLevels.medium, '#7c3aed')}
+              {renderLevelChart('소카테고리', categoryLevels.small, '#a855f7')}
+            </div>
+          </div>
+        )}
+
+        {/* 전체 경로 분포 */}
         <div style={{
           background: '#fff', borderRadius: 16, padding: 24,
           border: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(0,0,0,0.04)'
         }}>
           <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a', marginBottom: 20 }}>
-            카테고리 분포 (상위 40개 상품 기준)
+            카테고리 전체 경로 분포 (상위 상품 기준)
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             {categories.map(function(item, idx) {

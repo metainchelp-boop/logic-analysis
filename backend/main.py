@@ -1372,7 +1372,7 @@ async def advertiser_analyze(req: AdvertiserAnalysisRequest, current_user: dict 
                 "store_name": p["store_name"],
                 "price": p["price"],
                 "brand": p.get("brand", ""),
-                "category": p.get("category2") or p.get("category1") or "-",
+                "category": ' > '.join([x for x in [p.get("category1",""), p.get("category2",""), p.get("category3","")] if x]) or "-",
                 "image_url": p.get("image_url", ""),
                 "product_type": p.get("product_type", ""),
                 "has_keyword_in_name": has_keyword,
@@ -1428,10 +1428,11 @@ async def advertiser_analyze(req: AdvertiserAnalysisRequest, current_user: dict 
         total_analyzed = min(len(page1_products), 80)
         brand_concentration = (top_brands[0][1] / max(total_analyzed, 1) * 100) if top_brands else 0
 
-        # 카테고리 분석
+        # 카테고리 분석 (대>중>소 계층 경로)
         cat_map = {}
         for p in page1_products[:80]:
-            cat = p.get("category2") or p.get("category1") or "기타"
+            parts = [x for x in [p.get("category1",""), p.get("category2",""), p.get("category3","")] if x]
+            cat = ' > '.join(parts) if parts else "기타"
             cat_map[cat] = cat_map.get(cat, 0) + 1
         top_cat = max(cat_map, key=cat_map.get) if cat_map else "-"
         cat_share = round(cat_map.get(top_cat, 0) / max(total_analyzed, 1) * 100)
