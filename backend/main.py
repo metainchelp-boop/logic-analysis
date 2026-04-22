@@ -27,6 +27,7 @@ from auth import router as auth_router, init_auth_db, get_current_user, require_
 from clients import router as clients_router, init_clients_db
 from reports import router as reports_router, init_reports_db
 from client_dashboard import router as cd_router, init_client_dashboard_db
+from datalab import analyze_datalab
 
 logger = logging.getLogger(__name__)
 
@@ -803,7 +804,6 @@ async def detail_page_analyze(req: DetailPageAnalysisRequest, current_user: dict
         }
     except Exception as e:
         logger.error(f"상세페이지 분석 오류: {e}")
-        logger.error(f"상세페이지 분석 실패: {e}")
         raise HTTPException(status_code=500, detail="상세페이지 분석 중 오류가 발생했습니다.")
 
 
@@ -1467,7 +1467,7 @@ async def advertiser_analyze(req: AdvertiserAnalysisRequest, current_user: dict 
         my_name_len = len(my_name)
 
         # ── 경쟁사 패턴 심층 분석 ──
-        top5 = page1_products[:10] if page1_products else []
+        top5 = page1_products[:5] if page1_products else []
         top10 = page1_products[:10] if page1_products else []
 
         # 가격대 분포 분석
@@ -2002,7 +2002,6 @@ class DatalabRequest(BaseModel):
 async def datalab_analyze(req: DatalabRequest, current_user: dict = Depends(get_current_user)):
     """네이버 데이터랩 쇼핑인사이트 통합 분석 (인증 필수)"""
     try:
-        from datalab import analyze_datalab
         result = analyze_datalab(
             keyword=req.keyword,
             category1=req.category1,

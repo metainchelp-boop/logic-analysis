@@ -37,7 +37,7 @@ window.DatalabDemographicsSection = function DatalabDemographicsSection(props) {
         <div className="section-line"></div>
         <p className="section-subtitle">데이터랩 쇼핑인사이트 기반 성별·연령대 검색 비율</p>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+        <div className="card-grid card-grid-2">
           {/* 성별 비율 */}
           <div className="card" style={{ padding: 24 }}>
             <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 6 }}>

@@ -24,7 +24,7 @@ window.DatalabGrowthSection = function DatalabGrowthSection(props) {
         <div className="section-line"></div>
         <p className="section-subtitle">데이터랩 쇼핑인사이트 기반 전년 대비 검색 트렌드 변화</p>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
+        <div className="card-grid card-grid-3">
           {periods.map(function(p, i) {
             var c = colors[i] || colors[0];
             var isRecommended = i === 1;

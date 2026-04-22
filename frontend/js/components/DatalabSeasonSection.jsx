@@ -22,7 +22,7 @@ window.DatalabSeasonSection = function DatalabSeasonSection(props) {
         <div className="section-line"></div>
         <p className="section-subtitle">데이터랩 쇼핑인사이트 기반 시즌 분석</p>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
+        <div className="card-grid card-grid-4">
           {seasons.map(function(s, i) {
             return (
               <div key={i} className="card" style={{ padding: '20px 16px', textAlign: 'center', background: seasonBgs[s.name] || '#fff' }}>

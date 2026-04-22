@@ -52,7 +52,7 @@ window.DatalabCategoryKeywordsSection = function DatalabCategoryKeywordsSection(
         <div className="section-line"></div>
         <p className="section-subtitle">분석 상품의 카테고리에서 최근 가장 많이 검색되는 키워드</p>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+        <div className="card-grid card-grid-2">
           {/* 인기 키워드 순위 */}
           <div className="card" style={{ padding: 20 }}>
             <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 6 }}>

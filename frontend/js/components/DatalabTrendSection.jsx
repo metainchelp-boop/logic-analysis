@@ -36,7 +36,7 @@ window.DatalabTrendSection = function DatalabTrendSection(props) {
 
         <div className="card" style={{ padding: 24 }}>
           {/* 상단 요약 카드 */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
+          <div className="card-grid card-grid-4" style={{ marginBottom: 20 }}>
             <div style={{ background: '#f0f4ff', borderRadius: 10, padding: 12, textAlign: 'center' }}>
               <div style={{ fontSize: 10, color: '#64748b', fontWeight: 600 }}>최고 지수</div>
               <div style={{ fontSize: 20, fontWeight: 800, color: '#4f46e5' }}>{d.maxRatio}</div>
