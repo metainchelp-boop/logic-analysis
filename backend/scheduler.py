@@ -161,18 +161,22 @@ def _collect_all_keywords(conn):
 
 def _run_rank_tracking():
     """
-    08:00 순위 추적 — 모든 키워드를 1회씩 API 호출, 결과를 캐시에 저장.
+    08:00 순위 추적 — 키워드당 최대 400위(4페이지)까지 조회.
     홈탭 순위 + 업체 순위를 동시에 처리.
-    여유 있게 키워드당 3초 간격 → 147개 기준 약 7분 소요.
+    Rate Limit 방지를 위해 키워드당 약 18초 간격 → 약 50분 소요.
     """
     global _api_cache, _api_cache_date
     import sqlite3
     import os
 
+    RANK_PAGES = 4          # 페이지 수 (100개 × 4 = 400위)
+    DELAY_PER_KEYWORD = 18  # 키워드당 대기 시간 (초) — 50분 분산
+    DELAY_PER_PAGE = 1.5    # 같은 키워드 내 페이지 간 대기 (초)
+
     DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
     today = date.today().isoformat()
 
-    logger.info(f"🔍 순위 추적 시작 ({datetime.now().strftime('%H:%M')})")
+    logger.info(f"🔍 순위 추적 시작 ({datetime.now().strftime('%H:%M')}) — 400위 범위, ~50분 소요 예상")
 
     try:
         from naver_crawler import (
@@ -191,7 +195,7 @@ def _run_rank_tracking():
             conn.close()
             return
 
-        logger.info(f"  📋 키워드 {len(all_keywords)}개 순위 추적 시작 (홈탭: {len(home_keyword_map)}, 업체: {len(set().union(*client_keyword_map.values()) if client_keyword_map else set())})")
+        logger.info(f"  📋 키워드 {len(all_keywords)}개 × {RANK_PAGES}페이지 순위 추적 시작 (홈탭: {len(home_keyword_map)}, 업체: {len(set().union(*client_keyword_map.values()) if client_keyword_map else set())})")
 
         # 캐시 초기화
         _api_cache = {}
@@ -201,24 +205,40 @@ def _run_rank_tracking():
         total_rank_saved = 0
         total_errors = 0
 
-        for keyword in sorted(all_keywords):
+        for ki, keyword in enumerate(sorted(all_keywords)):
             try:
-                # ── API 1회 호출: 상품 100개 ──
-                shop_result = search_naver_shopping_api(keyword, display=100)
-                total_api_calls += 1
-                items = shop_result.get("items", [])
-                total_shop = shop_result.get("total", 0)
-                prods = [_parse_api_item(item, i + 1) for i, item in enumerate(items)]
+                # ── API 호출: 최대 400개 (100개 × 4페이지) ──
+                all_prods = []
+                total_shop = 0
+                for page_idx in range(RANK_PAGES):
+                    start = page_idx * 100 + 1
+                    shop_result = search_naver_shopping_api(keyword, display=100, start=start)
+                    total_api_calls += 1
+                    items = shop_result.get("items", [])
+                    if page_idx == 0:
+                        total_shop = shop_result.get("total", 0)
 
-                # 09시 분석용 캐시 저장
-                _api_cache[keyword] = {"prods": prods, "total": total_shop}
+                    for i, item in enumerate(items):
+                        prod = _parse_api_item(item, start + i)
+                        all_prods.append(prod)
+
+                    # 결과가 100개 미만이면 더 이상 페이지 없음
+                    if len(items) < 100:
+                        break
+
+                    # 같은 키워드 내 페이지 간 짧은 대기
+                    if page_idx < RANK_PAGES - 1:
+                        time.sleep(DELAY_PER_PAGE)
+
+                # 09시 분석용 캐시 저장 (첫 100개만 — 기존 호환)
+                _api_cache[keyword] = {"prods": all_prods[:100], "total": total_shop}
 
                 # ── 홈탭 순위 저장 ──
                 if keyword in home_keyword_map:
                     for product, kw_info in home_keyword_map[keyword]:
                         try:
                             rank, page, competitors = find_product_rank_from_cache(
-                                keyword, product["product_url"], prods
+                                keyword, product["product_url"], all_prods
                             )
                             save_ranking(
                                 product_id=product["id"],
@@ -241,23 +261,24 @@ def _run_rank_tracking():
                     if not product_url or keyword not in client_keyword_map.get(cid, []):
                         continue
                     try:
-                        rank, page, _ = find_product_rank_from_cache(keyword, product_url, prods)
+                        rank, page, _ = find_product_rank_from_cache(keyword, product_url, all_prods)
                         _save_client_rank(conn, cid, keyword, product_url, rank, page, "scheduled")
                         total_rank_saved += 1
                     except Exception as e:
                         logger.error(f"  ❌ 업체 순위 저장 실패 [{client['name']}:{keyword}]: {e}")
 
-                # 여유 있는 API 간격 (3초 — 429 방지)
-                time.sleep(3)
+                # 키워드 간 대기 (Rate Limit 방지 — 50분 분산)
+                if ki < len(all_keywords) - 1:
+                    time.sleep(DELAY_PER_KEYWORD)
 
             except Exception as e:
                 total_errors += 1
                 logger.error(f"  ❌ [{keyword}] 순위 추적 실패: {e}")
-                time.sleep(2)
+                time.sleep(5)
 
         conn.close()
         logger.info(
-            f"✅ 순위 추적 완료: API {total_api_calls}회, "
+            f"✅ 순위 추적 완료: API {total_api_calls}회 (400위 범위), "
             f"순위 {total_rank_saved}건 저장, 실패 {total_errors}건 "
             f"(캐시 {len(_api_cache)}개 키워드 → 09시 분석 대기)"
         )
