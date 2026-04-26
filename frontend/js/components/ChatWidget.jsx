@@ -1,4 +1,16 @@
-/* ChatWidget — 플로팅 AI 채팅 + 의견함 위젯 v2.0 */
+/* ChatWidget — 플로팅 AI 채팅 + 의견함 위젯 v2.1 (리팩토링) */
+
+// 타임스탬프 헬퍼 (컴포넌트 외부 — 매 렌더링마다 재생성 방지)
+var _chatNow = function() { return new Date().toISOString().slice(0, 19).replace('T', ' '); };
+
+// 의견함 카테고리 옵션 (상수)
+var _categoryOptions = [
+    { value: 'error', label: '오류 신고', icon: '🚨', desc: '버그, 에러, 오작동', color: '#dc2626', bg: '#fee2e2' },
+    { value: 'request', label: '기능 요청', icon: '💡', desc: '새 기능, 개선 요청', color: '#2563eb', bg: '#dbeafe' },
+    { value: 'opinion', label: '의견/건의', icon: '💬', desc: '사용 후기, 제안', color: '#7c3aed', bg: '#ede9fe' },
+];
+var _fbTagMap = { error: '#오류', request: '#요청', opinion: '#의견' };
+
 window.ChatWidget = function ChatWidget({ currentUser }) {
     const { useState, useEffect, useRef, useCallback } = React;
 
@@ -16,6 +28,10 @@ window.ChatWidget = function ChatWidget({ currentUser }) {
     const [fbContent, setFbContent] = useState('');
     const [fbSending, setFbSending] = useState(false);
     const [fbSent, setFbSent] = useState(false);
+
+    // isOpen을 ref로도 추적 (useCallback 내부에서 최신값 참조)
+    const isOpenRef = useRef(isOpen);
+    useEffect(function() { isOpenRef.current = isOpen; }, [isOpen]);
 
     // 채팅 이력 로드
     var loadHistory = useCallback(function() {
@@ -41,49 +57,45 @@ window.ChatWidget = function ChatWidget({ currentUser }) {
         }
     }, [isOpen, messages.length, activeTab]);
 
-    // 메시지 전송
-    var sendMessage = function() {
+    // 메시지 전송 (useCallback으로 안정적 참조)
+    var sendMessage = useCallback(function() {
         var msg = input.trim();
         if (!msg || sending) return;
 
         setSending(true);
         setInput('');
 
-        var userMsg = { role: 'user', content: msg, created_at: new Date().toISOString().slice(0, 19).replace('T', ' ') };
+        var userMsg = { role: 'user', content: msg, created_at: _chatNow() };
         setMessages(function(prev) { return prev.concat([userMsg]); });
 
         api.post('/chat/send', { message: msg }).then(function(res) {
-            if (res.success) {
-                var aiMsg = { role: 'assistant', content: res.response, created_at: new Date().toISOString().slice(0, 19).replace('T', ' ') };
-                setMessages(function(prev) { return prev.concat([aiMsg]); });
-                if (!isOpen) setUnread(function(n) { return n + 1; });
-            } else {
-                var errMsg = { role: 'assistant', content: res.detail || '오류가 발생했습니다.', created_at: new Date().toISOString().slice(0, 19).replace('T', ' ') };
-                setMessages(function(prev) { return prev.concat([errMsg]); });
-            }
+            var aiMsg = {
+                role: 'assistant',
+                content: res.success ? res.response : (res.detail || '오류가 발생했습니다.'),
+                created_at: _chatNow()
+            };
+            setMessages(function(prev) { return prev.concat([aiMsg]); });
+            if (!isOpenRef.current) setUnread(function(n) { return n + 1; });
             setSending(false);
         }).catch(function() {
-            var errMsg = { role: 'assistant', content: '네트워크 오류가 발생했습니다.', created_at: new Date().toISOString().slice(0, 19).replace('T', ' ') };
-            setMessages(function(prev) { return prev.concat([errMsg]); });
+            setMessages(function(prev) { return prev.concat([{ role: 'assistant', content: '네트워크 오류가 발생했습니다.', created_at: _chatNow() }]); });
             setSending(false);
         });
-    };
+    }, [input, sending]);
 
-    var handleKeyDown = function(e) {
+    var handleKeyDown = useCallback(function(e) {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             sendMessage();
         }
-    };
+    }, [sendMessage]);
 
     // 의견함 전송
-    var sendFeedback = function() {
+    var sendFeedback = useCallback(function() {
         if (!fbCategory || !fbContent.trim() || fbSending) return;
         setFbSending(true);
 
-        // 카테고리 태그를 자동으로 붙여서 기존 백엔드 로직 활용
-        var tagMap = { error: '#오류', request: '#요청', opinion: '#의견' };
-        var msgWithTag = (tagMap[fbCategory] || '') + ' ' + fbContent.trim();
+        var msgWithTag = (_fbTagMap[fbCategory] || '') + ' ' + fbContent.trim();
 
         api.post('/chat/send', { message: msgWithTag }).then(function(res) {
             setFbSending(false);
@@ -95,7 +107,7 @@ window.ChatWidget = function ChatWidget({ currentUser }) {
             setFbSending(false);
             toast.error('전송에 실패했습니다.');
         });
-    };
+    }, [fbCategory, fbContent, fbSending]);
 
     // 마크다운 간이 렌더링
     var renderContent = function(text) {
@@ -109,11 +121,7 @@ window.ChatWidget = function ChatWidget({ currentUser }) {
 
     if (!currentUser) return null;
 
-    var categoryOptions = [
-        { value: 'error', label: '오류 신고', icon: '🚨', desc: '버그, 에러, 오작동', color: '#dc2626', bg: '#fee2e2' },
-        { value: 'request', label: '기능 요청', icon: '💡', desc: '새 기능, 개선 요청', color: '#2563eb', bg: '#dbeafe' },
-        { value: 'opinion', label: '의견/건의', icon: '💬', desc: '사용 후기, 제안', color: '#7c3aed', bg: '#ede9fe' },
-    ];
+    var categoryOptions = _categoryOptions;
 
     return React.createElement('div', null,
         /* 플로팅 버튼 — 회사 로고 */

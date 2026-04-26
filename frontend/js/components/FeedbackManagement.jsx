@@ -1,4 +1,21 @@
-/* FeedbackManagement — 피드백 관리 (manager/superadmin용) v1.0 */
+/* FeedbackManagement — 피드백 관리 (manager/superadmin용) v1.1 (리팩토링) */
+
+// 상수를 컴포넌트 외부로 추출 (매 렌더링마다 재생성 방지)
+var _fbCategoryLabels = { error: '오류 신고', request: '기능 요청', opinion: '의견/건의', general: '일반' };
+var _fbCategoryColors = {
+    error: { bg: '#fee2e2', color: '#dc2626' },
+    request: { bg: '#dbeafe', color: '#2563eb' },
+    opinion: { bg: '#ede9fe', color: '#7c3aed' },
+    general: { bg: '#f1f5f9', color: '#64748b' }
+};
+var _fbStatusLabels = { pending: '대기', resolved: '처리완료', in_progress: '처리중' };
+var _fbStatusColors = {
+    pending: { bg: '#fef9c3', color: '#ca8a04' },
+    resolved: { bg: '#dcfce7', color: '#16a34a' },
+    in_progress: { bg: '#dbeafe', color: '#2563eb' }
+};
+var _fbFilterOptions = ['all', 'pending', 'resolved'];
+
 window.FeedbackManagement = function FeedbackManagement() {
     const { useState, useEffect, useCallback } = React;
 
@@ -26,7 +43,7 @@ window.FeedbackManagement = function FeedbackManagement() {
 
     useEffect(function() { loadFeedbacks(); loadStats(); }, [loadFeedbacks, loadStats]);
 
-    var updateFeedback = function(id, status, reply) {
+    var updateFeedback = useCallback(function(id, status, reply) {
         var body = {};
         if (status) body.status = status;
         if (reply !== undefined) body.admin_reply = reply;
@@ -39,21 +56,12 @@ window.FeedbackManagement = function FeedbackManagement() {
                 setReplyText('');
             }
         }).catch(function() {});
-    };
+    }, [loadFeedbacks, loadStats]);
 
-    var categoryLabels = { error: '오류 신고', request: '기능 요청', opinion: '의견/건의', general: '일반' };
-    var categoryColors = {
-        error: { bg: '#fee2e2', color: '#dc2626' },
-        request: { bg: '#dbeafe', color: '#2563eb' },
-        opinion: { bg: '#ede9fe', color: '#7c3aed' },
-        general: { bg: '#f1f5f9', color: '#64748b' }
-    };
-    var statusLabels = { pending: '대기', resolved: '처리완료', in_progress: '처리중' };
-    var statusColors = {
-        pending: { bg: '#fef9c3', color: '#ca8a04' },
-        resolved: { bg: '#dcfce7', color: '#16a34a' },
-        in_progress: { bg: '#dbeafe', color: '#2563eb' }
-    };
+    var categoryLabels = _fbCategoryLabels;
+    var categoryColors = _fbCategoryColors;
+    var statusLabels = _fbStatusLabels;
+    var statusColors = _fbStatusColors;
 
     return React.createElement('div', { className: 'card', style: { padding: 20, marginBottom: 20 } },
         React.createElement('div', { style: { fontSize: 18, fontWeight: 700, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 10 } },
@@ -88,7 +96,7 @@ window.FeedbackManagement = function FeedbackManagement() {
 
         /* 필터 */
         React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 16 } },
-            ['all', 'pending', 'resolved'].map(function(f) {
+            _fbFilterOptions.map(function(f) {
                 var label = f === 'all' ? '전체' : statusLabels[f] || f;
                 return React.createElement('button', {
                     key: f,
