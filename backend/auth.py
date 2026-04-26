@@ -155,7 +155,7 @@ def init_auth_db():
             )
         """)
 
-        # Insert default admin if not exists
+        # Insert default admin if not exists (INSERT OR IGNORE로 워커 동시 실행 시 충돌 방지)
         cursor.execute("SELECT id FROM users WHERE username = ?", ("yoosub92",))
         if cursor.fetchone() is None:
             default_password = os.getenv("DEFAULT_ADMIN_PASSWORD", "")
@@ -167,7 +167,7 @@ def init_auth_db():
             password_hash = hash_password(default_password)
             cursor.execute(
                 """
-                INSERT INTO users (username, password_hash, name, role, is_active, created_at, updated_at)
+                INSERT OR IGNORE INTO users (username, password_hash, name, role, is_active, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (

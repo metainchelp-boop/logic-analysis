@@ -27,6 +27,7 @@ from auth import router as auth_router, init_auth_db, get_current_user, require_
 from clients import router as clients_router, init_clients_db
 from reports import router as reports_router, init_reports_db
 from client_dashboard import router as cd_router, init_client_dashboard_db
+from chat import router as chat_router, init_chat_db
 from datalab import analyze_datalab
 
 logger = logging.getLogger(__name__)
@@ -208,6 +209,7 @@ async def lifespan(app):
     init_clients_db()
     init_reports_db()
     init_client_dashboard_db()
+    init_chat_db()
 
     # DB 무결성 검증 후 백업 (테이블 초기화 이후)
     _backup_db_on_startup()
@@ -242,6 +244,7 @@ app.include_router(auth_router)
 app.include_router(clients_router)
 app.include_router(reports_router)
 app.include_router(cd_router)
+app.include_router(chat_router)
 
 
 # ==================== 유저 격리 헬퍼 ====================

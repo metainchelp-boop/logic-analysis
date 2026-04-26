@@ -1089,68 +1089,85 @@ window.App = function App() {
     /* ==================== 페이지별 콘텐츠 렌더링 ==================== */
 
     /* 홈 탭 — 업체 리스트 + 검색 */
-    if (currentPage === 'home') return React.createElement('div', null,
-        renderTopbar('home'),
-        React.createElement(SearchBar, { onSearch: handleHomeSearch, loading: searchLoading, initialValues: searchBarInitial }),
+    if (currentPage === 'home') return React.createElement(React.Fragment, null,
+        React.createElement('div', null,
+            renderTopbar('home'),
+            React.createElement(SearchBar, { onSearch: handleHomeSearch, loading: searchLoading, initialValues: searchBarInitial }),
 
-        /* 업체 연동 자동저장 상태 배너 */
-        currentClientId && autoSaveStatus && React.createElement('div', {
-            style: {
-                background: autoSaveStatus === 'saved' ? '#dcfce7' : autoSaveStatus === 'error' ? '#fee2e2' : '#e0e7ff',
-                color: autoSaveStatus === 'saved' ? '#166534' : autoSaveStatus === 'error' ? '#991b1b' : '#3730a3',
-                padding: '10px 0', fontSize: 13, fontWeight: 600, textAlign: 'center',
-                borderBottom: '1px solid rgba(0,0,0,0.05)'
-            }
-        },
-            autoSaveStatus === 'saving' ? '🔄 분석 완료 후 업체관리에 자동 저장됩니다...' :
-            autoSaveStatus === 'saved' ? '✅ 업체관리 탭에 분석 기록이 자동 저장되었습니다' :
-            autoSaveStatus === 'error' ? '⚠️ 자동 저장에 실패했습니다. 분석 완료 후 하단 "업체 등록/저장" 버튼을 이용해주세요' : ''
-        ),
+            /* 업체 연동 자동저장 상태 배너 */
+            currentClientId && autoSaveStatus && React.createElement('div', {
+                style: {
+                    background: autoSaveStatus === 'saved' ? '#dcfce7' : autoSaveStatus === 'error' ? '#fee2e2' : '#e0e7ff',
+                    color: autoSaveStatus === 'saved' ? '#166534' : autoSaveStatus === 'error' ? '#991b1b' : '#3730a3',
+                    padding: '10px 0', fontSize: 13, fontWeight: 600, textAlign: 'center',
+                    borderBottom: '1px solid rgba(0,0,0,0.05)'
+                }
+            },
+                autoSaveStatus === 'saving' ? '🔄 분석 완료 후 업체관리에 자동 저장됩니다...' :
+                autoSaveStatus === 'saved' ? '✅ 업체관리 탭에 분석 기록이 자동 저장되었습니다' :
+                autoSaveStatus === 'error' ? '⚠️ 자동 저장에 실패했습니다. 분석 완료 후 하단 "업체 등록/저장" 버튼을 이용해주세요' : ''
+            ),
 
-        /* 등록 업체 리스트 */
-        React.createElement(window.ClientListSection, {
-            onClientClick: handleClientClick,
-            onNavigateToClient: handleNavigateToClient
-        }),
+            /* 등록 업체 리스트 */
+            React.createElement(window.ClientListSection, {
+                onClientClick: handleClientClick,
+                onNavigateToClient: handleNavigateToClient
+            }),
 
-        /* 푸터 */
-        React.createElement('footer', { className: 'footer' },
-            React.createElement('div', { className: 'container' },
-                '© 2026 메타아이앤씨 — 로직 분석 ' + APP_VERSION + ' | 네이버 쇼핑 키워드 분석 & 순위 추적'
+            /* 푸터 */
+            React.createElement('footer', { className: 'footer' },
+                React.createElement('div', { className: 'container' },
+                    '© 2026 메타아이앤씨 — 로직 분석 ' + APP_VERSION + ' | 네이버 쇼핑 키워드 분석 & 순위 추적'
+                )
             )
-        )
+        ),
+        React.createElement(window.ChatWidget, { currentUser: currentUser })
     );
 
-    if (currentPage === 'management') return React.createElement('div', null,
-        renderTopbar('management'),
-        React.createElement(window.ClientDashboard, {
-            currentUser: currentUser,
-            onRunAnalysis: handleClientClick,
-            initialSearch: managementInitialSearch,
-            canEdit: currentUser.role !== 'viewer'
-        })
+    if (currentPage === 'management') return React.createElement(React.Fragment, null,
+        React.createElement('div', null,
+            renderTopbar('management'),
+            React.createElement(window.ClientDashboard, {
+                currentUser: currentUser,
+                onRunAnalysis: handleClientClick,
+                initialSearch: managementInitialSearch,
+                canEdit: currentUser.role !== 'viewer'
+            })
+        ),
+        React.createElement(window.ChatWidget, { currentUser: currentUser })
     );
 
-    if (currentPage === 'guide') return React.createElement('div', null,
-        renderTopbar('guide'),
-        React.createElement(window.UserGuidePage, { currentUser: currentUser })
+    if (currentPage === 'guide') return React.createElement(React.Fragment, null,
+        React.createElement('div', null,
+            renderTopbar('guide'),
+            React.createElement(window.UserGuidePage, { currentUser: currentUser })
+        ),
+        React.createElement(window.ChatWidget, { currentUser: currentUser })
     );
 
-    if (currentPage === 'users' && (currentUser.role === 'admin' || currentUser.role === 'superadmin')) return React.createElement('div', null,
-        renderTopbar('users'),
-        React.createElement(window.UserManagementPage, { currentUser: currentUser, token: authToken })
+    if (currentPage === 'users' && (currentUser.role === 'admin' || currentUser.role === 'superadmin')) return React.createElement(React.Fragment, null,
+        React.createElement('div', null,
+            renderTopbar('users'),
+            React.createElement(window.UserManagementPage, { currentUser: currentUser, token: authToken })
+        ),
+        React.createElement(window.ChatWidget, { currentUser: currentUser })
     );
 
-    if (currentPage === 'settings' && currentUser.role === 'superadmin') return React.createElement('div', null,
-        renderTopbar('settings'),
-        React.createElement('div', { style: { maxWidth: 1000, margin: '0 auto', padding: '24px 16px' } },
-            React.createElement(ApiUsageSection, null),
-            React.createElement(NotificationSection, null)
-        )
+    if (currentPage === 'settings' && currentUser.role === 'superadmin') return React.createElement(React.Fragment, null,
+        React.createElement('div', null,
+            renderTopbar('settings'),
+            React.createElement('div', { style: { maxWidth: 1000, margin: '0 auto', padding: '24px 16px' } },
+                React.createElement(ApiUsageSection, null),
+                React.createElement(NotificationSection, null),
+                React.createElement(window.FeedbackManagement, null)
+            )
+        ),
+        React.createElement(window.ChatWidget, { currentUser: currentUser })
     );
 
     /* ==================== 메인 분석 페이지 ==================== */
     return (
+        React.createElement(React.Fragment, null,
         React.createElement('div', null,
             /* 네비게이션 바 */
             renderTopbar('analysis'),
@@ -1448,6 +1465,8 @@ window.App = function App() {
                     '© 2026 메타아이앤씨 — 로직 분석 ' + APP_VERSION + ' | 네이버 쇼핑 키워드 분석 & 순위 추적'
                 )
             )
+        ),
+        React.createElement(window.ChatWidget, { currentUser: currentUser })
         )
     );
 };
