@@ -718,7 +718,27 @@ async def get_rank_history(client_id: int, keyword: Optional[str] = None, days: 
         conn.close()
 
 
-# ==================== 등록된 업체 목록 (분석 탭용 - 간략) ====================
+# ==================== AI 인사이트 ====================
+
+@router.get("/{client_id}/ai-insights")
+async def get_ai_insights(client_id: int, current_user: dict = Depends(get_current_user)):
+    """업체별 AI 인사이트 통합 조회"""
+    conn = _get_conn()
+    try:
+        _verify_client_access(conn, client_id, current_user)
+    except Exception as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    finally:
+        conn.close()
+
+    try:
+        from ai_insights import get_all_client_insights
+        result = get_all_client_insights(client_id)
+        return {"success": True, "data": result}
+    except Exception as e:
+        logger.error(f"[ai-insights] {e}")
+        return {"success": False, "detail": str(e)}
+
 
 # ==================== 일일 조회 제한 ====================
 
