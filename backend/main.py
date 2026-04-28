@@ -69,6 +69,7 @@ from database import (
 from naver_crawler import (
     find_product_rank, get_product_info,
     generate_rank_analysis, extract_product_id_from_url,
+    extract_store_name_from_url, search_products,
     get_keyword_volume
 )
 from scheduler import start_scheduler, stop_scheduler, reschedule_report
@@ -830,8 +831,7 @@ async def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_
             product_info = req.cached_product_info
             # product_name이 비어있으면 cached_competitors에서 product_id로 보완
             if not product_info.get("product_name") and req.cached_competitors:
-                from naver_crawler import extract_product_id_from_url as _ext_pid_fix
-                _fix_pid = _ext_pid_fix(req.product_url) or ""
+                _fix_pid = extract_product_id_from_url(req.product_url) or ""
                 if _fix_pid:
                     _matched_cp = None
                     # 1차: product_id 필드 직접 비교
@@ -862,8 +862,7 @@ async def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_
             product_info = {"product_name": req.cached_product_name}
             # cached_competitors에서 자기 상품 정보 보완 (가격/브랜드/카테고리)
             if req.cached_competitors:
-                from naver_crawler import extract_store_name_from_url as _ext_store
-                target_store = (_ext_store(req.product_url) or "").lower()
+                target_store = (extract_store_name_from_url(req.product_url) or "").lower()
                 for _cp in req.cached_competitors:
                     cp_store = (_cp.get("store_name") or "").lower()
                     cp_url = (_cp.get("product_url") or "").lower()
@@ -880,10 +879,8 @@ async def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_
             # cached_product_info/name 없지만 competitors에서 스토어명으로 매칭 시도
             # → get_product_info() API 호출 없이 상품 정보 확보 (429 방지 핵심)
             product_info = {}
-            from naver_crawler import extract_store_name_from_url as _ext_store2
-            from naver_crawler import extract_product_id_from_url as _ext_pid2
-            target_store = (_ext_store2(req.product_url) or "").lower()
-            target_pid = _ext_pid2(req.product_url) or ""
+            target_store = (extract_store_name_from_url(req.product_url) or "").lower()
+            target_pid = extract_product_id_from_url(req.product_url) or ""
             for _cp in req.cached_competitors:
                 cp_store = (_cp.get("store_name") or "").lower()
                 cp_url = (_cp.get("product_url") or "").lower()
@@ -943,12 +940,9 @@ async def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_
         # 캐시된 product_name이 있으면 폴백 불필요
         if not product_name and not req.cached_product_name:
             try:
-                from naver_crawler import extract_product_id_from_url as _extract_pid
-                from naver_crawler import extract_store_name_from_url as _extract_store
-                from naver_crawler import search_products as _sp
-                target_pid = _extract_pid(req.product_url) or ""
-                target_store = _extract_store(req.product_url) or ""
-                _prods = _sp(req.keyword, max_results=200)
+                target_pid = extract_product_id_from_url(req.product_url) or ""
+                target_store = extract_store_name_from_url(req.product_url) or ""
+                _prods = search_products(req.keyword, max_results=200)
                 for _p in _prods:
                     p_url = _p.get("product_url", "")
                     p_pid = _p.get("product_id", "")

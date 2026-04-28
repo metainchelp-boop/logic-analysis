@@ -22,11 +22,13 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
     const [exposureLoading, setExposureLoading] = useState(false);
     const lastExposureKey = useRef('');
 
-    // 검색 컨텍스트(광고주)가 바뀌면 순위 히스토리 캐시 초기화
+    // 검색 컨텍스트(광고주)가 바뀌면 캐시 전체 초기화
     useEffect(function() {
         setHistoryData({});
         setExpandedProduct(null);
+        setTempRankResult(null);
         setExposureResult(null);
+        lastTempCheckKey.current = '';
         lastExposureKey.current = '';
     }, [searchedProductUrl, searchedKeyword]);
 

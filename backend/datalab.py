@@ -576,7 +576,8 @@ def analyze_datalab(keyword: str, category1: str = "", related_keywords: list = 
     try:
         trend_raw = get_trend_24m(keyword, cat_code)
         if trend_raw:
-            result["trend"] = trend_raw
+            # 프론트에는 allMonths 제외 (내부 성장률 계산용)
+            result["trend"] = {k: v for k, v in trend_raw.items() if k != "allMonths"}
     except Exception as e:
         logger.error(f"데이터랩 트렌드 오류: {e}")
 

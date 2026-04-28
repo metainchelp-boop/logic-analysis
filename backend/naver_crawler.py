@@ -203,9 +203,8 @@ def find_product_rank(keyword: str, product_url: str,
 
     매칭 우선순위:
     1. productId(nvMid) 완전 일치
-    2. productId가 URL에 포함
-    3. 스토어명 일치 + productId 부분 매칭
-    4. 스토어명 일치 + 상품명 유사도 (폴백)
+    2. 채널 productId가 API product_url에 포함 (채널ID는 고유값)
+    3. 스토어명 일치 + 상품명 유사도 (폴백)
 
     ⚠️ 이 순위는 공식 API의 sort=sim(유사도순) 기준이며,
        실제 네이버쇼핑 노출 순위(sort=rel)와는 다를 수 있습니다.
@@ -257,11 +256,6 @@ def find_product_rank(keyword: str, product_url: str,
         #    스토어 슬러그 검증 없이 PID 포함만으로 매칭 (채널ID는 고유값)
         if not matched and target_product_id and product.get("product_url"):
             if target_product_id in product["product_url"]:
-                matched = True
-
-        # 3순위: 스토어 슬러그 일치 + productId 부분 매칭
-        if not matched and target_store_name and _store_matches(product):
-            if target_product_id and target_product_id in str(product.get("product_url", "")):
                 matched = True
 
         if matched:
