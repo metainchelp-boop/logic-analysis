@@ -1410,16 +1410,21 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
             detail_text = soup.get_text(separator=" ", strip=True)
     text_length = len(detail_text)
 
-    # ── 3. 동영상 분석 ──
+    # ── 3. 동영상 분석 (중복 제거) ──
     videos = soup.find_all(["video", "iframe"])
+    counted_elements = set()
     video_count = 0
     for v in videos:
         src = v.get("src", "") or v.get("data-src", "") or ""
         if "youtube" in src.lower() or "naver" in src.lower() or "vimeo" in src.lower() or v.name == "video":
             video_count += 1
-    # 네이버 SmartEditor 동영상 감지
-    video_divs = soup.find_all("div", {"class": re.compile(r"se-video|_video|movie", re.I)})
-    video_count += len(video_divs)
+            counted_elements.add(id(v))
+    # 네이버 SmartEditor 동영상 감지 (이미 카운트된 video/iframe을 포함하는 div는 제외)
+    video_divs = soup.find_all("div", {"class": re.compile(r"se-video|_video", re.I)})
+    for vd in video_divs:
+        child_videos = vd.find_all(["video", "iframe"])
+        if not any(id(cv) in counted_elements for cv in child_videos):
+            video_count += 1
 
     # ── 4. 테이블/스펙 정보 분석 ──
     tables = soup.find_all("table")
