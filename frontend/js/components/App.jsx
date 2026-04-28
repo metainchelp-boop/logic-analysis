@@ -876,6 +876,19 @@ window.App = function App() {
                 }
             }
 
+            // SEO 진단용 targetProd 정보 저장 (get_product_info API 호출 제거용)
+            if (targetProd) {
+                analysis.targetProductInfo = {
+                    product_name: targetProd.product_name,
+                    price: targetProd.price,
+                    brand: targetProd.brand || '',
+                    store_name: targetProd.store_name || '',
+                    category1: targetProd.category1 || '',
+                    category2: targetProd.category2 || '',
+                    image_url: targetProd.image_url || ''
+                };
+            }
+
             setAnalysisData(Object.keys(analysis).length > 0 ? analysis : null);
             setSearchLoading(false);
 
@@ -1377,8 +1390,9 @@ window.App = function App() {
                         var m = rankText.match(/(\d+)위/);
                         return m ? parseInt(m[1]) : null;
                     })() : null) : null,
-                    cachedProductName: advertiserReport && advertiserReport.product_name ? advertiserReport.product_name : null,
+                    cachedProductName: advertiserReport && advertiserReport.product_name ? advertiserReport.product_name : (analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo.product_name : null),
                     cachedTotalVolume: volumeData && volumeData[0] ? ((volumeData[0].monthlyPcQcCnt || 0) + (volumeData[0].monthlyMobileQcCnt || 0)) : null,
+                    cachedProductInfo: analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo : null,
                     shopProducts: shopProducts
                 })
             ),

@@ -1,5 +1,5 @@
 /* SeoDiagnosisSection — SEO 종합 진단 (v5 풀버전) */
-window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl: parentProductUrl, competitorData, cachedRank, cachedProductName, cachedTotalVolume, shopProducts }) {
+window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl: parentProductUrl, competitorData, cachedRank, cachedProductName, cachedTotalVolume, cachedProductInfo, shopProducts }) {
     const { useState, useEffect, useRef } = React;
     const [productUrl, setProductUrl] = useState('');
     const [result, setResult] = useState(null);
@@ -19,11 +19,11 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl:
     // 자동 실행: 메인 분석 데이터(cachedRank 또는 cachedProductName)가 도착한 후 실행
     // cachedRank가 없으면 메인 분석이 아직 진행 중이므로 대기
     useEffect(function() {
-        if (keyword && productUrl && !autoTriggered.current && !result && !loading && (cachedRank || cachedProductName || cachedTotalVolume)) {
+        if (keyword && productUrl && !autoTriggered.current && !result && !loading && (cachedRank || cachedProductName || cachedTotalVolume || cachedProductInfo)) {
             autoTriggered.current = true;
             handleAnalyze();
         }
-    }, [keyword, productUrl, cachedRank, cachedProductName, cachedTotalVolume]);
+    }, [keyword, productUrl, cachedRank, cachedProductName, cachedTotalVolume, cachedProductInfo]);
 
     const handleAnalyze = async () => {
         if (!productUrl || !keyword) return;
@@ -34,6 +34,7 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl:
             if (cachedRank) seoBody.cached_rank = cachedRank;
             if (cachedProductName) seoBody.cached_product_name = cachedProductName;
             if (cachedTotalVolume) seoBody.cached_total_volume = cachedTotalVolume;
+            if (cachedProductInfo) seoBody.cached_product_info = cachedProductInfo;
             // shopProducts에서 competitor 정보 추출
             if (shopProducts && shopProducts.length > 0) {
                 seoBody.cached_competitors = shopProducts.slice(0, 20).map(function(p) {

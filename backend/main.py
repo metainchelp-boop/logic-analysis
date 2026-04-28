@@ -828,8 +828,31 @@ async def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_
         # 캐시된 데이터가 있으면 재활용, 없으면 API 호출
         if req.cached_product_info:
             product_info = req.cached_product_info
+        elif req.cached_product_name:
+            # cached_product_name이 있으면 get_product_info 불필요 → API 절약 + 429 방지
+            product_info = {"product_name": req.cached_product_name}
+            # cached_competitors에서 자기 상품 정보 보완 (가격/브랜드/카테고리)
+            if req.cached_competitors:
+                from naver_crawler import extract_store_name_from_url as _ext_store
+                target_store = (_ext_store(req.product_url) or "").lower()
+                for _cp in req.cached_competitors:
+                    cp_store = (_cp.get("store_name") or "").lower()
+                    cp_url = (_cp.get("product_url") or "").lower()
+                    # 스토어명 일치 또는 URL 포함으로 매칭
+                    if (target_store and (cp_store == target_store or target_store in cp_url)):
+                        product_info["price"] = _cp.get("price", 0)
+                        product_info["brand"] = _cp.get("brand", "")
+                        product_info["store_name"] = _cp.get("store_name", "")
+                        product_info["category1"] = _cp.get("category1", "")
+                        product_info["category2"] = _cp.get("category2", "")
+                        logger.info(f"SEO product_info 캐시 보완: {_cp.get('store_name', '')}")
+                        break
         else:
-            product_info = get_product_info(req.product_url, keyword=req.keyword)
+            try:
+                product_info = get_product_info(req.product_url, keyword=req.keyword)
+            except Exception as e:
+                logger.warning(f"get_product_info 실패 (빈 값 사용): {e}")
+                product_info = {}
         product_name = req.cached_product_name or product_info.get("product_name", "")
         product_url = req.product_url or ""
 
