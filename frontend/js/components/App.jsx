@@ -694,17 +694,12 @@ window.App = function App() {
                     // 2-a: product_id 필드로 정확 매칭 (가장 신뢰도 높음)
                     found = prodList.find(function(p) { return p.product_id && String(p.product_id) === pid; });
                     if (found) { console.log('[SEO-DEBUG] 2-a product_id매칭 성공:', found.product_name); return found; }
-                    // 2-b: product_url에 PID 포함 + 스토어 슬러그 검증
+                    // 2-b: product_url에 PID 포함 (채널상품ID는 고유하므로 URL 포함만으로 충분)
+                    // 네이버 API link는 /main/products/ID 형태 → 스토어 슬러그 불일치 허용
                     found = prodList.find(function(p) {
-                        if (!p.product_url || p.product_url.indexOf(pid) < 0) return false;
-                        if (_targetStoreName) {
-                            var pUrlMatch = p.product_url.match(/smartstore\.naver\.com\/([^\/\?]+)/);
-                            var pSlug = pUrlMatch ? pUrlMatch[1].toLowerCase() : '';
-                            if (pSlug) return pSlug === _targetStoreName;
-                        }
-                        return true;
+                        return p.product_url && p.product_url.indexOf(pid) >= 0;
                     });
-                    if (found) return found;
+                    if (found) { console.log('[SEO-DEBUG] 2-b URL-PID매칭 성공:', found.product_name); return found; }
                 }
                 // 3차: 스토어명으로 매칭 (URL/PID 매칭 실패 시 — store_name 또는 URL 슬러그)
                 if (_targetStoreName) {

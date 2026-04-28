@@ -843,18 +843,30 @@ async def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_
                 _fix_pid = _ext_pid_fix(req.product_url) or ""
                 logger.info(f"SEO product_id 매칭 시도: target_pid={_fix_pid}, competitor_pids={[str(c.get('product_id',''))[:15] for c in (req.cached_competitors or [])[:5]]}")
                 if _fix_pid:
+                    _matched_cp = None
+                    # 1차: product_id 필드 직접 비교
                     for _cp in req.cached_competitors:
                         if str(_cp.get("product_id", "")) == _fix_pid:
-                            product_info["product_name"] = _cp.get("product_name", "")
-                            product_info["price"] = _cp.get("price", 0)
-                            product_info["brand"] = _cp.get("brand", "")
-                            product_info["store_name"] = _cp.get("store_name", "")
-                            product_info["category1"] = _cp.get("category1", "")
-                            product_info["category2"] = _cp.get("category2", "")
-                            logger.info(f"SEO cached_product_info 보완 (product_id): {_cp.get('product_name', '')[:30]}")
+                            _matched_cp = _cp
+                            logger.info(f"SEO product_id 필드 매칭: {_cp.get('product_name', '')[:30]}")
                             break
+                    # 2차: product_url에 PID 포함 (네이버 API link = /main/products/채널ID)
+                    if not _matched_cp:
+                        for _cp in req.cached_competitors:
+                            if _fix_pid in (_cp.get("product_url") or ""):
+                                _matched_cp = _cp
+                                logger.info(f"SEO URL-PID 매칭: {_cp.get('product_name', '')[:30]}")
+                                break
+                    if _matched_cp:
+                        product_info["product_name"] = _matched_cp.get("product_name", "")
+                        product_info["price"] = _matched_cp.get("price", 0)
+                        product_info["brand"] = _matched_cp.get("brand", "")
+                        product_info["store_name"] = _matched_cp.get("store_name", "")
+                        product_info["category1"] = _matched_cp.get("category1", "")
+                        product_info["category2"] = _matched_cp.get("category2", "")
+                        logger.info(f"SEO cached_product_info 보완 성공: {_matched_cp.get('product_name', '')[:30]}")
                     else:
-                        logger.warning(f"SEO product_id 매칭 실패: target_pid={_fix_pid} not in competitors")
+                        logger.warning(f"SEO 매칭 실패: target_pid={_fix_pid} — product_id/URL 모두 불일치")
         elif req.cached_product_name:
             # cached_product_name이 있으면 get_product_info 불필요 → API 절약 + 429 방지
             product_info = {"product_name": req.cached_product_name}
