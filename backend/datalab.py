@@ -215,10 +215,10 @@ def get_age_ratio(keyword: str, category_code: str) -> dict:
 
 
 # ==================== 12개월 검색량 트렌드 ====================
-def get_trend_12m(keyword: str, category_code: str) -> dict:
-    """최근 12개월 월별 검색 트렌드"""
+def get_trend_24m(keyword: str, category_code: str) -> dict:
+    """최근 24개월 월별 검색 트렌드 (API 1건으로 트렌드+성장률 모두 커버)"""
     end_date = datetime.now().strftime("%Y-%m-%d")
-    start_date = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+    start_date = (datetime.now() - timedelta(days=730)).strftime("%Y-%m-%d")
 
     body = {
         "startDate": start_date,
@@ -236,30 +236,33 @@ def get_trend_12m(keyword: str, category_code: str) -> dict:
         return {}
 
     points = results[0].get("data", [])
-    months = []
+    all_months = []
     for pt in points:
         period = pt.get("period", "")
         ratio = round(pt.get("ratio", 0), 1)
-        # period: "2025-04-01" → "4월"
         try:
             dt = datetime.strptime(period, "%Y-%m-%d")
             label = f"{dt.month}월"
         except Exception:
             label = period
-        months.append({"period": period, "label": label, "ratio": ratio})
+        all_months.append({"period": period, "label": label, "ratio": ratio})
 
-    if not months:
+    if not all_months:
         return {}
 
-    ratios = [m["ratio"] for m in months]
+    # 프론트에 보낼 최근 12개월 (트렌드 차트용)
+    recent_12 = all_months[-12:] if len(all_months) > 12 else all_months
+
+    ratios = [m["ratio"] for m in recent_12]
     max_ratio = max(ratios)
     min_ratio = min(ratios)
     avg_ratio = round(sum(ratios) / len(ratios), 1)
-    max_month = next(m["label"] for m in months if m["ratio"] == max_ratio)
-    min_month = next(m["label"] for m in months if m["ratio"] == min_ratio)
+    max_month = next(m["label"] for m in recent_12 if m["ratio"] == max_ratio)
+    min_month = next(m["label"] for m in recent_12 if m["ratio"] == min_ratio)
 
     return {
-        "months": months,
+        "months": recent_12,
+        "allMonths": all_months,  # 성장률 계산용 (24개월 전체)
         "maxRatio": max_ratio, "minRatio": min_ratio, "avgRatio": avg_ratio,
         "maxMonth": max_month, "minMonth": min_month,
         "range": round(max_ratio - min_ratio, 1),
@@ -397,9 +400,22 @@ def get_weekday_pattern(keyword: str, category_code: str) -> dict:
 
 
 # ==================== 전년 동기 대비 성장률 ====================
-def get_yoy_growth(keyword: str, category_code: str) -> dict:
-    """전년 동기 대비 1개월/3개월/12개월 성장률 (병렬 API 호출)"""
-    from concurrent.futures import ThreadPoolExecutor
+def get_yoy_growth_from_trend(trend_data: dict) -> dict:
+    """24개월 트렌드 데이터에서 전년 동기 대비 성장률 계산 (API 호출 0건)"""
+    all_months = trend_data.get("allMonths", [])
+    if len(all_months) < 13:
+        logger.warning(f"YoY 성장률: 데이터 부족 ({len(all_months)}개월, 최소 13개월 필요)")
+        return {}
+
+    # period를 datetime으로 변환
+    month_map = {}
+    for m in all_months:
+        try:
+            dt = datetime.strptime(m["period"], "%Y-%m-%d")
+            month_map[dt.strftime("%Y-%m")] = m["ratio"]
+        except Exception:
+            continue
+
     now = datetime.now()
     periods = [
         {"label": "1개월", "months": 1},
@@ -407,74 +423,39 @@ def get_yoy_growth(keyword: str, category_code: str) -> dict:
         {"label": "12개월", "months": 12},
     ]
 
-    # 6개 API 요청 본문을 미리 준비
-    api_tasks = []
-    for p in periods:
-        cur_end = now.strftime("%Y-%m-%d")
-        cur_start = (now - timedelta(days=30 * p["months"])).strftime("%Y-%m-%d")
-        prev_end = (now - timedelta(days=365)).strftime("%Y-%m-%d")
-        prev_start = (now - timedelta(days=365 + 30 * p["months"])).strftime("%Y-%m-%d")
-
-        body_base = {
-            "timeUnit": "month",
-            "category": category_code,
-            "keyword": [{"name": keyword, "param": [keyword]}],
-        }
-        api_tasks.append({
-            "label": p["label"],
-            "cur_body": {**body_base, "startDate": cur_start, "endDate": cur_end},
-            "prev_body": {**body_base, "startDate": prev_start, "endDate": prev_end},
-            "cur_start": cur_start, "cur_end": cur_end,
-            "prev_start": prev_start, "prev_end": prev_end,
-        })
-
-    # 6개 API를 병렬 호출 (순차 60초 → 병렬 ~10초)
-    def _fetch(body):
-        return _datalab_post("category/keywords", body)
-
-    all_bodies = []
-    for t in api_tasks:
-        all_bodies.append(t["cur_body"])
-        all_bodies.append(t["prev_body"])
-
-    with ThreadPoolExecutor(max_workers=6) as executor:
-        api_results = list(executor.map(_fetch, all_bodies))
-
-    # 결과 조합
     results = []
-    for i, t in enumerate(api_tasks):
-        data_cur = api_results[i * 2]
-        data_prev = api_results[i * 2 + 1]
+    for p in periods:
+        n = p["months"]
+        cur_vals = []
+        prev_vals = []
+        for i in range(n):
+            # 올해 해당 월
+            cur_dt = now - timedelta(days=30 * i)
+            cur_key = cur_dt.strftime("%Y-%m")
+            if cur_key in month_map:
+                cur_vals.append(month_map[cur_key])
 
-        cur_avg = 0
-        prev_avg = 0
-        if data_cur and "results" in data_cur and data_cur["results"]:
-            pts = data_cur["results"][0].get("data", [])
-            vals = [pt.get("ratio", 0) for pt in pts]
-            cur_avg = round(sum(vals) / len(vals), 1) if vals else 0
-        else:
-            logger.warning(f"YoY 성장률 — {t['label']} 올해 데이터 없음: cur_body={t['cur_body']}, API응답={str(data_cur)[:300]}")
-        if data_prev and "results" in data_prev and data_prev["results"]:
-            pts = data_prev["results"][0].get("data", [])
-            vals = [pt.get("ratio", 0) for pt in pts]
-            prev_avg = round(sum(vals) / len(vals), 1) if vals else 0
-        else:
-            logger.warning(f"YoY 성장률 — {t['label']} 전년 데이터 없음: prev_body={t['prev_body']}, API응답={str(data_prev)[:300]}")
+            # 전년 동월
+            prev_dt = cur_dt - timedelta(days=365)
+            prev_key = prev_dt.strftime("%Y-%m")
+            if prev_key in month_map:
+                prev_vals.append(month_map[prev_key])
+
+        cur_avg = round(sum(cur_vals) / len(cur_vals), 1) if cur_vals else 0
+        prev_avg = round(sum(prev_vals) / len(prev_vals), 1) if prev_vals else 0
 
         if prev_avg > 0:
             growth = round((cur_avg - prev_avg) / prev_avg * 100, 1)
         else:
             growth = 0
 
-        logger.info(f"YoY 성장률 {t['label']}: cur_avg={cur_avg}, prev_avg={prev_avg}, growth={growth}%")
+        logger.info(f"YoY 성장률 {p['label']}: cur_avg={cur_avg}, prev_avg={prev_avg}, growth={growth}% (API 호출 0건)")
 
         results.append({
-            "label": t["label"],
+            "label": p["label"],
             "currentAvg": cur_avg,
             "previousAvg": prev_avg,
             "growth": growth,
-            "curPeriod": f'{t["cur_start"]} ~ {t["cur_end"]}',
-            "prevPeriod": f'{t["prev_start"]} ~ {t["prev_end"]}',
         })
 
     return {"periods": results}
@@ -496,45 +477,32 @@ def get_category_popular_keywords(keyword: str, category_code: str, related_keyw
     popular = []
     rising = []
 
-    # 2번에 나눠서 호출 (5개씩)
+    # 2번에 나눠서 호출 (5개씩) — 최근 2개월 한 번에 조회하여 전월 대비 성장률 계산
     for batch_start in range(0, len(kw_list), 5):
         batch = kw_list[batch_start:batch_start + 5]
         kw_params = [{"name": kw["keyword"], "param": [kw["keyword"]]} for kw in batch]
 
-        # 최근 1개월 데이터
-        body_cur = {
-            "startDate": start_1m, "endDate": end_date,
+        # 최근 2개월 데이터를 한 번에 조회 (API 1건으로 전월 비교 커버)
+        body = {
+            "startDate": start_2m, "endDate": end_date,
             "timeUnit": "month",
             "category": category_code,
             "keyword": kw_params,
         }
-        data_cur = _datalab_post("category/keywords", body_cur)
-
-        # 전월 데이터
-        body_prev = {
-            "startDate": start_2m, "endDate": start_1m,
-            "timeUnit": "month",
-            "category": category_code,
-            "keyword": kw_params,
-        }
-        data_prev = _datalab_post("category/keywords", body_prev)
+        data = _datalab_post("category/keywords", body)
 
         cur_map = {}
         prev_map = {}
 
-        if data_cur and "results" in data_cur:
-            for r in data_cur["results"]:
+        if data and "results" in data:
+            for r in data["results"]:
                 name = r.get("title", "")
                 pts = r.get("data", [])
-                val = pts[-1].get("ratio", 0) if pts else 0
-                cur_map[name] = val
-
-        if data_prev and "results" in data_prev:
-            for r in data_prev["results"]:
-                name = r.get("title", "")
-                pts = r.get("data", [])
-                val = pts[-1].get("ratio", 0) if pts else 0
-                prev_map[name] = val
+                if len(pts) >= 2:
+                    cur_map[name] = pts[-1].get("ratio", 0)
+                    prev_map[name] = pts[-2].get("ratio", 0)
+                elif len(pts) == 1:
+                    cur_map[name] = pts[0].get("ratio", 0)
 
         for kw in batch:
             name = kw["keyword"]
@@ -603,18 +571,19 @@ def analyze_datalab(keyword: str, category1: str = "", related_keywords: list = 
     except Exception as e:
         logger.error(f"데이터랩 연령대 오류: {e}")
 
-    # 3. 12개월 트렌드
+    # 3. 24개월 트렌드 (트렌드 차트 + 성장률 + 시즌 모두 커버, API 1건)
+    trend_raw = None
     try:
-        trend = get_trend_12m(keyword, cat_code)
-        if trend:
-            result["trend"] = trend
+        trend_raw = get_trend_24m(keyword, cat_code)
+        if trend_raw:
+            result["trend"] = trend_raw
     except Exception as e:
         logger.error(f"데이터랩 트렌드 오류: {e}")
 
-    # 4. 시즌별 수요 예측 (트렌드 데이터 기반)
-    if "trend" in result:
+    # 4. 시즌별 수요 예측 (트렌드 데이터 기반, API 0건)
+    if trend_raw:
         try:
-            season = get_season_prediction(result["trend"])
+            season = get_season_prediction(trend_raw)
             if season:
                 result["season"] = season
         except Exception as e:
@@ -628,13 +597,14 @@ def analyze_datalab(keyword: str, category1: str = "", related_keywords: list = 
     except Exception as e:
         logger.error(f"데이터랩 요일 오류: {e}")
 
-    # 6. 전년 동기 대비 성장률
-    try:
-        growth = get_yoy_growth(keyword, cat_code)
-        if growth:
-            result["growth"] = growth
-    except Exception as e:
-        logger.error(f"데이터랩 성장률 오류: {e}")
+    # 6. 전년 동기 대비 성장률 (24개월 트렌드에서 계산, API 0건)
+    if trend_raw:
+        try:
+            growth = get_yoy_growth_from_trend(trend_raw)
+            if growth:
+                result["growth"] = growth
+        except Exception as e:
+            logger.error(f"데이터랩 성장률 오류: {e}")
 
     # 7. 카테고리 인기 키워드
     if related_keywords:
