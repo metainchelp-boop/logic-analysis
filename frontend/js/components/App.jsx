@@ -680,17 +680,24 @@ window.App = function App() {
             // URL에서 스토어명 추출 (매칭 검증용 — 섹션 12, 13에서 공통 사용)
             var _storeMatch = cleanedUrl ? cleanedUrl.match(/smartstore\.naver\.com\/([^\/]+)/) : null;
             var _targetStoreName = _storeMatch ? _storeMatch[1].toLowerCase() : '';
-            // 안전한 advProd 매칭 헬퍼 (스토어명 교차 검증)
+            // 안전한 advProd 매칭 헬퍼 (스토어 URL 슬러그 교차 검증)
             var _findAdvProd = function(prodList) {
                 if (!cleanedUrl) return null;
+                // 1차: 전체 URL 포함 매칭 (가장 정확)
                 var found = prodList.find(function(p) { return p.product_url && p.product_url.indexOf(cleanedUrl) >= 0; });
                 if (found) return found;
+                // 2차: product ID + 스토어 슬러그 검증
                 var pidMatch = cleanedUrl.match(/\/products\/(\d+)/);
                 if (pidMatch) {
                     var pid = pidMatch[1];
                     found = prodList.find(function(p) {
                         if (!p.product_url || p.product_url.indexOf(pid) < 0) return false;
-                        if (_targetStoreName && p.store_name) return p.store_name.toLowerCase() === _targetStoreName;
+                        if (_targetStoreName) {
+                            // p.product_url에서 스토어 슬러그 추출하여 슬러그끼리 비교
+                            var pUrlMatch = p.product_url.match(/smartstore\.naver\.com\/([^\/\?]+)/);
+                            var pSlug = pUrlMatch ? pUrlMatch[1].toLowerCase() : '';
+                            if (pSlug) return pSlug === _targetStoreName;
+                        }
                         return true;
                     });
                 }

@@ -228,6 +228,21 @@ def find_product_rank(keyword: str, product_url: str,
     # 상위 5개 = 경쟁 상품
     top_competitors = products[:5]
 
+    # 스토어 슬러그 비교 헬퍼 (URL 슬러그 vs API 스토어명/URL 모두 비교)
+    def _store_matches(product):
+        """대상 스토어와 검색 결과 상품의 스토어가 같은지 확인"""
+        if not target_store_name:
+            return True  # 스토어명 없으면 검증 스킵
+        # 1) API product_url에서 스토어 슬러그 추출하여 비교
+        p_url_store = extract_store_name_from_url(product.get("product_url", ""))
+        if p_url_store and p_url_store.lower() == target_store_name.lower():
+            return True
+        # 2) mallName과 직접 비교 (같은 경우도 있음)
+        p_mall = (product.get("store_name") or "").lower()
+        if p_mall and p_mall == target_store_name.lower():
+            return True
+        return False
+
     # --- 1차: ID 기반 정확 매칭 ---
     for product in products:
         matched = False
@@ -237,16 +252,15 @@ def find_product_rank(keyword: str, product_url: str,
             if target_product_id == product["product_id"]:
                 matched = True
 
-        # 2순위: productId가 URL에 포함
+        # 2순위: productId가 URL에 포함 + 스토어 검증 필수
         if not matched and target_product_id and product.get("product_url"):
-            if target_product_id in product["product_url"]:
+            if target_product_id in product["product_url"] and _store_matches(product):
                 matched = True
 
-        # 3순위: 스토어명 일치 + productId 부분 매칭
-        if not matched and target_store_name and product.get("store_name"):
-            if target_store_name.lower() == product["store_name"].lower():
-                if target_product_id and target_product_id in str(product.get("product_url", "")):
-                    matched = True
+        # 3순위: 스토어 슬러그 일치 + productId 부분 매칭
+        if not matched and target_store_name and _store_matches(product):
+            if target_product_id and target_product_id in str(product.get("product_url", "")):
+                matched = True
 
         if matched:
             page_number = (product["rank"] - 1) // 40 + 1
@@ -380,10 +394,20 @@ def get_product_info(product_url: str, keyword: str = "") -> Dict:
         item_pid = str(item.get("productId", ""))
         item_link = item.get("link", "")
         item_mall = (item.get("mallName", "") or "").lower()
-        # productId 매칭 또는 URL에 productId 포함
-        if product_id and ((item_pid == product_id) or (product_id in item_link)):
+        # 1순위: productId 정확 매칭
+        if product_id and item_pid == product_id:
             return True
-        # 스토어명 + 상품 링크에 스토어 슬러그 포함
+        # 2순위: URL에 productId 포함 + 스토어 검증 (다른 스토어 오염 방지)
+        if product_id and product_id in item_link:
+            if store_name:
+                # URL 슬러그 비교 또는 mallName 비교
+                if store_name.lower() in item_link.lower():
+                    return True
+                if item_mall and item_mall == store_name.lower():
+                    return True
+                return False  # 스토어 불일치 → 거부
+            return True
+        # 3순위: 스토어명 + 상품 링크에 스토어 슬러그 포함
         if store_name and store_name.lower() in item_link.lower():
             return True
         return False
