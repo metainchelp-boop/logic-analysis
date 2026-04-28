@@ -252,9 +252,11 @@ def find_product_rank(keyword: str, product_url: str,
             if target_product_id == product["product_id"]:
                 matched = True
 
-        # 2순위: productId가 URL에 포함 + 스토어 검증 필수
+        # 2순위: 채널 productId가 API product_url에 포함
+        # ※ 네이버 API는 product_url을 /main/products/채널ID 형식으로 반환하므로
+        #    스토어 슬러그 검증 없이 PID 포함만으로 매칭 (채널ID는 고유값)
         if not matched and target_product_id and product.get("product_url"):
-            if target_product_id in product["product_url"] and _store_matches(product):
+            if target_product_id in product["product_url"]:
                 matched = True
 
         # 3순위: 스토어 슬러그 일치 + productId 부분 매칭

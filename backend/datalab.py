@@ -452,15 +452,21 @@ def get_yoy_growth(keyword: str, category_code: str) -> dict:
             pts = data_cur["results"][0].get("data", [])
             vals = [pt.get("ratio", 0) for pt in pts]
             cur_avg = round(sum(vals) / len(vals), 1) if vals else 0
+        else:
+            logger.warning(f"YoY 성장률 — {t['label']} 올해 데이터 없음: cur_body={t['cur_body']}, API응답={str(data_cur)[:300]}")
         if data_prev and "results" in data_prev and data_prev["results"]:
             pts = data_prev["results"][0].get("data", [])
             vals = [pt.get("ratio", 0) for pt in pts]
             prev_avg = round(sum(vals) / len(vals), 1) if vals else 0
+        else:
+            logger.warning(f"YoY 성장률 — {t['label']} 전년 데이터 없음: prev_body={t['prev_body']}, API응답={str(data_prev)[:300]}")
 
         if prev_avg > 0:
             growth = round((cur_avg - prev_avg) / prev_avg * 100, 1)
         else:
             growth = 0
+
+        logger.info(f"YoY 성장률 {t['label']}: cur_avg={cur_avg}, prev_avg={prev_avg}, growth={growth}%")
 
         results.append({
             "label": t["label"],
