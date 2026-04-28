@@ -772,22 +772,33 @@ async def get_analysis_counts(
     current_user: Dict[str, Any] = Depends(require_role(UserRole.ADMIN)),
 ):
     """유저별 실제 분석 실행 횟수 조회 (관리자 전용).
-    daily_usage 테이블에서 user_id별 전체 query_count 합계를 카운팅."""
+    daily_usage 테이블에서 당일/누적 query_count를 각각 카운팅."""
     try:
+        from datetime import date as _date
+        today_str = _date.today().isoformat()
         conn = _get_db_connection()
         cursor = conn.cursor()
+        # 누적 합계
         cursor.execute(
             """SELECT user_id, SUM(query_count) AS cnt
                FROM daily_usage
                GROUP BY user_id"""
         )
-        rows = cursor.fetchall()
+        total_counts = {}
+        for r in cursor.fetchall():
+            total_counts[str(r[0])] = r[1]
+        # 당일 합계
+        cursor.execute(
+            """SELECT user_id, query_count
+               FROM daily_usage
+               WHERE usage_date = ?""",
+            (today_str,)
+        )
+        today_counts = {}
+        for r in cursor.fetchall():
+            today_counts[str(r[0])] = r[1]
         conn.close()
-        # { user_id: count } 형태로 반환
-        counts = {}
-        for r in rows:
-            counts[str(r[0])] = r[1]
-        return {"success": True, "data": counts}
+        return {"success": True, "data": total_counts, "today": today_counts}
     except Exception as e:
         logger.error(f"분석 횟수 조회 실패: {e}")
         return {"success": False, "error": f"분석 횟수 조회 실패: {str(e)}", "data": {}}

@@ -41,6 +41,10 @@ window.UserManagementPage = function UserManagementPage(props) {
   var analysisCounts = _useState9[0];
   var setAnalysisCounts = _useState9[1];
 
+  var _useState11 = useState({});
+  var todayCounts = _useState11[0];
+  var setTodayCounts = _useState11[1];
+
   var _useState10 = useState('all');
   var roleFilter = _useState10[0];
   var setRoleFilter = _useState10[1];
@@ -71,7 +75,10 @@ window.UserManagementPage = function UserManagementPage(props) {
   var fetchAnalysisCounts = function() {
     api.get('/auth/users/analysis-counts')
     .then(function(data) {
-      if (data.success) setAnalysisCounts(data.data || {});
+      if (data.success) {
+        setAnalysisCounts(data.data || {});
+        setTodayCounts(data.today || {});
+      }
     })
     .catch(function() {});
   };
@@ -297,7 +304,8 @@ window.UserManagementPage = function UserManagementPage(props) {
             React.createElement('th', { style: { padding: '12px', textAlign: 'left', fontWeight: 'bold', color: '#6B21A8' } }, '역할'),
             React.createElement('th', { style: { padding: '12px', textAlign: 'left', fontWeight: 'bold', color: '#6B21A8' } }, '상태'),
             React.createElement('th', { style: { padding: '12px', textAlign: 'left', fontWeight: 'bold', color: '#6B21A8' } }, '등록일'),
-            React.createElement('th', { style: { padding: '12px', textAlign: 'center', fontWeight: 'bold', color: '#6B21A8' } }, '분석 횟수'),
+            React.createElement('th', { style: { padding: '12px', textAlign: 'center', fontWeight: 'bold', color: '#6B21A8' } }, '당일'),
+            React.createElement('th', { style: { padding: '12px', textAlign: 'center', fontWeight: 'bold', color: '#6B21A8' } }, '누적'),
             React.createElement('th', { style: { padding: '12px', textAlign: 'left', fontWeight: 'bold', color: '#6B21A8' } }, '액션')
           )
         ),
@@ -318,6 +326,20 @@ window.UserManagementPage = function UserManagementPage(props) {
                 React.createElement('td', { style: { padding: '12px' } }, getRoleBadge(user.role)),
                 React.createElement('td', { style: { padding: '12px' } }, getStatusBadge(user.status || 'active')),
                 React.createElement('td', { style: { padding: '12px', fontSize: '12px', color: '#666' } }, new Date(user.created_at || user.createdAt).toLocaleDateString('ko-KR')),
+                React.createElement('td', { style: { padding: '12px', textAlign: 'center' } },
+                  React.createElement('span', {
+                    style: {
+                      display: 'inline-block',
+                      minWidth: 36,
+                      padding: '4px 10px',
+                      borderRadius: 999,
+                      fontSize: 13,
+                      fontWeight: 700,
+                      color: (todayCounts[String(user.id)] || 0) > 0 ? '#2563eb' : '#94a3b8',
+                      background: (todayCounts[String(user.id)] || 0) > 0 ? '#dbeafe' : '#f1f5f9'
+                    }
+                  }, String(todayCounts[String(user.id)] || 0) + '건')
+                ),
                 React.createElement('td', { style: { padding: '12px', textAlign: 'center' } },
                   React.createElement('span', {
                     style: {
@@ -361,7 +383,7 @@ window.UserManagementPage = function UserManagementPage(props) {
                 )
               ),
               isExpanded && React.createElement('tr', { key: user.id + '-logs' },
-                React.createElement('td', { colSpan: 7, style: { padding: '16px 20px', background: '#F5F3FF', borderBottom: '2px solid #C4B5FD' } },
+                React.createElement('td', { colSpan: 8, style: { padding: '16px 20px', background: '#F5F3FF', borderBottom: '2px solid #C4B5FD' } },
                   React.createElement('div', { style: { fontSize: 13, fontWeight: 600, color: '#6B21A8', marginBottom: 8 } },
                     '📋 최근 7일 접속 이력 — ' + user.name + ' (' + user.username + ')'
                   ),
