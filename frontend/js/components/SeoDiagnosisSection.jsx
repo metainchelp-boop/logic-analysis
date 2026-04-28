@@ -37,9 +37,9 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl:
         try {
             var seoBody = { product_url: productUrl, keyword: keyword };
             // 메인 분석 데이터 재활용 → 네이버 API 중복 호출 방지
-            if (cachedRank) seoBody.cached_rank = cachedRank;
+            if (cachedRank != null) seoBody.cached_rank = cachedRank;
             if (cachedProductName) seoBody.cached_product_name = cachedProductName;
-            if (cachedTotalVolume) seoBody.cached_total_volume = cachedTotalVolume;
+            if (cachedTotalVolume != null) seoBody.cached_total_volume = cachedTotalVolume;
             if (cachedProductInfo) seoBody.cached_product_info = cachedProductInfo;
             // shopProducts에서 competitor 정보 추출 (ref로 최신값 읽기)
             var currentShopProducts = shopProductsRef.current;
