@@ -3,10 +3,19 @@ window.EntryStrategySection = function EntryStrategySection(props) {
     var advertiserData = props.advertiserData;   // from /advertiser/analyze
     var strategicData = props.strategicData;      // from App.jsx client-side calc
     var keyword = props.keyword || '';
+    var rankCheckResult = props.rankCheckResult;   // from RankTrackingSection (순위 추적 결과 공유)
 
     if (!advertiserData && !strategicData) return null;
 
+    // 순위 데이터: rankCheckResult(순위 추적)가 있으면 우선 사용, 없으면 advertiser 데이터 사용
     var ranking = (advertiserData && advertiserData.ranking) || {};
+    if (rankCheckResult && rankCheckResult.rank_position != null) {
+        ranking = Object.assign({}, ranking, {
+            current_rank: rankCheckResult.rank_position,
+            page_number: rankCheckResult.page_number,
+            is_on_page1: rankCheckResult.rank_position <= 40,
+        });
+    }
     var productInfo = (advertiserData && advertiserData.product_info) || {};
     var comparison = (advertiserData && advertiserData.competitor_comparison) || {};
     var compItems = comparison.items || [];

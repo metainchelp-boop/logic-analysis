@@ -50,6 +50,7 @@ window.App = function App() {
     const [companyName, setCompanyName] = useState('');
     const [datalabData, setDatalabData] = useState(null);
     const [datalabLoading, setDatalabLoading] = useState(false);
+    const [rankCheckResult, setRankCheckResult] = useState(null); // 순위 추적 → 진입 전략 공유용
     const searchIdRef = React.useRef(0); // 비동기 요청 경합 방지용
 
     /* 업체 카드 클릭으로 시작된 분석 추적 (자동 저장용) */
@@ -249,6 +250,7 @@ window.App = function App() {
         setHtmlDetailResult(null);
         setDatalabData(null);
         setDatalabLoading(false);
+        setRankCheckResult(null);
 
         // 검색바에서 HTML이 입력되었으면 상세페이지 분석 + 리뷰 데이터 추출 (비동기)
         if (htmlInput && htmlInput.length >= 100) {
@@ -1213,7 +1215,7 @@ window.App = function App() {
 
             /* 순위 추적 */
             React.createElement(window.SectionErrorBoundary, { name: '순위 추적' },
-                React.createElement(RankTrackingSection, { products: products, refreshProducts: loadProducts, searchedKeyword: searchedKeyword, searchedProductUrl: searchedProductUrl, onNavigateToClient: handleNavigateToClient, canEdit: currentUser.role !== 'viewer' })
+                React.createElement(RankTrackingSection, { products: products, refreshProducts: loadProducts, searchedKeyword: searchedKeyword, searchedProductUrl: searchedProductUrl, onNavigateToClient: handleNavigateToClient, canEdit: currentUser.role !== 'viewer', onRankResult: setRankCheckResult })
             ),
 
             /* 종합 요약 카드 */
@@ -1421,7 +1423,8 @@ window.App = function App() {
                 React.createElement(EntryStrategySection, {
                     advertiserData: advertiserReport,
                     strategicData: analysisData && analysisData.strategicAnalysis,
-                    keyword: searchedKeyword
+                    keyword: searchedKeyword,
+                    rankCheckResult: rankCheckResult
                 })
             ),
 

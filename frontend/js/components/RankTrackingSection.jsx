@@ -1,5 +1,5 @@
 /* RankTrackingSection — 순위 추적 */
-window.RankTrackingSection = function RankTrackingSection({ products, refreshProducts, searchedKeyword, searchedProductUrl, onNavigateToClient, canEdit }) {
+window.RankTrackingSection = function RankTrackingSection({ products, refreshProducts, searchedKeyword, searchedProductUrl, onNavigateToClient, canEdit, onRankResult }) {
     const { useState, useEffect, useRef } = React;
     const [showAddForm, setShowAddForm] = useState(false);
     const [newUrl, setNewUrl] = useState('');
@@ -46,6 +46,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
             .then(function(res) {
                 if (res && res.success && res.data) {
                     setTempRankResult(res.data);
+                    if (onRankResult) onRankResult(res.data);
                 } else if (res && !res.success && res.detail) {
                     toast.error(res.detail);
                 }
