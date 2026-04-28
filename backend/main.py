@@ -847,6 +847,42 @@ async def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_
                         product_info["category2"] = _cp.get("category2", "")
                         logger.info(f"SEO product_info 캐시 보완: {_cp.get('store_name', '')}")
                         break
+        elif req.cached_competitors:
+            # cached_product_info/name 없지만 competitors에서 스토어명으로 매칭 시도
+            # → get_product_info() API 호출 없이 상품 정보 확보 (429 방지 핵심)
+            product_info = {}
+            from naver_crawler import extract_store_name_from_url as _ext_store2
+            from naver_crawler import extract_product_id_from_url as _ext_pid2
+            target_store = (_ext_store2(req.product_url) or "").lower()
+            target_pid = _ext_pid2(req.product_url) or ""
+            for _cp in req.cached_competitors:
+                cp_store = (_cp.get("store_name") or "").lower()
+                cp_url = (_cp.get("product_url") or "").lower()
+                cp_matched = False
+                # 매칭 1: productId가 URL에 포함
+                if target_pid and target_pid in cp_url:
+                    cp_matched = True
+                # 매칭 2: 스토어명 일치 또는 URL에 스토어 슬러그 포함
+                elif target_store and (cp_store == target_store or target_store in cp_url):
+                    cp_matched = True
+                if cp_matched:
+                    product_info = {
+                        "product_name": _cp.get("product_name", ""),
+                        "price": _cp.get("price", 0),
+                        "brand": _cp.get("brand", ""),
+                        "store_name": _cp.get("store_name", ""),
+                        "category1": _cp.get("category1", ""),
+                        "category2": _cp.get("category2", ""),
+                    }
+                    logger.info(f"SEO competitors 스토어 매칭 성공: {_cp.get('product_name', '')[:30]} (store: {target_store})")
+                    break
+            if not product_info:
+                logger.info(f"SEO competitors 스토어 매칭 실패 — get_product_info 호출 (store: {target_store})")
+                try:
+                    product_info = get_product_info(req.product_url, keyword=req.keyword)
+                except Exception as e:
+                    logger.warning(f"get_product_info 실패 (빈 값 사용): {e}")
+                    product_info = {}
         else:
             try:
                 product_info = get_product_info(req.product_url, keyword=req.keyword)

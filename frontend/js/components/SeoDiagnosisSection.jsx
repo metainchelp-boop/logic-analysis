@@ -37,7 +37,7 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl:
             if (cachedProductInfo) seoBody.cached_product_info = cachedProductInfo;
             // shopProducts에서 competitor 정보 추출
             if (shopProducts && shopProducts.length > 0) {
-                seoBody.cached_competitors = shopProducts.slice(0, 20).map(function(p) {
+                seoBody.cached_competitors = shopProducts.slice(0, 80).map(function(p) {
                     return { product_name: p.product_name, price: p.price, store_name: p.store_name, brand: p.brand, category1: p.category1, category2: p.category2, product_url: p.product_url };
                 });
             }

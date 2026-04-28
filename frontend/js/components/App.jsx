@@ -700,6 +700,18 @@ window.App = function App() {
                         }
                         return true;
                     });
+                    if (found) return found;
+                }
+                // 3차: 스토어명으로 매칭 (URL/PID 매칭 실패 시 — store_name 또는 URL 슬러그)
+                if (_targetStoreName) {
+                    found = prodList.find(function(p) {
+                        // store_name 필드 직접 비교
+                        if ((p.store_name || '').toLowerCase() === _targetStoreName) return true;
+                        // product_url에서 스토어 슬러그 추출하여 비교
+                        var pSlugMatch = (p.product_url || '').match(/smartstore\.naver\.com\/([^\/\?]+)/);
+                        if (pSlugMatch && pSlugMatch[1].toLowerCase() === _targetStoreName) return true;
+                        return false;
+                    });
                 }
                 return found || null;
             };
@@ -886,6 +898,22 @@ window.App = function App() {
                     category1: targetProd.category1 || '',
                     category2: targetProd.category2 || '',
                     image_url: targetProd.image_url || ''
+                };
+            } else if (_targetStoreName && prods.length > 0) {
+                // URL/PID/스토어 3단계 매칭 모두 실패해도 스토어 정보는 전달
+                // → 백엔드에서 cached_competitors 스토어명 매칭으로 get_product_info 호출 방지
+                var _sameStoreProd = prods.find(function(p) {
+                    return (p.store_name || '').toLowerCase() === _targetStoreName ||
+                           ((p.product_url || '').match(/smartstore\.naver\.com\/([^\/\?]+)/) || [])[1] === _targetStoreName;
+                });
+                analysis.targetProductInfo = {
+                    product_name: _sameStoreProd ? _sameStoreProd.product_name : '',
+                    price: _sameStoreProd ? _sameStoreProd.price : 0,
+                    brand: _sameStoreProd ? (_sameStoreProd.brand || '') : '',
+                    store_name: _sameStoreProd ? (_sameStoreProd.store_name || _targetStoreName) : _targetStoreName,
+                    category1: _sameStoreProd ? (_sameStoreProd.category1 || '') : '',
+                    category2: _sameStoreProd ? (_sameStoreProd.category2 || '') : '',
+                    image_url: _sameStoreProd ? (_sameStoreProd.image_url || '') : ''
                 };
             }
 
