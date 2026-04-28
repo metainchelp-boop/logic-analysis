@@ -191,15 +191,21 @@ def search_products(keyword: str, max_results: int = 200) -> List[Dict]:
 
 # ==================== 상품 순위 찾기 ====================
 
+def _normalize_name(name: str) -> str:
+    """상품명 정규화: 공백/특수문자 제거, 소문자"""
+    return re.sub(r'[\s\-_/·•\(\)\[\]【】]', '', name).lower()
+
+
 def find_product_rank(keyword: str, product_url: str,
-                      max_pages: int = 10) -> Tuple[Optional[int], Optional[int], List[Dict]]:
+                      max_pages: int = 10, product_name: str = "") -> Tuple[Optional[int], Optional[int], List[Dict]]:
     """
     키워드 검색에서 특정 상품의 순위를 찾는다. (공식 API 기반)
 
     매칭 우선순위:
     1. productId(nvMid) 완전 일치
-    2. 스토어명 + 상품ID 부분 일치
-    3. 스토어명 + 상품명 유사도
+    2. productId가 URL에 포함
+    3. 스토어명 일치 + productId 부분 매칭
+    4. 스토어명 일치 + 상품명 유사도 (폴백)
 
     ⚠️ 이 순위는 공식 API의 sort=sim(유사도순) 기준이며,
        실제 네이버쇼핑 노출 순위(sort=rel)와는 다를 수 있습니다.
@@ -222,6 +228,7 @@ def find_product_rank(keyword: str, product_url: str,
     # 상위 5개 = 경쟁 상품
     top_competitors = products[:5]
 
+    # --- 1차: ID 기반 정확 매칭 ---
     for product in products:
         matched = False
 
@@ -243,10 +250,61 @@ def find_product_rank(keyword: str, product_url: str,
 
         if matched:
             page_number = (product["rank"] - 1) // 40 + 1
-            logger.info(f"상품 발견! '{keyword}' → {product['rank']}위 (페이지 {page_number})")
+            logger.info(f"상품 발견(ID매칭)! '{keyword}' → {product['rank']}위 (페이지 {page_number})")
             return product["rank"], page_number, top_competitors
 
-    logger.info(f"상품 미발견: '{keyword}' (검색 범위: {len(products)}개)")
+    # --- 2차: 스토어명 + 상품명 유사도 폴백 ---
+    # 스토어명이 없거나 상품명을 모르면 스킵
+    if not target_store_name:
+        logger.info(f"상품 미발견: '{keyword}' (검색 범위: {len(products)}개, 스토어명 없어 유사도 매칭 불가)")
+        return None, None, top_competitors
+
+    # 상품명 확보: 파라미터로 받았거나, 스마트스토어 API에서 조회
+    ref_name = product_name
+    if not ref_name:
+        try:
+            info = get_product_info(product_url)
+            ref_name = info.get("product_name", "")
+        except Exception:
+            pass
+    if not ref_name:
+        logger.info(f"상품 미발견: '{keyword}' (검색 범위: {len(products)}개, 상품명 미확보로 유사도 매칭 불가)")
+        return None, None, top_competitors
+
+    ref_norm = _normalize_name(ref_name)
+    best_match = None
+    best_score = 0
+
+    for product in products:
+        p_store = (product.get("store_name") or "").lower()
+        # 스토어명(mallName)이 스마트스토어 URL의 스토어명과 일치해야 함
+        if p_store != target_store_name.lower():
+            continue
+
+        p_norm = _normalize_name(product.get("product_name", ""))
+        if not p_norm or not ref_norm:
+            continue
+
+        # 유사도: 긴 쪽이 짧은 쪽을 포함하면 높은 점수, 아니면 공통 글자 비율
+        if ref_norm in p_norm or p_norm in ref_norm:
+            score = 0.9 + 0.1 * (min(len(ref_norm), len(p_norm)) / max(len(ref_norm), len(p_norm)))
+        else:
+            # 공통 문자 비율 (순서 무관 집합 기반)
+            common = len(set(ref_norm) & set(p_norm))
+            total = max(len(set(ref_norm) | set(p_norm)), 1)
+            score = common / total
+
+        if score > best_score:
+            best_score = score
+            best_match = product
+
+    # 유사도 70% 이상이면 매칭으로 판정
+    if best_match and best_score >= 0.7:
+        page_number = (best_match["rank"] - 1) // 40 + 1
+        logger.info(f"상품 발견(유사도매칭)! '{keyword}' → {best_match['rank']}위 (유사도: {best_score:.2f}, 스토어: {target_store_name})")
+        return best_match["rank"], page_number, top_competitors
+
+    logger.info(f"상품 미발견: '{keyword}' (검색 범위: {len(products)}개, 최고 유사도: {best_score:.2f})")
     return None, None, top_competitors
 
 

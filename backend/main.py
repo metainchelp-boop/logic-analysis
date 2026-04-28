@@ -356,12 +356,13 @@ class NotificationSettingsRequest(BaseModel):
 async def check_rank(req: RankCheckRequest, current_user: dict = Depends(get_current_user)):
     """키워드 + 상품URL로 실시간 순위 조회 (인증 필수, viewer 제한은 handleSearch에서 관리)"""
     try:
+        product_info = get_product_info(req.product_url, keyword=req.keyword)
         rank, page, competitors = find_product_rank(
             keyword=req.keyword,
             product_url=req.product_url,
-            max_pages=10
+            max_pages=10,
+            product_name=product_info.get("product_name", "")
         )
-        product_info = get_product_info(req.product_url)
         analysis = generate_rank_analysis(rank, None, competitors, product_info)
 
         return {
@@ -818,12 +819,13 @@ class SeoAnalysisRequest(BaseModel):
 async def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_current_user)):
     """상품 SEO 종합 진단 (인증 필수)"""
     try:
-        product_info = get_product_info(req.product_url)
+        product_info = get_product_info(req.product_url, keyword=req.keyword)
         product_name = product_info.get("product_name", "")
         product_url = req.product_url or ""
 
         rank, page, competitors = find_product_rank(
-            keyword=req.keyword, product_url=req.product_url, max_pages=10
+            keyword=req.keyword, product_url=req.product_url, max_pages=10,
+            product_name=product_name
         )
 
         # get_product_info 실패 시 (스마트스토어 ID ≠ nvMid) → 키워드 검색에서 productId로 보완
@@ -1443,7 +1445,8 @@ async def advertiser_analyze(req: AdvertiserAnalysisRequest, current_user: dict 
 
         # 2) 키워드로 순위 검색
         rank, page, top_competitors = find_product_rank(
-            keyword=req.keyword, product_url=req.product_url, max_pages=10
+            keyword=req.keyword, product_url=req.product_url, max_pages=10,
+            product_name=product_info.get("product_name", "")
         )
 
         # 3) 상위 40개 상품 가져오기 (1페이지 분석용)
