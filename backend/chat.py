@@ -1,18 +1,22 @@
 """
-chat.py — AI 채팅 + 의견함 모듈 v2.1 (리팩토링)
+chat.py — AI 채팅 + 의견함 모듈 v2.2 (이미지 첨부 + Vision)
 Claude API 연동, 로직 분석 프로그램 전용 시스템 프롬프트,
 DB 데이터 참조형 RAG — 질문에 관련된 분석 데이터를 자동 조회하여 AI 컨텍스트에 주입
 #오류/#요청/#의견 태그 자동 감지 → 피드백 테이블 저장
+이미지 첨부 → Claude Vision API 멀티모달 분석
 """
 import os
 import json
 import re
+import base64
+import uuid
 import sqlite3
 import logging
 import anthropic
 from datetime import datetime
 from typing import Optional, Dict, List
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from auth import get_current_user, require_role, UserRole
@@ -24,6 +28,11 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
 CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY", "")
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
+
+# ==================== 이미지 설정 ====================
+ALLOWED_IMAGE_TYPES = {"image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp"}
+MAX_IMAGE_SIZE = 5 * 1024 * 1024  # 5MB
+CHAT_IMAGE_DIR = os.path.join(os.path.dirname(DB_PATH), "chat_images")
 
 # ==================== Anthropic 클라이언트 싱글톤 ====================
 _claude_client: Optional[anthropic.Anthropic] = None
@@ -101,11 +110,20 @@ def init_chat_db():
                 resolved_at TEXT
             )
         """)
+        # image_url 컬럼 추가 (마이그레이션)
+        try:
+            conn.execute("ALTER TABLE chat_messages ADD COLUMN image_url TEXT")
+        except Exception:
+            pass  # 이미 존재
+
         # 인덱스: 자주 사용되는 쿼리 패턴에 맞춤
         conn.execute("CREATE INDEX IF NOT EXISTS idx_chat_messages_user ON chat_messages(user_id, id DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_chat_feedback_status ON chat_feedback(status, created_at DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_chat_feedback_category ON chat_feedback(category, status)")
         conn.commit()
+
+        # 이미지 저장 디렉토리 생성
+        os.makedirs(CHAT_IMAGE_DIR, exist_ok=True)
         logger.info("[Chat] DB tables & indexes initialized (WAL mode)")
     except Exception as e:
         logger.error(f"[Chat] DB init error: {e}")
@@ -117,6 +135,19 @@ def _get_conn():
     conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+# ==================== 이미지 저장 헬퍼 ====================
+
+def _save_chat_image(image_b64: str, image_type: str, user_id: int) -> str:
+    """base64 이미지를 파일로 저장하고 파일명 반환"""
+    ext = ALLOWED_IMAGE_TYPES.get(image_type, "png")
+    filename = f"{user_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}.{ext}"
+    filepath = os.path.join(CHAT_IMAGE_DIR, filename)
+    with open(filepath, "wb") as f:
+        f.write(base64.b64decode(image_b64))
+    logger.info(f"[Chat] 이미지 저장: {filename}")
+    return filename
 
 
 # ==================== 피드백 태그 감지 ====================
@@ -341,8 +372,9 @@ def _fetch_context_data(message: str) -> str:
 
 
 # ==================== Claude API 호출 ====================
-def _call_claude_sync(messages: list, user_message: str, context_data: str = "") -> str:
-    """Claude API 호출 (동기 — anthropic SDK 싱글톤 사용)"""
+def _call_claude_sync(messages: list, user_message: str, context_data: str = "",
+                      image_b64: str = None, image_media_type: str = None) -> str:
+    """Claude API 호출 (동기 — anthropic SDK 싱글톤 사용, 이미지 Vision 지원)"""
     # 최근 10개 메시지만 컨텍스트로 전송 (비용 절감)
     recent_messages = messages[-10:] if len(messages) > 10 else messages
 
@@ -355,7 +387,22 @@ def _call_claude_sync(messages: list, user_message: str, context_data: str = "")
     if context_data:
         enriched_message = f"{user_message}\n\n{context_data}"
 
-    api_messages.append({"role": "user", "content": enriched_message})
+    # 이미지가 있으면 멀티모달 content 블록 사용
+    if image_b64 and image_media_type:
+        content_blocks = [
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": image_media_type,
+                    "data": image_b64,
+                }
+            },
+            {"type": "text", "text": enriched_message or "이 이미지를 분석해주세요."},
+        ]
+        api_messages.append({"role": "user", "content": content_blocks})
+    else:
+        api_messages.append({"role": "user", "content": enriched_message})
 
     try:
         client = _get_claude_client()
@@ -392,6 +439,8 @@ def _call_claude_sync(messages: list, user_message: str, context_data: str = "")
 
 class ChatRequest(BaseModel):
     message: str
+    image: Optional[str] = None       # base64 인코딩된 이미지 데이터
+    image_type: Optional[str] = None  # MIME 타입 (image/png, image/jpeg 등)
 
 
 class FeedbackUpdateRequest(BaseModel):
@@ -412,12 +461,33 @@ async def send_message(req: ChatRequest, current_user: dict = Depends(get_curren
     if len(message) > 2000:
         raise HTTPException(status_code=400, detail="메시지는 2000자 이내로 작성해주세요.")
 
+    # 이미지 검증 및 처리
+    image_b64 = None
+    image_media_type = None
+    image_filename = None
+
+    if req.image and req.image_type:
+        if req.image_type not in ALLOWED_IMAGE_TYPES:
+            raise HTTPException(status_code=400, detail="지원하지 않는 이미지 형식입니다. (PNG, JPG, GIF, WebP만 가능)")
+        try:
+            decoded = base64.b64decode(req.image)
+            if len(decoded) > MAX_IMAGE_SIZE:
+                raise HTTPException(status_code=400, detail="이미지 크기는 5MB 이하만 가능합니다.")
+        except (ValueError, Exception) as e:
+            if isinstance(e, HTTPException):
+                raise
+            raise HTTPException(status_code=400, detail="이미지 데이터가 올바르지 않습니다.")
+
+        image_b64 = req.image
+        image_media_type = req.image_type
+        image_filename = _save_chat_image(req.image, req.image_type, user_id)
+
     conn = _get_conn()
     try:
-        # 사용자 메시지 저장
+        # 사용자 메시지 저장 (이미지 파일명 포함)
         conn.execute(
-            "INSERT INTO chat_messages (user_id, username, role, content) VALUES (?, ?, 'user', ?)",
-            (user_id, username, message)
+            "INSERT INTO chat_messages (user_id, username, role, content, image_url) VALUES (?, ?, 'user', ?, ?)",
+            (user_id, username, message, image_filename)
         )
         conn.commit()
 
@@ -440,8 +510,8 @@ async def send_message(req: ChatRequest, current_user: dict = Depends(get_curren
         if context_data:
             logger.info(f"[Chat] RAG 데이터 주입: {len(context_data)}자")
 
-        # Claude API 호출 (데이터 컨텍스트 포함)
-        ai_response = _call_claude_sync(history[:-1], message, context_data)
+        # Claude API 호출 (데이터 컨텍스트 + 이미지 포함)
+        ai_response = _call_claude_sync(history[:-1], message, context_data, image_b64, image_media_type)
 
         # 피드백 접수 안내 추가
         if feedback_saved:
@@ -460,6 +530,7 @@ async def send_message(req: ChatRequest, current_user: dict = Depends(get_curren
             "success": True,
             "response": ai_response,
             "feedbackSaved": feedback_saved,
+            "imageUrl": f"/api/chat/image/{image_filename}" if image_filename else None,
         }
 
     except HTTPException:
@@ -477,13 +548,34 @@ async def get_chat_history(current_user: dict = Depends(get_current_user)):
     conn = _get_conn()
     try:
         rows = conn.execute(
-            "SELECT id, role, content, created_at FROM chat_messages WHERE user_id = ? ORDER BY id DESC LIMIT 50",
+            "SELECT id, role, content, created_at, image_url FROM chat_messages WHERE user_id = ? ORDER BY id DESC LIMIT 50",
             (current_user["id"],)
         ).fetchall()
-        messages = [dict(r) for r in reversed(rows)]
+        messages = []
+        for r in reversed(rows):
+            msg = dict(r)
+            # image_url을 API 경로로 변환
+            if msg.get("image_url"):
+                msg["image_url"] = f"/api/chat/image/{msg['image_url']}"
+            messages.append(msg)
         return {"success": True, "data": messages}
     finally:
         conn.close()
+
+
+@router.get("/image/{filename}")
+async def get_chat_image(filename: str, current_user: dict = Depends(get_current_user)):
+    """채팅 이미지 파일 서빙 (인증 필요)"""
+    # 경로 탈출 방지
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="잘못된 파일명입니다.")
+    filepath = os.path.join(CHAT_IMAGE_DIR, filename)
+    if not os.path.exists(filepath):
+        raise HTTPException(status_code=404, detail="이미지를 찾을 수 없습니다.")
+    # MIME 타입 결정
+    ext = filename.rsplit(".", 1)[-1].lower()
+    media_types = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif", "webp": "image/webp"}
+    return FileResponse(filepath, media_type=media_types.get(ext, "image/png"))
 
 
 @router.get("/feedback")

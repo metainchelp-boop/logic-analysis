@@ -1,4 +1,4 @@
-/* ChatWidget — 플로팅 AI 채팅 + 의견함 위젯 v2.1 (리팩토링) */
+/* ChatWidget — 플로팅 AI 채팅 + 의견함 위젯 v2.2 (이미지 첨부 지원) */
 
 // 타임스탬프 헬퍼 (컴포넌트 외부 — 매 렌더링마다 재생성 방지)
 var _chatNow = function() { return new Date().toISOString().slice(0, 19).replace('T', ' '); };
@@ -22,6 +22,12 @@ window.ChatWidget = function ChatWidget({ currentUser }) {
     const [unread, setUnread] = useState(0);
     const messagesEndRef = useRef(null);
     const inputRef = useRef(null);
+    const fileInputRef = useRef(null);
+
+    // 이미지 첨부 상태
+    const [imagePreview, setImagePreview] = useState(null);   // 미리보기 data URL
+    const [imageB64, setImageB64] = useState(null);           // base64 데이터 (서버 전송용)
+    const [imageType, setImageType] = useState(null);         // MIME 타입
 
     // 의견함 상태
     const [fbCategory, setFbCategory] = useState('');
@@ -57,18 +63,62 @@ window.ChatWidget = function ChatWidget({ currentUser }) {
         }
     }, [isOpen, messages.length, activeTab]);
 
+    // 이미지 파일 선택 핸들러
+    var handleImageSelect = useCallback(function(e) {
+        var file = e.target.files && e.target.files[0];
+        if (!file) return;
+
+        // 타입 검증
+        var allowed = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+        if (allowed.indexOf(file.type) < 0) {
+            toast.error('PNG, JPG, GIF, WebP 이미지만 첨부 가능합니다.');
+            e.target.value = '';
+            return;
+        }
+        // 크기 검증 (5MB)
+        if (file.size > 5 * 1024 * 1024) {
+            toast.error('이미지 크기는 5MB 이하만 가능합니다.');
+            e.target.value = '';
+            return;
+        }
+
+        var reader = new FileReader();
+        reader.onload = function(ev) {
+            setImagePreview(ev.target.result);
+            // data:image/png;base64,xxxxx → base64 부분만 추출
+            var b64 = ev.target.result.split(',')[1];
+            setImageB64(b64);
+            setImageType(file.type);
+        };
+        reader.readAsDataURL(file);
+        e.target.value = ''; // 같은 파일 재선택 허용
+    }, []);
+
+    var clearImage = useCallback(function() {
+        setImagePreview(null);
+        setImageB64(null);
+        setImageType(null);
+    }, []);
+
     // 메시지 전송 (useCallback으로 안정적 참조)
     var sendMessage = useCallback(function() {
         var msg = input.trim();
-        if (!msg || sending) return;
+        if ((!msg && !imageB64) || sending) return;
 
         setSending(true);
         setInput('');
 
-        var userMsg = { role: 'user', content: msg, created_at: _chatNow() };
+        var userMsg = { role: 'user', content: msg || '(이미지)', created_at: _chatNow(), image_url: imagePreview };
         setMessages(function(prev) { return prev.concat([userMsg]); });
 
-        api.post('/chat/send', { message: msg }).then(function(res) {
+        var payload = { message: msg || '이 이미지를 분석해주세요.' };
+        if (imageB64) {
+            payload.image = imageB64;
+            payload.image_type = imageType;
+        }
+        clearImage();
+
+        api.post('/chat/send', payload).then(function(res) {
             var aiMsg = {
                 role: 'assistant',
                 content: res.success ? res.response : (res.detail || '오류가 발생했습니다.'),
@@ -81,7 +131,7 @@ window.ChatWidget = function ChatWidget({ currentUser }) {
             setMessages(function(prev) { return prev.concat([{ role: 'assistant', content: '네트워크 오류가 발생했습니다.', created_at: _chatNow() }]); });
             setSending(false);
         });
-    }, [input, sending]);
+    }, [input, sending, imageB64, imageType, imagePreview, clearImage]);
 
     var handleKeyDown = useCallback(function(e) {
         if (e.key === 'Enter' && !e.shiftKey) {
@@ -254,7 +304,19 @@ window.ChatWidget = function ChatWidget({ currentUser }) {
                                     borderBottomLeftRadius: isUser ? 12 : 4,
                                 }
                             },
-                                React.createElement('div', { dangerouslySetInnerHTML: renderContent(m.content) }),
+                                /* 이미지 표시 */
+                                m.image_url && React.createElement('img', {
+                                    src: m.image_url,
+                                    alt: '첨부 이미지',
+                                    style: {
+                                        maxWidth: '100%', maxHeight: 200, borderRadius: 8,
+                                        marginBottom: m.content && m.content !== '(이미지)' ? 8 : 0,
+                                        cursor: 'pointer', display: 'block',
+                                    },
+                                    onClick: function() { window.open(m.image_url, '_blank'); }
+                                }),
+                                /* 텍스트 (이미지만 보낸 경우 '(이미지)' 표시 제외) */
+                                (m.content && m.content !== '(이미지)') && React.createElement('div', { dangerouslySetInnerHTML: renderContent(m.content) }),
                                 React.createElement('div', {
                                     style: { fontSize: 10, marginTop: 4, opacity: 0.5, textAlign: isUser ? 'right' : 'left' }
                                 }, (m.created_at || '').slice(11, 16))
@@ -271,16 +333,60 @@ window.ChatWidget = function ChatWidget({ currentUser }) {
                     React.createElement('div', { ref: messagesEndRef })
                 ),
 
+                /* 이미지 미리보기 */
+                imagePreview && React.createElement('div', {
+                    style: {
+                        padding: '8px 14px', borderTop: '1px solid #e2e8f0', background: '#f8fafc',
+                        display: 'flex', alignItems: 'center', gap: 8,
+                    }
+                },
+                    React.createElement('img', {
+                        src: imagePreview,
+                        alt: '미리보기',
+                        style: { width: 48, height: 48, objectFit: 'cover', borderRadius: 8, border: '1px solid #e2e8f0' }
+                    }),
+                    React.createElement('span', { style: { fontSize: 12, color: '#64748b', flex: 1 } }, '이미지 첨부됨'),
+                    React.createElement('button', {
+                        onClick: clearImage,
+                        style: {
+                            background: '#fee2e2', color: '#dc2626', border: 'none', borderRadius: 6,
+                            padding: '4px 8px', fontSize: 11, cursor: 'pointer', fontWeight: 600,
+                        }
+                    }, '삭제')
+                ),
+
                 /* 입력 영역 */
                 React.createElement('div', {
-                    style: { padding: '10px 14px', borderTop: '1px solid #e2e8f0', background: '#fff', display: 'flex', gap: 8, alignItems: 'flex-end' }
+                    style: { padding: '10px 14px', borderTop: imagePreview ? 'none' : '1px solid #e2e8f0', background: '#fff', display: 'flex', gap: 8, alignItems: 'flex-end' }
                 },
+                    /* 숨겨진 파일 입력 */
+                    React.createElement('input', {
+                        ref: fileInputRef,
+                        type: 'file',
+                        accept: 'image/png,image/jpeg,image/gif,image/webp',
+                        style: { display: 'none' },
+                        onChange: handleImageSelect,
+                    }),
+                    /* 이미지 첨부 버튼 */
+                    React.createElement('button', {
+                        onClick: function() { if (fileInputRef.current) fileInputRef.current.click(); },
+                        disabled: sending,
+                        title: '이미지 첨부 (5MB 이하)',
+                        style: {
+                            width: 36, height: 36, borderRadius: '50%',
+                            background: imagePreview ? '#dbeafe' : '#f1f5f9',
+                            color: imagePreview ? '#2563eb' : '#64748b',
+                            border: 'none', cursor: sending ? 'default' : 'pointer',
+                            fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            flexShrink: 0, transition: 'all 0.15s ease',
+                        }
+                    }, '📷'),
                     React.createElement('textarea', {
                         ref: inputRef,
                         value: input,
                         onChange: function(e) { setInput(e.target.value); },
                         onKeyDown: handleKeyDown,
-                        placeholder: '질문을 입력하세요...',
+                        placeholder: imagePreview ? '이미지에 대해 질문하세요...' : '질문을 입력하세요...',
                         rows: 1,
                         style: {
                             flex: 1, padding: '8px 12px', borderRadius: 10,
@@ -291,11 +397,11 @@ window.ChatWidget = function ChatWidget({ currentUser }) {
                     }),
                     React.createElement('button', {
                         onClick: sendMessage,
-                        disabled: sending || !input.trim(),
+                        disabled: sending || (!input.trim() && !imageB64),
                         style: {
                             width: 36, height: 36, borderRadius: '50%',
-                            background: sending || !input.trim() ? '#e2e8f0' : '#1B2A4A',
-                            color: '#fff', border: 'none', cursor: sending || !input.trim() ? 'default' : 'pointer',
+                            background: sending || (!input.trim() && !imageB64) ? '#e2e8f0' : '#1B2A4A',
+                            color: '#fff', border: 'none', cursor: sending || (!input.trim() && !imageB64) ? 'default' : 'pointer',
                             fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center',
                             flexShrink: 0,
                         }
