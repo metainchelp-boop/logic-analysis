@@ -6,6 +6,10 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl:
     const [loading, setLoading] = useState(false);
 
     const autoTriggered = useRef(false);
+    // shopProducts ref — React 17 Promise 내 setState 비배치 문제 방지
+    // useEffect 실행 시점에 shopProducts prop이 아직 null일 수 있으므로 ref로 최신값 보장
+    const shopProductsRef = useRef(shopProducts);
+    shopProductsRef.current = shopProducts;
 
     useEffect(function() {
         if (parentProductUrl) setProductUrl(parentProductUrl);
@@ -16,14 +20,16 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl:
         setResult(null);
     }, [keyword, parentProductUrl]);
 
-    // 자동 실행: 메인 분석 데이터(cachedRank 또는 cachedProductName)가 도착한 후 실행
-    // cachedRank가 없으면 메인 분석이 아직 진행 중이므로 대기
+    // 자동 실행: 메인 분석 데이터 + shopProducts 모두 도착한 후 실행
+    // shopProducts를 deps에 포함하여 데이터 도착 후 재시도 보장
     useEffect(function() {
-        if (keyword && productUrl && !autoTriggered.current && !result && !loading && (cachedRank || cachedProductName || cachedTotalVolume || cachedProductInfo)) {
+        if (keyword && productUrl && !autoTriggered.current && !result && !loading
+            && (cachedRank || cachedProductName || cachedTotalVolume || cachedProductInfo)
+            && shopProducts && shopProducts.length > 0) {
             autoTriggered.current = true;
             handleAnalyze();
         }
-    }, [keyword, productUrl, cachedRank, cachedProductName, cachedTotalVolume, cachedProductInfo]);
+    }, [keyword, productUrl, cachedRank, cachedProductName, cachedTotalVolume, cachedProductInfo, shopProducts]);
 
     const handleAnalyze = async () => {
         if (!productUrl || !keyword) return;
@@ -35,9 +41,10 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl:
             if (cachedProductName) seoBody.cached_product_name = cachedProductName;
             if (cachedTotalVolume) seoBody.cached_total_volume = cachedTotalVolume;
             if (cachedProductInfo) seoBody.cached_product_info = cachedProductInfo;
-            // shopProducts에서 competitor 정보 추출
-            if (shopProducts && shopProducts.length > 0) {
-                seoBody.cached_competitors = shopProducts.slice(0, 80).map(function(p) {
+            // shopProducts에서 competitor 정보 추출 (ref로 최신값 읽기)
+            var currentShopProducts = shopProductsRef.current;
+            if (currentShopProducts && currentShopProducts.length > 0) {
+                seoBody.cached_competitors = currentShopProducts.slice(0, 80).map(function(p) {
                     return { product_name: p.product_name, price: p.price, store_name: p.store_name, brand: p.brand, category1: p.category1, category2: p.category2, product_url: p.product_url };
                 });
             }
