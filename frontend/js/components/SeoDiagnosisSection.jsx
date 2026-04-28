@@ -16,12 +16,14 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl:
         setResult(null);
     }, [keyword, parentProductUrl]);
 
+    // 자동 실행: 메인 분석 데이터(cachedRank 또는 cachedProductName)가 도착한 후 실행
+    // cachedRank가 없으면 메인 분석이 아직 진행 중이므로 대기
     useEffect(function() {
-        if (keyword && productUrl && !autoTriggered.current && !result && !loading) {
+        if (keyword && productUrl && !autoTriggered.current && !result && !loading && (cachedRank || cachedProductName || cachedTotalVolume)) {
             autoTriggered.current = true;
             handleAnalyze();
         }
-    }, [keyword, productUrl]);
+    }, [keyword, productUrl, cachedRank, cachedProductName, cachedTotalVolume]);
 
     const handleAnalyze = async () => {
         if (!productUrl || !keyword) return;
