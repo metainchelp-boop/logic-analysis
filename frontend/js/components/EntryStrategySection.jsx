@@ -67,7 +67,7 @@ window.EntryStrategySection = function EntryStrategySection(props) {
 
         var kwInNameCount = compItems.filter(function(c) { return c.has_keyword_in_name; }).length;
         var kwInNameRatio = compItems.length > 0 ? Math.round(kwInNameCount / compItems.length * 100) : 0;
-        var myHasKw = productInfo.product_name && keyword && productInfo.product_name.toLowerCase().indexOf(keyword.toLowerCase()) >= 0;
+        var myHasKw = productInfo.product_name && keyword && productInfo.product_name.replace(/\s/g, '').toLowerCase().indexOf(keyword.replace(/\s/g, '').toLowerCase()) >= 0;
 
         gapAnalysis = {
             myPrice: myPrice,

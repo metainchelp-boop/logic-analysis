@@ -855,7 +855,8 @@ async def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_
                     break
 
         # --- 기본 데이터 수집 ---
-        keyword_in_title = req.keyword.lower() in product_name.lower() if product_name else False
+        # 띄어쓰기 무시 비교 (상품명 "생 멸치" ↔ 키워드 "생멸치" 매칭)
+        keyword_in_title = req.keyword.replace(" ", "").lower() in product_name.replace(" ", "").lower() if product_name else False
         title_length = len(product_name)
         special_chars = sum(1 for c in product_name if c in '!@#$%^&*()[]{}|<>★☆♥♡')
 
@@ -1466,7 +1467,8 @@ async def advertiser_analyze(req: AdvertiserAnalysisRequest, current_user: dict 
 
         # 5) 마케터 관점 심층 전략 분석
         strategies = []
-        my_has_keyword = req.keyword.lower() in my_name.lower() if my_name else False
+        # 띄어쓰기 무시 비교 (상품명 "생 멸치" ↔ 키워드 "생멸치" 매칭)
+        my_has_keyword = req.keyword.replace(" ", "").lower() in my_name.replace(" ", "").lower() if my_name else False
         my_name_len = len(my_name)
 
         # ── 경쟁사 패턴 심층 분석 ──
@@ -1595,8 +1597,8 @@ async def advertiser_analyze(req: AdvertiserAnalysisRequest, current_user: dict 
         seo_actions = []
         if my_name:
             if my_has_keyword:
-                kw_pos = my_name.lower().find(req.keyword.lower())
-                pos_pct = round(kw_pos / max(len(my_name), 1) * 100)
+                kw_pos = my_name.replace(" ", "").lower().find(req.keyword.replace(" ", "").lower())
+                pos_pct = round(kw_pos / max(len(my_name.replace(" ", "")), 1) * 100)
                 seo_insights.append(f"핵심 키워드 '{req.keyword}'가 상품명의 {pos_pct}% 지점에 위치합니다." + (" 앞부분 배치로 SEO에 유리합니다." if pos_pct < 30 else " 가능하면 앞부분(30% 이내)에 배치하면 노출 확률이 높아집니다."))
             else:
                 seo_insights.append(f"상품명에 '{req.keyword}' 키워드가 없습니다. 1페이지 상품 중 {keyword_in_name_ratio}%가 포함하고 있어 필수 삽입이 필요합니다.")
