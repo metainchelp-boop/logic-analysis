@@ -685,21 +685,19 @@ window.App = function App() {
                 if (!cleanedUrl) return null;
                 // 1차: 전체 URL 포함 매칭 (가장 정확)
                 var found = prodList.find(function(p) { return p.product_url && p.product_url.indexOf(cleanedUrl) >= 0; });
-                if (found) { console.log('[SEO-DEBUG] 1차 URL매칭 성공:', found.product_name); return found; }
-                // 2차: product_id 필드 직접 비교 (API productId = 스마트스토어 상품 ID)
+                if (found) return found;
+                // 2차: 채널상품ID(URL의 /products/ID)로 매칭
                 var pidMatch = cleanedUrl.match(/\/products\/(\d+)/);
                 if (pidMatch) {
                     var pid = pidMatch[1];
-                    console.log('[SEO-DEBUG] target_pid:', pid, '| prodList[0~2] product_id:', prodList.slice(0,3).map(function(p){return p.product_id;}));
-                    // 2-a: product_id 필드로 정확 매칭 (가장 신뢰도 높음)
+                    // 2-a: product_id 필드 직접 비교
                     found = prodList.find(function(p) { return p.product_id && String(p.product_id) === pid; });
-                    if (found) { console.log('[SEO-DEBUG] 2-a product_id매칭 성공:', found.product_name); return found; }
-                    // 2-b: product_url에 PID 포함 (채널상품ID는 고유하므로 URL 포함만으로 충분)
-                    // 네이버 API link는 /main/products/ID 형태 → 스토어 슬러그 불일치 허용
+                    if (found) return found;
+                    // 2-b: product_url에 PID 포함 (네이버 API link = /main/products/채널ID)
                     found = prodList.find(function(p) {
                         return p.product_url && p.product_url.indexOf(pid) >= 0;
                     });
-                    if (found) { console.log('[SEO-DEBUG] 2-b URL-PID매칭 성공:', found.product_name); return found; }
+                    if (found) return found;
                 }
                 // 3차: 스토어명으로 매칭 (URL/PID 매칭 실패 시 — store_name 또는 URL 슬러그)
                 if (_targetStoreName) {

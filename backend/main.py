@@ -825,15 +825,6 @@ class SeoAnalysisRequest(BaseModel):
 async def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_current_user)):
     """상품 SEO 종합 진단 (인증 필수)"""
     try:
-        # === 디버그 로그 ===
-        logger.info(f"SEO 진입: url={req.product_url}, keyword={req.keyword}")
-        logger.info(f"SEO 캐시: rank={req.cached_rank}, name={req.cached_product_name}, info={bool(req.cached_product_info)}, competitors={len(req.cached_competitors) if req.cached_competitors else 0}")
-        if req.cached_product_info:
-            logger.info(f"SEO cached_product_info 내용: {req.cached_product_info}")
-        if req.cached_competitors and len(req.cached_competitors) > 0:
-            _sample = req.cached_competitors[0]
-            logger.info(f"SEO competitors[0] 샘플: product_id={_sample.get('product_id')}, name={_sample.get('product_name','')[:30]}, store={_sample.get('store_name','')}")
-
         # 캐시된 데이터가 있으면 재활용, 없으면 API 호출
         if req.cached_product_info:
             product_info = req.cached_product_info
@@ -841,7 +832,6 @@ async def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_
             if not product_info.get("product_name") and req.cached_competitors:
                 from naver_crawler import extract_product_id_from_url as _ext_pid_fix
                 _fix_pid = _ext_pid_fix(req.product_url) or ""
-                logger.info(f"SEO product_id 매칭 시도: target_pid={_fix_pid}, competitor_pids={[str(c.get('product_id',''))[:15] for c in (req.cached_competitors or [])[:5]]}")
                 if _fix_pid:
                     _matched_cp = None
                     # 1차: product_id 필드 직접 비교
