@@ -1,5 +1,5 @@
 /* SeoDiagnosisSection — SEO 종합 진단 (v5 풀버전) */
-window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl: parentProductUrl, competitorData }) {
+window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl: parentProductUrl, competitorData, cachedRank, cachedProductName, cachedTotalVolume, shopProducts }) {
     const { useState, useEffect, useRef } = React;
     const [productUrl, setProductUrl] = useState('');
     const [result, setResult] = useState(null);
@@ -27,7 +27,18 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl:
         if (!productUrl || !keyword) return;
         setLoading(true);
         try {
-            const res = await api.post('/seo/analyze', { product_url: productUrl, keyword });
+            var seoBody = { product_url: productUrl, keyword: keyword };
+            // 메인 분석 데이터 재활용 → 네이버 API 중복 호출 방지
+            if (cachedRank) seoBody.cached_rank = cachedRank;
+            if (cachedProductName) seoBody.cached_product_name = cachedProductName;
+            if (cachedTotalVolume) seoBody.cached_total_volume = cachedTotalVolume;
+            // shopProducts에서 competitor 정보 추출
+            if (shopProducts && shopProducts.length > 0) {
+                seoBody.cached_competitors = shopProducts.slice(0, 20).map(function(p) {
+                    return { product_name: p.product_name, price: p.price, store_name: p.store_name, brand: p.brand, category1: p.category1, category2: p.category2, product_url: p.product_url };
+                });
+            }
+            const res = await api.post('/seo/analyze', seoBody);
             if (res.success) setResult(res.data);
             else alert(res.detail || 'SEO 분석 실패');
         } catch (e) { alert('SEO 분석 실패: ' + e.message); }

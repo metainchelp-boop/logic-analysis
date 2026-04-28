@@ -1368,7 +1368,19 @@ window.App = function App() {
 
             /* 9. SEO 종합 진단 */
             searchedProductUrl && React.createElement(window.SectionErrorBoundary, { name: 'SEO 진단' },
-                React.createElement(SeoDiagnosisSection, { keyword: searchedKeyword, productUrl: searchedProductUrl, competitorData: analysisData && analysisData.competitorTable })
+                React.createElement(SeoDiagnosisSection, {
+                    keyword: searchedKeyword,
+                    productUrl: searchedProductUrl,
+                    competitorData: analysisData && analysisData.competitorTable,
+                    cachedRank: analysisData && analysisData.seoDetail ? (analysisData.seoDetail.popularity.items[0].pass !== undefined ? (function() {
+                        var rankText = analysisData.seoDetail.popularity.items[0].label;
+                        var m = rankText.match(/(\d+)위/);
+                        return m ? parseInt(m[1]) : null;
+                    })() : null) : null,
+                    cachedProductName: advertiserReport && advertiserReport.product_name ? advertiserReport.product_name : null,
+                    cachedTotalVolume: volumeData && volumeData[0] ? ((volumeData[0].monthlyPcQcCnt || 0) + (volumeData[0].monthlyMobileQcCnt || 0)) : null,
+                    shopProducts: shopProducts
+                })
             ),
 
             /* 10. SEO 상세 분석 */

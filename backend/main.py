@@ -814,22 +814,38 @@ async def detail_page_analyze(req: DetailPageAnalysisRequest, current_user: dict
 class SeoAnalysisRequest(BaseModel):
     product_url: str
     keyword: str
+    # 프론트엔드에서 메인 분석 데이터를 전달받아 중복 API 호출 방지
+    cached_rank: Optional[int] = None
+    cached_product_name: Optional[str] = None
+    cached_competitors: Optional[list] = None
+    cached_product_info: Optional[dict] = None
+    cached_total_volume: Optional[int] = None
 
 @app.post("/api/seo/analyze")
 async def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_current_user)):
     """상품 SEO 종합 진단 (인증 필수)"""
     try:
-        product_info = get_product_info(req.product_url, keyword=req.keyword)
-        product_name = product_info.get("product_name", "")
+        # 캐시된 데이터가 있으면 재활용, 없으면 API 호출
+        if req.cached_product_info:
+            product_info = req.cached_product_info
+        else:
+            product_info = get_product_info(req.product_url, keyword=req.keyword)
+        product_name = req.cached_product_name or product_info.get("product_name", "")
         product_url = req.product_url or ""
 
-        rank, page, competitors = find_product_rank(
-            keyword=req.keyword, product_url=req.product_url, max_pages=10,
-            product_name=product_name
-        )
+        if req.cached_rank is not None:
+            rank = req.cached_rank
+            page = (rank - 1) // 40 + 1 if rank > 0 else None
+            competitors = req.cached_competitors or []
+        else:
+            rank, page, competitors = find_product_rank(
+                keyword=req.keyword, product_url=req.product_url, max_pages=10,
+                product_name=product_name
+            )
 
         # get_product_info 실패 시 (스마트스토어 ID ≠ nvMid) → 키워드 검색에서 productId로 보완
-        if not product_name:
+        # 캐시된 product_name이 있으면 폴백 불필요
+        if not product_name and not req.cached_product_name:
             from naver_crawler import extract_product_id_from_url as _extract_pid
             from naver_crawler import extract_store_name_from_url as _extract_store
             from naver_crawler import search_products as _sp
@@ -998,13 +1014,16 @@ async def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_
         sales_score = 0
         est_monthly_sales = 0
         if rank:
-            # 키워드 볼륨 조회
-            try:
-                vol_data = get_keyword_volume([req.keyword])
-                vol = vol_data[0] if vol_data else None
-                total_vol = (vol.get("monthlyPcQcCnt", 0) + vol.get("monthlyMobileQcCnt", 0)) if vol else 0
-            except Exception:
-                total_vol = 0
+            # 키워드 볼륨: 캐시 우선, 없으면 API 호출
+            if req.cached_total_volume is not None:
+                total_vol = req.cached_total_volume
+            else:
+                try:
+                    vol_data = get_keyword_volume([req.keyword])
+                    vol = vol_data[0] if vol_data else None
+                    total_vol = (vol.get("monthlyPcQcCnt", 0) + vol.get("monthlyMobileQcCnt", 0)) if vol else 0
+                except Exception:
+                    total_vol = 0
 
             ctr_map = {1: 0.08, 2: 0.06, 3: 0.05, 4: 0.04, 5: 0.03}
             ctr = ctr_map.get(rank, 0.015 if rank <= 10 else 0.008 if rank <= 20 else 0.003 if rank <= 40 else 0.001)
