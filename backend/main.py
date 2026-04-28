@@ -839,9 +839,18 @@ async def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_
             for _p in _prods:
                 p_url = _p.get("product_url", "")
                 p_pid = _p.get("product_id", "")
-                # 매칭 1: productId가 URL에 포함 (find_product_rank와 동일 방식)
-                matched = target_pid and (target_pid in p_url or target_pid == p_pid)
-                # 매칭 2: 스토어명이 URL에 포함
+                p_mall = (_p.get("store_name", "") or "").lower()
+                # 매칭 1: productId 정확 일치
+                matched = target_pid and target_pid == p_pid
+                # 매칭 2: productId가 URL에 포함 + 스토어 검증 (다른 스토어 오염 방지)
+                if not matched and target_pid and target_pid in p_url:
+                    if target_store:
+                        store_in_url = target_store.lower() in p_url.lower()
+                        store_in_mall = p_mall == target_store.lower()
+                        matched = store_in_url or store_in_mall
+                    else:
+                        matched = True
+                # 매칭 3: 스토어명이 URL에 포함 (스토어 슬러그 비교)
                 if not matched and target_store:
                     matched = target_store.lower() in p_url.lower()
                 if matched:
@@ -1091,7 +1100,7 @@ async def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_
 
         # --- 개선 제안 ---
         suggestions = []
-        if not keyword_in_title:
+        if product_name and not keyword_in_title:
             suggestions.append(f"상품명에 '{req.keyword}' 키워드를 포함시키세요.")
         if title_length < 15:
             suggestions.append("상품명이 너무 짧습니다. 핵심 키워드와 속성을 추가하세요.")
