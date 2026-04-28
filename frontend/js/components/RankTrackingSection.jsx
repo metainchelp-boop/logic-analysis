@@ -58,23 +58,27 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
     }, [searchedKeyword, searchedProductUrl, canEdit]);
 
     // 키워드별 노출 분석 (상품명 기반)
+    // cachedProductName이 도착한 후에만 호출 (타이밍 버그 v5.4.16 수정)
     useEffect(function() {
         if (!searchedProductUrl || !searchedKeyword) {
             setExposureResult(null);
             return;
         }
-        var key = 'exposure::' + searchedProductUrl;
+        // cachedProductName이 아직 없으면 대기 (나중에 prop이 채워지면 재실행)
+        if (!cachedProductName) return;
+
+        var key = 'exposure::' + searchedProductUrl + '::' + cachedProductName;
         if (lastExposureKey.current === key) return;
         lastExposureKey.current = key;
 
         setExposureLoading(true);
         setExposureResult(null);
-        api.post('/rank/keyword-exposure', { product_url: searchedProductUrl, keyword: searchedKeyword, product_name: cachedProductName || '' })
+        api.post('/rank/keyword-exposure', { product_url: searchedProductUrl, keyword: searchedKeyword, product_name: cachedProductName })
             .then(function(res) {
                 if (res && res.success && res.data) {
                     setExposureResult(res.data);
                 } else if (res && !res.success) {
-                    toast.warn('키워드 노출 분석: ' + (res.detail || '상품명을 가져올 수 없습니다'));
+                    toast.warn('키워드 노출 분석: ' + (res.detail || '분석에 실패했습니다'));
                 }
                 setExposureLoading(false);
             })
@@ -82,7 +86,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                 toast.error('키워드 노출 분석 요청 실패');
                 setExposureLoading(false);
             });
-    }, [searchedProductUrl, searchedKeyword]);
+    }, [searchedProductUrl, searchedKeyword, cachedProductName]);
 
     // 자동 등록 + 자동 순위체크 제거 — 수동 버튼으로만 실행 (서버 부하 방지)
     // 기존 DB 데이터(스케줄러 수집분)만 표시, 필요시 사용자가 직접 새로고침
