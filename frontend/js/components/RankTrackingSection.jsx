@@ -1,5 +1,5 @@
 /* RankTrackingSection — 순위 추적 */
-window.RankTrackingSection = function RankTrackingSection({ products, refreshProducts, searchedKeyword, searchedProductUrl, onNavigateToClient, canEdit, onRankResult }) {
+window.RankTrackingSection = function RankTrackingSection({ products, refreshProducts, searchedKeyword, searchedProductUrl, cachedProductName, onNavigateToClient, canEdit, onRankResult }) {
     const { useState, useEffect, useRef } = React;
     const [showAddForm, setShowAddForm] = useState(false);
     const [newUrl, setNewUrl] = useState('');
@@ -69,7 +69,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
 
         setExposureLoading(true);
         setExposureResult(null);
-        api.post('/rank/keyword-exposure', { product_url: searchedProductUrl, keyword: searchedKeyword })
+        api.post('/rank/keyword-exposure', { product_url: searchedProductUrl, keyword: searchedKeyword, product_name: cachedProductName || '' })
             .then(function(res) {
                 if (res && res.success && res.data) {
                     setExposureResult(res.data);
