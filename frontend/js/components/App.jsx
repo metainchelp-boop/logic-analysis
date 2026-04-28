@@ -686,14 +686,17 @@ window.App = function App() {
                 // 1차: 전체 URL 포함 매칭 (가장 정확)
                 var found = prodList.find(function(p) { return p.product_url && p.product_url.indexOf(cleanedUrl) >= 0; });
                 if (found) return found;
-                // 2차: product ID + 스토어 슬러그 검증
+                // 2차: product_id 필드 직접 비교 (API productId = 스마트스토어 상품 ID)
                 var pidMatch = cleanedUrl.match(/\/products\/(\d+)/);
                 if (pidMatch) {
                     var pid = pidMatch[1];
+                    // 2-a: product_id 필드로 정확 매칭 (가장 신뢰도 높음)
+                    found = prodList.find(function(p) { return p.product_id && String(p.product_id) === pid; });
+                    if (found) return found;
+                    // 2-b: product_url에 PID 포함 + 스토어 슬러그 검증
                     found = prodList.find(function(p) {
                         if (!p.product_url || p.product_url.indexOf(pid) < 0) return false;
                         if (_targetStoreName) {
-                            // p.product_url에서 스토어 슬러그 추출하여 슬러그끼리 비교
                             var pUrlMatch = p.product_url.match(/smartstore\.naver\.com\/([^\/\?]+)/);
                             var pSlug = pUrlMatch ? pUrlMatch[1].toLowerCase() : '';
                             if (pSlug) return pSlug === _targetStoreName;

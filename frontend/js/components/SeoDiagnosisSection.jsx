@@ -45,7 +45,7 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl:
             var currentShopProducts = shopProductsRef.current;
             if (currentShopProducts && currentShopProducts.length > 0) {
                 seoBody.cached_competitors = currentShopProducts.slice(0, 80).map(function(p) {
-                    return { product_name: p.product_name, price: p.price, store_name: p.store_name, brand: p.brand, category1: p.category1, category2: p.category2, product_url: p.product_url };
+                    return { product_id: p.product_id || '', product_name: p.product_name, price: p.price, store_name: p.store_name, brand: p.brand, category1: p.category1, category2: p.category2, product_url: p.product_url };
                 });
             }
             const res = await api.post('/seo/analyze', seoBody);

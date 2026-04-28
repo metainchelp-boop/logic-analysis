@@ -828,6 +828,21 @@ async def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_
         # 캐시된 데이터가 있으면 재활용, 없으면 API 호출
         if req.cached_product_info:
             product_info = req.cached_product_info
+            # product_name이 비어있으면 cached_competitors에서 product_id로 보완
+            if not product_info.get("product_name") and req.cached_competitors:
+                from naver_crawler import extract_product_id_from_url as _ext_pid_fix
+                _fix_pid = _ext_pid_fix(req.product_url) or ""
+                if _fix_pid:
+                    for _cp in req.cached_competitors:
+                        if str(_cp.get("product_id", "")) == _fix_pid:
+                            product_info["product_name"] = _cp.get("product_name", "")
+                            product_info["price"] = _cp.get("price", 0)
+                            product_info["brand"] = _cp.get("brand", "")
+                            product_info["store_name"] = _cp.get("store_name", "")
+                            product_info["category1"] = _cp.get("category1", "")
+                            product_info["category2"] = _cp.get("category2", "")
+                            logger.info(f"SEO cached_product_info 보완 (product_id): {_cp.get('product_name', '')[:30]}")
+                            break
         elif req.cached_product_name:
             # cached_product_name이 있으면 get_product_info 불필요 → API 절약 + 429 방지
             product_info = {"product_name": req.cached_product_name}
@@ -858,11 +873,15 @@ async def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_
             for _cp in req.cached_competitors:
                 cp_store = (_cp.get("store_name") or "").lower()
                 cp_url = (_cp.get("product_url") or "").lower()
+                cp_pid = str(_cp.get("product_id", ""))
                 cp_matched = False
-                # 매칭 1: productId가 URL에 포함
-                if target_pid and target_pid in cp_url:
+                # 매칭 1: product_id 필드 직접 비교 (API productId = 스마트스토어 상품 ID)
+                if target_pid and cp_pid and target_pid == cp_pid:
                     cp_matched = True
-                # 매칭 2: 스토어명 일치 또는 URL에 스토어 슬러그 포함
+                # 매칭 2: productId가 URL에 포함
+                elif target_pid and target_pid in cp_url:
+                    cp_matched = True
+                # 매칭 3: 스토어명 일치 또는 URL에 스토어 슬러그 포함
                 elif target_store and (cp_store == target_store or target_store in cp_url):
                     cp_matched = True
                 if cp_matched:
