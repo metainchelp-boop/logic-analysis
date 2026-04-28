@@ -677,6 +677,26 @@ window.App = function App() {
                 };
             }
 
+            // URL에서 스토어명 추출 (매칭 검증용 — 섹션 12, 13에서 공통 사용)
+            var _storeMatch = cleanedUrl ? cleanedUrl.match(/smartstore\.naver\.com\/([^\/]+)/) : null;
+            var _targetStoreName = _storeMatch ? _storeMatch[1].toLowerCase() : '';
+            // 안전한 advProd 매칭 헬퍼 (스토어명 교차 검증)
+            var _findAdvProd = function(prodList) {
+                if (!cleanedUrl) return null;
+                var found = prodList.find(function(p) { return p.product_url && p.product_url.indexOf(cleanedUrl) >= 0; });
+                if (found) return found;
+                var pidMatch = cleanedUrl.match(/\/products\/(\d+)/);
+                if (pidMatch) {
+                    var pid = pidMatch[1];
+                    found = prodList.find(function(p) {
+                        if (!p.product_url || p.product_url.indexOf(pid) < 0) return false;
+                        if (_targetStoreName && p.store_name) return p.store_name.toLowerCase() === _targetStoreName;
+                        return true;
+                    });
+                }
+                return found || null;
+            };
+
             // 12. 리뷰 분석 (상위 상품 기반 추정)
             if (prods.length >= 5) {
                 var top5 = prods.slice(0, 5);
@@ -686,7 +706,7 @@ window.App = function App() {
                 // 리뷰 수 추정 (순위 기반 로그 감소 모델)
                 var estReviews = function(rank) { return Math.max(1, Math.round(2000 / Math.pow(rank, 0.7))); };
                 var advReview = cleanedUrl ? (function() {
-                    var advProd = prods.find(function(p) { return p.product_url && cleanedUrl && p.product_url.indexOf(cleanedUrl) >= 0; });
+                    var advProd = _findAdvProd(prods);
                     return advProd ? estReviews(advProd.rank) : estReviews(40);
                 })() : estReviews(40);
                 var avgReview = Math.round(top20.reduce(function(s, p) { return s + estReviews(p.rank); }, 0) / top20.length);
@@ -695,7 +715,7 @@ window.App = function App() {
                 // 평점 추정 (상위 4.5~4.9, 하위 4.0~4.5)
                 var estRating = function(rank) { return Math.round((4.9 - (rank - 1) * 0.012) * 10) / 10; };
                 var advRating = cleanedUrl ? (function() {
-                    var advProd = prods.find(function(p) { return p.product_url && cleanedUrl && p.product_url.indexOf(cleanedUrl) >= 0; });
+                    var advProd = _findAdvProd(prods);
                     return advProd ? estRating(advProd.rank) : estRating(40);
                 })() : estRating(40);
                 var avgRating = Math.round(top20.reduce(function(s, p) { return s + estRating(p.rank); }, 0) / top20.length * 10) / 10;
@@ -704,7 +724,7 @@ window.App = function App() {
                 // 찜 수 추정
                 var estWish = function(rank) { return Math.max(5, Math.round(500 / Math.pow(rank, 0.6))); };
                 var advWish = cleanedUrl ? (function() {
-                    var advProd = prods.find(function(p) { return p.product_url && cleanedUrl && p.product_url.indexOf(cleanedUrl) >= 0; });
+                    var advProd = _findAdvProd(prods);
                     return advProd ? estWish(advProd.rank) : estWish(40);
                 })() : estWish(40);
                 var avgWish = Math.round(top20.reduce(function(s, p) { return s + estWish(p.rank); }, 0) / top20.length);
@@ -729,19 +749,8 @@ window.App = function App() {
 
             // 13. SEO 상세 분석 (상품URL 있을 때)
             if (prods.length > 0) {
-                // URL 매칭: 전체 URL → 상품번호(숫자) 기반 폴백
-                var advProd = null;
-                if (cleanedUrl) {
-                    advProd = prods.find(function(p) { return p.product_url && p.product_url.indexOf(cleanedUrl) >= 0; });
-                    if (!advProd) {
-                        // 상품번호 추출 후 매칭 (URL 형식 차이 보완)
-                        var pidMatch = cleanedUrl.match(/\/products\/(\d+)/);
-                        if (pidMatch) {
-                            var pid = pidMatch[1];
-                            advProd = prods.find(function(p) { return p.product_url && p.product_url.indexOf(pid) >= 0; });
-                        }
-                    }
-                }
+                // 공통 헬퍼로 안전하게 매칭
+                var advProd = _findAdvProd(prods);
                 // advProd가 없으면 (광고주 상품 매칭 실패) prods[0]을 사용하지 않음
                 var targetProd = advProd;
                 if (targetProd) {
