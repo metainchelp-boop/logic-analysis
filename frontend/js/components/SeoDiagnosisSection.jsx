@@ -145,8 +145,8 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl:
                                 {[
                                     { label: '키워드 포함', value: result.scores.detail.keyword_in_title ? '포함 ✅' : '미포함 ❌', icon: '🔤', color: result.scores.detail.keyword_in_title ? '#10b981' : '#ef4444', bg: result.scores.detail.keyword_in_title ? '#f0fdf4' : '#fef2f2' },
                                     { label: '가격 비율', value: result.scores.detail.price_ratio > 0 ? (result.scores.detail.price_ratio * 100).toFixed(0) + '%' : (result.scores.detail.my_price > 0 ? '비교불가' : '가격없음'), icon: '💲', color: '#4f46e5', bg: '#eef2ff' },
-                                    { label: '추정 리뷰', value: (result.scores.detail.est_reviews || 0).toLocaleString() + '개', icon: '💬', color: '#7c3aed', bg: '#f5f3ff' },
-                                    { label: '추정 평점', value: result.scores.detail.est_rating ? result.scores.detail.est_rating.toFixed(1) : '-', icon: '⭐', color: '#f59e0b', bg: '#fffbeb' },
+                                    { label: result.scores.detail.review_source === 'api' ? '실제 리뷰' : '추정 리뷰', value: (result.scores.detail.est_reviews || 0).toLocaleString() + '개', icon: '💬', color: '#7c3aed', bg: '#f5f3ff' },
+                                    { label: result.scores.detail.review_source === 'api' ? '실제 평점' : '추정 평점', value: result.scores.detail.est_rating ? result.scores.detail.est_rating.toFixed(1) : '-', icon: '⭐', color: '#f59e0b', bg: '#fffbeb' },
                                 ].map((item, i) => (
                                     <div key={i} className="card" style={{ textAlign: 'center', padding: '18px 12px', borderRadius: 14, background: item.bg }}>
                                         <div style={{ fontSize: 18, marginBottom: 8 }}>{item.icon}</div>

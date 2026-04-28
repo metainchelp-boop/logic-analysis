@@ -911,55 +911,77 @@ async def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_
             else:
                 rank_score = 20
 
-        # 4. 리뷰 추정 점수 (12%) — 순위 구간별 업계 평균 기반
+        # 4. 리뷰 점수 (12%) — 스마트스토어 API에서 실제 값 조회, 실패 시 추정
         review_score = 0
         est_reviews = 0
-        if rank:
-            if rank <= 5:
-                est_reviews = 500
-                review_score = 95
-            elif rank <= 10:
-                est_reviews = 200
-                review_score = 80
-            elif rank <= 20:
-                est_reviews = 80
-                review_score = 60
-            elif rank <= 40:
-                est_reviews = 30
-                review_score = 40
-            elif rank <= 100:
-                est_reviews = 10
-                review_score = 25
-            else:
-                est_reviews = 3
-                review_score = 10
-        # 미노출 상품
-        if not rank:
-            review_score = 5
-            est_reviews = 0
+        actual_review_count = None
+        actual_rating = None
+        review_source = "estimated"
+        try:
+            from naver_crawler import _extract_smartstore_info
+            ss_store, ss_pno = _extract_smartstore_info(product_url)
+            if ss_store and ss_pno:
+                import requests as _req
+                ss_api_url = f"https://smartstore.naver.com/i/v1/stores/{ss_store}/products/{ss_pno}"
+                ss_headers = {
+                    "User-Agent": "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/124.0.0.0 Mobile Safari/537.36",
+                    "Accept": "application/json",
+                    "Referer": f"https://smartstore.naver.com/{ss_store}/products/{ss_pno}",
+                }
+                ss_resp = _req.get(ss_api_url, headers=ss_headers, timeout=10)
+                if ss_resp.status_code == 200:
+                    ss_data = ss_resp.json()
+                    review_amount = ss_data.get("reviewAmount", {})
+                    if isinstance(review_amount, dict):
+                        rc = review_amount.get("totalReviewCount", 0)
+                        rs = review_amount.get("averageReviewScore", 0)
+                        if rc is not None and rc >= 0:
+                            actual_review_count = int(rc)
+                        if rs is not None and rs > 0:
+                            actual_rating = float(rs)
+                    if actual_review_count is not None:
+                        review_source = "api"
+                        logger.info(f"SEO 리뷰 실제값 조회 성공: {actual_review_count}건, 평점 {actual_rating}")
+        except Exception as e:
+            logger.warning(f"SEO 리뷰 실제값 조회 실패 (추정값 사용): {e}")
 
-        # 5. 상품 평점 추정 (8%) — 상위권 상품은 평점이 높은 경향
+        if actual_review_count is not None:
+            est_reviews = actual_review_count
+            if actual_review_count >= 500: review_score = 95
+            elif actual_review_count >= 200: review_score = 80
+            elif actual_review_count >= 80: review_score = 60
+            elif actual_review_count >= 30: review_score = 40
+            elif actual_review_count >= 10: review_score = 25
+            elif actual_review_count >= 1: review_score = 15
+            else: review_score = 5
+        else:
+            if rank:
+                if rank <= 5: est_reviews = 500; review_score = 95
+                elif rank <= 10: est_reviews = 200; review_score = 80
+                elif rank <= 20: est_reviews = 80; review_score = 60
+                elif rank <= 40: est_reviews = 30; review_score = 40
+                elif rank <= 100: est_reviews = 10; review_score = 25
+                else: est_reviews = 3; review_score = 10
+            if not rank: review_score = 5; est_reviews = 0
+
+        # 5. 상품 평점 (8%) — 실제값 우선, 없으면 추정
         rating_score = 0
         est_rating = 0.0
-        if rank:
-            if rank <= 10:
-                est_rating = 4.7
-                rating_score = 90
-            elif rank <= 20:
-                est_rating = 4.5
-                rating_score = 75
-            elif rank <= 40:
-                est_rating = 4.3
-                rating_score = 60
-            elif rank <= 100:
-                est_rating = 4.0
-                rating_score = 45
-            else:
-                est_rating = 3.8
-                rating_score = 30
-        if not rank:
-            est_rating = 0
-            rating_score = 5
+        if actual_rating is not None and actual_rating > 0:
+            est_rating = actual_rating
+            if actual_rating >= 4.5: rating_score = 90
+            elif actual_rating >= 4.0: rating_score = 75
+            elif actual_rating >= 3.5: rating_score = 60
+            elif actual_rating >= 3.0: rating_score = 45
+            else: rating_score = 30
+        else:
+            if rank:
+                if rank <= 10: est_rating = 4.7; rating_score = 90
+                elif rank <= 20: est_rating = 4.5; rating_score = 75
+                elif rank <= 40: est_rating = 4.3; rating_score = 60
+                elif rank <= 100: est_rating = 4.0; rating_score = 45
+                else: est_rating = 3.8; rating_score = 30
+            if not rank: est_rating = 0; rating_score = 5
 
         # 6. 판매실적 추정 (10%) — 순위 기반 CTR × 전환율 역산
         sales_score = 0
@@ -1115,6 +1137,7 @@ async def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_
                         "price_ratio": price_ratio,
                         "est_reviews": est_reviews,
                         "est_rating": est_rating,
+                        "review_source": review_source,
                         "est_monthly_sales": est_monthly_sales,
                         "has_naverpay": has_naverpay,
                         "is_smartstore": is_smartstore,

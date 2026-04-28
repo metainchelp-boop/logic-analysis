@@ -742,7 +742,8 @@ window.App = function App() {
                         }
                     }
                 }
-                var targetProd = advProd || prods[0];
+                // advProd가 없으면 (광고주 상품 매칭 실패) prods[0]을 사용하지 않음
+                var targetProd = advProd;
                 if (targetProd) {
                     var kwWords = keyword.toLowerCase().split(/\s+/);
                     var titleLower = targetProd.product_name.toLowerCase();
@@ -751,12 +752,14 @@ window.App = function App() {
                     var isSmartStore = targetProd.product_url && targetProd.product_url.indexOf('smartstore.naver.com') >= 0;
                     var hasBrand = !!targetProd.brand;
                     var hasCategory = !!(targetProd.category2 || targetProd.category1);
+                    var myRank = targetProd.rank || null;
+                    var myRankLabel = myRank ? myRank + '위' : '미노출';
 
                     var relScore = (kwInTitle ? 40 : 0) + (titleLen >= 20 && titleLen <= 50 ? 30 : titleLen >= 10 ? 15 : 5) + (hasCategory ? 30 : 10);
-                    var trustScore = (isSmartStore ? 35 : 15) + (hasBrand ? 30 : 10) + (targetProd.rank <= 20 ? 35 : targetProd.rank <= 40 ? 20 : 10);
-                    var popScore = (targetProd.rank <= 5 ? 40 : targetProd.rank <= 10 ? 30 : targetProd.rank <= 20 ? 20 : 10)
-                        + (targetProd.rank <= 10 ? 30 : targetProd.rank <= 20 ? 20 : 10)
-                        + (targetProd.rank <= 10 ? 30 : targetProd.rank <= 30 ? 20 : 10);
+                    var trustScore = (isSmartStore ? 35 : 15) + (hasBrand ? 30 : 10) + (myRank && myRank <= 20 ? 35 : myRank && myRank <= 40 ? 20 : 10);
+                    var popScore = (myRank && myRank <= 5 ? 40 : myRank && myRank <= 10 ? 30 : myRank && myRank <= 20 ? 20 : 10)
+                        + (myRank && myRank <= 10 ? 30 : myRank && myRank <= 20 ? 20 : 10)
+                        + (myRank && myRank <= 10 ? 30 : myRank && myRank <= 30 ? 20 : 10);
 
                     analysis.seoDetail = {
                         relevance: {
@@ -773,17 +776,17 @@ window.App = function App() {
                             items: [
                                 { pass: isSmartStore, label: '네이버 스마트스토어 입점' },
                                 { pass: hasBrand, label: '브랜드 등록: ' + (targetProd.brand || '미등록') },
-                                { pass: targetProd.rank <= 20, label: '상위 노출 달성 (현재 ' + targetProd.rank + '위)' },
+                                { pass: myRank && myRank <= 20, label: myRank ? '상위 노출 달성 (현재 ' + myRankLabel + ')' : '검색 결과 내 미노출' },
                                 { pass: isSmartStore, label: '네이버페이 결제 지원' }
                             ]
                         },
                         popularity: {
                             score: popScore,
                             items: [
-                                { pass: targetProd.rank <= 10, label: '검색 결과 상위 10위 이내 (' + targetProd.rank + '위)' },
-                                { pass: targetProd.rank <= 20, label: '추정 리뷰 수 경쟁력 있음' },
-                                { pass: targetProd.rank <= 10, label: '추정 판매량 상위권' },
-                                { pass: targetProd.rank <= 30, label: '찜 수 평균 이상 추정' }
+                                { pass: myRank && myRank <= 10, label: myRank ? '검색 결과 ' + myRankLabel + (myRank <= 10 ? ' (상위 10위 이내)' : '') : '검색 결과 내 미노출' },
+                                { pass: myRank && myRank <= 20, label: '추정 리뷰 수 경쟁력 있음' },
+                                { pass: myRank && myRank <= 10, label: '추정 판매량 상위권' },
+                                { pass: myRank && myRank <= 30, label: '찜 수 평균 이상 추정' }
                             ]
                         }
                     };
@@ -794,7 +797,7 @@ window.App = function App() {
                         { label: '가격 경쟁력', score: (function() { var avgP = prods.slice(0, 20).reduce(function(s, p) { return s + p.price; }, 0) / 20; return targetProd.price <= avgP ? 85 : targetProd.price <= avgP * 1.2 ? 60 : 35; })(), maxScore: 100, color: '#22c55e' },
                         { label: '브랜드/스토어 신뢰도', score: (hasBrand ? 40 : 0) + (isSmartStore ? 40 : 20) + 10, maxScore: 100, color: '#f59e0b' },
                         { label: '카테고리 적합도', score: hasCategory ? 80 : 30, maxScore: 100, color: '#06b6d4' },
-                        { label: '검색 노출 순위', score: targetProd.rank <= 5 ? 95 : targetProd.rank <= 10 ? 80 : targetProd.rank <= 20 ? 60 : targetProd.rank <= 40 ? 40 : 20, maxScore: 100, color: '#ec4899' }
+                        { label: '검색 노출 순위', score: myRank ? (myRank <= 5 ? 95 : myRank <= 10 ? 80 : myRank <= 20 ? 60 : myRank <= 40 ? 40 : 20) : 10, maxScore: 100, color: '#ec4899' }
                     ];
                     var dpTotal = Math.round(dpScores.reduce(function(s, b) { return s + b.score; }, 0) / dpScores.length);
                     var dpGrade = dpTotal >= 80 ? 'A등급' : dpTotal >= 60 ? 'B등급' : dpTotal >= 40 ? 'C등급' : 'D등급';
