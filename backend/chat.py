@@ -578,6 +578,21 @@ async def get_chat_image(filename: str, current_user: dict = Depends(get_current
     return FileResponse(filepath, media_type=media_types.get(ext, "image/png"))
 
 
+@router.get("/my-feedback")
+async def get_my_feedback(current_user: dict = Depends(get_current_user)):
+    """현재 사용자의 피드백 이력 조회 (본인 것만)"""
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT id, category, content, status, admin_reply, created_at, resolved_at "
+            "FROM chat_feedback WHERE user_id = ? ORDER BY created_at DESC LIMIT 50",
+            (current_user["id"],)
+        ).fetchall()
+        return {"success": True, "data": [dict(r) for r in rows]}
+    finally:
+        conn.close()
+
+
 @router.get("/feedback")
 async def get_feedback_list(
     status: Optional[str] = None,

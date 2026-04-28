@@ -35,6 +35,10 @@ window.ChatWidget = function ChatWidget({ currentUser }) {
     const [fbSending, setFbSending] = useState(false);
     const [fbSent, setFbSent] = useState(false);
 
+    // 내 피드백 이력
+    const [myFeedback, setMyFeedback] = useState([]);
+    const [fbHistoryLoaded, setFbHistoryLoaded] = useState(false);
+
     // isOpen을 ref로도 추적 (useCallback 내부에서 최신값 참조)
     const isOpenRef = useRef(isOpen);
     useEffect(function() { isOpenRef.current = isOpen; }, [isOpen]);
@@ -48,9 +52,24 @@ window.ChatWidget = function ChatWidget({ currentUser }) {
         }).catch(function() {});
     }, []);
 
+    // 내 피드백 이력 로드
+    var loadMyFeedback = useCallback(function() {
+        api.get('/chat/my-feedback').then(function(res) {
+            if (res.success && res.data) {
+                setMyFeedback(res.data);
+                setFbHistoryLoaded(true);
+            }
+        }).catch(function() {});
+    }, []);
+
     useEffect(function() {
         if (currentUser) loadHistory();
     }, [currentUser, loadHistory]);
+
+    // 의견함 탭 열 때 피드백 이력 로드
+    useEffect(function() {
+        if (isOpen && activeTab === 'feedback' && currentUser) loadMyFeedback();
+    }, [isOpen, activeTab, currentUser, loadMyFeedback]);
 
     // 채팅 열 때 스크롤
     useEffect(function() {
@@ -152,6 +171,7 @@ window.ChatWidget = function ChatWidget({ currentUser }) {
             setFbSent(true);
             setFbContent('');
             setFbCategory('');
+            loadMyFeedback(); // 이력 새로고침
             setTimeout(function() { setFbSent(false); }, 3000);
         }).catch(function() {
             setFbSending(false);
@@ -484,6 +504,68 @@ window.ChatWidget = function ChatWidget({ currentUser }) {
                                 border: 'none', fontSize: 13, fontWeight: 600, cursor: fbSending || !fbContent.trim() ? 'default' : 'pointer',
                             }
                         }, fbSending ? '전송 중...' : '의견 보내기')
+                    ),
+
+                    /* ===== 내 의견 이력 ===== */
+                    React.createElement('div', {
+                        style: { marginTop: 8, borderTop: '1px solid #e2e8f0', paddingTop: 16 }
+                    },
+                        React.createElement('div', {
+                            style: { fontSize: 12, fontWeight: 600, color: '#334155', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }
+                        }, '📋 내 의견 이력'),
+
+                        myFeedback.length === 0 && fbHistoryLoaded && React.createElement('div', {
+                            style: { fontSize: 12, color: '#94a3b8', textAlign: 'center', padding: '12px 0' }
+                        }, '아직 등록한 의견이 없습니다.'),
+
+                        myFeedback.map(function(fb) {
+                            var _catInfo = { error: { icon: '🚨', label: '오류', color: '#dc2626', bg: '#fee2e2' }, request: { icon: '💡', label: '요청', color: '#2563eb', bg: '#dbeafe' }, opinion: { icon: '💬', label: '의견', color: '#7c3aed', bg: '#ede9fe' } };
+                            var catInfo = _catInfo[fb.category] || _catInfo.opinion;
+                            var _statusMap = { pending: { label: '접수됨', color: '#f59e0b', bg: '#fffbeb' }, in_progress: { label: '처리중', color: '#3b82f6', bg: '#dbeafe' }, resolved: { label: '완료', color: '#10b981', bg: '#dcfce7' } };
+                            var statusInfo = _statusMap[fb.status] || _statusMap.pending;
+
+                            return React.createElement('div', {
+                                key: fb.id,
+                                style: {
+                                    padding: '10px 12px', borderRadius: 10,
+                                    background: '#f8fafc', border: '1px solid #e2e8f0',
+                                    marginBottom: 8, fontSize: 12,
+                                }
+                            },
+                                /* 헤더: 카테고리 + 상태 + 날짜 */
+                                React.createElement('div', {
+                                    style: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }
+                                },
+                                    React.createElement('span', {
+                                        style: { padding: '2px 6px', borderRadius: 4, fontSize: 10, fontWeight: 600, color: catInfo.color, background: catInfo.bg }
+                                    }, catInfo.icon + ' ' + catInfo.label),
+                                    React.createElement('span', {
+                                        style: { padding: '2px 6px', borderRadius: 4, fontSize: 10, fontWeight: 600, color: statusInfo.color, background: statusInfo.bg }
+                                    }, statusInfo.label),
+                                    React.createElement('span', { style: { flex: 1 } }),
+                                    React.createElement('span', { style: { fontSize: 10, color: '#94a3b8' } }, (fb.created_at || '').slice(0, 16))
+                                ),
+                                /* 내용 (태그 제거) */
+                                React.createElement('div', {
+                                    style: { color: '#334155', lineHeight: 1.5, wordBreak: 'break-word' }
+                                }, (fb.content || '').replace(/^#\S+\s*/, '')),
+                                /* 관리자 답변 */
+                                fb.admin_reply && React.createElement('div', {
+                                    style: {
+                                        marginTop: 8, padding: '8px 10px', borderRadius: 8,
+                                        background: '#eff6ff', border: '1px solid #bfdbfe',
+                                        fontSize: 11, color: '#1e40af', lineHeight: 1.5,
+                                    }
+                                },
+                                    React.createElement('div', { style: { fontWeight: 600, marginBottom: 2, fontSize: 10 } }, '💼 관리자 답변'),
+                                    fb.admin_reply
+                                ),
+                                /* 완료 시간 */
+                                fb.resolved_at && React.createElement('div', {
+                                    style: { marginTop: 4, fontSize: 10, color: '#10b981' }
+                                }, '✅ 처리 완료: ' + fb.resolved_at.slice(0, 16))
+                            );
+                        })
                     )
                 )
             )
