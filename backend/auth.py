@@ -771,16 +771,15 @@ async def admin_reset_password(
 async def get_analysis_counts(
     current_user: Dict[str, Any] = Depends(require_role(UserRole.ADMIN)),
 ):
-    """유저별 분석 실행 횟수 조회 (관리자 전용).
-    clients.created_by → user_id 기준으로 client_analyses 건수를 카운팅."""
+    """유저별 실제 분석 실행 횟수 조회 (관리자 전용).
+    daily_usage 테이블에서 user_id별 전체 query_count 합계를 카운팅."""
     try:
         conn = _get_db_connection()
         cursor = conn.cursor()
         cursor.execute(
-            """SELECT c.created_by AS user_id, COUNT(ca.id) AS cnt
-               FROM client_analyses ca
-               JOIN clients c ON ca.client_id = c.id
-               GROUP BY c.created_by"""
+            """SELECT user_id, SUM(query_count) AS cnt
+               FROM daily_usage
+               GROUP BY user_id"""
         )
         rows = cursor.fetchall()
         conn.close()

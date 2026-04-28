@@ -317,7 +317,7 @@ window.UserManagementPage = function UserManagementPage(props) {
                 React.createElement('td', { style: { padding: '12px' } }, user.name),
                 React.createElement('td', { style: { padding: '12px' } }, getRoleBadge(user.role)),
                 React.createElement('td', { style: { padding: '12px' } }, getStatusBadge(user.status || 'active')),
-                React.createElement('td', { style: { padding: '12px', fontSize: '12px', color: '#666' } }, new Date(user.createdAt).toLocaleDateString('ko-KR')),
+                React.createElement('td', { style: { padding: '12px', fontSize: '12px', color: '#666' } }, new Date(user.created_at || user.createdAt).toLocaleDateString('ko-KR')),
                 React.createElement('td', { style: { padding: '12px', textAlign: 'center' } },
                   React.createElement('span', {
                     style: {
