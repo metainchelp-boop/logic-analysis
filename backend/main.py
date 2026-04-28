@@ -861,48 +861,55 @@ async def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_
             page = (rank - 1) // 40 + 1 if rank > 0 else None
             competitors = req.cached_competitors or []
         else:
-            rank, page, competitors = find_product_rank(
-                keyword=req.keyword, product_url=req.product_url, max_pages=10,
-                product_name=product_name
-            )
+            try:
+                rank, page, competitors = find_product_rank(
+                    keyword=req.keyword, product_url=req.product_url, max_pages=10,
+                    product_name=product_name
+                )
+            except Exception as e:
+                logger.warning(f"find_product_rank 실패 (순위 없음 처리): {e}")
+                rank, page, competitors = None, None, []
 
         # get_product_info 실패 시 (스마트스토어 ID ≠ nvMid) → 키워드 검색에서 productId로 보완
         # 캐시된 product_name이 있으면 폴백 불필요
         if not product_name and not req.cached_product_name:
-            from naver_crawler import extract_product_id_from_url as _extract_pid
-            from naver_crawler import extract_store_name_from_url as _extract_store
-            from naver_crawler import search_products as _sp
-            target_pid = _extract_pid(req.product_url) or ""
-            target_store = _extract_store(req.product_url) or ""
-            _prods = _sp(req.keyword, max_results=200)
-            for _p in _prods:
-                p_url = _p.get("product_url", "")
-                p_pid = _p.get("product_id", "")
-                p_mall = (_p.get("store_name", "") or "").lower()
-                # 매칭 1: productId 정확 일치
-                matched = target_pid and target_pid == p_pid
-                # 매칭 2: productId가 URL에 포함 + 스토어 검증 (다른 스토어 오염 방지)
-                if not matched and target_pid and target_pid in p_url:
-                    if target_store:
-                        store_in_url = target_store.lower() in p_url.lower()
-                        store_in_mall = p_mall == target_store.lower()
-                        matched = store_in_url or store_in_mall
-                    else:
-                        matched = True
-                # 매칭 3: 스토어명이 URL에 포함 (스토어 슬러그 비교)
-                if not matched and target_store:
-                    matched = target_store.lower() in p_url.lower()
-                if matched:
-                    product_name = _p.get("product_name", "")
-                    product_info["product_name"] = product_name
-                    product_info["price"] = _p.get("price", 0)
-                    product_info["image_url"] = _p.get("image_url", "")
-                    product_info["store_name"] = _p.get("store_name", "") or target_store
-                    product_info["brand"] = _p.get("brand", "")
-                    product_info["category1"] = _p.get("category1", "")
-                    product_info["category2"] = _p.get("category2", "")
-                    logger.info(f"SEO 보완 매칭 성공: {product_name[:30]} (pid: {target_pid})")
-                    break
+            try:
+                from naver_crawler import extract_product_id_from_url as _extract_pid
+                from naver_crawler import extract_store_name_from_url as _extract_store
+                from naver_crawler import search_products as _sp
+                target_pid = _extract_pid(req.product_url) or ""
+                target_store = _extract_store(req.product_url) or ""
+                _prods = _sp(req.keyword, max_results=200)
+                for _p in _prods:
+                    p_url = _p.get("product_url", "")
+                    p_pid = _p.get("product_id", "")
+                    p_mall = (_p.get("store_name", "") or "").lower()
+                    # 매칭 1: productId 정확 일치
+                    matched = target_pid and target_pid == p_pid
+                    # 매칭 2: productId가 URL에 포함 + 스토어 검증 (다른 스토어 오염 방지)
+                    if not matched and target_pid and target_pid in p_url:
+                        if target_store:
+                            store_in_url = target_store.lower() in p_url.lower()
+                            store_in_mall = p_mall == target_store.lower()
+                            matched = store_in_url or store_in_mall
+                        else:
+                            matched = True
+                    # 매칭 3: 스토어명이 URL에 포함 (스토어 슬러그 비교)
+                    if not matched and target_store:
+                        matched = target_store.lower() in p_url.lower()
+                    if matched:
+                        product_name = _p.get("product_name", "")
+                        product_info["product_name"] = product_name
+                        product_info["price"] = _p.get("price", 0)
+                        product_info["image_url"] = _p.get("image_url", "")
+                        product_info["store_name"] = _p.get("store_name", "") or target_store
+                        product_info["brand"] = _p.get("brand", "")
+                        product_info["category1"] = _p.get("category1", "")
+                        product_info["category2"] = _p.get("category2", "")
+                        logger.info(f"SEO 보완 매칭 성공: {product_name[:30]} (pid: {target_pid})")
+                        break
+            except Exception as e:
+                logger.warning(f"SEO 폴백 검색 실패 (스킵): {e}")
 
         # --- 기본 데이터 수집 ---
         # 띄어쓰기 무시 비교 (상품명 "생 멸치" ↔ 키워드 "생멸치" 매칭)

@@ -43,8 +43,8 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl:
             }
             const res = await api.post('/seo/analyze', seoBody);
             if (res.success) setResult(res.data);
-            else alert(res.detail || 'SEO 분석 실패');
-        } catch (e) { alert('SEO 분석 실패: ' + e.message); }
+            else toast.warn(res.detail || 'SEO 분석 데이터 일부를 가져오지 못했습니다.');
+        } catch (e) { toast.warn('SEO 분석 요청 실패 — 잠시 후 다시 시도해주세요.'); }
         setLoading(false);
     };
 
