@@ -731,9 +731,11 @@ def _extract_next_data_html(raw_html: str, product_url: str = "") -> Optional[st
         if cn:
             cert_html += f'<span class="certification">{cn} 인증</span> '
 
-    # 리뷰 수
+    # 리뷰 수 / 평점 / 찜수 — __NEXT_DATA__ JSON에서 정확한 값 추출
     review_data = page_props.get("reviewAmount", {}) or product.get("reviewAmount", {}) or {}
     review_count = review_data.get("totalReviewCount", 0) if isinstance(review_data, dict) else 0
+    review_score = review_data.get("averageReviewScore", 0) if isinstance(review_data, dict) else 0
+    wish_count = page_props.get("wishCount", 0) or product.get("wishCount", 0)
 
     # 카테고리
     category = product.get("category", {}) or {}
@@ -743,10 +745,14 @@ def _extract_next_data_html(raw_html: str, product_url: str = "") -> Optional[st
     tags = product.get("seoInfo", {}).get("sellerTags", []) or []
     tag_html = " ".join([f'#{t.get("text", "")}' for t in tags if isinstance(t, dict)])
 
-    # HTML 조립
+    # HTML 조립 — 메타 태그로 정확한 API 값 보존 (후속 추출에서 최우선 사용)
     html = f"""<!DOCTYPE html>
 <html lang="ko">
-<head><title>{name}</title></head>
+<head><title>{name}</title>
+<meta name="api-review-count" content="{review_count}">
+<meta name="api-review-score" content="{review_score}">
+<meta name="api-wish-count" content="{wish_count}">
+</head>
 <body>
 <div class="product-detail">
   <h1>{name}</h1>
@@ -878,13 +884,20 @@ def _convert_smartstore_json_to_html(data: Dict, product_url: str = "") -> Optio
                 cert_name = cert.get("name", "") if isinstance(cert, dict) else str(cert)
                 cert_html += f'<span class="certification">{cert_name} 인증</span> '
 
-        # 리뷰 수
-        review_count = data.get("reviewAmount", {}).get("totalReviewCount", 0) if isinstance(data.get("reviewAmount"), dict) else 0
+        # 리뷰 수 / 평점 / 찜수 — API JSON에서 정확한 값 추출
+        review_amount = data.get("reviewAmount", {})
+        review_count = review_amount.get("totalReviewCount", 0) if isinstance(review_amount, dict) else 0
+        review_score = review_amount.get("averageReviewScore", 0) if isinstance(review_amount, dict) else 0
+        wish_count = data.get("wishCount", 0) or product.get("wishCount", 0)
 
-        # HTML 조립
+        # HTML 조립 — 메타 태그로 정확한 API 값 보존 (후속 추출에서 최우선 사용)
         html = f"""<!DOCTYPE html>
 <html lang="ko">
-<head><title>{name}</title></head>
+<head><title>{name}</title>
+<meta name="api-review-count" content="{review_count}">
+<meta name="api-review-score" content="{review_score}">
+<meta name="api-wish-count" content="{wish_count}">
+</head>
 <body>
 <div class="product-detail">
   <h1>{name}</h1>
@@ -1434,7 +1447,37 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
     actual_rating = None
     actual_wish_count = None
 
-    # 방법 1: JSON-LD (schema.org Product)
+    # 방법 0 (최우선): 메타 태그에서 API 정확값 추출
+    # _convert_smartstore_json_to_html / _extract_next_data_html에서 API JSON 값을 메타 태그로 보존
+    api_meta_review = soup.find("meta", attrs={"name": "api-review-count"}) if soup else None
+    api_meta_score = soup.find("meta", attrs={"name": "api-review-score"}) if soup else None
+    api_meta_wish = soup.find("meta", attrs={"name": "api-wish-count"}) if soup else None
+    if api_meta_review:
+        try:
+            val = int(api_meta_review.get("content", "0"))
+            if val > 0:
+                actual_review_count = val
+                logger.info(f"[리뷰추출] 방법0 메타태그(API): 리뷰={actual_review_count}")
+        except (ValueError, TypeError):
+            pass
+    if api_meta_score:
+        try:
+            val = round(float(api_meta_score.get("content", "0")), 2)
+            if val > 0:
+                actual_rating = val
+                logger.info(f"[리뷰추출] 방법0 메타태그(API): 평점={actual_rating}")
+        except (ValueError, TypeError):
+            pass
+    if api_meta_wish:
+        try:
+            val = int(api_meta_wish.get("content", "0"))
+            if val > 0:
+                actual_wish_count = val
+                logger.info(f"[리뷰추출] 방법0 메타태그(API): 찜={actual_wish_count}")
+        except (ValueError, TypeError):
+            pass
+
+    # 방법 1: JSON-LD (schema.org Product) — 방법 0에서 못 가져온 값만 보완
     import json as _json
     ld_scripts = soup.find_all("script", {"type": "application/ld+json"})
     for sc in ld_scripts:
@@ -1499,9 +1542,9 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
         except Exception:
             pass
 
-    # 방법 3: BeautifulSoup 텍스트 기반 추출 (HTML 태그 제거 후 패턴 매칭)
-    # 북마클릿으로 복사한 DOM은 태그가 섞여있어 raw HTML 정규식이 실패할 수 있음
-    # 전략: 모든 매칭을 찾아서 가장 큰 값을 사용 (총 리뷰수가 항상 가장 큼)
+    # 방법 3 (최후 fallback): BeautifulSoup 텍스트 기반 추출
+    # 방법 0~2에서 모두 실패한 경우에만 실행됨 (각 필드별 if None 가드)
+    # 주의: max 전략은 부정확할 수 있으므로 API/JSON 추출을 항상 우선
     page_text = soup.get_text(separator=" ", strip=True) if soup else ""
 
     if actual_review_count is None:
@@ -1525,9 +1568,10 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
                     review_candidates.append(val)
             except Exception:
                 pass
-        # 가장 큰 값 = 총 리뷰수
+        # 가장 큰 값 = 총 리뷰수 (fallback이므로 부정확할 수 있음)
         if review_candidates:
             actual_review_count = max(review_candidates)
+            logger.info(f"[리뷰추출] 방법3 텍스트 fallback: 리뷰={actual_review_count} (후보: {review_candidates})")
 
     if actual_rating is None:
         rating_candidates = []
