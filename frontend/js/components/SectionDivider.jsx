@@ -1,29 +1,24 @@
-/* SectionDivider — 섹터 간 시각적 구분선 (v5) */
+/* SectionDivider — 섹터 구분 헤더 (v6.1 미리보기 디자인) */
 window.SectionDivider = function SectionDivider(props) {
   var label = props && props.label ? props.label : '';
   var icon = props && props.icon ? props.icon : '';
   var color = props && props.color ? props.color : '#4f46e5';
+  var sub = props && props.sub ? props.sub : '';
 
   return (
-    <div style={{
-      maxWidth: 960, margin: '0 auto', padding: '12px 24px'
-    }}>
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 12
-      }}>
-        <div style={{ flex: 1, height: 1, background: 'linear-gradient(90deg, transparent, ' + color + '33, transparent)' }}></div>
-        {label && (
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 6,
-            padding: '4px 14px', borderRadius: 999,
-            background: color + '10', border: '1px solid ' + color + '22',
-            fontSize: 11, fontWeight: 600, color: color, letterSpacing: '0.03em', whiteSpace: 'nowrap'
-          }}>
-            {icon && <span>{icon}</span>}
-            {label}
-          </div>
-        )}
-        <div style={{ flex: 1, height: 1, background: 'linear-gradient(90deg, transparent, ' + color + '33, transparent)' }}></div>
+    <div className="report-divider" style={{ maxWidth: 1000, margin: '34px auto 16px', padding: '0 24px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={{
+          width: 40, height: 40, borderRadius: 12, flexShrink: 0,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: 20, color: '#fff',
+          background: 'linear-gradient(135deg, ' + color + ', ' + color + 'cc)',
+          boxShadow: '0 4px 12px ' + color + '40'
+        }}>{icon}</div>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontWeight: 900, fontSize: 20, letterSpacing: '-0.5px', color: '#0f172a', lineHeight: 1.2 }}>{label}</div>
+          {sub && <div style={{ fontWeight: 500, fontSize: 12, color: '#64748b', marginTop: 2 }}>{sub}</div>}
+        </div>
       </div>
     </div>
   );

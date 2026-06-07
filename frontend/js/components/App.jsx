@@ -1305,7 +1305,7 @@ window.App = function App() {
             /* ==================== 보고서 6단계 흐름 (v6.0 — 광고주 발송용 재배치) ==================== */
 
             /* ========== 1. 종합 요약 ========== */
-            analysisData && React.createElement(window.SectionDivider, { label: '1. 종합 요약', icon: '📋', color: '#4f46e5' }),
+            analysisData && React.createElement(window.SectionDivider, { label: '1. 종합 요약', icon: '📋', color: '#4f46e5', sub: '광고주가 가장 먼저 보는 핵심 지표' }),
 
             analysisData && analysisData.summaryCards && React.createElement(window.SectionErrorBoundary, { name: '종합 요약' },
                 React.createElement('div', { id: 'sec-summary' },
@@ -1314,7 +1314,7 @@ window.App = function App() {
             ),
 
             /* ========== 2. 시장 · 수요 진단 ========== */
-            analysisData && React.createElement(window.SectionDivider, { label: '2. 시장 · 수요 진단', icon: '📊', color: '#0ea5e9' }),
+            analysisData && React.createElement(window.SectionDivider, { label: '2. 시장 · 수요 진단', icon: '📊', color: '#0ea5e9', sub: '검색량 · 트렌드 · 시즌 · 인구 · 요일 · 성장 · 시장규모' }),
 
             /* 키워드 검색량 */
             volumeData && React.createElement(window.SectionErrorBoundary, { name: '키워드 검색량' },
@@ -1359,7 +1359,7 @@ window.App = function App() {
             ),
 
             /* ========== 3. 경쟁 진단 ========== */
-            analysisData && React.createElement(window.SectionDivider, { label: '3. 경쟁 진단', icon: '⚔️', color: '#ef4444' }),
+            analysisData && React.createElement(window.SectionDivider, { label: '3. 경쟁 진단', icon: '⚔️', color: '#ef4444', sub: '경쟁강도 · 광고경쟁 · 경쟁사 · 카테고리' }),
 
             /* 키워드 경쟁강도 */
             analysisData && analysisData.competitionIndex && React.createElement(window.SectionErrorBoundary, { name: '경쟁강도' },
@@ -1384,7 +1384,7 @@ window.App = function App() {
             ),
 
             /* ========== 4. 내 상품 현황 ========== */
-            analysisData && React.createElement(window.SectionDivider, { label: '4. 내 상품 현황', icon: '🛒', color: '#059669' }),
+            analysisData && React.createElement(window.SectionDivider, { label: '4. 내 상품 현황', icon: '🛒', color: '#059669', sub: '노출순위 · 판매추정 · 리뷰 · SEO 4종' }),
 
             /* 키워드별 노출 순위 */
             React.createElement(window.SectionErrorBoundary, { name: '순위 추적' },
@@ -1446,7 +1446,7 @@ window.App = function App() {
             ),
 
             /* ========== 5. 기회 발굴 ========== */
-            analysisData && React.createElement(window.SectionDivider, { label: '5. 기회 발굴', icon: '💎', color: '#7c3aed' }),
+            analysisData && React.createElement(window.SectionDivider, { label: '5. 기회 발굴', icon: '💎', color: '#7c3aed', sub: '연관키워드 · 골든키워드 · 상품명 최적화' }),
 
             /* 연관 키워드 */
             relatedData && React.createElement(window.SectionErrorBoundary, { name: '연관 키워드' },
@@ -1471,7 +1471,7 @@ window.App = function App() {
             ),
 
             /* ========== 6. 전략 · 결론 ========== */
-            analysisData && React.createElement(window.SectionDivider, { label: '6. 전략 · 결론', icon: '🧭', color: '#1e293b' }),
+            analysisData && React.createElement(window.SectionDivider, { label: '6. 전략 · 결론', icon: '🧭', color: '#1e293b', sub: '진입전략 · AI 종합 · 보고서 내보내기' }),
 
             /* 17. 1페이지 진입 전략 비교 분석 */
             (advertiserReport || (analysisData && analysisData.strategicAnalysis)) && !advertiserLoading && React.createElement(window.SectionErrorBoundary, { name: '진입 전략' },

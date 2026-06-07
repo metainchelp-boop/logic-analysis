@@ -1,0 +1,68 @@
+/* ============================================================
+   report-theme.css — 광고주 보고서 디자인 통일 (미리보기 시안 기반, v6.1)
+   styles.css 다음에 로드되어 보고서 관련 클래스를 덮어씀.
+   문제 발생 시 index.html에서 이 파일 link 한 줄만 제거하면 원복.
+   ============================================================ */
+
+:root {
+  --rt-ind: #4f46e5; --rt-pur: #9333ea; --rt-ink: #0f172a; --rt-sub: #64748b;
+  --rt-line: #e8edf3; --rt-bg: #f1f5f9;
+  --rt-ok: #16a34a; --rt-okbg: #dcfce7; --rt-est: #d97706; --rt-estbg: #fef3c7;
+}
+
+/* 배경 톤 통일 */
+body { background: var(--rt-bg); }
+
+/* ===== 카드: 더 둥글고 부드러운 그림자 ===== */
+.card {
+  border-radius: 18px !important;
+  border: 1px solid var(--rt-line) !important;
+  box-shadow: 0 4px 18px rgba(15,23,42,.05) !important;
+  padding: 20px 22px;
+}
+.card:hover {
+  border-color: var(--rt-line) !important;
+  box-shadow: 0 6px 22px rgba(15,23,42,.08) !important;
+  transform: none !important;
+}
+
+/* ===== 표 스타일 통일 ===== */
+.section table { border-collapse: collapse; }
+.section table th {
+  color: var(--rt-sub); font-size: 11px; font-weight: 800;
+  border-bottom: 2px solid #e2e8f0; text-transform: none;
+}
+.section table tbody tr:hover { background: #fafbff; }
+
+/* ===== 배지 유틸 (실측/추정/AI) ===== */
+.badge { font-size: 11px; font-weight: 800; padding: 3px 9px; border-radius: 999px; vertical-align: middle; display: inline-block; }
+.b-ok  { background: var(--rt-okbg);  color: var(--rt-ok); }
+.b-est { background: var(--rt-estbg); color: var(--rt-est); }
+.b-ai  { background: #ede9fe;         color: #7c3aed; }
+
+/* ===== 노트 콜아웃 ===== */
+.note { font-size: 12px; color: #475569; margin-top: 12px; background: #f8fafc; border-left: 3px solid var(--rt-ind); padding: 9px 13px; border-radius: 0 9px 9px 0; line-height: 1.7; }
+.note.est { border-left-color: var(--rt-est); }
+.note.ok  { border-left-color: var(--rt-ok); }
+
+/* ===== 앵커 네비(목차): 미리보기 톤의 둥근 알약 + 상단 고정 ===== */
+.anchor-nav-wrap {
+  background: rgba(255,255,255,0.96);
+  backdrop-filter: blur(6px);
+  border-bottom: 1px solid var(--rt-line);
+  position: sticky; top: 0; z-index: 40;
+  box-shadow: 0 2px 10px rgba(15,23,42,.04);
+}
+.anchor-btn {
+  border-radius: 999px !important;
+  font-weight: 700 !important;
+  color: #475569 !important;
+}
+.anchor-btn:hover { background: #eef2ff !important; color: var(--rt-ind) !important; }
+.anchor-btn.active { background: var(--rt-ind) !important; color: #fff !important; }
+
+/* 섹션 스크롤 여백(고정 네비 높이만큼) */
+[id^="sec-"] { scroll-margin-top: 130px; }
+
+/* 보고서 본문 폭을 구분선과 맞춤 */
+.section > .container { max-width: 1000px; }
