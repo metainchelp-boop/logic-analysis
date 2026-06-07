@@ -23,46 +23,43 @@ window.ReportSection = function ReportSection(props) {
              * App 루트의 직접 자식 요소를 순회하여
              * 네비게이션/검색바/보고서/알림/푸터를 제외한 모든 콘텐츠를 수집
              */
+            /* ★ 보고서 본문(.report-main)을 통째로 캡처 — 모든 섹션 포함 + 스코프 CSS(.report-main ...) 유지 */
             var captured = [];
-            var rootEl = document.getElementById('root');
-            if (rootEl && rootEl.children[0]) {
-                var appDiv = rootEl.children[0];
-                var children = Array.from(appDiv.children);
-                children.forEach(function(child) {
-                    /* 상단 네비게이션 요소 건너뛰기 */
-                    if (child.classList.contains('topbar')) return;
-                    if (child.querySelector && child.querySelector('.anchor-nav')) return;
-
-                    /* 검색바 건너뛰기 */
-                    if (child.classList.contains('search-section')) return;
-                    var style = child.getAttribute('style') || '';
-                    if (style.indexOf('sticky') !== -1 && style.indexOf('top') !== -1 && child.querySelector && child.querySelector('.anchor-btn')) return;
-
-                    /* 보고서/알림/푸터 건너뛰기 */
-                    if (child.id === 'sec-report') return;
-                    if (child.id === 'sec-notify') return;
-                    if (child.querySelector && child.querySelector('#sec-report')) return;
-                    if (child.querySelector && child.querySelector('#sec-notify')) return;
-                    if (child.tagName === 'FOOTER') return;
-
-                    /* 빈 요소 건너뛰기 (조건부 렌더링으로 내용 없는 경우) */
-                    if (!child.innerHTML || child.innerHTML.trim() === '') return;
-
-                    /* 로딩 스피너 건너뛰기 */
-                    if (child.querySelector && child.querySelector('.loading-spinner')) return;
-
-                    captured.push(child.cloneNode(true));
-                });
-            }
-
-            /* 폴백: 루트 탐색 실패 시 .section 클래스 기반 */
-            if (captured.length === 0) {
+            var srcMain = document.querySelector('.report-main');
+            if (srcMain) {
+                captured.push(srcMain.cloneNode(true));
+            } else {
+                /* 폴백: .section 클래스 기반(있을 때만) */
                 var allSections = document.querySelectorAll('.section');
                 allSections.forEach(function(s) {
                     if (s.id === 'sec-report' || s.id === 'sec-notify') return;
                     captured.push(s.cloneNode(true));
                 });
             }
+
+            /* ★ 차트 canvas → 이미지(toDataURL) 변환 (canvas는 outerHTML에 그림이 안 담겨 빈칸이 됨) */
+            try {
+                var _origCanvas = (srcMain || document).querySelectorAll('canvas');
+                captured.forEach(function(node) {
+                    var _cloneCanvas = node.querySelectorAll('canvas');
+                    for (var _ci = 0; _ci < _cloneCanvas.length; _ci++) {
+                        try {
+                            var _du = '';
+                            /* Chart.js 인스턴스가 있으면 toBase64Image가 가장 안정적 */
+                            try {
+                                var _ch = (window.Chart && window.Chart.getChart) ? window.Chart.getChart(_origCanvas[_ci]) : null;
+                                if (_ch) _du = _ch.toBase64Image('image/png', 1);
+                            } catch (eChart) {}
+                            if (!_du && _origCanvas[_ci] && _origCanvas[_ci].toDataURL) _du = _origCanvas[_ci].toDataURL('image/png');
+                            if (!_du) continue;
+                            var _img = document.createElement('img');
+                            _img.src = _du;
+                            _img.style.cssText = 'width:100%;height:auto;display:block;';
+                            if (_cloneCanvas[_ci].parentNode) _cloneCanvas[_ci].parentNode.replaceChild(_img, _cloneCanvas[_ci]);
+                        } catch (eImg) {}
+                    }
+                });
+            } catch (eCanvas) {}
 
             /* 클론에서 no-export / 인터랙티브 요소 제거 */
             captured.forEach(function(node) {
