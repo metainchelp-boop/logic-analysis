@@ -15,19 +15,19 @@ window.CompetitionIndexSection = function CompetitionIndexSection(props) {
 
         {/* 시안 구조: 좌측 반원 게이지 + 우측 밴드·KPI (세로 중앙 정렬) */}
         <div className="grid2" style={{ alignItems: 'center' }}>
-          {/* 좌: 반원 게이지 (시안: 숫자·배지 없이 플레인 반원, 레벨/경쟁지수는 아래 노트에) */}
-          <div style={{ display: 'flex', justifyContent: 'center' }}>
-            <div style={{ position: 'relative', width: 260, height: 138, overflow: 'hidden' }}>
+          {/* 좌: 반원 게이지 (작고 얇게 — 숫자·배지 없이 플레인, 레벨/경쟁지수는 아래 노트에) */}
+          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+            <div style={{ position: 'relative', width: 190, height: 100, overflow: 'hidden' }}>
               <ChartCanvas
                 type="doughnut"
-                height={260}
-                style={{ height: 260, width: 260, position: 'absolute', top: 0, left: 0 }}
+                height={190}
+                style={{ height: 190, width: 190, position: 'absolute', top: 0, left: 0 }}
                 data={{
                   labels: ['경쟁', '여유'],
                   datasets: [{ data: [pct, Math.max(0, 100 - pct)], backgroundColor: [compColor, (window.CHART_COLORS || {}).GRID || '#eef2f7'], borderWidth: 0 }]
                 }}
                 options={{
-                  rotation: -90, circumference: 180, cutout: '70%',
+                  rotation: -90, circumference: 180, cutout: '78%',
                   plugins: { legend: { display: false }, tooltip: { enabled: false } }
                 }}
               />

@@ -246,3 +246,6 @@ body { background: var(--rt-bg); }
 .report-main .card > h3 { margin: 0 0 4px; font-size: 15.5px; font-weight: 800; color: var(--rt-ink); display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
 .report-main .hic { width: 32px; height: 32px; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; background: linear-gradient(135deg, #eef2ff, #e0e7ff); font-size: 16px; flex: none; }
 .report-main .card > .desc { color: var(--rt-sub); font-size: 12px; margin: 2px 0 14px; }
+
+/* ratecard 라벨(노출/미노출/노출률 등)을 진한 색으로 — 연한 회색 가독성 개선 */
+.report-main .ratecard .k { color: #334155; font-weight: 700; font-size: 12.5px; margin-top: 4px; }
