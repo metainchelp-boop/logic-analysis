@@ -1265,11 +1265,29 @@ window.App = function App() {
               ),
               /* 본문 시작 (이후 모든 섹션이 report-main의 자식) */
               React.createElement('div', { className: 'report-main' },
-                /* 보고서 표지 헤더 */
+                /* 보고서 표지(광고주 정보) 카드 */
                 analysisData && React.createElement('div', { className: 'report-cover' },
-                    React.createElement('div', { className: 'rc-title' }, '📊 로직 분석 보고서'),
-                    React.createElement('div', { className: 'rc-sub' },
-                        (companyName ? companyName + '  ·  ' : '') + '키워드 "' + (searchedKeyword || '') + '"'
+                    React.createElement('div', { className: 'report-cover-head' },
+                        React.createElement('span', { className: 'rc-ic' }, '📋'),
+                        React.createElement('span', { className: 'rc-title' }, '로직 분석 보고서')
+                    ),
+                    React.createElement('div', { className: 'rc-grid' },
+                        React.createElement('div', { className: 'rc-field' },
+                            React.createElement('div', { className: 'rc-k' }, '광고주 / 스토어'),
+                            React.createElement('div', { className: 'rc-v' }, companyName || '-')
+                        ),
+                        React.createElement('div', { className: 'rc-field' },
+                            React.createElement('div', { className: 'rc-k' }, '분석 키워드'),
+                            React.createElement('div', { className: 'rc-v' }, searchedKeyword || '-')
+                        ),
+                        React.createElement('div', { className: 'rc-field' },
+                            React.createElement('div', { className: 'rc-k' }, '상품 URL'),
+                            React.createElement('div', { className: 'rc-v rc-url', title: searchedProductUrl || '' }, searchedProductUrl || '-')
+                        ),
+                        React.createElement('div', { className: 'rc-field' },
+                            React.createElement('div', { className: 'rc-k' }, '분석일'),
+                            React.createElement('div', { className: 'rc-v' }, new Date().toLocaleDateString('ko'))
+                        )
                     )
                 ),
                 /* 모바일용 가로 목차 */
