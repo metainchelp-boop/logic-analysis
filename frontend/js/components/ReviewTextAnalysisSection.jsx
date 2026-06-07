@@ -28,7 +28,6 @@ window.ReviewTextAnalysisSection = function ReviewTextAnalysisSection(props) {
     neutral:  { background: '#f1f5f9', color: '#64748b' }
   };
 
-  var maxTagCount = data.tagStats && data.tagStats.length > 0 ? data.tagStats[0].count : 1;
   var tagColors = [
     'linear-gradient(90deg, #7c3aed, #a78bfa)',
     'linear-gradient(90deg, #3b82f6, #93c5fd)',
@@ -36,6 +35,10 @@ window.ReviewTextAnalysisSection = function ReviewTextAnalysisSection(props) {
     'linear-gradient(90deg, #f59e0b, #fcd34d)',
     'linear-gradient(90deg, #ec4899, #f9a8d4)',
   ];
+
+  var kwTabState = useState('pos');
+  var kwTab = kwTabState[0];
+  var setKwTab = kwTabState[1];
 
   var displayedReviews = showAll ? reviews : reviews.slice(0, 3);
   var remainingCount = reviews.length - 3;
@@ -52,101 +55,86 @@ window.ReviewTextAnalysisSection = function ReviewTextAnalysisSection(props) {
       ),
       React.createElement('div', { className: 'rt-desc' }, '상세페이지 HTML에서 추출한 구매자 리뷰 분석 결과'),
 
-      /* 1. 요약 카드 4개 */
-      React.createElement('div', {
-        style: { display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14, marginBottom: 28 }
-      },
+      /* 1. 요약 KPI 4개 (.grid4 + .kpi) */
+      React.createElement('div', { className: 'grid4', style: { marginBottom: 10 } },
         /* 추출된 리뷰 */
-        React.createElement('div', { style: { background: '#f8fafc', borderRadius: 14, padding: '20px 16px', textAlign: 'center', border: '1px solid #e2e8f0' } },
-          React.createElement('div', { style: { fontSize: 11, fontWeight: 600, color: '#94a3b8', marginBottom: 8 } }, '추출된 리뷰'),
-          React.createElement('div', { style: { fontSize: 18, fontWeight: 800, color: '#7c3aed' } },
+        React.createElement('div', { className: 'kpi' },
+          React.createElement('div', { className: 'k' }, '추출 리뷰'),
+          React.createElement('div', { className: 'v', style: { fontSize: 20 } },
             fmt(data.totalExtracted),
-            React.createElement('span', { style: { fontSize: 14, color: '#94a3b8' } }, '건')
+            React.createElement('small', null, '건')
           ),
           totalReviewCount ? React.createElement('div', { style: { fontSize: 11, color: '#94a3b8', marginTop: 4 } }, '전체 ' + fmt(totalReviewCount) + '건 중') : null
         ),
         /* 평균 별점 */
-        React.createElement('div', { style: { background: '#f8fafc', borderRadius: 14, padding: '20px 16px', textAlign: 'center', border: '1px solid #e2e8f0' } },
-          React.createElement('div', { style: { fontSize: 11, fontWeight: 600, color: '#94a3b8', marginBottom: 8 } }, '평균 별점'),
-          React.createElement('div', { style: { fontSize: 18, fontWeight: 800, color: '#f59e0b' } },
+        React.createElement('div', { className: 'kpi' },
+          React.createElement('div', { className: 'k' }, '평균 별점'),
+          React.createElement('div', { className: 'v', style: { fontSize: 20 } },
             data.avgRating,
-            React.createElement('span', { style: { fontSize: 14, color: '#94a3b8' } }, '점')
-          ),
-          React.createElement('div', { style: { fontSize: 11, color: '#f59e0b', marginTop: 4 } }, stars(data.avgRating))
+            React.createElement('small', null, '★')
+          )
         ),
         /* 긍정 비율 */
-        React.createElement('div', { style: { background: '#f8fafc', borderRadius: 14, padding: '20px 16px', textAlign: 'center', border: '1px solid #e2e8f0' } },
-          React.createElement('div', { style: { fontSize: 11, fontWeight: 600, color: '#94a3b8', marginBottom: 8 } }, '긍정 비율'),
-          React.createElement('div', { style: { fontSize: 18, fontWeight: 800, color: '#10b981' } },
+        React.createElement('div', { className: 'kpi' },
+          React.createElement('div', { className: 'k' }, '긍정 비율'),
+          React.createElement('div', { className: 'v', style: { fontSize: 20, color: 'var(--ok)' } },
             data.sentiment.positiveRatio,
-            React.createElement('span', { style: { fontSize: 14, color: '#94a3b8' } }, '%')
-          ),
-          React.createElement('div', { style: { fontSize: 11, color: '#94a3b8', marginTop: 4 } },
-            data.sentiment.positive + '건 긍정' + (data.sentiment.negative > 0 ? ' / ' + data.sentiment.negative + '건 부정' : '')
+            React.createElement('small', null, '%')
           )
         ),
         /* 평균 글자수 */
-        React.createElement('div', { style: { background: '#f8fafc', borderRadius: 14, padding: '20px 16px', textAlign: 'center', border: '1px solid #e2e8f0' } },
-          React.createElement('div', { style: { fontSize: 11, fontWeight: 600, color: '#94a3b8', marginBottom: 8 } }, '평균 글자수'),
-          React.createElement('div', { style: { fontSize: 18, fontWeight: 800, color: '#3b82f6' } },
+        React.createElement('div', { className: 'kpi' },
+          React.createElement('div', { className: 'k' }, '평균 글자수'),
+          React.createElement('div', { className: 'v', style: { fontSize: 20 } },
             data.avgChars,
-            React.createElement('span', { style: { fontSize: 14, color: '#94a3b8' } }, '자')
-          ),
-          React.createElement('div', { style: { fontSize: 11, color: '#94a3b8', marginTop: 4 } },
-            data.avgChars > 50 ? '상세한 후기 비율 높음' : '짧은 후기 위주'
+            React.createElement('small', null, '자')
           )
         )
       ),
 
-      /* 2. 핵심 키워드 분석 (긍정 / 부정) */
+      /* 2. 핵심 키워드 분석 — 긍정/부정 탭 (.pill-tabs) */
       (data.positiveKeywords.length > 0 || data.negativeKeywords.length > 0) ?
-        React.createElement('div', { style: { marginBottom: 28 } },
-          React.createElement('div', { style: { fontSize: 14, fontWeight: 700, color: '#1e293b', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8 } },
-            React.createElement('span', null, '📊'), '핵심 키워드 분석'
+        React.createElement('div', { style: { marginBottom: 20 } },
+          /* pill-tabs 탭 버튼 */
+          React.createElement('div', { className: 'pill-tabs' },
+            React.createElement('button', {
+              className: kwTab === 'pos' ? 'on' : '',
+              onClick: function() { setKwTab('pos'); }
+            }, '긍정 키워드'),
+            React.createElement('button', {
+              className: kwTab === 'neg' ? 'on' : '',
+              onClick: function() { setKwTab('neg'); }
+            }, '부정 키워드')
           ),
-          React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 } },
-            /* 긍정 키워드 */
-            React.createElement('div', {
-              style: { background: 'linear-gradient(135deg, #f0fdf4, #ecfdf5)', border: '1px solid #bbf7d0', borderRadius: 14, padding: 20 }
-            },
-              React.createElement('div', { style: { fontSize: 13, fontWeight: 700, color: '#059669', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 6 } }, '👍 긍정 키워드'),
-              React.createElement('div', null,
+          /* 긍정 키워드 칩 */
+          kwTab === 'pos' ?
+            React.createElement('div', null,
+              data.positiveKeywords.length > 0 ?
                 data.positiveKeywords.map(function(kw, i) {
-                  return React.createElement('span', {
-                    key: 'pos-' + i,
-                    style: { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 999, fontSize: 13, fontWeight: 600, background: '#dcfce7', color: '#166534', margin: '3px 4px' }
-                  },
-                    kw.keyword,
-                    React.createElement('span', { style: { fontSize: 11, fontWeight: 700, opacity: 0.7 } }, '×' + kw.count)
+                  return React.createElement('span', { key: 'pos-' + i, className: 'tag2' },
+                    kw.keyword + ' (' + kw.count + ')'
                   );
                 })
-              )
-            ),
-            /* 부정 키워드 */
-            React.createElement('div', {
-              style: { background: 'linear-gradient(135deg, #fef2f2, #fff5f5)', border: '1px solid #fecaca', borderRadius: 14, padding: 20 }
-            },
-              React.createElement('div', { style: { fontSize: 13, fontWeight: 700, color: '#dc2626', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 6 } }, '👎 부정/개선 키워드'),
+              : React.createElement('div', { style: { fontSize: 13, color: '#94a3b8', padding: '12px 0' } }, '긍정 키워드가 발견되지 않았습니다')
+            )
+          :
+          /* 부정 키워드 칩 */
+            React.createElement('div', null,
               data.negativeKeywords.length > 0 ?
-                React.createElement('div', null,
-                  data.negativeKeywords.map(function(kw, i) {
-                    return React.createElement('span', {
-                      key: 'neg-' + i,
-                      style: { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 999, fontSize: 13, fontWeight: 600, background: '#fee2e2', color: '#991b1b', margin: '3px 4px' }
-                    },
-                      kw.keyword,
-                      React.createElement('span', { style: { fontSize: 11, fontWeight: 700, opacity: 0.7 } }, '×' + kw.count)
-                    );
-                  })
-                )
+                data.negativeKeywords.map(function(kw, i) {
+                  return React.createElement('span', {
+                    key: 'neg-' + i,
+                    className: 'tag2',
+                    style: { background: '#fee2e2', color: '#b91c1c' }
+                  }, kw.keyword + ' (' + kw.count + ')');
+                })
               : React.createElement('div', { style: { fontSize: 13, color: '#94a3b8', padding: '12px 0' } }, '부정 키워드가 발견되지 않았습니다')
             )
-          )
         ) : null,
 
       /* 3. 구매자 선택 태그 분석 */
       data.tagStats && data.tagStats.length > 0 ?
-        React.createElement('div', { style: { marginBottom: 28 } },
+        React.createElement('div', { style: { marginBottom: 20 } },
           React.createElement('div', { style: { fontSize: 14, fontWeight: 700, color: '#1e293b', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8 } },
             React.createElement('span', null, '🏷️'), '구매자 선택 태그 분석'
           ),
@@ -169,19 +157,15 @@ window.ReviewTextAnalysisSection = function ReviewTextAnalysisSection(props) {
           )
         ) : null,
 
-      /* 4. AI 전략 인사이트 */
+      /* 4. AI 전략 인사이트 (.sub-card + .st) */
       data.insights && data.insights.length > 0 ?
-        React.createElement('div', {
-          style: { background: 'linear-gradient(135deg, #eef2ff, #e0e7ff)', border: '1px solid #c7d2fe', borderRadius: 14, padding: '20px 24px', marginBottom: 28 }
-        },
-          React.createElement('div', { style: { fontSize: 13, fontWeight: 700, color: '#4338ca', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 } },
-            React.createElement('span', null, '🤖'), 'AI 전략 인사이트'
-          ),
-          React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+        React.createElement('div', { className: 'sub-card' },
+          React.createElement('div', { className: 'st' }, '🤖 AI 전략 인사이트'),
+          React.createElement('div', { style: { fontSize: 12.5, color: '#475569' } },
             data.insights.map(function(insight, i) {
               return React.createElement('div', {
                 key: 'insight-' + i,
-                style: { fontSize: 13, color: '#312e81', lineHeight: 1.8, paddingLeft: 20, position: 'relative' }
+                style: { lineHeight: 1.8, paddingLeft: 20, position: 'relative' }
               },
                 React.createElement('span', { style: { position: 'absolute', left: 0, color: '#6366f1', fontWeight: 700 } }, '→'),
                 insight

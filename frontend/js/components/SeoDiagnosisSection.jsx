@@ -58,29 +58,6 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl:
     /* v5 유틸 */
     const getScoreColor = (s) => s >= 70 ? '#10b981' : s >= 40 ? '#f59e0b' : '#ef4444';
     const getScoreLabel = (s) => s >= 70 ? '양호' : s >= 40 ? '보통' : '개선필요';
-    const getScoreGradient = (s) => s >= 70 ? 'linear-gradient(90deg, #34d399, #059669)' : s >= 40 ? 'linear-gradient(90deg, #fbbf24, #d97706)' : 'linear-gradient(90deg, #f87171, #dc2626)';
-
-    /* v5 스코어바 컴포넌트 */
-    const ScoreBar = ({ label, score, icon, weight }) => (
-        <div style={{ marginBottom: 14 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                <span style={{ fontSize: 13, fontWeight: 600, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ fontSize: 15 }}>{icon}</span> {label}
-                </span>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ fontSize: 13, fontWeight: 700, color: getScoreColor(score) }}>{score}점</span>
-                    <span style={{ fontSize: 11, color: '#94a3b8' }}>{weight}</span>
-                </div>
-            </div>
-            <div style={{ height: 10, borderRadius: 5, background: '#f1f5f9', overflow: 'hidden' }}>
-                <div style={{
-                    width: score + '%', height: '100%',
-                    background: getScoreGradient(score),
-                    borderRadius: 5, transition: 'width 0.8s ease'
-                }} />
-            </div>
-        </div>
-    );
 
     return (
         <div className="section fade-in" id="sec-seo">
@@ -103,91 +80,60 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl:
 
                 {result && !loading && (
                     <div className="fade-in">
-                        {/* v5 2칼럼: 원형 스코어 + 지표 바 */}
-                        <div style={{ display: 'grid', gridTemplateColumns: '220px 1fr', gap: 16, marginBottom: 16 }}>
-                            {/* 왼쪽: 원형 스코어 */}
-                            <div className="card" style={{
-                                textAlign: 'center', display: 'flex', flexDirection: 'column',
-                                alignItems: 'center', justifyContent: 'center', padding: 28, borderRadius: 16
-                            }}>
-                                <div style={{ fontSize: 14, fontWeight: 600, color: '#64748b', marginBottom: 16 }}>SEO 종합 점수</div>
-                                <div style={{ position: 'relative', width: 120, height: 120, marginBottom: 12 }}>
-                                    <ChartCanvas
-                                        type="doughnut"
-                                        height={120}
-                                        data={{
-                                            labels: ['점수', '잔여'],
-                                            datasets: [{ data: [result.scores.total, Math.max(0, 100 - result.scores.total)], backgroundColor: [getScoreColor(result.scores.total), '#f1f5f9'], borderWidth: 0 }]
-                                        }}
-                                        options={{ cutout: '78%', plugins: { legend: { display: false }, tooltip: { enabled: false } } }}
-                                    />
-                                    <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-                                        <div style={{ fontSize: 28, fontWeight: 800, color: getScoreColor(result.scores.total) }}>{result.scores.total}</div>
-                                        <div style={{ fontSize: 11, color: '#94a3b8' }}>/ 100</div>
-                                    </div>
+                        {/* 시안 .grid2: 좌측 레이더 + 우측 종합점수/지표바 */}
+                        <div className="grid2" style={{ alignItems: 'center', marginBottom: 16 }}>
+                            {/* 왼쪽: 10개 지표 레이더 차트 (기존 ChartCanvas 보존) */}
+                            <div className="chartbox sm">
+                                <ChartCanvas
+                                    type="radar"
+                                    height={320}
+                                    data={{
+                                        labels: ['상품명', '검색순위', '가격', '리뷰', '판매', '평점', '카테고리', '브랜드', '네이버페이', '최신성'],
+                                        datasets: [{
+                                            label: 'SEO 점수',
+                                            data: [
+                                                result.scores.title || 0, result.scores.rank || 0, result.scores.price || 0,
+                                                result.scores.review || 0, result.scores.sales || 0, result.scores.rating || 0,
+                                                result.scores.category || 0, result.scores.brand || 0, result.scores.naverpay || 0,
+                                                result.scores.freshness || 0
+                                            ],
+                                            borderColor: '#4f46e5',
+                                            backgroundColor: 'rgba(79,70,229,.18)',
+                                            pointBackgroundColor: '#4f46e5',
+                                            borderWidth: 2
+                                        }]
+                                    }}
+                                    options={{
+                                        plugins: { legend: { display: false }, tooltip: { callbacks: { label: function(ctx) { return ctx.label + ' ' + ctx.parsed.r + '점'; } } } },
+                                        scales: { r: { beginAtZero: true, max: 100, ticks: { display: false }, pointLabels: { font: { size: 11 } } } }
+                                    }}
+                                />
+                            </div>
+
+                            {/* 오른쪽: 종합점수 + 지표별 스코어바 */}
+                            <div>
+                                <div style={{ textAlign: 'center', marginBottom: 8 }}>
+                                    <span style={{ fontSize: 34, fontWeight: 900, color: getScoreColor(result.scores.total) }}>{result.scores.total}</span>
+                                    <span style={{ color: 'var(--rt-sub)' }}>/100 · {getScoreLabel(result.scores.total)}</span>
                                 </div>
-                                <div style={{
-                                    fontSize: 14, fontWeight: 700,
-                                    color: getScoreColor(result.scores.total)
-                                }}>
-                                    {getScoreLabel(result.scores.total)}
-                                </div>
+                                <div className="scorebar"><div className="lbl"><b>상품명</b><span className="w">15%</span></div><div className="track"><i style={{ width: (result.scores.title || 0) + '%' }}></i></div></div>
+                                <div className="scorebar"><div className="lbl"><b>검색순위</b><span className="w">15%</span></div><div className="track"><i style={{ width: (result.scores.rank || 0) + '%' }}></i></div></div>
+                                <div className="scorebar"><div className="lbl"><b>가격</b><span className="w">12%</span></div><div className="track"><i style={{ width: (result.scores.price || 0) + '%' }}></i></div></div>
+                                <div className="scorebar"><div className="lbl"><b>리뷰</b><span className="w">12%</span></div><div className="track"><i style={{ width: (result.scores.review || 0) + '%' }}></i></div></div>
+                                <div className="scorebar"><div className="lbl"><b>판매실적</b><span className="w">10%</span></div><div className="track"><i style={{ width: (result.scores.sales || 0) + '%' }}></i></div></div>
+                                <div className="scorebar"><div className="lbl"><b>평점</b><span className="w">8%</span></div><div className="track"><i style={{ width: (result.scores.rating || 0) + '%' }}></i></div></div>
+                                <div className="scorebar"><div className="lbl"><b>카테고리</b><span className="w">8%</span></div><div className="track"><i style={{ width: (result.scores.category || 0) + '%' }}></i></div></div>
+                                <div className="scorebar"><div className="lbl"><b>브랜드</b><span className="w">8%</span></div><div className="track"><i style={{ width: (result.scores.brand || 0) + '%' }}></i></div></div>
+                                <div className="scorebar"><div className="lbl"><b>네이버페이</b><span className="w">6%</span></div><div className="track"><i style={{ width: (result.scores.naverpay || 0) + '%' }}></i></div></div>
+                                <div className="scorebar"><div className="lbl"><b>최신성</b><span className="w">6%</span></div><div className="track"><i style={{ width: (result.scores.freshness || 0) + '%' }}></i></div></div>
                                 {result.scores.detail?.current_rank && (
-                                    <div style={{ marginTop: 8, fontSize: 12, color: '#64748b', lineHeight: 1.6 }}>
-                                        현재 순위: <strong>{result.scores.detail.current_rank}위</strong><br />
-                                        추정 월 판매: <strong>{(result.scores.detail.est_monthly_sales || 0).toLocaleString()}건</strong>
+                                    <div style={{ marginTop: 8, fontSize: 12, color: 'var(--rt-sub)', lineHeight: 1.6, textAlign: 'center' }}>
+                                        현재 순위: <strong>{result.scores.detail.current_rank}위</strong> · 추정 월 판매: <strong>{(result.scores.detail.est_monthly_sales || 0).toLocaleString()}건</strong>
                                     </div>
                                 )}
                             </div>
-
-                            {/* 오른쪽: 지표별 프로그레스바 */}
-                            <div className="card" style={{ padding: 24, borderRadius: 16 }}>
-                                <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                    <span>📊 평가지표 상세</span>
-                                    <span style={{ fontSize: 11, color: '#94a3b8', fontWeight: 400 }}>비중</span>
-                                </div>
-                                <ScoreBar label="상품명" score={result.scores.title} icon="📝" weight="15%" />
-                                <ScoreBar label="검색 순위" score={result.scores.rank} icon="📈" weight="15%" />
-                                <ScoreBar label="가격 경쟁력" score={result.scores.price} icon="💰" weight="12%" />
-                                <ScoreBar label="리뷰 수" score={result.scores.review || 0} icon="💬" weight="12%" />
-                                <ScoreBar label="판매실적" score={result.scores.sales || 0} icon="🛒" weight="10%" />
-                                <ScoreBar label="상품 평점" score={result.scores.rating || 0} icon="⭐" weight="8%" />
-                                <ScoreBar label="카테고리" score={result.scores.category || 0} icon="📂" weight="8%" />
-                                <ScoreBar label="브랜드" score={result.scores.brand || 0} icon="🏷️" weight="8%" />
-                                <ScoreBar label="네이버페이" score={result.scores.naverpay || 0} icon="💳" weight="6%" />
-                                <ScoreBar label="최신성" score={result.scores.freshness || 0} icon="🕐" weight="6%" />
-                            </div>
                         </div>
-
-                        {/* 10개 지표 레이더 차트 */}
-                        <div className="card" style={{ padding: 24, borderRadius: 16, marginBottom: 16 }}>
-                            <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8 }}>📡 평가지표 균형 (레이더)</div>
-                            <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 12 }}>10개 지표 점수를 한눈에 비교합니다. 바깥쪽일수록 우수.</div>
-                            <ChartCanvas
-                                type="radar"
-                                height={320}
-                                data={{
-                                    labels: ['상품명', '검색순위', '가격', '리뷰', '판매', '평점', '카테고리', '브랜드', '네이버페이', '최신성'],
-                                    datasets: [{
-                                        label: 'SEO 점수',
-                                        data: [
-                                            result.scores.title || 0, result.scores.rank || 0, result.scores.price || 0,
-                                            result.scores.review || 0, result.scores.sales || 0, result.scores.rating || 0,
-                                            result.scores.category || 0, result.scores.brand || 0, result.scores.naverpay || 0,
-                                            result.scores.freshness || 0
-                                        ],
-                                        borderColor: '#4f46e5',
-                                        backgroundColor: 'rgba(79,70,229,.18)',
-                                        pointBackgroundColor: '#4f46e5',
-                                        borderWidth: 2
-                                    }]
-                                }}
-                                options={{
-                                    plugins: { legend: { display: false }, tooltip: { callbacks: { label: function(ctx) { return ctx.label + ' ' + ctx.parsed.r + '점'; } } } },
-                                    scales: { r: { beginAtZero: true, max: 100, ticks: { display: false }, pointLabels: { font: { size: 11 } } } }
-                                }}
-                            />
-                        </div>
+                        <div style={{ fontSize: 11, color: 'var(--rt-sub)', marginTop: 6 }}>10개 지표: 상품명·검색순위·가격·리뷰·판매실적·평점·카테고리·브랜드·네이버페이·최신성 (레이더 차트)</div>
 
                         {/* v5 세부 정보 요약 — 4칼럼 메트릭 카드 */}
                         {result.scores.detail && (
@@ -231,12 +177,7 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl:
                         )}
 
                         {/* 산출 근거 */}
-                        <div style={{
-                            marginTop: 12, padding: '12px 16px',
-                            background: 'linear-gradient(135deg, #f0f9ff, #e0f2fe)',
-                            borderRadius: 10, border: '1px solid #bae6fd',
-                            fontSize: 12, color: '#0369a1', lineHeight: 1.7
-                        }}>
+                        <div className="note est">
                             ※ 리뷰 수·평점·판매실적·최신성은 순위 구간별 업계 평균 기반 추정치입니다. 네이버 쇼핑 API 한계로 실제 수치와 차이가 있을 수 있으며, 향후 정밀화 예정입니다.
                         </div>
                     </div>

@@ -1,79 +1,38 @@
 window.GoldenKeywordCard = function GoldenKeywordCard(props) {
   if (!props?.data) return null;
-  const { name, score, volume, competition, ctr, clicks, reason } = props.data;
 
-  if (!name || score === undefined) return null;
+  // 단일 객체 또는 배열 모두 처리
+  const items = Array.isArray(props.data) ? props.data : [props.data];
 
-  const scorePercent = Math.min(100, (score / 100) * 100);
+  if (!items.length) return null;
 
   return (
-    <div className="section fade-in">
-      <div className="container">
-        <div className="golden-card" style={{ marginBottom: '16px' }}>
-          {/* Header */}
-          <h3 className="rt-h3"><span className="rt-hic">👑</span>골든 키워드<span className="badge b-ok">✅ 실측</span></h3>
-          <div className="rt-desc">검색량 대비 경쟁이 낮은 기회 키워드</div>
-          <div style={{ fontSize: '28px', fontWeight: '800', color: '#78350f', marginBottom: '8px', wordBreak: 'break-word', position: 'relative', zIndex: 1 }}>
-            {name}
-          </div>
-          <span className="badge badge-gold" style={{ fontSize: '13px', padding: '5px 14px', position: 'relative', zIndex: 1 }}>
-            점수: {score}점
-          </span>
-
-          {/* Stat Cards */}
-          <div className="golden-stats-grid" style={{
-            display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px',
-            marginBottom: '20px', position: 'relative', zIndex: 1
-          }}>
-            {[
-              { label: '월간 검색량', val: fmt(volume) + '회', color: '#b45309' },
-              { label: '경쟁강도', val: competition, color: '#b45309' },
-              { label: '평균 클릭수', val: (typeof ctr === 'number' ? ctr.toFixed(1) : ctr) + '회', color: '#b45309' },
-              { label: '월간 클릭수', val: fmt(clicks) + '회', color: '#b45309' }
-            ].map(function(s, i) {
-              return (
-                <div key={i} style={{
-                  background: 'rgba(255,255,255,0.7)', padding: '14px',
-                  borderRadius: '10px', border: '1px solid rgba(251,191,36,0.4)',
-                  textAlign: 'center'
-                }}>
-                  <div style={{ fontSize: '11px', color: '#92400e', marginBottom: '6px', fontWeight: '600' }}>{s.label}</div>
-                  <div style={{ fontSize: '18px', fontWeight: '700', color: s.color }}>{s.val}</div>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Score Progress */}
-          <div style={{ marginBottom: '16px', position: 'relative', zIndex: 1 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px', fontSize: '12px', color: '#92400e' }}>
-              <span>성능 지수</span>
-              <span style={{ fontWeight: '700' }}>{Math.round(scorePercent)}%</span>
+    <div className="card">
+      <h3 className="rt-h3"><span className="rt-hic">👑</span>골든 키워드 <span className="badge b-ok">✅ 실측</span></h3>
+      <div className="grid2">
+        {items.map(function(item, idx) {
+          if (!item || !item.name || item.score === undefined) return null;
+          const { name, score, volume, competition, ctr, clicks, reason } = item;
+          const scorePercent = Math.min(100, (score / 100) * 100);
+          return (
+            <div key={idx} className="sub-card">
+              <div className="st">
+                👑 {name}
+                <span style={{ marginLeft: 'auto', color: 'var(--est)', fontWeight: 900 }}>점수 {score}</span>
+              </div>
+              <div className="grid2" style={{ gap: '8px', margin: '8px 0' }}>
+                <div style={{ fontSize: '12px' }}><span style={{ color: 'var(--sub)' }}>월 검색량</span> <b>{fmt(volume)}</b></div>
+                <div style={{ fontSize: '12px' }}><span style={{ color: 'var(--sub)' }}>경쟁강도</span> <b>{competition}</b></div>
+                <div style={{ fontSize: '12px' }}><span style={{ color: 'var(--sub)' }}>평균 클릭</span> <b>{typeof ctr === 'number' ? ctr.toFixed(1) : ctr}</b></div>
+                <div style={{ fontSize: '12px' }}><span style={{ color: 'var(--sub)' }}>월 클릭수</span> <b>{fmt(clicks)}</b></div>
+              </div>
+              <div className="track"><i style={{ width: Math.round(scorePercent) + '%' }}></i></div>
+              {reason && (
+                <div style={{ fontSize: '11.5px', color: 'var(--sub)', marginTop: '6px' }}>{reason}</div>
+              )}
             </div>
-            <div style={{ height: '8px', background: 'rgba(251,191,36,0.3)', borderRadius: '999px', overflow: 'hidden' }}>
-              <div style={{
-                width: scorePercent + '%', height: '100%',
-                background: 'linear-gradient(90deg, #f59e0b, #d97706)',
-                borderRadius: '999px', transition: 'width 0.5s ease'
-              }}></div>
-            </div>
-          </div>
-
-          {/* Reason */}
-          {reason && (
-            <div style={{
-              background: 'rgba(255,255,255,0.6)', borderLeft: '4px solid #d97706',
-              padding: '12px 16px', borderRadius: '8px',
-              fontSize: '13px', color: '#78350f', lineHeight: '1.6',
-              position: 'relative', zIndex: 1
-            }}>
-              <strong style={{ display: 'block', marginBottom: '4px' }}>📌 추천 이유</strong>
-              {reason}
-            </div>
-          )}
-
-          {/* 반응형은 styles.css .golden-stats-grid에서 처리 */}
-        </div>
+          );
+        })}
       </div>
     </div>
   );

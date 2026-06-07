@@ -84,7 +84,7 @@ window.EntryStrategySection = function EntryStrategySection(props) {
         };
     }
 
-    /* v5 격차 바 시각화 컴포넌트 */
+    /* 시안(.gapbar) 격차 바 시각화 컴포넌트 — .me=내 상품, .cp=경쟁 평균 마커 */
     var GapBar = function(barProps) {
         var label = barProps.label;
         var myVal = barProps.myVal;
@@ -96,21 +96,15 @@ window.EntryStrategySection = function EntryStrategySection(props) {
         var compPct = Math.min((compVal / max) * 100, 100);
         var myBetter = reverse ? myVal <= compVal : myVal >= compVal;
 
-        return React.createElement('div', { style: { marginBottom: 16 } },
-            React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: '#0f172a', marginBottom: 8 } }, label),
-            React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 } },
-                React.createElement('span', { style: { fontSize: 11, color: myBetter ? '#10b981' : '#ef4444', fontWeight: 700, width: 55, flexShrink: 0 } }, '내 상품'),
-                React.createElement('div', { style: { flex: 1, background: '#f1f5f9', borderRadius: 5, height: 10, position: 'relative', overflow: 'hidden' } },
-                    React.createElement('div', { style: { width: myPct + '%', height: '100%', background: myBetter ? 'linear-gradient(90deg, #34d399, #10b981)' : 'linear-gradient(90deg, #f87171, #ef4444)', borderRadius: 5, transition: 'width 0.8s ease' } })
+        return React.createElement('div', { className: 'gapbar' },
+            React.createElement('div', { className: 'row' },
+                React.createElement('span', { className: 'nm' }, label),
+                React.createElement('div', { className: 'b' },
+                    React.createElement('div', { className: 'me', style: { width: myPct + '%' } }),
+                    React.createElement('div', { className: 'cp', style: { left: compPct + '%' } })
                 ),
-                React.createElement('span', { style: { fontSize: 12, fontWeight: 700, color: '#0f172a', width: 70, textAlign: 'right', flexShrink: 0 } }, fmt(myVal) + unit)
-            ),
-            React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
-                React.createElement('span', { style: { fontSize: 11, color: '#64748b', fontWeight: 600, width: 55, flexShrink: 0 } }, '경쟁 평균'),
-                React.createElement('div', { style: { flex: 1, background: '#f1f5f9', borderRadius: 5, height: 10, position: 'relative', overflow: 'hidden' } },
-                    React.createElement('div', { style: { width: compPct + '%', height: '100%', background: '#94a3b8', borderRadius: 5, transition: 'width 0.8s ease' } })
-                ),
-                React.createElement('span', { style: { fontSize: 12, fontWeight: 700, color: '#64748b', width: 70, textAlign: 'right', flexShrink: 0 } }, fmt(compVal) + unit)
+                React.createElement('span', { style: { fontSize: 11, color: myBetter ? '#10b981' : '#ef4444', fontWeight: 700, flexShrink: 0 } },
+                    '내 ' + fmt(myVal) + unit + ' · 경쟁 ' + fmt(compVal) + unit)
             )
         );
     };
@@ -169,6 +163,31 @@ window.EntryStrategySection = function EntryStrategySection(props) {
                             } }, overallScore)
                         ),
                         React.createElement('div', { style: { fontSize: 11, color: scoreColor, fontWeight: 600 } }, scoreLabel)
+                    )
+                )
+            ),
+
+            /* === 종합 진입 점수 + KPI (시안 .grid2 + .kpi) === */
+            advertiserData && React.createElement('div', { className: 'grid2', style: { alignItems: 'center', marginBottom: 6 } },
+                React.createElement('div', { style: { textAlign: 'center' } },
+                    React.createElement('div', { style: { fontSize: 13, color: '#64748b' } }, '종합 진입 점수'),
+                    React.createElement('div', { style: { fontSize: 40, fontWeight: 900, color: scoreColor } },
+                        overallScore,
+                        React.createElement('span', { style: { fontSize: 16, color: '#64748b' } }, '/100')
+                    )
+                ),
+                React.createElement('div', null,
+                    React.createElement('div', { className: 'grid2' },
+                        React.createElement('div', { className: 'kpi' },
+                            React.createElement('div', { className: 'k' }, '1P 평균가'),
+                            React.createElement('div', { className: 'v', style: { fontSize: 18 } },
+                                compStats.avg_price ? fmt(compStats.avg_price) : avgTop5Price)
+                        ),
+                        React.createElement('div', { className: 'kpi' },
+                            React.createElement('div', { className: 'k' }, '키워드 포함률'),
+                            React.createElement('div', { className: 'v', style: { fontSize: 18 } },
+                                (compStats.keyword_in_name_ratio != null ? compStats.keyword_in_name_ratio : '-') + '%')
+                        )
                     )
                 )
             ),
@@ -317,11 +336,11 @@ window.EntryStrategySection = function EntryStrategySection(props) {
                     )
                 ),
 
-                /* 격차 바 차트 */
-                React.createElement('div', { style: Object.assign({}, v5Card, { padding: 24 }) },
-                    React.createElement('div', { style: { fontWeight: 700, fontSize: 14, marginBottom: 16, color: '#0f172a' } }, '\uD83D\uDCCA 상세 비교'),
-                    React.createElement(GapBar, { label: '가격 (원)', myVal: gapAnalysis.myPrice, compVal: gapAnalysis.avgCompPrice, unit: '원', reverse: true }),
-                    React.createElement(GapBar, { label: '상품명 길이 (글자)', myVal: gapAnalysis.myNameLength, compVal: gapAnalysis.avgNameLength, unit: '자' }),
+                /* 격차 바 차트 — 시안 .sub-card + .st + .gapbar */
+                React.createElement('div', { className: 'sub-card' },
+                    React.createElement('div', { className: 'st' }, '\uD83D\uDCCA 내 상품 vs 경쟁사 격차'),
+                    React.createElement(GapBar, { label: '가격', myVal: gapAnalysis.myPrice, compVal: gapAnalysis.avgCompPrice, unit: '원', reverse: true }),
+                    React.createElement(GapBar, { label: '상품명 길이', myVal: gapAnalysis.myNameLength, compVal: gapAnalysis.avgNameLength, unit: '자' }),
                     gapAnalysis.myRank && React.createElement(GapBar, { label: '순위', myVal: gapAnalysis.myRank, compVal: 3, unit: '위', reverse: true })
                 )
             ),
@@ -333,26 +352,25 @@ window.EntryStrategySection = function EntryStrategySection(props) {
                     ' 3. AI 기반 맞춤 진입 전략 제안'
                 ),
 
-                /* 전략 카드들 — v5 스타일 */
+                /* 전략 카드들 — 시안 .strat + .st + .sev */
                 React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 16 } },
                     strategies.map(function(s, idx) {
-                        var cardBorderColor = severityColor(s.severity === 'info' ? 'medium' : s.severity);
-                        var cardBg = severityBg(s.severity === 'info' ? 'medium' : s.severity);
                         var insights = s.insights || [];
                         var actions = s.actions || [];
                         var recs = s.recommendations || [];
+                        /* 심각도 → 시안 클래스(high/med/low) + 라벨 매핑 */
+                        var sevClass = s.severity === 'high' ? 'high' : s.severity === 'low' ? 'low' : 'med';
+                        var sevLabel = s.severity === 'high' ? '긴급' : s.severity === 'low' ? '선택' : '권장';
 
-                        return React.createElement('div', { key: idx, style: Object.assign({}, v5Card, { overflow: 'hidden' }) },
-                            /* 카드 헤더 */
-                            React.createElement('div', { style: { background: cardBg, padding: '16px 24px', borderBottom: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', gap: 12 } },
-                                React.createElement('span', { style: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, borderRadius: 10, background: '#fff', fontSize: 18, border: '1px solid #e2e8f0' } }, s.icon || ''),
-                                React.createElement('span', { style: { fontWeight: 700, fontSize: 15, color: '#0f172a', flex: 1 } }, s.area),
-                                React.createElement('span', { style: { padding: '4px 12px', borderRadius: 999, fontSize: 12, fontWeight: 700, color: '#fff', background: severityColor(s.severity) } },
-                                    s.severity === 'high' ? '핵심 개선' : s.severity === 'low' ? '강점 유지' : s.severity === 'info' ? '실행 가이드' : '점검 필요'
-                                )
+                        return React.createElement('div', { key: idx, className: 'strat ' + sevClass },
+                            /* 카드 헤더 — .st + .sev */
+                            React.createElement('div', { className: 'st' },
+                                s.icon ? React.createElement('span', null, s.icon) : null,
+                                React.createElement('span', { style: { flex: 1 } }, s.area),
+                                React.createElement('span', { className: 'sev ' + sevClass }, sevLabel)
                             ),
                             /* 카드 바디 */
-                            React.createElement('div', { style: { padding: '20px 24px' } },
+                            React.createElement('div', { style: { marginTop: 8 } },
                                 /* 분석 인사이트 */
                                 insights.length > 0 && React.createElement('div', { style: { marginBottom: actions.length > 0 || recs.length > 0 ? 16 : 0 } },
                                     React.createElement('div', { style: { fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 } }, 'INSIGHT'),

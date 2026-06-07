@@ -309,31 +309,25 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                                 <span>🔎</span> 키워드별 노출 순위
                             </div>
                             <div style={{ display: 'flex', gap: 8 }}>
-                                <span style={{ padding: '4px 12px', borderRadius: 999, fontSize: 11, fontWeight: 700, background: '#ecfdf5', color: '#10b981' }}>
-                                    노출 {exposureResult.exposed_count}개
-                                </span>
-                                <span style={{ padding: '4px 12px', borderRadius: 999, fontSize: 11, fontWeight: 700, background: '#fef2f2', color: '#ef4444' }}>
-                                    미노출 {unexposed.length}개
-                                </span>
-                                <span style={{ padding: '4px 12px', borderRadius: 999, fontSize: 11, fontWeight: 700, background: '#f1f5f9', color: '#64748b' }}>
-                                    전체 {exposureResult.total_keywords}개
-                                </span>
+                                <span className="ps ps-g">노출 {exposureResult.exposed_count}개</span>
+                                <span className="ps ps-r">미노출 {unexposed.length}개</span>
+                                <span className="ps ps-n">전체 {exposureResult.total_keywords}개</span>
                             </div>
                         </div>
 
                         {/* 요약 카드 3개 */}
-                        <div className="card-grid card-grid-3" style={{ marginBottom: 16 }}>
-                            <div className="card" style={{ textAlign: 'center', padding: '16px 12px' }}>
-                                <div style={{ fontSize: 24, fontWeight: 800, color: '#10b981' }}>{exposureResult.exposed_count}</div>
-                                <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>노출 키워드</div>
+                        <div className="grid3" style={{ marginBottom: 16 }}>
+                            <div className="ratecard">
+                                <div className="v" style={{ color: 'var(--ok)' }}>{exposureResult.exposed_count}</div>
+                                <div className="k">노출 키워드</div>
                             </div>
-                            <div className="card" style={{ textAlign: 'center', padding: '16px 12px' }}>
-                                <div style={{ fontSize: 24, fontWeight: 800, color: '#ef4444' }}>{unexposed.length}</div>
-                                <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>미노출 키워드</div>
+                            <div className="ratecard">
+                                <div className="v" style={{ color: 'var(--red)' }}>{unexposed.length}</div>
+                                <div className="k">미노출 키워드</div>
                             </div>
-                            <div className="card" style={{ textAlign: 'center', padding: '16px 12px' }}>
-                                <div style={{ fontSize: 24, fontWeight: 800, color: '#4f46e5' }}>{exposureRate}%</div>
-                                <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>노출률</div>
+                            <div className="ratecard">
+                                <div className="v" style={{ color: 'var(--pur)' }}>{exposureRate}%</div>
+                                <div className="k">노출률</div>
                             </div>
                         </div>
 
@@ -346,14 +340,10 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                                 </div>
                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                                     {exposed.map(function(r, idx) {
-                                        var chipBg = r.rank <= 10 ? '#ecfdf5' : r.rank <= 40 ? '#fffbeb' : '#fef2f2';
-                                        var chipColor = r.rank <= 10 ? '#059669' : r.rank <= 40 ? '#d97706' : '#dc2626';
-                                        var rankBg = r.rank <= 10 ? '#059669' : r.rank <= 40 ? '#d97706' : '#dc2626';
                                         return (
-                                            <div key={idx} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 10, fontSize: 13, fontWeight: 600, background: chipBg, color: chipColor }}>
-                                                {r.keyword}
-                                                <span style={{ fontSize: 12, fontWeight: 800, padding: '2px 8px', borderRadius: 6, background: rankBg, color: '#fff' }}>{r.rank}위</span>
-                                            </div>
+                                            <span key={idx} className={r.rank <= 10 ? 'kwchip' : 'kwchip warn'}>
+                                                {r.keyword} <span className="rk">{r.rank}위</span>
+                                            </span>
                                         );
                                     })}
                                     {exposed.length === 0 && (
@@ -369,9 +359,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                                     {unexposed.map(function(r, idx) {
                                         return (
-                                            <div key={idx} style={{ display: 'inline-flex', alignItems: 'center', padding: '8px 14px', borderRadius: 10, fontSize: 13, fontWeight: 600, background: '#f1f5f9', color: '#94a3b8' }}>
-                                                {r.keyword}
-                                            </div>
+                                            <span key={idx} className="kwchip off">{r.keyword}</span>
                                         );
                                     })}
                                     {unexposed.length === 0 && (

@@ -1,15 +1,8 @@
-/* DatalabSeasonSection — 시즌별 수요 예측 (v5) */
+/* DatalabSeasonSection — 시즌별 수요 예측 (v6) */
 window.DatalabSeasonSection = function DatalabSeasonSection(props) {
   if (!props?.data || !props.data.seasons || props.data.seasons.length === 0) return null;
   var d = props.data;
   var seasons = d.seasons;
-
-  var seasonBgs = {
-    '봄': 'linear-gradient(135deg, #fef3c7, #fff)',
-    '여름': 'linear-gradient(135deg, #dcfce7, #fff)',
-    '가을': 'linear-gradient(135deg, #fee2e2, #fff)',
-    '겨울': 'linear-gradient(135deg, #dbeafe, #fff)',
-  };
 
   return (
     <div className="section fade-in">
@@ -18,26 +11,24 @@ window.DatalabSeasonSection = function DatalabSeasonSection(props) {
         <h3 className="rt-h3"><span className="rt-hic">🗓️</span>시즌별 수요 예측<span className="badge b-ok">✅ 데이터랩</span></h3>
         <div className="rt-desc">데이터랩 쇼핑인사이트 기반 시즌 분석</div>
 
-        <div className="card-grid card-grid-4">
+        <div className="grid4">
           {seasons.map(function(s, i) {
+            var isPeak = s.peakSeason || s.grade === '최성수기';
             return (
-              <div key={i} className="card" style={{ padding: '20px 16px', textAlign: 'center', background: seasonBgs[s.name] || '#fff' }}>
-                <div style={{ fontSize: 28, marginBottom: 8 }}>{s.icon}</div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: s.gradeColor || '#475569', marginBottom: 4 }}>{s.name} 시즌</div>
-                <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 12 }}>{s.period}</div>
-                <div style={{ fontSize: 28, fontWeight: 800, color: s.gradeColor || '#475569' }}>{Math.round(s.index)}</div>
-                <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>수요 지수</div>
-                <div style={{ marginTop: 8, padding: '4px 12px', background: s.gradeBg || '#f1f5f9', borderRadius: 999, display: 'inline-block', fontSize: 11, fontWeight: 700, color: s.gradeColor || '#475569' }}>
-                  {s.grade}{s.grade === '최성수기' ? ' 🔥' : ''}
-                </div>
+              <div key={i} className={isPeak ? 'seasoncard peak' : 'seasoncard'}>
+                <div style={{ fontSize: 22 }}>{s.icon}</div>
+                <b>{s.name}</b>
+                <div className="desc" style={{ margin: '2px 0' }}>{s.period}</div>
+                <div style={{ fontWeight: 800 }}>지수 {Math.round(s.index)}{isPeak ? ' 🔥' : ''}</div>
+                <div style={{ fontSize: 11, color: isPeak ? '#c2410c' : 'var(--sub)' }}>{s.grade}</div>
               </div>
             );
           })}
         </div>
 
         {d.insight && (
-          <div style={{ marginTop: 16, padding: '12px 16px', background: '#fffbeb', borderRadius: 10, border: '1px solid #fde68a', fontSize: 12, color: '#92400e', lineHeight: 1.7 }}>
-            💡 <strong>인사이트:</strong> {d.insight}
+          <div className="note">
+            {d.insight}
           </div>
         )}
         </div>

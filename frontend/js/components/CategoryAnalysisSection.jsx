@@ -52,39 +52,45 @@ window.CategoryAnalysisSection = function CategoryAnalysisSection(props) {
         <div className="rt-desc">상위 상품들의 카테고리 분포를 파악합니다</div>
 
         {verdict && (
-          <div style={{
-            background: '#fff', borderRadius: 16, padding: 24,
-            border: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
-            marginBottom: 20, display: 'flex', alignItems: 'center', gap: 16
-          }}>
-            <div style={{
-              width: 48, height: 48, borderRadius: 14,
-              background: 'linear-gradient(135deg, #eef2ff, #dbeafe)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 22, flexShrink: 0
-            }}>📋</div>
-            <div>
-              <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a', marginBottom: 4 }}>{verdict}</div>
-              <div style={{ fontSize: 13, color: '#64748b' }}>주요 카테고리: <span style={{ fontWeight: 700, color: '#4f46e5' }}>{mainCategory}</span></div>
-            </div>
-          </div>
+          <div className="note ok">{verdict}</div>
         )}
 
         {/* 레벨별 분포 (대/중/소) */}
         {categoryLevels && (categoryLevels.large?.length > 0 || categoryLevels.medium?.length > 0 || categoryLevels.small?.length > 0) && (
-          <div style={{
-            background: '#fff', borderRadius: 16, padding: 24,
-            border: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
-            marginBottom: 20
-          }}>
-            <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a', marginBottom: 20 }}>
-              카테고리 레벨별 분포
-            </div>
-            <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
-              {renderLevelChart('대카테고리', categoryLevels.large, '#4f46e5')}
-              {renderLevelChart('중카테고리', categoryLevels.medium, '#7c3aed')}
-              {renderLevelChart('소카테고리', categoryLevels.small, '#a855f7')}
-            </div>
+          <div className="sub-card">
+            <div className="st">레벨별 분포 (1페이지 상품)</div>
+            {categoryLevels.large && categoryLevels.large.length > 0 && (
+              <div>
+                {categoryLevels.large.map(function(item, idx) {
+                  return (
+                    <div key={idx}>
+                      <div style={{ fontSize: 12.5, margin: '6px 0' }}><b>대분류</b> {item.name} {item.ratio}%</div>
+                      <div className="track"><i style={{ width: item.ratio + '%' }}></i></div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {categoryLevels.medium && categoryLevels.medium.length > 0 && (
+              <div>
+                <div style={{ fontSize: 12.5, margin: '10px 0 6px' }}>
+                  <b>중분류</b> {categoryLevels.medium.map(function(item, idx) {
+                    return item.name + ' ' + item.ratio + '%' + (idx < categoryLevels.medium.length - 1 ? ' · ' : '');
+                  }).join('')}
+                </div>
+                <div className="track"><i style={{ width: categoryLevels.medium[0].ratio + '%' }}></i></div>
+              </div>
+            )}
+            {categoryLevels.small && categoryLevels.small.length > 0 && (
+              <div>
+                <div style={{ fontSize: 12.5, margin: '10px 0 6px' }}>
+                  <b>소분류</b> {categoryLevels.small.map(function(item, idx) {
+                    return item.name + ' ' + item.ratio + '%' + (idx < categoryLevels.small.length - 1 ? ' · ' : '');
+                  }).join('')}
+                </div>
+                <div className="track"><i style={{ width: categoryLevels.small[0].ratio + '%' }}></i></div>
+              </div>
+            )}
           </div>
         )}
 
