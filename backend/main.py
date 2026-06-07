@@ -2044,20 +2044,25 @@ async def ai_feedback_all(req: AiFeedbackAllRequest, current_user: dict = Depend
 - 각 섹션은 5~8줄 내외로, 현황→핵심 이슈→실행 전략 흐름으로 작성하세요.
 - 마지막에 'METAINC 종합 인사이트'로 전체 요약과 핵심 액션 3가지를 짧게 정리하세요."""
 
-        message = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=4000,
-            messages=[{
-                "role": "user",
-                "content": f"""키워드 '{req.keyword}'에 대한 전체 분석 데이터입니다.
+        # ★502 방지: 동기 Claude 호출을 별도 스레드로 실행해 이벤트 루프(워커 하트비트)를
+        #  막지 않음. 이렇게 하면 생성이 길어져도 gunicorn 120s 타임아웃에 워커가 죽지 않음.
+        import asyncio
+        user_content = f"""키워드 '{req.keyword}'에 대한 전체 분석 데이터입니다.
 각 섹션별로 분석 피드백을 작성해주세요.
 
 {combined_data}
 
 각 섹션을 [섹션명] 형태로 구분하여, 광고주 브리핑 형식으로 작성하세요."""
-            }],
-            system=system_prompt
-        )
+
+        def _call_claude():
+            return client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=4000,
+                messages=[{"role": "user", "content": user_content}],
+                system=system_prompt
+            )
+
+        message = await asyncio.to_thread(_call_claude)
 
         full_text = message.content[0].text if message.content else ""
 

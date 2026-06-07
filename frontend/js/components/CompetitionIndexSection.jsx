@@ -13,15 +13,15 @@ window.CompetitionIndexSection = function CompetitionIndexSection(props) {
         <h3 className="rt-h3"><span className="rt-hic">⚔️</span>키워드 경쟁강도 분석<span className="badge b-ok">✅ 실측</span></h3>
         <div className="rt-desc">상품 수 대비 검색량으로 경쟁 수준을 판단합니다</div>
 
-        {/* 시안 구조: 좌측 반원 게이지 + 우측 밴드·KPI */}
+        {/* 시안 구조: 좌측 반원 게이지 + 우측 밴드·KPI (세로 중앙 정렬) */}
         <div className="grid2" style={{ alignItems: 'center' }}>
-          {/* 좌: 반원 게이지 — 등급·경쟁지수를 그래프 하단 안쪽에 표시 */}
-          <div style={{ display: 'flex', justifyContent: 'center' }}>
-            <div style={{ position: 'relative', width: 260, height: 168, flexShrink: 0 }}>
+          {/* 좌: 반원 게이지 — 점수는 아크 중앙 하단, 등급·경쟁지수는 그래프 바로 아래 중앙 */}
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+            <div style={{ position: 'relative', width: 230, height: 122 }}>
               <ChartCanvas
                 type="doughnut"
-                height={260}
-                style={{ height: 260, width: 260, position: 'absolute', top: 0, left: 0 }}
+                height={230}
+                style={{ height: 230, width: 230, position: 'absolute', top: 0, left: 0 }}
                 data={{
                   labels: ['경쟁', '여유'],
                   datasets: [{ data: [pct, Math.max(0, 100 - pct)], backgroundColor: [compColor, (window.CHART_COLORS || {}).GRID || '#eef2f7'], borderWidth: 0 }]
@@ -31,17 +31,16 @@ window.CompetitionIndexSection = function CompetitionIndexSection(props) {
                   plugins: { legend: { display: false }, tooltip: { enabled: false } }
                 }}
               />
-              {/* 그래프 하단 중앙 오버레이: 점수 + 등급 + 경쟁지수 */}
-              <div style={{ position: 'absolute', bottom: 4, left: 0, width: '100%', textAlign: 'center' }}>
-                <div style={{ fontSize: 46, fontWeight: 900, color: compColor, lineHeight: 1 }}>{pct}</div>
-                <div style={{ marginTop: 7 }}>
-                  <span style={{
-                    display: 'inline-block', background: compColor, color: '#fff',
-                    padding: '4px 16px', borderRadius: 999, fontSize: 13, fontWeight: 700
-                  }}>{compLabel}</span>
-                </div>
-                <div style={{ fontSize: 12, color: '#64748b', marginTop: 5 }}>경쟁지수: {fmt(compIndex)}</div>
-              </div>
+              {/* 점수: 아크 중앙 하단 */}
+              <div style={{ position: 'absolute', bottom: 2, left: 0, width: '100%', textAlign: 'center', fontSize: 38, fontWeight: 900, color: compColor, lineHeight: 1 }}>{pct}</div>
+            </div>
+            {/* 등급 + 경쟁지수: 그래프 바로 아래 중앙 */}
+            <div style={{ textAlign: 'center', marginTop: 10 }}>
+              <span style={{
+                display: 'inline-block', background: compColor, color: '#fff',
+                padding: '4px 16px', borderRadius: 999, fontSize: 13, fontWeight: 700
+              }}>{compLabel}</span>
+              <div style={{ fontSize: 12, color: '#64748b', marginTop: 6 }}>경쟁지수: {fmt(compIndex)}</div>
             </div>
           </div>
 
