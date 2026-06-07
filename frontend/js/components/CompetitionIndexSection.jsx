@@ -15,32 +15,30 @@ window.CompetitionIndexSection = function CompetitionIndexSection(props) {
 
         {/* 시안 구조: 좌측 반원 게이지 + 우측 밴드·KPI (세로 중앙 정렬) */}
         <div className="grid2" style={{ alignItems: 'center' }}>
-          {/* 좌: 반원 게이지 — 점수는 아크 중앙 하단, 등급·경쟁지수는 그래프 바로 아래 중앙 */}
+          {/* 좌: 반원 게이지 — 점수는 반원 안쪽(빈 공간) 중앙, 등급·경쟁지수는 그래프 바로 아래 */}
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-            <div style={{ position: 'relative', width: 230, height: 122 }}>
+            <div style={{ position: 'relative', width: 220, height: 116, overflow: 'hidden' }}>
               <ChartCanvas
                 type="doughnut"
-                height={230}
-                style={{ height: 230, width: 230, position: 'absolute', top: 0, left: 0 }}
+                height={220}
+                style={{ height: 220, width: 220, position: 'absolute', top: 0, left: 0 }}
                 data={{
                   labels: ['경쟁', '여유'],
                   datasets: [{ data: [pct, Math.max(0, 100 - pct)], backgroundColor: [compColor, (window.CHART_COLORS || {}).GRID || '#eef2f7'], borderWidth: 0 }]
                 }}
                 options={{
-                  rotation: -90, circumference: 180, cutout: '68%',
+                  rotation: -90, circumference: 180, cutout: '70%',
                   plugins: { legend: { display: false }, tooltip: { enabled: false } }
                 }}
               />
-              {/* 점수: 아크 중앙 하단 */}
-              <div style={{ position: 'absolute', bottom: 2, left: 0, width: '100%', textAlign: 'center', fontSize: 38, fontWeight: 900, color: compColor, lineHeight: 1 }}>{pct}</div>
             </div>
             {/* 등급 + 경쟁지수: 그래프 바로 아래 중앙 */}
-            <div style={{ textAlign: 'center', marginTop: 10 }}>
+            <div style={{ textAlign: 'center', marginTop: -2 }}>
               <span style={{
                 display: 'inline-block', background: compColor, color: '#fff',
-                padding: '4px 16px', borderRadius: 999, fontSize: 13, fontWeight: 700
+                padding: '5px 18px', borderRadius: 999, fontSize: 14, fontWeight: 800
               }}>{compLabel}</span>
-              <div style={{ fontSize: 12, color: '#64748b', marginTop: 6 }}>경쟁지수: {fmt(compIndex)}</div>
+              <div style={{ fontSize: 12, color: '#64748b', marginTop: 7 }}>경쟁지수: {fmt(compIndex)}</div>
             </div>
           </div>
 
