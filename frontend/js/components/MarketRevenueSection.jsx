@@ -25,6 +25,7 @@ window.MarketRevenueSection = function MarketRevenueSection(props) {
       <div className="section-title">
         <span className="icon" style={{ background: '#fef3c7' }}>💰</span>
         시장 규모 & 매출 추정
+        <span className="badge b-est" style={{ marginLeft: 8 }}>≈ 추정</span>
       </div>
       <div className="section-line"></div>
       <p className="section-subtitle">검색량 × 클릭률 × 전환율 × 평균 단가 기반 추정</p>

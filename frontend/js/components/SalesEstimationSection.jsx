@@ -28,6 +28,7 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
         <div className="section-title">
           <span className="icon" style={{ background: 'linear-gradient(135deg, #eef2ff, #dbeafe)' }}>💵</span>
           판매량 추정 &amp; 성장 시뮬레이션
+          <span className="badge b-est" style={{ marginLeft: 8 }}>≈ 추정</span>
         </div>
         <div className="section-line"></div>
         <p className="section-subtitle">순위별 예상 판매량과 매출 성장 시나리오</p>
