@@ -15,22 +15,28 @@ window.CompetitionIndexSection = function CompetitionIndexSection(props) {
 
         {/* 시안 구조: 좌측 반원 게이지 + 우측 밴드·KPI (세로 중앙 정렬) */}
         <div className="grid2" style={{ alignItems: 'center' }}>
-          {/* 좌: 반원 게이지 (작고 얇게 — 숫자·배지 없이 플레인, 레벨/경쟁지수는 아래 노트에) */}
+          {/* 좌: 원형 도넛 게이지 — 가운데에 경쟁지수 숫자 */}
           <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-            <div style={{ position: 'relative', width: 190, height: 100, overflow: 'hidden' }}>
+            <div style={{ position: 'relative', width: 172, height: 172 }}>
               <ChartCanvas
                 type="doughnut"
-                height={190}
-                style={{ height: 190, width: 190, position: 'absolute', top: 0, left: 0 }}
+                height={172}
+                style={{ height: 172, width: 172 }}
                 data={{
                   labels: ['경쟁', '여유'],
                   datasets: [{ data: [pct, Math.max(0, 100 - pct)], backgroundColor: [compColor, (window.CHART_COLORS || {}).GRID || '#eef2f7'], borderWidth: 0 }]
                 }}
                 options={{
-                  rotation: -90, circumference: 180, cutout: '78%',
+                  cutout: '70%',
                   plugins: { legend: { display: false }, tooltip: { enabled: false } }
                 }}
               />
+              {/* 중앙 오버레이: 경쟁지수 숫자 + 라벨 */}
+              <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center' }}>
+                <div style={{ fontSize: 24, fontWeight: 900, color: compColor, lineHeight: 1.1 }}>{fmt(compIndex)}</div>
+                <div style={{ fontSize: 11, color: '#64748b', marginTop: 3 }}>경쟁지수</div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: compColor, marginTop: 2 }}>{compLabel}</div>
+              </div>
             </div>
           </div>
 
