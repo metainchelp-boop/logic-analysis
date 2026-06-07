@@ -27,7 +27,7 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
 CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY", "")
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
+CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
 
 # ==================== 이미지 설정 ====================
 ALLOWED_IMAGE_TYPES = {"image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp"}

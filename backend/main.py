@@ -2043,7 +2043,7 @@ async def ai_feedback_all(req: AiFeedbackAllRequest, current_user: dict = Depend
 - 마지막에 'METAINC 종합 인사이트'로 전체 요약과 핵심 액션 3가지를 짧게 정리하세요."""
 
         message = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             max_tokens=4000,
             messages=[{
                 "role": "user",
@@ -2072,7 +2072,7 @@ async def ai_feedback_all(req: AiFeedbackAllRequest, current_user: dict = Depend
                 client_name=getattr(req, 'client_name', '') or '',
                 client_id=getattr(req, 'client_id', 0) or 0,
                 call_type=getattr(req, 'call_type', 'manual') or 'manual',
-                model="claude-sonnet-4-20250514",
+                model="claude-sonnet-4-6",
                 input_tokens=inp_tok,
                 output_tokens=out_tok,
                 cost_usd=cost,
@@ -2119,7 +2119,7 @@ async def ai_feedback_all(req: AiFeedbackAllRequest, current_user: dict = Depend
             from database import save_api_usage_log
             save_api_usage_log(
                 endpoint="feedback-all", keyword=req.keyword,
-                model="claude-sonnet-4-20250514",
+                model="claude-sonnet-4-6",
                 user_id=current_user.get("id", 0),
                 status="error", error_message=str(e)[:200]  # 내부 로그용
             )
