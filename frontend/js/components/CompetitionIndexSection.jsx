@@ -15,13 +15,13 @@ window.CompetitionIndexSection = function CompetitionIndexSection(props) {
 
         {/* 시안 구조: 좌측 반원 게이지 + 우측 밴드·KPI (세로 중앙 정렬) */}
         <div className="grid2" style={{ alignItems: 'center' }}>
-          {/* 좌: 반원 게이지 — 점수는 반원 안쪽(빈 공간) 중앙, 등급·경쟁지수는 그래프 바로 아래 */}
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-            <div style={{ position: 'relative', width: 220, height: 116, overflow: 'hidden' }}>
+          {/* 좌: 반원 게이지 (시안: 숫자·배지 없이 플레인 반원, 레벨/경쟁지수는 아래 노트에) */}
+          <div style={{ display: 'flex', justifyContent: 'center' }}>
+            <div style={{ position: 'relative', width: 260, height: 138, overflow: 'hidden' }}>
               <ChartCanvas
                 type="doughnut"
-                height={220}
-                style={{ height: 220, width: 220, position: 'absolute', top: 0, left: 0 }}
+                height={260}
+                style={{ height: 260, width: 260, position: 'absolute', top: 0, left: 0 }}
                 data={{
                   labels: ['경쟁', '여유'],
                   datasets: [{ data: [pct, Math.max(0, 100 - pct)], backgroundColor: [compColor, (window.CHART_COLORS || {}).GRID || '#eef2f7'], borderWidth: 0 }]
@@ -32,14 +32,6 @@ window.CompetitionIndexSection = function CompetitionIndexSection(props) {
                 }}
               />
             </div>
-            {/* 등급 + 경쟁지수: 그래프 바로 아래 중앙 */}
-            <div style={{ textAlign: 'center', marginTop: -2 }}>
-              <span style={{
-                display: 'inline-block', background: compColor, color: '#fff',
-                padding: '5px 18px', borderRadius: 999, fontSize: 14, fontWeight: 800
-              }}>{compLabel}</span>
-              <div style={{ fontSize: 12, color: '#64748b', marginTop: 7 }}>경쟁지수: {fmt(compIndex)}</div>
-            </div>
           </div>
 
           {/* 우: 3구간 밴드 + 핵심 지표 */}
@@ -49,20 +41,15 @@ window.CompetitionIndexSection = function CompetitionIndexSection(props) {
               <span>블루오션</span><span>보통</span><span>레드오션</span>
             </div>
             <div className="grid3" style={{ marginTop: 14 }}>
-              <div className="kpi"><div className="k">등록 상품수</div><div className="v" style={{ fontSize: 18 }}>{fmt(productCount)}<small>개</small></div></div>
-              <div className="kpi"><div className="k">월간 검색량</div><div className="v" style={{ fontSize: 18 }}>{fmt(searchVolume)}<small>회</small></div></div>
-              <div className="kpi"><div className="k">평균 클릭수</div><div className="v" style={{ fontSize: 18 }}>{typeof avgCtr === 'number' ? avgCtr.toFixed(1) : avgCtr}<small>회</small></div></div>
+              <div className="kpi"><div className="k">등록 상품수</div><div className="v" style={{ fontSize: 18 }}>{fmt(productCount)}</div></div>
+              <div className="kpi"><div className="k">월간 검색량</div><div className="v" style={{ fontSize: 18 }}>{fmt(searchVolume)}</div></div>
+              <div className="kpi"><div className="k">평균 클릭수</div><div className="v" style={{ fontSize: 18 }}>{fmt(avgCtr)}</div></div>
             </div>
           </div>
         </div>
 
-        {/* 전문 코멘트 — 시안 톤(note) */}
-        {interpretation && (
-          <div className="note">
-            <b style={{ color: '#0369a1' }}>📋 시장 분석 코멘트</b><br/>
-            {interpretation}
-          </div>
-        )}
+        {/* 코멘트 — 시안 톤(note): 경쟁지수(레벨) + 해석 */}
+        <div className="note">경쟁지수 {fmt(compIndex)}({compLabel}){interpretation ? '. ' + interpretation : '.'}</div>
       </div>
       </div>
     </div>
