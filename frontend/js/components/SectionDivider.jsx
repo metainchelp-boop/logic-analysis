@@ -6,7 +6,7 @@ window.SectionDivider = function SectionDivider(props) {
   var sub = props && props.sub ? props.sub : '';
 
   return (
-    <div className="report-divider" style={{ maxWidth: 1000, margin: '34px auto 16px', padding: '0 24px' }}>
+    <div className="report-divider">
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         <div style={{
           width: 40, height: 40, borderRadius: 12, flexShrink: 0,

@@ -1227,7 +1227,7 @@ window.App = function App() {
     /* ==================== 메인 분석 페이지 ==================== */
     return (
         React.createElement(React.Fragment, null,
-        React.createElement('div', null,
+        React.createElement('div', { className: 'analysis-page' },
             /* 네비게이션 바 */
             renderTopbar('analysis'),
             React.createElement(SearchBar, { onSearch: handleManualSearch, loading: searchLoading, initialValues: searchBarInitial }),
@@ -1246,19 +1246,45 @@ window.App = function App() {
                 autoSaveStatus === 'error' ? '⚠️ 자동 저장에 실패했습니다. 하단의 "업체 등록/저장" 버튼을 이용해주세요' : ''
             ),
 
-            /* 앵커 네비 v5 */
-            React.createElement('div', { className: 'anchor-nav-wrap' },
-                React.createElement('div', { className: 'container' },
-                    React.createElement('div', { className: 'anchor-nav' },
-                        sections.map(function(s) {
-                            return React.createElement('button', { key: s.id, className: 'anchor-btn', onClick: function() { scrollTo(s.id); } },
-                                React.createElement('span', { className: 'anchor-icon' }, s.icon),
-                                s.label
-                            );
-                        })
-                    )
+            /* ==================== 보고서 레이아웃: 좌측 목차 + 본문 ==================== */
+            React.createElement('div', { className: 'report-shell' },
+              /* 좌측 고정 목차 (와이드 화면 전용) */
+              React.createElement('nav', { className: 'report-toc' },
+                React.createElement('div', { className: 'report-toc-title' }, '목차'),
+                sections.map(function(s) {
+                  return React.createElement('a', { key: s.id, className: 'report-toc-link', onClick: function() { scrollTo(s.id); } },
+                    React.createElement('span', { className: 'report-toc-n' }, s.icon),
+                    s.label
+                  );
+                }),
+                React.createElement('div', { className: 'report-toc-legend' },
+                  React.createElement('div', null, React.createElement('b', { className: 'badge b-ok' }, '✅ 실측'), ' 네이버 실제값'),
+                  React.createElement('div', null, React.createElement('b', { className: 'badge b-est' }, '≈ 추정'), ' 계산·근거기반'),
+                  React.createElement('div', null, React.createElement('b', { className: 'badge b-ai' }, 'AI'), ' AI 생성')
                 )
-            ),
+              ),
+              /* 본문 시작 (이후 모든 섹션이 report-main의 자식) */
+              React.createElement('div', { className: 'report-main' },
+                /* 보고서 표지 헤더 */
+                analysisData && React.createElement('div', { className: 'report-cover' },
+                    React.createElement('div', { className: 'rc-title' }, '📊 로직 분석 보고서'),
+                    React.createElement('div', { className: 'rc-sub' },
+                        (companyName ? companyName + '  ·  ' : '') + '키워드 "' + (searchedKeyword || '') + '"'
+                    )
+                ),
+                /* 모바일용 가로 목차 */
+                React.createElement('div', { className: 'anchor-nav-wrap' },
+                    React.createElement('div', { className: 'container' },
+                        React.createElement('div', { className: 'anchor-nav' },
+                            sections.map(function(s) {
+                                return React.createElement('button', { key: s.id, className: 'anchor-btn', onClick: function() { scrollTo(s.id); } },
+                                    React.createElement('span', { className: 'anchor-icon' }, s.icon),
+                                    s.label
+                                );
+                            })
+                        )
+                    )
+                ),
 
             /* 1페이지 진입 전략 비교 분석 (통합) — 로딩 */
             advertiserLoading && !advertiserReport && React.createElement('div', { id: 'sec-strategy', className: 'section' },
@@ -1523,6 +1549,8 @@ window.App = function App() {
                     '© 2026 메타아이앤씨 — 로직 분석 ' + APP_VERSION + ' | 네이버 쇼핑 키워드 분석 & 순위 추적'
                 )
             )
+              ) /* report-main 닫기 */
+            ) /* report-shell 닫기 */
         ),
         React.createElement(window.ChatWidget, { currentUser: currentUser })
         )

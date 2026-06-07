@@ -64,5 +64,45 @@ body { background: var(--rt-bg); }
 /* 섹션 스크롤 여백(고정 네비 높이만큼) */
 [id^="sec-"] { scroll-margin-top: 130px; }
 
-/* 보고서 본문 폭을 구분선과 맞춤 */
-.section > .container { max-width: 1000px; }
+/* ===== 보고서 표지(커버) 헤더 ===== */
+.report-cover {
+  background: linear-gradient(120deg, #0f172a, #312e81 60%, #4f46e5);
+  color: #fff; border-radius: 16px; padding: 22px 26px; margin: 16px 0;
+  box-shadow: 0 8px 26px rgba(49,46,129,.25);
+}
+.report-cover .rc-title { font-size: 20px; font-weight: 900; letter-spacing: -.5px; }
+.report-cover .rc-sub { font-size: 13px; opacity: .9; margin-top: 4px; }
+
+/* 섹션 구분선 기본 폭(모바일/일반) */
+.report-divider { max-width: 1200px; margin: 28px auto 14px; padding: 0 24px; }
+
+/* ===== 보고서 레이아웃: 좌측 목차 + 본문 ===== */
+.report-shell { display: block; }
+.report-toc { display: none; }
+.report-main { min-width: 0; }
+
+@media (min-width: 1200px) {
+  .report-shell {
+    display: flex; align-items: flex-start; gap: 24px;
+    max-width: 1260px; margin: 0 auto; padding: 16px 24px 0;
+  }
+  .report-toc {
+    display: block; position: sticky; top: 96px; width: 214px; flex: none;
+    background: #fff; border: 1px solid var(--rt-line); border-radius: 16px;
+    padding: 12px; box-shadow: 0 6px 24px rgba(15,23,42,.06);
+    max-height: calc(100vh - 120px); overflow-y: auto;
+  }
+  .report-toc-title { font-size: 11px; font-weight: 800; color: #94a3b8; letter-spacing: .08em; padding: 4px 10px 8px; }
+  .report-toc-link {
+    display: flex; align-items: center; gap: 8px; cursor: pointer;
+    padding: 9px 11px; border-radius: 10px; color: #475569;
+    font-size: 13px; font-weight: 700; margin-bottom: 2px; text-decoration: none;
+  }
+  .report-toc-link:hover { background: #eef2ff; color: var(--rt-ind); }
+  .report-toc-n { width: 22px; height: 22px; border-radius: 7px; background: #eef2ff; color: var(--rt-ind); font-size: 12px; display: inline-flex; align-items: center; justify-content: center; flex: none; }
+  .report-toc-legend { border-top: 1px solid var(--rt-line); margin: 10px 4px 2px; padding: 10px 8px 2px; font-size: 11px; color: #64748b; line-height: 2; }
+  .report-main { flex: 1; min-width: 0; }
+  .report-main .anchor-nav-wrap { display: none; }
+  .report-main .section > .container { max-width: 100%; padding: 0; }
+  .report-main .report-divider { max-width: 100%; margin: 28px 0 14px; padding: 0; }
+}
