@@ -128,13 +128,13 @@ window.ProductNameSection = function ProductNameSection({ keyword, shopProducts 
                             }}>
                                 <div style={{ fontSize: 15, fontWeight: 700, color: '#0f172a', marginBottom: 16 }}>📊 자주 사용된 키워드 TOP 15</div>
                                 <div className="table-wrap" style={{ maxHeight: 282, overflowY: 'auto' }}>
-                                    <table>
+                                    <table className="rt-table">
                                         <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}>
-                                            <tr style={{ background: 'linear-gradient(135deg, #4f46e5, #7c3aed)' }}>
-                                                <th style={{ color: '#fff', fontWeight: 600, fontSize: 12 }}>#</th>
-                                                <th style={{ color: '#fff', fontWeight: 600, fontSize: 12 }}>키워드</th>
-                                                <th style={{ color: '#fff', fontWeight: 600, fontSize: 12 }}>등장 횟수</th>
-                                                <th style={{ color: '#fff', fontWeight: 600, fontSize: 12 }}>사용 비율</th>
+                                            <tr>
+                                                <th style={{ fontWeight: 600, fontSize: 12 }}>#</th>
+                                                <th style={{ fontWeight: 600, fontSize: 12 }}>키워드</th>
+                                                <th style={{ fontWeight: 600, fontSize: 12 }}>등장 횟수</th>
+                                                <th style={{ fontWeight: 600, fontSize: 12 }}>사용 비율</th>
                                             </tr>
                                         </thead>
                                         <tbody>

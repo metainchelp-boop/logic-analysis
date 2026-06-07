@@ -134,3 +134,97 @@ body { background: var(--rt-bg); }
   .report-main .section > .container { max-width: 100%; padding: 0; }
   .report-main .report-divider { max-width: 100%; margin: 28px 0 14px; padding: 0; }
 }
+
+/* ============================================================
+   미리보기 시안 유틸리티 클래스 (v6.2) — 시안 <style> 1:1 이식.
+   .report-main 범위로 한정해 관리자 UI(.track/.note 등)와 충돌 방지.
+   각 컴포넌트가 인라인 스타일 대신 이 클래스를 쓰면 시안과 픽셀 일치.
+   ============================================================ */
+
+/* 그리드 */
+.report-main .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.report-main .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.report-main .grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+@media (max-width: 860px) {
+  .report-main .grid2, .report-main .grid3, .report-main .grid4 { grid-template-columns: 1fr; }
+}
+
+/* KPI (시안 .kpi) */
+.report-main .kpi { background: linear-gradient(135deg, #f8fafc, #f1f5f9); border: 1px solid #e8edf3; border-radius: 14px; padding: 15px; }
+.report-main .kpi .k { font-size: 12px; color: var(--rt-sub); font-weight: 700; margin-bottom: 7px; }
+.report-main .kpi .v { font-size: 27px; font-weight: 900; letter-spacing: -1px; color: var(--rt-ink); }
+.report-main .kpi .v small { font-size: 13px; font-weight: 700; color: var(--rt-sub); margin-left: 2px; }
+
+/* 서브 카드 */
+.report-main .sub-card { background: #f8fafc; border: 1px solid #eef2f7; border-radius: 13px; padding: 14px 16px; margin-top: 12px; }
+.report-main .sub-card .st { font-size: 13.5px; font-weight: 800; margin-bottom: 8px; display: flex; align-items: center; gap: 6px; color: var(--rt-ink); }
+
+/* 점수 막대 */
+.report-main .scorebar { margin: 9px 0; }
+.report-main .scorebar .lbl { display: flex; justify-content: space-between; font-size: 12.5px; margin-bottom: 5px; }
+.report-main .scorebar .lbl b { color: var(--rt-ink); }
+.report-main .scorebar .lbl .w { color: #94a3b8; font-weight: 500; font-size: 11px; }
+.report-main .track { height: 9px; background: #eef2f7; border-radius: 6px; overflow: hidden; }
+.report-main .track > i { display: block; height: 100%; border-radius: 6px; background: linear-gradient(90deg, var(--rt-ind), var(--rt-pur)); }
+
+/* 체크리스트 */
+.report-main .check { font-size: 12.5px; padding: 5px 0; display: flex; gap: 9px; align-items: flex-start; }
+.report-main .check .y { color: var(--rt-ok); font-weight: 900; }
+.report-main .check .n { color: #ef4444; font-weight: 900; }
+
+/* 키워드 칩 */
+.report-main .kwchip { display: inline-flex; align-items: center; gap: 6px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 9px; padding: 7px 9px; margin: 4px 6px 0 0; font-size: 12.5px; font-weight: 700; }
+.report-main .kwchip .rk { background: #16a34a; color: #fff; border-radius: 6px; padding: 2px 7px; font-size: 11px; }
+.report-main .kwchip.warn { background: #fffbeb; border-color: #fde68a; }
+.report-main .kwchip.warn .rk { background: #d97706; }
+.report-main .kwchip.off { background: #f8fafc; border: 1px solid #e8edf3; color: #94a3b8; font-weight: 500; }
+
+/* 미니 막대 / 태그 */
+.report-main .minibar { height: 7px; border-radius: 5px; background: #eef2f7; overflow: hidden; display: inline-block; width: 80px; vertical-align: middle; margin-right: 6px; }
+.report-main .minibar > i { display: block; height: 100%; background: linear-gradient(90deg, var(--rt-ind), var(--rt-pur)); }
+.report-main .tag2 { display: inline-block; background: #eef2ff; color: #4338ca; border-radius: 999px; padding: 4px 11px; font-size: 12px; margin: 3px 4px 0 0; font-weight: 700; }
+
+/* 시즌 카드 / 비율 카드 */
+.report-main .seasoncard { border: 1px solid #e8edf3; border-radius: 14px; padding: 14px; text-align: center; }
+.report-main .seasoncard.peak { border-color: #fdba74; background: linear-gradient(135deg, #fff7ed, #ffedd5); }
+.report-main .ratecard { text-align: center; border: 1px solid #e8edf3; border-radius: 13px; padding: 12px; }
+
+/* 알약 탭 */
+.report-main .pill-tabs { display: flex; gap: 6px; margin: 6px 0 14px; flex-wrap: wrap; }
+.report-main .pill-tabs button { border: 1px solid var(--rt-line); background: #fff; border-radius: 999px; padding: 7px 15px; font-size: 12px; font-weight: 700; cursor: pointer; font-family: inherit; }
+.report-main .pill-tabs button.on { background: var(--rt-ind); color: #fff; border-color: var(--rt-ind); }
+
+/* 점수 칩 (실측/추정/중립) */
+.report-main .ps { font-size: 11px; font-weight: 800; padding: 3px 10px; border-radius: 999px; margin-left: 4px; }
+.report-main .ps-g { background: var(--rt-okbg); color: var(--rt-ok); }
+.report-main .ps-r { background: #fee2e2; color: #b91c1c; }
+.report-main .ps-n { background: #eef2f7; color: #64748b; }
+
+/* 경쟁 밴드 / 격차 막대 / 전략 카드 / 심각도 */
+.report-main .band { position: relative; height: 12px; border-radius: 7px; background: linear-gradient(90deg, #22c55e, #eab308, #ef4444); margin: 16px 0 6px; }
+.report-main .band .mk { position: absolute; top: -6px; width: 4px; height: 24px; background: #0f172a; border-radius: 2px; }
+.report-main .gapbar { margin: 10px 0; }
+.report-main .gapbar .row { display: flex; align-items: center; gap: 10px; font-size: 12.5px; }
+.report-main .gapbar .nm { width: 90px; color: var(--rt-sub); font-weight: 600; }
+.report-main .gapbar .b { flex: 1; height: 22px; background: #eef2f7; border-radius: 7px; position: relative; overflow: hidden; }
+.report-main .gapbar .b .me { position: absolute; left: 0; top: 0; height: 100%; background: linear-gradient(90deg, #4f46e5, #9333ea); border-radius: 7px; }
+.report-main .gapbar .b .cp { position: absolute; top: 0; height: 100%; border-left: 2px dashed #ef4444; }
+.report-main .strat { border: 1px solid #e8edf3; border-radius: 14px; padding: 14px; margin-top: 10px; }
+.report-main .strat.high { border-left: 4px solid #ef4444; }
+.report-main .strat.med { border-left: 4px solid var(--rt-est); }
+.report-main .strat.low { border-left: 4px solid var(--rt-ok); }
+.report-main .sev { font-size: 10px; font-weight: 800; padding: 2px 8px; border-radius: 999px; }
+.report-main .sev.high { background: #fee2e2; color: #b91c1c; }
+.report-main .sev.med { background: #fef3c7; color: #b45309; }
+.report-main .sev.low { background: #dcfce7; color: #15803d; }
+
+/* 차트 박스 */
+.report-main .chartbox { position: relative; height: 240px; margin-top: 8px; }
+.report-main .chartbox.sm { height: 170px; }
+
+/* ===== 평면 표(시안 톤): 그라데이션 헤더 → 회색 평면 헤더 ===== */
+.report-main .rt-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 6px; }
+.report-main .rt-table th, .report-main .rt-table td { text-align: left; padding: 10px 8px; border-bottom: 1px solid #eef2f7; }
+.report-main .rt-table th { color: var(--rt-sub); font-size: 11px; font-weight: 800; border-bottom: 2px solid #e2e8f0; text-transform: none; background: none; }
+.report-main .rt-table thead tr { background: none !important; }
+.report-main .rt-table tbody tr:hover { background: #fafbff; }

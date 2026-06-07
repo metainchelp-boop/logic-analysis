@@ -85,16 +85,16 @@ window.MarketRevenueSection = function MarketRevenueSection(props) {
       </div>
       <div className="card" style={{ padding: 0, overflow: 'hidden', borderRadius: 16 }}>
         <div style={{ maxHeight: 540, overflowY: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <table className="rt-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
-              <tr style={{ background: 'linear-gradient(135deg, #4f46e5, #7c3aed)' }}>
-                <th style={{ padding: '14px 16px', color: '#fff', fontSize: 13, fontWeight: 600, textAlign: 'center', width: 50 }}>순위</th>
-                <th style={{ padding: '14px 16px', color: '#fff', fontSize: 13, fontWeight: 600, textAlign: 'left' }}>상품명</th>
-                <th style={{ padding: '14px 16px', color: '#fff', fontSize: 13, fontWeight: 600, textAlign: 'left', width: 90 }}>판매처</th>
-                <th style={{ padding: '14px 16px', color: '#fff', fontSize: 13, fontWeight: 600, textAlign: 'right', width: 90 }}>가격</th>
-                <th style={{ padding: '14px 16px', color: '#fff', fontSize: 13, fontWeight: 600, textAlign: 'center', width: 60 }}>CTR</th>
-                <th style={{ padding: '14px 16px', color: '#fff', fontSize: 13, fontWeight: 600, textAlign: 'right', width: 90 }}>예상 판매</th>
-                <th style={{ padding: '14px 16px', color: '#fff', fontSize: 13, fontWeight: 600, textAlign: 'right', width: 120 }}>예상 월 매출</th>
+              <tr>
+                <th style={{ padding: '14px 16px', fontSize: 13, fontWeight: 600, textAlign: 'center', width: 50 }}>순위</th>
+                <th style={{ padding: '14px 16px', fontSize: 13, fontWeight: 600, textAlign: 'left' }}>상품명</th>
+                <th style={{ padding: '14px 16px', fontSize: 13, fontWeight: 600, textAlign: 'left', width: 90 }}>판매처</th>
+                <th style={{ padding: '14px 16px', fontSize: 13, fontWeight: 600, textAlign: 'right', width: 90 }}>가격</th>
+                <th style={{ padding: '14px 16px', fontSize: 13, fontWeight: 600, textAlign: 'center', width: 60 }}>CTR</th>
+                <th style={{ padding: '14px 16px', fontSize: 13, fontWeight: 600, textAlign: 'right', width: 90 }}>예상 판매</th>
+                <th style={{ padding: '14px 16px', fontSize: 13, fontWeight: 600, textAlign: 'right', width: 120 }}>예상 월 매출</th>
               </tr>
             </thead>
             <tbody>

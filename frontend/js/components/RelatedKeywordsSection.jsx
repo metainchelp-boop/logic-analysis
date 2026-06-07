@@ -53,17 +53,17 @@ window.RelatedKeywordsSection = function RelatedKeywordsSection({ data }) {
                 ) : (
                     <div className="card" style={{ padding: 0, overflow: 'hidden', borderRadius: 16 }}>
                       <div style={{ maxHeight: 540, overflowY: 'auto' }}>
-                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                        <table className="rt-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
                             <thead>
-                                <tr style={{ background: tab === 'golden' ? 'linear-gradient(135deg, #f59e0b, #d97706)' : 'linear-gradient(135deg, #4f46e5, #7c3aed)' }}>
-                                    <th style={{ padding: '14px 16px', color: '#fff', fontSize: 13, fontWeight: 600, textAlign: 'center', width: 40 }}>#</th>
-                                    <th style={{ padding: '14px 20px', color: '#fff', fontSize: 13, fontWeight: 600, textAlign: 'left' }}>키워드</th>
-                                    <th style={{ padding: '14px 20px', color: '#fff', fontSize: 13, fontWeight: 600, textAlign: 'left' }}>월간 검색량</th>
-                                    <th style={{ padding: '14px 16px', color: '#fff', fontSize: 13, fontWeight: 600, textAlign: 'center' }}>PC</th>
-                                    <th style={{ padding: '14px 16px', color: '#fff', fontSize: 13, fontWeight: 600, textAlign: 'center' }}>모바일</th>
-                                    <th style={{ padding: '14px 16px', color: '#fff', fontSize: 13, fontWeight: 600, textAlign: 'center' }}>경쟁강도</th>
-                                    <th style={{ padding: '14px 20px', color: '#fff', fontSize: 13, fontWeight: 600, textAlign: 'left', width: '20%' }}>검색량 비율</th>
-                                    {tab === 'golden' && <th style={{ padding: '14px 16px', color: '#fff', fontSize: 13, fontWeight: 600, textAlign: 'center' }}>추천</th>}
+                                <tr>
+                                    <th style={{ textAlign: 'center', width: 40 }}>#</th>
+                                    <th style={{ textAlign: 'left' }}>키워드</th>
+                                    <th style={{ textAlign: 'left' }}>월간 검색량</th>
+                                    <th style={{ textAlign: 'center' }}>PC</th>
+                                    <th style={{ textAlign: 'center' }}>모바일</th>
+                                    <th style={{ textAlign: 'center' }}>경쟁강도</th>
+                                    <th style={{ textAlign: 'left', width: '20%' }}>검색량 비율</th>
+                                    {tab === 'golden' && <th style={{ textAlign: 'center' }}>추천</th>}
                                 </tr>
                             </thead>
                             <tbody>
