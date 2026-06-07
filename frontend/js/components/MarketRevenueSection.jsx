@@ -22,13 +22,9 @@ window.MarketRevenueSection = function MarketRevenueSection(props) {
   return (
     <div className="section fade-in">
       <div className="container">
-      <div className="section-title">
-        <span className="icon" style={{ background: '#fef3c7' }}>💰</span>
-        시장 규모 & 매출 추정
-        <span className="badge b-est" style={{ marginLeft: 8 }}>≈ 추정</span>
-      </div>
-      <div className="section-line"></div>
-      <p className="section-subtitle">검색량 × 클릭률 × 전환율 × 평균 단가 기반 추정</p>
+      <div className="card" style={{ padding: '20px 22px' }}>
+      <h3 className="rt-h3"><span className="rt-hic">💰</span>시장 규모 & 매출 추정<span className="badge b-est">≈ 추정</span></h3>
+      <div className="rt-desc">검색량 × 클릭률 × 전환율 × 평균 단가 기반 추정</div>
 
       {/* v5 3칼럼 메트릭 카드 */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, marginBottom: 24 }}>
@@ -141,6 +137,7 @@ window.MarketRevenueSection = function MarketRevenueSection(props) {
         fontSize: 12, color: '#0369a1', lineHeight: 1.7
       }}>
         ※ 산출 근거: 월간 검색량 × 순위별 CTR(클릭률) × 전환율({conversionRate || '3.5%'})로 계산된 추정치입니다. 순위별 CTR은 업계 평균 벤치마크(1위 8%, 5위 3%, 10위 1.5%, 20위 0.8%)를 적용했습니다. 실제 매출은 리뷰 수, 가격, 광고, 시즌 등에 따라 달라질 수 있으며, 참고 지표로 활용해 주세요.
+      </div>
       </div>
       </div>
     </div>

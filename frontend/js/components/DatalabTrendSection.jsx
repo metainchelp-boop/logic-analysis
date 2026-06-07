@@ -26,15 +26,9 @@ window.DatalabTrendSection = function DatalabTrendSection(props) {
   return (
     <div className="section fade-in">
       <div className="container">
-        <div className="section-title">
-          <span className="icon" style={{ background: 'linear-gradient(135deg, #dbeafe, #bfdbfe)' }}>📈</span>
-          키워드 검색량 트렌드
-          <span style={{ marginLeft: 8, padding: '3px 10px', borderRadius: 999, fontSize: 10, fontWeight: 700, background: '#10b981', color: '#fff' }}>DATALAB</span>
-        </div>
-        <div className="section-line"></div>
-        <p className="section-subtitle">최근 12개월 검색량 추이 — 데이터랩 쇼핑인사이트 기준</p>
-
         <div className="card" style={{ padding: 24 }}>
+          <h3 className="rt-h3"><span className="rt-hic">📈</span>키워드 검색량 트렌드 (최근 12개월)<span className="badge b-ok">✅ 데이터랩</span></h3>
+          <div className="rt-desc">최근 12개월 검색량 추이 — 데이터랩 쇼핑인사이트 기준</div>
           {/* 상단 요약 카드 */}
           <div className="card-grid card-grid-4" style={{ marginBottom: 20 }}>
             <div style={{ background: '#f0f4ff', borderRadius: 10, padding: 12, textAlign: 'center' }}>

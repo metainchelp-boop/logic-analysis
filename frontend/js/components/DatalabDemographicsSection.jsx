@@ -29,20 +29,10 @@ window.DatalabDemographicsSection = function DatalabDemographicsSection(props) {
   return (
     <div className="section fade-in">
       <div className="container">
-        <div className="section-title">
-          <span className="icon" style={{ background: 'linear-gradient(135deg, #fce7f3, #fbcfe8)' }}>👥</span>
-          검색 인구통계
-          <span style={{ marginLeft: 8, padding: '3px 10px', borderRadius: 999, fontSize: 10, fontWeight: 700, background: '#10b981', color: '#fff' }}>DATALAB</span>
-        </div>
-        <div className="section-line"></div>
-        <p className="section-subtitle">데이터랩 쇼핑인사이트 기반 성별·연령대 검색 비율</p>
-
         <div className="card-grid card-grid-2">
           {/* 성별 비율 */}
           <div className="card" style={{ padding: 24 }}>
-            <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span>⚤</span> 성별 검색 비율
-            </div>
+            <h3 className="rt-h3"><span className="rt-hic">👥</span>검색 인구통계 — 성별<span className="badge b-ok">✅ 데이터랩</span></h3>
 
             {gender ? (
               <div>
@@ -81,9 +71,7 @@ window.DatalabDemographicsSection = function DatalabDemographicsSection(props) {
 
           {/* 연령대별 비율 */}
           <div className="card" style={{ padding: 24 }}>
-            <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span>📊</span> 연령대별 검색 비율
-            </div>
+            <h3 className="rt-h3"><span className="rt-hic">👥</span>검색 인구통계 — 연령<span className="badge b-ok">✅ 데이터랩</span></h3>
 
             {ages.length > 0 ? (
               <div>

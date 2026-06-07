@@ -118,13 +118,14 @@ window.EntryStrategySection = function EntryStrategySection(props) {
     return React.createElement('div', { id: 'sec-strategy', className: 'section fade-in' },
         React.createElement('div', { className: 'container' },
 
+            React.createElement('div', { className: 'card', style: { padding: '20px 22px' } },
+
             /* === 섹션 헤더 === */
-            React.createElement('div', { className: 'section-title' },
-                React.createElement('span', { className: 'icon', style: { background: 'linear-gradient(135deg, #eef2ff, #dbeafe)' } }, '🚀'),
-                ' 1페이지 진입 전략 비교 분석'
+            React.createElement('h3', { className: 'rt-h3' },
+                React.createElement('span', { className: 'rt-hic' }, '🧭'),
+                '1페이지 진입 전략 비교 분석'
             ),
-            React.createElement('div', { className: 'section-line' }),
-            React.createElement('p', { className: 'section-subtitle' }, '경쟁사 데이터 기반 1페이지 진입 전략을 제안합니다'),
+            React.createElement('div', { className: 'rt-desc' }, '경쟁사 데이터 기반 1페이지 진입 전략을 제안합니다'),
 
             /* === 상품 정보 헤더 (광고주 데이터가 있을 때만) === */
             advertiserData && React.createElement('div', { style: {
@@ -409,6 +410,7 @@ window.EntryStrategySection = function EntryStrategySection(props) {
 
             /* 반응형 스타일 */
             React.createElement('style', null, '\n@media (max-width: 768px) {\n  #sec-strategy .card-grid-4 { grid-template-columns: 1fr 1fr !important; }\n}\n')
+            )
         )
     );
 };

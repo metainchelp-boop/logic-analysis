@@ -44,13 +44,9 @@ window.DatalabCategoryKeywordsSection = function DatalabCategoryKeywordsSection(
   return (
     <div className="section fade-in">
       <div className="container">
-        <div className="section-title">
-          <span className="icon" style={{ background: 'linear-gradient(135deg, #fef3c7, #fde68a)' }}>🏷️</span>
-          카테고리 인기 키워드 TOP
-          <span style={{ marginLeft: 8, padding: '3px 10px', borderRadius: 999, fontSize: 10, fontWeight: 700, background: '#10b981', color: '#fff' }}>DATALAB</span>
-        </div>
-        <div className="section-line"></div>
-        <p className="section-subtitle">분석 상품의 카테고리에서 최근 가장 많이 검색되는 키워드</p>
+        <div className="card" style={{ padding: '20px 22px' }}>
+        <h3 className="rt-h3"><span className="rt-hic">🔥</span>카테고리 인기 · 급상승 키워드<span className="badge b-ok">✅ 데이터랩</span></h3>
+        <div className="rt-desc">분석 상품의 카테고리에서 최근 가장 많이 검색되는 키워드</div>
 
         <div className="card-grid card-grid-2">
           {/* 인기 키워드 순위 */}
@@ -84,6 +80,7 @@ window.DatalabCategoryKeywordsSection = function DatalabCategoryKeywordsSection(
 
         <div style={{ marginTop: 16, padding: '12px 16px', background: '#fffbeb', borderRadius: 10, border: '1px solid #fde68a', fontSize: 12, color: '#92400e', lineHeight: 1.7 }}>
           💡 <strong>활용 팁:</strong> 인기 키워드를 상품명이나 태그에 포함하면 노출 확률이 높아집니다. 급상승 키워드는 시즌 트렌드를 반영하므로 빠른 대응이 유리합니다.
+        </div>
         </div>
       </div>
     </div>

@@ -47,13 +47,9 @@ window.CategoryAnalysisSection = function CategoryAnalysisSection(props) {
   return (
     <div className="section fade-in">
       <div className="container">
-        <div className="section-title">
-          <span className="icon" style={{ background: 'linear-gradient(135deg, #eef2ff, #dbeafe)' }}>📂</span>
-          카테고리 등록 분석
-          <span className="badge b-ok" style={{ marginLeft: 8 }}>✅ 실측</span>
-        </div>
-        <div className="section-line"></div>
-        <p className="section-subtitle">상위 상품들의 카테고리 분포를 파악합니다</p>
+        <div className="card" style={{ padding: '20px 22px' }}>
+        <h3 className="rt-h3"><span className="rt-hic">🗂️</span>카테고리 등록 분석<span className="badge b-ok">✅ 실측</span></h3>
+        <div className="rt-desc">상위 상품들의 카테고리 분포를 파악합니다</div>
 
         {verdict && (
           <div style={{
@@ -123,6 +119,7 @@ window.CategoryAnalysisSection = function CategoryAnalysisSection(props) {
               );
             })}
           </div>
+        </div>
         </div>
       </div>
     </div>

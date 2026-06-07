@@ -11,18 +11,14 @@ window.GoldenKeywordCard = function GoldenKeywordCard(props) {
       <div className="container">
         <div className="golden-card" style={{ marginBottom: '16px' }}>
           {/* Header */}
-          <div style={{ marginBottom: '20px', position: 'relative', zIndex: 1 }}>
-            <span className="golden-badge">👑 GOLDEN KEYWORD</span>
-            <p style={{ fontSize: '12px', color: '#92400e', marginTop: '10px', marginBottom: '16px' }}>
-              낮은 CPC + 높은 전환율 = 최고 ROAS 키워드
-            </p>
-            <div style={{ fontSize: '28px', fontWeight: '800', color: '#78350f', marginBottom: '8px', wordBreak: 'break-word' }}>
-              {name}
-            </div>
-            <span className="badge badge-gold" style={{ fontSize: '13px', padding: '5px 14px' }}>
-              점수: {score}점
-            </span>
+          <h3 className="rt-h3"><span className="rt-hic">👑</span>골든 키워드<span className="badge b-ok">✅ 실측</span></h3>
+          <div className="rt-desc">검색량 대비 경쟁이 낮은 기회 키워드</div>
+          <div style={{ fontSize: '28px', fontWeight: '800', color: '#78350f', marginBottom: '8px', wordBreak: 'break-word', position: 'relative', zIndex: 1 }}>
+            {name}
           </div>
+          <span className="badge badge-gold" style={{ fontSize: '13px', padding: '5px 14px', position: 'relative', zIndex: 1 }}>
+            점수: {score}점
+          </span>
 
           {/* Stat Cards */}
           <div className="golden-stats-grid" style={{

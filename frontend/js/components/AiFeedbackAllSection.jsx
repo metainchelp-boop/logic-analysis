@@ -117,34 +117,30 @@ window.AiFeedbackAllSection = function AiFeedbackAllSection(props) {
     return React.createElement('section', { id: 'sec-ai-feedback', className: 'section' },
         React.createElement('div', { className: 'container' },
             React.createElement('div', {
-                style: {
-                    background: 'linear-gradient(135deg, #0c4a6e 0%, #075985 50%, #0369a1 100%)',
-                    borderRadius: 16,
-                    padding: '24px 28px',
-                    color: '#fff',
-                    boxShadow: '0 8px 32px rgba(3, 105, 161, 0.3)'
-                }
+                className: 'card',
+                style: { padding: '20px 22px' }
             },
                 /* 헤더 */
                 React.createElement('div', {
-                    style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: feedbacks ? 20 : 0 }
+                    style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }
                 },
-                    React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12 } },
-                        React.createElement('span', { style: { fontSize: 28 } }, '🤖'),
-                        React.createElement('div', null,
-                            React.createElement('div', { style: { fontSize: 18, fontWeight: 700 } }, 'METAINC AI 종합 분석 리포트'),
-                            React.createElement('div', { style: { fontSize: 12, opacity: 0.7, marginTop: 2 } },
-                                keyword ? '"' + keyword + '" 키워드 분석 결과' : ''
-                            )
+                    React.createElement('div', null,
+                        React.createElement('h3', { className: 'rt-h3' },
+                            React.createElement('span', { className: 'rt-hic' }, '🤖'),
+                            'METAINC AI 종합 분석 리포트',
+                            React.createElement('span', { className: 'badge b-ai' }, 'AI')
+                        ),
+                        React.createElement('div', { className: 'rt-desc' },
+                            keyword ? '"' + keyword + '" 키워드를 AI가 전체 데이터를 종합해 작성한 분석' : 'AI가 전체 데이터를 종합해 작성한 분석'
                         )
                     ),
-                    React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center' } },
+                    React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 } },
                         feedbacks && React.createElement('button', {
                             onClick: function() { setExpanded(!expanded); },
                             style: {
-                                background: 'rgba(255,255,255,0.15)',
-                                border: '1px solid rgba(255,255,255,0.3)',
-                                color: '#fff',
+                                background: '#f1f5f9',
+                                border: '1px solid #e2e8f0',
+                                color: '#475569',
                                 padding: '6px 14px',
                                 borderRadius: 8,
                                 fontSize: 12,
@@ -166,18 +162,18 @@ window.AiFeedbackAllSection = function AiFeedbackAllSection(props) {
                             }
                         }, feedbacks ? '다시 분석' : '✨ AI 종합 분석'),
                         loading && React.createElement('span', {
-                            style: { fontSize: 13, color: '#bae6fd', fontWeight: 500 }
+                            style: { fontSize: 13, color: '#0ea5e9', fontWeight: 500 }
                         }, '⏳ AI 분석 중... (약 20~30초)')
                     )
                 ),
 
                 /* 에러 */
                 error && React.createElement('div', {
-                    style: { marginTop: 12, padding: '10px 14px', background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, fontSize: 13, color: '#fecaca' }
+                    style: { marginTop: 12, padding: '10px 14px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, fontSize: 13, color: '#b91c1c' }
                 }, error),
 
                 /* 피드백 내용 */
-                feedbacks && expanded && React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 16 } },
+                feedbacks && expanded && React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 16, marginTop: 18 } },
                     sectionConfig.map(function(sec) {
                         var content = feedbacks[sec.key];
                         if (!content) return null;
@@ -185,10 +181,10 @@ window.AiFeedbackAllSection = function AiFeedbackAllSection(props) {
                         return React.createElement('div', {
                             key: sec.key,
                             style: {
-                                background: isSummary ? 'rgba(251, 191, 36, 0.12)' : 'rgba(255,255,255,0.08)',
+                                background: isSummary ? '#fffbeb' : '#f8fafc',
                                 borderRadius: 12,
                                 padding: '16px 20px',
-                                border: isSummary ? '1px solid rgba(251, 191, 36, 0.3)' : '1px solid rgba(255,255,255,0.1)'
+                                border: isSummary ? '1px solid #fde68a' : '1px solid #e2e8f0'
                             }
                         },
                             React.createElement('div', {
@@ -196,11 +192,11 @@ window.AiFeedbackAllSection = function AiFeedbackAllSection(props) {
                             },
                                 React.createElement('span', { style: { fontSize: 16 } }, sec.icon),
                                 React.createElement('span', {
-                                    style: { fontSize: 14, fontWeight: 700, color: isSummary ? '#fbbf24' : '#bae6fd' }
+                                    style: { fontSize: 14, fontWeight: 700, color: isSummary ? '#b45309' : '#0369a1' }
                                 }, sec.label)
                             ),
                             React.createElement('div', {
-                                style: { fontSize: 13, lineHeight: 1.85, color: '#e0f2fe', whiteSpace: 'pre-wrap' }
+                                style: { fontSize: 13, lineHeight: 1.85, color: '#334155', whiteSpace: 'pre-wrap' }
                             }, content)
                         );
                     })

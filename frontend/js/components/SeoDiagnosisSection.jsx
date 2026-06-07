@@ -85,13 +85,9 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl:
     return (
         <div className="section fade-in" id="sec-seo">
             <div className="container">
-                <div className="section-title">
-                    <span className="icon" style={{ background: '#faf5ff' }}>🏥</span>
-                    SEO 종합 진단
-                    <span className="badge b-est" style={{ marginLeft: 8 }}>≈ 추정</span>
-                </div>
-                <div className="section-line"></div>
-                <p className="section-subtitle">10개 평가지표로 상품의 검색 노출 상태를 진단합니다</p>
+                <div className="card" style={{ padding: '20px 22px' }}>
+                <h3 className="rt-h3"><span className="rt-hic">🔧</span>① SEO 종합 진단<span className="badge b-est">≈ 추정</span></h3>
+                <div className="rt-desc">10개 평가지표로 상품의 검색 노출 상태를 진단합니다</div>
 
                 <div className="card" style={{ marginBottom: 16, borderRadius: 16 }}>
                     <div style={{ display: 'flex', gap: 10 }}>
@@ -246,6 +242,7 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl:
                     </div>
                 )}
 
+                </div>
             </div>
         </div>
     );

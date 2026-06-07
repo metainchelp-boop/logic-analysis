@@ -10,13 +10,9 @@ window.CompetitorTableSection = function CompetitorTableSection(props) {
   return (
     <div className="section fade-in">
       <div className="container">
-      <div className="section-title">
-        <span className="icon" style={{ background: '#eef2ff' }}>🏆</span>
-        경쟁사 비교표 (상위 {items.length}개)
-        <span className="badge b-ok" style={{ marginLeft: 8 }}>✅ 실측</span>
-      </div>
-      <div className="section-line"></div>
-      <p className="section-subtitle">상위 노출 상품들의 핵심 지표를 비교합니다</p>
+      <div className="card" style={{ padding: '20px 22px' }}>
+        <h3 className="rt-h3"><span className="rt-hic">🏆</span>경쟁사 비교표 (상위 노출 80개 중)<span className="badge b-ok">✅ 실측</span></h3>
+        <div className="rt-desc">상위 노출 상품들의 핵심 지표를 비교합니다</div>
 
       {hasScore && (
         <div style={{
@@ -99,6 +95,7 @@ window.CompetitorTableSection = function CompetitorTableSection(props) {
             </tbody>
           </table>
         </div>
+      </div>
       </div>
       </div>
     </div>

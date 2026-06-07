@@ -25,13 +25,9 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
   return (
     <div className="section fade-in">
       <div className="container">
-        <div className="section-title">
-          <span className="icon" style={{ background: 'linear-gradient(135deg, #eef2ff, #dbeafe)' }}>💵</span>
-          판매량 추정 &amp; 성장 시뮬레이션
-          <span className="badge b-est" style={{ marginLeft: 8 }}>≈ 추정</span>
-        </div>
-        <div className="section-line"></div>
-        <p className="section-subtitle">순위별 예상 판매량과 매출 성장 시나리오</p>
+        <div className="card" style={{ padding: '20px 22px' }}>
+        <h3 className="rt-h3"><span className="rt-hic">📦</span>판매량 추정 &amp; 성장 시뮬레이션<span className="badge b-est">≈ 추정</span></h3>
+        <div className="rt-desc">순위별 예상 판매량과 매출 성장 시나리오</div>
 
         {/* v5 상단 요약 MetricCard 3칼럼 */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 24 }}>
@@ -227,6 +223,7 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
             </div>
           );
         })()}
+        </div>
       </div>
     </div>
   );

@@ -15,12 +15,9 @@ window.SeoDetailSection = function SeoDetailSection(props) {
   return (
     <div className="section fade-in">
       <div className="container">
-        <div className="section-title">
-          <span className="icon" style={{ background: '#f0fdf4' }}>🔧</span>
-          SEO 종합 진단
-        </div>
-        <div className="section-line"></div>
-        <p className="section-subtitle">적합도, 신뢰도, 인기도 3가지 관점에서 광고주 상품의 종합 평가</p>
+        <div className="card" style={{ padding: '20px 22px' }}>
+        <h3 className="rt-h3"><span className="rt-hic">🛡️</span>② SEO 적합도 · 신뢰도 · 인기도<span className="badge b-est">≈ 추정</span></h3>
+        <div className="rt-desc">적합도, 신뢰도, 인기도 3가지 관점에서 광고주 상품의 종합 평가</div>
 
         {/* 3개 관점 점수 비교 막대 */}
         <div className="card" style={{ padding: '20px 24px', marginTop: 20 }}>
@@ -96,6 +93,7 @@ window.SeoDetailSection = function SeoDetailSection(props) {
               </div>
             );
           })}
+        </div>
         </div>
       </div>
     </div>

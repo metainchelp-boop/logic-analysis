@@ -36,13 +36,9 @@ window.HtmlDetailAnalysisSection = function HtmlDetailAnalysisSection({ data }) 
     return (
         <div className="section fade-in">
             <div className="container">
-                <div className="section-title">
-                    <span className="icon" style={{ background: 'linear-gradient(135deg, #eef2ff, #dbeafe)' }}>📄</span>
-                    상세페이지 품질 진단 (HTML 분석)
-                    <span style={{ fontSize: 10, background: '#ecfdf5', color: '#10b981', padding: '4px 12px', borderRadius: 999, marginLeft: 8, fontWeight: 700 }}>HTML 기반</span>
-                </div>
-                <div className="section-line"></div>
-                <p className="section-subtitle">실제 HTML에서 추출한 데이터 기반 정밀 진단</p>
+                <div className="card" style={{ padding: '20px 22px' }}>
+                <h3 className="rt-h3"><span className="rt-hic">🖼️</span>④ 상세페이지 HTML 분석<span className="badge b-est">≈ 추정</span></h3>
+                <div className="rt-desc">실제 HTML에서 추출한 데이터 기반 정밀 진단</div>
 
                 {/* v5 2칼럼: 원형 스코어 + 영역별 바 */}
                 <div style={{ display: 'grid', gridTemplateColumns: '220px 1fr', gap: 16, marginBottom: 16 }}>
@@ -216,6 +212,7 @@ window.HtmlDetailAnalysisSection = function HtmlDetailAnalysisSection({ data }) 
                     border: '1px solid #e2e8f0', fontSize: 12, color: '#94a3b8', lineHeight: 1.7
                 }}>
                     ※ 상세페이지 분석은 검색바에 입력된 HTML을 직접 파싱하여 수행합니다. 네이버의 봇 차단으로 서버측 크롤링이 불가능하여 이 방식을 사용합니다.
+                </div>
                 </div>
             </div>
         </div>

@@ -16,13 +16,9 @@ window.DatalabGrowthSection = function DatalabGrowthSection(props) {
   return (
     <div className="section fade-in">
       <div className="container">
-        <div className="section-title">
-          <span className="icon" style={{ background: 'linear-gradient(135deg, #dcfce7, #bbf7d0)' }}>📈</span>
-          전년 동기 대비 성장률
-          <span style={{ marginLeft: 8, padding: '3px 10px', borderRadius: 999, fontSize: 10, fontWeight: 700, background: '#10b981', color: '#fff' }}>DATALAB</span>
-        </div>
-        <div className="section-line"></div>
-        <p className="section-subtitle">데이터랩 쇼핑인사이트 기반 전년 대비 검색 트렌드 변화</p>
+        <div className="card" style={{ padding: '20px 22px' }}>
+        <h3 className="rt-h3"><span className="rt-hic">🚀</span>전년 동기 대비 성장률<span className="badge b-ok">✅ 데이터랩</span></h3>
+        <div className="rt-desc">데이터랩 쇼핑인사이트 기반 전년 대비 검색 트렌드 변화</div>
 
         {/* 기간별 성장률 비교 막대 차트 */}
         <div className="card" style={{ padding: '20px 24px', marginBottom: 16 }}>
@@ -85,6 +81,7 @@ window.DatalabGrowthSection = function DatalabGrowthSection(props) {
         <div style={{ marginTop: 16, padding: '12px 16px', background: '#f0fdf4', borderRadius: 10, border: '1px solid #a7f3d0', fontSize: 12, color: '#065f46', lineHeight: 1.7 }}>
           📈 <strong>성장 분석:</strong> 전년 대비 3개월 평균 기준 {avg3m.growth > 0 ? '+' : ''}{avg3m.growth}%로 <strong>{growthLabel}</strong>입니다.
           {avg3m.growth > 0 && ' 단기(1개월) 성장률이 장기 평균보다 ' + (periods[0].growth > avg3m.growth ? '높아 현재 상승 모멘텀이 강합니다.' : '낮아 안정적 성장 구간입니다.')}
+        </div>
         </div>
       </div>
     </div>

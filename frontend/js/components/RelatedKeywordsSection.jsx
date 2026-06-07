@@ -16,16 +16,9 @@ window.RelatedKeywordsSection = function RelatedKeywordsSection({ data }) {
     return (
         <div className="section fade-in" id="sec-related">
             <div className="container">
-                <div className="section-title">
-                    <span className="icon" style={{ background: '#fef9c3' }}>🔗</span>
-                    연관 키워드 분석
-                    <span className="badge b-ok" style={{ marginLeft: 8 }}>✅ 실측</span>
-                    <span style={{ fontSize: 13, fontWeight: 400, color: '#64748b', marginLeft: 8 }}>
-                        총 {fmt(data.total_found)}개 발견
-                    </span>
-                </div>
-                <div className="section-line"></div>
-                <p className="section-subtitle">검색량과 경쟁강도를 기반으로 분류합니다</p>
+                <div className="card" style={{ padding: '20px 22px' }}>
+                <h3 className="rt-h3"><span className="rt-hic">🔗</span>연관 키워드 분석<span className="badge b-ok">✅ 실측</span><span style={{ fontSize: 12, fontWeight: 400, color: '#64748b', marginLeft: 4 }}>총 {fmt(data.total_found)}개 발견</span></h3>
+                <div className="rt-desc">검색량과 경쟁강도를 기반으로 분류합니다</div>
 
                 {/* v5 탭 바 */}
                 <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
@@ -117,6 +110,7 @@ window.RelatedKeywordsSection = function RelatedKeywordsSection({ data }) {
                       </div>
                     </div>
                 )}
+                </div>
             </div>
         </div>
     );

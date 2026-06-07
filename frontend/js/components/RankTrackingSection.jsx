@@ -257,10 +257,11 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
     return (
         <div className="section" id="sec-rank">
             <div className="container">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-                    <div className="section-title" style={{ marginBottom: 0 }}>
-                        <span className="icon" style={{ background: '#eff6ff' }}>📊</span>
-                        순위 추적
+                <div className="card" style={{ padding: '20px 22px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+                    <div>
+                        <h3 className="rt-h3"><span className="rt-hic">📊</span>순위 추적<span className="badge b-ok">✅ 실측</span></h3>
+                        <div className="rt-desc">네이버 쇼핑 노출 순위를 키워드별로 추적합니다</div>
                     </div>
                     {canEdit !== false && <button className="btn btn-primary btn-sm" onClick={() => setShowAddForm(!showAddForm)}>
                         {showAddForm ? '취소' : '+ 상품 등록'}
@@ -588,6 +589,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                     </div>
                 )
                     ; })()}
+                </div>
             </div>
         </div>
     );

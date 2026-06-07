@@ -7,15 +7,9 @@ window.DatalabWeekdaySection = function DatalabWeekdaySection(props) {
   return (
     <div className="section fade-in">
       <div className="container">
-        <div className="section-title">
-          <span className="icon" style={{ background: 'linear-gradient(135deg, #ede9fe, #ddd6fe)' }}>📅</span>
-          요일별 검색 패턴
-          <span style={{ marginLeft: 8, padding: '3px 10px', borderRadius: 999, fontSize: 10, fontWeight: 700, background: '#10b981', color: '#fff' }}>DATALAB</span>
-        </div>
-        <div className="section-line"></div>
-        <p className="section-subtitle">최근 4주 기준 요일별 검색 트렌드</p>
-
         <div className="card" style={{ padding: 24 }}>
+          <h3 className="rt-h3"><span className="rt-hic">📅</span>요일별 검색 패턴<span className="badge b-ok">✅ 데이터랩</span></h3>
+          <div className="rt-desc">최근 4주 기준 요일별 검색 트렌드</div>
           <ChartCanvas
             type="bar"
             height={200}

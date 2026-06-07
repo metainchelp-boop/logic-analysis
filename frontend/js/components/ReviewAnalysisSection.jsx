@@ -138,13 +138,9 @@ window.ReviewAnalysisSection = function ReviewAnalysisSection(props) {
   return (
     <div className="section fade-in">
       <div className="container">
-        <div className="section-title">
-          <span className="icon" style={{ background: 'linear-gradient(135deg, #eef2ff, #dbeafe)' }}>⭐</span>
-          리뷰 &amp; 찜 분석
-          <span className="badge b-est" style={{ marginLeft: 8 }}>≈ 추정</span>
-        </div>
-        <div className="section-line"></div>
-        <p className="section-subtitle">광고주 상품 vs 경쟁 평균 vs 상위 5개 비교</p>
+        <div className="card" style={{ padding: '20px 22px' }}>
+        <h3 className="rt-h3"><span className="rt-hic">⭐</span>리뷰 &amp; 찜 분석<span className="badge b-ok">✅ 실측</span></h3>
+        <div className="rt-desc">광고주 상품 vs 경쟁 평균 vs 상위 5개 비교</div>
 
         {/* HTML 실제 데이터 안내 배너 */}
         {hasHtmlData && (
@@ -300,6 +296,7 @@ window.ReviewAnalysisSection = function ReviewAnalysisSection(props) {
             </div>
           </div>
         )}
+        </div>
       </div>
     </div>
   );

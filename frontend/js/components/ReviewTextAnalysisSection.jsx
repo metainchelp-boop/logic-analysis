@@ -42,14 +42,15 @@ window.ReviewTextAnalysisSection = function ReviewTextAnalysisSection(props) {
 
   return React.createElement('div', { className: 'section fade-in' },
     React.createElement('div', { className: 'container' },
+      React.createElement('div', { className: 'card', style: { padding: '20px 22px' } },
 
       /* 제목 */
-      React.createElement('div', { className: 'section-title' },
-        React.createElement('span', { className: 'icon', style: { background: 'linear-gradient(135deg, #fef3c7, #fde68a)' } }, '💬'),
-        '리뷰 텍스트 분석'
+      React.createElement('h3', { className: 'rt-h3' },
+        React.createElement('span', { className: 'rt-hic' }, '💬'),
+        '리뷰 텍스트 분석',
+        React.createElement('span', { className: 'badge b-est' }, '≈ 추정')
       ),
-      React.createElement('div', { className: 'section-line' }),
-      React.createElement('p', { className: 'section-subtitle' }, '상세페이지 HTML에서 추출한 구매자 리뷰 분석 결과'),
+      React.createElement('div', { className: 'rt-desc' }, '상세페이지 HTML에서 추출한 구매자 리뷰 분석 결과'),
 
       /* 1. 요약 카드 4개 */
       React.createElement('div', {
@@ -238,6 +239,7 @@ window.ReviewTextAnalysisSection = function ReviewTextAnalysisSection(props) {
               showAll ? '▲ 접기' : '▼ 나머지 ' + remainingCount + '건 더 보기'
             ) : null
         )
+      )
       )
     )
   );
