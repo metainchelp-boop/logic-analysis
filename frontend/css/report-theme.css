@@ -240,3 +240,9 @@ body { background: var(--rt-bg); }
 .report-main .rt-table th { color: var(--rt-sub); font-size: 11px; font-weight: 800; border-bottom: 2px solid #e2e8f0; text-transform: none; background: none; }
 .report-main .rt-table thead tr { background: none !important; }
 .report-main .rt-table tbody tr:hover { background: #fafbff; }
+
+/* ===== 시안 원본 클래스명 별칭 (.card>h3 / .hic) — rt-h3/rt-hic와 동일 스타일 =====
+   일부 컴포넌트가 시안 HTML의 클래스명을 그대로 사용해도 깨지지 않도록 보강 */
+.report-main .card > h3 { margin: 0 0 4px; font-size: 15.5px; font-weight: 800; color: var(--rt-ink); display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.report-main .hic { width: 32px; height: 32px; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; background: linear-gradient(135deg, #eef2ff, #e0e7ff); font-size: 16px; flex: none; }
+.report-main .card > .desc { color: var(--rt-sub); font-size: 12px; margin: 2px 0 14px; }

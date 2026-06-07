@@ -118,7 +118,7 @@ window.AiFeedbackAllSection = function AiFeedbackAllSection(props) {
         React.createElement('div', { className: 'container' },
             React.createElement('div', {
                 className: 'card',
-                style: { padding: '20px 22px' }
+                style: { padding: '20px 22px', border: '2px dashed #c7d2fe', background: 'linear-gradient(135deg,#eef2ff,#faf5ff)' }
             },
                 /* 헤더 */
                 React.createElement('div', {
@@ -196,7 +196,7 @@ window.AiFeedbackAllSection = function AiFeedbackAllSection(props) {
                                 }, sec.label)
                             ),
                             React.createElement('div', {
-                                style: { fontSize: 13, lineHeight: 1.85, color: '#334155', whiteSpace: 'pre-wrap' }
+                                style: { fontSize: 13, lineHeight: 1.75, color: '#334155', whiteSpace: 'pre-wrap' }
                             }, content)
                         );
                     })

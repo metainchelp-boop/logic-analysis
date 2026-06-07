@@ -7,9 +7,9 @@ window.HtmlDetailAnalysisSection = function HtmlDetailAnalysisSection({ data }) 
     const getScoreLabel = (s) => s >= 70 ? '우수' : s >= 40 ? '보통' : '미흡';
     const priorityLabel = (p) => p === 'high' ? '긴급' : p === 'medium' ? '권장' : '선택';
 
-    const ScoreBar = ({ label, score, icon, weight }) => (
+    const ScoreBar = ({ label, score, weight }) => (
         <div className="scorebar">
-            <div className="lbl"><b>{icon} {label}</b><span className="w">{weight}</span></div>
+            <div className="lbl"><b>{label}</b><span className="w">{weight}</span></div>
             <div className="track"><i style={{ width: score + '%' }} /></div>
         </div>
     );
@@ -24,73 +24,38 @@ window.HtmlDetailAnalysisSection = function HtmlDetailAnalysisSection({ data }) 
                 <div className="rt-desc">실제 HTML에서 추출한 데이터 기반 정밀 진단</div>
 
                 {/* v5 2칼럼: 원형 스코어 + 영역별 바 */}
-                <div className="grid2" style={{ alignItems: 'center', marginBottom: 16 }}>
-                    {/* 왼쪽: 원형 스코어 */}
-                    <div style={{
-                        textAlign: 'center', display: 'flex', flexDirection: 'column',
-                        alignItems: 'center', justifyContent: 'center'
-                    }}>
-                        <div style={{ fontSize: 14, fontWeight: 600, color: '#64748b', marginBottom: 16 }}>상세페이지 종합 점수</div>
-                        <div style={{ position: 'relative', width: 120, height: 120, marginBottom: 12 }}>
-                            <ChartCanvas
-                                type="doughnut"
-                                height={120}
-                                data={{ labels: ['점수', '잔여'], datasets: [{ data: [total, Math.max(0, 100 - total)], backgroundColor: [getScoreColor(total), '#f1f5f9'], borderWidth: 0 }] }}
-                                options={{ cutout: '78%', plugins: { legend: { display: false }, tooltip: { enabled: false } } }}
-                            />
-                            <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-                                <div style={{ fontSize: 28, fontWeight: 800, color: getScoreColor(total) }}>{total}</div>
-                                <div style={{ fontSize: 11, color: '#94a3b8' }}>/ 100</div>
-                            </div>
-                        </div>
-                        <div style={{ fontSize: 14, fontWeight: 700, color: getScoreColor(total) }}>
-                            {getScoreLabel(total)}
-                        </div>
+                <div className="grid2" style={{ alignItems: 'center' }}>
+                    {/* 왼쪽: 도넛 차트 */}
+                    <div className="chartbox sm">
+                        <ChartCanvas
+                            type="doughnut"
+                            data={{ labels: ['점수', '잔여'], datasets: [{ data: [total, Math.max(0, 100 - total)], backgroundColor: [getScoreColor(total), '#f1f5f9'], borderWidth: 0 }] }}
+                            options={{ cutout: '78%', plugins: { legend: { display: false }, tooltip: { enabled: false } } }}
+                        />
                     </div>
 
                     {/* 오른쪽: 영역별 점수 바 */}
                     <div>
-                        <ScoreBar label="이미지" score={data.scores.images} icon="🖼️" weight="30%" />
-                        <ScoreBar label="텍스트 콘텐츠" score={data.scores.text} icon="📝" weight="20%" />
-                        <ScoreBar label="동영상" score={data.scores.video} icon="🎬" weight="15%" />
-                        <ScoreBar label="정보 완성도" score={data.scores.info} icon="📋" weight="20%" />
-                        <ScoreBar label="신뢰 요소" score={data.scores.trust} icon="🛡️" weight="15%" />
+                        <ScoreBar label="이미지" score={data.scores.images} weight="30%" />
+                        <ScoreBar label="텍스트" score={data.scores.text} weight="20%" />
+                        <ScoreBar label="동영상" score={data.scores.video} weight="15%" />
+                        <ScoreBar label="정보 완성도" score={data.scores.info} weight="20%" />
+                        <ScoreBar label="신뢰 요소" score={data.scores.trust} weight="15%" />
                     </div>
-                </div>
-
-                {/* 영역별 점수 레이더 */}
-                <div style={{ padding: 24, borderRadius: 16, marginBottom: 16, background: '#fff', border: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
-                    <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>📡 영역별 균형 (레이더)</div>
-                    <ChartCanvas
-                        type="radar"
-                        height={300}
-                        data={{
-                            labels: ['이미지', '텍스트', '동영상', '정보 완성도', '신뢰 요소'],
-                            datasets: [{
-                                label: '점수',
-                                data: [data.scores.images || 0, data.scores.text || 0, data.scores.video || 0, data.scores.info || 0, data.scores.trust || 0],
-                                borderColor: '#4f46e5', backgroundColor: 'rgba(79,70,229,.18)', pointBackgroundColor: '#4f46e5', borderWidth: 2
-                            }]
-                        }}
-                        options={{
-                            plugins: { legend: { display: false }, tooltip: { callbacks: { label: function(ctx) { return ctx.label + ' ' + ctx.parsed.r + '점'; } } } },
-                            scales: { r: { beginAtZero: true, max: 100, ticks: { display: false }, pointLabels: { font: { size: 11 } } } }
-                        }}
-                    />
                 </div>
 
                 {/* 주요 지표 4칼럼 MetricCard */}
                 {data.metrics && (
-                    <div className="grid4" style={{ marginTop: 10, marginBottom: 16 }}>
+                    <div className="grid4" style={{ marginTop: 10 }}>
                         {[
-                            { label: '상품 이미지', value: data.metrics.total_images + '장', icon: '🖼️', good: data.metrics.total_images >= 10 },
-                            { label: '텍스트 길이', value: data.metrics.text_length > 1000 ? (data.metrics.text_length / 1000).toFixed(1) + 'K자' : data.metrics.text_length + '자', icon: '📝', good: data.metrics.text_length >= 500 },
-                            { label: '동영상', value: data.metrics.video_count + '개', icon: '🎬', good: data.metrics.video_count > 0 },
-                            { label: '페이지 크기', value: data.metrics.html_size_kb + 'KB', icon: '📦', good: data.metrics.html_size_kb >= 50 },
+                            { label: '상품 이미지', num: data.metrics.total_images, unit: '장', good: data.metrics.total_images >= 10 },
+                            { label: '텍스트 길이', num: data.metrics.text_length > 1000 ? (data.metrics.text_length / 1000).toFixed(1) + 'K' : data.metrics.text_length, unit: '자', good: data.metrics.text_length >= 500 },
+                            { label: '동영상', num: data.metrics.video_count, unit: '개', good: data.metrics.video_count > 0 },
+                            { label: '페이지 크기', num: data.metrics.html_size_kb, unit: 'KB', good: data.metrics.html_size_kb >= 50 },
                         ].map((item, i) => (
                             <div key={'dp-metric-'+i} className="kpi">
-                                <div className="k">{item.icon} {item.label}</div>
-                                <div className="v" style={{ fontSize: 18, color: item.good ? undefined : 'var(--red)' }}>{item.value}</div>
+                                <div className="k">{item.label}</div>
+                                <div className="v" style={{ fontSize: 18, color: item.good ? undefined : 'var(--red)' }}>{item.num}<small>{item.unit}</small></div>
                             </div>
                         ))}
                     </div>
@@ -140,13 +105,6 @@ window.HtmlDetailAnalysisSection = function HtmlDetailAnalysisSection({ data }) 
                     </div>
                 )}
 
-                {/* 안내 */}
-                <div style={{
-                    padding: '12px 16px', background: '#f8fafc', borderRadius: 12,
-                    border: '1px solid #e2e8f0', fontSize: 12, color: '#94a3b8', lineHeight: 1.7
-                }}>
-                    ※ 상세페이지 분석은 검색바에 입력된 HTML을 직접 파싱하여 수행합니다. 네이버의 봇 차단으로 서버측 크롤링이 불가능하여 이 방식을 사용합니다.
-                </div>
                 </div>
             </div>
         </div>

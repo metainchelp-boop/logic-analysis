@@ -13,10 +13,8 @@ window.SeoDetailSection = function SeoDetailSection(props) {
   return (
     <div className="section fade-in">
       <div className="container">
-        <div className="card" style={{ padding: '20px 22px' }}>
+        <div className="card">
         <h3 className="rt-h3"><span className="rt-hic">🛡️</span>② SEO 적합도 · 신뢰도 · 인기도<span className="badge b-est">≈ 추정</span></h3>
-        <div className="rt-desc">적합도, 신뢰도, 인기도 3가지 관점에서 광고주 상품의 종합 평가</div>
-
         <div className="grid3">
           {categories.map(function(cat, catIdx) {
             return (

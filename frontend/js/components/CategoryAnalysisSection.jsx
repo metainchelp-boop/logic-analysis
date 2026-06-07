@@ -52,7 +52,7 @@ window.CategoryAnalysisSection = function CategoryAnalysisSection(props) {
         <div className="rt-desc">상위 상품들의 카테고리 분포를 파악합니다</div>
 
         {verdict && (
-          <div className="note ok">{verdict}</div>
+          <div className="note ok" style={{ margin: '0 0 12px' }}>{verdict}</div>
         )}
 
         {/* 레벨별 분포 (대/중/소) */}

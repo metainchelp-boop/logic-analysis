@@ -5,7 +5,7 @@ window.CompetitorTableSection = function CompetitorTableSection(props) {
   if (items.length === 0) return null;
 
   var hasScore = items.some(function(item) { return typeof item.seoScore === 'number'; });
-  var medalColors = ['#fbbf24', '#94a3b8', '#cd7f32'];
+  var medalEmoji = ['🥇', '🥈', '🥉'];
 
   return (
     <div className="section fade-in">
@@ -46,13 +46,7 @@ window.CompetitorTableSection = function CompetitorTableSection(props) {
                   <tr key={idx} style={{ borderBottom: '1px solid #e2e8f0', background: idx % 2 === 0 ? '#fff' : '#f8fafc' }}>
                     <td style={{ padding: '14px 16px', textAlign: 'center' }}>
                       {comp.rank <= 3 ? (
-                        <span style={{
-                          display: 'inline-flex', width: 30, height: 30, borderRadius: '50%',
-                          background: medalColors[comp.rank - 1], color: '#fff',
-                          alignItems: 'center', justifyContent: 'center',
-                          fontSize: 14, fontWeight: 800,
-                          boxShadow: '0 2px 6px ' + medalColors[comp.rank - 1] + '66'
-                        }}>{comp.rank}</span>
+                        <span style={{ fontSize: 14, fontWeight: 700, color: '#0f172a' }}>{medalEmoji[comp.rank - 1]}{comp.rank}</span>
                       ) : (
                         <span style={{ fontSize: 14, fontWeight: 700, color: '#64748b' }}>{comp.rank}</span>
                       )}

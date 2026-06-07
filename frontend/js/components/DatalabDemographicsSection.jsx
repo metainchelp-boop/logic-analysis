@@ -27,85 +27,79 @@ window.DatalabDemographicsSection = function DatalabDemographicsSection(props) {
     : (peakAge.ratio * gender.male / 100).toFixed(1)) : '';
 
   return (
-    <div className="section fade-in">
-      <div className="container">
-        <div className="card-grid card-grid-2">
-          {/* 성별 비율 */}
-          <div className="card" style={{ padding: 24 }}>
-            <h3 className="rt-h3"><span className="rt-hic">👥</span>검색 인구통계 — 성별<span className="badge b-ok">✅ 데이터랩</span></h3>
+    <div className="grid2">
+      {/* 성별 비율 */}
+      <div className="card">
+        <h3 className="rt-h3"><span className="hic">👥</span>검색 인구통계 — 성별 <span className="badge b-ok">✅ 데이터랩</span></h3>
 
-            {gender ? (
-              <div>
-                {/* 성별 도넛 차트 */}
-                <ChartCanvas
-                  type="doughnut"
-                  height={180}
-                  data={{
-                    labels: ['남성', '여성'],
-                    datasets: [{ data: [gender.male, gender.female], backgroundColor: ['#4f46e5', '#ec4899'], borderWidth: 0 }]
-                  }}
-                  options={{
-                    cutout: '62%',
-                    plugins: {
-                      legend: { position: 'bottom' },
-                      tooltip: { callbacks: { label: function(ctx) { return ctx.label + ' ' + ctx.parsed + '%'; } } }
-                    }
-                  }}
-                />
-                {/* 수치 카드 */}
-                <div className="card-grid card-grid-2" style={{ gap: 10 }}>
-                  <div style={{ background: '#eef2ff', borderRadius: 10, padding: 14, textAlign: 'center' }}>
-                    <div style={{ fontSize: 11, color: '#64748b', fontWeight: 600, marginBottom: 4 }}>🧑 남성</div>
-                    <div style={{ fontSize: 22, fontWeight: 800, color: '#4f46e5' }}>{gender.male}%</div>
-                  </div>
-                  <div style={{ background: '#fdf2f8', borderRadius: 10, padding: 14, textAlign: 'center' }}>
-                    <div style={{ fontSize: 11, color: '#64748b', fontWeight: 600, marginBottom: 4 }}>👩 여성</div>
-                    <div style={{ fontSize: 22, fontWeight: 800, color: '#ec4899' }}>{gender.female}%</div>
-                  </div>
-                </div>
+        {gender ? (
+          <div>
+            {/* 성별 도넛 차트 */}
+            <div className="chartbox sm">
+              <ChartCanvas
+                type="doughnut"
+                height={180}
+                data={{
+                  labels: ['남성', '여성'],
+                  datasets: [{ data: [gender.male, gender.female], backgroundColor: ['#4f46e5', '#ec4899'], borderWidth: 0 }]
+                }}
+                options={{
+                  cutout: '62%',
+                  plugins: {
+                    legend: { position: 'bottom' },
+                    tooltip: { callbacks: { label: function(ctx) { return ctx.label + ' ' + ctx.parsed + '%'; } } }
+                  }
+                }}
+              />
+            </div>
+            <div className="note">
+              {gender.male > gender.female
+                ? '남성 ' + gender.male + '% · 여성 ' + gender.female + '% — 남성 타겟 소구.'
+                : '여성 ' + gender.female + '% · 남성 ' + gender.male + '% — 여성 타겟 소구.'}
+            </div>
+          </div>
+        ) : (
+          <div style={{ textAlign: 'center', padding: 40, color: '#94a3b8', fontSize: 13 }}>데이터 없음</div>
+        )}
+      </div>
+
+      {/* 연령대별 비율 */}
+      <div className="card">
+        <h3 className="rt-h3"><span className="hic">👥</span>검색 인구통계 — 연령 <span className="badge b-ok">✅ 데이터랩</span></h3>
+
+        {ages.length > 0 ? (
+          <div>
+            <div className="chartbox sm">
+              <ChartCanvas
+                type="bar"
+                height={200}
+                data={{
+                  labels: ages.map(function(a) { return a.label + (peakAge && a.label === peakAge.label ? ' 🔥' : ''); }),
+                  datasets: [{
+                    label: '검색 비율',
+                    data: ages.map(function(a) { return a.ratio; }),
+                    backgroundColor: ages.map(function(a) { return (peakAge && a.label === peakAge.label) ? '#7c3aed' : '#c7d2fe'; }),
+                    borderRadius: 6
+                  }]
+                }}
+                options={{
+                  plugins: {
+                    legend: { display: false },
+                    tooltip: { callbacks: { label: function(ctx) { return ctx.parsed.y + '%'; } } }
+                  },
+                  scales: { y: { beginAtZero: true, ticks: { callback: function(v) { return v + '%'; } } } }
+                }}
+              />
+            </div>
+            {peakAge && (
+              <div className="note">
+                핵심 타겟: <b>{targetAge} {targetGender}</b> (전체의 약 {targetPct}%).
               </div>
-            ) : (
-              <div style={{ textAlign: 'center', padding: 40, color: '#94a3b8', fontSize: 13 }}>데이터 없음</div>
             )}
           </div>
-
-          {/* 연령대별 비율 */}
-          <div className="card" style={{ padding: 24 }}>
-            <h3 className="rt-h3"><span className="rt-hic">👥</span>검색 인구통계 — 연령<span className="badge b-ok">✅ 데이터랩</span></h3>
-
-            {ages.length > 0 ? (
-              <div>
-                <ChartCanvas
-                  type="bar"
-                  height={200}
-                  data={{
-                    labels: ages.map(function(a) { return a.label + (peakAge && a.label === peakAge.label ? ' 🔥' : ''); }),
-                    datasets: [{
-                      label: '검색 비율',
-                      data: ages.map(function(a) { return a.ratio; }),
-                      backgroundColor: ages.map(function(a) { return (peakAge && a.label === peakAge.label) ? '#7c3aed' : '#c7d2fe'; }),
-                      borderRadius: 6
-                    }]
-                  }}
-                  options={{
-                    plugins: {
-                      legend: { display: false },
-                      tooltip: { callbacks: { label: function(ctx) { return ctx.parsed.y + '%'; } } }
-                    },
-                    scales: { y: { beginAtZero: true, ticks: { callback: function(v) { return v + '%'; } } } }
-                  }}
-                />
-                {peakAge && (
-                  <div style={{ marginTop: 14, padding: '10px 14px', background: '#f0f4ff', borderRadius: 8, fontSize: 11, color: '#4f46e5', fontWeight: 600 }}>
-                    🎯 핵심 타겟: {targetAge} {targetGender} (전체의 약 {targetPct}%)
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div style={{ textAlign: 'center', padding: 40, color: '#94a3b8', fontSize: 13 }}>데이터 없음</div>
-            )}
-          </div>
-        </div>
+        ) : (
+          <div style={{ textAlign: 'center', padding: 40, color: '#94a3b8', fontSize: 13 }}>데이터 없음</div>
+        )}
       </div>
     </div>
   );
