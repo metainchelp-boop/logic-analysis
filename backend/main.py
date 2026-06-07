@@ -942,7 +942,9 @@ async def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_
             try:
                 target_pid = extract_product_id_from_url(req.product_url) or ""
                 target_store = extract_store_name_from_url(req.product_url) or ""
-                _prods = search_products(req.keyword, max_results=200)
+                # 주의: 이 모듈에 동명의 라우트(search_products)가 있어 import가 가려짐 → 크롤러 함수를 별칭으로 호출
+                from naver_crawler import search_products as _sp_crawler
+                _prods = _sp_crawler(req.keyword, max_results=200)
                 for _p in _prods:
                     p_url = _p.get("product_url", "")
                     p_pid = _p.get("product_id", "")
