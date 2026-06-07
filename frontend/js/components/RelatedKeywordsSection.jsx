@@ -19,6 +19,7 @@ window.RelatedKeywordsSection = function RelatedKeywordsSection({ data }) {
                 <div className="section-title">
                     <span className="icon" style={{ background: '#fef9c3' }}>🔗</span>
                     연관 키워드 분석
+                    <span className="badge b-ok" style={{ marginLeft: 8 }}>✅ 실측</span>
                     <span style={{ fontSize: 13, fontWeight: 400, color: '#64748b', marginLeft: 8 }}>
                         총 {fmt(data.total_found)}개 발견
                     </span>

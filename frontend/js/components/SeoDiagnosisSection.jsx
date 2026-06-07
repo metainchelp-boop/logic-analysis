@@ -88,6 +88,7 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl:
                 <div className="section-title">
                     <span className="icon" style={{ background: '#faf5ff' }}>🏥</span>
                     SEO 종합 진단
+                    <span className="badge b-est" style={{ marginLeft: 8 }}>≈ 추정</span>
                 </div>
                 <div className="section-line"></div>
                 <p className="section-subtitle">10개 평가지표로 상품의 검색 노출 상태를 진단합니다</p>

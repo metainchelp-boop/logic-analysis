@@ -47,6 +47,7 @@ window.ProductNameSection = function ProductNameSection({ keyword, shopProducts 
                 <div className="section-title">
                     <span className="icon" style={{ background: 'linear-gradient(135deg, #eef2ff, #dbeafe)' }}>📝</span>
                     상품명 키워드 분석
+                    <span className="badge b-ok" style={{ marginLeft: 8 }}>✅ 실측</span>
                 </div>
                 <div className="section-line"></div>
                 <p className="section-subtitle">경쟁 상품명의 키워드 구성을 분석합니다</p>

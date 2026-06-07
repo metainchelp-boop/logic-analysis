@@ -16,14 +16,9 @@ window.CompetitionIndexSection = function CompetitionIndexSection(props) {
   return (
     <div className="section fade-in">
       <div className="container">
-      <div className="section-title">
-        <span className="icon" style={{ background: '#fef2f2' }}>⚔️</span>
-        키워드 경쟁강도 분석
-      </div>
-      <div className="section-line"></div>
-      <p className="section-subtitle">상품 수 대비 검색량으로 경쟁 수준을 판단합니다</p>
-
       <div className="card" style={{ padding: '24px', borderRadius: '16px' }}>
+        <h3 className="rt-h3"><span className="rt-hic">⚔️</span>키워드 경쟁강도 분석<span className="badge b-ok">✅ 실측</span></h3>
+        <div className="rt-desc">상품 수 대비 검색량으로 경쟁 수준을 판단합니다</div>
         {/* 상단: 도넛차트 + 라벨 */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>

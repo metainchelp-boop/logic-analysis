@@ -141,6 +141,7 @@ window.ReviewAnalysisSection = function ReviewAnalysisSection(props) {
         <div className="section-title">
           <span className="icon" style={{ background: 'linear-gradient(135deg, #eef2ff, #dbeafe)' }}>⭐</span>
           리뷰 &amp; 찜 분석
+          <span className="badge b-est" style={{ marginLeft: 8 }}>≈ 추정</span>
         </div>
         <div className="section-line"></div>
         <p className="section-subtitle">광고주 상품 vs 경쟁 평균 vs 상위 5개 비교</p>

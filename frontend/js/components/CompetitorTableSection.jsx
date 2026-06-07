@@ -13,6 +13,7 @@ window.CompetitorTableSection = function CompetitorTableSection(props) {
       <div className="section-title">
         <span className="icon" style={{ background: '#eef2ff' }}>🏆</span>
         경쟁사 비교표 (상위 {items.length}개)
+        <span className="badge b-ok" style={{ marginLeft: 8 }}>✅ 실측</span>
       </div>
       <div className="section-line"></div>
       <p className="section-subtitle">상위 노출 상품들의 핵심 지표를 비교합니다</p>

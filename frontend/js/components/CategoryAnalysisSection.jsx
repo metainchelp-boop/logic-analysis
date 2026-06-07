@@ -50,6 +50,7 @@ window.CategoryAnalysisSection = function CategoryAnalysisSection(props) {
         <div className="section-title">
           <span className="icon" style={{ background: 'linear-gradient(135deg, #eef2ff, #dbeafe)' }}>📂</span>
           카테고리 등록 분석
+          <span className="badge b-ok" style={{ marginLeft: 8 }}>✅ 실측</span>
         </div>
         <div className="section-line"></div>
         <p className="section-subtitle">상위 상품들의 카테고리 분포를 파악합니다</p>
