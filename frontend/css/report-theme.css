@@ -13,6 +13,27 @@
 /* 배경 톤 통일 */
 body { background: var(--rt-bg); }
 
+/* ===== 미리보기형 섹션 제목: 보라 밑줄 제거 + 컴팩트 아이콘 ===== */
+.section-line { display: none !important; }
+.section-subtitle { display: block !important; font-size: 12px; color: var(--rt-sub); margin: 2px 0 14px; }
+.section-title { font-size: 16px !important; font-weight: 800 !important; gap: 9px !important; margin-bottom: 12px !important; }
+.section-title .icon {
+  width: 32px !important; height: 32px !important; border-radius: 10px !important;
+  font-size: 16px !important;
+  background: linear-gradient(135deg, #eef2ff, #e0e7ff) !important;
+}
+
+/* ===== 미리보기형 카드 내부 헤더(.rt-h3) ===== */
+.rt-h3 { margin: 0 0 4px; font-size: 15.5px; font-weight: 800; color: var(--rt-ink); display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.rt-hic { width: 32px; height: 32px; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; background: linear-gradient(135deg, #eef2ff, #e0e7ff); font-size: 16px; }
+.rt-desc { color: var(--rt-sub); font-size: 12px; margin: 2px 0 14px; }
+
+/* ===== 미리보기형 KPI ===== */
+.rt-kpi { background: linear-gradient(135deg, #f8fafc, #f1f5f9); border: 1px solid #e8edf3; border-radius: 14px; padding: 15px; }
+.rt-kpi-k { font-size: 12px; color: var(--rt-sub); font-weight: 700; margin-bottom: 7px; display: flex; align-items: center; flex-wrap: wrap; }
+.rt-kpi-v { font-size: 27px; font-weight: 900; letter-spacing: -1px; color: var(--rt-ink); }
+.rt-kpi-v small { font-size: 13px; font-weight: 700; color: var(--rt-sub); margin-left: 2px; }
+
 /* ===== 카드: 더 둥글고 부드러운 그림자 ===== */
 .card {
   border-radius: 18px !important;
