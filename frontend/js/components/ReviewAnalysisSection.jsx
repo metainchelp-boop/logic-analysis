@@ -217,6 +217,51 @@ window.ReviewAnalysisSection = function ReviewAnalysisSection(props) {
           )}
         </div>
 
+        {/* 리뷰·평점·찜 비교 그룹 막대 차트 */}
+        {(function() {
+          var C = window.CHART_COLORS || {};
+          var num = function(v) { return (v == null || isNaN(Number(v))) ? 0 : Number(v); };
+          var mineReview = (hasHtmlData && html && html.reviewCount != null) ? html.reviewCount : reviewCount.adv;
+          var mineRating = (hasHtmlData && html && html.rating != null) ? html.rating : rating.adv;
+          var mineWish = (hasHtmlData && html && html.wishCount != null) ? html.wishCount : wishCount.adv;
+          var mine = [num(mineReview), num(mineRating) * 100, num(mineWish)];
+          var avg = [num(reviewCount.avg), num(rating.avg) * 100, num(wishCount.avg)];
+          var top5 = [num(reviewCount.top5), num(rating.top5) * 100, num(wishCount.top5)];
+          var anyVal = mine.concat(avg, top5).some(function(v) { return v > 0; });
+          if (!anyVal) return null;
+          var fmtTip = function(ctx) {
+            var raw = ctx.parsed.y;
+            var label = ctx.dataset.label + ': ';
+            if (ctx.dataIndex === 1) return label + (raw / 100).toFixed(1) + '점';
+            return label + (window.chartComma ? window.chartComma(raw) : raw);
+          };
+          return (
+            <div style={{ background: '#fff', borderRadius: 16, padding: '24px 20px', border: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(0,0,0,0.04)', marginBottom: 24 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a', marginBottom: 6 }}>리뷰 · 평점 · 찜 비교</div>
+              <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 14 }}>값 차이가 커서 로그 눈금으로 표시합니다. 평점은 비교를 위해 ×100 환산했습니다(툴팁은 실제 점수).</div>
+              <ChartCanvas
+                type="bar"
+                height={260}
+                data={{
+                  labels: ['리뷰 수', '평점(×100)', '찜 수'],
+                  datasets: [
+                    { label: '내 상품', data: mine, backgroundColor: C.OK || '#10b981', borderRadius: 5 },
+                    { label: '경쟁 평균', data: avg, backgroundColor: '#94a3b8', borderRadius: 5 },
+                    { label: '상위 5', data: top5, backgroundColor: C.IND || '#4f46e5', borderRadius: 5 }
+                  ]
+                }}
+                options={{
+                  plugins: {
+                    legend: { position: 'bottom' },
+                    tooltip: { callbacks: { label: fmtTip } }
+                  },
+                  scales: { y: { type: 'logarithmic', ticks: { callback: function(v) { return window.chartComma ? window.chartComma(v) : v; } } } }
+                }}
+              />
+            </div>
+          );
+        })()}
+
         {/* Strategy Comment */}
         {strategy && (
           <div style={{

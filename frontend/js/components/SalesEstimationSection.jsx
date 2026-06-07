@@ -5,6 +5,15 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
 
   if (!top10Card || !page1Card || !page2Card) return null;
 
+  var C = window.CHART_COLORS || {};
+  /* 순위별 예상 월 판매량 차트 데이터 */
+  var salesBars = [
+    { label: '1위', val: Number(top10Card.rank1Sales) || 0 },
+    { label: '5위', val: Number(top10Card.rank5Sales) || 0 },
+    { label: '10위', val: Number(top10Card.rank10Sales) || 0 }
+  ];
+  var hasSalesChart = salesBars.some(function(b) { return b.val > 0; });
+
   /* v5 카드 스타일 */
   var v5Card = { borderRadius: 16, background: '#fff', border: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' };
   var v5MetricRow = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderBottom: '1px solid #f1f5f9' };
@@ -41,6 +50,34 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
             <div style={{ fontSize: 24, fontWeight: 800, color: '#7c3aed' }}>{estimatedCTR}</div>
           </div>
         </div>
+
+        {/* 순위별 예상 월 판매량 막대 차트 */}
+        {hasSalesChart && (
+          <div style={{ ...v5Card, padding: '20px 24px', marginBottom: 20 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a', marginBottom: 14 }}>순위별 예상 월 판매량</div>
+            <ChartCanvas
+              type="bar"
+              height={220}
+              data={{
+                labels: salesBars.map(function(b) { return b.label; }),
+                datasets: [{
+                  label: '예상 월 판매(건)',
+                  data: salesBars.map(function(b) { return b.val; }),
+                  backgroundColor: [C.OK || '#16a34a', C.IND || '#4f46e5', '#cbd5e1'],
+                  borderRadius: 6
+                }]
+              }}
+              options={{
+                plugins: {
+                  legend: { display: false },
+                  tooltip: { callbacks: { label: function(ctx) { return (window.chartComma ? window.chartComma(ctx.parsed.y) : ctx.parsed.y) + '건/월'; } } }
+                },
+                scales: { y: { beginAtZero: true, ticks: { callback: function(v) { return window.chartComma ? window.chartComma(v) : v; } } } }
+              }}
+            />
+            <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 8 }}>※ 상위 순위일수록 클릭률(CTR)이 높아 예상 판매량이 큽니다.</div>
+          </div>
+        )}
 
         {/* v5 3칸 시나리오 카드 */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>

@@ -22,6 +22,28 @@ window.SeoDetailSection = function SeoDetailSection(props) {
         <div className="section-line"></div>
         <p className="section-subtitle">적합도, 신뢰도, 인기도 3가지 관점에서 광고주 상품의 종합 평가</p>
 
+        {/* 3개 관점 점수 비교 막대 */}
+        <div className="card" style={{ padding: '20px 24px', marginTop: 20 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a', marginBottom: 14 }}>관점별 점수 비교</div>
+          <ChartCanvas
+            type="bar"
+            height={200}
+            data={{
+              labels: categories.map(function(c) { return c.title; }),
+              datasets: [{
+                label: '점수',
+                data: categories.map(function(c) { return c.data.score; }),
+                backgroundColor: categories.map(function(c) { return getScoreColor(c.data.score); }),
+                borderRadius: 6
+              }]
+            }}
+            options={{
+              plugins: { legend: { display: false }, tooltip: { callbacks: { label: function(ctx) { return ctx.parsed.y + '점'; } } } },
+              scales: { y: { beginAtZero: true, max: 100, ticks: { callback: function(v) { return v + '점'; } } } }
+            }}
+          />
+        </div>
+
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20, marginTop: 20 }}>
           {categories.map(function(cat, catIdx) {
             return (

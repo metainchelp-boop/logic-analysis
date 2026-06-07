@@ -16,32 +16,28 @@ window.DatalabWeekdaySection = function DatalabWeekdaySection(props) {
         <p className="section-subtitle">최근 4주 기준 요일별 검색 트렌드</p>
 
         <div className="card" style={{ padding: 24 }}>
-          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, height: 160, paddingTop: 20 }}>
-            {days.map(function(day, i) {
-              var isPeak = day.label === d.peakDay;
-              var isLow = day.label === d.lowDay;
-              var barH = Math.max(day.normalized, 8);
-              var barBg = isPeak
-                ? 'linear-gradient(180deg, #f472b6, #ec4899)'
-                : isLow
-                  ? 'linear-gradient(180deg, #94a3b8, #64748b)'
-                  : (day.normalized >= 85
-                    ? 'linear-gradient(180deg, #a78bfa, #7c3aed)'
-                    : 'linear-gradient(180deg, #818cf8, #4f46e5)');
-
-              return (
-                <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, height: '100%', justifyContent: 'flex-end' }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: isPeak ? '#ec4899' : isLow ? '#64748b' : '#4f46e5' }}>
-                    {Math.round(day.normalized)}
-                  </div>
-                  <div style={{ width: '100%', height: barH + '%', borderRadius: '8px 8px 4px 4px', background: barBg, minHeight: 8 }}></div>
-                  <div style={{ fontSize: 12, fontWeight: isPeak || isLow ? 700 : 600, color: isPeak ? '#ec4899' : isLow ? '#64748b' : '#64748b' }}>
-                    {day.label}{isPeak ? ' 🔥' : ''}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+          <ChartCanvas
+            type="bar"
+            height={200}
+            data={{
+              labels: days.map(function(day) { return day.label + (day.label === d.peakDay ? ' 🔥' : ''); }),
+              datasets: [{
+                label: '검색 지수',
+                data: days.map(function(day) { return Math.round(day.normalized); }),
+                backgroundColor: days.map(function(day) {
+                  return day.label === d.peakDay ? '#ec4899' : day.label === d.lowDay ? '#94a3b8' : (day.normalized >= 85 ? '#7c3aed' : '#4f46e5');
+                }),
+                borderRadius: 6
+              }]
+            }}
+            options={{
+              plugins: {
+                legend: { display: false },
+                tooltip: { callbacks: { label: function(ctx) { return '지수 ' + ctx.parsed.y; } } }
+              },
+              scales: { y: { beginAtZero: true } }
+            }}
+          />
 
           <div style={{ display: 'flex', justifyContent: 'center', gap: 24, marginTop: 16, paddingTop: 12, borderTop: '1px solid #f1f5f9' }}>
             <span style={{ fontSize: 12, color: '#64748b' }}>📈 최고: <strong style={{ color: '#ec4899' }}>{d.peakDay}요일</strong> (지수 {Math.round(d.peakIndex)})</span>

@@ -29,17 +29,23 @@ window.DetailPageQualitySection = function DetailPageQualitySection(props) {
           padding: '24px',
           display: 'flex',
           alignItems: 'center',
-          gap: '20px'
+          gap: '24px'
         }}>
-          <div style={{
-            fontSize: '48px',
-            fontWeight: '700',
-            color: '#1f2937',
-            minWidth: '80px',
-            textAlign: 'center'
-          }}>
-            {totalScore}
-          </div>
+          {(function() {
+            var sc = Number(totalScore) || 0;
+            var col = sc >= 70 ? '#16a34a' : sc >= 40 ? '#f59e0b' : '#ef4444';
+            return (
+              <div style={{ position: 'relative', width: 110, height: 110, flexShrink: 0 }}>
+                <ChartCanvas
+                  type="doughnut"
+                  height={110}
+                  data={{ labels: ['점수', '잔여'], datasets: [{ data: [sc, Math.max(0, 100 - sc)], backgroundColor: [col, '#e5e7eb'], borderWidth: 0 }] }}
+                  options={{ cutout: '74%', plugins: { legend: { display: false }, tooltip: { enabled: false } } }}
+                />
+                <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 30, fontWeight: 800, color: col }}>{totalScore}</div>
+              </div>
+            );
+          })()}
           <div style={{
             fontSize: '13px',
             color: '#666',

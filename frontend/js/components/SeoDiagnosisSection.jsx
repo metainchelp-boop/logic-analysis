@@ -114,15 +114,17 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl:
                                 alignItems: 'center', justifyContent: 'center', padding: 28, borderRadius: 16
                             }}>
                                 <div style={{ fontSize: 14, fontWeight: 600, color: '#64748b', marginBottom: 16 }}>SEO 종합 점수</div>
-                                <div style={{
-                                    width: 120, height: 120, borderRadius: '50%',
-                                    background: 'conic-gradient(' + getScoreColor(result.scores.total) + ' ' + (result.scores.total * 3.6) + 'deg, #f1f5f9 0deg)',
-                                    display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 12
-                                }}>
-                                    <div style={{
-                                        width: 96, height: 96, borderRadius: '50%', background: '#fff',
-                                        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center'
-                                    }}>
+                                <div style={{ position: 'relative', width: 120, height: 120, marginBottom: 12 }}>
+                                    <ChartCanvas
+                                        type="doughnut"
+                                        height={120}
+                                        data={{
+                                            labels: ['점수', '잔여'],
+                                            datasets: [{ data: [result.scores.total, Math.max(0, 100 - result.scores.total)], backgroundColor: [getScoreColor(result.scores.total), '#f1f5f9'], borderWidth: 0 }]
+                                        }}
+                                        options={{ cutout: '78%', plugins: { legend: { display: false }, tooltip: { enabled: false } } }}
+                                    />
+                                    <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
                                         <div style={{ fontSize: 28, fontWeight: 800, color: getScoreColor(result.scores.total) }}>{result.scores.total}</div>
                                         <div style={{ fontSize: 11, color: '#94a3b8' }}>/ 100</div>
                                     </div>
@@ -158,6 +160,36 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl:
                                 <ScoreBar label="네이버페이" score={result.scores.naverpay || 0} icon="💳" weight="6%" />
                                 <ScoreBar label="최신성" score={result.scores.freshness || 0} icon="🕐" weight="6%" />
                             </div>
+                        </div>
+
+                        {/* 10개 지표 레이더 차트 */}
+                        <div className="card" style={{ padding: 24, borderRadius: 16, marginBottom: 16 }}>
+                            <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8 }}>📡 평가지표 균형 (레이더)</div>
+                            <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 12 }}>10개 지표 점수를 한눈에 비교합니다. 바깥쪽일수록 우수.</div>
+                            <ChartCanvas
+                                type="radar"
+                                height={320}
+                                data={{
+                                    labels: ['상품명', '검색순위', '가격', '리뷰', '판매', '평점', '카테고리', '브랜드', '네이버페이', '최신성'],
+                                    datasets: [{
+                                        label: 'SEO 점수',
+                                        data: [
+                                            result.scores.title || 0, result.scores.rank || 0, result.scores.price || 0,
+                                            result.scores.review || 0, result.scores.sales || 0, result.scores.rating || 0,
+                                            result.scores.category || 0, result.scores.brand || 0, result.scores.naverpay || 0,
+                                            result.scores.freshness || 0
+                                        ],
+                                        borderColor: '#4f46e5',
+                                        backgroundColor: 'rgba(79,70,229,.18)',
+                                        pointBackgroundColor: '#4f46e5',
+                                        borderWidth: 2
+                                    }]
+                                }}
+                                options={{
+                                    plugins: { legend: { display: false }, tooltip: { callbacks: { label: function(ctx) { return ctx.label + ' ' + ctx.parsed.r + '점'; } } } },
+                                    scales: { r: { beginAtZero: true, max: 100, ticks: { display: false }, pointLabels: { font: { size: 11 } } } }
+                                }}
+                            />
                         </div>
 
                         {/* v5 세부 정보 요약 — 4칼럼 메트릭 카드 */}

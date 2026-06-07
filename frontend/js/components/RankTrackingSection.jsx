@@ -7,6 +7,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
     const [adding, setAdding] = useState(false);
     const [refreshing, setRefreshing] = useState({});
     const [expandedProduct, setExpandedProduct] = useState(null);
+    const [expandedKeyword, setExpandedKeyword] = useState(null);
     const [historyData, setHistoryData] = useState({});
     const lastAutoRegistered = useRef('');
     const productsRef = useRef(products);
@@ -137,6 +138,56 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
         } catch (e) {
             toast.error('순위 이력 조회 실패');
         }
+    };
+
+    // 키워드 30일 순위 추이 라인차트 (펼침 행)
+    var renderRankHistoryChart = function(keywordId, keywordLabel) {
+        var rows = historyData[keywordId];
+        if (!rows) {
+            return React.createElement('div', { style: { padding: '16px', textAlign: 'center', fontSize: 12, color: '#94a3b8' } }, '순위 이력 불러오는 중...');
+        }
+        if (rows.length < 2) {
+            return React.createElement('div', { style: { padding: '16px', textAlign: 'center', fontSize: 12, color: '#94a3b8' } },
+                '30일 추이를 표시하려면 2회 이상의 순위 기록이 필요합니다. (현재 ' + rows.length + '회)');
+        }
+        var labels = rows.map(function(r) {
+            var d = new Date((r.checked_at || '').replace(' ', 'T'));
+            return isNaN(d) ? '' : (d.getMonth() + 1) + '/' + d.getDate();
+        });
+        var data = rows.map(function(r) { return (r.rank_position && r.rank_position > 0) ? r.rank_position : null; });
+        var valid = data.filter(function(v) { return v != null; });
+        var maxRank = valid.length ? Math.max.apply(null, valid) : 40;
+        var C = window.CHART_COLORS || { OK: '#16a34a' };
+        return React.createElement('div', { style: { padding: '12px 16px 4px' } },
+            React.createElement('div', { style: { fontSize: 12, fontWeight: 700, color: '#0f172a', marginBottom: 8 } },
+                '"' + keywordLabel + '" 최근 30일 순위 추이'),
+            React.createElement(window.ChartCanvas, {
+                type: 'line',
+                height: 180,
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: '순위',
+                        data: data,
+                        borderColor: C.OK,
+                        backgroundColor: 'rgba(22,163,74,.12)',
+                        fill: true, tension: 0.35, pointRadius: 2.5, borderWidth: 2.5,
+                        spanGaps: true
+                    }]
+                },
+                options: {
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: { callbacks: { label: function(ctx) { return ctx.parsed.y != null ? ctx.parsed.y + '위' : '미노출'; } } }
+                    },
+                    scales: {
+                        y: { reverse: true, suggestedMin: 1, suggestedMax: Math.max(16, maxRank + 2), title: { display: true, text: '순위 (낮을수록 상위 ↑)' }, ticks: { precision: 0 } }
+                    }
+                }
+            }),
+            React.createElement('div', { style: { fontSize: 10, color: '#94a3b8', marginTop: 4 } },
+                '※ 선이 위로 갈수록 상위 노출. 끊긴 구간은 미노출입니다.')
+        );
     };
 
     // 1회성 순위 결과 블록 카드 렌더링
@@ -393,8 +444,12 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                                                 )),
                                                 React.createElement('tbody', null,
                                                     p.keywords.map(function(k) {
-                                                        return React.createElement('tr', { key: k.id, style: { cursor: 'pointer' }, onClick: function() { setExpandedProduct(p.id === expandedProduct ? null : p.id); loadHistory(k.id); } },
-                                                            React.createElement('td', { style: { fontWeight: 500 } }, k.keyword),
+                                                        var isOpen = expandedKeyword === k.id;
+                                                        var rowEl = React.createElement('tr', { key: k.id, style: { cursor: 'pointer', background: isOpen ? '#f8fafc' : undefined }, onClick: function() { var next = isOpen ? null : k.id; setExpandedKeyword(next); if (next) loadHistory(k.id); } },
+                                                            React.createElement('td', { style: { fontWeight: 500 } },
+                                                                React.createElement('span', { style: { color: '#cbd5e1', marginRight: 6, fontSize: 11 } }, isOpen ? '▼' : '▶'),
+                                                                k.keyword
+                                                            ),
                                                             React.createElement('td', null,
                                                                 k.latest_rank
                                                                     ? React.createElement('span', { style: { fontWeight: 700, color: k.latest_rank <= 10 ? '#059669' : k.latest_rank <= 40 ? '#d97706' : '#dc2626' } }, k.latest_rank + '위')
@@ -403,6 +458,13 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                                                             React.createElement('td', null, k.latest_rank ? Math.ceil(k.latest_rank / 40) + 'P' : '-'),
                                                             React.createElement('td', { style: { fontSize: 12, color: '#94a3b8' } }, k.last_checked ? new Date(k.last_checked).toLocaleString('ko') : '-')
                                                         );
+                                                        if (!isOpen) return rowEl;
+                                                        var chartRow = React.createElement('tr', { key: k.id + '-chart' },
+                                                            React.createElement('td', { colSpan: 4, style: { padding: 0, background: '#f8fafc' } },
+                                                                renderRankHistoryChart(k.id, k.keyword)
+                                                            )
+                                                        );
+                                                        return [rowEl, chartRow];
                                                     })
                                                 )
                                             )
@@ -485,12 +547,16 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                                                 var badgeBg = rk ? (rk <= 10 ? '#ecfdf5' : rk <= 40 ? '#fffbeb' : '#fef2f2') : '#f1f5f9';
                                                 var badgeColor = rk ? (rk <= 10 ? '#059669' : rk <= 40 ? '#d97706' : '#dc2626') : '#94a3b8';
                                                 var pg = rk ? Math.ceil(rk / 40) : 0;
-                                                return React.createElement('tr', {
+                                                var isOpen = expandedKeyword === k.id;
+                                                var rowEl = React.createElement('tr', {
                                                     key: k.id,
-                                                    style: { cursor: 'pointer', borderTop: '1px solid #f1f5f9' },
-                                                    onClick: function() { setExpandedProduct(p.id === expandedProduct ? null : p.id); loadHistory(k.id); }
+                                                    style: { cursor: 'pointer', borderTop: '1px solid #f1f5f9', background: isOpen ? '#f8fafc' : undefined },
+                                                    onClick: function() { var next = isOpen ? null : k.id; setExpandedKeyword(next); if (next) loadHistory(k.id); }
                                                 },
-                                                    React.createElement('td', { style: { padding: '6px 10px', fontSize: 12, fontWeight: 600, color: '#1e293b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, k.keyword),
+                                                    React.createElement('td', { style: { padding: '6px 10px', fontSize: 12, fontWeight: 600, color: '#1e293b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+                                                        React.createElement('span', { style: { color: '#cbd5e1', marginRight: 4, fontSize: 9 } }, isOpen ? '▼' : '▶'),
+                                                        k.keyword
+                                                    ),
                                                     React.createElement('td', { style: { padding: '6px 6px', whiteSpace: 'nowrap' } },
                                                         React.createElement('span', { style: { fontSize: 13, fontWeight: 800, letterSpacing: '-0.5px', color: rankColor } }, rk ? rk + '위' : '미노출'),
                                                         pg > 0 && React.createElement('span', { style: { fontSize: 9, padding: '1px 4px', borderRadius: 3, fontWeight: 700, background: '#f1f5f9', color: '#64748b', marginLeft: 4 } }, pg + 'P')
@@ -499,6 +565,13 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                                                         React.createElement('span', { style: { fontSize: 9, padding: '2px 5px', borderRadius: 4, fontWeight: 700, background: badgeBg, color: badgeColor } }, rkLabel)
                                                     )
                                                 );
+                                                if (!isOpen) return rowEl;
+                                                var chartRow = React.createElement('tr', { key: k.id + '-chart' },
+                                                    React.createElement('td', { colSpan: 3, style: { padding: 0, background: '#f8fafc' } },
+                                                        renderRankHistoryChart(k.id, k.keyword)
+                                                    )
+                                                );
+                                                return [rowEl, chartRow];
                                             })
                                         )
                                     )

@@ -27,20 +27,22 @@ window.CompetitionIndexSection = function CompetitionIndexSection(props) {
         {/* 상단: 도넛차트 + 라벨 */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-            {/* conic-gradient 도넛 */}
-            <div style={{
-              width: 80, height: 80, borderRadius: '50%',
-              background: 'conic-gradient(' + compColor + ' ' + (pct * 3.6) + 'deg, #f1f5f9 0deg)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              flexShrink: 0
-            }}>
-              <div style={{
-                width: 60, height: 60, borderRadius: '50%', background: '#fff',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: 18, fontWeight: 800, color: compColor
-              }}>
-                {pct}
-              </div>
+            {/* Chart.js 반원 게이지 */}
+            <div style={{ position: 'relative', width: 130, height: 78, flexShrink: 0 }}>
+              <ChartCanvas
+                type="doughnut"
+                height={130}
+                style={{ height: 130, position: 'absolute', top: 0, left: 0 }}
+                data={{
+                  labels: ['경쟁', '여유'],
+                  datasets: [{ data: [pct, Math.max(0, 100 - pct)], backgroundColor: [compColor, (window.CHART_COLORS || {}).GRID || '#eef2f7'], borderWidth: 0 }]
+                }}
+                options={{
+                  rotation: -90, circumference: 180, cutout: '70%',
+                  plugins: { legend: { display: false }, tooltip: { enabled: false } }
+                }}
+              />
+              <div style={{ position: 'absolute', bottom: 0, left: 0, width: '100%', textAlign: 'center', fontSize: 22, fontWeight: 800, color: compColor }}>{pct}</div>
             </div>
             <div>
               <span style={{

@@ -4,6 +4,14 @@ window.MarketRevenueSection = function MarketRevenueSection(props) {
 
   if (!topProducts || topProducts.length === 0) return null;
 
+  var C = window.CHART_COLORS || {};
+  var parseWon = function(s) { return parseInt(String(s).replace(/[^0-9]/g, ''), 10) || 0; };
+  /* 순위별 예상 월 매출 차트용 데이터 (상위 10위, 만원 단위) */
+  var revTop = (topProducts || []).slice(0, 10);
+  var revLabels = revTop.map(function(it) { return it.rank + '위'; });
+  var revValues = revTop.map(function(it) { return Math.round(parseWon(it.estRevenue) / 10000); });
+  var hasRevChart = revValues.some(function(v) { return v > 0; });
+
   /* v5 상단 메트릭 카드 데이터 */
   var summaryCards = [
     { icon: '💰', label: '월간 시장 규모', value: estimatedMonthly || '-', color: '#4f46e5', gradBg: 'linear-gradient(135deg, #eef2ff, #dbeafe)' },
@@ -46,9 +54,37 @@ window.MarketRevenueSection = function MarketRevenueSection(props) {
         })}
       </div>
 
+      {/* 순위별 예상 월 매출 막대 차트 */}
+      {hasRevChart && (
+        <div className="card" style={{ padding: '20px 24px', borderRadius: 16, marginBottom: 20 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a', marginBottom: 14 }}>순위별 예상 월 매출 (상위 {revTop.length}위)</div>
+          <ChartCanvas
+            type="bar"
+            height={240}
+            data={{
+              labels: revLabels,
+              datasets: [{
+                label: '예상 월 매출(만원)',
+                data: revValues,
+                backgroundColor: function(ctx) { return ctx.dataIndex < 3 ? C.IND : C.SOFT; },
+                borderRadius: 6
+              }]
+            }}
+            options={{
+              plugins: {
+                legend: { display: false },
+                tooltip: { callbacks: { label: function(ctx) { return (window.chartComma ? window.chartComma(ctx.parsed.y) : ctx.parsed.y) + '만원'; } } }
+              },
+              scales: { y: { beginAtZero: true, ticks: { callback: function(v) { return (window.chartComma ? window.chartComma(v) : v) + '만'; } } } }
+            }}
+          />
+          <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 8 }}>※ 상위 3위는 진한 색으로 강조했습니다. 추정치 단위: 만원.</div>
+        </div>
+      )}
+
       {/* v5 순위별 매출 테이블 — 그라데이션 헤더 */}
       <div style={{ fontSize: 15, fontWeight: 700, color: '#0f172a', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
-        <span>🏆</span> 순위별 예상 월 매출
+        <span>🏆</span> 순위별 예상 월 매출 (상세)
       </div>
       <div className="card" style={{ padding: 0, overflow: 'hidden', borderRadius: 16 }}>
         <div style={{ maxHeight: 540, overflowY: 'auto' }}>

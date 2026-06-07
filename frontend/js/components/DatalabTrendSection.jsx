@@ -59,56 +59,32 @@ window.DatalabTrendSection = function DatalabTrendSection(props) {
             </div>
           </div>
 
-          {/* SVG 꺾은선 그래프 */}
-          <div style={{ position: 'relative' }}>
-            <svg viewBox={'0 0 ' + W + ' ' + H} style={{ width: '100%', height: 'auto' }}>
-              <defs>
-                <linearGradient id="dlTrendArea" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#4f46e5" stopOpacity="0.15"/>
-                  <stop offset="100%" stopColor="#4f46e5" stopOpacity="0.01"/>
-                </linearGradient>
-              </defs>
-
-              {/* 가로 그리드 */}
-              {gridLines.map(function(v) {
-                return (
-                  <g key={v}>
-                    <line x1={PAD_L} y1={y(v)} x2={W - PAD_R} y2={y(v)} stroke={v === 0 ? '#e2e8f0' : '#f1f5f9'} strokeWidth="1" strokeDasharray={v === 0 ? '0' : '4'}/>
-                    <text x={PAD_L - 6} y={y(v) + 4} fill="#94a3b8" fontSize="10" textAnchor="end">{v}</text>
-                  </g>
-                );
-              })}
-
-              {/* 영역 */}
-              <polygon points={area} fill="url(#dlTrendArea)"/>
-
-              {/* 꺾은선 */}
-              <polyline points={points} fill="none" stroke="#4f46e5" strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round"/>
-
-              {/* 데이터 포인트 + X축 라벨 */}
-              {months.map(function(m, i) {
-                var isMax = m.ratio === d.maxRatio;
-                var isMin = m.ratio === d.minRatio;
-                var cx = x(i), cy = y(m.ratio);
-                return (
-                  <g key={i}>
-                    <circle cx={cx} cy={cy} r={isMax ? 6 : isMin ? 5 : 4}
-                      fill={isMax ? '#4f46e5' : isMin ? '#ef4444' : '#fff'}
-                      stroke={isMax ? '#fff' : isMin ? '#fff' : '#4f46e5'}
-                      strokeWidth={isMax || isMin ? 2 : 2}/>
-                    {(isMax || isMin) && (
-                      <g>
-                        <rect x={cx - 22} y={isMax ? cy - 20 : cy + 6} width="44" height="16" rx="4" fill={isMax ? '#4f46e5' : '#ef4444'}/>
-                        <text x={cx} y={isMax ? cy - 8 : cy + 18} fill="#fff" fontSize="9" fontWeight="700" textAnchor="middle">{m.ratio}</text>
-                      </g>
-                    )}
-                    <text x={cx} y={H - 8} fill={isMax ? '#4f46e5' : isMin ? '#ef4444' : '#64748b'}
-                      fontSize="10" fontWeight={isMax || isMin ? 700 : 400} textAnchor="middle">{m.label}</text>
-                  </g>
-                );
-              })}
-            </svg>
-          </div>
+          {/* Chart.js 꺾은선 그래프 */}
+          <ChartCanvas
+            type="line"
+            height={240}
+            data={{
+              labels: months.map(function(m) { return m.label; }),
+              datasets: [{
+                label: '검색 지수',
+                data: months.map(function(m) { return m.ratio; }),
+                borderColor: '#4f46e5',
+                backgroundColor: function(c) {
+                  if (!c.chart.ctx) return 'rgba(79,70,229,.12)';
+                  return window.chartGrad ? window.chartGrad(c.chart.ctx, 'rgba(79,70,229,.22)', 'rgba(79,70,229,0)', 240) : 'rgba(79,70,229,.12)';
+                },
+                fill: true, tension: 0.4, borderWidth: 2.5,
+                pointRadius: months.map(function(m) { return (m.ratio === d.maxRatio || m.ratio === d.minRatio) ? 6 : 3; }),
+                pointBackgroundColor: months.map(function(m) { return m.ratio === d.maxRatio ? '#4f46e5' : m.ratio === d.minRatio ? '#ef4444' : '#fff'; }),
+                pointBorderColor: months.map(function(m) { return m.ratio === d.minRatio ? '#ef4444' : '#4f46e5'; }),
+                pointBorderWidth: 2
+              }]
+            }}
+            options={{
+              plugins: { legend: { display: false } },
+              scales: { y: { beginAtZero: true, suggestedMax: (d.maxRatio || 100) } }
+            }}
+          />
 
           <div style={{ marginTop: 12, padding: '10px 16px', background: 'linear-gradient(135deg, #f0f9ff, #e0f2fe)', borderRadius: 10, border: '1px solid #bae6fd', fontSize: 12, color: '#0369a1', lineHeight: 1.7 }}>
             📊 <strong>트렌드 요약:</strong> 검색량이 {d.maxMonth}에 최고({d.maxRatio}), {d.minMonth}에 최저({d.minRatio})를 기록합니다. 평균 지수는 {d.avgRatio}이며 변동폭은 {d.range}p입니다.

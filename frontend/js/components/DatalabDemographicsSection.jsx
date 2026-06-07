@@ -46,24 +46,22 @@ window.DatalabDemographicsSection = function DatalabDemographicsSection(props) {
 
             {gender ? (
               <div>
-                {/* 비율 바 */}
-                <div style={{ display: 'flex', height: 32, borderRadius: 10, overflow: 'hidden', marginBottom: 12 }}>
-                  <div style={{ width: gender.male + '%', background: 'linear-gradient(135deg, #4f46e5, #818cf8)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 13, fontWeight: 700 }}>
-                    {gender.male > 10 ? gender.male + '%' : ''}
-                  </div>
-                  <div style={{ width: gender.female + '%', background: 'linear-gradient(135deg, #ec4899, #f472b6)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 13, fontWeight: 700 }}>
-                    {gender.female > 10 ? gender.female + '%' : ''}
-                  </div>
-                </div>
-                {/* 범례 */}
-                <div style={{ display: 'flex', gap: 24, justifyContent: 'center', marginBottom: 20 }}>
-                  <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#475569', fontWeight: 600 }}>
-                    <span style={{ width: 10, height: 10, borderRadius: '50%', background: '#4f46e5', display: 'inline-block' }}></span> 남성 {gender.male}%
-                  </span>
-                  <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#475569', fontWeight: 600 }}>
-                    <span style={{ width: 10, height: 10, borderRadius: '50%', background: '#ec4899', display: 'inline-block' }}></span> 여성 {gender.female}%
-                  </span>
-                </div>
+                {/* 성별 도넛 차트 */}
+                <ChartCanvas
+                  type="doughnut"
+                  height={180}
+                  data={{
+                    labels: ['남성', '여성'],
+                    datasets: [{ data: [gender.male, gender.female], backgroundColor: ['#4f46e5', '#ec4899'], borderWidth: 0 }]
+                  }}
+                  options={{
+                    cutout: '62%',
+                    plugins: {
+                      legend: { position: 'bottom' },
+                      tooltip: { callbacks: { label: function(ctx) { return ctx.label + ' ' + ctx.parsed + '%'; } } }
+                    }
+                  }}
+                />
                 {/* 수치 카드 */}
                 <div className="card-grid card-grid-2" style={{ gap: 10 }}>
                   <div style={{ background: '#eef2ff', borderRadius: 10, padding: 14, textAlign: 'center' }}>
@@ -89,25 +87,26 @@ window.DatalabDemographicsSection = function DatalabDemographicsSection(props) {
 
             {ages.length > 0 ? (
               <div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  {ages.map(function(a, i) {
-                    var isPeak = peakAge && a.label === peakAge.label;
-                    var widthPct = maxAge > 0 ? Math.max(a.ratio / maxAge * 100, 4) : 4;
-                    return (
-                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                        <div style={{ width: 48, fontSize: 12, fontWeight: 600, color: '#475569', textAlign: 'right' }}>{a.label}</div>
-                        <div style={{ flex: 1, height: 24, background: '#f1f5f9', borderRadius: 8, position: 'relative', overflow: 'hidden' }}>
-                          <div style={{ height: '100%', width: widthPct + '%', borderRadius: 8, background: ageGrads[i] || ageGrads[0], display: 'flex', alignItems: 'center', paddingLeft: 10, fontSize: 11, fontWeight: 700, color: '#fff', minWidth: 30 }}>
-                            {a.ratio > 8 ? a.ratio + '%' : ''}
-                          </div>
-                        </div>
-                        <div style={{ width: 50, fontSize: 12, fontWeight: isPeak ? 800 : 700, color: isPeak ? '#4f46e5' : '#0f172a', textAlign: 'right' }}>
-                          {a.ratio}%{isPeak ? ' 🔥' : ''}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
+                <ChartCanvas
+                  type="bar"
+                  height={200}
+                  data={{
+                    labels: ages.map(function(a) { return a.label + (peakAge && a.label === peakAge.label ? ' 🔥' : ''); }),
+                    datasets: [{
+                      label: '검색 비율',
+                      data: ages.map(function(a) { return a.ratio; }),
+                      backgroundColor: ages.map(function(a) { return (peakAge && a.label === peakAge.label) ? '#7c3aed' : '#c7d2fe'; }),
+                      borderRadius: 6
+                    }]
+                  }}
+                  options={{
+                    plugins: {
+                      legend: { display: false },
+                      tooltip: { callbacks: { label: function(ctx) { return ctx.parsed.y + '%'; } } }
+                    },
+                    scales: { y: { beginAtZero: true, ticks: { callback: function(v) { return v + '%'; } } } }
+                  }}
+                />
                 {peakAge && (
                   <div style={{ marginTop: 14, padding: '10px 14px', background: '#f0f4ff', borderRadius: 8, fontSize: 11, color: '#4f46e5', fontWeight: 600 }}>
                     🎯 핵심 타겟: {targetAge} {targetGender} (전체의 약 {targetPct}%)

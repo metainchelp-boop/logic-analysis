@@ -24,6 +24,31 @@ window.DatalabGrowthSection = function DatalabGrowthSection(props) {
         <div className="section-line"></div>
         <p className="section-subtitle">데이터랩 쇼핑인사이트 기반 전년 대비 검색 트렌드 변화</p>
 
+        {/* 기간별 성장률 비교 막대 차트 */}
+        <div className="card" style={{ padding: '20px 24px', marginBottom: 16 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a', marginBottom: 14 }}>기간별 성장률 비교</div>
+          <ChartCanvas
+            type="bar"
+            height={200}
+            data={{
+              labels: periods.map(function(p) { return '직전 ' + p.label + ' 대비'; }),
+              datasets: [{
+                label: '성장률(%)',
+                data: periods.map(function(p) { return p.growth; }),
+                backgroundColor: periods.map(function(p) { return p.growth >= 0 ? '#22c55e' : '#ef4444'; }),
+                borderRadius: 6
+              }]
+            }}
+            options={{
+              plugins: {
+                legend: { display: false },
+                tooltip: { callbacks: { label: function(ctx) { return (ctx.parsed.y >= 0 ? '+' : '') + ctx.parsed.y + '%'; } } }
+              },
+              scales: { y: { ticks: { callback: function(v) { return (v > 0 ? '+' : '') + v + '%'; } } } }
+            }}
+          />
+        </div>
+
         <div className="card-grid card-grid-3">
           {periods.map(function(p, i) {
             var c = colors[i] || colors[0];

@@ -53,15 +53,14 @@ window.HtmlDetailAnalysisSection = function HtmlDetailAnalysisSection({ data }) 
                         background: '#fff', border: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(0,0,0,0.04)'
                     }}>
                         <div style={{ fontSize: 14, fontWeight: 600, color: '#64748b', marginBottom: 16 }}>상세페이지 종합 점수</div>
-                        <div style={{
-                            width: 120, height: 120, borderRadius: '50%',
-                            background: 'conic-gradient(' + getScoreColor(total) + ' ' + (total * 3.6) + 'deg, #f1f5f9 0deg)',
-                            display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 12
-                        }}>
-                            <div style={{
-                                width: 96, height: 96, borderRadius: '50%', background: '#fff',
-                                display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center'
-                            }}>
+                        <div style={{ position: 'relative', width: 120, height: 120, marginBottom: 12 }}>
+                            <ChartCanvas
+                                type="doughnut"
+                                height={120}
+                                data={{ labels: ['점수', '잔여'], datasets: [{ data: [total, Math.max(0, 100 - total)], backgroundColor: [getScoreColor(total), '#f1f5f9'], borderWidth: 0 }] }}
+                                options={{ cutout: '78%', plugins: { legend: { display: false }, tooltip: { enabled: false } } }}
+                            />
+                            <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
                                 <div style={{ fontSize: 28, fontWeight: 800, color: getScoreColor(total) }}>{total}</div>
                                 <div style={{ fontSize: 11, color: '#94a3b8' }}>/ 100</div>
                             </div>
@@ -86,6 +85,27 @@ window.HtmlDetailAnalysisSection = function HtmlDetailAnalysisSection({ data }) 
                         <ScoreBar label="정보 완성도" score={data.scores.info} icon="📋" weight="20%" />
                         <ScoreBar label="신뢰 요소" score={data.scores.trust} icon="🛡️" weight="15%" />
                     </div>
+                </div>
+
+                {/* 영역별 점수 레이더 */}
+                <div style={{ padding: 24, borderRadius: 16, marginBottom: 16, background: '#fff', border: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+                    <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>📡 영역별 균형 (레이더)</div>
+                    <ChartCanvas
+                        type="radar"
+                        height={300}
+                        data={{
+                            labels: ['이미지', '텍스트', '동영상', '정보 완성도', '신뢰 요소'],
+                            datasets: [{
+                                label: '점수',
+                                data: [data.scores.images || 0, data.scores.text || 0, data.scores.video || 0, data.scores.info || 0, data.scores.trust || 0],
+                                borderColor: '#4f46e5', backgroundColor: 'rgba(79,70,229,.18)', pointBackgroundColor: '#4f46e5', borderWidth: 2
+                            }]
+                        }}
+                        options={{
+                            plugins: { legend: { display: false }, tooltip: { callbacks: { label: function(ctx) { return ctx.label + ' ' + ctx.parsed.r + '점'; } } } },
+                            scales: { r: { beginAtZero: true, max: 100, ticks: { display: false }, pointLabels: { font: { size: 11 } } } }
+                        }}
+                    />
                 </div>
 
                 {/* 주요 지표 4칼럼 MetricCard */}
