@@ -91,6 +91,15 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
             });
     }, [searchedProductUrl, searchedKeyword, cachedProductName]);
 
+    // 분석 중인 상품이 추적 등록돼 있으면 30일 순위 추이 차트용 이력을 미리 로드
+    useEffect(function() {
+        if (!searchedProductUrl || !products) return;
+        var tp = products.find(function(p) { return p.product_url === searchedProductUrl; });
+        if (!tp) return;
+        var kw = (tp.keywords || []).find(function(k) { return k.latest_rank; }) || (tp.keywords || [])[0];
+        if (kw && kw.id) loadHistory(kw.id);
+    }, [searchedProductUrl, products]);
+
     // 자동 등록 + 자동 순위체크 제거 — 수동 버튼으로만 실행 (서버 부하 방지)
     // 기존 DB 데이터(스케줄러 수집분)만 표시, 필요시 사용자가 직접 새로고침
 
@@ -260,8 +269,8 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                 <div className="card" style={{ padding: '20px 22px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
                     <div>
-                        <h3 className="rt-h3"><span className="rt-hic">📊</span>순위 추적<span className="badge b-ok">✅ 실측</span></h3>
-                        <div className="rt-desc">네이버 쇼핑 노출 순위를 키워드별로 추적합니다</div>
+                        <h3 className="rt-h3"><span className="rt-hic">📍</span>키워드별 노출 순위<span className="badge b-ok">✅ 실측</span></h3>
+                        <div className="rt-desc">상품명에서 추출한 키워드별로 네이버 쇼핑 검색 순위를 조회한 결과 (검색 범위: 상위 300개 상품)</div>
                     </div>
                     {canEdit !== false && <button className="btn btn-primary btn-sm" onClick={() => setShowAddForm(!showAddForm)}>
                         {showAddForm ? '취소' : '+ 상품 등록'}
@@ -286,9 +295,6 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                     </div>
                 )}
 
-                {/* 실시간 순위 조회 결과 */}
-                {renderTempRankCard()}
-
                 {/* 키워드별 노출 분석 */}
                 {exposureLoading && (
                     <div className="card fade-in" style={{ textAlign: 'center', padding: '24px 16px', color: '#64748b', marginTop: 16 }}>
@@ -304,15 +310,10 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                         : 0;
                     return (
                     <div className="fade-in" style={{ marginTop: 16 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-                            <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 6 }}>
-                                <span>🔎</span> 키워드별 노출 순위
-                            </div>
-                            <div style={{ display: 'flex', gap: 8 }}>
-                                <span className="ps ps-g">노출 {exposureResult.exposed_count}개</span>
-                                <span className="ps ps-r">미노출 {unexposed.length}개</span>
-                                <span className="ps ps-n">전체 {exposureResult.total_keywords}개</span>
-                            </div>
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginBottom: 12 }}>
+                            <span className="ps ps-g">노출 {exposureResult.exposed_count}개</span>
+                            <span className="ps ps-r">미노출 {unexposed.length}개</span>
+                            <span className="ps ps-n">전체 {exposureResult.total_keywords}개</span>
                         </div>
 
                         {/* 요약 카드 3개 */}
@@ -369,9 +370,25 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                             </div>
                         </div>
 
-                        <div style={{ marginTop: 12, fontSize: 11, color: '#94a3b8', lineHeight: 1.6 }}>
-                            ※ 상품명에서 추출한 키워드별로 네이버 쇼핑 검색 순위를 조회한 결과입니다. 검색 범위: 상위 300개 상품
-                        </div>
+                        {/* 30일 순위 추이 차트 (추적 등록된 상품이면 실데이터, 아니면 안내) */}
+                        {(function() {
+                            var tp = (products || []).find(function(p) { return p.product_url === searchedProductUrl; });
+                            var kw = tp && ((tp.keywords || []).find(function(k) { return k.latest_rank; }) || (tp.keywords || [])[0]);
+                            var topExposed = exposed.length ? exposed.slice().sort(function(a, b) { return a.rank - b.rank; })[0] : null;
+                            var chartTitle = kw ? kw.keyword : (topExposed ? topExposed.keyword : '');
+                            return (
+                                <div className="sub-card" style={{ marginTop: 16 }}>
+                                    <div className="st">📉 {chartTitle ? "'" + chartTitle + "' " : ''}30일 순위 추이 <span className="badge b-est" style={{ marginLeft: 4 }}>신규 차트</span></div>
+                                    {kw && kw.id
+                                        ? renderRankHistoryChart(kw.id, kw.keyword)
+                                        : (
+                                            <div style={{ fontSize: 12, color: '#94a3b8', padding: '6px 2px', lineHeight: 1.7 }}>
+                                                지속적인 30일 순위 추이는 <b style={{ color: '#475569' }}>관리자에 상품 등록(추적 요청)</b> 후 매일 스냅샷으로 자동 기록됩니다. 등록되면 이 자리에 추이 그래프가 표시됩니다.
+                                            </div>
+                                        )}
+                                </div>
+                            );
+                        })()}
                     </div>
                     );
                 })()}
