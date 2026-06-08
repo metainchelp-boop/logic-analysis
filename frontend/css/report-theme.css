@@ -49,11 +49,19 @@ body { background: var(--rt-bg); }
 
 /* ===== 표 스타일 통일 ===== */
 .section table { border-collapse: collapse; }
+/* 전역 thead(보라 그라데이션) 제거 → 회색 헤더 글자가 보이도록 (플랫 디자인 통일) */
+.section table thead,
+.section table thead tr { background: none !important; }
 .section table th {
   color: var(--rt-sub); font-size: 11px; font-weight: 800;
   border-bottom: 2px solid #e2e8f0; text-transform: none;
+  background: none !important;
 }
 .section table tbody tr:hover { background: #fafbff; }
+/* 보고서 전체 표 헤더 — 보라 그라데이션 제거 + 회색 글자 가독성 보장 (.card 등 .section 밖 표까지 커버) */
+.report-main thead,
+.report-main thead tr { background: none !important; }
+.report-main table th { color: var(--rt-sub) !important; background: none !important; }
 
 /* ===== 배지 유틸 (실측/추정/AI) ===== */
 .badge { font-size: 11px; font-weight: 800; padding: 3px 9px; border-radius: 999px; vertical-align: middle; display: inline-block; }
