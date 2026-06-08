@@ -30,11 +30,26 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
         <div className="rt-desc">순위별 예상 판매량과 매출 성장 시나리오</div>
 
         {/* KPI 3칸 */}
-        <div className="grid3" style={{ marginBottom: 24 }}>
+        <div className="grid3" style={{ marginBottom: 16 }}>
           <div className="kpi"><div className="k">평균 상품 단가</div><div className="v" style={{ fontSize: 20 }}>{avgPrice}</div></div>
           <div className="kpi"><div className="k">월간 검색량</div><div className="v" style={{ fontSize: 20 }}>{monthlySearches}</div></div>
           <div className="kpi"><div className="k">예상 전환율</div><div className="v" style={{ fontSize: 20 }}>{estimatedCTR}</div></div>
         </div>
+
+        {/* ★ 리뷰 기반 추정(더 정확) — 실제 리뷰수 기반이라 CTR 추정보다 오차가 작음 */}
+        {props.reviewCount != null && props.reviewCount > 0 && (function() {
+          var rc = props.reviewCount;
+          var rate = 0.116; // 식품 평균 리뷰 작성률
+          var cumSales = Math.round(rc / rate);
+          var monthly = Math.round(cumSales / 12); // 운영 12개월 가정
+          return (
+            <div className="note ok" style={{ marginTop: 0, marginBottom: 20 }}>
+              <b>🧾 리뷰 기반 추정 (더 정확)</b> — 실제 누적 리뷰 <b>{fmt(rc)}건</b> 기반.
+              추정 누적 판매 <b>~{fmt(cumSales)}건</b>, 월 환산 <b>~{fmt(monthly)}건</b>
+              <span style={{ color: '#64748b' }}> (작성률 11.6% · 운영 12개월 가정). 아래 순위 기반 시나리오는 참고용입니다.</span>
+            </div>
+          );
+        })()}
 
         {/* 순위별 예상 월 판매량 막대 차트 */}
         {hasSalesChart && (
