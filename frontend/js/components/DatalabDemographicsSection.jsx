@@ -35,7 +35,7 @@ window.DatalabDemographicsSection = function DatalabDemographicsSection(props) {
         {gender ? (
           <div>
             {/* 성별 도넛 차트 */}
-            <div className="chartbox sm">
+            <div style={{ marginBottom: 14 }}>
               <ChartCanvas
                 type="doughnut"
                 height={180}
@@ -69,7 +69,7 @@ window.DatalabDemographicsSection = function DatalabDemographicsSection(props) {
 
         {ages.length > 0 ? (
           <div>
-            <div className="chartbox sm">
+            <div style={{ marginBottom: 14 }}>
               <ChartCanvas
                 type="bar"
                 height={200}
