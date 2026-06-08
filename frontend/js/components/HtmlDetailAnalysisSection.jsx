@@ -25,13 +25,21 @@ window.HtmlDetailAnalysisSection = function HtmlDetailAnalysisSection({ data }) 
 
                 {/* v5 2칼럼: 원형 스코어 + 영역별 바 */}
                 <div className="grid2" style={{ alignItems: 'center' }}>
-                    {/* 왼쪽: 도넛 차트 */}
-                    <div className="chartbox sm">
-                        <ChartCanvas
-                            type="doughnut"
-                            data={{ labels: ['점수', '잔여'], datasets: [{ data: [total, Math.max(0, 100 - total)], backgroundColor: [getScoreColor(total), '#f1f5f9'], borderWidth: 0 }] }}
-                            options={{ cutout: '78%', plugins: { legend: { display: false }, tooltip: { enabled: false } } }}
-                        />
+                    {/* 왼쪽: 도넛 차트 (고정 크기로 가두기 → 오버플로우 방지 + 중앙 점수) */}
+                    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '6px 0' }}>
+                        <div style={{ position: 'relative', width: 180, height: 180 }}>
+                            <ChartCanvas
+                                type="doughnut"
+                                height={180}
+                                style={{ height: 180, width: 180 }}
+                                data={{ labels: ['점수', '잔여'], datasets: [{ data: [total, Math.max(0, 100 - total)], backgroundColor: [getScoreColor(total), '#f1f5f9'], borderWidth: 0 }] }}
+                                options={{ maintainAspectRatio: false, cutout: '78%', plugins: { legend: { display: false }, tooltip: { enabled: false } } }}
+                            />
+                            <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center' }}>
+                                <div style={{ fontSize: 30, fontWeight: 900, color: getScoreColor(total), lineHeight: 1.1 }}>{total}</div>
+                                <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>/100 · {getScoreLabel(total)}</div>
+                            </div>
+                        </div>
                     </div>
 
                     {/* 오른쪽: 영역별 점수 바 */}

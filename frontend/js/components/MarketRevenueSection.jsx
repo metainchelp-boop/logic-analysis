@@ -52,8 +52,9 @@ window.MarketRevenueSection = function MarketRevenueSection(props) {
         </div>
       )}
 
-      {/* 순위별 매출 표: 시안 .rt-table 5컬럼, 내 상품 행 강조 */}
-      <table className="rt-table" style={{ marginTop: 10 }}>
+      {/* 순위별 매출 표: 10개 높이까지만 보이고 나머지는 스크롤(헤더 고정) */}
+      <div className="rt-scroll">
+      <table className="rt-table" style={{ marginTop: 0 }}>
         <thead>
           <tr>
             <th>순위</th>
@@ -78,6 +79,7 @@ window.MarketRevenueSection = function MarketRevenueSection(props) {
           })}
         </tbody>
       </table>
+      </div>
 
       <div className="note est">≈ 검색량×순위별 클릭률×전환율 기반 <b>시장 규모 추정</b>(개별 실판매 아님). 보완 후 리뷰증가 기반으로 정밀화.</div>
       </div>
