@@ -58,8 +58,11 @@ SECRET_KEY = _get_or_create_secret()
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = 24
 
-# 전산(ERP) SSO 공유 시크릿 — 전산·로직분석 양쪽 서버에 동일하게 설정(env). 미설정 시 SSO 비활성.
-SSO_SHARED_SECRET = os.getenv("SSO_SHARED_SECRET", "")
+# 전산(ERP) SSO — 로직분석이 전산 '내 정보' API로 토큰을 검증(별도 공유시크릿 불필요).
+#   전산 로그인 토큰(localStorage 'token')을 그대로 받아 전산 my-profile 에 질의 → 사용자 식별.
+SSO_SHARED_SECRET = os.getenv("SSO_SHARED_SECRET", "")  # (구 방식 호환용, 현재 미사용)
+ERP_BASE_URL = os.getenv("ERP_BASE_URL", "http://metainc01.cafe24.com")
+ERP_MY_PROFILE_PATH = os.getenv("ERP_MY_PROFILE_PATH", "/api/employee-management/my-profile")
 
 # Password hashing configuration
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -558,20 +561,47 @@ async def sso_login(request: SSORequest, request_obj: Request) -> LoginResponse:
     """전산(ERP) SSO 자동 로그인.
     전산이 공유 시크릿(SSO_SHARED_SECRET)으로 서명한 단기 토큰을 검증 →
     매핑되는 로직분석 사용자 자동 로그인(없으면 viewer 역할로 자동 가입)."""
-    if not SSO_SHARED_SECRET:
-        raise HTTPException(status_code=503, detail="SSO가 설정되지 않았습니다.")
+    # 전산 로그인 토큰을 전산 '내 정보' API로 검증 → 사용자 식별(별도 공유시크릿 불필요).
     # URL 전달 과정에서 붙을 수 있는 앞뒤 공백·후행 슬래시 정리(토큰 자체엔 없는 문자)
     _tok = (request.token or "").strip().strip("/").strip()
+    if not _tok:
+        raise HTTPException(status_code=401, detail="SSO 토큰이 없습니다.")
+    _bearer = _tok if _tok.lower().startswith("bearer ") else ("Bearer " + _tok)
+    import requests as _rq
+    # 전산 API 도달성 견고화: 설정값 + http/https 두 스킴 모두 시도(연결오류 시 다음 후보로)
+    _base = ERP_BASE_URL.rstrip("/")
+    _candidates = [_base]
+    if _base.startswith("http://"):
+        _candidates.append("https://" + _base[len("http://"):])
+    elif _base.startswith("https://"):
+        _candidates.append("http://" + _base[len("https://"):])
+    _resp = None
+    _last_err = None
+    for _cand in _candidates:
+        try:
+            _resp = _rq.get(
+                _cand + ERP_MY_PROFILE_PATH,
+                headers={"Authorization": _bearer},
+                timeout=8,
+            )
+            break  # 응답을 받으면(코드 무관) 연결 성공 → 사용
+        except Exception as _e:
+            _last_err = _e
+            continue
+    if _resp is None:
+        logger.error(f"SSO 전산 검증 연결 실패: {_last_err}")
+        raise HTTPException(status_code=502, detail="전산 인증 서버에 연결할 수 없습니다.")
+    if _resp.status_code != 200:
+        raise HTTPException(status_code=401, detail="전산 로그인 정보가 유효하지 않습니다. 전산에 먼저 로그인해주세요.")
     try:
-        payload = jwt.decode(_tok, SSO_SHARED_SECRET, algorithms=["HS256"])
-    except JWTError:
-        raise HTTPException(status_code=401, detail="유효하지 않거나 만료된 SSO 토큰입니다.")
-
-    sub = str(payload.get("sub") or payload.get("username") or "").strip()
+        _result = (_resp.json() or {}).get("result") or {}
+    except Exception:
+        _result = {}
+    sub = str(_result.get("id") or "").strip()
     if not sub or len(sub) > 100:
-        raise HTTPException(status_code=401, detail="SSO 토큰에 유효한 사용자 식별자가 없습니다.")
-    name = (str(payload.get("name") or sub)).strip()[:100]
-    username = sub  # 전산 식별자를 로직분석 username으로 사용
+        raise HTTPException(status_code=401, detail="전산 사용자 식별에 실패했습니다.")
+    name = (str(_result.get("name") or sub)).strip()[:100]
+    username = sub  # 전산 로그인ID 를 로직분석 username 으로 사용
 
     try:
         user = get_user_by_username(username)
