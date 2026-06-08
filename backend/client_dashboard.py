@@ -152,6 +152,7 @@ class SaveAnalysisRequest(BaseModel):
     shop_products: Optional[Any] = []
     advertiser_data: Optional[Any] = {}
     report_html: Optional[str] = ''
+    detail_html: Optional[str] = ''  # #1: 상세페이지 HTML(재분석/자동분석 재사용)
 
 
 class QuickRegisterRequest(BaseModel):
@@ -165,6 +166,7 @@ class QuickRegisterRequest(BaseModel):
     shop_products: Optional[Any] = []
     advertiser_data: Optional[Any] = {}
     report_html: Optional[str] = ''
+    detail_html: Optional[str] = ''  # #1: 상세페이지 HTML(재분석/자동분석 재사용)
 
 
 class SaveRankRequest(BaseModel):
@@ -223,6 +225,14 @@ async def quick_register(req: QuickRegisterRequest, current_user: dict = Depends
                                 req.analysis_data, req.volume_data, req.related_data,
                                 req.shop_products, req.advertiser_data, today, now,
                                 req.report_html or '')
+
+        # #1: 상세 HTML 저장 (있을 때만)
+        if req.detail_html:
+            try:
+                conn.execute("UPDATE clients SET detail_html = ?, updated_at = ? WHERE id = ?",
+                             (req.detail_html, now, client_id))
+            except Exception:
+                pass
 
         conn.commit()
         return {"success": True, "message": msg, "client_id": client_id}
@@ -425,6 +435,14 @@ async def save_analysis(req: SaveAnalysisRequest, current_user: dict = Depends(r
                                 req.analysis_data, req.volume_data, req.related_data,
                                 req.shop_products, req.advertiser_data, today, now,
                                 req.report_html or '')
+
+        # #1: 상세 HTML 저장 (있을 때만 — 빈값으로 기존 저장본을 덮어쓰지 않음)
+        if req.detail_html:
+            try:
+                conn.execute("UPDATE clients SET detail_html = ?, updated_at = ? WHERE id = ?",
+                             (req.detail_html, now, req.client_id))
+            except Exception:
+                pass  # detail_html 컬럼 없으면 무시(마이그레이션 전)
 
         # 키워드 업데이트
         cur_kw = conn.execute(

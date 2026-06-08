@@ -52,6 +52,7 @@ window.App = function App() {
     const [datalabLoading, setDatalabLoading] = useState(false);
     const [rankCheckResult, setRankCheckResult] = useState(null); // 순위 추적 → 진입 전략 공유용
     const searchIdRef = React.useRef(0); // 비동기 요청 경합 방지용
+    const lastHtmlRef = React.useRef(''); // #1: 마지막 분석에 쓰인 상세 HTML (업체 저장/재사용용)
 
     /* 업체 카드 클릭으로 시작된 분석 추적 (자동 저장용) */
     const [currentClientId, setCurrentClientId] = useState(null);
@@ -160,6 +161,7 @@ window.App = function App() {
                 shop_products: (shopProducts || []).slice(0, 20),
                 advertiser_data: advertiserReport || {},
                 report_html: reportHtml,
+                detail_html: lastHtmlRef.current || '',
             }).then(function(res) {
                 if (!mounted) return;
                 if (res && res.success) {
@@ -234,6 +236,7 @@ window.App = function App() {
     };
 
     var _doSearch = function(keyword, productUrl, inputCompanyName, htmlInput) {
+        lastHtmlRef.current = htmlInput || '';  // #1: 저장/재사용용 상세 HTML 보관
         if (inputCompanyName !== undefined) setCompanyName(inputCompanyName);
         var cleanedUrl = cleanProductUrl(productUrl);
         var currentSearchId = ++searchIdRef.current; // 새 검색마다 ID 증가
@@ -968,7 +971,8 @@ window.App = function App() {
         setAutoSaveStatus('');
         setCurrentPage('analysis');
         try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch(e) {}
-        handleSearch(params.keyword, params.productUrl || '', params.companyName || '');
+        // #1: 업체에 저장된 상세 HTML이 있으면 자동 주입 → 리뷰 텍스트/상세 분석 자동 표시
+        handleSearch(params.keyword, params.productUrl || '', params.companyName || '', params.detailHtml || null);
     };
 
     /* DOM 캡처 — 자동 저장용 HTML 보고서 생성 (SaveToClientSection과 동일 로직) */
@@ -1548,6 +1552,7 @@ window.App = function App() {
                     relatedData: relatedData,
                     shopProducts: shopProducts,
                     advertiserReport: advertiserReport,
+                    detailHtml: lastHtmlRef.current,
                 })
             ),
 

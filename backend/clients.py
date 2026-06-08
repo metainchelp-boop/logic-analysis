@@ -215,6 +215,13 @@ def init_clients_db():
                 ON clients(name)
             """)
 
+            # 마이그레이션(#1): 등록 시 상세페이지 HTML 저장 → 재분석/자동분석에 재사용
+            try:
+                cursor.execute("SELECT detail_html FROM clients LIMIT 1")
+            except Exception:
+                cursor.execute("ALTER TABLE clients ADD COLUMN detail_html TEXT DEFAULT ''")
+                logger.info("[clients] detail_html column added via migration")
+
             logger.info("Clients database initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize clients database: {str(e)}")

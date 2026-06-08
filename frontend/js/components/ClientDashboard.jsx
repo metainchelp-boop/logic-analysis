@@ -661,7 +661,8 @@ window.ClientDashboard = function ClientDashboard({ currentUser, onRunAnalysis, 
                                         keyword: keyword,
                                         productUrl: productUrl || '',
                                         companyName: selectedClient.name || '',
-                                        clientId: selectedClient.id
+                                        clientId: selectedClient.id,
+                                        detailHtml: selectedClient.detail_html || ''  // #1: 저장된 상세HTML 재사용
                                     };
                                     onRunAnalysis(params);
                                 } : runAnalysis}
