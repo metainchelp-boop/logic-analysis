@@ -55,7 +55,7 @@ window.SearchBar = function SearchBar({ onSearch, loading, initialValues }) {
                             />
                         </div>
                         <div>
-                            <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#6b7280', marginBottom: 4, letterSpacing: '0.02em' }}>상품 URL (선택)</label>
+                            <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#6b7280', marginBottom: 4, letterSpacing: '0.02em' }}>상품 URL (선택 · HTML 넣으면 자동인식)</label>
                             <input
                                 className="search-input"
                                 type="url"

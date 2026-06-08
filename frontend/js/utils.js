@@ -1,7 +1,7 @@
 /* ===== 로직 분석 — API 헬퍼 & 유틸리티 ===== */
 
 // ===== 앱 버전 (한 곳에서 관리) =====
-var APP_VERSION = window.APP_VERSION = 'v6.3.6';
+var APP_VERSION = window.APP_VERSION = 'v6.3.7';
 
 // ===== 401 중복 새로고침 방지 플래그 =====
 var _isAuthRedirecting = false;
@@ -175,4 +175,25 @@ var CTR_TABLE = [
 // CTR 가져오기 (rank: 1-based)
 function getCTR(rank) {
     return rank >= 1 && rank <= CTR_TABLE.length ? CTR_TABLE[rank - 1] : 0.001;
+}
+
+// 붙여넣은 상품 페이지 HTML에서 상품 URL 자동 추출 (URL 따로 입력 불필요)
+// 우선순위: og:url 메타 → canonical → HTML 내 스마트스토어 상품 URL 패턴 → productNo
+function extractProductUrlFromHtml(html) {
+    if (!html || typeof html !== 'string') return '';
+    try {
+        var m;
+        m = html.match(/<meta[^>]+property=["']og:url["'][^>]*content=["']([^"']+)["']/i)
+            || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]*property=["']og:url["']/i);
+        if (m && m[1] && /naver\.com\/.*\/products\/\d+/.test(m[1])) return m[1].split('?')[0];
+        m = html.match(/<link[^>]+rel=["']canonical["'][^>]*href=["']([^"']+)["']/i);
+        if (m && m[1] && /naver\.com\/.*\/products\/\d+/.test(m[1])) return m[1].split('?')[0];
+        m = html.match(/https?:\/\/smartstore\.naver\.com\/[A-Za-z0-9_-]+\/products\/\d+/);
+        if (m && m[0]) return m[0];
+        m = html.match(/["']productNo["']\s*:\s*["']?(\d{6,})/);
+        if (m && m[1]) return 'https://smartstore.naver.com/main/products/' + m[1];
+        return '';
+    } catch (e) {
+        return '';
+    }
 }

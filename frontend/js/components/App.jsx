@@ -239,6 +239,14 @@ window.App = function App() {
         lastHtmlRef.current = htmlInput || '';  // #1: 저장/재사용용 상세 HTML 보관
         if (inputCompanyName !== undefined) setCompanyName(inputCompanyName);
         var cleanedUrl = cleanProductUrl(productUrl);
+        // URL을 안 넣어도 됨: 붙여넣은 HTML에서 상품 URL 자동 추출 → 순위/광고주 분석 정상 동작
+        if (!cleanedUrl && htmlInput && typeof extractProductUrlFromHtml === 'function') {
+            var _autoUrl = extractProductUrlFromHtml(htmlInput);
+            if (_autoUrl) {
+                cleanedUrl = cleanProductUrl(_autoUrl);
+                try { toast.info('HTML에서 상품 URL을 자동 인식했습니다.'); } catch(e) {}
+            }
+        }
         var currentSearchId = ++searchIdRef.current; // 새 검색마다 ID 증가
         setSearchLoading(true);
         setSearchedKeyword(keyword);
