@@ -74,7 +74,7 @@ body { background: var(--rt-bg); }
 .b-ai  { background: #ede9fe;         color: #7c3aed; }
 
 /* ===== 노트 콜아웃 ===== */
-.note { font-size: 12px; color: #475569; margin-top: 12px; background: #f8fafc; border-left: 3px solid var(--rt-ind); padding: 9px 13px; border-radius: 0 9px 9px 0; line-height: 1.7; }
+.note { font-size: 12px; color: #475569; margin-top: 16px; background: #f8fafc; border-left: 3px solid var(--rt-ind); padding: 11px 14px; border-radius: 0 9px 9px 0; line-height: 1.7; clear: both; }
 .note.est { border-left-color: var(--rt-est); }
 .note.ok  { border-left-color: var(--rt-ok); }
 
@@ -169,7 +169,12 @@ body { background: var(--rt-bg); }
 .report-main .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .report-main .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
 .report-main .grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
-@media (max-width: 860px) {
+/* 반응형: 태블릿에서 4열→2열 (모바일 폭에서 카드 깨짐·겹침 방지), 좁은 폰에서 1열 */
+@media (max-width: 1024px) {
+  .report-main .grid4 { grid-template-columns: repeat(2, 1fr); }
+  .report-main .grid3 { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 640px) {
   .report-main .grid2, .report-main .grid3, .report-main .grid4 { grid-template-columns: 1fr; }
 }
 
@@ -243,8 +248,9 @@ body { background: var(--rt-bg); }
 .report-main .sev.low { background: #dcfce7; color: #15803d; }
 
 /* 차트 박스 */
-.report-main .chartbox { position: relative; height: 240px; margin-top: 8px; }
-.report-main .chartbox.sm { height: 170px; }
+/* 절대 높이 금지 — 차트박스는 내부 차트(ChartCanvas 자체 height) 높이만큼 자동으로 늘어남 → 아래 노트와 겹침 방지 */
+.report-main .chartbox { position: relative; margin-top: 8px; }
+.report-main .chartbox.sm { margin-top: 6px; }
 
 /* ===== 평면 표(시안 톤): 그라데이션 헤더 → 회색 평면 헤더 ===== */
 .report-main .rt-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 6px; }
@@ -261,3 +267,28 @@ body { background: var(--rt-bg); }
 
 /* ratecard 라벨(노출/미노출/노출률 등)을 진한 색으로 — 연한 회색 가독성 개선 */
 .report-main .ratecard .k { color: #334155; font-weight: 800; font-size: 14.5px; margin-top: 6px; }
+
+/* ===== 모바일 가독성 — 카드 패딩/숫자 마진 엄격 통제 (카톡 등 모바일 열람 시 숫자 오인 방지) ===== */
+@media (max-width: 640px) {
+  .report-main .card, .report-main .section .card { padding: 16px 14px !important; }
+  .report-main .kpi { padding: 13px 12px; }
+  .report-main .kpi .v { font-size: 22px; }            /* 폭 좁을 때 숫자 줄바꿈/겹침 방지 */
+  .report-main .rt-h3, .report-main .card > h3 { font-size: 14.5px; }
+  .report-main table { font-size: 12px; }
+  .report-main .rt-scroll { max-height: 360px; }
+}
+
+/* ===== 인쇄 / PDF 저장 — 광고주 제출용: 시스템 버튼·유틸 영역 숨김 ===== */
+@media print {
+  /* 화면 전용 UI(상단바·목차·앵커네비) + 액션 영역(업체저장/보고서내보내기/알림설정) + 모든 버튼·입력 숨김 */
+  .topbar, .anchor-nav, .report-toc,
+  #sec-save-client, #sec-report, #sec-notify,
+  .action-container, .btn-group, .action-buttons, .no-export,
+  button, .btn, .btn-search, .dlbtn,
+  input, select, textarea { display: none !important; }
+  /* 배경색·그라데이션 유실 방지 */
+  html, body { -webkit-print-color-adjust: exact; print-color-adjust: exact; background: #fff !important; }
+  .report-shell, .report-main { display: block !important; max-width: 100% !important; margin: 0 !important; }
+  /* 카드가 페이지 경계에서 잘리지 않게 + 인쇄 시 그림자 제거(잉크 절약·깔끔) */
+  .report-main .card, .report-main .section, .seasoncard, .sub-card { break-inside: avoid; page-break-inside: avoid; box-shadow: none !important; }
+}
