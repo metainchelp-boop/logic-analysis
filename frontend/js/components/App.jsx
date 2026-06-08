@@ -1214,6 +1214,14 @@ window.App = function App() {
                 ),
                 React.createElement('div', { className: 'topbar-user-area', style: { display:'flex', alignItems:'center', gap:8 } },
                     React.createElement('span', { style: _navUserStyle }, currentUser.name || currentUser.username),
+                    (function(){
+                        var _r = currentUser.role;
+                        var _label = _r === 'superadmin' ? '최고관리자' : _r === 'admin' ? '관리자' : _r === 'manager' ? '매니저' : '뷰어';
+                        var _isAdmin = (_r === 'admin' || _r === 'superadmin');
+                        var _bg = _isAdmin ? '#ede9fe' : _r === 'manager' ? '#dbeafe' : '#f1f5f9';
+                        var _fg = _isAdmin ? '#6d28d9' : _r === 'manager' ? '#1d4ed8' : '#475569';
+                        return React.createElement('span', { title: '내 권한', style: { fontSize:11, fontWeight:800, padding:'2px 9px', borderRadius:999, background:_bg, color:_fg, whiteSpace:'nowrap' } }, _label);
+                    })(),
                     React.createElement('button', { onClick: function(){ setShowPwModal(true); setPwMsg(''); setPwCurrent(''); setPwNew(''); setPwConfirm(''); }, style: _navPwStyle, title: '비밀번호 변경' }, '🔒'),
                     React.createElement('button', { onClick: clearAuth, style: _navLogoutStyle }, '로그아웃')
                 )
