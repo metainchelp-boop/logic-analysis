@@ -560,8 +560,10 @@ async def sso_login(request: SSORequest, request_obj: Request) -> LoginResponse:
     매핑되는 로직분석 사용자 자동 로그인(없으면 viewer 역할로 자동 가입)."""
     if not SSO_SHARED_SECRET:
         raise HTTPException(status_code=503, detail="SSO가 설정되지 않았습니다.")
+    # URL 전달 과정에서 붙을 수 있는 앞뒤 공백·후행 슬래시 정리(토큰 자체엔 없는 문자)
+    _tok = (request.token or "").strip().strip("/").strip()
     try:
-        payload = jwt.decode(request.token, SSO_SHARED_SECRET, algorithms=["HS256"])
+        payload = jwt.decode(_tok, SSO_SHARED_SECRET, algorithms=["HS256"])
     except JWTError:
         raise HTTPException(status_code=401, detail="유효하지 않거나 만료된 SSO 토큰입니다.")
 
