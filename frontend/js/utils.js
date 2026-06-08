@@ -1,7 +1,7 @@
 /* ===== 로직 분석 — API 헬퍼 & 유틸리티 ===== */
 
 // ===== 앱 버전 (한 곳에서 관리) =====
-var APP_VERSION = window.APP_VERSION = 'v6.4.3';
+var APP_VERSION = window.APP_VERSION = 'v6.4.4';
 
 // ===== 401 중복 새로고침 방지 플래그 =====
 var _isAuthRedirecting = false;
@@ -188,10 +188,17 @@ function extractProductUrlFromHtml(html) {
         if (m && m[1] && /naver\.com\/.*\/products\/\d+/.test(m[1])) return m[1].split('?')[0];
         m = html.match(/<link[^>]+rel=["']canonical["'][^>]*href=["']([^"']+)["']/i);
         if (m && m[1] && /naver\.com\/.*\/products\/\d+/.test(m[1])) return m[1].split('?')[0];
-        m = html.match(/https?:\/\/smartstore\.naver\.com\/[A-Za-z0-9_-]+\/products\/\d+/);
-        if (m && m[0]) return m[0];
-        m = html.match(/["']productNo["']\s*:\s*["']?(\d{6,})/);
-        if (m && m[1]) return 'https://smartstore.naver.com/main/products/' + m[1];
+        // 3) HTML 내 스마트스토어 상품 URL 중 '가장 많이 등장하는 것' = 본 상품
+        //    (추천/광고 상품은 보통 1번만 나옴 → 빈도로 본 상품 구별, 2회 이상만 신뢰)
+        var all = html.match(/https?:\/\/smartstore\.naver\.com\/[A-Za-z0-9_-]+\/products\/\d+/g);
+        if (all && all.length) {
+            var counts = {};
+            for (var i = 0; i < all.length; i++) { var u = all[i].split('?')[0]; counts[u] = (counts[u] || 0) + 1; }
+            var best = '', bestN = 0;
+            for (var k in counts) { if (counts[k] > bestN) { bestN = counts[k]; best = k; } }
+            if (best && bestN >= 2) return best;
+        }
+        // 못 찾으면 빈값 — '가짜 채널(/main/)·아무 상품번호'로 엉뚱한 상품을 잡는 것보다 안전.
         return '';
     } catch (e) {
         return '';

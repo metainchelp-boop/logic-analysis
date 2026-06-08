@@ -135,23 +135,7 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl:
                         </div>
                         <div style={{ fontSize: 11, color: 'var(--rt-sub)', marginTop: 6 }}>10개 지표: 상품명·검색순위·가격·리뷰·판매실적·평점·카테고리·브랜드·네이버페이·최신성 (레이더 차트)</div>
 
-                        {/* v5 세부 정보 요약 — 4칼럼 메트릭 카드 */}
-                        {result.scores.detail && (
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 16 }}>
-                                {[
-                                    { label: '키워드 포함', value: result.scores.detail.keyword_in_title ? '포함 ✅' : '미포함 ❌', icon: '🔤', color: result.scores.detail.keyword_in_title ? '#10b981' : '#ef4444', bg: result.scores.detail.keyword_in_title ? '#f0fdf4' : '#fef2f2' },
-                                    { label: '가격 비율', value: result.scores.detail.price_ratio > 0 ? (result.scores.detail.price_ratio * 100).toFixed(0) + '%' : (result.scores.detail.my_price > 0 ? '비교불가' : '가격없음'), icon: '💲', color: '#4f46e5', bg: '#eef2ff' },
-                                    { label: result.scores.detail.review_source === 'api' ? '실제 리뷰' : '추정 리뷰', value: (result.scores.detail.est_reviews || 0).toLocaleString() + '개', icon: '💬', color: '#7c3aed', bg: '#f5f3ff' },
-                                    { label: result.scores.detail.review_source === 'api' ? '실제 평점' : '추정 평점', value: result.scores.detail.est_rating ? result.scores.detail.est_rating.toFixed(1) : '-', icon: '⭐', color: '#f59e0b', bg: '#fffbeb' },
-                                ].map((item, i) => (
-                                    <div key={i} className="card" style={{ textAlign: 'center', padding: '18px 12px', borderRadius: 14, background: item.bg }}>
-                                        <div style={{ fontSize: 18, marginBottom: 8 }}>{item.icon}</div>
-                                        <div style={{ fontSize: 14, fontWeight: 800, color: item.color }}>{item.value}</div>
-                                        <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>{item.label}</div>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
+                        {/* (요청) 키워드포함·가격비율·추정리뷰·추정평점 4칼럼 카드 제거 — 레이더+10지표로 충분 */}
 
                         {/* v5 개선 제안 */}
                         {result.suggestions?.length > 0 && (
