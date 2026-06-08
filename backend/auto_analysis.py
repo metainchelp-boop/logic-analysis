@@ -378,7 +378,7 @@ def generate_html_report(keyword: str, company_name: str, analysis: dict,
     if ci:
         sections_html.append(f'''
         <div class="section">
-            <h2>🔥 경쟁강도 분석</h2>
+            <h2>⚔️ 키워드 경쟁강도 분석 <span class="badge b-ok">✅ 실측</span></h2>
             <div class="info-box">
                 <div class="metric"><span>경쟁지수</span><strong style="color:{ci.get('compColor','#333')}">{ci.get('compIndex','-')}</strong></div>
                 <div class="metric"><span>경쟁수준</span><strong style="color:{ci.get('compColor','#333')}">{ci.get('compLabel','-')} ({ci.get('compPercent',0)}%)</strong></div>
@@ -393,7 +393,7 @@ def generate_html_report(keyword: str, company_name: str, analysis: dict,
     if mr:
         sections_html.append(f'''
         <div class="section">
-            <h2>💰 시장 규모 추정</h2>
+            <h2>💰 시장 규모 &amp; 매출 추정 <span class="badge b-est">≈ 추정</span></h2>
             <div class="info-box">
                 <div class="metric"><span>평균 가격</span><strong>{mr.get('avgPrice','-')}</strong></div>
                 <div class="metric"><span>예상 월 시장</span><strong>{mr.get('estimatedMonthly','-')}</strong></div>
@@ -406,7 +406,7 @@ def generate_html_report(keyword: str, company_name: str, analysis: dict,
     if ai:
         sections_html.append(f'''
         <div class="section">
-            <h2>📢 광고 경쟁 정보</h2>
+            <h2>📣 광고 경쟁 정보 <span class="badge b-ok">✅ 실측</span></h2>
             <div class="info-box">
                 <div class="metric"><span>광고 경쟁강도</span><strong>{ai.get('compIdx','-')}</strong></div>
                 <div class="metric"><span>노출 깊이</span><strong>{ai.get('adDepth','-')}</strong></div>
@@ -420,7 +420,7 @@ def generate_html_report(keyword: str, company_name: str, analysis: dict,
     if gk:
         sections_html.append(f'''
         <div class="section">
-            <h2>🏆 골든 키워드</h2>
+            <h2>👑 골든 키워드 <span class="badge b-ok">✅ 실측</span></h2>
             <div class="golden-box">
                 <div class="golden-name">{gk.get('name','')}</div>
                 <div class="golden-detail">검색량 {fmt(gk.get('volume',0))}회 | 경쟁 {gk.get('competition','-')}</div>
@@ -436,7 +436,7 @@ def generate_html_report(keyword: str, company_name: str, analysis: dict,
             rows += f'<tr><td>{p.get("rank","")}</td><td>{p.get("name","")[:30]}</td><td>{p.get("store","")}</td><td>{p.get("price","")}</td><td>{p.get("brand","")}</td><td>{p.get("category","")}</td></tr>'
         sections_html.append(f'''
         <div class="section">
-            <h2>🏪 경쟁사 비교 (상위 20)</h2>
+            <h2>🏆 경쟁사 비교표 (상위 20) <span class="badge b-ok">✅ 실측</span></h2>
             <table><thead><tr><th>순위</th><th>상품명</th><th>스토어</th><th>가격</th><th>브랜드</th><th>카테고리</th></tr></thead>
             <tbody>{rows}</tbody></table>
         </div>''')
@@ -449,7 +449,7 @@ def generate_html_report(keyword: str, company_name: str, analysis: dict,
             sim_rows += f'<tr><td>{s["rank"]}위</td><td>{s["estSales"]}건</td><td>{s["revenue"]}</td></tr>'
         sections_html.append(f'''
         <div class="section">
-            <h2>📈 판매량 추정 시뮬레이션</h2>
+            <h2>📦 판매량 추정 &amp; 성장 시뮬레이션 <span class="badge b-est">≈ 추정</span></h2>
             <div class="info-box">
                 <div class="metric"><span>평균 가격</span><strong>{se.get('avgPrice','')}</strong></div>
                 <div class="metric"><span>월 검색량</span><strong>{se.get('monthlySearches','')}</strong></div>
@@ -463,7 +463,7 @@ def generate_html_report(keyword: str, company_name: str, analysis: dict,
     if sa:
         sections_html.append(f'''
         <div class="section">
-            <h2>🎯 1페이지 진입 전략</h2>
+            <h2>🧭 1페이지 진입 전략</h2>
             <div class="info-box">
                 <div class="metric"><span>상위5 평균가</span><strong>{sa.get('avgTop5Price','')}</strong></div>
                 <div class="metric"><span>가격 범위</span><strong>{sa.get('priceRange','')}</strong></div>
@@ -479,7 +479,7 @@ def generate_html_report(keyword: str, company_name: str, analysis: dict,
         cat_items = ''.join(f'<span class="tag">{c["name"]} ({c["ratio"]}%)</span>' for c in ca.get('categories', []))
         sections_html.append(f'''
         <div class="section">
-            <h2>📂 카테고리 분석</h2>
+            <h2>🗂️ 카테고리 등록 분석 <span class="badge b-ok">✅ 실측</span></h2>
             <p><strong>{ca.get('verdict','')}</strong></p>
             <div class="tags">{cat_items}</div>
         </div>''')
@@ -493,7 +493,7 @@ def generate_html_report(keyword: str, company_name: str, analysis: dict,
         )
         sections_html.append(f'''
         <div class="section">
-            <h2>🏷️ 연관 키워드 ({kt.get('totalFound',0)}개)</h2>
+            <h2>🔗 연관 키워드 ({kt.get('totalFound',0)}개) <span class="badge b-ok">✅ 실측</span></h2>
             <div class="tags">{kw_items}</div>
         </div>''')
 
@@ -508,40 +508,41 @@ def generate_html_report(keyword: str, company_name: str, analysis: dict,
 <title>{title_name}{keyword} 키워드 분석 보고서 - {date_str}</title>
 <style>
 * {{ margin:0; padding:0; box-sizing:border-box; }}
-body {{ font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans KR",sans-serif; background:#f8fafc; color:#1e293b; line-height:1.6; }}
-.report-header {{ background:linear-gradient(135deg,#6C5CE7,#a29bfe); color:#fff; padding:50px 20px; text-align:center; }}
-.report-header h1 {{ font-size:28px; margin-bottom:8px; }}
-.report-header p {{ font-size:14px; opacity:0.85; }}
-.container {{ max-width:1100px; margin:0 auto; padding:20px; }}
-.section {{ background:#fff; border-radius:14px; padding:24px 28px; margin-bottom:20px; box-shadow:0 1px 3px rgba(0,0,0,0.06); }}
-.section h2 {{ font-size:18px; font-weight:700; margin-bottom:16px; color:#1e293b; }}
-.card-row {{ display:flex; gap:12px; flex-wrap:wrap; }}
-.stat-card {{ flex:1; min-width:140px; border-radius:12px; padding:20px; text-align:center; }}
-.stat-card .label {{ font-size:12px; color:#64748b; margin-bottom:4px; }}
-.stat-card .value {{ font-size:26px; font-weight:700; }}
-.stat-card.blue {{ background:#eff6ff; color:#1d4ed8; }}
-.stat-card.green {{ background:#f0fdf4; color:#16a34a; }}
-.stat-card.purple {{ background:#faf5ff; color:#7c3aed; }}
-.stat-card.orange {{ background:#fff7ed; color:#ea580c; }}
-.info-box {{ display:flex; gap:20px; flex-wrap:wrap; margin-bottom:12px; }}
-.metric {{ flex:1; min-width:120px; }}
-.metric span {{ display:block; font-size:12px; color:#94a3b8; }}
-.metric strong {{ font-size:16px; }}
-.comment {{ font-size:14px; color:#475569; line-height:1.7; margin-top:10px; padding:14px; background:#f8fafc; border-radius:8px; }}
-table {{ width:100%; border-collapse:collapse; font-size:13px; }}
-th {{ background:#f1f5f9; padding:10px 12px; text-align:left; font-weight:600; color:#475569; border-bottom:2px solid #e2e8f0; }}
-td {{ padding:10px 12px; border-bottom:1px solid #f1f5f9; word-break:break-all; }}
-tr:hover {{ background:#fafbfc; }}
+:root {{ --ind:#4f46e5; --pur:#9333ea; --ink:#0f172a; --sub:#64748b; --line:#e8edf3; --bg:#f1f5f9;
+  --ok:#16a34a; --okbg:#dcfce7; --est:#d97706; --estbg:#fef3c7; --red:#ef4444; }}
+body {{ font-family:'Noto Sans KR',-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--ink); line-height:1.6; }}
+.report-header {{ background:linear-gradient(120deg,#0f172a,#312e81 60%,#4f46e5); color:#fff; padding:44px 20px; text-align:center; }}
+.report-header h1 {{ font-size:24px; font-weight:900; margin-bottom:8px; letter-spacing:-.5px; }}
+.report-header p {{ font-size:13px; opacity:0.85; }}
+.container {{ max-width:1100px; margin:0 auto; padding:22px 20px 60px; }}
+.section {{ background:#fff; border:1px solid var(--line); border-radius:18px; padding:20px 24px; margin-bottom:16px; box-shadow:0 4px 18px rgba(15,23,42,.05); }}
+.section h2 {{ font-size:16px; font-weight:800; margin-bottom:4px; color:var(--ink); display:flex; align-items:center; gap:9px; flex-wrap:wrap; letter-spacing:-.3px; }}
+.section .sub {{ font-size:12px; color:var(--sub); margin-bottom:14px; }}
+.badge {{ font-size:11px; font-weight:800; padding:3px 9px; border-radius:999px; }}
+.b-ok {{ background:var(--okbg); color:var(--ok); }}
+.b-est {{ background:var(--estbg); color:var(--est); }}
+.b-ai {{ background:#ede9fe; color:#7c3aed; }}
+.card-row {{ display:grid; grid-template-columns:repeat(4,1fr); gap:12px; }}
+.info-box {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:6px; }}
+.stat-card, .metric {{ background:linear-gradient(135deg,#f8fafc,#f1f5f9); border:1px solid #e8edf3; border-radius:14px; padding:15px; text-align:left; }}
+.stat-card .label, .metric span {{ display:block; font-size:12px; color:var(--sub); font-weight:700; margin-bottom:7px; }}
+.stat-card .value, .metric strong {{ font-size:22px; font-weight:900; letter-spacing:-1px; color:var(--ink); }}
+.comment {{ font-size:13px; color:#475569; line-height:1.7; margin-top:12px; padding:10px 14px; background:#f8fafc; border-left:3px solid var(--ind); border-radius:0 9px 9px 0; }}
+table {{ width:100%; border-collapse:collapse; font-size:13px; margin-top:6px; }}
+th {{ color:var(--sub); font-size:11px; font-weight:800; text-align:left; padding:10px 8px; border-bottom:2px solid #e2e8f0; }}
+td {{ padding:10px 8px; border-bottom:1px solid #eef2f7; word-break:break-all; }}
+tr:hover {{ background:#fafbff; }}
 .url-wrap {{ word-break:break-all; overflow-wrap:break-word; max-width:100%; }}
-.golden-box {{ background:linear-gradient(135deg,#fef3c7,#fde68a); border-radius:12px; padding:20px; }}
-.golden-name {{ font-size:22px; font-weight:700; color:#92400e; margin-bottom:6px; }}
-.golden-detail {{ font-size:13px; color:#a16207; margin-bottom:10px; }}
-.golden-box p {{ font-size:13px; color:#78350f; line-height:1.6; }}
+.golden-box {{ background:#f8fafc; border:1px solid #eef2f7; border-radius:13px; padding:16px; }}
+.golden-name {{ font-size:16px; font-weight:800; color:var(--ink); margin-bottom:6px; }}
+.golden-detail {{ font-size:12.5px; color:var(--sub); margin-bottom:10px; }}
+.golden-box p {{ font-size:12.5px; color:#475569; line-height:1.6; }}
 .tags {{ display:flex; gap:8px; flex-wrap:wrap; }}
-.tag {{ padding:6px 14px; border-radius:20px; font-size:12px; background:#f1f5f9; color:#475569; }}
-.tag.golden {{ background:#fef3c7; color:#92400e; font-weight:600; }}
-.report-footer {{ text-align:center; padding:30px; color:#94a3b8; font-size:12px; border-top:1px solid #e2e8f0; margin-top:20px; }}
+.tag {{ display:inline-block; padding:4px 11px; border-radius:999px; font-size:12px; font-weight:700; background:#eef2ff; color:#4338ca; }}
+.tag.golden {{ background:var(--estbg); color:var(--est); }}
+.report-footer {{ text-align:center; padding:30px; color:#94a3b8; font-size:12px; border-top:1px solid var(--line); margin-top:20px; }}
 @media print {{ .report-header {{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }} }}
+@media(max-width:760px){{ .card-row, .info-box {{ grid-template-columns:1fr 1fr; }} }}
 </style>
 </head>
 <body>
