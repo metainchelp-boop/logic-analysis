@@ -59,9 +59,9 @@ window.MarketRevenueSection = function MarketRevenueSection(props) {
           <tr>
             <th>순위</th>
             <th>상품명</th>
-            <th style={{ textAlign: 'center' }}>CTR</th>
-            <th style={{ textAlign: 'right' }}>예상 판매</th>
-            <th style={{ textAlign: 'right' }}>예상 월 매출</th>
+            <th style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>CTR</th>
+            <th style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>예상 판매</th>
+            <th style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>예상 월 매출</th>
           </tr>
         </thead>
         <tbody>
@@ -70,10 +70,10 @@ window.MarketRevenueSection = function MarketRevenueSection(props) {
             return (
               <tr key={idx} style={isMyProduct ? { background: '#fff7ed' } : {}}>
                 <td>{item.rank}</td>
-                <td style={{ fontWeight: isMyProduct ? 700 : 400 }}>{item.name}{isMyProduct ? ' 👈' : ''}</td>
-                <td style={{ textAlign: 'center' }}>{item.ctr}</td>
-                <td style={{ textAlign: 'right' }}>{item.estMonthlySales}</td>
-                <td style={{ textAlign: 'right' }}>{item.estRevenue}</td>
+                <td style={{ fontWeight: isMyProduct ? 700 : 400, wordBreak: 'keep-all' }}>{item.name}{isMyProduct ? ' 👈' : ''}</td>
+                <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>{item.ctr}</td>
+                <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>{item.estMonthlySales}</td>
+                <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>{item.estRevenue}</td>
               </tr>
             );
           })}
