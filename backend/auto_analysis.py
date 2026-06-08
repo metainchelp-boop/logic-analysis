@@ -615,6 +615,19 @@ def run_single_analysis(client_id: int, client_name: str, keyword: str, product_
     analysis = compute_full_analysis(keyword, vol_data, prods, related_data,
                                      total_shop_products=total_shop_products)
 
+    # 4b. 광고주 맞춤 분석 (진입전략·상품정보·SEO·경쟁사 stats 채우기 → 자동보고서 완전화)
+    #     실패해도 나머지 분석/저장은 그대로 진행(방어적). 지연 임포트로 순환 방지.
+    advertiser_data = {}
+    if product_url:
+        try:
+            from main import compute_advertiser_report
+            _adv = compute_advertiser_report(keyword, product_url)
+            if isinstance(_adv, dict) and _adv.get("success"):
+                advertiser_data = _adv.get("data", {}) or {}
+                logger.info(f"  [{keyword}] 광고주 분석(자동) 완료")
+        except Exception as e:
+            logger.warning(f"  [{keyword}] 광고주 분석(자동) 실패 — 스킵: {e}")
+
     # 5. HTML 보고서 생성
     report_html = generate_html_report(keyword, client_name, analysis, vol_data, related_data)
 
@@ -635,7 +648,7 @@ def run_single_analysis(client_id: int, client_name: str, keyword: str, product_
             json.dumps(vol_data, ensure_ascii=False),
             json.dumps(related_data, ensure_ascii=False),
             json.dumps(prods[:20] if prods else [], ensure_ascii=False),
-            json.dumps({}, ensure_ascii=False),  # advertiser_json — 자동분석에는 광고주 데이터 없음
+            json.dumps(advertiser_data, ensure_ascii=False),  # advertiser_json — 광고주 맞춤 분석(자동)
             report_html,
             now,
         )

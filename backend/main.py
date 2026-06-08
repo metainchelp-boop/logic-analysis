@@ -1541,9 +1541,10 @@ class AdvertiserAnalysisRequest(BaseModel):
             raise ValueError('유효한 상품 URL을 입력하세요')
         return v
 
-@app.post("/api/advertiser/analyze")
-async def advertiser_analyze(req: AdvertiserAnalysisRequest, current_user: dict = Depends(get_current_user)):
-    """광고주 맞춤 분석 리포트 (인증 필수)"""
+def compute_advertiser_report(keyword: str, product_url: str):
+    """광고주 맞춤 분석 — 엔드포인트/스케줄러 공용 재사용 함수. {"success","data"} 반환."""
+    from types import SimpleNamespace
+    req = SimpleNamespace(keyword=keyword, product_url=product_url)
     try:
         from naver_crawler import search_naver_shopping_api, _parse_api_item
 
@@ -1988,6 +1989,12 @@ async def advertiser_analyze(req: AdvertiserAnalysisRequest, current_user: dict 
     except Exception as e:
         logger.error(f"광고주 분석 실패: {e}")
         raise HTTPException(status_code=500, detail="광고주 분석 중 오류가 발생했습니다.")
+
+
+@app.post("/api/advertiser/analyze")
+async def advertiser_analyze(req: AdvertiserAnalysisRequest, current_user: dict = Depends(get_current_user)):
+    """광고주 맞춤 분석 리포트 (인증 필수) — 공용 함수 위임"""
+    return compute_advertiser_report(req.keyword, req.product_url)
 
 
 # --- AI 피드백 통합 (1회 호출) ---
