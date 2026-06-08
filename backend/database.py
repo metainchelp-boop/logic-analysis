@@ -133,6 +133,12 @@ def init_db():
             VALUES (1, 0, '', '09:00');
         """)
         conn.commit()
+        # v6.3 마이그레이션: rankings.review_count (리뷰 델타 기반 판매추정용)
+        try:
+            conn.execute("ALTER TABLE rankings ADD COLUMN review_count INTEGER")
+            conn.commit()
+        except Exception:
+            pass  # 이미 존재하면 무시
         logger.info("✅ 데이터베이스 초기화 완료")
     except Exception as e:
         logger.error(f"DB 초기화 실패: {e}")
@@ -271,15 +277,24 @@ def get_keywords_for_product(product_id: int) -> List[Dict]:
 
 def save_ranking(product_id: int, keyword_id: int, keyword: str,
                  rank_position: Optional[int], page_number: Optional[int],
-                 check_type: str = "scheduled"):
-    """순위 기록 저장"""
+                 check_type: str = "scheduled", review_count: Optional[int] = None):
+    """순위 기록 저장 (review_count: 리뷰 델타 추정용, 없으면 None)"""
     conn = _get_conn()
     try:
-        conn.execute("""
-            INSERT INTO rankings
-                (product_id, keyword_id, keyword, rank_position, page_number, check_type)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (product_id, keyword_id, keyword, rank_position, page_number, check_type))
+        try:
+            # review_count 컬럼 포함 저장
+            conn.execute("""
+                INSERT INTO rankings
+                    (product_id, keyword_id, keyword, rank_position, page_number, check_type, review_count)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (product_id, keyword_id, keyword, rank_position, page_number, check_type, review_count))
+        except Exception:
+            # 구버전 DB(컬럼 없음) 폴백 — 순위는 반드시 저장
+            conn.execute("""
+                INSERT INTO rankings
+                    (product_id, keyword_id, keyword, rank_position, page_number, check_type)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (product_id, keyword_id, keyword, rank_position, page_number, check_type))
         conn.commit()
     finally:
         conn.close()

@@ -204,6 +204,7 @@ def _run_rank_tracking():
         total_api_calls = 0
         total_rank_saved = 0
         total_errors = 0
+        _review_cache = {}  # product_url -> review_count (상품당 1회, 리뷰 델타 추정용)
 
         for ki, keyword in enumerate(sorted(all_keywords)):
             try:
@@ -240,13 +241,22 @@ def _run_rank_tracking():
                             rank, page, competitors = find_product_rank_from_cache(
                                 keyword, product["product_url"], all_prods
                             )
+                            # 리뷰수 1회 조회 (상품당 캐시) — 실패해도 순위 저장엔 무영향
+                            _purl = product.get("product_url")
+                            if _purl not in _review_cache:
+                                try:
+                                    from naver_crawler import get_review_count
+                                    _review_cache[_purl] = get_review_count(_purl)
+                                except Exception:
+                                    _review_cache[_purl] = None
                             save_ranking(
                                 product_id=product["id"],
                                 keyword_id=kw_info["id"],
                                 keyword=keyword,
                                 rank_position=rank,
                                 page_number=page,
-                                check_type="scheduled"
+                                check_type="scheduled",
+                                review_count=_review_cache.get(_purl)
                             )
                             if competitors:
                                 save_competitor_snapshot(kw_info["id"], competitors[:5])

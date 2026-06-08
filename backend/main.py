@@ -500,6 +500,13 @@ async def track_product(req: ProductAddRequest, background_tasks: BackgroundTask
 
 def run_initial_rank_check(product_id: int, product_url: str, keyword_ids: List[dict]):
     """초기 순위 체크 (백그라운드 - sync로 실행하여 스레드풀 활용)"""
+    # 리뷰수 1회 조회 (상품당) — 리뷰 델타 기반 판매추정용. 실패해도 순위체크엔 무영향.
+    _review_count = None
+    try:
+        from naver_crawler import get_review_count
+        _review_count = get_review_count(product_url)
+    except Exception:
+        _review_count = None
     for kw_info in keyword_ids:
         try:
             rank, page, competitors = find_product_rank(
@@ -513,7 +520,8 @@ def run_initial_rank_check(product_id: int, product_url: str, keyword_ids: List[
                 keyword=kw_info["keyword"],
                 rank_position=rank,
                 page_number=page,
-                check_type="initial"
+                check_type="initial",
+                review_count=_review_count
             )
             if competitors:
                 save_competitor_snapshot(kw_info["keyword_id"], competitors[:5])

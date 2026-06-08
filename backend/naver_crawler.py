@@ -164,6 +164,32 @@ def _parse_api_item(item: Dict, rank: int) -> Dict:
     }
 
 
+def get_review_count(product_url: str) -> Optional[int]:
+    """스마트스토어 내부 API로 '리뷰수'만 가볍게 조회 (리뷰 델타 추정용).
+    실패하면 None 반환 — 호출부(순위 기록)가 절대 깨지지 않도록 완전 방어적."""
+    try:
+        store = extract_store_name_from_url(product_url)
+        pno = extract_product_id_from_url(product_url)
+        if not store or not pno:
+            return None
+        api_url = f"https://smartstore.naver.com/i/v1/stores/{store}/products/{pno}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/124.0.0.0 Mobile Safari/537.36",
+            "Accept": "application/json",
+            "Referer": f"https://smartstore.naver.com/{store}/products/{pno}",
+        }
+        resp = requests.get(api_url, headers=headers, timeout=8)
+        if resp.status_code == 200:
+            ra = resp.json().get("reviewAmount", {})
+            if isinstance(ra, dict):
+                rc = ra.get("totalReviewCount")
+                if rc is not None and int(rc) >= 0:
+                    return int(rc)
+    except Exception:
+        pass
+    return None
+
+
 def search_products(keyword: str, max_results: int = 200) -> List[Dict]:
     """
     키워드로 상품 검색 (최대 1000개까지)
