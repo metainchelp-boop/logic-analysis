@@ -106,7 +106,7 @@ window.ReportSection = function ReportSection(props) {
 
             var fullHtml = '<!DOCTYPE html>\n<html lang="ko">\n<head>\n'
                 + '<meta charset="UTF-8">\n'
-                + '<meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
+                + '<meta name="viewport" content="width=1200">\n'
                 + '<title>' + headerText + ' - ' + dateStr + '</title>\n'
                 + '<style>\n'
                 + '* { margin: 0; padding: 0; box-sizing: border-box; }\n'
