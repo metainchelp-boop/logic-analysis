@@ -14,14 +14,14 @@ window.ReviewAnalysisSection = function ReviewAnalysisSection(props) {
   var mineReview = (hasHtmlData && html && html.reviewCount != null) ? html.reviewCount : reviewCount.adv;
   var top5Review = reviewCount.top5;
 
-  // 시안 톤 노트: 전략 코멘트가 있으면 사용, 없으면 데이터 기반 1줄 생성
-  var noteText = strategy;
-  if (!noteText) {
-    var gap = (top5Review && mineReview < top5Review)
-      ? '(상위5 평균 ' + fmt(top5Review) + '건 대비 부족)'
-      : '';
-    noteText = '리뷰 ' + fmt(mineReview) + '건' + gap + ' — 구매 전환의 핵심 지표입니다.'
-      + ((reviewCount.avg && mineReview < reviewCount.avg) ? ' 체험단 등으로 단기 확보를 권장합니다.' : '');
+  // 시안 톤 노트: '부족 지적 → 해결방안' 논리 (광고주 보고서, 실데이터 기반)
+  var noteText;
+  if (top5Review && mineReview < top5Review) {
+    noteText = '리뷰 ' + fmt(mineReview) + '건(상위5 평균 ' + fmt(top5Review) + '건 대비 부족) — 구매 전환의 가장 큰 병목. 체험단으로 단기 확보 필요.';
+  } else if (reviewCount.avg && mineReview < reviewCount.avg) {
+    noteText = '리뷰 ' + fmt(mineReview) + '건(경쟁 평균 ' + fmt(reviewCount.avg) + '건 대비 부족) — 구매 전환의 핵심 지표. 체험단으로 단기 확보 필요.';
+  } else {
+    noteText = '리뷰 ' + fmt(mineReview) + '건 — 경쟁 대비 양호. 평점·재구매 관리로 전환율을 끌어올리세요.';
   }
 
   return (
@@ -55,7 +55,7 @@ window.ReviewAnalysisSection = function ReviewAnalysisSection(props) {
                 data={{
                   labels: ['리뷰 수', '평점(×100)', '찜 수'],
                   datasets: [
-                    { label: '내 상품', data: mine, backgroundColor: C.OK || '#10b981', borderRadius: 5 },
+                    { label: '내 상품', data: mine, backgroundColor: '#ec4899', borderRadius: 5 },
                     { label: '경쟁 평균', data: avg, backgroundColor: '#94a3b8', borderRadius: 5 },
                     { label: '상위 5', data: top5, backgroundColor: C.IND || '#4f46e5', borderRadius: 5 }
                   ]
