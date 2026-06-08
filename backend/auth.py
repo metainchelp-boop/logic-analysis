@@ -603,15 +603,46 @@ async def sso_login(request: SSORequest, request_obj: Request) -> LoginResponse:
     name = (str(_result.get("name") or sub)).strip()[:100]
     username = sub  # 전산 로그인ID 를 로직분석 username 으로 사용
 
+    # 전산 팀/권한으로 로직분석 권한 자동 결정: 관리팀 = manager, 그 외 = viewer.
+    # 매칭 키워드는 env(SSO_MANAGER_TEAMS, 콤마구분)로 조정 가능. 기본 "관리팀".
+    _mgr_keywords = [k.strip() for k in os.getenv("SSO_MANAGER_TEAMS", "관리팀").split(",") if k.strip()]
+    _team_strings = []
+    try:
+        _auth = _result.get("authority") or {}
+        if isinstance(_auth, dict) and _auth.get("name"):
+            _team_strings.append(str(_auth.get("name")))
+        for _t in (_result.get("teamList") or []):
+            if isinstance(_t, dict):
+                for _v in _t.values():
+                    if isinstance(_v, str):
+                        _team_strings.append(_v)
+            elif isinstance(_t, str):
+                _team_strings.append(_t)
+    except Exception:
+        pass
+    _is_mgr_team = any(any(kw in s for kw in _mgr_keywords) for s in _team_strings)
+    sso_role = "manager" if _is_mgr_team else "viewer"
+    try:
+        logger.info(f"SSO 권한판별: {username} teams={_team_strings} → {sso_role}")
+    except Exception:
+        pass
+
     try:
         user = get_user_by_username(username)
         if not user:
             import secrets as _secrets
-            create_user(username, _secrets.token_hex(16), name=name, role="viewer")
+            create_user(username, _secrets.token_hex(16), name=name, role=sso_role)
             user = get_user_by_username(username)  # 생성 후 재조회(일관된 dict)
             if not user:
                 raise HTTPException(status_code=500, detail="사용자 자동 생성에 실패했습니다.")
-            logger.info(f"SSO 자동 가입: {username}")
+            logger.info(f"SSO 자동 가입: {username} (role={sso_role})")
+        else:
+            # 기존 계정: 팀 기준 권한으로 동기화 — 단 admin/superadmin 은 절대 강등하지 않음
+            _cur_role = str(user.get("role") or "")
+            if _cur_role not in ("admin", "superadmin") and _cur_role != sso_role:
+                update_user(user["id"], role=sso_role)
+                user = get_user_by_username(username) or user
+                logger.info(f"SSO 권한 동기화: {username} {_cur_role} → {sso_role}")
         if not user.get("is_active", True):
             raise HTTPException(status_code=403, detail="비활성화된 계정입니다.")
 
