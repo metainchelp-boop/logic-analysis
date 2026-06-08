@@ -63,7 +63,7 @@ body { background: var(--rt-bg); }
 .report-main thead tr { background: none !important; }
 .report-main table th { color: var(--rt-sub) !important; background: none !important; }
 /* 표 스크롤 영역 — 약 10행만 보이고 나머지는 스크롤, 헤더 고정 */
-.report-main .rt-scroll { max-height: 440px; overflow-y: auto; border: 1px solid #eef2f7; border-radius: 10px; margin-top: 10px; }
+.report-main .rt-scroll { max-height: 440px; overflow-y: auto; border: 1px solid #eef2f7; border-radius: 10px; margin-top: 18px; }
 .report-main .rt-scroll table { margin-top: 0 !important; }
 .report-main .rt-scroll thead th { position: sticky; top: 0; background: #fff !important; z-index: 2; box-shadow: inset 0 -2px 0 #e2e8f0; }
 
@@ -74,7 +74,7 @@ body { background: var(--rt-bg); }
 .b-ai  { background: #ede9fe;         color: #7c3aed; }
 
 /* ===== 노트 콜아웃 ===== */
-.note { font-size: 12px; color: #475569; margin-top: 16px; background: #f8fafc; border-left: 3px solid var(--rt-ind); padding: 11px 14px; border-radius: 0 9px 9px 0; line-height: 1.7; clear: both; }
+.note { font-size: 12px; color: #475569; margin-top: 22px; background: #f8fafc; border-left: 3px solid var(--rt-ind); padding: 13px 16px; border-radius: 0 9px 9px 0; line-height: 1.7; clear: both; }
 .note.est { border-left-color: var(--rt-est); }
 .note.ok  { border-left-color: var(--rt-ok); }
 
@@ -249,8 +249,11 @@ body { background: var(--rt-bg); }
 
 /* 차트 박스 */
 /* 절대 높이 금지 — 차트박스는 내부 차트(ChartCanvas 자체 height) 높이만큼 자동으로 늘어남 → 아래 노트와 겹침 방지 */
-.report-main .chartbox { position: relative; margin-top: 8px; }
-.report-main .chartbox.sm { margin-top: 6px; }
+/* 차트 위/아래 넉넉한 여유 — 어떤 상황에서도 아래 노트/표와 답답하지 않게 */
+.report-main .chartbox { position: relative; margin: 10px 0 26px; }
+.report-main .chartbox.sm { margin: 8px 0 20px; }
+/* 차트박스 안 이미지(다운로드 변환본)는 항상 박스 너비에 맞춰 비율 유지 */
+.report-main .chartbox img { display: block; width: 100%; height: auto; }
 
 /* ===== 평면 표(시안 톤): 그라데이션 헤더 → 회색 평면 헤더 ===== */
 .report-main .rt-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 6px; }
