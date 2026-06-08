@@ -980,33 +980,40 @@ window.App = function App() {
     var captureAutoReportHtml = function(kw) {
         try {
             var captured = [];
-            var rootEl = document.getElementById('root');
-            if (rootEl && rootEl.children[0]) {
-                var appDiv = rootEl.children[0];
-                var children = Array.from(appDiv.children);
-                children.forEach(function(child) {
-                    if (child.classList.contains('topbar')) return;
-                    if (child.querySelector && child.querySelector('.anchor-nav')) return;
-                    if (child.id === 'sec-report') return;
-                    if (child.id === 'sec-notify') return;
-                    if (child.id === 'sec-save-client') return;
-                    if (child.querySelector && child.querySelector('#sec-report')) return;
-                    if (child.querySelector && child.querySelector('#sec-notify')) return;
-                    if (child.querySelector && child.querySelector('#sec-save-client')) return;
-                    if (child.tagName === 'FOOTER') return;
-                    if (!child.innerHTML || child.innerHTML.trim() === '') return;
-                    captured.push(child.cloneNode(true));
-                });
+            // 화면의 실제 보고서 본문(.report-main)을 통째로 캡처 → 화면과 동일
+            var srcRoot = document.querySelector('.report-main')
+                || (document.getElementById('root') && document.getElementById('root').children[0]);
+            if (srcRoot) {
+                var cloneRoot = srcRoot.cloneNode(true);
+                // 차트(canvas) → 이미지 변환 (정적 HTML에서도 보이도록)
+                try {
+                    var _oc = srcRoot.querySelectorAll('canvas');
+                    var _cc = cloneRoot.querySelectorAll('canvas');
+                    for (var _i = 0; _i < _cc.length; _i++) {
+                        var _du = '';
+                        var _o = _oc[_i];
+                        var _ch = (window.Chart && window.Chart.getChart && _o) ? window.Chart.getChart(_o) : null;
+                        if (_ch) { try { _du = _ch.toBase64Image('image/png', 1); } catch(e) {} }
+                        if (!_du && _o && _o.toDataURL) { try { _du = _o.toDataURL('image/png'); } catch(e) {} }
+                        if (!_du) continue;
+                        var _img = document.createElement('img');
+                        _img.src = _du; _img.style.cssText = 'width:100%;height:auto;display:block;';
+                        if (_cc[_i].parentNode) _cc[_i].parentNode.replaceChild(_img, _cc[_i]);
+                    }
+                } catch(e) {}
+                captured.push(cloneRoot);
             }
             captured.forEach(function(node) {
-                var btns = node.querySelectorAll('button, .btn');
-                btns.forEach(function(b) { b.remove(); });
-                var inputs = node.querySelectorAll('input, select, textarea');
-                inputs.forEach(function(inp) {
+                // 내보내기 제외 영역 제거 (보고서/알림/업체저장/네비/버튼/입력)
+                ['#sec-report', '#sec-notify', '#sec-save-client', '.anchor-nav', '.topbar', '.no-export'].forEach(function(sel) {
+                    node.querySelectorAll(sel).forEach(function(el) { el.remove(); });
+                });
+                node.querySelectorAll('button, .btn').forEach(function(b) { b.remove(); });
+                node.querySelectorAll('input, select, textarea').forEach(function(inp) {
                     var span = document.createElement('span');
                     span.textContent = inp.value || '';
                     span.style.fontWeight = '600';
-                    inp.parentNode.replaceChild(span, inp);
+                    if (inp.parentNode) inp.parentNode.replaceChild(span, inp);
                 });
             });
             var cssText = '';
@@ -1045,6 +1052,41 @@ window.App = function App() {
             console.error('자동 DOM capture 실패:', e);
             return '';
         }
+    };
+
+    /* 저장된 분석 데이터를 실제 분석 화면으로 재렌더 → 화면과 동일하게 HTML 다운로드 (옵션 A) */
+    var downloadSavedReport = function(saved) {
+        if (!saved) { toast.error('보고서 데이터가 없습니다.'); return; }
+        var kw = saved.keyword || '';
+        // 1) 저장 데이터를 화면 상태에 주입 → 분석 화면(React 컴포넌트)으로 그대로 렌더
+        setCurrentClientId(saved.client_id || null);
+        setCompanyName(saved.companyName || saved.client_name || '');
+        setSearchedKeyword(kw);
+        setSearchedProductUrl(saved.product_url || '');
+        setAnalysisData(saved.analysis_data || null);
+        setVolumeData(saved.volume_data || null);
+        setRelatedData(saved.related_data || null);
+        setShopProducts(saved.shop_products || []);
+        setAdvertiserReport(saved.advertiser_data || null);
+        setCurrentPage('analysis');
+        try { window.scrollTo({ top: 0 }); } catch(e) {}
+        toast.info('보고서를 화면에 불러오는 중… 잠시 후 자동 다운로드됩니다.');
+        // 2) 차트가 그려질 시간을 준 뒤 화면 그대로 캡처 → 다운로드
+        setTimeout(function() {
+            try {
+                var htmlStr = captureAutoReportHtml(kw);
+                if (!htmlStr) { toast.error('보고서 생성에 실패했습니다.'); return; }
+                var blob = new Blob([htmlStr], { type: 'text/html;charset=utf-8' });
+                var a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = (saved.companyName || saved.client_name || '업체') + '_' + kw + '_보고서_' + (saved.analyzed_date || '') + '.html';
+                document.body.appendChild(a); a.click(); a.remove();
+                URL.revokeObjectURL(a.href);
+                toast.success('보고서를 다운로드했습니다. (화면과 동일)');
+            } catch(e) {
+                toast.error('보고서 다운로드 실패: ' + (e && e.message ? e.message : ''));
+            }
+        }, 3000);
     };
 
     // 앵커 네비게이션 (페이지 렌더링 순서와 동일하게 정렬)
@@ -1193,6 +1235,7 @@ window.App = function App() {
             React.createElement(window.ClientDashboard, {
                 currentUser: currentUser,
                 onRunAnalysis: handleClientClick,
+                onDownloadReport: downloadSavedReport,
                 initialSearch: managementInitialSearch,
                 canEdit: currentUser.role !== 'viewer'
             })

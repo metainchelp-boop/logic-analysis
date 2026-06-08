@@ -1,5 +1,5 @@
 /* ClientDashboard — 업체별 분석 관리 대시보드 v4.0 (AI 인사이트 탭 추가) */
-window.ClientDashboard = function ClientDashboard({ currentUser, onRunAnalysis, initialSearch, canEdit }) {
+window.ClientDashboard = function ClientDashboard({ currentUser, onRunAnalysis, onDownloadReport, initialSearch, canEdit }) {
     const { useState, useEffect, useCallback } = React;
 
     const [clients, setClients] = useState([]);
@@ -787,7 +787,19 @@ window.ClientDashboard = function ClientDashboard({ currentUser, onRunAnalysis, 
                                                                             </span>
                                                                         </td>
                                                                         <td style={{ textAlign: 'center' }}>
-                                                                            <button onClick={function() { downloadReport(h.date); }}
+                                                                            <button onClick={function() {
+                                                                                    var row = (analyses || []).find(function(a) {
+                                                                                        return a.analyzed_date === h.date && (!activeKeyword || a.keyword === activeKeyword);
+                                                                                    });
+                                                                                    if (row && onDownloadReport) {
+                                                                                        onDownloadReport(Object.assign({}, row, {
+                                                                                            client_id: selectedClient ? selectedClient.id : null,
+                                                                                            companyName: selectedClient ? selectedClient.name : ''
+                                                                                        }));
+                                                                                    } else {
+                                                                                        downloadReport(h.date);
+                                                                                    }
+                                                                                }}
                                                                                 style={{
                                                                                     padding: '4px 10px', borderRadius: 6, fontSize: 11, cursor: 'pointer',
                                                                                     background: '#f0f9ff', color: '#0369a1', border: '1px solid #bae6fd',
