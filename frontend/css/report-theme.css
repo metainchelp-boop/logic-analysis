@@ -248,4 +248,4 @@ body { background: var(--rt-bg); }
 .report-main .card > .desc { color: var(--rt-sub); font-size: 12px; margin: 2px 0 14px; }
 
 /* ratecard 라벨(노출/미노출/노출률 등)을 진한 색으로 — 연한 회색 가독성 개선 */
-.report-main .ratecard .k { color: #334155; font-weight: 700; font-size: 12.5px; margin-top: 4px; }
+.report-main .ratecard .k { color: #334155; font-weight: 800; font-size: 14.5px; margin-top: 6px; }

@@ -332,41 +332,36 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                             </div>
                         </div>
 
-                        {/* 2컬럼: 노출 / 미노출 */}
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-                            {/* 노출 키워드 */}
-                            <div>
-                                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
-                                    <span style={{ color: '#10b981' }}>●</span> 노출 키워드
-                                </div>
-                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                                    {exposed.map(function(r, idx) {
-                                        return (
-                                            <span key={idx} className={r.rank <= 10 ? 'kwchip' : 'kwchip warn'}>
-                                                {r.keyword} <span className="rk">{r.rank}위</span>
-                                            </span>
-                                        );
-                                    })}
-                                    {exposed.length === 0 && (
-                                        <div style={{ fontSize: 12, color: '#94a3b8' }}>노출된 키워드가 없습니다</div>
-                                    )}
-                                </div>
+                        {/* 노출 / 미노출 — 시안처럼 전체폭 가로 줄바꿈 */}
+                        <div>
+                            <div style={{ fontSize: 13, fontWeight: 800, color: '#10b981', margin: '6px 0 8px', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <span>●</span> 노출 키워드
                             </div>
-                            {/* 미노출 키워드 */}
-                            <div>
-                                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
-                                    <span style={{ color: '#ef4444' }}>●</span> 미노출 키워드
-                                </div>
-                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                                    {unexposed.map(function(r, idx) {
-                                        return (
-                                            <span key={idx} className="kwchip off">{r.keyword}</span>
-                                        );
-                                    })}
-                                    {unexposed.length === 0 && (
-                                        <div style={{ fontSize: 12, color: '#94a3b8' }}>모든 키워드에 노출 중입니다</div>
-                                    )}
-                                </div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                                {exposed.map(function(r, idx) {
+                                    return (
+                                        <span key={idx} className={r.rank <= 10 ? 'kwchip' : 'kwchip warn'}>
+                                            {r.keyword} <span className="rk">{r.rank}위</span>
+                                        </span>
+                                    );
+                                })}
+                                {exposed.length === 0 && (
+                                    <div style={{ fontSize: 12, color: '#94a3b8' }}>노출된 키워드가 없습니다</div>
+                                )}
+                            </div>
+
+                            <div style={{ fontSize: 13, fontWeight: 800, color: '#ef4444', margin: '16px 0 8px', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <span>●</span> 미노출 키워드
+                            </div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                                {unexposed.map(function(r, idx) {
+                                    return (
+                                        <span key={idx} className="kwchip off">{r.keyword}</span>
+                                    );
+                                })}
+                                {unexposed.length === 0 && (
+                                    <div style={{ fontSize: 12, color: '#94a3b8' }}>모든 키워드에 노출 중입니다</div>
+                                )}
                             </div>
                         </div>
 
