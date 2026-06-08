@@ -748,8 +748,9 @@ window.ClientDashboard = function ClientDashboard({ currentUser, onRunAnalysis, 
                                                             </tr>
                                                         </thead>
                                                         <tbody>
-                                                            {analysisHistory.map(function(h, i) {
-                                                                var prevH = i > 0 ? analysisHistory[i - 1] : null;
+                                                            {analysisHistory.slice().reverse().map(function(h, i, arr) {
+                                                                /* 최신이 위 → 더 과거(아래쪽, i+1)와 비교해 변동 계산 */
+                                                                var prevH = arr[i + 1] || null;
                                                                 var compIdxDiff = (prevH && h.comp_index != null && prevH.comp_index != null) ? (h.comp_index - prevH.comp_index).toFixed(2) : null;
                                                                 /* 경쟁수준 퍼센트 색상 */
                                                                 var cpVal = h.comp_percent;
@@ -870,8 +871,8 @@ window.ClientDashboard = function ClientDashboard({ currentUser, onRunAnalysis, 
                                                 <table>
                                                     <thead><tr><th>날짜</th><th>순위</th><th>유형</th></tr></thead>
                                                     <tbody>
-                                                        {rankHistory.map(function(r, i) {
-                                                            var prevR = i > 0 ? rankHistory[i - 1] : null;
+                                                        {rankHistory.slice().reverse().map(function(r, i, arr) {
+                                                            var prevR = arr[i + 1] || null;
                                                             var diff = (prevR && r.rank_position && prevR.rank_position) ? prevR.rank_position - r.rank_position : null;
                                                             return (
                                                                 <tr key={i}>
@@ -1381,7 +1382,7 @@ window.AnalysisResultView = function AnalysisResultView({ keyword, data, rankHis
                         <table>
                             <thead><tr><th>날짜</th><th>순위</th><th>유형</th></tr></thead>
                             <tbody>
-                                {rankHistory.map(function(r, i) {
+                                {rankHistory.slice().reverse().map(function(r, i) {
                                     return (
                                         <tr key={i}>
                                             <td>{(r.checked_at || '').slice(0, 16)}</td>
