@@ -13,7 +13,7 @@ window.DetailPageQualitySection = function DetailPageQualitySection(props) {
       {/* Score Header */}
       <div style={{ textAlign: 'center', marginBottom: '8px' }}>
         <span style={{ fontSize: '30px', fontWeight: '900' }}>{totalScore}</span>
-        <span style={{ color: 'var(--sub)' }}>/100 · {grade}등급</span>
+        <span style={{ color: 'var(--sub)' }}>/100{grade ? ' · ' + String(grade).replace(/등급$/, '') + '등급' : ''}</span>
       </div>
 
       {/* Score Bars */}
