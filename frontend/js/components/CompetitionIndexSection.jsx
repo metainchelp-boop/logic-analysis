@@ -47,9 +47,9 @@ window.CompetitionIndexSection = function CompetitionIndexSection(props) {
               <span>블루오션</span><span>보통</span><span>레드오션</span>
             </div>
             <div className="grid3" style={{ marginTop: 14 }}>
-              <div className="kpi"><div className="k">등록 상품수</div><div className="v" style={{ fontSize: 18 }}>{fmt(productCount)}</div></div>
-              <div className="kpi"><div className="k">월간 검색량</div><div className="v" style={{ fontSize: 18 }}>{fmt(searchVolume)}</div></div>
-              <div className="kpi"><div className="k">평균 클릭수</div><div className="v" style={{ fontSize: 18 }}>{fmt(avgCtr)}</div></div>
+              <div className="kpi"><div className="k">등록 상품수</div><div className="v">{fmt(productCount)}</div></div>
+              <div className="kpi"><div className="k">월간 검색량</div><div className="v">{fmt(searchVolume)}</div></div>
+              <div className="kpi"><div className="k">평균 클릭수</div><div className="v">{fmt(avgCtr)}</div></div>
             </div>
           </div>
         </div>

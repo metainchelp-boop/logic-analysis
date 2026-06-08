@@ -30,10 +30,10 @@ window.DatalabTrendSection = function DatalabTrendSection(props) {
           <h3 className="rt-h3"><span className="rt-hic">📈</span>키워드 검색량 트렌드 (최근 12개월) <span className="badge b-ok">✅ 데이터랩</span></h3>
           {/* KPI 4칸 — 차트 위 */}
           <div className="grid4" style={{ marginBottom: 6 }}>
-            <div className="kpi"><div className="k">최고 지수</div><div className="v" style={{ fontSize: 20 }}>{d.maxRatio} <small>{d.maxMonth}</small></div></div>
-            <div className="kpi"><div className="k">최저 지수</div><div className="v" style={{ fontSize: 20 }}>{d.minRatio} <small>{d.minMonth}</small></div></div>
-            <div className="kpi"><div className="k">평균 지수</div><div className="v" style={{ fontSize: 20 }}>{d.avgRatio}</div></div>
-            <div className="kpi"><div className="k">변동폭</div><div className="v" style={{ fontSize: 20 }}>{d.range}<small>p</small></div></div>
+            <div className="kpi"><div className="k">최고 지수</div><div className="v">{d.maxRatio} <small>{d.maxMonth}</small></div></div>
+            <div className="kpi"><div className="k">최저 지수</div><div className="v">{d.minRatio} <small>{d.minMonth}</small></div></div>
+            <div className="kpi"><div className="k">평균 지수</div><div className="v">{d.avgRatio}</div></div>
+            <div className="kpi"><div className="k">변동폭</div><div className="v">{d.range}<small>p</small></div></div>
           </div>
 
           {/* Chart.js 꺾은선 그래프 */}

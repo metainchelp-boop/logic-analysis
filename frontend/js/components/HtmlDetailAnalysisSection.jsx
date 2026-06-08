@@ -63,7 +63,7 @@ window.HtmlDetailAnalysisSection = function HtmlDetailAnalysisSection({ data }) 
                         ].map((item, i) => (
                             <div key={'dp-metric-'+i} className="kpi">
                                 <div className="k">{item.label}</div>
-                                <div className="v" style={{ fontSize: 18, color: item.good ? undefined : 'var(--red)' }}>{item.num}<small>{item.unit}</small></div>
+                                <div className="v" style={{ color: item.good ? undefined : 'var(--red)' }}>{item.num}<small>{item.unit}</small></div>
                             </div>
                         ))}
                     </div>

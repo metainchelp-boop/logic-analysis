@@ -181,7 +181,7 @@ body { background: var(--rt-bg); }
 /* KPI (시안 .kpi) */
 .report-main .kpi { background: linear-gradient(135deg, #f8fafc, #f1f5f9); border: 1px solid #e8edf3; border-radius: 14px; padding: 15px; }
 .report-main .kpi .k { font-size: 12px; color: var(--rt-sub); font-weight: 700; margin-bottom: 7px; }
-.report-main .kpi .v { font-size: 27px; font-weight: 900; letter-spacing: -1px; color: var(--rt-ink); }
+.report-main .kpi .v { font-size: 22px; font-weight: 900; letter-spacing: -1px; color: var(--rt-ink); }
 .report-main .kpi .v small { font-size: 13px; font-weight: 700; color: var(--rt-sub); margin-left: 2px; }
 
 /* 서브 카드 */
@@ -272,7 +272,7 @@ body { background: var(--rt-bg); }
 @media (max-width: 640px) {
   .report-main .card, .report-main .section .card { padding: 16px 14px !important; }
   .report-main .kpi { padding: 13px 12px; }
-  .report-main .kpi .v { font-size: 22px; }            /* 폭 좁을 때 숫자 줄바꿈/겹침 방지 */
+  .report-main .kpi .v { font-size: 20px !important; }   /* 폭 좁을 때 숫자 줄바꿈/겹침 방지 */
   .report-main .rt-h3, .report-main .card > h3 { font-size: 14.5px; }
   .report-main table { font-size: 12px; }
   .report-main .rt-scroll { max-height: 360px; }
