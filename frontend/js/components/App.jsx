@@ -155,7 +155,7 @@ window.App = function App() {
                 client_id: savedClientId,
                 keyword: savedKeyword,
                 product_url: savedUrl || '',
-                analysis_data: analysisData,
+                analysis_data: (htmlDetailResult ? Object.assign({}, analysisData, { htmlDetail: trimHtmlDetail(htmlDetailResult) }) : analysisData),
                 volume_data: volumeData || {},
                 related_data: relatedData || {},
                 shop_products: (shopProducts || []).slice(0, 20),
@@ -1076,6 +1076,10 @@ window.App = function App() {
         setRelatedData(saved.related_data || null);
         setShopProducts(saved.shop_products || []);
         setAdvertiserReport(saved.advertiser_data || null);
+        // Phase2: 저장된 상세분석(analysis_data.htmlDetail) 주입 → 상세HTML분석·리뷰텍스트 렌더
+        var _hd = saved.analysis_data && saved.analysis_data.htmlDetail;
+        setHtmlDetailResult(_hd || null);
+        setHtmlReviewData(_hd && _hd.reviewData ? _hd.reviewData : null);
         setCurrentPage('analysis');
         try { window.scrollTo({ top: 0 }); } catch(e) {}
         toast.info('보고서를 화면에 불러오는 중… 잠시 후 자동 다운로드됩니다.');
@@ -1604,6 +1608,7 @@ window.App = function App() {
                     shopProducts: shopProducts,
                     advertiserReport: advertiserReport,
                     detailHtml: lastHtmlRef.current,
+                    htmlDetailResult: htmlDetailResult,
                 })
             ),
 

@@ -628,6 +628,25 @@ def run_single_analysis(client_id: int, client_name: str, keyword: str, product_
         except Exception as e:
             logger.warning(f"  [{keyword}] 광고주 분석(자동) 실패 — 스킵: {e}")
 
+    # 4c. 상세페이지 분석 (#1에서 저장한 detail_html 활용 → 리뷰텍스트·상세HTML분석 채우기)
+    #     analysis['htmlDetail']에 넣어 analysis_json으로 저장 → #2-A 다운로드 시 렌더.
+    try:
+        _conn_h = sqlite3.connect(DB_PATH, timeout=10)
+        _row = _conn_h.execute("SELECT detail_html FROM clients WHERE id=?", (client_id,)).fetchone()
+        _conn_h.close()
+        _detail_html = (_row[0] if _row else '') or ''
+        if _detail_html and len(_detail_html) > 100:
+            from naver_crawler import analyze_detail_page
+            _dr = analyze_detail_page(_detail_html, product_url or '')
+            if isinstance(_dr, dict) and _dr.get('success') is not False:
+                rd = _dr.get('reviewData')  # 리뷰 배열은 20개만 저장(목록조회 경량화)
+                if isinstance(rd, dict) and isinstance(rd.get('reviews'), list):
+                    rd['reviews'] = rd['reviews'][:20]
+                analysis['htmlDetail'] = _dr
+                logger.info(f"  [{keyword}] 상세페이지 분석(자동) 완료")
+    except Exception as e:
+        logger.warning(f"  [{keyword}] 상세페이지 분석(자동) 실패 — 스킵: {e}")
+
     # 5. HTML 보고서 생성
     report_html = generate_html_report(keyword, client_name, analysis, vol_data, related_data)
 

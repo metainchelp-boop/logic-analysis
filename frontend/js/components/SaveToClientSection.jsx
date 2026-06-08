@@ -1,6 +1,6 @@
 /* SaveToClientSection — 분석 결과를 업체로 저장하는 섹션 */
 window.SaveToClientSection = function SaveToClientSection({
-    keyword, productUrl, analysisData, volumeData, relatedData, shopProducts, advertiserReport, detailHtml
+    keyword, productUrl, analysisData, volumeData, relatedData, shopProducts, advertiserReport, detailHtml, htmlDetailResult
 }) {
     var _React = React;
     var useState = _React.useState;
@@ -119,7 +119,7 @@ window.SaveToClientSection = function SaveToClientSection({
         var payload = {
             keyword: keyword,
             product_url: productUrl || '',
-            analysis_data: analysisData,
+            analysis_data: (htmlDetailResult ? Object.assign({}, analysisData, { htmlDetail: trimHtmlDetail(htmlDetailResult) }) : analysisData),
             volume_data: volumeData || {},
             related_data: relatedData || {},
             shop_products: (shopProducts || []).slice(0, 20),

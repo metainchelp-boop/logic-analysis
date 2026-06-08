@@ -1,7 +1,7 @@
 /* ===== 로직 분석 — API 헬퍼 & 유틸리티 ===== */
 
 // ===== 앱 버전 (한 곳에서 관리) =====
-var APP_VERSION = window.APP_VERSION = 'v6.3.9';
+var APP_VERSION = window.APP_VERSION = 'v6.4.0';
 
 // ===== 401 중복 새로고침 방지 플래그 =====
 var _isAuthRedirecting = false;
@@ -196,4 +196,16 @@ function extractProductUrlFromHtml(html) {
     } catch (e) {
         return '';
     }
+}
+
+// 저장용 상세분석 경량화 — 리뷰 배열을 20개로 제한(목록 조회 비대화 방지)
+function trimHtmlDetail(hd) {
+    if (!hd || typeof hd !== 'object') return hd;
+    try {
+        var copy = Object.assign({}, hd);
+        if (copy.reviewData && Array.isArray(copy.reviewData.reviews)) {
+            copy.reviewData = Object.assign({}, copy.reviewData, { reviews: copy.reviewData.reviews.slice(0, 20) });
+        }
+        return copy;
+    } catch (e) { return hd; }
 }
