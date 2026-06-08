@@ -56,6 +56,9 @@ window.ReportSection = function ReportSection(props) {
                             _img.src = _du;
                             _img.style.cssText = 'width:100%;height:auto;display:block;';
                             if (_cloneCanvas[_ci].parentNode) _cloneCanvas[_ci].parentNode.replaceChild(_img, _cloneCanvas[_ci]);
+                            /* ★겹침방지: 차트박스 고정높이(inline/CSS) 제거 → 이미지가 넘쳐 아래 노트를 침범하지 않게 */
+                            var _box = (_img.closest && _img.closest('.chartbox')) || _img.parentNode;
+                            if (_box && _box.style) { _box.style.height = 'auto'; _box.style.minHeight = '0'; _box.style.overflow = 'visible'; }
                         } catch (eImg) {}
                     }
                 });

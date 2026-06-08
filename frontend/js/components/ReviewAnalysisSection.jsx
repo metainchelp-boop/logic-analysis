@@ -48,7 +48,7 @@ window.ReviewAnalysisSection = function ReviewAnalysisSection(props) {
             return label + (window.chartComma ? window.chartComma(raw) : raw);
           };
           return (
-            <div className="chartbox" style={{ height: 280 }}>
+            <div className="chartbox">
               <ChartCanvas
                 type="bar"
                 height={280}

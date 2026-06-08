@@ -1029,6 +1029,9 @@ window.App = function App() {
                         var _img = document.createElement('img');
                         _img.src = _du; _img.style.cssText = 'width:100%;height:auto;display:block;';
                         if (_cc[_i].parentNode) _cc[_i].parentNode.replaceChild(_img, _cc[_i]);
+                        // 겹침방지: 차트박스 고정높이 제거 → 이미지가 넘쳐 노트 침범 방지
+                        var _box2 = (_img.closest && _img.closest('.chartbox')) || _img.parentNode;
+                        if (_box2 && _box2.style) { _box2.style.height = 'auto'; _box2.style.minHeight = '0'; _box2.style.overflow = 'visible'; }
                     }
                 } catch(e) {}
                 captured.push(cloneRoot);
