@@ -1027,11 +1027,13 @@ window.App = function App() {
                         if (!_du && _o && _o.toDataURL) { try { _du = _o.toDataURL('image/png'); } catch(e) {} }
                         if (!_du) continue;
                         var _img = document.createElement('img');
-                        _img.src = _du; _img.style.cssText = 'width:100%;height:auto;display:block;';
+                        _img.src = _du; _img.style.cssText = 'width:100%;height:auto;display:block;margin-bottom:14px;';
                         if (_cc[_i].parentNode) _cc[_i].parentNode.replaceChild(_img, _cc[_i]);
-                        // 겹침방지: 차트박스 고정높이 제거 → 이미지가 넘쳐 노트 침범 방지
-                        var _box2 = (_img.closest && _img.closest('.chartbox')) || _img.parentNode;
-                        if (_box2 && _box2.style) { _box2.style.height = 'auto'; _box2.style.minHeight = '0'; _box2.style.overflow = 'visible'; }
+                        // 겹침방지(핵심): 이미지 직속 부모(차트 래퍼 height:NNNpx 고정) + .chartbox 모두 높이 해제
+                        var _wrap2 = _img.parentNode;
+                        if (_wrap2 && _wrap2.style) { _wrap2.style.height = 'auto'; _wrap2.style.minHeight = '0'; _wrap2.style.position = 'static'; }
+                        var _box2 = (_img.closest && _img.closest('.chartbox')) || _wrap2;
+                        if (_box2 && _box2.style) { _box2.style.height = 'auto'; _box2.style.minHeight = '0'; _box2.style.overflow = 'visible'; _box2.style.marginBottom = '18px'; }
                     }
                 } catch(e) {}
                 captured.push(cloneRoot);

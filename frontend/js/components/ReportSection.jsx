@@ -54,11 +54,14 @@ window.ReportSection = function ReportSection(props) {
                             if (!_du) continue;
                             var _img = document.createElement('img');
                             _img.src = _du;
-                            _img.style.cssText = 'width:100%;height:auto;display:block;';
+                            _img.style.cssText = 'width:100%;height:auto;display:block;margin-bottom:14px;';
                             if (_cloneCanvas[_ci].parentNode) _cloneCanvas[_ci].parentNode.replaceChild(_img, _cloneCanvas[_ci]);
-                            /* ★겹침방지: 차트박스 고정높이(inline/CSS) 제거 → 이미지가 넘쳐 아래 노트를 침범하지 않게 */
-                            var _box = (_img.closest && _img.closest('.chartbox')) || _img.parentNode;
-                            if (_box && _box.style) { _box.style.height = 'auto'; _box.style.minHeight = '0'; _box.style.overflow = 'visible'; }
+                            /* ★겹침방지(핵심): 이미지의 직속 부모(차트 래퍼, height:NNNpx 고정)와 .chartbox 모두 높이 해제 →
+                               이미지가 비율대로 늘어나도 래퍼가 정확히 감싸 아래 노트와 겹치지 않게 */
+                            var _wrap = _img.parentNode; /* ChartCanvas가 만든 position:relative;height:NNNpx 래퍼 */
+                            if (_wrap && _wrap.style) { _wrap.style.height = 'auto'; _wrap.style.minHeight = '0'; _wrap.style.position = 'static'; }
+                            var _box = (_img.closest && _img.closest('.chartbox')) || _wrap;
+                            if (_box && _box.style) { _box.style.height = 'auto'; _box.style.minHeight = '0'; _box.style.overflow = 'visible'; _box.style.marginBottom = '18px'; }
                         } catch (eImg) {}
                     }
                 });
