@@ -87,6 +87,28 @@ window.App = function App() {
 
     useEffect(function() {
         try {
+            // 0) 전산(ERP) SSO 자동 로그인: URL ?sso=<토큰> 있으면 우선 처리
+            var _ssoTok = '';
+            try { _ssoTok = new URLSearchParams(window.location.search).get('sso') || ''; } catch(e) {}
+            if (_ssoTok) {
+                var _cleanUrl = function() {
+                    try {
+                        var u = new URL(window.location.href);
+                        u.searchParams.delete('sso');
+                        window.history.replaceState({}, document.title, u.pathname + u.search + u.hash);
+                    } catch(e) {}
+                };
+                fetch('/api/auth/sso', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: _ssoTok }) })
+                    .then(function(r) { return r.json(); })
+                    .then(function(data) {
+                        _cleanUrl();
+                        if (data && data.success && data.token && data.user) {
+                            saveAuth(data.user, data.token);
+                        }
+                        setAuthChecking(false);
+                    }).catch(function() { _cleanUrl(); setAuthChecking(false); });
+                return; // SSO 처리로 분기 — 아래 세션복원 스킵
+            }
             // 기존 세션 복원
             var savedToken = sessionStorage.getItem('logic_token');
             if (savedToken) {

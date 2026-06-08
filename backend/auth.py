@@ -58,6 +58,9 @@ SECRET_KEY = _get_or_create_secret()
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = 24
 
+# 전산(ERP) SSO 공유 시크릿 — 전산·로직분석 양쪽 서버에 동일하게 설정(env). 미설정 시 SSO 비활성.
+SSO_SHARED_SECRET = os.getenv("SSO_SHARED_SECRET", "")
+
 # Password hashing configuration
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -544,6 +547,72 @@ async def login(request: LoginRequest, request_obj: Request) -> LoginResponse:
     except Exception as e:
         logger.error(f"Login failed: {str(e)}")
         raise HTTPException(status_code=500, detail="로그인 처리 중 오류가 발생했습니다.")
+
+
+class SSORequest(BaseModel):
+    token: str
+
+
+@router.post("/sso", response_model=LoginResponse)
+async def sso_login(request: SSORequest, request_obj: Request) -> LoginResponse:
+    """전산(ERP) SSO 자동 로그인.
+    전산이 공유 시크릿(SSO_SHARED_SECRET)으로 서명한 단기 토큰을 검증 →
+    매핑되는 로직분석 사용자 자동 로그인(없으면 viewer 역할로 자동 가입)."""
+    if not SSO_SHARED_SECRET:
+        raise HTTPException(status_code=503, detail="SSO가 설정되지 않았습니다.")
+    try:
+        payload = jwt.decode(request.token, SSO_SHARED_SECRET, algorithms=["HS256"])
+    except JWTError:
+        raise HTTPException(status_code=401, detail="유효하지 않거나 만료된 SSO 토큰입니다.")
+
+    sub = str(payload.get("sub") or payload.get("username") or "").strip()
+    if not sub or len(sub) > 100:
+        raise HTTPException(status_code=401, detail="SSO 토큰에 유효한 사용자 식별자가 없습니다.")
+    name = (str(payload.get("name") or sub)).strip()[:100]
+    username = sub  # 전산 식별자를 로직분석 username으로 사용
+
+    try:
+        user = get_user_by_username(username)
+        if not user:
+            import secrets as _secrets
+            create_user(username, _secrets.token_hex(16), name=name, role="viewer")
+            user = get_user_by_username(username)  # 생성 후 재조회(일관된 dict)
+            if not user:
+                raise HTTPException(status_code=500, detail="사용자 자동 생성에 실패했습니다.")
+            logger.info(f"SSO 자동 가입: {username}")
+        if not user.get("is_active", True):
+            raise HTTPException(status_code=403, detail="비활성화된 계정입니다.")
+
+        token = create_access_token(data={"user_id": user["id"]})
+        user_response = UserResponse(
+            id=user["id"],
+            username=user["username"],
+            name=user.get("name", ""),
+            role=user["role"],
+            is_active=user["is_active"],
+            created_at=user["created_at"],
+        )
+        try:
+            ip = request_obj.client.host if hasattr(request_obj, 'client') and request_obj.client else ''
+        except Exception:
+            ip = ''
+        try:
+            log_conn = _get_db_connection()
+            log_conn.execute(
+                "INSERT INTO login_logs (user_id, username, login_at, ip_address) VALUES (?, ?, ?, ?)",
+                (user["id"], user["username"], datetime.now().isoformat(), 'SSO:' + ip)
+            )
+            log_conn.commit()
+            log_conn.close()
+        except Exception:
+            pass
+        logger.info(f"SSO 로그인: {username}")
+        return LoginResponse(success=True, token=token, user=user_response)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"SSO 로그인 실패: {str(e)}")
+        raise HTTPException(status_code=500, detail="SSO 처리 중 오류가 발생했습니다.")
 
 
 @router.get("/me", response_model=UserResponse)
