@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>로직 분석 보고서 — 든든해장국</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root{--ind:#4f46e5;--pur:#9333ea;--ink:#0f172a;--sub:#64748b;--line:#e8edf3;--bg:#f1f5f9;
+        --ok:#16a34a;--okbg:#dcfce7;--est:#d97706;--estbg:#fef3c7;--red:#ef4444;--blue:#2563eb;}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:'Noto Sans KR',sans-serif;background:var(--bg);color:var(--ink);line-height:1.5}
+  .topbar{background:linear-gradient(120deg,#0f172a,#312e81 60%,#4f46e5);color:#fff;padding:16px 26px;display:flex;align-items:center;gap:14px;position:sticky;top:0;z-index:50;box-shadow:0 4px 20px rgba(15,23,42,.3)}
+  .topbar .logo{font-weight:900;font-size:18px;letter-spacing:-.5px}
+  .topbar .tag{font-size:12px;background:rgba(255,255,255,.16);padding:5px 12px;border-radius:999px;backdrop-filter:blur(4px)}
+  .topbar .demo{margin-left:auto;font-size:12px;color:#fcd34d}
+  .layout{display:flex;max-width:1220px;margin:0 auto;gap:26px;padding:22px 26px 100px}
+  nav.toc{position:sticky;top:84px;align-self:flex-start;width:210px;flex:none;background:#fff;border:1px solid var(--line);border-radius:16px;padding:12px;box-shadow:0 6px 24px rgba(15,23,42,.06)}
+  nav.toc a{display:block;padding:9px 12px;border-radius:10px;color:#475569;text-decoration:none;font-size:13px;font-weight:700;margin-bottom:2px}
+  nav.toc a:hover{background:#eef2ff;color:var(--ind)}
+  nav.toc a .n{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:7px;background:#eef2ff;color:var(--ind);font-size:11px;margin-right:8px}
+  nav.toc a small{display:block;font-weight:400;color:#94a3b8;font-size:10px;margin:2px 0 0 30px;line-height:1.3}
+  main{flex:1;min-width:0}
+  .divider{display:flex;align-items:center;gap:12px;margin:34px 0 16px}
+  .divider .ic{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;font-size:20px;color:#fff;box-shadow:0 4px 12px rgba(79,70,229,.25)}
+  .divider .tt{font-weight:900;font-size:20px;letter-spacing:-.5px}
+  .divider .tt small{display:block;font-weight:500;font-size:12px;color:var(--sub);letter-spacing:0}
+  .card{background:#fff;border:1px solid var(--line);border-radius:18px;padding:20px 22px;margin-bottom:16px;box-shadow:0 4px 18px rgba(15,23,42,.05)}
+  .card h3{margin:0 0 4px;font-size:15.5px;display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+  .card .hic{width:32px;height:32px;border-radius:10px;display:grid;place-items:center;background:linear-gradient(135deg,#eef2ff,#e0e7ff);font-size:16px}
+  .card .desc{color:var(--sub);font-size:12px;margin:2px 0 14px}
+  .badge{font-size:11px;font-weight:800;padding:3px 9px;border-radius:999px;vertical-align:middle}
+  .b-ok{background:var(--okbg);color:var(--ok)} .b-est{background:var(--estbg);color:var(--est)} .b-ai{background:#ede9fe;color:#7c3aed}
+  .ps{font-size:11px;font-weight:800;padding:3px 10px;border-radius:999px;margin-left:4px}
+  .ps-g{background:var(--okbg);color:var(--ok)}.ps-r{background:#fee2e2;color:#b91c1c}.ps-n{background:#eef2f7;color:#64748b}
+  .kpis{display:grid;gap:12px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  .grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+  .kpi{background:linear-gradient(135deg,#f8fafc,#f1f5f9);border:1px solid #e8edf3;border-radius:14px;padding:15px}
+  .kpi .k{font-size:12px;color:var(--sub);font-weight:700;margin-bottom:7px}
+  .kpi .v{font-size:27px;font-weight:900;letter-spacing:-1px} .kpi .v small{font-size:13px;font-weight:700;color:var(--sub);margin-left:2px}
+  table{width:100%;border-collapse:collapse;font-size:13px;margin-top:6px}
+  th,td{text-align:left;padding:10px 8px;border-bottom:1px solid #eef2f7}
+  th{color:var(--sub);font-size:11px;font-weight:800;border-bottom:2px solid #e2e8f0;text-transform:none}
+  tbody tr:hover{background:#fafbff}
+  .tag2{display:inline-block;background:#eef2ff;color:#4338ca;border-radius:999px;padding:4px 11px;font-size:12px;margin:3px 4px 0 0;font-weight:700}
+  .minibar{height:7px;border-radius:5px;background:#eef2f7;overflow:hidden;display:inline-block;width:80px;vertical-align:middle;margin-right:6px}
+  .minibar > i{display:block;height:100%;background:linear-gradient(90deg,var(--ind),var(--pur))}
+  .kwchip{display:inline-flex;align-items:center;gap:6px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:9px;padding:7px 9px;margin:4px 6px 0 0;font-size:12.5px;font-weight:700}
+  .kwchip .rk{background:#16a34a;color:#fff;border-radius:6px;padding:2px 7px;font-size:11px}
+  .kwchip.warn{background:#fffbeb;border-color:#fde68a}.kwchip.warn .rk{background:#d97706}
+  .kwchip.off{background:#f8fafc;border:1px solid #e8edf3;color:#94a3b8;font-weight:500}
+  .scorebar{margin:9px 0}
+  .scorebar .lbl{display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:5px}
+  .scorebar .lbl b{color:var(--ink)} .scorebar .lbl .w{color:#94a3b8;font-weight:500;font-size:11px}
+  .track{height:9px;background:#eef2f7;border-radius:6px;overflow:hidden}
+  .track > i{display:block;height:100%;border-radius:6px;background:linear-gradient(90deg,var(--ind),var(--pur))}
+  .check{font-size:12.5px;padding:5px 0;display:flex;gap:9px;align-items:flex-start}
+  .check .y{color:var(--ok);font-weight:900}.check .n{color:var(--red);font-weight:900}
+  .note{font-size:12px;color:#475569;margin-top:12px;background:#f8fafc;border-left:3px solid var(--ind);padding:9px 13px;border-radius:0 9px 9px 0}
+  .note.est{border-left-color:var(--est)} .note.ok{border-left-color:var(--ok)}
+  .pill-tabs{display:flex;gap:6px;margin:6px 0 14px;flex-wrap:wrap}
+  .pill-tabs button{border:1px solid var(--line);background:#fff;border-radius:999px;padding:7px 15px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit}
+  .pill-tabs button.on{background:var(--ind);color:#fff;border-color:var(--ind)}
+  .donut{position:relative;width:150px;height:150px;border-radius:50%;display:grid;place-items:center;margin:auto}
+  .donut .inner{position:absolute;inset:16px;background:#fff;border-radius:50%;display:grid;place-items:center;text-align:center}
+  .donut .num{font-size:30px;font-weight:900;line-height:1}.donut .lab{font-size:11px;color:var(--sub);margin-top:2px}
+  .band{position:relative;height:12px;border-radius:7px;background:linear-gradient(90deg,#22c55e,#eab308,#ef4444);margin:16px 0 6px}
+  .band .mk{position:absolute;top:-6px;width:4px;height:24px;background:#0f172a;border-radius:2px}
+  .seasoncard{border:1px solid #e8edf3;border-radius:14px;padding:14px;text-align:center}
+  .seasoncard.peak{border-color:#fdba74;background:linear-gradient(135deg,#fff7ed,#ffedd5)}
+  .gapbar{margin:10px 0}
+  .gapbar .row{display:flex;align-items:center;gap:10px;font-size:12.5px}
+  .gapbar .nm{width:90px;color:var(--sub);font-weight:600}
+  .gapbar .b{flex:1;height:22px;background:#eef2f7;border-radius:7px;position:relative;overflow:hidden}
+  .gapbar .b .me{position:absolute;left:0;top:0;height:100%;background:linear-gradient(90deg,#4f46e5,#9333ea);border-radius:7px}
+  .gapbar .b .cp{position:absolute;top:0;height:100%;border-left:2px dashed #ef4444}
+  .strat{border:1px solid #e8edf3;border-radius:14px;padding:14px;margin-top:10px}
+  .strat.high{border-left:4px solid var(--red)} .strat.med{border-left:4px solid var(--est)} .strat.low{border-left:4px solid var(--ok)}
+  .sev{font-size:10px;font-weight:800;padding:2px 8px;border-radius:999px}
+  .sev.high{background:#fee2e2;color:#b91c1c}.sev.med{background:#fef3c7;color:#b45309}.sev.low{background:#dcfce7;color:#15803d}
+  .dlbtn{display:inline-block;background:linear-gradient(135deg,#4f46e5,#9333ea);color:#fff;border:none;border-radius:12px;padding:13px 26px;font-size:14px;font-weight:800;cursor:pointer;font-family:inherit;box-shadow:0 6px 18px rgba(79,70,229,.3)}
+  .chartbox{position:relative;height:240px;margin-top:8px}
+  .chartbox.sm{height:170px}
+  .sub-card{background:#f8fafc;border:1px solid #eef2f7;border-radius:13px;padding:14px 16px;margin-top:12px}
+  .sub-card .st{font-size:13.5px;font-weight:800;margin-bottom:8px;display:flex;align-items:center;gap:6px}
+  .ratecard{text-align:center;border:1px solid #e8edf3;border-radius:13px;padding:12px}
+  @media(max-width:860px){.layout{flex-direction:column}.grid2,.grid3,.grid4{grid-template-columns:1fr}nav.toc{position:static;width:auto;display:flex;flex-wrap:wrap;gap:4px}nav.toc a small{display:none}}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <span class="logo">로직 분석 보고서</span>
+  <span class="tag">든든해장국 · 키워드 "해장국"</span>
+  <span class="demo">● 미리보기(샘플 데이터) — 완전판 · 차트 포함</span>
+</div>
+
+<div class="layout">
+  <nav class="toc">
+    <a href="#g1"><span class="n">1</span>표지·요약</a>
+    <a href="#g2"><span class="n">2</span>시장·수요<small>검색량·트렌드·시즌·인구·요일·성장·카테고리·시장규모</small></a>
+    <a href="#g3"><span class="n">3</span>경쟁 진단<small>강도·광고경쟁·경쟁사·카테고리</small></a>
+    <a href="#g4"><span class="n">4</span>내 상품 현황<small>노출순위·판매·리뷰·SEO 4종</small></a>
+    <a href="#g5"><span class="n">5</span>기회 발굴<small>연관·골든·상품명</small></a>
+    <a href="#g6"><span class="n">6</span>전략·결론<small>진입전략·AI·내보내기</small></a>
+    <div style="border-top:1px solid var(--line);margin:10px 4px 6px"></div>
+    <div style="padding:2px 8px;font-size:11px;color:var(--sub);line-height:1.9">
+      <b class="badge b-ok">✅ 실측</b> 네이버 실제값<br>
+      <b class="badge b-est">≈ 추정</b> 계산·근거기반<br>
+      <b class="badge b-ai">AI</b> AI 생성
+    </div>
+  </nav>
+
+  <main>
+    <!-- ============ 1 ============ -->
+    <div class="divider" id="g1"><span class="ic" style="background:linear-gradient(135deg,#4f46e5,#9333ea)">📋</span><span class="tt">1. 표지 · 종합 요약<small>광고주가 가장 먼저 보는 화면</small></span></div>
+
+    <div class="card" style="background:linear-gradient(120deg,#fff,#f5f3ff);border-color:#e0e7ff">
+      <h3><span class="hic">🏪</span>광고주 정보</h3>
+      <div class="grid4">
+        <div class="kpi"><div class="k">광고주 / 스토어</div><div class="v" style="font-size:18px">든든해장국</div></div>
+        <div class="kpi"><div class="k">분석 키워드</div><div class="v" style="font-size:18px">해장국</div></div>
+        <div class="kpi"><div class="k">대표 상품</div><div class="v" style="font-size:14px;line-height:1.35">우거지 감자탕 해장국 2팩 6kg 밀키트</div></div>
+        <div class="kpi"><div class="k">카테고리</div><div class="v" style="font-size:14px">식품 &gt; 즉석국 &gt; 해장국</div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3><span class="hic">🎯</span>종합 요약</h3>
+      <div class="grid4">
+        <div class="kpi"><div class="k">월간 검색량 <span class="badge b-ok">✅</span></div><div class="v">34,200<small>회/월</small></div></div>
+        <div class="kpi"><div class="k">등록 상품수 <span class="badge b-ok">✅</span></div><div class="v">1,740<small>개</small></div></div>
+        <div class="kpi"><div class="k">골든 키워드 <span class="badge b-ok">✅</span></div><div class="v">4<small>개 발견</small></div></div>
+        <div class="kpi"><div class="k">경쟁강도 <span class="badge b-ok">✅</span></div><div class="v" style="font-size:22px">중간</div></div>
+      </div>
+      <div class="note">💡 '해장국' 7위로 1페이지 노출 중이나, 상품명 키워드 13개 중 3개만 노출(노출률 23%)로 검색 유입을 절반 이상 놓치고 있습니다.</div>
+    </div>
+
+    <!-- ============ 2 ============ -->
+    <div class="divider" id="g2"><span class="ic" style="background:linear-gradient(135deg,#0ea5e9,#6366f1)">📊</span><span class="tt">2. 시장 · 수요 진단<small>데이터랩 분석을 한 곳에 모음</small></span></div>
+
+    <div class="card">
+      <h3><span class="hic">🔍</span>키워드 검색량 <span class="badge b-ok">✅ 실측</span></h3>
+      <div class="grid3">
+        <div class="kpi"><div class="k">총 검색량</div><div class="v">34,200<small>회/월</small></div></div>
+        <div class="kpi"><div class="k">PC</div><div class="v">9,800<small>회 (29%)</small></div></div>
+        <div class="kpi"><div class="k">모바일</div><div class="v">24,400<small>회 (71%)</small></div></div>
+      </div>
+      <div class="track" style="height:14px;margin-top:14px;display:flex"><i style="width:29%;background:#6366f1"></i><i style="width:71%;background:#ec4899"></i></div>
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--sub);margin-top:5px"><span>● PC 29%</span><span>모바일 71% ●</span></div>
+      <div class="note">모바일 비중 71% — 모바일 최적화 상세페이지가 매우 중요합니다.</div>
+    </div>
+
+    <div class="card">
+      <h3><span class="hic">📈</span>키워드 검색량 트렌드 (최근 12개월) <span class="badge b-ok">✅ 데이터랩</span></h3>
+      <div class="grid4" style="margin-bottom:6px">
+        <div class="kpi"><div class="k">최고 지수</div><div class="v" style="font-size:20px">100 <small>11월</small></div></div>
+        <div class="kpi"><div class="k">최저 지수</div><div class="v" style="font-size:20px">40 <small>3월</small></div></div>
+        <div class="kpi"><div class="k">평균 지수</div><div class="v" style="font-size:20px">63</div></div>
+        <div class="kpi"><div class="k">변동폭</div><div class="v" style="font-size:20px">60<small>p</small></div></div>
+      </div>
+      <div class="chartbox"><canvas id="trendChart"></canvas></div>
+      <div class="note">겨울(11~1월) 급상승 · 전년 대비 +21% 상승 추세. 성수기 2~3개월 전 준비 권장.</div>
+    </div>
+
+    <div class="card">
+      <h3><span class="hic">🗓️</span>시즌별 수요 예측 <span class="badge b-ok">✅ 데이터랩</span></h3>
+      <div class="grid4">
+        <div class="seasoncard"><div style="font-size:22px">🌸</div><b>봄</b><div class="desc" style="margin:2px 0">3~5월</div><div style="font-weight:800">지수 52</div><div style="font-size:11px;color:var(--sub)">보통</div></div>
+        <div class="seasoncard"><div style="font-size:22px">☀️</div><b>여름</b><div class="desc" style="margin:2px 0">6~8월</div><div style="font-weight:800">지수 45</div><div style="font-size:11px;color:var(--sub)">비수기</div></div>
+        <div class="seasoncard"><div style="font-size:22px">🍂</div><b>가을</b><div class="desc" style="margin:2px 0">9~11월</div><div style="font-weight:800">지수 78</div><div style="font-size:11px;color:var(--sub)">성수기</div></div>
+        <div class="seasoncard peak"><div style="font-size:22px">❄️</div><b>겨울</b><div class="desc" style="margin:2px 0">12~2월</div><div style="font-weight:800;color:#c2410c">지수 100 🔥</div><div style="font-size:11px;color:#c2410c">최성수기</div></div>
+      </div>
+      <div class="note">겨울 최성수기. 추위·숙취 수요로 12~1월 검색 최고조 → 11월부터 광고·재고 선제 준비.</div>
+    </div>
+
+    <div class="grid2">
+      <div class="card">
+        <h3><span class="hic">👥</span>검색 인구통계 — 성별 <span class="badge b-ok">✅ 데이터랩</span></h3>
+        <div class="chartbox sm"><canvas id="genderChart"></canvas></div>
+        <div class="note">남성 63% · 여성 37% — 남성 타겟 소구.</div>
+      </div>
+      <div class="card">
+        <h3><span class="hic">👥</span>검색 인구통계 — 연령 <span class="badge b-ok">✅ 데이터랩</span></h3>
+        <div class="chartbox sm"><canvas id="ageChart"></canvas></div>
+        <div class="note">핵심 타겟: <b>40대 남성</b> (전체의 약 27%).</div>
+      </div>
+    </div>
+
+    <div class="grid2">
+      <div class="card">
+        <h3><span class="hic">📅</span>요일별 검색 패턴 <span class="badge b-ok">✅ 데이터랩</span></h3>
+        <div class="chartbox sm"><canvas id="weekdayChart"></canvas></div>
+        <div class="note">최고 <b>일요일</b>(118) / 최저 수요일(82) — 주말 광고 강화.</div>
+      </div>
+      <div class="card">
+        <h3><span class="hic">🚀</span>전년 동기 대비 성장률 <span class="badge b-ok">✅ 데이터랩</span></h3>
+        <div class="kpi" style="margin-bottom:8px"><div class="k">직전 1개월</div><div class="v" style="color:var(--ok)">+9<small>%</small></div><div class="track" style="margin-top:6px"><i style="width:60%"></i></div></div>
+        <div class="kpi" style="margin-bottom:8px"><div class="k">직전 3개월</div><div class="v" style="color:var(--ok)">+18<small>%</small></div><div class="track" style="margin-top:6px"><i style="width:74%"></i></div></div>
+        <div class="kpi"><div class="k">직전 12개월</div><div class="v" style="color:var(--ok)">+21<small>%</small></div><div class="track" style="margin-top:6px"><i style="width:82%"></i></div></div>
+        <div class="note ok">빠른 성장세 — 시장이 커지는 중. 진입 적기.</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3><span class="hic">🔥</span>카테고리 인기 · 급상승 키워드 <span class="badge b-ok">✅ 데이터랩</span></h3>
+      <div class="grid2">
+        <div>
+          <div class="sub-card"><div class="st">🏆 인기 키워드 TOP</div>
+            <table><tbody>
+              <tr><td>1</td><td><b>해장국</b></td><td style="text-align:right">검색 34,200</td></tr>
+              <tr><td>2</td><td><b>밀키트 해장국</b></td><td style="text-align:right">12,800</td></tr>
+              <tr><td>3</td><td><b>뼈해장국</b></td><td style="text-align:right">9,100</td></tr>
+              <tr><td>4</td><td><b>콩나물해장국</b></td><td style="text-align:right">6,400</td></tr>
+            </tbody></table>
+          </div>
+        </div>
+        <div>
+          <div class="sub-card"><div class="st">📈 급상승 키워드</div>
+            <table><tbody>
+              <tr><td><b>우거지해장국</b></td><td style="text-align:right"><span class="ps ps-g">▲ +64%</span></td></tr>
+              <tr><td><b>감자탕 밀키트</b></td><td style="text-align:right"><span class="ps ps-g">▲ +41%</span></td></tr>
+              <tr><td><b>술국 밀키트</b></td><td style="text-align:right"><span class="ps ps-g">▲ +29%</span></td></tr>
+              <tr><td><b>사골 해장국</b></td><td style="text-align:right"><span class="ps ps-g">▲ +22%</span></td></tr>
+            </tbody></table>
+          </div>
+        </div>
+      </div>
+      <div class="note">급상승 '우거지해장국'은 내 상품명에 이미 있는 키워드 → 노출 최적화 시 수혜 큼.</div>
+    </div>
+
+    <div class="card">
+      <h3><span class="hic">💰</span>시장 규모 &amp; 매출 추정 <span class="badge b-est">≈ 추정</span></h3>
+      <div class="grid3">
+        <div class="kpi"><div class="k">월간 시장 규모</div><div class="v">2.1<small>억</small></div></div>
+        <div class="kpi"><div class="k">평균 판매가</div><div class="v">18,900<small>원</small></div></div>
+        <div class="kpi"><div class="k">적용 전환율</div><div class="v">3.0<small>%</small></div></div>
+      </div>
+      <div class="chartbox" style="margin-top:14px"><canvas id="marketRevChart"></canvas></div>
+      <table style="margin-top:10px">
+        <thead><tr><th>순위</th><th>상품명</th><th style="text-align:center">CTR</th><th style="text-align:right">예상 판매</th><th style="text-align:right">예상 월 매출</th></tr></thead>
+        <tbody>
+          <tr><td>🥇1</td><td>한솥 우거지 해장국 4팩</td><td style="text-align:center">8%</td><td style="text-align:right">820건</td><td style="text-align:right">1,303만</td></tr>
+          <tr><td>🥈2</td><td>전통 뼈해장국 밀키트</td><td style="text-align:center">6%</td><td style="text-align:right">615건</td><td style="text-align:right">1,322만</td></tr>
+          <tr style="background:#fff7ed"><td>7</td><td><b>우거지 감자탕 해장국 2팩 👈</b></td><td style="text-align:center">1.5%</td><td style="text-align:right">154건</td><td style="text-align:right">291만</td></tr>
+        </tbody>
+      </table>
+      <div class="note est">≈ 검색량×순위별 클릭률×전환율 기반 <b>시장 규모 추정</b>(개별 실판매 아님). 보완 후 리뷰증가 기반으로 정밀화.</div>
+    </div>
+
+    <!-- ============ 3 ============ -->
+    <div class="divider" id="g3"><span class="ic" style="background:linear-gradient(135deg,#ef4444,#f59e0b)">⚔️</span><span class="tt">3. 경쟁 진단</span></div>
+
+    <div class="card">
+      <h3><span class="hic">⚔️</span>키워드 경쟁강도 분석 <span class="badge b-ok">✅ 실측</span></h3>
+      <div class="grid2" style="align-items:center">
+        <div class="chartbox sm"><canvas id="compGauge"></canvas></div>
+        <div>
+          <div class="band"><span class="mk" style="left:51%"></span></div>
+          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--sub)"><span>블루오션</span><span>보통</span><span>레드오션</span></div>
+          <div class="grid3" style="margin-top:14px">
+            <div class="kpi"><div class="k">등록 상품수</div><div class="v" style="font-size:18px">1,740</div></div>
+            <div class="kpi"><div class="k">월간 검색량</div><div class="v" style="font-size:18px">34,200</div></div>
+            <div class="kpi"><div class="k">평균 클릭수</div><div class="v" style="font-size:18px">1,180</div></div>
+          </div>
+        </div>
+      </div>
+      <div class="note">경쟁지수 5.1(중간). 독점 브랜드 없이 다양한 셀러 경쟁 → 차별화 시 신규 진입 여력 있음.</div>
+    </div>
+
+    <div class="card">
+      <h3><span class="hic">📣</span>광고 경쟁 정보 <span class="badge b-ok">✅ 실측</span></h3>
+      <div class="desc">네이버 검색광고 기준 — 이 키워드에 광고로 들어올 때의 경쟁 환경</div>
+      <div class="grid4">
+        <div class="kpi"><div class="k">광고 노출 깊이</div><div class="v" style="font-size:20px">상위 7개</div></div>
+        <div class="kpi"><div class="k">PC 평균 클릭수</div><div class="v" style="font-size:20px">320<small>회</small></div></div>
+        <div class="kpi"><div class="k">모바일 평균 클릭수</div><div class="v" style="font-size:20px">860<small>회</small></div></div>
+        <div class="kpi"><div class="k">광고 경쟁강도</div><div class="v" style="font-size:20px">높음</div></div>
+      </div>
+      <div class="note">광고 경쟁이 높아 입찰가 부담 → SEO(자연노출) 병행으로 광고비 효율 확보 권장.</div>
+    </div>
+
+    <div class="card">
+      <h3><span class="hic">🏆</span>경쟁사 비교표 (상위 노출 80개 중) <span class="badge b-ok">✅ 실측</span></h3>
+      <table>
+        <thead><tr><th>순위</th><th>종합점수</th><th>상품명</th><th>판매처</th><th>브랜드</th><th style="text-align:right">가격</th><th>카테고리</th></tr></thead>
+        <tbody>
+          <tr><td>🥇1</td><td><b>92</b></td><td>한솥 우거지 해장국 4팩</td><td>한솥푸드</td><td>한솥</td><td style="text-align:right">15,900</td><td>즉석국</td></tr>
+          <tr><td>🥈2</td><td><b>85</b></td><td>전통 뼈해장국 밀키트</td><td>국물대장</td><td>국물대장</td><td style="text-align:right">21,500</td><td>밀키트</td></tr>
+          <tr><td>🥉3</td><td><b>80</b></td><td>콩나물 해장국 6팩</td><td>옛맛식품</td><td>-</td><td style="text-align:right">17,200</td><td>즉석국</td></tr>
+          <tr style="background:#fff7ed"><td>7</td><td><b>64</b></td><td><b>우거지 감자탕 해장국 2팩 6kg 👈</b></td><td>든든해장국</td><td>든든</td><td style="text-align:right">18,900</td><td>즉석국</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3><span class="hic">🗂️</span>카테고리 등록 분석 <span class="badge b-ok">✅ 실측</span></h3>
+      <div class="note ok" style="margin:0 0 12px">판정: 주력 카테고리 '식품&gt;즉석국' 적합 — 경쟁사 다수와 동일 카테고리에 정상 등록됨.</div>
+      <div class="sub-card"><div class="st">레벨별 분포 (1페이지 상품)</div>
+        <div style="font-size:12.5px;margin:6px 0"><b>대분류</b> 식품 100%</div><div class="track"><i style="width:100%"></i></div>
+        <div style="font-size:12.5px;margin:10px 0 6px"><b>중분류</b> 즉석국·탕 68% · 밀키트 24% · 기타 8%</div><div class="track"><i style="width:68%"></i></div>
+        <div style="font-size:12.5px;margin:10px 0 6px"><b>소분류</b> 해장국 54% · 감자탕 21% · 기타 25%</div><div class="track"><i style="width:54%"></i></div>
+      </div>
+    </div>
+
+    <!-- ============ 4 ============ -->
+    <div class="divider" id="g4"><span class="ic" style="background:linear-gradient(135deg,#059669,#10b981)">🛒</span><span class="tt">4. 내 상품 현황</span></div>
+
+    <div class="card">
+      <h3><span class="hic">📍</span>키워드별 노출 순위 <span class="badge b-ok">✅ 실측</span>
+        <span class="ps ps-g">노출 3</span><span class="ps ps-r">미노출 10</span><span class="ps ps-n">전체 13</span></h3>
+      <div class="desc">상품명에서 추출한 키워드별로 네이버 쇼핑 검색 순위를 조회한 결과 (검색 범위: 상위 300개 상품)</div>
+      <div class="grid3" style="margin-bottom:12px">
+        <div class="ratecard"><div class="v" style="font-size:30px;font-weight:900;color:var(--ok)">3</div><div class="k">노출 키워드</div></div>
+        <div class="ratecard"><div class="v" style="font-size:30px;font-weight:900;color:var(--red)">10</div><div class="k">미노출 키워드</div></div>
+        <div class="ratecard"><div class="v" style="font-size:30px;font-weight:900;color:var(--pur)">23%</div><div class="k">노출률</div></div>
+      </div>
+      <div style="font-size:12.5px;font-weight:800;color:var(--ok);margin:6px 0 2px">● 노출 키워드</div>
+      <span class="kwchip">2팩 해장국 <span class="rk">1위</span></span>
+      <span class="kwchip warn">해장국 우거지감자탕 <span class="rk">7위</span></span>
+      <span class="kwchip warn">감자탕 <span class="rk">27위</span></span>
+      <div style="font-size:12.5px;font-weight:800;color:var(--red);margin:14px 0 2px">● 미노출 키워드</div>
+      <span class="kwchip off">2팩</span><span class="kwchip off">6kg 2팩</span><span class="kwchip off">밀키트</span><span class="kwchip off">해장국</span><span class="kwchip off">우거지감자탕</span><span class="kwchip off">뼈다귀</span><span class="kwchip off">뼈다귀 감자탕</span><span class="kwchip off">우거지감자탕 밀키트</span><span class="kwchip off">6kg</span><span class="kwchip off">감자탕 6kg</span>
+      <div class="sub-card" style="margin-top:14px"><div class="st">📉 '해장국 우거지감자탕' 30일 순위 추이 <span class="badge b-est" style="margin-left:4px">신규 차트</span></div>
+        <div class="chartbox sm"><canvas id="rankSpark"></canvas></div>
+        <div style="font-size:11px;color:var(--sub)">※ 지속 추적은 관리자에 상품 등록 요청 → (보완 후) 매일 스냅샷으로 자동 추적.</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3><span class="hic">📦</span>판매량 추정 &amp; 성장 시뮬레이션 <span class="badge b-est">≈ 추정</span></h3>
+      <div class="grid3">
+        <div class="kpi"><div class="k">평균 상품 단가</div><div class="v" style="font-size:20px">18,900<small>원</small></div></div>
+        <div class="kpi"><div class="k">월간 검색량</div><div class="v" style="font-size:20px">34,200</div></div>
+        <div class="kpi"><div class="k">예상 전환율</div><div class="v" style="font-size:20px">3.0<small>%</small></div></div>
+      </div>
+      <div class="chartbox" style="margin-top:14px"><canvas id="salesChart"></canvas></div>
+      <div class="sub-card"><div class="st">🧾 리뷰 증가 기반 추정 (작성률 식품 11.6%)</div>
+        <table><thead><tr><th>가정</th><th style="text-align:right">3개월</th><th style="text-align:right">6개월</th><th style="text-align:right">12개월</th></tr></thead>
+        <tbody>
+          <tr><td>보수(작성률 5%)</td><td style="text-align:right">~210건</td><td style="text-align:right">~430건</td><td style="text-align:right">~880건</td></tr>
+          <tr><td>평균(11.6%)</td><td style="text-align:right">~378건</td><td style="text-align:right">~760건</td><td style="text-align:right">~1,520건</td></tr>
+          <tr><td>적극(이벤트)</td><td style="text-align:right">~520건</td><td style="text-align:right">~1,040건</td><td style="text-align:right">~2,080건</td></tr>
+        </tbody></table>
+      </div>
+      <div class="note est">≈ 현재 추정 <b>월 126건</b>(리뷰 증가량÷작성률, 오차 ±40%). 보완 후 '구매수' 노출 상품은 ±15%로 정밀화.</div>
+    </div>
+
+    <div class="card">
+      <h3><span class="hic">⭐</span>리뷰 &amp; 찜 분석 <span class="badge b-ok">✅ 실측</span></h3>
+      <div class="chartbox"><canvas id="reviewCompare"></canvas></div>
+      <div class="note">리뷰 412건(상위5 평균 8,100건 대비 부족) — 구매 전환의 가장 큰 병목. 체험단으로 단기 확보 필요.</div>
+    </div>
+
+    <div class="card">
+      <h3><span class="hic">💬</span>리뷰 텍스트 분석 <span class="badge b-est">≈ 추정</span></h3>
+      <div class="grid4" style="margin-bottom:10px">
+        <div class="kpi"><div class="k">추출 리뷰</div><div class="v" style="font-size:20px">200<small>건</small></div></div>
+        <div class="kpi"><div class="k">평균 별점</div><div class="v" style="font-size:20px">4.7<small>★</small></div></div>
+        <div class="kpi"><div class="k">긍정 비율</div><div class="v" style="font-size:20px;color:var(--ok)">81<small>%</small></div></div>
+        <div class="kpi"><div class="k">평균 글자수</div><div class="v" style="font-size:20px">48<small>자</small></div></div>
+      </div>
+      <div class="pill-tabs"><button class="on" onclick="tab(this,'pos')">긍정 키워드</button><button onclick="tab(this,'neg')">부정 키워드</button></div>
+      <div id="pos"><span class="tag2">국물 진해요 (88)</span><span class="tag2">양 많음 (61)</span><span class="tag2">간편 (47)</span><span class="tag2">재구매 (33)</span><span class="tag2">가성비 (28)</span></div>
+      <div id="neg" style="display:none"><span class="tag2" style="background:#fee2e2;color:#b91c1c">배송 지연 (14)</span><span class="tag2" style="background:#fee2e2;color:#b91c1c">짠맛 (9)</span><span class="tag2" style="background:#fee2e2;color:#b91c1c">포장 (5)</span></div>
+      <div class="sub-card"><div class="st">🤖 AI 전략 인사이트</div><div style="font-size:12.5px;color:#475569">'국물 진해요·양 많음'이 핵심 강점 → 썸네일·상세 상단에 전면 배치. '배송 지연' 불만은 물류 개선 또는 배송 안내 강화로 방어.</div></div>
+    </div>
+
+    <div class="card">
+      <h3><span class="hic">🔧</span>① SEO 종합 진단 <span class="badge b-est">≈ 추정</span></h3>
+      <div class="grid2" style="align-items:center">
+        <div class="chartbox sm"><canvas id="seoRadar"></canvas></div>
+        <div>
+          <div style="text-align:center;margin-bottom:8px"><span style="font-size:34px;font-weight:900">58</span><span style="color:var(--sub)">/100 · C등급(개선필요)</span></div>
+          <div class="scorebar"><div class="lbl"><b>상품명</b><span class="w">15%</span></div><div class="track"><i style="width:55%"></i></div></div>
+          <div class="scorebar"><div class="lbl"><b>검색순위</b><span class="w">15%</span></div><div class="track"><i style="width:62%"></i></div></div>
+          <div class="scorebar"><div class="lbl"><b>가격</b><span class="w">12%</span></div><div class="track"><i style="width:70%"></i></div></div>
+          <div class="scorebar"><div class="lbl"><b>리뷰</b><span class="w">12%</span></div><div class="track"><i style="width:45%"></i></div></div>
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--sub);margin-top:6px">10개 지표: 상품명·검색순위·가격·리뷰·판매실적·평점·카테고리·브랜드·네이버페이·최신성 (레이더 차트)</div>
+      <div class="note est">개선 제안: 상품명에 '우거지해장국·밀키트' 앞배치, 리뷰 확보로 신뢰도 점수 상승.</div>
+    </div>
+
+    <div class="card">
+      <h3><span class="hic">🛡️</span>② SEO 적합도 · 신뢰도 · 인기도 <span class="badge b-est">≈ 추정</span></h3>
+      <div class="grid3">
+        <div class="sub-card"><div class="st">🎯 적합도 <span style="margin-left:auto;font-weight:900">72</span></div>
+          <div class="check"><span class="y">✔</span> 카테고리 정확</div><div class="check"><span class="y">✔</span> 키워드 포함</div><div class="check"><span class="n">✘</span> 속성값 일부 누락</div></div>
+        <div class="sub-card"><div class="st">🛡️ 신뢰도 <span style="margin-left:auto;font-weight:900">55</span></div>
+          <div class="check"><span class="y">✔</span> 네이버페이</div><div class="check"><span class="n">✘</span> 리뷰 부족</div><div class="check"><span class="n">✘</span> 찜 적음</div></div>
+        <div class="sub-card"><div class="st">🔥 인기도 <span style="margin-left:auto;font-weight:900">60</span></div>
+          <div class="check"><span class="y">✔</span> 최근 판매 발생</div><div class="check"><span class="y">✔</span> 클릭률 양호</div><div class="check"><span class="n">✘</span> 판매량 중위</div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3><span class="hic">📄</span>③ 상세페이지 품질 점수 <span class="badge b-est">≈ 추정</span></h3>
+      <div style="text-align:center;margin-bottom:8px"><span style="font-size:30px;font-weight:900">72</span><span style="color:var(--sub)">/100 · B등급</span></div>
+      <div class="scorebar"><div class="lbl"><b>상품명 최적화</b></div><div class="track"><i style="width:70%"></i></div></div>
+      <div class="scorebar"><div class="lbl"><b>가격 경쟁력</b></div><div class="track"><i style="width:78%"></i></div></div>
+      <div class="scorebar"><div class="lbl"><b>브랜드/스토어 신뢰도</b></div><div class="track"><i style="width:60%"></i></div></div>
+      <div class="sub-card"><div class="st">평가 체크리스트</div>
+        <div class="check"><span class="y">✔</span> 메인 키워드 포함 · 상품명 20자 이상</div>
+        <div class="check"><span class="n">✘</span> 상품명 50자 초과(과도) — 정리 권장</div>
+        <div class="check"><span class="y">✔</span> 정상 가격 등록 · 네이버페이 지원 · 카테고리 정확</div>
+      </div>
+      <div class="note">전반적으로 양호하나 상품명 길이·리뷰 보강 시 A등급 가능.</div>
+    </div>
+
+    <div class="card">
+      <h3><span class="hic">🖼️</span>④ 상세페이지 HTML 분석 <span class="badge b-est">≈ 추정</span></h3>
+      <div class="grid2" style="align-items:center">
+        <div class="chartbox sm"><canvas id="htmlDonut"></canvas></div>
+        <div>
+          <div class="scorebar"><div class="lbl"><b>이미지</b><span class="w">30%</span></div><div class="track"><i style="width:80%"></i></div></div>
+          <div class="scorebar"><div class="lbl"><b>텍스트</b><span class="w">20%</span></div><div class="track"><i style="width:65%"></i></div></div>
+          <div class="scorebar"><div class="lbl"><b>동영상</b><span class="w">15%</span></div><div class="track"><i style="width:0%"></i></div></div>
+          <div class="scorebar"><div class="lbl"><b>정보 완성도</b><span class="w">20%</span></div><div class="track"><i style="width:70%"></i></div></div>
+          <div class="scorebar"><div class="lbl"><b>신뢰 요소</b><span class="w">15%</span></div><div class="track"><i style="width:55%"></i></div></div>
+        </div>
+      </div>
+      <div class="grid4" style="margin-top:10px">
+        <div class="kpi"><div class="k">상품 이미지</div><div class="v" style="font-size:18px">14<small>장</small></div></div>
+        <div class="kpi"><div class="k">텍스트 길이</div><div class="v" style="font-size:18px">820<small>자</small></div></div>
+        <div class="kpi"><div class="k">동영상</div><div class="v" style="font-size:18px;color:var(--red)">0<small>개</small></div></div>
+        <div class="kpi"><div class="k">페이지 크기</div><div class="v" style="font-size:18px">2.4<small>MB</small></div></div>
+      </div>
+      <div class="sub-card"><div class="st">필수 항목 체크리스트</div>
+        <div class="grid2">
+          <div><div class="check"><span class="y">✔</span> 배송정보</div><div class="check"><span class="y">✔</span> 교환/반품/환불</div><div class="check"><span class="n">✘</span> 사은품</div></div>
+          <div><div class="check"><span class="n">✘</span> 인증/수상/특허</div><div class="check"><span class="y">✔</span> 후기/리뷰 섹션</div><div class="check"><span class="y">✔</span> 스펙/사양 테이블</div></div>
+        </div>
+      </div>
+      <div class="note est"><b>개선 제안</b> · <span class="sev high">긴급</span> 동영상 0개 → 조리 영상 추가 · <span class="sev med">권장</span> 인증/특허 배치</div>
+    </div>
+
+    <!-- ============ 5 ============ -->
+    <div class="divider" id="g5"><span class="ic" style="background:linear-gradient(135deg,#7c3aed,#ec4899)">💎</span><span class="tt">5. 기회 발굴</span></div>
+
+    <div class="card">
+      <h3><span class="hic">🔗</span>연관 키워드 분석 <span class="badge b-ok">✅ 실측</span></h3>
+      <div class="pill-tabs"><button class="on" onclick="rk(this,'rel')">연관 키워드</button><button onclick="rk(this,'gold')">💎 황금 키워드</button></div>
+      <div id="rel"><table>
+        <thead><tr><th>키워드</th><th style="text-align:right">월 검색량</th><th style="text-align:right">PC</th><th style="text-align:right">모바일</th><th style="text-align:center">경쟁</th><th>비율</th></tr></thead>
+        <tbody>
+          <tr><td>해장국 추천</td><td style="text-align:right">5,200</td><td style="text-align:right">1,400</td><td style="text-align:right">3,800</td><td style="text-align:center"><span class="ps ps-n">중간</span></td><td><span class="minibar"><i style="width:80%"></i></span></td></tr>
+          <tr><td>사골 해장국</td><td style="text-align:right">3,100</td><td style="text-align:right">800</td><td style="text-align:right">2,300</td><td style="text-align:center"><span class="ps ps-g">낮음</span></td><td><span class="minibar"><i style="width:48%"></i></span></td></tr>
+          <tr><td>술국</td><td style="text-align:right">2,400</td><td style="text-align:right">600</td><td style="text-align:right">1,800</td><td style="text-align:center"><span class="ps ps-g">낮음</span></td><td><span class="minibar"><i style="width:37%"></i></span></td></tr>
+        </tbody></table></div>
+      <div id="gold" style="display:none"><table>
+        <thead><tr><th>👑 키워드</th><th style="text-align:right">월 검색량</th><th style="text-align:center">경쟁</th><th style="text-align:center">추천</th></tr></thead>
+        <tbody>
+          <tr><td><b>우거지 해장국</b></td><td style="text-align:right">2,400</td><td style="text-align:center"><span class="ps ps-g">낮음</span></td><td style="text-align:center">★</td></tr>
+          <tr><td><b>해장국 밀키트</b></td><td style="text-align:right">1,800</td><td style="text-align:center"><span class="ps ps-g">낮음</span></td><td style="text-align:center">★</td></tr>
+          <tr><td><b>뼈해장국</b></td><td style="text-align:right">1,300</td><td style="text-align:center"><span class="ps ps-g">낮음</span></td><td style="text-align:center">★</td></tr>
+        </tbody></table></div>
+    </div>
+
+    <div class="card">
+      <h3><span class="hic">👑</span>골든 키워드 <span class="badge b-ok">✅ 실측</span></h3>
+      <div class="grid2">
+        <div class="sub-card"><div class="st">👑 우거지 해장국 <span style="margin-left:auto;color:var(--est);font-weight:900">점수 92</span></div>
+          <div class="grid2" style="gap:8px;margin:8px 0">
+            <div style="font-size:12px"><span style="color:var(--sub)">월 검색량</span> <b>2,400</b></div>
+            <div style="font-size:12px"><span style="color:var(--sub)">경쟁강도</span> <b>낮음</b></div>
+            <div style="font-size:12px"><span style="color:var(--sub)">평균 클릭</span> <b>180</b></div>
+            <div style="font-size:12px"><span style="color:var(--sub)">월 클릭수</span> <b>1,250</b></div>
+          </div>
+          <div class="track"><i style="width:92%"></i></div>
+          <div style="font-size:11.5px;color:var(--sub);margin-top:6px">검색량 대비 경쟁이 낮아 진입 비용이 가장 낮은 1순위 공략 키워드.</div>
+        </div>
+        <div class="sub-card"><div class="st">👑 해장국 밀키트 <span style="margin-left:auto;color:var(--est);font-weight:900">점수 86</span></div>
+          <div class="grid2" style="gap:8px;margin:8px 0">
+            <div style="font-size:12px"><span style="color:var(--sub)">월 검색량</span> <b>1,800</b></div>
+            <div style="font-size:12px"><span style="color:var(--sub)">경쟁강도</span> <b>낮음</b></div>
+            <div style="font-size:12px"><span style="color:var(--sub)">평균 클릭</span> <b>140</b></div>
+            <div style="font-size:12px"><span style="color:var(--sub)">월 클릭수</span> <b>920</b></div>
+          </div>
+          <div class="track"><i style="width:86%"></i></div>
+          <div style="font-size:11.5px;color:var(--sub);margin-top:6px">밀키트 수요 급상승 중 → 상품명에 '밀키트' 강조 시 수혜.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3><span class="hic">🔤</span>상품명 키워드 분석 <span class="badge b-ok">✅ 실측</span></h3>
+      <div class="desc">1페이지 상품들이 자주 쓰는 키워드 TOP15 — 내 상품명에 반영 (※ '키워드&태그 분석'과 통합)</div>
+      <div class="grid3" style="margin-bottom:10px">
+        <div class="kpi"><div class="k">분석 상품 수</div><div class="v" style="font-size:18px">80<small>개</small></div></div>
+        <div class="kpi"><div class="k">평균 상품명 길이</div><div class="v" style="font-size:18px">41<small>자</small></div></div>
+        <div class="kpi"><div class="k">키워드 포함률</div><div class="v" style="font-size:18px">92<small>%</small></div></div>
+      </div>
+      <table>
+        <thead><tr><th>#</th><th>키워드</th><th style="text-align:right">등장</th><th>사용 비율</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td><b>해장국</b></td><td style="text-align:right">74회</td><td><span class="minibar" style="width:120px"><i style="width:92%"></i></span>92%</td></tr>
+          <tr><td>2</td><td><b>밀키트</b></td><td style="text-align:right">51회</td><td><span class="minibar" style="width:120px"><i style="width:64%"></i></span>64%</td></tr>
+          <tr><td>3</td><td><b>우거지</b></td><td style="text-align:right">41회</td><td><span class="minibar" style="width:120px"><i style="width:51%"></i></span>51%</td></tr>
+          <tr><td>4</td><td><b>2팩</b></td><td style="text-align:right">32회</td><td><span class="minibar" style="width:120px"><i style="width:40%"></i></span>40%</td></tr>
+          <tr><td>5</td><td><b>국내산</b></td><td style="text-align:right">28회</td><td><span class="minibar" style="width:120px"><i style="width:35%"></i></span>35%</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3><span class="hic">✏️</span>상품명 SEO 최적화 <span class="badge b-ai">AI</span></h3>
+      <div style="font-size:13px;margin-bottom:8px"><span style="color:var(--sub)">현재</span><br><b>우거지 감자탕 해장국 2팩 6kg 밀키트</b></div>
+      <div class="check"><span class="y">✔</span> 메인 키워드 '해장국' 포함</div>
+      <div class="check"><span class="n">✘</span> 골든 키워드 '우거지해장국·밀키트' 앞배치 안 됨</div>
+      <div class="check"><span class="n">✘</span> 미노출 키워드(뼈해장국 등) 미반영</div>
+      <div class="note" style="border-left-color:#ec4899"><b>✏️ 제안</b><br><b>우거지 해장국 밀키트 2팩 6kg (뼈해장국·감자탕)</b><br>→ 골든키워드 앞배치 + 미노출 키워드 흡수로 노출률 23%↑ 기대</div>
+    </div>
+
+    <!-- ============ 6 ============ -->
+    <div class="divider" id="g6"><span class="ic" style="background:linear-gradient(135deg,#1e293b,#4f46e5)">🧭</span><span class="tt">6. 전략 · 결론</span></div>
+
+    <div class="card">
+      <h3><span class="hic">🧭</span>1페이지 진입 전략 비교 분석</h3>
+      <div class="grid2" style="align-items:center;margin-bottom:6px">
+        <div style="text-align:center"><div style="font-size:13px;color:var(--sub)">종합 진입 점수</div><div style="font-size:40px;font-weight:900;color:var(--ind)">64<span style="font-size:16px;color:var(--sub)">/100</span></div></div>
+        <div><div class="grid2">
+          <div class="kpi"><div class="k">1P 평균가</div><div class="v" style="font-size:18px">18,900</div></div>
+          <div class="kpi"><div class="k">키워드 포함률</div><div class="v" style="font-size:18px">92%</div></div>
+        </div></div>
+      </div>
+      <div class="sub-card"><div class="st">📊 내 상품 vs 경쟁사 격차</div>
+        <div class="gapbar"><div class="row"><span class="nm">가격</span><div class="b"><div class="me" style="width:54%"></div><div class="cp" style="left:50%"></div></div><span style="font-size:11px;color:var(--sub)">평균 근접</span></div></div>
+        <div class="gapbar"><div class="row"><span class="nm">상품명 길이</span><div class="b"><div class="me" style="width:80%"></div><div class="cp" style="left:58%"></div></div><span style="font-size:11px;color:var(--red)">과도(50자+)</span></div></div>
+        <div class="gapbar"><div class="row"><span class="nm">순위</span><div class="b"><div class="me" style="width:40%"></div><div class="cp" style="left:90%"></div></div><span style="font-size:11px;color:var(--sub)">7위 → 3위 목표</span></div></div>
+      </div>
+      <div class="strat high" style="margin-top:14px"><div class="st" style="display:flex;align-items:center;gap:8px">🔍 키워드 커버리지 <span class="sev high">긴급</span></div>
+        <div style="font-size:12.5px;color:#475569;margin-top:4px"><b>INSIGHT</b> 노출률 23% — 검색 유입 절반 손실. <b>ACTION</b> 상품명 재구성으로 미노출 10개 키워드 흡수.</div></div>
+      <div class="strat med"><div class="st" style="display:flex;align-items:center;gap:8px">⭐ 리뷰 자산 <span class="sev med">권장</span></div>
+        <div style="font-size:12.5px;color:#475569;margin-top:4px"><b>INSIGHT</b> 412건(상위 8천 대비 부족). <b>ACTION</b> 체험단 50건으로 신뢰도 확보.</div></div>
+      <div class="strat low"><div class="st" style="display:flex;align-items:center;gap:8px">📣 광고 타이밍 <span class="sev low">선택</span></div>
+        <div style="font-size:12.5px;color:#475569;margin-top:4px"><b>INSIGHT</b> 겨울 최성수기. <b>ACTION</b> 11월 전 쇼핑검색광고 선점 + 묶음 구성.</div></div>
+    </div>
+
+    <div class="card" style="border:2px dashed #c7d2fe;background:linear-gradient(135deg,#eef2ff,#faf5ff)">
+      <h3><span class="hic">🤖</span>METAINC AI 종합 분석 리포트 <span class="badge b-ai">AI</span></h3>
+      <div style="font-size:13px;line-height:1.75;color:#334155">
+        든든해장국의 '해장국' 상품은 7위로 1페이지에 있으나, 상품명 13개 키워드 중 노출은 3개(23%)뿐이라 검색 유입을 절반 이상 놓치고 있습니다. 시장은 전년 대비 +21% 성장 중이고 겨울 최성수기·일요일·40대 남성에 수요가 집중됩니다.<br>
+        가격은 1P 평균 수준으로 적정하나, 리뷰 412건은 상위 경쟁사(8천+) 대비 절대 부족해 전환의 최대 병목입니다. 상세페이지는 동영상이 0개로 보강 여지가 있습니다.<br><br>
+        <b>핵심 액션 3가지</b><br>
+        1. 상품명 재구성 — '우거지해장국·밀키트' 골든키워드 앞배치로 미노출 키워드 흡수<br>
+        2. 체험단으로 리뷰 격차 축소(겨울 성수기 전)<br>
+        3. 11월 쇼핑검색광고 선점 + 묶음(2팩/4팩) 구성으로 객단가 방어
+      </div>
+    </div>
+
+    <div class="card" style="text-align:center">
+      <button class="dlbtn">📄 분석 보고서 다운로드 (PDF / HTML)</button>
+      <div class="desc" style="margin-top:12px">광고주에게 전달할 최종 보고서를 내려받습니다. (형식: HTML · JSON · CSV)</div>
+    </div>
+  </main>
+</div>
+
+<script>
+function tab(b,id){var p=b.parentElement;[].forEach.call(p.children,function(x){x.classList.remove('on')});b.classList.add('on');document.getElementById('pos').style.display=id==='pos'?'block':'none';document.getElementById('neg').style.display=id==='neg'?'block':'none';}
+function rk(b,id){var p=b.parentElement;[].forEach.call(p.children,function(x){x.classList.remove('on')});b.classList.add('on');document.getElementById('rel').style.display=id==='rel'?'block':'none';document.getElementById('gold').style.display=id==='gold'?'block':'none';}
+document.querySelectorAll('nav.toc a').forEach(function(a){a.addEventListener('click',function(e){e.preventDefault();document.querySelector(a.getAttribute('href')).scrollIntoView({behavior:'smooth'});});});
+
+window.addEventListener('load',function(){
+  if(!window.Chart){return;}
+  Chart.defaults.font.family="'Noto Sans KR',sans-serif"; Chart.defaults.font.size=11; Chart.defaults.color='#64748b';
+  var IND='#4f46e5',PUR='#9333ea',PINK='#ec4899',OK='#16a34a',RED='#ef4444',BLUE='#2563eb';
+  var grad=function(ctx,c1,c2){var g=ctx.createLinearGradient(0,0,0,220);g.addColorStop(0,c1);g.addColorStop(1,c2);return g;};
+  var noLeg={plugins:{legend:{display:false}}};
+  // 트렌드 라인
+  new Chart(trendChart,{type:'line',data:{labels:['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'],datasets:[{data:[58,50,40,46,52,45,50,55,70,88,100,95],borderColor:IND,backgroundColor:function(c){return grad(c.chart.ctx,'rgba(79,70,229,.25)','rgba(79,70,229,0)');},fill:true,tension:.4,pointRadius:3,pointBackgroundColor:IND,borderWidth:3}]},options:{maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,max:110}}}});
+  // 성별 도넛
+  new Chart(genderChart,{type:'doughnut',data:{labels:['남성','여성'],datasets:[{data:[63,37],backgroundColor:[BLUE,PINK],borderWidth:0}]},options:{maintainAspectRatio:false,cutout:'62%',plugins:{legend:{position:'bottom'}}}});
+  // 연령 막대
+  new Chart(ageChart,{type:'bar',data:{labels:['10대','20대','30대','40대','50대','60대+'],datasets:[{data:[3,14,24,30,21,8],backgroundColor:function(c){return c.dataIndex===3?PUR:'#c7d2fe';},borderRadius:6}]},options:{maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,ticks:{callback:function(v){return v+'%';}}}}}});
+  // 요일 막대
+  new Chart(weekdayChart,{type:'bar',data:{labels:['월','화','수','목','금','토','일'],datasets:[{data:[95,88,82,86,98,110,118],backgroundColor:function(c){return c.dataIndex===6?IND:(c.dataIndex===2?'#fca5a5':'#a5b4fc');},borderRadius:6}]},options:{maintainAspectRatio:false,plugins:{legend:{display:false}}}});
+  // 시장 매출 막대
+  new Chart(marketRevChart,{type:'bar',data:{labels:['1위','2위','3위','4위','5위','...','7위(내상품)'],datasets:[{label:'예상 월 매출(만원)',data:[1303,1322,980,720,610,300,291],backgroundColor:function(c){return c.dataIndex===6?PINK:'#a5b4fc';},borderRadius:6}]},options:{maintainAspectRatio:false,plugins:{legend:{display:false}}}});
+  // 경쟁 게이지(반도넛)
+  new Chart(compGauge,{type:'doughnut',data:{labels:['경쟁','여유'],datasets:[{data:[51,49],backgroundColor:['#f59e0b','#eef2f7'],borderWidth:0}]},options:{maintainAspectRatio:false,rotation:-90,circumference:180,cutout:'70%',plugins:{legend:{display:false},tooltip:{enabled:false}}}});
+  // 판매 시나리오
+  new Chart(salesChart,{type:'bar',data:{labels:['TOP10 진입','1페이지','2페이지'],datasets:[{label:'예상 월 판매(건)',data:[820,310,90],backgroundColor:[OK,IND,'#cbd5e1'],borderRadius:6}]},options:{maintainAspectRatio:false,plugins:{legend:{display:false}}}});
+  // 리뷰 비교(그룹)
+  new Chart(reviewCompare,{type:'bar',data:{labels:['리뷰 수','평점(×100)','찜 수'],datasets:[
+    {label:'내 상품',data:[412,470,180],backgroundColor:PINK,borderRadius:5},
+    {label:'경쟁 평균',data:[3200,455,1100],backgroundColor:'#94a3b8',borderRadius:5},
+    {label:'상위 5',data:[8100,478,3400],backgroundColor:IND,borderRadius:5}]},
+    options:{maintainAspectRatio:false,plugins:{legend:{position:'bottom'}},scales:{y:{type:'logarithmic'}}}});
+  // SEO 레이더
+  new Chart(seoRadar,{type:'radar',data:{labels:['상품명','검색순위','가격','리뷰','판매','평점','카테고리','브랜드','페이','최신성'],datasets:[{data:[55,62,70,45,50,68,80,40,100,52],borderColor:IND,backgroundColor:'rgba(79,70,229,.18)',pointBackgroundColor:IND,borderWidth:2}]},options:{maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{r:{beginAtZero:true,max:100,ticks:{display:false},pointLabels:{font:{size:10}}}}}});
+  // HTML 도넛
+  new Chart(htmlDonut,{type:'doughnut',data:{labels:['점수','잔여'],datasets:[{data:[63,37],backgroundColor:[OK,'#eef2f7'],borderWidth:0}]},options:{maintainAspectRatio:false,cutout:'72%',plugins:{legend:{display:false},tooltip:{enabled:false}}}});
+  // 순위 추이 스파크
+  new Chart(rankSpark,{type:'line',data:{labels:Array.from({length:15},function(_,i){return (i*2+1)+'일';}),datasets:[{data:[14,13,15,12,11,10,9,9,8,8,7,7,8,7,7],borderColor:OK,backgroundColor:'rgba(22,163,74,.12)',fill:true,tension:.35,pointRadius:0,borderWidth:2.5}]},options:{maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{y:{reverse:true,suggestedMin:1,suggestedMax:16,title:{display:true,text:'순위(낮을수록↑)'}}}}});
+});
+</script>
+</body>
+</html>
