@@ -1473,6 +1473,24 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
 
     soup = BeautifulSoup(html, "lxml")
 
+    # ── 0. __NEXT_DATA__에서 단가·카테고리 직접 추출 (크롤 없이 단가·데이터랩 카테고리 공급) ──
+    nd_price, nd_cat, nd_cat1 = 0, "", ""
+    try:
+        import json as _json
+        _m = re.search(r'<script\s+id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.DOTALL)
+        if _m:
+            _pp = (((_json.loads(_m.group(1)).get("props") or {}).get("pageProps")) or {})
+            _prod = _pp.get("product") or _pp.get("productDetail") or {}
+            if isinstance(_prod, dict):
+                nd_price = int(float(_prod.get("discountedSalePrice") or _prod.get("salePrice")
+                                     or _prod.get("dispSalePrice") or _pp.get("discountedSalePrice")
+                                     or _pp.get("salePrice") or 0) or 0)
+                _cat = _prod.get("category") or {}
+                nd_cat = (_cat.get("wholeCategoryName") or "") if isinstance(_cat, dict) else ""
+                nd_cat1 = nd_cat.split(">")[0].strip() if nd_cat else ""
+    except Exception:
+        pass
+
     # ── 1. 이미지 분석 ──
     all_imgs = soup.find_all("img")
     # 상세페이지 영역 이미지 (상품 상세 설명 내부)
@@ -1897,7 +1915,7 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
 
     # reviewData: 실제 HTML에서 추출된 리뷰/평점/찜수 (없으면 None)
     review_data = None
-    if actual_review_count is not None or actual_rating is not None or actual_wish_count is not None or extracted_reviews:
+    if actual_review_count is not None or actual_rating is not None or actual_wish_count is not None or extracted_reviews or nd_price or nd_cat:
         review_data = {
             "reviewCount": actual_review_count,
             "rating": actual_rating,
@@ -1905,6 +1923,9 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
             "source": "html",
             "reviews": extracted_reviews,
             "reviewTextAnalysis": review_text_analysis,
+            "price": nd_price or None,
+            "category": nd_cat or None,
+            "category1": nd_cat1 or None,
         }
 
     return {
