@@ -120,17 +120,29 @@ def _datalab_headers():
 
 
 def _datalab_post(endpoint: str, body: dict) -> dict:
-    """데이터랩 API POST 호출 (공통)"""
+    """데이터랩 API POST 호출 (공통) — 429(호출초과)/일시오류 시 백오프 재시도.
+    제안서 enrich는 짧은 시간에 성별·연령·트렌드 등 여러 호출을 몰아치므로
+    초당 제한에 걸려 빈값이 오던 문제 방지(다수 직원 동시 사용 대비)."""
     url = f"{DATALAB_BASE}/{endpoint}"
-    try:
-        resp = requests.post(url, json=body, headers=_datalab_headers(), timeout=10)
-        if resp.status_code == 200:
-            return resp.json()
-        logger.warning(f"Datalab API {endpoint} 응답 코드: {resp.status_code} — {resp.text[:200]}")
-        return {}
-    except Exception as e:
-        logger.error(f"Datalab API {endpoint} 오류: {e}")
-        return {}
+    for attempt in range(3):
+        try:
+            resp = requests.post(url, json=body, headers=_datalab_headers(), timeout=10)
+            if resp.status_code == 200:
+                return resp.json()
+            if resp.status_code == 429 and attempt < 2:
+                wait = 0.6 * (attempt + 1)
+                logger.warning(f"Datalab {endpoint} 429 — {wait}s 후 재시도 ({attempt + 1}/3)")
+                time.sleep(wait)
+                continue
+            logger.warning(f"Datalab API {endpoint} 응답 코드: {resp.status_code} — {resp.text[:200]}")
+            return {}
+        except Exception as e:
+            logger.error(f"Datalab API {endpoint} 오류: {e}")
+            if attempt < 2:
+                time.sleep(0.5)
+                continue
+            return {}
+    return {}
 
 
 # ==================== 성별 검색 비율 ====================
@@ -619,8 +631,11 @@ def analyze_datalab(keyword: str, category1: str = "", related_keywords: list = 
     logger.info(f"데이터랩 분석 완료: {list(result.keys())}")
 
     # 결과가 있으면 캐시에 저장
-    if result:
+    # 핵심 지표(성별·연령)가 다 있을 때만 캐싱 — 일부만 성공한 부분결과를 1시간 가두지 않도록
+    if result and result.get("gender") and result.get("age"):
         _cache_set(c_key, result)
         logger.info(f"데이터랩 캐시 저장: keyword={keyword} (캐시 크기: {len(_cache)})")
+    elif result:
+        logger.warning(f"데이터랩 부분결과(성별/연령 누락) — 캐싱 건너뜀: keyword={keyword}")
 
     return result
