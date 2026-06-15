@@ -1549,7 +1549,9 @@ def compute_advertiser_report(keyword: str, product_url: str):
         from naver_crawler import search_naver_shopping_api, _parse_api_item
 
         # 1) 광고주 상품 정보 조회
-        product_info = get_product_info(req.product_url)
+        #    keyword를 함께 넘겨 빠른 키워드-검색 경로를 사용 → 가격/카테고리까지 채움
+        #    (미전달 시 my_price 0원·주요카테고리 공란 발생)
+        product_info = get_product_info(req.product_url, keyword=req.keyword)
 
         # get_product_info 실패 시 (스마트스토어 ID ≠ nvMid) → 키워드 검색에서 productId로 보완
         if not product_info.get("product_name"):
@@ -1582,8 +1584,11 @@ def compute_advertiser_report(keyword: str, product_url: str):
         )
 
         # 3) 상위 40개 상품 가져오기 (1페이지 분석용)
-        shop_result = search_naver_shopping_api(req.keyword, display=80)
+        #    retry_on_429=True: 429로 빈 결과가 와서 '1페이지 평균가 0원'이 되는 것을 방지
+        shop_result = search_naver_shopping_api(req.keyword, display=80, retry_on_429=True)
         shop_items = shop_result.get("items", [])
+        if not shop_items:
+            logger.warning(f"광고주분석: 쇼핑 API 결과 0건 (keyword={req.keyword}) → 평균가 산출 불가")
         page1_products = [_parse_api_item(item, idx + 1) for idx, item in enumerate(shop_items)]
 
         # 4) 경쟁사 비교 분석 데이터 구성
@@ -1755,9 +1760,15 @@ def compute_advertiser_report(keyword: str, product_url: str):
         seo_actions = []
         if my_name:
             if my_has_keyword:
-                kw_pos = my_name.replace(" ", "").lower().find(req.keyword.replace(" ", "").lower())
-                pos_pct = round(kw_pos / max(len(my_name.replace(" ", "")), 1) * 100)
-                seo_insights.append(f"핵심 키워드 '{req.keyword}'가 상품명의 {pos_pct}% 지점에 위치합니다." + (" 앞부분 배치로 SEO에 유리합니다." if pos_pct < 30 else " 가능하면 앞부분(30% 이내)에 배치하면 노출 확률이 높아집니다."))
+                _stripped = my_name.replace(" ", "")
+                kw_pos = _stripped.lower().find(req.keyword.replace(" ", "").lower())
+                if kw_pos < 0:
+                    # 가드: my_has_keyword=True인데 매칭 실패한 예외 케이스
+                    seo_insights.append(f"핵심 키워드 '{req.keyword}'가 상품명에 포함되어 있습니다.")
+                else:
+                    pos_pct = round(kw_pos / max(len(_stripped), 1) * 100)
+                    _loc = "맨 앞" if pos_pct == 0 else f"{pos_pct}% 지점"
+                    seo_insights.append(f"핵심 키워드 '{req.keyword}'가 상품명의 {_loc}에 위치합니다." + (" 앞부분 배치로 SEO에 유리합니다." if pos_pct < 30 else " 가능하면 앞부분(30% 이내)에 배치하면 노출 확률이 높아집니다."))
             else:
                 seo_insights.append(f"상품명에 '{req.keyword}' 키워드가 없습니다. 1페이지 상품 중 {keyword_in_name_ratio}%가 포함하고 있어 필수 삽입이 필요합니다.")
                 seo_actions.append(f"상품명 앞부분에 '{req.keyword}'를 반드시 추가하세요. 키워드 앞부분 배치가 검색 노출에 가장 큰 영향을 줍니다.")
