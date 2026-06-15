@@ -458,7 +458,7 @@ class FeedbackUpdateRequest(BaseModel):
 
 
 @router.post("/send")
-async def send_message(req: ChatRequest, current_user: dict = Depends(get_current_user)):
+def send_message(req: ChatRequest, current_user: dict = Depends(get_current_user)):
     """채팅 메시지 전송 + AI 응답"""
     user_id = current_user["id"]
     username = current_user["username"]
@@ -552,7 +552,7 @@ async def send_message(req: ChatRequest, current_user: dict = Depends(get_curren
 
 
 @router.get("/history")
-async def get_chat_history(current_user: dict = Depends(get_current_user)):
+def get_chat_history(current_user: dict = Depends(get_current_user)):
     """현재 사용자의 채팅 이력 조회 (최근 50건)"""
     conn = _get_conn()
     try:
@@ -573,7 +573,7 @@ async def get_chat_history(current_user: dict = Depends(get_current_user)):
 
 
 @router.get("/image/{filename}")
-async def get_chat_image(filename: str, current_user: dict = Depends(get_current_user)):
+def get_chat_image(filename: str, current_user: dict = Depends(get_current_user)):
     """채팅 이미지 파일 서빙 (인증 필요)"""
     # 경로 탈출 방지
     if "/" in filename or "\\" in filename or ".." in filename:
@@ -588,7 +588,7 @@ async def get_chat_image(filename: str, current_user: dict = Depends(get_current
 
 
 @router.get("/my-feedback")
-async def get_my_feedback(current_user: dict = Depends(get_current_user)):
+def get_my_feedback(current_user: dict = Depends(get_current_user)):
     """현재 사용자의 피드백 이력 조회 (본인 것만)"""
     conn = _get_conn()
     try:
@@ -603,7 +603,7 @@ async def get_my_feedback(current_user: dict = Depends(get_current_user)):
 
 
 @router.get("/feedback")
-async def get_feedback_list(
+def get_feedback_list(
     status: Optional[str] = None,
     current_user: dict = Depends(require_role(UserRole.MANAGER))
 ):
@@ -625,7 +625,7 @@ async def get_feedback_list(
 
 
 @router.put("/feedback/{feedback_id}")
-async def update_feedback(
+def update_feedback(
     feedback_id: int,
     req: FeedbackUpdateRequest,
     current_user: dict = Depends(require_role(UserRole.MANAGER))
@@ -656,7 +656,7 @@ async def update_feedback(
 
 
 @router.get("/feedback/stats")
-async def get_feedback_stats(current_user: dict = Depends(require_role(UserRole.MANAGER))):
+def get_feedback_stats(current_user: dict = Depends(require_role(UserRole.MANAGER))):
     """피드백 통계 (manager 이상)"""
     conn = _get_conn()
     try:

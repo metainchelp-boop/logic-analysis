@@ -401,7 +401,7 @@ class NotificationSettingsRequest(BaseModel):
 
 # --- 실시간 순위 조회 ---
 @app.post("/api/rank/check")
-async def check_rank(req: RankCheckRequest, current_user: dict = Depends(get_current_user)):
+def check_rank(req: RankCheckRequest, current_user: dict = Depends(get_current_user)):
     """키워드 + 상품URL로 실시간 순위 조회 (인증 필수, viewer 제한은 handleSearch에서 관리)"""
     try:
         product_info = get_product_info(req.product_url, keyword=req.keyword)
@@ -439,7 +439,7 @@ class KeywordExposureRequest(BaseModel):
     extra_keywords: List[str] = []   # 연관/황금 키워드 등 추가 후보 (대체 추천용)
 
 @app.post("/api/rank/keyword-exposure")
-async def keyword_exposure(req: KeywordExposureRequest, current_user: dict = Depends(get_current_user)):
+def keyword_exposure(req: KeywordExposureRequest, current_user: dict = Depends(get_current_user)):
     """상품명에서 키워드를 추출하고 각 키워드별 노출 순위를 조회"""
     import re, concurrent.futures
     try:
@@ -522,7 +522,7 @@ async def keyword_exposure(req: KeywordExposureRequest, current_user: dict = Dep
 
 # --- 상품 추적 등록 ---
 @app.post("/api/products/track")
-async def track_product(req: ProductAddRequest, background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
+def track_product(req: ProductAddRequest, background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
     """상품 + 키워드 추적 등록 (유저별 격리)"""
     try:
         # 상품 정보 가져오기
@@ -598,7 +598,7 @@ def run_initial_rank_check(product_id: int, product_url: str, keyword_ids: List[
 
 # --- 추적 상품 목록 ---
 @app.get("/api/products")
-async def list_products(current_user: dict = Depends(get_current_user)):
+def list_products(current_user: dict = Depends(get_current_user)):
     """추적 중인 상품 목록 (유저별 격리)
     최적화: 빈 상품 정보 재조회를 백그라운드로 분리, 키워드 벌크 조회"""
     import sqlite3
@@ -690,7 +690,7 @@ async def list_products(current_user: dict = Depends(get_current_user)):
 
 # --- 상품 삭제 ---
 @app.delete("/api/products/{product_id}")
-async def remove_product(product_id: int, current_user: dict = Depends(get_current_user)):
+def remove_product(product_id: int, current_user: dict = Depends(get_current_user)):
     """추적 상품 삭제 (소유권 확인)"""
     delete_tracked_product(product_id, user_id=current_user["id"], is_admin=_is_admin(current_user))
     return {"success": True, "message": "상품이 삭제되었습니다."}
@@ -698,7 +698,7 @@ async def remove_product(product_id: int, current_user: dict = Depends(get_curre
 
 # --- 순위 이력 조회 ---
 @app.get("/api/rank/history/{keyword_id}")
-async def rank_history(keyword_id: int, days: int = 30, current_user: dict = Depends(get_current_user)):
+def rank_history(keyword_id: int, days: int = 30, current_user: dict = Depends(get_current_user)):
     """키워드별 순위 변동 이력 (소유권 검증)"""
     _verify_keyword_ownership(keyword_id, current_user)
     days = min(max(days, 1), 365)
@@ -708,7 +708,7 @@ async def rank_history(keyword_id: int, days: int = 30, current_user: dict = Dep
 
 # --- 수동 순위 체크 ---
 @app.post("/api/rank/refresh/{product_id}")
-async def refresh_rank(product_id: int, background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
+def refresh_rank(product_id: int, background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
     """특정 상품의 모든 키워드 순위 재체크"""
     products = get_all_tracked_products(user_id=current_user["id"], is_admin=_is_admin(current_user))
     product = next((p for p in products if p["id"] == product_id), None)
@@ -727,7 +727,7 @@ async def refresh_rank(product_id: int, background_tasks: BackgroundTasks, curre
 
 # --- 키워드 볼륨 조회 ---
 @app.post("/api/keyword/volume")
-async def keyword_volume(keywords: List[str], current_user: dict = Depends(get_current_user)):
+def keyword_volume(keywords: List[str], current_user: dict = Depends(get_current_user)):
     """키워드 검색량 조회 (인증 필수)"""
     try:
         # 키워드 길이 제한 (100자 초과 방지)
@@ -745,7 +745,7 @@ async def keyword_volume(keywords: List[str], current_user: dict = Depends(get_c
 
 # --- 알림 설정 조회 ---
 @app.get("/api/notify/settings")
-async def get_notify_settings(current_user: dict = Depends(require_role(UserRole.ADMIN))):
+def get_notify_settings(current_user: dict = Depends(require_role(UserRole.ADMIN))):
     """현재 알림 설정 조회 (인증 필수)"""
     settings = get_notification_settings()
     return {
@@ -759,7 +759,7 @@ async def get_notify_settings(current_user: dict = Depends(require_role(UserRole
 
 # --- 알림 설정 변경 ---
 @app.put("/api/notify/settings")
-async def update_notify_settings(req: NotificationSettingsRequest, current_user: dict = Depends(require_role(UserRole.ADMIN))):
+def update_notify_settings(req: NotificationSettingsRequest, current_user: dict = Depends(require_role(UserRole.ADMIN))):
     """알림 설정 변경 (admin 전용)"""
     try:
         settings = update_notification_settings(
@@ -794,7 +794,7 @@ class ReportExportRequest(BaseModel):
     date_range: int = 30  # 최근 N일
 
 @app.post("/api/report/export")
-async def export_report(req: ReportExportRequest, current_user: dict = Depends(get_current_user)):
+def export_report(req: ReportExportRequest, current_user: dict = Depends(get_current_user)):
     """순위 데이터 보고서 내보내기 (유저별 격리)"""
     try:
         products = get_all_tracked_products(user_id=current_user["id"], is_admin=_is_admin(current_user))
@@ -850,7 +850,7 @@ class DetailPageAnalysisRequest(BaseModel):
     product_url: Optional[str] = ""
 
 @app.post("/api/seo/detail-page")
-async def detail_page_analyze(req: DetailPageAnalysisRequest, current_user: dict = Depends(get_current_user)):
+def detail_page_analyze(req: DetailPageAnalysisRequest, current_user: dict = Depends(get_current_user)):
     """상세페이지 품질 분석 (인증 필수)"""
     try:
         from naver_crawler import analyze_detail_page
@@ -898,7 +898,7 @@ class SeoAnalysisRequest(BaseModel):
     cached_total_volume: Optional[int] = None
 
 @app.post("/api/seo/analyze")
-async def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_current_user)):
+def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_current_user)):
     """상품 SEO 종합 진단 (인증 필수)"""
     try:
         # 캐시된 데이터가 있으면 재활용, 없으면 API 호출
@@ -1363,7 +1363,7 @@ class ProductSearchRequest(BaseModel):
     count: int = 40
 
 @app.post("/api/products/search")
-async def search_products(req: ProductSearchRequest, current_user: dict = Depends(get_current_user)):
+def search_products(req: ProductSearchRequest, current_user: dict = Depends(get_current_user)):
     """네이버 쇼핑에서 키워드로 상품 검색 (인증 필수)"""
     try:
         from naver_crawler import search_naver_shopping_api, _parse_api_item
@@ -1390,7 +1390,7 @@ class RelatedKeywordRequest(BaseModel):
     keyword: str
 
 @app.post("/api/keywords/related")
-async def related_keywords(req: RelatedKeywordRequest, current_user: dict = Depends(get_current_user)):
+def related_keywords(req: RelatedKeywordRequest, current_user: dict = Depends(get_current_user)):
     """연관 키워드 + 황금 키워드 분석 (인증 필수)"""
     try:
         # 네이버 검색광고 API에서 연관 키워드 가져오기
@@ -1518,7 +1518,7 @@ class ProductNameAnalysisRequest(BaseModel):
     keyword: str = ""  # 기준 키워드 (선택)
 
 @app.post("/api/product-name/analyze")
-async def analyze_product_names(req: ProductNameAnalysisRequest, current_user: dict = Depends(get_current_user)):
+def analyze_product_names(req: ProductNameAnalysisRequest, current_user: dict = Depends(get_current_user)):
     """상품명에서 키워드 추출 및 빈도 분석 (인증 필수)"""
     try:
         import re as re_mod
@@ -2070,7 +2070,7 @@ def compute_advertiser_report(keyword: str, product_url: str):
 
 
 @app.post("/api/advertiser/analyze")
-async def advertiser_analyze(req: AdvertiserAnalysisRequest, current_user: dict = Depends(get_current_user)):
+def advertiser_analyze(req: AdvertiserAnalysisRequest, current_user: dict = Depends(get_current_user)):
     """광고주 맞춤 분석 리포트 (인증 필수) — 공용 함수 위임"""
     return compute_advertiser_report(req.keyword, req.product_url)
 
@@ -2241,7 +2241,7 @@ async def ai_feedback_all(req: AiFeedbackAllRequest, current_user: dict = Depend
 
 # --- API 사용량 조회 (superadmin 전용, v3.9.13) ---
 @app.get("/api/admin/api-usage")
-async def get_api_usage(current_user: dict = Depends(get_current_user)):
+def get_api_usage(current_user: dict = Depends(get_current_user)):
     """API 사용량 대시보드 데이터 — superadmin 전용"""
     if current_user.get("role") != "superadmin":
         raise HTTPException(status_code=403, detail="접근 권한이 없습니다.")
@@ -2262,7 +2262,7 @@ class DatalabRequest(BaseModel):
     related_keywords: list = []
 
 @app.post("/api/datalab/analyze")
-async def datalab_analyze(req: DatalabRequest, current_user: dict = Depends(get_current_user)):
+def datalab_analyze(req: DatalabRequest, current_user: dict = Depends(get_current_user)):
     """네이버 데이터랩 쇼핑인사이트 통합 분석 (인증 필수)"""
     try:
         result = analyze_datalab(
@@ -2278,7 +2278,7 @@ async def datalab_analyze(req: DatalabRequest, current_user: dict = Depends(get_
 
 # --- 헬스체크 ---
 @app.get("/api/health")
-async def health():
+def health():
     return {"status": "ok", "version": "3.0.0", "timestamp": datetime.now().isoformat()}
 
 
