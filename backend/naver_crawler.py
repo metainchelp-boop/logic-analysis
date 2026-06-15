@@ -1280,6 +1280,32 @@ _NEGATIVE_KW = [
     '양이', '냄새', '변색', '문제', '환불', '교환', '짜증', '후회', '아쉬', '아깝',
 ]
 
+# 부정 의미를 무효화하는 표현(부정 키워드 직후에 오면 오히려 긍정/중립)
+_NEG_CANCEL_MARKERS = ('없', '않', '아니', '제거', '방지')
+# 부정 키워드가 포함되어도 부정이 아닌 복합어(상품 특성/긍정 맥락)
+_NEG_FALSE_COMPOUNDS = ('반건조', '건조기', '건조과일', '건조방식', '건조과정', '냄새제거', '냄새방지')
+
+
+def _neg_keyword_hit(text: str, kw: str) -> bool:
+    """맥락을 고려해 kw가 '진짜 부정'으로 쓰였는지 판정.
+    - '반건조'처럼 상품 특성 복합어는 제외
+    - '냄새없음 / 냄새 안 나요'처럼 부정어가 취소된 경우 제외
+    (네이버 리뷰 맥락 오인식 #6 대응)"""
+    idx = text.find(kw)
+    while idx >= 0:
+        ctx = text[max(0, idx - 2): idx + len(kw) + 2]
+        if not any(fc in ctx for fc in _NEG_FALSE_COMPOUNDS):
+            after = text[idx + len(kw): idx + len(kw) + 5]
+            if not any(m in after for m in _NEG_CANCEL_MARKERS):
+                return True  # 취소/복합어가 아닌 진짜 부정 출현
+        idx = text.find(kw, idx + len(kw))
+    return False
+
+
+def _negative_hits(text: str) -> int:
+    """맥락 고려 부정 키워드 종류 수 (감성 분류용)."""
+    return sum(1 for kw in _NEGATIVE_KW if _neg_keyword_hit(text, kw))
+
 
 def _extract_reviews(soup, html: str) -> list:
     """HTML에서 개별 구매자 리뷰 추출 (스마트스토어 상품 페이지)"""
@@ -1345,7 +1371,7 @@ def _extract_reviews(soup, html: str) -> list:
                 seen_texts.add(text_key)
                 # 감성 분류
                 pos = sum(1 for kw in _POSITIVE_KW if kw in review_text)
-                neg = sum(1 for kw in _NEGATIVE_KW if kw in review_text)
+                neg = _negative_hits(review_text)
                 sentiment = 'negative' if neg > pos else ('positive' if pos > 0 else 'neutral')
                 reviews.append({
                     'rating': rating,
@@ -1381,7 +1407,7 @@ def _extract_reviews(soup, html: str) -> list:
                 if text_key not in seen_texts:
                     seen_texts.add(text_key)
                     pos = sum(1 for kw in _POSITIVE_KW if kw in review_text)
-                    neg = sum(1 for kw in _NEGATIVE_KW if kw in review_text)
+                    neg = _negative_hits(review_text)
                     sentiment = 'negative' if neg > pos else ('positive' if pos > 0 else 'neutral')
                     reviews.append({
                         'rating': rating,
@@ -1418,7 +1444,7 @@ def _analyze_reviews(reviews: list) -> dict:
             if kw in text:
                 pos_kw_counts[kw] = pos_kw_counts.get(kw, 0) + 1
         for kw in _NEGATIVE_KW:
-            if kw in text:
+            if _neg_keyword_hit(text, kw):
                 neg_kw_counts[kw] = neg_kw_counts.get(kw, 0) + 1
 
     positive_keywords = sorted(pos_kw_counts.items(), key=lambda x: -x[1])[:10]
