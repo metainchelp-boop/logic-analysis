@@ -805,7 +805,12 @@ window.App = function App() {
                 if (targetProd) {
                     var kwWords = keyword.toLowerCase().split(/\s+/);
                     var titleLower = targetProd.product_name.toLowerCase();
-                    var kwInTitle = kwWords.every(function(w) { return titleLower.indexOf(w) >= 0; });
+                    // 공백 무시 매칭도 인정: 네이버는 띄어쓰기와 무관하게 키워드를 매칭하므로
+                    // '브로멜라인효소'(붙임)와 '브로멜라인 효소'(띄움)를 동일하게 취급한다.
+                    var titleNoSpace = titleLower.replace(/\s+/g, '');
+                    var kwNoSpace = keyword.toLowerCase().replace(/\s+/g, '');
+                    var kwInTitle = kwWords.every(function(w) { return titleLower.indexOf(w) >= 0; })
+                        || (kwNoSpace.length > 0 && titleNoSpace.indexOf(kwNoSpace) >= 0);
                     var titleLen = targetProd.product_name.length;
                     var isSmartStore = targetProd.product_url && targetProd.product_url.indexOf('smartstore.naver.com') >= 0;
                     var hasBrand = !!targetProd.brand;
@@ -904,7 +909,16 @@ window.App = function App() {
                     var suggested = targetProd.product_name;
                     if (!kwInTitle) {
                         suggested = keyword + ' ' + targetProd.product_name;
-                        if (suggested.length > 50) suggested = suggested.substring(0, 50);
+                        // 중복 단어 토큰 제거 (키워드와 기존 상품명에 같은 단어가 겹치면 한 번만 유지)
+                        var _seenWord = {};
+                        suggested = suggested.split(/\s+/).filter(function(w) {
+                            if (!w) return false;
+                            var lw = w.toLowerCase();
+                            if (_seenWord[lw]) return false;
+                            _seenWord[lw] = true;
+                            return true;
+                        }).join(' ');
+                        if (suggested.length > 50) suggested = suggested.substring(0, 50).trim();
                     }
 
                     analysis.productNameOpt = {
@@ -1312,6 +1326,7 @@ window.App = function App() {
             React.createElement('div', { style: { maxWidth: 1000, margin: '0 auto', padding: '24px 16px' } },
                 React.createElement(ApiUsageSection, null),
                 React.createElement(NotificationSection, null),
+                React.createElement(window.ClientDiagnosticsSection, null),
                 React.createElement(window.FeedbackManagement, null)
             )
         ),

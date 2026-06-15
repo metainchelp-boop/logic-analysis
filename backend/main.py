@@ -1549,7 +1549,9 @@ def compute_advertiser_report(keyword: str, product_url: str):
         from naver_crawler import search_naver_shopping_api, _parse_api_item
 
         # 1) 광고주 상품 정보 조회
-        product_info = get_product_info(req.product_url)
+        #    keyword를 함께 넘겨 빠른 키워드-검색 경로를 사용 → 가격/카테고리까지 채움
+        #    (미전달 시 my_price 0원·주요카테고리 공란 발생)
+        product_info = get_product_info(req.product_url, keyword=req.keyword)
 
         # get_product_info 실패 시 (스마트스토어 ID ≠ nvMid) → 키워드 검색에서 productId로 보완
         if not product_info.get("product_name"):
@@ -1582,8 +1584,11 @@ def compute_advertiser_report(keyword: str, product_url: str):
         )
 
         # 3) 상위 40개 상품 가져오기 (1페이지 분석용)
-        shop_result = search_naver_shopping_api(req.keyword, display=80)
+        #    retry_on_429=True: 429로 빈 결과가 와서 '1페이지 평균가 0원'이 되는 것을 방지
+        shop_result = search_naver_shopping_api(req.keyword, display=80, retry_on_429=True)
         shop_items = shop_result.get("items", [])
+        if not shop_items:
+            logger.warning(f"광고주분석: 쇼핑 API 결과 0건 (keyword={req.keyword}) → 평균가 산출 불가")
         page1_products = [_parse_api_item(item, idx + 1) for idx, item in enumerate(shop_items)]
 
         # 4) 경쟁사 비교 분석 데이터 구성
@@ -1755,9 +1760,15 @@ def compute_advertiser_report(keyword: str, product_url: str):
         seo_actions = []
         if my_name:
             if my_has_keyword:
-                kw_pos = my_name.replace(" ", "").lower().find(req.keyword.replace(" ", "").lower())
-                pos_pct = round(kw_pos / max(len(my_name.replace(" ", "")), 1) * 100)
-                seo_insights.append(f"핵심 키워드 '{req.keyword}'가 상품명의 {pos_pct}% 지점에 위치합니다." + (" 앞부분 배치로 SEO에 유리합니다." if pos_pct < 30 else " 가능하면 앞부분(30% 이내)에 배치하면 노출 확률이 높아집니다."))
+                _stripped = my_name.replace(" ", "")
+                kw_pos = _stripped.lower().find(req.keyword.replace(" ", "").lower())
+                if kw_pos < 0:
+                    # 가드: my_has_keyword=True인데 매칭 실패한 예외 케이스
+                    seo_insights.append(f"핵심 키워드 '{req.keyword}'가 상품명에 포함되어 있습니다.")
+                else:
+                    pos_pct = round(kw_pos / max(len(_stripped), 1) * 100)
+                    _loc = "맨 앞" if pos_pct == 0 else f"{pos_pct}% 지점"
+                    seo_insights.append(f"핵심 키워드 '{req.keyword}'가 상품명의 {_loc}에 위치합니다." + (" 앞부분 배치로 SEO에 유리합니다." if pos_pct < 30 else " 가능하면 앞부분(30% 이내)에 배치하면 노출 확률이 높아집니다."))
             else:
                 seo_insights.append(f"상품명에 '{req.keyword}' 키워드가 없습니다. 1페이지 상품 중 {keyword_in_name_ratio}%가 포함하고 있어 필수 삽입이 필요합니다.")
                 seo_actions.append(f"상품명 앞부분에 '{req.keyword}'를 반드시 추가하세요. 키워드 앞부분 배치가 검색 노출에 가장 큰 영향을 줍니다.")
@@ -2072,12 +2083,23 @@ async def ai_feedback_all(req: AiFeedbackAllRequest, current_user: dict = Depend
         def _call_claude():
             return client.messages.create(
                 model="claude-sonnet-4-6",
-                max_tokens=4000,
+                # 여러 섹션 + 마지막 'METAINC 종합 인사이트'까지 한 번에 생성하므로
+                # 4000 토큰으로는 마지막 요약이 잘리는 사례가 있어 상향(8000).
+                # max_tokens는 실제 생성된 토큰만 과금되어 비용 영향은 최소.
+                max_tokens=8000,
                 messages=[{"role": "user", "content": user_content}],
                 system=system_prompt
             )
 
         message = await asyncio.to_thread(_call_claude)
+
+        # 출력이 토큰 한도로 잘린 경우 감지 (인사이트가 중간에 끊기는 문제 추적용)
+        if getattr(message, "stop_reason", None) == "max_tokens":
+            logger.warning(
+                f"[feedback-all] 응답이 max_tokens 한도로 잘렸습니다 "
+                f"(keyword='{req.keyword}', output_tokens={getattr(message.usage, 'output_tokens', '?')}). "
+                f"max_tokens 추가 상향을 검토하세요."
+            )
 
         full_text = message.content[0].text if message.content else ""
 

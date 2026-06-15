@@ -178,19 +178,23 @@ function getCTR(rank) {
 }
 
 // 붙여넣은 상품 페이지 HTML에서 상품 URL 자동 추출 (URL 따로 입력 불필요)
-// 우선순위: og:url 메타 → canonical → HTML 내 스마트스토어 상품 URL 패턴 → productNo
+// 우선순위: og:url 메타 → canonical → HTML 내 네이버 쇼핑 상품 URL 패턴
+// 지원 호스트: smartstore / brand(브랜드스토어) / shopping(가격비교) + m. 서브도메인
+var _naverProductUrlRe = /https?:\/\/(?:m\.)?(?:smartstore|brand|shopping)\.naver\.com(?:\/[A-Za-z0-9_-]+)?\/(?:products|catalog)\/\d+/g;
 function extractProductUrlFromHtml(html) {
     if (!html || typeof html !== 'string') return '';
     try {
         var m;
         m = html.match(/<meta[^>]+property=["']og:url["'][^>]*content=["']([^"']+)["']/i)
             || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]*property=["']og:url["']/i);
-        if (m && m[1] && /naver\.com\/.*\/products\/\d+/.test(m[1])) return m[1].split('?')[0];
-        m = html.match(/<link[^>]+rel=["']canonical["'][^>]*href=["']([^"']+)["']/i);
-        if (m && m[1] && /naver\.com\/.*\/products\/\d+/.test(m[1])) return m[1].split('?')[0];
-        // 3) HTML 내 스마트스토어 상품 URL 중 '가장 많이 등장하는 것' = 본 상품
+        if (m && m[1] && /naver\.com\/.*\/(?:products|catalog)\/\d+/.test(m[1])) return m[1].split('?')[0];
+        m = html.match(/<link[^>]+rel=["']canonical["'][^>]*href=["']([^"']+)["']/i)
+            || html.match(/<link[^>]+href=["']([^"']+)["'][^>]*rel=["']canonical["']/i);
+        if (m && m[1] && /naver\.com\/.*\/(?:products|catalog)\/\d+/.test(m[1])) return m[1].split('?')[0];
+        // 3) HTML 내 네이버 쇼핑 상품 URL 중 '가장 많이 등장하는 것' = 본 상품
         //    (추천/광고 상품은 보통 1번만 나옴 → 빈도로 본 상품 구별, 2회 이상만 신뢰)
-        var all = html.match(/https?:\/\/smartstore\.naver\.com\/[A-Za-z0-9_-]+\/products\/\d+/g);
+        //    smartstore 외에 brand(브랜드스토어)·shopping(가격비교)·m. 모바일도 인식
+        var all = html.match(_naverProductUrlRe);
         if (all && all.length) {
             var counts = {};
             for (var i = 0; i < all.length; i++) { var u = all[i].split('?')[0]; counts[u] = (counts[u] || 0) + 1; }

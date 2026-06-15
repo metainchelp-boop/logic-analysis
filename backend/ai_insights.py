@@ -193,9 +193,22 @@ _POSITIVE_WORDS = [
 ]
 _NEGATIVE_WORDS = [
     '별로', '실망', '아쉬', '불만', '교환', '환불', '반품', '늦', '느리', '불친절',
-    '비싸', '작은', '적은', '부족', '상태', '훼손', '파손', '변질', '곰팡이', '냄새',
-    '찜찜', '짜증', '화나', '최악', '다시.*않', '비추', '후회',
+    '비싸', '작은', '적은', '부족', '훼손', '파손', '변질', '곰팡이', '냄새',
+    '찜찜', '짜증', '화나', '최악', '비추', '후회',
 ]
+# 부정 단어 직후에 오면 부정 의미를 무효화하는 표현(예: '냄새없음')
+_NEG_CANCEL_MARKERS = ('없', '않', '제거', '방지')
+
+
+def _neg_word_hit(text: str, w: str) -> bool:
+    """부정 단어 w가 취소 표현 없이 실제 부정으로 쓰였는지 판정 (#6 맥락 인식)."""
+    idx = text.find(w)
+    while idx >= 0:
+        after = text[idx + len(w): idx + len(w) + 5]
+        if not any(m in after for m in _NEG_CANCEL_MARKERS):
+            return True
+        idx = text.find(w, idx + len(w))
+    return False
 
 
 def _analyze_sentiment(text: str) -> str:
@@ -204,7 +217,7 @@ def _analyze_sentiment(text: str) -> str:
         return "neutral"
     text_lower = text.lower()
     pos_count = sum(1 for w in _POSITIVE_WORDS if w in text_lower)
-    neg_count = sum(1 for w in _NEGATIVE_WORDS if w in text_lower)
+    neg_count = sum(1 for w in _NEGATIVE_WORDS if _neg_word_hit(text_lower, w))
     if pos_count > neg_count:
         return "positive"
     elif neg_count > pos_count:

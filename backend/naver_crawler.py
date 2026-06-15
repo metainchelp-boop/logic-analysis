@@ -299,7 +299,7 @@ def find_product_rank(keyword: str, product_url: str,
     ref_name = product_name
     if not ref_name:
         try:
-            info = get_product_info(product_url)
+            info = get_product_info(product_url, keyword=keyword)
             ref_name = info.get("product_name", "")
         except Exception:
             pass
@@ -312,9 +312,10 @@ def find_product_rank(keyword: str, product_url: str,
     best_score = 0
 
     for product in products:
-        p_store = (product.get("store_name") or "").lower()
-        # 스토어명(mallName)이 스마트스토어 URL의 스토어명과 일치해야 함
-        if p_store != target_store_name.lower():
+        # 스토어 일치 검증 — tier-1과 동일한 헬퍼 사용.
+        # (기존엔 API mallName(한글)과 URL 슬러그(영문)를 정확 비교해 거의 항상 불일치 →
+        #  실제 노출 상품도 '미노출'로 오판하던 문제를 해소)
+        if not _store_matches(product):
             continue
 
         p_norm = _normalize_name(product.get("product_name", ""))
@@ -409,6 +410,9 @@ def get_product_info(product_url: str, keyword: str = "") -> Dict:
         "product_url": product_url,
         "review_count": 0,
         "rating": 0,
+        "category1": "",
+        "category2": "",
+        "category3": "",
     }
 
     def _match_item(item):
@@ -440,6 +444,11 @@ def get_product_info(product_url: str, keyword: str = "") -> Dict:
         result["image_url"] = item.get("image", "")
         result["price"] = int(item.get("lprice", 0) or 0)
         result["store_name"] = item.get("mallName", store_name) or store_name
+        # 카테고리 채우기 (광고주 분석의 '주요카테고리' 공란 방지)
+        if item.get("category1"):
+            result["category1"] = item.get("category1", "")
+            result["category2"] = item.get("category2", "")
+            result["category3"] = item.get("category3", "")
 
     # ===== 1차: 추적 키워드로 네이버 쇼핑 API 검색 (1000위까지, 가장 빠르고 안정적) =====
     if keyword:
@@ -1271,6 +1280,32 @@ _NEGATIVE_KW = [
     '양이', '냄새', '변색', '문제', '환불', '교환', '짜증', '후회', '아쉬', '아깝',
 ]
 
+# 부정 의미를 무효화하는 표현(부정 키워드 직후에 오면 오히려 긍정/중립)
+_NEG_CANCEL_MARKERS = ('없', '않', '아니', '제거', '방지')
+# 부정 키워드가 포함되어도 부정이 아닌 복합어(상품 특성/긍정 맥락)
+_NEG_FALSE_COMPOUNDS = ('반건조', '건조기', '건조과일', '건조방식', '건조과정', '냄새제거', '냄새방지')
+
+
+def _neg_keyword_hit(text: str, kw: str) -> bool:
+    """맥락을 고려해 kw가 '진짜 부정'으로 쓰였는지 판정.
+    - '반건조'처럼 상품 특성 복합어는 제외
+    - '냄새없음 / 냄새 안 나요'처럼 부정어가 취소된 경우 제외
+    (네이버 리뷰 맥락 오인식 #6 대응)"""
+    idx = text.find(kw)
+    while idx >= 0:
+        ctx = text[max(0, idx - 2): idx + len(kw) + 2]
+        if not any(fc in ctx for fc in _NEG_FALSE_COMPOUNDS):
+            after = text[idx + len(kw): idx + len(kw) + 5]
+            if not any(m in after for m in _NEG_CANCEL_MARKERS):
+                return True  # 취소/복합어가 아닌 진짜 부정 출현
+        idx = text.find(kw, idx + len(kw))
+    return False
+
+
+def _negative_hits(text: str) -> int:
+    """맥락 고려 부정 키워드 종류 수 (감성 분류용)."""
+    return sum(1 for kw in _NEGATIVE_KW if _neg_keyword_hit(text, kw))
+
 
 def _extract_reviews(soup, html: str) -> list:
     """HTML에서 개별 구매자 리뷰 추출 (스마트스토어 상품 페이지)"""
@@ -1336,7 +1371,7 @@ def _extract_reviews(soup, html: str) -> list:
                 seen_texts.add(text_key)
                 # 감성 분류
                 pos = sum(1 for kw in _POSITIVE_KW if kw in review_text)
-                neg = sum(1 for kw in _NEGATIVE_KW if kw in review_text)
+                neg = _negative_hits(review_text)
                 sentiment = 'negative' if neg > pos else ('positive' if pos > 0 else 'neutral')
                 reviews.append({
                     'rating': rating,
@@ -1372,7 +1407,7 @@ def _extract_reviews(soup, html: str) -> list:
                 if text_key not in seen_texts:
                     seen_texts.add(text_key)
                     pos = sum(1 for kw in _POSITIVE_KW if kw in review_text)
-                    neg = sum(1 for kw in _NEGATIVE_KW if kw in review_text)
+                    neg = _negative_hits(review_text)
                     sentiment = 'negative' if neg > pos else ('positive' if pos > 0 else 'neutral')
                     reviews.append({
                         'rating': rating,
@@ -1409,7 +1444,7 @@ def _analyze_reviews(reviews: list) -> dict:
             if kw in text:
                 pos_kw_counts[kw] = pos_kw_counts.get(kw, 0) + 1
         for kw in _NEGATIVE_KW:
-            if kw in text:
+            if _neg_keyword_hit(text, kw):
                 neg_kw_counts[kw] = neg_kw_counts.get(kw, 0) + 1
 
     positive_keywords = sorted(pos_kw_counts.items(), key=lambda x: -x[1])[:10]
@@ -1502,9 +1537,15 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
     detail_imgs = detail_area.find_all("img") if detail_area else []
 
     # 이미지 소스 중 실제 상품 이미지 필터링 (아이콘/로고 제외)
-    product_imgs = []
+    # ※ 스마트스토어 상세는 lazy-load라 실제 URL이 data-lazy-src/data-original/srcset에 있고
+    #   <img src>는 1px 플레이스홀더인 경우가 많음 → 여러 속성을 함께 확인.
+    #   또한 같은 URL이 래퍼로 중복 등장하므로 set으로 중복 제거(개수 과대/과소 방지).
+    product_imgs = set()
     for img in (detail_imgs if detail_imgs else all_imgs):
-        src = img.get("src", "") or img.get("data-src", "") or ""
+        src = (img.get("src") or img.get("data-src") or img.get("data-lazy-src")
+               or img.get("data-original") or img.get("data-img-src") or "")
+        if not src and img.get("srcset"):
+            src = img.get("srcset").split(",")[0].strip().split(" ")[0]
         # 작은 아이콘이나 트래킹 픽셀 제외
         width = img.get("width", "")
         height = img.get("height", "")
@@ -1512,8 +1553,9 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
             continue
         if height and str(height).isdigit() and int(height) < 50:
             continue
-        if src and ("shop-phinf" in src or "simage" in src or "phinf" in src or "blogpfthumb" in src or ".jpg" in src.lower() or ".png" in src.lower() or ".webp" in src.lower()):
-            product_imgs.append(src)
+        sl = src.lower()
+        if src and ("shop-phinf" in sl or "simage" in sl or "phinf" in sl or "blogpfthumb" in sl or ".jpg" in sl or ".jpeg" in sl or ".png" in sl or ".webp" in sl):
+            product_imgs.add(src.split("?")[0])  # 쿼리스트링 제거 후 중복 제거
 
     total_images = len(product_imgs) if product_imgs else max(len(detail_imgs), 0)
 
@@ -1558,7 +1600,15 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
 
     # ── 5. 구매/배송 정보 감지 ──
     full_text_lower = html.lower()
-    has_delivery_info = any(kw in full_text_lower for kw in ["무료배송", "당일출고", "당일발송", "로켓배송", "오늘출발"])
+    # 스마트스토어는 배송정보를 '무료 배송'(공백 포함)·JSON(freeDelivery/deliveryFee)로 표기하는
+    # 경우가 많아, 공백 제거 후 매칭 + JSON 필드까지 함께 확인(배송정보 X 오탐 방지).
+    _delivery_norm = full_text_lower.replace(" ", "")
+    has_delivery_info = (
+        any(kw in _delivery_norm for kw in ["무료배송", "당일출고", "당일발송", "로켓배송", "오늘출발", "오늘발송", "익일배송", "무료반품"])
+        or '"freedelivery":true' in _delivery_norm
+        or re.search(r'"deliveryfee"\s*:\s*0', _delivery_norm) is not None
+        or re.search(r'(배송비|배송료)[^0-9]{0,6}(무료|0\s*원)', full_text_lower) is not None
+    )
     has_return_info = any(kw in full_text_lower for kw in ["교환", "반품", "환불", "100%"])
     has_gift_info = any(kw in full_text_lower for kw in ["사은품", "증정", "선물", "덤"])
 
@@ -1675,30 +1725,37 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
     page_text = soup.get_text(separator=" ", strip=True) if soup else ""
 
     if actual_review_count is None:
-        review_candidates = []
-        # 텍스트에서 모든 "리뷰 N" 패턴을 찾아 후보 수집
-        for pat in [
-            r'(?:리뷰|구매후기|상품평|review)\s*(\d[\d,]*)',
-            r'(?:리뷰|구매후기|상품평)\s*\(\s*(\d[\d,]*)\s*\)',
-            r'(?:리뷰|구매후기|상품평)\s*:\s*(\d[\d,]*)',
-        ]:
-            for m in re.finditer(pat, page_text, re.I):
-                try:
-                    review_candidates.append(int(m.group(1).replace(",", "")))
-                except Exception:
-                    pass
-        # raw HTML에서도 태그 사이 숫자 추출
-        for m in re.finditer(r'(?:리뷰|구매후기|상품평)(?:[^<]*(?:<[^>]*>)[^<]*){0,5}?([\d,]+)', html):
+        # 1) JSON 리뷰수 키 우선 (가장 신뢰도 높음)
+        json_review_vals = []
+        for m in re.finditer(r'"(?:totalReviewCount|reviewCount)"\s*:\s*(\d+)', html):
             try:
-                val = int(m.group(1).replace(",", ""))
-                if val > 0:
-                    review_candidates.append(val)
+                v = int(m.group(1))
+                if v > 0:
+                    json_review_vals.append(v)
             except Exception:
                 pass
-        # 가장 큰 값 = 총 리뷰수 (fallback이므로 부정확할 수 있음)
-        if review_candidates:
-            actual_review_count = max(review_candidates)
-            logger.info(f"[리뷰추출] 방법3 텍스트 fallback: 리뷰={actual_review_count} (후보: {review_candidates})")
+        if json_review_vals:
+            actual_review_count = max(json_review_vals)
+            logger.info(f"[리뷰추출] 방법3 JSON키: 리뷰={actual_review_count} (후보: {json_review_vals})")
+        else:
+            # 2) 라벨에 바로 붙은 숫자만 후보로 수집 (노이즈 큰 raw-HTML 패턴 제거)
+            review_candidates = []
+            for pat in [
+                r'(?:리뷰|구매후기|상품평|review)\s*\(?\s*(\d[\d,]*)\s*\)?',
+                r'(?:리뷰|구매후기|상품평)\s*:\s*(\d[\d,]*)',
+            ]:
+                for m in re.finditer(pat, page_text, re.I):
+                    try:
+                        val = int(m.group(1).replace(",", ""))
+                        if val > 0:
+                            review_candidates.append(val)
+                    except Exception:
+                        pass
+            # 최댓값 대신 최빈값(mode) — 같은 총 리뷰수가 여러 번 반복 노출되는 특성 활용
+            if review_candidates:
+                from collections import Counter as _Counter
+                actual_review_count = _Counter(review_candidates).most_common(1)[0][0]
+                logger.info(f"[리뷰추출] 방법3 텍스트 fallback(최빈값): 리뷰={actual_review_count} (후보: {review_candidates})")
 
     if actual_rating is None:
         rating_candidates = []
@@ -1883,7 +1940,10 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
 
     # ── 개선 제안 생성 ──
     suggestions = []
-    if total_images < 5:
+    if total_images == 0:
+        # 이미지 추출 실패(lazy-load 등)로 0장일 수 있어 '부족' 단정 대신 안내만 제공
+        suggestions.append({"priority": "low", "area": "이미지", "text": "상세페이지 이미지를 자동으로 인식하지 못했습니다. 상세 설명 영역의 이미지가 정상 등록되어 있는지 확인해주세요."})
+    elif total_images < 5:
         suggestions.append({"priority": "high", "area": "이미지", "text": f"상세페이지 이미지가 {total_images}장으로 부족합니다. 경쟁력 있는 상세페이지는 최소 10장 이상의 고화질 이미지를 사용합니다. 제품 사진, 사용 장면, 사이즈 비교, 패키지 등을 추가하세요."})
     elif total_images < 10:
         suggestions.append({"priority": "medium", "area": "이미지", "text": f"이미지 {total_images}장은 양호하지만, TOP 상품들은 평균 15~20장을 사용합니다. 사용 후기 이미지, 디테일 컷을 추가하면 전환율이 올라갑니다."})

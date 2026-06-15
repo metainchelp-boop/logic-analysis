@@ -35,6 +35,12 @@ window.ChatWidget = function ChatWidget({ currentUser }) {
     const [fbSending, setFbSending] = useState(false);
     const [fbSent, setFbSent] = useState(false);
 
+    // 의견함 이미지 첨부 상태 (채팅 탭과 분리)
+    const [fbImagePreview, setFbImagePreview] = useState(null);  // 미리보기 data URL
+    const [fbImageB64, setFbImageB64] = useState(null);          // base64 데이터 (서버 전송용)
+    const [fbImageType, setFbImageType] = useState(null);        // MIME 타입
+    const fbFileInputRef = useRef(null);
+
     // 내 피드백 이력
     const [myFeedback, setMyFeedback] = useState([]);
     const [fbHistoryLoaded, setFbHistoryLoaded] = useState(false);
@@ -119,6 +125,42 @@ window.ChatWidget = function ChatWidget({ currentUser }) {
         setImageType(null);
     }, []);
 
+    // 의견함 이미지 선택 핸들러
+    var handleFbImageSelect = useCallback(function(e) {
+        var file = e.target.files && e.target.files[0];
+        if (!file) return;
+
+        // 타입 검증
+        var allowed = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+        if (allowed.indexOf(file.type) < 0) {
+            toast.error('PNG, JPG, GIF, WebP 이미지만 첨부 가능합니다.');
+            e.target.value = '';
+            return;
+        }
+        // 크기 검증 (5MB)
+        if (file.size > 5 * 1024 * 1024) {
+            toast.error('이미지 크기는 5MB 이하만 가능합니다.');
+            e.target.value = '';
+            return;
+        }
+
+        var reader = new FileReader();
+        reader.onload = function(ev) {
+            setFbImagePreview(ev.target.result);
+            var b64 = ev.target.result.split(',')[1];
+            setFbImageB64(b64);
+            setFbImageType(file.type);
+        };
+        reader.readAsDataURL(file);
+        e.target.value = ''; // 같은 파일 재선택 허용
+    }, []);
+
+    var clearFbImage = useCallback(function() {
+        setFbImagePreview(null);
+        setFbImageB64(null);
+        setFbImageType(null);
+    }, []);
+
     // 메시지 전송 (useCallback으로 안정적 참조)
     var sendMessage = useCallback(function() {
         var msg = input.trim();
@@ -166,18 +208,25 @@ window.ChatWidget = function ChatWidget({ currentUser }) {
 
         var msgWithTag = (_fbTagMap[fbCategory] || '') + ' ' + fbContent.trim();
 
-        api.post('/chat/send', { message: msgWithTag }).then(function(res) {
+        var payload = { message: msgWithTag };
+        if (fbImageB64) {
+            payload.image = fbImageB64;
+            payload.image_type = fbImageType;
+        }
+
+        api.post('/chat/send', payload).then(function(res) {
             setFbSending(false);
             setFbSent(true);
             setFbContent('');
             setFbCategory('');
+            clearFbImage();
             loadMyFeedback(); // 이력 새로고침
             setTimeout(function() { setFbSent(false); }, 3000);
         }).catch(function() {
             setFbSending(false);
             toast.error('전송에 실패했습니다.');
         });
-    }, [fbCategory, fbContent, fbSending]);
+    }, [fbCategory, fbContent, fbSending, fbImageB64, fbImageType, clearFbImage]);
 
     // 마크다운 간이 렌더링
     var renderContent = function(text) {
@@ -494,6 +543,39 @@ window.ChatWidget = function ChatWidget({ currentUser }) {
                                 boxSizing: 'border-box',
                             }
                         }),
+
+                        /* 이미지 첨부 (선택) */
+                        React.createElement('input', {
+                            type: 'file', accept: 'image/png,image/jpeg,image/gif,image/webp',
+                            ref: fbFileInputRef, onChange: handleFbImageSelect,
+                            style: { display: 'none' }
+                        }),
+                        fbImagePreview
+                            ? React.createElement('div', { style: { marginTop: 8, position: 'relative', display: 'inline-block' } },
+                                React.createElement('img', {
+                                    src: fbImagePreview,
+                                    style: { maxWidth: '100%', maxHeight: 160, borderRadius: 10, border: '1px solid #e2e8f0', display: 'block' }
+                                }),
+                                React.createElement('button', {
+                                    onClick: clearFbImage,
+                                    title: '이미지 제거',
+                                    style: {
+                                        position: 'absolute', top: 6, right: 6, width: 24, height: 24, borderRadius: '50%',
+                                        background: 'rgba(0,0,0,0.6)', color: '#fff', border: 'none', cursor: 'pointer',
+                                        fontSize: 14, lineHeight: '24px', padding: 0
+                                    }
+                                }, '×')
+                            )
+                            : React.createElement('button', {
+                                onClick: function() { if (fbFileInputRef.current) fbFileInputRef.current.click(); },
+                                style: {
+                                    marginTop: 8, display: 'flex', alignItems: 'center', gap: 6,
+                                    padding: '8px 12px', borderRadius: 10, background: '#f8fafc',
+                                    border: '1px dashed #cbd5e1', color: '#64748b', fontSize: 12,
+                                    fontWeight: 600, cursor: 'pointer'
+                                }
+                            }, '🖼️ 이미지 첨부 (선택)'),
+
                         React.createElement('button', {
                             onClick: sendFeedback,
                             disabled: fbSending || !fbContent.trim(),
