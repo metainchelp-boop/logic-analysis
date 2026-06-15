@@ -77,6 +77,32 @@ window.ClientDiagnosticsSection = function ClientDiagnosticsSection() {
         loading && React.createElement('div', { style: { textAlign: 'center', padding: 20, color: '#94a3b8' } }, '불러오는 중...'),
 
         !loading && data && React.createElement(React.Fragment, null,
+            /* 서버 디스크 사용량 */
+            data.disk && (function() {
+                var dk = data.disk;
+                var pct = dk.usedPercent || 0;
+                var color = pct >= 90 ? { bg: '#fee2e2', bar: '#dc2626', text: '#dc2626' }
+                    : pct >= 75 ? { bg: '#fef9c3', bar: '#ca8a04', text: '#ca8a04' }
+                    : { bg: '#dcfce7', bar: '#16a34a', text: '#16a34a' };
+                return React.createElement('div', { style: { marginBottom: 20 } },
+                    React.createElement('div', { style: { fontSize: 13, fontWeight: 700, color: '#334155', margin: '4px 0 8px', display: 'flex', alignItems: 'center', gap: 8 } },
+                        '💾 서버 디스크 사용량',
+                        React.createElement('span', { style: { fontSize: 12, fontWeight: 700, color: color.text } }, pct + '%'),
+                        pct >= 90 && React.createElement('span', { style: { fontSize: 11, color: '#dc2626', fontWeight: 600 } }, '⚠️ 정리 필요')
+                    ),
+                    /* 사용률 막대 */
+                    React.createElement('div', { style: { height: 14, borderRadius: 7, background: '#e2e8f0', overflow: 'hidden', marginBottom: 8 } },
+                        React.createElement('div', { style: { width: Math.min(pct, 100) + '%', height: '100%', background: color.bar, transition: 'width 0.3s' } })
+                    ),
+                    React.createElement('div', { style: { display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 12, color: '#475569' } },
+                        React.createElement('span', null, '전체 ' + dk.totalGB + 'GB'),
+                        React.createElement('span', null, '사용 ' + dk.usedGB + 'GB'),
+                        React.createElement('span', { style: { fontWeight: 600 } }, '여유 ' + dk.freeGB + 'GB'),
+                        React.createElement('span', { style: { color: '#94a3b8' } }, '| DB ' + dk.dbSizeGB + 'GB · 백업 ' + dk.backupCount + '개(' + dk.backupTotalGB + 'GB)')
+                    )
+                );
+            })(),
+
             /* 상태별 업체 수 */
             React.createElement('div', { style: { fontSize: 13, fontWeight: 700, color: '#334155', margin: '4px 0 8px' } }, '상태별 업체 수'),
             React.createElement('div', { style: { display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 20 } },

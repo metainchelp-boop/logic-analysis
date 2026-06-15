@@ -533,6 +533,36 @@ async def get_client_diagnostics(
             )
             recent_inactive = [dict(r) for r in cursor.fetchall()]
 
+        # 서버 디스크/DB/백업 용량 (조회 전용)
+        disk = None
+        try:
+            import shutil
+            data_dir = os.path.dirname(os.path.abspath(DB_PATH))
+            du = shutil.disk_usage(data_dir)
+            _GB = 1024 ** 3
+            db_size = os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else 0
+            backup_dir = os.path.join(data_dir, "backups")
+            backup_count, backup_bytes = 0, 0
+            if os.path.isdir(backup_dir):
+                for _f in os.listdir(backup_dir):
+                    if _f.startswith("logic_analysis_backup_") and _f.endswith(".db"):
+                        backup_count += 1
+                        try:
+                            backup_bytes += os.path.getsize(os.path.join(backup_dir, _f))
+                        except Exception:
+                            pass
+            disk = {
+                "totalGB": round(du.total / _GB, 1),
+                "usedGB": round(du.used / _GB, 1),
+                "freeGB": round(du.free / _GB, 1),
+                "usedPercent": round(du.used / du.total * 100, 1) if du.total else 0,
+                "dbSizeGB": round(db_size / _GB, 2),
+                "backupCount": backup_count,
+                "backupTotalGB": round(backup_bytes / _GB, 2),
+            }
+        except Exception as _de:
+            logger.warning(f"디스크 사용량 조회 실패(무시): {_de}")
+
         return {
             "success": True,
             "data": {
@@ -540,6 +570,7 @@ async def get_client_diagnostics(
                 "orphanActive": orphan_active,
                 "orphanActiveCount": len(orphan_active),
                 "recentInactive": recent_inactive,
+                "disk": disk,
             },
         }
     except Exception as e:
