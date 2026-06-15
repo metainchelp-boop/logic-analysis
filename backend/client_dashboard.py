@@ -132,6 +132,12 @@ def init_client_dashboard_db():
             ON client_rank_history(client_id, keyword, check_type)
         """)
 
+        # my_clients의 MAX(id) GROUP BY (client_id, keyword) 서브쿼리 커버링 인덱스
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_client_rank_maxid
+            ON client_rank_history(client_id, keyword, id)
+        """)
+
         conn.commit()
         logger.info("[ClientDashboard] DB tables initialized")
     except Exception as e:

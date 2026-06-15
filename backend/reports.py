@@ -198,12 +198,20 @@ def generate_report_html(
     products_html = ""
     if top_products:
         for idx, product in enumerate(top_products[:20], 1):
-            rank = product.get("rank", idx)
-            title = product.get("title", "제품명 없음")
+            # 외부(네이버) 데이터는 타입이 불안정 → 강제 변환(미변환 시 리포트 생성 500)
+            try:
+                rank = int(product.get("rank", idx))
+            except (ValueError, TypeError):
+                rank = idx
+            try:
+                rating = float(product.get("rating", 0.0) or 0)
+            except (ValueError, TypeError):
+                rating = 0.0
+            # XSS 방지: 상품명/판매처는 리포트 HTML에 그대로 삽입되므로 이스케이프
+            title = html_module.escape(str(product.get("title", "제품명 없음")))
             price = product.get("price", "가격 정보 없음")
-            merchant = product.get("merchant", "판매처 미확인")
+            merchant = html_module.escape(str(product.get("merchant", "판매처 미확인")))
             sales = product.get("sales", 0)
-            rating = product.get("rating", 0.0)
 
             # Format price
             try:

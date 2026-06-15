@@ -41,7 +41,12 @@ def start_scheduler():
         logger.info("⏭ 스케줄러 — 다른 워커에서 이미 실행 중, 건너뜀")
         return
 
-    _scheduler = BackgroundScheduler(timezone="Asia/Seoul")
+    # misfire_grace_time: 기동 직후/순간 부하로 발화시각을 놓쳐도 1시간 내면 실행
+    # coalesce: 밀린 실행을 1번으로 합침 (일일 순위수집이 조용히 누락되는 것 방지)
+    _scheduler = BackgroundScheduler(
+        timezone="Asia/Seoul",
+        job_defaults={"misfire_grace_time": 3600, "coalesce": True, "max_instances": 1},
+    )
 
     # 1) 순위 추적 — 매일 08:00 (홈탭 + 업체, 키워드당 1회 API, 결과 캐시)
     _scheduler.add_job(
