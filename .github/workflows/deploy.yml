@@ -38,7 +38,7 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          command_timeout: 120s
+          command_timeout: 300s
           script: |
             cd /root/logic-analysis-deploy
 
@@ -79,18 +79,21 @@ jobs:
             docker compose build --no-cache
             docker compose up -d
 
-            # 헬스체크 (최대 30초 대기)
+            # 헬스체크 (대용량 DB 기동 시간 고려: 초기 대기 + 최대 120초)
+            # 1.2GB+ DB를 로드하며 기동하므로 30초로는 짧아 false 실패가 발생 → 여유 확보
+            echo "앱 기동 대기 중(20초)..."
+            sleep 20
             echo "헬스체크 시작..."
-            for i in $(seq 1 10); do
+            for i in $(seq 1 24); do
               if curl -sf http://127.0.0.1:5050/api/health > /dev/null 2>&1; then
                 echo "헬스체크 성공! (${i}번째 시도)"
                 docker compose ps
                 exit 0
               fi
-              echo "대기 중... (${i}/10)"
-              sleep 3
+              echo "대기 중... (${i}/24)"
+              sleep 5
             done
 
             echo "헬스체크 실패"
-            docker compose logs --tail=20
+            docker compose logs --tail=40
             exit 1

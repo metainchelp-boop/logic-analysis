@@ -314,7 +314,8 @@ async def my_clients(current_user: dict = Depends(get_current_user)):
                     (SELECT COUNT(*) FROM client_analyses ca WHERE ca.client_id = c.id) as analysis_count,
                     (SELECT MAX(ca.updated_at) FROM client_analyses ca WHERE ca.client_id = c.id) as last_analyzed
                 FROM clients c
-                WHERE c.status = 'active' AND c.created_by = ?
+                WHERE c.status = 'active'
+                  AND (c.created_by = ? OR c.created_by IS NULL OR c.created_by = '')
                 ORDER BY c.updated_at DESC
             """, (user_id,)).fetchall()
 
@@ -406,7 +407,9 @@ async def registered_clients(current_user: dict = Depends(get_current_user)):
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT id, name, main_keywords FROM clients WHERE status = 'active' AND created_by = ? ORDER BY name ASC",
+                "SELECT id, name, main_keywords FROM clients "
+                "WHERE status = 'active' AND (created_by = ? OR created_by IS NULL OR created_by = '') "
+                "ORDER BY name ASC",
                 (user_id,)
             ).fetchall()
 
