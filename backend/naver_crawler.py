@@ -190,16 +190,17 @@ def get_review_count(product_url: str) -> Optional[int]:
     return None
 
 
-def search_products(keyword: str, max_results: int = 200) -> List[Dict]:
+def search_products(keyword: str, max_results: int = 200, retry_on_429: bool = True) -> List[Dict]:
     """
     키워드로 상품 검색 (최대 1000개까지)
     여러 페이지를 자동으로 조회하여 합침
+    retry_on_429: 429(호출제한) 시 재시도 — 상품 매칭이 간헐적으로 실패하는 것을 방지
     """
     all_products = []
     per_page = 100
 
     for start in range(1, min(max_results, 1000) + 1, per_page):
-        result = search_naver_shopping_api(keyword, display=per_page, start=start)
+        result = search_naver_shopping_api(keyword, display=per_page, start=start, retry_on_429=retry_on_429)
         items = result.get("items", [])
         if not items:
             break
@@ -455,7 +456,7 @@ def get_product_info(product_url: str, keyword: str = "") -> Dict:
         try:
             total_checked = 0
             for page_start in [1, 101, 201, 301, 401, 501, 601, 701, 801, 901]:
-                api_result = search_naver_shopping_api(keyword, display=100, start=page_start)
+                api_result = search_naver_shopping_api(keyword, display=100, start=page_start, retry_on_429=True)
                 items = api_result.get("items", [])
                 if not items:
                     break
@@ -472,7 +473,7 @@ def get_product_info(product_url: str, keyword: str = "") -> Dict:
     # ===== 2차: 스토어명으로 네이버 쇼핑 API 검색 =====
     if not result["product_name"] and store_name and product_id:
         try:
-            api_result = search_naver_shopping_api(store_name, display=100)
+            api_result = search_naver_shopping_api(store_name, display=100, retry_on_429=True)
             for item in api_result.get("items", []):
                 if _match_item(item):
                     _fill_from_item(item)
