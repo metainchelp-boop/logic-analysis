@@ -494,7 +494,7 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
 @router.post("/login", response_model=LoginResponse)
-async def login(request: LoginRequest, request_obj: Request) -> LoginResponse:
+def login(request: LoginRequest, request_obj: Request) -> LoginResponse:
     """
     User login endpoint.
     Returns JWT token and user information.
@@ -559,7 +559,7 @@ class SSORequest(BaseModel):
 
 
 @router.post("/sso", response_model=LoginResponse)
-async def sso_login(request: SSORequest, request_obj: Request) -> LoginResponse:
+def sso_login(request: SSORequest, request_obj: Request) -> LoginResponse:
     """전산(ERP) SSO 자동 로그인.
     전산이 공유 시크릿(SSO_SHARED_SECRET)으로 서명한 단기 토큰을 검증 →
     매핑되는 로직분석 사용자 자동 로그인(없으면 viewer 역할로 자동 가입)."""
@@ -681,7 +681,7 @@ async def sso_login(request: SSORequest, request_obj: Request) -> LoginResponse:
 
 
 @router.get("/me", response_model=UserResponse)
-async def get_current_user_info(current_user: Dict[str, Any] = Depends(get_current_user)) -> UserResponse:
+def get_current_user_info(current_user: Dict[str, Any] = Depends(get_current_user)) -> UserResponse:
     """Get current authenticated user information."""
     return UserResponse(
         id=current_user["id"],
@@ -694,14 +694,14 @@ async def get_current_user_info(current_user: Dict[str, Any] = Depends(get_curre
 
 
 @router.post("/logout", response_model=MessageResponse)
-async def logout(current_user: Dict[str, Any] = Depends(get_current_user)) -> MessageResponse:
+def logout(current_user: Dict[str, Any] = Depends(get_current_user)) -> MessageResponse:
     """Logout endpoint (client-side token removal)."""
     logger.info(f"User logged out: {current_user['username']}")
     return MessageResponse(success=True, message="로그아웃되었습니다.")
 
 
 @router.put("/change-password", response_model=MessageResponse)
-async def change_password(
+def change_password(
     request: ChangePasswordRequest, current_user: Dict[str, Any] = Depends(get_current_user)
 ) -> MessageResponse:
     """Change current user's password."""
@@ -734,7 +734,7 @@ async def change_password(
 # ============================================================================
 
 @router.get("/users", response_model=List[UserResponse])
-async def list_users(current_user: Dict[str, Any] = Depends(require_role(UserRole.ADMIN))) -> List[UserResponse]:
+def list_users(current_user: Dict[str, Any] = Depends(require_role(UserRole.ADMIN))) -> List[UserResponse]:
     """List all users (admin only)."""
     users = get_all_users()
     return [
@@ -751,7 +751,7 @@ async def list_users(current_user: Dict[str, Any] = Depends(require_role(UserRol
 
 
 @router.post("/users", response_model=UserResponse)
-async def create_new_user(
+def create_new_user(
     request: CreateUserRequest, current_user: Dict[str, Any] = Depends(require_role(UserRole.ADMIN))
 ) -> UserResponse:
     """Create new user (admin only)."""
@@ -785,7 +785,7 @@ async def create_new_user(
 
 
 @router.put("/users/{user_id}", response_model=UserResponse)
-async def update_existing_user(
+def update_existing_user(
     user_id: int,
     request: UpdateUserRequest,
     current_user: Dict[str, Any] = Depends(require_role(UserRole.ADMIN)),
@@ -827,7 +827,7 @@ async def update_existing_user(
 
 
 @router.delete("/users/{user_id}", response_model=MessageResponse)
-async def delete_existing_user(
+def delete_existing_user(
     user_id: int, current_user: Dict[str, Any] = Depends(require_role(UserRole.ADMIN))
 ) -> MessageResponse:
     """Delete user (admin only, cannot delete self)."""
@@ -879,7 +879,7 @@ class AdminResetPasswordRequest(BaseModel):
 
 
 @router.put("/users/{user_id}/reset-password", response_model=MessageResponse)
-async def admin_reset_password(
+def admin_reset_password(
     user_id: int,
     request: AdminResetPasswordRequest,
     current_user: Dict[str, Any] = Depends(require_role(UserRole.ADMIN)),
@@ -902,7 +902,7 @@ async def admin_reset_password(
 
 
 @router.get("/users/analysis-counts")
-async def get_analysis_counts(
+def get_analysis_counts(
     current_user: Dict[str, Any] = Depends(require_role(UserRole.ADMIN)),
 ):
     """유저별 실제 분석 실행 횟수 조회 (관리자 전용).
@@ -939,7 +939,7 @@ async def get_analysis_counts(
 
 
 @router.get("/users/{user_id}/login-logs")
-async def get_login_logs(
+def get_login_logs(
     user_id: int,
     days: int = 7,
     current_user: Dict[str, Any] = Depends(require_role(UserRole.ADMIN)),

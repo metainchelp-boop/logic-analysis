@@ -487,7 +487,7 @@ def get_client_stats(user_id: int = None, is_admin: bool = False) -> Dict[str, i
 # ============================================================================
 
 @router.get("/stats/summary", response_model=ClientStatsResponse)
-async def get_stats(
+def get_stats(
     current_user: Dict = Depends(get_current_user),
 ):
     """Get client statistics for dashboard"""
@@ -504,7 +504,7 @@ async def get_stats(
 
 
 @router.get("/diagnostics")
-async def get_client_diagnostics(
+def get_client_diagnostics(
     current_user: Dict = Depends(require_role("admin")),
 ):
     """업체 데이터 점검 (admin/superadmin 전용, 조회 전용).
@@ -582,7 +582,7 @@ async def get_client_diagnostics(
 
 
 @router.get("", response_model=ClientListResponse)
-async def list_clients(
+def list_clients(
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
     search: Optional[str] = Query(None),
@@ -636,7 +636,7 @@ def _check_ownership(client, current_user):
 
 
 @router.get("/{client_id}", response_model=ClientDetailResponse)
-async def get_client(
+def get_client(
     client_id: int,
     current_user: Dict = Depends(get_current_user),
 ):
@@ -662,7 +662,7 @@ async def get_client(
 
 
 @router.post("", response_model=ClientCreateResponse, status_code=status.HTTP_201_CREATED)
-async def create_new_client(
+def create_new_client(
     client_data: ClientCreate,
     current_user: Dict = Depends(get_current_user),
     role_check: None = Depends(require_role(["admin", "manager"])),
@@ -693,7 +693,7 @@ async def create_new_client(
 
 
 @router.put("/{client_id}", response_model=ClientUpdateResponse)
-async def update_existing_client(
+def update_existing_client(
     client_id: int,
     client_data: ClientUpdate,
     current_user: Dict = Depends(get_current_user),
@@ -730,7 +730,7 @@ async def update_existing_client(
 
 
 @router.delete("/{client_id}", response_model=ClientDeleteResponse)
-async def delete_existing_client(
+def delete_existing_client(
     client_id: int,
     current_user: Dict = Depends(get_current_user),
     role_check: None = Depends(require_role(["admin", "manager"])),

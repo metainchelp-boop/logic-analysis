@@ -187,7 +187,7 @@ class SaveRankRequest(BaseModel):
 # ==================== 빠른 업체 등록 (분석 탭에서) ====================
 
 @router.post("/quick-register")
-async def quick_register(req: QuickRegisterRequest, current_user: dict = Depends(require_role(["admin", "manager"]))):
+def quick_register(req: QuickRegisterRequest, current_user: dict = Depends(require_role(["admin", "manager"]))):
     """분석 결과와 함께 업체를 빠르게 등록 (신규 또는 기존 업체에 분석 추가)"""
     conn = _get_conn()
     try:
@@ -296,7 +296,7 @@ def _save_analysis_internal(conn, client_id, keyword, product_url,
 # ==================== 업체 목록 ====================
 
 @router.get("/my-clients")
-async def my_clients(current_user: dict = Depends(get_current_user)):
+def my_clients(current_user: dict = Depends(get_current_user)):
     """등록된 업체 목록 + 최근 분석 요약 (admin/viewer=전체, manager=본인)"""
     conn = _get_conn()
     try:
@@ -397,7 +397,7 @@ async def my_clients(current_user: dict = Depends(get_current_user)):
 # ==================== 등록된 업체 간략 목록 (라우트 순서 중요: /{client_id} 보다 위) ====================
 
 @router.get("/registered-clients")
-async def registered_clients(current_user: dict = Depends(get_current_user)):
+def registered_clients(current_user: dict = Depends(get_current_user)):
     """분석 탭에서 업체 선택 드롭다운용 간략 목록"""
     conn = _get_conn()
     try:
@@ -430,7 +430,7 @@ async def registered_clients(current_user: dict = Depends(get_current_user)):
 # ==================== 분석 결과 저장/조회 ====================
 
 @router.post("/analyze")
-async def save_analysis(req: SaveAnalysisRequest, current_user: dict = Depends(require_role(["admin", "manager"]))):
+def save_analysis(req: SaveAnalysisRequest, current_user: dict = Depends(require_role(["admin", "manager"]))):
     """분석 결과 저장 (admin/manager 전용, 일자별 누적)"""
     conn = _get_conn()
     try:
@@ -486,7 +486,7 @@ async def save_analysis(req: SaveAnalysisRequest, current_user: dict = Depends(r
 
 
 @router.get("/{client_id}/analysis")
-async def get_analysis(client_id: int, keyword: Optional[str] = None,
+def get_analysis(client_id: int, keyword: Optional[str] = None,
                        current_user: dict = Depends(get_current_user)):
     """저장된 분석 결과 조회 (일자별 히스토리, 최근 90일 제한, 소유권 검증)
     최적화: report_html, shop_products_json 등 대용량 컬럼 제외 → 17MB → ~1MB"""
@@ -518,7 +518,7 @@ async def get_analysis(client_id: int, keyword: Optional[str] = None,
 
 
 @router.get("/{client_id}/history")
-async def get_analysis_history(client_id: int, keyword: str,
+def get_analysis_history(client_id: int, keyword: str,
                                current_user: dict = Depends(get_current_user)):
     """특정 키워드의 일자별 분석 히스토리 (트렌드 보기용, 소유권 검증)"""
     conn = _get_conn()
@@ -614,7 +614,7 @@ def _parse_analysis_row_light(row):
 # ==================== 업체 삭제 ====================
 
 @router.delete("/{client_id}")
-async def delete_client(client_id: int, current_user: dict = Depends(require_role(["admin", "manager"]))):
+def delete_client(client_id: int, current_user: dict = Depends(require_role(["admin", "manager"]))):
     """업체 삭제 (admin/manager, 관련 분석/순위 데이터도 함께 삭제)"""
     conn = _get_conn()
     try:
@@ -649,7 +649,7 @@ async def delete_client(client_id: int, current_user: dict = Depends(require_rol
 # ==================== 보고서 HTML 다운로드 ====================
 
 @router.get("/{client_id}/report-html")
-async def get_report_html(client_id: int, keyword: str, date: str,
+def get_report_html(client_id: int, keyword: str, date: str,
                           current_user: dict = Depends(get_current_user)):
     """특정 일자의 저장된 HTML 보고서 반환 (소유권 검증)"""
     conn = _get_conn()
@@ -674,7 +674,7 @@ async def get_report_html(client_id: int, keyword: str, date: str,
 # ==================== 순위 추적 이력 ====================
 
 @router.post("/rank-save")
-async def save_rank(req: SaveRankRequest, current_user: dict = Depends(require_role(["admin", "manager"]))):
+def save_rank(req: SaveRankRequest, current_user: dict = Depends(require_role(["admin", "manager"]))):
     """순위 체크 결과 저장 (admin/manager 전용, 소유권 검증, 당일 중복 시 UPDATE)"""
     conn = _get_conn()
     try:
@@ -716,7 +716,7 @@ async def save_rank(req: SaveRankRequest, current_user: dict = Depends(require_r
 
 
 @router.get("/{client_id}/rank-history")
-async def get_rank_history(client_id: int, keyword: Optional[str] = None, days: int = 90,
+def get_rank_history(client_id: int, keyword: Optional[str] = None, days: int = 90,
                            current_user: dict = Depends(get_current_user)):
     """순위 추적 이력 조회 (소유권 검증)"""
     conn = _get_conn()
@@ -748,7 +748,7 @@ async def get_rank_history(client_id: int, keyword: Optional[str] = None, days: 
 # ==================== AI 인사이트 ====================
 
 @router.get("/{client_id}/ai-insights")
-async def get_ai_insights(client_id: int, current_user: dict = Depends(get_current_user)):
+def get_ai_insights(client_id: int, current_user: dict = Depends(get_current_user)):
     """업체별 AI 인사이트 통합 조회"""
     conn = _get_conn()
     try:
@@ -770,7 +770,7 @@ async def get_ai_insights(client_id: int, current_user: dict = Depends(get_curre
 # ==================== 일일 조회 제한 ====================
 
 @router.get("/usage/check")
-async def check_usage(current_user: dict = Depends(get_current_user)):
+def check_usage(current_user: dict = Depends(get_current_user)):
     """일일 조회 횟수 확인"""
     conn = _get_conn()
     try:
@@ -805,7 +805,7 @@ async def check_usage(current_user: dict = Depends(get_current_user)):
 
 
 @router.post("/usage/increment")
-async def increment_usage(current_user: dict = Depends(get_current_user)):
+def increment_usage(current_user: dict = Depends(get_current_user)):
     """조회 횟수 1 증가"""
     conn = _get_conn()
     try:
@@ -827,7 +827,7 @@ async def increment_usage(current_user: dict = Depends(get_current_user)):
 
 
 @router.get("/today-stats")
-async def today_stats(current_user: dict = Depends(get_current_user)):
+def today_stats(current_user: dict = Depends(get_current_user)):
     """당일 수동 분석 횟수 + 당일 보고서 출력 건수"""
     conn = _get_conn()
     try:

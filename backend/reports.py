@@ -757,7 +757,7 @@ router = APIRouter(prefix="/api/reports", tags=["reports"])
 
 
 @router.post("/generate")
-async def generate_report(
+def generate_report(
     request: ReportGenerateRequest,
     current_user: dict = Depends(get_current_user)
 ):
@@ -877,7 +877,7 @@ async def generate_report(
 
 
 @router.get("")
-async def list_reports(
+def list_reports(
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
     client_id: Optional[int] = None,
@@ -953,7 +953,7 @@ async def list_reports(
 
 
 @router.get("/{report_id}")
-async def get_report(
+def get_report(
     report_id: int,
     current_user: dict = Depends(get_current_user)
 ):
@@ -1002,7 +1002,7 @@ async def get_report(
 
 
 @router.get("/view/{report_hash}")
-async def view_public_report(report_hash: str, request: Request):
+def view_public_report(report_hash: str, request: Request):
     """
     Public report view (레이트 리밋 적용, 분당 30회 제한)
     Returns HTML content and increments view count
@@ -1059,7 +1059,7 @@ async def view_public_report(report_hash: str, request: Request):
 
 
 @router.delete("/{report_id}")
-async def delete_report(
+def delete_report(
     report_id: int,
     current_user: dict = Depends(require_role(["admin", "manager"]))
 ):
