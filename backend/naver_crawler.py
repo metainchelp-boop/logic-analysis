@@ -299,7 +299,7 @@ def find_product_rank(keyword: str, product_url: str,
     ref_name = product_name
     if not ref_name:
         try:
-            info = get_product_info(product_url)
+            info = get_product_info(product_url, keyword=keyword)
             ref_name = info.get("product_name", "")
         except Exception:
             pass
@@ -312,9 +312,10 @@ def find_product_rank(keyword: str, product_url: str,
     best_score = 0
 
     for product in products:
-        p_store = (product.get("store_name") or "").lower()
-        # 스토어명(mallName)이 스마트스토어 URL의 스토어명과 일치해야 함
-        if p_store != target_store_name.lower():
+        # 스토어 일치 검증 — tier-1과 동일한 헬퍼 사용.
+        # (기존엔 API mallName(한글)과 URL 슬러그(영문)를 정확 비교해 거의 항상 불일치 →
+        #  실제 노출 상품도 '미노출'로 오판하던 문제를 해소)
+        if not _store_matches(product):
             continue
 
         p_norm = _normalize_name(product.get("product_name", ""))
