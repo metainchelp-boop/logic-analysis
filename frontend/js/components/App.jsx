@@ -1326,6 +1326,7 @@ window.App = function App() {
             React.createElement('div', { style: { maxWidth: 1000, margin: '0 auto', padding: '24px 16px' } },
                 React.createElement(ApiUsageSection, null),
                 React.createElement(NotificationSection, null),
+                React.createElement(window.ClientDiagnosticsSection, null),
                 React.createElement(window.FeedbackManagement, null)
             )
         ),
