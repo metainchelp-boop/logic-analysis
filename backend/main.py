@@ -155,10 +155,57 @@ def _backup_db_on_startup():
     backup_dir = os.path.join(os.path.dirname(os.path.abspath(db_path)), "backups")
     os.makedirs(backup_dir, exist_ok=True)
 
-    # 현재 시각 기반 백업 파일명
+    # 보관 개수: 1.2GB×5 ≈ 6GB. 이전 14개(약 17GB)는 36GB 디스크에서 과다 → 디스크 풀 유발.
+    MAX_BACKUPS = 5
+
+    def _list_backups():
+        return sorted(
+            f for f in os.listdir(backup_dir)
+            if f.startswith("logic_analysis_backup_") and f.endswith(".db")
+        )
+
+    def _prune(keep):
+        try:
+            bks = _list_backups()
+            while len(bks) > keep:
+                old = bks.pop(0)
+                os.remove(os.path.join(backup_dir, old))
+                logger.info(f"  🗑️ 오래된 백업 삭제: {old}")
+        except Exception as _pe:
+            logger.warning(f"백업 정리 실패(무시): {_pe}")
+
+    # 1) 잦은 재시작 시 백업 폭증 방지: 최근 6시간 내 백업이 있으면 새 백업 생략(개수 정리만)
+    try:
+        _existing = _list_backups()
+        if _existing:
+            _latest = os.path.join(backup_dir, _existing[-1])
+            _age = time.time() - os.path.getmtime(_latest)
+            if _age < 6 * 3600:
+                logger.info(f"ℹ️ 최근({int(_age/60)}분 전) 백업 존재 — 시작 시 백업 생략")
+                _prune(MAX_BACKUPS)
+                return
+    except Exception:
+        pass
+
+    # 2) 새 백업 전에 먼저 정리해 공간 확보(꽉 찬 상태에서 백업 실패 방지)
+    _prune(MAX_BACKUPS - 1)
+
+    # 3) 디스크 여유 가드: 여유 < DB크기×1.5면 백업 생략(디스크 풀로 앱 마비 방지)
+    try:
+        _db_size = os.path.getsize(db_path)
+        _free = shutil.disk_usage(backup_dir).free
+        if _free < _db_size * 1.5:
+            logger.error(
+                f"⚠️ 디스크 여유 부족(여유 {_free//(1024**2)}MB < 필요 {int(_db_size*1.5)//(1024**2)}MB) "
+                f"— 백업 생략. 디스크 정리가 필요합니다!"
+            )
+            return
+    except Exception:
+        pass
+
+    # 4) 백업 생성
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_path = os.path.join(backup_dir, f"logic_analysis_backup_{ts}.db")
-
     try:
         # SQLite online backup API 사용 (WAL 안전)
         src = sqlite3.connect(db_path)
@@ -168,25 +215,25 @@ def _backup_db_on_startup():
         src.close()
         logger.info(f"✅ DB 백업 완료: {backup_path} (업체 {client_count}건)")
     except Exception as e:
-        # 백업 실패해도 fallback: shutil.copy2
+        # 실패 시 부분 파일 제거(공간 점유 방지) 후 파일 복사 fallback
+        try:
+            if os.path.exists(backup_path):
+                os.remove(backup_path)
+        except Exception:
+            pass
         try:
             shutil.copy2(db_path, backup_path)
             logger.info(f"✅ DB 백업 완료 (파일 복사): {backup_path}")
         except Exception as e2:
+            try:
+                if os.path.exists(backup_path):
+                    os.remove(backup_path)
+            except Exception:
+                pass
             logger.error(f"❌ DB 백업 실패: {e2}")
 
-    # 오래된 백업 정리 (최대 14개 = 약 2주분 보관)
-    try:
-        backups = sorted([
-            f for f in os.listdir(backup_dir)
-            if f.startswith("logic_analysis_backup_") and f.endswith(".db")
-        ])
-        while len(backups) > 14:
-            old = backups.pop(0)
-            os.remove(os.path.join(backup_dir, old))
-            logger.info(f"  🗑️ 오래된 백업 삭제: {old}")
-    except Exception:
-        pass
+    # 5) 최종 보관 개수 정리
+    _prune(MAX_BACKUPS)
 
 
 @asynccontextmanager
