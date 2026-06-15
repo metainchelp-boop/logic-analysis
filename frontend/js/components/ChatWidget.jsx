@@ -228,10 +228,14 @@ window.ChatWidget = function ChatWidget({ currentUser }) {
         });
     }, [fbCategory, fbContent, fbSending, fbImageB64, fbImageType, clearFbImage]);
 
-    // 마크다운 간이 렌더링
+    // 마크다운 간이 렌더링 (XSS 방지: 먼저 HTML 이스케이프 후 제한된 마크다운만 허용)
     var renderContent = function(text) {
         if (!text) return '';
-        var html = text
+        var html = String(text)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
             .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
             .replace(/`(.*?)`/g, '<code style="background:#f1f5f9;padding:1px 4px;border-radius:3px;font-size:12px">$1</code>')
             .replace(/\n/g, '<br/>');

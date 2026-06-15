@@ -199,6 +199,8 @@ def init_auth_db():
                 ip_address TEXT DEFAULT ''
             )
         """)
+        # 로그인 이력 조회 인덱스 (관리자 화면 GROUP BY user_id / 최근순)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_login_logs_user ON login_logs(user_id, login_at DESC)")
 
         conn.commit()
         conn.close()

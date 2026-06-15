@@ -39,6 +39,25 @@ SCRAPINGBEE_API_KEY = os.getenv("SCRAPINGBEE_API_KEY", "")
 SCRAPINGBEE_API_URL = "https://app.scrapingbee.com/api/v1/"
 
 
+# ==================== SSRF 가드 ====================
+# 서버가 사용자 입력 URL을 직접 fetch하므로, 네이버 계열 호스트만 허용한다.
+# (내부망/클라우드 메타데이터(169.254.169.254)/localhost 접근 차단)
+def is_allowed_fetch_url(url: str) -> bool:
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except Exception:
+        return False
+    if not host:
+        return False
+    return host == "naver.com" or host.endswith(".naver.com")
+
+
+def _assert_allowed_fetch_url(url: str):
+    if not is_allowed_fetch_url(url):
+        raise ValueError("허용되지 않은 URL입니다 (네이버 도메인만 허용)")
+
+
+
 # ==================== 유틸리티 ====================
 
 def extract_product_id_from_url(product_url: str) -> Optional[str]:
@@ -146,7 +165,7 @@ def _parse_api_item(item: Dict, rank: int) -> Dict:
         "rank": rank,
         "product_id": product_id,
         "product_name": title,
-        "price": int(item.get("lprice", 0)),
+        "price": _safe_int(item.get("lprice", 0)),
         "hprice": int(item.get("hprice", 0)) if item.get("hprice") else None,
         "store_name": item.get("mallName", ""),
         "image_url": item.get("image", ""),
@@ -490,6 +509,7 @@ def get_product_info(product_url: str, keyword: str = "") -> Dict:
                 "Accept": "text/html,application/xhtml+xml",
                 "Accept-Language": "ko-KR,ko;q=0.9",
             }
+            _assert_allowed_fetch_url(product_url)  # SSRF 가드
             resp = requests.get(product_url, headers=headers, timeout=5, allow_redirects=True)
             if resp.status_code == 200 and len(resp.text) > 500:
                 og_title = re.search(r'<meta\s+property=["\']og:title["\']\s+content=["\']([^"\']+)["\']', resp.text)
@@ -1120,6 +1140,11 @@ def fetch_detail_page_html(product_url: str) -> Optional[str]:
     4차: 향상된 직접 요청
     5차: Bright Data (fallback)
     """
+    # SSRF 가드: 네이버 계열만 허용 (ScrapingBee/BRD 경유로 내부망 fetch 방지)
+    if not is_allowed_fetch_url(product_url):
+        logger.warning(f"[SSRF차단] 허용되지 않은 URL: {product_url[:80]}")
+        return None
+
     # 1차: ScrapingBee premium (기본, 25 credits, transparent_status_code로 429도 수용)
     html = _fetch_via_scrapingbee(product_url, render_js=False, stealth=False)
     if html:
@@ -1157,6 +1182,7 @@ def fetch_detail_page_html(product_url: str) -> Optional[str]:
     headers = _get_realistic_headers(referer="https://search.shopping.naver.com/")
     try:
         logger.info(f"향상된 직접 요청 시도: {product_url[:60]}...")
+        _assert_allowed_fetch_url(product_url)  # SSRF 가드
         session = requests.Session()
         session.headers.update(headers)
         resp = session.get(product_url, timeout=15, allow_redirects=True)
@@ -1662,13 +1688,14 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
         try:
             ld = _json.loads(sc.string or "")
             if isinstance(ld, list):
-                ld = next((x for x in ld if x.get("@type") == "Product"), None)
-            if ld and ld.get("@type") == "Product":
+                ld = next((x for x in ld if isinstance(x, dict) and x.get("@type") == "Product"), None)
+            if isinstance(ld, dict) and ld.get("@type") == "Product":
                 ar = ld.get("aggregateRating", {})
-                if ar.get("reviewCount"):
-                    actual_review_count = int(ar["reviewCount"])
-                if ar.get("ratingValue"):
-                    actual_rating = round(float(ar["ratingValue"]), 2)
+                if isinstance(ar, dict):
+                    if ar.get("reviewCount"):
+                        actual_review_count = _safe_int(ar["reviewCount"])
+                    if ar.get("ratingValue"):
+                        actual_rating = round(_safe_float(ar["ratingValue"]), 2)
                 logger.info(f"[리뷰추출] 방법1 JSON-LD: 리뷰={actual_review_count}, 평점={actual_rating}")
         except Exception:
             pass

@@ -241,18 +241,27 @@ def _fetch_context_data(message: str) -> str:
             if rows:
                 for r in rows:
                     parts = [f"\n📊 키워드 '{r['keyword']}' 분석 데이터 (업체: {r['client_name']}, 분석일: {r['analyzed_date']}):"]
-                    # analysis_json 파싱
+                    # analysis_json + volume_json 병합 파싱
+                    #  (검색량/경쟁강도 필드는 volume_json에 저장되는 경우가 있어 둘 다 읽음)
                     try:
                         analysis = json.loads(r["analysis_json"]) if r["analysis_json"] else {}
-                        if analysis:
-                            vol = analysis.get("monthlyPcQcCnt", "-")
-                            mob = analysis.get("monthlyMobileQcCnt", "-")
-                            comp = analysis.get("compIdx", "-")
-                            prod_cnt = analysis.get("totalProductCount", analysis.get("productCount", "-"))
+                        volume = json.loads(r["volume_json"]) if r["volume_json"] else {}
+                        merged = {}
+                        if isinstance(volume, dict):
+                            merged.update(volume)
+                        if isinstance(analysis, dict):
+                            merged.update(analysis)
+                            if isinstance(analysis.get("volume"), dict):
+                                merged.update(analysis["volume"])
+                        if merged:
+                            vol = merged.get("monthlyPcQcCnt", "-")
+                            mob = merged.get("monthlyMobileQcCnt", "-")
+                            comp = merged.get("compIdx", merged.get("competitionIndex", "-"))
+                            prod_cnt = merged.get("totalProductCount", merged.get("productCount", "-"))
                             parts.append(f"  - PC 검색량: {vol}, 모바일 검색량: {mob}, 경쟁강도: {comp}, 상품 수: {prod_cnt}")
                             # 클릭률 등 추가 데이터
-                            pc_ctr = analysis.get("monthlyPcClkCnt", "")
-                            mob_ctr = analysis.get("monthlyMobileClkCnt", "")
+                            pc_ctr = merged.get("monthlyPcClkCnt", "")
+                            mob_ctr = merged.get("monthlyMobileClkCnt", "")
                             if pc_ctr:
                                 parts.append(f"  - PC 클릭수: {pc_ctr}, 모바일 클릭수: {mob_ctr}")
                     except (json.JSONDecodeError, TypeError):
