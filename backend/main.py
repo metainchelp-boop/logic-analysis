@@ -2072,12 +2072,23 @@ async def ai_feedback_all(req: AiFeedbackAllRequest, current_user: dict = Depend
         def _call_claude():
             return client.messages.create(
                 model="claude-sonnet-4-6",
-                max_tokens=4000,
+                # 여러 섹션 + 마지막 'METAINC 종합 인사이트'까지 한 번에 생성하므로
+                # 4000 토큰으로는 마지막 요약이 잘리는 사례가 있어 상향(8000).
+                # max_tokens는 실제 생성된 토큰만 과금되어 비용 영향은 최소.
+                max_tokens=8000,
                 messages=[{"role": "user", "content": user_content}],
                 system=system_prompt
             )
 
         message = await asyncio.to_thread(_call_claude)
+
+        # 출력이 토큰 한도로 잘린 경우 감지 (인사이트가 중간에 끊기는 문제 추적용)
+        if getattr(message, "stop_reason", None) == "max_tokens":
+            logger.warning(
+                f"[feedback-all] 응답이 max_tokens 한도로 잘렸습니다 "
+                f"(keyword='{req.keyword}', output_tokens={getattr(message.usage, 'output_tokens', '?')}). "
+                f"max_tokens 추가 상향을 검토하세요."
+            )
 
         full_text = message.content[0].text if message.content else ""
 
