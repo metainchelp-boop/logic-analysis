@@ -436,6 +436,7 @@ class KeywordExposureRequest(BaseModel):
     product_url: str
     product_name: str = ""
     keyword: str = ""
+    extra_keywords: List[str] = []   # 연관/황금 키워드 등 추가 후보 (대체 추천용)
 
 @app.post("/api/rank/keyword-exposure")
 async def keyword_exposure(req: KeywordExposureRequest, current_user: dict = Depends(get_current_user)):
@@ -466,10 +467,24 @@ async def keyword_exposure(req: KeywordExposureRequest, current_user: dict = Dep
             if not re.match(r'^\d+\s\d+$', combo):
                 keywords.add(combo)
 
-        if not keywords:
-            return {"success": True, "data": {"product_name": product_name, "results": []}}
+        # 후보 키워드 구성: 연관/황금 키워드(추가) 우선 + 상품명 키워드, 메인 키워드 제외, 최대 10개
+        #   (대체 추천 기능 #10 — 후보 수를 제한해 순위조회 API 호출/속도를 통제)
+        main_kw = (req.keyword or "").strip().lower()
+        extra = [k.strip() for k in (req.extra_keywords or []) if k and k.strip()]
+        candidates, _seen = [], set()
+        for k in extra + sorted(keywords):
+            kl = k.strip().lower()
+            if not kl or kl == main_kw or kl in _seen:
+                continue
+            _seen.add(kl)
+            candidates.append(k.strip())
+            if len(candidates) >= 10:
+                break
 
-        # 병렬로 순위 조회 (max_pages=3으로 제한 — 속도 최적화)
+        if not candidates:
+            return {"success": True, "data": {"product_name": product_name, "results": [], "recommended": []}}
+
+        # 병렬로 순위 조회 (max_pages=3으로 제한 — 속도 최적화, find_product_rank는 429 재시도 적용됨)
         results = []
         def check_one(kw):
             try:
@@ -479,20 +494,25 @@ async def keyword_exposure(req: KeywordExposureRequest, current_user: dict = Dep
                 return {"keyword": kw, "rank": None, "page": None}
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-            futures = {executor.submit(check_one, kw): kw for kw in keywords}
+            futures = {executor.submit(check_one, kw): kw for kw in candidates}
             for future in concurrent.futures.as_completed(futures):
                 results.append(future.result())
 
         # 순위 있는 것 우선, 순위순 정렬
         results.sort(key=lambda x: (x["rank"] is None, x["rank"] or 9999))
 
+        # 대체 추천: 노출 중인(순위 있는) 키워드 상위 5개
+        recommended = [r for r in results if r["rank"] is not None][:5]
+
         return {
             "success": True,
             "data": {
                 "product_name": product_name,
-                "total_keywords": len(keywords),
+                "keyword": req.keyword,
+                "total_keywords": len(candidates),
                 "exposed_count": sum(1 for r in results if r["rank"] is not None),
-                "results": results
+                "results": results,
+                "recommended": recommended,
             }
         }
     except Exception as e:

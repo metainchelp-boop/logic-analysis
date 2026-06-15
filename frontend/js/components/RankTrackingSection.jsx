@@ -1,5 +1,5 @@
 /* RankTrackingSection — 순위 추적 */
-window.RankTrackingSection = function RankTrackingSection({ products, refreshProducts, searchedKeyword, searchedProductUrl, cachedProductName, onNavigateToClient, canEdit, onRankResult }) {
+window.RankTrackingSection = function RankTrackingSection({ products, refreshProducts, searchedKeyword, searchedProductUrl, cachedProductName, relatedKeywords, onNavigateToClient, canEdit, onRankResult }) {
     const { useState, useEffect, useRef } = React;
     const [showAddForm, setShowAddForm] = useState(false);
     const [newUrl, setNewUrl] = useState('');
@@ -70,13 +70,14 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
         // cachedProductName이 아직 없으면 대기 (나중에 prop이 채워지면 재실행)
         if (!cachedProductName) return;
 
-        var key = 'exposure::' + searchedProductUrl + '::' + cachedProductName;
+        var _extraKws = (relatedKeywords || []).filter(Boolean);
+        var key = 'exposure::' + searchedProductUrl + '::' + cachedProductName + '::' + _extraKws.length;
         if (lastExposureKey.current === key) return;
         lastExposureKey.current = key;
 
         setExposureLoading(true);
         setExposureResult(null);
-        api.post('/rank/keyword-exposure', { product_url: searchedProductUrl, keyword: searchedKeyword, product_name: cachedProductName })
+        api.post('/rank/keyword-exposure', { product_url: searchedProductUrl, keyword: searchedKeyword, product_name: cachedProductName, extra_keywords: _extraKws })
             .then(function(res) {
                 if (res && res.success && res.data) {
                     setExposureResult(res.data);
@@ -89,7 +90,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                 toast.error('키워드 노출 분석 요청 실패');
                 setExposureLoading(false);
             });
-    }, [searchedProductUrl, searchedKeyword, cachedProductName]);
+    }, [searchedProductUrl, searchedKeyword, cachedProductName, relatedKeywords]);
 
     // 분석 중인 상품이 추적 등록돼 있으면 30일 순위 추이 차트용 이력을 미리 로드
     useEffect(function() {
@@ -331,6 +332,28 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                                 <div className="k">노출률</div>
                             </div>
                         </div>
+
+                        {/* 💡 노출 중인 추천 키워드 (대체 추천) — #10 */}
+                        {exposureResult.recommended && exposureResult.recommended.length > 0 && (
+                            <div style={{ background: '#f5f3ff', border: '1px solid #ddd6fe', borderRadius: 12, padding: '14px 16px', marginBottom: 16 }}>
+                                <div style={{ fontSize: 13, fontWeight: 800, color: '#6d28d9', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                    💡 노출 중인 추천 키워드
+                                </div>
+                                <div style={{ fontSize: 12, color: '#64748b', marginBottom: 10, lineHeight: 1.5 }}>
+                                    검색 키워드로 미노출이어도, 아래 키워드로는 지금 노출 중입니다 — 상품명·태그·광고에 활용해 노출을 확보하세요.
+                                </div>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                                    {exposureResult.recommended.map(function(r, idx) {
+                                        return (
+                                            <span key={idx} style={{ background: '#fff', border: '1px solid #ddd6fe', borderRadius: 999, padding: '6px 12px', fontSize: 13, fontWeight: 600, color: '#1e293b', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                                                {r.keyword}
+                                                <span style={{ fontWeight: 800, color: r.rank <= 10 ? '#16a34a' : '#ca8a04' }}>{r.rank}위</span>
+                                            </span>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        )}
 
                         {/* 노출 / 미노출 — 시안처럼 전체폭 가로 줄바꿈 */}
                         <div>
