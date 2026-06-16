@@ -304,36 +304,26 @@ def my_clients(current_user: dict = Depends(get_current_user)):
         is_adm = _is_admin(current_user)
         user_role = current_user.get("role", "viewer")
 
-        # admin/superadmin/viewer → 전체 업체 조회, manager → 본인 등록분만
+        # admin/superadmin/viewer → 전체 업체, manager → 본인 등록분만
+        #   (상관 서브쿼리 제거 + latest_ranks 제거 + analyzed_keywords 최신 1건만 → 대량 업체 시 빠름)
         if is_adm or user_role == "viewer":
-            clients = conn.execute("""
-                SELECT c.*,
-                    (SELECT COUNT(*) FROM client_analyses ca WHERE ca.client_id = c.id) as analysis_count,
-                    (SELECT MAX(ca.updated_at) FROM client_analyses ca WHERE ca.client_id = c.id) as last_analyzed
-                FROM clients c
-                WHERE c.status = 'active'
-                ORDER BY c.updated_at DESC
-            """).fetchall()
+            clients = conn.execute(
+                "SELECT * FROM clients WHERE status='active' ORDER BY updated_at DESC"
+            ).fetchall()
         else:
-            clients = conn.execute("""
-                SELECT c.*,
-                    (SELECT COUNT(*) FROM client_analyses ca WHERE ca.client_id = c.id) as analysis_count,
-                    (SELECT MAX(ca.updated_at) FROM client_analyses ca WHERE ca.client_id = c.id) as last_analyzed
-                FROM clients c
-                WHERE c.status = 'active'
-                  AND (c.created_by = ? OR c.created_by IS NULL OR c.created_by = '')
-                ORDER BY c.updated_at DESC
-            """, (user_id,)).fetchall()
+            clients = conn.execute(
+                "SELECT * FROM clients WHERE status='active' "
+                "AND (created_by = ? OR created_by IS NULL OR created_by = '') "
+                "ORDER BY updated_at DESC",
+                (user_id,)
+            ).fetchall()
 
-        # --- 최적화: N+1 쿼리 → 벌크 3회 쿼리로 통합 ---
         client_ids = [c['id'] for c in clients]
-
         if not client_ids:
             return {"success": True, "data": []}
-
         placeholders = ','.join('?' * len(client_ids))
 
-        # 1) 전체 업체의 분석 키워드를 한 번에 조회
+        # 분석 이력 벌크 1회 (analyzed_date/updated_at DESC) → 개수/최신만 사용
         all_analyses = conn.execute(
             f"""SELECT client_id, keyword, product_url, analyzed_date, updated_at
                 FROM client_analyses
@@ -341,49 +331,32 @@ def my_clients(current_user: dict = Depends(get_current_user)):
                 ORDER BY analyzed_date DESC, updated_at DESC""",
             client_ids
         ).fetchall()
-
-        # client_id별로 그룹핑
         analyses_map = {}
         for a in all_analyses:
-            a_dict = dict(a)
-            cid = a_dict.pop('client_id')
-            analyses_map.setdefault(cid, []).append(a_dict)
+            d = dict(a); cid = d.pop('client_id')
+            analyses_map.setdefault(cid, []).append(d)
 
-        # 2) 전체 업체의 최근 순위를 한 번에 조회
-        all_ranks = conn.execute(
-            f"""SELECT client_id, keyword, rank_position, checked_at
-                FROM client_rank_history
-                WHERE client_id IN ({placeholders})
-                AND id IN (
-                    SELECT MAX(id) FROM client_rank_history
-                    WHERE client_id IN ({placeholders})
-                    GROUP BY client_id, keyword
-                )""",
-            client_ids + client_ids
-        ).fetchall()
+        # 담당자(등록 직원) 이름 벌크 조회 (created_by → users.name)
+        mgr_ids = sorted({c['created_by'] for c in clients if c['created_by'] is not None})
+        mgr_map = {}
+        if mgr_ids:
+            mph = ','.join('?' * len(mgr_ids))
+            for u in conn.execute(
+                f"SELECT id, name, username FROM users WHERE id IN ({mph})", mgr_ids
+            ).fetchall():
+                mgr_map[u['id']] = (u['name'] or u['username'] or '')
 
-        # client_id별로 그룹핑
-        ranks_map = {}
-        for r in all_ranks:
-            r_dict = dict(r)
-            cid = r_dict.pop('client_id')
-            ranks_map.setdefault(cid, []).append(r_dict)
-
-        # 3) 결과 조립 (추가 DB 호출 없음)
         result = []
         for c in clients:
             row = dict(c)
             cid = c['id']
             kw_list = analyses_map.get(cid, [])
-            row['analyzed_keywords'] = kw_list
-
-            unique_keywords = list(set(a['keyword'] for a in kw_list))
-            row['unique_keyword_count'] = len(unique_keywords)
-
-            unique_dates = list(set(a['analyzed_date'] for a in kw_list if a.get('analyzed_date')))
-            row['total_analysis_days'] = len(unique_dates)
-
-            row['latest_ranks'] = ranks_map.get(cid, [])
+            row['analysis_count'] = len(kw_list)
+            row['last_analyzed'] = max((a['updated_at'] for a in kw_list), default=None)
+            row['unique_keyword_count'] = len({a['keyword'] for a in kw_list})
+            row['total_analysis_days'] = len({a['analyzed_date'] for a in kw_list if a.get('analyzed_date')})
+            row['analyzed_keywords'] = kw_list[:1]  # 프론트는 최신 1건만 사용
+            row['manager_name'] = mgr_map.get(row.get('created_by'), '')  # 담당자명
             result.append(row)
 
         return {"success": True, "data": result}
