@@ -70,6 +70,6 @@
 
     return React.createElement('div', {
       style: Object.assign({ position: 'relative', height: height, width: '100%' }, props.style || {})
-    }, React.createElement('canvas', { ref: canvasRef }));
+    }, React.createElement('canvas', { ref: canvasRef, id: props.canvasId }));
   };
 })();
