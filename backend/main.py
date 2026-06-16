@@ -654,7 +654,9 @@ def list_products(current_user: dict = Depends(get_current_user)):
     if needs_info_update:
         from starlette.background import BackgroundTask
 
-        async def _update_empty_products(items):
+        # def(동기)로 둬야 Starlette가 스레드풀에서 실행 → 블로킹 get_product_info가
+        # 이벤트 루프를 막지 않음 (async def면 루프에서 await되어 워커 전체가 멈춤)
+        def _update_empty_products(items):
             for p in items:
                 try:
                     keywords = p.get("keywords", [])
