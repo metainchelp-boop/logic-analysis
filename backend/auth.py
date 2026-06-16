@@ -4,8 +4,11 @@ JWT-based authentication with SQLite database, bcrypt hashing, and role-based ac
 """
 
 import os
+import time
 import sqlite3
 import logging
+import threading
+from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 from enum import Enum
@@ -20,6 +23,32 @@ from pydantic import BaseModel, Field
 # ============================================================================
 
 logger = logging.getLogger(__name__)
+
+# ============================================================================
+# 로그인 레이트 리밋 (무차별 대입 방지) — 인메모리(워커당), (IP+username) 단위
+#   한도는 넉넉히: 사무실 공유 IP에서도 정상 사용자는 절대 안 걸리도록 username별 분리
+# ============================================================================
+_login_attempts = defaultdict(list)
+_login_rate_lock = threading.Lock()
+LOGIN_RATE_LIMIT = 20       # 최대 시도 횟수
+LOGIN_RATE_WINDOW = 300     # 윈도우(초) — 5분
+
+def _login_rate_ok(key: str) -> bool:
+    """(IP+username)당 5분 내 20회 초과 시 False. 스레드풀 실행 대비 락 보호."""
+    now = time.time()
+    cutoff = now - LOGIN_RATE_WINDOW
+    with _login_rate_lock:
+        bucket = [t for t in _login_attempts.get(key, []) if t > cutoff]
+        if len(bucket) >= LOGIN_RATE_LIMIT:
+            _login_attempts[key] = bucket
+            return False
+        bucket.append(now)
+        _login_attempts[key] = bucket
+        # 메모리 누적 방지: 항목이 많아지면 만료된 키 정리
+        if len(_login_attempts) > 5000:
+            for k in [k for k, v in list(_login_attempts.items()) if not v or v[-1] < cutoff]:
+                _login_attempts.pop(k, None)
+        return True
 
 # Database configuration
 DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
@@ -501,6 +530,15 @@ def login(request: LoginRequest, request_obj: Request) -> LoginResponse:
     Returns JWT token and user information.
     """
     try:
+        # 무차별 대입 방지: (IP+username)당 5분 20회 초과 시 차단
+        try:
+            _ip = request_obj.client.host if (request_obj and request_obj.client) else ''
+        except Exception:
+            _ip = ''
+        if not _login_rate_ok(f"{_ip}|{request.username}"):
+            logger.warning(f"로그인 시도 제한 초과: ip={_ip} user={request.username}")
+            raise HTTPException(status_code=429, detail="로그인 시도가 너무 많습니다. 잠시 후 다시 시도해주세요.")
+
         user = get_user_by_username(request.username)
 
         if not user or not verify_password(request.password, user.get("password_hash", "")):
