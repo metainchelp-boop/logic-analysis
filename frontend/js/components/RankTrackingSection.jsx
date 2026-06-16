@@ -351,7 +351,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                     <div className="fade-in" style={{ marginTop: 16 }}>
                         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginBottom: 12 }}>
                             <span className="ps ps-g">노출 {exposureResult.exposed_count}개</span>
-                            <span className="ps ps-r">미노출 {unexposed.length}개</span>
+                            <span className="ps ps-r">300위 밖 {unexposed.length}개</span>
                             <span className="ps ps-n">전체 {exposureResult.total_keywords}개</span>
                         </div>
 
@@ -363,7 +363,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                             </div>
                             <div className="ratecard">
                                 <div className="v" style={{ color: 'var(--red)' }}>{unexposed.length}</div>
-                                <div className="k">미노출 키워드</div>
+                                <div className="k">300위 밖 키워드</div>
                             </div>
                             <div className="ratecard">
                                 <div className="v" style={{ color: 'var(--pur)' }}>{exposureRate}%</div>
@@ -378,7 +378,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                                     💡 노출 중인 추천 키워드
                                 </div>
                                 <div style={{ fontSize: 12, color: '#64748b', marginBottom: 10, lineHeight: 1.5 }}>
-                                    검색 키워드로 미노출이어도, 아래 키워드로는 지금 노출 중입니다 — 상품명·태그·광고에 활용해 노출을 확보하세요.
+                                    검색 키워드가 상위 300위 밖이어도, 아래 키워드로는 지금 노출 중입니다 — 상품명·태그·광고에 활용해 노출을 확보하세요.
                                 </div>
                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                                     {exposureResult.recommended.map(function(r, idx) {
@@ -412,7 +412,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                             </div>
 
                             <div style={{ fontSize: 13, fontWeight: 800, color: '#ef4444', margin: '16px 0 8px', display: 'flex', alignItems: 'center', gap: 6 }}>
-                                <span>●</span> 미노출 키워드
+                                <span>●</span> 300위 밖 키워드
                             </div>
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                                 {unexposed.map(function(r, idx) {

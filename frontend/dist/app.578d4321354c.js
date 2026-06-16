@@ -2161,7 +2161,7 @@ window.RankTrackingSection = function RankTrackingSection({
       className: "ps ps-g"
     }, "\uB178\uCD9C ", exposureResult.exposed_count, "\uAC1C"), /*#__PURE__*/React.createElement("span", {
       className: "ps ps-r"
-    }, "\uBBF8\uB178\uCD9C ", unexposed.length, "\uAC1C"), /*#__PURE__*/React.createElement("span", {
+    }, "300\uC704 \uBC16 ", unexposed.length, "\uAC1C"), /*#__PURE__*/React.createElement("span", {
       className: "ps ps-n"
     }, "\uC804\uCCB4 ", exposureResult.total_keywords, "\uAC1C")), /*#__PURE__*/React.createElement("div", {
       className: "grid3",
@@ -2186,7 +2186,7 @@ window.RankTrackingSection = function RankTrackingSection({
       }
     }, unexposed.length), /*#__PURE__*/React.createElement("div", {
       className: "k"
-    }, "\uBBF8\uB178\uCD9C \uD0A4\uC6CC\uB4DC")), /*#__PURE__*/React.createElement("div", {
+    }, "300\uC704 \uBC16 \uD0A4\uC6CC\uB4DC")), /*#__PURE__*/React.createElement("div", {
       className: "ratecard"
     }, /*#__PURE__*/React.createElement("div", {
       className: "v",
@@ -2220,7 +2220,7 @@ window.RankTrackingSection = function RankTrackingSection({
         marginBottom: 10,
         lineHeight: 1.5
       }
-    }, "\uAC80\uC0C9 \uD0A4\uC6CC\uB4DC\uB85C \uBBF8\uB178\uCD9C\uC774\uC5B4\uB3C4, \uC544\uB798 \uD0A4\uC6CC\uB4DC\uB85C\uB294 \uC9C0\uAE08 \uB178\uCD9C \uC911\uC785\uB2C8\uB2E4 \u2014 \uC0C1\uD488\uBA85\xB7\uD0DC\uADF8\xB7\uAD11\uACE0\uC5D0 \uD65C\uC6A9\uD574 \uB178\uCD9C\uC744 \uD655\uBCF4\uD558\uC138\uC694."), /*#__PURE__*/React.createElement("div", {
+    }, "\uAC80\uC0C9 \uD0A4\uC6CC\uB4DC\uAC00 \uC0C1\uC704 300\uC704 \uBC16\uC774\uC5B4\uB3C4, \uC544\uB798 \uD0A4\uC6CC\uB4DC\uB85C\uB294 \uC9C0\uAE08 \uB178\uCD9C \uC911\uC785\uB2C8\uB2E4 \u2014 \uC0C1\uD488\uBA85\xB7\uD0DC\uADF8\xB7\uAD11\uACE0\uC5D0 \uD65C\uC6A9\uD574 \uB178\uCD9C\uC744 \uD655\uBCF4\uD558\uC138\uC694."), /*#__PURE__*/React.createElement("div", {
       style: {
         display: 'flex',
         flexWrap: 'wrap',
@@ -2285,7 +2285,7 @@ window.RankTrackingSection = function RankTrackingSection({
         alignItems: 'center',
         gap: 6
       }
-    }, /*#__PURE__*/React.createElement("span", null, "\u25CF"), " \uBBF8\uB178\uCD9C \uD0A4\uC6CC\uB4DC"), /*#__PURE__*/React.createElement("div", {
+    }, /*#__PURE__*/React.createElement("span", null, "\u25CF"), " 300\uC704 \uBC16 \uD0A4\uC6CC\uB4DC"), /*#__PURE__*/React.createElement("div", {
       style: {
         display: 'flex',
         flexWrap: 'wrap',
@@ -15132,7 +15132,6 @@ window.ClientDiagnosticsSection = function ClientDiagnosticsSection() {
     }))));
   };
   var byStatus = data && data.byStatus || {};
-  var orphan = data && data.orphanActive || [];
   var recentInactive = data && data.recentInactive || [];
   return React.createElement('div', {
     className: 'card',
@@ -15175,7 +15174,7 @@ window.ClientDiagnosticsSection = function ClientDiagnosticsSection() {
       marginBottom: 16,
       lineHeight: 1.6
     }
-  }, "'진행중 업체 일부가 사라짐' 점검용입니다. 아래 '등록자 없는 진행중 업체'가 있으면, manager 권한 사용자에게는 그 업체가 보이지 않아 사라진 것처럼 느껴질 수 있습니다."), loading && React.createElement('div', {
+  }, "업체 데이터 점검용입니다. 상태별 업체 수와 최근 일시중지/종료된 업체를 확인할 수 있습니다."), loading && React.createElement('div', {
     style: {
       textAlign: 'center',
       padding: 20,
@@ -15296,52 +15295,9 @@ window.ClientDiagnosticsSection = function ClientDiagnosticsSection() {
         color: cc.color
       }
     }, byStatus[st] || 0));
-  })), /* 등록자 없는 active 업체 */
-  React.createElement('div', {
-    style: {
-      fontSize: 13,
-      fontWeight: 700,
-      color: '#334155',
-      margin: '4px 0 8px',
-      display: 'flex',
-      alignItems: 'center',
-      gap: 8
-    }
-  }, '등록자(created_by) 없는 진행중 업체', React.createElement('span', {
-    style: {
-      fontSize: 11,
-      padding: '2px 8px',
-      borderRadius: 10,
-      background: orphan.length ? '#fee2e2' : '#dcfce7',
-      color: orphan.length ? '#dc2626' : '#16a34a',
-      fontWeight: 600
-    }
-  }, orphan.length + '건')), orphan.length === 0 ? React.createElement('div', {
-    style: {
-      fontSize: 12,
-      color: '#94a3b8',
-      marginBottom: 20
-    }
-  }, '없음 — 이 항목이 원인은 아닙니다.') : React.createElement('div', {
-    style: {
-      marginBottom: 20
-    }
-  }, renderTable(orphan, [{
-    key: 'id',
-    label: 'ID'
-  }, {
-    key: 'name',
-    label: '업체명'
-  }, {
-    key: 'created_by',
-    label: '등록자'
-  }, {
-    key: 'created_at',
-    label: '등록일',
-    render: function (v) {
-      return (v || '').slice(0, 16);
-    }
-  }])), /* 최근 paused/terminated */
+  })), /* (등록자 없는 진행중 업체 항목 제거 — clients.created_by가 NOT NULL이라 항상 0건이라 무의미) */
+
+  /* 최근 paused/terminated */
   React.createElement('div', {
     style: {
       fontSize: 13,
@@ -16720,27 +16676,28 @@ window.ChatWidget = function ChatWidget({
 
 /* ==================== 정적 스타일 (렌더 밖 — 매번 재생성 방지) ==================== */
 var _navBtnBase = {
-  padding: '6px 14px',
+  padding: '7px 16px',
   borderRadius: 8,
   cursor: 'pointer',
   fontSize: 13,
   transition: 'all 0.2s'
 };
 var _navBtnActive = Object.assign({}, _navBtnBase, {
-  background: 'rgba(59,130,246,0.9)',
+  background: '#3b82f6',
   color: '#fff',
-  border: 'none',
-  fontWeight: 600
+  border: '1px solid #3b82f6',
+  fontWeight: 700
 });
 var _navBtnInactive = Object.assign({}, _navBtnBase, {
-  background: 'rgba(255,255,255,0.08)',
-  color: 'rgba(255,255,255,0.75)',
-  border: '1px solid rgba(255,255,255,0.12)',
-  fontWeight: 400
+  background: '#f1f5f9',
+  color: '#475569',
+  border: '1px solid #e2e8f0',
+  fontWeight: 500
 });
 var _navUserStyle = {
-  color: 'rgba(255,255,255,0.7)',
-  fontSize: 13
+  color: '#475569',
+  fontSize: 13,
+  fontWeight: 600
 };
 var _navLogoutStyle = {
   background: 'rgba(239,68,68,0.15)',
@@ -16754,27 +16711,27 @@ var _navLogoutStyle = {
 var _topbarContainer = {
   display: 'flex',
   alignItems: 'center',
-  justifyContent: 'space-between',
+  justifyContent: 'flex-start',
   flexWrap: 'wrap',
   minHeight: 48,
   padding: '8px 24px',
-  gap: 6
+  gap: 10
 };
 var _versionBadge = {
   fontSize: 11,
-  color: 'rgba(255,255,255,0.4)',
-  background: 'rgba(255,255,255,0.06)',
+  color: '#94a3b8',
+  background: '#f1f5f9',
   padding: '2px 8px',
   borderRadius: 10,
   fontWeight: 400
 };
 var _healthBadge = {
-  background: 'rgba(16,185,129,0.2)',
-  color: '#34d399',
+  background: '#dcfce7',
+  color: '#16a34a',
   fontSize: 11,
   padding: '2px 8px',
   borderRadius: 10,
-  fontWeight: 400
+  fontWeight: 600
 };
 window.App = function App() {
   const {
@@ -18296,7 +18253,7 @@ window.App = function App() {
         setCurrentPage('home');
       }
     }, React.createElement('img', {
-      src: '/img/logo_dark.png',
+      src: '/img/logo_light.png',
       alt: 'META INC',
       style: {
         height: 28,
@@ -18312,8 +18269,9 @@ window.App = function App() {
       style: {
         display: 'flex',
         alignItems: 'center',
-        gap: 6,
-        flexWrap: 'wrap'
+        gap: 16,
+        flexWrap: 'wrap',
+        marginLeft: 8
       }
     }, React.createElement('button', {
       onClick: function () {
@@ -18347,7 +18305,8 @@ window.App = function App() {
       style: {
         display: 'flex',
         alignItems: 'center',
-        gap: 8
+        gap: 8,
+        marginLeft: 'auto'
       }
     }, React.createElement('span', {
       style: _navUserStyle
