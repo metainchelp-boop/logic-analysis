@@ -1172,6 +1172,7 @@ window.App = function App() {
 
             /* 등록 업체 리스트 */
             React.createElement(window.ClientListSection, {
+                currentUser: currentUser,
                 onClientClick: handleClientClick,
                 onNavigateToClient: handleNavigateToClient
             }),

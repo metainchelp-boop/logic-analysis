@@ -9174,6 +9174,7 @@ window.SaveToClientSection = function SaveToClientSection({
  * 등록된 업체 카드를 가나다순으로 표시하고, 클릭 시 자동 분석 실행
  */
 window.ClientListSection = function ClientListSection({
+  currentUser,
   onClientClick,
   onNavigateToClient
 }) {
@@ -9189,6 +9190,12 @@ window.ClientListSection = function ClientListSection({
   var _s3 = useState('');
   var query = _s3[0];
   var setQuery = _s3[1];
+  var _s4 = useState(null);
+  var expandedMgr = _s4[0];
+  var setExpandedMgr = _s4[1];
+
+  // 상위 계정(관리자)만 담당자(등록 직원) 정보를 노출 (매니저는 본인 것만 보므로 불필요)
+  var isAdmin = !!(currentUser && (currentUser.role === 'admin' || currentUser.role === 'superadmin'));
 
   /* 업체 목록 로드 */
   var loadClients = useCallback(function () {
@@ -9415,9 +9422,16 @@ window.ClientListSection = function ClientListSection({
       style: {
         fontSize: 11,
         color: '#dc2626',
+        marginBottom: isAdmin ? 4 : 12
+      }
+    }, '마지막 분석: ' + lastDate), isAdmin && React.createElement('div', {
+      style: {
+        fontSize: 11,
+        color: '#6d28d9',
+        fontWeight: 700,
         marginBottom: 12
       }
-    }, '마지막 분석: ' + lastDate)), /* 업체 상세 보기 버튼 */
+    }, '👤 담당자: ' + (client.manager_name || '-'))), /* 업체 상세 보기 버튼 */
     React.createElement('button', {
       onClick: function () {
         handleViewClient(client);
@@ -9436,7 +9450,113 @@ window.ClientListSection = function ClientListSection({
         cursor: 'pointer'
       }
     }, '업체 상세 보기 →'));
-  }))));
+  })), /* 담당자별 등록 현황 (상위 계정 전용) */
+  isAdmin && !loading && clients.length > 0 && function () {
+    var groups = {};
+    clients.forEach(function (c) {
+      var m = c.manager_name || '(미지정)';
+      (groups[m] = groups[m] || []).push(c);
+    });
+    var names = Object.keys(groups).sort(function (a, b) {
+      return groups[b].length - groups[a].length;
+    });
+    return React.createElement('div', {
+      style: {
+        marginTop: 28
+      }
+    }, React.createElement('div', {
+      style: {
+        fontSize: 16,
+        fontWeight: 800,
+        color: '#1e293b',
+        marginBottom: 4,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8
+      }
+    }, '👥 담당자별 등록 현황', React.createElement('span', {
+      style: {
+        fontSize: 12,
+        fontWeight: 500,
+        color: '#94a3b8'
+      }
+    }, '(' + names.length + '명)')), React.createElement('div', {
+      style: {
+        fontSize: 12,
+        color: '#64748b',
+        marginBottom: 12
+      }
+    }, '담당자를 클릭하면 등록한 업체 목록을 볼 수 있어요.'), React.createElement('div', {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8
+      }
+    }, names.map(function (m) {
+      var list = groups[m];
+      var open = expandedMgr === m;
+      return React.createElement('div', {
+        key: m,
+        style: {
+          border: '1px solid #e9d5ff',
+          borderRadius: 12,
+          overflow: 'hidden',
+          background: '#faf5ff'
+        }
+      }, React.createElement('div', {
+        onClick: function () {
+          setExpandedMgr(open ? null : m);
+        },
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '10px 14px',
+          cursor: 'pointer',
+          fontWeight: 700,
+          color: '#6d28d9'
+        }
+      }, React.createElement('span', null, React.createElement('span', {
+        style: {
+          color: '#a78bfa',
+          marginRight: 6,
+          fontSize: 11
+        }
+      }, open ? '▼' : '▶'), '👤 ' + m), React.createElement('span', {
+        style: {
+          fontSize: 12,
+          fontWeight: 800,
+          background: '#ede9fe',
+          color: '#6d28d9',
+          padding: '2px 10px',
+          borderRadius: 999
+        }
+      }, list.length + '개')), open && React.createElement('div', {
+        style: {
+          padding: '4px 14px 12px',
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 6
+        }
+      }, list.map(function (c) {
+        return React.createElement('span', {
+          key: c.id,
+          onClick: function () {
+            handleViewClient(c);
+          },
+          style: {
+            fontSize: 12,
+            background: '#fff',
+            border: '1px solid #ddd6fe',
+            borderRadius: 8,
+            padding: '4px 10px',
+            color: '#1e293b',
+            cursor: 'pointer'
+          }
+        }, c.name || '(이름 없음)');
+      })));
+    })));
+  }()));
 };
 
 ;/* ===== js/components/LoginPage.jsx ===== */
@@ -10878,7 +10998,14 @@ window.ClientDashboard = function ClientDashboard({
         fontWeight: 600,
         fontSize: 14
       }
-    }, c.name || c.business_name), /*#__PURE__*/React.createElement("div", {
+    }, c.name || c.business_name), currentUser && (currentUser.role === 'admin' || currentUser.role === 'superadmin') && /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: '#a78bfa',
+        fontWeight: 700,
+        marginTop: 2
+      }
+    }, "\uD83D\uDC64 \uB2F4\uB2F9\uC790: ", c.manager_name || '-'), /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 11,
         opacity: 0.7,
@@ -18793,6 +18920,7 @@ window.App = function App() {
     }
   }, autoSaveStatus === 'saving' ? '🔄 분석 완료 후 업체관리에 자동 저장됩니다...' : autoSaveStatus === 'saved' ? '✅ 업체관리 탭에 분석 기록이 자동 저장되었습니다' : autoSaveStatus === 'error' ? '⚠️ 자동 저장에 실패했습니다. 분석 완료 후 하단 "업체 등록/저장" 버튼을 이용해주세요' : ''), /* 등록 업체 리스트 */
   React.createElement(window.ClientListSection, {
+    currentUser: currentUser,
     onClientClick: handleClientClick,
     onNavigateToClient: handleNavigateToClient
   }), /* 푸터 */

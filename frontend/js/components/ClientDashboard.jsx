@@ -335,6 +335,9 @@ window.ClientDashboard = function ClientDashboard({ currentUser, onRunAnalysis, 
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                                         <div style={{ flex: 1, minWidth: 0 }}>
                                             <div style={{ fontWeight: 600, fontSize: 14 }}>{c.name || c.business_name}</div>
+                                            {currentUser && (currentUser.role === 'admin' || currentUser.role === 'superadmin') && (
+                                                <div style={{ fontSize: 11, color: '#a78bfa', fontWeight: 700, marginTop: 2 }}>👤 담당자: {c.manager_name || '-'}</div>
+                                            )}
                                             <div style={{ fontSize: 11, opacity: 0.7, marginTop: 2 }}>
                                                 {c.unique_keyword_count > 0 ? '키워드 ' + c.unique_keyword_count + '개' : ''}
                                                 {c.total_analysis_days > 0 ? ' | ' + c.total_analysis_days + '일 분석' : ''}
