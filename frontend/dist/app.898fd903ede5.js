@@ -16689,9 +16689,9 @@ var _navBtnActive = Object.assign({}, _navBtnBase, {
   fontWeight: 700
 });
 var _navBtnInactive = Object.assign({}, _navBtnBase, {
-  background: '#f1f5f9',
+  background: '#ffffff',
   color: '#475569',
-  border: '1px solid #e2e8f0',
+  border: '1px solid #f0d2d2',
   fontWeight: 500
 });
 var _navUserStyle = {
@@ -18288,7 +18288,7 @@ window.App = function App() {
         setCurrentPage('management');
       },
       style: navBtn(activePage === 'management')
-    }, '🏢 진행중 업체'), React.createElement('button', {
+    }, '📈 로직 분석'), React.createElement('button', {
       onClick: function () {
         setCurrentPage('guide');
       },
