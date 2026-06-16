@@ -7,6 +7,10 @@ __pycache__/
 data/
 data/backups/
 
+# Node (프론트 번들 빌드용 — CI/로컬에서 생성, 커밋 안 함)
+node_modules/
+package-lock.json
+
 # 쿠팡 관련 (비활성, 롤백됨)
 backend/coupang*.py
 frontend/js/components/CoupangAnalysisSection.jsx
