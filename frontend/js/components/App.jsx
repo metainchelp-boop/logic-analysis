@@ -28,7 +28,7 @@ window.App = function App() {
     // URL hash에서 현재 페이지 복원 (새로고침 시 탭 유지)
     var _getPageFromHash = function() {
         var hash = window.location.hash.replace('#', '');
-        var validPages = ['home', 'analysis', 'management', 'guide', 'users', 'settings'];
+        var validPages = ['home', 'analysis', 'management', 'guide', 'settings'];
         return validPages.indexOf(hash) !== -1 ? hash : 'home';
     };
     const [currentPage, setCurrentPage] = useState(_getPageFromHash);
@@ -1223,7 +1223,7 @@ window.App = function App() {
                     React.createElement('button', { onClick: function(){setCurrentPage('analysis');}, style: navBtn(activePage === 'analysis') }, '📊 스토어 분석'),
                     React.createElement('button', { onClick: function(){setCurrentPage('management');}, style: navBtn(activePage === 'management') }, '🏢 진행중 업체'),
                     React.createElement('button', { onClick: function(){setCurrentPage('guide');}, style: navBtn(activePage === 'guide') }, '📖 설명서'),
-                    (currentUser.role === 'admin' || currentUser.role === 'superadmin') && React.createElement('button', { onClick: function(){setCurrentPage('users');}, style: navBtn(activePage === 'users') }, '👥 직원'),
+                    // 👥 직원 탭 제거 — SSO(ERP 연동)로 계정 자동 관리, 로그인 이력/실행 건수는 ⚙️설정 탭으로 통합
                     currentUser.role === 'superadmin' && React.createElement('button', { onClick: function(){setCurrentPage('settings');}, style: navBtn(activePage === 'settings') }, '⚙️ 설정')
                 ),
                 React.createElement('div', { className: 'topbar-user-area', style: { display:'flex', alignItems:'center', gap:8 } },

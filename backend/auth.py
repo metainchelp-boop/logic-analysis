@@ -993,17 +993,19 @@ def get_analysis_stats(current_user: Dict[str, Any] = Depends(get_current_user))
 def get_login_logs(
     user_id: int,
     days: int = 7,
+    limit: int = 10,
     current_user: Dict[str, Any] = Depends(require_role(UserRole.ADMIN)),
 ):
-    """특정 직원의 최근 로그인 이력 조회 (관리자 전용)"""
+    """특정 직원의 최근 로그인 이력 조회 (관리자 전용) — 최신순 최대 limit개(기본 10)."""
     try:
+        limit = max(1, min(int(limit), 50))
         conn = _get_db_connection()
         cursor = conn.cursor()
         cursor.execute(
             """SELECT id, login_at, ip_address FROM login_logs
-               WHERE user_id = ? AND login_at >= datetime('now', '-' || ? || ' days')
-               ORDER BY login_at DESC LIMIT 50""",
-            (user_id, days),
+               WHERE user_id = ?
+               ORDER BY login_at DESC LIMIT ?""",
+            (user_id, limit),
         )
         rows = cursor.fetchall()
         conn.close()
