@@ -1185,22 +1185,22 @@ def fetch_detail_page_html(product_url: str) -> Optional[str]:
     try:
         logger.info(f"향상된 직접 요청 시도: {product_url[:60]}...")
         _assert_allowed_fetch_url(product_url)  # SSRF 가드
-        session = requests.Session()
-        session.headers.update(headers)
-        resp = session.get(product_url, timeout=15, allow_redirects=True)
+        with requests.Session() as session:  # 누수 방지: 컨텍스트 매니저로 자동 close
+            session.headers.update(headers)
+            resp = session.get(product_url, timeout=15, allow_redirects=True)
 
-        if len(resp.text) > 1000:
-            next_data_html = _extract_next_data_html(resp.text, product_url)
-            if next_data_html:
-                logger.info(f"__NEXT_DATA__ 파싱 성공: {len(next_data_html)}자")
-                return next_data_html
-            if resp.status_code == 200:
-                logger.info(f"향상된 직접 요청 성공: {len(resp.text)}자")
-                return resp.text
+            if len(resp.text) > 1000:
+                next_data_html = _extract_next_data_html(resp.text, product_url)
+                if next_data_html:
+                    logger.info(f"__NEXT_DATA__ 파싱 성공: {len(next_data_html)}자")
+                    return next_data_html
+                if resp.status_code == 200:
+                    logger.info(f"향상된 직접 요청 성공: {len(resp.text)}자")
+                    return resp.text
+                else:
+                    logger.warning(f"향상된 직접 요청: status={resp.status_code}, __NEXT_DATA__ 없음")
             else:
-                logger.warning(f"향상된 직접 요청: status={resp.status_code}, __NEXT_DATA__ 없음")
-        else:
-            logger.warning(f"향상된 직접 요청 실패: status={resp.status_code}, len={len(resp.text)}")
+                logger.warning(f"향상된 직접 요청 실패: status={resp.status_code}, len={len(resp.text)}")
     except Exception as e:
         logger.warning(f"향상된 직접 요청 실패: {e}")
 

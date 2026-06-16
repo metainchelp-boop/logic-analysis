@@ -84,6 +84,7 @@ def get_db():
     """Get database connection with WAL mode and Row factory"""
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")  # 쓰기 잠금 시 즉시 실패 대신 최대 30초 대기
     conn.row_factory = sqlite3.Row
     return conn
 
