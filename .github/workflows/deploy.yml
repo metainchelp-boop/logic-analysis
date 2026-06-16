@@ -12,6 +12,18 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # 프론트 번들 자동 빌드 — .jsx 수정 시 번들 재생성을 깜빡해도 항상 최신으로 배포.
+      # (실패해도 이후 SCP/재시작 단계 전이라 라이브에는 영향 없음 — 무중단)
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build frontend bundle
+        run: |
+          npm install --no-save @babel/core @babel/preset-react
+          node frontend/build.js
+
       - name: Deploy frontend to VPS
         uses: appleboy/scp-action@v0.1.7
         with:
