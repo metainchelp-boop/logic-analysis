@@ -467,14 +467,18 @@ def keyword_exposure(req: KeywordExposureRequest, current_user: dict = Depends(g
             if not re.match(r'^\d+\s\d+$', combo):
                 keywords.add(combo)
 
-        # 후보 키워드 구성: 연관/황금 키워드(추가) 우선 + 상품명 키워드, 메인 키워드 제외, 최대 10개
-        #   (대체 추천 기능 #10 — 후보 수를 제한해 순위조회 API 호출/속도를 통제)
-        main_kw = (req.keyword or "").strip().lower()
+        # 후보 키워드 구성: 검색한 '메인 키워드'를 맨 앞에 포함(그 키워드의 노출 여부를
+        #   함께 보여줘야 함) + 연관/황금 키워드(추가) + 상품명 키워드, 최대 10개
+        main_kw_raw = (req.keyword or "").strip()
+        main_kw = main_kw_raw.lower()
         extra = [k.strip() for k in (req.extra_keywords or []) if k and k.strip()]
         candidates, _seen = [], set()
+        if main_kw_raw:
+            candidates.append(main_kw_raw)
+            _seen.add(main_kw)
         for k in extra + sorted(keywords):
             kl = k.strip().lower()
-            if not kl or kl == main_kw or kl in _seen:
+            if not kl or kl in _seen:
                 continue
             _seen.add(kl)
             candidates.append(k.strip())
@@ -501,8 +505,8 @@ def keyword_exposure(req: KeywordExposureRequest, current_user: dict = Depends(g
         # 순위 있는 것 우선, 순위순 정렬
         results.sort(key=lambda x: (x["rank"] is None, x["rank"] or 9999))
 
-        # 대체 추천: 노출 중인(순위 있는) 키워드 상위 5개
-        recommended = [r for r in results if r["rank"] is not None][:5]
+        # 대체 추천: 노출 중인(순위 있는) '메인 키워드 외' 키워드 상위 5개
+        recommended = [r for r in results if r["rank"] is not None and r["keyword"].strip().lower() != main_kw][:5]
 
         return {
             "success": True,
