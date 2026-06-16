@@ -5,6 +5,7 @@ window.SearchBar = function SearchBar({ onSearch, loading, initialValues }) {
     const [companyName, setCompanyName] = useState('');
     const [htmlInput, setHtmlInput] = useState('');
     const [htmlExpanded, setHtmlExpanded] = useState(false);
+    const [manualUrl, setManualUrl] = useState('');  // 자동 추출 실패 시 안전망
 
     /* 북마클릿: 스마트스토어에서 클릭하면 HTML을 클립보드에 복사 */
     const bookmarkletCode = "javascript:(function(){try{var h=document.documentElement.outerHTML;navigator.clipboard.writeText(h).then(function(){alert('\\u2705 HTML '+Math.round(h.length/1024)+'KB \\ubcf5\\uc0ac \\uc644\\ub8cc!\\n\\n\\ub85c\\uc9c1\\ubd84\\uc11d \\ud398\\uc774\\uc9c0\\uc758 HTML \\ubd99\\uc5ec\\ub123\\uae30 \\uce78\\uc5d0 \\ubd99\\uc5ec\\ub123\\uc73c\\uc138\\uc694.');}).catch(function(e){var t=document.createElement('textarea');t.value=h;document.body.appendChild(t);t.select();document.execCommand('copy');document.body.removeChild(t);alert('\\u2705 HTML '+Math.round(h.length/1024)+'KB \\ubcf5\\uc0ac \\uc644\\ub8cc! \\ub85c\\uc9c1\\ubd84\\uc11d\\uc5d0 \\ubd99\\uc5ec\\ub123\\uc73c\\uc138\\uc694.');});}catch(e){alert('\\u274c \\ubcf5\\uc0ac \\uc2e4\\ud328: '+e.message);}})();";
@@ -25,7 +26,16 @@ window.SearchBar = function SearchBar({ onSearch, loading, initialValues }) {
         var html = (htmlInput || '').trim();
         if (html.length < 100) { try { toast.warn('상품 상세페이지 HTML을 붙여넣어주세요. (Ctrl+U 소스 전체 복사)'); } catch(e2) {} return; }
         var url = (typeof extractProductUrlFromHtml === 'function') ? extractProductUrlFromHtml(html) : '';
-        if (!url) { try { toast.error('HTML에서 상품 URL을 찾지 못했습니다. 상품 상세페이지의 전체 소스가 맞는지 확인해주세요.'); } catch(e2) {} return; }
+        // 자동 추출 실패 시: 수동 입력한 URL을 안전망으로 사용 (직원이 막히지 않도록)
+        if (!url) {
+            var mu = (manualUrl || '').trim().split('#')[0];
+            if (mu && /naver\.com\/(?:[\w-]+\/)*(?:products|catalog)\/\d+/.test(mu)) {
+                url = mu.split('?')[0];
+            } else {
+                try { toast.error('HTML에서 상품 URL을 못 찾았어요. 아래 "상품 URL 직접 입력" 칸에 상품 페이지 주소를 붙여넣어 주세요.'); } catch(e2) {}
+                return;
+            }
+        }
         onSearch(keyword.trim(), url, companyName.trim(), html);
     };
 
@@ -108,6 +118,22 @@ window.SearchBar = function SearchBar({ onSearch, loading, initialValues }) {
                         <button className="btn-search" type="submit" disabled={loading || !canSubmit} style={{ height: 44, marginBottom: 0, opacity: (loading || !canSubmit) ? 0.55 : 1 }} title={canSubmit ? '' : '업체명·키워드·HTML 3가지를 모두 입력하세요'}>
                             {loading ? <><span className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} /> 분석 중...</> : '분석 실행'}
                         </button>
+                    </div>
+
+                    {/* 2.5행: 상품 URL 직접 입력 (자동 추출 실패 시 안전망 — 평소엔 비워둬도 됨) */}
+                    <div>
+                        <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#6b7280', marginBottom: 4, letterSpacing: '0.02em' }}>
+                            상품 URL 직접 입력
+                            <span style={{ fontSize: 10, color: '#94a3b8', fontWeight: 400, marginLeft: 6 }}>선택 — HTML에서 URL 자동 인식이 안 될 때만 상품 페이지 주소를 붙여넣으세요</span>
+                        </label>
+                        <input
+                            className="search-input"
+                            type="text"
+                            placeholder="예: https://smartstore.naver.com/스토어/products/1234567890 (비워두면 HTML에서 자동 추출)"
+                            value={manualUrl}
+                            onChange={e => setManualUrl(e.target.value)}
+                            style={{ width: '100%', fontSize: 12 }}
+                        />
                     </div>
 
                     {/* 3행: 북마클릿 안내 (HTML 필드 바로 아래) */}

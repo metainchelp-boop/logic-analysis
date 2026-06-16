@@ -180,27 +180,36 @@ function getCTR(rank) {
 // 붙여넣은 상품 페이지 HTML에서 상품 URL 자동 추출 (URL 따로 입력 불필요)
 // 우선순위: og:url 메타 → canonical → HTML 내 네이버 쇼핑 상품 URL 패턴
 // 지원 호스트: smartstore / brand(브랜드스토어) / shopping(가격비교) + m. 서브도메인
-var _naverProductUrlRe = /https?:\/\/(?:m\.)?(?:smartstore|brand|shopping)\.naver\.com(?:\/[A-Za-z0-9_-]+)?\/(?:products|catalog)\/\d+/g;
+var _naverProductUrlRe = /https?:\/\/(?:[a-z0-9-]+\.)*(?:smartstore|brand|shopping)\.naver\.com(?:\/[A-Za-z0-9_-]+)?\/(?:products|catalog)\/\d+/g;
+// og:url/canonical 검증용 — 가격비교(search.shopping.naver.com/catalog/123)처럼
+// 도메인 바로 뒤에 catalog/products가 오는 경우까지 허용 (중간 경로 0개 이상)
+var _naverProductUrlTest = /naver\.com\/(?:[\w-]+\/)*(?:products|catalog)\/\d+/;
 function extractProductUrlFromHtml(html) {
     if (!html || typeof html !== 'string') return '';
     try {
+        // JSON(window 상태 등) 안의 URL은 슬래시가 "\/" 로 이스케이프돼 있어
+        // 정규식이 못 잡는다 → 사본에서 슬래시를 복원해 함께 검사한다.
+        var h = html.indexOf('\\/') >= 0 ? html.replace(/\\\//g, '/') : html;
         var m;
-        m = html.match(/<meta[^>]+property=["']og:url["'][^>]*content=["']([^"']+)["']/i)
-            || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]*property=["']og:url["']/i);
-        if (m && m[1] && /naver\.com\/.*\/(?:products|catalog)\/\d+/.test(m[1])) return m[1].split('?')[0];
-        m = html.match(/<link[^>]+rel=["']canonical["'][^>]*href=["']([^"']+)["']/i)
-            || html.match(/<link[^>]+href=["']([^"']+)["'][^>]*rel=["']canonical["']/i);
-        if (m && m[1] && /naver\.com\/.*\/(?:products|catalog)\/\d+/.test(m[1])) return m[1].split('?')[0];
+        m = h.match(/<meta[^>]+property=["']og:url["'][^>]*content=["']([^"']+)["']/i)
+            || h.match(/<meta[^>]+content=["']([^"']+)["'][^>]*property=["']og:url["']/i);
+        if (m && m[1] && _naverProductUrlTest.test(m[1])) return m[1].split('?')[0];
+        m = h.match(/<link[^>]+rel=["']canonical["'][^>]*href=["']([^"']+)["']/i)
+            || h.match(/<link[^>]+href=["']([^"']+)["'][^>]*rel=["']canonical["']/i);
+        if (m && m[1] && _naverProductUrlTest.test(m[1])) return m[1].split('?')[0];
         // 3) HTML 내 네이버 쇼핑 상품 URL 중 '가장 많이 등장하는 것' = 본 상품
         //    (추천/광고 상품은 보통 1번만 나옴 → 빈도로 본 상품 구별, 2회 이상만 신뢰)
         //    smartstore 외에 brand(브랜드스토어)·shopping(가격비교)·m. 모바일도 인식
-        var all = html.match(_naverProductUrlRe);
+        var all = h.match(_naverProductUrlRe);
         if (all && all.length) {
             var counts = {};
             for (var i = 0; i < all.length; i++) { var u = all[i].split('?')[0]; counts[u] = (counts[u] || 0) + 1; }
             var best = '', bestN = 0;
             for (var k in counts) { if (counts[k] > bestN) { bestN = counts[k]; best = k; } }
             if (best && bestN >= 2) return best;
+            // 2회 미만이라도 후보 상품 URL이 '단 하나'뿐이면 그것이 본 상품
+            // (추천/광고 상품이 섞이지 않은 경우 → 오인식 위험 없이 추출 성공률 향상)
+            if (best && Object.keys(counts).length === 1) return best;
         }
         // 못 찾으면 빈값 — '가짜 채널(/main/)·아무 상품번호'로 엉뚱한 상품을 잡는 것보다 안전.
         return '';
