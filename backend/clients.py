@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from fastapi import APIRouter, HTTPException, Query, Depends, status
 from pydantic import BaseModel, Field, validator
 
-from auth import get_current_user, require_role
+from auth import get_current_user, require_role, require_register_permission
 
 
 # Configure logging
@@ -655,7 +655,7 @@ def get_client(
 def create_new_client(
     client_data: ClientCreate,
     current_user: Dict = Depends(get_current_user),
-    role_check: None = Depends(require_role(["admin", "manager"])),
+    role_check: Dict = Depends(require_register_permission()),  # 등록=관리팀 매니저+최고관리자만
 ):
     """
     Create a new client.
