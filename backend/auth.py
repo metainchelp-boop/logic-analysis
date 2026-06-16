@@ -938,6 +938,57 @@ def get_analysis_counts(
         return {"success": False, "error": f"분석 횟수 조회 실패: {str(e)}", "data": {}}
 
 
+@router.get("/analysis-stats")
+def get_analysis_stats(current_user: Dict[str, Any] = Depends(get_current_user)):
+    """로직 분석 실행 건수 통계 — 설정 탭용 (최고관리자 전용).
+    전체 요약(총/이번 달/오늘) + 직원별 집계. daily_usage.query_count 기준."""
+    # require_role은 admin도 통과시키므로, '최고관리자만' 보장하려 명시적으로 검사
+    if current_user.get("role") != "superadmin":
+        raise HTTPException(status_code=403, detail="최고관리자만 접근 가능합니다.")
+    try:
+        from datetime import date as _date
+        today_str = _date.today().isoformat()
+        month_start = today_str[:8] + "01"  # 이번 달 1일 (YYYY-MM-01)
+        conn = _get_db_connection()
+        cur = conn.cursor()
+        total = cur.execute("SELECT COALESCE(SUM(query_count),0) FROM daily_usage").fetchone()[0]
+        today_total = cur.execute(
+            "SELECT COALESCE(SUM(query_count),0) FROM daily_usage WHERE usage_date=?", (today_str,)
+        ).fetchone()[0]
+        month_total = cur.execute(
+            "SELECT COALESCE(SUM(query_count),0) FROM daily_usage WHERE usage_date>=?", (month_start,)
+        ).fetchone()[0]
+        rows = cur.execute(
+            """SELECT u.id, u.username, u.name, u.role,
+                      COALESCE(SUM(du.query_count),0) AS total,
+                      COALESCE(SUM(CASE WHEN du.usage_date=? THEN du.query_count ELSE 0 END),0) AS today,
+                      COALESCE(SUM(CASE WHEN du.usage_date>=? THEN du.query_count ELSE 0 END),0) AS month
+               FROM users u
+               LEFT JOIN daily_usage du ON du.user_id = u.id
+               WHERE u.is_active = 1
+               GROUP BY u.id
+               ORDER BY total DESC, today DESC""",
+            (today_str, month_start)
+        ).fetchall()
+        per_user = [
+            {
+                "user_id": r["id"], "username": r["username"],
+                "name": r["name"] or r["username"], "role": r["role"],
+                "total": r["total"], "today": r["today"], "month": r["month"],
+            }
+            for r in rows
+        ]
+        conn.close()
+        return {
+            "success": True,
+            "total": total, "today": today_total, "this_month": month_total,
+            "per_user": per_user,
+        }
+    except Exception as e:
+        logger.error(f"분석 통계 조회 실패: {e}")
+        return {"success": False, "error": str(e), "total": 0, "today": 0, "this_month": 0, "per_user": []}
+
+
 @router.get("/users/{user_id}/login-logs")
 def get_login_logs(
     user_id: int,
