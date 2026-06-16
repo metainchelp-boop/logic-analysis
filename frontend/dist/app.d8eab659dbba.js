@@ -16826,6 +16826,16 @@ window.TopBar = function TopBar(props) {
   }())));
 };
 
+;/* ===== js/components/Footer.jsx ===== */
+/* Footer — 하단 푸터 (App.jsx에서 분리, 중복 제거) */
+window.Footer = function Footer() {
+  return React.createElement('footer', {
+    className: 'footer'
+  }, React.createElement('div', {
+    className: 'container'
+  }, '© 2026 메타아이앤씨 — 로직 분석 ' + APP_VERSION + ' | 네이버 쇼핑 키워드 분석 & 순위 추적'));
+};
+
 ;/* ===== js/components/App.jsx ===== */
 /* App — 메인 앱 컴포넌트 (v3 에이전시) */
 /* APP_VERSION은 utils.js에서 전역 선언 */
@@ -18368,11 +18378,7 @@ window.App = function App() {
     onClientClick: handleClientClick,
     onNavigateToClient: handleNavigateToClient
   }), /* 푸터 */
-  React.createElement('footer', {
-    className: 'footer'
-  }, React.createElement('div', {
-    className: 'container'
-  }, '© 2026 메타아이앤씨 — 로직 분석 ' + APP_VERSION + ' | 네이버 쇼핑 키워드 분석 & 순위 추적'))), React.createElement(window.ChatWidget, {
+  React.createElement(window.Footer, null)), React.createElement(window.ChatWidget, {
     currentUser: currentUser
   }));
   if (currentPage === 'management') return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.TopBar, {
@@ -18838,11 +18844,7 @@ window.App = function App() {
   (currentUser.role === 'admin' || currentUser.role === 'superadmin') && React.createElement(window.SectionErrorBoundary, {
     name: '알림 설정'
   }, React.createElement(NotificationSection, null)), /* 푸터 */
-  React.createElement('footer', {
-    className: 'footer'
-  }, React.createElement('div', {
-    className: 'container'
-  }, '© 2026 메타아이앤씨 — 로직 분석 ' + APP_VERSION + ' | 네이버 쇼핑 키워드 분석 & 순위 추적'))) /* report-main 닫기 */) /* report-shell 닫기 */), React.createElement(window.ChatWidget, {
+  React.createElement(window.Footer, null)) /* report-main 닫기 */) /* report-shell 닫기 */), React.createElement(window.ChatWidget, {
     currentUser: currentUser
   }));
 };
