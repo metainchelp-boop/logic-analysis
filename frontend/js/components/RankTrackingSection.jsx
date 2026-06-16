@@ -309,7 +309,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
                     <div>
                         <h3 className="rt-h3"><span className="rt-hic">📍</span>키워드별 노출 순위<span className="badge b-ok">✅ 실측</span></h3>
-                        <div className="rt-desc">상품명에서 추출한 키워드별로 네이버 쇼핑 검색 순위를 조회한 결과 (검색 범위: 상위 300개 상품)</div>
+                        <div className="rt-desc">상품명에서 추출한 키워드별로 네이버 쇼핑 검색 순위를 조회한 결과 (검색 범위: 상위 400개 상품)</div>
                     </div>
                     {canEdit !== false && <button className="btn btn-primary btn-sm" onClick={() => setShowAddForm(!showAddForm)}>
                         {showAddForm ? '취소' : '+ 상품 등록'}
