@@ -54,5 +54,6 @@
   "js/components/TopBar.jsx",
   "js/components/Footer.jsx",
   "js/components/AnalysisResults.jsx",
+  "js/analysis.jsx",
   "js/components/App.jsx"
 ]
