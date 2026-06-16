@@ -1293,8 +1293,8 @@ window.App = function App() {
 
             /* ==================== 보고서 레이아웃: 좌측 목차 + 본문 ==================== */
             React.createElement('div', { className: 'report-shell' },
-              /* 좌측 고정 목차 (와이드 화면 전용) */
-              React.createElement('nav', { className: 'report-toc' },
+              /* 좌측 고정 목차 (와이드 화면 전용) — 분석 결과(섹션 2개 이상)가 있을 때만 표시 */
+              (sections.length > 1) && React.createElement('nav', { className: 'report-toc' },
                 React.createElement('div', { className: 'report-toc-title' }, '목차'),
                 sections.map(function(s) {
                   return React.createElement('a', { key: s.id, className: 'report-toc-link', onClick: function() { scrollTo(s.id); } },
