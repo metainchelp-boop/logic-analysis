@@ -39,7 +39,7 @@ window.AnalysisStatsSection = function AnalysisStatsSection() {
     var th = function(label, align) {
         return React.createElement('th', {
             key: label,
-            style: { textAlign: align || 'left', padding: '8px 10px', borderBottom: '2px solid #e2e8f0', color: '#64748b', fontWeight: 700, whiteSpace: 'nowrap', fontSize: 12 }
+            style: { textAlign: align || 'left', padding: '10px 12px', borderBottom: '2px solid rgba(255,255,255,0.25)', color: '#ffffff', fontWeight: 700, whiteSpace: 'nowrap', fontSize: 12.5, letterSpacing: '0.01em' }
         }, label);
     };
 
