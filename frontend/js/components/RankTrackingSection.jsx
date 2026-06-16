@@ -157,25 +157,9 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
 
     var _periodLabel = { 7: '최근 7일', 30: '최근 30일', 365: '전체기간' };
 
-    // 차트를 PNG로 저장 (흰 배경 합성)
-    var downloadChartImage = function(canvasId, filename) {
-        var src = document.getElementById(canvasId);
-        if (!src) { toast.error('차트를 찾을 수 없습니다'); return; }
-        try {
-            var tmp = document.createElement('canvas');
-            tmp.width = src.width; tmp.height = src.height;
-            var ctx = tmp.getContext('2d');
-            ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, tmp.width, tmp.height);
-            ctx.drawImage(src, 0, 0);
-            var a = document.createElement('a');
-            a.href = tmp.toDataURL('image/png');
-            a.download = (filename || 'rank').replace(/[^\w가-힣]+/g, '_') + '.png';
-            document.body.appendChild(a); a.click(); document.body.removeChild(a);
-        } catch (e) { toast.error('이미지 저장 실패'); }
-    };
-
     // 키워드 순위 추이 라인차트 (펼침 행) — 기간 선택(7/30/전체) + 이미지 저장
-    var renderRankHistoryChart = function(keywordId, keywordLabel) {
+    //   meta: { storeName, storeUrl } — 이미지 헤더/파일명용 (선택)
+    var renderRankHistoryChart = function(keywordId, keywordLabel, meta) {
         var days = historyDays[keywordId] || 30;
         var cacheKey = keywordId + ':' + days;
         var rows = historyData[cacheKey];
@@ -191,8 +175,17 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                     style: { fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 14, cursor: 'pointer',
                              border: '1px solid ' + (on ? '#4f46e5' : '#e2e8f0'), background: on ? '#4f46e5' : '#fff', color: on ? '#fff' : '#475569' } }, _periodLabel[d]);
             }),
-            React.createElement('button', { onClick: function(e) { e.stopPropagation(); downloadChartImage(canvasId, (keywordLabel || '순위') + '_' + _periodLabel[days]); },
-                style: { marginLeft: 'auto', fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 14, cursor: 'pointer', border: '1px solid #16a34a', background: '#f0fdf4', color: '#16a34a' } }, '⬇ 이미지 저장')
+            React.createElement('button', { onClick: function(e) {
+                    e.stopPropagation();
+                    window.exportRankHistoryImage({
+                        rows: historyData[cacheKey] || [],
+                        storeName: (meta && meta.storeName) || '',
+                        keyword: keywordLabel,
+                        storeUrl: (meta && meta.storeUrl) || '',
+                        days: days === 365 ? 0 : days
+                    });
+                },
+                style: { marginLeft: 'auto', fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 14, cursor: 'pointer', border: '1px solid #16a34a', background: '#f0fdf4', color: '#16a34a' } }, '📸 이미지 저장')
         );
         if (!rows) {
             return React.createElement('div', { style: { padding: '12px 16px' } }, periodBtns,
@@ -443,7 +436,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                                 <div className="sub-card" style={{ marginTop: 16 }}>
                                     <div className="st">📉 {chartTitle ? "'" + chartTitle + "' " : ''}30일 순위 추이 <span className="badge b-est" style={{ marginLeft: 4 }}>신규 차트</span></div>
                                     {kw && kw.id
-                                        ? renderRankHistoryChart(kw.id, kw.keyword)
+                                        ? renderRankHistoryChart(kw.id, kw.keyword, tp ? { storeName: tp.store_name, storeUrl: tp.product_url } : {})
                                         : (
                                             <div style={{ fontSize: 12, color: '#94a3b8', padding: '6px 2px', lineHeight: 1.7 }}>
                                                 지속적인 30일 순위 추이는 <b style={{ color: '#475569' }}>관리자에 상품 등록(추적 요청)</b> 후 매일 스냅샷으로 자동 기록됩니다. 등록되면 이 자리에 추이 그래프가 표시됩니다.
@@ -530,7 +523,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                                                         if (!isOpen) return rowEl;
                                                         var chartRow = React.createElement('tr', { key: k.id + '-chart' },
                                                             React.createElement('td', { colSpan: 4, style: { padding: 0, background: '#f8fafc' } },
-                                                                renderRankHistoryChart(k.id, k.keyword)
+                                                                renderRankHistoryChart(k.id, k.keyword, { storeName: p.store_name, storeUrl: p.product_url })
                                                             )
                                                         );
                                                         return [rowEl, chartRow];
@@ -641,7 +634,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                                                                             React.createElement('td', { style: { padding: '6px 10px', fontSize: 11, color: '#94a3b8' } }, k.last_checked ? new Date((k.last_checked || '').replace(' ', 'T')).toLocaleString('ko') : '-')
                                                                         );
                                                                         if (!kOpen) return krow;
-                                                                        return [krow, React.createElement('tr', { key: k.id + '-c' }, React.createElement('td', { colSpan: 3, style: { padding: 0, background: '#f8fafc' } }, renderRankHistoryChart(k.id, k.keyword)))];
+                                                                        return [krow, React.createElement('tr', { key: k.id + '-c' }, React.createElement('td', { colSpan: 3, style: { padding: 0, background: '#f8fafc' } }, renderRankHistoryChart(k.id, k.keyword, { storeName: p.store_name, storeUrl: p.product_url })))];
                                                                     })
                                                                 )
                                                             )

@@ -1,5 +1,6 @@
 [
   "js/utils.js",
+  "js/rankImage.js",
   "js/components/ErrorBoundary.jsx",
   "js/components/SectionErrorBoundary.jsx",
   "js/components/ChartCanvas.jsx",
