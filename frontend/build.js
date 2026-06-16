@@ -25,14 +25,11 @@ const babel = reqBabel('@babel/core');
 const presetReact = reqBabel('@babel/preset-react');
 
 const FRONTEND = __dirname;
-const html = fs.readFileSync(path.join(FRONTEND, 'index.html'), 'utf8');
 
-// index.html에서 js/ 로 시작하는 스크립트 src를 등장 순서대로 추출
-const re = /<script[^>]*\bsrc="(js\/[^"?]+)(?:\?[^"]*)?"/g;
-const files = [];
-let m;
-while ((m = re.exec(html)) !== null) files.push(m[1]);
-if (files.length === 0) { console.error('로드할 js 파일을 못 찾음'); process.exit(1); }
+// 로드 순서는 build.manifest.json에서 읽는다 (index.html은 번들만 로드하므로 더 이상 목록을 갖지 않음)
+const manifestPath = path.join(FRONTEND, 'build.manifest.json');
+const files = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+if (!Array.isArray(files) || files.length === 0) { console.error('build.manifest.json이 비어있음'); process.exit(1); }
 
 // "use strict"를 넣지 않는다 — 현재 앱은 비엄격 스크립트로 동작하므로 동일하게 유지
 let out = '';
@@ -63,3 +60,12 @@ fs.writeFileSync(path.join(distDir, bundleName), out);
 // 빌드 메타(해시) 기록 — index 갱신 스크립트가 참조
 fs.writeFileSync(path.join(distDir, 'bundle.json'), JSON.stringify({ bundle: bundleName, files: files.length }, null, 2));
 console.log(`✅ 빌드 완료: dist/${bundleName}  (${(out.length / 1024).toFixed(0)}KB, ${files.length}개 파일)`);
+
+// index.html / index.bundle.html의 번들 참조를 새 해시로 자동 갱신 (해시 갱신 누락 방지)
+for (const htmlFile of ['index.html', 'index.bundle.html']) {
+  const p = path.join(FRONTEND, htmlFile);
+  if (!fs.existsSync(p)) continue;
+  const h = fs.readFileSync(p, 'utf8');
+  const replaced = h.replace(/dist\/app\.[0-9a-f]+\.js/g, 'dist/' + bundleName);
+  if (replaced !== h) { fs.writeFileSync(p, replaced); console.log(`  ↳ ${htmlFile} 번들 참조 갱신`); }
+}
