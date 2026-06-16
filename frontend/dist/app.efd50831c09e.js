@@ -18280,8 +18280,8 @@ window.App = function App() {
   }, autoSaveStatus === 'saving' ? '🔄 분석 완료 후 업체관리에 자동 저장됩니다... (약 25초 대기)' : autoSaveStatus === 'saved' ? '✅ 업체관리 탭에 분석 기록이 자동 저장되었습니다' : autoSaveStatus === 'error' ? '⚠️ 자동 저장에 실패했습니다. 하단의 "업체 등록/저장" 버튼을 이용해주세요' : ''), /* ==================== 보고서 레이아웃: 좌측 목차 + 본문 ==================== */
   React.createElement('div', {
     className: 'report-shell'
-  }, /* 좌측 고정 목차 (와이드 화면 전용) */
-  React.createElement('nav', {
+  }, /* 좌측 고정 목차 (와이드 화면 전용) — 분석 결과(섹션 2개 이상)가 있을 때만 표시 */
+  sections.length > 1 && React.createElement('nav', {
     className: 'report-toc'
   }, React.createElement('div', {
     className: 'report-toc-title'
