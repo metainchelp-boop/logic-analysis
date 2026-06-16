@@ -488,11 +488,11 @@ def keyword_exposure(req: KeywordExposureRequest, current_user: dict = Depends(g
         if not candidates:
             return {"success": True, "data": {"product_name": product_name, "results": [], "recommended": []}}
 
-        # 병렬로 순위 조회 (max_pages=3으로 제한 — 속도 최적화, find_product_rank는 429 재시도 적용됨)
+        # 병렬로 순위 조회 (max_pages=4 = 상위 400위까지, find_product_rank는 429 재시도 적용됨)
         results = []
         def check_one(kw):
             try:
-                rank, page, _ = find_product_rank(kw, req.product_url, max_pages=3)
+                rank, page, _ = find_product_rank(kw, req.product_url, max_pages=4)
                 return {"keyword": kw, "rank": rank, "page": page}
             except Exception:
                 return {"keyword": kw, "rank": None, "page": None}

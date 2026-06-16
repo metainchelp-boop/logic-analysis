@@ -2077,7 +2077,7 @@ window.RankTrackingSection = function RankTrackingSection({
     className: "badge b-ok"
   }, "\u2705 \uC2E4\uCE21")), /*#__PURE__*/React.createElement("div", {
     className: "rt-desc"
-  }, "\uC0C1\uD488\uBA85\uC5D0\uC11C \uCD94\uCD9C\uD55C \uD0A4\uC6CC\uB4DC\uBCC4\uB85C \uB124\uC774\uBC84 \uC1FC\uD551 \uAC80\uC0C9 \uC21C\uC704\uB97C \uC870\uD68C\uD55C \uACB0\uACFC (\uAC80\uC0C9 \uBC94\uC704: \uC0C1\uC704 300\uAC1C \uC0C1\uD488)")), canEdit !== false && /*#__PURE__*/React.createElement("button", {
+  }, "\uC0C1\uD488\uBA85\uC5D0\uC11C \uCD94\uCD9C\uD55C \uD0A4\uC6CC\uB4DC\uBCC4\uB85C \uB124\uC774\uBC84 \uC1FC\uD551 \uAC80\uC0C9 \uC21C\uC704\uB97C \uC870\uD68C\uD55C \uACB0\uACFC (\uAC80\uC0C9 \uBC94\uC704: \uC0C1\uC704 400\uAC1C \uC0C1\uD488)")), canEdit !== false && /*#__PURE__*/React.createElement("button", {
     className: "btn btn-primary btn-sm",
     onClick: () => setShowAddForm(!showAddForm)
   }, showAddForm ? '취소' : '+ 상품 등록')), showAddForm && /*#__PURE__*/React.createElement("div", {
