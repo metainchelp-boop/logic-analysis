@@ -57,7 +57,6 @@ window.ClientDiagnosticsSection = function ClientDiagnosticsSection() {
     };
 
     var byStatus = (data && data.byStatus) || {};
-    var orphan = (data && data.orphanActive) || [];
     var recentInactive = (data && data.recentInactive) || [];
 
     return React.createElement('div', { className: 'card', style: { padding: 20, marginBottom: 20 } },
@@ -71,7 +70,7 @@ window.ClientDiagnosticsSection = function ClientDiagnosticsSection() {
         ),
 
         React.createElement('div', { style: { fontSize: 12, color: '#64748b', marginBottom: 16, lineHeight: 1.6 } },
-            "'진행중 업체 일부가 사라짐' 점검용입니다. 아래 '등록자 없는 진행중 업체'가 있으면, manager 권한 사용자에게는 그 업체가 보이지 않아 사라진 것처럼 느껴질 수 있습니다."
+            "업체 데이터 점검용입니다. 상태별 업체 수와 최근 일시중지/종료된 업체를 확인할 수 있습니다."
         ),
 
         loading && React.createElement('div', { style: { textAlign: 'center', padding: 20, color: '#94a3b8' } }, '불러오는 중...'),
@@ -115,19 +114,7 @@ window.ClientDiagnosticsSection = function ClientDiagnosticsSection() {
                 })
             ),
 
-            /* 등록자 없는 active 업체 */
-            React.createElement('div', { style: { fontSize: 13, fontWeight: 700, color: '#334155', margin: '4px 0 8px', display: 'flex', alignItems: 'center', gap: 8 } },
-                '등록자(created_by) 없는 진행중 업체',
-                React.createElement('span', { style: { fontSize: 11, padding: '2px 8px', borderRadius: 10, background: orphan.length ? '#fee2e2' : '#dcfce7', color: orphan.length ? '#dc2626' : '#16a34a', fontWeight: 600 } }, orphan.length + '건')
-            ),
-            orphan.length === 0
-                ? React.createElement('div', { style: { fontSize: 12, color: '#94a3b8', marginBottom: 20 } }, '없음 — 이 항목이 원인은 아닙니다.')
-                : React.createElement('div', { style: { marginBottom: 20 } }, renderTable(orphan, [
-                    { key: 'id', label: 'ID' },
-                    { key: 'name', label: '업체명' },
-                    { key: 'created_by', label: '등록자' },
-                    { key: 'created_at', label: '등록일', render: function(v) { return (v || '').slice(0, 16); } }
-                ])),
+            /* (등록자 없는 진행중 업체 항목 제거 — clients.created_by가 NOT NULL이라 항상 0건이라 무의미) */
 
             /* 최근 paused/terminated */
             React.createElement('div', { style: { fontSize: 13, fontWeight: 700, color: '#334155', margin: '4px 0 8px' } }, '최근 일시중지/종료된 업체 (최대 30건)'),
