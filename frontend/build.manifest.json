@@ -50,6 +50,5 @@
   "js/components/ClientDiagnosticsSection.jsx",
   "js/components/AnalysisStatsSection.jsx",
   "js/components/ChatWidget.jsx",
-  "js/components/PasswordChangeModal.jsx",
   "js/components/App.jsx"
 ]
