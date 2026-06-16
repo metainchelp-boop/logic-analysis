@@ -1644,19 +1644,19 @@ def compute_advertiser_report(keyword: str, product_url: str):
                     logger.info(f"광고주분석 보완 매칭 성공: {product_info['product_name'][:30]} (pid: {target_pid})")
                     break
 
-        # 2) 키워드로 순위 검색
+        # 2~3) 키워드로 1회만 검색 → 순위 계산 + 1페이지(상위 80) 분석에 공용 사용
+        #      (기존엔 find_product_rank 내부 검색 + 쇼핑 API 재검색으로 같은 키워드를 두 번 호출)
+        #      매칭 로직은 그대로(cached_products로 결과만 재사용). retry_on_429=True로 429 빈결과 방지.
+        from naver_crawler import search_products as _sp_crawler
+        all_products = _sp_crawler(req.keyword, max_results=1000, retry_on_429=True)
         rank, page, top_competitors = find_product_rank(
             keyword=req.keyword, product_url=req.product_url, max_pages=10,
-            product_name=product_info.get("product_name", "")
+            product_name=product_info.get("product_name", ""),
+            cached_products=all_products,
         )
-
-        # 3) 상위 40개 상품 가져오기 (1페이지 분석용)
-        #    retry_on_429=True: 429로 빈 결과가 와서 '1페이지 평균가 0원'이 되는 것을 방지
-        shop_result = search_naver_shopping_api(req.keyword, display=80, retry_on_429=True)
-        shop_items = shop_result.get("items", [])
-        if not shop_items:
+        page1_products = all_products[:80]
+        if not page1_products:
             logger.warning(f"광고주분석: 쇼핑 API 결과 0건 (keyword={req.keyword}) → 평균가 산출 불가")
-        page1_products = [_parse_api_item(item, idx + 1) for idx, item in enumerate(shop_items)]
 
         # 4) 경쟁사 비교 분석 데이터 구성
         my_price = product_info.get("price", 0)

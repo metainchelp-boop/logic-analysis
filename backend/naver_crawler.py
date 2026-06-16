@@ -243,7 +243,8 @@ def _normalize_name(name: str) -> str:
 
 
 def find_product_rank(keyword: str, product_url: str,
-                      max_pages: int = 10, product_name: str = "") -> Tuple[Optional[int], Optional[int], List[Dict]]:
+                      max_pages: int = 10, product_name: str = "",
+                      cached_products: Optional[List[Dict]] = None) -> Tuple[Optional[int], Optional[int], List[Dict]]:
     """
     키워드 검색에서 특정 상품의 순위를 찾는다. (공식 API 기반)
 
@@ -263,8 +264,9 @@ def find_product_rank(keyword: str, product_url: str,
     top_competitors = []
 
     # max_pages * 100개 결과까지 검색
+    # cached_products가 주어지면 재검색 없이 재사용 (중복 API 호출 방지) — 매칭 로직은 동일
     max_results = max_pages * 100
-    products = search_products(keyword, max_results=max_results)
+    products = cached_products if cached_products is not None else search_products(keyword, max_results=max_results)
 
     if not products:
         logger.warning(f"검색 결과 없음: '{keyword}'")
