@@ -4,7 +4,7 @@
 /* ==================== 정적 스타일 (렌더 밖 — 매번 재생성 방지) ==================== */
 var _navBtnBase = { padding: '7px 16px', borderRadius: 8, cursor: 'pointer', fontSize: 13, transition: 'all 0.2s' };
 var _navBtnActive = Object.assign({}, _navBtnBase, { background: '#3b82f6', color: '#fff', border: '1px solid #3b82f6', fontWeight: 700 });
-var _navBtnInactive = Object.assign({}, _navBtnBase, { background: '#f1f5f9', color: '#475569', border: '1px solid #e2e8f0', fontWeight: 500 });
+var _navBtnInactive = Object.assign({}, _navBtnBase, { background: '#ffffff', color: '#475569', border: '1px solid #f0d2d2', fontWeight: 500 });
 var _navUserStyle = { color: '#475569', fontSize: 13, fontWeight: 600 };
 var _navLogoutStyle = { background: 'rgba(239,68,68,0.15)', color: '#fca5a5', border: '1px solid rgba(239,68,68,0.2)', padding: '6px 14px', borderRadius: 8, cursor: 'pointer', fontSize: 13 };
 var _topbarContainer = { display:'flex', alignItems:'center', justifyContent:'flex-start', flexWrap:'wrap', minHeight: 48, padding:'8px 24px', gap:10 };
@@ -1159,7 +1159,7 @@ window.App = function App() {
                 React.createElement('div', { className: 'topbar-nav-btns', style: { display:'flex', alignItems:'center', gap:16, flexWrap:'wrap', marginLeft:8 } },
                     React.createElement('button', { onClick: function(){setCurrentPage('home');}, style: navBtn(activePage === 'home') }, '🏠 대시보드'),
                     React.createElement('button', { onClick: function(){setCurrentPage('analysis');}, style: navBtn(activePage === 'analysis') }, '📍 순위 추적'),
-                    React.createElement('button', { onClick: function(){setCurrentPage('management');}, style: navBtn(activePage === 'management') }, '🏢 진행중 업체'),
+                    React.createElement('button', { onClick: function(){setCurrentPage('management');}, style: navBtn(activePage === 'management') }, '📈 로직 분석'),
                     React.createElement('button', { onClick: function(){setCurrentPage('guide');}, style: navBtn(activePage === 'guide') }, '📖 설명서'),
                     // 👥 직원 탭 제거 — SSO(ERP 연동)로 계정 자동 관리, 로그인 이력/실행 건수는 ⚙️설정 탭으로 통합
                     currentUser.role === 'superadmin' && React.createElement('button', { onClick: function(){setCurrentPage('settings');}, style: navBtn(activePage === 'settings') }, '⚙️ 설정')
