@@ -7,8 +7,6 @@ var _navBtnActive = Object.assign({}, _navBtnBase, { background: 'rgba(59,130,24
 var _navBtnInactive = Object.assign({}, _navBtnBase, { background: 'rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.75)', border: '1px solid rgba(255,255,255,0.12)', fontWeight: 400 });
 var _navUserStyle = { color: 'rgba(255,255,255,0.7)', fontSize: 13 };
 var _navLogoutStyle = { background: 'rgba(239,68,68,0.15)', color: '#fca5a5', border: '1px solid rgba(239,68,68,0.2)', padding: '6px 14px', borderRadius: 8, cursor: 'pointer', fontSize: 13 };
-var _navPwStyle = { background: 'rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.8)', border: '1px solid rgba(255,255,255,0.15)', padding: '6px 14px', borderRadius: 8, cursor: 'pointer', fontSize: 13 };
-// 비밀번호 변경 모달 스타일/로직은 PasswordChangeModal.jsx로 분리됨
 var _topbarContainer = { display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', minHeight: 48, padding:'8px 24px', gap:6 };
 var _versionBadge = { fontSize:11, color:'rgba(255,255,255,0.4)', background:'rgba(255,255,255,0.06)', padding:'2px 8px', borderRadius:10, fontWeight:400 };
 var _healthBadge = { background:'rgba(16,185,129,0.2)', color:'#34d399', fontSize:11, padding:'2px 8px', borderRadius:10, fontWeight:400 };
@@ -57,9 +55,6 @@ window.App = function App() {
     /* 순위 추적 → 업체관리 이동 시 자동 검색용 */
     const [managementInitialSearch, setManagementInitialSearch] = useState(null);
 
-    // 비밀번호 변경 모달 열림 상태만 보관 (입력/검증/제출은 PasswordChangeModal.jsx가 자체 관리)
-    var _pwState = useState(false);
-    var showPwModal = _pwState[0]; var setShowPwModal = _pwState[1];
 
     var saveAuth = function(user, token) {
         setCurrentUser(user); setAuthToken(token);
@@ -1152,7 +1147,6 @@ window.App = function App() {
     /* ==================== Topbar 스타일 (정적 객체는 컴포넌트 밖에 선언) ==================== */
     var navBtn = function(active) { return active ? _navBtnActive : _navBtnInactive; };
 
-    // (비밀번호 변경 모달은 PasswordChangeModal.jsx로 분리됨)
 
     var renderTopbar = function(activePage) {
         return React.createElement('div', { className: 'topbar' },
@@ -1179,12 +1173,9 @@ window.App = function App() {
                         var _bg = _isAdmin ? '#ede9fe' : _r === 'manager' ? '#dbeafe' : '#f1f5f9';
                         var _fg = _isAdmin ? '#6d28d9' : _r === 'manager' ? '#1d4ed8' : '#475569';
                         return React.createElement('span', { title: '내 권한', style: { fontSize:11, fontWeight:800, padding:'2px 9px', borderRadius:999, background:_bg, color:_fg, whiteSpace:'nowrap' } }, _label);
-                    })(),
-                    React.createElement('button', { onClick: function(){ setShowPwModal(true); }, style: _navPwStyle, title: '비밀번호 변경' }, '🔒'),
-                    React.createElement('button', { onClick: clearAuth, style: _navLogoutStyle }, '로그아웃')
+                    })()
                 )
-            ),
-            React.createElement(window.PasswordChangeModal, { show: showPwModal, onClose: function(){ setShowPwModal(false); } })
+            )
         );
     };
 

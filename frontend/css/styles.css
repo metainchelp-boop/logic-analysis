@@ -11,7 +11,7 @@ body {
 #root { min-height: 100vh; }
 
 /* ===== 유틸리티 ===== */
-.container { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
+.container { max-width: 1920px; margin: 0; padding: 0 24px; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
 .hidden { display: none !important; }
 
@@ -438,8 +438,8 @@ tr.rank-highlight { background: #fef3c7 !important; font-weight: 600; }
 
 /* ===== 섹션 그룹 (세로 나열) ===== */
 .section-group {
-    max-width: 1200px;
-    margin: 0 auto;
+    max-width: 1920px;
+    margin: 0;
     padding: 0 24px;
 }
 
