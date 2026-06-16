@@ -303,6 +303,266 @@ function trimHtmlDetail(hd) {
   }
 }
 
+;/* ===== js/rankImage.js ===== */
+/* rankImage.js — 순위 이력 이미지(PNG) 생성 공용 헬퍼
+ *
+ * 진행중 업체(ClientDashboard)와 순위 추적(RankTrackingSection)이 동일한 이미지를 쓰도록
+ * 캔버스 렌더링 로직을 한 곳으로 통합한다.
+ *
+ * window.exportRankHistoryImage({
+ *   rows:      [{ checked_at, rank_position, check_type }, ...],  // 시간순 무관(내부에서 ASC 정렬)
+ *   storeName: '업체명',
+ *   keyword:   '키워드',
+ *   storeUrl:  'https://smartstore.naver.com/...'(선택),
+ *   days:      0|7|30|...  // 0/미지정 = 전체, N = 최근 N일
+ * })
+ */
+(function () {
+  function roundRect(ctx, x, y, w, h, r, fill, stroke) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+    if (fill) ctx.fill();
+    if (stroke) ctx.stroke();
+  }
+  window.exportRankHistoryImage = function (opts) {
+    opts = opts || {};
+    var storeName = opts.storeName || '업체';
+    var keyword = opts.keyword || '';
+    var storeUrl = opts.storeUrl || '';
+    var days = opts.days || 0;
+
+    // ASC 정렬(오래된 날짜부터) — 소스 순서 무관하게 보장
+    var allData = (opts.rows || []).slice().sort(function (a, b) {
+      return String(a.checked_at || '').localeCompare(String(b.checked_at || ''));
+    });
+    var data = allData;
+    var periodLabel = '전체';
+    if (days && days > 0) {
+      var cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - days);
+      data = allData.filter(function (r) {
+        return new Date((r.checked_at || '').replace(' ', 'T')) >= cutoff;
+      });
+      periodLabel = '최근 ' + days + '일';
+    }
+    if (data.length === 0) {
+      try {
+        toast.warn('선택한 기간에 순위 데이터가 없습니다.');
+      } catch (e) {}
+      return;
+    }
+    var padding = 40;
+    var headerH = 90;
+    var tableRowH = 32;
+    var tableHeaderH = 36;
+    var tableH = tableHeaderH + data.length * tableRowH;
+    var chartH = 220;
+    var chartGap = 40;
+    var totalW = 720;
+    var totalH = headerH + tableH + chartGap + chartH + padding * 2 + 30;
+    var canvas = document.createElement('canvas');
+    var dpr = window.devicePixelRatio || 2;
+    canvas.width = totalW * dpr;
+    canvas.height = totalH * dpr;
+    var ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, totalW, totalH);
+
+    // 헤더 그라데이션
+    var grad = ctx.createLinearGradient(0, 0, totalW, 0);
+    grad.addColorStop(0, '#1B2A4A');
+    grad.addColorStop(1, '#2d4a7a');
+    ctx.fillStyle = grad;
+    roundRect(ctx, padding - 10, padding - 10, totalW - padding * 2 + 20, headerH, 12, true, false);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 20px "Noto Sans KR", sans-serif';
+    ctx.fillText(storeName, padding + 10, padding + 24);
+    ctx.font = '13px "Noto Sans KR", sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    var subText = '키워드: ' + keyword;
+    if (storeUrl) {
+      var dispUrl = storeUrl;
+      try {
+        var uu = new URL(dispUrl);
+        if (uu.hostname.indexOf('smartstore') !== -1) dispUrl = uu.origin + uu.pathname;
+      } catch (e) {}
+      if (dispUrl.length > 55) dispUrl = dispUrl.slice(0, 55) + '...';
+      subText += '   |   URL: ' + dispUrl;
+    }
+    ctx.fillText(subText, padding + 10, padding + 48);
+    ctx.font = '11px "Noto Sans KR", sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    ctx.fillText('생성일: ' + new Date().toLocaleDateString('ko-KR') + '   |   조회 기간: ' + periodLabel + ' (' + data.length + '건)', padding + 10, padding + 68);
+
+    // 테이블
+    var tableY = padding + headerH + 20;
+    ctx.font = 'bold 15px "Noto Sans KR", sans-serif';
+    ctx.fillStyle = '#1e293b';
+    ctx.fillText('"' + keyword + '" 순위 추적 이력 (' + data.length + '건)', padding, tableY);
+    tableY += 16;
+    var colX = [padding, padding + 250, padding + 430];
+    ctx.fillStyle = '#f1f5f9';
+    ctx.fillRect(padding, tableY, totalW - padding * 2, tableHeaderH);
+    ctx.fillStyle = '#475569';
+    ctx.font = 'bold 12px "Noto Sans KR", sans-serif';
+    ctx.fillText('날짜', colX[0] + 12, tableY + 22);
+    ctx.fillText('순위', colX[1] + 12, tableY + 22);
+    ctx.fillText('유형', colX[2] + 12, tableY + 22);
+    tableY += tableHeaderH;
+    data.forEach(function (r, i) {
+      var rowY = tableY + i * tableRowH;
+      if (i % 2 === 0) {
+        ctx.fillStyle = '#f8fafc';
+        ctx.fillRect(padding, rowY, totalW - padding * 2, tableRowH);
+      }
+      ctx.strokeStyle = '#e2e8f0';
+      ctx.lineWidth = 0.5;
+      ctx.beginPath();
+      ctx.moveTo(padding, rowY + tableRowH);
+      ctx.lineTo(totalW - padding, rowY + tableRowH);
+      ctx.stroke();
+      ctx.font = '12px "Noto Sans KR", sans-serif';
+      ctx.fillStyle = '#334155';
+      ctx.fillText((r.checked_at || '').slice(0, 16), colX[0] + 12, rowY + 20);
+      var prevR = i > 0 ? data[i - 1] : null;
+      var diff = prevR && r.rank_position && prevR.rank_position ? prevR.rank_position - r.rank_position : null;
+      ctx.font = 'bold 13px "Noto Sans KR", sans-serif';
+      var rankText = r.rank_position ? r.rank_position + '위' : '미노출';
+      ctx.fillStyle = r.rank_position ? r.rank_position <= 10 ? '#059669' : r.rank_position <= 40 ? '#d97706' : '#dc2626' : '#94a3b8';
+      ctx.fillText(rankText, colX[1] + 12, rowY + 20);
+      if (diff != null && diff !== 0) {
+        var diffText = diff > 0 ? '▲' + diff : '▼' + Math.abs(diff);
+        var tw = ctx.measureText(rankText).width;
+        ctx.font = '11px "Noto Sans KR", sans-serif';
+        ctx.fillStyle = diff > 0 ? '#16a34a' : '#dc2626';
+        ctx.fillText(diffText, colX[1] + 12 + tw + 8, rowY + 20);
+      }
+      ctx.font = '12px "Noto Sans KR", sans-serif';
+      ctx.fillStyle = '#64748b';
+      ctx.fillText(r.check_type === 'manual' ? '수동' : '자동', colX[2] + 12, rowY + 20);
+    });
+
+    // 라인 차트
+    var chartTop = tableY + data.length * tableRowH + chartGap;
+    ctx.font = 'bold 15px "Noto Sans KR", sans-serif';
+    ctx.fillStyle = '#1e293b';
+    ctx.fillText('순위 변동 추이', padding, chartTop);
+    chartTop += 20;
+    var chartLeft = padding + 40;
+    var chartRight = totalW - padding - 20;
+    var chartBottom = chartTop + chartH - 30;
+    var chartInnerTop = chartTop + 10;
+    var validData = data.filter(function (r) {
+      return r.rank_position != null && r.rank_position > 0;
+    });
+    if (validData.length > 1) {
+      var ranks = validData.map(function (r) {
+        return r.rank_position;
+      });
+      var maxRank = Math.max.apply(null, ranks);
+      var minRank = Math.min.apply(null, ranks);
+      var rankRange = Math.max(maxRank - minRank, 4);
+      var yPad = Math.ceil(rankRange * 0.2);
+      var yMin = Math.max(1, minRank - yPad);
+      var yMax = maxRank + yPad;
+      ctx.strokeStyle = '#e2e8f0';
+      ctx.lineWidth = 0.5;
+      ctx.font = '10px "Noto Sans KR", sans-serif';
+      ctx.fillStyle = '#94a3b8';
+      var ySteps = 5;
+      for (var yi = 0; yi <= ySteps; yi++) {
+        var yVal = Math.round(yMin + (yMax - yMin) * yi / ySteps);
+        var yPos = chartInnerTop + (chartBottom - chartInnerTop) * (yi / ySteps);
+        ctx.beginPath();
+        ctx.moveTo(chartLeft, yPos);
+        ctx.lineTo(chartRight, yPos);
+        ctx.stroke();
+        ctx.textAlign = 'right';
+        ctx.fillText(yVal + '위', chartLeft - 6, yPos + 4);
+      }
+      ctx.textAlign = 'left';
+      validData.forEach(function (r, i) {
+        var xPos = chartLeft + (chartRight - chartLeft) * (i / (validData.length - 1));
+        ctx.save();
+        ctx.font = '9px "Noto Sans KR", sans-serif';
+        ctx.fillStyle = '#94a3b8';
+        ctx.translate(xPos, chartBottom + 12);
+        ctx.rotate(-0.4);
+        ctx.fillText((r.checked_at || '').slice(5, 10), 0, 0);
+        ctx.restore();
+      });
+      ctx.beginPath();
+      ctx.strokeStyle = '#3b82f6';
+      ctx.lineWidth = 2.5;
+      ctx.lineJoin = 'round';
+      validData.forEach(function (r, i) {
+        var xPos = chartLeft + (chartRight - chartLeft) * (i / (validData.length - 1));
+        var yPos = chartInnerTop + (chartBottom - chartInnerTop) * ((r.rank_position - yMin) / (yMax - yMin));
+        if (i === 0) ctx.moveTo(xPos, yPos);else ctx.lineTo(xPos, yPos);
+      });
+      ctx.stroke();
+      ctx.beginPath();
+      validData.forEach(function (r, i) {
+        var xPos = chartLeft + (chartRight - chartLeft) * (i / (validData.length - 1));
+        var yPos = chartInnerTop + (chartBottom - chartInnerTop) * ((r.rank_position - yMin) / (yMax - yMin));
+        if (i === 0) ctx.moveTo(xPos, yPos);else ctx.lineTo(xPos, yPos);
+      });
+      ctx.lineTo(chartLeft + (chartRight - chartLeft), chartBottom);
+      ctx.lineTo(chartLeft, chartBottom);
+      ctx.closePath();
+      var areaGrad = ctx.createLinearGradient(0, chartInnerTop, 0, chartBottom);
+      areaGrad.addColorStop(0, 'rgba(59, 130, 246, 0.15)');
+      areaGrad.addColorStop(1, 'rgba(59, 130, 246, 0.02)');
+      ctx.fillStyle = areaGrad;
+      ctx.fill();
+      validData.forEach(function (r, i) {
+        var xPos = chartLeft + (chartRight - chartLeft) * (i / (validData.length - 1));
+        var yPos = chartInnerTop + (chartBottom - chartInnerTop) * ((r.rank_position - yMin) / (yMax - yMin));
+        ctx.beginPath();
+        ctx.arc(xPos, yPos, 4, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffffff';
+        ctx.fill();
+        ctx.strokeStyle = '#3b82f6';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.font = 'bold 10px "Noto Sans KR", sans-serif';
+        ctx.fillStyle = '#1e40af';
+        ctx.textAlign = 'center';
+        ctx.fillText(r.rank_position + '위', xPos, yPos - 10);
+      });
+      ctx.textAlign = 'left';
+    } else {
+      ctx.font = '13px "Noto Sans KR", sans-serif';
+      ctx.fillStyle = '#94a3b8';
+      ctx.fillText('차트를 표시하려면 유효한 순위 데이터가 2건 이상 필요합니다.', chartLeft, chartTop + 60);
+    }
+
+    // 워터마크
+    ctx.font = '10px "Noto Sans KR", sans-serif';
+    ctx.fillStyle = '#cbd5e1';
+    ctx.textAlign = 'right';
+    ctx.fillText('METAINC 로직분석', totalW - padding, totalH - 12);
+    ctx.textAlign = 'left';
+    canvas.toBlob(function (blob) {
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = (storeName + '_' + keyword + '_순위이력_' + new Date().toISOString().slice(0, 10) + '.png').replace(/[\/\\?%*:|"<>]/g, '_');
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }, 'image/png');
+  };
+})();
+
 ;/* ===== js/components/ErrorBoundary.jsx ===== */
 /* ErrorBoundary — React 에러 경계 (빈 화면 방지) */
 (function () {
@@ -1450,34 +1710,9 @@ window.RankTrackingSection = function RankTrackingSection({
     365: '전체기간'
   };
 
-  // 차트를 PNG로 저장 (흰 배경 합성)
-  var downloadChartImage = function (canvasId, filename) {
-    var src = document.getElementById(canvasId);
-    if (!src) {
-      toast.error('차트를 찾을 수 없습니다');
-      return;
-    }
-    try {
-      var tmp = document.createElement('canvas');
-      tmp.width = src.width;
-      tmp.height = src.height;
-      var ctx = tmp.getContext('2d');
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, tmp.width, tmp.height);
-      ctx.drawImage(src, 0, 0);
-      var a = document.createElement('a');
-      a.href = tmp.toDataURL('image/png');
-      a.download = (filename || 'rank').replace(/[^\w가-힣]+/g, '_') + '.png';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-    } catch (e) {
-      toast.error('이미지 저장 실패');
-    }
-  };
-
   // 키워드 순위 추이 라인차트 (펼침 행) — 기간 선택(7/30/전체) + 이미지 저장
-  var renderRankHistoryChart = function (keywordId, keywordLabel) {
+  //   meta: { storeName, storeUrl } — 이미지 헤더/파일명용 (선택)
+  var renderRankHistoryChart = function (keywordId, keywordLabel, meta) {
     var days = historyDays[keywordId] || 30;
     var cacheKey = keywordId + ':' + days;
     var rows = historyData[cacheKey];
@@ -1520,7 +1755,13 @@ window.RankTrackingSection = function RankTrackingSection({
     }), React.createElement('button', {
       onClick: function (e) {
         e.stopPropagation();
-        downloadChartImage(canvasId, (keywordLabel || '순위') + '_' + _periodLabel[days]);
+        window.exportRankHistoryImage({
+          rows: historyData[cacheKey] || [],
+          storeName: meta && meta.storeName || '',
+          keyword: keywordLabel,
+          storeUrl: meta && meta.storeUrl || '',
+          days: days === 365 ? 0 : days
+        });
       },
       style: {
         marginLeft: 'auto',
@@ -1533,7 +1774,7 @@ window.RankTrackingSection = function RankTrackingSection({
         background: '#f0fdf4',
         color: '#16a34a'
       }
-    }, '⬇ 이미지 저장'));
+    }, '📸 이미지 저장'));
     if (!rows) {
       return React.createElement('div', {
         style: {
@@ -2083,7 +2324,10 @@ window.RankTrackingSection = function RankTrackingSection({
         style: {
           marginLeft: 4
         }
-      }, "\uC2E0\uADDC \uCC28\uD2B8")), kw && kw.id ? renderRankHistoryChart(kw.id, kw.keyword) : /*#__PURE__*/React.createElement("div", {
+      }, "\uC2E0\uADDC \uCC28\uD2B8")), kw && kw.id ? renderRankHistoryChart(kw.id, kw.keyword, tp ? {
+        storeName: tp.store_name,
+        storeUrl: tp.product_url
+      } : {}) : /*#__PURE__*/React.createElement("div", {
         style: {
           fontSize: 12,
           color: '#94a3b8',
@@ -2254,7 +2498,10 @@ window.RankTrackingSection = function RankTrackingSection({
               padding: 0,
               background: '#f8fafc'
             }
-          }, renderRankHistoryChart(k.id, k.keyword)));
+          }, renderRankHistoryChart(k.id, k.keyword, {
+            storeName: p.store_name,
+            storeUrl: p.product_url
+          })));
           return [rowEl, chartRow];
         })))));
       }));
@@ -2607,7 +2854,10 @@ window.RankTrackingSection = function RankTrackingSection({
             padding: 0,
             background: '#f8fafc'
           }
-        }, renderRankHistoryChart(k.id, k.keyword)))];
+        }, renderRankHistoryChart(k.id, k.keyword, {
+          storeName: p.store_name,
+          storeUrl: p.product_url
+        })))];
       }))))));
       return [rowMain, detail];
     })))));
@@ -10516,276 +10766,15 @@ window.ClientDashboard = function ClientDashboard({
   var exportRankImage = function (days) {
     setShowExportMenu(false);
     if (!selectedClient || !activeKeyword || rankHistory.length === 0) return;
-    var allData = rankHistory.slice(); // 이미 ASC 정렬 (오래된 날짜부터)
-
-    // 기간 필터 적용
-    var data = allData;
-    var periodLabel = '전체';
-    if (days && days > 0) {
-      var cutoff = new Date();
-      cutoff.setDate(cutoff.getDate() - days);
-      data = allData.filter(function (r) {
-        return new Date(r.checked_at) >= cutoff;
-      });
-      periodLabel = '최근 ' + days + '일';
-    }
-    if (data.length === 0) {
-      toast.warn('선택한 기간에 순위 데이터가 없습니다.');
-      return;
-    }
-    var padding = 40;
-    var headerH = 90;
-    var tableRowH = 32;
-    var tableHeaderH = 36;
-    var tableH = tableHeaderH + data.length * tableRowH;
-    var chartH = 220;
-    var chartGap = 40;
-    var totalW = 720;
-    var totalH = headerH + tableH + chartGap + chartH + padding * 2 + 30;
-    var canvas = document.createElement('canvas');
-    var dpr = window.devicePixelRatio || 2;
-    canvas.width = totalW * dpr;
-    canvas.height = totalH * dpr;
-    canvas.style.width = totalW + 'px';
-    canvas.style.height = totalH + 'px';
-    var ctx = canvas.getContext('2d');
-    ctx.scale(dpr, dpr);
-
-    // 배경
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, totalW, totalH);
-
-    // 헤더 영역 — 그라데이션 배경
-    var grad = ctx.createLinearGradient(0, 0, totalW, 0);
-    grad.addColorStop(0, '#1B2A4A');
-    grad.addColorStop(1, '#2d4a7a');
-    ctx.fillStyle = grad;
-    roundRect(ctx, padding - 10, padding - 10, totalW - padding * 2 + 20, headerH, 12, true, false);
-
-    // 업체명
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 20px "Noto Sans KR", sans-serif';
-    ctx.fillText(selectedClient.name || '업체명', padding + 10, padding + 24);
-
-    // 키워드 + URL
-    ctx.font = '13px "Noto Sans KR", sans-serif';
-    ctx.fillStyle = 'rgba(255,255,255,0.8)';
-    var subText = '키워드: ' + activeKeyword;
-    if (selectedClient.naver_store_url) {
-      var dispUrl = selectedClient.naver_store_url;
-      try {
-        var uu = new URL(dispUrl);
-        if (uu.hostname.indexOf('smartstore') !== -1) dispUrl = uu.origin + uu.pathname;
-      } catch (e) {}
-      if (dispUrl.length > 55) dispUrl = dispUrl.slice(0, 55) + '...';
-      subText += '   |   URL: ' + dispUrl;
-    }
-    ctx.fillText(subText, padding + 10, padding + 48);
-
-    // 생성일 + 기간
-    ctx.font = '11px "Noto Sans KR", sans-serif';
-    ctx.fillStyle = 'rgba(255,255,255,0.6)';
-    ctx.fillText('생성일: ' + new Date().toLocaleDateString('ko-KR') + '   |   조회 기간: ' + periodLabel + ' (' + data.length + '건)', padding + 10, padding + 68);
-
-    // 순위 이력 테이블
-    var tableY = padding + headerH + 20;
-    ctx.font = 'bold 15px "Noto Sans KR", sans-serif';
-    ctx.fillStyle = '#1e293b';
-    ctx.fillText('"' + activeKeyword + '" 순위 추적 이력 (' + data.length + '건)', padding, tableY);
-    tableY += 16;
-    var colX = [padding, padding + 250, padding + 430];
-    var colW = [250, 180, totalW - padding * 2 - 430];
-
-    // 테이블 헤더
-    ctx.fillStyle = '#f1f5f9';
-    ctx.fillRect(padding, tableY, totalW - padding * 2, tableHeaderH);
-    ctx.fillStyle = '#475569';
-    ctx.font = 'bold 12px "Noto Sans KR", sans-serif';
-    ctx.fillText('날짜', colX[0] + 12, tableY + 22);
-    ctx.fillText('순위', colX[1] + 12, tableY + 22);
-    ctx.fillText('유형', colX[2] + 12, tableY + 22);
-    tableY += tableHeaderH;
-
-    // 테이블 행
-    data.forEach(function (r, i) {
-      var rowY = tableY + i * tableRowH;
-      if (i % 2 === 0) {
-        ctx.fillStyle = '#f8fafc';
-        ctx.fillRect(padding, rowY, totalW - padding * 2, tableRowH);
-      }
-      // 하단 선
-      ctx.strokeStyle = '#e2e8f0';
-      ctx.lineWidth = 0.5;
-      ctx.beginPath();
-      ctx.moveTo(padding, rowY + tableRowH);
-      ctx.lineTo(totalW - padding, rowY + tableRowH);
-      ctx.stroke();
-      ctx.font = '12px "Noto Sans KR", sans-serif';
-      ctx.fillStyle = '#334155';
-      ctx.fillText((r.checked_at || '').slice(0, 16), colX[0] + 12, rowY + 20);
-
-      // 순위 + 변동
-      var prevR = i > 0 ? data[i - 1] : null;
-      var diff = prevR && r.rank_position && prevR.rank_position ? prevR.rank_position - r.rank_position : null;
-      ctx.font = 'bold 13px "Noto Sans KR", sans-serif';
-      var rankText = r.rank_position ? r.rank_position + '위' : '미노출';
-      ctx.fillStyle = r.rank_position ? r.rank_position <= 10 ? '#059669' : r.rank_position <= 40 ? '#d97706' : '#dc2626' : '#94a3b8';
-      ctx.fillText(rankText, colX[1] + 12, rowY + 20);
-      if (diff != null && diff !== 0) {
-        var diffText = diff > 0 ? '▲' + diff : '▼' + Math.abs(diff);
-        var tw = ctx.measureText(rankText).width;
-        ctx.font = '11px "Noto Sans KR", sans-serif';
-        ctx.fillStyle = diff > 0 ? '#16a34a' : '#dc2626';
-        ctx.fillText(diffText, colX[1] + 12 + tw + 8, rowY + 20);
-      }
-      ctx.font = '12px "Noto Sans KR", sans-serif';
-      ctx.fillStyle = '#64748b';
-      ctx.fillText(r.check_type === 'manual' ? '수동' : '자동', colX[2] + 12, rowY + 20);
+    // 공용 헬퍼로 통합 — 순위 추적 페이지와 동일한 이미지 생성
+    window.exportRankHistoryImage({
+      rows: rankHistory,
+      storeName: selectedClient.name || '업체명',
+      keyword: activeKeyword,
+      storeUrl: selectedClient.naver_store_url || '',
+      days: days
     });
-
-    // ==================== 라인 차트 ====================
-    var chartTop = tableY + data.length * tableRowH + chartGap;
-    ctx.font = 'bold 15px "Noto Sans KR", sans-serif';
-    ctx.fillStyle = '#1e293b';
-    ctx.fillText('순위 변동 추이', padding, chartTop);
-    chartTop += 20;
-    var chartLeft = padding + 40;
-    var chartRight = totalW - padding - 20;
-    var chartBottom = chartTop + chartH - 30;
-    var chartInnerTop = chartTop + 10;
-
-    // 순위 데이터 (유효한 것만)
-    var validData = data.filter(function (r) {
-      return r.rank_position != null && r.rank_position > 0;
-    });
-    if (validData.length > 1) {
-      var ranks = validData.map(function (r) {
-        return r.rank_position;
-      });
-      var maxRank = Math.max.apply(null, ranks);
-      var minRank = Math.min.apply(null, ranks);
-      var rankRange = Math.max(maxRank - minRank, 4);
-      var yPad = Math.ceil(rankRange * 0.2);
-      var yMin = Math.max(1, minRank - yPad);
-      var yMax = maxRank + yPad;
-
-      // Y축 (순위: 위가 1위)
-      ctx.strokeStyle = '#e2e8f0';
-      ctx.lineWidth = 0.5;
-      ctx.font = '10px "Noto Sans KR", sans-serif';
-      ctx.fillStyle = '#94a3b8';
-      var ySteps = 5;
-      for (var yi = 0; yi <= ySteps; yi++) {
-        var yVal = Math.round(yMin + (yMax - yMin) * yi / ySteps);
-        var yPos = chartInnerTop + (chartBottom - chartInnerTop) * (yi / ySteps);
-        ctx.beginPath();
-        ctx.moveTo(chartLeft, yPos);
-        ctx.lineTo(chartRight, yPos);
-        ctx.stroke();
-        ctx.textAlign = 'right';
-        ctx.fillText(yVal + '위', chartLeft - 6, yPos + 4);
-      }
-      ctx.textAlign = 'left';
-
-      // X축 라벨
-      validData.forEach(function (r, i) {
-        var xPos = chartLeft + (chartRight - chartLeft) * (i / (validData.length - 1));
-        ctx.save();
-        ctx.font = '9px "Noto Sans KR", sans-serif';
-        ctx.fillStyle = '#94a3b8';
-        ctx.translate(xPos, chartBottom + 12);
-        ctx.rotate(-0.4);
-        ctx.fillText((r.checked_at || '').slice(5, 10), 0, 0);
-        ctx.restore();
-      });
-
-      // 라인 그리기
-      ctx.beginPath();
-      ctx.strokeStyle = '#3b82f6';
-      ctx.lineWidth = 2.5;
-      ctx.lineJoin = 'round';
-      validData.forEach(function (r, i) {
-        var xPos = chartLeft + (chartRight - chartLeft) * (i / (validData.length - 1));
-        var yPos = chartInnerTop + (chartBottom - chartInnerTop) * ((r.rank_position - yMin) / (yMax - yMin));
-        if (i === 0) ctx.moveTo(xPos, yPos);else ctx.lineTo(xPos, yPos);
-      });
-      ctx.stroke();
-
-      // 그라데이션 영역
-      ctx.beginPath();
-      validData.forEach(function (r, i) {
-        var xPos = chartLeft + (chartRight - chartLeft) * (i / (validData.length - 1));
-        var yPos = chartInnerTop + (chartBottom - chartInnerTop) * ((r.rank_position - yMin) / (yMax - yMin));
-        if (i === 0) ctx.moveTo(xPos, yPos);else ctx.lineTo(xPos, yPos);
-      });
-      var lastX = chartLeft + (chartRight - chartLeft);
-      ctx.lineTo(lastX, chartBottom);
-      ctx.lineTo(chartLeft, chartBottom);
-      ctx.closePath();
-      var areaGrad = ctx.createLinearGradient(0, chartInnerTop, 0, chartBottom);
-      areaGrad.addColorStop(0, 'rgba(59, 130, 246, 0.15)');
-      areaGrad.addColorStop(1, 'rgba(59, 130, 246, 0.02)');
-      ctx.fillStyle = areaGrad;
-      ctx.fill();
-
-      // 데이터 포인트
-      validData.forEach(function (r, i) {
-        var xPos = chartLeft + (chartRight - chartLeft) * (i / (validData.length - 1));
-        var yPos = chartInnerTop + (chartBottom - chartInnerTop) * ((r.rank_position - yMin) / (yMax - yMin));
-        ctx.beginPath();
-        ctx.arc(xPos, yPos, 4, 0, Math.PI * 2);
-        ctx.fillStyle = '#ffffff';
-        ctx.fill();
-        ctx.strokeStyle = '#3b82f6';
-        ctx.lineWidth = 2;
-        ctx.stroke();
-
-        // 순위 라벨
-        ctx.font = 'bold 10px "Noto Sans KR", sans-serif';
-        ctx.fillStyle = '#1e40af';
-        ctx.textAlign = 'center';
-        ctx.fillText(r.rank_position + '위', xPos, yPos - 10);
-      });
-      ctx.textAlign = 'left';
-    } else {
-      ctx.font = '13px "Noto Sans KR", sans-serif';
-      ctx.fillStyle = '#94a3b8';
-      ctx.fillText('차트를 표시하려면 유효한 순위 데이터가 2건 이상 필요합니다.', chartLeft, chartTop + 60);
-    }
-
-    // 워터마크
-    ctx.font = '10px "Noto Sans KR", sans-serif';
-    ctx.fillStyle = '#cbd5e1';
-    ctx.textAlign = 'right';
-    ctx.fillText('METAINC 로직분석', totalW - padding, totalH - 12);
-    ctx.textAlign = 'left';
-
-    // 다운로드
-    canvas.toBlob(function (blob) {
-      var a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = (selectedClient.name || '업체') + '_' + activeKeyword + '_순위이력_' + new Date().toISOString().slice(0, 10) + '.png';
-      a.click();
-      URL.revokeObjectURL(a.href);
-    }, 'image/png');
   };
-
-  // Canvas 둥근 사각형 헬퍼
-  function roundRect(ctx, x, y, w, h, r, fill, stroke) {
-    ctx.beginPath();
-    ctx.moveTo(x + r, y);
-    ctx.lineTo(x + w - r, y);
-    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-    ctx.lineTo(x + w, y + h - r);
-    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-    ctx.lineTo(x + r, y + h);
-    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-    ctx.lineTo(x, y + r);
-    ctx.quadraticCurveTo(x, y, x + r, y);
-    ctx.closePath();
-    if (fill) ctx.fill();
-    if (stroke) ctx.stroke();
-  }
   var uniqueKeywords = getUniqueKeywords();
 
   /* ==================== 렌더링 ==================== */
