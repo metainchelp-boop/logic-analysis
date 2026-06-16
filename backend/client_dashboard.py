@@ -11,7 +11,7 @@ import os
 import json
 import logging
 
-from auth import get_current_user, require_role
+from auth import get_current_user, require_role, require_register_permission
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +145,38 @@ def init_client_dashboard_db():
     finally:
         conn.close()
 
+    # 일회성 정리(멱등): 비-매니저(영업팀 '배재민')의 상승 권한/잘못된 등록 정리
+    cleanup_misassigned_clients()
+
+
+def cleanup_misassigned_clients():
+    """일회성·멱등 정리:
+    - name='배재민' 이고 role이 admin/manager인 계정 → viewer로 강등(영업팀은 등록권한 없어야 함)
+    - 그 계정이 등록한 active 업체 → status='terminated'(소프트 삭제, 복구 가능)
+      → 대시보드/담당자 탭(status='active'만 조회)에서 사라짐. 데이터는 보존.
+    superadmin은 건드리지 않음. 재실행해도 안전(이미 viewer면 매칭 안 됨)."""
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=10)
+        try:
+            conn.execute("PRAGMA busy_timeout=30000")
+            cur = conn.cursor()
+            rows = cur.execute(
+                "SELECT id, role FROM users WHERE name = ? AND role IN ('admin','manager')",
+                ('배재민',)
+            ).fetchall()
+            for uid, role in rows:
+                cur.execute("UPDATE users SET role='viewer' WHERE id=?", (uid,))
+                n = cur.execute(
+                    "UPDATE clients SET status='terminated', updated_at=datetime('now','localtime') "
+                    "WHERE created_by=? AND status='active'", (uid,)
+                ).rowcount
+                logger.info(f"[cleanup] '배재민'(uid={uid}, {role}→viewer), active 업체 {n}건 소프트삭제(terminated)")
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.error(f"[cleanup] 미할당 업체 정리 실패(무시): {e}")
+
 
 # ==================== Request / Response Models ====================
 
@@ -187,7 +219,7 @@ class SaveRankRequest(BaseModel):
 # ==================== 빠른 업체 등록 (분석 탭에서) ====================
 
 @router.post("/quick-register")
-def quick_register(req: QuickRegisterRequest, current_user: dict = Depends(require_role(["admin", "manager"]))):
+def quick_register(req: QuickRegisterRequest, current_user: dict = Depends(require_register_permission())):
     """분석 결과와 함께 업체를 빠르게 등록 (신규 또는 기존 업체에 분석 추가)"""
     conn = _get_conn()
     try:

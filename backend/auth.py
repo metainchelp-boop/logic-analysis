@@ -516,6 +516,17 @@ def require_role(*roles):
     return role_checker
 
 
+def require_register_permission():
+    """업체 '등록' 전용 권한 — 관리팀 매니저 + 최고관리자(superadmin)만 허용.
+    require_role과 달리 일반 admin/viewer는 등록 불가(관리부서 매니저로 제한).
+    단 superadmin(최고관리자)은 절대권한이므로 허용."""
+    async def _checker(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+        if current_user.get("role") not in ("manager", "superadmin"):
+            raise HTTPException(status_code=403, detail="업체 등록은 관리팀 매니저만 가능합니다.")
+        return current_user
+    return _checker
+
+
 # ============================================================================
 # API Router
 # ============================================================================
