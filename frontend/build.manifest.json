@@ -52,5 +52,6 @@
   "js/components/AnalysisStatsSection.jsx",
   "js/components/ChatWidget.jsx",
   "js/components/TopBar.jsx",
+  "js/components/Footer.jsx",
   "js/components/App.jsx"
 ]

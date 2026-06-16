@@ -1177,11 +1177,7 @@ window.App = function App() {
             }),
 
             /* 푸터 */
-            React.createElement('footer', { className: 'footer' },
-                React.createElement('div', { className: 'container' },
-                    '© 2026 메타아이앤씨 — 로직 분석 ' + APP_VERSION + ' | 네이버 쇼핑 키워드 분석 & 순위 추적'
-                )
-            )
+            React.createElement(window.Footer, null)
         ),
         React.createElement(window.ChatWidget, { currentUser: currentUser })
     );
@@ -1561,11 +1557,7 @@ window.App = function App() {
             ),
 
             /* 푸터 */
-            React.createElement('footer', { className: 'footer' },
-                React.createElement('div', { className: 'container' },
-                    '© 2026 메타아이앤씨 — 로직 분석 ' + APP_VERSION + ' | 네이버 쇼핑 키워드 분석 & 순위 추적'
-                )
-            )
+            React.createElement(window.Footer, null)
               ) /* report-main 닫기 */
             ) /* report-shell 닫기 */
         ),
