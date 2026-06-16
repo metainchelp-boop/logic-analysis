@@ -9,7 +9,7 @@ window.ClientListSection = function ClientListSection({ currentUser, onClientCli
     var _s1 = useState([]); var clients = _s1[0]; var setClients = _s1[1];
     var _s2 = useState(true); var loading = _s2[0]; var setLoading = _s2[1];
     var _s3 = useState(''); var query = _s3[0]; var setQuery = _s3[1];
-    var _s4 = useState(null); var expandedMgr = _s4[0]; var setExpandedMgr = _s4[1];
+    var _s4 = useState(null); var mgrFilter = _s4[0]; var setMgrFilter = _s4[1]; // 담당자 탭 필터(null=전체)
 
     // 상위 계정(관리자)만 담당자(등록 직원) 정보를 노출 (매니저는 본인 것만 보므로 불필요)
     var isAdmin = !!(currentUser && (currentUser.role === 'admin' || currentUser.role === 'superadmin'));
@@ -77,6 +77,8 @@ window.ClientListSection = function ClientListSection({ currentUser, onClientCli
     /* 검색 + 가나다 정렬 */
     var filtered = clients
         .filter(function(c) {
+            // 담당자 탭 필터 (null = 전체)
+            if (mgrFilter && (c.manager_name || '(미지정)') !== mgrFilter) return false;
             if (!query.trim()) return true;
             var q = query.trim().toLowerCase();
             return (c.name || '').toLowerCase().indexOf(q) !== -1
@@ -124,6 +126,25 @@ window.ClientListSection = function ClientListSection({ currentUser, onClientCli
                     }
                 })
             ),
+
+            /* 담당자별 구분 탭 (상위 계정 전용) — 클릭 시 해당 담당자 업체만 모아보기 */
+            isAdmin && !loading && clients.length > 0 && (function() {
+                var counts = {};
+                clients.forEach(function(c) { var m = c.manager_name || '(미지정)'; counts[m] = (counts[m] || 0) + 1; });
+                var names = Object.keys(counts).sort(function(a, b) { return counts[b] - counts[a]; });
+                var mkTab = function(label, val, count) {
+                    var on = mgrFilter === val;
+                    return React.createElement('button', { key: label, onClick: function() { setMgrFilter(val); },
+                        style: { fontSize: 12, fontWeight: 700, padding: '6px 12px', borderRadius: 999, cursor: 'pointer', whiteSpace: 'nowrap',
+                                 border: '1px solid ' + (on ? '#6d28d9' : '#e9d5ff'), background: on ? '#6d28d9' : '#faf5ff', color: on ? '#fff' : '#6d28d9' } },
+                        label + (count != null ? ' ' + count : ''));
+                };
+                return React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 16, paddingBottom: 14, borderBottom: '1px dashed #e2e8f0' } },
+                    React.createElement('span', { style: { fontSize: 12, color: '#94a3b8', fontWeight: 700, marginRight: 2 } }, '담당자별 보기'),
+                    mkTab('전체', null, clients.length),
+                    names.map(function(m) { return mkTab('👤 ' + m, m, counts[m]); })
+                );
+            })(),
 
             /* 로딩 */
             loading && React.createElement('div', {
@@ -221,40 +242,7 @@ window.ClientListSection = function ClientListSection({ currentUser, onClientCli
                         }, '업체 상세 보기 →')
                     );
                 })
-            ),
-
-            /* 담당자별 등록 현황 (상위 계정 전용) */
-            (isAdmin && !loading && clients.length > 0) && (function() {
-                var groups = {};
-                clients.forEach(function(c) { var m = c.manager_name || '(미지정)'; (groups[m] = groups[m] || []).push(c); });
-                var names = Object.keys(groups).sort(function(a, b) { return groups[b].length - groups[a].length; });
-                return React.createElement('div', { style: { marginTop: 28 } },
-                    React.createElement('div', { style: { fontSize: 16, fontWeight: 800, color: '#1e293b', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 8 } },
-                        '👥 담당자별 등록 현황',
-                        React.createElement('span', { style: { fontSize: 12, fontWeight: 500, color: '#94a3b8' } }, '(' + names.length + '명)')
-                    ),
-                    React.createElement('div', { style: { fontSize: 12, color: '#64748b', marginBottom: 12 } }, '담당자를 클릭하면 등록한 업체 목록을 볼 수 있어요.'),
-                    React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
-                        names.map(function(m) {
-                            var list = groups[m];
-                            var open = expandedMgr === m;
-                            return React.createElement('div', { key: m, style: { border: '1px solid #e9d5ff', borderRadius: 12, overflow: 'hidden', background: '#faf5ff' } },
-                                React.createElement('div', { onClick: function() { setExpandedMgr(open ? null : m); },
-                                    style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', cursor: 'pointer', fontWeight: 700, color: '#6d28d9' } },
-                                    React.createElement('span', null, React.createElement('span', { style: { color: '#a78bfa', marginRight: 6, fontSize: 11 } }, open ? '▼' : '▶'), '👤 ' + m),
-                                    React.createElement('span', { style: { fontSize: 12, fontWeight: 800, background: '#ede9fe', color: '#6d28d9', padding: '2px 10px', borderRadius: 999 } }, list.length + '개')
-                                ),
-                                open && React.createElement('div', { style: { padding: '4px 14px 12px', display: 'flex', flexWrap: 'wrap', gap: 6 } },
-                                    list.map(function(c) {
-                                        return React.createElement('span', { key: c.id, onClick: function() { handleViewClient(c); },
-                                            style: { fontSize: 12, background: '#fff', border: '1px solid #ddd6fe', borderRadius: 8, padding: '4px 10px', color: '#1e293b', cursor: 'pointer' } }, c.name || '(이름 없음)');
-                                    })
-                                )
-                            );
-                        })
-                    )
-                );
-            })()
+            )
         )
     );
 };
