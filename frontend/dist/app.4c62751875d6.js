@@ -17327,328 +17327,30 @@ window.AnalysisResults = function AnalysisResults(props) {
   React.createElement(window.Footer, null)) /* report-main 닫기 */) /* report-shell 닫기 */;
 };
 
-;/* ===== js/components/App.jsx ===== */
-/* App — 메인 앱 컴포넌트 (v3 에이전시) */
-/* APP_VERSION은 utils.js에서 전역 선언 */
-
-/* ==================== 정적 스타일 (렌더 밖 — 매번 재생성 방지) ==================== */
-
-window.App = function App() {
-  const {
-    useState,
-    useEffect,
-    useCallback
-  } = React;
-
-  /* ==================== 인증 상태 ==================== */
-  const [currentUser, setCurrentUser] = useState(null);
-  const [authToken, setAuthToken] = useState(null);
-  const [authChecking, setAuthChecking] = useState(true);
-  // URL hash에서 현재 페이지 복원 (새로고침 시 탭 유지)
-  var _getPageFromHash = function () {
-    var hash = window.location.hash.replace('#', '');
-    var validPages = ['home', 'analysis', 'management', 'guide', 'settings'];
-    return validPages.indexOf(hash) !== -1 ? hash : 'home';
-  };
-  const [currentPage, setCurrentPage] = useState(_getPageFromHash);
-
-  /* ==================== 기존 상태 (hooks는 반드시 조건문 전에) ==================== */
-  const [health, setHealth] = useState(false);
-  const [products, setProducts] = useState([]);
-  const [searchLoading, setSearchLoading] = useState(false);
-  const [searchedKeyword, setSearchedKeyword] = useState('');
-  const [volumeData, setVolumeData] = useState(null);
-  const [relatedData, setRelatedData] = useState(null);
-  const [analysisData, setAnalysisData] = useState(null);
-  const [shopProducts, setShopProducts] = useState(null);
-  const [advertiserReport, setAdvertiserReport] = useState(null);
-  const [advertiserLoading, setAdvertiserLoading] = useState(false);
-  const [htmlReviewData, setHtmlReviewData] = useState(null);
-  const [htmlDetailResult, setHtmlDetailResult] = useState(null);
-  const [searchedProductUrl, setSearchedProductUrl] = useState('');
-  const [companyName, setCompanyName] = useState('');
-  const [datalabData, setDatalabData] = useState(null);
-  const [datalabLoading, setDatalabLoading] = useState(false);
-  const [rankCheckResult, setRankCheckResult] = useState(null); // 순위 추적 → 진입 전략 공유용
-  const searchIdRef = React.useRef(0); // 비동기 요청 경합 방지용
-  const lastHtmlRef = React.useRef(''); // #1: 마지막 분석에 쓰인 상세 HTML (업체 저장/재사용용)
-
-  /* 업체 카드 클릭으로 시작된 분석 추적 (자동 저장용) */
-  const [currentClientId, setCurrentClientId] = useState(null);
-  const [searchBarInitial, setSearchBarInitial] = useState(null);
-  const [autoSaveStatus, setAutoSaveStatus] = useState(''); // '', 'saving', 'saved', 'error'
-
-  /* 순위 추적 → 업체관리 이동 시 자동 검색용 */
-  const [managementInitialSearch, setManagementInitialSearch] = useState(null);
-  var saveAuth = function (user, token) {
-    setCurrentUser(user);
-    setAuthToken(token);
-    try {
-      sessionStorage.setItem('logic_token', token);
-      sessionStorage.setItem('logic_user', JSON.stringify(user));
-    } catch (e) {}
-  };
-  var clearAuth = function () {
-    setCurrentUser(null);
-    setAuthToken(null);
-    setCurrentPage('analysis');
-    try {
-      sessionStorage.removeItem('logic_token');
-      sessionStorage.removeItem('logic_user');
-    } catch (e) {}
-  };
-  useEffect(function () {
-    try {
-      // 0) 전산(ERP) SSO 자동 로그인: URL ?sso=<토큰> 있으면 우선 처리
-      var _ssoTok = '';
-      try {
-        _ssoTok = new URLSearchParams(window.location.search).get('sso') || '';
-      } catch (e) {}
-      if (_ssoTok) {
-        var _cleanUrl = function () {
-          try {
-            var u = new URL(window.location.href);
-            u.searchParams.delete('sso');
-            window.history.replaceState({}, document.title, u.pathname + u.search + u.hash);
-          } catch (e) {}
-        };
-        fetch('/api/auth/sso', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            token: _ssoTok
-          })
-        }).then(function (r) {
-          return r.json();
-        }).then(function (data) {
-          _cleanUrl();
-          if (data && data.success && data.token && data.user) {
-            saveAuth(data.user, data.token);
-          }
-          setAuthChecking(false);
-        }).catch(function () {
-          _cleanUrl();
-          setAuthChecking(false);
-        });
-        return; // SSO 처리로 분기 — 아래 세션복원 스킵
-      }
-      // 기존 세션 복원
-      var savedToken = sessionStorage.getItem('logic_token');
-      if (savedToken) {
-        fetch('/api/auth/me', {
-          headers: {
-            'Authorization': 'Bearer ' + savedToken
-          }
-        }).then(function (r) {
-          return r.json();
-        }).then(function (data) {
-          if (data && data.id) {
-            setCurrentUser(data);
-            setAuthToken(savedToken);
-          } else if (data && data.success && data.user) {
-            setCurrentUser(data.user);
-            setAuthToken(savedToken);
-          }
-          setAuthChecking(false);
-        }).catch(function () {
-          setAuthChecking(false);
-        });
-      } else {
-        setAuthChecking(false);
-      }
-    } catch (e) {
-      setAuthChecking(false);
-    }
-  }, []);
-
-  // URL hash ↔ currentPage 동기화
-  useEffect(function () {
-    if (currentPage) {
-      window.location.hash = currentPage;
-    }
-  }, [currentPage]);
-  useEffect(function () {
-    var onHashChange = function () {
-      var page = _getPageFromHash();
-      setCurrentPage(page);
-    };
-    window.addEventListener('hashchange', onHashChange);
-    return function () {
-      window.removeEventListener('hashchange', onHashChange);
-    };
-  }, []);
-
-  // 헬스체크
-  useEffect(function () {
-    if (currentUser) {
-      api.get('/health').then(function (res) {
-        setHealth(res.status === 'ok');
-      }).catch(function () {
-        setHealth(false);
-      });
-    }
-  }, [currentUser]);
-
-  // 상품 목록 로드
-  var loadProducts = useCallback(function () {
-    api.get('/products').then(function (res) {
-      if (res.success) setProducts(res.data);
-    }).catch(function () {});
-  }, []);
-  useEffect(function () {
-    if (currentUser) loadProducts();
-  }, [loadProducts, currentUser]);
-
-  /* 업체 연동 자동 저장 — Rules of Hooks에 따라 early return 이전에 선언.
-     실제 저장 조건은 effect 내부에서 가드 (로그인 전에는 currentClientId가 null이라 no-op). */
-  useEffect(function () {
-    if (!currentClientId) return;
-    if (!analysisData) return;
-    if (searchLoading) return;
-    if (currentUser && currentUser.role === 'viewer') return; // 뷰어는 자동저장 금지
-    if (autoSaveStatus === 'saving' || autoSaveStatus === 'saved') return;
-    setAutoSaveStatus('saving');
-    var savedClientId = currentClientId;
-    var savedKeyword = searchedKeyword;
-    var savedUrl = searchedProductUrl;
-    var mounted = true;
-    var nestedTimers = [];
-    var timer = setTimeout(function () {
-      if (!mounted) return;
-      var reportHtml = typeof captureAutoReportHtml === 'function' ? captureAutoReportHtml(savedKeyword) : '';
-      api.post('/cd/analyze', {
-        client_id: savedClientId,
-        keyword: savedKeyword,
-        product_url: savedUrl || '',
-        analysis_data: htmlDetailResult ? Object.assign({}, analysisData, {
-          htmlDetail: trimHtmlDetail(htmlDetailResult)
-        }) : analysisData,
-        volume_data: volumeData || {},
-        related_data: relatedData || {},
-        shop_products: (shopProducts || []).slice(0, 20),
-        advertiser_data: advertiserReport || {},
-        report_html: reportHtml,
-        detail_html: lastHtmlRef.current || ''
-      }).then(function (res) {
-        if (!mounted) return;
-        if (res && res.success) {
-          setAutoSaveStatus('saved');
-          nestedTimers.push(setTimeout(function () {
-            if (mounted) setAutoSaveStatus('');
-          }, 4000));
-        } else {
-          setAutoSaveStatus('error');
-          nestedTimers.push(setTimeout(function () {
-            if (mounted) setAutoSaveStatus('');
-          }, 5000));
-        }
-      }).catch(function () {
-        if (!mounted) return;
-        setAutoSaveStatus('error');
-        nestedTimers.push(setTimeout(function () {
-          if (mounted) setAutoSaveStatus('');
-        }, 5000));
-      });
-    }, 25000);
-    return function () {
-      mounted = false;
-      clearTimeout(timer);
-      nestedTimers.forEach(function (t) {
-        clearTimeout(t);
-      });
-    };
-  }, [analysisData, currentClientId, searchLoading, autoSaveStatus]);
-  if (authChecking) return React.createElement('div', {
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      justifyContent: 'center',
-      alignItems: 'center',
-      height: '100vh',
-      background: 'linear-gradient(135deg,#6C5CE7,#a29bfe)',
-      gap: 16
-    }
-  }, React.createElement('img', {
-    src: '/img/logo_dark.png',
-    alt: 'META INC',
-    style: {
-      height: 40,
-      width: 'auto',
-      marginBottom: 8
-    }
-  }), React.createElement('span', {
-    className: 'spinner',
-    style: {
-      width: 28,
-      height: 28,
-      borderWidth: 3,
-      borderColor: 'rgba(255,255,255,0.3)',
-      borderTopColor: '#fff'
-    }
-  }), React.createElement('div', {
-    style: {
-      color: '#fff',
-      fontSize: 14,
-      fontWeight: 500,
-      opacity: 0.8
-    }
-  }, '시스템 연결 중...'));
-  if (!currentUser) return React.createElement(window.LoginPage, {
-    onLogin: saveAuth
-  });
-
-  // 수동 검색 (SearchBar 제출): 업체 자동연동 해제
-  var handleManualSearch = function (keyword, productUrl, inputCompanyName, htmlInput) {
-    setCurrentClientId(null);
-    setAutoSaveStatus('');
-    handleSearch(keyword, productUrl, inputCompanyName, htmlInput);
-  };
-
-  // 상품 URL 정리 — 불필요한 추적 파라미터 제거
-  var cleanProductUrl = function (url) {
-    if (!url) return '';
-    try {
-      var u = new URL(url);
-      // smartstore URL이면 path만 유지 (NaPm, nl-query 등 제거)
-      if (u.hostname.indexOf('smartstore.naver.com') !== -1) {
-        return u.origin + u.pathname;
-      }
-      // 그 외 URL은 NaPm, nl-query 파라미터만 제거
-      u.searchParams.delete('NaPm');
-      u.searchParams.delete('nl-query');
-      return u.toString();
-    } catch (e) {
-      return url;
-    }
-  };
-
-  // 통합 검색 (htmlInput: 검색바에서 입력된 HTML — 상세페이지 분석 + 리뷰 추출에 사용)
-  var handleSearch = function (keyword, productUrl, inputCompanyName, htmlInput) {
-    // Viewer 일일 분석 횟수 체크 (백엔드 연동)
-    if (currentUser && currentUser.role === 'viewer') {
-      api.get('/cd/usage/check').then(function (usageRes) {
-        if (usageRes && usageRes.success && usageRes.data && !usageRes.data.can_query) {
-          toast.error('일일 분석 제한(3회)을 초과했습니다. 내일 자정에 초기화됩니다.');
-          return;
-        }
-        // 제한 내 → 카운트 증가 후 실제 분석 실행
-        api.post('/cd/usage/increment').then(function () {
-          _doSearch(keyword, productUrl, inputCompanyName, htmlInput);
-        }).catch(function () {
-          _doSearch(keyword, productUrl, inputCompanyName, htmlInput);
-        });
-      }).catch(function () {
-        _doSearch(keyword, productUrl, inputCompanyName, htmlInput);
-      });
-      return;
-    }
-    // 관리자/매니저도 수동 분석 카운팅
-    api.post('/cd/usage/increment').catch(function () {});
-    _doSearch(keyword, productUrl, inputCompanyName, htmlInput);
-  };
-  var _doSearch = function (keyword, productUrl, inputCompanyName, htmlInput) {
+;/* ===== js/analysis.jsx ===== */
+/* analysis.jsx — 분석 실행 로직(_doSearch)을 App.jsx에서 분리
+ * window.createDoSearch(deps) → _doSearch 함수 반환. deps로 App의 setter/ref/값 주입. */
+window.createDoSearch = function (deps) {
+  var cleanProductUrl = deps.cleanProductUrl;
+  var lastHtmlRef = deps.lastHtmlRef;
+  var products = deps.products;
+  var searchIdRef = deps.searchIdRef;
+  var setAdvertiserLoading = deps.setAdvertiserLoading;
+  var setAdvertiserReport = deps.setAdvertiserReport;
+  var setAnalysisData = deps.setAnalysisData;
+  var setCompanyName = deps.setCompanyName;
+  var setDatalabData = deps.setDatalabData;
+  var setDatalabLoading = deps.setDatalabLoading;
+  var setHtmlDetailResult = deps.setHtmlDetailResult;
+  var setHtmlReviewData = deps.setHtmlReviewData;
+  var setRankCheckResult = deps.setRankCheckResult;
+  var setRelatedData = deps.setRelatedData;
+  var setSearchLoading = deps.setSearchLoading;
+  var setSearchedKeyword = deps.setSearchedKeyword;
+  var setSearchedProductUrl = deps.setSearchedProductUrl;
+  var setShopProducts = deps.setShopProducts;
+  var setVolumeData = deps.setVolumeData;
+  return function _doSearch(keyword, productUrl, inputCompanyName, htmlInput) {
     lastHtmlRef.current = htmlInput || ''; // #1: 저장/재사용용 상세 HTML 보관
     if (inputCompanyName !== undefined) setCompanyName(inputCompanyName);
     var cleanedUrl = cleanProductUrl(productUrl);
@@ -18563,6 +18265,350 @@ window.App = function App() {
       setSearchLoading(false);
     });
   };
+};
+
+;/* ===== js/components/App.jsx ===== */
+/* App — 메인 앱 컴포넌트 (v3 에이전시) */
+/* APP_VERSION은 utils.js에서 전역 선언 */
+
+/* ==================== 정적 스타일 (렌더 밖 — 매번 재생성 방지) ==================== */
+
+window.App = function App() {
+  const {
+    useState,
+    useEffect,
+    useCallback
+  } = React;
+
+  /* ==================== 인증 상태 ==================== */
+  const [currentUser, setCurrentUser] = useState(null);
+  const [authToken, setAuthToken] = useState(null);
+  const [authChecking, setAuthChecking] = useState(true);
+  // URL hash에서 현재 페이지 복원 (새로고침 시 탭 유지)
+  var _getPageFromHash = function () {
+    var hash = window.location.hash.replace('#', '');
+    var validPages = ['home', 'analysis', 'management', 'guide', 'settings'];
+    return validPages.indexOf(hash) !== -1 ? hash : 'home';
+  };
+  const [currentPage, setCurrentPage] = useState(_getPageFromHash);
+
+  /* ==================== 기존 상태 (hooks는 반드시 조건문 전에) ==================== */
+  const [health, setHealth] = useState(false);
+  const [products, setProducts] = useState([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchedKeyword, setSearchedKeyword] = useState('');
+  const [volumeData, setVolumeData] = useState(null);
+  const [relatedData, setRelatedData] = useState(null);
+  const [analysisData, setAnalysisData] = useState(null);
+  const [shopProducts, setShopProducts] = useState(null);
+  const [advertiserReport, setAdvertiserReport] = useState(null);
+  const [advertiserLoading, setAdvertiserLoading] = useState(false);
+  const [htmlReviewData, setHtmlReviewData] = useState(null);
+  const [htmlDetailResult, setHtmlDetailResult] = useState(null);
+  const [searchedProductUrl, setSearchedProductUrl] = useState('');
+  const [companyName, setCompanyName] = useState('');
+  const [datalabData, setDatalabData] = useState(null);
+  const [datalabLoading, setDatalabLoading] = useState(false);
+  const [rankCheckResult, setRankCheckResult] = useState(null); // 순위 추적 → 진입 전략 공유용
+  const searchIdRef = React.useRef(0); // 비동기 요청 경합 방지용
+  const lastHtmlRef = React.useRef(''); // #1: 마지막 분석에 쓰인 상세 HTML (업체 저장/재사용용)
+
+  /* 업체 카드 클릭으로 시작된 분석 추적 (자동 저장용) */
+  const [currentClientId, setCurrentClientId] = useState(null);
+  const [searchBarInitial, setSearchBarInitial] = useState(null);
+  const [autoSaveStatus, setAutoSaveStatus] = useState(''); // '', 'saving', 'saved', 'error'
+
+  /* 순위 추적 → 업체관리 이동 시 자동 검색용 */
+  const [managementInitialSearch, setManagementInitialSearch] = useState(null);
+  var saveAuth = function (user, token) {
+    setCurrentUser(user);
+    setAuthToken(token);
+    try {
+      sessionStorage.setItem('logic_token', token);
+      sessionStorage.setItem('logic_user', JSON.stringify(user));
+    } catch (e) {}
+  };
+  var clearAuth = function () {
+    setCurrentUser(null);
+    setAuthToken(null);
+    setCurrentPage('analysis');
+    try {
+      sessionStorage.removeItem('logic_token');
+      sessionStorage.removeItem('logic_user');
+    } catch (e) {}
+  };
+  useEffect(function () {
+    try {
+      // 0) 전산(ERP) SSO 자동 로그인: URL ?sso=<토큰> 있으면 우선 처리
+      var _ssoTok = '';
+      try {
+        _ssoTok = new URLSearchParams(window.location.search).get('sso') || '';
+      } catch (e) {}
+      if (_ssoTok) {
+        var _cleanUrl = function () {
+          try {
+            var u = new URL(window.location.href);
+            u.searchParams.delete('sso');
+            window.history.replaceState({}, document.title, u.pathname + u.search + u.hash);
+          } catch (e) {}
+        };
+        fetch('/api/auth/sso', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            token: _ssoTok
+          })
+        }).then(function (r) {
+          return r.json();
+        }).then(function (data) {
+          _cleanUrl();
+          if (data && data.success && data.token && data.user) {
+            saveAuth(data.user, data.token);
+          }
+          setAuthChecking(false);
+        }).catch(function () {
+          _cleanUrl();
+          setAuthChecking(false);
+        });
+        return; // SSO 처리로 분기 — 아래 세션복원 스킵
+      }
+      // 기존 세션 복원
+      var savedToken = sessionStorage.getItem('logic_token');
+      if (savedToken) {
+        fetch('/api/auth/me', {
+          headers: {
+            'Authorization': 'Bearer ' + savedToken
+          }
+        }).then(function (r) {
+          return r.json();
+        }).then(function (data) {
+          if (data && data.id) {
+            setCurrentUser(data);
+            setAuthToken(savedToken);
+          } else if (data && data.success && data.user) {
+            setCurrentUser(data.user);
+            setAuthToken(savedToken);
+          }
+          setAuthChecking(false);
+        }).catch(function () {
+          setAuthChecking(false);
+        });
+      } else {
+        setAuthChecking(false);
+      }
+    } catch (e) {
+      setAuthChecking(false);
+    }
+  }, []);
+
+  // URL hash ↔ currentPage 동기화
+  useEffect(function () {
+    if (currentPage) {
+      window.location.hash = currentPage;
+    }
+  }, [currentPage]);
+  useEffect(function () {
+    var onHashChange = function () {
+      var page = _getPageFromHash();
+      setCurrentPage(page);
+    };
+    window.addEventListener('hashchange', onHashChange);
+    return function () {
+      window.removeEventListener('hashchange', onHashChange);
+    };
+  }, []);
+
+  // 헬스체크
+  useEffect(function () {
+    if (currentUser) {
+      api.get('/health').then(function (res) {
+        setHealth(res.status === 'ok');
+      }).catch(function () {
+        setHealth(false);
+      });
+    }
+  }, [currentUser]);
+
+  // 상품 목록 로드
+  var loadProducts = useCallback(function () {
+    api.get('/products').then(function (res) {
+      if (res.success) setProducts(res.data);
+    }).catch(function () {});
+  }, []);
+  useEffect(function () {
+    if (currentUser) loadProducts();
+  }, [loadProducts, currentUser]);
+
+  /* 업체 연동 자동 저장 — Rules of Hooks에 따라 early return 이전에 선언.
+     실제 저장 조건은 effect 내부에서 가드 (로그인 전에는 currentClientId가 null이라 no-op). */
+  useEffect(function () {
+    if (!currentClientId) return;
+    if (!analysisData) return;
+    if (searchLoading) return;
+    if (currentUser && currentUser.role === 'viewer') return; // 뷰어는 자동저장 금지
+    if (autoSaveStatus === 'saving' || autoSaveStatus === 'saved') return;
+    setAutoSaveStatus('saving');
+    var savedClientId = currentClientId;
+    var savedKeyword = searchedKeyword;
+    var savedUrl = searchedProductUrl;
+    var mounted = true;
+    var nestedTimers = [];
+    var timer = setTimeout(function () {
+      if (!mounted) return;
+      var reportHtml = typeof captureAutoReportHtml === 'function' ? captureAutoReportHtml(savedKeyword) : '';
+      api.post('/cd/analyze', {
+        client_id: savedClientId,
+        keyword: savedKeyword,
+        product_url: savedUrl || '',
+        analysis_data: htmlDetailResult ? Object.assign({}, analysisData, {
+          htmlDetail: trimHtmlDetail(htmlDetailResult)
+        }) : analysisData,
+        volume_data: volumeData || {},
+        related_data: relatedData || {},
+        shop_products: (shopProducts || []).slice(0, 20),
+        advertiser_data: advertiserReport || {},
+        report_html: reportHtml,
+        detail_html: lastHtmlRef.current || ''
+      }).then(function (res) {
+        if (!mounted) return;
+        if (res && res.success) {
+          setAutoSaveStatus('saved');
+          nestedTimers.push(setTimeout(function () {
+            if (mounted) setAutoSaveStatus('');
+          }, 4000));
+        } else {
+          setAutoSaveStatus('error');
+          nestedTimers.push(setTimeout(function () {
+            if (mounted) setAutoSaveStatus('');
+          }, 5000));
+        }
+      }).catch(function () {
+        if (!mounted) return;
+        setAutoSaveStatus('error');
+        nestedTimers.push(setTimeout(function () {
+          if (mounted) setAutoSaveStatus('');
+        }, 5000));
+      });
+    }, 25000);
+    return function () {
+      mounted = false;
+      clearTimeout(timer);
+      nestedTimers.forEach(function (t) {
+        clearTimeout(t);
+      });
+    };
+  }, [analysisData, currentClientId, searchLoading, autoSaveStatus]);
+  if (authChecking) return React.createElement('div', {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      justifyContent: 'center',
+      alignItems: 'center',
+      height: '100vh',
+      background: 'linear-gradient(135deg,#6C5CE7,#a29bfe)',
+      gap: 16
+    }
+  }, React.createElement('img', {
+    src: '/img/logo_dark.png',
+    alt: 'META INC',
+    style: {
+      height: 40,
+      width: 'auto',
+      marginBottom: 8
+    }
+  }), React.createElement('span', {
+    className: 'spinner',
+    style: {
+      width: 28,
+      height: 28,
+      borderWidth: 3,
+      borderColor: 'rgba(255,255,255,0.3)',
+      borderTopColor: '#fff'
+    }
+  }), React.createElement('div', {
+    style: {
+      color: '#fff',
+      fontSize: 14,
+      fontWeight: 500,
+      opacity: 0.8
+    }
+  }, '시스템 연결 중...'));
+  if (!currentUser) return React.createElement(window.LoginPage, {
+    onLogin: saveAuth
+  });
+
+  // 수동 검색 (SearchBar 제출): 업체 자동연동 해제
+  var handleManualSearch = function (keyword, productUrl, inputCompanyName, htmlInput) {
+    setCurrentClientId(null);
+    setAutoSaveStatus('');
+    handleSearch(keyword, productUrl, inputCompanyName, htmlInput);
+  };
+
+  // 상품 URL 정리 — 불필요한 추적 파라미터 제거
+  var cleanProductUrl = function (url) {
+    if (!url) return '';
+    try {
+      var u = new URL(url);
+      // smartstore URL이면 path만 유지 (NaPm, nl-query 등 제거)
+      if (u.hostname.indexOf('smartstore.naver.com') !== -1) {
+        return u.origin + u.pathname;
+      }
+      // 그 외 URL은 NaPm, nl-query 파라미터만 제거
+      u.searchParams.delete('NaPm');
+      u.searchParams.delete('nl-query');
+      return u.toString();
+    } catch (e) {
+      return url;
+    }
+  };
+
+  // 통합 검색 (htmlInput: 검색바에서 입력된 HTML — 상세페이지 분석 + 리뷰 추출에 사용)
+  var handleSearch = function (keyword, productUrl, inputCompanyName, htmlInput) {
+    // Viewer 일일 분석 횟수 체크 (백엔드 연동)
+    if (currentUser && currentUser.role === 'viewer') {
+      api.get('/cd/usage/check').then(function (usageRes) {
+        if (usageRes && usageRes.success && usageRes.data && !usageRes.data.can_query) {
+          toast.error('일일 분석 제한(3회)을 초과했습니다. 내일 자정에 초기화됩니다.');
+          return;
+        }
+        // 제한 내 → 카운트 증가 후 실제 분석 실행
+        api.post('/cd/usage/increment').then(function () {
+          _doSearch(keyword, productUrl, inputCompanyName, htmlInput);
+        }).catch(function () {
+          _doSearch(keyword, productUrl, inputCompanyName, htmlInput);
+        });
+      }).catch(function () {
+        _doSearch(keyword, productUrl, inputCompanyName, htmlInput);
+      });
+      return;
+    }
+    // 관리자/매니저도 수동 분석 카운팅
+    api.post('/cd/usage/increment').catch(function () {});
+    _doSearch(keyword, productUrl, inputCompanyName, htmlInput);
+  };
+  var _doSearch = window.createDoSearch({
+    cleanProductUrl: cleanProductUrl,
+    lastHtmlRef: lastHtmlRef,
+    products: products,
+    searchIdRef: searchIdRef,
+    setAdvertiserLoading: setAdvertiserLoading,
+    setAdvertiserReport: setAdvertiserReport,
+    setAnalysisData: setAnalysisData,
+    setCompanyName: setCompanyName,
+    setDatalabData: setDatalabData,
+    setDatalabLoading: setDatalabLoading,
+    setHtmlDetailResult: setHtmlDetailResult,
+    setHtmlReviewData: setHtmlReviewData,
+    setRankCheckResult: setRankCheckResult,
+    setRelatedData: setRelatedData,
+    setSearchLoading: setSearchLoading,
+    setSearchedKeyword: setSearchedKeyword,
+    setSearchedProductUrl: setSearchedProductUrl,
+    setShopProducts: setShopProducts,
+    setVolumeData: setVolumeData
+  });
 
   /* ==================== 순위 추적 → 업체관리 이동 ==================== */
   var handleNavigateToClient = function (storeName, productUrl) {
