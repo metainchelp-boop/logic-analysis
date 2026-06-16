@@ -511,7 +511,6 @@ def get_client_diagnostics(
 
     '진행중(active) 업체 일부가 사라짐' 원인 파악용:
     - byStatus: 상태별 업체 수
-    - orphanActive: 등록자(created_by)가 없는 active 업체 (manager에게 안 보임 → 사라짐처럼 보일 수 있음)
     - recentInactive: 최근 paused/terminated로 바뀐 업체 (의도치 않은 상태 변경 의심)
     """
     try:
@@ -519,13 +518,6 @@ def get_client_diagnostics(
             cursor = conn.cursor()
             cursor.execute("SELECT status, COUNT(*) as cnt FROM clients GROUP BY status")
             by_status = {row["status"]: row["cnt"] for row in cursor.fetchall()}
-
-            cursor.execute(
-                "SELECT id, name, created_by, created_at FROM clients "
-                "WHERE status='active' AND (created_by IS NULL OR created_by='') "
-                "ORDER BY created_at DESC"
-            )
-            orphan_active = [dict(r) for r in cursor.fetchall()]
 
             cursor.execute(
                 "SELECT id, name, status, updated_at FROM clients "
@@ -567,8 +559,6 @@ def get_client_diagnostics(
             "success": True,
             "data": {
                 "byStatus": by_status,
-                "orphanActive": orphan_active,
-                "orphanActiveCount": len(orphan_active),
                 "recentInactive": recent_inactive,
                 "disk": disk,
             },
