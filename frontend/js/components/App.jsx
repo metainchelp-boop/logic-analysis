@@ -2,14 +2,6 @@
 /* APP_VERSION은 utils.js에서 전역 선언 */
 
 /* ==================== 정적 스타일 (렌더 밖 — 매번 재생성 방지) ==================== */
-var _navBtnBase = { padding: '7px 16px', borderRadius: 8, cursor: 'pointer', fontSize: 13, transition: 'all 0.2s' };
-var _navBtnActive = Object.assign({}, _navBtnBase, { background: '#3b82f6', color: '#fff', border: '1px solid #3b82f6', fontWeight: 700 });
-var _navBtnInactive = Object.assign({}, _navBtnBase, { background: '#ffffff', color: '#475569', border: '1px solid #f0d2d2', fontWeight: 500 });
-var _navUserStyle = { color: '#475569', fontSize: 13, fontWeight: 600 };
-var _navLogoutStyle = { background: 'rgba(239,68,68,0.15)', color: '#fca5a5', border: '1px solid rgba(239,68,68,0.2)', padding: '6px 14px', borderRadius: 8, cursor: 'pointer', fontSize: 13 };
-var _topbarContainer = { display:'flex', alignItems:'center', justifyContent:'flex-start', flexWrap:'wrap', minHeight: 48, padding:'8px 24px', gap:10 };
-var _versionBadge = { fontSize:11, color:'#94a3b8', background:'#f1f5f9', padding:'2px 8px', borderRadius:10, fontWeight:400 };
-var _healthBadge = { background:'#dcfce7', color:'#16a34a', fontSize:11, padding:'2px 8px', borderRadius:10, fontWeight:600 };
 
 window.App = function App() {
     const { useState, useEffect, useCallback } = React;
@@ -1145,39 +1137,8 @@ window.App = function App() {
     };
 
     /* ==================== Topbar 스타일 (정적 객체는 컴포넌트 밖에 선언) ==================== */
-    var navBtn = function(active) { return active ? _navBtnActive : _navBtnInactive; };
 
 
-    var renderTopbar = function(activePage) {
-        return React.createElement('div', { className: 'topbar' },
-            React.createElement('div', { className: 'container', style: _topbarContainer },
-                React.createElement('div', { className: 'logo', style: { cursor:'pointer', display:'flex', alignItems:'center', gap:8 }, onClick: function() { setCurrentPage('home'); } },
-                    React.createElement('img', { src: '/img/logo_light.png', alt: 'META INC', style: { height:28, width:'auto', display:'block' } }),
-                    React.createElement('span', { style: _versionBadge }, APP_VERSION),
-                    (activePage === 'analysis' || activePage === 'home') && health && React.createElement('span', { style: _healthBadge }, '● 정상')
-                ),
-                React.createElement('div', { className: 'topbar-nav-btns', style: { display:'flex', alignItems:'center', gap:16, flexWrap:'wrap', marginLeft:8 } },
-                    React.createElement('button', { onClick: function(){setCurrentPage('home');}, style: navBtn(activePage === 'home') }, '🏠 대시보드'),
-                    React.createElement('button', { onClick: function(){setCurrentPage('analysis');}, style: navBtn(activePage === 'analysis') }, '📍 순위 추적'),
-                    React.createElement('button', { onClick: function(){setCurrentPage('management');}, style: navBtn(activePage === 'management') }, '📈 로직 분석'),
-                    React.createElement('button', { onClick: function(){setCurrentPage('guide');}, style: navBtn(activePage === 'guide') }, '📖 설명서'),
-                    // 👥 직원 탭 제거 — SSO(ERP 연동)로 계정 자동 관리, 로그인 이력/실행 건수는 ⚙️설정 탭으로 통합
-                    currentUser.role === 'superadmin' && React.createElement('button', { onClick: function(){setCurrentPage('settings');}, style: navBtn(activePage === 'settings') }, '⚙️ 설정')
-                ),
-                React.createElement('div', { className: 'topbar-user-area', style: { display:'flex', alignItems:'center', gap:8, marginLeft:'auto' } },
-                    React.createElement('span', { style: _navUserStyle }, currentUser.name || currentUser.username),
-                    (function(){
-                        var _r = currentUser.role;
-                        var _label = _r === 'superadmin' ? '최고관리자' : _r === 'admin' ? '관리자' : _r === 'manager' ? '매니저' : '뷰어';
-                        var _isAdmin = (_r === 'admin' || _r === 'superadmin');
-                        var _bg = _isAdmin ? '#ede9fe' : _r === 'manager' ? '#dbeafe' : '#f1f5f9';
-                        var _fg = _isAdmin ? '#6d28d9' : _r === 'manager' ? '#1d4ed8' : '#475569';
-                        return React.createElement('span', { title: '내 권한', style: { fontSize:11, fontWeight:800, padding:'2px 9px', borderRadius:999, background:_bg, color:_fg, whiteSpace:'nowrap' } }, _label);
-                    })()
-                )
-            )
-        );
-    };
 
     /* ==================== 홈에서 검색 시 분석 탭으로 전환하는 핸들러 ==================== */
     var handleHomeSearch = function(keyword, productUrl, inputCompanyName, htmlInput) {
@@ -1192,7 +1153,7 @@ window.App = function App() {
     /* 홈 탭 — 업체 리스트 + 검색 */
     if (currentPage === 'home') return React.createElement(React.Fragment, null,
         React.createElement('div', null,
-            renderTopbar('home'),
+            React.createElement(window.TopBar, { activePage: 'home', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
             React.createElement(SearchBar, { onSearch: handleHomeSearch, loading: searchLoading, initialValues: searchBarInitial }),
 
             /* 업체 연동 자동저장 상태 배너 */
@@ -1227,7 +1188,7 @@ window.App = function App() {
 
     if (currentPage === 'management') return React.createElement(React.Fragment, null,
         React.createElement('div', null,
-            renderTopbar('management'),
+            React.createElement(window.TopBar, { activePage: 'management', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
             React.createElement(window.ClientDashboard, {
                 currentUser: currentUser,
                 onRunAnalysis: handleClientClick,
@@ -1241,7 +1202,7 @@ window.App = function App() {
 
     if (currentPage === 'guide') return React.createElement(React.Fragment, null,
         React.createElement('div', null,
-            renderTopbar('guide'),
+            React.createElement(window.TopBar, { activePage: 'guide', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
             React.createElement(window.UserGuidePage, { currentUser: currentUser })
         ),
         React.createElement(window.ChatWidget, { currentUser: currentUser })
@@ -1249,7 +1210,7 @@ window.App = function App() {
 
     if (currentPage === 'users' && (currentUser.role === 'admin' || currentUser.role === 'superadmin')) return React.createElement(React.Fragment, null,
         React.createElement('div', null,
-            renderTopbar('users'),
+            React.createElement(window.TopBar, { activePage: 'users', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
             React.createElement(window.UserManagementPage, { currentUser: currentUser, token: authToken })
         ),
         React.createElement(window.ChatWidget, { currentUser: currentUser })
@@ -1257,7 +1218,7 @@ window.App = function App() {
 
     if (currentPage === 'settings' && currentUser.role === 'superadmin') return React.createElement(React.Fragment, null,
         React.createElement('div', null,
-            renderTopbar('settings'),
+            React.createElement(window.TopBar, { activePage: 'settings', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
             React.createElement('div', { style: { maxWidth: 1000, margin: '0 auto', padding: '24px 16px' } },
                 React.createElement(window.AnalysisStatsSection, null),
                 React.createElement(ApiUsageSection, null),
@@ -1274,7 +1235,7 @@ window.App = function App() {
         React.createElement(React.Fragment, null,
         React.createElement('div', { className: 'analysis-page' },
             /* 네비게이션 바 */
-            renderTopbar('analysis'),
+            React.createElement(window.TopBar, { activePage: 'analysis', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
             React.createElement(SearchBar, { onSearch: handleManualSearch, loading: searchLoading, initialValues: searchBarInitial }),
 
             /* 업체 연동 자동저장 상태 배너 */
