@@ -18143,7 +18143,7 @@ window.App = function App() {
         setCurrentPage('analysis');
       },
       style: navBtn(activePage === 'analysis')
-    }, '📊 스토어 분석'), React.createElement('button', {
+    }, '📍 순위 추적'), React.createElement('button', {
       onClick: function () {
         setCurrentPage('management');
       },
@@ -18391,40 +18391,9 @@ window.App = function App() {
     }
   }, React.createElement('div', {
     className: 'spinner-small'
-  }), '데이터랩 쇼핑인사이트 분석 중...'))), /* 검색 전 안내 (아무 데이터도 없을 때) */
-  !searchLoading && !analysisData && !volumeData && !searchedKeyword && React.createElement('div', {
-    className: 'section'
-  }, React.createElement('div', {
-    className: 'container'
-  }, React.createElement('div', {
-    style: {
-      textAlign: 'center',
-      padding: '60px 20px',
-      color: '#94a3b8'
-    }
-  }, React.createElement('img', {
-    src: '/img/logo_light.png',
-    alt: 'META INC',
-    style: {
-      height: 40,
-      width: 'auto',
-      marginBottom: 16,
-      opacity: 0.45
-    }
-  }), React.createElement('div', {
-    style: {
-      fontSize: 16,
-      fontWeight: 600,
-      color: '#64748b',
-      marginBottom: 8
-    }
-  }, '키워드를 입력하고 분석을 시작하세요'), React.createElement('div', {
-    style: {
-      fontSize: 13,
-      color: '#94a3b8',
-      lineHeight: 1.6
-    }
-  }, '상단 검색바에 키워드를 입력하면 검색량, 경쟁강도, 시장규모 등을 분석합니다.')))), /* 검색 로딩 */
+  }), '데이터랩 쇼핑인사이트 분석 중...'))), /* (검색 전 안내 제거 — 공간 낭비 없이 추적상품/순위 목록이 바로 보이도록) */
+
+  /* 검색 로딩 */
   searchLoading && React.createElement('div', {
     className: 'section'
   }, React.createElement('div', {
