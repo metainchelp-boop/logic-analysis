@@ -150,32 +150,49 @@ def init_client_dashboard_db():
 
 
 def cleanup_misassigned_clients():
-    """일회성·멱등 정리:
-    - name='배재민' 이고 role이 admin/manager인 계정 → viewer로 강등(영업팀은 등록권한 없어야 함)
-    - 그 계정이 등록한 active 업체 → status='terminated'(소프트 삭제, 복구 가능)
-      → 대시보드/담당자 탭(status='active'만 조회)에서 사라짐. 데이터는 보존.
-    superadmin은 건드리지 않음. 재실행해도 안전(이미 viewer면 매칭 안 됨)."""
+    """일회성(DB 플래그로 1회만 실행): '배재민'(영업팀) 정리.
+    - role 무관(superadmin 제외)으로 name='배재민' 계정의 등록 업체를 '하드 삭제'
+      (clients + 연관 client_analyses/client_rank_history) → 담당자 탭에서 완전히 사라짐.
+    - 해당 계정 role → viewer 강등.
+    플래그(_app_migrations)로 1회만 실행 → 향후 동명이인 매니저 피해 방지."""
+    FLAG = 'cleanup_baejaemin_v2'
     try:
         conn = sqlite3.connect(DB_PATH, timeout=10)
         try:
             conn.execute("PRAGMA busy_timeout=30000")
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS _app_migrations "
+                "(key TEXT PRIMARY KEY, applied_at TEXT DEFAULT (datetime('now','localtime')))"
+            )
+            if conn.execute("SELECT 1 FROM _app_migrations WHERE key=?", (FLAG,)).fetchone():
+                return  # 이미 실행됨
             cur = conn.cursor()
-            rows = cur.execute(
-                "SELECT id, role FROM users WHERE name = ? AND role IN ('admin','manager')",
+            users = cur.execute(
+                "SELECT id, role FROM users WHERE TRIM(name) = ? AND role != 'superadmin'",
                 ('배재민',)
             ).fetchall()
-            for uid, role in rows:
+            total = 0
+            for uid, role in users:
+                cids = [r[0] for r in cur.execute("SELECT id FROM clients WHERE created_by=?", (uid,)).fetchall()]
+                for cid in cids:
+                    cur.execute("DELETE FROM client_analyses WHERE client_id=?", (cid,))
+                    cur.execute("DELETE FROM client_rank_history WHERE client_id=?", (cid,))
+                    cur.execute("DELETE FROM clients WHERE id=?", (cid,))
                 cur.execute("UPDATE users SET role='viewer' WHERE id=?", (uid,))
-                n = cur.execute(
-                    "UPDATE clients SET status='terminated', updated_at=datetime('now','localtime') "
-                    "WHERE created_by=? AND status='active'", (uid,)
-                ).rowcount
-                logger.info(f"[cleanup] '배재민'(uid={uid}, {role}→viewer), active 업체 {n}건 소프트삭제(terminated)")
-            conn.commit()
+                total += len(cids)
+                logger.info(f"[cleanup] '배재민'(uid={uid}, {role}→viewer): 업체 {len(cids)}건 하드삭제")
+            if users:
+                # 매칭·처리됐을 때만 플래그 기록 → 0건이면 다음 배포에 재시도
+                cur.execute("INSERT OR REPLACE INTO _app_migrations(key) VALUES(?)", (FLAG,))
+                conn.commit()
+                logger.info(f"[cleanup] 완료: 대상 {len(users)}명, 업체 {total}건 삭제 (플래그 기록)")
+            else:
+                conn.commit()
+                logger.warning("[cleanup] '배재민' 매칭 0건 — 플래그 미기록(다음 배포 재시도)")
         finally:
             conn.close()
     except Exception as e:
-        logger.error(f"[cleanup] 미할당 업체 정리 실패(무시): {e}")
+        logger.error(f"[cleanup] '배재민' 정리 실패(무시): {e}")
 
 
 # ==================== Request / Response Models ====================
