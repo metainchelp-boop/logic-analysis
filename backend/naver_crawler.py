@@ -1538,7 +1538,11 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
     except ImportError:
         return {"success": False, "error": "beautifulsoup4 미설치"}
 
-    soup = BeautifulSoup(html, "lxml")
+    # 파서는 순수 파이썬 "html.parser"를 사용한다. lxml(C 라이브러리) 파서는
+    # 사용자가 붙여넣은 거대/비정상 스마트스토어 HTML에서 세그폴트로 워커
+    # 프로세스를 통째로 죽여(파이썬 traceback 없이) 502를 유발했다.
+    # html.parser는 순수 파이썬이라 세그폴트가 원천적으로 불가능하다.
+    soup = BeautifulSoup(html, "html.parser")
 
     # ── 0. __NEXT_DATA__에서 단가·카테고리 직접 추출 (크롤 없이 단가·데이터랩 카테고리 공급) ──
     nd_price, nd_cat, nd_cat1 = 0, "", ""
