@@ -503,6 +503,7 @@ window.App = function App() {
                 React.createElement(window.AnalysisStatsSection, null),
                 React.createElement(ApiUsageSection, null),
                 React.createElement(NotificationSection, null),
+                React.createElement(window.ManagerReassignSection, null),
                 React.createElement(window.ClientDiagnosticsSection, null),
                 React.createElement(window.FeedbackManagement, null)
             )

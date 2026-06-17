@@ -571,6 +571,80 @@ def get_client_diagnostics(
         )
 
 
+# ============================================================================
+# 담당자 배정/재배정 (관리자 전용)
+# ============================================================================
+
+class ManagerAssignRequest(BaseModel):
+    manager_id: int
+
+class BulkReassignRequest(BaseModel):
+    from_user_id: int
+    to_user_id: int
+
+
+@router.get("/assignable-managers")
+def assignable_managers(current_user: Dict = Depends(require_role("admin"))):
+    """담당자로 배정 가능한 사용자 목록 (관리자/superadmin 전용)."""
+    with get_db_connection() as conn:
+        rows = conn.execute(
+            "SELECT id, name, username, role FROM users "
+            "WHERE is_active=1 AND role IN ('manager','admin','superadmin') "
+            "ORDER BY (role='manager') DESC, name"
+        ).fetchall()
+    return {"success": True, "data": [
+        {"id": r["id"], "name": (r["name"] or r["username"]), "role": r["role"]} for r in rows
+    ]}
+
+
+@router.get("/manager-counts")
+def manager_counts(current_user: Dict = Depends(require_role("admin"))):
+    """담당자별 보유 업체 수 (일괄 이관의 '원본' 선택용). 비활성(퇴사) 계정도 포함."""
+    with get_db_connection() as conn:
+        rows = conn.execute(
+            "SELECT u.id, u.name, u.username, u.role, u.is_active, COUNT(c.id) AS cnt "
+            "FROM users u JOIN clients c ON c.created_by = u.id AND c.status='active' "
+            "GROUP BY u.id HAVING cnt > 0 ORDER BY cnt DESC"
+        ).fetchall()
+    return {"success": True, "data": [
+        {"id": r["id"], "name": (r["name"] or r["username"]), "role": r["role"],
+         "is_active": r["is_active"], "count": r["cnt"]} for r in rows
+    ]}
+
+
+@router.put("/{client_id}/manager")
+def change_client_manager(client_id: int, req: ManagerAssignRequest,
+                          current_user: Dict = Depends(require_role("admin"))):
+    """업체 담당자(created_by) 변경 (관리자/superadmin 전용)."""
+    with get_db_connection() as conn:
+        u = conn.execute("SELECT id, name, username FROM users WHERE id=? AND is_active=1", (req.manager_id,)).fetchone()
+        if not u:
+            raise HTTPException(status_code=404, detail="담당자(사용자)를 찾을 수 없습니다")
+        if not conn.execute("SELECT 1 FROM clients WHERE id=?", (client_id,)).fetchone():
+            raise HTTPException(status_code=404, detail="업체를 찾을 수 없습니다")
+        conn.execute("UPDATE clients SET created_by=?, updated_at=datetime('now','localtime') WHERE id=?",
+                     (req.manager_id, client_id))
+    logger.info(f"[manager] client {client_id} → user {req.manager_id} (by {current_user.get('id')})")
+    return {"success": True, "manager_name": (u["name"] or u["username"])}
+
+
+@router.post("/reassign-bulk")
+def reassign_bulk(req: BulkReassignRequest, current_user: Dict = Depends(require_role("admin"))):
+    """퇴사자 등 from_user의 업체 전체를 to_user로 일괄 이관 (관리자/superadmin 전용)."""
+    if req.from_user_id == req.to_user_id:
+        raise HTTPException(status_code=400, detail="같은 사용자로는 이관할 수 없습니다")
+    with get_db_connection() as conn:
+        to_u = conn.execute("SELECT id, name, username FROM users WHERE id=? AND is_active=1", (req.to_user_id,)).fetchone()
+        if not to_u:
+            raise HTTPException(status_code=404, detail="이관 대상 담당자를 찾을 수 없습니다")
+        n = conn.execute(
+            "UPDATE clients SET created_by=?, updated_at=datetime('now','localtime') WHERE created_by=?",
+            (req.to_user_id, req.from_user_id)
+        ).rowcount
+    logger.info(f"[reassign-bulk] {req.from_user_id} → {req.to_user_id}: {n}건 (by {current_user.get('id')})")
+    return {"success": True, "moved": n, "to_name": (to_u["name"] or to_u["username"])}
+
+
 @router.get("", response_model=ClientListResponse)
 def list_clients(
     page: int = Query(1, ge=1),

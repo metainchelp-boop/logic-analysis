@@ -9196,6 +9196,48 @@ window.ClientListSection = function ClientListSection({
 
   // 상위 계정(관리자)만 담당자(등록 직원) 정보를 노출 (매니저는 본인 것만 보므로 불필요)
   var isAdmin = !!(currentUser && (currentUser.role === 'admin' || currentUser.role === 'superadmin'));
+  var _s5 = useState([]);
+  var managers = _s5[0];
+  var setManagers = _s5[1]; // 배정 가능한 담당자
+  var _s6 = useState(null);
+  var editMgrId = _s6[0];
+  var setEditMgrId = _s6[1]; // 담당자 변경 중인 업체 id
+
+  useEffect(function () {
+    if (!isAdmin) return;
+    api.get('/clients/assignable-managers').then(function (res) {
+      if (res && res.success) setManagers(res.data || []);
+    }).catch(function () {});
+  }, [isAdmin]);
+
+  // 담당자(created_by) 변경
+  var changeManager = function (clientId, managerId) {
+    var mid = parseInt(managerId, 10);
+    if (!mid) {
+      setEditMgrId(null);
+      return;
+    }
+    api.put('/clients/' + clientId + '/manager', {
+      manager_id: mid
+    }).then(function (res) {
+      if (res && res.success) {
+        setClients(function (prev) {
+          return prev.map(function (c) {
+            return c.id === clientId ? Object.assign({}, c, {
+              created_by: mid,
+              manager_name: res.manager_name
+            }) : c;
+          });
+        });
+        try {
+          toast.success('담당자를 변경했습니다.');
+        } catch (e) {}
+      }
+      setEditMgrId(null);
+    }).catch(function () {
+      setEditMgrId(null);
+    });
+  };
 
   /* 업체 목록 로드 */
   var loadClients = useCallback(function () {
@@ -9481,9 +9523,51 @@ window.ClientListSection = function ClientListSection({
         fontSize: 11,
         color: '#6d28d9',
         fontWeight: 700,
-        marginBottom: 12
+        marginBottom: 12,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        flexWrap: 'wrap'
       }
-    }, '👤 담당자: ' + (client.manager_name || '-'))), /* 업체 상세 보기 버튼 */
+    }, editMgrId === client.id ? React.createElement('select', {
+      defaultValue: client.created_by || '',
+      onClick: function (e) {
+        e.stopPropagation();
+      },
+      onChange: function (e) {
+        e.stopPropagation();
+        changeManager(client.id, e.target.value);
+      },
+      style: {
+        fontSize: 11,
+        padding: '3px 6px',
+        borderRadius: 6,
+        border: '1px solid #ddd6fe',
+        maxWidth: '100%'
+      }
+    }, React.createElement('option', {
+      value: ''
+    }, '담당자 선택...'), managers.map(function (m) {
+      return React.createElement('option', {
+        key: m.id,
+        value: m.id
+      }, m.name + (m.role !== 'manager' ? ' (' + m.role + ')' : ''));
+    })) : React.createElement(React.Fragment, null, React.createElement('span', null, '👤 담당자: ' + (client.manager_name || '-')), React.createElement('button', {
+      onClick: function (e) {
+        e.stopPropagation();
+        setEditMgrId(client.id);
+      },
+      style: {
+        fontSize: 10,
+        fontWeight: 700,
+        color: '#6d28d9',
+        background: '#ede9fe',
+        border: 'none',
+        borderRadius: 6,
+        padding: '2px 7px',
+        cursor: 'pointer'
+      }
+    }, '변경')))), /* 업체 상세 보기 버튼 */
     React.createElement('button', {
       onClick: function () {
         handleViewClient(client);
@@ -15404,6 +15488,160 @@ window.ClientDiagnosticsSection = function ClientDiagnosticsSection() {
   }])));
 };
 
+;/* ===== js/components/ManagerReassignSection.jsx ===== */
+/* ManagerReassignSection — 담당자 재배정 / 퇴사자 업체 일괄 이관 (설정 탭, 관리자 전용) */
+window.ManagerReassignSection = function ManagerReassignSection() {
+  const {
+    useState,
+    useEffect,
+    useCallback
+  } = React;
+  const [fromList, setFromList] = useState([]); // 보유 업체 있는 담당자(원본)
+  const [toList, setToList] = useState([]); // 배정 가능한 담당자(대상)
+  const [fromId, setFromId] = useState('');
+  const [toId, setToId] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+  const load = useCallback(function () {
+    api.get('/clients/manager-counts').then(function (res) {
+      if (res && res.success) setFromList(res.data || []);
+    }).catch(function () {});
+    api.get('/clients/assignable-managers').then(function (res) {
+      if (res && res.success) setToList(res.data || []);
+    }).catch(function () {});
+  }, []);
+  useEffect(function () {
+    load();
+  }, [load]);
+  var doReassign = function () {
+    var f = parseInt(fromId, 10),
+      t = parseInt(toId, 10);
+    if (!f || !t) {
+      setMsg('원본 담당자와 이관 대상을 모두 선택하세요.');
+      return;
+    }
+    if (f === t) {
+      setMsg('같은 담당자로는 이관할 수 없습니다.');
+      return;
+    }
+    var fromName = (fromList.find(function (x) {
+      return x.id === f;
+    }) || {}).name || '';
+    var toName = (toList.find(function (x) {
+      return x.id === t;
+    }) || {}).name || '';
+    if (!confirm("'" + fromName + "' 담당 업체를 전부 '" + toName + "'(으)로 이관할까요?")) return;
+    setBusy(true);
+    setMsg('');
+    api.post('/clients/reassign-bulk', {
+      from_user_id: f,
+      to_user_id: t
+    }).then(function (res) {
+      setBusy(false);
+      if (res && res.success) {
+        setMsg('✅ ' + res.moved + '개 업체를 ' + (res.to_name || toName) + '(으)로 이관했습니다.');
+        setFromId('');
+        setToId('');
+        load();
+      } else {
+        setMsg('이관 실패: ' + (res && res.detail || '오류'));
+      }
+    }).catch(function (e) {
+      setBusy(false);
+      setMsg('이관 실패: ' + (e.message || '네트워크 오류'));
+    });
+  };
+  var selStyle = {
+    fontSize: 13,
+    padding: '8px 10px',
+    borderRadius: 8,
+    border: '1px solid #e2e8f0',
+    minWidth: 220,
+    background: '#fff'
+  };
+  return React.createElement('div', {
+    style: {
+      background: '#fff',
+      borderRadius: 16,
+      padding: '22px 24px',
+      boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
+      marginBottom: 20
+    }
+  }, React.createElement('div', {
+    style: {
+      fontSize: 16,
+      fontWeight: 800,
+      color: '#0f172a',
+      marginBottom: 4
+    }
+  }, '👥 담당자 재배정 · 퇴사자 업체 이관'), React.createElement('div', {
+    style: {
+      fontSize: 12,
+      color: '#94a3b8',
+      marginBottom: 16
+    }
+  }, '원본 담당자의 모든 진행중 업체를 다른 담당자에게 한 번에 이관합니다. (퇴사·비활성 계정도 원본으로 선택 가능)'), React.createElement('div', {
+    style: {
+      display: 'flex',
+      gap: 10,
+      flexWrap: 'wrap',
+      alignItems: 'center'
+    }
+  }, React.createElement('select', {
+    value: fromId,
+    onChange: function (e) {
+      setFromId(e.target.value);
+    },
+    style: selStyle
+  }, React.createElement('option', {
+    value: ''
+  }, '원본 담당자 선택...'), fromList.map(function (m) {
+    return React.createElement('option', {
+      key: m.id,
+      value: m.id
+    }, m.name + ' (' + m.count + '개)' + (m.is_active ? '' : ' · 퇴사'));
+  })), React.createElement('span', {
+    style: {
+      color: '#94a3b8',
+      fontWeight: 700
+    }
+  }, '→'), React.createElement('select', {
+    value: toId,
+    onChange: function (e) {
+      setToId(e.target.value);
+    },
+    style: selStyle
+  }, React.createElement('option', {
+    value: ''
+  }, '이관 대상 선택...'), toList.map(function (m) {
+    return React.createElement('option', {
+      key: m.id,
+      value: m.id
+    }, m.name + (m.role !== 'manager' ? ' (' + m.role + ')' : ''));
+  })), React.createElement('button', {
+    onClick: doReassign,
+    disabled: busy,
+    style: {
+      fontSize: 13,
+      fontWeight: 700,
+      padding: '8px 18px',
+      borderRadius: 8,
+      cursor: busy ? 'default' : 'pointer',
+      border: 'none',
+      background: '#4f46e5',
+      color: '#fff',
+      opacity: busy ? 0.6 : 1
+    }
+  }, busy ? '이관 중…' : '이관 실행')), msg && React.createElement('div', {
+    style: {
+      marginTop: 14,
+      fontSize: 13,
+      fontWeight: 600,
+      color: msg.indexOf('✅') === 0 ? '#16a34a' : '#dc2626'
+    }
+  }, msg));
+};
+
 ;/* ===== js/components/AnalysisStatsSection.jsx ===== */
 /* AnalysisStatsSection — 로직 분석 실행 건수 통계 (설정 탭, 최고관리자 전용) v1.0
  *  - 요약 카드: 총 실행 / 이번 달 / 오늘
@@ -18965,7 +19203,7 @@ window.App = function App() {
       margin: '0 auto',
       padding: '24px 16px'
     }
-  }, React.createElement(window.AnalysisStatsSection, null), React.createElement(ApiUsageSection, null), React.createElement(NotificationSection, null), React.createElement(window.ClientDiagnosticsSection, null), React.createElement(window.FeedbackManagement, null))), React.createElement(window.ChatWidget, {
+  }, React.createElement(window.AnalysisStatsSection, null), React.createElement(ApiUsageSection, null), React.createElement(NotificationSection, null), React.createElement(window.ManagerReassignSection, null), React.createElement(window.ClientDiagnosticsSection, null), React.createElement(window.FeedbackManagement, null))), React.createElement(window.ChatWidget, {
     currentUser: currentUser
   }));
 
