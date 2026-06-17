@@ -444,15 +444,20 @@ def my_clients(current_user: dict = Depends(get_current_user)):
         is_adm = _is_admin(current_user)
         user_role = current_user.get("role", "viewer")
 
-        # admin/superadmin/viewer → 전체 업체, manager → 본인 등록분만
-        #   (상관 서브쿼리 제거 + latest_ranks 제거 + analyzed_keywords 최신 1건만 → 대량 업체 시 빠름)
+        # 목록에 필요한 컬럼만 선택한다. SELECT * 는 detail_html(상세페이지 HTML 통째,
+        # 업체당 수십~수백 KB)까지 끌어와, 관리자(전체 336개)에서 응답이 수십~수백 MB로
+        # 부풀어 워커가 메모리로 죽어(→ /api/cd/my-clients 502) 대시보드가 안 떴다.
+        # detail_html은 목록 화면에서 쓰지 않으므로 제외한다.
+        _COLS = ("id, name, business_name, contact_name, contact_phone, contact_email, "
+                 "website_url, naver_store_url, main_keywords, notes, status, "
+                 "created_by, created_at, updated_at")
         if is_adm or user_role == "viewer":
             clients = conn.execute(
-                "SELECT * FROM clients WHERE status='active' ORDER BY updated_at DESC"
+                f"SELECT {_COLS} FROM clients WHERE status='active' ORDER BY updated_at DESC"
             ).fetchall()
         else:
             clients = conn.execute(
-                "SELECT * FROM clients WHERE status='active' "
+                f"SELECT {_COLS} FROM clients WHERE status='active' "
                 "AND (created_by = ? OR created_by IS NULL OR created_by = '') "
                 "ORDER BY updated_at DESC",
                 (user_id,)
@@ -463,18 +468,40 @@ def my_clients(current_user: dict = Depends(get_current_user)):
             return {"success": True, "data": []}
         placeholders = ','.join('?' * len(client_ids))
 
-        # 분석 이력 벌크 1회 (analyzed_date/updated_at DESC) → 개수/최신만 사용
-        all_analyses = conn.execute(
+        # 집계는 SQL(GROUP BY)에서 처리한다. 과거에는 client_analyses의 모든 row를
+        # fetchall()로 메모리에 통째로 올렸는데, 관리자(업체 220개 전체)는 분석이력이
+        # 수천~수만 row라 워커가 메모리로 죽어(→ /api/cd/my-clients 502) 대시보드가
+        # 로드되지 않았다. 집계를 SQL로 옮겨 업체당 1줄만 가져온다.
+        agg_map = {}
+        for r in conn.execute(
+            f"""SELECT client_id,
+                       COUNT(*)                    AS analysis_count,
+                       MAX(updated_at)             AS last_analyzed,
+                       COUNT(DISTINCT keyword)     AS unique_keyword_count,
+                       COUNT(DISTINCT analyzed_date) AS total_analysis_days
+                FROM client_analyses
+                WHERE client_id IN ({placeholders})
+                GROUP BY client_id""",
+            client_ids
+        ):
+            agg_map[r['client_id']] = r
+
+        # 프론트는 업체별 "최신 1건"만 사용 → 커서를 스트리밍하며 업체당 최초 1건만 보관
+        # (fetchall로 전체를 메모리에 올리지 않음)
+        latest_map = {}
+        for r in conn.execute(
             f"""SELECT client_id, keyword, product_url, analyzed_date, updated_at
                 FROM client_analyses
                 WHERE client_id IN ({placeholders})
                 ORDER BY analyzed_date DESC, updated_at DESC""",
             client_ids
-        ).fetchall()
-        analyses_map = {}
-        for a in all_analyses:
-            d = dict(a); cid = d.pop('client_id')
-            analyses_map.setdefault(cid, []).append(d)
+        ):
+            cid = r['client_id']
+            if cid not in latest_map:
+                latest_map[cid] = {
+                    'keyword': r['keyword'], 'product_url': r['product_url'],
+                    'analyzed_date': r['analyzed_date'], 'updated_at': r['updated_at'],
+                }
 
         # 담당자(등록 직원) 이름 벌크 조회 (created_by → users.name)
         mgr_ids = sorted({c['created_by'] for c in clients if c['created_by'] is not None})
@@ -490,12 +517,12 @@ def my_clients(current_user: dict = Depends(get_current_user)):
         for c in clients:
             row = dict(c)
             cid = c['id']
-            kw_list = analyses_map.get(cid, [])
-            row['analysis_count'] = len(kw_list)
-            row['last_analyzed'] = max((a['updated_at'] for a in kw_list), default=None)
-            row['unique_keyword_count'] = len({a['keyword'] for a in kw_list})
-            row['total_analysis_days'] = len({a['analyzed_date'] for a in kw_list if a.get('analyzed_date')})
-            row['analyzed_keywords'] = kw_list[:1]  # 프론트는 최신 1건만 사용
+            a = agg_map.get(cid)
+            row['analysis_count'] = (a['analysis_count'] if a else 0)
+            row['last_analyzed'] = (a['last_analyzed'] if a else None)
+            row['unique_keyword_count'] = (a['unique_keyword_count'] if a else 0)
+            row['total_analysis_days'] = (a['total_analysis_days'] if a else 0)
+            row['analyzed_keywords'] = ([latest_map[cid]] if cid in latest_map else [])  # 최신 1건만
             row['manager_name'] = mgr_map.get(row.get('created_by'), '')  # 담당자명
             result.append(row)
 
