@@ -129,10 +129,13 @@ def search_naver_shopping_api(keyword: str, display: int = 100, start: int = 1, 
             response = requests.get(url, params=params, headers=headers, timeout=10)
             # 429 Too Many Requests
             if response.status_code == 429:
-                if retry_on_429 and attempt < max_retries:
-                    wait_sec = 2.0 * (attempt + 1)
-                    logger.warning(f"네이버 API 429 — {wait_sec}초 대기 후 재시도 ({attempt + 1}/{max_retries}) (keyword: {keyword})")
-                    time.sleep(wait_sec)
+                # 429는 "빠른 실패" 한다: 짧게 1회만 재시도(0.4초)하고 포기.
+                # 네이버가 rate-limit 중일 때 길게(2/4/6초) 재시도해봐야 대부분
+                # 다시 429로 실패하면서 워커를 최대 12초씩 점유 → 무거운 분석이
+                # 적은 워커를 모두 묶어 가벼운 요청(my-clients 등)까지 502가 났다.
+                if retry_on_429 and attempt < 1:
+                    logger.warning(f"네이버 API 429 — 0.4초 후 1회 재시도 (keyword: {keyword})")
+                    time.sleep(0.4)
                     continue
                 logger.warning(f"네이버 API 429 Rate Limit — 건너뜀 (keyword: {keyword})")
                 return {"error": "API 요청 한도 초과", "items": [], "total": 0}
