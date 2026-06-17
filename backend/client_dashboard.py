@@ -110,6 +110,13 @@ def init_client_dashboard_db():
             conn.execute("ALTER TABLE client_analyses ADD COLUMN report_html TEXT DEFAULT ''")
             logger.info("[ClientDashboard] report_html column added via migration")
 
+        # 2c) 마이그레이션: created_by(분석 작업자 user_id) — 누가 분석·저장했는지 추적
+        try:
+            conn.execute("SELECT created_by FROM client_analyses LIMIT 1")
+        except sqlite3.OperationalError:
+            conn.execute("ALTER TABLE client_analyses ADD COLUMN created_by INTEGER")
+            logger.info("[ClientDashboard] client_analyses.created_by column added via migration")
+
         # 3) 기존 UNIQUE 인덱스 삭제 후 새 인덱스 생성
         try:
             conn.execute("DROP INDEX IF EXISTS idx_client_analyses_key")
@@ -279,7 +286,7 @@ def quick_register(req: QuickRegisterRequest, current_user: dict = Depends(requi
         _save_analysis_internal(conn, client_id, req.keyword, req.product_url or '',
                                 req.analysis_data, req.volume_data, req.related_data,
                                 req.shop_products, req.advertiser_data, today, now,
-                                req.report_html or '')
+                                req.report_html or '', author_id=user_id)
 
         # #1: 상세 HTML 저장 (있을 때만)
         if req.detail_html:
@@ -305,8 +312,9 @@ def quick_register(req: QuickRegisterRequest, current_user: dict = Depends(requi
 def _save_analysis_internal(conn, client_id, keyword, product_url,
                             analysis_data, volume_data, related_data,
                             shop_products, advertiser_data, today, now,
-                            report_html=''):
+                            report_html='', author_id=None):
     """분석 결과 내부 저장 함수 (일자별 UPSERT)
+    author_id: 분석을 실행·저장한 user_id(작업자 추적). 자동 저장 등 미상이면 None.
     주의: 호출자가 conn.commit()을 담당합니다."""
     params = (
         product_url,
@@ -325,21 +333,22 @@ def _save_analysis_internal(conn, client_id, keyword, product_url,
     ).fetchone()
 
     if existing:
+        # created_by는 author_id가 있을 때만 갱신(자동 재저장이 작업자 기록을 지우지 않도록)
         conn.execute("""
             UPDATE client_analyses
             SET product_url=?, analysis_json=?, volume_json=?,
                 related_json=?, shop_products_json=?, advertiser_json=?,
-                report_html=?, updated_at=?
+                report_html=?, updated_at=?, created_by=COALESCE(?, created_by)
             WHERE client_id=? AND keyword=? AND analyzed_date=?
-        """, params + (client_id, keyword, today))
+        """, params + (author_id, client_id, keyword, today))
     else:
         conn.execute("""
             INSERT INTO client_analyses
             (client_id, keyword, product_url, analysis_json, volume_json,
              related_json, shop_products_json, advertiser_json, report_html,
-             analyzed_date, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (client_id, keyword) + params[:7] + (today, now, now))
+             analyzed_date, created_at, updated_at, created_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (client_id, keyword) + params[:7] + (today, now, now, author_id))
 
 
 # ==================== 업체 목록 ====================
@@ -465,7 +474,7 @@ def save_analysis(req: SaveAnalysisRequest, current_user: dict = Depends(require
         _save_analysis_internal(conn, req.client_id, req.keyword, req.product_url or '',
                                 req.analysis_data, req.volume_data, req.related_data,
                                 req.shop_products, req.advertiser_data, today, now,
-                                req.report_html or '')
+                                req.report_html or '', author_id=current_user.get("id"))
 
         # #1: 상세 HTML 저장 (있을 때만 — 빈값으로 기존 저장본을 덮어쓰지 않음)
         if req.detail_html:
