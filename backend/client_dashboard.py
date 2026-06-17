@@ -444,15 +444,20 @@ def my_clients(current_user: dict = Depends(get_current_user)):
         is_adm = _is_admin(current_user)
         user_role = current_user.get("role", "viewer")
 
-        # admin/superadmin/viewer → 전체 업체, manager → 본인 등록분만
-        #   (상관 서브쿼리 제거 + latest_ranks 제거 + analyzed_keywords 최신 1건만 → 대량 업체 시 빠름)
+        # 목록에 필요한 컬럼만 선택한다. SELECT * 는 detail_html(상세페이지 HTML 통째,
+        # 업체당 수십~수백 KB)까지 끌어와, 관리자(전체 336개)에서 응답이 수십~수백 MB로
+        # 부풀어 워커가 메모리로 죽어(→ /api/cd/my-clients 502) 대시보드가 안 떴다.
+        # detail_html은 목록 화면에서 쓰지 않으므로 제외한다.
+        _COLS = ("id, name, business_name, contact_name, contact_phone, contact_email, "
+                 "website_url, naver_store_url, main_keywords, notes, status, "
+                 "created_by, created_at, updated_at")
         if is_adm or user_role == "viewer":
             clients = conn.execute(
-                "SELECT * FROM clients WHERE status='active' ORDER BY updated_at DESC"
+                f"SELECT {_COLS} FROM clients WHERE status='active' ORDER BY updated_at DESC"
             ).fetchall()
         else:
             clients = conn.execute(
-                "SELECT * FROM clients WHERE status='active' "
+                f"SELECT {_COLS} FROM clients WHERE status='active' "
                 "AND (created_by = ? OR created_by IS NULL OR created_by = '') "
                 "ORDER BY updated_at DESC",
                 (user_id,)
