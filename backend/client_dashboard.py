@@ -8,6 +8,7 @@ from typing import Optional, List, Any
 from datetime import datetime, date
 import sqlite3
 import os
+import re
 import json
 import logging
 
@@ -154,6 +155,87 @@ def init_client_dashboard_db():
 
     # 일회성 정리(멱등): 비-매니저(영업팀 '배재민')의 상승 권한/잘못된 등록 정리
     cleanup_misassigned_clients()
+    # 일회성: 신요섭 담당 업체를 실제 담당자로 재배정 + 나머지 삭제(사장님 매핑 기준)
+    reassign_sinyoseop_clients()
+
+
+def reassign_sinyoseop_clients():
+    """일회성(플래그): '신요섭'(superadmin) 담당으로 잘못 잡힌 업체를 실제 담당자로 재배정,
+    매핑에 없는 나머지는 하드 삭제. (사장님 지정 매핑)
+    안전장치: 8개 재배정이 '전부' 성공할 때만 삭제 진행. 하나라도 매칭 실패 시 전체 롤백·
+    플래그 미기록(다음 배포 재시도) → 잘못 삭제 방지."""
+    FLAG = 'reassign_sinyoseop_v1'
+    # (정규화된 업체명, 담당 매니저명, 매칭모드)  — 정규화: 공백제거+소문자
+    REASSIGN = [
+        ('정다운텃밭', '양근형', 'eq'),
+        ('또또바삭', '김우리', 'eq'),
+        ('문경시장기름집', '김우리', 'eq'),
+        ('착한농부들', '이진희', 'eq'),
+        ('푸른몰식품', '이진희', 'eq'),
+        ('헤만로스터스', '박성섭', 'eq'),
+        ('ongyel', '박성섭', 'eq'),
+        ('모씨네', '이재민', 'prefix'),  # "모씨네 Mocci Ne" 등 변형 대비
+    ]
+    norm = lambda s: re.sub(r'\s+', '', (s or '')).lower()
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=10)
+        try:
+            conn.execute("PRAGMA busy_timeout=30000")
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS _app_migrations "
+                "(key TEXT PRIMARY KEY, applied_at TEXT DEFAULT (datetime('now','localtime')))"
+            )
+            if conn.execute("SELECT 1 FROM _app_migrations WHERE key=?", (FLAG,)).fetchone():
+                return
+            cur = conn.cursor()
+            srow = cur.execute("SELECT id FROM users WHERE TRIM(name)='신요섭' AND role='superadmin'").fetchone()
+            if not srow:
+                logger.warning("[reassign] '신요섭'(superadmin) 미발견 — 보류(재시도)")
+                return
+            sid = srow[0]
+
+            def mgr_id(name):
+                r = cur.execute("SELECT id FROM users WHERE TRIM(name)=?", (name,)).fetchone()
+                return r[0] if r else None
+
+            clients = cur.execute(
+                "SELECT id, name FROM clients WHERE created_by=? AND status='active'", (sid,)
+            ).fetchall()
+
+            satisfied, matched_cids = set(), set()
+            for cid, cname in clients:
+                n = norm(cname)
+                for idx, (key, mname, mode) in enumerate(REASSIGN):
+                    hit = (n == key) if mode == 'eq' else n.startswith(key)
+                    if hit:
+                        mid = mgr_id(mname)
+                        if mid:
+                            cur.execute(
+                                "UPDATE clients SET created_by=?, updated_at=datetime('now','localtime') WHERE id=?",
+                                (mid, cid)
+                            )
+                            satisfied.add(idx); matched_cids.add(cid)
+                            logger.info(f"[reassign] '{cname}' → {mname}(uid={mid})")
+                        break
+
+            if len(satisfied) == len(REASSIGN):
+                rest = [(cid, cname) for cid, cname in clients if cid not in matched_cids]
+                for cid, cname in rest:
+                    cur.execute("DELETE FROM client_analyses WHERE client_id=?", (cid,))
+                    cur.execute("DELETE FROM client_rank_history WHERE client_id=?", (cid,))
+                    cur.execute("DELETE FROM clients WHERE id=?", (cid,))
+                    logger.info(f"[reassign] '{cname}' 하드삭제(신요섭 잔여분)")
+                cur.execute("INSERT OR REPLACE INTO _app_migrations(key) VALUES(?)", (FLAG,))
+                conn.commit()
+                logger.info(f"[reassign] 완료: 재배정 {len(satisfied)}건, 삭제 {len(rest)}건 (플래그 기록)")
+            else:
+                conn.rollback()
+                miss = [REASSIGN[i][0] for i in range(len(REASSIGN)) if i not in satisfied]
+                logger.warning(f"[reassign] 매칭 미완료(미일치: {miss}) → 전체 롤백, 플래그 미기록(재시도)")
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.error(f"[reassign] 실패(무시): {e}")
 
 
 def cleanup_misassigned_clients():
