@@ -416,7 +416,29 @@ def find_product_rank_from_cache(keyword: str, product_url: str,
 
 # ==================== 상품 정보 조회 ====================
 
+# ── 상품정보 캐시 (B1) ──
+# 같은 상품을 짧은 시간 내 반복 크롤하면 네이버를 중복 호출해 429를 유발한다.
+# 성공 결과를 TTL 동안 캐시해 중복 호출을 제거한다. (uvicorn 워커별 메모리 캐시)
+_PRODUCT_INFO_CACHE = {}      # product_url -> (timestamp, result_dict)
+_PRODUCT_INFO_TTL = 900       # 15분
+
+
 def get_product_info(product_url: str, keyword: str = "") -> Dict:
+    """상품정보 조회 (TTL 캐시 래퍼). TTL 내 성공 결과가 있으면 네이버 재호출 없이 반환."""
+    now = time.time()
+    hit = _PRODUCT_INFO_CACHE.get(product_url)
+    if hit and (now - hit[0]) < _PRODUCT_INFO_TTL:
+        return dict(hit[1])  # 사본 반환 (호출측 변형 방지)
+    result = _get_product_info_impl(product_url, keyword=keyword)
+    # 의미있는 결과(상품명 확보)만 캐시 — 실패는 캐시하지 않아 다음 기회에 재시도
+    if result and result.get("product_name"):
+        if len(_PRODUCT_INFO_CACHE) > 5000:
+            _PRODUCT_INFO_CACHE.clear()  # 단순 상한 (메모리 보호)
+        _PRODUCT_INFO_CACHE[product_url] = (now, dict(result))
+    return result
+
+
+def _get_product_info_impl(product_url: str, keyword: str = "") -> Dict:
     """
     상품 URL에서 상품 정보 가져오기
     - 1차: 추적 키워드로 네이버 쇼핑 API 검색 → URL/productId 매칭 (빠르고 안정적)
@@ -1217,6 +1239,14 @@ def fetch_detail_page_html(product_url: str) -> Optional[str]:
 
 # ==================== 찜 수 API 조회 ====================
 
+# 찜수 회로차단기 (B2): 스마트스토어 상품페이지 스크래핑은 서버 IP에서 거의 항상
+# 429로 막힌다(값도 못 얻으면서 부하·로그만 유발). 연속 429가 임계치를 넘으면
+# 일정 시간 호출 자체를 멈춘다. 한 번이라도 정상 응답(200)을 받으면 카운터 초기화.
+_WISH_BREAKER = {"fails": 0, "open_until": 0.0}
+_WISH_BREAKER_THRESHOLD = 5     # 연속 429 5회 → 차단
+_WISH_BREAKER_COOLDOWN = 600    # 600초(10분)간 호출 중단
+
+
 def _fetch_wish_count_from_api(product_url: str) -> Optional[int]:
     """
     상품 URL에서 찜 수를 네이버 내부 API로 조회.
@@ -1225,6 +1255,10 @@ def _fetch_wish_count_from_api(product_url: str) -> Optional[int]:
     비용: 없음 (일반 HTTP 요청)
     """
     if not product_url:
+        return None
+
+    # 회로 열림(쿨다운) 상태면 네이버를 더 두드리지 않고 즉시 None
+    if time.time() < _WISH_BREAKER["open_until"]:
         return None
 
     try:
@@ -1251,6 +1285,7 @@ def _fetch_wish_count_from_api(product_url: str) -> Optional[int]:
         resp = requests.get(url, headers=headers, timeout=10, allow_redirects=True)
         resp.raise_for_status()
         page_html = resp.text
+        _WISH_BREAKER["fails"] = 0  # 정상 응답 → 연속 429 카운터 초기화
 
         # 3) __PRELOADED_STATE__ 에서 wishCount 검색
         state_m = re.search(r'window\.__PRELOADED_STATE__\s*=\s*({.+?})\s*;?\s*</script>', page_html, re.DOTALL)
@@ -1294,6 +1329,14 @@ def _fetch_wish_count_from_api(product_url: str) -> Optional[int]:
         return None
 
     except Exception as e:
+        # 429(레이트리밋) 연속 발생 시 회로 차단 → 쿨다운 동안 호출 중단
+        status = getattr(getattr(e, "response", None), "status_code", None)
+        if status == 429:
+            _WISH_BREAKER["fails"] += 1
+            if _WISH_BREAKER["fails"] >= _WISH_BREAKER_THRESHOLD:
+                _WISH_BREAKER["open_until"] = time.time() + _WISH_BREAKER_COOLDOWN
+                _WISH_BREAKER["fails"] = 0
+                logger.warning(f"[찜수API] 연속 429 {_WISH_BREAKER_THRESHOLD}회 → {_WISH_BREAKER_COOLDOWN // 60}분간 호출 중단(회로 차단)")
         logger.warning(f"[찜수API] 요청 실패: {e}")
         return None
 
