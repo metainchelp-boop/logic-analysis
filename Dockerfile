@@ -36,5 +36,9 @@ sys.exit(0) if r[0]>=0 else sys.exit(1)" || exit 1
 EXPOSE 5050
 
 # gunicorn (멀티 워커)
-CMD ["gunicorn", "main:app", "-w", "6", "-k", "uvicorn.workers.UvicornWorker", \
+# 워커 수는 서버 RAM에 맞춰 3개로 제한한다. 워커 1개당 앱 전체를 메모리에 올리므로,
+# RAM 1.9GB 서버에서 6개는 ~1.2GB를 점유해 스왑 thrashing → gunicorn 타임아웃에
+# 워커가 끊기고 동일 워커의 다른 요청까지 502로 동반 실패하는 문제가 있었다.
+# 3개로 줄이면 메모리 점유가 절반(~0.6GB)으로 떨어져 여유가 확보된다.
+CMD ["gunicorn", "main:app", "-w", "3", "-k", "uvicorn.workers.UvicornWorker", \
      "--bind", "0.0.0.0:5050", "--timeout", "120", "--graceful-timeout", "30"]
