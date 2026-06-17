@@ -91,6 +91,10 @@ jobs:
             docker compose build --no-cache
             docker compose up -d
 
+            # 빌드 캐시 자동 정리 — 매 배포 --no-cache 빌드로 캐시가 누적되어
+            # 디스크가 차오르는 것을 방지 (최근 2GB만 남기고 회수, 실행 중 컨테이너/이미지/볼륨/DB는 영향 없음)
+            docker builder prune -f --keep-storage 2GB || true
+
             # 헬스체크 (대용량 DB 기동 시간 고려: 초기 대기 + 최대 120초)
             # 1.2GB+ DB를 로드하며 기동하므로 30초로는 짧아 false 실패가 발생 → 여유 확보
             echo "앱 기동 대기 중(20초)..."
