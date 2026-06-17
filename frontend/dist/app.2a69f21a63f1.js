@@ -8734,6 +8734,9 @@ window.SaveToClientSection = function SaveToClientSection({
   var _s8 = useState(false);
   var success = _s8[0];
   var setSuccess = _s8[1];
+  var _s9 = useState('');
+  var clientSearch = _s9[0];
+  var setClientSearch = _s9[1]; // 기존 업체 검색어
 
   /* 기존 업체 목록 로드 */
   var loadClients = useCallback(function () {
@@ -9108,40 +9111,70 @@ window.SaveToClientSection = function SaveToClientSection({
       color: '#94a3b8',
       fontSize: 13
     }
-  }, '등록된 업체가 없습니다. 새 업체를 등록해주세요.') : React.createElement('div', {
-    style: {
-      maxHeight: 200,
-      overflowY: 'auto'
-    }
-  }, existingClients.map(function (c) {
-    var isSelected = selectedClientId === c.id;
-    return React.createElement('div', {
-      key: c.id,
-      onClick: function () {
-        setSelectedClientId(c.id);
+  }, '등록된 업체가 없습니다. 새 업체를 등록해주세요.') : function () {
+    var q = clientSearch.trim().toLowerCase();
+    var filtered = q ? existingClients.filter(function (c) {
+      return (c.name || '').toLowerCase().indexOf(q) !== -1 || (c.main_keywords || '').toLowerCase().indexOf(q) !== -1;
+    }) : existingClients;
+    return React.createElement(React.Fragment, null, /* 업체명 검색 (업체 多 → 빠르게 찾기) */
+    React.createElement('input', {
+      type: 'text',
+      value: clientSearch,
+      onChange: function (e) {
+        setClientSearch(e.target.value);
       },
+      placeholder: '🔍 업체명 검색...',
       style: {
-        padding: '10px 14px',
+        width: '100%',
+        boxSizing: 'border-box',
+        padding: '10px 12px',
         borderRadius: 8,
-        cursor: 'pointer',
-        marginBottom: 4,
-        background: isSelected ? '#6C5CE7' : '#f8fafc',
-        color: isSelected ? '#fff' : '#1e293b',
-        border: '1px solid ' + (isSelected ? '#6C5CE7' : '#e2e8f0')
+        border: '1px solid #e2e8f0',
+        fontSize: 13,
+        marginBottom: 8
       }
-    }, React.createElement('div', {
+    }), filtered.length === 0 ? React.createElement('div', {
       style: {
-        fontWeight: 600,
-        fontSize: 14
+        textAlign: 'center',
+        padding: 16,
+        color: '#94a3b8',
+        fontSize: 13
       }
-    }, c.name), c.main_keywords && React.createElement('div', {
+    }, "'" + clientSearch + "' 검색 결과가 없습니다.") : React.createElement('div', {
       style: {
-        fontSize: 11,
-        opacity: 0.7,
-        marginTop: 2
+        maxHeight: 200,
+        overflowY: 'auto'
       }
-    }, c.main_keywords));
-  }))), /* 오류 메시지 */
+    }, filtered.map(function (c) {
+      var isSelected = selectedClientId === c.id;
+      return React.createElement('div', {
+        key: c.id,
+        onClick: function () {
+          setSelectedClientId(c.id);
+        },
+        style: {
+          padding: '10px 14px',
+          borderRadius: 8,
+          cursor: 'pointer',
+          marginBottom: 4,
+          background: isSelected ? '#6C5CE7' : '#f8fafc',
+          color: isSelected ? '#fff' : '#1e293b',
+          border: '1px solid ' + (isSelected ? '#6C5CE7' : '#e2e8f0')
+        }
+      }, React.createElement('div', {
+        style: {
+          fontWeight: 600,
+          fontSize: 14
+        }
+      }, c.name), c.main_keywords && React.createElement('div', {
+        style: {
+          fontSize: 11,
+          opacity: 0.7,
+          marginTop: 2
+        }
+      }, c.main_keywords));
+    })));
+  }()), /* 오류 메시지 */
   message && !success && React.createElement('div', {
     style: {
       color: '#dc2626',
