@@ -129,6 +129,14 @@ def init_client_dashboard_db():
             ON client_analyses(client_id, keyword, analyzed_date)
         """)
 
+        # my-clients의 "업체별 최신 1건" 조회 가속용
+        # (WHERE client_id IN (...) ORDER BY analyzed_date DESC, updated_at DESC).
+        # 업체가 1,000개 규모로 늘어 분석이력이 수만 row가 돼도 정렬 비용을 낮춘다.
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_client_analyses_recent
+            ON client_analyses(client_id, analyzed_date DESC, updated_at DESC)
+        """)
+
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_client_rank_lookup
             ON client_rank_history(client_id, keyword, checked_at)
