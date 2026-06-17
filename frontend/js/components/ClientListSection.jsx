@@ -14,6 +14,31 @@ window.ClientListSection = function ClientListSection({ currentUser, onClientCli
     // 상위 계정(관리자)만 담당자(등록 직원) 정보를 노출 (매니저는 본인 것만 보므로 불필요)
     var isAdmin = !!(currentUser && (currentUser.role === 'admin' || currentUser.role === 'superadmin'));
 
+    var _s5 = useState([]); var managers = _s5[0]; var setManagers = _s5[1];     // 배정 가능한 담당자
+    var _s6 = useState(null); var editMgrId = _s6[0]; var setEditMgrId = _s6[1]; // 담당자 변경 중인 업체 id
+
+    useEffect(function() {
+        if (!isAdmin) return;
+        api.get('/clients/assignable-managers').then(function(res) {
+            if (res && res.success) setManagers(res.data || []);
+        }).catch(function() {});
+    }, [isAdmin]);
+
+    // 담당자(created_by) 변경
+    var changeManager = function(clientId, managerId) {
+        var mid = parseInt(managerId, 10);
+        if (!mid) { setEditMgrId(null); return; }
+        api.put('/clients/' + clientId + '/manager', { manager_id: mid }).then(function(res) {
+            if (res && res.success) {
+                setClients(function(prev) {
+                    return prev.map(function(c) { return c.id === clientId ? Object.assign({}, c, { created_by: mid, manager_name: res.manager_name }) : c; });
+                });
+                try { toast.success('담당자를 변경했습니다.'); } catch(e) {}
+            }
+            setEditMgrId(null);
+        }).catch(function() { setEditMgrId(null); });
+    };
+
     /* 업체 목록 로드 */
     var loadClients = useCallback(function() {
         setLoading(true);
@@ -219,8 +244,24 @@ window.ClientListSection = function ClientListSection({ currentUser, onClientCli
                                 style: { fontSize: 11, color: '#dc2626', marginBottom: isAdmin ? 4 : 12 }
                             }, '마지막 분석: ' + lastDate),
                             isAdmin && React.createElement('div', {
-                                style: { fontSize: 11, color: '#6d28d9', fontWeight: 700, marginBottom: 12 }
-                            }, '👤 담당자: ' + (client.manager_name || '-'))
+                                style: { fontSize: 11, color: '#6d28d9', fontWeight: 700, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }
+                            },
+                                editMgrId === client.id
+                                    ? React.createElement('select', {
+                                        defaultValue: client.created_by || '',
+                                        onClick: function(e){ e.stopPropagation(); },
+                                        onChange: function(e){ e.stopPropagation(); changeManager(client.id, e.target.value); },
+                                        style: { fontSize: 11, padding: '3px 6px', borderRadius: 6, border: '1px solid #ddd6fe', maxWidth: '100%' }
+                                    },
+                                        React.createElement('option', { value: '' }, '담당자 선택...'),
+                                        managers.map(function(m){ return React.createElement('option', { key: m.id, value: m.id }, m.name + (m.role !== 'manager' ? ' (' + m.role + ')' : '')); })
+                                    )
+                                    : React.createElement(React.Fragment, null,
+                                        React.createElement('span', null, '👤 담당자: ' + (client.manager_name || '-')),
+                                        React.createElement('button', { onClick: function(e){ e.stopPropagation(); setEditMgrId(client.id); },
+                                            style: { fontSize: 10, fontWeight: 700, color: '#6d28d9', background: '#ede9fe', border: 'none', borderRadius: 6, padding: '2px 7px', cursor: 'pointer' } }, '변경')
+                                    )
+                            )
                         ),
 
                         /* 업체 상세 보기 버튼 */
