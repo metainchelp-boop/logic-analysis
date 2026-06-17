@@ -13,6 +13,12 @@ from datetime import datetime, date
 import os
 import time
 import logging
+import faulthandler
+
+# 네이티브 크래시(SIGSEGV/SIGABRT 등) 발생 시 파이썬 스택을 stderr에 덤프한다.
+# 워커가 커널 로그(dmesg)에 안 찍히는 방식으로 죽을 때 정확한 크래시 위치를
+# docker logs에서 확인하기 위함. (동작 변화 없음, 진단 전용)
+faulthandler.enable()
 
 # 타임존 설정 (Docker 컨테이너 UTC 대응 — KST 강제)
 os.environ.setdefault('TZ', 'Asia/Seoul')
