@@ -2129,8 +2129,9 @@ async def ai_feedback_all(req: AiFeedbackAllRequest, current_user: dict = Depend
                 continue
             label, instruction = label_info
             data_str = json.dumps(sec_data, ensure_ascii=False, default=str)
-            if len(data_str) > 1500:
-                data_str = data_str[:1500] + "...(생략)"
+            # 1500자는 카테고리·수치 등 핵심 필드가 잘려 AI가 빈칸을 추측(환각)하는 원인 → 4000자로 완화
+            if len(data_str) > 4000:
+                data_str = data_str[:4000] + "...(생략)"
             section_blocks.append(f"[{label}]\n데이터: {data_str}\n분석 지시: {instruction}")
 
         if not section_blocks:
@@ -2147,7 +2148,13 @@ async def ai_feedback_all(req: AiFeedbackAllRequest, current_user: dict = Depend
 - 반드시 데이터 수치를 인용하며, 근거 없는 추상적 표현은 쓰지 마세요.
 - 아이콘, 이모지, 특수기호(**, ##)는 사용하지 마세요.
 - 각 섹션은 5~8줄 내외로, 현황→핵심 이슈→실행 전략 흐름으로 작성하세요.
-- 마지막에 'METAINC 종합 인사이트'로 전체 요약과 핵심 액션 3가지를 짧게 정리하세요."""
+- 마지막에 'METAINC 종합 인사이트'로 전체 요약과 핵심 액션 3가지를 짧게 정리하세요.
+
+[사실성 규칙 — 반드시 준수]
+- 제공된 데이터에 있는 사실·수치만 사용하세요. 데이터에 없는 내용을 지어내거나 단정하지 마세요.
+- 카테고리·업종은 데이터에 명시된 값만 그대로 쓰고, 추측으로 다른 카테고리(예: 건강/뷰티/식품 등)를 섞거나 바꾸지 마세요. (예: 데이터가 '가구>소파'면 식품·건강 등을 언급하지 마세요.)
+- 광고주의 운영 방식(매일 소재 제작, 메시지 마케팅 등)이나 외부 플랫폼·서비스(당근비즈니스/당근마켓, 쿠팡, 토스 등)는 데이터로 확인되지 않으면 언급하지 마세요. 특히 그 서비스의 성격(온라인/오프라인/지역기반 등)을 임의로 단정하지 마세요.
+- 값이 0이거나 비어있는 항목(리뷰수, 평점, 판매가 등)은 '데이터 미수집(확인 필요)'으로 표현하고, 0을 실제 수치처럼 단정하지 마세요."""
 
         # ★502 방지: 동기 Claude 호출을 별도 스레드로 실행해 이벤트 루프(워커 하트비트)를
         #  막지 않음. 이렇게 하면 생성이 길어져도 gunicorn 120s 타임아웃에 워커가 죽지 않음.
