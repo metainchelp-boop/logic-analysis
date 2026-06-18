@@ -4891,9 +4891,11 @@ window.MarketRevenueSection = function MarketRevenueSection(props) {
   const {
     avgPrice,
     estimatedMonthly,
+    estimatedMonthlyRange,
     topProducts,
     conversionRate,
-    calculationMethod
+    calculationMethod,
+    tolerance
   } = props.data;
   if (!topProducts || topProducts.length === 0) return null;
   var C = window.CHART_COLORS || {};
@@ -4928,7 +4930,13 @@ window.MarketRevenueSection = function MarketRevenueSection(props) {
           }, void 0, false), "시장 규모 & 매출 추정", /*#__PURE__*/_jsxDEV("span", {
             className: "badge b-est",
             children: "≈ 추정"
-          }, void 0, false)]
+          }, void 0, false), tolerance ? /*#__PURE__*/_jsxDEV("span", {
+            className: "badge b-est",
+            style: {
+              marginLeft: 6
+            },
+            children: tolerance
+          }, void 0, false) : null]
         }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
           className: "rt-desc",
           children: "검색량 × 클릭률 × 전환율 × 평균 단가 기반 추정"
@@ -4941,7 +4949,7 @@ window.MarketRevenueSection = function MarketRevenueSection(props) {
               children: "월간 시장 규모"
             }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
               className: "v",
-              children: estimatedMonthly || '-'
+              children: estimatedMonthlyRange || estimatedMonthly || '-'
             }, void 0, false)]
           }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
             className: "kpi",
@@ -5065,13 +5073,13 @@ window.MarketRevenueSection = function MarketRevenueSection(props) {
                       textAlign: 'right',
                       whiteSpace: 'nowrap'
                     },
-                    children: item.estMonthlySales
+                    children: item.estMonthlySalesRange || item.estMonthlySales
                   }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
                     style: {
                       textAlign: 'right',
                       whiteSpace: 'nowrap'
                     },
-                    children: item.estRevenue
+                    children: item.estRevenueRange || item.estRevenue
                   }, void 0, false)]
                 }, idx, true);
               })
@@ -6848,7 +6856,9 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
     estimatedCTR,
     top10Card,
     page1Card,
-    page2Card
+    page2Card,
+    simulations,
+    tolerance
   } = props.data;
   if (!top10Card || !page1Card || !page2Card) return null;
   var C = window.CHART_COLORS || {};
@@ -6923,7 +6933,13 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
           }, void 0, false), "판매량 추정 & 성장 시뮬레이션", /*#__PURE__*/_jsxDEV("span", {
             className: "badge b-est",
             children: "≈ 추정"
-          }, void 0, false)]
+          }, void 0, false), tolerance ? /*#__PURE__*/_jsxDEV("span", {
+            className: "badge b-est",
+            style: {
+              marginLeft: 6
+            },
+            children: tolerance
+          }, void 0, false) : null]
         }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
           className: "rt-desc",
           children: "순위별 예상 판매량과 매출 성장 시나리오"
@@ -7383,6 +7399,54 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
                 }, void 0, false)]
               }, void 0, true)]
             }, void 0, true)]
+          }, void 0, true)]
+        }, void 0, true), simulations && simulations.length > 0 && /*#__PURE__*/_jsxDEV("div", {
+          className: "sub-card",
+          style: {
+            marginTop: 20
+          },
+          children: [/*#__PURE__*/_jsxDEV("div", {
+            className: "st",
+            children: ["📊 순위별 추정 범위 (전환율 밴드 ", tolerance || '', ")"]
+          }, void 0, true), /*#__PURE__*/_jsxDEV("table", {
+            className: "rt-table",
+            children: [/*#__PURE__*/_jsxDEV("thead", {
+              children: /*#__PURE__*/_jsxDEV("tr", {
+                children: [/*#__PURE__*/_jsxDEV("th", {
+                  children: "순위"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                  style: {
+                    textAlign: 'right'
+                  },
+                  children: "예상 판매(건/월)"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                  style: {
+                    textAlign: 'right'
+                  },
+                  children: "예상 매출(월)"
+                }, void 0, false)]
+              }, void 0, true)
+            }, void 0, false), /*#__PURE__*/_jsxDEV("tbody", {
+              children: simulations.map(function (sim, idx) {
+                return /*#__PURE__*/_jsxDEV("tr", {
+                  children: [/*#__PURE__*/_jsxDEV("td", {
+                    children: [sim.rank, "위"]
+                  }, void 0, true), /*#__PURE__*/_jsxDEV("td", {
+                    style: {
+                      textAlign: 'right',
+                      whiteSpace: 'nowrap'
+                    },
+                    children: sim.estSalesRange || sim.estSales
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                    style: {
+                      textAlign: 'right',
+                      whiteSpace: 'nowrap'
+                    },
+                    children: sim.revenueRange || sim.revenue
+                  }, void 0, false)]
+                }, idx, true);
+              })
+            }, void 0, false)]
           }, void 0, true)]
         }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
           className: "note est",
@@ -19421,11 +19485,18 @@ window.createDoSearch = function (deps) {
         var avgPrice = prices.length > 0 ? Math.round(prices.reduce(function (a, b) {
           return a + b;
         }, 0) / prices.length) : 0;
-        var conversionRate = 0.035; // 전환율 3.5%
+
+        // 전환율 밴드(저/중/고) — 매출/판매량은 단일값이 아니라 '범위'로 추정 (±EST_TOLERANCE)
+        var EST_TOLERANCE = 0.30; // 허용오차 밴드 ±30%
+        var cvMid = 0.035; // 기준 전환율 3.5%
+        var cvLo = cvMid * (1 - EST_TOLERANCE); // 0.0245
+        var cvHi = cvMid * (1 + EST_TOLERANCE); // 0.0455
 
         var topProductsList = prods.slice(0, 40).map(function (p) {
           var ctr = getCTR(p.rank);
-          var estSales = Math.max(1, Math.round(totalVol * ctr * conversionRate));
+          var estSales = Math.max(1, Math.round(totalVol * ctr * cvMid));
+          var estSalesLo = Math.max(1, Math.round(totalVol * ctr * cvLo));
+          var estSalesHi = Math.max(1, Math.round(totalVol * ctr * cvHi));
           return {
             rank: p.rank,
             name: p.product_name,
@@ -19435,20 +19506,33 @@ window.createDoSearch = function (deps) {
             ctr: ctr,
             estMonthlySales: estSales,
             estMonthlySalesStr: fmt(estSales) + '건',
+            estMonthlySalesRange: fmt(estSalesLo) + '~' + fmt(estSalesHi) + '건',
             estRevenue: p.price * estSales,
-            estRevenueStr: fmt(p.price * estSales) + '원'
+            estRevenueStr: fmt(p.price * estSales) + '원',
+            estRevenueRange: fmt(p.price * estSalesLo) + '~' + fmt(p.price * estSalesHi) + '원'
           };
         });
 
-        // 전체 시장 규모 = 상위 40개 상품 추정 매출 합산
-        var totalMarketRevenue = topProductsList.slice(0, 40).reduce(function (sum, p) {
-          return sum + p.estRevenue;
-        }, 0);
+        // 전체 시장 규모 = 상위 40개 상품 추정 매출 합산 (전환율별로 동일 방식 합산)
+        var _marketTotal = function (cv) {
+          return prods.slice(0, 40).reduce(function (sum, p) {
+            var estSales = Math.max(1, Math.round(totalVol * getCTR(p.rank) * cv));
+            return sum + p.price * estSales;
+          }, 0);
+        };
+        var totalMarketRevenue = _marketTotal(cvMid);
+        var marketLo = _marketTotal(cvLo);
+        var marketHi = _marketTotal(cvHi);
+
+        // '2.5%~4.6% (기준 3.5%, ±30%)' 형태의 전환율 가정 라벨 (백엔드 conv_band_label과 동일)
+        var convBandLabel = (cvLo * 100).toFixed(1) + '%~' + (cvHi * 100).toFixed(1) + '% (기준 ' + (cvMid * 100).toFixed(1) + '%, ±' + Math.round(EST_TOLERANCE * 100) + '%)';
         analysis.marketRevenue = {
           avgPrice: fmt(avgPrice) + '원',
           estimatedMonthly: fmt(totalMarketRevenue) + '원',
-          conversionRate: '3.5%',
-          calculationMethod: 'CTR × 전환율',
+          estimatedMonthlyRange: fmt(marketLo) + '~' + fmt(marketHi) + '원',
+          conversionRate: convBandLabel,
+          calculationMethod: 'CTR × 전환율(밴드)',
+          tolerance: '±' + Math.round(EST_TOLERANCE * 100) + '%',
           topProducts: topProductsList.map(function (p) {
             return {
               rank: p.rank,
@@ -19457,7 +19541,9 @@ window.createDoSearch = function (deps) {
               price: p.priceStr,
               ctr: (p.ctr * 100).toFixed(1) + '%',
               estMonthlySales: p.estMonthlySalesStr,
-              estRevenue: p.estRevenueStr
+              estMonthlySalesRange: p.estMonthlySalesRange,
+              estRevenue: p.estRevenueStr,
+              estRevenueRange: p.estRevenueRange
             };
           })
         };
@@ -19686,14 +19772,26 @@ window.createDoSearch = function (deps) {
         var avgP = Math.round(top10p.reduce(function (s, p) {
           return s + p.price;
         }, 0) / top10p.length);
-        var cv = 0.035;
+        // 전환율 밴드(저/중/고) — 판매량/매출은 단일값이 아니라 '범위'로 추정 (±EST_TOLERANCE)
+        var SE_TOLERANCE = 0.30; // 허용오차 밴드 ±30%
+        var cv = 0.035; // 기준 전환율 3.5%
+        var cvLoSE = cv * (1 - SE_TOLERANCE); // 0.0245
+        var cvHiSE = cv * (1 + SE_TOLERANCE); // 0.0455
+        // '2.5%~4.6% (기준 3.5%, ±30%)' 형태의 전환율 가정 라벨 (백엔드 conv_band_label과 동일)
+        var seBandLabel = (cvLoSE * 100).toFixed(1) + '%~' + (cvHiSE * 100).toFixed(1) + '% (기준 ' + (cv * 100).toFixed(1) + '%, ±' + Math.round(SE_TOLERANCE * 100) + '%)';
         // 80위 전체 한번에 계산
         var allRanks = [];
         for (var ci = 0; ci < 80; ci++) {
           var sales = Math.round(totalVol * CTR_TABLE[ci] * cv);
+          var salesLo = Math.round(totalVol * CTR_TABLE[ci] * cvLoSE);
+          var salesHi = Math.round(totalVol * CTR_TABLE[ci] * cvHiSE);
           allRanks.push({
             sales: sales,
-            revenue: sales * avgP
+            revenue: sales * avgP,
+            salesLo: salesLo,
+            salesHi: salesHi,
+            revenueLo: salesLo * avgP,
+            revenueHi: salesHi * avgP
           });
         }
         // TOP 10 집계
@@ -19713,10 +19811,25 @@ window.createDoSearch = function (deps) {
           p2Sales += allRanks[ci].sales;
           p2Total += allRanks[ci].revenue;
         }
+
+        // 순위별 시뮬레이션 행 (±밴드 범위 포함) — 백엔드 salesEstimation.simulations와 동일 구조
+        var _simRanks = [1, 5, 10, 15, 20, 25, 30, 35, 40];
+        var simulations = _simRanks.map(function (rank) {
+          var r = allRanks[rank - 1];
+          return {
+            rank: rank,
+            estSales: r.sales,
+            estSalesRange: fmt(r.salesLo) + '~' + fmt(r.salesHi),
+            revenue: fmt(r.revenue) + '원',
+            revenueRange: fmt(r.revenueLo) + '~' + fmt(r.revenueHi) + '원'
+          };
+        });
         analysis.salesEstimation = {
           avgPrice: fmt(avgP) + '원',
           monthlySearches: fmt(totalVol),
-          estimatedCTR: 'CTR × 3.5%',
+          estimatedCTR: 'CTR × 전환율 ' + seBandLabel,
+          tolerance: '±' + Math.round(SE_TOLERANCE * 100) + '%',
+          simulations: simulations,
           top10Card: {
             rank1Sales: allRanks[0].sales,
             rank5Sales: allRanks[4].sales,

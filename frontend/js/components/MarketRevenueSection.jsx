@@ -1,6 +1,6 @@
 window.MarketRevenueSection = function MarketRevenueSection(props) {
   if (!props?.data) return null;
-  const { avgPrice, estimatedMonthly, topProducts, conversionRate, calculationMethod } = props.data;
+  const { avgPrice, estimatedMonthly, estimatedMonthlyRange, topProducts, conversionRate, calculationMethod, tolerance } = props.data;
 
   if (!topProducts || topProducts.length === 0) return null;
 
@@ -16,12 +16,12 @@ window.MarketRevenueSection = function MarketRevenueSection(props) {
     <div className="section fade-in">
       <div className="container">
       <div className="card" style={{ padding: '20px 22px' }}>
-      <h3 className="rt-h3"><span className="rt-hic">💰</span>시장 규모 &amp; 매출 추정<span className="badge b-est">≈ 추정</span></h3>
+      <h3 className="rt-h3"><span className="rt-hic">💰</span>시장 규모 &amp; 매출 추정<span className="badge b-est">≈ 추정</span>{tolerance ? <span className="badge b-est" style={{ marginLeft: 6 }}>{tolerance}</span> : null}</h3>
       <div className="rt-desc">검색량 × 클릭률 × 전환율 × 평균 단가 기반 추정</div>
 
       {/* KPI 3칸: 시안 .grid3 + .kpi 구조 */}
       <div className="grid3">
-        <div className="kpi"><div className="k">월간 시장 규모</div><div className="v">{estimatedMonthly || '-'}</div></div>
+        <div className="kpi"><div className="k">월간 시장 규모</div><div className="v">{estimatedMonthlyRange || estimatedMonthly || '-'}</div></div>
         <div className="kpi"><div className="k">평균 판매가</div><div className="v">{avgPrice || '-'}</div></div>
         <div className="kpi"><div className="k">적용 전환율</div><div className="v">{conversionRate || '3.0%'}</div></div>
       </div>
@@ -72,8 +72,8 @@ window.MarketRevenueSection = function MarketRevenueSection(props) {
                 <td>{item.rank}</td>
                 <td style={{ fontWeight: isMyProduct ? 700 : 400, wordBreak: 'keep-all' }}>{item.name}{isMyProduct ? ' 👈' : ''}</td>
                 <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>{item.ctr}</td>
-                <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>{item.estMonthlySales}</td>
-                <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>{item.estRevenue}</td>
+                <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>{item.estMonthlySalesRange || item.estMonthlySales}</td>
+                <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>{item.estRevenueRange || item.estRevenue}</td>
               </tr>
             );
           })}
