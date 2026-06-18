@@ -1,7 +1,7 @@
 /* SalesEstimationSection — 판매량 추정 & 성장 시뮬레이션 (v5) */
 window.SalesEstimationSection = function SalesEstimationSection(props) {
   if (!props?.data) return null;
-  const { avgPrice, monthlySearches, estimatedCTR, top10Card, page1Card, page2Card } = props.data;
+  const { avgPrice, monthlySearches, estimatedCTR, top10Card, page1Card, page2Card, simulations, tolerance } = props.data;
 
   if (!top10Card || !page1Card || !page2Card) return null;
 
@@ -26,7 +26,7 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
     <div className="section fade-in">
       <div className="container">
         <div className="card" style={{ padding: '20px 22px' }}>
-        <h3 className="rt-h3"><span className="rt-hic">📦</span>판매량 추정 &amp; 성장 시뮬레이션<span className="badge b-est">≈ 추정</span></h3>
+        <h3 className="rt-h3"><span className="rt-hic">📦</span>판매량 추정 &amp; 성장 시뮬레이션<span className="badge b-est">≈ 추정</span>{tolerance ? <span className="badge b-est" style={{ marginLeft: 6 }}>{tolerance}</span> : null}</h3>
         <div className="rt-desc">순위별 예상 판매량과 매출 성장 시나리오</div>
 
         {/* KPI 3칸 */}
@@ -138,6 +138,33 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
           </div>
 
         </div>
+
+        {/* 순위별 추정 범위 표 (전환율 밴드 ±오차) — simulations가 있을 때만 표시 */}
+        {simulations && simulations.length > 0 && (
+          <div className="sub-card" style={{ marginTop: 20 }}>
+            <div className="st">📊 순위별 추정 범위 (전환율 밴드 {tolerance || ''})</div>
+            <table className="rt-table">
+              <thead>
+                <tr>
+                  <th>순위</th>
+                  <th style={{ textAlign: 'right' }}>예상 판매(건/월)</th>
+                  <th style={{ textAlign: 'right' }}>예상 매출(월)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {simulations.map(function(sim, idx) {
+                  return (
+                    <tr key={idx}>
+                      <td>{sim.rank}위</td>
+                      <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>{sim.estSalesRange || sim.estSales}</td>
+                      <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>{sim.revenueRange || sim.revenue}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
 
         <div className="note est">
           ⚠️ 순위별 클릭률(CTR)을 기반으로 추정한 값이며, 실제 판매량은 상품 경쟁력, 리뷰, 가격 등에 따라 달라질 수 있습니다.
