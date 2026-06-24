@@ -17951,17 +17951,7 @@ window.TopBar = function TopBar(props) {
       go('home');
     },
     style: _navBtn(activePage === 'home')
-  }, '🏠 대시보드'), React.createElement('button', {
-    onClick: function () {
-      go('analysis');
-    },
-    style: _navBtn(activePage === 'analysis')
-  }, '📍 순위 추적'), React.createElement('button', {
-    onClick: function () {
-      go('management');
-    },
-    style: _navBtn(activePage === 'management')
-  }, '📈 로직 분석'),
+  }, '🏠 대시보드'),
   // 🔍 SEO 최적화 — 광고 관리팀(manager) + 최고관리자(superadmin) 전용
   (currentUser.role === 'manager' || currentUser.role === 'superadmin') && React.createElement('button', {
     onClick: function () {
@@ -17969,6 +17959,16 @@ window.TopBar = function TopBar(props) {
     },
     style: _navBtn(activePage === 'seo')
   }, '🔍 SEO 최적화'), React.createElement('button', {
+    onClick: function () {
+      go('management');
+    },
+    style: _navBtn(activePage === 'management')
+  }, '📈 로직 분석'), React.createElement('button', {
+    onClick: function () {
+      go('analysis');
+    },
+    style: _navBtn(activePage === 'analysis')
+  }, '📍 순위 추적'), React.createElement('button', {
     onClick: function () {
       go('guide');
     },
