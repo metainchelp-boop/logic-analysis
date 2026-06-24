@@ -34,7 +34,7 @@ from clients import router as clients_router, init_clients_db
 from reports import router as reports_router, init_reports_db
 from client_dashboard import router as cd_router, init_client_dashboard_db
 from chat import router as chat_router, init_chat_db
-from seo_generate import router as seo_generate_router
+from seo_generate import router as seo_generate_router, init_seo_db
 from datalab import analyze_datalab
 
 logger = logging.getLogger(__name__)
@@ -265,6 +265,7 @@ async def lifespan(app):
     init_reports_db()
     init_client_dashboard_db()
     init_chat_db()
+    init_seo_db()
 
     # DB 무결성 검증 후 백업 (테이블 초기화 이후)
     _backup_db_on_startup()

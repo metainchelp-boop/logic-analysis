@@ -14190,19 +14190,32 @@ window.UserGuidePage = function UserGuidePage({
 
 ;/* ===== js/components/SeoOptimizerPage.jsx ===== */
 /* SeoOptimizerPage — 네이버 쇼핑 SEO 최적화 (관리팀 전용 상단 탭)
- * 1) 진단: 상품 URL + 키워드 → 기존 /seo/analyze 엔진 재활용 (SeoDiagnosisSection)
- * 2) 생성: 키워드(+브랜드/카테고리/특징) → /seo/generate (Claude) → 상품명·태그·카테고리 제안
+ * 우리 업무 방식 반영:
+ *  - 업체(고객) 연동: 업체 선택 → 키워드/URL 자동입력 → 결과를 업체 기록으로 저장(담당자 이어받기)
+ *  - 사내 SEO 규칙: 설정 탭에서 편집한 기준을 AI 생성에 적용 + 화면에 '적용 기준' 표시
+ *  - 결과물 산출/공유: 생성 결과를 CSV로 내보내기
  * props: { currentUser }
  */
 window.SeoOptimizerPage = function SeoOptimizerPage(props) {
   const {
-    useState
+    useState,
+    useEffect
   } = React;
-  const [mode, setMode] = useState('diagnose'); // 'diagnose' | 'generate'
+  const [mode, setMode] = useState('generate'); // 'generate' | 'diagnose'
+
+  /* ---------- 업체 연동 ---------- */
+  const [clients, setClients] = useState([]);
+  const [clientId, setClientId] = useState('');
+  const [clientName, setClientName] = useState('');
+  const [savedList, setSavedList] = useState([]);
+
+  /* ---------- 사내 규칙(읽기 표시) ---------- */
+  const [rules, setRules] = useState('');
+  const [showRules, setShowRules] = useState(false);
 
   /* ---------- 진단 ---------- */
   const [diagKeyword, setDiagKeyword] = useState('');
-  const [activeKeyword, setActiveKeyword] = useState(''); // SeoDiagnosisSection로 전달되는 확정 키워드
+  const [activeKeyword, setActiveKeyword] = useState('');
 
   /* ---------- 생성 ---------- */
   const [genKeyword, setGenKeyword] = useState('');
@@ -14211,10 +14224,54 @@ window.SeoOptimizerPage = function SeoOptimizerPage(props) {
   const [features, setFeatures] = useState('');
   const [genLoading, setGenLoading] = useState(false);
   const [genResult, setGenResult] = useState(null);
+
+  /* 업체 목록 + 사내 규칙 로드 */
+  useEffect(function () {
+    api.get('/cd/registered-clients').then(function (res) {
+      if (res && res.success) setClients(res.data || []);
+    }).catch(function () {});
+    api.get('/seo/rules').then(function (res) {
+      if (res && res.success && res.data) setRules(res.data.rules_text || '');
+    }).catch(function () {});
+  }, []);
+
+  /* 업체별 저장 이력 로드 */
+  const loadSaved = function (cid) {
+    if (!cid) {
+      setSavedList([]);
+      return;
+    }
+    api.get('/seo/client/' + cid + '/saved').then(function (res) {
+      if (res && res.success) setSavedList(res.data || []);
+    }).catch(function () {});
+  };
+
+  /* 업체 선택 → 키워드/URL 자동입력 + 이력 로드 */
+  const handleSelectClient = function (cid) {
+    setClientId(cid);
+    if (!cid) {
+      setClientName('');
+      setSavedList([]);
+      return;
+    }
+    var picked = clients.filter(function (c) {
+      return String(c.id) === String(cid);
+    })[0];
+    setClientName(picked ? picked.name : '');
+    // 대표 키워드 자동입력 (첫 키워드)
+    var kw = picked && picked.main_keywords ? String(picked.main_keywords).split(',')[0].trim() : '';
+    if (kw) {
+      setGenKeyword(kw);
+      setDiagKeyword(kw);
+    }
+    loadSaved(cid);
+  };
+
+  /* ---------- 유틸 ---------- */
   const copy = function (text) {
     try {
       navigator.clipboard.writeText(text);
-      if (window.toast && toast.success) toast.success('복사되었습니다');else if (window.toast && toast.info) toast.info('복사되었습니다');
+      if (window.toast && toast.success) toast.success('복사되었습니다');
     } catch (e) {
       if (window.toast && toast.warn) toast.warn('복사에 실패했습니다');
     }
@@ -14228,17 +14285,79 @@ window.SeoOptimizerPage = function SeoOptimizerPage(props) {
     setGenLoading(true);
     setGenResult(null);
     try {
-      var res = await api.post('/seo/generate', {
+      var body = {
         keyword: kw,
         brand: brand || '',
         category: category || '',
         features: features || ''
-      });
+      };
+      if (clientId) body.client_id = Number(clientId);
+      var res = await api.post('/seo/generate', body);
       if (res && res.success) setGenResult(res.data);else if (window.toast) toast.warn(res && res.detail || 'SEO 생성에 실패했습니다.');
     } catch (e) {
       if (window.toast) toast.warn('SEO 생성 요청 실패 — 잠시 후 다시 시도해주세요.');
     }
     setGenLoading(false);
+  };
+
+  /* 업체에 저장 (선택한 상품명 기준) */
+  const saveToClient = async function (productName) {
+    if (!clientId) {
+      if (window.toast) toast.warn('먼저 업체를 선택하세요');
+      return;
+    }
+    if (!genResult) return;
+    try {
+      var res = await api.post('/seo/save-to-client', {
+        client_id: Number(clientId),
+        keyword: genResult.keyword,
+        product_name: productName || genResult.product_names[0] || '',
+        tags: genResult.tags || [],
+        category: genResult.category || '',
+        rationale: genResult.rationale || [],
+        source: 'generate'
+      });
+      if (res && res.success) {
+        if (window.toast && toast.success) toast.success('업체 기록에 저장되었습니다');
+        loadSaved(clientId);
+      } else if (window.toast) {
+        toast.warn(res && res.detail || '저장에 실패했습니다.');
+      }
+    } catch (e) {
+      if (window.toast) toast.warn('저장 요청에 실패했습니다.');
+    }
+  };
+
+  /* 결과물 내보내기 (CSV) */
+  const exportCsv = function () {
+    if (!genResult) return;
+    var rows = [['항목', '내용']];
+    if (clientName) rows.push(['업체', clientName]);
+    rows.push(['대표 키워드', genResult.keyword]);
+    (genResult.product_names || []).forEach(function (nm, i) {
+      rows.push(['추천 상품명 ' + (i + 1), nm]);
+    });
+    rows.push(['추천 태그', (genResult.tags || []).join(', ')]);
+    rows.push(['추천 카테고리', genResult.category || '']);
+    (genResult.rationale || []).forEach(function (r, i) {
+      rows.push(['적용 근거 ' + (i + 1), r]);
+    });
+    var csv = rows.map(function (r) {
+      return r.map(function (cell) {
+        var s = String(cell == null ? '' : cell).replace(/"/g, '""');
+        return '"' + s + '"';
+      }).join(',');
+    }).join('\r\n');
+    // 엑셀 한글 깨짐 방지 BOM
+    var blob = new Blob(['﻿' + csv], {
+      type: 'text/csv;charset=utf-8'
+    });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    var fn = (clientName ? clientName + '_' : '') + 'SEO_' + (genResult.keyword || '') + '.csv';
+    a.download = fn;
+    a.click();
+    if (window.toast && toast.success) toast.success('CSV로 내보냈습니다');
   };
 
   /* ---------- 스타일 ---------- */
@@ -14302,78 +14421,90 @@ window.SeoOptimizerPage = function SeoOptimizerPage(props) {
       color: '#64748b',
       fontSize: 13
     }
-  }, "\uB124\uC774\uBC84 \uC1FC\uD551 \uAC80\uC0C9 \uB178\uCD9C\uC5D0 \uB9DE\uCDB0 \uC0C1\uD488 SEO\uB97C \uC9C4\uB2E8\uD558\uACE0, AI\uB85C \uCD5C\uC801\uD654\uB41C \uC0C1\uD488\uBA85\xB7\uD0DC\uADF8\xB7\uCE74\uD14C\uACE0\uB9AC\uB97C \uC0DD\uC131\uD569\uB2C8\uB2E4.")), /*#__PURE__*/React.createElement("div", {
+  }, "\uC5C5\uCCB4\uB97C \uC120\uD0DD\uD574 \uC0AC\uB0B4 SEO \uAE30\uC900\uC73C\uB85C \uC9C4\uB2E8\xB7\uC0DD\uC131\uD558\uACE0, \uACB0\uACFC\uB97C \uC5C5\uCCB4 \uAE30\uB85D\uC5D0 \uC800\uC7A5\xB7\uACF5\uC720\uD569\uB2C8\uB2E4.")), /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      padding: '16px 20px',
+      marginBottom: 16,
+      borderRadius: 16
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 12,
+      alignItems: 'center',
+      flexWrap: 'wrap'
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    style: {
+      fontSize: 13,
+      fontWeight: 700,
+      color: '#334155'
+    }
+  }, "\uD83C\uDFE2 \uC5C5\uCCB4 \uC120\uD0DD"), /*#__PURE__*/React.createElement("select", {
+    className: "form-input",
+    value: clientId,
+    onChange: function (e) {
+      handleSelectClient(e.target.value);
+    },
+    style: {
+      minWidth: 240,
+      maxWidth: 360
+    }
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "\u2014 \uC5C5\uCCB4\uB97C \uC120\uD0DD\uD558\uC138\uC694 (\uC120\uD0DD) \u2014"), clients.map(function (c) {
+    return /*#__PURE__*/React.createElement("option", {
+      key: c.id,
+      value: c.id
+    }, c.name);
+  })), clientName && /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12,
+      color: '#0f766e',
+      fontWeight: 600
+    }
+  }, "\uC120\uD0DD\uB428: ", clientName, " \xB7 \uB300\uD45C\uD0A4\uC6CC\uB4DC \uC790\uB3D9\uC785\uB825"), /*#__PURE__*/React.createElement("button", {
+    className: "btn",
+    style: {
+      marginLeft: 'auto',
+      padding: '6px 12px',
+      fontSize: 12
+    },
+    onClick: function () {
+      setShowRules(!showRules);
+    }
+  }, "\uD83D\uDCCB \uC0AC\uB0B4 SEO \uAE30\uC900 ", showRules ? '닫기' : '보기')), showRules && /*#__PURE__*/React.createElement("pre", {
+    style: {
+      marginTop: 12,
+      padding: 14,
+      background: '#f8fafc',
+      border: '1px solid #e2e8f0',
+      borderRadius: 10,
+      fontSize: 12,
+      color: '#334155',
+      whiteSpace: 'pre-wrap',
+      lineHeight: 1.6,
+      maxHeight: 320,
+      overflow: 'auto'
+    }
+  }, rules || '사내 SEO 기준이 아직 설정되지 않았습니다. (설정 탭 → SEO 규칙)')), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       gap: 10,
       marginBottom: 18
     }
   }, /*#__PURE__*/React.createElement("button", {
-    style: tabBtn(mode === 'diagnose'),
-    onClick: function () {
-      setMode('diagnose');
-    }
-  }, "\uD83E\uDE7A SEO \uC9C4\uB2E8\xB7\uC810\uAC80"), /*#__PURE__*/React.createElement("button", {
     style: tabBtn(mode === 'generate'),
     onClick: function () {
       setMode('generate');
     }
-  }, "\u2728 SEO \uC0DD\uC131")), mode === 'diagnose' && /*#__PURE__*/React.createElement("div", {
-    className: "fade-in"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      padding: '18px 20px',
-      marginBottom: 8,
-      borderRadius: 16
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontWeight: 700,
-      fontSize: 14,
-      marginBottom: 10
-    }
-  }, "\u2460 \uAE30\uC900 \uD0A4\uC6CC\uB4DC \uC785\uB825"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      gap: 10
-    }
-  }, /*#__PURE__*/React.createElement("input", {
-    className: "form-input",
-    placeholder: "\uC9C4\uB2E8 \uAE30\uC900 \uD0A4\uC6CC\uB4DC (\uC608: \uC0DD\uBA78\uCE58, \uBB34\uC120\uC774\uC5B4\uD3F0)",
-    value: diagKeyword,
-    onChange: function (e) {
-      setDiagKeyword(e.target.value);
-    },
-    onKeyDown: function (e) {
-      if (e.key === 'Enter') setActiveKeyword(diagKeyword.trim());
-    },
-    style: {
-      flex: 1
-    }
-  }), /*#__PURE__*/React.createElement("button", {
-    className: "btn btn-primary",
-    disabled: !diagKeyword.trim(),
+  }, "\u2728 SEO \uC0DD\uC131"), /*#__PURE__*/React.createElement("button", {
+    style: tabBtn(mode === 'diagnose'),
     onClick: function () {
-      setActiveKeyword(diagKeyword.trim());
+      setMode('diagnose');
     }
-  }, "\uD0A4\uC6CC\uB4DC \uC801\uC6A9")), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 12,
-      color: '#64748b',
-      marginTop: 8
-    }
-  }, "\uD0A4\uC6CC\uB4DC\uB97C \uC801\uC6A9\uD55C \uB4A4, \uC544\uB798\uC5D0\uC11C \uC9C4\uB2E8\uD560 \uC0C1\uD488 URL\uC744 \uC785\uB825\uD558\uBA74 10\uAC1C \uC9C0\uD45C\uB85C SEO \uC0C1\uD0DC\uB97C \uC9C4\uB2E8\uD569\uB2C8\uB2E4.")), activeKeyword ? React.createElement(window.SeoDiagnosisSection, {
-    keyword: activeKeyword
-  }) : /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      padding: '28px 20px',
-      textAlign: 'center',
-      color: '#94a3b8',
-      borderRadius: 16
-    }
-  }, "\uAE30\uC900 \uD0A4\uC6CC\uB4DC\uB97C \uBA3C\uC800 \uC801\uC6A9\uD574\uC8FC\uC138\uC694.")), mode === 'generate' && /*#__PURE__*/React.createElement("div", {
+  }, "\uD83E\uDE7A SEO \uC9C4\uB2E8\xB7\uC810\uAC80")), mode === 'generate' && /*#__PURE__*/React.createElement("div", {
     className: "fade-in"
   }, /*#__PURE__*/React.createElement("div", {
     className: "card",
@@ -14423,7 +14554,7 @@ window.SeoOptimizerPage = function SeoOptimizerPage(props) {
     }
   }, "\uBE0C\uB79C\uB4DC (\uC120\uD0DD)"), /*#__PURE__*/React.createElement("input", {
     className: "form-input",
-    placeholder: "\uC608: \uBA54\uD0C0\uC778\uD06C",
+    placeholder: "\uC608: \uBC14\uB2E4\uB4DC\uB9BC",
     value: brand,
     onChange: function (e) {
       setBrand(e.target.value);
@@ -14464,11 +14595,32 @@ window.SeoOptimizerPage = function SeoOptimizerPage(props) {
       color: '#94a3b8',
       marginTop: 8
     }
-  }, "\uB124\uC774\uBC84 \uC0C1\uC704 \uB178\uCD9C \uC0C1\uD488\uC744 \uCC38\uACE0\uD574 AI\uAC00 \uCD5C\uC801\uD654\uB41C \uC0C1\uD488\uBA85\xB7\uD0DC\uADF8\xB7\uCE74\uD14C\uACE0\uB9AC\uB97C \uC81C\uC548\uD569\uB2C8\uB2E4.")), genLoading && React.createElement(window.LoadingSpinner, {
+  }, "\uC0AC\uB0B4 SEO \uAE30\uC900 + \uB124\uC774\uBC84 \uC0C1\uC704 \uB178\uCD9C \uC0C1\uD488\uC744 \uBC18\uC601\uD574 AI\uAC00 \uC0C1\uD488\uBA85\xB7\uD0DC\uADF8\xB7\uCE74\uD14C\uACE0\uB9AC\uB97C \uC81C\uC548\uD569\uB2C8\uB2E4.")), genLoading && React.createElement(window.LoadingSpinner, {
     text: '네이버 데이터 분석 + AI 생성 중...'
   }), genResult && !genLoading && /*#__PURE__*/React.createElement("div", {
     className: "fade-in"
   }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      marginBottom: 12,
+      flexWrap: 'wrap'
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn",
+    onClick: exportCsv
+  }, "\uD83D\uDCE4 \uACB0\uACFC \uB0B4\uBCF4\uB0B4\uAE30 (CSV)"), clientId ? /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-primary",
+    onClick: function () {
+      saveToClient(genResult.product_names[0]);
+    }
+  }, "\uD83D\uDCBE ", clientName, "\uC5D0 \uC800\uC7A5 (1\uC21C\uC704)") : /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12,
+      color: '#94a3b8',
+      alignSelf: 'center'
+    }
+  }, "\u203B \uC5C5\uCCB4\uB97C \uC120\uD0DD\uD558\uBA74 \uACB0\uACFC\uB97C \uC5C5\uCCB4 \uAE30\uB85D\uC5D0 \uC800\uC7A5\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4")), /*#__PURE__*/React.createElement("div", {
     className: "card",
     style: {
       padding: '18px 20px',
@@ -14537,7 +14689,16 @@ window.SeoOptimizerPage = function SeoOptimizerPage(props) {
       onClick: function () {
         copy(nm);
       }
-    }, "\uBCF5\uC0AC"));
+    }, "\uBCF5\uC0AC"), clientId && /*#__PURE__*/React.createElement("button", {
+      className: "btn",
+      style: {
+        padding: '4px 10px',
+        fontSize: 12
+      },
+      onClick: function () {
+        saveToClient(nm);
+      }
+    }, "\uC774 \uC548 \uC800\uC7A5"));
   })), genResult.tags && genResult.tags.length > 0 && /*#__PURE__*/React.createElement("div", {
     className: "card",
     style: {
@@ -14618,7 +14779,7 @@ window.SeoOptimizerPage = function SeoOptimizerPage(props) {
       fontSize: 15,
       marginBottom: 12
     }
-  }, "\uD83D\uDCA1 \uC801\uC6A9 \uADFC\uAC70"), genResult.rationale.map(function (r, i) {
+  }, "\uD83D\uDCA1 \uC801\uC6A9 \uADFC\uAC70 (\uC0AC\uB0B4 \uAE30\uC900 \uBC18\uC601)"), genResult.rationale.map(function (r, i) {
     return /*#__PURE__*/React.createElement("div", {
       key: i,
       style: {
@@ -14642,7 +14803,223 @@ window.SeoOptimizerPage = function SeoOptimizerPage(props) {
     style: {
       fontSize: 12
     }
-  }, "\u203B AI\uAC00 \uB124\uC774\uBC84 \uC0C1\uC704 \uB178\uCD9C \uC0C1\uD488 ", genResult.context && genResult.context.sampled_titles || 0, "\uAC74\uC744 \uCC38\uACE0\uD574 \uC0DD\uC131\uD55C \uC81C\uC548\uC785\uB2C8\uB2E4. \uB4F1\uB85D \uC804 \uC2E4\uC81C \uC0C1\uD488 \uC815\uBCF4\uC640 \uB9DE\uB294\uC9C0 \uAC80\uD1A0 \uD6C4 \uC0AC\uC6A9\uD558\uC138\uC694."))));
+  }, "\u203B AI\uAC00 \uB124\uC774\uBC84 \uC0C1\uC704 \uB178\uCD9C \uC0C1\uD488 ", genResult.context && genResult.context.sampled_titles || 0, "\uAC74 + \uC0AC\uB0B4 SEO \uAE30\uC900\uC744 \uBC18\uC601\uD574 \uC0DD\uC131\uD55C \uC81C\uC548\uC785\uB2C8\uB2E4. \uB4F1\uB85D \uC804 \uC2E4\uC81C \uC0C1\uD488 \uC815\uBCF4\uC640 \uB9DE\uB294\uC9C0 \uAC80\uD1A0 \uD6C4 \uC0AC\uC6A9\uD558\uC138\uC694.")), clientId && savedList.length > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      padding: '18px 20px',
+      marginTop: 8,
+      borderRadius: 16
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 800,
+      fontSize: 15,
+      marginBottom: 12
+    }
+  }, "\uD83D\uDDC2\uFE0F ", clientName, " \xB7 \uC800\uC7A5\uB41C SEO \uC791\uC5C5 (", savedList.length, ")"), savedList.map(function (it) {
+    return /*#__PURE__*/React.createElement("div", {
+      key: it.id,
+      style: {
+        padding: '10px 0',
+        borderBottom: '1px solid #f1f5f9'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        flexWrap: 'wrap'
+      }
+    }, /*#__PURE__*/React.createElement("b", {
+      style: {
+        fontSize: 13
+      }
+    }, it.product_name || '(상품명 없음)'), /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: '#94a3b8'
+      }
+    }, "\uD0A4\uC6CC\uB4DC: ", it.keyword), /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: '#cbd5e1',
+        marginLeft: 'auto'
+      }
+    }, (it.created_at || '').slice(0, 10), " \xB7 ", it.created_by)), it.tags && it.tags.length > 0 && /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 12,
+        color: '#6366f1',
+        marginTop: 4
+      }
+    }, it.tags.map(function (t) {
+      return '#' + t;
+    }).join(' ')));
+  }))), mode === 'diagnose' && /*#__PURE__*/React.createElement("div", {
+    className: "fade-in"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      padding: '18px 20px',
+      marginBottom: 8,
+      borderRadius: 16
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 14,
+      marginBottom: 10
+    }
+  }, "\u2460 \uAE30\uC900 \uD0A4\uC6CC\uB4DC \uC785\uB825"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    placeholder: "\uC9C4\uB2E8 \uAE30\uC900 \uD0A4\uC6CC\uB4DC (\uC608: \uC0DD\uBA78\uCE58, \uBB34\uC120\uC774\uC5B4\uD3F0)",
+    value: diagKeyword,
+    onChange: function (e) {
+      setDiagKeyword(e.target.value);
+    },
+    onKeyDown: function (e) {
+      if (e.key === 'Enter') setActiveKeyword(diagKeyword.trim());
+    },
+    style: {
+      flex: 1
+    }
+  }), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-primary",
+    disabled: !diagKeyword.trim(),
+    onClick: function () {
+      setActiveKeyword(diagKeyword.trim());
+    }
+  }, "\uD0A4\uC6CC\uB4DC \uC801\uC6A9")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: '#64748b',
+      marginTop: 8
+    }
+  }, clientName ? /*#__PURE__*/React.createElement("span", null, "\uC5C5\uCCB4 ", /*#__PURE__*/React.createElement("b", null, clientName), "\uC758 \uB300\uD45C \uD0A4\uC6CC\uB4DC\uAC00 \uC785\uB825\uB418\uC5C8\uC2B5\uB2C8\uB2E4. ") : null, "\uD0A4\uC6CC\uB4DC\uB97C \uC801\uC6A9\uD55C \uB4A4, \uC544\uB798\uC5D0\uC11C \uC9C4\uB2E8\uD560 \uC0C1\uD488 URL\uC744 \uC785\uB825\uD558\uBA74 10\uAC1C \uC9C0\uD45C\uB85C SEO \uC0C1\uD0DC\uB97C \uC9C4\uB2E8\uD569\uB2C8\uB2E4.")), activeKeyword ? React.createElement(window.SeoDiagnosisSection, {
+    keyword: activeKeyword
+  }) : /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      padding: '28px 20px',
+      textAlign: 'center',
+      color: '#94a3b8',
+      borderRadius: 16
+    }
+  }, "\uAE30\uC900 \uD0A4\uC6CC\uB4DC\uB97C \uBA3C\uC800 \uC801\uC6A9\uD574\uC8FC\uC138\uC694.")));
+};
+
+;/* ===== js/components/SeoRulesSection.jsx ===== */
+/* SeoRulesSection — 설정 탭: 사내 SEO 규칙 편집 (최고관리자 전용)
+ * GET /api/seo/rules, PUT /api/seo/rules
+ * 여기서 저장한 기준이 SEO 최적화 탭의 AI 생성에 즉시 반영됨(재배포 불필요).
+ */
+window.SeoRulesSection = function SeoRulesSection() {
+  const {
+    useState,
+    useEffect
+  } = React;
+  const [text, setText] = useState('');
+  const [orig, setOrig] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  useEffect(function () {
+    api.get('/seo/rules').then(function (res) {
+      if (res && res.success && res.data) {
+        setText(res.data.rules_text || '');
+        setOrig(res.data.rules_text || '');
+      }
+      setLoading(false);
+    }).catch(function () {
+      setLoading(false);
+    });
+  }, []);
+  const save = async function () {
+    if (!text.trim()) {
+      if (window.toast) toast.warn('규칙 내용을 입력하세요');
+      return;
+    }
+    setSaving(true);
+    try {
+      var res = await api.put('/seo/rules', {
+        rules_text: text
+      });
+      if (res && res.success) {
+        setOrig(res.data.rules_text || text);
+        if (window.toast && toast.success) toast.success('SEO 규칙이 저장되었습니다 — 생성에 즉시 반영됩니다');
+      } else if (window.toast) {
+        toast.warn(res && res.detail || '저장에 실패했습니다.');
+      }
+    } catch (e) {
+      if (window.toast) toast.warn('저장 요청에 실패했습니다.');
+    }
+    setSaving(false);
+  };
+  var dirty = text !== orig;
+  return /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      padding: '20px 22px',
+      marginBottom: 16,
+      borderRadius: 16
+    }
+  }, /*#__PURE__*/React.createElement("h3", {
+    className: "rt-h3"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "rt-hic"
+  }, "\uD83D\uDCCB"), "SEO \uC0AC\uB0B4 \uADDC\uCE59"), /*#__PURE__*/React.createElement("div", {
+    className: "rt-desc"
+  }, "\uC5EC\uAE30\uC11C \uC815\uD55C \uAE30\uC900\uC774 ", /*#__PURE__*/React.createElement("b", null, "SEO \uCD5C\uC801\uD654 \uD0ED\uC758 AI \uC0DD\uC131"), "\uC5D0 \uC989\uC2DC \uC801\uC6A9\uB429\uB2C8\uB2E4. (\uC0C1\uD488\uBA85 \uACF5\uC2DD\xB7\uD544\uC218\uC694\uC18C\xB7\uAE08\uC9C0\uC5B4\xB7\uD0DC\uADF8/\uCE74\uD14C\uACE0\uB9AC \uAE30\uC900 \uB4F1)"), loading ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: '#94a3b8',
+      fontSize: 13,
+      padding: '12px 0'
+    }
+  }, "\uBD88\uB7EC\uC624\uB294 \uC911...") : /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("textarea", {
+    value: text,
+    onChange: function (e) {
+      setText(e.target.value);
+    },
+    spellCheck: false,
+    style: {
+      width: '100%',
+      minHeight: 360,
+      padding: 14,
+      border: '1px solid #e2e8f0',
+      borderRadius: 10,
+      fontSize: 13,
+      lineHeight: 1.6,
+      fontFamily: 'inherit',
+      resize: 'vertical',
+      whiteSpace: 'pre'
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      marginTop: 10
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-primary",
+    onClick: save,
+    disabled: saving || !dirty
+  }, saving ? '저장 중...' : '저장'), dirty && /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12,
+      color: '#f59e0b',
+      fontWeight: 600
+    }
+  }, "\u25CF \uC800\uC7A5\uB418\uC9C0 \uC54A\uC740 \uBCC0\uACBD\uC0AC\uD56D"), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: '#94a3b8',
+      marginLeft: 'auto'
+    }
+  }, text.length.toLocaleString(), "\uC790"))));
 };
 
 ;/* ===== js/components/SectionDivider.jsx ===== */
@@ -19710,7 +20087,7 @@ window.App = function App() {
       margin: '0 auto',
       padding: '24px 16px'
     }
-  }, React.createElement(window.AnalysisStatsSection, null), React.createElement(ApiUsageSection, null), React.createElement(NotificationSection, null), React.createElement(window.ManagerReassignSection, null), React.createElement(window.ClientDiagnosticsSection, null), React.createElement(window.FeedbackManagement, null))), React.createElement(window.ChatWidget, {
+  }, React.createElement(window.AnalysisStatsSection, null), React.createElement(ApiUsageSection, null), React.createElement(window.SeoRulesSection, null), React.createElement(NotificationSection, null), React.createElement(window.ManagerReassignSection, null), React.createElement(window.ClientDiagnosticsSection, null), React.createElement(window.FeedbackManagement, null))), React.createElement(window.ChatWidget, {
     currentUser: currentUser
   }));
 

@@ -41,6 +41,7 @@
   "js/components/ClientDashboard.jsx",
   "js/components/UserGuidePage.jsx",
   "js/components/SeoOptimizerPage.jsx",
+  "js/components/SeoRulesSection.jsx",
   "js/components/SectionDivider.jsx",
   "js/components/DatalabDemographicsSection.jsx",
   "js/components/DatalabTrendSection.jsx",
