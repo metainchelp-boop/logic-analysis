@@ -14188,6 +14188,463 @@ window.UserGuidePage = function UserGuidePage({
   }, renderContent())));
 };
 
+;/* ===== js/components/SeoOptimizerPage.jsx ===== */
+/* SeoOptimizerPage — 네이버 쇼핑 SEO 최적화 (관리팀 전용 상단 탭)
+ * 1) 진단: 상품 URL + 키워드 → 기존 /seo/analyze 엔진 재활용 (SeoDiagnosisSection)
+ * 2) 생성: 키워드(+브랜드/카테고리/특징) → /seo/generate (Claude) → 상품명·태그·카테고리 제안
+ * props: { currentUser }
+ */
+window.SeoOptimizerPage = function SeoOptimizerPage(props) {
+  const {
+    useState
+  } = React;
+  const [mode, setMode] = useState('diagnose'); // 'diagnose' | 'generate'
+
+  /* ---------- 진단 ---------- */
+  const [diagKeyword, setDiagKeyword] = useState('');
+  const [activeKeyword, setActiveKeyword] = useState(''); // SeoDiagnosisSection로 전달되는 확정 키워드
+
+  /* ---------- 생성 ---------- */
+  const [genKeyword, setGenKeyword] = useState('');
+  const [brand, setBrand] = useState('');
+  const [category, setCategory] = useState('');
+  const [features, setFeatures] = useState('');
+  const [genLoading, setGenLoading] = useState(false);
+  const [genResult, setGenResult] = useState(null);
+  const copy = function (text) {
+    try {
+      navigator.clipboard.writeText(text);
+      if (window.toast && toast.success) toast.success('복사되었습니다');else if (window.toast && toast.info) toast.info('복사되었습니다');
+    } catch (e) {
+      if (window.toast && toast.warn) toast.warn('복사에 실패했습니다');
+    }
+  };
+  const handleGenerate = async function () {
+    var kw = (genKeyword || '').trim();
+    if (!kw) {
+      if (window.toast) toast.warn('키워드를 입력하세요');
+      return;
+    }
+    setGenLoading(true);
+    setGenResult(null);
+    try {
+      var res = await api.post('/seo/generate', {
+        keyword: kw,
+        brand: brand || '',
+        category: category || '',
+        features: features || ''
+      });
+      if (res && res.success) setGenResult(res.data);else if (window.toast) toast.warn(res && res.detail || 'SEO 생성에 실패했습니다.');
+    } catch (e) {
+      if (window.toast) toast.warn('SEO 생성 요청 실패 — 잠시 후 다시 시도해주세요.');
+    }
+    setGenLoading(false);
+  };
+
+  /* ---------- 스타일 ---------- */
+  var tabBtn = function (active) {
+    return {
+      padding: '10px 20px',
+      borderRadius: 10,
+      cursor: 'pointer',
+      fontSize: 14,
+      fontWeight: 700,
+      border: active ? '1px solid #3b82f6' : '1px solid #e2e8f0',
+      background: active ? '#3b82f6' : '#fff',
+      color: active ? '#fff' : '#475569',
+      transition: 'all .15s'
+    };
+  };
+  var chip = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    padding: '6px 12px',
+    margin: '4px 6px 4px 0',
+    background: '#eef2ff',
+    color: '#3730a3',
+    borderRadius: 999,
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: 'pointer',
+    border: '1px solid #c7d2fe'
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      maxWidth: 1080,
+      margin: '0 auto',
+      padding: '24px 16px'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 18
+    }
+  }, /*#__PURE__*/React.createElement("h2", {
+    style: {
+      fontSize: 22,
+      fontWeight: 900,
+      margin: '0 0 4px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8
+    }
+  }, "\uD83D\uDD0D SEO \uCD5C\uC801\uD654", /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      padding: '2px 9px',
+      borderRadius: 999,
+      background: '#dbeafe',
+      color: '#1d4ed8'
+    }
+  }, "\uAD00\uB9AC\uD300 \uC804\uC6A9")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: '#64748b',
+      fontSize: 13
+    }
+  }, "\uB124\uC774\uBC84 \uC1FC\uD551 \uAC80\uC0C9 \uB178\uCD9C\uC5D0 \uB9DE\uCDB0 \uC0C1\uD488 SEO\uB97C \uC9C4\uB2E8\uD558\uACE0, AI\uB85C \uCD5C\uC801\uD654\uB41C \uC0C1\uD488\uBA85\xB7\uD0DC\uADF8\xB7\uCE74\uD14C\uACE0\uB9AC\uB97C \uC0DD\uC131\uD569\uB2C8\uB2E4.")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 10,
+      marginBottom: 18
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    style: tabBtn(mode === 'diagnose'),
+    onClick: function () {
+      setMode('diagnose');
+    }
+  }, "\uD83E\uDE7A SEO \uC9C4\uB2E8\xB7\uC810\uAC80"), /*#__PURE__*/React.createElement("button", {
+    style: tabBtn(mode === 'generate'),
+    onClick: function () {
+      setMode('generate');
+    }
+  }, "\u2728 SEO \uC0DD\uC131")), mode === 'diagnose' && /*#__PURE__*/React.createElement("div", {
+    className: "fade-in"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      padding: '18px 20px',
+      marginBottom: 8,
+      borderRadius: 16
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 14,
+      marginBottom: 10
+    }
+  }, "\u2460 \uAE30\uC900 \uD0A4\uC6CC\uB4DC \uC785\uB825"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    placeholder: "\uC9C4\uB2E8 \uAE30\uC900 \uD0A4\uC6CC\uB4DC (\uC608: \uC0DD\uBA78\uCE58, \uBB34\uC120\uC774\uC5B4\uD3F0)",
+    value: diagKeyword,
+    onChange: function (e) {
+      setDiagKeyword(e.target.value);
+    },
+    onKeyDown: function (e) {
+      if (e.key === 'Enter') setActiveKeyword(diagKeyword.trim());
+    },
+    style: {
+      flex: 1
+    }
+  }), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-primary",
+    disabled: !diagKeyword.trim(),
+    onClick: function () {
+      setActiveKeyword(diagKeyword.trim());
+    }
+  }, "\uD0A4\uC6CC\uB4DC \uC801\uC6A9")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: '#64748b',
+      marginTop: 8
+    }
+  }, "\uD0A4\uC6CC\uB4DC\uB97C \uC801\uC6A9\uD55C \uB4A4, \uC544\uB798\uC5D0\uC11C \uC9C4\uB2E8\uD560 \uC0C1\uD488 URL\uC744 \uC785\uB825\uD558\uBA74 10\uAC1C \uC9C0\uD45C\uB85C SEO \uC0C1\uD0DC\uB97C \uC9C4\uB2E8\uD569\uB2C8\uB2E4.")), activeKeyword ? React.createElement(window.SeoDiagnosisSection, {
+    keyword: activeKeyword
+  }) : /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      padding: '28px 20px',
+      textAlign: 'center',
+      color: '#94a3b8',
+      borderRadius: 16
+    }
+  }, "\uAE30\uC900 \uD0A4\uC6CC\uB4DC\uB97C \uBA3C\uC800 \uC801\uC6A9\uD574\uC8FC\uC138\uC694.")), mode === 'generate' && /*#__PURE__*/React.createElement("div", {
+    className: "fade-in"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      padding: '18px 20px',
+      marginBottom: 16,
+      borderRadius: 16
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 14,
+      marginBottom: 12
+    }
+  }, "\uC0C1\uD488 \uC815\uBCF4 \uC785\uB825"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: '1fr 1fr',
+      gap: 10,
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    style: {
+      fontSize: 12,
+      color: '#64748b',
+      fontWeight: 600
+    }
+  }, "\uB300\uD45C \uD0A4\uC6CC\uB4DC ", /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: '#ef4444'
+    }
+  }, "*")), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    placeholder: "\uC608: \uC0DD\uBA78\uCE58 1kg",
+    value: genKeyword,
+    onChange: function (e) {
+      setGenKeyword(e.target.value);
+    },
+    onKeyDown: function (e) {
+      if (e.key === 'Enter') handleGenerate();
+    }
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    style: {
+      fontSize: 12,
+      color: '#64748b',
+      fontWeight: 600
+    }
+  }, "\uBE0C\uB79C\uB4DC (\uC120\uD0DD)"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    placeholder: "\uC608: \uBA54\uD0C0\uC778\uD06C",
+    value: brand,
+    onChange: function (e) {
+      setBrand(e.target.value);
+    }
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    style: {
+      fontSize: 12,
+      color: '#64748b',
+      fontWeight: 600
+    }
+  }, "\uD76C\uB9DD \uCE74\uD14C\uACE0\uB9AC (\uC120\uD0DD)"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    placeholder: "\uC608: \uC2DD\uD488 > \uC218\uC0B0\uBB3C > \uAC74\uC5B4\uBB3C",
+    value: category,
+    onChange: function (e) {
+      setCategory(e.target.value);
+    }
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    style: {
+      fontSize: 12,
+      color: '#64748b',
+      fontWeight: 600
+    }
+  }, "\uC81C\uD488 \uD2B9\uC9D5/\uC18D\uC131 (\uC120\uD0DD)"), /*#__PURE__*/React.createElement("input", {
+    className: "form-input",
+    placeholder: "\uC608: \uAD6D\uB0B4\uC0B0, \uBB34\uC5FC, \uB300\uC6A9\uB7C9",
+    value: features,
+    onChange: function (e) {
+      setFeatures(e.target.value);
+    }
+  }))), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-primary",
+    onClick: handleGenerate,
+    disabled: genLoading || !genKeyword.trim()
+  }, genLoading ? 'AI 생성 중...' : '✨ SEO 생성'), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: '#94a3b8',
+      marginTop: 8
+    }
+  }, "\uB124\uC774\uBC84 \uC0C1\uC704 \uB178\uCD9C \uC0C1\uD488\uC744 \uCC38\uACE0\uD574 AI\uAC00 \uCD5C\uC801\uD654\uB41C \uC0C1\uD488\uBA85\xB7\uD0DC\uADF8\xB7\uCE74\uD14C\uACE0\uB9AC\uB97C \uC81C\uC548\uD569\uB2C8\uB2E4.")), genLoading && React.createElement(window.LoadingSpinner, {
+    text: '네이버 데이터 분석 + AI 생성 중...'
+  }), genResult && !genLoading && /*#__PURE__*/React.createElement("div", {
+    className: "fade-in"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      padding: '18px 20px',
+      marginBottom: 14,
+      borderRadius: 16
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 800,
+      fontSize: 15,
+      marginBottom: 12,
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6
+    }
+  }, "\u270F\uFE0F \uCD94\uCC9C \uC0C1\uD488\uBA85 ", /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      padding: '2px 8px',
+      borderRadius: 999,
+      background: '#fce7f3',
+      color: '#9d174d'
+    }
+  }, "AI")), genResult.product_names.map(function (nm, i) {
+    return /*#__PURE__*/React.createElement("div", {
+      key: i,
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        padding: '10px 0',
+        borderBottom: i < genResult.product_names.length - 1 ? '1px solid #f1f5f9' : 'none'
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        width: 22,
+        height: 22,
+        flexShrink: 0,
+        borderRadius: 6,
+        background: '#ec4899',
+        color: '#fff',
+        fontSize: 11,
+        fontWeight: 800,
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center'
+      }
+    }, i + 1), /*#__PURE__*/React.createElement("b", {
+      style: {
+        flex: 1,
+        fontSize: 14,
+        lineHeight: 1.5
+      }
+    }, nm), /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: '#94a3b8'
+      }
+    }, nm.length, "\uC790"), /*#__PURE__*/React.createElement("button", {
+      className: "btn",
+      style: {
+        padding: '4px 10px',
+        fontSize: 12
+      },
+      onClick: function () {
+        copy(nm);
+      }
+    }, "\uBCF5\uC0AC"));
+  })), genResult.tags && genResult.tags.length > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      padding: '18px 20px',
+      marginBottom: 14,
+      borderRadius: 16
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 800,
+      fontSize: 15,
+      marginBottom: 12,
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8
+    }
+  }, "\uD83C\uDFF7\uFE0F \uCD94\uCC9C \uD0DC\uADF8 (", genResult.tags.length, ")", /*#__PURE__*/React.createElement("button", {
+    className: "btn",
+    style: {
+      marginLeft: 'auto',
+      padding: '4px 10px',
+      fontSize: 12
+    },
+    onClick: function () {
+      copy(genResult.tags.join(', '));
+    }
+  }, "\uC804\uCCB4 \uBCF5\uC0AC")), /*#__PURE__*/React.createElement("div", null, genResult.tags.map(function (tg, i) {
+    return /*#__PURE__*/React.createElement("span", {
+      key: i,
+      style: chip,
+      onClick: function () {
+        copy(tg);
+      }
+    }, "#", tg);
+  }))), genResult.category && /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      padding: '18px 20px',
+      marginBottom: 14,
+      borderRadius: 16
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 800,
+      fontSize: 15,
+      marginBottom: 8
+    }
+  }, "\uD83D\uDCC2 \uCD94\uCC9C \uCE74\uD14C\uACE0\uB9AC"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement("b", {
+    style: {
+      fontSize: 14,
+      color: '#0f766e'
+    }
+  }, genResult.category), /*#__PURE__*/React.createElement("button", {
+    className: "btn",
+    style: {
+      padding: '4px 10px',
+      fontSize: 12
+    },
+    onClick: function () {
+      copy(genResult.category);
+    }
+  }, "\uBCF5\uC0AC"))), genResult.rationale && genResult.rationale.length > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      padding: '18px 20px',
+      marginBottom: 14,
+      borderRadius: 16
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 800,
+      fontSize: 15,
+      marginBottom: 12
+    }
+  }, "\uD83D\uDCA1 \uC801\uC6A9 \uADFC\uAC70"), genResult.rationale.map(function (r, i) {
+    return /*#__PURE__*/React.createElement("div", {
+      key: i,
+      style: {
+        padding: '8px 0',
+        borderBottom: i < genResult.rationale.length - 1 ? '1px solid #f1f5f9' : 'none',
+        fontSize: 13,
+        color: '#334155',
+        display: 'flex',
+        gap: 10,
+        lineHeight: 1.7
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: '#10b981',
+        fontWeight: 800,
+        flexShrink: 0
+      }
+    }, "\u2714"), r);
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "note est",
+    style: {
+      fontSize: 12
+    }
+  }, "\u203B AI\uAC00 \uB124\uC774\uBC84 \uC0C1\uC704 \uB178\uCD9C \uC0C1\uD488 ", genResult.context && genResult.context.sampled_titles || 0, "\uAC74\uC744 \uCC38\uACE0\uD574 \uC0DD\uC131\uD55C \uC81C\uC548\uC785\uB2C8\uB2E4. \uB4F1\uB85D \uC804 \uC2E4\uC81C \uC0C1\uD488 \uC815\uBCF4\uC640 \uB9DE\uB294\uC9C0 \uAC80\uD1A0 \uD6C4 \uC0AC\uC6A9\uD558\uC138\uC694."))));
+};
+
 ;/* ===== js/components/SectionDivider.jsx ===== */
 /* SectionDivider — 섹터 구분 헤더 (v6.1 미리보기 디자인) */
 window.SectionDivider = function SectionDivider(props) {
@@ -17127,7 +17584,14 @@ window.TopBar = function TopBar(props) {
       go('management');
     },
     style: _navBtn(activePage === 'management')
-  }, '📈 로직 분석'), React.createElement('button', {
+  }, '📈 로직 분석'),
+  // 🔍 SEO 최적화 — 광고 관리팀(manager) + 최고관리자(superadmin) 전용
+  (currentUser.role === 'manager' || currentUser.role === 'superadmin') && React.createElement('button', {
+    onClick: function () {
+      go('seo');
+    },
+    style: _navBtn(activePage === 'seo')
+  }, '🔍 SEO 최적화'), React.createElement('button', {
     onClick: function () {
       go('guide');
     },
@@ -18558,7 +19022,7 @@ window.App = function App() {
   // URL hash에서 현재 페이지 복원 (새로고침 시 탭 유지)
   var _getPageFromHash = function () {
     var hash = window.location.hash.replace('#', '');
-    var validPages = ['home', 'analysis', 'management', 'guide', 'settings'];
+    var validPages = ['home', 'analysis', 'management', 'seo', 'guide', 'settings'];
     return validPages.indexOf(hash) !== -1 ? hash : 'home';
   };
   const [currentPage, setCurrentPage] = useState(_getPageFromHash);
@@ -19210,6 +19674,16 @@ window.App = function App() {
     health: health,
     onNavigate: setCurrentPage
   }), React.createElement(window.UserGuidePage, {
+    currentUser: currentUser
+  })), React.createElement(window.ChatWidget, {
+    currentUser: currentUser
+  }));
+  if (currentPage === 'seo' && (currentUser.role === 'manager' || currentUser.role === 'superadmin')) return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.TopBar, {
+    activePage: 'seo',
+    currentUser: currentUser,
+    health: health,
+    onNavigate: setCurrentPage
+  }), React.createElement(window.SeoOptimizerPage, {
     currentUser: currentUser
   })), React.createElement(window.ChatWidget, {
     currentUser: currentUser

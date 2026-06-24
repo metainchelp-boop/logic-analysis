@@ -34,6 +34,7 @@ from clients import router as clients_router, init_clients_db
 from reports import router as reports_router, init_reports_db
 from client_dashboard import router as cd_router, init_client_dashboard_db
 from chat import router as chat_router, init_chat_db
+from seo_generate import router as seo_generate_router
 from datalab import analyze_datalab
 
 logger = logging.getLogger(__name__)
@@ -299,6 +300,7 @@ app.include_router(clients_router)
 app.include_router(reports_router)
 app.include_router(cd_router)
 app.include_router(chat_router)
+app.include_router(seo_generate_router)
 
 
 # ==================== 유저 격리 헬퍼 ====================

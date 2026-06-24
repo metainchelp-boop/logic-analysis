@@ -13,7 +13,7 @@ window.App = function App() {
     // URL hash에서 현재 페이지 복원 (새로고침 시 탭 유지)
     var _getPageFromHash = function() {
         var hash = window.location.hash.replace('#', '');
-        var validPages = ['home', 'analysis', 'management', 'guide', 'settings'];
+        var validPages = ['home', 'analysis', 'management', 'seo', 'guide', 'settings'];
         return validPages.indexOf(hash) !== -1 ? hash : 'home';
     };
     const [currentPage, setCurrentPage] = useState(_getPageFromHash);
@@ -484,6 +484,14 @@ window.App = function App() {
         React.createElement('div', null,
             React.createElement(window.TopBar, { activePage: 'guide', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
             React.createElement(window.UserGuidePage, { currentUser: currentUser })
+        ),
+        React.createElement(window.ChatWidget, { currentUser: currentUser })
+    );
+
+    if (currentPage === 'seo' && (currentUser.role === 'manager' || currentUser.role === 'superadmin')) return React.createElement(React.Fragment, null,
+        React.createElement('div', null,
+            React.createElement(window.TopBar, { activePage: 'seo', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
+            React.createElement(window.SeoOptimizerPage, { currentUser: currentUser })
         ),
         React.createElement(window.ChatWidget, { currentUser: currentUser })
     );

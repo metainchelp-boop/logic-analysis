@@ -28,6 +28,8 @@ window.TopBar = function TopBar(props) {
                 React.createElement('button', { onClick: function(){ go('home'); }, style: _navBtn(activePage === 'home') }, '🏠 대시보드'),
                 React.createElement('button', { onClick: function(){ go('analysis'); }, style: _navBtn(activePage === 'analysis') }, '📍 순위 추적'),
                 React.createElement('button', { onClick: function(){ go('management'); }, style: _navBtn(activePage === 'management') }, '📈 로직 분석'),
+                // 🔍 SEO 최적화 — 광고 관리팀(manager) + 최고관리자(superadmin) 전용
+                (currentUser.role === 'manager' || currentUser.role === 'superadmin') && React.createElement('button', { onClick: function(){ go('seo'); }, style: _navBtn(activePage === 'seo') }, '🔍 SEO 최적화'),
                 React.createElement('button', { onClick: function(){ go('guide'); }, style: _navBtn(activePage === 'guide') }, '📖 설명서'),
                 // 👥 직원 탭 제거 — SSO(ERP 연동)로 계정 자동 관리, 로그인 이력/실행 건수는 ⚙️설정 탭으로 통합
                 currentUser.role === 'superadmin' && React.createElement('button', { onClick: function(){ go('settings'); }, style: _navBtn(activePage === 'settings') }, '⚙️ 설정')
