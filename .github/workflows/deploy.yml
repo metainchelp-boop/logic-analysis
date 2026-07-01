@@ -86,17 +86,31 @@ jobs:
             # Nginx 설정 리로드 (정적 파일 서빙 반영)
             sudo nginx -t && sudo nginx -s reload 2>/dev/null || true
 
-            # 컨테이너 재빌드 및 재시작
-            docker compose down
-            docker compose build --no-cache
+            # ── 무중단 지향 교체 + 자동 롤백 ──
+            # 기존: down → build(--no-cache, 수 분간 컨테이너 없음 = 긴 다운 윈도우) → up.
+            # 개선: 구 컨테이너를 계속 서빙시킨 채 '먼저 빌드' → 롤백용 이미지 보존 → '빠른 교체'.
+            #       다운 윈도우가 빌드시간(수 분) → 컨테이너 재생성+기동(수십 초)으로 축소.
+            #       (진짜 0초 무중단은 nginx blue-green 필요 — VPS 설정 확인 후 후속)
+
+            # 1) 현재 실행 중 이미지를 롤백용으로 보존
+            if docker image inspect logic-analysis:latest >/dev/null 2>&1; then
+              docker tag logic-analysis:latest logic-analysis:rollback && echo "롤백 이미지 보존 완료"
+            fi
+
+            # 2) 새 이미지 빌드 — 구 컨테이너는 그대로 서빙 중(빌드 동안 다운 없음)
+            #    빌드 실패 시: 구 컨테이너를 건드리지 않고 즉시 실패 처리(사이트 무영향).
+            if ! docker compose build --no-cache; then
+              echo "새 이미지 빌드 실패 → 구 버전 그대로 유지(사이트 정상), 배포만 실패 처리"
+              exit 1
+            fi
+
+            # 3) 새 이미지로 교체 (down 생략 → up -d가 컨테이너 재생성)
             docker compose up -d
 
-            # 빌드 캐시 자동 정리 — 매 배포 --no-cache 빌드로 캐시가 누적되어
-            # 디스크가 차오르는 것을 방지 (최근 2GB만 남기고 회수, 실행 중 컨테이너/이미지/볼륨/DB는 영향 없음)
+            # 4) 빌드 캐시 자동 정리 (실행 중 컨테이너/이미지/볼륨/DB는 영향 없음)
             docker builder prune -f --keep-storage 2GB || true
 
-            # 헬스체크 (대용량 DB 기동 시간 고려: 초기 대기 + 최대 120초)
-            # 1.2GB+ DB를 로드하며 기동하므로 30초로는 짧아 false 실패가 발생 → 여유 확보
+            # 5) 헬스체크 (대용량 DB 기동 시간 고려: 초기 대기 + 최대 120초)
             echo "앱 기동 대기 중(20초)..."
             sleep 20
             echo "헬스체크 시작..."
@@ -110,6 +124,24 @@ jobs:
               sleep 5
             done
 
-            echo "헬스체크 실패"
+            # 6) 헬스체크 실패 → 이전 버전으로 자동 롤백 (직원 사용 보호)
+            echo "새 버전 헬스체크 실패 → 이전 버전으로 자동 롤백 시도"
             docker compose logs --tail=40
+            if docker image inspect logic-analysis:rollback >/dev/null 2>&1; then
+              docker tag logic-analysis:rollback logic-analysis:latest
+              docker compose up -d --no-build
+              echo "이전 버전으로 롤백 완료 — 헬스 재확인 중"
+              sleep 15
+              for j in $(seq 1 12); do
+                if curl -sf http://127.0.0.1:5050/api/health > /dev/null 2>&1; then
+                  echo "롤백 후 헬스체크 성공 (${j}번째) — 사이트 정상, 배포만 실패 처리"
+                  docker compose ps
+                  exit 1
+                fi
+                sleep 5
+              done
+              echo "치명: 롤백 후에도 헬스 실패 — 수동 개입 필요"
+            else
+              echo "롤백 이미지 없음(최초 배포) — 수동 개입 필요"
+            fi
             exit 1
