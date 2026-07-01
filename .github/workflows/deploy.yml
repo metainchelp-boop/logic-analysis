@@ -12,6 +12,18 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # ── 신뢰도 회귀 테스트 — 실패 시 배포 중단(VPS 접촉 전이라 라이브 무영향) ──
+      # 분석 실행 핵심 파싱 로직(가격 회수·0리뷰·월버킷팅) 재발 방지 가드.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run backend regression tests
+        run: |
+          pip install --quiet beautifulsoup4 requests
+          python backend/tests/test_analysis_regression.py
+
       # 프론트 번들 자동 빌드 — .jsx 수정 시 번들 재생성을 깜빡해도 항상 최신으로 배포.
       # (실패해도 이후 SCP/재시작 단계 전이라 라이브에는 영향 없음 — 무중단)
       - name: Setup Node

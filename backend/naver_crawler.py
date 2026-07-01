@@ -903,7 +903,7 @@ def _extract_next_data_html(raw_html: str, product_url: str = "") -> Optional[st
         _price_raw = (product.get("discountedSalePrice") or product.get("salePrice") or product.get("dispSalePrice")
                       or page_props.get("discountedSalePrice") or page_props.get("salePrice") or 0)
         price_val = int(float(_price_raw) or 0)
-    except (TypeError, ValueError):
+    except Exception:
         price_val = 0
 
     # 카테고리
@@ -1065,7 +1065,7 @@ def _convert_smartstore_json_to_html(data: Dict, product_url: str = "") -> Optio
             _price_raw = (data.get("discountedSalePrice") or data.get("salePrice") or data.get("dispSalePrice")
                           or product.get("discountedSalePrice") or product.get("salePrice") or 0)
             price_val = int(float(_price_raw) or 0)
-        except (TypeError, ValueError):
+        except Exception:
             price_val = 0
 
         # HTML 조립 — 메타 태그로 정확한 API 값 보존 (후속 추출에서 최우선 사용)
@@ -1630,7 +1630,7 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
         if _pm:
             try:
                 nd_price = int(float(_pm.get("content", "0")) or 0)
-            except (ValueError, TypeError):
+            except Exception:
                 nd_price = 0
 
     # ── 1. 이미지 분석 ──
