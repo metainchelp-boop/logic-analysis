@@ -1333,6 +1333,19 @@ def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_curren
         if not suggestions:
             suggestions.append("전반적으로 양호합니다! 리뷰 확보와 찜 유도에 집중하세요.")
 
+        # ── 데이터 신뢰 등급: 실측(스마트스토어 API) vs 추정(순위 기반)을 구분해 부착(부가 필드) ──
+        import data_quality as dq
+        _rev_measured = (review_source == "api")
+        data_quality = {
+            "review_count": dq.metric(est_reviews, dq.MEASURED if _rev_measured else dq.ESTIMATED,
+                                      sources=["smartstore_api"] if _rev_measured else ["rank_based"]),
+            "rating": dq.metric(est_rating, dq.MEASURED if (_rev_measured and est_rating) else dq.ESTIMATED,
+                                sources=["smartstore_api"] if _rev_measured else ["rank_based"]),
+            "monthly_sales": dq.metric(est_monthly_sales, dq.ESTIMATED, sources=["volume_ctr_model"]),
+            "price": dq.metric((my_price or None), dq.status_from_presence(my_price or None),
+                               sources=["crawl"] if my_price else []),
+        }
+
         return {
             "success": True,
             "data": {
@@ -1369,6 +1382,7 @@ def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_curren
                     }
                 },
                 "weights": weights,
+                "data_quality": data_quality,
                 "suggestions": suggestions,
                 "competitors": competitors[:5],
                 "analyzed_at": datetime.now().isoformat(),
