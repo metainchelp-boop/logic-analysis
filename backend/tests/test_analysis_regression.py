@@ -88,6 +88,30 @@ def test_growth_month_keys_match_calendar():
             assert f"{y - 1:04d}-{mo + 1:02d}" == f"{yy - 1:04d}-{mm:02d}"
 
 
+def test_anomaly_guard_absurd_review_count():
+    """이상탐지: 비현실적 리뷰수(>2,000,000)는 미확인(None) 처리."""
+    html = (
+        '<!DOCTYPE html><html><head>'
+        '<meta name="api-review-count" content="9999999">'
+        '</head><body><div class="product-detail"><h1>x</h1></div></body></html>'
+    )
+    rd = (nc.analyze_detail_page(html, _URL) or {}).get("reviewData") or {}
+    assert rd.get("reviewCount") is None, f"absurd review -> {rd.get('reviewCount')!r}"
+
+
+def test_anomaly_guard_price_out_of_range():
+    """이상탐지: 상식 범위 밖 판매가(100원 미만/1억 초과)는 미확인 처리."""
+    for bad in ("50", "999999999"):
+        html = (
+            '<!DOCTYPE html><html><head>'
+            '<meta name="api-review-count" content="3">'
+            f'<meta name="api-price" content="{bad}">'
+            '</head><body><div class="product-detail"><h1>x</h1></div></body></html>'
+        )
+        rd = (nc.analyze_detail_page(html, _URL) or {}).get("reviewData") or {}
+        assert rd.get("price") in (None, 0), f"out-of-range price {bad} -> {rd.get('price')!r}"
+
+
 if __name__ == "__main__":
     _tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     _failed = 0

@@ -2081,6 +2081,21 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
     review_text_analysis = _analyze_reviews(extracted_reviews) if extracted_reviews else None
     logger.info(f"[리뷰추출] 개별 리뷰 {len(extracted_reviews)}건 추출")
 
+    # ── 이상탐지 가드: 추출값이 상식 범위를 벗어나면 '틀린 값' 대신 미확인(None) 처리 ──
+    # 파싱 오류(자릿수 병합 등)·fuzzy 폴백 오탐으로 비현실적 값이 리포트에 실리는 것을 차단.
+    if actual_review_count is not None and not (0 <= actual_review_count <= 2_000_000):
+        logger.warning(f"[이상탐지] 리뷰수 {actual_review_count} 상식범위 초과 → 미확인 처리")
+        actual_review_count = None
+    if actual_rating is not None and not (0.0 < actual_rating <= 5.0):
+        logger.warning(f"[이상탐지] 평점 {actual_rating} 상식범위 초과 → 미확인 처리")
+        actual_rating = None
+    if actual_wish_count is not None and not (0 <= actual_wish_count <= 20_000_000):
+        logger.warning(f"[이상탐지] 찜수 {actual_wish_count} 상식범위 초과 → 미확인 처리")
+        actual_wish_count = None
+    if nd_price and not (100 <= nd_price <= 100_000_000):
+        logger.warning(f"[이상탐지] 판매가 {nd_price} 상식범위 초과 → 미확인 처리")
+        nd_price = 0
+
     # reviewData: 실제 HTML에서 추출된 리뷰/평점/찜수 (없으면 None)
     review_data = None
     if actual_review_count is not None or actual_rating is not None or actual_wish_count is not None or extracted_reviews or nd_price or nd_cat:
