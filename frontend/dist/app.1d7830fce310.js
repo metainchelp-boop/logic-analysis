@@ -831,6 +831,8 @@ window.AiFeedbackAllSection = function AiFeedbackAllSection(props) {
   var volumeData = props.volumeData;
   var relatedData = props.relatedData;
   var advertiserReport = props.advertiserReport;
+  var htmlReviewData = props.htmlReviewData;
+  var datalabData = props.datalabData;
   var _loading = React.useState(false);
   var loading = _loading[0];
   var setLoading = _loading[1];
@@ -906,6 +908,24 @@ window.AiFeedbackAllSection = function AiFeedbackAllSection(props) {
         strategicAnalysis: analysisData.strategicAnalysis
       };
     }
+    // R5: AI가 방어자/신규진입을 판단하고 시즌·리뷰격차를 인용하도록 자기상태·리뷰·시즌을 주입
+    if (analysisData.reviewAnalysis) sections.review = analysisData.reviewAnalysis;
+    if (datalabData && (datalabData.season || datalabData.trend || datalabData.growth)) {
+      sections.season = {
+        season: datalabData.season,
+        trend: datalabData.trend,
+        growth: datalabData.growth
+      };
+    }
+    var _myRank = advertiserReport && advertiserReport.ranking && advertiserReport.ranking.current_rank != null ? advertiserReport.ranking.current_rank : analysisData.targetProductInfo && analysisData.targetProductInfo.rank != null ? analysisData.targetProductInfo.rank : null;
+    var _myReviews = htmlReviewData && htmlReviewData.reviewCount != null ? htmlReviewData.reviewCount : null;
+    var _top5Reviews = analysisData.reviewAnalysis && analysisData.reviewAnalysis.reviewCount ? analysisData.reviewAnalysis.reviewCount.top5 : null;
+    sections.mystatus = {
+      myRank: _myRank,
+      myActualReviews: _myReviews,
+      top5AvgReviews: _top5Reviews,
+      isDefender: _myRank != null && _myRank <= 10 || _myReviews != null && _myReviews >= 100
+    };
     return sections;
   };
   var doFetch = function () {
@@ -17955,7 +17975,9 @@ window.AnalysisResults = function AnalysisResults(props) {
     analysisData: analysisData,
     volumeData: volumeData,
     relatedData: relatedData,
-    advertiserReport: advertiserReport
+    advertiserReport: advertiserReport,
+    htmlReviewData: htmlReviewData,
+    datalabData: datalabData
   })), /* 20. 업체 등록/저장 (viewer는 숨김) */
   analysisData && currentUser.role !== 'viewer' && React.createElement(window.SectionErrorBoundary, {
     name: '업체 저장'
