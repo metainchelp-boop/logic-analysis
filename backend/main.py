@@ -516,10 +516,27 @@ def keyword_exposure(req: KeywordExposureRequest, current_user: dict = Depends(g
             except Exception:
                 return {"keyword": kw, "rank": None, "page": None}
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-            futures = {executor.submit(check_one, kw): kw for kw in candidates}
-            for future in concurrent.futures.as_completed(futures):
+        # ⏱️ 벽시계 예산: 이 시간 안에 끝난 키워드만 모으고, 지연된 키워드는 '미조회(None)'로 채워
+        #    '부분 결과라도 항상 반환'한다. 느린 네이버 조회로 요청이 프록시 타임아웃(≈60s)에 걸려
+        #    노출 분석 섹션이 통째로 사라지던 문제 방지(504 대신 부분 성공).
+        EXPOSURE_BUDGET_SEC = 35
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
+        futures = {executor.submit(check_one, kw): kw for kw in candidates}
+        done_kws = set()
+        try:
+            for future in concurrent.futures.as_completed(futures, timeout=EXPOSURE_BUDGET_SEC):
                 results.append(future.result())
+                done_kws.add(futures[future])
+        except concurrent.futures.TimeoutError:
+            logger.warning(
+                f"keyword-exposure 예산({EXPOSURE_BUDGET_SEC}s) 초과 — 부분 결과 반환 "
+                f"({len(done_kws)}/{len(candidates)} 키워드)"
+            )
+        # 예산 내 미완료 키워드는 미조회(None)로 채워 부분 결과 유지
+        for _fut, _kw in futures.items():
+            if _kw not in done_kws:
+                results.append({"keyword": _kw, "rank": None, "page": None})
+        executor.shutdown(wait=False, cancel_futures=True)
 
         # 내 상품 키워드 vs 참고(연관/급상승) 구분
         for r in results:

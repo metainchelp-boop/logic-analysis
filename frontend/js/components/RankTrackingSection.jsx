@@ -24,6 +24,8 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
     // 키워드별 노출 분석
     const [exposureResult, setExposureResult] = useState(null);
     const [exposureLoading, setExposureLoading] = useState(false);
+    const [exposureFailed, setExposureFailed] = useState(false);
+    const [exposureNonce, setExposureNonce] = useState(0);
     const lastExposureKey = useRef('');
 
     // 검색 컨텍스트(광고주)가 바뀌면 캐시 전체 초기화
@@ -74,26 +76,44 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
         if (!cachedProductName) return;
 
         var _extraKws = (relatedKeywords || []).filter(Boolean);
-        var key = 'exposure::' + searchedProductUrl + '::' + cachedProductName + '::' + _extraKws.length;
+        var key = 'exposure::' + searchedProductUrl + '::' + cachedProductName + '::' + _extraKws.length + '::' + exposureNonce;
         if (lastExposureKey.current === key) return;
         lastExposureKey.current = key;
 
+        var cancelled = false;
+        var retries = 0;
         setExposureLoading(true);
         setExposureResult(null);
-        api.post('/rank/keyword-exposure', { product_url: searchedProductUrl, keyword: searchedKeyword, product_name: cachedProductName, extra_keywords: _extraKws })
-            .then(function(res) {
-                if (res && res.success && res.data) {
-                    setExposureResult(res.data);
-                } else if (res && !res.success) {
-                    toast.warn('키워드 노출 분석: ' + (res.detail || '분석에 실패했습니다'));
-                }
+        setExposureFailed(false);
+
+        function retryOrFail() {
+            if (cancelled) return;
+            // 네이버 조회 지연/일시 실패 → 최대 1회 자동 재시도 후 폴백(빈 상태로 사라지지 않게)
+            if (retries < 1) {
+                retries += 1;
+                setTimeout(function() { if (!cancelled) attempt(); }, 2500);
+            } else {
                 setExposureLoading(false);
-            })
-            .catch(function() {
-                toast.error('키워드 노출 분석 요청 실패');
-                setExposureLoading(false);
-            });
-    }, [searchedProductUrl, searchedKeyword, cachedProductName, relatedKeywords]);
+                setExposureFailed(true);
+            }
+        }
+        function attempt() {
+            api.post('/rank/keyword-exposure', { product_url: searchedProductUrl, keyword: searchedKeyword, product_name: cachedProductName, extra_keywords: _extraKws })
+                .then(function(res) {
+                    if (cancelled) return;
+                    if (res && res.success && res.data) {
+                        setExposureResult(res.data);
+                        setExposureFailed(false);
+                        setExposureLoading(false);
+                    } else {
+                        retryOrFail();
+                    }
+                })
+                .catch(function() { retryOrFail(); });
+        }
+        attempt();
+        return function() { cancelled = true; };
+    }, [searchedProductUrl, searchedKeyword, cachedProductName, relatedKeywords, exposureNonce]);
 
     // 분석 중인 상품이 추적 등록돼 있으면 30일 순위 추이 차트용 이력을 미리 로드
     useEffect(function() {
@@ -449,6 +469,22 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                     </div>
                     );
                 })()}
+
+                {/* 키워드 노출 조회 일시 실패 — 빈 상태로 사라지지 않게 재조회 제공 */}
+                {exposureFailed && !exposureLoading && !exposureResult && (
+                    <div className="card fade-in" style={{ textAlign: 'center', padding: '22px 16px' }}>
+                        <div style={{ fontSize: 26, marginBottom: 8 }}>🔄</div>
+                        <div style={{ fontSize: 13, color: '#64748b', lineHeight: 1.6, marginBottom: 12 }}>
+                            일시적으로 키워드별 노출 순위를 불러오지 못했습니다(네이버 조회 지연). 순위 데이터는 유효하며, 다시 조회하면 표시됩니다.
+                        </div>
+                        <button
+                            onClick={function() { lastExposureKey.current = ''; setExposureFailed(false); setExposureNonce(function(n) { return n + 1; }); }}
+                            style={{ padding: '9px 18px', borderRadius: 10, border: 'none', background: 'linear-gradient(135deg,#4f46e5,#6366f1)', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}
+                        >
+                            🔄 다시 조회
+                        </button>
+                    </div>
+                )}
 
                 {/* 등록된 상품 목록 (viewer에게는 숨김 — 1회성 조회만 표시) */}
                 {(function() {

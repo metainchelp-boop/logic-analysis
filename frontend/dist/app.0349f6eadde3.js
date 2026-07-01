@@ -1572,6 +1572,8 @@ window.RankTrackingSection = function RankTrackingSection({
   // 키워드별 노출 분석
   const [exposureResult, setExposureResult] = useState(null);
   const [exposureLoading, setExposureLoading] = useState(false);
+  const [exposureFailed, setExposureFailed] = useState(false);
+  const [exposureNonce, setExposureNonce] = useState(0);
   const lastExposureKey = useRef('');
 
   // 검색 컨텍스트(광고주)가 바뀌면 캐시 전체 초기화
@@ -1621,28 +1623,51 @@ window.RankTrackingSection = function RankTrackingSection({
     // cachedProductName이 아직 없으면 대기 (나중에 prop이 채워지면 재실행)
     if (!cachedProductName) return;
     var _extraKws = (relatedKeywords || []).filter(Boolean);
-    var key = 'exposure::' + searchedProductUrl + '::' + cachedProductName + '::' + _extraKws.length;
+    var key = 'exposure::' + searchedProductUrl + '::' + cachedProductName + '::' + _extraKws.length + '::' + exposureNonce;
     if (lastExposureKey.current === key) return;
     lastExposureKey.current = key;
+    var cancelled = false;
+    var retries = 0;
     setExposureLoading(true);
     setExposureResult(null);
-    api.post('/rank/keyword-exposure', {
-      product_url: searchedProductUrl,
-      keyword: searchedKeyword,
-      product_name: cachedProductName,
-      extra_keywords: _extraKws
-    }).then(function (res) {
-      if (res && res.success && res.data) {
-        setExposureResult(res.data);
-      } else if (res && !res.success) {
-        toast.warn('키워드 노출 분석: ' + (res.detail || '분석에 실패했습니다'));
+    setExposureFailed(false);
+    function retryOrFail() {
+      if (cancelled) return;
+      // 네이버 조회 지연/일시 실패 → 최대 1회 자동 재시도 후 폴백(빈 상태로 사라지지 않게)
+      if (retries < 1) {
+        retries += 1;
+        setTimeout(function () {
+          if (!cancelled) attempt();
+        }, 2500);
+      } else {
+        setExposureLoading(false);
+        setExposureFailed(true);
       }
-      setExposureLoading(false);
-    }).catch(function () {
-      toast.error('키워드 노출 분석 요청 실패');
-      setExposureLoading(false);
-    });
-  }, [searchedProductUrl, searchedKeyword, cachedProductName, relatedKeywords]);
+    }
+    function attempt() {
+      api.post('/rank/keyword-exposure', {
+        product_url: searchedProductUrl,
+        keyword: searchedKeyword,
+        product_name: cachedProductName,
+        extra_keywords: _extraKws
+      }).then(function (res) {
+        if (cancelled) return;
+        if (res && res.success && res.data) {
+          setExposureResult(res.data);
+          setExposureFailed(false);
+          setExposureLoading(false);
+        } else {
+          retryOrFail();
+        }
+      }).catch(function () {
+        retryOrFail();
+      });
+    }
+    attempt();
+    return function () {
+      cancelled = true;
+    };
+  }, [searchedProductUrl, searchedKeyword, cachedProductName, relatedKeywords, exposureNonce]);
 
   // 분석 중인 상품이 추적 등록돼 있으면 30일 순위 추이 차트용 이력을 미리 로드
   useEffect(function () {
@@ -2361,7 +2386,43 @@ window.RankTrackingSection = function RankTrackingSection({
         }
       }, "\uAD00\uB9AC\uC790\uC5D0 \uC0C1\uD488 \uB4F1\uB85D(\uCD94\uC801 \uC694\uCCAD)"), " \uD6C4 \uB9E4\uC77C \uC2A4\uB0C5\uC0F7\uC73C\uB85C \uC790\uB3D9 \uAE30\uB85D\uB429\uB2C8\uB2E4. \uB4F1\uB85D\uB418\uBA74 \uC774 \uC790\uB9AC\uC5D0 \uCD94\uC774 \uADF8\uB798\uD504\uAC00 \uD45C\uC2DC\uB429\uB2C8\uB2E4."));
     }());
-  }(), function () {
+  }(), exposureFailed && !exposureLoading && !exposureResult && /*#__PURE__*/React.createElement("div", {
+    className: "card fade-in",
+    style: {
+      textAlign: 'center',
+      padding: '22px 16px'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 26,
+      marginBottom: 8
+    }
+  }, "\uD83D\uDD04"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      color: '#64748b',
+      lineHeight: 1.6,
+      marginBottom: 12
+    }
+  }, "\uC77C\uC2DC\uC801\uC73C\uB85C \uD0A4\uC6CC\uB4DC\uBCC4 \uB178\uCD9C \uC21C\uC704\uB97C \uBD88\uB7EC\uC624\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4(\uB124\uC774\uBC84 \uC870\uD68C \uC9C0\uC5F0). \uC21C\uC704 \uB370\uC774\uD130\uB294 \uC720\uD6A8\uD558\uBA70, \uB2E4\uC2DC \uC870\uD68C\uD558\uBA74 \uD45C\uC2DC\uB429\uB2C8\uB2E4."), /*#__PURE__*/React.createElement("button", {
+    onClick: function () {
+      lastExposureKey.current = '';
+      setExposureFailed(false);
+      setExposureNonce(function (n) {
+        return n + 1;
+      });
+    },
+    style: {
+      padding: '9px 18px',
+      borderRadius: 10,
+      border: 'none',
+      background: 'linear-gradient(135deg,#4f46e5,#6366f1)',
+      color: '#fff',
+      fontSize: 13,
+      fontWeight: 700,
+      cursor: 'pointer'
+    }
+  }, "\uD83D\uDD04 \uB2E4\uC2DC \uC870\uD68C")), function () {
     // viewer는 등록된 상품 목록 표시 안 함
     if (canEdit === false) {
       // 1회성 결과도 없고 로딩도 아닌 경우에만 빈 상태 표시
