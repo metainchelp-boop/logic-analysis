@@ -436,6 +436,7 @@ def get_yoy_growth_from_trend(trend_data: dict) -> dict:
     ]
 
     results = []
+    peak = max(month_map.values()) if month_map else 0   # 연중 최고 지수(비수기 판정 기준)
     for p in periods:
         n = p["months"]
         cur_vals = []
@@ -457,21 +458,30 @@ def get_yoy_growth_from_trend(trend_data: dict) -> dict:
         cur_avg = round(sum(cur_vals) / len(cur_vals), 1) if cur_vals else 0
         prev_avg = round(sum(prev_vals) / len(prev_vals), 1) if prev_vals else 0
 
+        # 계절성 노이즈 방지: 기준/현재 지수가 연중 최고 대비 매우 낮으면(비수기) 성장률 %는
+        # 미세 지수의 산물이라 오해를 부른다(예: 1.1→0 = -100%). 이 경우 reliable=false로 표시.
+        low_signal = bool(peak) and (prev_avg < peak * 0.2 or cur_avg < peak * 0.2)
         if prev_avg > 0:
             growth = round((cur_avg - prev_avg) / prev_avg * 100, 1)
         else:
             growth = 0
+            low_signal = True
 
-        logger.info(f"YoY 성장률 {p['label']}: cur_avg={cur_avg}, prev_avg={prev_avg}, growth={growth}% (API 호출 0건)")
+        logger.info(f"YoY 성장률 {p['label']}: cur_avg={cur_avg}, prev_avg={prev_avg}, growth={growth}% low_signal={low_signal}")
 
         results.append({
             "label": p["label"],
             "currentAvg": cur_avg,
             "previousAvg": prev_avg,
             "growth": growth,
+            "reliable": not low_signal,   # False면 비수기 미세지수 → 화면에서 '참고(비수기)'로 순화
         })
 
-    return {"periods": results}
+    # 현재 시점이 비수기인지(현재월 지수가 연중 최고 대비 낮음) — 화면 배너/맥락용
+    cur_month_key = f"{now.year:04d}-{now.month:02d}"
+    cur_month_idx = month_map.get(cur_month_key, 0)
+    off_season = bool(peak) and cur_month_idx < peak * 0.3
+    return {"periods": results, "offSeason": off_season, "currentIndex": cur_month_idx, "peakIndex": peak}
 
 
 # ==================== 카테고리 인기 키워드 ====================
