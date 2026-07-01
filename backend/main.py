@@ -507,11 +507,14 @@ def keyword_exposure(req: KeywordExposureRequest, current_user: dict = Depends(g
         if not candidates:
             return {"success": True, "data": {"product_name": product_name, "results": [], "recommended": []}}
 
-        # 병렬로 순위 조회 (max_pages=4 = 상위 400위까지, find_product_rank는 429 재시도 적용됨)
+        # 병렬로 순위 조회 (max_pages=2 = 상위 200위까지, find_product_rank는 429 재시도 적용됨)
+        # ⚠️ 부하/속도: 키워드 여러 개를 라이브로 조회하므로 200위로 제한(400→200)해
+        #    호출량을 절반으로 줄여 응답을 빠르게(스피너 단축)·429 완화. 상품 자체 키워드는
+        #    통상 상위 200위 안에서 노출되므로 실사용 손실은 작다.
         results = []
         def check_one(kw):
             try:
-                rank, page, _ = find_product_rank(kw, req.product_url, max_pages=4)
+                rank, page, _ = find_product_rank(kw, req.product_url, max_pages=2)
                 return {"keyword": kw, "rank": rank, "page": page}
             except Exception:
                 return {"keyword": kw, "rank": None, "page": None}
@@ -519,7 +522,7 @@ def keyword_exposure(req: KeywordExposureRequest, current_user: dict = Depends(g
         # ⏱️ 벽시계 예산: 이 시간 안에 끝난 키워드만 모으고, 지연된 키워드는 '미조회(None)'로 채워
         #    '부분 결과라도 항상 반환'한다. 느린 네이버 조회로 요청이 프록시 타임아웃(≈60s)에 걸려
         #    노출 분석 섹션이 통째로 사라지던 문제 방지(504 대신 부분 성공).
-        EXPOSURE_BUDGET_SEC = 35
+        EXPOSURE_BUDGET_SEC = 12
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
         futures = {executor.submit(check_one, kw): kw for kw in candidates}
         done_kws = set()
