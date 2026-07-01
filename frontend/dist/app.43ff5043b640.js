@@ -15089,7 +15089,18 @@ window.DatalabGrowthSection = function DatalabGrowthSection(props) {
     className: "badge b-ok"
   }, "\u2705 \uB370\uC774\uD130\uB7A9")), /*#__PURE__*/React.createElement("div", {
     className: "rt-desc"
-  }, "\uB370\uC774\uD130\uB7A9 \uC1FC\uD551\uC778\uC0AC\uC774\uD2B8 \uAE30\uBC18 \uC804\uB144 \uB300\uBE44 \uAC80\uC0C9 \uD2B8\uB80C\uB4DC \uBCC0\uD654"), /*#__PURE__*/React.createElement("div", {
+  }, "\uB370\uC774\uD130\uB7A9 \uC1FC\uD551\uC778\uC0AC\uC774\uD2B8 \uAE30\uBC18 \uC804\uB144 \uB300\uBE44 \uAC80\uC0C9 \uD2B8\uB80C\uB4DC \uBCC0\uD654"), props.data.offSeason && /*#__PURE__*/React.createElement("div", {
+    style: {
+      margin: '8px 0 4px',
+      padding: '10px 14px',
+      background: '#fffbeb',
+      border: '1px solid #fcd34d',
+      borderRadius: 10,
+      fontSize: 12.5,
+      color: '#92400e',
+      lineHeight: 1.6
+    }
+  }, "\u26A0\uFE0F ", /*#__PURE__*/React.createElement("strong", null, "\uBE44\uC218\uAE30 \uC548\uB0B4:"), " \uD604\uC7AC\uB294 \uC774 \uD0A4\uC6CC\uB4DC\uC758 \uBE44\uC218\uAE30 \uAD6C\uAC04\uC785\uB2C8\uB2E4(\uD604\uC7AC \uC9C0\uC218 ", props.data.currentIndex, " / \uC5F0\uC911 \uCD5C\uACE0 ", props.data.peakIndex, "). \uB0AE\uC740 \uC218\uCE58\xB7\uC131\uC7A5\uB960\uC740 \uACC4\uC808 \uC800\uC810 \uB54C\uBB38\uC774\uBA70 \uC2DC\uC7A5 \uC1E0\uD1F4\uAC00 \uC544\uB2D9\uB2C8\uB2E4 \u2014 \uC131\uC218\uAE30 \uAE30\uC900\uC73C\uB85C \uD574\uC11D\uD558\uC138\uC694."), /*#__PURE__*/React.createElement("div", {
     className: "card-grid card-grid-3"
   }, periods.map(function (p, i) {
     var c = colors[i] || colors[0];
@@ -15130,16 +15141,16 @@ window.DatalabGrowthSection = function DatalabGrowthSection(props) {
       style: {
         fontSize: 32,
         fontWeight: 800,
-        color: isPositive ? c.main : '#ef4444',
+        color: p.reliable === false ? '#94a3b8' : isPositive ? c.main : '#ef4444',
         marginBottom: 4
       }
-    }, isPositive ? '+' : '', p.growth, "%"), /*#__PURE__*/React.createElement("div", {
+    }, p.reliable === false ? '—' : (isPositive ? '+' : '') + p.growth + '%'), /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 12,
         color: '#64748b',
         marginBottom: 12
       }
-    }, isPositive ? '검색량 증가 추세' : '검색량 감소 추세'), /*#__PURE__*/React.createElement("div", {
+    }, p.reliable === false ? '비수기 · 참고(지수 미미)' : isPositive ? '검색량 증가 추세' : '검색량 감소 추세'), /*#__PURE__*/React.createElement("div", {
       style: {
         height: 6,
         background: '#e2e8f0',
@@ -15162,7 +15173,18 @@ window.DatalabGrowthSection = function DatalabGrowthSection(props) {
         color: '#94a3b8'
       }
     }, /*#__PURE__*/React.createElement("span", null, "\uC804\uB144: ", p.previousAvg), /*#__PURE__*/React.createElement("span", null, "\uC62C\uD574: ", p.currentAvg)));
-  })), /*#__PURE__*/React.createElement("div", {
+  })), props.data.offSeason || avg3m.reliable === false ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 16,
+      padding: '12px 16px',
+      background: '#fffbeb',
+      borderRadius: 10,
+      border: '1px solid #fcd34d',
+      fontSize: 12,
+      color: '#92400e',
+      lineHeight: 1.7
+    }
+  }, "\uD83D\uDCC8 ", /*#__PURE__*/React.createElement("strong", null, "\uC131\uC7A5 \uBD84\uC11D:"), " \uD604\uC7AC \uBE44\uC218\uAE30 \uAD6C\uAC04\uC774\uB77C \uC804\uB144 \uB300\uBE44 \uC131\uC7A5\uB960\uC740 \uBBF8\uC138 \uC9C0\uC218\uC758 \uBCC0\uB3D9\uC73C\uB85C ", /*#__PURE__*/React.createElement("strong", null, "\uC2E0\uB8B0\uB3C4\uAC00 \uB0AE\uC2B5\uB2C8\uB2E4"), ". \uC131\uC7A5\uC138 \uD310\uB2E8\uC740 \uC131\uC218\uAE30 \uB370\uC774\uD130\uB85C \uD558\uB294 \uAC83\uC774 \uC815\uD655\uD569\uB2C8\uB2E4.") : /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 16,
       padding: '12px 16px',
