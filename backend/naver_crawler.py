@@ -169,7 +169,7 @@ def _parse_api_item(item: Dict, rank: int) -> Dict:
         "product_id": product_id,
         "product_name": title,
         "price": _safe_int(item.get("lprice", 0)),
-        "hprice": int(item.get("hprice", 0)) if item.get("hprice") else None,
+        "hprice": _safe_int(item.get("hprice")) if item.get("hprice") else None,
         "store_name": item.get("mallName", ""),
         "image_url": item.get("image", ""),
         "product_url": item.get("link", ""),
@@ -898,6 +898,14 @@ def _extract_next_data_html(raw_html: str, product_url: str = "") -> Optional[st
     review_score = review_data.get("averageReviewScore", 0) if isinstance(review_data, dict) else 0
     wish_count = page_props.get("wishCount", 0) or product.get("wishCount", 0)
 
+    # 판매가 — __NEXT_DATA__ JSON에서 추출해 합성 HTML에 보존(주 크롤 경로 가격 유실 방지)
+    try:
+        _price_raw = (product.get("discountedSalePrice") or product.get("salePrice") or product.get("dispSalePrice")
+                      or page_props.get("discountedSalePrice") or page_props.get("salePrice") or 0)
+        price_val = int(float(_price_raw) or 0)
+    except (TypeError, ValueError):
+        price_val = 0
+
     # 카테고리
     category = product.get("category", {}) or {}
     cat_name = category.get("wholeCategoryName", "") or ""
@@ -913,6 +921,7 @@ def _extract_next_data_html(raw_html: str, product_url: str = "") -> Optional[st
 <meta name="api-review-count" content="{review_count}">
 <meta name="api-review-score" content="{review_score}">
 <meta name="api-wish-count" content="{wish_count}">
+<meta name="api-price" content="{price_val}">
 </head>
 <body>
 <div class="product-detail">
@@ -1051,6 +1060,14 @@ def _convert_smartstore_json_to_html(data: Dict, product_url: str = "") -> Optio
         review_score = review_amount.get("averageReviewScore", 0) if isinstance(review_amount, dict) else 0
         wish_count = data.get("wishCount", 0) or product.get("wishCount", 0)
 
+        # 판매가 — API JSON에서 추출해 합성 HTML에 보존(가격 유실 방지)
+        try:
+            _price_raw = (data.get("discountedSalePrice") or data.get("salePrice") or data.get("dispSalePrice")
+                          or product.get("discountedSalePrice") or product.get("salePrice") or 0)
+            price_val = int(float(_price_raw) or 0)
+        except (TypeError, ValueError):
+            price_val = 0
+
         # HTML 조립 — 메타 태그로 정확한 API 값 보존 (후속 추출에서 최우선 사용)
         html = f"""<!DOCTYPE html>
 <html lang="ko">
@@ -1058,6 +1075,7 @@ def _convert_smartstore_json_to_html(data: Dict, product_url: str = "") -> Optio
 <meta name="api-review-count" content="{review_count}">
 <meta name="api-review-score" content="{review_score}">
 <meta name="api-wish-count" content="{wish_count}">
+<meta name="api-price" content="{price_val}">
 </head>
 <body>
 <div class="product-detail">
@@ -1605,6 +1623,16 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
     except Exception:
         pass
 
+    # 합성 HTML(주 크롤 경로)에는 __NEXT_DATA__ 스크립트가 없어 위에서 nd_price=0 →
+    # 빌더가 보존한 api-price 메타에서 판매가 회수(가격 유실 방지)
+    if not nd_price and soup:
+        _pm = soup.find("meta", attrs={"name": "api-price"})
+        if _pm:
+            try:
+                nd_price = int(float(_pm.get("content", "0")) or 0)
+            except (ValueError, TypeError):
+                nd_price = 0
+
     # ── 1. 이미지 분석 ──
     all_imgs = soup.find_all("img")
     # 상세페이지 영역 이미지 (상품 상세 설명 내부)
@@ -1711,7 +1739,7 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
     if api_meta_review:
         try:
             val = int(api_meta_review.get("content", "0"))
-            if val > 0:
+            if val >= 0:   # 진짜 0리뷰도 인정(음수만 배제) — 0을 '못 찾음'으로 오인해 fuzzy 폴백이 엉뚱한 숫자를 잡는 것 방지
                 actual_review_count = val
                 logger.info(f"[리뷰추출] 방법0 메타태그(API): 리뷰={actual_review_count}")
         except (ValueError, TypeError):

@@ -1195,6 +1195,7 @@ def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_curren
         # 6. 판매실적 추정 (10%) — 순위 기반 CTR × 전환율 역산
         sales_score = 0
         est_monthly_sales = 0
+        vol_available = True
         if rank:
             # 키워드 볼륨: 캐시 우선, 없으면 API 호출
             if req.cached_total_volume is not None:
@@ -1204,8 +1205,10 @@ def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_curren
                     vol_data = get_keyword_volume([req.keyword])
                     vol = vol_data[0] if vol_data else None
                     total_vol = (vol.get("monthlyPcQcCnt", 0) + vol.get("monthlyMobileQcCnt", 0)) if vol else 0
+                    vol_available = vol is not None   # 조회 자체는 성공(값이 0이어도 available)
                 except Exception:
                     total_vol = 0
+                    vol_available = False   # 볼륨 조회 실패 → '판매 0'이 아니라 '측정 불가'
 
             ctr_map = {1: 0.08, 2: 0.06, 3: 0.05, 4: 0.04, 5: 0.03}
             ctr = ctr_map.get(rank, 0.015 if rank <= 10 else 0.008 if rank <= 20 else 0.003 if rank <= 40 else 0.001)
@@ -1221,6 +1224,14 @@ def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_curren
                 sales_score = 40
             elif est_monthly_sales >= 1:
                 sales_score = 20
+            elif not vol_available:
+                # 볼륨 조회 실패로 판매 추정 불가 → 순위 기반 보수적 폴백(리뷰/평점과 동일 원칙).
+                # 일시적 API 실패가 랭크 상품의 판매점수를 0점으로 만들어 종합점수를 왜곡하는 것을 방지.
+                if rank <= 5: sales_score = 60
+                elif rank <= 10: sales_score = 45
+                elif rank <= 20: sales_score = 35
+                elif rank <= 40: sales_score = 25
+                else: sales_score = 15
         if not rank:
             sales_score = 5
 
@@ -1559,7 +1570,7 @@ def analyze_product_names(req: ProductNameAnalysisRequest, current_user: dict = 
         # 빈도 분석
         word_freq = Counter(all_words)
         top_keywords = [
-            {"word": word, "count": count, "ratio": round(count / len(req.product_names) * 100, 1)}
+            {"word": word, "count": count, "ratio": round(count / max(1, min(len(req.product_names), 50)) * 100, 1)}
             for word, count in word_freq.most_common(30)
         ]
 
