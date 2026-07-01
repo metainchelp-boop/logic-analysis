@@ -2096,6 +2096,25 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
         logger.warning(f"[이상탐지] 판매가 {nd_price} 상식범위 초과 → 미확인 처리")
         nd_price = 0
 
+    # ── 데이터 신뢰 등급(data_quality): 각 수치가 실측/교차확인/미확인 중 무엇인지 부착(부가 정보) ──
+    import data_quality as dq
+    _sample_ratings = [r.get("rating") for r in (extracted_reviews or [])
+                       if isinstance(r.get("rating"), (int, float)) and r.get("rating") > 0]
+    _sample_avg = round(sum(_sample_ratings) / len(_sample_ratings), 1) if _sample_ratings else None
+    # 평점: 메타/API 평점 vs 추출 리뷰 표본 평균 교차검증(±0.5 일치 시 '교차확인')
+    _rating_val, _rating_status, _rating_note = dq.cross_check(actual_rating, _sample_avg, tol=0.5)
+    _rating_sources = (["html_meta"] if actual_rating is not None else []) + (["review_sample"] if _sample_avg is not None else [])
+    _price_val = nd_price or None
+    data_quality = {
+        "review_count": dq.metric(actual_review_count, dq.status_from_presence(actual_review_count),
+                                  sources=["html_meta"] if actual_review_count is not None else []),
+        "rating": dq.metric(_rating_val, _rating_status, sources=_rating_sources, note=_rating_note),
+        "wish": dq.metric(actual_wish_count, dq.status_from_presence(actual_wish_count),
+                          sources=["html_meta"] if actual_wish_count is not None else []),
+        "price": dq.metric(_price_val, dq.status_from_presence(_price_val),
+                           sources=["html_next_data"] if _price_val else []),
+    }
+
     # reviewData: 실제 HTML에서 추출된 리뷰/평점/찜수 (없으면 None)
     review_data = None
     if actual_review_count is not None or actual_rating is not None or actual_wish_count is not None or extracted_reviews or nd_price or nd_cat:
@@ -2109,6 +2128,7 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
             "price": nd_price or None,
             "category": nd_cat or None,
             "category1": nd_cat1 or None,
+            "data_quality": data_quality,
         }
 
     return {

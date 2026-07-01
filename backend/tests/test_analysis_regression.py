@@ -112,6 +112,33 @@ def test_anomaly_guard_price_out_of_range():
         assert rd.get("price") in (None, 0), f"out-of-range price {bad} -> {rd.get('price')!r}"
 
 
+def test_data_quality_status_tags():
+    """지능층: data_quality가 각 수치에 실측/미확인 상태를 붙인다."""
+    html = (
+        '<!DOCTYPE html><html><head>'
+        '<meta name="api-review-count" content="7">'
+        '<meta name="api-price" content="13000">'
+        '</head><body><div class="product-detail"><h1>x</h1></div></body></html>'
+    )
+    rd = (nc.analyze_detail_page(html, _URL) or {}).get("reviewData") or {}
+    q = rd.get("data_quality") or {}
+    assert q.get("review_count", {}).get("status") == "measured", q.get("review_count")
+    assert q.get("price", {}).get("status") == "measured", q.get("price")
+    assert q.get("rating", {}).get("status") == "unavailable", q.get("rating")  # 평점 메타/리뷰 없음
+    assert q.get("review_count", {}).get("confidence") == "medium"
+
+
+def test_data_quality_cross_check_unit():
+    """지능층: cross_check 상태 전이(교차확인/불일치/한쪽/없음)."""
+    import data_quality as dq
+    assert dq.cross_check(4.5, 4.6, tol=0.5)[1] == "cross_verified"
+    assert dq.cross_check(4.5, 3.0, tol=0.5)[1] == "measured"
+    assert dq.cross_check(4.5, None)[1] == "measured"
+    assert dq.cross_check(None, None)[1] == "unavailable"
+    assert dq.confidence("cross_verified") == "high"
+    assert dq.label("estimated") == "추정"
+
+
 if __name__ == "__main__":
     _tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     _failed = 0
