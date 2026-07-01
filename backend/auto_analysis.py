@@ -788,5 +788,10 @@ def run_single_analysis(client_id: int, client_name: str, keyword: str, product_
         'keyword': keyword,
         'total_vol': analysis.get('summaryCards', {}).get('totalVolume', 0),
         'product_count': len(prods),
-        'has_report': bool(report_html),
+        # 실제 데이터를 얻었을 때만 유효 리포트로 간주(스켈레톤 HTML은 항상 생성되므로 bool(report_html)만으론 부족).
+        # 상품 0건 + 검색량 0/공백 = 전체 API 실패 → has_report False(성공 오판 방지).
+        'has_report': bool(report_html) and (
+            len(prods) > 0
+            or str(analysis.get('summaryCards', {}).get('totalVolume', '0')).replace(',', '').strip() not in ('', '0')
+        ),
     }

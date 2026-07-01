@@ -1246,7 +1246,7 @@ def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_curren
                 most_common_cat = Counter(comp_cats).most_common(1)[0][0] if comp_cats else ""
                 if product_category == most_common_cat:
                     category_score = 100
-                elif product_category in " ".join(comp_cats):
+                elif product_category in comp_cats:   # 경쟁사 카테고리 목록에 정확히 존재(부분문자열 오탐 방지)
                     category_score = 60
                 else:
                     category_score = 30

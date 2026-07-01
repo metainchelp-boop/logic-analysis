@@ -104,6 +104,10 @@ window.createDoSearch = function(deps) {
             if ((!volRes || !volRes.success) && (!relRes || !relRes.success) && (!shopRes || !shopRes.success)) {
                 toast.error('키워드 분석 데이터를 가져오지 못했습니다. 네트워크를 확인해주세요.');
             }
+            // 검색량만 실패한 경우도 명시 경고 — '0회'를 실제값으로 오인하거나 관련 섹션이 조용히 사라지는 것 방지
+            else if (!volRes || !volRes.success) {
+                (toast.warn || toast.error)('검색량 데이터를 가져오지 못했습니다 — 검색량·경쟁강도·판매추정 지표는 참고용입니다.');
+            }
 
             if (volRes && volRes.success) setVolumeData(volRes.data);
             if (relRes && relRes.success) setRelatedData(relRes.data);
