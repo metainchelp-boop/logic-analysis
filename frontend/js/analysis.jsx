@@ -51,7 +51,7 @@ window.createDoSearch = function(deps) {
 
         // 검색바에서 HTML이 입력되었으면 상세페이지 분석 + 리뷰 데이터 추출 (비동기)
         if (htmlInput && htmlInput.length >= 100) {
-            api.post('/seo/detail-page', { html: htmlInput, product_url: productUrl || '' })
+            api.post('/seo/detail-page', { html: htmlInput, product_url: cleanedUrl || '' })
                 .then(function(res) {
                     if (searchIdRef.current !== currentSearchId) return; // 이미 다른 검색 시작됨
                     if (res && res.success && res.data) {
@@ -72,9 +72,11 @@ window.createDoSearch = function(deps) {
         }
 
         // 광고주 상품 URL이 있으면 광고주 분석 API 호출
-        if (productUrl) {
+        // cleanedUrl 사용: 추적 파라미터 제거 + HTML만 붙여넣은 경우 HTML에서 자동추출된 URL 포함
+        // (기존엔 raw productUrl이라 HTML만 붙여넣으면 광고주(진입전략) 분석이 통째로 누락됐음)
+        if (cleanedUrl) {
             setAdvertiserLoading(true);
-            api.post('/advertiser/analyze', { keyword: keyword, product_url: productUrl })
+            api.post('/advertiser/analyze', { keyword: keyword, product_url: cleanedUrl })
                 .then(function(res) {
                     if (searchIdRef.current !== currentSearchId) return;
                     if (res && res.success) setAdvertiserReport(res.data);
