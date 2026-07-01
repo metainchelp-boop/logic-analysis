@@ -2172,7 +2172,7 @@ async def ai_feedback_all(req: AiFeedbackAllRequest, current_user: dict = Depend
         section_labels = {
             "volume": ("검색량 분석", "PC/모바일 검색 비율, CTR, CPC 효율성을 수치로 분석하고 광고 vs SEO 투자 판단 근거를 제시하세요."),
             "market": ("시장 규모", "월 거래액, 마진율, BEP 시나리오를 분석하세요."),
-            "competition": ("경쟁강도", "상품 수 대비 검색량, 브랜드 비율을 분석하고 1페이지 진입을 위한 현실적 목표(리뷰수, 판매건수)를 제시하세요."),
+            "competition": ("경쟁강도", "상품 수 대비 검색량, 브랜드 비율을 분석하세요. 목표는 내 순위 상태에 맞게 — 상위권(1~10위)이면 순위 방어·1위 추격·리뷰 격차 해소, 하위권이면 1페이지 진입 — 로 제시하세요."),
             "related": ("연관 키워드", "구매의도/정보탐색/브랜드 키워드를 분류하고 공략 우선순위와 활용법을 제시하세요."),
             "trend": ("키워드 트렌드", "시즌성, 성장 추세를 분석하고 광고/재고/SEO 최적 타이밍을 제시하세요."),
             "golden": ("골든 키워드", "검색량 대비 경쟁도가 낮은 키워드 우선순위와 상품명 최적화 예시를 제시하세요."),
@@ -2201,6 +2201,22 @@ async def ai_feedback_all(req: AiFeedbackAllRequest, current_user: dict = Depend
 
         combined_data = "\n\n---\n\n".join(section_blocks)
 
+        # R5: 자기상태·시즌·리뷰격차는 '피드백 섹션'이 아니라 전 섹션 판단의 '컨텍스트'로 주입.
+        #     (section_labels에 없어 위 루프에서 제외됨 → 여기서 명시적으로 앞단에 붙인다)
+        _ctx_bits = []
+        _ms = req.sections.get("mystatus")
+        if isinstance(_ms, dict) and (_ms.get("myRank") is not None or _ms.get("myActualReviews") is not None):
+            _ctx_bits.append(f"[내 상품 현황(반드시 반영)] {json.dumps(_ms, ensure_ascii=False, default=str)} "
+                             f"— isDefender=true면 '신규 진입'이 아니라 '상위권 방어·1위 추격·리뷰 격차 해소' 관점으로 작성.")
+        _sea = req.sections.get("season")
+        if isinstance(_sea, dict):
+            _ctx_bits.append(f"[시즌·월별 트렌드(반드시 인용)] {json.dumps(_sea, ensure_ascii=False, default=str)[:1500]} "
+                             f"— 데이터에 트렌드/시즌이 있으므로 '데이터 없음'이라 말하지 말 것. 비수기면 낮은 수치는 비수기 탓임을 명시.")
+        _rev = req.sections.get("review")
+        if isinstance(_rev, dict):
+            _ctx_bits.append(f"[리뷰 격차] {json.dumps(_rev, ensure_ascii=False, default=str)[:800]}")
+        _context_block = ("\n\n".join(_ctx_bits) + "\n\n---\n\n") if _ctx_bits else ""
+
         system_prompt = """당신은 메타아이앤씨(METAINC) 시니어 네이버 쇼핑 마케팅 컨설턴트입니다.
 네이버 쇼핑 알고리즘(적합도·인기도·신뢰도)에 정통합니다.
 
@@ -2217,7 +2233,14 @@ async def ai_feedback_all(req: AiFeedbackAllRequest, current_user: dict = Depend
 - 카테고리·업종은 데이터에 명시된 값만 그대로 쓰고, 추측으로 다른 카테고리(예: 건강/뷰티/식품 등)를 섞거나 바꾸지 마세요. (예: 데이터가 '가구>소파'면 식품·건강 등을 언급하지 마세요.)
 - 광고주의 운영 방식(매일 소재 제작, 메시지 마케팅 등)이나 외부 플랫폼·서비스(당근비즈니스/당근마켓, 쿠팡, 토스 등)는 데이터로 확인되지 않으면 언급하지 마세요. 특히 그 서비스의 성격(온라인/오프라인/지역기반 등)을 임의로 단정하지 마세요.
 - 값이 0이거나 비어있는 항목(리뷰수, 평점, 판매가 등)은 '데이터 미수집(확인 필요)'으로 표현하고, 0을 실제 수치처럼 단정하지 마세요.
-- 매출·판매량 등 '추정' 항목은 단정적 단일 숫자로 쓰지 말고, 데이터에 범위(예: estimatedMonthlyRange, estRevenueRange, revenueRange)가 있으면 그 범위로, 없으면 '약 N(추정)'처럼 추정임을 명시하세요. 추정 전환율은 가정값이며 실제와 다를 수 있음을 한 번 언급하세요."""
+- 매출·판매량 등 '추정' 항목은 단정적 단일 숫자로 쓰지 말고, 데이터에 범위(예: estimatedMonthlyRange, estRevenueRange, revenueRange)가 있으면 그 범위로, 없으면 '약 N(추정)'처럼 추정임을 명시하세요. 추정 전환율은 가정값이며 실제와 다를 수 있음을 한 번 언급하세요.
+
+[상태 인지 규칙 — 신규 진입자 vs 상위권 방어자 구분]
+- 데이터의 mystatus(내 상품 현재 순위·실측 리뷰수·SEO점수)를 반드시 먼저 확인하세요.
+- 내 상품이 이미 상위권(순위 1~10위)이거나 실측 리뷰가 상당수(예: 100건 이상)면, 이 광고주는 '신규 진입자'가 아니라 '상위권 방어자'입니다. 이 경우 '신규 진입', '1페이지 진입', '리뷰 N건 목표(현재 리뷰수보다 적은 값)', '진입 점수' 같은 표현을 절대 쓰지 마세요.
+- 방어자에게는 '현 순위 방어·상위(1위) 추격', '경쟁사 대비 리뷰 격차 해소(현재 X건 → 상위 평균 Y건)', '성수기 선점', '객단가·재구매 강화' 관점으로 서술하세요.
+- 리뷰 목표는 하드코딩 숫자가 아니라 데이터의 실측 리뷰수와 경쟁 평균의 격차를 근거로 제시하세요.
+- 시즌/월별 지수 데이터가 있으면 반드시 인용하고 '데이터에 트렌드가 없다'고 말하지 마세요. 분석 시점이 비수기(현재 지수가 연중 최고 대비 낮음)면 낮은 수치는 비수기 때문임을 명시하고, 성수기 대비 선점 준비 관점으로 조언하세요."""
 
         # ★502 방지: 동기 Claude 호출을 별도 스레드로 실행해 이벤트 루프(워커 하트비트)를
         #  막지 않음. 이렇게 하면 생성이 길어져도 gunicorn 120s 타임아웃에 워커가 죽지 않음.
@@ -2225,7 +2248,7 @@ async def ai_feedback_all(req: AiFeedbackAllRequest, current_user: dict = Depend
         user_content = f"""키워드 '{req.keyword}'에 대한 전체 분석 데이터입니다.
 각 섹션별로 분석 피드백을 작성해주세요.
 
-{combined_data}
+{_context_block}{combined_data}
 
 각 섹션을 [섹션명] 형태로 구분하여, 광고주 브리핑 형식으로 작성하세요."""
 

@@ -305,7 +305,9 @@ window.AnalysisResults = function AnalysisResults(props) {
                         analysisData: analysisData,
                         volumeData: volumeData,
                         relatedData: relatedData,
-                        advertiserReport: advertiserReport
+                        advertiserReport: advertiserReport,
+                        htmlReviewData: htmlReviewData,
+                        datalabData: datalabData
                     })
                 ),
     
