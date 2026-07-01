@@ -772,7 +772,7 @@ window.AnalysisResultView = function AnalysisResultView({ keyword, data, rankHis
                     <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 10 }}>광고 경쟁 정보</div>
                     <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', fontSize: 14 }}>
                         <div><span style={{ color: '#64748b' }}>광고 경쟁강도:</span> <strong>{data.advertiserInfo.compIdx}</strong></div>
-                        <div><span style={{ color: '#64748b' }}>노출 깊이:</span> <strong>{data.advertiserInfo.adDepth}</strong></div>
+                        <div><span style={{ color: '#64748b' }}>광고 노출 깊이:</span> <strong>{data.advertiserInfo.adDepth ? '상위 ' + data.advertiserInfo.adDepth + '개' : '-'}</strong></div>
                         <div><span style={{ color: '#64748b' }}>PC 클릭:</span> <strong>{data.advertiserInfo.pcClicks}회</strong></div>
                         <div><span style={{ color: '#64748b' }}>모바일 클릭:</span> <strong>{data.advertiserInfo.mobileClicks}회</strong></div>
                     </div>

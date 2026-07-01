@@ -19,7 +19,7 @@ window.DatalabSeasonSection = function DatalabSeasonSection(props) {
                 <div style={{ fontSize: 22 }}>{s.icon}</div>
                 <b>{s.name}</b>
                 <div className="desc" style={{ margin: '2px 0' }}>{s.period}</div>
-                <div style={{ fontWeight: 800, color: isPeak ? '#c2410c' : undefined }}>지수 {Math.round(s.index)}{isPeak ? ' 🔥' : ''}</div>
+                <div style={{ fontWeight: 800, color: isPeak ? '#c2410c' : undefined }}>지수 {Math.round(s.index)}<span style={{ fontSize: 10, fontWeight: 500, color: '#94a3b8' }}> (상대값)</span>{isPeak ? ' 🔥' : ''}</div>
                 <div style={{ fontSize: 11, color: isPeak ? '#c2410c' : 'var(--sub)' }}>{s.grade}</div>
               </div>
             );

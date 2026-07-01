@@ -66,6 +66,7 @@ window.DatalabTrendSection = function DatalabTrendSection(props) {
           </div>
 
           <div className="note">{d.trendNote}</div>
+          <div className="note" style={{ marginTop: 6, fontSize: 11.5, color: '#94a3b8' }}>ℹ️ '지수'는 절대 검색량이 아니라 <b>기간 내 최고값을 100으로 본 상대값</b>입니다. 증감 추세를 보는 용도이며, 값 자체를 검색 횟수로 해석하지 마세요.</div>
         </div>
       </div>
     </div>

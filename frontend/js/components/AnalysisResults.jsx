@@ -126,6 +126,17 @@ window.AnalysisResults = function AnalysisResults(props) {
                         React.createElement(SummaryCardsSection, { data: analysisData.summaryCards })
                     )
                 ),
+
+                /* 자사 강점 요약 배너 (강점 1개 이상일 때만 노출) */
+                analysisData && React.createElement(window.SectionErrorBoundary, { name: '강점 요약' },
+                    React.createElement(window.StrengthsHighlightBanner, {
+                        reviewAnalysis: analysisData.reviewAnalysis,
+                        htmlReviewData: htmlReviewData,
+                        marketRevenue: analysisData.marketRevenue,
+                        advertiserReport: advertiserReport,
+                        datalabGrowth: datalabData && datalabData.growth
+                    })
+                ),
     
                 /* ========== 2. 시장 · 수요 진단 ========== */
                 analysisData && React.createElement(window.SectionDivider, { label: '2. 시장 · 수요 진단', icon: '📊', color: '#0ea5e9', sub: '검색량 · 트렌드 · 시즌 · 인구 · 요일 · 성장 · 시장규모' }),
@@ -143,6 +154,11 @@ window.AnalysisResults = function AnalysisResults(props) {
                 /* [DATALAB] 시즌별 수요 예측 */
                 datalabData && datalabData.season && React.createElement(window.SectionErrorBoundary, { name: '시즌별 수요' },
                     React.createElement(window.DatalabSeasonSection, { data: datalabData.season })
+                ),
+
+                /* 성수기 긴급성 안내 (성수기 식별 시) */
+                datalabData && datalabData.season && React.createElement(window.SectionErrorBoundary, { name: '시즌 긴급성' },
+                    React.createElement(window.SeasonUrgencyCountdown, { season: datalabData.season })
                 ),
     
                 /* [DATALAB] 성별 + 연령대별 검색 비율 */
@@ -186,6 +202,11 @@ window.AnalysisResults = function AnalysisResults(props) {
                 analysisData && analysisData.advertiserInfo && React.createElement(window.SectionErrorBoundary, { name: '광고 경쟁 정보' },
                     React.createElement(AdvertiserInfoCard, { data: analysisData.advertiserInfo })
                 ),
+
+                /* 예상 CPC · 권장 입찰가 (추정) */
+                analysisData && volumeData && volumeData.length && React.createElement(window.SectionErrorBoundary, { name: '예상 CPC' },
+                    React.createElement(window.CpcBidEstimateSection, { volumeData: volumeData, keyword: searchedKeyword })
+                ),
     
                 /* 경쟁사 비교표 (상위 80개) */
                 analysisData && analysisData.competitorTable && React.createElement(window.SectionErrorBoundary, { name: '경쟁사 비교표' },
@@ -204,12 +225,27 @@ window.AnalysisResults = function AnalysisResults(props) {
                 React.createElement(window.SectionErrorBoundary, { name: '순위 추적' },
                     React.createElement(RankTrackingSection, { products: products, refreshProducts: loadProducts, searchedKeyword: searchedKeyword, searchedProductUrl: searchedProductUrl, cachedProductName: advertiserReport && advertiserReport.product_name ? advertiserReport.product_name : (analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo.product_name : null), relatedKeywords: (relatedData ? (relatedData.golden_keywords || []).concat(relatedData.related_keywords || []).map(function(k) { return typeof k === 'string' ? k : (k && k.keyword) || ''; }).filter(Boolean) : []), onNavigateToClient: handleNavigateToClient, canEdit: currentUser.role !== 'viewer', onRankResult: setRankCheckResult })
                 ),
+
+                /* 분석 상품 순위추적 원클릭 등록 */
+                searchedProductUrl && React.createElement(window.SectionErrorBoundary, { name: '추적 등록' },
+                    React.createElement(window.TrackRegisterButton, { searchedProductUrl: searchedProductUrl, searchedKeyword: searchedKeyword, products: products, refreshProducts: loadProducts, canEdit: currentUser.role !== 'viewer' })
+                ),
     
                 /* 판매량 추정 */
                 analysisData && analysisData.salesEstimation && React.createElement(window.SectionErrorBoundary, { name: '판매량 추정' },
                     React.createElement('div', { id: 'sec-sales' },
                         React.createElement(SalesEstimationSection, { data: analysisData.salesEstimation, reviewCount: (htmlReviewData && htmlReviewData.reviewCount) || (analysisData.reviewAnalysis && analysisData.reviewAnalysis.reviewCount ? analysisData.reviewAnalysis.reviewCount.adv : null), productPrice: analysisData.marketRevenue ? parseInt((analysisData.marketRevenue.avgPrice || '0').replace(/[^0-9]/g, '')) : 0 })
                     )
+                ),
+
+                /* 순위 상승 시 예상 성과(ROI 델타) */
+                analysisData && analysisData.salesEstimation && React.createElement(window.SectionErrorBoundary, { name: 'ROI 시뮬레이션' },
+                    React.createElement(window.RankDeltaROISimulation, {
+                        salesEstimation: analysisData.salesEstimation,
+                        currentRank: (rankCheckResult && rankCheckResult.rank_position != null)
+                            ? rankCheckResult.rank_position
+                            : ((advertiserReport && advertiserReport.ranking) ? advertiserReport.ranking.current_rank : null)
+                    })
                 ),
     
                 /* 리뷰 & 찜 분석 */
@@ -268,8 +304,8 @@ window.AnalysisResults = function AnalysisResults(props) {
                     React.createElement(RelatedKeywordsSection, { data: relatedData })
                 ),
     
-                /* 골든 키워드 */
-                analysisData && analysisData.goldenKeyword && React.createElement(window.SectionErrorBoundary, { name: '골든 키워드' },
+                /* 골든 키워드 (0건이어도 대안 안내를 렌더) */
+                analysisData && React.createElement(window.SectionErrorBoundary, { name: '골든 키워드' },
                     React.createElement('div', { id: 'sec-golden' },
                         React.createElement(GoldenKeywordCard, { data: analysisData.goldenKeyword })
                     )

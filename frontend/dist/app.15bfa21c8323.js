@@ -4660,11 +4660,46 @@ window.MarketRevenueSection = function MarketRevenueSection(props) {
 
 ;/* ===== js/components/GoldenKeywordCard.jsx ===== */
 window.GoldenKeywordCard = function GoldenKeywordCard(props) {
-  if (!props?.data) return null;
+  // 단일 객체 또는 배열 모두 처리 (data가 없어도 0건 안내를 렌더)
+  var raw = props ? props.data : null;
+  var items = Array.isArray(raw) ? raw : raw ? [raw] : [];
+  var valid = items.filter(function (item) {
+    return item && item.name && item.score !== undefined;
+  });
 
-  // 단일 객체 또는 배열 모두 처리
-  const items = Array.isArray(props.data) ? props.data : [props.data];
-  if (!items.length) return null;
+  // 0건: 숨기지 않고 대안을 안내 (빈 표/‘없음’이 부정적으로 보이는 문제 개선)
+  if (valid.length === 0) {
+    return /*#__PURE__*/React.createElement("div", {
+      className: "card"
+    }, /*#__PURE__*/React.createElement("h3", {
+      className: "rt-h3"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "rt-hic"
+    }, "\uD83D\uDC51"), "\uACE8\uB4E0 \uD0A4\uC6CC\uB4DC ", /*#__PURE__*/React.createElement("span", {
+      className: "badge b-ok"
+    }, "\u2705 \uC2E4\uCE21")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        padding: '22px 20px',
+        textAlign: 'center',
+        background: '#f8fafc',
+        borderRadius: 12,
+        border: '1px dashed #e2e8f0'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 14,
+        fontWeight: 700,
+        color: '#475569',
+        marginBottom: 6
+      }
+    }, "\uC9C0\uAE08\uC740 \uC800\uACBD\uC7C1 \uACE8\uB4E0 \uD0A4\uC6CC\uB4DC\uAC00 \uBC1C\uACAC\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 12,
+        color: '#94a3b8',
+        lineHeight: 1.7
+      }
+    }, "\uACE8\uB4E0 \uD0A4\uC6CC\uB4DC\uB294 ", /*#__PURE__*/React.createElement("b", null, "\uAC80\uC0C9\uB7C9\uC740 \uC788\uC73C\uBA74\uC11C \uACBD\uC7C1\uAC15\uB3C4\uAC00 \uB0AE\uC740"), " \uD0A4\uC6CC\uB4DC\uC785\uB2C8\uB2E4. \uB300\uD45C\uD0A4\uC6CC\uB4DC \uC8FC\uBCC0\uC5D0\uB294 \uC5C6\uC9C0\uB9CC, \uC544\uB798 ", /*#__PURE__*/React.createElement("b", null, "\uC5F0\uAD00 \uD0A4\uC6CC\uB4DC"), "\uC758 \uB871\uD14C\uC77C(2~3\uC5B4\uC808 \uC870\uD569)\uC774\uB098 ", /*#__PURE__*/React.createElement("b", null, "\uC138\uBD80 \uC0C1\uD488 \uC18D\uC131 \uD0A4\uC6CC\uB4DC"), "\uB85C \uC9C4\uC785\uD558\uBA74 \uB0AE\uC740 \uBE44\uC6A9\uC73C\uB85C \uC0C1\uC704 \uB178\uCD9C\uC744 \uB178\uB9B4 \uC218 \uC788\uC2B5\uB2C8\uB2E4.")));
+  }
   return /*#__PURE__*/React.createElement("div", {
     className: "card"
   }, /*#__PURE__*/React.createElement("h3", {
@@ -4675,8 +4710,7 @@ window.GoldenKeywordCard = function GoldenKeywordCard(props) {
     className: "badge b-ok"
   }, "\u2705 \uC2E4\uCE21")), /*#__PURE__*/React.createElement("div", {
     className: "grid2"
-  }, items.map(function (item, idx) {
-    if (!item || !item.name || item.score === undefined) return null;
+  }, valid.map(function (item, idx) {
     const {
       name,
       score,
@@ -4818,7 +4852,7 @@ window.AdvertiserInfoCard = function AdvertiserInfoCard(props) {
     }, item.value, item.unit && /*#__PURE__*/React.createElement("small", null, item.unit)));
   })), /*#__PURE__*/React.createElement("div", {
     className: "note"
-  }, "\uAD11\uACE0 \uACBD\uC7C1\uC774 \uCE58\uC5F4\uD560\uC218\uB85D \uC785\uCC30\uAC00 \uBD80\uB2F4\uC774 \uCEE4\uC9C0\uBBC0\uB85C, SEO(\uC790\uC5F0\uB178\uCD9C)\uB97C \uBCD1\uD589\uD574 \uAD11\uACE0\uBE44 \uD6A8\uC728\uC744 \uD655\uBCF4\uD558\uB294 \uAC83\uC774 \uC720\uB9AC\uD569\uB2C8\uB2E4."))));
+  }, "'\uAD11\uACE0 \uB178\uCD9C \uAE4A\uC774 = \uC0C1\uC704 N\uAC1C'\uB294 \uC774 \uD0A4\uC6CC\uB4DC\uC5D0\uC11C \uAC80\uC0C9\uAD11\uACE0\uAC00 \uD3C9\uADE0\uC801\uC73C\uB85C ", /*#__PURE__*/React.createElement("b", null, "\uC0C1\uC704 \uBA87 \uBC88\uC9F8 \uC2AC\uB86F\uAE4C\uC9C0 \uB178\uCD9C"), "\uB418\uB294\uC9C0\uB97C \uB73B\uD569\uB2C8\uB2E4(\uAC12\uC774 \uD074\uC218\uB85D \uAD11\uACE0 \uB178\uCD9C \uACBD\uC7C1\uC774 \uB113\uC74C). \uAD11\uACE0 \uACBD\uC7C1\uC774 \uCE58\uC5F4\uD560\uC218\uB85D \uC785\uCC30\uAC00 \uBD80\uB2F4\uC774 \uCEE4\uC9C0\uBBC0\uB85C, SEO(\uC790\uC5F0\uB178\uCD9C)\uB97C \uBCD1\uD589\uD574 \uAD11\uACE0\uBE44 \uD6A8\uC728\uC744 \uD655\uBCF4\uD558\uB294 \uAC83\uC774 \uC720\uB9AC\uD569\uB2C8\uB2E4."))));
 };
 
 ;/* ===== js/components/SummaryCardsSection.jsx ===== */
@@ -4869,8 +4903,11 @@ window.SummaryCardsSection = function SummaryCardsSection(props) {
   }, "\uACE8\uB4E0 \uD0A4\uC6CC\uB4DC ", /*#__PURE__*/React.createElement("span", {
     className: "badge b-ok"
   }, "\u2705")), /*#__PURE__*/React.createElement("div", {
-    className: "v"
-  }, goldenCount, /*#__PURE__*/React.createElement("small", null, "\uAC1C \uBC1C\uACAC"))), /*#__PURE__*/React.createElement("div", {
+    className: "v",
+    style: {
+      color: Number(goldenCount) === 0 ? '#f59e0b' : undefined
+    }
+  }, goldenCount, /*#__PURE__*/React.createElement("small", null, Number(goldenCount) === 0 ? '개 — 롱테일 권장' : '개 발견'))), /*#__PURE__*/React.createElement("div", {
     className: "kpi"
   }, /*#__PURE__*/React.createElement("div", {
     className: "k"
@@ -5563,6 +5600,40 @@ window.ReviewTextAnalysisSection = function ReviewTextAnalysisSection(props) {
   var setKwTab = kwTabState[1];
   var displayedReviews = showAll ? reviews : reviews.slice(0, 3);
   var remainingCount = reviews.length - 3;
+
+  /* 리뷰 실문장 카피 후보 — 긍정 리뷰에서 실제 문장 추출(문구 창작이 아니라 구매자 표현 인용) */
+  var positiveKw = (data.positiveKeywords || []).map(function (k) {
+    return k.keyword;
+  }).filter(Boolean);
+  var pickSentence = function (text) {
+    var parts = String(text || '').split(/[.!?\n·•]|다\s|요\s/).map(function (s) {
+      return s.trim();
+    }).filter(function (s) {
+      return s.length >= 6 && s.length <= 45;
+    });
+    for (var i = 0; i < parts.length; i++) {
+      for (var j = 0; j < positiveKw.length; j++) {
+        if (positiveKw[j] && parts[i].indexOf(positiveKw[j]) >= 0) return parts[i];
+      }
+    }
+    return parts[0] || null;
+  };
+  var _seen = {};
+  var copyCandidates = [];
+  (reviews || []).forEach(function (r) {
+    if (copyCandidates.length >= 5) return;
+    if (!r || !r.text) return;
+    if (!(r.sentiment === 'positive' || (Number(r.rating) || 0) >= 4)) return;
+    var s = pickSentence(r.text);
+    if (!s) return;
+    var key = s.replace(/\s/g, '');
+    if (_seen[key]) return;
+    _seen[key] = 1;
+    copyCandidates.push({
+      copy: s,
+      rating: r.rating
+    });
+  });
   return React.createElement('div', {
     className: 'section fade-in'
   }, React.createElement('div', {
@@ -5603,7 +5674,7 @@ window.ReviewTextAnalysisSection = function ReviewTextAnalysisSection(props) {
       color: '#94a3b8',
       marginTop: 4
     }
-  }, '전체 ' + fmt(totalReviewCount) + '건 중') : null), /* 평균 별점 */
+  }, '전체 ' + fmt(totalReviewCount) + '건 중 표본 ' + fmt(data.totalExtracted) + '건' + (totalReviewCount > 0 ? ' (' + Math.round(data.totalExtracted / totalReviewCount * 100) + '%)' : '')) : null), /* 평균 별점 */
   React.createElement('div', {
     className: 'kpi'
   }, React.createElement('div', {
@@ -5777,6 +5848,49 @@ window.ReviewTextAnalysisSection = function ReviewTextAnalysisSection(props) {
         fontWeight: 700
       }
     }, '→'), insight);
+  }))) : null, /* 4-1. 리뷰 기반 카피 후보 (구매자 실제 표현) */
+  copyCandidates.length > 0 ? React.createElement('div', {
+    className: 'sub-card'
+  }, React.createElement('div', {
+    className: 'st'
+  }, '📝 리뷰 기반 카피 후보'), React.createElement('div', {
+    style: {
+      fontSize: 11.5,
+      color: '#94a3b8',
+      marginBottom: 10
+    }
+  }, '구매자가 실제 남긴 긍정 리뷰 문장입니다. 상세페이지·광고 카피 소재로 활용하세요(과장 없이 실제 표현 그대로).'), React.createElement('div', {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 8
+    }
+  }, copyCandidates.map(function (c, i) {
+    return React.createElement('div', {
+      key: 'copy-' + i,
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        padding: '10px 14px',
+        background: '#f0fdf4',
+        border: '1px solid #bbf7d0',
+        borderRadius: 10
+      }
+    }, React.createElement('span', {
+      style: {
+        color: '#f59e0b',
+        fontSize: 12,
+        flexShrink: 0
+      }
+    }, stars(c.rating)), React.createElement('span', {
+      style: {
+        fontSize: 13,
+        fontWeight: 600,
+        color: '#166534',
+        lineHeight: 1.5
+      }
+    }, '"' + c.copy + '"'));
   }))) : null, /* 5. 리뷰 목록 */
   React.createElement('div', null, React.createElement('div', {
     style: {
@@ -5788,14 +5902,14 @@ window.ReviewTextAnalysisSection = function ReviewTextAnalysisSection(props) {
       alignItems: 'center',
       gap: 8
     }
-  }, React.createElement('span', null, '📋'), '추출된 리뷰 목록', React.createElement('span', {
+  }, React.createElement('span', null, '📋'), '추출된 리뷰 목록 (표본 분석)', React.createElement('span', {
     style: {
       fontSize: 11,
       fontWeight: 500,
       color: '#94a3b8',
       marginLeft: 4
     }
-  }, '(HTML에서 추출된 ' + reviews.length + '건)')), React.createElement('div', {
+  }, totalReviewCount ? '전체 ' + fmt(totalReviewCount) + '건 중 ' + reviews.length + '건 표본' : '(HTML에서 추출된 ' + reviews.length + '건)')), React.createElement('div', {
     style: {
       display: 'flex',
       flexDirection: 'column',
@@ -6262,7 +6376,7 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
     className: "kpi"
   }, /*#__PURE__*/React.createElement("div", {
     className: "k"
-  }, "\uD3C9\uADE0 \uC0C1\uD488 \uB2E8\uAC00"), /*#__PURE__*/React.createElement("div", {
+  }, "\uD3C9\uADE0 \uD310\uB9E4\uAC00"), /*#__PURE__*/React.createElement("div", {
     className: "v"
   }, avgPrice)), /*#__PURE__*/React.createElement("div", {
     className: "kpi"
@@ -7280,7 +7394,7 @@ window.EntryStrategySection = function EntryStrategySection(props) {
       textTransform: 'uppercase',
       marginBottom: 6
     }
-  }, '평균 가격'), React.createElement('div', {
+  }, '1P 평균가'), React.createElement('div', {
     style: {
       fontSize: 18,
       fontWeight: 800,
@@ -12931,7 +13045,7 @@ window.AnalysisResultView = function AnalysisResultView({
     style: {
       color: '#64748b'
     }
-  }, "\uB178\uCD9C \uAE4A\uC774:"), " ", /*#__PURE__*/React.createElement("strong", null, data.advertiserInfo.adDepth)), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+  }, "\uAD11\uACE0 \uB178\uCD9C \uAE4A\uC774:"), " ", /*#__PURE__*/React.createElement("strong", null, data.advertiserInfo.adDepth ? '상위 ' + data.advertiserInfo.adDepth + '개' : '-')), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
     style: {
       color: '#64748b'
     }
@@ -14903,7 +15017,14 @@ window.DatalabTrendSection = function DatalabTrendSection(props) {
     }
   })), /*#__PURE__*/React.createElement("div", {
     className: "note"
-  }, d.trendNote))));
+  }, d.trendNote), /*#__PURE__*/React.createElement("div", {
+    className: "note",
+    style: {
+      marginTop: 6,
+      fontSize: 11.5,
+      color: '#94a3b8'
+    }
+  }, "\u2139\uFE0F '\uC9C0\uC218'\uB294 \uC808\uB300 \uAC80\uC0C9\uB7C9\uC774 \uC544\uB2C8\uB77C ", /*#__PURE__*/React.createElement("b", null, "\uAE30\uAC04 \uB0B4 \uCD5C\uACE0\uAC12\uC744 100\uC73C\uB85C \uBCF8 \uC0C1\uB300\uAC12"), "\uC785\uB2C8\uB2E4. \uC99D\uAC10 \uCD94\uC138\uB97C \uBCF4\uB294 \uC6A9\uB3C4\uC774\uBA70, \uAC12 \uC790\uCCB4\uB97C \uAC80\uC0C9 \uD69F\uC218\uB85C \uD574\uC11D\uD558\uC9C0 \uB9C8\uC138\uC694."))));
 };
 
 ;/* ===== js/components/DatalabSeasonSection.jsx ===== */
@@ -14950,7 +15071,13 @@ window.DatalabSeasonSection = function DatalabSeasonSection(props) {
         fontWeight: 800,
         color: isPeak ? '#c2410c' : undefined
       }
-    }, "\uC9C0\uC218 ", Math.round(s.index), isPeak ? ' 🔥' : ''), /*#__PURE__*/React.createElement("div", {
+    }, "\uC9C0\uC218 ", Math.round(s.index), /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 10,
+        fontWeight: 500,
+        color: '#94a3b8'
+      }
+    }, " (\uC0C1\uB300\uAC12)"), isPeak ? ' 🔥' : ''), /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 11,
         color: isPeak ? '#c2410c' : 'var(--sub)'
@@ -17606,6 +17733,622 @@ window.Footer = function Footer() {
   }, '© 2026 메타아이앤씨 — 로직 분석 ' + APP_VERSION + ' | 네이버 쇼핑 키워드 분석 & 순위 추적'));
 };
 
+;/* ===== js/components/StrengthsHighlightBanner.jsx ===== */
+/* StrengthsHighlightBanner — 리포트 상단 '자사 강점 요약' 배너
+ * 기존 분석 데이터에서 강점만 파생(신규 데이터 없음). 강점이 1개 이상일 때만 노출. */
+window.StrengthsHighlightBanner = function StrengthsHighlightBanner(props) {
+  var reviewAnalysis = props.reviewAnalysis;
+  var htmlReviewData = props.htmlReviewData;
+  var marketRevenue = props.marketRevenue;
+  var advertiserReport = props.advertiserReport;
+  var datalabGrowth = props.datalabGrowth;
+  var parseWon = function (s) {
+    return parseInt(String(s == null ? '' : s).replace(/[^0-9]/g, ''), 10) || 0;
+  };
+  var strengths = [];
+
+  /* 1) 리뷰 경쟁력 — 실측 자사 리뷰수 vs 경쟁 평균 */
+  var rc = reviewAnalysis && reviewAnalysis.reviewCount;
+  var myReviews = htmlReviewData && htmlReviewData.reviewCount != null ? htmlReviewData.reviewCount : rc && rc.adv != null ? rc.adv : null;
+  var avgReviews = rc && rc.avg != null ? rc.avg : null;
+  if (myReviews != null && avgReviews != null && avgReviews > 0 && myReviews >= avgReviews) {
+    var revMult = myReviews / avgReviews;
+    strengths.push({
+      icon: '⭐',
+      title: '리뷰 경쟁력',
+      desc: '경쟁 평균 ' + fmt(avgReviews) + '건 대비 ' + fmt(myReviews) + '건 보유' + (revMult >= 1.2 ? ' (' + revMult.toFixed(1) + '배)' : ''),
+      color: '#16a34a',
+      bg: '#f0fdf4',
+      border: '#bbf7d0'
+    });
+  }
+
+  /* 2) 가격 경쟁력 — 자사 판매가 vs 1페이지 경쟁 평균가 */
+  var myPrice = advertiserReport && advertiserReport.product_info ? advertiserReport.product_info.price || 0 : 0;
+  if (!myPrice && marketRevenue) myPrice = parseWon(marketRevenue.avgPrice);
+  var compAvg = advertiserReport && advertiserReport.competitor_comparison && advertiserReport.competitor_comparison.stats ? advertiserReport.competitor_comparison.stats.avg_price || 0 : 0;
+  if (myPrice > 0 && compAvg > 0 && myPrice <= compAvg) {
+    var cheaperPct = Math.round((compAvg - myPrice) / compAvg * 100);
+    strengths.push({
+      icon: '💰',
+      title: '가격 경쟁력',
+      desc: cheaperPct > 0 ? '경쟁 평균 대비 ' + cheaperPct + '% 저렴' : '경쟁 평균 수준의 적정가',
+      color: '#0ea5e9',
+      bg: '#f0f9ff',
+      border: '#bae6fd'
+    });
+  }
+
+  /* 3) 상위 노출 — 현재 순위 10위 이내 */
+  var rank = advertiserReport && advertiserReport.ranking ? advertiserReport.ranking.current_rank : null;
+  if (rank != null && rank > 0 && rank <= 10) {
+    strengths.push({
+      icon: '🎯',
+      title: '상위 노출 방어',
+      desc: '현재 ' + rank + '위 — 이미 상위권 진입',
+      color: '#7c3aed',
+      bg: '#faf5ff',
+      border: '#e9d5ff'
+    });
+  }
+
+  /* 4) 검색 성장세 — 데이터랩 성장률(신뢰 가능한 값 중 최고) */
+  if (datalabGrowth && datalabGrowth.periods && datalabGrowth.periods.length) {
+    var best = null;
+    datalabGrowth.periods.forEach(function (p) {
+      if (p && p.reliable !== false && typeof p.growth === 'number' && p.growth > 0) {
+        if (!best || p.growth > best.growth) best = p;
+      }
+    });
+    if (best) {
+      strengths.push({
+        icon: '🔥',
+        title: '검색 성장세',
+        desc: '직전 ' + (best.label || '기간') + ' 대비 +' + best.growth + '%',
+        color: '#ea580c',
+        bg: '#fff7ed',
+        border: '#fed7aa'
+      });
+    }
+  }
+  if (strengths.length === 0) return null;
+  return React.createElement('div', {
+    className: 'section fade-in'
+  }, React.createElement('div', {
+    className: 'container'
+  }, React.createElement('div', {
+    className: 'card',
+    style: {
+      padding: '18px 20px',
+      background: 'linear-gradient(135deg,#eff6ff,#f5f3ff)',
+      border: '1px solid #dbeafe'
+    }
+  }, React.createElement('div', {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      marginBottom: 12
+    }
+  }, React.createElement('span', {
+    style: {
+      fontSize: 18
+    }
+  }, '💪'), React.createElement('span', {
+    style: {
+      fontSize: 15,
+      fontWeight: 800,
+      color: '#1e293b'
+    }
+  }, '한눈에 보는 자사 강점'), React.createElement('span', {
+    style: {
+      fontSize: 11,
+      color: '#94a3b8'
+    }
+  }, '· 아래 상세 지표에서 근거 확인')), React.createElement('div', {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+      gap: 10
+    }
+  }, strengths.map(function (s, i) {
+    return React.createElement('div', {
+      key: i,
+      style: {
+        background: s.bg,
+        border: '1px solid ' + s.border,
+        borderRadius: 12,
+        padding: '12px 14px'
+      }
+    }, React.createElement('div', {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        marginBottom: 4
+      }
+    }, React.createElement('span', {
+      style: {
+        fontSize: 15
+      }
+    }, s.icon), React.createElement('span', {
+      style: {
+        fontSize: 13,
+        fontWeight: 700,
+        color: s.color
+      }
+    }, s.title)), React.createElement('div', {
+      style: {
+        fontSize: 12,
+        color: '#475569',
+        lineHeight: 1.5
+      }
+    }, s.desc));
+  })))));
+};
+
+;/* ===== js/components/SeasonUrgencyCountdown.jsx ===== */
+/* SeasonUrgencyCountdown — 성수기 긴급성 안내 (데이터랩 시즌 데이터에서 파생)
+ * 성수기가 식별될 때만 노출. 비수기엔 역효과 없는 톤으로 안내. */
+window.SeasonUrgencyCountdown = function SeasonUrgencyCountdown(props) {
+  var season = props.season; // datalabData.season
+  if (!season || !season.seasons || !season.seasons.length) return null;
+  var seasons = season.seasons;
+  var peak = null;
+  seasons.forEach(function (s) {
+    if (!s) return;
+    if (s.peakSeason || s.grade === '최성수기') {
+      if (!peak || (s.index || 0) > (peak.index || 0)) peak = s;
+    }
+  });
+  // 최성수기 라벨이 없으면 지수 최고 시즌을 성수기로 간주
+  if (!peak) {
+    seasons.forEach(function (s) {
+      if (s && (!peak || (s.index || 0) > (peak.index || 0))) peak = s;
+    });
+  }
+  if (!peak || !peak.period) return null;
+
+  // "6월 ~ 8월" → 시작월 6
+  var mm = String(peak.period).match(/(\d{1,2})\s*월/);
+  var startMonth = mm ? parseInt(mm[1], 10) : null;
+  if (!startMonth) return null;
+  // 끝월(있으면)
+  var mm2 = String(peak.period).match(/~\s*(\d{1,2})\s*월/);
+  var endMonth = mm2 ? parseInt(mm2[1], 10) : startMonth;
+  var now = new Date();
+  var curMonth = now.getMonth() + 1; // 1~12
+
+  // 상태 판정
+  var inPeak = startMonth <= endMonth ? curMonth >= startMonth && curMonth <= endMonth : curMonth >= startMonth || curMonth <= endMonth; // 겨울처럼 연말~연초 걸침
+  var monthsUntil;
+  if (inPeak) {
+    monthsUntil = 0;
+  } else {
+    monthsUntil = startMonth - curMonth;
+    if (monthsUntil < 0) monthsUntil += 12;
+  }
+  var box, msg, emoji, col, bg, bd;
+  if (inPeak) {
+    emoji = '⏰';
+    col = '#b91c1c';
+    bg = '#fef2f2';
+    bd = '#fecaca';
+    box = '성수기 진행 중';
+    msg = '지금이 ' + peak.name + '(' + peak.period + ') 성수기입니다. 광고·프로모션을 집중할 최적 타이밍입니다.';
+  } else if (monthsUntil <= 2) {
+    emoji = '🔥';
+    col = '#c2410c';
+    bg = '#fff7ed';
+    bd = '#fed7aa';
+    box = '성수기 D-' + monthsUntil + '개월';
+    msg = peak.name + ' 성수기(' + peak.period + ')까지 약 ' + monthsUntil + '개월. 지금부터 상품·상세페이지·리뷰를 준비해야 성수기에 상위 노출을 선점합니다.';
+  } else {
+    emoji = '🗓️';
+    col = '#475569';
+    bg = '#f8fafc';
+    bd = '#e2e8f0';
+    box = '다음 성수기까지 ' + monthsUntil + '개월';
+    msg = peak.name + ' 성수기(' + peak.period + ')까지 여유가 있습니다. 지금은 비수기 전략(기초 리뷰 확보·콘텐츠 정비)으로 준비하세요.';
+  }
+  return React.createElement('div', {
+    className: 'section fade-in'
+  }, React.createElement('div', {
+    className: 'container'
+  }, React.createElement('div', {
+    className: 'card',
+    style: {
+      padding: '16px 20px',
+      background: bg,
+      border: '1px solid ' + bd,
+      display: 'flex',
+      alignItems: 'center',
+      gap: 16,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement('div', {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      minWidth: 96
+    }
+  }, React.createElement('div', {
+    style: {
+      fontSize: 26
+    }
+  }, emoji), React.createElement('div', {
+    style: {
+      fontSize: 13,
+      fontWeight: 800,
+      color: col,
+      textAlign: 'center'
+    }
+  }, box)), React.createElement('div', {
+    style: {
+      flex: 1,
+      minWidth: 220
+    }
+  }, React.createElement('div', {
+    style: {
+      fontSize: 13.5,
+      fontWeight: 700,
+      color: '#1e293b',
+      marginBottom: 4
+    }
+  }, '⏱️ 시즌 타이밍 안내'), React.createElement('div', {
+    style: {
+      fontSize: 12.5,
+      color: '#475569',
+      lineHeight: 1.6
+    }
+  }, msg)))));
+};
+
+;/* ===== js/components/RankDeltaROISimulation.jsx ===== */
+/* RankDeltaROISimulation — 현재 순위 → 1위 도달 시 예상 성과 증분
+ * salesEstimation의 순위별 추정값(실데이터)에서 파생. 값을 지어내지 않음. */
+window.RankDeltaROISimulation = function RankDeltaROISimulation(props) {
+  var se = props.salesEstimation;
+  var currentRank = props.currentRank; // null = 미노출
+  if (!se || !se.top10Card) return null;
+  var top10 = se.top10Card;
+  var n = function (v) {
+    return Number(v) || 0;
+  };
+  var s1 = n(top10.rank1Sales),
+    s5 = n(top10.rank5Sales),
+    s10 = n(top10.rank10Sales);
+  if (s1 <= 0) return null; // 1위 추정치가 없으면 델타 계산 불가
+
+  // 순위 → 예상 월 판매(건) : 1/5/10위 앵커로 선형보간, 10위 밖은 감쇠
+  var salesForRank = function (r) {
+    if (r == null) return 0; // 미노출 → 0 기준(전량 업사이드)
+    if (r <= 1) return s1;
+    if (r <= 5) return s1 + (s5 - s1) * (r - 1) / 4;
+    if (r <= 10) return s5 + (s10 - s5) * (r - 5) / 5;
+    // 10위 밖: 10위 값에서 순위가 낮아질수록 감쇠(최저 10%)
+    return Math.max(s10 * Math.pow(0.92, r - 10), s10 * 0.1);
+  };
+  var isRanked = currentRank != null && currentRank > 0;
+  var curSales = Math.round(salesForRank(isRanked ? currentRank : null));
+  var tgtSales = Math.round(s1);
+  var deltaSales = Math.max(tgtSales - curSales, 0);
+
+  // 이미 1위면 방어 메시지
+  var alreadyTop = isRanked && currentRank === 1;
+  var curLabel = isRanked ? currentRank + '위' : '미노출';
+  var pct = curSales > 0 ? Math.round(deltaSales / curSales * 100) : null;
+  var Col = function (title, value, sub, color) {
+    return React.createElement('div', {
+      style: {
+        flex: 1,
+        minWidth: 130,
+        textAlign: 'center',
+        padding: '14px 12px',
+        background: '#f8fafc',
+        borderRadius: 12,
+        border: '1px solid #e2e8f0'
+      }
+    }, React.createElement('div', {
+      style: {
+        fontSize: 11,
+        fontWeight: 600,
+        color: '#94a3b8',
+        marginBottom: 6
+      }
+    }, title), React.createElement('div', {
+      style: {
+        fontSize: 22,
+        fontWeight: 800,
+        color: color || '#0f172a'
+      }
+    }, value), sub ? React.createElement('div', {
+      style: {
+        fontSize: 11,
+        color: '#64748b',
+        marginTop: 4
+      }
+    }, sub) : null);
+  };
+  return React.createElement('div', {
+    className: 'section fade-in'
+  }, React.createElement('div', {
+    className: 'container'
+  }, React.createElement('div', {
+    className: 'card',
+    style: {
+      padding: '20px 22px'
+    }
+  }, React.createElement('h3', {
+    className: 'rt-h3'
+  }, React.createElement('span', {
+    className: 'rt-hic'
+  }, '📈'), '순위 상승 시 예상 성과', React.createElement('span', {
+    className: 'badge b-est'
+  }, '≈ 추정')), React.createElement('div', {
+    className: 'rt-desc'
+  }, alreadyTop ? '이미 1위입니다 — 방어 관점의 참고 지표입니다.' : '현재 순위 대비 1위 도달 시 예상되는 월 판매 증분(순위별 추정 판매량 기반)'), alreadyTop ? React.createElement('div', {
+    style: {
+      marginTop: 12,
+      padding: '14px 16px',
+      background: '#f0fdf4',
+      border: '1px solid #bbf7d0',
+      borderRadius: 10,
+      fontSize: 13,
+      color: '#065f46',
+      lineHeight: 1.6
+    }
+  }, '🎉 현재 1위입니다. 예상 월 판매 ~' + fmt(tgtSales) + '건 수준을 유지하려면 리뷰·가격·상세페이지 방어에 집중하세요.') : React.createElement('div', null, React.createElement('div', {
+    style: {
+      display: 'flex',
+      gap: 12,
+      marginTop: 12,
+      flexWrap: 'wrap',
+      alignItems: 'stretch'
+    }
+  }, Col('현재 (' + curLabel + ')', isRanked ? '~' + fmt(curSales) + '건' : '0건', '예상 월 판매', '#64748b'), Col('목표 (1위)', '~' + fmt(tgtSales) + '건', '예상 월 판매', '#4f46e5'), Col('증분 (Δ)', '+' + fmt(deltaSales) + '건', pct != null ? '현재 대비 +' + pct + '%' : '1위 도달 시 순증', '#16a34a')), React.createElement('div', {
+    style: {
+      marginTop: 12,
+      padding: '10px 14px',
+      background: '#fffbeb',
+      border: '1px solid #fcd34d',
+      borderRadius: 10,
+      fontSize: 11.5,
+      color: '#92400e',
+      lineHeight: 1.6
+    }
+  }, '※ 순위별 클릭률(CTR) 기반 추정치입니다. 실제 성과는 상품 경쟁력·리뷰·가격·시즌에 따라 달라지며, 순위 상승을 보장하지 않습니다.')))));
+};
+
+;/* ===== js/components/CpcBidEstimateSection.jsx ===== */
+/* CpcBidEstimateSection — 키워드 예상 CPC·권장 입찰가 (추정)
+ * 네이버는 실제 CPC를 제공하지 않으므로, 경쟁지수(실값)+클릭량(실값) 기반의
+ * 투명한 추정 밴드로 제시. 절대값이 아니라 '기준선'임을 강하게 고지. */
+window.CpcBidEstimateSection = function CpcBidEstimateSection(props) {
+  var vol = props.volumeData && props.volumeData.length ? props.volumeData[0] : null;
+  var keyword = props.keyword || '';
+  if (!vol) return null;
+  var comp = (vol.compIdx || '').trim();
+  // 경쟁지수 → 업종 일반 CPC 밴드(원). 네이버 미제공 → 휴리스틱.
+  var bandMap = {
+    '높음': {
+      base: 900,
+      low: 700,
+      high: 1200
+    },
+    '중간': {
+      base: 500,
+      low: 350,
+      high: 700
+    },
+    '낮음': {
+      base: 300,
+      low: 200,
+      high: 450
+    }
+  };
+  var band = bandMap[comp] || bandMap['중간'];
+  var clicks = Math.round((Number(vol.monthlyAvePcClkCnt) || 0) + (Number(vol.monthlyAveMobileClkCnt) || 0));
+  var volTotal = (Number(vol.monthlyPcQcCnt) || 0) + (Number(vol.monthlyMobileQcCnt) || 0);
+  // 예상 월 광고비(중간 입찰가 × 예상 유입 클릭의 일부). 보수적으로 클릭의 30% 확보 가정.
+  var assumedClicks = Math.max(Math.round(clicks * 0.3), 0);
+  var estSpendMid = assumedClicks * band.base;
+  var won = function (v) {
+    return fmt(Math.round(v)) + '원';
+  };
+  var Kpi = function (k, v, sub, color) {
+    return React.createElement('div', {
+      className: 'kpi'
+    }, React.createElement('div', {
+      className: 'k'
+    }, k), React.createElement('div', {
+      className: 'v',
+      style: {
+        fontSize: 18,
+        color: color || undefined
+      }
+    }, v), sub ? React.createElement('div', {
+      style: {
+        fontSize: 11,
+        color: '#94a3b8',
+        marginTop: 2
+      }
+    }, sub) : null);
+  };
+  return React.createElement('div', {
+    className: 'section fade-in'
+  }, React.createElement('div', {
+    className: 'container'
+  }, React.createElement('div', {
+    className: 'card',
+    style: {
+      padding: '20px 22px'
+    }
+  }, React.createElement('h3', {
+    className: 'rt-h3'
+  }, React.createElement('span', {
+    className: 'rt-hic'
+  }, '💸'), '예상 CPC · 권장 입찰가', React.createElement('span', {
+    className: 'badge b-est'
+  }, '≈ 추정')), React.createElement('div', {
+    className: 'rt-desc'
+  }, (keyword ? '"' + keyword + '" ' : '') + '경쟁지수 "' + (comp || '중간') + '" · 월 검색량 ' + fmt(volTotal) + '회 기준 추정'), React.createElement('div', {
+    className: 'grid4',
+    style: {
+      marginTop: 10
+    }
+  }, Kpi('예상 CPC(중간)', won(band.base), '클릭당 예상 단가', '#0f172a'), Kpi('권장 입찰가 범위', fmt(band.low) + '~' + fmt(band.high) + '원', '저가~상위노출가'), Kpi('예상 월 클릭', fmt(clicks) + '회', '네이버 실측 평균클릭'), Kpi('예상 월 광고비', '~' + won(estSpendMid), '클릭 30% 확보 가정', '#4f46e5')), React.createElement('div', {
+    style: {
+      marginTop: 14,
+      background: '#f8fafc',
+      border: '1px solid #e2e8f0',
+      borderRadius: 10,
+      overflow: 'hidden'
+    }
+  }, React.createElement('table', {
+    className: 'rt-table',
+    style: {
+      margin: 0
+    }
+  }, React.createElement('thead', null, React.createElement('tr', null, React.createElement('th', null, '전략'), React.createElement('th', {
+    style: {
+      textAlign: 'right'
+    }
+  }, '입찰가(추정)'), React.createElement('th', null, '기대 효과'))), React.createElement('tbody', null, React.createElement('tr', null, React.createElement('td', null, '저가 진입'), React.createElement('td', {
+    style: {
+      textAlign: 'right'
+    }
+  }, won(band.low)), React.createElement('td', null, '노출 제한적·광고비 절약 (SEO 병행 권장)')), React.createElement('tr', null, React.createElement('td', null, '표준'), React.createElement('td', {
+    style: {
+      textAlign: 'right',
+      fontWeight: 700
+    }
+  }, won(band.base)), React.createElement('td', null, '평균적 노출 확보')), React.createElement('tr', null, React.createElement('td', null, '상위 노출'), React.createElement('td', {
+    style: {
+      textAlign: 'right'
+    }
+  }, won(band.high)), React.createElement('td', null, '상단 노출 경쟁 우위 (광고비 부담↑)'))))), React.createElement('div', {
+    style: {
+      marginTop: 12,
+      padding: '10px 14px',
+      background: '#fffbeb',
+      border: '1px solid #fcd34d',
+      borderRadius: 10,
+      fontSize: 11.5,
+      color: '#92400e',
+      lineHeight: 1.6
+    }
+  }, '※ 네이버는 키워드별 실제 CPC를 제공하지 않습니다. 위 값은 경쟁지수·클릭량 기반 <b>업종 일반 추정 밴드</b>로, 실제 입찰 단가는 광고 시스템의 실시간 경쟁·품질지수에 따라 달라집니다. 집행 전 네이버 검색광고 관리시스템에서 실제 예상 입찰가를 확인하세요.'))));
+};
+
+;/* ===== js/components/TrackRegisterButton.jsx ===== */
+/* TrackRegisterButton — 분석한 상품을 순위추적에 원클릭 등록
+ * 기존 POST /api/products/track 재사용. 자동등록이 아니라 명시적 1클릭(서버 부하 방지). */
+window.TrackRegisterButton = function TrackRegisterButton(props) {
+  var searchedProductUrl = props.searchedProductUrl;
+  var searchedKeyword = props.searchedKeyword;
+  var products = props.products;
+  var refreshProducts = props.refreshProducts;
+  var canEdit = props.canEdit;
+  var st = React.useState(false);
+  var adding = st[0],
+    setAdding = st[1];
+  if (!searchedProductUrl || !searchedKeyword || !canEdit) return null;
+  var already = (products || []).find(function (p) {
+    return p.product_url === searchedProductUrl;
+  });
+  var alreadyHasKw = already && (already.keywords || []).some(function (k) {
+    return (typeof k === 'string' ? k : k && k.keyword) === searchedKeyword;
+  });
+  var onClick = function () {
+    if (adding) return;
+    setAdding(true);
+    api.post('/products/track', {
+      product_url: searchedProductUrl,
+      keywords: [searchedKeyword]
+    }).then(function (res) {
+      if (res && res.success) {
+        if (typeof toast !== 'undefined' && toast.success) toast.success('순위 추적에 등록했습니다. 첫 순위 체크를 시작합니다.');
+        if (refreshProducts) refreshProducts();
+      } else {
+        if (typeof toast !== 'undefined' && toast.error) toast.error(res && res.detail || '추적 등록에 실패했습니다.');
+      }
+      setAdding(false);
+    }).catch(function (e) {
+      if (typeof toast !== 'undefined' && toast.error) toast.error('추적 등록 실패: ' + (e.message || '네트워크 오류'));
+      setAdding(false);
+    });
+  };
+  var wrap = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    margin: '4px 0 4px',
+    flexWrap: 'wrap'
+  };
+  if (already) {
+    return React.createElement('div', {
+      className: 'container'
+    }, React.createElement('div', {
+      style: wrap
+    }, React.createElement('span', {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '8px 14px',
+        borderRadius: 10,
+        background: '#ecfdf5',
+        border: '1px solid #a7f3d0',
+        color: '#047857',
+        fontSize: 12.5,
+        fontWeight: 700
+      }
+    }, '✓ 이미 추적 중인 상품입니다' + (alreadyHasKw ? ' (이 키워드 포함)' : '')), !alreadyHasKw ? React.createElement('button', {
+      onClick: onClick,
+      disabled: adding,
+      style: {
+        padding: '8px 14px',
+        borderRadius: 10,
+        border: '1px solid #c7d2fe',
+        background: '#eef2ff',
+        color: '#4f46e5',
+        fontSize: 12.5,
+        fontWeight: 700,
+        cursor: adding ? 'default' : 'pointer'
+      }
+    }, adding ? '등록 중...' : '＋ 이 키워드도 추적 추가') : null));
+  }
+  return React.createElement('div', {
+    className: 'container'
+  }, React.createElement('div', {
+    style: wrap
+  }, React.createElement('button', {
+    onClick: onClick,
+    disabled: adding,
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 8,
+      padding: '10px 18px',
+      borderRadius: 10,
+      border: 'none',
+      background: adding ? '#94a3b8' : 'linear-gradient(135deg,#4f46e5,#6366f1)',
+      color: '#fff',
+      fontSize: 13,
+      fontWeight: 700,
+      cursor: adding ? 'default' : 'pointer',
+      boxShadow: '0 3px 10px rgba(79,70,229,0.3)'
+    }
+  }, adding ? '⏳ 등록 중...' : '🔍 이 상품 순위 추적 시작'), React.createElement('span', {
+    style: {
+      fontSize: 11.5,
+      color: '#94a3b8'
+    }
+  }, '이후 이 키워드의 순위 변화를 자동 기록합니다')));
+};
+
 ;/* ===== js/components/AnalysisResults.jsx ===== */
 /* AnalysisResults — 메인 분석결과 렌더 (App.jsx에서 분리)
  * report-shell(좌측 목차 + 본문 전 섹션). App의 상태/핸들러를 props로 받음. */
@@ -17793,7 +18536,16 @@ window.AnalysisResults = function AnalysisResults(props) {
     id: 'sec-summary'
   }, React.createElement(SummaryCardsSection, {
     data: analysisData.summaryCards
-  }))), /* ========== 2. 시장 · 수요 진단 ========== */
+  }))), /* 자사 강점 요약 배너 (강점 1개 이상일 때만 노출) */
+  analysisData && React.createElement(window.SectionErrorBoundary, {
+    name: '강점 요약'
+  }, React.createElement(window.StrengthsHighlightBanner, {
+    reviewAnalysis: analysisData.reviewAnalysis,
+    htmlReviewData: htmlReviewData,
+    marketRevenue: analysisData.marketRevenue,
+    advertiserReport: advertiserReport,
+    datalabGrowth: datalabData && datalabData.growth
+  })), /* ========== 2. 시장 · 수요 진단 ========== */
   analysisData && React.createElement(window.SectionDivider, {
     label: '2. 시장 · 수요 진단',
     icon: '📊',
@@ -17815,6 +18567,11 @@ window.AnalysisResults = function AnalysisResults(props) {
     name: '시즌별 수요'
   }, React.createElement(window.DatalabSeasonSection, {
     data: datalabData.season
+  })), /* 성수기 긴급성 안내 (성수기 식별 시) */
+  datalabData && datalabData.season && React.createElement(window.SectionErrorBoundary, {
+    name: '시즌 긴급성'
+  }, React.createElement(window.SeasonUrgencyCountdown, {
+    season: datalabData.season
   })), /* [DATALAB] 성별 + 연령대별 검색 비율 */
   datalabData && (datalabData.gender || datalabData.age) && React.createElement(window.SectionErrorBoundary, {
     name: '검색 인구통계'
@@ -17862,6 +18619,12 @@ window.AnalysisResults = function AnalysisResults(props) {
     name: '광고 경쟁 정보'
   }, React.createElement(AdvertiserInfoCard, {
     data: analysisData.advertiserInfo
+  })), /* 예상 CPC · 권장 입찰가 (추정) */
+  analysisData && volumeData && volumeData.length && React.createElement(window.SectionErrorBoundary, {
+    name: '예상 CPC'
+  }, React.createElement(window.CpcBidEstimateSection, {
+    volumeData: volumeData,
+    keyword: searchedKeyword
   })), /* 경쟁사 비교표 (상위 80개) */
   analysisData && analysisData.competitorTable && React.createElement(window.SectionErrorBoundary, {
     name: '경쟁사 비교표'
@@ -17893,6 +18656,15 @@ window.AnalysisResults = function AnalysisResults(props) {
     onNavigateToClient: handleNavigateToClient,
     canEdit: currentUser.role !== 'viewer',
     onRankResult: setRankCheckResult
+  })), /* 분석 상품 순위추적 원클릭 등록 */
+  searchedProductUrl && React.createElement(window.SectionErrorBoundary, {
+    name: '추적 등록'
+  }, React.createElement(window.TrackRegisterButton, {
+    searchedProductUrl: searchedProductUrl,
+    searchedKeyword: searchedKeyword,
+    products: products,
+    refreshProducts: loadProducts,
+    canEdit: currentUser.role !== 'viewer'
   })), /* 판매량 추정 */
   analysisData && analysisData.salesEstimation && React.createElement(window.SectionErrorBoundary, {
     name: '판매량 추정'
@@ -17902,7 +18674,13 @@ window.AnalysisResults = function AnalysisResults(props) {
     data: analysisData.salesEstimation,
     reviewCount: htmlReviewData && htmlReviewData.reviewCount || (analysisData.reviewAnalysis && analysisData.reviewAnalysis.reviewCount ? analysisData.reviewAnalysis.reviewCount.adv : null),
     productPrice: analysisData.marketRevenue ? parseInt((analysisData.marketRevenue.avgPrice || '0').replace(/[^0-9]/g, '')) : 0
-  }))), /* 리뷰 & 찜 분석 */
+  }))), /* 순위 상승 시 예상 성과(ROI 델타) */
+  analysisData && analysisData.salesEstimation && React.createElement(window.SectionErrorBoundary, {
+    name: 'ROI 시뮬레이션'
+  }, React.createElement(window.RankDeltaROISimulation, {
+    salesEstimation: analysisData.salesEstimation,
+    currentRank: rankCheckResult && rankCheckResult.rank_position != null ? rankCheckResult.rank_position : advertiserReport && advertiserReport.ranking ? advertiserReport.ranking.current_rank : null
+  })), /* 리뷰 & 찜 분석 */
   analysisData && analysisData.reviewAnalysis && React.createElement(window.SectionErrorBoundary, {
     name: '리뷰 분석'
   }, React.createElement(window.ReviewAnalysisSection, {
@@ -17958,8 +18736,8 @@ window.AnalysisResults = function AnalysisResults(props) {
     name: '연관 키워드'
   }, React.createElement(RelatedKeywordsSection, {
     data: relatedData
-  })), /* 골든 키워드 */
-  analysisData && analysisData.goldenKeyword && React.createElement(window.SectionErrorBoundary, {
+  })), /* 골든 키워드 (0건이어도 대안 안내를 렌더) */
+  analysisData && React.createElement(window.SectionErrorBoundary, {
     name: '골든 키워드'
   }, React.createElement('div', {
     id: 'sec-golden'

@@ -203,7 +203,7 @@ window.EntryStrategySection = function EntryStrategySection(props) {
                 React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 16 } },
                     React.createElement('div', { style: Object.assign({}, v5Card, { textAlign: 'center', padding: 24 }) },
                         React.createElement('div', { style: { fontSize: 18, marginBottom: 8 } }, '\uD83D\uDCB0'),
-                        React.createElement('div', { style: { fontSize: 11, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', marginBottom: 6 } }, '평균 가격'),
+                        React.createElement('div', { style: { fontSize: 11, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', marginBottom: 6 } }, '1P 평균가'),
                         React.createElement('div', { style: { fontSize: 18, fontWeight: 800, color: '#0f172a' } },
                             compStats.avg_price ? fmt(compStats.avg_price) + '원' : avgTop5Price
                         )

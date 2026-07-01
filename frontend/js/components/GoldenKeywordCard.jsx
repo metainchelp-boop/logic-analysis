@@ -1,17 +1,31 @@
 window.GoldenKeywordCard = function GoldenKeywordCard(props) {
-  if (!props?.data) return null;
+  // 단일 객체 또는 배열 모두 처리 (data가 없어도 0건 안내를 렌더)
+  var raw = props ? props.data : null;
+  var items = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+  var valid = items.filter(function(item) { return item && item.name && item.score !== undefined; });
 
-  // 단일 객체 또는 배열 모두 처리
-  const items = Array.isArray(props.data) ? props.data : [props.data];
-
-  if (!items.length) return null;
+  // 0건: 숨기지 않고 대안을 안내 (빈 표/‘없음’이 부정적으로 보이는 문제 개선)
+  if (valid.length === 0) {
+    return (
+      <div className="card">
+        <h3 className="rt-h3"><span className="rt-hic">👑</span>골든 키워드 <span className="badge b-ok">✅ 실측</span></h3>
+        <div style={{ padding: '22px 20px', textAlign: 'center', background: '#f8fafc', borderRadius: 12, border: '1px dashed #e2e8f0' }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: '#475569', marginBottom: 6 }}>지금은 저경쟁 골든 키워드가 발견되지 않았습니다</div>
+          <div style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.7 }}>
+            골든 키워드는 <b>검색량은 있으면서 경쟁강도가 낮은</b> 키워드입니다. 대표키워드 주변에는 없지만,
+            아래 <b>연관 키워드</b>의 롱테일(2~3어절 조합)이나 <b>세부 상품 속성 키워드</b>로 진입하면
+            낮은 비용으로 상위 노출을 노릴 수 있습니다.
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="card">
       <h3 className="rt-h3"><span className="rt-hic">👑</span>골든 키워드 <span className="badge b-ok">✅ 실측</span></h3>
       <div className="grid2">
-        {items.map(function(item, idx) {
-          if (!item || !item.name || item.score === undefined) return null;
+        {valid.map(function(item, idx) {
           const { name, score, volume, competition, ctr, clicks, reason } = item;
           const scorePercent = Math.min(100, (score / 100) * 100);
           return (
