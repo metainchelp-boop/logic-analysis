@@ -92,7 +92,7 @@ window.ReviewTextAnalysisSection = function ReviewTextAnalysisSection(props) {
           ),
           totalReviewCount ? React.createElement('div', { style: { fontSize: 11, color: '#94a3b8', marginTop: 4 } },
             '전체 ' + fmt(totalReviewCount) + '건 중 표본 ' + fmt(data.totalExtracted) + '건'
-            + (totalReviewCount > 0 ? ' (' + Math.round(data.totalExtracted / totalReviewCount * 100) + '%)' : '')
+            + (totalReviewCount > 0 ? (function() { var pct = data.totalExtracted / totalReviewCount * 100; return ' (' + (pct > 0 && pct < 1 ? '<1' : Math.round(pct)) + '%)'; })() : '')
           ) : null
         ),
         /* 평균 별점 */
