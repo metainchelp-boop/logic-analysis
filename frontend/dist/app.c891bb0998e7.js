@@ -5674,7 +5674,10 @@ window.ReviewTextAnalysisSection = function ReviewTextAnalysisSection(props) {
       color: '#94a3b8',
       marginTop: 4
     }
-  }, '전체 ' + fmt(totalReviewCount) + '건 중 표본 ' + fmt(data.totalExtracted) + '건' + (totalReviewCount > 0 ? ' (' + Math.round(data.totalExtracted / totalReviewCount * 100) + '%)' : '')) : null), /* 평균 별점 */
+  }, '전체 ' + fmt(totalReviewCount) + '건 중 표본 ' + fmt(data.totalExtracted) + '건' + (totalReviewCount > 0 ? function () {
+    var pct = data.totalExtracted / totalReviewCount * 100;
+    return ' (' + (pct > 0 && pct < 1 ? '<1' : Math.round(pct)) + '%)';
+  }() : '')) : null), /* 평균 별점 */
   React.createElement('div', {
     className: 'kpi'
   }, React.createElement('div', {
@@ -6376,7 +6379,7 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
     className: "kpi"
   }, /*#__PURE__*/React.createElement("div", {
     className: "k"
-  }, "\uD3C9\uADE0 \uD310\uB9E4\uAC00"), /*#__PURE__*/React.createElement("div", {
+  }, "\uC0C1\uC70410 \uD3C9\uADE0\uAC00"), /*#__PURE__*/React.createElement("div", {
     className: "v"
   }, avgPrice)), /*#__PURE__*/React.createElement("div", {
     className: "kpi"
