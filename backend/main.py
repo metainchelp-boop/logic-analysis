@@ -908,6 +908,8 @@ class SeoAnalysisRequest(BaseModel):
     cached_competitors: Optional[list] = None
     cached_product_info: Optional[dict] = None
     cached_total_volume: Optional[int] = None
+    cached_review_count: Optional[int] = None   # HTML 실측 리뷰수(있으면 순위 추정 대신 최우선 사용)
+    cached_rating: Optional[float] = None        # HTML 실측 평점
 
 @app.post("/api/seo/analyze")
 def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_current_user)):
@@ -1126,10 +1128,16 @@ def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_curren
         actual_review_count = None
         actual_rating = None
         review_source = "estimated"
+        # 프론트가 HTML 실측 리뷰/평점을 넘기면 최우선 사용(순위 추정·불안정한 스토어 API 대신)
+        if req.cached_review_count is not None:
+            actual_review_count = req.cached_review_count
+            review_source = "actual"
+            if req.cached_rating is not None and req.cached_rating > 0:
+                actual_rating = req.cached_rating
         try:
             from naver_crawler import _extract_smartstore_info
             ss_store, ss_pno = _extract_smartstore_info(product_url)
-            if ss_store and ss_pno:
+            if ss_store and ss_pno and actual_review_count is None:   # 실측 캐시 없을 때만 스토어 API 시도
                 import requests as _req
                 ss_api_url = f"https://smartstore.naver.com/i/v1/stores/{ss_store}/products/{ss_pno}"
                 ss_headers = {

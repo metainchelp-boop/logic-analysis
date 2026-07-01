@@ -240,7 +240,8 @@ window.AnalysisResults = function AnalysisResults(props) {
                         cachedProductName: advertiserReport && advertiserReport.product_name ? advertiserReport.product_name : (analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo.product_name : null),
                         cachedTotalVolume: volumeData && volumeData[0] ? ((volumeData[0].monthlyPcQcCnt || 0) + (volumeData[0].monthlyMobileQcCnt || 0)) : null,
                         cachedProductInfo: analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo : null,
-                        shopProducts: shopProducts
+                        shopProducts: shopProducts,
+                        htmlReviewData: htmlReviewData
                     })
                 ),
     
