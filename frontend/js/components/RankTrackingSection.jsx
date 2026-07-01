@@ -98,7 +98,12 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
             }
         }
         function attempt() {
-            api.post('/rank/keyword-exposure', { product_url: searchedProductUrl, keyword: searchedKeyword, product_name: cachedProductName, extra_keywords: _extraKws })
+            // 클라이언트 타임아웃(무한 로딩 방지): 25초 내 응답 없으면 실패 처리 → 재시도/폴백
+            var timeoutP = new Promise(function(_res, rej) { setTimeout(function() { rej(new Error('timeout')); }, 25000); });
+            Promise.race([
+                api.post('/rank/keyword-exposure', { product_url: searchedProductUrl, keyword: searchedKeyword, product_name: cachedProductName, extra_keywords: _extraKws }),
+                timeoutP
+            ])
                 .then(function(res) {
                     if (cancelled) return;
                     if (res && res.success && res.data) {
@@ -246,7 +251,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                 options: {
                     plugins: {
                         legend: { display: false },
-                        tooltip: { callbacks: { label: function(ctx) { return ctx.parsed.y != null ? ctx.parsed.y + '위' : '400위 밖'; } } }
+                        tooltip: { callbacks: { label: function(ctx) { return ctx.parsed.y != null ? ctx.parsed.y + '위' : '200위 밖'; } } }
                     },
                     scales: {
                         y: { reverse: true, suggestedMin: 1, suggestedMax: Math.max(16, maxRank + 2), title: { display: true, text: '순위 (낮을수록 상위 ↑)' }, ticks: { precision: 0 } }
@@ -254,7 +259,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                 }
             }),
             React.createElement('div', { style: { fontSize: 10, color: '#94a3b8', marginTop: 4 } },
-                '※ 선이 위로 갈수록 상위 노출. 끊긴 구간은 400위 밖입니다.')
+                '※ 선이 위로 갈수록 상위 노출. 끊긴 구간은 200위 밖입니다.')
         );
     };
 
@@ -329,7 +334,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
                     <div>
                         <h3 className="rt-h3"><span className="rt-hic">📍</span>키워드별 노출 순위<span className="badge b-ok">✅ 실측</span></h3>
-                        <div className="rt-desc">상품명에서 추출한 키워드별로 네이버 쇼핑 검색 순위를 조회한 결과 (검색 범위: 상위 400개 상품)</div>
+                        <div className="rt-desc">상품명에서 추출한 키워드별로 네이버 쇼핑 검색 순위를 조회한 결과 (검색 범위: 상위 200개 상품)</div>
                     </div>
                     {canEdit !== false && <button className="btn btn-primary btn-sm" onClick={() => setShowAddForm(!showAddForm)}>
                         {showAddForm ? '취소' : '+ 상품 등록'}
@@ -372,7 +377,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                     <div className="fade-in" style={{ marginTop: 16 }}>
                         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginBottom: 12 }}>
                             <span className="ps ps-g">노출 {exposureResult.exposed_count}개</span>
-                            <span className="ps ps-r">400위 밖 {unexposed.length}개</span>
+                            <span className="ps ps-r">200위 밖 {unexposed.length}개</span>
                             <span className="ps ps-n">전체 {exposureResult.total_keywords}개</span>
                         </div>
 
@@ -384,7 +389,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                             </div>
                             <div className="ratecard">
                                 <div className="v" style={{ color: 'var(--red)' }}>{unexposed.length}</div>
-                                <div className="k">400위 밖 키워드</div>
+                                <div className="k">200위 밖 키워드</div>
                             </div>
                             <div className="ratecard">
                                 <div className="v" style={{ color: 'var(--pur)' }}>{exposureRate}%</div>
@@ -399,7 +404,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                                     💡 노출 중인 추천 키워드
                                 </div>
                                 <div style={{ fontSize: 12, color: '#64748b', marginBottom: 10, lineHeight: 1.5 }}>
-                                    검색 키워드가 상위 400위 밖이어도, 아래 키워드로는 지금 노출 중입니다 — 상품명·태그·광고에 활용해 노출을 확보하세요.
+                                    검색 키워드가 상위 200위 밖이어도, 아래 키워드로는 지금 노출 중입니다 — 상품명·태그·광고에 활용해 노출을 확보하세요.
                                 </div>
                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                                     {exposureResult.recommended.map(function(r, idx) {
@@ -433,7 +438,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                             </div>
 
                             <div style={{ fontSize: 13, fontWeight: 800, color: '#ef4444', margin: '16px 0 8px', display: 'flex', alignItems: 'center', gap: 6 }}>
-                                <span>●</span> 400위 밖 키워드
+                                <span>●</span> 200위 밖 키워드
                             </div>
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                                 {unexposed.map(function(r, idx) {
@@ -552,7 +557,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                                                             React.createElement('td', null,
                                                                 k.latest_rank
                                                                     ? React.createElement('span', { style: { fontWeight: 700, color: k.latest_rank <= 10 ? '#059669' : k.latest_rank <= 40 ? '#d97706' : '#dc2626' } }, k.latest_rank + '위')
-                                                                    : React.createElement('span', { className: 'badge badge-gray' }, '400위 밖')
+                                                                    : React.createElement('span', { className: 'badge badge-gray' }, '200위 밖')
                                                             ),
                                                             React.createElement('td', null, k.latest_rank ? Math.ceil(k.latest_rank / 40) + 'P' : '-'),
                                                             React.createElement('td', { style: { fontSize: 12, color: '#94a3b8' } }, k.last_checked ? new Date(k.last_checked).toLocaleString('ko') : '-')
@@ -598,7 +603,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                     var _thS = { textAlign: 'left', padding: '9px 12px', borderBottom: '2px solid #e2e8f0', color: '#64748b', fontWeight: 700, whiteSpace: 'nowrap', fontSize: 12, background: '#f8fafc' };
                     var _thC = Object.assign({}, _thS, { textAlign: 'center' });
                     var _rankBadge = function(rk) {
-                        if (!rk) return React.createElement('span', { style: { fontSize: 12, color: '#94a3b8', fontWeight: 600 } }, '400위 밖');
+                        if (!rk) return React.createElement('span', { style: { fontSize: 12, color: '#94a3b8', fontWeight: 600 } }, '200위 밖');
                         var c = rk <= 10 ? '#059669' : rk <= 40 ? '#d97706' : '#dc2626';
                         return React.createElement('span', { style: { fontWeight: 800, color: c } }, rk + '위',
                             React.createElement('span', { style: { fontSize: 10, color: '#94a3b8', fontWeight: 600, marginLeft: 4 } }, Math.ceil(rk / 40) + 'P'));

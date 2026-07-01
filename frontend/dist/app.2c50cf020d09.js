@@ -1645,12 +1645,18 @@ window.RankTrackingSection = function RankTrackingSection({
       }
     }
     function attempt() {
-      api.post('/rank/keyword-exposure', {
+      // 클라이언트 타임아웃(무한 로딩 방지): 25초 내 응답 없으면 실패 처리 → 재시도/폴백
+      var timeoutP = new Promise(function (_res, rej) {
+        setTimeout(function () {
+          rej(new Error('timeout'));
+        }, 25000);
+      });
+      Promise.race([api.post('/rank/keyword-exposure', {
         product_url: searchedProductUrl,
         keyword: searchedKeyword,
         product_name: cachedProductName,
         extra_keywords: _extraKws
-      }).then(function (res) {
+      }), timeoutP]).then(function (res) {
         if (cancelled) return;
         if (res && res.success && res.data) {
           setExposureResult(res.data);
@@ -1899,7 +1905,7 @@ window.RankTrackingSection = function RankTrackingSection({
           tooltip: {
             callbacks: {
               label: function (ctx) {
-                return ctx.parsed.y != null ? ctx.parsed.y + '위' : '400위 밖';
+                return ctx.parsed.y != null ? ctx.parsed.y + '위' : '200위 밖';
               }
             }
           }
@@ -1925,7 +1931,7 @@ window.RankTrackingSection = function RankTrackingSection({
         color: '#94a3b8',
         marginTop: 4
       }
-    }, '※ 선이 위로 갈수록 상위 노출. 끊긴 구간은 400위 밖입니다.'));
+    }, '※ 선이 위로 갈수록 상위 노출. 끊긴 구간은 200위 밖입니다.'));
   };
 
   // 1회성 순위 결과 블록 카드 렌더링
@@ -2122,7 +2128,7 @@ window.RankTrackingSection = function RankTrackingSection({
     className: "badge b-ok"
   }, "\u2705 \uC2E4\uCE21")), /*#__PURE__*/React.createElement("div", {
     className: "rt-desc"
-  }, "\uC0C1\uD488\uBA85\uC5D0\uC11C \uCD94\uCD9C\uD55C \uD0A4\uC6CC\uB4DC\uBCC4\uB85C \uB124\uC774\uBC84 \uC1FC\uD551 \uAC80\uC0C9 \uC21C\uC704\uB97C \uC870\uD68C\uD55C \uACB0\uACFC (\uAC80\uC0C9 \uBC94\uC704: \uC0C1\uC704 400\uAC1C \uC0C1\uD488)")), canEdit !== false && /*#__PURE__*/React.createElement("button", {
+  }, "\uC0C1\uD488\uBA85\uC5D0\uC11C \uCD94\uCD9C\uD55C \uD0A4\uC6CC\uB4DC\uBCC4\uB85C \uB124\uC774\uBC84 \uC1FC\uD551 \uAC80\uC0C9 \uC21C\uC704\uB97C \uC870\uD68C\uD55C \uACB0\uACFC (\uAC80\uC0C9 \uBC94\uC704: \uC0C1\uC704 200\uAC1C \uC0C1\uD488)")), canEdit !== false && /*#__PURE__*/React.createElement("button", {
     className: "btn btn-primary btn-sm",
     onClick: () => setShowAddForm(!showAddForm)
   }, showAddForm ? '취소' : '+ 상품 등록')), showAddForm && /*#__PURE__*/React.createElement("div", {
@@ -2207,7 +2213,7 @@ window.RankTrackingSection = function RankTrackingSection({
       className: "ps ps-g"
     }, "\uB178\uCD9C ", exposureResult.exposed_count, "\uAC1C"), /*#__PURE__*/React.createElement("span", {
       className: "ps ps-r"
-    }, "400\uC704 \uBC16 ", unexposed.length, "\uAC1C"), /*#__PURE__*/React.createElement("span", {
+    }, "200\uC704 \uBC16 ", unexposed.length, "\uAC1C"), /*#__PURE__*/React.createElement("span", {
       className: "ps ps-n"
     }, "\uC804\uCCB4 ", exposureResult.total_keywords, "\uAC1C")), /*#__PURE__*/React.createElement("div", {
       className: "grid3",
@@ -2232,7 +2238,7 @@ window.RankTrackingSection = function RankTrackingSection({
       }
     }, unexposed.length), /*#__PURE__*/React.createElement("div", {
       className: "k"
-    }, "400\uC704 \uBC16 \uD0A4\uC6CC\uB4DC")), /*#__PURE__*/React.createElement("div", {
+    }, "200\uC704 \uBC16 \uD0A4\uC6CC\uB4DC")), /*#__PURE__*/React.createElement("div", {
       className: "ratecard"
     }, /*#__PURE__*/React.createElement("div", {
       className: "v",
@@ -2266,7 +2272,7 @@ window.RankTrackingSection = function RankTrackingSection({
         marginBottom: 10,
         lineHeight: 1.5
       }
-    }, "\uAC80\uC0C9 \uD0A4\uC6CC\uB4DC\uAC00 \uC0C1\uC704 400\uC704 \uBC16\uC774\uC5B4\uB3C4, \uC544\uB798 \uD0A4\uC6CC\uB4DC\uB85C\uB294 \uC9C0\uAE08 \uB178\uCD9C \uC911\uC785\uB2C8\uB2E4 \u2014 \uC0C1\uD488\uBA85\xB7\uD0DC\uADF8\xB7\uAD11\uACE0\uC5D0 \uD65C\uC6A9\uD574 \uB178\uCD9C\uC744 \uD655\uBCF4\uD558\uC138\uC694."), /*#__PURE__*/React.createElement("div", {
+    }, "\uAC80\uC0C9 \uD0A4\uC6CC\uB4DC\uAC00 \uC0C1\uC704 200\uC704 \uBC16\uC774\uC5B4\uB3C4, \uC544\uB798 \uD0A4\uC6CC\uB4DC\uB85C\uB294 \uC9C0\uAE08 \uB178\uCD9C \uC911\uC785\uB2C8\uB2E4 \u2014 \uC0C1\uD488\uBA85\xB7\uD0DC\uADF8\xB7\uAD11\uACE0\uC5D0 \uD65C\uC6A9\uD574 \uB178\uCD9C\uC744 \uD655\uBCF4\uD558\uC138\uC694."), /*#__PURE__*/React.createElement("div", {
       style: {
         display: 'flex',
         flexWrap: 'wrap',
@@ -2331,7 +2337,7 @@ window.RankTrackingSection = function RankTrackingSection({
         alignItems: 'center',
         gap: 6
       }
-    }, /*#__PURE__*/React.createElement("span", null, "\u25CF"), " 400\uC704 \uBC16 \uD0A4\uC6CC\uB4DC"), /*#__PURE__*/React.createElement("div", {
+    }, /*#__PURE__*/React.createElement("span", null, "\u25CF"), " 200\uC704 \uBC16 \uD0A4\uC6CC\uB4DC"), /*#__PURE__*/React.createElement("div", {
       style: {
         display: 'flex',
         flexWrap: 'wrap',
@@ -2565,7 +2571,7 @@ window.RankTrackingSection = function RankTrackingSection({
             }
           }, k.latest_rank + '위') : React.createElement('span', {
             className: 'badge badge-gray'
-          }, '400위 밖')), React.createElement('td', null, k.latest_rank ? Math.ceil(k.latest_rank / 40) + 'P' : '-'), React.createElement('td', {
+          }, '200위 밖')), React.createElement('td', null, k.latest_rank ? Math.ceil(k.latest_rank / 40) + 'P' : '-'), React.createElement('td', {
             style: {
               fontSize: 12,
               color: '#94a3b8'
@@ -2644,7 +2650,7 @@ window.RankTrackingSection = function RankTrackingSection({
           color: '#94a3b8',
           fontWeight: 600
         }
-      }, '400위 밖');
+      }, '200위 밖');
       var c = rk <= 10 ? '#059669' : rk <= 40 ? '#d97706' : '#dc2626';
       return React.createElement('span', {
         style: {
