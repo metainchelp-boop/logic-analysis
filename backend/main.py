@@ -478,18 +478,31 @@ def keyword_exposure(req: KeywordExposureRequest, current_user: dict = Depends(g
         main_kw_raw = (req.keyword or "").strip()
         main_kw = main_kw_raw.lower()
         extra = [k.strip() for k in (req.extra_keywords or []) if k and k.strip()]
-        candidates, _seen = [], set()
+        # R6: 내 상품 키워드(메인+상품명 토큰)를 우선 채우고, 연관/급상승(extra)은 '참고용'으로 뒤에.
+        #     노출률 분모는 내 상품 키워드만 사용 → 사과·양하 같은 무관 연관어로 노출률이 왜곡되던 문제 방지.
+        own_candidates, _seen = [], set()
         if main_kw_raw:
-            candidates.append(main_kw_raw)
+            own_candidates.append(main_kw_raw)
             _seen.add(main_kw)
-        for k in extra + sorted(keywords):
+        for k in sorted(keywords):
             kl = k.strip().lower()
             if not kl or kl in _seen:
                 continue
             _seen.add(kl)
-            candidates.append(k.strip())
-            if len(candidates) >= 10:
+            own_candidates.append(k.strip())
+            if len(own_candidates) >= 10:
                 break
+        ref_candidates = []
+        for k in extra:
+            kl = k.strip().lower()
+            if not kl or kl in _seen:
+                continue
+            _seen.add(kl)
+            ref_candidates.append(k.strip())
+            if len(own_candidates) + len(ref_candidates) >= 12:
+                break
+        candidates = own_candidates + ref_candidates
+        own_set = set(c.strip().lower() for c in own_candidates)
 
         if not candidates:
             return {"success": True, "data": {"product_name": product_name, "results": [], "recommended": []}}
@@ -508,19 +521,25 @@ def keyword_exposure(req: KeywordExposureRequest, current_user: dict = Depends(g
             for future in concurrent.futures.as_completed(futures):
                 results.append(future.result())
 
+        # 내 상품 키워드 vs 참고(연관/급상승) 구분
+        for r in results:
+            r["source"] = "own" if r["keyword"].strip().lower() in own_set else "related"
+
         # 순위 있는 것 우선, 순위순 정렬
         results.sort(key=lambda x: (x["rank"] is None, x["rank"] or 9999))
 
         # 대체 추천: 노출 중인(순위 있는) '메인 키워드 외' 키워드 상위 5개
         recommended = [r for r in results if r["rank"] is not None and r["keyword"].strip().lower() != main_kw][:5]
 
+        own_results = [r for r in results if r["source"] == "own"]
         return {
             "success": True,
             "data": {
                 "product_name": product_name,
                 "keyword": req.keyword,
-                "total_keywords": len(candidates),
-                "exposed_count": sum(1 for r in results if r["rank"] is not None),
+                # 노출률 분모 = 내 상품 키워드만(무관 연관어 제외 — R6)
+                "total_keywords": len(own_candidates),
+                "exposed_count": sum(1 for r in own_results if r["rank"] is not None),
                 "results": results,
                 "recommended": recommended,
             }

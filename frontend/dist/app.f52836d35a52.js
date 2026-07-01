@@ -2158,11 +2158,12 @@ window.RankTrackingSection = function RankTrackingSection({
       marginTop: 4
     }
   }, "\uC0C1\uD488\uBA85\uC5D0\uC11C \uD0A4\uC6CC\uB4DC\uB97C \uCD94\uCD9C\uD558\uC5EC \uAC01\uAC01 \uC21C\uC704\uB97C \uC870\uD68C\uD558\uACE0 \uC788\uC2B5\uB2C8\uB2E4")), exposureResult && !exposureLoading && function () {
+    // R6: 노출률·노출/400위밖 리스트는 '내 상품 키워드'(source!=='related')만 — 무관 연관어 제외
     var exposed = exposureResult.results.filter(function (r) {
-      return r.rank != null;
+      return r.rank != null && r.source !== 'related';
     });
     var unexposed = exposureResult.results.filter(function (r) {
-      return r.rank == null;
+      return r.rank == null && r.source !== 'related';
     });
     var exposureRate = exposureResult.total_keywords > 0 ? Math.round(exposureResult.exposed_count / exposureResult.total_keywords * 100) : 0;
     return /*#__PURE__*/React.createElement("div", {

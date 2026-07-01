@@ -342,8 +342,9 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                     </div>
                 )}
                 {exposureResult && !exposureLoading && (function() {
-                    var exposed = exposureResult.results.filter(function(r) { return r.rank != null; });
-                    var unexposed = exposureResult.results.filter(function(r) { return r.rank == null; });
+                    // R6: 노출률·노출/400위밖 리스트는 '내 상품 키워드'(source!=='related')만 — 무관 연관어 제외
+                    var exposed = exposureResult.results.filter(function(r) { return r.rank != null && r.source !== 'related'; });
+                    var unexposed = exposureResult.results.filter(function(r) { return r.rank == null && r.source !== 'related'; });
                     var exposureRate = exposureResult.total_keywords > 0
                         ? Math.round((exposureResult.exposed_count / exposureResult.total_keywords) * 100)
                         : 0;
