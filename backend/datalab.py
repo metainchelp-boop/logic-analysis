@@ -440,16 +440,17 @@ def get_yoy_growth_from_trend(trend_data: dict) -> dict:
         n = p["months"]
         cur_vals = []
         prev_vals = []
+        # 캘린더 월 기준으로 버킷팅 (30일 근사는 월말 근처에서 월을 건너뛰거나 중복시킴)
+        base_idx = now.year * 12 + (now.month - 1)
         for i in range(n):
-            # 올해 해당 월
-            cur_dt = now - timedelta(days=30 * i)
-            cur_key = cur_dt.strftime("%Y-%m")
+            m_idx = base_idx - i
+            y, mo = divmod(m_idx, 12)
+            cur_key = f"{y:04d}-{mo + 1:02d}"
             if cur_key in month_map:
                 cur_vals.append(month_map[cur_key])
 
-            # 전년 동월
-            prev_dt = cur_dt - timedelta(days=365)
-            prev_key = prev_dt.strftime("%Y-%m")
+            # 전년 동월 (윤년 무관 — 연도만 -1)
+            prev_key = f"{y - 1:04d}-{mo + 1:02d}"
             if prev_key in month_map:
                 prev_vals.append(month_map[prev_key])
 
