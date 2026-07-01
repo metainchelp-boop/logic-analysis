@@ -12,7 +12,7 @@ window.SummaryCardsSection = function SummaryCardsSection(props) {
           <div className="grid4">
             <div className="kpi"><div className="k">월간 검색량 <span className="badge b-ok">✅</span></div><div className="v">{totalVolume}<small>회/월</small></div></div>
             <div className="kpi"><div className="k">등록 상품수 <span className="badge b-ok">✅</span></div><div className="v">{productCount}<small>개</small></div></div>
-            <div className="kpi"><div className="k">골든 키워드 <span className="badge b-ok">✅</span></div><div className="v">{goldenCount}<small>개 발견</small></div></div>
+            <div className="kpi"><div className="k">골든 키워드 <span className="badge b-ok">✅</span></div><div className="v" style={{ color: (Number(goldenCount) === 0 ? '#f59e0b' : undefined) }}>{goldenCount}<small>{Number(goldenCount) === 0 ? '개 — 롱테일 권장' : '개 발견'}</small></div></div>
             <div className="kpi"><div className="k">경쟁강도 <span className="badge b-ok">✅</span></div><div className="v" style={{ fontSize: '22px' }}>{compLevel || '-'}</div></div>
           </div>
           {note && <div className="note">💡 {note}</div>}

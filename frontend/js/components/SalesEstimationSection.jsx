@@ -31,7 +31,7 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
 
         {/* KPI 3칸 */}
         <div className="grid3" style={{ marginBottom: 16 }}>
-          <div className="kpi"><div className="k">평균 상품 단가</div><div className="v">{avgPrice}</div></div>
+          <div className="kpi"><div className="k">평균 판매가</div><div className="v">{avgPrice}</div></div>
           <div className="kpi"><div className="k">월간 검색량</div><div className="v">{monthlySearches}</div></div>
           <div className="kpi"><div className="k">예상 전환율</div><div className="v">{estimatedCTR}</div></div>
         </div>

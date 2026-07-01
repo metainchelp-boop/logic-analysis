@@ -43,6 +43,32 @@ window.ReviewTextAnalysisSection = function ReviewTextAnalysisSection(props) {
   var displayedReviews = showAll ? reviews : reviews.slice(0, 3);
   var remainingCount = reviews.length - 3;
 
+  /* 리뷰 실문장 카피 후보 — 긍정 리뷰에서 실제 문장 추출(문구 창작이 아니라 구매자 표현 인용) */
+  var positiveKw = (data.positiveKeywords || []).map(function(k) { return k.keyword; }).filter(Boolean);
+  var pickSentence = function(text) {
+    var parts = String(text || '').split(/[.!?\n·•]|다\s|요\s/).map(function(s) { return s.trim(); })
+      .filter(function(s) { return s.length >= 6 && s.length <= 45; });
+    for (var i = 0; i < parts.length; i++) {
+      for (var j = 0; j < positiveKw.length; j++) {
+        if (positiveKw[j] && parts[i].indexOf(positiveKw[j]) >= 0) return parts[i];
+      }
+    }
+    return parts[0] || null;
+  };
+  var _seen = {};
+  var copyCandidates = [];
+  (reviews || []).forEach(function(r) {
+    if (copyCandidates.length >= 5) return;
+    if (!r || !r.text) return;
+    if (!(r.sentiment === 'positive' || (Number(r.rating) || 0) >= 4)) return;
+    var s = pickSentence(r.text);
+    if (!s) return;
+    var key = s.replace(/\s/g, '');
+    if (_seen[key]) return;
+    _seen[key] = 1;
+    copyCandidates.push({ copy: s, rating: r.rating });
+  });
+
   return React.createElement('div', { className: 'section fade-in' },
     React.createElement('div', { className: 'container' },
       React.createElement('div', { className: 'card', style: { padding: '20px 22px' } },
@@ -64,7 +90,10 @@ window.ReviewTextAnalysisSection = function ReviewTextAnalysisSection(props) {
             fmt(data.totalExtracted),
             React.createElement('small', null, '건')
           ),
-          totalReviewCount ? React.createElement('div', { style: { fontSize: 11, color: '#94a3b8', marginTop: 4 } }, '전체 ' + fmt(totalReviewCount) + '건 중') : null
+          totalReviewCount ? React.createElement('div', { style: { fontSize: 11, color: '#94a3b8', marginTop: 4 } },
+            '전체 ' + fmt(totalReviewCount) + '건 중 표본 ' + fmt(data.totalExtracted) + '건'
+            + (totalReviewCount > 0 ? ' (' + Math.round(data.totalExtracted / totalReviewCount * 100) + '%)' : '')
+          ) : null
         ),
         /* 평균 별점 */
         React.createElement('div', { className: 'kpi' },
@@ -174,11 +203,31 @@ window.ReviewTextAnalysisSection = function ReviewTextAnalysisSection(props) {
           )
         ) : null,
 
+      /* 4-1. 리뷰 기반 카피 후보 (구매자 실제 표현) */
+      copyCandidates.length > 0 ?
+        React.createElement('div', { className: 'sub-card' },
+          React.createElement('div', { className: 'st' }, '📝 리뷰 기반 카피 후보'),
+          React.createElement('div', { style: { fontSize: 11.5, color: '#94a3b8', marginBottom: 10 } },
+            '구매자가 실제 남긴 긍정 리뷰 문장입니다. 상세페이지·광고 카피 소재로 활용하세요(과장 없이 실제 표현 그대로).'),
+          React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+            copyCandidates.map(function(c, i) {
+              return React.createElement('div', {
+                key: 'copy-' + i,
+                style: { display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10 }
+              },
+                React.createElement('span', { style: { color: '#f59e0b', fontSize: 12, flexShrink: 0 } }, stars(c.rating)),
+                React.createElement('span', { style: { fontSize: 13, fontWeight: 600, color: '#166534', lineHeight: 1.5 } }, '"' + c.copy + '"')
+              );
+            })
+          )
+        ) : null,
+
       /* 5. 리뷰 목록 */
       React.createElement('div', null,
         React.createElement('div', { style: { fontSize: 14, fontWeight: 700, color: '#1e293b', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8 } },
-          React.createElement('span', null, '📋'), '추출된 리뷰 목록',
-          React.createElement('span', { style: { fontSize: 11, fontWeight: 500, color: '#94a3b8', marginLeft: 4 } }, '(HTML에서 추출된 ' + reviews.length + '건)')
+          React.createElement('span', null, '📋'), '추출된 리뷰 목록 (표본 분석)',
+          React.createElement('span', { style: { fontSize: 11, fontWeight: 500, color: '#94a3b8', marginLeft: 4 } },
+            totalReviewCount ? ('전체 ' + fmt(totalReviewCount) + '건 중 ' + reviews.length + '건 표본') : ('(HTML에서 추출된 ' + reviews.length + '건)'))
         ),
         React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 12 } },
           displayedReviews.map(function(review, i) {

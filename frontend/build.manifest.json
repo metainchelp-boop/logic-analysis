@@ -56,6 +56,11 @@
   "js/components/ChatWidget.jsx",
   "js/components/TopBar.jsx",
   "js/components/Footer.jsx",
+  "js/components/StrengthsHighlightBanner.jsx",
+  "js/components/SeasonUrgencyCountdown.jsx",
+  "js/components/RankDeltaROISimulation.jsx",
+  "js/components/CpcBidEstimateSection.jsx",
+  "js/components/TrackRegisterButton.jsx",
   "js/components/AnalysisResults.jsx",
   "js/analysis.jsx",
   "js/components/App.jsx"
