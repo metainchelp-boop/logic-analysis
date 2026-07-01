@@ -1707,6 +1707,35 @@ def compute_advertiser_report(keyword: str, product_url: str):
         my_price = product_info.get("price", 0)
         my_name = product_info.get("product_name", "")
 
+        # [R1] 자기상품 정보 보완: 순위는 잡혔는데(=순위검색에서 내 상품을 찾음) my_price/my_name이 비면
+        #      같은 순위검색 결과(all_products)에서 내 상품을 재매칭해 채운다.
+        #      (없으면 "상품 가격/상품명을 확인할 수 없습니다"가 뜨는데, 이미 순위로 존재하므로 모순)
+        if (not my_name or not my_price) and rank and all_products:
+            try:
+                from naver_crawler import extract_product_id_from_url as _epid, extract_store_name_from_url as _estore
+                _tpid = _epid(req.product_url) or ""
+                _tstore = (_estore(req.product_url) or "").lower()
+                for _p in all_products:
+                    _u = (_p.get("product_url") or "")
+                    _hit = (_tpid and (_tpid in _u or _tpid == _p.get("product_id", ""))) or (_tstore and _tstore in _u.lower())
+                    if _hit:
+                        if not my_name:
+                            my_name = _p.get("product_name", "") or my_name
+                            product_info["product_name"] = my_name
+                        if not my_price:
+                            my_price = _p.get("price", 0) or my_price
+                            product_info["price"] = my_price
+                        if not product_info.get("store_name"):
+                            product_info["store_name"] = _p.get("store_name", "")
+                        if not product_info.get("brand"):
+                            product_info["brand"] = _p.get("brand", "")
+                        if not product_info.get("category"):
+                            product_info["category"] = _p.get("category2") or _p.get("category1") or ""
+                        logger.info(f"[R1] 자기상품 정보 순위검색 결과로 보완: {(my_name or '')[:30]} / {my_price}원 (rank {rank})")
+                        break
+            except Exception as _e:
+                logger.warning(f"[R1] 자기상품 보완 실패(무시): {_e}")
+
         competitor_comparison = []
         prices = []
         review_counts = []
