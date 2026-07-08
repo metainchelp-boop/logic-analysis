@@ -916,23 +916,28 @@ def get_ai_insights(client_id: int, current_user: dict = Depends(get_current_use
 
 
 @router.get("/portal-summary")
-def portal_summary(company: str = Query(..., description="전산 광고주 회사명"),
+def portal_summary(company: str = Query(None, description="전산 광고주 회사명(폴백)"),
+                   client_id: int = Query(None, description="명시적 매핑 업체 id(우선)"),
                    current_user: dict = Depends(get_current_user)):
-    """전산 광고주 공유 대시보드용 — 회사명으로 업체 매핑 → 미리 계산된 일일 분석 요약 + 인사이트.
+    """전산 광고주 공유 대시보드용 — 업체 매핑(client_id 우선, 없으면 회사명) → 미리 계산된 일일 분석 요약 + 인사이트.
     무거운 재분석 없이 client_analyses(스케줄러 적재분)를 빠르게 조회. 매칭 실패 시 found=False.
     """
     name = (company or "").strip()
-    if not name:
+    if not client_id and not name:
         return {"found": False}
     conn = _get_conn()
     try:
-        row = conn.execute(
-            "SELECT id, name FROM clients WHERE name = ? AND status = 'active' ORDER BY id LIMIT 1",
-            (name,)).fetchone()
-        if not row:
+        if client_id:  # 명시적 매핑 우선 — 회사명 무관
             row = conn.execute(
-                "SELECT id, name FROM clients WHERE name LIKE ? AND status = 'active' ORDER BY id LIMIT 1",
-                (f"%{name}%",)).fetchone()
+                "SELECT id, name FROM clients WHERE id = ? LIMIT 1", (client_id,)).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT id, name FROM clients WHERE name = ? AND status = 'active' ORDER BY id LIMIT 1",
+                (name,)).fetchone()
+            if not row:
+                row = conn.execute(
+                    "SELECT id, name FROM clients WHERE name LIKE ? AND status = 'active' ORDER BY id LIMIT 1",
+                    (f"%{name}%",)).fetchone()
         if not row:
             return {"found": False}
         cid = row["id"]
@@ -981,6 +986,28 @@ def portal_summary(company: str = Query(..., description="전산 광고주 회�
     except Exception as e:
         logger.error(f"[portal-summary] {e}")
         return {"found": False, "detail": str(e)}
+    finally:
+        conn.close()
+
+
+@router.get("/clients-lookup")
+def clients_lookup(q: str = Query(None, description="회사명 부분검색"),
+                   current_user: dict = Depends(get_current_user)):
+    """전산 관리 화면 피커용 — 로직분석 업체 [{id,name}] 목록(q 부분검색, 최대 30)."""
+    conn = _get_conn()
+    try:
+        key = (q or "").strip()
+        if key:
+            rows = conn.execute(
+                "SELECT id, name FROM clients WHERE status = 'active' AND name LIKE ? "
+                "ORDER BY name LIMIT 30", (f"%{key}%",)).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, name FROM clients WHERE status = 'active' ORDER BY name LIMIT 30").fetchall()
+        return {"success": True, "data": [{"id": r["id"], "name": r["name"]} for r in rows]}
+    except Exception as e:
+        logger.error(f"[clients-lookup] {e}")
+        return {"success": False, "data": []}
     finally:
         conn.close()
 
