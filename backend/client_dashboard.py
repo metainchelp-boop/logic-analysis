@@ -2,7 +2,7 @@
 업체별 분석 관리 대시보드 API
 v3.4 — 분석→업체 등록 연동, 일자별 분석 누적, 사용자 격리
 """
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Query
 from pydantic import BaseModel
 from typing import Optional, List, Any
 from datetime import datetime, date
@@ -913,6 +913,103 @@ def get_ai_insights(client_id: int, current_user: dict = Depends(get_current_use
     except Exception as e:
         logger.error(f"[ai-insights] {e}")
         return {"success": False, "detail": str(e)}
+
+
+@router.get("/portal-summary")
+def portal_summary(company: str = Query(None, description="전산 광고주 회사명(폴백)"),
+                   client_id: int = Query(None, description="명시적 매핑 업체 id(우선)"),
+                   current_user: dict = Depends(get_current_user)):
+    """전산 광고주 공유 대시보드용 — 업체 매핑(client_id 우선, 없으면 회사명) → 미리 계산된 일일 분석 요약 + 인사이트.
+    무거운 재분석 없이 client_analyses(스케줄러 적재분)를 빠르게 조회. 매칭 실패 시 found=False.
+    """
+    name = (company or "").strip()
+    if not client_id and not name:
+        return {"found": False}
+    conn = _get_conn()
+    try:
+        if client_id:  # 명시적 매핑 우선 — 회사명 무관
+            row = conn.execute(
+                "SELECT id, name FROM clients WHERE id = ? LIMIT 1", (client_id,)).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT id, name FROM clients WHERE name = ? AND status = 'active' ORDER BY id LIMIT 1",
+                (name,)).fetchone()
+            if not row:
+                row = conn.execute(
+                    "SELECT id, name FROM clients WHERE name LIKE ? AND status = 'active' ORDER BY id LIMIT 1",
+                    (f"%{name}%",)).fetchone()
+        if not row:
+            return {"found": False}
+        cid = row["id"]
+
+        # 키워드별 최신 분석 1건씩 (최대 8개) → 일일 리포트
+        rep_rows = conn.execute("""
+            SELECT keyword, MAX(analyzed_date) AS analyzed_date, analysis_json
+            FROM client_analyses
+            WHERE client_id = ?
+            GROUP BY keyword
+            ORDER BY analyzed_date DESC
+            LIMIT 8
+        """, (cid,)).fetchall()
+        daily = []
+        for r in rep_rows:
+            try:
+                ad = json.loads(r["analysis_json"] or "{}")
+            except (json.JSONDecodeError, TypeError):
+                ad = {}
+            vol = ad.get("summaryCards", {}).get("totalVolume", None)
+            comp = ad.get("competitionIndex", {}).get("compPercent", None)
+            parts = []
+            if vol not in (None, "-", ""):
+                parts.append(f"검색량 {vol}")
+            if comp is not None:
+                parts.append(f"경쟁강도 {comp}%")
+            daily.append({
+                "date": r["analyzed_date"],
+                "keyword": r["keyword"],
+                "summary": " · ".join(parts) if parts else "분석 완료",
+            })
+
+        total = conn.execute(
+            "SELECT COUNT(*) AS c FROM client_analyses WHERE client_id = ?", (cid,)).fetchone()["c"]
+
+        insight = None
+        if daily:
+            top = daily[0]
+            tail = f" ({top['summary']})" if top["summary"] and top["summary"] != "분석 완료" else ""
+            insight = (f"최근 {total}건의 자동 분석이 누적되었습니다. "
+                       f"현재 {len(daily)}개 키워드를 추적 중이며, 가장 최근 분석 키워드는 "
+                       f"'{top['keyword']}'{tail}입니다.")
+
+        return {"found": True, "clientId": cid, "insight": insight,
+                "dailyReports": daily, "totalDays": total}
+    except Exception as e:
+        logger.error(f"[portal-summary] {e}")
+        return {"found": False, "detail": str(e)}
+    finally:
+        conn.close()
+
+
+@router.get("/clients-lookup")
+def clients_lookup(q: str = Query(None, description="회사명 부분검색"),
+                   current_user: dict = Depends(get_current_user)):
+    """전산 관리 화면 피커용 — 로직분석 업체 [{id,name}] 목록(q 부분검색, 최대 30)."""
+    conn = _get_conn()
+    try:
+        key = (q or "").strip()
+        if key:
+            rows = conn.execute(
+                "SELECT id, name FROM clients WHERE status = 'active' AND name LIKE ? "
+                "ORDER BY name LIMIT 30", (f"%{key}%",)).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, name FROM clients WHERE status = 'active' ORDER BY name LIMIT 30").fetchall()
+        return {"success": True, "data": [{"id": r["id"], "name": r["name"]} for r in rows]}
+    except Exception as e:
+        logger.error(f"[clients-lookup] {e}")
+        return {"success": False, "data": []}
+    finally:
+        conn.close()
 
 
 # ==================== 일일 조회 제한 ====================
