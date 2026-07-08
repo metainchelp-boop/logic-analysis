@@ -953,6 +953,7 @@ def portal_summary(company: str = Query(None, description="전산 광고주 회�
         """, (cid,)).fetchall()
         daily = []
         metrics = []  # (keyword, volume_int|None, comp_float|None) — 인사이트 합성용
+        seo_volume = []  # SEO 자동 통로 — 키워드별 월 검색량·현재순위(전산 seo-auto 플래그로 사용 여부 결정)
         for r in rep_rows:
             try:
                 ad = json.loads(r["analysis_json"] or "{}")
@@ -975,6 +976,12 @@ def portal_summary(company: str = Query(None, description="전산 광고주 회�
             except (ValueError, TypeError):
                 vnum = None
             metrics.append((r["keyword"], vnum, comp if isinstance(comp, (int, float)) else None))
+            rank = ad.get("ranking", {}).get("current_rank", None)
+            seo_volume.append({
+                "keyword": r["keyword"],
+                "volume": f"{vnum:,}" if vnum is not None else (str(vol) if vol not in (None, "", "-") else "-"),
+                "rank": f"{rank}위" if isinstance(rank, int) else "-",
+            })
 
         total = conn.execute(
             "SELECT COUNT(*) AS c FROM client_analyses WHERE client_id = ?", (cid,)).fetchone()["c"]
@@ -994,7 +1001,8 @@ def portal_summary(company: str = Query(None, description="전산 광고주 회�
             insight = " ".join(sents)
 
         return {"found": True, "clientId": cid, "insight": insight,
-                "dailyReports": daily, "totalDays": total}
+                "dailyReports": daily, "totalDays": total,
+                "seo": {"keywordVolume": seo_volume}}
     except Exception as e:
         logger.error(f"[portal-summary] {e}")
         return {"found": False, "detail": str(e)}
