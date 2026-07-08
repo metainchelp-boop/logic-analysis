@@ -952,6 +952,7 @@ def portal_summary(company: str = Query(None, description="전산 광고주 회�
             LIMIT 8
         """, (cid,)).fetchall()
         daily = []
+        metrics = []  # (keyword, volume_int|None, comp_float|None) — 인사이트 합성용
         for r in rep_rows:
             try:
                 ad = json.loads(r["analysis_json"] or "{}")
@@ -969,17 +970,28 @@ def portal_summary(company: str = Query(None, description="전산 광고주 회�
                 "keyword": r["keyword"],
                 "summary": " · ".join(parts) if parts else "분석 완료",
             })
+            try:
+                vnum = int(str(vol).replace(",", "")) if vol not in (None, "-", "") else None
+            except (ValueError, TypeError):
+                vnum = None
+            metrics.append((r["keyword"], vnum, comp if isinstance(comp, (int, float)) else None))
 
         total = conn.execute(
             "SELECT COUNT(*) AS c FROM client_analyses WHERE client_id = ?", (cid,)).fetchone()["c"]
 
+        # 인사이트 — 누적된 실제 분석값(검색량·경쟁강도)에서만 합성(환각 방지)
         insight = None
         if daily:
-            top = daily[0]
-            tail = f" ({top['summary']})" if top["summary"] and top["summary"] != "분석 완료" else ""
-            insight = (f"최근 {total}건의 자동 분석이 누적되었습니다. "
-                       f"현재 {len(daily)}개 키워드를 추적 중이며, 가장 최근 분석 키워드는 "
-                       f"'{top['keyword']}'{tail}입니다.")
+            sents = [f"현재 {len(daily)}개 키워드를 매일 자동 추적 중이며, 누적 분석은 {total}건입니다."]
+            with_vol = [m for m in metrics if m[1] is not None]
+            if with_vol:
+                tv = max(with_vol, key=lambda m: m[1])
+                sents.append(f"검색량이 가장 높은 '{tv[0]}'({tv[1]:,})가 핵심 유입 키워드입니다.")
+            with_comp = [m for m in metrics if m[2] is not None]
+            if with_comp:
+                lc = min(with_comp, key=lambda m: m[2])
+                sents.append(f"경쟁강도가 가장 낮은 '{lc[0]}'({lc[2]}%)는 상위 노출을 노려볼 만합니다.")
+            insight = " ".join(sents)
 
         return {"found": True, "clientId": cid, "insight": insight,
                 "dailyReports": daily, "totalDays": total}
