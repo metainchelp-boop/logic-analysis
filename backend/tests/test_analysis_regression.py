@@ -139,6 +139,24 @@ def test_data_quality_cross_check_unit():
     assert dq.label("estimated") == "추정"
 
 
+def test_match_item_rejects_wrong_store_product():
+    """오매칭 회귀 가드(#83): productId를 뽑은 URL에서 같은 스토어의
+    '다른 상품(대표상품)'을 스토어명만으로 매칭하지 않는다.
+    (지정 상품 대신 스토어의 리뷰 많은 대표 상품으로 바뀌던 버그 재발 방지.)"""
+    url = "https://smartstore.naver.com/gyuloreum/products/123"  # 지정 상품 productId=123
+    wrong = {"productId": "777",  # 같은 스토어의 '다른' 상품(대표)
+             "link": "https://smartstore.naver.com/gyuloreum/products/777",
+             "title": "대표상품 리뷰많음", "mallName": "gyuloreum", "image": "", "lprice": "9900"}
+    _orig = nc.search_naver_shopping_api
+    nc.search_naver_shopping_api = lambda *a, **k: {"items": [wrong]}
+    try:
+        rd = nc._get_product_info_impl(url, keyword="한라봉")
+    finally:
+        nc.search_naver_shopping_api = _orig
+    assert rd.get("product_name") != "대표상품 리뷰많음", \
+        f"오매칭 재발! 같은 스토어 다른 상품을 잡음: {rd.get('product_name')!r}"
+
+
 if __name__ == "__main__":
     _tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     _failed = 0
