@@ -481,7 +481,10 @@ def _get_product_info_impl(product_url: str, keyword: str = "") -> Dict:
                 return False  # 스토어 불일치 → 거부
             return True
         # 3순위: 스토어명 + 상품 링크에 스토어 슬러그 포함
-        if store_name and store_name.lower() in item_link.lower():
+        #   ⚠️ productId를 URL에서 뽑은 경우엔 스토어명만으로 매칭하지 않는다.
+        #   productId가 있는데 1·2순위에서 안 잡혔다 = 같은 스토어의 '다른 상품' → 거부.
+        #   (지정 상품 대신 스토어의 리뷰 많은 대표 상품으로 오매칭되던 버그 차단.)
+        if not product_id and store_name and store_name.lower() in item_link.lower():
             return True
         return False
 
