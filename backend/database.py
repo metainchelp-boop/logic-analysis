@@ -4,6 +4,9 @@ SQLite 기반 상품/키워드/순위/경쟁자/알림 CRUD
 """
 import sqlite3
 import os
+import json
+import gzip
+import time
 import logging
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
@@ -11,6 +14,11 @@ from typing import Optional, List, Dict, Any
 logger = logging.getLogger(__name__)
 
 DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
+
+# 쇼핑검색 크롤 공유 캐시 TTL(초) — 기본 3시간.
+# 여러 직원/워커가 같은 키워드를 짧은 시간 내 분석할 때 네이버 재호출을 없애
+# 일일 API 한도(25,000) 소진을 막는다. (운영자 지시 2026-07-10)
+SHOPPING_CACHE_TTL = int(os.getenv("SHOPPING_CACHE_TTL", "10800"))
 
 
 def _get_conn() -> sqlite3.Connection:
@@ -127,6 +135,20 @@ def init_db():
             );
             CREATE INDEX IF NOT EXISTS idx_api_usage_called_at ON api_usage_logs(called_at);
             CREATE INDEX IF NOT EXISTS idx_api_usage_client ON api_usage_logs(client_id);
+
+            -- 쇼핑검색 크롤 공유 캐시 (v6.4) — 같은 키워드 크롤 결과를 TTL 동안 공유해
+            -- 네이버 쇼핑 API 중복 호출을 제거(일일 한도 소진 방지). payload=gzip(JSON).
+            -- 워커별 메모리 캐시로는 5개 워커가 각자 긁으므로, DB에 두어 워커·재시작을 넘어 공유.
+            CREATE TABLE IF NOT EXISTS shopping_search_cache (
+                cache_key TEXT PRIMARY KEY,
+                keyword TEXT NOT NULL,
+                max_results INTEGER NOT NULL,
+                sort TEXT DEFAULT 'sim',
+                payload BLOB NOT NULL,
+                product_count INTEGER DEFAULT 0,
+                created_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_shopping_cache_created ON shopping_search_cache(created_at);
 
             -- 알림 설정 기본 행 삽입 (없으면)
             INSERT OR IGNORE INTO notification_settings (id, notify_enabled, receiver_phone, report_time)
@@ -612,3 +634,68 @@ def get_api_usage_summary(days: int = 30) -> dict:
         }
     finally:
         conn.close()
+
+
+# ==================== 쇼핑검색 크롤 공유 캐시 (v6.4) ====================
+# 목적: 여러 직원(+5개 워커)이 짧은 시간에 같은 키워드를 분석할 때, 네이버 쇼핑 API
+#       크롤을 1번만 하고 결과를 공유해 일일 호출 한도(25,000) 소진을 막는다.
+# 설계: 실패는 전부 방어적으로 무시 → 캐시가 깨져도 분석 자체는 절대 멈추지 않는다.
+#       빈 결과(429 등)는 저장하지 않아 다음 기회에 정상 재크롤된다.
+
+def _shopping_cache_key(keyword: str, max_results: int, sort: str) -> str:
+    return f"{sort}|{max_results}|{keyword}"
+
+
+def get_cached_shopping_search(keyword: str, max_results: int,
+                               sort: str = "sim",
+                               ttl: Optional[int] = None) -> Optional[List[Dict]]:
+    """TTL 내 캐시된 크롤 결과를 반환. 없거나 만료·오류면 None(=미스, 직접 크롤)."""
+    ttl = SHOPPING_CACHE_TTL if ttl is None else ttl
+    key = _shopping_cache_key(keyword, max_results, sort)
+    conn = None
+    try:
+        conn = _get_conn()
+        row = conn.execute(
+            "SELECT payload, created_at FROM shopping_search_cache WHERE cache_key = ?",
+            (key,)
+        ).fetchone()
+        if not row:
+            return None
+        if (time.time() - float(row["created_at"])) > ttl:
+            return None  # 만료 → 미스 취급 (정리는 저장 시 일괄)
+        return json.loads(gzip.decompress(row["payload"]).decode("utf-8"))
+    except Exception as e:
+        logger.warning(f"[크롤캐시] 조회 실패(무시): {e}")
+        return None
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def save_cached_shopping_search(keyword: str, max_results: int,
+                                products: List[Dict], sort: str = "sim") -> None:
+    """크롤 결과를 gzip(JSON)으로 저장. 빈 결과는 저장하지 않음. 실패는 무시."""
+    if not products:
+        return
+    key = _shopping_cache_key(keyword, max_results, sort)
+    conn = None
+    try:
+        payload = gzip.compress(json.dumps(products, ensure_ascii=False).encode("utf-8"))
+        conn = _get_conn()
+        conn.execute(
+            """INSERT OR REPLACE INTO shopping_search_cache
+                   (cache_key, keyword, max_results, sort, payload, product_count, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (key, keyword, max_results, sort, payload, len(products), time.time())
+        )
+        # 오래된 캐시 정리(누적 방지): TTL의 8배(기본 24시간) 넘은 행 삭제
+        conn.execute(
+            "DELETE FROM shopping_search_cache WHERE created_at < ?",
+            (time.time() - SHOPPING_CACHE_TTL * 8,)
+        )
+        conn.commit()
+    except Exception as e:
+        logger.warning(f"[크롤캐시] 저장 실패(무시): {e}")
+    finally:
+        if conn is not None:
+            conn.close()
