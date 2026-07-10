@@ -405,17 +405,51 @@ class NotificationSettingsRequest(BaseModel):
 # ==================== API 엔드포인트 ====================
 
 
+# ── 쇼핑 크롤 공유 헬퍼 (과부하 방지) ──────────────────────────────
+# 여러 직원/워커(uvicorn 5개)가 같은 키워드를 짧은 시간에 크롤하면 네이버 쇼핑 API를
+# 중복 호출한다. 이를 3시간 DB 공유 캐시(database.shopping_search_cache)로 1회로 합쳐
+# 일일 한도(25,000) 소진·과부하를 막는다.
+#   - read_cache=True : 캐시 우선(분석·스냅샷용, 3시간 staleness 허용)
+#   - read_cache=False: 항상 새로 크롤(실시간 조회용)하되 결과는 캐시에 채워 후속 분석과 공유
+# 캐시 조회/저장 실패는 전부 방어적으로 무시하고 직접 크롤로 폴백 → 기능은 절대 멈추지 않음.
+def _shared_crawl(keyword: str, max_results: int = 500, read_cache: bool = True) -> list:
+    from naver_crawler import search_products as _sp
+    products = None
+    cache_ok = False
+    try:
+        from database import get_cached_shopping_search, save_cached_shopping_search
+        cache_ok = True
+        if read_cache:
+            products = get_cached_shopping_search(keyword, max_results)
+            if products is not None:
+                logger.info(f"[크롤캐시] 히트 '{keyword}' ({len(products)}개) — 네이버 재호출 없음")
+    except Exception as _ce:
+        logger.warning(f"[크롤캐시] 우회(직접 크롤): {_ce}")
+        products, cache_ok = None, False
+    if products is None:
+        products = _sp(keyword, max_results=max_results, retry_on_429=True)
+        if cache_ok:
+            try:
+                save_cached_shopping_search(keyword, max_results, products)
+            except Exception as _ce:
+                logger.warning(f"[크롤캐시] 저장 우회: {_ce}")
+    return products
+
+
 # --- 실시간 순위 조회 ---
 @app.post("/api/rank/check")
 def check_rank(req: RankCheckRequest, current_user: dict = Depends(get_current_user)):
     """키워드 + 상품URL로 실시간 순위 조회 (인증 필수, viewer 제한은 handleSearch에서 관리)"""
     try:
         product_info = get_product_info(req.product_url, keyword=req.keyword)
+        # 실시간 조회 → 항상 새로 크롤(상위 500)하되 결과는 공유 캐시에 채워 후속 분석과 공유(과부하 방지).
+        _prods = _shared_crawl(req.keyword, 500, read_cache=False)
         rank, page, competitors = find_product_rank(
             keyword=req.keyword,
             product_url=req.product_url,
-            max_pages=10,
-            product_name=product_info.get("product_name", "")
+            max_pages=5,
+            product_name=product_info.get("product_name", ""),
+            cached_products=_prods,
         )
         analysis = generate_rank_analysis(rank, None, competitors, product_info)
 
@@ -514,7 +548,8 @@ def keyword_exposure(req: KeywordExposureRequest, current_user: dict = Depends(g
         results = []
         def check_one(kw):
             try:
-                rank, page, _ = find_product_rank(kw, req.product_url, max_pages=2)
+                _prods = _shared_crawl(kw, 200)  # 공유 캐시(3h) → 반복/동시 노출조회 중복 크롤 제거
+                rank, page, _ = find_product_rank(kw, req.product_url, max_pages=2, cached_products=_prods)
                 return {"keyword": kw, "rank": rank, "page": page}
             except Exception:
                 return {"keyword": kw, "rank": None, "page": None}
@@ -625,10 +660,12 @@ def run_initial_rank_check(product_id: int, product_url: str, keyword_ids: List[
         _review_count = None
     for kw_info in keyword_ids:
         try:
+            _prods = _shared_crawl(kw_info["keyword"], 500)  # 공유 캐시(3h) → 과부하 방지
             rank, page, competitors = find_product_rank(
                 keyword=kw_info["keyword"],
                 product_url=product_url,
-                max_pages=10
+                max_pages=5,
+                cached_products=_prods,
             )
             save_ranking(
                 product_id=product_id,
@@ -1056,9 +1093,10 @@ def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_curren
             competitors = req.cached_competitors or []
         else:
             try:
+                _prods = _shared_crawl(req.keyword, 500)  # 공유 캐시(3h) → 과부하 방지
                 rank, page, competitors = find_product_rank(
-                    keyword=req.keyword, product_url=req.product_url, max_pages=10,
-                    product_name=product_name
+                    keyword=req.keyword, product_url=req.product_url, max_pages=5,
+                    product_name=product_name, cached_products=_prods
                 )
             except Exception as e:
                 logger.warning(f"find_product_rank 실패 (순위 없음 처리): {e}")
@@ -1731,29 +1769,9 @@ def compute_advertiser_report(keyword: str, product_url: str):
         # 2~3) 키워드로 1회만 검색 → 순위 계산 + 1페이지(상위 80) 분석에 공용 사용
         #      (기존엔 find_product_rank 내부 검색 + 쇼핑 API 재검색으로 같은 키워드를 두 번 호출)
         #      매칭 로직은 그대로(cached_products로 결과만 재사용). retry_on_429=True로 429 빈결과 방지.
-        # [A] 수집 깊이 1000→500 (10페이지→5페이지): 분석당 쇼핑 API 콜 10→5. 상위 500이면 순위·경쟁분석 충분.
-        # [B] 교차요청 공유 캐시(3시간): 같은 키워드를 여러 직원/워커가 분석하면 1번만 크롤해 공유 → 한도 절약.
-        #     캐시 조회/저장 실패는 전부 방어적으로 무시하고 직접 크롤로 폴백 → 분석은 절대 멈추지 않음.
-        from naver_crawler import search_products as _sp_crawler
-        _SP_MAX = 500
-        all_products = None
-        _cache_ok = False
-        try:
-            from database import get_cached_shopping_search, save_cached_shopping_search
-            _cache_ok = True
-            all_products = get_cached_shopping_search(req.keyword, _SP_MAX)
-            if all_products is not None:
-                logger.info(f"[크롤캐시] 히트 '{req.keyword}' ({len(all_products)}개) — 네이버 재호출 없음")
-        except Exception as _ce:
-            logger.warning(f"[크롤캐시] 우회(직접 크롤): {_ce}")
-            all_products = None
-        if all_products is None:
-            all_products = _sp_crawler(req.keyword, max_results=_SP_MAX, retry_on_429=True)
-            if _cache_ok:
-                try:
-                    save_cached_shopping_search(req.keyword, _SP_MAX, all_products)
-                except Exception as _ce:
-                    logger.warning(f"[크롤캐시] 저장 우회: {_ce}")
+        # [A] 수집 깊이 1000→500 + [B] 3시간 공유 캐시. 같은 키워드를 여러 직원/워커가 분석하면
+        #     _shared_crawl가 1회 크롤 결과를 공유(캐시 우선, 실패 시 직접 크롤 폴백 → 분석 안 멈춤).
+        all_products = _shared_crawl(req.keyword, 500)
         rank, page, top_competitors = find_product_rank(
             keyword=req.keyword, product_url=req.product_url, max_pages=5,
             product_name=product_info.get("product_name", ""),
