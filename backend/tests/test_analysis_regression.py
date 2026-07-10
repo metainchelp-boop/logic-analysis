@@ -157,6 +157,36 @@ def test_match_item_rejects_wrong_store_product():
         f"오매칭 재발! 같은 스토어 다른 상품을 잡음: {rd.get('product_name')!r}"
 
 
+def test_keyword_volume_contract_fields():
+    """계약 가드: get_keyword_volume이 제안서·ERP가 소비하는 필드
+    (monthlyPcQcCnt/monthlyMobileQcCnt/compIdx)를 항상 내보낸다.
+    이 필드명·구조가 바뀌면 제안서 '월 검색량'이 깨진다(반복 신고 부류)."""
+    class _Resp:
+        status_code = 200
+        def raise_for_status(self):
+            pass
+        def json(self):
+            return {"keywordList": [{
+                "relKeyword": "한라봉", "monthlyPcQcCnt": 12000, "monthlyMobileQcCnt": 30000,
+                "monthlyAvePcClkCnt": 10, "monthlyAveMobileClkCnt": 20, "plAvgDepth": 15, "compIdx": "높음",
+            }]}
+    _keys = (nc.SEARCHAD_API_KEY, nc.SEARCHAD_SECRET_KEY, nc.SEARCHAD_CUSTOMER_ID)
+    _get = nc.requests.get
+    nc.SEARCHAD_API_KEY, nc.SEARCHAD_SECRET_KEY, nc.SEARCHAD_CUSTOMER_ID = "k", "s", "c"
+    nc.requests.get = lambda *a, **k: _Resp()
+    try:
+        out = nc.get_keyword_volume(["한라봉"])
+    finally:
+        nc.SEARCHAD_API_KEY, nc.SEARCHAD_SECRET_KEY, nc.SEARCHAD_CUSTOMER_ID = _keys
+        nc.requests.get = _get
+    assert out and isinstance(out, list), f"빈 결과: {out!r}"
+    r0 = out[0]
+    for f in ("monthlyPcQcCnt", "monthlyMobileQcCnt", "compIdx"):
+        assert f in r0, f"계약 필드 누락: {f} — 제안서 '월 검색량' 깨짐. keys={list(r0.keys())}"
+    assert r0["monthlyPcQcCnt"] == 12000 and r0["monthlyMobileQcCnt"] == 30000, \
+        f"검색량 파싱 오류: {r0!r}"
+
+
 if __name__ == "__main__":
     _tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     _failed = 0
