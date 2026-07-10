@@ -1731,10 +1731,31 @@ def compute_advertiser_report(keyword: str, product_url: str):
         # 2~3) 키워드로 1회만 검색 → 순위 계산 + 1페이지(상위 80) 분석에 공용 사용
         #      (기존엔 find_product_rank 내부 검색 + 쇼핑 API 재검색으로 같은 키워드를 두 번 호출)
         #      매칭 로직은 그대로(cached_products로 결과만 재사용). retry_on_429=True로 429 빈결과 방지.
+        # [A] 수집 깊이 1000→500 (10페이지→5페이지): 분석당 쇼핑 API 콜 10→5. 상위 500이면 순위·경쟁분석 충분.
+        # [B] 교차요청 공유 캐시(3시간): 같은 키워드를 여러 직원/워커가 분석하면 1번만 크롤해 공유 → 한도 절약.
+        #     캐시 조회/저장 실패는 전부 방어적으로 무시하고 직접 크롤로 폴백 → 분석은 절대 멈추지 않음.
         from naver_crawler import search_products as _sp_crawler
-        all_products = _sp_crawler(req.keyword, max_results=1000, retry_on_429=True)
+        _SP_MAX = 500
+        all_products = None
+        _cache_ok = False
+        try:
+            from database import get_cached_shopping_search, save_cached_shopping_search
+            _cache_ok = True
+            all_products = get_cached_shopping_search(req.keyword, _SP_MAX)
+            if all_products is not None:
+                logger.info(f"[크롤캐시] 히트 '{req.keyword}' ({len(all_products)}개) — 네이버 재호출 없음")
+        except Exception as _ce:
+            logger.warning(f"[크롤캐시] 우회(직접 크롤): {_ce}")
+            all_products = None
+        if all_products is None:
+            all_products = _sp_crawler(req.keyword, max_results=_SP_MAX, retry_on_429=True)
+            if _cache_ok:
+                try:
+                    save_cached_shopping_search(req.keyword, _SP_MAX, all_products)
+                except Exception as _ce:
+                    logger.warning(f"[크롤캐시] 저장 우회: {_ce}")
         rank, page, top_competitors = find_product_rank(
-            keyword=req.keyword, product_url=req.product_url, max_pages=10,
+            keyword=req.keyword, product_url=req.product_url, max_pages=5,
             product_name=product_info.get("product_name", ""),
             cached_products=all_products,
         )
