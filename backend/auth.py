@@ -90,7 +90,9 @@ ACCESS_TOKEN_EXPIRE_HOURS = 24
 # 전산(ERP) SSO — 로직분석이 전산 '내 정보' API로 토큰을 검증(별도 공유시크릿 불필요).
 #   전산 로그인 토큰(localStorage 'token')을 그대로 받아 전산 my-profile 에 질의 → 사용자 식별.
 SSO_SHARED_SECRET = os.getenv("SSO_SHARED_SECRET", "")  # (구 방식 호환용, 현재 미사용)
-ERP_BASE_URL = os.getenv("ERP_BASE_URL", "http://metainc01.cafe24.com")
+# 2026-07-09 전산 BE 서버 이전(Cafe24 → 전용서버 api.metainc.co.kr). 옛 metainc01.cafe24.com 은 중지됨.
+#   env ERP_BASE_URL 로 언제든 오버라이드 가능(서버 .env). SSO 핸들러가 http/https 둘 다 시도.
+ERP_BASE_URL = os.getenv("ERP_BASE_URL", "http://api.metainc.co.kr")
 ERP_MY_PROFILE_PATH = os.getenv("ERP_MY_PROFILE_PATH", "/api/employee-management/my-profile")
 
 # Password hashing configuration
