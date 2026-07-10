@@ -528,12 +528,39 @@ def _save_client_rank(conn, client_id, keyword, product_url, rank, page, check_t
 
 # ==================== 00:30 DB 자동 백업 ====================
 
+BACKUP_KEEP = 5  # 보관 개수 (gzip 이라 개당 ~1GB → 약 5GB, 5일치)
+
+
+def _prune_old_backups(backup_dir, keep=BACKUP_KEEP):
+    """오래된 백업 정리 — 압축(.db.gz)·비압축(.db) 모두 대상, 최신 keep개만 보관.
+    파일명이 logic_analysis_backup_YYYYMMDD_HHMMSS 라 이름 정렬 = 시간 정렬."""
+    import os
+    try:
+        backups = sorted([
+            f for f in os.listdir(backup_dir)
+            if f.startswith("logic_analysis_backup_") and (f.endswith(".db") or f.endswith(".db.gz"))
+        ])
+        while len(backups) > keep:
+            old = backups.pop(0)
+            try:
+                os.remove(os.path.join(backup_dir, old))
+                logger.info(f"  🗑️ [DB백업] 오래된 백업 삭제: {old}")
+            except Exception as e:
+                logger.warning(f"[DB백업] 삭제 실패({old}): {e}")
+    except Exception as e:
+        logger.warning(f"[DB백업] 정리 실패: {e}")
+
+
 def _run_daily_db_backup():
-    """매일 자정 30분에 DB 백업 수행.
-    업체(광고주) 데이터 보호를 위해 SQLite online backup API 사용."""
+    """매일 자정 30분에 DB 백업 수행 (gzip 압축 · 최신 5개 보관 · 디스크 가드).
+    업체(광고주) 데이터 보호를 위해 SQLite online backup API 사용.
+    ⚠️ 복원 시: gunzip logic_analysis_backup_YYYYMMDD_HHMMSS.db.gz 로 풀어서 사용.
+    (2026-07-10 개정) DB가 수 GB로 성장하며 비압축 14개 보관이 공유서버 디스크를
+    가득 채워 타 배치(순위추적)의 DB 쓰기까지 막는 사고가 있어, 압축+개수축소+가드 적용."""
     import sqlite3
     import shutil
     import os
+    import gzip
 
     DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
 
@@ -549,8 +576,23 @@ def _run_daily_db_backup():
     backup_dir = os.path.join(os.path.dirname(os.path.abspath(DB_PATH)), "backups")
     os.makedirs(backup_dir, exist_ok=True)
 
+    # ── 디스크 가드 ── 백업이 디스크를 꽉 채워 앱(순위추적 등)의 DB 쓰기를 막는 사고 방지.
+    #   압축 전 임시 .db(≈DB 크기) 저장 + 여유 2GB 가 확보 안 되면 이번 백업은 건너뛴다.
+    try:
+        free = shutil.disk_usage(backup_dir).free
+        if free < db_size + 2 * 1024 ** 3:
+            logger.warning(
+                f"[DB백업] 디스크 여유 부족(free={free:,} < db={db_size:,}+2GB) — "
+                f"이번 백업 건너뜀(앱 쓰기 보호). 오래된 백업만 정리."
+            )
+            _prune_old_backups(backup_dir)
+            return
+    except Exception:
+        pass
+
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_path = os.path.join(backup_dir, f"logic_analysis_backup_{ts}.db")
+    raw_path = os.path.join(backup_dir, f"logic_analysis_backup_{ts}.db")
+    gz_path = raw_path + ".gz"
 
     try:
         # 업체 수 확인 (빈 DB 백업 방지)
@@ -563,36 +605,45 @@ def _run_daily_db_backup():
             logger.info("[DB백업] 업체 데이터 없음, 백업 건너뜀")
             return
 
-        # SQLite online backup (WAL 안전)
+        # SQLite online backup (WAL 안전) → 임시 .db
         src = sqlite3.connect(DB_PATH)
-        dst = sqlite3.connect(backup_path)
+        dst = sqlite3.connect(raw_path)
         src.backup(dst)
         dst.close()
         src.close()
 
-        backup_size = os.path.getsize(backup_path)
-        logger.info(f"✅ [DB백업] 완료: {backup_path} ({backup_size:,} bytes, 업체 {client_count}건)")
-
     except Exception as e:
-        logger.error(f"❌ [DB백업] 실패: {e}")
-        # fallback: 파일 복사
+        logger.error(f"❌ [DB백업] online backup 실패, 파일 복사로 대체: {e}")
         try:
-            shutil.copy2(DB_PATH, backup_path)
-            logger.info(f"✅ [DB백업] 파일 복사로 완료: {backup_path}")
+            shutil.copy2(DB_PATH, raw_path)
         except Exception as e2:
             logger.error(f"❌ [DB백업] 파일 복사도 실패: {e2}")
+            if os.path.exists(raw_path):
+                try:
+                    os.remove(raw_path)
+                except Exception:
+                    pass
             return
 
-    # 오래된 백업 정리 (최대 14개 보관 = 약 2주)
+    # gzip 압축 → 원본 .db 제거 (수 GB → ~1GB, 디스크 절약)
+    final_path = raw_path
     try:
-        backups = sorted([
-            f for f in os.listdir(backup_dir)
-            if f.startswith("logic_analysis_backup_") and f.endswith(".db")
-        ])
-        while len(backups) > 14:
-            old = backups.pop(0)
-            old_path = os.path.join(backup_dir, old)
-            os.remove(old_path)
-            logger.info(f"  🗑️ [DB백업] 오래된 백업 삭제: {old}")
+        with open(raw_path, "rb") as f_in, gzip.open(gz_path, "wb", compresslevel=6) as f_out:
+            shutil.copyfileobj(f_in, f_out, length=4 * 1024 * 1024)
+        os.remove(raw_path)
+        final_path = gz_path
     except Exception as e:
-        logger.warning(f"[DB백업] 정리 실패: {e}")
+        logger.error(f"[DB백업] 압축 실패 — 비압축본 유지: {e}")
+        if os.path.exists(gz_path):
+            try:
+                os.remove(gz_path)
+            except Exception:
+                pass
+
+    try:
+        logger.info(f"✅ [DB백업] 완료: {final_path} ({os.path.getsize(final_path):,} bytes, 업체 {client_count}건)")
+    except Exception:
+        pass
+
+    # 오래된 백업 정리 (최신 BACKUP_KEEP개 보관; 압축·비압축 모두 대상)
+    _prune_old_backups(backup_dir)
