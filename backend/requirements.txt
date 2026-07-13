@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+gunicorn
+sqlalchemy
+pydantic
+python-jose[cryptography]
+passlib
+python-multipart
+cryptography
+bcrypt
+requests
+openpyxl

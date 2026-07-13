@@ -1,0 +1,85 @@
+:root{
+  --bg:#f4f6fa;--panel:#ffffff;--panel2:#f1f3f8;--line:#e4e7ee;--line2:#d6dae3;
+  --text:#1c2230;--sub:#5f6878;--muted:#9aa3b2;
+  --green:#16a34a;--greenbg:rgba(22,163,74,.10);--amber:#d97706;--amberbg:rgba(217,119,6,.12);
+  --blue:#2f6fe0;--bluebg:rgba(47,111,224,.10);--red:#dc2626;--redbg:rgba(220,38,38,.08);--naver:#03c75a;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,'Apple SD Gothic Neo','Malgun Gothic',sans-serif;background:var(--bg);color:var(--text);font-size:14px;line-height:1.5}
+button{font-family:inherit}
+a{cursor:pointer}
+
+/* 로그인 */
+.login-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;background:radial-gradient(1000px 500px at 70% -10%,rgba(47,111,224,.10),transparent),var(--bg)}
+.login-box{width:380px;padding:20px}
+.login-box .brand{text-align:center;margin-bottom:24px}
+.login-box .logo{font-size:24px;font-weight:800;letter-spacing:-.5px}
+.login-box .logo span{color:var(--naver)}
+.login-box .tag{font-size:13px;color:var(--sub);margin-top:8px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:26px;box-shadow:0 12px 40px rgba(20,30,60,.10)}
+.card h1{font-size:17px;font-weight:800;margin-bottom:4px}
+.card .desc{font-size:12.5px;color:var(--sub);margin-bottom:20px}
+.fg{margin-bottom:14px}
+.fg label{display:block;font-size:12.5px;color:var(--sub);margin-bottom:7px;font-weight:600}
+.fg input,.fg select,.fg textarea{width:100%;background:var(--panel2);border:1px solid var(--line2);border-radius:9px;padding:10px 12px;color:var(--text);font-size:13px;outline:none;font-family:inherit}
+.fg input:focus,.fg select:focus{border-color:var(--blue)}
+.fg .hint{font-size:11px;color:var(--muted);margin-top:5px}
+.btn-primary{width:100%;background:var(--blue);color:#fff;border:none;border-radius:11px;padding:13px;font-size:14.5px;font-weight:700;cursor:pointer}
+.err{color:var(--red);font-size:12.5px;margin-top:10px;min-height:16px}
+.demo-accounts{font-size:11px;color:var(--muted);background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:10px 12px;margin-top:16px;line-height:1.7}
+.demo-accounts b{color:var(--text)}
+.demo-accounts code{background:#fff;border:1px solid var(--line);padding:1px 5px;border-radius:4px;cursor:pointer}
+
+/* 앱 레이아웃 */
+.shell{display:flex;min-height:100vh}
+.nav{width:210px;background:#fff;border-right:1px solid var(--line);padding:16px 0;flex-shrink:0;position:sticky;top:0;height:100vh}
+.nav .logo{padding:0 20px 16px;font-weight:800;font-size:15px}
+.nav .logo span{color:var(--naver)}
+.nav .group{padding:6px 20px;color:var(--muted);font-size:11px;margin-top:8px}
+.nav a{display:block;padding:9px 20px;color:var(--sub);text-decoration:none;font-size:13px}
+.nav a:hover{background:#eef1f6;color:var(--text)}
+.nav a.active{background:var(--bluebg);color:var(--text);border-left:3px solid var(--blue);padding-left:17px;font-weight:600}
+.nav .me{margin:auto 16px 8px;padding:10px;background:var(--panel2);border-radius:10px;font-size:12px}
+.nav .me .n{font-weight:700}
+.nav .me .r{color:var(--sub);font-size:11px}
+.main{flex:1;padding:24px 30px;max-width:980px}
+
+.page-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}
+.page-head h1{font-size:20px;font-weight:800;letter-spacing:-.4px}
+.page-head .sub{color:var(--sub);font-size:13px;margin-top:3px}
+.btn{border:none;border-radius:10px;padding:10px 16px;font-size:13px;font-weight:700;cursor:pointer}
+.btn.blue{background:var(--blue);color:#fff}
+.btn.green{background:var(--green);color:#fff}
+.btn.ghost{background:#fff;border:1px solid var(--line2);color:var(--sub)}
+.btn.danger{background:#fff;border:1px solid var(--red);color:var(--red)}
+
+/* 광고주 카드 */
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
+.acard{background:#fff;border:1px solid var(--line);border-radius:14px;padding:16px;cursor:pointer;transition:.15s}
+.acard:hover{border-color:var(--blue);box-shadow:0 4px 16px rgba(20,30,60,.06)}
+.acard .top{display:flex;align-items:center;gap:11px;margin-bottom:12px}
+.acard .av{width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-weight:800;color:#fff;background:var(--naver);flex-shrink:0}
+.acard .nm{font-size:15px;font-weight:800}
+.acard .cat{font-size:11.5px;color:var(--sub)}
+.acard .st{margin-left:auto;font-size:10px;font-weight:700;padding:3px 8px;border-radius:20px}
+.st.active{background:var(--greenbg);color:var(--green)}
+.st.paused{background:#eceff4;color:#8a93a3}
+.st.ended{background:#eceff4;color:#8a93a3}
+.acard .meta{font-size:12px;color:var(--sub);border-top:1px solid var(--line);padding-top:10px;display:flex;justify-content:space-between}
+.acard .meta b{color:var(--text)}
+.empty{background:#fff;border:1px dashed var(--line2);border-radius:14px;padding:40px;text-align:center;color:var(--sub)}
+
+/* 폼 */
+.two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+fieldset{border:1px solid var(--line);border-radius:14px;padding:18px 20px;margin-bottom:16px;background:#fff}
+legend{font-size:13px;font-weight:800;padding:0 8px}
+.channel{border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px;background:var(--panel2)}
+.chan-head{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+.chan-head .logo{width:26px;height:26px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:12px;color:#fff;flex-shrink:0}
+.chan-head .name{font-weight:800;font-size:13.5px}
+.chan-head .status{margin-left:auto;font-size:11px;font-weight:700;padding:3px 9px;border-radius:20px}
+.status.connected{background:var(--greenbg);color:var(--green)}
+.status.disconnected{background:#eceff4;color:#8a93a3}
+.save-bar{display:flex;gap:10px;justify-content:flex-end;margin-top:8px}
+.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--text);color:#fff;padding:11px 20px;border-radius:10px;font-size:13px;font-weight:600;opacity:0;transition:.25s;pointer-events:none}
+.toast.show{opacity:1}

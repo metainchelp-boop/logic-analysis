@@ -1,0 +1,13 @@
+backend/.venv/
+backend/app.db
+backend/secret.key
+data/
+.env
+__pycache__/
+*.pyc
+.DS_Store
+
+# 배포 자동화 보류(2026-07-10 대표 결정). 되살릴 때:
+#  1) gh auth refresh -s workflow  (토큰에 workflow 권한 추가)
+#  2) GitHub Secrets에 VPS 접속정보 등록  3) 아래 줄 삭제 후 커밋
+.github/workflows/deploy.yml

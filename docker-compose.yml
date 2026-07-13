@@ -1,0 +1,35 @@
+services:
+  ad-api:
+    build: .
+    container_name: ad-api
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5051:5051"   # nginx 역프록시 통해서만 외부 노출 (logic-analysis와 동일)
+    volumes:
+      - ./data:/app/data        # DB·암호화키 영구 보관
+    environment:
+      - TZ=Asia/Seoul
+      - DB_PATH=/app/data/app.db
+      - FERNET_KEY_FILE=/app/data/secret.key
+      - JWT_SECRET=${JWT_SECRET:-please-set-a-strong-secret}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-sonnet-4-6}
+      # 메타체험단 연동 API(읽기전용) — 토큰은 mc_cal/mc_ad 공용
+      - MC_AD_API_URL=${MC_AD_API_URL:-https://meta-chehumdan.com/mc_ad_api.php}
+      - MC_AD_API_TOKEN=${MC_AD_API_TOKEN:-}
+      # 유튜브 Data API v3 — 회사 공용 키(영상 조회수·좋아요·댓글)
+      - YOUTUBE_API_KEY=${YOUTUBE_API_KEY:-}
+      # 쿠팡애즈/네이버GFA — 권한·파트너 승인 후 엔드포인트 경로 주입(선택)
+      - COUPANG_ADS_PATH=${COUPANG_ADS_PATH:-}
+      - GFA_API_BASE=${GFA_API_BASE:-}
+      # 전산 ERP 계약 동기화 — 값은 VPS .env에서 주입(키는 git 미포함)
+      - ERP_SYNC_URL=${ERP_SYNC_URL:-}
+      - ERP_SYNC_API_KEY=${ERP_SYNC_API_KEY:-}
+      - ERP_SYNC_STATUS=${ERP_SYNC_STATUS:-}
+      - ERP_SYNC_AUTOCREATE=${ERP_SYNC_AUTOCREATE:-}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:5051/api/health').status==200 else 1)"]
+      interval: 60s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
