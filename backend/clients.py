@@ -232,6 +232,14 @@ def init_clients_db():
                 cursor.execute("ALTER TABLE clients ADD COLUMN auto_analysis INTEGER DEFAULT 1")
                 logger.info("[clients] auto_analysis column added via migration")
 
+            # 마이그레이션(#3, 2026-07 계약단계 연동): 직원이 수동으로 토글한 업체 표시.
+            # 1이면 전산 계약단계 자동 동기화(07:30)가 덮어쓰지 않음(수동 우선).
+            try:
+                cursor.execute("SELECT auto_analysis_manual FROM clients LIMIT 1")
+            except Exception:
+                cursor.execute("ALTER TABLE clients ADD COLUMN auto_analysis_manual INTEGER DEFAULT 0")
+                logger.info("[clients] auto_analysis_manual column added via migration")
+
             logger.info("Clients database initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize clients database: {str(e)}")
@@ -408,6 +416,8 @@ def update_client(
             if data.auto_analysis is not None:
                 updates.append("auto_analysis = ?")
                 params.append(int(data.auto_analysis))
+                # 직원 수동 토글 표시 — 계약단계 자동 동기화가 이 업체를 덮어쓰지 않게(수동 우선)
+                updates.append("auto_analysis_manual = 1")
 
             # Always update updated_at
             updates.append("updated_at = datetime('now','localtime')")

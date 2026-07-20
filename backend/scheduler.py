@@ -48,6 +48,16 @@ def start_scheduler():
         job_defaults={"misfire_grace_time": 3600, "coalesce": True, "max_instances": 1},
     )
 
+    # 0) 계약단계 동기화 — 매일 07:30 (전산 ad-sync 소비 합의 2026-07-20, 08시 배치 전에 실행)
+    _scheduler.add_job(
+        _run_contract_stage_sync,
+        trigger=CronTrigger(hour=7, minute=30),
+        id="contract_stage_sync",
+        name="계약단계 동기화 (07:30)",
+        replace_existing=True,
+        max_instances=1,
+    )
+
     # 1) 순위 추적 — 매일 08:00 (홈탭 + 업체, 키워드당 1회 API, 결과 캐시)
     _scheduler.add_job(
         _run_rank_tracking,
@@ -116,6 +126,123 @@ def reschedule_report(hour: int, minute: int):
         logger.info(f"📅 리포트 발송 시간 변경: {hour:02d}:{minute:02d}")
     except Exception as e:
         logger.error(f"리포트 스케줄 변경 실패: {e}")
+
+
+# ==================== 07:30 계약단계 동기화 (전산 ad-sync 소비) ====================
+#   합의(2026-07-20): ① 메타 전산의 GET /api/ad-sync/contracts 를 ②(로직분석)도 소비.
+#   계약이 끝난 단계(계약 만료·환불중·홀딩중) 업체는 자동 추적을 자동 중지(⏸),
+#   운영 단계(진행중·전략 관리·사후 관리)로 복귀하면 자동 재개(▶).
+#   - 읽기 전용 · 하루 1회(07:30 — ③ 광고센터 06:00과 시간 분리) · 단계당 1콜(총 6콜).
+#   - 직원 수동 토글(auto_analysis_manual=1) 업체는 절대 덮어쓰지 않음(수동 우선).
+#   - ERP_AD_SYNC_API_KEY 미설정·API 실패 시 아무것도 바꾸지 않음(안전 기본값).
+
+PAUSE_STAGES = ["계약 만료", "환불중", "홀딩중"]          # 자동 중지 대상
+RESUME_STAGES = ["진행중", "전략 관리", "사후 관리"]      # 자동 재개 대상(운영 지속 단계)
+
+
+def _sync_norm(s):
+    """업체명 정규화(공백 제거·소문자) — 전산 상호명 ↔ 로직분석 업체명 매칭용"""
+    import re as _re
+    return _re.sub(r"\s+", "", str(s or "")).lower()
+
+
+def _sync_store_slug(url):
+    """스마트스토어 URL → 스토어 슬러그 (이름보다 안정적인 매칭 키)"""
+    import re as _re
+    m = _re.search(r"smartstore\.naver\.com/([^/?#]+)", str(url or ""))
+    return m.group(1).lower() if m else ""
+
+
+def _decide_stage_actions(client_rows, stage_by_name, stage_by_slug):
+    """순수 판정 로직(단위테스트 대상): 업체 행들과 전산 단계 맵 → (pause_ids, resume_ids).
+    수동 토글 업체 제외, 매칭 안 되면 아무것도 안 함."""
+    pause_ids, resume_ids = [], []
+    for c in client_rows:
+        if int(c["auto_analysis_manual"] or 0) == 1:
+            continue  # 수동 우선
+        stage = None
+        slug = _sync_store_slug(c["naver_store_url"])
+        if slug and slug in stage_by_slug:
+            stage = stage_by_slug[slug]
+        else:
+            for nm in (c["name"], c["business_name"]):
+                key = _sync_norm(nm)
+                if key and key in stage_by_name:
+                    stage = stage_by_name[key]
+                    break
+        if stage is None:
+            continue  # 매칭 실패 — 변경 없음(수동 토글로 커버)
+        cur = int(c["auto_analysis"] if c["auto_analysis"] is not None else 1)
+        if stage in PAUSE_STAGES and cur != 0:
+            pause_ids.append(c["id"])
+        elif stage in RESUME_STAGES and cur == 0:
+            resume_ids.append(c["id"])
+    return pause_ids, resume_ids
+
+
+def _run_contract_stage_sync():
+    """07:30 — 전산 계약 단계 기반 자동 추적 중지/재개"""
+    import os
+    import sqlite3
+    import requests
+
+    api_key = os.getenv("ERP_AD_SYNC_API_KEY", "")
+    if not api_key:
+        logger.info("계약단계 동기화: ERP_AD_SYNC_API_KEY 미설정 — 건너뜀 (합의 후 서버 .env에 설정)")
+        return
+    base = os.getenv("ERP_BASE_URL", "http://api.metainc.co.kr").rstrip("/")
+    DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
+
+    logger.info("🔄 계약단계 동기화 시작 (전산 ad-sync)")
+    stage_by_name, stage_by_slug = {}, {}
+    fetched_stages = 0
+    for stage in PAUSE_STAGES + RESUME_STAGES:
+        try:
+            resp = requests.get(
+                f"{base}/api/ad-sync/contracts",
+                params={"stage": stage, "has_contract": "true"},
+                headers={"X-Api-Key": api_key}, timeout=15,
+            )
+            if resp.status_code != 200:
+                logger.warning(f"  계약단계 조회 {resp.status_code} (stage={stage}) — 이 단계 건너뜀")
+                continue
+            items = ((resp.json() or {}).get("result") or {}).get("items") or []
+            fetched_stages += 1
+            for it in items:
+                nm = _sync_norm(it.get("company_name"))
+                if nm:
+                    stage_by_name[nm] = stage
+                slug = _sync_store_slug(it.get("store_url"))
+                if slug:
+                    stage_by_slug[slug] = stage
+        except Exception as e:
+            logger.warning(f"  계약단계 조회 실패(stage={stage}): {e} — 이 단계 건너뜀")
+
+    if fetched_stages == 0:
+        logger.warning("계약단계 동기화: 조회 전부 실패 — 아무것도 변경하지 않음(안전 기본값)")
+        return
+
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=10)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT id, name, business_name, naver_store_url, auto_analysis, "
+            "COALESCE(auto_analysis_manual, 0) AS auto_analysis_manual "
+            "FROM clients WHERE status = 'active'"
+        ).fetchall()
+        pause_ids, resume_ids = _decide_stage_actions(rows, stage_by_name, stage_by_slug)
+        for cid in pause_ids:
+            conn.execute("UPDATE clients SET auto_analysis = 0 WHERE id = ?", (cid,))
+        for cid in resume_ids:
+            conn.execute("UPDATE clients SET auto_analysis = 1 WHERE id = ?", (cid,))
+        conn.commit()
+        conn.close()
+        logger.info(
+            f"✅ 계약단계 동기화 완료: 자동 중지 {len(pause_ids)}건 · 자동 재개 {len(resume_ids)}건 "
+            f"(전산 매칭 {len(stage_by_name)}개 업체, 수동 설정 업체는 유지)"
+        )
+    except Exception as e:
+        logger.error(f"❌ 계약단계 동기화 DB 반영 실패: {e}")
 
 
 # ==================== 08:00 순위 추적 ====================
