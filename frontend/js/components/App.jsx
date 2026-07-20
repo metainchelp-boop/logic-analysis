@@ -35,6 +35,7 @@ window.App = function App() {
     const [companyName, setCompanyName] = useState('');
     const [datalabData, setDatalabData] = useState(null);
     const [datalabLoading, setDatalabLoading] = useState(false);
+    const [auditStatus, setAuditStatus] = useState(null);   // 🔍 데이터 검수 상태
     const [rankCheckResult, setRankCheckResult] = useState(null); // 순위 추적 → 진입 전략 공유용
     const searchIdRef = React.useRef(0); // 비동기 요청 경합 방지용
     const lastHtmlRef = React.useRef(''); // #1: 마지막 분석에 쓰인 상세 HTML (업체 저장/재사용용)
@@ -240,6 +241,7 @@ window.App = function App() {
         setCompanyName: setCompanyName,
         setDatalabData: setDatalabData,
         setDatalabLoading: setDatalabLoading,
+        setAuditStatus: setAuditStatus,
         setHtmlDetailResult: setHtmlDetailResult,
         setHtmlReviewData: setHtmlReviewData,
         setRankCheckResult: setRankCheckResult,
@@ -550,6 +552,7 @@ window.App = function App() {
                 currentUser: currentUser,
                 datalabData: datalabData,
                 datalabLoading: datalabLoading,
+                auditStatus: auditStatus,
                 handleNavigateToClient: handleNavigateToClient,
                 htmlDetailResult: htmlDetailResult,
                 htmlReviewData: htmlReviewData,

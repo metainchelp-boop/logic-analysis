@@ -241,21 +241,21 @@ def _datalab_post(endpoint: str, body: dict) -> dict:
     제안서 enrich는 짧은 시간에 성별·연령·트렌드 등 여러 호출을 몰아치므로
     초당 제한에 걸려 빈값이 오던 문제 방지(다수 직원 동시 사용 대비)."""
     url = f"{DATALAB_BASE}/{endpoint}"
-    for attempt in range(3):
+    for attempt in range(4):
         try:
             resp = requests.post(url, json=body, headers=_datalab_headers(), timeout=10)
             if resp.status_code == 200:
                 return resp.json()
-            if resp.status_code == 429 and attempt < 2:
-                wait = 0.6 * (attempt + 1)
-                logger.warning(f"Datalab {endpoint} 429 — {wait}s 후 재시도 ({attempt + 1}/3)")
+            if resp.status_code == 429 and attempt < 3:
+                wait = 0.8 * (attempt + 1)   # 0.8→1.6→2.4s — 초당 제한 버스트를 넘길 수 있게 강화
+                logger.warning(f"Datalab {endpoint} 429 — {wait}s 후 재시도 ({attempt + 1}/4)")
                 time.sleep(wait)
                 continue
             logger.warning(f"Datalab API {endpoint} 응답 코드: {resp.status_code} — {resp.text[:200]}")
             return {}
         except Exception as e:
             logger.error(f"Datalab API {endpoint} 오류: {e}")
-            if attempt < 2:
+            if attempt < 3:
                 time.sleep(0.5)
                 continue
             return {}
@@ -293,14 +293,11 @@ def get_gender_ratio(keyword: str, category_code: str) -> dict:
     male = gender_data.get("m", 0)
     female = gender_data.get("f", 0)
     total = male + female
-    if total > 0:
-        male_pct = round(male / total * 100, 1)
-        female_pct = round(female / total * 100, 1)
-    else:
-        male_pct = 50
-        female_pct = 50
-
-    return {"male": male_pct, "female": female_pct}
+    if total <= 0:
+        # 응답은 왔지만 실데이터 없음(레이트리밋 등) — 50/50을 지어내지 않는다.
+        # 빈값 반환 → 지표 캐시에 저장 안 됨 → 검수 재조회가 실데이터로 채움.
+        return {}
+    return {"male": round(male / total * 100, 1), "female": round(female / total * 100, 1)}
 
 
 # ==================== 연령대별 검색 비율 ====================
@@ -330,6 +327,10 @@ def get_age_ratio(keyword: str, category_code: str) -> dict:
             if group:
                 age_data[group] = round(ratio, 1)  # 마지막(최신) 데이터 포인트가 덮어씀
     logger.info(f"연령대 원본 데이터: {age_data}")
+
+    # 응답은 왔지만 전 연령 0 = 실데이터 없음 — 0% 배열을 지어내지 않는다(검수 재조회 대상)
+    if not age_data or sum(age_data.values()) <= 0:
+        return {}
 
     # 그룹명 매핑 (API는 10, 20, 30, 40, 50, 60 반환)
     total = sum(age_data.values()) or 1
@@ -511,6 +512,10 @@ def get_weekday_pattern(keyword: str, category_code: str) -> dict:
     if not days:
         return {}
 
+    # 전 요일 지수 0 = 실데이터 없음 — '최고 월요일(0)' 같은 허구 표시를 만들지 않는다
+    if all(d["index"] <= 0 for d in days):
+        return {}
+
     # 100 기준으로 정규화
     max_val = max(d["index"] for d in days) if days else 1
     for d in days:
@@ -688,26 +693,41 @@ def get_category_popular_keywords(keyword: str, category_code: str, related_keyw
 # ==================== 통합 분석 함수 ====================
 def analyze_datalab(keyword: str, category1: str = "", related_keywords: list = None,
                     category2: str = "", category3: str = "") -> dict:
-    """모든 데이터랩 분석을 한 번에 실행 (1시간 TTL 메모리 캐시 적용)"""
+    """모든 데이터랩 분석을 한 번에 실행 (지표별 1시간 TTL 캐시).
+
+    ★ 지표별 개별 캐시(2026-07 검수 시스템): 성공한 지표는 보존하고 실패(빈값) 지표만
+      다음 호출에서 재조회한다 → 검수 재조회 시 성공분은 API를 다시 쓰지 않아
+      쿼터 낭비 없이 실데이터를 채울 수 있다. (기존 '전체 캐시'는 성별·연령이 빠지면
+      성공한 트렌드까지 통째로 버려 재실행마다 쿼터를 태우는 악순환이 있었음.)"""
     if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
         logger.warning("데이터랩: 네이버 API 키 미설정")
         return {}
 
-    # 캐시 확인 (중/소분류까지 키에 반영)
-    c_key = _cache_key(keyword, "|".join([category1 or "", category2 or "", category3 or ""]), related_keywords)
-    cached = _cache_get(c_key)
-    if cached:
-        logger.info(f"데이터랩 캐시 히트: keyword={keyword}")
-        return cached
-
     cat_code = _find_category_code(category1)
-    logger.info(f"데이터랩 분석 시작 (API 호출): keyword={keyword}, category={category1}→{cat_code}")
+    kbase = f"{keyword}|{cat_code}"
+    logger.info(f"데이터랩 분석 시작: keyword={keyword}, category={category1}→{cat_code}")
+
+    _paced = [False]
+
+    def _cached(mkey, fetch):
+        """지표 캐시 우선, 미스면 호출. 연속 실호출 사이 간격(0.25s)으로 429 버스트 예방.
+        성공(truthy)만 캐시 — 실패는 다음 호출에서 자동 재조회."""
+        hit = _cache_get(mkey)
+        if hit is not None:
+            return hit
+        if _paced[0]:
+            time.sleep(0.25)
+        _paced[0] = True
+        val = fetch()
+        if val:
+            _cache_set(mkey, val)
+        return val
 
     result = {}
 
     # 1. 성별 비율
     try:
-        gender = get_gender_ratio(keyword, cat_code)
+        gender = _cached(kbase + "#gender", lambda: get_gender_ratio(keyword, cat_code))
         if gender:
             result["gender"] = gender
     except Exception as e:
@@ -715,7 +735,7 @@ def analyze_datalab(keyword: str, category1: str = "", related_keywords: list = 
 
     # 2. 연령대별 비율
     try:
-        age = get_age_ratio(keyword, cat_code)
+        age = _cached(kbase + "#age", lambda: get_age_ratio(keyword, cat_code))
         if age:
             result["age"] = age
     except Exception as e:
@@ -724,7 +744,7 @@ def analyze_datalab(keyword: str, category1: str = "", related_keywords: list = 
     # 3. 24개월 트렌드 (트렌드 차트 + 성장률 + 시즌 모두 커버, API 1건)
     trend_raw = None
     try:
-        trend_raw = get_trend_24m(keyword, cat_code)
+        trend_raw = _cached(kbase + "#trend", lambda: get_trend_24m(keyword, cat_code))
         if trend_raw:
             # 프론트에는 allMonths 제외 (내부 성장률 계산용)
             result["trend"] = {k: v for k, v in trend_raw.items() if k != "allMonths"}
@@ -742,7 +762,7 @@ def analyze_datalab(keyword: str, category1: str = "", related_keywords: list = 
 
     # 5. 요일별 검색 패턴
     try:
-        weekday = get_weekday_pattern(keyword, cat_code)
+        weekday = _cached(kbase + "#weekday", lambda: get_weekday_pattern(keyword, cat_code))
         if weekday:
             result["weekday"] = weekday
     except Exception as e:
@@ -757,25 +777,22 @@ def analyze_datalab(keyword: str, category1: str = "", related_keywords: list = 
         except Exception as e:
             logger.error(f"데이터랩 성장률 오류: {e}")
 
-    # 7. 카테고리 인기 키워드
+    # 7. 카테고리 인기 키워드 (키에 중/소분류·연관키워드 반영)
     if related_keywords:
         try:
-            sub_cid, sub_name = _resolve_subcategory_cid(category1, category2, category3)
-            cat_kw = get_category_popular_keywords(keyword, cat_code, related_keywords,
-                                                   sub_cid=sub_cid, sub_name=sub_name)
+            ck_key = _cache_key(keyword, "|".join([category1 or "", category2 or "", category3 or ""]),
+                                related_keywords) + "#catkw"
+
+            def _fetch_catkw():
+                sub_cid, sub_name = _resolve_subcategory_cid(category1, category2, category3)
+                return get_category_popular_keywords(keyword, cat_code, related_keywords,
+                                                     sub_cid=sub_cid, sub_name=sub_name)
+
+            cat_kw = _cached(ck_key, _fetch_catkw)
             if cat_kw:
                 result["categoryKeywords"] = cat_kw
         except Exception as e:
             logger.error(f"데이터랩 카테고리 키워드 오류: {e}")
 
     logger.info(f"데이터랩 분석 완료: {list(result.keys())}")
-
-    # 결과가 있으면 캐시에 저장
-    # 핵심 지표(성별·연령)가 다 있을 때만 캐싱 — 일부만 성공한 부분결과를 1시간 가두지 않도록
-    if result and result.get("gender") and result.get("age"):
-        _cache_set(c_key, result)
-        logger.info(f"데이터랩 캐시 저장: keyword={keyword} (캐시 크기: {len(_cache)})")
-    elif result:
-        logger.warning(f"데이터랩 부분결과(성별/연령 누락) — 캐싱 건너뜀: keyword={keyword}")
-
     return result
