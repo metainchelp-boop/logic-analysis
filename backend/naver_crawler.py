@@ -94,6 +94,66 @@ def extract_store_name_from_url(url: str) -> Optional[str]:
     return None
 
 
+# ==================== 검색 API 일일 사용량 계측 (호출 다이어트 2026-07) ====================
+#   일일 한도 25,000 소진(2026-07-20 실사고)을 '사전에' 감지하기 위한 자체 카운터.
+#   재시도 포함 실제 HTTP 요청 단위로 계수(쿼터 소모 기준과 동일). 50콜마다 파일 영속화.
+import threading as _threading
+_search_usage_lock = _threading.Lock()
+_search_usage = {"date": "", "count": 0}
+SEARCH_API_DAILY_LIMIT = 25000
+_SEARCH_USAGE_FILE = os.path.join(os.path.dirname(os.getenv("DB_PATH", "/app/data/logic_data.db")),
+                                  "search_api_usage.json")
+
+
+def _count_search_api_call():
+    from datetime import date as _date
+    today = _date.today().isoformat()
+    with _search_usage_lock:
+        if _search_usage["date"] != today:
+            _search_usage["date"] = today
+            _search_usage["count"] = 0
+            try:  # 재시작 대비: 오늘자 파일 값 복원
+                import json as _json
+                with open(_SEARCH_USAGE_FILE, "r", encoding="utf-8") as _f:
+                    _s = _json.load(_f)
+                if _s.get("date") == today:
+                    _search_usage["count"] = int(_s.get("count", 0))
+            except Exception:
+                pass
+        _search_usage["count"] += 1
+        c = _search_usage["count"]
+        if c % 50 == 0:
+            try:
+                import json as _json
+                with open(_SEARCH_USAGE_FILE, "w", encoding="utf-8") as _f:
+                    _json.dump(_search_usage, _f)
+            except Exception:
+                pass
+    _warn_at = int(SEARCH_API_DAILY_LIMIT * 0.9)
+    if c == _warn_at or (c > _warn_at and c % 500 == 0):
+        logger.warning(f"⚠️ 검색 API 일일 사용량 {c}/{SEARCH_API_DAILY_LIMIT} — 소진 임박(90%+)")
+    return c
+
+
+def get_search_api_usage_today() -> Dict:
+    """오늘 검색 API 사용량(자체 계측) — 관리자 대시보드용."""
+    from datetime import date as _date
+    today = _date.today().isoformat()
+    with _search_usage_lock:
+        cnt = _search_usage["count"] if _search_usage["date"] == today else 0
+    if cnt == 0:
+        try:
+            import json as _json
+            with open(_SEARCH_USAGE_FILE, "r", encoding="utf-8") as _f:
+                _s = _json.load(_f)
+            if _s.get("date") == today:
+                cnt = int(_s.get("count", 0))
+        except Exception:
+            pass
+    return {"date": today, "count": cnt, "limit": SEARCH_API_DAILY_LIMIT,
+            "pct": round(cnt / SEARCH_API_DAILY_LIMIT * 100, 1)}
+
+
 # ==================== 네이버 쇼핑 공식 API ====================
 
 def search_naver_shopping_api(keyword: str, display: int = 100, start: int = 1, sort: str = "sim", retry_on_429: bool = False) -> Dict:
@@ -126,6 +186,7 @@ def search_naver_shopping_api(keyword: str, display: int = 100, start: int = 1, 
     max_retries = 3 if retry_on_429 else 2
     for attempt in range(max_retries + 1):
         try:
+            _count_search_api_call()  # 일일 사용량 계측(재시도 포함 — 쿼터는 요청 단위로 소모됨)
             response = requests.get(url, params=params, headers=headers, timeout=10)
             # 429 Too Many Requests
             if response.status_code == 429:
@@ -504,7 +565,10 @@ def _get_product_info_impl(product_url: str, keyword: str = "") -> Dict:
     if keyword:
         try:
             total_checked = 0
-            for page_start in [1, 101, 201, 301, 401, 501, 601, 701, 801, 901]:
+            # 호출 다이어트(2026-07): 10페이지(1,000위) 사냥 → 3페이지(300위).
+            # 300위 밖 상품은 아래 스토어명 폴백이 정보를 잡아주므로 실사용 영향 미미,
+            # 검색 API 소모 상한은 호출당 11 → 4로 감소(일일 25,000 한도 보호).
+            for page_start in [1, 101, 201]:
                 api_result = search_naver_shopping_api(keyword, display=100, start=page_start, retry_on_429=True)
                 items = api_result.get("items", [])
                 if not items:

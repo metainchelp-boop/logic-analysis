@@ -138,7 +138,7 @@ def _collect_all_keywords(conn):
 
     # 업체 키워드
     clients = conn.execute(
-        "SELECT id, name, main_keywords, naver_store_url FROM clients WHERE status = 'active'"
+        "SELECT id, name, main_keywords, naver_store_url FROM clients WHERE status = 'active' AND COALESCE(auto_analysis, 1) = 1"  # 관리 중단 업체 제외(호출 다이어트)
     ).fetchall()
 
     client_keyword_map = {}  # {client_id: [keywords]}
@@ -292,6 +292,18 @@ def _run_rank_tracking():
                 time.sleep(5)
 
         conn.close()
+
+        # 호출 다이어트(2026-07): 08시 캐시를 디스크에도 저장 — 08~09시 사이 재배포/재시작으로
+        # 메모리 캐시가 날아가도 09시 분석이 쇼핑 API를 다시 태우지 않게(키워드×1콜 낭비 방지).
+        try:
+            import json as _json
+            _pf = os.path.join(os.path.dirname(DB_PATH), "rank_api_cache.json")
+            with open(_pf, "w", encoding="utf-8") as _f:
+                _json.dump({"date": today, "cache": _api_cache}, _f, ensure_ascii=False)
+            logger.info(f"  💾 08시 캐시 디스크 저장: {len(_api_cache)}개 키워드")
+        except Exception as _pe:
+            logger.warning(f"  08시 캐시 디스크 저장 실패(무시): {_pe}")
+
         logger.info(
             f"✅ 순위 추적 완료: API {total_api_calls}회 (400위 범위), "
             f"순위 {total_rank_saved}건 저장, 실패 {total_errors}건 "
@@ -321,6 +333,20 @@ def _run_daily_analysis():
 
     # 캐시 유효성 확인
     cache_valid = (_api_cache_date == today and len(_api_cache) > 0)
+    if not cache_valid:
+        # 호출 다이어트(2026-07): 메모리 캐시가 없으면(재배포·재시작) 디스크 복원 시도
+        try:
+            import json as _json
+            _pf = os.path.join(os.path.dirname(DB_PATH), "rank_api_cache.json")
+            with open(_pf, "r", encoding="utf-8") as _f:
+                _saved = _json.load(_f)
+            if isinstance(_saved, dict) and _saved.get("date") == today and _saved.get("cache"):
+                _api_cache = _saved["cache"]
+                _api_cache_date = today
+                cache_valid = True
+                logger.info(f"  💾 08시 캐시 디스크 복원: {len(_api_cache)}개 키워드")
+        except Exception:
+            pass
     if cache_valid:
         logger.info(f"  ✅ 08시 캐시 유효 — {len(_api_cache)}개 키워드 재사용 (쇼핑 API 호출 0회)")
     else:
@@ -338,7 +364,7 @@ def _run_daily_analysis():
 
         # 활성 업체 + 키워드 수집
         clients = conn.execute(
-            "SELECT id, name, main_keywords, naver_store_url FROM clients WHERE status = 'active'"
+            "SELECT id, name, main_keywords, naver_store_url FROM clients WHERE status = 'active' AND COALESCE(auto_analysis, 1) = 1"  # 관리 중단 업체 제외(호출 다이어트)
         ).fetchall()
 
         client_keyword_map = {}

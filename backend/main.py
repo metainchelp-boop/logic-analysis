@@ -412,7 +412,7 @@ class NotificationSettingsRequest(BaseModel):
 #   - read_cache=True : 캐시 우선(분석·스냅샷용, 3시간 staleness 허용)
 #   - read_cache=False: 항상 새로 크롤(실시간 조회용)하되 결과는 캐시에 채워 후속 분석과 공유
 # 캐시 조회/저장 실패는 전부 방어적으로 무시하고 직접 크롤로 폴백 → 기능은 절대 멈추지 않음.
-def _shared_crawl(keyword: str, max_results: int = 500, read_cache: bool = True) -> list:
+def _shared_crawl(keyword: str, max_results: int = 500, read_cache: bool = True, ttl: int = None) -> list:
     from naver_crawler import search_products as _sp
     products = None
     cache_ok = False
@@ -420,7 +420,7 @@ def _shared_crawl(keyword: str, max_results: int = 500, read_cache: bool = True)
         from database import get_cached_shopping_search, save_cached_shopping_search
         cache_ok = True
         if read_cache:
-            products = get_cached_shopping_search(keyword, max_results)
+            products = get_cached_shopping_search(keyword, max_results, ttl=ttl)
             if products is not None:
                 logger.info(f"[크롤캐시] 히트 '{keyword}' ({len(products)}개) — 네이버 재호출 없음")
     except Exception as _ce:
@@ -442,8 +442,9 @@ def check_rank(req: RankCheckRequest, current_user: dict = Depends(get_current_u
     """키워드 + 상품URL로 실시간 순위 조회 (인증 필수, viewer 제한은 handleSearch에서 관리)"""
     try:
         product_info = get_product_info(req.product_url, keyword=req.keyword)
-        # 실시간 조회 → 항상 새로 크롤(상위 500)하되 결과는 공유 캐시에 채워 후속 분석과 공유(과부하 방지).
-        _prods = _shared_crawl(req.keyword, 500, read_cache=False)
+        # 호출 다이어트(2026-07): '항상 신규 크롤(5콜)' → 10분 단기 캐시 허용.
+        # 네이버 쇼핑 순위는 분 단위로 변하지 않아 실시간성 손실 없이 검색 API 소모를 크게 줄임.
+        _prods = _shared_crawl(req.keyword, 500, ttl=600)
         rank, page, competitors = find_product_rank(
             keyword=req.keyword,
             product_url=req.product_url,
@@ -2431,6 +2432,12 @@ def get_api_usage(current_user: dict = Depends(get_current_user)):
     try:
         from database import get_api_usage_summary
         data = get_api_usage_summary(days=30)
+        try:
+            # 검색 API 자체 계측(호출 다이어트 2026-07) — 일일 25,000 한도 대비 현황
+            from naver_crawler import get_search_api_usage_today
+            data["searchApiToday"] = get_search_api_usage_today()
+        except Exception:
+            pass
         return {"success": True, "data": data}
     except Exception as e:
         logger.error(f"API 사용량 조회 실패: {e}")

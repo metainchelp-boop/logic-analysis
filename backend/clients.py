@@ -76,6 +76,8 @@ class ClientUpdate(BaseModel):
     main_keywords: Optional[str] = Field(None)
     notes: Optional[str] = Field(None)
     status: Optional[str] = Field(None, pattern="^(active|paused|terminated)$")
+    # 자동분석 여부(2026-07 호출 다이어트): 0=중지(계약만료·환불·홀딩 등 관리 중단), 1=수행
+    auto_analysis: Optional[int] = Field(None, ge=0, le=1)
 
     @validator("contact_email")
     def validate_email(cls, v):
@@ -221,6 +223,14 @@ def init_clients_db():
             except Exception:
                 cursor.execute("ALTER TABLE clients ADD COLUMN detail_html TEXT DEFAULT ''")
                 logger.info("[clients] detail_html column added via migration")
+
+            # 마이그레이션(#2, 2026-07 호출 다이어트): 관리 중단(계약만료·환불·홀딩) 업체의
+            # 일일 자동분석·순위추적 제외 플래그. 1=자동분석 함(기본), 0=중지.
+            try:
+                cursor.execute("SELECT auto_analysis FROM clients LIMIT 1")
+            except Exception:
+                cursor.execute("ALTER TABLE clients ADD COLUMN auto_analysis INTEGER DEFAULT 1")
+                logger.info("[clients] auto_analysis column added via migration")
 
             logger.info("Clients database initialized successfully")
     except Exception as e:
@@ -395,6 +405,9 @@ def update_client(
             if data.status is not None:
                 updates.append("status = ?")
                 params.append(data.status)
+            if data.auto_analysis is not None:
+                updates.append("auto_analysis = ?")
+                params.append(int(data.auto_analysis))
 
             # Always update updated_at
             updates.append("updated_at = datetime('now','localtime')")
