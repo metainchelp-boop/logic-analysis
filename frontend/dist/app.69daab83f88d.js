@@ -1107,11 +1107,12 @@ window.AiFeedbackAllSection = function AiFeedbackAllSection(props) {
 };
 
 ;/* ===== js/components/LoadingSpinner.jsx ===== */
+import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";
 /* LoadingSpinner — 로딩 인디케이터 */
 window.LoadingSpinner = function LoadingSpinner({
   text = '분석 중...'
 }) {
-  return /*#__PURE__*/React.createElement("div", {
+  return /*#__PURE__*/_jsxDEV("div", {
     style: {
       display: 'flex',
       alignItems: 'center',
@@ -1120,26 +1121,33 @@ window.LoadingSpinner = function LoadingSpinner({
       justifyContent: 'center',
       color: '#64748b',
       fontSize: 14
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "spinner"
-  }), text);
+    },
+    children: [/*#__PURE__*/_jsxDEV("span", {
+      className: "spinner"
+    }, void 0, false), text]
+  }, void 0, true);
 };
 
 ;/* ===== js/components/EmptyState.jsx ===== */
+import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";
 /* EmptyState — 빈 상태 표시 */
 window.EmptyState = function EmptyState({
   icon = '📊',
   text = '데이터가 없습니다'
 }) {
-  return /*#__PURE__*/React.createElement("div", {
-    className: "empty-state"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "empty-icon"
-  }, icon), /*#__PURE__*/React.createElement("p", null, text));
+  return /*#__PURE__*/_jsxDEV("div", {
+    className: "empty-state",
+    children: [/*#__PURE__*/_jsxDEV("div", {
+      className: "empty-icon",
+      children: icon
+    }, void 0, false), /*#__PURE__*/_jsxDEV("p", {
+      children: text
+    }, void 0, false)]
+  }, void 0, true);
 };
 
 ;/* ===== js/components/StatCard.jsx ===== */
+import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";
 /* StatCard — 스탯 카드 위젯 */
 window.StatCard = function StatCard({
   icon,
@@ -1148,20 +1156,26 @@ window.StatCard = function StatCard({
   value,
   sub
 }) {
-  return /*#__PURE__*/React.createElement("div", {
-    className: "card"
-  }, icon && /*#__PURE__*/React.createElement("div", {
-    className: `stat-icon ${iconColor}`
-  }, icon), /*#__PURE__*/React.createElement("div", {
-    className: "stat-label"
-  }, label), /*#__PURE__*/React.createElement("div", {
-    className: "stat-value"
-  }, value), sub && /*#__PURE__*/React.createElement("div", {
-    className: "stat-sub"
-  }, sub));
+  return /*#__PURE__*/_jsxDEV("div", {
+    className: "card",
+    children: [icon && /*#__PURE__*/_jsxDEV("div", {
+      className: `stat-icon ${iconColor}`,
+      children: icon
+    }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+      className: "stat-label",
+      children: label
+    }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+      className: "stat-value",
+      children: value
+    }, void 0, false), sub && /*#__PURE__*/_jsxDEV("div", {
+      className: "stat-sub",
+      children: sub
+    }, void 0, false)]
+  }, void 0, true);
 };
 
 ;/* ===== js/components/SearchBar.jsx ===== */
+import { jsxDEV as _jsxDEV, Fragment as _Fragment } from "react/jsx-dev-runtime";
 /* SearchBar — 통합 검색바 (업체명 + 키워드 + 상품 URL + HTML 붙여넣기 + 북마클릿) */
 window.SearchBar = function SearchBar({
   onSearch,
@@ -1228,257 +1242,295 @@ window.SearchBar = function SearchBar({
   };
   const htmlSizeKB = htmlInput ? (new Blob([htmlInput]).size / 1024).toFixed(1) : 0;
   const canSubmit = !!(companyName.trim() && keyword.trim() && (htmlInput || '').trim().length >= 100);
-  return /*#__PURE__*/React.createElement("div", {
-    className: "search-section"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "container"
-  }, /*#__PURE__*/React.createElement("form", {
-    onSubmit: handleSubmit,
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: '10px'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'grid',
-      gridTemplateColumns: '240px 1fr',
-      gap: '10px',
-      alignItems: 'end'
-    }
-  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
-    style: {
-      display: 'block',
-      fontSize: 11,
-      fontWeight: 600,
-      color: '#6b7280',
-      marginBottom: 4,
-      letterSpacing: '0.02em'
-    }
-  }, "\uC5C5\uCCB4\uBA85 ", /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: '#dc2626'
-    }
-  }, "*")), /*#__PURE__*/React.createElement("input", {
-    className: "search-input",
-    type: "text",
-    placeholder: "\uBCF4\uACE0\uC11C \uD45C\uC9C0\uC6A9 (\uD544\uC218)",
-    value: companyName,
-    onChange: e => setCompanyName(e.target.value),
-    style: {
-      width: '100%',
-      fontSize: 13
-    }
-  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
-    style: {
-      display: 'block',
-      fontSize: 11,
-      fontWeight: 600,
-      color: '#6b7280',
-      marginBottom: 4,
-      letterSpacing: '0.02em'
-    }
-  }, "\uD0A4\uC6CC\uB4DC ", /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: '#dc2626'
-    }
-  }, "*")), /*#__PURE__*/React.createElement("input", {
-    className: "search-input",
-    type: "text",
-    placeholder: "\uBD84\uC11D\uD560 \uD0A4\uC6CC\uB4DC (\uC608: \uBB34\uC120 \uC774\uC5B4\uD3F0)",
-    value: keyword,
-    onChange: e => setKeyword(e.target.value),
-    style: {
-      width: '100%'
-    }
-  }))), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'grid',
-      gridTemplateColumns: '1fr auto',
-      gap: '10px',
-      alignItems: 'end'
-    }
-  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
-    style: {
-      display: 'block',
-      fontSize: 11,
-      fontWeight: 600,
-      color: '#6b7280',
-      marginBottom: 4,
-      letterSpacing: '0.02em'
-    }
-  }, "HTML \uBD99\uC5EC\uB123\uAE30 ", /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: '#dc2626'
-    }
-  }, "*"), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 10,
-      color: '#94a3b8',
-      fontWeight: 400,
-      marginLeft: 6
-    }
-  }, "\uC0C1\uD488 \uC0C1\uC138\uD398\uC774\uC9C0 HTML \u2192 \uC0C1\uD488 URL\xB7\uB9AC\uBDF0\uC218\xB7\uD3C9\uC810\xB7\uCC1C\uC218 \uC790\uB3D9 \uCD94\uCD9C")), /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: 'relative'
-    }
-  }, /*#__PURE__*/React.createElement("textarea", {
-    placeholder: "\uC0C1\uD488 \uC0C1\uC138\uD398\uC774\uC9C0 HTML \uC804\uCCB4\uB97C \uBD99\uC5EC\uB123\uC73C\uC138\uC694 (\uD544\uC218) \u2014 Ctrl+U \uC18C\uC2A4\uBCF4\uAE30 \uD6C4 \uC804\uCCB4 \uBCF5\uC0AC. \uC0C1\uD488 URL\uC740 \uC790\uB3D9 \uC778\uC2DD\uB429\uB2C8\uB2E4.",
-    value: htmlInput,
-    onChange: e => setHtmlInput(e.target.value),
-    style: {
-      width: '100%',
-      height: htmlExpanded ? 120 : 44,
-      padding: '10px 14px',
-      border: '2px solid ' + (htmlInput ? '#a7f3d0' : '#e5e7eb'),
-      borderRadius: 10,
-      fontSize: 12,
-      fontFamily: 'inherit',
-      outline: 'none',
-      background: htmlInput ? '#f0fdf4' : '#f9fafb',
-      resize: 'none',
-      transition: 'all 0.2s',
-      overflow: htmlExpanded ? 'auto' : 'hidden'
-    },
-    onFocus: () => setHtmlExpanded(true),
-    onBlur: () => {
-      if (!htmlInput) setHtmlExpanded(false);
-    }
-  }), htmlInput && /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: 'absolute',
-      top: 8,
-      right: 8,
-      display: 'flex',
-      alignItems: 'center',
-      gap: 8
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 10,
-      color: '#059669',
-      fontWeight: 600,
-      background: '#ecfdf5',
-      padding: '2px 8px',
-      borderRadius: 10
-    }
-  }, htmlSizeKB, " KB"), /*#__PURE__*/React.createElement("button", {
-    type: "button",
-    onClick: () => {
-      setHtmlInput('');
-      setHtmlExpanded(false);
-    },
-    style: {
-      border: 'none',
-      background: '#fef2f2',
-      color: '#dc2626',
-      fontSize: 11,
-      padding: '2px 8px',
-      borderRadius: 10,
-      cursor: 'pointer',
-      fontWeight: 600
-    }
-  }, "\uCD08\uAE30\uD654")))), /*#__PURE__*/React.createElement("button", {
-    className: "btn-search",
-    type: "submit",
-    disabled: loading || !canSubmit,
-    style: {
-      height: 44,
-      marginBottom: 0,
-      opacity: loading || !canSubmit ? 0.55 : 1
-    },
-    title: canSubmit ? '' : '업체명·키워드·HTML 3가지를 모두 입력하세요'
-  }, loading ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
-    className: "spinner",
-    style: {
-      width: 16,
-      height: 16,
-      borderWidth: 2
-    }
-  }), " \uBD84\uC11D \uC911...") : '분석 실행')), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
-    style: {
-      display: 'block',
-      fontSize: 11,
-      fontWeight: 600,
-      color: '#6b7280',
-      marginBottom: 4,
-      letterSpacing: '0.02em'
-    }
-  }, "\uC0C1\uD488 URL \uC9C1\uC811 \uC785\uB825", /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 10,
-      color: '#94a3b8',
-      fontWeight: 400,
-      marginLeft: 6
-    }
-  }, "\uC120\uD0DD \u2014 HTML\uC5D0\uC11C URL \uC790\uB3D9 \uC778\uC2DD\uC774 \uC548 \uB420 \uB54C\uB9CC \uC0C1\uD488 \uD398\uC774\uC9C0 \uC8FC\uC18C\uB97C \uBD99\uC5EC\uB123\uC73C\uC138\uC694")), /*#__PURE__*/React.createElement("input", {
-    className: "search-input",
-    type: "text",
-    placeholder: "\uC608: https://smartstore.naver.com/\uC2A4\uD1A0\uC5B4/products/1234567890 (\uBE44\uC6CC\uB450\uBA74 HTML\uC5D0\uC11C \uC790\uB3D9 \uCD94\uCD9C)",
-    value: manualUrl,
-    onChange: e => setManualUrl(e.target.value),
-    style: {
-      width: '100%',
-      fontSize: 12
-    }
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 12,
-      padding: '8px 14px',
-      background: '#eff6ff',
-      borderRadius: 10,
-      border: '1px solid #bfdbfe'
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 16
-    }
-  }, "\uD83D\uDD16"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      flex: 1
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 12,
-      fontWeight: 700,
-      color: '#1e40af'
-    }
-  }, "\u2605 \uAC00\uC7A5 \uC26C\uC6B4 \uBC29\uBC95: \uBD81\uB9C8\uD074\uB9BF \uC0AC\uC6A9"), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 11,
-      color: '#3730a3',
-      marginLeft: 8
-    }
-  }, "\uC544\uB798 \uBC84\uD2BC\uC744 \uBD81\uB9C8\uD06C\uBC14\uB85C ", /*#__PURE__*/React.createElement("strong", null, "\uB4DC\uB798\uADF8"), " \u2192 \uC2A4\uB9C8\uD2B8\uC2A4\uD1A0\uC5B4\uC5D0\uC11C \uD074\uB9AD \uD55C \uBC88\uC5D0 HTML \uBCF5\uC0AC")), /*#__PURE__*/React.createElement("a", {
-    href: bookmarkletCode,
-    onClick: e => {
-      e.preventDefault();
-      alert('이 버튼을 클릭하지 말고, 브라우저 북마크바로 드래그해서 놓으세요!\n\n북마크바가 안 보이면 Chrome에서 ⌘+Shift+B (Mac) / Ctrl+Shift+B (Windows) 로 표시할 수 있습니다.');
-    },
-    draggable: "true",
-    style: {
-      display: 'inline-block',
-      padding: '6px 14px',
-      background: '#1e40af',
-      color: '#fff',
-      fontWeight: 700,
-      fontSize: 12,
-      borderRadius: 6,
-      textDecoration: 'none',
-      cursor: 'grab',
-      boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-      whiteSpace: 'nowrap',
-      flexShrink: 0
-    }
-  }, "\uD83D\uDCCE HTML \uBCF5\uC0AC (\uBD81\uB9C8\uD06C\uBC14\uB85C \uB4DC\uB798\uADF8)"), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 10,
-      color: '#64748b',
-      flexShrink: 0
-    }
-  }, "\u2190 \uC774 \uD30C\uB780 \uBC84\uD2BC\uC744 \uC704\uCABD \uBD81\uB9C8\uD06C\uBC14\uC5D0 \uB04C\uC5B4\uB2E4 \uB193\uC73C\uC138\uC694")))));
+  return /*#__PURE__*/_jsxDEV("div", {
+    className: "search-section",
+    children: /*#__PURE__*/_jsxDEV("div", {
+      className: "container",
+      children: /*#__PURE__*/_jsxDEV("form", {
+        onSubmit: handleSubmit,
+        style: {
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '10px'
+        },
+        children: [/*#__PURE__*/_jsxDEV("div", {
+          style: {
+            display: 'grid',
+            gridTemplateColumns: '240px 1fr',
+            gap: '10px',
+            alignItems: 'end'
+          },
+          children: [/*#__PURE__*/_jsxDEV("div", {
+            children: [/*#__PURE__*/_jsxDEV("label", {
+              style: {
+                display: 'block',
+                fontSize: 11,
+                fontWeight: 600,
+                color: '#6b7280',
+                marginBottom: 4,
+                letterSpacing: '0.02em'
+              },
+              children: ["업체명 ", /*#__PURE__*/_jsxDEV("span", {
+                style: {
+                  color: '#dc2626'
+                },
+                children: "*"
+              }, void 0, false)]
+            }, void 0, true), /*#__PURE__*/_jsxDEV("input", {
+              className: "search-input",
+              type: "text",
+              placeholder: "보고서 표지용 (필수)",
+              value: companyName,
+              onChange: e => setCompanyName(e.target.value),
+              style: {
+                width: '100%',
+                fontSize: 13
+              }
+            }, void 0, false)]
+          }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+            children: [/*#__PURE__*/_jsxDEV("label", {
+              style: {
+                display: 'block',
+                fontSize: 11,
+                fontWeight: 600,
+                color: '#6b7280',
+                marginBottom: 4,
+                letterSpacing: '0.02em'
+              },
+              children: ["키워드 ", /*#__PURE__*/_jsxDEV("span", {
+                style: {
+                  color: '#dc2626'
+                },
+                children: "*"
+              }, void 0, false)]
+            }, void 0, true), /*#__PURE__*/_jsxDEV("input", {
+              className: "search-input",
+              type: "text",
+              placeholder: "분석할 키워드 (예: 무선 이어폰)",
+              value: keyword,
+              onChange: e => setKeyword(e.target.value),
+              style: {
+                width: '100%'
+              }
+            }, void 0, false)]
+          }, void 0, true)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          style: {
+            display: 'grid',
+            gridTemplateColumns: '1fr auto',
+            gap: '10px',
+            alignItems: 'end'
+          },
+          children: [/*#__PURE__*/_jsxDEV("div", {
+            children: [/*#__PURE__*/_jsxDEV("label", {
+              style: {
+                display: 'block',
+                fontSize: 11,
+                fontWeight: 600,
+                color: '#6b7280',
+                marginBottom: 4,
+                letterSpacing: '0.02em'
+              },
+              children: ["HTML 붙여넣기 ", /*#__PURE__*/_jsxDEV("span", {
+                style: {
+                  color: '#dc2626'
+                },
+                children: "*"
+              }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+                style: {
+                  fontSize: 10,
+                  color: '#94a3b8',
+                  fontWeight: 400,
+                  marginLeft: 6
+                },
+                children: "상품 상세페이지 HTML → 상품 URL·리뷰수·평점·찜수 자동 추출"
+              }, void 0, false)]
+            }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+              style: {
+                position: 'relative'
+              },
+              children: [/*#__PURE__*/_jsxDEV("textarea", {
+                placeholder: "상품 상세페이지 HTML 전체를 붙여넣으세요 (필수) — Ctrl+U 소스보기 후 전체 복사. 상품 URL은 자동 인식됩니다.",
+                value: htmlInput,
+                onChange: e => setHtmlInput(e.target.value),
+                style: {
+                  width: '100%',
+                  height: htmlExpanded ? 120 : 44,
+                  padding: '10px 14px',
+                  border: '2px solid ' + (htmlInput ? '#a7f3d0' : '#e5e7eb'),
+                  borderRadius: 10,
+                  fontSize: 12,
+                  fontFamily: 'inherit',
+                  outline: 'none',
+                  background: htmlInput ? '#f0fdf4' : '#f9fafb',
+                  resize: 'none',
+                  transition: 'all 0.2s',
+                  overflow: htmlExpanded ? 'auto' : 'hidden'
+                },
+                onFocus: () => setHtmlExpanded(true),
+                onBlur: () => {
+                  if (!htmlInput) setHtmlExpanded(false);
+                }
+              }, void 0, false), htmlInput && /*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  position: 'absolute',
+                  top: 8,
+                  right: 8,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8
+                },
+                children: [/*#__PURE__*/_jsxDEV("span", {
+                  style: {
+                    fontSize: 10,
+                    color: '#059669',
+                    fontWeight: 600,
+                    background: '#ecfdf5',
+                    padding: '2px 8px',
+                    borderRadius: 10
+                  },
+                  children: [htmlSizeKB, " KB"]
+                }, void 0, true), /*#__PURE__*/_jsxDEV("button", {
+                  type: "button",
+                  onClick: () => {
+                    setHtmlInput('');
+                    setHtmlExpanded(false);
+                  },
+                  style: {
+                    border: 'none',
+                    background: '#fef2f2',
+                    color: '#dc2626',
+                    fontSize: 11,
+                    padding: '2px 8px',
+                    borderRadius: 10,
+                    cursor: 'pointer',
+                    fontWeight: 600
+                  },
+                  children: "초기화"
+                }, void 0, false)]
+              }, void 0, true)]
+            }, void 0, true)]
+          }, void 0, true), /*#__PURE__*/_jsxDEV("button", {
+            className: "btn-search",
+            type: "submit",
+            disabled: loading || !canSubmit,
+            style: {
+              height: 44,
+              marginBottom: 0,
+              opacity: loading || !canSubmit ? 0.55 : 1
+            },
+            title: canSubmit ? '' : '업체명·키워드·HTML 3가지를 모두 입력하세요',
+            children: loading ? /*#__PURE__*/_jsxDEV(_Fragment, {
+              children: [/*#__PURE__*/_jsxDEV("span", {
+                className: "spinner",
+                style: {
+                  width: 16,
+                  height: 16,
+                  borderWidth: 2
+                }
+              }, void 0, false), " 분석 중..."]
+            }, void 0, true) : '분석 실행'
+          }, void 0, false)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          children: [/*#__PURE__*/_jsxDEV("label", {
+            style: {
+              display: 'block',
+              fontSize: 11,
+              fontWeight: 600,
+              color: '#6b7280',
+              marginBottom: 4,
+              letterSpacing: '0.02em'
+            },
+            children: ["상품 URL 직접 입력", /*#__PURE__*/_jsxDEV("span", {
+              style: {
+                fontSize: 10,
+                color: '#94a3b8',
+                fontWeight: 400,
+                marginLeft: 6
+              },
+              children: "선택 — HTML에서 URL 자동 인식이 안 될 때만 상품 페이지 주소를 붙여넣으세요"
+            }, void 0, false)]
+          }, void 0, true), /*#__PURE__*/_jsxDEV("input", {
+            className: "search-input",
+            type: "text",
+            placeholder: "예: https://smartstore.naver.com/스토어/products/1234567890 (비워두면 HTML에서 자동 추출)",
+            value: manualUrl,
+            onChange: e => setManualUrl(e.target.value),
+            style: {
+              width: '100%',
+              fontSize: 12
+            }
+          }, void 0, false)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          style: {
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            padding: '8px 14px',
+            background: '#eff6ff',
+            borderRadius: 10,
+            border: '1px solid #bfdbfe'
+          },
+          children: [/*#__PURE__*/_jsxDEV("span", {
+            style: {
+              fontSize: 16
+            },
+            children: "🔖"
+          }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+            style: {
+              flex: 1
+            },
+            children: [/*#__PURE__*/_jsxDEV("span", {
+              style: {
+                fontSize: 12,
+                fontWeight: 700,
+                color: '#1e40af'
+              },
+              children: "★ 가장 쉬운 방법: 북마클릿 사용"
+            }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+              style: {
+                fontSize: 11,
+                color: '#3730a3',
+                marginLeft: 8
+              },
+              children: ["아래 버튼을 북마크바로 ", /*#__PURE__*/_jsxDEV("strong", {
+                children: "드래그"
+              }, void 0, false), " → 스마트스토어에서 클릭 한 번에 HTML 복사"]
+            }, void 0, true)]
+          }, void 0, true), /*#__PURE__*/_jsxDEV("a", {
+            href: bookmarkletCode,
+            onClick: e => {
+              e.preventDefault();
+              alert('이 버튼을 클릭하지 말고, 브라우저 북마크바로 드래그해서 놓으세요!\n\n북마크바가 안 보이면 Chrome에서 ⌘+Shift+B (Mac) / Ctrl+Shift+B (Windows) 로 표시할 수 있습니다.');
+            },
+            draggable: "true",
+            style: {
+              display: 'inline-block',
+              padding: '6px 14px',
+              background: '#1e40af',
+              color: '#fff',
+              fontWeight: 700,
+              fontSize: 12,
+              borderRadius: 6,
+              textDecoration: 'none',
+              cursor: 'grab',
+              boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+              whiteSpace: 'nowrap',
+              flexShrink: 0
+            },
+            children: "📎 HTML 복사 (북마크바로 드래그)"
+          }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+            style: {
+              fontSize: 10,
+              color: '#64748b',
+              flexShrink: 0
+            },
+            children: "← 이 파란 버튼을 위쪽 북마크바에 끌어다 놓으세요"
+          }, void 0, false)]
+        }, void 0, true)]
+      }, void 0, true)
+    }, void 0, false)
+  }, void 0, false);
 };
 
 ;/* ===== js/components/DashboardSummary.jsx ===== */
@@ -1532,6 +1584,7 @@ window.DashboardSummary = function DashboardSummary({
 };
 
 ;/* ===== js/components/RankTrackingSection.jsx ===== */
+import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";
 /* RankTrackingSection — 순위 추적 */
 window.RankTrackingSection = function RankTrackingSection({
   products,
@@ -2103,856 +2156,922 @@ window.RankTrackingSection = function RankTrackingSection({
       }
     }, '이 결과는 1회성 조회입니다. 지속적인 순위 추적은 관리자에게 상품 등록을 요청하세요.'));
   };
-  return /*#__PURE__*/React.createElement("div", {
+  return /*#__PURE__*/_jsxDEV("div", {
     className: "section",
-    id: "sec-rank"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "container"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      padding: '20px 22px'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      justifyContent: 'space-between',
-      alignItems: 'flex-start',
-      gap: 12
-    }
-  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h3", {
-    className: "rt-h3"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "rt-hic"
-  }, "\uD83D\uDCCD"), "\uD0A4\uC6CC\uB4DC\uBCC4 \uB178\uCD9C \uC21C\uC704", /*#__PURE__*/React.createElement("span", {
-    className: "badge b-ok"
-  }, "\u2705 \uC2E4\uCE21")), /*#__PURE__*/React.createElement("div", {
-    className: "rt-desc"
-  }, "\uC0C1\uD488\uBA85\uC5D0\uC11C \uCD94\uCD9C\uD55C \uD0A4\uC6CC\uB4DC\uBCC4\uB85C \uB124\uC774\uBC84 \uC1FC\uD551 \uAC80\uC0C9 \uC21C\uC704\uB97C \uC870\uD68C\uD55C \uACB0\uACFC (\uAC80\uC0C9 \uBC94\uC704: \uC0C1\uC704 200\uAC1C \uC0C1\uD488)")), canEdit !== false && /*#__PURE__*/React.createElement("button", {
-    className: "btn btn-primary btn-sm",
-    onClick: () => setShowAddForm(!showAddForm)
-  }, showAddForm ? '취소' : '+ 상품 등록')), showAddForm && /*#__PURE__*/React.createElement("div", {
-    className: "card fade-in",
-    style: {
-      marginBottom: 16
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "form-group"
-  }, /*#__PURE__*/React.createElement("label", {
-    className: "form-label"
-  }, "\uC0C1\uD488 URL"), /*#__PURE__*/React.createElement("input", {
-    className: "form-input",
-    placeholder: "https://smartstore.naver.com/\uC2A4\uD1A0\uC5B4\uBA85/products/12345",
-    value: newUrl,
-    onChange: e => setNewUrl(e.target.value)
-  }), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 11,
-      color: '#94a3b8',
-      marginTop: 4
-    }
-  }, "\uB124\uC774\uBC84 \uC2A4\uB9C8\uD2B8\uC2A4\uD1A0\uC5B4 \uC0C1\uD488 \uD398\uC774\uC9C0 URL\uC744 \uC785\uB825\uD558\uC138\uC694")), /*#__PURE__*/React.createElement("div", {
-    className: "form-group"
-  }, /*#__PURE__*/React.createElement("label", {
-    className: "form-label"
-  }, "\uCD94\uC801 \uD0A4\uC6CC\uB4DC (\uC27C\uD45C\uB85C \uAD6C\uBD84)"), /*#__PURE__*/React.createElement("input", {
-    className: "form-input",
-    placeholder: "\uC608: \uC2A4\uB9C8\uD2B8\uC6CC\uCE58, \uBE14\uB8E8\uD22C\uC2A4 \uC774\uC5B4\uD3F0",
-    value: newKeywords,
-    onChange: e => setNewKeywords(e.target.value)
-  }), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 11,
-      color: '#94a3b8',
-      marginTop: 4
-    }
-  }, "\uC5EC\uB7EC \uD0A4\uC6CC\uB4DC\uB294 \uC27C\uD45C(,)\uB85C \uAD6C\uBD84\uD574\uC11C \uC785\uB825\uD558\uC138\uC694 (\uCD5C\uB300 10\uAC1C)")), /*#__PURE__*/React.createElement("button", {
-    className: "btn btn-primary",
-    onClick: handleAdd,
-    disabled: adding || !newUrl.trim() || !newKeywords.trim()
-  }, adding ? '등록 중...' : '상품 등록')), exposureLoading && /*#__PURE__*/React.createElement("div", {
-    className: "card fade-in",
-    style: {
-      textAlign: 'center',
-      padding: '24px 16px',
-      color: '#64748b',
-      marginTop: 16
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 14
-    }
-  }, "\uD0A4\uC6CC\uB4DC\uBCC4 \uB178\uCD9C \uC21C\uC704 \uBD84\uC11D \uC911..."), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 12,
-      color: '#94a3b8',
-      marginTop: 4
-    }
-  }, "\uC0C1\uD488\uBA85\uC5D0\uC11C \uD0A4\uC6CC\uB4DC\uB97C \uCD94\uCD9C\uD558\uC5EC \uAC01\uAC01 \uC21C\uC704\uB97C \uC870\uD68C\uD558\uACE0 \uC788\uC2B5\uB2C8\uB2E4")), exposureResult && !exposureLoading && function () {
-    // R6: 노출률·노출/400위밖 리스트는 '내 상품 키워드'(source!=='related')만 — 무관 연관어 제외
-    var exposed = exposureResult.results.filter(function (r) {
-      return r.rank != null && r.source !== 'related';
-    });
-    var unexposed = exposureResult.results.filter(function (r) {
-      return r.rank == null && r.source !== 'related';
-    });
-    var exposureRate = exposureResult.total_keywords > 0 ? Math.round(exposureResult.exposed_count / exposureResult.total_keywords * 100) : 0;
-    return /*#__PURE__*/React.createElement("div", {
-      className: "fade-in",
-      style: {
-        marginTop: 16
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        display: 'flex',
-        justifyContent: 'flex-end',
-        gap: 8,
-        marginBottom: 12
-      }
-    }, /*#__PURE__*/React.createElement("span", {
-      className: "ps ps-g"
-    }, "\uB178\uCD9C ", exposureResult.exposed_count, "\uAC1C"), /*#__PURE__*/React.createElement("span", {
-      className: "ps ps-r"
-    }, "200\uC704 \uBC16 ", unexposed.length, "\uAC1C"), /*#__PURE__*/React.createElement("span", {
-      className: "ps ps-n"
-    }, "\uC804\uCCB4 ", exposureResult.total_keywords, "\uAC1C")), /*#__PURE__*/React.createElement("div", {
-      className: "grid3",
-      style: {
-        marginBottom: 16
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "ratecard"
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "v",
-      style: {
-        color: 'var(--ok)'
-      }
-    }, exposureResult.exposed_count), /*#__PURE__*/React.createElement("div", {
-      className: "k"
-    }, "\uB178\uCD9C \uD0A4\uC6CC\uB4DC")), /*#__PURE__*/React.createElement("div", {
-      className: "ratecard"
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "v",
-      style: {
-        color: 'var(--red)'
-      }
-    }, unexposed.length), /*#__PURE__*/React.createElement("div", {
-      className: "k"
-    }, "200\uC704 \uBC16 \uD0A4\uC6CC\uB4DC")), /*#__PURE__*/React.createElement("div", {
-      className: "ratecard"
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "v",
-      style: {
-        color: 'var(--pur)'
-      }
-    }, exposureRate, "%"), /*#__PURE__*/React.createElement("div", {
-      className: "k"
-    }, "\uB178\uCD9C\uB960"))), exposureResult.recommended && exposureResult.recommended.length > 0 && /*#__PURE__*/React.createElement("div", {
-      style: {
-        background: '#f5f3ff',
-        border: '1px solid #ddd6fe',
-        borderRadius: 12,
-        padding: '14px 16px',
-        marginBottom: 16
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 13,
-        fontWeight: 800,
-        color: '#6d28d9',
-        marginBottom: 4,
-        display: 'flex',
-        alignItems: 'center',
-        gap: 6
-      }
-    }, "\uD83D\uDCA1 \uB178\uCD9C \uC911\uC778 \uCD94\uCC9C \uD0A4\uC6CC\uB4DC"), /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 12,
-        color: '#64748b',
-        marginBottom: 10,
-        lineHeight: 1.5
-      }
-    }, "\uAC80\uC0C9 \uD0A4\uC6CC\uB4DC\uAC00 \uC0C1\uC704 200\uC704 \uBC16\uC774\uC5B4\uB3C4, \uC544\uB798 \uD0A4\uC6CC\uB4DC\uB85C\uB294 \uC9C0\uAE08 \uB178\uCD9C \uC911\uC785\uB2C8\uB2E4 \u2014 \uC0C1\uD488\uBA85\xB7\uD0DC\uADF8\xB7\uAD11\uACE0\uC5D0 \uD65C\uC6A9\uD574 \uB178\uCD9C\uC744 \uD655\uBCF4\uD558\uC138\uC694."), /*#__PURE__*/React.createElement("div", {
-      style: {
-        display: 'flex',
-        flexWrap: 'wrap',
-        gap: 8
-      }
-    }, exposureResult.recommended.map(function (r, idx) {
-      return /*#__PURE__*/React.createElement("span", {
-        key: idx,
+    id: "sec-rank",
+    children: /*#__PURE__*/_jsxDEV("div", {
+      className: "container",
+      children: /*#__PURE__*/_jsxDEV("div", {
+        className: "card",
         style: {
-          background: '#fff',
-          border: '1px solid #ddd6fe',
-          borderRadius: 999,
-          padding: '6px 12px',
-          fontSize: 13,
-          fontWeight: 600,
-          color: '#1e293b',
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 6
-        }
-      }, r.keyword, /*#__PURE__*/React.createElement("span", {
-        style: {
-          fontWeight: 800,
-          color: r.rank <= 10 ? '#16a34a' : '#ca8a04'
-        }
-      }, r.rank, "\uC704"));
-    }))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 13,
-        fontWeight: 800,
-        color: '#10b981',
-        margin: '6px 0 8px',
-        display: 'flex',
-        alignItems: 'center',
-        gap: 6
-      }
-    }, /*#__PURE__*/React.createElement("span", null, "\u25CF"), " \uB178\uCD9C \uD0A4\uC6CC\uB4DC"), /*#__PURE__*/React.createElement("div", {
-      style: {
-        display: 'flex',
-        flexWrap: 'wrap',
-        gap: 8
-      }
-    }, exposed.map(function (r, idx) {
-      return /*#__PURE__*/React.createElement("span", {
-        key: idx,
-        className: r.rank <= 10 ? 'kwchip' : 'kwchip warn'
-      }, r.keyword, " ", /*#__PURE__*/React.createElement("span", {
-        className: "rk"
-      }, r.rank, "\uC704"));
-    }), exposed.length === 0 && /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 12,
-        color: '#94a3b8'
-      }
-    }, "\uB178\uCD9C\uB41C \uD0A4\uC6CC\uB4DC\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4")), /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 13,
-        fontWeight: 800,
-        color: '#ef4444',
-        margin: '16px 0 8px',
-        display: 'flex',
-        alignItems: 'center',
-        gap: 6
-      }
-    }, /*#__PURE__*/React.createElement("span", null, "\u25CF"), " 200\uC704 \uBC16 \uD0A4\uC6CC\uB4DC"), /*#__PURE__*/React.createElement("div", {
-      style: {
-        display: 'flex',
-        flexWrap: 'wrap',
-        gap: 8
-      }
-    }, unexposed.map(function (r, idx) {
-      return /*#__PURE__*/React.createElement("span", {
-        key: idx,
-        className: "kwchip off"
-      }, r.keyword);
-    }), unexposed.length === 0 && /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 12,
-        color: '#94a3b8'
-      }
-    }, "\uBAA8\uB4E0 \uD0A4\uC6CC\uB4DC\uC5D0 \uB178\uCD9C \uC911\uC785\uB2C8\uB2E4"))), function () {
-      var tp = (products || []).find(function (p) {
-        return p.product_url === searchedProductUrl;
-      });
-      var kw = tp && ((tp.keywords || []).find(function (k) {
-        return k.latest_rank;
-      }) || (tp.keywords || [])[0]);
-      var topExposed = exposed.length ? exposed.slice().sort(function (a, b) {
-        return a.rank - b.rank;
-      })[0] : null;
-      var chartTitle = kw ? kw.keyword : topExposed ? topExposed.keyword : '';
-      return /*#__PURE__*/React.createElement("div", {
-        className: "sub-card",
-        style: {
-          marginTop: 16
-        }
-      }, /*#__PURE__*/React.createElement("div", {
-        className: "st"
-      }, "\uD83D\uDCC9 ", chartTitle ? "'" + chartTitle + "' " : '', "30\uC77C \uC21C\uC704 \uCD94\uC774 ", /*#__PURE__*/React.createElement("span", {
-        className: "badge b-est",
-        style: {
-          marginLeft: 4
-        }
-      }, "\uC2E0\uADDC \uCC28\uD2B8")), kw && kw.id ? renderRankHistoryChart(kw.id, kw.keyword, tp ? {
-        storeName: tp.store_name,
-        storeUrl: tp.product_url
-      } : {}) : /*#__PURE__*/React.createElement("div", {
-        style: {
-          fontSize: 12,
-          color: '#94a3b8',
-          padding: '6px 2px',
-          lineHeight: 1.7
-        }
-      }, "\uC9C0\uC18D\uC801\uC778 30\uC77C \uC21C\uC704 \uCD94\uC774\uB294 ", /*#__PURE__*/React.createElement("b", {
-        style: {
-          color: '#475569'
-        }
-      }, "\uAD00\uB9AC\uC790\uC5D0 \uC0C1\uD488 \uB4F1\uB85D(\uCD94\uC801 \uC694\uCCAD)"), " \uD6C4 \uB9E4\uC77C \uC2A4\uB0C5\uC0F7\uC73C\uB85C \uC790\uB3D9 \uAE30\uB85D\uB429\uB2C8\uB2E4. \uB4F1\uB85D\uB418\uBA74 \uC774 \uC790\uB9AC\uC5D0 \uCD94\uC774 \uADF8\uB798\uD504\uAC00 \uD45C\uC2DC\uB429\uB2C8\uB2E4."));
-    }());
-  }(), exposureFailed && !exposureLoading && !exposureResult && /*#__PURE__*/React.createElement("div", {
-    className: "card fade-in",
-    style: {
-      textAlign: 'center',
-      padding: '22px 16px'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 26,
-      marginBottom: 8
-    }
-  }, "\uD83D\uDD04"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 13,
-      color: '#64748b',
-      lineHeight: 1.6,
-      marginBottom: 12
-    }
-  }, "\uC77C\uC2DC\uC801\uC73C\uB85C \uD0A4\uC6CC\uB4DC\uBCC4 \uB178\uCD9C \uC21C\uC704\uB97C \uBD88\uB7EC\uC624\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4(\uB124\uC774\uBC84 \uC870\uD68C \uC9C0\uC5F0). \uC21C\uC704 \uB370\uC774\uD130\uB294 \uC720\uD6A8\uD558\uBA70, \uB2E4\uC2DC \uC870\uD68C\uD558\uBA74 \uD45C\uC2DC\uB429\uB2C8\uB2E4."), /*#__PURE__*/React.createElement("button", {
-    onClick: function () {
-      lastExposureKey.current = '';
-      setExposureFailed(false);
-      setExposureNonce(function (n) {
-        return n + 1;
-      });
-    },
-    style: {
-      padding: '9px 18px',
-      borderRadius: 10,
-      border: 'none',
-      background: 'linear-gradient(135deg,#4f46e5,#6366f1)',
-      color: '#fff',
-      fontSize: 13,
-      fontWeight: 700,
-      cursor: 'pointer'
-    }
-  }, "\uD83D\uDD04 \uB2E4\uC2DC \uC870\uD68C")), function () {
-    // viewer는 등록된 상품 목록 표시 안 함
-    if (canEdit === false) {
-      // 1회성 결과도 없고 로딩도 아닌 경우에만 빈 상태 표시
-      if (!tempRankResult && !tempRankLoading && searchedProductUrl) return null;
-      if (!searchedProductUrl) return null;
-      return null;
-    }
-    var filtered = searchedProductUrl ? products.filter(function (p) {
-      return p.product_url === searchedProductUrl;
-    }) : products;
-    if (filtered.length === 0) return /*#__PURE__*/React.createElement(EmptyState, {
-      icon: "\uD83D\uDCE6",
-      text: searchedProductUrl ? "해당 상품의 순위 추적 데이터가 아직 없습니다. 상품이 등록되면 자동으로 표시됩니다." : "추적 중인 상품이 없습니다. 상품을 등록해보세요."
-    });
-
-    /* ===== 특정 업체 분석 결과 → 기존 가로 리스트형 ===== */
-    if (searchedProductUrl) {
-      return /*#__PURE__*/React.createElement("div", {
-        style: {
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 12
-        }
-      }, filtered.map(function (p) {
-        return React.createElement('div', {
-          className: 'card fade-in',
-          key: p.id
-        }, React.createElement('div', {
+          padding: '20px 22px'
+        },
+        children: [/*#__PURE__*/_jsxDEV("div", {
           style: {
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'flex-start',
-            gap: 12,
-            flexWrap: 'wrap'
-          }
-        }, React.createElement('div', {
-          style: {
-            display: 'flex',
-            gap: 12,
-            flex: 1,
-            minWidth: 0,
-            cursor: onNavigateToClient ? 'pointer' : 'default'
+            gap: 12
           },
-          onClick: onNavigateToClient ? function () {
-            onNavigateToClient(p.store_name || '', p.product_url || '');
-          } : undefined,
-          title: onNavigateToClient ? '클릭하여 업체관리에서 상세 보기' : ''
-        }, p.image_url && React.createElement('img', {
-          src: p.image_url,
-          alt: '',
+          children: [/*#__PURE__*/_jsxDEV("div", {
+            children: [/*#__PURE__*/_jsxDEV("h3", {
+              className: "rt-h3",
+              children: [/*#__PURE__*/_jsxDEV("span", {
+                className: "rt-hic",
+                children: "📍"
+              }, void 0, false), "키워드별 노출 순위", /*#__PURE__*/_jsxDEV("span", {
+                className: "badge b-ok",
+                children: "✅ 실측"
+              }, void 0, false)]
+            }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+              className: "rt-desc",
+              children: "상품명에서 추출한 키워드별로 네이버 쇼핑 검색 순위를 조회한 결과 (검색 범위: 상위 200개 상품)"
+            }, void 0, false)]
+          }, void 0, true), canEdit !== false && /*#__PURE__*/_jsxDEV("button", {
+            className: "btn btn-primary btn-sm",
+            onClick: () => setShowAddForm(!showAddForm),
+            children: showAddForm ? '취소' : '+ 상품 등록'
+          }, void 0, false)]
+        }, void 0, true), showAddForm && /*#__PURE__*/_jsxDEV("div", {
+          className: "card fade-in",
           style: {
-            width: 56,
-            height: 56,
-            borderRadius: 8,
-            objectFit: 'cover',
-            flexShrink: 0
-          }
-        }), React.createElement('div', {
-          style: {
-            minWidth: 0
-          }
-        }, React.createElement('div', {
-          style: {
-            fontWeight: 600,
-            fontSize: 14,
-            marginBottom: 2,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-            color: onNavigateToClient ? '#4f46e5' : 'inherit'
-          }
-        }, p.product_name || '상품', onNavigateToClient && React.createElement('span', {
-          style: {
-            fontSize: 11,
-            color: '#818cf8',
-            marginLeft: 6,
-            fontWeight: 400
-          }
-        }, '→ 업체관리')), React.createElement('div', {
-          style: {
-            fontSize: 12,
-            color: '#64748b'
-          }
-        }, p.store_name || '-'), p.price > 0 && React.createElement('div', {
-          style: {
-            fontSize: 13,
-            fontWeight: 600,
-            color: '#0f172a',
-            marginTop: 2
-          }
-        }, fmt(p.price) + '원'))), canEdit !== false && React.createElement('div', {
-          style: {
-            display: 'flex',
-            gap: 6,
-            flexShrink: 0
-          }
-        }, React.createElement('button', {
-          className: 'btn btn-secondary btn-sm',
-          onClick: function () {
-            handleRefresh(p.id);
+            marginBottom: 16
           },
-          disabled: refreshing[p.id]
-        }, refreshing[p.id] ? '체크 중' : '↻ 순위체크'), React.createElement('button', {
-          className: 'btn btn-danger btn-sm',
-          onClick: function () {
-            handleDelete(p.id);
-          }
-        }, '삭제'))), (p.keywords || []).length > 0 && React.createElement('div', {
-          className: 'table-wrap',
+          children: [/*#__PURE__*/_jsxDEV("div", {
+            className: "form-group",
+            children: [/*#__PURE__*/_jsxDEV("label", {
+              className: "form-label",
+              children: "상품 URL"
+            }, void 0, false), /*#__PURE__*/_jsxDEV("input", {
+              className: "form-input",
+              placeholder: "https://smartstore.naver.com/스토어명/products/12345",
+              value: newUrl,
+              onChange: e => setNewUrl(e.target.value)
+            }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+              style: {
+                fontSize: 11,
+                color: '#94a3b8',
+                marginTop: 4
+              },
+              children: "네이버 스마트스토어 상품 페이지 URL을 입력하세요"
+            }, void 0, false)]
+          }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+            className: "form-group",
+            children: [/*#__PURE__*/_jsxDEV("label", {
+              className: "form-label",
+              children: "추적 키워드 (쉼표로 구분)"
+            }, void 0, false), /*#__PURE__*/_jsxDEV("input", {
+              className: "form-input",
+              placeholder: "예: 스마트워치, 블루투스 이어폰",
+              value: newKeywords,
+              onChange: e => setNewKeywords(e.target.value)
+            }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+              style: {
+                fontSize: 11,
+                color: '#94a3b8',
+                marginTop: 4
+              },
+              children: "여러 키워드는 쉼표(,)로 구분해서 입력하세요 (최대 10개)"
+            }, void 0, false)]
+          }, void 0, true), /*#__PURE__*/_jsxDEV("button", {
+            className: "btn btn-primary",
+            onClick: handleAdd,
+            disabled: adding || !newUrl.trim() || !newKeywords.trim(),
+            children: adding ? '등록 중...' : '상품 등록'
+          }, void 0, false)]
+        }, void 0, true), exposureLoading && /*#__PURE__*/_jsxDEV("div", {
+          className: "card fade-in",
           style: {
-            marginTop: 14
-          }
-        }, React.createElement('table', null, React.createElement('thead', null, React.createElement('tr', null, React.createElement('th', null, '키워드'), React.createElement('th', null, '현재 순위'), React.createElement('th', null, '페이지'), React.createElement('th', null, '최근 체크'))), React.createElement('tbody', null, p.keywords.map(function (k) {
-          var isOpen = expandedKeyword === k.id;
-          var rowEl = React.createElement('tr', {
-            key: k.id,
+            textAlign: 'center',
+            padding: '24px 16px',
+            color: '#64748b',
+            marginTop: 16
+          },
+          children: [/*#__PURE__*/_jsxDEV("div", {
             style: {
-              cursor: 'pointer',
-              background: isOpen ? '#f8fafc' : undefined
+              fontSize: 14
             },
-            onClick: function () {
-              var next = isOpen ? null : k.id;
-              setExpandedKeyword(next);
-              if (next) loadHistory(k.id);
-            }
-          }, React.createElement('td', {
-            style: {
-              fontWeight: 500
-            }
-          }, React.createElement('span', {
-            style: {
-              color: '#cbd5e1',
-              marginRight: 6,
-              fontSize: 11
-            }
-          }, isOpen ? '▼' : '▶'), k.keyword), React.createElement('td', null, k.latest_rank ? React.createElement('span', {
-            style: {
-              fontWeight: 700,
-              color: k.latest_rank <= 10 ? '#059669' : k.latest_rank <= 40 ? '#d97706' : '#dc2626'
-            }
-          }, k.latest_rank + '위') : React.createElement('span', {
-            className: 'badge badge-gray'
-          }, '200위 밖')), React.createElement('td', null, k.latest_rank ? Math.ceil(k.latest_rank / 40) + 'P' : '-'), React.createElement('td', {
+            children: "키워드별 노출 순위 분석 중..."
+          }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
             style: {
               fontSize: 12,
+              color: '#94a3b8',
+              marginTop: 4
+            },
+            children: "상품명에서 키워드를 추출하여 각각 순위를 조회하고 있습니다"
+          }, void 0, false)]
+        }, void 0, true), exposureResult && !exposureLoading && function () {
+          // R6: 노출률·노출/400위밖 리스트는 '내 상품 키워드'(source!=='related')만 — 무관 연관어 제외
+          var exposed = exposureResult.results.filter(function (r) {
+            return r.rank != null && r.source !== 'related';
+          });
+          var unexposed = exposureResult.results.filter(function (r) {
+            return r.rank == null && r.source !== 'related';
+          });
+          var exposureRate = exposureResult.total_keywords > 0 ? Math.round(exposureResult.exposed_count / exposureResult.total_keywords * 100) : 0;
+          return /*#__PURE__*/_jsxDEV("div", {
+            className: "fade-in",
+            style: {
+              marginTop: 16
+            },
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              style: {
+                display: 'flex',
+                justifyContent: 'flex-end',
+                gap: 8,
+                marginBottom: 12
+              },
+              children: [/*#__PURE__*/_jsxDEV("span", {
+                className: "ps ps-g",
+                children: ["노출 ", exposureResult.exposed_count, "개"]
+              }, void 0, true), /*#__PURE__*/_jsxDEV("span", {
+                className: "ps ps-r",
+                children: ["200위 밖 ", unexposed.length, "개"]
+              }, void 0, true), /*#__PURE__*/_jsxDEV("span", {
+                className: "ps ps-n",
+                children: ["전체 ", exposureResult.total_keywords, "개"]
+              }, void 0, true)]
+            }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+              className: "grid3",
+              style: {
+                marginBottom: 16
+              },
+              children: [/*#__PURE__*/_jsxDEV("div", {
+                className: "ratecard",
+                children: [/*#__PURE__*/_jsxDEV("div", {
+                  className: "v",
+                  style: {
+                    color: 'var(--ok)'
+                  },
+                  children: exposureResult.exposed_count
+                }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+                  className: "k",
+                  children: "노출 키워드"
+                }, void 0, false)]
+              }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                className: "ratecard",
+                children: [/*#__PURE__*/_jsxDEV("div", {
+                  className: "v",
+                  style: {
+                    color: 'var(--red)'
+                  },
+                  children: unexposed.length
+                }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+                  className: "k",
+                  children: "200위 밖 키워드"
+                }, void 0, false)]
+              }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                className: "ratecard",
+                children: [/*#__PURE__*/_jsxDEV("div", {
+                  className: "v",
+                  style: {
+                    color: 'var(--pur)'
+                  },
+                  children: [exposureRate, "%"]
+                }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                  className: "k",
+                  children: "노출률"
+                }, void 0, false)]
+              }, void 0, true)]
+            }, void 0, true), exposureResult.recommended && exposureResult.recommended.length > 0 && /*#__PURE__*/_jsxDEV("div", {
+              style: {
+                background: '#f5f3ff',
+                border: '1px solid #ddd6fe',
+                borderRadius: 12,
+                padding: '14px 16px',
+                marginBottom: 16
+              },
+              children: [/*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  fontSize: 13,
+                  fontWeight: 800,
+                  color: '#6d28d9',
+                  marginBottom: 4,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6
+                },
+                children: "💡 노출 중인 추천 키워드"
+              }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  fontSize: 12,
+                  color: '#64748b',
+                  marginBottom: 10,
+                  lineHeight: 1.5
+                },
+                children: "검색 키워드가 상위 200위 밖이어도, 아래 키워드로는 지금 노출 중입니다 — 상품명·태그·광고에 활용해 노출을 확보하세요."
+              }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  gap: 8
+                },
+                children: exposureResult.recommended.map(function (r, idx) {
+                  return /*#__PURE__*/_jsxDEV("span", {
+                    style: {
+                      background: '#fff',
+                      border: '1px solid #ddd6fe',
+                      borderRadius: 999,
+                      padding: '6px 12px',
+                      fontSize: 13,
+                      fontWeight: 600,
+                      color: '#1e293b',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 6
+                    },
+                    children: [r.keyword, /*#__PURE__*/_jsxDEV("span", {
+                      style: {
+                        fontWeight: 800,
+                        color: r.rank <= 10 ? '#16a34a' : '#ca8a04'
+                      },
+                      children: [r.rank, "위"]
+                    }, void 0, true)]
+                  }, idx, true);
+                })
+              }, void 0, false)]
+            }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+              children: [/*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  fontSize: 13,
+                  fontWeight: 800,
+                  color: '#10b981',
+                  margin: '6px 0 8px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6
+                },
+                children: [/*#__PURE__*/_jsxDEV("span", {
+                  children: "●"
+                }, void 0, false), " 노출 키워드"]
+              }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  gap: 8
+                },
+                children: [exposed.map(function (r, idx) {
+                  return /*#__PURE__*/_jsxDEV("span", {
+                    className: r.rank <= 10 ? 'kwchip' : 'kwchip warn',
+                    children: [r.keyword, " ", /*#__PURE__*/_jsxDEV("span", {
+                      className: "rk",
+                      children: [r.rank, "위"]
+                    }, void 0, true)]
+                  }, idx, true);
+                }), exposed.length === 0 && /*#__PURE__*/_jsxDEV("div", {
+                  style: {
+                    fontSize: 12,
+                    color: '#94a3b8'
+                  },
+                  children: "노출된 키워드가 없습니다"
+                }, void 0, false)]
+              }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  fontSize: 13,
+                  fontWeight: 800,
+                  color: '#ef4444',
+                  margin: '16px 0 8px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6
+                },
+                children: [/*#__PURE__*/_jsxDEV("span", {
+                  children: "●"
+                }, void 0, false), " 200위 밖 키워드"]
+              }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  gap: 8
+                },
+                children: [unexposed.map(function (r, idx) {
+                  return /*#__PURE__*/_jsxDEV("span", {
+                    className: "kwchip off",
+                    children: r.keyword
+                  }, idx, false);
+                }), unexposed.length === 0 && /*#__PURE__*/_jsxDEV("div", {
+                  style: {
+                    fontSize: 12,
+                    color: '#94a3b8'
+                  },
+                  children: "모든 키워드에 노출 중입니다"
+                }, void 0, false)]
+              }, void 0, true)]
+            }, void 0, true), function () {
+              var tp = (products || []).find(function (p) {
+                return p.product_url === searchedProductUrl;
+              });
+              var kw = tp && ((tp.keywords || []).find(function (k) {
+                return k.latest_rank;
+              }) || (tp.keywords || [])[0]);
+              var topExposed = exposed.length ? exposed.slice().sort(function (a, b) {
+                return a.rank - b.rank;
+              })[0] : null;
+              var chartTitle = kw ? kw.keyword : topExposed ? topExposed.keyword : '';
+              return /*#__PURE__*/_jsxDEV("div", {
+                className: "sub-card",
+                style: {
+                  marginTop: 16
+                },
+                children: [/*#__PURE__*/_jsxDEV("div", {
+                  className: "st",
+                  children: ["📉 ", chartTitle ? "'" + chartTitle + "' " : '', "30일 순위 추이 ", /*#__PURE__*/_jsxDEV("span", {
+                    className: "badge b-est",
+                    style: {
+                      marginLeft: 4
+                    },
+                    children: "신규 차트"
+                  }, void 0, false)]
+                }, void 0, true), kw && kw.id ? renderRankHistoryChart(kw.id, kw.keyword, tp ? {
+                  storeName: tp.store_name,
+                  storeUrl: tp.product_url
+                } : {}) : /*#__PURE__*/_jsxDEV("div", {
+                  style: {
+                    fontSize: 12,
+                    color: '#94a3b8',
+                    padding: '6px 2px',
+                    lineHeight: 1.7
+                  },
+                  children: ["지속적인 30일 순위 추이는 ", /*#__PURE__*/_jsxDEV("b", {
+                    style: {
+                      color: '#475569'
+                    },
+                    children: "관리자에 상품 등록(추적 요청)"
+                  }, void 0, false), " 후 매일 스냅샷으로 자동 기록됩니다. 등록되면 이 자리에 추이 그래프가 표시됩니다."]
+                }, void 0, true)]
+              }, void 0, true);
+            }()]
+          }, void 0, true);
+        }(), exposureFailed && !exposureLoading && !exposureResult && /*#__PURE__*/_jsxDEV("div", {
+          className: "card fade-in",
+          style: {
+            textAlign: 'center',
+            padding: '22px 16px'
+          },
+          children: [/*#__PURE__*/_jsxDEV("div", {
+            style: {
+              fontSize: 26,
+              marginBottom: 8
+            },
+            children: "🔄"
+          }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+            style: {
+              fontSize: 13,
+              color: '#64748b',
+              lineHeight: 1.6,
+              marginBottom: 12
+            },
+            children: "일시적으로 키워드별 노출 순위를 불러오지 못했습니다(네이버 조회 지연). 순위 데이터는 유효하며, 다시 조회하면 표시됩니다."
+          }, void 0, false), /*#__PURE__*/_jsxDEV("button", {
+            onClick: function () {
+              lastExposureKey.current = '';
+              setExposureFailed(false);
+              setExposureNonce(function (n) {
+                return n + 1;
+              });
+            },
+            style: {
+              padding: '9px 18px',
+              borderRadius: 10,
+              border: 'none',
+              background: 'linear-gradient(135deg,#4f46e5,#6366f1)',
+              color: '#fff',
+              fontSize: 13,
+              fontWeight: 700,
+              cursor: 'pointer'
+            },
+            children: "🔄 다시 조회"
+          }, void 0, false)]
+        }, void 0, true), function () {
+          // viewer는 등록된 상품 목록 표시 안 함
+          if (canEdit === false) {
+            // 1회성 결과도 없고 로딩도 아닌 경우에만 빈 상태 표시
+            if (!tempRankResult && !tempRankLoading && searchedProductUrl) return null;
+            if (!searchedProductUrl) return null;
+            return null;
+          }
+          var filtered = searchedProductUrl ? products.filter(function (p) {
+            return p.product_url === searchedProductUrl;
+          }) : products;
+          if (filtered.length === 0) return /*#__PURE__*/_jsxDEV(EmptyState, {
+            icon: "📦",
+            text: searchedProductUrl ? "해당 상품의 순위 추적 데이터가 아직 없습니다. 상품이 등록되면 자동으로 표시됩니다." : "추적 중인 상품이 없습니다. 상품을 등록해보세요."
+          }, void 0, false);
+
+          /* ===== 특정 업체 분석 결과 → 기존 가로 리스트형 ===== */
+          if (searchedProductUrl) {
+            return /*#__PURE__*/_jsxDEV("div", {
+              style: {
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 12
+              },
+              children: filtered.map(function (p) {
+                return React.createElement('div', {
+                  className: 'card fade-in',
+                  key: p.id
+                }, React.createElement('div', {
+                  style: {
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'flex-start',
+                    gap: 12,
+                    flexWrap: 'wrap'
+                  }
+                }, React.createElement('div', {
+                  style: {
+                    display: 'flex',
+                    gap: 12,
+                    flex: 1,
+                    minWidth: 0,
+                    cursor: onNavigateToClient ? 'pointer' : 'default'
+                  },
+                  onClick: onNavigateToClient ? function () {
+                    onNavigateToClient(p.store_name || '', p.product_url || '');
+                  } : undefined,
+                  title: onNavigateToClient ? '클릭하여 업체관리에서 상세 보기' : ''
+                }, p.image_url && React.createElement('img', {
+                  src: p.image_url,
+                  alt: '',
+                  style: {
+                    width: 56,
+                    height: 56,
+                    borderRadius: 8,
+                    objectFit: 'cover',
+                    flexShrink: 0
+                  }
+                }), React.createElement('div', {
+                  style: {
+                    minWidth: 0
+                  }
+                }, React.createElement('div', {
+                  style: {
+                    fontWeight: 600,
+                    fontSize: 14,
+                    marginBottom: 2,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    color: onNavigateToClient ? '#4f46e5' : 'inherit'
+                  }
+                }, p.product_name || '상품', onNavigateToClient && React.createElement('span', {
+                  style: {
+                    fontSize: 11,
+                    color: '#818cf8',
+                    marginLeft: 6,
+                    fontWeight: 400
+                  }
+                }, '→ 업체관리')), React.createElement('div', {
+                  style: {
+                    fontSize: 12,
+                    color: '#64748b'
+                  }
+                }, p.store_name || '-'), p.price > 0 && React.createElement('div', {
+                  style: {
+                    fontSize: 13,
+                    fontWeight: 600,
+                    color: '#0f172a',
+                    marginTop: 2
+                  }
+                }, fmt(p.price) + '원'))), canEdit !== false && React.createElement('div', {
+                  style: {
+                    display: 'flex',
+                    gap: 6,
+                    flexShrink: 0
+                  }
+                }, React.createElement('button', {
+                  className: 'btn btn-secondary btn-sm',
+                  onClick: function () {
+                    handleRefresh(p.id);
+                  },
+                  disabled: refreshing[p.id]
+                }, refreshing[p.id] ? '체크 중' : '↻ 순위체크'), React.createElement('button', {
+                  className: 'btn btn-danger btn-sm',
+                  onClick: function () {
+                    handleDelete(p.id);
+                  }
+                }, '삭제'))), (p.keywords || []).length > 0 && React.createElement('div', {
+                  className: 'table-wrap',
+                  style: {
+                    marginTop: 14
+                  }
+                }, React.createElement('table', null, React.createElement('thead', null, React.createElement('tr', null, React.createElement('th', null, '키워드'), React.createElement('th', null, '현재 순위'), React.createElement('th', null, '페이지'), React.createElement('th', null, '최근 체크'))), React.createElement('tbody', null, p.keywords.map(function (k) {
+                  var isOpen = expandedKeyword === k.id;
+                  var rowEl = React.createElement('tr', {
+                    key: k.id,
+                    style: {
+                      cursor: 'pointer',
+                      background: isOpen ? '#f8fafc' : undefined
+                    },
+                    onClick: function () {
+                      var next = isOpen ? null : k.id;
+                      setExpandedKeyword(next);
+                      if (next) loadHistory(k.id);
+                    }
+                  }, React.createElement('td', {
+                    style: {
+                      fontWeight: 500
+                    }
+                  }, React.createElement('span', {
+                    style: {
+                      color: '#cbd5e1',
+                      marginRight: 6,
+                      fontSize: 11
+                    }
+                  }, isOpen ? '▼' : '▶'), k.keyword), React.createElement('td', null, k.latest_rank ? React.createElement('span', {
+                    style: {
+                      fontWeight: 700,
+                      color: k.latest_rank <= 10 ? '#059669' : k.latest_rank <= 40 ? '#d97706' : '#dc2626'
+                    }
+                  }, k.latest_rank + '위') : React.createElement('span', {
+                    className: 'badge badge-gray'
+                  }, '200위 밖')), React.createElement('td', null, k.latest_rank ? Math.ceil(k.latest_rank / 40) + 'P' : '-'), React.createElement('td', {
+                    style: {
+                      fontSize: 12,
+                      color: '#94a3b8'
+                    }
+                  }, k.last_checked ? new Date(k.last_checked).toLocaleString('ko') : '-'));
+                  if (!isOpen) return rowEl;
+                  var chartRow = React.createElement('tr', {
+                    key: k.id + '-chart'
+                  }, React.createElement('td', {
+                    colSpan: 4,
+                    style: {
+                      padding: 0,
+                      background: '#f8fafc'
+                    }
+                  }, renderRankHistoryChart(k.id, k.keyword, {
+                    storeName: p.store_name,
+                    storeUrl: p.product_url
+                  })));
+                  return [rowEl, chartRow];
+                })))));
+              })
+            }, void 0, false);
+          }
+
+          /* ===== 전체 상품 → 스캔형 표 (검색·정렬·업체명 강조 + 이력 펼침) ===== */
+          var _q = (trackedSearch || '').trim().toLowerCase();
+          var _bestRank = function (p) {
+            var rs = (p.keywords || []).map(function (k) {
+              return k.latest_rank;
+            }).filter(function (r) {
+              return r && r > 0;
+            });
+            return rs.length ? Math.min.apply(null, rs) : null;
+          };
+          var _lastChecked = function (p) {
+            var ts = (p.keywords || []).map(function (k) {
+              return k.last_checked;
+            }).filter(Boolean).sort();
+            return ts.length ? ts[ts.length - 1] : null;
+          };
+          var _exposedCount = function (p) {
+            return (p.keywords || []).filter(function (k) {
+              return k.latest_rank && k.latest_rank > 0;
+            }).length;
+          };
+          var displayed = filtered.filter(function (p) {
+            if (!_q) return true;
+            return (p.store_name || '').toLowerCase().indexOf(_q) >= 0 || (p.product_name || '').toLowerCase().indexOf(_q) >= 0;
+          }).slice().sort(function (a, b) {
+            if (trackedSort === 'rank') {
+              var ra = _bestRank(a),
+                rb = _bestRank(b);
+              return (ra == null ? 99999 : ra) - (rb == null ? 99999 : rb);
+            }
+            if (trackedSort === 'checked') {
+              return String(_lastChecked(b) || '').localeCompare(String(_lastChecked(a) || ''));
+            }
+            return (a.store_name || '').localeCompare(b.store_name || '', 'ko');
+          });
+          var _thS = {
+            textAlign: 'left',
+            padding: '9px 12px',
+            borderBottom: '2px solid #e2e8f0',
+            color: '#64748b',
+            fontWeight: 700,
+            whiteSpace: 'nowrap',
+            fontSize: 12,
+            background: '#f8fafc'
+          };
+          var _thC = Object.assign({}, _thS, {
+            textAlign: 'center'
+          });
+          var _rankBadge = function (rk) {
+            if (!rk) return React.createElement('span', {
+              style: {
+                fontSize: 12,
+                color: '#94a3b8',
+                fontWeight: 600
+              }
+            }, '200위 밖');
+            var c = rk <= 10 ? '#059669' : rk <= 40 ? '#d97706' : '#dc2626';
+            return React.createElement('span', {
+              style: {
+                fontWeight: 800,
+                color: c
+              }
+            }, rk + '위', React.createElement('span', {
+              style: {
+                fontSize: 10,
+                color: '#94a3b8',
+                fontWeight: 600,
+                marginLeft: 4
+              }
+            }, Math.ceil(rk / 40) + 'P'));
+          };
+          return React.createElement('div', null, React.createElement('div', {
+            style: {
+              display: 'flex',
+              gap: 8,
+              flexWrap: 'wrap',
+              alignItems: 'center',
+              margin: '4px 0 12px'
+            }
+          }, React.createElement('input', {
+            className: 'form-input',
+            placeholder: '🔎 업체명·상품명 검색',
+            value: trackedSearch,
+            onChange: function (e) {
+              setTrackedSearch(e.target.value);
+            },
+            style: {
+              maxWidth: 280,
+              fontSize: 13
+            }
+          }), React.createElement('select', {
+            className: 'form-input',
+            value: trackedSort,
+            onChange: function (e) {
+              setTrackedSort(e.target.value);
+            },
+            style: {
+              maxWidth: 150,
+              fontSize: 13
+            }
+          }, React.createElement('option', {
+            value: 'company'
+          }, '업체명순'), React.createElement('option', {
+            value: 'rank'
+          }, '최고순위순'), React.createElement('option', {
+            value: 'checked'
+          }, '최근체크순')), React.createElement('span', {
+            style: {
+              fontSize: 12,
+              color: '#94a3b8',
+              marginLeft: 'auto'
+            }
+          }, '총 ' + displayed.length + '개')), React.createElement('div', {
+            style: {
+              overflowX: 'auto',
+              border: '1px solid #eef2f7',
+              borderRadius: 12
+            }
+          }, React.createElement('table', {
+            style: {
+              width: '100%',
+              borderCollapse: 'collapse',
+              fontSize: 13
+            }
+          }, React.createElement('thead', null, React.createElement('tr', null, React.createElement('th', {
+            style: _thS
+          }, '업체명'), React.createElement('th', {
+            style: _thS
+          }, '상품명'), React.createElement('th', {
+            style: _thC
+          }, '최고 순위'), React.createElement('th', {
+            style: _thC
+          }, '노출 키워드'), React.createElement('th', {
+            style: _thC
+          }, '최근 체크'), canEdit !== false && React.createElement('th', {
+            style: _thC
+          }, '관리'))), React.createElement('tbody', null, displayed.length === 0 ? React.createElement('tr', null, React.createElement('td', {
+            colSpan: 6,
+            style: {
+              padding: 24,
+              textAlign: 'center',
               color: '#94a3b8'
             }
-          }, k.last_checked ? new Date(k.last_checked).toLocaleString('ko') : '-'));
-          if (!isOpen) return rowEl;
-          var chartRow = React.createElement('tr', {
-            key: k.id + '-chart'
-          }, React.createElement('td', {
-            colSpan: 4,
-            style: {
-              padding: 0,
-              background: '#f8fafc'
-            }
-          }, renderRankHistoryChart(k.id, k.keyword, {
-            storeName: p.store_name,
-            storeUrl: p.product_url
-          })));
-          return [rowEl, chartRow];
-        })))));
-      }));
-    }
-
-    /* ===== 전체 상품 → 스캔형 표 (검색·정렬·업체명 강조 + 이력 펼침) ===== */
-    var _q = (trackedSearch || '').trim().toLowerCase();
-    var _bestRank = function (p) {
-      var rs = (p.keywords || []).map(function (k) {
-        return k.latest_rank;
-      }).filter(function (r) {
-        return r && r > 0;
-      });
-      return rs.length ? Math.min.apply(null, rs) : null;
-    };
-    var _lastChecked = function (p) {
-      var ts = (p.keywords || []).map(function (k) {
-        return k.last_checked;
-      }).filter(Boolean).sort();
-      return ts.length ? ts[ts.length - 1] : null;
-    };
-    var _exposedCount = function (p) {
-      return (p.keywords || []).filter(function (k) {
-        return k.latest_rank && k.latest_rank > 0;
-      }).length;
-    };
-    var displayed = filtered.filter(function (p) {
-      if (!_q) return true;
-      return (p.store_name || '').toLowerCase().indexOf(_q) >= 0 || (p.product_name || '').toLowerCase().indexOf(_q) >= 0;
-    }).slice().sort(function (a, b) {
-      if (trackedSort === 'rank') {
-        var ra = _bestRank(a),
-          rb = _bestRank(b);
-        return (ra == null ? 99999 : ra) - (rb == null ? 99999 : rb);
-      }
-      if (trackedSort === 'checked') {
-        return String(_lastChecked(b) || '').localeCompare(String(_lastChecked(a) || ''));
-      }
-      return (a.store_name || '').localeCompare(b.store_name || '', 'ko');
-    });
-    var _thS = {
-      textAlign: 'left',
-      padding: '9px 12px',
-      borderBottom: '2px solid #e2e8f0',
-      color: '#64748b',
-      fontWeight: 700,
-      whiteSpace: 'nowrap',
-      fontSize: 12,
-      background: '#f8fafc'
-    };
-    var _thC = Object.assign({}, _thS, {
-      textAlign: 'center'
-    });
-    var _rankBadge = function (rk) {
-      if (!rk) return React.createElement('span', {
-        style: {
-          fontSize: 12,
-          color: '#94a3b8',
-          fontWeight: 600
-        }
-      }, '200위 밖');
-      var c = rk <= 10 ? '#059669' : rk <= 40 ? '#d97706' : '#dc2626';
-      return React.createElement('span', {
-        style: {
-          fontWeight: 800,
-          color: c
-        }
-      }, rk + '위', React.createElement('span', {
-        style: {
-          fontSize: 10,
-          color: '#94a3b8',
-          fontWeight: 600,
-          marginLeft: 4
-        }
-      }, Math.ceil(rk / 40) + 'P'));
-    };
-    return React.createElement('div', null, React.createElement('div', {
-      style: {
-        display: 'flex',
-        gap: 8,
-        flexWrap: 'wrap',
-        alignItems: 'center',
-        margin: '4px 0 12px'
-      }
-    }, React.createElement('input', {
-      className: 'form-input',
-      placeholder: '🔎 업체명·상품명 검색',
-      value: trackedSearch,
-      onChange: function (e) {
-        setTrackedSearch(e.target.value);
-      },
-      style: {
-        maxWidth: 280,
-        fontSize: 13
-      }
-    }), React.createElement('select', {
-      className: 'form-input',
-      value: trackedSort,
-      onChange: function (e) {
-        setTrackedSort(e.target.value);
-      },
-      style: {
-        maxWidth: 150,
-        fontSize: 13
-      }
-    }, React.createElement('option', {
-      value: 'company'
-    }, '업체명순'), React.createElement('option', {
-      value: 'rank'
-    }, '최고순위순'), React.createElement('option', {
-      value: 'checked'
-    }, '최근체크순')), React.createElement('span', {
-      style: {
-        fontSize: 12,
-        color: '#94a3b8',
-        marginLeft: 'auto'
-      }
-    }, '총 ' + displayed.length + '개')), React.createElement('div', {
-      style: {
-        overflowX: 'auto',
-        border: '1px solid #eef2f7',
-        borderRadius: 12
-      }
-    }, React.createElement('table', {
-      style: {
-        width: '100%',
-        borderCollapse: 'collapse',
-        fontSize: 13
-      }
-    }, React.createElement('thead', null, React.createElement('tr', null, React.createElement('th', {
-      style: _thS
-    }, '업체명'), React.createElement('th', {
-      style: _thS
-    }, '상품명'), React.createElement('th', {
-      style: _thC
-    }, '최고 순위'), React.createElement('th', {
-      style: _thC
-    }, '노출 키워드'), React.createElement('th', {
-      style: _thC
-    }, '최근 체크'), canEdit !== false && React.createElement('th', {
-      style: _thC
-    }, '관리'))), React.createElement('tbody', null, displayed.length === 0 ? React.createElement('tr', null, React.createElement('td', {
-      colSpan: 6,
-      style: {
-        padding: 24,
-        textAlign: 'center',
-        color: '#94a3b8'
-      }
-    }, _q ? '검색 결과가 없습니다.' : '추적 중인 상품이 없습니다. 상품을 등록해보세요.')) : displayed.map(function (p) {
-      var kws = p.keywords || [];
-      var isOpen = expandedProduct === p.id;
-      var lc = _lastChecked(p);
-      var rowMain = React.createElement('tr', {
-        key: p.id,
-        style: {
-          cursor: 'pointer',
-          borderTop: '1px solid #f1f5f9',
-          background: isOpen ? '#f5f3ff' : '#fff'
-        },
-        onClick: function () {
-          setExpandedProduct(isOpen ? null : p.id);
-        }
-      }, React.createElement('td', {
-        style: {
-          padding: '10px 12px',
-          fontWeight: 800,
-          color: '#0f172a',
-          whiteSpace: 'nowrap',
-          maxWidth: 220,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis'
-        }
-      }, React.createElement('span', {
-        style: {
-          color: '#a78bfa',
-          marginRight: 6,
-          fontSize: 11
-        }
-      }, isOpen ? '▼' : '▶'), p.store_name || '-'), React.createElement('td', {
-        style: {
-          padding: '10px 12px',
-          color: '#475569',
-          maxWidth: 360,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap'
-        },
-        title: p.product_name || ''
-      }, p.product_name || '-'), React.createElement('td', {
-        style: {
-          padding: '10px 12px',
-          textAlign: 'center'
-        }
-      }, _rankBadge(_bestRank(p))), React.createElement('td', {
-        style: {
-          padding: '10px 12px',
-          textAlign: 'center',
-          color: '#475569',
-          whiteSpace: 'nowrap'
-        }
-      }, _exposedCount(p) + ' / ' + kws.length), React.createElement('td', {
-        style: {
-          padding: '10px 12px',
-          textAlign: 'center',
-          fontSize: 12,
-          color: '#94a3b8',
-          whiteSpace: 'nowrap'
-        }
-      }, lc ? new Date((lc || '').replace(' ', 'T')).toLocaleDateString('ko') : '-'), canEdit !== false && React.createElement('td', {
-        style: {
-          padding: '10px 12px',
-          textAlign: 'center',
-          whiteSpace: 'nowrap'
-        }
-      }, React.createElement('button', {
-        className: 'btn btn-secondary btn-sm',
-        style: {
-          fontSize: 11,
-          padding: '4px 8px'
-        },
-        onClick: function (e) {
-          e.stopPropagation();
-          handleRefresh(p.id);
-        },
-        disabled: refreshing[p.id],
-        title: '순위 체크'
-      }, refreshing[p.id] ? '체크중' : '↻'), React.createElement('button', {
-        className: 'btn btn-danger btn-sm',
-        style: {
-          fontSize: 11,
-          padding: '4px 8px',
-          marginLeft: 4
-        },
-        onClick: function (e) {
-          e.stopPropagation();
-          handleDelete(p.id);
-        },
-        title: '삭제'
-      }, '✕')));
-      if (!isOpen) return rowMain;
-      var detail = React.createElement('tr', {
-        key: p.id + '-d'
-      }, React.createElement('td', {
-        colSpan: 6,
-        style: {
-          padding: 0,
-          background: '#faf5ff'
-        }
-      }, React.createElement('div', {
-        style: {
-          padding: '8px 12px 14px'
-        }
-      }, onNavigateToClient && React.createElement('button', {
-        onClick: function () {
-          onNavigateToClient(p.store_name || '', p.product_url || '');
-        },
-        style: {
-          fontSize: 11,
-          fontWeight: 700,
-          color: '#4f46e5',
-          background: '#ede9fe',
-          border: 'none',
-          borderRadius: 8,
-          padding: '4px 10px',
-          cursor: 'pointer',
-          marginBottom: 8
-        }
-      }, '업체관리에서 상세 보기 →'), kws.length === 0 ? React.createElement('div', {
-        style: {
-          fontSize: 12,
-          color: '#94a3b8',
-          padding: '8px 0'
-        }
-      }, '추적 키워드가 없습니다.') : React.createElement('table', {
-        style: {
-          width: '100%',
-          borderCollapse: 'collapse',
-          fontSize: 12,
-          background: '#fff',
-          borderRadius: 8,
-          overflow: 'hidden'
-        }
-      }, React.createElement('thead', null, React.createElement('tr', null, React.createElement('th', {
-        style: {
-          textAlign: 'left',
-          padding: '6px 10px',
-          color: '#94a3b8',
-          fontWeight: 700,
-          fontSize: 11
-        }
-      }, '키워드'), React.createElement('th', {
-        style: {
-          textAlign: 'left',
-          padding: '6px 10px',
-          color: '#94a3b8',
-          fontWeight: 700,
-          fontSize: 11
-        }
-      }, '현재 순위'), React.createElement('th', {
-        style: {
-          textAlign: 'left',
-          padding: '6px 10px',
-          color: '#94a3b8',
-          fontWeight: 700,
-          fontSize: 11
-        }
-      }, '최근 체크'))), React.createElement('tbody', null, kws.map(function (k) {
-        var kOpen = expandedKeyword === k.id;
-        var krow = React.createElement('tr', {
-          key: k.id,
-          style: {
-            cursor: 'pointer',
-            borderTop: '1px solid #f1f5f9',
-            background: kOpen ? '#f8fafc' : undefined
-          },
-          onClick: function () {
-            var next = kOpen ? null : k.id;
-            setExpandedKeyword(next);
-            if (next) loadHistory(k.id, historyDays[k.id] || 30);
-          }
-        }, React.createElement('td', {
-          style: {
-            padding: '6px 10px',
-            fontWeight: 600,
-            color: '#1e293b'
-          }
-        }, React.createElement('span', {
-          style: {
-            color: '#cbd5e1',
-            marginRight: 5,
-            fontSize: 9
-          }
-        }, kOpen ? '▼' : '▶'), k.keyword), React.createElement('td', {
-          style: {
-            padding: '6px 10px'
-          }
-        }, _rankBadge(k.latest_rank)), React.createElement('td', {
-          style: {
-            padding: '6px 10px',
-            fontSize: 11,
-            color: '#94a3b8'
-          }
-        }, k.last_checked ? new Date((k.last_checked || '').replace(' ', 'T')).toLocaleString('ko') : '-'));
-        if (!kOpen) return krow;
-        return [krow, React.createElement('tr', {
-          key: k.id + '-c'
-        }, React.createElement('td', {
-          colSpan: 3,
-          style: {
-            padding: 0,
-            background: '#f8fafc'
-          }
-        }, renderRankHistoryChart(k.id, k.keyword, {
-          storeName: p.store_name,
-          storeUrl: p.product_url
-        })))];
-      }))))));
-      return [rowMain, detail];
-    })))));
-  }())));
+          }, _q ? '검색 결과가 없습니다.' : '추적 중인 상품이 없습니다. 상품을 등록해보세요.')) : displayed.map(function (p) {
+            var kws = p.keywords || [];
+            var isOpen = expandedProduct === p.id;
+            var lc = _lastChecked(p);
+            var rowMain = React.createElement('tr', {
+              key: p.id,
+              style: {
+                cursor: 'pointer',
+                borderTop: '1px solid #f1f5f9',
+                background: isOpen ? '#f5f3ff' : '#fff'
+              },
+              onClick: function () {
+                setExpandedProduct(isOpen ? null : p.id);
+              }
+            }, React.createElement('td', {
+              style: {
+                padding: '10px 12px',
+                fontWeight: 800,
+                color: '#0f172a',
+                whiteSpace: 'nowrap',
+                maxWidth: 220,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis'
+              }
+            }, React.createElement('span', {
+              style: {
+                color: '#a78bfa',
+                marginRight: 6,
+                fontSize: 11
+              }
+            }, isOpen ? '▼' : '▶'), p.store_name || '-'), React.createElement('td', {
+              style: {
+                padding: '10px 12px',
+                color: '#475569',
+                maxWidth: 360,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap'
+              },
+              title: p.product_name || ''
+            }, p.product_name || '-'), React.createElement('td', {
+              style: {
+                padding: '10px 12px',
+                textAlign: 'center'
+              }
+            }, _rankBadge(_bestRank(p))), React.createElement('td', {
+              style: {
+                padding: '10px 12px',
+                textAlign: 'center',
+                color: '#475569',
+                whiteSpace: 'nowrap'
+              }
+            }, _exposedCount(p) + ' / ' + kws.length), React.createElement('td', {
+              style: {
+                padding: '10px 12px',
+                textAlign: 'center',
+                fontSize: 12,
+                color: '#94a3b8',
+                whiteSpace: 'nowrap'
+              }
+            }, lc ? new Date((lc || '').replace(' ', 'T')).toLocaleDateString('ko') : '-'), canEdit !== false && React.createElement('td', {
+              style: {
+                padding: '10px 12px',
+                textAlign: 'center',
+                whiteSpace: 'nowrap'
+              }
+            }, React.createElement('button', {
+              className: 'btn btn-secondary btn-sm',
+              style: {
+                fontSize: 11,
+                padding: '4px 8px'
+              },
+              onClick: function (e) {
+                e.stopPropagation();
+                handleRefresh(p.id);
+              },
+              disabled: refreshing[p.id],
+              title: '순위 체크'
+            }, refreshing[p.id] ? '체크중' : '↻'), React.createElement('button', {
+              className: 'btn btn-danger btn-sm',
+              style: {
+                fontSize: 11,
+                padding: '4px 8px',
+                marginLeft: 4
+              },
+              onClick: function (e) {
+                e.stopPropagation();
+                handleDelete(p.id);
+              },
+              title: '삭제'
+            }, '✕')));
+            if (!isOpen) return rowMain;
+            var detail = React.createElement('tr', {
+              key: p.id + '-d'
+            }, React.createElement('td', {
+              colSpan: 6,
+              style: {
+                padding: 0,
+                background: '#faf5ff'
+              }
+            }, React.createElement('div', {
+              style: {
+                padding: '8px 12px 14px'
+              }
+            }, onNavigateToClient && React.createElement('button', {
+              onClick: function () {
+                onNavigateToClient(p.store_name || '', p.product_url || '');
+              },
+              style: {
+                fontSize: 11,
+                fontWeight: 700,
+                color: '#4f46e5',
+                background: '#ede9fe',
+                border: 'none',
+                borderRadius: 8,
+                padding: '4px 10px',
+                cursor: 'pointer',
+                marginBottom: 8
+              }
+            }, '업체관리에서 상세 보기 →'), kws.length === 0 ? React.createElement('div', {
+              style: {
+                fontSize: 12,
+                color: '#94a3b8',
+                padding: '8px 0'
+              }
+            }, '추적 키워드가 없습니다.') : React.createElement('table', {
+              style: {
+                width: '100%',
+                borderCollapse: 'collapse',
+                fontSize: 12,
+                background: '#fff',
+                borderRadius: 8,
+                overflow: 'hidden'
+              }
+            }, React.createElement('thead', null, React.createElement('tr', null, React.createElement('th', {
+              style: {
+                textAlign: 'left',
+                padding: '6px 10px',
+                color: '#94a3b8',
+                fontWeight: 700,
+                fontSize: 11
+              }
+            }, '키워드'), React.createElement('th', {
+              style: {
+                textAlign: 'left',
+                padding: '6px 10px',
+                color: '#94a3b8',
+                fontWeight: 700,
+                fontSize: 11
+              }
+            }, '현재 순위'), React.createElement('th', {
+              style: {
+                textAlign: 'left',
+                padding: '6px 10px',
+                color: '#94a3b8',
+                fontWeight: 700,
+                fontSize: 11
+              }
+            }, '최근 체크'))), React.createElement('tbody', null, kws.map(function (k) {
+              var kOpen = expandedKeyword === k.id;
+              var krow = React.createElement('tr', {
+                key: k.id,
+                style: {
+                  cursor: 'pointer',
+                  borderTop: '1px solid #f1f5f9',
+                  background: kOpen ? '#f8fafc' : undefined
+                },
+                onClick: function () {
+                  var next = kOpen ? null : k.id;
+                  setExpandedKeyword(next);
+                  if (next) loadHistory(k.id, historyDays[k.id] || 30);
+                }
+              }, React.createElement('td', {
+                style: {
+                  padding: '6px 10px',
+                  fontWeight: 600,
+                  color: '#1e293b'
+                }
+              }, React.createElement('span', {
+                style: {
+                  color: '#cbd5e1',
+                  marginRight: 5,
+                  fontSize: 9
+                }
+              }, kOpen ? '▼' : '▶'), k.keyword), React.createElement('td', {
+                style: {
+                  padding: '6px 10px'
+                }
+              }, _rankBadge(k.latest_rank)), React.createElement('td', {
+                style: {
+                  padding: '6px 10px',
+                  fontSize: 11,
+                  color: '#94a3b8'
+                }
+              }, k.last_checked ? new Date((k.last_checked || '').replace(' ', 'T')).toLocaleString('ko') : '-'));
+              if (!kOpen) return krow;
+              return [krow, React.createElement('tr', {
+                key: k.id + '-c'
+              }, React.createElement('td', {
+                colSpan: 3,
+                style: {
+                  padding: 0,
+                  background: '#f8fafc'
+                }
+              }, renderRankHistoryChart(k.id, k.keyword, {
+                storeName: p.store_name,
+                storeUrl: p.product_url
+              })))];
+            }))))));
+            return [rowMain, detail];
+          })))));
+        }()]
+      }, void 0, true)
+    }, void 0, false)
+  }, void 0, false);
 };
 
 ;/* ===== js/components/KeywordVolumeSection.jsx ===== */
+import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";
 /* KeywordVolumeSection — 키워드 검색량 (v6.1 미리보기 디자인) */
 window.KeywordVolumeSection = function KeywordVolumeSection({
   keyword,
@@ -2966,70 +3085,100 @@ window.KeywordVolumeSection = function KeywordVolumeSection({
   const pcRatio = total > 0 ? Math.round(pc / total * 100) : 0;
   const mobileRatio = total > 0 ? Math.round(mobile / total * 100) : 0;
   var note = mobileRatio >= 70 ? '모바일 비중 ' + mobileRatio + '% — 모바일 최적화 상세페이지가 매우 중요합니다.' : mobileRatio >= 50 ? '모바일과 PC가 균형 잡힌 키워드입니다. 양쪽 모두 최적화가 필요합니다.' : 'PC 비중 ' + pcRatio + '% — PC 기반 상세페이지 최적화에 집중하세요.';
-  return /*#__PURE__*/React.createElement("div", {
+  return /*#__PURE__*/_jsxDEV("div", {
     className: "section fade-in",
-    id: "sec-volume"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "container"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "card"
-  }, /*#__PURE__*/React.createElement("h3", {
-    className: "rt-h3"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "hic"
-  }, "\uD83D\uDD0D"), "\uD0A4\uC6CC\uB4DC \uAC80\uC0C9\uB7C9", /*#__PURE__*/React.createElement("span", {
-    className: "badge b-ok"
-  }, "\u2705 \uC2E4\uCE21")), /*#__PURE__*/React.createElement("div", {
-    className: "grid3"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "kpi"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "k"
-  }, "\uCD1D \uAC80\uC0C9\uB7C9"), /*#__PURE__*/React.createElement("div", {
-    className: "v"
-  }, fmt(total), /*#__PURE__*/React.createElement("small", null, "\uD68C/\uC6D4"))), /*#__PURE__*/React.createElement("div", {
-    className: "kpi"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "k"
-  }, "PC"), /*#__PURE__*/React.createElement("div", {
-    className: "v"
-  }, fmt(pc), /*#__PURE__*/React.createElement("small", null, "\uD68C (", pcRatio, "%)"))), /*#__PURE__*/React.createElement("div", {
-    className: "kpi"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "k"
-  }, "\uBAA8\uBC14\uC77C"), /*#__PURE__*/React.createElement("div", {
-    className: "v"
-  }, fmt(mobile), /*#__PURE__*/React.createElement("small", null, "\uD68C (", mobileRatio, "%)")))), /*#__PURE__*/React.createElement("div", {
-    className: "track",
-    style: {
-      height: 14,
-      marginTop: 14,
-      display: 'flex'
-    }
-  }, /*#__PURE__*/React.createElement("i", {
-    style: {
-      width: pcRatio + '%',
-      background: '#6366f1'
-    }
-  }), /*#__PURE__*/React.createElement("i", {
-    style: {
-      width: mobileRatio + '%',
-      background: '#ec4899'
-    }
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      justifyContent: 'space-between',
-      fontSize: 11,
-      color: 'var(--sub)',
-      marginTop: 5
-    }
-  }, /*#__PURE__*/React.createElement("span", null, "\u25CF PC ", pcRatio, "%"), /*#__PURE__*/React.createElement("span", null, "\uBAA8\uBC14\uC77C ", mobileRatio, "% \u25CF")), /*#__PURE__*/React.createElement("div", {
-    className: "note"
-  }, note))));
+    id: "sec-volume",
+    children: /*#__PURE__*/_jsxDEV("div", {
+      className: "container",
+      children: /*#__PURE__*/_jsxDEV("div", {
+        className: "card",
+        children: [/*#__PURE__*/_jsxDEV("h3", {
+          className: "rt-h3",
+          children: [/*#__PURE__*/_jsxDEV("span", {
+            className: "hic",
+            children: "🔍"
+          }, void 0, false), "키워드 검색량", /*#__PURE__*/_jsxDEV("span", {
+            className: "badge b-ok",
+            children: "✅ 실측"
+          }, void 0, false)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          className: "grid3",
+          children: [/*#__PURE__*/_jsxDEV("div", {
+            className: "kpi",
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              className: "k",
+              children: "총 검색량"
+            }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+              className: "v",
+              children: [fmt(total), /*#__PURE__*/_jsxDEV("small", {
+                children: "회/월"
+              }, void 0, false)]
+            }, void 0, true)]
+          }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+            className: "kpi",
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              className: "k",
+              children: "PC"
+            }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+              className: "v",
+              children: [fmt(pc), /*#__PURE__*/_jsxDEV("small", {
+                children: ["회 (", pcRatio, "%)"]
+              }, void 0, true)]
+            }, void 0, true)]
+          }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+            className: "kpi",
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              className: "k",
+              children: "모바일"
+            }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+              className: "v",
+              children: [fmt(mobile), /*#__PURE__*/_jsxDEV("small", {
+                children: ["회 (", mobileRatio, "%)"]
+              }, void 0, true)]
+            }, void 0, true)]
+          }, void 0, true)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          className: "track",
+          style: {
+            height: 14,
+            marginTop: 14,
+            display: 'flex'
+          },
+          children: [/*#__PURE__*/_jsxDEV("i", {
+            style: {
+              width: pcRatio + '%',
+              background: '#6366f1'
+            }
+          }, void 0, false), /*#__PURE__*/_jsxDEV("i", {
+            style: {
+              width: mobileRatio + '%',
+              background: '#ec4899'
+            }
+          }, void 0, false)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          style: {
+            display: 'flex',
+            justifyContent: 'space-between',
+            fontSize: 11,
+            color: 'var(--sub)',
+            marginTop: 5
+          },
+          children: [/*#__PURE__*/_jsxDEV("span", {
+            children: ["● PC ", pcRatio, "%"]
+          }, void 0, true), /*#__PURE__*/_jsxDEV("span", {
+            children: ["모바일 ", mobileRatio, "% ●"]
+          }, void 0, true)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          className: "note",
+          children: note
+        }, void 0, false)]
+      }, void 0, true)
+    }, void 0, false)
+  }, void 0, false);
 };
 
 ;/* ===== js/components/RelatedKeywordsSection.jsx ===== */
+import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";
 /* RelatedKeywordsSection — 연관/황금 키워드 (v5) */
 window.RelatedKeywordsSection = function RelatedKeywordsSection({
   data
@@ -3057,231 +3206,272 @@ window.RelatedKeywordsSection = function RelatedKeywordsSection({
     '보통': '#fffbeb',
     '낮음': '#f0fdf4'
   };
-  return /*#__PURE__*/React.createElement("div", {
+  return /*#__PURE__*/_jsxDEV("div", {
     className: "section fade-in",
-    id: "sec-related"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "container"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      padding: '20px 22px'
-    }
-  }, /*#__PURE__*/React.createElement("h3", {
-    className: "rt-h3"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "rt-hic"
-  }, "\uD83D\uDD17"), "\uC5F0\uAD00 \uD0A4\uC6CC\uB4DC \uBD84\uC11D", /*#__PURE__*/React.createElement("span", {
-    className: "badge b-ok"
-  }, "\u2705 \uC2E4\uCE21"), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 12,
-      fontWeight: 400,
-      color: '#64748b',
-      marginLeft: 4
-    }
-  }, "\uCD1D ", fmt(data.total_found), "\uAC1C \uBC1C\uACAC")), /*#__PURE__*/React.createElement("div", {
-    className: "rt-desc"
-  }, "\uAC80\uC0C9\uB7C9\uACFC \uACBD\uC7C1\uAC15\uB3C4\uB97C \uAE30\uBC18\uC73C\uB85C \uBD84\uB958\uD569\uB2C8\uB2E4"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      gap: 8,
-      marginBottom: 16
-    }
-  }, /*#__PURE__*/React.createElement("button", {
-    onClick: () => setTab('related'),
-    style: {
-      padding: '10px 20px',
-      borderRadius: 10,
-      border: 'none',
-      background: tab === 'related' ? '#4f46e5' : '#f1f5f9',
-      color: tab === 'related' ? '#fff' : '#64748b',
-      fontSize: 13,
-      fontWeight: 600,
-      cursor: 'pointer',
-      fontFamily: 'inherit',
-      transition: 'all 0.2s'
-    }
-  }, "\uC5F0\uAD00 \uD0A4\uC6CC\uB4DC (", relatedList.length, ")"), /*#__PURE__*/React.createElement("button", {
-    onClick: () => setTab('golden'),
-    style: {
-      padding: '10px 20px',
-      borderRadius: 10,
-      border: 'none',
-      background: tab === 'golden' ? '#f59e0b' : '#f1f5f9',
-      color: tab === 'golden' ? '#fff' : '#64748b',
-      fontSize: 13,
-      fontWeight: 600,
-      cursor: 'pointer',
-      fontFamily: 'inherit',
-      transition: 'all 0.2s'
-    }
-  }, "\uD83D\uDC8E \uD669\uAE08 \uD0A4\uC6CC\uB4DC (", goldenList.length, ")")), displayList.length === 0 ? /*#__PURE__*/React.createElement(EmptyState, {
-    icon: "\uD83D\uDC8E",
-    text: tab === 'golden' ? '황금 키워드가 없습니다 (검색량 100~5,000 + 경쟁 낮음 조건)' : '연관 키워드가 없습니다'
-  }) : /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      padding: 0,
-      overflow: 'hidden',
-      borderRadius: 16
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      maxHeight: 540,
-      overflowY: 'auto'
-    }
-  }, /*#__PURE__*/React.createElement("table", {
-    className: "rt-table",
-    style: {
-      width: '100%',
-      borderCollapse: 'collapse'
-    }
-  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", {
-    style: {
-      textAlign: 'center',
-      width: 40
-    }
-  }, "#"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      textAlign: 'left'
-    }
-  }, "\uD0A4\uC6CC\uB4DC"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      textAlign: 'left'
-    }
-  }, "\uC6D4\uAC04 \uAC80\uC0C9\uB7C9"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      textAlign: 'center'
-    }
-  }, "PC"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      textAlign: 'center'
-    }
-  }, "\uBAA8\uBC14\uC77C"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      textAlign: 'center'
-    }
-  }, "\uACBD\uC7C1\uAC15\uB3C4"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      textAlign: 'left',
-      width: '20%'
-    }
-  }, "\uAC80\uC0C9\uB7C9 \uBE44\uC728"), tab === 'golden' && /*#__PURE__*/React.createElement("th", {
-    style: {
-      textAlign: 'center'
-    }
-  }, "\uCD94\uCC9C"))), /*#__PURE__*/React.createElement("tbody", null, displayList.map((k, i) => {
-    var volPct = maxVol > 0 ? Math.min(100, Math.round((k.totalVolume || 0) / maxVol * 100)) : 0;
-    var cLabel = compLabel(k.compIdx);
-    return /*#__PURE__*/React.createElement("tr", {
-      key: k.keyword,
-      style: {
-        borderBottom: '1px solid #e2e8f0',
-        background: i % 2 === 0 ? '#fff' : '#f8fafc'
-      }
-    }, /*#__PURE__*/React.createElement("td", {
-      style: {
-        padding: '12px 16px',
-        textAlign: 'center',
-        color: '#94a3b8',
-        fontSize: 13,
-        whiteSpace: 'nowrap',
-        minWidth: 32
-      }
-    }, i + 1), /*#__PURE__*/React.createElement("td", {
-      style: {
-        padding: '12px 20px',
-        fontWeight: 600,
-        fontSize: 14,
-        color: '#0f172a'
-      }
-    }, k.keyword, k.isGolden && /*#__PURE__*/React.createElement("span", {
-      style: {
-        display: 'inline-block',
-        marginLeft: 6,
-        padding: '2px 8px',
-        borderRadius: 999,
-        fontSize: 10,
-        fontWeight: 700,
-        background: '#fef3c7',
-        color: '#92400e'
-      }
-    }, "\uD669\uAE08")), /*#__PURE__*/React.createElement("td", {
-      style: {
-        padding: '12px 20px',
-        fontWeight: 700,
-        fontSize: 14,
-        color: '#4f46e5'
-      }
-    }, fmt(k.totalVolume)), /*#__PURE__*/React.createElement("td", {
-      style: {
-        padding: '12px 16px',
-        textAlign: 'center',
-        fontSize: 13,
-        color: '#64748b'
-      }
-    }, fmt(k.monthlyPcQcCnt)), /*#__PURE__*/React.createElement("td", {
-      style: {
-        padding: '12px 16px',
-        textAlign: 'center',
-        fontSize: 13,
-        color: '#64748b'
-      }
-    }, fmt(k.monthlyMobileQcCnt)), /*#__PURE__*/React.createElement("td", {
-      style: {
-        padding: '12px 16px',
-        textAlign: 'center'
-      }
-    }, /*#__PURE__*/React.createElement("span", {
-      style: {
-        display: 'inline-block',
-        padding: '4px 12px',
-        borderRadius: 999,
-        fontSize: 12,
-        fontWeight: 700,
-        background: compBgMap[cLabel] || '#f1f5f9',
-        color: compColorMap[cLabel] || '#64748b'
-      }
-    }, cLabel)), /*#__PURE__*/React.createElement("td", {
-      style: {
-        padding: '12px 20px'
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        height: 6,
-        borderRadius: 3,
-        background: '#f1f5f9',
-        overflow: 'hidden'
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        width: volPct + '%',
-        height: '100%',
-        borderRadius: 3,
-        background: tab === 'golden' ? 'linear-gradient(90deg, #f59e0b, #fbbf24)' : 'linear-gradient(90deg, #4f46e5, #7c3aed)',
-        transition: 'width 0.8s ease'
-      }
-    }))), tab === 'golden' && /*#__PURE__*/React.createElement("td", {
-      style: {
-        padding: '12px 16px',
-        textAlign: 'center'
-      }
-    }, /*#__PURE__*/React.createElement("span", {
-      style: {
-        display: 'inline-block',
-        padding: '4px 12px',
-        borderRadius: 999,
-        fontSize: 11,
-        fontWeight: 700,
-        background: '#f0fdf4',
-        color: '#166534'
-      }
-    }, "\uC9C4\uC785 \uCD94\uCC9C")));
-  }))))))));
+    id: "sec-related",
+    children: /*#__PURE__*/_jsxDEV("div", {
+      className: "container",
+      children: /*#__PURE__*/_jsxDEV("div", {
+        className: "card",
+        style: {
+          padding: '20px 22px'
+        },
+        children: [/*#__PURE__*/_jsxDEV("h3", {
+          className: "rt-h3",
+          children: [/*#__PURE__*/_jsxDEV("span", {
+            className: "rt-hic",
+            children: "🔗"
+          }, void 0, false), "연관 키워드 분석", /*#__PURE__*/_jsxDEV("span", {
+            className: "badge b-ok",
+            children: "✅ 실측"
+          }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+            style: {
+              fontSize: 12,
+              fontWeight: 400,
+              color: '#64748b',
+              marginLeft: 4
+            },
+            children: ["총 ", fmt(data.total_found), "개 발견"]
+          }, void 0, true)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          className: "rt-desc",
+          children: "검색량과 경쟁강도를 기반으로 분류합니다"
+        }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+          style: {
+            display: 'flex',
+            gap: 8,
+            marginBottom: 16
+          },
+          children: [/*#__PURE__*/_jsxDEV("button", {
+            onClick: () => setTab('related'),
+            style: {
+              padding: '10px 20px',
+              borderRadius: 10,
+              border: 'none',
+              background: tab === 'related' ? '#4f46e5' : '#f1f5f9',
+              color: tab === 'related' ? '#fff' : '#64748b',
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: 'pointer',
+              fontFamily: 'inherit',
+              transition: 'all 0.2s'
+            },
+            children: ["연관 키워드 (", relatedList.length, ")"]
+          }, void 0, true), /*#__PURE__*/_jsxDEV("button", {
+            onClick: () => setTab('golden'),
+            style: {
+              padding: '10px 20px',
+              borderRadius: 10,
+              border: 'none',
+              background: tab === 'golden' ? '#f59e0b' : '#f1f5f9',
+              color: tab === 'golden' ? '#fff' : '#64748b',
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: 'pointer',
+              fontFamily: 'inherit',
+              transition: 'all 0.2s'
+            },
+            children: ["💎 황금 키워드 (", goldenList.length, ")"]
+          }, void 0, true)]
+        }, void 0, true), displayList.length === 0 ? /*#__PURE__*/_jsxDEV(EmptyState, {
+          icon: "💎",
+          text: tab === 'golden' ? '황금 키워드가 없습니다 (검색량 100~5,000 + 경쟁 낮음 조건)' : '연관 키워드가 없습니다'
+        }, void 0, false) : /*#__PURE__*/_jsxDEV("div", {
+          className: "card",
+          style: {
+            padding: 0,
+            overflow: 'hidden',
+            borderRadius: 16
+          },
+          children: /*#__PURE__*/_jsxDEV("div", {
+            style: {
+              maxHeight: 540,
+              overflowY: 'auto'
+            },
+            children: /*#__PURE__*/_jsxDEV("table", {
+              className: "rt-table",
+              style: {
+                width: '100%',
+                borderCollapse: 'collapse'
+              },
+              children: [/*#__PURE__*/_jsxDEV("thead", {
+                children: /*#__PURE__*/_jsxDEV("tr", {
+                  children: [/*#__PURE__*/_jsxDEV("th", {
+                    style: {
+                      textAlign: 'center',
+                      width: 40
+                    },
+                    children: "#"
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                    style: {
+                      textAlign: 'left'
+                    },
+                    children: "키워드"
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                    style: {
+                      textAlign: 'left'
+                    },
+                    children: "월간 검색량"
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                    style: {
+                      textAlign: 'center'
+                    },
+                    children: "PC"
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                    style: {
+                      textAlign: 'center'
+                    },
+                    children: "모바일"
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                    style: {
+                      textAlign: 'center'
+                    },
+                    children: "경쟁강도"
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                    style: {
+                      textAlign: 'left',
+                      width: '20%'
+                    },
+                    children: "검색량 비율"
+                  }, void 0, false), tab === 'golden' && /*#__PURE__*/_jsxDEV("th", {
+                    style: {
+                      textAlign: 'center'
+                    },
+                    children: "추천"
+                  }, void 0, false)]
+                }, void 0, true)
+              }, void 0, false), /*#__PURE__*/_jsxDEV("tbody", {
+                children: displayList.map((k, i) => {
+                  var volPct = maxVol > 0 ? Math.min(100, Math.round((k.totalVolume || 0) / maxVol * 100)) : 0;
+                  var cLabel = compLabel(k.compIdx);
+                  return /*#__PURE__*/_jsxDEV("tr", {
+                    style: {
+                      borderBottom: '1px solid #e2e8f0',
+                      background: i % 2 === 0 ? '#fff' : '#f8fafc'
+                    },
+                    children: [/*#__PURE__*/_jsxDEV("td", {
+                      style: {
+                        padding: '12px 16px',
+                        textAlign: 'center',
+                        color: '#94a3b8',
+                        fontSize: 13,
+                        whiteSpace: 'nowrap',
+                        minWidth: 32
+                      },
+                      children: i + 1
+                    }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                      style: {
+                        padding: '12px 20px',
+                        fontWeight: 600,
+                        fontSize: 14,
+                        color: '#0f172a'
+                      },
+                      children: [k.keyword, k.isGolden && /*#__PURE__*/_jsxDEV("span", {
+                        style: {
+                          display: 'inline-block',
+                          marginLeft: 6,
+                          padding: '2px 8px',
+                          borderRadius: 999,
+                          fontSize: 10,
+                          fontWeight: 700,
+                          background: '#fef3c7',
+                          color: '#92400e'
+                        },
+                        children: "황금"
+                      }, void 0, false)]
+                    }, void 0, true), /*#__PURE__*/_jsxDEV("td", {
+                      style: {
+                        padding: '12px 20px',
+                        fontWeight: 700,
+                        fontSize: 14,
+                        color: '#4f46e5'
+                      },
+                      children: fmt(k.totalVolume)
+                    }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                      style: {
+                        padding: '12px 16px',
+                        textAlign: 'center',
+                        fontSize: 13,
+                        color: '#64748b'
+                      },
+                      children: fmt(k.monthlyPcQcCnt)
+                    }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                      style: {
+                        padding: '12px 16px',
+                        textAlign: 'center',
+                        fontSize: 13,
+                        color: '#64748b'
+                      },
+                      children: fmt(k.monthlyMobileQcCnt)
+                    }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                      style: {
+                        padding: '12px 16px',
+                        textAlign: 'center'
+                      },
+                      children: /*#__PURE__*/_jsxDEV("span", {
+                        style: {
+                          display: 'inline-block',
+                          padding: '4px 12px',
+                          borderRadius: 999,
+                          fontSize: 12,
+                          fontWeight: 700,
+                          background: compBgMap[cLabel] || '#f1f5f9',
+                          color: compColorMap[cLabel] || '#64748b'
+                        },
+                        children: cLabel
+                      }, void 0, false)
+                    }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                      style: {
+                        padding: '12px 20px'
+                      },
+                      children: /*#__PURE__*/_jsxDEV("div", {
+                        style: {
+                          height: 6,
+                          borderRadius: 3,
+                          background: '#f1f5f9',
+                          overflow: 'hidden'
+                        },
+                        children: /*#__PURE__*/_jsxDEV("div", {
+                          style: {
+                            width: volPct + '%',
+                            height: '100%',
+                            borderRadius: 3,
+                            background: tab === 'golden' ? 'linear-gradient(90deg, #f59e0b, #fbbf24)' : 'linear-gradient(90deg, #4f46e5, #7c3aed)',
+                            transition: 'width 0.8s ease'
+                          }
+                        }, void 0, false)
+                      }, void 0, false)
+                    }, void 0, false), tab === 'golden' && /*#__PURE__*/_jsxDEV("td", {
+                      style: {
+                        padding: '12px 16px',
+                        textAlign: 'center'
+                      },
+                      children: /*#__PURE__*/_jsxDEV("span", {
+                        style: {
+                          display: 'inline-block',
+                          padding: '4px 12px',
+                          borderRadius: 999,
+                          fontSize: 11,
+                          fontWeight: 700,
+                          background: '#f0fdf4',
+                          color: '#166534'
+                        },
+                        children: "진입 추천"
+                      }, void 0, false)
+                    }, void 0, false)]
+                  }, k.keyword, true);
+                })
+              }, void 0, false)]
+            }, void 0, true)
+          }, void 0, false)
+        }, void 0, false)]
+      }, void 0, true)
+    }, void 0, false)
+  }, void 0, false);
 };
 
 ;/* ===== js/components/SeoDiagnosisSection.jsx ===== */
+import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";
 /* SeoDiagnosisSection — SEO 종합 진단 (v5 풀버전) */
 window.SeoDiagnosisSection = function SeoDiagnosisSection({
   keyword,
@@ -3376,302 +3566,396 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({
   /* v5 유틸 */
   const getScoreColor = s => s >= 70 ? '#10b981' : s >= 40 ? '#f59e0b' : '#ef4444';
   const getScoreLabel = s => s >= 70 ? '양호' : s >= 40 ? '보통' : '개선필요';
-  return /*#__PURE__*/React.createElement("div", {
+  return /*#__PURE__*/_jsxDEV("div", {
     className: "section fade-in",
-    id: "sec-seo"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "container"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      padding: '20px 22px'
-    }
-  }, /*#__PURE__*/React.createElement("h3", {
-    className: "rt-h3"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "rt-hic"
-  }, "\uD83D\uDD27"), "\u2460 SEO \uC885\uD569 \uC9C4\uB2E8", /*#__PURE__*/React.createElement("span", {
-    className: "badge b-est"
-  }, "\u2248 \uCD94\uC815")), /*#__PURE__*/React.createElement("div", {
-    className: "rt-desc"
-  }, "10\uAC1C \uD3C9\uAC00\uC9C0\uD45C\uB85C \uC0C1\uD488\uC758 \uAC80\uC0C9 \uB178\uCD9C \uC0C1\uD0DC\uB97C \uC9C4\uB2E8\uD569\uB2C8\uB2E4"), /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      marginBottom: 16,
-      borderRadius: 16
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      gap: 10
-    }
-  }, /*#__PURE__*/React.createElement("input", {
-    className: "form-input",
-    placeholder: "\uBD84\uC11D\uD560 \uC0C1\uD488 URL\uC744 \uC785\uB825\uD558\uC138\uC694",
-    value: productUrl,
-    onChange: e => setProductUrl(e.target.value),
-    style: {
-      flex: 1
-    }
-  }), /*#__PURE__*/React.createElement("button", {
-    className: "btn btn-primary",
-    onClick: handleAnalyze,
-    disabled: loading || !productUrl || !keyword
-  }, loading ? '분석 중...' : 'SEO 진단')), keyword && /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 12,
-      color: '#64748b',
-      marginTop: 8
-    }
-  }, "\uAE30\uC900 \uD0A4\uC6CC\uB4DC: ", /*#__PURE__*/React.createElement("strong", null, keyword))), loading && /*#__PURE__*/React.createElement(LoadingSpinner, {
-    text: "SEO \uBD84\uC11D \uC911..."
-  }), result && !loading && /*#__PURE__*/React.createElement("div", {
-    className: "fade-in"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "grid2",
-    style: {
-      alignItems: 'center',
-      marginBottom: 16
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "chartbox sm"
-  }, /*#__PURE__*/React.createElement(ChartCanvas, {
-    type: "radar",
-    height: 320,
-    data: {
-      labels: ['상품명', '검색순위', '가격', '리뷰', '판매', '평점', '카테고리', '브랜드', '네이버페이', '최신성'],
-      datasets: [{
-        label: 'SEO 점수',
-        data: [result.scores.title || 0, result.scores.rank || 0, result.scores.price || 0, result.scores.review || 0, result.scores.sales || 0, result.scores.rating || 0, result.scores.category || 0, result.scores.brand || 0, result.scores.naverpay || 0, result.scores.freshness || 0],
-        borderColor: '#4f46e5',
-        backgroundColor: 'rgba(79,70,229,.18)',
-        pointBackgroundColor: '#4f46e5',
-        borderWidth: 2
-      }]
-    },
-    options: {
-      plugins: {
-        legend: {
-          display: false
+    id: "sec-seo",
+    children: /*#__PURE__*/_jsxDEV("div", {
+      className: "container",
+      children: /*#__PURE__*/_jsxDEV("div", {
+        className: "card",
+        style: {
+          padding: '20px 22px'
         },
-        tooltip: {
-          callbacks: {
-            label: function (ctx) {
-              return ctx.label + ' ' + ctx.parsed.r + '점';
-            }
-          }
-        }
-      },
-      scales: {
-        r: {
-          beginAtZero: true,
-          max: 100,
-          ticks: {
-            display: false
+        children: [/*#__PURE__*/_jsxDEV("h3", {
+          className: "rt-h3",
+          children: [/*#__PURE__*/_jsxDEV("span", {
+            className: "rt-hic",
+            children: "🔧"
+          }, void 0, false), "① SEO 종합 진단", /*#__PURE__*/_jsxDEV("span", {
+            className: "badge b-est",
+            children: "≈ 추정"
+          }, void 0, false)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          className: "rt-desc",
+          children: "10개 평가지표로 상품의 검색 노출 상태를 진단합니다"
+        }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+          className: "card",
+          style: {
+            marginBottom: 16,
+            borderRadius: 16
           },
-          pointLabels: {
-            font: {
-              size: 11
-            }
-          }
-        }
-      }
-    }
-  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    style: {
-      textAlign: 'center',
-      marginBottom: 8
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 34,
-      fontWeight: 900,
-      color: getScoreColor(result.scores.total)
-    }
-  }, result.scores.total), /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: 'var(--rt-sub)'
-    }
-  }, "/100 \xB7 ", getScoreLabel(result.scores.total))), /*#__PURE__*/React.createElement("div", {
-    className: "scorebar"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "lbl"
-  }, /*#__PURE__*/React.createElement("b", null, "\uC0C1\uD488\uBA85"), /*#__PURE__*/React.createElement("span", {
-    className: "w"
-  }, "15%")), /*#__PURE__*/React.createElement("div", {
-    className: "track"
-  }, /*#__PURE__*/React.createElement("i", {
-    style: {
-      width: (result.scores.title || 0) + '%'
-    }
-  }))), /*#__PURE__*/React.createElement("div", {
-    className: "scorebar"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "lbl"
-  }, /*#__PURE__*/React.createElement("b", null, "\uAC80\uC0C9\uC21C\uC704"), /*#__PURE__*/React.createElement("span", {
-    className: "w"
-  }, "15%")), /*#__PURE__*/React.createElement("div", {
-    className: "track"
-  }, /*#__PURE__*/React.createElement("i", {
-    style: {
-      width: (result.scores.rank || 0) + '%'
-    }
-  }))), /*#__PURE__*/React.createElement("div", {
-    className: "scorebar"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "lbl"
-  }, /*#__PURE__*/React.createElement("b", null, "\uAC00\uACA9"), /*#__PURE__*/React.createElement("span", {
-    className: "w"
-  }, "12%")), /*#__PURE__*/React.createElement("div", {
-    className: "track"
-  }, /*#__PURE__*/React.createElement("i", {
-    style: {
-      width: (result.scores.price || 0) + '%'
-    }
-  }))), /*#__PURE__*/React.createElement("div", {
-    className: "scorebar"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "lbl"
-  }, /*#__PURE__*/React.createElement("b", null, "\uB9AC\uBDF0"), /*#__PURE__*/React.createElement("span", {
-    className: "w"
-  }, "12%")), /*#__PURE__*/React.createElement("div", {
-    className: "track"
-  }, /*#__PURE__*/React.createElement("i", {
-    style: {
-      width: (result.scores.review || 0) + '%'
-    }
-  }))), /*#__PURE__*/React.createElement("div", {
-    className: "scorebar"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "lbl"
-  }, /*#__PURE__*/React.createElement("b", null, "\uD310\uB9E4\uC2E4\uC801"), /*#__PURE__*/React.createElement("span", {
-    className: "w"
-  }, "10%")), /*#__PURE__*/React.createElement("div", {
-    className: "track"
-  }, /*#__PURE__*/React.createElement("i", {
-    style: {
-      width: (result.scores.sales || 0) + '%'
-    }
-  }))), /*#__PURE__*/React.createElement("div", {
-    className: "scorebar"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "lbl"
-  }, /*#__PURE__*/React.createElement("b", null, "\uD3C9\uC810"), /*#__PURE__*/React.createElement("span", {
-    className: "w"
-  }, "8%")), /*#__PURE__*/React.createElement("div", {
-    className: "track"
-  }, /*#__PURE__*/React.createElement("i", {
-    style: {
-      width: (result.scores.rating || 0) + '%'
-    }
-  }))), /*#__PURE__*/React.createElement("div", {
-    className: "scorebar"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "lbl"
-  }, /*#__PURE__*/React.createElement("b", null, "\uCE74\uD14C\uACE0\uB9AC"), /*#__PURE__*/React.createElement("span", {
-    className: "w"
-  }, "8%")), /*#__PURE__*/React.createElement("div", {
-    className: "track"
-  }, /*#__PURE__*/React.createElement("i", {
-    style: {
-      width: (result.scores.category || 0) + '%'
-    }
-  }))), /*#__PURE__*/React.createElement("div", {
-    className: "scorebar"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "lbl"
-  }, /*#__PURE__*/React.createElement("b", null, "\uBE0C\uB79C\uB4DC"), /*#__PURE__*/React.createElement("span", {
-    className: "w"
-  }, "8%")), /*#__PURE__*/React.createElement("div", {
-    className: "track"
-  }, /*#__PURE__*/React.createElement("i", {
-    style: {
-      width: (result.scores.brand || 0) + '%'
-    }
-  }))), /*#__PURE__*/React.createElement("div", {
-    className: "scorebar"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "lbl"
-  }, /*#__PURE__*/React.createElement("b", null, "\uB124\uC774\uBC84\uD398\uC774"), /*#__PURE__*/React.createElement("span", {
-    className: "w"
-  }, "6%")), /*#__PURE__*/React.createElement("div", {
-    className: "track"
-  }, /*#__PURE__*/React.createElement("i", {
-    style: {
-      width: (result.scores.naverpay || 0) + '%'
-    }
-  }))), /*#__PURE__*/React.createElement("div", {
-    className: "scorebar"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "lbl"
-  }, /*#__PURE__*/React.createElement("b", null, "\uCD5C\uC2E0\uC131"), /*#__PURE__*/React.createElement("span", {
-    className: "w"
-  }, "6%")), /*#__PURE__*/React.createElement("div", {
-    className: "track"
-  }, /*#__PURE__*/React.createElement("i", {
-    style: {
-      width: (result.scores.freshness || 0) + '%'
-    }
-  }))), result.scores.detail?.current_rank && /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: 8,
-      fontSize: 12,
-      color: 'var(--rt-sub)',
-      lineHeight: 1.6,
-      textAlign: 'center'
-    }
-  }, "\uD604\uC7AC \uC21C\uC704: ", /*#__PURE__*/React.createElement("strong", null, result.scores.detail.current_rank, "\uC704"), " \xB7 \uCD94\uC815 \uC6D4 \uD310\uB9E4: ", /*#__PURE__*/React.createElement("strong", null, (result.scores.detail.est_monthly_sales || 0).toLocaleString(), "\uAC74")))), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 11,
-      color: 'var(--rt-sub)',
-      marginTop: 6
-    }
-  }, "10\uAC1C \uC9C0\uD45C: \uC0C1\uD488\uBA85\xB7\uAC80\uC0C9\uC21C\uC704\xB7\uAC00\uACA9\xB7\uB9AC\uBDF0\xB7\uD310\uB9E4\uC2E4\uC801\xB7\uD3C9\uC810\xB7\uCE74\uD14C\uACE0\uB9AC\xB7\uBE0C\uB79C\uB4DC\xB7\uB124\uC774\uBC84\uD398\uC774\xB7\uCD5C\uC2E0\uC131 (\uB808\uC774\uB354 \uCC28\uD2B8)"), result.suggestions?.length > 0 && /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      borderRadius: 16
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontWeight: 700,
-      fontSize: 14,
-      marginBottom: 14,
-      display: 'flex',
-      alignItems: 'center',
-      gap: 6
-    }
-  }, /*#__PURE__*/React.createElement("span", null, "\uD83D\uDCA1"), " \uAC1C\uC120 \uC81C\uC548"), result.suggestions.map((s, i) => /*#__PURE__*/React.createElement("div", {
-    key: i,
-    style: {
-      padding: '10px 0',
-      borderBottom: i < result.suggestions.length - 1 ? '1px solid #f1f5f9' : 'none',
-      fontSize: 13,
-      color: '#334155',
-      display: 'flex',
-      gap: 10,
-      lineHeight: 1.7
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    style: {
-      display: 'inline-flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      width: 22,
-      height: 22,
-      borderRadius: 6,
-      background: '#4f46e5',
-      color: '#fff',
-      fontSize: 11,
-      fontWeight: 700,
-      flexShrink: 0,
-      marginTop: 2
-    }
-  }, i + 1), s))), /*#__PURE__*/React.createElement("div", {
-    className: "note est"
-  }, "\u203B \uB9AC\uBDF0 \uC218\xB7\uD3C9\uC810\xB7\uD310\uB9E4\uC2E4\uC801\xB7\uCD5C\uC2E0\uC131\uC740 \uC21C\uC704 \uAD6C\uAC04\uBCC4 \uC5C5\uACC4 \uD3C9\uADE0 \uAE30\uBC18 \uCD94\uC815\uCE58\uC785\uB2C8\uB2E4. \uB124\uC774\uBC84 \uC1FC\uD551 API \uD55C\uACC4\uB85C \uC2E4\uC81C \uC218\uCE58\uC640 \uCC28\uC774\uAC00 \uC788\uC744 \uC218 \uC788\uC73C\uBA70, \uD5A5\uD6C4 \uC815\uBC00\uD654 \uC608\uC815\uC785\uB2C8\uB2E4.")))));
+          children: [/*#__PURE__*/_jsxDEV("div", {
+            style: {
+              display: 'flex',
+              gap: 10
+            },
+            children: [/*#__PURE__*/_jsxDEV("input", {
+              className: "form-input",
+              placeholder: "분석할 상품 URL을 입력하세요",
+              value: productUrl,
+              onChange: e => setProductUrl(e.target.value),
+              style: {
+                flex: 1
+              }
+            }, void 0, false), /*#__PURE__*/_jsxDEV("button", {
+              className: "btn btn-primary",
+              onClick: handleAnalyze,
+              disabled: loading || !productUrl || !keyword,
+              children: loading ? '분석 중...' : 'SEO 진단'
+            }, void 0, false)]
+          }, void 0, true), keyword && /*#__PURE__*/_jsxDEV("div", {
+            style: {
+              fontSize: 12,
+              color: '#64748b',
+              marginTop: 8
+            },
+            children: ["기준 키워드: ", /*#__PURE__*/_jsxDEV("strong", {
+              children: keyword
+            }, void 0, false)]
+          }, void 0, true)]
+        }, void 0, true), loading && /*#__PURE__*/_jsxDEV(LoadingSpinner, {
+          text: "SEO 분석 중..."
+        }, void 0, false), result && !loading && /*#__PURE__*/_jsxDEV("div", {
+          className: "fade-in",
+          children: [/*#__PURE__*/_jsxDEV("div", {
+            className: "grid2",
+            style: {
+              alignItems: 'center',
+              marginBottom: 16
+            },
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              className: "chartbox sm",
+              children: /*#__PURE__*/_jsxDEV(ChartCanvas, {
+                type: "radar",
+                height: 320,
+                data: {
+                  labels: ['상품명', '검색순위', '가격', '리뷰', '판매', '평점', '카테고리', '브랜드', '네이버페이', '최신성'],
+                  datasets: [{
+                    label: 'SEO 점수',
+                    data: [result.scores.title || 0, result.scores.rank || 0, result.scores.price || 0, result.scores.review || 0, result.scores.sales || 0, result.scores.rating || 0, result.scores.category || 0, result.scores.brand || 0, result.scores.naverpay || 0, result.scores.freshness || 0],
+                    borderColor: '#4f46e5',
+                    backgroundColor: 'rgba(79,70,229,.18)',
+                    pointBackgroundColor: '#4f46e5',
+                    borderWidth: 2
+                  }]
+                },
+                options: {
+                  plugins: {
+                    legend: {
+                      display: false
+                    },
+                    tooltip: {
+                      callbacks: {
+                        label: function (ctx) {
+                          return ctx.label + ' ' + ctx.parsed.r + '점';
+                        }
+                      }
+                    }
+                  },
+                  scales: {
+                    r: {
+                      beginAtZero: true,
+                      max: 100,
+                      ticks: {
+                        display: false
+                      },
+                      pointLabels: {
+                        font: {
+                          size: 11
+                        }
+                      }
+                    }
+                  }
+                }
+              }, void 0, false)
+            }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+              children: [/*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  textAlign: 'center',
+                  marginBottom: 8
+                },
+                children: [/*#__PURE__*/_jsxDEV("span", {
+                  style: {
+                    fontSize: 34,
+                    fontWeight: 900,
+                    color: getScoreColor(result.scores.total)
+                  },
+                  children: result.scores.total
+                }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+                  style: {
+                    color: 'var(--rt-sub)'
+                  },
+                  children: ["/100 · ", getScoreLabel(result.scores.total)]
+                }, void 0, true)]
+              }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                className: "scorebar",
+                children: [/*#__PURE__*/_jsxDEV("div", {
+                  className: "lbl",
+                  children: [/*#__PURE__*/_jsxDEV("b", {
+                    children: "상품명"
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+                    className: "w",
+                    children: "15%"
+                  }, void 0, false)]
+                }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                  className: "track",
+                  children: /*#__PURE__*/_jsxDEV("i", {
+                    style: {
+                      width: (result.scores.title || 0) + '%'
+                    }
+                  }, void 0, false)
+                }, void 0, false)]
+              }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                className: "scorebar",
+                children: [/*#__PURE__*/_jsxDEV("div", {
+                  className: "lbl",
+                  children: [/*#__PURE__*/_jsxDEV("b", {
+                    children: "검색순위"
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+                    className: "w",
+                    children: "15%"
+                  }, void 0, false)]
+                }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                  className: "track",
+                  children: /*#__PURE__*/_jsxDEV("i", {
+                    style: {
+                      width: (result.scores.rank || 0) + '%'
+                    }
+                  }, void 0, false)
+                }, void 0, false)]
+              }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                className: "scorebar",
+                children: [/*#__PURE__*/_jsxDEV("div", {
+                  className: "lbl",
+                  children: [/*#__PURE__*/_jsxDEV("b", {
+                    children: "가격"
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+                    className: "w",
+                    children: "12%"
+                  }, void 0, false)]
+                }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                  className: "track",
+                  children: /*#__PURE__*/_jsxDEV("i", {
+                    style: {
+                      width: (result.scores.price || 0) + '%'
+                    }
+                  }, void 0, false)
+                }, void 0, false)]
+              }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                className: "scorebar",
+                children: [/*#__PURE__*/_jsxDEV("div", {
+                  className: "lbl",
+                  children: [/*#__PURE__*/_jsxDEV("b", {
+                    children: "리뷰"
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+                    className: "w",
+                    children: "12%"
+                  }, void 0, false)]
+                }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                  className: "track",
+                  children: /*#__PURE__*/_jsxDEV("i", {
+                    style: {
+                      width: (result.scores.review || 0) + '%'
+                    }
+                  }, void 0, false)
+                }, void 0, false)]
+              }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                className: "scorebar",
+                children: [/*#__PURE__*/_jsxDEV("div", {
+                  className: "lbl",
+                  children: [/*#__PURE__*/_jsxDEV("b", {
+                    children: "판매실적"
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+                    className: "w",
+                    children: "10%"
+                  }, void 0, false)]
+                }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                  className: "track",
+                  children: /*#__PURE__*/_jsxDEV("i", {
+                    style: {
+                      width: (result.scores.sales || 0) + '%'
+                    }
+                  }, void 0, false)
+                }, void 0, false)]
+              }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                className: "scorebar",
+                children: [/*#__PURE__*/_jsxDEV("div", {
+                  className: "lbl",
+                  children: [/*#__PURE__*/_jsxDEV("b", {
+                    children: "평점"
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+                    className: "w",
+                    children: "8%"
+                  }, void 0, false)]
+                }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                  className: "track",
+                  children: /*#__PURE__*/_jsxDEV("i", {
+                    style: {
+                      width: (result.scores.rating || 0) + '%'
+                    }
+                  }, void 0, false)
+                }, void 0, false)]
+              }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                className: "scorebar",
+                children: [/*#__PURE__*/_jsxDEV("div", {
+                  className: "lbl",
+                  children: [/*#__PURE__*/_jsxDEV("b", {
+                    children: "카테고리"
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+                    className: "w",
+                    children: "8%"
+                  }, void 0, false)]
+                }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                  className: "track",
+                  children: /*#__PURE__*/_jsxDEV("i", {
+                    style: {
+                      width: (result.scores.category || 0) + '%'
+                    }
+                  }, void 0, false)
+                }, void 0, false)]
+              }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                className: "scorebar",
+                children: [/*#__PURE__*/_jsxDEV("div", {
+                  className: "lbl",
+                  children: [/*#__PURE__*/_jsxDEV("b", {
+                    children: "브랜드"
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+                    className: "w",
+                    children: "8%"
+                  }, void 0, false)]
+                }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                  className: "track",
+                  children: /*#__PURE__*/_jsxDEV("i", {
+                    style: {
+                      width: (result.scores.brand || 0) + '%'
+                    }
+                  }, void 0, false)
+                }, void 0, false)]
+              }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                className: "scorebar",
+                children: [/*#__PURE__*/_jsxDEV("div", {
+                  className: "lbl",
+                  children: [/*#__PURE__*/_jsxDEV("b", {
+                    children: "네이버페이"
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+                    className: "w",
+                    children: "6%"
+                  }, void 0, false)]
+                }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                  className: "track",
+                  children: /*#__PURE__*/_jsxDEV("i", {
+                    style: {
+                      width: (result.scores.naverpay || 0) + '%'
+                    }
+                  }, void 0, false)
+                }, void 0, false)]
+              }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                className: "scorebar",
+                children: [/*#__PURE__*/_jsxDEV("div", {
+                  className: "lbl",
+                  children: [/*#__PURE__*/_jsxDEV("b", {
+                    children: "최신성"
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+                    className: "w",
+                    children: "6%"
+                  }, void 0, false)]
+                }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                  className: "track",
+                  children: /*#__PURE__*/_jsxDEV("i", {
+                    style: {
+                      width: (result.scores.freshness || 0) + '%'
+                    }
+                  }, void 0, false)
+                }, void 0, false)]
+              }, void 0, true), result.scores.detail?.current_rank && /*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  marginTop: 8,
+                  fontSize: 12,
+                  color: 'var(--rt-sub)',
+                  lineHeight: 1.6,
+                  textAlign: 'center'
+                },
+                children: ["현재 순위: ", /*#__PURE__*/_jsxDEV("strong", {
+                  children: [result.scores.detail.current_rank, "위"]
+                }, void 0, true), " · 추정 월 판매: ", /*#__PURE__*/_jsxDEV("strong", {
+                  children: [(result.scores.detail.est_monthly_sales || 0).toLocaleString(), "건"]
+                }, void 0, true)]
+              }, void 0, true)]
+            }, void 0, true)]
+          }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+            style: {
+              fontSize: 11,
+              color: 'var(--rt-sub)',
+              marginTop: 6
+            },
+            children: "10개 지표: 상품명·검색순위·가격·리뷰·판매실적·평점·카테고리·브랜드·네이버페이·최신성 (레이더 차트)"
+          }, void 0, false), result.suggestions?.length > 0 && /*#__PURE__*/_jsxDEV("div", {
+            className: "card",
+            style: {
+              borderRadius: 16
+            },
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              style: {
+                fontWeight: 700,
+                fontSize: 14,
+                marginBottom: 14,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6
+              },
+              children: [/*#__PURE__*/_jsxDEV("span", {
+                children: "💡"
+              }, void 0, false), " 개선 제안"]
+            }, void 0, true), result.suggestions.map((s, i) => /*#__PURE__*/_jsxDEV("div", {
+              style: {
+                padding: '10px 0',
+                borderBottom: i < result.suggestions.length - 1 ? '1px solid #f1f5f9' : 'none',
+                fontSize: 13,
+                color: '#334155',
+                display: 'flex',
+                gap: 10,
+                lineHeight: 1.7
+              },
+              children: [/*#__PURE__*/_jsxDEV("span", {
+                style: {
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: 22,
+                  height: 22,
+                  borderRadius: 6,
+                  background: '#4f46e5',
+                  color: '#fff',
+                  fontSize: 11,
+                  fontWeight: 700,
+                  flexShrink: 0,
+                  marginTop: 2
+                },
+                children: i + 1
+              }, void 0, false), s]
+            }, i, true))]
+          }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+            className: "note est",
+            children: "※ 리뷰 수·평점·판매실적·최신성은 순위 구간별 업계 평균 기반 추정치입니다. 네이버 쇼핑 API 한계로 실제 수치와 차이가 있을 수 있으며, 향후 정밀화 예정입니다."
+          }, void 0, false)]
+        }, void 0, true)]
+      }, void 0, true)
+    }, void 0, false)
+  }, void 0, false);
 };
 
 ;/* ===== js/components/ProductNameSection.jsx ===== */
+import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";
 /* ProductNameSection — 상품명 키워드 분석 */
 window.ProductNameSection = function ProductNameSection({
   keyword,
@@ -3737,276 +4021,329 @@ window.ProductNameSection = function ProductNameSection({
     boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
     textAlign: 'center'
   };
-  return /*#__PURE__*/React.createElement("div", {
+  return /*#__PURE__*/_jsxDEV("div", {
     className: "section fade-in",
-    id: "sec-productname"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "container"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      padding: '20px 22px'
-    }
-  }, /*#__PURE__*/React.createElement("h3", {
-    className: "rt-h3"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "rt-hic"
-  }, "\uD83D\uDD24"), "\uC0C1\uD488\uBA85 \uD0A4\uC6CC\uB4DC \uBD84\uC11D", /*#__PURE__*/React.createElement("span", {
-    className: "badge b-ok"
-  }, "\u2705 \uC2E4\uCE21")), /*#__PURE__*/React.createElement("div", {
-    className: "rt-desc"
-  }, "\uACBD\uC7C1 \uC0C1\uD488\uBA85\uC758 \uD0A4\uC6CC\uB4DC \uAD6C\uC131\uC744 \uBD84\uC11D\uD569\uB2C8\uB2E4"), /*#__PURE__*/React.createElement("div", {
-    className: "no-export",
-    style: {
-      background: '#fff',
-      borderRadius: 16,
-      padding: 24,
-      border: '1px solid #e2e8f0',
-      boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
-      marginBottom: 20
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginBottom: 12
-    }
-  }, /*#__PURE__*/React.createElement("label", {
-    style: {
-      fontSize: 12,
-      fontWeight: 600,
-      color: '#64748b',
-      textTransform: 'uppercase',
-      letterSpacing: '0.05em'
-    }
-  }, "\uC0C1\uD488\uBA85 \uBAA9\uB85D (\uD55C \uC904\uC5D0 \uD558\uB098\uC529)")), /*#__PURE__*/React.createElement("textarea", {
-    style: {
-      width: '100%',
-      height: 100,
-      padding: 12,
-      border: '1.5px solid #e2e8f0',
-      borderRadius: 12,
-      fontFamily: 'inherit',
-      fontSize: 13,
-      resize: 'vertical',
-      outline: 'none',
-      background: '#f8fafc',
-      color: '#0f172a',
-      boxSizing: 'border-box'
-    },
-    placeholder: "\uACBD\uC7C1 \uC0C1\uD488\uBA85\uC744 \uD55C \uC904\uC5D0 \uD558\uB098\uC529 \uC785\uB825\uD558\uC138\uC694...",
-    value: names,
-    onChange: e => setNames(e.target.value)
-  }), /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: 12
-    }
-  }, /*#__PURE__*/React.createElement("button", {
-    className: "btn btn-primary",
-    onClick: handleAnalyze,
-    disabled: loading || !names.trim(),
-    style: {
-      borderRadius: 12,
-      padding: '10px 24px',
-      fontWeight: 700
-    }
-  }, loading ? '분석 중...' : '상품명 분석'))), result && /*#__PURE__*/React.createElement("div", {
-    className: "fade-in"
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'grid',
-      gridTemplateColumns: 'repeat(3, 1fr)',
-      gap: 16,
-      marginBottom: 20
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: metricCardStyle
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 18,
-      marginBottom: 8
-    }
-  }, "\uD83D\uDCE6"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 11,
-      fontWeight: 600,
-      color: '#94a3b8',
-      textTransform: 'uppercase',
-      letterSpacing: '0.05em',
-      marginBottom: 6
-    }
-  }, "\uBD84\uC11D \uC0C1\uD488 \uC218"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 18,
-      fontWeight: 800,
-      color: '#0f172a'
-    }
-  }, result.total_analyzed), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 12,
-      color: '#64748b'
-    }
-  }, "\uAC1C")), /*#__PURE__*/React.createElement("div", {
-    style: metricCardStyle
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 18,
-      marginBottom: 8
-    }
-  }, "\uD83D\uDCCF"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 11,
-      fontWeight: 600,
-      color: '#94a3b8',
-      textTransform: 'uppercase',
-      letterSpacing: '0.05em',
-      marginBottom: 6
-    }
-  }, "\uD3C9\uADE0 \uC0C1\uD488\uBA85 \uAE38\uC774"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 18,
-      fontWeight: 800,
-      color: '#0f172a'
-    }
-  }, result.avg_name_length), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 12,
-      color: '#64748b'
-    }
-  }, "\uC790")), /*#__PURE__*/React.createElement("div", {
-    style: metricCardStyle
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 18,
-      marginBottom: 8
-    }
-  }, "\uD83C\uDFAF"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 11,
-      fontWeight: 600,
-      color: '#94a3b8',
-      textTransform: 'uppercase',
-      letterSpacing: '0.05em',
-      marginBottom: 6
-    }
-  }, "\uD0A4\uC6CC\uB4DC \uD3EC\uD568\uB960"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 18,
-      fontWeight: 800,
-      color: '#0f172a'
-    }
-  }, result.keyword_coverage != null ? result.keyword_coverage : '-'), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 12,
-      color: '#64748b'
-    }
-  }, "%"))), result.top_keywords?.length > 0 && /*#__PURE__*/React.createElement("div", {
-    style: {
-      background: '#fff',
-      borderRadius: 16,
-      padding: 24,
-      border: '1px solid #e2e8f0',
-      boxShadow: '0 1px 3px rgba(0,0,0,0.04)'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 15,
-      fontWeight: 700,
-      color: '#0f172a',
-      marginBottom: 16
-    }
-  }, "\uD83D\uDCCA \uC790\uC8FC \uC0AC\uC6A9\uB41C \uD0A4\uC6CC\uB4DC TOP 15"), /*#__PURE__*/React.createElement("div", {
-    className: "table-wrap",
-    style: {
-      maxHeight: 282,
-      overflowY: 'auto'
-    }
-  }, /*#__PURE__*/React.createElement("table", {
-    className: "rt-table"
-  }, /*#__PURE__*/React.createElement("thead", {
-    style: {
-      position: 'sticky',
-      top: 0,
-      zIndex: 1
-    }
-  }, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", {
-    style: {
-      fontWeight: 600,
-      fontSize: 12
-    }
-  }, "#"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      fontWeight: 600,
-      fontSize: 12
-    }
-  }, "\uD0A4\uC6CC\uB4DC"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      fontWeight: 600,
-      fontSize: 12
-    }
-  }, "\uB4F1\uC7A5 \uD69F\uC218"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      fontWeight: 600,
-      fontSize: 12
-    }
-  }, "\uC0AC\uC6A9 \uBE44\uC728"))), /*#__PURE__*/React.createElement("tbody", null, result.top_keywords.slice(0, 15).map((k, i) => /*#__PURE__*/React.createElement("tr", {
-    key: k.word,
-    style: {
-      background: i % 2 === 0 ? '#fff' : '#f8fafc'
-    }
-  }, /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("span", {
-    style: {
-      display: 'inline-flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      width: 26,
-      height: 26,
-      background: 'linear-gradient(135deg, #4f46e5, #7c3aed)',
-      color: '#fff',
-      borderRadius: '50%',
-      fontSize: 11,
-      fontWeight: 700
-    }
-  }, i + 1)), /*#__PURE__*/React.createElement("td", {
-    style: {
-      fontWeight: 600,
-      color: '#0f172a'
-    }
-  }, k.word), /*#__PURE__*/React.createElement("td", {
-    style: {
-      color: '#0f172a'
-    }
-  }, k.count, "\uD68C"), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 8
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      flex: 1,
-      maxWidth: 120,
-      height: 8,
-      borderRadius: 8,
-      background: '#f1f5f9',
-      overflow: 'hidden'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      width: Math.min(k.ratio, 100) + '%',
-      height: '100%',
-      borderRadius: 8,
-      background: 'linear-gradient(135deg, #4f46e5, #7c3aed)',
-      transition: 'width 0.3s ease'
-    }
-  })), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 12,
-      color: '#64748b',
-      minWidth: 36
-    }
-  }, k.ratio, "%")))))))))))));
+    id: "sec-productname",
+    children: /*#__PURE__*/_jsxDEV("div", {
+      className: "container",
+      children: /*#__PURE__*/_jsxDEV("div", {
+        className: "card",
+        style: {
+          padding: '20px 22px'
+        },
+        children: [/*#__PURE__*/_jsxDEV("h3", {
+          className: "rt-h3",
+          children: [/*#__PURE__*/_jsxDEV("span", {
+            className: "rt-hic",
+            children: "🔤"
+          }, void 0, false), "상품명 키워드 분석", /*#__PURE__*/_jsxDEV("span", {
+            className: "badge b-ok",
+            children: "✅ 실측"
+          }, void 0, false)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          className: "rt-desc",
+          children: "경쟁 상품명의 키워드 구성을 분석합니다"
+        }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+          className: "no-export",
+          style: {
+            background: '#fff',
+            borderRadius: 16,
+            padding: 24,
+            border: '1px solid #e2e8f0',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+            marginBottom: 20
+          },
+          children: [/*#__PURE__*/_jsxDEV("div", {
+            style: {
+              marginBottom: 12
+            },
+            children: /*#__PURE__*/_jsxDEV("label", {
+              style: {
+                fontSize: 12,
+                fontWeight: 600,
+                color: '#64748b',
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em'
+              },
+              children: "상품명 목록 (한 줄에 하나씩)"
+            }, void 0, false)
+          }, void 0, false), /*#__PURE__*/_jsxDEV("textarea", {
+            style: {
+              width: '100%',
+              height: 100,
+              padding: 12,
+              border: '1.5px solid #e2e8f0',
+              borderRadius: 12,
+              fontFamily: 'inherit',
+              fontSize: 13,
+              resize: 'vertical',
+              outline: 'none',
+              background: '#f8fafc',
+              color: '#0f172a',
+              boxSizing: 'border-box'
+            },
+            placeholder: "경쟁 상품명을 한 줄에 하나씩 입력하세요...",
+            value: names,
+            onChange: e => setNames(e.target.value)
+          }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+            style: {
+              marginTop: 12
+            },
+            children: /*#__PURE__*/_jsxDEV("button", {
+              className: "btn btn-primary",
+              onClick: handleAnalyze,
+              disabled: loading || !names.trim(),
+              style: {
+                borderRadius: 12,
+                padding: '10px 24px',
+                fontWeight: 700
+              },
+              children: loading ? '분석 중...' : '상품명 분석'
+            }, void 0, false)
+          }, void 0, false)]
+        }, void 0, true), result && /*#__PURE__*/_jsxDEV("div", {
+          className: "fade-in",
+          children: [/*#__PURE__*/_jsxDEV("div", {
+            style: {
+              display: 'grid',
+              gridTemplateColumns: 'repeat(3, 1fr)',
+              gap: 16,
+              marginBottom: 20
+            },
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              style: metricCardStyle,
+              children: [/*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  fontSize: 18,
+                  marginBottom: 8
+                },
+                children: "📦"
+              }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color: '#94a3b8',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.05em',
+                  marginBottom: 6
+                },
+                children: "분석 상품 수"
+              }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  fontSize: 18,
+                  fontWeight: 800,
+                  color: '#0f172a'
+                },
+                children: result.total_analyzed
+              }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  fontSize: 12,
+                  color: '#64748b'
+                },
+                children: "개"
+              }, void 0, false)]
+            }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+              style: metricCardStyle,
+              children: [/*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  fontSize: 18,
+                  marginBottom: 8
+                },
+                children: "📏"
+              }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color: '#94a3b8',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.05em',
+                  marginBottom: 6
+                },
+                children: "평균 상품명 길이"
+              }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  fontSize: 18,
+                  fontWeight: 800,
+                  color: '#0f172a'
+                },
+                children: result.avg_name_length
+              }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  fontSize: 12,
+                  color: '#64748b'
+                },
+                children: "자"
+              }, void 0, false)]
+            }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+              style: metricCardStyle,
+              children: [/*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  fontSize: 18,
+                  marginBottom: 8
+                },
+                children: "🎯"
+              }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color: '#94a3b8',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.05em',
+                  marginBottom: 6
+                },
+                children: "키워드 포함률"
+              }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  fontSize: 18,
+                  fontWeight: 800,
+                  color: '#0f172a'
+                },
+                children: result.keyword_coverage != null ? result.keyword_coverage : '-'
+              }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  fontSize: 12,
+                  color: '#64748b'
+                },
+                children: "%"
+              }, void 0, false)]
+            }, void 0, true)]
+          }, void 0, true), result.top_keywords?.length > 0 && /*#__PURE__*/_jsxDEV("div", {
+            style: {
+              background: '#fff',
+              borderRadius: 16,
+              padding: 24,
+              border: '1px solid #e2e8f0',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.04)'
+            },
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              style: {
+                fontSize: 15,
+                fontWeight: 700,
+                color: '#0f172a',
+                marginBottom: 16
+              },
+              children: "📊 자주 사용된 키워드 TOP 15"
+            }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+              className: "table-wrap",
+              style: {
+                maxHeight: 282,
+                overflowY: 'auto'
+              },
+              children: /*#__PURE__*/_jsxDEV("table", {
+                className: "rt-table",
+                children: [/*#__PURE__*/_jsxDEV("thead", {
+                  style: {
+                    position: 'sticky',
+                    top: 0,
+                    zIndex: 1
+                  },
+                  children: /*#__PURE__*/_jsxDEV("tr", {
+                    children: [/*#__PURE__*/_jsxDEV("th", {
+                      style: {
+                        fontWeight: 600,
+                        fontSize: 12
+                      },
+                      children: "#"
+                    }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                      style: {
+                        fontWeight: 600,
+                        fontSize: 12
+                      },
+                      children: "키워드"
+                    }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                      style: {
+                        fontWeight: 600,
+                        fontSize: 12
+                      },
+                      children: "등장 횟수"
+                    }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                      style: {
+                        fontWeight: 600,
+                        fontSize: 12
+                      },
+                      children: "사용 비율"
+                    }, void 0, false)]
+                  }, void 0, true)
+                }, void 0, false), /*#__PURE__*/_jsxDEV("tbody", {
+                  children: result.top_keywords.slice(0, 15).map((k, i) => /*#__PURE__*/_jsxDEV("tr", {
+                    style: {
+                      background: i % 2 === 0 ? '#fff' : '#f8fafc'
+                    },
+                    children: [/*#__PURE__*/_jsxDEV("td", {
+                      children: /*#__PURE__*/_jsxDEV("span", {
+                        style: {
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          width: 26,
+                          height: 26,
+                          background: 'linear-gradient(135deg, #4f46e5, #7c3aed)',
+                          color: '#fff',
+                          borderRadius: '50%',
+                          fontSize: 11,
+                          fontWeight: 700
+                        },
+                        children: i + 1
+                      }, void 0, false)
+                    }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                      style: {
+                        fontWeight: 600,
+                        color: '#0f172a'
+                      },
+                      children: k.word
+                    }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                      style: {
+                        color: '#0f172a'
+                      },
+                      children: [k.count, "회"]
+                    }, void 0, true), /*#__PURE__*/_jsxDEV("td", {
+                      children: /*#__PURE__*/_jsxDEV("div", {
+                        style: {
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 8
+                        },
+                        children: [/*#__PURE__*/_jsxDEV("div", {
+                          style: {
+                            flex: 1,
+                            maxWidth: 120,
+                            height: 8,
+                            borderRadius: 8,
+                            background: '#f1f5f9',
+                            overflow: 'hidden'
+                          },
+                          children: /*#__PURE__*/_jsxDEV("div", {
+                            style: {
+                              width: Math.min(k.ratio, 100) + '%',
+                              height: '100%',
+                              borderRadius: 8,
+                              background: 'linear-gradient(135deg, #4f46e5, #7c3aed)',
+                              transition: 'width 0.3s ease'
+                            }
+                          }, void 0, false)
+                        }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+                          style: {
+                            fontSize: 12,
+                            color: '#64748b',
+                            minWidth: 36
+                          },
+                          children: [k.ratio, "%"]
+                        }, void 0, true)]
+                      }, void 0, true)
+                    }, void 0, false)]
+                  }, k.word, true))
+                }, void 0, false)]
+              }, void 0, true)
+            }, void 0, false)]
+          }, void 0, true)]
+        }, void 0, true)]
+      }, void 0, true)
+    }, void 0, false)
+  }, void 0, false);
 };
 
 ;/* ===== js/components/ReportSection.jsx ===== */
+import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";
 /* ReportSection — 보고서 내보내기 (DOM 복제 HTML + JSON/CSV) */
 window.ReportSection = function ReportSection(props) {
   var propKeyword = props && props.keyword || '';
@@ -4195,151 +4532,205 @@ window.ReportSection = function ReportSection(props) {
     a.click();
     URL.revokeObjectURL(url);
   };
-  return /*#__PURE__*/React.createElement("div", {
+  return /*#__PURE__*/_jsxDEV("div", {
     className: "section fade-in",
-    id: "sec-report"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "container"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "section-title"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "icon",
-    style: {
-      background: '#eff6ff'
-    }
-  }, "\uD83D\uDCC4"), "\uBCF4\uACE0\uC11C \uB0B4\uBCF4\uB0B4\uAE30"), /*#__PURE__*/React.createElement("div", {
-    className: "section-line"
-  }), /*#__PURE__*/React.createElement("p", {
-    className: "section-subtitle"
-  }, "\uBD84\uC11D \uACB0\uACFC\uB97C HTML/JSON/CSV\uB85C \uB2E4\uC6B4\uB85C\uB4DC\uD569\uB2C8\uB2E4"), /*#__PURE__*/React.createElement("div", {
-    className: "card"
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      gap: 12,
-      alignItems: 'flex-end',
-      flexWrap: 'wrap'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "form-group",
-    style: {
-      marginBottom: 0
-    }
-  }, /*#__PURE__*/React.createElement("label", {
-    className: "form-label"
-  }, "\uC5C5\uCCB4\uBA85 (\uC120\uD0DD)"), /*#__PURE__*/React.createElement("input", {
-    className: "form-input",
-    style: {
-      width: 160
-    },
-    placeholder: "\uC5C5\uCCB4\uBA85 \uC785\uB825",
-    value: companyName,
-    onChange: function (e) {
-      setCompanyName(e.target.value);
-    }
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "form-group",
-    style: {
-      marginBottom: 0
-    }
-  }, /*#__PURE__*/React.createElement("label", {
-    className: "form-label"
-  }, "\uD615\uC2DD"), /*#__PURE__*/React.createElement("select", {
-    className: "form-input",
-    style: {
-      width: 140
-    },
-    value: format,
-    onChange: function (e) {
-      setFormat(e.target.value);
-    }
-  }, /*#__PURE__*/React.createElement("option", {
-    value: "html"
-  }, "HTML \uBCF4\uACE0\uC11C"), /*#__PURE__*/React.createElement("option", {
-    value: "json"
-  }, "JSON"), /*#__PURE__*/React.createElement("option", {
-    value: "csv"
-  }, "CSV"))), format !== 'html' && /*#__PURE__*/React.createElement("div", {
-    className: "form-group",
-    style: {
-      marginBottom: 0
-    }
-  }, /*#__PURE__*/React.createElement("label", {
-    className: "form-label"
-  }, "\uAE30\uAC04"), /*#__PURE__*/React.createElement("select", {
-    className: "form-input",
-    style: {
-      width: 120
-    },
-    value: days,
-    onChange: function (e) {
-      setDays(Number(e.target.value));
-    }
-  }, /*#__PURE__*/React.createElement("option", {
-    value: 7
-  }, "\uCD5C\uADFC 7\uC77C"), /*#__PURE__*/React.createElement("option", {
-    value: 14
-  }, "\uCD5C\uADFC 14\uC77C"), /*#__PURE__*/React.createElement("option", {
-    value: 30
-  }, "\uCD5C\uADFC 30\uC77C"), /*#__PURE__*/React.createElement("option", {
-    value: 90
-  }, "\uCD5C\uADFC 90\uC77C"))), /*#__PURE__*/React.createElement("button", {
-    className: "btn btn-primary",
-    onClick: handleExport,
-    disabled: loading
-  }, loading ? '생성 중...' : format === 'html' ? '📄 HTML 보고서 다운로드' : '보고서 생성'), data && data.format === 'csv' && /*#__PURE__*/React.createElement("button", {
-    className: "btn btn-secondary",
-    onClick: handleDownloadCSV
-  }, "\uD83D\uDCE5 CSV \uB2E4\uC6B4\uB85C\uB4DC")), format === 'html' && /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: 12,
-      padding: '10px 14px',
-      background: '#f0f9ff',
-      borderRadius: 8,
-      fontSize: 13,
-      color: '#0369a1'
-    }
-  }, "\uD83D\uDCA1 \uD604\uC7AC \uD398\uC774\uC9C0\uC5D0 \uD45C\uC2DC\uB41C \uBAA8\uB4E0 \uBD84\uC11D \uACB0\uACFC\uB97C \uADF8\uB300\uB85C HTML \uD30C\uC77C\uB85C \uB0B4\uBCF4\uB0C5\uB2C8\uB2E4. \uBA3C\uC800 \uD0A4\uC6CC\uB4DC \uAC80\uC0C9\uC744 \uC644\uB8CC\uD55C \uD6C4 \uBCF4\uACE0\uC11C\uB97C \uC0DD\uC131\uD574\uC8FC\uC138\uC694."), data && data.format === 'json' && /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: 16
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      gap: 16,
-      marginBottom: 12
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "badge badge-blue"
-  }, "\uC0C1\uD488 ", data.total_products, "\uAC1C"), /*#__PURE__*/React.createElement("span", {
-    className: "badge badge-green"
-  }, "\uD0A4\uC6CC\uB4DC ", data.total_keywords, "\uAC1C"), /*#__PURE__*/React.createElement("span", {
-    className: "badge badge-gray"
-  }, data.generated_at ? data.generated_at.slice(0, 10) : '')), /*#__PURE__*/React.createElement("div", {
-    className: "table-wrap",
-    style: {
-      maxHeight: 300,
-      overflow: 'auto'
-    }
-  }, /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "\uC0C1\uD488\uBA85"), /*#__PURE__*/React.createElement("th", null, "\uD0A4\uC6CC\uB4DC"), /*#__PURE__*/React.createElement("th", null, "\uCD5C\uADFC \uC21C\uC704"), /*#__PURE__*/React.createElement("th", null, "\uC774\uB825 \uC218"))), /*#__PURE__*/React.createElement("tbody", null, (data.items || []).map(function (item, i) {
-    return /*#__PURE__*/React.createElement("tr", {
-      key: i
-    }, /*#__PURE__*/React.createElement("td", {
-      style: {
-        maxWidth: 200,
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        whiteSpace: 'nowrap'
-      }
-    }, item.product_name), /*#__PURE__*/React.createElement("td", null, item.keyword), /*#__PURE__*/React.createElement("td", {
-      style: {
-        fontWeight: 600
-      }
-    }, item.latest_rank ? item.latest_rank + '위' : '-'), /*#__PURE__*/React.createElement("td", null, item.history_count, "\uAC74"));
-  }))))))));
+    id: "sec-report",
+    children: /*#__PURE__*/_jsxDEV("div", {
+      className: "container",
+      children: [/*#__PURE__*/_jsxDEV("div", {
+        className: "section-title",
+        children: [/*#__PURE__*/_jsxDEV("span", {
+          className: "icon",
+          style: {
+            background: '#eff6ff'
+          },
+          children: "📄"
+        }, void 0, false), "보고서 내보내기"]
+      }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+        className: "section-line"
+      }, void 0, false), /*#__PURE__*/_jsxDEV("p", {
+        className: "section-subtitle",
+        children: "분석 결과를 HTML/JSON/CSV로 다운로드합니다"
+      }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+        className: "card",
+        children: [/*#__PURE__*/_jsxDEV("div", {
+          style: {
+            display: 'flex',
+            gap: 12,
+            alignItems: 'flex-end',
+            flexWrap: 'wrap'
+          },
+          children: [/*#__PURE__*/_jsxDEV("div", {
+            className: "form-group",
+            style: {
+              marginBottom: 0
+            },
+            children: [/*#__PURE__*/_jsxDEV("label", {
+              className: "form-label",
+              children: "업체명 (선택)"
+            }, void 0, false), /*#__PURE__*/_jsxDEV("input", {
+              className: "form-input",
+              style: {
+                width: 160
+              },
+              placeholder: "업체명 입력",
+              value: companyName,
+              onChange: function (e) {
+                setCompanyName(e.target.value);
+              }
+            }, void 0, false)]
+          }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+            className: "form-group",
+            style: {
+              marginBottom: 0
+            },
+            children: [/*#__PURE__*/_jsxDEV("label", {
+              className: "form-label",
+              children: "형식"
+            }, void 0, false), /*#__PURE__*/_jsxDEV("select", {
+              className: "form-input",
+              style: {
+                width: 140
+              },
+              value: format,
+              onChange: function (e) {
+                setFormat(e.target.value);
+              },
+              children: [/*#__PURE__*/_jsxDEV("option", {
+                value: "html",
+                children: "HTML 보고서"
+              }, void 0, false), /*#__PURE__*/_jsxDEV("option", {
+                value: "json",
+                children: "JSON"
+              }, void 0, false), /*#__PURE__*/_jsxDEV("option", {
+                value: "csv",
+                children: "CSV"
+              }, void 0, false)]
+            }, void 0, true)]
+          }, void 0, true), format !== 'html' && /*#__PURE__*/_jsxDEV("div", {
+            className: "form-group",
+            style: {
+              marginBottom: 0
+            },
+            children: [/*#__PURE__*/_jsxDEV("label", {
+              className: "form-label",
+              children: "기간"
+            }, void 0, false), /*#__PURE__*/_jsxDEV("select", {
+              className: "form-input",
+              style: {
+                width: 120
+              },
+              value: days,
+              onChange: function (e) {
+                setDays(Number(e.target.value));
+              },
+              children: [/*#__PURE__*/_jsxDEV("option", {
+                value: 7,
+                children: "최근 7일"
+              }, void 0, false), /*#__PURE__*/_jsxDEV("option", {
+                value: 14,
+                children: "최근 14일"
+              }, void 0, false), /*#__PURE__*/_jsxDEV("option", {
+                value: 30,
+                children: "최근 30일"
+              }, void 0, false), /*#__PURE__*/_jsxDEV("option", {
+                value: 90,
+                children: "최근 90일"
+              }, void 0, false)]
+            }, void 0, true)]
+          }, void 0, true), /*#__PURE__*/_jsxDEV("button", {
+            className: "btn btn-primary",
+            onClick: handleExport,
+            disabled: loading,
+            children: loading ? '생성 중...' : format === 'html' ? '📄 HTML 보고서 다운로드' : '보고서 생성'
+          }, void 0, false), data && data.format === 'csv' && /*#__PURE__*/_jsxDEV("button", {
+            className: "btn btn-secondary",
+            onClick: handleDownloadCSV,
+            children: "📥 CSV 다운로드"
+          }, void 0, false)]
+        }, void 0, true), format === 'html' && /*#__PURE__*/_jsxDEV("div", {
+          style: {
+            marginTop: 12,
+            padding: '10px 14px',
+            background: '#f0f9ff',
+            borderRadius: 8,
+            fontSize: 13,
+            color: '#0369a1'
+          },
+          children: "💡 현재 페이지에 표시된 모든 분석 결과를 그대로 HTML 파일로 내보냅니다. 먼저 키워드 검색을 완료한 후 보고서를 생성해주세요."
+        }, void 0, false), data && data.format === 'json' && /*#__PURE__*/_jsxDEV("div", {
+          style: {
+            marginTop: 16
+          },
+          children: [/*#__PURE__*/_jsxDEV("div", {
+            style: {
+              display: 'flex',
+              gap: 16,
+              marginBottom: 12
+            },
+            children: [/*#__PURE__*/_jsxDEV("span", {
+              className: "badge badge-blue",
+              children: ["상품 ", data.total_products, "개"]
+            }, void 0, true), /*#__PURE__*/_jsxDEV("span", {
+              className: "badge badge-green",
+              children: ["키워드 ", data.total_keywords, "개"]
+            }, void 0, true), /*#__PURE__*/_jsxDEV("span", {
+              className: "badge badge-gray",
+              children: data.generated_at ? data.generated_at.slice(0, 10) : ''
+            }, void 0, false)]
+          }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+            className: "table-wrap",
+            style: {
+              maxHeight: 300,
+              overflow: 'auto'
+            },
+            children: /*#__PURE__*/_jsxDEV("table", {
+              children: [/*#__PURE__*/_jsxDEV("thead", {
+                children: /*#__PURE__*/_jsxDEV("tr", {
+                  children: [/*#__PURE__*/_jsxDEV("th", {
+                    children: "상품명"
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                    children: "키워드"
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                    children: "최근 순위"
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                    children: "이력 수"
+                  }, void 0, false)]
+                }, void 0, true)
+              }, void 0, false), /*#__PURE__*/_jsxDEV("tbody", {
+                children: (data.items || []).map(function (item, i) {
+                  return /*#__PURE__*/_jsxDEV("tr", {
+                    children: [/*#__PURE__*/_jsxDEV("td", {
+                      style: {
+                        maxWidth: 200,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap'
+                      },
+                      children: item.product_name
+                    }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                      children: item.keyword
+                    }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                      style: {
+                        fontWeight: 600
+                      },
+                      children: item.latest_rank ? item.latest_rank + '위' : '-'
+                    }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                      children: [item.history_count, "건"]
+                    }, void 0, true)]
+                  }, i, true);
+                })
+              }, void 0, false)]
+            }, void 0, true)
+          }, void 0, false)]
+        }, void 0, true)]
+      }, void 0, true)]
+    }, void 0, true)
+  }, void 0, false);
 };
 
 ;/* ===== js/components/NotificationSection.jsx ===== */
+import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";
 /* NotificationSection — 알림 설정 */
 window.NotificationSection = function NotificationSection() {
   const {
@@ -4362,55 +4753,68 @@ window.NotificationSection = function NotificationSection() {
   };
   if (loading) return null;
   if (!settings) return null;
-  return /*#__PURE__*/React.createElement("div", {
+  return /*#__PURE__*/_jsxDEV("div", {
     className: "section",
-    id: "sec-notify"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "container"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "section-title"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "icon",
-    style: {
-      background: '#fffbeb'
-    }
-  }, "\uD83D\uDD14"), "\uC54C\uB9BC \uC124\uC815"), /*#__PURE__*/React.createElement("div", {
-    className: "card"
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      justifyContent: 'space-between',
-      alignItems: 'center'
-    }
-  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontWeight: 600,
-      fontSize: 14
-    }
-  }, "\uC77C\uC77C \uB9AC\uD3EC\uD2B8 \uC54C\uB9BC"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 12,
-      color: '#64748b',
-      marginTop: 2
-    }
-  }, settings.report_time || '09:00', "\uC5D0 \uC21C\uC704 \uBCC0\uB3D9 \uB9AC\uD3EC\uD2B8\uB97C \uBC1C\uC1A1\uD569\uB2C8\uB2E4")), /*#__PURE__*/React.createElement("label", {
-    className: "toggle"
-  }, /*#__PURE__*/React.createElement("input", {
-    type: "checkbox",
-    checked: settings.notify_enabled || false,
-    onChange: e => toggleNotify(e.target.checked)
-  }), /*#__PURE__*/React.createElement("span", {
-    className: "toggle-track"
-  }))), !settings.solapi_configured && /*#__PURE__*/React.createElement("div", {
-    className: "alert alert-info",
-    style: {
-      marginTop: 12,
-      marginBottom: 0
-    }
-  }, "\uC194\uB77C\uD53C API\uAC00 \uC124\uC815\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4. \uC54C\uB9BC\uC744 \uC0AC\uC6A9\uD558\uB824\uBA74 \uD658\uACBD\uBCC0\uC218\uB97C \uC124\uC815\uD558\uC138\uC694."))));
+    id: "sec-notify",
+    children: /*#__PURE__*/_jsxDEV("div", {
+      className: "container",
+      children: [/*#__PURE__*/_jsxDEV("div", {
+        className: "section-title",
+        children: [/*#__PURE__*/_jsxDEV("span", {
+          className: "icon",
+          style: {
+            background: '#fffbeb'
+          },
+          children: "🔔"
+        }, void 0, false), "알림 설정"]
+      }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+        className: "card",
+        children: [/*#__PURE__*/_jsxDEV("div", {
+          style: {
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center'
+          },
+          children: [/*#__PURE__*/_jsxDEV("div", {
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              style: {
+                fontWeight: 600,
+                fontSize: 14
+              },
+              children: "일일 리포트 알림"
+            }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+              style: {
+                fontSize: 12,
+                color: '#64748b',
+                marginTop: 2
+              },
+              children: [settings.report_time || '09:00', "에 순위 변동 리포트를 발송합니다"]
+            }, void 0, true)]
+          }, void 0, true), /*#__PURE__*/_jsxDEV("label", {
+            className: "toggle",
+            children: [/*#__PURE__*/_jsxDEV("input", {
+              type: "checkbox",
+              checked: settings.notify_enabled || false,
+              onChange: e => toggleNotify(e.target.checked)
+            }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+              className: "toggle-track"
+            }, void 0, false)]
+          }, void 0, true)]
+        }, void 0, true), !settings.solapi_configured && /*#__PURE__*/_jsxDEV("div", {
+          className: "alert alert-info",
+          style: {
+            marginTop: 12,
+            marginBottom: 0
+          },
+          children: "솔라피 API가 설정되지 않았습니다. 알림을 사용하려면 환경변수를 설정하세요."
+        }, void 0, false)]
+      }, void 0, true)]
+    }, void 0, true)
+  }, void 0, false);
 };
 
 ;/* ===== js/components/CompetitionIndexSection.jsx ===== */
+import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";
 window.CompetitionIndexSection = function CompetitionIndexSection(props) {
   if (!props?.data) return null;
   const {
@@ -4425,139 +4829,175 @@ window.CompetitionIndexSection = function CompetitionIndexSection(props) {
   } = props.data;
   if (compPercent === undefined && compIndex === undefined) return null;
   var pct = typeof compPercent === 'number' ? compPercent : Math.min(98, Math.round(Math.log10(compIndex * 10 + 1) / Math.log10(101) * 100));
-  return /*#__PURE__*/React.createElement("div", {
-    className: "section fade-in"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "container"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      padding: '20px 22px'
-    }
-  }, /*#__PURE__*/React.createElement("h3", {
-    className: "rt-h3"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "rt-hic"
-  }, "\u2694\uFE0F"), "\uD0A4\uC6CC\uB4DC \uACBD\uC7C1\uAC15\uB3C4 \uBD84\uC11D", /*#__PURE__*/React.createElement("span", {
-    className: "badge b-ok"
-  }, "\u2705 \uC2E4\uCE21")), /*#__PURE__*/React.createElement("div", {
-    className: "rt-desc"
-  }, "\uC0C1\uD488 \uC218 \uB300\uBE44 \uAC80\uC0C9\uB7C9\uC73C\uB85C \uACBD\uC7C1 \uC218\uC900\uC744 \uD310\uB2E8\uD569\uB2C8\uB2E4"), /*#__PURE__*/React.createElement("div", {
-    className: "grid2",
-    style: {
-      alignItems: 'center'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      justifyContent: 'center',
-      alignItems: 'center'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: 'relative',
-      width: 172,
-      height: 172
-    }
-  }, /*#__PURE__*/React.createElement(ChartCanvas, {
-    type: "doughnut",
-    height: 172,
-    style: {
-      height: 172,
-      width: 172
-    },
-    data: {
-      labels: ['경쟁', '여유'],
-      datasets: [{
-        data: [pct, Math.max(0, 100 - pct)],
-        backgroundColor: [compColor, (window.CHART_COLORS || {}).GRID || '#eef2f7'],
-        borderWidth: 0
-      }]
-    },
-    options: {
-      cutout: '70%',
-      plugins: {
-        legend: {
-          display: false
+  return /*#__PURE__*/_jsxDEV("div", {
+    className: "section fade-in",
+    children: /*#__PURE__*/_jsxDEV("div", {
+      className: "container",
+      children: /*#__PURE__*/_jsxDEV("div", {
+        className: "card",
+        style: {
+          padding: '20px 22px'
         },
-        tooltip: {
-          enabled: false
-        }
-      }
-    }
-  }), /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: 'absolute',
-      inset: 0,
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      justifyContent: 'center',
-      textAlign: 'center'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 24,
-      fontWeight: 900,
-      color: compColor,
-      lineHeight: 1.1
-    }
-  }, fmt(compIndex)), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 11,
-      color: '#64748b',
-      marginTop: 3
-    }
-  }, "\uACBD\uC7C1\uC9C0\uC218"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 11,
-      fontWeight: 700,
-      color: compColor,
-      marginTop: 2
-    }
-  }, compLabel)))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    className: "band"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "mk",
-    style: {
-      left: 'calc(' + pct + '% - 2px)'
-    }
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      justifyContent: 'space-between',
-      fontSize: 11,
-      color: '#64748b'
-    }
-  }, /*#__PURE__*/React.createElement("span", null, "\uBE14\uB8E8\uC624\uC158"), /*#__PURE__*/React.createElement("span", null, "\uBCF4\uD1B5"), /*#__PURE__*/React.createElement("span", null, "\uB808\uB4DC\uC624\uC158")), /*#__PURE__*/React.createElement("div", {
-    className: "grid3",
-    style: {
-      marginTop: 14
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "kpi"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "k"
-  }, "\uB4F1\uB85D \uC0C1\uD488\uC218"), /*#__PURE__*/React.createElement("div", {
-    className: "v"
-  }, fmt(productCount))), /*#__PURE__*/React.createElement("div", {
-    className: "kpi"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "k"
-  }, "\uC6D4\uAC04 \uAC80\uC0C9\uB7C9"), /*#__PURE__*/React.createElement("div", {
-    className: "v"
-  }, fmt(searchVolume))), /*#__PURE__*/React.createElement("div", {
-    className: "kpi"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "k"
-  }, "\uD3C9\uADE0 \uD074\uB9AD\uC218"), /*#__PURE__*/React.createElement("div", {
-    className: "v"
-  }, fmt(avgCtr)))))), /*#__PURE__*/React.createElement("div", {
-    className: "note"
-  }, "\uACBD\uC7C1\uC9C0\uC218 ", fmt(compIndex), "(", compLabel, ")", interpretation ? '. ' + interpretation : '.'))));
+        children: [/*#__PURE__*/_jsxDEV("h3", {
+          className: "rt-h3",
+          children: [/*#__PURE__*/_jsxDEV("span", {
+            className: "rt-hic",
+            children: "⚔️"
+          }, void 0, false), "키워드 경쟁강도 분석", /*#__PURE__*/_jsxDEV("span", {
+            className: "badge b-ok",
+            children: "✅ 실측"
+          }, void 0, false)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          className: "rt-desc",
+          children: "상품 수 대비 검색량으로 경쟁 수준을 판단합니다"
+        }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+          className: "grid2",
+          style: {
+            alignItems: 'center'
+          },
+          children: [/*#__PURE__*/_jsxDEV("div", {
+            style: {
+              display: 'flex',
+              justifyContent: 'center',
+              alignItems: 'center'
+            },
+            children: /*#__PURE__*/_jsxDEV("div", {
+              style: {
+                position: 'relative',
+                width: 172,
+                height: 172
+              },
+              children: [/*#__PURE__*/_jsxDEV(ChartCanvas, {
+                type: "doughnut",
+                height: 172,
+                style: {
+                  height: 172,
+                  width: 172
+                },
+                data: {
+                  labels: ['경쟁', '여유'],
+                  datasets: [{
+                    data: [pct, Math.max(0, 100 - pct)],
+                    backgroundColor: [compColor, (window.CHART_COLORS || {}).GRID || '#eef2f7'],
+                    borderWidth: 0
+                  }]
+                },
+                options: {
+                  cutout: '70%',
+                  plugins: {
+                    legend: {
+                      display: false
+                    },
+                    tooltip: {
+                      enabled: false
+                    }
+                  }
+                }
+              }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  position: 'absolute',
+                  inset: 0,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  textAlign: 'center'
+                },
+                children: [/*#__PURE__*/_jsxDEV("div", {
+                  style: {
+                    fontSize: 24,
+                    fontWeight: 900,
+                    color: compColor,
+                    lineHeight: 1.1
+                  },
+                  children: fmt(compIndex)
+                }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+                  style: {
+                    fontSize: 11,
+                    color: '#64748b',
+                    marginTop: 3
+                  },
+                  children: "경쟁지수"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+                  style: {
+                    fontSize: 11,
+                    fontWeight: 700,
+                    color: compColor,
+                    marginTop: 2
+                  },
+                  children: compLabel
+                }, void 0, false)]
+              }, void 0, true)]
+            }, void 0, true)
+          }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              className: "band",
+              children: /*#__PURE__*/_jsxDEV("span", {
+                className: "mk",
+                style: {
+                  left: 'calc(' + pct + '% - 2px)'
+                }
+              }, void 0, false)
+            }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+              style: {
+                display: 'flex',
+                justifyContent: 'space-between',
+                fontSize: 11,
+                color: '#64748b'
+              },
+              children: [/*#__PURE__*/_jsxDEV("span", {
+                children: "블루오션"
+              }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+                children: "보통"
+              }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+                children: "레드오션"
+              }, void 0, false)]
+            }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+              className: "grid3",
+              style: {
+                marginTop: 14
+              },
+              children: [/*#__PURE__*/_jsxDEV("div", {
+                className: "kpi",
+                children: [/*#__PURE__*/_jsxDEV("div", {
+                  className: "k",
+                  children: "등록 상품수"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+                  className: "v",
+                  children: fmt(productCount)
+                }, void 0, false)]
+              }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                className: "kpi",
+                children: [/*#__PURE__*/_jsxDEV("div", {
+                  className: "k",
+                  children: "월간 검색량"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+                  className: "v",
+                  children: fmt(searchVolume)
+                }, void 0, false)]
+              }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                className: "kpi",
+                children: [/*#__PURE__*/_jsxDEV("div", {
+                  className: "k",
+                  children: "평균 클릭수"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+                  className: "v",
+                  children: fmt(avgCtr)
+                }, void 0, false)]
+              }, void 0, true)]
+            }, void 0, true)]
+          }, void 0, true)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          className: "note",
+          children: ["경쟁지수 ", fmt(compIndex), "(", compLabel, ")", interpretation ? '. ' + interpretation : '.']
+        }, void 0, true)]
+      }, void 0, true)
+    }, void 0, false)
+  }, void 0, false);
 };
 
 ;/* ===== js/components/MarketRevenueSection.jsx ===== */
+import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";
 window.MarketRevenueSection = function MarketRevenueSection(props) {
   if (!props?.data) return null;
   const {
@@ -4585,147 +5025,191 @@ window.MarketRevenueSection = function MarketRevenueSection(props) {
   var hasRevChart = revValues.some(function (v) {
     return v > 0;
   });
-  return /*#__PURE__*/React.createElement("div", {
-    className: "section fade-in"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "container"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      padding: '20px 22px'
-    }
-  }, /*#__PURE__*/React.createElement("h3", {
-    className: "rt-h3"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "rt-hic"
-  }, "\uD83D\uDCB0"), "\uC2DC\uC7A5 \uADDC\uBAA8 & \uB9E4\uCD9C \uCD94\uC815", /*#__PURE__*/React.createElement("span", {
-    className: "badge b-est"
-  }, "\u2248 \uCD94\uC815"), tolerance ? /*#__PURE__*/React.createElement("span", {
-    className: "badge b-est",
-    style: {
-      marginLeft: 6
-    }
-  }, tolerance) : null), /*#__PURE__*/React.createElement("div", {
-    className: "rt-desc"
-  }, "\uAC80\uC0C9\uB7C9 \xD7 \uD074\uB9AD\uB960 \xD7 \uC804\uD658\uC728 \xD7 \uD3C9\uADE0 \uB2E8\uAC00 \uAE30\uBC18 \uCD94\uC815"), /*#__PURE__*/React.createElement("div", {
-    className: "grid3"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "kpi"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "k"
-  }, "\uC6D4\uAC04 \uC2DC\uC7A5 \uADDC\uBAA8"), /*#__PURE__*/React.createElement("div", {
-    className: "v"
-  }, estimatedMonthlyRange || estimatedMonthly || '-')), /*#__PURE__*/React.createElement("div", {
-    className: "kpi"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "k"
-  }, "\uD3C9\uADE0 \uD310\uB9E4\uAC00"), /*#__PURE__*/React.createElement("div", {
-    className: "v"
-  }, avgPrice || '-')), /*#__PURE__*/React.createElement("div", {
-    className: "kpi"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "k"
-  }, "\uC801\uC6A9 \uC804\uD658\uC728"), /*#__PURE__*/React.createElement("div", {
-    className: "v"
-  }, conversionRate || '3.0%'))), hasRevChart && /*#__PURE__*/React.createElement("div", {
-    className: "chartbox",
-    style: {
-      marginTop: 14
-    }
-  }, /*#__PURE__*/React.createElement(ChartCanvas, {
-    type: "bar",
-    height: 240,
-    data: {
-      labels: revLabels,
-      datasets: [{
-        label: '예상 월 매출(만원)',
-        data: revValues,
-        backgroundColor: function (ctx) {
-          return ctx.dataIndex < 3 ? C.IND : C.SOFT;
+  return /*#__PURE__*/_jsxDEV("div", {
+    className: "section fade-in",
+    children: /*#__PURE__*/_jsxDEV("div", {
+      className: "container",
+      children: /*#__PURE__*/_jsxDEV("div", {
+        className: "card",
+        style: {
+          padding: '20px 22px'
         },
-        borderRadius: 6
-      }]
-    },
-    options: {
-      plugins: {
-        legend: {
-          display: false
-        },
-        tooltip: {
-          callbacks: {
-            label: function (ctx) {
-              return (window.chartComma ? window.chartComma(ctx.parsed.y) : ctx.parsed.y) + '만원';
+        children: [/*#__PURE__*/_jsxDEV("h3", {
+          className: "rt-h3",
+          children: [/*#__PURE__*/_jsxDEV("span", {
+            className: "rt-hic",
+            children: "💰"
+          }, void 0, false), "시장 규모 & 매출 추정", /*#__PURE__*/_jsxDEV("span", {
+            className: "badge b-est",
+            children: "≈ 추정"
+          }, void 0, false), tolerance ? /*#__PURE__*/_jsxDEV("span", {
+            className: "badge b-est",
+            style: {
+              marginLeft: 6
+            },
+            children: tolerance
+          }, void 0, false) : null]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          className: "rt-desc",
+          children: "검색량 × 클릭률 × 전환율 × 평균 단가 기반 추정"
+        }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+          className: "grid3",
+          children: [/*#__PURE__*/_jsxDEV("div", {
+            className: "kpi",
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              className: "k",
+              children: "월간 시장 규모"
+            }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+              className: "v",
+              children: estimatedMonthlyRange || estimatedMonthly || '-'
+            }, void 0, false)]
+          }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+            className: "kpi",
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              className: "k",
+              children: "평균 판매가"
+            }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+              className: "v",
+              children: avgPrice || '-'
+            }, void 0, false)]
+          }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+            className: "kpi",
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              className: "k",
+              children: "적용 전환율"
+            }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+              className: "v",
+              children: conversionRate || '3.0%'
+            }, void 0, false)]
+          }, void 0, true)]
+        }, void 0, true), hasRevChart && /*#__PURE__*/_jsxDEV("div", {
+          className: "chartbox",
+          style: {
+            marginTop: 14
+          },
+          children: /*#__PURE__*/_jsxDEV(ChartCanvas, {
+            type: "bar",
+            height: 240,
+            data: {
+              labels: revLabels,
+              datasets: [{
+                label: '예상 월 매출(만원)',
+                data: revValues,
+                backgroundColor: function (ctx) {
+                  return ctx.dataIndex < 3 ? C.IND : C.SOFT;
+                },
+                borderRadius: 6
+              }]
+            },
+            options: {
+              plugins: {
+                legend: {
+                  display: false
+                },
+                tooltip: {
+                  callbacks: {
+                    label: function (ctx) {
+                      return (window.chartComma ? window.chartComma(ctx.parsed.y) : ctx.parsed.y) + '만원';
+                    }
+                  }
+                }
+              },
+              scales: {
+                y: {
+                  beginAtZero: true,
+                  ticks: {
+                    callback: function (v) {
+                      return (window.chartComma ? window.chartComma(v) : v) + '만';
+                    }
+                  }
+                }
+              }
             }
-          }
-        }
-      },
-      scales: {
-        y: {
-          beginAtZero: true,
-          ticks: {
-            callback: function (v) {
-              return (window.chartComma ? window.chartComma(v) : v) + '만';
-            }
-          }
-        }
-      }
-    }
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "rt-scroll"
-  }, /*#__PURE__*/React.createElement("table", {
-    className: "rt-table",
-    style: {
-      marginTop: 0
-    }
-  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "\uC21C\uC704"), /*#__PURE__*/React.createElement("th", null, "\uC0C1\uD488\uBA85"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      textAlign: 'center',
-      whiteSpace: 'nowrap'
-    }
-  }, "CTR"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      textAlign: 'right',
-      whiteSpace: 'nowrap'
-    }
-  }, "\uC608\uC0C1 \uD310\uB9E4"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      textAlign: 'right',
-      whiteSpace: 'nowrap'
-    }
-  }, "\uC608\uC0C1 \uC6D4 \uB9E4\uCD9C"))), /*#__PURE__*/React.createElement("tbody", null, topProducts.map(function (item, idx) {
-    var isMyProduct = item.isMyProduct || false;
-    return /*#__PURE__*/React.createElement("tr", {
-      key: idx,
-      style: isMyProduct ? {
-        background: '#fff7ed'
-      } : {}
-    }, /*#__PURE__*/React.createElement("td", null, item.rank), /*#__PURE__*/React.createElement("td", {
-      style: {
-        fontWeight: isMyProduct ? 700 : 400,
-        wordBreak: 'keep-all'
-      }
-    }, item.name, isMyProduct ? ' 👈' : ''), /*#__PURE__*/React.createElement("td", {
-      style: {
-        textAlign: 'center',
-        whiteSpace: 'nowrap'
-      }
-    }, item.ctr), /*#__PURE__*/React.createElement("td", {
-      style: {
-        textAlign: 'right',
-        whiteSpace: 'nowrap'
-      }
-    }, item.estMonthlySalesRange || item.estMonthlySales), /*#__PURE__*/React.createElement("td", {
-      style: {
-        textAlign: 'right',
-        whiteSpace: 'nowrap'
-      }
-    }, item.estRevenueRange || item.estRevenue));
-  })))), /*#__PURE__*/React.createElement("div", {
-    className: "note est"
-  }, "\u2248 \uAC80\uC0C9\uB7C9\xD7\uC21C\uC704\uBCC4 \uD074\uB9AD\uB960\xD7\uC804\uD658\uC728 \uAE30\uBC18 ", /*#__PURE__*/React.createElement("b", null, "\uC2DC\uC7A5 \uADDC\uBAA8 \uCD94\uC815"), "(\uAC1C\uBCC4 \uC2E4\uD310\uB9E4 \uC544\uB2D8). \uBCF4\uC644 \uD6C4 \uB9AC\uBDF0\uC99D\uAC00 \uAE30\uBC18\uC73C\uB85C \uC815\uBC00\uD654."))));
+          }, void 0, false)
+        }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+          className: "rt-scroll",
+          children: /*#__PURE__*/_jsxDEV("table", {
+            className: "rt-table",
+            style: {
+              marginTop: 0
+            },
+            children: [/*#__PURE__*/_jsxDEV("thead", {
+              children: /*#__PURE__*/_jsxDEV("tr", {
+                children: [/*#__PURE__*/_jsxDEV("th", {
+                  children: "순위"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                  children: "상품명"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                  style: {
+                    textAlign: 'center',
+                    whiteSpace: 'nowrap'
+                  },
+                  children: "CTR"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                  style: {
+                    textAlign: 'right',
+                    whiteSpace: 'nowrap'
+                  },
+                  children: "예상 판매"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                  style: {
+                    textAlign: 'right',
+                    whiteSpace: 'nowrap'
+                  },
+                  children: "예상 월 매출"
+                }, void 0, false)]
+              }, void 0, true)
+            }, void 0, false), /*#__PURE__*/_jsxDEV("tbody", {
+              children: topProducts.map(function (item, idx) {
+                var isMyProduct = item.isMyProduct || false;
+                return /*#__PURE__*/_jsxDEV("tr", {
+                  style: isMyProduct ? {
+                    background: '#fff7ed'
+                  } : {},
+                  children: [/*#__PURE__*/_jsxDEV("td", {
+                    children: item.rank
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                    style: {
+                      fontWeight: isMyProduct ? 700 : 400,
+                      wordBreak: 'keep-all'
+                    },
+                    children: [item.name, isMyProduct ? ' 👈' : '']
+                  }, void 0, true), /*#__PURE__*/_jsxDEV("td", {
+                    style: {
+                      textAlign: 'center',
+                      whiteSpace: 'nowrap'
+                    },
+                    children: item.ctr
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                    style: {
+                      textAlign: 'right',
+                      whiteSpace: 'nowrap'
+                    },
+                    children: item.estMonthlySalesRange || item.estMonthlySales
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                    style: {
+                      textAlign: 'right',
+                      whiteSpace: 'nowrap'
+                    },
+                    children: item.estRevenueRange || item.estRevenue
+                  }, void 0, false)]
+                }, idx, true);
+              })
+            }, void 0, false)]
+          }, void 0, true)
+        }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+          className: "note est",
+          children: ["≈ 검색량×순위별 클릭률×전환율 기반 ", /*#__PURE__*/_jsxDEV("b", {
+            children: "시장 규모 추정"
+          }, void 0, false), "(개별 실판매 아님). 보완 후 리뷰증가 기반으로 정밀화."]
+        }, void 0, true)]
+      }, void 0, true)
+    }, void 0, false)
+  }, void 0, false);
 };
 
 ;/* ===== js/components/GoldenKeywordCard.jsx ===== */
+import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";
 window.GoldenKeywordCard = function GoldenKeywordCard(props) {
   // 단일 객체 또는 배열 모두 처리 (data가 없어도 0건 안내를 렌더)
   var raw = props ? props.data : null;
@@ -4736,124 +5220,164 @@ window.GoldenKeywordCard = function GoldenKeywordCard(props) {
 
   // 0건: 숨기지 않고 대안을 안내 (빈 표/‘없음’이 부정적으로 보이는 문제 개선)
   if (valid.length === 0) {
-    return /*#__PURE__*/React.createElement("div", {
-      className: "card"
-    }, /*#__PURE__*/React.createElement("h3", {
-      className: "rt-h3"
-    }, /*#__PURE__*/React.createElement("span", {
-      className: "rt-hic"
-    }, "\uD83D\uDC51"), "\uACE8\uB4E0 \uD0A4\uC6CC\uB4DC ", /*#__PURE__*/React.createElement("span", {
-      className: "badge b-ok"
-    }, "\u2705 \uC2E4\uCE21")), /*#__PURE__*/React.createElement("div", {
-      style: {
-        padding: '22px 20px',
-        textAlign: 'center',
-        background: '#f8fafc',
-        borderRadius: 12,
-        border: '1px dashed #e2e8f0'
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 14,
-        fontWeight: 700,
-        color: '#475569',
-        marginBottom: 6
-      }
-    }, "\uC9C0\uAE08\uC740 \uC800\uACBD\uC7C1 \uACE8\uB4E0 \uD0A4\uC6CC\uB4DC\uAC00 \uBC1C\uACAC\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4"), /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 12,
-        color: '#94a3b8',
-        lineHeight: 1.7
-      }
-    }, "\uACE8\uB4E0 \uD0A4\uC6CC\uB4DC\uB294 ", /*#__PURE__*/React.createElement("b", null, "\uAC80\uC0C9\uB7C9\uC740 \uC788\uC73C\uBA74\uC11C \uACBD\uC7C1\uAC15\uB3C4\uAC00 \uB0AE\uC740"), " \uD0A4\uC6CC\uB4DC\uC785\uB2C8\uB2E4. \uB300\uD45C\uD0A4\uC6CC\uB4DC \uC8FC\uBCC0\uC5D0\uB294 \uC5C6\uC9C0\uB9CC, \uC544\uB798 ", /*#__PURE__*/React.createElement("b", null, "\uC5F0\uAD00 \uD0A4\uC6CC\uB4DC"), "\uC758 \uB871\uD14C\uC77C(2~3\uC5B4\uC808 \uC870\uD569)\uC774\uB098 ", /*#__PURE__*/React.createElement("b", null, "\uC138\uBD80 \uC0C1\uD488 \uC18D\uC131 \uD0A4\uC6CC\uB4DC"), "\uB85C \uC9C4\uC785\uD558\uBA74 \uB0AE\uC740 \uBE44\uC6A9\uC73C\uB85C \uC0C1\uC704 \uB178\uCD9C\uC744 \uB178\uB9B4 \uC218 \uC788\uC2B5\uB2C8\uB2E4.")));
+    return /*#__PURE__*/_jsxDEV("div", {
+      className: "card",
+      children: [/*#__PURE__*/_jsxDEV("h3", {
+        className: "rt-h3",
+        children: [/*#__PURE__*/_jsxDEV("span", {
+          className: "rt-hic",
+          children: "👑"
+        }, void 0, false), "골든 키워드 ", /*#__PURE__*/_jsxDEV("span", {
+          className: "badge b-ok",
+          children: "✅ 실측"
+        }, void 0, false)]
+      }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+        style: {
+          padding: '22px 20px',
+          textAlign: 'center',
+          background: '#f8fafc',
+          borderRadius: 12,
+          border: '1px dashed #e2e8f0'
+        },
+        children: [/*#__PURE__*/_jsxDEV("div", {
+          style: {
+            fontSize: 14,
+            fontWeight: 700,
+            color: '#475569',
+            marginBottom: 6
+          },
+          children: "지금은 저경쟁 골든 키워드가 발견되지 않았습니다"
+        }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+          style: {
+            fontSize: 12,
+            color: '#94a3b8',
+            lineHeight: 1.7
+          },
+          children: ["골든 키워드는 ", /*#__PURE__*/_jsxDEV("b", {
+            children: "검색량은 있으면서 경쟁강도가 낮은"
+          }, void 0, false), " 키워드입니다. 대표키워드 주변에는 없지만, 아래 ", /*#__PURE__*/_jsxDEV("b", {
+            children: "연관 키워드"
+          }, void 0, false), "의 롱테일(2~3어절 조합)이나 ", /*#__PURE__*/_jsxDEV("b", {
+            children: "세부 상품 속성 키워드"
+          }, void 0, false), "로 진입하면 낮은 비용으로 상위 노출을 노릴 수 있습니다."]
+        }, void 0, true)]
+      }, void 0, true)]
+    }, void 0, true);
   }
-  return /*#__PURE__*/React.createElement("div", {
-    className: "card"
-  }, /*#__PURE__*/React.createElement("h3", {
-    className: "rt-h3"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "rt-hic"
-  }, "\uD83D\uDC51"), "\uACE8\uB4E0 \uD0A4\uC6CC\uB4DC ", /*#__PURE__*/React.createElement("span", {
-    className: "badge b-ok"
-  }, "\u2705 \uC2E4\uCE21")), /*#__PURE__*/React.createElement("div", {
-    className: "grid2"
-  }, valid.map(function (item, idx) {
-    const {
-      name,
-      score,
-      volume,
-      competition,
-      ctr,
-      clicks,
-      reason
-    } = item;
-    const scorePercent = Math.min(100, score / 100 * 100);
-    return /*#__PURE__*/React.createElement("div", {
-      key: idx,
-      className: "sub-card"
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "st"
-    }, "\uD83D\uDC51 ", name, /*#__PURE__*/React.createElement("span", {
-      style: {
-        marginLeft: 'auto',
-        color: 'var(--est)',
-        fontWeight: 900
-      }
-    }, "\uC810\uC218 ", score)), /*#__PURE__*/React.createElement("div", {
+  return /*#__PURE__*/_jsxDEV("div", {
+    className: "card",
+    children: [/*#__PURE__*/_jsxDEV("h3", {
+      className: "rt-h3",
+      children: [/*#__PURE__*/_jsxDEV("span", {
+        className: "rt-hic",
+        children: "👑"
+      }, void 0, false), "골든 키워드 ", /*#__PURE__*/_jsxDEV("span", {
+        className: "badge b-ok",
+        children: "✅ 실측"
+      }, void 0, false)]
+    }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
       className: "grid2",
-      style: {
-        gap: '8px',
-        margin: '8px 0'
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: '12px'
-      }
-    }, /*#__PURE__*/React.createElement("span", {
-      style: {
-        color: 'var(--sub)'
-      }
-    }, "\uC6D4 \uAC80\uC0C9\uB7C9"), " ", /*#__PURE__*/React.createElement("b", null, fmt(volume))), /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: '12px'
-      }
-    }, /*#__PURE__*/React.createElement("span", {
-      style: {
-        color: 'var(--sub)'
-      }
-    }, "\uACBD\uC7C1\uAC15\uB3C4"), " ", /*#__PURE__*/React.createElement("b", null, competition)), /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: '12px'
-      }
-    }, /*#__PURE__*/React.createElement("span", {
-      style: {
-        color: 'var(--sub)'
-      }
-    }, "\uD3C9\uADE0 \uD074\uB9AD"), " ", /*#__PURE__*/React.createElement("b", null, typeof ctr === 'number' ? ctr.toFixed(1) : ctr)), /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: '12px'
-      }
-    }, /*#__PURE__*/React.createElement("span", {
-      style: {
-        color: 'var(--sub)'
-      }
-    }, "\uC6D4 \uD074\uB9AD\uC218"), " ", /*#__PURE__*/React.createElement("b", null, fmt(clicks)))), /*#__PURE__*/React.createElement("div", {
-      className: "track"
-    }, /*#__PURE__*/React.createElement("i", {
-      style: {
-        width: Math.round(scorePercent) + '%'
-      }
-    })), reason && /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: '11.5px',
-        color: 'var(--sub)',
-        marginTop: '6px'
-      }
-    }, reason));
-  })));
+      children: valid.map(function (item, idx) {
+        const {
+          name,
+          score,
+          volume,
+          competition,
+          ctr,
+          clicks,
+          reason
+        } = item;
+        const scorePercent = Math.min(100, score / 100 * 100);
+        return /*#__PURE__*/_jsxDEV("div", {
+          className: "sub-card",
+          children: [/*#__PURE__*/_jsxDEV("div", {
+            className: "st",
+            children: ["👑 ", name, /*#__PURE__*/_jsxDEV("span", {
+              style: {
+                marginLeft: 'auto',
+                color: 'var(--est)',
+                fontWeight: 900
+              },
+              children: ["점수 ", score]
+            }, void 0, true)]
+          }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+            className: "grid2",
+            style: {
+              gap: '8px',
+              margin: '8px 0'
+            },
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              style: {
+                fontSize: '12px'
+              },
+              children: [/*#__PURE__*/_jsxDEV("span", {
+                style: {
+                  color: 'var(--sub)'
+                },
+                children: "월 검색량"
+              }, void 0, false), " ", /*#__PURE__*/_jsxDEV("b", {
+                children: fmt(volume)
+              }, void 0, false)]
+            }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+              style: {
+                fontSize: '12px'
+              },
+              children: [/*#__PURE__*/_jsxDEV("span", {
+                style: {
+                  color: 'var(--sub)'
+                },
+                children: "경쟁강도"
+              }, void 0, false), " ", /*#__PURE__*/_jsxDEV("b", {
+                children: competition
+              }, void 0, false)]
+            }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+              style: {
+                fontSize: '12px'
+              },
+              children: [/*#__PURE__*/_jsxDEV("span", {
+                style: {
+                  color: 'var(--sub)'
+                },
+                children: "평균 클릭"
+              }, void 0, false), " ", /*#__PURE__*/_jsxDEV("b", {
+                children: typeof ctr === 'number' ? ctr.toFixed(1) : ctr
+              }, void 0, false)]
+            }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+              style: {
+                fontSize: '12px'
+              },
+              children: [/*#__PURE__*/_jsxDEV("span", {
+                style: {
+                  color: 'var(--sub)'
+                },
+                children: "월 클릭수"
+              }, void 0, false), " ", /*#__PURE__*/_jsxDEV("b", {
+                children: fmt(clicks)
+              }, void 0, false)]
+            }, void 0, true)]
+          }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+            className: "track",
+            children: /*#__PURE__*/_jsxDEV("i", {
+              style: {
+                width: Math.round(scorePercent) + '%'
+              }
+            }, void 0, false)
+          }, void 0, false), reason && /*#__PURE__*/_jsxDEV("div", {
+            style: {
+              fontSize: '11.5px',
+              color: 'var(--sub)',
+              marginTop: '6px'
+            },
+            children: reason
+          }, void 0, false)]
+        }, idx, true);
+      })
+    }, void 0, false)]
+  }, void 0, true);
 };
 
 ;/* ===== js/components/AdvertiserInfoCard.jsx ===== */
+import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";
 window.AdvertiserInfoCard = function AdvertiserInfoCard(props) {
   if (!props?.data) return null;
   const {
@@ -4882,47 +5406,63 @@ window.AdvertiserInfoCard = function AdvertiserInfoCard(props) {
     value: compIdx || '-',
     unit: ''
   }];
-  return /*#__PURE__*/React.createElement("div", {
-    className: "section fade-in"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "container"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      padding: '20px 22px'
-    }
-  }, /*#__PURE__*/React.createElement("h3", {
-    className: "rt-h3"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "rt-hic"
-  }, "\uD83D\uDCE3"), "\uAD11\uACE0 \uACBD\uC7C1 \uC815\uBCF4", /*#__PURE__*/React.createElement("span", {
-    className: "badge b-ok"
-  }, "\u2705 \uC2E4\uCE21")), /*#__PURE__*/React.createElement("div", {
-    className: "rt-desc"
-  }, "\uB124\uC774\uBC84 \uAC80\uC0C9\uAD11\uACE0 \uAE30\uC900 \u2014 \uC774 \uD0A4\uC6CC\uB4DC\uC5D0 \uAD11\uACE0\uB85C \uB4E4\uC5B4\uC62C \uB54C\uC758 \uACBD\uC7C1 \uD658\uACBD"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'grid',
-      gridTemplateColumns: 'repeat(4, 1fr)',
-      gap: 12
-    }
-  }, items.map(function (item, idx) {
-    return /*#__PURE__*/React.createElement("div", {
-      key: idx,
-      className: "rt-kpi"
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "rt-kpi-k"
-    }, item.label), /*#__PURE__*/React.createElement("div", {
-      className: "rt-kpi-v",
-      style: {
-        fontSize: 20
-      }
-    }, item.value, item.unit && /*#__PURE__*/React.createElement("small", null, item.unit)));
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "note"
-  }, "'\uAD11\uACE0 \uB178\uCD9C \uAE4A\uC774 = \uC0C1\uC704 N\uAC1C'\uB294 \uC774 \uD0A4\uC6CC\uB4DC\uC5D0\uC11C \uAC80\uC0C9\uAD11\uACE0\uAC00 \uD3C9\uADE0\uC801\uC73C\uB85C ", /*#__PURE__*/React.createElement("b", null, "\uC0C1\uC704 \uBA87 \uBC88\uC9F8 \uC2AC\uB86F\uAE4C\uC9C0 \uB178\uCD9C"), "\uB418\uB294\uC9C0\uB97C \uB73B\uD569\uB2C8\uB2E4(\uAC12\uC774 \uD074\uC218\uB85D \uAD11\uACE0 \uB178\uCD9C \uACBD\uC7C1\uC774 \uB113\uC74C). \uAD11\uACE0 \uACBD\uC7C1\uC774 \uCE58\uC5F4\uD560\uC218\uB85D \uC785\uCC30\uAC00 \uBD80\uB2F4\uC774 \uCEE4\uC9C0\uBBC0\uB85C, SEO(\uC790\uC5F0\uB178\uCD9C)\uB97C \uBCD1\uD589\uD574 \uAD11\uACE0\uBE44 \uD6A8\uC728\uC744 \uD655\uBCF4\uD558\uB294 \uAC83\uC774 \uC720\uB9AC\uD569\uB2C8\uB2E4."))));
+  return /*#__PURE__*/_jsxDEV("div", {
+    className: "section fade-in",
+    children: /*#__PURE__*/_jsxDEV("div", {
+      className: "container",
+      children: /*#__PURE__*/_jsxDEV("div", {
+        className: "card",
+        style: {
+          padding: '20px 22px'
+        },
+        children: [/*#__PURE__*/_jsxDEV("h3", {
+          className: "rt-h3",
+          children: [/*#__PURE__*/_jsxDEV("span", {
+            className: "rt-hic",
+            children: "📣"
+          }, void 0, false), "광고 경쟁 정보", /*#__PURE__*/_jsxDEV("span", {
+            className: "badge b-ok",
+            children: "✅ 실측"
+          }, void 0, false)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          className: "rt-desc",
+          children: "네이버 검색광고 기준 — 이 키워드에 광고로 들어올 때의 경쟁 환경"
+        }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+          style: {
+            display: 'grid',
+            gridTemplateColumns: 'repeat(4, 1fr)',
+            gap: 12
+          },
+          children: items.map(function (item, idx) {
+            return /*#__PURE__*/_jsxDEV("div", {
+              className: "rt-kpi",
+              children: [/*#__PURE__*/_jsxDEV("div", {
+                className: "rt-kpi-k",
+                children: item.label
+              }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+                className: "rt-kpi-v",
+                style: {
+                  fontSize: 20
+                },
+                children: [item.value, item.unit && /*#__PURE__*/_jsxDEV("small", {
+                  children: item.unit
+                }, void 0, false)]
+              }, void 0, true)]
+            }, idx, true);
+          })
+        }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+          className: "note",
+          children: ["'광고 노출 깊이 = 상위 N개'는 이 키워드에서 검색광고가 평균적으로 ", /*#__PURE__*/_jsxDEV("b", {
+            children: "상위 몇 번째 슬롯까지 노출"
+          }, void 0, false), "되는지를 뜻합니다(값이 클수록 광고 노출 경쟁이 넓음). 광고 경쟁이 치열할수록 입찰가 부담이 커지므로, SEO(자연노출)를 병행해 광고비 효율을 확보하는 것이 유리합니다."]
+        }, void 0, true)]
+      }, void 0, true)
+    }, void 0, false)
+  }, void 0, false);
 };
 
 ;/* ===== js/components/SummaryCardsSection.jsx ===== */
+import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";
 /* SummaryCardsSection — 종합 요약 (시안: 한 카드 + ✅배지 KPI 4칸) */
 window.SummaryCardsSection = function SummaryCardsSection(props) {
   if (!props?.data) return null;
@@ -4935,62 +5475,92 @@ window.SummaryCardsSection = function SummaryCardsSection(props) {
   } = props.data;
   // ★ totalVolume/productCount 는 App.jsx에서 이미 fmt() 적용된 문자열 → 그대로 출력(이중 포맷 NaN 방지)
 
-  return /*#__PURE__*/React.createElement("div", {
-    className: "section fade-in"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "container"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "card"
-  }, /*#__PURE__*/React.createElement("h3", {
-    className: "rt-h3"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "rt-hic"
-  }, "\uD83C\uDFAF"), "\uC885\uD569 \uC694\uC57D"), /*#__PURE__*/React.createElement("div", {
-    className: "grid4"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "kpi"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "k"
-  }, "\uC6D4\uAC04 \uAC80\uC0C9\uB7C9 ", /*#__PURE__*/React.createElement("span", {
-    className: "badge b-ok"
-  }, "\u2705")), /*#__PURE__*/React.createElement("div", {
-    className: "v"
-  }, totalVolume, /*#__PURE__*/React.createElement("small", null, "\uD68C/\uC6D4"))), /*#__PURE__*/React.createElement("div", {
-    className: "kpi"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "k"
-  }, "\uB4F1\uB85D \uC0C1\uD488\uC218 ", /*#__PURE__*/React.createElement("span", {
-    className: "badge b-ok"
-  }, "\u2705")), /*#__PURE__*/React.createElement("div", {
-    className: "v"
-  }, productCount, /*#__PURE__*/React.createElement("small", null, "\uAC1C"))), /*#__PURE__*/React.createElement("div", {
-    className: "kpi"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "k"
-  }, "\uACE8\uB4E0 \uD0A4\uC6CC\uB4DC ", /*#__PURE__*/React.createElement("span", {
-    className: "badge b-ok"
-  }, "\u2705")), /*#__PURE__*/React.createElement("div", {
-    className: "v",
-    style: {
-      color: Number(goldenCount) === 0 ? '#f59e0b' : undefined
-    }
-  }, goldenCount, /*#__PURE__*/React.createElement("small", null, Number(goldenCount) === 0 ? '개 — 롱테일 권장' : '개 발견'))), /*#__PURE__*/React.createElement("div", {
-    className: "kpi"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "k"
-  }, "\uACBD\uC7C1\uAC15\uB3C4 ", /*#__PURE__*/React.createElement("span", {
-    className: "badge b-ok"
-  }, "\u2705")), /*#__PURE__*/React.createElement("div", {
-    className: "v",
-    style: {
-      fontSize: '22px'
-    }
-  }, compLevel || '-'))), note && /*#__PURE__*/React.createElement("div", {
-    className: "note"
-  }, "\uD83D\uDCA1 ", note))));
+  return /*#__PURE__*/_jsxDEV("div", {
+    className: "section fade-in",
+    children: /*#__PURE__*/_jsxDEV("div", {
+      className: "container",
+      children: /*#__PURE__*/_jsxDEV("div", {
+        className: "card",
+        children: [/*#__PURE__*/_jsxDEV("h3", {
+          className: "rt-h3",
+          children: [/*#__PURE__*/_jsxDEV("span", {
+            className: "rt-hic",
+            children: "🎯"
+          }, void 0, false), "종합 요약"]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          className: "grid4",
+          children: [/*#__PURE__*/_jsxDEV("div", {
+            className: "kpi",
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              className: "k",
+              children: ["월간 검색량 ", /*#__PURE__*/_jsxDEV("span", {
+                className: "badge b-ok",
+                children: "✅"
+              }, void 0, false)]
+            }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+              className: "v",
+              children: [totalVolume, /*#__PURE__*/_jsxDEV("small", {
+                children: "회/월"
+              }, void 0, false)]
+            }, void 0, true)]
+          }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+            className: "kpi",
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              className: "k",
+              children: ["등록 상품수 ", /*#__PURE__*/_jsxDEV("span", {
+                className: "badge b-ok",
+                children: "✅"
+              }, void 0, false)]
+            }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+              className: "v",
+              children: [productCount, /*#__PURE__*/_jsxDEV("small", {
+                children: "개"
+              }, void 0, false)]
+            }, void 0, true)]
+          }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+            className: "kpi",
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              className: "k",
+              children: ["골든 키워드 ", /*#__PURE__*/_jsxDEV("span", {
+                className: "badge b-ok",
+                children: "✅"
+              }, void 0, false)]
+            }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+              className: "v",
+              style: {
+                color: Number(goldenCount) === 0 ? '#f59e0b' : undefined
+              },
+              children: [goldenCount, /*#__PURE__*/_jsxDEV("small", {
+                children: Number(goldenCount) === 0 ? '개 — 롱테일 권장' : '개 발견'
+              }, void 0, false)]
+            }, void 0, true)]
+          }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+            className: "kpi",
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              className: "k",
+              children: ["경쟁강도 ", /*#__PURE__*/_jsxDEV("span", {
+                className: "badge b-ok",
+                children: "✅"
+              }, void 0, false)]
+            }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+              className: "v",
+              style: {
+                fontSize: '22px'
+              },
+              children: compLevel || '-'
+            }, void 0, false)]
+          }, void 0, true)]
+        }, void 0, true), note && /*#__PURE__*/_jsxDEV("div", {
+          className: "note",
+          children: ["💡 ", note]
+        }, void 0, true)]
+      }, void 0, true)
+    }, void 0, false)
+  }, void 0, false);
 };
 
 ;/* ===== js/components/CategoryAnalysisSection.jsx ===== */
+import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";
 window.CategoryAnalysisSection = function CategoryAnalysisSection(props) {
   if (!props?.data) return null;
   const {
@@ -5005,206 +5575,251 @@ window.CategoryAnalysisSection = function CategoryAnalysisSection(props) {
   /* 레벨별 분포 차트 렌더링 */
   var renderLevelChart = function (title, items, color) {
     if (!items || items.length === 0) return null;
-    return /*#__PURE__*/React.createElement("div", {
+    return /*#__PURE__*/_jsxDEV("div", {
       style: {
         flex: 1,
         minWidth: 200
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 13,
-        fontWeight: 700,
-        color: '#0f172a',
-        marginBottom: 12
-      }
-    }, title), /*#__PURE__*/React.createElement("div", {
-      style: {
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 10
-      }
-    }, items.map(function (item, idx) {
-      return /*#__PURE__*/React.createElement("div", {
-        key: idx
-      }, /*#__PURE__*/React.createElement("div", {
+      },
+      children: [/*#__PURE__*/_jsxDEV("div", {
+        style: {
+          fontSize: 13,
+          fontWeight: 700,
+          color: '#0f172a',
+          marginBottom: 12
+        },
+        children: title
+      }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
         style: {
           display: 'flex',
-          justifyContent: 'space-between',
-          marginBottom: 4,
-          alignItems: 'center'
-        }
-      }, /*#__PURE__*/React.createElement("span", {
-        style: {
-          fontSize: 12,
-          fontWeight: 600,
-          color: '#334155'
-        }
-      }, item.name), /*#__PURE__*/React.createElement("span", {
-        style: {
-          fontSize: 11,
-          color: '#64748b'
-        }
-      }, /*#__PURE__*/React.createElement("span", {
-        style: {
-          fontWeight: 700,
-          color: color,
-          marginRight: 3
-        }
-      }, item.count, "\uAC1C"), "(", item.ratio, "%)")), /*#__PURE__*/React.createElement("div", {
-        style: {
-          height: 6,
-          borderRadius: 6,
-          background: '#f1f5f9',
-          overflow: 'hidden'
-        }
-      }, /*#__PURE__*/React.createElement("div", {
-        style: {
-          width: item.ratio + '%',
-          height: '100%',
-          borderRadius: 6,
-          background: color,
-          opacity: 1 - idx * 0.15,
-          transition: 'width 0.8s ease'
-        }
-      })));
-    })));
+          flexDirection: 'column',
+          gap: 10
+        },
+        children: items.map(function (item, idx) {
+          return /*#__PURE__*/_jsxDEV("div", {
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              style: {
+                display: 'flex',
+                justifyContent: 'space-between',
+                marginBottom: 4,
+                alignItems: 'center'
+              },
+              children: [/*#__PURE__*/_jsxDEV("span", {
+                style: {
+                  fontSize: 12,
+                  fontWeight: 600,
+                  color: '#334155'
+                },
+                children: item.name
+              }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+                style: {
+                  fontSize: 11,
+                  color: '#64748b'
+                },
+                children: [/*#__PURE__*/_jsxDEV("span", {
+                  style: {
+                    fontWeight: 700,
+                    color: color,
+                    marginRight: 3
+                  },
+                  children: [item.count, "개"]
+                }, void 0, true), "(", item.ratio, "%)"]
+              }, void 0, true)]
+            }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+              style: {
+                height: 6,
+                borderRadius: 6,
+                background: '#f1f5f9',
+                overflow: 'hidden'
+              },
+              children: /*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  width: item.ratio + '%',
+                  height: '100%',
+                  borderRadius: 6,
+                  background: color,
+                  opacity: 1 - idx * 0.15,
+                  transition: 'width 0.8s ease'
+                }
+              }, void 0, false)
+            }, void 0, false)]
+          }, idx, true);
+        })
+      }, void 0, false)]
+    }, void 0, true);
   };
-  return /*#__PURE__*/React.createElement("div", {
-    className: "section fade-in"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "container"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      padding: '20px 22px'
-    }
-  }, /*#__PURE__*/React.createElement("h3", {
-    className: "rt-h3"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "rt-hic"
-  }, "\uD83D\uDDC2\uFE0F"), "\uCE74\uD14C\uACE0\uB9AC \uB4F1\uB85D \uBD84\uC11D", /*#__PURE__*/React.createElement("span", {
-    className: "badge b-ok"
-  }, "\u2705 \uC2E4\uCE21")), /*#__PURE__*/React.createElement("div", {
-    className: "rt-desc"
-  }, "\uC0C1\uC704 \uC0C1\uD488\uB4E4\uC758 \uCE74\uD14C\uACE0\uB9AC \uBD84\uD3EC\uB97C \uD30C\uC545\uD569\uB2C8\uB2E4"), verdict && /*#__PURE__*/React.createElement("div", {
-    className: "note ok",
-    style: {
-      margin: '0 0 12px'
-    }
-  }, verdict), categoryLevels && (categoryLevels.large?.length > 0 || categoryLevels.medium?.length > 0 || categoryLevels.small?.length > 0) && /*#__PURE__*/React.createElement("div", {
-    className: "sub-card"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "st"
-  }, "\uB808\uBCA8\uBCC4 \uBD84\uD3EC (1\uD398\uC774\uC9C0 \uC0C1\uD488)"), categoryLevels.large && categoryLevels.large.length > 0 && /*#__PURE__*/React.createElement("div", null, categoryLevels.large.map(function (item, idx) {
-    return /*#__PURE__*/React.createElement("div", {
-      key: idx
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 12.5,
-        margin: '6px 0'
-      }
-    }, /*#__PURE__*/React.createElement("b", null, "\uB300\uBD84\uB958"), " ", item.name, " ", item.ratio, "%"), /*#__PURE__*/React.createElement("div", {
-      className: "track"
-    }, /*#__PURE__*/React.createElement("i", {
-      style: {
-        width: item.ratio + '%'
-      }
-    })));
-  })), categoryLevels.medium && categoryLevels.medium.length > 0 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 12.5,
-      margin: '10px 0 6px'
-    }
-  }, /*#__PURE__*/React.createElement("b", null, "\uC911\uBD84\uB958"), " ", categoryLevels.medium.map(function (item, idx) {
-    return item.name + ' ' + item.ratio + '%' + (idx < categoryLevels.medium.length - 1 ? ' · ' : '');
-  }).join('')), /*#__PURE__*/React.createElement("div", {
-    className: "track"
-  }, /*#__PURE__*/React.createElement("i", {
-    style: {
-      width: categoryLevels.medium[0].ratio + '%'
-    }
-  }))), categoryLevels.small && categoryLevels.small.length > 0 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 12.5,
-      margin: '10px 0 6px'
-    }
-  }, /*#__PURE__*/React.createElement("b", null, "\uC18C\uBD84\uB958"), " ", categoryLevels.small.map(function (item, idx) {
-    return item.name + ' ' + item.ratio + '%' + (idx < categoryLevels.small.length - 1 ? ' · ' : '');
-  }).join('')), /*#__PURE__*/React.createElement("div", {
-    className: "track"
-  }, /*#__PURE__*/React.createElement("i", {
-    style: {
-      width: categoryLevels.small[0].ratio + '%'
-    }
-  })))), /*#__PURE__*/React.createElement("div", {
-    style: {
-      background: '#fff',
-      borderRadius: 16,
-      padding: 24,
-      border: '1px solid #e2e8f0',
-      boxShadow: '0 1px 3px rgba(0,0,0,0.04)'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 14,
-      fontWeight: 700,
-      color: '#0f172a',
-      marginBottom: 20
-    }
-  }, "\uCE74\uD14C\uACE0\uB9AC \uC804\uCCB4 \uACBD\uB85C \uBD84\uD3EC (\uC0C1\uC704 \uC0C1\uD488 \uAE30\uC900)"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 16
-    }
-  }, categories.map(function (item, idx) {
-    var gradient = gradients[Math.min(idx, gradients.length - 1)];
-    return /*#__PURE__*/React.createElement("div", {
-      key: idx
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        display: 'flex',
-        justifyContent: 'space-between',
-        marginBottom: 8,
-        alignItems: 'center'
-      }
-    }, /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontWeight: 600,
-        fontSize: 13,
-        color: '#0f172a'
-      }
-    }, item.name), /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 12,
-        color: '#64748b'
-      }
-    }, /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontWeight: 700,
-        color: '#4f46e5',
-        marginRight: 4
-      }
-    }, item.count, "\uAC1C"), "(", item.ratio, "%)")), /*#__PURE__*/React.createElement("div", {
-      style: {
-        height: 10,
-        borderRadius: 10,
-        background: '#f1f5f9',
-        overflow: 'hidden'
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        width: item.ratio + '%',
-        height: '100%',
-        borderRadius: 10,
-        background: gradient,
-        transition: 'width 0.8s ease'
-      }
-    })));
-  }))))));
+  return /*#__PURE__*/_jsxDEV("div", {
+    className: "section fade-in",
+    children: /*#__PURE__*/_jsxDEV("div", {
+      className: "container",
+      children: /*#__PURE__*/_jsxDEV("div", {
+        className: "card",
+        style: {
+          padding: '20px 22px'
+        },
+        children: [/*#__PURE__*/_jsxDEV("h3", {
+          className: "rt-h3",
+          children: [/*#__PURE__*/_jsxDEV("span", {
+            className: "rt-hic",
+            children: "🗂️"
+          }, void 0, false), "카테고리 등록 분석", /*#__PURE__*/_jsxDEV("span", {
+            className: "badge b-ok",
+            children: "✅ 실측"
+          }, void 0, false)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          className: "rt-desc",
+          children: "상위 상품들의 카테고리 분포를 파악합니다"
+        }, void 0, false), verdict && /*#__PURE__*/_jsxDEV("div", {
+          className: "note ok",
+          style: {
+            margin: '0 0 12px'
+          },
+          children: verdict
+        }, void 0, false), categoryLevels && (categoryLevels.large?.length > 0 || categoryLevels.medium?.length > 0 || categoryLevels.small?.length > 0) && /*#__PURE__*/_jsxDEV("div", {
+          className: "sub-card",
+          children: [/*#__PURE__*/_jsxDEV("div", {
+            className: "st",
+            children: "레벨별 분포 (1페이지 상품)"
+          }, void 0, false), categoryLevels.large && categoryLevels.large.length > 0 && /*#__PURE__*/_jsxDEV("div", {
+            children: categoryLevels.large.map(function (item, idx) {
+              return /*#__PURE__*/_jsxDEV("div", {
+                children: [/*#__PURE__*/_jsxDEV("div", {
+                  style: {
+                    fontSize: 12.5,
+                    margin: '6px 0'
+                  },
+                  children: [/*#__PURE__*/_jsxDEV("b", {
+                    children: "대분류"
+                  }, void 0, false), " ", item.name, " ", item.ratio, "%"]
+                }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                  className: "track",
+                  children: /*#__PURE__*/_jsxDEV("i", {
+                    style: {
+                      width: item.ratio + '%'
+                    }
+                  }, void 0, false)
+                }, void 0, false)]
+              }, idx, true);
+            })
+          }, void 0, false), categoryLevels.medium && categoryLevels.medium.length > 0 && /*#__PURE__*/_jsxDEV("div", {
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              style: {
+                fontSize: 12.5,
+                margin: '10px 0 6px'
+              },
+              children: [/*#__PURE__*/_jsxDEV("b", {
+                children: "중분류"
+              }, void 0, false), " ", categoryLevels.medium.map(function (item, idx) {
+                return item.name + ' ' + item.ratio + '%' + (idx < categoryLevels.medium.length - 1 ? ' · ' : '');
+              }).join('')]
+            }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+              className: "track",
+              children: /*#__PURE__*/_jsxDEV("i", {
+                style: {
+                  width: categoryLevels.medium[0].ratio + '%'
+                }
+              }, void 0, false)
+            }, void 0, false)]
+          }, void 0, true), categoryLevels.small && categoryLevels.small.length > 0 && /*#__PURE__*/_jsxDEV("div", {
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              style: {
+                fontSize: 12.5,
+                margin: '10px 0 6px'
+              },
+              children: [/*#__PURE__*/_jsxDEV("b", {
+                children: "소분류"
+              }, void 0, false), " ", categoryLevels.small.map(function (item, idx) {
+                return item.name + ' ' + item.ratio + '%' + (idx < categoryLevels.small.length - 1 ? ' · ' : '');
+              }).join('')]
+            }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+              className: "track",
+              children: /*#__PURE__*/_jsxDEV("i", {
+                style: {
+                  width: categoryLevels.small[0].ratio + '%'
+                }
+              }, void 0, false)
+            }, void 0, false)]
+          }, void 0, true)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          style: {
+            background: '#fff',
+            borderRadius: 16,
+            padding: 24,
+            border: '1px solid #e2e8f0',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.04)'
+          },
+          children: [/*#__PURE__*/_jsxDEV("div", {
+            style: {
+              fontSize: 14,
+              fontWeight: 700,
+              color: '#0f172a',
+              marginBottom: 20
+            },
+            children: "카테고리 전체 경로 분포 (상위 상품 기준)"
+          }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+            style: {
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 16
+            },
+            children: categories.map(function (item, idx) {
+              var gradient = gradients[Math.min(idx, gradients.length - 1)];
+              return /*#__PURE__*/_jsxDEV("div", {
+                children: [/*#__PURE__*/_jsxDEV("div", {
+                  style: {
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    marginBottom: 8,
+                    alignItems: 'center'
+                  },
+                  children: [/*#__PURE__*/_jsxDEV("span", {
+                    style: {
+                      fontWeight: 600,
+                      fontSize: 13,
+                      color: '#0f172a'
+                    },
+                    children: item.name
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+                    style: {
+                      fontSize: 12,
+                      color: '#64748b'
+                    },
+                    children: [/*#__PURE__*/_jsxDEV("span", {
+                      style: {
+                        fontWeight: 700,
+                        color: '#4f46e5',
+                        marginRight: 4
+                      },
+                      children: [item.count, "개"]
+                    }, void 0, true), "(", item.ratio, "%)"]
+                  }, void 0, true)]
+                }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                  style: {
+                    height: 10,
+                    borderRadius: 10,
+                    background: '#f1f5f9',
+                    overflow: 'hidden'
+                  },
+                  children: /*#__PURE__*/_jsxDEV("div", {
+                    style: {
+                      width: item.ratio + '%',
+                      height: '100%',
+                      borderRadius: 10,
+                      background: gradient,
+                      transition: 'width 0.8s ease'
+                    }
+                  }, void 0, false)
+                }, void 0, false)]
+              }, idx, true);
+            })
+          }, void 0, false)]
+        }, void 0, true)]
+      }, void 0, true)
+    }, void 0, false)
+  }, void 0, false);
 };
 
 ;/* ===== js/components/KeywordTagSection.jsx ===== */
+import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";
 window.KeywordTagSection = function KeywordTagSection(props) {
   if (!props?.data) return null;
   const {
@@ -5215,173 +5830,209 @@ window.KeywordTagSection = function KeywordTagSection(props) {
   const maxVolume = Math.max.apply(null, topKeywords.map(function (kw) {
     return typeof kw.volume === 'number' ? kw.volume : 0;
   })) || 1;
-  return /*#__PURE__*/React.createElement("div", {
-    className: "section fade-in"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "container"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "section-title"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "icon",
-    style: {
-      background: 'linear-gradient(135deg, #eef2ff, #dbeafe)'
-    }
-  }, "\uD83C\uDFF7\uFE0F"), "\uD0A4\uC6CC\uB4DC & \uD0DC\uADF8 \uBD84\uC11D"), /*#__PURE__*/React.createElement("div", {
-    className: "section-line"
-  }), /*#__PURE__*/React.createElement("p", {
-    className: "section-subtitle"
-  }, "\uC0C1\uD488\uBA85\uC5D0\uC11C \uC790\uC8FC \uC4F0\uC774\uB294 \uD0A4\uC6CC\uB4DC\uB97C \uBD84\uC11D\uD569\uB2C8\uB2E4"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      background: '#fff',
-      borderRadius: 16,
-      padding: 24,
-      border: '1px solid #e2e8f0',
-      boxShadow: '0 1px 3px rgba(0,0,0,0.04)'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      marginBottom: 20
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 15,
-      fontWeight: 700,
-      color: '#0f172a'
-    }
-  }, "\uD83D\uDCAC \uC0C1\uD488\uBA85 \uC8FC\uC694 \uD0A4\uC6CC\uB4DC TOP ", Math.min(topKeywords.length, 15)), /*#__PURE__*/React.createElement("span", {
-    style: {
-      padding: '4px 12px',
-      borderRadius: 999,
-      fontSize: 12,
-      fontWeight: 700,
-      background: 'linear-gradient(135deg, #eef2ff, #dbeafe)',
-      color: '#4f46e5'
-    }
-  }, "\uCD1D ", fmt(totalFound), "\uAC1C \uBC1C\uACAC")), /*#__PURE__*/React.createElement("div", {
-    className: "table-wrap",
-    style: {
-      maxHeight: 340,
-      overflowY: 'auto'
-    }
-  }, /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", {
-    style: {
-      background: 'linear-gradient(135deg, #4f46e5, #7c3aed)'
-    }
-  }, /*#__PURE__*/React.createElement("th", {
-    style: {
-      color: '#fff',
-      fontWeight: 600,
-      fontSize: 12
-    }
-  }, "#"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      color: '#fff',
-      fontWeight: 600,
-      fontSize: 12
-    }
-  }, "\uD0A4\uC6CC\uB4DC"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      color: '#fff',
-      fontWeight: 600,
-      fontSize: 12
-    }
-  }, "\uAC80\uC0C9\uB7C9"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      color: '#fff',
-      fontWeight: 600,
-      fontSize: 12
-    }
-  }, "\uACBD\uC7C1\uB3C4"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      color: '#fff',
-      fontWeight: 600,
-      fontSize: 12
-    }
-  }, "\uBE44\uC911"))), /*#__PURE__*/React.createElement("tbody", null, topKeywords.map(function (kw, idx) {
-    var barPercent = typeof kw.volume === 'number' ? Math.round(kw.volume / maxVolume * 100) : 0;
-    return /*#__PURE__*/React.createElement("tr", {
-      key: idx,
-      style: {
-        background: idx % 2 === 0 ? '#fff' : '#f8fafc'
-      }
-    }, /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("span", {
-      style: {
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        width: 28,
-        height: 28,
-        background: kw.isGolden ? 'linear-gradient(135deg, #f59e0b, #d97706)' : 'linear-gradient(135deg, #4f46e5, #7c3aed)',
-        color: '#fff',
-        borderRadius: '50%',
-        fontSize: 11,
-        fontWeight: 700
-      }
-    }, idx + 1)), /*#__PURE__*/React.createElement("td", {
-      style: {
-        fontWeight: 600,
-        color: '#0f172a',
-        fontSize: 13
-      }
-    }, kw.keyword, kw.isGolden && /*#__PURE__*/React.createElement("span", {
-      style: {
-        marginLeft: 6
-      }
-    }, "\uD83D\uDC51")), /*#__PURE__*/React.createElement("td", {
-      style: {
-        fontSize: 13,
-        color: '#0f172a'
-      }
-    }, fmt(kw.volume)), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("span", {
-      style: {
-        padding: '4px 12px',
-        borderRadius: 999,
-        fontSize: 12,
-        fontWeight: 700,
-        background: kw.comp === '낮음' ? '#ecfdf5' : kw.comp === '높음' ? '#fef2f2' : '#fffbeb',
-        color: kw.comp === '낮음' ? '#10b981' : kw.comp === '높음' ? '#ef4444' : '#f59e0b'
-      }
-    }, kw.comp)), /*#__PURE__*/React.createElement("td", {
-      style: {
-        minWidth: 120
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        flex: 1,
-        height: 8,
-        borderRadius: 8,
-        background: '#f1f5f9',
-        overflow: 'hidden'
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        width: barPercent + '%',
-        height: '100%',
-        borderRadius: 8,
-        background: kw.isGolden ? 'linear-gradient(135deg, #f59e0b, #d97706)' : 'linear-gradient(135deg, #4f46e5, #7c3aed)',
-        transition: 'width 0.3s ease'
-      }
-    })), /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 11,
-        color: '#64748b',
-        minWidth: 32,
-        textAlign: 'right'
-      }
-    }, barPercent, "%"))));
-  })))))));
+  return /*#__PURE__*/_jsxDEV("div", {
+    className: "section fade-in",
+    children: /*#__PURE__*/_jsxDEV("div", {
+      className: "container",
+      children: [/*#__PURE__*/_jsxDEV("div", {
+        className: "section-title",
+        children: [/*#__PURE__*/_jsxDEV("span", {
+          className: "icon",
+          style: {
+            background: 'linear-gradient(135deg, #eef2ff, #dbeafe)'
+          },
+          children: "🏷️"
+        }, void 0, false), "키워드 & 태그 분석"]
+      }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+        className: "section-line"
+      }, void 0, false), /*#__PURE__*/_jsxDEV("p", {
+        className: "section-subtitle",
+        children: "상품명에서 자주 쓰이는 키워드를 분석합니다"
+      }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+        style: {
+          background: '#fff',
+          borderRadius: 16,
+          padding: 24,
+          border: '1px solid #e2e8f0',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.04)'
+        },
+        children: [/*#__PURE__*/_jsxDEV("div", {
+          style: {
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            marginBottom: 20
+          },
+          children: [/*#__PURE__*/_jsxDEV("div", {
+            style: {
+              fontSize: 15,
+              fontWeight: 700,
+              color: '#0f172a'
+            },
+            children: ["💬 상품명 주요 키워드 TOP ", Math.min(topKeywords.length, 15)]
+          }, void 0, true), /*#__PURE__*/_jsxDEV("span", {
+            style: {
+              padding: '4px 12px',
+              borderRadius: 999,
+              fontSize: 12,
+              fontWeight: 700,
+              background: 'linear-gradient(135deg, #eef2ff, #dbeafe)',
+              color: '#4f46e5'
+            },
+            children: ["총 ", fmt(totalFound), "개 발견"]
+          }, void 0, true)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          className: "table-wrap",
+          style: {
+            maxHeight: 340,
+            overflowY: 'auto'
+          },
+          children: /*#__PURE__*/_jsxDEV("table", {
+            children: [/*#__PURE__*/_jsxDEV("thead", {
+              children: /*#__PURE__*/_jsxDEV("tr", {
+                style: {
+                  background: 'linear-gradient(135deg, #4f46e5, #7c3aed)'
+                },
+                children: [/*#__PURE__*/_jsxDEV("th", {
+                  style: {
+                    color: '#fff',
+                    fontWeight: 600,
+                    fontSize: 12
+                  },
+                  children: "#"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                  style: {
+                    color: '#fff',
+                    fontWeight: 600,
+                    fontSize: 12
+                  },
+                  children: "키워드"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                  style: {
+                    color: '#fff',
+                    fontWeight: 600,
+                    fontSize: 12
+                  },
+                  children: "검색량"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                  style: {
+                    color: '#fff',
+                    fontWeight: 600,
+                    fontSize: 12
+                  },
+                  children: "경쟁도"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                  style: {
+                    color: '#fff',
+                    fontWeight: 600,
+                    fontSize: 12
+                  },
+                  children: "비중"
+                }, void 0, false)]
+              }, void 0, true)
+            }, void 0, false), /*#__PURE__*/_jsxDEV("tbody", {
+              children: topKeywords.map(function (kw, idx) {
+                var barPercent = typeof kw.volume === 'number' ? Math.round(kw.volume / maxVolume * 100) : 0;
+                return /*#__PURE__*/_jsxDEV("tr", {
+                  style: {
+                    background: idx % 2 === 0 ? '#fff' : '#f8fafc'
+                  },
+                  children: [/*#__PURE__*/_jsxDEV("td", {
+                    children: /*#__PURE__*/_jsxDEV("span", {
+                      style: {
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        width: 28,
+                        height: 28,
+                        background: kw.isGolden ? 'linear-gradient(135deg, #f59e0b, #d97706)' : 'linear-gradient(135deg, #4f46e5, #7c3aed)',
+                        color: '#fff',
+                        borderRadius: '50%',
+                        fontSize: 11,
+                        fontWeight: 700
+                      },
+                      children: idx + 1
+                    }, void 0, false)
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                    style: {
+                      fontWeight: 600,
+                      color: '#0f172a',
+                      fontSize: 13
+                    },
+                    children: [kw.keyword, kw.isGolden && /*#__PURE__*/_jsxDEV("span", {
+                      style: {
+                        marginLeft: 6
+                      },
+                      children: "👑"
+                    }, void 0, false)]
+                  }, void 0, true), /*#__PURE__*/_jsxDEV("td", {
+                    style: {
+                      fontSize: 13,
+                      color: '#0f172a'
+                    },
+                    children: fmt(kw.volume)
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                    children: /*#__PURE__*/_jsxDEV("span", {
+                      style: {
+                        padding: '4px 12px',
+                        borderRadius: 999,
+                        fontSize: 12,
+                        fontWeight: 700,
+                        background: kw.comp === '낮음' ? '#ecfdf5' : kw.comp === '높음' ? '#fef2f2' : '#fffbeb',
+                        color: kw.comp === '낮음' ? '#10b981' : kw.comp === '높음' ? '#ef4444' : '#f59e0b'
+                      },
+                      children: kw.comp
+                    }, void 0, false)
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                    style: {
+                      minWidth: 120
+                    },
+                    children: /*#__PURE__*/_jsxDEV("div", {
+                      style: {
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8
+                      },
+                      children: [/*#__PURE__*/_jsxDEV("div", {
+                        style: {
+                          flex: 1,
+                          height: 8,
+                          borderRadius: 8,
+                          background: '#f1f5f9',
+                          overflow: 'hidden'
+                        },
+                        children: /*#__PURE__*/_jsxDEV("div", {
+                          style: {
+                            width: barPercent + '%',
+                            height: '100%',
+                            borderRadius: 8,
+                            background: kw.isGolden ? 'linear-gradient(135deg, #f59e0b, #d97706)' : 'linear-gradient(135deg, #4f46e5, #7c3aed)',
+                            transition: 'width 0.3s ease'
+                          }
+                        }, void 0, false)
+                      }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+                        style: {
+                          fontSize: 11,
+                          color: '#64748b',
+                          minWidth: 32,
+                          textAlign: 'right'
+                        },
+                        children: [barPercent, "%"]
+                      }, void 0, true)]
+                    }, void 0, true)
+                  }, void 0, false)]
+                }, idx, true);
+              })
+            }, void 0, false)]
+          }, void 0, true)
+        }, void 0, false)]
+      }, void 0, true)]
+    }, void 0, true)
+  }, void 0, false);
 };
 
 ;/* ===== js/components/SeoDetailSection.jsx ===== */
+import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";
 window.SeoDetailSection = function SeoDetailSection(props) {
   if (!props?.data) return null;
   const {
@@ -5415,45 +6066,57 @@ window.SeoDetailSection = function SeoDetailSection(props) {
     color: '#9d174d',
     bg: '#fdf2f8'
   }];
-  return /*#__PURE__*/React.createElement("div", {
-    className: "section fade-in"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "container"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "card"
-  }, /*#__PURE__*/React.createElement("h3", {
-    className: "rt-h3"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "rt-hic"
-  }, "\uD83D\uDEE1\uFE0F"), "\u2461 SEO \uC801\uD569\uB3C4 \xB7 \uC2E0\uB8B0\uB3C4 \xB7 \uC778\uAE30\uB3C4", /*#__PURE__*/React.createElement("span", {
-    className: "badge b-est"
-  }, "\u2248 \uCD94\uC815")), /*#__PURE__*/React.createElement("div", {
-    className: "grid3"
-  }, categories.map(function (cat, catIdx) {
-    return /*#__PURE__*/React.createElement("div", {
-      key: catIdx,
-      className: "sub-card"
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "st"
-    }, cat.icon, " ", cat.title, /*#__PURE__*/React.createElement("span", {
-      style: {
-        marginLeft: 'auto',
-        fontWeight: 900
-      }
-    }, cat.data.score)), cat.data.items && cat.data.items.map(function (item, idx) {
-      return /*#__PURE__*/React.createElement("div", {
-        key: idx,
-        className: "check"
-      }, item.pass ? /*#__PURE__*/React.createElement("span", {
-        className: "y"
-      }, "\u2714") : /*#__PURE__*/React.createElement("span", {
-        className: "n"
-      }, "\u2718"), ' ', item.label);
-    }));
-  })))));
+  return /*#__PURE__*/_jsxDEV("div", {
+    className: "section fade-in",
+    children: /*#__PURE__*/_jsxDEV("div", {
+      className: "container",
+      children: /*#__PURE__*/_jsxDEV("div", {
+        className: "card",
+        children: [/*#__PURE__*/_jsxDEV("h3", {
+          className: "rt-h3",
+          children: [/*#__PURE__*/_jsxDEV("span", {
+            className: "rt-hic",
+            children: "🛡️"
+          }, void 0, false), "② SEO 적합도 · 신뢰도 · 인기도", /*#__PURE__*/_jsxDEV("span", {
+            className: "badge b-est",
+            children: "≈ 추정"
+          }, void 0, false)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          className: "grid3",
+          children: categories.map(function (cat, catIdx) {
+            return /*#__PURE__*/_jsxDEV("div", {
+              className: "sub-card",
+              children: [/*#__PURE__*/_jsxDEV("div", {
+                className: "st",
+                children: [cat.icon, " ", cat.title, /*#__PURE__*/_jsxDEV("span", {
+                  style: {
+                    marginLeft: 'auto',
+                    fontWeight: 900
+                  },
+                  children: cat.data.score
+                }, void 0, false)]
+              }, void 0, true), cat.data.items && cat.data.items.map(function (item, idx) {
+                return /*#__PURE__*/_jsxDEV("div", {
+                  className: "check",
+                  children: [item.pass ? /*#__PURE__*/_jsxDEV("span", {
+                    className: "y",
+                    children: "✔"
+                  }, void 0, false) : /*#__PURE__*/_jsxDEV("span", {
+                    className: "n",
+                    children: "✘"
+                  }, void 0, false), ' ', item.label]
+                }, idx, true);
+              })]
+            }, catIdx, true);
+          })
+        }, void 0, false)]
+      }, void 0, true)
+    }, void 0, false)
+  }, void 0, false);
 };
 
 ;/* ===== js/components/ProductNameOptSection.jsx ===== */
+import { jsxDEV as _jsxDEV, Fragment as _Fragment } from "react/jsx-dev-runtime";
 window.ProductNameOptSection = function ProductNameOptSection(props) {
   if (!props?.data) return null;
   const {
@@ -5463,44 +6126,63 @@ window.ProductNameOptSection = function ProductNameOptSection(props) {
     marketerComment
   } = props.data;
   if (!currentName) return null;
-  return /*#__PURE__*/React.createElement("div", {
-    className: "section fade-in"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "container"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      padding: '20px 22px'
-    }
-  }, /*#__PURE__*/React.createElement("h3", {
-    className: "rt-h3"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "rt-hic"
-  }, "\u270F\uFE0F"), "\uC0C1\uD488\uBA85 SEO \uCD5C\uC801\uD654 ", /*#__PURE__*/React.createElement("span", {
-    className: "badge b-ai"
-  }, "AI")), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 13,
-      marginBottom: 8
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: 'var(--sub)'
-    }
-  }, "\uD604\uC7AC"), /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("b", null, currentName)), issues && issues.map((item, idx) => /*#__PURE__*/React.createElement("div", {
-    key: idx,
-    className: "check"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: item.pass ? 'y' : 'n'
-  }, item.pass ? '✔' : '✘'), ' ', item.text)), suggestedName && /*#__PURE__*/React.createElement("div", {
-    className: "note",
-    style: {
-      borderLeftColor: '#ec4899'
-    }
-  }, /*#__PURE__*/React.createElement("b", null, "\u270F\uFE0F \uC81C\uC548"), /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("b", null, suggestedName), marketerComment && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("br", null), marketerComment)))));
+  return /*#__PURE__*/_jsxDEV("div", {
+    className: "section fade-in",
+    children: /*#__PURE__*/_jsxDEV("div", {
+      className: "container",
+      children: /*#__PURE__*/_jsxDEV("div", {
+        className: "card",
+        style: {
+          padding: '20px 22px'
+        },
+        children: [/*#__PURE__*/_jsxDEV("h3", {
+          className: "rt-h3",
+          children: [/*#__PURE__*/_jsxDEV("span", {
+            className: "rt-hic",
+            children: "✏️"
+          }, void 0, false), "상품명 SEO 최적화 ", /*#__PURE__*/_jsxDEV("span", {
+            className: "badge b-ai",
+            children: "AI"
+          }, void 0, false)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          style: {
+            fontSize: 13,
+            marginBottom: 8
+          },
+          children: [/*#__PURE__*/_jsxDEV("span", {
+            style: {
+              color: 'var(--sub)'
+            },
+            children: "현재"
+          }, void 0, false), /*#__PURE__*/_jsxDEV("br", {}, void 0, false), /*#__PURE__*/_jsxDEV("b", {
+            children: currentName
+          }, void 0, false)]
+        }, void 0, true), issues && issues.map((item, idx) => /*#__PURE__*/_jsxDEV("div", {
+          className: "check",
+          children: [/*#__PURE__*/_jsxDEV("span", {
+            className: item.pass ? 'y' : 'n',
+            children: item.pass ? '✔' : '✘'
+          }, void 0, false), ' ', item.text]
+        }, idx, true)), suggestedName && /*#__PURE__*/_jsxDEV("div", {
+          className: "note",
+          style: {
+            borderLeftColor: '#ec4899'
+          },
+          children: [/*#__PURE__*/_jsxDEV("b", {
+            children: "✏️ 제안"
+          }, void 0, false), /*#__PURE__*/_jsxDEV("br", {}, void 0, false), /*#__PURE__*/_jsxDEV("b", {
+            children: suggestedName
+          }, void 0, false), marketerComment && /*#__PURE__*/_jsxDEV(_Fragment, {
+            children: [/*#__PURE__*/_jsxDEV("br", {}, void 0, false), marketerComment]
+          }, void 0, true)]
+        }, void 0, true)]
+      }, void 0, true)
+    }, void 0, false)
+  }, void 0, false);
 };
 
 ;/* ===== js/components/ReviewAnalysisSection.jsx ===== */
+import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";
 window.ReviewAnalysisSection = function ReviewAnalysisSection(props) {
   if (!props?.data) return null;
   const {
@@ -5532,91 +6214,100 @@ window.ReviewAnalysisSection = function ReviewAnalysisSection(props) {
   } else {
     noteText = '리뷰 ' + fmt(mineReview) + '건 — 경쟁 대비 양호. 평점·재구매 관리로 전환율을 끌어올리세요.';
   }
-  return /*#__PURE__*/React.createElement("div", {
-    className: "section fade-in"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "container"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      padding: '20px 22px'
-    }
-  }, /*#__PURE__*/React.createElement("h3", {
-    className: "rt-h3"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "rt-hic"
-  }, "\u2B50"), "\uB9AC\uBDF0 & \uCC1C \uBD84\uC11D", /*#__PURE__*/React.createElement("span", {
-    className: "badge b-ok"
-  }, "\u2705 \uC2E4\uCE21")), /*#__PURE__*/React.createElement("div", {
-    className: "rt-desc"
-  }, "\uAD11\uACE0\uC8FC \uC0C1\uD488 vs \uACBD\uC7C1 \uD3C9\uADE0 vs \uC0C1\uC704 5\uAC1C \uBE44\uAD50"), function () {
-    var C = window.CHART_COLORS || {};
-    var mineRating = hasHtmlData && html && html.rating != null ? html.rating : rating.adv;
-    var mineWish = hasHtmlData && html && html.wishCount != null ? html.wishCount : wishCount.adv;
-    var mine = [num(mineReview), num(mineRating) * 100, num(mineWish)];
-    var avg = [num(reviewCount.avg), num(rating.avg) * 100, num(wishCount.avg)];
-    var top5 = [num(reviewCount.top5), num(rating.top5) * 100, num(wishCount.top5)];
-    var anyVal = mine.concat(avg, top5).some(function (v) {
-      return v > 0;
-    });
-    if (!anyVal) return null;
-    var fmtTip = function (ctx) {
-      var raw = ctx.parsed.y;
-      var label = ctx.dataset.label + ': ';
-      if (ctx.dataIndex === 1) return label + (raw / 100).toFixed(1) + '점';
-      return label + (window.chartComma ? window.chartComma(raw) : raw);
-    };
-    return /*#__PURE__*/React.createElement("div", {
-      className: "chartbox"
-    }, /*#__PURE__*/React.createElement(ChartCanvas, {
-      type: "bar",
-      height: 280,
-      data: {
-        labels: ['리뷰 수', '평점(×100)', '찜 수'],
-        datasets: [{
-          label: '내 상품',
-          data: mine,
-          backgroundColor: '#ec4899',
-          borderRadius: 5
-        }, {
-          label: '경쟁 평균',
-          data: avg,
-          backgroundColor: '#94a3b8',
-          borderRadius: 5
-        }, {
-          label: '상위 5',
-          data: top5,
-          backgroundColor: C.IND || '#4f46e5',
-          borderRadius: 5
-        }]
-      },
-      options: {
-        maintainAspectRatio: false,
-        plugins: {
-          legend: {
-            position: 'bottom'
-          },
-          tooltip: {
-            callbacks: {
-              label: fmtTip
-            }
-          }
+  return /*#__PURE__*/_jsxDEV("div", {
+    className: "section fade-in",
+    children: /*#__PURE__*/_jsxDEV("div", {
+      className: "container",
+      children: /*#__PURE__*/_jsxDEV("div", {
+        className: "card",
+        style: {
+          padding: '20px 22px'
         },
-        scales: {
-          y: {
-            type: 'logarithmic',
-            ticks: {
-              callback: function (v) {
-                return window.chartComma ? window.chartComma(v) : v;
+        children: [/*#__PURE__*/_jsxDEV("h3", {
+          className: "rt-h3",
+          children: [/*#__PURE__*/_jsxDEV("span", {
+            className: "rt-hic",
+            children: "⭐"
+          }, void 0, false), "리뷰 & 찜 분석", /*#__PURE__*/_jsxDEV("span", {
+            className: "badge b-ok",
+            children: "✅ 실측"
+          }, void 0, false)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          className: "rt-desc",
+          children: "광고주 상품 vs 경쟁 평균 vs 상위 5개 비교"
+        }, void 0, false), function () {
+          var C = window.CHART_COLORS || {};
+          var mineRating = hasHtmlData && html && html.rating != null ? html.rating : rating.adv;
+          var mineWish = hasHtmlData && html && html.wishCount != null ? html.wishCount : wishCount.adv;
+          var mine = [num(mineReview), num(mineRating) * 100, num(mineWish)];
+          var avg = [num(reviewCount.avg), num(rating.avg) * 100, num(wishCount.avg)];
+          var top5 = [num(reviewCount.top5), num(rating.top5) * 100, num(wishCount.top5)];
+          var anyVal = mine.concat(avg, top5).some(function (v) {
+            return v > 0;
+          });
+          if (!anyVal) return null;
+          var fmtTip = function (ctx) {
+            var raw = ctx.parsed.y;
+            var label = ctx.dataset.label + ': ';
+            if (ctx.dataIndex === 1) return label + (raw / 100).toFixed(1) + '점';
+            return label + (window.chartComma ? window.chartComma(raw) : raw);
+          };
+          return /*#__PURE__*/_jsxDEV("div", {
+            className: "chartbox",
+            children: /*#__PURE__*/_jsxDEV(ChartCanvas, {
+              type: "bar",
+              height: 280,
+              data: {
+                labels: ['리뷰 수', '평점(×100)', '찜 수'],
+                datasets: [{
+                  label: '내 상품',
+                  data: mine,
+                  backgroundColor: '#ec4899',
+                  borderRadius: 5
+                }, {
+                  label: '경쟁 평균',
+                  data: avg,
+                  backgroundColor: '#94a3b8',
+                  borderRadius: 5
+                }, {
+                  label: '상위 5',
+                  data: top5,
+                  backgroundColor: C.IND || '#4f46e5',
+                  borderRadius: 5
+                }]
+              },
+              options: {
+                maintainAspectRatio: false,
+                plugins: {
+                  legend: {
+                    position: 'bottom'
+                  },
+                  tooltip: {
+                    callbacks: {
+                      label: fmtTip
+                    }
+                  }
+                },
+                scales: {
+                  y: {
+                    type: 'logarithmic',
+                    ticks: {
+                      callback: function (v) {
+                        return window.chartComma ? window.chartComma(v) : v;
+                      }
+                    }
+                  }
+                }
               }
-            }
-          }
-        }
-      }
-    }));
-  }(), noteText && /*#__PURE__*/React.createElement("div", {
-    className: "note"
-  }, noteText))));
+            }, void 0, false)
+          }, void 0, false);
+        }(), noteText && /*#__PURE__*/_jsxDEV("div", {
+          className: "note",
+          children: noteText
+        }, void 0, false)]
+      }, void 0, true)
+    }, void 0, false)
+  }, void 0, false);
 };
 
 ;/* ===== js/components/ReviewTextAnalysisSection.jsx ===== */
@@ -6064,6 +6755,7 @@ window.ReviewTextAnalysisSection = function ReviewTextAnalysisSection(props) {
 };
 
 ;/* ===== js/components/DetailPageQualitySection.jsx ===== */
+import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";
 window.DetailPageQualitySection = function DetailPageQualitySection(props) {
   if (!props?.data) return null;
   const {
@@ -6075,64 +6767,82 @@ window.DetailPageQualitySection = function DetailPageQualitySection(props) {
     comment
   } = props.data;
   if (totalScore === undefined) return null;
-  return /*#__PURE__*/React.createElement("div", {
-    className: "section fade-in"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "container"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      padding: '20px 22px'
-    }
-  }, /*#__PURE__*/React.createElement("h3", {
-    className: "rt-h3"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "rt-hic"
-  }, "\uD83D\uDCC4"), "\u2462 \uC0C1\uC138\uD398\uC774\uC9C0 \uD488\uC9C8 \uC810\uC218", /*#__PURE__*/React.createElement("span", {
-    className: "badge b-est"
-  }, "\u2248 \uCD94\uC815")), /*#__PURE__*/React.createElement("div", {
-    style: {
-      textAlign: 'center',
-      marginBottom: '8px'
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: '30px',
-      fontWeight: '900'
-    }
-  }, totalScore), /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: 'var(--sub)'
-    }
-  }, "/100", grade ? ' · ' + String(grade).replace(/등급$/, '') + '등급' : '')), scoreBars && scoreBars.map((bar, idx) => {
-    const percent = bar.maxScore ? Math.round(bar.score / bar.maxScore * 100) : bar.percent || 0;
-    return /*#__PURE__*/React.createElement("div", {
-      key: idx,
-      className: "scorebar"
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "lbl"
-    }, /*#__PURE__*/React.createElement("b", null, bar.label)), /*#__PURE__*/React.createElement("div", {
-      className: "track"
-    }, /*#__PURE__*/React.createElement("i", {
-      style: {
-        width: percent + '%'
-      }
-    })));
-  }), checklist && checklist.length > 0 && /*#__PURE__*/React.createElement("div", {
-    className: "sub-card"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "st"
-  }, "\uD3C9\uAC00 \uCCB4\uD06C\uB9AC\uC2A4\uD2B8"), checklist.map((category, cidx) => category.items && category.items.map((item, iidx) => /*#__PURE__*/React.createElement("div", {
-    key: cidx + '-' + iidx,
-    className: "check"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: item.pass ? 'y' : 'n'
-  }, item.pass ? '✔' : '✘'), " ", item.text)))), comment && /*#__PURE__*/React.createElement("div", {
-    className: "note"
-  }, comment))));
+  return /*#__PURE__*/_jsxDEV("div", {
+    className: "section fade-in",
+    children: /*#__PURE__*/_jsxDEV("div", {
+      className: "container",
+      children: /*#__PURE__*/_jsxDEV("div", {
+        className: "card",
+        style: {
+          padding: '20px 22px'
+        },
+        children: [/*#__PURE__*/_jsxDEV("h3", {
+          className: "rt-h3",
+          children: [/*#__PURE__*/_jsxDEV("span", {
+            className: "rt-hic",
+            children: "📄"
+          }, void 0, false), "③ 상세페이지 품질 점수", /*#__PURE__*/_jsxDEV("span", {
+            className: "badge b-est",
+            children: "≈ 추정"
+          }, void 0, false)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          style: {
+            textAlign: 'center',
+            marginBottom: '8px'
+          },
+          children: [/*#__PURE__*/_jsxDEV("span", {
+            style: {
+              fontSize: '30px',
+              fontWeight: '900'
+            },
+            children: totalScore
+          }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+            style: {
+              color: 'var(--sub)'
+            },
+            children: ["/100", grade ? ' · ' + String(grade).replace(/등급$/, '') + '등급' : '']
+          }, void 0, true)]
+        }, void 0, true), scoreBars && scoreBars.map((bar, idx) => {
+          const percent = bar.maxScore ? Math.round(bar.score / bar.maxScore * 100) : bar.percent || 0;
+          return /*#__PURE__*/_jsxDEV("div", {
+            className: "scorebar",
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              className: "lbl",
+              children: /*#__PURE__*/_jsxDEV("b", {
+                children: bar.label
+              }, void 0, false)
+            }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+              className: "track",
+              children: /*#__PURE__*/_jsxDEV("i", {
+                style: {
+                  width: percent + '%'
+                }
+              }, void 0, false)
+            }, void 0, false)]
+          }, idx, true);
+        }), checklist && checklist.length > 0 && /*#__PURE__*/_jsxDEV("div", {
+          className: "sub-card",
+          children: [/*#__PURE__*/_jsxDEV("div", {
+            className: "st",
+            children: "평가 체크리스트"
+          }, void 0, false), checklist.map((category, cidx) => category.items && category.items.map((item, iidx) => /*#__PURE__*/_jsxDEV("div", {
+            className: "check",
+            children: [/*#__PURE__*/_jsxDEV("span", {
+              className: item.pass ? 'y' : 'n',
+              children: item.pass ? '✔' : '✘'
+            }, void 0, false), " ", item.text]
+          }, cidx + '-' + iidx, true)))]
+        }, void 0, true), comment && /*#__PURE__*/_jsxDEV("div", {
+          className: "note",
+          children: comment
+        }, void 0, false)]
+      }, void 0, true)
+    }, void 0, false)
+  }, void 0, false);
 };
 
 ;/* ===== js/components/HtmlDetailAnalysisSection.jsx ===== */
+import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";
 /* HtmlDetailAnalysisSection — 상세페이지 HTML 분석 결과 표시 (v5) */
 /* SearchBar에서 입력된 HTML → /seo/detail-page API 결과를 시각화 */
 window.HtmlDetailAnalysisSection = function HtmlDetailAnalysisSection({
@@ -6146,206 +6856,241 @@ window.HtmlDetailAnalysisSection = function HtmlDetailAnalysisSection({
     label,
     score,
     weight
-  }) => /*#__PURE__*/React.createElement("div", {
-    className: "scorebar"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "lbl"
-  }, /*#__PURE__*/React.createElement("b", null, label), /*#__PURE__*/React.createElement("span", {
-    className: "w"
-  }, weight)), /*#__PURE__*/React.createElement("div", {
-    className: "track"
-  }, /*#__PURE__*/React.createElement("i", {
-    style: {
-      width: score + '%'
-    }
-  })));
-  const total = data.scores.total;
-  return /*#__PURE__*/React.createElement("div", {
-    className: "section fade-in"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "container"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      padding: '20px 22px'
-    }
-  }, /*#__PURE__*/React.createElement("h3", {
-    className: "rt-h3"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "rt-hic"
-  }, "\uD83D\uDDBC\uFE0F"), "\u2463 \uC0C1\uC138\uD398\uC774\uC9C0 HTML \uBD84\uC11D", /*#__PURE__*/React.createElement("span", {
-    className: "badge b-est"
-  }, "\u2248 \uCD94\uC815")), /*#__PURE__*/React.createElement("div", {
-    className: "rt-desc"
-  }, "\uC2E4\uC81C HTML\uC5D0\uC11C \uCD94\uCD9C\uD55C \uB370\uC774\uD130 \uAE30\uBC18 \uC815\uBC00 \uC9C4\uB2E8"), /*#__PURE__*/React.createElement("div", {
-    className: "grid2",
-    style: {
-      alignItems: 'center'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      justifyContent: 'center',
-      alignItems: 'center',
-      padding: '6px 0'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: 'relative',
-      width: 180,
-      height: 180
-    }
-  }, /*#__PURE__*/React.createElement(ChartCanvas, {
-    type: "doughnut",
-    height: 180,
-    style: {
-      height: 180,
-      width: 180
-    },
-    data: {
-      labels: ['점수', '잔여'],
-      datasets: [{
-        data: [total, Math.max(0, 100 - total)],
-        backgroundColor: [getScoreColor(total), '#f1f5f9'],
-        borderWidth: 0
-      }]
-    },
-    options: {
-      maintainAspectRatio: false,
-      cutout: '78%',
-      plugins: {
-        legend: {
-          display: false
-        },
-        tooltip: {
-          enabled: false
+  }) => /*#__PURE__*/_jsxDEV("div", {
+    className: "scorebar",
+    children: [/*#__PURE__*/_jsxDEV("div", {
+      className: "lbl",
+      children: [/*#__PURE__*/_jsxDEV("b", {
+        children: label
+      }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+        className: "w",
+        children: weight
+      }, void 0, false)]
+    }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+      className: "track",
+      children: /*#__PURE__*/_jsxDEV("i", {
+        style: {
+          width: score + '%'
         }
-      }
-    }
-  }), /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: 'absolute',
-      inset: 0,
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      justifyContent: 'center',
-      textAlign: 'center'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 30,
-      fontWeight: 900,
-      color: getScoreColor(total),
-      lineHeight: 1.1
-    }
-  }, total), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 11,
-      color: '#64748b',
-      marginTop: 2
-    }
-  }, "/100 \xB7 ", getScoreLabel(total))))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(ScoreBar, {
-    label: "\uC774\uBBF8\uC9C0",
-    score: data.scores.images,
-    weight: "30%"
-  }), /*#__PURE__*/React.createElement(ScoreBar, {
-    label: "\uD14D\uC2A4\uD2B8",
-    score: data.scores.text,
-    weight: "20%"
-  }), /*#__PURE__*/React.createElement(ScoreBar, {
-    label: "\uB3D9\uC601\uC0C1",
-    score: data.scores.video,
-    weight: "15%"
-  }), /*#__PURE__*/React.createElement(ScoreBar, {
-    label: "\uC815\uBCF4 \uC644\uC131\uB3C4",
-    score: data.scores.info,
-    weight: "20%"
-  }), /*#__PURE__*/React.createElement(ScoreBar, {
-    label: "\uC2E0\uB8B0 \uC694\uC18C",
-    score: data.scores.trust,
-    weight: "15%"
-  }))), data.metrics && /*#__PURE__*/React.createElement("div", {
-    className: "grid4",
-    style: {
-      marginTop: 10
-    }
-  }, [{
-    label: '상품 이미지',
-    num: data.metrics.total_images,
-    unit: '장',
-    good: data.metrics.total_images >= 10
-  }, {
-    label: '텍스트 길이',
-    num: data.metrics.text_length > 1000 ? (data.metrics.text_length / 1000).toFixed(1) + 'K' : data.metrics.text_length,
-    unit: '자',
-    good: data.metrics.text_length >= 500
-  }, {
-    label: '동영상',
-    num: data.metrics.video_count,
-    unit: '개',
-    good: data.metrics.video_count > 0
-  }, {
-    label: '페이지 크기',
-    num: data.metrics.html_size_kb,
-    unit: 'KB',
-    good: data.metrics.html_size_kb >= 50
-  }].map((item, i) => /*#__PURE__*/React.createElement("div", {
-    key: 'dp-metric-' + i,
-    className: "kpi"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "k"
-  }, item.label), /*#__PURE__*/React.createElement("div", {
-    className: "v",
-    style: {
-      color: item.good ? undefined : 'var(--red)'
-    }
-  }, item.num, /*#__PURE__*/React.createElement("small", null, item.unit))))), data.metrics && (() => {
-    const checkItems = [{
-      label: '배송 정보 (무료배송/당일출고)',
-      checked: data.metrics.has_delivery_info
-    }, {
-      label: '교환/반품/환불 정책',
-      checked: data.metrics.has_return_info
-    }, {
-      label: '사은품/증정 혜택',
-      checked: data.metrics.has_gift_info
-    }, {
-      label: '인증/수상/특허 표시',
-      checked: data.metrics.has_certification
-    }, {
-      label: '구매 후기/리뷰 섹션',
-      checked: data.metrics.has_review_section
-    }, {
-      label: '스펙/사양 테이블',
-      checked: data.metrics.has_spec_table
-    }];
-    const half = Math.ceil(checkItems.length / 2);
-    const cols = [checkItems.slice(0, half), checkItems.slice(half)];
-    return /*#__PURE__*/React.createElement("div", {
-      className: "sub-card"
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "st"
-    }, "\uD544\uC218 \uD56D\uBAA9 \uCCB4\uD06C\uB9AC\uC2A4\uD2B8"), /*#__PURE__*/React.createElement("div", {
-      className: "grid2"
-    }, cols.map((col, ci) => /*#__PURE__*/React.createElement("div", {
-      key: 'dp-check-col-' + ci
-    }, col.map((item, i) => /*#__PURE__*/React.createElement("div", {
-      key: 'dp-check-' + ci + '-' + i,
-      className: "check"
-    }, /*#__PURE__*/React.createElement("span", {
-      className: item.checked ? 'y' : 'n'
-    }, item.checked ? '✔' : '✘'), " ", item.label))))));
-  })(), data.suggestions && data.suggestions.length > 0 && /*#__PURE__*/React.createElement("div", {
-    className: "note est"
-  }, /*#__PURE__*/React.createElement("b", null, "\uAC1C\uC120 \uC81C\uC548"), data.suggestions.map((s, i) => /*#__PURE__*/React.createElement("span", {
-    key: 'dp-sug-' + i
-  }, ' · ', /*#__PURE__*/React.createElement("span", {
-    className: 'sev ' + (s.priority === 'high' ? 'high' : s.priority === 'medium' ? 'med' : 'low')
-  }, priorityLabel(s.priority)), ' ', s.area ? s.area + ' — ' : '', s.text))))));
+      }, void 0, false)
+    }, void 0, false)]
+  }, void 0, true);
+  const total = data.scores.total;
+  return /*#__PURE__*/_jsxDEV("div", {
+    className: "section fade-in",
+    children: /*#__PURE__*/_jsxDEV("div", {
+      className: "container",
+      children: /*#__PURE__*/_jsxDEV("div", {
+        className: "card",
+        style: {
+          padding: '20px 22px'
+        },
+        children: [/*#__PURE__*/_jsxDEV("h3", {
+          className: "rt-h3",
+          children: [/*#__PURE__*/_jsxDEV("span", {
+            className: "rt-hic",
+            children: "🖼️"
+          }, void 0, false), "④ 상세페이지 HTML 분석", /*#__PURE__*/_jsxDEV("span", {
+            className: "badge b-est",
+            children: "≈ 추정"
+          }, void 0, false)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          className: "rt-desc",
+          children: "실제 HTML에서 추출한 데이터 기반 정밀 진단"
+        }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+          className: "grid2",
+          style: {
+            alignItems: 'center'
+          },
+          children: [/*#__PURE__*/_jsxDEV("div", {
+            style: {
+              display: 'flex',
+              justifyContent: 'center',
+              alignItems: 'center',
+              padding: '6px 0'
+            },
+            children: /*#__PURE__*/_jsxDEV("div", {
+              style: {
+                position: 'relative',
+                width: 180,
+                height: 180
+              },
+              children: [/*#__PURE__*/_jsxDEV(ChartCanvas, {
+                type: "doughnut",
+                height: 180,
+                style: {
+                  height: 180,
+                  width: 180
+                },
+                data: {
+                  labels: ['점수', '잔여'],
+                  datasets: [{
+                    data: [total, Math.max(0, 100 - total)],
+                    backgroundColor: [getScoreColor(total), '#f1f5f9'],
+                    borderWidth: 0
+                  }]
+                },
+                options: {
+                  maintainAspectRatio: false,
+                  cutout: '78%',
+                  plugins: {
+                    legend: {
+                      display: false
+                    },
+                    tooltip: {
+                      enabled: false
+                    }
+                  }
+                }
+              }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  position: 'absolute',
+                  inset: 0,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  textAlign: 'center'
+                },
+                children: [/*#__PURE__*/_jsxDEV("div", {
+                  style: {
+                    fontSize: 30,
+                    fontWeight: 900,
+                    color: getScoreColor(total),
+                    lineHeight: 1.1
+                  },
+                  children: total
+                }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+                  style: {
+                    fontSize: 11,
+                    color: '#64748b',
+                    marginTop: 2
+                  },
+                  children: ["/100 · ", getScoreLabel(total)]
+                }, void 0, true)]
+              }, void 0, true)]
+            }, void 0, true)
+          }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+            children: [/*#__PURE__*/_jsxDEV(ScoreBar, {
+              label: "이미지",
+              score: data.scores.images,
+              weight: "30%"
+            }, void 0, false), /*#__PURE__*/_jsxDEV(ScoreBar, {
+              label: "텍스트",
+              score: data.scores.text,
+              weight: "20%"
+            }, void 0, false), /*#__PURE__*/_jsxDEV(ScoreBar, {
+              label: "동영상",
+              score: data.scores.video,
+              weight: "15%"
+            }, void 0, false), /*#__PURE__*/_jsxDEV(ScoreBar, {
+              label: "정보 완성도",
+              score: data.scores.info,
+              weight: "20%"
+            }, void 0, false), /*#__PURE__*/_jsxDEV(ScoreBar, {
+              label: "신뢰 요소",
+              score: data.scores.trust,
+              weight: "15%"
+            }, void 0, false)]
+          }, void 0, true)]
+        }, void 0, true), data.metrics && /*#__PURE__*/_jsxDEV("div", {
+          className: "grid4",
+          style: {
+            marginTop: 10
+          },
+          children: [{
+            label: '상품 이미지',
+            num: data.metrics.total_images,
+            unit: '장',
+            good: data.metrics.total_images >= 10
+          }, {
+            label: '텍스트 길이',
+            num: data.metrics.text_length > 1000 ? (data.metrics.text_length / 1000).toFixed(1) + 'K' : data.metrics.text_length,
+            unit: '자',
+            good: data.metrics.text_length >= 500
+          }, {
+            label: '동영상',
+            num: data.metrics.video_count,
+            unit: '개',
+            good: data.metrics.video_count > 0
+          }, {
+            label: '페이지 크기',
+            num: data.metrics.html_size_kb,
+            unit: 'KB',
+            good: data.metrics.html_size_kb >= 50
+          }].map((item, i) => /*#__PURE__*/_jsxDEV("div", {
+            className: "kpi",
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              className: "k",
+              children: item.label
+            }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+              className: "v",
+              style: {
+                color: item.good ? undefined : 'var(--red)'
+              },
+              children: [item.num, /*#__PURE__*/_jsxDEV("small", {
+                children: item.unit
+              }, void 0, false)]
+            }, void 0, true)]
+          }, 'dp-metric-' + i, true))
+        }, void 0, false), data.metrics && (() => {
+          const checkItems = [{
+            label: '배송 정보 (무료배송/당일출고)',
+            checked: data.metrics.has_delivery_info
+          }, {
+            label: '교환/반품/환불 정책',
+            checked: data.metrics.has_return_info
+          }, {
+            label: '사은품/증정 혜택',
+            checked: data.metrics.has_gift_info
+          }, {
+            label: '인증/수상/특허 표시',
+            checked: data.metrics.has_certification
+          }, {
+            label: '구매 후기/리뷰 섹션',
+            checked: data.metrics.has_review_section
+          }, {
+            label: '스펙/사양 테이블',
+            checked: data.metrics.has_spec_table
+          }];
+          const half = Math.ceil(checkItems.length / 2);
+          const cols = [checkItems.slice(0, half), checkItems.slice(half)];
+          return /*#__PURE__*/_jsxDEV("div", {
+            className: "sub-card",
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              className: "st",
+              children: "필수 항목 체크리스트"
+            }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+              className: "grid2",
+              children: cols.map((col, ci) => /*#__PURE__*/_jsxDEV("div", {
+                children: col.map((item, i) => /*#__PURE__*/_jsxDEV("div", {
+                  className: "check",
+                  children: [/*#__PURE__*/_jsxDEV("span", {
+                    className: item.checked ? 'y' : 'n',
+                    children: item.checked ? '✔' : '✘'
+                  }, void 0, false), " ", item.label]
+                }, 'dp-check-' + ci + '-' + i, true))
+              }, 'dp-check-col-' + ci, false))
+            }, void 0, false)]
+          }, void 0, true);
+        })(), data.suggestions && data.suggestions.length > 0 && /*#__PURE__*/_jsxDEV("div", {
+          className: "note est",
+          children: [/*#__PURE__*/_jsxDEV("b", {
+            children: "개선 제안"
+          }, void 0, false), data.suggestions.map((s, i) => /*#__PURE__*/_jsxDEV("span", {
+            children: [' · ', /*#__PURE__*/_jsxDEV("span", {
+              className: 'sev ' + (s.priority === 'high' ? 'high' : s.priority === 'medium' ? 'med' : 'low'),
+              children: priorityLabel(s.priority)
+            }, void 0, false), ' ', s.area ? s.area + ' — ' : '', s.text]
+          }, 'dp-sug-' + i, true))]
+        }, void 0, true)]
+      }, void 0, true)
+    }, void 0, false)
+  }, void 0, false);
 };
 
 ;/* ===== js/components/SalesEstimationSection.jsx ===== */
+import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";
 /* SalesEstimationSection — 판매량 추정 & 성장 시뮬레이션 (v5) */
 window.SalesEstimationSection = function SalesEstimationSection(props) {
   if (!props?.data) return null;
@@ -6415,471 +7160,602 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
     fontWeight: 700,
     color: '#64748b'
   };
-  return /*#__PURE__*/React.createElement("div", {
-    className: "section fade-in"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "container"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      padding: '20px 22px'
-    }
-  }, /*#__PURE__*/React.createElement("h3", {
-    className: "rt-h3"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "rt-hic"
-  }, "\uD83D\uDCE6"), "\uD310\uB9E4\uB7C9 \uCD94\uC815 & \uC131\uC7A5 \uC2DC\uBBAC\uB808\uC774\uC158", /*#__PURE__*/React.createElement("span", {
-    className: "badge b-est"
-  }, "\u2248 \uCD94\uC815"), tolerance ? /*#__PURE__*/React.createElement("span", {
-    className: "badge b-est",
-    style: {
-      marginLeft: 6
-    }
-  }, tolerance) : null), /*#__PURE__*/React.createElement("div", {
-    className: "rt-desc"
-  }, "\uC21C\uC704\uBCC4 \uC608\uC0C1 \uD310\uB9E4\uB7C9\uACFC \uB9E4\uCD9C \uC131\uC7A5 \uC2DC\uB098\uB9AC\uC624"), /*#__PURE__*/React.createElement("div", {
-    className: "grid3",
-    style: {
-      marginBottom: 16
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "kpi"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "k"
-  }, "\uC0C1\uC70410 \uD3C9\uADE0\uAC00"), /*#__PURE__*/React.createElement("div", {
-    className: "v"
-  }, avgPrice)), /*#__PURE__*/React.createElement("div", {
-    className: "kpi"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "k"
-  }, "\uC6D4\uAC04 \uAC80\uC0C9\uB7C9"), /*#__PURE__*/React.createElement("div", {
-    className: "v"
-  }, monthlySearches)), /*#__PURE__*/React.createElement("div", {
-    className: "kpi"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "k"
-  }, "\uC608\uC0C1 \uC804\uD658\uC728"), /*#__PURE__*/React.createElement("div", {
-    className: "v"
-  }, estimatedCTR))), props.reviewCount != null && props.reviewCount > 0 && function () {
-    var rc = props.reviewCount;
-    var rate = 0.116; // 식품 평균 리뷰 작성률
-    var cumSales = Math.round(rc / rate);
-    var monthly = Math.round(cumSales / 12); // 운영 12개월 가정
-    return /*#__PURE__*/React.createElement("div", {
-      className: "note ok",
-      style: {
-        marginTop: 0,
-        marginBottom: 20
-      }
-    }, /*#__PURE__*/React.createElement("b", null, "\uD83E\uDDFE \uB9AC\uBDF0 \uAE30\uBC18 \uCD94\uC815 (\uB354 \uC815\uD655)"), " \u2014 \uC2E4\uC81C \uB204\uC801 \uB9AC\uBDF0 ", /*#__PURE__*/React.createElement("b", null, fmt(rc), "\uAC74"), " \uAE30\uBC18. \uCD94\uC815 \uB204\uC801 \uD310\uB9E4 ", /*#__PURE__*/React.createElement("b", null, "~", fmt(cumSales), "\uAC74"), ", \uC6D4 \uD658\uC0B0 ", /*#__PURE__*/React.createElement("b", null, "~", fmt(monthly), "\uAC74"), /*#__PURE__*/React.createElement("span", {
-      style: {
-        color: '#64748b'
-      }
-    }, " (\uC791\uC131\uB960 11.6% \xB7 \uC6B4\uC601 12\uAC1C\uC6D4 \uAC00\uC815). \uC544\uB798 \uC21C\uC704 \uAE30\uBC18 \uC2DC\uB098\uB9AC\uC624\uB294 \uCC38\uACE0\uC6A9\uC785\uB2C8\uB2E4."));
-  }(), hasSalesChart && /*#__PURE__*/React.createElement("div", {
-    className: "chartbox",
-    style: {
-      marginBottom: 20
-    }
-  }, /*#__PURE__*/React.createElement(ChartCanvas, {
-    type: "bar",
-    height: 220,
-    data: {
-      labels: salesBars.map(function (b) {
-        return b.label;
-      }),
-      datasets: [{
-        label: '예상 월 판매(건)',
-        data: salesBars.map(function (b) {
-          return b.val;
-        }),
-        backgroundColor: [C.OK || '#16a34a', C.IND || '#4f46e5', '#cbd5e1'],
-        borderRadius: 6
-      }]
-    },
-    options: {
-      plugins: {
-        legend: {
-          display: false
-        },
-        tooltip: {
-          callbacks: {
-            label: function (ctx) {
-              return (window.chartComma ? window.chartComma(ctx.parsed.y) : ctx.parsed.y) + '건/월';
-            }
-          }
-        }
-      },
-      scales: {
-        y: {
-          beginAtZero: true,
-          ticks: {
-            callback: function (v) {
-              return window.chartComma ? window.chartComma(v) : v;
-            }
-          }
-        }
-      }
-    }
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'grid',
-      gridTemplateColumns: 'repeat(3, 1fr)',
-      gap: 16
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      ...v5Card,
-      overflow: 'hidden'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      padding: '16px 20px',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      background: 'linear-gradient(135deg, #f59e0b, #d97706)'
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 14,
-      fontWeight: 700,
-      color: '#fff'
-    }
-  }, "\uD83C\uDFC6 TOP 10 (1~10\uC704)"), /*#__PURE__*/React.createElement("span", {
-    style: {
-      padding: '4px 12px',
-      borderRadius: 999,
-      fontSize: 12,
-      fontWeight: 700,
-      background: 'rgba(255,255,255,0.25)',
-      color: '#fff'
-    }
-  }, "\uD575\uC2EC \uAD6C\uAC04")), /*#__PURE__*/React.createElement("div", {
-    style: {
-      padding: 20
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: v5MetricRow
-  }, /*#__PURE__*/React.createElement("span", {
-    style: v5MetricLabel
-  }, "1\uC704 \uC608\uC0C1 \uD310\uB9E4"), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 13,
-      fontWeight: 700,
-      color: '#d97706'
-    }
-  }, fmt(top10Card.rank1Sales), "\uAC74")), /*#__PURE__*/React.createElement("div", {
-    style: v5MetricRow
-  }, /*#__PURE__*/React.createElement("span", {
-    style: v5MetricLabel
-  }, "5\uC704 \uC608\uC0C1 \uD310\uB9E4"), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 13,
-      fontWeight: 700,
-      color: '#d97706'
-    }
-  }, fmt(top10Card.rank5Sales), "\uAC74")), /*#__PURE__*/React.createElement("div", {
-    style: v5MetricRow
-  }, /*#__PURE__*/React.createElement("span", {
-    style: v5MetricLabel
-  }, "10\uC704 \uC608\uC0C1 \uD310\uB9E4"), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 13,
-      fontWeight: 700,
-      color: '#d97706'
-    }
-  }, fmt(top10Card.rank10Sales), "\uAC74")), /*#__PURE__*/React.createElement("div", {
-    style: v5MetricRow
-  }, /*#__PURE__*/React.createElement("span", {
-    style: v5MetricLabel
-  }, "1\uC704 \uC608\uC0C1 \uB9E4\uCD9C"), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 13,
-      fontWeight: 700,
-      color: '#d97706'
-    }
-  }, top10Card.rank1Revenue)), /*#__PURE__*/React.createElement("div", {
-    style: v5MetricRowLast
-  }, /*#__PURE__*/React.createElement("span", {
-    style: v5MetricLabel
-  }, "10\uC704 \uC608\uC0C1 \uB9E4\uCD9C"), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 13,
-      fontWeight: 700,
-      color: '#d97706'
-    }
-  }, top10Card.rank10Revenue)), /*#__PURE__*/React.createElement("div", {
-    style: v5TotalRow
-  }, /*#__PURE__*/React.createElement("span", {
-    style: v5TotalLabel
-  }, "TOP10 \uD569\uC0B0 \uB9E4\uCD9C"), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 15,
-      fontWeight: 800,
-      color: '#d97706'
-    }
-  }, top10Card.totalRevenue)))), /*#__PURE__*/React.createElement("div", {
-    style: {
-      ...v5Card,
-      overflow: 'hidden'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      padding: '16px 20px',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      background: 'linear-gradient(135deg, #4f46e5, #7c3aed)'
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 14,
-      fontWeight: 700,
-      color: '#fff'
-    }
-  }, "\uD83D\uDCC4 1\uD398\uC774\uC9C0 (1~40\uC704)"), /*#__PURE__*/React.createElement("span", {
-    style: {
-      padding: '4px 12px',
-      borderRadius: 999,
-      fontSize: 12,
-      fontWeight: 700,
-      background: 'rgba(255,255,255,0.25)',
-      color: '#fff'
-    }
-  }, "1\uD398\uC774\uC9C0")), /*#__PURE__*/React.createElement("div", {
-    style: {
-      padding: 20
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: v5MetricRow
-  }, /*#__PURE__*/React.createElement("span", {
-    style: v5MetricLabel
-  }, "\uD3C9\uADE0 \uD310\uB9E4\uB7C9"), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 13,
-      fontWeight: 700,
-      color: '#4f46e5'
-    }
-  }, fmt(page1Card.avgSales), "\uAC74/\uC6D4")), /*#__PURE__*/React.createElement("div", {
-    style: v5MetricRow
-  }, /*#__PURE__*/React.createElement("span", {
-    style: v5MetricLabel
-  }, "\uCD1D \uC608\uC0C1 \uD310\uB9E4"), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 13,
-      fontWeight: 700,
-      color: '#4f46e5'
-    }
-  }, fmt(page1Card.totalSales), "\uAC74/\uC6D4")), /*#__PURE__*/React.createElement("div", {
-    style: v5MetricRow
-  }, /*#__PURE__*/React.createElement("span", {
-    style: v5MetricLabel
-  }, "\uCD5C\uACE0 \uB9E4\uCD9C (1\uC704)"), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 13,
-      fontWeight: 700,
-      color: '#4f46e5'
-    }
-  }, page1Card.maxRevenue)), /*#__PURE__*/React.createElement("div", {
-    style: v5MetricRow
-  }, /*#__PURE__*/React.createElement("span", {
-    style: v5MetricLabel
-  }, "\uCD5C\uC800 \uB9E4\uCD9C (40\uC704)"), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 13,
-      fontWeight: 700,
-      color: '#4f46e5'
-    }
-  }, page1Card.minRevenue)), /*#__PURE__*/React.createElement("div", {
-    style: v5MetricRowLast
-  }, /*#__PURE__*/React.createElement("span", {
-    style: v5MetricLabel
-  }, "\uD3C9\uADE0 \uB9E4\uCD9C"), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 13,
-      fontWeight: 700,
-      color: '#4f46e5'
-    }
-  }, page1Card.avgRevenue)), /*#__PURE__*/React.createElement("div", {
-    style: v5TotalRow
-  }, /*#__PURE__*/React.createElement("span", {
-    style: v5TotalLabel
-  }, "1\uD398\uC774\uC9C0 \uD569\uC0B0 \uB9E4\uCD9C"), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 15,
-      fontWeight: 800,
-      color: '#4f46e5'
-    }
-  }, page1Card.totalRevenue)))), /*#__PURE__*/React.createElement("div", {
-    style: {
-      ...v5Card,
-      overflow: 'hidden'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      padding: '16px 20px',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      background: 'linear-gradient(135deg, #64748b, #475569)'
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 14,
-      fontWeight: 700,
-      color: '#fff'
-    }
-  }, "\uD83D\uDCC4 2\uD398\uC774\uC9C0 (41~80\uC704)"), /*#__PURE__*/React.createElement("span", {
-    style: {
-      padding: '4px 12px',
-      borderRadius: 999,
-      fontSize: 12,
-      fontWeight: 700,
-      background: 'rgba(255,255,255,0.25)',
-      color: '#fff'
-    }
-  }, "2\uD398\uC774\uC9C0")), /*#__PURE__*/React.createElement("div", {
-    style: {
-      padding: 20
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: v5MetricRow
-  }, /*#__PURE__*/React.createElement("span", {
-    style: v5MetricLabel
-  }, "\uD3C9\uADE0 \uD310\uB9E4\uB7C9"), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 13,
-      fontWeight: 700,
-      color: '#475569'
-    }
-  }, fmt(page2Card.avgSales), "\uAC74/\uC6D4")), /*#__PURE__*/React.createElement("div", {
-    style: v5MetricRow
-  }, /*#__PURE__*/React.createElement("span", {
-    style: v5MetricLabel
-  }, "\uCD1D \uC608\uC0C1 \uD310\uB9E4"), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 13,
-      fontWeight: 700,
-      color: '#475569'
-    }
-  }, fmt(page2Card.totalSales), "\uAC74/\uC6D4")), /*#__PURE__*/React.createElement("div", {
-    style: v5MetricRow
-  }, /*#__PURE__*/React.createElement("span", {
-    style: v5MetricLabel
-  }, "\uCD5C\uACE0 \uB9E4\uCD9C (41\uC704)"), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 13,
-      fontWeight: 700,
-      color: '#475569'
-    }
-  }, page2Card.maxRevenue)), /*#__PURE__*/React.createElement("div", {
-    style: v5MetricRow
-  }, /*#__PURE__*/React.createElement("span", {
-    style: v5MetricLabel
-  }, "\uCD5C\uC800 \uB9E4\uCD9C (80\uC704)"), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 13,
-      fontWeight: 700,
-      color: '#475569'
-    }
-  }, page2Card.minRevenue)), /*#__PURE__*/React.createElement("div", {
-    style: v5MetricRowLast
-  }, /*#__PURE__*/React.createElement("span", {
-    style: v5MetricLabel
-  }, "\uD3C9\uADE0 \uB9E4\uCD9C"), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 13,
-      fontWeight: 700,
-      color: '#475569'
-    }
-  }, page2Card.avgRevenue)), /*#__PURE__*/React.createElement("div", {
-    style: v5TotalRow
-  }, /*#__PURE__*/React.createElement("span", {
-    style: v5TotalLabel
-  }, "2\uD398\uC774\uC9C0 \uD569\uC0B0 \uB9E4\uCD9C"), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 15,
-      fontWeight: 800,
-      color: '#475569'
-    }
-  }, page2Card.totalRevenue))))), simulations && simulations.length > 0 && /*#__PURE__*/React.createElement("div", {
-    className: "sub-card",
-    style: {
-      marginTop: 20
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "st"
-  }, "\uD83D\uDCCA \uC21C\uC704\uBCC4 \uCD94\uC815 \uBC94\uC704 (\uC804\uD658\uC728 \uBC34\uB4DC ", tolerance || '', ")"), /*#__PURE__*/React.createElement("table", {
-    className: "rt-table"
-  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "\uC21C\uC704"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      textAlign: 'right'
-    }
-  }, "\uC608\uC0C1 \uD310\uB9E4(\uAC74/\uC6D4)"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      textAlign: 'right'
-    }
-  }, "\uC608\uC0C1 \uB9E4\uCD9C(\uC6D4)"))), /*#__PURE__*/React.createElement("tbody", null, simulations.map(function (sim, idx) {
-    return /*#__PURE__*/React.createElement("tr", {
-      key: idx
-    }, /*#__PURE__*/React.createElement("td", null, sim.rank, "\uC704"), /*#__PURE__*/React.createElement("td", {
-      style: {
-        textAlign: 'right',
-        whiteSpace: 'nowrap'
-      }
-    }, sim.estSalesRange || sim.estSales), /*#__PURE__*/React.createElement("td", {
-      style: {
-        textAlign: 'right',
-        whiteSpace: 'nowrap'
-      }
-    }, sim.revenueRange || sim.revenue));
-  })))), /*#__PURE__*/React.createElement("div", {
-    className: "note est"
-  }, "\u26A0\uFE0F \uC21C\uC704\uBCC4 \uD074\uB9AD\uB960(CTR)\uC744 \uAE30\uBC18\uC73C\uB85C \uCD94\uC815\uD55C \uAC12\uC774\uBA70, \uC2E4\uC81C \uD310\uB9E4\uB7C9\uC740 \uC0C1\uD488 \uACBD\uC7C1\uB825, \uB9AC\uBDF0, \uAC00\uACA9 \uB4F1\uC5D0 \uB530\uB77C \uB2EC\uB77C\uC9C8 \uC218 \uC788\uC2B5\uB2C8\uB2E4."), props.reviewCount != null && props.reviewCount > 0 && props.productPrice > 0 && function () {
-    var rc = props.reviewCount;
-    var price = props.productPrice;
-    var reviewRates = [{
-      label: '보수(작성률 5%)',
-      rate: 0.05
-    }, {
-      label: '평균(11.6%)',
-      rate: 0.116
-    }, {
-      label: '적극(이벤트)',
-      rate: 0.20
-    }];
-    var periods = [3, 6, 12];
-    return /*#__PURE__*/React.createElement("div", {
-      className: "sub-card"
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "st"
-    }, "\uD83E\uDDFE \uB9AC\uBDF0 \uC99D\uAC00 \uAE30\uBC18 \uCD94\uC815 (\uC791\uC131\uB960 \uC2DD\uD488 11.6%)"), /*#__PURE__*/React.createElement("table", {
-      className: "rt-table"
-    }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "\uAC00\uC815"), periods.map(function (m) {
-      return /*#__PURE__*/React.createElement("th", {
-        key: m,
+  return /*#__PURE__*/_jsxDEV("div", {
+    className: "section fade-in",
+    children: /*#__PURE__*/_jsxDEV("div", {
+      className: "container",
+      children: /*#__PURE__*/_jsxDEV("div", {
+        className: "card",
         style: {
-          textAlign: 'right'
-        }
-      }, m, "\uAC1C\uC6D4");
-    }))), /*#__PURE__*/React.createElement("tbody", null, reviewRates.map(function (rr) {
-      var totalSales = Math.round(rc / rr.rate);
-      return /*#__PURE__*/React.createElement("tr", {
-        key: rr.label
-      }, /*#__PURE__*/React.createElement("td", null, rr.label), periods.map(function (m) {
-        return /*#__PURE__*/React.createElement("td", {
-          key: m,
+          padding: '20px 22px'
+        },
+        children: [/*#__PURE__*/_jsxDEV("h3", {
+          className: "rt-h3",
+          children: [/*#__PURE__*/_jsxDEV("span", {
+            className: "rt-hic",
+            children: "📦"
+          }, void 0, false), "판매량 추정 & 성장 시뮬레이션", /*#__PURE__*/_jsxDEV("span", {
+            className: "badge b-est",
+            children: "≈ 추정"
+          }, void 0, false), tolerance ? /*#__PURE__*/_jsxDEV("span", {
+            className: "badge b-est",
+            style: {
+              marginLeft: 6
+            },
+            children: tolerance
+          }, void 0, false) : null]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          className: "rt-desc",
+          children: "순위별 예상 판매량과 매출 성장 시나리오"
+        }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+          className: "grid3",
           style: {
-            textAlign: 'right'
-          }
-        }, "~", fmt(Math.round(totalSales / 12 * m)), "\uAC74");
-      }));
-    }))));
-  }())));
+            marginBottom: 16
+          },
+          children: [/*#__PURE__*/_jsxDEV("div", {
+            className: "kpi",
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              className: "k",
+              children: "상위10 평균가"
+            }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+              className: "v",
+              children: avgPrice
+            }, void 0, false)]
+          }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+            className: "kpi",
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              className: "k",
+              children: "월간 검색량"
+            }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+              className: "v",
+              children: monthlySearches
+            }, void 0, false)]
+          }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+            className: "kpi",
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              className: "k",
+              children: "예상 전환율"
+            }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+              className: "v",
+              children: estimatedCTR
+            }, void 0, false)]
+          }, void 0, true)]
+        }, void 0, true), props.reviewCount != null && props.reviewCount > 0 && function () {
+          var rc = props.reviewCount;
+          var rate = 0.116; // 식품 평균 리뷰 작성률
+          var cumSales = Math.round(rc / rate);
+          var monthly = Math.round(cumSales / 12); // 운영 12개월 가정
+          return /*#__PURE__*/_jsxDEV("div", {
+            className: "note ok",
+            style: {
+              marginTop: 0,
+              marginBottom: 20
+            },
+            children: [/*#__PURE__*/_jsxDEV("b", {
+              children: "🧾 리뷰 기반 추정 (더 정확)"
+            }, void 0, false), " — 실제 누적 리뷰 ", /*#__PURE__*/_jsxDEV("b", {
+              children: [fmt(rc), "건"]
+            }, void 0, true), " 기반. 추정 누적 판매 ", /*#__PURE__*/_jsxDEV("b", {
+              children: ["~", fmt(cumSales), "건"]
+            }, void 0, true), ", 월 환산 ", /*#__PURE__*/_jsxDEV("b", {
+              children: ["~", fmt(monthly), "건"]
+            }, void 0, true), /*#__PURE__*/_jsxDEV("span", {
+              style: {
+                color: '#64748b'
+              },
+              children: " (작성률 11.6% · 운영 12개월 가정). 아래 순위 기반 시나리오는 참고용입니다."
+            }, void 0, false)]
+          }, void 0, true);
+        }(), hasSalesChart && /*#__PURE__*/_jsxDEV("div", {
+          className: "chartbox",
+          style: {
+            marginBottom: 20
+          },
+          children: /*#__PURE__*/_jsxDEV(ChartCanvas, {
+            type: "bar",
+            height: 220,
+            data: {
+              labels: salesBars.map(function (b) {
+                return b.label;
+              }),
+              datasets: [{
+                label: '예상 월 판매(건)',
+                data: salesBars.map(function (b) {
+                  return b.val;
+                }),
+                backgroundColor: [C.OK || '#16a34a', C.IND || '#4f46e5', '#cbd5e1'],
+                borderRadius: 6
+              }]
+            },
+            options: {
+              plugins: {
+                legend: {
+                  display: false
+                },
+                tooltip: {
+                  callbacks: {
+                    label: function (ctx) {
+                      return (window.chartComma ? window.chartComma(ctx.parsed.y) : ctx.parsed.y) + '건/월';
+                    }
+                  }
+                }
+              },
+              scales: {
+                y: {
+                  beginAtZero: true,
+                  ticks: {
+                    callback: function (v) {
+                      return window.chartComma ? window.chartComma(v) : v;
+                    }
+                  }
+                }
+              }
+            }
+          }, void 0, false)
+        }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+          style: {
+            display: 'grid',
+            gridTemplateColumns: 'repeat(3, 1fr)',
+            gap: 16
+          },
+          children: [/*#__PURE__*/_jsxDEV("div", {
+            style: {
+              ...v5Card,
+              overflow: 'hidden'
+            },
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              style: {
+                padding: '16px 20px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                background: 'linear-gradient(135deg, #f59e0b, #d97706)'
+              },
+              children: [/*#__PURE__*/_jsxDEV("span", {
+                style: {
+                  fontSize: 14,
+                  fontWeight: 700,
+                  color: '#fff'
+                },
+                children: "🏆 TOP 10 (1~10위)"
+              }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+                style: {
+                  padding: '4px 12px',
+                  borderRadius: 999,
+                  fontSize: 12,
+                  fontWeight: 700,
+                  background: 'rgba(255,255,255,0.25)',
+                  color: '#fff'
+                },
+                children: "핵심 구간"
+              }, void 0, false)]
+            }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+              style: {
+                padding: 20
+              },
+              children: [/*#__PURE__*/_jsxDEV("div", {
+                style: v5MetricRow,
+                children: [/*#__PURE__*/_jsxDEV("span", {
+                  style: v5MetricLabel,
+                  children: "1위 예상 판매"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+                  style: {
+                    fontSize: 13,
+                    fontWeight: 700,
+                    color: '#d97706'
+                  },
+                  children: [fmt(top10Card.rank1Sales), "건"]
+                }, void 0, true)]
+              }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                style: v5MetricRow,
+                children: [/*#__PURE__*/_jsxDEV("span", {
+                  style: v5MetricLabel,
+                  children: "5위 예상 판매"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+                  style: {
+                    fontSize: 13,
+                    fontWeight: 700,
+                    color: '#d97706'
+                  },
+                  children: [fmt(top10Card.rank5Sales), "건"]
+                }, void 0, true)]
+              }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                style: v5MetricRow,
+                children: [/*#__PURE__*/_jsxDEV("span", {
+                  style: v5MetricLabel,
+                  children: "10위 예상 판매"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+                  style: {
+                    fontSize: 13,
+                    fontWeight: 700,
+                    color: '#d97706'
+                  },
+                  children: [fmt(top10Card.rank10Sales), "건"]
+                }, void 0, true)]
+              }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                style: v5MetricRow,
+                children: [/*#__PURE__*/_jsxDEV("span", {
+                  style: v5MetricLabel,
+                  children: "1위 예상 매출"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+                  style: {
+                    fontSize: 13,
+                    fontWeight: 700,
+                    color: '#d97706'
+                  },
+                  children: top10Card.rank1Revenue
+                }, void 0, false)]
+              }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                style: v5MetricRowLast,
+                children: [/*#__PURE__*/_jsxDEV("span", {
+                  style: v5MetricLabel,
+                  children: "10위 예상 매출"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+                  style: {
+                    fontSize: 13,
+                    fontWeight: 700,
+                    color: '#d97706'
+                  },
+                  children: top10Card.rank10Revenue
+                }, void 0, false)]
+              }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                style: v5TotalRow,
+                children: [/*#__PURE__*/_jsxDEV("span", {
+                  style: v5TotalLabel,
+                  children: "TOP10 합산 매출"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+                  style: {
+                    fontSize: 15,
+                    fontWeight: 800,
+                    color: '#d97706'
+                  },
+                  children: top10Card.totalRevenue
+                }, void 0, false)]
+              }, void 0, true)]
+            }, void 0, true)]
+          }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+            style: {
+              ...v5Card,
+              overflow: 'hidden'
+            },
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              style: {
+                padding: '16px 20px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                background: 'linear-gradient(135deg, #4f46e5, #7c3aed)'
+              },
+              children: [/*#__PURE__*/_jsxDEV("span", {
+                style: {
+                  fontSize: 14,
+                  fontWeight: 700,
+                  color: '#fff'
+                },
+                children: "📄 1페이지 (1~40위)"
+              }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+                style: {
+                  padding: '4px 12px',
+                  borderRadius: 999,
+                  fontSize: 12,
+                  fontWeight: 700,
+                  background: 'rgba(255,255,255,0.25)',
+                  color: '#fff'
+                },
+                children: "1페이지"
+              }, void 0, false)]
+            }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+              style: {
+                padding: 20
+              },
+              children: [/*#__PURE__*/_jsxDEV("div", {
+                style: v5MetricRow,
+                children: [/*#__PURE__*/_jsxDEV("span", {
+                  style: v5MetricLabel,
+                  children: "평균 판매량"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+                  style: {
+                    fontSize: 13,
+                    fontWeight: 700,
+                    color: '#4f46e5'
+                  },
+                  children: [fmt(page1Card.avgSales), "건/월"]
+                }, void 0, true)]
+              }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                style: v5MetricRow,
+                children: [/*#__PURE__*/_jsxDEV("span", {
+                  style: v5MetricLabel,
+                  children: "총 예상 판매"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+                  style: {
+                    fontSize: 13,
+                    fontWeight: 700,
+                    color: '#4f46e5'
+                  },
+                  children: [fmt(page1Card.totalSales), "건/월"]
+                }, void 0, true)]
+              }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                style: v5MetricRow,
+                children: [/*#__PURE__*/_jsxDEV("span", {
+                  style: v5MetricLabel,
+                  children: "최고 매출 (1위)"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+                  style: {
+                    fontSize: 13,
+                    fontWeight: 700,
+                    color: '#4f46e5'
+                  },
+                  children: page1Card.maxRevenue
+                }, void 0, false)]
+              }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                style: v5MetricRow,
+                children: [/*#__PURE__*/_jsxDEV("span", {
+                  style: v5MetricLabel,
+                  children: "최저 매출 (40위)"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+                  style: {
+                    fontSize: 13,
+                    fontWeight: 700,
+                    color: '#4f46e5'
+                  },
+                  children: page1Card.minRevenue
+                }, void 0, false)]
+              }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                style: v5MetricRowLast,
+                children: [/*#__PURE__*/_jsxDEV("span", {
+                  style: v5MetricLabel,
+                  children: "평균 매출"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+                  style: {
+                    fontSize: 13,
+                    fontWeight: 700,
+                    color: '#4f46e5'
+                  },
+                  children: page1Card.avgRevenue
+                }, void 0, false)]
+              }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                style: v5TotalRow,
+                children: [/*#__PURE__*/_jsxDEV("span", {
+                  style: v5TotalLabel,
+                  children: "1페이지 합산 매출"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+                  style: {
+                    fontSize: 15,
+                    fontWeight: 800,
+                    color: '#4f46e5'
+                  },
+                  children: page1Card.totalRevenue
+                }, void 0, false)]
+              }, void 0, true)]
+            }, void 0, true)]
+          }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+            style: {
+              ...v5Card,
+              overflow: 'hidden'
+            },
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              style: {
+                padding: '16px 20px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                background: 'linear-gradient(135deg, #64748b, #475569)'
+              },
+              children: [/*#__PURE__*/_jsxDEV("span", {
+                style: {
+                  fontSize: 14,
+                  fontWeight: 700,
+                  color: '#fff'
+                },
+                children: "📄 2페이지 (41~80위)"
+              }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+                style: {
+                  padding: '4px 12px',
+                  borderRadius: 999,
+                  fontSize: 12,
+                  fontWeight: 700,
+                  background: 'rgba(255,255,255,0.25)',
+                  color: '#fff'
+                },
+                children: "2페이지"
+              }, void 0, false)]
+            }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+              style: {
+                padding: 20
+              },
+              children: [/*#__PURE__*/_jsxDEV("div", {
+                style: v5MetricRow,
+                children: [/*#__PURE__*/_jsxDEV("span", {
+                  style: v5MetricLabel,
+                  children: "평균 판매량"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+                  style: {
+                    fontSize: 13,
+                    fontWeight: 700,
+                    color: '#475569'
+                  },
+                  children: [fmt(page2Card.avgSales), "건/월"]
+                }, void 0, true)]
+              }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                style: v5MetricRow,
+                children: [/*#__PURE__*/_jsxDEV("span", {
+                  style: v5MetricLabel,
+                  children: "총 예상 판매"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+                  style: {
+                    fontSize: 13,
+                    fontWeight: 700,
+                    color: '#475569'
+                  },
+                  children: [fmt(page2Card.totalSales), "건/월"]
+                }, void 0, true)]
+              }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                style: v5MetricRow,
+                children: [/*#__PURE__*/_jsxDEV("span", {
+                  style: v5MetricLabel,
+                  children: "최고 매출 (41위)"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+                  style: {
+                    fontSize: 13,
+                    fontWeight: 700,
+                    color: '#475569'
+                  },
+                  children: page2Card.maxRevenue
+                }, void 0, false)]
+              }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                style: v5MetricRow,
+                children: [/*#__PURE__*/_jsxDEV("span", {
+                  style: v5MetricLabel,
+                  children: "최저 매출 (80위)"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+                  style: {
+                    fontSize: 13,
+                    fontWeight: 700,
+                    color: '#475569'
+                  },
+                  children: page2Card.minRevenue
+                }, void 0, false)]
+              }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                style: v5MetricRowLast,
+                children: [/*#__PURE__*/_jsxDEV("span", {
+                  style: v5MetricLabel,
+                  children: "평균 매출"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+                  style: {
+                    fontSize: 13,
+                    fontWeight: 700,
+                    color: '#475569'
+                  },
+                  children: page2Card.avgRevenue
+                }, void 0, false)]
+              }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                style: v5TotalRow,
+                children: [/*#__PURE__*/_jsxDEV("span", {
+                  style: v5TotalLabel,
+                  children: "2페이지 합산 매출"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("span", {
+                  style: {
+                    fontSize: 15,
+                    fontWeight: 800,
+                    color: '#475569'
+                  },
+                  children: page2Card.totalRevenue
+                }, void 0, false)]
+              }, void 0, true)]
+            }, void 0, true)]
+          }, void 0, true)]
+        }, void 0, true), simulations && simulations.length > 0 && /*#__PURE__*/_jsxDEV("div", {
+          className: "sub-card",
+          style: {
+            marginTop: 20
+          },
+          children: [/*#__PURE__*/_jsxDEV("div", {
+            className: "st",
+            children: ["📊 순위별 추정 범위 (전환율 밴드 ", tolerance || '', ")"]
+          }, void 0, true), /*#__PURE__*/_jsxDEV("table", {
+            className: "rt-table",
+            children: [/*#__PURE__*/_jsxDEV("thead", {
+              children: /*#__PURE__*/_jsxDEV("tr", {
+                children: [/*#__PURE__*/_jsxDEV("th", {
+                  children: "순위"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                  style: {
+                    textAlign: 'right'
+                  },
+                  children: "예상 판매(건/월)"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                  style: {
+                    textAlign: 'right'
+                  },
+                  children: "예상 매출(월)"
+                }, void 0, false)]
+              }, void 0, true)
+            }, void 0, false), /*#__PURE__*/_jsxDEV("tbody", {
+              children: simulations.map(function (sim, idx) {
+                return /*#__PURE__*/_jsxDEV("tr", {
+                  children: [/*#__PURE__*/_jsxDEV("td", {
+                    children: [sim.rank, "위"]
+                  }, void 0, true), /*#__PURE__*/_jsxDEV("td", {
+                    style: {
+                      textAlign: 'right',
+                      whiteSpace: 'nowrap'
+                    },
+                    children: sim.estSalesRange || sim.estSales
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                    style: {
+                      textAlign: 'right',
+                      whiteSpace: 'nowrap'
+                    },
+                    children: sim.revenueRange || sim.revenue
+                  }, void 0, false)]
+                }, idx, true);
+              })
+            }, void 0, false)]
+          }, void 0, true)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          className: "note est",
+          children: "⚠️ 순위별 클릭률(CTR)을 기반으로 추정한 값이며, 실제 판매량은 상품 경쟁력, 리뷰, 가격 등에 따라 달라질 수 있습니다."
+        }, void 0, false), props.reviewCount != null && props.reviewCount > 0 && props.productPrice > 0 && function () {
+          var rc = props.reviewCount;
+          var price = props.productPrice;
+          var reviewRates = [{
+            label: '보수(작성률 5%)',
+            rate: 0.05
+          }, {
+            label: '평균(11.6%)',
+            rate: 0.116
+          }, {
+            label: '적극(이벤트)',
+            rate: 0.20
+          }];
+          var periods = [3, 6, 12];
+          return /*#__PURE__*/_jsxDEV("div", {
+            className: "sub-card",
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              className: "st",
+              children: "🧾 리뷰 증가 기반 추정 (작성률 식품 11.6%)"
+            }, void 0, false), /*#__PURE__*/_jsxDEV("table", {
+              className: "rt-table",
+              children: [/*#__PURE__*/_jsxDEV("thead", {
+                children: /*#__PURE__*/_jsxDEV("tr", {
+                  children: [/*#__PURE__*/_jsxDEV("th", {
+                    children: "가정"
+                  }, void 0, false), periods.map(function (m) {
+                    return /*#__PURE__*/_jsxDEV("th", {
+                      style: {
+                        textAlign: 'right'
+                      },
+                      children: [m, "개월"]
+                    }, m, true);
+                  })]
+                }, void 0, true)
+              }, void 0, false), /*#__PURE__*/_jsxDEV("tbody", {
+                children: reviewRates.map(function (rr) {
+                  var totalSales = Math.round(rc / rr.rate);
+                  return /*#__PURE__*/_jsxDEV("tr", {
+                    children: [/*#__PURE__*/_jsxDEV("td", {
+                      children: rr.label
+                    }, void 0, false), periods.map(function (m) {
+                      return /*#__PURE__*/_jsxDEV("td", {
+                        style: {
+                          textAlign: 'right'
+                        },
+                        children: ["~", fmt(Math.round(totalSales / 12 * m)), "건"]
+                      }, m, true);
+                    })]
+                  }, rr.label, true);
+                })
+              }, void 0, false)]
+            }, void 0, true)]
+          }, void 0, true);
+        }()]
+      }, void 0, true)
+    }, void 0, false)
+  }, void 0, false);
 };
 
 ;/* ===== js/components/CompetitorTableSection.jsx ===== */
+import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";
 window.CompetitorTableSection = function CompetitorTableSection(props) {
   if (!props?.data) return null;
   var items = Array.isArray(props.data) ? props.data : props.data.competitors || [];
@@ -6888,217 +7764,253 @@ window.CompetitorTableSection = function CompetitorTableSection(props) {
     return typeof item.seoScore === 'number';
   });
   var medalEmoji = ['🥇', '🥈', '🥉'];
-  return /*#__PURE__*/React.createElement("div", {
-    className: "section fade-in"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "container"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      padding: '20px 22px'
-    }
-  }, /*#__PURE__*/React.createElement("h3", {
-    className: "rt-h3"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "rt-hic"
-  }, "\uD83C\uDFC6"), "\uACBD\uC7C1\uC0AC \uBE44\uAD50\uD45C (\uC0C1\uC704 \uB178\uCD9C 80\uAC1C \uC911)", /*#__PURE__*/React.createElement("span", {
-    className: "badge b-ok"
-  }, "\u2705 \uC2E4\uCE21")), /*#__PURE__*/React.createElement("div", {
-    className: "rt-desc"
-  }, "\uC0C1\uC704 \uB178\uCD9C \uC0C1\uD488\uB4E4\uC758 \uD575\uC2EC \uC9C0\uD45C\uB97C \uBE44\uAD50\uD569\uB2C8\uB2E4"), hasScore && /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginBottom: 16,
-      padding: '14px 18px',
-      background: 'linear-gradient(135deg, #f0f9ff, #e0f2fe)',
-      borderRadius: 12,
-      border: '1px solid #bae6fd',
-      fontSize: 13,
-      color: '#0369a1',
-      lineHeight: 1.7
-    }
-  }, "\uD83D\uDCA1 \uC885\uD569\uC810\uC218\uAC00 \uB192\uC744\uC218\uB85D \uB124\uC774\uBC84 \uC1FC\uD551 \uB178\uCD9C \uC21C\uC704\uAC00 \uB192\uC544\uC9C0\uB294 \uACBD\uD5A5\uC774 \uC788\uC2B5\uB2C8\uB2E4. \uC0C1\uD488\uBA85\xB7\uAC00\uACA9\xB7\uB9AC\uBDF0\xB7\uD310\uB9E4\uC2E4\uC801 \uB4F1 10\uAC1C \uC9C0\uD45C\uB97C \uAC00\uC911 \uD569\uC0B0\uD55C \uC810\uC218\uC785\uB2C8\uB2E4."), /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      padding: 0,
-      overflow: 'hidden',
-      borderRadius: 16
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      maxHeight: 580,
-      overflowY: 'auto'
-    }
-  }, /*#__PURE__*/React.createElement("table", {
-    className: "rt-table",
-    style: {
-      width: '100%',
-      borderCollapse: 'collapse',
-      minWidth: hasScore ? 900 : 800
-    }
-  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", {
-    style: {
-      padding: '14px 16px',
-      fontSize: 13,
-      fontWeight: 600,
-      textAlign: 'center',
-      width: 50
-    }
-  }, "\uC21C\uC704"), hasScore && /*#__PURE__*/React.createElement("th", {
-    style: {
-      padding: '14px 16px',
-      fontSize: 13,
-      fontWeight: 600,
-      textAlign: 'center',
-      width: 70
-    }
-  }, "\uC885\uD569\uC810\uC218"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      padding: '14px 16px',
-      fontSize: 13,
-      fontWeight: 600,
-      textAlign: 'center',
-      width: 50
-    }
-  }, "\uC774\uBBF8\uC9C0"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      padding: '14px 16px',
-      fontSize: 13,
-      fontWeight: 600,
-      textAlign: 'left'
-    }
-  }, "\uC0C1\uD488\uBA85"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      padding: '14px 16px',
-      fontSize: 13,
-      fontWeight: 600,
-      textAlign: 'left',
-      width: 90
-    }
-  }, "\uD310\uB9E4\uCC98"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      padding: '14px 16px',
-      fontSize: 13,
-      fontWeight: 600,
-      textAlign: 'left',
-      width: 90
-    }
-  }, "\uBE0C\uB79C\uB4DC"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      padding: '14px 16px',
-      fontSize: 13,
-      fontWeight: 600,
-      textAlign: 'right',
-      width: 100
-    }
-  }, "\uAC00\uACA9"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      padding: '14px 16px',
-      fontSize: 13,
-      fontWeight: 600,
-      textAlign: 'left',
-      width: 100
-    }
-  }, "\uCE74\uD14C\uACE0\uB9AC"))), /*#__PURE__*/React.createElement("tbody", null, items.map(function (comp, idx) {
-    return /*#__PURE__*/React.createElement("tr", {
-      key: idx,
-      style: {
-        borderBottom: '1px solid #e2e8f0',
-        background: idx % 2 === 0 ? '#fff' : '#f8fafc'
-      }
-    }, /*#__PURE__*/React.createElement("td", {
-      style: {
-        padding: '14px 16px',
-        textAlign: 'center'
-      }
-    }, comp.rank <= 3 ? /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 14,
-        fontWeight: 700,
-        color: '#0f172a'
-      }
-    }, medalEmoji[comp.rank - 1], comp.rank) : /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 14,
-        fontWeight: 700,
-        color: '#64748b'
-      }
-    }, comp.rank)), hasScore && /*#__PURE__*/React.createElement("td", {
-      style: {
-        padding: '14px 16px',
-        textAlign: 'center'
-      }
-    }, /*#__PURE__*/React.createElement("span", {
-      style: {
-        display: 'inline-block',
-        padding: '4px 12px',
-        borderRadius: 999,
-        fontSize: 13,
-        fontWeight: 700,
-        color: scoreColor(comp.seoScore),
-        background: scoreBg(comp.seoScore),
-        border: '1px solid ' + scoreColor(comp.seoScore) + '33'
-      }
-    }, comp.seoScore)), /*#__PURE__*/React.createElement("td", {
-      style: {
-        padding: '8px 16px',
-        textAlign: 'center'
-      }
-    }, comp.image ? React.createElement('img', {
-      src: comp.image,
-      alt: '',
-      style: {
-        width: 44,
-        height: 44,
-        objectFit: 'cover',
-        borderRadius: 8
-      },
-      onError: function (e) {
-        e.target.style.display = 'none';
-      }
-    }) : React.createElement('span', {
-      style: {
-        color: '#d1d5db',
-        fontSize: 22
-      }
-    }, '📦')), /*#__PURE__*/React.createElement("td", {
-      style: {
-        padding: '14px 16px',
-        fontWeight: 500,
-        fontSize: 14,
-        color: '#0f172a',
-        maxWidth: 220,
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        whiteSpace: 'nowrap'
-      }
-    }, comp.name), /*#__PURE__*/React.createElement("td", {
-      style: {
-        padding: '14px 16px',
-        fontSize: 12,
-        color: '#6b7280'
-      }
-    }, comp.store), /*#__PURE__*/React.createElement("td", {
-      style: {
-        padding: '14px 16px',
-        fontSize: 12,
-        color: '#6b7280'
-      }
-    }, comp.brand), /*#__PURE__*/React.createElement("td", {
-      style: {
-        padding: '14px 16px',
-        textAlign: 'right',
-        fontWeight: 600,
-        fontSize: 14,
-        color: '#0f172a'
-      }
-    }, comp.price), /*#__PURE__*/React.createElement("td", {
-      style: {
-        padding: '14px 16px',
-        fontSize: 12,
-        color: '#6b7280'
-      }
-    }, comp.category));
-  }))))))));
+  return /*#__PURE__*/_jsxDEV("div", {
+    className: "section fade-in",
+    children: /*#__PURE__*/_jsxDEV("div", {
+      className: "container",
+      children: /*#__PURE__*/_jsxDEV("div", {
+        className: "card",
+        style: {
+          padding: '20px 22px'
+        },
+        children: [/*#__PURE__*/_jsxDEV("h3", {
+          className: "rt-h3",
+          children: [/*#__PURE__*/_jsxDEV("span", {
+            className: "rt-hic",
+            children: "🏆"
+          }, void 0, false), "경쟁사 비교표 (상위 노출 80개 중)", /*#__PURE__*/_jsxDEV("span", {
+            className: "badge b-ok",
+            children: "✅ 실측"
+          }, void 0, false)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          className: "rt-desc",
+          children: "상위 노출 상품들의 핵심 지표를 비교합니다"
+        }, void 0, false), hasScore && /*#__PURE__*/_jsxDEV("div", {
+          style: {
+            marginBottom: 16,
+            padding: '14px 18px',
+            background: 'linear-gradient(135deg, #f0f9ff, #e0f2fe)',
+            borderRadius: 12,
+            border: '1px solid #bae6fd',
+            fontSize: 13,
+            color: '#0369a1',
+            lineHeight: 1.7
+          },
+          children: "💡 종합점수가 높을수록 네이버 쇼핑 노출 순위가 높아지는 경향이 있습니다. 상품명·가격·리뷰·판매실적 등 10개 지표를 가중 합산한 점수입니다."
+        }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+          className: "card",
+          style: {
+            padding: 0,
+            overflow: 'hidden',
+            borderRadius: 16
+          },
+          children: /*#__PURE__*/_jsxDEV("div", {
+            style: {
+              maxHeight: 580,
+              overflowY: 'auto'
+            },
+            children: /*#__PURE__*/_jsxDEV("table", {
+              className: "rt-table",
+              style: {
+                width: '100%',
+                borderCollapse: 'collapse',
+                minWidth: hasScore ? 900 : 800
+              },
+              children: [/*#__PURE__*/_jsxDEV("thead", {
+                children: /*#__PURE__*/_jsxDEV("tr", {
+                  children: [/*#__PURE__*/_jsxDEV("th", {
+                    style: {
+                      padding: '14px 16px',
+                      fontSize: 13,
+                      fontWeight: 600,
+                      textAlign: 'center',
+                      width: 50
+                    },
+                    children: "순위"
+                  }, void 0, false), hasScore && /*#__PURE__*/_jsxDEV("th", {
+                    style: {
+                      padding: '14px 16px',
+                      fontSize: 13,
+                      fontWeight: 600,
+                      textAlign: 'center',
+                      width: 70
+                    },
+                    children: "종합점수"
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                    style: {
+                      padding: '14px 16px',
+                      fontSize: 13,
+                      fontWeight: 600,
+                      textAlign: 'center',
+                      width: 50
+                    },
+                    children: "이미지"
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                    style: {
+                      padding: '14px 16px',
+                      fontSize: 13,
+                      fontWeight: 600,
+                      textAlign: 'left'
+                    },
+                    children: "상품명"
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                    style: {
+                      padding: '14px 16px',
+                      fontSize: 13,
+                      fontWeight: 600,
+                      textAlign: 'left',
+                      width: 90
+                    },
+                    children: "판매처"
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                    style: {
+                      padding: '14px 16px',
+                      fontSize: 13,
+                      fontWeight: 600,
+                      textAlign: 'left',
+                      width: 90
+                    },
+                    children: "브랜드"
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                    style: {
+                      padding: '14px 16px',
+                      fontSize: 13,
+                      fontWeight: 600,
+                      textAlign: 'right',
+                      width: 100
+                    },
+                    children: "가격"
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                    style: {
+                      padding: '14px 16px',
+                      fontSize: 13,
+                      fontWeight: 600,
+                      textAlign: 'left',
+                      width: 100
+                    },
+                    children: "카테고리"
+                  }, void 0, false)]
+                }, void 0, true)
+              }, void 0, false), /*#__PURE__*/_jsxDEV("tbody", {
+                children: items.map(function (comp, idx) {
+                  return /*#__PURE__*/_jsxDEV("tr", {
+                    style: {
+                      borderBottom: '1px solid #e2e8f0',
+                      background: idx % 2 === 0 ? '#fff' : '#f8fafc'
+                    },
+                    children: [/*#__PURE__*/_jsxDEV("td", {
+                      style: {
+                        padding: '14px 16px',
+                        textAlign: 'center'
+                      },
+                      children: comp.rank <= 3 ? /*#__PURE__*/_jsxDEV("span", {
+                        style: {
+                          fontSize: 14,
+                          fontWeight: 700,
+                          color: '#0f172a'
+                        },
+                        children: [medalEmoji[comp.rank - 1], comp.rank]
+                      }, void 0, true) : /*#__PURE__*/_jsxDEV("span", {
+                        style: {
+                          fontSize: 14,
+                          fontWeight: 700,
+                          color: '#64748b'
+                        },
+                        children: comp.rank
+                      }, void 0, false)
+                    }, void 0, false), hasScore && /*#__PURE__*/_jsxDEV("td", {
+                      style: {
+                        padding: '14px 16px',
+                        textAlign: 'center'
+                      },
+                      children: /*#__PURE__*/_jsxDEV("span", {
+                        style: {
+                          display: 'inline-block',
+                          padding: '4px 12px',
+                          borderRadius: 999,
+                          fontSize: 13,
+                          fontWeight: 700,
+                          color: scoreColor(comp.seoScore),
+                          background: scoreBg(comp.seoScore),
+                          border: '1px solid ' + scoreColor(comp.seoScore) + '33'
+                        },
+                        children: comp.seoScore
+                      }, void 0, false)
+                    }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                      style: {
+                        padding: '8px 16px',
+                        textAlign: 'center'
+                      },
+                      children: comp.image ? React.createElement('img', {
+                        src: comp.image,
+                        alt: '',
+                        style: {
+                          width: 44,
+                          height: 44,
+                          objectFit: 'cover',
+                          borderRadius: 8
+                        },
+                        onError: function (e) {
+                          e.target.style.display = 'none';
+                        }
+                      }) : React.createElement('span', {
+                        style: {
+                          color: '#d1d5db',
+                          fontSize: 22
+                        }
+                      }, '📦')
+                    }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                      style: {
+                        padding: '14px 16px',
+                        fontWeight: 500,
+                        fontSize: 14,
+                        color: '#0f172a',
+                        maxWidth: 220,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap'
+                      },
+                      children: comp.name
+                    }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                      style: {
+                        padding: '14px 16px',
+                        fontSize: 12,
+                        color: '#6b7280'
+                      },
+                      children: comp.store
+                    }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                      style: {
+                        padding: '14px 16px',
+                        fontSize: 12,
+                        color: '#6b7280'
+                      },
+                      children: comp.brand
+                    }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                      style: {
+                        padding: '14px 16px',
+                        textAlign: 'right',
+                        fontWeight: 600,
+                        fontSize: 14,
+                        color: '#0f172a'
+                      },
+                      children: comp.price
+                    }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                      style: {
+                        padding: '14px 16px',
+                        fontSize: 12,
+                        color: '#6b7280'
+                      },
+                      children: comp.category
+                    }, void 0, false)]
+                  }, idx, true);
+                })
+              }, void 0, false)]
+            }, void 0, true)
+          }, void 0, false)
+        }, void 0, false)]
+      }, void 0, true)
+    }, void 0, false)
+  }, void 0, false);
 };
 
 ;/* ===== js/components/EntryStrategySection.jsx ===== */
@@ -10878,6 +11790,7 @@ window.UserManagementPage = function UserManagementPage(props) {
 };
 
 ;/* ===== js/components/AiInsightsView.jsx ===== */
+import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";
 /* AiInsightsView — 광고주(업체) 누적 데이터 기반 AI 자기학습 인사이트 렌더러
  * ClientDashboard의 "AI 인사이트" 탭과 학습센터(LearningCenterPage)에서 공용으로 사용.
  * 렌더링은 ClientDashboard 인라인 블록과 동일(behavior-preserving). 숫자 포맷은 전역 fmt 사용. */
@@ -10887,943 +11800,1029 @@ window.AiInsightsView = function AiInsightsView({
   aiSelectedKeyword,
   setAiSelectedKeyword
 }) {
-  return /*#__PURE__*/React.createElement("div", null, aiLoading && /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      padding: 40,
-      textAlign: 'center'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 32,
-      marginBottom: 12
-    }
-  }, '🤖'), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 14,
-      color: '#64748b'
-    }
-  }, "AI \uC778\uC0AC\uC774\uD2B8\uB97C \uBD84\uC11D \uC911\uC785\uB2C8\uB2E4...")), !aiLoading && !aiInsights && /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      padding: 40,
-      textAlign: 'center',
-      color: '#94a3b8'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 32,
-      marginBottom: 12
-    }
-  }, '📊'), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 14,
-      fontWeight: 500
-    }
-  }, "\uC544\uC9C1 \uBD84\uC11D \uB370\uC774\uD130\uAC00 \uC5C6\uC5B4 AI \uC778\uC0AC\uC774\uD2B8\uB97C \uC0DD\uC131\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4."), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 13,
-      marginTop: 8
-    }
-  }, "\uBD84\uC11D\uC744 \uC2E4\uD589\uD558\uBA74 AI\uAC00 \uC790\uB3D9\uC73C\uB85C \uD559\uC2B5\uD558\uC5EC \uC778\uC0AC\uC774\uD2B8\uB97C \uC81C\uACF5\uD569\uB2C8\uB2E4.")), !aiLoading && aiInsights && /*#__PURE__*/React.createElement("div", null, aiInsights.performance && /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      padding: 20,
-      marginBottom: 16
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 16,
-      fontWeight: 700,
-      marginBottom: 16,
-      display: 'flex',
-      alignItems: 'center',
-      gap: 8
-    }
-  }, '📊', " \uC5C5\uCCB4 \uC131\uACFC \uD328\uD134", /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 11,
-      padding: '2px 8px',
-      borderRadius: 10,
-      fontWeight: 600,
-      background: aiInsights.performance.overallTrend === '상승세' ? '#dcfce7' : aiInsights.performance.overallTrend === '하락세' ? '#fee2e2' : '#f1f5f9',
-      color: aiInsights.performance.overallTrend === '상승세' ? '#16a34a' : aiInsights.performance.overallTrend === '하락세' ? '#dc2626' : '#64748b'
-    }
-  }, aiInsights.performance.overallTrend)), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      gap: 12,
-      flexWrap: 'wrap',
-      marginBottom: 16
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      flex: 1,
-      minWidth: 100,
-      background: '#f0fdf4',
-      borderRadius: 10,
-      padding: 14,
-      textAlign: 'center'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 11,
-      color: '#64748b'
-    }
-  }, "\uC0C1\uC2B9 \uD0A4\uC6CC\uB4DC"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 22,
-      fontWeight: 700,
-      color: '#16a34a'
-    }
-  }, aiInsights.performance.improving)), /*#__PURE__*/React.createElement("div", {
-    style: {
-      flex: 1,
-      minWidth: 100,
-      background: '#fee2e2',
-      borderRadius: 10,
-      padding: 14,
-      textAlign: 'center'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 11,
-      color: '#64748b'
-    }
-  }, "\uD558\uB77D \uD0A4\uC6CC\uB4DC"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 22,
-      fontWeight: 700,
-      color: '#dc2626'
-    }
-  }, aiInsights.performance.declining)), /*#__PURE__*/React.createElement("div", {
-    style: {
-      flex: 1,
-      minWidth: 100,
-      background: '#f1f5f9',
-      borderRadius: 10,
-      padding: 14,
-      textAlign: 'center'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 11,
-      color: '#64748b'
-    }
-  }, "\uC720\uC9C0 \uD0A4\uC6CC\uB4DC"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 22,
-      fontWeight: 700,
-      color: '#64748b'
-    }
-  }, aiInsights.performance.stable)), /*#__PURE__*/React.createElement("div", {
-    style: {
-      flex: 1,
-      minWidth: 100,
-      background: '#dbeafe',
-      borderRadius: 10,
-      padding: 14,
-      textAlign: 'center'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 11,
-      color: '#64748b'
-    }
-  }, "\uCD1D \uD0A4\uC6CC\uB4DC"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 22,
-      fontWeight: 700,
-      color: '#1e40af'
-    }
-  }, aiInsights.performance.totalKeywords))), aiInsights.performance.keywordSummaries && aiInsights.performance.keywordSummaries.length > 0 && /*#__PURE__*/React.createElement("div", {
-    className: "table-wrap",
-    style: {
-      overflowX: 'auto'
-    }
-  }, /*#__PURE__*/React.createElement("table", {
-    style: {
-      fontSize: 13,
-      whiteSpace: 'nowrap'
-    }
-  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "\uD0A4\uC6CC\uB4DC"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      textAlign: 'center'
-    }
-  }, "\uCD94\uC138"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      textAlign: 'right'
-    }
-  }, "\uCD08\uAE30 \uC21C\uC704"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      textAlign: 'right'
-    }
-  }, "\uD604\uC7AC \uC21C\uC704"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      textAlign: 'right'
-    }
-  }, "\uBCC0\uB3D9"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      textAlign: 'right'
-    }
-  }, "\uD3C9\uADE0 \uC21C\uC704"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      textAlign: 'right'
-    }
-  }, "\uB370\uC774\uD130"))), /*#__PURE__*/React.createElement("tbody", null, aiInsights.performance.keywordSummaries.map(function (s, i) {
-    var trendColor = s.trend === '상승' ? '#16a34a' : s.trend === '하락' ? '#dc2626' : '#64748b';
-    var trendBg = s.trend === '상승' ? '#dcfce7' : s.trend === '하락' ? '#fee2e2' : '#f1f5f9';
-    return /*#__PURE__*/React.createElement("tr", {
-      key: i
-    }, /*#__PURE__*/React.createElement("td", {
+  return /*#__PURE__*/_jsxDEV("div", {
+    children: [aiLoading && /*#__PURE__*/_jsxDEV("div", {
+      className: "card",
       style: {
-        fontWeight: 600
-      }
-    }, s.keyword), /*#__PURE__*/React.createElement("td", {
-      style: {
+        padding: 40,
         textAlign: 'center'
-      }
-    }, /*#__PURE__*/React.createElement("span", {
-      style: {
-        padding: '2px 8px',
-        borderRadius: 10,
-        fontSize: 11,
-        fontWeight: 600,
-        background: trendBg,
-        color: trendColor
-      }
-    }, s.trend)), /*#__PURE__*/React.createElement("td", {
-      style: {
-        textAlign: 'right'
-      }
-    }, s.firstRank, "\uC704"), /*#__PURE__*/React.createElement("td", {
-      style: {
-        textAlign: 'right',
-        fontWeight: 700
-      }
-    }, s.latestRank, "\uC704"), /*#__PURE__*/React.createElement("td", {
-      style: {
-        textAlign: 'right',
-        color: s.change > 0 ? '#16a34a' : s.change < 0 ? '#dc2626' : '#64748b',
-        fontWeight: 600
-      }
-    }, s.change > 0 ? '▲' + s.change : s.change < 0 ? '▼' + Math.abs(s.change) : '-'), /*#__PURE__*/React.createElement("td", {
-      style: {
-        textAlign: 'right'
-      }
-    }, s.avgRank, "\uC704"), /*#__PURE__*/React.createElement("td", {
-      style: {
-        textAlign: 'right',
-        color: '#94a3b8'
-      }
-    }, s.dataPoints, "\uAC74"));
-  })))), aiInsights.performance.advice && /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: 14,
-      padding: 12,
-      background: '#faf5ff',
-      borderRadius: 8,
-      fontSize: 13,
-      color: '#6b21a8',
-      lineHeight: 1.6
-    }
-  }, '💡', " ", aiInsights.performance.advice)), aiInsights.competitorAlerts && aiInsights.competitorAlerts.totalAlerts > 0 && /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      padding: 20,
-      marginBottom: 16
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 16,
-      fontWeight: 700,
-      marginBottom: 16,
-      display: 'flex',
-      alignItems: 'center',
-      gap: 8
-    }
-  }, '🚨', " \uACBD\uC7C1\uC0AC \uC774\uC0C1 \uAC10\uC9C0", aiInsights.competitorAlerts.dangerCount > 0 && /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 11,
-      padding: '2px 8px',
-      borderRadius: 10,
-      background: '#fee2e2',
-      color: '#dc2626',
-      fontWeight: 600
-    }
-  }, "\uC704\uD5D8 ", aiInsights.competitorAlerts.dangerCount, "\uAC74"), aiInsights.competitorAlerts.warningCount > 0 && /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 11,
-      padding: '2px 8px',
-      borderRadius: 10,
-      background: '#fef9c3',
-      color: '#ca8a04',
-      fontWeight: 600
-    }
-  }, "\uC8FC\uC758 ", aiInsights.competitorAlerts.warningCount, "\uAC74")), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 8
-    }
-  }, aiInsights.competitorAlerts.alerts.map(function (alert, i) {
-    var severityStyles = {
-      danger: {
-        bg: '#fef2f2',
-        border: '#fecaca',
-        color: '#991b1b',
-        icon: '🔴'
       },
-      warning: {
-        bg: '#fffbeb',
-        border: '#fde68a',
-        color: '#92400e',
-        icon: '🟡'
-      },
-      success: {
-        bg: '#f0fdf4',
-        border: '#bbf7d0',
-        color: '#166534',
-        icon: '🟢'
-      },
-      info: {
-        bg: '#eff6ff',
-        border: '#bfdbfe',
-        color: '#1e40af',
-        icon: '🔵'
-      }
-    };
-    var st = severityStyles[alert.severity] || severityStyles.info;
-    return /*#__PURE__*/React.createElement("div", {
-      key: i,
+      children: [/*#__PURE__*/_jsxDEV("div", {
+        style: {
+          fontSize: 32,
+          marginBottom: 12
+        },
+        children: '🤖'
+      }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+        style: {
+          fontSize: 14,
+          color: '#64748b'
+        },
+        children: "AI 인사이트를 분석 중입니다..."
+      }, void 0, false)]
+    }, void 0, true), !aiLoading && !aiInsights && /*#__PURE__*/_jsxDEV("div", {
+      className: "card",
       style: {
-        padding: '10px 14px',
-        background: st.bg,
-        border: '1px solid ' + st.border,
-        borderRadius: 8,
-        fontSize: 13
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center'
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        color: st.color,
-        fontWeight: 600
-      }
-    }, st.icon, " ", alert.message), /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 11,
-        color: '#94a3b8'
-      }
-    }, (alert.date || '').slice(0, 10))), alert.detail && /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 12,
-        color: '#64748b',
-        marginTop: 4
-      }
-    }, alert.detail));
-  }))), aiInsights.keywordRecommendations && aiInsights.keywordRecommendations.topRecommended && aiInsights.keywordRecommendations.topRecommended.length > 0 && /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      padding: 20,
-      marginBottom: 16
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 16,
-      fontWeight: 700,
-      marginBottom: 16,
-      display: 'flex',
-      alignItems: 'center',
-      gap: 8
-    }
-  }, '🔍', " \uD0A4\uC6CC\uB4DC \uBC1C\uAD74 \uCD94\uCC9C", /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 11,
-      color: '#94a3b8',
-      fontWeight: 400
-    }
-  }, "\uAE30\uC874 ", aiInsights.keywordRecommendations.existingCount, "\uAC1C \uD0A4\uC6CC\uB4DC\uC5D0\uC11C ", aiInsights.keywordRecommendations.candidateCount, "\uAC1C \uD6C4\uBCF4 \uBC1C\uAD74")), /*#__PURE__*/React.createElement("div", {
-    className: "table-wrap",
-    style: {
-      overflowX: 'auto'
-    }
-  }, /*#__PURE__*/React.createElement("table", {
-    style: {
-      fontSize: 13,
-      whiteSpace: 'nowrap'
-    }
-  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "\uCD94\uCC9C \uD0A4\uC6CC\uB4DC"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      textAlign: 'right'
-    }
-  }, "\uC6D4\uAC04 \uAC80\uC0C9\uB7C9"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      textAlign: 'right'
-    }
-  }, "\uC5F0\uAD00 \uB4F1\uC7A5"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      textAlign: 'right'
-    }
-  }, "\uCD94\uCC9C \uC810\uC218"))), /*#__PURE__*/React.createElement("tbody", null, aiInsights.keywordRecommendations.topRecommended.map(function (kw, i) {
-    return /*#__PURE__*/React.createElement("tr", {
-      key: i
-    }, /*#__PURE__*/React.createElement("td", {
-      style: {
-        fontWeight: 600
-      }
-    }, kw.keyword), /*#__PURE__*/React.createElement("td", {
-      style: {
-        textAlign: 'right'
-      }
-    }, fmt(kw.volume)), /*#__PURE__*/React.createElement("td", {
-      style: {
-        textAlign: 'right'
-      }
-    }, kw.appearances, "\uD68C"), /*#__PURE__*/React.createElement("td", {
-      style: {
-        textAlign: 'right'
-      }
-    }, /*#__PURE__*/React.createElement("span", {
-      style: {
-        padding: '2px 8px',
-        borderRadius: 10,
-        fontSize: 11,
-        fontWeight: 600,
-        background: kw.score >= 5 ? '#dcfce7' : kw.score >= 2 ? '#fef9c3' : '#f1f5f9',
-        color: kw.score >= 5 ? '#16a34a' : kw.score >= 2 ? '#ca8a04' : '#64748b'
-      }
-    }, kw.score)));
-  }))))), aiInsights.keywordInsights && Object.keys(aiInsights.keywordInsights).length > 0 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      gap: 8,
-      flexWrap: 'wrap',
-      marginBottom: 16
-    }
-  }, Object.keys(aiInsights.keywordInsights).map(function (kw) {
-    var isActive = aiSelectedKeyword === kw;
-    return /*#__PURE__*/React.createElement("button", {
-      key: kw,
-      onClick: function () {
-        setAiSelectedKeyword(kw);
-      },
-      style: {
-        padding: '6px 14px',
-        borderRadius: 20,
-        cursor: 'pointer',
-        fontSize: 12,
-        background: isActive ? '#7C3AED' : '#f5f3ff',
-        color: isActive ? '#fff' : '#7C3AED',
-        border: isActive ? '1px solid #7C3AED' : '1px solid #DDD6FE'
-      }
-    }, '🔑', " ", kw);
-  })), aiSelectedKeyword && aiInsights.keywordInsights[aiSelectedKeyword] && function () {
-    var kwData = aiInsights.keywordInsights[aiSelectedKeyword];
-    return React.createElement('div', null, /* ⑧ 순위 예측 */
-    kwData.rankPrediction && React.createElement('div', {
-      className: 'card',
-      style: {
-        padding: 20,
-        marginBottom: 16
-      }
-    }, React.createElement('div', {
-      style: {
-        fontSize: 16,
-        fontWeight: 700,
-        marginBottom: 16
-      }
-    }, '🔮 순위 예측 — "' + aiSelectedKeyword + '"'), kwData.rankPrediction.ready === false ? React.createElement('div', {
-      style: {
+        padding: 40,
         textAlign: 'center',
-        padding: 20,
-        color: '#94a3b8',
-        fontSize: 13
-      }
-    }, kwData.rankPrediction.message) : React.createElement('div', null, React.createElement('div', {
-      style: {
-        display: 'flex',
-        gap: 12,
-        flexWrap: 'wrap',
-        marginBottom: 16
-      }
-    }, React.createElement('div', {
-      style: {
-        flex: 1,
-        minWidth: 110,
-        background: '#f1f5f9',
-        borderRadius: 10,
-        padding: 14,
-        textAlign: 'center'
-      }
-    }, React.createElement('div', {
-      style: {
-        fontSize: 11,
-        color: '#64748b'
-      }
-    }, '현재 순위'), React.createElement('div', {
-      style: {
-        fontSize: 22,
-        fontWeight: 700
-      }
-    }, kwData.rankPrediction.currentRank + '위')), React.createElement('div', {
-      style: {
-        flex: 1,
-        minWidth: 110,
-        background: '#dbeafe',
-        borderRadius: 10,
-        padding: 14,
-        textAlign: 'center'
-      }
-    }, React.createElement('div', {
-      style: {
-        fontSize: 11,
-        color: '#64748b'
-      }
-    }, '7일 후 예측'), React.createElement('div', {
-      style: {
-        fontSize: 22,
-        fontWeight: 700,
-        color: '#1e40af'
-      }
-    }, kwData.rankPrediction.predicted7d + '위')), React.createElement('div', {
-      style: {
-        flex: 1,
-        minWidth: 110,
-        background: '#ede9fe',
-        borderRadius: 10,
-        padding: 14,
-        textAlign: 'center'
-      }
-    }, React.createElement('div', {
-      style: {
-        fontSize: 11,
-        color: '#64748b'
-      }
-    }, '14일 후 예측'), React.createElement('div', {
-      style: {
-        fontSize: 22,
-        fontWeight: 700,
-        color: '#6d28d9'
-      }
-    }, kwData.rankPrediction.predicted14d + '위')), React.createElement('div', {
-      style: {
-        flex: 1,
-        minWidth: 110,
-        background: '#faf5ff',
-        borderRadius: 10,
-        padding: 14,
-        textAlign: 'center'
-      }
-    }, React.createElement('div', {
-      style: {
-        fontSize: 11,
-        color: '#64748b'
-      }
-    }, '30일 후 예측'), React.createElement('div', {
-      style: {
-        fontSize: 22,
-        fontWeight: 700,
-        color: '#9333ea'
-      }
-    }, kwData.rankPrediction.predicted30d + '위'))), React.createElement('div', {
-      style: {
-        display: 'flex',
-        gap: 16,
-        flexWrap: 'wrap',
-        fontSize: 13,
-        color: '#475569'
-      }
-    }, React.createElement('span', null, '추세: ', React.createElement('strong', {
-      style: {
-        color: kwData.rankPrediction.trend === '상승' ? '#16a34a' : kwData.rankPrediction.trend === '하락' ? '#dc2626' : '#64748b'
-      }
-    }, kwData.rankPrediction.trend)), React.createElement('span', null, '신뢰도: ', React.createElement('strong', null, kwData.rankPrediction.confidence, ' (R²=', kwData.rankPrediction.rSquared, ')')), React.createElement('span', null, '데이터: ', React.createElement('strong', null, kwData.rankPrediction.dataPoints, '건'))), React.createElement('div', {
-      style: {
-        marginTop: 10,
-        padding: 10,
-        background: '#f8fafc',
-        borderRadius: 8,
-        fontSize: 12,
-        color: '#64748b'
-      }
-    }, kwData.rankPrediction.trendDesc))), /* ① 가격 최적화 */
-    kwData.priceOptimization && React.createElement('div', {
-      className: 'card',
-      style: {
-        padding: 20,
-        marginBottom: 16
-      }
-    }, React.createElement('div', {
-      style: {
-        fontSize: 16,
-        fontWeight: 700,
-        marginBottom: 16
-      }
-    }, '💰 가격 최적화 — "' + aiSelectedKeyword + '"'), React.createElement('div', {
-      style: {
-        display: 'flex',
-        gap: 12,
-        flexWrap: 'wrap',
-        marginBottom: 16
-      }
-    }, React.createElement('div', {
-      style: {
-        flex: 1,
-        minWidth: 130,
-        background: '#f0fdf4',
-        borderRadius: 10,
-        padding: 14,
-        textAlign: 'center'
-      }
-    }, React.createElement('div', {
-      style: {
-        fontSize: 11,
-        color: '#64748b'
-      }
-    }, '추천 가격대'), React.createElement('div', {
-      style: {
-        fontSize: 16,
-        fontWeight: 700,
-        color: '#16a34a'
-      }
-    }, fmt(kwData.priceOptimization.recommendedRange.low) + ' ~ ' + fmt(kwData.priceOptimization.recommendedRange.high) + '원')), React.createElement('div', {
-      style: {
-        flex: 1,
-        minWidth: 100,
-        background: '#eff6ff',
-        borderRadius: 10,
-        padding: 14,
-        textAlign: 'center'
-      }
-    }, React.createElement('div', {
-      style: {
-        fontSize: 11,
-        color: '#64748b'
-      }
-    }, '상위5 평균'), React.createElement('div', {
-      style: {
-        fontSize: 16,
-        fontWeight: 700
-      }
-    }, fmt(kwData.priceOptimization.avgTop5) + '원')), React.createElement('div', {
-      style: {
-        flex: 1,
-        minWidth: 100,
-        background: '#f1f5f9',
-        borderRadius: 10,
-        padding: 14,
-        textAlign: 'center'
-      }
-    }, React.createElement('div', {
-      style: {
-        fontSize: 11,
-        color: '#64748b'
-      }
-    }, '중위 가격'), React.createElement('div', {
-      style: {
-        fontSize: 16,
-        fontWeight: 700
-      }
-    }, fmt(kwData.priceOptimization.median) + '원'))), React.createElement('div', {
-      style: {
-        padding: 12,
-        background: '#faf5ff',
-        borderRadius: 8,
-        fontSize: 13,
-        color: '#6b21a8'
-      }
-    }, '💡 전략: ', React.createElement('strong', null, kwData.priceOptimization.strategy), ' — ', kwData.priceOptimization.strategyDesc)), /* ④ 광고 효율 */
-    kwData.adEfficiency && React.createElement('div', {
-      className: 'card',
-      style: {
-        padding: 20,
-        marginBottom: 16
-      }
-    }, React.createElement('div', {
-      style: {
-        fontSize: 16,
-        fontWeight: 700,
-        marginBottom: 16,
-        display: 'flex',
-        alignItems: 'center',
-        gap: 10
-      }
-    }, '📣 광고 효율 — "' + aiSelectedKeyword + '"', React.createElement('span', {
-      style: {
-        fontSize: 14,
-        padding: '2px 10px',
-        borderRadius: 10,
-        fontWeight: 700,
-        background: kwData.adEfficiency.grade === 'A' ? '#dcfce7' : kwData.adEfficiency.grade === 'B' ? '#dbeafe' : kwData.adEfficiency.grade === 'C' ? '#fef9c3' : '#fee2e2',
-        color: kwData.adEfficiency.grade === 'A' ? '#16a34a' : kwData.adEfficiency.grade === 'B' ? '#1e40af' : kwData.adEfficiency.grade === 'C' ? '#ca8a04' : '#dc2626'
-      }
-    }, kwData.adEfficiency.grade + '등급')), React.createElement('div', {
-      style: {
-        display: 'flex',
-        gap: 12,
-        flexWrap: 'wrap',
-        marginBottom: 16
-      }
-    }, React.createElement('div', {
-      style: {
-        flex: 1,
-        minWidth: 100,
-        background: '#f8fafc',
-        borderRadius: 10,
-        padding: 14,
-        textAlign: 'center'
-      }
-    }, React.createElement('div', {
-      style: {
-        fontSize: 11,
-        color: '#64748b'
-      }
-    }, '효율 점수'), React.createElement('div', {
-      style: {
-        fontSize: 28,
-        fontWeight: 700,
-        color: kwData.adEfficiency.efficiencyScore >= 70 ? '#16a34a' : kwData.adEfficiency.efficiencyScore >= 40 ? '#ca8a04' : '#dc2626'
-      }
-    }, kwData.adEfficiency.efficiencyScore)), React.createElement('div', {
-      style: {
-        flex: 1,
-        minWidth: 100,
-        background: '#f8fafc',
-        borderRadius: 10,
-        padding: 14,
-        textAlign: 'center'
-      }
-    }, React.createElement('div', {
-      style: {
-        fontSize: 11,
-        color: '#64748b'
-      }
-    }, '검색량'), React.createElement('div', {
-      style: {
-        fontSize: 16,
-        fontWeight: 700
-      }
-    }, fmt(kwData.adEfficiency.totalVolume))), React.createElement('div', {
-      style: {
-        flex: 1,
-        minWidth: 100,
-        background: '#f8fafc',
-        borderRadius: 10,
-        padding: 14,
-        textAlign: 'center'
-      }
-    }, React.createElement('div', {
-      style: {
-        fontSize: 11,
-        color: '#64748b'
-      }
-    }, 'CTR'), React.createElement('div', {
-      style: {
-        fontSize: 16,
-        fontWeight: 700
-      }
-    }, kwData.adEfficiency.ctr + '%')), React.createElement('div', {
-      style: {
-        flex: 1,
-        minWidth: 100,
-        background: '#f8fafc',
-        borderRadius: 10,
-        padding: 14,
-        textAlign: 'center'
-      }
-    }, React.createElement('div', {
-      style: {
-        fontSize: 11,
-        color: '#64748b'
-      }
-    }, '현재 순위'), React.createElement('div', {
-      style: {
-        fontSize: 16,
-        fontWeight: 700
-      }
-    }, kwData.adEfficiency.currentRank ? kwData.adEfficiency.currentRank + '위' : '미측정'))), React.createElement('div', {
-      style: {
-        padding: 12,
-        background: '#faf5ff',
-        borderRadius: 8,
-        fontSize: 13,
-        color: '#6b21a8'
-      }
-    }, '💡 ' + kwData.adEfficiency.advice)), /* ⑤ 최적 등록 타이밍 */
-    kwData.optimalTiming && React.createElement('div', {
-      className: 'card',
-      style: {
-        padding: 20,
-        marginBottom: 16
-      }
-    }, React.createElement('div', {
-      style: {
-        fontSize: 16,
-        fontWeight: 700,
-        marginBottom: 16
-      }
-    }, '⏰ 최적 등록 타이밍 — "' + aiSelectedKeyword + '"'), kwData.optimalTiming.ready === false ? React.createElement('div', {
-      style: {
-        textAlign: 'center',
-        padding: 20,
-        color: '#94a3b8',
-        fontSize: 13
-      }
-    }, kwData.optimalTiming.message) : React.createElement('div', null, /* 요일별 막대 */
-    kwData.optimalTiming.weekdayData && React.createElement('div', {
-      style: {
-        display: 'flex',
-        gap: 6,
-        alignItems: 'flex-end',
-        height: 120,
-        marginBottom: 16
-      }
-    }, kwData.optimalTiming.weekdayData.map(function (d) {
-      var maxRank = Math.max.apply(null, kwData.optimalTiming.weekdayData.map(function (x) {
-        return x.avgRank;
-      }));
-      var barH = maxRank > 0 ? Math.max(20, d.avgRank / maxRank * 100) : 40;
-      return React.createElement('div', {
-        key: d.day,
-        style: {
-          flex: 1,
-          textAlign: 'center'
-        }
-      }, React.createElement('div', {
-        style: {
-          fontSize: 11,
-          fontWeight: 600,
-          marginBottom: 4,
-          color: d.isBest ? '#16a34a' : d.isWorst ? '#dc2626' : '#64748b'
-        }
-      }, d.avgRank + '위'), React.createElement('div', {
-        style: {
-          height: barH,
-          borderRadius: '6px 6px 0 0',
-          margin: '0 auto',
-          width: '70%',
-          background: d.isBest ? '#22c55e' : d.isWorst ? '#ef4444' : '#94a3b8'
-        }
-      }), React.createElement('div', {
-        style: {
-          fontSize: 12,
-          fontWeight: 600,
-          marginTop: 6,
-          color: d.isBest ? '#16a34a' : d.isWorst ? '#dc2626' : '#334155'
-        }
-      }, d.day));
-    })), React.createElement('div', {
-      style: {
-        padding: 12,
-        background: '#faf5ff',
-        borderRadius: 8,
-        fontSize: 13,
-        color: '#6b21a8'
-      }
-    }, '💡 ' + kwData.optimalTiming.advice))), /* ③ 리뷰 감성 */
-    kwData.reviewSentiment && React.createElement('div', {
-      className: 'card',
-      style: {
-        padding: 20,
-        marginBottom: 16
-      }
-    }, React.createElement('div', {
-      style: {
-        fontSize: 16,
-        fontWeight: 700,
-        marginBottom: 16
-      }
-    }, '💬 리뷰 감성 분석 — "' + aiSelectedKeyword + '"'), kwData.reviewSentiment.alert && React.createElement('div', {
-      style: {
-        marginBottom: 12,
-        padding: 10,
-        borderRadius: 8,
-        fontSize: 13,
-        background: kwData.reviewSentiment.alert.indexOf('급증') !== -1 ? '#fee2e2' : '#dcfce7',
-        color: kwData.reviewSentiment.alert.indexOf('급증') !== -1 ? '#991b1b' : '#166534'
-      }
-    }, '⚠️ ' + kwData.reviewSentiment.alert), kwData.reviewSentiment.latest && React.createElement('div', {
-      style: {
-        display: 'flex',
-        gap: 12,
-        flexWrap: 'wrap',
-        marginBottom: 12
-      }
-    }, React.createElement('div', {
-      style: {
-        flex: 1,
-        minWidth: 100,
-        background: '#dcfce7',
-        borderRadius: 10,
-        padding: 12,
-        textAlign: 'center'
-      }
-    }, React.createElement('div', {
-      style: {
-        fontSize: 11,
-        color: '#64748b'
-      }
-    }, '긍정'), React.createElement('div', {
-      style: {
-        fontSize: 18,
-        fontWeight: 700,
-        color: '#16a34a'
-      }
-    }, kwData.reviewSentiment.latest.positiveRate + '%')), React.createElement('div', {
-      style: {
-        flex: 1,
-        minWidth: 100,
-        background: '#fee2e2',
-        borderRadius: 10,
-        padding: 12,
-        textAlign: 'center'
-      }
-    }, React.createElement('div', {
-      style: {
-        fontSize: 11,
-        color: '#64748b'
-      }
-    }, '부정'), React.createElement('div', {
-      style: {
-        fontSize: 18,
-        fontWeight: 700,
-        color: '#dc2626'
-      }
-    }, kwData.reviewSentiment.latest.negativeRate + '%')), React.createElement('div', {
-      style: {
-        flex: 1,
-        minWidth: 100,
-        background: '#f1f5f9',
-        borderRadius: 10,
-        padding: 12,
-        textAlign: 'center'
-      }
-    }, React.createElement('div', {
-      style: {
-        fontSize: 11,
-        color: '#64748b'
-      }
-    }, '중립'), React.createElement('div', {
-      style: {
-        fontSize: 18,
-        fontWeight: 700,
-        color: '#64748b'
-      }
-    }, (100 - kwData.reviewSentiment.latest.positiveRate - kwData.reviewSentiment.latest.negativeRate).toFixed(1) + '%'))), React.createElement('div', {
-      style: {
-        fontSize: 12,
         color: '#94a3b8'
-      }
-    }, '분석 데이터: ' + kwData.reviewSentiment.dataPoints + '건')));
-  }())));
+      },
+      children: [/*#__PURE__*/_jsxDEV("div", {
+        style: {
+          fontSize: 32,
+          marginBottom: 12
+        },
+        children: '📊'
+      }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+        style: {
+          fontSize: 14,
+          fontWeight: 500
+        },
+        children: "아직 분석 데이터가 없어 AI 인사이트를 생성할 수 없습니다."
+      }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+        style: {
+          fontSize: 13,
+          marginTop: 8
+        },
+        children: "분석을 실행하면 AI가 자동으로 학습하여 인사이트를 제공합니다."
+      }, void 0, false)]
+    }, void 0, true), !aiLoading && aiInsights && /*#__PURE__*/_jsxDEV("div", {
+      children: [aiInsights.performance && /*#__PURE__*/_jsxDEV("div", {
+        className: "card",
+        style: {
+          padding: 20,
+          marginBottom: 16
+        },
+        children: [/*#__PURE__*/_jsxDEV("div", {
+          style: {
+            fontSize: 16,
+            fontWeight: 700,
+            marginBottom: 16,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8
+          },
+          children: ['📊', " 업체 성과 패턴", /*#__PURE__*/_jsxDEV("span", {
+            style: {
+              fontSize: 11,
+              padding: '2px 8px',
+              borderRadius: 10,
+              fontWeight: 600,
+              background: aiInsights.performance.overallTrend === '상승세' ? '#dcfce7' : aiInsights.performance.overallTrend === '하락세' ? '#fee2e2' : '#f1f5f9',
+              color: aiInsights.performance.overallTrend === '상승세' ? '#16a34a' : aiInsights.performance.overallTrend === '하락세' ? '#dc2626' : '#64748b'
+            },
+            children: aiInsights.performance.overallTrend
+          }, void 0, false)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          style: {
+            display: 'flex',
+            gap: 12,
+            flexWrap: 'wrap',
+            marginBottom: 16
+          },
+          children: [/*#__PURE__*/_jsxDEV("div", {
+            style: {
+              flex: 1,
+              minWidth: 100,
+              background: '#f0fdf4',
+              borderRadius: 10,
+              padding: 14,
+              textAlign: 'center'
+            },
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              style: {
+                fontSize: 11,
+                color: '#64748b'
+              },
+              children: "상승 키워드"
+            }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+              style: {
+                fontSize: 22,
+                fontWeight: 700,
+                color: '#16a34a'
+              },
+              children: aiInsights.performance.improving
+            }, void 0, false)]
+          }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+            style: {
+              flex: 1,
+              minWidth: 100,
+              background: '#fee2e2',
+              borderRadius: 10,
+              padding: 14,
+              textAlign: 'center'
+            },
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              style: {
+                fontSize: 11,
+                color: '#64748b'
+              },
+              children: "하락 키워드"
+            }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+              style: {
+                fontSize: 22,
+                fontWeight: 700,
+                color: '#dc2626'
+              },
+              children: aiInsights.performance.declining
+            }, void 0, false)]
+          }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+            style: {
+              flex: 1,
+              minWidth: 100,
+              background: '#f1f5f9',
+              borderRadius: 10,
+              padding: 14,
+              textAlign: 'center'
+            },
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              style: {
+                fontSize: 11,
+                color: '#64748b'
+              },
+              children: "유지 키워드"
+            }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+              style: {
+                fontSize: 22,
+                fontWeight: 700,
+                color: '#64748b'
+              },
+              children: aiInsights.performance.stable
+            }, void 0, false)]
+          }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+            style: {
+              flex: 1,
+              minWidth: 100,
+              background: '#dbeafe',
+              borderRadius: 10,
+              padding: 14,
+              textAlign: 'center'
+            },
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              style: {
+                fontSize: 11,
+                color: '#64748b'
+              },
+              children: "총 키워드"
+            }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+              style: {
+                fontSize: 22,
+                fontWeight: 700,
+                color: '#1e40af'
+              },
+              children: aiInsights.performance.totalKeywords
+            }, void 0, false)]
+          }, void 0, true)]
+        }, void 0, true), aiInsights.performance.keywordSummaries && aiInsights.performance.keywordSummaries.length > 0 && /*#__PURE__*/_jsxDEV("div", {
+          className: "table-wrap",
+          style: {
+            overflowX: 'auto'
+          },
+          children: /*#__PURE__*/_jsxDEV("table", {
+            style: {
+              fontSize: 13,
+              whiteSpace: 'nowrap'
+            },
+            children: [/*#__PURE__*/_jsxDEV("thead", {
+              children: /*#__PURE__*/_jsxDEV("tr", {
+                children: [/*#__PURE__*/_jsxDEV("th", {
+                  children: "키워드"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                  style: {
+                    textAlign: 'center'
+                  },
+                  children: "추세"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                  style: {
+                    textAlign: 'right'
+                  },
+                  children: "초기 순위"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                  style: {
+                    textAlign: 'right'
+                  },
+                  children: "현재 순위"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                  style: {
+                    textAlign: 'right'
+                  },
+                  children: "변동"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                  style: {
+                    textAlign: 'right'
+                  },
+                  children: "평균 순위"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                  style: {
+                    textAlign: 'right'
+                  },
+                  children: "데이터"
+                }, void 0, false)]
+              }, void 0, true)
+            }, void 0, false), /*#__PURE__*/_jsxDEV("tbody", {
+              children: aiInsights.performance.keywordSummaries.map(function (s, i) {
+                var trendColor = s.trend === '상승' ? '#16a34a' : s.trend === '하락' ? '#dc2626' : '#64748b';
+                var trendBg = s.trend === '상승' ? '#dcfce7' : s.trend === '하락' ? '#fee2e2' : '#f1f5f9';
+                return /*#__PURE__*/_jsxDEV("tr", {
+                  children: [/*#__PURE__*/_jsxDEV("td", {
+                    style: {
+                      fontWeight: 600
+                    },
+                    children: s.keyword
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                    style: {
+                      textAlign: 'center'
+                    },
+                    children: /*#__PURE__*/_jsxDEV("span", {
+                      style: {
+                        padding: '2px 8px',
+                        borderRadius: 10,
+                        fontSize: 11,
+                        fontWeight: 600,
+                        background: trendBg,
+                        color: trendColor
+                      },
+                      children: s.trend
+                    }, void 0, false)
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                    style: {
+                      textAlign: 'right'
+                    },
+                    children: [s.firstRank, "위"]
+                  }, void 0, true), /*#__PURE__*/_jsxDEV("td", {
+                    style: {
+                      textAlign: 'right',
+                      fontWeight: 700
+                    },
+                    children: [s.latestRank, "위"]
+                  }, void 0, true), /*#__PURE__*/_jsxDEV("td", {
+                    style: {
+                      textAlign: 'right',
+                      color: s.change > 0 ? '#16a34a' : s.change < 0 ? '#dc2626' : '#64748b',
+                      fontWeight: 600
+                    },
+                    children: s.change > 0 ? '▲' + s.change : s.change < 0 ? '▼' + Math.abs(s.change) : '-'
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                    style: {
+                      textAlign: 'right'
+                    },
+                    children: [s.avgRank, "위"]
+                  }, void 0, true), /*#__PURE__*/_jsxDEV("td", {
+                    style: {
+                      textAlign: 'right',
+                      color: '#94a3b8'
+                    },
+                    children: [s.dataPoints, "건"]
+                  }, void 0, true)]
+                }, i, true);
+              })
+            }, void 0, false)]
+          }, void 0, true)
+        }, void 0, false), aiInsights.performance.advice && /*#__PURE__*/_jsxDEV("div", {
+          style: {
+            marginTop: 14,
+            padding: 12,
+            background: '#faf5ff',
+            borderRadius: 8,
+            fontSize: 13,
+            color: '#6b21a8',
+            lineHeight: 1.6
+          },
+          children: ['💡', " ", aiInsights.performance.advice]
+        }, void 0, true)]
+      }, void 0, true), aiInsights.competitorAlerts && aiInsights.competitorAlerts.totalAlerts > 0 && /*#__PURE__*/_jsxDEV("div", {
+        className: "card",
+        style: {
+          padding: 20,
+          marginBottom: 16
+        },
+        children: [/*#__PURE__*/_jsxDEV("div", {
+          style: {
+            fontSize: 16,
+            fontWeight: 700,
+            marginBottom: 16,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8
+          },
+          children: ['🚨', " 경쟁사 이상 감지", aiInsights.competitorAlerts.dangerCount > 0 && /*#__PURE__*/_jsxDEV("span", {
+            style: {
+              fontSize: 11,
+              padding: '2px 8px',
+              borderRadius: 10,
+              background: '#fee2e2',
+              color: '#dc2626',
+              fontWeight: 600
+            },
+            children: ["위험 ", aiInsights.competitorAlerts.dangerCount, "건"]
+          }, void 0, true), aiInsights.competitorAlerts.warningCount > 0 && /*#__PURE__*/_jsxDEV("span", {
+            style: {
+              fontSize: 11,
+              padding: '2px 8px',
+              borderRadius: 10,
+              background: '#fef9c3',
+              color: '#ca8a04',
+              fontWeight: 600
+            },
+            children: ["주의 ", aiInsights.competitorAlerts.warningCount, "건"]
+          }, void 0, true)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          style: {
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 8
+          },
+          children: aiInsights.competitorAlerts.alerts.map(function (alert, i) {
+            var severityStyles = {
+              danger: {
+                bg: '#fef2f2',
+                border: '#fecaca',
+                color: '#991b1b',
+                icon: '🔴'
+              },
+              warning: {
+                bg: '#fffbeb',
+                border: '#fde68a',
+                color: '#92400e',
+                icon: '🟡'
+              },
+              success: {
+                bg: '#f0fdf4',
+                border: '#bbf7d0',
+                color: '#166534',
+                icon: '🟢'
+              },
+              info: {
+                bg: '#eff6ff',
+                border: '#bfdbfe',
+                color: '#1e40af',
+                icon: '🔵'
+              }
+            };
+            var st = severityStyles[alert.severity] || severityStyles.info;
+            return /*#__PURE__*/_jsxDEV("div", {
+              style: {
+                padding: '10px 14px',
+                background: st.bg,
+                border: '1px solid ' + st.border,
+                borderRadius: 8,
+                fontSize: 13
+              },
+              children: [/*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center'
+                },
+                children: [/*#__PURE__*/_jsxDEV("div", {
+                  style: {
+                    color: st.color,
+                    fontWeight: 600
+                  },
+                  children: [st.icon, " ", alert.message]
+                }, void 0, true), /*#__PURE__*/_jsxDEV("span", {
+                  style: {
+                    fontSize: 11,
+                    color: '#94a3b8'
+                  },
+                  children: (alert.date || '').slice(0, 10)
+                }, void 0, false)]
+              }, void 0, true), alert.detail && /*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  fontSize: 12,
+                  color: '#64748b',
+                  marginTop: 4
+                },
+                children: alert.detail
+              }, void 0, false)]
+            }, i, true);
+          })
+        }, void 0, false)]
+      }, void 0, true), aiInsights.keywordRecommendations && aiInsights.keywordRecommendations.topRecommended && aiInsights.keywordRecommendations.topRecommended.length > 0 && /*#__PURE__*/_jsxDEV("div", {
+        className: "card",
+        style: {
+          padding: 20,
+          marginBottom: 16
+        },
+        children: [/*#__PURE__*/_jsxDEV("div", {
+          style: {
+            fontSize: 16,
+            fontWeight: 700,
+            marginBottom: 16,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8
+          },
+          children: ['🔍', " 키워드 발굴 추천", /*#__PURE__*/_jsxDEV("span", {
+            style: {
+              fontSize: 11,
+              color: '#94a3b8',
+              fontWeight: 400
+            },
+            children: ["기존 ", aiInsights.keywordRecommendations.existingCount, "개 키워드에서 ", aiInsights.keywordRecommendations.candidateCount, "개 후보 발굴"]
+          }, void 0, true)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          className: "table-wrap",
+          style: {
+            overflowX: 'auto'
+          },
+          children: /*#__PURE__*/_jsxDEV("table", {
+            style: {
+              fontSize: 13,
+              whiteSpace: 'nowrap'
+            },
+            children: [/*#__PURE__*/_jsxDEV("thead", {
+              children: /*#__PURE__*/_jsxDEV("tr", {
+                children: [/*#__PURE__*/_jsxDEV("th", {
+                  children: "추천 키워드"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                  style: {
+                    textAlign: 'right'
+                  },
+                  children: "월간 검색량"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                  style: {
+                    textAlign: 'right'
+                  },
+                  children: "연관 등장"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                  style: {
+                    textAlign: 'right'
+                  },
+                  children: "추천 점수"
+                }, void 0, false)]
+              }, void 0, true)
+            }, void 0, false), /*#__PURE__*/_jsxDEV("tbody", {
+              children: aiInsights.keywordRecommendations.topRecommended.map(function (kw, i) {
+                return /*#__PURE__*/_jsxDEV("tr", {
+                  children: [/*#__PURE__*/_jsxDEV("td", {
+                    style: {
+                      fontWeight: 600
+                    },
+                    children: kw.keyword
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                    style: {
+                      textAlign: 'right'
+                    },
+                    children: fmt(kw.volume)
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                    style: {
+                      textAlign: 'right'
+                    },
+                    children: [kw.appearances, "회"]
+                  }, void 0, true), /*#__PURE__*/_jsxDEV("td", {
+                    style: {
+                      textAlign: 'right'
+                    },
+                    children: /*#__PURE__*/_jsxDEV("span", {
+                      style: {
+                        padding: '2px 8px',
+                        borderRadius: 10,
+                        fontSize: 11,
+                        fontWeight: 600,
+                        background: kw.score >= 5 ? '#dcfce7' : kw.score >= 2 ? '#fef9c3' : '#f1f5f9',
+                        color: kw.score >= 5 ? '#16a34a' : kw.score >= 2 ? '#ca8a04' : '#64748b'
+                      },
+                      children: kw.score
+                    }, void 0, false)
+                  }, void 0, false)]
+                }, i, true);
+              })
+            }, void 0, false)]
+          }, void 0, true)
+        }, void 0, false)]
+      }, void 0, true), aiInsights.keywordInsights && Object.keys(aiInsights.keywordInsights).length > 0 && /*#__PURE__*/_jsxDEV("div", {
+        children: [/*#__PURE__*/_jsxDEV("div", {
+          style: {
+            display: 'flex',
+            gap: 8,
+            flexWrap: 'wrap',
+            marginBottom: 16
+          },
+          children: Object.keys(aiInsights.keywordInsights).map(function (kw) {
+            var isActive = aiSelectedKeyword === kw;
+            return /*#__PURE__*/_jsxDEV("button", {
+              onClick: function () {
+                setAiSelectedKeyword(kw);
+              },
+              style: {
+                padding: '6px 14px',
+                borderRadius: 20,
+                cursor: 'pointer',
+                fontSize: 12,
+                background: isActive ? '#7C3AED' : '#f5f3ff',
+                color: isActive ? '#fff' : '#7C3AED',
+                border: isActive ? '1px solid #7C3AED' : '1px solid #DDD6FE'
+              },
+              children: ['🔑', " ", kw]
+            }, kw, true);
+          })
+        }, void 0, false), aiSelectedKeyword && aiInsights.keywordInsights[aiSelectedKeyword] && function () {
+          var kwData = aiInsights.keywordInsights[aiSelectedKeyword];
+          return React.createElement('div', null, /* ⑧ 순위 예측 */
+          kwData.rankPrediction && React.createElement('div', {
+            className: 'card',
+            style: {
+              padding: 20,
+              marginBottom: 16
+            }
+          }, React.createElement('div', {
+            style: {
+              fontSize: 16,
+              fontWeight: 700,
+              marginBottom: 16
+            }
+          }, '🔮 순위 예측 — "' + aiSelectedKeyword + '"'), kwData.rankPrediction.ready === false ? React.createElement('div', {
+            style: {
+              textAlign: 'center',
+              padding: 20,
+              color: '#94a3b8',
+              fontSize: 13
+            }
+          }, kwData.rankPrediction.message) : React.createElement('div', null, React.createElement('div', {
+            style: {
+              display: 'flex',
+              gap: 12,
+              flexWrap: 'wrap',
+              marginBottom: 16
+            }
+          }, React.createElement('div', {
+            style: {
+              flex: 1,
+              minWidth: 110,
+              background: '#f1f5f9',
+              borderRadius: 10,
+              padding: 14,
+              textAlign: 'center'
+            }
+          }, React.createElement('div', {
+            style: {
+              fontSize: 11,
+              color: '#64748b'
+            }
+          }, '현재 순위'), React.createElement('div', {
+            style: {
+              fontSize: 22,
+              fontWeight: 700
+            }
+          }, kwData.rankPrediction.currentRank + '위')), React.createElement('div', {
+            style: {
+              flex: 1,
+              minWidth: 110,
+              background: '#dbeafe',
+              borderRadius: 10,
+              padding: 14,
+              textAlign: 'center'
+            }
+          }, React.createElement('div', {
+            style: {
+              fontSize: 11,
+              color: '#64748b'
+            }
+          }, '7일 후 예측'), React.createElement('div', {
+            style: {
+              fontSize: 22,
+              fontWeight: 700,
+              color: '#1e40af'
+            }
+          }, kwData.rankPrediction.predicted7d + '위')), React.createElement('div', {
+            style: {
+              flex: 1,
+              minWidth: 110,
+              background: '#ede9fe',
+              borderRadius: 10,
+              padding: 14,
+              textAlign: 'center'
+            }
+          }, React.createElement('div', {
+            style: {
+              fontSize: 11,
+              color: '#64748b'
+            }
+          }, '14일 후 예측'), React.createElement('div', {
+            style: {
+              fontSize: 22,
+              fontWeight: 700,
+              color: '#6d28d9'
+            }
+          }, kwData.rankPrediction.predicted14d + '위')), React.createElement('div', {
+            style: {
+              flex: 1,
+              minWidth: 110,
+              background: '#faf5ff',
+              borderRadius: 10,
+              padding: 14,
+              textAlign: 'center'
+            }
+          }, React.createElement('div', {
+            style: {
+              fontSize: 11,
+              color: '#64748b'
+            }
+          }, '30일 후 예측'), React.createElement('div', {
+            style: {
+              fontSize: 22,
+              fontWeight: 700,
+              color: '#9333ea'
+            }
+          }, kwData.rankPrediction.predicted30d + '위'))), React.createElement('div', {
+            style: {
+              display: 'flex',
+              gap: 16,
+              flexWrap: 'wrap',
+              fontSize: 13,
+              color: '#475569'
+            }
+          }, React.createElement('span', null, '추세: ', React.createElement('strong', {
+            style: {
+              color: kwData.rankPrediction.trend === '상승' ? '#16a34a' : kwData.rankPrediction.trend === '하락' ? '#dc2626' : '#64748b'
+            }
+          }, kwData.rankPrediction.trend)), React.createElement('span', null, '신뢰도: ', React.createElement('strong', null, kwData.rankPrediction.confidence, ' (R²=', kwData.rankPrediction.rSquared, ')')), React.createElement('span', null, '데이터: ', React.createElement('strong', null, kwData.rankPrediction.dataPoints, '건'))), React.createElement('div', {
+            style: {
+              marginTop: 10,
+              padding: 10,
+              background: '#f8fafc',
+              borderRadius: 8,
+              fontSize: 12,
+              color: '#64748b'
+            }
+          }, kwData.rankPrediction.trendDesc))), /* ① 가격 최적화 */
+          kwData.priceOptimization && React.createElement('div', {
+            className: 'card',
+            style: {
+              padding: 20,
+              marginBottom: 16
+            }
+          }, React.createElement('div', {
+            style: {
+              fontSize: 16,
+              fontWeight: 700,
+              marginBottom: 16
+            }
+          }, '💰 가격 최적화 — "' + aiSelectedKeyword + '"'), React.createElement('div', {
+            style: {
+              display: 'flex',
+              gap: 12,
+              flexWrap: 'wrap',
+              marginBottom: 16
+            }
+          }, React.createElement('div', {
+            style: {
+              flex: 1,
+              minWidth: 130,
+              background: '#f0fdf4',
+              borderRadius: 10,
+              padding: 14,
+              textAlign: 'center'
+            }
+          }, React.createElement('div', {
+            style: {
+              fontSize: 11,
+              color: '#64748b'
+            }
+          }, '추천 가격대'), React.createElement('div', {
+            style: {
+              fontSize: 16,
+              fontWeight: 700,
+              color: '#16a34a'
+            }
+          }, fmt(kwData.priceOptimization.recommendedRange.low) + ' ~ ' + fmt(kwData.priceOptimization.recommendedRange.high) + '원')), React.createElement('div', {
+            style: {
+              flex: 1,
+              minWidth: 100,
+              background: '#eff6ff',
+              borderRadius: 10,
+              padding: 14,
+              textAlign: 'center'
+            }
+          }, React.createElement('div', {
+            style: {
+              fontSize: 11,
+              color: '#64748b'
+            }
+          }, '상위5 평균'), React.createElement('div', {
+            style: {
+              fontSize: 16,
+              fontWeight: 700
+            }
+          }, fmt(kwData.priceOptimization.avgTop5) + '원')), React.createElement('div', {
+            style: {
+              flex: 1,
+              minWidth: 100,
+              background: '#f1f5f9',
+              borderRadius: 10,
+              padding: 14,
+              textAlign: 'center'
+            }
+          }, React.createElement('div', {
+            style: {
+              fontSize: 11,
+              color: '#64748b'
+            }
+          }, '중위 가격'), React.createElement('div', {
+            style: {
+              fontSize: 16,
+              fontWeight: 700
+            }
+          }, fmt(kwData.priceOptimization.median) + '원'))), React.createElement('div', {
+            style: {
+              padding: 12,
+              background: '#faf5ff',
+              borderRadius: 8,
+              fontSize: 13,
+              color: '#6b21a8'
+            }
+          }, '💡 전략: ', React.createElement('strong', null, kwData.priceOptimization.strategy), ' — ', kwData.priceOptimization.strategyDesc)), /* ④ 광고 효율 */
+          kwData.adEfficiency && React.createElement('div', {
+            className: 'card',
+            style: {
+              padding: 20,
+              marginBottom: 16
+            }
+          }, React.createElement('div', {
+            style: {
+              fontSize: 16,
+              fontWeight: 700,
+              marginBottom: 16,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10
+            }
+          }, '📣 광고 효율 — "' + aiSelectedKeyword + '"', React.createElement('span', {
+            style: {
+              fontSize: 14,
+              padding: '2px 10px',
+              borderRadius: 10,
+              fontWeight: 700,
+              background: kwData.adEfficiency.grade === 'A' ? '#dcfce7' : kwData.adEfficiency.grade === 'B' ? '#dbeafe' : kwData.adEfficiency.grade === 'C' ? '#fef9c3' : '#fee2e2',
+              color: kwData.adEfficiency.grade === 'A' ? '#16a34a' : kwData.adEfficiency.grade === 'B' ? '#1e40af' : kwData.adEfficiency.grade === 'C' ? '#ca8a04' : '#dc2626'
+            }
+          }, kwData.adEfficiency.grade + '등급')), React.createElement('div', {
+            style: {
+              display: 'flex',
+              gap: 12,
+              flexWrap: 'wrap',
+              marginBottom: 16
+            }
+          }, React.createElement('div', {
+            style: {
+              flex: 1,
+              minWidth: 100,
+              background: '#f8fafc',
+              borderRadius: 10,
+              padding: 14,
+              textAlign: 'center'
+            }
+          }, React.createElement('div', {
+            style: {
+              fontSize: 11,
+              color: '#64748b'
+            }
+          }, '효율 점수'), React.createElement('div', {
+            style: {
+              fontSize: 28,
+              fontWeight: 700,
+              color: kwData.adEfficiency.efficiencyScore >= 70 ? '#16a34a' : kwData.adEfficiency.efficiencyScore >= 40 ? '#ca8a04' : '#dc2626'
+            }
+          }, kwData.adEfficiency.efficiencyScore)), React.createElement('div', {
+            style: {
+              flex: 1,
+              minWidth: 100,
+              background: '#f8fafc',
+              borderRadius: 10,
+              padding: 14,
+              textAlign: 'center'
+            }
+          }, React.createElement('div', {
+            style: {
+              fontSize: 11,
+              color: '#64748b'
+            }
+          }, '검색량'), React.createElement('div', {
+            style: {
+              fontSize: 16,
+              fontWeight: 700
+            }
+          }, fmt(kwData.adEfficiency.totalVolume))), React.createElement('div', {
+            style: {
+              flex: 1,
+              minWidth: 100,
+              background: '#f8fafc',
+              borderRadius: 10,
+              padding: 14,
+              textAlign: 'center'
+            }
+          }, React.createElement('div', {
+            style: {
+              fontSize: 11,
+              color: '#64748b'
+            }
+          }, 'CTR'), React.createElement('div', {
+            style: {
+              fontSize: 16,
+              fontWeight: 700
+            }
+          }, kwData.adEfficiency.ctr + '%')), React.createElement('div', {
+            style: {
+              flex: 1,
+              minWidth: 100,
+              background: '#f8fafc',
+              borderRadius: 10,
+              padding: 14,
+              textAlign: 'center'
+            }
+          }, React.createElement('div', {
+            style: {
+              fontSize: 11,
+              color: '#64748b'
+            }
+          }, '현재 순위'), React.createElement('div', {
+            style: {
+              fontSize: 16,
+              fontWeight: 700
+            }
+          }, kwData.adEfficiency.currentRank ? kwData.adEfficiency.currentRank + '위' : '미측정'))), React.createElement('div', {
+            style: {
+              padding: 12,
+              background: '#faf5ff',
+              borderRadius: 8,
+              fontSize: 13,
+              color: '#6b21a8'
+            }
+          }, '💡 ' + kwData.adEfficiency.advice)), /* ⑤ 최적 등록 타이밍 */
+          kwData.optimalTiming && React.createElement('div', {
+            className: 'card',
+            style: {
+              padding: 20,
+              marginBottom: 16
+            }
+          }, React.createElement('div', {
+            style: {
+              fontSize: 16,
+              fontWeight: 700,
+              marginBottom: 16
+            }
+          }, '⏰ 최적 등록 타이밍 — "' + aiSelectedKeyword + '"'), kwData.optimalTiming.ready === false ? React.createElement('div', {
+            style: {
+              textAlign: 'center',
+              padding: 20,
+              color: '#94a3b8',
+              fontSize: 13
+            }
+          }, kwData.optimalTiming.message) : React.createElement('div', null, /* 요일별 막대 */
+          kwData.optimalTiming.weekdayData && React.createElement('div', {
+            style: {
+              display: 'flex',
+              gap: 6,
+              alignItems: 'flex-end',
+              height: 120,
+              marginBottom: 16
+            }
+          }, kwData.optimalTiming.weekdayData.map(function (d) {
+            var maxRank = Math.max.apply(null, kwData.optimalTiming.weekdayData.map(function (x) {
+              return x.avgRank;
+            }));
+            var barH = maxRank > 0 ? Math.max(20, d.avgRank / maxRank * 100) : 40;
+            return React.createElement('div', {
+              key: d.day,
+              style: {
+                flex: 1,
+                textAlign: 'center'
+              }
+            }, React.createElement('div', {
+              style: {
+                fontSize: 11,
+                fontWeight: 600,
+                marginBottom: 4,
+                color: d.isBest ? '#16a34a' : d.isWorst ? '#dc2626' : '#64748b'
+              }
+            }, d.avgRank + '위'), React.createElement('div', {
+              style: {
+                height: barH,
+                borderRadius: '6px 6px 0 0',
+                margin: '0 auto',
+                width: '70%',
+                background: d.isBest ? '#22c55e' : d.isWorst ? '#ef4444' : '#94a3b8'
+              }
+            }), React.createElement('div', {
+              style: {
+                fontSize: 12,
+                fontWeight: 600,
+                marginTop: 6,
+                color: d.isBest ? '#16a34a' : d.isWorst ? '#dc2626' : '#334155'
+              }
+            }, d.day));
+          })), React.createElement('div', {
+            style: {
+              padding: 12,
+              background: '#faf5ff',
+              borderRadius: 8,
+              fontSize: 13,
+              color: '#6b21a8'
+            }
+          }, '💡 ' + kwData.optimalTiming.advice))), /* ③ 리뷰 감성 */
+          kwData.reviewSentiment && React.createElement('div', {
+            className: 'card',
+            style: {
+              padding: 20,
+              marginBottom: 16
+            }
+          }, React.createElement('div', {
+            style: {
+              fontSize: 16,
+              fontWeight: 700,
+              marginBottom: 16
+            }
+          }, '💬 리뷰 감성 분석 — "' + aiSelectedKeyword + '"'), kwData.reviewSentiment.alert && React.createElement('div', {
+            style: {
+              marginBottom: 12,
+              padding: 10,
+              borderRadius: 8,
+              fontSize: 13,
+              background: kwData.reviewSentiment.alert.indexOf('급증') !== -1 ? '#fee2e2' : '#dcfce7',
+              color: kwData.reviewSentiment.alert.indexOf('급증') !== -1 ? '#991b1b' : '#166534'
+            }
+          }, '⚠️ ' + kwData.reviewSentiment.alert), kwData.reviewSentiment.latest && React.createElement('div', {
+            style: {
+              display: 'flex',
+              gap: 12,
+              flexWrap: 'wrap',
+              marginBottom: 12
+            }
+          }, React.createElement('div', {
+            style: {
+              flex: 1,
+              minWidth: 100,
+              background: '#dcfce7',
+              borderRadius: 10,
+              padding: 12,
+              textAlign: 'center'
+            }
+          }, React.createElement('div', {
+            style: {
+              fontSize: 11,
+              color: '#64748b'
+            }
+          }, '긍정'), React.createElement('div', {
+            style: {
+              fontSize: 18,
+              fontWeight: 700,
+              color: '#16a34a'
+            }
+          }, kwData.reviewSentiment.latest.positiveRate + '%')), React.createElement('div', {
+            style: {
+              flex: 1,
+              minWidth: 100,
+              background: '#fee2e2',
+              borderRadius: 10,
+              padding: 12,
+              textAlign: 'center'
+            }
+          }, React.createElement('div', {
+            style: {
+              fontSize: 11,
+              color: '#64748b'
+            }
+          }, '부정'), React.createElement('div', {
+            style: {
+              fontSize: 18,
+              fontWeight: 700,
+              color: '#dc2626'
+            }
+          }, kwData.reviewSentiment.latest.negativeRate + '%')), React.createElement('div', {
+            style: {
+              flex: 1,
+              minWidth: 100,
+              background: '#f1f5f9',
+              borderRadius: 10,
+              padding: 12,
+              textAlign: 'center'
+            }
+          }, React.createElement('div', {
+            style: {
+              fontSize: 11,
+              color: '#64748b'
+            }
+          }, '중립'), React.createElement('div', {
+            style: {
+              fontSize: 18,
+              fontWeight: 700,
+              color: '#64748b'
+            }
+          }, (100 - kwData.reviewSentiment.latest.positiveRate - kwData.reviewSentiment.latest.negativeRate).toFixed(1) + '%'))), React.createElement('div', {
+            style: {
+              fontSize: 12,
+              color: '#94a3b8'
+            }
+          }, '분석 데이터: ' + kwData.reviewSentiment.dataPoints + '건')));
+        }()]
+      }, void 0, true)]
+    }, void 0, true)]
+  }, void 0, true);
 };
 
 ;/* ===== js/components/ClientDashboard.jsx ===== */
+import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";
 /* ClientDashboard — 업체별 분석 관리 대시보드 v4.0 (AI 인사이트 탭 추가) */
 window.ClientDashboard = function ClientDashboard({
   currentUser,
@@ -12177,644 +13176,753 @@ window.ClientDashboard = function ClientDashboard({
   var uniqueKeywords = getUniqueKeywords();
 
   /* ==================== 렌더링 ==================== */
-  return /*#__PURE__*/React.createElement("div", {
+  return /*#__PURE__*/_jsxDEV("div", {
     style: {
       minHeight: 'calc(100vh - 60px)',
       background: '#f0f2f5'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "container cd-layout",
-    style: {
-      display: 'flex',
-      gap: 20,
-      paddingTop: 20,
-      minHeight: 'calc(100vh - 80px)'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "cd-sidebar",
-    style: {
-      width: 280,
-      flexShrink: 0
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      padding: 16
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 16,
-      fontWeight: 700,
-      marginBottom: 12
-    }
-  }, "\uB0B4 \uC5C5\uCCB4 \uBAA9\uB85D (", clients.length, ")"), clients.length > 3 && /*#__PURE__*/React.createElement("input", {
-    className: "form-input",
-    placeholder: "\uC5C5\uCCB4\uBA85 / \uD0A4\uC6CC\uB4DC \uAC80\uC0C9...",
-    value: searchQuery,
-    onChange: function (e) {
-      setSearchQuery(e.target.value);
     },
-    style: {
-      width: '100%',
-      marginBottom: 10,
-      fontSize: 13,
-      padding: '8px 12px'
-    }
-  }), loading && /*#__PURE__*/React.createElement("div", {
-    style: {
-      color: '#64748b',
-      fontSize: 13
-    }
-  }, "\uB85C\uB529 \uC911..."), !loading && clients.length === 0 && /*#__PURE__*/React.createElement("div", {
-    style: {
-      color: '#94a3b8',
-      fontSize: 13,
-      padding: '20px 0',
-      textAlign: 'center'
-    }
-  }, "\uB4F1\uB85D\uB41C \uC5C5\uCCB4\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4.", /*#__PURE__*/React.createElement("br", null), "\uBD84\uC11D \uD0ED\uC5D0\uC11C \uC5C5\uCCB4\uB97C \uB4F1\uB85D\uD574\uC8FC\uC138\uC694."), !loading && clients.length > 0 && filteredClients.length === 0 && /*#__PURE__*/React.createElement("div", {
-    style: {
-      color: '#94a3b8',
-      fontSize: 13,
-      padding: '20px 0',
-      textAlign: 'center'
-    }
-  }, "\uAC80\uC0C9 \uACB0\uACFC\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4."), /*#__PURE__*/React.createElement("div", {
-    style: {
-      maxHeight: 'calc(100vh - 220px)',
-      overflowY: 'auto'
-    }
-  }, filteredClients.map(function (c) {
-    var isActive = selectedClient && selectedClient.id === c.id;
-    return /*#__PURE__*/React.createElement("div", {
-      key: c.id,
-      onClick: function () {
-        selectClient(c);
-      },
-      style: {
-        padding: '12px 14px',
-        borderRadius: 8,
-        cursor: 'pointer',
-        marginBottom: 6,
-        background: isActive ? '#1B2A4A' : '#f8fafc',
-        color: isActive ? '#fff' : '#1e293b',
-        border: '1px solid ' + (isActive ? '#1B2A4A' : '#e2e8f0'),
-        transition: 'all 0.15s'
-      }
-    }, /*#__PURE__*/React.createElement("div", {
+    children: /*#__PURE__*/_jsxDEV("div", {
+      className: "container cd-layout",
       style: {
         display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'flex-start'
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        flex: 1,
-        minWidth: 0
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontWeight: 600,
-        fontSize: 14
-      }
-    }, c.name || c.business_name), currentUser && (currentUser.role === 'admin' || currentUser.role === 'superadmin') && /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 11,
-        color: '#a78bfa',
-        fontWeight: 700,
-        marginTop: 2
-      }
-    }, "\uD83D\uDC64 \uB2F4\uB2F9\uC790: ", c.manager_name || '-'), /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 11,
-        opacity: 0.7,
-        marginTop: 2
-      }
-    }, c.unique_keyword_count > 0 ? '키워드 ' + c.unique_keyword_count + '개' : '', c.total_analysis_days > 0 ? ' | ' + c.total_analysis_days + '일 분석' : '', !c.unique_keyword_count && !c.total_analysis_days ? '미분석' : ''), c.main_keywords && /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 11,
-        opacity: 0.6,
-        marginTop: 4,
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        whiteSpace: 'nowrap'
-      }
-    }, c.main_keywords)), canEdit !== false && /*#__PURE__*/React.createElement("button", {
-      onClick: function (e) {
-        deleteClient(c, e);
+        gap: 20,
+        paddingTop: 20,
+        minHeight: 'calc(100vh - 80px)'
       },
-      title: "\uC5C5\uCCB4 \uC0AD\uC81C",
-      style: {
-        background: 'none',
-        border: 'none',
-        cursor: 'pointer',
-        padding: '2px 6px',
-        fontSize: 14,
-        color: isActive ? 'rgba(255,255,255,0.5)' : '#cbd5e1',
-        flexShrink: 0,
-        lineHeight: 1
-      },
-      onMouseOver: function (e) {
-        e.target.style.color = '#ef4444';
-      },
-      onMouseOut: function (e) {
-        e.target.style.color = isActive ? 'rgba(255,255,255,0.5)' : '#cbd5e1';
-      }
-    }, '\u2715')));
-  })))), /*#__PURE__*/React.createElement("div", {
-    className: "cd-main",
-    style: {
-      flex: 1,
-      minWidth: 0
-    }
-  }, !selectedClient && /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      padding: 40,
-      textAlign: 'center',
-      color: '#94a3b8'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 48,
-      marginBottom: 12
-    }
-  }, "\uD83D\uDCCA"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 16
-    }
-  }, "\uC88C\uCE21\uC5D0\uC11C \uC5C5\uCCB4\uB97C \uC120\uD0DD\uD558\uC138\uC694"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 13,
-      marginTop: 8
-    }
-  }, "\uBD84\uC11D \uD0ED\uC5D0\uC11C \uD0A4\uC6CC\uB4DC \uBD84\uC11D \uD6C4 \uC5C5\uCCB4\uB97C \uB4F1\uB85D\uD558\uBA74 \uC5EC\uAE30\uC5D0 \uD45C\uC2DC\uB429\uB2C8\uB2E4.")), selectedClient && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      padding: 20,
-      marginBottom: 16
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      justifyContent: 'space-between',
-      alignItems: 'center'
-    }
-  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 20,
-      fontWeight: 700
-    }
-  }, selectedClient.name), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 13,
-      color: '#64748b',
-      marginTop: 4
-    }
-  }, selectedClient.main_keywords && /*#__PURE__*/React.createElement("span", null, "\uD0A4\uC6CC\uB4DC: ", selectedClient.main_keywords), selectedClient.naver_store_url && /*#__PURE__*/React.createElement("span", {
-    style: {
-      marginLeft: 12
-    }
-  }, "URL: ", function () {
-    try {
-      var u = new URL(selectedClient.naver_store_url);
-      if (u.hostname.indexOf('smartstore.naver.com') !== -1) return u.origin + u.pathname;
-    } catch (e) {}
-    return selectedClient.naver_store_url.length > 60 ? selectedClient.naver_store_url.slice(0, 60) + '...' : selectedClient.naver_store_url;
-  }()))), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 12,
-      color: '#94a3b8'
-    }
-  }, selectedClient.last_analyzed && '마지막 분석: ' + selectedClient.last_analyzed.slice(0, 10)))), canEdit !== false && /*#__PURE__*/React.createElement(AnalysisForm, {
-    client: selectedClient,
-    onAnalyze: onRunAnalysis ? function (keyword, productUrl) {
-      /* 분석 탭으로 전환하여 실제 분석 실행 + 자동 저장 */
-      var params = {
-        keyword: keyword,
-        productUrl: productUrl || '',
-        companyName: selectedClient.name || '',
-        clientId: selectedClient.id,
-        detailHtml: selectedClient.detail_html || '' // #1: 저장된 상세HTML 재사용
-      };
-      onRunAnalysis(params);
-    } : runAnalysis,
-    analyzing: analyzing,
-    message: message
-  }), uniqueKeywords.length > 0 && /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      padding: 16,
-      marginBottom: 16
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 15,
-      fontWeight: 600,
-      marginBottom: 12
-    }
-  }, "\uBD84\uC11D \uD0A4\uC6CC\uB4DC (", uniqueKeywords.length, "\uAC1C)"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      gap: 8,
-      flexWrap: 'wrap'
-    }
-  }, uniqueKeywords.map(function (a, i) {
-    var isActive = activeKeyword === a.keyword;
-    return /*#__PURE__*/React.createElement("button", {
-      key: i,
-      onClick: function () {
-        viewKeywordAnalysis(a.keyword);
-      },
-      style: {
-        padding: '8px 16px',
-        borderRadius: 20,
-        cursor: 'pointer',
-        fontSize: 13,
-        background: isActive ? '#1B2A4A' : '#f1f5f9',
-        color: isActive ? '#fff' : '#475569',
-        border: isActive ? '1px solid #1B2A4A' : '1px solid #e2e8f0'
-      }
-    }, a.keyword, /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 11,
-        opacity: 0.7,
-        marginLeft: 6
-      }
-    }, (a.analyzed_date || '').slice(0, 10)));
-  }))), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      gap: 8,
-      marginBottom: 16
-    }
-  }, /*#__PURE__*/React.createElement("button", {
-    onClick: function () {
-      setViewMode('history');
-    },
-    style: {
-      padding: '8px 18px',
-      borderRadius: 8,
-      fontSize: 13,
-      fontWeight: 600,
-      cursor: 'pointer',
-      background: viewMode === 'history' ? '#1B2A4A' : '#fff',
-      color: viewMode === 'history' ? '#fff' : '#475569',
-      border: viewMode === 'history' ? 'none' : '1px solid #e2e8f0'
-    }
-  }, '📊', " \uC77C\uC790\uBCC4 \uCD94\uC774 ", activeKeyword ? '(' + analysisHistory.length + '일)' : ''), /*#__PURE__*/React.createElement("button", {
-    onClick: function () {
-      setViewMode('rank');
-    },
-    style: {
-      padding: '8px 18px',
-      borderRadius: 8,
-      fontSize: 13,
-      fontWeight: 600,
-      cursor: 'pointer',
-      background: viewMode === 'rank' ? '#1B2A4A' : '#fff',
-      color: viewMode === 'rank' ? '#fff' : '#475569',
-      border: viewMode === 'rank' ? 'none' : '1px solid #e2e8f0'
-    }
-  }, '📈', " \uC21C\uC704 \uC774\uB825 ", activeKeyword ? '(' + rankHistory.length + '건)' : ''), /*#__PURE__*/React.createElement("button", {
-    onClick: function () {
-      setViewMode('insights');
-    },
-    style: {
-      padding: '8px 18px',
-      borderRadius: 8,
-      fontSize: 13,
-      fontWeight: 600,
-      cursor: 'pointer',
-      background: viewMode === 'insights' ? '#7C3AED' : '#fff',
-      color: viewMode === 'insights' ? '#fff' : '#7C3AED',
-      border: viewMode === 'insights' ? 'none' : '1px solid #DDD6FE'
-    }
-  }, '🤖', " AI \uC778\uC0AC\uC774\uD2B8"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      flex: 1
-    }
-  })), activeKeyword && (viewMode === 'history' || viewMode === 'rank') && /*#__PURE__*/React.createElement("div", null, viewMode === 'history' && /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      padding: 20
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 16,
-      fontWeight: 700,
-      marginBottom: 16
-    }
-  }, "\"", activeKeyword, "\" \uC77C\uC790\uBCC4 \uBD84\uC11D \uCD94\uC774"), analysisHistory.length === 0 ? /*#__PURE__*/React.createElement("div", {
-    style: {
-      textAlign: 'center',
-      padding: 30,
-      color: '#94a3b8',
-      fontSize: 13
-    }
-  }, "\uC544\uC9C1 \uB204\uC801\uB41C \uBD84\uC11D \uB370\uC774\uD130\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4. \uB9E4\uC77C \uBD84\uC11D\uC744 \uC2E4\uD589\uD558\uBA74 \uC5EC\uAE30\uC5D0 \uCD94\uC774\uAC00 \uD45C\uC2DC\uB429\uB2C8\uB2E4.") : /*#__PURE__*/React.createElement("div", {
-    className: "table-wrap",
-    style: {
-      overflowX: 'auto'
-    }
-  }, /*#__PURE__*/React.createElement("table", {
-    style: {
-      minWidth: 750,
-      fontSize: 13,
-      whiteSpace: 'nowrap'
-    }
-  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", {
-    style: {
-      whiteSpace: 'nowrap'
-    }
-  }, "\uB0A0\uC9DC"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      textAlign: 'right',
-      whiteSpace: 'nowrap'
-    }
-  }, "\uAC80\uC0C9\uB7C9"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      textAlign: 'right',
-      whiteSpace: 'nowrap'
-    }
-  }, "PC \uD074\uB9AD"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      textAlign: 'right',
-      whiteSpace: 'nowrap'
-    }
-  }, "\uBAA8\uBC14\uC77C \uD074\uB9AD"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      textAlign: 'right',
-      whiteSpace: 'nowrap'
-    }
-  }, "\uACBD\uC7C1\uC9C0\uC218"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      textAlign: 'center',
-      whiteSpace: 'nowrap'
-    }
-  }, "\uACBD\uC7C1\uC218\uC900"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      textAlign: 'center',
-      whiteSpace: 'nowrap'
-    }
-  }, "\uAD11\uACE0 \uACBD\uC7C1\uAC15\uB3C4"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      textAlign: 'center',
-      whiteSpace: 'nowrap'
-    }
-  }, "\uBCF4\uACE0\uC11C"))), /*#__PURE__*/React.createElement("tbody", null, analysisHistory.slice().reverse().map(function (h, i, arr) {
-    /* 최신이 위 → 더 과거(아래쪽, i+1)와 비교해 변동 계산 */
-    var prevH = arr[i + 1] || null;
-    var compIdxDiff = prevH && h.comp_index != null && prevH.comp_index != null ? (h.comp_index - prevH.comp_index).toFixed(2) : null;
-    /* 경쟁수준 퍼센트 색상 */
-    var cpVal = h.comp_percent;
-    var cpColor = cpVal != null ? cpVal <= 30 ? '#16a34a' : cpVal <= 70 ? '#ca8a04' : '#dc2626' : '#64748b';
-    var cpBg = cpVal != null ? cpVal <= 30 ? '#dcfce7' : cpVal <= 70 ? '#fef9c3' : '#fee2e2' : '#f1f5f9';
-    var cpLabel = cpVal != null ? cpVal <= 30 ? '블루오션' : cpVal <= 70 ? '보통' : '레드오션' : '-';
-    /* 광고 경쟁강도 배지 색상 */
-    var adIdx = h.ad_comp_idx || '-';
-    var adColor = adIdx === '높음' || adIdx === 'HIGH' ? '#dc2626' : adIdx === '중간' || adIdx === 'MEDIUM' ? '#ca8a04' : adIdx === '낮음' || adIdx === 'LOW' ? '#16a34a' : '#64748b';
-    var adBg = adIdx === '높음' || adIdx === 'HIGH' ? '#fee2e2' : adIdx === '중간' || adIdx === 'MEDIUM' ? '#fef9c3' : adIdx === '낮음' || adIdx === 'LOW' ? '#dcfce7' : '#f1f5f9';
-    return /*#__PURE__*/React.createElement("tr", {
-      key: i
-    }, /*#__PURE__*/React.createElement("td", {
-      style: {
-        fontWeight: 600,
-        whiteSpace: 'nowrap'
-      }
-    }, h.date), /*#__PURE__*/React.createElement("td", {
-      style: {
-        textAlign: 'right',
-        whiteSpace: 'nowrap'
-      }
-    }, h.search_volume || '-'), /*#__PURE__*/React.createElement("td", {
-      style: {
-        textAlign: 'right',
-        whiteSpace: 'nowrap'
-      }
-    }, h.pc_clicks || '-'), /*#__PURE__*/React.createElement("td", {
-      style: {
-        textAlign: 'right',
-        whiteSpace: 'nowrap'
-      }
-    }, h.mobile_clicks || '-'), /*#__PURE__*/React.createElement("td", {
-      style: {
-        textAlign: 'right',
-        whiteSpace: 'nowrap'
-      }
-    }, h.comp_index != null ? h.comp_index : '-', compIdxDiff && compIdxDiff != '0.00' && /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 11,
-        marginLeft: 4,
-        color: compIdxDiff > 0 ? '#dc2626' : '#16a34a'
-      }
-    }, compIdxDiff > 0 ? '+' : '', compIdxDiff)), /*#__PURE__*/React.createElement("td", {
-      style: {
-        textAlign: 'center',
-        whiteSpace: 'nowrap'
-      }
-    }, cpVal != null ? /*#__PURE__*/React.createElement("span", {
-      style: {
-        padding: '2px 6px',
-        borderRadius: 10,
-        fontSize: 11,
-        fontWeight: 600,
-        background: cpBg,
-        color: cpColor
-      }
-    }, cpLabel, " ", cpVal, "%") : '-'), /*#__PURE__*/React.createElement("td", {
-      style: {
-        textAlign: 'center',
-        whiteSpace: 'nowrap'
-      }
-    }, /*#__PURE__*/React.createElement("span", {
-      style: {
-        padding: '2px 6px',
-        borderRadius: 10,
-        fontSize: 11,
-        fontWeight: 600,
-        background: adBg,
-        color: adColor
-      }
-    }, adIdx)), /*#__PURE__*/React.createElement("td", {
-      style: {
-        textAlign: 'center'
-      }
-    }, /*#__PURE__*/React.createElement("button", {
-      onClick: function () {
-        var row = (analyses || []).find(function (a) {
-          return a.analyzed_date === h.date && (!activeKeyword || a.keyword === activeKeyword);
-        });
-        if (row && onDownloadReport) {
-          onDownloadReport(Object.assign({}, row, {
-            client_id: selectedClient ? selectedClient.id : null,
-            companyName: selectedClient ? selectedClient.name : ''
-          }));
-        } else {
-          downloadReport(h.date);
-        }
-      },
-      style: {
-        padding: '4px 10px',
-        borderRadius: 6,
-        fontSize: 11,
-        cursor: 'pointer',
-        background: '#f0f9ff',
-        color: '#0369a1',
-        border: '1px solid #bae6fd',
-        fontWeight: 600
-      }
-    }, "HTML")));
-  }))))), viewMode === 'rank' && /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      padding: 20
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      justifyContent: 'space-between',
-      alignItems: 'center',
-      marginBottom: 16
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 16,
-      fontWeight: 700
-    }
-  }, "\"", activeKeyword, "\" \uC21C\uC704 \uCD94\uC801 \uC774\uB825"), /*#__PURE__*/React.createElement("div", {
-    ref: exportMenuRef,
-    style: {
-      position: 'relative'
-    }
-  }, /*#__PURE__*/React.createElement("button", {
-    onClick: function () {
-      setShowExportMenu(!showExportMenu);
-    },
-    style: {
-      padding: '6px 14px',
-      borderRadius: 8,
-      fontSize: 12,
-      fontWeight: 600,
-      cursor: 'pointer',
-      background: '#f0f9ff',
-      color: '#0369a1',
-      border: '1px solid #bae6fd',
-      display: 'flex',
-      alignItems: 'center',
-      gap: 6
-    }
-  }, '📸', " \uC774\uBBF8\uC9C0 \uC800\uC7A5 ", '▾'), showExportMenu && /*#__PURE__*/React.createElement("div", {
-    style: {
-      position: 'absolute',
-      top: '100%',
-      right: 0,
-      marginTop: 4,
-      zIndex: 100,
-      background: '#fff',
-      borderRadius: 10,
-      boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
-      border: '1px solid #e2e8f0',
-      minWidth: 160,
-      overflow: 'hidden'
-    }
-  }, [{
-    label: '최근 7일',
-    days: 7
-  }, {
-    label: '최근 30일',
-    days: 30
-  }, {
-    label: '최근 60일',
-    days: 60
-  }, {
-    label: '전체 기간',
-    days: 0
-  }].map(function (opt) {
-    return React.createElement('button', {
-      key: opt.days,
-      onClick: function () {
-        exportRankImage(opt.days);
-      },
-      style: {
-        display: 'block',
-        width: '100%',
-        padding: '10px 16px',
-        background: 'none',
-        border: 'none',
-        borderBottom: '1px solid #f1f5f9',
-        textAlign: 'left',
-        fontSize: 13,
-        cursor: 'pointer',
-        color: '#334155',
-        fontWeight: 500
-      },
-      onMouseOver: function (e) {
-        e.target.style.background = '#f0f9ff';
-      },
-      onMouseOut: function (e) {
-        e.target.style.background = 'none';
-      }
-    }, opt.label);
-  })))), rankHistory.length === 0 ? /*#__PURE__*/React.createElement("div", {
-    style: {
-      textAlign: 'center',
-      padding: 40,
-      color: '#94a3b8',
-      fontSize: 13
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 32,
-      marginBottom: 12
-    }
-  }, "\uD83D\uDCCA"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontWeight: 600,
-      marginBottom: 6,
-      color: '#64748b'
-    }
-  }, "\uC544\uC9C1 \uC218\uC9D1\uB41C \uC21C\uC704 \uB370\uC774\uD130\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4"), /*#__PURE__*/React.createElement("div", null, "\uC2A4\uCF00\uC904\uB7EC\uAC00 6\uC2DC\uAC04 \uAC04\uACA9\uC73C\uB85C \uC790\uB3D9 \uC218\uC9D1\uD558\uBA70, \uB9E4\uC77C \uC624\uC804 7\uC2DC \uC804\uCCB4 \uBD84\uC11D \uC2DC\uC5D0\uB3C4 \uD568\uAED8 \uC218\uC9D1\uB429\uB2C8\uB2E4.")) : /*#__PURE__*/React.createElement("div", {
-    className: "table-wrap"
-  }, /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "\uB0A0\uC9DC"), /*#__PURE__*/React.createElement("th", null, "\uC21C\uC704"), /*#__PURE__*/React.createElement("th", null, "\uC720\uD615"))), /*#__PURE__*/React.createElement("tbody", null, rankHistory.slice().reverse().map(function (r, i, arr) {
-    var prevR = arr[i + 1] || null;
-    var diff = prevR && r.rank_position && prevR.rank_position ? prevR.rank_position - r.rank_position : null;
-    return /*#__PURE__*/React.createElement("tr", {
-      key: i
-    }, /*#__PURE__*/React.createElement("td", null, (r.checked_at || '').slice(0, 16)), /*#__PURE__*/React.createElement("td", {
-      style: {
-        fontWeight: 700
-      }
-    }, r.rank_position ? r.rank_position + '위' : '미노출', diff != null && diff !== 0 && /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 11,
-        marginLeft: 6,
-        color: diff > 0 ? '#16a34a' : '#dc2626'
-      }
-    }, diff > 0 ? '▲' + diff : '▼' + Math.abs(diff))), /*#__PURE__*/React.createElement("td", null, r.check_type === 'manual' ? '수동' : '자동'));
-  })))))), !activeKeyword && (viewMode === 'history' || viewMode === 'rank') && /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      padding: 40,
-      textAlign: 'center',
-      color: '#94a3b8'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 32,
-      marginBottom: 12
-    }
-  }, '👆'), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 14,
-      fontWeight: 500
-    }
-  }, "\uC704\uC5D0\uC11C \uD0A4\uC6CC\uB4DC\uB97C \uC120\uD0DD\uD558\uBA74 ", viewMode === 'history' ? '일자별 추이' : '순위 이력', "\uAC00 \uD45C\uC2DC\uB429\uB2C8\uB2E4.")), viewMode === 'insights' && /*#__PURE__*/React.createElement(AiInsightsView, {
-    aiLoading: aiLoading,
-    aiInsights: aiInsights,
-    aiSelectedKeyword: aiSelectedKeyword,
-    setAiSelectedKeyword: setAiSelectedKeyword
-  })))));
+      children: [/*#__PURE__*/_jsxDEV("div", {
+        className: "cd-sidebar",
+        style: {
+          width: 280,
+          flexShrink: 0
+        },
+        children: /*#__PURE__*/_jsxDEV("div", {
+          className: "card",
+          style: {
+            padding: 16
+          },
+          children: [/*#__PURE__*/_jsxDEV("div", {
+            style: {
+              fontSize: 16,
+              fontWeight: 700,
+              marginBottom: 12
+            },
+            children: ["내 업체 목록 (", clients.length, ")"]
+          }, void 0, true), clients.length > 3 && /*#__PURE__*/_jsxDEV("input", {
+            className: "form-input",
+            placeholder: "업체명 / 키워드 검색...",
+            value: searchQuery,
+            onChange: function (e) {
+              setSearchQuery(e.target.value);
+            },
+            style: {
+              width: '100%',
+              marginBottom: 10,
+              fontSize: 13,
+              padding: '8px 12px'
+            }
+          }, void 0, false), loading && /*#__PURE__*/_jsxDEV("div", {
+            style: {
+              color: '#64748b',
+              fontSize: 13
+            },
+            children: "로딩 중..."
+          }, void 0, false), !loading && clients.length === 0 && /*#__PURE__*/_jsxDEV("div", {
+            style: {
+              color: '#94a3b8',
+              fontSize: 13,
+              padding: '20px 0',
+              textAlign: 'center'
+            },
+            children: ["등록된 업체가 없습니다.", /*#__PURE__*/_jsxDEV("br", {}, void 0, false), "분석 탭에서 업체를 등록해주세요."]
+          }, void 0, true), !loading && clients.length > 0 && filteredClients.length === 0 && /*#__PURE__*/_jsxDEV("div", {
+            style: {
+              color: '#94a3b8',
+              fontSize: 13,
+              padding: '20px 0',
+              textAlign: 'center'
+            },
+            children: "검색 결과가 없습니다."
+          }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+            style: {
+              maxHeight: 'calc(100vh - 220px)',
+              overflowY: 'auto'
+            },
+            children: filteredClients.map(function (c) {
+              var isActive = selectedClient && selectedClient.id === c.id;
+              return /*#__PURE__*/_jsxDEV("div", {
+                onClick: function () {
+                  selectClient(c);
+                },
+                style: {
+                  padding: '12px 14px',
+                  borderRadius: 8,
+                  cursor: 'pointer',
+                  marginBottom: 6,
+                  background: isActive ? '#1B2A4A' : '#f8fafc',
+                  color: isActive ? '#fff' : '#1e293b',
+                  border: '1px solid ' + (isActive ? '#1B2A4A' : '#e2e8f0'),
+                  transition: 'all 0.15s'
+                },
+                children: /*#__PURE__*/_jsxDEV("div", {
+                  style: {
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'flex-start'
+                  },
+                  children: [/*#__PURE__*/_jsxDEV("div", {
+                    style: {
+                      flex: 1,
+                      minWidth: 0
+                    },
+                    children: [/*#__PURE__*/_jsxDEV("div", {
+                      style: {
+                        fontWeight: 600,
+                        fontSize: 14
+                      },
+                      children: c.name || c.business_name
+                    }, void 0, false), currentUser && (currentUser.role === 'admin' || currentUser.role === 'superadmin') && /*#__PURE__*/_jsxDEV("div", {
+                      style: {
+                        fontSize: 11,
+                        color: '#a78bfa',
+                        fontWeight: 700,
+                        marginTop: 2
+                      },
+                      children: ["👤 담당자: ", c.manager_name || '-']
+                    }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                      style: {
+                        fontSize: 11,
+                        opacity: 0.7,
+                        marginTop: 2
+                      },
+                      children: [c.unique_keyword_count > 0 ? '키워드 ' + c.unique_keyword_count + '개' : '', c.total_analysis_days > 0 ? ' | ' + c.total_analysis_days + '일 분석' : '', !c.unique_keyword_count && !c.total_analysis_days ? '미분석' : '']
+                    }, void 0, true), c.main_keywords && /*#__PURE__*/_jsxDEV("div", {
+                      style: {
+                        fontSize: 11,
+                        opacity: 0.6,
+                        marginTop: 4,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap'
+                      },
+                      children: c.main_keywords
+                    }, void 0, false)]
+                  }, void 0, true), canEdit !== false && /*#__PURE__*/_jsxDEV("button", {
+                    onClick: function (e) {
+                      deleteClient(c, e);
+                    },
+                    title: "업체 삭제",
+                    style: {
+                      background: 'none',
+                      border: 'none',
+                      cursor: 'pointer',
+                      padding: '2px 6px',
+                      fontSize: 14,
+                      color: isActive ? 'rgba(255,255,255,0.5)' : '#cbd5e1',
+                      flexShrink: 0,
+                      lineHeight: 1
+                    },
+                    onMouseOver: function (e) {
+                      e.target.style.color = '#ef4444';
+                    },
+                    onMouseOut: function (e) {
+                      e.target.style.color = isActive ? 'rgba(255,255,255,0.5)' : '#cbd5e1';
+                    },
+                    children: '\u2715'
+                  }, void 0, false)]
+                }, void 0, true)
+              }, c.id, false);
+            })
+          }, void 0, false)]
+        }, void 0, true)
+      }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+        className: "cd-main",
+        style: {
+          flex: 1,
+          minWidth: 0
+        },
+        children: [!selectedClient && /*#__PURE__*/_jsxDEV("div", {
+          className: "card",
+          style: {
+            padding: 40,
+            textAlign: 'center',
+            color: '#94a3b8'
+          },
+          children: [/*#__PURE__*/_jsxDEV("div", {
+            style: {
+              fontSize: 48,
+              marginBottom: 12
+            },
+            children: "📊"
+          }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+            style: {
+              fontSize: 16
+            },
+            children: "좌측에서 업체를 선택하세요"
+          }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+            style: {
+              fontSize: 13,
+              marginTop: 8
+            },
+            children: "분석 탭에서 키워드 분석 후 업체를 등록하면 여기에 표시됩니다."
+          }, void 0, false)]
+        }, void 0, true), selectedClient && /*#__PURE__*/_jsxDEV("div", {
+          children: [/*#__PURE__*/_jsxDEV("div", {
+            className: "card",
+            style: {
+              padding: 20,
+              marginBottom: 16
+            },
+            children: /*#__PURE__*/_jsxDEV("div", {
+              style: {
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center'
+              },
+              children: [/*#__PURE__*/_jsxDEV("div", {
+                children: [/*#__PURE__*/_jsxDEV("div", {
+                  style: {
+                    fontSize: 20,
+                    fontWeight: 700
+                  },
+                  children: selectedClient.name
+                }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+                  style: {
+                    fontSize: 13,
+                    color: '#64748b',
+                    marginTop: 4
+                  },
+                  children: [selectedClient.main_keywords && /*#__PURE__*/_jsxDEV("span", {
+                    children: ["키워드: ", selectedClient.main_keywords]
+                  }, void 0, true), selectedClient.naver_store_url && /*#__PURE__*/_jsxDEV("span", {
+                    style: {
+                      marginLeft: 12
+                    },
+                    children: ["URL: ", function () {
+                      try {
+                        var u = new URL(selectedClient.naver_store_url);
+                        if (u.hostname.indexOf('smartstore.naver.com') !== -1) return u.origin + u.pathname;
+                      } catch (e) {}
+                      return selectedClient.naver_store_url.length > 60 ? selectedClient.naver_store_url.slice(0, 60) + '...' : selectedClient.naver_store_url;
+                    }()]
+                  }, void 0, true)]
+                }, void 0, true)]
+              }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  fontSize: 12,
+                  color: '#94a3b8'
+                },
+                children: selectedClient.last_analyzed && '마지막 분석: ' + selectedClient.last_analyzed.slice(0, 10)
+              }, void 0, false)]
+            }, void 0, true)
+          }, void 0, false), canEdit !== false && /*#__PURE__*/_jsxDEV(AnalysisForm, {
+            client: selectedClient,
+            onAnalyze: onRunAnalysis ? function (keyword, productUrl) {
+              /* 분석 탭으로 전환하여 실제 분석 실행 + 자동 저장 */
+              var params = {
+                keyword: keyword,
+                productUrl: productUrl || '',
+                companyName: selectedClient.name || '',
+                clientId: selectedClient.id,
+                detailHtml: selectedClient.detail_html || '' // #1: 저장된 상세HTML 재사용
+              };
+              onRunAnalysis(params);
+            } : runAnalysis,
+            analyzing: analyzing,
+            message: message
+          }, void 0, false), uniqueKeywords.length > 0 && /*#__PURE__*/_jsxDEV("div", {
+            className: "card",
+            style: {
+              padding: 16,
+              marginBottom: 16
+            },
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              style: {
+                fontSize: 15,
+                fontWeight: 600,
+                marginBottom: 12
+              },
+              children: ["분석 키워드 (", uniqueKeywords.length, "개)"]
+            }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+              style: {
+                display: 'flex',
+                gap: 8,
+                flexWrap: 'wrap'
+              },
+              children: uniqueKeywords.map(function (a, i) {
+                var isActive = activeKeyword === a.keyword;
+                return /*#__PURE__*/_jsxDEV("button", {
+                  onClick: function () {
+                    viewKeywordAnalysis(a.keyword);
+                  },
+                  style: {
+                    padding: '8px 16px',
+                    borderRadius: 20,
+                    cursor: 'pointer',
+                    fontSize: 13,
+                    background: isActive ? '#1B2A4A' : '#f1f5f9',
+                    color: isActive ? '#fff' : '#475569',
+                    border: isActive ? '1px solid #1B2A4A' : '1px solid #e2e8f0'
+                  },
+                  children: [a.keyword, /*#__PURE__*/_jsxDEV("span", {
+                    style: {
+                      fontSize: 11,
+                      opacity: 0.7,
+                      marginLeft: 6
+                    },
+                    children: (a.analyzed_date || '').slice(0, 10)
+                  }, void 0, false)]
+                }, i, true);
+              })
+            }, void 0, false)]
+          }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+            style: {
+              display: 'flex',
+              gap: 8,
+              marginBottom: 16
+            },
+            children: [/*#__PURE__*/_jsxDEV("button", {
+              onClick: function () {
+                setViewMode('history');
+              },
+              style: {
+                padding: '8px 18px',
+                borderRadius: 8,
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: 'pointer',
+                background: viewMode === 'history' ? '#1B2A4A' : '#fff',
+                color: viewMode === 'history' ? '#fff' : '#475569',
+                border: viewMode === 'history' ? 'none' : '1px solid #e2e8f0'
+              },
+              children: ['📊', " 일자별 추이 ", activeKeyword ? '(' + analysisHistory.length + '일)' : '']
+            }, void 0, true), /*#__PURE__*/_jsxDEV("button", {
+              onClick: function () {
+                setViewMode('rank');
+              },
+              style: {
+                padding: '8px 18px',
+                borderRadius: 8,
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: 'pointer',
+                background: viewMode === 'rank' ? '#1B2A4A' : '#fff',
+                color: viewMode === 'rank' ? '#fff' : '#475569',
+                border: viewMode === 'rank' ? 'none' : '1px solid #e2e8f0'
+              },
+              children: ['📈', " 순위 이력 ", activeKeyword ? '(' + rankHistory.length + '건)' : '']
+            }, void 0, true), /*#__PURE__*/_jsxDEV("button", {
+              onClick: function () {
+                setViewMode('insights');
+              },
+              style: {
+                padding: '8px 18px',
+                borderRadius: 8,
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: 'pointer',
+                background: viewMode === 'insights' ? '#7C3AED' : '#fff',
+                color: viewMode === 'insights' ? '#fff' : '#7C3AED',
+                border: viewMode === 'insights' ? 'none' : '1px solid #DDD6FE'
+              },
+              children: ['🤖', " AI 인사이트"]
+            }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+              style: {
+                flex: 1
+              }
+            }, void 0, false)]
+          }, void 0, true), activeKeyword && (viewMode === 'history' || viewMode === 'rank') && /*#__PURE__*/_jsxDEV("div", {
+            children: [viewMode === 'history' && /*#__PURE__*/_jsxDEV("div", {
+              className: "card",
+              style: {
+                padding: 20
+              },
+              children: [/*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  fontSize: 16,
+                  fontWeight: 700,
+                  marginBottom: 16
+                },
+                children: ["\"", activeKeyword, "\" 일자별 분석 추이"]
+              }, void 0, true), analysisHistory.length === 0 ? /*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  textAlign: 'center',
+                  padding: 30,
+                  color: '#94a3b8',
+                  fontSize: 13
+                },
+                children: "아직 누적된 분석 데이터가 없습니다. 매일 분석을 실행하면 여기에 추이가 표시됩니다."
+              }, void 0, false) : /*#__PURE__*/_jsxDEV("div", {
+                className: "table-wrap",
+                style: {
+                  overflowX: 'auto'
+                },
+                children: /*#__PURE__*/_jsxDEV("table", {
+                  style: {
+                    minWidth: 750,
+                    fontSize: 13,
+                    whiteSpace: 'nowrap'
+                  },
+                  children: [/*#__PURE__*/_jsxDEV("thead", {
+                    children: /*#__PURE__*/_jsxDEV("tr", {
+                      children: [/*#__PURE__*/_jsxDEV("th", {
+                        style: {
+                          whiteSpace: 'nowrap'
+                        },
+                        children: "날짜"
+                      }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                        style: {
+                          textAlign: 'right',
+                          whiteSpace: 'nowrap'
+                        },
+                        children: "검색량"
+                      }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                        style: {
+                          textAlign: 'right',
+                          whiteSpace: 'nowrap'
+                        },
+                        children: "PC 클릭"
+                      }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                        style: {
+                          textAlign: 'right',
+                          whiteSpace: 'nowrap'
+                        },
+                        children: "모바일 클릭"
+                      }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                        style: {
+                          textAlign: 'right',
+                          whiteSpace: 'nowrap'
+                        },
+                        children: "경쟁지수"
+                      }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                        style: {
+                          textAlign: 'center',
+                          whiteSpace: 'nowrap'
+                        },
+                        children: "경쟁수준"
+                      }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                        style: {
+                          textAlign: 'center',
+                          whiteSpace: 'nowrap'
+                        },
+                        children: "광고 경쟁강도"
+                      }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                        style: {
+                          textAlign: 'center',
+                          whiteSpace: 'nowrap'
+                        },
+                        children: "보고서"
+                      }, void 0, false)]
+                    }, void 0, true)
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("tbody", {
+                    children: analysisHistory.slice().reverse().map(function (h, i, arr) {
+                      /* 최신이 위 → 더 과거(아래쪽, i+1)와 비교해 변동 계산 */
+                      var prevH = arr[i + 1] || null;
+                      var compIdxDiff = prevH && h.comp_index != null && prevH.comp_index != null ? (h.comp_index - prevH.comp_index).toFixed(2) : null;
+                      /* 경쟁수준 퍼센트 색상 */
+                      var cpVal = h.comp_percent;
+                      var cpColor = cpVal != null ? cpVal <= 30 ? '#16a34a' : cpVal <= 70 ? '#ca8a04' : '#dc2626' : '#64748b';
+                      var cpBg = cpVal != null ? cpVal <= 30 ? '#dcfce7' : cpVal <= 70 ? '#fef9c3' : '#fee2e2' : '#f1f5f9';
+                      var cpLabel = cpVal != null ? cpVal <= 30 ? '블루오션' : cpVal <= 70 ? '보통' : '레드오션' : '-';
+                      /* 광고 경쟁강도 배지 색상 */
+                      var adIdx = h.ad_comp_idx || '-';
+                      var adColor = adIdx === '높음' || adIdx === 'HIGH' ? '#dc2626' : adIdx === '중간' || adIdx === 'MEDIUM' ? '#ca8a04' : adIdx === '낮음' || adIdx === 'LOW' ? '#16a34a' : '#64748b';
+                      var adBg = adIdx === '높음' || adIdx === 'HIGH' ? '#fee2e2' : adIdx === '중간' || adIdx === 'MEDIUM' ? '#fef9c3' : adIdx === '낮음' || adIdx === 'LOW' ? '#dcfce7' : '#f1f5f9';
+                      return /*#__PURE__*/_jsxDEV("tr", {
+                        children: [/*#__PURE__*/_jsxDEV("td", {
+                          style: {
+                            fontWeight: 600,
+                            whiteSpace: 'nowrap'
+                          },
+                          children: h.date
+                        }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                          style: {
+                            textAlign: 'right',
+                            whiteSpace: 'nowrap'
+                          },
+                          children: h.search_volume || '-'
+                        }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                          style: {
+                            textAlign: 'right',
+                            whiteSpace: 'nowrap'
+                          },
+                          children: h.pc_clicks || '-'
+                        }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                          style: {
+                            textAlign: 'right',
+                            whiteSpace: 'nowrap'
+                          },
+                          children: h.mobile_clicks || '-'
+                        }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                          style: {
+                            textAlign: 'right',
+                            whiteSpace: 'nowrap'
+                          },
+                          children: [h.comp_index != null ? h.comp_index : '-', compIdxDiff && compIdxDiff != '0.00' && /*#__PURE__*/_jsxDEV("span", {
+                            style: {
+                              fontSize: 11,
+                              marginLeft: 4,
+                              color: compIdxDiff > 0 ? '#dc2626' : '#16a34a'
+                            },
+                            children: [compIdxDiff > 0 ? '+' : '', compIdxDiff]
+                          }, void 0, true)]
+                        }, void 0, true), /*#__PURE__*/_jsxDEV("td", {
+                          style: {
+                            textAlign: 'center',
+                            whiteSpace: 'nowrap'
+                          },
+                          children: cpVal != null ? /*#__PURE__*/_jsxDEV("span", {
+                            style: {
+                              padding: '2px 6px',
+                              borderRadius: 10,
+                              fontSize: 11,
+                              fontWeight: 600,
+                              background: cpBg,
+                              color: cpColor
+                            },
+                            children: [cpLabel, " ", cpVal, "%"]
+                          }, void 0, true) : '-'
+                        }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                          style: {
+                            textAlign: 'center',
+                            whiteSpace: 'nowrap'
+                          },
+                          children: /*#__PURE__*/_jsxDEV("span", {
+                            style: {
+                              padding: '2px 6px',
+                              borderRadius: 10,
+                              fontSize: 11,
+                              fontWeight: 600,
+                              background: adBg,
+                              color: adColor
+                            },
+                            children: adIdx
+                          }, void 0, false)
+                        }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                          style: {
+                            textAlign: 'center'
+                          },
+                          children: /*#__PURE__*/_jsxDEV("button", {
+                            onClick: function () {
+                              var row = (analyses || []).find(function (a) {
+                                return a.analyzed_date === h.date && (!activeKeyword || a.keyword === activeKeyword);
+                              });
+                              if (row && onDownloadReport) {
+                                onDownloadReport(Object.assign({}, row, {
+                                  client_id: selectedClient ? selectedClient.id : null,
+                                  companyName: selectedClient ? selectedClient.name : ''
+                                }));
+                              } else {
+                                downloadReport(h.date);
+                              }
+                            },
+                            style: {
+                              padding: '4px 10px',
+                              borderRadius: 6,
+                              fontSize: 11,
+                              cursor: 'pointer',
+                              background: '#f0f9ff',
+                              color: '#0369a1',
+                              border: '1px solid #bae6fd',
+                              fontWeight: 600
+                            },
+                            children: "HTML"
+                          }, void 0, false)
+                        }, void 0, false)]
+                      }, i, true);
+                    })
+                  }, void 0, false)]
+                }, void 0, true)
+              }, void 0, false)]
+            }, void 0, true), viewMode === 'rank' && /*#__PURE__*/_jsxDEV("div", {
+              className: "card",
+              style: {
+                padding: 20
+              },
+              children: [/*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  marginBottom: 16
+                },
+                children: [/*#__PURE__*/_jsxDEV("div", {
+                  style: {
+                    fontSize: 16,
+                    fontWeight: 700
+                  },
+                  children: ["\"", activeKeyword, "\" 순위 추적 이력"]
+                }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                  ref: exportMenuRef,
+                  style: {
+                    position: 'relative'
+                  },
+                  children: [/*#__PURE__*/_jsxDEV("button", {
+                    onClick: function () {
+                      setShowExportMenu(!showExportMenu);
+                    },
+                    style: {
+                      padding: '6px 14px',
+                      borderRadius: 8,
+                      fontSize: 12,
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      background: '#f0f9ff',
+                      color: '#0369a1',
+                      border: '1px solid #bae6fd',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 6
+                    },
+                    children: ['📸', " 이미지 저장 ", '▾']
+                  }, void 0, true), showExportMenu && /*#__PURE__*/_jsxDEV("div", {
+                    style: {
+                      position: 'absolute',
+                      top: '100%',
+                      right: 0,
+                      marginTop: 4,
+                      zIndex: 100,
+                      background: '#fff',
+                      borderRadius: 10,
+                      boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
+                      border: '1px solid #e2e8f0',
+                      minWidth: 160,
+                      overflow: 'hidden'
+                    },
+                    children: [{
+                      label: '최근 7일',
+                      days: 7
+                    }, {
+                      label: '최근 30일',
+                      days: 30
+                    }, {
+                      label: '최근 60일',
+                      days: 60
+                    }, {
+                      label: '전체 기간',
+                      days: 0
+                    }].map(function (opt) {
+                      return React.createElement('button', {
+                        key: opt.days,
+                        onClick: function () {
+                          exportRankImage(opt.days);
+                        },
+                        style: {
+                          display: 'block',
+                          width: '100%',
+                          padding: '10px 16px',
+                          background: 'none',
+                          border: 'none',
+                          borderBottom: '1px solid #f1f5f9',
+                          textAlign: 'left',
+                          fontSize: 13,
+                          cursor: 'pointer',
+                          color: '#334155',
+                          fontWeight: 500
+                        },
+                        onMouseOver: function (e) {
+                          e.target.style.background = '#f0f9ff';
+                        },
+                        onMouseOut: function (e) {
+                          e.target.style.background = 'none';
+                        }
+                      }, opt.label);
+                    })
+                  }, void 0, false)]
+                }, void 0, true)]
+              }, void 0, true), rankHistory.length === 0 ? /*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  textAlign: 'center',
+                  padding: 40,
+                  color: '#94a3b8',
+                  fontSize: 13
+                },
+                children: [/*#__PURE__*/_jsxDEV("div", {
+                  style: {
+                    fontSize: 32,
+                    marginBottom: 12
+                  },
+                  children: "📊"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+                  style: {
+                    fontWeight: 600,
+                    marginBottom: 6,
+                    color: '#64748b'
+                  },
+                  children: "아직 수집된 순위 데이터가 없습니다"
+                }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+                  children: "스케줄러가 6시간 간격으로 자동 수집하며, 매일 오전 7시 전체 분석 시에도 함께 수집됩니다."
+                }, void 0, false)]
+              }, void 0, true) : /*#__PURE__*/_jsxDEV("div", {
+                className: "table-wrap",
+                children: /*#__PURE__*/_jsxDEV("table", {
+                  children: [/*#__PURE__*/_jsxDEV("thead", {
+                    children: /*#__PURE__*/_jsxDEV("tr", {
+                      children: [/*#__PURE__*/_jsxDEV("th", {
+                        children: "날짜"
+                      }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                        children: "순위"
+                      }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                        children: "유형"
+                      }, void 0, false)]
+                    }, void 0, true)
+                  }, void 0, false), /*#__PURE__*/_jsxDEV("tbody", {
+                    children: rankHistory.slice().reverse().map(function (r, i, arr) {
+                      var prevR = arr[i + 1] || null;
+                      var diff = prevR && r.rank_position && prevR.rank_position ? prevR.rank_position - r.rank_position : null;
+                      return /*#__PURE__*/_jsxDEV("tr", {
+                        children: [/*#__PURE__*/_jsxDEV("td", {
+                          children: (r.checked_at || '').slice(0, 16)
+                        }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                          style: {
+                            fontWeight: 700
+                          },
+                          children: [r.rank_position ? r.rank_position + '위' : '미노출', diff != null && diff !== 0 && /*#__PURE__*/_jsxDEV("span", {
+                            style: {
+                              fontSize: 11,
+                              marginLeft: 6,
+                              color: diff > 0 ? '#16a34a' : '#dc2626'
+                            },
+                            children: diff > 0 ? '▲' + diff : '▼' + Math.abs(diff)
+                          }, void 0, false)]
+                        }, void 0, true), /*#__PURE__*/_jsxDEV("td", {
+                          children: r.check_type === 'manual' ? '수동' : '자동'
+                        }, void 0, false)]
+                      }, i, true);
+                    })
+                  }, void 0, false)]
+                }, void 0, true)
+              }, void 0, false)]
+            }, void 0, true)]
+          }, void 0, true), !activeKeyword && (viewMode === 'history' || viewMode === 'rank') && /*#__PURE__*/_jsxDEV("div", {
+            className: "card",
+            style: {
+              padding: 40,
+              textAlign: 'center',
+              color: '#94a3b8'
+            },
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              style: {
+                fontSize: 32,
+                marginBottom: 12
+              },
+              children: '👆'
+            }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+              style: {
+                fontSize: 14,
+                fontWeight: 500
+              },
+              children: ["위에서 키워드를 선택하면 ", viewMode === 'history' ? '일자별 추이' : '순위 이력', "가 표시됩니다."]
+            }, void 0, true)]
+          }, void 0, true), viewMode === 'insights' && /*#__PURE__*/_jsxDEV(AiInsightsView, {
+            aiLoading: aiLoading,
+            aiInsights: aiInsights,
+            aiSelectedKeyword: aiSelectedKeyword,
+            setAiSelectedKeyword: setAiSelectedKeyword
+          }, void 0, false)]
+        }, void 0, true)]
+      }, void 0, true)]
+    }, void 0, true)
+  }, void 0, false);
 };
 
 /* ==================== 분석 실행 폼 ==================== */
@@ -12843,85 +13951,94 @@ window.AnalysisForm = function AnalysisForm({
       setProductUrl(url);
     }
   }, [client]);
-  return /*#__PURE__*/React.createElement("div", {
+  return /*#__PURE__*/_jsxDEV("div", {
     className: "card",
     style: {
       padding: 16,
       marginBottom: 16
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 15,
-      fontWeight: 600,
-      marginBottom: 12
-    }
-  }, "\uC0C8 \uBD84\uC11D \uC2E4\uD589"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      gap: 10,
-      alignItems: 'flex-end',
-      flexWrap: 'wrap'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      flex: 1,
-      minWidth: 150
-    }
-  }, /*#__PURE__*/React.createElement("label", {
-    style: {
-      fontSize: 12,
-      color: '#64748b',
-      display: 'block',
-      marginBottom: 4
-    }
-  }, "\uD0A4\uC6CC\uB4DC"), /*#__PURE__*/React.createElement("input", {
-    className: "form-input",
-    value: keyword,
-    onChange: function (e) {
-      setKeyword(e.target.value);
     },
-    placeholder: "\uBD84\uC11D\uD560 \uD0A4\uC6CC\uB4DC",
-    style: {
-      width: '100%'
-    }
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      flex: 1.5,
-      minWidth: 200
-    }
-  }, /*#__PURE__*/React.createElement("label", {
-    style: {
-      fontSize: 12,
-      color: '#64748b',
-      display: 'block',
-      marginBottom: 4
-    }
-  }, "\uC0C1\uD488 URL (\uC120\uD0DD)"), /*#__PURE__*/React.createElement("input", {
-    className: "form-input",
-    value: productUrl,
-    onChange: function (e) {
-      setProductUrl(e.target.value);
-    },
-    placeholder: "https://smartstore.naver.com/...",
-    style: {
-      width: '100%'
-    }
-  })), /*#__PURE__*/React.createElement("button", {
-    className: "btn btn-primary",
-    onClick: function () {
-      onAnalyze(keyword, productUrl);
-    },
-    disabled: analyzing || !keyword,
-    style: {
-      whiteSpace: 'nowrap'
-    }
-  }, analyzing ? '분석 중...' : '분석 실행')), message && /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: 10,
-      fontSize: 13,
-      color: '#16a34a'
-    }
-  }, message));
+    children: [/*#__PURE__*/_jsxDEV("div", {
+      style: {
+        fontSize: 15,
+        fontWeight: 600,
+        marginBottom: 12
+      },
+      children: "새 분석 실행"
+    }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+      style: {
+        display: 'flex',
+        gap: 10,
+        alignItems: 'flex-end',
+        flexWrap: 'wrap'
+      },
+      children: [/*#__PURE__*/_jsxDEV("div", {
+        style: {
+          flex: 1,
+          minWidth: 150
+        },
+        children: [/*#__PURE__*/_jsxDEV("label", {
+          style: {
+            fontSize: 12,
+            color: '#64748b',
+            display: 'block',
+            marginBottom: 4
+          },
+          children: "키워드"
+        }, void 0, false), /*#__PURE__*/_jsxDEV("input", {
+          className: "form-input",
+          value: keyword,
+          onChange: function (e) {
+            setKeyword(e.target.value);
+          },
+          placeholder: "분석할 키워드",
+          style: {
+            width: '100%'
+          }
+        }, void 0, false)]
+      }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+        style: {
+          flex: 1.5,
+          minWidth: 200
+        },
+        children: [/*#__PURE__*/_jsxDEV("label", {
+          style: {
+            fontSize: 12,
+            color: '#64748b',
+            display: 'block',
+            marginBottom: 4
+          },
+          children: "상품 URL (선택)"
+        }, void 0, false), /*#__PURE__*/_jsxDEV("input", {
+          className: "form-input",
+          value: productUrl,
+          onChange: function (e) {
+            setProductUrl(e.target.value);
+          },
+          placeholder: "https://smartstore.naver.com/...",
+          style: {
+            width: '100%'
+          }
+        }, void 0, false)]
+      }, void 0, true), /*#__PURE__*/_jsxDEV("button", {
+        className: "btn btn-primary",
+        onClick: function () {
+          onAnalyze(keyword, productUrl);
+        },
+        disabled: analyzing || !keyword,
+        style: {
+          whiteSpace: 'nowrap'
+        },
+        children: analyzing ? '분석 중...' : '분석 실행'
+      }, void 0, false)]
+    }, void 0, true), message && /*#__PURE__*/_jsxDEV("div", {
+      style: {
+        marginTop: 10,
+        fontSize: 13,
+        color: '#16a34a'
+      },
+      children: message
+    }, void 0, false)]
+  }, void 0, true);
 };
 
 /* ==================== 분석 결과 뷰 ==================== */
@@ -12935,217 +14052,308 @@ window.AnalysisResultView = function AnalysisResultView({
   function fmt(n) {
     return n != null ? Number(n).toLocaleString('ko-KR') : '-';
   }
-  return /*#__PURE__*/React.createElement("div", null, data.summaryCards && /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      padding: 20,
-      marginBottom: 16
-    }
-  }, !hideHeader && /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      justifyContent: 'space-between',
-      alignItems: 'center',
-      marginBottom: 16
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 16,
-      fontWeight: 700
-    }
-  }, keyword, " \uBD84\uC11D \uACB0\uACFC"), onExport && /*#__PURE__*/React.createElement("button", {
-    className: "btn btn-primary",
-    onClick: onExport,
-    style: {
-      fontSize: 13,
-      padding: '6px 14px'
-    }
-  }, "HTML \uBCF4\uACE0\uC11C")), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      gap: 12,
-      flexWrap: 'wrap'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      flex: 1,
-      minWidth: 120,
-      background: '#f0f9ff',
-      borderRadius: 10,
-      padding: 16,
-      textAlign: 'center'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 12,
-      color: '#64748b'
-    }
-  }, "\uC6D4\uAC04 \uAC80\uC0C9\uB7C9"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 24,
-      fontWeight: 700,
-      color: '#0f172a'
-    }
-  }, fmt(data.summaryCards.totalVolume))), /*#__PURE__*/React.createElement("div", {
-    style: {
-      flex: 1,
-      minWidth: 120,
-      background: '#f0fdf4',
-      borderRadius: 10,
-      padding: 16,
-      textAlign: 'center'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 12,
-      color: '#64748b'
-    }
-  }, "\uC0C1\uD488 \uC218"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 24,
-      fontWeight: 700,
-      color: '#0f172a'
-    }
-  }, fmt(data.summaryCards.productCount))), /*#__PURE__*/React.createElement("div", {
-    style: {
-      flex: 1,
-      minWidth: 120,
-      background: '#faf5ff',
-      borderRadius: 10,
-      padding: 16,
-      textAlign: 'center'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 12,
-      color: '#64748b'
-    }
-  }, "\uACBD\uC7C1\uAC15\uB3C4"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 24,
-      fontWeight: 700,
-      color: data.competitionIndex ? data.competitionIndex.compColor : '#0f172a'
-    }
-  }, data.summaryCards.compLevel)))), data.competitionIndex && /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      padding: 16,
-      marginBottom: 16
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 15,
-      fontWeight: 600,
-      marginBottom: 10
-    }
-  }, "\uACBD\uC7C1\uAC15\uB3C4 \uBD84\uC11D"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      gap: 20,
-      flexWrap: 'wrap',
-      fontSize: 14
-    }
-  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: '#64748b'
-    }
-  }, "\uACBD\uC7C1\uC9C0\uC218:"), " ", /*#__PURE__*/React.createElement("strong", {
-    style: {
-      color: data.competitionIndex.compColor
-    }
-  }, data.competitionIndex.compIndex)), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: '#64748b'
-    }
-  }, "\uC0C1\uD488 \uC218:"), " ", /*#__PURE__*/React.createElement("strong", null, fmt(data.competitionIndex.productCount))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: '#64748b'
-    }
-  }, "\uAC80\uC0C9\uB7C9:"), " ", /*#__PURE__*/React.createElement("strong", null, fmt(data.competitionIndex.searchVolume))))), data.marketRevenue && /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      padding: 16,
-      marginBottom: 16
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 15,
-      fontWeight: 600,
-      marginBottom: 10
-    }
-  }, "\uC2DC\uC7A5 \uADDC\uBAA8"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      gap: 20,
-      flexWrap: 'wrap',
-      fontSize: 14
-    }
-  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: '#64748b'
-    }
-  }, "\uD3C9\uADE0 \uAC00\uACA9:"), " ", /*#__PURE__*/React.createElement("strong", null, fmt(data.marketRevenue.avgPrice), "\uC6D0")), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: '#64748b'
-    }
-  }, "\uC608\uC0C1 \uC6D4 \uC2DC\uC7A5:"), " ", /*#__PURE__*/React.createElement("strong", null, fmt(data.marketRevenue.estimatedMonthly), "\uC6D0")))), data.advertiserInfo && /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      padding: 16,
-      marginBottom: 16
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 15,
-      fontWeight: 600,
-      marginBottom: 10
-    }
-  }, "\uAD11\uACE0 \uACBD\uC7C1 \uC815\uBCF4"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      gap: 20,
-      flexWrap: 'wrap',
-      fontSize: 14
-    }
-  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: '#64748b'
-    }
-  }, "\uAD11\uACE0 \uACBD\uC7C1\uAC15\uB3C4:"), " ", /*#__PURE__*/React.createElement("strong", null, data.advertiserInfo.compIdx)), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: '#64748b'
-    }
-  }, "\uAD11\uACE0 \uB178\uCD9C \uAE4A\uC774:"), " ", /*#__PURE__*/React.createElement("strong", null, data.advertiserInfo.adDepth ? '상위 ' + data.advertiserInfo.adDepth + '개' : '-')), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: '#64748b'
-    }
-  }, "PC \uD074\uB9AD:"), " ", /*#__PURE__*/React.createElement("strong", null, data.advertiserInfo.pcClicks, "\uD68C")), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: '#64748b'
-    }
-  }, "\uBAA8\uBC14\uC77C \uD074\uB9AD:"), " ", /*#__PURE__*/React.createElement("strong", null, data.advertiserInfo.mobileClicks, "\uD68C")))), !hideHeader && rankHistory && rankHistory.length > 0 && /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      padding: 16,
-      marginBottom: 16
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 15,
-      fontWeight: 600,
-      marginBottom: 10
-    }
-  }, "\uC21C\uC704 \uCD94\uC801 \uC774\uB825 (", rankHistory.length, "\uAC74)"), /*#__PURE__*/React.createElement("div", {
-    className: "table-wrap"
-  }, /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "\uB0A0\uC9DC"), /*#__PURE__*/React.createElement("th", null, "\uC21C\uC704"), /*#__PURE__*/React.createElement("th", null, "\uC720\uD615"))), /*#__PURE__*/React.createElement("tbody", null, rankHistory.slice().reverse().map(function (r, i) {
-    return /*#__PURE__*/React.createElement("tr", {
-      key: i
-    }, /*#__PURE__*/React.createElement("td", null, (r.checked_at || '').slice(0, 16)), /*#__PURE__*/React.createElement("td", {
+  return /*#__PURE__*/_jsxDEV("div", {
+    children: [data.summaryCards && /*#__PURE__*/_jsxDEV("div", {
+      className: "card",
       style: {
-        fontWeight: 700
-      }
-    }, r.rank_position ? r.rank_position + '위' : '미노출'), /*#__PURE__*/React.createElement("td", null, r.check_type === 'manual' ? '수동' : '자동'));
-  }))))));
+        padding: 20,
+        marginBottom: 16
+      },
+      children: [!hideHeader && /*#__PURE__*/_jsxDEV("div", {
+        style: {
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          marginBottom: 16
+        },
+        children: [/*#__PURE__*/_jsxDEV("div", {
+          style: {
+            fontSize: 16,
+            fontWeight: 700
+          },
+          children: [keyword, " 분석 결과"]
+        }, void 0, true), onExport && /*#__PURE__*/_jsxDEV("button", {
+          className: "btn btn-primary",
+          onClick: onExport,
+          style: {
+            fontSize: 13,
+            padding: '6px 14px'
+          },
+          children: "HTML 보고서"
+        }, void 0, false)]
+      }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+        style: {
+          display: 'flex',
+          gap: 12,
+          flexWrap: 'wrap'
+        },
+        children: [/*#__PURE__*/_jsxDEV("div", {
+          style: {
+            flex: 1,
+            minWidth: 120,
+            background: '#f0f9ff',
+            borderRadius: 10,
+            padding: 16,
+            textAlign: 'center'
+          },
+          children: [/*#__PURE__*/_jsxDEV("div", {
+            style: {
+              fontSize: 12,
+              color: '#64748b'
+            },
+            children: "월간 검색량"
+          }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+            style: {
+              fontSize: 24,
+              fontWeight: 700,
+              color: '#0f172a'
+            },
+            children: fmt(data.summaryCards.totalVolume)
+          }, void 0, false)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          style: {
+            flex: 1,
+            minWidth: 120,
+            background: '#f0fdf4',
+            borderRadius: 10,
+            padding: 16,
+            textAlign: 'center'
+          },
+          children: [/*#__PURE__*/_jsxDEV("div", {
+            style: {
+              fontSize: 12,
+              color: '#64748b'
+            },
+            children: "상품 수"
+          }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+            style: {
+              fontSize: 24,
+              fontWeight: 700,
+              color: '#0f172a'
+            },
+            children: fmt(data.summaryCards.productCount)
+          }, void 0, false)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          style: {
+            flex: 1,
+            minWidth: 120,
+            background: '#faf5ff',
+            borderRadius: 10,
+            padding: 16,
+            textAlign: 'center'
+          },
+          children: [/*#__PURE__*/_jsxDEV("div", {
+            style: {
+              fontSize: 12,
+              color: '#64748b'
+            },
+            children: "경쟁강도"
+          }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+            style: {
+              fontSize: 24,
+              fontWeight: 700,
+              color: data.competitionIndex ? data.competitionIndex.compColor : '#0f172a'
+            },
+            children: data.summaryCards.compLevel
+          }, void 0, false)]
+        }, void 0, true)]
+      }, void 0, true)]
+    }, void 0, true), data.competitionIndex && /*#__PURE__*/_jsxDEV("div", {
+      className: "card",
+      style: {
+        padding: 16,
+        marginBottom: 16
+      },
+      children: [/*#__PURE__*/_jsxDEV("div", {
+        style: {
+          fontSize: 15,
+          fontWeight: 600,
+          marginBottom: 10
+        },
+        children: "경쟁강도 분석"
+      }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+        style: {
+          display: 'flex',
+          gap: 20,
+          flexWrap: 'wrap',
+          fontSize: 14
+        },
+        children: [/*#__PURE__*/_jsxDEV("div", {
+          children: [/*#__PURE__*/_jsxDEV("span", {
+            style: {
+              color: '#64748b'
+            },
+            children: "경쟁지수:"
+          }, void 0, false), " ", /*#__PURE__*/_jsxDEV("strong", {
+            style: {
+              color: data.competitionIndex.compColor
+            },
+            children: data.competitionIndex.compIndex
+          }, void 0, false)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          children: [/*#__PURE__*/_jsxDEV("span", {
+            style: {
+              color: '#64748b'
+            },
+            children: "상품 수:"
+          }, void 0, false), " ", /*#__PURE__*/_jsxDEV("strong", {
+            children: fmt(data.competitionIndex.productCount)
+          }, void 0, false)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          children: [/*#__PURE__*/_jsxDEV("span", {
+            style: {
+              color: '#64748b'
+            },
+            children: "검색량:"
+          }, void 0, false), " ", /*#__PURE__*/_jsxDEV("strong", {
+            children: fmt(data.competitionIndex.searchVolume)
+          }, void 0, false)]
+        }, void 0, true)]
+      }, void 0, true)]
+    }, void 0, true), data.marketRevenue && /*#__PURE__*/_jsxDEV("div", {
+      className: "card",
+      style: {
+        padding: 16,
+        marginBottom: 16
+      },
+      children: [/*#__PURE__*/_jsxDEV("div", {
+        style: {
+          fontSize: 15,
+          fontWeight: 600,
+          marginBottom: 10
+        },
+        children: "시장 규모"
+      }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+        style: {
+          display: 'flex',
+          gap: 20,
+          flexWrap: 'wrap',
+          fontSize: 14
+        },
+        children: [/*#__PURE__*/_jsxDEV("div", {
+          children: [/*#__PURE__*/_jsxDEV("span", {
+            style: {
+              color: '#64748b'
+            },
+            children: "평균 가격:"
+          }, void 0, false), " ", /*#__PURE__*/_jsxDEV("strong", {
+            children: [fmt(data.marketRevenue.avgPrice), "원"]
+          }, void 0, true)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          children: [/*#__PURE__*/_jsxDEV("span", {
+            style: {
+              color: '#64748b'
+            },
+            children: "예상 월 시장:"
+          }, void 0, false), " ", /*#__PURE__*/_jsxDEV("strong", {
+            children: [fmt(data.marketRevenue.estimatedMonthly), "원"]
+          }, void 0, true)]
+        }, void 0, true)]
+      }, void 0, true)]
+    }, void 0, true), data.advertiserInfo && /*#__PURE__*/_jsxDEV("div", {
+      className: "card",
+      style: {
+        padding: 16,
+        marginBottom: 16
+      },
+      children: [/*#__PURE__*/_jsxDEV("div", {
+        style: {
+          fontSize: 15,
+          fontWeight: 600,
+          marginBottom: 10
+        },
+        children: "광고 경쟁 정보"
+      }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+        style: {
+          display: 'flex',
+          gap: 20,
+          flexWrap: 'wrap',
+          fontSize: 14
+        },
+        children: [/*#__PURE__*/_jsxDEV("div", {
+          children: [/*#__PURE__*/_jsxDEV("span", {
+            style: {
+              color: '#64748b'
+            },
+            children: "광고 경쟁강도:"
+          }, void 0, false), " ", /*#__PURE__*/_jsxDEV("strong", {
+            children: data.advertiserInfo.compIdx
+          }, void 0, false)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          children: [/*#__PURE__*/_jsxDEV("span", {
+            style: {
+              color: '#64748b'
+            },
+            children: "광고 노출 깊이:"
+          }, void 0, false), " ", /*#__PURE__*/_jsxDEV("strong", {
+            children: data.advertiserInfo.adDepth ? '상위 ' + data.advertiserInfo.adDepth + '개' : '-'
+          }, void 0, false)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          children: [/*#__PURE__*/_jsxDEV("span", {
+            style: {
+              color: '#64748b'
+            },
+            children: "PC 클릭:"
+          }, void 0, false), " ", /*#__PURE__*/_jsxDEV("strong", {
+            children: [data.advertiserInfo.pcClicks, "회"]
+          }, void 0, true)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          children: [/*#__PURE__*/_jsxDEV("span", {
+            style: {
+              color: '#64748b'
+            },
+            children: "모바일 클릭:"
+          }, void 0, false), " ", /*#__PURE__*/_jsxDEV("strong", {
+            children: [data.advertiserInfo.mobileClicks, "회"]
+          }, void 0, true)]
+        }, void 0, true)]
+      }, void 0, true)]
+    }, void 0, true), !hideHeader && rankHistory && rankHistory.length > 0 && /*#__PURE__*/_jsxDEV("div", {
+      className: "card",
+      style: {
+        padding: 16,
+        marginBottom: 16
+      },
+      children: [/*#__PURE__*/_jsxDEV("div", {
+        style: {
+          fontSize: 15,
+          fontWeight: 600,
+          marginBottom: 10
+        },
+        children: ["순위 추적 이력 (", rankHistory.length, "건)"]
+      }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+        className: "table-wrap",
+        children: /*#__PURE__*/_jsxDEV("table", {
+          children: [/*#__PURE__*/_jsxDEV("thead", {
+            children: /*#__PURE__*/_jsxDEV("tr", {
+              children: [/*#__PURE__*/_jsxDEV("th", {
+                children: "날짜"
+              }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                children: "순위"
+              }, void 0, false), /*#__PURE__*/_jsxDEV("th", {
+                children: "유형"
+              }, void 0, false)]
+            }, void 0, true)
+          }, void 0, false), /*#__PURE__*/_jsxDEV("tbody", {
+            children: rankHistory.slice().reverse().map(function (r, i) {
+              return /*#__PURE__*/_jsxDEV("tr", {
+                children: [/*#__PURE__*/_jsxDEV("td", {
+                  children: (r.checked_at || '').slice(0, 16)
+                }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                  style: {
+                    fontWeight: 700
+                  },
+                  children: r.rank_position ? r.rank_position + '위' : '미노출'
+                }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                  children: r.check_type === 'manual' ? '수동' : '자동'
+                }, void 0, false)]
+              }, i, true);
+            })
+          }, void 0, false)]
+        }, void 0, true)
+      }, void 0, false)]
+    }, void 0, true)]
+  }, void 0, true);
 };
 
 ;/* ===== js/components/LearningCenterPage.jsx ===== */
@@ -14772,57 +15980,65 @@ window.UserGuidePage = function UserGuidePage({
 };
 
 ;/* ===== js/components/SectionDivider.jsx ===== */
+import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";
 /* SectionDivider — 섹터 구분 헤더 (v6.1 미리보기 디자인) */
 window.SectionDivider = function SectionDivider(props) {
   var label = props && props.label ? props.label : '';
   var icon = props && props.icon ? props.icon : '';
   var color = props && props.color ? props.color : '#4f46e5';
   var sub = props && props.sub ? props.sub : '';
-  return /*#__PURE__*/React.createElement("div", {
-    className: "report-divider"
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 12
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      width: 40,
-      height: 40,
-      borderRadius: 12,
-      flexShrink: 0,
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      fontSize: 20,
-      color: '#fff',
-      background: 'linear-gradient(135deg, ' + color + ', ' + color + 'cc)',
-      boxShadow: '0 4px 12px ' + color + '40'
-    }
-  }, icon), /*#__PURE__*/React.createElement("div", {
-    style: {
-      minWidth: 0
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontWeight: 900,
-      fontSize: 20,
-      letterSpacing: '-0.5px',
-      color: '#0f172a',
-      lineHeight: 1.2
-    }
-  }, label), sub && /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontWeight: 500,
-      fontSize: 12,
-      color: '#64748b',
-      marginTop: 2
-    }
-  }, sub))));
+  return /*#__PURE__*/_jsxDEV("div", {
+    className: "report-divider",
+    children: /*#__PURE__*/_jsxDEV("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12
+      },
+      children: [/*#__PURE__*/_jsxDEV("div", {
+        style: {
+          width: 40,
+          height: 40,
+          borderRadius: 12,
+          flexShrink: 0,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: 20,
+          color: '#fff',
+          background: 'linear-gradient(135deg, ' + color + ', ' + color + 'cc)',
+          boxShadow: '0 4px 12px ' + color + '40'
+        },
+        children: icon
+      }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+        style: {
+          minWidth: 0
+        },
+        children: [/*#__PURE__*/_jsxDEV("div", {
+          style: {
+            fontWeight: 900,
+            fontSize: 20,
+            letterSpacing: '-0.5px',
+            color: '#0f172a',
+            lineHeight: 1.2
+          },
+          children: label
+        }, void 0, false), sub && /*#__PURE__*/_jsxDEV("div", {
+          style: {
+            fontWeight: 500,
+            fontSize: 12,
+            color: '#64748b',
+            marginTop: 2
+          },
+          children: sub
+        }, void 0, false)]
+      }, void 0, true)]
+    }, void 0, true)
+  }, void 0, false);
 };
 
 ;/* ===== js/components/DatalabDemographicsSection.jsx ===== */
+import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";
 /* DatalabDemographicsSection — 성별 + 연령대별 검색 비율 (v5) */
 window.DatalabDemographicsSection = function DatalabDemographicsSection(props) {
   if (!props?.data) return null;
@@ -14843,122 +16059,144 @@ window.DatalabDemographicsSection = function DatalabDemographicsSection(props) {
   var targetGender = gender ? gender.female > gender.male ? '여성' : '남성' : '';
   var targetAge = peakAge ? peakAge.label : '';
   var targetPct = gender && peakAge ? gender.female > gender.male ? (peakAge.ratio * gender.female / 100).toFixed(1) : (peakAge.ratio * gender.male / 100).toFixed(1) : '';
-  return /*#__PURE__*/React.createElement("div", {
-    className: "grid2"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "card"
-  }, /*#__PURE__*/React.createElement("h3", {
-    className: "rt-h3"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "hic"
-  }, "\uD83D\uDC65"), "\uAC80\uC0C9 \uC778\uAD6C\uD1B5\uACC4 \u2014 \uC131\uBCC4 ", /*#__PURE__*/React.createElement("span", {
-    className: "badge b-ok"
-  }, "\u2705 \uB370\uC774\uD130\uB7A9")), gender ? /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginBottom: 14
-    }
-  }, /*#__PURE__*/React.createElement(ChartCanvas, {
-    type: "doughnut",
-    height: 180,
-    data: {
-      labels: ['남성', '여성'],
-      datasets: [{
-        data: [gender.male, gender.female],
-        backgroundColor: ['#4f46e5', '#ec4899'],
-        borderWidth: 0
-      }]
-    },
-    options: {
-      cutout: '62%',
-      plugins: {
-        legend: {
-          position: 'bottom'
+  return /*#__PURE__*/_jsxDEV("div", {
+    className: "grid2",
+    children: [/*#__PURE__*/_jsxDEV("div", {
+      className: "card",
+      children: [/*#__PURE__*/_jsxDEV("h3", {
+        className: "rt-h3",
+        children: [/*#__PURE__*/_jsxDEV("span", {
+          className: "hic",
+          children: "👥"
+        }, void 0, false), "검색 인구통계 — 성별 ", /*#__PURE__*/_jsxDEV("span", {
+          className: "badge b-ok",
+          children: "✅ 데이터랩"
+        }, void 0, false)]
+      }, void 0, true), gender ? /*#__PURE__*/_jsxDEV("div", {
+        children: [/*#__PURE__*/_jsxDEV("div", {
+          style: {
+            marginBottom: 14
+          },
+          children: /*#__PURE__*/_jsxDEV(ChartCanvas, {
+            type: "doughnut",
+            height: 180,
+            data: {
+              labels: ['남성', '여성'],
+              datasets: [{
+                data: [gender.male, gender.female],
+                backgroundColor: ['#4f46e5', '#ec4899'],
+                borderWidth: 0
+              }]
+            },
+            options: {
+              cutout: '62%',
+              plugins: {
+                legend: {
+                  position: 'bottom'
+                },
+                tooltip: {
+                  callbacks: {
+                    label: function (ctx) {
+                      return ctx.label + ' ' + ctx.parsed + '%';
+                    }
+                  }
+                }
+              }
+            }
+          }, void 0, false)
+        }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+          className: "note",
+          children: gender.male > gender.female ? '남성 ' + gender.male + '% · 여성 ' + gender.female + '% — 남성 타겟 소구.' : '여성 ' + gender.female + '% · 남성 ' + gender.male + '% — 여성 타겟 소구.'
+        }, void 0, false)]
+      }, void 0, true) : /*#__PURE__*/_jsxDEV("div", {
+        style: {
+          textAlign: 'center',
+          padding: 40,
+          color: '#94a3b8',
+          fontSize: 13
         },
-        tooltip: {
-          callbacks: {
-            label: function (ctx) {
-              return ctx.label + ' ' + ctx.parsed + '%';
+        children: "데이터 없음"
+      }, void 0, false)]
+    }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+      className: "card",
+      children: [/*#__PURE__*/_jsxDEV("h3", {
+        className: "rt-h3",
+        children: [/*#__PURE__*/_jsxDEV("span", {
+          className: "hic",
+          children: "👥"
+        }, void 0, false), "검색 인구통계 — 연령 ", /*#__PURE__*/_jsxDEV("span", {
+          className: "badge b-ok",
+          children: "✅ 데이터랩"
+        }, void 0, false)]
+      }, void 0, true), ages.length > 0 ? /*#__PURE__*/_jsxDEV("div", {
+        children: [/*#__PURE__*/_jsxDEV("div", {
+          style: {
+            marginBottom: 14
+          },
+          children: /*#__PURE__*/_jsxDEV(ChartCanvas, {
+            type: "bar",
+            height: 200,
+            data: {
+              labels: ages.map(function (a) {
+                return a.label + (peakAge && a.label === peakAge.label ? ' 🔥' : '');
+              }),
+              datasets: [{
+                label: '검색 비율',
+                data: ages.map(function (a) {
+                  return a.ratio;
+                }),
+                backgroundColor: ages.map(function (a) {
+                  return peakAge && a.label === peakAge.label ? '#7c3aed' : '#c7d2fe';
+                }),
+                borderRadius: 6
+              }]
+            },
+            options: {
+              plugins: {
+                legend: {
+                  display: false
+                },
+                tooltip: {
+                  callbacks: {
+                    label: function (ctx) {
+                      return ctx.parsed.y + '%';
+                    }
+                  }
+                }
+              },
+              scales: {
+                y: {
+                  beginAtZero: true,
+                  ticks: {
+                    callback: function (v) {
+                      return v + '%';
+                    }
+                  }
+                }
+              }
             }
-          }
-        }
-      }
-    }
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "note"
-  }, gender.male > gender.female ? '남성 ' + gender.male + '% · 여성 ' + gender.female + '% — 남성 타겟 소구.' : '여성 ' + gender.female + '% · 남성 ' + gender.male + '% — 여성 타겟 소구.')) : /*#__PURE__*/React.createElement("div", {
-    style: {
-      textAlign: 'center',
-      padding: 40,
-      color: '#94a3b8',
-      fontSize: 13
-    }
-  }, "\uB370\uC774\uD130 \uC5C6\uC74C")), /*#__PURE__*/React.createElement("div", {
-    className: "card"
-  }, /*#__PURE__*/React.createElement("h3", {
-    className: "rt-h3"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "hic"
-  }, "\uD83D\uDC65"), "\uAC80\uC0C9 \uC778\uAD6C\uD1B5\uACC4 \u2014 \uC5F0\uB839 ", /*#__PURE__*/React.createElement("span", {
-    className: "badge b-ok"
-  }, "\u2705 \uB370\uC774\uD130\uB7A9")), ages.length > 0 ? /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginBottom: 14
-    }
-  }, /*#__PURE__*/React.createElement(ChartCanvas, {
-    type: "bar",
-    height: 200,
-    data: {
-      labels: ages.map(function (a) {
-        return a.label + (peakAge && a.label === peakAge.label ? ' 🔥' : '');
-      }),
-      datasets: [{
-        label: '검색 비율',
-        data: ages.map(function (a) {
-          return a.ratio;
-        }),
-        backgroundColor: ages.map(function (a) {
-          return peakAge && a.label === peakAge.label ? '#7c3aed' : '#c7d2fe';
-        }),
-        borderRadius: 6
-      }]
-    },
-    options: {
-      plugins: {
-        legend: {
-          display: false
+          }, void 0, false)
+        }, void 0, false), peakAge && /*#__PURE__*/_jsxDEV("div", {
+          className: "note",
+          children: ["핵심 타겟: ", /*#__PURE__*/_jsxDEV("b", {
+            children: [targetAge, " ", targetGender]
+          }, void 0, true), " (전체의 약 ", targetPct, "%)."]
+        }, void 0, true)]
+      }, void 0, true) : /*#__PURE__*/_jsxDEV("div", {
+        style: {
+          textAlign: 'center',
+          padding: 40,
+          color: '#94a3b8',
+          fontSize: 13
         },
-        tooltip: {
-          callbacks: {
-            label: function (ctx) {
-              return ctx.parsed.y + '%';
-            }
-          }
-        }
-      },
-      scales: {
-        y: {
-          beginAtZero: true,
-          ticks: {
-            callback: function (v) {
-              return v + '%';
-            }
-          }
-        }
-      }
-    }
-  })), peakAge && /*#__PURE__*/React.createElement("div", {
-    className: "note"
-  }, "\uD575\uC2EC \uD0C0\uAC9F: ", /*#__PURE__*/React.createElement("b", null, targetAge, " ", targetGender), " (\uC804\uCCB4\uC758 \uC57D ", targetPct, "%).")) : /*#__PURE__*/React.createElement("div", {
-    style: {
-      textAlign: 'center',
-      padding: 40,
-      color: '#94a3b8',
-      fontSize: 13
-    }
-  }, "\uB370\uC774\uD130 \uC5C6\uC74C")));
+        children: "데이터 없음"
+      }, void 0, false)]
+    }, void 0, true)]
+  }, void 0, true);
 };
 
 ;/* ===== js/components/DatalabTrendSection.jsx ===== */
+import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";
 /* DatalabTrendSection — 12개월 검색량 트렌드 꺾은선 그래프 (v5) */
 window.DatalabTrendSection = function DatalabTrendSection(props) {
   if (!props?.data || !props.data.months || props.data.months.length < 3) return null;
@@ -14997,258 +16235,319 @@ window.DatalabTrendSection = function DatalabTrendSection(props) {
     return v <= maxR;
   });
   if (maxR > 100) gridLines.push(Math.round(maxR));
-  return /*#__PURE__*/React.createElement("div", {
-    className: "section fade-in"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "container"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "card"
-  }, /*#__PURE__*/React.createElement("h3", {
-    className: "rt-h3"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "rt-hic"
-  }, "\uD83D\uDCC8"), "\uD0A4\uC6CC\uB4DC \uAC80\uC0C9\uB7C9 \uD2B8\uB80C\uB4DC (\uCD5C\uADFC 12\uAC1C\uC6D4) ", /*#__PURE__*/React.createElement("span", {
-    className: "badge b-ok"
-  }, "\u2705 \uB370\uC774\uD130\uB7A9")), /*#__PURE__*/React.createElement("div", {
-    className: "grid4",
-    style: {
-      marginBottom: 6
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "kpi"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "k"
-  }, "\uCD5C\uACE0 \uC9C0\uC218"), /*#__PURE__*/React.createElement("div", {
-    className: "v"
-  }, d.maxRatio, " ", /*#__PURE__*/React.createElement("small", null, d.maxMonth))), /*#__PURE__*/React.createElement("div", {
-    className: "kpi"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "k"
-  }, "\uCD5C\uC800 \uC9C0\uC218"), /*#__PURE__*/React.createElement("div", {
-    className: "v"
-  }, d.minRatio, " ", /*#__PURE__*/React.createElement("small", null, d.minMonth))), /*#__PURE__*/React.createElement("div", {
-    className: "kpi"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "k"
-  }, "\uD3C9\uADE0 \uC9C0\uC218"), /*#__PURE__*/React.createElement("div", {
-    className: "v"
-  }, d.avgRatio)), /*#__PURE__*/React.createElement("div", {
-    className: "kpi"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "k"
-  }, "\uBCC0\uB3D9\uD3ED"), /*#__PURE__*/React.createElement("div", {
-    className: "v"
-  }, d.range, /*#__PURE__*/React.createElement("small", null, "p")))), /*#__PURE__*/React.createElement("div", {
-    className: "chartbox"
-  }, /*#__PURE__*/React.createElement(ChartCanvas, {
-    type: "line",
-    height: 240,
-    data: {
-      labels: months.map(function (m) {
-        return m.label;
-      }),
-      datasets: [{
-        label: '검색 지수',
-        data: months.map(function (m) {
-          return m.ratio;
-        }),
-        borderColor: '#4f46e5',
-        backgroundColor: function (c) {
-          if (!c.chart.ctx) return 'rgba(79,70,229,.12)';
-          return window.chartGrad ? window.chartGrad(c.chart.ctx, 'rgba(79,70,229,.22)', 'rgba(79,70,229,0)', 240) : 'rgba(79,70,229,.12)';
-        },
-        fill: true,
-        tension: 0.4,
-        borderWidth: 2.5,
-        pointRadius: months.map(function (m) {
-          return m.ratio === d.maxRatio || m.ratio === d.minRatio ? 6 : 3;
-        }),
-        pointBackgroundColor: months.map(function (m) {
-          return m.ratio === d.maxRatio ? '#4f46e5' : m.ratio === d.minRatio ? '#ef4444' : '#fff';
-        }),
-        pointBorderColor: months.map(function (m) {
-          return m.ratio === d.minRatio ? '#ef4444' : '#4f46e5';
-        }),
-        pointBorderWidth: 2
-      }]
-    },
-    options: {
-      plugins: {
-        legend: {
-          display: false
-        }
-      },
-      scales: {
-        y: {
-          beginAtZero: true,
-          suggestedMax: d.maxRatio || 100
-        }
-      }
-    }
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "note"
-  }, d.trendNote), /*#__PURE__*/React.createElement("div", {
-    className: "note",
-    style: {
-      marginTop: 6,
-      fontSize: 11.5,
-      color: '#94a3b8'
-    }
-  }, "\u2139\uFE0F '\uC9C0\uC218'\uB294 \uC808\uB300 \uAC80\uC0C9\uB7C9\uC774 \uC544\uB2C8\uB77C ", /*#__PURE__*/React.createElement("b", null, "\uAE30\uAC04 \uB0B4 \uCD5C\uACE0\uAC12\uC744 100\uC73C\uB85C \uBCF8 \uC0C1\uB300\uAC12"), "\uC785\uB2C8\uB2E4. \uC99D\uAC10 \uCD94\uC138\uB97C \uBCF4\uB294 \uC6A9\uB3C4\uC774\uBA70, \uAC12 \uC790\uCCB4\uB97C \uAC80\uC0C9 \uD69F\uC218\uB85C \uD574\uC11D\uD558\uC9C0 \uB9C8\uC138\uC694."))));
+  return /*#__PURE__*/_jsxDEV("div", {
+    className: "section fade-in",
+    children: /*#__PURE__*/_jsxDEV("div", {
+      className: "container",
+      children: /*#__PURE__*/_jsxDEV("div", {
+        className: "card",
+        children: [/*#__PURE__*/_jsxDEV("h3", {
+          className: "rt-h3",
+          children: [/*#__PURE__*/_jsxDEV("span", {
+            className: "rt-hic",
+            children: "📈"
+          }, void 0, false), "키워드 검색량 트렌드 (최근 12개월) ", /*#__PURE__*/_jsxDEV("span", {
+            className: "badge b-ok",
+            children: "✅ 데이터랩"
+          }, void 0, false)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          className: "grid4",
+          style: {
+            marginBottom: 6
+          },
+          children: [/*#__PURE__*/_jsxDEV("div", {
+            className: "kpi",
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              className: "k",
+              children: "최고 지수"
+            }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+              className: "v",
+              children: [d.maxRatio, " ", /*#__PURE__*/_jsxDEV("small", {
+                children: d.maxMonth
+              }, void 0, false)]
+            }, void 0, true)]
+          }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+            className: "kpi",
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              className: "k",
+              children: "최저 지수"
+            }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+              className: "v",
+              children: [d.minRatio, " ", /*#__PURE__*/_jsxDEV("small", {
+                children: d.minMonth
+              }, void 0, false)]
+            }, void 0, true)]
+          }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+            className: "kpi",
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              className: "k",
+              children: "평균 지수"
+            }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+              className: "v",
+              children: d.avgRatio
+            }, void 0, false)]
+          }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+            className: "kpi",
+            children: [/*#__PURE__*/_jsxDEV("div", {
+              className: "k",
+              children: "변동폭"
+            }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+              className: "v",
+              children: [d.range, /*#__PURE__*/_jsxDEV("small", {
+                children: "p"
+              }, void 0, false)]
+            }, void 0, true)]
+          }, void 0, true)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          className: "chartbox",
+          children: /*#__PURE__*/_jsxDEV(ChartCanvas, {
+            type: "line",
+            height: 240,
+            data: {
+              labels: months.map(function (m) {
+                return m.label;
+              }),
+              datasets: [{
+                label: '검색 지수',
+                data: months.map(function (m) {
+                  return m.ratio;
+                }),
+                borderColor: '#4f46e5',
+                backgroundColor: function (c) {
+                  if (!c.chart.ctx) return 'rgba(79,70,229,.12)';
+                  return window.chartGrad ? window.chartGrad(c.chart.ctx, 'rgba(79,70,229,.22)', 'rgba(79,70,229,0)', 240) : 'rgba(79,70,229,.12)';
+                },
+                fill: true,
+                tension: 0.4,
+                borderWidth: 2.5,
+                pointRadius: months.map(function (m) {
+                  return m.ratio === d.maxRatio || m.ratio === d.minRatio ? 6 : 3;
+                }),
+                pointBackgroundColor: months.map(function (m) {
+                  return m.ratio === d.maxRatio ? '#4f46e5' : m.ratio === d.minRatio ? '#ef4444' : '#fff';
+                }),
+                pointBorderColor: months.map(function (m) {
+                  return m.ratio === d.minRatio ? '#ef4444' : '#4f46e5';
+                }),
+                pointBorderWidth: 2
+              }]
+            },
+            options: {
+              plugins: {
+                legend: {
+                  display: false
+                }
+              },
+              scales: {
+                y: {
+                  beginAtZero: true,
+                  suggestedMax: d.maxRatio || 100
+                }
+              }
+            }
+          }, void 0, false)
+        }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+          className: "note",
+          children: d.trendNote
+        }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+          className: "note",
+          style: {
+            marginTop: 6,
+            fontSize: 11.5,
+            color: '#94a3b8'
+          },
+          children: ["ℹ️ '지수'는 절대 검색량이 아니라 ", /*#__PURE__*/_jsxDEV("b", {
+            children: "기간 내 최고값을 100으로 본 상대값"
+          }, void 0, false), "입니다. 증감 추세를 보는 용도이며, 값 자체를 검색 횟수로 해석하지 마세요."]
+        }, void 0, true)]
+      }, void 0, true)
+    }, void 0, false)
+  }, void 0, false);
 };
 
 ;/* ===== js/components/DatalabSeasonSection.jsx ===== */
+import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";
 /* DatalabSeasonSection — 시즌별 수요 예측 (v6) */
 window.DatalabSeasonSection = function DatalabSeasonSection(props) {
   if (!props?.data || !props.data.seasons || props.data.seasons.length === 0) return null;
   var d = props.data;
   var seasons = d.seasons;
-  return /*#__PURE__*/React.createElement("div", {
-    className: "section fade-in"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "container"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      padding: '20px 22px'
-    }
-  }, /*#__PURE__*/React.createElement("h3", {
-    className: "rt-h3"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "rt-hic"
-  }, "\uD83D\uDDD3\uFE0F"), "\uC2DC\uC98C\uBCC4 \uC218\uC694 \uC608\uCE21", /*#__PURE__*/React.createElement("span", {
-    className: "badge b-ok"
-  }, "\u2705 \uB370\uC774\uD130\uB7A9")), /*#__PURE__*/React.createElement("div", {
-    className: "rt-desc"
-  }, "\uB370\uC774\uD130\uB7A9 \uC1FC\uD551\uC778\uC0AC\uC774\uD2B8 \uAE30\uBC18 \uC2DC\uC98C \uBD84\uC11D"), /*#__PURE__*/React.createElement("div", {
-    className: "grid4"
-  }, seasons.map(function (s, i) {
-    var isPeak = s.peakSeason || s.grade === '최성수기';
-    return /*#__PURE__*/React.createElement("div", {
-      key: i,
-      className: isPeak ? 'seasoncard peak' : 'seasoncard'
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 22
-      }
-    }, s.icon), /*#__PURE__*/React.createElement("b", null, s.name), /*#__PURE__*/React.createElement("div", {
-      className: "desc",
-      style: {
-        margin: '2px 0'
-      }
-    }, s.period), /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontWeight: 800,
-        color: isPeak ? '#c2410c' : undefined
-      }
-    }, "\uC9C0\uC218 ", Math.round(s.index), /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 10,
-        fontWeight: 500,
-        color: '#94a3b8'
-      }
-    }, " (\uC0C1\uB300\uAC12)"), isPeak ? ' 🔥' : ''), /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 11,
-        color: isPeak ? '#c2410c' : 'var(--sub)'
-      }
-    }, s.grade));
-  })), d.insight && /*#__PURE__*/React.createElement("div", {
-    className: "note"
-  }, d.insight))));
+  return /*#__PURE__*/_jsxDEV("div", {
+    className: "section fade-in",
+    children: /*#__PURE__*/_jsxDEV("div", {
+      className: "container",
+      children: /*#__PURE__*/_jsxDEV("div", {
+        className: "card",
+        style: {
+          padding: '20px 22px'
+        },
+        children: [/*#__PURE__*/_jsxDEV("h3", {
+          className: "rt-h3",
+          children: [/*#__PURE__*/_jsxDEV("span", {
+            className: "rt-hic",
+            children: "🗓️"
+          }, void 0, false), "시즌별 수요 예측", /*#__PURE__*/_jsxDEV("span", {
+            className: "badge b-ok",
+            children: "✅ 데이터랩"
+          }, void 0, false)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          className: "rt-desc",
+          children: "데이터랩 쇼핑인사이트 기반 시즌 분석"
+        }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+          className: "grid4",
+          children: seasons.map(function (s, i) {
+            var isPeak = s.peakSeason || s.grade === '최성수기';
+            return /*#__PURE__*/_jsxDEV("div", {
+              className: isPeak ? 'seasoncard peak' : 'seasoncard',
+              children: [/*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  fontSize: 22
+                },
+                children: s.icon
+              }, void 0, false), /*#__PURE__*/_jsxDEV("b", {
+                children: s.name
+              }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+                className: "desc",
+                style: {
+                  margin: '2px 0'
+                },
+                children: s.period
+              }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  fontWeight: 800,
+                  color: isPeak ? '#c2410c' : undefined
+                },
+                children: ["지수 ", Math.round(s.index), /*#__PURE__*/_jsxDEV("span", {
+                  style: {
+                    fontSize: 10,
+                    fontWeight: 500,
+                    color: '#94a3b8'
+                  },
+                  children: " (상대값)"
+                }, void 0, false), isPeak ? ' 🔥' : '']
+              }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  fontSize: 11,
+                  color: isPeak ? '#c2410c' : 'var(--sub)'
+                },
+                children: s.grade
+              }, void 0, false)]
+            }, i, true);
+          })
+        }, void 0, false), d.insight && /*#__PURE__*/_jsxDEV("div", {
+          className: "note",
+          children: d.insight
+        }, void 0, false)]
+      }, void 0, true)
+    }, void 0, false)
+  }, void 0, false);
 };
 
 ;/* ===== js/components/DatalabWeekdaySection.jsx ===== */
+import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";
 /* DatalabWeekdaySection — 요일별 검색 패턴 (v5) */
 window.DatalabWeekdaySection = function DatalabWeekdaySection(props) {
   if (!props?.data || !props.data.days || props.data.days.length === 0) return null;
   var d = props.data;
   var days = d.days;
-  return /*#__PURE__*/React.createElement("div", {
-    className: "section fade-in"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "container"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      padding: 24
-    }
-  }, /*#__PURE__*/React.createElement("h3", {
-    className: "rt-h3"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "rt-hic"
-  }, "\uD83D\uDCC5"), "\uC694\uC77C\uBCC4 \uAC80\uC0C9 \uD328\uD134", /*#__PURE__*/React.createElement("span", {
-    className: "badge b-ok"
-  }, "\u2705 \uB370\uC774\uD130\uB7A9")), /*#__PURE__*/React.createElement("div", {
-    className: "rt-desc"
-  }, "\uCD5C\uADFC 4\uC8FC \uAE30\uC900 \uC694\uC77C\uBCC4 \uAC80\uC0C9 \uD2B8\uB80C\uB4DC"), /*#__PURE__*/React.createElement(ChartCanvas, {
-    type: "bar",
-    height: 200,
-    data: {
-      labels: days.map(function (day) {
-        return day.label + (day.label === d.peakDay ? ' 🔥' : '');
-      }),
-      datasets: [{
-        label: '검색 지수',
-        data: days.map(function (day) {
-          return Math.round(day.normalized);
-        }),
-        backgroundColor: days.map(function (day) {
-          return day.label === d.peakDay ? '#ec4899' : day.label === d.lowDay ? '#94a3b8' : day.normalized >= 85 ? '#7c3aed' : '#4f46e5';
-        }),
-        borderRadius: 6
-      }]
-    },
-    options: {
-      plugins: {
-        legend: {
-          display: false
+  return /*#__PURE__*/_jsxDEV("div", {
+    className: "section fade-in",
+    children: /*#__PURE__*/_jsxDEV("div", {
+      className: "container",
+      children: /*#__PURE__*/_jsxDEV("div", {
+        className: "card",
+        style: {
+          padding: 24
         },
-        tooltip: {
-          callbacks: {
-            label: function (ctx) {
-              return '지수 ' + ctx.parsed.y;
+        children: [/*#__PURE__*/_jsxDEV("h3", {
+          className: "rt-h3",
+          children: [/*#__PURE__*/_jsxDEV("span", {
+            className: "rt-hic",
+            children: "📅"
+          }, void 0, false), "요일별 검색 패턴", /*#__PURE__*/_jsxDEV("span", {
+            className: "badge b-ok",
+            children: "✅ 데이터랩"
+          }, void 0, false)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          className: "rt-desc",
+          children: "최근 4주 기준 요일별 검색 트렌드"
+        }, void 0, false), /*#__PURE__*/_jsxDEV(ChartCanvas, {
+          type: "bar",
+          height: 200,
+          data: {
+            labels: days.map(function (day) {
+              return day.label + (day.label === d.peakDay ? ' 🔥' : '');
+            }),
+            datasets: [{
+              label: '검색 지수',
+              data: days.map(function (day) {
+                return Math.round(day.normalized);
+              }),
+              backgroundColor: days.map(function (day) {
+                return day.label === d.peakDay ? '#ec4899' : day.label === d.lowDay ? '#94a3b8' : day.normalized >= 85 ? '#7c3aed' : '#4f46e5';
+              }),
+              borderRadius: 6
+            }]
+          },
+          options: {
+            plugins: {
+              legend: {
+                display: false
+              },
+              tooltip: {
+                callbacks: {
+                  label: function (ctx) {
+                    return '지수 ' + ctx.parsed.y;
+                  }
+                }
+              }
+            },
+            scales: {
+              y: {
+                beginAtZero: true
+              }
             }
           }
-        }
-      },
-      scales: {
-        y: {
-          beginAtZero: true
-        }
-      }
-    }
-  }), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      justifyContent: 'center',
-      gap: 24,
-      marginTop: 16,
-      paddingTop: 12,
-      borderTop: '1px solid #f1f5f9'
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 12,
-      color: '#64748b'
-    }
-  }, "\uD83D\uDCC8 \uCD5C\uACE0: ", /*#__PURE__*/React.createElement("strong", {
-    style: {
-      color: '#ec4899'
-    }
-  }, d.peakDay, "\uC694\uC77C"), " (\uC9C0\uC218 ", Math.round(d.peakIndex), ")"), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 12,
-      color: '#64748b'
-    }
-  }, "\uD83D\uDCC9 \uCD5C\uC800: ", /*#__PURE__*/React.createElement("strong", {
-    style: {
-      color: '#64748b'
-    }
-  }, d.lowDay, "\uC694\uC77C"), " (\uC9C0\uC218 ", Math.round(d.lowIndex), ")")))));
+        }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+          style: {
+            display: 'flex',
+            justifyContent: 'center',
+            gap: 24,
+            marginTop: 16,
+            paddingTop: 12,
+            borderTop: '1px solid #f1f5f9'
+          },
+          children: [/*#__PURE__*/_jsxDEV("span", {
+            style: {
+              fontSize: 12,
+              color: '#64748b'
+            },
+            children: ["📈 최고: ", /*#__PURE__*/_jsxDEV("strong", {
+              style: {
+                color: '#ec4899'
+              },
+              children: [d.peakDay, "요일"]
+            }, void 0, true), " (지수 ", Math.round(d.peakIndex), ")"]
+          }, void 0, true), /*#__PURE__*/_jsxDEV("span", {
+            style: {
+              fontSize: 12,
+              color: '#64748b'
+            },
+            children: ["📉 최저: ", /*#__PURE__*/_jsxDEV("strong", {
+              style: {
+                color: '#64748b'
+              },
+              children: [d.lowDay, "요일"]
+            }, void 0, true), " (지수 ", Math.round(d.lowIndex), ")"]
+          }, void 0, true)]
+        }, void 0, true)]
+      }, void 0, true)
+    }, void 0, false)
+  }, void 0, false);
 };
 
 ;/* ===== js/components/DatalabGrowthSection.jsx ===== */
+import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";
 /* DatalabGrowthSection — 전년 동기 대비 성장률 (v5) */
 window.DatalabGrowthSection = function DatalabGrowthSection(props) {
   if (!props?.data || !props.data.periods || props.data.periods.length === 0) return null;
@@ -15270,193 +16569,260 @@ window.DatalabGrowthSection = function DatalabGrowthSection(props) {
   /* 전체 성장 판단 */
   var avg3m = periods.length > 1 ? periods[1] : periods[0];
   var growthLabel = avg3m.growth > 10 ? '빠른 성장세' : avg3m.growth > 0 ? '완만한 성장세' : avg3m.growth > -10 ? '보합세' : '하락세';
-  return /*#__PURE__*/React.createElement("div", {
-    className: "section fade-in"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "container"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      padding: '20px 22px'
-    }
-  }, /*#__PURE__*/React.createElement("h3", {
-    className: "rt-h3"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "rt-hic"
-  }, "\uD83D\uDE80"), "\uC804\uB144 \uB3D9\uAE30 \uB300\uBE44 \uC131\uC7A5\uB960", /*#__PURE__*/React.createElement("span", {
-    className: "badge b-ok"
-  }, "\u2705 \uB370\uC774\uD130\uB7A9")), /*#__PURE__*/React.createElement("div", {
-    className: "rt-desc"
-  }, "\uB370\uC774\uD130\uB7A9 \uC1FC\uD551\uC778\uC0AC\uC774\uD2B8 \uAE30\uBC18 \uC804\uB144 \uB300\uBE44 \uAC80\uC0C9 \uD2B8\uB80C\uB4DC \uBCC0\uD654"), props.data.offSeason && /*#__PURE__*/React.createElement("div", {
-    style: {
-      margin: '8px 0 4px',
-      padding: '10px 14px',
-      background: '#fffbeb',
-      border: '1px solid #fcd34d',
-      borderRadius: 10,
-      fontSize: 12.5,
-      color: '#92400e',
-      lineHeight: 1.6
-    }
-  }, "\u26A0\uFE0F ", /*#__PURE__*/React.createElement("strong", null, "\uBE44\uC218\uAE30 \uC548\uB0B4:"), " \uD604\uC7AC\uB294 \uC774 \uD0A4\uC6CC\uB4DC\uC758 \uBE44\uC218\uAE30 \uAD6C\uAC04\uC785\uB2C8\uB2E4(\uD604\uC7AC \uC9C0\uC218 ", props.data.currentIndex, " / \uC5F0\uC911 \uCD5C\uACE0 ", props.data.peakIndex, "). \uB0AE\uC740 \uC218\uCE58\xB7\uC131\uC7A5\uB960\uC740 \uACC4\uC808 \uC800\uC810 \uB54C\uBB38\uC774\uBA70 \uC2DC\uC7A5 \uC1E0\uD1F4\uAC00 \uC544\uB2D9\uB2C8\uB2E4 \u2014 \uC131\uC218\uAE30 \uAE30\uC900\uC73C\uB85C \uD574\uC11D\uD558\uC138\uC694."), /*#__PURE__*/React.createElement("div", {
-    className: "card-grid card-grid-3"
-  }, periods.map(function (p, i) {
-    var c = colors[i] || colors[0];
-    var isRecommended = i === 1;
-    var isPositive = p.growth >= 0;
-    var barWidth = Math.min(Math.abs(p.growth) + 50, 100);
-    return /*#__PURE__*/React.createElement("div", {
-      key: i,
-      className: "card",
-      style: {
-        padding: 24,
-        textAlign: 'center',
-        position: 'relative',
-        border: isRecommended ? '2px solid #4f46e5' : undefined
-      }
-    }, isRecommended && /*#__PURE__*/React.createElement("div", {
-      style: {
-        position: 'absolute',
-        top: -1,
-        right: 16,
-        background: '#4f46e5',
-        color: '#fff',
-        fontSize: 10,
-        fontWeight: 700,
-        padding: '2px 10px',
-        borderRadius: '0 0 6px 6px'
-      }
-    }, "\uCD94\uCC9C \uAE30\uC900"), /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 11,
-        fontWeight: 600,
-        color: '#94a3b8',
-        textTransform: 'uppercase',
-        letterSpacing: '0.05em',
-        marginBottom: 12
-      }
-    }, "\uC9C1\uC804 ", p.label, " \uB300\uBE44"), /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 32,
-        fontWeight: 800,
-        color: p.reliable === false ? '#94a3b8' : isPositive ? c.main : '#ef4444',
-        marginBottom: 4
-      }
-    }, p.reliable === false ? '—' : (isPositive ? '+' : '') + p.growth + '%'), /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 12,
-        color: '#64748b',
-        marginBottom: 12
-      }
-    }, p.reliable === false ? '비수기 · 참고(지수 미미)' : isPositive ? '검색량 증가 추세' : '검색량 감소 추세'), /*#__PURE__*/React.createElement("div", {
-      style: {
-        height: 6,
-        background: '#e2e8f0',
-        borderRadius: 3,
-        overflow: 'hidden',
-        marginBottom: 10
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        height: '100%',
-        width: barWidth + '%',
-        borderRadius: 3,
-        background: isPositive ? c.grad : 'linear-gradient(90deg, #ef4444, #f87171)'
-      }
-    })), /*#__PURE__*/React.createElement("div", {
-      style: {
-        display: 'flex',
-        justifyContent: 'space-between',
-        fontSize: 11,
-        color: '#94a3b8'
-      }
-    }, /*#__PURE__*/React.createElement("span", null, "\uC804\uB144: ", p.previousAvg), /*#__PURE__*/React.createElement("span", null, "\uC62C\uD574: ", p.currentAvg)));
-  })), props.data.offSeason || avg3m.reliable === false ? /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: 16,
-      padding: '12px 16px',
-      background: '#fffbeb',
-      borderRadius: 10,
-      border: '1px solid #fcd34d',
-      fontSize: 12,
-      color: '#92400e',
-      lineHeight: 1.7
-    }
-  }, "\uD83D\uDCC8 ", /*#__PURE__*/React.createElement("strong", null, "\uC131\uC7A5 \uBD84\uC11D:"), " \uD604\uC7AC \uBE44\uC218\uAE30 \uAD6C\uAC04\uC774\uB77C \uC804\uB144 \uB300\uBE44 \uC131\uC7A5\uB960\uC740 \uBBF8\uC138 \uC9C0\uC218\uC758 \uBCC0\uB3D9\uC73C\uB85C ", /*#__PURE__*/React.createElement("strong", null, "\uC2E0\uB8B0\uB3C4\uAC00 \uB0AE\uC2B5\uB2C8\uB2E4"), ". \uC131\uC7A5\uC138 \uD310\uB2E8\uC740 \uC131\uC218\uAE30 \uB370\uC774\uD130\uB85C \uD558\uB294 \uAC83\uC774 \uC815\uD655\uD569\uB2C8\uB2E4.") : /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: 16,
-      padding: '12px 16px',
-      background: '#f0fdf4',
-      borderRadius: 10,
-      border: '1px solid #a7f3d0',
-      fontSize: 12,
-      color: '#065f46',
-      lineHeight: 1.7
-    }
-  }, "\uD83D\uDCC8 ", /*#__PURE__*/React.createElement("strong", null, "\uC131\uC7A5 \uBD84\uC11D:"), " \uC804\uB144 \uB300\uBE44 3\uAC1C\uC6D4 \uD3C9\uADE0 \uAE30\uC900 ", avg3m.growth > 0 ? '+' : '', avg3m.growth, "%\uB85C ", /*#__PURE__*/React.createElement("strong", null, growthLabel), "\uC785\uB2C8\uB2E4.", avg3m.growth > 0 && ' 단기(1개월) 성장률이 장기 평균보다 ' + (periods[0].growth > avg3m.growth ? '높아 현재 상승 모멘텀이 강합니다.' : '낮아 안정적 성장 구간입니다.')))));
+  return /*#__PURE__*/_jsxDEV("div", {
+    className: "section fade-in",
+    children: /*#__PURE__*/_jsxDEV("div", {
+      className: "container",
+      children: /*#__PURE__*/_jsxDEV("div", {
+        className: "card",
+        style: {
+          padding: '20px 22px'
+        },
+        children: [/*#__PURE__*/_jsxDEV("h3", {
+          className: "rt-h3",
+          children: [/*#__PURE__*/_jsxDEV("span", {
+            className: "rt-hic",
+            children: "🚀"
+          }, void 0, false), "전년 동기 대비 성장률", /*#__PURE__*/_jsxDEV("span", {
+            className: "badge b-ok",
+            children: "✅ 데이터랩"
+          }, void 0, false)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          className: "rt-desc",
+          children: "데이터랩 쇼핑인사이트 기반 전년 대비 검색 트렌드 변화"
+        }, void 0, false), props.data.offSeason && /*#__PURE__*/_jsxDEV("div", {
+          style: {
+            margin: '8px 0 4px',
+            padding: '10px 14px',
+            background: '#fffbeb',
+            border: '1px solid #fcd34d',
+            borderRadius: 10,
+            fontSize: 12.5,
+            color: '#92400e',
+            lineHeight: 1.6
+          },
+          children: ["⚠️ ", /*#__PURE__*/_jsxDEV("strong", {
+            children: "비수기 안내:"
+          }, void 0, false), " 현재는 이 키워드의 비수기 구간입니다(현재 지수 ", props.data.currentIndex, " / 연중 최고 ", props.data.peakIndex, "). 낮은 수치·성장률은 계절 저점 때문이며 시장 쇠퇴가 아닙니다 — 성수기 기준으로 해석하세요."]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          className: "card-grid card-grid-3",
+          children: periods.map(function (p, i) {
+            var c = colors[i] || colors[0];
+            var isRecommended = i === 1;
+            var isPositive = p.growth >= 0;
+            var barWidth = Math.min(Math.abs(p.growth) + 50, 100);
+            return /*#__PURE__*/_jsxDEV("div", {
+              className: "card",
+              style: {
+                padding: 24,
+                textAlign: 'center',
+                position: 'relative',
+                border: isRecommended ? '2px solid #4f46e5' : undefined
+              },
+              children: [isRecommended && /*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  position: 'absolute',
+                  top: -1,
+                  right: 16,
+                  background: '#4f46e5',
+                  color: '#fff',
+                  fontSize: 10,
+                  fontWeight: 700,
+                  padding: '2px 10px',
+                  borderRadius: '0 0 6px 6px'
+                },
+                children: "추천 기준"
+              }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color: '#94a3b8',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.05em',
+                  marginBottom: 12
+                },
+                children: ["직전 ", p.label, " 대비"]
+              }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  fontSize: 32,
+                  fontWeight: 800,
+                  color: p.reliable === false ? '#94a3b8' : isPositive ? c.main : '#ef4444',
+                  marginBottom: 4
+                },
+                children: p.reliable === false ? '—' : (isPositive ? '+' : '') + p.growth + '%'
+              }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  fontSize: 12,
+                  color: '#64748b',
+                  marginBottom: 12
+                },
+                children: p.reliable === false ? '비수기 · 참고(지수 미미)' : isPositive ? '검색량 증가 추세' : '검색량 감소 추세'
+              }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  height: 6,
+                  background: '#e2e8f0',
+                  borderRadius: 3,
+                  overflow: 'hidden',
+                  marginBottom: 10
+                },
+                children: /*#__PURE__*/_jsxDEV("div", {
+                  style: {
+                    height: '100%',
+                    width: barWidth + '%',
+                    borderRadius: 3,
+                    background: isPositive ? c.grad : 'linear-gradient(90deg, #ef4444, #f87171)'
+                  }
+                }, void 0, false)
+              }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+                style: {
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  fontSize: 11,
+                  color: '#94a3b8'
+                },
+                children: [/*#__PURE__*/_jsxDEV("span", {
+                  children: ["전년: ", p.previousAvg]
+                }, void 0, true), /*#__PURE__*/_jsxDEV("span", {
+                  children: ["올해: ", p.currentAvg]
+                }, void 0, true)]
+              }, void 0, true)]
+            }, i, true);
+          })
+        }, void 0, false), props.data.offSeason || avg3m.reliable === false ? /*#__PURE__*/_jsxDEV("div", {
+          style: {
+            marginTop: 16,
+            padding: '12px 16px',
+            background: '#fffbeb',
+            borderRadius: 10,
+            border: '1px solid #fcd34d',
+            fontSize: 12,
+            color: '#92400e',
+            lineHeight: 1.7
+          },
+          children: ["📈 ", /*#__PURE__*/_jsxDEV("strong", {
+            children: "성장 분석:"
+          }, void 0, false), " 현재 비수기 구간이라 전년 대비 성장률은 미세 지수의 변동으로 ", /*#__PURE__*/_jsxDEV("strong", {
+            children: "신뢰도가 낮습니다"
+          }, void 0, false), ". 성장세 판단은 성수기 데이터로 하는 것이 정확합니다."]
+        }, void 0, true) : /*#__PURE__*/_jsxDEV("div", {
+          style: {
+            marginTop: 16,
+            padding: '12px 16px',
+            background: '#f0fdf4',
+            borderRadius: 10,
+            border: '1px solid #a7f3d0',
+            fontSize: 12,
+            color: '#065f46',
+            lineHeight: 1.7
+          },
+          children: ["📈 ", /*#__PURE__*/_jsxDEV("strong", {
+            children: "성장 분석:"
+          }, void 0, false), " 전년 대비 3개월 평균 기준 ", avg3m.growth > 0 ? '+' : '', avg3m.growth, "%로 ", /*#__PURE__*/_jsxDEV("strong", {
+            children: growthLabel
+          }, void 0, false), "입니다.", avg3m.growth > 0 && ' 단기(1개월) 성장률이 장기 평균보다 ' + (periods[0].growth > avg3m.growth ? '높아 현재 상승 모멘텀이 강합니다.' : '낮아 안정적 성장 구간입니다.')]
+        }, void 0, true)]
+      }, void 0, true)
+    }, void 0, false)
+  }, void 0, false);
 };
 
 ;/* ===== js/components/DatalabCategoryKeywordsSection.jsx ===== */
+import { jsxDEV as _jsxDEV } from "react/jsx-dev-runtime";
 /* DatalabCategoryKeywordsSection — 카테고리 인기 키워드 TOP (v6) */
 window.DatalabCategoryKeywordsSection = function DatalabCategoryKeywordsSection(props) {
   if (!props?.data) return null;
   var popular = props.data.popular || [];
   var rising = props.data.rising || [];
   if (popular.length === 0 && rising.length === 0) return null;
-  return /*#__PURE__*/React.createElement("div", {
-    className: "section fade-in"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "container"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      padding: '20px 22px'
-    }
-  }, /*#__PURE__*/React.createElement("h3", {
-    className: "rt-h3"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "rt-hic"
-  }, "\uD83D\uDD25"), "\uCE74\uD14C\uACE0\uB9AC \uC778\uAE30 \xB7 \uAE09\uC0C1\uC2B9 \uD0A4\uC6CC\uB4DC", /*#__PURE__*/React.createElement("span", {
-    className: "badge b-ok"
-  }, "\u2705 \uB370\uC774\uD130\uB7A9")), /*#__PURE__*/React.createElement("div", {
-    className: "grid2"
-  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    className: "sub-card"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "st"
-  }, "\uD83C\uDFC6 \uC778\uAE30 \uD0A4\uC6CC\uB4DC TOP"), /*#__PURE__*/React.createElement("table", {
-    className: "rt-table"
-  }, /*#__PURE__*/React.createElement("tbody", null, popular.map(function (kw, i) {
-    return /*#__PURE__*/React.createElement("tr", {
-      key: i
-    }, /*#__PURE__*/React.createElement("td", null, i + 1), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("b", null, kw.keyword)), /*#__PURE__*/React.createElement("td", {
-      style: {
-        textAlign: 'right'
-      }
-    }, i === 0 ? '검색 ' : '', fmt(kw.volume)));
-  }))))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    className: "sub-card"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "st"
-  }, "\uD83D\uDCC8 \uAE09\uC0C1\uC2B9 \uD0A4\uC6CC\uB4DC"), /*#__PURE__*/React.createElement("table", {
-    className: "rt-table"
-  }, /*#__PURE__*/React.createElement("tbody", null, rising.map(function (kw, i) {
-    var isPositive = kw.growth >= 0;
-    var growthAbs = Math.abs(kw.growth);
-    var psClass = isPositive ? 'ps ps-g' : 'ps ps-r';
-    var arrow = isPositive ? '▲' : '▼';
-    return /*#__PURE__*/React.createElement("tr", {
-      key: i
-    }, /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("b", null, kw.keyword)), /*#__PURE__*/React.createElement("td", {
-      style: {
-        textAlign: 'right'
-      }
-    }, /*#__PURE__*/React.createElement("span", {
-      className: psClass
-    }, arrow, " ", isPositive ? '+' : '', kw.growth, "%")));
-  })))))), /*#__PURE__*/React.createElement("div", {
-    className: "note"
-  }, props.data.note || '급상승 키워드를 상품명 · 태그에 반영하면 시즌 트렌드 수혜를 빠르게 받을 수 있습니다.'))));
+  return /*#__PURE__*/_jsxDEV("div", {
+    className: "section fade-in",
+    children: /*#__PURE__*/_jsxDEV("div", {
+      className: "container",
+      children: /*#__PURE__*/_jsxDEV("div", {
+        className: "card",
+        style: {
+          padding: '20px 22px'
+        },
+        children: [/*#__PURE__*/_jsxDEV("h3", {
+          className: "rt-h3",
+          children: [/*#__PURE__*/_jsxDEV("span", {
+            className: "rt-hic",
+            children: "🔥"
+          }, void 0, false), "카테고리 인기 · 급상승 키워드", /*#__PURE__*/_jsxDEV("span", {
+            className: "badge b-ok",
+            children: "✅ 데이터랩"
+          }, void 0, false)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          className: "grid2",
+          children: [/*#__PURE__*/_jsxDEV("div", {
+            children: /*#__PURE__*/_jsxDEV("div", {
+              className: "sub-card",
+              children: [/*#__PURE__*/_jsxDEV("div", {
+                className: "st",
+                children: "🏆 인기 키워드 TOP"
+              }, void 0, false), /*#__PURE__*/_jsxDEV("table", {
+                className: "rt-table",
+                children: /*#__PURE__*/_jsxDEV("tbody", {
+                  children: popular.map(function (kw, i) {
+                    return /*#__PURE__*/_jsxDEV("tr", {
+                      children: [/*#__PURE__*/_jsxDEV("td", {
+                        children: i + 1
+                      }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                        children: /*#__PURE__*/_jsxDEV("b", {
+                          children: kw.keyword
+                        }, void 0, false)
+                      }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                        style: {
+                          textAlign: 'right'
+                        },
+                        children: [i === 0 ? '검색 ' : '', fmt(kw.volume)]
+                      }, void 0, true)]
+                    }, i, true);
+                  })
+                }, void 0, false)
+              }, void 0, false)]
+            }, void 0, true)
+          }, void 0, false), /*#__PURE__*/_jsxDEV("div", {
+            children: /*#__PURE__*/_jsxDEV("div", {
+              className: "sub-card",
+              children: [/*#__PURE__*/_jsxDEV("div", {
+                className: "st",
+                children: "📈 급상승 키워드"
+              }, void 0, false), /*#__PURE__*/_jsxDEV("table", {
+                className: "rt-table",
+                children: /*#__PURE__*/_jsxDEV("tbody", {
+                  children: rising.map(function (kw, i) {
+                    var isPositive = kw.growth >= 0;
+                    var growthAbs = Math.abs(kw.growth);
+                    var psClass = isPositive ? 'ps ps-g' : 'ps ps-r';
+                    var arrow = isPositive ? '▲' : '▼';
+                    return /*#__PURE__*/_jsxDEV("tr", {
+                      children: [/*#__PURE__*/_jsxDEV("td", {
+                        children: /*#__PURE__*/_jsxDEV("b", {
+                          children: kw.keyword
+                        }, void 0, false)
+                      }, void 0, false), /*#__PURE__*/_jsxDEV("td", {
+                        style: {
+                          textAlign: 'right'
+                        },
+                        children: /*#__PURE__*/_jsxDEV("span", {
+                          className: psClass,
+                          children: [arrow, " ", isPositive ? '+' : '', kw.growth, "%"]
+                        }, void 0, true)
+                      }, void 0, false)]
+                    }, i, true);
+                  })
+                }, void 0, false)
+              }, void 0, false)]
+            }, void 0, true)
+          }, void 0, false)]
+        }, void 0, true), /*#__PURE__*/_jsxDEV("div", {
+          className: "note",
+          children: props.data.note || '급상승 키워드를 상품명 · 태그에 반영하면 시즌 트렌드 수혜를 빠르게 받을 수 있습니다.'
+        }, void 0, false)]
+      }, void 0, true)
+    }, void 0, false)
+  }, void 0, false);
 };
 
 ;/* ===== js/components/FeedbackManagement.jsx ===== */
@@ -19832,9 +21198,14 @@ window.createDoSearch = function (deps) {
 
       /* 데이터랩 쇼핑인사이트 비동기 호출 (분석 완료 후) */
       (function () {
-        var cat1 = '';
-        if (analysis.categoryAnalysis && analysis.categoryAnalysis.categoryLevels && analysis.categoryAnalysis.categoryLevels.large && analysis.categoryAnalysis.categoryLevels.large.length > 0) {
-          cat1 = analysis.categoryAnalysis.categoryLevels.large[0].name || '';
+        var cat1 = '',
+          cat2 = '',
+          cat3 = '';
+        var _lv = analysis.categoryAnalysis && analysis.categoryAnalysis.categoryLevels;
+        if (_lv) {
+          if (_lv.large && _lv.large.length > 0) cat1 = _lv.large[0].name || '';
+          if (_lv.medium && _lv.medium.length > 0) cat2 = _lv.medium[0].name || '';
+          if (_lv.small && _lv.small.length > 0) cat3 = _lv.small[0].name || '';
         }
         var relKws = [];
         if (analysis.keywordTags && analysis.keywordTags.topKeywords) {
@@ -19849,6 +21220,8 @@ window.createDoSearch = function (deps) {
         api.post('/datalab/analyze', {
           keyword: keyword,
           category1: cat1,
+          category2: cat2,
+          category3: cat3,
           related_keywords: relKws
         }).then(function (dlRes) {
           if (searchIdRef.current !== currentSearchId) return;

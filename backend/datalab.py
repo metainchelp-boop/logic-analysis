@@ -111,6 +111,27 @@ def _find_category_code(cat1_name: str) -> str:
     return "50000008"
 
 
+# 중/소분류 → DataLab 카테고리 코드 (find_category로 확인한 '검증된 실코드'만 등록).
+#   ⚠️ 추측 금지 — 없는 항목은 대분류로 폴백해 '조용한 오류'(엉뚱한 카테고리 데이터)를 막는다.
+#   키: (대분류, 중분류, 소분류). 네이버 공식 쇼핑 카테고리 코드표로 계속 확장 가능(seed).
+SUBCATEGORY_MAP = {
+    ("식품", "음료", "생수"): "50002032",
+    ("식품", "음료", "탄산수"): "50002033",
+    ("식품", "건강식품", "인삼"): "50001902",
+    ("식품", "건강식품", "건강환/정"): "50001899",
+    ("식품", "건강식품", "꿀"): "50001905",
+}
+
+
+def _find_category_code_deep(cat1: str, cat2: str = "", cat3: str = "") -> str:
+    """대>중>소분류로 '검증된' DataLab 코드를 찾고, 없으면 대분류 코드로 안전 폴백.
+       (추측 코드로 조용한 오류를 내지 않기 위해, 검증 매핑이 있을 때만 세분화한다.)"""
+    c1, c2, c3 = (cat1 or "").strip(), (cat2 or "").strip(), (cat3 or "").strip()
+    if c1 and c2 and c3 and (c1, c2, c3) in SUBCATEGORY_MAP:
+        return SUBCATEGORY_MAP[(c1, c2, c3)]
+    return _find_category_code(c1)
+
+
 def _datalab_headers():
     return {
         "X-Naver-Client-Id": NAVER_CLIENT_ID,
@@ -485,7 +506,7 @@ def get_yoy_growth_from_trend(trend_data: dict) -> dict:
 
 
 # ==================== 카테고리 인기 키워드 ====================
-def get_category_popular_keywords(keyword: str, category_code: str, related_keywords: list = None) -> dict:
+def get_category_popular_keywords(keyword: str, category_code: str, related_keywords: list = None, product_terms: list = None) -> dict:
     """카테고리 내 연관 키워드의 트렌드 비교 → 인기 + 급상승 분류"""
     if not related_keywords or len(related_keywords) < 2:
         return {}
@@ -494,8 +515,27 @@ def get_category_popular_keywords(keyword: str, category_code: str, related_keyw
     start_1m = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
     start_2m = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%d")
 
+    # ── 관련성 필터 (건의 2026-07, 양근형) ──────────────────────────
+    #   대분류(예: 식품) 트렌드 기준으로 산정되다 보니 '쌀 10kg' 같은 초고검색량
+    #   생필품이 무관한 상품 분석에도 상위에 뜨는 문제. 분석 상품의 '시드 키워드 +
+    #   중/소분류명'과 토큰이 겹치는 연관 키워드만 남겨 관련성을 높인다.
+    _terms = []
+    for _t in [keyword] + list(product_terms or []):
+        for _w in str(_t or "").split():
+            if len(_w) >= 2:
+                _terms.append(_w)
+    def _relevant(cand):
+        if not _terms:
+            return True
+        cc = str(cand or "")
+        cc2 = cc.replace(" ", "")
+        return any(t in cc or t in cc2 for t in _terms)
+    _rel = [k for k in related_keywords if _relevant(k.get("keyword", ""))]
+    # 과필터로 2개 미만만 남으면 원본 유지(빈 섹션 방지 — 안전)
+    src = _rel if len(_rel) >= 2 else related_keywords
+
     # 최대 5개씩 비교 (API 제한: 한 번에 최대 5개 키워드)
-    kw_list = related_keywords[:10]
+    kw_list = src[:10]
 
     popular = []
     rising = []
@@ -560,21 +600,24 @@ def get_category_popular_keywords(keyword: str, category_code: str, related_keyw
 
 
 # ==================== 통합 분석 함수 ====================
-def analyze_datalab(keyword: str, category1: str = "", related_keywords: list = None) -> dict:
+def analyze_datalab(keyword: str, category1: str = "", related_keywords: list = None,
+                    category2: str = "", category3: str = "") -> dict:
     """모든 데이터랩 분석을 한 번에 실행 (1시간 TTL 메모리 캐시 적용)"""
     if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
         logger.warning("데이터랩: 네이버 API 키 미설정")
         return {}
 
-    # 캐시 확인
-    c_key = _cache_key(keyword, category1, related_keywords)
+    # 캐시 확인 (중/소분류까지 키에 반영 — 카테고리 세분화 시 캐시 분리)
+    c_key = _cache_key(keyword, "|".join([category1 or "", category2 or "", category3 or ""]), related_keywords)
     cached = _cache_get(c_key)
     if cached:
         logger.info(f"데이터랩 캐시 히트: keyword={keyword}")
         return cached
 
     cat_code = _find_category_code(category1)
-    logger.info(f"데이터랩 분석 시작 (API 호출): keyword={keyword}, category={category1}→{cat_code}")
+    # 인기·급상승 키워드는 가장 구체적인 '검증된' 카테고리 코드로 산정(없으면 대분류 폴백)
+    popular_cat_code = _find_category_code_deep(category1, category2, category3)
+    logger.info(f"데이터랩 분석 시작 (API 호출): keyword={keyword}, category={category1}→{cat_code}, popular_cat={popular_cat_code}")
 
     result = {}
 
@@ -633,7 +676,8 @@ def analyze_datalab(keyword: str, category1: str = "", related_keywords: list = 
     # 7. 카테고리 인기 키워드
     if related_keywords:
         try:
-            cat_kw = get_category_popular_keywords(keyword, cat_code, related_keywords)
+            cat_kw = get_category_popular_keywords(keyword, popular_cat_code, related_keywords,
+                                                   product_terms=[category2, category3, category1])
             if cat_kw:
                 result["categoryKeywords"] = cat_kw
         except Exception as e:
