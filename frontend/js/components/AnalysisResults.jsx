@@ -8,6 +8,7 @@ window.AnalysisResults = function AnalysisResults(props) {
     var currentUser = props.currentUser;
     var datalabData = props.datalabData;
     var datalabLoading = props.datalabLoading;
+    var auditStatus = props.auditStatus;
     var handleNavigateToClient = props.handleNavigateToClient;
     var htmlDetailResult = props.htmlDetailResult;
     var htmlReviewData = props.htmlReviewData;
@@ -93,6 +94,21 @@ window.AnalysisResults = function AnalysisResults(props) {
                 /* 대시보드 요약 — 분석 전 메인 화면에서만 표시, 특정 업체 분석 시 숨김 */
                 !searchedProductUrl && React.createElement(DashboardSummary, { products: products, searchResult: relatedData }),
     
+                /* [검수] 데이터 검수 상태 배너 — 항목별 실데이터 확보 현황(✓ 확보 · ↻ 재조회 중 · ✗ 실패) */
+                auditStatus && auditStatus.items && auditStatus.items.length > 0 && React.createElement('div', { className: 'section fade-in' },
+                    React.createElement('div', { className: 'container' },
+                        React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '10px 14px', fontSize: 12.5 } },
+                            React.createElement('b', { style: { color: '#334155' } },
+                                auditStatus.phase === 'auditing' ? '🔍 데이터 검수 중…' : '🔍 데이터 검수'),
+                            auditStatus.items.map(function(it, i) {
+                                var color = it.st === 'ok' ? '#059669' : (it.st === 'retry' ? '#d97706' : (it.st === 'wait' ? '#94a3b8' : '#dc2626'));
+                                var mark = it.st === 'ok' ? '✓' : (it.st === 'retry' ? '↻' : (it.st === 'wait' ? '…' : '✗'));
+                                return React.createElement('span', { key: i, style: { color: color, whiteSpace: 'nowrap', fontWeight: 600 } }, mark + ' ' + it.name);
+                            })
+                        )
+                    )
+                ),
+
                 /* [DATALAB] 로딩 인디케이터 */
                 analysisData && !datalabData && datalabLoading && React.createElement('div', { className: 'section fade-in', style: { textAlign: 'center', padding: '24px 0' } },
                     React.createElement('div', { className: 'container' },
