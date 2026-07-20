@@ -1031,7 +1031,7 @@ def check_usage(current_user: dict = Depends(get_current_user)):
             role = current_user['role']
         except (KeyError, TypeError):
             role = 'readonly'
-        limit = -1 if role in ('admin', 'superadmin', 'manager') else 3
+        limit = -1 if role in ('admin', 'superadmin', 'manager') else 15
 
         return {
             "success": True,

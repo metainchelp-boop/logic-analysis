@@ -210,7 +210,7 @@ window.App = function App() {
         if (currentUser && currentUser.role === 'viewer') {
             api.get('/cd/usage/check').then(function(usageRes) {
                 if (usageRes && usageRes.success && usageRes.data && !usageRes.data.can_query) {
-                    toast.error('일일 분석 제한(3회)을 초과했습니다. 내일 자정에 초기화됩니다.');
+                    toast.error('일일 분석 제한(15회)을 초과했습니다. 내일 자정에 초기화됩니다.');
                     return;
                 }
                 // 제한 내 → 카운트 증가 후 실제 분석 실행
