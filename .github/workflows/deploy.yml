@@ -121,6 +121,9 @@ jobs:
 
             # 4) 빌드 캐시 자동 정리 (실행 중 컨테이너/이미지/볼륨/DB는 영향 없음)
             docker builder prune -f --keep-storage 2GB || true
+            # 4b) 옛 이미지 자동 정리 — 재배포마다 이전 이미지가 dangling으로 쌓여
+            #     디스크를 채우던 문제(2026-07-20 95% 실사고) 방지. 사용 중 이미지는 안전.
+            docker image prune -f || true
 
             # 5) 헬스체크 (대용량 DB 기동 시간 고려: 초기 대기 + 최대 120초)
             echo "앱 기동 대기 중(20초)..."

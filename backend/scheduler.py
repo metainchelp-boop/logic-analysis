@@ -681,7 +681,8 @@ def _save_client_rank(conn, client_id, keyword, product_url, rank, page, check_t
 
 # ==================== 00:30 DB 자동 백업 ====================
 
-BACKUP_KEEP = 5  # 보관 개수 (gzip 이라 개당 ~1GB → 약 5GB, 5일치)
+BACKUP_KEEP = 2  # 보관 개수 — DB가 ~3.5GB로 성장해 gzip 개당 ~3GB. 5개(15GB)가 35GB 디스크를
+#   채워 쓰기 실패(업체 등록 500, 2026-07-20 실사고)를 유발 → 최신 2개(~6GB)로 축소.
 
 
 def _prune_old_backups(backup_dir, keep=BACKUP_KEEP):
