@@ -2442,6 +2442,8 @@ def get_api_usage(current_user: dict = Depends(get_current_user)):
 class DatalabRequest(BaseModel):
     keyword: str
     category1: str = ""
+    category2: str = ""
+    category3: str = ""
     related_keywords: list = []
 
 @app.post("/api/datalab/analyze")
@@ -2451,6 +2453,8 @@ def datalab_analyze(req: DatalabRequest, current_user: dict = Depends(get_curren
         result = analyze_datalab(
             keyword=req.keyword,
             category1=req.category1,
+            category2=req.category2,
+            category3=req.category3,
             related_keywords=[{"keyword": k} if isinstance(k, str) else k for k in req.related_keywords],
         )
         return {"success": True, "data": result}

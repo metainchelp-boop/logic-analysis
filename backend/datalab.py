@@ -111,6 +111,123 @@ def _find_category_code(cat1_name: str) -> str:
     return "50000008"
 
 
+# ==================== 중/소분류 카테고리 코드 런타임 확인 ====================
+#   근본 개선(건의 2026-07, 양근형): 인기·급상승 키워드를 상품의 소분류(예: 차류) 기준으로
+#   산정하면 '쌀 10kg' 같은 무관 키워드는 그 카테고리 검색 비중이 0이라 자연 탈락한다
+#   (실측: 식품 기준 쌀10kg 지수 100 → 콤부차 세분류 기준 데이터 없음).
+#   코드는 데이터랩 쇼핑인사이트 공개 카테고리 조회로 '필요할 때만' 확인 후 영구 캐시
+#   (추측 코드 금지). 확인 실패 시 대분류 폴백 → 기존 동작과 동일.
+DATALAB_TREE_URL = "https://datalab.naver.com/shoppingInsight/getCategory.naver"
+_cat_code_cache = {}
+_cat_code_lock = threading.Lock()
+CAT_CODE_FILE = os.path.join(os.path.dirname(os.getenv("DB_PATH", "/app/data/logic_data.db")),
+                             "datalab_category_codes.json")
+# 공식 데이터랩 코드표(find_category)로 검증된 시드 — 재기동 직후 워밍업
+_VERIFIED_SEED = {
+    "식품|음료|생수": "50002032",
+    "식품|음료|탄산수": "50002033",
+    "식품|건강식품|인삼": "50001902",
+    "식품|건강식품|건강환/정": "50001899",
+    "식품|건강식품|꿀": "50001905",
+}
+
+
+def _cat_cache_load():
+    with _cat_code_lock:
+        if _cat_code_cache:
+            return
+        _cat_code_cache.update(_VERIFIED_SEED)
+        try:
+            import json as _json
+            with open(CAT_CODE_FILE, "r", encoding="utf-8") as f:
+                saved = _json.load(f)
+            if isinstance(saved, dict):
+                _cat_code_cache.update({str(k): str(v) for k, v in saved.items()})
+        except Exception:
+            pass
+
+
+def _cat_cache_put(key: str, cid: str):
+    with _cat_code_lock:
+        _cat_code_cache[key] = cid
+        try:
+            import json as _json
+            with open(CAT_CODE_FILE, "w", encoding="utf-8") as f:
+                _json.dump(_cat_code_cache, f, ensure_ascii=False, indent=1)
+        except Exception:
+            pass  # 파일 저장 실패해도 메모리 캐시로 동작
+
+
+def _fetch_category_children(cid: str) -> list:
+    """cid의 하위 카테고리 [{name, cid}] 조회 — 실패 시 빈 리스트(호출측 대분류 폴백)."""
+    try:
+        resp = requests.get(
+            DATALAB_TREE_URL, params={"cid": cid},
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                "Referer": "https://datalab.naver.com/shoppingInsight/sCategory.naver",
+            }, timeout=6)
+        if resp.status_code != 200:
+            logger.warning(f"카테고리 트리 조회 {resp.status_code} (cid={cid})")
+            return []
+        data = resp.json()
+    except Exception as e:
+        logger.warning(f"카테고리 트리 조회 실패(cid={cid}): {e}")
+        return []
+    # 응답 형태 방어적 파싱: name + cid(catId)를 가진 dict 리스트를 재귀 탐색
+    def _walk(node):
+        if isinstance(node, list):
+            found = [x for x in node if isinstance(x, dict) and x.get("name") and (x.get("cid") or x.get("catId"))]
+            if found:
+                return found
+            for x in node:
+                r = _walk(x)
+                if r:
+                    return r
+        elif isinstance(node, dict):
+            for v in node.values():
+                r = _walk(v)
+                if r:
+                    return r
+        return []
+    return [{"name": str(c.get("name", "")).strip(), "cid": str(c.get("cid") or c.get("catId"))}
+            for c in _walk(data)]
+
+
+def _resolve_subcategory_cid(cat1: str, cat2: str = "", cat3: str = ""):
+    """상품의 중/소분류명으로 데이터랩 코드를 확인. 성공 시 (cid, 기준명), 실패 시 (None, '')."""
+    c1 = (cat1 or "").strip()
+    names = [n.strip() for n in (cat2, cat3) if n and n.strip()]
+    if not c1 or not names or c1 not in CATEGORY_MAP:
+        return None, ""
+    _cat_cache_load()
+    key = "|".join([c1] + names)
+    with _cat_code_lock:
+        hit = _cat_code_cache.get(key)
+    if hit:
+        return hit, names[-1]
+    cur = CATEGORY_MAP[c1]
+    resolved_name = ""
+    for name in names:
+        children = _fetch_category_children(cur)
+        if not children:
+            break
+        norm = name.replace(" ", "")
+        match = next((c for c in children if c["name"] == name), None) \
+            or next((c for c in children if c["name"].replace(" ", "") == norm), None)
+        if not match:
+            part = [c for c in children if norm in c["name"].replace(" ", "") or c["name"].replace(" ", "") in norm]
+            match = part[0] if len(part) == 1 else None
+        if not match:
+            break  # 더 못 내려가면 지금까지 해석된 깊이 사용
+        cur, resolved_name = match["cid"], match["name"]
+    if cur == CATEGORY_MAP[c1] or not resolved_name:
+        return None, ""
+    _cat_cache_put(key, cur)
+    logger.info(f"카테고리 코드 확인: {key} → {cur} ({resolved_name})")
+    return cur, resolved_name
+
+
 def _datalab_headers():
     return {
         "X-Naver-Client-Id": NAVER_CLIENT_ID,
@@ -485,74 +602,83 @@ def get_yoy_growth_from_trend(trend_data: dict) -> dict:
 
 
 # ==================== 카테고리 인기 키워드 ====================
-def get_category_popular_keywords(keyword: str, category_code: str, related_keywords: list = None) -> dict:
-    """카테고리 내 연관 키워드의 트렌드 비교 → 인기 + 급상승 분류"""
+def get_category_popular_keywords(keyword: str, category_code: str, related_keywords: list = None,
+                                  sub_cid: str = None, sub_name: str = "") -> dict:
+    """카테고리 내 연관 키워드의 트렌드 비교 → 인기 + 급상승 분류.
+
+    sub_cid(상품 중/소분류 코드)가 있으면 그 기준으로 먼저 산정 — 무관 키워드(예: '쌀 10kg')는
+    그 카테고리 검색 비중이 0이라 자연 탈락한다(건의 2026-07, 실측 검증). 결과가 빈약하면
+    (인기 3개 미만 또는 급상승 0건) 대분류 기준으로 폴백해 기존 동작을 보장한다
+    (2026-07-20 '급상승 빈칸' 사고 재발 방지 — 어떤 경우에도 기존보다 나빠지지 않음)."""
     if not related_keywords or len(related_keywords) < 2:
         return {}
 
     end_date = datetime.now().strftime("%Y-%m-%d")
-    start_1m = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
     start_2m = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%d")
 
     # 최대 5개씩 비교 (API 제한: 한 번에 최대 5개 키워드)
     kw_list = related_keywords[:10]
 
-    popular = []
-    rising = []
-
-    # 2번에 나눠서 호출 (5개씩) — 최근 2개월 한 번에 조회하여 전월 대비 성장률 계산
-    for batch_start in range(0, len(kw_list), 5):
-        batch = kw_list[batch_start:batch_start + 5]
-        kw_params = [{"name": kw["keyword"], "param": [kw["keyword"]]} for kw in batch]
-
-        # 최근 2개월 데이터를 한 번에 조회 (API 1건으로 전월 비교 커버)
-        body = {
-            "startDate": start_2m, "endDate": end_date,
-            "timeUnit": "month",
-            "category": category_code,
-            "keyword": kw_params,
-        }
-        data = _datalab_post("category/keywords", body)
-
-        cur_map = {}
-        prev_map = {}
-
-        if data and "results" in data:
-            for r in data["results"]:
-                name = r.get("title", "")
-                pts = r.get("data", [])
-                if len(pts) >= 2:
-                    cur_map[name] = pts[-1].get("ratio", 0)
-                    prev_map[name] = pts[-2].get("ratio", 0)
-                elif len(pts) == 1:
-                    cur_map[name] = pts[0].get("ratio", 0)
-
-        for kw in batch:
-            name = kw["keyword"]
-            cur_val = cur_map.get(name, 0)
-            prev_val = prev_map.get(name, 0)
-            volume = kw.get("totalVolume", 0)
-
-            if prev_val > 0:
-                growth = round((cur_val - prev_val) / prev_val * 100, 1)
-            else:
-                growth = 0
-
-            entry = {
-                "keyword": name,
-                "volume": volume,
-                "growth": growth,
-                "currentIndex": round(cur_val, 1),
+    def _compute(code):
+        popular, rising = [], []
+        # 2번에 나눠서 호출 (5개씩) — 최근 2개월 한 번에 조회하여 전월 대비 성장률 계산
+        for batch_start in range(0, len(kw_list), 5):
+            batch = kw_list[batch_start:batch_start + 5]
+            kw_params = [{"name": kw["keyword"], "param": [kw["keyword"]]} for kw in batch]
+            body = {
+                "startDate": start_2m, "endDate": end_date,
+                "timeUnit": "month",
+                "category": code,
+                "keyword": kw_params,
             }
-            popular.append(entry)
-            if growth > 20:
-                rising.append(entry)
+            data = _datalab_post("category/keywords", body)
 
-    # 인기 키워드: 현재 지수 기준 정렬
-    popular.sort(key=lambda x: -x["currentIndex"])
-    # 급상승: 성장률 기준 정렬
-    rising.sort(key=lambda x: -x["growth"])
+            cur_map, prev_map = {}, {}
+            if data and "results" in data:
+                for r in data["results"]:
+                    name = r.get("title", "")
+                    pts = r.get("data", [])
+                    if len(pts) >= 2:
+                        cur_map[name] = pts[-1].get("ratio", 0)
+                        prev_map[name] = pts[-2].get("ratio", 0)
+                    elif len(pts) == 1:
+                        cur_map[name] = pts[0].get("ratio", 0)
 
+            for kw in batch:
+                name = kw["keyword"]
+                cur_val = cur_map.get(name, 0)
+                prev_val = prev_map.get(name, 0)
+                growth = round((cur_val - prev_val) / prev_val * 100, 1) if prev_val > 0 else 0
+                entry = {
+                    "keyword": name,
+                    "volume": kw.get("totalVolume", 0),
+                    "growth": growth,
+                    "currentIndex": round(cur_val, 1),
+                }
+                popular.append(entry)
+                if growth > 20:
+                    rising.append(entry)
+
+        popular.sort(key=lambda x: -x["currentIndex"])   # 인기: 현재 지수
+        rising.sort(key=lambda x: -x["growth"])          # 급상승: 성장률
+        return popular, rising
+
+    # 1차: 상품 소분류 기준 — 카테고리 밖 키워드(지수 0)는 인기 목록에서 자연 제외
+    if sub_cid:
+        popular, rising = _compute(sub_cid)
+        popular = [e for e in popular if e["currentIndex"] > 0]
+        if len(popular) >= 3 and len(rising) >= 1:
+            return {
+                "popular": popular[:10],
+                "rising": rising[:5],
+                "basis": sub_name,
+                "note": f"🔎 '{sub_name}' 카테고리 기준 인기·급상승 키워드입니다. "
+                        f"급상승 키워드를 상품명 · 태그에 반영하면 시즌 트렌드 수혜를 빠르게 받을 수 있습니다.",
+            }
+        logger.info(f"카테고리 키워드: '{sub_name}' 기준 빈약(인기 {len(popular)}·급상승 {len(rising)}) → 대분류 폴백")
+
+    # 2차(기본): 대분류 기준 — 기존 동작 그대로
+    popular, rising = _compute(category_code)
     return {
         "popular": popular[:10],
         "rising": rising[:5],
@@ -560,14 +686,15 @@ def get_category_popular_keywords(keyword: str, category_code: str, related_keyw
 
 
 # ==================== 통합 분석 함수 ====================
-def analyze_datalab(keyword: str, category1: str = "", related_keywords: list = None) -> dict:
+def analyze_datalab(keyword: str, category1: str = "", related_keywords: list = None,
+                    category2: str = "", category3: str = "") -> dict:
     """모든 데이터랩 분석을 한 번에 실행 (1시간 TTL 메모리 캐시 적용)"""
     if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
         logger.warning("데이터랩: 네이버 API 키 미설정")
         return {}
 
-    # 캐시 확인
-    c_key = _cache_key(keyword, category1, related_keywords)
+    # 캐시 확인 (중/소분류까지 키에 반영)
+    c_key = _cache_key(keyword, "|".join([category1 or "", category2 or "", category3 or ""]), related_keywords)
     cached = _cache_get(c_key)
     if cached:
         logger.info(f"데이터랩 캐시 히트: keyword={keyword}")
@@ -633,7 +760,9 @@ def analyze_datalab(keyword: str, category1: str = "", related_keywords: list = 
     # 7. 카테고리 인기 키워드
     if related_keywords:
         try:
-            cat_kw = get_category_popular_keywords(keyword, cat_code, related_keywords)
+            sub_cid, sub_name = _resolve_subcategory_cid(category1, category2, category3)
+            cat_kw = get_category_popular_keywords(keyword, cat_code, related_keywords,
+                                                   sub_cid=sub_cid, sub_name=sub_name)
             if cat_kw:
                 result["categoryKeywords"] = cat_kw
         except Exception as e:
