@@ -280,7 +280,47 @@ window.ClientListSection = function ClientListSection({ currentUser, onClientCli
                                 fontWeight: 600,
                                 cursor: 'pointer'
                             }
-                        }, '업체 상세 보기 →')
+                        }, '업체 상세 보기 →'),
+
+                        /* 자동 추적 켜기/끄기 (호출 다이어트) — 계약만료·환불·홀딩 등 관리 중단 업체는
+                           일일 자동분석·순위추적에서 제외. 기록·조회는 유지. viewer는 조회만 */
+                        currentUser && currentUser.role !== 'viewer' && React.createElement('button', {
+                            onClick: function(e) {
+                                e.stopPropagation();
+                                var next = (client.auto_analysis === 0) ? 1 : 0;
+                                var label = next === 0 ? '끄기' : '켜기';
+                                if (!window.confirm('"' + (client.name || '') + '" 자동 추적을 ' + label + ' 할까요?' + (next === 0 ? '\n(계약만료·환불·홀딩 등 관리 중단 업체 권장 — 기록·조회는 그대로 유지됩니다)' : ''))) return;
+                                api.put('/clients/' + client.id, { auto_analysis: next }).then(function(res) {
+                                    if (res && (res.success === undefined || res.success)) {
+                                        try { toast.success('자동 추적 ' + label + ' 완료: ' + (client.name || '')); } catch (e2) {}
+                                        loadClients();
+                                    } else {
+                                        try { toast.error('변경 실패: ' + ((res && res.detail) || '오류')); } catch (e2) {}
+                                    }
+                                }).catch(function(err) {
+                                    try { toast.error('변경 실패: ' + (err.message || '네트워크 오류')); } catch (e2) {}
+                                });
+                            },
+                            style: {
+                                display: 'block',
+                                width: '100%',
+                                textAlign: 'center',
+                                marginTop: 6,
+                                background: client.auto_analysis === 0 ? '#fef3c7' : '#f1f5f9',
+                                color: client.auto_analysis === 0 ? '#92400e' : '#475569',
+                                border: '1px solid ' + (client.auto_analysis === 0 ? '#fcd34d' : '#e2e8f0'),
+                                padding: '6px 0',
+                                borderRadius: 8,
+                                fontSize: 11.5,
+                                fontWeight: 700,
+                                cursor: 'pointer'
+                            }
+                        }, client.auto_analysis === 0 ? '⏸ 자동 추적 꺼짐 — 켜기' : '▶ 자동 추적 중 — 끄기'),
+
+                        /* 중지 상태 배지(viewer 포함 전원에게 보임) */
+                        client.auto_analysis === 0 && (!currentUser || currentUser.role === 'viewer') && React.createElement('div', {
+                            style: { marginTop: 6, textAlign: 'center', fontSize: 11, fontWeight: 700, color: '#92400e' }
+                        }, '⏸ 자동 추적 중지됨')
                     );
                 })
             )

@@ -166,7 +166,7 @@ def _collect_all_keywords(conn):
 
 def _run_rank_tracking():
     """
-    08:00 순위 추적 — 키워드당 최대 400위(4페이지)까지 조회.
+    08:00 순위 추적 — 키워드당 최대 300위(3페이지)까지 조회.
     홈탭 순위 + 업체 순위를 동시에 처리.
     Rate Limit 방지를 위해 키워드당 약 18초 간격 → 약 50분 소요.
     """
@@ -174,14 +174,14 @@ def _run_rank_tracking():
     import sqlite3
     import os
 
-    RANK_PAGES = 4          # 페이지 수 (100개 × 4 = 400위)
+    RANK_PAGES = 3          # 페이지 수 (100개 × 3 = 300위) — 호출 다이어트 D3(운영자 승인 2026-07-20): 400→300위, 배치 API 25% 절감
     DELAY_PER_KEYWORD = 18  # 키워드당 대기 시간 (초) — 50분 분산
     DELAY_PER_PAGE = 1.5    # 같은 키워드 내 페이지 간 대기 (초)
 
     DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
     today = date.today().isoformat()
 
-    logger.info(f"🔍 순위 추적 시작 ({datetime.now().strftime('%H:%M')}) — 400위 범위, ~50분 소요 예상")
+    logger.info(f"🔍 순위 추적 시작 ({datetime.now().strftime('%H:%M')}) — 300위 범위, ~40분 소요 예상")
 
     try:
         from naver_crawler import (
@@ -213,7 +213,7 @@ def _run_rank_tracking():
 
         for ki, keyword in enumerate(sorted(all_keywords)):
             try:
-                # ── API 호출: 최대 400개 (100개 × 4페이지) ──
+                # ── API 호출: 최대 300개 (100개 × 3페이지) ──
                 all_prods = []
                 total_shop = 0
                 for page_idx in range(RANK_PAGES):
@@ -305,7 +305,7 @@ def _run_rank_tracking():
             logger.warning(f"  08시 캐시 디스크 저장 실패(무시): {_pe}")
 
         logger.info(
-            f"✅ 순위 추적 완료: API {total_api_calls}회 (400위 범위), "
+            f"✅ 순위 추적 완료: API {total_api_calls}회 (300위 범위), "
             f"순위 {total_rank_saved}건 저장, 실패 {total_errors}건 "
             f"(캐시 {len(_api_cache)}개 키워드 → 09시 분석 대기)"
         )
