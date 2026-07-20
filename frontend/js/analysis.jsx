@@ -784,19 +784,16 @@ window.createDoSearch = function(deps) {
 
             /* 데이터랩 쇼핑인사이트 비동기 호출 (분석 완료 후) */
             (function() {
-                var cat1 = '', cat2 = '', cat3 = '';
-                var _lv = analysis.categoryAnalysis && analysis.categoryAnalysis.categoryLevels;
-                if (_lv) {
-                    if (_lv.large && _lv.large.length > 0) cat1 = _lv.large[0].name || '';
-                    if (_lv.medium && _lv.medium.length > 0) cat2 = _lv.medium[0].name || '';
-                    if (_lv.small && _lv.small.length > 0) cat3 = _lv.small[0].name || '';
+                var cat1 = '';
+                if (analysis.categoryAnalysis && analysis.categoryAnalysis.categoryLevels && analysis.categoryAnalysis.categoryLevels.large && analysis.categoryAnalysis.categoryLevels.large.length > 0) {
+                    cat1 = analysis.categoryAnalysis.categoryLevels.large[0].name || '';
                 }
                 var relKws = [];
                 if (analysis.keywordTags && analysis.keywordTags.topKeywords) {
                     relKws = analysis.keywordTags.topKeywords.map(function(k) { return { keyword: k.keyword, totalVolume: parseInt(String(k.volume || '0').replace(/,/g, '')) }; });
                 }
                 setDatalabLoading(true);
-                api.post('/datalab/analyze', { keyword: keyword, category1: cat1, category2: cat2, category3: cat3, related_keywords: relKws })
+                api.post('/datalab/analyze', { keyword: keyword, category1: cat1, related_keywords: relKws })
                     .then(function(dlRes) {
                         if (searchIdRef.current !== currentSearchId) return;
                         if (dlRes && dlRes.success && dlRes.data) {
