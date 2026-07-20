@@ -347,6 +347,28 @@ window.ClientDashboard = function ClientDashboard({ currentUser, onRunAnalysis, 
                                                 <div style={{ fontSize: 11, opacity: 0.6, marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.main_keywords}</div>
                                             )}
                                         </div>
+                                        {canEdit !== false && <button onClick={function(e) {
+                                                e.stopPropagation();
+                                                /* 자동분석 토글(호출 다이어트) — 계약만료·환불·홀딩 등 관리 중단 업체는
+                                                   매일 자동분석·순위추적에서 제외해 API 호출을 아낀다 */
+                                                var next = (c.auto_analysis === 0) ? 1 : 0;
+                                                var label = next === 0 ? '중지' : '재개';
+                                                if (!window.confirm('"' + (c.name || c.business_name) + '" 업체의 일일 자동분석·순위추적을 ' + label + '할까요?' + (next === 0 ? '\n(계약만료·환불·홀딩 등 관리 중단 업체 권장 — 기록·조회는 그대로 유지됩니다)' : ''))) return;
+                                                api.put('/clients/' + c.id, { auto_analysis: next }).then(function(res) {
+                                                    if (res && (res.success === undefined || res.success)) {
+                                                        c.auto_analysis = next;
+                                                        setMessage('자동분석 ' + label + ': ' + (c.name || c.business_name));
+                                                        if (typeof loadClients === 'function') loadClients();
+                                                    } else { setMessage('변경 실패: ' + ((res && res.detail) || '오류')); }
+                                                }).catch(function(err) { setMessage('변경 실패: ' + (err.message || '네트워크 오류')); });
+                                            }}
+                                            title={c.auto_analysis === 0 ? '자동분석 중지됨 — 클릭 시 재개' : '자동분석 중 — 클릭 시 중지(관리 중단 업체용)'}
+                                            style={{
+                                                background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px',
+                                                fontSize: 13, flexShrink: 0, lineHeight: 1,
+                                                color: c.auto_analysis === 0 ? '#f59e0b' : (isActive ? 'rgba(255,255,255,0.5)' : '#cbd5e1'),
+                                            }}
+                                        >{c.auto_analysis === 0 ? '⏸' : '▶'}</button>}
                                         {canEdit !== false && <button onClick={function(e) { deleteClient(c, e); }}
                                             title="업체 삭제"
                                             style={{

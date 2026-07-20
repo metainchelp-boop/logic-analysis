@@ -457,7 +457,7 @@ def my_clients(current_user: dict = Depends(get_current_user)):
         # 부풀어 워커가 메모리로 죽어(→ /api/cd/my-clients 502) 대시보드가 안 떴다.
         # detail_html은 목록 화면에서 쓰지 않으므로 제외한다.
         _COLS = ("id, name, business_name, contact_name, contact_phone, contact_email, "
-                 "website_url, naver_store_url, main_keywords, notes, status, "
+                 "website_url, naver_store_url, main_keywords, notes, status, auto_analysis, "
                  "created_by, created_at, updated_at")
         if is_adm or user_role == "viewer":
             clients = conn.execute(
