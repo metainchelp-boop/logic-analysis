@@ -736,6 +736,71 @@ def get_keyword_volume(keywords: List[str]) -> List[Dict]:
                 return []
 
 
+def _searchad_post(uri: str, body: dict) -> dict:
+    """검색광고 API POST 호출(서명 인증) — 실패 시 {} (호출측 폴백)."""
+    if not SEARCHAD_API_KEY or not SEARCHAD_SECRET_KEY or not SEARCHAD_CUSTOMER_ID:
+        return {}
+    try:
+        timestamp = str(int(time.time() * 1000))
+        headers = {
+            "X-Timestamp": timestamp,
+            "X-API-KEY": SEARCHAD_API_KEY,
+            "X-Customer": SEARCHAD_CUSTOMER_ID,
+            "X-Signature": _generate_searchad_signature(timestamp, "POST", uri),
+            "Content-Type": "application/json",
+        }
+        resp = requests.post(f"https://api.searchad.naver.com{uri}", json=body, headers=headers, timeout=10)
+        if resp.status_code != 200:
+            logger.warning(f"검색광고 API {uri} 응답 {resp.status_code}: {resp.text[:150]}")
+            return {}
+        return resp.json() or {}
+    except Exception as e:
+        logger.warning(f"검색광고 API {uri} 실패: {e}")
+        return {}
+
+
+def get_bid_estimates(keyword: str) -> Dict:
+    """파워링크 순위(1~5위)별 평균 노출 입찰가 + 최소 노출 입찰가 (건의 2026-07-22, 이예은).
+
+    네이버 검색광고 공식 '입찰가 추정' API — 광고시스템 콘솔의 '예상 입찰가'와 같은 소스.
+    검색량 조회와 동일 자격증명(검색 Open API 25,000 쿼터와 별개 시스템).
+    실패·데이터 없음 시 {} 반환 → 프론트는 신규 표를 렌더하지 않아 기존 화면과 동일(시안 B)."""
+    kw = (keyword or "").strip().replace(" ", "")
+    if not kw:
+        return {}
+    out = {"pc": [], "mobile": [], "minBid": {}}
+    for device, key in (("PC", "pc"), ("MOBILE", "mobile")):
+        data = _searchad_post(
+            "/estimate/average-position-bid/keyword",
+            {"device": device, "items": [{"key": kw, "position": p} for p in range(1, 6)]},
+        )
+        rows = []
+        for it in (data.get("estimate") or []):
+            try:
+                pos = int(it.get("position"))
+                bid = int(it.get("bid"))
+                if 1 <= pos <= 5 and bid > 0:
+                    rows.append({"position": pos, "bid": bid})
+            except (TypeError, ValueError):
+                continue
+        out[key] = sorted(rows, key=lambda r: r["position"])
+
+        mdata = _searchad_post(
+            "/estimate/exposure-minimum-bid/keyword",
+            {"device": device, "period": "MONTH", "items": [kw]},
+        )
+        try:
+            mbid = int(((mdata.get("estimate") or [{}])[0]).get("bid") or 0)
+            if mbid > 0:
+                out["minBid"][key] = mbid
+        except (TypeError, ValueError, IndexError):
+            pass
+
+    if not out["pc"] and not out["mobile"]:
+        return {}  # 데이터 없음 — 신규 표 미표시(안전 폴백)
+    return out
+
+
 def _safe_int(val) -> int:
     """안전한 int 변환 (< 10 등 문자열 처리)"""
     if val is None:
