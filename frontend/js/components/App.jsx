@@ -112,6 +112,37 @@ window.App = function App() {
         return function() { window.removeEventListener('hashchange', onHashChange); };
     }, []);
 
+    /* 🧩 크롬 확장 브리지 — 확장이 수집한 상품 HTML 수신 → 검색바 자동 주입·분석 자동 시작.
+       확장 미설치·미사용 시 이 리스너는 아무 일도 하지 않음(기존 흐름 무영향). */
+    const currentUserRef = React.useRef(null);
+    currentUserRef.current = currentUser;
+    const extSearchRef = React.useRef(null);   // handleHomeSearch 최신본 (정의 이후 갱신)
+    const lastCaptureRef = React.useRef(0);    // 같은 수집물 중복 처리 방지
+    useEffect(function() {
+        var onExtMsg = function(ev) {
+            if (ev.source !== window || !ev.data || ev.data.type !== 'METAINC_EXT_CAPTURE') return;
+            if (!currentUserRef.current) return;                 // 로그인 전 — 확장이 30초간 재시도
+            var p = ev.data.payload || {};
+            var html = String(p.html || '');
+            if (html.length < 1000) return;                      // 비정상 수집물 무시
+            var capId = Number(p.captured_at) || 0;
+            if (capId && capId === lastCaptureRef.current) return;
+            lastCaptureRef.current = capId || Date.now();
+            window.postMessage({ type: 'METAINC_EXT_ACK' }, window.location.origin);
+            try { toast.success('🧩 확장 수신: 상품 HTML ' + Math.round(html.length / 1024) + 'KB'); } catch (e) {}
+            var kw = String(p.keyword || '').trim();
+            if (kw && extSearchRef.current) {
+                extSearchRef.current(kw, String(p.product_url || ''), html);   // 분석 자동 시작
+            } else {
+                setSearchBarInitial({ keyword: kw, companyName: String(p.product_name || ''), html: html, productUrl: String(p.product_url || '') });
+                setCurrentPage('home');
+                try { toast.info('키워드 입력 후 분석 실행을 눌러주세요.'); } catch (e) {}
+            }
+        };
+        window.addEventListener('message', onExtMsg);
+        return function() { window.removeEventListener('message', onExtMsg); };
+    }, []);
+
     // 헬스체크
     useEffect(function() {
         if (currentUser) {
@@ -432,6 +463,8 @@ window.App = function App() {
         setCurrentPage('analysis');
         handleSearch(keyword, productUrl, inputCompanyName, htmlInput);
     };
+    // 크롬 확장 브리지에서 자동 분석 시작에 사용(최신 클로저 유지)
+    extSearchRef.current = function(kw, url, html) { handleHomeSearch(kw, url, undefined, html); };
 
     /* ==================== 페이지별 콘텐츠 렌더링 ==================== */
 

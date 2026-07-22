@@ -15,6 +15,9 @@ window.SearchBar = function SearchBar({ onSearch, loading, initialValues }) {
         if (initialValues && typeof initialValues === 'object') {
             if (typeof initialValues.keyword === 'string') setKeyword(initialValues.keyword);
             if (typeof initialValues.companyName === 'string') setCompanyName(initialValues.companyName);
+            // 크롬 확장 브리지 — 수집된 상품 HTML·URL 자동 주입 (확장 미사용 시 미전달)
+            if (typeof initialValues.html === 'string' && initialValues.html) { setHtmlInput(initialValues.html); setHtmlExpanded(true); }
+            if (typeof initialValues.productUrl === 'string' && initialValues.productUrl) setManualUrl(initialValues.productUrl);
         }
     }, [initialValues]);
 

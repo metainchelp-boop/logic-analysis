@@ -1,0 +1,20 @@
+/* METAINC 로직분석 FAB — 페이지 스타일과 충돌하지 않도록 전부 고유 접두사 */
+#metainc-logic-fab{position:fixed;right:16px;bottom:16px;z-index:2147483000;width:262px;
+  background:#1B2A4A;color:#fff;border-radius:14px;box-shadow:0 8px 24px rgba(16,24,40,.35);
+  padding:12px 14px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Malgun Gothic",sans-serif;font-size:12px;line-height:1.5}
+#metainc-logic-fab .metainc-fab-head{display:flex;align-items:center;gap:7px;font-weight:800;font-size:12.5px}
+#metainc-logic-fab .metainc-fab-logo{width:20px;height:20px;border-radius:6px;background:#3b82f6;display:inline-flex;align-items:center;justify-content:center;font-size:11px}
+#metainc-fab-close{margin-left:auto;background:none;border:none;color:#94a3b8;font-size:15px;cursor:pointer;padding:0 2px;line-height:1}
+#metainc-fab-close:hover{color:#fff}
+#metainc-fab-keyword{margin-top:9px;width:100%;box-sizing:border-box;padding:8px 10px;border-radius:8px;border:1px solid #334a77;
+  background:#233657;color:#fff;font-size:12.5px;outline:none}
+#metainc-fab-keyword::placeholder{color:#7f93b8}
+#metainc-fab-keyword:focus{border-color:#3b82f6}
+#metainc-fab-btn{margin-top:8px;background:#3b82f6;border:none;color:#fff;width:100%;padding:9px 0;border-radius:9px;font-weight:800;font-size:12.5px;cursor:pointer}
+#metainc-fab-btn:hover{background:#2563eb}
+#metainc-fab-btn:disabled{background:#475569;cursor:default}
+#metainc-logic-fab .metainc-steps{display:flex;gap:6px;margin-top:9px}
+#metainc-logic-fab .metainc-step{flex:1;text-align:center;font-size:10px;padding:4px 0;border-radius:6px;background:rgba(255,255,255,.08);color:#94a3b8}
+#metainc-logic-fab .metainc-step.metainc-on{background:#f59e0b;color:#241a03;font-weight:800}
+#metainc-logic-fab .metainc-step.metainc-done{background:#22c55e;color:#04240f;font-weight:800}
+#metainc-fab-status{margin-top:7px;font-size:10.5px;color:#cbd5e1;line-height:1.55;min-height:28px}

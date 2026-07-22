@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="ko">
+<head><meta charset="utf-8"><style>
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Malgun Gothic",sans-serif;width:280px;margin:0;background:#fff;color:#1e293b}
+.head{background:#1B2A4A;color:#fff;padding:11px 14px;font-weight:800;font-size:13px;display:flex;align-items:center;gap:7px}
+.head small{margin-left:auto;font-weight:600;color:#cbd5e1;font-size:10px}
+.body{padding:12px 14px;font-size:12px}
+.row{display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid #f1f5f9}
+.pill{font-size:10px;font-weight:800;border-radius:999px;padding:2px 8px}
+.pg{background:#dcfce7;color:#166534}.pr{background:#fee2e2;color:#991b1b}
+button{margin-top:10px;background:#3b82f6;color:#fff;border:none;width:100%;padding:9px 0;border-radius:9px;font-weight:800;font-size:12.5px;cursor:pointer}
+button:disabled{background:#94a3b8;cursor:default}
+.tip{margin-top:9px;font-size:10.5px;color:#94a3b8;line-height:1.6}
+</style></head>
+<body>
+<div class="head">📊 METAINC 로직분석 <small>v1.0</small></div>
+<div class="body">
+  <div class="row"><span>현재 페이지</span><span class="pill pr" id="pg-status">확인 중…</span></div>
+  <button id="send-btn" disabled>📥 이 상품 분석 보내기</button>
+  <div class="tip" id="tip">스마트스토어 상품 페이지에서 사용하세요. 버튼을 누르면 페이지 우하단 패널에서 키워드 입력 후 전송합니다.</div>
+</div>
+<script src="popup.js"></script>
+</body>
+</html>
