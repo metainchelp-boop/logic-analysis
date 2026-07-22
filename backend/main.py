@@ -815,6 +815,42 @@ def refresh_rank(product_id: int, background_tasks: BackgroundTasks, current_use
 
 
 # --- 키워드 볼륨 조회 ---
+# ── 파워링크 순위별 입찰가 (건의 2026-07-22) — 1시간 메모리 캐시 ──
+import threading as _bid_threading
+_bid_cache = {}
+_bid_cache_lock = _bid_threading.Lock()
+
+
+class BidEstimateRequest(BaseModel):
+    keyword: str
+
+
+@app.post("/api/keyword/bid-estimate")
+def keyword_bid_estimate(req: BidEstimateRequest, current_user: dict = Depends(get_current_user)):
+    """파워링크 1~5위 평균 노출 입찰가 + 최소 노출가 (네이버 검색광고 공식 추정, 인증 필수).
+    데이터 없음/실패 시 data={} — 프론트는 신규 표를 렌더하지 않음(기존 화면 유지)."""
+    try:
+        kw = (req.keyword or "").strip()[:100]
+        if not kw:
+            return {"success": False, "detail": "키워드를 입력해주세요."}
+        now = time.time()
+        with _bid_cache_lock:
+            hit = _bid_cache.get(kw)
+            if hit and now - hit[1] < 3600:
+                return {"success": True, "data": hit[0], "cached": True}
+        from naver_crawler import get_bid_estimates
+        data = get_bid_estimates(kw)
+        if data:  # 성공한 결과만 캐시 — 실패는 다음 요청에서 재시도
+            with _bid_cache_lock:
+                if len(_bid_cache) > 300:
+                    _bid_cache.clear()
+                _bid_cache[kw] = (data, now)
+        return {"success": True, "data": data}
+    except Exception as e:
+        logger.error(f"입찰가 추정 조회 실패: {e}")
+        return {"success": False, "detail": "입찰가 추정 조회 중 오류가 발생했습니다."}
+
+
 @app.post("/api/keyword/volume")
 def keyword_volume(keywords: List[str], current_user: dict = Depends(get_current_user)):
     """키워드 검색량 조회 (인증 필수)"""
