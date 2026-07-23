@@ -37,7 +37,9 @@ for (const rel of files) {
   const full = path.join(FRONTEND, rel);
   const code = fs.readFileSync(full, 'utf8');
   const res = babel.transformSync(code, {
-    presets: [presetReact],
+    // runtime 'classic' 고정: babel 8부터 기본이 automatic(ESM import 생성)으로 바뀌어
+    // 브라우저 클래식 스크립트 번들이 통째로 파싱 실패함 — React 전역(UMD) 방식 유지
+    presets: [[presetReact, { runtime: 'classic', development: false }]],
     filename: rel,
     compact: false,
     babelrc: false,

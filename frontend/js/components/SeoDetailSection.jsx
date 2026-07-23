@@ -14,7 +14,7 @@ window.SeoDetailSection = function SeoDetailSection(props) {
     <div className="section fade-in">
       <div className="container">
         <div className="card">
-        <h3 className="rt-h3"><span className="rt-hic">🛡️</span>② SEO 적합도 · 신뢰도 · 인기도<span className="badge b-est">≈ 추정</span></h3>
+        <h3 className="rt-h3"><span className="rt-hic">🛡️</span>SEO 적합도 · 신뢰도 · 인기도<span className="badge b-est">≈ 추정</span></h3>
         <div className="grid3">
           {categories.map(function(cat, catIdx) {
             return (

@@ -8,7 +8,7 @@ window.DatalabSeasonSection = function DatalabSeasonSection(props) {
     <div className="section fade-in">
       <div className="container">
         <div className="card" style={{ padding: '20px 22px' }}>
-        <h3 className="rt-h3"><span className="rt-hic">🗓️</span>시즌별 수요 예측<span className="badge b-ok">✅ 데이터랩</span></h3>
+        <h3 className="rt-h3"><span className="rt-hic">🗓️</span>시즌별 수요 예측<span className="badge b-dl">📊 데이터랩</span></h3>
         <div className="rt-desc">데이터랩 쇼핑인사이트 기반 시즌 분석</div>
 
         <div className="grid4">

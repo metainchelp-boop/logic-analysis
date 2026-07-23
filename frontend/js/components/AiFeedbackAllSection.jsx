@@ -133,6 +133,12 @@ window.AiFeedbackAllSection = function AiFeedbackAllSection(props) {
     }, []);
 
     return React.createElement('section', { id: 'sec-ai-feedback', className: 'section' },
+        /* 내보내기용 숨김 상태 마커 — ReportCapture가 읽어 미완료 시 로딩 문구 박제를 차단 */
+        React.createElement('span', {
+            className: 'ai-state',
+            style: { display: 'none' },
+            'data-state': loading ? 'loading' : (feedbacks ? 'done' : 'idle')
+        }),
         React.createElement('div', { className: 'container' },
             React.createElement('div', {
                 className: 'card',
@@ -179,7 +185,9 @@ window.AiFeedbackAllSection = function AiFeedbackAllSection(props) {
                                 boxShadow: '0 4px 12px rgba(14, 165, 233, 0.4)'
                             }
                         }, feedbacks ? '다시 분석' : '✨ AI 종합 분석'),
+                        /* no-export: 상태 마커가 실패해도 로딩 문구만은 전달본에서 항상 제거(이중 방어) */
                         loading && React.createElement('span', {
+                            className: 'no-export',
                             style: { fontSize: 13, color: '#0ea5e9', fontWeight: 500 }
                         }, '⏳ AI 분석 중... (약 20~30초)')
                     )

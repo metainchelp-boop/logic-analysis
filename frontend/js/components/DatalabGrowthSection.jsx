@@ -17,7 +17,7 @@ window.DatalabGrowthSection = function DatalabGrowthSection(props) {
     <div className="section fade-in">
       <div className="container">
         <div className="card" style={{ padding: '20px 22px' }}>
-        <h3 className="rt-h3"><span className="rt-hic">🚀</span>전년 동기 대비 성장률<span className="badge b-ok">✅ 데이터랩</span></h3>
+        <h3 className="rt-h3"><span className="rt-hic">🚀</span>전년 동기 대비 성장률<span className="badge b-dl">📊 데이터랩</span></h3>
         <div className="rt-desc">데이터랩 쇼핑인사이트 기반 전년 대비 검색 트렌드 변화</div>
         {props.data.offSeason && (
           <div style={{ margin: '8px 0 4px', padding: '10px 14px', background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: 10, fontSize: 12.5, color: '#92400e', lineHeight: 1.6 }}>

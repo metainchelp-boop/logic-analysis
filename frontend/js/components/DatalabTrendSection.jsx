@@ -27,7 +27,7 @@ window.DatalabTrendSection = function DatalabTrendSection(props) {
     <div className="section fade-in">
       <div className="container">
         <div className="card">
-          <h3 className="rt-h3"><span className="rt-hic">📈</span>키워드 검색량 트렌드 (최근 12개월) <span className="badge b-ok">✅ 데이터랩</span></h3>
+          <h3 className="rt-h3"><span className="rt-hic">📈</span>키워드 검색량 트렌드 (최근 12개월) <span className="badge b-dl">📊 데이터랩</span></h3>
           {/* KPI 4칸 — 차트 위 */}
           <div className="grid4" style={{ marginBottom: 6 }}>
             <div className="kpi"><div className="k">최고 지수</div><div className="v">{d.maxRatio} <small>{d.maxMonth}</small></div></div>

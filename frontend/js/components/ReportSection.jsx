@@ -14,127 +14,23 @@ window.ReportSection = function ReportSection(props) {
         if (propCompanyName) setCompanyName(propCompanyName);
     }, [propCompanyName]);
 
-    /* HTML 보고서 — 현재 페이지 DOM 복제 */
+    /* HTML 보고서 — 공용 캡처 빌더(ReportCapture) 사용
+     * 업체 자동저장 경로와 동일한 빌더를 써서 직원용 UI가 전달본에 섞이는 것을 원천 차단 */
     var handleHtmlExport = function() {
+        /* AI 종합 분석이 진행 중이면 완료 대기를 먼저 권유 (강행 시 해당 섹션은 '별도 전달' 안내로 대체) */
+        try {
+            if (window.ReportCapture && window.ReportCapture.aiState() === 'loading') {
+                var goNow = window.confirm('🤖 AI 종합 분석이 아직 진행 중입니다 (약 20~30초).\n완료 후 내보내면 AI 분석이 보고서에 포함됩니다.\n\n지금 바로 내보내시겠습니까?\n(AI 섹션은 "완료 후 별도 전달" 안내로 대체됩니다)');
+                if (!goNow) return;
+            }
+        } catch(eG) {}
         setLoading(true);
         try {
-            /*
-             * 페이지의 모든 분석 결과를 DOM 순서대로 자동 캡처
-             * App 루트의 직접 자식 요소를 순회하여
-             * 네비게이션/검색바/보고서/알림/푸터를 제외한 모든 콘텐츠를 수집
-             */
-            /* ★ 보고서 본문(.report-main)을 통째로 캡처 — 모든 섹션 포함 + 스코프 CSS(.report-main ...) 유지 */
-            var captured = [];
-            var srcMain = document.querySelector('.report-main');
-            if (srcMain) {
-                captured.push(srcMain.cloneNode(true));
-            } else {
-                /* 폴백: .section 클래스 기반(있을 때만) */
-                var allSections = document.querySelectorAll('.section');
-                allSections.forEach(function(s) {
-                    if (s.id === 'sec-report' || s.id === 'sec-notify') return;
-                    captured.push(s.cloneNode(true));
-                });
-            }
-
-            /* ★ 차트 canvas → 이미지(toDataURL) 변환 (canvas는 outerHTML에 그림이 안 담겨 빈칸이 됨) */
-            try {
-                var _origCanvas = (srcMain || document).querySelectorAll('canvas');
-                captured.forEach(function(node) {
-                    var _cloneCanvas = node.querySelectorAll('canvas');
-                    for (var _ci = 0; _ci < _cloneCanvas.length; _ci++) {
-                        try {
-                            var _du = '';
-                            /* Chart.js 인스턴스가 있으면 toBase64Image가 가장 안정적 */
-                            try {
-                                var _ch = (window.Chart && window.Chart.getChart) ? window.Chart.getChart(_origCanvas[_ci]) : null;
-                                if (_ch) _du = _ch.toBase64Image('image/png', 1);
-                            } catch (eChart) {}
-                            if (!_du && _origCanvas[_ci] && _origCanvas[_ci].toDataURL) _du = _origCanvas[_ci].toDataURL('image/png');
-                            if (!_du) continue;
-                            var _img = document.createElement('img');
-                            _img.src = _du;
-                            _img.style.cssText = 'width:100%;height:auto;display:block;margin-bottom:14px;';
-                            if (_cloneCanvas[_ci].parentNode) _cloneCanvas[_ci].parentNode.replaceChild(_img, _cloneCanvas[_ci]);
-                            /* ★겹침방지(핵심): 이미지의 직속 부모(차트 래퍼, height:NNNpx 고정)와 .chartbox 모두 높이 해제 →
-                               이미지가 비율대로 늘어나도 래퍼가 정확히 감싸 아래 노트와 겹치지 않게 */
-                            var _wrap = _img.parentNode; /* ChartCanvas가 만든 position:relative;height:NNNpx 래퍼 */
-                            if (_wrap && _wrap.style) { _wrap.style.height = 'auto'; _wrap.style.minHeight = '0'; _wrap.style.position = 'static'; }
-                            var _box = (_img.closest && _img.closest('.chartbox')) || _wrap;
-                            if (_box && _box.style) { _box.style.height = 'auto'; _box.style.minHeight = '0'; _box.style.overflow = 'visible'; _box.style.marginBottom = '18px'; }
-                        } catch (eImg) {}
-                    }
-                });
-            } catch (eCanvas) {}
-
-            /* 클론에서 no-export / 인터랙티브 요소 제거 */
-            captured.forEach(function(node) {
-                var noExport = node.querySelectorAll('.no-export');
-                noExport.forEach(function(el) { el.remove(); });
-                var btns = node.querySelectorAll('button, .btn');
-                btns.forEach(function(b) { b.remove(); });
-                var inputs = node.querySelectorAll('input, select, textarea');
-                inputs.forEach(function(inp) {
-                    var span = document.createElement('span');
-                    span.textContent = inp.value || '';
-                    span.style.fontWeight = '600';
-                    inp.parentNode.replaceChild(span, inp);
-                });
-                /* grid 레이아웃 요소에 반응형 클래스 추가 */
-                var gridEls = node.querySelectorAll('[style*="grid-template-columns"]');
-                gridEls.forEach(function(el) { el.classList.add('rpt-grid'); });
-                var flexEls = node.querySelectorAll('[style*="display: flex"], [style*="display:flex"]');
-                flexEls.forEach(function(el) { el.classList.add('rpt-flex'); });
-            });
-
-            /* CSS 수집 */
-            var cssText = '';
-            try {
-                var sheets = document.styleSheets;
-                for (var i = 0; i < sheets.length; i++) {
-                    try {
-                        var rules = sheets[i].cssRules || sheets[i].rules;
-                        for (var j = 0; j < rules.length; j++) {
-                            cssText += rules[j].cssText + '\n';
-                        }
-                    } catch(e) { /* cross-origin 무시 */ }
-                }
-            } catch(e) {}
-
-            /* 섹션 HTML 합치기 */
-            var bodyHtml = '';
-            captured.forEach(function(node) {
-                bodyHtml += node.outerHTML + '\n';
-            });
-
-            var dateStr = new Date().toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric' });
             var headerText = companyName ? companyName + ' 분석 보고서' : '로직 분석 보고서';
-
-            var fullHtml = '<!DOCTYPE html>\n<html lang="ko">\n<head>\n'
-                + '<meta charset="UTF-8">\n'
-                + '<meta name="viewport" content="width=1200">\n'
-                + '<title>' + headerText + ' - ' + dateStr + '</title>\n'
-                + '<style>\n'
-                + '* { margin: 0; padding: 0; box-sizing: border-box; }\n'
-                + 'body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f8fafc; color: #1e293b; }\n'
-                + '.report-header { background: linear-gradient(135deg, #6C5CE7, #a29bfe); color: #fff; padding: 40px 20px; text-align: center; }\n'
-                + '.report-header h1 { font-size: 24px; margin-bottom: 8px; }\n'
-                + '.report-header p { font-size: 14px; opacity: 0.85; }\n'
-                + '.report-footer { text-align: center; padding: 30px; color: #94a3b8; font-size: 12px; border-top: 1px solid #e2e8f0; margin-top: 40px; }\n'
-                + cssText
-                + '\n@media print { .report-header { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }\n'
-                + '</style>\n</head>\n<body>\n'
-                + '<div class="report-header">\n'
-                + '  <h1>' + headerText + '</h1>\n'
-                + '  <p>' + dateStr + ' | 메타아이앤씨 로직 분석 시스템</p>\n'
-                + '</div>\n'
-                + '<div class="report-content" style="max-width:1200px; margin:0 auto; padding:20px;">\n'
-                + bodyHtml
-                + '</div>\n'
-                + '<div class="report-footer">\n'
-                + '  <p>\u00A9 2026 \uba54\ud0c0\uc544\uc774\uc564\uc528 \u2014 \ub85c\uc9c1 \ubd84\uc11d \uc2dc\uc2a4\ud15c | \ubcf8 \ubcf4\uace0\uc11c\ub294 \uc790\ub3d9 \uc0dd\uc131\ub418\uc5c8\uc2b5\ub2c8\ub2e4.</p>\n'
-                + '</div>\n'
-                + '</body>\n</html>';
+            var fullHtml = window.ReportCapture
+                ? window.ReportCapture.buildHtml({ title: headerText, managerName: props && props.managerName })
+                : '';
+            if (!fullHtml) { throw new Error('캡처 대상(.report-main)을 찾지 못했습니다'); }
 
             /* 다운로드 */
             var blob = new Blob([fullHtml], { type: 'text/html;charset=utf-8' });

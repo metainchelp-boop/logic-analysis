@@ -20,7 +20,7 @@ window.HtmlDetailAnalysisSection = function HtmlDetailAnalysisSection({ data }) 
         <div className="section fade-in">
             <div className="container">
                 <div className="card" style={{ padding: '20px 22px' }}>
-                <h3 className="rt-h3"><span className="rt-hic">🖼️</span>④ 상세페이지 HTML 분석<span className="badge b-est">≈ 추정</span></h3>
+                <h3 className="rt-h3"><span className="rt-hic">🖼️</span>상세페이지 HTML 분석<span className="badge b-est">≈ 추정</span></h3>
                 <div className="rt-desc">실제 HTML에서 추출한 데이터 기반 정밀 진단</div>
 
                 {/* v5 2칼럼: 원형 스코어 + 영역별 바 */}
