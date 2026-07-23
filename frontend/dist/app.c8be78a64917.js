@@ -2003,6 +2003,62 @@ window.RankTrackingSection = function RankTrackingSection({
       toast.error('삭제 실패: ' + (e.message || '네트워크 오류'));
     }
   };
+
+  /* 키워드 개별 삭제 (건의 2026-07-22, 이예은) — 남기는 키워드의 이력은 유지.
+     마지막 1개는 삭제 불가(키워드 0개 상품 방지 → 상품 삭제로 정리). */
+  const handleDeleteKeyword = async (keywordId, keyword, siblingCount) => {
+    if (siblingCount <= 1) {
+      try {
+        toast.warn('마지막 키워드는 삭제할 수 없습니다. 상품 전체를 정리하려면 상품 삭제를 이용하세요.');
+      } catch (e) {}
+      return;
+    }
+    if (!confirm("'" + keyword + "' 추적을 삭제할까요?\n이 키워드의 순위 이력도 함께 삭제됩니다. (상품과 다른 키워드는 유지)")) return;
+    try {
+      await api.del('/keywords/' + keywordId);
+      try {
+        toast.success("'" + keyword + "' 추적이 삭제되었습니다.");
+      } catch (e) {}
+      refreshProducts();
+    } catch (e) {
+      toast.error('키워드 삭제 실패: ' + (e.message || '네트워크 오류'));
+    }
+  };
+
+  /* 키워드 삭제 ✕ 버튼 (canEdit일 때만) — 표의 '관리' 열 셀. 마지막 1개면 비활성 */
+  var renderKeywordDeleteCell = function (k, siblingCount, pad) {
+    var disabled = siblingCount <= 1;
+    return React.createElement('td', {
+      style: {
+        padding: pad || '6px 10px',
+        textAlign: 'center',
+        whiteSpace: 'nowrap'
+      },
+      onClick: function (e) {
+        e.stopPropagation();
+      } /* 셀 클릭이 행 펼침을 토글하지 않게 */
+    }, React.createElement('button', {
+      disabled: disabled,
+      title: disabled ? '마지막 키워드는 삭제할 수 없습니다 — 상품 삭제를 이용하세요' : '이 키워드 추적 삭제',
+      onClick: function (e) {
+        e.stopPropagation();
+        handleDeleteKeyword(k.id, k.keyword, siblingCount);
+      },
+      style: {
+        border: '1px solid ' + (disabled ? '#e2e8f0' : '#fecaca'),
+        background: disabled ? '#f8fafc' : '#fff',
+        color: disabled ? '#cbd5e1' : '#dc2626',
+        borderRadius: 8,
+        width: 26,
+        height: 26,
+        fontSize: 12,
+        fontWeight: 800,
+        lineHeight: 1,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        padding: 0
+      }
+    }, '✕'));
+  };
   const loadHistory = async (keywordId, days) => {
     days = days || 30;
     var cacheKey = keywordId + ':' + days;
@@ -2804,7 +2860,12 @@ window.RankTrackingSection = function RankTrackingSection({
           style: {
             marginTop: 14
           }
-        }, React.createElement('table', null, React.createElement('thead', null, React.createElement('tr', null, React.createElement('th', null, '키워드'), React.createElement('th', null, '현재 순위'), React.createElement('th', null, '페이지'), React.createElement('th', null, '최근 체크'))), React.createElement('tbody', null, p.keywords.map(function (k) {
+        }, React.createElement('table', null, React.createElement('thead', null, React.createElement('tr', null, React.createElement('th', null, '키워드'), React.createElement('th', null, '현재 순위'), React.createElement('th', null, '페이지'), React.createElement('th', null, '최근 체크'), canEdit !== false && React.createElement('th', {
+          style: {
+            width: 52,
+            textAlign: 'center'
+          }
+        }, '관리'))), React.createElement('tbody', null, p.keywords.map(function (k) {
           var isOpen = expandedKeyword === k.id;
           var rowEl = React.createElement('tr', {
             key: k.id,
@@ -2839,12 +2900,12 @@ window.RankTrackingSection = function RankTrackingSection({
               fontSize: 12,
               color: '#94a3b8'
             }
-          }, k.last_checked ? new Date(k.last_checked).toLocaleString('ko') : '-'));
+          }, k.last_checked ? new Date(k.last_checked).toLocaleString('ko') : '-'), canEdit !== false && renderKeywordDeleteCell(k, p.keywords.length, '8px 8px'));
           if (!isOpen) return rowEl;
           var chartRow = React.createElement('tr', {
             key: k.id + '-chart'
           }, React.createElement('td', {
-            colSpan: 4,
+            colSpan: canEdit !== false ? 5 : 4,
             style: {
               padding: 0,
               background: '#f8fafc'
@@ -3159,7 +3220,16 @@ window.RankTrackingSection = function RankTrackingSection({
           fontWeight: 700,
           fontSize: 11
         }
-      }, '최근 체크'))), React.createElement('tbody', null, kws.map(function (k) {
+      }, '최근 체크'), canEdit !== false && React.createElement('th', {
+        style: {
+          textAlign: 'center',
+          padding: '6px 10px',
+          color: '#94a3b8',
+          fontWeight: 700,
+          fontSize: 11,
+          width: 44
+        }
+      }, '관리'))), React.createElement('tbody', null, kws.map(function (k) {
         var kOpen = expandedKeyword === k.id;
         var krow = React.createElement('tr', {
           key: k.id,
@@ -3195,12 +3265,12 @@ window.RankTrackingSection = function RankTrackingSection({
             fontSize: 11,
             color: '#94a3b8'
           }
-        }, k.last_checked ? new Date((k.last_checked || '').replace(' ', 'T')).toLocaleString('ko') : '-'));
+        }, k.last_checked ? new Date((k.last_checked || '').replace(' ', 'T')).toLocaleString('ko') : '-'), canEdit !== false && renderKeywordDeleteCell(k, kws.length, '6px 10px'));
         if (!kOpen) return krow;
         return [krow, React.createElement('tr', {
           key: k.id + '-c'
         }, React.createElement('td', {
-          colSpan: 3,
+          colSpan: canEdit !== false ? 4 : 3,
           style: {
             padding: 0,
             background: '#f8fafc'
