@@ -13,7 +13,7 @@ window.App = function App() {
     // URL hash에서 현재 페이지 복원 (새로고침 시 탭 유지)
     var _getPageFromHash = function() {
         var hash = window.location.hash.replace('#', '');
-        var validPages = ['home', 'analysis', 'management', 'learning', 'guide', 'settings'];
+        var validPages = ['home', 'place', 'analysis', 'management', 'learning', 'guide', 'settings'];
         return validPages.indexOf(hash) !== -1 ? hash : 'home';
     };
     const [currentPage, setCurrentPage] = useState(_getPageFromHash);
@@ -447,6 +447,15 @@ window.App = function App() {
                 initialSearch: managementInitialSearch,
                 canEdit: currentUser.role !== 'viewer'
             })
+        ),
+        React.createElement(window.ChatWidget, { currentUser: currentUser })
+    );
+
+    /* 플레이스 분석 탭 — 오프라인·지역 업종(자체완결 페이지, 스토어 분석 흐름과 독립) */
+    if (currentPage === 'place') return React.createElement(React.Fragment, null,
+        React.createElement('div', null,
+            React.createElement(window.TopBar, { activePage: 'place', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
+            React.createElement(window.PlaceAnalysisPage, { currentUser: currentUser })
         ),
         React.createElement(window.ChatWidget, { currentUser: currentUser })
     );

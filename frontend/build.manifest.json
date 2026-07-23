@@ -63,6 +63,8 @@
   "js/components/CpcBidEstimateSection.jsx",
   "js/components/TrackRegisterButton.jsx",
   "js/components/AnalysisResults.jsx",
+  "js/components/PlaceRankChart.jsx",
+  "js/components/PlaceAnalysisPage.jsx",
   "js/analysis.jsx",
   "js/components/App.jsx"
 ]
