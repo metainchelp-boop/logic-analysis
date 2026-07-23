@@ -19022,7 +19022,9 @@ window.TrackRegisterButton = function TrackRegisterButton(props) {
       className: 'container'
     }, React.createElement('div', {
       style: wrap
-    }, React.createElement('span', {
+    }, /* no-export: 직원용 운영 상태 표시 — 광고주 전달본(내보내기)에서는 제외 */
+    React.createElement('span', {
+      className: 'no-export',
       style: {
         display: 'inline-flex',
         alignItems: 'center',
