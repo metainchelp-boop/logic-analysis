@@ -30,80 +30,13 @@ window.SaveToClientSection = function SaveToClientSection({
 
     if (!keyword || !analysisData) return null;
 
-    /* DOM 캡처 — ReportSection과 동일한 로직으로 분석 화면 HTML 생성 */
+    /* DOM 캡처 — 공용 빌더(ReportCapture) 사용 (v6.7 통일)
+     * 수동 내보내기·자동저장과 동일한 제거 규칙·인디고 표지·PC 축소판 viewport 적용.
+     * 구버전(자체 클론 로직)은 보라 표지·no-export 미제거로 전달본 불일치가 있었음. */
     var captureReportHtml = function() {
         try {
-            var captured = [];
-            var rootEl = document.getElementById('root');
-            if (rootEl && rootEl.children[0]) {
-                var appDiv = rootEl.children[0];
-                var children = Array.from(appDiv.children);
-                children.forEach(function(child) {
-                    if (child.classList.contains('topbar')) return;
-                    if (child.querySelector && child.querySelector('.anchor-nav')) return;
-                    var style = child.getAttribute('style') || '';
-                    if (style.indexOf('sticky') !== -1 && style.indexOf('top') !== -1 && child.querySelector && child.querySelector('.anchor-btn')) return;
-                    if (child.id === 'sec-report') return;
-                    if (child.id === 'sec-notify') return;
-                    if (child.id === 'sec-save-client') return;
-                    if (child.querySelector && child.querySelector('#sec-report')) return;
-                    if (child.querySelector && child.querySelector('#sec-notify')) return;
-                    if (child.querySelector && child.querySelector('#sec-save-client')) return;
-                    if (child.tagName === 'FOOTER') return;
-                    if (!child.innerHTML || child.innerHTML.trim() === '') return;
-                    if (child.querySelector && child.querySelector('.loading-spinner')) return;
-                    captured.push(child.cloneNode(true));
-                });
-            }
-            if (captured.length === 0) {
-                var allSections = document.querySelectorAll('.section');
-                allSections.forEach(function(s) {
-                    if (s.id === 'sec-report' || s.id === 'sec-notify' || s.id === 'sec-save-client') return;
-                    captured.push(s.cloneNode(true));
-                });
-            }
-            captured.forEach(function(node) {
-                var btns = node.querySelectorAll('button, .btn');
-                btns.forEach(function(b) { b.remove(); });
-                var inputs = node.querySelectorAll('input, select, textarea');
-                inputs.forEach(function(inp) {
-                    var span = document.createElement('span');
-                    span.textContent = inp.value || '';
-                    span.style.fontWeight = '600';
-                    inp.parentNode.replaceChild(span, inp);
-                });
-            });
-            var cssText = '';
-            try {
-                var sheets = document.styleSheets;
-                for (var i = 0; i < sheets.length; i++) {
-                    try {
-                        var rules = sheets[i].cssRules || sheets[i].rules;
-                        for (var j = 0; j < rules.length; j++) { cssText += rules[j].cssText + '\n'; }
-                    } catch(e) {}
-                }
-            } catch(e) {}
-            var bodyHtml = '';
-            captured.forEach(function(node) { bodyHtml += node.outerHTML + '\n'; });
-            var dateStr = new Date().toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric' });
-            var headerText = keyword + ' 키워드 분석 보고서';
-            return '<!DOCTYPE html>\n<html lang="ko">\n<head>\n'
-                + '<meta charset="UTF-8">\n<meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
-                + '<title>' + headerText + ' - ' + dateStr + '</title>\n<style>\n'
-                + '* { margin: 0; padding: 0; box-sizing: border-box; }\n'
-                + 'body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f8fafc; color: #1e293b; }\n'
-                + '.report-header { background: linear-gradient(135deg, #6C5CE7, #a29bfe); color: #fff; padding: 40px 20px; text-align: center; }\n'
-                + '.report-header h1 { font-size: 24px; margin-bottom: 8px; }\n'
-                + '.report-header p { font-size: 14px; opacity: 0.85; }\n'
-                + '.report-footer { text-align: center; padding: 30px; color: #94a3b8; font-size: 12px; border-top: 1px solid #e2e8f0; margin-top: 40px; }\n'
-                + cssText
-                + '\n@media print { .report-header { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }\n'
-                + '</style>\n</head>\n<body>\n'
-                + '<div class="report-header">\n<h1>' + headerText + '</h1>\n'
-                + '<p>' + dateStr + ' | \uba54\ud0c0\uc544\uc774\uc564\uc528 \ub85c\uc9c1 \ubd84\uc11d \uc2dc\uc2a4\ud15c</p>\n</div>\n'
-                + '<div style="max-width:1200px; margin:0 auto; padding:20px;">\n' + bodyHtml + '</div>\n'
-                + '<div class="report-footer">\n<p>\u00A9 2026 \uba54\ud0c0\uc544\uc774\uc564\uc528 \u2014 \ub85c\uc9c1 \ubd84\uc11d \uc2dc\uc2a4\ud15c | \ubcf8 \ubcf4\uace0\uc11c\ub294 \uc790\ub3d9 \uc0dd\uc131\ub418\uc5c8\uc2b5\ub2c8\ub2e4.</p>\n</div>\n'
-                + '</body>\n</html>';
+            if (!window.ReportCapture) return '';
+            return window.ReportCapture.buildHtml({ title: keyword + ' 키워드 분석 보고서' });
         } catch(e) {
             console.error('DOM capture failed:', e);
             return '';
