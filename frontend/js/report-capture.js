@@ -211,7 +211,8 @@
 
       return '<!DOCTYPE html>\n<html lang="ko">\n<head>\n'
         + '<meta charset="UTF-8">\n'
-        + '<meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
+        /* 운영자 지시: 모바일에서도 PC 화면 축소판으로 열람(1열 재배치 아님) — width=1200 고정 */
+        + '<meta name="viewport" content="width=1200">\n'
         + '<title>' + headerText + ' - ' + esc(dateStr) + '</title>\n'
         + '<style>\n'
         + '* { margin: 0; padding: 0; box-sizing: border-box; }\n'
