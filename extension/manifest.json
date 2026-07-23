@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "METAINC 로직분석 수집기",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "스마트스토어 상품 페이지를 자동 스크롤로 완전 수집해 로직분석으로 원클릭 전송합니다.",
   "permissions": ["storage", "unlimitedStorage", "tabs"],
   "host_permissions": [
