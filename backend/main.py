@@ -1029,10 +1029,20 @@ class SeoAnalysisRequest(BaseModel):
     place_html: Optional[str] = None             # 직원 브라우저 캡처 검색결과 HTML(순위·경쟁사)
     target_doc_id: Optional[str] = None          # 내 업체 플레이스 doc-id(순위 매칭)
     target_name: Optional[str] = None            # 내 업체명(doc-id 없을 때 매칭 폴백)
+    region: Optional[str] = None                 # 지역(동/구/시) — 업체 식별키·표시용
     place: Optional[Dict[str, Any]] = None       # 담당자 보완 지표(저장수·예약·사진·소식 등)
 
 
-def _place_seo_analyze(req: "SeoAnalysisRequest"):
+def _place_business_key(req: "SeoAnalysisRequest", region: str = "") -> str:
+    """업체 식별키 — doc_id 우선, 없으면 정규화한 업체명+지역(캡처마다 안정적)."""
+    if req.target_doc_id:
+        return f"doc:{req.target_doc_id}"
+    name = place_crawler._norm(req.target_name or "")
+    reg = place_crawler._norm(region or req.region or "")
+    return f"nm:{name}|{reg}" if name else ""
+
+
+def _place_seo_analyze(req: "SeoAnalysisRequest", current_user: dict = None):
     """플레이스 전용 SEO 진단 — place_crawler 어댑터로 파싱·순위·점수화.
     반환 envelope 를 쇼핑 seo_analyze 와 동일 형태로 맞춰 프론트 리포트 셸을 재사용한다."""
     try:
@@ -1046,12 +1056,20 @@ def _place_seo_analyze(req: "SeoAnalysisRequest"):
         )
         if rank_info.get("rank"):
             place_in["rank"] = rank_info["rank"]
+        # 캡처에 내 업체가 노출됐으면 방문자·블로그 리뷰를 자동 측정값으로 채움
+        # (담당자가 직접 입력한 값이 있으면 그 값을 우선 — 하이브리드).
+        _matched = rank_info.get("matched") or {}
+        for _mk in ("visitor_reviews", "blog_reviews"):
+            if place_in.get(_mk) is None and _matched.get(_mk) is not None:
+                place_in[_mk] = _matched.get(_mk)
         # 경쟁사(상위 오가닉·내 업체 제외) — 캡처에서 리뷰 지표만 확보
         competitors = []
         for it in parsed.get("items", []):
             if it.get("is_ad"):
                 continue
             if req.target_doc_id and str(it.get("doc_id")) == str(req.target_doc_id):
+                continue
+            if _matched and it is _matched:   # 이름 매칭된 내 업체도 제외
                 continue
             competitors.append({
                 "name": it.get("name"),
@@ -1061,13 +1079,35 @@ def _place_seo_analyze(req: "SeoAnalysisRequest"):
                 "rating": it.get("rating"),
             })
         scored = place_crawler.score_place(place_in, competitors=competitors)
+        region = req.region or parsed.get("region") or ""
+        business_key = _place_business_key(req, region)
+
+        # 순위 이력 누적(하루 1점) — 플레이스는 캡처로만 순위가 확보되므로 분석 시점에 저장.
+        # 실패해도 분석 응답은 정상 반환(무회귀).
+        try:
+            if business_key and req.keyword:
+                from database import save_place_rank
+                save_place_rank(
+                    business_key=business_key,
+                    keyword=req.keyword,
+                    rank_position=rank_info.get("rank"),
+                    rank_state=rank_info.get("state") or "",
+                    business_name=req.target_name or "",
+                    region=region,
+                    user_id=(current_user or {}).get("id", 0),
+                )
+        except Exception as _e:
+            logger.warning(f"플레이스 순위 이력 저장 건너뜀: {_e}")
+
         return {
             "success": True,
             "data": {
                 "vertical": "place",
                 "keyword": req.keyword,
-                "region": parsed.get("region"),
+                "region": region,
                 "category": parsed.get("category"),
+                "business_key": business_key,
+                "business_name": req.target_name or "",
                 "rank_state": rank_info.get("state"),
                 "rank": rank_info.get("rank"),
                 "page": rank_info.get("page"),
@@ -1087,13 +1127,39 @@ def _place_seo_analyze(req: "SeoAnalysisRequest"):
         raise HTTPException(status_code=500, detail="플레이스 분석 중 오류가 발생했습니다.")
 
 
+@app.get("/api/place/rank-history")
+def place_rank_history_api(business: str = "", keyword: str = "", days: int = 30,
+                          current_user: dict = Depends(get_current_user)):
+    """플레이스 (업체·키워드) 일자별 순위 시계열 — §2 추적 차트용."""
+    try:
+        from database import get_place_rank_history
+        d = min(max(int(days or 30), 7), 365)
+        series = get_place_rank_history(business, keyword, days=d)
+        return {"success": True, "data": {"business_key": business, "keyword": keyword, "series": series}}
+    except Exception as e:
+        logger.error(f"플레이스 순위 이력 조회 실패: {e}")
+        return {"success": False, "error": "순위 이력 조회 중 오류가 발생했습니다."}
+
+
+@app.get("/api/place/keywords")
+def place_tracked_keywords_api(business: str = "", current_user: dict = Depends(get_current_user)):
+    """플레이스 업체가 추적(분석)한 키워드 + 각 최신 순위/상태 — §2 키워드 칩용."""
+    try:
+        from database import get_place_tracked_keywords
+        kws = get_place_tracked_keywords(business)
+        return {"success": True, "data": {"business_key": business, "keywords": kws}}
+    except Exception as e:
+        logger.error(f"플레이스 추적 키워드 조회 실패: {e}")
+        return {"success": False, "error": "추적 키워드 조회 중 오류가 발생했습니다."}
+
+
 @app.post("/api/seo/analyze")
 def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_current_user)):
     """상품 SEO 종합 진단 (인증 필수)"""
     try:
         # 플레이스 업종은 전용 어댑터로 분기(기본 shopping 은 아래 기존 경로 100% 그대로)
         if (req.vertical or "shopping") == "place":
-            return _place_seo_analyze(req)
+            return _place_seo_analyze(req, current_user)
         # 캐시된 데이터가 있으면 재활용, 없으면 API 호출
         if req.cached_product_info:
             product_info = req.cached_product_info

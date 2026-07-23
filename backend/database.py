@@ -150,6 +150,22 @@ def init_db():
             );
             CREATE INDEX IF NOT EXISTS idx_shopping_cache_created ON shopping_search_cache(created_at);
 
+            -- 플레이스(지역 검색) 순위 이력 (v6.6) — 플레이스는 서버 크롤이 불가(GPS 개인화·차단)해
+            -- 직원 캡처로만 순위가 확보된다. 분석할 때마다 (업체·키워드) 순위를 하루 1점으로 누적해
+            -- 일자별 추적 차트(§2)를 그린다. rank_position NULL = 미노출/미확인(state로 구분).
+            CREATE TABLE IF NOT EXISTS place_rank_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                business_key TEXT NOT NULL,
+                business_name TEXT DEFAULT '',
+                region TEXT DEFAULT '',
+                keyword TEXT NOT NULL,
+                rank_position INTEGER,
+                rank_state TEXT DEFAULT '',
+                user_id INTEGER DEFAULT 0,
+                checked_at TEXT DEFAULT (datetime('now', 'localtime'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_place_rank_bk_kw ON place_rank_history(business_key, keyword, checked_at);
+
             -- 알림 설정 기본 행 삽입 (없으면)
             INSERT OR IGNORE INTO notification_settings (id, notify_enabled, receiver_phone, report_time)
             VALUES (1, 0, '', '09:00');
@@ -165,6 +181,90 @@ def init_db():
     except Exception as e:
         logger.error(f"DB 초기화 실패: {e}")
         raise
+    finally:
+        conn.close()
+
+
+# ==================== 플레이스(지역 검색) 순위 이력 ====================
+
+def save_place_rank(business_key: str, keyword: str, rank_position=None,
+                    rank_state: str = "", business_name: str = "",
+                    region: str = "", user_id: int = 0):
+    """플레이스 (업체·키워드) 순위를 하루 1점으로 누적 저장.
+    같은 날 재분석 시 그날 값을 최신으로 대체(하루 1점 유지) → 일자별 차트가 깔끔.
+    rank_position None = 미노출/미확인(state로 구분)."""
+    if not business_key or not keyword:
+        return
+    conn = _get_conn()
+    try:
+        # 오늘 같은 (업체·키워드) 점은 최신으로 대체
+        conn.execute(
+            "DELETE FROM place_rank_history "
+            "WHERE business_key = ? AND keyword = ? "
+            "AND date(checked_at) = date('now', 'localtime')",
+            (business_key, keyword)
+        )
+        conn.execute(
+            "INSERT INTO place_rank_history "
+            "(business_key, business_name, region, keyword, rank_position, rank_state, user_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (business_key, business_name or "", region or "", keyword,
+             rank_position, rank_state or "", user_id or 0)
+        )
+        conn.commit()
+    except Exception as e:
+        logger.warning(f"플레이스 순위 저장 실패(무시): {e}")
+    finally:
+        conn.close()
+
+
+def get_place_rank_history(business_key: str, keyword: str, days: int = 30) -> List[Dict]:
+    """(업체·키워드) 일자별 순위 시계열. 하루 1점(최신)으로 정규화해 오름차순 반환.
+    반환: [{date:'YYYY-MM-DD', rank:int|None, state:str}]"""
+    if not business_key or not keyword:
+        return []
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT date(checked_at) AS d, rank_position, rank_state, checked_at "
+            "FROM place_rank_history "
+            "WHERE business_key = ? AND keyword = ? "
+            "AND date(checked_at) >= date('now', 'localtime', ?) "
+            "ORDER BY checked_at ASC",
+            (business_key, keyword, f"-{int(days)} days")
+        ).fetchall()
+        # 날짜별 최신 1점
+        by_day = {}
+        for r in rows:
+            by_day[r["d"]] = {"date": r["d"], "rank": r["rank_position"], "state": r["rank_state"] or ""}
+        return [by_day[d] for d in sorted(by_day.keys())]
+    except Exception as e:
+        logger.warning(f"플레이스 순위 이력 조회 실패(무시): {e}")
+        return []
+    finally:
+        conn.close()
+
+
+def get_place_tracked_keywords(business_key: str) -> List[Dict]:
+    """업체가 지금까지 분석(추적)한 키워드 목록 + 각 키워드의 최신 순위/상태.
+    §2 키워드 노출 칩 렌더용. 반환: [{keyword, rank, state, checked_at}] (최신 분석 순)."""
+    if not business_key:
+        return []
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT keyword, rank_position, rank_state, checked_at FROM place_rank_history p "
+            "WHERE business_key = ? AND checked_at = ("
+            "    SELECT MAX(checked_at) FROM place_rank_history "
+            "    WHERE business_key = p.business_key AND keyword = p.keyword) "
+            "ORDER BY checked_at DESC",
+            (business_key,)
+        ).fetchall()
+        return [{"keyword": r["keyword"], "rank": r["rank_position"],
+                 "state": r["rank_state"] or "", "checked_at": r["checked_at"]} for r in rows]
+    except Exception as e:
+        logger.warning(f"플레이스 추적 키워드 조회 실패(무시): {e}")
+        return []
     finally:
         conn.close()
 
