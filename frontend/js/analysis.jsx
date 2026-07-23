@@ -250,6 +250,7 @@ window.createDoSearch = function(deps) {
                     topProducts: topProductsList.map(function(p) {
                         return {
                             rank: p.rank,
+                            priceNum: p.price, /* 리뷰 실측 보정 계산용 숫자 가격 */
                             name: p.name,
                             store: p.store,
                             price: p.priceStr,

@@ -915,6 +915,63 @@ def get_ai_insights(client_id: int, current_user: dict = Depends(get_current_use
         return {"success": False, "detail": str(e)}
 
 
+@router.get("/review-trend")
+def review_trend(product_url: str, current_user: dict = Depends(get_current_user)):
+    """리뷰 증가 기반 실측 판매 추정(2단계) — 같은 상품의 과거 분석 기록에서
+    실제 리뷰수 스냅샷(HTML 수집분)을 모아 기간 델타로 월판매를 역산.
+    스냅샷 2개 미만·간격 7일 미만이면 available=False (FE는 조용히 생략)."""
+    url = (product_url or "").strip().split("?")[0]
+    if not url:
+        return {"success": True, "data": {"available": False}}
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT analyzed_date, analysis_json FROM client_analyses "
+            "WHERE product_url LIKE ? ORDER BY analyzed_date ASC",
+            (url.rstrip("/") + "%",),
+        ).fetchall()
+        points = []
+        for r in rows:
+            try:
+                data = json.loads(r["analysis_json"] or "{}")
+                rc = (((data.get("htmlDetail") or {}).get("reviewData")) or {}).get("reviewCount")
+                if rc is not None and int(rc) > 0:
+                    points.append({"date": r["analyzed_date"], "reviews": int(rc)})
+            except Exception:
+                continue
+        # 같은 날짜는 마지막 값만
+        dedup = {}
+        for p in points:
+            dedup[p["date"]] = p["reviews"]
+        series = [{"date": d, "reviews": dedup[d]} for d in sorted(dedup.keys())]
+        if len(series) < 2:
+            return {"success": True, "data": {"available": False, "points": len(series)}}
+        first, last = series[0], series[-1]
+        try:
+            d0 = datetime.strptime(first["date"][:10], "%Y-%m-%d")
+            d1 = datetime.strptime(last["date"][:10], "%Y-%m-%d")
+        except Exception:
+            return {"success": True, "data": {"available": False}}
+        days = (d1 - d0).days
+        delta = last["reviews"] - first["reviews"]
+        if days < 7 or delta < 0:
+            return {"success": True, "data": {"available": False, "days": days}}
+        monthly_reviews = delta / days * 30
+        # 리뷰 작성률 11.6%(식품 평균) 역산 — SalesEstimation 배너와 동일 가정
+        monthly_sales = round(monthly_reviews / 0.116)
+        return {"success": True, "data": {
+            "available": True,
+            "days": days,
+            "review_delta": delta,
+            "monthly_reviews": round(monthly_reviews, 1),
+            "monthly_sales_est": monthly_sales,
+            "from_date": first["date"][:10],
+            "to_date": last["date"][:10],
+        }}
+    finally:
+        conn.close()
+
+
 @router.get("/portal-summary")
 def portal_summary(company: str = Query(None, description="전산 광고주 회사명(폴백)"),
                    client_id: int = Query(None, description="명시적 매핑 업체 id(우선)"),

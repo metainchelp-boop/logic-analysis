@@ -4820,6 +4820,35 @@ window.MarketRevenueSection = function MarketRevenueSection(props) {
   var hasRevChart = revValues.some(function (v) {
     return v > 0;
   });
+
+  /* ===== 리뷰 실측 앵커 보정 (v6.7) — 판다랭크류와 같은 '실판매 신호' 기반 =====
+   * 자사 상품의 실제 누적 리뷰(HTML 수집)로 월판매를 역산(작성률 11.6%·운영 12개월 가정)하고,
+   * 그 값을 앵커로 순위 감쇠 곡선(1/rank^0.7)의 절대 수준을 보정해 상위 40개 시장규모를 재계산.
+   * 검색량×CTR 모델은 '검색 유입 기여분'이라 실제 시장(재구매·타키워드·광고 유입 포함)보다
+   * 크게 작게 나오던 문제 해결. 실리뷰·순위 없으면 이 블록만 생략(기존 표시 그대로 — 무손실). */
+  var _rc = Number(props.reviewCount) || 0;
+  var _advRank = Number(props.advRank) || 0;
+  var _calib = null;
+  if (_rc > 0 && _advRank > 0 && topProducts && topProducts.length >= 3) {
+    var _realMonthly = _rc / 0.116 / 12; /* 자사 실측 월판매(추정) — SalesEstimation 배너와 동일 가정 */
+    var _decay = function (r) {
+      return 1 / Math.pow(Math.max(1, r), 0.7);
+    };
+    var _unit = _realMonthly / _decay(_advRank);
+    var _sum = 0;
+    topProducts.forEach(function (p) {
+      var _pr = Number(p.priceNum) || 0;
+      if (_pr > 0) _sum += _unit * _decay(p.rank) * _pr;
+    });
+    if (_sum > 0) {
+      _calib = {
+        mid: Math.round(_sum),
+        lo: Math.round(_sum * 0.7),
+        hi: Math.round(_sum * 1.3),
+        realMonthly: Math.round(_realMonthly)
+      };
+    }
+  }
   return /*#__PURE__*/React.createElement("div", {
     className: "section fade-in"
   }, /*#__PURE__*/React.createElement("div", {
@@ -4842,14 +4871,47 @@ window.MarketRevenueSection = function MarketRevenueSection(props) {
     }
   }, tolerance) : null), /*#__PURE__*/React.createElement("div", {
     className: "rt-desc"
-  }, "검색량 × 클릭률 × 전환율 × 평균 단가 기반 추정"), /*#__PURE__*/React.createElement("div", {
+  }, _calib ? '리뷰 실측 앵커 보정(주 수치) + 검색 유입 기여분(참고)' : '검색량 × 클릭률 × 전환율 × 평균 단가 기반 추정'), _calib && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 12,
+      padding: '14px 18px',
+      background: '#f0fdf4',
+      border: '1px solid #a7f3d0',
+      borderRadius: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 800,
+      color: '#047857',
+      marginBottom: 4
+    }
+  }, "🧾 월간 시장 규모 (리뷰 실측 보정 — 주 수치)"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 24,
+      fontWeight: 900,
+      color: '#065f46',
+      letterSpacing: '-0.5px'
+    }
+  }, fmt(_calib.lo), "~", fmt(_calib.hi), "원"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: '#64748b',
+      marginTop: 4,
+      lineHeight: 1.6
+    }
+  }, "자사 실제 누적 리뷰 ", fmt(_rc), "건 → 월판매 ~", fmt(_calib.realMonthly), "건 역산(작성률 11.6%·운영 12개월 가정)을 기준점으로, 상위 ", topProducts.length, "개 상품의 순위·판매가에 적용해 재계산한 값입니다. 재구매·타 키워드·광고 유입이 포함된 실제 시장에 가깝습니다.")), /*#__PURE__*/React.createElement("div", {
     className: "grid3"
   }, /*#__PURE__*/React.createElement("div", {
     className: "kpi"
   }, /*#__PURE__*/React.createElement("div", {
     className: "k"
-  }, "월간 시장 규모"), /*#__PURE__*/React.createElement("div", {
-    className: "v"
+  }, _calib ? '검색 유입 기여분 (참고)' : '월간 시장 규모'), /*#__PURE__*/React.createElement("div", {
+    className: "v",
+    style: _calib ? {
+      fontSize: 18,
+      color: '#64748b'
+    } : undefined
   }, estimatedMonthlyRange || estimatedMonthly || '-')), /*#__PURE__*/React.createElement("div", {
     className: "kpi"
   }, /*#__PURE__*/React.createElement("div", {
@@ -6754,6 +6816,22 @@ window.HtmlDetailAnalysisSection = function HtmlDetailAnalysisSection({
 ;/* ===== js/components/SalesEstimationSection.jsx ===== */
 /* SalesEstimationSection — 판매량 추정 & 성장 시뮬레이션 (v5) */
 window.SalesEstimationSection = function SalesEstimationSection(props) {
+  /* [2단계] 리뷰 증가 실측 — 같은 상품의 과거 분석 스냅샷 델타(hooks는 조기 return 이전) */
+  var _tr = React.useState(null);
+  var trend = _tr[0];
+  var setTrend = _tr[1];
+  var _url = props.productUrl || '';
+  React.useEffect(function () {
+    setTrend(null);
+    if (!_url) return;
+    var alive = true;
+    api.get('/cd/review-trend?product_url=' + encodeURIComponent(_url)).then(function (res) {
+      if (alive && res && res.success && res.data && res.data.available) setTrend(res.data);
+    }).catch(function () {});
+    return function () {
+      alive = false;
+    };
+  }, [_url]);
   if (!props?.data) return null;
   const {
     avgPrice,
@@ -6877,11 +6955,23 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
         marginTop: 0,
         marginBottom: 20
       }
-    }, /*#__PURE__*/React.createElement("b", null, "🧾 리뷰 기반 추정 (더 정확)"), " — 실제 누적 리뷰 ", /*#__PURE__*/React.createElement("b", null, fmt(rc), "건"), " 기반. 추정 누적 판매 ", /*#__PURE__*/React.createElement("b", null, "~", fmt(cumSales), "건"), ", 월 환산 ", /*#__PURE__*/React.createElement("b", null, "~", fmt(monthly), "건"), /*#__PURE__*/React.createElement("span", {
+    }, /*#__PURE__*/React.createElement("b", null, "🧾 리뷰 기반 추정 (주 수치)"), " — 실제 누적 리뷰 ", /*#__PURE__*/React.createElement("b", null, fmt(rc), "건"), " 기반.", props.productPrice > 0 ? function () {
+      var m = Math.round(rc / rate / 12);
+      return /*#__PURE__*/React.createElement("b", null, " 월 매출 환산 ~", fmt(m * props.productPrice), "원");
+    }() : null, "추정 누적 판매 ", /*#__PURE__*/React.createElement("b", null, "~", fmt(cumSales), "건"), ", 월 환산 ", /*#__PURE__*/React.createElement("b", null, "~", fmt(monthly), "건"), /*#__PURE__*/React.createElement("span", {
       style: {
         color: '#64748b'
       }
-    }, " (작성률 11.6% · 운영 12개월 가정). 아래 순위 기반 시나리오는 참고용입니다."));
+    }, " (작성률 11.6% · 운영 12개월 가정). 아래 순위 기반 시나리오는 참고용입니다."), trend && /*#__PURE__*/React.createElement("div", {
+      style: {
+        marginTop: 6,
+        fontSize: 12.5
+      }
+    }, "📈 ", /*#__PURE__*/React.createElement("b", null, "실측 리뷰 증가 기반"), " — 최근 ", trend.days, "일간 리뷰 +", fmt(trend.review_delta), "건 → 월판매 ", /*#__PURE__*/React.createElement("b", null, "~", fmt(trend.monthly_sales_est), "건"), props.productPrice > 0 ? /*#__PURE__*/React.createElement("b", null, " · 월 매출 ~", fmt(trend.monthly_sales_est * props.productPrice), "원") : null, /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: '#64748b'
+      }
+    }, " (", trend.from_date, "~", trend.to_date, " 분석 기록 비교 — 기간이 쌓일수록 정확해집니다)")));
   }(), hasSalesChart && /*#__PURE__*/React.createElement("div", {
     className: "chartbox",
     style: {
@@ -19389,6 +19479,7 @@ window.AnalysisResults = function AnalysisResults(props) {
   }, React.createElement('div', {
     id: 'sec-market'
   }, React.createElement(MarketRevenueSection, {
+    advRank: rankCheckResult && rankCheckResult.rank_position != null ? rankCheckResult.rank_position : advertiserReport && advertiserReport.ranking ? advertiserReport.ranking.current_rank : null,
     data: analysisData.marketRevenue,
     reviewCount: htmlReviewData && htmlReviewData.reviewCount || (analysisData.reviewAnalysis && analysisData.reviewAnalysis.reviewCount ? analysisData.reviewAnalysis.reviewCount.adv : null),
     productPrice: analysisData.marketRevenue ? parseInt((analysisData.marketRevenue.avgPrice || '0').replace(/[^0-9]/g, '')) : 0
@@ -19473,6 +19564,7 @@ window.AnalysisResults = function AnalysisResults(props) {
   }, React.createElement('div', {
     id: 'sec-sales'
   }, React.createElement(SalesEstimationSection, {
+    productUrl: searchedProductUrl,
     data: analysisData.salesEstimation,
     reviewCount: htmlReviewData && htmlReviewData.reviewCount || (analysisData.reviewAnalysis && analysisData.reviewAnalysis.reviewCount ? analysisData.reviewAnalysis.reviewCount.adv : null),
     productPrice: analysisData.marketRevenue ? parseInt((analysisData.marketRevenue.avgPrice || '0').replace(/[^0-9]/g, '')) : 0
@@ -19882,6 +19974,8 @@ window.createDoSearch = function (deps) {
           topProducts: topProductsList.map(function (p) {
             return {
               rank: p.rank,
+              priceNum: p.price,
+              /* 리뷰 실측 보정 계산용 숫자 가격 */
               name: p.name,
               store: p.store,
               price: p.priceStr,
