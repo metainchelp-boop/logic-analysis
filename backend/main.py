@@ -80,6 +80,7 @@ from naver_crawler import (
 )
 from scheduler import start_scheduler, stop_scheduler, reschedule_report
 from kakao_notify import is_configured as is_solapi_configured
+import place_crawler  # 플레이스(지역 검색) 업종 어댑터 — vertical="place" 분기에서만 사용
 
 def _verify_db_integrity():
     """앱 시작 시 DB 경로 및 데이터 무결성 검증.
@@ -1023,11 +1024,76 @@ class SeoAnalysisRequest(BaseModel):
     cached_total_volume: Optional[int] = None
     cached_review_count: Optional[int] = None   # HTML 실측 리뷰수(있으면 순위 추정 대신 최우선 사용)
     cached_rating: Optional[float] = None        # HTML 실측 평점
+    # --- 플레이스(지역 검색) 업종 전용 (기본 shopping 유지 → 기존 요청·응답 무영향) ---
+    vertical: Optional[str] = "shopping"         # "place" 면 아래 플레이스 어댑터로 분기
+    place_html: Optional[str] = None             # 직원 브라우저 캡처 검색결과 HTML(순위·경쟁사)
+    target_doc_id: Optional[str] = None          # 내 업체 플레이스 doc-id(순위 매칭)
+    target_name: Optional[str] = None            # 내 업체명(doc-id 없을 때 매칭 폴백)
+    place: Optional[Dict[str, Any]] = None       # 담당자 보완 지표(저장수·예약·사진·소식 등)
+
+
+def _place_seo_analyze(req: "SeoAnalysisRequest"):
+    """플레이스 전용 SEO 진단 — place_crawler 어댑터로 파싱·순위·점수화.
+    반환 envelope 를 쇼핑 seo_analyze 와 동일 형태로 맞춰 프론트 리포트 셸을 재사용한다."""
+    try:
+        parsed = place_crawler.parse_place_search(req.place_html or "")
+        place_in = dict(req.place or {})
+        # 내 업체 순위(3-state: 노출/미노출/미확인)
+        rank_info = place_crawler.find_place_rank(
+            parsed,
+            target_doc_id=req.target_doc_id,
+            target_name=req.target_name or place_in.get("name"),
+        )
+        if rank_info.get("rank"):
+            place_in["rank"] = rank_info["rank"]
+        # 경쟁사(상위 오가닉·내 업체 제외) — 캡처에서 리뷰 지표만 확보
+        competitors = []
+        for it in parsed.get("items", []):
+            if it.get("is_ad"):
+                continue
+            if req.target_doc_id and str(it.get("doc_id")) == str(req.target_doc_id):
+                continue
+            competitors.append({
+                "name": it.get("name"),
+                "rank": it.get("rank"),
+                "visitor_reviews": it.get("visitor_reviews"),
+                "blog_reviews": it.get("blog_reviews"),
+                "rating": it.get("rating"),
+            })
+        scored = place_crawler.score_place(place_in, competitors=competitors)
+        return {
+            "success": True,
+            "data": {
+                "vertical": "place",
+                "keyword": req.keyword,
+                "region": parsed.get("region"),
+                "category": parsed.get("category"),
+                "rank_state": rank_info.get("state"),
+                "rank": rank_info.get("rank"),
+                "page": rank_info.get("page"),
+                "scores": scored["scores"],
+                "weights": scored["weights"],
+                "labels": scored.get("labels"),
+                "data_quality": scored.get("data_quality"),
+                "suggestions": scored.get("suggestions"),
+                "competitors": competitors[:5],
+                "analyzed_at": datetime.now().isoformat(),
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"플레이스 분석 실패: {e}")
+        raise HTTPException(status_code=500, detail="플레이스 분석 중 오류가 발생했습니다.")
+
 
 @app.post("/api/seo/analyze")
 def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_current_user)):
     """상품 SEO 종합 진단 (인증 필수)"""
     try:
+        # 플레이스 업종은 전용 어댑터로 분기(기본 shopping 은 아래 기존 경로 100% 그대로)
+        if (req.vertical or "shopping") == "place":
+            return _place_seo_analyze(req)
         # 캐시된 데이터가 있으면 재활용, 없으면 API 호출
         if req.cached_product_info:
             product_info = req.cached_product_info
@@ -2271,6 +2337,7 @@ class AiFeedbackAllRequest(BaseModel):
     client_name: Optional[str] = ""
     client_id: Optional[int] = 0
     call_type: Optional[str] = "manual"
+    vertical: Optional[str] = "shopping"   # "place" 면 플레이스 페르소나 프롬프트/섹션 사용
 
 @app.post("/api/ai/feedback-all")
 async def ai_feedback_all(req: AiFeedbackAllRequest, current_user: dict = Depends(get_current_user)):
@@ -2284,17 +2351,20 @@ async def ai_feedback_all(req: AiFeedbackAllRequest, current_user: dict = Depend
 
         client = anthropic.Anthropic(api_key=api_key)
 
-        section_labels = {
-            "volume": ("검색량 분석", "PC/모바일 검색 비율, CTR, CPC 효율성을 수치로 분석하고 광고 vs SEO 투자 판단 근거를 제시하세요."),
-            "market": ("시장 규모", "월 거래액, 마진율, BEP 시나리오를 분석하세요."),
-            "competition": ("경쟁강도", "상품 수 대비 검색량, 브랜드 비율을 분석하세요. 목표는 내 순위 상태에 맞게 — 상위권(1~10위)이면 순위 방어·1위 추격·리뷰 격차 해소, 하위권이면 1페이지 진입 — 로 제시하세요."),
-            "related": ("연관 키워드", "구매의도/정보탐색/브랜드 키워드를 분류하고 공략 우선순위와 활용법을 제시하세요."),
-            "trend": ("키워드 트렌드", "시즌성, 성장 추세를 분석하고 광고/재고/SEO 최적 타이밍을 제시하세요."),
-            "golden": ("골든 키워드", "검색량 대비 경쟁도가 낮은 키워드 우선순위와 상품명 최적화 예시를 제시하세요."),
-            "competitor": ("경쟁사 비교", "경쟁사 가격/리뷰/상품명을 비교하고 차별화 전략을 제시하세요."),
-            "sales": ("판매량 추정", "순위별 매출 시나리오와 투자 대비 수익률(ROAS)을 분석하세요."),
-            "strategy": ("진입 전략", "가격/상품명/카테고리/리뷰별 개선 우선순위와 1주~3개월 실행 계획을 제시하세요."),
-        }
+        if (req.vertical or "shopping") == "place":
+            section_labels = dict(place_crawler.PLACE_AI_SECTION_LABELS)
+        else:
+            section_labels = {
+                "volume": ("검색량 분석", "PC/모바일 검색 비율, CTR, CPC 효율성을 수치로 분석하고 광고 vs SEO 투자 판단 근거를 제시하세요."),
+                "market": ("시장 규모", "월 거래액, 마진율, BEP 시나리오를 분석하세요."),
+                "competition": ("경쟁강도", "상품 수 대비 검색량, 브랜드 비율을 분석하세요. 목표는 내 순위 상태에 맞게 — 상위권(1~10위)이면 순위 방어·1위 추격·리뷰 격차 해소, 하위권이면 1페이지 진입 — 로 제시하세요."),
+                "related": ("연관 키워드", "구매의도/정보탐색/브랜드 키워드를 분류하고 공략 우선순위와 활용법을 제시하세요."),
+                "trend": ("키워드 트렌드", "시즌성, 성장 추세를 분석하고 광고/재고/SEO 최적 타이밍을 제시하세요."),
+                "golden": ("골든 키워드", "검색량 대비 경쟁도가 낮은 키워드 우선순위와 상품명 최적화 예시를 제시하세요."),
+                "competitor": ("경쟁사 비교", "경쟁사 가격/리뷰/상품명을 비교하고 차별화 전략을 제시하세요."),
+                "sales": ("판매량 추정", "순위별 매출 시나리오와 투자 대비 수익률(ROAS)을 분석하세요."),
+                "strategy": ("진입 전략", "가격/상품명/카테고리/리뷰별 개선 우선순위와 1주~3개월 실행 계획을 제시하세요."),
+            }
 
         # 데이터가 있는 섹션만 프롬프트에 포함
         section_blocks = []
@@ -2332,7 +2402,10 @@ async def ai_feedback_all(req: AiFeedbackAllRequest, current_user: dict = Depend
             _ctx_bits.append(f"[리뷰 격차] {json.dumps(_rev, ensure_ascii=False, default=str)[:800]}")
         _context_block = ("\n\n".join(_ctx_bits) + "\n\n---\n\n") if _ctx_bits else ""
 
-        system_prompt = """당신은 메타아이앤씨(METAINC) 시니어 네이버 쇼핑 마케팅 컨설턴트입니다.
+        if (req.vertical or "shopping") == "place":
+            system_prompt = place_crawler.PLACE_AI_SYSTEM_PROMPT
+        else:
+            system_prompt = """당신은 메타아이앤씨(METAINC) 시니어 네이버 쇼핑 마케팅 컨설턴트입니다.
 네이버 쇼핑 알고리즘(적합도·인기도·신뢰도)에 정통합니다.
 
 작성 원칙:
