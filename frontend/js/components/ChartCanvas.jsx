@@ -53,7 +53,8 @@
         chartRef.current = new Chart(el.getContext('2d'), {
           type: props.type,
           data: props.data,
-          options: Object.assign({ responsive: true, maintainAspectRatio: false }, props.options || {})
+          /* devicePixelRatio 최소 2: 내보내기(캔버스→PNG) 시 저배율 모니터에서도 선명한 2배 해상도 확보 */
+          options: Object.assign({ responsive: true, maintainAspectRatio: false, devicePixelRatio: Math.max(window.devicePixelRatio || 1, 2) }, props.options || {})
         });
       } catch (e) {
         if (window.console) console.warn('[ChartCanvas] render 실패:', e);

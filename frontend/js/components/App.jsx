@@ -307,84 +307,15 @@ window.App = function App() {
         handleSearch(params.keyword, params.productUrl || '', params.companyName || '', params.detailHtml || null);
     };
 
-    /* DOM 캡처 — 자동 저장용 HTML 보고서 생성 (SaveToClientSection과 동일 로직) */
-    /* (본 함수는 hook이 아니라 일반 함수이므로 early return 이후 위치에 있어도 됨) */
+    /* DOM 캡처 — 자동 저장/저장 보고서 다운로드용 HTML 생성
+     * 공용 빌더(ReportCapture) 사용: 수동 내보내기(ReportSection)와 완전히 동일한 제거 규칙·표지·푸터 적용 */
     var captureAutoReportHtml = function(kw) {
         try {
-            var captured = [];
-            // 화면의 실제 보고서 본문(.report-main)을 통째로 캡처 → 화면과 동일
-            var srcRoot = document.querySelector('.report-main')
-                || (document.getElementById('root') && document.getElementById('root').children[0]);
-            if (srcRoot) {
-                var cloneRoot = srcRoot.cloneNode(true);
-                // 차트(canvas) → 이미지 변환 (정적 HTML에서도 보이도록)
-                try {
-                    var _oc = srcRoot.querySelectorAll('canvas');
-                    var _cc = cloneRoot.querySelectorAll('canvas');
-                    for (var _i = 0; _i < _cc.length; _i++) {
-                        var _du = '';
-                        var _o = _oc[_i];
-                        var _ch = (window.Chart && window.Chart.getChart && _o) ? window.Chart.getChart(_o) : null;
-                        if (_ch) { try { _du = _ch.toBase64Image('image/png', 1); } catch(e) {} }
-                        if (!_du && _o && _o.toDataURL) { try { _du = _o.toDataURL('image/png'); } catch(e) {} }
-                        if (!_du) continue;
-                        var _img = document.createElement('img');
-                        _img.src = _du; _img.style.cssText = 'width:100%;height:auto;display:block;margin-bottom:14px;';
-                        if (_cc[_i].parentNode) _cc[_i].parentNode.replaceChild(_img, _cc[_i]);
-                        // 겹침방지(핵심): 이미지 직속 부모(차트 래퍼 height:NNNpx 고정) + .chartbox 모두 높이 해제
-                        var _wrap2 = _img.parentNode;
-                        if (_wrap2 && _wrap2.style) { _wrap2.style.height = 'auto'; _wrap2.style.minHeight = '0'; _wrap2.style.position = 'static'; }
-                        var _box2 = (_img.closest && _img.closest('.chartbox')) || _wrap2;
-                        if (_box2 && _box2.style) { _box2.style.height = 'auto'; _box2.style.minHeight = '0'; _box2.style.overflow = 'visible'; _box2.style.marginBottom = '18px'; }
-                    }
-                } catch(e) {}
-                captured.push(cloneRoot);
-            }
-            captured.forEach(function(node) {
-                // 내보내기 제외 영역 제거 (보고서/알림/업체저장/네비/버튼/입력)
-                ['#sec-report', '#sec-notify', '#sec-save-client', '.anchor-nav', '.topbar', '.no-export'].forEach(function(sel) {
-                    node.querySelectorAll(sel).forEach(function(el) { el.remove(); });
-                });
-                node.querySelectorAll('button, .btn').forEach(function(b) { b.remove(); });
-                node.querySelectorAll('input, select, textarea').forEach(function(inp) {
-                    var span = document.createElement('span');
-                    span.textContent = inp.value || '';
-                    span.style.fontWeight = '600';
-                    if (inp.parentNode) inp.parentNode.replaceChild(span, inp);
-                });
+            if (!window.ReportCapture) return '';
+            return window.ReportCapture.buildHtml({
+                title: (kw || '키워드') + ' 분석 보고서',
+                managerName: currentUser && currentUser.name
             });
-            var cssText = '';
-            try {
-                var sheets = document.styleSheets;
-                for (var i = 0; i < sheets.length; i++) {
-                    try {
-                        var rules = sheets[i].cssRules || sheets[i].rules;
-                        for (var j = 0; j < rules.length; j++) { cssText += rules[j].cssText + '\n'; }
-                    } catch(e) {}
-                }
-            } catch(e) {}
-            var bodyHtml = '';
-            captured.forEach(function(node) { bodyHtml += node.outerHTML + '\n'; });
-            var dateStr = new Date().toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric' });
-            // XSS 방지: HTML 특수문자 이스케이프
-            var _esc = function(s) { var d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; };
-            var headerText = _esc(kw || '키워드') + ' 분석 보고서';
-            return '<!DOCTYPE html>\n<html lang="ko">\n<head>\n'
-                + '<meta charset="UTF-8">\n<meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
-                + '<title>' + headerText + ' - ' + dateStr + '</title>\n<style>\n'
-                + '* { margin: 0; padding: 0; box-sizing: border-box; }\n'
-                + 'body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f8fafc; color: #1e293b; }\n'
-                + '.report-header { background: linear-gradient(135deg, #6C5CE7, #a29bfe); color: #fff; padding: 40px 20px; text-align: center; }\n'
-                + '.report-header h1 { font-size: 24px; margin-bottom: 8px; }\n'
-                + '.report-header p { font-size: 14px; opacity: 0.85; }\n'
-                + '.report-footer { text-align: center; padding: 30px; color: #94a3b8; font-size: 12px; border-top: 1px solid #e2e8f0; margin-top: 40px; }\n'
-                + cssText
-                + '\n</style>\n</head>\n<body>\n'
-                + '<div class="report-header">\n<h1>' + headerText + '</h1>\n'
-                + '<p>' + dateStr + ' | 메타아이앤씨 로직 분석 시스템</p>\n</div>\n'
-                + '<div style="max-width:1200px; margin:0 auto; padding:20px;">\n' + bodyHtml + '</div>\n'
-                + '<div class="report-footer">\n<p>© 2026 메타아이앤씨 — 로직 분석 시스템 | 자동 저장된 보고서</p>\n</div>\n'
-                + '</body>\n</html>';
         } catch(e) {
             console.error('자동 DOM capture 실패:', e);
             return '';

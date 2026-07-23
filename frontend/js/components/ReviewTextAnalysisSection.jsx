@@ -103,9 +103,9 @@ window.ReviewTextAnalysisSection = function ReviewTextAnalysisSection(props) {
             React.createElement('small', null, '★')
           )
         ),
-        /* 긍정 비율 */
+        /* 긍정 비율 (소표본이면 참고용 표기 — 별점과 어긋난 단정 방지) */
         React.createElement('div', { className: 'kpi' },
-          React.createElement('div', { className: 'k' }, '긍정 비율'),
+          React.createElement('div', { className: 'k' }, '긍정 비율' + ((Number(data.totalExtracted) || 0) < 10 ? ' (표본 적음·참고용)' : '')),
           React.createElement('div', { className: 'v', style: { fontSize: 20, color: 'var(--ok)' } },
             data.sentiment.positiveRatio,
             React.createElement('small', null, '%')

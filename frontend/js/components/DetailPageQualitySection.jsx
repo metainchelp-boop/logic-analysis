@@ -8,7 +8,7 @@ window.DetailPageQualitySection = function DetailPageQualitySection(props) {
     <div className="section fade-in">
       <div className="container">
       <div className="card" style={{ padding: '20px 22px' }}>
-      <h3 className="rt-h3"><span className="rt-hic">📄</span>③ 상세페이지 품질 점수<span className="badge b-est">≈ 추정</span></h3>
+      <h3 className="rt-h3"><span className="rt-hic">📄</span>상세페이지 품질 점수<span className="badge b-est">≈ 추정</span></h3>
 
       {/* Score Header */}
       <div style={{ textAlign: 'center', marginBottom: '8px' }}>

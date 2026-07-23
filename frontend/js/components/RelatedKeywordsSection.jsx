@@ -1,12 +1,40 @@
-/* RelatedKeywordsSection — 연관/황금 키워드 (v5) */
-window.RelatedKeywordsSection = function RelatedKeywordsSection({ data }) {
+/* RelatedKeywordsSection — 연관/황금 키워드 (v6.6: 연관도 우선 정렬 + 상위 30개 기본 표시)
+ * '콤부차' 보고서에 쌀·계란 등 대분류 인기 키워드가 상위를 차지하던 문제 개선:
+ * ① 분석 키워드를 포함(또는 포함되는) 키워드를 앞으로 → ② 나머지는 검색량순.
+ * 기본 30개만 표시(전달본 다이어트), '전체 보기'는 화면 전용(no-export). 데이터 삭제 없음. */
+window.RelatedKeywordsSection = function RelatedKeywordsSection({ data, keyword }) {
     const { useState } = React;
     const [tab, setTab] = useState('related');
+    const [showAll, setShowAll] = useState(false);
     if (!data) return null;
 
     const goldenList = data.golden_keywords || [];
-    const relatedList = data.related_keywords || [];
-    const displayList = tab === 'golden' ? goldenList : relatedList;
+    const rawRelated = data.related_keywords || [];
+
+    /* 연관도 우선 정렬 — keyword 미전달 시 기존 순서 그대로(무손실 폴백) */
+    var norm = function(v) { return String(v || '').replace(/\s/g, '').toLowerCase(); };
+    var base = norm(keyword);
+    var isRel = function(k) {
+        if (!base) return false;
+        var n = norm(k && k.keyword);
+        return !!n && (n.indexOf(base) >= 0 || base.indexOf(n) >= 0);
+    };
+    var relatedList = rawRelated;
+    var relCount = 0;
+    if (base) {
+        var tier1 = [], tier2 = [];
+        rawRelated.forEach(function(k) { (isRel(k) ? tier1 : tier2).push(k); });
+        var byVol = function(a, b) { return (b.totalVolume || 0) - (a.totalVolume || 0); };
+        tier1.sort(byVol); tier2.sort(byVol);
+        relatedList = tier1.concat(tier2);
+        relCount = tier1.length;
+    }
+    var SHOW_LIMIT = 30;
+    var relatedVisible = (tab === 'related' && !showAll) ? relatedList.slice(0, SHOW_LIMIT) : relatedList;
+    /* 상품명 후보: 연관도 상위 5개 (분석 키워드 자체 제외) */
+    var nameCandidates = base ? relatedList.filter(function(k) { return isRel(k) && norm(k.keyword) !== base; }).slice(0, 5) : [];
+
+    const displayList = tab === 'golden' ? goldenList : relatedVisible;
     const maxVol = displayList.reduce(function(m, k) { return Math.max(m, k.totalVolume || 0); }, 1);
 
     /* 경쟁강도 색상 맵 */
@@ -18,7 +46,7 @@ window.RelatedKeywordsSection = function RelatedKeywordsSection({ data }) {
             <div className="container">
                 <div className="card" style={{ padding: '20px 22px' }}>
                 <h3 className="rt-h3"><span className="rt-hic">🔗</span>연관 키워드 분석<span className="badge b-ok">✅ 실측</span><span style={{ fontSize: 12, fontWeight: 400, color: '#64748b', marginLeft: 4 }}>총 {fmt(data.total_found)}개 발견</span></h3>
-                <div className="rt-desc">검색량과 경쟁강도를 기반으로 분류합니다</div>
+                <div className="rt-desc">{base ? '연관도(분석 키워드 포함 우선) → 검색량순 정렬 · 기본 상위 ' + SHOW_LIMIT + '개 표시' : '검색량과 경쟁강도를 기반으로 분류합니다'}</div>
 
                 {/* v5 탭 바 */}
                 <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
@@ -46,6 +74,20 @@ window.RelatedKeywordsSection = function RelatedKeywordsSection({ data }) {
                     >
                         💎 황금 키워드 ({goldenList.length})
                     </button>
+                    {tab === 'related' && relatedList.length > SHOW_LIMIT && (
+                        <button
+                            type="button"
+                            className="no-export"
+                            onClick={() => setShowAll(!showAll)}
+                            style={{
+                                marginLeft: 'auto', padding: '10px 16px', borderRadius: 10,
+                                border: '1px solid #e2e8f0', background: '#fff', color: '#64748b',
+                                fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit'
+                            }}
+                        >
+                            {showAll ? '상위 ' + SHOW_LIMIT + '개만 보기' : '전체 ' + fmt(relatedList.length) + '개 보기'}
+                        </button>
+                    )}
                 </div>
 
                 {displayList.length === 0 ? (
@@ -108,6 +150,18 @@ window.RelatedKeywordsSection = function RelatedKeywordsSection({ data }) {
                             </tbody>
                         </table>
                       </div>
+                    </div>
+                )}
+
+                {tab === 'related' && nameCandidates.length > 0 && (
+                    <div className="sub-card">
+                        <div className="st">✏️ 상품명에 넣을 후보 {nameCandidates.length}개</div>
+                        <div>
+                            {nameCandidates.map(function(k) {
+                                return <span key={k.keyword} className="tag2">{k.keyword} · 월 {fmt(k.totalVolume)}</span>;
+                            })}
+                        </div>
+                        <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 6 }}>분석 키워드와 직접 연관된 키워드 중 검색량 상위 — 상품명·태그 반영 후보</div>
                     </div>
                 )}
                 </div>
