@@ -41,7 +41,9 @@ window.TrackRegisterButton = function TrackRegisterButton(props) {
   if (already) {
     return React.createElement('div', { className: 'container' },
       React.createElement('div', { style: wrap },
+        /* no-export: 직원용 운영 상태 표시 — 광고주 전달본(내보내기)에서는 제외 */
         React.createElement('span', {
+          className: 'no-export',
           style: { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 10, background: '#ecfdf5', border: '1px solid #a7f3d0', color: '#047857', fontSize: 12.5, fontWeight: 700 }
         }, '✓ 이미 추적 중인 상품입니다' + (alreadyHasKw ? ' (이 키워드 포함)' : '')),
         !alreadyHasKw ? React.createElement('button', {
