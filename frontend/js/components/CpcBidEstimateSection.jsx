@@ -115,6 +115,7 @@ window.CpcBidEstimateSection = function CpcBidEstimateSection(props) {
         React.createElement('h3', { className: 'rt-h3' },
           React.createElement('span', { className: 'rt-hic' }, '💸'),
           '예상 CPC · 권장 입찰가',
+          React.createElement('span', { style: { fontSize: 11, fontWeight: 500, color: '#94a3b8' } }, '(CPC = 클릭당 광고비)'),
           React.createElement('span', { className: 'badge b-est' }, '≈ 추정'),
           bidTable ? React.createElement('span', { className: 'badge b-ok' }, '✅ 파워링크 공식 추정 포함') : null
         ),

@@ -395,6 +395,38 @@ def get_keywords_for_product(product_id: int) -> List[Dict]:
         conn.close()
 
 
+def get_keyword_product_and_count(keyword_id: int) -> Optional[Dict]:
+    """키워드의 소속 상품 ID와 그 상품의 총 키워드 수를 반환 (키워드 없으면 None).
+    개별 삭제 시 '마지막 1개 보호' 판정에 사용."""
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT product_id FROM tracked_keywords WHERE id = ?", (keyword_id,)
+        ).fetchone()
+        if not row:
+            return None
+        pid = row["product_id"]
+        cnt = conn.execute(
+            "SELECT COUNT(*) AS c FROM tracked_keywords WHERE product_id = ?", (pid,)
+        ).fetchone()["c"]
+        return {"product_id": pid, "count": cnt}
+    finally:
+        conn.close()
+
+
+def delete_tracked_keyword(keyword_id: int):
+    """추적 키워드 1개 삭제. FK=ON이라 CASCADE로 순위·경쟁자 스냅샷이 함께 지워지나,
+    누락 방어를 위해 자식 행을 명시적으로 먼저 삭제한다(같은 커넥션·단일 커밋)."""
+    conn = _get_conn()
+    try:
+        conn.execute("DELETE FROM rankings WHERE keyword_id = ?", (keyword_id,))
+        conn.execute("DELETE FROM competitor_snapshots WHERE keyword_id = ?", (keyword_id,))
+        conn.execute("DELETE FROM tracked_keywords WHERE id = ?", (keyword_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 # ==================== 순위 기록 ====================
 
 def save_ranking(product_id: int, keyword_id: int, keyword: str,

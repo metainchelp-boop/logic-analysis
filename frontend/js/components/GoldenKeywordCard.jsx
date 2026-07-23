@@ -22,8 +22,12 @@ window.GoldenKeywordCard = function GoldenKeywordCard(props) {
   }
 
   return (
-    <div className="card">
+    <div className="card golden-card">
       <h3 className="rt-h3"><span className="rt-hic">👑</span>골든 키워드 <span className="badge b-ok">✅ 실측</span></h3>
+      <div style={{ fontSize: 11.5, color: '#92400e', margin: '2px 0 10px' }}>
+        대표 골든 키워드 기준 — 전체 후보는 연관 키워드의 「황금 키워드」 탭 참조.
+        브랜드(상표)형 키워드는 상품명에 직접 쓰지 말고 광고 참고용으로만 활용하세요.
+      </div>
       <div className="grid2">
         {valid.map(function(item, idx) {
           const { name, score, volume, competition, ctr, clicks, reason } = item;
@@ -32,7 +36,7 @@ window.GoldenKeywordCard = function GoldenKeywordCard(props) {
             <div key={idx} className="sub-card">
               <div className="st">
                 👑 {name}
-                <span style={{ marginLeft: 'auto', color: 'var(--est)', fontWeight: 900 }}>점수 {score}</span>
+                <span style={{ marginLeft: 'auto', color: 'var(--est)', fontWeight: 900 }}>점수 {score}/100</span>
               </div>
               <div className="grid2" style={{ gap: '8px', margin: '8px 0' }}>
                 <div style={{ fontSize: '12px' }}><span style={{ color: 'var(--sub)' }}>월 검색량</span> <b>{fmt(volume)}</b></div>
