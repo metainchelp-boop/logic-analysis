@@ -20799,6 +20799,32 @@ window.App = function App() {
   };
   useEffect(function () {
     try {
+      // 기존 세션 복원 (SSO 실패 시 폴백으로도 사용 — 오래된 sso 토큰이 유효 세션을 밀어내지 않게)
+      var _restoreSession = function () {
+        var savedToken = sessionStorage.getItem('logic_token');
+        if (savedToken) {
+          fetch('/api/auth/me', {
+            headers: {
+              'Authorization': 'Bearer ' + savedToken
+            }
+          }).then(function (r) {
+            return r.json();
+          }).then(function (data) {
+            if (data && data.id) {
+              setCurrentUser(data);
+              setAuthToken(savedToken);
+            } else if (data && data.success && data.user) {
+              setCurrentUser(data.user);
+              setAuthToken(savedToken);
+            }
+            setAuthChecking(false);
+          }).catch(function () {
+            setAuthChecking(false);
+          });
+        } else {
+          setAuthChecking(false);
+        }
+      };
       // 0) 전산(ERP) SSO 자동 로그인: URL ?sso=<토큰> 있으면 우선 처리
       var _ssoTok = '';
       try {
@@ -20826,38 +20852,17 @@ window.App = function App() {
           _cleanUrl();
           if (data && data.success && data.token && data.user) {
             saveAuth(data.user, data.token);
+            setAuthChecking(false);
+          } else {
+            _restoreSession(); // SSO 토큰 만료·검증 실패 → 기존 세션이 있으면 그대로 유지
           }
-          setAuthChecking(false);
         }).catch(function () {
           _cleanUrl();
-          setAuthChecking(false);
+          _restoreSession();
         });
-        return; // SSO 처리로 분기 — 아래 세션복원 스킵
+        return; // SSO 처리로 분기
       }
-      // 기존 세션 복원
-      var savedToken = sessionStorage.getItem('logic_token');
-      if (savedToken) {
-        fetch('/api/auth/me', {
-          headers: {
-            'Authorization': 'Bearer ' + savedToken
-          }
-        }).then(function (r) {
-          return r.json();
-        }).then(function (data) {
-          if (data && data.id) {
-            setCurrentUser(data);
-            setAuthToken(savedToken);
-          } else if (data && data.success && data.user) {
-            setCurrentUser(data.user);
-            setAuthToken(savedToken);
-          }
-          setAuthChecking(false);
-        }).catch(function () {
-          setAuthChecking(false);
-        });
-      } else {
-        setAuthChecking(false);
-      }
+      _restoreSession();
     } catch (e) {
       setAuthChecking(false);
     }
