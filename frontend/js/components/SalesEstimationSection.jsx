@@ -1,5 +1,18 @@
 /* SalesEstimationSection — 판매량 추정 & 성장 시뮬레이션 (v5) */
 window.SalesEstimationSection = function SalesEstimationSection(props) {
+  /* [2단계] 리뷰 증가 실측 — 같은 상품의 과거 분석 스냅샷 델타(hooks는 조기 return 이전) */
+  var _tr = React.useState(null); var trend = _tr[0]; var setTrend = _tr[1];
+  var _url = props.productUrl || '';
+  React.useEffect(function() {
+    setTrend(null);
+    if (!_url) return;
+    var alive = true;
+    api.get('/cd/review-trend?product_url=' + encodeURIComponent(_url)).then(function(res) {
+      if (alive && res && res.success && res.data && res.data.available) setTrend(res.data);
+    }).catch(function() {});
+    return function() { alive = false; };
+  }, [_url]);
+
   if (!props?.data) return null;
   const { avgPrice, monthlySearches, estimatedCTR, top10Card, page1Card, page2Card, simulations, tolerance } = props.data;
 
@@ -44,9 +57,16 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
           var monthly = Math.round(cumSales / 12); // 운영 12개월 가정
           return (
             <div className="note ok" style={{ marginTop: 0, marginBottom: 20 }}>
-              <b>🧾 리뷰 기반 추정 (더 정확)</b> — 실제 누적 리뷰 <b>{fmt(rc)}건</b> 기반.
+              <b>🧾 리뷰 기반 추정 (주 수치)</b> — 실제 누적 리뷰 <b>{fmt(rc)}건</b> 기반.{props.productPrice > 0 ? (function(){ var m = Math.round(rc / rate / 12); return <b> 월 매출 환산 ~{fmt(m * props.productPrice)}원</b>; })() : null}
               추정 누적 판매 <b>~{fmt(cumSales)}건</b>, 월 환산 <b>~{fmt(monthly)}건</b>
               <span style={{ color: '#64748b' }}> (작성률 11.6% · 운영 12개월 가정). 아래 순위 기반 시나리오는 참고용입니다.</span>
+              {trend && (
+                <div style={{ marginTop: 6, fontSize: 12.5 }}>
+                  📈 <b>실측 리뷰 증가 기반</b> — 최근 {trend.days}일간 리뷰 +{fmt(trend.review_delta)}건 → 월판매 <b>~{fmt(trend.monthly_sales_est)}건</b>
+                  {props.productPrice > 0 ? <b> · 월 매출 ~{fmt(trend.monthly_sales_est * props.productPrice)}원</b> : null}
+                  <span style={{ color: '#64748b' }}> ({trend.from_date}~{trend.to_date} 분석 기록 비교 — 기간이 쌓일수록 정확해집니다)</span>
+                </div>
+              )}
             </div>
           );
         })()}

@@ -219,7 +219,7 @@ window.AnalysisResults = function AnalysisResults(props) {
                 /* 시장 규모 & 매출 추정 */
                 analysisData && analysisData.marketRevenue && React.createElement(window.SectionErrorBoundary, { name: '시장 규모' },
                     React.createElement('div', { id: 'sec-market' },
-                        React.createElement(MarketRevenueSection, { data: analysisData.marketRevenue, reviewCount: (htmlReviewData && htmlReviewData.reviewCount) || (analysisData.reviewAnalysis && analysisData.reviewAnalysis.reviewCount ? analysisData.reviewAnalysis.reviewCount.adv : null), productPrice: analysisData.marketRevenue ? parseInt((analysisData.marketRevenue.avgPrice || '0').replace(/[^0-9]/g, '')) : 0 })
+                        React.createElement(MarketRevenueSection, { advRank: (rankCheckResult && rankCheckResult.rank_position != null) ? rankCheckResult.rank_position : ((advertiserReport && advertiserReport.ranking) ? advertiserReport.ranking.current_rank : null), data: analysisData.marketRevenue, reviewCount: (htmlReviewData && htmlReviewData.reviewCount) || (analysisData.reviewAnalysis && analysisData.reviewAnalysis.reviewCount ? analysisData.reviewAnalysis.reviewCount.adv : null), productPrice: analysisData.marketRevenue ? parseInt((analysisData.marketRevenue.avgPrice || '0').replace(/[^0-9]/g, '')) : 0 })
                     )
                 ),
     
@@ -281,7 +281,7 @@ window.AnalysisResults = function AnalysisResults(props) {
                 /* 판매량 추정 */
                 analysisData && analysisData.salesEstimation && React.createElement(window.SectionErrorBoundary, { name: '판매량 추정' },
                     React.createElement('div', { id: 'sec-sales' },
-                        React.createElement(SalesEstimationSection, { data: analysisData.salesEstimation, reviewCount: (htmlReviewData && htmlReviewData.reviewCount) || (analysisData.reviewAnalysis && analysisData.reviewAnalysis.reviewCount ? analysisData.reviewAnalysis.reviewCount.adv : null), productPrice: analysisData.marketRevenue ? parseInt((analysisData.marketRevenue.avgPrice || '0').replace(/[^0-9]/g, '')) : 0 })
+                        React.createElement(SalesEstimationSection, { productUrl: searchedProductUrl, data: analysisData.salesEstimation, reviewCount: (htmlReviewData && htmlReviewData.reviewCount) || (analysisData.reviewAnalysis && analysisData.reviewAnalysis.reviewCount ? analysisData.reviewAnalysis.reviewCount.adv : null), productPrice: analysisData.marketRevenue ? parseInt((analysisData.marketRevenue.avgPrice || '0').replace(/[^0-9]/g, '')) : 0 })
                     )
                 ),
 
