@@ -69,6 +69,7 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
 from database import (
     init_db, add_tracked_product, get_all_tracked_products,
     delete_tracked_product, add_tracked_keyword, get_keywords_for_product,
+    get_keyword_product_and_count, delete_tracked_keyword,
     save_ranking, get_ranking_history, save_competitor_snapshot,
     get_notification_settings, update_notification_settings
 )
@@ -783,6 +784,25 @@ def remove_product(product_id: int, current_user: dict = Depends(get_current_use
     """추적 상품 삭제 (소유권 확인)"""
     delete_tracked_product(product_id, user_id=current_user["id"], is_admin=_is_admin(current_user))
     return {"success": True, "message": "상품이 삭제되었습니다."}
+
+
+# --- 키워드 개별 삭제 (건의 2026-07-22, 이예은) ---
+@app.delete("/api/keywords/{keyword_id}")
+def remove_keyword(keyword_id: int, current_user: dict = Depends(get_current_user)):
+    """추적 키워드 1개 삭제 — 소유권 검증 + 마지막 1개 보호.
+    남기는 다른 키워드의 순위 이력은 유지되고, 해당 키워드의 이력만 함께 삭제된다.
+    키워드 0개 상품을 막기 위해 마지막 1개는 삭제 불가(상품 정리는 상품 삭제 사용)."""
+    _verify_keyword_ownership(keyword_id, current_user)  # 404/403 처리
+    info = get_keyword_product_and_count(keyword_id)
+    if not info:
+        raise HTTPException(status_code=404, detail="키워드를 찾을 수 없습니다.")
+    if info["count"] <= 1:
+        raise HTTPException(
+            status_code=400,
+            detail="마지막 키워드는 삭제할 수 없습니다. 상품 전체를 정리하려면 상품 삭제를 이용하세요."
+        )
+    delete_tracked_keyword(keyword_id)
+    return {"success": True, "message": "키워드가 삭제되었습니다."}
 
 
 # --- 순위 이력 조회 ---
