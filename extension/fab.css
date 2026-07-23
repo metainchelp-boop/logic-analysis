@@ -1,5 +1,6 @@
 /* METAINC 로직분석 FAB — 페이지 스타일과 충돌하지 않도록 전부 고유 접두사 */
-#metainc-logic-fab{position:fixed;right:16px;bottom:16px;z-index:2147483000;width:262px;
+/* 위치: 우측 세로 중앙 — 다른 섹션 확장(우하단)과 겹침 회피 (운영자 확정 2026-07-23) */
+#metainc-logic-fab{position:fixed;right:16px;top:50%;transform:translateY(-50%);z-index:2147483000;width:262px;
   background:#1B2A4A;color:#fff;border-radius:14px;box-shadow:0 8px 24px rgba(16,24,40,.35);
   padding:12px 14px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Malgun Gothic",sans-serif;font-size:12px;line-height:1.5}
 #metainc-logic-fab .metainc-fab-head{display:flex;align-items:center;gap:7px;font-weight:800;font-size:12.5px}
