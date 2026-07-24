@@ -35,6 +35,7 @@
   "js/components/CompetitorTableSection.jsx",
   "js/components/EntryStrategySection.jsx",
   "js/components/ApiUsageSection.jsx",
+  "js/components/CompetitorCompareSection.jsx",
   "js/components/SaveToClientSection.jsx",
   "js/components/ClientListSection.jsx",
   "js/components/LoginPage.jsx",

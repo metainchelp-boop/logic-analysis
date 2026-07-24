@@ -1,5 +1,5 @@
 /* ClientDashboard — 업체별 분석 관리 대시보드 v4.0 (AI 인사이트 탭 추가) */
-window.ClientDashboard = function ClientDashboard({ currentUser, onRunAnalysis, onDownloadReport, initialSearch, canEdit }) {
+window.ClientDashboard = function ClientDashboard({ currentUser, onRunAnalysis, onRegisterCompetitor, onDownloadReport, initialSearch, canEdit }) {
     const { useState, useEffect, useCallback } = React;
 
     const [clients, setClients] = useState([]);
@@ -414,6 +414,13 @@ window.ClientDashboard = function ClientDashboard({ currentUser, onRunAnalysis, 
                                     </div>
                                 </div>
                             </div>
+
+                            {/* 경쟁사 비교 (광고주 vs 경쟁사) — 무손실: 미등록 시 슬롯만 표시 */}
+                            {window.CompetitorCompareSection && React.createElement(window.CompetitorCompareSection, {
+                                client: selectedClient,
+                                canEdit: canEdit,
+                                onRegisterCompetitor: onRegisterCompetitor
+                            })}
 
                             {/* 새 분석 실행 폼 (viewer는 숨김) */}
                             {canEdit !== false && <AnalysisForm

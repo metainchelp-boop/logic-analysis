@@ -407,6 +407,8 @@ window.AnalysisResults = function AnalysisResults(props) {
                         advertiserReport: advertiserReport,
                         detailHtml: lastHtmlRef.current,
                         htmlDetailResult: htmlDetailResult,
+                        competitorContext: props.competitorContext,
+                        onCompetitorSaved: props.onCompetitorSaved,
                     })
                 ),
     
