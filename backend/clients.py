@@ -240,6 +240,21 @@ def init_clients_db():
                 cursor.execute("ALTER TABLE clients ADD COLUMN auto_analysis_manual INTEGER DEFAULT 0")
                 logger.info("[clients] auto_analysis_manual column added via migration")
 
+            # 마이그레이션(#4, 2026-07 경쟁사 비교): 업체 유형과 광고주 연결.
+            # role='advertiser'(기본, 정식 광고주) / 'competitor'(비교용 경쟁사).
+            # competitor_of=연결된 광고주 client_id(경쟁사만). 경쟁사는 광고주 리스트·
+            # 업무량·자동추적·정산·가망에서 제외되고, 비교 화면에서만 쓰인다.
+            try:
+                cursor.execute("SELECT role FROM clients LIMIT 1")
+            except Exception:
+                cursor.execute("ALTER TABLE clients ADD COLUMN role TEXT DEFAULT 'advertiser'")
+                logger.info("[clients] role column added via migration")
+            try:
+                cursor.execute("SELECT competitor_of FROM clients LIMIT 1")
+            except Exception:
+                cursor.execute("ALTER TABLE clients ADD COLUMN competitor_of INTEGER DEFAULT NULL")
+                logger.info("[clients] competitor_of column added via migration")
+
             logger.info("Clients database initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize clients database: {str(e)}")
@@ -280,7 +295,8 @@ def search_clients(
             cursor = conn.cursor()
 
             # Build query
-            query = "SELECT * FROM clients WHERE 1=1"
+            # 경쟁사(role=competitor)는 광고주 리스트에서 제외 (비교 화면에서만 사용)
+            query = "SELECT * FROM clients WHERE 1=1 AND COALESCE(role,'advertiser')='advertiser'"
             params = []
 
             # 유저별 격리 (admin은 전체 조회)
