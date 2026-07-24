@@ -417,7 +417,7 @@ window.AnalysisResults = function AnalysisResults(props) {
                         htmlDetailResult: htmlDetailResult,
                         competitorContext: props.competitorContext,
                         onCompetitorSaved: props.onCompetitorSaved,
-                        allowCompetitorOnly: currentUser.role === 'viewer',
+                        isViewer: currentUser.role === 'viewer',
                         defaultName: _displayCompany,
                     })
                 ),

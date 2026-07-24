@@ -37,16 +37,30 @@ def _is_admin(user) -> bool:
         return False
 
 
+def _days_left(expires_at):
+    """expires_at(문자열) → 자동삭제까지 남은 일수(정수, 0 이상). 없으면 None."""
+    if not expires_at:
+        return None
+    try:
+        left = (datetime.strptime(str(expires_at)[:10], "%Y-%m-%d") - datetime.now()).days
+        return max(0, left)
+    except Exception:
+        return None
+
+
 def _verify_client_access(conn, client_id: int, current_user: dict):
-    """업체 소유권 확인. admin/viewer는 통과, manager는 created_by 확인.
+    """업체 소유권 확인. admin은 통과, manager는 created_by 확인,
+    viewer(영업사원)는 본인이 등록한 영업 대상·경쟁사만(완전 개인 모드).
     업체가 없으면 404, 권한 없으면 403 반환."""
     row = conn.execute("SELECT id, created_by FROM clients WHERE id = ?", (client_id,)).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="업체를 찾을 수 없습니다.")
     if _is_admin(current_user):
         return row
-    # viewer는 전체 업체 조회(읽기) 가능
+    # viewer(영업사원)는 완전 개인 모드 — 본인이 등록한 업체만 접근(관리팀 광고주 비노출).
     if current_user.get("role") == "viewer":
+        if row["created_by"] != current_user.get("id"):
+            raise HTTPException(status_code=403, detail="본인이 등록한 영업 대상만 볼 수 있습니다.")
         return row
     if row["created_by"] != current_user.get("id"):
         raise HTTPException(status_code=403, detail="해당 업체에 대한 접근 권한이 없습니다.")
@@ -348,26 +362,35 @@ def quick_register(req: QuickRegisterRequest, current_user: dict = Depends(get_c
         now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         today = date.today().isoformat()
 
-        # 경쟁사 등록 여부 판정 (role='competitor' + competitor_of=<광고주 id>)
-        is_comp = (str(req.role or 'advertiser') == 'competitor') and req.competitor_of
-        role = 'competitor' if is_comp else 'advertiser'
+        # 등록 유형 판정.
+        #  - competitor: role='competitor' + competitor_of=<앵커 id>  → 비교 화면 전용
+        #  - prospect  : role='prospect'                              → 영업 대상(영업사원 개인용)
+        #  - advertiser: 그 외 기본값                                  → 정식 광고주(관리팀 소유)
+        req_role = str(req.role or 'advertiser')
+        is_comp = (req_role == 'competitor') and req.competitor_of
+        is_prospect = (req_role == 'prospect') and not is_comp
+        role = 'competitor' if is_comp else ('prospect' if is_prospect else 'advertiser')
         comp_of = int(req.competitor_of) if is_comp else None
 
-        # 권한: 광고주(정식 업체) 등록은 관리팀 매니저·최고관리자만. 경쟁사는 전원 허용.
-        if not is_comp and user_role not in ("manager", "superadmin"):
-            raise HTTPException(status_code=403, detail="업체(광고주) 등록은 관리팀 매니저만 가능합니다. 경쟁사만 등록할 수 있습니다.")
+        # 권한: 광고주(정식 업체) 등록은 관리팀 매니저·최고관리자만.
+        #       영업 대상(prospect)·경쟁사(competitor)는 로그인 사용자 전원 허용(영업사원 개인용).
+        if role == 'advertiser' and user_role not in ("manager", "superadmin"):
+            raise HTTPException(status_code=403, detail="정식 광고주 등록은 관리팀 매니저만 가능합니다. 영업 대상·경쟁사만 등록할 수 있습니다.")
 
-        # 영업사원(viewer)이 등록한 경쟁사 → 30일 뒤 자동 삭제. 관리팀 등록분은 영구(NULL).
+        # 영업사원(viewer)이 등록한 영업 대상·경쟁사 → 30일 뒤 자동 삭제. 관리팀 등록분은 영구(NULL).
         is_rep = (user_role == "viewer")
         expires_at = None
-        if is_comp and is_rep:
+        if is_rep and role in ("prospect", "competitor"):
             expires_at = (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%d %H:%M:%S')
 
         if is_comp:
-            # 연결 광고주 존재 확인 (경쟁사는 반드시 광고주에 연결)
-            adv = conn.execute("SELECT id FROM clients WHERE id = ? AND COALESCE(role,'advertiser')='advertiser'", (comp_of,)).fetchone()
+            # 연결 앵커(광고주 또는 영업 대상) 존재 확인 (경쟁사는 반드시 앵커에 연결)
+            adv = conn.execute(
+                "SELECT id FROM clients WHERE id = ? AND COALESCE(role,'advertiser') IN ('advertiser','prospect')",
+                (comp_of,)
+            ).fetchone()
             if not adv:
-                raise HTTPException(status_code=400, detail="연결할 광고주 업체를 찾을 수 없습니다.")
+                raise HTTPException(status_code=400, detail="연결할 대상(광고주·영업 대상)을 찾을 수 없습니다.")
 
         # 같은 이름의 업체가 이미 있는지 확인 (본인 소유 · 같은 유형/연결 범위 내 — 경쟁사가 광고주를 덮지 않게)
         existing = conn.execute(
@@ -389,13 +412,14 @@ def quick_register(req: QuickRegisterRequest, current_user: dict = Depends(get_c
                     "UPDATE clients SET main_keywords = ?, updated_at = ? WHERE id = ?",
                     (', '.join(kw_list), now, client_id)
                 )
-            # 영업사원이 경쟁사를 재등록하면 자동삭제 시점 30일 연장(갱신). 관리팀 재등록은 영구 유지.
-            if is_comp and is_rep:
+            # 영업사원이 영업 대상·경쟁사를 재등록하면 자동삭제 시점 30일 연장(갱신). 관리팀 재등록은 영구 유지.
+            if expires_at is not None:
                 conn.execute("UPDATE clients SET expires_at = ? WHERE id = ?", (expires_at, client_id))
             msg = (f"경쟁사 '{req.name}' 분석 결과가 갱신되었습니다." if is_comp
-                   else f"'{req.name}' 업체에 분석 결과가 추가되었습니다.")
+                   else (f"영업 대상 '{req.name}' 분석 결과가 갱신되었습니다." if is_prospect
+                         else f"'{req.name}' 업체에 분석 결과가 추가되었습니다."))
         else:
-            # 신규 업체 등록 (광고주 또는 경쟁사)
+            # 신규 업체 등록 (광고주 · 영업 대상 · 경쟁사)
             cursor = conn.execute("""
                 INSERT INTO clients (name, business_name, main_keywords, naver_store_url,
                     status, created_by, created_at, updated_at, role, competitor_of, expires_at)
@@ -404,7 +428,8 @@ def quick_register(req: QuickRegisterRequest, current_user: dict = Depends(get_c
                   user_id, now, now, role, comp_of, expires_at))
             client_id = cursor.lastrowid
             msg = (f"경쟁사 '{req.name}'가 등록되고 분석되었습니다." if is_comp
-                   else f"'{req.name}' 업체가 등록되고 분석 결과가 저장되었습니다.")
+                   else (f"영업 대상 '{req.name}'가 등록되고 분석되었습니다." if is_prospect
+                         else f"'{req.name}' 업체가 등록되고 분석 결과가 저장되었습니다."))
 
         # 분석 결과 저장 (일자별 누적)
         _save_analysis_internal(conn, client_id, req.keyword, req.product_url or '',
@@ -492,8 +517,17 @@ def my_clients(current_user: dict = Depends(get_current_user)):
         # detail_html은 목록 화면에서 쓰지 않으므로 제외한다.
         _COLS = ("id, name, business_name, contact_name, contact_phone, contact_email, "
                  "website_url, naver_store_url, main_keywords, notes, status, auto_analysis, "
-                 "created_by, created_at, updated_at")
-        if is_adm or user_role == "viewer":
+                 "created_by, created_at, updated_at, role, expires_at")
+        if user_role == "viewer":
+            # 영업사원(viewer) = 완전 개인 모드. 관리팀 광고주는 아예 보이지 않고,
+            # 본인이 등록한 영업 대상(prospect)만 보인다(경쟁사는 각 대상 상세에서 조회).
+            clients = conn.execute(
+                f"SELECT {_COLS} FROM clients WHERE status='active' "
+                "AND COALESCE(role,'advertiser')='prospect' AND created_by = ? "
+                "ORDER BY updated_at DESC",
+                (user_id,)
+            ).fetchall()
+        elif is_adm:
             clients = conn.execute(
                 f"SELECT {_COLS} FROM clients WHERE status='active' AND COALESCE(role,'advertiser')='advertiser' ORDER BY updated_at DESC"
             ).fetchall()
@@ -566,6 +600,8 @@ def my_clients(current_user: dict = Depends(get_current_user)):
             row['total_analysis_days'] = (a['total_analysis_days'] if a else 0)
             row['analyzed_keywords'] = ([latest_map[cid]] if cid in latest_map else [])  # 최신 1건만
             row['manager_name'] = mgr_map.get(row.get('created_by'), '')  # 담당자명
+            # 영업 대상(prospect)·경쟁사 자동삭제까지 남은 일수(있을 때만)
+            row['days_left'] = _days_left(row.get('expires_at'))
             result.append(row)
 
         return {"success": True, "data": result}
@@ -588,8 +624,16 @@ def registered_clients(current_user: dict = Depends(get_current_user)):
 
         user_role = current_user.get("role", "viewer")
 
-        # admin/viewer → 전체 업체, manager → 본인 등록분만
-        if is_adm or user_role == "viewer":
+        # viewer(영업사원) → 본인 등록 영업 대상만(관리팀 광고주 비노출),
+        # admin → 전체 광고주, manager → 본인 등록 광고주만
+        if user_role == "viewer":
+            rows = conn.execute(
+                "SELECT id, name, main_keywords FROM clients "
+                "WHERE status = 'active' AND COALESCE(role,'advertiser')='prospect' AND created_by = ? "
+                "ORDER BY name ASC",
+                (user_id,)
+            ).fetchall()
+        elif is_adm:
             rows = conn.execute(
                 "SELECT id, name, main_keywords FROM clients WHERE status = 'active' AND COALESCE(role,'advertiser')='advertiser' ORDER BY name ASC"
             ).fetchall()
@@ -1002,21 +1046,33 @@ def list_competitors(client_id: int, current_user: dict = Depends(get_current_us
 
 
 def cleanup_expired_competitors():
-    """만료된(영업사원 등록·30일 경과) 경쟁사 자동 삭제. 스케줄러 일일 호출.
+    """만료된(영업사원 등록·30일 경과) 영업 대상·경쟁사 자동 삭제. 스케줄러 일일 호출.
+    영업 대상(prospect) 삭제 시 그에 연결된 경쟁사도 함께 정리한다.
     client_analyses는 FK ON DELETE CASCADE로 함께 삭제. 반환: 삭제 건수."""
     conn = _get_conn()
     try:
         now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        # 만료된 영업 대상·경쟁사(영업사원 등록·30일 경과)
         rows = conn.execute(
-            "SELECT id, name FROM clients WHERE COALESCE(role,'advertiser')='competitor' "
+            "SELECT id, name FROM clients WHERE COALESCE(role,'advertiser') IN ('prospect','competitor') "
             "AND expires_at IS NOT NULL AND expires_at < ?", (now,)
         ).fetchall()
+        expired_ids = {r["id"] for r in rows}
+        # 만료된 영업 대상에 매달린 경쟁사(아직 만료 전이라도)도 함께 삭제 — 고아 방지
+        for r in list(rows):
+            for c in conn.execute(
+                "SELECT id, name FROM clients WHERE COALESCE(role,'advertiser')='competitor' AND competitor_of = ?",
+                (r["id"],)
+            ).fetchall():
+                if c["id"] not in expired_ids:
+                    expired_ids.add(c["id"])
+                    rows.append(c)
         for r in rows:
             conn.execute("DELETE FROM client_analyses WHERE client_id = ?", (r["id"],))
             conn.execute("DELETE FROM clients WHERE id = ?", (r["id"],))
         conn.commit()
         if rows:
-            logger.info(f"[cleanup] 만료 경쟁사 {len(rows)}건 자동 삭제: {[r['name'] for r in rows]}")
+            logger.info(f"[cleanup] 만료 영업 대상·경쟁사 {len(rows)}건 자동 삭제: {[r['name'] for r in rows]}")
         return len(rows)
     finally:
         conn.close()

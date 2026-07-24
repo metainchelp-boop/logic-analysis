@@ -19,6 +19,9 @@ window.CompetitorCompareSection = function CompetitorCompareSection(props) {
   var coachLd = _R.useState(false); var coachLoading = coachLd[0]; var setCoachLoading = coachLd[1];
 
   var advId = advClient && advClient.id;
+  /* 영업사원(viewer)은 앵커가 '광고주'가 아니라 '영업 대상'(prospect) — 라벨을 바꾼다 */
+  var isViewer = props.isViewer;
+  var anchorLabel = isViewer ? '영업 대상' : '광고주';
 
   var loadCompetitors = function() {
     if (!advId) return;
@@ -150,11 +153,11 @@ window.CompetitorCompareSection = function CompetitorCompareSection(props) {
     setCoachLoading(true); setCoaching(null);
     var rows = buildRows(compareData);
     var summary = rows.map(function(r) {
-      return '- ' + r.label + ': 광고주 ' + r.aStr + ' / 경쟁사 ' + r.bStr
-        + (r.advWin == null ? '' : (r.advWin ? ' (광고주 우세)' : ' (경쟁사 우세' + (r.gap != null ? ', 격차 ' + r.gap + '%' : '') + ')'));
+      return '- ' + r.label + ': ' + anchorLabel + ' ' + r.aStr + ' / 경쟁사 ' + r.bStr
+        + (r.advWin == null ? '' : (r.advWin ? ' (' + anchorLabel + ' 우세)' : ' (경쟁사 우세' + (r.gap != null ? ', 격차 ' + r.gap + '%' : '') + ')'));
     }).join('\n');
     var gap = coverageGap(compareData);
-    if (gap.length) summary += '\n- 광고주가 놓친 경쟁사 키워드: ' + gap.join(', ');
+    if (gap.length) summary += '\n- ' + anchorLabel + '가 놓친 경쟁사 키워드: ' + gap.join(', ');
     api.post('/cd/compare-coaching', { advertiser_id: advId, competitor_id: selectedId, summary: summary }).then(function(res) {
       setCoachLoading(false);
       if (res && res.success && res.data) setCoaching(res.data);
@@ -166,7 +169,6 @@ window.CompetitorCompareSection = function CompetitorCompareSection(props) {
   var C = window.React.createElement;
 
   /* 슬롯(등록·목록) */
-  var isViewer = props.isViewer;
   var slot = C('div', { className: 'card', style: { padding: '16px 20px', marginBottom: 16, border: '1px solid #fed7aa', background: 'linear-gradient(120deg,#fff,#fff7ed)' } },
     C('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 } },
       C('span', { style: { fontSize: 15, fontWeight: 800, color: '#c2410c' } }, isViewer ? '⚔️ 경쟁사 비교 (내 영업자료)' : '⚔️ 경쟁사 비교'),
@@ -203,7 +205,7 @@ window.CompetitorCompareSection = function CompetitorCompareSection(props) {
     var c = compareData;
     if (!c.advHas || !c.compHas) {
       body = C('div', { className: 'card', style: { padding: 18, fontSize: 13, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a' } },
-        (!c.advHas ? '광고주' : '경쟁사') + ' 분석 기록이 없어 비교할 수 없습니다. 해당 업체를 먼저 분석해 저장하세요.');
+        (!c.advHas ? anchorLabel : '경쟁사') + ' 분석 기록이 없어 비교할 수 없습니다. 해당 업체를 먼저 분석해 저장하세요.');
     } else {
       var rows = buildRows(c);
       var ups = catchUp(rows); var strs = strengths(rows); var gap = coverageGap(c);
@@ -214,7 +216,7 @@ window.CompetitorCompareSection = function CompetitorCompareSection(props) {
         C('div', { className: 'card', style: { padding: '16px 20px', marginBottom: 12 } },
           C('div', { style: { display: 'grid', gridTemplateColumns: '1fr 44px 1fr', gap: 10, alignItems: 'center' } },
             C('div', { style: { textAlign: 'center', background: 'linear-gradient(135deg,#eef2ff,#e0e7ff)', border: '1px solid #c7d2fe', borderRadius: 12, padding: '12px 10px' } },
-              C('div', { style: { fontSize: 10.5, fontWeight: 800, color: '#4338ca' } }, '광고주'),
+              C('div', { style: { fontSize: 10.5, fontWeight: 800, color: '#4338ca' } }, anchorLabel),
               C('div', { style: { fontSize: 15, fontWeight: 800, color: '#0f172a', margin: '3px 0' } }, c.advName),
               C('div', { style: { fontSize: 12, color: '#475569' } }, c.adv.keyword + (c.adv.rank != null ? ' · ' + c.adv.rank + '위' : ''))
             ),
@@ -231,7 +233,7 @@ window.CompetitorCompareSection = function CompetitorCompareSection(props) {
           C('h3', { className: 'rt-h3' }, C('span', { className: 'rt-hic' }, '⚔️'), '핵심 지표 비교'),
           C('table', { className: 'rt-table', style: { width: '100%', marginTop: 6 } },
             C('thead', null, C('tr', null,
-              C('th', null, '지표'), C('th', { style: { textAlign: 'center' } }, '광고주'),
+              C('th', null, '지표'), C('th', { style: { textAlign: 'center' } }, anchorLabel),
               C('th', { style: { textAlign: 'center' } }, '경쟁사'), C('th', { style: { textAlign: 'center' } }, '우열'))),
             C('tbody', null, rows.map(function(r, i) {
               var aBg = r.advWin === true ? '#ecfdf5' : r.advWin === false ? '#fef2f2' : undefined;

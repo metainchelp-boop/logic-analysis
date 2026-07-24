@@ -185,6 +185,25 @@ function fmt(n) {
   return n != null ? Number(n).toLocaleString() : '-';
 }
 
+// 리뷰 실측 앵커 — '자사 상품' 월판매·월매출 단일 계산(모든 섹션 공통).
+//   판매량 추정 배너·시장 규모 보정이 같은 값을 쓰도록 여기서 한 번만 계산한다.
+//   가정: 식품 평균 리뷰 작성률 11.6% · 운영 12개월. (rc/rate=누적판매, ÷12=월판매)
+window.REVIEW_WRITE_RATE = 0.116;
+window.reviewAnchorEstimate = function reviewAnchorEstimate(reviewCount, price) {
+  var rc = Number(reviewCount) || 0;
+  if (rc <= 0) return null;
+  var rate = window.REVIEW_WRITE_RATE;
+  var cumSales = Math.round(rc / rate);
+  var monthlyUnits = Math.round(cumSales / 12);
+  var p = Number(price) || 0;
+  return {
+    reviewCount: rc,
+    cumSales: cumSales,
+    monthlyUnits: monthlyUnits,
+    monthlyRevenue: p > 0 ? monthlyUnits * p : null
+  };
+};
+
 // 경쟁강도 라벨
 function compLabel(c) {
   var map = {
@@ -1908,11 +1927,12 @@ window.RankTrackingSection = function RankTrackingSection({
       }
     }
     function attempt() {
-      // 클라이언트 타임아웃(무한 로딩 방지): 25초 내 응답 없으면 실패 처리 → 재시도/폴백
+      // 클라이언트 타임아웃(무한 로딩 방지): BE 예산 18s + 네트워크 여유를 두고 32초.
+      // (첫 시도가 BE 예산 안에 끝나 불필요한 재시도로 크롤을 두 번 하지 않게 함)
       var timeoutP = new Promise(function (_res, rej) {
         setTimeout(function () {
           rej(new Error('timeout'));
-        }, 25000);
+        }, 32000);
       });
       Promise.race([api.post('/rank/keyword-exposure', {
         product_url: searchedProductUrl,
@@ -4899,9 +4919,11 @@ window.MarketRevenueSection = function MarketRevenueSection(props) {
    * 크게 작게 나오던 문제 해결. 실리뷰·순위 없으면 이 블록만 생략(기존 표시 그대로 — 무손실). */
   var _rc = Number(props.reviewCount) || 0;
   var _advRank = Number(props.advRank) || 0;
+  /* 자사 실측 앵커 — 판매량 추정 배너와 '완전히 같은 값'을 쓰도록 공통 helper 사용 */
+  var _anchor = _rc > 0 && window.reviewAnchorEstimate ? window.reviewAnchorEstimate(_rc, props.productPrice) : null;
   var _calib = null;
-  if (_rc > 0 && _advRank > 0 && topProducts && topProducts.length >= 3) {
-    var _realMonthly = _rc / 0.116 / 12; /* 자사 실측 월판매(추정) — SalesEstimation 배너와 동일 가정 */
+  if (_anchor && _advRank > 0 && topProducts && topProducts.length >= 3) {
+    var _realMonthly = _anchor.monthlyUnits; /* 자사 실측 월판매(추정) — SalesEstimation 배너와 동일 값 */
     var _decay = function (r) {
       return 1 / Math.pow(Math.max(1, r), 0.7);
     };
@@ -4952,12 +4974,24 @@ window.MarketRevenueSection = function MarketRevenueSection(props) {
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
+      fontSize: 12,
+      color: '#047857',
+      marginBottom: 8,
+      paddingBottom: 8,
+      borderBottom: '1px dashed #a7f3d0'
+    }
+  }, "🧾 ", /*#__PURE__*/React.createElement("b", null, "자사 실측 앵커"), " — 누적 리뷰 ", /*#__PURE__*/React.createElement("b", null, fmt(_rc), "건"), " → 월판매 ", /*#__PURE__*/React.createElement("b", null, "~", fmt(_calib.realMonthly), "건"), _anchor && _anchor.monthlyRevenue != null ? /*#__PURE__*/React.createElement("span", null, " · 월매출 ", /*#__PURE__*/React.createElement("b", null, "~", fmt(_anchor.monthlyRevenue), "원")) : null, /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: '#64748b'
+    }
+  }, " (판매량 추정 섹션과 동일 값)")), /*#__PURE__*/React.createElement("div", {
+    style: {
       fontSize: 12.5,
       fontWeight: 800,
       color: '#047857',
       marginBottom: 4
     }
-  }, "🧾 월간 시장 규모 (리뷰 실측 보정 — 주 수치)"), /*#__PURE__*/React.createElement("div", {
+  }, "💰 상위 ", topProducts.length, "개 합산 ", /*#__PURE__*/React.createElement("b", null, "시장 규모"), " (리뷰 실측 보정 — 주 수치)"), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 24,
       fontWeight: 900,
@@ -4971,7 +5005,7 @@ window.MarketRevenueSection = function MarketRevenueSection(props) {
       marginTop: 4,
       lineHeight: 1.6
     }
-  }, "자사 실제 누적 리뷰 ", fmt(_rc), "건 → 월판매 ~", fmt(_calib.realMonthly), "건 역산(작성률 11.6%·운영 12개월 가정)을 기준점으로, 상위 ", topProducts.length, "개 상품의 순위·판매가에 적용해 재계산한 값입니다. 재구매·타 키워드·광고 유입이 포함된 실제 시장에 가깝습니다.")), /*#__PURE__*/React.createElement("div", {
+  }, "위 자사 월판매를 기준점으로 상위 ", topProducts.length, "개 상품의 순위·판매가에 적용해 재계산한 ", /*#__PURE__*/React.createElement("b", null, "시장 전체 규모"), "입니다(자사 1개 매출이 아니라 상위권 합산). 재구매·타 키워드·광고 유입이 포함된 실제 시장에 가깝습니다.")), /*#__PURE__*/React.createElement("div", {
     className: "grid3"
   }, /*#__PURE__*/React.createElement("div", {
     className: "kpi"
@@ -7015,21 +7049,19 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
     className: "k"
   }, "예상 전환율"), /*#__PURE__*/React.createElement("div", {
     className: "v"
-  }, estimatedCTR))), props.reviewCount != null && props.reviewCount > 0 && function () {
-    var rc = props.reviewCount;
-    var rate = 0.116; // 식품 평균 리뷰 작성률
-    var cumSales = Math.round(rc / rate);
-    var monthly = Math.round(cumSales / 12); // 운영 12개월 가정
+  }, estimatedCTR))), props.reviewCount != null && props.reviewCount > 0 && window.reviewAnchorEstimate && function () {
+    var est = window.reviewAnchorEstimate(props.reviewCount, props.productPrice);
+    if (!est) return null;
+    var rc = est.reviewCount;
+    var cumSales = est.cumSales;
+    var monthly = est.monthlyUnits;
     return /*#__PURE__*/React.createElement("div", {
       className: "note ok",
       style: {
         marginTop: 0,
         marginBottom: 20
       }
-    }, /*#__PURE__*/React.createElement("b", null, "🧾 리뷰 기반 추정 (주 수치)"), " — 실제 누적 리뷰 ", /*#__PURE__*/React.createElement("b", null, fmt(rc), "건"), " 기반.", props.productPrice > 0 ? function () {
-      var m = Math.round(rc / rate / 12);
-      return /*#__PURE__*/React.createElement("b", null, " 월 매출 환산 ~", fmt(m * props.productPrice), "원");
-    }() : null, "추정 누적 판매 ", /*#__PURE__*/React.createElement("b", null, "~", fmt(cumSales), "건"), ", 월 환산 ", /*#__PURE__*/React.createElement("b", null, "~", fmt(monthly), "건"), /*#__PURE__*/React.createElement("span", {
+    }, /*#__PURE__*/React.createElement("b", null, "🧾 리뷰 기반 추정 (주 수치)"), " — 실제 누적 리뷰 ", /*#__PURE__*/React.createElement("b", null, fmt(rc), "건"), " 기반.", est.monthlyRevenue != null ? /*#__PURE__*/React.createElement("b", null, " 월 매출 환산 ~", fmt(est.monthlyRevenue), "원") : null, "추정 누적 판매 ", /*#__PURE__*/React.createElement("b", null, "~", fmt(cumSales), "건"), ", 월 환산 ", /*#__PURE__*/React.createElement("b", null, "~", fmt(monthly), "건"), /*#__PURE__*/React.createElement("span", {
       style: {
         color: '#64748b'
       }
@@ -9570,6 +9602,9 @@ window.CompetitorCompareSection = function CompetitorCompareSection(props) {
   var coachLoading = coachLd[0];
   var setCoachLoading = coachLd[1];
   var advId = advClient && advClient.id;
+  /* 영업사원(viewer)은 앵커가 '광고주'가 아니라 '영업 대상'(prospect) — 라벨을 바꾼다 */
+  var isViewer = props.isViewer;
+  var anchorLabel = isViewer ? '영업 대상' : '광고주';
   var loadCompetitors = function () {
     if (!advId) return;
     api.get('/cd/' + advId + '/competitors').then(function (res) {
@@ -9803,10 +9838,10 @@ window.CompetitorCompareSection = function CompetitorCompareSection(props) {
     setCoaching(null);
     var rows = buildRows(compareData);
     var summary = rows.map(function (r) {
-      return '- ' + r.label + ': 광고주 ' + r.aStr + ' / 경쟁사 ' + r.bStr + (r.advWin == null ? '' : r.advWin ? ' (광고주 우세)' : ' (경쟁사 우세' + (r.gap != null ? ', 격차 ' + r.gap + '%' : '') + ')');
+      return '- ' + r.label + ': ' + anchorLabel + ' ' + r.aStr + ' / 경쟁사 ' + r.bStr + (r.advWin == null ? '' : r.advWin ? ' (' + anchorLabel + ' 우세)' : ' (경쟁사 우세' + (r.gap != null ? ', 격차 ' + r.gap + '%' : '') + ')');
     }).join('\n');
     var gap = coverageGap(compareData);
-    if (gap.length) summary += '\n- 광고주가 놓친 경쟁사 키워드: ' + gap.join(', ');
+    if (gap.length) summary += '\n- ' + anchorLabel + '가 놓친 경쟁사 키워드: ' + gap.join(', ');
     api.post('/cd/compare-coaching', {
       advertiser_id: advId,
       competitor_id: selectedId,
@@ -9828,7 +9863,6 @@ window.CompetitorCompareSection = function CompetitorCompareSection(props) {
   var C = window.React.createElement;
 
   /* 슬롯(등록·목록) */
-  var isViewer = props.isViewer;
   var slot = C('div', {
     className: 'card',
     style: {
@@ -9991,7 +10025,7 @@ window.CompetitorCompareSection = function CompetitorCompareSection(props) {
           background: '#fffbeb',
           border: '1px solid #fde68a'
         }
-      }, (!c.advHas ? '광고주' : '경쟁사') + ' 분석 기록이 없어 비교할 수 없습니다. 해당 업체를 먼저 분석해 저장하세요.');
+      }, (!c.advHas ? anchorLabel : '경쟁사') + ' 분석 기록이 없어 비교할 수 없습니다. 해당 업체를 먼저 분석해 저장하세요.');
     } else {
       var rows = buildRows(c);
       var ups = catchUp(rows);
@@ -10027,7 +10061,7 @@ window.CompetitorCompareSection = function CompetitorCompareSection(props) {
           fontWeight: 800,
           color: '#4338ca'
         }
-      }, '광고주'), C('div', {
+      }, anchorLabel), C('div', {
         style: {
           fontSize: 15,
           fontWeight: 800,
@@ -10100,7 +10134,7 @@ window.CompetitorCompareSection = function CompetitorCompareSection(props) {
         style: {
           textAlign: 'center'
         }
-      }, '광고주'), C('th', {
+      }, anchorLabel), C('th', {
         style: {
           textAlign: 'center'
         }
@@ -10430,7 +10464,15 @@ window.CompetitorRadar = function CompetitorRadar(props) {
 };
 
 ;/* ===== js/components/SaveToClientSection.jsx ===== */
-/* SaveToClientSection — 분석 결과를 업체로 저장하는 섹션 */
+/* SaveToClientSection — 분석 결과를 업체로 저장하는 섹션
+ *
+ * 저장 흐름(2026-07 영업팀 전용 재설계):
+ *  - 영업사원(viewer) · 진입 컨텍스트 없음 → "영업 대상으로 저장"(role='prospect').
+ *    광고주 드롭다운 없음(관리팀 광고주 완전 비노출). 본인만 열람 · 30일 후 자동 삭제.
+ *  - 영업 대상/광고주 상세의 "경쟁사 등록" 진입(competitorContext) → 경쟁사 고정 저장.
+ *    앵커(연결 대상)가 컨텍스트로 고정되므로 드롭다운 없음.
+ *  - 관리팀(manager/admin) · 진입 컨텍스트 없음 → 기존 탭 흐름(새 업체 / 기존 업체 / 경쟁사).
+ */
 window.SaveToClientSection = function SaveToClientSection({
   keyword,
   productUrl,
@@ -10443,7 +10485,7 @@ window.SaveToClientSection = function SaveToClientSection({
   htmlDetailResult,
   competitorContext,
   onCompetitorSaved,
-  allowCompetitorOnly,
+  isViewer,
   defaultName
 }) {
   var _React = React;
@@ -10477,15 +10519,23 @@ window.SaveToClientSection = function SaveToClientSection({
   var _s9 = useState('');
   var clientSearch = _s9[0];
   var setClientSearch = _s9[1]; // 기존 업체 검색어
-  /* 경쟁사 저장(영업사원/확장 흐름) — 연결할 광고주 드롭다운 선택 */
+  /* 경쟁사 저장(관리팀 경쟁사 탭) — 연결할 광고주 드롭다운 선택 */
   var _sa = useState(null);
   var compAdvId = _sa[0];
   var setCompAdvId = _sa[1];
 
-  /* 영업사원(viewer)은 경쟁사 저장만 가능 → 모달 열리면 경쟁사 모드로 고정 */
-  var _forceComp = !!allowCompetitorOnly;
+  /* 저장 유형 판정 */
+  var _isViewer = !!isViewer;
+  var _compCtx = !!(competitorContext && competitorContext.competitor_of);
+  var _anchorName = competitorContext && competitorContext.advName || '';
+  /* 영업 대상(prospect) 저장: 영업사원 + 경쟁사 진입 컨텍스트 없음 */
+  var _prospectMode = _isViewer && !_compCtx;
+  /* 경쟁사 고정 저장: 상세의 '경쟁사 등록' 진입(앵커 고정, 드롭다운 없음) */
+  var _fixedCompMode = _compCtx;
+  /* 관리팀 전체 탭 흐름(새 업체 / 기존 업체 / 경쟁사 드롭다운) */
+  var _fullMode = !_prospectMode && !_fixedCompMode;
 
-  /* 기존 업체(광고주) 목록 로드 — 기존 업체 추가/경쟁사 연결 드롭다운 공용 */
+  /* 기존 업체(광고주) 목록 로드 — 관리팀 경쟁사 탭 드롭다운/기존 업체 추가용 */
   var loadClients = useCallback(function () {
     api.get('/cd/registered-clients').then(function (res) {
       if (res.success) setExistingClients(res.data || []);
@@ -10493,17 +10543,16 @@ window.SaveToClientSection = function SaveToClientSection({
   }, []);
   useEffect(function () {
     if (showModal) {
-      loadClients();
-      if (_forceComp) setSaveMode('competitor');
+      if (_fullMode) loadClients(); // 영업사원 흐름은 드롭다운 불필요
+      if (_prospectMode) setSaveMode('prospect');else if (_fixedCompMode) setSaveMode('competitor');
       // 업체명/경쟁사명 자동 채우기 — 비어 있으면 스토어명 등 기본값으로
       if (!clientName && defaultName) setClientName(defaultName);
     }
-  }, [showModal, loadClients, _forceComp, defaultName]);
+  }, [showModal, loadClients, _fullMode, _prospectMode, _fixedCompMode, defaultName]);
   if (!keyword || !analysisData) return null;
 
   /* DOM 캡처 — 공용 빌더(ReportCapture) 사용 (v6.7 통일)
-   * 수동 내보내기·자동저장과 동일한 제거 규칙·인디고 표지·PC 축소판 viewport 적용.
-   * 구버전(자체 클론 로직)은 보라 표지·no-export 미제거로 전달본 불일치가 있었음. */
+   * 수동 내보내기·자동저장과 동일한 제거 규칙·인디고 표지·PC 축소판 viewport 적용. */
   var captureReportHtml = function () {
     try {
       if (!window.ReportCapture) return '';
@@ -10535,25 +10584,30 @@ window.SaveToClientSection = function SaveToClientSection({
       detail_html: detailHtml || ''
     };
 
-    // 경쟁사 저장 대상 광고주: 업체관리 진입(competitorContext) 우선, 아니면 경쟁사 탭 드롭다운 선택
-    var compOf = competitorContext && competitorContext.competitor_of || (saveMode === 'competitor' || _forceComp ? compAdvId : null);
+    // 경쟁사 저장 앵커: 진입 컨텍스트(competitorContext) 우선, 아니면 관리팀 경쟁사 탭 드롭다운 선택
+    var compOf = competitorContext && competitorContext.competitor_of || (saveMode === 'competitor' ? compAdvId : null);
     var isCompMode = !!compOf;
-    if (saveMode === 'new' || isCompMode) {
+    var isProspect = _prospectMode; // 영업 대상 저장
+
+    if (saveMode === 'new' || saveMode === 'prospect' || isCompMode) {
       if (!clientName.trim()) {
-        setMessage(isCompMode ? '경쟁사명을 입력해주세요.' : '업체명을 입력해주세요.');
+        setMessage(isCompMode ? '경쟁사명을 입력해주세요.' : isProspect ? '영업 대상명을 입력해주세요.' : '업체명을 입력해주세요.');
         setSaving(false);
         return;
       }
-      if (isCompMode && !compOf) {
+      if (saveMode === 'competitor' && !_fixedCompMode && !compOf) {
         setMessage('연결할 광고주를 선택해주세요.');
         setSaving(false);
         return;
       }
       payload.name = clientName.trim();
-      // 경쟁사 저장: 광고주에 연결된 경쟁사로 (광고주 리스트/자동추적엔 안 섞임)
       if (isCompMode) {
+        // 경쟁사 저장: 앵커(광고주·영업 대상)에 연결된 경쟁사로
         payload.role = 'competitor';
         payload.competitor_of = compOf;
+      } else if (isProspect) {
+        // 영업 대상 저장(영업사원 개인용)
+        payload.role = 'prospect';
       }
       api.post('/cd/quick-register', payload).then(function (res) {
         if (res.success) {
@@ -10601,8 +10655,27 @@ window.SaveToClientSection = function SaveToClientSection({
     setSuccess(false);
     setClientName('');
     setSelectedClientId(null);
-    setSaveMode('new');
+    setSaveMode(_prospectMode ? 'prospect' : _fixedCompMode ? 'competitor' : 'new');
   };
+
+  /* 트리거 카드 문구/버튼 */
+  var _cardTitle, _cardDesc, _cardBtn, _cardHint;
+  if (_prospectMode) {
+    _cardTitle = '"' + keyword + '" 분석 결과를 영업 대상으로 저장하시겠습니까?';
+    _cardDesc = '영업 대상으로 저장하면 [내 영업자료]에 쌓이고, 여기에 상위노출 경쟁사를 붙여 비교할 수 있습니다. (본인만 열람 · 30일 후 자동 삭제)';
+    _cardBtn = '🎯 영업 대상으로 저장';
+    _cardHint = '⚔️ 저장 후 [내 영업자료] → 해당 대상 → "경쟁사 등록"에서 상위노출 경쟁사 상품을 분석해 붙이면 나란히 비교됩니다.';
+  } else if (_fixedCompMode) {
+    _cardTitle = '"' + keyword + '" 분석 결과를 ' + (_anchorName ? '‘' + _anchorName + '’의 ' : '') + '경쟁사로 저장하시겠습니까?';
+    _cardDesc = (_anchorName ? '‘' + _anchorName + '’에 ' : '선택한 대상에 ') + '연결된 경쟁사로 저장됩니다.' + (_isViewer ? ' (본인 등록분은 30일 후 자동 삭제)' : '');
+    _cardBtn = '⚔️ 경쟁사로 저장';
+    _cardHint = '⚔️ 경쟁사로 저장하면 상세에서 대상과 나란히 비교할 수 있습니다.';
+  } else {
+    _cardTitle = '"' + keyword + '" 분석 결과를 업체에 저장하시겠습니까?';
+    _cardDesc = '업체로 저장하면 업체관리 탭에서 일자별 분석 데이터가 누적됩니다.';
+    _cardBtn = '업체 등록 / 저장';
+    _cardHint = '⚔️ 경쟁사와 비교하려면: 이 업체를 저장한 뒤 [업체관리] → 해당 업체 → "경쟁사 등록"에서 경쟁사 상품을 분석해 추가하세요.';
+  }
   return React.createElement('div', {
     id: 'sec-save-client',
     className: 'section',
@@ -10626,13 +10699,13 @@ window.SaveToClientSection = function SaveToClientSection({
       fontWeight: 700,
       marginBottom: 8
     }
-  }, _forceComp ? '"' + keyword + '" 분석 결과를 경쟁사로 저장하시겠습니까?' : '"' + keyword + '" 분석 결과를 업체에 저장하시겠습니까?'), React.createElement('div', {
+  }, _cardTitle), React.createElement('div', {
     style: {
       fontSize: 13,
       opacity: 0.85,
       marginBottom: 16
     }
-  }, _forceComp ? '광고주를 선택해 그 광고주의 경쟁사로 저장합니다. (영업사원 등록분은 30일 후 자동 삭제)' : '업체로 저장하면 업체관리 탭에서 일자별 분석 데이터가 누적됩니다.'), React.createElement('button', {
+  }, _cardDesc), React.createElement('button', {
     onClick: function () {
       setShowModal(true);
     },
@@ -10647,15 +10720,14 @@ window.SaveToClientSection = function SaveToClientSection({
       cursor: 'pointer',
       boxShadow: '0 2px 8px rgba(0,0,0,0.15)'
     }
-  }, _forceComp ? '⚔️ 경쟁사로 저장' : '업체 등록 / 저장'), /* 경쟁사 비교 안내 (진입점 발견성) */
-  React.createElement('div', {
+  }, _cardBtn), React.createElement('div', {
     style: {
       marginTop: 12,
       fontSize: 12,
       opacity: 0.92,
       lineHeight: 1.6
     }
-  }, _forceComp ? '⚔️ 경쟁사 비교: 위 버튼으로 이 상품을 광고주의 경쟁사로 저장하면, 업체관리에서 광고주와 나란히 비교할 수 있습니다.' : '⚔️ 경쟁사와 비교하려면: 이 업체를 저장한 뒤 [업체관리] → 해당 업체 → "경쟁사 등록"에서 경쟁사 상품을 분석해 추가하세요. (경쟁사도 상품 페이지에서 분석 후 저장)'))), /* 모달 */
+  }, _cardHint))), /* 모달 */
   showModal && React.createElement('div', {
     style: {
       position: 'fixed',
@@ -10696,7 +10768,7 @@ window.SaveToClientSection = function SaveToClientSection({
       fontWeight: 700,
       color: '#1e293b'
     }
-  }, '업체 등록 / 분석 저장'), React.createElement('button', {
+  }, _prospectMode ? '영업 대상 저장' : _fixedCompMode ? '경쟁사 저장' : '업체 등록 / 분석 저장'), React.createElement('button', {
     onClick: closeModal,
     style: {
       background: 'none',
@@ -10705,7 +10777,7 @@ window.SaveToClientSection = function SaveToClientSection({
       cursor: 'pointer',
       color: '#94a3b8'
     }
-  }, '\u2715')), /* 분석 키워드 표시 */
+  }, '✕')), /* 분석 키워드 표시 */
   React.createElement('div', {
     style: {
       background: '#f8fafc',
@@ -10734,7 +10806,7 @@ window.SaveToClientSection = function SaveToClientSection({
       fontSize: 32,
       marginBottom: 8
     }
-  }, '\u2705'), React.createElement('div', {
+  }, '✅'), React.createElement('div', {
     style: {
       fontSize: 15,
       fontWeight: 600,
@@ -10755,14 +10827,14 @@ window.SaveToClientSection = function SaveToClientSection({
     }
   }, '확인'))
 
-  /* 입력 폼 */ : React.createElement('div', null, /* 탭: 새 업체 / 기존 업체 / 경쟁사 (viewer는 경쟁사만) */
-  React.createElement('div', {
+  /* 입력 폼 */ : React.createElement('div', null, /* 탭: 관리팀 전체 흐름에서만 (영업사원 흐름은 단일 입력) */
+  _fullMode && React.createElement('div', {
     style: {
       display: 'flex',
       gap: 8,
       marginBottom: 16
     }
-  }, !_forceComp && React.createElement('button', {
+  }, React.createElement('button', {
     onClick: function () {
       setSaveMode('new');
     },
@@ -10777,7 +10849,7 @@ window.SaveToClientSection = function SaveToClientSection({
       color: saveMode === 'new' ? '#fff' : '#64748b',
       border: saveMode === 'new' ? '1px solid #6C5CE7' : '1px solid #e2e8f0'
     }
-  }, '새 업체 등록'), !_forceComp && React.createElement('button', {
+  }, '새 업체 등록'), React.createElement('button', {
     onClick: function () {
       setSaveMode('existing');
     },
@@ -10807,8 +10879,78 @@ window.SaveToClientSection = function SaveToClientSection({
       color: saveMode === 'competitor' ? '#fff' : '#c2410c',
       border: '1px solid ' + (saveMode === 'competitor' ? '#c2410c' : '#fed7aa')
     }
-  }, '⚔️ 경쟁사로 저장')), /* 경쟁사 저장: 연결할 광고주 선택 + 경쟁사명 */
-  saveMode === 'competitor' && React.createElement('div', {
+  }, '⚔️ 경쟁사로 저장')), /* 영업 대상(prospect) 저장 — 단일 입력, 드롭다운 없음 */
+  _prospectMode && React.createElement('div', null, React.createElement('label', {
+    style: {
+      fontSize: 13,
+      color: '#475569',
+      fontWeight: 600,
+      display: 'block',
+      marginBottom: 6
+    }
+  }, '영업 대상명'), React.createElement('input', {
+    className: 'form-input',
+    value: clientName,
+    onChange: function (e) {
+      setClientName(e.target.value);
+    },
+    placeholder: '영업 대상(업체·상품)명을 입력하세요',
+    style: {
+      width: '100%',
+      marginBottom: 8
+    },
+    autoFocus: true
+  }), React.createElement('div', {
+    style: {
+      fontSize: 11.5,
+      color: '#4338ca',
+      background: '#eef2ff',
+      border: '1px solid #c7d2fe',
+      borderRadius: 8,
+      padding: '8px 12px'
+    }
+  }, '🎯 영업 대상은 [내 영업자료]에 저장되어 본인만 볼 수 있고, 30일 후 자동 삭제됩니다. 저장 후 상위노출 경쟁사를 붙여 비교하세요.')), /* 경쟁사 저장(앵커 고정, 드롭다운 없음) — 상세 '경쟁사 등록' 진입 */
+  _fixedCompMode && React.createElement('div', null, _anchorName && React.createElement('div', {
+    style: {
+      fontSize: 12.5,
+      color: '#9a3412',
+      background: '#fff7ed',
+      border: '1px solid #fed7aa',
+      borderRadius: 8,
+      padding: '8px 12px',
+      marginBottom: 12
+    }
+  }, '연결 대상: ', React.createElement('b', null, _anchorName)), React.createElement('label', {
+    style: {
+      fontSize: 13,
+      color: '#475569',
+      fontWeight: 600,
+      display: 'block',
+      marginBottom: 6
+    }
+  }, '경쟁사명'), React.createElement('input', {
+    className: 'form-input',
+    value: clientName,
+    onChange: function (e) {
+      setClientName(e.target.value);
+    },
+    placeholder: '경쟁사명을 입력하세요',
+    style: {
+      width: '100%',
+      marginBottom: 8
+    },
+    autoFocus: true
+  }), _isViewer && React.createElement('div', {
+    style: {
+      fontSize: 11.5,
+      color: '#c2410c',
+      background: '#fff7ed',
+      border: '1px solid #fed7aa',
+      borderRadius: 8,
+      padding: '8px 12px'
+    }
+  }, '⏳ 본인이 등록한 경쟁사는 30일 후 자동 삭제됩니다.')), /* 관리팀 경쟁사 탭: 연결할 광고주 선택 + 경쟁사명 */
+  _fullMode && saveMode === 'competitor' && React.createElement('div', {
     style: {
       marginBottom: 16
     }
@@ -10858,17 +11000,8 @@ window.SaveToClientSection = function SaveToClientSection({
       marginBottom: 8
     },
     autoFocus: true
-  }), _forceComp && React.createElement('div', {
-    style: {
-      fontSize: 11.5,
-      color: '#c2410c',
-      background: '#fff7ed',
-      border: '1px solid #fed7aa',
-      borderRadius: 8,
-      padding: '8px 12px'
-    }
-  }, '⏳ 영업사원이 등록한 경쟁사는 30일 후 자동 삭제됩니다. (관리팀에 정식 등록이 필요하면 담당자에게 요청)')), /* 새 업체 입력 */
-  saveMode === 'new' && React.createElement('div', null, React.createElement('label', {
+  })), /* 새 업체 입력(관리팀) */
+  _fullMode && saveMode === 'new' && React.createElement('div', null, React.createElement('label', {
     style: {
       fontSize: 13,
       color: '#475569',
@@ -10894,8 +11027,8 @@ window.SaveToClientSection = function SaveToClientSection({
       color: '#94a3b8',
       marginBottom: 16
     }
-  }, '같은 이름의 업체가 있으면 해당 업체에 분석이 추가됩니다.')), /* 기존 업체 선택 */
-  saveMode === 'existing' && React.createElement('div', {
+  }, '같은 이름의 업체가 있으면 해당 업체에 분석이 추가됩니다.')), /* 기존 업체 선택(관리팀) */
+  _fullMode && saveMode === 'existing' && React.createElement('div', {
     style: {
       marginBottom: 16
     }
@@ -10911,8 +11044,7 @@ window.SaveToClientSection = function SaveToClientSection({
     var filtered = q ? existingClients.filter(function (c) {
       return (c.name || '').toLowerCase().indexOf(q) !== -1 || (c.main_keywords || '').toLowerCase().indexOf(q) !== -1;
     }) : existingClients;
-    return React.createElement(React.Fragment, null, /* 업체명 검색 (업체 多 → 빠르게 찾기) */
-    React.createElement('input', {
+    return React.createElement(React.Fragment, null, React.createElement('input', {
       type: 'text',
       value: clientSearch,
       onChange: function (e) {
@@ -10994,7 +11126,7 @@ window.SaveToClientSection = function SaveToClientSection({
       fontWeight: 600,
       cursor: saving ? 'default' : 'pointer'
     }
-  }, saving ? '저장 중...' : '분석 결과 저장')))));
+  }, saving ? '저장 중...' : _prospectMode ? '영업 대상 저장' : _fixedCompMode ? '경쟁사 저장' : '분석 결과 저장')))));
 };
 
 ;/* ===== js/components/ClientListSection.jsx ===== */
@@ -13784,7 +13916,7 @@ window.ClientDashboard = function ClientDashboard({
       fontWeight: 700,
       marginBottom: 12
     }
-  }, "내 업체 목록 (", clients.length, ")"), clients.length > 3 && /*#__PURE__*/React.createElement("input", {
+  }, currentUser && currentUser.role === 'viewer' ? '내 영업 대상' : '내 업체 목록', " (", clients.length, ")"), clients.length > 3 && /*#__PURE__*/React.createElement("input", {
     className: "form-input",
     placeholder: "업체명 / 키워드 검색...",
     value: searchQuery,
@@ -13809,7 +13941,7 @@ window.ClientDashboard = function ClientDashboard({
       padding: '20px 0',
       textAlign: 'center'
     }
-  }, "등록된 업체가 없습니다.", /*#__PURE__*/React.createElement("br", null), "분석 탭에서 업체를 등록해주세요."), !loading && clients.length > 0 && filteredClients.length === 0 && /*#__PURE__*/React.createElement("div", {
+  }, currentUser && currentUser.role === 'viewer' ? /*#__PURE__*/React.createElement("span", null, "등록된 영업 대상이 없습니다.", /*#__PURE__*/React.createElement("br", null), "분석 탭에서 영업 대상을 분석해 저장하세요.") : /*#__PURE__*/React.createElement("span", null, "등록된 업체가 없습니다.", /*#__PURE__*/React.createElement("br", null), "분석 탭에서 업체를 등록해주세요.")), !loading && clients.length > 0 && filteredClients.length === 0 && /*#__PURE__*/React.createElement("div", {
     style: {
       color: '#94a3b8',
       fontSize: 13,
@@ -13876,7 +14008,15 @@ window.ClientDashboard = function ClientDashboard({
         textOverflow: 'ellipsis',
         whiteSpace: 'nowrap'
       }
-    }, c.main_keywords)), canEdit !== false && /*#__PURE__*/React.createElement("button", {
+    }, c.main_keywords), c.days_left != null && /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 10,
+        fontWeight: 800,
+        marginTop: 4,
+        color: isActive ? '#fdba74' : '#c2410c'
+      },
+      title: "영업 대상은 30일 후 자동 삭제됩니다"
+    }, "⏳ ", c.days_left, "일 후 자동 삭제")), canEdit !== false && /*#__PURE__*/React.createElement("button", {
       onClick: function (e) {
         e.stopPropagation();
         /* 자동분석 토글(호출 다이어트) — 계약만료·환불·홀딩 등 관리 중단 업체는
@@ -13953,12 +14093,12 @@ window.ClientDashboard = function ClientDashboard({
     style: {
       fontSize: 16
     }
-  }, "좌측에서 업체를 선택하세요"), /*#__PURE__*/React.createElement("div", {
+  }, currentUser && currentUser.role === 'viewer' ? '좌측에서 영업 대상을 선택하세요' : '좌측에서 업체를 선택하세요'), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 13,
       marginTop: 8
     }
-  }, "분석 탭에서 키워드 분석 후 업체를 등록하면 여기에 표시됩니다.")), selectedClient && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+  }, currentUser && currentUser.role === 'viewer' ? '분석 탭에서 영업 대상을 분석·저장하면 여기에 표시됩니다.' : '분석 탭에서 키워드 분석 후 업체를 등록하면 여기에 표시됩니다.')), selectedClient && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "card",
     style: {
       padding: 20,
@@ -16966,7 +17106,19 @@ window.DatalabGrowthSection = function DatalabGrowthSection(props) {
         color: p.reliable === false ? '#94a3b8' : isPositive ? c.main : '#ef4444',
         marginBottom: 4
       }
-    }, p.reliable === false ? '—' : (isPositive ? '+' : '') + p.growth + '%'), /*#__PURE__*/React.createElement("div", {
+    }, p.growth == null || isNaN(p.growth) ? '집계 없음' : (isPositive ? '+' : '') + p.growth + '%', p.reliable === false && p.growth != null && !isNaN(p.growth) && /*#__PURE__*/React.createElement("span", {
+      style: {
+        marginLeft: 6,
+        fontSize: 10,
+        fontWeight: 800,
+        color: '#92400e',
+        background: '#fffbeb',
+        border: '1px solid #fcd34d',
+        borderRadius: 99,
+        padding: '2px 8px',
+        verticalAlign: 'middle'
+      }
+    }, "참고")), /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 12,
         color: '#64748b',
@@ -20735,7 +20887,7 @@ window.AnalysisResults = function AnalysisResults(props) {
     htmlDetailResult: htmlDetailResult,
     competitorContext: props.competitorContext,
     onCompetitorSaved: props.onCompetitorSaved,
-    allowCompetitorOnly: currentUser.role === 'viewer',
+    isViewer: currentUser.role === 'viewer',
     defaultName: _displayCompany
   })), /* 21. 보고서 출력 */
   searchedProductUrl && React.createElement(window.SectionErrorBoundary, {
@@ -23840,7 +23992,7 @@ window.App = function App() {
       margin: '10px auto',
       maxWidth: 1200
     }
-  }, "⚔️ 경쟁사 등록 모드 — 이 분석을 광고주 '" + competitorContext.advName + "'의 경쟁사로 저장합니다. 분석 후 하단 '업체 등록/저장'을 누르세요.", React.createElement('button', {
+  }, "⚔️ 경쟁사 등록 모드 — 이 분석을 " + (currentUser && currentUser.role === 'viewer' ? '영업 대상' : '광고주') + " '" + competitorContext.advName + "'의 경쟁사로 저장합니다. 분석 후 하단 '경쟁사로 저장'을 누르세요.", React.createElement('button', {
     onClick: function () {
       setCompetitorContext(null);
       try {

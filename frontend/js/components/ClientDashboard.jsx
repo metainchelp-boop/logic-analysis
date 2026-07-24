@@ -300,7 +300,7 @@ window.ClientDashboard = function ClientDashboard({ currentUser, onRunAnalysis, 
                 {/* 좌측: 업체 목록 */}
                 <div className="cd-sidebar" style={{ width: 280, flexShrink: 0 }}>
                     <div className="card" style={{ padding: 16 }}>
-                        <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 12 }}>내 업체 목록 ({clients.length})</div>
+                        <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 12 }}>{(currentUser && currentUser.role === 'viewer') ? '내 영업 대상' : '내 업체 목록'} ({clients.length})</div>
                         {clients.length > 3 && (
                             <input className="form-input"
                                 placeholder="업체명 / 키워드 검색..."
@@ -312,7 +312,9 @@ window.ClientDashboard = function ClientDashboard({ currentUser, onRunAnalysis, 
                         {loading && <div style={{ color: '#64748b', fontSize: 13 }}>로딩 중...</div>}
                         {!loading && clients.length === 0 && (
                             <div style={{ color: '#94a3b8', fontSize: 13, padding: '20px 0', textAlign: 'center' }}>
-                                등록된 업체가 없습니다.<br />분석 탭에서 업체를 등록해주세요.
+                                {(currentUser && currentUser.role === 'viewer')
+                                    ? <span>등록된 영업 대상이 없습니다.<br />분석 탭에서 영업 대상을 분석해 저장하세요.</span>
+                                    : <span>등록된 업체가 없습니다.<br />분석 탭에서 업체를 등록해주세요.</span>}
                             </div>
                         )}
                         {!loading && clients.length > 0 && filteredClients.length === 0 && (
@@ -345,6 +347,10 @@ window.ClientDashboard = function ClientDashboard({ currentUser, onRunAnalysis, 
                                             </div>
                                             {c.main_keywords && (
                                                 <div style={{ fontSize: 11, opacity: 0.6, marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.main_keywords}</div>
+                                            )}
+                                            {c.days_left != null && (
+                                                <div style={{ fontSize: 10, fontWeight: 800, marginTop: 4, color: isActive ? '#fdba74' : '#c2410c' }}
+                                                    title="영업 대상은 30일 후 자동 삭제됩니다">⏳ {c.days_left}일 후 자동 삭제</div>
                                             )}
                                         </div>
                                         {canEdit !== false && <button onClick={function(e) {
@@ -392,8 +398,8 @@ window.ClientDashboard = function ClientDashboard({ currentUser, onRunAnalysis, 
                     {!selectedClient && (
                         <div className="card" style={{ padding: 40, textAlign: 'center', color: '#94a3b8' }}>
                             <div style={{ fontSize: 48, marginBottom: 12 }}>📊</div>
-                            <div style={{ fontSize: 16 }}>좌측에서 업체를 선택하세요</div>
-                            <div style={{ fontSize: 13, marginTop: 8 }}>분석 탭에서 키워드 분석 후 업체를 등록하면 여기에 표시됩니다.</div>
+                            <div style={{ fontSize: 16 }}>{(currentUser && currentUser.role === 'viewer') ? '좌측에서 영업 대상을 선택하세요' : '좌측에서 업체를 선택하세요'}</div>
+                            <div style={{ fontSize: 13, marginTop: 8 }}>{(currentUser && currentUser.role === 'viewer') ? '분석 탭에서 영업 대상을 분석·저장하면 여기에 표시됩니다.' : '분석 탭에서 키워드 분석 후 업체를 등록하면 여기에 표시됩니다.'}</div>
                         </div>
                     )}
 

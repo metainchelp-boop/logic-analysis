@@ -544,7 +544,7 @@ window.App = function App() {
             competitorContext && React.createElement('div', {
                 style: { background: '#fff7ed', color: '#c2410c', border: '1px solid #fed7aa', padding: '10px 16px', fontSize: 13, fontWeight: 700, textAlign: 'center', borderRadius: 10, margin: '10px auto', maxWidth: 1200 }
             },
-                "⚔️ 경쟁사 등록 모드 — 이 분석을 광고주 '" + competitorContext.advName + "'의 경쟁사로 저장합니다. 분석 후 하단 '업체 등록/저장'을 누르세요.",
+                "⚔️ 경쟁사 등록 모드 — 이 분석을 " + ((currentUser && currentUser.role === 'viewer') ? '영업 대상' : '광고주') + " '" + competitorContext.advName + "'의 경쟁사로 저장합니다. 분석 후 하단 '경쟁사로 저장'을 누르세요.",
                 React.createElement('button', {
                     onClick: function() { setCompetitorContext(null); try { toast.info('일반 분석 모드로 전환했습니다.'); } catch(e) {} },
                     style: { marginLeft: 12, fontSize: 11.5, fontWeight: 700, color: '#c2410c', background: '#fff', border: '1px solid #fdba74', borderRadius: 7, padding: '3px 10px', cursor: 'pointer' }
