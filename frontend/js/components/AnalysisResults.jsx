@@ -26,6 +26,14 @@ window.AnalysisResults = function AnalysisResults(props) {
     var shopProducts = props.shopProducts;
     var volumeData = props.volumeData;
 
+    /* 광고주/스토어명 자동 채우기 — companyName 미지정(확장 자동분석 등) 시 분석 결과의
+       실제 스토어명, 없으면 상품 URL의 스마트스토어 슬러그로 폴백. */
+    var _storeName = (advertiserReport && advertiserReport.product_info && advertiserReport.product_info.store_name)
+        || (analysisData && analysisData.targetProductInfo && analysisData.targetProductInfo.store_name)
+        || (function() { try { var m = (searchedProductUrl || '').match(/smartstore\.naver\.com\/([^\/?#]+)/); return m ? decodeURIComponent(m[1]) : ''; } catch (e) { return ''; } })()
+        || '';
+    var _displayCompany = companyName || _storeName;
+
     return (
                 React.createElement('div', { className: 'report-shell' },
                   /* 좌측 고정 목차 (와이드 화면 전용) — 분석 결과(섹션 2개 이상)가 있을 때만 표시 */
@@ -55,7 +63,7 @@ window.AnalysisResults = function AnalysisResults(props) {
                         React.createElement('div', { className: 'rc-grid' },
                             React.createElement('div', { className: 'rc-field' },
                                 React.createElement('div', { className: 'rc-k' }, '광고주 / 스토어'),
-                                React.createElement('div', { className: 'rc-v' }, companyName || '-')
+                                React.createElement('div', { className: 'rc-v' }, _displayCompany || '-')
                             ),
                             React.createElement('div', { className: 'rc-field' },
                                 React.createElement('div', { className: 'rc-k' }, '분석 키워드'),
@@ -410,6 +418,7 @@ window.AnalysisResults = function AnalysisResults(props) {
                         competitorContext: props.competitorContext,
                         onCompetitorSaved: props.onCompetitorSaved,
                         allowCompetitorOnly: currentUser.role === 'viewer',
+                        defaultName: _displayCompany,
                     })
                 ),
     
