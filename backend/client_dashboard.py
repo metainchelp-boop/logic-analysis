@@ -1165,17 +1165,29 @@ def compare_coaching(req: CompareCoachingRequest, current_user: dict = Depends(g
             f"광고주 '{adv_name}' vs 경쟁사 '{comp['name']}' 비교 지표 격차입니다. "
             f"이 광고주가 이 경쟁사를 이기기 위한 전략을 코칭해줘.\n\n{summary}"
         )
-        try:
-            resp = client.messages.create(
-                model=CLAUDE_MODEL, max_tokens=1200,
-                system=system, messages=[{"role": "user", "content": user_msg}],
-            )
-            text = resp.content[0].text if resp.content else ""
-            return {"success": True, "data": {"text": text, "available": True}}
-        except Exception as e:
-            logger.error(f"[compare-coaching] Claude 호출 실패: {e}")
-            return {"success": True, "data": {"text": "", "available": False,
-                    "message": "AI 코칭 생성 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요."}}
+        # 설정된 모델(CLAUDE_MODEL)이 유효하지 않거나 접근 불가일 때를 대비해
+        # 널리 접근 가능한 모델로 폴백을 시도한다(서버 .env 오설정에도 자동 복구).
+        models_to_try = []
+        for m in (CLAUDE_MODEL, "claude-sonnet-4-6", "claude-haiku-4-5"):
+            if m and m not in models_to_try:
+                models_to_try.append(m)
+        last_err = None
+        for mdl in models_to_try:
+            try:
+                resp = client.messages.create(
+                    model=mdl, max_tokens=1200,
+                    system=system, messages=[{"role": "user", "content": user_msg}],
+                )
+                text = resp.content[0].text if resp.content else ""
+                return {"success": True, "data": {"text": text, "available": True}}
+            except Exception as e:
+                last_err = e
+                logger.error(f"[compare-coaching] Claude 호출 실패(model={mdl}): {type(e).__name__}: {e}")
+                continue
+        # 모든 모델 실패 — 원인 파악을 위해 오류 요약을 함께 반환(민감정보 없음).
+        _detail = f"{type(last_err).__name__}: {str(last_err)[:180]}" if last_err else ""
+        return {"success": True, "data": {"text": "", "available": False,
+                "message": "AI 코칭 생성 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요." + (f" ({_detail})" if _detail else "")}}
     finally:
         conn.close()
 
