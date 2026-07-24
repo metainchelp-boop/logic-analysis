@@ -35,3 +35,25 @@
 - [x] BE + FE 구현·검증, 번들 재생성
 - [ ] 운영자 승인("배포하자" + "FE까지 완성 후 통째로 배포") → main 머지 → VPS blue-green(스키마 마이그레이션 자동, DDL은 ADD COLUMN 뿐 무중단)
 - 후속(2·3차 후보): 경쟁사 감시 알림(카톡) · 가격/프로모션 캘린더 · 다중 경쟁사 벤치마크 · 키워드별 순위 매트릭스(경쟁사 다중 키워드 분석) · 부정리뷰 불만 추출.
+
+## 영업사원 경쟁사 등록 + 30일 자동삭제 (2026-07-23, 운영자 지시)
+
+- 지시: "영업사원은 등록하되 30일 뒤 자동 삭제." 배경: 영업사원=viewer라 기존엔 업체 등록 자체가 불가(관리팀만). 경쟁사 입력 동선을 열되 데이터 누적 방지.
+- 정책: **영업사원(viewer)은 경쟁사만 등록 가능**(광고주 신규 등록은 계속 관리팀). **영업사원이 등록한 경쟁사는 30일 뒤 자동 삭제**(관리팀 등록분은 영구).
+- BE:
+  - `clients.expires_at` 마이그레이션(#5, NULL=영구).
+  - `quick-register` 권한 완화: 의존성 `require_register_permission`→`get_current_user`. 내부에서 광고주 등록은 manager/superadmin만(403), 경쟁사는 전원 허용. viewer가 등록한 경쟁사에 `expires_at=+30d`(재등록 시 연장). 관리팀 경쟁사는 NULL.
+  - `cleanup_expired_competitors()` — 만료 경쟁사 + 분석기록 삭제. 스케줄러 `_run_daily_analysis`(09:00) 시작 시 호출.
+  - `list_competitors` 응답에 `expires_at`·`days_left` 추가.
+- FE:
+  - `SaveToClientSection`: '⚔️ 경쟁사로 저장' 탭 신설(연결 광고주 드롭다운+경쟁사명). viewer(`allowCompetitorOnly`)는 이 탭만 노출·트리거 문구도 경쟁사, "30일 후 자동 삭제" 안내. quick-register에 role/competitor_of 전달.
+  - `AnalysisResults`: 저장 섹션을 viewer에게도 렌더(경쟁사 전용, `allowCompetitorOnly=role==='viewer'`).
+  - `CompetitorCompareSection`: 경쟁사 목록에 '⏳ N일 후 삭제' 배지(days_left).
+- 검증: BE 격리 SQL TTL 5/5(만료만 삭제·잔존·분석기록 동반삭제·days_left) + FE 렌더 9/9(경쟁사 전용·드롭다운·30일 안내·탭 숨김·role/competitor_of/name·배지) PASS.
+
+## 영업사원 본인 등록분 분리 (2026-07-23, 운영자 지시)
+
+- 지시: "영업사원도 본인이 등록한 것만 따로 구분해서 영업자료로 볼 수 있게 영역을 나누면 될 거 같아."
+- BE: `list_competitors` — viewer는 `created_by=본인`만 반환(관리팀=전체). 각 항목 `mine` 플래그. `compare`·`compare-coaching`도 viewer는 본인 등록 경쟁사만 접근(403 가드).
+- FE: `CompetitorCompareSection` — viewer면 슬롯 제목 "경쟁사 비교 (내 영업자료)"·"내가 등록한 경쟁사만 표시" + 관리팀 화면엔 본인 등록분에 '내 등록' 배지. `ClientDashboard`에서 `isViewer` 전달.
+- 검증: 스코핑 SQL — viewer9/viewer8 각자 본인 것만·관리팀 전체 PASS.

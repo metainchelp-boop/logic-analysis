@@ -255,6 +255,14 @@ def init_clients_db():
                 cursor.execute("ALTER TABLE clients ADD COLUMN competitor_of INTEGER DEFAULT NULL")
                 logger.info("[clients] competitor_of column added via migration")
 
+            # 마이그레이션(#5, 2026-07 경쟁사 TTL): 영업사원(viewer)이 등록한 경쟁사는
+            # 30일 뒤 자동 삭제(스케줄러). expires_at=삭제 예정 시각(NULL=영구, 관리팀 등록분).
+            try:
+                cursor.execute("SELECT expires_at FROM clients LIMIT 1")
+            except Exception:
+                cursor.execute("ALTER TABLE clients ADD COLUMN expires_at TEXT DEFAULT NULL")
+                logger.info("[clients] expires_at column added via migration")
+
             logger.info("Clients database initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize clients database: {str(e)}")

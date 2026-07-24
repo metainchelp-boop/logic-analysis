@@ -166,10 +166,11 @@ window.CompetitorCompareSection = function CompetitorCompareSection(props) {
   var C = window.React.createElement;
 
   /* 슬롯(등록·목록) */
+  var isViewer = props.isViewer;
   var slot = C('div', { className: 'card', style: { padding: '16px 20px', marginBottom: 16, border: '1px solid #fed7aa', background: 'linear-gradient(120deg,#fff,#fff7ed)' } },
     C('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 } },
-      C('span', { style: { fontSize: 15, fontWeight: 800, color: '#c2410c' } }, '⚔️ 경쟁사 비교'),
-      C('span', { style: { fontSize: 11.5, color: '#94a3b8' } }, '— 광고주와 나란히 비교할 상대를 등록하세요')
+      C('span', { style: { fontSize: 15, fontWeight: 800, color: '#c2410c' } }, isViewer ? '⚔️ 경쟁사 비교 (내 영업자료)' : '⚔️ 경쟁사 비교'),
+      C('span', { style: { fontSize: 11.5, color: '#94a3b8' } }, isViewer ? '— 내가 등록한 경쟁사만 표시 (30일 후 자동 삭제)' : '— 광고주와 나란히 비교할 상대를 등록하세요')
     ),
     competitors.length === 0
       ? C('div', { style: { fontSize: 12.5, color: '#94a3b8', padding: '4px 0 10px' } }, '등록된 경쟁사가 없습니다.')
@@ -178,7 +179,9 @@ window.CompetitorCompareSection = function CompetitorCompareSection(props) {
             var isSel = selectedId === cc.id;
             return C('div', { key: cc.id, style: { display: 'flex', alignItems: 'center', gap: 10, background: isSel ? '#fff7ed' : '#fff', border: '1px solid ' + (isSel ? '#fdba74' : '#fed7aa'), borderRadius: 10, padding: '8px 12px' } },
               C('div', { style: { minWidth: 0, flex: 1 } },
-                C('div', { style: { fontWeight: 700, fontSize: 13, color: '#0f172a' } }, cc.name),
+                C('div', { style: { fontWeight: 700, fontSize: 13, color: '#0f172a' } }, cc.name,
+                  (!isViewer && cc.mine) && C('span', { style: { marginLeft: 6, fontSize: 10, fontWeight: 800, color: '#4338ca', background: '#eef2ff', border: '1px solid #c7d2fe', borderRadius: 99, padding: '1px 7px' } }, '내 등록'),
+                  (cc.days_left != null) && C('span', { title: '영업사원 등록분 — 자동 삭제 예정', style: { marginLeft: 6, fontSize: 10, fontWeight: 800, color: '#c2410c', background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 99, padding: '1px 7px' } }, '⏳ ' + cc.days_left + '일 후 삭제')),
                 C('div', { style: { fontSize: 11, color: '#94a3b8' } }, cc.has_analysis ? ('키워드: ' + (cc.latest_keyword || '-') + ' · ' + (cc.latest_date || '')) : '분석 기록 없음 — 경쟁사 상품을 분석해 저장하세요')
               ),
               C('button', { onClick: function() { runCompare(cc.id); }, disabled: !cc.has_analysis,

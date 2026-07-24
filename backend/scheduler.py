@@ -456,6 +456,15 @@ def _run_daily_analysis():
     DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
     today = date.today().isoformat()
 
+    # 만료 경쟁사 자동 삭제 (영업사원 등록·30일 경과) — 일일 1회
+    try:
+        from client_dashboard import cleanup_expired_competitors
+        _n = cleanup_expired_competitors()
+        if _n:
+            logger.info(f"🗑️ 만료 경쟁사 {_n}건 자동 삭제 완료")
+    except Exception as _e:
+        logger.error(f"[cleanup] 만료 경쟁사 삭제 실패: {_e}")
+
     logger.info(f"📊 전체 분석 + 보고서 생성 시작 ({datetime.now().strftime('%H:%M')})")
 
     # 캐시 유효성 확인

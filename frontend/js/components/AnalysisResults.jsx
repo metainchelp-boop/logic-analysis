@@ -395,8 +395,8 @@ window.AnalysisResults = function AnalysisResults(props) {
                     })
                 ),
     
-                /* 20. 업체 등록/저장 (viewer는 숨김) */
-                analysisData && currentUser.role !== 'viewer' && React.createElement(window.SectionErrorBoundary, { name: '업체 저장' },
+                /* 20. 업체 등록/저장 — 관리팀은 업체+경쟁사, 영업사원(viewer)은 경쟁사 저장만 */
+                analysisData && React.createElement(window.SectionErrorBoundary, { name: '업체 저장' },
                     React.createElement(SaveToClientSection, {
                         keyword: searchedKeyword,
                         productUrl: searchedProductUrl,
@@ -409,6 +409,7 @@ window.AnalysisResults = function AnalysisResults(props) {
                         htmlDetailResult: htmlDetailResult,
                         competitorContext: props.competitorContext,
                         onCompetitorSaved: props.onCompetitorSaved,
+                        allowCompetitorOnly: currentUser.role === 'viewer',
                     })
                 ),
     

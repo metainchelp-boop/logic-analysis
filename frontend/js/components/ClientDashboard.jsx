@@ -419,6 +419,7 @@ window.ClientDashboard = function ClientDashboard({ currentUser, onRunAnalysis, 
                             {window.CompetitorCompareSection && React.createElement(window.CompetitorCompareSection, {
                                 client: selectedClient,
                                 canEdit: canEdit,
+                                isViewer: currentUser && currentUser.role === 'viewer',
                                 onRegisterCompetitor: onRegisterCompetitor
                             })}
 
