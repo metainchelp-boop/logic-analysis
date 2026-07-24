@@ -9605,6 +9605,9 @@ window.CompetitorCompareSection = function CompetitorCompareSection(props) {
   /* 영업사원(viewer)은 앵커가 '광고주'가 아니라 '영업 대상'(prospect) — 라벨을 바꾼다 */
   var isViewer = props.isViewer;
   var anchorLabel = isViewer ? '영업 대상' : '광고주';
+  /* 경쟁사 등록·삭제 권한: 관리팀(canEdit)뿐 아니라 영업사원도 '본인 영업 대상'에는
+     경쟁사를 붙이고 지울 수 있어야 한다(완전 개인 모드). viewer는 스코핑으로 본인 것만 봄. */
+  var canManageComp = canEdit || isViewer;
   var loadCompetitors = function () {
     if (!advId) return;
     api.get('/cd/' + advId + '/competitors').then(function (res) {
@@ -9969,7 +9972,7 @@ window.CompetitorCompareSection = function CompetitorCompareSection(props) {
         padding: '6px 12px',
         cursor: cc.has_analysis ? 'pointer' : 'not-allowed'
       }
-    }, '⚔️ 비교'), canEdit && C('button', {
+    }, '⚔️ 비교'), canManageComp && C('button', {
       onClick: function () {
         handleDeleteCompetitor(cc.id, cc.name);
       },
@@ -9986,7 +9989,7 @@ window.CompetitorCompareSection = function CompetitorCompareSection(props) {
         cursor: 'pointer'
       }
     }, '✕'));
-  })), canEdit && C('button', {
+  })), canManageComp && C('button', {
     onClick: function () {
       if (onRegisterCompetitor) onRegisterCompetitor(advClient);
     },
@@ -10001,7 +10004,7 @@ window.CompetitorCompareSection = function CompetitorCompareSection(props) {
       cursor: 'pointer',
       width: '100%'
     }
-  }, '➕ 경쟁사 등록 (분석 화면에서 경쟁사 상품을 분석 → 저장)'));
+  }, isViewer ? '➕ 상위노출 경쟁사 등록 (분석 화면으로 이동 → 경쟁사 상품 분석 → 저장)' : '➕ 경쟁사 등록 (분석 화면에서 경쟁사 상품을 분석 → 저장)'));
   var body = null;
   if (loading) {
     body = C('div', {
@@ -13624,11 +13627,14 @@ window.ClientDashboard = function ClientDashboard({
   /* 업체 삭제 */
   var deleteClient = function (client, e) {
     e.stopPropagation();
-    if (canEdit === false) {
+    var _isViewer = currentUser && currentUser.role === 'viewer';
+    // 관리팀(canEdit)뿐 아니라 영업사원도 '본인 영업 대상'을 삭제할 수 있다(완전 개인 모드).
+    if (canEdit === false && !_isViewer) {
       toast.error('삭제 권한이 없습니다.');
       return;
     }
-    if (!confirm("'" + client.name + "' 업체를 삭제하시겠습니까?\n\n관련된 모든 분석 데이터와 순위 이력이 함께 삭제됩니다.\n이 작업은 되돌릴 수 없습니다.")) return;
+    var _label = _isViewer ? '영업 대상' : '업체';
+    if (!confirm("'" + client.name + "' " + _label + "을(를) 삭제하시겠습니까?\n\n관련된 모든 분석 데이터·순위 이력과 여기에 붙인 경쟁사도 함께 삭제됩니다.\n이 작업은 되돌릴 수 없습니다.")) return;
     api.del('/cd/' + client.id).then(function (res) {
       if (res.success) {
         if (selectedClient && selectedClient.id === client.id) {
@@ -14049,11 +14055,11 @@ window.ClientDashboard = function ClientDashboard({
         lineHeight: 1,
         color: c.auto_analysis === 0 ? '#f59e0b' : isActive ? 'rgba(255,255,255,0.5)' : '#cbd5e1'
       }
-    }, c.auto_analysis === 0 ? '⏸' : '▶'), canEdit !== false && /*#__PURE__*/React.createElement("button", {
+    }, c.auto_analysis === 0 ? '⏸' : '▶'), (canEdit !== false || currentUser && currentUser.role === 'viewer') && /*#__PURE__*/React.createElement("button", {
       onClick: function (e) {
         deleteClient(c, e);
       },
-      title: "업체 삭제",
+      title: currentUser && currentUser.role === 'viewer' ? '영업 대상 삭제' : '업체 삭제',
       style: {
         background: 'none',
         border: 'none',

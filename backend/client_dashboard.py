@@ -840,28 +840,36 @@ def _parse_analysis_row_light(row):
 # ==================== 업체 삭제 ====================
 
 @router.delete("/{client_id}")
-def delete_client(client_id: int, current_user: dict = Depends(require_role(["admin", "manager"]))):
-    """업체 삭제 (admin/manager, 관련 분석/순위 데이터도 함께 삭제)"""
+def delete_client(client_id: int, current_user: dict = Depends(get_current_user)):
+    """업체 삭제 (본인 소유분만 — 관리팀 광고주 + 영업사원 영업 대상/경쟁사).
+    관련 분석/순위 데이터, 그리고 이 업체에 연결된 경쟁사도 함께 삭제(고아 방지)."""
     conn = _get_conn()
     try:
         user_id = current_user["id"]
         is_adm = _is_admin(current_user)
 
-        # 업체 존재 및 소유권 확인
+        # 업체 존재 및 소유권 확인 — admin은 전체, 그 외(manager·viewer)는 본인 등록분만.
         client = conn.execute("SELECT id, name, created_by FROM clients WHERE id = ?", (client_id,)).fetchone()
         if not client:
             raise HTTPException(status_code=404, detail="업체를 찾을 수 없습니다.")
         if not is_adm and client['created_by'] != user_id:
-            raise HTTPException(status_code=403, detail="삭제 권한이 없습니다.")
+            raise HTTPException(status_code=403, detail="본인이 등록한 업체만 삭제할 수 있습니다.")
 
         name = client['name']
-        # 관련 데이터 삭제 (FOREIGN KEY CASCADE가 안 될 수 있으므로 명시적 삭제)
-        conn.execute("DELETE FROM client_analyses WHERE client_id = ?", (client_id,))
-        conn.execute("DELETE FROM client_rank_history WHERE client_id = ?", (client_id,))
-        conn.execute("DELETE FROM clients WHERE id = ?", (client_id,))
+        # 이 업체(광고주·영업 대상)에 연결된 경쟁사 id 수집 → 함께 삭제(고아 방지)
+        linked = [r["id"] for r in conn.execute(
+            "SELECT id FROM clients WHERE COALESCE(role,'advertiser')='competitor' AND competitor_of = ?",
+            (client_id,)
+        ).fetchall()]
+        del_ids = [client_id] + linked
+        for cid in del_ids:
+            # 관련 데이터 삭제 (FOREIGN KEY CASCADE가 안 될 수 있으므로 명시적 삭제)
+            conn.execute("DELETE FROM client_analyses WHERE client_id = ?", (cid,))
+            conn.execute("DELETE FROM client_rank_history WHERE client_id = ?", (cid,))
+            conn.execute("DELETE FROM clients WHERE id = ?", (cid,))
         conn.commit()
 
-        logger.info(f"[delete-client] '{name}' (id={client_id}) deleted by user {user_id}")
+        logger.info(f"[delete-client] '{name}' (id={client_id}) + 연결 경쟁사 {len(linked)}건 deleted by user {user_id}")
         return {"success": True, "message": f"'{name}' 업체가 삭제되었습니다."}
     except HTTPException:
         raise

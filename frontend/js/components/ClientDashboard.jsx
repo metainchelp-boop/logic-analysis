@@ -74,8 +74,11 @@ window.ClientDashboard = function ClientDashboard({ currentUser, onRunAnalysis, 
     /* 업체 삭제 */
     var deleteClient = function(client, e) {
         e.stopPropagation();
-        if (canEdit === false) { toast.error('삭제 권한이 없습니다.'); return; }
-        if (!confirm("'" + client.name + "' 업체를 삭제하시겠습니까?\n\n관련된 모든 분석 데이터와 순위 이력이 함께 삭제됩니다.\n이 작업은 되돌릴 수 없습니다.")) return;
+        var _isViewer = currentUser && currentUser.role === 'viewer';
+        // 관리팀(canEdit)뿐 아니라 영업사원도 '본인 영업 대상'을 삭제할 수 있다(완전 개인 모드).
+        if (canEdit === false && !_isViewer) { toast.error('삭제 권한이 없습니다.'); return; }
+        var _label = _isViewer ? '영업 대상' : '업체';
+        if (!confirm("'" + client.name + "' " + _label + "을(를) 삭제하시겠습니까?\n\n관련된 모든 분석 데이터·순위 이력과 여기에 붙인 경쟁사도 함께 삭제됩니다.\n이 작업은 되돌릴 수 없습니다.")) return;
         api.del('/cd/' + client.id).then(function(res) {
             if (res.success) {
                 if (selectedClient && selectedClient.id === client.id) {
@@ -375,8 +378,8 @@ window.ClientDashboard = function ClientDashboard({ currentUser, onRunAnalysis, 
                                                 color: c.auto_analysis === 0 ? '#f59e0b' : (isActive ? 'rgba(255,255,255,0.5)' : '#cbd5e1'),
                                             }}
                                         >{c.auto_analysis === 0 ? '⏸' : '▶'}</button>}
-                                        {canEdit !== false && <button onClick={function(e) { deleteClient(c, e); }}
-                                            title="업체 삭제"
+                                        {(canEdit !== false || (currentUser && currentUser.role === 'viewer')) && <button onClick={function(e) { deleteClient(c, e); }}
+                                            title={(currentUser && currentUser.role === 'viewer') ? '영업 대상 삭제' : '업체 삭제'}
                                             style={{
                                                 background: 'none', border: 'none', cursor: 'pointer', padding: '2px 6px',
                                                 fontSize: 14, color: isActive ? 'rgba(255,255,255,0.5)' : '#cbd5e1',

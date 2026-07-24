@@ -22,6 +22,9 @@ window.CompetitorCompareSection = function CompetitorCompareSection(props) {
   /* 영업사원(viewer)은 앵커가 '광고주'가 아니라 '영업 대상'(prospect) — 라벨을 바꾼다 */
   var isViewer = props.isViewer;
   var anchorLabel = isViewer ? '영업 대상' : '광고주';
+  /* 경쟁사 등록·삭제 권한: 관리팀(canEdit)뿐 아니라 영업사원도 '본인 영업 대상'에는
+     경쟁사를 붙이고 지울 수 있어야 한다(완전 개인 모드). viewer는 스코핑으로 본인 것만 봄. */
+  var canManageComp = canEdit || isViewer;
 
   var loadCompetitors = function() {
     if (!advId) return;
@@ -188,14 +191,16 @@ window.CompetitorCompareSection = function CompetitorCompareSection(props) {
               ),
               C('button', { onClick: function() { runCompare(cc.id); }, disabled: !cc.has_analysis,
                 style: { fontSize: 11.5, fontWeight: 800, color: '#fff', background: cc.has_analysis ? '#c2410c' : '#cbd5e1', border: 'none', borderRadius: 8, padding: '6px 12px', cursor: cc.has_analysis ? 'pointer' : 'not-allowed' } }, '⚔️ 비교'),
-              canEdit && C('button', { onClick: function() { handleDeleteCompetitor(cc.id, cc.name); }, title: '경쟁사 삭제',
+              canManageComp && C('button', { onClick: function() { handleDeleteCompetitor(cc.id, cc.name); }, title: '경쟁사 삭제',
                 style: { fontSize: 12, fontWeight: 800, color: '#dc2626', background: '#fff', border: '1px solid #fecaca', borderRadius: 8, width: 28, height: 28, cursor: 'pointer' } }, '✕')
             );
           })
         ),
-    canEdit && C('button', { onClick: function() { if (onRegisterCompetitor) onRegisterCompetitor(advClient); },
+    canManageComp && C('button', { onClick: function() { if (onRegisterCompetitor) onRegisterCompetitor(advClient); },
       style: { fontSize: 12.5, fontWeight: 800, color: '#c2410c', background: '#fff', border: '1.5px dashed #fdba74', borderRadius: 10, padding: '9px 14px', cursor: 'pointer', width: '100%' } },
-      '➕ 경쟁사 등록 (분석 화면에서 경쟁사 상품을 분석 → 저장)')
+      isViewer
+        ? '➕ 상위노출 경쟁사 등록 (분석 화면으로 이동 → 경쟁사 상품 분석 → 저장)'
+        : '➕ 경쟁사 등록 (분석 화면에서 경쟁사 상품을 분석 → 저장)')
   );
 
   var body = null;
