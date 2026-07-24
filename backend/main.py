@@ -527,7 +527,7 @@ def keyword_exposure(req: KeywordExposureRequest, current_user: dict = Depends(g
                 continue
             _seen.add(kl)
             own_candidates.append(k.strip())
-            if len(own_candidates) >= 10:
+            if len(own_candidates) >= 6:  # 후보 축소(10→6): 라이브 크롤 수를 줄여 예산 내 완주율↑·스피너 단축
                 break
         ref_candidates = []
         for k in extra:
@@ -536,7 +536,7 @@ def keyword_exposure(req: KeywordExposureRequest, current_user: dict = Depends(g
                 continue
             _seen.add(kl)
             ref_candidates.append(k.strip())
-            if len(own_candidates) + len(ref_candidates) >= 12:
+            if len(own_candidates) + len(ref_candidates) >= 8:  # 총 12→8
                 break
         candidates = own_candidates + ref_candidates
         own_set = set(c.strip().lower() for c in own_candidates)
@@ -560,8 +560,10 @@ def keyword_exposure(req: KeywordExposureRequest, current_user: dict = Depends(g
         # ⏱️ 벽시계 예산: 이 시간 안에 끝난 키워드만 모으고, 지연된 키워드는 '미조회(None)'로 채워
         #    '부분 결과라도 항상 반환'한다. 느린 네이버 조회로 요청이 프록시 타임아웃(≈60s)에 걸려
         #    노출 분석 섹션이 통째로 사라지던 문제 방지(504 대신 부분 성공).
-        EXPOSURE_BUDGET_SEC = 12
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
+        # 후보를 8개로 줄이고 워커를 6으로 늘려(≈2웨이브) 대부분 예산 안에 끝나게 한다.
+        # 예산은 12→18s로(FE 25s 타임아웃·프록시 60s보다 여유) 상향해 마지막 웨이브까지 완주율↑.
+        EXPOSURE_BUDGET_SEC = 18
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=6)
         futures = {executor.submit(check_one, kw): kw for kw in candidates}
         done_kws = set()
         try:

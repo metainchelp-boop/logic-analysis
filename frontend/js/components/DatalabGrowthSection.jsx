@@ -41,7 +41,10 @@ window.DatalabGrowthSection = function DatalabGrowthSection(props) {
                   직전 {p.label} 대비
                 </div>
                 <div style={{ fontSize: 32, fontWeight: 800, color: p.reliable === false ? '#94a3b8' : (isPositive ? c.main : '#ef4444'), marginBottom: 4 }}>
-                  {p.reliable === false ? '—' : ((isPositive ? '+' : '') + p.growth + '%')}
+                  {(p.growth == null || isNaN(p.growth)) ? '집계 없음' : ((isPositive ? '+' : '') + p.growth + '%')}
+                  {p.reliable === false && (p.growth != null && !isNaN(p.growth)) && (
+                    <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: '#92400e', background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: 99, padding: '2px 8px', verticalAlign: 'middle' }}>참고</span>
+                  )}
                 </div>
                 <div style={{ fontSize: 12, color: '#64748b', marginBottom: 12 }}>
                   {p.reliable === false ? '비수기 · 참고(지수 미미)' : (isPositive ? '검색량 증가 추세' : '검색량 감소 추세')}

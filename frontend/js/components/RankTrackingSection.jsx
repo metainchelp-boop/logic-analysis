@@ -98,8 +98,9 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
             }
         }
         function attempt() {
-            // 클라이언트 타임아웃(무한 로딩 방지): 25초 내 응답 없으면 실패 처리 → 재시도/폴백
-            var timeoutP = new Promise(function(_res, rej) { setTimeout(function() { rej(new Error('timeout')); }, 25000); });
+            // 클라이언트 타임아웃(무한 로딩 방지): BE 예산 18s + 네트워크 여유를 두고 32초.
+            // (첫 시도가 BE 예산 안에 끝나 불필요한 재시도로 크롤을 두 번 하지 않게 함)
+            var timeoutP = new Promise(function(_res, rej) { setTimeout(function() { rej(new Error('timeout')); }, 32000); });
             Promise.race([
                 api.post('/rank/keyword-exposure', { product_url: searchedProductUrl, keyword: searchedKeyword, product_name: cachedProductName, extra_keywords: _extraKws }),
                 timeoutP
