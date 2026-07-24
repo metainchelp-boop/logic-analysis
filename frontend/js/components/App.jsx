@@ -151,6 +151,23 @@ window.App = function App() {
         return function() { window.removeEventListener('message', onExtMsg); };
     }, []);
 
+    /* 🧩 경쟁사 등록 모드 복원 — 확장이 연 새 로직 탭에서도 '이 분석 = 경쟁사' 흐름이 이어지게.
+       진입(handleRegisterCompetitor) 시 localStorage에 저장한 컨텍스트를, 새 탭 로드 시 30분 이내면 복원.
+       (일반 흐름엔 무영향: 저장된 값 없으면 아무 일도 안 함) */
+    useEffect(function() {
+        try {
+            if (competitorContext) return;              // 이미 모드면 유지
+            var raw = localStorage.getItem('logic_comp_ctx');
+            if (!raw) return;
+            var ctx = JSON.parse(raw);
+            if (ctx && ctx.competitor_of && ctx.ts && (Date.now() - ctx.ts) < 30 * 60 * 1000) {
+                setCompetitorContext({ competitor_of: ctx.competitor_of, advName: ctx.advName });
+            } else {
+                localStorage.removeItem('logic_comp_ctx');  // 만료 → 정리
+            }
+        } catch(e) {}
+    }, []);
+
     // 헬스체크
     useEffect(function() {
         if (currentUser) {
@@ -305,6 +322,9 @@ window.App = function App() {
     var handleRegisterCompetitor = function(advClient) {
         if (!advClient) return;
         setCompetitorContext({ competitor_of: advClient.id, advName: advClient.name });
+        // 확장으로 경쟁사를 보내면 '새 로직 탭'이 열려 이 모드가 사라진다 →
+        // 같은 오리진 localStorage에 잠깐(30분) 저장해 새 탭에서 복원(확장 수정 불필요).
+        try { localStorage.setItem('logic_comp_ctx', JSON.stringify({ competitor_of: advClient.id, advName: advClient.name, ts: Date.now() })); } catch(e) {}
         setCurrentClientId(null);
         setAutoSaveStatus('');
         setSearchBarInitial({ keyword: '', productUrl: '', companyName: '' });
@@ -316,7 +336,7 @@ window.App = function App() {
     /* ==================== 업체 카드 클릭 → 자동 분석 ==================== */
     var handleClientClick = function(params) {
         if (!params) return;
-        setCompetitorContext(null);  // 일반 업체 분석 → 경쟁사 모드 해제
+        setCompetitorContext(null); try { localStorage.removeItem('logic_comp_ctx'); } catch(e) {}  // 일반 업체 분석 → 경쟁사 모드 해제
         setCurrentClientId(params.clientId);
         setSearchBarInitial({
             keyword: params.keyword || '',
@@ -544,9 +564,9 @@ window.App = function App() {
             competitorContext && React.createElement('div', {
                 style: { background: '#fff7ed', color: '#c2410c', border: '1px solid #fed7aa', padding: '10px 16px', fontSize: 13, fontWeight: 700, textAlign: 'center', borderRadius: 10, margin: '10px auto', maxWidth: 1200 }
             },
-                "⚔️ 경쟁사 등록 모드 — 이 분석을 " + ((currentUser && currentUser.role === 'viewer') ? '영업 대상' : '광고주') + " '" + competitorContext.advName + "'의 경쟁사로 저장합니다. 분석 후 하단 '경쟁사로 저장'을 누르세요.",
+                "⚔️ 경쟁사 등록 모드 — 이 분석을 " + ((currentUser && currentUser.role === 'viewer') ? '영업 대상' : '광고주') + " '" + competitorContext.advName + "'의 경쟁사로 저장합니다. 경쟁사 상품 페이지에서 확장 프로그램(또는 북마클릿)으로 보내거나 아래에 붙여넣어 분석 후 '경쟁사로 저장'을 누르세요.",
                 React.createElement('button', {
-                    onClick: function() { setCompetitorContext(null); try { toast.info('일반 분석 모드로 전환했습니다.'); } catch(e) {} },
+                    onClick: function() { setCompetitorContext(null); try { localStorage.removeItem('logic_comp_ctx'); } catch(e) {} try { toast.info('일반 분석 모드로 전환했습니다.'); } catch(e) {} },
                     style: { marginLeft: 12, fontSize: 11.5, fontWeight: 700, color: '#c2410c', background: '#fff', border: '1px solid #fdba74', borderRadius: 7, padding: '3px 10px', cursor: 'pointer' }
                 }, '모드 해제')
             ),
@@ -578,7 +598,7 @@ window.App = function App() {
                 shopProducts: shopProducts,
                 volumeData: volumeData,
                 competitorContext: competitorContext,
-                onCompetitorSaved: function() { setCompetitorContext(null); }
+                onCompetitorSaved: function() { setCompetitorContext(null); try { localStorage.removeItem('logic_comp_ctx'); } catch(e) {} }
             })
         ),
         React.createElement(window.ChatWidget, { currentUser: currentUser })
