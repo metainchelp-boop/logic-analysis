@@ -1,7 +1,7 @@
 /* SaveToClientSection — 분석 결과를 업체로 저장하는 섹션 */
 window.SaveToClientSection = function SaveToClientSection({
     keyword, productUrl, analysisData, volumeData, relatedData, shopProducts, advertiserReport, detailHtml, htmlDetailResult,
-    competitorContext, onCompetitorSaved, allowCompetitorOnly
+    competitorContext, onCompetitorSaved, allowCompetitorOnly, defaultName
 }) {
     var _React = React;
     var useState = _React.useState;
@@ -34,8 +34,10 @@ window.SaveToClientSection = function SaveToClientSection({
         if (showModal) {
             loadClients();
             if (_forceComp) setSaveMode('competitor');
+            // 업체명/경쟁사명 자동 채우기 — 비어 있으면 스토어명 등 기본값으로
+            if (!clientName && defaultName) setClientName(defaultName);
         }
-    }, [showModal, loadClients, _forceComp]);
+    }, [showModal, loadClients, _forceComp, defaultName]);
 
     if (!keyword || !analysisData) return null;
 
@@ -167,7 +169,13 @@ window.SaveToClientSection = function SaveToClientSection({
                         padding: '12px 32px', borderRadius: 10, fontSize: 15, fontWeight: 700,
                         cursor: 'pointer', boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
                     }
-                }, _forceComp ? '⚔️ 경쟁사로 저장' : '업체 등록 / 저장')
+                }, _forceComp ? '⚔️ 경쟁사로 저장' : '업체 등록 / 저장'),
+                /* 경쟁사 비교 안내 (진입점 발견성) */
+                React.createElement('div', { style: { marginTop: 12, fontSize: 12, opacity: 0.92, lineHeight: 1.6 } },
+                    _forceComp
+                        ? '⚔️ 경쟁사 비교: 위 버튼으로 이 상품을 광고주의 경쟁사로 저장하면, 업체관리에서 광고주와 나란히 비교할 수 있습니다.'
+                        : '⚔️ 경쟁사와 비교하려면: 이 업체를 저장한 뒤 [업체관리] → 해당 업체 → "경쟁사 등록"에서 경쟁사 상품을 분석해 추가하세요. (경쟁사도 상품 페이지에서 분석 후 저장)'
+                )
             )
         ),
 

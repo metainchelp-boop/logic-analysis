@@ -57,3 +57,10 @@
 - BE: `list_competitors` — viewer는 `created_by=본인`만 반환(관리팀=전체). 각 항목 `mine` 플래그. `compare`·`compare-coaching`도 viewer는 본인 등록 경쟁사만 접근(403 가드).
 - FE: `CompetitorCompareSection` — viewer면 슬롯 제목 "경쟁사 비교 (내 영업자료)"·"내가 등록한 경쟁사만 표시" + 관리팀 화면엔 본인 등록분에 '내 등록' 배지. `ClientDashboard`에서 `isViewer` 전달.
 - 검증: 스코핑 SQL — viewer9/viewer8 각자 본인 것만·관리팀 전체 PASS.
+
+## 실사용 보완 (2026-07-24) — 스토어명 자동채움 + 경쟁사 진입 안내
+
+- 신고: 판매페이지 확장 분석 시 커버 '광고주/스토어'가 "-"로 비어있고, 경쟁사 등록 위치가 안 보임.
+- 스토어명 자동채움: `AnalysisResults` — companyName 미지정(확장 자동분석)이면 `advertiserReport.product_info.store_name` → `analysisData.targetProductInfo.store_name` → 상품 URL 스마트스토어 슬러그 순으로 커버(`_displayCompany`) 자동 표기. `SaveToClientSection`에 `defaultName` 전달 → 저장 모달 업체명/경쟁사명 기본값 자동 채움.
+- 경쟁사 진입 발견성: 저장 카드에 안내 추가 — 관리팀 "이 업체 저장 후 업체관리→경쟁사 등록", viewer "경쟁사로 저장하면 업체관리에서 비교". (경쟁사 비교 UI 자체는 업체관리에 있음 — 발견성만 보완)
+- 검증: FE 렌더 4/4 PASS(실측 스토어명·URL 슬러그 폴백·안내 노출).

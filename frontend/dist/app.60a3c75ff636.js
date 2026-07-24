@@ -10443,7 +10443,8 @@ window.SaveToClientSection = function SaveToClientSection({
   htmlDetailResult,
   competitorContext,
   onCompetitorSaved,
-  allowCompetitorOnly
+  allowCompetitorOnly,
+  defaultName
 }) {
   var _React = React;
   var useState = _React.useState;
@@ -10494,8 +10495,10 @@ window.SaveToClientSection = function SaveToClientSection({
     if (showModal) {
       loadClients();
       if (_forceComp) setSaveMode('competitor');
+      // 업체명/경쟁사명 자동 채우기 — 비어 있으면 스토어명 등 기본값으로
+      if (!clientName && defaultName) setClientName(defaultName);
     }
-  }, [showModal, loadClients, _forceComp]);
+  }, [showModal, loadClients, _forceComp, defaultName]);
   if (!keyword || !analysisData) return null;
 
   /* DOM 캡처 — 공용 빌더(ReportCapture) 사용 (v6.7 통일)
@@ -10644,7 +10647,15 @@ window.SaveToClientSection = function SaveToClientSection({
       cursor: 'pointer',
       boxShadow: '0 2px 8px rgba(0,0,0,0.15)'
     }
-  }, _forceComp ? '⚔️ 경쟁사로 저장' : '업체 등록 / 저장'))), /* 모달 */
+  }, _forceComp ? '⚔️ 경쟁사로 저장' : '업체 등록 / 저장'), /* 경쟁사 비교 안내 (진입점 발견성) */
+  React.createElement('div', {
+    style: {
+      marginTop: 12,
+      fontSize: 12,
+      opacity: 0.92,
+      lineHeight: 1.6
+    }
+  }, _forceComp ? '⚔️ 경쟁사 비교: 위 버튼으로 이 상품을 광고주의 경쟁사로 저장하면, 업체관리에서 광고주와 나란히 비교할 수 있습니다.' : '⚔️ 경쟁사와 비교하려면: 이 업체를 저장한 뒤 [업체관리] → 해당 업체 → "경쟁사 등록"에서 경쟁사 상품을 분석해 추가하세요. (경쟁사도 상품 페이지에서 분석 후 저장)'))), /* 모달 */
   showModal && React.createElement('div', {
     style: {
       position: 'fixed',
@@ -20221,6 +20232,18 @@ window.AnalysisResults = function AnalysisResults(props) {
   var setRankCheckResult = props.setRankCheckResult;
   var shopProducts = props.shopProducts;
   var volumeData = props.volumeData;
+
+  /* 광고주/스토어명 자동 채우기 — companyName 미지정(확장 자동분석 등) 시 분석 결과의
+     실제 스토어명, 없으면 상품 URL의 스마트스토어 슬러그로 폴백. */
+  var _storeName = advertiserReport && advertiserReport.product_info && advertiserReport.product_info.store_name || analysisData && analysisData.targetProductInfo && analysisData.targetProductInfo.store_name || function () {
+    try {
+      var m = (searchedProductUrl || '').match(/smartstore\.naver\.com\/([^\/?#]+)/);
+      return m ? decodeURIComponent(m[1]) : '';
+    } catch (e) {
+      return '';
+    }
+  }() || '';
+  var _displayCompany = companyName || _storeName;
   return React.createElement('div', {
     className: 'report-shell'
   }, /* 좌측 고정 목차 (와이드 화면 전용) — 분석 결과(섹션 2개 이상)가 있을 때만 표시 */
@@ -20268,7 +20291,7 @@ window.AnalysisResults = function AnalysisResults(props) {
     className: 'rc-k'
   }, '광고주 / 스토어'), React.createElement('div', {
     className: 'rc-v'
-  }, companyName || '-')), React.createElement('div', {
+  }, _displayCompany || '-')), React.createElement('div', {
     className: 'rc-field'
   }, React.createElement('div', {
     className: 'rc-k'
@@ -20712,7 +20735,8 @@ window.AnalysisResults = function AnalysisResults(props) {
     htmlDetailResult: htmlDetailResult,
     competitorContext: props.competitorContext,
     onCompetitorSaved: props.onCompetitorSaved,
-    allowCompetitorOnly: currentUser.role === 'viewer'
+    allowCompetitorOnly: currentUser.role === 'viewer',
+    defaultName: _displayCompany
   })), /* 21. 보고서 출력 */
   searchedProductUrl && React.createElement(window.SectionErrorBoundary, {
     name: '보고서'
