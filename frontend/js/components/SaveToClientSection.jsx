@@ -1,6 +1,7 @@
 /* SaveToClientSection — 분석 결과를 업체로 저장하는 섹션 */
 window.SaveToClientSection = function SaveToClientSection({
-    keyword, productUrl, analysisData, volumeData, relatedData, shopProducts, advertiserReport, detailHtml, htmlDetailResult
+    keyword, productUrl, analysisData, volumeData, relatedData, shopProducts, advertiserReport, detailHtml, htmlDetailResult,
+    competitorContext, onCompetitorSaved
 }) {
     var _React = React;
     var useState = _React.useState;
@@ -62,17 +63,24 @@ window.SaveToClientSection = function SaveToClientSection({
             detail_html: detailHtml || '',
         };
 
-        if (saveMode === 'new') {
+        var isCompMode = competitorContext && competitorContext.competitor_of;
+        if (saveMode === 'new' || isCompMode) {
             if (!clientName.trim()) {
-                setMessage('업체명을 입력해주세요.');
+                setMessage(isCompMode ? '경쟁사명을 입력해주세요.' : '업체명을 입력해주세요.');
                 setSaving(false);
                 return;
             }
             payload.name = clientName.trim();
+            // 경쟁사 등록 모드: 광고주에 연결된 경쟁사로 저장 (광고주 리스트/자동추적엔 안 섞임)
+            if (isCompMode) {
+                payload.role = 'competitor';
+                payload.competitor_of = competitorContext.competitor_of;
+            }
             api.post('/cd/quick-register', payload).then(function(res) {
                 if (res.success) {
                     setSuccess(true);
                     setMessage(res.message);
+                    if (isCompMode && onCompetitorSaved) { try { onCompetitorSaved(); } catch(e) {} }
                 } else {
                     var errMsg = typeof res.detail === 'string' ? res.detail : '저장에 실패했습니다.';
                     setMessage(errMsg);

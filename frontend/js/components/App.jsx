@@ -48,6 +48,9 @@ window.App = function App() {
     /* 순위 추적 → 업체관리 이동 시 자동 검색용 */
     const [managementInitialSearch, setManagementInitialSearch] = useState(null);
 
+    /* 경쟁사 등록 모드 — 설정 시 이 분석을 광고주의 경쟁사로 저장 (null=일반) */
+    const [competitorContext, setCompetitorContext] = useState(null); // { competitor_of, advName }
+
 
     var saveAuth = function(user, token) {
         setCurrentUser(user); setAuthToken(token);
@@ -296,9 +299,24 @@ window.App = function App() {
         try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch(e) {}
     };
 
+    /* ==================== 경쟁사 등록 모드 진입 ==================== */
+    /* 업체 상세의 '경쟁사 등록' → 분석 화면으로 전환. 이후 분석을 저장하면
+       광고주(advClient)의 경쟁사로 quick-register 된다(SaveToClientSection이 competitorContext 사용). */
+    var handleRegisterCompetitor = function(advClient) {
+        if (!advClient) return;
+        setCompetitorContext({ competitor_of: advClient.id, advName: advClient.name });
+        setCurrentClientId(null);
+        setAutoSaveStatus('');
+        setSearchBarInitial({ keyword: '', productUrl: '', companyName: '' });
+        setCurrentPage('analysis');
+        try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch(e) {}
+        try { toast.info("경쟁사 등록 모드 — '" + advClient.name + "'의 경쟁사 상품을 분석 후 저장하세요."); } catch(e) {}
+    };
+
     /* ==================== 업체 카드 클릭 → 자동 분석 ==================== */
     var handleClientClick = function(params) {
         if (!params) return;
+        setCompetitorContext(null);  // 일반 업체 분석 → 경쟁사 모드 해제
         setCurrentClientId(params.clientId);
         setSearchBarInitial({
             keyword: params.keyword || '',
@@ -443,6 +461,7 @@ window.App = function App() {
             React.createElement(window.ClientDashboard, {
                 currentUser: currentUser,
                 onRunAnalysis: handleClientClick,
+                onRegisterCompetitor: handleRegisterCompetitor,
                 onDownloadReport: downloadSavedReport,
                 initialSearch: managementInitialSearch,
                 canEdit: currentUser.role !== 'viewer'
@@ -521,6 +540,17 @@ window.App = function App() {
                 autoSaveStatus === 'error' ? '⚠️ 자동 저장에 실패했습니다. 하단의 "업체 등록/저장" 버튼을 이용해주세요' : ''
             ),
 
+            /* 경쟁사 등록 모드 배너 */
+            competitorContext && React.createElement('div', {
+                style: { background: '#fff7ed', color: '#c2410c', border: '1px solid #fed7aa', padding: '10px 16px', fontSize: 13, fontWeight: 700, textAlign: 'center', borderRadius: 10, margin: '10px auto', maxWidth: 1200 }
+            },
+                "⚔️ 경쟁사 등록 모드 — 이 분석을 광고주 '" + competitorContext.advName + "'의 경쟁사로 저장합니다. 분석 후 하단 '업체 등록/저장'을 누르세요.",
+                React.createElement('button', {
+                    onClick: function() { setCompetitorContext(null); try { toast.info('일반 분석 모드로 전환했습니다.'); } catch(e) {} },
+                    style: { marginLeft: 12, fontSize: 11.5, fontWeight: 700, color: '#c2410c', background: '#fff', border: '1px solid #fdba74', borderRadius: 7, padding: '3px 10px', cursor: 'pointer' }
+                }, '모드 해제')
+            ),
+
             /* ==================== 보고서 레이아웃: 좌측 목차 + 본문 ==================== */
             React.createElement(window.AnalysisResults, {
                 advertiserLoading: advertiserLoading,
@@ -546,7 +576,9 @@ window.App = function App() {
                 sections: sections,
                 setRankCheckResult: setRankCheckResult,
                 shopProducts: shopProducts,
-                volumeData: volumeData
+                volumeData: volumeData,
+                competitorContext: competitorContext,
+                onCompetitorSaved: function() { setCompetitorContext(null); }
             })
         ),
         React.createElement(window.ChatWidget, { currentUser: currentUser })

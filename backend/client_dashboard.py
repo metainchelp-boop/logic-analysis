@@ -319,6 +319,10 @@ class QuickRegisterRequest(BaseModel):
     advertiser_data: Optional[Any] = {}
     report_html: Optional[str] = ''
     detail_html: Optional[str] = ''  # #1: 상세페이지 HTML(재분석/자동분석 재사용)
+    # 경쟁사 비교(2026-07): role='competitor' + competitor_of=<광고주 client_id> 로 등록하면
+    # 광고주 리스트/자동추적/정산에서 제외되고 비교 화면에서만 쓰인다. 기본은 광고주.
+    role: Optional[str] = 'advertiser'
+    competitor_of: Optional[int] = None
 
 
 class SaveRankRequest(BaseModel):
@@ -341,10 +345,21 @@ def quick_register(req: QuickRegisterRequest, current_user: dict = Depends(requi
         now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         today = date.today().isoformat()
 
-        # 같은 이름의 업체가 이미 있는지 확인 (본인 소유)
+        # 경쟁사 등록 여부 판정 (role='competitor' + competitor_of=<광고주 id>)
+        is_comp = (str(req.role or 'advertiser') == 'competitor') and req.competitor_of
+        role = 'competitor' if is_comp else 'advertiser'
+        comp_of = int(req.competitor_of) if is_comp else None
+        if is_comp:
+            # 연결 광고주 존재 확인 (경쟁사는 반드시 광고주에 연결)
+            adv = conn.execute("SELECT id FROM clients WHERE id = ? AND COALESCE(role,'advertiser')='advertiser'", (comp_of,)).fetchone()
+            if not adv:
+                raise HTTPException(status_code=400, detail="연결할 광고주 업체를 찾을 수 없습니다.")
+
+        # 같은 이름의 업체가 이미 있는지 확인 (본인 소유 · 같은 유형/연결 범위 내 — 경쟁사가 광고주를 덮지 않게)
         existing = conn.execute(
-            "SELECT id FROM clients WHERE name = ? AND created_by = ?",
-            (req.name, user_id)
+            "SELECT id FROM clients WHERE name = ? AND created_by = ? "
+            "AND COALESCE(role,'advertiser') = ? AND COALESCE(competitor_of,0) = ?",
+            (req.name, user_id, role, comp_of or 0)
         ).fetchone()
 
         if existing:
@@ -360,17 +375,19 @@ def quick_register(req: QuickRegisterRequest, current_user: dict = Depends(requi
                     "UPDATE clients SET main_keywords = ?, updated_at = ? WHERE id = ?",
                     (', '.join(kw_list), now, client_id)
                 )
-            msg = f"'{req.name}' 업체에 분석 결과가 추가되었습니다."
+            msg = (f"경쟁사 '{req.name}' 분석 결과가 갱신되었습니다." if is_comp
+                   else f"'{req.name}' 업체에 분석 결과가 추가되었습니다.")
         else:
-            # 신규 업체 등록
+            # 신규 업체 등록 (광고주 또는 경쟁사)
             cursor = conn.execute("""
                 INSERT INTO clients (name, business_name, main_keywords, naver_store_url,
-                    status, created_by, created_at, updated_at)
-                VALUES (?, ?, ?, ?, 'active', ?, ?, ?)
+                    status, created_by, created_at, updated_at, role, competitor_of)
+                VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)
             """, (req.name, req.name, req.keyword, req.product_url or '',
-                  user_id, now, now))
+                  user_id, now, now, role, comp_of))
             client_id = cursor.lastrowid
-            msg = f"'{req.name}' 업체가 등록되고 분석 결과가 저장되었습니다."
+            msg = (f"경쟁사 '{req.name}'가 등록되고 분석되었습니다." if is_comp
+                   else f"'{req.name}' 업체가 등록되고 분석 결과가 저장되었습니다.")
 
         # 분석 결과 저장 (일자별 누적)
         _save_analysis_internal(conn, client_id, req.keyword, req.product_url or '',
@@ -461,11 +478,11 @@ def my_clients(current_user: dict = Depends(get_current_user)):
                  "created_by, created_at, updated_at")
         if is_adm or user_role == "viewer":
             clients = conn.execute(
-                f"SELECT {_COLS} FROM clients WHERE status='active' ORDER BY updated_at DESC"
+                f"SELECT {_COLS} FROM clients WHERE status='active' AND COALESCE(role,'advertiser')='advertiser' ORDER BY updated_at DESC"
             ).fetchall()
         else:
             clients = conn.execute(
-                f"SELECT {_COLS} FROM clients WHERE status='active' "
+                f"SELECT {_COLS} FROM clients WHERE status='active' AND COALESCE(role,'advertiser')='advertiser' "
                 "AND (created_by = ? OR created_by IS NULL OR created_by = '') "
                 "ORDER BY updated_at DESC",
                 (user_id,)
@@ -557,12 +574,12 @@ def registered_clients(current_user: dict = Depends(get_current_user)):
         # admin/viewer → 전체 업체, manager → 본인 등록분만
         if is_adm or user_role == "viewer":
             rows = conn.execute(
-                "SELECT id, name, main_keywords FROM clients WHERE status = 'active' ORDER BY name ASC"
+                "SELECT id, name, main_keywords FROM clients WHERE status = 'active' AND COALESCE(role,'advertiser')='advertiser' ORDER BY name ASC"
             ).fetchall()
         else:
             rows = conn.execute(
                 "SELECT id, name, main_keywords FROM clients "
-                "WHERE status = 'active' AND (created_by = ? OR created_by IS NULL OR created_by = '') "
+                "WHERE status = 'active' AND COALESCE(role,'advertiser')='advertiser' AND (created_by = ? OR created_by IS NULL OR created_by = '') "
                 "ORDER BY name ASC",
                 (user_id,)
             ).fetchall()
@@ -913,6 +930,133 @@ def get_ai_insights(client_id: int, current_user: dict = Depends(get_current_use
     except Exception as e:
         logger.error(f"[ai-insights] {e}")
         return {"success": False, "detail": str(e)}
+
+
+def _latest_analysis_light(conn, client_id: int):
+    """업체의 가장 최근(일자) 분석 1건을 경량 파싱해 반환 (없으면 None)."""
+    light_cols = """id, client_id, keyword, product_url,
+        analysis_json, volume_json, related_json, advertiser_json,
+        analyzed_date, created_at, updated_at,
+        CASE WHEN report_html IS NOT NULL AND report_html != '' THEN 1 ELSE 0 END as has_report_html"""
+    row = conn.execute(
+        f"SELECT {light_cols} FROM client_analyses WHERE client_id=? ORDER BY analyzed_date DESC, updated_at DESC LIMIT 1",
+        (client_id,)
+    ).fetchone()
+    return _parse_analysis_row_light(row) if row else None
+
+
+@router.get("/{client_id}/competitors")
+def list_competitors(client_id: int, current_user: dict = Depends(get_current_user)):
+    """광고주에 연결된 경쟁사 목록 (각 경쟁사 최근 분석 요약 포함)."""
+    conn = _get_conn()
+    try:
+        _verify_client_access(conn, client_id, current_user)  # 광고주 접근권
+        rows = conn.execute(
+            "SELECT id, name, main_keywords, naver_store_url, updated_at "
+            "FROM clients WHERE COALESCE(role,'advertiser')='competitor' AND competitor_of = ? "
+            "AND status='active' ORDER BY updated_at DESC",
+            (client_id,)
+        ).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            la = _latest_analysis_light(conn, r["id"])
+            d["has_analysis"] = bool(la)
+            d["latest_keyword"] = (la or {}).get("keyword", "")
+            d["latest_date"] = (la or {}).get("analyzed_date", "")
+            out.append(d)
+        return {"success": True, "data": out}
+    finally:
+        conn.close()
+
+
+@router.get("/compare")
+def compare_clients(advertiser_id: int, competitor_id: int,
+                    current_user: dict = Depends(get_current_user)):
+    """광고주 vs 경쟁사 최근 분석 1건씩 반환 → FE가 지표 비교·격차·매트릭스 계산.
+    경쟁사는 반드시 해당 광고주에 연결된 것이어야 함(교차 접근 방지)."""
+    conn = _get_conn()
+    try:
+        adv_row = _verify_client_access(conn, advertiser_id, current_user)
+        comp = conn.execute(
+            "SELECT id, name, competitor_of, role FROM clients WHERE id = ?", (competitor_id,)
+        ).fetchone()
+        if not comp:
+            raise HTTPException(status_code=404, detail="경쟁사를 찾을 수 없습니다.")
+        if str(comp["role"] or 'advertiser') != 'competitor' or comp["competitor_of"] != advertiser_id:
+            raise HTTPException(status_code=400, detail="해당 광고주에 연결된 경쟁사가 아닙니다.")
+        adv_name = conn.execute("SELECT name FROM clients WHERE id=?", (advertiser_id,)).fetchone()["name"]
+        return {"success": True, "data": {
+            "advertiser": {"id": advertiser_id, "name": adv_name, "analysis": _latest_analysis_light(conn, advertiser_id)},
+            "competitor": {"id": competitor_id, "name": comp["name"], "analysis": _latest_analysis_light(conn, competitor_id)},
+        }}
+    finally:
+        conn.close()
+
+
+class CompareCoachingRequest(BaseModel):
+    advertiser_id: int
+    competitor_id: int
+    summary: Optional[str] = ''   # FE가 계산한 지표 격차 요약(사람이 읽는 텍스트) — 토큰 절약
+
+
+@router.post("/compare-coaching")
+def compare_coaching(req: CompareCoachingRequest, current_user: dict = Depends(get_current_user)):
+    """AI 대결 코칭 — 광고주 vs 경쟁사 지표 격차를 Claude에 넣어 '이기려면' 전략 브리핑 생성.
+    FE가 넘긴 격차 요약(summary)을 우선 사용(토큰 절약). CLAUDE_API_KEY 미설정 시 친화적 안내."""
+    conn = _get_conn()
+    try:
+        _verify_client_access(conn, req.advertiser_id, current_user)
+        comp = conn.execute(
+            "SELECT name, competitor_of, role FROM clients WHERE id = ?", (req.competitor_id,)
+        ).fetchone()
+        if not comp or str(comp["role"] or 'advertiser') != 'competitor' or comp["competitor_of"] != req.advertiser_id:
+            raise HTTPException(status_code=400, detail="해당 광고주에 연결된 경쟁사가 아닙니다.")
+        adv_name = conn.execute("SELECT name FROM clients WHERE id=?", (req.advertiser_id,)).fetchone()["name"]
+
+        summary = (req.summary or '').strip()
+        if not summary:
+            # 요약 미전달 시 최소 컨텍스트 구성 (양측 최근 분석 요약)
+            def _one(cid):
+                la = _latest_analysis_light(conn, cid) or {}
+                vol = (la.get("volume_data") or [{}])
+                v0 = vol[0] if isinstance(vol, list) and vol else {}
+                return f"키워드={la.get('keyword','?')}, 경쟁강도={v0.get('compIdx','?')}"
+            summary = f"[광고주 {adv_name}] {_one(req.advertiser_id)}\n[경쟁사 {comp['name']}] {_one(req.competitor_id)}"
+
+        try:
+            from chat import _get_claude_client, CLAUDE_MODEL
+        except Exception:
+            return {"success": True, "data": {"text": "", "available": False,
+                    "message": "AI 코칭을 사용하려면 관리자가 CLAUDE_API_KEY를 설정해야 합니다."}}
+        client = _get_claude_client()
+        if not client:
+            return {"success": True, "data": {"text": "", "available": False,
+                    "message": "AI 코칭을 사용하려면 관리자가 CLAUDE_API_KEY를 설정해야 합니다."}}
+
+        system = (
+            "너는 10년차 네이버 쇼핑 퍼포먼스 마케팅 전문가다. 광고주가 특정 경쟁사를 이기도록 코칭한다. "
+            "반드시 아래 4개 소제목으로만, 한국어로, 실행 가능하고 구체적으로 답하라. 표·마크다운 기호 남발 금지. "
+            "1) 한줄 결론(역전 가능성) 2) 지금 당장 할 것 3가지(우선순위·격차 근거) "
+            "3) 경쟁사 약점을 파고들 포인트 4) 유지할 강점. 광고주 이름과 경쟁사 이름을 실제로 언급."
+        )
+        user_msg = (
+            f"광고주 '{adv_name}' vs 경쟁사 '{comp['name']}' 비교 지표 격차입니다. "
+            f"이 광고주가 이 경쟁사를 이기기 위한 전략을 코칭해줘.\n\n{summary}"
+        )
+        try:
+            resp = client.messages.create(
+                model=CLAUDE_MODEL, max_tokens=1200,
+                system=system, messages=[{"role": "user", "content": user_msg}],
+            )
+            text = resp.content[0].text if resp.content else ""
+            return {"success": True, "data": {"text": text, "available": True}}
+        except Exception as e:
+            logger.error(f"[compare-coaching] Claude 호출 실패: {e}")
+            return {"success": True, "data": {"text": "", "available": False,
+                    "message": "AI 코칭 생성 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요."}}
+    finally:
+        conn.close()
 
 
 @router.get("/review-trend")
