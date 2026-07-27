@@ -1028,6 +1028,8 @@ def detail_page_analyze(req: DetailPageAnalysisRequest, current_user: dict = Dep
                 "scores": result["scores"],
                 "suggestions": result["suggestions"],
                 "reviewData": result.get("reviewData"),
+                # 표시용 스토어/상호명 — 보고서 표지의 슬러그 오표기 방지(2026-07-27)
+                "storeInfo": result.get("storeInfo") or {"name": "", "source": ""},
             }
         }
     except Exception as e:

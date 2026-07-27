@@ -20496,16 +20496,33 @@ window.AnalysisResults = function AnalysisResults(props) {
   var shopProducts = props.shopProducts;
   var volumeData = props.volumeData;
 
-  /* 광고주/스토어명 자동 채우기 — companyName 미지정(확장 자동분석 등) 시 분석 결과의
-     실제 스토어명, 없으면 상품 URL의 스마트스토어 슬러그로 폴백. */
-  var _storeName = advertiserReport && advertiserReport.product_info && advertiserReport.product_info.store_name || analysisData && analysisData.targetProductInfo && analysisData.targetProductInfo.store_name || function () {
+  /* 광고주/스토어명 자동 채우기 (2026-07-27 수정)
+     주의: 백엔드 store_name 은 쇼핑API 매칭·상품페이지 방문이 모두 실패하면
+     'URL 슬러그'가 그대로 담긴다. 슬러그가 이메일 아이디인 업체가 있어 표지에
+     'chajju2009' 처럼 찍히는 신고가 있었다(윤채은 07-27). 따라서 슬러그와 같은 값은
+     '이름 미확보'로 보고, 상세 HTML에서 뽑은 실제 상호명(storeInfo)을 우선 사용한다.
+     ※ 슬러그는 순위 매칭 키로 계속 쓰이므로 여기서는 '표시용'만 판단한다. */
+  var _urlSlug = function () {
     try {
       var m = (searchedProductUrl || '').match(/smartstore\.naver\.com\/([^\/?#]+)/);
       return m ? decodeURIComponent(m[1]) : '';
     } catch (e) {
       return '';
     }
-  }() || '';
+  }();
+  var _isSlug = function (v) {
+    return !!v && !!_urlSlug && String(v).trim().toLowerCase() === _urlSlug.trim().toLowerCase();
+  };
+  var _realStoreName = function () {
+    var cands = [htmlDetailResult && htmlDetailResult.storeInfo && htmlDetailResult.storeInfo.name, advertiserReport && advertiserReport.product_info && advertiserReport.product_info.store_name, analysisData && analysisData.targetProductInfo && analysisData.targetProductInfo.store_name, analysisData && analysisData.htmlDetail && analysisData.htmlDetail.storeInfo && analysisData.htmlDetail.storeInfo.name];
+    for (var i = 0; i < cands.length; i++) {
+      var v = cands[i] && String(cands[i]).trim();
+      if (v && !_isSlug(v)) return v; // 슬러그와 같은 값은 이름으로 인정하지 않음
+    }
+    return '';
+  }();
+  /* 실제 이름을 못 구하면 최후에만 슬러그(빈 표지보다는 낫다) */
+  var _storeName = _realStoreName || _urlSlug || '';
   var _displayCompany = companyName || _storeName;
   return React.createElement('div', {
     className: 'report-shell'

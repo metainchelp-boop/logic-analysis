@@ -1716,6 +1716,84 @@ def _analyze_reviews(reviews: list) -> dict:
     }
 
 
+def extract_store_display_name(html: str, product_url: str = "") -> Dict:
+    """상세페이지 HTML에서 '표시용' 스토어/상호명을 추출한다 (2026-07-27).
+
+    배경: get_product_info 는 쇼핑 API 매칭·상품페이지 방문이 모두 실패하면
+    store_name 을 URL 슬러그로 남긴다. 슬러그가 이메일 아이디인 업체가 있어
+    보고서 표지에 'chajju2009' 처럼 엉뚱한 값이 찍히는 신고가 있었다.
+    직원이 붙여넣는 상세 HTML에는 실제 상호명이 들어 있으므로 여기서 뽑는다.
+
+    ⚠️ 슬러그는 순위 매칭 키로 계속 쓰이므로 이 함수는 '표시용'만 반환하며,
+       기존 store_name/매칭 로직은 건드리지 않는다.
+    반환: {"name": str, "source": str}  — 못 찾으면 name=""
+    """
+    if not html:
+        return {"name": "", "source": ""}
+
+    slug = (extract_store_name_from_url(product_url) or "").strip().lower()
+    # 스토어명으로 볼 수 없는 일반 문구(플랫폼명 등)
+    # 공백을 제거한 형태로 비교한다("네이버 스마트스토어" 같은 변형까지 배제)
+    generic = {"네이버", "네이버쇼핑", "스마트스토어", "네이버스마트스토어", "브랜드스토어",
+               "네이버브랜드스토어", "smartstore", "naver", "navershopping", "쇼핑", "쇼핑몰"}
+
+    def _clean(v):
+        if not v:
+            return ""
+        s = str(v)
+        # HTML/JSON 내 유니코드 이스케이프(\uXXXX) 복원
+        if "\\u" in s:
+            try:
+                s = s.encode().decode("unicode_escape")
+            except Exception:
+                pass
+        s = re.sub(r"\s+", " ", s).strip().strip('"\'')
+        return s
+
+    def _ok(v):
+        """실제 상호명으로 볼 수 있는가 — 일반문구/슬러그/비정상 길이 배제"""
+        if not v or not (1 < len(v) <= 60):
+            return False
+        low = v.lower()
+        if re.sub(r"\s+", "", low) in generic:
+            return False
+        if slug and low == slug:      # 슬러그와 같으면 표시용으로 무의미
+            return False
+        return True
+
+    # 1) 스마트스토어 임베드 JSON — 채널(스토어) 표시명이 가장 정확
+    for pat, src in (
+        (r'"channelName"\s*:\s*"([^"]{1,60})"', "channelName"),
+        (r'"mallName"\s*:\s*"([^"]{1,60})"', "mallName"),
+        (r'"storeName"\s*:\s*"([^"]{1,60})"', "storeName"),
+    ):
+        for m in re.finditer(pat, html):
+            v = _clean(m.group(1))
+            if _ok(v):
+                return {"name": v, "source": src}
+
+    # 2) 판매자 정보의 '상호명' (사업자 정보 영역) — 화면에 보이는 그 값
+    try:
+        from bs4 import BeautifulSoup as _BS
+        text = _BS(html, "html.parser").get_text(" ", strip=True)
+    except Exception:
+        text = re.sub(r"<[^>]+>", " ", html)
+    m = re.search(r"상호(?:명)?\s*[:：]?\s*(.{1,60}?)\s*(?:대표자|사업자|고객센터|이메일|주소|통신판매|$)", text)
+    if m:
+        v = _clean(m.group(1))
+        if _ok(v):
+            return {"name": v, "source": "상호명"}
+
+    # 3) og:site_name (플랫폼 일반명이면 위 _ok 에서 걸러짐)
+    m = re.search(r'<meta[^>]+property=["\']og:site_name["\'][^>]+content=["\']([^"\']{1,60})["\']', html, re.I)
+    if m:
+        v = _clean(m.group(1))
+        if _ok(v):
+            return {"name": v, "source": "og:site_name"}
+
+    return {"name": "", "source": ""}
+
+
 def analyze_detail_page(html: str, product_url: str = "") -> Dict:
     """
     상세페이지 HTML을 분석하여 품질 지표를 추출
@@ -2282,4 +2360,6 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
         "scores": scores,
         "suggestions": suggestions,
         "reviewData": review_data,
+        # 표시용 스토어/상호명 (슬러그 오표기 방지 — 2026-07-27). 실패 시 name=""
+        "storeInfo": extract_store_display_name(html, product_url),
     }
