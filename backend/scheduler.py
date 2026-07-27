@@ -1,8 +1,9 @@
 """
 로직 분석 프로그램 v3 - 스케줄러 모듈
 APScheduler 기반 통합 스케줄러
-- 08:00 순위 추적 (홈탭 + 업체, 키워드당 1회 API, 결과 캐시)
-- 09:00 전체 분석 + HTML 보고서 (08시 캐시 재사용, API 추가 호출 없음)
+- 04:00 계약단계 동기화 · 04:30 순위 추적 (홈탭 + 업체, 키워드당 1회 API, 결과 캐시)
+- 05:00 전체 분석 + HTML 보고서 (04:30 캐시 재사용, API 추가 호출 없음) → 08:00 리포트 발송
+  ※ 2026-07-27 업무시간 502 사고로 전 배치를 새벽으로 이동(업무 시작 전 종료)
 - 일일 API 호출: ~147회 (기존 25,000+에서 99% 절감)
 """
 import logging
@@ -18,7 +19,7 @@ logger = logging.getLogger(__name__)
 # 글로벌 스케줄러 인스턴스
 _scheduler: BackgroundScheduler = None
 
-# 08시 순위 추적에서 캐시한 API 결과 → 09시 분석에서 재사용
+# 04:30 순위 추적에서 캐시한 API 결과 → 05:00 분석에서 재사용
 _api_cache = {}       # {keyword: {"prods": [...], "total": int}}
 _api_cache_date = ""  # 캐시 날짜 (당일만 유효)
 
@@ -48,42 +49,51 @@ def start_scheduler():
         job_defaults={"misfire_grace_time": 3600, "coalesce": True, "max_instances": 1},
     )
 
-    # 0) 계약단계 동기화 — 매일 07:30 (전산 ad-sync 소비 합의 2026-07-20, 08시 배치 전에 실행)
+    # ⏰ 배치 시간대 이동 (2026-07-27, 운영자 승인)
+    #   사유: 09:00 전체분석은 업체수×키워드마다 1~2초 대기하며 1시간 이상 도는 장시간 배치라
+    #   업무시간(10시대)까지 물려, 같은 컨테이너(RAM 1.9GB·uvicorn 워커 5)의 사용자 요청이
+    #   502로 실패하는 사고가 있었다(직원 신고 07-27 10:12). 체인 전체를 새벽으로 당겨
+    #   업무 시작(09:00) 전에 끝나게 한다. 의존 순서(계약동기화→순위추적 캐시→분석→발송)는 유지.
+
+    # 0) 계약단계 동기화 — 매일 04:00 (구 07:30. 분석 배치 전에 실행해 만료 업체를 제외)
+    #    ※ ad-sync 소비 합의(2026-07-20) 조건 유지: 하루 1회·읽기 전용·단계당 1콜,
+    #      ③ 광고센터의 06:00과 시간대 분리(04:00). 시각 변경은 ①에 통지 대상.
     _scheduler.add_job(
         _run_contract_stage_sync,
-        trigger=CronTrigger(hour=7, minute=30),
+        trigger=CronTrigger(hour=4, minute=0),
         id="contract_stage_sync",
-        name="계약단계 동기화 (07:30)",
+        name="계약단계 동기화 (04:00)",
         replace_existing=True,
         max_instances=1,
     )
 
-    # 1) 순위 추적 — 매일 08:00 (홈탭 + 업체, 키워드당 1회 API, 결과 캐시)
+    # 1) 순위 추적 — 매일 04:30 (구 08:00. 홈탭 + 업체, 키워드당 1회 API, 결과 캐시)
     _scheduler.add_job(
         _run_rank_tracking,
-        trigger=CronTrigger(hour=8, minute=0),
+        trigger=CronTrigger(hour=4, minute=30),
         id="rank_tracking",
-        name="순위 추적 (08:00)",
+        name="순위 추적 (04:30)",
         replace_existing=True,
         max_instances=1,
     )
 
-    # 2) 전체 분석 + 보고서 — 매일 09:00 (08시 캐시 재사용)
+    # 2) 전체 분석 + 보고서 — 매일 05:00 (구 09:00. 04:30 캐시 재사용)
+    #    발송(08:00)까지 3시간 확보 — 기존 09→10시 간격(1시간)보다 여유가 크다.
     _scheduler.add_job(
         _run_daily_analysis,
-        trigger=CronTrigger(hour=9, minute=0),
+        trigger=CronTrigger(hour=5, minute=0),
         id="daily_analysis",
-        name="전체 분석 + 보고서 (09:00)",
+        name="전체 분석 + 보고서 (05:00)",
         replace_existing=True,
         max_instances=1,
     )
 
-    # 3) 일일 리포트 발송 — 10:00 (분석 완료 후 발송)
+    # 3) 일일 리포트 발송 — 08:00 (구 10:00. 분석 완료 후 발송 · 업무 시작 전 도착)
     _scheduler.add_job(
         _run_daily_report,
-        trigger=CronTrigger(hour=10, minute=0),
+        trigger=CronTrigger(hour=8, minute=0),
         id="daily_report",
-        name="일일 리포트 발송 (10:00)",
+        name="일일 리포트 발송 (08:00)",
         replace_existing=True,
         max_instances=1,
     )
@@ -99,7 +109,7 @@ def start_scheduler():
     )
 
     _scheduler.start()
-    logger.info("✅ 스케줄러 시작 (순위: 08:00, 분석: 09:00, 리포트: 10:00, DB백업: 00:30)")
+    logger.info("✅ 스케줄러 시작 (계약동기화: 04:00, 순위: 04:30, 분석: 05:00, 리포트: 08:00, DB백업: 00:30)")
 
 
 def stop_scheduler():
@@ -128,11 +138,11 @@ def reschedule_report(hour: int, minute: int):
         logger.error(f"리포트 스케줄 변경 실패: {e}")
 
 
-# ==================== 07:30 계약단계 동기화 (전산 ad-sync 소비) ====================
+# ==================== 04:00 계약단계 동기화 (전산 ad-sync 소비) ====================
 #   합의(2026-07-20): ① 메타 전산의 GET /api/ad-sync/contracts 를 ②(로직분석)도 소비.
 #   계약이 끝난 단계(계약 만료·환불중·홀딩중) 업체는 자동 추적을 자동 중지(⏸),
 #   운영 단계(진행중·전략 관리·사후 관리)로 복귀하면 자동 재개(▶).
-#   - 읽기 전용 · 하루 1회(07:30 — ③ 광고센터 06:00과 시간 분리) · 단계당 1콜(총 6콜).
+#   - 읽기 전용 · 하루 1회(04:00 — ③ 광고센터 06:00과 시간 분리) · 단계당 1콜(총 6콜).
 #   - 직원 수동 토글(auto_analysis_manual=1) 업체는 절대 덮어쓰지 않음(수동 우선).
 #   - ERP_AD_SYNC_API_KEY 미설정·API 실패 시 아무것도 바꾸지 않음(안전 기본값).
 
@@ -181,7 +191,7 @@ def _decide_stage_actions(client_rows, stage_by_name, stage_by_slug):
 
 
 def _run_contract_stage_sync():
-    """07:30 — 전산 계약 단계 기반 자동 추적 중지/재개"""
+    """04:00 — 전산 계약 단계 기반 자동 추적 중지/재개"""
     import os
     import sqlite3
     import requests
@@ -245,7 +255,7 @@ def _run_contract_stage_sync():
         logger.error(f"❌ 계약단계 동기화 DB 반영 실패: {e}")
 
 
-# ==================== 08:00 순위 추적 ====================
+# ==================== 04:30 순위 추적 ====================
 
 def _collect_all_keywords(conn):
     """홈탭 추적 상품 + 업체 키워드 수집 (공통 유틸)"""
@@ -293,7 +303,7 @@ def _collect_all_keywords(conn):
 
 def _run_rank_tracking():
     """
-    08:00 순위 추적 — 키워드당 최대 300위(3페이지)까지 조회.
+    04:30 순위 추적 — 키워드당 최대 300위(3페이지)까지 조회.
     홈탭 순위 + 업체 순위를 동시에 처리.
     Rate Limit 방지를 위해 키워드당 약 18초 간격 → 약 50분 소요.
     """
@@ -441,11 +451,11 @@ def _run_rank_tracking():
         logger.error(f"❌ 순위 추적 전체 실패: {e}")
 
 
-# ==================== 09:00 전체 분석 + 보고서 ====================
+# ==================== 05:00 전체 분석 + 보고서 ====================
 
 def _run_daily_analysis():
     """
-    09:00 전체 분석 + HTML 보고서 — 08시 캐시된 상품 데이터를 재사용.
+    05:00 전체 분석 + HTML 보고서 — 04:30 캐시된 상품 데이터를 재사용.
     쇼핑 API 추가 호출 없음 (검색광고 API만 사용: 검색량 + 연관 키워드).
     캐시 미스 시에만 쇼핑 API 호출 (fallback).
     """
