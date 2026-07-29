@@ -1285,7 +1285,23 @@ def portal_summary(company: str = Query(None, description="전산 광고주 회�
             ORDER BY analyzed_date DESC
             LIMIT 8
         """, (cid,)).fetchall()
+        # 키워드별 최신 순위 — 04:30 순위 추적 배치 적재분(300위 범위, 밖이면 행 없음/NULL).
+        # 아래 seo.keywordVolume 에만 쓰며, 조회 실패해도 기존 응답은 그대로 나가게 감싼다.
+        rank_map = {}
+        try:
+            for rr in conn.execute("""
+                SELECT keyword, rank_position
+                FROM client_rank_history
+                WHERE client_id = ?
+                  AND id IN (SELECT MAX(id) FROM client_rank_history
+                             WHERE client_id = ? GROUP BY keyword)
+            """, (cid, cid)).fetchall():
+                rank_map[rr["keyword"]] = rr["rank_position"]
+        except Exception as e:
+            logger.warning(f"[portal-summary] rank lookup skipped: {e}")
+
         daily = []
+        kw_volume = []          # 전산(①) 공유 대시보드 소비용 — 아래 seo 블록
         for r in rep_rows:
             try:
                 ad = json.loads(r["analysis_json"] or "{}")
@@ -1303,6 +1319,14 @@ def portal_summary(company: str = Query(None, description="전산 광고주 회�
                 "keyword": r["keyword"],
                 "summary": " · ".join(parts) if parts else "분석 완료",
             })
+            # 검색량이 있는 키워드만 담는다(값 없는 행은 전산 화면에서 의미 없음).
+            if vol not in (None, "-", ""):
+                rk = rank_map.get(r["keyword"])
+                kw_volume.append({
+                    "keyword": r["keyword"],
+                    "volume": vol,
+                    "rank": str(rk) if rk not in (None, 0) else "-",
+                })
 
         total = conn.execute(
             "SELECT COUNT(*) AS c FROM client_analyses WHERE client_id = ?", (cid,)).fetchone()["c"]
@@ -1315,8 +1339,14 @@ def portal_summary(company: str = Query(None, description="전산 광고주 회�
                        f"현재 {len(daily)}개 키워드를 추적 중이며, 가장 최근 분석 키워드는 "
                        f"'{top['keyword']}'{tail}입니다.")
 
-        return {"found": True, "clientId": cid, "insight": insight,
-                "dailyReports": daily, "totalDays": total}
+        out = {"found": True, "clientId": cid, "insight": insight,
+               "dailyReports": daily, "totalDays": total}
+        # 전산(①) 공유 대시보드 「SEO 키워드 검색량」 소비 계약 — 2026-07-28 요청 반영.
+        # 값이 하나도 없으면 키 자체를 생략한다(전산이 담당자 입력값으로 폴백하도록 합의).
+        # 기존 4개 필드의 의미·형식은 그대로 → 전산 미배포 상태여도 무영향.
+        if kw_volume:
+            out["seo"] = {"keywordVolume": kw_volume}
+        return out
     except Exception as e:
         logger.error(f"[portal-summary] {e}")
         return {"found": False, "detail": str(e)}
