@@ -2739,10 +2739,59 @@ def naver_probe():
             f"https://search.shopping.naver.com/api/search/all?sort=rel&pagingIndex=1&pagingSize=40&query={q}"),
         "searchHtml": _probe_crawl("html",
             f"https://search.shopping.naver.com/search/all?query={q}"),
-        "scrapingBee": _probe_crawl("bee",
-            f"https://search.shopping.naver.com/api/search/all?sort=rel&pagingIndex=1&pagingSize=40&query={q}",
-            via_bee=True),
     }
+
+    # ScrapingBee 는 위 헬퍼(_fetch_via_scrapingbee)가 HTML 응답만 수용하도록 돼 있어
+    # JSON API 주소로는 성공해도 버려진다 → 여기서는 ScrapingBee 를 직접 호출해
+    # 상태코드·에러헤더·남은 크레딧까지 그대로 본다(되살릴 수 있는지 판단용).
+    def _probe_bee(url, stealth=True):
+        try:
+            from naver_crawler import SCRAPINGBEE_API_KEY, SCRAPINGBEE_API_URL
+            if not SCRAPINGBEE_API_KEY:
+                return {"ok": False, "note": "ScrapingBee 키 미설정"}
+            params = {"api_key": SCRAPINGBEE_API_KEY, "url": url, "render_js": "false",
+                      "block_resources": "false", "country_code": "kr",
+                      "transparent_status_code": "true"}
+            params["stealth_proxy" if stealth else "premium_proxy"] = "true"
+            r = requests.get(SCRAPINGBEE_API_URL, params=params, timeout=90)
+            body = r.text or ""
+            n = None
+            try:
+                if body.lstrip()[:1] in "{[":
+                    j = json.loads(body)
+                    node = j.get("shoppingResult") if isinstance(j, dict) else None
+                    if isinstance(node, dict) and isinstance(node.get("products"), list):
+                        n = len(node["products"])
+            except Exception:
+                pass
+            return {"ok": r.status_code == 200 and bool(body),
+                    "status": r.status_code, "bytes": len(body), "productsParsed": n,
+                    "spbError": r.headers.get("Spb-error-code") or r.headers.get("Spb-error"),
+                    "creditsLeft": r.headers.get("Spb-remaining-api-calls") or r.headers.get("Spb-remaining-calls"),
+                    "cost": r.headers.get("Spb-cost"),
+                    "bodyHead": body[:200]}
+        except Exception as e:
+            return {"ok": False, "error": str(e)[:200]}
+
+    out["crawlProbes"]["scrapingBeeJson"] = _probe_bee(
+        f"https://search.shopping.naver.com/api/search/all?sort=rel&pagingIndex=1&pagingSize=40&query={q}")
+
+    # 잘못 쌓인 순위 이력(수집 실패인데 미노출로 저장된 행) 규모 — 읽기 전용 집계
+    try:
+        import sqlite3 as _sq
+        from client_dashboard import DB_PATH as _CD_DB
+        _c = _sq.connect(_CD_DB, timeout=10)
+        rows = _c.execute("""
+            SELECT substr(checked_at,1,10) AS d, COUNT(*) AS total,
+                   SUM(CASE WHEN rank_position IS NULL THEN 1 ELSE 0 END) AS nulls
+            FROM client_rank_history
+            WHERE checked_at >= date('now','localtime','-7 day')
+            GROUP BY d ORDER BY d
+        """).fetchall()
+        _c.close()
+        out["rankHistoryRecent"] = [{"date": r[0], "total": r[1], "미노출": r[2]} for r in rows]
+    except Exception as e:
+        out["rankHistoryRecent"] = {"error": str(e)[:200]}
 
     _NAVER_PROBE_CACHE["at"], _NAVER_PROBE_CACHE["data"] = now, out
     return {"success": True, "cached": False, "data": out}
