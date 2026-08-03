@@ -21,10 +21,11 @@ const CFG = {
   pageSize: 80,          // 한 요청당 상품 수 (네이버 허용 상한)
   maxRank: 300,          // 300위까지 = 80 × 4페이지
   minGapMs: 1500,        // 요청 간 최소 간격
-  maxGapMs: 3000,        // 요청 간 최대 간격 (이 사이 랜덤)
-  keywordGapMs: 4000,    // 키워드 사이 추가 휴식
+  maxGapMs: 4000,        // 요청 간 최대 간격 (이 사이 랜덤 — 여유 확대 2026-08-04)
+  keywordGapMs: 8000,    // 키워드 사이 추가 휴식 (여유 확대 — 총 소요 ~6시간)
   maxConsecutiveFail: 5, // 연속 실패가 이만큼이면 그날 수집 중단(차단 의심)
-  runHour: 3,            // 매일 03시에 자동 시작 (서버 배치 04:30보다 먼저)
+  runHour: 21,           // 매일 밤 9시 시작 → 새벽 3시경 완료 (04:30 배치 전 여유)
+                         // 실측 4h+ 라 03시 시작으론 배치를 못 따라잡아 저녁으로 이동.
 };
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -232,7 +233,8 @@ async function runCollection(manual = false) {
     await log(`✅ 수집 종료 — 성공 ${done} · 실패 ${failed}`);
     // 성공 0 = 사실상 실패한 날 — finishedAt 을 남기지 않아 매시 만회 로직이 재시도하게 한다
     if (done > 0) {
-      await setState({ running: false, finishedAt: new Date().toISOString(), done, failed, current: '' });
+      await setState({ running: false, finishedAt: new Date().toISOString(),
+                       finishedCycle: cycleDate(), done, failed, current: '' });
     } else {
       await setState({ running: false, done, failed, current: '' });
       await log('⚠️ 성공 0건 — 완료로 기록하지 않음(다음 시각에 자동 재시도)');
@@ -304,16 +306,22 @@ function armAlarms() {
 chrome.runtime.onInstalled.addListener(() => { armAlarms(); log('설치됨 — 03시 자동 수집 + 1분 주기 온디맨드 대기.'); });
 chrome.runtime.onStartup.addListener(() => { armAlarms(); log('브라우저 시작 — 알람 재장전.'); });
 
+/** 수집 회차 날짜 — 서버 _effective_date 와 동일 규칙.
+ *  21시 이후 수집은 '다음 날 04:30 배치'용이므로 다음 날짜 회차로 센다. */
+function cycleDate() {
+  const d = new Date();
+  if (d.getHours() >= CFG.runHour) d.setDate(d.getDate() + 1);
+  // 로컬(KST) 날짜 — toISOString(UTC)을 쓰면 자정 부근에 하루 어긋난다
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 chrome.alarms.onAlarm.addListener(async (a) => {
   if (a.name === 'ondemand') { runOnDemand(); return; }
   if (a.name !== 'daily') return;
-  const now = new Date();
-  // 03시 정각을 놓쳤어도(새벽에 크롬이 꺼져 있었다면) 그날 처음 켜진 시점에 만회한다.
-  // 요청 속도는 시간대와 무관하게 사람 수준이라 낮에 돌아도 차단 위험은 같다.
-  if (now.getHours() < CFG.runHour) return;
+  // 이번 회차 수집이 아직이면 실행 — 21시 정각을 놓쳤어도(크롬 꺼짐 등)
+  // 다음 매시 확인 때 자동 만회된다. 서버가 완료 키워드를 빼고 주므로 이어받기도 됨.
   const { state = {} } = await chrome.storage.local.get('state');
-  const today = now.toISOString().slice(0, 10);
-  if ((state.finishedAt || '').slice(0, 10) === today) return;   // 오늘 이미 완료
+  if (state.finishedCycle === cycleDate()) return;   // 이번 회차 이미 완료
   runCollection(false);
 });
 

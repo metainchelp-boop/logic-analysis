@@ -32,6 +32,24 @@ COLLECTOR_TOKEN = os.getenv("COLLECTOR_TOKEN", "")
 # 수집기가 한 번에 가져갈 키워드 상한 — PC 한 대가 새벽에 소화 가능한 양으로 제한
 MAX_KEYWORDS = 1200
 
+# 수집 시작 시각(확장 runHour 와 합의된 값) — 이 시각 이후의 수집은 '다음 날 04:30 배치'용
+CYCLE_START_HOUR = 21
+
+
+def _effective_date() -> str:
+    """수집 회차 날짜.
+
+    수집이 밤 21시에 시작해 자정을 넘겨 끝나므로, 21시 이후 업로드는 다음 날
+    04:30 배치가 쓸 데이터다 — 달력 날짜로 찍으면 자정 전 수집분(전체의 절반)이
+    '어제 것'이 되어 배치의 스테일 차단에 걸려 통째로 버려진다.
+    낮(온디맨드) 업로드는 그대로 오늘 날짜.
+    """
+    now = datetime.now()
+    if now.hour >= CYCLE_START_HOUR:
+        from datetime import timedelta
+        return (now.date() + timedelta(days=1)).isoformat()
+    return now.date().isoformat()
+
 
 def init_collector_db():
     """수집 테이블 생성 (멱등)."""
@@ -90,7 +108,7 @@ def get_collect_keywords(x_collector_token: str = Header(None)):
     오늘 이미 수집된 키워드는 빼고 준다(중간에 멈췄다 다시 켜도 이어서 진행).
     """
     _auth(x_collector_token)
-    today = date.today().isoformat()
+    today = _effective_date()   # 회차 날짜 — 21시 이후는 다음 날 배치분
     conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
     try:
@@ -157,7 +175,7 @@ def upload_serp(req: SerpUpload, x_collector_token: str = Header(None)):
         raise HTTPException(status_code=422,
                             detail="상품명·링크가 대부분 비어 있습니다 — 확장 필드 매핑 오류 의심. 팝업의 '수집 원본 샘플'을 확인하세요.")
 
-    today = date.today().isoformat()
+    today = _effective_date()   # 회차 날짜 — 21시 이후 수집은 다음 날 배치분으로 저장
     payload = json.dumps([p.model_dump() for p in req.products], ensure_ascii=False)
     conn = sqlite3.connect(DB_PATH, timeout=10)
     try:
