@@ -2660,7 +2660,7 @@ def naver_probe():
       - 파라미터를 받지 않아 임의 검색 통로로 쓰일 수 없다.
     · 원인 확정 후 제거 예정.
     """
-    import requests  # main.py 전역에 없어 함수 안에서 가져온다(진단 전용)
+    import requests, json, re  # main.py 전역에 없어 함수 안에서 가져온다(진단 전용)
     from naver_crawler import NAVER_CLIENT_ID, NAVER_CLIENT_SECRET
 
     now = time.time()
@@ -2696,6 +2696,53 @@ def naver_probe():
         out["verdict"] = "둘 다 실패 — 키 만료·쿼터 소진 등 계정 문제 가능성"
     else:
         out["verdict"] = "판정 불가 — probes 원문 확인 필요"
+
+    # ── 대체 경로(크롤링) 실현 가능성 진단 ──
+    # 공식 API가 사라진 이상 순위 산출은 검색 결과 크롤링뿐이라, 서버에서 실제로
+    # 가져와지는지 후보별로 1회씩 확인한다. 상품 개수까지 세어 '접속만 되는' 경우와 구분.
+    def _probe_crawl(label, url, via_bee=False):
+        try:
+            if via_bee:
+                from naver_crawler import _fetch_via_scrapingbee, SCRAPINGBEE_API_KEY
+                if not SCRAPINGBEE_API_KEY:
+                    return {"ok": False, "note": "ScrapingBee 키 미설정"}
+                body = _fetch_via_scrapingbee(url, render_js=False, stealth=True) or ""
+                status = 200 if body else None
+            else:
+                from naver_crawler import _get_realistic_headers
+                r = requests.get(url, headers=_get_realistic_headers(
+                    referer="https://search.shopping.naver.com/"), timeout=15)
+                status, body = r.status_code, (r.text or "")
+            n = None
+            try:
+                if body.lstrip()[:1] in "{[":
+                    j = json.loads(body)
+                    for key in ("shoppingResult", "products"):
+                        node = j.get(key) if isinstance(j, dict) else None
+                        if isinstance(node, dict) and isinstance(node.get("products"), list):
+                            n = len(node["products"]); break
+                        if isinstance(node, list):
+                            n = len(node); break
+                elif "__NEXT_DATA__" in body:
+                    n = body.count('"productTitle"') or body.count('"mallName"')
+            except Exception:
+                pass
+            return {"ok": bool(body) and status == 200, "status": status,
+                    "bytes": len(body), "productsParsed": n,
+                    "blocked": bool(re.search(r"captcha|자동입력|비정상적", body[:4000], re.I)) if body else None}
+        except Exception as e:
+            return {"ok": False, "error": str(e)[:160]}
+
+    q = "%ED%99%8D%EC%82%BC"  # 홍삼
+    out["crawlProbes"] = {
+        "searchJsonApi": _probe_crawl("json",
+            f"https://search.shopping.naver.com/api/search/all?sort=rel&pagingIndex=1&pagingSize=40&query={q}"),
+        "searchHtml": _probe_crawl("html",
+            f"https://search.shopping.naver.com/search/all?query={q}"),
+        "scrapingBee": _probe_crawl("bee",
+            f"https://search.shopping.naver.com/api/search/all?sort=rel&pagingIndex=1&pagingSize=40&query={q}",
+            via_bee=True),
+    }
 
     _NAVER_PROBE_CACHE["at"], _NAVER_PROBE_CACHE["data"] = now, out
     return {"success": True, "cached": False, "data": out}
