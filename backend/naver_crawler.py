@@ -167,6 +167,20 @@ def search_naver_shopping_api(keyword: str, display: int = 100, start: int = 1, 
 
     ⚠️ sort=sim은 실제 네이버쇼핑 노출 순위(rel)와 다름
     """
+    # ── 2026-08 쇼핑 검색 API 종료(404 SE05) 대응: 브라우저 수집분 우선 서빙 ──
+    # 사내 크롬 확장이 새벽에 올린 수집분(2일 내)이 있으면 원본 API 형식 그대로 반환.
+    # 없으면 요청 큐에 등록하고 아래 기존 API 경로로 폴백(API 부활 시 자동 원복 = 무회귀).
+    # 이 한 지점으로 분석기·광고주 분석·키워드 노출·자동 분석이 전부 수집분 위에서 돈다.
+    try:
+        from collector import serve_from_collected
+        _served = serve_from_collected(keyword, display=display, start=start)
+    except Exception as _se:
+        _served = None
+        logger.warning(f"수집분 서빙 실패(무시, API 폴백): {_se}")
+    if _served is not None:
+        logger.info(f"수집분 서빙 '{keyword}': {_served.get('total', 0)}건 중 {len(_served.get('items', []))}건 (브라우저 수집)")
+        return _served
+
     if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
         logger.error("네이버 API 키가 설정되지 않았습니다.")
         return {"error": "API 키 미설정", "items": [], "total": 0}
@@ -200,6 +214,10 @@ def search_naver_shopping_api(keyword: str, display: int = 100, start: int = 1, 
                     continue
                 logger.warning(f"네이버 API 429 Rate Limit — 건너뜀 (keyword: {keyword})")
                 return {"error": "API 요청 한도 초과", "items": [], "total": 0}
+            # 404 = 쇼핑 검색 API 서비스 종료(SE05, 2026-07-31). 재시도해도 소용없으니 즉시 반환
+            if response.status_code == 404:
+                logger.error(f"쇼핑 검색 API 404(서비스 종료) — 수집분도 없음 (keyword: {keyword})")
+                return {"error": "쇼핑 검색 API 종료(수집분 없음)", "items": [], "total": 0}
             response.raise_for_status()
             data = response.json()
             logger.info(f"API 검색 '{keyword}': {data.get('total', 0)}건 중 {len(data.get('items', []))}건 조회")

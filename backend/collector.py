@@ -52,6 +52,12 @@ def init_collector_db():
                 ON collected_serp(keyword, collected_date);
             CREATE INDEX IF NOT EXISTS idx_collected_serp_date
                 ON collected_serp(collected_date);
+            CREATE TABLE IF NOT EXISTS collect_requests (
+                keyword TEXT PRIMARY KEY,
+                requested_at TEXT DEFAULT (datetime('now','localtime')),
+                status TEXT DEFAULT 'pending',
+                attempts INTEGER DEFAULT 0
+            );
         """)
         conn.commit()
         logger.info("수집 테이블 준비 완료")
@@ -137,6 +143,12 @@ def upload_serp(req: SerpUpload, x_collector_token: str = Header(None)):
     # (2026-08-01~03 실제로 1,992건이 그렇게 오염됐다.)
     if not req.products:
         raise HTTPException(status_code=400, detail="상품이 0건입니다. 수집 실패로 보고 저장하지 않습니다.")
+    # 상품명·링크가 대부분 비면 확장 toProduct 필드 매핑 오류다 — 조용히 저장하면
+    # 배치·분석이 빈 이름으로 오염되므로 여기서 소리내어 거부한다.
+    filled = sum(1 for p in req.products if (p.title or "").strip() or (p.link or "").strip())
+    if filled < max(1, int(len(req.products) * 0.2)):
+        raise HTTPException(status_code=422,
+                            detail="상품명·링크가 대부분 비어 있습니다 — 확장 필드 매핑 오류 의심. 팝업의 '수집 원본 샘플'을 확인하세요.")
 
     today = date.today().isoformat()
     payload = json.dumps([p.model_dump() for p in req.products], ensure_ascii=False)
@@ -150,6 +162,8 @@ def upload_serp(req: SerpUpload, x_collector_token: str = Header(None)):
                 product_count=excluded.product_count,
                 created_at=datetime('now','localtime')
         """, (kw, today, req.total, payload, len(req.products)))
+        # 이 키워드가 요청 큐(주간 온디맨드)에 있었다면 완료 처리
+        conn.execute("UPDATE collect_requests SET status='done' WHERE keyword=?", (kw,))
         conn.commit()
         return {"success": True, "keyword": kw, "saved": len(req.products)}
     finally:
@@ -173,7 +187,9 @@ def collect_status(x_collector_token: str = Header(None)):
             WHERE collected_date >= date('now','localtime','-6 day')
             GROUP BY collected_date ORDER BY collected_date DESC
         """).fetchall()
-        return {"success": True, "today": today,
+        pending = conn.execute(
+            "SELECT COUNT(*) FROM collect_requests WHERE status='pending'").fetchone()[0]
+        return {"success": True, "today": today, "pendingRequests": pending,
                 "days": [dict(r) for r in rows]}
     finally:
         conn.close()
@@ -248,3 +264,129 @@ def load_collected(keyword: str, on_date: Optional[str] = None) -> Optional[dict
         return {"total": r["total"] or 0, "prods": prods}
     finally:
         conn.close()
+# ==================== 4) 주간 온디맨드 요청 큐 ====================
+
+@router.get("/requests")
+def get_pending_requests(x_collector_token: str = Header(None)):
+    """확장이 1분 주기로 폴링 — 직원이 낮에 새 키워드를 분석하면 여기 쌓인다.
+
+    소량(상한 10)만 내려 IP 부하를 묶는다. 수집·업로드되면 upload_serp 가 done 처리.
+    """
+    _auth(x_collector_token)
+    conn = sqlite3.connect(DB_PATH, timeout=10)
+    conn.row_factory = sqlite3.Row
+    try:
+        # 오래된 완료분 정리(테이블 비대 방지)
+        conn.execute("DELETE FROM collect_requests WHERE status='done' AND requested_at < datetime('now','localtime','-7 day')")
+        # 전달 5회가 넘도록 수집이 안 된 키워드(오타·결과 0건)는 제외 — 1분마다 영원히
+        # 재시도해 네이버를 계속 두드리는 폭주를 막는다. 직원이 그 키워드를 다시 분석하면
+        # _enqueue_request 가 attempts 를 리셋해 5회 더 시도한다.
+        rows = conn.execute("""
+            SELECT keyword FROM collect_requests
+            WHERE status='pending' AND attempts < 5
+            ORDER BY requested_at ASC LIMIT 10
+        """).fetchall()
+        kws = [r["keyword"] for r in rows]
+        if kws:
+            conn.executemany(
+                "UPDATE collect_requests SET attempts = attempts + 1 WHERE keyword=?",
+                [(k,) for k in kws])
+        conn.commit()
+        return {"success": True, "keywords": kws}
+    finally:
+        conn.close()
+
+
+def _enqueue_request(keyword: str):
+    """수집분이 없는 키워드를 요청 큐에 넣는다(중복 무해 — 멱등).
+
+    이미 done 인 키워드도 다시 pending 으로 되돌린다 — done 은 '그날 수집됨'일 뿐이라
+    2일 이상 지나 서빙이 다시 miss 나면 재수집이 필요하기 때문.
+    """
+    kw = (keyword or "").strip()
+    if not kw:
+        return
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=5)
+        try:
+            conn.execute("""
+                INSERT INTO collect_requests (keyword, status)
+                VALUES (?, 'pending')
+                ON CONFLICT(keyword) DO UPDATE SET
+                    status='pending',
+                    requested_at=datetime('now','localtime'),
+                    attempts=0
+                WHERE collect_requests.status != 'pending'
+                   OR collect_requests.attempts >= 5
+            """, (kw,))
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.warning(f"[collector] 요청 큐 등록 실패(무시): {e}")
+
+
+# ==================== 5) 검색 API 대체 서빙 ====================
+
+def _to_api_item(p: dict) -> dict:
+    """수집분 상품 1건 → 네이버 검색 API 원본 item 형식(역변환).
+
+    search_naver_shopping_api 의 반환을 그대로 흉내내기 위한 것.
+    소비자는 전부 _parse_api_item 을 거치므로, 그 함수가 읽는 키
+    (title·productId·link·lprice·mallName·brand·maker·image·category1~3·productType)만 맞추면 된다.
+    """
+    return {
+        "title": p.get("title", "") or "",
+        "productId": str(p.get("productId", "") or ""),
+        "link": p.get("link", "") or "",
+        "lprice": str(_safe_int(p.get("price"))),
+        "hprice": "",
+        "mallName": p.get("mallName", "") or "",
+        "image": "",
+        "brand": p.get("brand", "") or "",
+        "maker": p.get("brand", "") or "",
+        "category1": p.get("category1", "") or "",
+        "category2": p.get("category2", "") or "",
+        "category3": p.get("category3", "") or "",
+        "productType": "",
+    }
+
+
+def serve_from_collected(keyword: str, display: int = 100, start: int = 1) -> Optional[dict]:
+    """죽은 쇼핑 검색 API 를 수집분으로 대체 서빙한다.
+
+    search_naver_shopping_api 최상단에서 호출된다(원본 API 응답과 같은 형식으로 반환).
+    · 오늘/어제(2일 내) 수집분이 있으면 → {'total':…, 'items':[원본형식…]} 로 페이징 서빙
+    · 없으면 → 요청 큐에 등록하고 None (호출부가 기존 API 경로로 폴백 — API 부활 시 무회귀)
+
+    이 한 지점으로 분석기·광고주 분석·키워드 노출·자동 분석이 전부 수집분 위에서 돌게 된다.
+    낮 분석은 새벽(03시) 스냅샷 기준이라 '실시간'은 아니지만, 순위·시장 구도가 하루 안에
+    급변하는 경우는 드물어 실사용상 차이가 작다.
+    """
+    kw = (keyword or "").strip()
+    if not kw:
+        return None
+    conn = sqlite3.connect(DB_PATH, timeout=10)
+    conn.row_factory = sqlite3.Row
+    try:
+        r = conn.execute("""
+            SELECT total, products_json FROM collected_serp
+            WHERE keyword=? AND collected_date >= date('now','localtime','-1 day')
+            ORDER BY collected_date DESC LIMIT 1
+        """, (kw,)).fetchone()
+    finally:
+        conn.close()
+    if not r:
+        _enqueue_request(kw)
+        return None
+    try:
+        raw = json.loads(r["products_json"] or "[]")
+    except json.JSONDecodeError:
+        return None
+    if not raw:
+        return None
+    raw.sort(key=lambda p: p.get("rank", 0) or 0)
+    end = start + max(1, min(display, 100)) - 1
+    page = [_to_api_item(p) for p in raw if start <= (p.get("rank", 0) or 0) <= end]
+    return {"total": r["total"] or len(raw), "start": start,
+            "display": len(page), "items": page, "collectorServed": True}

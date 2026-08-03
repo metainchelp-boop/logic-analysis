@@ -164,15 +164,59 @@ async function runCollection(manual = false) {
   }
 }
 
-// 매일 03시 자동 실행 — 브라우저가 켜져 있어야 동작한다(PC 절전 해제 필수)
-chrome.runtime.onInstalled.addListener(() => {
+/** 낮 시간 온디맨드 — 직원이 새 키워드를 분석하면 서버 요청 큐에 쌓이고,
+ *  1분 주기로 그걸 걷어 즉시 수집한다(한 번에 최대 10개 — 소량이라 IP 부하 미미).
+ *  새벽 전체 수집이 도는 동안에는 건너뛴다. */
+async function runOnDemand() {
+  if (running) return;
+  const token = await getToken();
+  if (!token) return;
+  let kws = [];
+  try {
+    const res = await fetch(`${CFG.serverBase}/api/collector/requests`, {
+      headers: { 'X-Collector-Token': token },
+    });
+    if (!res.ok) return;
+    kws = (await res.json()).keywords || [];
+  } catch (e) { return; }
+  if (!kws.length) return;
+
+  running = true;                       // 새벽 수집과 동시 진입 방지
+  await log(`🔎 온디맨드 수집 ${kws.length}건: ${kws.join(', ')}`);
+  try {
+    for (const kw of kws) {
+      try {
+        const payload = await collectKeyword(kw);
+        if (!payload.products.length) throw new Error('상품 0건');
+        await uploadKeyword(token, kw, payload);
+        await log(`  ✅ [${kw}] 온디맨드 완료 (${payload.products.length}개)`);
+      } catch (e) {
+        await log(`  ⚠️ [${kw}] 온디맨드 실패: ${e.message}`);
+      }
+      await sleep(jitter());
+    }
+  } finally {
+    running = false;
+  }
+}
+
+// 알람 2개 — 브라우저가 켜져 있어야 동작한다(맥북 절전 해제 필수)
+//  · daily   : 매시 확인, 03시 이후 오늘 수집이 없으면 실행(새벽에 꺼져 있었어도 켜지면 자동 만회)
+//  · ondemand: 1분 주기, 낮에 들어온 새 키워드 요청 즉시 수집
+function armAlarms() {
   chrome.alarms.create('daily', { periodInMinutes: 60 });
-  log('설치됨 — 매시 정각에 03시인지 확인해 자동 수집합니다.');
-});
+  chrome.alarms.create('ondemand', { periodInMinutes: 1 });
+}
+chrome.runtime.onInstalled.addListener(() => { armAlarms(); log('설치됨 — 03시 자동 수집 + 1분 주기 온디맨드 대기.'); });
+chrome.runtime.onStartup.addListener(() => { armAlarms(); log('브라우저 시작 — 알람 재장전.'); });
+
 chrome.alarms.onAlarm.addListener(async (a) => {
+  if (a.name === 'ondemand') { runOnDemand(); return; }
   if (a.name !== 'daily') return;
   const now = new Date();
-  if (now.getHours() !== CFG.runHour) return;
+  // 03시 정각을 놓쳤어도(새벽에 크롬이 꺼져 있었다면) 그날 처음 켜진 시점에 만회한다.
+  // 요청 속도는 시간대와 무관하게 사람 수준이라 낮에 돌아도 차단 위험은 같다.
+  if (now.getHours() < CFG.runHour) return;
   const { state = {} } = await chrome.storage.local.get('state');
   const today = now.toISOString().slice(0, 10);
   if ((state.finishedAt || '').slice(0, 10) === today) return;   // 오늘 이미 완료
