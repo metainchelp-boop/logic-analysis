@@ -207,6 +207,12 @@ async function runCollection(manual = false) {
     if (!res.ok) throw new Error(`키워드 조회 실패 HTTP ${res.status}`);
     const { keywords = [], done: already = 0, total = 0 } = await res.json();
     await log(`대상 ${keywords.length}개 (전체 ${total} · 오늘 완료 ${already})`);
+    if (!keywords.length) {
+      // 이번 회차 수집할 게 없음(이미 완료) — 회차 완료로 기록해 매시 헛돌지 않게
+      await setState({ running: false, finishedCycle: cycleDate(), current: '' });
+      await log('이번 회차 수집 대상 없음 — 완료 처리');
+      return;
+    }
     await setState({ target: keywords.length });
 
     let done = 0, failed = 0, streak = 0;
