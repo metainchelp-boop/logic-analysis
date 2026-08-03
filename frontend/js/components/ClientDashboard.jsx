@@ -2,6 +2,18 @@
 window.ClientDashboard = function ClientDashboard({ currentUser, onRunAnalysis, onRegisterCompetitor, onDownloadReport, initialSearch, canEdit }) {
     const { useState, useEffect, useCallback } = React;
 
+/* 2026-08-01~03 = 네이버 쇼핑 검색 API 종료 직후 수집 불능 기간(운영자 확정 2026-08-04).
+   이 사흘의 순위 없음(NULL)은 '미노출'이 아니라 '수집 중단'으로 표기한다 — 실제 순위 하락으로
+   오독되는 것을 막기 위함. 데이터는 삭제하지 않고 표기만 바꾼다. */
+function isOutageRow(r) {
+    var d = ((r && r.checked_at) || '').slice(0, 10);
+    return !(r && r.rank_position) && d >= '2026-08-01' && d <= '2026-08-03';
+}
+function rankCellLabel(r) {
+    if (r && r.rank_position) return r.rank_position + '위';
+    return isOutageRow(r) ? '수집 중단' : '미노출';
+}
+
     const [clients, setClients] = useState([]);
     const [selectedClient, setSelectedClient] = useState(null);
     const [analyses, setAnalyses] = useState([]);
@@ -657,8 +669,8 @@ window.ClientDashboard = function ClientDashboard({ currentUser, onRunAnalysis, 
                                                             return (
                                                                 <tr key={i}>
                                                                     <td>{(r.checked_at || '').slice(0, 16)}</td>
-                                                                    <td style={{ fontWeight: 700 }}>
-                                                                        {r.rank_position ? r.rank_position + '위' : '미노출'}
+                                                                    <td style={{ fontWeight: 700, color: isOutageRow(r) ? '#94a3b8' : undefined, fontStyle: isOutageRow(r) ? 'italic' : undefined }}>
+                                                                        {rankCellLabel(r)}
                                                                         {diff != null && diff !== 0 && (
                                                                             <span style={{ fontSize: 11, marginLeft: 6, color: diff > 0 ? '#16a34a' : '#dc2626' }}>
                                                                                 {diff > 0 ? '▲' + diff : '▼' + Math.abs(diff)}
@@ -830,7 +842,7 @@ window.AnalysisResultView = function AnalysisResultView({ keyword, data, rankHis
                                     return (
                                         <tr key={i}>
                                             <td>{(r.checked_at || '').slice(0, 16)}</td>
-                                            <td style={{ fontWeight: 700 }}>{r.rank_position ? r.rank_position + '위' : '미노출'}</td>
+                                            <td style={{ fontWeight: 700, color: isOutageRow(r) ? '#94a3b8' : undefined, fontStyle: isOutageRow(r) ? 'italic' : undefined }}>{rankCellLabel(r)}</td>
                                             <td>{r.check_type === 'manual' ? '수동' : '자동'}</td>
                                         </tr>
                                     );
