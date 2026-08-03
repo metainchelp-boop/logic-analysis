@@ -1,8 +1,8 @@
 """
 로직 분석 프로그램 v3 - 스케줄러 모듈
 APScheduler 기반 통합 스케줄러
-- 04:00 계약단계 동기화 · 04:30 순위 추적 (홈탭 + 업체, 키워드당 1회 API, 결과 캐시)
-- 05:00 전체 분석 + HTML 보고서 (04:30 캐시 재사용, API 추가 호출 없음) → 08:00 리포트 발송
+- 04:00 계약단계 동기화 · 08:00 순위 추적 (맥북 브라우저 수집 01:00~07:00 분 소비)
+- 08:30 전체 분석 + HTML 보고서 (08:00 캐시 재사용) → 09:30 리포트 발송(현재 발송 비활성 — 운영자 확인 후 재개)
   ※ 2026-07-27 업무시간 502 사고로 전 배치를 새벽으로 이동(업무 시작 전 종료)
 - 일일 API 호출: ~147회 (기존 25,000+에서 99% 절감)
 """
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 # 글로벌 스케줄러 인스턴스
 _scheduler: BackgroundScheduler = None
 
-# 04:30 순위 추적에서 캐시한 API 결과 → 05:00 분석에서 재사용
+# 08:00 순위 추적에서 캐시한 결과 → 08:30 분석에서 재사용
 _api_cache = {}       # {keyword: {"prods": [...], "total": int}}
 _api_cache_date = ""  # 캐시 날짜 (당일만 유효)
 
@@ -67,23 +67,23 @@ def start_scheduler():
         max_instances=1,
     )
 
-    # 1) 순위 추적 — 매일 04:30 (구 08:00. 홈탭 + 업체, 키워드당 1회 API, 결과 캐시)
+    # 1) 순위 추적 — 매일 08:00 (2026-08-04 운영자 확정: 수집 01~07시 완료 후 소비, 데드라인 10시)
     _scheduler.add_job(
         _run_rank_tracking,
-        trigger=CronTrigger(hour=4, minute=30),
+        trigger=CronTrigger(hour=8, minute=0),
         id="rank_tracking",
-        name="순위 추적 (04:30)",
+        name="순위 추적 (08:00)",
         replace_existing=True,
         max_instances=1,
     )
 
-    # 2) 전체 분석 + 보고서 — 매일 05:00 (구 09:00. 04:30 캐시 재사용)
+    # 2) 전체 분석 + 보고서 — 매일 08:30 (08:00 캐시 재사용)
     #    발송(08:00)까지 3시간 확보 — 기존 09→10시 간격(1시간)보다 여유가 크다.
     _scheduler.add_job(
         _run_daily_analysis,
-        trigger=CronTrigger(hour=5, minute=0),
+        trigger=CronTrigger(hour=8, minute=30),
         id="daily_analysis",
-        name="전체 분석 + 보고서 (05:00)",
+        name="전체 분석 + 보고서 (08:30)",
         replace_existing=True,
         max_instances=1,
     )
@@ -91,7 +91,7 @@ def start_scheduler():
     # 3) 일일 리포트 발송 — 08:00 (구 10:00. 분석 완료 후 발송 · 업무 시작 전 도착)
     _scheduler.add_job(
         _run_daily_report,
-        trigger=CronTrigger(hour=8, minute=0),
+        trigger=CronTrigger(hour=9, minute=30),
         id="daily_report",
         name="일일 리포트 발송 (08:00)",
         replace_existing=True,
@@ -109,7 +109,7 @@ def start_scheduler():
     )
 
     _scheduler.start()
-    logger.info("✅ 스케줄러 시작 (계약동기화: 04:00, 순위: 04:30, 분석: 05:00, 리포트: 08:00, DB백업: 00:30)")
+    logger.info("✅ 스케줄러 시작 (계약동기화: 04:00, 순위: 08:00, 분석: 08:30, 리포트: 09:30(발송 비활성), DB백업: 00:30)")
 
 
 def stop_scheduler():
@@ -255,7 +255,7 @@ def _run_contract_stage_sync():
         logger.error(f"❌ 계약단계 동기화 DB 반영 실패: {e}")
 
 
-# ==================== 04:30 순위 추적 ====================
+# ==================== 08:00 순위 추적 ====================
 
 def _collect_all_keywords(conn):
     """홈탭 추적 상품 + 업체 키워드 수집 (공통 유틸)"""
@@ -303,7 +303,7 @@ def _collect_all_keywords(conn):
 
 def _run_rank_tracking():
     """
-    04:30 순위 추적 — 키워드당 최대 300위(3페이지)까지 조회.
+    08:00 순위 추적 — 키워드당 최대 300위(3페이지)까지 조회.
     홈탭 순위 + 업체 순위를 동시에 처리.
     Rate Limit 방지를 위해 키워드당 약 18초 간격 → 약 50분 소요.
     """
@@ -489,11 +489,11 @@ def _run_rank_tracking():
         logger.error(f"❌ 순위 추적 전체 실패: {e}")
 
 
-# ==================== 05:00 전체 분석 + 보고서 ====================
+# ==================== 08:30 전체 분석 + 보고서 ====================
 
 def _run_daily_analysis():
     """
-    05:00 전체 분석 + HTML 보고서 — 04:30 캐시된 상품 데이터를 재사용.
+    08:30 전체 분석 + HTML 보고서 — 08:00 캐시된 상품 데이터를 재사용.
     쇼핑 API 추가 호출 없음 (검색광고 API만 사용: 검색량 + 연관 키워드).
     캐시 미스 시에만 쇼핑 API 호출 (fallback).
     """

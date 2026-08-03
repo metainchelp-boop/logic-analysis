@@ -32,8 +32,10 @@ COLLECTOR_TOKEN = os.getenv("COLLECTOR_TOKEN", "")
 # 수집기가 한 번에 가져갈 키워드 상한 — PC 한 대가 새벽에 소화 가능한 양으로 제한
 MAX_KEYWORDS = 1200
 
-# 수집 시작 시각(확장 runHour 와 합의된 값) — 이 시각 이후의 수집은 '다음 날 04:30 배치'용
-CYCLE_START_HOUR = 21
+# 수집 회차 경계 — 확장이 '새벽 1시 시작'(2026-08-04 운영자 확정)이라 수집이 자정을
+# 넘지 않으므로 날짜 이동이 필요 없다. 24 = 항상 당일(이동 없음). 저녁 시작으로
+# 되돌릴 일이 생기면 이 값을 그 시각(예: 21)으로 바꾸면 된다.
+CYCLE_START_HOUR = 24
 
 
 def _effective_date() -> str:

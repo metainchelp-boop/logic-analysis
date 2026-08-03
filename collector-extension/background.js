@@ -24,8 +24,8 @@ const CFG = {
   maxGapMs: 4000,        // 요청 간 최대 간격 (이 사이 랜덤 — 여유 확대 2026-08-04)
   keywordGapMs: 8000,    // 키워드 사이 추가 휴식 (여유 확대 — 총 소요 ~6시간)
   maxConsecutiveFail: 5, // 연속 실패가 이만큼이면 그날 수집 중단(차단 의심)
-  runHour: 21,           // 매일 밤 9시 시작 → 새벽 3시경 완료 (04:30 배치 전 여유)
-                         // 실측 4h+ 라 03시 시작으론 배치를 못 따라잡아 저녁으로 이동.
+  runHour: 1,            // 매일 새벽 1시 시작 → 아침 7시경 완료 (운영자 확정 2026-08-04:
+                         // '당일' 데이터여야 하고 완료 데드라인은 오전 10시. 서버 순위 기록은 08:00)
 };
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -310,7 +310,9 @@ chrome.runtime.onStartup.addListener(() => { armAlarms(); log('브라우저 시�
  *  21시 이후 수집은 '다음 날 04:30 배치'용이므로 다음 날짜 회차로 센다. */
 function cycleDate() {
   const d = new Date();
-  if (d.getHours() >= CFG.runHour) d.setDate(d.getDate() + 1);
+  // 오후·저녁 시작(runHour>=13)일 때만 '다음 날 배치분'으로 날짜를 넘긴다.
+  // 새벽 1시 시작 체계에서는 수집이 자정을 안 넘으므로 회차 = 그냥 그 달력 날짜.
+  if (CFG.runHour >= 13 && d.getHours() >= CFG.runHour) d.setDate(d.getDate() + 1);
   // 로컬(KST) 날짜 — toISOString(UTC)을 쓰면 자정 부근에 하루 어긋난다
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
@@ -318,8 +320,10 @@ function cycleDate() {
 chrome.alarms.onAlarm.addListener(async (a) => {
   if (a.name === 'ondemand') { runOnDemand(); return; }
   if (a.name !== 'daily') return;
-  // 이번 회차 수집이 아직이면 실행 — 21시 정각을 놓쳤어도(크롬 꺼짐 등)
-  // 다음 매시 확인 때 자동 만회된다. 서버가 완료 키워드를 빼고 주므로 이어받기도 됨.
+  // 새벽 1시 이전(자정~0시대)엔 시작하지 않는다 — 1시 이후 매시 확인에서
+  // 이번 회차 미완료면 실행(놓친 날 자동 만회·이어받기는 서버 done 필터가 보장).
+  const now = new Date();
+  if (CFG.runHour < 13 && now.getHours() < CFG.runHour) return;
   const { state = {} } = await chrome.storage.local.get('state');
   if (state.finishedCycle === cycleDate()) return;   // 이번 회차 이미 완료
   runCollection(false);
