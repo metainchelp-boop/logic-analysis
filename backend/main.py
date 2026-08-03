@@ -2643,6 +2643,64 @@ def get_api_usage(current_user: dict = Depends(get_current_user)):
         return {"success": False, "error": "API 사용량 조회 중 오류가 발생했습니다."}
 
 
+_NAVER_PROBE_CACHE = {"at": 0.0, "data": None}
+
+@app.get("/api/diag/naver-probe")
+def naver_probe():
+    """네이버 검색 API 생사 진단 — 읽기 전용·일시 진단용.
+
+    2026-07-31 '네이버 검색 > 쇼핑 API 종료' 공지 이후 순위 추적이 전부 '미노출'로
+    나오는 원인을 서버에서 직접 확인하기 위한 임시 엔드포인트다.
+    같은 키로 쇼핑(shop)과 블로그(blog)를 1회씩 호출해 비교한다
+    — 쇼핑만 실패하면 종료 확정, 둘 다 실패하면 키·쿼터 등 계정 문제다.
+
+    · 인증 없음: 진단자가 바로 열어봐야 하므로. 대신 아래를 지킨다.
+      - 키·토큰·업체 정보 등 비밀값은 응답에 넣지 않는다(상태코드·건수·판정만).
+      - 5분 캐시로 호출을 묶어 쿼터 낭비·외부 남용을 막는다(최악 576회/일 << 25,000).
+      - 파라미터를 받지 않아 임의 검색 통로로 쓰일 수 없다.
+    · 원인 확정 후 제거 예정.
+    """
+    import requests  # main.py 전역에 없어 함수 안에서 가져온다(진단 전용)
+    from naver_crawler import NAVER_CLIENT_ID, NAVER_CLIENT_SECRET
+
+    now = time.time()
+    if _NAVER_PROBE_CACHE["data"] and (now - _NAVER_PROBE_CACHE["at"]) < 300:
+        return {"success": True, "cached": True, "data": _NAVER_PROBE_CACHE["data"]}
+
+    out = {"checkedAt": datetime.now().isoformat(),
+           "keyConfigured": bool(NAVER_CLIENT_ID and NAVER_CLIENT_SECRET),
+           "probes": {}}
+    headers = {"X-Naver-Client-Id": NAVER_CLIENT_ID, "X-Naver-Client-Secret": NAVER_CLIENT_SECRET}
+    for label, path in (("shop", "shop.json"), ("blog", "blog.json")):
+        try:
+            r = requests.get(f"https://openapi.naver.com/v1/search/{path}",
+                             params={"query": "홍삼", "display": 1}, headers=headers, timeout=10)
+            info = {"status": r.status_code, "total": None, "errorCode": None, "errorMessage": None}
+            try:
+                j = r.json()
+                info["total"] = j.get("total")
+                info["errorCode"] = j.get("errorCode")
+                info["errorMessage"] = j.get("errorMessage")
+            except Exception:
+                pass
+            out["probes"][label] = info
+        except Exception as e:
+            out["probes"][label] = {"status": None, "errorMessage": str(e)[:200]}
+
+    sh, bl = out["probes"].get("shop", {}), out["probes"].get("blog", {})
+    if sh.get("status") == 200 and (sh.get("total") or 0) > 0:
+        out["verdict"] = "쇼핑 API 정상 — 미노출 원인은 다른 곳(순위 판정·상품 매칭 등)"
+    elif bl.get("status") == 200 and sh.get("status") != 200:
+        out["verdict"] = "쇼핑 API만 실패 — 서비스 종료로 확정 (같은 키로 블로그는 정상)"
+    elif bl.get("status") != 200 and sh.get("status") != 200:
+        out["verdict"] = "둘 다 실패 — 키 만료·쿼터 소진 등 계정 문제 가능성"
+    else:
+        out["verdict"] = "판정 불가 — probes 원문 확인 필요"
+
+    _NAVER_PROBE_CACHE["at"], _NAVER_PROBE_CACHE["data"] = now, out
+    return {"success": True, "cached": False, "data": out}
+
+
 # ==================== 데이터랩 쇼핑인사이트 ====================
 
 class DatalabRequest(BaseModel):
