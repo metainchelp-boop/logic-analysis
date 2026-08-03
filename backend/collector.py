@@ -179,11 +179,55 @@ def collect_status(x_collector_token: str = Header(None)):
         conn.close()
 
 
-def load_collected(keyword: str, on_date: Optional[str] = None) -> Optional[dict]:
-    """배치용 — 수집분에서 키워드 1건을 꺼낸다. 없으면 None.
+def _safe_int(v):
+    """문자열 가격('12,900')·None 등을 정수로. 실패 시 0."""
+    if v is None:
+        return 0
+    if isinstance(v, (int, float)):
+        return int(v)
+    try:
+        return int(str(v).replace(",", "").replace("원", "").strip() or 0)
+    except (ValueError, TypeError):
+        return 0
 
-    반환 형식은 기존 검색 API 결과와 맞춘다({'total':…, 'items':[…]} 아님에 유의):
-    상품 리스트는 이미 _parse_api_item 을 거친 형태로 저장돼 있으므로 그대로 쓴다.
+
+def _normalize_collected(p: dict) -> dict:
+    """수집분 상품 1건을 _parse_api_item(naver_crawler.py) 출력과 '완전히 같은 키'로 변환한다.
+
+    ⚠️ 이 정규화가 없으면 순위 매칭(find_product_rank_from_cache 는 product_url·product_id 를 읽음)과
+    분석(auto_analysis 는 product_name·store_name 을 읽음)이 전부 빈값·미스매치가 되어,
+    수집이 정상이어도 화면은 계속 '미노출'로 나온다. price 도 int 여야 산술이 깨지지 않는다.
+    수집기(SerpProduct)는 productId·title·link·mallName·price(문자열)로 저장하므로 여기서 매핑한다.
+    """
+    return {
+        "rank": p.get("rank", 0),
+        "product_id": str(p.get("productId", "") or ""),
+        "product_name": p.get("title", "") or "",
+        "price": _safe_int(p.get("price")),
+        "hprice": None,
+        "store_name": p.get("mallName", "") or "",
+        "image_url": p.get("image", "") or "",
+        "product_url": p.get("link", "") or "",
+        "brand": p.get("brand", "") or "",
+        "maker": p.get("brand", "") or "",
+        "category1": p.get("category1", "") or "",
+        "category2": p.get("category2", "") or "",
+        "category3": p.get("category3", "") or "",
+        "product_type": "",
+        # 리뷰/평점/구매수는 SERP 목록에 없다(_parse_api_item 도 0). 리뷰는 상세 크롤링 경로에서만.
+        "review_count": 0,
+        "rating": 0,
+        "purchase_count": 0,
+        # 수집분 표식 — 디버깅·감사용
+        "review_count_collected": _safe_int(p.get("reviewCount")),
+    }
+
+
+def load_collected(keyword: str, on_date: Optional[str] = None) -> Optional[dict]:
+    """배치용 — 수집분에서 키워드 1건을 꺼내 _parse_api_item 포맷으로 정규화해 돌려준다.
+
+    반환: {'total': int, 'prods': [ _parse_api_item 과 동일 키의 dict, … ]} 또는 None.
+    scheduler 의 find_product_rank_from_cache·auto_analysis 가 그대로 소비할 수 있어야 한다.
     """
     on_date = on_date or date.today().isoformat()
     conn = sqlite3.connect(DB_PATH, timeout=10)
@@ -195,11 +239,12 @@ def load_collected(keyword: str, on_date: Optional[str] = None) -> Optional[dict
         if not r:
             return None
         try:
-            prods = json.loads(r["products_json"] or "[]")
+            raw = json.loads(r["products_json"] or "[]")
         except json.JSONDecodeError:
             return None
-        if not prods:
+        if not raw:
             return None
+        prods = [_normalize_collected(p) for p in raw]
         return {"total": r["total"] or 0, "prods": prods}
     finally:
         conn.close()

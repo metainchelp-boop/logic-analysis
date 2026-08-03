@@ -87,6 +87,12 @@ async function collectKeyword(keyword) {
     const { total: t, list } = await fetchPage(keyword, i);
     if (i === 1) total = t;
     if (!list.length) break;
+    // ⚠️ 첫 키워드 첫 상품의 '원본 JSON'을 저장해 둔다. toProduct 의 필드명 가정
+    //    (p.productTitle·p.category1Name 등)이 실제 네이버 응답과 맞는지 내일 첫 실행 때
+    //    팝업에서 눈으로 검증하기 위함(맞으면 매핑 확정, 다르면 즉시 교정).
+    if (i === 1 && list[0]) {
+      chrome.storage.local.set({ rawSample: { keyword, at: new Date().toISOString(), item: list[0] } });
+    }
     list.forEach((p, idx) => {
       const rank = (i - 1) * CFG.pageSize + idx + 1;
       if (rank <= CFG.maxRank) products.push(toProduct(p, rank));

@@ -2,7 +2,7 @@
 const $ = (id) => document.getElementById(id);
 
 async function render() {
-  const { token = '', state = {}, logs = [] } = await chrome.storage.local.get(['token', 'state', 'logs']);
+  const { token = '', state = {}, logs = [], rawSample = null } = await chrome.storage.local.get(['token', 'state', 'logs', 'rawSample']);
   $('token').value = token;
   const running = state.running ? '<span class="b ok">수집 중</span>' : '대기';
   $('stat').innerHTML =
@@ -13,6 +13,8 @@ async function render() {
     (state.current ? `진행 중: ${state.current}<br>` : '') +
     (state.finishedAt ? `마지막 완료: ${new Date(state.finishedAt).toLocaleString('ko-KR')}` : '아직 완료 기록 없음');
   $('logs').textContent = logs.join('\n');
+  const rawEl = document.getElementById('raw');
+  if (rawEl) rawEl.textContent = rawSample ? `[${rawSample.keyword}] ${rawSample.at}\n` + JSON.stringify(rawSample.item, null, 1) : '아직 없음 — 수집 1회 실행 후 표시';
 }
 
 $('save').onclick = async () => {
