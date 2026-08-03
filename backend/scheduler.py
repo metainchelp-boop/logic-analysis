@@ -373,6 +373,19 @@ def _run_rank_tracking():
                     if page_idx < RANK_PAGES - 1:
                         time.sleep(DELAY_PER_PAGE)
 
+                # ── 수집 실패 판정 ──
+                # 2026-08-01 네이버 쇼핑 검색 API 종료(404 SE05) 이후, 검색 결과가 0건이어도
+                # 순위 None 을 그대로 저장해 '미노출'로 기록되던 문제(3일간 1,992건 오염).
+                # 상품을 하나도 못 받았으면 '순위 없음'이 아니라 '수집 실패'이므로 저장하지 않는다.
+                # (진짜 미노출은 all_prods 가 채워진 상태에서 내 상품이 안 잡히는 경우다.)
+                if not all_prods:
+                    total_errors += 1
+                    logger.error(f"  ⚠️ [{keyword}] 검색 결과 0건 — 수집 실패로 보고 순위 저장 건너뜀"
+                                 f" (미노출로 잘못 기록되는 것 방지)")
+                    if ki < len(all_keywords) - 1:
+                        time.sleep(DELAY_PER_KEYWORD)
+                    continue
+
                 # 09시 분석용 캐시 저장 (첫 100개만 — 기존 호환)
                 _api_cache[keyword] = {"prods": all_prods[:100], "total": total_shop}
 
