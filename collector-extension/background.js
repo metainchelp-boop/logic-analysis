@@ -46,17 +46,92 @@ async function log(line) {
   await chrome.storage.local.set({ logs: logs.slice(0, 200) });
 }
 
-/** 네이버 검색 결과 1페이지 — 브라우저(실제 IP·헤더)로 요청 */
+/* ── 요청 경로 2단 구조 (2026-08-04 실측 후 개편) ──
+ * 확장 백그라운드에서 보내는 직접 fetch 는 실제 페이지 요청과 헤더(Sec-Fetch-*)·쿠키가
+ * 달라 네이버가 418 로 차단함을 현장에서 확인했다.
+ * → 실제 네이버쇼핑 페이지를 백그라운드 고정 탭으로 하나 열어두고, '그 페이지 안에서'
+ *   fetch 를 실행한다. 이는 사이트 자신의 페이지네이션 요청과 완전히 동일해 차단 불가.
+ * 직접 fetch 를 1차로 시도하되(언젠가 풀릴 수 있음), 418 이 확인되면 그 세션 동안은
+ * 페이지 경로로 영구 전환한다(차단당한 경로를 계속 두드리지 않기 위함). */
+let fetchMode = 'direct';          // 'direct' | 'page'
+let workTabId = null;
+
+function waitTabLoaded(tabId) {
+  return new Promise((resolve) => {
+    const iv = setInterval(async () => {
+      try {
+        const t = await chrome.tabs.get(tabId);
+        if (t.status === 'complete') { clearInterval(iv); resolve(); }
+      } catch (e) { clearInterval(iv); resolve(); }
+    }, 500);
+    setTimeout(() => { clearInterval(iv); resolve(); }, 20000);
+  });
+}
+
+/** 네이버쇼핑 작업 탭 확보 — 없으면 백그라운드(비활성)·고정 탭으로 생성.
+ *  사용자가 닫아도 다음 요청 때 자동 재생성된다. */
+async function ensureWorkTab() {
+  if (workTabId !== null) {
+    try {
+      const t = await chrome.tabs.get(workTabId);
+      if (t && (t.url || '').includes('search.shopping.naver.com')) return workTabId;
+    } catch (e) { /* 닫힘 — 재생성 */ }
+  }
+  const tab = await chrome.tabs.create({
+    url: 'https://search.shopping.naver.com/search/all?query=' + encodeURIComponent('쇼핑'),
+    active: false,    // 화면을 뺏지 않게 백그라운드로
+    pinned: true,     // 실수로 닫기 어렵게 고정
+  });
+  workTabId = tab.id;
+  await waitTabLoaded(workTabId);
+  await sleep(2500);               // 페이지 초기 스크립트·쿠키 정착 대기
+  await log('🪟 네이버쇼핑 작업 탭 준비 완료 (고정 탭 — 닫혀도 자동 재생성)');
+  return workTabId;
+}
+
+/** 실제 페이지 컨텍스트에서 fetch — 사이트 자신의 요청과 동일(같은 출처·쿠키·Sec-Fetch) */
+async function fetchViaPage(url) {
+  const tabId = await ensureWorkTab();
+  const [res] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: async (u) => {
+      try {
+        const r = await fetch(u, { credentials: 'include', headers: { 'Accept': 'application/json' } });
+        if (!r.ok) return { err: 'HTTP ' + r.status };
+        return { data: await r.json() };
+      } catch (e) { return { err: String(e && e.message || e) }; }
+    },
+    args: [url],
+  });
+  const out = res && res.result;
+  if (!out) throw new Error('페이지 주입 실패');
+  if (out.err) throw new Error(out.err);
+  return out.data;
+}
+
+/** 네이버 검색 결과 1페이지 */
 async function fetchPage(keyword, pagingIndex) {
   const url = 'https://search.shopping.naver.com/api/search/all'
     + `?sort=rel&pagingIndex=${pagingIndex}&pagingSize=${CFG.pageSize}`
     + `&query=${encodeURIComponent(keyword)}`;
-  const res = await fetch(url, {
-    headers: { 'Accept': 'application/json', 'Referer': 'https://search.shopping.naver.com/' },
-    credentials: 'omit',   // 개인 네이버 계정과 엮지 않는다(계정 정지 위험 차단)
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const data = await res.json();
+  let data;
+  if (fetchMode === 'direct') {
+    try {
+      const res = await fetch(url, {
+        headers: { 'Accept': 'application/json', 'Referer': 'https://search.shopping.naver.com/' },
+        credentials: 'include',
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      data = await res.json();
+    } catch (e) {
+      // 직접 경로 차단 확인 → 이 세션은 페이지 경로로 전환(차단 경로 재타격 방지)
+      fetchMode = 'page';
+      await log(`↪ 직접 요청 차단(${e.message}) — 실제 페이지 경로로 전환`);
+      data = await fetchViaPage(url);
+    }
+  } else {
+    data = await fetchViaPage(url);
+  }
   const node = data?.shoppingResult || {};
   return { total: node.total || 0, list: node.products || [] };
 }
@@ -155,7 +230,13 @@ async function runCollection(manual = false) {
       await sleep(jitter() + CFG.keywordGapMs);
     }
     await log(`✅ 수집 종료 — 성공 ${done} · 실패 ${failed}`);
-    await setState({ running: false, finishedAt: new Date().toISOString(), done, failed, current: '' });
+    // 성공 0 = 사실상 실패한 날 — finishedAt 을 남기지 않아 매시 만회 로직이 재시도하게 한다
+    if (done > 0) {
+      await setState({ running: false, finishedAt: new Date().toISOString(), done, failed, current: '' });
+    } else {
+      await setState({ running: false, done, failed, current: '' });
+      await log('⚠️ 성공 0건 — 완료로 기록하지 않음(다음 시각에 자동 재시도)');
+    }
   } catch (e) {
     await log(`❌ 수집 중단: ${e.message}`);
     await setState({ running: false, error: e.message });

@@ -1,13 +1,23 @@
 {
   "manifest_version": 3,
   "name": "메타아이앤씨 순위 수집기",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "사내 전용 — 새벽에 네이버 쇼핑 검색 순위를 모아 로직분석 서버로 보냅니다.",
-  "permissions": ["alarms", "storage"],
+  "permissions": [
+    "alarms",
+    "storage",
+    "tabs",
+    "scripting"
+  ],
   "host_permissions": [
     "https://search.shopping.naver.com/*",
     "https://logic.metainc.co.kr/*"
   ],
-  "background": { "service_worker": "background.js" },
-  "action": { "default_popup": "popup.html", "default_title": "순위 수집기" }
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "순위 수집기"
+  }
 }
