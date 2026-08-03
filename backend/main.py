@@ -2773,8 +2773,30 @@ def naver_probe():
         except Exception as e:
             return {"ok": False, "error": str(e)[:200]}
 
-    out["crawlProbes"]["scrapingBeeJson"] = _probe_bee(
-        f"https://search.shopping.naver.com/api/search/all?sort=rel&pagingIndex=1&pagingSize=40&query={q}")
+    # 비용을 좌우하는 두 변수를 실측한다.
+    #  ① 프록시 등급: stealth 75크레딧 vs premium 25크레딧 — premium 이 통하면 비용 1/3
+    #  ② 페이지당 개수: 40 vs 80 — 80이 통하면 300위 확보에 필요한 호출이 절반
+    _u = "https://search.shopping.naver.com/api/search/all?sort=rel&pagingIndex=1&pagingSize={n}&query=" + q
+    out["crawlProbes"]["beeStealth40"] = _probe_bee(_u.format(n=40), stealth=True)
+    out["crawlProbes"]["beePremium40"] = _probe_bee(_u.format(n=40), stealth=False)
+    out["crawlProbes"]["beeStealth80"] = _probe_bee(_u.format(n=80), stealth=True)
+
+    # 비용 산정 기준 — 실제 추적 중인 키워드 수(중복 제외)
+    try:
+        import sqlite3 as _sq2
+        from client_dashboard import DB_PATH as _CD_DB2
+        _c2 = _sq2.connect(_CD_DB2, timeout=10)
+        out["trackingScale"] = {
+            "distinctKeywords": _c2.execute(
+                "SELECT COUNT(DISTINCT keyword) FROM client_rank_history "
+                "WHERE checked_at >= date('now','localtime','-2 day')").fetchone()[0],
+            "rowsPerDay": _c2.execute(
+                "SELECT COUNT(*) FROM client_rank_history "
+                "WHERE substr(checked_at,1,10) = date('now','localtime')").fetchone()[0],
+        }
+        _c2.close()
+    except Exception as e:
+        out["trackingScale"] = {"error": str(e)[:200]}
 
     # 잘못 쌓인 순위 이력(수집 실패인데 미노출로 저장된 행) 규모 — 읽기 전용 집계
     try:
