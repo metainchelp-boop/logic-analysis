@@ -156,7 +156,8 @@ def get_search_api_usage_today() -> Dict:
 
 # ==================== 네이버 쇼핑 공식 API ====================
 
-def search_naver_shopping_api(keyword: str, display: int = 100, start: int = 1, sort: str = "sim", retry_on_429: bool = False) -> Dict:
+def search_naver_shopping_api(keyword: str, display: int = 100, start: int = 1, sort: str = "sim", retry_on_429: bool = False,
+                              enqueue_on_miss: bool = True) -> Dict:
     """
     네이버 검색 API - 쇼핑 검색
 
@@ -173,7 +174,8 @@ def search_naver_shopping_api(keyword: str, display: int = 100, start: int = 1, 
     # 이 한 지점으로 분석기·광고주 분석·키워드 노출·자동 분석이 전부 수집분 위에서 돈다.
     try:
         from collector import serve_from_collected
-        _served = serve_from_collected(keyword, display=display, start=start)
+        _served = serve_from_collected(keyword, display=display, start=start,
+                                       enqueue_on_miss=enqueue_on_miss)
     except Exception as _se:
         _served = None
         logger.warning(f"수집분 서빙 실패(무시, API 폴백): {_se}")
@@ -604,7 +606,8 @@ def _get_product_info_impl(product_url: str, keyword: str = "") -> Dict:
     # ===== 2차: 스토어명으로 네이버 쇼핑 API 검색 =====
     if not result["product_name"] and store_name and product_id:
         try:
-            api_result = search_naver_shopping_api(store_name, display=100, retry_on_429=True)
+            # 스토어명은 수집 키워드가 아님 — 온디맨드 큐에 넣지 않는다(수집 예산 보호)
+            api_result = search_naver_shopping_api(store_name, display=100, retry_on_429=True, enqueue_on_miss=False)
             for item in api_result.get("items", []):
                 if _match_item(item):
                     _fill_from_item(item)

@@ -117,10 +117,10 @@ let running = false;
 
 async function runCollection(manual = false) {
   if (running) { await log('이미 수집 중 — 중복 실행 무시'); return; }
+  running = 'daily';   // ⚠️ 첫 await 이전에 '동기' 선점 — ondemand 와 알람이 겹쳐도 이중 진입 불가
   const token = await getToken();
-  if (!token) { await log('❌ 토큰이 없습니다. 팝업에서 먼저 저장하세요.'); return; }
+  if (!token) { await log('❌ 토큰이 없습니다. 팝업에서 먼저 저장하세요.'); running = false; return; }
 
-  running = true;
   await setState({ running: true, startedAt: new Date().toISOString(), done: 0, failed: 0 });
   await log(manual ? '▶ 수동 수집 시작' : '▶ 자동 수집 시작');
 
@@ -160,7 +160,7 @@ async function runCollection(manual = false) {
     await log(`❌ 수집 중단: ${e.message}`);
     await setState({ running: false, error: e.message });
   } finally {
-    running = false;
+    if (running === 'daily') running = false;   // 내 락만 해제 (남의 락 오해제 방지)
   }
 }
 
@@ -169,34 +169,46 @@ async function runCollection(manual = false) {
  *  새벽 전체 수집이 도는 동안에는 건너뛴다. */
 async function runOnDemand() {
   if (running) return;
-  const token = await getToken();
-  if (!token) return;
-  let kws = [];
+  running = 'ondemand';   // ⚠️ 첫 await 이전에 '동기' 선점 — daily 와 알람이 겹쳐도 이중 진입 불가
   try {
-    const res = await fetch(`${CFG.serverBase}/api/collector/requests`, {
-      headers: { 'X-Collector-Token': token },
-    });
-    if (!res.ok) return;
-    kws = (await res.json()).keywords || [];
-  } catch (e) { return; }
-  if (!kws.length) return;
+    // 직전 회차가 전량 실패(차단 의심)였으면 10분 쉰다 — 차단 중 매분 재타격으로 차단을 연장시키지 않기 위함
+    const { odBackoffUntil = 0 } = await chrome.storage.local.get('odBackoffUntil');
+    if (Date.now() < odBackoffUntil) return;
 
-  running = true;                       // 새벽 수집과 동시 진입 방지
-  await log(`🔎 온디맨드 수집 ${kws.length}건: ${kws.join(', ')}`);
-  try {
+    const token = await getToken();
+    if (!token) return;
+    let kws = [];
+    try {
+      const res = await fetch(`${CFG.serverBase}/api/collector/requests`, {
+        headers: { 'X-Collector-Token': token },
+      });
+      if (!res.ok) return;
+      kws = (await res.json()).keywords || [];
+    } catch (e) { return; }
+    if (!kws.length) return;
+
+    await log(`🔎 온디맨드 수집 ${kws.length}건: ${kws.join(', ')}`);
+    let ok = 0, fail = 0, streak = 0;
     for (const kw of kws) {
       try {
         const payload = await collectKeyword(kw);
         if (!payload.products.length) throw new Error('상품 0건');
         await uploadKeyword(token, kw, payload);
+        ok++; streak = 0;
         await log(`  ✅ [${kw}] 온디맨드 완료 (${payload.products.length}개)`);
       } catch (e) {
+        fail++; streak++;
         await log(`  ⚠️ [${kw}] 온디맨드 실패: ${e.message}`);
+        if (streak >= 3) { await log('  🛑 연속 3회 실패 — 이번 회차 중단(차단 의심)'); break; }
       }
       await sleep(jitter());
     }
+    if (ok === 0 && fail > 0) {
+      await chrome.storage.local.set({ odBackoffUntil: Date.now() + 10 * 60 * 1000 });
+      await log('  ⏸ 전량 실패 — 온디맨드 10분 백오프');
+    }
   } finally {
-    running = false;
+    if (running === 'ondemand') running = false;   // 내 락만 해제
   }
 }
 
@@ -205,7 +217,8 @@ async function runOnDemand() {
 //  · ondemand: 1분 주기, 낮에 들어온 새 키워드 요청 즉시 수집
 function armAlarms() {
   chrome.alarms.create('daily', { periodInMinutes: 60 });
-  chrome.alarms.create('ondemand', { periodInMinutes: 1 });
+  // 30초 오프셋 — daily 와 만기가 매시 정각에 겹치지 않게(동시 발화 자체를 회피)
+  chrome.alarms.create('ondemand', { periodInMinutes: 1, when: Date.now() + 30000 });
 }
 chrome.runtime.onInstalled.addListener(() => { armAlarms(); log('설치됨 — 03시 자동 수집 + 1분 주기 온디맨드 대기.'); });
 chrome.runtime.onStartup.addListener(() => { armAlarms(); log('브라우저 시작 — 알람 재장전.'); });

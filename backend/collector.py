@@ -59,6 +59,13 @@ def init_collector_db():
                 attempts INTEGER DEFAULT 0
             );
         """)
+        # 멱등 컬럼 가드 — attempts 없는 구스키마로 생성된 DB에도 안전하게 추가
+        try:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(collect_requests)").fetchall()}
+            if "attempts" not in cols:
+                conn.execute("ALTER TABLE collect_requests ADD COLUMN attempts INTEGER DEFAULT 0")
+        except Exception as e:
+            logger.warning(f"[collector] attempts 컬럼 가드 실패(무시): {e}")
         conn.commit()
         logger.info("수집 테이블 준비 완료")
     finally:
@@ -188,7 +195,7 @@ def collect_status(x_collector_token: str = Header(None)):
             GROUP BY collected_date ORDER BY collected_date DESC
         """).fetchall()
         pending = conn.execute(
-            "SELECT COUNT(*) FROM collect_requests WHERE status='pending'").fetchone()[0]
+            "SELECT COUNT(*) FROM collect_requests WHERE status='pending' AND attempts < 5").fetchone()[0]
         return {"success": True, "today": today, "pendingRequests": pending,
                 "days": [dict(r) for r in rows]}
     finally:
@@ -278,6 +285,8 @@ def get_pending_requests(x_collector_token: str = Header(None)):
     try:
         # 오래된 완료분 정리(테이블 비대 방지)
         conn.execute("DELETE FROM collect_requests WHERE status='done' AND requested_at < datetime('now','localtime','-7 day')")
+        # 5회 소진 후에도 재요청이 없는 사장 pending 도 7일 뒤 정리(계기판·테이블 비대 방지)
+        conn.execute("DELETE FROM collect_requests WHERE status='pending' AND attempts >= 5 AND requested_at < datetime('now','localtime','-7 day')")
         # 전달 5회가 넘도록 수집이 안 된 키워드(오타·결과 0건)는 제외 — 1분마다 영원히
         # 재시도해 네이버를 계속 두드리는 폭주를 막는다. 직원이 그 키워드를 다시 분석하면
         # _enqueue_request 가 attempts 를 리셋해 5회 더 시도한다.
@@ -352,7 +361,8 @@ def _to_api_item(p: dict) -> dict:
     }
 
 
-def serve_from_collected(keyword: str, display: int = 100, start: int = 1) -> Optional[dict]:
+def serve_from_collected(keyword: str, display: int = 100, start: int = 1,
+                         enqueue_on_miss: bool = True) -> Optional[dict]:
     """죽은 쇼핑 검색 API 를 수집분으로 대체 서빙한다.
 
     search_naver_shopping_api 최상단에서 호출된다(원본 API 응답과 같은 형식으로 반환).
@@ -370,14 +380,15 @@ def serve_from_collected(keyword: str, display: int = 100, start: int = 1) -> Op
     conn.row_factory = sqlite3.Row
     try:
         r = conn.execute("""
-            SELECT total, products_json FROM collected_serp
+            SELECT total, products_json, collected_date FROM collected_serp
             WHERE keyword=? AND collected_date >= date('now','localtime','-1 day')
             ORDER BY collected_date DESC LIMIT 1
         """, (kw,)).fetchone()
     finally:
         conn.close()
     if not r:
-        _enqueue_request(kw)
+        if enqueue_on_miss:
+            _enqueue_request(kw)
         return None
     try:
         raw = json.loads(r["products_json"] or "[]")
@@ -388,5 +399,8 @@ def serve_from_collected(keyword: str, display: int = 100, start: int = 1) -> Op
     raw.sort(key=lambda p: p.get("rank", 0) or 0)
     end = start + max(1, min(display, 100)) - 1
     page = [_to_api_item(p) for p in raw if start <= (p.get("rank", 0) or 0) <= end]
+    # collectedDate: 순위 기록 배치가 '오늘분인지' 판별하는 데 쓴다 — 어제 스냅샷이
+    # 오늘 순위로 기록되는 것(수집 실패 가드 우회)을 막기 위한 필수 표식.
     return {"total": r["total"] or len(raw), "start": start,
-            "display": len(page), "items": page, "collectorServed": True}
+            "display": len(page), "items": page,
+            "collectorServed": True, "collectedDate": r["collected_date"]}

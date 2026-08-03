@@ -373,6 +373,15 @@ def _run_rank_tracking():
                     start = page_idx * 100 + 1
                     shop_result = search_naver_shopping_api(keyword, display=100, start=start)
                     total_api_calls += 1
+                    # ── 스테일 수집분 차단 ──
+                    # 서빙 훅은 2일 창이라 '어제' 수집분도 돌려줄 수 있다(주간 분석용으론 유용).
+                    # 그러나 순위 '기록'은 오늘 데이터여야 한다 — 어제 스냅샷을 오늘 순위로 저장하면
+                    # 수집 실패 가드를 우회해 1,992건 오염 사고의 변종이 재발한다.
+                    # 오늘분이 아니면 수집 실패로 취급해 저장을 건너뛴다(낮 만회 수집 후 정상화).
+                    if shop_result.get("collectorServed") and shop_result.get("collectedDate") != today:
+                        logger.warning(f"  ⏭️ [{keyword}] 수집분이 오늘자 아님({shop_result.get('collectedDate')}) — 순위 기록 건너뜀")
+                        all_prods = []
+                        break
                     items = shop_result.get("items", [])
                     if page_idx == 0:
                         total_shop = shop_result.get("total", 0)
