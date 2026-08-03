@@ -350,10 +350,26 @@ def _run_rank_tracking():
 
         for ki, keyword in enumerate(sorted(all_keywords)):
             try:
-                # ── API 호출: 최대 300개 (100개 × 3페이지) ──
+                # ── 1순위: 브라우저 수집분 (2026-08-03~) ──
+                # 네이버 쇼핑 검색 API 종료(404 SE05)로 서버는 검색 결과를 못 받는다.
+                # 사내 크롬 확장이 새벽에 올려둔 그날치 수집분이 있으면 그걸 그대로 쓴다.
+                # 수집분이 없으면 아래 기존 API 경로를 그대로 타서, API가 되살아나거나
+                # 다른 환경(로컬·테스트)에서는 종전과 똑같이 동작한다(무회귀).
                 all_prods = []
                 total_shop = 0
-                for page_idx in range(RANK_PAGES):
+                _collected = None
+                try:
+                    from collector import load_collected
+                    _collected = load_collected(keyword)
+                except Exception as _ce:
+                    logger.warning(f"  [{keyword}] 수집분 조회 실패(무시): {_ce}")
+                if _collected:
+                    all_prods = _collected["prods"]
+                    total_shop = _collected["total"]
+                    logger.info(f"  📥 [{keyword}] 브라우저 수집분 사용 — 상품 {len(all_prods)}개")
+
+                # ── 2순위: 기존 검색 API (최대 300개 = 100개 × 3페이지) ──
+                for page_idx in range(RANK_PAGES if not all_prods else 0):
                     start = page_idx * 100 + 1
                     shop_result = search_naver_shopping_api(keyword, display=100, start=start)
                     total_api_calls += 1

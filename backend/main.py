@@ -34,6 +34,7 @@ from clients import router as clients_router, init_clients_db
 from reports import router as reports_router, init_reports_db
 from client_dashboard import router as cd_router, init_client_dashboard_db
 from chat import router as chat_router, init_chat_db
+from collector import router as collector_router, init_collector_db
 from datalab import analyze_datalab
 
 logger = logging.getLogger(__name__)
@@ -266,6 +267,7 @@ async def lifespan(app):
     init_reports_db()
     init_client_dashboard_db()
     init_chat_db()
+    init_collector_db()   # 수집기 테이블(collected_serp)
 
     # DB 무결성 검증 후 백업 (테이블 초기화 이후)
     _backup_db_on_startup()
@@ -301,6 +303,7 @@ app.include_router(clients_router)
 app.include_router(reports_router)
 app.include_router(cd_router)
 app.include_router(chat_router)
+app.include_router(collector_router)  # 브라우저 수집기(크롬 확장) — 2026-08-03 쇼핑 API 종료 대응
 
 
 # ==================== 유저 격리 헬퍼 ====================
