@@ -2710,6 +2710,24 @@ def naver_probe():
     except Exception as _e:
         out["probes"]["searchad"] = {"ok": False, "errorMessage": str(_e)[:200]}
 
+    # 최근 5일 순위 기록 통계 — '배치가 수집분을 실제로 소비해 순위를 기록했는가'를
+    # 외부에서 확인하는 계기판(읽기 전용). 8/1~3 처럼 미노출 100% 면 파이프라인 이상.
+    try:
+        import sqlite3 as _sq3
+        from client_dashboard import DB_PATH as _CD_DB3
+        _c3 = _sq3.connect(_CD_DB3, timeout=10)
+        _c3.row_factory = _sq3.Row
+        out["rankDays"] = [dict(r) for r in _c3.execute("""
+            SELECT substr(checked_at,1,10) AS d, COUNT(*) AS total,
+                   SUM(CASE WHEN rank_position IS NULL THEN 1 ELSE 0 END) AS no_rank
+            FROM client_rank_history
+            WHERE checked_at >= date('now','localtime','-4 day')
+            GROUP BY d ORDER BY d
+        """).fetchall()]
+        _c3.close()
+    except Exception as _e:
+        out["rankDays"] = {"error": str(_e)[:150]}
+
     sh, bl = out["probes"].get("shop", {}), out["probes"].get("blog", {})
     if sh.get("status") == 200 and (sh.get("total") or 0) > 0:
         out["verdict"] = "쇼핑 API 정상 — 미노출 원인은 다른 곳(순위 판정·상품 매칭 등)"
