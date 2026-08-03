@@ -669,6 +669,14 @@ def run_initial_rank_check(product_id: int, product_url: str, keyword_ids: List[
     for kw_info in keyword_ids:
         try:
             _prods = _shared_crawl(kw_info["keyword"], 500)  # 공유 캐시(3h) → 과부하 방지
+            # ── 수집 실패 가드 (2026-08-04 전수조사에서 발견된 오염 잔존 경로) ──
+            # 검색 결과를 하나도 못 받았으면 '순위 없음'이 아니라 '수집 실패'다.
+            # 신규 등록 직후엔 키워드가 아직 미수집이라 거의 항상 여기 걸리는데,
+            # None 을 저장하면 허위 '미노출' 이력이 남는다(8/1~3 1,992건 오염과 동일 기전).
+            # 저장을 건너뛰면 온디맨드 수집(1~5분) 후 재체크 때 정상값이 첫 기록이 된다.
+            if not _prods:
+                logger.warning(f"초기/재체크 [{kw_info['keyword']}] 검색 결과 0건 — 수집 실패로 보고 순위 저장 건너뜀")
+                continue
             rank, page, competitors = find_product_rank(
                 keyword=kw_info["keyword"],
                 product_url=product_url,
@@ -2689,6 +2697,18 @@ def naver_probe():
             out["probes"][label] = info
         except Exception as e:
             out["probes"][label] = {"status": None, "errorMessage": str(e)[:200]}
+
+    # 검색광고 API(searchad — 검색량·연관키워드) 실호출 확인: 전수조사에서 유일한 '확인불가' 항목.
+    # 1콜 소모(무해)·5분 캐시 안에서만. 실패해도 다른 진단은 그대로.
+    try:
+        from naver_crawler import get_keyword_volume
+        _v = get_keyword_volume(["홍삼"])
+        out["probes"]["searchad"] = {
+            "ok": bool(_v), "rows": len(_v or []),
+            "sampleVolume": (_v[0].get("monthlyPcQcCnt") if _v else None),
+        }
+    except Exception as _e:
+        out["probes"]["searchad"] = {"ok": False, "errorMessage": str(_e)[:200]}
 
     sh, bl = out["probes"].get("shop", {}), out["probes"].get("blog", {})
     if sh.get("status") == 200 and (sh.get("total") or 0) > 0:
