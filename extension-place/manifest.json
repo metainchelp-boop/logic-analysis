@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "METAINC 플레이스 순위 추적기",
+  "version": "1.0.2",
+  "description": "네이버 플레이스 순위 무인 추적 — 매일 06:30 자동 수집해 로직분석에 기록합니다. (수집기 확장과 별개·공존)",
+  "permissions": ["storage", "tabs", "scripting", "alarms"],
+  "host_permissions": [
+    "https://pcmap.place.naver.com/*",
+    "https://logic.metainc.co.kr/*",
+    "http://metainc.co.kr/*",
+    "https://metainc.co.kr/*",
+    "http://www.metainc.co.kr/*",
+    "https://www.metainc.co.kr/*"
+  ],
+  "background": { "service_worker": "place-runner.js" },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": { "16": "icons/icon16.png", "48": "icons/icon48.png", "128": "icons/icon128.png" }
+  },
+  "icons": { "16": "icons/icon16.png", "48": "icons/icon48.png", "128": "icons/icon128.png" },
+  "content_scripts": [
+    {
+      "matches": ["https://logic.metainc.co.kr/*"],
+      "js": ["content-logic-place.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "http://metainc.co.kr/*",
+        "https://metainc.co.kr/*",
+        "http://www.metainc.co.kr/*",
+        "https://www.metainc.co.kr/*"
+      ],
+      "js": ["content-erp.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

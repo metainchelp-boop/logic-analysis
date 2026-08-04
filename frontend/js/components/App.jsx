@@ -13,7 +13,7 @@ window.App = function App() {
     // URL hash에서 현재 페이지 복원 (새로고침 시 탭 유지)
     var _getPageFromHash = function() {
         var hash = window.location.hash.replace('#', '');
-        var validPages = ['home', 'analysis', 'management', 'learning', 'guide', 'settings'];
+        var validPages = ['home', 'place', 'placetrack', 'analysis', 'rank', 'management', 'learning', 'seo', 'guide', 'settings'];
         return validPages.indexOf(hash) !== -1 ? hash : 'home';
     };
     const [currentPage, setCurrentPage] = useState(_getPageFromHash);
@@ -47,6 +47,9 @@ window.App = function App() {
 
     /* 순위 추적 → 업체관리 이동 시 자동 검색용 */
     const [managementInitialSearch, setManagementInitialSearch] = useState(null);
+
+    /* 경쟁사 등록 모드 — 설정 시 이 분석을 광고주의 경쟁사로 저장 (null=일반) */
+    const [competitorContext, setCompetitorContext] = useState(null); // { competitor_of, advName }
 
 
     var saveAuth = function(user, token) {
@@ -146,6 +149,57 @@ window.App = function App() {
         };
         window.addEventListener('message', onExtMsg);
         return function() { window.removeEventListener('message', onExtMsg); };
+    }, []);
+
+    /* 📊 플레이스 추적기 브리지 — 무인 수집 결과 수신 → /api/place/ingest 기록 → ACK.
+       추적기(별개 확장) 미설치·결과 없음이면 아무 일도 하지 않음(기존 흐름 무영향). */
+    const lastPlaceIngestRef = React.useRef(0);
+    const placeIngestBusyRef = React.useRef(false);
+    useEffect(function() {
+        var onPlaceMsg = function(ev) {
+            if (ev.source !== window || !ev.data || ev.data.type !== 'METAINC_PLACE_RESULTS') return;
+            if (!currentUserRef.current) return;                  // 로그인 전 — 브리지가 재시도(최대 20시간)
+            var p = ev.data.payload || {};
+            var results = p.results || [];
+            if (!results.length) return;
+            var runId = Number(p.created_at) || 0;
+            if (runId && runId === lastPlaceIngestRef.current) return;   // 같은 수집분 중복 기록 방지
+            if (placeIngestBusyRef.current) return;                       // 기록 중 재시도 무시
+            placeIngestBusyRef.current = true;
+            api.post('/place/ingest', { results: results, ran_at: p.ran_at || null, source: p.source || null })
+                .then(function(res) {
+                    placeIngestBusyRef.current = false;
+                    if (res && res.success) {
+                        lastPlaceIngestRef.current = runId || Date.now();
+                        window.postMessage({ type: 'METAINC_PLACE_RESULTS_ACK' }, window.location.origin);
+                        var s = p.summary || {};
+                        try {
+                            toast.success('📊 플레이스 무인 수집 기록: 노출 ' + (s.exposed || 0)
+                                + ' · 미노출 ' + (s.missing || 0) + (s.unknown ? ' · 미확인 ' + s.unknown : ''));
+                        } catch (e) {}
+                    }
+                })
+                .catch(function() { placeIngestBusyRef.current = false; });   // 실패 시 ACK 없음 → 브리지 재시도
+        };
+        window.addEventListener('message', onPlaceMsg);
+        return function() { window.removeEventListener('message', onPlaceMsg); };
+    }, []);
+
+    /* 🧩 경쟁사 등록 모드 복원 — 확장이 연 새 로직 탭에서도 '이 분석 = 경쟁사' 흐름이 이어지게.
+       진입(handleRegisterCompetitor) 시 localStorage에 저장한 컨텍스트를, 새 탭 로드 시 30분 이내면 복원.
+       (일반 흐름엔 무영향: 저장된 값 없으면 아무 일도 안 함) */
+    useEffect(function() {
+        try {
+            if (competitorContext) return;              // 이미 모드면 유지
+            var raw = localStorage.getItem('logic_comp_ctx');
+            if (!raw) return;
+            var ctx = JSON.parse(raw);
+            if (ctx && ctx.competitor_of && ctx.ts && (Date.now() - ctx.ts) < 30 * 60 * 1000) {
+                setCompetitorContext({ competitor_of: ctx.competitor_of, advName: ctx.advName });
+            } else {
+                localStorage.removeItem('logic_comp_ctx');  // 만료 → 정리
+            }
+        } catch(e) {}
     }, []);
 
     // 헬스체크
@@ -296,9 +350,34 @@ window.App = function App() {
         try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch(e) {}
     };
 
+    /* ==================== 스토어 분석 → 키워드 순위 탭 이동 ====================
+       검색 컨텍스트는 RankTrackingSection(analysisOnly)이 sessionStorage('logic_rank_ctx')에 기록한 뒤 호출 */
+    var handleOpenRankTab = function() {
+        setCurrentPage('rank');
+        try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch(e) {}
+    };
+
+    /* ==================== 경쟁사 등록 모드 진입 ==================== */
+    /* 업체 상세의 '경쟁사 등록' → 분석 화면으로 전환. 이후 분석을 저장하면
+       광고주(advClient)의 경쟁사로 quick-register 된다(SaveToClientSection이 competitorContext 사용). */
+    var handleRegisterCompetitor = function(advClient) {
+        if (!advClient) return;
+        setCompetitorContext({ competitor_of: advClient.id, advName: advClient.name });
+        // 확장으로 경쟁사를 보내면 '새 로직 탭'이 열려 이 모드가 사라진다 →
+        // 같은 오리진 localStorage에 잠깐(30분) 저장해 새 탭에서 복원(확장 수정 불필요).
+        try { localStorage.setItem('logic_comp_ctx', JSON.stringify({ competitor_of: advClient.id, advName: advClient.name, ts: Date.now() })); } catch(e) {}
+        setCurrentClientId(null);
+        setAutoSaveStatus('');
+        setSearchBarInitial({ keyword: '', productUrl: '', companyName: '' });
+        setCurrentPage('analysis');
+        try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch(e) {}
+        try { toast.info("경쟁사 등록 모드 — '" + advClient.name + "'의 경쟁사 상품을 분석 후 저장하세요."); } catch(e) {}
+    };
+
     /* ==================== 업체 카드 클릭 → 자동 분석 ==================== */
     var handleClientClick = function(params) {
         if (!params) return;
+        setCompetitorContext(null); try { localStorage.removeItem('logic_comp_ctx'); } catch(e) {}  // 일반 업체 분석 → 경쟁사 모드 해제
         setCurrentClientId(params.clientId);
         setSearchBarInitial({
             keyword: params.keyword || '',
@@ -443,10 +522,40 @@ window.App = function App() {
             React.createElement(window.ClientDashboard, {
                 currentUser: currentUser,
                 onRunAnalysis: handleClientClick,
+                onRegisterCompetitor: handleRegisterCompetitor,
                 onDownloadReport: downloadSavedReport,
                 initialSearch: managementInitialSearch,
                 canEdit: currentUser.role !== 'viewer'
             })
+        ),
+        React.createElement(window.ChatWidget, { currentUser: currentUser })
+    );
+
+    /* 📊 키워드 순위 탭 — 업체별 순위 추적 (스토어 분석에서 분리, 2026-08-04) */
+    if (currentPage === 'rank') return React.createElement(React.Fragment, null,
+        React.createElement('div', null,
+            React.createElement(window.TopBar, { activePage: 'rank', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
+            React.createElement(window.KeywordRankPage, {
+                currentUser: currentUser,
+                onNavigateToClient: handleNavigateToClient
+            })
+        ),
+        React.createElement(window.ChatWidget, { currentUser: currentUser })
+    );
+
+    /* 플레이스 분석 탭 — 오프라인·지역 업종(자체완결 페이지, 스토어 분석 흐름과 독립) */
+    if (currentPage === 'place') return React.createElement(React.Fragment, null,
+        React.createElement('div', null,
+            React.createElement(window.TopBar, { activePage: 'place', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
+            React.createElement(window.PlaceAnalysisPage, { currentUser: currentUser })
+        ),
+        React.createElement(window.ChatWidget, { currentUser: currentUser })
+    );
+
+    if (currentPage === 'placetrack') return React.createElement(React.Fragment, null,
+        React.createElement('div', null,
+            React.createElement(window.TopBar, { activePage: 'placetrack', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
+            React.createElement(window.PlaceTrackingPage, { currentUser: currentUser })
         ),
         React.createElement(window.ChatWidget, { currentUser: currentUser })
     );
@@ -467,6 +576,14 @@ window.App = function App() {
         React.createElement(window.ChatWidget, { currentUser: currentUser })
     );
 
+    if (currentPage === 'seo' && (currentUser.role === 'manager' || currentUser.role === 'superadmin')) return React.createElement(React.Fragment, null,
+        React.createElement('div', null,
+            React.createElement(window.TopBar, { activePage: 'seo', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
+            React.createElement(window.SeoOptimizerPage, { currentUser: currentUser })
+        ),
+        React.createElement(window.ChatWidget, { currentUser: currentUser })
+    );
+
     if (currentPage === 'users' && (currentUser.role === 'admin' || currentUser.role === 'superadmin')) return React.createElement(React.Fragment, null,
         React.createElement('div', null,
             React.createElement(window.TopBar, { activePage: 'users', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
@@ -481,6 +598,7 @@ window.App = function App() {
             React.createElement('div', { style: { maxWidth: 1000, margin: '0 auto', padding: '24px 16px' } },
                 React.createElement(window.AnalysisStatsSection, null),
                 React.createElement(ApiUsageSection, null),
+                React.createElement(window.SeoRulesSection, null),
                 React.createElement(NotificationSection, null),
                 React.createElement(window.ManagerReassignSection, null),
                 React.createElement(window.ClientDiagnosticsSection, null),
@@ -512,6 +630,17 @@ window.App = function App() {
                 autoSaveStatus === 'error' ? '⚠️ 자동 저장에 실패했습니다. 하단의 "업체 등록/저장" 버튼을 이용해주세요' : ''
             ),
 
+            /* 경쟁사 등록 모드 배너 */
+            competitorContext && React.createElement('div', {
+                style: { background: '#fff7ed', color: '#c2410c', border: '1px solid #fed7aa', padding: '10px 16px', fontSize: 13, fontWeight: 700, textAlign: 'center', borderRadius: 10, margin: '10px auto', maxWidth: 1200 }
+            },
+                "⚔️ 경쟁사 등록 모드 — 이 분석을 " + ((currentUser && currentUser.role === 'viewer') ? '영업 대상' : '광고주') + " '" + competitorContext.advName + "'의 경쟁사로 저장합니다. 경쟁사 상품 페이지에서 확장 프로그램(또는 북마클릿)으로 보내거나 아래에 붙여넣어 분석 후 '경쟁사로 저장'을 누르세요.",
+                React.createElement('button', {
+                    onClick: function() { setCompetitorContext(null); try { localStorage.removeItem('logic_comp_ctx'); } catch(e) {} try { toast.info('일반 분석 모드로 전환했습니다.'); } catch(e) {} },
+                    style: { marginLeft: 12, fontSize: 11.5, fontWeight: 700, color: '#c2410c', background: '#fff', border: '1px solid #fdba74', borderRadius: 7, padding: '3px 10px', cursor: 'pointer' }
+                }, '모드 해제')
+            ),
+
             /* ==================== 보고서 레이아웃: 좌측 목차 + 본문 ==================== */
             React.createElement(window.AnalysisResults, {
                 advertiserLoading: advertiserLoading,
@@ -537,7 +666,10 @@ window.App = function App() {
                 sections: sections,
                 setRankCheckResult: setRankCheckResult,
                 shopProducts: shopProducts,
-                volumeData: volumeData
+                volumeData: volumeData,
+                competitorContext: competitorContext,
+                onCompetitorSaved: function() { setCompetitorContext(null); try { localStorage.removeItem('logic_comp_ctx'); } catch(e) {} },
+                onOpenRankTab: handleOpenRankTab
             })
         ),
         React.createElement(window.ChatWidget, { currentUser: currentUser })

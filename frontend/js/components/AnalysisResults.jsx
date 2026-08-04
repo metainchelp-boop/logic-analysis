@@ -26,6 +26,36 @@ window.AnalysisResults = function AnalysisResults(props) {
     var shopProducts = props.shopProducts;
     var volumeData = props.volumeData;
 
+    /* 광고주/스토어명 자동 채우기 (2026-07-27 수정)
+       주의: 백엔드 store_name 은 쇼핑API 매칭·상품페이지 방문이 모두 실패하면
+       'URL 슬러그'가 그대로 담긴다. 슬러그가 이메일 아이디인 업체가 있어 표지에
+       'chajju2009' 처럼 찍히는 신고가 있었다(윤채은 07-27). 따라서 슬러그와 같은 값은
+       '이름 미확보'로 보고, 상세 HTML에서 뽑은 실제 상호명(storeInfo)을 우선 사용한다.
+       ※ 슬러그는 순위 매칭 키로 계속 쓰이므로 여기서는 '표시용'만 판단한다. */
+    var _urlSlug = (function() {
+        try { var m = (searchedProductUrl || '').match(/smartstore\.naver\.com\/([^\/?#]+)/); return m ? decodeURIComponent(m[1]) : ''; }
+        catch (e) { return ''; }
+    })();
+    var _isSlug = function(v) {
+        return !!v && !!_urlSlug && String(v).trim().toLowerCase() === _urlSlug.trim().toLowerCase();
+    };
+    var _realStoreName = (function() {
+        var cands = [
+            (htmlDetailResult && htmlDetailResult.storeInfo && htmlDetailResult.storeInfo.name),
+            (advertiserReport && advertiserReport.product_info && advertiserReport.product_info.store_name),
+            (analysisData && analysisData.targetProductInfo && analysisData.targetProductInfo.store_name),
+            (analysisData && analysisData.htmlDetail && analysisData.htmlDetail.storeInfo && analysisData.htmlDetail.storeInfo.name)
+        ];
+        for (var i = 0; i < cands.length; i++) {
+            var v = cands[i] && String(cands[i]).trim();
+            if (v && !_isSlug(v)) return v;   // 슬러그와 같은 값은 이름으로 인정하지 않음
+        }
+        return '';
+    })();
+    /* 실제 이름을 못 구하면 최후에만 슬러그(빈 표지보다는 낫다) */
+    var _storeName = _realStoreName || _urlSlug || '';
+    var _displayCompany = companyName || _storeName;
+
     return (
                 React.createElement('div', { className: 'report-shell' },
                   /* 좌측 고정 목차 (와이드 화면 전용) — 분석 결과(섹션 2개 이상)가 있을 때만 표시 */
@@ -55,7 +85,7 @@ window.AnalysisResults = function AnalysisResults(props) {
                         React.createElement('div', { className: 'rc-grid' },
                             React.createElement('div', { className: 'rc-field' },
                                 React.createElement('div', { className: 'rc-k' }, '광고주 / 스토어'),
-                                React.createElement('div', { className: 'rc-v' }, companyName || '-')
+                                React.createElement('div', { className: 'rc-v' }, _displayCompany || '-')
                             ),
                             React.createElement('div', { className: 'rc-field' },
                                 React.createElement('div', { className: 'rc-k' }, '분석 키워드'),
@@ -268,14 +298,16 @@ window.AnalysisResults = function AnalysisResults(props) {
                 /* ========== 4. 내 상품 현황 ========== */
                 analysisData && React.createElement(window.SectionDivider, { label: '4. 내 상품 현황', icon: '🛒', color: '#059669', sub: '노출순위 · 판매추정 · 리뷰 · SEO 4종' }),
     
-                /* 키워드별 노출 순위 */
+                /* 키워드별 노출 순위 — analysisOnly 모드(노출 분석·1회성 조회만, 보고서 구성 요소).
+                   추적 상품 목록·등록 관리만 📊 키워드 순위 탭으로 분리(2026-08-04, 직원 신고로
+                   노출 분석 블록은 복구 — 탭 분리 대상은 '추적 현황 열람'이지 분석 결과가 아님). */
                 React.createElement(window.SectionErrorBoundary, { name: '순위 추적' },
-                    React.createElement(RankTrackingSection, { products: products, refreshProducts: loadProducts, searchedKeyword: searchedKeyword, searchedProductUrl: searchedProductUrl, cachedProductName: advertiserReport && advertiserReport.product_name ? advertiserReport.product_name : (analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo.product_name : null), relatedKeywords: (relatedData ? (relatedData.golden_keywords || []).concat(relatedData.related_keywords || []).map(function(k) { return typeof k === 'string' ? k : (k && k.keyword) || ''; }).filter(Boolean) : []), onNavigateToClient: handleNavigateToClient, canEdit: currentUser.role !== 'viewer', onRankResult: setRankCheckResult })
+                    React.createElement(RankTrackingSection, { analysisOnly: true, onOpenRankTab: props.onOpenRankTab, products: products, refreshProducts: loadProducts, searchedKeyword: searchedKeyword, searchedProductUrl: searchedProductUrl, cachedProductName: advertiserReport && advertiserReport.product_name ? advertiserReport.product_name : (analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo.product_name : null), relatedKeywords: (relatedData ? (relatedData.golden_keywords || []).concat(relatedData.related_keywords || []).map(function(k) { return typeof k === 'string' ? k : (k && k.keyword) || ''; }).filter(Boolean) : []), onNavigateToClient: handleNavigateToClient, canEdit: currentUser.role !== 'viewer', onRankResult: setRankCheckResult })
                 ),
 
                 /* 분석 상품 순위추적 원클릭 등록 */
                 searchedProductUrl && React.createElement(window.SectionErrorBoundary, { name: '추적 등록' },
-                    React.createElement(window.TrackRegisterButton, { searchedProductUrl: searchedProductUrl, searchedKeyword: searchedKeyword, products: products, refreshProducts: loadProducts, canEdit: currentUser.role !== 'viewer' })
+                    React.createElement(window.TrackRegisterButton, { searchedProductUrl: searchedProductUrl, searchedKeyword: searchedKeyword, products: products, refreshProducts: loadProducts, canEdit: currentUser.role !== 'viewer', storeNameHint: _realStoreName })
                 ),
     
                 /* 판매량 추정 */
@@ -395,8 +427,8 @@ window.AnalysisResults = function AnalysisResults(props) {
                     })
                 ),
     
-                /* 20. 업체 등록/저장 (viewer는 숨김) */
-                analysisData && currentUser.role !== 'viewer' && React.createElement(window.SectionErrorBoundary, { name: '업체 저장' },
+                /* 20. 업체 등록/저장 — 관리팀은 업체+경쟁사, 영업사원(viewer)은 경쟁사 저장만 */
+                analysisData && React.createElement(window.SectionErrorBoundary, { name: '업체 저장' },
                     React.createElement(SaveToClientSection, {
                         keyword: searchedKeyword,
                         productUrl: searchedProductUrl,
@@ -407,6 +439,10 @@ window.AnalysisResults = function AnalysisResults(props) {
                         advertiserReport: advertiserReport,
                         detailHtml: lastHtmlRef.current,
                         htmlDetailResult: htmlDetailResult,
+                        competitorContext: props.competitorContext,
+                        onCompetitorSaved: props.onCompetitorSaved,
+                        isViewer: currentUser.role === 'viewer',
+                        defaultName: _displayCompany,
                     })
                 ),
     

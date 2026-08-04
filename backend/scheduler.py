@@ -1,8 +1,9 @@
 """
 로직 분석 프로그램 v3 - 스케줄러 모듈
 APScheduler 기반 통합 스케줄러
-- 08:00 순위 추적 (홈탭 + 업체, 키워드당 1회 API, 결과 캐시)
-- 09:00 전체 분석 + HTML 보고서 (08시 캐시 재사용, API 추가 호출 없음)
+- 04:00 계약단계 동기화 · 08:00 순위 추적 (맥북 브라우저 수집 01:00~07:00 분 소비)
+- 08:30 전체 분석 + HTML 보고서 (08:00 캐시 재사용) → 09:30 리포트 발송(현재 발송 비활성 — 운영자 확인 후 재개)
+  ※ 2026-07-27 업무시간 502 사고로 전 배치를 새벽으로 이동(업무 시작 전 종료)
 - 일일 API 호출: ~147회 (기존 25,000+에서 99% 절감)
 """
 import logging
@@ -18,7 +19,7 @@ logger = logging.getLogger(__name__)
 # 글로벌 스케줄러 인스턴스
 _scheduler: BackgroundScheduler = None
 
-# 08시 순위 추적에서 캐시한 API 결과 → 09시 분석에서 재사용
+# 08:00 순위 추적에서 캐시한 결과 → 08:30 분석에서 재사용
 _api_cache = {}       # {keyword: {"prods": [...], "total": int}}
 _api_cache_date = ""  # 캐시 날짜 (당일만 유효)
 
@@ -48,17 +49,25 @@ def start_scheduler():
         job_defaults={"misfire_grace_time": 3600, "coalesce": True, "max_instances": 1},
     )
 
-    # 0) 계약단계 동기화 — 매일 07:30 (전산 ad-sync 소비 합의 2026-07-20, 08시 배치 전에 실행)
+    # ⏰ 배치 시간대 이동 (2026-07-27, 운영자 승인)
+    #   사유: 09:00 전체분석은 업체수×키워드마다 1~2초 대기하며 1시간 이상 도는 장시간 배치라
+    #   업무시간(10시대)까지 물려, 같은 컨테이너(RAM 1.9GB·uvicorn 워커 5)의 사용자 요청이
+    #   502로 실패하는 사고가 있었다(직원 신고 07-27 10:12). 체인 전체를 새벽으로 당겨
+    #   업무 시작(09:00) 전에 끝나게 한다. 의존 순서(계약동기화→순위추적 캐시→분석→발송)는 유지.
+
+    # 0) 계약단계 동기화 — 매일 04:00 (구 07:30. 분석 배치 전에 실행해 만료 업체를 제외)
+    #    ※ ad-sync 소비 합의(2026-07-20) 조건 유지: 하루 1회·읽기 전용·단계당 1콜,
+    #      ③ 광고센터의 06:00과 시간대 분리(04:00). 시각 변경은 ①에 통지 대상.
     _scheduler.add_job(
         _run_contract_stage_sync,
-        trigger=CronTrigger(hour=7, minute=30),
+        trigger=CronTrigger(hour=4, minute=0),
         id="contract_stage_sync",
-        name="계약단계 동기화 (07:30)",
+        name="계약단계 동기화 (04:00)",
         replace_existing=True,
         max_instances=1,
     )
 
-    # 1) 순위 추적 — 매일 08:00 (홈탭 + 업체, 키워드당 1회 API, 결과 캐시)
+    # 1) 순위 추적 — 매일 08:00 (2026-08-04 운영자 확정: 수집 01~07시 완료 후 소비, 데드라인 10시)
     _scheduler.add_job(
         _run_rank_tracking,
         trigger=CronTrigger(hour=8, minute=0),
@@ -68,22 +77,23 @@ def start_scheduler():
         max_instances=1,
     )
 
-    # 2) 전체 분석 + 보고서 — 매일 09:00 (08시 캐시 재사용)
+    # 2) 전체 분석 + 보고서 — 매일 08:30 (08:00 캐시 재사용)
+    #    발송(08:00)까지 3시간 확보 — 기존 09→10시 간격(1시간)보다 여유가 크다.
     _scheduler.add_job(
         _run_daily_analysis,
-        trigger=CronTrigger(hour=9, minute=0),
+        trigger=CronTrigger(hour=8, minute=30),
         id="daily_analysis",
-        name="전체 분석 + 보고서 (09:00)",
+        name="전체 분석 + 보고서 (08:30)",
         replace_existing=True,
         max_instances=1,
     )
 
-    # 3) 일일 리포트 발송 — 10:00 (분석 완료 후 발송)
+    # 3) 일일 리포트 발송 — 08:00 (구 10:00. 분석 완료 후 발송 · 업무 시작 전 도착)
     _scheduler.add_job(
         _run_daily_report,
-        trigger=CronTrigger(hour=10, minute=0),
+        trigger=CronTrigger(hour=9, minute=30),
         id="daily_report",
-        name="일일 리포트 발송 (10:00)",
+        name="일일 리포트 발송 (08:00)",
         replace_existing=True,
         max_instances=1,
     )
@@ -99,7 +109,7 @@ def start_scheduler():
     )
 
     _scheduler.start()
-    logger.info("✅ 스케줄러 시작 (순위: 08:00, 분석: 09:00, 리포트: 10:00, DB백업: 00:30)")
+    logger.info("✅ 스케줄러 시작 (계약동기화: 04:00, 순위: 08:00, 분석: 08:30, 리포트: 09:30(발송 비활성), DB백업: 00:30)")
 
 
 def stop_scheduler():
@@ -128,11 +138,11 @@ def reschedule_report(hour: int, minute: int):
         logger.error(f"리포트 스케줄 변경 실패: {e}")
 
 
-# ==================== 07:30 계약단계 동기화 (전산 ad-sync 소비) ====================
+# ==================== 04:00 계약단계 동기화 (전산 ad-sync 소비) ====================
 #   합의(2026-07-20): ① 메타 전산의 GET /api/ad-sync/contracts 를 ②(로직분석)도 소비.
 #   계약이 끝난 단계(계약 만료·환불중·홀딩중) 업체는 자동 추적을 자동 중지(⏸),
 #   운영 단계(진행중·전략 관리·사후 관리)로 복귀하면 자동 재개(▶).
-#   - 읽기 전용 · 하루 1회(07:30 — ③ 광고센터 06:00과 시간 분리) · 단계당 1콜(총 6콜).
+#   - 읽기 전용 · 하루 1회(04:00 — ③ 광고센터 06:00과 시간 분리) · 단계당 1콜(총 6콜).
 #   - 직원 수동 토글(auto_analysis_manual=1) 업체는 절대 덮어쓰지 않음(수동 우선).
 #   - ERP_AD_SYNC_API_KEY 미설정·API 실패 시 아무것도 바꾸지 않음(안전 기본값).
 
@@ -181,7 +191,7 @@ def _decide_stage_actions(client_rows, stage_by_name, stage_by_slug):
 
 
 def _run_contract_stage_sync():
-    """07:30 — 전산 계약 단계 기반 자동 추적 중지/재개"""
+    """04:00 — 전산 계약 단계 기반 자동 추적 중지/재개"""
     import os
     import sqlite3
     import requests
@@ -228,7 +238,8 @@ def _run_contract_stage_sync():
         rows = conn.execute(
             "SELECT id, name, business_name, naver_store_url, auto_analysis, "
             "COALESCE(auto_analysis_manual, 0) AS auto_analysis_manual "
-            "FROM clients WHERE status = 'active'"
+            "FROM clients WHERE status = 'active' AND COALESCE(role,'advertiser')='advertiser' "
+            "AND COALESCE(vertical,'store')='store'"
         ).fetchall()
         pause_ids, resume_ids = _decide_stage_actions(rows, stage_by_name, stage_by_slug)
         for cid in pause_ids:
@@ -265,7 +276,7 @@ def _collect_all_keywords(conn):
 
     # 업체 키워드
     clients = conn.execute(
-        "SELECT id, name, main_keywords, naver_store_url FROM clients WHERE status = 'active' AND COALESCE(auto_analysis, 1) = 1"  # 관리 중단 업체 제외(호출 다이어트)
+        "SELECT id, name, main_keywords, naver_store_url FROM clients WHERE status = 'active' AND COALESCE(auto_analysis, 1) = 1 AND COALESCE(role,'advertiser')='advertiser' AND COALESCE(vertical,'store')='store'"  # 관리 중단 업체 제외(호출 다이어트) · 플레이스 축 제외(스토어 크롤 대상 아님)
     ).fetchall()
 
     client_keyword_map = {}  # {client_id: [keywords]}
@@ -340,13 +351,38 @@ def _run_rank_tracking():
 
         for ki, keyword in enumerate(sorted(all_keywords)):
             try:
-                # ── API 호출: 최대 300개 (100개 × 3페이지) ──
+                # ── 1순위: 브라우저 수집분 (2026-08-03~) ──
+                # 네이버 쇼핑 검색 API 종료(404 SE05)로 서버는 검색 결과를 못 받는다.
+                # 사내 크롬 확장이 새벽에 올려둔 그날치 수집분이 있으면 그걸 그대로 쓴다.
+                # 수집분이 없으면 아래 기존 API 경로를 그대로 타서, API가 되살아나거나
+                # 다른 환경(로컬·테스트)에서는 종전과 똑같이 동작한다(무회귀).
                 all_prods = []
                 total_shop = 0
-                for page_idx in range(RANK_PAGES):
+                _collected = None
+                try:
+                    from collector import load_collected
+                    _collected = load_collected(keyword)
+                except Exception as _ce:
+                    logger.warning(f"  [{keyword}] 수집분 조회 실패(무시): {_ce}")
+                if _collected:
+                    all_prods = _collected["prods"]
+                    total_shop = _collected["total"]
+                    logger.info(f"  📥 [{keyword}] 브라우저 수집분 사용 — 상품 {len(all_prods)}개")
+
+                # ── 2순위: 기존 검색 API (최대 300개 = 100개 × 3페이지) ──
+                for page_idx in range(RANK_PAGES if not all_prods else 0):
                     start = page_idx * 100 + 1
                     shop_result = search_naver_shopping_api(keyword, display=100, start=start)
                     total_api_calls += 1
+                    # ── 스테일 수집분 차단 ──
+                    # 서빙 훅은 2일 창이라 '어제' 수집분도 돌려줄 수 있다(주간 분석용으론 유용).
+                    # 그러나 순위 '기록'은 오늘 데이터여야 한다 — 어제 스냅샷을 오늘 순위로 저장하면
+                    # 수집 실패 가드를 우회해 1,992건 오염 사고의 변종이 재발한다.
+                    # 오늘분이 아니면 수집 실패로 취급해 저장을 건너뛴다(낮 만회 수집 후 정상화).
+                    if shop_result.get("collectorServed") and shop_result.get("collectedDate") != today:
+                        logger.warning(f"  ⏭️ [{keyword}] 수집분이 오늘자 아님({shop_result.get('collectedDate')}) — 순위 기록 건너뜀")
+                        all_prods = []
+                        break
                     items = shop_result.get("items", [])
                     if page_idx == 0:
                         total_shop = shop_result.get("total", 0)
@@ -363,6 +399,19 @@ def _run_rank_tracking():
                     if page_idx < RANK_PAGES - 1:
                         time.sleep(DELAY_PER_PAGE)
 
+                # ── 수집 실패 판정 ──
+                # 2026-08-01 네이버 쇼핑 검색 API 종료(404 SE05) 이후, 검색 결과가 0건이어도
+                # 순위 None 을 그대로 저장해 '미노출'로 기록되던 문제(3일간 1,992건 오염).
+                # 상품을 하나도 못 받았으면 '순위 없음'이 아니라 '수집 실패'이므로 저장하지 않는다.
+                # (진짜 미노출은 all_prods 가 채워진 상태에서 내 상품이 안 잡히는 경우다.)
+                if not all_prods:
+                    total_errors += 1
+                    logger.error(f"  ⚠️ [{keyword}] 검색 결과 0건 — 수집 실패로 보고 순위 저장 건너뜀"
+                                 f" (미노출로 잘못 기록되는 것 방지)")
+                    if ki < len(all_keywords) - 1:
+                        time.sleep(DELAY_PER_KEYWORD)
+                    continue
+
                 # 09시 분석용 캐시 저장 (첫 100개만 — 기존 호환)
                 _api_cache[keyword] = {"prods": all_prods[:100], "total": total_shop}
 
@@ -373,6 +422,13 @@ def _run_rank_tracking():
                             rank, page, competitors = find_product_rank_from_cache(
                                 keyword, product["product_url"], all_prods
                             )
+                            # 슬러그로 저장된 스토어명 자가치유 (매칭 시 mallName 확보됨)
+                            if rank is not None:
+                                try:
+                                    from database import heal_tracked_product_info
+                                    heal_tracked_product_info(product["id"], product["product_url"], all_prods)
+                                except Exception:
+                                    pass
                             # 리뷰수 1회 조회 (상품당 캐시) — 실패해도 순위 저장엔 무영향
                             _purl = product.get("product_url")
                             if _purl not in _review_cache:
@@ -441,11 +497,11 @@ def _run_rank_tracking():
         logger.error(f"❌ 순위 추적 전체 실패: {e}")
 
 
-# ==================== 09:00 전체 분석 + 보고서 ====================
+# ==================== 08:30 전체 분석 + 보고서 ====================
 
 def _run_daily_analysis():
     """
-    09:00 전체 분석 + HTML 보고서 — 08시 캐시된 상품 데이터를 재사용.
+    08:30 전체 분석 + HTML 보고서 — 08:00 캐시된 상품 데이터를 재사용.
     쇼핑 API 추가 호출 없음 (검색광고 API만 사용: 검색량 + 연관 키워드).
     캐시 미스 시에만 쇼핑 API 호출 (fallback).
     """
@@ -455,6 +511,15 @@ def _run_daily_analysis():
 
     DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
     today = date.today().isoformat()
+
+    # 만료 경쟁사 자동 삭제 (영업사원 등록·30일 경과) — 일일 1회
+    try:
+        from client_dashboard import cleanup_expired_competitors
+        _n = cleanup_expired_competitors()
+        if _n:
+            logger.info(f"🗑️ 만료 경쟁사 {_n}건 자동 삭제 완료")
+    except Exception as _e:
+        logger.error(f"[cleanup] 만료 경쟁사 삭제 실패: {_e}")
 
     logger.info(f"📊 전체 분석 + 보고서 생성 시작 ({datetime.now().strftime('%H:%M')})")
 
@@ -491,7 +556,7 @@ def _run_daily_analysis():
 
         # 활성 업체 + 키워드 수집
         clients = conn.execute(
-            "SELECT id, name, main_keywords, naver_store_url FROM clients WHERE status = 'active' AND COALESCE(auto_analysis, 1) = 1"  # 관리 중단 업체 제외(호출 다이어트)
+            "SELECT id, name, main_keywords, naver_store_url FROM clients WHERE status = 'active' AND COALESCE(auto_analysis, 1) = 1 AND COALESCE(role,'advertiser')='advertiser' AND COALESCE(vertical,'store')='store'"  # 관리 중단 업체 제외(호출 다이어트) · 플레이스 축 제외(스토어 크롤 대상 아님)
         ).fetchall()
 
         client_keyword_map = {}

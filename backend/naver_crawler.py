@@ -156,7 +156,8 @@ def get_search_api_usage_today() -> Dict:
 
 # ==================== 네이버 쇼핑 공식 API ====================
 
-def search_naver_shopping_api(keyword: str, display: int = 100, start: int = 1, sort: str = "sim", retry_on_429: bool = False) -> Dict:
+def search_naver_shopping_api(keyword: str, display: int = 100, start: int = 1, sort: str = "sim", retry_on_429: bool = False,
+                              enqueue_on_miss: bool = True) -> Dict:
     """
     네이버 검색 API - 쇼핑 검색
 
@@ -167,6 +168,21 @@ def search_naver_shopping_api(keyword: str, display: int = 100, start: int = 1, 
 
     ⚠️ sort=sim은 실제 네이버쇼핑 노출 순위(rel)와 다름
     """
+    # ── 2026-08 쇼핑 검색 API 종료(404 SE05) 대응: 브라우저 수집분 우선 서빙 ──
+    # 사내 크롬 확장이 새벽에 올린 수집분(2일 내)이 있으면 원본 API 형식 그대로 반환.
+    # 없으면 요청 큐에 등록하고 아래 기존 API 경로로 폴백(API 부활 시 자동 원복 = 무회귀).
+    # 이 한 지점으로 분석기·광고주 분석·키워드 노출·자동 분석이 전부 수집분 위에서 돈다.
+    try:
+        from collector import serve_from_collected
+        _served = serve_from_collected(keyword, display=display, start=start,
+                                       enqueue_on_miss=enqueue_on_miss)
+    except Exception as _se:
+        _served = None
+        logger.warning(f"수집분 서빙 실패(무시, API 폴백): {_se}")
+    if _served is not None:
+        logger.info(f"수집분 서빙 '{keyword}': {_served.get('total', 0)}건 중 {len(_served.get('items', []))}건 (브라우저 수집)")
+        return _served
+
     if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
         logger.error("네이버 API 키가 설정되지 않았습니다.")
         return {"error": "API 키 미설정", "items": [], "total": 0}
@@ -200,6 +216,10 @@ def search_naver_shopping_api(keyword: str, display: int = 100, start: int = 1, 
                     continue
                 logger.warning(f"네이버 API 429 Rate Limit — 건너뜀 (keyword: {keyword})")
                 return {"error": "API 요청 한도 초과", "items": [], "total": 0}
+            # 404 = 쇼핑 검색 API 서비스 종료(SE05, 2026-07-31). 재시도해도 소용없으니 즉시 반환
+            if response.status_code == 404:
+                logger.error(f"쇼핑 검색 API 404(서비스 종료) — 수집분도 없음 (keyword: {keyword})")
+                return {"error": "쇼핑 검색 API 종료(수집분 없음)", "items": [], "total": 0}
             response.raise_for_status()
             data = response.json()
             logger.info(f"API 검색 '{keyword}': {data.get('total', 0)}건 중 {len(data.get('items', []))}건 조회")
@@ -586,7 +606,8 @@ def _get_product_info_impl(product_url: str, keyword: str = "") -> Dict:
     # ===== 2차: 스토어명으로 네이버 쇼핑 API 검색 =====
     if not result["product_name"] and store_name and product_id:
         try:
-            api_result = search_naver_shopping_api(store_name, display=100, retry_on_429=True)
+            # 스토어명은 수집 키워드가 아님 — 온디맨드 큐에 넣지 않는다(수집 예산 보호)
+            api_result = search_naver_shopping_api(store_name, display=100, retry_on_429=True, enqueue_on_miss=False)
             for item in api_result.get("items", []):
                 if _match_item(item):
                     _fill_from_item(item)
@@ -1716,6 +1737,84 @@ def _analyze_reviews(reviews: list) -> dict:
     }
 
 
+def extract_store_display_name(html: str, product_url: str = "") -> Dict:
+    """상세페이지 HTML에서 '표시용' 스토어/상호명을 추출한다 (2026-07-27).
+
+    배경: get_product_info 는 쇼핑 API 매칭·상품페이지 방문이 모두 실패하면
+    store_name 을 URL 슬러그로 남긴다. 슬러그가 이메일 아이디인 업체가 있어
+    보고서 표지에 'chajju2009' 처럼 엉뚱한 값이 찍히는 신고가 있었다.
+    직원이 붙여넣는 상세 HTML에는 실제 상호명이 들어 있으므로 여기서 뽑는다.
+
+    ⚠️ 슬러그는 순위 매칭 키로 계속 쓰이므로 이 함수는 '표시용'만 반환하며,
+       기존 store_name/매칭 로직은 건드리지 않는다.
+    반환: {"name": str, "source": str}  — 못 찾으면 name=""
+    """
+    if not html:
+        return {"name": "", "source": ""}
+
+    slug = (extract_store_name_from_url(product_url) or "").strip().lower()
+    # 스토어명으로 볼 수 없는 일반 문구(플랫폼명 등)
+    # 공백을 제거한 형태로 비교한다("네이버 스마트스토어" 같은 변형까지 배제)
+    generic = {"네이버", "네이버쇼핑", "스마트스토어", "네이버스마트스토어", "브랜드스토어",
+               "네이버브랜드스토어", "smartstore", "naver", "navershopping", "쇼핑", "쇼핑몰"}
+
+    def _clean(v):
+        if not v:
+            return ""
+        s = str(v)
+        # HTML/JSON 내 유니코드 이스케이프(\uXXXX) 복원
+        if "\\u" in s:
+            try:
+                s = s.encode().decode("unicode_escape")
+            except Exception:
+                pass
+        s = re.sub(r"\s+", " ", s).strip().strip('"\'')
+        return s
+
+    def _ok(v):
+        """실제 상호명으로 볼 수 있는가 — 일반문구/슬러그/비정상 길이 배제"""
+        if not v or not (1 < len(v) <= 60):
+            return False
+        low = v.lower()
+        if re.sub(r"\s+", "", low) in generic:
+            return False
+        if slug and low == slug:      # 슬러그와 같으면 표시용으로 무의미
+            return False
+        return True
+
+    # 1) 스마트스토어 임베드 JSON — 채널(스토어) 표시명이 가장 정확
+    for pat, src in (
+        (r'"channelName"\s*:\s*"([^"]{1,60})"', "channelName"),
+        (r'"mallName"\s*:\s*"([^"]{1,60})"', "mallName"),
+        (r'"storeName"\s*:\s*"([^"]{1,60})"', "storeName"),
+    ):
+        for m in re.finditer(pat, html):
+            v = _clean(m.group(1))
+            if _ok(v):
+                return {"name": v, "source": src}
+
+    # 2) 판매자 정보의 '상호명' (사업자 정보 영역) — 화면에 보이는 그 값
+    try:
+        from bs4 import BeautifulSoup as _BS
+        text = _BS(html, "html.parser").get_text(" ", strip=True)
+    except Exception:
+        text = re.sub(r"<[^>]+>", " ", html)
+    m = re.search(r"상호(?:명)?\s*[:：]?\s*(.{1,60}?)\s*(?:대표자|사업자|고객센터|이메일|주소|통신판매|$)", text)
+    if m:
+        v = _clean(m.group(1))
+        if _ok(v):
+            return {"name": v, "source": "상호명"}
+
+    # 3) og:site_name (플랫폼 일반명이면 위 _ok 에서 걸러짐)
+    m = re.search(r'<meta[^>]+property=["\']og:site_name["\'][^>]+content=["\']([^"\']{1,60})["\']', html, re.I)
+    if m:
+        v = _clean(m.group(1))
+        if _ok(v):
+            return {"name": v, "source": "og:site_name"}
+
+    return {"name": "", "source": ""}
+
+
 def analyze_detail_page(html: str, product_url: str = "") -> Dict:
     """
     상세페이지 HTML을 분석하여 품질 지표를 추출
@@ -2282,4 +2381,6 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
         "scores": scores,
         "suggestions": suggestions,
         "reviewData": review_data,
+        # 표시용 스토어/상호명 (슬러그 오표기 방지 — 2026-07-27). 실패 시 name=""
+        "storeInfo": extract_store_display_name(html, product_url),
     }

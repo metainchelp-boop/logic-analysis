@@ -49,15 +49,17 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
           <div className="kpi"><div className="k">예상 전환율</div><div className="v">{estimatedCTR}</div></div>
         </div>
 
-        {/* ★ 리뷰 기반 추정(더 정확) — 실제 리뷰수 기반이라 CTR 추정보다 오차가 작음 */}
-        {props.reviewCount != null && props.reviewCount > 0 && (function() {
-          var rc = props.reviewCount;
-          var rate = 0.116; // 식품 평균 리뷰 작성률
-          var cumSales = Math.round(rc / rate);
-          var monthly = Math.round(cumSales / 12); // 운영 12개월 가정
+        {/* ★ 리뷰 기반 추정(더 정확) — 실제 리뷰수 기반이라 CTR 추정보다 오차가 작음.
+             시장 규모 섹션과 '같은 앵커 값'을 쓰도록 공통 helper(reviewAnchorEstimate) 사용. */}
+        {props.reviewCount != null && props.reviewCount > 0 && window.reviewAnchorEstimate && (function() {
+          var est = window.reviewAnchorEstimate(props.reviewCount, props.productPrice);
+          if (!est) return null;
+          var rc = est.reviewCount;
+          var cumSales = est.cumSales;
+          var monthly = est.monthlyUnits;
           return (
             <div className="note ok" style={{ marginTop: 0, marginBottom: 20 }}>
-              <b>🧾 리뷰 기반 추정 (주 수치)</b> — 실제 누적 리뷰 <b>{fmt(rc)}건</b> 기반.{props.productPrice > 0 ? (function(){ var m = Math.round(rc / rate / 12); return <b> 월 매출 환산 ~{fmt(m * props.productPrice)}원</b>; })() : null}
+              <b>🧾 리뷰 기반 추정 (주 수치)</b> — 실제 누적 리뷰 <b>{fmt(rc)}건</b> 기반.{est.monthlyRevenue != null ? <b> 월 매출 환산 ~{fmt(est.monthlyRevenue)}원</b> : null}
               추정 누적 판매 <b>~{fmt(cumSales)}건</b>, 월 환산 <b>~{fmt(monthly)}건</b>
               <span style={{ color: '#64748b' }}> (작성률 11.6% · 운영 12개월 가정). 아래 순위 기반 시나리오는 참고용입니다.</span>
               {trend && (

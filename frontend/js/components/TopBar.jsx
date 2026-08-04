@@ -26,7 +26,12 @@ window.TopBar = function TopBar(props) {
             ),
             React.createElement('div', { className: 'topbar-nav-btns', style: { display:'flex', alignItems:'center', gap:16, flexWrap:'wrap', marginLeft:8 } },
                 React.createElement('button', { onClick: function(){ go('home'); }, style: _navBtn(activePage === 'home') }, '🏠 대시보드'),
-                React.createElement('button', { onClick: function(){ go('analysis'); }, style: _navBtn(activePage === 'analysis') }, '📍 순위 추적'),
+                // 🔍 SEO 최적화 — 광고 관리팀(manager) + 최고관리자(superadmin) 전용 (타 세션 의도 위치: 대시보드 다음)
+                (currentUser.role === 'manager' || currentUser.role === 'superadmin') && React.createElement('button', { onClick: function(){ go('seo'); }, style: _navBtn(activePage === 'seo') }, '🔍 SEO 최적화'),
+                React.createElement('button', { onClick: function(){ go('place'); }, style: _navBtn(activePage === 'place') }, '📍 플레이스 분석'),
+                React.createElement('button', { onClick: function(){ go('placetrack'); }, style: _navBtn(activePage === 'placetrack') }, '📊 플레이스 추적'),
+                React.createElement('button', { onClick: function(){ go('analysis'); }, style: _navBtn(activePage === 'analysis') }, '🛒 스토어 분석'),
+                React.createElement('button', { onClick: function(){ go('rank'); }, style: _navBtn(activePage === 'rank') }, '📊 키워드 순위'),
                 React.createElement('button', { onClick: function(){ go('management'); }, style: _navBtn(activePage === 'management') }, '📈 로직 분석'),
                 React.createElement('button', { onClick: function(){ go('learning'); }, style: _navBtn(activePage === 'learning') }, '🎓 학습센터'),
                 React.createElement('button', { onClick: function(){ go('guide'); }, style: _navBtn(activePage === 'guide') }, '📖 설명서'),

@@ -3,6 +3,7 @@ name: Deploy to VPS
 on:
   push:
     branches: [ main ]
+  workflow_dispatch:   # 수동 실행 — 시크릿 변경 반영 등
 
 jobs:
   deploy:
@@ -65,6 +66,15 @@ jobs:
           command_timeout: 300s
           script: |
             cd /root/logic-analysis-deploy
+
+            # ── COLLECTOR_TOKEN 멱등 주입 (2026-08-04, 브라우저 수집기) ──
+            # GitHub Secret COLLECTOR_TOKEN 이 설정돼 있고 .env 에 아직 없을 때만
+            # 맨 아래에 한 줄 추가한다(기존 키들은 그대로 — 덮어쓰기 없음).
+            if [ -n "${{ secrets.COLLECTOR_TOKEN }}" ] && ! grep -q '^COLLECTOR_TOKEN=' .env 2>/dev/null; then
+              cp .env .env.bak-collector 2>/dev/null || true
+              echo 'COLLECTOR_TOKEN=${{ secrets.COLLECTOR_TOKEN }}' >> .env
+              echo "COLLECTOR_TOKEN 주입 완료 (.env.bak-collector 백업)"
+            fi
 
             # docker-compose.yml 작성
             cat > docker-compose.yml << 'COMPEOF'

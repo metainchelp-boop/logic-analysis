@@ -1,6 +1,18 @@
 /* ClientDashboard — 업체별 분석 관리 대시보드 v4.0 (AI 인사이트 탭 추가) */
-window.ClientDashboard = function ClientDashboard({ currentUser, onRunAnalysis, onDownloadReport, initialSearch, canEdit }) {
+window.ClientDashboard = function ClientDashboard({ currentUser, onRunAnalysis, onRegisterCompetitor, onDownloadReport, initialSearch, canEdit }) {
     const { useState, useEffect, useCallback } = React;
+
+/* 2026-08-01~03 = 네이버 쇼핑 검색 API 종료 직후 수집 불능 기간(운영자 확정 2026-08-04).
+   이 사흘의 순위 없음(NULL)은 '미노출'이 아니라 '수집 중단'으로 표기한다 — 실제 순위 하락으로
+   오독되는 것을 막기 위함. 데이터는 삭제하지 않고 표기만 바꾼다. */
+function isOutageRow(r) {
+    var d = ((r && r.checked_at) || '').slice(0, 10);
+    return !(r && r.rank_position) && d >= '2026-08-01' && d <= '2026-08-03';
+}
+function rankCellLabel(r) {
+    if (r && r.rank_position) return r.rank_position + '위';
+    return isOutageRow(r) ? '수집 중단' : '미노출';
+}
 
     const [clients, setClients] = useState([]);
     const [selectedClient, setSelectedClient] = useState(null);
@@ -74,8 +86,11 @@ window.ClientDashboard = function ClientDashboard({ currentUser, onRunAnalysis, 
     /* 업체 삭제 */
     var deleteClient = function(client, e) {
         e.stopPropagation();
-        if (canEdit === false) { toast.error('삭제 권한이 없습니다.'); return; }
-        if (!confirm("'" + client.name + "' 업체를 삭제하시겠습니까?\n\n관련된 모든 분석 데이터와 순위 이력이 함께 삭제됩니다.\n이 작업은 되돌릴 수 없습니다.")) return;
+        var _isViewer = currentUser && currentUser.role === 'viewer';
+        // 관리팀(canEdit)뿐 아니라 영업사원도 '본인 영업 대상'을 삭제할 수 있다(완전 개인 모드).
+        if (canEdit === false && !_isViewer) { toast.error('삭제 권한이 없습니다.'); return; }
+        var _label = _isViewer ? '영업 대상' : '업체';
+        if (!confirm("'" + client.name + "' " + _label + "을(를) 삭제하시겠습니까?\n\n관련된 모든 분석 데이터·순위 이력과 여기에 붙인 경쟁사도 함께 삭제됩니다.\n이 작업은 되돌릴 수 없습니다.")) return;
         api.del('/cd/' + client.id).then(function(res) {
             if (res.success) {
                 if (selectedClient && selectedClient.id === client.id) {
@@ -300,7 +315,7 @@ window.ClientDashboard = function ClientDashboard({ currentUser, onRunAnalysis, 
                 {/* 좌측: 업체 목록 */}
                 <div className="cd-sidebar" style={{ width: 280, flexShrink: 0 }}>
                     <div className="card" style={{ padding: 16 }}>
-                        <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 12 }}>내 업체 목록 ({clients.length})</div>
+                        <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 12 }}>{(currentUser && currentUser.role === 'viewer') ? '내 영업 대상' : '내 업체 목록'} ({clients.length})</div>
                         {clients.length > 3 && (
                             <input className="form-input"
                                 placeholder="업체명 / 키워드 검색..."
@@ -312,7 +327,9 @@ window.ClientDashboard = function ClientDashboard({ currentUser, onRunAnalysis, 
                         {loading && <div style={{ color: '#64748b', fontSize: 13 }}>로딩 중...</div>}
                         {!loading && clients.length === 0 && (
                             <div style={{ color: '#94a3b8', fontSize: 13, padding: '20px 0', textAlign: 'center' }}>
-                                등록된 업체가 없습니다.<br />분석 탭에서 업체를 등록해주세요.
+                                {(currentUser && currentUser.role === 'viewer')
+                                    ? <span>등록된 영업 대상이 없습니다.<br />분석 탭에서 영업 대상을 분석해 저장하세요.</span>
+                                    : <span>등록된 업체가 없습니다.<br />분석 탭에서 업체를 등록해주세요.</span>}
                             </div>
                         )}
                         {!loading && clients.length > 0 && filteredClients.length === 0 && (
@@ -334,7 +351,10 @@ window.ClientDashboard = function ClientDashboard({ currentUser, onRunAnalysis, 
                                     }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                                         <div style={{ flex: 1, minWidth: 0 }}>
-                                            <div style={{ fontWeight: 600, fontSize: 14 }}>{c.name || c.business_name}</div>
+                                            <div style={{ fontWeight: 600, fontSize: 14 }}>
+                                                {c.vertical === 'place' && <span title="플레이스 업체 — 분석·순위는 「📍 플레이스 분석」 탭" style={{ marginRight: 4 }}>📍</span>}
+                                                {c.name || c.business_name}
+                                            </div>
                                             {currentUser && (currentUser.role === 'admin' || currentUser.role === 'superadmin') && (
                                                 <div style={{ fontSize: 11, color: '#a78bfa', fontWeight: 700, marginTop: 2 }}>👤 담당자: {c.manager_name || '-'}</div>
                                             )}
@@ -345,6 +365,10 @@ window.ClientDashboard = function ClientDashboard({ currentUser, onRunAnalysis, 
                                             </div>
                                             {c.main_keywords && (
                                                 <div style={{ fontSize: 11, opacity: 0.6, marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.main_keywords}</div>
+                                            )}
+                                            {c.days_left != null && (
+                                                <div style={{ fontSize: 10, fontWeight: 800, marginTop: 4, color: isActive ? '#fdba74' : '#c2410c' }}
+                                                    title="영업 대상은 30일 후 자동 삭제됩니다">⏳ {c.days_left}일 후 자동 삭제</div>
                                             )}
                                         </div>
                                         {canEdit !== false && <button onClick={function(e) {
@@ -369,8 +393,8 @@ window.ClientDashboard = function ClientDashboard({ currentUser, onRunAnalysis, 
                                                 color: c.auto_analysis === 0 ? '#f59e0b' : (isActive ? 'rgba(255,255,255,0.5)' : '#cbd5e1'),
                                             }}
                                         >{c.auto_analysis === 0 ? '⏸' : '▶'}</button>}
-                                        {canEdit !== false && <button onClick={function(e) { deleteClient(c, e); }}
-                                            title="업체 삭제"
+                                        {(canEdit !== false || (currentUser && currentUser.role === 'viewer')) && <button onClick={function(e) { deleteClient(c, e); }}
+                                            title={(currentUser && currentUser.role === 'viewer') ? '영업 대상 삭제' : '업체 삭제'}
                                             style={{
                                                 background: 'none', border: 'none', cursor: 'pointer', padding: '2px 6px',
                                                 fontSize: 14, color: isActive ? 'rgba(255,255,255,0.5)' : '#cbd5e1',
@@ -392,8 +416,8 @@ window.ClientDashboard = function ClientDashboard({ currentUser, onRunAnalysis, 
                     {!selectedClient && (
                         <div className="card" style={{ padding: 40, textAlign: 'center', color: '#94a3b8' }}>
                             <div style={{ fontSize: 48, marginBottom: 12 }}>📊</div>
-                            <div style={{ fontSize: 16 }}>좌측에서 업체를 선택하세요</div>
-                            <div style={{ fontSize: 13, marginTop: 8 }}>분석 탭에서 키워드 분석 후 업체를 등록하면 여기에 표시됩니다.</div>
+                            <div style={{ fontSize: 16 }}>{(currentUser && currentUser.role === 'viewer') ? '좌측에서 영업 대상을 선택하세요' : '좌측에서 업체를 선택하세요'}</div>
+                            <div style={{ fontSize: 13, marginTop: 8 }}>{(currentUser && currentUser.role === 'viewer') ? '분석 탭에서 영업 대상을 분석·저장하면 여기에 표시됩니다.' : '분석 탭에서 키워드 분석 후 업체를 등록하면 여기에 표시됩니다.'}</div>
                         </div>
                     )}
 
@@ -414,6 +438,14 @@ window.ClientDashboard = function ClientDashboard({ currentUser, onRunAnalysis, 
                                     </div>
                                 </div>
                             </div>
+
+                            {/* 경쟁사 비교 (광고주 vs 경쟁사) — 무손실: 미등록 시 슬롯만 표시 */}
+                            {window.CompetitorCompareSection && React.createElement(window.CompetitorCompareSection, {
+                                client: selectedClient,
+                                canEdit: canEdit,
+                                isViewer: currentUser && currentUser.role === 'viewer',
+                                onRegisterCompetitor: onRegisterCompetitor
+                            })}
 
                             {/* 새 분석 실행 폼 (viewer는 숨김) */}
                             {canEdit !== false && <AnalysisForm
@@ -640,8 +672,8 @@ window.ClientDashboard = function ClientDashboard({ currentUser, onRunAnalysis, 
                                                             return (
                                                                 <tr key={i}>
                                                                     <td>{(r.checked_at || '').slice(0, 16)}</td>
-                                                                    <td style={{ fontWeight: 700 }}>
-                                                                        {r.rank_position ? r.rank_position + '위' : '미노출'}
+                                                                    <td style={{ fontWeight: 700, color: isOutageRow(r) ? '#94a3b8' : undefined, fontStyle: isOutageRow(r) ? 'italic' : undefined }}>
+                                                                        {rankCellLabel(r)}
                                                                         {diff != null && diff !== 0 && (
                                                                             <span style={{ fontSize: 11, marginLeft: 6, color: diff > 0 ? '#16a34a' : '#dc2626' }}>
                                                                                 {diff > 0 ? '▲' + diff : '▼' + Math.abs(diff)}
@@ -813,7 +845,7 @@ window.AnalysisResultView = function AnalysisResultView({ keyword, data, rankHis
                                     return (
                                         <tr key={i}>
                                             <td>{(r.checked_at || '').slice(0, 16)}</td>
-                                            <td style={{ fontWeight: 700 }}>{r.rank_position ? r.rank_position + '위' : '미노출'}</td>
+                                            <td style={{ fontWeight: 700, color: isOutageRow(r) ? '#94a3b8' : undefined, fontStyle: isOutageRow(r) ? 'italic' : undefined }}>{rankCellLabel(r)}</td>
                                             <td>{r.check_type === 'manual' ? '수동' : '자동'}</td>
                                         </tr>
                                     );

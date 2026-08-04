@@ -117,12 +117,38 @@ var api = {
     del: function(url) {
         return fetch(API_BASE + url, { method: 'DELETE', headers: _authHeaders() }).then(_handleResponse).catch(_handleNetworkError);
     },
+    patch: function(url, body) {
+        return fetch(API_BASE + url, {
+            method: 'PATCH',
+            headers: _authHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify(body),
+        }).then(_handleResponse).catch(_handleNetworkError);
+    },
 };
 
 // 숫자 포맷팅
 function fmt(n) {
     return n != null ? Number(n).toLocaleString() : '-';
 }
+
+// 리뷰 실측 앵커 — '자사 상품' 월판매·월매출 단일 계산(모든 섹션 공통).
+//   판매량 추정 배너·시장 규모 보정이 같은 값을 쓰도록 여기서 한 번만 계산한다.
+//   가정: 식품 평균 리뷰 작성률 11.6% · 운영 12개월. (rc/rate=누적판매, ÷12=월판매)
+window.REVIEW_WRITE_RATE = 0.116;
+window.reviewAnchorEstimate = function reviewAnchorEstimate(reviewCount, price) {
+    var rc = Number(reviewCount) || 0;
+    if (rc <= 0) return null;
+    var rate = window.REVIEW_WRITE_RATE;
+    var cumSales = Math.round(rc / rate);
+    var monthlyUnits = Math.round(cumSales / 12);
+    var p = Number(price) || 0;
+    return {
+        reviewCount: rc,
+        cumSales: cumSales,
+        monthlyUnits: monthlyUnits,
+        monthlyRevenue: p > 0 ? monthlyUnits * p : null,
+    };
+};
 
 // 경쟁강도 라벨
 function compLabel(c) {

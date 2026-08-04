@@ -19,9 +19,11 @@ window.MarketRevenueSection = function MarketRevenueSection(props) {
    * 크게 작게 나오던 문제 해결. 실리뷰·순위 없으면 이 블록만 생략(기존 표시 그대로 — 무손실). */
   var _rc = Number(props.reviewCount) || 0;
   var _advRank = Number(props.advRank) || 0;
+  /* 자사 실측 앵커 — 판매량 추정 배너와 '완전히 같은 값'을 쓰도록 공통 helper 사용 */
+  var _anchor = (_rc > 0 && window.reviewAnchorEstimate) ? window.reviewAnchorEstimate(_rc, props.productPrice) : null;
   var _calib = null;
-  if (_rc > 0 && _advRank > 0 && topProducts && topProducts.length >= 3) {
-    var _realMonthly = _rc / 0.116 / 12; /* 자사 실측 월판매(추정) — SalesEstimation 배너와 동일 가정 */
+  if (_anchor && _advRank > 0 && topProducts && topProducts.length >= 3) {
+    var _realMonthly = _anchor.monthlyUnits; /* 자사 실측 월판매(추정) — SalesEstimation 배너와 동일 값 */
     var _decay = function(r) { return 1 / Math.pow(Math.max(1, r), 0.7); };
     var _unit = _realMonthly / _decay(_advRank);
     var _sum = 0;
@@ -48,11 +50,16 @@ window.MarketRevenueSection = function MarketRevenueSection(props) {
 
       {_calib && (
         <div style={{ marginBottom: 12, padding: '14px 18px', background: '#f0fdf4', border: '1px solid #a7f3d0', borderRadius: 12 }}>
-          <div style={{ fontSize: 12.5, fontWeight: 800, color: '#047857', marginBottom: 4 }}>🧾 월간 시장 규모 (리뷰 실측 보정 — 주 수치)</div>
+          {/* 자사 실측 앵커 — '판매량 추정' 섹션과 동일한 값(같은 helper)으로 먼저 명시 */}
+          <div style={{ fontSize: 12, color: '#047857', marginBottom: 8, paddingBottom: 8, borderBottom: '1px dashed #a7f3d0' }}>
+            🧾 <b>자사 실측 앵커</b> — 누적 리뷰 <b>{fmt(_rc)}건</b> → 월판매 <b>~{fmt(_calib.realMonthly)}건</b>
+            {_anchor && _anchor.monthlyRevenue != null ? <span> · 월매출 <b>~{fmt(_anchor.monthlyRevenue)}원</b></span> : null}
+            <span style={{ color: '#64748b' }}> (판매량 추정 섹션과 동일 값)</span>
+          </div>
+          <div style={{ fontSize: 12.5, fontWeight: 800, color: '#047857', marginBottom: 4 }}>💰 상위 {topProducts.length}개 합산 <b>시장 규모</b> (리뷰 실측 보정 — 주 수치)</div>
           <div style={{ fontSize: 24, fontWeight: 900, color: '#065f46', letterSpacing: '-0.5px' }}>{fmt(_calib.lo)}~{fmt(_calib.hi)}원</div>
           <div style={{ fontSize: 11.5, color: '#64748b', marginTop: 4, lineHeight: 1.6 }}>
-            자사 실제 누적 리뷰 {fmt(_rc)}건 → 월판매 ~{fmt(_calib.realMonthly)}건 역산(작성률 11.6%·운영 12개월 가정)을 기준점으로,
-            상위 {topProducts.length}개 상품의 순위·판매가에 적용해 재계산한 값입니다. 재구매·타 키워드·광고 유입이 포함된 실제 시장에 가깝습니다.
+            위 자사 월판매를 기준점으로 상위 {topProducts.length}개 상품의 순위·판매가에 적용해 재계산한 <b>시장 전체 규모</b>입니다(자사 1개 매출이 아니라 상위권 합산). 재구매·타 키워드·광고 유입이 포함된 실제 시장에 가깝습니다.
           </div>
         </div>
       )}

@@ -1,5 +1,7 @@
-/* RankTrackingSection — 순위 추적 */
-window.RankTrackingSection = function RankTrackingSection({ products, refreshProducts, searchedKeyword, searchedProductUrl, cachedProductName, relatedKeywords, onNavigateToClient, canEdit, onRankResult }) {
+/* RankTrackingSection — 순위 추적
+ * analysisOnly: 스토어 분석 화면 전용 모드 — 키워드별 노출 분석·1회성 조회만 렌더
+ * (추적 상품 목록·상품 등록 폼은 📊 키워드 순위 탭에서 관리, 2026-08-04 탭 분리) */
+window.RankTrackingSection = function RankTrackingSection({ products, refreshProducts, searchedKeyword, searchedProductUrl, cachedProductName, relatedKeywords, onNavigateToClient, canEdit, onRankResult, analysisOnly, onOpenRankTab }) {
     const { useState, useEffect, useRef } = React;
     const [showAddForm, setShowAddForm] = useState(false);
     const [newUrl, setNewUrl] = useState('');
@@ -98,8 +100,9 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
             }
         }
         function attempt() {
-            // 클라이언트 타임아웃(무한 로딩 방지): 25초 내 응답 없으면 실패 처리 → 재시도/폴백
-            var timeoutP = new Promise(function(_res, rej) { setTimeout(function() { rej(new Error('timeout')); }, 25000); });
+            // 클라이언트 타임아웃(무한 로딩 방지): BE 예산 18s + 네트워크 여유를 두고 32초.
+            // (첫 시도가 BE 예산 안에 끝나 불필요한 재시도로 크롤을 두 번 하지 않게 함)
+            var timeoutP = new Promise(function(_res, rej) { setTimeout(function() { rej(new Error('timeout')); }, 32000); });
             Promise.race([
                 api.post('/rank/keyword-exposure', { product_url: searchedProductUrl, keyword: searchedKeyword, product_name: cachedProductName, extra_keywords: _extraKws }),
                 timeoutP
@@ -375,7 +378,18 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                         <h3 className="rt-h3"><span className="rt-hic">📍</span>키워드별 노출 순위<span className="badge b-ok">✅ 실측</span></h3>
                         <div className="rt-desc">상품명에서 추출한 키워드별로 네이버 쇼핑 검색 순위를 조회한 결과 (검색 범위: 상위 200개 상품)</div>
                     </div>
-                    {canEdit !== false && <button className="btn btn-primary btn-sm" onClick={() => setShowAddForm(!showAddForm)}>
+                    {analysisOnly && onOpenRankTab && <button className="btn btn-primary btn-sm" onClick={() => {
+                        try {
+                            sessionStorage.setItem('logic_rank_ctx', JSON.stringify({
+                                searchedKeyword: searchedKeyword || '',
+                                searchedProductUrl: searchedProductUrl || '',
+                                cachedProductName: cachedProductName || '',
+                                relatedKeywords: relatedKeywords || []
+                            }));
+                        } catch (e) {}
+                        onOpenRankTab();
+                    }}>📊 키워드 순위 탭에서 관리 →</button>}
+                    {!analysisOnly && canEdit !== false && <button className="btn btn-primary btn-sm" onClick={() => setShowAddForm(!showAddForm)}>
                         {showAddForm ? '취소' : '+ 상품 등록'}
                     </button>}
                 </div>
@@ -530,8 +544,10 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                     </div>
                 )}
 
-                {/* 등록된 상품 목록 (viewer에게는 숨김 — 1회성 조회만 표시) */}
+                {/* 등록된 상품 목록 (viewer에게는 숨김 — 1회성 조회만 표시)
+                    analysisOnly(스토어 분석 화면)에서는 목록 전체를 📊 키워드 순위 탭으로 위임 */}
                 {(function() {
+                    if (analysisOnly) return null;
                     // viewer는 등록된 상품 목록 표시 안 함
                     if (canEdit === false) {
                         // 1회성 결과도 없고 로딩도 아닌 경우에만 빈 상태 표시
