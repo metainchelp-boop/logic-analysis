@@ -31,8 +31,21 @@ window.PlaceTrackingPage = function PlaceTrackingPage(props) {
     var _cs = useState([]);       var chartSeries = _cs[0], setChartSeries = _cs[1];
     var _cd = useState(30);       var chartDays = _cd[0], setChartDays = _cd[1];
 
+    var _pid = useState('');      var placeIdInput = _pid[0], setPlaceIdInput = _pid[1];
+
     var targetsRef = useRef([]);
     targetsRef.current = targets;
+
+    // 플레이스 링크/ID → 숫자 ID 추출 (지도 주소 어느 형식이든: .../place/12345, m.place.naver.com/restaurant/12345/..., 숫자 단독)
+    function extractPlaceId(v) {
+        v = String(v || '').trim();
+        if (!v) return '';
+        if (/^\d{5,}$/.test(v)) return v;
+        var m = v.match(/(?:place|restaurant|cafe|hairshop|hospital|accommodation|attraction)\/(\d{5,})/);
+        if (m) return m[1];
+        m = v.match(/(\d{7,})/);
+        return m ? m[1] : '';
+    }
 
     // ==================== 확장 브리지 ====================
     function pushTargetsToExt(list) {
@@ -106,13 +119,18 @@ window.PlaceTrackingPage = function PlaceTrackingPage(props) {
         if (!name) { toast.warn('업체명을 입력해주세요.'); return; }
         if (!reg) { toast.warn('지역을 입력해주세요. (예: 성수동 — 순위 재현에 필요)'); return; }
         if (!list.length) { toast.warn('추적 키워드를 1개 이상 입력해주세요.'); return; }
+        var pid = '';
+        if ((placeIdInput || '').trim()) {
+            pid = extractPlaceId(placeIdInput);
+            if (!pid) { toast.warn('플레이스 링크/ID를 인식하지 못했습니다 — 네이버 지도 업체 페이지 주소나 숫자 ID를 붙여넣어주세요. (비워두면 업체명으로 찾습니다)'); return; }
+        }
         setSaving(true);
-        api.post('/place/track-targets', { business_name: name, region: reg, keywords: list })
+        api.post('/place/track-targets', { business_name: name, region: reg, keywords: list, place_id: pid })
             .then(function (res) {
                 setSaving(false);
                 if (res && res.success) {
                     toast.success('✅ 추적 등록: ' + name + ' · 키워드 ' + ((res.data && res.data.added) || 0) + '개 — 다음 자동 수집부터 기록됩니다.');
-                    setBizName(''); setRegion(''); setKws([]); setKwInput('');
+                    setBizName(''); setRegion(''); setKws([]); setKwInput(''); setPlaceIdInput('');
                     load();
                 } else {
                     toast.error((res && res.error) || '등록에 실패했습니다.');
@@ -280,8 +298,22 @@ window.PlaceTrackingPage = function PlaceTrackingPage(props) {
                                 onKeyDown: onKwKey,
                                 style: { flex: 1, minWidth: 90, border: 0, outline: 'none', background: 'transparent', fontSize: 13, padding: '4px 2px' } }))),
                     React.createElement('button', { className: 'btn btn-primary', onClick: submit, disabled: saving }, saving ? '등록 중…' : '등록')),
+                React.createElement('div', { style: { marginTop: 10 } },
+                    React.createElement('label', { style: { display: 'block', fontSize: 11.5, fontWeight: 700, color: '#64748b', marginBottom: 4 } },
+                        '플레이스 링크 또는 ID (선택 — 넣으면 이름 대신 ID로 정확 매칭)'),
+                    React.createElement('input', { type: 'text', value: placeIdInput,
+                        placeholder: '예: https://m.place.naver.com/restaurant/1234567890 · 네이버 지도 업체 페이지 주소를 그대로 붙여넣으세요',
+                        onChange: function (e) { setPlaceIdInput(e.target.value); },
+                        style: { width: '100%', boxSizing: 'border-box', border: '1px solid #e2e8f0', borderRadius: 9, padding: '8px 10px', fontSize: 13 } }),
+                    (placeIdInput || '').trim()
+                        ? React.createElement('div', { style: { fontSize: 11.5, marginTop: 4, fontWeight: 700,
+                            color: extractPlaceId(placeIdInput) ? '#059669' : '#dc2626' } },
+                            extractPlaceId(placeIdInput)
+                                ? '✓ 인식된 플레이스 ID: ' + extractPlaceId(placeIdInput)
+                                : '✕ ID를 인식하지 못했습니다 — 지도 업체 페이지 주소 또는 숫자 ID를 넣어주세요')
+                        : null),
                 React.createElement('div', { className: 'note est', style: { marginTop: 10 } },
-                    'ℹ️ 키워드는 자동으로 「지역 + 키워드」로 저장됩니다(예: 성수동 + 카페 → 성수동 카페). 지역이 포함된 키워드는 검색 위치와 무관하게 순위가 재현됩니다(실측 검증).')),
+                    'ℹ️ 키워드는 자동으로 「지역 + 키워드」로 저장됩니다(예: 성수동 + 카페 → 성수동 카페). 지역이 포함된 키워드는 검색 위치와 무관하게 순위가 재현됩니다(실측 검증). 플레이스 ID를 비워두면 업체명으로 찾고, 첫 노출 때 ID가 자동 저장됩니다.')),
 
             // ── 현황 필 ──
             React.createElement('div', { className: 'pills', style: { margin: '2px 0 10px' } },

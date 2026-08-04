@@ -26,7 +26,9 @@
     $('last').textContent = !lr ? '-'
       : lr.skipped ? (fmtTime(lr.finishedAt) + ' (' + (lr.skipped === 'no-targets' ? '대상 없음' : '중지됨') + ')')
       : (fmtTime(lr.finishedAt) + ' · 노출 ' + (lr.exposed || 0) + '·미노출 ' + (lr.missing || 0)
-         + (lr.unknown ? '·미확인 ' + lr.unknown : '') + (lr.delivered ? ' ✓기록' : ' (기록 대기)'));
+         + (lr.unknown ? '·미확인 ' + lr.unknown : '')
+         + (lr.depthMax ? ' · 판독 ' + (lr.depthMin && lr.depthMin !== lr.depthMax ? lr.depthMin + '~' : '~') + lr.depthMax + '위' : '')
+         + (lr.delivered ? ' ✓기록' : ' (기록 대기)'));
     $('toggle').textContent = st.enabled ? '무인 추적 끄기' : '무인 추적 켜기';
   }
 
