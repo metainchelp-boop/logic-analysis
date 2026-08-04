@@ -20,6 +20,7 @@ window.createDoSearch = function(deps) {
     var setSearchedProductUrl = deps.setSearchedProductUrl;
     var setShopProducts = deps.setShopProducts;
     var setVolumeData = deps.setVolumeData;
+    var setAuditStatus = deps.setAuditStatus || function () {};
 
     return function _doSearch(keyword, productUrl, inputCompanyName, htmlInput) {
         lastHtmlRef.current = htmlInput || '';  // #1: 저장/재사용용 상세 HTML 보관
@@ -48,10 +49,11 @@ window.createDoSearch = function(deps) {
         setDatalabData(null);
         setDatalabLoading(false);
         setRankCheckResult(null);
+        setAuditStatus(null);
 
         // 검색바에서 HTML이 입력되었으면 상세페이지 분석 + 리뷰 데이터 추출 (비동기)
         if (htmlInput && htmlInput.length >= 100) {
-            api.post('/seo/detail-page', { html: htmlInput, product_url: productUrl || '' })
+            api.post('/seo/detail-page', { html: htmlInput, product_url: cleanedUrl || '' })
                 .then(function(res) {
                     if (searchIdRef.current !== currentSearchId) return; // 이미 다른 검색 시작됨
                     if (res && res.success && res.data) {
@@ -72,9 +74,11 @@ window.createDoSearch = function(deps) {
         }
 
         // 광고주 상품 URL이 있으면 광고주 분석 API 호출
-        if (productUrl) {
+        // cleanedUrl 사용: 추적 파라미터 제거 + HTML만 붙여넣은 경우 HTML에서 자동추출된 URL 포함
+        // (기존엔 raw productUrl이라 HTML만 붙여넣으면 광고주(진입전략) 분석이 통째로 누락됐음)
+        if (cleanedUrl) {
             setAdvertiserLoading(true);
-            api.post('/advertiser/analyze', { keyword: keyword, product_url: productUrl })
+            api.post('/advertiser/analyze', { keyword: keyword, product_url: cleanedUrl })
                 .then(function(res) {
                     if (searchIdRef.current !== currentSearchId) return;
                     if (res && res.success) setAdvertiserReport(res.data);
@@ -86,12 +90,28 @@ window.createDoSearch = function(deps) {
                 });
         }
 
-        // 병렬로 3개 API 호출
-        Promise.all([
-            api.post('/keyword/volume', [keyword]).catch(function() { return null; }),
-            api.post('/keywords/related', { keyword: keyword }).catch(function() { return null; }),
-            api.post('/products/search', { keyword: keyword, count: 80 }).catch(function() { return null; }),
-        ]).then(function(results) {
+        // 병렬로 3개 API 호출 — 실패 항목은 검수(_audit)가 재조회해 '실데이터가 채워진 상태'로만 본처리
+        var _auditItems = {};
+        var _pushAudit = function(phase) {
+            try {
+                setAuditStatus({ phase: phase, items: Object.keys(_auditItems).map(function(n) { return { name: n, st: _auditItems[n] }; }) });
+            } catch (e) {}
+        };
+        var _fetchTriple = function(prev) {
+            prev = prev || [null, null, null];
+            var ok = {
+                vol: !!(prev[0] && prev[0].success && prev[0].data && prev[0].data[0]),
+                rel: !!(prev[1] && prev[1].success),
+                shop: !!(prev[2] && prev[2].success && prev[2].data && (prev[2].data.products || []).length > 0),
+            };
+            // 성공한 항목은 재호출하지 않고 그대로 유지 — 실패분만 다시 받는다
+            return Promise.all([
+                ok.vol ? Promise.resolve(prev[0]) : api.post('/keyword/volume', [keyword]).catch(function() { return prev[0]; }),
+                ok.rel ? Promise.resolve(prev[1]) : api.post('/keywords/related', { keyword: keyword }).catch(function() { return prev[1]; }),
+                ok.shop ? Promise.resolve(prev[2]) : api.post('/products/search', { keyword: keyword, count: 80 }).catch(function() { return prev[2]; }),
+            ]);
+        };
+        var _processResults = function(results) {
             if (searchIdRef.current !== currentSearchId) return; // 이미 다른 검색 시작됨
 
             var volRes = results[0];
@@ -101,6 +121,10 @@ window.createDoSearch = function(deps) {
             // 모든 API 실패 시 사용자에게 알림
             if ((!volRes || !volRes.success) && (!relRes || !relRes.success) && (!shopRes || !shopRes.success)) {
                 toast.error('키워드 분석 데이터를 가져오지 못했습니다. 네트워크를 확인해주세요.');
+            }
+            // 검색량만 실패한 경우도 명시 경고 — '0회'를 실제값으로 오인하거나 관련 섹션이 조용히 사라지는 것 방지
+            else if (!volRes || !volRes.success) {
+                (toast.warn || toast.error)('검색량 데이터를 가져오지 못했습니다 — 검색량·경쟁강도·판매추정 지표는 참고용입니다.');
             }
 
             if (volRes && volRes.success) setVolumeData(volRes.data);
@@ -175,11 +199,17 @@ window.createDoSearch = function(deps) {
                 var prices = prods.map(function(p) { return p.price; }).filter(function(p) { return p > 0; });
                 var avgPrice = prices.length > 0 ? Math.round(prices.reduce(function(a, b) { return a + b; }, 0) / prices.length) : 0;
 
-                var conversionRate = 0.035; // 전환율 3.5%
+                // 전환율 밴드(저/중/고) — 매출/판매량은 단일값이 아니라 '범위'로 추정 (±EST_TOLERANCE)
+                var EST_TOLERANCE = 0.30; // 허용오차 밴드 ±30%
+                var cvMid = 0.035;        // 기준 전환율 3.5%
+                var cvLo = cvMid * (1 - EST_TOLERANCE); // 0.0245
+                var cvHi = cvMid * (1 + EST_TOLERANCE); // 0.0455
 
                 var topProductsList = prods.slice(0, 40).map(function(p) {
                     var ctr = getCTR(p.rank);
-                    var estSales = Math.max(1, Math.round(totalVol * ctr * conversionRate));
+                    var estSales = Math.max(1, Math.round(totalVol * ctr * cvMid));
+                    var estSalesLo = Math.max(1, Math.round(totalVol * ctr * cvLo));
+                    var estSalesHi = Math.max(1, Math.round(totalVol * ctr * cvHi));
                     return {
                         rank: p.rank,
                         name: p.product_name,
@@ -189,30 +219,46 @@ window.createDoSearch = function(deps) {
                         ctr: ctr,
                         estMonthlySales: estSales,
                         estMonthlySalesStr: fmt(estSales) + '건',
+                        estMonthlySalesRange: fmt(estSalesLo) + '~' + fmt(estSalesHi) + '건',
                         estRevenue: p.price * estSales,
                         estRevenueStr: fmt(p.price * estSales) + '원',
+                        estRevenueRange: fmt(p.price * estSalesLo) + '~' + fmt(p.price * estSalesHi) + '원',
                     };
                 });
 
-                // 전체 시장 규모 = 상위 40개 상품 추정 매출 합산
-                var totalMarketRevenue = topProductsList.slice(0, 40).reduce(function(sum, p) {
-                    return sum + p.estRevenue;
-                }, 0);
+                // 전체 시장 규모 = 상위 40개 상품 추정 매출 합산 (전환율별로 동일 방식 합산)
+                var _marketTotal = function(cv) {
+                    return prods.slice(0, 40).reduce(function(sum, p) {
+                        var estSales = Math.max(1, Math.round(totalVol * getCTR(p.rank) * cv));
+                        return sum + p.price * estSales;
+                    }, 0);
+                };
+                var totalMarketRevenue = _marketTotal(cvMid);
+                var marketLo = _marketTotal(cvLo);
+                var marketHi = _marketTotal(cvHi);
+
+                // '2.5%~4.6% (기준 3.5%, ±30%)' 형태의 전환율 가정 라벨 (백엔드 conv_band_label과 동일)
+                var convBandLabel = (cvLo * 100).toFixed(1) + '%~' + (cvHi * 100).toFixed(1) + '% (기준 ' + (cvMid * 100).toFixed(1) + '%, ±' + Math.round(EST_TOLERANCE * 100) + '%)';
 
                 analysis.marketRevenue = {
                     avgPrice: fmt(avgPrice) + '원',
                     estimatedMonthly: fmt(totalMarketRevenue) + '원',
-                    conversionRate: '3.5%',
-                    calculationMethod: 'CTR × 전환율',
+                    estimatedMonthlyRange: fmt(marketLo) + '~' + fmt(marketHi) + '원',
+                    conversionRate: convBandLabel,
+                    calculationMethod: 'CTR × 전환율(밴드)',
+                    tolerance: '±' + Math.round(EST_TOLERANCE * 100) + '%',
                     topProducts: topProductsList.map(function(p) {
                         return {
                             rank: p.rank,
+                            priceNum: p.price, /* 리뷰 실측 보정 계산용 숫자 가격 */
                             name: p.name,
                             store: p.store,
                             price: p.priceStr,
                             ctr: (p.ctr * 100).toFixed(1) + '%',
                             estMonthlySales: p.estMonthlySalesStr,
+                            estMonthlySalesRange: p.estMonthlySalesRange,
                             estRevenue: p.estRevenueStr,
+                            estRevenueRange: p.estRevenueRange,
                         };
                     }),
                 };
@@ -410,12 +456,24 @@ window.createDoSearch = function(deps) {
             if (prods.length > 0 && totalVol > 0) {
                 var top10p = prods.slice(0, 10);
                 var avgP = Math.round(top10p.reduce(function(s, p) { return s + p.price; }, 0) / top10p.length);
-                var cv = 0.035;
+                // 전환율 밴드(저/중/고) — 판매량/매출은 단일값이 아니라 '범위'로 추정 (±EST_TOLERANCE)
+                var SE_TOLERANCE = 0.30; // 허용오차 밴드 ±30%
+                var cv = 0.035;                       // 기준 전환율 3.5%
+                var cvLoSE = cv * (1 - SE_TOLERANCE);  // 0.0245
+                var cvHiSE = cv * (1 + SE_TOLERANCE);  // 0.0455
+                // '2.5%~4.6% (기준 3.5%, ±30%)' 형태의 전환율 가정 라벨 (백엔드 conv_band_label과 동일)
+                var seBandLabel = (cvLoSE * 100).toFixed(1) + '%~' + (cvHiSE * 100).toFixed(1) + '% (기준 ' + (cv * 100).toFixed(1) + '%, ±' + Math.round(SE_TOLERANCE * 100) + '%)';
                 // 80위 전체 한번에 계산
                 var allRanks = [];
                 for (var ci = 0; ci < 80; ci++) {
                     var sales = Math.round(totalVol * CTR_TABLE[ci] * cv);
-                    allRanks.push({ sales: sales, revenue: sales * avgP });
+                    var salesLo = Math.round(totalVol * CTR_TABLE[ci] * cvLoSE);
+                    var salesHi = Math.round(totalVol * CTR_TABLE[ci] * cvHiSE);
+                    allRanks.push({
+                        sales: sales, revenue: sales * avgP,
+                        salesLo: salesLo, salesHi: salesHi,
+                        revenueLo: salesLo * avgP, revenueHi: salesHi * avgP,
+                    });
                 }
                 // TOP 10 집계
                 var top10Rev = 0;
@@ -427,10 +485,25 @@ window.createDoSearch = function(deps) {
                 var p2Sales = 0, p2Total = 0;
                 for (var ci = 40; ci < 80; ci++) { p2Sales += allRanks[ci].sales; p2Total += allRanks[ci].revenue; }
 
+                // 순위별 시뮬레이션 행 (±밴드 범위 포함) — 백엔드 salesEstimation.simulations와 동일 구조
+                var _simRanks = [1, 5, 10, 15, 20, 25, 30, 35, 40];
+                var simulations = _simRanks.map(function(rank) {
+                    var r = allRanks[rank - 1];
+                    return {
+                        rank: rank,
+                        estSales: r.sales,
+                        estSalesRange: fmt(r.salesLo) + '~' + fmt(r.salesHi),
+                        revenue: fmt(r.revenue) + '원',
+                        revenueRange: fmt(r.revenueLo) + '~' + fmt(r.revenueHi) + '원',
+                    };
+                });
+
                 analysis.salesEstimation = {
                     avgPrice: fmt(avgP) + '원',
                     monthlySearches: fmt(totalVol),
-                    estimatedCTR: 'CTR × 3.5%',
+                    estimatedCTR: 'CTR × 전환율 ' + seBandLabel,
+                    tolerance: '±' + Math.round(SE_TOLERANCE * 100) + '%',
+                    simulations: simulations,
                     top10Card: {
                         rank1Sales: allRanks[0].sales, rank5Sales: allRanks[4].sales, rank10Sales: allRanks[9].sales,
                         rank1Revenue: fmt(allRanks[0].revenue) + '원', rank10Revenue: fmt(allRanks[9].revenue) + '원',
@@ -730,28 +803,100 @@ window.createDoSearch = function(deps) {
 
             /* 데이터랩 쇼핑인사이트 비동기 호출 (분석 완료 후) */
             (function() {
-                var cat1 = '';
-                if (analysis.categoryAnalysis && analysis.categoryAnalysis.categoryLevels && analysis.categoryAnalysis.categoryLevels.large && analysis.categoryAnalysis.categoryLevels.large.length > 0) {
-                    cat1 = analysis.categoryAnalysis.categoryLevels.large[0].name || '';
+                var cat1 = '', cat2 = '', cat3 = '';
+                var _lv = analysis.categoryAnalysis && analysis.categoryAnalysis.categoryLevels;
+                if (_lv) {
+                    if (_lv.large && _lv.large.length > 0) cat1 = _lv.large[0].name || '';
+                    if (_lv.medium && _lv.medium.length > 0) cat2 = _lv.medium[0].name || '';
+                    if (_lv.small && _lv.small.length > 0) cat3 = _lv.small[0].name || '';
                 }
                 var relKws = [];
                 if (analysis.keywordTags && analysis.keywordTags.topKeywords) {
                     relKws = analysis.keywordTags.topKeywords.map(function(k) { return { keyword: k.keyword, totalVolume: parseInt(String(k.volume || '0').replace(/,/g, '')) }; });
                 }
+                /* 검수 루프: 누락 지표만 재조회 — 백엔드 지표별 캐시 덕에 성공분은 API를 다시 쓰지 않음 */
+                var _dlKeyMap = { '성별': 'gender', '연령': 'age', '트렌드': 'trend', '요일': 'weekday', '인기·급상승': 'categoryKeywords' };
+                var _dlExpected = ['성별', '연령', '트렌드', '요일'];
+                if (relKws.length >= 2) _dlExpected.push('인기·급상승');
+                _dlExpected.forEach(function(n) { _auditItems[n] = 'wait'; });
+                _pushAudit('auditing');
                 setDatalabLoading(true);
-                api.post('/datalab/analyze', { keyword: keyword, category1: cat1, related_keywords: relKws })
-                    .then(function(dlRes) {
-                        if (searchIdRef.current !== currentSearchId) return;
-                        if (dlRes && dlRes.success && dlRes.data) {
-                            setDatalabData(dlRes.data);
-                        }
-                    }).catch(function(e) {
-                        console.warn('데이터랩 조회 실패 (무시):', e);
-                    }).finally(function() {
-                        setDatalabLoading(false);
-                    });
+                var _dlCall = function(dlRound) {
+                    api.post('/datalab/analyze', { keyword: keyword, category1: cat1, category2: cat2, category3: cat3, related_keywords: relKws })
+                        .then(function(dlRes) {
+                            if (searchIdRef.current !== currentSearchId) return;
+                            var d = (dlRes && dlRes.success && dlRes.data) || null;
+                            if (d) setDatalabData(d);
+                            var missing = [];
+                            _dlExpected.forEach(function(n) {
+                                var okItem = !!(d && d[_dlKeyMap[n]]);
+                                _auditItems[n] = okItem ? 'ok' : (dlRound < 2 ? 'retry' : 'fail');
+                                if (!okItem) missing.push(n);
+                            });
+                            if (missing.length > 0 && dlRound < 2) {
+                                _pushAudit('auditing');
+                                setTimeout(function() {
+                                    if (searchIdRef.current !== currentSearchId) return;
+                                    _dlCall(dlRound + 1);
+                                }, 4000);
+                            } else {
+                                _pushAudit('done');
+                                setDatalabLoading(false);
+                                if (missing.length > 0) {
+                                    try { (toast.warn || toast.error)('데이터랩 일부 지표 미수신(' + missing.join('·') + ') — 잠시 후 재분석하면 채워집니다.'); } catch (e) {}
+                                }
+                            }
+                        }).catch(function(e) {
+                            console.warn('데이터랩 조회 실패:', e);
+                            if (searchIdRef.current !== currentSearchId) return;
+                            if (dlRound < 2) {
+                                setTimeout(function() { if (searchIdRef.current === currentSearchId) _dlCall(dlRound + 1); }, 4000);
+                            } else {
+                                _dlExpected.forEach(function(n) { if (_auditItems[n] !== 'ok') _auditItems[n] = 'fail'; });
+                                _pushAudit('done');
+                                setDatalabLoading(false);
+                            }
+                        });
+                };
+                _dlCall(0);
             })();
 
+        };
+
+        /* 🔍 데이터 검수 게이트: 핵심 3종(검색량·연관·상품)이 빈 채로 화면·보고서가 그려지지 않도록,
+           실패 항목만 재조회(최대 2회, 2.5s→5s 간격 — 429 버스트가 풀릴 시간)한 뒤 본처리한다.
+           재조회로도 못 받으면 그대로 진행하되 검수 배너에 실패로 표시(가짜값 대신 정직한 상태). */
+        var _audit = function(results, round) {
+            if (searchIdRef.current !== currentSearchId) return;
+            var ok = {
+                vol: !!(results[0] && results[0].success && results[0].data && results[0].data[0]),
+                rel: !!(results[1] && results[1].success),
+                shop: !!(results[2] && results[2].success && results[2].data && (results[2].data.products || []).length > 0),
+            };
+            var retrying = (!ok.vol || !ok.rel || !ok.shop) && round < 2;
+            _auditItems['검색량'] = ok.vol ? 'ok' : (retrying ? 'retry' : 'fail');
+            _auditItems['연관 키워드'] = ok.rel ? 'ok' : (retrying ? 'retry' : 'fail');
+            _auditItems['상품 검색'] = ok.shop ? 'ok' : (retrying ? 'retry' : 'fail');
+            _pushAudit(retrying ? 'auditing' : 'collected');
+            if (retrying) {
+                if (round === 0) { try { toast.info('🔍 데이터 검수 — 누락 항목을 재조회합니다…'); } catch (e) {} }
+                setTimeout(function() {
+                    if (searchIdRef.current !== currentSearchId) return;
+                    _fetchTriple(results).then(function(r2) { _audit(r2, round + 1); });
+                }, 2500 + round * 2500);
+                return; // 완성(또는 재조회 소진) 전에는 본처리하지 않음
+            }
+            try {
+                _processResults(results);
+            } catch (e) {
+                console.error('분석 처리 오류:', e);
+                try { toast.error('분석 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.'); } catch (e2) {}
+                setSearchLoading(false);
+            }
+        };
+
+        _fetchTriple(null).then(function(results) {
+            _audit(results, 0);
         }).catch(function(e) {
             if (searchIdRef.current !== currentSearchId) return;
             console.error('검색 오류:', e);

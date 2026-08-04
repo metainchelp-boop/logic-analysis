@@ -31,7 +31,7 @@ window.AdvertiserInfoCard = function AdvertiserInfoCard(props) {
             })}
           </div>
 
-          <div className="note">광고 경쟁이 치열할수록 입찰가 부담이 커지므로, SEO(자연노출)를 병행해 광고비 효율을 확보하는 것이 유리합니다.</div>
+          <div className="note">'광고 노출 깊이 = 상위 N개'는 이 키워드에서 검색광고가 평균적으로 <b>상위 몇 번째 슬롯까지 노출</b>되는지를 뜻합니다(값이 클수록 광고 노출 경쟁이 넓음). 광고 경쟁이 치열할수록 입찰가 부담이 커지므로, SEO(자연노출)를 병행해 광고비 효율을 확보하는 것이 유리합니다.</div>
         </div>
       </div>
     </div>

@@ -4,6 +4,11 @@ window.EntryStrategySection = function EntryStrategySection(props) {
     var strategicData = props.strategicData;      // from App.jsx client-side calc
     var keyword = props.keyword || '';
     var rankCheckResult = props.rankCheckResult;   // from RankTrackingSection (순위 추적 결과 공유)
+    /* part 분할 렌더 (v6.6): 'competition'=경쟁사 비교·격차(3장) / 'strategy'=점수·전략 제안(6장)
+     * 미지정('all')이면 기존과 동일하게 전체 렌더 — 하위 호환 보장 */
+    var part = props.part || 'all';
+    var showComp = part !== 'strategy';
+    var showStrat = part !== 'competition';
 
     if (!advertiserData && !strategicData) return null;
 
@@ -109,20 +114,24 @@ window.EntryStrategySection = function EntryStrategySection(props) {
         );
     };
 
-    return React.createElement('div', { id: 'sec-strategy', className: 'section fade-in' },
+    /* 경쟁 파트만 요청됐는데 보여줄 경쟁 데이터가 없으면 빈 카드 방지 */
+    if (part === 'competition' && !advertiserData && !mainBrands) return null;
+
+    return React.createElement('div', { id: part === 'competition' ? 'sec-strategy-comp' : 'sec-strategy', className: 'section fade-in' },
         React.createElement('div', { className: 'container' },
 
             React.createElement('div', { className: 'card', style: { padding: '20px 22px' } },
 
             /* === 섹션 헤더 === */
             React.createElement('h3', { className: 'rt-h3' },
-                React.createElement('span', { className: 'rt-hic' }, '🧭'),
-                '1페이지 진입 전략 비교 분석'
+                React.createElement('span', { className: 'rt-hic' }, part === 'competition' ? '🏆' : '🧭'),
+                part === 'competition' ? '경쟁사 비교 · 격차 분석' : '1페이지 진입 전략 비교 분석'
             ),
-            React.createElement('div', { className: 'rt-desc' }, '경쟁사 데이터 기반 1페이지 진입 전략을 제안합니다'),
+            React.createElement('div', { className: 'rt-desc' },
+                part === 'competition' ? '상위 노출 경쟁사와 내 상품의 격차를 진단합니다' : '경쟁사 데이터 기반 1페이지 진입 전략을 제안합니다'),
 
             /* === 상품 정보 헤더 (광고주 데이터가 있을 때만) === */
-            advertiserData && React.createElement('div', { style: {
+            showComp && advertiserData && React.createElement('div', { style: {
                 background: '#fff', borderRadius: 16, padding: '20px 24px', marginBottom: 24,
                 display: 'flex', flexWrap: 'wrap', gap: 20, alignItems: 'center',
                 border: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(0,0,0,0.04)'
@@ -168,7 +177,7 @@ window.EntryStrategySection = function EntryStrategySection(props) {
             ),
 
             /* === 종합 진입 점수 + KPI (시안 .grid2 + .kpi) === */
-            advertiserData && React.createElement('div', { className: 'grid2', style: { alignItems: 'center', marginBottom: 6 } },
+            showStrat && advertiserData && React.createElement('div', { className: 'grid2', style: { alignItems: 'center', marginBottom: 6 } },
                 React.createElement('div', { style: { textAlign: 'center' } },
                     React.createElement('div', { style: { fontSize: 13, color: '#64748b' } }, '종합 진입 점수'),
                     React.createElement('div', { style: { fontSize: 40, fontWeight: 900, color: scoreColor } },
@@ -192,18 +201,18 @@ window.EntryStrategySection = function EntryStrategySection(props) {
                 )
             ),
 
-            /* === 1. 경쟁사 상위 10개 비교표 === */
-            React.createElement('div', { style: { marginBottom: 28 } },
+            /* === 경쟁사 상위 10개 비교표 === */
+            showComp && React.createElement('div', { style: { marginBottom: 28 } },
                 React.createElement('h3', { style: { fontSize: 16, fontWeight: 700, color: '#0f172a', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 } },
                     React.createElement('span', { style: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, background: 'linear-gradient(135deg, #eef2ff, #dbeafe)', fontSize: 14 } }, '\uD83C\uDFC6'),
-                    ' 1. 경쟁사 상위 10개 비교표'
+                    ' 경쟁사 상위 10개 비교표'
                 ),
 
                 /* 시장 요약 v5 MetricCard */
                 React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 16 } },
                     React.createElement('div', { style: Object.assign({}, v5Card, { textAlign: 'center', padding: 24 }) },
                         React.createElement('div', { style: { fontSize: 18, marginBottom: 8 } }, '\uD83D\uDCB0'),
-                        React.createElement('div', { style: { fontSize: 11, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', marginBottom: 6 } }, '평균 가격'),
+                        React.createElement('div', { style: { fontSize: 11, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', marginBottom: 6 } }, '1P 평균가'),
                         React.createElement('div', { style: { fontSize: 18, fontWeight: 800, color: '#0f172a' } },
                             compStats.avg_price ? fmt(compStats.avg_price) + '원' : avgTop5Price
                         )
@@ -281,11 +290,11 @@ window.EntryStrategySection = function EntryStrategySection(props) {
                 )
             ),
 
-            /* === 2. 내 상품 vs 경쟁사 격차 분석 === */
-            gapAnalysis && React.createElement('div', { style: { marginBottom: 28 } },
+            /* === 내 상품 vs 경쟁사 격차 분석 === */
+            showComp && gapAnalysis && React.createElement('div', { style: { marginBottom: 28 } },
                 React.createElement('h3', { style: { fontSize: 16, fontWeight: 700, color: '#0f172a', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 } },
                     React.createElement('span', { style: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, background: 'linear-gradient(135deg, #eef2ff, #dbeafe)', fontSize: 14 } }, '\uD83D\uDCCA'),
-                    ' 2. 내 상품 vs 경쟁사 격차 분석'
+                    ' 내 상품 vs 경쟁사 격차 분석'
                 ),
 
                 /* 격차 요약 v5 MetricCard */
@@ -298,7 +307,7 @@ window.EntryStrategySection = function EntryStrategySection(props) {
                             (gapAnalysis.priceDiffPct > 0 ? '+' : '') + gapAnalysis.priceDiffPct + '%'
                         ),
                         React.createElement('div', { style: { fontSize: 12, color: '#64748b', marginTop: 4 } },
-                            gapAnalysis.priceDiffPct <= -10 ? '경쟁사 대비 저렴' : gapAnalysis.priceDiffPct <= 0 ? '적정 가격대' : gapAnalysis.priceDiffPct <= 10 ? '소폭 비쌈' : '가격 조정 필요'
+                            gapAnalysis.priceDiffPct <= -10 ? '경쟁사 대비 저렴' : gapAnalysis.priceDiffPct <= 0 ? '적정 가격대' : gapAnalysis.priceDiffPct <= 10 ? '소폭 비쌈' : '비쌈 → 쿠폰·기획전으로 상쇄 권장 (진입 전략 참조)'
                         )
                     ),
                     /* 상위3개 vs 내 가격 */
@@ -345,11 +354,11 @@ window.EntryStrategySection = function EntryStrategySection(props) {
                 )
             ),
 
-            /* === 3. AI 기반 맞춤 진입 전략 제안 === */
-            strategies.length > 0 && React.createElement('div', { style: { marginBottom: 20 } },
+            /* === AI 기반 맞춤 진입 전략 제안 === */
+            showStrat && strategies.length > 0 && React.createElement('div', { style: { marginBottom: 20 } },
                 React.createElement('h3', { style: { fontSize: 16, fontWeight: 700, color: '#0f172a', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 } },
                     React.createElement('span', { style: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, background: 'linear-gradient(135deg, #eef2ff, #dbeafe)', fontSize: 14 } }, '\uD83E\uDD16'),
-                    ' 3. AI 기반 맞춤 진입 전략 제안'
+                    ' AI 기반 맞춤 진입 전략 제안'
                 ),
 
                 /* 전략 카드들 — 시안 .strat + .st + .sev */
@@ -411,7 +420,7 @@ window.EntryStrategySection = function EntryStrategySection(props) {
             ),
 
             /* 종합 전략 추천 (strategicData 기반 — advertiserData 없을 때만) */
-            !advertiserData && recommendation && React.createElement('div', { style: { background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 16, padding: '20px 24px', borderLeft: '4px solid #10b981', marginBottom: 20 } },
+            showStrat && !advertiserData && recommendation && React.createElement('div', { style: { background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 16, padding: '20px 24px', borderLeft: '4px solid #10b981', marginBottom: 20 } },
                 React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 } },
                     React.createElement('span', { style: { fontSize: 16 } }, '\uD83D\uDCCC'),
                     React.createElement('span', { style: { fontWeight: 700, fontSize: 14, color: '#065f46' } }, '종합 진입 전략'),
@@ -420,8 +429,8 @@ window.EntryStrategySection = function EntryStrategySection(props) {
                 React.createElement('p', { style: { lineHeight: 1.7, color: '#0f172a', fontSize: 13, margin: 0 } }, recommendation)
             ),
 
-            /* 분석 시각 */
-            React.createElement('div', { style: { marginTop: 16, padding: '12px 16px', background: '#f8fafc', borderRadius: 12, fontSize: 12, color: '#94a3b8', textAlign: 'center', border: '1px solid #e2e8f0' } },
+            /* 분석 시각 (전략 파트에만 — 분할 렌더 시 중복 방지) */
+            showStrat && React.createElement('div', { style: { marginTop: 16, padding: '12px 16px', background: '#f8fafc', borderRadius: 12, fontSize: 12, color: '#94a3b8', textAlign: 'center', border: '1px solid #e2e8f0' } },
                 '네이버 공식 API 기준 분석 결과이며, 실제 검색 노출 순위와 차이가 있을 수 있습니다.',
                 advertiserData && advertiserData.analyzed_at ? ' | 분석 시각: ' + new Date(advertiserData.analyzed_at).toLocaleString('ko-KR') : ''
             ),

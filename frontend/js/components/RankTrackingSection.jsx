@@ -24,6 +24,8 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
     // 키워드별 노출 분석
     const [exposureResult, setExposureResult] = useState(null);
     const [exposureLoading, setExposureLoading] = useState(false);
+    const [exposureFailed, setExposureFailed] = useState(false);
+    const [exposureNonce, setExposureNonce] = useState(0);
     const lastExposureKey = useRef('');
 
     // 검색 컨텍스트(광고주)가 바뀌면 캐시 전체 초기화
@@ -74,26 +76,50 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
         if (!cachedProductName) return;
 
         var _extraKws = (relatedKeywords || []).filter(Boolean);
-        var key = 'exposure::' + searchedProductUrl + '::' + cachedProductName + '::' + _extraKws.length;
+        var key = 'exposure::' + searchedProductUrl + '::' + cachedProductName + '::' + _extraKws.length + '::' + exposureNonce;
         if (lastExposureKey.current === key) return;
         lastExposureKey.current = key;
 
+        var cancelled = false;
+        var retries = 0;
         setExposureLoading(true);
         setExposureResult(null);
-        api.post('/rank/keyword-exposure', { product_url: searchedProductUrl, keyword: searchedKeyword, product_name: cachedProductName, extra_keywords: _extraKws })
-            .then(function(res) {
-                if (res && res.success && res.data) {
-                    setExposureResult(res.data);
-                } else if (res && !res.success) {
-                    toast.warn('키워드 노출 분석: ' + (res.detail || '분석에 실패했습니다'));
-                }
+        setExposureFailed(false);
+
+        function retryOrFail() {
+            if (cancelled) return;
+            // 네이버 조회 지연/일시 실패 → 최대 1회 자동 재시도 후 폴백(빈 상태로 사라지지 않게)
+            if (retries < 1) {
+                retries += 1;
+                setTimeout(function() { if (!cancelled) attempt(); }, 2500);
+            } else {
                 setExposureLoading(false);
-            })
-            .catch(function() {
-                toast.error('키워드 노출 분석 요청 실패');
-                setExposureLoading(false);
-            });
-    }, [searchedProductUrl, searchedKeyword, cachedProductName, relatedKeywords]);
+                setExposureFailed(true);
+            }
+        }
+        function attempt() {
+            // 클라이언트 타임아웃(무한 로딩 방지): BE 예산 18s + 네트워크 여유를 두고 32초.
+            // (첫 시도가 BE 예산 안에 끝나 불필요한 재시도로 크롤을 두 번 하지 않게 함)
+            var timeoutP = new Promise(function(_res, rej) { setTimeout(function() { rej(new Error('timeout')); }, 32000); });
+            Promise.race([
+                api.post('/rank/keyword-exposure', { product_url: searchedProductUrl, keyword: searchedKeyword, product_name: cachedProductName, extra_keywords: _extraKws }),
+                timeoutP
+            ])
+                .then(function(res) {
+                    if (cancelled) return;
+                    if (res && res.success && res.data) {
+                        setExposureResult(res.data);
+                        setExposureFailed(false);
+                        setExposureLoading(false);
+                    } else {
+                        retryOrFail();
+                    }
+                })
+                .catch(function() { retryOrFail(); });
+        }
+        attempt();
+        return function() { cancelled = true; };
+    }, [searchedProductUrl, searchedKeyword, cachedProductName, relatedKeywords, exposureNonce]);
 
     // 분석 중인 상품이 추적 등록돼 있으면 30일 순위 추이 차트용 이력을 미리 로드
     useEffect(function() {
@@ -141,6 +167,45 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
         } catch (e) {
             toast.error('삭제 실패: ' + (e.message || '네트워크 오류'));
         }
+    };
+
+    /* 키워드 개별 삭제 (건의 2026-07-22, 이예은) — 남기는 키워드의 이력은 유지.
+       마지막 1개는 삭제 불가(키워드 0개 상품 방지 → 상품 삭제로 정리). */
+    const handleDeleteKeyword = async (keywordId, keyword, siblingCount) => {
+        if (siblingCount <= 1) {
+            try { toast.warn('마지막 키워드는 삭제할 수 없습니다. 상품 전체를 정리하려면 상품 삭제를 이용하세요.'); } catch (e) {}
+            return;
+        }
+        if (!confirm("'" + keyword + "' 추적을 삭제할까요?\n이 키워드의 순위 이력도 함께 삭제됩니다. (상품과 다른 키워드는 유지)")) return;
+        try {
+            await api.del('/keywords/' + keywordId);
+            try { toast.success("'" + keyword + "' 추적이 삭제되었습니다."); } catch (e) {}
+            refreshProducts();
+        } catch (e) {
+            toast.error('키워드 삭제 실패: ' + (e.message || '네트워크 오류'));
+        }
+    };
+
+    /* 키워드 삭제 ✕ 버튼 (canEdit일 때만) — 표의 '관리' 열 셀. 마지막 1개면 비활성 */
+    var renderKeywordDeleteCell = function(k, siblingCount, pad) {
+        var disabled = siblingCount <= 1;
+        return React.createElement('td', {
+            style: { padding: pad || '6px 10px', textAlign: 'center', whiteSpace: 'nowrap' },
+            onClick: function(e) { e.stopPropagation(); }  /* 셀 클릭이 행 펼침을 토글하지 않게 */
+        },
+            React.createElement('button', {
+                disabled: disabled,
+                title: disabled ? '마지막 키워드는 삭제할 수 없습니다 — 상품 삭제를 이용하세요' : '이 키워드 추적 삭제',
+                onClick: function(e) { e.stopPropagation(); handleDeleteKeyword(k.id, k.keyword, siblingCount); },
+                style: {
+                    border: '1px solid ' + (disabled ? '#e2e8f0' : '#fecaca'),
+                    background: disabled ? '#f8fafc' : '#fff',
+                    color: disabled ? '#cbd5e1' : '#dc2626',
+                    borderRadius: 8, width: 26, height: 26, fontSize: 12, fontWeight: 800, lineHeight: 1,
+                    cursor: disabled ? 'not-allowed' : 'pointer', padding: 0
+                }
+            }, '✕')
+        );
     };
 
     const loadHistory = async (keywordId, days) => {
@@ -226,7 +291,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                 options: {
                     plugins: {
                         legend: { display: false },
-                        tooltip: { callbacks: { label: function(ctx) { return ctx.parsed.y != null ? ctx.parsed.y + '위' : '400위 밖'; } } }
+                        tooltip: { callbacks: { label: function(ctx) { return ctx.parsed.y != null ? ctx.parsed.y + '위' : '200위 밖'; } } }
                     },
                     scales: {
                         y: { reverse: true, suggestedMin: 1, suggestedMax: Math.max(16, maxRank + 2), title: { display: true, text: '순위 (낮을수록 상위 ↑)' }, ticks: { precision: 0 } }
@@ -234,7 +299,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                 }
             }),
             React.createElement('div', { style: { fontSize: 10, color: '#94a3b8', marginTop: 4 } },
-                '※ 선이 위로 갈수록 상위 노출. 끊긴 구간은 400위 밖입니다.')
+                '※ 선이 위로 갈수록 상위 노출. 끊긴 구간은 200위 밖입니다.')
         );
     };
 
@@ -309,7 +374,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
                     <div>
                         <h3 className="rt-h3"><span className="rt-hic">📍</span>키워드별 노출 순위<span className="badge b-ok">✅ 실측</span></h3>
-                        <div className="rt-desc">상품명에서 추출한 키워드별로 네이버 쇼핑 검색 순위를 조회한 결과 (검색 범위: 상위 400개 상품)</div>
+                        <div className="rt-desc">상품명에서 추출한 키워드별로 네이버 쇼핑 검색 순위를 조회한 결과 (검색 범위: 상위 200개 상품)</div>
                     </div>
                     {canEdit !== false && <button className="btn btn-primary btn-sm" onClick={() => setShowAddForm(!showAddForm)}>
                         {showAddForm ? '취소' : '+ 상품 등록'}
@@ -342,8 +407,9 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                     </div>
                 )}
                 {exposureResult && !exposureLoading && (function() {
-                    var exposed = exposureResult.results.filter(function(r) { return r.rank != null; });
-                    var unexposed = exposureResult.results.filter(function(r) { return r.rank == null; });
+                    // R6: 노출률·노출/400위밖 리스트는 '내 상품 키워드'(source!=='related')만 — 무관 연관어 제외
+                    var exposed = exposureResult.results.filter(function(r) { return r.rank != null && r.source !== 'related'; });
+                    var unexposed = exposureResult.results.filter(function(r) { return r.rank == null && r.source !== 'related'; });
                     var exposureRate = exposureResult.total_keywords > 0
                         ? Math.round((exposureResult.exposed_count / exposureResult.total_keywords) * 100)
                         : 0;
@@ -351,7 +417,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                     <div className="fade-in" style={{ marginTop: 16 }}>
                         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginBottom: 12 }}>
                             <span className="ps ps-g">노출 {exposureResult.exposed_count}개</span>
-                            <span className="ps ps-r">400위 밖 {unexposed.length}개</span>
+                            <span className="ps ps-r">200위 밖 {unexposed.length}개</span>
                             <span className="ps ps-n">전체 {exposureResult.total_keywords}개</span>
                         </div>
 
@@ -363,7 +429,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                             </div>
                             <div className="ratecard">
                                 <div className="v" style={{ color: 'var(--red)' }}>{unexposed.length}</div>
-                                <div className="k">400위 밖 키워드</div>
+                                <div className="k">200위 밖 키워드</div>
                             </div>
                             <div className="ratecard">
                                 <div className="v" style={{ color: 'var(--pur)' }}>{exposureRate}%</div>
@@ -378,7 +444,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                                     💡 노출 중인 추천 키워드
                                 </div>
                                 <div style={{ fontSize: 12, color: '#64748b', marginBottom: 10, lineHeight: 1.5 }}>
-                                    검색 키워드가 상위 400위 밖이어도, 아래 키워드로는 지금 노출 중입니다 — 상품명·태그·광고에 활용해 노출을 확보하세요.
+                                    검색 키워드가 상위 200위 밖이어도, 아래 키워드로는 지금 노출 중입니다 — 상품명·태그·광고에 활용해 노출을 확보하세요.
                                 </div>
                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                                     {exposureResult.recommended.map(function(r, idx) {
@@ -412,7 +478,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                             </div>
 
                             <div style={{ fontSize: 13, fontWeight: 800, color: '#ef4444', margin: '16px 0 8px', display: 'flex', alignItems: 'center', gap: 6 }}>
-                                <span>●</span> 400위 밖 키워드
+                                <span>●</span> 200위 밖 키워드
                             </div>
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                                 {unexposed.map(function(r, idx) {
@@ -448,6 +514,22 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                     </div>
                     );
                 })()}
+
+                {/* 키워드 노출 조회 일시 실패 — 빈 상태로 사라지지 않게 재조회 제공 */}
+                {exposureFailed && !exposureLoading && !exposureResult && (
+                    <div className="card fade-in" style={{ textAlign: 'center', padding: '22px 16px' }}>
+                        <div style={{ fontSize: 26, marginBottom: 8 }}>🔄</div>
+                        <div style={{ fontSize: 13, color: '#64748b', lineHeight: 1.6, marginBottom: 12 }}>
+                            일시적으로 키워드별 노출 순위를 불러오지 못했습니다(네이버 조회 지연). 순위 데이터는 유효하며, 다시 조회하면 표시됩니다.
+                        </div>
+                        <button
+                            onClick={function() { lastExposureKey.current = ''; setExposureFailed(false); setExposureNonce(function(n) { return n + 1; }); }}
+                            style={{ padding: '9px 18px', borderRadius: 10, border: 'none', background: 'linear-gradient(135deg,#4f46e5,#6366f1)', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}
+                        >
+                            🔄 다시 조회
+                        </button>
+                    </div>
+                )}
 
                 {/* 등록된 상품 목록 (viewer에게는 숨김 — 1회성 조회만 표시) */}
                 {(function() {
@@ -502,7 +584,8 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                                                     React.createElement('th', null, '키워드'),
                                                     React.createElement('th', null, '현재 순위'),
                                                     React.createElement('th', null, '페이지'),
-                                                    React.createElement('th', null, '최근 체크')
+                                                    React.createElement('th', null, '최근 체크'),
+                                                    canEdit !== false && React.createElement('th', { style: { width: 52, textAlign: 'center' } }, '관리')
                                                 )),
                                                 React.createElement('tbody', null,
                                                     p.keywords.map(function(k) {
@@ -515,14 +598,15 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                                                             React.createElement('td', null,
                                                                 k.latest_rank
                                                                     ? React.createElement('span', { style: { fontWeight: 700, color: k.latest_rank <= 10 ? '#059669' : k.latest_rank <= 40 ? '#d97706' : '#dc2626' } }, k.latest_rank + '위')
-                                                                    : React.createElement('span', { className: 'badge badge-gray' }, '400위 밖')
+                                                                    : React.createElement('span', { className: 'badge badge-gray' }, '200위 밖')
                                                             ),
                                                             React.createElement('td', null, k.latest_rank ? Math.ceil(k.latest_rank / 40) + 'P' : '-'),
-                                                            React.createElement('td', { style: { fontSize: 12, color: '#94a3b8' } }, k.last_checked ? new Date(k.last_checked).toLocaleString('ko') : '-')
+                                                            React.createElement('td', { style: { fontSize: 12, color: '#94a3b8' } }, k.last_checked ? new Date(k.last_checked).toLocaleString('ko') : '-'),
+                                                            canEdit !== false && renderKeywordDeleteCell(k, p.keywords.length, '8px 8px')
                                                         );
                                                         if (!isOpen) return rowEl;
                                                         var chartRow = React.createElement('tr', { key: k.id + '-chart' },
-                                                            React.createElement('td', { colSpan: 4, style: { padding: 0, background: '#f8fafc' } },
+                                                            React.createElement('td', { colSpan: canEdit !== false ? 5 : 4, style: { padding: 0, background: '#f8fafc' } },
                                                                 renderRankHistoryChart(k.id, k.keyword, { storeName: p.store_name, storeUrl: p.product_url })
                                                             )
                                                         );
@@ -561,7 +645,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                     var _thS = { textAlign: 'left', padding: '9px 12px', borderBottom: '2px solid #e2e8f0', color: '#64748b', fontWeight: 700, whiteSpace: 'nowrap', fontSize: 12, background: '#f8fafc' };
                     var _thC = Object.assign({}, _thS, { textAlign: 'center' });
                     var _rankBadge = function(rk) {
-                        if (!rk) return React.createElement('span', { style: { fontSize: 12, color: '#94a3b8', fontWeight: 600 } }, '400위 밖');
+                        if (!rk) return React.createElement('span', { style: { fontSize: 12, color: '#94a3b8', fontWeight: 600 } }, '200위 밖');
                         var c = rk <= 10 ? '#059669' : rk <= 40 ? '#d97706' : '#dc2626';
                         return React.createElement('span', { style: { fontWeight: 800, color: c } }, rk + '위',
                             React.createElement('span', { style: { fontSize: 10, color: '#94a3b8', fontWeight: 600, marginLeft: 4 } }, Math.ceil(rk / 40) + 'P'));
@@ -621,7 +705,8 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                                                                 React.createElement('thead', null, React.createElement('tr', null,
                                                                     React.createElement('th', { style: { textAlign: 'left', padding: '6px 10px', color: '#94a3b8', fontWeight: 700, fontSize: 11 } }, '키워드'),
                                                                     React.createElement('th', { style: { textAlign: 'left', padding: '6px 10px', color: '#94a3b8', fontWeight: 700, fontSize: 11 } }, '현재 순위'),
-                                                                    React.createElement('th', { style: { textAlign: 'left', padding: '6px 10px', color: '#94a3b8', fontWeight: 700, fontSize: 11 } }, '최근 체크')
+                                                                    React.createElement('th', { style: { textAlign: 'left', padding: '6px 10px', color: '#94a3b8', fontWeight: 700, fontSize: 11 } }, '최근 체크'),
+                                                                    canEdit !== false && React.createElement('th', { style: { textAlign: 'center', padding: '6px 10px', color: '#94a3b8', fontWeight: 700, fontSize: 11, width: 44 } }, '관리')
                                                                 )),
                                                                 React.createElement('tbody', null,
                                                                     kws.map(function(k) {
@@ -631,10 +716,11 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                                                                             React.createElement('td', { style: { padding: '6px 10px', fontWeight: 600, color: '#1e293b' } },
                                                                                 React.createElement('span', { style: { color: '#cbd5e1', marginRight: 5, fontSize: 9 } }, kOpen ? '▼' : '▶'), k.keyword),
                                                                             React.createElement('td', { style: { padding: '6px 10px' } }, _rankBadge(k.latest_rank)),
-                                                                            React.createElement('td', { style: { padding: '6px 10px', fontSize: 11, color: '#94a3b8' } }, k.last_checked ? new Date((k.last_checked || '').replace(' ', 'T')).toLocaleString('ko') : '-')
+                                                                            React.createElement('td', { style: { padding: '6px 10px', fontSize: 11, color: '#94a3b8' } }, k.last_checked ? new Date((k.last_checked || '').replace(' ', 'T')).toLocaleString('ko') : '-'),
+                                                                            canEdit !== false && renderKeywordDeleteCell(k, kws.length, '6px 10px')
                                                                         );
                                                                         if (!kOpen) return krow;
-                                                                        return [krow, React.createElement('tr', { key: k.id + '-c' }, React.createElement('td', { colSpan: 3, style: { padding: 0, background: '#f8fafc' } }, renderRankHistoryChart(k.id, k.keyword, { storeName: p.store_name, storeUrl: p.product_url })))];
+                                                                        return [krow, React.createElement('tr', { key: k.id + '-c' }, React.createElement('td', { colSpan: canEdit !== false ? 4 : 3, style: { padding: 0, background: '#f8fafc' } }, renderRankHistoryChart(k.id, k.keyword, { storeName: p.store_name, storeUrl: p.product_url })))];
                                                                     })
                                                                 )
                                                             )

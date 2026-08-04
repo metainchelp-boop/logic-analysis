@@ -17,8 +17,13 @@ window.DatalabGrowthSection = function DatalabGrowthSection(props) {
     <div className="section fade-in">
       <div className="container">
         <div className="card" style={{ padding: '20px 22px' }}>
-        <h3 className="rt-h3"><span className="rt-hic">🚀</span>전년 동기 대비 성장률<span className="badge b-ok">✅ 데이터랩</span></h3>
+        <h3 className="rt-h3"><span className="rt-hic">🚀</span>전년 동기 대비 성장률<span className="badge b-dl">📊 데이터랩</span></h3>
         <div className="rt-desc">데이터랩 쇼핑인사이트 기반 전년 대비 검색 트렌드 변화</div>
+        {props.data.offSeason && (
+          <div style={{ margin: '8px 0 4px', padding: '10px 14px', background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: 10, fontSize: 12.5, color: '#92400e', lineHeight: 1.6 }}>
+            ⚠️ <strong>비수기 안내:</strong> 현재는 이 키워드의 비수기 구간입니다(현재 지수 {props.data.currentIndex} / 연중 최고 {props.data.peakIndex}). 낮은 수치·성장률은 계절 저점 때문이며 시장 쇠퇴가 아닙니다 — 성수기 기준으로 해석하세요.
+          </div>
+        )}
 
         <div className="card-grid card-grid-3">
           {periods.map(function(p, i) {
@@ -35,11 +40,14 @@ window.DatalabGrowthSection = function DatalabGrowthSection(props) {
                 <div style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 12 }}>
                   직전 {p.label} 대비
                 </div>
-                <div style={{ fontSize: 32, fontWeight: 800, color: isPositive ? c.main : '#ef4444', marginBottom: 4 }}>
-                  {isPositive ? '+' : ''}{p.growth}%
+                <div style={{ fontSize: 32, fontWeight: 800, color: p.reliable === false ? '#94a3b8' : (isPositive ? c.main : '#ef4444'), marginBottom: 4 }}>
+                  {(p.growth == null || isNaN(p.growth)) ? '집계 없음' : ((isPositive ? '+' : '') + p.growth + '%')}
+                  {p.reliable === false && (p.growth != null && !isNaN(p.growth)) && (
+                    <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: '#92400e', background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: 99, padding: '2px 8px', verticalAlign: 'middle' }}>참고</span>
+                  )}
                 </div>
                 <div style={{ fontSize: 12, color: '#64748b', marginBottom: 12 }}>
-                  {isPositive ? '검색량 증가 추세' : '검색량 감소 추세'}
+                  {p.reliable === false ? '비수기 · 참고(지수 미미)' : (isPositive ? '검색량 증가 추세' : '검색량 감소 추세')}
                 </div>
                 <div style={{ height: 6, background: '#e2e8f0', borderRadius: 3, overflow: 'hidden', marginBottom: 10 }}>
                   <div style={{ height: '100%', width: barWidth + '%', borderRadius: 3, background: isPositive ? c.grad : 'linear-gradient(90deg, #ef4444, #f87171)' }}></div>
@@ -53,10 +61,16 @@ window.DatalabGrowthSection = function DatalabGrowthSection(props) {
           })}
         </div>
 
-        <div style={{ marginTop: 16, padding: '12px 16px', background: '#f0fdf4', borderRadius: 10, border: '1px solid #a7f3d0', fontSize: 12, color: '#065f46', lineHeight: 1.7 }}>
-          📈 <strong>성장 분석:</strong> 전년 대비 3개월 평균 기준 {avg3m.growth > 0 ? '+' : ''}{avg3m.growth}%로 <strong>{growthLabel}</strong>입니다.
-          {avg3m.growth > 0 && ' 단기(1개월) 성장률이 장기 평균보다 ' + (periods[0].growth > avg3m.growth ? '높아 현재 상승 모멘텀이 강합니다.' : '낮아 안정적 성장 구간입니다.')}
-        </div>
+        {(props.data.offSeason || avg3m.reliable === false) ? (
+          <div style={{ marginTop: 16, padding: '12px 16px', background: '#fffbeb', borderRadius: 10, border: '1px solid #fcd34d', fontSize: 12, color: '#92400e', lineHeight: 1.7 }}>
+            📈 <strong>성장 분석:</strong> 현재 비수기 구간이라 전년 대비 성장률은 미세 지수의 변동으로 <strong>신뢰도가 낮습니다</strong>. 성장세 판단은 성수기 데이터로 하는 것이 정확합니다.
+          </div>
+        ) : (
+          <div style={{ marginTop: 16, padding: '12px 16px', background: '#f0fdf4', borderRadius: 10, border: '1px solid #a7f3d0', fontSize: 12, color: '#065f46', lineHeight: 1.7 }}>
+            📈 <strong>성장 분석:</strong> 전년 대비 3개월 평균 기준 {avg3m.growth > 0 ? '+' : ''}{avg3m.growth}%로 <strong>{growthLabel}</strong>입니다.
+            {avg3m.growth > 0 && ' 단기(1개월) 성장률이 장기 평균보다 ' + (periods[0].growth > avg3m.growth ? '높아 현재 상승 모멘텀이 강합니다.' : '낮아 안정적 성장 구간입니다.')}
+          </div>
+        )}
         </div>
       </div>
     </div>

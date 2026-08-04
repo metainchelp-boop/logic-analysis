@@ -67,11 +67,18 @@ body { background: var(--rt-bg); }
 .report-main .rt-scroll table { margin-top: 0 !important; }
 .report-main .rt-scroll thead th { position: sticky; top: 0; background: #fff !important; z-index: 2; box-shadow: inset 0 -2px 0 #e2e8f0; }
 
-/* ===== 배지 유틸 (실측/추정/AI) ===== */
+/* ===== 배지 유틸 (실측/데이터랩/추정/AI/결측) ===== */
 .badge { font-size: 11px; font-weight: 800; padding: 3px 9px; border-radius: 999px; vertical-align: middle; display: inline-block; }
 .b-ok  { background: var(--rt-okbg);  color: var(--rt-ok); }
+.b-dl  { background: #e0f2fe;         color: #0284c7; }  /* 데이터랩 전용 — 실측(초록)과 시각 구분 */
 .b-est { background: var(--rt-estbg); color: var(--rt-est); }
 .b-ai  { background: #ede9fe;         color: #7c3aed; }
+.b-n   { background: #eef2f7;         color: #64748b; }  /* 결측·중립 — 0/'-' 값에 초록 ✅ 오독 방지 */
+
+/* ===== 배지 범례 (report-main 내부 — 전달본 포함) ===== */
+.report-legend { max-width: 1200px; margin: 0 auto 4px; padding: 2px 24px; font-size: 11.5px; color: #64748b; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.report-legend .rl-sep { color: #cbd5e1; margin: 0 2px; }
+@media (min-width: 1100px) { .report-main .report-legend { max-width: 100%; padding: 2px 0; } }
 
 /* ===== 노트 콜아웃 ===== */
 .note { font-size: 12px; color: #475569; margin-top: 22px; background: #f8fafc; border-left: 3px solid var(--rt-ind); padding: 13px 16px; border-radius: 0 9px 9px 0; line-height: 1.7; clear: both; }
@@ -279,10 +286,18 @@ body { background: var(--rt-bg); }
   .report-main .rt-h3, .report-main .card > h3 { font-size: 14.5px; }
   .report-main table { font-size: 12px; }
   .report-main .rt-scroll { max-height: 360px; }
+  /* 내보내기 캡처가 부여하는 반응형 훅 — 인라인 grid/flex를 폰에서 1열로 (기존엔 클래스만 있고 정의가 없었음) */
+  .report-main .rpt-grid, .rpt-grid { grid-template-columns: 1fr !important; }
+  .report-main .rpt-flex, .rpt-flex { flex-wrap: wrap !important; }
 }
 
 /* ===== 인쇄 / PDF 저장 — 광고주 제출용: 시스템 버튼·유틸 영역 숨김 ===== */
+@page { size: A4; margin: 12mm; }
 @media print {
+  /* 스크롤 박스는 인쇄에서 무력 → 잘림 방지: 높이 제한 해제 + 표 축소 */
+  .report-main .rt-scroll, .table-wrap { max-height: none !important; overflow: visible !important; }
+  .report-main table { font-size: 11px !important; }
+  .report-main table th, .report-main table td { padding: 6px 6px !important; word-break: break-word; }
   /* 화면 전용 UI(상단바·목차·앵커네비) + 액션 영역(업체저장/보고서내보내기/알림설정) + 모든 버튼·입력 숨김 */
   .topbar, .anchor-nav, .report-toc,
   #sec-save-client, #sec-report, #sec-notify,

@@ -1,8 +1,9 @@
 """
 로직 분석 프로그램 v3 - 스케줄러 모듈
 APScheduler 기반 통합 스케줄러
-- 08:00 순위 추적 (홈탭 + 업체, 키워드당 1회 API, 결과 캐시)
-- 09:00 전체 분석 + HTML 보고서 (08시 캐시 재사용, API 추가 호출 없음)
+- 04:00 계약단계 동기화 · 08:00 순위 추적 (맥북 브라우저 수집 01:00~07:00 분 소비)
+- 08:30 전체 분석 + HTML 보고서 (08:00 캐시 재사용) → 09:30 리포트 발송(현재 발송 비활성 — 운영자 확인 후 재개)
+  ※ 2026-07-27 업무시간 502 사고로 전 배치를 새벽으로 이동(업무 시작 전 종료)
 - 일일 API 호출: ~147회 (기존 25,000+에서 99% 절감)
 """
 import logging
@@ -18,7 +19,7 @@ logger = logging.getLogger(__name__)
 # 글로벌 스케줄러 인스턴스
 _scheduler: BackgroundScheduler = None
 
-# 08시 순위 추적에서 캐시한 API 결과 → 09시 분석에서 재사용
+# 08:00 순위 추적에서 캐시한 결과 → 08:30 분석에서 재사용
 _api_cache = {}       # {keyword: {"prods": [...], "total": int}}
 _api_cache_date = ""  # 캐시 날짜 (당일만 유효)
 
@@ -48,7 +49,25 @@ def start_scheduler():
         job_defaults={"misfire_grace_time": 3600, "coalesce": True, "max_instances": 1},
     )
 
-    # 1) 순위 추적 — 매일 08:00 (홈탭 + 업체, 키워드당 1회 API, 결과 캐시)
+    # ⏰ 배치 시간대 이동 (2026-07-27, 운영자 승인)
+    #   사유: 09:00 전체분석은 업체수×키워드마다 1~2초 대기하며 1시간 이상 도는 장시간 배치라
+    #   업무시간(10시대)까지 물려, 같은 컨테이너(RAM 1.9GB·uvicorn 워커 5)의 사용자 요청이
+    #   502로 실패하는 사고가 있었다(직원 신고 07-27 10:12). 체인 전체를 새벽으로 당겨
+    #   업무 시작(09:00) 전에 끝나게 한다. 의존 순서(계약동기화→순위추적 캐시→분석→발송)는 유지.
+
+    # 0) 계약단계 동기화 — 매일 04:00 (구 07:30. 분석 배치 전에 실행해 만료 업체를 제외)
+    #    ※ ad-sync 소비 합의(2026-07-20) 조건 유지: 하루 1회·읽기 전용·단계당 1콜,
+    #      ③ 광고센터의 06:00과 시간대 분리(04:00). 시각 변경은 ①에 통지 대상.
+    _scheduler.add_job(
+        _run_contract_stage_sync,
+        trigger=CronTrigger(hour=4, minute=0),
+        id="contract_stage_sync",
+        name="계약단계 동기화 (04:00)",
+        replace_existing=True,
+        max_instances=1,
+    )
+
+    # 1) 순위 추적 — 매일 08:00 (2026-08-04 운영자 확정: 수집 01~07시 완료 후 소비, 데드라인 10시)
     _scheduler.add_job(
         _run_rank_tracking,
         trigger=CronTrigger(hour=8, minute=0),
@@ -58,22 +77,23 @@ def start_scheduler():
         max_instances=1,
     )
 
-    # 2) 전체 분석 + 보고서 — 매일 09:00 (08시 캐시 재사용)
+    # 2) 전체 분석 + 보고서 — 매일 08:30 (08:00 캐시 재사용)
+    #    발송(08:00)까지 3시간 확보 — 기존 09→10시 간격(1시간)보다 여유가 크다.
     _scheduler.add_job(
         _run_daily_analysis,
-        trigger=CronTrigger(hour=9, minute=0),
+        trigger=CronTrigger(hour=8, minute=30),
         id="daily_analysis",
-        name="전체 분석 + 보고서 (09:00)",
+        name="전체 분석 + 보고서 (08:30)",
         replace_existing=True,
         max_instances=1,
     )
 
-    # 3) 일일 리포트 발송 — 10:00 (분석 완료 후 발송)
+    # 3) 일일 리포트 발송 — 08:00 (구 10:00. 분석 완료 후 발송 · 업무 시작 전 도착)
     _scheduler.add_job(
         _run_daily_report,
-        trigger=CronTrigger(hour=10, minute=0),
+        trigger=CronTrigger(hour=9, minute=30),
         id="daily_report",
-        name="일일 리포트 발송 (10:00)",
+        name="일일 리포트 발송 (08:00)",
         replace_existing=True,
         max_instances=1,
     )
@@ -89,7 +109,7 @@ def start_scheduler():
     )
 
     _scheduler.start()
-    logger.info("✅ 스케줄러 시작 (순위: 08:00, 분석: 09:00, 리포트: 10:00, DB백업: 00:30)")
+    logger.info("✅ 스케줄러 시작 (계약동기화: 04:00, 순위: 08:00, 분석: 08:30, 리포트: 09:30(발송 비활성), DB백업: 00:30)")
 
 
 def stop_scheduler():
@@ -118,6 +138,123 @@ def reschedule_report(hour: int, minute: int):
         logger.error(f"리포트 스케줄 변경 실패: {e}")
 
 
+# ==================== 04:00 계약단계 동기화 (전산 ad-sync 소비) ====================
+#   합의(2026-07-20): ① 메타 전산의 GET /api/ad-sync/contracts 를 ②(로직분석)도 소비.
+#   계약이 끝난 단계(계약 만료·환불중·홀딩중) 업체는 자동 추적을 자동 중지(⏸),
+#   운영 단계(진행중·전략 관리·사후 관리)로 복귀하면 자동 재개(▶).
+#   - 읽기 전용 · 하루 1회(04:00 — ③ 광고센터 06:00과 시간 분리) · 단계당 1콜(총 6콜).
+#   - 직원 수동 토글(auto_analysis_manual=1) 업체는 절대 덮어쓰지 않음(수동 우선).
+#   - ERP_AD_SYNC_API_KEY 미설정·API 실패 시 아무것도 바꾸지 않음(안전 기본값).
+
+PAUSE_STAGES = ["계약 만료", "환불중", "홀딩중"]          # 자동 중지 대상
+RESUME_STAGES = ["진행중", "전략 관리", "사후 관리"]      # 자동 재개 대상(운영 지속 단계)
+
+
+def _sync_norm(s):
+    """업체명 정규화(공백 제거·소문자) — 전산 상호명 ↔ 로직분석 업체명 매칭용"""
+    import re as _re
+    return _re.sub(r"\s+", "", str(s or "")).lower()
+
+
+def _sync_store_slug(url):
+    """스마트스토어 URL → 스토어 슬러그 (이름보다 안정적인 매칭 키)"""
+    import re as _re
+    m = _re.search(r"smartstore\.naver\.com/([^/?#]+)", str(url or ""))
+    return m.group(1).lower() if m else ""
+
+
+def _decide_stage_actions(client_rows, stage_by_name, stage_by_slug):
+    """순수 판정 로직(단위테스트 대상): 업체 행들과 전산 단계 맵 → (pause_ids, resume_ids).
+    수동 토글 업체 제외, 매칭 안 되면 아무것도 안 함."""
+    pause_ids, resume_ids = [], []
+    for c in client_rows:
+        if int(c["auto_analysis_manual"] or 0) == 1:
+            continue  # 수동 우선
+        stage = None
+        slug = _sync_store_slug(c["naver_store_url"])
+        if slug and slug in stage_by_slug:
+            stage = stage_by_slug[slug]
+        else:
+            for nm in (c["name"], c["business_name"]):
+                key = _sync_norm(nm)
+                if key and key in stage_by_name:
+                    stage = stage_by_name[key]
+                    break
+        if stage is None:
+            continue  # 매칭 실패 — 변경 없음(수동 토글로 커버)
+        cur = int(c["auto_analysis"] if c["auto_analysis"] is not None else 1)
+        if stage in PAUSE_STAGES and cur != 0:
+            pause_ids.append(c["id"])
+        elif stage in RESUME_STAGES and cur == 0:
+            resume_ids.append(c["id"])
+    return pause_ids, resume_ids
+
+
+def _run_contract_stage_sync():
+    """04:00 — 전산 계약 단계 기반 자동 추적 중지/재개"""
+    import os
+    import sqlite3
+    import requests
+
+    api_key = os.getenv("ERP_AD_SYNC_API_KEY", "")
+    if not api_key:
+        logger.info("계약단계 동기화: ERP_AD_SYNC_API_KEY 미설정 — 건너뜀 (합의 후 서버 .env에 설정)")
+        return
+    base = os.getenv("ERP_BASE_URL", "http://api.metainc.co.kr").rstrip("/")
+    DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
+
+    logger.info("🔄 계약단계 동기화 시작 (전산 ad-sync)")
+    stage_by_name, stage_by_slug = {}, {}
+    fetched_stages = 0
+    for stage in PAUSE_STAGES + RESUME_STAGES:
+        try:
+            resp = requests.get(
+                f"{base}/api/ad-sync/contracts",
+                params={"stage": stage, "has_contract": "true"},
+                headers={"X-Api-Key": api_key}, timeout=15,
+            )
+            if resp.status_code != 200:
+                logger.warning(f"  계약단계 조회 {resp.status_code} (stage={stage}) — 이 단계 건너뜀")
+                continue
+            items = ((resp.json() or {}).get("result") or {}).get("items") or []
+            fetched_stages += 1
+            for it in items:
+                nm = _sync_norm(it.get("company_name"))
+                if nm:
+                    stage_by_name[nm] = stage
+                slug = _sync_store_slug(it.get("store_url"))
+                if slug:
+                    stage_by_slug[slug] = stage
+        except Exception as e:
+            logger.warning(f"  계약단계 조회 실패(stage={stage}): {e} — 이 단계 건너뜀")
+
+    if fetched_stages == 0:
+        logger.warning("계약단계 동기화: 조회 전부 실패 — 아무것도 변경하지 않음(안전 기본값)")
+        return
+
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=10)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT id, name, business_name, naver_store_url, auto_analysis, "
+            "COALESCE(auto_analysis_manual, 0) AS auto_analysis_manual "
+            "FROM clients WHERE status = 'active' AND COALESCE(role,'advertiser')='advertiser'"
+        ).fetchall()
+        pause_ids, resume_ids = _decide_stage_actions(rows, stage_by_name, stage_by_slug)
+        for cid in pause_ids:
+            conn.execute("UPDATE clients SET auto_analysis = 0 WHERE id = ?", (cid,))
+        for cid in resume_ids:
+            conn.execute("UPDATE clients SET auto_analysis = 1 WHERE id = ?", (cid,))
+        conn.commit()
+        conn.close()
+        logger.info(
+            f"✅ 계약단계 동기화 완료: 자동 중지 {len(pause_ids)}건 · 자동 재개 {len(resume_ids)}건 "
+            f"(전산 매칭 {len(stage_by_name)}개 업체, 수동 설정 업체는 유지)"
+        )
+    except Exception as e:
+        logger.error(f"❌ 계약단계 동기화 DB 반영 실패: {e}")
+
+
 # ==================== 08:00 순위 추적 ====================
 
 def _collect_all_keywords(conn):
@@ -138,7 +275,7 @@ def _collect_all_keywords(conn):
 
     # 업체 키워드
     clients = conn.execute(
-        "SELECT id, name, main_keywords, naver_store_url FROM clients WHERE status = 'active'"
+        "SELECT id, name, main_keywords, naver_store_url FROM clients WHERE status = 'active' AND COALESCE(auto_analysis, 1) = 1 AND COALESCE(role,'advertiser')='advertiser'"  # 관리 중단 업체 제외(호출 다이어트)
     ).fetchall()
 
     client_keyword_map = {}  # {client_id: [keywords]}
@@ -166,7 +303,7 @@ def _collect_all_keywords(conn):
 
 def _run_rank_tracking():
     """
-    08:00 순위 추적 — 키워드당 최대 400위(4페이지)까지 조회.
+    08:00 순위 추적 — 키워드당 최대 300위(3페이지)까지 조회.
     홈탭 순위 + 업체 순위를 동시에 처리.
     Rate Limit 방지를 위해 키워드당 약 18초 간격 → 약 50분 소요.
     """
@@ -174,14 +311,14 @@ def _run_rank_tracking():
     import sqlite3
     import os
 
-    RANK_PAGES = 4          # 페이지 수 (100개 × 4 = 400위)
+    RANK_PAGES = 3          # 페이지 수 (100개 × 3 = 300위) — 호출 다이어트 D3(운영자 승인 2026-07-20): 400→300위, 배치 API 25% 절감
     DELAY_PER_KEYWORD = 18  # 키워드당 대기 시간 (초) — 50분 분산
     DELAY_PER_PAGE = 1.5    # 같은 키워드 내 페이지 간 대기 (초)
 
     DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
     today = date.today().isoformat()
 
-    logger.info(f"🔍 순위 추적 시작 ({datetime.now().strftime('%H:%M')}) — 400위 범위, ~50분 소요 예상")
+    logger.info(f"🔍 순위 추적 시작 ({datetime.now().strftime('%H:%M')}) — 300위 범위, ~40분 소요 예상")
 
     try:
         from naver_crawler import (
@@ -213,13 +350,38 @@ def _run_rank_tracking():
 
         for ki, keyword in enumerate(sorted(all_keywords)):
             try:
-                # ── API 호출: 최대 400개 (100개 × 4페이지) ──
+                # ── 1순위: 브라우저 수집분 (2026-08-03~) ──
+                # 네이버 쇼핑 검색 API 종료(404 SE05)로 서버는 검색 결과를 못 받는다.
+                # 사내 크롬 확장이 새벽에 올려둔 그날치 수집분이 있으면 그걸 그대로 쓴다.
+                # 수집분이 없으면 아래 기존 API 경로를 그대로 타서, API가 되살아나거나
+                # 다른 환경(로컬·테스트)에서는 종전과 똑같이 동작한다(무회귀).
                 all_prods = []
                 total_shop = 0
-                for page_idx in range(RANK_PAGES):
+                _collected = None
+                try:
+                    from collector import load_collected
+                    _collected = load_collected(keyword)
+                except Exception as _ce:
+                    logger.warning(f"  [{keyword}] 수집분 조회 실패(무시): {_ce}")
+                if _collected:
+                    all_prods = _collected["prods"]
+                    total_shop = _collected["total"]
+                    logger.info(f"  📥 [{keyword}] 브라우저 수집분 사용 — 상품 {len(all_prods)}개")
+
+                # ── 2순위: 기존 검색 API (최대 300개 = 100개 × 3페이지) ──
+                for page_idx in range(RANK_PAGES if not all_prods else 0):
                     start = page_idx * 100 + 1
                     shop_result = search_naver_shopping_api(keyword, display=100, start=start)
                     total_api_calls += 1
+                    # ── 스테일 수집분 차단 ──
+                    # 서빙 훅은 2일 창이라 '어제' 수집분도 돌려줄 수 있다(주간 분석용으론 유용).
+                    # 그러나 순위 '기록'은 오늘 데이터여야 한다 — 어제 스냅샷을 오늘 순위로 저장하면
+                    # 수집 실패 가드를 우회해 1,992건 오염 사고의 변종이 재발한다.
+                    # 오늘분이 아니면 수집 실패로 취급해 저장을 건너뛴다(낮 만회 수집 후 정상화).
+                    if shop_result.get("collectorServed") and shop_result.get("collectedDate") != today:
+                        logger.warning(f"  ⏭️ [{keyword}] 수집분이 오늘자 아님({shop_result.get('collectedDate')}) — 순위 기록 건너뜀")
+                        all_prods = []
+                        break
                     items = shop_result.get("items", [])
                     if page_idx == 0:
                         total_shop = shop_result.get("total", 0)
@@ -305,8 +467,20 @@ def _run_rank_tracking():
                 time.sleep(5)
 
         conn.close()
+
+        # 호출 다이어트(2026-07): 08시 캐시를 디스크에도 저장 — 08~09시 사이 재배포/재시작으로
+        # 메모리 캐시가 날아가도 09시 분석이 쇼핑 API를 다시 태우지 않게(키워드×1콜 낭비 방지).
+        try:
+            import json as _json
+            _pf = os.path.join(os.path.dirname(DB_PATH), "rank_api_cache.json")
+            with open(_pf, "w", encoding="utf-8") as _f:
+                _json.dump({"date": today, "cache": _api_cache}, _f, ensure_ascii=False)
+            logger.info(f"  💾 08시 캐시 디스크 저장: {len(_api_cache)}개 키워드")
+        except Exception as _pe:
+            logger.warning(f"  08시 캐시 디스크 저장 실패(무시): {_pe}")
+
         logger.info(
-            f"✅ 순위 추적 완료: API {total_api_calls}회 (400위 범위), "
+            f"✅ 순위 추적 완료: API {total_api_calls}회 (300위 범위), "
             f"순위 {total_rank_saved}건 저장, 실패 {total_errors}건 "
             f"(캐시 {len(_api_cache)}개 키워드 → 09시 분석 대기)"
         )
@@ -315,11 +489,11 @@ def _run_rank_tracking():
         logger.error(f"❌ 순위 추적 전체 실패: {e}")
 
 
-# ==================== 09:00 전체 분석 + 보고서 ====================
+# ==================== 08:30 전체 분석 + 보고서 ====================
 
 def _run_daily_analysis():
     """
-    09:00 전체 분석 + HTML 보고서 — 08시 캐시된 상품 데이터를 재사용.
+    08:30 전체 분석 + HTML 보고서 — 08:00 캐시된 상품 데이터를 재사용.
     쇼핑 API 추가 호출 없음 (검색광고 API만 사용: 검색량 + 연관 키워드).
     캐시 미스 시에만 쇼핑 API 호출 (fallback).
     """
@@ -330,10 +504,33 @@ def _run_daily_analysis():
     DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
     today = date.today().isoformat()
 
+    # 만료 경쟁사 자동 삭제 (영업사원 등록·30일 경과) — 일일 1회
+    try:
+        from client_dashboard import cleanup_expired_competitors
+        _n = cleanup_expired_competitors()
+        if _n:
+            logger.info(f"🗑️ 만료 경쟁사 {_n}건 자동 삭제 완료")
+    except Exception as _e:
+        logger.error(f"[cleanup] 만료 경쟁사 삭제 실패: {_e}")
+
     logger.info(f"📊 전체 분석 + 보고서 생성 시작 ({datetime.now().strftime('%H:%M')})")
 
     # 캐시 유효성 확인
     cache_valid = (_api_cache_date == today and len(_api_cache) > 0)
+    if not cache_valid:
+        # 호출 다이어트(2026-07): 메모리 캐시가 없으면(재배포·재시작) 디스크 복원 시도
+        try:
+            import json as _json
+            _pf = os.path.join(os.path.dirname(DB_PATH), "rank_api_cache.json")
+            with open(_pf, "r", encoding="utf-8") as _f:
+                _saved = _json.load(_f)
+            if isinstance(_saved, dict) and _saved.get("date") == today and _saved.get("cache"):
+                _api_cache = _saved["cache"]
+                _api_cache_date = today
+                cache_valid = True
+                logger.info(f"  💾 08시 캐시 디스크 복원: {len(_api_cache)}개 키워드")
+        except Exception:
+            pass
     if cache_valid:
         logger.info(f"  ✅ 08시 캐시 유효 — {len(_api_cache)}개 키워드 재사용 (쇼핑 API 호출 0회)")
     else:
@@ -351,7 +548,7 @@ def _run_daily_analysis():
 
         # 활성 업체 + 키워드 수집
         clients = conn.execute(
-            "SELECT id, name, main_keywords, naver_store_url FROM clients WHERE status = 'active'"
+            "SELECT id, name, main_keywords, naver_store_url FROM clients WHERE status = 'active' AND COALESCE(auto_analysis, 1) = 1 AND COALESCE(role,'advertiser')='advertiser'"  # 관리 중단 업체 제외(호출 다이어트)
         ).fetchall()
 
         client_keyword_map = {}
@@ -541,12 +738,40 @@ def _save_client_rank(conn, client_id, keyword, product_url, rank, page, check_t
 
 # ==================== 00:30 DB 자동 백업 ====================
 
+BACKUP_KEEP = 2  # 보관 개수 — DB가 ~3.5GB로 성장해 gzip 개당 ~3GB. 5개(15GB)가 35GB 디스크를
+#   채워 쓰기 실패(업체 등록 500, 2026-07-20 실사고)를 유발 → 최신 2개(~6GB)로 축소.
+
+
+def _prune_old_backups(backup_dir, keep=BACKUP_KEEP):
+    """오래된 백업 정리 — 압축(.db.gz)·비압축(.db) 모두 대상, 최신 keep개만 보관.
+    파일명이 logic_analysis_backup_YYYYMMDD_HHMMSS 라 이름 정렬 = 시간 정렬."""
+    import os
+    try:
+        backups = sorted([
+            f for f in os.listdir(backup_dir)
+            if f.startswith("logic_analysis_backup_") and (f.endswith(".db") or f.endswith(".db.gz"))
+        ])
+        while len(backups) > keep:
+            old = backups.pop(0)
+            try:
+                os.remove(os.path.join(backup_dir, old))
+                logger.info(f"  🗑️ [DB백업] 오래된 백업 삭제: {old}")
+            except Exception as e:
+                logger.warning(f"[DB백업] 삭제 실패({old}): {e}")
+    except Exception as e:
+        logger.warning(f"[DB백업] 정리 실패: {e}")
+
+
 def _run_daily_db_backup():
-    """매일 자정 30분에 DB 백업 수행.
-    업체(광고주) 데이터 보호를 위해 SQLite online backup API 사용."""
+    """매일 자정 30분에 DB 백업 수행 (gzip 압축 · 최신 5개 보관 · 디스크 가드).
+    업체(광고주) 데이터 보호를 위해 SQLite online backup API 사용.
+    ⚠️ 복원 시: gunzip logic_analysis_backup_YYYYMMDD_HHMMSS.db.gz 로 풀어서 사용.
+    (2026-07-10 개정) DB가 수 GB로 성장하며 비압축 14개 보관이 공유서버 디스크를
+    가득 채워 타 배치(순위추적)의 DB 쓰기까지 막는 사고가 있어, 압축+개수축소+가드 적용."""
     import sqlite3
     import shutil
     import os
+    import gzip
 
     DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
 
@@ -562,8 +787,23 @@ def _run_daily_db_backup():
     backup_dir = os.path.join(os.path.dirname(os.path.abspath(DB_PATH)), "backups")
     os.makedirs(backup_dir, exist_ok=True)
 
+    # ── 디스크 가드 ── 백업이 디스크를 꽉 채워 앱(순위추적 등)의 DB 쓰기를 막는 사고 방지.
+    #   압축 전 임시 .db(≈DB 크기) 저장 + 여유 2GB 가 확보 안 되면 이번 백업은 건너뛴다.
+    try:
+        free = shutil.disk_usage(backup_dir).free
+        if free < db_size + 2 * 1024 ** 3:
+            logger.warning(
+                f"[DB백업] 디스크 여유 부족(free={free:,} < db={db_size:,}+2GB) — "
+                f"이번 백업 건너뜀(앱 쓰기 보호). 오래된 백업만 정리."
+            )
+            _prune_old_backups(backup_dir)
+            return
+    except Exception:
+        pass
+
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_path = os.path.join(backup_dir, f"logic_analysis_backup_{ts}.db")
+    raw_path = os.path.join(backup_dir, f"logic_analysis_backup_{ts}.db")
+    gz_path = raw_path + ".gz"
 
     try:
         # 업체 수 확인 (빈 DB 백업 방지)
@@ -576,36 +816,45 @@ def _run_daily_db_backup():
             logger.info("[DB백업] 업체 데이터 없음, 백업 건너뜀")
             return
 
-        # SQLite online backup (WAL 안전)
+        # SQLite online backup (WAL 안전) → 임시 .db
         src = sqlite3.connect(DB_PATH)
-        dst = sqlite3.connect(backup_path)
+        dst = sqlite3.connect(raw_path)
         src.backup(dst)
         dst.close()
         src.close()
 
-        backup_size = os.path.getsize(backup_path)
-        logger.info(f"✅ [DB백업] 완료: {backup_path} ({backup_size:,} bytes, 업체 {client_count}건)")
-
     except Exception as e:
-        logger.error(f"❌ [DB백업] 실패: {e}")
-        # fallback: 파일 복사
+        logger.error(f"❌ [DB백업] online backup 실패, 파일 복사로 대체: {e}")
         try:
-            shutil.copy2(DB_PATH, backup_path)
-            logger.info(f"✅ [DB백업] 파일 복사로 완료: {backup_path}")
+            shutil.copy2(DB_PATH, raw_path)
         except Exception as e2:
             logger.error(f"❌ [DB백업] 파일 복사도 실패: {e2}")
+            if os.path.exists(raw_path):
+                try:
+                    os.remove(raw_path)
+                except Exception:
+                    pass
             return
 
-    # 오래된 백업 정리 (최대 14개 보관 = 약 2주)
+    # gzip 압축 → 원본 .db 제거 (수 GB → ~1GB, 디스크 절약)
+    final_path = raw_path
     try:
-        backups = sorted([
-            f for f in os.listdir(backup_dir)
-            if f.startswith("logic_analysis_backup_") and f.endswith(".db")
-        ])
-        while len(backups) > 14:
-            old = backups.pop(0)
-            old_path = os.path.join(backup_dir, old)
-            os.remove(old_path)
-            logger.info(f"  🗑️ [DB백업] 오래된 백업 삭제: {old}")
+        with open(raw_path, "rb") as f_in, gzip.open(gz_path, "wb", compresslevel=6) as f_out:
+            shutil.copyfileobj(f_in, f_out, length=4 * 1024 * 1024)
+        os.remove(raw_path)
+        final_path = gz_path
     except Exception as e:
-        logger.warning(f"[DB백업] 정리 실패: {e}")
+        logger.error(f"[DB백업] 압축 실패 — 비압축본 유지: {e}")
+        if os.path.exists(gz_path):
+            try:
+                os.remove(gz_path)
+            except Exception:
+                pass
+
+    try:
+        logger.info(f"✅ [DB백업] 완료: {final_path} ({os.path.getsize(final_path):,} bytes, 업체 {client_count}건)")
+    except Exception:
+        pass
+
+    # 오래된 백업 정리 (최신 BACKUP_KEEP개 보관; 압축·비압축 모두 대상)
+    _prune_old_backups(backup_dir)

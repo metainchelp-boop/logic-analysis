@@ -1,11 +1,12 @@
 /* SeoDiagnosisSection — SEO 종합 진단 (v5 풀버전) */
-window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl: parentProductUrl, competitorData, cachedRank, cachedProductName, cachedTotalVolume, cachedProductInfo, shopProducts }) {
+window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl: parentProductUrl, competitorData, cachedRank, cachedProductName, cachedTotalVolume, cachedProductInfo, shopProducts, htmlReviewData }) {
     const { useState, useEffect, useRef } = React;
     const [productUrl, setProductUrl] = useState('');
     const [result, setResult] = useState(null);
     const [loading, setLoading] = useState(false);
 
     const autoTriggered = useRef(false);
+    const ranWithReview = useRef(false); // HTML 실측 리뷰 반영해 재실행했는지
     // shopProducts ref — React 17 Promise 내 setState 비배치 문제 방지
     // useEffect 실행 시점에 shopProducts prop이 아직 null일 수 있으므로 ref로 최신값 보장
     const shopProductsRef = useRef(shopProducts);
@@ -17,19 +18,28 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl:
 
     useEffect(function() {
         autoTriggered.current = false;
+        ranWithReview.current = false;
         setResult(null);
     }, [keyword, parentProductUrl]);
 
     // 자동 실행: 메인 분석 데이터 + shopProducts 모두 도착한 후 실행
-    // shopProducts를 deps에 포함하여 데이터 도착 후 재시도 보장
+    // shopProducts를 deps에 포함하여 데이터 도착 후 재시도 보장.
+    // 추가: HTML 실측 리뷰가 SEO 분석 후 늦게 도착하면 실측을 반영해 1회 재실행(리뷰 병목 모순 제거).
     useEffect(function() {
-        if (keyword && productUrl && !autoTriggered.current && !result && !loading
+        var canRun = keyword && productUrl && !loading
             && (cachedRank || cachedProductName || cachedTotalVolume || cachedProductInfo)
-            && shopProducts && shopProducts.length > 0) {
+            && shopProducts && shopProducts.length > 0;
+        if (!canRun) return;
+        var hasReview = htmlReviewData && htmlReviewData.reviewCount != null;
+        if (!autoTriggered.current && !result) {
             autoTriggered.current = true;
+            ranWithReview.current = hasReview;
+            handleAnalyze();
+        } else if (hasReview && !ranWithReview.current) {
+            ranWithReview.current = true;
             handleAnalyze();
         }
-    }, [keyword, productUrl, cachedRank, cachedProductName, cachedTotalVolume, cachedProductInfo, shopProducts]);
+    }, [keyword, productUrl, cachedRank, cachedProductName, cachedTotalVolume, cachedProductInfo, shopProducts, htmlReviewData]);
 
     const handleAnalyze = async () => {
         if (!productUrl || !keyword) return;
@@ -41,6 +51,9 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl:
             if (cachedProductName) seoBody.cached_product_name = cachedProductName;
             if (cachedTotalVolume != null) seoBody.cached_total_volume = cachedTotalVolume;
             if (cachedProductInfo) seoBody.cached_product_info = cachedProductInfo;
+            // HTML 실측 리뷰/평점 → SEO 진단이 순위 추정 대신 실측 사용(리뷰 병목 모순 제거)
+            if (htmlReviewData && htmlReviewData.reviewCount != null) seoBody.cached_review_count = htmlReviewData.reviewCount;
+            if (htmlReviewData && htmlReviewData.rating != null) seoBody.cached_rating = htmlReviewData.rating;
             // shopProducts에서 competitor 정보 추출 (ref로 최신값 읽기)
             var currentShopProducts = shopProductsRef.current;
             if (currentShopProducts && currentShopProducts.length > 0) {
@@ -63,7 +76,7 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl:
         <div className="section fade-in" id="sec-seo">
             <div className="container">
                 <div className="card" style={{ padding: '20px 22px' }}>
-                <h3 className="rt-h3"><span className="rt-hic">🔧</span>① SEO 종합 진단<span className="badge b-est">≈ 추정</span></h3>
+                <h3 className="rt-h3"><span className="rt-hic">🔧</span>SEO 종합 진단<span className="badge b-est">≈ 추정</span></h3>
                 <div className="rt-desc">10개 평가지표로 상품의 검색 노출 상태를 진단합니다</div>
 
                 <div className="card" style={{ marginBottom: 16, borderRadius: 16 }}>

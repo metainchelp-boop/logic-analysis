@@ -8,6 +8,7 @@ window.AnalysisResults = function AnalysisResults(props) {
     var currentUser = props.currentUser;
     var datalabData = props.datalabData;
     var datalabLoading = props.datalabLoading;
+    var auditStatus = props.auditStatus;
     var handleNavigateToClient = props.handleNavigateToClient;
     var htmlDetailResult = props.htmlDetailResult;
     var htmlReviewData = props.htmlReviewData;
@@ -25,6 +26,36 @@ window.AnalysisResults = function AnalysisResults(props) {
     var shopProducts = props.shopProducts;
     var volumeData = props.volumeData;
 
+    /* 광고주/스토어명 자동 채우기 (2026-07-27 수정)
+       주의: 백엔드 store_name 은 쇼핑API 매칭·상품페이지 방문이 모두 실패하면
+       'URL 슬러그'가 그대로 담긴다. 슬러그가 이메일 아이디인 업체가 있어 표지에
+       'chajju2009' 처럼 찍히는 신고가 있었다(윤채은 07-27). 따라서 슬러그와 같은 값은
+       '이름 미확보'로 보고, 상세 HTML에서 뽑은 실제 상호명(storeInfo)을 우선 사용한다.
+       ※ 슬러그는 순위 매칭 키로 계속 쓰이므로 여기서는 '표시용'만 판단한다. */
+    var _urlSlug = (function() {
+        try { var m = (searchedProductUrl || '').match(/smartstore\.naver\.com\/([^\/?#]+)/); return m ? decodeURIComponent(m[1]) : ''; }
+        catch (e) { return ''; }
+    })();
+    var _isSlug = function(v) {
+        return !!v && !!_urlSlug && String(v).trim().toLowerCase() === _urlSlug.trim().toLowerCase();
+    };
+    var _realStoreName = (function() {
+        var cands = [
+            (htmlDetailResult && htmlDetailResult.storeInfo && htmlDetailResult.storeInfo.name),
+            (advertiserReport && advertiserReport.product_info && advertiserReport.product_info.store_name),
+            (analysisData && analysisData.targetProductInfo && analysisData.targetProductInfo.store_name),
+            (analysisData && analysisData.htmlDetail && analysisData.htmlDetail.storeInfo && analysisData.htmlDetail.storeInfo.name)
+        ];
+        for (var i = 0; i < cands.length; i++) {
+            var v = cands[i] && String(cands[i]).trim();
+            if (v && !_isSlug(v)) return v;   // 슬러그와 같은 값은 이름으로 인정하지 않음
+        }
+        return '';
+    })();
+    /* 실제 이름을 못 구하면 최후에만 슬러그(빈 표지보다는 낫다) */
+    var _storeName = _realStoreName || _urlSlug || '';
+    var _displayCompany = companyName || _storeName;
+
     return (
                 React.createElement('div', { className: 'report-shell' },
                   /* 좌측 고정 목차 (와이드 화면 전용) — 분석 결과(섹션 2개 이상)가 있을 때만 표시 */
@@ -38,6 +69,7 @@ window.AnalysisResults = function AnalysisResults(props) {
                     }),
                     React.createElement('div', { className: 'report-toc-legend' },
                       React.createElement('div', null, React.createElement('b', { className: 'badge b-ok' }, '✅ 실측'), ' 네이버 실제값'),
+                      React.createElement('div', null, React.createElement('b', { className: 'badge b-dl' }, '📊 데이터랩'), ' 쇼핑인사이트 통계'),
                       React.createElement('div', null, React.createElement('b', { className: 'badge b-est' }, '≈ 추정'), ' 계산·근거기반'),
                       React.createElement('div', null, React.createElement('b', { className: 'badge b-ai' }, 'AI'), ' AI 생성')
                     )
@@ -53,7 +85,7 @@ window.AnalysisResults = function AnalysisResults(props) {
                         React.createElement('div', { className: 'rc-grid' },
                             React.createElement('div', { className: 'rc-field' },
                                 React.createElement('div', { className: 'rc-k' }, '광고주 / 스토어'),
-                                React.createElement('div', { className: 'rc-v' }, companyName || '-')
+                                React.createElement('div', { className: 'rc-v' }, _displayCompany || '-')
                             ),
                             React.createElement('div', { className: 'rc-field' },
                                 React.createElement('div', { className: 'rc-k' }, '분석 키워드'),
@@ -68,6 +100,17 @@ window.AnalysisResults = function AnalysisResults(props) {
                                 React.createElement('div', { className: 'rc-v' }, new Date().toLocaleDateString('ko'))
                             )
                         )
+                    ),
+                    /* 배지 범례 — report-main 내부에 두어 전달본(내보내기)에도 포함되게 함
+                     * (좌측 목차의 범례는 캡처 범위 밖이라 전달본에서 소실되던 문제 보완) */
+                    analysisData && React.createElement('div', { className: 'report-legend' },
+                        React.createElement('b', { className: 'badge b-ok' }, '✅ 실측'), ' 네이버 실제값',
+                        React.createElement('span', { className: 'rl-sep' }, '·'),
+                        React.createElement('b', { className: 'badge b-dl' }, '📊 데이터랩'), ' 쇼핑인사이트 통계',
+                        React.createElement('span', { className: 'rl-sep' }, '·'),
+                        React.createElement('b', { className: 'badge b-est' }, '≈ 추정'), ' 계산·근거 기반',
+                        React.createElement('span', { className: 'rl-sep' }, '·'),
+                        React.createElement('b', { className: 'badge b-ai' }, 'AI'), ' AI 생성'
                     ),
                     /* 모바일용 가로 목차 */
                     React.createElement('div', { className: 'anchor-nav-wrap' },
@@ -93,6 +136,21 @@ window.AnalysisResults = function AnalysisResults(props) {
                 /* 대시보드 요약 — 분석 전 메인 화면에서만 표시, 특정 업체 분석 시 숨김 */
                 !searchedProductUrl && React.createElement(DashboardSummary, { products: products, searchResult: relatedData }),
     
+                /* [검수] 데이터 검수 상태 배너 — 항목별 실데이터 확보 현황(✓ 확보 · ↻ 재조회 중 · ✗ 실패) */
+                auditStatus && auditStatus.items && auditStatus.items.length > 0 && React.createElement('div', { className: 'section fade-in' },
+                    React.createElement('div', { className: 'container' },
+                        React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '10px 14px', fontSize: 12.5 } },
+                            React.createElement('b', { style: { color: '#334155' } },
+                                auditStatus.phase === 'auditing' ? '🔍 데이터 검수 중…' : '🔍 데이터 검수'),
+                            auditStatus.items.map(function(it, i) {
+                                var color = it.st === 'ok' ? '#059669' : (it.st === 'retry' ? '#d97706' : (it.st === 'wait' ? '#94a3b8' : '#dc2626'));
+                                var mark = it.st === 'ok' ? '✓' : (it.st === 'retry' ? '↻' : (it.st === 'wait' ? '…' : '✗'));
+                                return React.createElement('span', { key: i, style: { color: color, whiteSpace: 'nowrap', fontWeight: 600 } }, mark + ' ' + it.name);
+                            })
+                        )
+                    )
+                ),
+
                 /* [DATALAB] 로딩 인디케이터 */
                 analysisData && !datalabData && datalabLoading && React.createElement('div', { className: 'section fade-in', style: { textAlign: 'center', padding: '24px 0' } },
                     React.createElement('div', { className: 'container' },
@@ -123,8 +181,26 @@ window.AnalysisResults = function AnalysisResults(props) {
     
                 analysisData && analysisData.summaryCards && React.createElement(window.SectionErrorBoundary, { name: '종합 요약' },
                     React.createElement('div', { id: 'sec-summary' },
-                        React.createElement(SummaryCardsSection, { data: analysisData.summaryCards })
+                        React.createElement(SummaryCardsSection, {
+                            data: analysisData.summaryCards,
+                            /* 히어로 요약용 — 전부 기존 데이터 재사용(없으면 히어로만 생략) */
+                            keyword: searchedKeyword,
+                            advertiserReport: advertiserReport,
+                            rankCheckResult: rankCheckResult,
+                            htmlReviewData: htmlReviewData
+                        })
                     )
+                ),
+
+                /* 자사 강점 요약 배너 (강점 1개 이상일 때만 노출) */
+                analysisData && React.createElement(window.SectionErrorBoundary, { name: '강점 요약' },
+                    React.createElement(window.StrengthsHighlightBanner, {
+                        reviewAnalysis: analysisData.reviewAnalysis,
+                        htmlReviewData: htmlReviewData,
+                        marketRevenue: analysisData.marketRevenue,
+                        advertiserReport: advertiserReport,
+                        datalabGrowth: datalabData && datalabData.growth
+                    })
                 ),
     
                 /* ========== 2. 시장 · 수요 진단 ========== */
@@ -143,6 +219,11 @@ window.AnalysisResults = function AnalysisResults(props) {
                 /* [DATALAB] 시즌별 수요 예측 */
                 datalabData && datalabData.season && React.createElement(window.SectionErrorBoundary, { name: '시즌별 수요' },
                     React.createElement(window.DatalabSeasonSection, { data: datalabData.season })
+                ),
+
+                /* 성수기 긴급성 안내 (성수기 식별 시) */
+                datalabData && datalabData.season && React.createElement(window.SectionErrorBoundary, { name: '시즌 긴급성' },
+                    React.createElement(window.SeasonUrgencyCountdown, { season: datalabData.season })
                 ),
     
                 /* [DATALAB] 성별 + 연령대별 검색 비율 */
@@ -168,7 +249,7 @@ window.AnalysisResults = function AnalysisResults(props) {
                 /* 시장 규모 & 매출 추정 */
                 analysisData && analysisData.marketRevenue && React.createElement(window.SectionErrorBoundary, { name: '시장 규모' },
                     React.createElement('div', { id: 'sec-market' },
-                        React.createElement(MarketRevenueSection, { data: analysisData.marketRevenue, reviewCount: (htmlReviewData && htmlReviewData.reviewCount) || (analysisData.reviewAnalysis && analysisData.reviewAnalysis.reviewCount ? analysisData.reviewAnalysis.reviewCount.adv : null), productPrice: analysisData.marketRevenue ? parseInt((analysisData.marketRevenue.avgPrice || '0').replace(/[^0-9]/g, '')) : 0 })
+                        React.createElement(MarketRevenueSection, { advRank: (rankCheckResult && rankCheckResult.rank_position != null) ? rankCheckResult.rank_position : ((advertiserReport && advertiserReport.ranking) ? advertiserReport.ranking.current_rank : null), data: analysisData.marketRevenue, reviewCount: (htmlReviewData && htmlReviewData.reviewCount) || (analysisData.reviewAnalysis && analysisData.reviewAnalysis.reviewCount ? analysisData.reviewAnalysis.reviewCount.adv : null), productPrice: analysisData.marketRevenue ? parseInt((analysisData.marketRevenue.avgPrice || '0').replace(/[^0-9]/g, '')) : 0 })
                     )
                 ),
     
@@ -186,10 +267,27 @@ window.AnalysisResults = function AnalysisResults(props) {
                 analysisData && analysisData.advertiserInfo && React.createElement(window.SectionErrorBoundary, { name: '광고 경쟁 정보' },
                     React.createElement(AdvertiserInfoCard, { data: analysisData.advertiserInfo })
                 ),
+
+                /* 예상 CPC · 권장 입찰가 (추정) */
+                analysisData && volumeData && volumeData.length && React.createElement(window.SectionErrorBoundary, { name: '예상 CPC' },
+                    React.createElement(window.CpcBidEstimateSection, { volumeData: volumeData, keyword: searchedKeyword })
+                ),
     
                 /* 경쟁사 비교표 (상위 80개) */
                 analysisData && analysisData.competitorTable && React.createElement(window.SectionErrorBoundary, { name: '경쟁사 비교표' },
                     React.createElement(window.CompetitorTableSection, { data: analysisData.competitorTable })
+                ),
+
+                /* 경쟁사 상위 10개 비교 · 격차 분석 — 3장(경쟁 진단)으로 재배치.
+                 * 같은 컴포넌트를 part로 분할 렌더: 여기선 경쟁 비교/격차만, 전략 제안은 6장에 유지 */
+                (advertiserReport || (analysisData && analysisData.strategicAnalysis)) && !advertiserLoading && React.createElement(window.SectionErrorBoundary, { name: '경쟁 격차 분석' },
+                    React.createElement(EntryStrategySection, {
+                        advertiserData: advertiserReport,
+                        strategicData: analysisData && analysisData.strategicAnalysis,
+                        keyword: searchedKeyword,
+                        rankCheckResult: rankCheckResult,
+                        part: 'competition'
+                    })
                 ),
     
                 /* 카테고리 등록 분석 */
@@ -204,12 +302,27 @@ window.AnalysisResults = function AnalysisResults(props) {
                 React.createElement(window.SectionErrorBoundary, { name: '순위 추적' },
                     React.createElement(RankTrackingSection, { products: products, refreshProducts: loadProducts, searchedKeyword: searchedKeyword, searchedProductUrl: searchedProductUrl, cachedProductName: advertiserReport && advertiserReport.product_name ? advertiserReport.product_name : (analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo.product_name : null), relatedKeywords: (relatedData ? (relatedData.golden_keywords || []).concat(relatedData.related_keywords || []).map(function(k) { return typeof k === 'string' ? k : (k && k.keyword) || ''; }).filter(Boolean) : []), onNavigateToClient: handleNavigateToClient, canEdit: currentUser.role !== 'viewer', onRankResult: setRankCheckResult })
                 ),
+
+                /* 분석 상품 순위추적 원클릭 등록 */
+                searchedProductUrl && React.createElement(window.SectionErrorBoundary, { name: '추적 등록' },
+                    React.createElement(window.TrackRegisterButton, { searchedProductUrl: searchedProductUrl, searchedKeyword: searchedKeyword, products: products, refreshProducts: loadProducts, canEdit: currentUser.role !== 'viewer' })
+                ),
     
                 /* 판매량 추정 */
                 analysisData && analysisData.salesEstimation && React.createElement(window.SectionErrorBoundary, { name: '판매량 추정' },
                     React.createElement('div', { id: 'sec-sales' },
-                        React.createElement(SalesEstimationSection, { data: analysisData.salesEstimation, reviewCount: (htmlReviewData && htmlReviewData.reviewCount) || (analysisData.reviewAnalysis && analysisData.reviewAnalysis.reviewCount ? analysisData.reviewAnalysis.reviewCount.adv : null), productPrice: analysisData.marketRevenue ? parseInt((analysisData.marketRevenue.avgPrice || '0').replace(/[^0-9]/g, '')) : 0 })
+                        React.createElement(SalesEstimationSection, { productUrl: searchedProductUrl, data: analysisData.salesEstimation, reviewCount: (htmlReviewData && htmlReviewData.reviewCount) || (analysisData.reviewAnalysis && analysisData.reviewAnalysis.reviewCount ? analysisData.reviewAnalysis.reviewCount.adv : null), productPrice: analysisData.marketRevenue ? parseInt((analysisData.marketRevenue.avgPrice || '0').replace(/[^0-9]/g, '')) : 0 })
                     )
+                ),
+
+                /* 순위 상승 시 예상 성과(ROI 델타) */
+                analysisData && analysisData.salesEstimation && React.createElement(window.SectionErrorBoundary, { name: 'ROI 시뮬레이션' },
+                    React.createElement(window.RankDeltaROISimulation, {
+                        salesEstimation: analysisData.salesEstimation,
+                        currentRank: (rankCheckResult && rankCheckResult.rank_position != null)
+                            ? rankCheckResult.rank_position
+                            : ((advertiserReport && advertiserReport.ranking) ? advertiserReport.ranking.current_rank : null)
+                    })
                 ),
     
                 /* 리뷰 & 찜 분석 */
@@ -240,7 +353,8 @@ window.AnalysisResults = function AnalysisResults(props) {
                         cachedProductName: advertiserReport && advertiserReport.product_name ? advertiserReport.product_name : (analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo.product_name : null),
                         cachedTotalVolume: volumeData && volumeData[0] ? ((volumeData[0].monthlyPcQcCnt || 0) + (volumeData[0].monthlyMobileQcCnt || 0)) : null,
                         cachedProductInfo: analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo : null,
-                        shopProducts: shopProducts
+                        shopProducts: shopProducts,
+                        htmlReviewData: htmlReviewData
                     })
                 ),
     
@@ -264,11 +378,11 @@ window.AnalysisResults = function AnalysisResults(props) {
     
                 /* 연관 키워드 */
                 relatedData && React.createElement(window.SectionErrorBoundary, { name: '연관 키워드' },
-                    React.createElement(RelatedKeywordsSection, { data: relatedData })
+                    React.createElement(RelatedKeywordsSection, { data: relatedData, keyword: searchedKeyword })
                 ),
     
-                /* 골든 키워드 */
-                analysisData && analysisData.goldenKeyword && React.createElement(window.SectionErrorBoundary, { name: '골든 키워드' },
+                /* 골든 키워드 (0건이어도 대안 안내를 렌더) */
+                analysisData && React.createElement(window.SectionErrorBoundary, { name: '골든 키워드' },
                     React.createElement('div', { id: 'sec-golden' },
                         React.createElement(GoldenKeywordCard, { data: analysisData.goldenKeyword })
                     )
@@ -287,13 +401,14 @@ window.AnalysisResults = function AnalysisResults(props) {
                 /* ========== 6. 전략 · 결론 ========== */
                 analysisData && React.createElement(window.SectionDivider, { label: '6. 전략 · 결론', icon: '🧭', color: '#1e293b', sub: '진입전략 · AI 종합 · 보고서 내보내기' }),
     
-                /* 17. 1페이지 진입 전략 비교 분석 */
+                /* 17. 1페이지 진입 전략 (경쟁 비교표·격차는 3장으로 이동 — part 분할) */
                 (advertiserReport || (analysisData && analysisData.strategicAnalysis)) && !advertiserLoading && React.createElement(window.SectionErrorBoundary, { name: '진입 전략' },
                     React.createElement(EntryStrategySection, {
                         advertiserData: advertiserReport,
                         strategicData: analysisData && analysisData.strategicAnalysis,
                         keyword: searchedKeyword,
-                        rankCheckResult: rankCheckResult
+                        rankCheckResult: rankCheckResult,
+                        part: 'strategy'
                     })
                 ),
     
@@ -304,12 +419,14 @@ window.AnalysisResults = function AnalysisResults(props) {
                         analysisData: analysisData,
                         volumeData: volumeData,
                         relatedData: relatedData,
-                        advertiserReport: advertiserReport
+                        advertiserReport: advertiserReport,
+                        htmlReviewData: htmlReviewData,
+                        datalabData: datalabData
                     })
                 ),
     
-                /* 20. 업체 등록/저장 (viewer는 숨김) */
-                analysisData && currentUser.role !== 'viewer' && React.createElement(window.SectionErrorBoundary, { name: '업체 저장' },
+                /* 20. 업체 등록/저장 — 관리팀은 업체+경쟁사, 영업사원(viewer)은 경쟁사 저장만 */
+                analysisData && React.createElement(window.SectionErrorBoundary, { name: '업체 저장' },
                     React.createElement(SaveToClientSection, {
                         keyword: searchedKeyword,
                         productUrl: searchedProductUrl,
@@ -320,12 +437,16 @@ window.AnalysisResults = function AnalysisResults(props) {
                         advertiserReport: advertiserReport,
                         detailHtml: lastHtmlRef.current,
                         htmlDetailResult: htmlDetailResult,
+                        competitorContext: props.competitorContext,
+                        onCompetitorSaved: props.onCompetitorSaved,
+                        isViewer: currentUser.role === 'viewer',
+                        defaultName: _displayCompany,
                     })
                 ),
     
                 /* 21. 보고서 출력 */
                 searchedProductUrl && React.createElement(window.SectionErrorBoundary, { name: '보고서' },
-                    React.createElement(ReportSection, { keyword: searchedKeyword, companyName: companyName })
+                    React.createElement(ReportSection, { keyword: searchedKeyword, companyName: companyName, managerName: currentUser && currentUser.name })
                 ),
     
                 /* 알림 설정 (admin/superadmin만) */

@@ -1,7 +1,20 @@
 /* SalesEstimationSection — 판매량 추정 & 성장 시뮬레이션 (v5) */
 window.SalesEstimationSection = function SalesEstimationSection(props) {
+  /* [2단계] 리뷰 증가 실측 — 같은 상품의 과거 분석 스냅샷 델타(hooks는 조기 return 이전) */
+  var _tr = React.useState(null); var trend = _tr[0]; var setTrend = _tr[1];
+  var _url = props.productUrl || '';
+  React.useEffect(function() {
+    setTrend(null);
+    if (!_url) return;
+    var alive = true;
+    api.get('/cd/review-trend?product_url=' + encodeURIComponent(_url)).then(function(res) {
+      if (alive && res && res.success && res.data && res.data.available) setTrend(res.data);
+    }).catch(function() {});
+    return function() { alive = false; };
+  }, [_url]);
+
   if (!props?.data) return null;
-  const { avgPrice, monthlySearches, estimatedCTR, top10Card, page1Card, page2Card } = props.data;
+  const { avgPrice, monthlySearches, estimatedCTR, top10Card, page1Card, page2Card, simulations, tolerance } = props.data;
 
   if (!top10Card || !page1Card || !page2Card) return null;
 
@@ -26,27 +39,36 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
     <div className="section fade-in">
       <div className="container">
         <div className="card" style={{ padding: '20px 22px' }}>
-        <h3 className="rt-h3"><span className="rt-hic">📦</span>판매량 추정 &amp; 성장 시뮬레이션<span className="badge b-est">≈ 추정</span></h3>
+        <h3 className="rt-h3"><span className="rt-hic">📦</span>판매량 추정 &amp; 성장 시뮬레이션<span className="badge b-est">≈ 추정</span>{tolerance ? <span className="badge b-est" style={{ marginLeft: 6 }}>{tolerance}</span> : null}</h3>
         <div className="rt-desc">순위별 예상 판매량과 매출 성장 시나리오</div>
 
         {/* KPI 3칸 */}
         <div className="grid3" style={{ marginBottom: 16 }}>
-          <div className="kpi"><div className="k">평균 상품 단가</div><div className="v">{avgPrice}</div></div>
+          <div className="kpi"><div className="k">상위10 평균가</div><div className="v">{avgPrice}</div></div>
           <div className="kpi"><div className="k">월간 검색량</div><div className="v">{monthlySearches}</div></div>
           <div className="kpi"><div className="k">예상 전환율</div><div className="v">{estimatedCTR}</div></div>
         </div>
 
-        {/* ★ 리뷰 기반 추정(더 정확) — 실제 리뷰수 기반이라 CTR 추정보다 오차가 작음 */}
-        {props.reviewCount != null && props.reviewCount > 0 && (function() {
-          var rc = props.reviewCount;
-          var rate = 0.116; // 식품 평균 리뷰 작성률
-          var cumSales = Math.round(rc / rate);
-          var monthly = Math.round(cumSales / 12); // 운영 12개월 가정
+        {/* ★ 리뷰 기반 추정(더 정확) — 실제 리뷰수 기반이라 CTR 추정보다 오차가 작음.
+             시장 규모 섹션과 '같은 앵커 값'을 쓰도록 공통 helper(reviewAnchorEstimate) 사용. */}
+        {props.reviewCount != null && props.reviewCount > 0 && window.reviewAnchorEstimate && (function() {
+          var est = window.reviewAnchorEstimate(props.reviewCount, props.productPrice);
+          if (!est) return null;
+          var rc = est.reviewCount;
+          var cumSales = est.cumSales;
+          var monthly = est.monthlyUnits;
           return (
             <div className="note ok" style={{ marginTop: 0, marginBottom: 20 }}>
-              <b>🧾 리뷰 기반 추정 (더 정확)</b> — 실제 누적 리뷰 <b>{fmt(rc)}건</b> 기반.
+              <b>🧾 리뷰 기반 추정 (주 수치)</b> — 실제 누적 리뷰 <b>{fmt(rc)}건</b> 기반.{est.monthlyRevenue != null ? <b> 월 매출 환산 ~{fmt(est.monthlyRevenue)}원</b> : null}
               추정 누적 판매 <b>~{fmt(cumSales)}건</b>, 월 환산 <b>~{fmt(monthly)}건</b>
               <span style={{ color: '#64748b' }}> (작성률 11.6% · 운영 12개월 가정). 아래 순위 기반 시나리오는 참고용입니다.</span>
+              {trend && (
+                <div style={{ marginTop: 6, fontSize: 12.5 }}>
+                  📈 <b>실측 리뷰 증가 기반</b> — 최근 {trend.days}일간 리뷰 +{fmt(trend.review_delta)}건 → 월판매 <b>~{fmt(trend.monthly_sales_est)}건</b>
+                  {props.productPrice > 0 ? <b> · 월 매출 ~{fmt(trend.monthly_sales_est * props.productPrice)}원</b> : null}
+                  <span style={{ color: '#64748b' }}> ({trend.from_date}~{trend.to_date} 분석 기록 비교 — 기간이 쌓일수록 정확해집니다)</span>
+                </div>
+              )}
             </div>
           );
         })()}
@@ -138,6 +160,33 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
           </div>
 
         </div>
+
+        {/* 순위별 추정 범위 표 (전환율 밴드 ±오차) — simulations가 있을 때만 표시 */}
+        {simulations && simulations.length > 0 && (
+          <div className="sub-card" style={{ marginTop: 20 }}>
+            <div className="st">📊 순위별 추정 범위 (전환율 밴드 {tolerance || ''})</div>
+            <table className="rt-table">
+              <thead>
+                <tr>
+                  <th>순위</th>
+                  <th style={{ textAlign: 'right' }}>예상 판매(건/월)</th>
+                  <th style={{ textAlign: 'right' }}>예상 매출(월)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {simulations.map(function(sim, idx) {
+                  return (
+                    <tr key={idx}>
+                      <td>{sim.rank}위</td>
+                      <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>{sim.estSalesRange || sim.estSales}</td>
+                      <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>{sim.revenueRange || sim.revenue}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
 
         <div className="note est">
           ⚠️ 순위별 클릭률(CTR)을 기반으로 추정한 값이며, 실제 판매량은 상품 경쟁력, 리뷰, 가격 등에 따라 달라질 수 있습니다.

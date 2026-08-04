@@ -94,9 +94,70 @@ def extract_store_name_from_url(url: str) -> Optional[str]:
     return None
 
 
+# ==================== 검색 API 일일 사용량 계측 (호출 다이어트 2026-07) ====================
+#   일일 한도 25,000 소진(2026-07-20 실사고)을 '사전에' 감지하기 위한 자체 카운터.
+#   재시도 포함 실제 HTTP 요청 단위로 계수(쿼터 소모 기준과 동일). 50콜마다 파일 영속화.
+import threading as _threading
+_search_usage_lock = _threading.Lock()
+_search_usage = {"date": "", "count": 0}
+SEARCH_API_DAILY_LIMIT = 25000
+_SEARCH_USAGE_FILE = os.path.join(os.path.dirname(os.getenv("DB_PATH", "/app/data/logic_data.db")),
+                                  "search_api_usage.json")
+
+
+def _count_search_api_call():
+    from datetime import date as _date
+    today = _date.today().isoformat()
+    with _search_usage_lock:
+        if _search_usage["date"] != today:
+            _search_usage["date"] = today
+            _search_usage["count"] = 0
+            try:  # 재시작 대비: 오늘자 파일 값 복원
+                import json as _json
+                with open(_SEARCH_USAGE_FILE, "r", encoding="utf-8") as _f:
+                    _s = _json.load(_f)
+                if _s.get("date") == today:
+                    _search_usage["count"] = int(_s.get("count", 0))
+            except Exception:
+                pass
+        _search_usage["count"] += 1
+        c = _search_usage["count"]
+        if c % 50 == 0:
+            try:
+                import json as _json
+                with open(_SEARCH_USAGE_FILE, "w", encoding="utf-8") as _f:
+                    _json.dump(_search_usage, _f)
+            except Exception:
+                pass
+    _warn_at = int(SEARCH_API_DAILY_LIMIT * 0.9)
+    if c == _warn_at or (c > _warn_at and c % 500 == 0):
+        logger.warning(f"⚠️ 검색 API 일일 사용량 {c}/{SEARCH_API_DAILY_LIMIT} — 소진 임박(90%+)")
+    return c
+
+
+def get_search_api_usage_today() -> Dict:
+    """오늘 검색 API 사용량(자체 계측) — 관리자 대시보드용."""
+    from datetime import date as _date
+    today = _date.today().isoformat()
+    with _search_usage_lock:
+        cnt = _search_usage["count"] if _search_usage["date"] == today else 0
+    if cnt == 0:
+        try:
+            import json as _json
+            with open(_SEARCH_USAGE_FILE, "r", encoding="utf-8") as _f:
+                _s = _json.load(_f)
+            if _s.get("date") == today:
+                cnt = int(_s.get("count", 0))
+        except Exception:
+            pass
+    return {"date": today, "count": cnt, "limit": SEARCH_API_DAILY_LIMIT,
+            "pct": round(cnt / SEARCH_API_DAILY_LIMIT * 100, 1)}
+
+
 # ==================== 네이버 쇼핑 공식 API ====================
 
-def search_naver_shopping_api(keyword: str, display: int = 100, start: int = 1, sort: str = "sim", retry_on_429: bool = False) -> Dict:
+def search_naver_shopping_api(keyword: str, display: int = 100, start: int = 1, sort: str = "sim", retry_on_429: bool = False,
+                              enqueue_on_miss: bool = True) -> Dict:
     """
     네이버 검색 API - 쇼핑 검색
 
@@ -107,6 +168,21 @@ def search_naver_shopping_api(keyword: str, display: int = 100, start: int = 1, 
 
     ⚠️ sort=sim은 실제 네이버쇼핑 노출 순위(rel)와 다름
     """
+    # ── 2026-08 쇼핑 검색 API 종료(404 SE05) 대응: 브라우저 수집분 우선 서빙 ──
+    # 사내 크롬 확장이 새벽에 올린 수집분(2일 내)이 있으면 원본 API 형식 그대로 반환.
+    # 없으면 요청 큐에 등록하고 아래 기존 API 경로로 폴백(API 부활 시 자동 원복 = 무회귀).
+    # 이 한 지점으로 분석기·광고주 분석·키워드 노출·자동 분석이 전부 수집분 위에서 돈다.
+    try:
+        from collector import serve_from_collected
+        _served = serve_from_collected(keyword, display=display, start=start,
+                                       enqueue_on_miss=enqueue_on_miss)
+    except Exception as _se:
+        _served = None
+        logger.warning(f"수집분 서빙 실패(무시, API 폴백): {_se}")
+    if _served is not None:
+        logger.info(f"수집분 서빙 '{keyword}': {_served.get('total', 0)}건 중 {len(_served.get('items', []))}건 (브라우저 수집)")
+        return _served
+
     if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
         logger.error("네이버 API 키가 설정되지 않았습니다.")
         return {"error": "API 키 미설정", "items": [], "total": 0}
@@ -126,6 +202,7 @@ def search_naver_shopping_api(keyword: str, display: int = 100, start: int = 1, 
     max_retries = 3 if retry_on_429 else 2
     for attempt in range(max_retries + 1):
         try:
+            _count_search_api_call()  # 일일 사용량 계측(재시도 포함 — 쿼터는 요청 단위로 소모됨)
             response = requests.get(url, params=params, headers=headers, timeout=10)
             # 429 Too Many Requests
             if response.status_code == 429:
@@ -139,6 +216,10 @@ def search_naver_shopping_api(keyword: str, display: int = 100, start: int = 1, 
                     continue
                 logger.warning(f"네이버 API 429 Rate Limit — 건너뜀 (keyword: {keyword})")
                 return {"error": "API 요청 한도 초과", "items": [], "total": 0}
+            # 404 = 쇼핑 검색 API 서비스 종료(SE05, 2026-07-31). 재시도해도 소용없으니 즉시 반환
+            if response.status_code == 404:
+                logger.error(f"쇼핑 검색 API 404(서비스 종료) — 수집분도 없음 (keyword: {keyword})")
+                return {"error": "쇼핑 검색 API 종료(수집분 없음)", "items": [], "total": 0}
             response.raise_for_status()
             data = response.json()
             logger.info(f"API 검색 '{keyword}': {data.get('total', 0)}건 중 {len(data.get('items', []))}건 조회")
@@ -169,7 +250,7 @@ def _parse_api_item(item: Dict, rank: int) -> Dict:
         "product_id": product_id,
         "product_name": title,
         "price": _safe_int(item.get("lprice", 0)),
-        "hprice": int(item.get("hprice", 0)) if item.get("hprice") else None,
+        "hprice": _safe_int(item.get("hprice")) if item.get("hprice") else None,
         "store_name": item.get("mallName", ""),
         "image_url": item.get("image", ""),
         "product_url": item.get("link", ""),
@@ -481,7 +562,10 @@ def _get_product_info_impl(product_url: str, keyword: str = "") -> Dict:
                 return False  # 스토어 불일치 → 거부
             return True
         # 3순위: 스토어명 + 상품 링크에 스토어 슬러그 포함
-        if store_name and store_name.lower() in item_link.lower():
+        #   ⚠️ productId를 URL에서 뽑은 경우엔 스토어명만으로 매칭하지 않는다.
+        #   productId가 있는데 1·2순위에서 안 잡혔다 = 같은 스토어의 '다른 상품' → 거부.
+        #   (지정 상품 대신 스토어의 리뷰 많은 대표 상품으로 오매칭되던 버그 차단.)
+        if not product_id and store_name and store_name.lower() in item_link.lower():
             return True
         return False
 
@@ -501,7 +585,10 @@ def _get_product_info_impl(product_url: str, keyword: str = "") -> Dict:
     if keyword:
         try:
             total_checked = 0
-            for page_start in [1, 101, 201, 301, 401, 501, 601, 701, 801, 901]:
+            # 호출 다이어트(2026-07): 10페이지(1,000위) 사냥 → 3페이지(300위).
+            # 300위 밖 상품은 아래 스토어명 폴백이 정보를 잡아주므로 실사용 영향 미미,
+            # 검색 API 소모 상한은 호출당 11 → 4로 감소(일일 25,000 한도 보호).
+            for page_start in [1, 101, 201]:
                 api_result = search_naver_shopping_api(keyword, display=100, start=page_start, retry_on_429=True)
                 items = api_result.get("items", [])
                 if not items:
@@ -519,7 +606,8 @@ def _get_product_info_impl(product_url: str, keyword: str = "") -> Dict:
     # ===== 2차: 스토어명으로 네이버 쇼핑 API 검색 =====
     if not result["product_name"] and store_name and product_id:
         try:
-            api_result = search_naver_shopping_api(store_name, display=100, retry_on_429=True)
+            # 스토어명은 수집 키워드가 아님 — 온디맨드 큐에 넣지 않는다(수집 예산 보호)
+            api_result = search_naver_shopping_api(store_name, display=100, retry_on_429=True, enqueue_on_miss=False)
             for item in api_result.get("items", []):
                 if _match_item(item):
                     _fill_from_item(item)
@@ -667,6 +755,71 @@ def get_keyword_volume(keywords: List[str]) -> List[Dict]:
             else:
                 logger.error(f"검색광고 API 요청 실패 (재시도 소진): {e}")
                 return []
+
+
+def _searchad_post(uri: str, body: dict) -> dict:
+    """검색광고 API POST 호출(서명 인증) — 실패 시 {} (호출측 폴백)."""
+    if not SEARCHAD_API_KEY or not SEARCHAD_SECRET_KEY or not SEARCHAD_CUSTOMER_ID:
+        return {}
+    try:
+        timestamp = str(int(time.time() * 1000))
+        headers = {
+            "X-Timestamp": timestamp,
+            "X-API-KEY": SEARCHAD_API_KEY,
+            "X-Customer": SEARCHAD_CUSTOMER_ID,
+            "X-Signature": _generate_searchad_signature(timestamp, "POST", uri),
+            "Content-Type": "application/json",
+        }
+        resp = requests.post(f"https://api.searchad.naver.com{uri}", json=body, headers=headers, timeout=10)
+        if resp.status_code != 200:
+            logger.warning(f"검색광고 API {uri} 응답 {resp.status_code}: {resp.text[:150]}")
+            return {}
+        return resp.json() or {}
+    except Exception as e:
+        logger.warning(f"검색광고 API {uri} 실패: {e}")
+        return {}
+
+
+def get_bid_estimates(keyword: str) -> Dict:
+    """파워링크 순위(1~5위)별 평균 노출 입찰가 + 최소 노출 입찰가 (건의 2026-07-22, 이예은).
+
+    네이버 검색광고 공식 '입찰가 추정' API — 광고시스템 콘솔의 '예상 입찰가'와 같은 소스.
+    검색량 조회와 동일 자격증명(검색 Open API 25,000 쿼터와 별개 시스템).
+    실패·데이터 없음 시 {} 반환 → 프론트는 신규 표를 렌더하지 않아 기존 화면과 동일(시안 B)."""
+    kw = (keyword or "").strip().replace(" ", "")
+    if not kw:
+        return {}
+    out = {"pc": [], "mobile": [], "minBid": {}}
+    for device, key in (("PC", "pc"), ("MOBILE", "mobile")):
+        data = _searchad_post(
+            "/estimate/average-position-bid/keyword",
+            {"device": device, "items": [{"key": kw, "position": p} for p in range(1, 6)]},
+        )
+        rows = []
+        for it in (data.get("estimate") or []):
+            try:
+                pos = int(it.get("position"))
+                bid = int(it.get("bid"))
+                if 1 <= pos <= 5 and bid > 0:
+                    rows.append({"position": pos, "bid": bid})
+            except (TypeError, ValueError):
+                continue
+        out[key] = sorted(rows, key=lambda r: r["position"])
+
+        mdata = _searchad_post(
+            "/estimate/exposure-minimum-bid/keyword",
+            {"device": device, "period": "MONTH", "items": [kw]},
+        )
+        try:
+            mbid = int(((mdata.get("estimate") or [{}])[0]).get("bid") or 0)
+            if mbid > 0:
+                out["minBid"][key] = mbid
+        except (TypeError, ValueError, IndexError):
+            pass
+
+    if not out["pc"] and not out["mobile"]:
+        return {}  # 데이터 없음 — 신규 표 미표시(안전 폴백)
+    return out
 
 
 def _safe_int(val) -> int:
@@ -898,6 +1051,14 @@ def _extract_next_data_html(raw_html: str, product_url: str = "") -> Optional[st
     review_score = review_data.get("averageReviewScore", 0) if isinstance(review_data, dict) else 0
     wish_count = page_props.get("wishCount", 0) or product.get("wishCount", 0)
 
+    # 판매가 — __NEXT_DATA__ JSON에서 추출해 합성 HTML에 보존(주 크롤 경로 가격 유실 방지)
+    try:
+        _price_raw = (product.get("discountedSalePrice") or product.get("salePrice") or product.get("dispSalePrice")
+                      or page_props.get("discountedSalePrice") or page_props.get("salePrice") or 0)
+        price_val = int(float(_price_raw) or 0)
+    except Exception:
+        price_val = 0
+
     # 카테고리
     category = product.get("category", {}) or {}
     cat_name = category.get("wholeCategoryName", "") or ""
@@ -913,6 +1074,7 @@ def _extract_next_data_html(raw_html: str, product_url: str = "") -> Optional[st
 <meta name="api-review-count" content="{review_count}">
 <meta name="api-review-score" content="{review_score}">
 <meta name="api-wish-count" content="{wish_count}">
+<meta name="api-price" content="{price_val}">
 </head>
 <body>
 <div class="product-detail">
@@ -1051,6 +1213,14 @@ def _convert_smartstore_json_to_html(data: Dict, product_url: str = "") -> Optio
         review_score = review_amount.get("averageReviewScore", 0) if isinstance(review_amount, dict) else 0
         wish_count = data.get("wishCount", 0) or product.get("wishCount", 0)
 
+        # 판매가 — API JSON에서 추출해 합성 HTML에 보존(가격 유실 방지)
+        try:
+            _price_raw = (data.get("discountedSalePrice") or data.get("salePrice") or data.get("dispSalePrice")
+                          or product.get("discountedSalePrice") or product.get("salePrice") or 0)
+            price_val = int(float(_price_raw) or 0)
+        except Exception:
+            price_val = 0
+
         # HTML 조립 — 메타 태그로 정확한 API 값 보존 (후속 추출에서 최우선 사용)
         html = f"""<!DOCTYPE html>
 <html lang="ko">
@@ -1058,6 +1228,7 @@ def _convert_smartstore_json_to_html(data: Dict, product_url: str = "") -> Optio
 <meta name="api-review-count" content="{review_count}">
 <meta name="api-review-score" content="{review_score}">
 <meta name="api-wish-count" content="{wish_count}">
+<meta name="api-price" content="{price_val}">
 </head>
 <body>
 <div class="product-detail">
@@ -1566,6 +1737,84 @@ def _analyze_reviews(reviews: list) -> dict:
     }
 
 
+def extract_store_display_name(html: str, product_url: str = "") -> Dict:
+    """상세페이지 HTML에서 '표시용' 스토어/상호명을 추출한다 (2026-07-27).
+
+    배경: get_product_info 는 쇼핑 API 매칭·상품페이지 방문이 모두 실패하면
+    store_name 을 URL 슬러그로 남긴다. 슬러그가 이메일 아이디인 업체가 있어
+    보고서 표지에 'chajju2009' 처럼 엉뚱한 값이 찍히는 신고가 있었다.
+    직원이 붙여넣는 상세 HTML에는 실제 상호명이 들어 있으므로 여기서 뽑는다.
+
+    ⚠️ 슬러그는 순위 매칭 키로 계속 쓰이므로 이 함수는 '표시용'만 반환하며,
+       기존 store_name/매칭 로직은 건드리지 않는다.
+    반환: {"name": str, "source": str}  — 못 찾으면 name=""
+    """
+    if not html:
+        return {"name": "", "source": ""}
+
+    slug = (extract_store_name_from_url(product_url) or "").strip().lower()
+    # 스토어명으로 볼 수 없는 일반 문구(플랫폼명 등)
+    # 공백을 제거한 형태로 비교한다("네이버 스마트스토어" 같은 변형까지 배제)
+    generic = {"네이버", "네이버쇼핑", "스마트스토어", "네이버스마트스토어", "브랜드스토어",
+               "네이버브랜드스토어", "smartstore", "naver", "navershopping", "쇼핑", "쇼핑몰"}
+
+    def _clean(v):
+        if not v:
+            return ""
+        s = str(v)
+        # HTML/JSON 내 유니코드 이스케이프(\uXXXX) 복원
+        if "\\u" in s:
+            try:
+                s = s.encode().decode("unicode_escape")
+            except Exception:
+                pass
+        s = re.sub(r"\s+", " ", s).strip().strip('"\'')
+        return s
+
+    def _ok(v):
+        """실제 상호명으로 볼 수 있는가 — 일반문구/슬러그/비정상 길이 배제"""
+        if not v or not (1 < len(v) <= 60):
+            return False
+        low = v.lower()
+        if re.sub(r"\s+", "", low) in generic:
+            return False
+        if slug and low == slug:      # 슬러그와 같으면 표시용으로 무의미
+            return False
+        return True
+
+    # 1) 스마트스토어 임베드 JSON — 채널(스토어) 표시명이 가장 정확
+    for pat, src in (
+        (r'"channelName"\s*:\s*"([^"]{1,60})"', "channelName"),
+        (r'"mallName"\s*:\s*"([^"]{1,60})"', "mallName"),
+        (r'"storeName"\s*:\s*"([^"]{1,60})"', "storeName"),
+    ):
+        for m in re.finditer(pat, html):
+            v = _clean(m.group(1))
+            if _ok(v):
+                return {"name": v, "source": src}
+
+    # 2) 판매자 정보의 '상호명' (사업자 정보 영역) — 화면에 보이는 그 값
+    try:
+        from bs4 import BeautifulSoup as _BS
+        text = _BS(html, "html.parser").get_text(" ", strip=True)
+    except Exception:
+        text = re.sub(r"<[^>]+>", " ", html)
+    m = re.search(r"상호(?:명)?\s*[:：]?\s*(.{1,60}?)\s*(?:대표자|사업자|고객센터|이메일|주소|통신판매|$)", text)
+    if m:
+        v = _clean(m.group(1))
+        if _ok(v):
+            return {"name": v, "source": "상호명"}
+
+    # 3) og:site_name (플랫폼 일반명이면 위 _ok 에서 걸러짐)
+    m = re.search(r'<meta[^>]+property=["\']og:site_name["\'][^>]+content=["\']([^"\']{1,60})["\']', html, re.I)
+    if m:
+        v = _clean(m.group(1))
+        if _ok(v):
+            return {"name": v, "source": "og:site_name"}
+
+    return {"name": "", "source": ""}
+
+
 def analyze_detail_page(html: str, product_url: str = "") -> Dict:
     """
     상세페이지 HTML을 분석하여 품질 지표를 추출
@@ -1604,6 +1853,16 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
                 nd_cat1 = nd_cat.split(">")[0].strip() if nd_cat else ""
     except Exception:
         pass
+
+    # 합성 HTML(주 크롤 경로)에는 __NEXT_DATA__ 스크립트가 없어 위에서 nd_price=0 →
+    # 빌더가 보존한 api-price 메타에서 판매가 회수(가격 유실 방지)
+    if not nd_price and soup:
+        _pm = soup.find("meta", attrs={"name": "api-price"})
+        if _pm:
+            try:
+                nd_price = int(float(_pm.get("content", "0")) or 0)
+            except Exception:
+                nd_price = 0
 
     # ── 1. 이미지 분석 ──
     all_imgs = soup.find_all("img")
@@ -1711,7 +1970,7 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
     if api_meta_review:
         try:
             val = int(api_meta_review.get("content", "0"))
-            if val > 0:
+            if val >= 0:   # 진짜 0리뷰도 인정(음수만 배제) — 0을 '못 찾음'으로 오인해 fuzzy 폴백이 엉뚱한 숫자를 잡는 것 방지
                 actual_review_count = val
                 logger.info(f"[리뷰추출] 방법0 메타태그(API): 리뷰={actual_review_count}")
         except (ValueError, TypeError):
@@ -2053,6 +2312,40 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
     review_text_analysis = _analyze_reviews(extracted_reviews) if extracted_reviews else None
     logger.info(f"[리뷰추출] 개별 리뷰 {len(extracted_reviews)}건 추출")
 
+    # ── 이상탐지 가드: 추출값이 상식 범위를 벗어나면 '틀린 값' 대신 미확인(None) 처리 ──
+    # 파싱 오류(자릿수 병합 등)·fuzzy 폴백 오탐으로 비현실적 값이 리포트에 실리는 것을 차단.
+    if actual_review_count is not None and not (0 <= actual_review_count <= 2_000_000):
+        logger.warning(f"[이상탐지] 리뷰수 {actual_review_count} 상식범위 초과 → 미확인 처리")
+        actual_review_count = None
+    if actual_rating is not None and not (0.0 < actual_rating <= 5.0):
+        logger.warning(f"[이상탐지] 평점 {actual_rating} 상식범위 초과 → 미확인 처리")
+        actual_rating = None
+    if actual_wish_count is not None and not (0 <= actual_wish_count <= 20_000_000):
+        logger.warning(f"[이상탐지] 찜수 {actual_wish_count} 상식범위 초과 → 미확인 처리")
+        actual_wish_count = None
+    if nd_price and not (100 <= nd_price <= 100_000_000):
+        logger.warning(f"[이상탐지] 판매가 {nd_price} 상식범위 초과 → 미확인 처리")
+        nd_price = 0
+
+    # ── 데이터 신뢰 등급(data_quality): 각 수치가 실측/교차확인/미확인 중 무엇인지 부착(부가 정보) ──
+    import data_quality as dq
+    _sample_ratings = [r.get("rating") for r in (extracted_reviews or [])
+                       if isinstance(r.get("rating"), (int, float)) and r.get("rating") > 0]
+    _sample_avg = round(sum(_sample_ratings) / len(_sample_ratings), 1) if _sample_ratings else None
+    # 평점: 메타/API 평점 vs 추출 리뷰 표본 평균 교차검증(±0.5 일치 시 '교차확인')
+    _rating_val, _rating_status, _rating_note = dq.cross_check(actual_rating, _sample_avg, tol=0.5)
+    _rating_sources = (["html_meta"] if actual_rating is not None else []) + (["review_sample"] if _sample_avg is not None else [])
+    _price_val = nd_price or None
+    data_quality = {
+        "review_count": dq.metric(actual_review_count, dq.status_from_presence(actual_review_count),
+                                  sources=["html_meta"] if actual_review_count is not None else []),
+        "rating": dq.metric(_rating_val, _rating_status, sources=_rating_sources, note=_rating_note),
+        "wish": dq.metric(actual_wish_count, dq.status_from_presence(actual_wish_count),
+                          sources=["html_meta"] if actual_wish_count is not None else []),
+        "price": dq.metric(_price_val, dq.status_from_presence(_price_val),
+                           sources=["html_next_data"] if _price_val else []),
+    }
+
     # reviewData: 실제 HTML에서 추출된 리뷰/평점/찜수 (없으면 None)
     review_data = None
     if actual_review_count is not None or actual_rating is not None or actual_wish_count is not None or extracted_reviews or nd_price or nd_cat:
@@ -2066,6 +2359,7 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
             "price": nd_price or None,
             "category": nd_cat or None,
             "category1": nd_cat1 or None,
+            "data_quality": data_quality,
         }
 
     return {
@@ -2087,4 +2381,6 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
         "scores": scores,
         "suggestions": suggestions,
         "reviewData": review_data,
+        # 표시용 스토어/상호명 (슬러그 오표기 방지 — 2026-07-27). 실패 시 name=""
+        "storeInfo": extract_store_display_name(html, product_url),
     }

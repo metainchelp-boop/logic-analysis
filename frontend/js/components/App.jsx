@@ -13,7 +13,7 @@ window.App = function App() {
     // URL hash에서 현재 페이지 복원 (새로고침 시 탭 유지)
     var _getPageFromHash = function() {
         var hash = window.location.hash.replace('#', '');
-        var validPages = ['home', 'analysis', 'management', 'seo', 'guide', 'settings'];
+        var validPages = ['home', 'place', 'analysis', 'management', 'learning', 'seo', 'guide', 'settings'];
         return validPages.indexOf(hash) !== -1 ? hash : 'home';
     };
     const [currentPage, setCurrentPage] = useState(_getPageFromHash);
@@ -35,6 +35,7 @@ window.App = function App() {
     const [companyName, setCompanyName] = useState('');
     const [datalabData, setDatalabData] = useState(null);
     const [datalabLoading, setDatalabLoading] = useState(false);
+    const [auditStatus, setAuditStatus] = useState(null);   // 🔍 데이터 검수 상태
     const [rankCheckResult, setRankCheckResult] = useState(null); // 순위 추적 → 진입 전략 공유용
     const searchIdRef = React.useRef(0); // 비동기 요청 경합 방지용
     const lastHtmlRef = React.useRef(''); // #1: 마지막 분석에 쓰인 상세 HTML (업체 저장/재사용용)
@@ -46,6 +47,9 @@ window.App = function App() {
 
     /* 순위 추적 → 업체관리 이동 시 자동 검색용 */
     const [managementInitialSearch, setManagementInitialSearch] = useState(null);
+
+    /* 경쟁사 등록 모드 — 설정 시 이 분석을 광고주의 경쟁사로 저장 (null=일반) */
+    const [competitorContext, setCompetitorContext] = useState(null); // { competitor_of, advName }
 
 
     var saveAuth = function(user, token) {
@@ -59,6 +63,19 @@ window.App = function App() {
 
     useEffect(function() {
         try {
+            // 기존 세션 복원 (SSO 실패 시 폴백으로도 사용 — 오래된 sso 토큰이 유효 세션을 밀어내지 않게)
+            var _restoreSession = function() {
+                var savedToken = sessionStorage.getItem('logic_token');
+                if (savedToken) {
+                    fetch('/api/auth/me', { headers: { 'Authorization': 'Bearer ' + savedToken } })
+                        .then(function(r) { return r.json(); })
+                        .then(function(data) {
+                            if (data && data.id) { setCurrentUser(data); setAuthToken(savedToken); }
+                            else if (data && data.success && data.user) { setCurrentUser(data.user); setAuthToken(savedToken); }
+                            setAuthChecking(false);
+                        }).catch(function() { setAuthChecking(false); });
+                } else { setAuthChecking(false); }
+            };
             // 0) 전산(ERP) SSO 자동 로그인: URL ?sso=<토큰> 있으면 우선 처리
             var _ssoTok = '';
             try { _ssoTok = new URLSearchParams(window.location.search).get('sso') || ''; } catch(e) {}
@@ -76,22 +93,14 @@ window.App = function App() {
                         _cleanUrl();
                         if (data && data.success && data.token && data.user) {
                             saveAuth(data.user, data.token);
+                            setAuthChecking(false);
+                        } else {
+                            _restoreSession(); // SSO 토큰 만료·검증 실패 → 기존 세션이 있으면 그대로 유지
                         }
-                        setAuthChecking(false);
-                    }).catch(function() { _cleanUrl(); setAuthChecking(false); });
-                return; // SSO 처리로 분기 — 아래 세션복원 스킵
+                    }).catch(function() { _cleanUrl(); _restoreSession(); });
+                return; // SSO 처리로 분기
             }
-            // 기존 세션 복원
-            var savedToken = sessionStorage.getItem('logic_token');
-            if (savedToken) {
-                fetch('/api/auth/me', { headers: { 'Authorization': 'Bearer ' + savedToken } })
-                    .then(function(r) { return r.json(); })
-                    .then(function(data) {
-                        if (data && data.id) { setCurrentUser(data); setAuthToken(savedToken); }
-                        else if (data && data.success && data.user) { setCurrentUser(data.user); setAuthToken(savedToken); }
-                        setAuthChecking(false);
-                    }).catch(function() { setAuthChecking(false); });
-            } else { setAuthChecking(false); }
+            _restoreSession();
         } catch(e) { setAuthChecking(false); }
     }, []);
 
@@ -109,6 +118,54 @@ window.App = function App() {
         };
         window.addEventListener('hashchange', onHashChange);
         return function() { window.removeEventListener('hashchange', onHashChange); };
+    }, []);
+
+    /* 🧩 크롬 확장 브리지 — 확장이 수집한 상품 HTML 수신 → 검색바 자동 주입·분석 자동 시작.
+       확장 미설치·미사용 시 이 리스너는 아무 일도 하지 않음(기존 흐름 무영향). */
+    const currentUserRef = React.useRef(null);
+    currentUserRef.current = currentUser;
+    const extSearchRef = React.useRef(null);   // handleHomeSearch 최신본 (정의 이후 갱신)
+    const lastCaptureRef = React.useRef(0);    // 같은 수집물 중복 처리 방지
+    useEffect(function() {
+        var onExtMsg = function(ev) {
+            if (ev.source !== window || !ev.data || ev.data.type !== 'METAINC_EXT_CAPTURE') return;
+            if (!currentUserRef.current) return;                 // 로그인 전 — 확장이 30초간 재시도
+            var p = ev.data.payload || {};
+            var html = String(p.html || '');
+            if (html.length < 1000) return;                      // 비정상 수집물 무시
+            var capId = Number(p.captured_at) || 0;
+            if (capId && capId === lastCaptureRef.current) return;
+            lastCaptureRef.current = capId || Date.now();
+            window.postMessage({ type: 'METAINC_EXT_ACK' }, window.location.origin);
+            try { toast.success('🧩 확장 수신: 상품 HTML ' + Math.round(html.length / 1024) + 'KB'); } catch (e) {}
+            var kw = String(p.keyword || '').trim();
+            if (kw && extSearchRef.current) {
+                extSearchRef.current(kw, String(p.product_url || ''), html);   // 분석 자동 시작
+            } else {
+                setSearchBarInitial({ keyword: kw, companyName: String(p.product_name || ''), html: html, productUrl: String(p.product_url || '') });
+                setCurrentPage('home');
+                try { toast.info('키워드 입력 후 분석 실행을 눌러주세요.'); } catch (e) {}
+            }
+        };
+        window.addEventListener('message', onExtMsg);
+        return function() { window.removeEventListener('message', onExtMsg); };
+    }, []);
+
+    /* 🧩 경쟁사 등록 모드 복원 — 확장이 연 새 로직 탭에서도 '이 분석 = 경쟁사' 흐름이 이어지게.
+       진입(handleRegisterCompetitor) 시 localStorage에 저장한 컨텍스트를, 새 탭 로드 시 30분 이내면 복원.
+       (일반 흐름엔 무영향: 저장된 값 없으면 아무 일도 안 함) */
+    useEffect(function() {
+        try {
+            if (competitorContext) return;              // 이미 모드면 유지
+            var raw = localStorage.getItem('logic_comp_ctx');
+            if (!raw) return;
+            var ctx = JSON.parse(raw);
+            if (ctx && ctx.competitor_of && ctx.ts && (Date.now() - ctx.ts) < 30 * 60 * 1000) {
+                setCompetitorContext({ competitor_of: ctx.competitor_of, advName: ctx.advName });
+            } else {
+                localStorage.removeItem('logic_comp_ctx');  // 만료 → 정리
+            }
+        } catch(e) {}
     }, []);
 
     // 헬스체크
@@ -210,7 +267,7 @@ window.App = function App() {
         if (currentUser && currentUser.role === 'viewer') {
             api.get('/cd/usage/check').then(function(usageRes) {
                 if (usageRes && usageRes.success && usageRes.data && !usageRes.data.can_query) {
-                    toast.error('일일 분석 제한(3회)을 초과했습니다. 내일 자정에 초기화됩니다.');
+                    toast.error('일일 분석 제한(15회)을 초과했습니다. 내일 자정에 초기화됩니다.');
                     return;
                 }
                 // 제한 내 → 카운트 증가 후 실제 분석 실행
@@ -240,6 +297,7 @@ window.App = function App() {
         setCompanyName: setCompanyName,
         setDatalabData: setDatalabData,
         setDatalabLoading: setDatalabLoading,
+        setAuditStatus: setAuditStatus,
         setHtmlDetailResult: setHtmlDetailResult,
         setHtmlReviewData: setHtmlReviewData,
         setRankCheckResult: setRankCheckResult,
@@ -258,9 +316,27 @@ window.App = function App() {
         try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch(e) {}
     };
 
+    /* ==================== 경쟁사 등록 모드 진입 ==================== */
+    /* 업체 상세의 '경쟁사 등록' → 분석 화면으로 전환. 이후 분석을 저장하면
+       광고주(advClient)의 경쟁사로 quick-register 된다(SaveToClientSection이 competitorContext 사용). */
+    var handleRegisterCompetitor = function(advClient) {
+        if (!advClient) return;
+        setCompetitorContext({ competitor_of: advClient.id, advName: advClient.name });
+        // 확장으로 경쟁사를 보내면 '새 로직 탭'이 열려 이 모드가 사라진다 →
+        // 같은 오리진 localStorage에 잠깐(30분) 저장해 새 탭에서 복원(확장 수정 불필요).
+        try { localStorage.setItem('logic_comp_ctx', JSON.stringify({ competitor_of: advClient.id, advName: advClient.name, ts: Date.now() })); } catch(e) {}
+        setCurrentClientId(null);
+        setAutoSaveStatus('');
+        setSearchBarInitial({ keyword: '', productUrl: '', companyName: '' });
+        setCurrentPage('analysis');
+        try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch(e) {}
+        try { toast.info("경쟁사 등록 모드 — '" + advClient.name + "'의 경쟁사 상품을 분석 후 저장하세요."); } catch(e) {}
+    };
+
     /* ==================== 업체 카드 클릭 → 자동 분석 ==================== */
     var handleClientClick = function(params) {
         if (!params) return;
+        setCompetitorContext(null); try { localStorage.removeItem('logic_comp_ctx'); } catch(e) {}  // 일반 업체 분석 → 경쟁사 모드 해제
         setCurrentClientId(params.clientId);
         setSearchBarInitial({
             keyword: params.keyword || '',
@@ -274,84 +350,15 @@ window.App = function App() {
         handleSearch(params.keyword, params.productUrl || '', params.companyName || '', params.detailHtml || null);
     };
 
-    /* DOM 캡처 — 자동 저장용 HTML 보고서 생성 (SaveToClientSection과 동일 로직) */
-    /* (본 함수는 hook이 아니라 일반 함수이므로 early return 이후 위치에 있어도 됨) */
+    /* DOM 캡처 — 자동 저장/저장 보고서 다운로드용 HTML 생성
+     * 공용 빌더(ReportCapture) 사용: 수동 내보내기(ReportSection)와 완전히 동일한 제거 규칙·표지·푸터 적용 */
     var captureAutoReportHtml = function(kw) {
         try {
-            var captured = [];
-            // 화면의 실제 보고서 본문(.report-main)을 통째로 캡처 → 화면과 동일
-            var srcRoot = document.querySelector('.report-main')
-                || (document.getElementById('root') && document.getElementById('root').children[0]);
-            if (srcRoot) {
-                var cloneRoot = srcRoot.cloneNode(true);
-                // 차트(canvas) → 이미지 변환 (정적 HTML에서도 보이도록)
-                try {
-                    var _oc = srcRoot.querySelectorAll('canvas');
-                    var _cc = cloneRoot.querySelectorAll('canvas');
-                    for (var _i = 0; _i < _cc.length; _i++) {
-                        var _du = '';
-                        var _o = _oc[_i];
-                        var _ch = (window.Chart && window.Chart.getChart && _o) ? window.Chart.getChart(_o) : null;
-                        if (_ch) { try { _du = _ch.toBase64Image('image/png', 1); } catch(e) {} }
-                        if (!_du && _o && _o.toDataURL) { try { _du = _o.toDataURL('image/png'); } catch(e) {} }
-                        if (!_du) continue;
-                        var _img = document.createElement('img');
-                        _img.src = _du; _img.style.cssText = 'width:100%;height:auto;display:block;margin-bottom:14px;';
-                        if (_cc[_i].parentNode) _cc[_i].parentNode.replaceChild(_img, _cc[_i]);
-                        // 겹침방지(핵심): 이미지 직속 부모(차트 래퍼 height:NNNpx 고정) + .chartbox 모두 높이 해제
-                        var _wrap2 = _img.parentNode;
-                        if (_wrap2 && _wrap2.style) { _wrap2.style.height = 'auto'; _wrap2.style.minHeight = '0'; _wrap2.style.position = 'static'; }
-                        var _box2 = (_img.closest && _img.closest('.chartbox')) || _wrap2;
-                        if (_box2 && _box2.style) { _box2.style.height = 'auto'; _box2.style.minHeight = '0'; _box2.style.overflow = 'visible'; _box2.style.marginBottom = '18px'; }
-                    }
-                } catch(e) {}
-                captured.push(cloneRoot);
-            }
-            captured.forEach(function(node) {
-                // 내보내기 제외 영역 제거 (보고서/알림/업체저장/네비/버튼/입력)
-                ['#sec-report', '#sec-notify', '#sec-save-client', '.anchor-nav', '.topbar', '.no-export'].forEach(function(sel) {
-                    node.querySelectorAll(sel).forEach(function(el) { el.remove(); });
-                });
-                node.querySelectorAll('button, .btn').forEach(function(b) { b.remove(); });
-                node.querySelectorAll('input, select, textarea').forEach(function(inp) {
-                    var span = document.createElement('span');
-                    span.textContent = inp.value || '';
-                    span.style.fontWeight = '600';
-                    if (inp.parentNode) inp.parentNode.replaceChild(span, inp);
-                });
+            if (!window.ReportCapture) return '';
+            return window.ReportCapture.buildHtml({
+                title: (kw || '키워드') + ' 분석 보고서',
+                managerName: currentUser && currentUser.name
             });
-            var cssText = '';
-            try {
-                var sheets = document.styleSheets;
-                for (var i = 0; i < sheets.length; i++) {
-                    try {
-                        var rules = sheets[i].cssRules || sheets[i].rules;
-                        for (var j = 0; j < rules.length; j++) { cssText += rules[j].cssText + '\n'; }
-                    } catch(e) {}
-                }
-            } catch(e) {}
-            var bodyHtml = '';
-            captured.forEach(function(node) { bodyHtml += node.outerHTML + '\n'; });
-            var dateStr = new Date().toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric' });
-            // XSS 방지: HTML 특수문자 이스케이프
-            var _esc = function(s) { var d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; };
-            var headerText = _esc(kw || '키워드') + ' 분석 보고서';
-            return '<!DOCTYPE html>\n<html lang="ko">\n<head>\n'
-                + '<meta charset="UTF-8">\n<meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
-                + '<title>' + headerText + ' - ' + dateStr + '</title>\n<style>\n'
-                + '* { margin: 0; padding: 0; box-sizing: border-box; }\n'
-                + 'body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f8fafc; color: #1e293b; }\n'
-                + '.report-header { background: linear-gradient(135deg, #6C5CE7, #a29bfe); color: #fff; padding: 40px 20px; text-align: center; }\n'
-                + '.report-header h1 { font-size: 24px; margin-bottom: 8px; }\n'
-                + '.report-header p { font-size: 14px; opacity: 0.85; }\n'
-                + '.report-footer { text-align: center; padding: 30px; color: #94a3b8; font-size: 12px; border-top: 1px solid #e2e8f0; margin-top: 40px; }\n'
-                + cssText
-                + '\n</style>\n</head>\n<body>\n'
-                + '<div class="report-header">\n<h1>' + headerText + '</h1>\n'
-                + '<p>' + dateStr + ' | 메타아이앤씨 로직 분석 시스템</p>\n</div>\n'
-                + '<div style="max-width:1200px; margin:0 auto; padding:20px;">\n' + bodyHtml + '</div>\n'
-                + '<div class="report-footer">\n<p>© 2026 메타아이앤씨 — 로직 분석 시스템 | 자동 저장된 보고서</p>\n</div>\n'
-                + '</body>\n</html>';
         } catch(e) {
             console.error('자동 DOM capture 실패:', e);
             return '';
@@ -430,6 +437,8 @@ window.App = function App() {
         setCurrentPage('analysis');
         handleSearch(keyword, productUrl, inputCompanyName, htmlInput);
     };
+    // 크롬 확장 브리지에서 자동 분석 시작에 사용(최신 클로저 유지)
+    extSearchRef.current = function(kw, url, html) { handleHomeSearch(kw, url, undefined, html); };
 
     /* ==================== 페이지별 콘텐츠 렌더링 ==================== */
 
@@ -472,10 +481,28 @@ window.App = function App() {
             React.createElement(window.ClientDashboard, {
                 currentUser: currentUser,
                 onRunAnalysis: handleClientClick,
+                onRegisterCompetitor: handleRegisterCompetitor,
                 onDownloadReport: downloadSavedReport,
                 initialSearch: managementInitialSearch,
                 canEdit: currentUser.role !== 'viewer'
             })
+        ),
+        React.createElement(window.ChatWidget, { currentUser: currentUser })
+    );
+
+    /* 플레이스 분석 탭 — 오프라인·지역 업종(자체완결 페이지, 스토어 분석 흐름과 독립) */
+    if (currentPage === 'place') return React.createElement(React.Fragment, null,
+        React.createElement('div', null,
+            React.createElement(window.TopBar, { activePage: 'place', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
+            React.createElement(window.PlaceAnalysisPage, { currentUser: currentUser })
+        ),
+        React.createElement(window.ChatWidget, { currentUser: currentUser })
+    );
+
+    if (currentPage === 'learning') return React.createElement(React.Fragment, null,
+        React.createElement('div', null,
+            React.createElement(window.TopBar, { activePage: 'learning', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
+            React.createElement(window.LearningCenterPage, { currentUser: currentUser })
         ),
         React.createElement(window.ChatWidget, { currentUser: currentUser })
     );
@@ -542,6 +569,17 @@ window.App = function App() {
                 autoSaveStatus === 'error' ? '⚠️ 자동 저장에 실패했습니다. 하단의 "업체 등록/저장" 버튼을 이용해주세요' : ''
             ),
 
+            /* 경쟁사 등록 모드 배너 */
+            competitorContext && React.createElement('div', {
+                style: { background: '#fff7ed', color: '#c2410c', border: '1px solid #fed7aa', padding: '10px 16px', fontSize: 13, fontWeight: 700, textAlign: 'center', borderRadius: 10, margin: '10px auto', maxWidth: 1200 }
+            },
+                "⚔️ 경쟁사 등록 모드 — 이 분석을 " + ((currentUser && currentUser.role === 'viewer') ? '영업 대상' : '광고주') + " '" + competitorContext.advName + "'의 경쟁사로 저장합니다. 경쟁사 상품 페이지에서 확장 프로그램(또는 북마클릿)으로 보내거나 아래에 붙여넣어 분석 후 '경쟁사로 저장'을 누르세요.",
+                React.createElement('button', {
+                    onClick: function() { setCompetitorContext(null); try { localStorage.removeItem('logic_comp_ctx'); } catch(e) {} try { toast.info('일반 분석 모드로 전환했습니다.'); } catch(e) {} },
+                    style: { marginLeft: 12, fontSize: 11.5, fontWeight: 700, color: '#c2410c', background: '#fff', border: '1px solid #fdba74', borderRadius: 7, padding: '3px 10px', cursor: 'pointer' }
+                }, '모드 해제')
+            ),
+
             /* ==================== 보고서 레이아웃: 좌측 목차 + 본문 ==================== */
             React.createElement(window.AnalysisResults, {
                 advertiserLoading: advertiserLoading,
@@ -551,6 +589,7 @@ window.App = function App() {
                 currentUser: currentUser,
                 datalabData: datalabData,
                 datalabLoading: datalabLoading,
+                auditStatus: auditStatus,
                 handleNavigateToClient: handleNavigateToClient,
                 htmlDetailResult: htmlDetailResult,
                 htmlReviewData: htmlReviewData,
@@ -566,7 +605,9 @@ window.App = function App() {
                 sections: sections,
                 setRankCheckResult: setRankCheckResult,
                 shopProducts: shopProducts,
-                volumeData: volumeData
+                volumeData: volumeData,
+                competitorContext: competitorContext,
+                onCompetitorSaved: function() { setCompetitorContext(null); try { localStorage.removeItem('logic_comp_ctx'); } catch(e) {} }
             })
         ),
         React.createElement(window.ChatWidget, { currentUser: currentUser })

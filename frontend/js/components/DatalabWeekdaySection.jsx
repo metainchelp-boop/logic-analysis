@@ -3,12 +3,14 @@ window.DatalabWeekdaySection = function DatalabWeekdaySection(props) {
   if (!props?.data || !props.data.days || props.data.days.length === 0) return null;
   var d = props.data;
   var days = d.days;
+  /* 유효성 게이트: 지수가 전부 0이면 "최고: 월요일(지수 0)" 같은 모순 서술이 인쇄되므로 섹션 생략 */
+  if (!(Number(d.peakIndex) > 0)) return null;
 
   return (
     <div className="section fade-in">
       <div className="container">
         <div className="card" style={{ padding: 24 }}>
-          <h3 className="rt-h3"><span className="rt-hic">📅</span>요일별 검색 패턴<span className="badge b-ok">✅ 데이터랩</span></h3>
+          <h3 className="rt-h3"><span className="rt-hic">📅</span>요일별 검색 패턴<span className="badge b-dl">📊 데이터랩</span></h3>
           <div className="rt-desc">최근 4주 기준 요일별 검색 트렌드</div>
           <ChartCanvas
             type="bar"

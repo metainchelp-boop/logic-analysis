@@ -1,6 +1,15 @@
-/* SaveToClientSection — 분석 결과를 업체로 저장하는 섹션 */
+/* SaveToClientSection — 분석 결과를 업체로 저장하는 섹션
+ *
+ * 저장 흐름(2026-07 영업팀 전용 재설계):
+ *  - 영업사원(viewer) · 진입 컨텍스트 없음 → "영업 대상으로 저장"(role='prospect').
+ *    광고주 드롭다운 없음(관리팀 광고주 완전 비노출). 본인만 열람 · 30일 후 자동 삭제.
+ *  - 영업 대상/광고주 상세의 "경쟁사 등록" 진입(competitorContext) → 경쟁사 고정 저장.
+ *    앵커(연결 대상)가 컨텍스트로 고정되므로 드롭다운 없음.
+ *  - 관리팀(manager/admin) · 진입 컨텍스트 없음 → 기존 탭 흐름(새 업체 / 기존 업체 / 경쟁사).
+ */
 window.SaveToClientSection = function SaveToClientSection({
-    keyword, productUrl, analysisData, volumeData, relatedData, shopProducts, advertiserReport, detailHtml, htmlDetailResult
+    keyword, productUrl, analysisData, volumeData, relatedData, shopProducts, advertiserReport, detailHtml, htmlDetailResult,
+    competitorContext, onCompetitorSaved, isViewer, defaultName
 }) {
     var _React = React;
     var useState = _React.useState;
@@ -16,8 +25,21 @@ window.SaveToClientSection = function SaveToClientSection({
     var _s7 = useState(''); var message = _s7[0]; var setMessage = _s7[1];
     var _s8 = useState(false); var success = _s8[0]; var setSuccess = _s8[1];
     var _s9 = useState(''); var clientSearch = _s9[0]; var setClientSearch = _s9[1];  // 기존 업체 검색어
+    /* 경쟁사 저장(관리팀 경쟁사 탭) — 연결할 광고주 드롭다운 선택 */
+    var _sa = useState(null); var compAdvId = _sa[0]; var setCompAdvId = _sa[1];
 
-    /* 기존 업체 목록 로드 */
+    /* 저장 유형 판정 */
+    var _isViewer = !!isViewer;
+    var _compCtx = !!(competitorContext && competitorContext.competitor_of);
+    var _anchorName = (competitorContext && competitorContext.advName) || '';
+    /* 영업 대상(prospect) 저장: 영업사원 + 경쟁사 진입 컨텍스트 없음 */
+    var _prospectMode = _isViewer && !_compCtx;
+    /* 경쟁사 고정 저장: 상세의 '경쟁사 등록' 진입(앵커 고정, 드롭다운 없음) */
+    var _fixedCompMode = _compCtx;
+    /* 관리팀 전체 탭 흐름(새 업체 / 기존 업체 / 경쟁사 드롭다운) */
+    var _fullMode = !_prospectMode && !_fixedCompMode;
+
+    /* 기존 업체(광고주) 목록 로드 — 관리팀 경쟁사 탭 드롭다운/기존 업체 추가용 */
     var loadClients = useCallback(function() {
         api.get('/cd/registered-clients').then(function(res) {
             if (res.success) setExistingClients(res.data || []);
@@ -25,85 +47,24 @@ window.SaveToClientSection = function SaveToClientSection({
     }, []);
 
     useEffect(function() {
-        if (showModal) loadClients();
-    }, [showModal, loadClients]);
+        if (showModal) {
+            // 관리팀 전체 흐름 + 영업사원 흐름(경쟁사 서브모드에서 '내 영업 대상' 드롭다운 필요) 모두 목록 로드
+            if (_fullMode || _prospectMode) loadClients();
+            if (_prospectMode) setSaveMode('prospect');
+            else if (_fixedCompMode) setSaveMode('competitor');
+            // 업체명/경쟁사명 자동 채우기 — 비어 있으면 스토어명 등 기본값으로
+            if (!clientName && defaultName) setClientName(defaultName);
+        }
+    }, [showModal, loadClients, _fullMode, _prospectMode, _fixedCompMode, defaultName]);
 
     if (!keyword || !analysisData) return null;
 
-    /* DOM 캡처 — ReportSection과 동일한 로직으로 분석 화면 HTML 생성 */
+    /* DOM 캡처 — 공용 빌더(ReportCapture) 사용 (v6.7 통일)
+     * 수동 내보내기·자동저장과 동일한 제거 규칙·인디고 표지·PC 축소판 viewport 적용. */
     var captureReportHtml = function() {
         try {
-            var captured = [];
-            var rootEl = document.getElementById('root');
-            if (rootEl && rootEl.children[0]) {
-                var appDiv = rootEl.children[0];
-                var children = Array.from(appDiv.children);
-                children.forEach(function(child) {
-                    if (child.classList.contains('topbar')) return;
-                    if (child.querySelector && child.querySelector('.anchor-nav')) return;
-                    var style = child.getAttribute('style') || '';
-                    if (style.indexOf('sticky') !== -1 && style.indexOf('top') !== -1 && child.querySelector && child.querySelector('.anchor-btn')) return;
-                    if (child.id === 'sec-report') return;
-                    if (child.id === 'sec-notify') return;
-                    if (child.id === 'sec-save-client') return;
-                    if (child.querySelector && child.querySelector('#sec-report')) return;
-                    if (child.querySelector && child.querySelector('#sec-notify')) return;
-                    if (child.querySelector && child.querySelector('#sec-save-client')) return;
-                    if (child.tagName === 'FOOTER') return;
-                    if (!child.innerHTML || child.innerHTML.trim() === '') return;
-                    if (child.querySelector && child.querySelector('.loading-spinner')) return;
-                    captured.push(child.cloneNode(true));
-                });
-            }
-            if (captured.length === 0) {
-                var allSections = document.querySelectorAll('.section');
-                allSections.forEach(function(s) {
-                    if (s.id === 'sec-report' || s.id === 'sec-notify' || s.id === 'sec-save-client') return;
-                    captured.push(s.cloneNode(true));
-                });
-            }
-            captured.forEach(function(node) {
-                var btns = node.querySelectorAll('button, .btn');
-                btns.forEach(function(b) { b.remove(); });
-                var inputs = node.querySelectorAll('input, select, textarea');
-                inputs.forEach(function(inp) {
-                    var span = document.createElement('span');
-                    span.textContent = inp.value || '';
-                    span.style.fontWeight = '600';
-                    inp.parentNode.replaceChild(span, inp);
-                });
-            });
-            var cssText = '';
-            try {
-                var sheets = document.styleSheets;
-                for (var i = 0; i < sheets.length; i++) {
-                    try {
-                        var rules = sheets[i].cssRules || sheets[i].rules;
-                        for (var j = 0; j < rules.length; j++) { cssText += rules[j].cssText + '\n'; }
-                    } catch(e) {}
-                }
-            } catch(e) {}
-            var bodyHtml = '';
-            captured.forEach(function(node) { bodyHtml += node.outerHTML + '\n'; });
-            var dateStr = new Date().toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric' });
-            var headerText = keyword + ' 키워드 분석 보고서';
-            return '<!DOCTYPE html>\n<html lang="ko">\n<head>\n'
-                + '<meta charset="UTF-8">\n<meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
-                + '<title>' + headerText + ' - ' + dateStr + '</title>\n<style>\n'
-                + '* { margin: 0; padding: 0; box-sizing: border-box; }\n'
-                + 'body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f8fafc; color: #1e293b; }\n'
-                + '.report-header { background: linear-gradient(135deg, #6C5CE7, #a29bfe); color: #fff; padding: 40px 20px; text-align: center; }\n'
-                + '.report-header h1 { font-size: 24px; margin-bottom: 8px; }\n'
-                + '.report-header p { font-size: 14px; opacity: 0.85; }\n'
-                + '.report-footer { text-align: center; padding: 30px; color: #94a3b8; font-size: 12px; border-top: 1px solid #e2e8f0; margin-top: 40px; }\n'
-                + cssText
-                + '\n@media print { .report-header { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }\n'
-                + '</style>\n</head>\n<body>\n'
-                + '<div class="report-header">\n<h1>' + headerText + '</h1>\n'
-                + '<p>' + dateStr + ' | \uba54\ud0c0\uc544\uc774\uc564\uc528 \ub85c\uc9c1 \ubd84\uc11d \uc2dc\uc2a4\ud15c</p>\n</div>\n'
-                + '<div style="max-width:1200px; margin:0 auto; padding:20px;">\n' + bodyHtml + '</div>\n'
-                + '<div class="report-footer">\n<p>\u00A9 2026 \uba54\ud0c0\uc544\uc774\uc564\uc528 \u2014 \ub85c\uc9c1 \ubd84\uc11d \uc2dc\uc2a4\ud15c | \ubcf8 \ubcf4\uace0\uc11c\ub294 \uc790\ub3d9 \uc0dd\uc131\ub418\uc5c8\uc2b5\ub2c8\ub2e4.</p>\n</div>\n'
-                + '</body>\n</html>';
+            if (!window.ReportCapture) return '';
+            return window.ReportCapture.buildHtml({ title: keyword + ' 키워드 분석 보고서' });
         } catch(e) {
             console.error('DOM capture failed:', e);
             return '';
@@ -129,17 +90,37 @@ window.SaveToClientSection = function SaveToClientSection({
             detail_html: detailHtml || '',
         };
 
-        if (saveMode === 'new') {
+        // 경쟁사 저장 앵커: 진입 컨텍스트(competitorContext) 우선, 아니면 관리팀 경쟁사 탭 드롭다운 선택
+        var compOf = (competitorContext && competitorContext.competitor_of)
+            || (saveMode === 'competitor' ? compAdvId : null);
+        var isCompMode = !!compOf;
+        var isProspect = _prospectMode && saveMode === 'prospect' && !isCompMode;  // 영업 대상 저장(영업사원)
+
+        if (saveMode === 'new' || saveMode === 'prospect' || isCompMode) {
             if (!clientName.trim()) {
-                setMessage('업체명을 입력해주세요.');
+                setMessage(isCompMode ? '경쟁사명을 입력해주세요.' : (isProspect ? '영업 대상명을 입력해주세요.' : '업체명을 입력해주세요.'));
+                setSaving(false);
+                return;
+            }
+            if (saveMode === 'competitor' && !_fixedCompMode && !compOf) {
+                setMessage(_isViewer ? '연결할 영업 대상을 선택해주세요.' : '연결할 광고주를 선택해주세요.');
                 setSaving(false);
                 return;
             }
             payload.name = clientName.trim();
+            if (isCompMode) {
+                // 경쟁사 저장: 앵커(광고주·영업 대상)에 연결된 경쟁사로
+                payload.role = 'competitor';
+                payload.competitor_of = compOf;
+            } else if (isProspect) {
+                // 영업 대상 저장(영업사원 개인용)
+                payload.role = 'prospect';
+            }
             api.post('/cd/quick-register', payload).then(function(res) {
                 if (res.success) {
                     setSuccess(true);
                     setMessage(res.message);
+                    if (isCompMode && onCompetitorSaved) { try { onCompetitorSaved(); } catch(e) {} }
                 } else {
                     var errMsg = typeof res.detail === 'string' ? res.detail : '저장에 실패했습니다.';
                     setMessage(errMsg);
@@ -178,8 +159,27 @@ window.SaveToClientSection = function SaveToClientSection({
         setSuccess(false);
         setClientName('');
         setSelectedClientId(null);
-        setSaveMode('new');
+        setSaveMode(_prospectMode ? 'prospect' : (_fixedCompMode ? 'competitor' : 'new'));
     };
+
+    /* 트리거 카드 문구/버튼 */
+    var _cardTitle, _cardDesc, _cardBtn, _cardHint;
+    if (_prospectMode) {
+        _cardTitle = '"' + keyword + '" 분석 결과를 내 영업자료로 저장하시겠습니까?';
+        _cardDesc = '저장 시 [영업 대상] 또는 [경쟁사]를 고를 수 있습니다. 경쟁사로 고르면 내 영업 대상 목록에서 대상을 선택해 바로 붙일 수 있어요. (본인만 열람 · 30일 후 자동 삭제)';
+        _cardBtn = '🎯 영업자료로 저장 (영업 대상 / 경쟁사)';
+        _cardHint = '⚔️ 확장으로 경쟁사 상품을 보낸 뒤에도 여기서 [경쟁사]를 골라 대상을 선택하면 됩니다.';
+    } else if (_fixedCompMode) {
+        _cardTitle = '"' + keyword + '" 분석 결과를 ' + (_anchorName ? '‘' + _anchorName + '’의 ' : '') + '경쟁사로 저장하시겠습니까?';
+        _cardDesc = (_anchorName ? '‘' + _anchorName + '’에 ' : '선택한 대상에 ') + '연결된 경쟁사로 저장됩니다.' + (_isViewer ? ' (본인 등록분은 30일 후 자동 삭제)' : '');
+        _cardBtn = '⚔️ 경쟁사로 저장';
+        _cardHint = '⚔️ 경쟁사로 저장하면 상세에서 대상과 나란히 비교할 수 있습니다.';
+    } else {
+        _cardTitle = '"' + keyword + '" 분석 결과를 업체에 저장하시겠습니까?';
+        _cardDesc = '업체로 저장하면 업체관리 탭에서 일자별 분석 데이터가 누적됩니다.';
+        _cardBtn = '업체 등록 / 저장';
+        _cardHint = '⚔️ 경쟁사와 비교하려면: 이 업체를 저장한 뒤 [업체관리] → 해당 업체 → "경쟁사 등록"에서 경쟁사 상품을 분석해 추가하세요.';
+    }
 
     return React.createElement('div', { id: 'sec-save-client', className: 'section', style: { paddingBottom: 20 } },
         React.createElement('div', { className: 'container' },
@@ -193,12 +193,8 @@ window.SaveToClientSection = function SaveToClientSection({
                     borderRadius: 14,
                 }
             },
-                React.createElement('div', { style: { fontSize: 18, fontWeight: 700, marginBottom: 8 } },
-                    '"' + keyword + '" 분석 결과를 업체에 저장하시겠습니까?'
-                ),
-                React.createElement('div', { style: { fontSize: 13, opacity: 0.85, marginBottom: 16 } },
-                    '업체로 저장하면 업체관리 탭에서 일자별 분석 데이터가 누적됩니다.'
-                ),
+                React.createElement('div', { style: { fontSize: 18, fontWeight: 700, marginBottom: 8 } }, _cardTitle),
+                React.createElement('div', { style: { fontSize: 13, opacity: 0.85, marginBottom: 16 } }, _cardDesc),
                 React.createElement('button', {
                     onClick: function() { setShowModal(true); },
                     style: {
@@ -206,7 +202,8 @@ window.SaveToClientSection = function SaveToClientSection({
                         padding: '12px 32px', borderRadius: 10, fontSize: 15, fontWeight: 700,
                         cursor: 'pointer', boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
                     }
-                }, '업체 등록 / 저장')
+                }, _cardBtn),
+                React.createElement('div', { style: { marginTop: 12, fontSize: 12, opacity: 0.92, lineHeight: 1.6 } }, _cardHint)
             )
         ),
 
@@ -228,11 +225,12 @@ window.SaveToClientSection = function SaveToClientSection({
             },
                 /* 헤더 */
                 React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 } },
-                    React.createElement('div', { style: { fontSize: 18, fontWeight: 700, color: '#1e293b' } }, '업체 등록 / 분석 저장'),
+                    React.createElement('div', { style: { fontSize: 18, fontWeight: 700, color: '#1e293b' } },
+                        _prospectMode ? (saveMode === 'competitor' ? '경쟁사 저장' : '영업 대상 저장') : (_fixedCompMode ? '경쟁사 저장' : '업체 등록 / 분석 저장')),
                     React.createElement('button', {
                         onClick: closeModal,
                         style: { background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: '#94a3b8' }
-                    }, '\u2715')
+                    }, '✕')
                 ),
 
                 /* 분석 키워드 표시 */
@@ -250,7 +248,7 @@ window.SaveToClientSection = function SaveToClientSection({
                         style: { background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10,
                             padding: '20px', textAlign: 'center', marginBottom: 16 }
                     },
-                        React.createElement('div', { style: { fontSize: 32, marginBottom: 8 } }, '\u2705'),
+                        React.createElement('div', { style: { fontSize: 32, marginBottom: 8 } }, '✅'),
                         React.createElement('div', { style: { fontSize: 15, fontWeight: 600, color: '#16a34a' } }, message)
                     ),
                     React.createElement('button', {
@@ -264,8 +262,8 @@ window.SaveToClientSection = function SaveToClientSection({
 
                 /* 입력 폼 */
                 : React.createElement('div', null,
-                    /* 탭: 새 업체 / 기존 업체 */
-                    React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 16 } },
+                    /* 탭: 관리팀 전체 흐름에서만 (영업사원 흐름은 단일 입력) */
+                    _fullMode && React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 16 } },
                         React.createElement('button', {
                             onClick: function() { setSaveMode('new'); },
                             style: {
@@ -283,11 +281,120 @@ window.SaveToClientSection = function SaveToClientSection({
                                 color: saveMode === 'existing' ? '#fff' : '#64748b',
                                 border: saveMode === 'existing' ? '1px solid #6C5CE7' : '1px solid #e2e8f0',
                             }
-                        }, '기존 업체에 추가 (' + existingClients.length + ')')
+                        }, '기존 업체에 추가 (' + existingClients.length + ')'),
+                        React.createElement('button', {
+                            onClick: function() { setSaveMode('competitor'); },
+                            style: {
+                                flex: 1, padding: '10px', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer',
+                                background: saveMode === 'competitor' ? '#c2410c' : '#fff7ed',
+                                color: saveMode === 'competitor' ? '#fff' : '#c2410c',
+                                border: '1px solid ' + (saveMode === 'competitor' ? '#c2410c' : '#fed7aa'),
+                            }
+                        }, '⚔️ 경쟁사로 저장')
                     ),
 
-                    /* 새 업체 입력 */
-                    saveMode === 'new' && React.createElement('div', null,
+                    /* 영업사원(prospect) 흐름: [영업 대상] / [경쟁사] 토글 → 서브모드별 입력 */
+                    _prospectMode && React.createElement('div', null,
+                        /* 유형 토글 */
+                        React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 16 } },
+                            React.createElement('button', {
+                                onClick: function() { setSaveMode('prospect'); },
+                                style: {
+                                    flex: 1, padding: '10px', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer',
+                                    background: saveMode === 'prospect' ? '#4f46e5' : '#eef2ff',
+                                    color: saveMode === 'prospect' ? '#fff' : '#4338ca',
+                                    border: '1px solid ' + (saveMode === 'prospect' ? '#4f46e5' : '#c7d2fe'),
+                                }
+                            }, '🎯 영업 대상으로'),
+                            React.createElement('button', {
+                                onClick: function() { setSaveMode('competitor'); },
+                                style: {
+                                    flex: 1, padding: '10px', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer',
+                                    background: saveMode === 'competitor' ? '#c2410c' : '#fff7ed',
+                                    color: saveMode === 'competitor' ? '#fff' : '#c2410c',
+                                    border: '1px solid ' + (saveMode === 'competitor' ? '#c2410c' : '#fed7aa'),
+                                }
+                            }, '⚔️ 경쟁사로')
+                        ),
+
+                        /* 영업 대상 서브모드 — 단일 입력 */
+                        saveMode !== 'competitor' && React.createElement('div', null,
+                            React.createElement('label', { style: { fontSize: 13, color: '#475569', fontWeight: 600, display: 'block', marginBottom: 6 } }, '영업 대상명'),
+                            React.createElement('input', {
+                                className: 'form-input', value: clientName,
+                                onChange: function(e) { setClientName(e.target.value); },
+                                placeholder: '영업 대상(업체·상품)명을 입력하세요',
+                                style: { width: '100%', marginBottom: 8 }, autoFocus: true
+                            }),
+                            React.createElement('div', { style: { fontSize: 11.5, color: '#4338ca', background: '#eef2ff', border: '1px solid #c7d2fe', borderRadius: 8, padding: '8px 12px' } },
+                                '🎯 영업 대상은 [내 영업자료]에 저장되어 본인만 볼 수 있고, 30일 후 자동 삭제됩니다. 저장 후 상위노출 경쟁사를 붙여 비교하세요.')
+                        ),
+
+                        /* 경쟁사 서브모드 — 내 영업 대상 드롭다운 + 경쟁사명 */
+                        saveMode === 'competitor' && React.createElement('div', null,
+                            React.createElement('label', { style: { fontSize: 13, color: '#475569', fontWeight: 600, display: 'block', marginBottom: 6 } }, '어느 영업 대상의 경쟁사?'),
+                            existingClients.length === 0
+                                ? React.createElement('div', { style: { fontSize: 12, color: '#c2410c', background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 8, padding: '10px 12px', marginBottom: 12 } },
+                                    '아직 등록된 영업 대상이 없습니다. 먼저 [🎯 영업 대상으로]로 이 상품(또는 영업 대상)을 저장한 뒤, 경쟁사를 붙여주세요.')
+                                : React.createElement('select', {
+                                    className: 'form-input', value: compAdvId || '',
+                                    onChange: function(e) { setCompAdvId(e.target.value ? Number(e.target.value) : null); },
+                                    style: { width: '100%', marginBottom: 12 }
+                                },
+                                    [React.createElement('option', { key: '_', value: '' }, '— 영업 대상 선택 —')].concat(
+                                        existingClients.map(function(c) { return React.createElement('option', { key: c.id, value: c.id }, c.name); })
+                                    )
+                                ),
+                            React.createElement('label', { style: { fontSize: 13, color: '#475569', fontWeight: 600, display: 'block', marginBottom: 6 } }, '경쟁사명'),
+                            React.createElement('input', {
+                                className: 'form-input', value: clientName,
+                                onChange: function(e) { setClientName(e.target.value); },
+                                placeholder: '경쟁사명을 입력하세요',
+                                style: { width: '100%', marginBottom: 8 }, autoFocus: true
+                            }),
+                            React.createElement('div', { style: { fontSize: 11.5, color: '#c2410c', background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 8, padding: '8px 12px' } },
+                                '⏳ 선택한 영업 대상에 연결된 경쟁사로 저장됩니다. 본인 등록분은 30일 후 자동 삭제됩니다.')
+                        )
+                    ),
+
+                    /* 경쟁사 저장(앵커 고정, 드롭다운 없음) — 상세 '경쟁사 등록' 진입 */
+                    _fixedCompMode && React.createElement('div', null,
+                        _anchorName && React.createElement('div', { style: { fontSize: 12.5, color: '#9a3412', background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 8, padding: '8px 12px', marginBottom: 12 } },
+                            '연결 대상: ', React.createElement('b', null, _anchorName)),
+                        React.createElement('label', { style: { fontSize: 13, color: '#475569', fontWeight: 600, display: 'block', marginBottom: 6 } }, '경쟁사명'),
+                        React.createElement('input', {
+                            className: 'form-input', value: clientName,
+                            onChange: function(e) { setClientName(e.target.value); },
+                            placeholder: '경쟁사명을 입력하세요',
+                            style: { width: '100%', marginBottom: 8 }, autoFocus: true
+                        }),
+                        _isViewer && React.createElement('div', { style: { fontSize: 11.5, color: '#c2410c', background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 8, padding: '8px 12px' } },
+                            '⏳ 본인이 등록한 경쟁사는 30일 후 자동 삭제됩니다.')
+                    ),
+
+                    /* 관리팀 경쟁사 탭: 연결할 광고주 선택 + 경쟁사명 */
+                    _fullMode && saveMode === 'competitor' && React.createElement('div', { style: { marginBottom: 16 } },
+                        React.createElement('label', { style: { fontSize: 13, color: '#475569', fontWeight: 600, display: 'block', marginBottom: 6 } }, '연결할 광고주'),
+                        React.createElement('select', {
+                            className: 'form-input', value: compAdvId || '',
+                            onChange: function(e) { setCompAdvId(e.target.value ? Number(e.target.value) : null); },
+                            style: { width: '100%', marginBottom: 12 }
+                        },
+                            [React.createElement('option', { key: '_', value: '' }, '— 광고주 선택 —')].concat(
+                                existingClients.map(function(c) { return React.createElement('option', { key: c.id, value: c.id }, c.name); })
+                            )
+                        ),
+                        React.createElement('label', { style: { fontSize: 13, color: '#475569', fontWeight: 600, display: 'block', marginBottom: 6 } }, '경쟁사명'),
+                        React.createElement('input', {
+                            className: 'form-input', value: clientName,
+                            onChange: function(e) { setClientName(e.target.value); },
+                            placeholder: '경쟁사명을 입력하세요',
+                            style: { width: '100%', marginBottom: 8 }, autoFocus: true
+                        })
+                    ),
+
+                    /* 새 업체 입력(관리팀) */
+                    _fullMode && saveMode === 'new' && React.createElement('div', null,
                         React.createElement('label', { style: { fontSize: 13, color: '#475569', fontWeight: 600, display: 'block', marginBottom: 6 } }, '업체명'),
                         React.createElement('input', {
                             className: 'form-input',
@@ -302,8 +409,8 @@ window.SaveToClientSection = function SaveToClientSection({
                         )
                     ),
 
-                    /* 기존 업체 선택 */
-                    saveMode === 'existing' && React.createElement('div', { style: { marginBottom: 16 } },
+                    /* 기존 업체 선택(관리팀) */
+                    _fullMode && saveMode === 'existing' && React.createElement('div', { style: { marginBottom: 16 } },
                         existingClients.length === 0
                             ? React.createElement('div', { style: { textAlign: 'center', padding: 20, color: '#94a3b8', fontSize: 13 } },
                                 '등록된 업체가 없습니다. 새 업체를 등록해주세요.')
@@ -365,7 +472,7 @@ window.SaveToClientSection = function SaveToClientSection({
                             background: saving ? '#94a3b8' : '#6C5CE7', color: '#fff',
                             fontSize: 14, fontWeight: 600, cursor: saving ? 'default' : 'pointer',
                         }
-                    }, saving ? '저장 중...' : '분석 결과 저장')
+                    }, saving ? '저장 중...' : (_prospectMode ? (saveMode === 'competitor' ? '경쟁사 저장' : '영업 대상 저장') : (_fixedCompMode ? '경쟁사 저장' : '분석 결과 저장')))
                 )
             )
         )

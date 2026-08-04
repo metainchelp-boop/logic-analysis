@@ -35,6 +35,7 @@ from reports import router as reports_router, init_reports_db
 from client_dashboard import router as cd_router, init_client_dashboard_db
 from chat import router as chat_router, init_chat_db
 from seo_generate import router as seo_generate_router, init_seo_db
+from collector import router as collector_router, init_collector_db
 from datalab import analyze_datalab
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,7 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
 from database import (
     init_db, add_tracked_product, get_all_tracked_products,
     delete_tracked_product, add_tracked_keyword, get_keywords_for_product,
+    get_keyword_product_and_count, delete_tracked_keyword,
     save_ranking, get_ranking_history, save_competitor_snapshot,
     get_notification_settings, update_notification_settings
 )
@@ -81,6 +83,7 @@ from naver_crawler import (
 )
 from scheduler import start_scheduler, stop_scheduler, reschedule_report
 from kakao_notify import is_configured as is_solapi_configured
+import place_crawler  # 플레이스(지역 검색) 업종 어댑터 — vertical="place" 분기에서만 사용
 
 def _verify_db_integrity():
     """앱 시작 시 DB 경로 및 데이터 무결성 검증.
@@ -266,6 +269,7 @@ async def lifespan(app):
     init_client_dashboard_db()
     init_chat_db()
     init_seo_db()
+    init_collector_db()   # 수집기 테이블(collected_serp)
 
     # DB 무결성 검증 후 백업 (테이블 초기화 이후)
     _backup_db_on_startup()
@@ -302,6 +306,7 @@ app.include_router(reports_router)
 app.include_router(cd_router)
 app.include_router(chat_router)
 app.include_router(seo_generate_router)
+app.include_router(collector_router)  # 브라우저 수집기(크롬 확장) — 2026-08-03 쇼핑 API 종료 대응
 
 
 # ==================== 유저 격리 헬퍼 ====================
@@ -408,17 +413,52 @@ class NotificationSettingsRequest(BaseModel):
 # ==================== API 엔드포인트 ====================
 
 
+# ── 쇼핑 크롤 공유 헬퍼 (과부하 방지) ──────────────────────────────
+# 여러 직원/워커(uvicorn 5개)가 같은 키워드를 짧은 시간에 크롤하면 네이버 쇼핑 API를
+# 중복 호출한다. 이를 3시간 DB 공유 캐시(database.shopping_search_cache)로 1회로 합쳐
+# 일일 한도(25,000) 소진·과부하를 막는다.
+#   - read_cache=True : 캐시 우선(분석·스냅샷용, 3시간 staleness 허용)
+#   - read_cache=False: 항상 새로 크롤(실시간 조회용)하되 결과는 캐시에 채워 후속 분석과 공유
+# 캐시 조회/저장 실패는 전부 방어적으로 무시하고 직접 크롤로 폴백 → 기능은 절대 멈추지 않음.
+def _shared_crawl(keyword: str, max_results: int = 500, read_cache: bool = True, ttl: int = None) -> list:
+    from naver_crawler import search_products as _sp
+    products = None
+    cache_ok = False
+    try:
+        from database import get_cached_shopping_search, save_cached_shopping_search
+        cache_ok = True
+        if read_cache:
+            products = get_cached_shopping_search(keyword, max_results, ttl=ttl)
+            if products is not None:
+                logger.info(f"[크롤캐시] 히트 '{keyword}' ({len(products)}개) — 네이버 재호출 없음")
+    except Exception as _ce:
+        logger.warning(f"[크롤캐시] 우회(직접 크롤): {_ce}")
+        products, cache_ok = None, False
+    if products is None:
+        products = _sp(keyword, max_results=max_results, retry_on_429=True)
+        if cache_ok:
+            try:
+                save_cached_shopping_search(keyword, max_results, products)
+            except Exception as _ce:
+                logger.warning(f"[크롤캐시] 저장 우회: {_ce}")
+    return products
+
+
 # --- 실시간 순위 조회 ---
 @app.post("/api/rank/check")
 def check_rank(req: RankCheckRequest, current_user: dict = Depends(get_current_user)):
     """키워드 + 상품URL로 실시간 순위 조회 (인증 필수, viewer 제한은 handleSearch에서 관리)"""
     try:
         product_info = get_product_info(req.product_url, keyword=req.keyword)
+        # 호출 다이어트(2026-07): '항상 신규 크롤(5콜)' → 10분 단기 캐시 허용.
+        # 네이버 쇼핑 순위는 분 단위로 변하지 않아 실시간성 손실 없이 검색 API 소모를 크게 줄임.
+        _prods = _shared_crawl(req.keyword, 500, ttl=600)
         rank, page, competitors = find_product_rank(
             keyword=req.keyword,
             product_url=req.product_url,
-            max_pages=10,
-            product_name=product_info.get("product_name", "")
+            max_pages=5,
+            product_name=product_info.get("product_name", ""),
+            cached_products=_prods,
         )
         analysis = generate_rank_analysis(rank, None, competitors, product_info)
 
@@ -481,35 +521,75 @@ def keyword_exposure(req: KeywordExposureRequest, current_user: dict = Depends(g
         main_kw_raw = (req.keyword or "").strip()
         main_kw = main_kw_raw.lower()
         extra = [k.strip() for k in (req.extra_keywords or []) if k and k.strip()]
-        candidates, _seen = [], set()
+        # R6: 내 상품 키워드(메인+상품명 토큰)를 우선 채우고, 연관/급상승(extra)은 '참고용'으로 뒤에.
+        #     노출률 분모는 내 상품 키워드만 사용 → 사과·양하 같은 무관 연관어로 노출률이 왜곡되던 문제 방지.
+        own_candidates, _seen = [], set()
         if main_kw_raw:
-            candidates.append(main_kw_raw)
+            own_candidates.append(main_kw_raw)
             _seen.add(main_kw)
-        for k in extra + sorted(keywords):
+        for k in sorted(keywords):
             kl = k.strip().lower()
             if not kl or kl in _seen:
                 continue
             _seen.add(kl)
-            candidates.append(k.strip())
-            if len(candidates) >= 10:
+            own_candidates.append(k.strip())
+            if len(own_candidates) >= 6:  # 후보 축소(10→6): 라이브 크롤 수를 줄여 예산 내 완주율↑·스피너 단축
                 break
+        ref_candidates = []
+        for k in extra:
+            kl = k.strip().lower()
+            if not kl or kl in _seen:
+                continue
+            _seen.add(kl)
+            ref_candidates.append(k.strip())
+            if len(own_candidates) + len(ref_candidates) >= 8:  # 총 12→8
+                break
+        candidates = own_candidates + ref_candidates
+        own_set = set(c.strip().lower() for c in own_candidates)
 
         if not candidates:
             return {"success": True, "data": {"product_name": product_name, "results": [], "recommended": []}}
 
-        # 병렬로 순위 조회 (max_pages=4 = 상위 400위까지, find_product_rank는 429 재시도 적용됨)
+        # 병렬로 순위 조회 (max_pages=2 = 상위 200위까지, find_product_rank는 429 재시도 적용됨)
+        # ⚠️ 부하/속도: 키워드 여러 개를 라이브로 조회하므로 200위로 제한(400→200)해
+        #    호출량을 절반으로 줄여 응답을 빠르게(스피너 단축)·429 완화. 상품 자체 키워드는
+        #    통상 상위 200위 안에서 노출되므로 실사용 손실은 작다.
         results = []
         def check_one(kw):
             try:
-                rank, page, _ = find_product_rank(kw, req.product_url, max_pages=4)
+                _prods = _shared_crawl(kw, 200)  # 공유 캐시(3h) → 반복/동시 노출조회 중복 크롤 제거
+                rank, page, _ = find_product_rank(kw, req.product_url, max_pages=2, cached_products=_prods)
                 return {"keyword": kw, "rank": rank, "page": page}
             except Exception:
                 return {"keyword": kw, "rank": None, "page": None}
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-            futures = {executor.submit(check_one, kw): kw for kw in candidates}
-            for future in concurrent.futures.as_completed(futures):
+        # ⏱️ 벽시계 예산: 이 시간 안에 끝난 키워드만 모으고, 지연된 키워드는 '미조회(None)'로 채워
+        #    '부분 결과라도 항상 반환'한다. 느린 네이버 조회로 요청이 프록시 타임아웃(≈60s)에 걸려
+        #    노출 분석 섹션이 통째로 사라지던 문제 방지(504 대신 부분 성공).
+        # 후보를 8개로 줄이고 워커를 6으로 늘려(≈2웨이브) 대부분 예산 안에 끝나게 한다.
+        # 예산은 12→18s로(FE 25s 타임아웃·프록시 60s보다 여유) 상향해 마지막 웨이브까지 완주율↑.
+        EXPOSURE_BUDGET_SEC = 18
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=6)
+        futures = {executor.submit(check_one, kw): kw for kw in candidates}
+        done_kws = set()
+        try:
+            for future in concurrent.futures.as_completed(futures, timeout=EXPOSURE_BUDGET_SEC):
                 results.append(future.result())
+                done_kws.add(futures[future])
+        except concurrent.futures.TimeoutError:
+            logger.warning(
+                f"keyword-exposure 예산({EXPOSURE_BUDGET_SEC}s) 초과 — 부분 결과 반환 "
+                f"({len(done_kws)}/{len(candidates)} 키워드)"
+            )
+        # 예산 내 미완료 키워드는 미조회(None)로 채워 부분 결과 유지
+        for _fut, _kw in futures.items():
+            if _kw not in done_kws:
+                results.append({"keyword": _kw, "rank": None, "page": None})
+        executor.shutdown(wait=False, cancel_futures=True)
+
+        # 내 상품 키워드 vs 참고(연관/급상승) 구분
+        for r in results:
+            r["source"] = "own" if r["keyword"].strip().lower() in own_set else "related"
 
         # 순위 있는 것 우선, 순위순 정렬
         results.sort(key=lambda x: (x["rank"] is None, x["rank"] or 9999))
@@ -517,13 +597,15 @@ def keyword_exposure(req: KeywordExposureRequest, current_user: dict = Depends(g
         # 대체 추천: 노출 중인(순위 있는) '메인 키워드 외' 키워드 상위 5개
         recommended = [r for r in results if r["rank"] is not None and r["keyword"].strip().lower() != main_kw][:5]
 
+        own_results = [r for r in results if r["source"] == "own"]
         return {
             "success": True,
             "data": {
                 "product_name": product_name,
                 "keyword": req.keyword,
-                "total_keywords": len(candidates),
-                "exposed_count": sum(1 for r in results if r["rank"] is not None),
+                # 노출률 분모 = 내 상품 키워드만(무관 연관어 제외 — R6)
+                "total_keywords": len(own_candidates),
+                "exposed_count": sum(1 for r in own_results if r["rank"] is not None),
                 "results": results,
                 "recommended": recommended,
             }
@@ -589,10 +671,20 @@ def run_initial_rank_check(product_id: int, product_url: str, keyword_ids: List[
         _review_count = None
     for kw_info in keyword_ids:
         try:
+            _prods = _shared_crawl(kw_info["keyword"], 500)  # 공유 캐시(3h) → 과부하 방지
+            # ── 수집 실패 가드 (2026-08-04 전수조사에서 발견된 오염 잔존 경로) ──
+            # 검색 결과를 하나도 못 받았으면 '순위 없음'이 아니라 '수집 실패'다.
+            # 신규 등록 직후엔 키워드가 아직 미수집이라 거의 항상 여기 걸리는데,
+            # None 을 저장하면 허위 '미노출' 이력이 남는다(8/1~3 1,992건 오염과 동일 기전).
+            # 저장을 건너뛰면 온디맨드 수집(1~5분) 후 재체크 때 정상값이 첫 기록이 된다.
+            if not _prods:
+                logger.warning(f"초기/재체크 [{kw_info['keyword']}] 검색 결과 0건 — 수집 실패로 보고 순위 저장 건너뜀")
+                continue
             rank, page, competitors = find_product_rank(
                 keyword=kw_info["keyword"],
                 product_url=product_url,
-                max_pages=10
+                max_pages=5,
+                cached_products=_prods,
             )
             save_ranking(
                 product_id=product_id,
@@ -711,6 +803,25 @@ def remove_product(product_id: int, current_user: dict = Depends(get_current_use
     return {"success": True, "message": "상품이 삭제되었습니다."}
 
 
+# --- 키워드 개별 삭제 (건의 2026-07-22, 이예은) ---
+@app.delete("/api/keywords/{keyword_id}")
+def remove_keyword(keyword_id: int, current_user: dict = Depends(get_current_user)):
+    """추적 키워드 1개 삭제 — 소유권 검증 + 마지막 1개 보호.
+    남기는 다른 키워드의 순위 이력은 유지되고, 해당 키워드의 이력만 함께 삭제된다.
+    키워드 0개 상품을 막기 위해 마지막 1개는 삭제 불가(상품 정리는 상품 삭제 사용)."""
+    _verify_keyword_ownership(keyword_id, current_user)  # 404/403 처리
+    info = get_keyword_product_and_count(keyword_id)
+    if not info:
+        raise HTTPException(status_code=404, detail="키워드를 찾을 수 없습니다.")
+    if info["count"] <= 1:
+        raise HTTPException(
+            status_code=400,
+            detail="마지막 키워드는 삭제할 수 없습니다. 상품 전체를 정리하려면 상품 삭제를 이용하세요."
+        )
+    delete_tracked_keyword(keyword_id)
+    return {"success": True, "message": "키워드가 삭제되었습니다."}
+
+
 # --- 순위 이력 조회 ---
 @app.get("/api/rank/history/{keyword_id}")
 def rank_history(keyword_id: int, days: int = 30, current_user: dict = Depends(get_current_user)):
@@ -741,6 +852,42 @@ def refresh_rank(product_id: int, background_tasks: BackgroundTasks, current_use
 
 
 # --- 키워드 볼륨 조회 ---
+# ── 파워링크 순위별 입찰가 (건의 2026-07-22) — 1시간 메모리 캐시 ──
+import threading as _bid_threading
+_bid_cache = {}
+_bid_cache_lock = _bid_threading.Lock()
+
+
+class BidEstimateRequest(BaseModel):
+    keyword: str
+
+
+@app.post("/api/keyword/bid-estimate")
+def keyword_bid_estimate(req: BidEstimateRequest, current_user: dict = Depends(get_current_user)):
+    """파워링크 1~5위 평균 노출 입찰가 + 최소 노출가 (네이버 검색광고 공식 추정, 인증 필수).
+    데이터 없음/실패 시 data={} — 프론트는 신규 표를 렌더하지 않음(기존 화면 유지)."""
+    try:
+        kw = (req.keyword or "").strip()[:100]
+        if not kw:
+            return {"success": False, "detail": "키워드를 입력해주세요."}
+        now = time.time()
+        with _bid_cache_lock:
+            hit = _bid_cache.get(kw)
+            if hit and now - hit[1] < 3600:
+                return {"success": True, "data": hit[0], "cached": True}
+        from naver_crawler import get_bid_estimates
+        data = get_bid_estimates(kw)
+        if data:  # 성공한 결과만 캐시 — 실패는 다음 요청에서 재시도
+            with _bid_cache_lock:
+                if len(_bid_cache) > 300:
+                    _bid_cache.clear()
+                _bid_cache[kw] = (data, now)
+        return {"success": True, "data": data}
+    except Exception as e:
+        logger.error(f"입찰가 추정 조회 실패: {e}")
+        return {"success": False, "detail": "입찰가 추정 조회 중 오류가 발생했습니다."}
+
+
 @app.post("/api/keyword/volume")
 def keyword_volume(keywords: List[str], current_user: dict = Depends(get_current_user)):
     """키워드 검색량 조회 (인증 필수)"""
@@ -895,6 +1042,8 @@ def detail_page_analyze(req: DetailPageAnalysisRequest, current_user: dict = Dep
                 "scores": result["scores"],
                 "suggestions": result["suggestions"],
                 "reviewData": result.get("reviewData"),
+                # 표시용 스토어/상호명 — 보고서 표지의 슬러그 오표기 방지(2026-07-27)
+                "storeInfo": result.get("storeInfo") or {"name": "", "source": ""},
             }
         }
     except Exception as e:
@@ -911,11 +1060,144 @@ class SeoAnalysisRequest(BaseModel):
     cached_competitors: Optional[list] = None
     cached_product_info: Optional[dict] = None
     cached_total_volume: Optional[int] = None
+    cached_review_count: Optional[int] = None   # HTML 실측 리뷰수(있으면 순위 추정 대신 최우선 사용)
+    cached_rating: Optional[float] = None        # HTML 실측 평점
+    # --- 플레이스(지역 검색) 업종 전용 (기본 shopping 유지 → 기존 요청·응답 무영향) ---
+    vertical: Optional[str] = "shopping"         # "place" 면 아래 플레이스 어댑터로 분기
+    place_html: Optional[str] = None             # 직원 브라우저 캡처 검색결과 HTML(순위·경쟁사)
+    target_doc_id: Optional[str] = None          # 내 업체 플레이스 doc-id(순위 매칭)
+    target_name: Optional[str] = None            # 내 업체명(doc-id 없을 때 매칭 폴백)
+    region: Optional[str] = None                 # 지역(동/구/시) — 업체 식별키·표시용
+    place: Optional[Dict[str, Any]] = None       # 담당자 보완 지표(저장수·예약·사진·소식 등)
+
+
+def _place_business_key(req: "SeoAnalysisRequest", region: str = "") -> str:
+    """업체 식별키 — doc_id 우선, 없으면 정규화한 업체명+지역(캡처마다 안정적)."""
+    if req.target_doc_id:
+        return f"doc:{req.target_doc_id}"
+    name = place_crawler._norm(req.target_name or "")
+    reg = place_crawler._norm(region or req.region or "")
+    return f"nm:{name}|{reg}" if name else ""
+
+
+def _place_seo_analyze(req: "SeoAnalysisRequest", current_user: dict = None):
+    """플레이스 전용 SEO 진단 — place_crawler 어댑터로 파싱·순위·점수화.
+    반환 envelope 를 쇼핑 seo_analyze 와 동일 형태로 맞춰 프론트 리포트 셸을 재사용한다."""
+    try:
+        parsed = place_crawler.parse_place_search(req.place_html or "")
+        place_in = dict(req.place or {})
+        # 내 업체 순위(3-state: 노출/미노출/미확인)
+        rank_info = place_crawler.find_place_rank(
+            parsed,
+            target_doc_id=req.target_doc_id,
+            target_name=req.target_name or place_in.get("name"),
+        )
+        if rank_info.get("rank"):
+            place_in["rank"] = rank_info["rank"]
+        # 캡처에 내 업체가 노출됐으면 방문자·블로그 리뷰를 자동 측정값으로 채움
+        # (담당자가 직접 입력한 값이 있으면 그 값을 우선 — 하이브리드).
+        _matched = rank_info.get("matched") or {}
+        for _mk in ("visitor_reviews", "blog_reviews"):
+            if place_in.get(_mk) is None and _matched.get(_mk) is not None:
+                place_in[_mk] = _matched.get(_mk)
+        # 경쟁사(상위 오가닉·내 업체 제외) — 캡처에서 리뷰 지표만 확보
+        competitors = []
+        for it in parsed.get("items", []):
+            if it.get("is_ad"):
+                continue
+            if req.target_doc_id and str(it.get("doc_id")) == str(req.target_doc_id):
+                continue
+            if _matched and it is _matched:   # 이름 매칭된 내 업체도 제외
+                continue
+            competitors.append({
+                "name": it.get("name"),
+                "rank": it.get("rank"),
+                "visitor_reviews": it.get("visitor_reviews"),
+                "blog_reviews": it.get("blog_reviews"),
+                "rating": it.get("rating"),
+            })
+        scored = place_crawler.score_place(place_in, competitors=competitors)
+        region = req.region or parsed.get("region") or ""
+        business_key = _place_business_key(req, region)
+
+        # 순위 이력 누적(하루 1점) — 플레이스는 캡처로만 순위가 확보되므로 분석 시점에 저장.
+        # 실패해도 분석 응답은 정상 반환(무회귀).
+        try:
+            if business_key and req.keyword:
+                from database import save_place_rank
+                save_place_rank(
+                    business_key=business_key,
+                    keyword=req.keyword,
+                    rank_position=rank_info.get("rank"),
+                    rank_state=rank_info.get("state") or "",
+                    business_name=req.target_name or "",
+                    region=region,
+                    user_id=(current_user or {}).get("id", 0),
+                )
+        except Exception as _e:
+            logger.warning(f"플레이스 순위 이력 저장 건너뜀: {_e}")
+
+        return {
+            "success": True,
+            "data": {
+                "vertical": "place",
+                "keyword": req.keyword,
+                "region": region,
+                "category": parsed.get("category"),
+                "business_key": business_key,
+                "business_name": req.target_name or "",
+                "rank_state": rank_info.get("state"),
+                "rank": rank_info.get("rank"),
+                "page": rank_info.get("page"),
+                "scores": scored["scores"],
+                "weights": scored["weights"],
+                "labels": scored.get("labels"),
+                "data_quality": scored.get("data_quality"),
+                "suggestions": scored.get("suggestions"),
+                "competitors": competitors[:5],
+                "analyzed_at": datetime.now().isoformat(),
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"플레이스 분석 실패: {e}")
+        raise HTTPException(status_code=500, detail="플레이스 분석 중 오류가 발생했습니다.")
+
+
+@app.get("/api/place/rank-history")
+def place_rank_history_api(business: str = "", keyword: str = "", days: int = 30,
+                          current_user: dict = Depends(get_current_user)):
+    """플레이스 (업체·키워드) 일자별 순위 시계열 — §2 추적 차트용."""
+    try:
+        from database import get_place_rank_history
+        d = min(max(int(days or 30), 7), 365)
+        series = get_place_rank_history(business, keyword, days=d)
+        return {"success": True, "data": {"business_key": business, "keyword": keyword, "series": series}}
+    except Exception as e:
+        logger.error(f"플레이스 순위 이력 조회 실패: {e}")
+        return {"success": False, "error": "순위 이력 조회 중 오류가 발생했습니다."}
+
+
+@app.get("/api/place/keywords")
+def place_tracked_keywords_api(business: str = "", current_user: dict = Depends(get_current_user)):
+    """플레이스 업체가 추적(분석)한 키워드 + 각 최신 순위/상태 — §2 키워드 칩용."""
+    try:
+        from database import get_place_tracked_keywords
+        kws = get_place_tracked_keywords(business)
+        return {"success": True, "data": {"business_key": business, "keywords": kws}}
+    except Exception as e:
+        logger.error(f"플레이스 추적 키워드 조회 실패: {e}")
+        return {"success": False, "error": "추적 키워드 조회 중 오류가 발생했습니다."}
+
 
 @app.post("/api/seo/analyze")
 def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_current_user)):
     """상품 SEO 종합 진단 (인증 필수)"""
     try:
+        # 플레이스 업종은 전용 어댑터로 분기(기본 shopping 은 아래 기존 경로 100% 그대로)
+        if (req.vertical or "shopping") == "place":
+            return _place_seo_analyze(req, current_user)
         # 캐시된 데이터가 있으면 재활용, 없으면 API 호출
         if req.cached_product_info:
             product_info = req.cached_product_info
@@ -1018,9 +1300,10 @@ def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_curren
             competitors = req.cached_competitors or []
         else:
             try:
+                _prods = _shared_crawl(req.keyword, 500)  # 공유 캐시(3h) → 과부하 방지
                 rank, page, competitors = find_product_rank(
-                    keyword=req.keyword, product_url=req.product_url, max_pages=10,
-                    product_name=product_name
+                    keyword=req.keyword, product_url=req.product_url, max_pages=5,
+                    product_name=product_name, cached_products=_prods
                 )
             except Exception as e:
                 logger.warning(f"find_product_rank 실패 (순위 없음 처리): {e}")
@@ -1129,10 +1412,16 @@ def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_curren
         actual_review_count = None
         actual_rating = None
         review_source = "estimated"
+        # 프론트가 HTML 실측 리뷰/평점을 넘기면 최우선 사용(순위 추정·불안정한 스토어 API 대신)
+        if req.cached_review_count is not None:
+            actual_review_count = req.cached_review_count
+            review_source = "actual"
+            if req.cached_rating is not None and req.cached_rating > 0:
+                actual_rating = req.cached_rating
         try:
             from naver_crawler import _extract_smartstore_info
             ss_store, ss_pno = _extract_smartstore_info(product_url)
-            if ss_store and ss_pno:
+            if ss_store and ss_pno and actual_review_count is None:   # 실측 캐시 없을 때만 스토어 API 시도
                 import requests as _req
                 ss_api_url = f"https://smartstore.naver.com/i/v1/stores/{ss_store}/products/{ss_pno}"
                 ss_headers = {
@@ -1198,6 +1487,7 @@ def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_curren
         # 6. 판매실적 추정 (10%) — 순위 기반 CTR × 전환율 역산
         sales_score = 0
         est_monthly_sales = 0
+        vol_available = True
         if rank:
             # 키워드 볼륨: 캐시 우선, 없으면 API 호출
             if req.cached_total_volume is not None:
@@ -1207,8 +1497,10 @@ def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_curren
                     vol_data = get_keyword_volume([req.keyword])
                     vol = vol_data[0] if vol_data else None
                     total_vol = (vol.get("monthlyPcQcCnt", 0) + vol.get("monthlyMobileQcCnt", 0)) if vol else 0
+                    vol_available = vol is not None   # 조회 자체는 성공(값이 0이어도 available)
                 except Exception:
                     total_vol = 0
+                    vol_available = False   # 볼륨 조회 실패 → '판매 0'이 아니라 '측정 불가'
 
             ctr_map = {1: 0.08, 2: 0.06, 3: 0.05, 4: 0.04, 5: 0.03}
             ctr = ctr_map.get(rank, 0.015 if rank <= 10 else 0.008 if rank <= 20 else 0.003 if rank <= 40 else 0.001)
@@ -1224,6 +1516,14 @@ def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_curren
                 sales_score = 40
             elif est_monthly_sales >= 1:
                 sales_score = 20
+            elif not vol_available:
+                # 볼륨 조회 실패로 판매 추정 불가 → 순위 기반 보수적 폴백(리뷰/평점과 동일 원칙).
+                # 일시적 API 실패가 랭크 상품의 판매점수를 0점으로 만들어 종합점수를 왜곡하는 것을 방지.
+                if rank <= 5: sales_score = 60
+                elif rank <= 10: sales_score = 45
+                elif rank <= 20: sales_score = 35
+                elif rank <= 40: sales_score = 25
+                else: sales_score = 15
         if not rank:
             sales_score = 5
 
@@ -1238,7 +1538,7 @@ def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_curren
                 most_common_cat = Counter(comp_cats).most_common(1)[0][0] if comp_cats else ""
                 if product_category == most_common_cat:
                     category_score = 100
-                elif product_category in " ".join(comp_cats):
+                elif product_category in comp_cats:   # 경쟁사 카테고리 목록에 정확히 존재(부분문자열 오탐 방지)
                     category_score = 60
                 else:
                     category_score = 30
@@ -1325,6 +1625,19 @@ def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_curren
         if not suggestions:
             suggestions.append("전반적으로 양호합니다! 리뷰 확보와 찜 유도에 집중하세요.")
 
+        # ── 데이터 신뢰 등급: 실측(스마트스토어 API) vs 추정(순위 기반)을 구분해 부착(부가 필드) ──
+        import data_quality as dq
+        _rev_measured = (review_source == "api")
+        data_quality = {
+            "review_count": dq.metric(est_reviews, dq.MEASURED if _rev_measured else dq.ESTIMATED,
+                                      sources=["smartstore_api"] if _rev_measured else ["rank_based"]),
+            "rating": dq.metric(est_rating, dq.MEASURED if (_rev_measured and est_rating) else dq.ESTIMATED,
+                                sources=["smartstore_api"] if _rev_measured else ["rank_based"]),
+            "monthly_sales": dq.metric(est_monthly_sales, dq.ESTIMATED, sources=["volume_ctr_model"]),
+            "price": dq.metric((my_price or None), dq.status_from_presence(my_price or None),
+                               sources=["crawl"] if my_price else []),
+        }
+
         return {
             "success": True,
             "data": {
@@ -1361,6 +1674,7 @@ def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_curren
                     }
                 },
                 "weights": weights,
+                "data_quality": data_quality,
                 "suggestions": suggestions,
                 "competitors": competitors[:5],
                 "analyzed_at": datetime.now().isoformat(),
@@ -1562,7 +1876,7 @@ def analyze_product_names(req: ProductNameAnalysisRequest, current_user: dict = 
         # 빈도 분석
         word_freq = Counter(all_words)
         top_keywords = [
-            {"word": word, "count": count, "ratio": round(count / len(req.product_names) * 100, 1)}
+            {"word": word, "count": count, "ratio": round(count / max(1, min(len(req.product_names), 50)) * 100, 1)}
             for word, count in word_freq.most_common(30)
         ]
 
@@ -1662,10 +1976,11 @@ def compute_advertiser_report(keyword: str, product_url: str):
         # 2~3) 키워드로 1회만 검색 → 순위 계산 + 1페이지(상위 80) 분석에 공용 사용
         #      (기존엔 find_product_rank 내부 검색 + 쇼핑 API 재검색으로 같은 키워드를 두 번 호출)
         #      매칭 로직은 그대로(cached_products로 결과만 재사용). retry_on_429=True로 429 빈결과 방지.
-        from naver_crawler import search_products as _sp_crawler
-        all_products = _sp_crawler(req.keyword, max_results=1000, retry_on_429=True)
+        # [A] 수집 깊이 1000→500 + [B] 3시간 공유 캐시. 같은 키워드를 여러 직원/워커가 분석하면
+        #     _shared_crawl가 1회 크롤 결과를 공유(캐시 우선, 실패 시 직접 크롤 폴백 → 분석 안 멈춤).
+        all_products = _shared_crawl(req.keyword, 500)
         rank, page, top_competitors = find_product_rank(
-            keyword=req.keyword, product_url=req.product_url, max_pages=10,
+            keyword=req.keyword, product_url=req.product_url, max_pages=5,
             product_name=product_info.get("product_name", ""),
             cached_products=all_products,
         )
@@ -1676,6 +1991,35 @@ def compute_advertiser_report(keyword: str, product_url: str):
         # 4) 경쟁사 비교 분석 데이터 구성
         my_price = product_info.get("price", 0)
         my_name = product_info.get("product_name", "")
+
+        # [R1] 자기상품 정보 보완: 순위는 잡혔는데(=순위검색에서 내 상품을 찾음) my_price/my_name이 비면
+        #      같은 순위검색 결과(all_products)에서 내 상품을 재매칭해 채운다.
+        #      (없으면 "상품 가격/상품명을 확인할 수 없습니다"가 뜨는데, 이미 순위로 존재하므로 모순)
+        if (not my_name or not my_price) and rank and all_products:
+            try:
+                from naver_crawler import extract_product_id_from_url as _epid, extract_store_name_from_url as _estore
+                _tpid = _epid(req.product_url) or ""
+                _tstore = (_estore(req.product_url) or "").lower()
+                for _p in all_products:
+                    _u = (_p.get("product_url") or "")
+                    _hit = (_tpid and (_tpid in _u or _tpid == _p.get("product_id", ""))) or (_tstore and _tstore in _u.lower())
+                    if _hit:
+                        if not my_name:
+                            my_name = _p.get("product_name", "") or my_name
+                            product_info["product_name"] = my_name
+                        if not my_price:
+                            my_price = _p.get("price", 0) or my_price
+                            product_info["price"] = my_price
+                        if not product_info.get("store_name"):
+                            product_info["store_name"] = _p.get("store_name", "")
+                        if not product_info.get("brand"):
+                            product_info["brand"] = _p.get("brand", "")
+                        if not product_info.get("category"):
+                            product_info["category"] = _p.get("category2") or _p.get("category1") or ""
+                        logger.info(f"[R1] 자기상품 정보 순위검색 결과로 보완: {(my_name or '')[:30]} / {my_price}원 (rank {rank})")
+                        break
+            except Exception as _e:
+                logger.warning(f"[R1] 자기상품 보완 실패(무시): {_e}")
 
         competitor_comparison = []
         prices = []
@@ -2097,6 +2441,7 @@ class AiFeedbackAllRequest(BaseModel):
     client_name: Optional[str] = ""
     client_id: Optional[int] = 0
     call_type: Optional[str] = "manual"
+    vertical: Optional[str] = "shopping"   # "place" 면 플레이스 페르소나 프롬프트/섹션 사용
 
 @app.post("/api/ai/feedback-all")
 async def ai_feedback_all(req: AiFeedbackAllRequest, current_user: dict = Depends(get_current_user)):
@@ -2110,17 +2455,20 @@ async def ai_feedback_all(req: AiFeedbackAllRequest, current_user: dict = Depend
 
         client = anthropic.Anthropic(api_key=api_key)
 
-        section_labels = {
-            "volume": ("검색량 분석", "PC/모바일 검색 비율, CTR, CPC 효율성을 수치로 분석하고 광고 vs SEO 투자 판단 근거를 제시하세요."),
-            "market": ("시장 규모", "월 거래액, 마진율, BEP 시나리오를 분석하세요."),
-            "competition": ("경쟁강도", "상품 수 대비 검색량, 브랜드 비율을 분석하고 1페이지 진입을 위한 현실적 목표(리뷰수, 판매건수)를 제시하세요."),
-            "related": ("연관 키워드", "구매의도/정보탐색/브랜드 키워드를 분류하고 공략 우선순위와 활용법을 제시하세요."),
-            "trend": ("키워드 트렌드", "시즌성, 성장 추세를 분석하고 광고/재고/SEO 최적 타이밍을 제시하세요."),
-            "golden": ("골든 키워드", "검색량 대비 경쟁도가 낮은 키워드 우선순위와 상품명 최적화 예시를 제시하세요."),
-            "competitor": ("경쟁사 비교", "경쟁사 가격/리뷰/상품명을 비교하고 차별화 전략을 제시하세요."),
-            "sales": ("판매량 추정", "순위별 매출 시나리오와 투자 대비 수익률(ROAS)을 분석하세요."),
-            "strategy": ("진입 전략", "가격/상품명/카테고리/리뷰별 개선 우선순위와 1주~3개월 실행 계획을 제시하세요."),
-        }
+        if (req.vertical or "shopping") == "place":
+            section_labels = dict(place_crawler.PLACE_AI_SECTION_LABELS)
+        else:
+            section_labels = {
+                "volume": ("검색량 분석", "PC/모바일 검색 비율, CTR, CPC 효율성을 수치로 분석하고 광고 vs SEO 투자 판단 근거를 제시하세요."),
+                "market": ("시장 규모", "월 거래액, 마진율, BEP 시나리오를 분석하세요."),
+                "competition": ("경쟁강도", "상품 수 대비 검색량, 브랜드 비율을 분석하세요. 목표는 내 순위 상태에 맞게 — 상위권(1~10위)이면 순위 방어·1위 추격·리뷰 격차 해소, 하위권이면 1페이지 진입 — 로 제시하세요."),
+                "related": ("연관 키워드", "구매의도/정보탐색/브랜드 키워드를 분류하고 공략 우선순위와 활용법을 제시하세요."),
+                "trend": ("키워드 트렌드", "시즌성, 성장 추세를 분석하고 광고/재고/SEO 최적 타이밍을 제시하세요."),
+                "golden": ("골든 키워드", "검색량 대비 경쟁도가 낮은 키워드 우선순위와 상품명 최적화 예시를 제시하세요."),
+                "competitor": ("경쟁사 비교", "경쟁사 가격/리뷰/상품명을 비교하고 차별화 전략을 제시하세요."),
+                "sales": ("판매량 추정", "순위별 매출 시나리오와 투자 대비 수익률(ROAS)을 분석하세요."),
+                "strategy": ("진입 전략", "가격/상품명/카테고리/리뷰별 개선 우선순위와 1주~3개월 실행 계획을 제시하세요."),
+            }
 
         # 데이터가 있는 섹션만 프롬프트에 포함
         section_blocks = []
@@ -2132,8 +2480,9 @@ async def ai_feedback_all(req: AiFeedbackAllRequest, current_user: dict = Depend
                 continue
             label, instruction = label_info
             data_str = json.dumps(sec_data, ensure_ascii=False, default=str)
-            if len(data_str) > 1500:
-                data_str = data_str[:1500] + "...(생략)"
+            # 1500자는 카테고리·수치 등 핵심 필드가 잘려 AI가 빈칸을 추측(환각)하는 원인 → 4000자로 완화
+            if len(data_str) > 4000:
+                data_str = data_str[:4000] + "...(생략)"
             section_blocks.append(f"[{label}]\n데이터: {data_str}\n분석 지시: {instruction}")
 
         if not section_blocks:
@@ -2141,7 +2490,26 @@ async def ai_feedback_all(req: AiFeedbackAllRequest, current_user: dict = Depend
 
         combined_data = "\n\n---\n\n".join(section_blocks)
 
-        system_prompt = """당신은 메타아이앤씨(METAINC) 시니어 네이버 쇼핑 마케팅 컨설턴트입니다.
+        # R5: 자기상태·시즌·리뷰격차는 '피드백 섹션'이 아니라 전 섹션 판단의 '컨텍스트'로 주입.
+        #     (section_labels에 없어 위 루프에서 제외됨 → 여기서 명시적으로 앞단에 붙인다)
+        _ctx_bits = []
+        _ms = req.sections.get("mystatus")
+        if isinstance(_ms, dict) and (_ms.get("myRank") is not None or _ms.get("myActualReviews") is not None):
+            _ctx_bits.append(f"[내 상품 현황(반드시 반영)] {json.dumps(_ms, ensure_ascii=False, default=str)} "
+                             f"— isDefender=true면 '신규 진입'이 아니라 '상위권 방어·1위 추격·리뷰 격차 해소' 관점으로 작성.")
+        _sea = req.sections.get("season")
+        if isinstance(_sea, dict):
+            _ctx_bits.append(f"[시즌·월별 트렌드(반드시 인용)] {json.dumps(_sea, ensure_ascii=False, default=str)[:1500]} "
+                             f"— 데이터에 트렌드/시즌이 있으므로 '데이터 없음'이라 말하지 말 것. 비수기면 낮은 수치는 비수기 탓임을 명시.")
+        _rev = req.sections.get("review")
+        if isinstance(_rev, dict):
+            _ctx_bits.append(f"[리뷰 격차] {json.dumps(_rev, ensure_ascii=False, default=str)[:800]}")
+        _context_block = ("\n\n".join(_ctx_bits) + "\n\n---\n\n") if _ctx_bits else ""
+
+        if (req.vertical or "shopping") == "place":
+            system_prompt = place_crawler.PLACE_AI_SYSTEM_PROMPT
+        else:
+            system_prompt = """당신은 메타아이앤씨(METAINC) 시니어 네이버 쇼핑 마케팅 컨설턴트입니다.
 네이버 쇼핑 알고리즘(적합도·인기도·신뢰도)에 정통합니다.
 
 작성 원칙:
@@ -2150,7 +2518,21 @@ async def ai_feedback_all(req: AiFeedbackAllRequest, current_user: dict = Depend
 - 반드시 데이터 수치를 인용하며, 근거 없는 추상적 표현은 쓰지 마세요.
 - 아이콘, 이모지, 특수기호(**, ##)는 사용하지 마세요.
 - 각 섹션은 5~8줄 내외로, 현황→핵심 이슈→실행 전략 흐름으로 작성하세요.
-- 마지막에 'METAINC 종합 인사이트'로 전체 요약과 핵심 액션 3가지를 짧게 정리하세요."""
+- 마지막에 'METAINC 종합 인사이트'로 전체 요약과 핵심 액션 3가지를 짧게 정리하세요.
+
+[사실성 규칙 — 반드시 준수]
+- 제공된 데이터에 있는 사실·수치만 사용하세요. 데이터에 없는 내용을 지어내거나 단정하지 마세요.
+- 카테고리·업종은 데이터에 명시된 값만 그대로 쓰고, 추측으로 다른 카테고리(예: 건강/뷰티/식품 등)를 섞거나 바꾸지 마세요. (예: 데이터가 '가구>소파'면 식품·건강 등을 언급하지 마세요.)
+- 광고주의 운영 방식(매일 소재 제작, 메시지 마케팅 등)이나 외부 플랫폼·서비스(당근비즈니스/당근마켓, 쿠팡, 토스 등)는 데이터로 확인되지 않으면 언급하지 마세요. 특히 그 서비스의 성격(온라인/오프라인/지역기반 등)을 임의로 단정하지 마세요.
+- 값이 0이거나 비어있는 항목(리뷰수, 평점, 판매가 등)은 '데이터 미수집(확인 필요)'으로 표현하고, 0을 실제 수치처럼 단정하지 마세요.
+- 매출·판매량 등 '추정' 항목은 단정적 단일 숫자로 쓰지 말고, 데이터에 범위(예: estimatedMonthlyRange, estRevenueRange, revenueRange)가 있으면 그 범위로, 없으면 '약 N(추정)'처럼 추정임을 명시하세요. 추정 전환율은 가정값이며 실제와 다를 수 있음을 한 번 언급하세요.
+
+[상태 인지 규칙 — 신규 진입자 vs 상위권 방어자 구분]
+- 데이터의 mystatus(내 상품 현재 순위·실측 리뷰수·SEO점수)를 반드시 먼저 확인하세요.
+- 내 상품이 이미 상위권(순위 1~10위)이거나 실측 리뷰가 상당수(예: 100건 이상)면, 이 광고주는 '신규 진입자'가 아니라 '상위권 방어자'입니다. 이 경우 '신규 진입', '1페이지 진입', '리뷰 N건 목표(현재 리뷰수보다 적은 값)', '진입 점수' 같은 표현을 절대 쓰지 마세요.
+- 방어자에게는 '현 순위 방어·상위(1위) 추격', '경쟁사 대비 리뷰 격차 해소(현재 X건 → 상위 평균 Y건)', '성수기 선점', '객단가·재구매 강화' 관점으로 서술하세요.
+- 리뷰 목표는 하드코딩 숫자가 아니라 데이터의 실측 리뷰수와 경쟁 평균의 격차를 근거로 제시하세요.
+- 시즌/월별 지수 데이터가 있으면 반드시 인용하고 '데이터에 트렌드가 없다'고 말하지 마세요. 분석 시점이 비수기(현재 지수가 연중 최고 대비 낮음)면 낮은 수치는 비수기 때문임을 명시하고, 성수기 대비 선점 준비 관점으로 조언하세요."""
 
         # ★502 방지: 동기 Claude 호출을 별도 스레드로 실행해 이벤트 루프(워커 하트비트)를
         #  막지 않음. 이렇게 하면 생성이 길어져도 gunicorn 120s 타임아웃에 워커가 죽지 않음.
@@ -2158,7 +2540,7 @@ async def ai_feedback_all(req: AiFeedbackAllRequest, current_user: dict = Depend
         user_content = f"""키워드 '{req.keyword}'에 대한 전체 분석 데이터입니다.
 각 섹션별로 분석 피드백을 작성해주세요.
 
-{combined_data}
+{_context_block}{combined_data}
 
 각 섹션을 [섹션명] 형태로 구분하여, 광고주 브리핑 형식으로 작성하세요."""
 
@@ -2263,10 +2645,222 @@ def get_api_usage(current_user: dict = Depends(get_current_user)):
     try:
         from database import get_api_usage_summary
         data = get_api_usage_summary(days=30)
+        try:
+            # 검색 API 자체 계측(호출 다이어트 2026-07) — 일일 25,000 한도 대비 현황
+            from naver_crawler import get_search_api_usage_today
+            data["searchApiToday"] = get_search_api_usage_today()
+        except Exception:
+            pass
         return {"success": True, "data": data}
     except Exception as e:
         logger.error(f"API 사용량 조회 실패: {e}")
         return {"success": False, "error": "API 사용량 조회 중 오류가 발생했습니다."}
+
+
+_NAVER_PROBE_CACHE = {"at": 0.0, "data": None}
+
+@app.get("/api/diag/naver-probe")
+def naver_probe():
+    """네이버 검색 API 생사 진단 — 읽기 전용·일시 진단용.
+
+    2026-07-31 '네이버 검색 > 쇼핑 API 종료' 공지 이후 순위 추적이 전부 '미노출'로
+    나오는 원인을 서버에서 직접 확인하기 위한 임시 엔드포인트다.
+    같은 키로 쇼핑(shop)과 블로그(blog)를 1회씩 호출해 비교한다
+    — 쇼핑만 실패하면 종료 확정, 둘 다 실패하면 키·쿼터 등 계정 문제다.
+
+    · 인증 없음: 진단자가 바로 열어봐야 하므로. 대신 아래를 지킨다.
+      - 키·토큰·업체 정보 등 비밀값은 응답에 넣지 않는다(상태코드·건수·판정만).
+      - 5분 캐시로 호출을 묶어 쿼터 낭비·외부 남용을 막는다(최악 576회/일 << 25,000).
+      - 파라미터를 받지 않아 임의 검색 통로로 쓰일 수 없다.
+    · 원인 확정 후 제거 예정.
+    """
+    import requests, json, re  # main.py 전역에 없어 함수 안에서 가져온다(진단 전용)
+    from naver_crawler import NAVER_CLIENT_ID, NAVER_CLIENT_SECRET
+
+    now = time.time()
+    if _NAVER_PROBE_CACHE["data"] and (now - _NAVER_PROBE_CACHE["at"]) < 300:
+        return {"success": True, "cached": True, "data": _NAVER_PROBE_CACHE["data"]}
+
+    out = {"checkedAt": datetime.now().isoformat(),
+           "keyConfigured": bool(NAVER_CLIENT_ID and NAVER_CLIENT_SECRET),
+           "probes": {}}
+    headers = {"X-Naver-Client-Id": NAVER_CLIENT_ID, "X-Naver-Client-Secret": NAVER_CLIENT_SECRET}
+    for label, path in (("shop", "shop.json"), ("blog", "blog.json")):
+        try:
+            r = requests.get(f"https://openapi.naver.com/v1/search/{path}",
+                             params={"query": "홍삼", "display": 1}, headers=headers, timeout=10)
+            info = {"status": r.status_code, "total": None, "errorCode": None, "errorMessage": None}
+            try:
+                j = r.json()
+                info["total"] = j.get("total")
+                info["errorCode"] = j.get("errorCode")
+                info["errorMessage"] = j.get("errorMessage")
+            except Exception:
+                pass
+            out["probes"][label] = info
+        except Exception as e:
+            out["probes"][label] = {"status": None, "errorMessage": str(e)[:200]}
+
+    # 검색광고 API(searchad — 검색량·연관키워드) 실호출 확인: 전수조사에서 유일한 '확인불가' 항목.
+    # 1콜 소모(무해)·5분 캐시 안에서만. 실패해도 다른 진단은 그대로.
+    try:
+        from naver_crawler import get_keyword_volume
+        _v = get_keyword_volume(["홍삼"])
+        out["probes"]["searchad"] = {
+            "ok": bool(_v), "rows": len(_v or []),
+            "sampleVolume": (_v[0].get("monthlyPcQcCnt") if _v else None),
+        }
+    except Exception as _e:
+        out["probes"]["searchad"] = {"ok": False, "errorMessage": str(_e)[:200]}
+
+    # 최근 5일 순위 기록 통계 — '배치가 수집분을 실제로 소비해 순위를 기록했는가'를
+    # 외부에서 확인하는 계기판(읽기 전용). 8/1~3 처럼 미노출 100% 면 파이프라인 이상.
+    try:
+        import sqlite3 as _sq3
+        from client_dashboard import DB_PATH as _CD_DB3
+        _c3 = _sq3.connect(_CD_DB3, timeout=10)
+        _c3.row_factory = _sq3.Row
+        out["rankDays"] = [dict(r) for r in _c3.execute("""
+            SELECT substr(checked_at,1,10) AS d, COUNT(*) AS total,
+                   SUM(CASE WHEN rank_position IS NULL THEN 1 ELSE 0 END) AS no_rank
+            FROM client_rank_history
+            WHERE checked_at >= date('now','localtime','-4 day')
+            GROUP BY d ORDER BY d
+        """).fetchall()]
+        _c3.close()
+    except Exception as _e:
+        out["rankDays"] = {"error": str(_e)[:150]}
+
+    sh, bl = out["probes"].get("shop", {}), out["probes"].get("blog", {})
+    if sh.get("status") == 200 and (sh.get("total") or 0) > 0:
+        out["verdict"] = "쇼핑 API 정상 — 미노출 원인은 다른 곳(순위 판정·상품 매칭 등)"
+    elif bl.get("status") == 200 and sh.get("status") != 200:
+        out["verdict"] = "쇼핑 API만 실패 — 서비스 종료로 확정 (같은 키로 블로그는 정상)"
+    elif bl.get("status") != 200 and sh.get("status") != 200:
+        out["verdict"] = "둘 다 실패 — 키 만료·쿼터 소진 등 계정 문제 가능성"
+    else:
+        out["verdict"] = "판정 불가 — probes 원문 확인 필요"
+
+    # ── 대체 경로(크롤링) 실현 가능성 진단 ──
+    # 공식 API가 사라진 이상 순위 산출은 검색 결과 크롤링뿐이라, 서버에서 실제로
+    # 가져와지는지 후보별로 1회씩 확인한다. 상품 개수까지 세어 '접속만 되는' 경우와 구분.
+    def _probe_crawl(label, url, via_bee=False):
+        try:
+            if via_bee:
+                from naver_crawler import _fetch_via_scrapingbee, SCRAPINGBEE_API_KEY
+                if not SCRAPINGBEE_API_KEY:
+                    return {"ok": False, "note": "ScrapingBee 키 미설정"}
+                body = _fetch_via_scrapingbee(url, render_js=False, stealth=True) or ""
+                status = 200 if body else None
+            else:
+                from naver_crawler import _get_realistic_headers
+                r = requests.get(url, headers=_get_realistic_headers(
+                    referer="https://search.shopping.naver.com/"), timeout=15)
+                status, body = r.status_code, (r.text or "")
+            n = None
+            try:
+                if body.lstrip()[:1] in "{[":
+                    j = json.loads(body)
+                    for key in ("shoppingResult", "products"):
+                        node = j.get(key) if isinstance(j, dict) else None
+                        if isinstance(node, dict) and isinstance(node.get("products"), list):
+                            n = len(node["products"]); break
+                        if isinstance(node, list):
+                            n = len(node); break
+                elif "__NEXT_DATA__" in body:
+                    n = body.count('"productTitle"') or body.count('"mallName"')
+            except Exception:
+                pass
+            return {"ok": bool(body) and status == 200, "status": status,
+                    "bytes": len(body), "productsParsed": n,
+                    "blocked": bool(re.search(r"captcha|자동입력|비정상적", body[:4000], re.I)) if body else None}
+        except Exception as e:
+            return {"ok": False, "error": str(e)[:160]}
+
+    q = "%ED%99%8D%EC%82%BC"  # 홍삼
+    out["crawlProbes"] = {
+        "searchJsonApi": _probe_crawl("json",
+            f"https://search.shopping.naver.com/api/search/all?sort=rel&pagingIndex=1&pagingSize=40&query={q}"),
+        "searchHtml": _probe_crawl("html",
+            f"https://search.shopping.naver.com/search/all?query={q}"),
+    }
+
+    # ScrapingBee 는 위 헬퍼(_fetch_via_scrapingbee)가 HTML 응답만 수용하도록 돼 있어
+    # JSON API 주소로는 성공해도 버려진다 → 여기서는 ScrapingBee 를 직접 호출해
+    # 상태코드·에러헤더·남은 크레딧까지 그대로 본다(되살릴 수 있는지 판단용).
+    def _probe_bee(url, stealth=True):
+        try:
+            from naver_crawler import SCRAPINGBEE_API_KEY, SCRAPINGBEE_API_URL
+            if not SCRAPINGBEE_API_KEY:
+                return {"ok": False, "note": "ScrapingBee 키 미설정"}
+            params = {"api_key": SCRAPINGBEE_API_KEY, "url": url, "render_js": "false",
+                      "block_resources": "false", "country_code": "kr",
+                      "transparent_status_code": "true"}
+            params["stealth_proxy" if stealth else "premium_proxy"] = "true"
+            r = requests.get(SCRAPINGBEE_API_URL, params=params, timeout=90)
+            body = r.text or ""
+            n = None
+            try:
+                if body.lstrip()[:1] in "{[":
+                    j = json.loads(body)
+                    node = j.get("shoppingResult") if isinstance(j, dict) else None
+                    if isinstance(node, dict) and isinstance(node.get("products"), list):
+                        n = len(node["products"])
+            except Exception:
+                pass
+            return {"ok": r.status_code == 200 and bool(body),
+                    "status": r.status_code, "bytes": len(body), "productsParsed": n,
+                    "spbError": r.headers.get("Spb-error-code") or r.headers.get("Spb-error"),
+                    "creditsLeft": r.headers.get("Spb-remaining-api-calls") or r.headers.get("Spb-remaining-calls"),
+                    "cost": r.headers.get("Spb-cost"),
+                    "bodyHead": body[:200]}
+        except Exception as e:
+            return {"ok": False, "error": str(e)[:200]}
+
+    # 비용을 좌우하는 두 변수를 실측한다.
+    #  ① 프록시 등급: stealth 75크레딧 vs premium 25크레딧 — premium 이 통하면 비용 1/3
+    #  ② 페이지당 개수: 40 vs 80 — 80이 통하면 300위 확보에 필요한 호출이 절반
+    _u = "https://search.shopping.naver.com/api/search/all?sort=rel&pagingIndex=1&pagingSize={n}&query=" + q
+    out["crawlProbes"]["beeStealth40"] = _probe_bee(_u.format(n=40), stealth=True)
+    out["crawlProbes"]["beePremium40"] = _probe_bee(_u.format(n=40), stealth=False)
+    out["crawlProbes"]["beeStealth80"] = _probe_bee(_u.format(n=80), stealth=True)
+
+    # 비용 산정 기준 — 실제 추적 중인 키워드 수(중복 제외)
+    try:
+        import sqlite3 as _sq2
+        from client_dashboard import DB_PATH as _CD_DB2
+        _c2 = _sq2.connect(_CD_DB2, timeout=10)
+        out["trackingScale"] = {
+            "distinctKeywords": _c2.execute(
+                "SELECT COUNT(DISTINCT keyword) FROM client_rank_history "
+                "WHERE checked_at >= date('now','localtime','-2 day')").fetchone()[0],
+            "rowsPerDay": _c2.execute(
+                "SELECT COUNT(*) FROM client_rank_history "
+                "WHERE substr(checked_at,1,10) = date('now','localtime')").fetchone()[0],
+        }
+        _c2.close()
+    except Exception as e:
+        out["trackingScale"] = {"error": str(e)[:200]}
+
+    # 잘못 쌓인 순위 이력(수집 실패인데 미노출로 저장된 행) 규모 — 읽기 전용 집계
+    try:
+        import sqlite3 as _sq
+        from client_dashboard import DB_PATH as _CD_DB
+        _c = _sq.connect(_CD_DB, timeout=10)
+        rows = _c.execute("""
+            SELECT substr(checked_at,1,10) AS d, COUNT(*) AS total,
+                   SUM(CASE WHEN rank_position IS NULL THEN 1 ELSE 0 END) AS nulls
+            FROM client_rank_history
+            WHERE checked_at >= date('now','localtime','-7 day')
+            GROUP BY d ORDER BY d
+        """).fetchall()
+        _c.close()
+        out["rankHistoryRecent"] = [{"date": r[0], "total": r[1], "미노출": r[2]} for r in rows]
+    except Exception as e:
+        out["rankHistoryRecent"] = {"error": str(e)[:200]}
+
+    _NAVER_PROBE_CACHE["at"], _NAVER_PROBE_CACHE["data"] = now, out
+    return {"success": True, "cached": False, "data": out}
 
 
 # ==================== 데이터랩 쇼핑인사이트 ====================
@@ -2274,6 +2868,8 @@ def get_api_usage(current_user: dict = Depends(get_current_user)):
 class DatalabRequest(BaseModel):
     keyword: str
     category1: str = ""
+    category2: str = ""
+    category3: str = ""
     related_keywords: list = []
 
 @app.post("/api/datalab/analyze")
@@ -2283,6 +2879,8 @@ def datalab_analyze(req: DatalabRequest, current_user: dict = Depends(get_curren
         result = analyze_datalab(
             keyword=req.keyword,
             category1=req.category1,
+            category2=req.category2,
+            category3=req.category3,
             related_keywords=[{"keyword": k} if isinstance(k, str) else k for k in req.related_keywords],
         )
         return {"success": True, "data": result}

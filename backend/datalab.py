@@ -111,6 +111,123 @@ def _find_category_code(cat1_name: str) -> str:
     return "50000008"
 
 
+# ==================== 중/소분류 카테고리 코드 런타임 확인 ====================
+#   근본 개선(건의 2026-07, 양근형): 인기·급상승 키워드를 상품의 소분류(예: 차류) 기준으로
+#   산정하면 '쌀 10kg' 같은 무관 키워드는 그 카테고리 검색 비중이 0이라 자연 탈락한다
+#   (실측: 식품 기준 쌀10kg 지수 100 → 콤부차 세분류 기준 데이터 없음).
+#   코드는 데이터랩 쇼핑인사이트 공개 카테고리 조회로 '필요할 때만' 확인 후 영구 캐시
+#   (추측 코드 금지). 확인 실패 시 대분류 폴백 → 기존 동작과 동일.
+DATALAB_TREE_URL = "https://datalab.naver.com/shoppingInsight/getCategory.naver"
+_cat_code_cache = {}
+_cat_code_lock = threading.Lock()
+CAT_CODE_FILE = os.path.join(os.path.dirname(os.getenv("DB_PATH", "/app/data/logic_data.db")),
+                             "datalab_category_codes.json")
+# 공식 데이터랩 코드표(find_category)로 검증된 시드 — 재기동 직후 워밍업
+_VERIFIED_SEED = {
+    "식품|음료|생수": "50002032",
+    "식품|음료|탄산수": "50002033",
+    "식품|건강식품|인삼": "50001902",
+    "식품|건강식품|건강환/정": "50001899",
+    "식품|건강식품|꿀": "50001905",
+}
+
+
+def _cat_cache_load():
+    with _cat_code_lock:
+        if _cat_code_cache:
+            return
+        _cat_code_cache.update(_VERIFIED_SEED)
+        try:
+            import json as _json
+            with open(CAT_CODE_FILE, "r", encoding="utf-8") as f:
+                saved = _json.load(f)
+            if isinstance(saved, dict):
+                _cat_code_cache.update({str(k): str(v) for k, v in saved.items()})
+        except Exception:
+            pass
+
+
+def _cat_cache_put(key: str, cid: str):
+    with _cat_code_lock:
+        _cat_code_cache[key] = cid
+        try:
+            import json as _json
+            with open(CAT_CODE_FILE, "w", encoding="utf-8") as f:
+                _json.dump(_cat_code_cache, f, ensure_ascii=False, indent=1)
+        except Exception:
+            pass  # 파일 저장 실패해도 메모리 캐시로 동작
+
+
+def _fetch_category_children(cid: str) -> list:
+    """cid의 하위 카테고리 [{name, cid}] 조회 — 실패 시 빈 리스트(호출측 대분류 폴백)."""
+    try:
+        resp = requests.get(
+            DATALAB_TREE_URL, params={"cid": cid},
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                "Referer": "https://datalab.naver.com/shoppingInsight/sCategory.naver",
+            }, timeout=6)
+        if resp.status_code != 200:
+            logger.warning(f"카테고리 트리 조회 {resp.status_code} (cid={cid})")
+            return []
+        data = resp.json()
+    except Exception as e:
+        logger.warning(f"카테고리 트리 조회 실패(cid={cid}): {e}")
+        return []
+    # 응답 형태 방어적 파싱: name + cid(catId)를 가진 dict 리스트를 재귀 탐색
+    def _walk(node):
+        if isinstance(node, list):
+            found = [x for x in node if isinstance(x, dict) and x.get("name") and (x.get("cid") or x.get("catId"))]
+            if found:
+                return found
+            for x in node:
+                r = _walk(x)
+                if r:
+                    return r
+        elif isinstance(node, dict):
+            for v in node.values():
+                r = _walk(v)
+                if r:
+                    return r
+        return []
+    return [{"name": str(c.get("name", "")).strip(), "cid": str(c.get("cid") or c.get("catId"))}
+            for c in _walk(data)]
+
+
+def _resolve_subcategory_cid(cat1: str, cat2: str = "", cat3: str = ""):
+    """상품의 중/소분류명으로 데이터랩 코드를 확인. 성공 시 (cid, 기준명), 실패 시 (None, '')."""
+    c1 = (cat1 or "").strip()
+    names = [n.strip() for n in (cat2, cat3) if n and n.strip()]
+    if not c1 or not names or c1 not in CATEGORY_MAP:
+        return None, ""
+    _cat_cache_load()
+    key = "|".join([c1] + names)
+    with _cat_code_lock:
+        hit = _cat_code_cache.get(key)
+    if hit:
+        return hit, names[-1]
+    cur = CATEGORY_MAP[c1]
+    resolved_name = ""
+    for name in names:
+        children = _fetch_category_children(cur)
+        if not children:
+            break
+        norm = name.replace(" ", "")
+        match = next((c for c in children if c["name"] == name), None) \
+            or next((c for c in children if c["name"].replace(" ", "") == norm), None)
+        if not match:
+            part = [c for c in children if norm in c["name"].replace(" ", "") or c["name"].replace(" ", "") in norm]
+            match = part[0] if len(part) == 1 else None
+        if not match:
+            break  # 더 못 내려가면 지금까지 해석된 깊이 사용
+        cur, resolved_name = match["cid"], match["name"]
+    if cur == CATEGORY_MAP[c1] or not resolved_name:
+        return None, ""
+    _cat_cache_put(key, cur)
+    logger.info(f"카테고리 코드 확인: {key} → {cur} ({resolved_name})")
+    return cur, resolved_name
+
+
 def _datalab_headers():
     return {
         "X-Naver-Client-Id": NAVER_CLIENT_ID,
@@ -124,21 +241,21 @@ def _datalab_post(endpoint: str, body: dict) -> dict:
     제안서 enrich는 짧은 시간에 성별·연령·트렌드 등 여러 호출을 몰아치므로
     초당 제한에 걸려 빈값이 오던 문제 방지(다수 직원 동시 사용 대비)."""
     url = f"{DATALAB_BASE}/{endpoint}"
-    for attempt in range(3):
+    for attempt in range(4):
         try:
             resp = requests.post(url, json=body, headers=_datalab_headers(), timeout=10)
             if resp.status_code == 200:
                 return resp.json()
-            if resp.status_code == 429 and attempt < 2:
-                wait = 0.6 * (attempt + 1)
-                logger.warning(f"Datalab {endpoint} 429 — {wait}s 후 재시도 ({attempt + 1}/3)")
+            if resp.status_code == 429 and attempt < 3:
+                wait = 0.8 * (attempt + 1)   # 0.8→1.6→2.4s — 초당 제한 버스트를 넘길 수 있게 강화
+                logger.warning(f"Datalab {endpoint} 429 — {wait}s 후 재시도 ({attempt + 1}/4)")
                 time.sleep(wait)
                 continue
             logger.warning(f"Datalab API {endpoint} 응답 코드: {resp.status_code} — {resp.text[:200]}")
             return {}
         except Exception as e:
             logger.error(f"Datalab API {endpoint} 오류: {e}")
-            if attempt < 2:
+            if attempt < 3:
                 time.sleep(0.5)
                 continue
             return {}
@@ -176,14 +293,11 @@ def get_gender_ratio(keyword: str, category_code: str) -> dict:
     male = gender_data.get("m", 0)
     female = gender_data.get("f", 0)
     total = male + female
-    if total > 0:
-        male_pct = round(male / total * 100, 1)
-        female_pct = round(female / total * 100, 1)
-    else:
-        male_pct = 50
-        female_pct = 50
-
-    return {"male": male_pct, "female": female_pct}
+    if total <= 0:
+        # 응답은 왔지만 실데이터 없음(레이트리밋 등) — 50/50을 지어내지 않는다.
+        # 빈값 반환 → 지표 캐시에 저장 안 됨 → 검수 재조회가 실데이터로 채움.
+        return {}
+    return {"male": round(male / total * 100, 1), "female": round(female / total * 100, 1)}
 
 
 # ==================== 연령대별 검색 비율 ====================
@@ -213,6 +327,10 @@ def get_age_ratio(keyword: str, category_code: str) -> dict:
             if group:
                 age_data[group] = round(ratio, 1)  # 마지막(최신) 데이터 포인트가 덮어씀
     logger.info(f"연령대 원본 데이터: {age_data}")
+
+    # 응답은 왔지만 전 연령 0 = 실데이터 없음 — 0% 배열을 지어내지 않는다(검수 재조회 대상)
+    if not age_data or sum(age_data.values()) <= 0:
+        return {}
 
     # 그룹명 매핑 (API는 10, 20, 30, 40, 50, 60 반환)
     total = sum(age_data.values()) or 1
@@ -394,6 +512,10 @@ def get_weekday_pattern(keyword: str, category_code: str) -> dict:
     if not days:
         return {}
 
+    # 전 요일 지수 0 = 실데이터 없음 — '최고 월요일(0)' 같은 허구 표시를 만들지 않는다
+    if all(d["index"] <= 0 for d in days):
+        return {}
+
     # 100 기준으로 정규화
     max_val = max(d["index"] for d in days) if days else 1
     for d in days:
@@ -436,112 +558,132 @@ def get_yoy_growth_from_trend(trend_data: dict) -> dict:
     ]
 
     results = []
+    peak = max(month_map.values()) if month_map else 0   # 연중 최고 지수(비수기 판정 기준)
     for p in periods:
         n = p["months"]
         cur_vals = []
         prev_vals = []
+        # 캘린더 월 기준으로 버킷팅 (30일 근사는 월말 근처에서 월을 건너뛰거나 중복시킴)
+        base_idx = now.year * 12 + (now.month - 1)
         for i in range(n):
-            # 올해 해당 월
-            cur_dt = now - timedelta(days=30 * i)
-            cur_key = cur_dt.strftime("%Y-%m")
+            m_idx = base_idx - i
+            y, mo = divmod(m_idx, 12)
+            cur_key = f"{y:04d}-{mo + 1:02d}"
             if cur_key in month_map:
                 cur_vals.append(month_map[cur_key])
 
-            # 전년 동월
-            prev_dt = cur_dt - timedelta(days=365)
-            prev_key = prev_dt.strftime("%Y-%m")
+            # 전년 동월 (윤년 무관 — 연도만 -1)
+            prev_key = f"{y - 1:04d}-{mo + 1:02d}"
             if prev_key in month_map:
                 prev_vals.append(month_map[prev_key])
 
         cur_avg = round(sum(cur_vals) / len(cur_vals), 1) if cur_vals else 0
         prev_avg = round(sum(prev_vals) / len(prev_vals), 1) if prev_vals else 0
 
+        # 계절성 노이즈 방지: 기준/현재 지수가 연중 최고 대비 매우 낮으면(비수기) 성장률 %는
+        # 미세 지수의 산물이라 오해를 부른다(예: 1.1→0 = -100%). 이 경우 reliable=false로 표시.
+        low_signal = bool(peak) and (prev_avg < peak * 0.2 or cur_avg < peak * 0.2)
         if prev_avg > 0:
             growth = round((cur_avg - prev_avg) / prev_avg * 100, 1)
         else:
             growth = 0
+            low_signal = True
 
-        logger.info(f"YoY 성장률 {p['label']}: cur_avg={cur_avg}, prev_avg={prev_avg}, growth={growth}% (API 호출 0건)")
+        logger.info(f"YoY 성장률 {p['label']}: cur_avg={cur_avg}, prev_avg={prev_avg}, growth={growth}% low_signal={low_signal}")
 
         results.append({
             "label": p["label"],
             "currentAvg": cur_avg,
             "previousAvg": prev_avg,
             "growth": growth,
+            "reliable": not low_signal,   # False면 비수기 미세지수 → 화면에서 '참고(비수기)'로 순화
         })
 
-    return {"periods": results}
+    # 현재 시점이 비수기인지(현재월 지수가 연중 최고 대비 낮음) — 화면 배너/맥락용
+    cur_month_key = f"{now.year:04d}-{now.month:02d}"
+    cur_month_idx = month_map.get(cur_month_key, 0)
+    off_season = bool(peak) and cur_month_idx < peak * 0.3
+    return {"periods": results, "offSeason": off_season, "currentIndex": cur_month_idx, "peakIndex": peak}
 
 
 # ==================== 카테고리 인기 키워드 ====================
-def get_category_popular_keywords(keyword: str, category_code: str, related_keywords: list = None) -> dict:
-    """카테고리 내 연관 키워드의 트렌드 비교 → 인기 + 급상승 분류"""
+def get_category_popular_keywords(keyword: str, category_code: str, related_keywords: list = None,
+                                  sub_cid: str = None, sub_name: str = "") -> dict:
+    """카테고리 내 연관 키워드의 트렌드 비교 → 인기 + 급상승 분류.
+
+    sub_cid(상품 중/소분류 코드)가 있으면 그 기준으로 먼저 산정 — 무관 키워드(예: '쌀 10kg')는
+    그 카테고리 검색 비중이 0이라 자연 탈락한다(건의 2026-07, 실측 검증). 결과가 빈약하면
+    (인기 3개 미만 또는 급상승 0건) 대분류 기준으로 폴백해 기존 동작을 보장한다
+    (2026-07-20 '급상승 빈칸' 사고 재발 방지 — 어떤 경우에도 기존보다 나빠지지 않음)."""
     if not related_keywords or len(related_keywords) < 2:
         return {}
 
     end_date = datetime.now().strftime("%Y-%m-%d")
-    start_1m = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
     start_2m = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%d")
 
     # 최대 5개씩 비교 (API 제한: 한 번에 최대 5개 키워드)
     kw_list = related_keywords[:10]
 
-    popular = []
-    rising = []
-
-    # 2번에 나눠서 호출 (5개씩) — 최근 2개월 한 번에 조회하여 전월 대비 성장률 계산
-    for batch_start in range(0, len(kw_list), 5):
-        batch = kw_list[batch_start:batch_start + 5]
-        kw_params = [{"name": kw["keyword"], "param": [kw["keyword"]]} for kw in batch]
-
-        # 최근 2개월 데이터를 한 번에 조회 (API 1건으로 전월 비교 커버)
-        body = {
-            "startDate": start_2m, "endDate": end_date,
-            "timeUnit": "month",
-            "category": category_code,
-            "keyword": kw_params,
-        }
-        data = _datalab_post("category/keywords", body)
-
-        cur_map = {}
-        prev_map = {}
-
-        if data and "results" in data:
-            for r in data["results"]:
-                name = r.get("title", "")
-                pts = r.get("data", [])
-                if len(pts) >= 2:
-                    cur_map[name] = pts[-1].get("ratio", 0)
-                    prev_map[name] = pts[-2].get("ratio", 0)
-                elif len(pts) == 1:
-                    cur_map[name] = pts[0].get("ratio", 0)
-
-        for kw in batch:
-            name = kw["keyword"]
-            cur_val = cur_map.get(name, 0)
-            prev_val = prev_map.get(name, 0)
-            volume = kw.get("totalVolume", 0)
-
-            if prev_val > 0:
-                growth = round((cur_val - prev_val) / prev_val * 100, 1)
-            else:
-                growth = 0
-
-            entry = {
-                "keyword": name,
-                "volume": volume,
-                "growth": growth,
-                "currentIndex": round(cur_val, 1),
+    def _compute(code):
+        popular, rising = [], []
+        # 2번에 나눠서 호출 (5개씩) — 최근 2개월 한 번에 조회하여 전월 대비 성장률 계산
+        for batch_start in range(0, len(kw_list), 5):
+            batch = kw_list[batch_start:batch_start + 5]
+            kw_params = [{"name": kw["keyword"], "param": [kw["keyword"]]} for kw in batch]
+            body = {
+                "startDate": start_2m, "endDate": end_date,
+                "timeUnit": "month",
+                "category": code,
+                "keyword": kw_params,
             }
-            popular.append(entry)
-            if growth > 20:
-                rising.append(entry)
+            data = _datalab_post("category/keywords", body)
 
-    # 인기 키워드: 현재 지수 기준 정렬
-    popular.sort(key=lambda x: -x["currentIndex"])
-    # 급상승: 성장률 기준 정렬
-    rising.sort(key=lambda x: -x["growth"])
+            cur_map, prev_map = {}, {}
+            if data and "results" in data:
+                for r in data["results"]:
+                    name = r.get("title", "")
+                    pts = r.get("data", [])
+                    if len(pts) >= 2:
+                        cur_map[name] = pts[-1].get("ratio", 0)
+                        prev_map[name] = pts[-2].get("ratio", 0)
+                    elif len(pts) == 1:
+                        cur_map[name] = pts[0].get("ratio", 0)
 
+            for kw in batch:
+                name = kw["keyword"]
+                cur_val = cur_map.get(name, 0)
+                prev_val = prev_map.get(name, 0)
+                growth = round((cur_val - prev_val) / prev_val * 100, 1) if prev_val > 0 else 0
+                entry = {
+                    "keyword": name,
+                    "volume": kw.get("totalVolume", 0),
+                    "growth": growth,
+                    "currentIndex": round(cur_val, 1),
+                }
+                popular.append(entry)
+                if growth > 20:
+                    rising.append(entry)
+
+        popular.sort(key=lambda x: -x["currentIndex"])   # 인기: 현재 지수
+        rising.sort(key=lambda x: -x["growth"])          # 급상승: 성장률
+        return popular, rising
+
+    # 1차: 상품 소분류 기준 — 카테고리 밖 키워드(지수 0)는 인기 목록에서 자연 제외
+    if sub_cid:
+        popular, rising = _compute(sub_cid)
+        popular = [e for e in popular if e["currentIndex"] > 0]
+        if len(popular) >= 3 and len(rising) >= 1:
+            return {
+                "popular": popular[:10],
+                "rising": rising[:5],
+                "basis": sub_name,
+                "note": f"🔎 '{sub_name}' 카테고리 기준 인기·급상승 키워드입니다. "
+                        f"급상승 키워드를 상품명 · 태그에 반영하면 시즌 트렌드 수혜를 빠르게 받을 수 있습니다.",
+            }
+        logger.info(f"카테고리 키워드: '{sub_name}' 기준 빈약(인기 {len(popular)}·급상승 {len(rising)}) → 대분류 폴백")
+
+    # 2차(기본): 대분류 기준 — 기존 동작 그대로
+    popular, rising = _compute(category_code)
     return {
         "popular": popular[:10],
         "rising": rising[:5],
@@ -549,27 +691,43 @@ def get_category_popular_keywords(keyword: str, category_code: str, related_keyw
 
 
 # ==================== 통합 분석 함수 ====================
-def analyze_datalab(keyword: str, category1: str = "", related_keywords: list = None) -> dict:
-    """모든 데이터랩 분석을 한 번에 실행 (1시간 TTL 메모리 캐시 적용)"""
+def analyze_datalab(keyword: str, category1: str = "", related_keywords: list = None,
+                    category2: str = "", category3: str = "") -> dict:
+    """모든 데이터랩 분석을 한 번에 실행 (지표별 1시간 TTL 캐시).
+
+    ★ 지표별 개별 캐시(2026-07 검수 시스템): 성공한 지표는 보존하고 실패(빈값) 지표만
+      다음 호출에서 재조회한다 → 검수 재조회 시 성공분은 API를 다시 쓰지 않아
+      쿼터 낭비 없이 실데이터를 채울 수 있다. (기존 '전체 캐시'는 성별·연령이 빠지면
+      성공한 트렌드까지 통째로 버려 재실행마다 쿼터를 태우는 악순환이 있었음.)"""
     if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
         logger.warning("데이터랩: 네이버 API 키 미설정")
         return {}
 
-    # 캐시 확인
-    c_key = _cache_key(keyword, category1, related_keywords)
-    cached = _cache_get(c_key)
-    if cached:
-        logger.info(f"데이터랩 캐시 히트: keyword={keyword}")
-        return cached
-
     cat_code = _find_category_code(category1)
-    logger.info(f"데이터랩 분석 시작 (API 호출): keyword={keyword}, category={category1}→{cat_code}")
+    kbase = f"{keyword}|{cat_code}"
+    logger.info(f"데이터랩 분석 시작: keyword={keyword}, category={category1}→{cat_code}")
+
+    _paced = [False]
+
+    def _cached(mkey, fetch):
+        """지표 캐시 우선, 미스면 호출. 연속 실호출 사이 간격(0.25s)으로 429 버스트 예방.
+        성공(truthy)만 캐시 — 실패는 다음 호출에서 자동 재조회."""
+        hit = _cache_get(mkey)
+        if hit is not None:
+            return hit
+        if _paced[0]:
+            time.sleep(0.25)
+        _paced[0] = True
+        val = fetch()
+        if val:
+            _cache_set(mkey, val)
+        return val
 
     result = {}
 
     # 1. 성별 비율
     try:
-        gender = get_gender_ratio(keyword, cat_code)
+        gender = _cached(kbase + "#gender", lambda: get_gender_ratio(keyword, cat_code))
         if gender:
             result["gender"] = gender
     except Exception as e:
@@ -577,7 +735,7 @@ def analyze_datalab(keyword: str, category1: str = "", related_keywords: list = 
 
     # 2. 연령대별 비율
     try:
-        age = get_age_ratio(keyword, cat_code)
+        age = _cached(kbase + "#age", lambda: get_age_ratio(keyword, cat_code))
         if age:
             result["age"] = age
     except Exception as e:
@@ -586,7 +744,7 @@ def analyze_datalab(keyword: str, category1: str = "", related_keywords: list = 
     # 3. 24개월 트렌드 (트렌드 차트 + 성장률 + 시즌 모두 커버, API 1건)
     trend_raw = None
     try:
-        trend_raw = get_trend_24m(keyword, cat_code)
+        trend_raw = _cached(kbase + "#trend", lambda: get_trend_24m(keyword, cat_code))
         if trend_raw:
             # 프론트에는 allMonths 제외 (내부 성장률 계산용)
             result["trend"] = {k: v for k, v in trend_raw.items() if k != "allMonths"}
@@ -604,7 +762,7 @@ def analyze_datalab(keyword: str, category1: str = "", related_keywords: list = 
 
     # 5. 요일별 검색 패턴
     try:
-        weekday = get_weekday_pattern(keyword, cat_code)
+        weekday = _cached(kbase + "#weekday", lambda: get_weekday_pattern(keyword, cat_code))
         if weekday:
             result["weekday"] = weekday
     except Exception as e:
@@ -619,23 +777,22 @@ def analyze_datalab(keyword: str, category1: str = "", related_keywords: list = 
         except Exception as e:
             logger.error(f"데이터랩 성장률 오류: {e}")
 
-    # 7. 카테고리 인기 키워드
+    # 7. 카테고리 인기 키워드 (키에 중/소분류·연관키워드 반영)
     if related_keywords:
         try:
-            cat_kw = get_category_popular_keywords(keyword, cat_code, related_keywords)
+            ck_key = _cache_key(keyword, "|".join([category1 or "", category2 or "", category3 or ""]),
+                                related_keywords) + "#catkw"
+
+            def _fetch_catkw():
+                sub_cid, sub_name = _resolve_subcategory_cid(category1, category2, category3)
+                return get_category_popular_keywords(keyword, cat_code, related_keywords,
+                                                     sub_cid=sub_cid, sub_name=sub_name)
+
+            cat_kw = _cached(ck_key, _fetch_catkw)
             if cat_kw:
                 result["categoryKeywords"] = cat_kw
         except Exception as e:
             logger.error(f"데이터랩 카테고리 키워드 오류: {e}")
 
     logger.info(f"데이터랩 분석 완료: {list(result.keys())}")
-
-    # 결과가 있으면 캐시에 저장
-    # 핵심 지표(성별·연령)가 다 있을 때만 캐싱 — 일부만 성공한 부분결과를 1시간 가두지 않도록
-    if result and result.get("gender") and result.get("age"):
-        _cache_set(c_key, result)
-        logger.info(f"데이터랩 캐시 저장: keyword={keyword} (캐시 크기: {len(_cache)})")
-    elif result:
-        logger.warning(f"데이터랩 부분결과(성별/연령 누락) — 캐싱 건너뜀: keyword={keyword}")
-
     return result

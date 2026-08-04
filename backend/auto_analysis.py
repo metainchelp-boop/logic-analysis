@@ -14,6 +14,42 @@ import html as html_module
 logger = logging.getLogger(__name__)
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# 추정 정확도 보강(제안서 #59 후속): 전환율 업종별 보정 + ±허용오차 밴드
+#   매출·판매량은 '추정'이며 전환율이 업종·상품마다 크게 달라 단일 숫자는 과도한 정밀도다.
+#   → 전환율을 (저·중·고) 밴드로 잡아 광고주에게 'X ~ Y' 범위로 제시한다.
+# ──────────────────────────────────────────────────────────────────────────
+CONV_RATE_DEFAULT = 0.035   # 기본 전환율(업종 미보정 시) — 3.5%
+EST_TOLERANCE = 0.30        # 허용오차 밴드 ±30% (대표 승인). 저=중×0.7, 고=중×1.3
+# 업종(category1)별 실측 전환율 보정 테이블.
+# ⚠️ 근거 있는 실측값만 채울 것 — 미기재 업종은 기본값(CONV_RATE_DEFAULT)을 쓴다. 추측값 금지(#59 환각 방지).
+CONV_RATE_BY_CATEGORY = {
+    # '패션의류': 0.02,   # ← 업종별 실측 전환율 확보 시 채움 (현재 비움 → 전부 기본 3.5%)
+}
+
+
+def conv_band(category1: str = ""):
+    """업종별 전환율 (저, 중, 고) 반환. 중앙=업종 보정값(없으면 기본), 저/고=중앙×(1∓EST_TOLERANCE)."""
+    mid = CONV_RATE_BY_CATEGORY.get((category1 or "").strip(), CONV_RATE_DEFAULT)
+    return mid * (1 - EST_TOLERANCE), mid, mid * (1 + EST_TOLERANCE)
+
+
+def conv_band_label(category1: str = ""):
+    """'2.5%~4.6% (기준 3.5%, ±30%)' 형태의 전환율 가정 라벨."""
+    lo, mid, hi = conv_band(category1)
+    return f"{lo*100:.1f}%~{hi*100:.1f}% (기준 {mid*100:.1f}%, ±{int(EST_TOLERANCE*100)}%)"
+
+
+def _dominant_cat1(prods: list) -> str:
+    """상품 목록에서 가장 많이 등장하는 category1 (업종 전환율 보정 키)."""
+    counts = {}
+    for p in prods:
+        c1 = (p.get('category1', '') or '').strip()
+        if c1:
+            counts[c1] = counts.get(c1, 0) + 1
+    return max(counts, key=counts.get) if counts else ""
+
+
 # ==================== 연관 키워드 조회 ====================
 def get_related_keywords(keyword: str) -> dict:
     """네이버 검색광고 API로 연관 키워드 + 황금 키워드 조회 (main.py /keywords/related 동일 로직)"""
@@ -179,25 +215,39 @@ def compute_full_analysis(keyword: str, vol_data: dict, prods: list, related_dat
     if prods:
         prices = [p.get('price', 0) for p in prods if p.get('price', 0) > 0]
         avg_price = round(sum(prices) / len(prices)) if prices else 0
-        conv_rate = 0.035
+        # 업종별 전환율 밴드(저/중/고) — 매출은 단일값이 아니라 '범위'로 추정 (±EST_TOLERANCE)
+        cat1_main = _dominant_cat1(prods)
+        cv_lo, cv_mid, cv_hi = conv_band(cat1_main)
 
         top_products = []
         for p in prods[:40]:
             rank = p.get('rank', 40)
             ctr = _get_ctr(rank)
-            est_sales = max(1, round(total_vol * ctr * conv_rate))
+            price = p.get('price', 0)
+            est_sales = max(1, round(total_vol * ctr * cv_mid))
+            est_sales_lo = max(1, round(total_vol * ctr * cv_lo))
+            est_sales_hi = max(1, round(total_vol * ctr * cv_hi))
             top_products.append({
                 'rank': rank, 'name': p.get('product_name', ''),
-                'store': p.get('store_name', ''), 'price': fmt(p.get('price', 0)) + '원',
-                'ctr': f'{ctr*100:.1f}%', 'estMonthlySales': fmt(est_sales) + '건',
-                'estRevenue': fmt(p.get('price', 0) * est_sales) + '원',
+                'store': p.get('store_name', ''), 'price': fmt(price) + '원',
+                'ctr': f'{ctr*100:.1f}%',
+                'estMonthlySales': fmt(est_sales) + '건',
+                'estMonthlySalesRange': f'{fmt(est_sales_lo)}~{fmt(est_sales_hi)}건',
+                'estRevenue': fmt(price * est_sales) + '원',
+                'estRevenueRange': f'{fmt(price * est_sales_lo)}~{fmt(price * est_sales_hi)}원',
             })
 
-        total_market = sum(p.get('price', 0) * max(1, round(total_vol * _get_ctr(p.get('rank', 40)) * conv_rate)) for p in prods[:20])
+        def _market(cv):
+            return sum(p.get('price', 0) * max(1, round(total_vol * _get_ctr(p.get('rank', 40)) * cv)) for p in prods[:20])
+        total_market_mid = _market(cv_mid)
 
         analysis['marketRevenue'] = {
-            'avgPrice': fmt(avg_price) + '원', 'estimatedMonthly': fmt(total_market) + '원',
-            'conversionRate': '3.5%', 'calculationMethod': 'CTR × 전환율',
+            'avgPrice': fmt(avg_price) + '원',
+            'estimatedMonthly': fmt(total_market_mid) + '원',
+            'estimatedMonthlyRange': f'{fmt(_market(cv_lo))}~{fmt(_market(cv_hi))}원',
+            'conversionRate': conv_band_label(cat1_main),
+            'calculationMethod': 'CTR × 전환율(밴드)',
+            'tolerance': f'±{int(EST_TOLERANCE*100)}%',
             'topProducts': top_products,
         }
 
@@ -300,25 +350,29 @@ def compute_full_analysis(keyword: str, vol_data: dict, prods: list, related_dat
                 'category': ' > '.join([x for x in [p.get('category1',''), p.get('category2',''), p.get('category3','')] if x]) or '-',
             })
 
-    # 10. 판매량 추정
+    # 10. 판매량 추정 (±허용오차 밴드 — 전환율 저/중/고로 범위 추정)
     if prods and total_vol > 0:
         top10 = prods[:10]
         avg_p = round(sum(p.get('price', 0) for p in top10) / max(len(top10), 1))
-        cv = 0.035
+        cat1_main = _dominant_cat1(prods)
+        cv_lo, cv_mid, cv_hi = conv_band(cat1_main)
+        rank_share = [(1, 0.08), (5, 0.03), (10, 0.015), (15, 0.010), (20, 0.008),
+                      (25, 0.006), (30, 0.005), (35, 0.004), (40, 0.003)]
+
+        def _sim(rank, share):
+            return {
+                'rank': rank,
+                'estSales': round(total_vol * share * cv_mid),
+                'estSalesRange': f'{round(total_vol * share * cv_lo)}~{round(total_vol * share * cv_hi)}',
+                'revenue': fmt(round(total_vol * share * cv_mid * avg_p)) + '원',
+                'revenueRange': f'{fmt(round(total_vol * share * cv_lo * avg_p))}~{fmt(round(total_vol * share * cv_hi * avg_p))}원',
+            }
+
         analysis['salesEstimation'] = {
             'avgPrice': fmt(avg_p) + '원', 'monthlySearches': fmt(total_vol),
-            'estimatedCTR': 'CTR × 3.5%',
-            'simulations': [
-                {'rank': 1, 'estSales': round(total_vol * 0.08 * cv), 'revenue': fmt(round(total_vol * 0.08 * cv * avg_p)) + '원'},
-                {'rank': 5, 'estSales': round(total_vol * 0.03 * cv), 'revenue': fmt(round(total_vol * 0.03 * cv * avg_p)) + '원'},
-                {'rank': 10, 'estSales': round(total_vol * 0.015 * cv), 'revenue': fmt(round(total_vol * 0.015 * cv * avg_p)) + '원'},
-                {'rank': 15, 'estSales': round(total_vol * 0.010 * cv), 'revenue': fmt(round(total_vol * 0.010 * cv * avg_p)) + '원'},
-                {'rank': 20, 'estSales': round(total_vol * 0.008 * cv), 'revenue': fmt(round(total_vol * 0.008 * cv * avg_p)) + '원'},
-                {'rank': 25, 'estSales': round(total_vol * 0.006 * cv), 'revenue': fmt(round(total_vol * 0.006 * cv * avg_p)) + '원'},
-                {'rank': 30, 'estSales': round(total_vol * 0.005 * cv), 'revenue': fmt(round(total_vol * 0.005 * cv * avg_p)) + '원'},
-                {'rank': 35, 'estSales': round(total_vol * 0.004 * cv), 'revenue': fmt(round(total_vol * 0.004 * cv * avg_p)) + '원'},
-                {'rank': 40, 'estSales': round(total_vol * 0.003 * cv), 'revenue': fmt(round(total_vol * 0.003 * cv * avg_p)) + '원'},
-            ],
+            'estimatedCTR': f'CTR × 전환율 {conv_band_label(cat1_main)}',
+            'tolerance': f'±{int(EST_TOLERANCE*100)}%',
+            'simulations': [_sim(rank, share) for rank, share in rank_share],
         }
 
     # 11. 진입 전략
@@ -393,12 +447,13 @@ def generate_html_report(keyword: str, company_name: str, analysis: dict,
     if mr:
         sections_html.append(f'''
         <div class="section">
-            <h2>💰 시장 규모 &amp; 매출 추정 <span class="badge b-est">≈ 추정</span></h2>
+            <h2>💰 시장 규모 &amp; 매출 추정 <span class="badge b-est">≈ 추정 {mr.get('tolerance','')}</span></h2>
             <div class="info-box">
                 <div class="metric"><span>평균 가격</span><strong>{mr.get('avgPrice','-')}</strong></div>
-                <div class="metric"><span>예상 월 시장</span><strong>{mr.get('estimatedMonthly','-')}</strong></div>
-                <div class="metric"><span>전환율</span><strong>{mr.get('conversionRate','-')}</strong></div>
+                <div class="metric"><span>예상 월 시장</span><strong>{mr.get('estimatedMonthlyRange', mr.get('estimatedMonthly','-'))}</strong></div>
+                <div class="metric"><span>전환율(가정)</span><strong>{mr.get('conversionRate','-')}</strong></div>
             </div>
+            <p style="font-size:12px;color:#6b7280;margin-top:8px;line-height:1.5">※ 매출은 검색량 × 순위별 CTR × 전환율 밴드로 산출한 <b>추정 범위</b>입니다(실측 아님). 전환율은 업종·상품·상세페이지에 따라 달라집니다.</p>
         </div>''')
 
     # 광고 정보
@@ -446,16 +501,20 @@ def generate_html_report(keyword: str, company_name: str, analysis: dict,
     if se:
         sim_rows = ''
         for s in se.get('simulations', []):
-            sim_rows += f'<tr><td>{s["rank"]}위</td><td>{s["estSales"]}건</td><td>{s["revenue"]}</td></tr>'
+            sales_disp = s.get('estSalesRange', s.get('estSales', ''))
+            rev_disp = s.get('revenueRange', s.get('revenue', ''))
+            sim_rows += f'<tr><td>{s["rank"]}위</td><td>{sales_disp}건</td><td>{rev_disp}</td></tr>'
         sections_html.append(f'''
         <div class="section">
-            <h2>📦 판매량 추정 &amp; 성장 시뮬레이션 <span class="badge b-est">≈ 추정</span></h2>
+            <h2>📦 판매량 추정 &amp; 성장 시뮬레이션 <span class="badge b-est">≈ 추정 {se.get('tolerance','')}</span></h2>
             <div class="info-box">
                 <div class="metric"><span>평균 가격</span><strong>{se.get('avgPrice','')}</strong></div>
                 <div class="metric"><span>월 검색량</span><strong>{se.get('monthlySearches','')}</strong></div>
+                <div class="metric"><span>전환율(가정)</span><strong>{se.get('estimatedCTR','')}</strong></div>
             </div>
-            <table><thead><tr><th>목표 순위</th><th>예상 판매</th><th>예상 매출</th></tr></thead>
+            <table><thead><tr><th>목표 순위</th><th>예상 판매(범위)</th><th>예상 매출(범위)</th></tr></thead>
             <tbody>{sim_rows}</tbody></table>
+            <p style="font-size:12px;color:#6b7280;margin-top:8px;line-height:1.5">※ 전환율 가정 밴드에 따른 <b>추정 범위</b>입니다(실측 아님). 실제 전환율은 상품·상세페이지·가격경쟁력에 따라 달라집니다.</p>
         </div>''')
 
     # 진입 전략
@@ -729,5 +788,10 @@ def run_single_analysis(client_id: int, client_name: str, keyword: str, product_
         'keyword': keyword,
         'total_vol': analysis.get('summaryCards', {}).get('totalVolume', 0),
         'product_count': len(prods),
-        'has_report': bool(report_html),
+        # 실제 데이터를 얻었을 때만 유효 리포트로 간주(스켈레톤 HTML은 항상 생성되므로 bool(report_html)만으론 부족).
+        # 상품 0건 + 검색량 0/공백 = 전체 API 실패 → has_report False(성공 오판 방지).
+        'has_report': bool(report_html) and (
+            len(prods) > 0
+            or str(analysis.get('summaryCards', {}).get('totalVolume', '0')).replace(',', '').strip() not in ('', '0')
+        ),
     }

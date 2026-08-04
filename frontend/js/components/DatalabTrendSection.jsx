@@ -27,7 +27,7 @@ window.DatalabTrendSection = function DatalabTrendSection(props) {
     <div className="section fade-in">
       <div className="container">
         <div className="card">
-          <h3 className="rt-h3"><span className="rt-hic">📈</span>키워드 검색량 트렌드 (최근 12개월) <span className="badge b-ok">✅ 데이터랩</span></h3>
+          <h3 className="rt-h3"><span className="rt-hic">📈</span>키워드 검색량 트렌드 (최근 12개월) <span className="badge b-dl">📊 데이터랩</span></h3>
           {/* KPI 4칸 — 차트 위 */}
           <div className="grid4" style={{ marginBottom: 6 }}>
             <div className="kpi"><div className="k">최고 지수</div><div className="v">{d.maxRatio} <small>{d.maxMonth}</small></div></div>
@@ -66,6 +66,7 @@ window.DatalabTrendSection = function DatalabTrendSection(props) {
           </div>
 
           <div className="note">{d.trendNote}</div>
+          <div className="note" style={{ marginTop: 6, fontSize: 11.5, color: '#94a3b8' }}>ℹ️ '지수'는 절대 검색량이 아니라 <b>기간 내 최고값을 100으로 본 상대값</b>입니다. 증감 추세를 보는 용도이며, 값 자체를 검색 횟수로 해석하지 마세요.</div>
         </div>
       </div>
     </div>

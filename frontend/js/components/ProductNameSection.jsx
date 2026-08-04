@@ -4,6 +4,7 @@ window.ProductNameSection = function ProductNameSection({ keyword, shopProducts 
     const [names, setNames] = useState('');
     const [result, setResult] = useState(null);
     const [loading, setLoading] = useState(false);
+    const reqIdRef = React.useRef(0); // 요청 경합 방지 — 이전 키워드 응답이 새 키워드 화면을 덮어쓰는 것 차단
 
     // 검색 결과의 1페이지 상품명 자동 채우기 + 자동 분석
     useEffect(function() {
@@ -12,11 +13,12 @@ window.ProductNameSection = function ProductNameSection({ keyword, shopProducts 
             setNames(productNames.join('\n'));
             // 자동 분석 실행
             if (productNames.length > 0) {
+                var myReq = ++reqIdRef.current;
                 setLoading(true);
                 setResult(null);
                 api.post('/product-name/analyze', { product_names: productNames, keyword: keyword || '' })
-                    .then(function(res) { if (res.success) setResult(res.data); setLoading(false); })
-                    .catch(function() { setLoading(false); });
+                    .then(function(res) { if (myReq !== reqIdRef.current) return; if (res.success) setResult(res.data); setLoading(false); })
+                    .catch(function() { if (myReq !== reqIdRef.current) return; setLoading(false); });
             }
         }
     }, [shopProducts, keyword]);
@@ -24,12 +26,14 @@ window.ProductNameSection = function ProductNameSection({ keyword, shopProducts 
     const handleAnalyze = async () => {
         const nameList = names.split('\n').map(n => n.trim()).filter(Boolean);
         if (nameList.length === 0) return;
+        const myReq = ++reqIdRef.current;
         setLoading(true);
         try {
             const res = await api.post('/product-name/analyze', { product_names: nameList, keyword: keyword || '' });
+            if (myReq !== reqIdRef.current) return;
             if (res.success) setResult(res.data);
         } catch (e) { alert('분석 실패'); }
-        setLoading(false);
+        if (myReq === reqIdRef.current) setLoading(false);
     };
 
     const metricCardStyle = {

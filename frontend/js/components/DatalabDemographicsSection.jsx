@@ -8,6 +8,10 @@ window.DatalabDemographicsSection = function DatalabDemographicsSection(props) {
   var ages = age && age.ages ? age.ages : [];
   var maxAge = ages.length > 0 ? Math.max.apply(null, ages.map(function(a) { return a.ratio; })) : 1;
   var peakAge = ages.length > 0 ? ages.reduce(function(a, b) { return a.ratio > b.ratio ? a : b; }) : null;
+  /* 유효성 게이트: 전 연령 0%면 "핵심 타겟 60대 남성(0.0%)" 같은 모순 서술 방지 → 데이터 없음 처리 */
+  if (peakAge && !(Number(peakAge.ratio) > 0)) { ages = []; peakAge = null; }
+  /* 성별 격차 10%p 미만 = 사실상 무차이 → 특정 성별 타겟 단정 금지 */
+  var genderGapSmall = gender ? Math.abs((Number(gender.female) || 0) - (Number(gender.male) || 0)) < 10 : false;
 
   var ageColors = ['#94a3b8', '#818cf8', '#4f46e5', '#7c3aed', '#a78bfa', '#94a3b8'];
   var ageGrads = [
@@ -30,7 +34,7 @@ window.DatalabDemographicsSection = function DatalabDemographicsSection(props) {
     <div className="grid2">
       {/* 성별 비율 */}
       <div className="card">
-        <h3 className="rt-h3"><span className="hic">👥</span>검색 인구통계 — 성별 <span className="badge b-ok">✅ 데이터랩</span></h3>
+        <h3 className="rt-h3"><span className="hic">👥</span>검색 인구통계 — 성별 <span className="badge b-dl">📊 데이터랩</span></h3>
 
         {gender ? (
           <div>
@@ -53,9 +57,11 @@ window.DatalabDemographicsSection = function DatalabDemographicsSection(props) {
               />
             </div>
             <div className="note">
-              {gender.male > gender.female
-                ? '남성 ' + gender.male + '% · 여성 ' + gender.female + '% — 남성 타겟 소구.'
-                : '여성 ' + gender.female + '% · 남성 ' + gender.male + '% — 여성 타겟 소구.'}
+              {genderGapSmall
+                ? '여성 ' + gender.female + '% · 남성 ' + gender.male + '% — 성별 차이가 크지 않아 전 성별 공통 소구가 유리합니다.'
+                : (gender.male > gender.female
+                    ? '남성 ' + gender.male + '% · 여성 ' + gender.female + '% — 남성 타겟 소구.'
+                    : '여성 ' + gender.female + '% · 남성 ' + gender.male + '% — 여성 타겟 소구.')}
             </div>
           </div>
         ) : (
@@ -65,7 +71,7 @@ window.DatalabDemographicsSection = function DatalabDemographicsSection(props) {
 
       {/* 연령대별 비율 */}
       <div className="card">
-        <h3 className="rt-h3"><span className="hic">👥</span>검색 인구통계 — 연령 <span className="badge b-ok">✅ 데이터랩</span></h3>
+        <h3 className="rt-h3"><span className="hic">👥</span>검색 인구통계 — 연령 <span className="badge b-dl">📊 데이터랩</span></h3>
 
         {ages.length > 0 ? (
           <div>
@@ -93,7 +99,7 @@ window.DatalabDemographicsSection = function DatalabDemographicsSection(props) {
             </div>
             {peakAge && (
               <div className="note">
-                핵심 타겟: <b>{targetAge} {targetGender}</b> (전체의 약 {targetPct}%).
+                핵심 타겟: <b>{targetAge}{genderGapSmall ? '' : ' ' + targetGender}</b>{genderGapSmall || !targetPct ? '' : ' (전체의 약 ' + targetPct + '%)'}{genderGapSmall ? ' — 성별 무관 공통 소구' : ''}.
               </div>
             )}
           </div>

@@ -9,13 +9,14 @@ window.DatalabCategoryKeywordsSection = function DatalabCategoryKeywordsSection(
     <div className="section fade-in">
       <div className="container">
         <div className="card" style={{ padding: '20px 22px' }}>
-          <h3 className="rt-h3"><span className="rt-hic">🔥</span>카테고리 인기 · 급상승 키워드<span className="badge b-ok">✅ 데이터랩</span></h3>
+          <h3 className="rt-h3"><span className="rt-hic">🔥</span>카테고리 인기 · 급상승 키워드<span className="badge b-dl">📊 데이터랩</span></h3>
           <div className="grid2">
             {/* 인기 키워드 TOP */}
             <div>
               <div className="sub-card">
                 <div className="st">🏆 인기 키워드 TOP</div>
-                <table className="rt-table">
+                {popular.length === 0 && <div style={{ fontSize: 12, color: '#94a3b8', padding: '6px 0' }}>이 카테고리 기준 집계된 인기 키워드가 없습니다.</div>}
+                {popular.length > 0 && <table className="rt-table">
                   <tbody>
                     {popular.map(function(kw, i) {
                       return (
@@ -27,7 +28,7 @@ window.DatalabCategoryKeywordsSection = function DatalabCategoryKeywordsSection(
                       );
                     })}
                   </tbody>
-                </table>
+                </table>}
               </div>
             </div>
 
@@ -35,7 +36,8 @@ window.DatalabCategoryKeywordsSection = function DatalabCategoryKeywordsSection(
             <div>
               <div className="sub-card">
                 <div className="st">📈 급상승 키워드</div>
-                <table className="rt-table">
+                {rising.length === 0 && <div style={{ fontSize: 12, color: '#94a3b8', padding: '6px 0' }}>이 카테고리 기준 급상승 키워드가 집계되지 않았습니다.</div>}
+                {rising.length > 0 && <table className="rt-table">
                   <tbody>
                     {rising.map(function(kw, i) {
                       var isPositive = kw.growth >= 0;
@@ -52,7 +54,7 @@ window.DatalabCategoryKeywordsSection = function DatalabCategoryKeywordsSection(
                       );
                     })}
                   </tbody>
-                </table>
+                </table>}
               </div>
             </div>
           </div>

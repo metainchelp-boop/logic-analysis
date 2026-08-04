@@ -76,6 +76,8 @@ class ClientUpdate(BaseModel):
     main_keywords: Optional[str] = Field(None)
     notes: Optional[str] = Field(None)
     status: Optional[str] = Field(None, pattern="^(active|paused|terminated)$")
+    # 자동분석 여부(2026-07 호출 다이어트): 0=중지(계약만료·환불·홀딩 등 관리 중단), 1=수행
+    auto_analysis: Optional[int] = Field(None, ge=0, le=1)
 
     @validator("contact_email")
     def validate_email(cls, v):
@@ -222,6 +224,45 @@ def init_clients_db():
                 cursor.execute("ALTER TABLE clients ADD COLUMN detail_html TEXT DEFAULT ''")
                 logger.info("[clients] detail_html column added via migration")
 
+            # 마이그레이션(#2, 2026-07 호출 다이어트): 관리 중단(계약만료·환불·홀딩) 업체의
+            # 일일 자동분석·순위추적 제외 플래그. 1=자동분석 함(기본), 0=중지.
+            try:
+                cursor.execute("SELECT auto_analysis FROM clients LIMIT 1")
+            except Exception:
+                cursor.execute("ALTER TABLE clients ADD COLUMN auto_analysis INTEGER DEFAULT 1")
+                logger.info("[clients] auto_analysis column added via migration")
+
+            # 마이그레이션(#3, 2026-07 계약단계 연동): 직원이 수동으로 토글한 업체 표시.
+            # 1이면 전산 계약단계 자동 동기화(07:30)가 덮어쓰지 않음(수동 우선).
+            try:
+                cursor.execute("SELECT auto_analysis_manual FROM clients LIMIT 1")
+            except Exception:
+                cursor.execute("ALTER TABLE clients ADD COLUMN auto_analysis_manual INTEGER DEFAULT 0")
+                logger.info("[clients] auto_analysis_manual column added via migration")
+
+            # 마이그레이션(#4, 2026-07 경쟁사 비교): 업체 유형과 광고주 연결.
+            # role='advertiser'(기본, 정식 광고주) / 'competitor'(비교용 경쟁사).
+            # competitor_of=연결된 광고주 client_id(경쟁사만). 경쟁사는 광고주 리스트·
+            # 업무량·자동추적·정산·가망에서 제외되고, 비교 화면에서만 쓰인다.
+            try:
+                cursor.execute("SELECT role FROM clients LIMIT 1")
+            except Exception:
+                cursor.execute("ALTER TABLE clients ADD COLUMN role TEXT DEFAULT 'advertiser'")
+                logger.info("[clients] role column added via migration")
+            try:
+                cursor.execute("SELECT competitor_of FROM clients LIMIT 1")
+            except Exception:
+                cursor.execute("ALTER TABLE clients ADD COLUMN competitor_of INTEGER DEFAULT NULL")
+                logger.info("[clients] competitor_of column added via migration")
+
+            # 마이그레이션(#5, 2026-07 경쟁사 TTL): 영업사원(viewer)이 등록한 경쟁사는
+            # 30일 뒤 자동 삭제(스케줄러). expires_at=삭제 예정 시각(NULL=영구, 관리팀 등록분).
+            try:
+                cursor.execute("SELECT expires_at FROM clients LIMIT 1")
+            except Exception:
+                cursor.execute("ALTER TABLE clients ADD COLUMN expires_at TEXT DEFAULT NULL")
+                logger.info("[clients] expires_at column added via migration")
+
             logger.info("Clients database initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize clients database: {str(e)}")
@@ -262,7 +303,8 @@ def search_clients(
             cursor = conn.cursor()
 
             # Build query
-            query = "SELECT * FROM clients WHERE 1=1"
+            # 경쟁사(role=competitor)는 광고주 리스트에서 제외 (비교 화면에서만 사용)
+            query = "SELECT * FROM clients WHERE 1=1 AND COALESCE(role,'advertiser')='advertiser'"
             params = []
 
             # 유저별 격리 (admin은 전체 조회)
@@ -395,6 +437,11 @@ def update_client(
             if data.status is not None:
                 updates.append("status = ?")
                 params.append(data.status)
+            if data.auto_analysis is not None:
+                updates.append("auto_analysis = ?")
+                params.append(int(data.auto_analysis))
+                # 직원 수동 토글 표시 — 계약단계 자동 동기화가 이 업체를 덮어쓰지 않게(수동 우선)
+                updates.append("auto_analysis_manual = 1")
 
             # Always update updated_at
             updates.append("updated_at = datetime('now','localtime')")

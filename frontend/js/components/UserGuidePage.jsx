@@ -319,7 +319,7 @@ window.UserGuidePage = function UserGuidePage({ currentUser }) {
                             ),
                             React.createElement('tr', null,
                                 React.createElement('td', { style: tdStyle }, React.createElement('span', { style: badgeStyle('#f1f5f9', '#64748b') }, 'Viewer')),
-                                React.createElement('td', { style: tdCenterStyle }, '\u2705 (\uC77C 3\uD68C)'), React.createElement('td', { style: tdCenterStyle }, '\u2705 (\uC804\uCCB4 \uC5C5\uCCB4 \uC870\uD68C)'),
+                                React.createElement('td', { style: tdCenterStyle }, '\u2705 (\uC77C 15\uD68C)'), React.createElement('td', { style: tdCenterStyle }, '\u2705 (\uC804\uCCB4 \uC5C5\uCCB4 \uC870\uD68C)'),
                                 React.createElement('td', { style: tdCenterStyle }, '\u274C'), React.createElement('td', { style: tdCenterStyle }, '\u274C'),
                                 React.createElement('td', { style: tdCenterStyle }, '\u274C')
                             )
@@ -332,7 +332,7 @@ window.UserGuidePage = function UserGuidePage({ currentUser }) {
 
                     React.createElement('h3', { style: h3Style }, '\uB85C\uADF8\uC778 \uC774\uB825'),
                     React.createElement('p', { style: pStyle }, '\uAD00\uB9AC\uC790\uB294 \uC9C1\uC6D0 \uAD00\uB9AC \uD0ED\uC5D0\uC11C \uAC01 \uACC4\uC815\uC758 \uB85C\uADF8\uC778 \uC774\uB825(\uC2DC\uAC04, IP \uC8FC\uC18C)\uC744 \uD655\uC778\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4. \uBE44\uC815\uC0C1\uC801\uC778 \uC811\uADFC\uC774 \uAC10\uC9C0\uB418\uBA74 \uAD00\uB9AC\uC790\uC5D0\uAC8C \uBB38\uC758\uD558\uC138\uC694.'),
-                    React.createElement('div', { style: tipBoxStyle }, '\uD83D\uDCA1 Viewer \uACC4\uC815\uC740 \uD558\uB8E8 3\uD68C \uBD84\uC11D \uC81C\uD55C\uC774 \uC788\uC2B5\uB2C8\uB2E4. \uC81C\uD55C \uCD08\uACFC \uC2DC \uB2E4\uC74C \uB0A0 \uC790\uC815\uC5D0 \uCD08\uAE30\uD654\uB429\uB2C8\uB2E4. \uBD84\uC11D \uD69F\uC218\uAC00 \uBD80\uC871\uD558\uBA74 \uAD00\uB9AC\uC790\uC5D0\uAC8C Manager \uC5ED\uD560 \uC2B9\uACA9\uC744 \uC694\uCCAD\uD558\uC138\uC694.')
+                    React.createElement('div', { style: tipBoxStyle }, '\uD83D\uDCA1 Viewer \uACC4\uC815\uC740 \uD558\uB8E8 15\uD68C \uBD84\uC11D \uC81C\uD55C\uC774 \uC788\uC2B5\uB2C8\uB2E4. \uC81C\uD55C \uCD08\uACFC \uC2DC \uB2E4\uC74C \uB0A0 \uC790\uC815\uC5D0 \uCD08\uAE30\uD654\uB429\uB2C8\uB2E4. \uBD84\uC11D \uD69F\uC218\uAC00 \uBD80\uC871\uD558\uBA74 \uAD00\uB9AC\uC790\uC5D0\uAC8C Manager \uC5ED\uD560 \uC2B9\uACA9\uC744 \uC694\uCCAD\uD558\uC138\uC694.')
                 )
             );
 

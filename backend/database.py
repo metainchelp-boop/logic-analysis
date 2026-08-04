@@ -4,6 +4,9 @@ SQLite 기반 상품/키워드/순위/경쟁자/알림 CRUD
 """
 import sqlite3
 import os
+import json
+import gzip
+import time
 import logging
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
@@ -11,6 +14,11 @@ from typing import Optional, List, Dict, Any
 logger = logging.getLogger(__name__)
 
 DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
+
+# 쇼핑검색 크롤 공유 캐시 TTL(초) — 기본 3시간.
+# 여러 직원/워커가 같은 키워드를 짧은 시간 내 분석할 때 네이버 재호출을 없애
+# 일일 API 한도(25,000) 소진을 막는다. (운영자 지시 2026-07-10)
+SHOPPING_CACHE_TTL = int(os.getenv("SHOPPING_CACHE_TTL", "10800"))
 
 
 def _get_conn() -> sqlite3.Connection:
@@ -128,6 +136,36 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_api_usage_called_at ON api_usage_logs(called_at);
             CREATE INDEX IF NOT EXISTS idx_api_usage_client ON api_usage_logs(client_id);
 
+            -- 쇼핑검색 크롤 공유 캐시 (v6.4) — 같은 키워드 크롤 결과를 TTL 동안 공유해
+            -- 네이버 쇼핑 API 중복 호출을 제거(일일 한도 소진 방지). payload=gzip(JSON).
+            -- 워커별 메모리 캐시로는 5개 워커가 각자 긁으므로, DB에 두어 워커·재시작을 넘어 공유.
+            CREATE TABLE IF NOT EXISTS shopping_search_cache (
+                cache_key TEXT PRIMARY KEY,
+                keyword TEXT NOT NULL,
+                max_results INTEGER NOT NULL,
+                sort TEXT DEFAULT 'sim',
+                payload BLOB NOT NULL,
+                product_count INTEGER DEFAULT 0,
+                created_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_shopping_cache_created ON shopping_search_cache(created_at);
+
+            -- 플레이스(지역 검색) 순위 이력 (v6.6) — 플레이스는 서버 크롤이 불가(GPS 개인화·차단)해
+            -- 직원 캡처로만 순위가 확보된다. 분석할 때마다 (업체·키워드) 순위를 하루 1점으로 누적해
+            -- 일자별 추적 차트(§2)를 그린다. rank_position NULL = 미노출/미확인(state로 구분).
+            CREATE TABLE IF NOT EXISTS place_rank_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                business_key TEXT NOT NULL,
+                business_name TEXT DEFAULT '',
+                region TEXT DEFAULT '',
+                keyword TEXT NOT NULL,
+                rank_position INTEGER,
+                rank_state TEXT DEFAULT '',
+                user_id INTEGER DEFAULT 0,
+                checked_at TEXT DEFAULT (datetime('now', 'localtime'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_place_rank_bk_kw ON place_rank_history(business_key, keyword, checked_at);
+
             -- 알림 설정 기본 행 삽입 (없으면)
             INSERT OR IGNORE INTO notification_settings (id, notify_enabled, receiver_phone, report_time)
             VALUES (1, 0, '', '09:00');
@@ -143,6 +181,90 @@ def init_db():
     except Exception as e:
         logger.error(f"DB 초기화 실패: {e}")
         raise
+    finally:
+        conn.close()
+
+
+# ==================== 플레이스(지역 검색) 순위 이력 ====================
+
+def save_place_rank(business_key: str, keyword: str, rank_position=None,
+                    rank_state: str = "", business_name: str = "",
+                    region: str = "", user_id: int = 0):
+    """플레이스 (업체·키워드) 순위를 하루 1점으로 누적 저장.
+    같은 날 재분석 시 그날 값을 최신으로 대체(하루 1점 유지) → 일자별 차트가 깔끔.
+    rank_position None = 미노출/미확인(state로 구분)."""
+    if not business_key or not keyword:
+        return
+    conn = _get_conn()
+    try:
+        # 오늘 같은 (업체·키워드) 점은 최신으로 대체
+        conn.execute(
+            "DELETE FROM place_rank_history "
+            "WHERE business_key = ? AND keyword = ? "
+            "AND date(checked_at) = date('now', 'localtime')",
+            (business_key, keyword)
+        )
+        conn.execute(
+            "INSERT INTO place_rank_history "
+            "(business_key, business_name, region, keyword, rank_position, rank_state, user_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (business_key, business_name or "", region or "", keyword,
+             rank_position, rank_state or "", user_id or 0)
+        )
+        conn.commit()
+    except Exception as e:
+        logger.warning(f"플레이스 순위 저장 실패(무시): {e}")
+    finally:
+        conn.close()
+
+
+def get_place_rank_history(business_key: str, keyword: str, days: int = 30) -> List[Dict]:
+    """(업체·키워드) 일자별 순위 시계열. 하루 1점(최신)으로 정규화해 오름차순 반환.
+    반환: [{date:'YYYY-MM-DD', rank:int|None, state:str}]"""
+    if not business_key or not keyword:
+        return []
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT date(checked_at) AS d, rank_position, rank_state, checked_at "
+            "FROM place_rank_history "
+            "WHERE business_key = ? AND keyword = ? "
+            "AND date(checked_at) >= date('now', 'localtime', ?) "
+            "ORDER BY checked_at ASC",
+            (business_key, keyword, f"-{int(days)} days")
+        ).fetchall()
+        # 날짜별 최신 1점
+        by_day = {}
+        for r in rows:
+            by_day[r["d"]] = {"date": r["d"], "rank": r["rank_position"], "state": r["rank_state"] or ""}
+        return [by_day[d] for d in sorted(by_day.keys())]
+    except Exception as e:
+        logger.warning(f"플레이스 순위 이력 조회 실패(무시): {e}")
+        return []
+    finally:
+        conn.close()
+
+
+def get_place_tracked_keywords(business_key: str) -> List[Dict]:
+    """업체가 지금까지 분석(추적)한 키워드 목록 + 각 키워드의 최신 순위/상태.
+    §2 키워드 노출 칩 렌더용. 반환: [{keyword, rank, state, checked_at}] (최신 분석 순)."""
+    if not business_key:
+        return []
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT keyword, rank_position, rank_state, checked_at FROM place_rank_history p "
+            "WHERE business_key = ? AND checked_at = ("
+            "    SELECT MAX(checked_at) FROM place_rank_history "
+            "    WHERE business_key = p.business_key AND keyword = p.keyword) "
+            "ORDER BY checked_at DESC",
+            (business_key,)
+        ).fetchall()
+        return [{"keyword": r["keyword"], "rank": r["rank_position"],
+                 "state": r["rank_state"] or "", "checked_at": r["checked_at"]} for r in rows]
+    except Exception as e:
+        logger.warning(f"플레이스 추적 키워드 조회 실패(무시): {e}")
+        return []
     finally:
         conn.close()
 
@@ -269,6 +391,38 @@ def get_keywords_for_product(product_id: int) -> List[Dict]:
             ORDER BY tk.created_at ASC
         """, (product_id,)).fetchall()
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_keyword_product_and_count(keyword_id: int) -> Optional[Dict]:
+    """키워드의 소속 상품 ID와 그 상품의 총 키워드 수를 반환 (키워드 없으면 None).
+    개별 삭제 시 '마지막 1개 보호' 판정에 사용."""
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT product_id FROM tracked_keywords WHERE id = ?", (keyword_id,)
+        ).fetchone()
+        if not row:
+            return None
+        pid = row["product_id"]
+        cnt = conn.execute(
+            "SELECT COUNT(*) AS c FROM tracked_keywords WHERE product_id = ?", (pid,)
+        ).fetchone()["c"]
+        return {"product_id": pid, "count": cnt}
+    finally:
+        conn.close()
+
+
+def delete_tracked_keyword(keyword_id: int):
+    """추적 키워드 1개 삭제. FK=ON이라 CASCADE로 순위·경쟁자 스냅샷이 함께 지워지나,
+    누락 방어를 위해 자식 행을 명시적으로 먼저 삭제한다(같은 커넥션·단일 커밋)."""
+    conn = _get_conn()
+    try:
+        conn.execute("DELETE FROM rankings WHERE keyword_id = ?", (keyword_id,))
+        conn.execute("DELETE FROM competitor_snapshots WHERE keyword_id = ?", (keyword_id,))
+        conn.execute("DELETE FROM tracked_keywords WHERE id = ?", (keyword_id,))
+        conn.commit()
     finally:
         conn.close()
 
@@ -612,3 +766,68 @@ def get_api_usage_summary(days: int = 30) -> dict:
         }
     finally:
         conn.close()
+
+
+# ==================== 쇼핑검색 크롤 공유 캐시 (v6.4) ====================
+# 목적: 여러 직원(+5개 워커)이 짧은 시간에 같은 키워드를 분석할 때, 네이버 쇼핑 API
+#       크롤을 1번만 하고 결과를 공유해 일일 호출 한도(25,000) 소진을 막는다.
+# 설계: 실패는 전부 방어적으로 무시 → 캐시가 깨져도 분석 자체는 절대 멈추지 않는다.
+#       빈 결과(429 등)는 저장하지 않아 다음 기회에 정상 재크롤된다.
+
+def _shopping_cache_key(keyword: str, max_results: int, sort: str) -> str:
+    return f"{sort}|{max_results}|{keyword}"
+
+
+def get_cached_shopping_search(keyword: str, max_results: int,
+                               sort: str = "sim",
+                               ttl: Optional[int] = None) -> Optional[List[Dict]]:
+    """TTL 내 캐시된 크롤 결과를 반환. 없거나 만료·오류면 None(=미스, 직접 크롤)."""
+    ttl = SHOPPING_CACHE_TTL if ttl is None else ttl
+    key = _shopping_cache_key(keyword, max_results, sort)
+    conn = None
+    try:
+        conn = _get_conn()
+        row = conn.execute(
+            "SELECT payload, created_at FROM shopping_search_cache WHERE cache_key = ?",
+            (key,)
+        ).fetchone()
+        if not row:
+            return None
+        if (time.time() - float(row["created_at"])) > ttl:
+            return None  # 만료 → 미스 취급 (정리는 저장 시 일괄)
+        return json.loads(gzip.decompress(row["payload"]).decode("utf-8"))
+    except Exception as e:
+        logger.warning(f"[크롤캐시] 조회 실패(무시): {e}")
+        return None
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def save_cached_shopping_search(keyword: str, max_results: int,
+                                products: List[Dict], sort: str = "sim") -> None:
+    """크롤 결과를 gzip(JSON)으로 저장. 빈 결과는 저장하지 않음. 실패는 무시."""
+    if not products:
+        return
+    key = _shopping_cache_key(keyword, max_results, sort)
+    conn = None
+    try:
+        payload = gzip.compress(json.dumps(products, ensure_ascii=False).encode("utf-8"))
+        conn = _get_conn()
+        conn.execute(
+            """INSERT OR REPLACE INTO shopping_search_cache
+                   (cache_key, keyword, max_results, sort, payload, product_count, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (key, keyword, max_results, sort, payload, len(products), time.time())
+        )
+        # 오래된 캐시 정리(누적 방지): TTL의 8배(기본 24시간) 넘은 행 삭제
+        conn.execute(
+            "DELETE FROM shopping_search_cache WHERE created_at < ?",
+            (time.time() - SHOPPING_CACHE_TTL * 8,)
+        )
+        conn.commit()
+    except Exception as e:
+        logger.warning(f"[크롤캐시] 저장 실패(무시): {e}")
+    finally:
+        if conn is not None:
+            conn.close()
