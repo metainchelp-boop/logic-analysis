@@ -13,7 +13,7 @@ window.App = function App() {
     // URL hash에서 현재 페이지 복원 (새로고침 시 탭 유지)
     var _getPageFromHash = function() {
         var hash = window.location.hash.replace('#', '');
-        var validPages = ['home', 'place', 'analysis', 'management', 'learning', 'seo', 'guide', 'settings'];
+        var validPages = ['home', 'place', 'analysis', 'rank', 'management', 'learning', 'seo', 'guide', 'settings'];
         return validPages.indexOf(hash) !== -1 ? hash : 'home';
     };
     const [currentPage, setCurrentPage] = useState(_getPageFromHash);
@@ -316,6 +316,13 @@ window.App = function App() {
         try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch(e) {}
     };
 
+    /* ==================== 스토어 분석 → 키워드 순위 탭 이동 ====================
+       검색 컨텍스트는 RankCheckCard 가 sessionStorage('logic_rank_ctx')에 기록한 뒤 호출 */
+    var handleOpenRankTab = function() {
+        setCurrentPage('rank');
+        try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch(e) {}
+    };
+
     /* ==================== 경쟁사 등록 모드 진입 ==================== */
     /* 업체 상세의 '경쟁사 등록' → 분석 화면으로 전환. 이후 분석을 저장하면
        광고주(advClient)의 경쟁사로 quick-register 된다(SaveToClientSection이 competitorContext 사용). */
@@ -490,6 +497,18 @@ window.App = function App() {
         React.createElement(window.ChatWidget, { currentUser: currentUser })
     );
 
+    /* 📊 키워드 순위 탭 — 업체별 순위 추적 (스토어 분석에서 분리, 2026-08-04) */
+    if (currentPage === 'rank') return React.createElement(React.Fragment, null,
+        React.createElement('div', null,
+            React.createElement(window.TopBar, { activePage: 'rank', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
+            React.createElement(window.KeywordRankPage, {
+                currentUser: currentUser,
+                onNavigateToClient: handleNavigateToClient
+            })
+        ),
+        React.createElement(window.ChatWidget, { currentUser: currentUser })
+    );
+
     /* 플레이스 분석 탭 — 오프라인·지역 업종(자체완결 페이지, 스토어 분석 흐름과 독립) */
     if (currentPage === 'place') return React.createElement(React.Fragment, null,
         React.createElement('div', null,
@@ -607,7 +626,8 @@ window.App = function App() {
                 shopProducts: shopProducts,
                 volumeData: volumeData,
                 competitorContext: competitorContext,
-                onCompetitorSaved: function() { setCompetitorContext(null); try { localStorage.removeItem('logic_comp_ctx'); } catch(e) {} }
+                onCompetitorSaved: function() { setCompetitorContext(null); try { localStorage.removeItem('logic_comp_ctx'); } catch(e) {} },
+                onOpenRankTab: handleOpenRankTab
             })
         ),
         React.createElement(window.ChatWidget, { currentUser: currentUser })

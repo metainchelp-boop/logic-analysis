@@ -981,6 +981,184 @@ def get_rank_history(client_id: int, keyword: Optional[str] = None, days: int = 
 
 # ==================== AI 인사이트 ====================
 
+@router.get("/rank-overview")
+def rank_overview(current_user: dict = Depends(get_current_user)):
+    """키워드 순위 탭 랜딩 — 업체별 순위 추적 롤업 (2026-08-04 탭 분리 1차).
+
+    스코핑은 my_clients 와 동일: viewer=본인 영업대상(prospect)만 /
+    manager=본인+무소유 광고주 / admin=전체 광고주. 집계 원천은 client_rank_history
+    최근 8일치(스파크라인·전일 대비까지 한 번에) — 업체 수십×키워드 수십×8일이라
+    수천 행 수준, 파이썬 집계로 충분하다.
+    """
+    conn = _get_conn()
+    try:
+        user_id = current_user["id"]
+        is_adm = _is_admin(current_user)
+        user_role = current_user.get("role", "viewer")
+        _COLS = "id, name, naver_store_url, role"
+        if user_role == "viewer":
+            clients = conn.execute(
+                f"SELECT {_COLS} FROM clients WHERE status='active' "
+                "AND COALESCE(role,'advertiser')='prospect' AND created_by = ? "
+                "ORDER BY name", (user_id,)).fetchall()
+        elif is_adm:
+            clients = conn.execute(
+                f"SELECT {_COLS} FROM clients WHERE status='active' "
+                "AND COALESCE(role,'advertiser')='advertiser' ORDER BY name").fetchall()
+        else:
+            clients = conn.execute(
+                f"SELECT {_COLS} FROM clients WHERE status='active' "
+                "AND COALESCE(role,'advertiser')='advertiser' "
+                "AND (created_by = ? OR created_by IS NULL OR created_by = '') "
+                "ORDER BY name", (user_id,)).fetchall()
+        if not clients:
+            return {"success": True, "data": [], "totals": {}}
+
+        ids = [c["id"] for c in clients]
+        ph = ",".join("?" * len(ids))
+        rows = conn.execute(f"""
+            SELECT client_id, keyword, rank_position,
+                   substr(checked_at,1,10) AS d, id
+            FROM client_rank_history
+            WHERE client_id IN ({ph})
+              AND checked_at >= date('now','localtime','-8 day')
+            ORDER BY id
+        """, ids).fetchall()
+
+        # (client, keyword) → 날짜별 마지막 값 (id 순회라 나중 행이 그 날짜의 최종값)
+        per = {}
+        for r in rows:
+            per.setdefault((r["client_id"], r["keyword"]), {})[r["d"]] = r["rank_position"]
+
+        by_client = {}
+        for (cid, kw), days in per.items():
+            ds = sorted(days.keys())
+            latest_d = ds[-1]
+            latest = days[latest_d]
+            prev = days[ds[-2]] if len(ds) >= 2 else None
+            e = by_client.setdefault(cid, {"keywords": 0, "exposed": 0, "top10": 0,
+                                           "up": 0, "down": 0, "last_checked": "",
+                                           "tops": []})
+            e["keywords"] += 1
+            if latest is not None:
+                e["exposed"] += 1
+                if latest <= 10:
+                    e["top10"] += 1
+                e["tops"].append((latest, kw))
+            if latest is not None and prev is not None:
+                if latest < prev:
+                    e["up"] += 1
+                elif latest > prev:
+                    e["down"] += 1
+            if latest_d > e["last_checked"]:
+                e["last_checked"] = latest_d
+
+        out = []
+        for c in clients:
+            e = by_client.get(c["id"])
+            item = {"id": c["id"], "name": c["name"],
+                    "store_url": c["naver_store_url"] or "",
+                    "role": c["role"] or "advertiser",
+                    "keywords": 0, "exposed": 0, "top10": 0, "up": 0, "down": 0,
+                    "last_checked": "", "top_keywords": []}
+            if e:
+                e["tops"].sort()
+                item.update({k: e[k] for k in ("keywords", "exposed", "top10", "up", "down", "last_checked")})
+                item["top_keywords"] = [{"keyword": k, "rank": r} for r, k in e["tops"][:2]]
+            out.append(item)
+        totals = {
+            "clients": len(out),
+            "keywords": sum(i["keywords"] for i in out),
+            "exposed_clients": sum(1 for i in out if i["exposed"] > 0),
+            "up_total": sum(i["up"] for i in out),
+            "down_total": sum(i["down"] for i in out),
+            "attention": sum(1 for i in out if i["keywords"] > 0 and i["exposed"] == 0),
+        }
+        return {"success": True, "data": out, "totals": totals}
+    except Exception as e:
+        logger.error(f"[rank-overview] {e}")
+        return {"success": False, "detail": str(e)}
+    finally:
+        conn.close()
+
+
+@router.get("/{client_id}/rank-board")
+def rank_board(client_id: int, current_user: dict = Depends(get_current_user)):
+    """업체 상세 — 키워드별 최신 순위·전일 대비·7일 시리즈·검색량 (탭 분리 1차).
+
+    순위 원천 = client_rank_history(최근 8일), 검색량 = client_analyses 의
+    키워드별 최신 summaryCards.totalVolume(콤마 문자열 그대로 표시용).
+    """
+    conn = _get_conn()
+    try:
+        _verify_client_access(conn, client_id, current_user)
+        client = conn.execute(
+            "SELECT id, name, naver_store_url FROM clients WHERE id=?", (client_id,)).fetchone()
+        if not client:
+            raise HTTPException(status_code=404, detail="업체를 찾을 수 없습니다.")
+
+        rows = conn.execute("""
+            SELECT keyword, rank_position, page_number,
+                   substr(checked_at,1,10) AS d, checked_at, id
+            FROM client_rank_history
+            WHERE client_id=? AND checked_at >= date('now','localtime','-8 day')
+            ORDER BY id
+        """, (client_id,)).fetchall()
+        per = {}
+        for r in rows:
+            per.setdefault(r["keyword"], {})[r["d"]] = {
+                "rank": r["rank_position"], "page": r["page_number"], "at": r["checked_at"]}
+
+        # 키워드별 검색량 — 최신 분석의 summaryCards.totalVolume
+        vol_map = {}
+        for r in conn.execute("""
+            SELECT keyword, analysis_json FROM client_analyses
+            WHERE client_id=? AND id IN (
+                SELECT MAX(id) FROM client_analyses WHERE client_id=? GROUP BY keyword)
+        """, (client_id, client_id)).fetchall():
+            try:
+                vol_map[r["keyword"]] = (json.loads(r["analysis_json"] or "{}")
+                                         .get("summaryCards", {}).get("totalVolume", "-"))
+            except (json.JSONDecodeError, TypeError):
+                vol_map[r["keyword"]] = "-"
+
+        board = []
+        for kw, days in per.items():
+            ds = sorted(days.keys())
+            latest = days[ds[-1]]
+            prev_rank = days[ds[-2]]["rank"] if len(ds) >= 2 else None
+            series = [{"d": d, "rank": days[d]["rank"]} for d in ds]
+            delta = None
+            if latest["rank"] is not None and prev_rank is not None:
+                delta = prev_rank - latest["rank"]   # 양수=상승
+            board.append({
+                "keyword": kw, "rank": latest["rank"], "page": latest["page"],
+                "prev_rank": prev_rank, "delta": delta,
+                "volume": vol_map.get(kw, "-"),
+                "last_checked": latest["at"], "series": series,
+            })
+        # 정렬: 노출(순위 오름차순) 먼저, 미노출 뒤(키워드 가나다)
+        board.sort(key=lambda b: (b["rank"] is None, b["rank"] if b["rank"] is not None else 0, b["keyword"]))
+        kpis = {
+            "keywords": len(board),
+            "exposed": sum(1 for b in board if b["rank"] is not None),
+            "top10": sum(1 for b in board if b["rank"] is not None and b["rank"] <= 10),
+            "up": sum(1 for b in board if (b["delta"] or 0) > 0),
+            "down": sum(1 for b in board if (b["delta"] or 0) < 0),
+        }
+        return {"success": True,
+                "client": {"id": client["id"], "name": client["name"],
+                           "store_url": client["naver_store_url"] or ""},
+                "kpis": kpis, "board": board}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[rank-board] {e}")
+        return {"success": False, "detail": str(e)}
+    finally:
+        conn.close()
+
+
 @router.get("/{client_id}/ai-insights")
 def get_ai_insights(client_id: int, current_user: dict = Depends(get_current_user)):
     """업체별 AI 인사이트 통합 조회"""

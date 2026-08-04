@@ -298,9 +298,10 @@ window.AnalysisResults = function AnalysisResults(props) {
                 /* ========== 4. 내 상품 현황 ========== */
                 analysisData && React.createElement(window.SectionDivider, { label: '4. 내 상품 현황', icon: '🛒', color: '#059669', sub: '노출순위 · 판매추정 · 리뷰 · SEO 4종' }),
     
-                /* 키워드별 노출 순위 */
+                /* 키워드별 노출 순위 — 상세 추적 UI는 📊 키워드 순위 탭으로 분리(2026-08-04).
+                   1회성 조회는 이 카드가 계속 수행해 진입 전략·시장 매출이 소비(무회귀). */
                 React.createElement(window.SectionErrorBoundary, { name: '순위 추적' },
-                    React.createElement(RankTrackingSection, { products: products, refreshProducts: loadProducts, searchedKeyword: searchedKeyword, searchedProductUrl: searchedProductUrl, cachedProductName: advertiserReport && advertiserReport.product_name ? advertiserReport.product_name : (analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo.product_name : null), relatedKeywords: (relatedData ? (relatedData.golden_keywords || []).concat(relatedData.related_keywords || []).map(function(k) { return typeof k === 'string' ? k : (k && k.keyword) || ''; }).filter(Boolean) : []), onNavigateToClient: handleNavigateToClient, canEdit: currentUser.role !== 'viewer', onRankResult: setRankCheckResult })
+                    React.createElement(window.RankCheckCard, { searchedKeyword: searchedKeyword, searchedProductUrl: searchedProductUrl, cachedProductName: advertiserReport && advertiserReport.product_name ? advertiserReport.product_name : (analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo.product_name : null), relatedKeywords: (relatedData ? (relatedData.golden_keywords || []).concat(relatedData.related_keywords || []).map(function(k) { return typeof k === 'string' ? k : (k && k.keyword) || ''; }).filter(Boolean) : []), onRankResult: setRankCheckResult, onOpenRankTab: props.onOpenRankTab })
                 ),
 
                 /* 분석 상품 순위추적 원클릭 등록 */

@@ -12,6 +12,8 @@
   "js/components/SearchBar.jsx",
   "js/components/DashboardSummary.jsx",
   "js/components/RankTrackingSection.jsx",
+  "js/components/KeywordRankPage.jsx",
+  "js/components/RankCheckCard.jsx",
   "js/components/KeywordVolumeSection.jsx",
   "js/components/RelatedKeywordsSection.jsx",
   "js/components/SeoDiagnosisSection.jsx",
