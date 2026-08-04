@@ -92,27 +92,109 @@ window.KeywordRankPage = function KeywordRankPage(props) {
        스토어 분석에서 컨텍스트를 들고 넘어온 경우엔 노출 확인이 이어지도록 자동 펼침 */
     var _tk = useState(!!_ctx[0]); var trackingOpen = _tk[0], setTrackingOpen = _tk[1];
 
-    /* 키워드별 📸 이미지 저장 — 기간 메뉴(열린 키워드)와 진행 상태 */
-    var _im = useState(null); var imgMenuKw = _im[0], setImgMenuKw = _im[1];
-    var _ims = useState(''); var imgSavingKw = _ims[0], setImgSavingKw = _ims[1];
-    var saveRankImage = function(client, keyword, days) {
-        setImgMenuKw(null);
-        setImgSavingKw(keyword);
-        api.get('/cd/' + client.id + '/rank-history?keyword=' + encodeURIComponent(keyword))
+    /* 키워드 펼침 패널 — 순위 추이 차트(이미지 저장과 동일 데이터) + 기간 선택 + 📸 저장 */
+    var _ex = useState(null); var expandedKw = _ex[0], setExpandedKw = _ex[1];
+    var _kd = useState({}); var kwDays = _kd[0], setKwDays = _kd[1];           // { keyword: 7|30|0 }
+    var _hc = useState({}); var histCache = _hc[0], setHistCache = _hc[1];    // { keyword: rows(90일) }
+    var loadKwHistory = function(client, keyword) {
+        if (histCache[keyword]) return;
+        api.get('/cd/' + client.id + '/rank-history?keyword=' + encodeURIComponent(keyword) + '&days=90')
             .then(function(res) {
                 var rows = (res && res.success && res.data) || [];
-                if (!rows.length) { try { toast.warn('저장할 순위 이력이 없습니다.'); } catch (e) {} return; }
-                window.exportRankHistoryImage({
-                    rows: rows,
-                    storeName: client.name || '업체',
-                    keyword: keyword,
-                    storeUrl: client.store_url || '',
-                    days: days
-                });
+                setHistCache(function(prev) { var n = Object.assign({}, prev); n[keyword] = rows; return n; });
             })
-            .catch(function() { try { toast.error('순위 이력을 불러오지 못했습니다.'); } catch (e) {} })
-            .finally(function() { setImgSavingKw(''); });
+            .catch(function() {
+                setHistCache(function(prev) { var n = Object.assign({}, prev); n[keyword] = []; return n; });
+                try { toast.error('순위 이력을 불러오지 못했습니다.'); } catch (e) {}
+            });
     };
+    var toggleKw = function(client, keyword) {
+        if (expandedKw === keyword) { setExpandedKw(null); return; }
+        setExpandedKw(keyword);
+        loadKwHistory(client, keyword);
+    };
+    var _kwPeriodLabel = { 7: '최근 7일', 30: '최근 30일', 0: '전체(90일)' };
+    var _kwFilterRows = function(rows, days) {
+        if (!days) return rows;
+        var cutoff = new Date(); cutoff.setDate(cutoff.getDate() - days);
+        return rows.filter(function(r) { return new Date((r.checked_at || '').replace(' ', 'T')) >= cutoff; });
+    };
+
+    function renderKwPanel(client, b) {
+        var days = kwDays[b.keyword] != null ? kwDays[b.keyword] : 7;   // 기본 = 최근 7일
+        var all = histCache[b.keyword];
+        var rows = all ? _kwFilterRows(all, days) : null;
+        var setPeriod = function(d) {
+            setKwDays(function(prev) { var n = Object.assign({}, prev); n[b.keyword] = d; return n; });
+        };
+        var header = React.createElement('div', { style: { display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 } },
+            [7, 30, 0].map(function(d) {
+                var on = days === d;
+                return React.createElement('button', {
+                    key: d, onClick: function(e) { e.stopPropagation(); setPeriod(d); },
+                    style: { fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 14, cursor: 'pointer',
+                             border: '1px solid ' + (on ? '#3b82f6' : '#e2e8f0'), background: on ? '#3b82f6' : '#fff', color: on ? '#fff' : '#475569' }
+                }, _kwPeriodLabel[d]);
+            }),
+            React.createElement('button', {
+                onClick: function(e) {
+                    e.stopPropagation();
+                    window.exportRankHistoryImage({
+                        rows: all || [],
+                        storeName: client.name || '업체',
+                        keyword: b.keyword,
+                        storeUrl: client.store_url || '',
+                        days: days
+                    });
+                },
+                style: { marginLeft: 'auto', fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 14, cursor: 'pointer', border: '1px solid #16a34a', background: '#f0fdf4', color: '#16a34a' }
+            }, '📸 이미지 저장')
+        );
+        var bodyEl;
+        if (!rows) {
+            bodyEl = React.createElement('div', { style: { padding: 8, textAlign: 'center', fontSize: 12, color: '#94a3b8' } }, '순위 이력 불러오는 중...');
+        } else if (rows.length < 2) {
+            bodyEl = React.createElement('div', { style: { padding: 8, textAlign: 'center', fontSize: 12, color: '#94a3b8' } },
+                _kwPeriodLabel[days] + ' 추이는 2회 이상의 순위 기록이 필요합니다. (현재 ' + rows.length + '회)');
+        } else {
+            var labels = rows.map(function(r) {
+                var d = new Date((r.checked_at || '').replace(' ', 'T'));
+                return isNaN(d) ? '' : (d.getMonth() + 1) + '/' + d.getDate();
+            });
+            var data = rows.map(function(r) { return (r.rank_position && r.rank_position > 0) ? r.rank_position : null; });
+            var valid = data.filter(function(v) { return v != null; });
+            var maxRank = valid.length ? Math.max.apply(null, valid) : 40;
+            bodyEl = React.createElement(React.Fragment, null,
+                React.createElement('div', { style: { fontSize: 12, fontWeight: 700, color: '#0f172a', marginBottom: 8 } },
+                    '"' + b.keyword + '" ' + _kwPeriodLabel[days] + ' 순위 추이'),
+                React.createElement(window.ChartCanvas, {
+                    canvasId: 'cdrank-' + client.id + '-' + encodeURIComponent(b.keyword),
+                    type: 'line',
+                    height: 180,
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: '순위', data: data,
+                            borderColor: '#16a34a', backgroundColor: 'rgba(22,163,74,.12)',
+                            fill: true, tension: 0.35, pointRadius: 2.5, borderWidth: 2.5, spanGaps: true
+                        }]
+                    },
+                    options: {
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: { callbacks: { label: function(ctx) { return ctx.parsed.y != null ? ctx.parsed.y + '위' : '300위 밖'; } } }
+                        },
+                        scales: {
+                            y: { reverse: true, suggestedMin: 1, suggestedMax: Math.max(16, maxRank + 2), title: { display: true, text: '순위 (낮을수록 상위 ↑)' }, ticks: { precision: 0 } }
+                        }
+                    }
+                })
+            );
+        }
+        return React.createElement('tr', { key: b.keyword + '::panel' },
+            React.createElement('td', { colSpan: 8, style: { padding: '14px 18px 10px', background: '#f8fafc', borderBottom: '1px solid #e2e8f0' } },
+                header, bodyEl));
+    }
 
     var loadOverview = useCallback(function() {
         setOvLoading(true);
@@ -299,8 +381,17 @@ window.KeywordRankPage = function KeywordRankPage(props) {
                         React.createElement('tbody', null, rows.map(function(b) {
                             var d = _krDelta(b.delta === null || b.delta === undefined ? (b.prev_rank == null && b.rank != null ? undefined : 0) : b.delta);
                             var exposed = b.rank !== null && b.rank !== undefined;
-                            return React.createElement('tr', { key: b.keyword },
-                                React.createElement('td', { style: Object.assign({}, _krTd, { fontWeight: 700, color: '#0f172a' }) }, b.keyword),
+                            var open = expandedKw === b.keyword;
+                            var mainRow = React.createElement('tr', {
+                                key: b.keyword,
+                                onClick: function() { toggleKw(client, b.keyword); },
+                                style: { cursor: 'pointer', background: open ? '#f8fafc' : 'transparent' },
+                                onMouseEnter: function(e) { e.currentTarget.style.background = '#f8fafc'; },
+                                onMouseLeave: function(e) { e.currentTarget.style.background = open ? '#f8fafc' : 'transparent'; }
+                            },
+                                React.createElement('td', { style: Object.assign({}, _krTd, { fontWeight: 700, color: '#0f172a' }) },
+                                    React.createElement('span', { style: { color: '#94a3b8', fontSize: 10, marginRight: 7 } }, open ? '▼' : '▶'),
+                                    b.keyword),
                                 React.createElement('td', { style: Object.assign({}, _krTd, { textAlign: 'right' }) },
                                     exposed
                                         ? React.createElement('span', { style: { fontSize: 16, fontWeight: 800, color: b.rank <= 10 ? '#16a34a' : '#0f172a', fontVariantNumeric: 'tabular-nums' } }, b.rank + '위')
@@ -314,25 +405,16 @@ window.KeywordRankPage = function KeywordRankPage(props) {
                                 React.createElement('td', { style: Object.assign({}, _krTd, { textAlign: 'right', fontVariantNumeric: 'tabular-nums' }) }, exposed && b.page ? b.page + 'p' : '—'),
                                 React.createElement('td', { style: Object.assign({}, _krTd, { fontSize: 12, color: '#94a3b8', whiteSpace: 'nowrap' }) },
                                     b.last_checked ? String(b.last_checked).slice(0, 16).replace('T', ' ') : '—'),
-                                React.createElement('td', { style: Object.assign({}, _krTd, { whiteSpace: 'nowrap', position: 'relative' }) },
+                                React.createElement('td', { style: Object.assign({}, _krTd, { whiteSpace: 'nowrap' }) },
                                     React.createElement('button', {
-                                        disabled: imgSavingKw === b.keyword,
-                                        onClick: function(e) { e.stopPropagation(); setImgMenuKw(imgMenuKw === b.keyword ? null : b.keyword); },
-                                        title: '순위 이력 이미지(PNG) 저장 — 광고주 보고용',
+                                        onClick: function(e) { e.stopPropagation(); if (!open) toggleKw(client, b.keyword); else setExpandedKw(null); },
+                                        title: '순위 추이 그래프 + 이미지(PNG) 저장',
                                         style: { fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 14, cursor: 'pointer', border: '1px solid #16a34a', background: '#f0fdf4', color: '#16a34a' }
-                                    }, imgSavingKw === b.keyword ? '저장 중...' : '📸 이미지 저장 ▾'),
-                                    imgMenuKw === b.keyword && React.createElement('div', {
-                                        style: { position: 'absolute', top: '100%', right: 8, zIndex: 30, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 10, boxShadow: '0 8px 20px rgba(15,23,42,.12)', padding: 4, display: 'flex', flexDirection: 'column', minWidth: 110 }
-                                    }, [[7, '최근 7일'], [30, '최근 30일'], [0, '전체(90일)']].map(function(opt) {
-                                        return React.createElement('button', {
-                                            key: opt[0],
-                                            onClick: function(e) { e.stopPropagation(); saveRankImage(client, b.keyword, opt[0]); },
-                                            style: { border: 'none', background: 'transparent', textAlign: 'left', padding: '7px 12px', fontSize: 12.5, fontWeight: 600, color: '#334155', cursor: 'pointer', borderRadius: 7 },
-                                            onMouseEnter: function(e) { e.currentTarget.style.background = '#f1f5f9'; },
-                                            onMouseLeave: function(e) { e.currentTarget.style.background = 'transparent'; }
-                                        }, opt[1]);
-                                    })))
+                                    }, open ? '▴ 접기' : '📸 그래프·저장'))
                             );
+                            return open
+                                ? React.createElement(React.Fragment, { key: b.keyword + '::grp' }, mainRow, renderKwPanel(client, b))
+                                : mainRow;
                         }))
                     )
                 )
