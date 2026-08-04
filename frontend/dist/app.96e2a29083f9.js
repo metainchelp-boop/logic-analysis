@@ -1828,7 +1828,9 @@ window.DashboardSummary = function DashboardSummary({
 };
 
 ;/* ===== js/components/RankTrackingSection.jsx ===== */
-/* RankTrackingSection — 순위 추적 */
+/* RankTrackingSection — 순위 추적
+ * analysisOnly: 스토어 분석 화면 전용 모드 — 키워드별 노출 분석·1회성 조회만 렌더
+ * (추적 상품 목록·상품 등록 폼은 📊 키워드 순위 탭에서 관리, 2026-08-04 탭 분리) */
 window.RankTrackingSection = function RankTrackingSection({
   products,
   refreshProducts,
@@ -1838,7 +1840,9 @@ window.RankTrackingSection = function RankTrackingSection({
   relatedKeywords,
   onNavigateToClient,
   canEdit,
-  onRankResult
+  onRankResult,
+  analysisOnly,
+  onOpenRankTab
 }) {
   const {
     useState,
@@ -2481,7 +2485,20 @@ window.RankTrackingSection = function RankTrackingSection({
     className: "badge b-ok"
   }, "✅ 실측")), /*#__PURE__*/React.createElement("div", {
     className: "rt-desc"
-  }, "상품명에서 추출한 키워드별로 네이버 쇼핑 검색 순위를 조회한 결과 (검색 범위: 상위 200개 상품)")), canEdit !== false && /*#__PURE__*/React.createElement("button", {
+  }, "상품명에서 추출한 키워드별로 네이버 쇼핑 검색 순위를 조회한 결과 (검색 범위: 상위 200개 상품)")), analysisOnly && onOpenRankTab && /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-primary btn-sm",
+    onClick: () => {
+      try {
+        sessionStorage.setItem('logic_rank_ctx', JSON.stringify({
+          searchedKeyword: searchedKeyword || '',
+          searchedProductUrl: searchedProductUrl || '',
+          cachedProductName: cachedProductName || '',
+          relatedKeywords: relatedKeywords || []
+        }));
+      } catch (e) {}
+      onOpenRankTab();
+    }
+  }, "📊 키워드 순위 탭에서 관리 →"), !analysisOnly && canEdit !== false && /*#__PURE__*/React.createElement("button", {
     className: "btn btn-primary btn-sm",
     onClick: () => setShowAddForm(!showAddForm)
   }, showAddForm ? '취소' : '+ 상품 등록')), showAddForm && /*#__PURE__*/React.createElement("div", {
@@ -2782,6 +2799,7 @@ window.RankTrackingSection = function RankTrackingSection({
       cursor: 'pointer'
     }
   }, "🔄 다시 조회")), function () {
+    if (analysisOnly) return null;
     // viewer는 등록된 상품 목록 표시 안 함
     if (canEdit === false) {
       // 1회성 결과도 없고 로딩도 아닌 경우에만 빈 상태 표시
@@ -4364,170 +4382,6 @@ window.KeywordRankPage = function KeywordRankPage(props) {
     canEdit: currentUser.role !== 'viewer',
     onRankResult: null
   })))));
-};
-
-;/* ===== js/components/RankCheckCard.jsx ===== */
-/* RankCheckCard — 스토어 분석 안 「키워드별 노출 순위」 콤팩트 연동 카드 (탭 분리 1차)
- *
- * 상세 추적 UI(RankTrackingSection)는 📊 키워드 순위 탭으로 이전했고, 여기서는
- * ① 검색 컨텍스트의 1회성 순위 조회(/rank/check)를 기존과 동일하게 수행해
- *    onRankResult 로 올린다 — 진입 전략·시장 매출 섹션이 이 값을 계속 소비(무회귀).
- * ② 결과를 한 줄로 보여주고, 「키워드 순위 탭」으로 컨텍스트를 넘겨 이동한다
- *    (sessionStorage 'logic_rank_ctx' — KeywordRankPage 가 1회 소비).
- *
- * props: { searchedKeyword, searchedProductUrl, cachedProductName, relatedKeywords,
- *          onRankResult, onOpenRankTab }
- */
-window.RankCheckCard = function RankCheckCard(props) {
-  var useState = React.useState,
-    useEffect = React.useEffect,
-    useRef = React.useRef;
-  var searchedKeyword = props.searchedKeyword;
-  var searchedProductUrl = props.searchedProductUrl;
-  var onRankResult = props.onRankResult;
-  var onOpenRankTab = props.onOpenRankTab;
-  var _r = useState(null);
-  var result = _r[0],
-    setResult = _r[1];
-  var _l = useState(false);
-  var loading = _l[0],
-    setLoading = _l[1];
-  var lastKey = useRef('');
-
-  /* 1회성 순위 조회 (DB 미저장) — RankTrackingSection 에 있던 로직 그대로 */
-  useEffect(function () {
-    if (!searchedKeyword || !searchedProductUrl) {
-      setResult(null);
-      return;
-    }
-    var key = searchedProductUrl + '::' + searchedKeyword;
-    if (lastKey.current === key) return;
-    lastKey.current = key;
-    setLoading(true);
-    setResult(null);
-    api.post('/rank/check', {
-      keyword: searchedKeyword,
-      product_url: searchedProductUrl
-    }).then(function (res) {
-      if (res && res.success && res.data) {
-        setResult(res.data);
-        if (onRankResult) onRankResult(res.data);
-      } else if (res && !res.success && res.detail) {
-        toast.error(res.detail);
-      }
-    }).catch(function () {}).finally(function () {
-      setLoading(false);
-    });
-  }, [searchedKeyword, searchedProductUrl]);
-  var openTab = function () {
-    try {
-      sessionStorage.setItem('logic_rank_ctx', JSON.stringify({
-        searchedKeyword: searchedKeyword || '',
-        searchedProductUrl: searchedProductUrl || '',
-        cachedProductName: props.cachedProductName || '',
-        relatedKeywords: props.relatedKeywords || []
-      }));
-    } catch (e) {}
-    if (onOpenRankTab) onOpenRankTab();
-  };
-  var statusEl;
-  if (loading) {
-    statusEl = React.createElement('span', {
-      style: {
-        fontSize: 13,
-        color: '#64748b'
-      }
-    }, '🔄 현재 순위 조회 중...');
-  } else if (result && result.rank_position != null) {
-    statusEl = React.createElement('span', {
-      style: {
-        fontSize: 14,
-        fontWeight: 800,
-        color: result.rank_position <= 10 ? '#16a34a' : '#0f172a'
-      }
-    }, '현재 ' + result.rank_position + '위', result.page_number ? React.createElement('span', {
-      style: {
-        fontSize: 12,
-        fontWeight: 600,
-        color: '#94a3b8',
-        marginLeft: 6
-      }
-    }, result.page_number + '페이지') : null);
-  } else if (result) {
-    statusEl = React.createElement('span', {
-      style: {
-        fontSize: 13,
-        fontWeight: 700,
-        color: '#b45309'
-      }
-    }, '300위 내 미노출');
-  } else if (searchedKeyword && searchedProductUrl) {
-    statusEl = React.createElement('span', {
-      style: {
-        fontSize: 13,
-        color: '#94a3b8'
-      }
-    }, '—');
-  } else {
-    statusEl = React.createElement('span', {
-      style: {
-        fontSize: 13,
-        color: '#94a3b8'
-      }
-    }, '상품 URL 로 분석하면 현재 순위가 표시됩니다');
-  }
-  return React.createElement('div', {
-    id: 'sec-rank',
-    style: {
-      background: '#fff',
-      border: '1px solid #e2e8f0',
-      borderRadius: 14,
-      padding: '16px 20px',
-      marginBottom: 16
-    }
-  }, React.createElement('div', {
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 12,
-      flexWrap: 'wrap'
-    }
-  }, React.createElement('div', {
-    style: {
-      fontSize: 15,
-      fontWeight: 800,
-      color: '#0f172a'
-    }
-  }, '📊 키워드별 노출 순위'), searchedKeyword && React.createElement('span', {
-    style: {
-      fontSize: 12.5,
-      color: '#475569',
-      background: '#f1f5f9',
-      borderRadius: 999,
-      padding: '3px 10px',
-      fontWeight: 600
-    }
-  }, searchedKeyword), statusEl, React.createElement('button', {
-    onClick: openTab,
-    style: {
-      marginLeft: 'auto',
-      border: '1px solid #bfdbfe',
-      background: '#eff6ff',
-      color: '#1d4ed8',
-      borderRadius: 10,
-      padding: '7px 14px',
-      fontSize: 12.5,
-      fontWeight: 700,
-      cursor: 'pointer',
-      whiteSpace: 'nowrap'
-    }
-  }, '📊 키워드 순위 탭에서 상세 보기 →')), React.createElement('div', {
-    style: {
-      fontSize: 12,
-      color: '#94a3b8',
-      marginTop: 8
-    }
-  }, '업체별 순위 추적 현황·키워드별 노출 분석·상품 추적 등록은 상단 「📊 키워드 순위」 탭으로 이동했습니다.'));
 };
 
 ;/* ===== js/components/KeywordVolumeSection.jsx ===== */
@@ -22480,7 +22334,8 @@ window.TrackRegisterButton = function TrackRegisterButton(props) {
     setAdding(true);
     api.post('/products/track', {
       product_url: searchedProductUrl,
-      keywords: [searchedKeyword]
+      keywords: [searchedKeyword],
+      store_name_hint: props.storeNameHint || undefined
     }).then(function (res) {
       if (res && res.success) {
         if (typeof toast !== 'undefined' && toast.success) toast.success('순위 추적에 등록했습니다. 첫 순위 체크를 시작합니다.');
@@ -22958,19 +22813,25 @@ window.AnalysisResults = function AnalysisResults(props) {
     color: '#059669',
     sub: '노출순위 · 판매추정 · 리뷰 · SEO 4종'
   }),
-  /* 키워드별 노출 순위 — 상세 추적 UI는 📊 키워드 순위 탭으로 분리(2026-08-04).
-     1회성 조회는 이 카드가 계속 수행해 진입 전략·시장 매출이 소비(무회귀). */
+  /* 키워드별 노출 순위 — analysisOnly 모드(노출 분석·1회성 조회만, 보고서 구성 요소).
+     추적 상품 목록·등록 관리만 📊 키워드 순위 탭으로 분리(2026-08-04, 직원 신고로
+     노출 분석 블록은 복구 — 탭 분리 대상은 '추적 현황 열람'이지 분석 결과가 아님). */
   React.createElement(window.SectionErrorBoundary, {
     name: '순위 추적'
-  }, React.createElement(window.RankCheckCard, {
+  }, React.createElement(RankTrackingSection, {
+    analysisOnly: true,
+    onOpenRankTab: props.onOpenRankTab,
+    products: products,
+    refreshProducts: loadProducts,
     searchedKeyword: searchedKeyword,
     searchedProductUrl: searchedProductUrl,
     cachedProductName: advertiserReport && advertiserReport.product_name ? advertiserReport.product_name : analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo.product_name : null,
     relatedKeywords: relatedData ? (relatedData.golden_keywords || []).concat(relatedData.related_keywords || []).map(function (k) {
       return typeof k === 'string' ? k : k && k.keyword || '';
     }).filter(Boolean) : [],
-    onRankResult: setRankCheckResult,
-    onOpenRankTab: props.onOpenRankTab
+    onNavigateToClient: handleNavigateToClient,
+    canEdit: currentUser.role !== 'viewer',
+    onRankResult: setRankCheckResult
   })), /* 분석 상품 순위추적 원클릭 등록 */
   searchedProductUrl && React.createElement(window.SectionErrorBoundary, {
     name: '추적 등록'
@@ -22979,7 +22840,8 @@ window.AnalysisResults = function AnalysisResults(props) {
     searchedKeyword: searchedKeyword,
     products: products,
     refreshProducts: loadProducts,
-    canEdit: currentUser.role !== 'viewer'
+    canEdit: currentUser.role !== 'viewer',
+    storeNameHint: _realStoreName
   })), /* 판매량 추정 */
   analysisData && analysisData.salesEstimation && React.createElement(window.SectionErrorBoundary, {
     name: '판매량 추정'
@@ -26819,7 +26681,7 @@ window.App = function App() {
   };
 
   /* ==================== 스토어 분석 → 키워드 순위 탭 이동 ====================
-     검색 컨텍스트는 RankCheckCard 가 sessionStorage('logic_rank_ctx')에 기록한 뒤 호출 */
+     검색 컨텍스트는 RankTrackingSection(analysisOnly)이 sessionStorage('logic_rank_ctx')에 기록한 뒤 호출 */
   var handleOpenRankTab = function () {
     setCurrentPage('rank');
     try {

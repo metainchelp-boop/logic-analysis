@@ -20,7 +20,7 @@ window.TrackRegisterButton = function TrackRegisterButton(props) {
   var onClick = function() {
     if (adding) return;
     setAdding(true);
-    api.post('/products/track', { product_url: searchedProductUrl, keywords: [searchedKeyword] })
+    api.post('/products/track', { product_url: searchedProductUrl, keywords: [searchedKeyword], store_name_hint: props.storeNameHint || undefined })
       .then(function(res) {
         if (res && res.success) {
           if (typeof toast !== 'undefined' && toast.success) toast.success('순위 추적에 등록했습니다. 첫 순위 체크를 시작합니다.');

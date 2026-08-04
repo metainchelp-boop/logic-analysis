@@ -591,6 +591,56 @@ def save_ranking(product_id: int, keyword_id: int, keyword: str,
         conn.close()
 
 
+def heal_tracked_product_info(db_product_id: int, product_url: str, prods: List[Dict]) -> bool:
+    """수집 SERP에서 매칭된 아이템의 실제 스토어명·상품명으로 표시 정보를 보정한다.
+
+    쇼핑 검색 API 종료(2026-07-31) 후 등록 시 스토어명 확보가 실패하면 URL 슬러그
+    (스토어 아이디)가 store_name 에 그대로 저장되는 문제(직원 오류신고 2026-08-04)의
+    자가치유 지점 — 순위 체크가 상품을 찾은 순간엔 mallName(실제 스토어명)이 손에
+    있으므로 공짜로 고칠 수 있다. 슬러그이거나 빈 값일 때만 교체(정상 이름은 불변)."""
+    try:
+        from naver_crawler import extract_product_id_from_url, extract_store_name_from_url
+        pid = extract_product_id_from_url(product_url) or ""
+        slug = (extract_store_name_from_url(product_url) or "").strip()
+        item = None
+        for p in prods or []:
+            p_pid = str(p.get("product_id") or "")
+            p_url = str(p.get("product_url") or "")
+            if pid and (pid == p_pid or pid in p_url):
+                item = p
+                break
+        if not item:
+            return False
+        real_store = (item.get("store_name") or "").strip()
+        real_name = (item.get("product_name") or "").strip()
+        conn = _get_conn()
+        try:
+            row = conn.execute(
+                "SELECT store_name, product_name FROM tracked_products WHERE id=?",
+                (db_product_id,)).fetchone()
+            if not row:
+                return False
+            cur_store = (row["store_name"] or "").strip()
+            cur_name = (row["product_name"] or "").strip()
+            sets, vals = [], []
+            if (real_store and real_store.lower() != slug.lower()
+                    and (not cur_store or cur_store.lower() == slug.lower())):
+                sets.append("store_name=?"); vals.append(real_store)
+            if real_name and not cur_name:
+                sets.append("product_name=?"); vals.append(real_name)
+            if not sets:
+                return False
+            vals.append(db_product_id)
+            conn.execute("UPDATE tracked_products SET " + ", ".join(sets)
+                         + ", updated_at=datetime('now','localtime') WHERE id=?", vals)
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+    except Exception:
+        return False
+
+
 def get_ranking_history(keyword_id: int, days: int = 30) -> List[Dict]:
     """키워드별 순위 이력 조회"""
     conn = _get_conn()
