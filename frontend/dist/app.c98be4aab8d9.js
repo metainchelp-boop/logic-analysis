@@ -3534,6 +3534,46 @@ window.KeywordRankPage = function KeywordRankPage(props) {
     return null;
   });
   var rankCtx = _ctx[0];
+
+  /* 하단 추적 상품 관리(전체 업체 도구) — 업체 목록에서만, 기본 접힘.
+     스토어 분석에서 컨텍스트를 들고 넘어온 경우엔 노출 확인이 이어지도록 자동 펼침 */
+  var _tk = useState(!!_ctx[0]);
+  var trackingOpen = _tk[0],
+    setTrackingOpen = _tk[1];
+
+  /* 키워드별 📸 이미지 저장 — 기간 메뉴(열린 키워드)와 진행 상태 */
+  var _im = useState(null);
+  var imgMenuKw = _im[0],
+    setImgMenuKw = _im[1];
+  var _ims = useState('');
+  var imgSavingKw = _ims[0],
+    setImgSavingKw = _ims[1];
+  var saveRankImage = function (client, keyword, days) {
+    setImgMenuKw(null);
+    setImgSavingKw(keyword);
+    api.get('/cd/' + client.id + '/rank-history?keyword=' + encodeURIComponent(keyword)).then(function (res) {
+      var rows = res && res.success && res.data || [];
+      if (!rows.length) {
+        try {
+          toast.warn('저장할 순위 이력이 없습니다.');
+        } catch (e) {}
+        return;
+      }
+      window.exportRankHistoryImage({
+        rows: rows,
+        storeName: client.name || '업체',
+        keyword: keyword,
+        storeUrl: client.store_url || '',
+        days: days
+      });
+    }).catch(function () {
+      try {
+        toast.error('순위 이력을 불러오지 못했습니다.');
+      } catch (e) {}
+    }).finally(function () {
+      setImgSavingKw('');
+    });
+  };
   var loadOverview = useCallback(function () {
     setOvLoading(true);
     api.get('/cd/rank-overview').then(function (res) {
@@ -3966,7 +4006,9 @@ window.KeywordRankPage = function KeywordRankPage(props) {
       })
     }, '페이지'), React.createElement('th', {
       style: _krTh
-    }, '확인 시각'))), React.createElement('tbody', null, rows.map(function (b) {
+    }, '확인 시각'), React.createElement('th', {
+      style: _krTh
+    }, '이미지'))), React.createElement('tbody', null, rows.map(function (b) {
       var d = _krDelta(b.delta === null || b.delta === undefined ? b.prev_rank == null && b.rank != null ? undefined : 0 : b.delta);
       var exposed = b.rank !== null && b.rank !== undefined;
       return React.createElement('tr', {
@@ -4016,7 +4058,69 @@ window.KeywordRankPage = function KeywordRankPage(props) {
           color: '#94a3b8',
           whiteSpace: 'nowrap'
         })
-      }, b.last_checked ? String(b.last_checked).slice(0, 16).replace('T', ' ') : '—'));
+      }, b.last_checked ? String(b.last_checked).slice(0, 16).replace('T', ' ') : '—'), React.createElement('td', {
+        style: Object.assign({}, _krTd, {
+          whiteSpace: 'nowrap',
+          position: 'relative'
+        })
+      }, React.createElement('button', {
+        disabled: imgSavingKw === b.keyword,
+        onClick: function (e) {
+          e.stopPropagation();
+          setImgMenuKw(imgMenuKw === b.keyword ? null : b.keyword);
+        },
+        title: '순위 이력 이미지(PNG) 저장 — 광고주 보고용',
+        style: {
+          fontSize: 11,
+          fontWeight: 700,
+          padding: '3px 10px',
+          borderRadius: 14,
+          cursor: 'pointer',
+          border: '1px solid #16a34a',
+          background: '#f0fdf4',
+          color: '#16a34a'
+        }
+      }, imgSavingKw === b.keyword ? '저장 중...' : '📸 이미지 저장 ▾'), imgMenuKw === b.keyword && React.createElement('div', {
+        style: {
+          position: 'absolute',
+          top: '100%',
+          right: 8,
+          zIndex: 30,
+          background: '#fff',
+          border: '1px solid #e2e8f0',
+          borderRadius: 10,
+          boxShadow: '0 8px 20px rgba(15,23,42,.12)',
+          padding: 4,
+          display: 'flex',
+          flexDirection: 'column',
+          minWidth: 110
+        }
+      }, [[7, '최근 7일'], [30, '최근 30일'], [0, '전체(90일)']].map(function (opt) {
+        return React.createElement('button', {
+          key: opt[0],
+          onClick: function (e) {
+            e.stopPropagation();
+            saveRankImage(client, b.keyword, opt[0]);
+          },
+          style: {
+            border: 'none',
+            background: 'transparent',
+            textAlign: 'left',
+            padding: '7px 12px',
+            fontSize: 12.5,
+            fontWeight: 600,
+            color: '#334155',
+            cursor: 'pointer',
+            borderRadius: 7
+          },
+          onMouseEnter: function (e) {
+            e.currentTarget.style.background = '#f1f5f9';
+          },
+          onMouseLeave: function (e) {
+            e.currentTarget.style.background = 'transparent';
+          }
+        }, opt[1]);
+      }))));
     }))))));
   }
   return React.createElement('div', {
@@ -4042,10 +4146,39 @@ window.KeywordRankPage = function KeywordRankPage(props) {
       fontSize: 12.5,
       color: '#94a3b8'
     }
-  }, selected ? '업체 상세 — 키워드별 추적 현황' : (isViewer ? '내 영업 대상 업체별 순위 추적 현황' : '광고주 업체별 순위 추적 현황') + ' · 매일 아침 자동 기록')), selected ? renderDetail() : renderList(), /* ---------- 기존 순위 추적 기능(등록·재확인·1회성 조회) — 무손실 이전 ---------- */
-  React.createElement('div', {
+  }, selected ? '업체 상세 — 키워드별 추적 현황' : (isViewer ? '내 영업 대상 업체별 순위 추적 현황' : '광고주 업체별 순위 추적 현황') + ' · 매일 아침 자동 기록')), selected ? renderDetail() : renderList(),
+  /* ---------- 추적 상품 관리(전체 업체 도구) — 업체 목록에서만, 기본 접힘 ----------
+     업체 상세는 그 업체 데이터만 보이도록 여기서 제외한다(운영자 지시 2026-08-04). */
+  !selected && React.createElement('div', {
     style: {
       marginTop: 28
+    }
+  }, React.createElement('button', {
+    onClick: function () {
+      setTrackingOpen(!trackingOpen);
+    },
+    style: {
+      width: '100%',
+      textAlign: 'left',
+      border: '1px solid #e2e8f0',
+      background: '#fff',
+      color: '#334155',
+      borderRadius: 12,
+      padding: '13px 18px',
+      fontSize: 13.5,
+      fontWeight: 700,
+      cursor: 'pointer'
+    }
+  }, (trackingOpen ? '▴ ' : '▾ ') + '🛠 추적 상품 관리 — 상품·키워드 등록/삭제 · 수동 재확인 · 노출 분석 (전체 업체)', !trackingOpen && React.createElement('span', {
+    style: {
+      fontSize: 12,
+      fontWeight: 500,
+      color: '#94a3b8',
+      marginLeft: 8
+    }
+  }, '펼쳐서 관리')), trackingOpen && React.createElement('div', {
+    style: {
+      marginTop: 12
     }
   }, React.createElement(window.SectionErrorBoundary, {
     name: '순위 추적'
@@ -4059,7 +4192,7 @@ window.KeywordRankPage = function KeywordRankPage(props) {
     onNavigateToClient: onNavigateToClient,
     canEdit: currentUser.role !== 'viewer',
     onRankResult: null
-  }))));
+  })))));
 };
 
 ;/* ===== js/components/RankCheckCard.jsx ===== */
