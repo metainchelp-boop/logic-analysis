@@ -1488,6 +1488,7 @@ def portal_summary(company: str = Query(None, description="전산 광고주 회�
 
         daily = []
         kw_volume = []          # 전산(①) 공유 대시보드 소비용 — 아래 seo 블록
+        metrics = []            # (키워드, 검색량 숫자, 경쟁강도 숫자) — insight 문구 합성용
         for r in rep_rows:
             try:
                 ad = json.loads(r["analysis_json"] or "{}")
@@ -1513,6 +1514,13 @@ def portal_summary(company: str = Query(None, description="전산 광고주 회�
                     "volume": vol,
                     "rank": str(rk) if rk not in (None, 0) else "-",
                 })
+            # 저장값이 문자열("12,300")일 수 있어 숫자 변환 실패 시 그 항목만 제외
+            try:
+                vnum = int(str(vol).replace(",", "")) if vol not in (None, "-", "") else None
+            except (ValueError, TypeError):
+                vnum = None
+            cnum = comp if isinstance(comp, (int, float)) and not isinstance(comp, bool) else None
+            metrics.append((r["keyword"], vnum, cnum))
 
         total = conn.execute(
             "SELECT COUNT(*) AS c FROM client_analyses WHERE client_id = ?", (cid,)).fetchone()["c"]
@@ -1524,6 +1532,18 @@ def portal_summary(company: str = Query(None, description="전산 광고주 회�
             insight = (f"최근 {total}건의 자동 분석이 누적되었습니다. "
                        f"현재 {len(daily)}개 키워드를 추적 중이며, 가장 최근 분석 키워드는 "
                        f"'{top['keyword']}'{tail}입니다.")
+            # 누적된 실제 분석값에서만 문장 합성(환각 방지) — 값 없으면 해당 문장 생략
+            extra = []
+            with_vol = [m for m in metrics if m[1] is not None]
+            if with_vol:
+                tv = max(with_vol, key=lambda m: m[1])
+                extra.append(f"검색량이 가장 높은 '{tv[0]}'({tv[1]:,})가 핵심 유입 키워드입니다.")
+            with_comp = [m for m in metrics if m[2] is not None]
+            if with_comp:
+                lc = min(with_comp, key=lambda m: m[2])
+                extra.append(f"경쟁강도가 가장 낮은 '{lc[0]}'({lc[2]}%)는 상위 노출을 노려볼 만합니다.")
+            if extra:
+                insight = insight + " " + " ".join(extra)
 
         out = {"found": True, "clientId": cid, "insight": insight,
                "dailyReports": daily, "totalDays": total}
