@@ -108,8 +108,19 @@ def start_scheduler():
         max_instances=1,
     )
 
+    # 5) 분석 보관정책 — 매일 01:00 (백업 직후). client_analyses 옛 일별 스냅샷 정리로
+    #    DB 무한 성장 방지(디스크 풀 사고 예방). 전산① portal-summary 무영향(아래 함수 주석).
+    _scheduler.add_job(
+        _run_client_analyses_retention,
+        trigger=CronTrigger(hour=1, minute=0),
+        id="client_analyses_retention",
+        name="분석 보관정책 (01:00)",
+        replace_existing=True,
+        max_instances=1,
+    )
+
     _scheduler.start()
-    logger.info("✅ 스케줄러 시작 (계약동기화: 04:00, 순위: 08:00, 분석: 08:30, 리포트: 09:30(발송 비활성), DB백업: 00:30)")
+    logger.info("✅ 스케줄러 시작 (계약동기화: 04:00, 순위: 08:00, 분석: 08:30, 리포트: 09:30(발송 비활성), DB백업: 00:30, 보관정책: 01:00)")
 
 
 def stop_scheduler():
@@ -866,3 +877,42 @@ def _run_daily_db_backup():
 
     # 오래된 백업 정리 (최신 BACKUP_KEEP개 보관; 압축·비압축 모두 대상)
     _prune_old_backups(backup_dir)
+
+
+# ==================== 01:00 분석 보관정책 (client_analyses 정리) ====================
+# 배경: client_analyses 는 스케줄러가 (업체×키워드×일)로 매일 append 하여 4월부터 수 GB로
+#   성장(2026-08 실측 4.7GB = DB 전체) → 공유서버 디스크 압박. 오래된 일별 분석 스냅샷은
+#   실사용에 불필요(화면·전산 연동은 '키워드별 최신'만 소비).
+# 정책 B(대표 확정 2026-08-04): 최근 30일치 + (업체·키워드별 최신 1건)은 보존, 그 외 삭제.
+# ⚠️ 전산① portal-summary 계약 무영향: 그 API 는 client_id 별 `GROUP BY keyword ORDER BY
+#   analyzed_date DESC LIMIT 8` 로 '키워드별 최신'만 읽으므로, 최신 1건을 항상 보존하는 이
+#   정책과 충돌하지 않는다(옛 중복 스냅샷만 제거).
+# 파일 크기: DELETE 는 페이지를 freelist 로 돌려 재사용케 해 '파일 무한 성장'을 멈춘다.
+#   (기존 파일 크기의 즉시 축소는 VACUUM 필요 — 운영 중 락 위험이 있어 별도 통제된 시점에 수행.)
+def _run_client_analyses_retention():
+    import sqlite3
+    import os
+    DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
+    if not os.path.exists(DB_PATH):
+        return
+    where = ("analyzed_date < date('now','localtime','-30 days') "
+             "AND id NOT IN (SELECT MAX(id) FROM client_analyses GROUP BY client_id, keyword)")
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=30)
+        cur = conn.cursor()
+        n = cur.execute(f"SELECT COUNT(*) FROM client_analyses WHERE {where}").fetchone()[0]
+        if not n:
+            logger.info("[보관정책] client_analyses 삭제 대상 없음")
+            return
+        cur.execute(f"DELETE FROM client_analyses WHERE {where}")
+        conn.commit()
+        logger.info(f"✅ [보관정책] client_analyses {n:,}행 정리 (최근 30일+키워드별 최신 보존)")
+    except Exception as e:
+        logger.error(f"[보관정책] 실패(무시): {e}")
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
