@@ -263,6 +263,15 @@ def init_clients_db():
                 cursor.execute("ALTER TABLE clients ADD COLUMN expires_at TEXT DEFAULT NULL")
                 logger.info("[clients] expires_at column added via migration")
 
+            # 마이그레이션(#6, 2026-08 플레이스 축): 업체 축 구분 — 'store'(기본)/'place'.
+            # 플레이스 분석의 업체 저장이 스토어와 같은 clients 파이프라인(권한·30일 유예)을 타되,
+            # 스토어 전용 자동분석 배치에서는 제외하기 위한 표식.
+            try:
+                cursor.execute("SELECT vertical FROM clients LIMIT 1")
+            except Exception:
+                cursor.execute("ALTER TABLE clients ADD COLUMN vertical TEXT DEFAULT 'store'")
+                logger.info("[clients] vertical column added via migration")
+
             logger.info("Clients database initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize clients database: {str(e)}")

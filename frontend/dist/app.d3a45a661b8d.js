@@ -15335,7 +15335,12 @@ window.ClientDashboard = function ClientDashboard({
         fontWeight: 600,
         fontSize: 14
       }
-    }, c.name || c.business_name), currentUser && (currentUser.role === 'admin' || currentUser.role === 'superadmin') && /*#__PURE__*/React.createElement("div", {
+    }, c.vertical === 'place' && /*#__PURE__*/React.createElement("span", {
+      title: "플레이스 업체 — 분석·순위는 「📍 플레이스 분석」 탭",
+      style: {
+        marginRight: 4
+      }
+    }, "📍"), c.name || c.business_name), currentUser && (currentUser.role === 'admin' || currentUser.role === 'superadmin') && /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 11,
         color: '#a78bfa',
@@ -23387,6 +23392,14 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
   var lastHtmlRef = useRef('');
   var aiTimerRef = useRef(null);
 
+  // ── 업체 저장 (스토어 SaveToClientSection 과 동일 규칙 — /cd/quick-register 재사용) ──
+  var _sb = useState(false);
+  var saveBusy = _sb[0],
+    setSaveBusy = _sb[1];
+  var _sm = useState(null);
+  var saveMsg = _sm[0],
+    setSaveMsg = _sm[1];
+
   // ==================== 유틸 ====================
   var METRIC_ORDER = ['rank', 'relevance', 'visitor_review', 'blog_review', 'save', 'photo', 'booking', 'review_keyword', 'activity', 'info'];
   var MEASURED = {
@@ -24126,6 +24139,96 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
     })));
   };
 
+  // ── 업체 저장 카드 (스토어와 동일 규칙: viewer=영업 대상 30일 유예 / 관리팀=광고주 영구) ──
+  var saveToClient = function (role) {
+    if (saveBusy) return;
+    var name = (businessName || '').trim();
+    var kw = (selectedKw || keywords[0] || '').trim();
+    if (!name) {
+      try {
+        toast.warn('업체명이 없습니다.');
+      } catch (e) {}
+      return;
+    }
+    if (!kw) {
+      try {
+        toast.warn('키워드가 없습니다.');
+      } catch (e) {}
+      return;
+    }
+    var pid = '';
+    try {
+      var m = result && result.rank_info && result.rank_info.matched;
+      pid = String(m && (m.doc_id || m.id) || '');
+    } catch (e) {}
+    setSaveBusy(true);
+    setSaveMsg(null);
+    api.post('/cd/quick-register', {
+      name: name,
+      keyword: kw,
+      product_url: pid ? 'https://map.naver.com/p/entry/place/' + pid : '',
+      vertical: 'place',
+      role: role
+    }).then(function (res) {
+      setSaveBusy(false);
+      if (res && res.success) setSaveMsg({
+        ok: true,
+        text: res.message || '저장되었습니다.'
+      });else setSaveMsg({
+        ok: false,
+        text: res && (typeof res.detail === 'string' ? res.detail : res.error) || '저장에 실패했습니다.'
+      });
+    }).catch(function () {
+      setSaveBusy(false);
+      setSaveMsg({
+        ok: false,
+        text: '저장 중 오류가 발생했습니다.'
+      });
+    });
+  };
+  var renderSaveCard = function () {
+    var isViewer = currentUser.role === 'viewer';
+    var canAdv = currentUser.role === 'manager' || currentUser.role === 'superadmin';
+    return React_.createElement('div', {
+      className: 'card',
+      style: {
+        marginTop: 14
+      }
+    }, React_.createElement('h3', {
+      className: 'rt-h3'
+    }, React_.createElement('span', {
+      className: 'rt-hic'
+    }, '💾'), '업체 저장 ', React_.createElement('span', {
+      className: 'badge b-ok'
+    }, '스토어와 동일 규칙')), React_.createElement('div', {
+      className: 'rt-desc'
+    }, isViewer ? '이 업체를 내 영업 대상으로 저장합니다 — 본인만 열람 · 30일 후 자동 삭제(재저장 시 연장). 스토어 분석과 동일합니다.' : '이 업체를 광고주로 등록(영구)하거나 영업 대상으로 저장합니다 — 광고주 대시보드 목록·권한이 스토어와 동일한 파이프라인입니다.'), React_.createElement('div', {
+      style: {
+        display: 'flex',
+        gap: 8,
+        flexWrap: 'wrap',
+        alignItems: 'center'
+      }
+    }, canAdv && React_.createElement('button', {
+      className: 'btn btn-primary',
+      disabled: saveBusy,
+      onClick: function () {
+        saveToClient('advertiser');
+      }
+    }, saveBusy ? '저장 중…' : '⭐ 광고주로 등록 (영구)'), React_.createElement('button', {
+      className: canAdv ? 'btn btn-secondary' : 'btn btn-primary',
+      disabled: saveBusy,
+      onClick: function () {
+        saveToClient('prospect');
+      }
+    }, saveBusy ? '저장 중…' : '🎯 영업 대상으로 저장' + (isViewer ? ' (30일)' : ''))), saveMsg && React_.createElement('div', {
+      className: 'note ' + (saveMsg.ok ? 'ok' : 'est'),
+      style: {
+        marginTop: 10
+      }
+    }, (saveMsg.ok ? '✅ ' : '⚠️ ') + saveMsg.text));
+  };
+
   // ── §3 경쟁 비교 ──
   var renderSec3 = function () {
     var comps = (result.competitors || []).slice(0, 5);
@@ -24329,7 +24432,7 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
     className: 'place-analysis'
   }, React_.createElement('div', {
     className: 'pa-wrap'
-  }, renderInput(), result && renderCover(), result && renderSec1(), result && renderSec2(), result && renderSec3(), result && renderSec4(), !result && React_.createElement('div', {
+  }, renderInput(), result && renderCover(), result && renderSec1(), result && renderSec2(), result && renderSec3(), result && renderSec4(), result && renderSaveCard(), !result && React_.createElement('div', {
     className: 'card',
     style: {
       textAlign: 'center',

@@ -337,6 +337,9 @@ class QuickRegisterRequest(BaseModel):
     # 광고주 리스트/자동추적/정산에서 제외되고 비교 화면에서만 쓰인다. 기본은 광고주.
     role: Optional[str] = 'advertiser'
     competitor_of: Optional[int] = None
+    # 플레이스 축(2026-08): vertical='place' 로 등록하면 같은 권한·30일 유예 규칙을 타되
+    # 스토어 전용 자동분석 배치에서 제외된다(순위 이력은 place_rank_history 별도 축).
+    vertical: Optional[str] = 'store'
 
 
 class SaveRankRequest(BaseModel):
@@ -371,6 +374,7 @@ def quick_register(req: QuickRegisterRequest, current_user: dict = Depends(get_c
         is_prospect = (req_role == 'prospect') and not is_comp
         role = 'competitor' if is_comp else ('prospect' if is_prospect else 'advertiser')
         comp_of = int(req.competitor_of) if is_comp else None
+        vertical = 'place' if str(req.vertical or 'store') == 'place' else 'store'
 
         # 권한: 광고주(정식 업체) 등록은 관리팀 매니저·최고관리자만.
         #       영업 대상(prospect)·경쟁사(competitor)는 로그인 사용자 전원 허용(영업사원 개인용).
@@ -395,8 +399,9 @@ def quick_register(req: QuickRegisterRequest, current_user: dict = Depends(get_c
         # 같은 이름의 업체가 이미 있는지 확인 (본인 소유 · 같은 유형/연결 범위 내 — 경쟁사가 광고주를 덮지 않게)
         existing = conn.execute(
             "SELECT id FROM clients WHERE name = ? AND created_by = ? "
-            "AND COALESCE(role,'advertiser') = ? AND COALESCE(competitor_of,0) = ?",
-            (req.name, user_id, role, comp_of or 0)
+            "AND COALESCE(role,'advertiser') = ? AND COALESCE(competitor_of,0) = ? "
+            "AND COALESCE(vertical,'store') = ?",
+            (req.name, user_id, role, comp_of or 0, vertical)
         ).fetchone()
 
         if existing:
@@ -422,20 +427,22 @@ def quick_register(req: QuickRegisterRequest, current_user: dict = Depends(get_c
             # 신규 업체 등록 (광고주 · 영업 대상 · 경쟁사)
             cursor = conn.execute("""
                 INSERT INTO clients (name, business_name, main_keywords, naver_store_url,
-                    status, created_by, created_at, updated_at, role, competitor_of, expires_at)
-                VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?)
+                    status, created_by, created_at, updated_at, role, competitor_of, expires_at, vertical)
+                VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)
             """, (req.name, req.name, req.keyword, req.product_url or '',
-                  user_id, now, now, role, comp_of, expires_at))
+                  user_id, now, now, role, comp_of, expires_at, vertical))
             client_id = cursor.lastrowid
             msg = (f"경쟁사 '{req.name}'가 등록되고 분석되었습니다." if is_comp
                    else (f"영업 대상 '{req.name}'가 등록되고 분석되었습니다." if is_prospect
                          else f"'{req.name}' 업체가 등록되고 분석 결과가 저장되었습니다."))
 
-        # 분석 결과 저장 (일자별 누적)
-        _save_analysis_internal(conn, client_id, req.keyword, req.product_url or '',
-                                req.analysis_data, req.volume_data, req.related_data,
-                                req.shop_products, req.advertiser_data, today, now,
-                                req.report_html or '', author_id=user_id)
+        # 분석 결과 저장 (일자별 누적) — 플레이스 축은 스킵(순위 이력은 place_rank_history 별도 축,
+        # client_analyses 는 스토어 분석 스키마라 빈 행을 남기지 않는다)
+        if vertical != 'place':
+            _save_analysis_internal(conn, client_id, req.keyword, req.product_url or '',
+                                    req.analysis_data, req.volume_data, req.related_data,
+                                    req.shop_products, req.advertiser_data, today, now,
+                                    req.report_html or '', author_id=user_id)
 
         # #1: 상세 HTML 저장 (있을 때만)
         if req.detail_html:
@@ -517,7 +524,8 @@ def my_clients(current_user: dict = Depends(get_current_user)):
         # detail_html은 목록 화면에서 쓰지 않으므로 제외한다.
         _COLS = ("id, name, business_name, contact_name, contact_phone, contact_email, "
                  "website_url, naver_store_url, main_keywords, notes, status, auto_analysis, "
-                 "created_by, created_at, updated_at, role, expires_at")
+                 "created_by, created_at, updated_at, role, expires_at, "
+                 "COALESCE(vertical,'store') AS vertical")
         if user_role == "viewer":
             # 영업사원(viewer) = 완전 개인 모드. 관리팀 광고주는 아예 보이지 않고,
             # 본인이 등록한 영업 대상(prospect)만 보인다(경쟁사는 각 대상 상세에서 조회).
