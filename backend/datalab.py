@@ -236,16 +236,38 @@ def _datalab_headers():
     }
 
 
+_quota_block_until = [0.0]  # 일일 한도(1000회) 소진 감지 시 자정(KST)까지 호출 중단 — epoch
+
+
+def datalab_quota_exhausted() -> bool:
+    """일일 한도 소진 상태인가 (자정 리셋 전까지 True)."""
+    return time.time() < _quota_block_until[0]
+
+
+def _mark_quota_exhausted():
+    now = datetime.now()  # 컨테이너 TZ=Asia/Seoul
+    reset_at = (now + timedelta(days=1)).replace(hour=0, minute=0, second=30, microsecond=0)
+    _quota_block_until[0] = reset_at.timestamp()
+    logger.warning(f"데이터랩 일일 한도 소진(010) — {reset_at}까지 호출 중단·안내 문구 전환")
+
+
 def _datalab_post(endpoint: str, body: dict) -> dict:
     """데이터랩 API POST 호출 (공통) — 429(호출초과)/일시오류 시 백오프 재시도.
     제안서 enrich는 짧은 시간에 성별·연령·트렌드 등 여러 호출을 몰아치므로
-    초당 제한에 걸려 빈값이 오던 문제 방지(다수 직원 동시 사용 대비)."""
+    초당 제한에 걸려 빈값이 오던 문제 방지(다수 직원 동시 사용 대비).
+    단 일일 한도 소진(errorCode 010)은 자정 전 재시도가 무의미 → 즉시 중단하고
+    자정까지 호출 자체를 스킵(재시도 폭주·로그 홍수 방지, 2026-08-04 대표 지시)."""
+    if datalab_quota_exhausted():
+        return {}
     url = f"{DATALAB_BASE}/{endpoint}"
     for attempt in range(4):
         try:
             resp = requests.post(url, json=body, headers=_datalab_headers(), timeout=10)
             if resp.status_code == 200:
                 return resp.json()
+            if resp.status_code == 429 and ('"errorCode":"010"' in resp.text or "Query limit exceeded" in resp.text or "쿼리 한도" in resp.text):
+                _mark_quota_exhausted()
+                return {}
             if resp.status_code == 429 and attempt < 3:
                 wait = 0.8 * (attempt + 1)   # 0.8→1.6→2.4s — 초당 제한 버스트를 넘길 수 있게 강화
                 logger.warning(f"Datalab {endpoint} 429 — {wait}s 후 재시도 ({attempt + 1}/4)")
@@ -793,6 +815,12 @@ def analyze_datalab(keyword: str, category1: str = "", related_keywords: list = 
                 result["categoryKeywords"] = cat_kw
         except Exception as e:
             logger.error(f"데이터랩 카테고리 키워드 오류: {e}")
+
+    # 한도 소진 안내 — 가산 필드(quotaNotice)라 기존 소비자(전산 ①·제안서) 무영향.
+    # 캐시로 이미 확보된 지표는 그대로 표시되고, 빈 지표의 사유만 화면에 안내한다.
+    if datalab_quota_exhausted():
+        result["quotaNotice"] = ("네이버 데이터랩 일일 호출 한도(1,000회)가 소진되어 일부 지표를 새로 불러올 수 없습니다. "
+                                 "한도는 매일 자정에 자동 초기화됩니다. 이미 수집된 지표는 정상 표시됩니다.")
 
     logger.info(f"데이터랩 분석 완료: {list(result.keys())}")
     return result
