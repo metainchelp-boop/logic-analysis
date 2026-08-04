@@ -211,6 +211,13 @@ window.AnalysisResults = function AnalysisResults(props) {
                     React.createElement(KeywordVolumeSection, { keyword: searchedKeyword, data: volumeData })
                 ),
     
+                /* [DATALAB] 일일 한도 소진 안내 — 서버 quotaNotice 수신 시에만 노출 */
+                datalabData && datalabData.quotaNotice && React.createElement('div', {
+                    className: 'section fade-in',
+                    style: { background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10,
+                             padding: '10px 14px', color: '#92400e', fontSize: 13, lineHeight: 1.6 }
+                }, '⏳ ' + datalabData.quotaNotice),
+
                 /* [DATALAB] 12개월 검색량 트렌드 (꺾은선) */
                 datalabData && datalabData.trend && React.createElement(window.SectionErrorBoundary, { name: '검색량 트렌드' },
                     React.createElement(window.DatalabTrendSection, { data: datalabData.trend })

@@ -6,6 +6,10 @@ name: Debug Place Tracking (읽기 전용 진단)
 
 on:
   workflow_dispatch:
+    inputs:
+      prune:
+        description: '디스크 정리 실행 (dangling 이미지+빌드 캐시+저널 — 롤백 이미지·실행 컨테이너·DB 보존)'
+        default: 'false'
 
 jobs:
   diagnose:
@@ -23,7 +27,7 @@ jobs:
             docker ps --filter name=logic-analysis --format '{{.Names}} {{.Status}}'
             echo
             echo "== 플레이스 추적 DB (읽기 전용) =="
-            docker exec logic-analysis python3 - <<'PY'
+            docker exec -i logic-analysis python3 - <<'PY'
             import sqlite3
             conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
             conn.row_factory = sqlite3.Row
@@ -57,3 +61,30 @@ jobs:
             echo
             echo "== 최근 ingest 요청 로그 =="
             docker logs --tail 400 logic-analysis 2>&1 | grep -i 'place/ingest\|place/track-targets' | tail -12 || echo "(로그 매칭 없음)"
+            echo
+            echo "== 재시작 계수·기동 시각 =="
+            docker inspect -f 'RestartCount={{.RestartCount}} StartedAt={{.State.StartedAt}} OOMKilled={{.State.OOMKilled}} ExitCode={{.State.ExitCode}}' logic-analysis
+            echo
+            echo "== 직전 오류 흔적 (unfiltered tail 80) =="
+            docker logs --tail 80 logic-analysis 2>&1 | tail -40
+            echo
+            echo "== 호스트 메모리/디스크 =="
+            free -m | head -2; df -h / | tail -1
+            if [ "${{ inputs.prune }}" = "true" ]; then
+              echo
+              echo "== 디스크 사용 내역 (정리 전) =="
+              docker system df
+              sudo du -xh -d1 /var/lib/docker 2>/dev/null | sort -h | tail -6
+              echo
+              echo "== 정리 실행 (롤백 이미지·실행 컨테이너·데이터 볼륨 보존) =="
+              docker image prune -f
+              docker builder prune -af
+              docker container prune -f
+              sudo journalctl --vacuum-size=200M 2>/dev/null | tail -1 || true
+              sudo apt-get clean 2>/dev/null || true
+              echo
+              echo "== 정리 후 =="
+              docker system df
+              df -h / | tail -1
+              docker images | head -8
+            fi
