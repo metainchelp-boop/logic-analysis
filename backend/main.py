@@ -2972,9 +2972,11 @@ def naver_probe():
     # 추적 상품 스토어명 슬러그 계기 — 자가치유(2026-08-04 직원 신고 대응) 진행 관측용.
     # 슬러그 = URL에서 뽑은 스토어 아이디가 store_name 에 그대로 남은 상태. 개수만 노출(업체 정보 없음).
     try:
+        import sqlite3 as _sq4
         from naver_crawler import extract_store_name_from_url as _esn
-        _c4 = sqlite3.connect(DB_PATH, timeout=5)
-        _c4.row_factory = sqlite3.Row
+        from database import DB_PATH as _DB4
+        _c4 = _sq4.connect(_DB4, timeout=5)
+        _c4.row_factory = _sq4.Row
         _tot = _slugged = _empty = 0
         for _r in _c4.execute("SELECT product_url, store_name FROM tracked_products"):
             _tot += 1
