@@ -122,6 +122,10 @@ def start_scheduler():
     _scheduler.start()
     logger.info("✅ 스케줄러 시작 (계약동기화: 04:00, 순위: 08:00, 분석: 08:30, 리포트: 09:30(발송 비활성), DB백업: 00:30, 보관정책: 01:00)")
 
+    # 1회성 VACUUM — 보관정책 1회 삭제(2026-08-04)로 생긴 freelist(~2.2GB)를 디스크로 반환.
+    # 스케줄러는 단일 워커에서만 기동(위 파일락)하므로 여기서 부르면 중복 실행 없음.
+    _run_one_time_vacuum()
+
 
 def stop_scheduler():
     """스케줄러 중지 — 앱 종료 시 호출"""
@@ -916,3 +920,56 @@ def _run_client_analyses_retention():
                 conn.close()
             except Exception:
                 pass
+
+
+# ==================== 1회성 VACUUM (freelist → 디스크 반환) ====================
+# 배경: 2026-08-04 보관정책 B 1회 삭제로 client_analyses 17,283행 제거 → DB 파일 안에
+#   ~2.2GB freelist(빈 페이지)만 남음. VACUUM 이 파일을 재구성해 그 공간을 실제 디스크로
+#   반환한다(4.7GB → ~2.5GB 예상). VACUUM 은 DB 를 잠그므로(수십 초~수 분) 아무 때나 하면
+#   그 사이 요청이 막힌다 → ① 기동 직후 저트래픽 시점까지 지연 ② 백그라운드 스레드(헬스체크
+#   비차단) ③ 1회성 마커로 배포마다 재실행 방지. 실패해도 마커 미생성 → 다음 배포에서 재시도.
+_VACUUM_MARKER_NAME = ".vacuum_done_2026_08_04"
+
+
+def _run_one_time_vacuum():
+    import os
+    import threading
+    DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
+    marker = os.path.join(os.path.dirname(os.path.abspath(DB_PATH)), _VACUUM_MARKER_NAME)
+    if not os.path.exists(DB_PATH) or os.path.exists(marker):
+        return
+
+    def _do():
+        import sqlite3
+        import shutil
+        conn = None
+        try:
+            time.sleep(120)  # 기동 직후 부하·헬스체크 창을 피해 저트래픽까지 대기
+            if os.path.exists(marker):
+                return
+            # 안전 가드: VACUUM 은 원본 크기만큼 임시 공간이 필요 → 여유 부족 시 이번엔 생략
+            size = os.path.getsize(DB_PATH)
+            free = shutil.disk_usage(os.path.dirname(DB_PATH)).free
+            if free < size + 1 * 1024 ** 3:
+                logger.warning(f"[VACUUM] 디스크 여유 부족(free={free}, db={size}) — 이번 배포 생략, 다음 재시도")
+                return
+            before = size
+            conn = sqlite3.connect(DB_PATH, timeout=600)
+            conn.execute("VACUUM")
+            conn.close()
+            conn = None
+            after = os.path.getsize(DB_PATH)
+            with open(marker, "w") as f:
+                f.write("done")
+            logger.info(f"✅ [VACUUM] 1회 파일 축소 완료: {before/1073741824:.2f}GB → {after/1073741824:.2f}GB")
+        except Exception as e:
+            logger.error(f"[VACUUM] 실패(무시·다음 배포 재시도): {e}")
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    threading.Thread(target=_do, daemon=True, name="one-time-vacuum").start()
+    logger.info("🧹 [VACUUM] 1회 축소 예약 — 기동 120초 후 백그라운드 실행(마커 없을 때만)")
