@@ -6,6 +6,10 @@ name: Debug Place Tracking (읽기 전용 진단)
 
 on:
   workflow_dispatch:
+    inputs:
+      prune:
+        description: '디스크 정리 실행 (dangling 이미지+빌드 캐시+저널 — 롤백 이미지·실행 컨테이너·DB 보존)'
+        default: 'false'
 
 jobs:
   diagnose:
@@ -66,3 +70,21 @@ jobs:
             echo
             echo "== 호스트 메모리/디스크 =="
             free -m | head -2; df -h / | tail -1
+            if [ "${{ inputs.prune }}" = "true" ]; then
+              echo
+              echo "== 디스크 사용 내역 (정리 전) =="
+              docker system df
+              sudo du -xh -d1 /var/lib/docker 2>/dev/null | sort -h | tail -6
+              echo
+              echo "== 정리 실행 (롤백 이미지·실행 컨테이너·데이터 볼륨 보존) =="
+              docker image prune -f
+              docker builder prune -af
+              docker container prune -f
+              sudo journalctl --vacuum-size=200M 2>/dev/null | tail -1 || true
+              sudo apt-get clean 2>/dev/null || true
+              echo
+              echo "== 정리 후 =="
+              docker system df
+              df -h / | tail -1
+              docker images | head -8
+            fi
