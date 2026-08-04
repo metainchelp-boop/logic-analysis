@@ -57,3 +57,12 @@ jobs:
             echo
             echo "== 최근 ingest 요청 로그 =="
             docker logs --tail 400 logic-analysis 2>&1 | grep -i 'place/ingest\|place/track-targets' | tail -12 || echo "(로그 매칭 없음)"
+            echo
+            echo "== 재시작 계수·기동 시각 =="
+            docker inspect -f 'RestartCount={{.RestartCount}} StartedAt={{.State.StartedAt}} OOMKilled={{.State.OOMKilled}} ExitCode={{.State.ExitCode}}' logic-analysis
+            echo
+            echo "== 직전 오류 흔적 (unfiltered tail 80) =="
+            docker logs --tail 80 logic-analysis 2>&1 | tail -40
+            echo
+            echo "== 호스트 메모리/디스크 =="
+            free -m | head -2; df -h / | tail -1
