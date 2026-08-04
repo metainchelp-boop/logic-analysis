@@ -13,6 +13,9 @@ on:
       backup_keep:
         description: 'DB 백업 정리 — 최신 N개만 보관(빈 값=미실행). 예: 2'
         default: ''
+      retention:
+        description: 'client_analyses 보관정책 — preview(미리보기만) / apply(실제 삭제, B안=최근30일+키워드별 최신)'
+        default: ''
 
 jobs:
   diagnose:
@@ -160,6 +163,34 @@ jobs:
                 print(f"  {ym}  {n:>7,}행")
             conn.close()
             PY
+            if [ -n "${{ inputs.retention }}" ]; then
+              echo
+              echo "== client_analyses 보관정책 B (최근 30일 + 업체·키워드별 최신 보존) — 모드: ${{ inputs.retention }} =="
+              MODE="${{ inputs.retention }}" timeout 200 docker exec -i -e MODE="${{ inputs.retention }}" logic-analysis python3 - <<'PY' || echo "(보관정책 처리 시간 초과)"
+            import os, sqlite3
+            apply = os.environ.get("MODE") == "apply"
+            uri = "file:/app/data/logic_data.db" + ("" if apply else "?mode=ro")
+            conn = sqlite3.connect(uri, uri=True, timeout=30)
+            c = conn.cursor()
+            # 보존 조건: 최근 30일 OR (업체·키워드별 최신 id). 그 외 삭제 대상.
+            WHERE = ("analyzed_date < date('now','localtime','-30 days') "
+                     "AND id NOT IN (SELECT MAX(id) FROM client_analyses GROUP BY client_id, keyword)")
+            total = c.execute("SELECT COUNT(*) FROM client_analyses").fetchone()[0]
+            dn, db = c.execute(f"SELECT COUNT(*), COALESCE(SUM(LENGTH(analysis_json)+LENGTH(shop_products_json)+LENGTH(advertiser_json)+LENGTH(volume_json)+LENGTH(related_json)),0) FROM client_analyses WHERE {WHERE}").fetchone()
+            print(f"  전체 {total:,}행 · 삭제 대상 {dn:,}행 · 보존 {total-dn:,}행")
+            print(f"  삭제분 JSON 문자수 {db/1048576:.0f} MB (한글 UTF-8 실바이트 ≈ ×2.5)")
+            if apply:
+                c.execute(f"DELETE FROM client_analyses WHERE {WHERE}")
+                conn.commit()
+                fl = c.execute("PRAGMA freelist_count").fetchone()[0]
+                ps = c.execute("PRAGMA page_size").fetchone()[0]
+                print(f"  ✅ 삭제 완료: {c.rowcount:,}행 · 현재 빈 페이지(freelist) {fl*ps/1073741824:.2f}GB (VACUUM 전까지 파일 크기 유지·이후 재사용)")
+                print(f"  남은 client_analyses: {c.execute('SELECT COUNT(*) FROM client_analyses').fetchone()[0]:,}행")
+            else:
+                print("  (미리보기 — 삭제 안 함. 실제 삭제는 retention=apply)")
+            conn.close()
+            PY
+            fi
             if [ "${{ inputs.prune }}" = "true" ]; then
               echo
               echo "== 디스크 사용 내역 (정리 전) =="
