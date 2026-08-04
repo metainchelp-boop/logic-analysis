@@ -1,4 +1,4 @@
-/* METAINC 플레이스 순위 추적기 — 무인 러너 (v1.0.0)
+/* METAINC 플레이스 순위 추적기 — 무인 러너 (v1.0.1)
  *
  * 매일 06:30(로컬) chrome.alarms 로 기동해, 로직분석에 등록된 추적 대상(업체×키워드)을
  * 키워드별로 pcmap.place.naver.com 목록 탭에서 수집(자동 스크롤 + __APOLLO_STATE__ 판독)하고,
@@ -20,7 +20,7 @@ var RUN_HOUR = 6, RUN_MIN = 30;                 // 매일 06:30 — 쇼핑 수�
 var DAILY_ALARM = 'place-daily';
 var STEP_ALARM = 'place-step';
 var STEP_GAP_MS = 35000;                        // 키워드 간 기본 간격(+0~15초 랜덤)
-var STEP_WATCHDOG_MS = 120000;                  // 단계 워치독 — 워커 서스펜션·탭 무응답 재개
+var STEP_WATCHDOG_MS = 180000;                  // 단계 워치독 — 워커 서스펜션·탭 무응답 재개(스크롤 판독 최장 ~60초 감안)
 var RUN_STALE_MS = 2 * 60 * 60 * 1000;          // 2시간 넘은 진행 상태는 버림(비정상 종료 잔재)
 var RESULT_TTL_MS = 20 * 60 * 60 * 1000;        // 결과 보관 20시간 — 아침 수동 로그인까지 대기 가능
 var MAX_TRIES_PER_STEP = 2;
@@ -145,15 +145,20 @@ function pageExtract() {
       });
       els.sort(function (a, b) { return b.scrollHeight - a.scrollHeight; });
       var sc = els[0] || document.scrollingElement;
-      var last = 0, same = 0, steps = 0;
-      while (steps < 40 && same < 3) {
+      // 끝까지 스크롤 — 네이버 목록은 배치 로딩이 느릴 수 있어(네트워크) 높이 정지 판정을 넉넉히:
+      // 900ms 간격 × 5회 연속 정지 + 중간(3회째) 1.6초 추가 대기 후 재확인. 최대 60스텝(~60초).
+      var last = 0, still = 0, steps = 0;
+      while (steps < 60 && still < 5) {
         try { sc.scrollTop = sc.scrollHeight; } catch (_) {}
         window.scrollTo(0, document.body.scrollHeight);
-        await sleep(600); steps++;
+        await sleep(900); steps++;
         var h = (sc && sc.scrollHeight) || document.body.scrollHeight;
-        if (h === last) same++; else { same = 0; last = h; }
+        if (h === last) {
+          still++;
+          if (still === 3) await sleep(1600);
+        } else { still = 0; last = h; }
       }
-      await sleep(300);
+      await sleep(500);
       var ap = null; try { ap = window.__APOLLO_STATE__ || null; } catch (_) {}
       var items = [];
       if (ap) {
@@ -192,18 +197,32 @@ function onExtracted(out, item) {
 
     var items = (out && out.items) || [];
     item = run.queue[run.idx] || item;
+
+    // 판독 깊이 기록 — 이 키워드에서 오가닉 몇 위까지 훑었는지(팝업 진단용)
+    if (out && out.ok) {
+      var organicCount = 0;
+      items.forEach(function (x) { if (!x.ad) organicCount++; });
+      run.depths = (run.depths || []).concat([{ k: item.keyword, n: organicCount }]);
+    }
     item.targets.forEach(function (t) {
       if (!out || !out.ok) {
         run.results.push({ target_id: t.id, keyword: item.keyword, business_name: t.business_name,
           region: t.region, place_id: t.place_id || null, rank: null, state: '미확인' });
         return;
       }
-      var matched = null;
-      for (var i = 0; i < items.length; i++) {
-        var it = items[i];
-        if (it.ad) continue;
-        if (t.place_id && String(it.id) === String(t.place_id)) { matched = it; break; }
-        if (!t.place_id && t.business_name && it.name && norm(it.name).indexOf(norm(t.business_name)) >= 0) { matched = it; break; }
+      // 매칭: ① 플레이스 ID 정확 일치(1차) ② 없으면 업체명 포함(2차 폴백 — ID 오기재 시에도 놓치지 않게)
+      var matched = null, i, it;
+      if (t.place_id) {
+        for (i = 0; i < items.length; i++) {
+          it = items[i];
+          if (!it.ad && String(it.id) === String(t.place_id)) { matched = it; break; }
+        }
+      }
+      if (!matched && t.business_name) {
+        for (i = 0; i < items.length; i++) {
+          it = items[i];
+          if (!it.ad && it.name && norm(it.name).indexOf(norm(t.business_name)) >= 0) { matched = it; break; }
+        }
       }
       run.results.push({
         target_id: t.id, keyword: item.keyword, business_name: t.business_name, region: t.region,
@@ -229,6 +248,12 @@ function finishRun(run, reason) {
     else if (r.state === '미노출') counts.missing++;
     else counts.unknown++;
   });
+  var depthMin = null, depthMax = null;
+  (run.depths || []).forEach(function (d) {
+    if (!d || !d.n) return;
+    if (depthMin === null || d.n < depthMin) depthMin = d.n;
+    if (depthMax === null || d.n > depthMax) depthMax = d.n;
+  });
   var pending = {
     results: results,
     ran_at: new Date().toISOString(),
@@ -242,7 +267,8 @@ function finishRun(run, reason) {
       place_pending_results: pending,
       place_last_run: { finishedAt: Date.now(), source: run.source, reason: reason,
         keywords: (run.queue || []).length, results: results.length,
-        exposed: counts.exposed, missing: counts.missing, unknown: counts.unknown, delivered: false }
+        exposed: counts.exposed, missing: counts.missing, unknown: counts.unknown,
+        depthMin: depthMin, depthMax: depthMax, delivered: false }
     });
   }).then(function () {
     if (!results.length) return;                    // 기록할 게 없으면 탭도 안 연다
