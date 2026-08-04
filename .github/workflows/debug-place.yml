@@ -84,6 +84,8 @@ jobs:
             echo "[우리 DB 크기]"; ls -lh /root/logic-analysis-deploy/data/*.db 2>/dev/null | awk '{print $9, $5}'
             echo "[동거 서비스별 배포 디렉터리 상위]"; sudo du -xh -d1 /root 2>/dev/null | sort -h | tail -10
             echo "[전체 루트 상위 소비]"; sudo du -xh -d1 / 2>/dev/null | sort -h | tail -8
+            echo "[logic-analysis-deploy 내부 — 15G 정체 규명]"; sudo du -xh -d1 /root/logic-analysis-deploy 2>/dev/null | sort -h | tail -8
+            echo "[data 디렉터리 — DB·백업 누적 여부]"; sudo ls -lhS /root/logic-analysis-deploy/data 2>/dev/null | head -20
             if [ "${{ inputs.prune }}" = "true" ]; then
               echo
               echo "== 디스크 사용 내역 (정리 전) =="
