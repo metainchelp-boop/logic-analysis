@@ -1,0 +1,59 @@
+name: Debug Place Tracking (읽기 전용 진단)
+
+# 플레이스 무인 추적 상태 점검 — 수동 실행 전용(push 트리거 없음 = 재배포 미유발).
+# 작업 브랜치 ref 로 dispatch 해 main 을 건드리지 않는다(전산 ① debug-logs 선례).
+# 전 쿼리 읽기 전용(SELECT) — 데이터 변경 없음.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Place tracking read-only query
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 60s
+          script: |
+            echo "== 컨테이너 상태 =="
+            docker ps --filter name=logic-analysis --format '{{.Names}} {{.Status}}'
+            echo
+            echo "== 플레이스 추적 DB (읽기 전용) =="
+            docker exec logic-analysis python3 - <<'PY'
+            import sqlite3
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+
+            c.execute("SELECT COUNT(*) n, SUM(active) a FROM place_track_target")
+            r = c.fetchone()
+            print(f"[등록 대상] 총 {r['n']}건 / 활성 {r['a']}건")
+            for t in c.execute("SELECT business_name, region, keyword, place_id, active FROM place_track_target ORDER BY id"):
+                pid = t["place_id"] or "-"
+                print(f"  - {t['business_name']} | {t['region']} | {t['keyword']} | ID:{pid} | {'ON' if t['active'] else 'OFF'}")
+
+            print()
+            print("[최근 48시간 수집 기록] (checked_at KST)")
+            rows = c.execute("""
+                SELECT business_name, keyword, rank_position, rank_state, checked_at
+                FROM place_rank_history
+                WHERE checked_at >= datetime('now', '+9 hours', '-48 hours')
+                ORDER BY checked_at DESC LIMIT 40
+            """).fetchall()
+            if not rows:
+                print("  (없음)")
+            for h in rows:
+                rk = h["rank_position"] if h["rank_position"] is not None else "-"
+                print(f"  {h['checked_at']} | {h['business_name']} | {h['keyword']} | {rk}위 | {h['rank_state']}")
+
+            print()
+            last = c.execute("SELECT MAX(checked_at) m, COUNT(*) n FROM place_rank_history").fetchone()
+            print(f"[전체] 누적 {last['n']}행 / 마지막 기록 {last['m']}")
+            PY
+            echo
+            echo "== 최근 ingest 요청 로그 =="
+            docker logs --tail 400 logic-analysis 2>&1 | grep -i 'place/ingest\|place/track-targets' | tail -12 || echo "(로그 매칭 없음)"
