@@ -23,7 +23,7 @@ jobs:
             docker ps --filter name=logic-analysis --format '{{.Names}} {{.Status}}'
             echo
             echo "== 플레이스 추적 DB (읽기 전용) =="
-            docker exec logic-analysis python3 - <<'PY'
+            docker exec -i logic-analysis python3 - <<'PY'
             import sqlite3
             conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
             conn.row_factory = sqlite3.Row
