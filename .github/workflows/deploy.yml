@@ -3,6 +3,8 @@ name: Deploy to VPS
 on:
   push:
     branches: [ main ]
+    paths-ignore:
+      - '.github/workflows/debug-place.yml'   # 읽기 전용 진단 — 수정이 재배포를 유발하지 않게(① debug-logs 선례)
   workflow_dispatch:   # 수동 실행 — 시크릿 변경 반영 등
 
 jobs:
