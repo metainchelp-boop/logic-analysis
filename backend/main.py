@@ -1227,6 +1227,115 @@ def place_tracked_keywords_api(business: str = "", current_user: dict = Depends(
         return {"success": False, "error": "추적 키워드 조회 중 오류가 발생했습니다."}
 
 
+class PlaceProposalEnrichRequest(BaseModel):
+    name: str = ""                       # 업체(광고주)명
+    region: str = ""                     # 지역(동/구/시)
+    keyword: str = ""                    # 대표 키워드(지역 미포함 가능 — 서버가 합성)
+    place_id: Optional[str] = None       # 플레이스 ID(있으면 순위 매칭 정확도 ↑)
+
+
+def _pe_int(x):
+    """검색량 문자열('12,300'·'< 10') → 정수. 실패 시 0."""
+    try:
+        return int(str(x).replace("<", "").replace(",", "").strip())
+    except (ValueError, TypeError):
+        return 0
+
+
+@app.post("/api/place/proposal-enrich")
+def place_proposal_enrich(req: PlaceProposalEnrichRequest,
+                          current_user: dict = Depends(get_current_user)):
+    """맞춤제안서(플레이스) 실데이터 enrich — 검색량·무인 추적 순위·순위 이력·추적 키워드를
+    한 번에 반환한다. 스토어 제안서의 directEnrich(검색량·순위·데이터랩)와 같은 취지의 플레이스판.
+    ★ 신규 경로 — 전산(①) 소비 계약(portal-summary·seo/analyze 등)과 무접점.
+    데이터 없는 필드는 비워서(null/[]) 반환 → 제안서가 예시 수치로 폴백(무회귀)."""
+    try:
+        from database import get_place_rank_history, get_place_tracked_keywords
+        from naver_crawler import get_keyword_volume as _kw_vol
+
+        name = (req.name or "").strip()
+        region = (req.region or "").strip()
+        base_kw = (req.keyword or "").strip()
+        if not base_kw:
+            return {"success": False, "error": "키워드가 필요합니다."}
+
+        # 업체 식별키 — doc:{place_id} 우선, 없으면 nm:{정규화명}|{정규화지역}
+        # (플레이스 무인 추적 save_place_rank·수동 분석 _place_business_key 와 동일 규칙)
+        if req.place_id:
+            business_key = f"doc:{str(req.place_id).strip()}"
+        else:
+            nm = place_crawler._norm(name)
+            rg = place_crawler._norm(region)
+            business_key = f"nm:{nm}|{rg}" if nm else ""
+
+        # 지역+키워드 합성(추적·제안서 동일 규칙 — 지역 포함 시 순위 재현성)
+        combined_kw = _combine_region_keyword(region, base_kw)
+
+        # 1) 검색량(검색광고 API) — 실패/미조회 시 null(가짜 0 금지)
+        volume = None
+        comp_idx = None
+        try:
+            v0 = ((_kw_vol([combined_kw]) or [{}])[0]) or {}
+            pc, mo = v0.get("monthlyPcQcCnt"), v0.get("monthlyMobileQcCnt")
+            if pc is not None or mo is not None:
+                volume = _pe_int(pc) + _pe_int(mo)
+            comp_idx = v0.get("compIdx")
+        except Exception as e:
+            logger.warning(f"[proposal-enrich] 검색량 조회 실패(무시): {e}")
+
+        # 2) 무인 추적 순위 이력(최근 90일) + 최신 순위·상태 (Q3 순위 추이 슬라이드)
+        rank = None
+        rank_state = ""
+        rank_series = []
+        if business_key:
+            rank_series = get_place_rank_history(business_key, combined_kw, days=90)
+            if rank_series:
+                last = rank_series[-1]
+                rank = last.get("rank")
+                rank_state = last.get("state") or ""
+
+        # 3) 이 업체가 추적 중인 키워드 전체 + 각 최신 순위·검색량 (지역 황금 키워드 축·실데이터)
+        keyword_rows = []
+        try:
+            tracked = get_place_tracked_keywords(business_key) if business_key else []
+            tk = [t.get("keyword") for t in tracked[:8] if t.get("keyword")]
+            vmap = {}
+            if tk:
+                for vr in (_kw_vol(tk) or []):
+                    kn = vr.get("keyword")
+                    if kn is not None:
+                        vmap[str(kn)] = vr
+            for t in tracked[:8]:
+                kw = t.get("keyword")
+                vr = vmap.get(str(kw), {}) if kw else {}
+                pc, mo = vr.get("monthlyPcQcCnt"), vr.get("monthlyMobileQcCnt")
+                vol = (_pe_int(pc) + _pe_int(mo)) if (pc is not None or mo is not None) else None
+                keyword_rows.append({
+                    "keyword": kw, "volume": vol,
+                    "rank": t.get("rank"), "state": t.get("state") or "",
+                    "compIdx": vr.get("compIdx"),
+                })
+        except Exception as e:
+            logger.warning(f"[proposal-enrich] 키워드 표 구성 실패(무시): {e}")
+
+        return {"success": True, "data": {
+            "connected": True,
+            "isPlace": True,
+            "businessKey": business_key,
+            "keyword": combined_kw,
+            "volume": volume,               # 월 검색량(실측) — null=미확인
+            "compIdx": comp_idx,
+            "rank": rank,                   # 무인 추적 최신 순위 — null=미추적/미노출
+            "rankState": rank_state,        # 노출/미노출/미확인
+            "rankSeries": rank_series,      # Q3 순위 추이 [{date,rank,state}]
+            "trackedKeywords": keyword_rows,  # 지역 황금 키워드 축(추적 중 키워드+검색량+순위)
+            "hasTracking": bool(rank_series),
+        }}
+    except Exception as e:
+        logger.error(f"[proposal-enrich] 실패: {e}")
+        return {"success": False, "error": "제안서 데이터 조회 중 오류가 발생했습니다."}
+
+
 # ==================== 플레이스 무인 추적 (v6.7) ====================
 # 확장 프로그램(플레이스 순위 추적기)이 매일 자동 수집한 순위를 브리지(로그인된 웹앱)로
 # 전달받아 기록한다. 전 경로 신규 /api/place/* — seo/analyze 등 전산(①) 소비 계약과 무접점.
