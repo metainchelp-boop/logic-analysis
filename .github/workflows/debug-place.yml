@@ -10,6 +10,9 @@ on:
       prune:
         description: '디스크 정리 실행 (dangling 이미지+빌드 캐시+저널 — 롤백 이미지·실행 컨테이너·DB 보존)'
         default: 'false'
+      backup_keep:
+        description: 'DB 백업 정리 — 최신 N개만 보관(빈 값=미실행). 예: 2'
+        default: ''
 
 jobs:
   diagnose:
@@ -86,6 +89,52 @@ jobs:
             echo "[전체 루트 상위 소비]"; sudo du -xh -d1 / 2>/dev/null | sort -h | tail -8
             echo "[logic-analysis-deploy 내부 — 15G 정체 규명]"; sudo du -xh -d1 /root/logic-analysis-deploy 2>/dev/null | sort -h | tail -8
             echo "[data 디렉터리 — DB·백업 누적 여부]"; sudo ls -lhS /root/logic-analysis-deploy/data 2>/dev/null | head -20
+            echo "[백업 폴더 상세]"; sudo ls -lhtr /root/logic-analysis-deploy/data/backups 2>/dev/null; sudo du -sh /root/logic-analysis-deploy/data/backups 2>/dev/null
+            echo
+            echo "== DB 테이블별 크기·가장 오래된 데이터 (읽기 전용) =="
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sqlite3
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            c = conn.cursor()
+            print("[테이블별 실제 차지 크기]")
+            try:
+                for name, b in c.execute("SELECT name, SUM(pgsize) FROM dbstat GROUP BY name ORDER BY 2 DESC LIMIT 14"):
+                    print(f"  {name:28s} {b/1048576:8.1f} MB")
+            except Exception as e:
+                print(f"  (dbstat 불가: {e} — 행 수로 대체)")
+            print()
+            print("[테이블별 행 수·기간(가장 오래된→최신)]")
+            spec = [
+                ("rankings", "checked_at"), ("competitor_snapshots", "captured_at"),
+                ("shopping_search_cache", "datetime(created_at,'unixepoch','localtime')"),
+                ("api_usage_logs", "called_at"), ("notification_logs", "created_at"),
+                ("place_rank_history", "checked_at"),
+            ]
+            for tbl, col in spec:
+                try:
+                    n, lo, hi = c.execute(f"SELECT COUNT(*), MIN({col}), MAX({col}) FROM {tbl}").fetchone()
+                    print(f"  {tbl:24s} {n:>9,}행  {str(lo)[:16]} → {str(hi)[:16]}")
+                except Exception as e:
+                    print(f"  {tbl:24s} (조회 불가: {e})")
+            conn.close()
+            PY
+            if [ -n "${{ inputs.backup_keep }}" ]; then
+              echo
+              echo "== DB 백업 정리 — 최신 ${{ inputs.backup_keep }}개만 보관 =="
+              BK=/root/logic-analysis-deploy/data/backups
+              echo "정리 전:"; sudo du -sh "$BK" 2>/dev/null
+              # logic_analysis_backup_*.db 를 시간 오래된 순으로 나열, 최신 N개 제외한 나머지 삭제
+              sudo bash -c '
+                BK="'"$BK"'"; KEEP='"${{ inputs.backup_keep }}"'
+                mapfile -t files < <(ls -1tr "$BK"/logic_analysis_backup_*.db 2>/dev/null)
+                total=${#files[@]}; drop=$((total - KEEP))
+                echo "  백업 $total개 발견 · $drop개 삭제 예정 · $KEEP개 보관"
+                if [ "$drop" -gt 0 ]; then
+                  for ((i=0;i<drop;i++)); do echo "  🗑️ ${files[$i]##*/}"; rm -f "${files[$i]}"; done
+                fi
+              '
+              echo "정리 후:"; sudo du -sh "$BK" 2>/dev/null; df -h / | tail -1
+            fi
             if [ "${{ inputs.prune }}" = "true" ]; then
               echo
               echo "== 디스크 사용 내역 (정리 전) =="
