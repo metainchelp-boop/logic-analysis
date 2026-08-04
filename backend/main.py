@@ -1231,6 +1231,16 @@ def _place_registry_business_key(place_id: str, business_name: str, region: str)
     return f"nm:{name}|{reg}" if name else ""
 
 
+def _place_track_denied(current_user) -> bool:
+    """플레이스 순위 추적 편집 권한 — 스토어 순위 추적과 동일 범주(2026-08-04 대표 확정):
+    영업사원(viewer)은 열람만 가능(등록·삭제·수집·기록 불가), 관리팀(manager)·관리자는 전체 가능."""
+    return (current_user or {}).get("role") == "viewer"
+
+
+_PLACE_TRACK_DENY_MSG = ("플레이스 순위 추적 등록·관리는 관리팀만 가능합니다. "
+                         "영업 대상 분석은 「📍 플레이스 분석」 탭을 이용해주세요. (스토어 순위 추적과 동일 기준)")
+
+
 def _combine_region_keyword(region: str, keyword: str) -> str:
     """추적 키워드는 항상 지역 포함(순위 재현성 — 2026-08-04 스파이크 실측).
     이미 지역이 들어있으면 그대로(중복 방지) — 맞춤제안서 합성 규칙과 동일."""
@@ -1245,10 +1255,20 @@ def _combine_region_keyword(region: str, keyword: str) -> str:
 
 @app.get("/api/place/track-targets")
 def place_track_targets_list(active: int = 0, current_user: dict = Depends(get_current_user)):
-    """추적 대상 목록 + 각 (업체·키워드) 최신 순위. active=1 이면 활성만(확장 러너 동기화용)."""
+    """추적 대상 목록 + 각 (업체·키워드) 최신 순위.
+    - 기본(화면): user_id별 격리 — 본인 등록분만, admin/superadmin 전체(스토어 tracked_products 와 동일).
+    - active=1(확장 러너 동기화 전용): 전체 활성 대상 — 무인 수집은 추적 PC 세션 권한과 무관하게
+      전 직원 등록분을 커버해야 하므로 격리 예외(내부 도구·업체명/키워드만 노출)."""
     try:
         from database import list_place_track_targets, get_place_tracked_keywords
-        targets = list_place_track_targets(active_only=bool(active))
+        if active:
+            targets = list_place_track_targets(active_only=True)
+        else:
+            targets = list_place_track_targets(
+                active_only=False,
+                user_id=(current_user or {}).get("id"),
+                is_admin=_is_admin(current_user or {}),
+            )
         # 업체별 최신 순위 채움(레지스트리는 소규모라 업체 단위 조회로 충분)
         latest_cache = {}
         for t in targets:
@@ -1273,6 +1293,8 @@ def place_track_targets_create(req: PlaceTrackCreateRequest,
                                current_user: dict = Depends(get_current_user)):
     """추적 대상 등록 — (업체 × 키워드) 행 생성. 키워드는 지역 자동 합성(중복 방지)."""
     try:
+        if _place_track_denied(current_user):
+            return {"success": False, "error": _PLACE_TRACK_DENY_MSG}
         name = (req.business_name or "").strip()
         region = (req.region or "").strip()
         if not name:
@@ -1305,8 +1327,12 @@ def place_track_targets_patch(target_id: int, req: PlaceTrackPatchRequest,
                               current_user: dict = Depends(get_current_user)):
     """추적 대상 활성/일시중지."""
     try:
+        if _place_track_denied(current_user):
+            return {"success": False, "error": _PLACE_TRACK_DENY_MSG}
         from database import set_place_track_target_active
-        ok = set_place_track_target_active(target_id, req.active)
+        ok = set_place_track_target_active(
+            target_id, req.active,
+            user_id=(current_user or {}).get("id"), is_admin=_is_admin(current_user or {}))
         return {"success": bool(ok)}
     except Exception as e:
         logger.error(f"플레이스 추적 토글 실패: {e}")
@@ -1317,8 +1343,12 @@ def place_track_targets_patch(target_id: int, req: PlaceTrackPatchRequest,
 def place_track_targets_delete(target_id: int, current_user: dict = Depends(get_current_user)):
     """추적 대상 삭제(순위 이력은 보존 — 재등록 시 이어짐)."""
     try:
+        if _place_track_denied(current_user):
+            return {"success": False, "error": _PLACE_TRACK_DENY_MSG}
         from database import delete_place_track_target
-        ok = delete_place_track_target(target_id)
+        ok = delete_place_track_target(
+            target_id,
+            user_id=(current_user or {}).get("id"), is_admin=_is_admin(current_user or {}))
         return {"success": bool(ok)}
     except Exception as e:
         logger.error(f"플레이스 추적 삭제 실패: {e}")
@@ -1328,7 +1358,8 @@ def place_track_targets_delete(target_id: int, current_user: dict = Depends(get_
 @app.post("/api/place/ingest")
 def place_ingest(req: PlaceIngestRequest, current_user: dict = Depends(get_current_user)):
     """무인 수집 결과 배치 기록 — 항목별 save_place_rank(하루 1점·멱등) 재사용.
-    한 항목 실패가 배치를 막지 않도록 건별 무해 실패."""
+    한 항목 실패가 배치를 막지 않도록 건별 무해 실패.
+    (권한 게이트 없음 — 스토어 수집기 기록 경로와 동일. 추적 PC 세션 권한과 무관하게 무인 기록이 끊기지 않아야 함)"""
     try:
         from database import save_place_rank, heal_place_track_target_place_id
         saved, skipped = 0, 0

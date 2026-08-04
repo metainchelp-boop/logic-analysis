@@ -46,8 +46,29 @@ window.PlaceRankChart = function PlaceRankChart(props) {
     };
 
     var CANVAS_ID = 'place-rankchart';
+    /* 📸 이미지 저장 — 스토어 순위 추적과 동일한 공용 빌더(exportRankHistoryImage)로 렌더
+     * (헤더 카드·이력 표·변동 ▲▼·추이 차트·워터마크). 날것 차트 캔버스 덤프는 폴백만. */
     var saveImg = function() {
         try {
+            if (!series.length) { try { toast.warn('저장할 순위 데이터가 없습니다.'); } catch(e) {} return; }
+            if (window.exportRankHistoryImage) {
+                window.exportRankHistoryImage({
+                    rows: series.map(function (p) {
+                        return {
+                            checked_at: p.date || '',
+                            rank_position: (p.rank == null ? null : p.rank),
+                            type_label: p.state || '미확인',
+                            rank_null_label: '–'
+                        };
+                    }),
+                    storeName: props.businessName || '플레이스 업체',
+                    keyword: keyword,
+                    storeUrl: props.placeUrl || '',
+                    days: days >= 365 ? 0 : days,
+                    typeHeader: '상태'
+                });
+                return;
+            }
             var cv = document.getElementById(CANVAS_ID);
             var url = '';
             var ch = (window.Chart && window.Chart.getChart && cv) ? window.Chart.getChart(cv) : null;
