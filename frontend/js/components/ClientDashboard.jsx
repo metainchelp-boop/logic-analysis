@@ -15,6 +15,7 @@ function rankCellLabel(r) {
 }
 
     const [clients, setClients] = useState([]);
+    const [rankOv, setRankOv] = useState({});   // 2차 확산: 업체별 순위 롤업(상태 점용, 실패 무해)
     const [selectedClient, setSelectedClient] = useState(null);
     const [analyses, setAnalyses] = useState([]);
     const [rankHistory, setRankHistory] = useState([]);
@@ -115,6 +116,15 @@ function rankCellLabel(r) {
     });
 
     /* 업체 선택 → 저장된 분석 로드 (경량 summary 모드) */
+    useEffect(function() {
+        api.get('/cd/rank-overview').then(function(res) {
+            if (res && res.success && res.data) {
+                var m = {}; res.data.forEach(function(it) { m[it.id] = it; });
+                setRankOv(m);
+            }
+        }).catch(function() {});
+    }, []);
+
     var selectClient = function(client) {
         setSelectedClient(client);
         setActiveKeyword(null);
@@ -351,9 +361,17 @@ function rankCellLabel(r) {
                                     }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                                         <div style={{ flex: 1, minWidth: 0 }}>
-                                            <div style={{ fontWeight: 600, fontSize: 14 }}>
-                                                {c.vertical === 'place' && <span title="플레이스 업체 — 분석·순위는 「📍 플레이스 분석」 탭" style={{ marginRight: 4 }}>📍</span>}
-                                                {c.name || c.business_name}
+                                            <div style={{ fontWeight: 600, fontSize: 14, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                                {c.vertical === 'place'
+                                                    ? <span title="플레이스 업체 — 이 화면에서 순위 확인, 분석은 플레이스 분석 탭">📍</span>
+                                                    : (function() {
+                                                        var ov = rankOv[c.id];
+                                                        if (!ov || !ov.keywords) return null;
+                                                        var col = ov.exposed === 0 ? '#f59e0b' : (ov.down > ov.up ? '#dc2626' : '#16a34a');
+                                                        var tip = ov.exposed === 0 ? '추적 중인데 노출 0 — 점검 필요' : ('노출 ' + ov.exposed + '/' + ov.keywords + ' · ▲' + ov.up + ' ▼' + ov.down);
+                                                        return <span title={tip} style={{ width: 8, height: 8, borderRadius: '50%', background: col, flexShrink: 0, display: 'inline-block' }} />;
+                                                    })()}
+                                                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name || c.business_name}</span>
                                             </div>
                                             {currentUser && (currentUser.role === 'admin' || currentUser.role === 'superadmin') && (
                                                 <div style={{ fontSize: 11, color: '#a78bfa', fontWeight: 700, marginTop: 2 }}>👤 담당자: {c.manager_name || '-'}</div>
@@ -427,7 +445,11 @@ function rankCellLabel(r) {
                             <div className="card" style={{ padding: 20, marginBottom: 16 }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                     <div>
-                                        <div style={{ fontSize: 20, fontWeight: 700 }}>{selectedClient.name}</div>
+                                        <div style={{ fontSize: 20, fontWeight: 700 }}>
+                                            {selectedClient.vertical === 'place' && <span title="플레이스 업체" style={{ marginRight: 6 }}>📍</span>}
+                                            {selectedClient.name}
+                                            {selectedClient.vertical === 'place' && <span style={{ fontSize: 11, fontWeight: 800, color: '#1d4ed8', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 999, padding: '2px 9px', marginLeft: 8, verticalAlign: 3 }}>플레이스</span>}
+                                        </div>
                                         <div style={{ fontSize: 13, color: '#64748b', marginTop: 4 }}>
                                             {selectedClient.main_keywords && <span>키워드: {selectedClient.main_keywords}</span>}
                                             {selectedClient.naver_store_url && <span style={{ marginLeft: 12 }}>URL: {(function() { try { var u = new URL(selectedClient.naver_store_url); if (u.hostname.indexOf('smartstore.naver.com') !== -1) return u.origin + u.pathname; } catch(e) {} return selectedClient.naver_store_url.length > 60 ? selectedClient.naver_store_url.slice(0, 60) + '...' : selectedClient.naver_store_url; })()}</span>}
@@ -439,16 +461,20 @@ function rankCellLabel(r) {
                                 </div>
                             </div>
 
+                            {/* 📍 플레이스 업체 — 스토어 분석 스키마 대신 플레이스 축(통합 뷰, 2026-08-05) */}
+                            {selectedClient.vertical === 'place' && window.PlaceClientPanel &&
+                                React.createElement(window.PlaceClientPanel, { client: selectedClient })}
+
                             {/* 경쟁사 비교 (광고주 vs 경쟁사) — 무손실: 미등록 시 슬롯만 표시 */}
-                            {window.CompetitorCompareSection && React.createElement(window.CompetitorCompareSection, {
+                            {selectedClient.vertical !== 'place' && window.CompetitorCompareSection && React.createElement(window.CompetitorCompareSection, {
                                 client: selectedClient,
                                 canEdit: canEdit,
                                 isViewer: currentUser && currentUser.role === 'viewer',
                                 onRegisterCompetitor: onRegisterCompetitor
                             })}
 
-                            {/* 새 분석 실행 폼 (viewer는 숨김) */}
-                            {canEdit !== false && <AnalysisForm
+                            {/* 새 분석 실행 폼 (viewer는 숨김 · 플레이스 업체는 플레이스 분석 탭에서) */}
+                            {selectedClient.vertical !== 'place' && canEdit !== false && <AnalysisForm
                                 client={selectedClient}
                                 onAnalyze={onRunAnalysis ? function(keyword, productUrl) {
                                     /* 분석 탭으로 전환하여 실제 분석 실행 + 자동 저장 */
@@ -465,8 +491,8 @@ function rankCellLabel(r) {
                                 message={message}
                             />}
 
-                            {/* 키워드 목록 (pill 버튼) */}
-                            {uniqueKeywords.length > 0 && (
+                            {/* 키워드 목록 (pill 버튼) — 스토어 업체 전용 */}
+                            {selectedClient.vertical !== 'place' && uniqueKeywords.length > 0 && (
                                 <div className="card" style={{ padding: 16, marginBottom: 16 }}>
                                     <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 12 }}>분석 키워드 ({uniqueKeywords.length}개)</div>
                                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -489,8 +515,8 @@ function rankCellLabel(r) {
                                 </div>
                             )}
 
-                            {/* 보기 모드 전환 탭 */}
-                            <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+                            {/* 보기 모드 전환 탭 — 스토어 업체 전용 */}
+                            {selectedClient.vertical !== 'place' && <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
                                 <button onClick={function() { setViewMode('history'); }}
                                     style={{
                                         padding: '8px 18px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer',
@@ -513,7 +539,7 @@ function rankCellLabel(r) {
                                         border: viewMode === 'insights' ? 'none' : '1px solid #DDD6FE',
                                     }}>{'🤖'} AI 인사이트</button>
                                 <div style={{ flex: 1 }} />
-                            </div>
+                            </div>}
 
                             {/* 키워드 선택 시 상세 보기 (일자별/순위) */}
                             {activeKeyword && (viewMode === 'history' || viewMode === 'rank') && (
@@ -693,8 +719,8 @@ function rankCellLabel(r) {
                                 </div>
                             )}
 
-                            {/* ===== 키워드 미선택 + history/rank 모드 안내 ===== */}
-                            {!activeKeyword && (viewMode === 'history' || viewMode === 'rank') && (
+                            {/* ===== 키워드 미선택 + history/rank 모드 안내 (스토어 전용) ===== */}
+                            {selectedClient.vertical !== 'place' && !activeKeyword && (viewMode === 'history' || viewMode === 'rank') && (
                                 <div className="card" style={{ padding: 40, textAlign: 'center', color: '#94a3b8' }}>
                                     <div style={{ fontSize: 32, marginBottom: 12 }}>{'👆'}</div>
                                     <div style={{ fontSize: 14, fontWeight: 500 }}>위에서 키워드를 선택하면 {viewMode === 'history' ? '일자별 추이' : '순위 이력'}가 표시됩니다.</div>
@@ -702,7 +728,7 @@ function rankCellLabel(r) {
                             )}
 
                             {/* ===== AI 인사이트 탭 ===== */}
-                            {viewMode === 'insights' && (
+                            {selectedClient.vertical !== 'place' && viewMode === 'insights' && (
                                 <AiInsightsView
                                     aiLoading={aiLoading}
                                     aiInsights={aiInsights}
