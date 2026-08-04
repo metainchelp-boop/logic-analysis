@@ -13,7 +13,7 @@ window.App = function App() {
     // URL hash에서 현재 페이지 복원 (새로고침 시 탭 유지)
     var _getPageFromHash = function() {
         var hash = window.location.hash.replace('#', '');
-        var validPages = ['home', 'place', 'analysis', 'rank', 'management', 'learning', 'seo', 'guide', 'settings'];
+        var validPages = ['home', 'place', 'placetrack', 'analysis', 'rank', 'management', 'learning', 'seo', 'guide', 'settings'];
         return validPages.indexOf(hash) !== -1 ? hash : 'home';
     };
     const [currentPage, setCurrentPage] = useState(_getPageFromHash);
@@ -149,6 +149,40 @@ window.App = function App() {
         };
         window.addEventListener('message', onExtMsg);
         return function() { window.removeEventListener('message', onExtMsg); };
+    }, []);
+
+    /* 📊 플레이스 추적기 브리지 — 무인 수집 결과 수신 → /api/place/ingest 기록 → ACK.
+       추적기(별개 확장) 미설치·결과 없음이면 아무 일도 하지 않음(기존 흐름 무영향). */
+    const lastPlaceIngestRef = React.useRef(0);
+    const placeIngestBusyRef = React.useRef(false);
+    useEffect(function() {
+        var onPlaceMsg = function(ev) {
+            if (ev.source !== window || !ev.data || ev.data.type !== 'METAINC_PLACE_RESULTS') return;
+            if (!currentUserRef.current) return;                  // 로그인 전 — 브리지가 재시도(최대 20시간)
+            var p = ev.data.payload || {};
+            var results = p.results || [];
+            if (!results.length) return;
+            var runId = Number(p.created_at) || 0;
+            if (runId && runId === lastPlaceIngestRef.current) return;   // 같은 수집분 중복 기록 방지
+            if (placeIngestBusyRef.current) return;                       // 기록 중 재시도 무시
+            placeIngestBusyRef.current = true;
+            api.post('/place/ingest', { results: results, ran_at: p.ran_at || null, source: p.source || null })
+                .then(function(res) {
+                    placeIngestBusyRef.current = false;
+                    if (res && res.success) {
+                        lastPlaceIngestRef.current = runId || Date.now();
+                        window.postMessage({ type: 'METAINC_PLACE_RESULTS_ACK' }, window.location.origin);
+                        var s = p.summary || {};
+                        try {
+                            toast.success('📊 플레이스 무인 수집 기록: 노출 ' + (s.exposed || 0)
+                                + ' · 미노출 ' + (s.missing || 0) + (s.unknown ? ' · 미확인 ' + s.unknown : ''));
+                        } catch (e) {}
+                    }
+                })
+                .catch(function() { placeIngestBusyRef.current = false; });   // 실패 시 ACK 없음 → 브리지 재시도
+        };
+        window.addEventListener('message', onPlaceMsg);
+        return function() { window.removeEventListener('message', onPlaceMsg); };
     }, []);
 
     /* 🧩 경쟁사 등록 모드 복원 — 확장이 연 새 로직 탭에서도 '이 분석 = 경쟁사' 흐름이 이어지게.
@@ -514,6 +548,14 @@ window.App = function App() {
         React.createElement('div', null,
             React.createElement(window.TopBar, { activePage: 'place', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
             React.createElement(window.PlaceAnalysisPage, { currentUser: currentUser })
+        ),
+        React.createElement(window.ChatWidget, { currentUser: currentUser })
+    );
+
+    if (currentPage === 'placetrack') return React.createElement(React.Fragment, null,
+        React.createElement('div', null,
+            React.createElement(window.TopBar, { activePage: 'placetrack', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
+            React.createElement(window.PlaceTrackingPage, { currentUser: currentUser })
         ),
         React.createElement(window.ChatWidget, { currentUser: currentUser })
     );

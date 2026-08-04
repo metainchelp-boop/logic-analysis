@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<style>
+  body{width:300px;margin:0;font:13px/1.55 -apple-system,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;color:#0f172a}
+  .bar{background:linear-gradient(135deg,#4f46e5,#9333ea);color:#fff;padding:12px 14px}
+  .bar .t{font-weight:800;font-size:13.5px}
+  .bar .s{font-size:11px;opacity:.9;margin-top:2px}
+  .body{padding:12px 14px}
+  .kv{display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px dashed #eef2f7;font-size:12.5px}
+  .kv:last-of-type{border-bottom:0}
+  .k{color:#64748b}.v{font-weight:700;font-family:ui-monospace,Menlo,monospace}
+  .ok{color:#059669}.warn{color:#d97706}
+  .btns{display:flex;gap:8px;margin-top:11px}
+  button{flex:1;border:0;border-radius:9px;padding:8px 10px;font-weight:700;font-size:12.5px;cursor:pointer;font-family:inherit}
+  #run{background:linear-gradient(135deg,#4f46e5,#9333ea);color:#fff}
+  #toggle{background:#f1f5f9;color:#475569;border:1px solid #e2e8f0}
+  .note{font-size:11px;color:#94a3b8;margin-top:9px;line-height:1.5}
+</style>
+</head>
+<body>
+  <div class="bar">
+    <div class="t">METAINC 플레이스 순위 추적기</div>
+    <div class="s">v1.0.0 · 무인 추적</div>
+  </div>
+  <div class="body">
+    <div class="kv"><span class="k">무인 추적</span><span class="v" id="enabled">…</span></div>
+    <div class="kv"><span class="k">다음 자동 수집</span><span class="v" id="next">…</span></div>
+    <div class="kv"><span class="k">추적 대상</span><span class="v" id="targets">…</span></div>
+    <div class="kv"><span class="k">지금 상태</span><span class="v" id="state">…</span></div>
+    <div class="kv"><span class="k">마지막 수집</span><span class="v" id="last">…</span></div>
+    <div class="btns">
+      <button id="run">지금 전체 수집</button>
+      <button id="toggle">…</button>
+    </div>
+    <div class="note">추적 목록은 로직분석 「📊 플레이스 추적」 화면에서 관리합니다. 이 컴퓨터의 크롬이 켜져 있으면 매일 06:30 자동 수집됩니다.</div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

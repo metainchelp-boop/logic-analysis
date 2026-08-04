@@ -1191,6 +1191,177 @@ def place_tracked_keywords_api(business: str = "", current_user: dict = Depends(
         return {"success": False, "error": "추적 키워드 조회 중 오류가 발생했습니다."}
 
 
+# ==================== 플레이스 무인 추적 (v6.7) ====================
+# 확장 프로그램(플레이스 순위 추적기)이 매일 자동 수집한 순위를 브리지(로그인된 웹앱)로
+# 전달받아 기록한다. 전 경로 신규 /api/place/* — seo/analyze 등 전산(①) 소비 계약과 무접점.
+
+class PlaceTrackCreateRequest(BaseModel):
+    business_name: str
+    region: str
+    keywords: List[str]
+    place_id: Optional[str] = None
+
+
+class PlaceTrackPatchRequest(BaseModel):
+    active: bool
+
+
+class PlaceIngestItem(BaseModel):
+    target_id: Optional[int] = None
+    keyword: str
+    business_name: Optional[str] = None
+    region: Optional[str] = None
+    place_id: Optional[str] = None       # 수집 중 매칭된 doc_id(있으면 레지스트리 self-heal)
+    rank: Optional[int] = None
+    state: Optional[str] = None          # 노출/미노출/미확인 — find_place_rank 3-state 어휘
+
+
+class PlaceIngestRequest(BaseModel):
+    results: List[PlaceIngestItem]
+    ran_at: Optional[str] = None
+    source: Optional[str] = None         # 'daily' | 'manual' — 기록용
+
+
+def _place_registry_business_key(place_id: str, business_name: str, region: str) -> str:
+    """레지스트리/배치용 업체 식별키 — _place_business_key 와 동일 공식(단일 조인 키 유지)."""
+    if place_id:
+        return f"doc:{place_id}"
+    name = place_crawler._norm(business_name or "")
+    reg = place_crawler._norm(region or "")
+    return f"nm:{name}|{reg}" if name else ""
+
+
+def _combine_region_keyword(region: str, keyword: str) -> str:
+    """추적 키워드는 항상 지역 포함(순위 재현성 — 2026-08-04 스파이크 실측).
+    이미 지역이 들어있으면 그대로(중복 방지) — 맞춤제안서 합성 규칙과 동일."""
+    kw = (keyword or "").strip()
+    reg = (region or "").strip()
+    if not reg:
+        return kw
+    if place_crawler._norm(reg) in place_crawler._norm(kw):
+        return kw
+    return f"{reg} {kw}"
+
+
+@app.get("/api/place/track-targets")
+def place_track_targets_list(active: int = 0, current_user: dict = Depends(get_current_user)):
+    """추적 대상 목록 + 각 (업체·키워드) 최신 순위. active=1 이면 활성만(확장 러너 동기화용)."""
+    try:
+        from database import list_place_track_targets, get_place_tracked_keywords
+        targets = list_place_track_targets(active_only=bool(active))
+        # 업체별 최신 순위 채움(레지스트리는 소규모라 업체 단위 조회로 충분)
+        latest_cache = {}
+        for t in targets:
+            bk = _place_registry_business_key(t["place_id"], t["business_name"], t["region"])
+            t["business_key"] = bk
+            if not bk:
+                t["last"] = None
+                continue
+            if bk not in latest_cache:
+                latest_cache[bk] = {k["keyword"]: k for k in get_place_tracked_keywords(bk)}
+            k = latest_cache[bk].get(t["keyword"])
+            t["last"] = ({"rank": k["rank"], "state": k["state"], "checked_at": k["checked_at"]}
+                         if k else None)
+        return {"success": True, "data": {"targets": targets}}
+    except Exception as e:
+        logger.error(f"플레이스 추적 목록 조회 실패: {e}")
+        return {"success": False, "error": "추적 목록 조회 중 오류가 발생했습니다."}
+
+
+@app.post("/api/place/track-targets")
+def place_track_targets_create(req: PlaceTrackCreateRequest,
+                               current_user: dict = Depends(get_current_user)):
+    """추적 대상 등록 — (업체 × 키워드) 행 생성. 키워드는 지역 자동 합성(중복 방지)."""
+    try:
+        name = (req.business_name or "").strip()
+        region = (req.region or "").strip()
+        if not name:
+            return {"success": False, "error": "업체명을 입력해주세요."}
+        if not region:
+            return {"success": False, "error": "지역을 입력해주세요. (예: 성수동 — 순위 재현에 필요)"}
+        kws = []
+        for kw in (req.keywords or []):
+            combined = _combine_region_keyword(region, kw)
+            if combined and combined not in kws:
+                kws.append(combined)
+        if not kws:
+            return {"success": False, "error": "추적 키워드를 1개 이상 입력해주세요."}
+        if len(kws) > 10:
+            return {"success": False, "error": "키워드는 업체당 최대 10개까지 등록할 수 있습니다."}
+        from database import add_place_track_targets
+        added = add_place_track_targets(
+            business_name=name, region=region, keywords=kws,
+            place_id=(req.place_id or "").strip(),
+            user_id=(current_user or {}).get("id", 0),
+        )
+        return {"success": True, "data": {"added": added, "keywords": kws}}
+    except Exception as e:
+        logger.error(f"플레이스 추적 등록 실패: {e}")
+        return {"success": False, "error": "추적 등록 중 오류가 발생했습니다."}
+
+
+@app.patch("/api/place/track-targets/{target_id}")
+def place_track_targets_patch(target_id: int, req: PlaceTrackPatchRequest,
+                              current_user: dict = Depends(get_current_user)):
+    """추적 대상 활성/일시중지."""
+    try:
+        from database import set_place_track_target_active
+        ok = set_place_track_target_active(target_id, req.active)
+        return {"success": bool(ok)}
+    except Exception as e:
+        logger.error(f"플레이스 추적 토글 실패: {e}")
+        return {"success": False, "error": "변경 중 오류가 발생했습니다."}
+
+
+@app.delete("/api/place/track-targets/{target_id}")
+def place_track_targets_delete(target_id: int, current_user: dict = Depends(get_current_user)):
+    """추적 대상 삭제(순위 이력은 보존 — 재등록 시 이어짐)."""
+    try:
+        from database import delete_place_track_target
+        ok = delete_place_track_target(target_id)
+        return {"success": bool(ok)}
+    except Exception as e:
+        logger.error(f"플레이스 추적 삭제 실패: {e}")
+        return {"success": False, "error": "삭제 중 오류가 발생했습니다."}
+
+
+@app.post("/api/place/ingest")
+def place_ingest(req: PlaceIngestRequest, current_user: dict = Depends(get_current_user)):
+    """무인 수집 결과 배치 기록 — 항목별 save_place_rank(하루 1점·멱등) 재사용.
+    한 항목 실패가 배치를 막지 않도록 건별 무해 실패."""
+    try:
+        from database import save_place_rank, heal_place_track_target_place_id
+        saved, skipped = 0, 0
+        for item in (req.results or []):
+            try:
+                bk = _place_registry_business_key(
+                    (item.place_id or "").strip(), item.business_name or "", item.region or "")
+                if not bk or not (item.keyword or "").strip():
+                    skipped += 1
+                    continue
+                state = (item.state or "").strip() or ("노출" if item.rank else "미확인")
+                save_place_rank(
+                    business_key=bk,
+                    keyword=item.keyword.strip(),
+                    rank_position=item.rank,
+                    rank_state=state,
+                    business_name=item.business_name or "",
+                    region=item.region or "",
+                    user_id=(current_user or {}).get("id", 0),
+                )
+                saved += 1
+                # 첫 노출로 doc_id 를 알아냈으면 레지스트리에 채움(self-heal)
+                if item.target_id and item.place_id:
+                    heal_place_track_target_place_id(item.target_id, item.place_id)
+            except Exception as _ie:
+                skipped += 1
+                logger.warning(f"플레이스 ingest 항목 건너뜀: {_ie}")
+        return {"success": True, "data": {"saved": saved, "skipped": skipped}}
+    except Exception as e:
+        logger.error(f"플레이스 ingest 실패: {e}")
+        return {"success": False, "error": "수집 결과 기록 중 오류가 발생했습니다."}
+
+
 @app.post("/api/seo/analyze")
 def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_current_user)):
     """상품 SEO 종합 진단 (인증 필수)"""

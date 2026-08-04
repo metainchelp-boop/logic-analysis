@@ -166,6 +166,23 @@ def init_db():
             );
             CREATE INDEX IF NOT EXISTS idx_place_rank_bk_kw ON place_rank_history(business_key, keyword, checked_at);
 
+            -- 플레이스 무인 추적 레지스트리 (v6.7) — 확장 프로그램(플레이스 순위 추적기)이 매일
+            -- 자동 수집할 (업체 × 키워드) 목록. 키워드는 항상 지역 포함(스파이크 검증: 지역이
+            -- 검색어에 있으면 오가닉 순위가 검색 위치와 무관하게 재현됨 — 2026-08-04 실측).
+            -- place_id 는 첫 노출 시 자동 채움(self-heal) → business_key 'doc:' 계열로 승격.
+            CREATE TABLE IF NOT EXISTS place_track_target (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                business_name TEXT NOT NULL,
+                region TEXT DEFAULT '',
+                place_id TEXT DEFAULT '',
+                keyword TEXT NOT NULL,
+                active INTEGER DEFAULT 1,
+                created_by INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT (datetime('now', 'localtime')),
+                UNIQUE(business_name, region, keyword)
+            );
+            CREATE INDEX IF NOT EXISTS idx_place_track_active ON place_track_target(active);
+
             -- 알림 설정 기본 행 삽입 (없으면)
             INSERT OR IGNORE INTO notification_settings (id, notify_enabled, receiver_phone, report_time)
             VALUES (1, 0, '', '09:00');
@@ -265,6 +282,105 @@ def get_place_tracked_keywords(business_key: str) -> List[Dict]:
     except Exception as e:
         logger.warning(f"플레이스 추적 키워드 조회 실패(무시): {e}")
         return []
+    finally:
+        conn.close()
+
+
+# ==================== 플레이스 무인 추적 레지스트리 (v6.7) ====================
+
+def add_place_track_targets(business_name: str, region: str, keywords: List[str],
+                            place_id: str = "", user_id: int = 0) -> int:
+    """추적 대상 (업체 × 키워드) 행 추가. 중복(업체·지역·키워드)은 조용히 무시.
+    반환: 실제 추가된 행 수."""
+    if not business_name or not keywords:
+        return 0
+    conn = _get_conn()
+    added = 0
+    try:
+        for kw in keywords:
+            kw = (kw or "").strip()
+            if not kw:
+                continue
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO place_track_target "
+                "(business_name, region, place_id, keyword, active, created_by) "
+                "VALUES (?, ?, ?, ?, 1, ?)",
+                (business_name.strip(), (region or "").strip(), (place_id or "").strip(), kw, user_id or 0)
+            )
+            added += cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        conn.commit()
+        return added
+    except Exception as e:
+        logger.warning(f"플레이스 추적 대상 추가 실패(무시): {e}")
+        return added
+    finally:
+        conn.close()
+
+
+def list_place_track_targets(active_only: bool = False) -> List[Dict]:
+    """추적 대상 전체 목록(등록순). active_only=True 면 활성만(확장 러너용)."""
+    conn = _get_conn()
+    try:
+        sql = ("SELECT id, business_name, region, place_id, keyword, active, created_at "
+               "FROM place_track_target ")
+        if active_only:
+            sql += "WHERE active = 1 "
+        sql += "ORDER BY business_name, region, id"
+        rows = conn.execute(sql).fetchall()
+        return [{"id": r["id"], "business_name": r["business_name"], "region": r["region"] or "",
+                 "place_id": r["place_id"] or "", "keyword": r["keyword"],
+                 "active": bool(r["active"]), "created_at": r["created_at"]} for r in rows]
+    except Exception as e:
+        logger.warning(f"플레이스 추적 대상 조회 실패(무시): {e}")
+        return []
+    finally:
+        conn.close()
+
+
+def set_place_track_target_active(target_id: int, active: bool) -> bool:
+    """추적 대상 활성/일시중지 토글."""
+    conn = _get_conn()
+    try:
+        conn.execute("UPDATE place_track_target SET active = ? WHERE id = ?",
+                     (1 if active else 0, int(target_id)))
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.warning(f"플레이스 추적 대상 토글 실패(무시): {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def delete_place_track_target(target_id: int) -> bool:
+    """추적 대상 행 삭제(순위 이력 place_rank_history 는 보존 — 재등록 시 이어짐)."""
+    conn = _get_conn()
+    try:
+        conn.execute("DELETE FROM place_track_target WHERE id = ?", (int(target_id),))
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.warning(f"플레이스 추적 대상 삭제 실패(무시): {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def heal_place_track_target_place_id(target_id: int, place_id: str) -> None:
+    """첫 노출 시 발견된 place_id 를 레지스트리에 채움(self-heal).
+    이미 값이 있으면 건드리지 않음 — 수동 지정 우선."""
+    if not place_id:
+        return
+    conn = _get_conn()
+    try:
+        conn.execute(
+            "UPDATE place_track_target SET place_id = ? "
+            "WHERE id = ? AND (place_id IS NULL OR place_id = '')",
+            (str(place_id).strip(), int(target_id))
+        )
+        conn.commit()
+    except Exception as e:
+        logger.warning(f"플레이스 추적 place_id self-heal 실패(무시): {e}")
     finally:
         conn.close()
 

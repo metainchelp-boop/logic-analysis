@@ -117,6 +117,13 @@ var api = {
     del: function(url) {
         return fetch(API_BASE + url, { method: 'DELETE', headers: _authHeaders() }).then(_handleResponse).catch(_handleNetworkError);
     },
+    patch: function(url, body) {
+        return fetch(API_BASE + url, {
+            method: 'PATCH',
+            headers: _authHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify(body),
+        }).then(_handleResponse).catch(_handleNetworkError);
+    },
 };
 
 // 숫자 포맷팅
