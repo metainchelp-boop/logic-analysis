@@ -351,7 +351,10 @@ function rankCellLabel(r) {
                                     }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                                         <div style={{ flex: 1, minWidth: 0 }}>
-                                            <div style={{ fontWeight: 600, fontSize: 14 }}>{c.name || c.business_name}</div>
+                                            <div style={{ fontWeight: 600, fontSize: 14 }}>
+                                                {c.vertical === 'place' && <span title="플레이스 업체 — 분석·순위는 「📍 플레이스 분석」 탭" style={{ marginRight: 4 }}>📍</span>}
+                                                {c.name || c.business_name}
+                                            </div>
                                             {currentUser && (currentUser.role === 'admin' || currentUser.role === 'superadmin') && (
                                                 <div style={{ fontSize: 11, color: '#a78bfa', fontWeight: 700, marginTop: 2 }}>👤 담당자: {c.manager_name || '-'}</div>
                                             )}

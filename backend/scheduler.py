@@ -238,7 +238,8 @@ def _run_contract_stage_sync():
         rows = conn.execute(
             "SELECT id, name, business_name, naver_store_url, auto_analysis, "
             "COALESCE(auto_analysis_manual, 0) AS auto_analysis_manual "
-            "FROM clients WHERE status = 'active' AND COALESCE(role,'advertiser')='advertiser'"
+            "FROM clients WHERE status = 'active' AND COALESCE(role,'advertiser')='advertiser' "
+            "AND COALESCE(vertical,'store')='store'"
         ).fetchall()
         pause_ids, resume_ids = _decide_stage_actions(rows, stage_by_name, stage_by_slug)
         for cid in pause_ids:
@@ -275,7 +276,7 @@ def _collect_all_keywords(conn):
 
     # 업체 키워드
     clients = conn.execute(
-        "SELECT id, name, main_keywords, naver_store_url FROM clients WHERE status = 'active' AND COALESCE(auto_analysis, 1) = 1 AND COALESCE(role,'advertiser')='advertiser'"  # 관리 중단 업체 제외(호출 다이어트)
+        "SELECT id, name, main_keywords, naver_store_url FROM clients WHERE status = 'active' AND COALESCE(auto_analysis, 1) = 1 AND COALESCE(role,'advertiser')='advertiser' AND COALESCE(vertical,'store')='store'"  # 관리 중단 업체 제외(호출 다이어트) · 플레이스 축 제외(스토어 크롤 대상 아님)
     ).fetchall()
 
     client_keyword_map = {}  # {client_id: [keywords]}
@@ -555,7 +556,7 @@ def _run_daily_analysis():
 
         # 활성 업체 + 키워드 수집
         clients = conn.execute(
-            "SELECT id, name, main_keywords, naver_store_url FROM clients WHERE status = 'active' AND COALESCE(auto_analysis, 1) = 1 AND COALESCE(role,'advertiser')='advertiser'"  # 관리 중단 업체 제외(호출 다이어트)
+            "SELECT id, name, main_keywords, naver_store_url FROM clients WHERE status = 'active' AND COALESCE(auto_analysis, 1) = 1 AND COALESCE(role,'advertiser')='advertiser' AND COALESCE(vertical,'store')='store'"  # 관리 중단 업체 제외(호출 다이어트) · 플레이스 축 제외(스토어 크롤 대상 아님)
         ).fetchall()
 
         client_keyword_map = {}
