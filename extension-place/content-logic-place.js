@@ -1,4 +1,4 @@
-/* METAINC 플레이스 순위 추적기 — 로직분석 페이지 브리지 (v1.0.0)
+/* METAINC 플레이스 순위 추적기 — 로직분석 페이지 브리지 (v1.0.2)
  *
  * 역할 3가지 (기존 수집기 브리지와 별개 메시지 채널 — METAINC_PLACE_* 접두):
  *  1) 러너가 보관한 수집 결과(place_pending_results)를 웹앱에 postMessage 로 전달.
@@ -12,7 +12,7 @@
   var TTL_MS = 20 * 60 * 60 * 1000;
   var acked = false;
   var BANNER_ID = 'metainc-place-bridge-banner';
-  var VERSION = '1.0.0';
+  var VERSION = '1.0.2';
 
   function announce() {
     try { window.postMessage({ type: 'METAINC_PLACE_EXT_READY', version: VERSION }, window.location.origin); } catch (e) {}

@@ -24591,8 +24591,39 @@ window.PlaceTrackingPage = function PlaceTrackingPage(props) {
     if (!t.last) pills.none++;else if (t.last.state === '노출') pills.exposed++;else if (t.last.state === '미노출') pills.missing++;else pills.unknown++;
   });
 
-  // 업체 그룹(연속 표시용): business_key 기준 첫 행에만 업체명 표시
-  var seenBiz = {};
+  // 업체별 그룹(카드형) — 스토어 분석과 같은 개념: 업체 카드 안에 그 업체의 키워드·순위가 모임
+  var bizGroups = [];
+  var bizIdx = {};
+  targets.forEach(function (t) {
+    var gk = (t.business_name || '') + '|' + (t.region || '');
+    if (bizIdx[gk] === undefined) {
+      bizIdx[gk] = bizGroups.length;
+      bizGroups.push({
+        name: t.business_name,
+        region: t.region,
+        place_id: t.place_id || '',
+        items: []
+      });
+    }
+    var g = bizGroups[bizIdx[gk]];
+    if (!g.place_id && t.place_id) g.place_id = t.place_id;
+    g.items.push(t);
+  });
+  function bizSummary(g) {
+    var s = {
+      exposed: 0,
+      missing: 0,
+      wait: 0,
+      best: null
+    };
+    g.items.forEach(function (t) {
+      if (!t.last) s.wait++;else if (t.last.state === '노출') {
+        s.exposed++;
+        if (t.last.rank != null && (s.best === null || t.last.rank < s.best)) s.best = t.last.rank;
+      } else if (t.last.state === '미노출') s.missing++;else s.wait++;
+    });
+    return s;
+  }
   function rankCell(t) {
     if (!t.last || t.last.rank == null) {
       return React.createElement('span', {
@@ -24633,99 +24664,157 @@ window.PlaceTrackingPage = function PlaceTrackingPage(props) {
     if (!s) return '-';
     return String(s).slice(5, 10).replace('-', '.');
   }
-  var rows = [];
-  targets.forEach(function (t) {
-    var bizKey = (t.business_name || '') + '|' + (t.region || '');
-    var first = !seenBiz[bizKey];
-    seenBiz[bizKey] = 1;
-    var key = (t.business_key || '') + '||' + t.keyword;
-    rows.push(React.createElement('tr', {
-      key: 'r' + t.id,
-      onClick: function () {
-        toggleChart(t);
-      },
-      style: {
-        cursor: 'pointer',
-        opacity: t.active ? 1 : 0.45
+  var bizCards = bizGroups.map(function (g, gi) {
+    var s = bizSummary(g);
+    var rowEls = [];
+    g.items.forEach(function (t) {
+      var key = (t.business_key || '') + '||' + t.keyword;
+      rowEls.push(React.createElement('div', {
+        key: 'r' + t.id,
+        onClick: function () {
+          toggleChart(t);
+        },
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '8px 2px',
+          borderTop: '1px solid #f1f5f9',
+          cursor: 'pointer',
+          opacity: t.active ? 1 : 0.45
+        }
+      }, React.createElement('span', {
+        title: t.keyword,
+        style: {
+          flex: 1,
+          minWidth: 0,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          fontFamily: 'SF Mono,JetBrains Mono,monospace',
+          fontSize: 12.5,
+          color: '#334155'
+        }
+      }, t.keyword), React.createElement('span', {
+        style: {
+          width: 52,
+          textAlign: 'right',
+          flexShrink: 0
+        }
+      }, rankCell(t)), React.createElement('span', {
+        style: {
+          flexShrink: 0
+        }
+      }, stateChip(t)), React.createElement('span', {
+        style: {
+          width: 42,
+          textAlign: 'center',
+          flexShrink: 0,
+          color: '#94a3b8',
+          fontFamily: 'SF Mono,monospace',
+          fontSize: 11.5
+        }
+      }, t.last ? fmtDate(t.last.checked_at) : '-'), React.createElement('button', {
+        className: 'btn btn-secondary btn-sm',
+        style: {
+          flexShrink: 0
+        },
+        onClick: function (e) {
+          e.stopPropagation();
+          toggleActive(t);
+        },
+        title: t.active ? '일시중지 — 자동 수집에서 제외' : '재개'
+      }, t.active ? '⏸' : '▶'), React.createElement('button', {
+        className: 'btn btn-secondary btn-sm',
+        style: {
+          flexShrink: 0
+        },
+        onClick: function (e) {
+          e.stopPropagation();
+          removeTarget(t);
+        }
+      }, '✕')));
+      if (openKey === key) {
+        rowEls.push(React.createElement('div', {
+          key: 'x' + t.id,
+          className: 'subcard',
+          style: {
+            margin: '4px 0 8px'
+          }
+        }, window.PlaceRankChart ? React.createElement(window.PlaceRankChart, {
+          series: chartSeries,
+          keyword: t.keyword,
+          days: chartDays,
+          onDays: function (d) {
+            setChartDays(d);
+            loadSeries(t, d);
+          }
+        }) : React.createElement('div', {
+          className: 'empty'
+        }, '차트 컴포넌트를 불러올 수 없습니다.')));
       }
-    }, React.createElement('td', null, first ? React.createElement('span', null, React.createElement('b', null, t.business_name), React.createElement('span', {
+    });
+    return React.createElement('div', {
+      key: 'g' + gi,
+      className: 'card',
       style: {
-        display: 'block',
+        padding: '14px 16px',
+        alignSelf: 'start'
+      }
+    }, React.createElement('div', {
+      style: {
+        display: 'flex',
+        alignItems: 'baseline',
+        justifyContent: 'space-between',
+        gap: 8,
+        flexWrap: 'wrap',
+        marginBottom: 8
+      }
+    }, React.createElement('div', {
+      style: {
+        minWidth: 0
+      }
+    }, React.createElement('div', {
+      style: {
+        fontWeight: 800,
+        fontSize: 15,
+        color: '#0f172a'
+      }
+    }, '📍 ' + (g.name || '')), React.createElement('div', {
+      style: {
         color: '#94a3b8',
-        fontSize: 11.5
+        fontSize: 11.5,
+        marginTop: 1
       }
-    }, (t.region || '') + (t.place_id ? ' · ID ' + t.place_id : ''))) : React.createElement('span', {
+    }, (g.region || '') + (g.place_id ? ' · ID ' + g.place_id : ''))), React.createElement('div', {
       style: {
-        color: '#cbd5e1'
+        display: 'flex',
+        gap: 6,
+        alignItems: 'center',
+        flexWrap: 'wrap'
       }
-    }, '〃')), React.createElement('td', {
+    }, s.best != null ? React.createElement('span', {
       style: {
-        fontFamily: 'SF Mono,JetBrains Mono,monospace',
         fontSize: 12.5,
-        color: '#334155'
+        fontWeight: 800,
+        color: '#059669'
       }
-    }, t.keyword), React.createElement('td', {
+    }, '최고 ' + s.best + '위') : null, React.createElement('span', {
+      className: 'ps ps-g',
       style: {
-        textAlign: 'center'
+        fontSize: 11
       }
-    }, rankCell(t)), React.createElement('td', {
+    }, '노출 ' + s.exposed), React.createElement('span', {
+      className: 'ps ps-r',
       style: {
-        textAlign: 'center'
+        fontSize: 11
       }
-    }, stateChip(t)), React.createElement('td', {
+    }, '미노출 ' + s.missing), s.wait ? React.createElement('span', {
+      className: 'ps ps-n',
       style: {
-        textAlign: 'center',
-        color: '#64748b',
-        fontFamily: 'SF Mono,monospace',
-        fontSize: 12
+        fontSize: 11
       }
-    }, t.last ? fmtDate(t.last.checked_at) : '-'), React.createElement('td', {
-      style: {
-        textAlign: 'center',
-        whiteSpace: 'nowrap'
-      }
-    }, React.createElement('button', {
-      className: 'btn btn-secondary btn-sm',
-      onClick: function (e) {
-        e.stopPropagation();
-        toggleActive(t);
-      },
-      title: t.active ? '일시중지 — 자동 수집에서 제외' : '재개'
-    }, t.active ? '⏸' : '▶'), React.createElement('button', {
-      className: 'btn btn-secondary btn-sm',
-      style: {
-        marginLeft: 6
-      },
-      onClick: function (e) {
-        e.stopPropagation();
-        removeTarget(t);
-      }
-    }, '✕'))));
-    if (openKey === key) {
-      rows.push(React.createElement('tr', {
-        key: 'x' + t.id
-      }, React.createElement('td', {
-        colSpan: 6,
-        style: {
-          background: '#faf9ff'
-        }
-      }, React.createElement('div', {
-        className: 'subcard',
-        style: {
-          margin: '6px 0'
-        }
-      }, window.PlaceRankChart ? React.createElement(window.PlaceRankChart, {
-        series: chartSeries,
-        keyword: t.keyword,
-        days: chartDays,
-        onDays: function (d) {
-          setChartDays(d);
-          loadSeries(t, d);
-        }
-      }) : React.createElement('div', {
-        className: 'empty'
-      }, '차트 컴포넌트를 불러올 수 없습니다.')))));
-    }
+    }, '대기 ' + s.wait) : null)), rowEls);
   });
   var kwChipsEls = kws.map(function (k, i) {
     return React.createElement('span', {
@@ -24953,51 +25042,30 @@ window.PlaceTrackingPage = function PlaceTrackingPage(props) {
   }, '미노출 ' + pills.missing), React.createElement('span', {
     className: 'ps ps-n'
   }, '미확인 ' + pills.unknown + (pills.none ? ' · 이력 없음 ' + pills.none : ''))),
-  // ── 목록 ──
-  React.createElement('div', {
+  // ── 목록 (업체별 카드) ──
+  loading ? React.createElement('div', {
     className: 'card'
-  }, loading ? React.createElement('div', {
+  }, React.createElement('div', {
     className: 'empty'
-  }, '불러오는 중…') : targets.length === 0 ? React.createElement('div', {
+  }, '불러오는 중…')) : targets.length === 0 ? React.createElement('div', {
+    className: 'card'
+  }, React.createElement('div', {
     className: 'empty'
-  }, '아직 추적 대상이 없습니다 — 위에서 업체와 키워드를 등록하면 다음 자동 수집(매일 06:30)부터 순위가 기록됩니다.') : React.createElement('div', {
-    className: 'twrap'
-  }, React.createElement('table', {
+  }, '아직 추적 대상이 없습니다 — 위에서 업체와 키워드를 등록하면 다음 자동 수집(매일 06:30)부터 순위가 기록됩니다.')) : React.createElement('div', {
     style: {
-      minWidth: 720
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 430px), 1fr))',
+      gap: 12,
+      alignItems: 'start'
     }
-  }, React.createElement('thead', null, React.createElement('tr', null, React.createElement('th', {
-    style: {
-      width: 190
-    }
-  }, '업체'), React.createElement('th', null, '키워드'), React.createElement('th', {
-    style: {
-      textAlign: 'center',
-      width: 90
-    }
-  }, '최근 순위'), React.createElement('th', {
-    style: {
-      textAlign: 'center',
-      width: 90
-    }
-  }, '상태'), React.createElement('th', {
-    style: {
-      textAlign: 'center',
-      width: 90
-    }
-  }, '최근 수집'), React.createElement('th', {
-    style: {
-      textAlign: 'center',
-      width: 110
-    }
-  }, '관리'))), React.createElement('tbody', null, rows)))),
+  }, bizCards),
   // ── 안내 ──
   React.createElement('div', {
     className: 'note ok',
     style: {
       marginTop: 12
     }
-  }, '✅ 수집은 「플레이스 순위 추적기」 확장이 설치된 추적 PC(24시간 크롬)가 매일 06:30 자동으로 수행합니다. ', '행을 클릭하면 일자별 순위 추이를 볼 수 있고, 수동 「📍 플레이스 분석」과 같은 이력에 이어집니다.')));
+  }, '✅ 수집은 「플레이스 순위 추적기」 확장이 설치된 추적 PC(24시간 크롬)가 매일 06:30 자동으로 수행합니다. ', '확장이 없는 PC에서도 등록만 해두면 됩니다 — 추적 PC가 수집 직전 최신 등록 목록을 자동으로 받아 갑니다. ', '키워드 행을 클릭하면 일자별 순위 추이를 볼 수 있고, 수동 「📍 플레이스 분석」과 같은 이력에 이어집니다.')));
 };
 
 ;/* ===== js/analysis.jsx ===== */

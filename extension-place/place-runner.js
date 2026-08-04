@@ -1,4 +1,4 @@
-/* METAINC 플레이스 순위 추적기 — 무인 러너 (v1.0.1)
+/* METAINC 플레이스 순위 추적기 — 무인 러너 (v1.0.2)
  *
  * 매일 06:30(로컬) chrome.alarms 로 기동해, 로직분석에 등록된 추적 대상(업체×키워드)을
  * 키워드별로 pcmap.place.naver.com 목록 탭에서 수집(자동 스크롤 + __APOLLO_STATE__ 판독)하고,
@@ -19,6 +19,8 @@
 var RUN_HOUR = 6, RUN_MIN = 30;                 // 매일 06:30 — 쇼핑 수집기 새벽 창(01:00~05:45) 회피
 var DAILY_ALARM = 'place-daily';
 var STEP_ALARM = 'place-step';
+var SYNC_ALARM = 'place-sync-wait';
+var SYNC_WAIT_MS = 30000;                       // 선동기화 대기 — 로직 탭이 목록을 push 할 시간
 var STEP_GAP_MS = 35000;                        // 키워드 간 기본 간격(+0~15초 랜덤)
 var STEP_WATCHDOG_MS = 180000;                  // 단계 워치독 — 워커 서스펜션·탭 무응답 재개(스크롤 판독 최장 ~60초 감안)
 var RUN_STALE_MS = 2 * 60 * 60 * 1000;          // 2시간 넘은 진행 상태는 버림(비정상 종료 잔재)
@@ -55,12 +57,58 @@ ensureDailyAlarm();
 
 /* ---------- 수집 시작 ---------- */
 function maybeStartRun(source) {
-  return sGet(['place_enabled', 'place_targets', 'place_run']).then(function (st) {
+  return sGet(['place_enabled', 'place_run', 'place_sync']).then(function (st) {
     if (st.place_enabled === false && source === 'daily') {
       return sSet({ place_last_run: { finishedAt: Date.now(), source: source, skipped: 'disabled' } });
     }
     var run = st.place_run;
     if (run && run.startedAt && (Date.now() - run.startedAt) < RUN_STALE_MS) return; // 진행 중 — 중복 기동 방지
+    if (source === 'daily') {
+      // 새벽 무인 수집은 목록 선동기화 후 시작 — 스토리지 목록은 추적 화면을 마지막으로 연 시점의
+      // 스냅샷이라, 직원들이 낮에 등록한 대상을 반영하려면 수집 직전 로직 탭을 잠깐 열어 최신 목록을 받는다.
+      var sy = st.place_sync;
+      if (sy && sy.at && (Date.now() - sy.at) < 2 * SYNC_WAIT_MS) return; // 선동기화 이미 진행 중
+      return startTargetSync(source);
+    }
+    return buildAndGo(source); // 수동(지금 수집)은 화면이 방금 목록을 push 했으므로 바로 시작
+  });
+}
+
+/* 선동기화 — 로직분석 추적 화면을 백그라운드로 열면 페이지가 서버 목록을 받아 확장에 push 한다.
+ * 로그인·SSO 실패 시엔 기존 목록으로 그대로 진행(무해 폴백). */
+function startTargetSync(source) {
+  return new Promise(function (resolve) {
+    resolveErpToken(function (tok) {
+      var url = tok
+        ? 'https://logic.metainc.co.kr/?sso=' + encodeURIComponent(tok) + '#placetrack'
+        : 'https://logic.metainc.co.kr/#placetrack';
+      function arm(tabId) {
+        sSet({ place_sync: { tabId: tabId, source: source, at: Date.now() } }).then(function () {
+          try { chrome.alarms.create(SYNC_ALARM, { when: Date.now() + SYNC_WAIT_MS }); } catch (e) {}
+          resolve();
+        });
+      }
+      try {
+        chrome.tabs.create({ url: url, active: false }, function (tab) {
+          arm((!chrome.runtime.lastError && tab) ? tab.id : null);
+        });
+      } catch (e) { arm(null); }
+    });
+  });
+}
+
+function finishTargetSync() {
+  sGet(['place_sync']).then(function (st) {
+    var sy = st.place_sync || {};
+    closeTabQuiet(sy.tabId);
+    sRemove(['place_sync']).then(function () { buildAndGo(sy.source || 'daily'); });
+  });
+}
+
+function buildAndGo(source) {
+  return sGet(['place_targets', 'place_run']).then(function (st) {
+    var run = st.place_run;
+    if (run && run.startedAt && (Date.now() - run.startedAt) < RUN_STALE_MS) return; // 선동기화 중 수동 시작 등
     var targets = (st.place_targets && st.place_targets.targets) || [];
     targets = targets.filter(function (t) { return t && t.keyword && t.business_name; });
     if (!targets.length) {
@@ -370,14 +418,20 @@ try {
   chrome.alarms.onAlarm.addListener(function (alarm) {
     if (!alarm) return;
     if (alarm.name === DAILY_ALARM) maybeStartRun('daily');
+    else if (alarm.name === SYNC_ALARM) finishTargetSync();
     else if (alarm.name === STEP_ALARM) step();
   });
 } catch (e) {}
 
 /* 결과 TTL 청소 — 기동 시 20시간 지난 미전달 결과 폐기(다음 수집이 새로 기록) */
-sGet(['place_pending_results']).then(function (st) {
+sGet(['place_pending_results', 'place_sync']).then(function (st) {
   var p = st.place_pending_results;
   if (p && p.created_at && (Date.now() - p.created_at) > RESULT_TTL_MS) {
     sRemove(['place_pending_results']);
+  }
+  var sy = st.place_sync; // 브라우저 재시작 등으로 알람을 잃은 선동기화 잔재 정리(자동 수집 재개 가능하게)
+  if (sy && sy.at && (Date.now() - sy.at) > 10 * 60 * 1000) {
+    closeTabQuiet(sy.tabId);
+    sRemove(['place_sync']);
   }
 });
