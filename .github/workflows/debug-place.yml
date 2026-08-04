@@ -70,6 +70,14 @@ jobs:
             echo
             echo "== 호스트 메모리/디스크 =="
             free -m | head -2; df -h / | tail -1
+            echo
+            echo "== 디스크 구성 (증설 가능성 판단 — 읽기 전용) =="
+            lsblk -e7 -o NAME,SIZE,TYPE,MOUNTPOINT 2>/dev/null || true
+            sudo pvs 2>/dev/null || true
+            sudo vgs 2>/dev/null || true
+            sudo lvs 2>/dev/null || true
+            sudo dmidecode -s system-manufacturer 2>/dev/null || true
+            sudo dmidecode -s system-product-name 2>/dev/null || true
             if [ "${{ inputs.prune }}" = "true" ]; then
               echo
               echo "== 디스크 사용 내역 (정리 전) =="
