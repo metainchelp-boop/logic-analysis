@@ -351,7 +351,7 @@ window.App = function App() {
     };
 
     /* ==================== 스토어 분석 → 키워드 순위 탭 이동 ====================
-       검색 컨텍스트는 RankCheckCard 가 sessionStorage('logic_rank_ctx')에 기록한 뒤 호출 */
+       검색 컨텍스트는 RankTrackingSection(analysisOnly)이 sessionStorage('logic_rank_ctx')에 기록한 뒤 호출 */
     var handleOpenRankTab = function() {
         setCurrentPage('rank');
         try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch(e) {}

@@ -421,6 +421,13 @@ def _run_rank_tracking():
                             rank, page, competitors = find_product_rank_from_cache(
                                 keyword, product["product_url"], all_prods
                             )
+                            # 슬러그로 저장된 스토어명 자가치유 (매칭 시 mallName 확보됨)
+                            if rank is not None:
+                                try:
+                                    from database import heal_tracked_product_info
+                                    heal_tracked_product_info(product["id"], product["product_url"], all_prods)
+                                except Exception:
+                                    pass
                             # 리뷰수 1회 조회 (상품당 캐시) — 실패해도 순위 저장엔 무영향
                             _purl = product.get("product_url")
                             if _purl not in _review_cache:

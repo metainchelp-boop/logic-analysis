@@ -298,15 +298,16 @@ window.AnalysisResults = function AnalysisResults(props) {
                 /* ========== 4. 내 상품 현황 ========== */
                 analysisData && React.createElement(window.SectionDivider, { label: '4. 내 상품 현황', icon: '🛒', color: '#059669', sub: '노출순위 · 판매추정 · 리뷰 · SEO 4종' }),
     
-                /* 키워드별 노출 순위 — 상세 추적 UI는 📊 키워드 순위 탭으로 분리(2026-08-04).
-                   1회성 조회는 이 카드가 계속 수행해 진입 전략·시장 매출이 소비(무회귀). */
+                /* 키워드별 노출 순위 — analysisOnly 모드(노출 분석·1회성 조회만, 보고서 구성 요소).
+                   추적 상품 목록·등록 관리만 📊 키워드 순위 탭으로 분리(2026-08-04, 직원 신고로
+                   노출 분석 블록은 복구 — 탭 분리 대상은 '추적 현황 열람'이지 분석 결과가 아님). */
                 React.createElement(window.SectionErrorBoundary, { name: '순위 추적' },
-                    React.createElement(window.RankCheckCard, { searchedKeyword: searchedKeyword, searchedProductUrl: searchedProductUrl, cachedProductName: advertiserReport && advertiserReport.product_name ? advertiserReport.product_name : (analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo.product_name : null), relatedKeywords: (relatedData ? (relatedData.golden_keywords || []).concat(relatedData.related_keywords || []).map(function(k) { return typeof k === 'string' ? k : (k && k.keyword) || ''; }).filter(Boolean) : []), onRankResult: setRankCheckResult, onOpenRankTab: props.onOpenRankTab })
+                    React.createElement(RankTrackingSection, { analysisOnly: true, onOpenRankTab: props.onOpenRankTab, products: products, refreshProducts: loadProducts, searchedKeyword: searchedKeyword, searchedProductUrl: searchedProductUrl, cachedProductName: advertiserReport && advertiserReport.product_name ? advertiserReport.product_name : (analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo.product_name : null), relatedKeywords: (relatedData ? (relatedData.golden_keywords || []).concat(relatedData.related_keywords || []).map(function(k) { return typeof k === 'string' ? k : (k && k.keyword) || ''; }).filter(Boolean) : []), onNavigateToClient: handleNavigateToClient, canEdit: currentUser.role !== 'viewer', onRankResult: setRankCheckResult })
                 ),
 
                 /* 분석 상품 순위추적 원클릭 등록 */
                 searchedProductUrl && React.createElement(window.SectionErrorBoundary, { name: '추적 등록' },
-                    React.createElement(window.TrackRegisterButton, { searchedProductUrl: searchedProductUrl, searchedKeyword: searchedKeyword, products: products, refreshProducts: loadProducts, canEdit: currentUser.role !== 'viewer' })
+                    React.createElement(window.TrackRegisterButton, { searchedProductUrl: searchedProductUrl, searchedKeyword: searchedKeyword, products: products, refreshProducts: loadProducts, canEdit: currentUser.role !== 'viewer', storeNameHint: _realStoreName })
                 ),
     
                 /* 판매량 추정 */

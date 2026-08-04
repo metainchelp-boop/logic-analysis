@@ -342,6 +342,9 @@ def _verify_keyword_ownership(keyword_id: int, current_user: dict):
 class ProductAddRequest(BaseModel):
     product_url: str
     keywords: List[str]
+    # 분석 화면에서 이미 확보한 실제 스토어명(상세 HTML·광고주 리포트) — 등록 시
+    # 쇼핑 검색으로 이름을 못 구해 URL 슬러그가 저장되는 문제의 예방 힌트(선택)
+    store_name_hint: Optional[str] = None
 
     @field_validator('product_url')
     @classmethod
@@ -624,6 +627,14 @@ def track_product(req: ProductAddRequest, background_tasks: BackgroundTasks, cur
         product_info = get_product_info(req.product_url)
         product_id_str = extract_product_id_from_url(req.product_url)
 
+        # 스토어명이 URL 슬러그로 남으면(검색 미매칭·페이지 접근 실패) 분석 화면이
+        # 이미 확보한 실제 이름(store_name_hint)으로 대체 — 슬러그 저장 신고(2026-08-04) 예방
+        _slug = (extract_store_name_from_url(req.product_url) or "").strip()
+        _hint = (req.store_name_hint or "").strip()
+        _got = (product_info.get("store_name") or "").strip()
+        if _hint and _hint.lower() != _slug.lower() and (not _got or _got.lower() == _slug.lower()):
+            product_info["store_name"] = _hint
+
         # DB에 상품 등록 (user_id 포함)
         db_product_id = add_tracked_product(
             product_url=req.product_url,
@@ -680,6 +691,12 @@ def run_initial_rank_check(product_id: int, product_url: str, keyword_ids: List[
             if not _prods:
                 logger.warning(f"초기/재체크 [{kw_info['keyword']}] 검색 결과 0건 — 수집 실패로 보고 순위 저장 건너뜀")
                 continue
+            # 등록 시 슬러그로 저장된 스토어명을 수집 SERP의 실제 mallName으로 보정
+            try:
+                from database import heal_tracked_product_info
+                heal_tracked_product_info(product_id, product_url, _prods)
+            except Exception:
+                pass
             rank, page, competitors = find_product_rank(
                 keyword=kw_info["keyword"],
                 product_url=product_url,
@@ -749,8 +766,12 @@ def list_products(current_user: dict = Depends(get_current_user)):
     for p in products:
         p["keywords"] = kw_map.get(p["id"], [])
 
-        # 상품명이 비어있으면 목록에 추가 (응답은 즉시 반환, 업데이트는 백그라운드)
-        if not p.get("product_name") or p["product_name"].strip() == '':
+        # 상품명이 비어있거나 스토어명이 URL 슬러그(등록 시 확보 실패 잔재)면
+        # 목록에 추가 (응답은 즉시 반환, 업데이트는 백그라운드)
+        _slug = (extract_store_name_from_url(p.get("product_url") or "") or "").strip().lower()
+        _store = (p.get("store_name") or "").strip()
+        if (not p.get("product_name") or p["product_name"].strip() == ''
+                or not _store or _store.lower() == _slug):
             needs_info_update.append(p)
 
         result.append(p)
@@ -767,21 +788,36 @@ def list_products(current_user: dict = Depends(get_current_user)):
                     keywords = p.get("keywords", [])
                     search_keyword = keywords[0]["keyword"] if keywords and isinstance(keywords[0], dict) else ""
                     info = get_product_info(p["product_url"], keyword=search_keyword)
-                    if info.get("product_name"):
-                        conn2 = sqlite3.connect(DB_PATH, timeout=10)
-                        try:
-                            conn2.execute("PRAGMA busy_timeout=30000")
-                            conn2.execute("""
-                                UPDATE tracked_products SET
-                                    product_name=?, store_name=?, image_url=?, price=?,
-                                    updated_at=datetime('now','localtime')
-                                WHERE id=?
-                            """, (info["product_name"], info["store_name"],
-                                  info["image_url"], info["price"], p["id"]))
-                            conn2.commit()
-                            logger.info(f"[bg] 상품 정보 재조회 성공: ID={p['id']} → {info['product_name'][:30]}")
-                        finally:
-                            conn2.close()
+                    slug = (extract_store_name_from_url(p.get("product_url") or "") or "").strip().lower()
+                    cur_name = (p.get("product_name") or "").strip()
+                    cur_store = (p.get("store_name") or "").strip()
+                    new_name = (info.get("product_name") or "").strip()
+                    new_store = (info.get("store_name") or "").strip()
+                    # 이름은 비었을 때만 채우고, 스토어명은 슬러그/빈 값을 실제 이름으로만 교체
+                    # (정상 값은 절대 덮지 않음 · 재조회가 또 슬러그를 주면 쓰기 생략)
+                    name_fix = bool(new_name) and not cur_name
+                    store_fix = (bool(new_store) and new_store.lower() != slug
+                                 and (not cur_store or cur_store.lower() == slug))
+                    if not name_fix and not store_fix:
+                        continue
+                    conn2 = sqlite3.connect(DB_PATH, timeout=10)
+                    try:
+                        conn2.execute("PRAGMA busy_timeout=30000")
+                        conn2.execute("""
+                            UPDATE tracked_products SET
+                                product_name=?, store_name=?,
+                                image_url=COALESCE(NULLIF(image_url,''), ?),
+                                price=CASE WHEN COALESCE(price,0)=0 THEN ? ELSE price END,
+                                updated_at=datetime('now','localtime')
+                            WHERE id=?
+                        """, (new_name if name_fix else cur_name,
+                              new_store if store_fix else cur_store,
+                              info.get("image_url") or "", info.get("price") or 0, p["id"]))
+                        conn2.commit()
+                        logger.info(f"[bg] 상품 정보 보정: ID={p['id']} → "
+                                    f"{(new_name if name_fix else cur_name)[:30]} / {(new_store if store_fix else cur_store)[:20]}")
+                    finally:
+                        conn2.close()
                 except Exception as e:
                     logger.warning(f"[bg] 상품 정보 재조회 실패: ID={p['id']}: {e}")
 
