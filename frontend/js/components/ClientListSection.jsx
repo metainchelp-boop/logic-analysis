@@ -17,6 +17,38 @@ window.ClientListSection = function ClientListSection({ currentUser, onClientCli
     var _s5 = useState([]); var managers = _s5[0]; var setManagers = _s5[1];     // 배정 가능한 담당자
     var _s6 = useState(null); var editMgrId = _s6[0]; var setEditMgrId = _s6[1]; // 담당자 변경 중인 업체 id
 
+    /* 2차 확산(2026-08-05): 업체별 순위 롤업(rank-overview) — 카드에 대표 키워드
+       순위·변동·미니 추이 표시용. 실패해도 카드 기본 표시는 그대로(가산). */
+    var _s7 = useState({}); var rankOv = _s7[0]; var setRankOv = _s7[1];         // { clientId: overviewItem }
+    var _s8 = useState(false); var attnOnly = _s8[0]; var setAttnOnly = _s8[1];  // ⚠️ 주의만 보기
+
+    useEffect(function() {
+        api.get('/cd/rank-overview').then(function(res) {
+            if (res && res.success && res.data) {
+                var m = {};
+                res.data.forEach(function(it) { m[it.id] = it; });
+                setRankOv(m);
+            }
+        }).catch(function() {});
+    }, []);
+
+    /* 카드 미니 스파크라인 — 대표 키워드 8일 추이 (낮은 순위 = 위) */
+    var miniSpark = function(series) {
+        var pts = (series || []).filter(function(p) { return p.rank != null; });
+        if (pts.length < 2) return null;
+        var w = 200, h = 22, pad = 2;
+        var rs = pts.map(function(p) { return p.rank; });
+        var mn = Math.min.apply(null, rs), mx = Math.max.apply(null, rs);
+        var span = (mx - mn) || 1;
+        var coords = pts.map(function(p, i) {
+            return (pad + (w - pad * 2) * (i / (pts.length - 1))).toFixed(1) + ',' +
+                   (pad + (h - pad * 2) * ((p.rank - mn) / span)).toFixed(1);
+        });
+        var improving = rs[rs.length - 1] <= rs[0];
+        return React.createElement('svg', { width: '100%', height: h, viewBox: '0 0 ' + w + ' ' + h, preserveAspectRatio: 'none', style: { display: 'block', margin: '4px 0 2px' } },
+            React.createElement('polyline', { points: coords.join(' '), fill: 'none', stroke: improving ? '#16a34a' : '#dc2626', strokeWidth: 1.8, strokeLinejoin: 'round', strokeLinecap: 'round' }));
+    };
+
     useEffect(function() {
         if (!isAdmin) return;
         api.get('/clients/assignable-managers').then(function(res) {
@@ -99,11 +131,18 @@ window.ClientListSection = function ClientListSection({ currentUser, onClientCli
         return '미분석';
     };
 
+    /* ⚠️ 주의 판정 — 추적 키워드는 있는데 노출 0 (rank-overview 기준) */
+    var isAttention = function(c) {
+        var ov = rankOv[c.id];
+        return !!(ov && ov.keywords > 0 && ov.exposed === 0);
+    };
+
     /* 검색 + 가나다 정렬 */
     var filtered = clients
         .filter(function(c) {
             // 담당자 탭 필터 (null = 전체)
             if (mgrFilter && (c.manager_name || '(미지정)') !== mgrFilter) return false;
+            if (attnOnly && !isAttention(c)) return false;
             if (!query.trim()) return true;
             var q = query.trim().toLowerCase();
             return (c.name || '').toLowerCase().indexOf(q) !== -1
@@ -151,6 +190,36 @@ window.ClientListSection = function ClientListSection({ currentUser, onClientCli
                     }
                 })
             ),
+
+            /* 2차 확산: KPI 스트립 — 업체·오늘 분석·상승 키워드·주의(클릭 필터) */
+            !loading && clients.length > 0 && (function() {
+                var today = new Date().toISOString().slice(0, 10);
+                var analyzedToday = clients.filter(function(c) {
+                    return c.analyzed_keywords && c.analyzed_keywords[0] && String(c.analyzed_keywords[0].analyzed_date || '').slice(0, 10) === today;
+                }).length;
+                var upTotal = 0, attn = 0, hasOv = false;
+                clients.forEach(function(c) {
+                    var ov = rankOv[c.id];
+                    if (ov) { hasOv = true; upTotal += (ov.up || 0); if (isAttention(c)) attn++; }
+                });
+                var kpi = function(k, v, sub, subColor, onClick, active) {
+                    return React.createElement('div', {
+                        onClick: onClick || null,
+                        style: { background: active ? '#fffbeb' : '#f8fafc', border: '1px solid ' + (active ? '#f59e0b' : '#eef2f6'), borderRadius: 12, padding: '11px 15px', cursor: onClick ? 'pointer' : 'default', flex: '1 1 150px', minWidth: 140 }
+                    },
+                        React.createElement('div', { style: { fontSize: 11, fontWeight: 700, color: '#94a3b8', letterSpacing: '.03em' } }, k),
+                        React.createElement('div', { style: { fontSize: 20, fontWeight: 800, color: '#0f172a', marginTop: 1 } }, v),
+                        sub && React.createElement('div', { style: { fontSize: 11, color: subColor || '#94a3b8' } }, sub)
+                    );
+                };
+                return React.createElement('div', { style: { display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 16 } },
+                    kpi('내 업체', clients.length, null),
+                    kpi('오늘 자동 분석', analyzedToday, '보고서 생성됨'),
+                    hasOv && kpi('상승 키워드', '▲ ' + upTotal, '전일 대비', '#16a34a'),
+                    hasOv && kpi('주의 필요', attn, attnOnly ? '필터 적용 중 — 클릭 해제' : '노출 0 — 클릭 시 필터', '#b45309',
+                        function() { setAttnOnly(!attnOnly); }, attnOnly)
+                );
+            })(),
 
             /* 담당자별 구분 탭 (상위 계정 전용) — 클릭 시 해당 담당자 업체만 모아보기 */
             isAdmin && !loading && clients.length > 0 && (function() {
@@ -210,12 +279,22 @@ window.ClientListSection = function ClientListSection({ currentUser, onClientCli
             },
                 filtered.map(function(client) {
                     var lastDate = getLastAnalyzedText(client);
+                    var ov = rankOv[client.id];
+                    var attn = isAttention(client);
+                    var repKw = ov && ov.top_keywords && ov.top_keywords[0];
+                    var repDelta = null;
+                    if (ov && ov.rep_series && ov.rep_series.length >= 2) {
+                        var _rs = ov.rep_series;
+                        if (_rs[_rs.length - 1].rank != null && _rs[_rs.length - 2].rank != null) {
+                            repDelta = _rs[_rs.length - 2].rank - _rs[_rs.length - 1].rank; // 양수=상승
+                        }
+                    }
 
                     return React.createElement('div', {
                         key: client.id,
                         style: {
                             background: '#fff',
-                            border: '1px solid #e2e8f0',
+                            border: '1px solid ' + (attn ? '#f59e0b' : '#e2e8f0'),
                             borderRadius: 12,
                             padding: '16px 18px',
                             transition: 'all 0.15s ease',
@@ -230,16 +309,37 @@ window.ClientListSection = function ClientListSection({ currentUser, onClientCli
                             e.currentTarget.style.transform = 'translateY(-2px)';
                         },
                         onMouseLeave: function(e) {
-                            e.currentTarget.style.borderColor = '#e2e8f0';
+                            e.currentTarget.style.borderColor = attn ? '#f59e0b' : '#e2e8f0';
                             e.currentTarget.style.boxShadow = '0 1px 2px rgba(0,0,0,0.04)';
                             e.currentTarget.style.transform = 'translateY(0)';
                         }
                     },
-                        /* 업체명 + 마지막 분석 */
+                        /* 업체명 + 대표 키워드 순위(2차 확산) + 마지막 분석 */
                         React.createElement('div', null,
                             React.createElement('div', {
                                 style: { fontSize: 15, fontWeight: 700, color: '#1e293b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: 6 }
-                            }, client.name || '(이름 없음)'),
+                            },
+                                client.vertical === 'place' && React.createElement('span', { title: '플레이스 업체', style: { marginRight: 4 } }, '📍'),
+                                client.name || '(이름 없음)'),
+
+                            /* 대표 키워드 현재 순위 + 변동 + 미니 추이 */
+                            ov && React.createElement('div', { style: { marginBottom: 7 } },
+                                repKw
+                                    ? React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 6 } },
+                                        React.createElement('span', { style: { fontSize: 12, color: '#475569', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, repKw.keyword),
+                                        React.createElement('span', { style: { fontSize: 16, fontWeight: 800, color: repKw.rank <= 10 ? '#16a34a' : '#0f172a' } }, repKw.rank + '위'),
+                                        repDelta != null && repDelta !== 0 && React.createElement('span', {
+                                            style: { fontSize: 11, fontWeight: 800, borderRadius: 6, padding: '1px 6px',
+                                                     color: repDelta > 0 ? '#dc2626' : '#2563eb', background: repDelta > 0 ? '#fef2f2' : '#eff6ff' }
+                                        }, (repDelta > 0 ? '▲' : '▼') + Math.abs(repDelta)))
+                                    : (ov.keywords > 0
+                                        ? React.createElement('div', { style: { fontSize: 12, fontWeight: 700, color: '#b45309' } }, '⚠️ 추적 ' + ov.keywords + '개 전부 미노출')
+                                        : null),
+                                miniSpark(ov.rep_series),
+                                ov.keywords > 0 && React.createElement('div', { style: { fontSize: 11, color: '#94a3b8' } },
+                                    '키워드 ' + ov.keywords + ' · 노출 ' + ov.exposed + (ov.top10 ? ' · TOP10 ' + ov.top10 : ''))
+                            ),
+
                             React.createElement('div', {
                                 style: { fontSize: 11, color: '#dc2626', marginBottom: isAdmin ? 4 : 12 }
                             }, '마지막 분석: ' + lastDate),

@@ -1003,20 +1003,23 @@ def rank_overview(current_user: dict = Depends(get_current_user)):
         user_id = current_user["id"]
         is_adm = _is_admin(current_user)
         user_role = current_user.get("role", "viewer")
+        # 플레이스 축 업체는 제외 — 이 탭(키워드 순위)은 쇼핑 순위 전용이라
+        # client_rank_history 가 없는 플레이스 업체가 「주의(노출 0)」로 오인 집계되는 것 방지.
         _COLS = "id, name, naver_store_url, role"
+        _V = "AND COALESCE(vertical,'store')='store' "
         if user_role == "viewer":
             clients = conn.execute(
                 f"SELECT {_COLS} FROM clients WHERE status='active' "
-                "AND COALESCE(role,'advertiser')='prospect' AND created_by = ? "
+                f"AND COALESCE(role,'advertiser')='prospect' {_V}AND created_by = ? "
                 "ORDER BY name", (user_id,)).fetchall()
         elif is_adm:
             clients = conn.execute(
                 f"SELECT {_COLS} FROM clients WHERE status='active' "
-                "AND COALESCE(role,'advertiser')='advertiser' ORDER BY name").fetchall()
+                f"AND COALESCE(role,'advertiser')='advertiser' {_V}ORDER BY name").fetchall()
         else:
             clients = conn.execute(
                 f"SELECT {_COLS} FROM clients WHERE status='active' "
-                "AND COALESCE(role,'advertiser')='advertiser' "
+                f"AND COALESCE(role,'advertiser')='advertiser' {_V}"
                 "AND (created_by = ? OR created_by IS NULL OR created_by = '') "
                 "ORDER BY name", (user_id,)).fetchall()
         if not clients:
@@ -1068,11 +1071,17 @@ def rank_overview(current_user: dict = Depends(get_current_user)):
                     "store_url": c["naver_store_url"] or "",
                     "role": c["role"] or "advertiser",
                     "keywords": 0, "exposed": 0, "top10": 0, "up": 0, "down": 0,
-                    "last_checked": "", "top_keywords": []}
+                    "last_checked": "", "top_keywords": [], "rep_series": []}
             if e:
                 e["tops"].sort()
                 item.update({k: e[k] for k in ("keywords", "exposed", "top10", "up", "down", "last_checked")})
                 item["top_keywords"] = [{"keyword": k, "rank": r} for r, k in e["tops"][:2]]
+                # 대표 키워드(최고 순위)의 8일 추이 — 대시보드 카드 미니 스파크용 (2차 확산)
+                if e["tops"]:
+                    _rep_kw = e["tops"][0][1]
+                    _rep_days = per.get((c["id"], _rep_kw), {})
+                    item["rep_series"] = [{"d": d, "rank": _rep_days[d]}
+                                          for d in sorted(_rep_days.keys())]
             out.append(item)
         totals = {
             "clients": len(out),
@@ -1091,25 +1100,27 @@ def rank_overview(current_user: dict = Depends(get_current_user)):
 
 
 @router.get("/{client_id}/rank-board")
-def rank_board(client_id: int, current_user: dict = Depends(get_current_user)):
-    """업체 상세 — 키워드별 최신 순위·전일 대비·7일 시리즈·검색량 (탭 분리 1차).
+def rank_board(client_id: int, days: int = 8, current_user: dict = Depends(get_current_user)):
+    """업체 상세 — 키워드별 최신 순위·전일 대비·시리즈·검색량 (탭 분리 1차).
 
-    순위 원천 = client_rank_history(최근 8일), 검색량 = client_analyses 의
-    키워드별 최신 summaryCards.totalVolume(콤마 문자열 그대로 표시용).
+    순위 원천 = client_rank_history(기본 최근 8일 — 2차 확산에서 days 파라미터로
+    7/30일 추이 전환), 검색량 = client_analyses 의 키워드별 최신
+    summaryCards.totalVolume(콤마 문자열 그대로 표시용).
     """
     conn = _get_conn()
     try:
+        days = min(max(int(days or 8), 7), 90)
         _verify_client_access(conn, client_id, current_user)
         client = conn.execute(
             "SELECT id, name, naver_store_url FROM clients WHERE id=?", (client_id,)).fetchone()
         if not client:
             raise HTTPException(status_code=404, detail="업체를 찾을 수 없습니다.")
 
-        rows = conn.execute("""
+        rows = conn.execute(f"""
             SELECT keyword, rank_position, page_number,
                    substr(checked_at,1,10) AS d, checked_at, id
             FROM client_rank_history
-            WHERE client_id=? AND checked_at >= date('now','localtime','-8 day')
+            WHERE client_id=? AND checked_at >= date('now','localtime','-{days} day')
             ORDER BY id
         """, (client_id,)).fetchall()
         per = {}
@@ -1139,11 +1150,18 @@ def rank_board(client_id: int, current_user: dict = Depends(get_current_user)):
             delta = None
             if latest["rank"] is not None and prev_rank is not None:
                 delta = prev_rank - latest["rank"]   # 양수=상승
+            # 미노출 연속일 — 시리즈 끝에서부터 연속으로 rank 가 없는 일수 (2차 확산)
+            unexposed_days = 0
+            for d in reversed(ds):
+                if days_map_rank := days[d]["rank"]:
+                    break
+                unexposed_days += 1
             board.append({
                 "keyword": kw, "rank": latest["rank"], "page": latest["page"],
                 "prev_rank": prev_rank, "delta": delta,
                 "volume": vol_map.get(kw, "-"),
                 "last_checked": latest["at"], "series": series,
+                "unexposed_days": unexposed_days,
             })
         # 정렬: 노출(순위 오름차순) 먼저, 미노출 뒤(키워드 가나다)
         board.sort(key=lambda b: (b["rank"] is None, b["rank"] if b["rank"] is not None else 0, b["keyword"]))

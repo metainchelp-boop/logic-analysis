@@ -69,6 +69,8 @@ window.KeywordRankPage = function KeywordRankPage(props) {
     var _bdL = useState(false); var bdLoading = _bdL[0], setBdLoading = _bdL[1];
     var _q = useState(''); var query = _q[0], setQuery = _q[1];
     var _flt = useState('all'); var filter = _flt[0], setFilter = _flt[1]; // all|attention|up|down
+    var _bs = useState('rank'); var boardSort = _bs[0], setBoardSort = _bs[1];   // rank|delta|volume|name (2차 확산)
+    var _bd2 = useState(7); var boardDays = _bd2[0], setBoardDays = _bd2[1];     // 추이 기간 7|30
 
     /* 하단 RankTrackingSection 용 — 추적 상품은 이 페이지가 자체 로드 */
     var _pr = useState([]); var products = _pr[0], setProducts = _pr[1];
@@ -208,17 +210,25 @@ window.KeywordRankPage = function KeywordRankPage(props) {
 
     useEffect(function() { loadOverview(); loadProducts(); }, [loadOverview, loadProducts]);
 
-    var openDetail = function(c) {
-        setSelected({ id: c.id, name: c.name });
+    var loadBoard = function(id, days) {
         setBoard(null);
         setBdLoading(true);
-        api.get('/cd/' + c.id + '/rank-board').then(function(res) {
+        api.get('/cd/' + id + '/rank-board?days=' + (days || boardDays)).then(function(res) {
             if (res && res.success) setBoard(res);
             else toast.error((res && res.detail) || '키워드 보드를 불러오지 못했습니다.');
         }).catch(function() {
             try { toast.error('키워드 보드를 불러오지 못했습니다.'); } catch (e) {}
         }).finally(function() { setBdLoading(false); });
+    };
+    var openDetail = function(c) {
+        setSelected({ id: c.id, name: c.name });
+        loadBoard(c.id, boardDays);
         try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch (e) {}
+    };
+    var changeBoardDays = function(d) {
+        if (d === boardDays) return;
+        setBoardDays(d);
+        if (selected) loadBoard(selected.id, d);
     };
     var backToList = function() { setSelected(null); setBoard(null); };
 
@@ -327,6 +337,14 @@ window.KeywordRankPage = function KeywordRankPage(props) {
         var kpis = (board && board.kpis) || {};
         var rows = (board && board.board) || [];
         var client = (board && board.client) || selected;
+        /* 2차 확산: 정렬 — 서버 기본(노출 순위순) 위에 클라이언트 재정렬 */
+        var _volNum = function(v) { var n = parseInt(String(v || '').replace(/[^0-9]/g, ''), 10); return isNaN(n) ? -1 : n; };
+        rows = rows.slice().sort(function(a, b) {
+            if (boardSort === 'delta') return Math.abs(b.delta || 0) - Math.abs(a.delta || 0);
+            if (boardSort === 'volume') return _volNum(b.volume) - _volNum(a.volume);
+            if (boardSort === 'name') return String(a.keyword).localeCompare(String(b.keyword), 'ko');
+            return (a.rank == null) - (b.rank == null) || (a.rank || 0) - (b.rank || 0);
+        });
         return React.createElement(React.Fragment, null,
             React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14, flexWrap: 'wrap' } },
                 React.createElement('button', {
@@ -363,6 +381,27 @@ window.KeywordRankPage = function KeywordRankPage(props) {
                     React.createElement('div', { style: _krKpiS }, '전일 대비'))
             ),
             React.createElement('div', { style: _krCard },
+                /* 2차 확산: 정렬 · 추이 기간 컨트롤 */
+                React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 } },
+                    React.createElement('select', {
+                        value: boardSort, onChange: function(e) { setBoardSort(e.target.value); },
+                        style: { border: '1px solid #e2e8f0', borderRadius: 9, padding: '7px 11px', fontSize: 12.5, fontWeight: 600, color: '#475569', background: '#fff' }
+                    },
+                        React.createElement('option', { value: 'rank' }, '정렬: 순위순'),
+                        React.createElement('option', { value: 'delta' }, '변동 큰 순'),
+                        React.createElement('option', { value: 'volume' }, '검색량 많은 순'),
+                        React.createElement('option', { value: 'name' }, '가나다순')),
+                    React.createElement('span', { style: { display: 'inline-flex', border: '1px solid #e2e8f0', borderRadius: 9, overflow: 'hidden' } },
+                        [7, 30].map(function(d) {
+                            var on = boardDays === d;
+                            return React.createElement('button', {
+                                key: d, onClick: function() { changeBoardDays(d); },
+                                style: { border: 'none', padding: '7px 13px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer',
+                                         background: on ? '#3b82f6' : '#fff', color: on ? '#fff' : '#475569' }
+                            }, d + '일');
+                        })),
+                    React.createElement('span', { style: { fontSize: 12, color: '#94a3b8', marginLeft: 'auto' } }, '추이·전일 대비는 매일 08:00 기록 기준')
+                ),
                 bdLoading ? React.createElement('div', { style: { padding: '40px 0', textAlign: 'center', color: '#94a3b8', fontSize: 13 } }, '불러오는 중...') :
                 rows.length === 0 ? React.createElement('div', { style: { padding: '40px 0', textAlign: 'center', color: '#94a3b8', fontSize: 13 } },
                     '최근 8일 순위 기록이 없습니다. 아래 「상품 순위 추적」에서 상품·키워드를 등록하면 매일 아침 자동 기록됩니다.') :
@@ -372,7 +411,7 @@ window.KeywordRankPage = function KeywordRankPage(props) {
                             React.createElement('th', { style: _krTh }, '키워드'),
                             React.createElement('th', { style: Object.assign({}, _krTh, { textAlign: 'right' }) }, '현재 순위'),
                             React.createElement('th', { style: _krTh }, '전일 대비'),
-                            React.createElement('th', { style: _krTh }, '최근 7일'),
+                            React.createElement('th', { style: _krTh }, '최근 ' + boardDays + '일'),
                             React.createElement('th', { style: Object.assign({}, _krTh, { textAlign: 'right' }) }, '월 검색량'),
                             React.createElement('th', { style: Object.assign({}, _krTh, { textAlign: 'right' }) }, '페이지'),
                             React.createElement('th', { style: _krTh }, '확인 시각'),
@@ -395,7 +434,9 @@ window.KeywordRankPage = function KeywordRankPage(props) {
                                 React.createElement('td', { style: Object.assign({}, _krTd, { textAlign: 'right' }) },
                                     exposed
                                         ? React.createElement('span', { style: { fontSize: 16, fontWeight: 800, color: b.rank <= 10 ? '#16a34a' : '#0f172a', fontVariantNumeric: 'tabular-nums' } }, b.rank + '위')
-                                        : React.createElement('span', { style: _krChip('mute') }, '미노출')),
+                                        : React.createElement('span', null,
+                                            React.createElement('span', { style: _krChip('mute') }, '미노출'),
+                                            (b.unexposed_days || 0) >= 2 && React.createElement('span', { style: Object.assign({}, _krChip('warn'), { marginLeft: 4 }), title: '연속 미노출 일수' }, b.unexposed_days + '일째'))),
                                 React.createElement('td', { style: _krTd },
                                     exposed && (b.delta !== null && b.delta !== undefined)
                                         ? React.createElement('span', { style: d.style }, d.label)

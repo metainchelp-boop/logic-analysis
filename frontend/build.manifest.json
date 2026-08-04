@@ -42,6 +42,7 @@
   "js/components/LoginPage.jsx",
   "js/components/UserManagementPage.jsx",
   "js/components/AiInsightsView.jsx",
+  "js/components/PlaceClientPanel.jsx",
   "js/components/ClientDashboard.jsx",
   "js/components/LearningCenterPage.jsx",
   "js/components/UserGuidePage.jsx",
