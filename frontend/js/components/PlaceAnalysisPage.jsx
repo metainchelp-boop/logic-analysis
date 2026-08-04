@@ -393,7 +393,7 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
                                 title: '클릭 = 이 키워드 순위 추이 보기', style: { cursor: 'pointer' } },
                                 React_.createElement('span', { className: 'rk' }, rk), c.keyword + (c.state === '미확인' ? ' · 미확인' : ''));
                         })),
-                    React_.createElement(window.PlaceRankChart, { series: chartSeries, keyword: chartKeyword || selectedKw, days: chartDays, onDays: onChartDays }))
+                    React_.createElement(window.PlaceRankChart, { series: chartSeries, keyword: chartKeyword || selectedKw, days: chartDays, businessName: businessName, onDays: onChartDays }))
             )
         );
     };

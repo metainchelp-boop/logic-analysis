@@ -344,6 +344,11 @@ function trimHtmlDetail(hd) {
  *   storeUrl:  'https://smartstore.naver.com/...'(선택),
  *   days:      0|7|30|...  // 0/미지정 = 전체, N = 최근 N일
  * })
+ *
+ * 플레이스 추적도 같은 빌더를 쓴다(2026-08-04 — 스토어와 동일 퀄리티). additive 옵션(미지정 시 기존과 동일):
+ *   typeHeader:        표 3번째 컬럼 제목(기본 '유형' — 플레이스는 '상태')
+ *   row.type_label:    3번째 컬럼 값(기본 check_type 수동/자동 — 플레이스는 노출/미노출/미확인)
+ *   row.rank_null_label: 순위 없음 표기(기본 '미노출' — 플레이스는 '–', 상태 컬럼이 사유를 설명)
  */
 (function () {
   function roundRect(ctx, x, y, w, h, r, fill, stroke) {
@@ -445,7 +450,7 @@ function trimHtmlDetail(hd) {
     ctx.font = 'bold 12px "Noto Sans KR", sans-serif';
     ctx.fillText('날짜', colX[0] + 12, tableY + 22);
     ctx.fillText('순위', colX[1] + 12, tableY + 22);
-    ctx.fillText('유형', colX[2] + 12, tableY + 22);
+    ctx.fillText(opts.typeHeader || '유형', colX[2] + 12, tableY + 22);
     tableY += tableHeaderH;
     data.forEach(function (r, i) {
       var rowY = tableY + i * tableRowH;
@@ -465,7 +470,7 @@ function trimHtmlDetail(hd) {
       var prevR = i > 0 ? data[i - 1] : null;
       var diff = prevR && r.rank_position && prevR.rank_position ? prevR.rank_position - r.rank_position : null;
       ctx.font = 'bold 13px "Noto Sans KR", sans-serif';
-      var rankText = r.rank_position ? r.rank_position + '위' : '미노출';
+      var rankText = r.rank_position ? r.rank_position + '위' : r.rank_null_label || '미노출';
       ctx.fillStyle = r.rank_position ? r.rank_position <= 10 ? '#059669' : r.rank_position <= 40 ? '#d97706' : '#dc2626' : '#94a3b8';
       ctx.fillText(rankText, colX[1] + 12, rowY + 20);
       if (diff != null && diff !== 0) {
@@ -477,7 +482,7 @@ function trimHtmlDetail(hd) {
       }
       ctx.font = '12px "Noto Sans KR", sans-serif';
       ctx.fillStyle = '#64748b';
-      ctx.fillText(r.check_type === 'manual' ? '수동' : '자동', colX[2] + 12, rowY + 20);
+      ctx.fillText(r.type_label || (r.check_type === 'manual' ? '수동' : '자동'), colX[2] + 12, rowY + 20);
     });
 
     // 라인 차트
@@ -23203,8 +23208,34 @@ window.PlaceRankChart = function PlaceRankChart(props) {
     }
   };
   var CANVAS_ID = 'place-rankchart';
+  /* 📸 이미지 저장 — 스토어 순위 추적과 동일한 공용 빌더(exportRankHistoryImage)로 렌더
+   * (헤더 카드·이력 표·변동 ▲▼·추이 차트·워터마크). 날것 차트 캔버스 덤프는 폴백만. */
   var saveImg = function () {
     try {
+      if (!series.length) {
+        try {
+          toast.warn('저장할 순위 데이터가 없습니다.');
+        } catch (e) {}
+        return;
+      }
+      if (window.exportRankHistoryImage) {
+        window.exportRankHistoryImage({
+          rows: series.map(function (p) {
+            return {
+              checked_at: p.date || '',
+              rank_position: p.rank == null ? null : p.rank,
+              type_label: p.state || '미확인',
+              rank_null_label: '–'
+            };
+          }),
+          storeName: props.businessName || '플레이스 업체',
+          keyword: keyword,
+          storeUrl: props.placeUrl || '',
+          days: days >= 365 ? 0 : days,
+          typeHeader: '상태'
+        });
+        return;
+      }
       var cv = document.getElementById(CANVAS_ID);
       var url = '';
       var ch = window.Chart && window.Chart.getChart && cv ? window.Chart.getChart(cv) : null;
@@ -24090,6 +24121,7 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
       series: chartSeries,
       keyword: chartKeyword || selectedKw,
       days: chartDays,
+      businessName: businessName,
       onDays: onChartDays
     })));
   };
@@ -24340,6 +24372,11 @@ window.PlaceTrackingPage = function PlaceTrackingPage(props) {
     useEffect = React.useEffect,
     useRef = React.useRef;
 
+  // 사용 범주 = 스토어 순위 추적과 동일(2026-08-04 대표 확정):
+  // 영업사원(viewer)은 열람만(등록·삭제·일시중지·지금 수집 불가), 관리팀·관리자는 전체 가능. 서버 게이트와 이중.
+  var currentUser = props.currentUser;
+  var isViewer = !!(currentUser && currentUser.role === 'viewer');
+
   // ── 목록 상태 ──
   var _t = useState([]);
   var targets = _t[0],
@@ -24383,8 +24420,6 @@ window.PlaceTrackingPage = function PlaceTrackingPage(props) {
   var _pid = useState('');
   var placeIdInput = _pid[0],
     setPlaceIdInput = _pid[1];
-  var targetsRef = useRef([]);
-  targetsRef.current = targets;
 
   // 플레이스 링크/ID → 숫자 ID 추출 (지도 주소 어느 형식이든: .../place/12345, m.place.naver.com/restaurant/12345/..., 숫자 단독)
   function extractPlaceId(v) {
@@ -24398,11 +24433,12 @@ window.PlaceTrackingPage = function PlaceTrackingPage(props) {
   }
 
   // ==================== 확장 브리지 ====================
-  function pushTargetsToExt(list) {
-    try {
-      var actives = (list || targetsRef.current).filter(function (t) {
-        return t.active;
-      }).map(function (t) {
+  // 러너 동기화는 항상 서버 전체 활성 목록(?active=1 — 러너 전용 격리 예외)으로 push:
+  // 화면 목록은 본인 것만(개인화)이지만, 무인 수집은 전 직원 등록분을 커버해야 하기 때문.
+  function pushTargetsToExt() {
+    api.get('/place/track-targets?active=1').then(function (res) {
+      if (!(res && res.success)) return;
+      var actives = (res.data && res.data.targets || []).map(function (t) {
         return {
           id: t.id,
           business_name: t.business_name,
@@ -24417,7 +24453,7 @@ window.PlaceTrackingPage = function PlaceTrackingPage(props) {
           targets: actives
         }
       }, window.location.origin);
-    } catch (e) {}
+    }).catch(function () {});
   }
   useEffect(function () {
     var onMsg = function (ev) {
@@ -24454,7 +24490,7 @@ window.PlaceTrackingPage = function PlaceTrackingPage(props) {
       if (res && res.success) {
         var list = res.data && res.data.targets || [];
         setTargets(list);
-        pushTargetsToExt(list);
+        pushTargetsToExt();
       }
     }).catch(function () {
       setLoading(false);
@@ -24714,7 +24750,7 @@ window.PlaceTrackingPage = function PlaceTrackingPage(props) {
           fontFamily: 'SF Mono,monospace',
           fontSize: 11.5
         }
-      }, t.last ? fmtDate(t.last.checked_at) : '-'), React.createElement('button', {
+      }, t.last ? fmtDate(t.last.checked_at) : '-'), isViewer ? null : React.createElement('button', {
         className: 'btn btn-secondary btn-sm',
         style: {
           flexShrink: 0
@@ -24724,7 +24760,7 @@ window.PlaceTrackingPage = function PlaceTrackingPage(props) {
           toggleActive(t);
         },
         title: t.active ? '일시중지 — 자동 수집에서 제외' : '재개'
-      }, t.active ? '⏸' : '▶'), React.createElement('button', {
+      }, t.active ? '⏸' : '▶'), isViewer ? null : React.createElement('button', {
         className: 'btn btn-secondary btn-sm',
         style: {
           flexShrink: 0
@@ -24745,6 +24781,8 @@ window.PlaceTrackingPage = function PlaceTrackingPage(props) {
           series: chartSeries,
           keyword: t.keyword,
           days: chartDays,
+          businessName: t.business_name,
+          placeUrl: t.place_id ? 'https://map.naver.com/p/entry/place/' + t.place_id : '',
           onDays: function (d) {
             setChartDays(d);
             loadSeries(t, d);
@@ -24863,7 +24901,17 @@ window.PlaceTrackingPage = function PlaceTrackingPage(props) {
       fontSize: 12.5,
       marginTop: 2
     }
-  }, '등록한 업체×키워드를 추적 PC가 매일 06:30 무인 수집 → 순위 이력 자동 기록')), React.createElement('div', {
+  }, '등록한 업체×키워드를 추적 PC가 매일 06:30 무인 수집 → 순위 이력 자동 기록')), isViewer ? React.createElement('span', {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 700,
+      borderRadius: 999,
+      padding: '3px 10px',
+      background: '#f1f5f9',
+      border: '1px solid #e2e8f0',
+      color: '#64748b'
+    }
+  }, '👁 열람 전용 (등록·관리는 관리팀)') : React.createElement('div', {
     style: {
       display: 'flex',
       alignItems: 'center',
@@ -24884,8 +24932,13 @@ window.PlaceTrackingPage = function PlaceTrackingPage(props) {
     className: 'btn btn-primary btn-sm',
     onClick: requestRunNow
   }, '⟳ 지금 수집'))),
-  // ── 등록 카드 ──
-  React.createElement('div', {
+  // ── 등록 카드 (영업사원은 안내로 대체 — 스토어 순위 추적과 동일 범주) ──
+  isViewer ? React.createElement('div', {
+    className: 'note est',
+    style: {
+      marginBottom: 14
+    }
+  }, '🔒 플레이스 순위 추적 등록·관리는 관리팀 권한입니다(스토어 순위 추적과 동일 기준). ', '영업 대상 분석은 「📍 플레이스 분석」 탭에서 자유롭게 사용할 수 있습니다. 추적이 필요한 업체는 관리팀에 요청해주세요.') : React.createElement('div', {
     className: 'card',
     style: {
       marginBottom: 14

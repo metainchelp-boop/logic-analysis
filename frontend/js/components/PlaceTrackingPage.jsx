@@ -12,6 +12,11 @@
 window.PlaceTrackingPage = function PlaceTrackingPage(props) {
     var useState = React.useState, useEffect = React.useEffect, useRef = React.useRef;
 
+    // 사용 범주 = 스토어 순위 추적과 동일(2026-08-04 대표 확정):
+    // 영업사원(viewer)은 열람만(등록·삭제·일시중지·지금 수집 불가), 관리팀·관리자는 전체 가능. 서버 게이트와 이중.
+    var currentUser = props.currentUser;
+    var isViewer = !!(currentUser && currentUser.role === 'viewer');
+
     // ── 목록 상태 ──
     var _t = useState([]);        var targets = _t[0], setTargets = _t[1];
     var _ld = useState(false);    var loading = _ld[0], setLoading = _ld[1];
@@ -33,9 +38,6 @@ window.PlaceTrackingPage = function PlaceTrackingPage(props) {
 
     var _pid = useState('');      var placeIdInput = _pid[0], setPlaceIdInput = _pid[1];
 
-    var targetsRef = useRef([]);
-    targetsRef.current = targets;
-
     // 플레이스 링크/ID → 숫자 ID 추출 (지도 주소 어느 형식이든: .../place/12345, m.place.naver.com/restaurant/12345/..., 숫자 단독)
     function extractPlaceId(v) {
         v = String(v || '').trim();
@@ -48,15 +50,17 @@ window.PlaceTrackingPage = function PlaceTrackingPage(props) {
     }
 
     // ==================== 확장 브리지 ====================
-    function pushTargetsToExt(list) {
-        try {
-            var actives = (list || targetsRef.current).filter(function (t) { return t.active; })
-                .map(function (t) {
-                    return { id: t.id, business_name: t.business_name, region: t.region,
-                             place_id: t.place_id || '', keyword: t.keyword };
-                });
+    // 러너 동기화는 항상 서버 전체 활성 목록(?active=1 — 러너 전용 격리 예외)으로 push:
+    // 화면 목록은 본인 것만(개인화)이지만, 무인 수집은 전 직원 등록분을 커버해야 하기 때문.
+    function pushTargetsToExt() {
+        api.get('/place/track-targets?active=1').then(function (res) {
+            if (!(res && res.success)) return;
+            var actives = ((res.data && res.data.targets) || []).map(function (t) {
+                return { id: t.id, business_name: t.business_name, region: t.region,
+                         place_id: t.place_id || '', keyword: t.keyword };
+            });
             window.postMessage({ type: 'METAINC_PLACE_TARGETS', payload: { targets: actives } }, window.location.origin);
-        } catch (e) {}
+        }).catch(function () {});
     }
 
     useEffect(function () {
@@ -86,7 +90,7 @@ window.PlaceTrackingPage = function PlaceTrackingPage(props) {
             if (res && res.success) {
                 var list = (res.data && res.data.targets) || [];
                 setTargets(list);
-                pushTargetsToExt(list);
+                pushTargetsToExt();
             }
         }).catch(function () { setLoading(false); });
     }
@@ -241,12 +245,12 @@ window.PlaceTrackingPage = function PlaceTrackingPage(props) {
                 React.createElement('span', { style: { flexShrink: 0 } }, stateChip(t)),
                 React.createElement('span', { style: { width: 42, textAlign: 'center', flexShrink: 0, color: '#94a3b8', fontFamily: 'SF Mono,monospace', fontSize: 11.5 } },
                     t.last ? fmtDate(t.last.checked_at) : '-'),
-                React.createElement('button', {
+                isViewer ? null : React.createElement('button', {
                     className: 'btn btn-secondary btn-sm', style: { flexShrink: 0 },
                     onClick: function (e) { e.stopPropagation(); toggleActive(t); },
                     title: t.active ? '일시중지 — 자동 수집에서 제외' : '재개'
                 }, t.active ? '⏸' : '▶'),
-                React.createElement('button', {
+                isViewer ? null : React.createElement('button', {
                     className: 'btn btn-secondary btn-sm', style: { flexShrink: 0 },
                     onClick: function (e) { e.stopPropagation(); removeTarget(t); }
                 }, '✕')
@@ -256,6 +260,8 @@ window.PlaceTrackingPage = function PlaceTrackingPage(props) {
                     window.PlaceRankChart
                         ? React.createElement(window.PlaceRankChart, {
                             series: chartSeries, keyword: t.keyword, days: chartDays,
+                            businessName: t.business_name,
+                            placeUrl: t.place_id ? 'https://map.naver.com/p/entry/place/' + t.place_id : '',
                             onDays: function (d) { setChartDays(d); loadSeries(t, d); }
                         })
                         : React.createElement('div', { className: 'empty' }, '차트 컴포넌트를 불러올 수 없습니다.')));
@@ -293,17 +299,26 @@ window.PlaceTrackingPage = function PlaceTrackingPage(props) {
                     React.createElement('h2', { style: { margin: 0, fontSize: 19 } }, '📊 플레이스 추적'),
                     React.createElement('div', { style: { color: '#64748b', fontSize: 12.5, marginTop: 2 } },
                         '등록한 업체×키워드를 추적 PC가 매일 06:30 무인 수집 → 순위 이력 자동 기록')),
-                React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
-                    React.createElement('span', {
+                isViewer
+                    ? React.createElement('span', {
                         style: { fontSize: 11.5, fontWeight: 700, borderRadius: 999, padding: '3px 10px',
-                                 background: extReady ? '#dcfce7' : '#f1f5f9',
-                                 border: '1px solid ' + (extReady ? '#bbf7d0' : '#e2e8f0'),
-                                 color: extReady ? '#059669' : '#94a3b8' }
-                    }, extReady ? '🧩 이 브라우저 추적기 연동됨' : '🧩 이 브라우저엔 추적기 없음'),
-                    React.createElement('button', { className: 'btn btn-primary btn-sm', onClick: requestRunNow }, '⟳ 지금 수집'))),
+                                 background: '#f1f5f9', border: '1px solid #e2e8f0', color: '#64748b' }
+                    }, '👁 열람 전용 (등록·관리는 관리팀)')
+                    : React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
+                        React.createElement('span', {
+                            style: { fontSize: 11.5, fontWeight: 700, borderRadius: 999, padding: '3px 10px',
+                                     background: extReady ? '#dcfce7' : '#f1f5f9',
+                                     border: '1px solid ' + (extReady ? '#bbf7d0' : '#e2e8f0'),
+                                     color: extReady ? '#059669' : '#94a3b8' }
+                        }, extReady ? '🧩 이 브라우저 추적기 연동됨' : '🧩 이 브라우저엔 추적기 없음'),
+                        React.createElement('button', { className: 'btn btn-primary btn-sm', onClick: requestRunNow }, '⟳ 지금 수집'))),
 
-            // ── 등록 카드 ──
-            React.createElement('div', { className: 'card', style: { marginBottom: 14 } },
+            // ── 등록 카드 (영업사원은 안내로 대체 — 스토어 순위 추적과 동일 범주) ──
+            isViewer
+                ? React.createElement('div', { className: 'note est', style: { marginBottom: 14 } },
+                    '🔒 플레이스 순위 추적 등록·관리는 관리팀 권한입니다(스토어 순위 추적과 동일 기준). ',
+                    '영업 대상 분석은 「📍 플레이스 분석」 탭에서 자유롭게 사용할 수 있습니다. 추적이 필요한 업체는 관리팀에 요청해주세요.')
+                : React.createElement('div', { className: 'card', style: { marginBottom: 14 } },
                 React.createElement('div', { style: { fontWeight: 800, fontSize: 14.5, marginBottom: 10 } }, '➕ 추적 대상 등록'),
                 React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(160px,1.2fr) minmax(120px,0.9fr) minmax(220px,2fr) auto', gap: 10, alignItems: 'end' } },
                     React.createElement('div', null,

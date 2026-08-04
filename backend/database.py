@@ -317,19 +317,29 @@ def add_place_track_targets(business_name: str, region: str, keywords: List[str]
         conn.close()
 
 
-def list_place_track_targets(active_only: bool = False) -> List[Dict]:
-    """추적 대상 전체 목록(등록순). active_only=True 면 활성만(확장 러너용)."""
+def list_place_track_targets(active_only: bool = False, user_id: int = None,
+                             is_admin: bool = False) -> List[Dict]:
+    """추적 대상 목록(등록순). active_only=True 면 활성만(확장 러너 동기화용).
+    user_id별 격리 — 스토어 tracked_products(get_all_tracked_products)와 동일 규칙:
+    본인 등록분만, admin/superadmin 또는 user_id 미지정(내부·러너 경로)은 전체."""
     conn = _get_conn()
     try:
-        sql = ("SELECT id, business_name, region, place_id, keyword, active, created_at "
+        sql = ("SELECT id, business_name, region, place_id, keyword, active, created_at, created_by "
                "FROM place_track_target ")
+        conds, params = [], []
         if active_only:
-            sql += "WHERE active = 1 "
+            conds.append("active = 1")
+        if not is_admin and user_id is not None:
+            conds.append("created_by = ?")
+            params.append(int(user_id))
+        if conds:
+            sql += "WHERE " + " AND ".join(conds) + " "
         sql += "ORDER BY business_name, region, id"
-        rows = conn.execute(sql).fetchall()
+        rows = conn.execute(sql, params).fetchall()
         return [{"id": r["id"], "business_name": r["business_name"], "region": r["region"] or "",
                  "place_id": r["place_id"] or "", "keyword": r["keyword"],
-                 "active": bool(r["active"]), "created_at": r["created_at"]} for r in rows]
+                 "active": bool(r["active"]), "created_at": r["created_at"],
+                 "created_by": r["created_by"]} for r in rows]
     except Exception as e:
         logger.warning(f"플레이스 추적 대상 조회 실패(무시): {e}")
         return []
@@ -337,14 +347,20 @@ def list_place_track_targets(active_only: bool = False) -> List[Dict]:
         conn.close()
 
 
-def set_place_track_target_active(target_id: int, active: bool) -> bool:
-    """추적 대상 활성/일시중지 토글."""
+def set_place_track_target_active(target_id: int, active: bool, user_id: int = None,
+                                  is_admin: bool = False) -> bool:
+    """추적 대상 활성/일시중지 토글 — 본인 등록분만(admin 전체, 스토어 삭제 규칙과 동일)."""
     conn = _get_conn()
     try:
-        conn.execute("UPDATE place_track_target SET active = ? WHERE id = ?",
-                     (1 if active else 0, int(target_id)))
+        if is_admin or user_id is None:
+            cur = conn.execute("UPDATE place_track_target SET active = ? WHERE id = ?",
+                               (1 if active else 0, int(target_id)))
+        else:
+            cur = conn.execute(
+                "UPDATE place_track_target SET active = ? WHERE id = ? AND created_by = ?",
+                (1 if active else 0, int(target_id), int(user_id)))
         conn.commit()
-        return True
+        return bool(cur.rowcount and cur.rowcount > 0)
     except Exception as e:
         logger.warning(f"플레이스 추적 대상 토글 실패(무시): {e}")
         return False
@@ -352,13 +368,18 @@ def set_place_track_target_active(target_id: int, active: bool) -> bool:
         conn.close()
 
 
-def delete_place_track_target(target_id: int) -> bool:
-    """추적 대상 행 삭제(순위 이력 place_rank_history 는 보존 — 재등록 시 이어짐)."""
+def delete_place_track_target(target_id: int, user_id: int = None, is_admin: bool = False) -> bool:
+    """추적 대상 행 삭제(순위 이력 place_rank_history 는 보존 — 재등록 시 이어짐).
+    본인 등록분만(admin 전체 — 스토어 delete_tracked_product 와 동일 규칙)."""
     conn = _get_conn()
     try:
-        conn.execute("DELETE FROM place_track_target WHERE id = ?", (int(target_id),))
+        if is_admin or user_id is None:
+            cur = conn.execute("DELETE FROM place_track_target WHERE id = ?", (int(target_id),))
+        else:
+            cur = conn.execute("DELETE FROM place_track_target WHERE id = ? AND created_by = ?",
+                               (int(target_id), int(user_id)))
         conn.commit()
-        return True
+        return bool(cur.rowcount and cur.rowcount > 0)
     except Exception as e:
         logger.warning(f"플레이스 추적 대상 삭제 실패(무시): {e}")
         return False

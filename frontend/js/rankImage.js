@@ -10,6 +10,11 @@
  *   storeUrl:  'https://smartstore.naver.com/...'(선택),
  *   days:      0|7|30|...  // 0/미지정 = 전체, N = 최근 N일
  * })
+ *
+ * 플레이스 추적도 같은 빌더를 쓴다(2026-08-04 — 스토어와 동일 퀄리티). additive 옵션(미지정 시 기존과 동일):
+ *   typeHeader:        표 3번째 컬럼 제목(기본 '유형' — 플레이스는 '상태')
+ *   row.type_label:    3번째 컬럼 값(기본 check_type 수동/자동 — 플레이스는 노출/미노출/미확인)
+ *   row.rank_null_label: 순위 없음 표기(기본 '미노출' — 플레이스는 '–', 상태 컬럼이 사유를 설명)
  */
 (function () {
   function roundRect(ctx, x, y, w, h, r, fill, stroke) {
@@ -114,7 +119,7 @@
     ctx.font = 'bold 12px "Noto Sans KR", sans-serif';
     ctx.fillText('날짜', colX[0] + 12, tableY + 22);
     ctx.fillText('순위', colX[1] + 12, tableY + 22);
-    ctx.fillText('유형', colX[2] + 12, tableY + 22);
+    ctx.fillText(opts.typeHeader || '유형', colX[2] + 12, tableY + 22);
     tableY += tableHeaderH;
 
     data.forEach(function (r, i) {
@@ -130,7 +135,7 @@
       var prevR = i > 0 ? data[i - 1] : null;
       var diff = (prevR && r.rank_position && prevR.rank_position) ? prevR.rank_position - r.rank_position : null;
       ctx.font = 'bold 13px "Noto Sans KR", sans-serif';
-      var rankText = r.rank_position ? r.rank_position + '위' : '미노출';
+      var rankText = r.rank_position ? r.rank_position + '위' : (r.rank_null_label || '미노출');
       ctx.fillStyle = r.rank_position ? (r.rank_position <= 10 ? '#059669' : r.rank_position <= 40 ? '#d97706' : '#dc2626') : '#94a3b8';
       ctx.fillText(rankText, colX[1] + 12, rowY + 20);
 
@@ -144,7 +149,7 @@
 
       ctx.font = '12px "Noto Sans KR", sans-serif';
       ctx.fillStyle = '#64748b';
-      ctx.fillText(r.check_type === 'manual' ? '수동' : '자동', colX[2] + 12, rowY + 20);
+      ctx.fillText(r.type_label || (r.check_type === 'manual' ? '수동' : '자동'), colX[2] + 12, rowY + 20);
     });
 
     // 라인 차트
