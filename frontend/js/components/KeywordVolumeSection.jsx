@@ -33,7 +33,7 @@ window.KeywordVolumeSection = function KeywordVolumeSection({ keyword, data }) {
 
                     {/* 기기별 비율 트랙바 */}
                     <div className="track" style={{ height: 14, marginTop: 14, display: 'flex' }}>
-                        <i style={{ width: pcRatio + '%', background: '#6366f1' }}></i>
+                        <i style={{ width: pcRatio + '%', background: '#3b82f6' }}></i>
                         <i style={{ width: mobileRatio + '%', background: '#ec4899' }}></i>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--sub)', marginTop: 5 }}>

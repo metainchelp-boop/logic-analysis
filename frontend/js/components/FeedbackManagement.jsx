@@ -103,7 +103,7 @@ window.FeedbackManagement = function FeedbackManagement() {
                     onClick: function() { setFilter(f); },
                     style: {
                         padding: '6px 14px', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: 'pointer',
-                        background: filter === f ? '#1B2A4A' : '#f1f5f9',
+                        background: filter === f ? '#3b82f6' : '#f1f5f9',
                         color: filter === f ? '#fff' : '#64748b',
                         border: 'none'
                     }
@@ -164,7 +164,7 @@ window.FeedbackManagement = function FeedbackManagement() {
                     }),
                     React.createElement('button', {
                         onClick: function() { updateFeedback(fb.id, null, replyText); },
-                        style: { padding: '6px 12px', borderRadius: 6, fontSize: 11, cursor: 'pointer', background: '#1B2A4A', color: '#fff', border: 'none', fontWeight: 600 }
+                        style: { padding: '6px 12px', borderRadius: 6, fontSize: 11, cursor: 'pointer', background: '#3b82f6', color: '#fff', border: 'none', fontWeight: 600 }
                     }, '저장')
                 )
             );

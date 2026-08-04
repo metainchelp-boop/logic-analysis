@@ -63,7 +63,7 @@ window.RankDeltaROISimulation = function RankDeltaROISimulation(props) {
           : React.createElement('div', null,
               React.createElement('div', { style: { display: 'flex', gap: 12, marginTop: 12, flexWrap: 'wrap', alignItems: 'stretch' } },
                 Col('현재 (' + curLabel + ')', isRanked ? ('~' + fmt(curSales) + '건') : '0건', '예상 월 판매', '#64748b'),
-                Col('목표 (1위)', '~' + fmt(tgtSales) + '건', '예상 월 판매', '#4f46e5'),
+                Col('목표 (1위)', '~' + fmt(tgtSales) + '건', '예상 월 판매', '#3b82f6'),
                 Col('증분 (Δ)', '+' + fmt(deltaSales) + '건', pct != null ? ('현재 대비 +' + pct + '%') : '1위 도달 시 순증', '#16a34a')
               ),
               React.createElement('div', {

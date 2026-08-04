@@ -33,14 +33,14 @@ window.KeywordTagSection = function KeywordTagSection(props) {
               fontSize: 12,
               fontWeight: 700,
               background: 'linear-gradient(135deg, #eef2ff, #dbeafe)',
-              color: '#4f46e5'
+              color: '#3b82f6'
             }}>총 {fmt(totalFound)}개 발견</span>
           </div>
 
           <div className="table-wrap" style={{ maxHeight: 340, overflowY: 'auto' }}>
             <table>
               <thead>
-                <tr style={{ background: 'linear-gradient(135deg, #4f46e5, #7c3aed)' }}>
+                <tr style={{ background: 'linear-gradient(135deg, #3b82f6, #7c3aed)' }}>
                   <th style={{ color: '#fff', fontWeight: 600, fontSize: 12 }}>#</th>
                   <th style={{ color: '#fff', fontWeight: 600, fontSize: 12 }}>키워드</th>
                   <th style={{ color: '#fff', fontWeight: 600, fontSize: 12 }}>검색량</th>
@@ -62,7 +62,7 @@ window.KeywordTagSection = function KeywordTagSection(props) {
                           height: 28,
                           background: kw.isGolden
                             ? 'linear-gradient(135deg, #f59e0b, #d97706)'
-                            : 'linear-gradient(135deg, #4f46e5, #7c3aed)',
+                            : 'linear-gradient(135deg, #3b82f6, #7c3aed)',
                           color: '#fff',
                           borderRadius: '50%',
                           fontSize: 11,
@@ -99,7 +99,7 @@ window.KeywordTagSection = function KeywordTagSection(props) {
                               borderRadius: 8,
                               background: kw.isGolden
                                 ? 'linear-gradient(135deg, #f59e0b, #d97706)'
-                                : 'linear-gradient(135deg, #4f46e5, #7c3aed)',
+                                : 'linear-gradient(135deg, #3b82f6, #7c3aed)',
                               transition: 'width 0.3s ease'
                             }}></div>
                           </div>

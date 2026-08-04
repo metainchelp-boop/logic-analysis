@@ -128,7 +128,7 @@ window.CpcBidEstimateSection = function CpcBidEstimateSection(props) {
           Kpi('예상 CPC(중간)', won(band.base), '클릭당 예상 단가', '#0f172a'),
           Kpi('권장 입찰가 범위', fmt(band.low) + '~' + fmt(band.high) + '원', '저가~상위노출가'),
           Kpi('예상 월 클릭', fmt(clicks) + '회', '네이버 실측 평균클릭'),
-          Kpi('예상 월 광고비', '~' + won(estSpendMid), '클릭 30% 확보 가정', '#4f46e5')
+          Kpi('예상 월 광고비', '~' + won(estSpendMid), '클릭 30% 확보 가정', '#3b82f6')
         ),
 
         bidTable,

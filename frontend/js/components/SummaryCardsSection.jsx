@@ -73,7 +73,7 @@ window.SummaryCardsSection = function SummaryCardsSection(props) {
         {/* ===== 경영자 히어로 요약 (점수·순위 있을 때만 — 없으면 기존 화면 그대로) ===== */}
         {showHero && (
           <div className="card" style={{
-            background: 'linear-gradient(135deg, #4f46e5, #7c3aed)', border: 'none',
+            background: 'linear-gradient(135deg, #3b82f6, #7c3aed)', border: 'none',
             color: '#fff', padding: '22px 26px', marginBottom: 14
           }}>
             <div className="rpt-flex" style={{ display: 'flex', gap: 20, alignItems: 'center', flexWrap: 'wrap' }}>

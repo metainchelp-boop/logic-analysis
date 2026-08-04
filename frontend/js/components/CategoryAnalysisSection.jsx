@@ -5,7 +5,7 @@ window.CategoryAnalysisSection = function CategoryAnalysisSection(props) {
   if (!categories || categories.length === 0) return null;
 
   var gradients = [
-    'linear-gradient(90deg, #4f46e5, #7c3aed)',
+    'linear-gradient(90deg, #3b82f6, #7c3aed)',
     'linear-gradient(90deg, #7c3aed, #a78bfa)',
     'linear-gradient(90deg, #a78bfa, #c4b5fd)',
     'linear-gradient(90deg, #c4b5fd, #ddd6fe)',
@@ -110,7 +110,7 @@ window.CategoryAnalysisSection = function CategoryAnalysisSection(props) {
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, alignItems: 'center' }}>
                     <span style={{ fontWeight: 600, fontSize: 13, color: '#0f172a' }}>{item.name}</span>
                     <span style={{ fontSize: 12, color: '#64748b' }}>
-                      <span style={{ fontWeight: 700, color: '#4f46e5', marginRight: 4 }}>{item.count}개</span>
+                      <span style={{ fontWeight: 700, color: '#3b82f6', marginRight: 4 }}>{item.count}개</span>
                       ({item.ratio}%)
                     </span>
                   </div>

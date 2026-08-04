@@ -316,7 +316,7 @@ window.SeoOptimizerPage = function SeoOptimizerPage(props) {
                                             <span style={{ fontSize: 11, color: '#94a3b8' }}>키워드: {it.keyword}</span>
                                             <span style={{ fontSize: 11, color: '#cbd5e1', marginLeft: 'auto' }}>{(it.created_at || '').slice(0, 10)} · {it.created_by}</span>
                                         </div>
-                                        {it.tags && it.tags.length > 0 && <div style={{ fontSize: 12, color: '#6366f1', marginTop: 4 }}>{it.tags.map(function(t){ return '#' + t; }).join(' ')}</div>}
+                                        {it.tags && it.tags.length > 0 && <div style={{ fontSize: 12, color: '#3b82f6', marginTop: 4 }}>{it.tags.map(function(t){ return '#' + t; }).join(' ')}</div>}
                                     </div>
                                 );
                             })}

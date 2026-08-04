@@ -168,7 +168,7 @@ window.AnalysisResults = function AnalysisResults(props) {
                     React.createElement('div', { className: 'container' },
                         React.createElement('div', { style: { textAlign:'center', padding:'40px 20px' } },
                             React.createElement('span', { className:'spinner', style:{ width:32, height:32, borderWidth:3, marginBottom:16, display:'inline-block' } }),
-                            React.createElement('div', { style: { fontSize:15, fontWeight:600, color:'#4f46e5', marginBottom:6 } }, '"' + searchedKeyword + '" 분석 중...'),
+                            React.createElement('div', { style: { fontSize:15, fontWeight:600, color:'#3b82f6', marginBottom:6 } }, '"' + searchedKeyword + '" 분석 중...'),
                             React.createElement('div', { style: { fontSize:13, color:'#94a3b8' } }, '검색량·경쟁강도·시장규모를 종합 분석하고 있습니다. 약 5~10초 소요됩니다.')
                         )
                     )
@@ -177,7 +177,7 @@ window.AnalysisResults = function AnalysisResults(props) {
                 /* ==================== 보고서 6단계 흐름 (v6.0 — 광고주 발송용 재배치) ==================== */
     
                 /* ========== 1. 종합 요약 ========== */
-                analysisData && React.createElement(window.SectionDivider, { label: '1. 종합 요약', icon: '📋', color: '#4f46e5', sub: '광고주가 가장 먼저 보는 핵심 지표' }),
+                analysisData && React.createElement(window.SectionDivider, { label: '1. 종합 요약', icon: '📋', color: '#3b82f6', sub: '광고주가 가장 먼저 보는 핵심 지표' }),
     
                 analysisData && analysisData.summaryCards && React.createElement(window.SectionErrorBoundary, { name: '종합 요약' },
                     React.createElement('div', { id: 'sec-summary' },

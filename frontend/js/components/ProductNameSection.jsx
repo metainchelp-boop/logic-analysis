@@ -151,7 +151,7 @@ window.ProductNameSection = function ProductNameSection({ keyword, shopProducts 
                                                             justifyContent: 'center',
                                                             width: 26,
                                                             height: 26,
-                                                            background: 'linear-gradient(135deg, #4f46e5, #7c3aed)',
+                                                            background: 'linear-gradient(135deg, #3b82f6, #7c3aed)',
                                                             color: '#fff',
                                                             borderRadius: '50%',
                                                             fontSize: 11,
@@ -174,7 +174,7 @@ window.ProductNameSection = function ProductNameSection({ keyword, shopProducts 
                                                                     width: Math.min(k.ratio, 100) + '%',
                                                                     height: '100%',
                                                                     borderRadius: 8,
-                                                                    background: 'linear-gradient(135deg, #4f46e5, #7c3aed)',
+                                                                    background: 'linear-gradient(135deg, #3b82f6, #7c3aed)',
                                                                     transition: 'width 0.3s ease'
                                                                 }} />
                                                             </div>

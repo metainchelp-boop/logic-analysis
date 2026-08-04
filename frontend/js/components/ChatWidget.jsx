@@ -253,7 +253,7 @@ window.ChatWidget = function ChatWidget({ currentUser }) {
             style: {
                 position: 'fixed', bottom: 24, right: 24, zIndex: 10000,
                 width: 56, height: 56, borderRadius: '50%',
-                background: isOpen ? '#64748b' : '#1B2A4A',
+                background: isOpen ? '#64748b' : '#3b82f6',
                 color: '#fff', border: 'none', cursor: 'pointer',
                 boxShadow: '0 4px 20px rgba(27,42,74,0.4)',
                 fontSize: 24, display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -295,7 +295,7 @@ window.ChatWidget = function ChatWidget({ currentUser }) {
             /* 헤더 */
             React.createElement('div', {
                 style: {
-                    padding: '12px 18px', background: '#1B2A4A',
+                    padding: '12px 18px', background: '#3b82f6',
                     color: '#fff', display: 'flex', alignItems: 'center', gap: 10,
                 }
             },
@@ -324,8 +324,8 @@ window.ChatWidget = function ChatWidget({ currentUser }) {
                     style: {
                         flex: 1, padding: '10px 0', fontSize: 13, fontWeight: 600, cursor: 'pointer',
                         background: 'none', border: 'none',
-                        color: activeTab === 'chat' ? '#1B2A4A' : '#94a3b8',
-                        borderBottom: activeTab === 'chat' ? '2px solid #1B2A4A' : '2px solid transparent',
+                        color: activeTab === 'chat' ? '#3b82f6' : '#94a3b8',
+                        borderBottom: activeTab === 'chat' ? '2px solid #3b82f6' : '2px solid transparent',
                     }
                 }, '💬 AI 채팅'),
                 React.createElement('button', {
@@ -333,8 +333,8 @@ window.ChatWidget = function ChatWidget({ currentUser }) {
                     style: {
                         flex: 1, padding: '10px 0', fontSize: 13, fontWeight: 600, cursor: 'pointer',
                         background: 'none', border: 'none',
-                        color: activeTab === 'feedback' ? '#1B2A4A' : '#94a3b8',
-                        borderBottom: activeTab === 'feedback' ? '2px solid #1B2A4A' : '2px solid transparent',
+                        color: activeTab === 'feedback' ? '#3b82f6' : '#94a3b8',
+                        borderBottom: activeTab === 'feedback' ? '2px solid #3b82f6' : '2px solid transparent',
                     }
                 }, '📝 의견함')
             ),
@@ -370,7 +370,7 @@ window.ChatWidget = function ChatWidget({ currentUser }) {
                             React.createElement('div', {
                                 style: {
                                     maxWidth: '80%', padding: '10px 14px', borderRadius: 12,
-                                    background: isUser ? '#1B2A4A' : '#f1f5f9',
+                                    background: isUser ? '#3b82f6' : '#f1f5f9',
                                     color: isUser ? '#fff' : '#1e293b',
                                     fontSize: 13, lineHeight: 1.6,
                                     borderBottomRightRadius: isUser ? 4 : 12,
@@ -473,7 +473,7 @@ window.ChatWidget = function ChatWidget({ currentUser }) {
                         disabled: sending || (!input.trim() && !imageB64),
                         style: {
                             width: 36, height: 36, borderRadius: '50%',
-                            background: sending || (!input.trim() && !imageB64) ? '#e2e8f0' : '#1B2A4A',
+                            background: sending || (!input.trim() && !imageB64) ? '#e2e8f0' : '#3b82f6',
                             color: '#fff', border: 'none', cursor: sending || (!input.trim() && !imageB64) ? 'default' : 'pointer',
                             fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center',
                             flexShrink: 0,
@@ -585,7 +585,7 @@ window.ChatWidget = function ChatWidget({ currentUser }) {
                             disabled: fbSending || !fbContent.trim(),
                             style: {
                                 marginTop: 10, width: '100%', padding: '10px 0', borderRadius: 10,
-                                background: fbSending || !fbContent.trim() ? '#e2e8f0' : '#1B2A4A',
+                                background: fbSending || !fbContent.trim() ? '#e2e8f0' : '#3b82f6',
                                 color: fbSending || !fbContent.trim() ? '#94a3b8' : '#fff',
                                 border: 'none', fontSize: 13, fontWeight: 600, cursor: fbSending || !fbContent.trim() ? 'default' : 'pointer',
                             }

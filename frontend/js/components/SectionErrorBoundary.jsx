@@ -37,7 +37,7 @@
                     ),
                     React.createElement('button', {
                         onClick: this.handleRetry,
-                        style: { background: '#6C5CE7', color: '#fff', border: 'none', padding: '8px 20px', borderRadius: 6, fontSize: 13, fontWeight: 500, cursor: 'pointer', marginRight: 8 }
+                        style: { background: '#3b82f6', color: '#fff', border: 'none', padding: '8px 20px', borderRadius: 6, fontSize: 13, fontWeight: 500, cursor: 'pointer', marginRight: 8 }
                     }, '\uB2E4\uC2DC \uC2DC\uB3C4')
                 )
             );

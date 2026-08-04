@@ -53,7 +53,7 @@ window.KeywordTrendSection = function KeywordTrendSection(props) {
         React.createElement('div', { style: { fontSize: 14, fontWeight: 700, color: '#0f172a' } }, '12개월 검색량 추이'),
         React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12 } },
           React.createElement('span', { style: { fontSize: 11, color: '#94a3b8' } }, '이번 달'),
-          React.createElement('span', { style: { fontSize: 18, fontWeight: 800, color: '#4f46e5' } }, fmt(lastVal)),
+          React.createElement('span', { style: { fontSize: 18, fontWeight: 800, color: '#3b82f6' } }, fmt(lastVal)),
           React.createElement('span', { style: { padding: '4px 12px', borderRadius: 999, fontSize: 12, fontWeight: 700, background: change >= 0 ? '#ecfdf5' : '#fef2f2', color: changeColor } },
             (change >= 0 ? '+' : '') + change + '%'
           )
@@ -67,20 +67,20 @@ window.KeywordTrendSection = function KeywordTrendSection(props) {
         }),
         React.createElement('defs', null,
           React.createElement('linearGradient', { id: 'trendGrad', x1: '0', y1: '0', x2: '0', y2: '1' },
-            React.createElement('stop', { offset: '0%', stopColor: '#4f46e5', stopOpacity: 0.4 }),
-            React.createElement('stop', { offset: '100%', stopColor: '#4f46e5', stopOpacity: 0.02 })
+            React.createElement('stop', { offset: '0%', stopColor: '#3b82f6', stopOpacity: 0.4 }),
+            React.createElement('stop', { offset: '100%', stopColor: '#3b82f6', stopOpacity: 0.02 })
           )
         ),
         /* line */
         React.createElement('polyline', {
           points: points.join(' '),
-          fill: 'none', stroke: '#4f46e5', strokeWidth: 2.5, strokeLinecap: 'round', strokeLinejoin: 'round'
+          fill: 'none', stroke: '#3b82f6', strokeWidth: 2.5, strokeLinecap: 'round', strokeLinejoin: 'round'
         }),
         /* dots */
         values.map(function(v, i) {
           var x = padX + (i / (values.length - 1)) * usableW;
           var y = padY + usableH - ((v - min) / (max - min || 1)) * usableH;
-          return React.createElement('circle', { key: i, cx: x, cy: y, r: 3, fill: '#4f46e5', stroke: '#fff', strokeWidth: 1.5 });
+          return React.createElement('circle', { key: i, cx: x, cy: y, r: 3, fill: '#3b82f6', stroke: '#fff', strokeWidth: 1.5 });
         })
       ),
       /* month labels */
@@ -113,10 +113,10 @@ window.KeywordTrendSection = function KeywordTrendSection(props) {
             }}>
               <div style={{ display: 'flex', alignItems: 'flex-end', gap: 32, height: 160, marginBottom: 16, justifyContent: 'center' }}>
                 <div style={{ flex: '0 0 35%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                  <div style={{ fontSize: 18, fontWeight: 800, color: '#4f46e5', marginBottom: 8 }}>{fmt(mainVolume)}</div>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: '#3b82f6', marginBottom: 8 }}>{fmt(mainVolume)}</div>
                   <div style={{
                     width: '100%', height: mainBarH + 'px',
-                    background: 'linear-gradient(180deg, #4f46e5 0%, #818cf8 100%)',
+                    background: 'linear-gradient(180deg, #3b82f6 0%, #818cf8 100%)',
                     borderRadius: '10px 10px 4px 4px', transition: 'height 0.6s ease',
                     boxShadow: '0 4px 12px rgba(79,70,229,0.2)'
                   }}></div>
@@ -132,7 +132,7 @@ window.KeywordTrendSection = function KeywordTrendSection(props) {
                 </div>
               </div>
               <div style={{ display: 'flex', gap: 24, justifyContent: 'center', fontSize: 12, color: '#64748b' }}>
-                <span><span style={{ display: 'inline-block', width: 12, height: 12, background: '#4f46e5', borderRadius: 3, marginRight: 6, verticalAlign: 'middle' }}></span>{mainKeyword} ({mainPct}%)</span>
+                <span><span style={{ display: 'inline-block', width: 12, height: 12, background: '#3b82f6', borderRadius: 3, marginRight: 6, verticalAlign: 'middle' }}></span>{mainKeyword} ({mainPct}%)</span>
                 <span><span style={{ display: 'inline-block', width: 12, height: 12, background: '#10b981', borderRadius: 3, marginRight: 6, verticalAlign: 'middle' }}></span>{subKeyword} ({subPct}%)</span>
               </div>
             </div>
@@ -141,7 +141,7 @@ window.KeywordTrendSection = function KeywordTrendSection(props) {
             <div style={{ marginTop: 16 }}>
               <div style={{ display: 'flex', height: 36, borderRadius: 10, overflow: 'hidden' }}>
                 <div style={{
-                  width: mainPct + '%', background: 'linear-gradient(135deg, #4f46e5, #818cf8)',
+                  width: mainPct + '%', background: 'linear-gradient(135deg, #3b82f6, #818cf8)',
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
                   color: '#fff', fontSize: 12, fontWeight: 700,
                   minWidth: mainPct > 10 ? 'auto' : '0'

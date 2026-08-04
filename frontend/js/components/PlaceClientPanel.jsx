@@ -85,7 +85,7 @@ window.PlaceClientPanel = function PlaceClientPanel(props) {
                     var on = selKw === k.keyword;
                     var base = { padding: '8px 14px', borderRadius: 20, cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' };
                     var st = on
-                        ? Object.assign(base, { background: '#1B2A4A', color: '#fff', border: '1px solid #1B2A4A' })
+                        ? Object.assign(base, { background: '#3b82f6', color: '#fff', border: '1px solid #3b82f6' })
                         : Object.assign(base, chipColor(k));
                     return React.createElement('button', { key: i, onClick: function() { setSelKw(k.keyword); }, style: st },
                         k.keyword,

@@ -33,7 +33,7 @@ window.UserGuidePage = function UserGuidePage({ currentUser }) {
     var tdCenterStyle = { padding: '10px 14px', borderBottom: '1px solid #f1f5f9', color: '#334155', textAlign: 'center' };
     var tdRightStyle = { padding: '10px 14px', borderBottom: '1px solid #f1f5f9', color: '#334155', textAlign: 'right', fontWeight: 600 };
     var badgeStyle = function(bg, color) { return { display: 'inline-block', padding: '2px 10px', borderRadius: 10, fontSize: 11, fontWeight: 600, background: bg, color: color, marginRight: 4 }; };
-    var stepNumStyle = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, borderRadius: '50%', background: '#6C5CE7', color: '#fff', fontSize: 12, fontWeight: 700, marginRight: 8, flexShrink: 0 };
+    var stepNumStyle = { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, borderRadius: '50%', background: '#3b82f6', color: '#fff', fontSize: 12, fontWeight: 700, marginRight: 8, flexShrink: 0 };
     var stepRowStyle = { display: 'flex', alignItems: 'flex-start', marginBottom: 14 };
     var dividerStyle = { border: 'none', borderTop: '1px solid #e2e8f0', margin: '24px 0' };
 
@@ -843,7 +843,7 @@ window.UserGuidePage = function UserGuidePage({ currentUser }) {
     /* ==================== 메인 레이아웃 ==================== */
     return React.createElement('div', { className: 'container', style: { paddingTop: 24, paddingBottom: 40 } },
         /* 헤더 */
-        React.createElement('div', { style: { background: 'linear-gradient(135deg, #6C5CE7, #a29bfe)', borderRadius: 16, padding: '32px 36px', marginBottom: 24, color: '#fff' } },
+        React.createElement('div', { style: { background: 'linear-gradient(135deg, #3b82f6, #93c5fd)', borderRadius: 16, padding: '32px 36px', marginBottom: 24, color: '#fff' } },
             React.createElement('h1', { style: { fontSize: 24, fontWeight: 700, marginBottom: 6 } }, '\uD83D\uDCD6 \uC0AC\uC6A9\uC790 \uAC00\uC774\uB4DC\uBD81'),
             React.createElement('p', { style: { fontSize: 14, opacity: 0.85 } }, '\uB85C\uC9C1 \uBD84\uC11D \uD504\uB85C\uADF8\uB7A8 \uB0B4\uBD80 \uC9C1\uC6D0\uC6A9 \uC0AC\uC6A9 \uC548\uB0B4\uC11C \u2014 \uC0AC\uC6A9 \uBC29\uBC95, \uB370\uC774\uD130 \uD574\uC11D, \uBE44\uC6A9 \uC548\uB0B4, \uD65C\uC6A9 \uD301')
         ),
@@ -861,8 +861,8 @@ window.UserGuidePage = function UserGuidePage({ currentUser }) {
                             display: 'block', width: '100%', padding: '10px 18px', border: 'none', cursor: 'pointer',
                             textAlign: 'left', fontSize: 13, fontWeight: isActive ? 700 : 400,
                             background: isActive ? '#f0f0ff' : 'transparent',
-                            color: isActive ? '#6C5CE7' : '#475569',
-                            borderLeft: isActive ? '3px solid #6C5CE7' : '3px solid transparent',
+                            color: isActive ? '#3b82f6' : '#475569',
+                            borderLeft: isActive ? '3px solid #3b82f6' : '3px solid transparent',
                             transition: 'all 0.15s',
                         }
                     }, s.icon + ' ' + s.label);

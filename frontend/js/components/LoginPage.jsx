@@ -64,7 +64,7 @@ window.LoginPage = function LoginPage(props) {
   var styles = {
     container: {
       minHeight: '100vh',
-      background: 'linear-gradient(135deg, #6C5CE7 0%, #a29bfe 100%)',
+      background: 'linear-gradient(135deg, #3b82f6 0%, #93c5fd 100%)',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
@@ -100,7 +100,7 @@ window.LoginPage = function LoginPage(props) {
     },
     badge: {
       display: 'inline-block',
-      background: '#6C5CE7',
+      background: '#3b82f6',
       color: 'white',
       padding: '4px 12px',
       borderRadius: '20px',
@@ -123,12 +123,12 @@ window.LoginPage = function LoginPage(props) {
       transition: 'border-color 0.3s'
     },
     inputWrapperFocus: {
-      borderColor: '#6C5CE7'
+      borderColor: '#3b82f6'
     },
     inputIcon: {
       marginRight: '12px',
       fontSize: '18px',
-      color: '#6C5CE7'
+      color: '#3b82f6'
     },
     input: {
       flex: 1,
@@ -139,7 +139,7 @@ window.LoginPage = function LoginPage(props) {
       fontFamily: 'inherit'
     },
     button: {
-      background: '#6C5CE7',
+      background: '#3b82f6',
       color: 'white',
       border: 'none',
       padding: '12px 24px',
@@ -152,7 +152,7 @@ window.LoginPage = function LoginPage(props) {
       marginTop: '12px'
     },
     buttonHover: {
-      background: '#5f3dc4'
+      background: '#2563eb'
     },
     error: {
       background: '#fff5f5',

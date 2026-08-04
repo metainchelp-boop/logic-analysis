@@ -189,7 +189,7 @@ window.ClientListSection = function ClientListSection({ currentUser, onClientCli
                 React.createElement('div', null,
                     React.createElement('h2', {
                         style: { fontSize: 20, fontWeight: 700, color: '#1e293b', margin: 0, display: 'flex', alignItems: 'center', gap: 8 }
-                    }, '🏢 등록 업체', clients.length > 0 && React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#6366f1', marginLeft: 4 } }, '(' + clients.length + '개)')),
+                    }, '🏢 등록 업체', clients.length > 0 && React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#3b82f6', marginLeft: 4 } }, '(' + clients.length + '개)')),
                     React.createElement('p', {
                         style: { fontSize: 13, color: '#64748b', margin: '4px 0 0 0' }
                     }, '업체 상세 보기를 클릭하면 분석 이력과 순위를 확인할 수 있습니다.')
@@ -323,7 +323,7 @@ window.ClientListSection = function ClientListSection({ currentUser, onClientCli
                             justifyContent: 'space-between'
                         },
                         onMouseEnter: function(e) {
-                            e.currentTarget.style.borderColor = '#6c5ce7';
+                            e.currentTarget.style.borderColor = '#3b82f6';
                             e.currentTarget.style.boxShadow = '0 4px 12px rgba(108,92,231,0.15)';
                             e.currentTarget.style.transform = 'translateY(-2px)';
                         },
@@ -390,7 +390,7 @@ window.ClientListSection = function ClientListSection({ currentUser, onClientCli
                                 display: 'block',
                                 width: '100%',
                                 textAlign: 'center',
-                                background: '#6c5ce7',
+                                background: '#3b82f6',
                                 color: '#fff',
                                 border: 'none',
                                 padding: '8px 0',

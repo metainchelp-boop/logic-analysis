@@ -4,7 +4,7 @@
  */
 .place-analysis{
   --pa-bg:#f1f5f9;--pa-card:#fff;--pa-ink:#0f172a;--pa-sub:#64748b;--pa-muted:#94a3b8;
-  --pa-line:#e8edf3;--pa-line2:#e2e8f0;--pa-ind:#4f46e5;--pa-pur:#9333ea;
+  --pa-line:#e8edf3;--pa-line2:#e2e8f0;--pa-ind:#3b82f6;--pa-pur:#9333ea;
   --pa-ind-soft:#eef2ff;--pa-ind-soft2:#e0e7ff;
   --pa-ok:#16a34a;--pa-ok2:#059669;--pa-okbg:#dcfce7;--pa-okln:#bbf7d0;
   --pa-red:#ef4444;--pa-red2:#dc2626;--pa-redbg:#fef2f2;--pa-redln:#fecaca;
@@ -30,7 +30,7 @@
 .place-analysis .field label{display:block;font-size:11px;font-weight:600;color:#6b7280;margin-bottom:4px}
 .place-analysis .field label .req{color:var(--pa-red2)}
 .place-analysis .inp{width:100%;height:44px;padding:0 14px;border:2px solid var(--pa-line2);border-radius:10px;font-size:14px;background:var(--pa-bg);color:var(--pa-ink);font-family:inherit}
-.place-analysis .inp:focus{outline:none;border-color:#6366f1;background:var(--pa-card);box-shadow:0 0 0 3px rgba(99,102,241,.15)}
+.place-analysis .inp:focus{outline:none;border-color:#3b82f6;background:var(--pa-card);box-shadow:0 0 0 3px rgba(99,102,241,.15)}
 .place-analysis .inp.filled{border-color:var(--pa-okln);background:var(--pa-okbg)}
 .place-analysis textarea.inp{height:auto;min-height:44px;padding:10px 14px;line-height:1.5;resize:vertical}
 .place-analysis .kwbox{border:2px solid var(--pa-okln);background:var(--pa-okbg);border-radius:10px;padding:9px 11px;min-height:44px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
@@ -120,7 +120,7 @@
 .place-analysis .suppgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:11px}
 .place-analysis .suppf label{display:block;font-size:11px;font-weight:700;color:#6b7280;margin-bottom:3px}
 .place-analysis .suppf .si{width:100%;height:38px;padding:0 11px;border:1.5px solid var(--pa-line2);border-radius:9px;font-size:13px;background:var(--pa-card);color:var(--pa-ink);font-family:inherit}
-.place-analysis .suppf .si:focus{outline:none;border-color:#6366f1}
+.place-analysis .suppf .si:focus{outline:none;border-color:#3b82f6}
 .place-analysis .chk{display:flex;gap:9px;flex-wrap:wrap;align-items:center}
 .place-analysis .chkb{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:700;padding:6px 11px;border-radius:8px;border:1.5px solid var(--pa-line2);background:var(--pa-card);color:var(--pa-sub);cursor:pointer}
 .place-analysis .chkb.on{border-color:var(--pa-ok2);background:var(--pa-okbg);color:var(--pa-ok2)}

@@ -55,7 +55,7 @@ window.ManagerReassignSection = function ManagerReassignSection() {
                 })
             ),
             React.createElement('button', { onClick: doReassign, disabled: busy,
-                style: { fontSize: 13, fontWeight: 700, padding: '8px 18px', borderRadius: 8, cursor: busy ? 'default' : 'pointer', border: 'none', background: '#4f46e5', color: '#fff', opacity: busy ? 0.6 : 1 } },
+                style: { fontSize: 13, fontWeight: 700, padding: '8px 18px', borderRadius: 8, cursor: busy ? 'default' : 'pointer', border: 'none', background: '#3b82f6', color: '#fff', opacity: busy ? 0.6 : 1 } },
                 busy ? '이관 중…' : '이관 실행')
         ),
         msg && React.createElement('div', { style: { marginTop: 14, fontSize: 13, fontWeight: 600, color: msg.indexOf('✅') === 0 ? '#16a34a' : '#dc2626' } }, msg)

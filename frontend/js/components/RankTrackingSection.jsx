@@ -240,7 +240,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                 var on = days === d;
                 return React.createElement('button', { key: d, onClick: function(e) { e.stopPropagation(); setPeriod(d); },
                     style: { fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 14, cursor: 'pointer',
-                             border: '1px solid ' + (on ? '#4f46e5' : '#e2e8f0'), background: on ? '#4f46e5' : '#fff', color: on ? '#fff' : '#475569' } }, _periodLabel[d]);
+                             border: '1px solid ' + (on ? '#3b82f6' : '#e2e8f0'), background: on ? '#3b82f6' : '#fff', color: on ? '#fff' : '#475569' } }, _periodLabel[d]);
             }),
             React.createElement('button', { onClick: function(e) {
                     e.stopPropagation();
@@ -537,7 +537,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                         </div>
                         <button
                             onClick={function() { lastExposureKey.current = ''; setExposureFailed(false); setExposureNonce(function(n) { return n + 1; }); }}
-                            style={{ padding: '9px 18px', borderRadius: 10, border: 'none', background: 'linear-gradient(135deg,#4f46e5,#6366f1)', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}
+                            style={{ padding: '9px 18px', borderRadius: 10, border: 'none', background: 'linear-gradient(135deg,#3b82f6,#3b82f6)', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}
                         >
                             🔄 다시 조회
                         </button>
@@ -578,7 +578,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                                             },
                                                 p.image_url && React.createElement('img', { src: p.image_url, alt: '', style: { width: 56, height: 56, borderRadius: 8, objectFit: 'cover', flexShrink: 0 } }),
                                                 React.createElement('div', { style: { minWidth: 0 } },
-                                                    React.createElement('div', { style: { fontWeight: 600, fontSize: 14, marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: onNavigateToClient ? '#4f46e5' : 'inherit' } },
+                                                    React.createElement('div', { style: { fontWeight: 600, fontSize: 14, marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: onNavigateToClient ? '#3b82f6' : 'inherit' } },
                                                         p.product_name || '상품',
                                                         onNavigateToClient && React.createElement('span', { style: { fontSize: 11, color: '#818cf8', marginLeft: 6, fontWeight: 400 } }, '→ 업체관리')
                                                     ),
@@ -713,7 +713,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                                             var detail = React.createElement('tr', { key: p.id + '-d' },
                                                 React.createElement('td', { colSpan: 6, style: { padding: 0, background: '#faf5ff' } },
                                                     React.createElement('div', { style: { padding: '8px 12px 14px' } },
-                                                        onNavigateToClient && React.createElement('button', { onClick: function(){ onNavigateToClient(p.store_name || '', p.product_url || ''); }, style: { fontSize: 11, fontWeight: 700, color: '#4f46e5', background: '#ede9fe', border: 'none', borderRadius: 8, padding: '4px 10px', cursor: 'pointer', marginBottom: 8 } }, '업체관리에서 상세 보기 →'),
+                                                        onNavigateToClient && React.createElement('button', { onClick: function(){ onNavigateToClient(p.store_name || '', p.product_url || ''); }, style: { fontSize: 11, fontWeight: 700, color: '#3b82f6', background: '#ede9fe', border: 'none', borderRadius: 8, padding: '4px 10px', cursor: 'pointer', marginBottom: 8 } }, '업체관리에서 상세 보기 →'),
                                                         kws.length === 0
                                                             ? React.createElement('div', { style: { fontSize: 12, color: '#94a3b8', padding: '8px 0' } }, '추적 키워드가 없습니다.')
                                                             : React.createElement('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: 12, background: '#fff', borderRadius: 8, overflow: 'hidden' } },

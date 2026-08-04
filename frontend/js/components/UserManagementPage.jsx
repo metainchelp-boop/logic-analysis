@@ -349,7 +349,7 @@ window.UserManagementPage = function UserManagementPage(props) {
                       borderRadius: 999,
                       fontSize: 13,
                       fontWeight: 700,
-                      color: (analysisCounts[String(user.id)] || 0) > 0 ? '#6c5ce7' : '#94a3b8',
+                      color: (analysisCounts[String(user.id)] || 0) > 0 ? '#3b82f6' : '#94a3b8',
                       background: (analysisCounts[String(user.id)] || 0) > 0 ? '#ede9fe' : '#f1f5f9'
                     }
                   }, String(analysisCounts[String(user.id)] || 0) + '건')

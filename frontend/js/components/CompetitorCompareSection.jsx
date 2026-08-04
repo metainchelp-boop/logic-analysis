@@ -324,10 +324,10 @@ window.CompetitorRadar = function CompetitorRadar(props) {
       C('svg', { width: 260, height: 240, viewBox: '0 0 260 240' },
         grid, spokes,
         C('polygon', { points: poly(comp), fill: 'rgba(249,115,22,.15)', stroke: '#f97316', strokeWidth: 2 }),
-        C('polygon', { points: poly(adv), fill: 'rgba(79,70,229,.20)', stroke: '#4f46e5', strokeWidth: 2 })
+        C('polygon', { points: poly(adv), fill: 'rgba(79,70,229,.20)', stroke: '#3b82f6', strokeWidth: 2 })
       ),
       C('div', { style: { fontSize: 12 } },
-        C('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 } }, C('span', { style: { width: 12, height: 12, borderRadius: 3, background: '#4f46e5', display: 'inline-block' } }), '광고주'),
+        C('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 } }, C('span', { style: { width: 12, height: 12, borderRadius: 3, background: '#3b82f6', display: 'inline-block' } }), '광고주'),
         C('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } }, C('span', { style: { width: 12, height: 12, borderRadius: 3, background: '#f97316', display: 'inline-block' } }), '경쟁사'))
     )
   );

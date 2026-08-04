@@ -54,7 +54,7 @@ window.ApiUsageSection = function ApiUsageSection() {
     ];
 
     var summaryCards = [
-        { label: '오늘 비용', value: fmt(today.cost_krw || 0) + '원', sub: (today.calls || 0) + '회 호출', icon: '📊', color: '#6366f1', bg: '#eef2ff' },
+        { label: '오늘 비용', value: fmt(today.cost_krw || 0) + '원', sub: (today.calls || 0) + '회 호출', icon: '📊', color: '#3b82f6', bg: '#eef2ff' },
         { label: '이번 달 누적', value: fmt(month.cost_krw || 0) + '원', sub: (month.calls || 0) + '회 호출', icon: '📅', color: '#8b5cf6', bg: '#f5f3ff' },
         { label: '1회 평균 비용', value: avgCost + '원', sub: 'Claude Sonnet 4', icon: '⚡', color: '#0ea5e9', bg: '#f0f9ff' },
         { label: '일 평균 비용', value: fmt(dailyAvg) + '원', sub: '일 평균 ' + (month.calls ? Math.round(month.calls / 30) : 0) + '회', icon: '📈', color: '#10b981', bg: '#ecfdf5' },
@@ -113,7 +113,7 @@ window.ApiUsageSection = function ApiUsageSection() {
                             flex: 1, padding: '8px 16px', border: 'none', cursor: 'pointer',
                             borderRadius: 8, fontSize: 13, fontWeight: 600,
                             background: active ? '#fff' : 'transparent',
-                            color: active ? '#4f46e5' : '#64748b',
+                            color: active ? '#3b82f6' : '#64748b',
                             boxShadow: active ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
                             transition: 'all 0.2s',
                         }
@@ -136,7 +136,7 @@ window.ApiUsageSection = function ApiUsageSection() {
                                     style: {
                                         padding: '4px 12px', border: 'none', borderRadius: 6,
                                         fontSize: 12, cursor: 'pointer', fontWeight: 500,
-                                        background: active ? '#6366f1' : 'transparent',
+                                        background: active ? '#3b82f6' : 'transparent',
                                         color: active ? '#fff' : '#64748b',
                                     }
                                 }, p);
@@ -167,8 +167,8 @@ window.ApiUsageSection = function ApiUsageSection() {
                                 React.createElement('div', {
                                     style: {
                                         width: '100%', height: h, borderRadius: '3px 3px 0 0',
-                                        background: isHov ? 'linear-gradient(180deg, #6366f1, #4f46e5)' :
-                                            (i >= chartData.length - 5 ? 'linear-gradient(180deg, #818cf8, #6366f1)' : 'linear-gradient(180deg, #c7d2fe, #a5b4fc)'),
+                                        background: isHov ? 'linear-gradient(180deg, #3b82f6, #3b82f6)' :
+                                            (i >= chartData.length - 5 ? 'linear-gradient(180deg, #818cf8, #3b82f6)' : 'linear-gradient(180deg, #c7d2fe, #a5b4fc)'),
                                         transition: 'all 0.2s',
                                     }
                                 })
@@ -194,9 +194,9 @@ window.ApiUsageSection = function ApiUsageSection() {
                             React.createElement('div', { style: { fontSize: 13, color: '#1e293b', marginBottom: 4 } }, '이번 달: ' + fmt(totalInputTokens) + ' 토큰'),
                             React.createElement('div', { style: { fontSize: 12, color: '#94a3b8' } }, '단가: $3 / 1M 토큰'),
                             React.createElement('div', { style: { marginTop: 8, height: 6, background: '#e2e8f0', borderRadius: 3, overflow: 'hidden' } },
-                                React.createElement('div', { style: { width: inputPct + '%', height: '100%', background: 'linear-gradient(90deg, #818cf8, #6366f1)', borderRadius: 3 } })
+                                React.createElement('div', { style: { width: inputPct + '%', height: '100%', background: 'linear-gradient(90deg, #818cf8, #3b82f6)', borderRadius: 3 } })
                             ),
-                            React.createElement('div', { style: { fontSize: 11, color: '#6366f1', marginTop: 4, fontWeight: 600 } }, '전체 비용의 약 ' + inputPct + '%')
+                            React.createElement('div', { style: { fontSize: 11, color: '#3b82f6', marginTop: 4, fontWeight: 600 } }, '전체 비용의 약 ' + inputPct + '%')
                         ),
                         /* 출력 토큰 */
                         React.createElement('div', { style: { background: '#f8fafc', borderRadius: 10, padding: 16 } },
@@ -236,11 +236,11 @@ window.ApiUsageSection = function ApiUsageSection() {
                                         React.createElement('td', { style: { padding: 12, fontWeight: 600, color: '#1e293b' } }, c.client_name),
                                         React.createElement('td', { style: { padding: 12, textAlign: 'center', color: '#64748b' } }, c.keyword_count + '개'),
                                         React.createElement('td', { style: { padding: 12, textAlign: 'center', color: '#64748b' } }, c.calls + '회'),
-                                        React.createElement('td', { style: { padding: 12, textAlign: 'center', fontWeight: 700, color: '#4f46e5' } }, fmt(c.cost_krw) + '원'),
+                                        React.createElement('td', { style: { padding: 12, textAlign: 'center', fontWeight: 700, color: '#3b82f6' } }, fmt(c.cost_krw) + '원'),
                                         React.createElement('td', { style: { padding: 12, textAlign: 'center' } },
                                             React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'center' } },
                                                 React.createElement('div', { style: { width: 60, height: 6, background: '#e2e8f0', borderRadius: 3, overflow: 'hidden' } },
-                                                    React.createElement('div', { style: { width: pct + '%', height: '100%', background: '#6366f1', borderRadius: 3 } })
+                                                    React.createElement('div', { style: { width: pct + '%', height: '100%', background: '#3b82f6', borderRadius: 3 } })
                                                 ),
                                                 React.createElement('span', { style: { fontSize: 11, color: '#64748b', minWidth: 30 } }, pct + '%')
                                             )
@@ -254,7 +254,7 @@ window.ApiUsageSection = function ApiUsageSection() {
                                         clients.reduce(function(s, c) { return s + c.keyword_count; }, 0) + '개'),
                                     React.createElement('td', { style: { padding: 12, textAlign: 'center', fontWeight: 600, color: '#64748b' } },
                                         clients.reduce(function(s, c) { return s + c.calls; }, 0) + '회'),
-                                    React.createElement('td', { style: { padding: 12, textAlign: 'center', fontWeight: 700, color: '#4f46e5', fontSize: 14 } },
+                                    React.createElement('td', { style: { padding: 12, textAlign: 'center', fontWeight: 700, color: '#3b82f6', fontSize: 14 } },
                                         fmt(totalClientCost) + '원'),
                                     React.createElement('td', { style: { padding: 12, textAlign: 'center', fontWeight: 600, color: '#64748b', fontSize: 11 } }, '100%')
                                 )
@@ -311,7 +311,7 @@ window.ApiUsageSection = function ApiUsageSection() {
                                         ),
                                         React.createElement('td', { style: { padding: '8px 10px', textAlign: 'center', color: '#64748b', fontFamily: 'monospace', fontSize: 11 } }, fmt(log.input_tokens)),
                                         React.createElement('td', { style: { padding: '8px 10px', textAlign: 'center', color: '#64748b', fontFamily: 'monospace', fontSize: 11 } }, fmt(log.output_tokens)),
-                                        React.createElement('td', { style: { padding: '8px 10px', textAlign: 'center', fontWeight: 600, color: '#4f46e5', fontSize: 12 } }, log.cost_krw + '원'),
+                                        React.createElement('td', { style: { padding: '8px 10px', textAlign: 'center', fontWeight: 600, color: '#3b82f6', fontSize: 12 } }, log.cost_krw + '원'),
                                         React.createElement('td', { style: { padding: '8px 10px', textAlign: 'center' } },
                                             React.createElement('span', {
                                                 style: { display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: log.status === 'success' ? '#22c55e' : '#ef4444' }
