@@ -78,6 +78,12 @@ jobs:
             sudo lvs 2>/dev/null || true
             sudo dmidecode -s system-manufacturer 2>/dev/null || true
             sudo dmidecode -s system-product-name 2>/dev/null || true
+            echo
+            echo "== 무엇이 공간을 먹나 (증가 요인 분석 — 읽기 전용) =="
+            echo "[도커 총량]"; docker system df
+            echo "[우리 DB 크기]"; ls -lh /root/logic-analysis-deploy/data/*.db 2>/dev/null | awk '{print $9, $5}'
+            echo "[동거 서비스별 배포 디렉터리 상위]"; sudo du -xh -d1 /root 2>/dev/null | sort -h | tail -10
+            echo "[전체 루트 상위 소비]"; sudo du -xh -d1 / 2>/dev/null | sort -h | tail -8
             if [ "${{ inputs.prune }}" = "true" ]; then
               echo
               echo "== 디스크 사용 내역 (정리 전) =="
