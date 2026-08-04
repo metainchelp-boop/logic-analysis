@@ -143,6 +143,21 @@ jobs:
                     print(f"  {t:30s} {n:>10,}행")
                 except Exception as e:
                     print(f"  {t:30s} (err {e})")
+            print()
+            print("[대용량 JSON 컬럼 실측 — 무엇이 4.7GB인가]")
+            def mb(q):
+                try: return (c.execute(q).fetchone()[0] or 0)/1048576
+                except Exception as e: return f"err:{e}"
+            print(f"  client_analyses.analysis_json      {mb('SELECT SUM(LENGTH(analysis_json)) FROM client_analyses'):8.0f} MB")
+            print(f"  client_analyses.shop_products_json {mb('SELECT SUM(LENGTH(shop_products_json)) FROM client_analyses'):8.0f} MB")
+            print(f"  client_analyses.advertiser_json    {mb('SELECT SUM(LENGTH(advertiser_json)) FROM client_analyses'):8.0f} MB")
+            print(f"  client_analyses.volume+related     {mb('SELECT SUM(LENGTH(volume_json)+LENGTH(related_json)) FROM client_analyses'):8.0f} MB")
+            print(f"  collected_serp.products_json       {mb('SELECT SUM(LENGTH(products_json)) FROM collected_serp'):8.0f} MB")
+            print(f"  competitor_snapshots(전 컬럼 근사) {mb('SELECT SUM(LENGTH(product_name)+LENGTH(store_name)+LENGTH(product_url)+LENGTH(image_url)) FROM competitor_snapshots'):8.0f} MB")
+            print()
+            print("[client_analyses 월별 분포 — 오래된 것 비중]")
+            for ym, n in c.execute("SELECT substr(analyzed_date,1,7), COUNT(*) FROM client_analyses GROUP BY 1 ORDER BY 1"):
+                print(f"  {ym}  {n:>7,}행")
             conn.close()
             PY
             if [ "${{ inputs.prune }}" = "true" ]; then
