@@ -127,6 +127,22 @@ jobs:
                     print(f"  {tbl:24s} {n:>10,}행  {str(lo)[:16]} → {str(hi)[:16]}")
                 except Exception as e:
                     print(f"  {tbl:24s} (조회 불가: {e})")
+            print()
+            pc = c.execute("PRAGMA page_count").fetchone()[0]
+            fl = c.execute("PRAGMA freelist_count").fetchone()[0]
+            ps = c.execute("PRAGMA page_size").fetchone()[0]
+            av = c.execute("PRAGMA auto_vacuum").fetchone()[0]
+            print(f"[파일 구조] 총 {pc*ps/1073741824:.2f}GB · 빈 페이지(freelist) {fl*ps/1073741824:.2f}GB "
+                  f"({100*fl/pc:.0f}%) · auto_vacuum={av}(0=꺼짐)")
+            print()
+            print("[전체 테이블 행 수 — 누락 없이]")
+            tabs = [r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
+            for t in tabs:
+                try:
+                    n = c.execute(f"SELECT COUNT(*) FROM \"{t}\"").fetchone()[0]
+                    print(f"  {t:30s} {n:>10,}행")
+                except Exception as e:
+                    print(f"  {t:30s} (err {e})")
             conn.close()
             PY
             if [ "${{ inputs.prune }}" = "true" ]; then
