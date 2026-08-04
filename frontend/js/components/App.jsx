@@ -486,7 +486,7 @@ window.App = function App() {
     /* 홈 탭 — 업체 리스트 + 검색 */
     if (currentPage === 'home') return React.createElement(React.Fragment, null,
         React.createElement('div', null,
-            React.createElement(window.TopBar, { activePage: 'home', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
+            React.createElement(window.AppShellBar, { activePage: 'home', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
             React.createElement(SearchBar, { onSearch: handleHomeSearch, loading: searchLoading, initialValues: searchBarInitial }),
 
             /* 업체 연동 자동저장 상태 배너 */
@@ -518,7 +518,7 @@ window.App = function App() {
 
     if (currentPage === 'management') return React.createElement(React.Fragment, null,
         React.createElement('div', null,
-            React.createElement(window.TopBar, { activePage: 'management', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
+            React.createElement(window.AppShellBar, { activePage: 'management', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
             React.createElement(window.ClientDashboard, {
                 currentUser: currentUser,
                 onRunAnalysis: handleClientClick,
@@ -534,7 +534,7 @@ window.App = function App() {
     /* 📊 키워드 순위 탭 — 업체별 순위 추적 (스토어 분석에서 분리, 2026-08-04) */
     if (currentPage === 'rank') return React.createElement(React.Fragment, null,
         React.createElement('div', null,
-            React.createElement(window.TopBar, { activePage: 'rank', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
+            React.createElement(window.AppShellBar, { activePage: 'rank', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
             React.createElement(window.KeywordRankPage, {
                 currentUser: currentUser,
                 onNavigateToClient: handleNavigateToClient
@@ -546,7 +546,7 @@ window.App = function App() {
     /* 플레이스 분석 탭 — 오프라인·지역 업종(자체완결 페이지, 스토어 분석 흐름과 독립) */
     if (currentPage === 'place') return React.createElement(React.Fragment, null,
         React.createElement('div', null,
-            React.createElement(window.TopBar, { activePage: 'place', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
+            React.createElement(window.AppShellBar, { activePage: 'place', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
             React.createElement(window.PlaceAnalysisPage, { currentUser: currentUser })
         ),
         React.createElement(window.ChatWidget, { currentUser: currentUser })
@@ -554,7 +554,7 @@ window.App = function App() {
 
     if (currentPage === 'placetrack') return React.createElement(React.Fragment, null,
         React.createElement('div', null,
-            React.createElement(window.TopBar, { activePage: 'placetrack', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
+            React.createElement(window.AppShellBar, { activePage: 'placetrack', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
             React.createElement(window.PlaceTrackingPage, { currentUser: currentUser })
         ),
         React.createElement(window.ChatWidget, { currentUser: currentUser })
@@ -562,7 +562,7 @@ window.App = function App() {
 
     if (currentPage === 'learning') return React.createElement(React.Fragment, null,
         React.createElement('div', null,
-            React.createElement(window.TopBar, { activePage: 'learning', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
+            React.createElement(window.AppShellBar, { activePage: 'learning', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
             React.createElement(window.LearningCenterPage, { currentUser: currentUser })
         ),
         React.createElement(window.ChatWidget, { currentUser: currentUser })
@@ -570,7 +570,7 @@ window.App = function App() {
 
     if (currentPage === 'guide') return React.createElement(React.Fragment, null,
         React.createElement('div', null,
-            React.createElement(window.TopBar, { activePage: 'guide', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
+            React.createElement(window.AppShellBar, { activePage: 'guide', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
             React.createElement(window.UserGuidePage, { currentUser: currentUser })
         ),
         React.createElement(window.ChatWidget, { currentUser: currentUser })
@@ -578,7 +578,7 @@ window.App = function App() {
 
     if (currentPage === 'seo' && (currentUser.role === 'manager' || currentUser.role === 'superadmin')) return React.createElement(React.Fragment, null,
         React.createElement('div', null,
-            React.createElement(window.TopBar, { activePage: 'seo', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
+            React.createElement(window.AppShellBar, { activePage: 'seo', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
             React.createElement(window.SeoOptimizerPage, { currentUser: currentUser })
         ),
         React.createElement(window.ChatWidget, { currentUser: currentUser })
@@ -586,7 +586,7 @@ window.App = function App() {
 
     if (currentPage === 'users' && (currentUser.role === 'admin' || currentUser.role === 'superadmin')) return React.createElement(React.Fragment, null,
         React.createElement('div', null,
-            React.createElement(window.TopBar, { activePage: 'users', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
+            React.createElement(window.AppShellBar, { activePage: 'users', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
             React.createElement(window.UserManagementPage, { currentUser: currentUser, token: authToken })
         ),
         React.createElement(window.ChatWidget, { currentUser: currentUser })
@@ -594,7 +594,7 @@ window.App = function App() {
 
     if (currentPage === 'settings' && currentUser.role === 'superadmin') return React.createElement(React.Fragment, null,
         React.createElement('div', null,
-            React.createElement(window.TopBar, { activePage: 'settings', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
+            React.createElement(window.AppShellBar, { activePage: 'settings', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
             React.createElement('div', { style: { maxWidth: 1000, margin: '0 auto', padding: '24px 16px' } },
                 React.createElement(window.AnalysisStatsSection, null),
                 React.createElement(ApiUsageSection, null),
@@ -613,7 +613,7 @@ window.App = function App() {
         React.createElement(React.Fragment, null,
         React.createElement('div', { className: 'analysis-page' },
             /* 네비게이션 바 */
-            React.createElement(window.TopBar, { activePage: 'analysis', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
+            React.createElement(window.AppShellBar, { activePage: 'analysis', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
             React.createElement(SearchBar, { onSearch: handleManualSearch, loading: searchLoading, initialValues: searchBarInitial }),
 
             /* 업체 연동 자동저장 상태 배너 */

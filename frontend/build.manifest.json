@@ -60,6 +60,7 @@
   "js/components/ManagerReassignSection.jsx",
   "js/components/AnalysisStatsSection.jsx",
   "js/components/ChatWidget.jsx",
+  "js/components/AppShellBar.jsx",
   "js/components/TopBar.jsx",
   "js/components/Footer.jsx",
   "js/components/StrengthsHighlightBanner.jsx",
