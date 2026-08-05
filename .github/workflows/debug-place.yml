@@ -19,11 +19,99 @@ on:
       sbiz_check:
         description: '소상공인365 인증키 6종 실응답 검증 (true — 키 값 미출력·읽기 전용·한국 IP=VPS에서 호출)'
         default: ''
+      datago_check:
+        description: '공공데이터포털(data.go.kr) 상가정보 인증키 검증 (true — 행정동코드 매핑용·키 값 미출력)'
+        default: ''
 
 jobs:
   diagnose:
     runs-on: ubuntu-latest
     steps:
+      # ── 공공데이터포털 상가(상권)정보 인증키 검증 (2026-08-05) ──────────
+      # 행정동코드(admiCd) 매핑용 — 소상공인365 포털의 지역명→코드 경로가 전부 막혀
+      # 이 공식 REST 로 「좌표 → 행정동코드」를 얻는다. 키 값은 출력하지 않는다.
+      # ⚠️ 흔한 실수: 인코딩/디코딩 키 혼동 → 두 방식 모두 시험해 어느 쪽이 맞는지 알려준다.
+      - name: 공공데이터포털 인증키 검증
+        if: ${{ github.event.inputs.datago_check == 'true' }}
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          DG_KEY: ${{ secrets.SBIZ_DATA_GO_KR_KEY }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 180s
+          envs: DG_KEY
+          script: |
+            docker exec -i -e DG_KEY="$DG_KEY" logic-analysis python3 - <<'PY'
+            import os, json, ssl, urllib.parse, urllib.request
+
+            KEY = (os.getenv("DG_KEY", "") or "").strip()
+            CTX = ssl.create_default_context(); CTX.check_hostname = False; CTX.verify_mode = ssl.CERT_NONE
+            BASE = "http://apis.data.go.kr/B553077/api/open/sdsc2"
+
+            print("=" * 62)
+            print(f"[0] 키 등록 상태: {'있음 len=' + str(len(KEY)) if KEY else '없음 — GitHub Secret SBIZ_DATA_GO_KR_KEY 미설정'}")
+            if not KEY:
+                raise SystemExit(0)
+            print(f"    형태: {'%2B/%3D 포함 = 인코딩 키로 보임' if ('%' in KEY) else '+ 또는 = 포함 = 디코딩 키로 보임' if ('+' in KEY or '=' in KEY) else '영숫자만'}")
+
+            def call(op, params, encoded_key):
+                # 인코딩 키는 그대로 붙이고, 디코딩 키는 urlencode 한다
+                qs = urllib.parse.urlencode(params)
+                url = f"{BASE}/{op}?serviceKey={KEY if encoded_key else urllib.parse.quote(KEY, safe='')}&{qs}"
+                try:
+                    with urllib.request.urlopen(urllib.request.Request(url, headers={"Accept": "application/json"}),
+                                                timeout=15, context=CTX) as r:
+                        return r.status, r.read().decode("utf-8", "replace")
+                except Exception as e:
+                    return None, f"{type(e).__name__}: {e}"
+
+            def show(txt):
+                t = (txt or "").strip()
+                try:
+                    j = json.loads(t)
+                    hdr = (j.get("header") or {})
+                    code, msg = hdr.get("resultCode"), hdr.get("resultMsg")
+                    body = j.get("body") or {}
+                    items = ((body.get("items") or []) if isinstance(body.get("items"), list) else [])
+                    print(f"     resultCode={code} · {msg} · items={len(items)}건 · totalCount={body.get('totalCount')}")
+                    if items:
+                        it = items[0]
+                        keys = ["bizesNm", "adongCd", "adongNm", "signguNm", "ctprvnNm", "indsSclsNm", "lon", "lat"]
+                        print("     샘플:", {k: it.get(k) for k in keys if k in it})
+                        if it.get("adongCd"):
+                            print(f"     ⭐ 행정동코드 확보: {it.get('adongCd')} ({it.get('adongNm')}) — 매핑 가능!")
+                    return code
+                except Exception:
+                    if "<OpenAPI_ServiceResponse>" in t or "<returnReasonCode>" in t:
+                        import re
+                        rc = re.search(r"<returnReasonCode>(\d+)</returnReasonCode>", t)
+                        au = re.search(r"<returnAuthMsg>([^<]+)</returnAuthMsg>", t)
+                        print(f"     XML 오류 · code={rc.group(1) if rc else '?'} · {au.group(1) if au else t[:120]}")
+                    else:
+                        print(f"     JSON 아님 · {t[:180]}")
+                    return None
+
+            # 강남역 좌표 · 반경 500m 상가 조회
+            for label, enc in [("인코딩 키 그대로", True), ("디코딩 키 → URL 인코딩", False)]:
+                print()
+                print(f"[1] storeListInRadius ({label})")
+                st, tx = call("storeListInRadius",
+                              {"radius": "500", "cx": "127.02758", "cy": "37.49794",
+                               "type": "json", "numOfRows": "3", "pageNo": "1"}, enc)
+                print(f"  HTTP {st}")
+                show(tx)
+
+            print()
+            print("=" * 62)
+            print("판정 안내")
+            print("  · resultCode=00 + items 있음  → ✅ 정상. 행정동코드 매핑 가능")
+            print("  · SERVICE_KEY_IS_NOT_REGISTERED_ERROR(30) → 승인은 됐으나 키 반영 대기(최대 1시간) 또는 키 오타")
+            print("  · SERVICE ACCESS DENIED(20)  → 그 API 활용신청이 안 된 상태")
+            print("  · 두 방식 중 한쪽만 성공     → 그쪽 키 종류가 맞음(코드가 자동으로 맞춤)")
+            PY
+
       # ── 소상공인365 실응답 검증 (2026-08-05) ────────────────────────────
       # 인증키는 서비스별로 발급되므로 6종을 각각 점검한다. 키 값은 절대 출력하지 않고
       # 존재/길이/HTTP 상태/응답 키 이름만 찍는다(전산 gemini_check 선례).
