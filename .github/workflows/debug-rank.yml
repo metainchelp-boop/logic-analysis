@@ -6,6 +6,10 @@ name: Debug Rank Batch (읽기 전용 진단)
 on:
   workflow_dispatch:
     inputs:
+      collector:
+        description: '수집기 진단 — off(기본) / on(확장이 서버에 접속했는지·큐·토큰 상태)'
+        required: false
+        default: 'off'
       rank_link:
         description: '순위 축 브리지 — off(기본) / impact(통합 시 영향 측정·배포 전 가능) / stats / preview / apply'
         required: false
@@ -115,6 +119,52 @@ jobs:
             print(f"  총 {tot} / 슬러그 {slug}")
             PY
             echo
+            if [ "${{ github.event.inputs.collector }}" = "on" ]; then
+              echo "== 수집기 진단 =="
+              echo "-- 확장이 서버에 접속한 기록(오늘) --"
+              # 확장은 GET /api/collector/keywords 로 목록을 받고 POST /serp 로 올린다.
+              # 한 줄도 없으면 '확장이 서버에 아예 말을 걸지 않은 것' = 맥북 쪽 문제.
+              docker logs --since 24h logic-analysis 2>&1 | grep -E 'api/collector' \
+                | awk '{print $0}' | tail -25 || echo "  (접속 기록 없음)"
+              echo "-- 접속 횟수(경로별·24시간) --"
+              docker logs --since 24h logic-analysis 2>&1 | grep -oE 'GET /api/collector/[a-z]+|POST /api/collector/[a-z]+' \
+                | sort | uniq -c || echo "  (없음)"
+              echo
+              docker exec -i logic-analysis python3 - <<'PY'
+            import os, sqlite3
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            print("[수집 적재 — 최근 7일]")
+            n = 0
+            for r in c.execute("""SELECT collected_date d, COUNT(*) kw, MAX(created_at) last_at
+                                    FROM collected_serp
+                                   WHERE collected_date >= date('now','localtime','-6 day')
+                                   GROUP BY collected_date ORDER BY d DESC"""):
+                n += 1
+                print(f"  {r['d']}: 키워드 {r['kw']}건 · 마지막 업로드 {r['last_at']}")
+            if not n:
+                print("  (최근 7일 수집 없음)")
+            print("\n[온디맨드 요청 큐]")
+            for r in c.execute("""SELECT status, COUNT(*) n, MIN(requested_at) oldest, MAX(attempts) mx
+                                    FROM collect_requests GROUP BY status"""):
+                print(f"  {r['status']}: {r['n']}건 (가장 오래된 {r['oldest']} · 최대 시도 {r['mx']})")
+            print("\n[수집 대상 키워드 규모]")
+            kws = set()
+            for sql in ("SELECT DISTINCT keyword FROM tracked_keywords",
+                        "SELECT DISTINCT keyword FROM client_analyses"):
+                for r in c.execute(sql):
+                    k = (r[0] or "").strip()
+                    if k: kws.add(k)
+            done = {r[0] for r in c.execute(
+                "SELECT keyword FROM collected_serp WHERE collected_date = date('now','localtime')")}
+            print(f"  대상 {len(kws)} · 오늘 완료 {len(done)} · 남음 {len(kws - done)}")
+            print("\n[서버 토큰 설정]")
+            tok = os.getenv("COLLECTOR_TOKEN", "")
+            print(f"  COLLECTOR_TOKEN: {'설정됨(len=%d)' % len(tok) if tok else '❌ 미설정 — 전 경로 503'}")
+            PY
+              echo
+            fi
             RL="${{ github.event.inputs.rank_link }}"
             if [ "$RL" = "impact" ]; then
               # 조회 통합(4단계)을 하면 전산① portal-summary 가 실제로 얼마나 달라지는지 측정.
