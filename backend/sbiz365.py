@@ -227,9 +227,15 @@ def _coord_to_admi(x, y):
             it = items[0]
             admi_cd = str(it.get("adongCd") or "").strip()
             if len(admi_cd) == 8:
+                sido, gu, dong = it.get("ctprvnNm"), it.get("signguNm"), it.get("adongNm")
+                # ⚠️ 2026-08-05 실측: getAvgAmtInfo 의 simpleLoc 은 **전체 주소 문자열**이어야 한다.
+                #    사용자가 적은 지역명(구로동)·행정동명(구로3동)·빈 값은 전부 HTTP 500,
+                #    '서울특별시 구로구 구로3동' 만 200. → 여기서 정식 주소를 만들어 함께 넘긴다.
                 return {"admiCd": admi_cd,
-                        "admiNm": it.get("adongNm"),
-                        "guNm": it.get("signguNm")}
+                        "admiNm": dong,
+                        "guNm": gu,
+                        "sidoNm": sido,
+                        "simpleLoc": " ".join(x for x in (sido, gu, dong) if x)}
         except Exception as e:
             logger.warning(f"[sbiz365] 행정동 조회 실패(radius={radius}·무시): {e}")
     return None
@@ -240,7 +246,8 @@ def _resolve_admi(region: str):
     캐시 적중 시 좌표·행정동 변환 재호출을 없앤다. 실패 시 None."""
     cache_key = f"sbiz:admi:{_norm(region)}"
     cached = _cache_get(cache_key, SBIZ_CACHE_TTL)
-    if cached:
+    # simpleLoc(정식 주소) 없이 캐시된 구버전 항목은 그대로 쓰면 매출 조회가 500 이므로 재해석한다.
+    if cached and cached.get("simpleLoc"):
         return cached
     coord = _region_coord(region)
     if not coord:
@@ -482,7 +489,8 @@ def get_place_sbiz(region: str, industry_label: str) -> dict | None:
         if cached is not None:
             return cached
 
-        avg = _fetch_avg(admi["admiCd"], upjong["code"], region)
+        # simpleLoc = 행정동 정식 주소(시도+시군구+행정동). 사용자 입력 지역명을 그대로 쓰면 500.
+        avg = _fetch_avg(admi["admiCd"], upjong["code"], admi.get("simpleLoc") or region)
         if avg is None:
             return None
         pop = _fetch_popular(admi["admiCd"], upjong["code"], avg.get("analyNo"))
