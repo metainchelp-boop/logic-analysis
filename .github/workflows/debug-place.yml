@@ -651,5 +651,26 @@ jobs:
             except Exception as e:
                 print("  실패:", type(e).__name__, e); traceback.print_exc()
 
+
+            # 4) 실패 격리 매트릭스 — parts[4]=="matrix" 일 때만
+            if len(parts) > 4 and parts[4].strip() == "matrix":
+                step("4. 실패 격리 매트릭스 (업종코드 × simpleLoc)")
+                try:
+                    pairs = sbiz365._upjong_pairs() or []
+                    cands = [(c, n) for c, n in pairs if "음식" in n][:10]
+                    print(f"  '음식' 포함 업종 후보 {len(cands)}개 — 같은 행정동({admi['admiCd']})에 하나씩 시험")
+                    for c, n in cands:
+                        r = sbiz365._fetch_avg(admi["admiCd"], c, region)
+                        print(f"    {c}  {'OK saleAmt=' + str(r.get('saleAmt')) if r else '실패'}   {n[:44]}")
+                    print("  simpleLoc 변형 시험 (업종 = 위 진단이 고른 코드)")
+                    for loc in [region, admi.get("admiNm", ""), f"서울특별시 {admi.get('guNm','')} {admi.get('admiNm','')}", ""]:
+                        r = sbiz365._fetch_avg(admi["admiCd"], up["code"], loc)
+                        print(f"    simpleLoc={loc!r:34s} → {'OK' if r else '실패'}")
+                    print("  대조군 — 검증 성공했던 행정동(역삼1동 11680640)에 같은 업종 코드")
+                    r = sbiz365._fetch_avg("11680640", up["code"], "역삼동")
+                    print(f"    11680640 × {up['code']} → {'OK saleAmt=' + str(r.get('saleAmt')) if r else '실패'}")
+                except Exception as e:
+                    print("  실패:", type(e).__name__, e); traceback.print_exc()
+
             print("=" * 66)
             PY
