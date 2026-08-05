@@ -1247,6 +1247,9 @@ def _place_seo_analyze(req: "SeoAnalysisRequest", current_user: dict = None):
                 "category": parsed.get("category"),
                 "business_key": business_key,
                 "business_name": req.target_name or "",
+                # 매칭된 플레이스 doc-id — 화면이 「영업 대상으로 저장」 시 지도 링크를 만든다.
+                # 종전엔 응답에 없어서 FE 가 없는 키(result.rank_info)를 읽고 항상 빈 값이었다(2026-08-05).
+                "place_id": str(_matched.get("doc_id") or req.target_doc_id or ""),
                 "rank_state": rank_info.get("state"),
                 "rank": rank_info.get("rank"),
                 "page": rank_info.get("page"),

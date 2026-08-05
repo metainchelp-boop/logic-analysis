@@ -25276,10 +25276,17 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
       } catch (e) {}
       return;
     }
+    // 매칭된 플레이스 doc-id → 지도 링크.
+    // ⚠️ 종전엔 `result.rank_info.matched` 를 읽었는데 **응답에 rank_info 키 자체가 없어**
+    //    지도 링크가 늘 빈 값이었다(저장한 영업 대상을 다시 열면 빈 패널). 2026-08-05 수정.
+    //    서버가 내려주는 place_id 를 쓰고, 없으면 business_key 의 `doc:` 접두에서 뽑는다.
     var pid = '';
     try {
-      var m = result && result.rank_info && result.rank_info.matched;
-      pid = String(m && (m.doc_id || m.id) || '');
+      pid = String(result && result.place_id || '');
+      if (!pid) {
+        var bk = String(result && result.business_key || '');
+        if (bk.indexOf('doc:') === 0) pid = bk.slice(4);
+      }
     } catch (e) {}
     setSaveBusy(true);
     setSaveMsg(null);
