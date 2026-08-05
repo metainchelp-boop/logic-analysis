@@ -33,102 +33,6 @@ jobs:
   diagnose:
     runs-on: ubuntu-latest
     steps:
-      # ── 맞춤제안서(플레이스) enrich 재현 진단 (2026-08-05) ──────────────
-      # 실제 제안서와 같은 입력으로 서버 안에서 같은 함수를 호출해, 어느 단계에서
-      # 값이 비는지(검색량/순위/상권) 단계별로 드러낸다. 전부 읽기 전용 조회.
-      - name: 제안서 enrich 재현 진단
-        if: ${{ github.event.inputs.enrich_probe != '' }}
-        uses: appleboy/ssh-action@v1.0.3
-        env:
-          PROBE: ${{ github.event.inputs.enrich_probe }}
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          command_timeout: 300s
-          envs: PROBE
-          script: |
-            docker exec -i -e PROBE="$PROBE" logic-analysis python3 - <<'PY'
-            import os, time, json, traceback
-
-            parts = (os.getenv("PROBE", "") or "").split("|")
-            region   = (parts[0] if len(parts) > 0 else "").strip()
-            industry = (parts[1] if len(parts) > 1 else "").strip()
-            keyword  = (parts[2] if len(parts) > 2 else "").strip()
-            name     = (parts[3] if len(parts) > 3 else "").strip()
-            print("=" * 66)
-            print(f"입력  지역={region!r} 업종={industry!r} 키워드={keyword!r} 업체명={name!r}")
-
-            def step(title):
-                print("-" * 66); print(f"[{title}]")
-
-            # 0) 인증키 등록 상태 — 존재 여부만(값 미출력)
-            step("0. 인증키 등록 상태")
-            try:
-                import sbiz365
-                ks = sbiz365._env_keys()
-                for k, v in ks.items():
-                    print(f"  {k:8s}: {'등록됨 len=' + str(len(v)) if v else '없음'}")
-            except Exception as e:
-                print("  sbiz365 import 실패:", e); traceback.print_exc()
-
-            # 1) 검색량 — 제안서 '월 검색량' 칸의 원천
-            step("1. 검색량(검색광고 API)")
-            try:
-                import main as _m
-                combined = _m._combine_region_keyword(region, keyword)
-                print(f"  합성 키워드: {combined!r}")
-                from naver_crawler import get_keyword_volume
-                t0 = time.time()
-                rows = get_keyword_volume([combined]) or []
-                print(f"  소요 {time.time()-t0:.1f}s · 응답 {len(rows)}건")
-                print("  원문:", json.dumps(rows[:2], ensure_ascii=False)[:600])
-            except Exception as e:
-                print("  실패:", type(e).__name__, e); traceback.print_exc()
-
-            # 2) 순위 이력 — '순위 추이' 슬라이드의 원천
-            step("2. 무인 추적 순위 이력")
-            try:
-                import place_crawler
-                from database import get_place_rank_history, get_place_tracked_keywords
-                bk = f"nm:{place_crawler._norm(name)}|{place_crawler._norm(region)}" if name else ""
-                print(f"  business_key: {bk!r}")
-                series = get_place_rank_history(bk, combined, days=90) if bk else []
-                print(f"  순위 점: {len(series)}개  (2개 미만이면 추이 슬라이드 생략)")
-                tracked = get_place_tracked_keywords(bk) if bk else []
-                print(f"  추적 중 키워드: {len(tracked)}개")
-                if tracked:
-                    print("  ", [t.get('keyword') for t in tracked[:8]])
-            except Exception as e:
-                print("  실패:", type(e).__name__, e); traceback.print_exc()
-
-            # 3) 상권 체인 — '우리 동네 상권' 6장의 원천. 단계별로 어디서 끊기는지 본다.
-            step("3. 상권(소상공인365) 체인")
-            try:
-                t0 = time.time()
-                admi = sbiz365._resolve_admi(region)
-                print(f"  ③-1 지역→행정동  {time.time()-t0:.1f}s  →  {admi}")
-                up = sbiz365._resolve_upjong(industry)
-                print(f"  ③-2 업종→분류코드  →  {up}")
-                if admi and admi.get("admiCd") and up:
-                    t1 = time.time()
-                    avg = sbiz365._fetch_avg(admi["admiCd"], up["code"], region)
-                    print(f"  ③-3 매출 조회  {time.time()-t1:.1f}s  →  {'수신' if avg else 'None'}")
-                    if avg:
-                        print("      키:", sorted(avg.keys()))
-                        print("      saleAmt(천원):", avg.get("saleAmt"), " guAmt:", avg.get("guAmt"), " siAmt:", avg.get("siAmt"))
-                else:
-                    print("  ③-3 건너뜀(행정동 또는 업종 매칭 실패)")
-                t2 = time.time()
-                block = sbiz365.get_place_sbiz(region, industry)
-                print(f"  ③-4 최종 블록  {time.time()-t2:.1f}s  →  {'생성됨' if block else 'None(상권 슬라이드 생략)'}")
-                if block:
-                    print("      ", json.dumps(block, ensure_ascii=False)[:900])
-            except Exception as e:
-                print("  실패:", type(e).__name__, e); traceback.print_exc()
-
-            print("=" * 66)
-            PY
       # ── 공공데이터포털 상가(상권)정보 인증키 검증 (2026-08-05) ──────────
       # 행정동코드(admiCd) 매핑용 — 소상공인365 포털의 지역명→코드 경로가 전부 막혀
       # 이 공식 REST 로 「좌표 → 행정동코드」를 얻는다. 키 값은 출력하지 않는다.
@@ -653,3 +557,99 @@ jobs:
               df -h / | tail -1
               docker images | head -8
             fi
+      # ── 맞춤제안서(플레이스) enrich 재현 진단 (2026-08-05) ──────────────
+      # 실제 제안서와 같은 입력으로 서버 안에서 같은 함수를 호출해, 어느 단계에서
+      # 값이 비는지(검색량/순위/상권) 단계별로 드러낸다. 전부 읽기 전용 조회.
+      - name: 제안서 enrich 재현 진단
+        if: ${{ github.event.inputs.enrich_probe != '' }}
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          PROBE: ${{ github.event.inputs.enrich_probe }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 300s
+          envs: PROBE
+          script: |
+            docker exec -i -e PROBE="$PROBE" logic-analysis python3 - <<'PY'
+            import os, time, json, traceback
+
+            parts = (os.getenv("PROBE", "") or "").split("|")
+            region   = (parts[0] if len(parts) > 0 else "").strip()
+            industry = (parts[1] if len(parts) > 1 else "").strip()
+            keyword  = (parts[2] if len(parts) > 2 else "").strip()
+            name     = (parts[3] if len(parts) > 3 else "").strip()
+            print("=" * 66)
+            print(f"입력  지역={region!r} 업종={industry!r} 키워드={keyword!r} 업체명={name!r}")
+
+            def step(title):
+                print("-" * 66); print(f"[{title}]")
+
+            # 0) 인증키 등록 상태 — 존재 여부만(값 미출력)
+            step("0. 인증키 등록 상태")
+            try:
+                import sbiz365
+                ks = sbiz365._env_keys()
+                for k, v in ks.items():
+                    print(f"  {k:8s}: {'등록됨 len=' + str(len(v)) if v else '없음'}")
+            except Exception as e:
+                print("  sbiz365 import 실패:", e); traceback.print_exc()
+
+            # 1) 검색량 — 제안서 '월 검색량' 칸의 원천
+            step("1. 검색량(검색광고 API)")
+            try:
+                import main as _m
+                combined = _m._combine_region_keyword(region, keyword)
+                print(f"  합성 키워드: {combined!r}")
+                from naver_crawler import get_keyword_volume
+                t0 = time.time()
+                rows = get_keyword_volume([combined]) or []
+                print(f"  소요 {time.time()-t0:.1f}s · 응답 {len(rows)}건")
+                print("  원문:", json.dumps(rows[:2], ensure_ascii=False)[:600])
+            except Exception as e:
+                print("  실패:", type(e).__name__, e); traceback.print_exc()
+
+            # 2) 순위 이력 — '순위 추이' 슬라이드의 원천
+            step("2. 무인 추적 순위 이력")
+            try:
+                import place_crawler
+                from database import get_place_rank_history, get_place_tracked_keywords
+                bk = f"nm:{place_crawler._norm(name)}|{place_crawler._norm(region)}" if name else ""
+                print(f"  business_key: {bk!r}")
+                series = get_place_rank_history(bk, combined, days=90) if bk else []
+                print(f"  순위 점: {len(series)}개  (2개 미만이면 추이 슬라이드 생략)")
+                tracked = get_place_tracked_keywords(bk) if bk else []
+                print(f"  추적 중 키워드: {len(tracked)}개")
+                if tracked:
+                    print("  ", [t.get('keyword') for t in tracked[:8]])
+            except Exception as e:
+                print("  실패:", type(e).__name__, e); traceback.print_exc()
+
+            # 3) 상권 체인 — '우리 동네 상권' 6장의 원천. 단계별로 어디서 끊기는지 본다.
+            step("3. 상권(소상공인365) 체인")
+            try:
+                t0 = time.time()
+                admi = sbiz365._resolve_admi(region)
+                print(f"  ③-1 지역→행정동  {time.time()-t0:.1f}s  →  {admi}")
+                up = sbiz365._resolve_upjong(industry)
+                print(f"  ③-2 업종→분류코드  →  {up}")
+                if admi and admi.get("admiCd") and up:
+                    t1 = time.time()
+                    avg = sbiz365._fetch_avg(admi["admiCd"], up["code"], region)
+                    print(f"  ③-3 매출 조회  {time.time()-t1:.1f}s  →  {'수신' if avg else 'None'}")
+                    if avg:
+                        print("      키:", sorted(avg.keys()))
+                        print("      saleAmt(천원):", avg.get("saleAmt"), " guAmt:", avg.get("guAmt"), " siAmt:", avg.get("siAmt"))
+                else:
+                    print("  ③-3 건너뜀(행정동 또는 업종 매칭 실패)")
+                t2 = time.time()
+                block = sbiz365.get_place_sbiz(region, industry)
+                print(f"  ③-4 최종 블록  {time.time()-t2:.1f}s  →  {'생성됨' if block else 'None(상권 슬라이드 생략)'}")
+                if block:
+                    print("      ", json.dumps(block, ensure_ascii=False)[:900])
+            except Exception as e:
+                print("  실패:", type(e).__name__, e); traceback.print_exc()
+
+            print("=" * 66)
+            PY
