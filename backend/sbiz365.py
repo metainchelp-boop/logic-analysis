@@ -45,6 +45,9 @@ def _env_keys() -> dict:
         "stor":   os.getenv("SBIZ365_KEY_STOR", "").strip(),     # 업소현황(shops 예정)
         "sns":    os.getenv("SBIZ365_KEY_SNS", "").strip(),      # SNS 분석(sns 예정)
         "theme":  os.getenv("SBIZ365_KEY_THEME", "").strip(),    # 테마상권 분석(theme 예정)
+        # 공공데이터포털 「소상공인시장진흥공단_상가(상권)정보」 — 행정동코드 매핑 전용
+        # (소상공인365 내부 좌표→행정동 경로가 전부 막혀 이 공식 REST 로 대체·2026-08-05 검증)
+        "datago": os.getenv("SBIZ_DATA_GO_KR_KEY", "").strip(),
     }
 
 
@@ -167,46 +170,74 @@ def _pick(resp, markers):
 # 4. 행정동 매칭 체인 — 지역명 → 좌표 → admiCd(행정동 8자리)
 # ============================================================
 def _region_coord(region: str):
-    """「지역명」 → 좌표(x, y).
-    place_crawler 는 캡처 HTML 파서 전용이라 좌표 확보 함수가 현재 없다(2026-08-04 확인 —
-    서버가 네이버에 직접 접속하지 않는 구조). 향후 place_crawler.get_region_coord(region)
-    -> (x, y) 가 정의되면 여기서 자동 재사용한다. 현재는 None → 행정동 매칭 실패 →
-    get_place_sbiz() None(제안서는 상권 블록 생략). 좌표/행정동 소스는 실응답 검증
-    단계에서 확정한다(다른 탐색 경로 추가 금지 — 과설계 방지)."""
+    """「지역명」 → 좌표(경도, 위도). 네이버 지역검색(local) 사용 — 이미 보유한 자격 재사용.
+    mapx/mapy 는 WGS84×10^7 정수라 10^7 로 나눈다. 실패 시 None."""
+    cid = os.getenv("NAVER_CLIENT_ID", "").strip()
+    csec = os.getenv("NAVER_CLIENT_SECRET", "").strip()
+    if not (cid and csec and region):
+        return None
     try:
-        import place_crawler
-        fn = getattr(place_crawler, "get_region_coord", None)
-        if callable(fn):
-            c = fn(region)
-            if c and len(c) >= 2 and c[0] is not None and c[1] is not None:
-                return float(c[0]), float(c[1])
+        import urllib.parse
+        import urllib.request
+        url = ("https://openapi.naver.com/v1/search/local.json?"
+               + urllib.parse.urlencode({"query": region, "display": 1}))
+        req = urllib.request.Request(url, headers={
+            "X-Naver-Client-Id": cid, "X-Naver-Client-Secret": csec})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            data = json.loads(r.read().decode("utf-8", "replace"))
+        items = data.get("items") or []
+        if not items:
+            return None
+        mx, my = items[0].get("mapx"), items[0].get("mapy")
+        if mx is None or my is None:
+            return None
+        x, y = float(mx), float(my)
+        if x > 1000:            # WGS84×10^7 정수 형식
+            x, y = x / 1e7, y / 1e7
+        return x, y
     except Exception as e:
         logger.warning(f"[sbiz365] 좌표 확보 실패(무시): {e}")
-    return None
+        return None
 
 
 def _coord_to_admi(x, y):
-    """좌표 → 행정동(admiCd 8자리). bigdata.sbiz.or.kr 내부 변환 JSON.
-    파라미터 이름은 실응답 검증 전이라 통용 표기(x·y·xCrdn·yCrdn)를 함께 보낸다."""
-    key = _env_keys()["simple"]
-    resp = _http_json(
-        "POST", f"{_BASE}/gis/api/getCoordToAdmPoint.json",
-        params={"certKey": key},
-        data={"x": x, "y": y, "xCrdn": x, "yCrdn": y, "certKey": key},
-    )
-    body = _pick(resp, ("admiCd",))
-    if body is None:
+    """좌표 → 행정동(admiCd 8자리).
+    ⚠️ 2026-08-05 실측: 소상공인365 내부 `getCoordToAdmPoint.json` 은 500, 다른 후보 경로도 전부 404.
+    → **공공데이터포털 「소상공인시장진흥공단_상가(상권)정보」 공식 REST** 로 확보한다.
+    반경 안 상가 1건만 받아 그 업소의 `adongCd`(행정동코드)를 읽는 방식(검증 완료:
+    강남역 반경 500m → adongCd 11650531 서초4동). 인증키는 **인코딩 키를 그대로** 붙인다
+    (디코딩 키를 재인코딩하면 403)."""
+    key = _env_keys()["datago"]
+    if not key:
         return None
-    admi_cd = str(body.get("admiCd") or "").strip()
-    if not admi_cd:
-        return None
-    return {"admiCd": admi_cd,
-            "admiNm": body.get("admiNm") or body.get("dongNm")}
+    import urllib.parse
+    import urllib.request
+    base = "http://apis.data.go.kr/B553077/api/open/sdsc2/storeListInRadius"
+    for radius in ("500", "1000", "2000"):     # 외곽 지역은 반경을 넓혀 재시도
+        try:
+            qs = urllib.parse.urlencode({"radius": radius, "cx": x, "cy": y,
+                                         "type": "json", "numOfRows": "1", "pageNo": "1"})
+            url = f"{base}?serviceKey={key}&{qs}"
+            req = urllib.request.Request(url, headers={"Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=12) as r:
+                data = json.loads(r.read().decode("utf-8", "replace"))
+            items = ((data.get("body") or {}).get("items")) or []
+            if not items:
+                continue
+            it = items[0]
+            admi_cd = str(it.get("adongCd") or "").strip()
+            if len(admi_cd) == 8:
+                return {"admiCd": admi_cd,
+                        "admiNm": it.get("adongNm"),
+                        "guNm": it.get("signguNm")}
+        except Exception as e:
+            logger.warning(f"[sbiz365] 행정동 조회 실패(radius={radius}·무시): {e}")
+    return None
 
 
 def _resolve_admi(region: str):
     """지역명 → 행정동. 결과는 (행정동×업종) 데이터와 같은 TTL 로 캐시해
-    캐시 적중 시 좌표 변환 재호출을 없앤다. 실패 시 None."""
+    캐시 적중 시 좌표·행정동 변환 재호출을 없앤다. 실패 시 None."""
     cache_key = f"sbiz:admi:{_norm(region)}"
     cached = _cache_get(cache_key, SBIZ_CACHE_TTL)
     if cached:

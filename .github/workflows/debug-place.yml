@@ -126,16 +126,19 @@ jobs:
           SB_STOR: ${{ secrets.SBIZ365_KEY_STOR }}
           SB_SNS: ${{ secrets.SBIZ365_KEY_SNS }}
           SB_THEME: ${{ secrets.SBIZ365_KEY_THEME }}
+          DG_KEY: ${{ secrets.SBIZ_DATA_GO_KR_KEY }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           command_timeout: 300s
-          envs: SB_SIMPLE,SB_DETAIL,SB_SLSIDX,SB_STOR,SB_SNS,SB_THEME
+          envs: SB_SIMPLE,SB_DETAIL,SB_SLSIDX,SB_STOR,SB_SNS,SB_THEME,DG_KEY
           script: |
             docker exec -i \
               -e SB_SIMPLE="$SB_SIMPLE" -e SB_DETAIL="$SB_DETAIL" -e SB_SLSIDX="$SB_SLSIDX" \
               -e SB_STOR="$SB_STOR" -e SB_SNS="$SB_SNS" -e SB_THEME="$SB_THEME" \
+              -e DG_KEY="$DG_KEY" -e NAVER_ID="$(grep -m1 '^NAVER_CLIENT_ID=' /root/logic-analysis-deploy/.env | cut -d= -f2-)" \
+              -e NAVER_SEC="$(grep -m1 '^NAVER_CLIENT_SECRET=' /root/logic-analysis-deploy/.env | cut -d= -f2-)" \
               logic-analysis python3 - <<'PY'
             import os, json, ssl, urllib.parse, urllib.request
 
@@ -161,45 +164,83 @@ jobs:
             LOC = "서울특별시 강남구 역삼1동"
 
             print("=" * 62)
-            print("[A] simpleLoc 단독 동작 여부 — admiCd 매핑 없이 가능한가")
-            UP = "I21007"   # 김밥/만두/분식
-            cases = [
-                ("정답 admiCd + simpleLoc(역삼1동)", {"admiCd": ADMI, "upjongCd": UP, "simpleLoc": LOC}),
-                ("admiCd 없음 + simpleLoc(역삼1동)", {"upjongCd": UP, "simpleLoc": LOC}),
-                ("admiCd 빈값 + simpleLoc(역삼1동)", {"admiCd": "", "upjongCd": UP, "simpleLoc": LOC}),
-                ("admiCd만(성수동 코드) simpleLoc 없음", {"admiCd": "11200710", "upjongCd": UP}),
-                ("성수동 admiCd + 역삼 simpleLoc(어느쪽이 이기나)",
-                 {"admiCd": "11200710", "upjongCd": UP, "simpleLoc": LOC}),
-                ("simpleLoc 만(동 이름만)", {"upjongCd": UP, "simpleLoc": "성수동"}),
-            ]
-            for label, pr in cases:
-                pr = dict(pr); pr["certKey"] = CK
-                st, tx = get("/gis/simpleAnls/getAvgAmtInfo.json", pr)
-                mark = ""
-                if st == 200:
+            print("[E2E] 지역명 → 좌표 → 행정동코드 → 상권 데이터 (전 구간 실키)")
+            DG = (os.getenv("DG_KEY", "") or "").strip()
+            NID = (os.getenv("NAVER_ID", "") or "").strip()
+            NSEC = (os.getenv("NAVER_SEC", "") or "").strip()
+            print(f"  키: sbiz={'O' if CK else 'X'} datago={'O' if DG else 'X'} naver={'O' if (NID and NSEC) else 'X'}")
+
+            def naver_coord(region):
+                if not (NID and NSEC):
+                    return None
+                try:
+                    u = "https://openapi.naver.com/v1/search/local.json?" + urllib.parse.urlencode(
+                        {"query": region, "display": 1})
+                    rq = urllib.request.Request(u, headers={"X-Naver-Client-Id": NID,
+                                                            "X-Naver-Client-Secret": NSEC})
+                    with urllib.request.urlopen(rq, timeout=8) as r:
+                        j = json.loads(r.read().decode("utf-8", "replace"))
+                    it = (j.get("items") or [None])[0]
+                    if not it:
+                        return None
+                    x, y = float(it["mapx"]), float(it["mapy"])
+                    return (x / 1e7, y / 1e7) if x > 1000 else (x, y)
+                except Exception as e:
+                    print(f"     좌표 실패: {e}")
+                    return None
+
+            def datago_admi(x, y):
+                for rad in ("500", "1000", "2000"):
                     try:
-                        j = json.loads(tx)
-                        mark = (f"saleAmt={j.get('saleAmt')} guAmt={j.get('guAmt')} "
-                                f"adminCnt={j.get('saleCnt')} top1={(j.get('topFive') or [{}])[0].get('admiNm')}")
+                        qs = urllib.parse.urlencode({"radius": rad, "cx": x, "cy": y,
+                                                     "type": "json", "numOfRows": "1", "pageNo": "1"})
+                        u = f"http://apis.data.go.kr/B553077/api/open/sdsc2/storeListInRadius?serviceKey={DG}&{qs}"
+                        with urllib.request.urlopen(urllib.request.Request(u), timeout=12) as r:
+                            j = json.loads(r.read().decode("utf-8", "replace"))
+                        items = ((j.get("body") or {}).get("items")) or []
+                        if items and str(items[0].get("adongCd") or "").strip():
+                            return items[0], rad
                     except Exception as e:
-                        mark = f"파싱실패 {e}"
-                else:
-                    mark = tx[:90]
-                print(f"  [{label}]\n     HTTP {st} · {mark}")
+                        print(f"     반경 {rad} 실패: {e}")
+                return None, None
+
+            for region, industry_cd, industry_nm in [("성수동", "I21201", "카페"),
+                                                     ("구로동", "I21007", "분식"),
+                                                     ("여수 소호동", "I21001", "한식")]:
+                print(f"\n  ── {region} × {industry_nm} ──")
+                c = naver_coord(region)
+                print(f"     좌표: {c}")
+                if not c:
+                    continue
+                it, rad = datago_admi(c[0], c[1])
+                if not it:
+                    print("     행정동 매칭 실패")
+                    continue
+                admi = it["adongCd"]
+                print(f"     행정동: {admi} {it.get('adongNm')} ({it.get('signguNm')}) · 반경 {rad}m")
+                loc = f"{it.get('ctprvnNm','')} {it.get('signguNm','')} {it.get('adongNm','')}".strip()
+                st, tx = get("/gis/simpleAnls/getAvgAmtInfo.json",
+                             {"admiCd": admi, "upjongCd": industry_cd, "simpleLoc": loc, "certKey": CK})
+                if st != 200:
+                    print(f"     상권 조회 HTTP {st} · {tx[:100]}")
+                    continue
+                try:
+                    j = json.loads(tx)
+                    sa = j.get("saleAmt"); gu = j.get("guAmt"); si = j.get("siAmt")
+                    cnt = j.get("saleCnt"); yoy = j.get("prevYearRate")
+                    ser = len(j.get("avgList") or [])
+                    up = (j.get("upjongTypeMap") or {}).get("upjong3nm")
+                    def man(v):
+                        try: return f"{int(v)/10:,.0f}만원"
+                        except Exception: return "-"
+                    print(f"     ✅ 업종={up} · 점포당 {man(sa)} · 구평균 {man(gu)} · 시평균 {man(si)}")
+                    print(f"        업소 {cnt}곳 · 전년비 {round(float(yoy),1) if yoy is not None else '-'}% · 매출시계열 {ser}개월")
+                except Exception as e:
+                    print(f"     파싱 실패: {e}")
 
             print()
             print("=" * 62)
-            print("[B] 지역 검색 → admiCd 경로 재탐색 (다른 이름 후보)")
-            for path, pr in [("/gis/simpleAnls/getAdmiList.json", {"searchWord": "역삼"}),
-                             ("/gis/simpleAnls/searchAdmi.json", {"searchWord": "역삼"}),
-                             ("/gis/api/getAdmi.json", {"searchWord": "역삼"}),
-                             ("/gis/api/getRegionList.json", {"upperCd": "11"}),
-                             ("/gis/api/getHierarchyAdmiCd", {}),
-                             ("/gis/api/getHierarchyRegionCode", {}),
-                             ("/gis/api/getAddrToAdmPoint.json", {"addr": "서울특별시 강남구 역삼동"})]:
-                pr = dict(pr); pr["certKey"] = CK
-                st, tx = get(path, pr, timeout=10)
-                print(f"  {path:<40} HTTP {st} · {tx[:110]}")
+            print("판정: ✅ 줄이 나오면 지역명만으로 상권 데이터 확보 = 제안서 상권 슬라이드 라이브 가능")
             PY
       - name: Place tracking read-only query
         uses: appleboy/ssh-action@v1.0.3

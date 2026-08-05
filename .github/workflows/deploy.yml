@@ -89,7 +89,8 @@ jobs:
               "SBIZ365_KEY_SLSIDX=${{ secrets.SBIZ365_KEY_SLSIDX }}" \
               "SBIZ365_KEY_STOR=${{ secrets.SBIZ365_KEY_STOR }}" \
               "SBIZ365_KEY_SNS=${{ secrets.SBIZ365_KEY_SNS }}" \
-              "SBIZ365_KEY_THEME=${{ secrets.SBIZ365_KEY_THEME }}" ; do
+              "SBIZ365_KEY_THEME=${{ secrets.SBIZ365_KEY_THEME }}" \
+              "SBIZ_DATA_GO_KR_KEY=${{ secrets.SBIZ_DATA_GO_KR_KEY }}" ; do
               _name="${_pair%%=*}"
               _val="${_pair#*=}"
               if [ -n "$_val" ] && ! grep -q "^${_name}=" .env 2>/dev/null; then
