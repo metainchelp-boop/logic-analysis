@@ -672,5 +672,49 @@ jobs:
                 except Exception as e:
                     print("  실패:", type(e).__name__, e); traceback.print_exc()
 
+
+            # 5) 수정안 사전 검증 — parts[4]=="verify". 배포 전에 고친 로직이 실제로 통하는지 확인.
+            #    (서버 컨테이너는 아직 옛 코드라, 고친 규칙을 이 자리에서 그대로 재현해 본다)
+            if len(parts) > 4 and parts[4].strip() == "verify":
+                step("5. 수정안 사전 검증")
+                try:
+                    import urllib.parse, urllib.request
+                    # (A) 행정동 조회가 정식 주소 3필드를 실제로 주는지
+                    coord = sbiz365._region_coord(region)
+                    print(f"  A-1 좌표: {coord}")
+                    key = sbiz365._env_keys()["datago"]
+                    qs = urllib.parse.urlencode({"radius": "500", "cx": coord[0], "cy": coord[1],
+                                                 "type": "json", "numOfRows": "1", "pageNo": "1"})
+                    u = f"http://apis.data.go.kr/B553077/api/open/sdsc2/storeListInRadius?serviceKey={key}&{qs}"
+                    with urllib.request.urlopen(urllib.request.Request(u, headers={"Accept": "application/json"}), timeout=12) as r:
+                        it = ((json.loads(r.read().decode("utf-8", "replace")).get("body") or {}).get("items") or [{}])[0]
+                    sido, gu, dong = it.get("ctprvnNm"), it.get("signguNm"), it.get("adongNm")
+                    loc = " ".join(x for x in (sido, gu, dong) if x)
+                    print(f"  A-2 주소 3필드: 시도={sido!r} 시군구={gu!r} 행정동={dong!r}")
+                    print(f"  A-3 조립된 simpleLoc: {loc!r}")
+                    # (B) 그 주소로 매출 조회
+                    got = sbiz365._fetch_avg(it.get("adongCd"), up["code"], loc)
+                    print(f"  B   매출 조회 → {'✅ 성공' if got else '❌ 실패'}")
+                    if got:
+                        print(f"      점포당 월평균 {got.get('saleAmt')}천원 · 시군구평균 {got.get('guAmt')} · 시도평균 {got.get('siAmt')}")
+                        print(f"      월별 시계열 {len(got.get('series') or [])}개 · 업소수 시계열 {len(got.get('shopSeries') or [])}개")
+                    # (C) 검색량 — 공백 제거 키워드
+                    from naver_crawler import get_keyword_volume as _kv
+                    stripped = combined.replace(" ", "")
+                    rows = _kv([stripped]) or []
+                    print(f"  C   검색량('{stripped}') → {len(rows)}건")
+                    if rows:
+                        r0 = rows[0]
+                        pc, mo = r0.get("monthlyPcQcCnt"), r0.get("monthlyMobileQcCnt")
+                        print(f"      keyword={r0.get('keyword')!r} PC={pc} 모바일={mo} 경쟁={r0.get('compIdx')}")
+                    # (D) 업종 대표성 비교 — 같은 동네에서 코드별 매출 차이
+                    print("  D   업종 코드별 점포당 매출(같은 행정동) — 대표 코드 선정 근거")
+                    for c, n in [(c, n) for c, n in (sbiz365._upjong_pairs() or []) if "음식 >" in n][:12]:
+                        rr = sbiz365._fetch_avg(it.get("adongCd"), c, loc)
+                        if rr and rr.get("saleAmt") is not None:
+                            print(f"      {c}  {str(rr.get('saleAmt')):>8}천원  {n[:40]}")
+                except Exception as e:
+                    print("  실패:", type(e).__name__, e); traceback.print_exc()
+
             print("=" * 66)
             PY
