@@ -897,11 +897,12 @@ jobs:
             print(f"[단위 검증] 지역={region!r}")
 
             # 1) 행정동 매핑
-            admi = sbiz365._coord_to_admi(region)
+            admi = sbiz365._resolve_admi(region)
             if not admi:
                 print("  행정동 매핑 실패 — 중단"); raise SystemExit(0)
             print(f"  admiCd={admi.get('admiCd')} · simpleLoc={admi.get('simpleLoc')!r}")
-            loc = admi.get("simpleLoc")
+            loc = sbiz365._pick_simple_loc(admi, region, "I20101") or admi.get("simpleLoc")
+            print(f"  응답 오는 simpleLoc 표기: {loc!r}")
 
             # 2) 업종 트리에서 고기·음식 계열 코드 몇 개 뽑기
             pairs = sbiz365._upjong_pairs() if hasattr(sbiz365, "_upjong_pairs") else []
