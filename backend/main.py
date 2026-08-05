@@ -1316,14 +1316,30 @@ def place_proposal_enrich(req: PlaceProposalEnrichRequest,
         combined_kw = _combine_region_keyword(region, base_kw)
 
         # 1) 검색량(검색광고 API) — 실패/미조회 시 null(가짜 0 금지)
+        #    ⚠️ 지역 키워드는 검색량이 매우 작다(실측: '구로동 고기' 20회/월). 그 숫자만 내밀면
+        #       사장님께 설득력이 없어서, **지역을 뗀 원 키워드**('고기') 검색량을 함께 돌려준다.
+        #       화면은 「지역 키워드 n회 · 전체 시장 N회」로 병기한다(대표 확정 2026-08-05).
+        #       두 키워드를 한 번의 API 호출로 받으므로 호출 수는 늘지 않는다.
         volume = None
         comp_idx = None
+        base_volume = None
         try:
-            v0 = ((_kw_vol([combined_kw]) or [{}])[0]) or {}
-            pc, mo = v0.get("monthlyPcQcCnt"), v0.get("monthlyMobileQcCnt")
-            if pc is not None or mo is not None:
-                volume = _pe_int(pc) + _pe_int(mo)
+            def _vk(s):
+                return "".join(str(s or "").split())
+            ask = [combined_kw] + ([base_kw] if _vk(base_kw) != _vk(combined_kw) else [])
+            vmap0 = {}
+            for vr in (_kw_vol(ask) or []):
+                vmap0[_vk(vr.get("keyword"))] = vr
+
+            def _sum(vr):
+                pc, mo = vr.get("monthlyPcQcCnt"), vr.get("monthlyMobileQcCnt")
+                return (_pe_int(pc) + _pe_int(mo)) if (pc is not None or mo is not None) else None
+
+            v0 = vmap0.get(_vk(combined_kw)) or {}
+            volume = _sum(v0)
             comp_idx = v0.get("compIdx")
+            if len(ask) > 1:
+                base_volume = _sum(vmap0.get(_vk(base_kw)) or {})
         except Exception as e:
             logger.warning(f"[proposal-enrich] 검색량 조회 실패(무시): {e}")
 
@@ -1411,6 +1427,8 @@ def place_proposal_enrich(req: PlaceProposalEnrichRequest,
             "metrics": place_metrics,  # 방문자/블로그 리뷰·저장수 실측(없는 키는 생략 — 가짜 0 금지)
             "keyword": matched_kw,
             "volume": volume,               # 월 검색량(실측) — null=미확인
+            "baseKeyword": base_kw,         # 지역을 뗀 원 키워드('고기')
+            "baseVolume": base_volume,      # 그 원 키워드 월 검색량 — null=미확인·지역 없는 입력
             "compIdx": comp_idx,
             "rank": rank,                   # 무인 추적 최신 순위 — null=미추적/미노출
             "rankState": rank_state,        # 노출/미노출/미확인
