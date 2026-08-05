@@ -835,5 +835,36 @@ jobs:
                 except Exception as e:
                     print("  실패:", type(e).__name__, e); traceback.print_exc()
 
+
+            # 8) 실제 엔드포인트 그대로 호출 — parts[4]=="real"
+            #    앞의 단계별 프로브는 내부 로직을 '흉내'내므로 수정 검증이 안 된다.
+            #    제안서가 실제로 부르는 함수를 그대로 호출해 응답을 그대로 본다.
+            if len(parts) > 4 and parts[4].strip() == "real":
+                step("8. 실제 엔드포인트 응답 (제안서가 받는 그대로)")
+                try:
+                    from main import place_proposal_enrich, PlaceProposalEnrichRequest
+                    t0 = time.time()
+                    res = place_proposal_enrich(
+                        PlaceProposalEnrichRequest(name=name, region=region,
+                                                   keyword=keyword, industry=industry),
+                        {"role": "admin", "username": "probe"})
+                    took = time.time() - t0
+                    d = (res or {}).get("data") or {}
+                    sb = d.get("sbiz") or {}
+                    mj = (sb.get("major") or {}) if sb else {}
+                    sal = (sb.get("sales") or {}) if sb else {}
+                    print(f"  success={res.get('success')} · 소요 {took:.1f}s")
+                    print(f"  businessKey : {d.get('businessKey')!r}")
+                    print(f"  검색량       : {d.get('volume')}")
+                    print(f"  현재 순위    : {d.get('rank')} ({d.get('rankState')})")
+                    print(f"  순위 추이    : {len(d.get('rankSeries') or [])}점   → 슬라이드 {'노출' if len(d.get('rankSeries') or []) >= 2 else '생략'}")
+                    print(f"  추적 키워드  : {len(d.get('trackedKeywords') or [])}개")
+                    print(f"  상권 블록    : {'있음' if sb else '없음'}   → 슬라이드 {'노출' if sb else '생략'}")
+                    if sb:
+                        print(f"     점포당 월평균 {sal.get('avgAmt')} · 시군구평균 {sal.get('guAvgAmt')} · 업종 {sb.get('industryNm')}")
+                        print(f"     업종 종합 {mj.get('label')} {mj.get('avgAmt')}원 · {mj.get('shopCnt')}곳")
+                except Exception as e:
+                    print("  실패:", type(e).__name__, e); traceback.print_exc()
+
             print("=" * 66)
             PY
