@@ -464,7 +464,7 @@ def generate_html_report(keyword: str, company_name: str, analysis: dict,
             <h2>📣 광고 경쟁 정보 <span class="badge b-ok">✅ 실측</span></h2>
             <div class="info-box">
                 <div class="metric"><span>광고 경쟁강도</span><strong>{ai.get('compIdx','-')}</strong></div>
-                <div class="metric"><span>노출 깊이</span><strong>{ai.get('adDepth','-')}</strong></div>
+                <div class="metric"><span>평균 광고 개수<br><small style="font-size:9px;color:#94a3b8">검색광고(파워링크) 기준</small></span><strong>{ai.get('adDepth','-')}</strong></div>
                 <div class="metric"><span>PC 클릭</span><strong>{ai.get('pcClicks','-')}회</strong></div>
                 <div class="metric"><span>모바일 클릭</span><strong>{ai.get('mobileClicks','-')}회</strong></div>
             </div>

@@ -6444,9 +6444,10 @@ window.AdvertiserInfoCard = function AdvertiserInfoCard(props) {
     return x;
   };
   var items = [{
-    label: '광고 노출 깊이',
-    value: adDepth ? '상위 ' + adDepth + '개' : '-',
-    unit: ''
+    label: '평균 광고 개수',
+    value: adDepth ? adDepth + '개' : '데이터 없음',
+    unit: '',
+    tip: '이 키워드로 네이버에서 검색하면 통합검색 상단 파워링크 영역에 광고가 평균 몇 개 노출되는지(네이버 검색광고 「월평균노출광고수」). 많을수록 광고 경쟁이 치열해 입찰가 부담이 큽니다.'
   }, {
     label: 'PC 평균 클릭수',
     value: pcClicks || pcClicks === 0 ? num(pcClicks) : '-',
@@ -6473,11 +6474,15 @@ window.AdvertiserInfoCard = function AdvertiserInfoCard(props) {
     className: "rt-h3"
   }, /*#__PURE__*/React.createElement("span", {
     className: "rt-hic"
-  }, "📣"), "광고 경쟁 정보", /*#__PURE__*/React.createElement("span", {
+  }, "📣"), "검색광고(파워링크) 경쟁 정보", /*#__PURE__*/React.createElement("span", {
     className: "badge b-ok"
   }, "✅ 실측")), /*#__PURE__*/React.createElement("div", {
     className: "rt-desc"
-  }, "네이버 검색광고 기준 — 이 키워드에 광고로 들어올 때의 경쟁 환경"), /*#__PURE__*/React.createElement("div", {
+  }, "네이버 ", /*#__PURE__*/React.createElement("b", null, "검색광고(파워링크)"), " 기준 — 통합검색 상단 광고 영역의 경쟁 환경입니다.", /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: '#b45309'
+    }
+  }, " 이 화면의 쇼핑 검색 순위와는 다른 지표"), "입니다."), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'grid',
       gridTemplateColumns: 'repeat(4, 1fr)',
@@ -6489,7 +6494,15 @@ window.AdvertiserInfoCard = function AdvertiserInfoCard(props) {
       className: "rt-kpi"
     }, /*#__PURE__*/React.createElement("div", {
       className: "rt-kpi-k"
-    }, item.label), /*#__PURE__*/React.createElement("div", {
+    }, item.label, item.tip && /*#__PURE__*/React.createElement("span", {
+      title: item.tip,
+      style: {
+        marginLeft: 4,
+        cursor: 'help',
+        color: '#94a3b8',
+        fontWeight: 800
+      }
+    }, "ⓘ")), /*#__PURE__*/React.createElement("div", {
       className: "rt-kpi-v",
       style: {
         fontSize: 20
@@ -6497,7 +6510,16 @@ window.AdvertiserInfoCard = function AdvertiserInfoCard(props) {
     }, item.value, item.unit && /*#__PURE__*/React.createElement("small", null, item.unit)));
   })), /*#__PURE__*/React.createElement("div", {
     className: "note"
-  }, "'광고 노출 깊이 = 상위 N개'는 이 키워드에서 검색광고가 평균적으로 ", /*#__PURE__*/React.createElement("b", null, "상위 몇 번째 슬롯까지 노출"), "되는지를 뜻합니다(값이 클수록 광고 노출 경쟁이 넓음). 광고 경쟁이 치열할수록 입찰가 부담이 커지므로, SEO(자연노출)를 병행해 광고비 효율을 확보하는 것이 유리합니다."))));
+  }, /*#__PURE__*/React.createElement("b", null, "평균 광고 개수"), " = 이 키워드로 검색했을 때 ", /*#__PURE__*/React.createElement("b", null, "통합검색 상단 파워링크 영역"), "에 광고가 평균 몇 개 붙는지입니다 (네이버 검색광고 「월평균노출광고수」 원본값). 순위가 아니라 ", /*#__PURE__*/React.createElement("b", null, "개수"), "이며, 많을수록 광고 경쟁이 치열해 입찰가 부담이 큽니다.", /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8,
+      padding: '9px 12px',
+      background: '#fffbeb',
+      border: '1px solid #fde68a',
+      borderRadius: 8,
+      color: '#7c2d12'
+    }
+  }, "⚠️ ", /*#__PURE__*/React.createElement("b", null, "검색광고(파워링크)와 쇼핑검색은 다릅니다."), /*#__PURE__*/React.createElement("br", null), "· ", /*#__PURE__*/React.createElement("b", null, "검색광고(파워링크)"), " — 네이버 통합검색 결과 상단의 링크형 광고. 이 카드의 지표가 여기 기준입니다.", /*#__PURE__*/React.createElement("br", null), "· ", /*#__PURE__*/React.createElement("b", null, "쇼핑검색"), " — 쇼핑 탭의 상품 목록. 우리 ", /*#__PURE__*/React.createElement("b", null, "순위 추적·노출 순위"), "는 전부 이쪽 기준이며, 그 안의 광고(쇼핑검색광고)도 별개입니다.", /*#__PURE__*/React.createElement("br", null), "즉 이 숫자가 크다고 쇼핑 순위가 나쁜 것은 아닙니다 — ", /*#__PURE__*/React.createElement("b", null, "서로 다른 지면"), "입니다."), "광고 경쟁이 치열할수록 SEO(자연노출)를 병행해 광고비 효율을 확보하는 것이 유리합니다."))));
 };
 
 ;/* ===== js/components/SummaryCardsSection.jsx ===== */
@@ -11738,6 +11760,49 @@ window.SaveToClientSection = function SaveToClientSection({
       return '';
     }
   };
+
+  /* 순위 저장 후속 호출 (2026-08-05 신설)
+     분석 결과를 업체에 저장해도 순위가 어디에도 기록되지 않던 문제 수정 —
+     종전엔 /cd/rank-save 를 부르는 곳이 업체관리 화면 1곳뿐이라, 스토어 분석에서
+     저장한 건은 아침 배치가 훑기 전까지 순위 이력이 비어 있었다.
+     · 상품ID 3형식(nvMid·/products/·/catalog/) 인식 — 서버 규칙과 동일
+     · 서버는 admin·manager 전용이라 그 외 권한은 조용히 생략(에러 표시 안 함)
+     · 순위를 못 찾았으면 저장하지 않음(허위 미노출 기록 방지 — 8/1~3 오염 선례) */
+  var extractPid = function (url) {
+    var u = String(url || '');
+    var m = u.match(/[?&]nvMid=(\d+)/);
+    if (m) return m[1];
+    m = u.match(/\/products\/(\d+)/);
+    if (m) return m[1];
+    m = u.match(/\/catalog\/(\d+)/);
+    if (m) return m[1];
+    return u;
+  };
+  var saveRankIfPossible = function (clientId) {
+    try {
+      if (!clientId || !keyword || !productUrl) return;
+      if (isViewer) return; // 서버가 admin·manager 전용 → 영업사원은 호출 자체 생략
+      var list = shopProducts || [];
+      if (!list || !list.length) return;
+      var pid = extractPid(productUrl);
+      var hit = null;
+      for (var i = 0; i < list.length; i++) {
+        var p = list[i];
+        if (p.product_id === pid || p.product_url && String(p.product_url).indexOf(pid) !== -1) {
+          hit = p;
+          break;
+        }
+      }
+      if (!hit || !hit.rank) return; // 못 찾으면 기록하지 않는다
+      api.post('/cd/rank-save', {
+        client_id: clientId,
+        keyword: keyword,
+        product_url: productUrl,
+        rank_position: hit.rank,
+        page_number: Math.ceil(hit.rank / 40)
+      }).catch(function () {});
+    } catch (e) {}
+  };
   var handleSave = function () {
     setSaving(true);
     setMessage('');
@@ -11787,6 +11852,7 @@ window.SaveToClientSection = function SaveToClientSection({
         if (res.success) {
           setSuccess(true);
           setMessage(res.message);
+          saveRankIfPossible(res.client_id);
           if (isCompMode && onCompetitorSaved) {
             try {
               onCompetitorSaved();
@@ -11812,6 +11878,7 @@ window.SaveToClientSection = function SaveToClientSection({
         if (res.success) {
           setSuccess(true);
           setMessage(res.message);
+          saveRankIfPossible(selectedClientId);
         } else {
           var errMsg = typeof res.detail === 'string' ? res.detail : '저장에 실패했습니다.';
           setMessage(errMsg);
@@ -15594,9 +15661,19 @@ window.ClientDashboard = function ClientDashboard({
       setAnalyzing(false);
     });
   };
+
+  /* 상품ID 추출 — 서버(naver_crawler.extract_product_id_from_url)와 동일한 3형식 인식.
+     종전엔 /products/숫자 만 봐서 nvMid=·/catalog/ URL 이면 URL 전체가 pid 로 넘어가
+     순위 매칭이 무조건 실패했다(2026-08-05 수정). */
   function extractPid(url) {
-    var m = url.match(/products\/(\d+)/);
-    return m ? m[1] : url;
+    var u = String(url || '');
+    var m = u.match(/[?&]nvMid=(\d+)/);
+    if (m) return m[1];
+    m = u.match(/\/products\/(\d+)/);
+    if (m) return m[1];
+    m = u.match(/\/catalog\/(\d+)/);
+    if (m) return m[1];
+    return u;
   }
 
   /* 키워드별 분석 보기 (히스토리 + 순위 병렬 로드) */
@@ -16701,8 +16778,9 @@ window.AnalysisResultView = function AnalysisResultView({
   }, "광고 경쟁강도:"), " ", /*#__PURE__*/React.createElement("strong", null, data.advertiserInfo.compIdx)), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
     style: {
       color: '#64748b'
-    }
-  }, "광고 노출 깊이:"), " ", /*#__PURE__*/React.createElement("strong", null, data.advertiserInfo.adDepth ? '상위 ' + data.advertiserInfo.adDepth + '개' : '-')), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+    },
+    title: "네이버 검색광고(파워링크) 기준 — 이 키워드 검색 시 통합검색 상단에 붙는 광고 평균 개수. 쇼핑검색 순위와는 다른 지표입니다."
+  }, "평균 광고 개수 ⓘ:"), " ", /*#__PURE__*/React.createElement("strong", null, data.advertiserInfo.adDepth ? data.advertiserInfo.adDepth + '개' : '데이터 없음')), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
     style: {
       color: '#64748b'
     }
@@ -23978,7 +24056,7 @@ window.AnalysisResults = function AnalysisResults(props) {
     refreshProducts: loadProducts,
     searchedKeyword: searchedKeyword,
     searchedProductUrl: searchedProductUrl,
-    cachedProductName: advertiserReport && advertiserReport.product_name ? advertiserReport.product_name : analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo.product_name : null,
+    cachedProductName: advertiserReport && advertiserReport.product_info && advertiserReport.product_info.product_name ? advertiserReport.product_info.product_name : advertiserReport && advertiserReport.product_name ? advertiserReport.product_name : analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo.product_name : null,
     relatedKeywords: relatedData ? (relatedData.golden_keywords || []).concat(relatedData.related_keywords || []).map(function (k) {
       return typeof k === 'string' ? k : k && k.keyword || '';
     }).filter(Boolean) : [],
@@ -24036,7 +24114,7 @@ window.AnalysisResults = function AnalysisResults(props) {
       var m = rankText.match(/(\d+)위/);
       return m ? parseInt(m[1]) : null;
     }() : null : null,
-    cachedProductName: advertiserReport && advertiserReport.product_name ? advertiserReport.product_name : analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo.product_name : null,
+    cachedProductName: advertiserReport && advertiserReport.product_info && advertiserReport.product_info.product_name ? advertiserReport.product_info.product_name : advertiserReport && advertiserReport.product_name ? advertiserReport.product_name : analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo.product_name : null,
     cachedTotalVolume: volumeData && volumeData[0] ? (volumeData[0].monthlyPcQcCnt || 0) + (volumeData[0].monthlyMobileQcCnt || 0) : null,
     cachedProductInfo: analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo : null,
     shopProducts: shopProducts,

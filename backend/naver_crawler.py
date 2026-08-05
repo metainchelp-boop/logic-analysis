@@ -736,10 +736,23 @@ def get_keyword_volume(keywords: List[str]) -> List[Dict]:
 
             results = []
             keyword_data_list = data.get("keywordList", [])
+            # ── 요청 키워드 매칭 (2026-08-05 수정) ──
+            # keywordstool 은 hintKeywords 의 공백을 제거해서 보내야 하고(위 참조),
+            # 응답 relKeyword 도 공백 없는 형태(영문은 대문자)로 돌아온다.
+            # 그런데 필터가 원본 문자열과 비교해, 띄어쓰기가 있는 키워드는
+            # 응답이 와도 전부 버려졌다 → 검색량·클릭수·경쟁지수·평균 광고 개수가
+            # 통째로 빈 값이 되어 "숫자에 편차가 있다"는 신고로 나타났다(이예은 2026-08-05).
+            #   → 공백 제거 + 소문자로 정규화해 비교하고, 표기는 사용자가 입력한 원문을 유지한다.
+            def _norm_kw(v):
+                return "".join(str(v or "").split()).lower()
+            _req_map = {}
+            for _k in keywords:
+                _req_map.setdefault(_norm_kw(_k), _k)
             for kd in keyword_data_list:
-                # 요청한 키워드만 필터 (연관 키워드 제외)
                 rel_keyword = kd.get("relKeyword", "")
-                if rel_keyword in keywords:
+                _matched = _req_map.get(_norm_kw(rel_keyword))
+                if _matched is not None:
+                    rel_keyword = _matched   # 화면·저장은 사용자 입력 표기로 통일
                     results.append({
                         "keyword": rel_keyword,
                         "monthlyPcQcCnt": _safe_int(kd.get("monthlyPcQcCnt")),

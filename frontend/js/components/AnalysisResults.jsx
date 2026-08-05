@@ -309,7 +309,7 @@ window.AnalysisResults = function AnalysisResults(props) {
                    추적 상품 목록·등록 관리만 📊 키워드 순위 탭으로 분리(2026-08-04, 직원 신고로
                    노출 분석 블록은 복구 — 탭 분리 대상은 '추적 현황 열람'이지 분석 결과가 아님). */
                 React.createElement(window.SectionErrorBoundary, { name: '순위 추적' },
-                    React.createElement(RankTrackingSection, { analysisOnly: true, onOpenRankTab: props.onOpenRankTab, products: products, refreshProducts: loadProducts, searchedKeyword: searchedKeyword, searchedProductUrl: searchedProductUrl, cachedProductName: advertiserReport && advertiserReport.product_name ? advertiserReport.product_name : (analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo.product_name : null), relatedKeywords: (relatedData ? (relatedData.golden_keywords || []).concat(relatedData.related_keywords || []).map(function(k) { return typeof k === 'string' ? k : (k && k.keyword) || ''; }).filter(Boolean) : []), onNavigateToClient: handleNavigateToClient, canEdit: currentUser.role !== 'viewer', onRankResult: setRankCheckResult })
+                    React.createElement(RankTrackingSection, { analysisOnly: true, onOpenRankTab: props.onOpenRankTab, products: products, refreshProducts: loadProducts, searchedKeyword: searchedKeyword, searchedProductUrl: searchedProductUrl, cachedProductName: (advertiserReport && advertiserReport.product_info && advertiserReport.product_info.product_name) ? advertiserReport.product_info.product_name : ((advertiserReport && advertiserReport.product_name) ? advertiserReport.product_name : (analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo.product_name : null)), relatedKeywords: (relatedData ? (relatedData.golden_keywords || []).concat(relatedData.related_keywords || []).map(function(k) { return typeof k === 'string' ? k : (k && k.keyword) || ''; }).filter(Boolean) : []), onNavigateToClient: handleNavigateToClient, canEdit: currentUser.role !== 'viewer', onRankResult: setRankCheckResult })
                 ),
 
                 /* 분석 상품 순위추적 원클릭 등록 */
@@ -359,7 +359,7 @@ window.AnalysisResults = function AnalysisResults(props) {
                             var m = rankText.match(/(\d+)위/);
                             return m ? parseInt(m[1]) : null;
                         })() : null) : null,
-                        cachedProductName: advertiserReport && advertiserReport.product_name ? advertiserReport.product_name : (analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo.product_name : null),
+                        cachedProductName: (advertiserReport && advertiserReport.product_info && advertiserReport.product_info.product_name) ? advertiserReport.product_info.product_name : ((advertiserReport && advertiserReport.product_name) ? advertiserReport.product_name : (analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo.product_name : null)),
                         cachedTotalVolume: volumeData && volumeData[0] ? ((volumeData[0].monthlyPcQcCnt || 0) + (volumeData[0].monthlyMobileQcCnt || 0)) : null,
                         cachedProductInfo: analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo : null,
                         shopProducts: shopProducts,

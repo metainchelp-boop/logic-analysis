@@ -251,9 +251,18 @@ function rankCellLabel(r) {
         }).catch(function() { setAnalyzing(false); });
     };
 
+    /* 상품ID 추출 — 서버(naver_crawler.extract_product_id_from_url)와 동일한 3형식 인식.
+       종전엔 /products/숫자 만 봐서 nvMid=·/catalog/ URL 이면 URL 전체가 pid 로 넘어가
+       순위 매칭이 무조건 실패했다(2026-08-05 수정). */
     function extractPid(url) {
-        var m = url.match(/products\/(\d+)/);
-        return m ? m[1] : url;
+        var u = String(url || '');
+        var m = u.match(/[?&]nvMid=(\d+)/);
+        if (m) return m[1];
+        m = u.match(/\/products\/(\d+)/);
+        if (m) return m[1];
+        m = u.match(/\/catalog\/(\d+)/);
+        if (m) return m[1];
+        return u;
     }
 
     /* 키워드별 분석 보기 (히스토리 + 순위 병렬 로드) */
@@ -852,7 +861,7 @@ window.AnalysisResultView = function AnalysisResultView({ keyword, data, rankHis
                     <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 10 }}>광고 경쟁 정보</div>
                     <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', fontSize: 14 }}>
                         <div><span style={{ color: '#64748b' }}>광고 경쟁강도:</span> <strong>{data.advertiserInfo.compIdx}</strong></div>
-                        <div><span style={{ color: '#64748b' }}>광고 노출 깊이:</span> <strong>{data.advertiserInfo.adDepth ? '상위 ' + data.advertiserInfo.adDepth + '개' : '-'}</strong></div>
+                        <div><span style={{ color: '#64748b' }} title="네이버 검색광고(파워링크) 기준 — 이 키워드 검색 시 통합검색 상단에 붙는 광고 평균 개수. 쇼핑검색 순위와는 다른 지표입니다.">평균 광고 개수 ⓘ:</span> <strong>{data.advertiserInfo.adDepth ? data.advertiserInfo.adDepth + '개' : '데이터 없음'}</strong></div>
                         <div><span style={{ color: '#64748b' }}>PC 클릭:</span> <strong>{data.advertiserInfo.pcClicks}회</strong></div>
                         <div><span style={{ color: '#64748b' }}>모바일 클릭:</span> <strong>{data.advertiserInfo.mobileClicks}회</strong></div>
                     </div>
