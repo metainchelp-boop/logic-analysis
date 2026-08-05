@@ -28,6 +28,9 @@ on:
       enrich_probe:
         description: '맞춤제안서 실데이터 재현 — "지역|업종|키워드|업체명" (예: 구로동|음식점|고기|메타). 읽기 전용'
         default: ''
+      unit_check:
+        description: '상권 매출 단위 검증 — 지역명만 (예: 구로동). saleAmt 원문·업종별 분포·공식 화면 표기로 천원/만원 확정'
+        default: ''
 
 jobs:
   diagnose:
@@ -867,4 +870,120 @@ jobs:
                     print("  실패:", type(e).__name__, e); traceback.print_exc()
 
             print("=" * 66)
+            PY
+
+      # ── 상권 매출 「단위」 실측 검증 (2026-08-05) ────────────────────────
+      # 대표 지적: 점포당 월평균 297만원은 음식점 실감과 안 맞는다(몇 천만원대여야).
+      # saleAmt 단위를 천원으로 보고 있는데 실제로 만원일 가능성 → 원문 값·공식 화면
+      # 표기·업종별 분포를 함께 찍어 단위를 확정한다. 전부 읽기 전용·키 값 미출력.
+      - name: 상권 매출 단위 검증
+        if: ${{ github.event.inputs.unit_check != '' }}
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          UNITQ: ${{ github.event.inputs.unit_check }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 300s
+          envs: UNITQ
+          script: |
+            docker exec -i -e UNITQ="$UNITQ" logic-analysis python3 - <<'PY'
+            import os, re, json, ssl, urllib.parse, urllib.request, traceback
+            import sbiz365
+
+            region = (os.getenv("UNITQ", "") or "").strip() or "구로동"
+            print("=" * 68)
+            print(f"[단위 검증] 지역={region!r}")
+
+            # 1) 행정동 매핑
+            admi = sbiz365._coord_to_admi(region)
+            if not admi:
+                print("  행정동 매핑 실패 — 중단"); raise SystemExit(0)
+            print(f"  admiCd={admi.get('admiCd')} · simpleLoc={admi.get('simpleLoc')!r}")
+            loc = admi.get("simpleLoc")
+
+            # 2) 업종 트리에서 고기·음식 계열 코드 몇 개 뽑기
+            pairs = sbiz365._upjong_pairs() if hasattr(sbiz365, "_upjong_pairs") else []
+            if not pairs:
+                try:
+                    pairs = sbiz365._fetch_upjong_tree() or []
+                except Exception:
+                    pairs = []
+            def find(*words):
+                out = []
+                for c, n in pairs:
+                    if all(w in n for w in words):
+                        out.append((c, n))
+                return out
+            cands = []
+            for ws in (("돼지",), ("구이",), ("갈비",), ("백반",), ("한식",)):
+                cands += find(*ws)
+            seen, picks = set(), []
+            for c, n in cands:
+                if c not in seen:
+                    seen.add(c); picks.append((c, n))
+            picks = picks[:8]
+            print(f"  업종 후보 {len(picks)}개: " + " / ".join(f"{c}={n.split('>')[-1].strip()}" for c, n in picks))
+
+            # 3) 업종별 RAW 값 — 어떤 변환도 하지 않고 그대로 출력
+            print("-" * 68)
+            print("[RAW getAvgAmtInfo — 변환 없음]")
+            hdr = f"{'코드':8s} {'saleAmt':>10s} {'minAmt':>10s} {'maxAmt':>12s} {'guAmt':>10s} {'siAmt':>10s} {'saleCnt':>9s}  업종"
+            print(hdr)
+            for c, n in picks:
+                try:
+                    got = sbiz365._fetch_avg(admi["admiCd"], c, loc)
+                except Exception as e:
+                    print(f"  {c}  예외 {type(e).__name__}: {e}"); continue
+                if not got:
+                    print(f"  {c}  무응답"); continue
+                print(f"  {c:8s} {str(got.get('saleAmt')):>10s} {str(got.get('minAmt')):>10s} "
+                      f"{str(got.get('maxAmt')):>12s} {str(got.get('guAmt')):>10s} "
+                      f"{str(got.get('siAmt')):>10s} {str(got.get('saleCnt')):>9s}  {n.split('>')[-1].strip()}")
+                if got.get("series"):
+                    print("           월별 avgList(원문): " + ", ".join(f"{r['ym']}={r['amt']}" for r in got["series"][-4:]))
+                if got.get("shopSeries"):
+                    print("           업소수 시계열(원문): " + ", ".join(f"{r.get('ym')}={r.get('cnt')}" for r in got["shopSeries"][-4:]))
+
+            # 4) 판정 근거 — 최고 점포(maxAmt)를 두 단위로 환산해 상식과 대조
+            print("-" * 68)
+            print("[단위 판정 — maxAmt(상권 내 최고 1개 점포)를 두 해석으로 환산]")
+            print("  * 음식점 최고 점포의 월매출이 어느 쪽이 상식적인지로 판정한다.")
+            for c, n in picks[:3]:
+                got = None
+                try:
+                    got = sbiz365._fetch_avg(admi["admiCd"], c, loc)
+                except Exception:
+                    pass
+                if not got or got.get("maxAmt") is None:
+                    continue
+                mx, av = got["maxAmt"], got.get("saleAmt")
+                print(f"  {n.split('>')[-1].strip()}")
+                print(f"    천원 해석 → 최고 {mx/1000:,.0f}만원/월 · 평균 {(av or 0)/1000:,.0f}만원/월")
+                print(f"    만원 해석 → 최고 {mx:,.0f}만원/월 · 평균 {(av or 0):,.0f}만원/월")
+
+            # 5) 공식 화면(iframe)에서 단위 표기 문자열 찾기
+            print("-" * 68)
+            print("[공식 화면 HTML 의 단위 표기 탐색]")
+            try:
+                key = sbiz365._env_keys().get("simple", "")
+                url = "https://bigdata.sbiz.or.kr/openApiIfrm/simple?certKey=" + urllib.parse.quote(key, safe="")
+                ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
+                with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"}),
+                                            timeout=20, context=ctx) as r:
+                    html = r.read().decode("utf-8", "replace")
+                print(f"  HTML {len(html):,}B 수신")
+                for pat in ("만원", "천원", "단위", "백만원", "억원"):
+                    hits = [m.start() for m in re.finditer(pat, html)][:6]
+                    if hits:
+                        for h in hits:
+                            frag = re.sub(r"\s+", " ", html[max(0, h - 70):h + 25])
+                            print(f"    '{pat}' … {frag}")
+                    else:
+                        print(f"    '{pat}' 없음")
+            except Exception as e:
+                print("  화면 조회 실패:", type(e).__name__, e)
+
+            print("=" * 68)
             PY
