@@ -273,8 +273,9 @@ _UPJONG_SEARCH_TERMS = {
     "베이커리": ["제과", "제빵", "베이커리"],
     "제과": ["제과", "제빵"],
     "분식": ["분식"],
-    "주점": ["주점", "호프"],
-    "바": ["주점", "호프"],
+    # '주점'은 중분류명(주점·커피)에도 들어 있어 카페가 먼저 잡힌다 → 호프를 앞에 둔다
+    "주점": ["호프", "주점"],
+    "바": ["호프", "주점"],
     "미용": ["미용", "헤어"],
     "뷰티": ["미용", "피부"],
     "네일": ["네일"],
@@ -344,29 +345,51 @@ def _upjong_pairs():
     return pairs or None
 
 
-def _resolve_upjong(industry_label: str):
-    """업종 라벨 → 트리 소분류 코드 1개. 이름 부분일치, 매칭 중 코드가 가장 긴 항목
-    (= 가장 깊은 분류)을 택한다. 실패 시 None."""
+def _is_residual_bucket(name: str) -> bool:
+    """소분류명이 '기타/그 외' 잔여 버킷인지. ⚠️ 2026-08-05 실측 — 이 버킷들은 어느 행정동에서든
+    점포당 매출이 0으로 나온다(구로3동: 그 외 기타 간이 음식점·기타 한식·기타 일식·기타 서양식 전부 0,
+    반면 곱창 전골/구이 3,340천원·국/탕/찌개류 2,938천원). 대표 업종으로 골라선 안 된다."""
+    last = str(name or "").split(">")[-1].strip()
+    return last.startswith("기타") or ("그 외" in last)
+
+
+def _resolve_upjong_candidates(industry_label: str, limit: int = 3):
+    """업종 라벨 → 소분류 후보 목록(우선순위 순, 최대 limit개).
+    ⚠️ 종전에는 후보 중 '코드가 가장 큰 것' 하나만 골랐는데, 그게 하필 '그 외 기타…' 잔여 버킷이라
+    상권 매출이 항상 0으로 나왔다(2026-08-05 실측). 이제 잔여 버킷을 뒤로 미루고, 실제 값이
+    있는 후보를 만날 때까지 호출부가 순서대로 시도한다."""
     label = (industry_label or "").strip()
     if not label:
-        return None
+        return []
     pairs = _upjong_pairs()
     if not pairs:
-        return None
+        return []
     terms = []
     for lk, ts in _UPJONG_SEARCH_TERMS.items():
         if lk in label or label in lk:
             terms.extend(ts)
     terms.append(label)  # 사전 미등재 라벨은 라벨 자체 부분일치 폴백
-    for term in terms:
+
+    # ⚠️ 검색어별로 따로 고르면 안 된다. '음식점'이라는 낱말은 트리에서 하필 잔여 버킷
+    #    (기타 한식 음식점·기타 일식 음식점·그 외 기타 간이 음식점…)에만 들어 있어서,
+    #    검색어 순서대로 끊으면 항상 0원짜리 버킷을 집는다. 전 검색어의 후보를 모은 뒤
+    #    '잔여 버킷인가 → 검색어 우선순위 → 코드' 로 한 번에 정렬한다.
+    scored, seen = [], set()
+    for rank, term in enumerate(terms):
         if not term:
             continue
-        hits = [(c, n) for c, n in pairs if term in n]
-        if hits:
-            hits.sort(key=lambda p: (len(p[0]), p[0]))
-            code, name = hits[-1]
-            return {"code": code, "name": name}
-    return None
+        for c, n in pairs:
+            if term in n and c not in seen:
+                seen.add(c)
+                scored.append((_is_residual_bucket(n), rank, len(c), c, n))
+    scored.sort()
+    return [{"code": c, "name": n} for _, _, _, c, n in scored[:limit]]
+
+
+def _resolve_upjong(industry_label: str):
+    """업종 라벨 → 소분류 코드 1개(최우선 후보). 실패 시 None."""
+    cands = _resolve_upjong_candidates(industry_label, limit=1)
+    return cands[0] if cands else None
 
 
 # ============================================================
@@ -480,17 +503,25 @@ def get_place_sbiz(region: str, industry_label: str) -> dict | None:
         admi = _resolve_admi(region)
         if not admi or not admi.get("admiCd"):
             return None
-        upjong = _resolve_upjong(label)
-        if not upjong:
+        candidates = _resolve_upjong_candidates(label, limit=3)
+        if not candidates:
             return None
 
-        cache_key = f"sbiz:simple:{admi['admiCd']}|{upjong['code']}"
+        cache_key = f"sbiz:simple:{admi['admiCd']}|{_norm(label)}"
         cached = _cache_get(cache_key, SBIZ_CACHE_TTL)
         if cached is not None:
             return cached
 
         # simpleLoc = 행정동 정식 주소(시도+시군구+행정동). 사용자 입력 지역명을 그대로 쓰면 500.
-        avg = _fetch_avg(admi["admiCd"], upjong["code"], admi.get("simpleLoc") or region)
+        # 후보 업종을 순서대로 시도하고, 점포당 매출이 실제로 잡히는 첫 후보를 채택한다
+        # (그 동네에 그 소분류 점포가 없으면 0원으로 와서 상권 슬라이드가 '0원'이 되어버림).
+        loc = admi.get("simpleLoc") or region
+        upjong, avg = None, None
+        for cand in candidates:
+            got = _fetch_avg(admi["admiCd"], cand["code"], loc)
+            if got and _num(got.get("saleAmt")):
+                upjong, avg = cand, got
+                break
         if avg is None:
             return None
         pop = _fetch_popular(admi["admiCd"], upjong["code"], avg.get("analyNo"))
@@ -522,7 +553,9 @@ def get_place_sbiz(region: str, industry_label: str) -> dict | None:
                 "admiNm": admi.get("admiNm"),
                 "guNm": admi.get("guNm"),
             },
-            "industryNm": avg.get("upjongNm"),
+            # 어떤 소분류로 집계했는지 — 응답에 없으면 우리가 고른 후보의 소분류명으로 표기
+            # (제안서에서 '무슨 업종 기준 수치인지'를 밝히기 위한 값).
+            "industryNm": avg.get("upjongNm") or str(upjong.get("name") or "").split(">")[-1].strip(),
             "sales": {
                 "avgAmt": _won(avg.get("saleAmt")),     # 점포당 월평균(원)
                 "minAmt": _won(avg.get("minAmt")),
