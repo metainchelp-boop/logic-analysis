@@ -151,18 +151,22 @@ jobs:
             diff_samples = []
             cells = 0
             linked_clients = set()
-            for cl in c.execute("""SELECT id, name, naver_store_url FROM clients
-                                    WHERE status='active' AND COALESCE(vertical,'store')='store'"""):
+            # ⚠ 바깥 루프를 커서로 돌면서 같은 커서로 안쪽 질의를 하면 이터레이션이 끊긴다
+            #   (첫 업체만 돌고 끝남 — 실측 「총 1개」로 드러남). 목록을 먼저 확정하고
+            #   안쪽 질의는 conn.execute(매번 새 커서)로 돈다.
+            client_rows = c.execute("""SELECT id, name, naver_store_url FROM clients
+                                        WHERE status='active' AND COALESCE(vertical,'store')='store'""").fetchall()
+            for cl in client_rows:
                 key = pid(cl["naver_store_url"])
                 amap = a_rank.get(key) if key else None
                 # portal-summary 와 같은 선택: client_analyses 키워드별 최신 8개
-                kws = [r["keyword"] for r in c.execute("""
+                kws = [r["keyword"] for r in conn.execute("""
                     SELECT keyword, MAX(analyzed_date) d FROM client_analyses
                      WHERE client_id=? GROUP BY keyword ORDER BY d DESC LIMIT 8""", (cl["id"],))]
                 if not kws:
                     continue
                 bmap = {}
-                for r in c.execute("""
+                for r in conn.execute("""
                     SELECT keyword, rank_position FROM client_rank_history
                      WHERE client_id=? AND id IN (SELECT MAX(id) FROM client_rank_history
                                                    WHERE client_id=? GROUP BY keyword)""",
