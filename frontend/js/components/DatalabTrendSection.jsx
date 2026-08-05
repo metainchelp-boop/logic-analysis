@@ -46,15 +46,15 @@ window.DatalabTrendSection = function DatalabTrendSection(props) {
                 datasets: [{
                   label: '검색 지수',
                   data: months.map(function(m) { return m.ratio; }),
-                  borderColor: '#4f46e5',
+                  borderColor: '#3b82f6',
                   backgroundColor: function(c) {
                     if (!c.chart.ctx) return 'rgba(79,70,229,.12)';
                     return window.chartGrad ? window.chartGrad(c.chart.ctx, 'rgba(79,70,229,.22)', 'rgba(79,70,229,0)', 240) : 'rgba(79,70,229,.12)';
                   },
                   fill: true, tension: 0.4, borderWidth: 2.5,
                   pointRadius: months.map(function(m) { return (m.ratio === d.maxRatio || m.ratio === d.minRatio) ? 6 : 3; }),
-                  pointBackgroundColor: months.map(function(m) { return m.ratio === d.maxRatio ? '#4f46e5' : m.ratio === d.minRatio ? '#ef4444' : '#fff'; }),
-                  pointBorderColor: months.map(function(m) { return m.ratio === d.minRatio ? '#ef4444' : '#4f46e5'; }),
+                  pointBackgroundColor: months.map(function(m) { return m.ratio === d.maxRatio ? '#3b82f6' : m.ratio === d.minRatio ? '#ef4444' : '#fff'; }),
+                  pointBorderColor: months.map(function(m) { return m.ratio === d.minRatio ? '#ef4444' : '#3b82f6'; }),
                   pointBorderWidth: 2
                 }]
               }}

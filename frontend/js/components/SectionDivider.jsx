@@ -2,7 +2,7 @@
 window.SectionDivider = function SectionDivider(props) {
   var label = props && props.label ? props.label : '';
   var icon = props && props.icon ? props.icon : '';
-  var color = props && props.color ? props.color : '#4f46e5';
+  var color = props && props.color ? props.color : '#3b82f6';
   var sub = props && props.sub ? props.sub : '';
 
   return (

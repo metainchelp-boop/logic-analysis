@@ -21,7 +21,7 @@ window.DatalabWeekdaySection = function DatalabWeekdaySection(props) {
                 label: '검색 지수',
                 data: days.map(function(day) { return Math.round(day.normalized); }),
                 backgroundColor: days.map(function(day) {
-                  return day.label === d.peakDay ? '#ec4899' : day.label === d.lowDay ? '#94a3b8' : (day.normalized >= 85 ? '#7c3aed' : '#4f46e5');
+                  return day.label === d.peakDay ? '#ec4899' : day.label === d.lowDay ? '#94a3b8' : (day.normalized >= 85 ? '#7c3aed' : '#3b82f6');
                 }),
                 borderRadius: 6
               }]

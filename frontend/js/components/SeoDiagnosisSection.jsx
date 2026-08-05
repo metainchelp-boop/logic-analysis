@@ -110,9 +110,9 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl:
                                                 result.scores.category || 0, result.scores.brand || 0, result.scores.naverpay || 0,
                                                 result.scores.freshness || 0
                                             ],
-                                            borderColor: '#4f46e5',
+                                            borderColor: '#3b82f6',
                                             backgroundColor: 'rgba(79,70,229,.18)',
-                                            pointBackgroundColor: '#4f46e5',
+                                            pointBackgroundColor: '#3b82f6',
                                             borderWidth: 2
                                         }]
                                     }}
@@ -164,7 +164,7 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl:
                                         <span style={{
                                             display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                                             width: 22, height: 22, borderRadius: 6,
-                                            background: '#4f46e5', color: '#fff', fontSize: 11, fontWeight: 700,
+                                            background: '#3b82f6', color: '#fff', fontSize: 11, fontWeight: 700,
                                             flexShrink: 0, marginTop: 2
                                         }}>{i + 1}</span>
                                         {s}

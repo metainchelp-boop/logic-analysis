@@ -187,7 +187,7 @@ window.SaveToClientSection = function SaveToClientSection({
                 className: 'card',
                 style: {
                     padding: '24px 28px',
-                    background: 'linear-gradient(135deg, #6C5CE7 0%, #a29bfe 100%)',
+                    background: 'linear-gradient(135deg, #3b82f6 0%, #93c5fd 100%)',
                     color: '#fff',
                     textAlign: 'center',
                     borderRadius: 14,
@@ -198,7 +198,7 @@ window.SaveToClientSection = function SaveToClientSection({
                 React.createElement('button', {
                     onClick: function() { setShowModal(true); },
                     style: {
-                        background: '#fff', color: '#6C5CE7', border: 'none',
+                        background: '#fff', color: '#3b82f6', border: 'none',
                         padding: '12px 32px', borderRadius: 10, fontSize: 15, fontWeight: 700,
                         cursor: 'pointer', boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
                     }
@@ -255,7 +255,7 @@ window.SaveToClientSection = function SaveToClientSection({
                         onClick: closeModal,
                         style: {
                             width: '100%', padding: '12px', borderRadius: 10, border: 'none',
-                            background: '#6C5CE7', color: '#fff', fontSize: 14, fontWeight: 600, cursor: 'pointer'
+                            background: '#3b82f6', color: '#fff', fontSize: 14, fontWeight: 600, cursor: 'pointer'
                         }
                     }, '확인')
                 )
@@ -268,18 +268,18 @@ window.SaveToClientSection = function SaveToClientSection({
                             onClick: function() { setSaveMode('new'); },
                             style: {
                                 flex: 1, padding: '10px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer',
-                                background: saveMode === 'new' ? '#6C5CE7' : '#f1f5f9',
+                                background: saveMode === 'new' ? '#3b82f6' : '#f1f5f9',
                                 color: saveMode === 'new' ? '#fff' : '#64748b',
-                                border: saveMode === 'new' ? '1px solid #6C5CE7' : '1px solid #e2e8f0',
+                                border: saveMode === 'new' ? '1px solid #3b82f6' : '1px solid #e2e8f0',
                             }
                         }, '새 업체 등록'),
                         React.createElement('button', {
                             onClick: function() { setSaveMode('existing'); },
                             style: {
                                 flex: 1, padding: '10px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer',
-                                background: saveMode === 'existing' ? '#6C5CE7' : '#f1f5f9',
+                                background: saveMode === 'existing' ? '#3b82f6' : '#f1f5f9',
                                 color: saveMode === 'existing' ? '#fff' : '#64748b',
-                                border: saveMode === 'existing' ? '1px solid #6C5CE7' : '1px solid #e2e8f0',
+                                border: saveMode === 'existing' ? '1px solid #3b82f6' : '1px solid #e2e8f0',
                             }
                         }, '기존 업체에 추가 (' + existingClients.length + ')'),
                         React.createElement('button', {
@@ -301,9 +301,9 @@ window.SaveToClientSection = function SaveToClientSection({
                                 onClick: function() { setSaveMode('prospect'); },
                                 style: {
                                     flex: 1, padding: '10px', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer',
-                                    background: saveMode === 'prospect' ? '#4f46e5' : '#eef2ff',
+                                    background: saveMode === 'prospect' ? '#3b82f6' : '#eef2ff',
                                     color: saveMode === 'prospect' ? '#fff' : '#4338ca',
-                                    border: '1px solid ' + (saveMode === 'prospect' ? '#4f46e5' : '#c7d2fe'),
+                                    border: '1px solid ' + (saveMode === 'prospect' ? '#3b82f6' : '#c7d2fe'),
                                 }
                             }, '🎯 영업 대상으로'),
                             React.createElement('button', {
@@ -444,9 +444,9 @@ window.SaveToClientSection = function SaveToClientSection({
                                                     onClick: function() { setSelectedClientId(c.id); },
                                                     style: {
                                                         padding: '10px 14px', borderRadius: 8, cursor: 'pointer', marginBottom: 4,
-                                                        background: isSelected ? '#6C5CE7' : '#f8fafc',
+                                                        background: isSelected ? '#3b82f6' : '#f8fafc',
                                                         color: isSelected ? '#fff' : '#1e293b',
-                                                        border: '1px solid ' + (isSelected ? '#6C5CE7' : '#e2e8f0'),
+                                                        border: '1px solid ' + (isSelected ? '#3b82f6' : '#e2e8f0'),
                                                     }
                                                 },
                                                     React.createElement('div', { style: { fontWeight: 600, fontSize: 14 } }, c.name),
@@ -469,7 +469,7 @@ window.SaveToClientSection = function SaveToClientSection({
                         disabled: saving,
                         style: {
                             width: '100%', padding: '12px', borderRadius: 10, border: 'none',
-                            background: saving ? '#94a3b8' : '#6C5CE7', color: '#fff',
+                            background: saving ? '#94a3b8' : '#3b82f6', color: '#fff',
                             fontSize: 14, fontWeight: 600, cursor: saving ? 'default' : 'pointer',
                         }
                     }, saving ? '저장 중...' : (_prospectMode ? (saveMode === 'competitor' ? '경쟁사 저장' : '영업 대상 저장') : (_fixedCompMode ? '경쟁사 저장' : '분석 결과 저장')))

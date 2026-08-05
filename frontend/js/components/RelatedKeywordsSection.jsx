@@ -54,7 +54,7 @@ window.RelatedKeywordsSection = function RelatedKeywordsSection({ data, keyword 
                         onClick={() => setTab('related')}
                         style={{
                             padding: '10px 20px', borderRadius: 10, border: 'none',
-                            background: tab === 'related' ? '#4f46e5' : '#f1f5f9',
+                            background: tab === 'related' ? '#3b82f6' : '#f1f5f9',
                             color: tab === 'related' ? '#fff' : '#64748b',
                             fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
                             transition: 'all 0.2s'
@@ -119,7 +119,7 @@ window.RelatedKeywordsSection = function RelatedKeywordsSection({ data, keyword 
                                                 {k.keyword}
                                                 {k.isGolden && <span style={{ display: 'inline-block', marginLeft: 6, padding: '2px 8px', borderRadius: 999, fontSize: 10, fontWeight: 700, background: '#fef3c7', color: '#92400e' }}>황금</span>}
                                             </td>
-                                            <td style={{ padding: '12px 20px', fontWeight: 700, fontSize: 14, color: '#4f46e5' }}>{fmt(k.totalVolume)}</td>
+                                            <td style={{ padding: '12px 20px', fontWeight: 700, fontSize: 14, color: '#3b82f6' }}>{fmt(k.totalVolume)}</td>
                                             <td style={{ padding: '12px 16px', textAlign: 'center', fontSize: 13, color: '#64748b' }}>{fmt(k.monthlyPcQcCnt)}</td>
                                             <td style={{ padding: '12px 16px', textAlign: 'center', fontSize: 13, color: '#64748b' }}>{fmt(k.monthlyMobileQcCnt)}</td>
                                             <td style={{ padding: '12px 16px', textAlign: 'center' }}>
@@ -134,7 +134,7 @@ window.RelatedKeywordsSection = function RelatedKeywordsSection({ data, keyword 
                                                 <div style={{ height: 6, borderRadius: 3, background: '#f1f5f9', overflow: 'hidden' }}>
                                                     <div style={{
                                                         width: volPct + '%', height: '100%', borderRadius: 3,
-                                                        background: tab === 'golden' ? 'linear-gradient(90deg, #f59e0b, #fbbf24)' : 'linear-gradient(90deg, #4f46e5, #7c3aed)',
+                                                        background: tab === 'golden' ? 'linear-gradient(90deg, #f59e0b, #fbbf24)' : 'linear-gradient(90deg, #3b82f6, #7c3aed)',
                                                         transition: 'width 0.8s ease'
                                                     }}></div>
                                                 </div>

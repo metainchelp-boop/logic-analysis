@@ -60,14 +60,14 @@ body {
     outline: none; background: #f9fafb;
 }
 .search-input:focus {
-    border-color: #6366f1;
+    border-color: #3b82f6;
     box-shadow: 0 0 0 3px rgba(99,102,241,0.15);
     background: #fff;
 }
 .search-input::placeholder { color: #9ca3af; }
 .btn-search {
     height: 48px; padding: 0 28px;
-    background: linear-gradient(135deg, #4f46e5, #9333ea);
+    background: linear-gradient(135deg, #3b82f6, #9333ea);
     color: #fff; border: none; border-radius: 10px;
     font-size: 15px; font-weight: 700; cursor: pointer;
     transition: opacity .2s, transform .1s;
@@ -97,7 +97,7 @@ body {
 /* v5 그라데이션 라인 */
 .section-line {
     height: 2px;
-    background: linear-gradient(90deg, #4f46e5, #7c3aed, transparent);
+    background: linear-gradient(90deg, #3b82f6, #7c3aed, transparent);
     border-radius: 2px;
     margin-top: 10px;
     margin-bottom: 16px;
@@ -126,7 +126,7 @@ body {
 /* ===== 스탯 카드 (보고서 스타일) ===== */
 .stat-label { font-size: 13px; font-weight: 500; color: #6b7280; margin-bottom: 6px; }
 .stat-value { font-size: 24px; font-weight: 700; color: #1f2937; line-height: 1.2; }
-.stat-value.indigo { color: #4f46e5; }
+.stat-value.indigo { color: #3b82f6; }
 .stat-value.purple { color: #9333ea; }
 .stat-value.green { color: #059669; }
 .stat-value.orange { color: #ea580c; }
@@ -173,7 +173,7 @@ body {
 
 /* ===== 스코어 카드 (보고서 스타일 좌측 보더) ===== */
 .score-card {
-    background: #fff; border-left: 4px solid #4f46e5;
+    background: #fff; border-left: 4px solid #3b82f6;
     border-radius: 8px; padding: 18px;
     box-shadow: 0 2px 8px rgba(0,0,0,0.06);
     transition: box-shadow .2s;
@@ -182,7 +182,7 @@ body {
 .score-card .score-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
 .score-card h4 { font-size: 15px; font-weight: 700; color: #1f2937; }
 .score-card .score-cat { font-size: 11px; color: #9ca3af; }
-.score-card .big-num { font-size: 24px; font-weight: 700; color: #4f46e5; }
+.score-card .big-num { font-size: 24px; font-weight: 700; color: #3b82f6; }
 
 /* ===== 추천 카드 (보고서 스타일 좌측 보더) ===== */
 .rec-card { border-left: 4px solid; border-radius: 10px; padding: 18px; box-shadow: 0 2px 6px rgba(0,0,0,0.06); margin-bottom: 12px; }
@@ -208,7 +208,7 @@ body {
     border: 1px solid #e2e8f0;
 }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
-thead { background: linear-gradient(135deg, #4f46e5, #7c3aed); position: sticky; top: 0; z-index: 1; }
+thead { background: linear-gradient(135deg, #3b82f6, #7c3aed); position: sticky; top: 0; z-index: 1; }
 th {
     text-align: left; font-weight: 600; color: #fff;
     padding: 12px 16px; border-bottom: none;
@@ -241,7 +241,7 @@ tr.rank-highlight { background: #fef3c7 !important; font-weight: 600; }
     min-height: 44px; /* WCAG 터치 타겟 최소 44px */
 }
 .btn-primary {
-    background: linear-gradient(135deg, #4f46e5, #7c3aed);
+    background: linear-gradient(135deg, #3b82f6, #7c3aed);
     color: #fff; border: none;
 }
 .btn-primary:hover { opacity: 0.9; transform: translateY(-1px); }
@@ -268,7 +268,7 @@ tr.rank-highlight { background: #fef3c7 !important; font-weight: 600; }
     background: #f9fafb;
 }
 .form-input:focus {
-    border-color: #6366f1;
+    border-color: #3b82f6;
     box-shadow: 0 0 0 3px rgba(99,102,241,0.15);
     background: #fff;
 }
@@ -284,7 +284,7 @@ tr.rank-highlight { background: #fef3c7 !important; font-weight: 600; }
 .progress-bar { height: 6px; border-radius: 999px; background: #f1f5f9; overflow: hidden; }
 .progress-fill {
     height: 100%; border-radius: 999px;
-    background: linear-gradient(90deg, #4f46e5, #7c3aed);
+    background: linear-gradient(90deg, #3b82f6, #7c3aed);
     transition: width .6s ease;
 }
 
@@ -307,13 +307,13 @@ tr.rank-highlight { background: #fef3c7 !important; font-weight: 600; }
 /* ===== 로딩 ===== */
 .spinner {
     width: 24px; height: 24px; border: 3px solid #e5e7eb;
-    border-top-color: #6366f1; border-radius: 50%;
+    border-top-color: #3b82f6; border-radius: 50%;
     animation: spin .7s linear infinite; display: inline-block;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 .spinner-small {
     width: 16px; height: 16px; border: 2px solid #e5e7eb;
-    border-top-color: #6366f1; border-radius: 50%;
+    border-top-color: #3b82f6; border-radius: 50%;
     animation: spin .7s linear infinite; display: inline-block;
 }
 
@@ -345,7 +345,7 @@ tr.rank-highlight { background: #fef3c7 !important; font-weight: 600; }
 }
 .anchor-btn:hover { background: #f1f5f9; color: #475569; }
 .anchor-btn.active {
-    background: #4f46e5;
+    background: #3b82f6;
     color: #fff; border-color: transparent;
 }
 .anchor-btn .anchor-icon { font-size: 13px; }
@@ -362,7 +362,7 @@ tr.rank-highlight { background: #fef3c7 !important; font-weight: 600; }
     left: 3px; bottom: 3px; background: #fff; border-radius: 50%; transition: .3s;
     box-shadow: 0 1px 4px rgba(0,0,0,0.15);
 }
-.toggle input:checked + .toggle-track { background: linear-gradient(135deg, #4f46e5, #7c3aed); }
+.toggle input:checked + .toggle-track { background: linear-gradient(135deg, #3b82f6, #7c3aed); }
 .toggle input:checked + .toggle-track::before { transform: translateX(20px); }
 
 /* ===== 스코어 링 ===== */
@@ -380,8 +380,8 @@ tr.rank-highlight { background: #fef3c7 !important; font-weight: 600; }
     border-bottom: 3px solid transparent; margin-bottom: -2px;
     font-family: inherit; transition: all .2s;
 }
-.tab-btn:hover { color: #6366f1; }
-.tab-btn.active { color: #4f46e5; border-bottom-color: #4f46e5; }
+.tab-btn:hover { color: #3b82f6; }
+.tab-btn.active { color: #3b82f6; border-bottom-color: #3b82f6; }
 
 /* ===== 알림/에러 메시지 ===== */
 .alert { padding: 14px 18px; border-radius: 10px; font-size: 13px; margin-bottom: 16px; line-height: 1.6; }
@@ -634,11 +634,11 @@ tr.rank-highlight { background: #fef3c7 !important; font-weight: 600; }
 
 /* ===== 포커스 인디케이터 (키보드 접근성) ===== */
 *:focus-visible {
-    outline: 2px solid #6366f1;
+    outline: 2px solid #3b82f6;
     outline-offset: 2px;
 }
 button:focus-visible, .btn:focus-visible, .anchor-btn:focus-visible, .tab-btn:focus-visible {
-    outline: 2px solid #6366f1;
+    outline: 2px solid #3b82f6;
     outline-offset: 2px;
     box-shadow: 0 0 0 4px rgba(99,102,241,0.2);
 }

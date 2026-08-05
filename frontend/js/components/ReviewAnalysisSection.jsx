@@ -57,7 +57,7 @@ window.ReviewAnalysisSection = function ReviewAnalysisSection(props) {
                   datasets: [
                     { label: '내 상품', data: mine, backgroundColor: '#ec4899', borderRadius: 5 },
                     { label: '경쟁 평균', data: avg, backgroundColor: '#94a3b8', borderRadius: 5 },
-                    { label: '상위 5', data: top5, backgroundColor: C.IND || '#4f46e5', borderRadius: 5 }
+                    { label: '상위 5', data: top5, backgroundColor: C.IND || '#3b82f6', borderRadius: 5 }
                   ]
                 }}
                 options={{

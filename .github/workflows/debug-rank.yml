@@ -1,0 +1,80 @@
+name: Debug Rank Batch (읽기 전용 진단)
+
+# 08:00 순위 추적 배치·수집 상태 점검 — 수동 실행 전용(push 트리거 없음 = 재배포 미유발).
+# 작업 브랜치 ref 로 dispatch. 전 쿼리 읽기 전용(SELECT) — 데이터 변경 없음.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Rank batch read-only diagnosis
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 90s
+          script: |
+            echo "== 컨테이너 상태 =="
+            docker ps --filter name=logic-analysis --format '{{.Names}} {{.Status}}'
+            docker inspect -f 'RestartCount={{.RestartCount}} StartedAt={{.State.StartedAt}} OOMKilled={{.State.OOMKilled}}' logic-analysis
+            echo
+            echo "== 오늘 배치 로그 (순위/수집/스케줄러) =="
+            docker logs --since 12h logic-analysis 2>&1 | grep -iE '순위 추적|수집 실패|검색 결과 0건|스케줄러|전체 분석|rank_tracking|daily_analysis' | tail -60 || echo "(매칭 없음)"
+            echo
+            echo "== DB 현황 (읽기 전용) =="
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sqlite3
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+
+            print("[client_rank_history 오늘 · check_type별]")
+            for r in c.execute("""SELECT check_type, COUNT(*) n,
+                                    SUM(CASE WHEN rank_position IS NULL THEN 1 ELSE 0 END) nr,
+                                    MIN(checked_at) mn, MAX(checked_at) mx
+                                  FROM client_rank_history
+                                  WHERE DATE(checked_at)=DATE('now','localtime')
+                                  GROUP BY check_type"""):
+                print(f"  {r['check_type']}: {r['n']}건 (미노출 {r['nr']}) {r['mn']} ~ {r['mx']}")
+
+            print("\n[rankings(추적상품) 오늘 · check_type별]")
+            for r in c.execute("""SELECT check_type, COUNT(*) n,
+                                    SUM(CASE WHEN rank_position IS NULL THEN 1 ELSE 0 END) nr,
+                                    MIN(checked_at) mn, MAX(checked_at) mx
+                                  FROM rankings
+                                  WHERE DATE(checked_at)=DATE('now','localtime')
+                                  GROUP BY check_type"""):
+                print(f"  {r['check_type']}: {r['n']}건 (미노출 {r['nr']}) {r['mn']} ~ {r['mx']}")
+            n = c.execute("SELECT COUNT(*) n FROM rankings WHERE DATE(checked_at)=DATE('now','localtime')").fetchone()['n']
+            if not n:
+                print("  (오늘 기록 없음)")
+
+            print("\n[수집 데이터(collected_serp) 최근 3일]")
+            try:
+                for r in c.execute("""SELECT collected_date d, COUNT(DISTINCT keyword) kw, COUNT(*) rows
+                                      FROM collected_serp
+                                      WHERE collected_date >= DATE('now','localtime','-2 day')
+                                      GROUP BY collected_date ORDER BY d"""):
+                    print(f"  {r['d']}: 키워드 {r['kw']} · 행 {r['rows']}")
+            except Exception as e:
+                print("  collected_serp 조회 실패:", e)
+                print("  테이블 목록:", [t[0] for t in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%collect%'")])
+
+            print("\n[추적 상품 스토어명 슬러그]")
+            import re
+            tot = slug = 0
+            for r in c.execute("SELECT product_url, store_name FROM tracked_products"):
+                tot += 1
+                m = re.search(r"smartstore\.naver\.com/([^/?#]+)", r["product_url"] or "")
+                s = (r["store_name"] or "").strip().lower()
+                if m and s == m.group(1).strip().lower():
+                    slug += 1
+            print(f"  총 {tot} / 슬러그 {slug}")
+            PY
+            echo
+            echo "== 최근 오류 tail =="
+            docker logs --tail 60 logic-analysis 2>&1 | grep -iE 'error|exception|traceback' | tail -15 || echo "(오류 없음)"

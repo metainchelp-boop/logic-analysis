@@ -8,7 +8,14 @@ window.ClientListSection = function ClientListSection({ currentUser, onClientCli
 
     var _s1 = useState([]); var clients = _s1[0]; var setClients = _s1[1];
     var _s2 = useState(true); var loading = _s2[0]; var setLoading = _s2[1];
-    var _s3 = useState(''); var query = _s3[0]; var setQuery = _s3[1];
+    var _s3 = useState(function() {
+        /* 셸 전역 검색(Ctrl+K) 핸드오프 — 1회 소비 */
+        try {
+            var g = sessionStorage.getItem('logic_global_q');
+            if (g) { sessionStorage.removeItem('logic_global_q'); return g; }
+        } catch (e) {}
+        return '';
+    }); var query = _s3[0]; var setQuery = _s3[1];
     var _s4 = useState(null); var mgrFilter = _s4[0]; var setMgrFilter = _s4[1]; // 담당자 탭 필터(null=전체)
 
     // 상위 계정(관리자)만 담당자(등록 직원) 정보를 노출 (매니저는 본인 것만 보므로 불필요)
@@ -81,6 +88,18 @@ window.ClientListSection = function ClientListSection({ currentUser, onClientCli
     }, []);
 
     useEffect(function() { loadClients(); }, [loadClients]);
+
+    /* 셸 전역 검색 이벤트 — 대시보드에 이미 있을 때도 검색어 반영 */
+    useEffect(function() {
+        var onSearch = function(ev) {
+            if (ev && typeof ev.detail === 'string') {
+                setQuery(ev.detail);
+                try { sessionStorage.removeItem('logic_global_q'); } catch (e) {}
+            }
+        };
+        window.addEventListener('logic-global-search', onSearch);
+        return function() { window.removeEventListener('logic-global-search', onSearch); };
+    }, []);
 
     /* 업체에서 대표 키워드/상품URL 추출 */
     var getClientAnalysisParams = function(client) {
@@ -170,7 +189,7 @@ window.ClientListSection = function ClientListSection({ currentUser, onClientCli
                 React.createElement('div', null,
                     React.createElement('h2', {
                         style: { fontSize: 20, fontWeight: 700, color: '#1e293b', margin: 0, display: 'flex', alignItems: 'center', gap: 8 }
-                    }, '🏢 등록 업체', clients.length > 0 && React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#6366f1', marginLeft: 4 } }, '(' + clients.length + '개)')),
+                    }, '🏢 등록 업체', clients.length > 0 && React.createElement('span', { style: { fontSize: 14, fontWeight: 500, color: '#3b82f6', marginLeft: 4 } }, '(' + clients.length + '개)')),
                     React.createElement('p', {
                         style: { fontSize: 13, color: '#64748b', margin: '4px 0 0 0' }
                     }, '업체 상세 보기를 클릭하면 분석 이력과 순위를 확인할 수 있습니다.')
@@ -304,7 +323,7 @@ window.ClientListSection = function ClientListSection({ currentUser, onClientCli
                             justifyContent: 'space-between'
                         },
                         onMouseEnter: function(e) {
-                            e.currentTarget.style.borderColor = '#6c5ce7';
+                            e.currentTarget.style.borderColor = '#3b82f6';
                             e.currentTarget.style.boxShadow = '0 4px 12px rgba(108,92,231,0.15)';
                             e.currentTarget.style.transform = 'translateY(-2px)';
                         },
@@ -371,7 +390,7 @@ window.ClientListSection = function ClientListSection({ currentUser, onClientCli
                                 display: 'block',
                                 width: '100%',
                                 textAlign: 'center',
-                                background: '#6c5ce7',
+                                background: '#3b82f6',
                                 color: '#fff',
                                 border: 'none',
                                 padding: '8px 0',

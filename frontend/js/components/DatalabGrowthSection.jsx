@@ -5,7 +5,7 @@ window.DatalabGrowthSection = function DatalabGrowthSection(props) {
 
   var colors = [
     { main: '#22c55e', grad: 'linear-gradient(90deg, #22c55e, #4ade80)', bg: '#f0fdf4' },
-    { main: '#4f46e5', grad: 'linear-gradient(90deg, #4f46e5, #818cf8)', bg: '#eef2ff' },
+    { main: '#3b82f6', grad: 'linear-gradient(90deg, #3b82f6, #818cf8)', bg: '#eef2ff' },
     { main: '#f59e0b', grad: 'linear-gradient(90deg, #f59e0b, #fbbf24)', bg: '#fffbeb' },
   ];
 
@@ -33,9 +33,9 @@ window.DatalabGrowthSection = function DatalabGrowthSection(props) {
             var barWidth = Math.min(Math.abs(p.growth) + 50, 100);
 
             return (
-              <div key={i} className="card" style={{ padding: 24, textAlign: 'center', position: 'relative', border: isRecommended ? '2px solid #4f46e5' : undefined }}>
+              <div key={i} className="card" style={{ padding: 24, textAlign: 'center', position: 'relative', border: isRecommended ? '2px solid #3b82f6' : undefined }}>
                 {isRecommended && (
-                  <div style={{ position: 'absolute', top: -1, right: 16, background: '#4f46e5', color: '#fff', fontSize: 10, fontWeight: 700, padding: '2px 10px', borderRadius: '0 0 6px 6px' }}>추천 기준</div>
+                  <div style={{ position: 'absolute', top: -1, right: 16, background: '#3b82f6', color: '#fff', fontSize: 10, fontWeight: 700, padding: '2px 10px', borderRadius: '0 0 6px 6px' }}>추천 기준</div>
                 )}
                 <div style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 12 }}>
                   직전 {p.label} 대비

@@ -13,11 +13,11 @@ window.DatalabDemographicsSection = function DatalabDemographicsSection(props) {
   /* 성별 격차 10%p 미만 = 사실상 무차이 → 특정 성별 타겟 단정 금지 */
   var genderGapSmall = gender ? Math.abs((Number(gender.female) || 0) - (Number(gender.male) || 0)) < 10 : false;
 
-  var ageColors = ['#94a3b8', '#818cf8', '#4f46e5', '#7c3aed', '#a78bfa', '#94a3b8'];
+  var ageColors = ['#94a3b8', '#818cf8', '#3b82f6', '#7c3aed', '#a78bfa', '#94a3b8'];
   var ageGrads = [
     'linear-gradient(90deg, #94a3b8, #cbd5e1)',
     'linear-gradient(90deg, #818cf8, #a78bfa)',
-    'linear-gradient(90deg, #4f46e5, #6366f1)',
+    'linear-gradient(90deg, #3b82f6, #3b82f6)',
     'linear-gradient(90deg, #7c3aed, #8b5cf6)',
     'linear-gradient(90deg, #a78bfa, #c4b5fd)',
     'linear-gradient(90deg, #94a3b8, #cbd5e1)',
@@ -45,7 +45,7 @@ window.DatalabDemographicsSection = function DatalabDemographicsSection(props) {
                 height={180}
                 data={{
                   labels: ['남성', '여성'],
-                  datasets: [{ data: [gender.male, gender.female], backgroundColor: ['#4f46e5', '#ec4899'], borderWidth: 0 }]
+                  datasets: [{ data: [gender.male, gender.female], backgroundColor: ['#3b82f6', '#ec4899'], borderWidth: 0 }]
                 }}
                 options={{
                   cutout: '62%',

@@ -196,7 +196,7 @@ window.ReviewTextAnalysisSection = function ReviewTextAnalysisSection(props) {
                 key: 'insight-' + i,
                 style: { lineHeight: 1.8, paddingLeft: 20, position: 'relative' }
               },
-                React.createElement('span', { style: { position: 'absolute', left: 0, color: '#6366f1', fontWeight: 700 } }, '→'),
+                React.createElement('span', { style: { position: 'absolute', left: 0, color: '#3b82f6', fontWeight: 700 } }, '→'),
                 insight
               );
             })

@@ -3,7 +3,7 @@
 /* ===== 로직 분석 — API 헬퍼 & 유틸리티 ===== */
 
 // ===== 앱 버전 (한 곳에서 관리) =====
-var APP_VERSION = window.APP_VERSION = 'v6.5.2';
+var APP_VERSION = window.APP_VERSION = 'v7.0.0';
 
 // ===== 401 중복 새로고침 방지 플래그 =====
 var _isAuthRedirecting = false;
@@ -906,7 +906,7 @@ function trimHtmlDetail(hd) {
           window.location.reload();
         },
         style: {
-          background: '#6C5CE7',
+          background: '#3b82f6',
           color: '#fff',
           border: 'none',
           padding: '12px 28px',
@@ -990,7 +990,7 @@ function trimHtmlDetail(hd) {
       }, this.state.errorMsg), React.createElement('button', {
         onClick: this.handleRetry,
         style: {
-          background: '#6C5CE7',
+          background: '#3b82f6',
           color: '#fff',
           border: 'none',
           padding: '8px 20px',
@@ -1017,7 +1017,7 @@ function trimHtmlDetail(hd) {
 (function () {
   // 보고서 공통 색상 팔레트 (미리보기 시안과 동일)
   window.CHART_COLORS = {
-    IND: '#4f46e5',
+    IND: '#3b82f6',
     // 인디고(주색)
     PUR: '#9333ea',
     // 보라
@@ -2155,8 +2155,8 @@ window.RankTrackingSection = function RankTrackingSection({
           padding: '3px 10px',
           borderRadius: 14,
           cursor: 'pointer',
-          border: '1px solid ' + (on ? '#4f46e5' : '#e2e8f0'),
-          background: on ? '#4f46e5' : '#fff',
+          border: '1px solid ' + (on ? '#3b82f6' : '#e2e8f0'),
+          background: on ? '#3b82f6' : '#fff',
           color: on ? '#fff' : '#475569'
         }
       }, _periodLabel[d]);
@@ -2792,7 +2792,7 @@ window.RankTrackingSection = function RankTrackingSection({
       padding: '9px 18px',
       borderRadius: 10,
       border: 'none',
-      background: 'linear-gradient(135deg,#4f46e5,#6366f1)',
+      background: 'linear-gradient(135deg,#3b82f6,#3b82f6)',
       color: '#fff',
       fontSize: 13,
       fontWeight: 700,
@@ -2869,7 +2869,7 @@ window.RankTrackingSection = function RankTrackingSection({
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
-            color: onNavigateToClient ? '#4f46e5' : 'inherit'
+            color: onNavigateToClient ? '#3b82f6' : 'inherit'
           }
         }, p.product_name || '상품', onNavigateToClient && React.createElement('span', {
           style: {
@@ -3225,7 +3225,7 @@ window.RankTrackingSection = function RankTrackingSection({
         style: {
           fontSize: 11,
           fontWeight: 700,
-          color: '#4f46e5',
+          color: '#3b82f6',
           background: '#ede9fe',
           border: 'none',
           borderRadius: 8,
@@ -4532,7 +4532,7 @@ window.KeywordVolumeSection = function KeywordVolumeSection({
   }, /*#__PURE__*/React.createElement("i", {
     style: {
       width: pcRatio + '%',
-      background: '#6366f1'
+      background: '#3b82f6'
     }
   }), /*#__PURE__*/React.createElement("i", {
     style: {
@@ -4655,7 +4655,7 @@ window.RelatedKeywordsSection = function RelatedKeywordsSection({
       padding: '10px 20px',
       borderRadius: 10,
       border: 'none',
-      background: tab === 'related' ? '#4f46e5' : '#f1f5f9',
+      background: tab === 'related' ? '#3b82f6' : '#f1f5f9',
       color: tab === 'related' ? '#fff' : '#64748b',
       fontSize: 13,
       fontWeight: 600,
@@ -4789,7 +4789,7 @@ window.RelatedKeywordsSection = function RelatedKeywordsSection({
         padding: '12px 20px',
         fontWeight: 700,
         fontSize: 14,
-        color: '#4f46e5'
+        color: '#3b82f6'
       }
     }, fmt(k.totalVolume)), /*#__PURE__*/React.createElement("td", {
       style: {
@@ -4836,7 +4836,7 @@ window.RelatedKeywordsSection = function RelatedKeywordsSection({
         width: volPct + '%',
         height: '100%',
         borderRadius: 3,
-        background: tab === 'golden' ? 'linear-gradient(90deg, #f59e0b, #fbbf24)' : 'linear-gradient(90deg, #4f46e5, #7c3aed)',
+        background: tab === 'golden' ? 'linear-gradient(90deg, #f59e0b, #fbbf24)' : 'linear-gradient(90deg, #3b82f6, #7c3aed)',
         transition: 'width 0.8s ease'
       }
     }))), tab === 'golden' && /*#__PURE__*/React.createElement("td", {
@@ -5035,9 +5035,9 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({
       datasets: [{
         label: 'SEO 점수',
         data: [result.scores.title || 0, result.scores.rank || 0, result.scores.price || 0, result.scores.review || 0, result.scores.sales || 0, result.scores.rating || 0, result.scores.category || 0, result.scores.brand || 0, result.scores.naverpay || 0, result.scores.freshness || 0],
-        borderColor: '#4f46e5',
+        borderColor: '#3b82f6',
         backgroundColor: 'rgba(79,70,229,.18)',
-        pointBackgroundColor: '#4f46e5',
+        pointBackgroundColor: '#3b82f6',
         borderWidth: 2
       }]
     },
@@ -5251,7 +5251,7 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({
       width: 22,
       height: 22,
       borderRadius: 6,
-      background: '#4f46e5',
+      background: '#3b82f6',
       color: '#fff',
       fontSize: 11,
       fontWeight: 700,
@@ -5551,7 +5551,7 @@ window.ProductNameSection = function ProductNameSection({
       justifyContent: 'center',
       width: 26,
       height: 26,
-      background: 'linear-gradient(135deg, #4f46e5, #7c3aed)',
+      background: 'linear-gradient(135deg, #3b82f6, #7c3aed)',
       color: '#fff',
       borderRadius: '50%',
       fontSize: 11,
@@ -5586,7 +5586,7 @@ window.ProductNameSection = function ProductNameSection({
       width: Math.min(k.ratio, 100) + '%',
       height: '100%',
       borderRadius: 8,
-      background: 'linear-gradient(135deg, #4f46e5, #7c3aed)',
+      background: 'linear-gradient(135deg, #3b82f6, #7c3aed)',
       transition: 'width 0.3s ease'
     }
   })), /*#__PURE__*/React.createElement("span", {
@@ -6583,7 +6583,7 @@ window.SummaryCardsSection = function SummaryCardsSection(props) {
   }, showHero && /*#__PURE__*/React.createElement("div", {
     className: "card",
     style: {
-      background: 'linear-gradient(135deg, #4f46e5, #7c3aed)',
+      background: 'linear-gradient(135deg, #3b82f6, #7c3aed)',
       border: 'none',
       color: '#fff',
       padding: '22px 26px',
@@ -6743,7 +6743,7 @@ window.CategoryAnalysisSection = function CategoryAnalysisSection(props) {
     categoryLevels
   } = props.data;
   if (!categories || categories.length === 0) return null;
-  var gradients = ['linear-gradient(90deg, #4f46e5, #7c3aed)', 'linear-gradient(90deg, #7c3aed, #a78bfa)', 'linear-gradient(90deg, #a78bfa, #c4b5fd)', 'linear-gradient(90deg, #c4b5fd, #ddd6fe)', 'linear-gradient(90deg, #ddd6fe, #ede9fe)'];
+  var gradients = ['linear-gradient(90deg, #3b82f6, #7c3aed)', 'linear-gradient(90deg, #7c3aed, #a78bfa)', 'linear-gradient(90deg, #a78bfa, #c4b5fd)', 'linear-gradient(90deg, #c4b5fd, #ddd6fe)', 'linear-gradient(90deg, #ddd6fe, #ede9fe)'];
 
   /* 레벨별 분포 차트 렌더링 */
   var renderLevelChart = function (title, items, color) {
@@ -6925,7 +6925,7 @@ window.CategoryAnalysisSection = function CategoryAnalysisSection(props) {
     }, /*#__PURE__*/React.createElement("span", {
       style: {
         fontWeight: 700,
-        color: '#4f46e5',
+        color: '#3b82f6',
         marginRight: 4
       }
     }, item.count, "개"), "(", item.ratio, "%)")), /*#__PURE__*/React.createElement("div", {
@@ -7001,7 +7001,7 @@ window.KeywordTagSection = function KeywordTagSection(props) {
       fontSize: 12,
       fontWeight: 700,
       background: 'linear-gradient(135deg, #eef2ff, #dbeafe)',
-      color: '#4f46e5'
+      color: '#3b82f6'
     }
   }, "총 ", fmt(totalFound), "개 발견")), /*#__PURE__*/React.createElement("div", {
     className: "table-wrap",
@@ -7011,7 +7011,7 @@ window.KeywordTagSection = function KeywordTagSection(props) {
     }
   }, /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", {
     style: {
-      background: 'linear-gradient(135deg, #4f46e5, #7c3aed)'
+      background: 'linear-gradient(135deg, #3b82f6, #7c3aed)'
     }
   }, /*#__PURE__*/React.createElement("th", {
     style: {
@@ -7057,7 +7057,7 @@ window.KeywordTagSection = function KeywordTagSection(props) {
         justifyContent: 'center',
         width: 28,
         height: 28,
-        background: kw.isGolden ? 'linear-gradient(135deg, #f59e0b, #d97706)' : 'linear-gradient(135deg, #4f46e5, #7c3aed)',
+        background: kw.isGolden ? 'linear-gradient(135deg, #f59e0b, #d97706)' : 'linear-gradient(135deg, #3b82f6, #7c3aed)',
         color: '#fff',
         borderRadius: '50%',
         fontSize: 11,
@@ -7110,7 +7110,7 @@ window.KeywordTagSection = function KeywordTagSection(props) {
         width: barPercent + '%',
         height: '100%',
         borderRadius: 8,
-        background: kw.isGolden ? 'linear-gradient(135deg, #f59e0b, #d97706)' : 'linear-gradient(135deg, #4f46e5, #7c3aed)',
+        background: kw.isGolden ? 'linear-gradient(135deg, #f59e0b, #d97706)' : 'linear-gradient(135deg, #3b82f6, #7c3aed)',
         transition: 'width 0.3s ease'
       }
     })), /*#__PURE__*/React.createElement("span", {
@@ -7329,7 +7329,7 @@ window.ReviewAnalysisSection = function ReviewAnalysisSection(props) {
         }, {
           label: '상위 5',
           data: top5,
-          backgroundColor: C.IND || '#4f46e5',
+          backgroundColor: C.IND || '#3b82f6',
           borderRadius: 5
         }]
       },
@@ -7657,7 +7657,7 @@ window.ReviewTextAnalysisSection = function ReviewTextAnalysisSection(props) {
       style: {
         position: 'absolute',
         left: 0,
-        color: '#6366f1',
+        color: '#3b82f6',
         fontWeight: 700
       }
     }, '→'), insight);
@@ -8262,7 +8262,7 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
         data: salesBars.map(function (b) {
           return b.val;
         }),
-        backgroundColor: [C.OK || '#16a34a', C.IND || '#4f46e5', '#cbd5e1'],
+        backgroundColor: [C.OK || '#16a34a', C.IND || '#3b82f6', '#cbd5e1'],
         borderRadius: 6
       }]
     },
@@ -8399,7 +8399,7 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'space-between',
-      background: 'linear-gradient(135deg, #4f46e5, #7c3aed)'
+      background: 'linear-gradient(135deg, #3b82f6, #7c3aed)'
     }
   }, /*#__PURE__*/React.createElement("span", {
     style: {
@@ -8428,7 +8428,7 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
     style: {
       fontSize: 13,
       fontWeight: 700,
-      color: '#4f46e5'
+      color: '#3b82f6'
     }
   }, fmt(page1Card.avgSales), "건/월")), /*#__PURE__*/React.createElement("div", {
     style: v5MetricRow
@@ -8438,7 +8438,7 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
     style: {
       fontSize: 13,
       fontWeight: 700,
-      color: '#4f46e5'
+      color: '#3b82f6'
     }
   }, fmt(page1Card.totalSales), "건/월")), /*#__PURE__*/React.createElement("div", {
     style: v5MetricRow
@@ -8448,7 +8448,7 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
     style: {
       fontSize: 13,
       fontWeight: 700,
-      color: '#4f46e5'
+      color: '#3b82f6'
     }
   }, page1Card.maxRevenue)), /*#__PURE__*/React.createElement("div", {
     style: v5MetricRow
@@ -8458,7 +8458,7 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
     style: {
       fontSize: 13,
       fontWeight: 700,
-      color: '#4f46e5'
+      color: '#3b82f6'
     }
   }, page1Card.minRevenue)), /*#__PURE__*/React.createElement("div", {
     style: v5MetricRowLast
@@ -8468,7 +8468,7 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
     style: {
       fontSize: 13,
       fontWeight: 700,
-      color: '#4f46e5'
+      color: '#3b82f6'
     }
   }, page1Card.avgRevenue)), /*#__PURE__*/React.createElement("div", {
     style: v5TotalRow
@@ -8478,7 +8478,7 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
     style: {
       fontSize: 15,
       fontWeight: 800,
-      color: '#4f46e5'
+      color: '#3b82f6'
     }
   }, page1Card.totalRevenue)))), /*#__PURE__*/React.createElement("div", {
     style: {
@@ -9292,7 +9292,7 @@ window.EntryStrategySection = function EntryStrategySection(props) {
     style: {
       fontSize: 18,
       fontWeight: 800,
-      color: '#4f46e5'
+      color: '#3b82f6'
     }
   }, monthlyVolume + '회')), React.createElement('div', {
     style: Object.assign({}, v5Card, {
@@ -9331,7 +9331,7 @@ window.EntryStrategySection = function EntryStrategySection(props) {
     }
   }, React.createElement('thead', null, React.createElement('tr', {
     style: {
-      background: 'linear-gradient(135deg, #4f46e5, #7c3aed)'
+      background: 'linear-gradient(135deg, #3b82f6, #7c3aed)'
     }
   }, React.createElement('th', {
     style: {
@@ -9452,7 +9452,7 @@ window.EntryStrategySection = function EntryStrategySection(props) {
       }
     }, isMyProduct && React.createElement('span', {
       style: {
-        color: '#4f46e5',
+        color: '#3b82f6',
         marginRight: 4,
         fontWeight: 700
       }
@@ -9519,7 +9519,7 @@ window.EntryStrategySection = function EntryStrategySection(props) {
         borderRadius: 999,
         fontSize: 12,
         fontWeight: 700,
-        color: '#4f46e5',
+        color: '#3b82f6',
         border: '1px solid #c7d2fe'
       }
     }, brand);
@@ -9850,7 +9850,7 @@ window.EntryStrategySection = function EntryStrategySection(props) {
       style: {
         fontSize: 11,
         fontWeight: 700,
-        color: '#4f46e5',
+        color: '#3b82f6',
         textTransform: 'uppercase',
         letterSpacing: 1,
         marginBottom: 12,
@@ -9878,7 +9878,7 @@ window.EntryStrategySection = function EntryStrategySection(props) {
           alignItems: 'center',
           padding: '4px 12px',
           borderRadius: 999,
-          background: '#4f46e5',
+          background: '#3b82f6',
           color: '#fff',
           fontSize: 12,
           fontWeight: 700,
@@ -10070,7 +10070,7 @@ window.ApiUsageSection = function ApiUsageSection() {
     value: fmt(today.cost_krw || 0) + '원',
     sub: (today.calls || 0) + '회 호출',
     icon: '📊',
-    color: '#6366f1',
+    color: '#3b82f6',
     bg: '#eef2ff'
   }, {
     label: '이번 달 누적',
@@ -10204,7 +10204,7 @@ window.ApiUsageSection = function ApiUsageSection() {
         fontSize: 13,
         fontWeight: 600,
         background: active ? '#fff' : 'transparent',
-        color: active ? '#4f46e5' : '#64748b',
+        color: active ? '#3b82f6' : '#64748b',
         boxShadow: active ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
         transition: 'all 0.2s'
       }
@@ -10251,7 +10251,7 @@ window.ApiUsageSection = function ApiUsageSection() {
         fontSize: 12,
         cursor: 'pointer',
         fontWeight: 500,
-        background: active ? '#6366f1' : 'transparent',
+        background: active ? '#3b82f6' : 'transparent',
         color: active ? '#fff' : '#64748b'
       }
     }, p);
@@ -10303,7 +10303,7 @@ window.ApiUsageSection = function ApiUsageSection() {
         width: '100%',
         height: h,
         borderRadius: '3px 3px 0 0',
-        background: isHov ? 'linear-gradient(180deg, #6366f1, #4f46e5)' : i >= chartData.length - 5 ? 'linear-gradient(180deg, #818cf8, #6366f1)' : 'linear-gradient(180deg, #c7d2fe, #a5b4fc)',
+        background: isHov ? 'linear-gradient(180deg, #3b82f6, #3b82f6)' : i >= chartData.length - 5 ? 'linear-gradient(180deg, #818cf8, #3b82f6)' : 'linear-gradient(180deg, #c7d2fe, #a5b4fc)',
         transition: 'all 0.2s'
       }
     }));
@@ -10369,13 +10369,13 @@ window.ApiUsageSection = function ApiUsageSection() {
     style: {
       width: inputPct + '%',
       height: '100%',
-      background: 'linear-gradient(90deg, #818cf8, #6366f1)',
+      background: 'linear-gradient(90deg, #818cf8, #3b82f6)',
       borderRadius: 3
     }
   })), React.createElement('div', {
     style: {
       fontSize: 11,
-      color: '#6366f1',
+      color: '#3b82f6',
       marginTop: 4,
       fontWeight: 600
     }
@@ -10499,7 +10499,7 @@ window.ApiUsageSection = function ApiUsageSection() {
         padding: 12,
         textAlign: 'center',
         fontWeight: 700,
-        color: '#4f46e5'
+        color: '#3b82f6'
       }
     }, fmt(c.cost_krw) + '원'), React.createElement('td', {
       style: {
@@ -10525,7 +10525,7 @@ window.ApiUsageSection = function ApiUsageSection() {
       style: {
         width: pct + '%',
         height: '100%',
-        background: '#6366f1',
+        background: '#3b82f6',
         borderRadius: 3
       }
     })), React.createElement('span', {
@@ -10570,7 +10570,7 @@ window.ApiUsageSection = function ApiUsageSection() {
       padding: 12,
       textAlign: 'center',
       fontWeight: 700,
-      color: '#4f46e5',
+      color: '#3b82f6',
       fontSize: 14
     }
   }, fmt(totalClientCost) + '원'), React.createElement('td', {
@@ -10719,7 +10719,7 @@ window.ApiUsageSection = function ApiUsageSection() {
         padding: '8px 10px',
         textAlign: 'center',
         fontWeight: 600,
-        color: '#4f46e5',
+        color: '#3b82f6',
         fontSize: 12
       }
     }, log.cost_krw + '원'), React.createElement('td', {
@@ -11598,7 +11598,7 @@ window.CompetitorRadar = function CompetitorRadar(props) {
   }), C('polygon', {
     points: poly(adv),
     fill: 'rgba(79,70,229,.20)',
-    stroke: '#4f46e5',
+    stroke: '#3b82f6',
     strokeWidth: 2
   })), C('div', {
     style: {
@@ -11616,7 +11616,7 @@ window.CompetitorRadar = function CompetitorRadar(props) {
       width: 12,
       height: 12,
       borderRadius: 3,
-      background: '#4f46e5',
+      background: '#3b82f6',
       display: 'inline-block'
     }
   }), '광고주'), C('div', {
@@ -11862,7 +11862,7 @@ window.SaveToClientSection = function SaveToClientSection({
     className: 'card',
     style: {
       padding: '24px 28px',
-      background: 'linear-gradient(135deg, #6C5CE7 0%, #a29bfe 100%)',
+      background: 'linear-gradient(135deg, #3b82f6 0%, #93c5fd 100%)',
       color: '#fff',
       textAlign: 'center',
       borderRadius: 14
@@ -11885,7 +11885,7 @@ window.SaveToClientSection = function SaveToClientSection({
     },
     style: {
       background: '#fff',
-      color: '#6C5CE7',
+      color: '#3b82f6',
       border: 'none',
       padding: '12px 32px',
       borderRadius: 10,
@@ -11993,7 +11993,7 @@ window.SaveToClientSection = function SaveToClientSection({
       padding: '12px',
       borderRadius: 10,
       border: 'none',
-      background: '#6C5CE7',
+      background: '#3b82f6',
       color: '#fff',
       fontSize: 14,
       fontWeight: 600,
@@ -12019,9 +12019,9 @@ window.SaveToClientSection = function SaveToClientSection({
       fontSize: 13,
       fontWeight: 600,
       cursor: 'pointer',
-      background: saveMode === 'new' ? '#6C5CE7' : '#f1f5f9',
+      background: saveMode === 'new' ? '#3b82f6' : '#f1f5f9',
       color: saveMode === 'new' ? '#fff' : '#64748b',
-      border: saveMode === 'new' ? '1px solid #6C5CE7' : '1px solid #e2e8f0'
+      border: saveMode === 'new' ? '1px solid #3b82f6' : '1px solid #e2e8f0'
     }
   }, '새 업체 등록'), React.createElement('button', {
     onClick: function () {
@@ -12034,9 +12034,9 @@ window.SaveToClientSection = function SaveToClientSection({
       fontSize: 13,
       fontWeight: 600,
       cursor: 'pointer',
-      background: saveMode === 'existing' ? '#6C5CE7' : '#f1f5f9',
+      background: saveMode === 'existing' ? '#3b82f6' : '#f1f5f9',
       color: saveMode === 'existing' ? '#fff' : '#64748b',
-      border: saveMode === 'existing' ? '1px solid #6C5CE7' : '1px solid #e2e8f0'
+      border: saveMode === 'existing' ? '1px solid #3b82f6' : '1px solid #e2e8f0'
     }
   }, '기존 업체에 추가 (' + existingClients.length + ')'), React.createElement('button', {
     onClick: function () {
@@ -12072,9 +12072,9 @@ window.SaveToClientSection = function SaveToClientSection({
       fontSize: 13,
       fontWeight: 700,
       cursor: 'pointer',
-      background: saveMode === 'prospect' ? '#4f46e5' : '#eef2ff',
+      background: saveMode === 'prospect' ? '#3b82f6' : '#eef2ff',
       color: saveMode === 'prospect' ? '#fff' : '#4338ca',
-      border: '1px solid ' + (saveMode === 'prospect' ? '#4f46e5' : '#c7d2fe')
+      border: '1px solid ' + (saveMode === 'prospect' ? '#3b82f6' : '#c7d2fe')
     }
   }, '🎯 영업 대상으로'), React.createElement('button', {
     onClick: function () {
@@ -12363,9 +12363,9 @@ window.SaveToClientSection = function SaveToClientSection({
           borderRadius: 8,
           cursor: 'pointer',
           marginBottom: 4,
-          background: isSelected ? '#6C5CE7' : '#f8fafc',
+          background: isSelected ? '#3b82f6' : '#f8fafc',
           color: isSelected ? '#fff' : '#1e293b',
-          border: '1px solid ' + (isSelected ? '#6C5CE7' : '#e2e8f0')
+          border: '1px solid ' + (isSelected ? '#3b82f6' : '#e2e8f0')
         }
       }, React.createElement('div', {
         style: {
@@ -12399,7 +12399,7 @@ window.SaveToClientSection = function SaveToClientSection({
       padding: '12px',
       borderRadius: 10,
       border: 'none',
-      background: saving ? '#94a3b8' : '#6C5CE7',
+      background: saving ? '#94a3b8' : '#3b82f6',
       color: '#fff',
       fontSize: 14,
       fontWeight: 600,
@@ -12426,7 +12426,17 @@ window.ClientListSection = function ClientListSection({
   var _s2 = useState(true);
   var loading = _s2[0];
   var setLoading = _s2[1];
-  var _s3 = useState('');
+  var _s3 = useState(function () {
+    /* 셸 전역 검색(Ctrl+K) 핸드오프 — 1회 소비 */
+    try {
+      var g = sessionStorage.getItem('logic_global_q');
+      if (g) {
+        sessionStorage.removeItem('logic_global_q');
+        return g;
+      }
+    } catch (e) {}
+    return '';
+  });
   var query = _s3[0];
   var setQuery = _s3[1];
   var _s4 = useState(null);
@@ -12550,6 +12560,22 @@ window.ClientListSection = function ClientListSection({
     loadClients();
   }, [loadClients]);
 
+  /* 셸 전역 검색 이벤트 — 대시보드에 이미 있을 때도 검색어 반영 */
+  useEffect(function () {
+    var onSearch = function (ev) {
+      if (ev && typeof ev.detail === 'string') {
+        setQuery(ev.detail);
+        try {
+          sessionStorage.removeItem('logic_global_q');
+        } catch (e) {}
+      }
+    };
+    window.addEventListener('logic-global-search', onSearch);
+    return function () {
+      window.removeEventListener('logic-global-search', onSearch);
+    };
+  }, []);
+
   /* 업체에서 대표 키워드/상품URL 추출 */
   var getClientAnalysisParams = function (client) {
     // 1순위: 최근 분석한 키워드 + URL
@@ -12657,7 +12683,7 @@ window.ClientListSection = function ClientListSection({
     style: {
       fontSize: 14,
       fontWeight: 500,
-      color: '#6366f1',
+      color: '#3b82f6',
       marginLeft: 4
     }
   }, '(' + clients.length + '개)')), React.createElement('p', {
@@ -12866,7 +12892,7 @@ window.ClientListSection = function ClientListSection({
         justifyContent: 'space-between'
       },
       onMouseEnter: function (e) {
-        e.currentTarget.style.borderColor = '#6c5ce7';
+        e.currentTarget.style.borderColor = '#3b82f6';
         e.currentTarget.style.boxShadow = '0 4px 12px rgba(108,92,231,0.15)';
         e.currentTarget.style.transform = 'translateY(-2px)';
       },
@@ -13002,7 +13028,7 @@ window.ClientListSection = function ClientListSection({
         display: 'block',
         width: '100%',
         textAlign: 'center',
-        background: '#6c5ce7',
+        background: '#3b82f6',
         color: '#fff',
         border: 'none',
         padding: '8px 0',
@@ -13135,7 +13161,7 @@ window.LoginPage = function LoginPage(props) {
   var styles = {
     container: {
       minHeight: '100vh',
-      background: 'linear-gradient(135deg, #6C5CE7 0%, #a29bfe 100%)',
+      background: 'linear-gradient(135deg, #3b82f6 0%, #93c5fd 100%)',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
@@ -13171,7 +13197,7 @@ window.LoginPage = function LoginPage(props) {
     },
     badge: {
       display: 'inline-block',
-      background: '#6C5CE7',
+      background: '#3b82f6',
       color: 'white',
       padding: '4px 12px',
       borderRadius: '20px',
@@ -13194,12 +13220,12 @@ window.LoginPage = function LoginPage(props) {
       transition: 'border-color 0.3s'
     },
     inputWrapperFocus: {
-      borderColor: '#6C5CE7'
+      borderColor: '#3b82f6'
     },
     inputIcon: {
       marginRight: '12px',
       fontSize: '18px',
-      color: '#6C5CE7'
+      color: '#3b82f6'
     },
     input: {
       flex: 1,
@@ -13210,7 +13236,7 @@ window.LoginPage = function LoginPage(props) {
       fontFamily: 'inherit'
     },
     button: {
-      background: '#6C5CE7',
+      background: '#3b82f6',
       color: 'white',
       border: 'none',
       padding: '12px 24px',
@@ -13223,7 +13249,7 @@ window.LoginPage = function LoginPage(props) {
       marginTop: '12px'
     },
     buttonHover: {
-      background: '#5f3dc4'
+      background: '#2563eb'
     },
     error: {
       background: '#fff5f5',
@@ -13753,7 +13779,7 @@ window.UserManagementPage = function UserManagementPage(props) {
         borderRadius: 999,
         fontSize: 13,
         fontWeight: 700,
-        color: (analysisCounts[String(user.id)] || 0) > 0 ? '#6c5ce7' : '#94a3b8',
+        color: (analysisCounts[String(user.id)] || 0) > 0 ? '#3b82f6' : '#94a3b8',
         background: (analysisCounts[String(user.id)] || 0) > 0 ? '#ede9fe' : '#f1f5f9'
       }
     }, String(analysisCounts[String(user.id)] || 0) + '건')), React.createElement('td', {
@@ -15172,9 +15198,9 @@ window.PlaceClientPanel = function PlaceClientPanel(props) {
       fontFamily: 'inherit'
     };
     var st = on ? Object.assign(base, {
-      background: '#1B2A4A',
+      background: '#3b82f6',
       color: '#fff',
-      border: '1px solid #1B2A4A'
+      border: '1px solid #3b82f6'
     }) : Object.assign(base, chipColor(k));
     return React.createElement('button', {
       key: i,
@@ -15723,9 +15749,9 @@ window.ClientDashboard = function ClientDashboard({
         borderRadius: 8,
         cursor: 'pointer',
         marginBottom: 6,
-        background: isActive ? '#1B2A4A' : '#f8fafc',
+        background: isActive ? '#3b82f6' : '#f8fafc',
         color: isActive ? '#fff' : '#1e293b',
-        border: '1px solid ' + (isActive ? '#1B2A4A' : '#e2e8f0'),
+        border: '1px solid ' + (isActive ? '#3b82f6' : '#e2e8f0'),
         transition: 'all 0.15s'
       }
     }, /*#__PURE__*/React.createElement("div", {
@@ -15990,9 +16016,9 @@ window.ClientDashboard = function ClientDashboard({
         borderRadius: 20,
         cursor: 'pointer',
         fontSize: 13,
-        background: isActive ? '#1B2A4A' : '#f1f5f9',
+        background: isActive ? '#3b82f6' : '#f1f5f9',
         color: isActive ? '#fff' : '#475569',
-        border: isActive ? '1px solid #1B2A4A' : '1px solid #e2e8f0'
+        border: isActive ? '1px solid #3b82f6' : '1px solid #e2e8f0'
       }
     }, a.keyword, /*#__PURE__*/React.createElement("span", {
       style: {
@@ -16017,7 +16043,7 @@ window.ClientDashboard = function ClientDashboard({
       fontSize: 13,
       fontWeight: 600,
       cursor: 'pointer',
-      background: viewMode === 'history' ? '#1B2A4A' : '#fff',
+      background: viewMode === 'history' ? '#3b82f6' : '#fff',
       color: viewMode === 'history' ? '#fff' : '#475569',
       border: viewMode === 'history' ? 'none' : '1px solid #e2e8f0'
     }
@@ -16031,7 +16057,7 @@ window.ClientDashboard = function ClientDashboard({
       fontSize: 13,
       fontWeight: 600,
       cursor: 'pointer',
-      background: viewMode === 'rank' ? '#1B2A4A' : '#fff',
+      background: viewMode === 'rank' ? '#3b82f6' : '#fff',
       color: viewMode === 'rank' ? '#fff' : '#475569',
       border: viewMode === 'rank' ? 'none' : '1px solid #e2e8f0'
     }
@@ -17191,7 +17217,7 @@ window.UserGuidePage = function UserGuidePage({
     width: 24,
     height: 24,
     borderRadius: '50%',
-    background: '#6C5CE7',
+    background: '#3b82f6',
     color: '#fff',
     fontSize: 12,
     fontWeight: 700,
@@ -18261,7 +18287,7 @@ window.UserGuidePage = function UserGuidePage({
   }, /* 헤더 */
   React.createElement('div', {
     style: {
-      background: 'linear-gradient(135deg, #6C5CE7, #a29bfe)',
+      background: 'linear-gradient(135deg, #3b82f6, #93c5fd)',
       borderRadius: 16,
       padding: '32px 36px',
       marginBottom: 24,
@@ -18320,8 +18346,8 @@ window.UserGuidePage = function UserGuidePage({
         fontSize: 13,
         fontWeight: isActive ? 700 : 400,
         background: isActive ? '#f0f0ff' : 'transparent',
-        color: isActive ? '#6C5CE7' : '#475569',
-        borderLeft: isActive ? '3px solid #6C5CE7' : '3px solid transparent',
+        color: isActive ? '#3b82f6' : '#475569',
+        borderLeft: isActive ? '3px solid #3b82f6' : '3px solid transparent',
         transition: 'all 0.15s'
       }
     }, s.icon + ' ' + s.label);
@@ -18994,7 +19020,7 @@ window.SeoOptimizerPage = function SeoOptimizerPage(props) {
     }, (it.created_at || '').slice(0, 10), " · ", it.created_by)), it.tags && it.tags.length > 0 && /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 12,
-        color: '#6366f1',
+        color: '#3b82f6',
         marginTop: 4
       }
     }, it.tags.map(function (t) {
@@ -19173,7 +19199,7 @@ window.SeoRulesSection = function SeoRulesSection() {
 window.SectionDivider = function SectionDivider(props) {
   var label = props && props.label ? props.label : '';
   var icon = props && props.icon ? props.icon : '';
-  var color = props && props.color ? props.color : '#4f46e5';
+  var color = props && props.color ? props.color : '#3b82f6';
   var sub = props && props.sub ? props.sub : '';
   return /*#__PURE__*/React.createElement("div", {
     className: "report-divider"
@@ -19240,8 +19266,8 @@ window.DatalabDemographicsSection = function DatalabDemographicsSection(props) {
   }
   /* 성별 격차 10%p 미만 = 사실상 무차이 → 특정 성별 타겟 단정 금지 */
   var genderGapSmall = gender ? Math.abs((Number(gender.female) || 0) - (Number(gender.male) || 0)) < 10 : false;
-  var ageColors = ['#94a3b8', '#818cf8', '#4f46e5', '#7c3aed', '#a78bfa', '#94a3b8'];
-  var ageGrads = ['linear-gradient(90deg, #94a3b8, #cbd5e1)', 'linear-gradient(90deg, #818cf8, #a78bfa)', 'linear-gradient(90deg, #4f46e5, #6366f1)', 'linear-gradient(90deg, #7c3aed, #8b5cf6)', 'linear-gradient(90deg, #a78bfa, #c4b5fd)', 'linear-gradient(90deg, #94a3b8, #cbd5e1)'];
+  var ageColors = ['#94a3b8', '#818cf8', '#3b82f6', '#7c3aed', '#a78bfa', '#94a3b8'];
+  var ageGrads = ['linear-gradient(90deg, #94a3b8, #cbd5e1)', 'linear-gradient(90deg, #818cf8, #a78bfa)', 'linear-gradient(90deg, #3b82f6, #3b82f6)', 'linear-gradient(90deg, #7c3aed, #8b5cf6)', 'linear-gradient(90deg, #a78bfa, #c4b5fd)', 'linear-gradient(90deg, #94a3b8, #cbd5e1)'];
 
   /* 핵심 타겟 계산 */
   var targetGender = gender ? gender.female > gender.male ? '여성' : '남성' : '';
@@ -19268,7 +19294,7 @@ window.DatalabDemographicsSection = function DatalabDemographicsSection(props) {
       labels: ['남성', '여성'],
       datasets: [{
         data: [gender.male, gender.female],
-        backgroundColor: ['#4f46e5', '#ec4899'],
+        backgroundColor: ['#3b82f6', '#ec4899'],
         borderWidth: 0
       }]
     },
@@ -19456,7 +19482,7 @@ window.DatalabTrendSection = function DatalabTrendSection(props) {
         data: months.map(function (m) {
           return m.ratio;
         }),
-        borderColor: '#4f46e5',
+        borderColor: '#3b82f6',
         backgroundColor: function (c) {
           if (!c.chart.ctx) return 'rgba(79,70,229,.12)';
           return window.chartGrad ? window.chartGrad(c.chart.ctx, 'rgba(79,70,229,.22)', 'rgba(79,70,229,0)', 240) : 'rgba(79,70,229,.12)';
@@ -19468,10 +19494,10 @@ window.DatalabTrendSection = function DatalabTrendSection(props) {
           return m.ratio === d.maxRatio || m.ratio === d.minRatio ? 6 : 3;
         }),
         pointBackgroundColor: months.map(function (m) {
-          return m.ratio === d.maxRatio ? '#4f46e5' : m.ratio === d.minRatio ? '#ef4444' : '#fff';
+          return m.ratio === d.maxRatio ? '#3b82f6' : m.ratio === d.minRatio ? '#ef4444' : '#fff';
         }),
         pointBorderColor: months.map(function (m) {
-          return m.ratio === d.minRatio ? '#ef4444' : '#4f46e5';
+          return m.ratio === d.minRatio ? '#ef4444' : '#3b82f6';
         }),
         pointBorderWidth: 2
       }]
@@ -19600,7 +19626,7 @@ window.DatalabWeekdaySection = function DatalabWeekdaySection(props) {
           return Math.round(day.normalized);
         }),
         backgroundColor: days.map(function (day) {
-          return day.label === d.peakDay ? '#ec4899' : day.label === d.lowDay ? '#94a3b8' : day.normalized >= 85 ? '#7c3aed' : '#4f46e5';
+          return day.label === d.peakDay ? '#ec4899' : day.label === d.lowDay ? '#94a3b8' : day.normalized >= 85 ? '#7c3aed' : '#3b82f6';
         }),
         borderRadius: 6
       }]
@@ -19664,8 +19690,8 @@ window.DatalabGrowthSection = function DatalabGrowthSection(props) {
     grad: 'linear-gradient(90deg, #22c55e, #4ade80)',
     bg: '#f0fdf4'
   }, {
-    main: '#4f46e5',
-    grad: 'linear-gradient(90deg, #4f46e5, #818cf8)',
+    main: '#3b82f6',
+    grad: 'linear-gradient(90deg, #3b82f6, #818cf8)',
     bg: '#eef2ff'
   }, {
     main: '#f59e0b',
@@ -19718,14 +19744,14 @@ window.DatalabGrowthSection = function DatalabGrowthSection(props) {
         padding: 24,
         textAlign: 'center',
         position: 'relative',
-        border: isRecommended ? '2px solid #4f46e5' : undefined
+        border: isRecommended ? '2px solid #3b82f6' : undefined
       }
     }, isRecommended && /*#__PURE__*/React.createElement("div", {
       style: {
         position: 'absolute',
         top: -1,
         right: 16,
-        background: '#4f46e5',
+        background: '#3b82f6',
         color: '#fff',
         fontSize: 10,
         fontWeight: 700,
@@ -20121,7 +20147,7 @@ window.FeedbackManagement = function FeedbackManagement() {
         fontSize: 12,
         fontWeight: 600,
         cursor: 'pointer',
-        background: filter === f ? '#1B2A4A' : '#f1f5f9',
+        background: filter === f ? '#3b82f6' : '#f1f5f9',
         color: filter === f ? '#fff' : '#64748b',
         border: 'none'
       }
@@ -20275,7 +20301,7 @@ window.FeedbackManagement = function FeedbackManagement() {
         borderRadius: 6,
         fontSize: 11,
         cursor: 'pointer',
-        background: '#1B2A4A',
+        background: '#3b82f6',
         color: '#fff',
         border: 'none',
         fontWeight: 600
@@ -20709,7 +20735,7 @@ window.ManagerReassignSection = function ManagerReassignSection() {
       borderRadius: 8,
       cursor: busy ? 'default' : 'pointer',
       border: 'none',
-      background: '#4f46e5',
+      background: '#3b82f6',
       color: '#fff',
       opacity: busy ? 0.6 : 1
     }
@@ -21362,7 +21388,7 @@ window.ChatWidget = function ChatWidget({
       width: 56,
       height: 56,
       borderRadius: '50%',
-      background: isOpen ? '#64748b' : '#1B2A4A',
+      background: isOpen ? '#64748b' : '#3b82f6',
       color: '#fff',
       border: 'none',
       cursor: 'pointer',
@@ -21428,7 +21454,7 @@ window.ChatWidget = function ChatWidget({
   React.createElement('div', {
     style: {
       padding: '12px 18px',
-      background: '#1B2A4A',
+      background: '#3b82f6',
       color: '#fff',
       display: 'flex',
       alignItems: 'center',
@@ -21487,8 +21513,8 @@ window.ChatWidget = function ChatWidget({
       cursor: 'pointer',
       background: 'none',
       border: 'none',
-      color: activeTab === 'chat' ? '#1B2A4A' : '#94a3b8',
-      borderBottom: activeTab === 'chat' ? '2px solid #1B2A4A' : '2px solid transparent'
+      color: activeTab === 'chat' ? '#3b82f6' : '#94a3b8',
+      borderBottom: activeTab === 'chat' ? '2px solid #3b82f6' : '2px solid transparent'
     }
   }, '💬 AI 채팅'), React.createElement('button', {
     onClick: function () {
@@ -21502,8 +21528,8 @@ window.ChatWidget = function ChatWidget({
       cursor: 'pointer',
       background: 'none',
       border: 'none',
-      color: activeTab === 'feedback' ? '#1B2A4A' : '#94a3b8',
-      borderBottom: activeTab === 'feedback' ? '2px solid #1B2A4A' : '2px solid transparent'
+      color: activeTab === 'feedback' ? '#3b82f6' : '#94a3b8',
+      borderBottom: activeTab === 'feedback' ? '2px solid #3b82f6' : '2px solid transparent'
     }
   }, '📝 의견함')), /* ===== AI 채팅 탭 ===== */
   activeTab === 'chat' && React.createElement(React.Fragment, null, /* 메시지 영역 */
@@ -21557,7 +21583,7 @@ window.ChatWidget = function ChatWidget({
         maxWidth: '80%',
         padding: '10px 14px',
         borderRadius: 12,
-        background: isUser ? '#1B2A4A' : '#f1f5f9',
+        background: isUser ? '#3b82f6' : '#f1f5f9',
         color: isUser ? '#fff' : '#1e293b',
         fontSize: 13,
         lineHeight: 1.6,
@@ -21714,7 +21740,7 @@ window.ChatWidget = function ChatWidget({
       width: 36,
       height: 36,
       borderRadius: '50%',
-      background: sending || !input.trim() && !imageB64 ? '#e2e8f0' : '#1B2A4A',
+      background: sending || !input.trim() && !imageB64 ? '#e2e8f0' : '#3b82f6',
       color: '#fff',
       border: 'none',
       cursor: sending || !input.trim() && !imageB64 ? 'default' : 'pointer',
@@ -21910,7 +21936,7 @@ window.ChatWidget = function ChatWidget({
       width: '100%',
       padding: '10px 0',
       borderRadius: 10,
-      background: fbSending || !fbContent.trim() ? '#e2e8f0' : '#1B2A4A',
+      background: fbSending || !fbContent.trim() ? '#e2e8f0' : '#3b82f6',
       color: fbSending || !fbContent.trim() ? '#94a3b8' : '#fff',
       border: 'none',
       fontSize: 13,
@@ -22060,6 +22086,525 @@ window.ChatWidget = function ChatWidget({
       }
     }, '✅ 처리 완료: ' + fb.resolved_at.slice(0, 16)));
   }))))));
+};
+
+;/* ===== js/components/AppShellBar.jsx ===== */
+/* AppShellBar — B+A 대개편 셸 (2026-08-05, 대표 확정)
+ *
+ * 상단 TopBar 를 대체하는 「좌측 사이드바 + 상단 바」. TopBar 와 동일한 props
+ * 계약({ activePage, currentUser, health, onNavigate })이라 페이지 블록들은
+ * 마운트 치환만으로 이전된다(라우팅·권한 게이트 불변).
+ *  - 사이드바: 쇼핑/플레이스/통합 그룹 · 상승 키워드 뱃지(rank-overview totals)
+ *    · 접기(수동 토글 localStorage + 좁은 화면 자동) — position:fixed,
+ *    본문은 body padding 으로 밀어낸다(페이지 내부 레이아웃 무수정).
+ *  - 상단 바: 크럼 · 전역 검색(Ctrl+K, Enter → 대시보드 검색 핸드오프) · 사용자.
+ *  - 첫 진입 1회 안내(「메뉴가 왼쪽으로 이동했어요」, localStorage).
+ */
+
+var _AS_W = 206,
+  _AS_WC = 60,
+  _AS_TOP = 50,
+  _AS_BANNER = 38;
+var _AS_GROUPS = function (cu) {
+  var role = cu && cu.role || '';
+  return [{
+    label: null,
+    items: [{
+      page: 'home',
+      icon: '🏠',
+      name: '대시보드'
+    }]
+  }, {
+    label: '쇼핑',
+    items: [(role === 'manager' || role === 'superadmin') && {
+      page: 'seo',
+      icon: '🔍',
+      name: 'SEO 최적화'
+    }, {
+      page: 'analysis',
+      icon: '🛒',
+      name: '스토어 분석'
+    }, {
+      page: 'rank',
+      icon: '📊',
+      name: '키워드 순위',
+      badge: 'up'
+    }].filter(Boolean)
+  }, {
+    label: '플레이스',
+    items: [{
+      page: 'place',
+      icon: '📍',
+      name: '플레이스 분석'
+    }, {
+      page: 'placetrack',
+      icon: '📊',
+      name: '플레이스 추적'
+    }]
+  }, {
+    label: '통합',
+    items: [{
+      page: 'management',
+      icon: '📈',
+      name: '로직 분석 (업체)'
+    }, {
+      page: 'learning',
+      icon: '🎓',
+      name: '학습센터'
+    }, {
+      page: 'guide',
+      icon: '📖',
+      name: '설명서'
+    }]
+  }, role === 'superadmin' ? {
+    label: '관리',
+    items: [{
+      page: 'settings',
+      icon: '⚙️',
+      name: '설정'
+    }]
+  } : null].filter(Boolean);
+};
+var _AS_CRUMB = {
+  home: '홈 / 대시보드',
+  seo: '쇼핑 / SEO 최적화',
+  analysis: '쇼핑 / 스토어 분석',
+  rank: '쇼핑 / 키워드 순위',
+  place: '플레이스 / 플레이스 분석',
+  placetrack: '플레이스 / 플레이스 추적',
+  management: '통합 / 로직 분석 (업체)',
+  learning: '통합 / 학습센터',
+  guide: '통합 / 설명서',
+  settings: '관리 / 설정',
+  users: '관리 / 직원'
+};
+window.AppShellBar = function AppShellBar(props) {
+  var useState = React.useState,
+    useEffect = React.useEffect,
+    useRef = React.useRef;
+  var activePage = props.activePage;
+  var currentUser = props.currentUser || {};
+  var health = props.health;
+  var go = props.onNavigate || function () {};
+  var _c = useState(function () {
+    try {
+      var saved = localStorage.getItem('logic_nav_collapsed');
+      if (saved != null) return saved === '1';
+    } catch (e) {}
+    return typeof window !== 'undefined' && window.innerWidth < 1080;
+  });
+  var collapsed = _c[0],
+    setCollapsed = _c[1];
+  var _up = useState(null);
+  var upTotal = _up[0],
+    setUpTotal = _up[1];
+  var _q = useState('');
+  var q = _q[0],
+    setQ = _q[1];
+  var _ch = useState(null);
+  var colHealth = _ch[0],
+    setColHealth = _ch[1]; // 수집 파이프라인 상태
+  var _chX = useState(false);
+  var colDismissed = _chX[0],
+    setColDismissed = _chX[1];
+  var _in = useState(function () {
+    try {
+      return !localStorage.getItem('logic_nav_intro_v7');
+    } catch (e) {
+      return false;
+    }
+  });
+  var showIntro = _in[0],
+    setShowIntro = _in[1];
+  var searchRef = useRef(null);
+
+  /* 본문 밀어내기 — 페이지 내부 컨테이너 무수정으로 셸 폭 반영.
+     경보 배너가 뜨면 그 높이만큼 더 내려 본문 첫 줄이 가려지지 않게 한다. */
+  var _bannerOn = !!(colHealth && !colDismissed);
+  useEffect(function () {
+    var w = collapsed ? _AS_WC : _AS_W;
+    document.body.style.paddingLeft = w + 'px';
+    document.body.style.paddingTop = _AS_TOP + (_bannerOn ? _AS_BANNER : 0) + 'px';
+    return function () {
+      document.body.style.paddingLeft = '';
+      document.body.style.paddingTop = '';
+    };
+  }, [collapsed, _bannerOn]);
+
+  /* 좁은 화면 자동 접힘(수동 설정 없을 때만) */
+  useEffect(function () {
+    var onR = function () {
+      try {
+        if (localStorage.getItem('logic_nav_collapsed') != null) return;
+      } catch (e) {}
+      setCollapsed(window.innerWidth < 1080);
+    };
+    window.addEventListener('resize', onR);
+    return function () {
+      window.removeEventListener('resize', onR);
+    };
+  }, []);
+
+  /* 상승 키워드 뱃지 — 실패 무해 */
+  useEffect(function () {
+    api.get('/cd/rank-overview').then(function (res) {
+      if (res && res.success && res.totals) setUpTotal(res.totals.up_total || 0);
+    }).catch(function () {});
+  }, []);
+
+  /* 수집 파이프라인 경보 — 오늘 수집이 없으면 전 화면 상단 배너.
+     하루 단위로 닫기 기억(다음 날 다시 노출), 조회 실패는 무음(기존 동작 유지) */
+  useEffect(function () {
+    var today = new Date().toISOString().slice(0, 10);
+    try {
+      if (localStorage.getItem('logic_collect_alert_off') === today) setColDismissed(true);
+    } catch (e) {}
+    var load = function () {
+      api.get('/collector/health').then(function (res) {
+        if (res && res.success && res.state && res.state !== 'ok') setColHealth(res);else setColHealth(null);
+      }).catch(function () {});
+    };
+    load();
+    var t = setInterval(load, 10 * 60 * 1000); // 10분 주기 — 낮 만회 수집 시 자동 해제
+    return function () {
+      clearInterval(t);
+    };
+  }, []);
+
+  /* Ctrl+K → 검색 포커스 */
+  useEffect(function () {
+    var onKey = function (e) {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault();
+        if (searchRef.current) searchRef.current.focus();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return function () {
+      window.removeEventListener('keydown', onKey);
+    };
+  }, []);
+  var toggle = function () {
+    var next = !collapsed;
+    setCollapsed(next);
+    try {
+      localStorage.setItem('logic_nav_collapsed', next ? '1' : '0');
+    } catch (e) {}
+  };
+  var submitSearch = function () {
+    var v = q.trim();
+    if (!v) return;
+    try {
+      sessionStorage.setItem('logic_global_q', v);
+    } catch (e) {}
+    /* 이미 대시보드에 있어도 반영되게 이벤트 병행(리스트가 리스닝) */
+    try {
+      window.dispatchEvent(new CustomEvent('logic-global-search', {
+        detail: v
+      }));
+    } catch (e) {}
+    setQ('');
+    go('home');
+  };
+  var dismissCollect = function () {
+    setColDismissed(true);
+    try {
+      localStorage.setItem('logic_collect_alert_off', new Date().toISOString().slice(0, 10));
+    } catch (e) {}
+  };
+  var dismissIntro = function () {
+    setShowIntro(false);
+    try {
+      localStorage.setItem('logic_nav_intro_v7', '1');
+    } catch (e) {}
+  };
+  var W = collapsed ? _AS_WC : _AS_W;
+  var _r = currentUser.role;
+  var roleLabel = _r === 'superadmin' ? '최고관리자' : _r === 'admin' ? '관리자' : _r === 'manager' ? '매니저' : '뷰어';
+  var roleBg = _r === 'admin' || _r === 'superadmin' ? '#ede9fe' : _r === 'manager' ? '#dbeafe' : '#f1f5f9';
+  var roleFg = _r === 'admin' || _r === 'superadmin' ? '#6d28d9' : _r === 'manager' ? '#1d4ed8' : '#475569';
+  var navBtn = function (item) {
+    var on = activePage === item.page;
+    return React.createElement('button', {
+      key: item.page,
+      onClick: function () {
+        go(item.page);
+      },
+      title: collapsed ? item.name : undefined,
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 9,
+        width: '100%',
+        border: 'none',
+        background: on ? '#1d2a44' : 'none',
+        color: on ? '#fff' : '#aeb8c8',
+        fontFamily: 'inherit',
+        fontSize: 13,
+        fontWeight: on ? 800 : 600,
+        textAlign: 'left',
+        borderRadius: 9,
+        padding: collapsed ? '9px 0' : '8px 11px',
+        cursor: 'pointer',
+        justifyContent: collapsed ? 'center' : 'flex-start',
+        whiteSpace: 'nowrap'
+      },
+      onMouseEnter: function (e) {
+        if (!on) {
+          e.currentTarget.style.background = '#18202f';
+          e.currentTarget.style.color = '#e2e8f0';
+        }
+      },
+      onMouseLeave: function (e) {
+        if (!on) {
+          e.currentTarget.style.background = 'none';
+          e.currentTarget.style.color = '#aeb8c8';
+        }
+      }
+    }, React.createElement('span', {
+      style: {
+        fontSize: 14,
+        flex: 'none'
+      }
+    }, item.icon), !collapsed && React.createElement('span', {
+      style: {
+        overflow: 'hidden',
+        textOverflow: 'ellipsis'
+      }
+    }, item.name), !collapsed && item.badge === 'up' && upTotal > 0 && React.createElement('span', {
+      style: {
+        marginLeft: 'auto',
+        fontSize: 10,
+        fontWeight: 800,
+        background: '#324467',
+        color: '#cfe0ff',
+        borderRadius: 999,
+        padding: '1px 7px'
+      }
+    }, '▲' + upTotal));
+  };
+  return React.createElement(React.Fragment, null, /* ── 좌측 사이드바 ── */
+  React.createElement('nav', {
+    'aria-label': '주요 메뉴',
+    style: {
+      position: 'fixed',
+      top: 0,
+      left: 0,
+      bottom: 0,
+      width: W,
+      zIndex: 1000,
+      background: '#101623',
+      display: 'flex',
+      flexDirection: 'column',
+      padding: collapsed ? '14px 8px 12px' : '16px 12px 14px',
+      gap: 2,
+      overflowY: 'auto',
+      overflowX: 'hidden',
+      transition: 'width .15s ease'
+    }
+  }, React.createElement('div', {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      padding: collapsed ? '2px 0 12px' : '4px 10px 14px',
+      justifyContent: collapsed ? 'center' : 'flex-start'
+    }
+  }, collapsed ? React.createElement('span', {
+    style: {
+      fontWeight: 900,
+      color: '#6ea8ff',
+      fontSize: 14
+    }
+  }, 'M') : React.createElement('span', {
+    style: {
+      fontWeight: 900,
+      color: '#fff',
+      fontSize: 14.5,
+      whiteSpace: 'nowrap'
+    }
+  }, 'META ', React.createElement('em', {
+    style: {
+      color: '#6ea8ff',
+      fontStyle: 'normal'
+    }
+  }, '로직분석'))), _AS_GROUPS(currentUser).map(function (g, gi) {
+    return React.createElement(React.Fragment, {
+      key: gi
+    }, g.label && !collapsed && React.createElement('div', {
+      style: {
+        fontSize: 10,
+        fontWeight: 800,
+        letterSpacing: '.12em',
+        color: '#5b6880',
+        padding: '13px 11px 5px'
+      }
+    }, g.label), g.label && collapsed && React.createElement('div', {
+      style: {
+        height: 1,
+        background: '#1c2534',
+        margin: '9px 4px'
+      }
+    }), g.items.map(navBtn));
+  }), React.createElement('div', {
+    style: {
+      marginTop: 'auto',
+      paddingTop: 10,
+      borderTop: '1px solid #1c2534'
+    }
+  }, React.createElement('button', {
+    onClick: toggle,
+    title: collapsed ? '메뉴 펼치기' : '메뉴 접기',
+    style: {
+      width: '100%',
+      border: 'none',
+      background: 'none',
+      color: '#5b6880',
+      fontSize: 12,
+      fontWeight: 700,
+      cursor: 'pointer',
+      padding: '6px 0',
+      fontFamily: 'inherit',
+      textAlign: 'center'
+    }
+  }, collapsed ? '»' : '« 접기'), !collapsed && React.createElement('div', {
+    style: {
+      fontSize: 11,
+      color: '#5b6880',
+      padding: '4px 11px 0',
+      whiteSpace: 'nowrap'
+    }
+  }, typeof APP_VERSION !== 'undefined' ? APP_VERSION : '', health && React.createElement('span', {
+    style: {
+      color: '#4ade80',
+      marginLeft: 6,
+      fontWeight: 700
+    }
+  }, '● 정상')))), /* ── 상단 바 ── */
+  React.createElement('div', {
+    style: {
+      position: 'fixed',
+      top: 0,
+      left: W,
+      right: 0,
+      height: _AS_TOP,
+      zIndex: 999,
+      background: '#fff',
+      borderBottom: '1px solid #e9ecf0',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      padding: '0 18px',
+      transition: 'left .15s ease'
+    }
+  }, React.createElement('span', {
+    style: {
+      fontSize: 13,
+      fontWeight: 700,
+      color: '#4e5968',
+      whiteSpace: 'nowrap'
+    }
+  }, _AS_CRUMB[activePage] || ''), showIntro && React.createElement('span', {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 700,
+      color: '#1d4ed8',
+      background: '#eff4ff',
+      border: '1px solid #bfdbfe',
+      borderRadius: 999,
+      padding: '3px 10px',
+      whiteSpace: 'nowrap',
+      cursor: 'pointer'
+    },
+    onClick: dismissIntro,
+    title: '닫기'
+  }, '💡 메뉴가 왼쪽으로 이동했어요 ✕'), React.createElement('input', {
+    ref: searchRef,
+    value: q,
+    onChange: function (e) {
+      setQ(e.target.value);
+    },
+    onKeyDown: function (e) {
+      if (e.key === 'Enter' && !e.nativeEvent.isComposing) submitSearch();
+    },
+    placeholder: '🔍 업체·키워드 검색 (Ctrl+K)',
+    style: {
+      marginLeft: 'auto',
+      border: '1px solid #e5e8ec',
+      borderRadius: 9,
+      padding: '6px 12px',
+      fontSize: 12.5,
+      background: '#f7f8fa',
+      minWidth: 150,
+      maxWidth: 260,
+      flex: '0 1 260px',
+      outline: 'none'
+    }
+  }), React.createElement('span', {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: '#4e5968',
+      whiteSpace: 'nowrap'
+    }
+  }, currentUser.name || currentUser.username), React.createElement('span', {
+    style: {
+      fontSize: 10.5,
+      fontWeight: 800,
+      color: roleFg,
+      background: roleBg,
+      borderRadius: 999,
+      padding: '2px 8px',
+      whiteSpace: 'nowrap'
+    }
+  }, roleLabel)), /* ── 수집 중단 경보 배너 (전 화면 공통) ── */
+  colHealth && !colDismissed && React.createElement('div', {
+    style: {
+      position: 'fixed',
+      top: _AS_TOP,
+      left: W,
+      right: 0,
+      zIndex: 998,
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      padding: '0 18px',
+      height: _AS_BANNER,
+      fontSize: 12.5,
+      fontWeight: 600,
+      transition: 'left .15s ease',
+      background: colHealth.state === 'down' ? '#fef2f2' : '#fffbeb',
+      borderBottom: '1px solid ' + (colHealth.state === 'down' ? '#fecaca' : '#fde68a'),
+      color: colHealth.state === 'down' ? '#991b1b' : '#92400e'
+    }
+  }, React.createElement('span', {
+    style: {
+      fontSize: 14
+    }
+  }, colHealth.state === 'down' ? '🚨' : '⚠️'), React.createElement('span', {
+    style: {
+      fontWeight: 800
+    }
+  }, colHealth.state === 'down' ? '순위 수집 중단' : '오늘 새벽 수집 미실행'), React.createElement('span', {
+    style: {
+      flex: 1,
+      minWidth: 0,
+      fontWeight: 500
+    }
+  }, colHealth.message || ''), React.createElement('button', {
+    onClick: dismissCollect,
+    title: '오늘 하루 숨기기',
+    style: {
+      border: 'none',
+      background: 'none',
+      cursor: 'pointer',
+      fontSize: 13,
+      fontWeight: 800,
+      color: 'inherit',
+      opacity: .65,
+      padding: '0 2px',
+      fontFamily: 'inherit'
+    }
+  }, '✕')));
 };
 
 ;/* ===== js/components/TopBar.jsx ===== */
@@ -22629,7 +23174,7 @@ window.RankDeltaROISimulation = function RankDeltaROISimulation(props) {
       flexWrap: 'wrap',
       alignItems: 'stretch'
     }
-  }, Col('현재 (' + curLabel + ')', isRanked ? '~' + fmt(curSales) + '건' : '0건', '예상 월 판매', '#64748b'), Col('목표 (1위)', '~' + fmt(tgtSales) + '건', '예상 월 판매', '#4f46e5'), Col('증분 (Δ)', '+' + fmt(deltaSales) + '건', pct != null ? '현재 대비 +' + pct + '%' : '1위 도달 시 순증', '#16a34a')), React.createElement('div', {
+  }, Col('현재 (' + curLabel + ')', isRanked ? '~' + fmt(curSales) + '건' : '0건', '예상 월 판매', '#64748b'), Col('목표 (1위)', '~' + fmt(tgtSales) + '건', '예상 월 판매', '#3b82f6'), Col('증분 (Δ)', '+' + fmt(deltaSales) + '건', pct != null ? '현재 대비 +' + pct + '%' : '1위 도달 시 순증', '#16a34a')), React.createElement('div', {
     style: {
       marginTop: 12,
       padding: '10px 14px',
@@ -22862,7 +23407,7 @@ window.CpcBidEstimateSection = function CpcBidEstimateSection(props) {
     style: {
       marginTop: 10
     }
-  }, Kpi('예상 CPC(중간)', won(band.base), '클릭당 예상 단가', '#0f172a'), Kpi('권장 입찰가 범위', fmt(band.low) + '~' + fmt(band.high) + '원', '저가~상위노출가'), Kpi('예상 월 클릭', fmt(clicks) + '회', '네이버 실측 평균클릭'), Kpi('예상 월 광고비', '~' + won(estSpendMid), '클릭 30% 확보 가정', '#4f46e5')), bidTable, React.createElement('div', {
+  }, Kpi('예상 CPC(중간)', won(band.base), '클릭당 예상 단가', '#0f172a'), Kpi('권장 입찰가 범위', fmt(band.low) + '~' + fmt(band.high) + '원', '저가~상위노출가'), Kpi('예상 월 클릭', fmt(clicks) + '회', '네이버 실측 평균클릭'), Kpi('예상 월 광고비', '~' + won(estSpendMid), '클릭 30% 확보 가정', '#3b82f6')), bidTable, React.createElement('div', {
     style: {
       marginTop: 14,
       background: '#f8fafc',
@@ -22980,7 +23525,7 @@ window.TrackRegisterButton = function TrackRegisterButton(props) {
         borderRadius: 10,
         border: '1px solid #c7d2fe',
         background: '#eef2ff',
-        color: '#4f46e5',
+        color: '#3b82f6',
         fontSize: 12.5,
         fontWeight: 700,
         cursor: adding ? 'default' : 'pointer'
@@ -23001,7 +23546,7 @@ window.TrackRegisterButton = function TrackRegisterButton(props) {
       padding: '10px 18px',
       borderRadius: 10,
       border: 'none',
-      background: adding ? '#94a3b8' : 'linear-gradient(135deg,#4f46e5,#6366f1)',
+      background: adding ? '#94a3b8' : 'linear-gradient(135deg,#3b82f6,#3b82f6)',
       color: '#fff',
       fontSize: 13,
       fontWeight: 700,
@@ -23264,7 +23809,7 @@ window.AnalysisResults = function AnalysisResults(props) {
     style: {
       fontSize: 15,
       fontWeight: 600,
-      color: '#4f46e5',
+      color: '#3b82f6',
       marginBottom: 6
     }
   }, '"' + searchedKeyword + '" 분석 중...'), React.createElement('div', {
@@ -23278,7 +23823,7 @@ window.AnalysisResults = function AnalysisResults(props) {
   analysisData && React.createElement(window.SectionDivider, {
     label: '1. 종합 요약',
     icon: '📋',
-    color: '#4f46e5',
+    color: '#3b82f6',
     sub: '광고주가 가장 먼저 보는 핵심 지표'
   }), analysisData && analysisData.summaryCards && React.createElement(window.SectionErrorBoundary, {
     name: '종합 요약'
@@ -24358,8 +24903,8 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
     }, React_.createElement('div', {
       className: 'tile',
       style: {
-        background: 'linear-gradient(135deg,#4f46e5,#4f46e5cc)',
-        boxShadow: '0 4px 12px #4f46e540'
+        background: 'linear-gradient(135deg,#3b82f6,#3b82f6cc)',
+        boxShadow: '0 4px 12px #3b82f640'
       }
     }, '1'), React_.createElement('div', null, React_.createElement('h2', null, '종합 경쟁력'), React_.createElement('div', {
       className: 's'
@@ -26520,7 +27065,7 @@ window.createDoSearch = function (deps) {
             label: '상품명 최적화',
             score: kwInTitle ? titleLen >= 20 && titleLen <= 50 ? 95 : 70 : 30,
             maxScore: 100,
-            color: '#6366f1'
+            color: '#3b82f6'
           }, {
             label: '가격 경쟁력',
             score: function () {
@@ -27169,7 +27714,7 @@ window.App = function App() {
       justifyContent: 'center',
       alignItems: 'center',
       height: '100vh',
-      background: 'linear-gradient(135deg,#6C5CE7,#a29bfe)',
+      background: 'linear-gradient(135deg,#3b82f6,#93c5fd)',
       gap: 16
     }
   }, React.createElement('img', {
@@ -27523,7 +28068,7 @@ window.App = function App() {
   /* ==================== 페이지별 콘텐츠 렌더링 ==================== */
 
   /* 홈 탭 — 업체 리스트 + 검색 */
-  if (currentPage === 'home') return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.TopBar, {
+  if (currentPage === 'home') return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.AppShellBar, {
     activePage: 'home',
     currentUser: currentUser,
     health: health,
@@ -27552,7 +28097,7 @@ window.App = function App() {
   React.createElement(window.Footer, null)), React.createElement(window.ChatWidget, {
     currentUser: currentUser
   }));
-  if (currentPage === 'management') return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.TopBar, {
+  if (currentPage === 'management') return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.AppShellBar, {
     activePage: 'management',
     currentUser: currentUser,
     health: health,
@@ -27569,7 +28114,7 @@ window.App = function App() {
   }));
 
   /* 📊 키워드 순위 탭 — 업체별 순위 추적 (스토어 분석에서 분리, 2026-08-04) */
-  if (currentPage === 'rank') return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.TopBar, {
+  if (currentPage === 'rank') return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.AppShellBar, {
     activePage: 'rank',
     currentUser: currentUser,
     health: health,
@@ -27582,7 +28127,7 @@ window.App = function App() {
   }));
 
   /* 플레이스 분석 탭 — 오프라인·지역 업종(자체완결 페이지, 스토어 분석 흐름과 독립) */
-  if (currentPage === 'place') return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.TopBar, {
+  if (currentPage === 'place') return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.AppShellBar, {
     activePage: 'place',
     currentUser: currentUser,
     health: health,
@@ -27592,7 +28137,7 @@ window.App = function App() {
   })), React.createElement(window.ChatWidget, {
     currentUser: currentUser
   }));
-  if (currentPage === 'placetrack') return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.TopBar, {
+  if (currentPage === 'placetrack') return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.AppShellBar, {
     activePage: 'placetrack',
     currentUser: currentUser,
     health: health,
@@ -27602,7 +28147,7 @@ window.App = function App() {
   })), React.createElement(window.ChatWidget, {
     currentUser: currentUser
   }));
-  if (currentPage === 'learning') return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.TopBar, {
+  if (currentPage === 'learning') return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.AppShellBar, {
     activePage: 'learning',
     currentUser: currentUser,
     health: health,
@@ -27612,7 +28157,7 @@ window.App = function App() {
   })), React.createElement(window.ChatWidget, {
     currentUser: currentUser
   }));
-  if (currentPage === 'guide') return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.TopBar, {
+  if (currentPage === 'guide') return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.AppShellBar, {
     activePage: 'guide',
     currentUser: currentUser,
     health: health,
@@ -27622,7 +28167,7 @@ window.App = function App() {
   })), React.createElement(window.ChatWidget, {
     currentUser: currentUser
   }));
-  if (currentPage === 'seo' && (currentUser.role === 'manager' || currentUser.role === 'superadmin')) return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.TopBar, {
+  if (currentPage === 'seo' && (currentUser.role === 'manager' || currentUser.role === 'superadmin')) return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.AppShellBar, {
     activePage: 'seo',
     currentUser: currentUser,
     health: health,
@@ -27632,7 +28177,7 @@ window.App = function App() {
   })), React.createElement(window.ChatWidget, {
     currentUser: currentUser
   }));
-  if (currentPage === 'users' && (currentUser.role === 'admin' || currentUser.role === 'superadmin')) return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.TopBar, {
+  if (currentPage === 'users' && (currentUser.role === 'admin' || currentUser.role === 'superadmin')) return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.AppShellBar, {
     activePage: 'users',
     currentUser: currentUser,
     health: health,
@@ -27643,7 +28188,7 @@ window.App = function App() {
   })), React.createElement(window.ChatWidget, {
     currentUser: currentUser
   }));
-  if (currentPage === 'settings' && currentUser.role === 'superadmin') return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.TopBar, {
+  if (currentPage === 'settings' && currentUser.role === 'superadmin') return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.AppShellBar, {
     activePage: 'settings',
     currentUser: currentUser,
     health: health,
@@ -27662,7 +28207,7 @@ window.App = function App() {
   return React.createElement(React.Fragment, null, React.createElement('div', {
     className: 'analysis-page'
   }, /* 네비게이션 바 */
-  React.createElement(window.TopBar, {
+  React.createElement(window.AppShellBar, {
     activePage: 'analysis',
     currentUser: currentUser,
     health: health,

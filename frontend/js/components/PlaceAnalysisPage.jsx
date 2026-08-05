@@ -282,7 +282,7 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
         return (
             React_.createElement(React_.Fragment, null,
                 React_.createElement('div', { className: 'divider' },
-                    React_.createElement('div', { className: 'tile', style: { background: 'linear-gradient(135deg,#4f46e5,#4f46e5cc)', boxShadow: '0 4px 12px #4f46e540' } }, '1'),
+                    React_.createElement('div', { className: 'tile', style: { background: 'linear-gradient(135deg,#3b82f6,#3b82f6cc)', boxShadow: '0 4px 12px #3b82f640' } }, '1'),
                     React_.createElement('div', null, React_.createElement('h2', null, '종합 경쟁력'), React_.createElement('div', { className: 's' }, '플레이스 로컬 10지표 가중 점수 · 강·약점'))),
                 React_.createElement('div', { className: 'card' },
                     React_.createElement('h3', { className: 'rt-h3' }, React_.createElement('span', { className: 'rt-hic' }, '🎯'), '플레이스 종합 경쟁력 ',

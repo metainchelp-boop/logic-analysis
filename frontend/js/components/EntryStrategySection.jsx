@@ -227,7 +227,7 @@ window.EntryStrategySection = function EntryStrategySection(props) {
                     React.createElement('div', { style: Object.assign({}, v5Card, { textAlign: 'center', padding: 24 }) },
                         React.createElement('div', { style: { fontSize: 18, marginBottom: 8 } }, '\uD83D\uDD0D'),
                         React.createElement('div', { style: { fontSize: 11, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', marginBottom: 6 } }, '월간 검색량'),
-                        React.createElement('div', { style: { fontSize: 18, fontWeight: 800, color: '#4f46e5' } }, monthlyVolume + '회')
+                        React.createElement('div', { style: { fontSize: 18, fontWeight: 800, color: '#3b82f6' } }, monthlyVolume + '회')
                     ),
                     React.createElement('div', { style: Object.assign({}, v5Card, { textAlign: 'center', padding: 24 }) },
                         React.createElement('div', { style: { fontSize: 18, marginBottom: 8 } }, '\uD83D\uDD24'),
@@ -242,7 +242,7 @@ window.EntryStrategySection = function EntryStrategySection(props) {
                 top5Items.length > 0 ? React.createElement('div', { style: Object.assign({}, v5Card, { overflow: 'hidden' }) },
                     React.createElement('table', { style: { minWidth: 700, width: '100%', borderCollapse: 'collapse' } },
                         React.createElement('thead', null,
-                            React.createElement('tr', { style: { background: 'linear-gradient(135deg, #4f46e5, #7c3aed)' } },
+                            React.createElement('tr', { style: { background: 'linear-gradient(135deg, #3b82f6, #7c3aed)' } },
                                 React.createElement('th', { style: { textAlign: 'center', width: 45, padding: '12px 8px', color: '#fff', fontSize: 12, fontWeight: 600 } }, '순위'),
                                 React.createElement('th', { style: { textAlign: 'center', width: 45, padding: '12px 4px', color: '#fff', fontSize: 12, fontWeight: 600 } }, ''),
                                 React.createElement('th', { style: { textAlign: 'left', padding: '12px 8px', color: '#fff', fontSize: 12, fontWeight: 600 } }, '상품명'),
@@ -264,7 +264,7 @@ window.EntryStrategySection = function EntryStrategySection(props) {
                                         c.image_url ? React.createElement('img', { src: c.image_url, alt: '', style: { width: 36, height: 36, objectFit: 'cover', borderRadius: 8 }, onError: function(e) { e.target.style.display = 'none'; } }) : null
                                     ),
                                     React.createElement('td', { style: { maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13, padding: '10px 8px', color: '#0f172a' } },
-                                        isMyProduct && React.createElement('span', { style: { color: '#4f46e5', marginRight: 4, fontWeight: 700 } }, '[내 상품]'),
+                                        isMyProduct && React.createElement('span', { style: { color: '#3b82f6', marginRight: 4, fontWeight: 700 } }, '[내 상품]'),
                                         c.product_name
                                     ),
                                     React.createElement('td', { style: { fontSize: 12, color: '#64748b', padding: '10px 8px' } }, c.store_name),
@@ -283,7 +283,7 @@ window.EntryStrategySection = function EntryStrategySection(props) {
                         React.createElement('h4', { style: { fontSize: 14, fontWeight: 700, color: '#0f172a', marginBottom: 14 } }, '\uD83C\uDFE2 주요 브랜드/판매처'),
                         React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 8 } },
                             mainBrands.split(', ').map(function(brand, idx) {
-                                return React.createElement('span', { key: idx, style: { padding: '4px 12px', background: 'linear-gradient(135deg, #eef2ff, #dbeafe)', borderRadius: 999, fontSize: 12, fontWeight: 700, color: '#4f46e5', border: '1px solid #c7d2fe' } }, brand);
+                                return React.createElement('span', { key: idx, style: { padding: '4px 12px', background: 'linear-gradient(135deg, #eef2ff, #dbeafe)', borderRadius: 999, fontSize: 12, fontWeight: 700, color: '#3b82f6', border: '1px solid #c7d2fe' } }, brand);
                             })
                         )
                     )
@@ -402,13 +402,13 @@ window.EntryStrategySection = function EntryStrategySection(props) {
                                 ),
                                 /* 추천 광고 품목 */
                                 recs.length > 0 && React.createElement('div', { style: { background: 'linear-gradient(135deg, #eef2ff, #faf5ff)', borderRadius: 12, padding: '16px 20px', border: '1px solid #c7d2fe' } },
-                                    React.createElement('div', { style: { fontSize: 11, fontWeight: 700, color: '#4f46e5', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 6 } },
+                                    React.createElement('div', { style: { fontSize: 11, fontWeight: 700, color: '#3b82f6', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 6 } },
                                         React.createElement('span', { style: { fontSize: 13 } }, '\uD83D\uDCE2'),
                                         'RECOMMENDED SERVICE'
                                     ),
                                     recs.map(function(rec, i) {
                                         return React.createElement('div', { key: i, style: { padding: '8px 0', borderBottom: i < recs.length - 1 ? '1px solid #ddd6fe' : 'none', display: 'flex', gap: 10, alignItems: 'flex-start' } },
-                                            React.createElement('span', { style: { display: 'inline-flex', alignItems: 'center', padding: '4px 12px', borderRadius: 999, background: '#4f46e5', color: '#fff', fontSize: 12, fontWeight: 700, flexShrink: 0, whiteSpace: 'nowrap', marginTop: 1 } }, rec.name),
+                                            React.createElement('span', { style: { display: 'inline-flex', alignItems: 'center', padding: '4px 12px', borderRadius: 999, background: '#3b82f6', color: '#fff', fontSize: 12, fontWeight: 700, flexShrink: 0, whiteSpace: 'nowrap', marginTop: 1 } }, rec.name),
                                             React.createElement('span', { style: { fontSize: 12, color: '#64748b', lineHeight: 1.6 } }, rec.reason)
                                         );
                                     })

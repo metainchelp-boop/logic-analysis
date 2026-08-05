@@ -84,7 +84,7 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
                 datasets: [{
                   label: '예상 월 판매(건)',
                   data: salesBars.map(function(b) { return b.val; }),
-                  backgroundColor: [C.OK || '#16a34a', C.IND || '#4f46e5', '#cbd5e1'],
+                  backgroundColor: [C.OK || '#16a34a', C.IND || '#3b82f6', '#cbd5e1'],
                   borderRadius: 6
                 }]
               }}
@@ -123,19 +123,19 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
 
           {/* 1페이지 */}
           <div style={{ ...v5Card, overflow: 'hidden' }}>
-            <div style={{ padding: '16px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'linear-gradient(135deg, #4f46e5, #7c3aed)' }}>
+            <div style={{ padding: '16px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'linear-gradient(135deg, #3b82f6, #7c3aed)' }}>
               <span style={{ fontSize: 14, fontWeight: 700, color: '#fff' }}>📄 1페이지 (1~40위)</span>
               <span style={{ padding: '4px 12px', borderRadius: 999, fontSize: 12, fontWeight: 700, background: 'rgba(255,255,255,0.25)', color: '#fff' }}>1페이지</span>
             </div>
             <div style={{ padding: 20 }}>
-              <div style={v5MetricRow}><span style={v5MetricLabel}>평균 판매량</span><span style={{ fontSize: 13, fontWeight: 700, color: '#4f46e5' }}>{fmt(page1Card.avgSales)}건/월</span></div>
-              <div style={v5MetricRow}><span style={v5MetricLabel}>총 예상 판매</span><span style={{ fontSize: 13, fontWeight: 700, color: '#4f46e5' }}>{fmt(page1Card.totalSales)}건/월</span></div>
-              <div style={v5MetricRow}><span style={v5MetricLabel}>최고 매출 (1위)</span><span style={{ fontSize: 13, fontWeight: 700, color: '#4f46e5' }}>{page1Card.maxRevenue}</span></div>
-              <div style={v5MetricRow}><span style={v5MetricLabel}>최저 매출 (40위)</span><span style={{ fontSize: 13, fontWeight: 700, color: '#4f46e5' }}>{page1Card.minRevenue}</span></div>
-              <div style={v5MetricRowLast}><span style={v5MetricLabel}>평균 매출</span><span style={{ fontSize: 13, fontWeight: 700, color: '#4f46e5' }}>{page1Card.avgRevenue}</span></div>
+              <div style={v5MetricRow}><span style={v5MetricLabel}>평균 판매량</span><span style={{ fontSize: 13, fontWeight: 700, color: '#3b82f6' }}>{fmt(page1Card.avgSales)}건/월</span></div>
+              <div style={v5MetricRow}><span style={v5MetricLabel}>총 예상 판매</span><span style={{ fontSize: 13, fontWeight: 700, color: '#3b82f6' }}>{fmt(page1Card.totalSales)}건/월</span></div>
+              <div style={v5MetricRow}><span style={v5MetricLabel}>최고 매출 (1위)</span><span style={{ fontSize: 13, fontWeight: 700, color: '#3b82f6' }}>{page1Card.maxRevenue}</span></div>
+              <div style={v5MetricRow}><span style={v5MetricLabel}>최저 매출 (40위)</span><span style={{ fontSize: 13, fontWeight: 700, color: '#3b82f6' }}>{page1Card.minRevenue}</span></div>
+              <div style={v5MetricRowLast}><span style={v5MetricLabel}>평균 매출</span><span style={{ fontSize: 13, fontWeight: 700, color: '#3b82f6' }}>{page1Card.avgRevenue}</span></div>
               <div style={v5TotalRow}>
                 <span style={v5TotalLabel}>1페이지 합산 매출</span>
-                <span style={{ fontSize: 15, fontWeight: 800, color: '#4f46e5' }}>{page1Card.totalRevenue}</span>
+                <span style={{ fontSize: 15, fontWeight: 800, color: '#3b82f6' }}>{page1Card.totalRevenue}</span>
               </div>
             </div>
           </div>

@@ -354,9 +354,9 @@ function rankCellLabel(r) {
                                 <div key={c.id} onClick={function() { selectClient(c); }}
                                     style={{
                                         padding: '12px 14px', borderRadius: 8, cursor: 'pointer', marginBottom: 6,
-                                        background: isActive ? '#1B2A4A' : '#f8fafc',
+                                        background: isActive ? '#3b82f6' : '#f8fafc',
                                         color: isActive ? '#fff' : '#1e293b',
-                                        border: '1px solid ' + (isActive ? '#1B2A4A' : '#e2e8f0'),
+                                        border: '1px solid ' + (isActive ? '#3b82f6' : '#e2e8f0'),
                                         transition: 'all 0.15s'
                                     }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
@@ -502,9 +502,9 @@ function rankCellLabel(r) {
                                                 <button key={i} onClick={function() { viewKeywordAnalysis(a.keyword); }}
                                                     style={{
                                                         padding: '8px 16px', borderRadius: 20, cursor: 'pointer', fontSize: 13,
-                                                        background: isActive ? '#1B2A4A' : '#f1f5f9',
+                                                        background: isActive ? '#3b82f6' : '#f1f5f9',
                                                         color: isActive ? '#fff' : '#475569',
-                                                        border: isActive ? '1px solid #1B2A4A' : '1px solid #e2e8f0'
+                                                        border: isActive ? '1px solid #3b82f6' : '1px solid #e2e8f0'
                                                     }}>
                                                     {a.keyword}
                                                     <span style={{ fontSize: 11, opacity: 0.7, marginLeft: 6 }}>{(a.analyzed_date || '').slice(0, 10)}</span>
@@ -520,14 +520,14 @@ function rankCellLabel(r) {
                                 <button onClick={function() { setViewMode('history'); }}
                                     style={{
                                         padding: '8px 18px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer',
-                                        background: viewMode === 'history' ? '#1B2A4A' : '#fff',
+                                        background: viewMode === 'history' ? '#3b82f6' : '#fff',
                                         color: viewMode === 'history' ? '#fff' : '#475569',
                                         border: viewMode === 'history' ? 'none' : '1px solid #e2e8f0',
                                     }}>{'📊'} 일자별 추이 {activeKeyword ? '(' + analysisHistory.length + '일)' : ''}</button>
                                 <button onClick={function() { setViewMode('rank'); }}
                                     style={{
                                         padding: '8px 18px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer',
-                                        background: viewMode === 'rank' ? '#1B2A4A' : '#fff',
+                                        background: viewMode === 'rank' ? '#3b82f6' : '#fff',
                                         color: viewMode === 'rank' ? '#fff' : '#475569',
                                         border: viewMode === 'rank' ? 'none' : '1px solid #e2e8f0',
                                     }}>{'📈'} 순위 이력 {activeKeyword ? '(' + rankHistory.length + '건)' : ''}</button>

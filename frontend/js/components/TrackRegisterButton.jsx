@@ -48,7 +48,7 @@ window.TrackRegisterButton = function TrackRegisterButton(props) {
         }, '✓ 이미 추적 중인 상품입니다' + (alreadyHasKw ? ' (이 키워드 포함)' : '')),
         !alreadyHasKw ? React.createElement('button', {
           onClick: onClick, disabled: adding,
-          style: { padding: '8px 14px', borderRadius: 10, border: '1px solid #c7d2fe', background: '#eef2ff', color: '#4f46e5', fontSize: 12.5, fontWeight: 700, cursor: adding ? 'default' : 'pointer' }
+          style: { padding: '8px 14px', borderRadius: 10, border: '1px solid #c7d2fe', background: '#eef2ff', color: '#3b82f6', fontSize: 12.5, fontWeight: 700, cursor: adding ? 'default' : 'pointer' }
         }, adding ? '등록 중...' : '＋ 이 키워드도 추적 추가') : null
       )
     );
@@ -60,7 +60,7 @@ window.TrackRegisterButton = function TrackRegisterButton(props) {
         onClick: onClick, disabled: adding,
         style: {
           display: 'inline-flex', alignItems: 'center', gap: 8, padding: '10px 18px', borderRadius: 10,
-          border: 'none', background: adding ? '#94a3b8' : 'linear-gradient(135deg,#4f46e5,#6366f1)', color: '#fff',
+          border: 'none', background: adding ? '#94a3b8' : 'linear-gradient(135deg,#3b82f6,#3b82f6)', color: '#fff',
           fontSize: 13, fontWeight: 700, cursor: adding ? 'default' : 'pointer', boxShadow: '0 3px 10px rgba(79,70,229,0.3)'
         }
       }, adding ? '⏳ 등록 중...' : '🔍 이 상품 순위 추적 시작'),

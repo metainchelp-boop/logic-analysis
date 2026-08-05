@@ -26,7 +26,7 @@
                     React.createElement('p', { style: { color: '#64748b', marginBottom: 20, fontSize: 14 } }, this.state.errorMsg),
                     React.createElement('button', {
                         onClick: function() { window.location.reload(); },
-                        style: { background: '#6C5CE7', color: '#fff', border: 'none', padding: '12px 28px', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer' }
+                        style: { background: '#3b82f6', color: '#fff', border: 'none', padding: '12px 28px', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer' }
                     }, '\uC0C8\uB85C\uACE0\uCE68')
                 )
             );
