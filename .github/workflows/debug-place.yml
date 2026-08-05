@@ -22,6 +22,9 @@ on:
       datago_check:
         description: '공공데이터포털(data.go.kr) 상가정보 인증키 검증 (true — 행정동코드 매핑용·키 값 미출력)'
         default: ''
+      sns_theme_check:
+        description: 'SNS·테마상권·유동인구(시간대/요일) 실응답 탐색 (true — 잔여 3종·키 값 미출력)'
+        default: ''
 
 jobs:
   diagnose:
@@ -242,6 +245,127 @@ jobs:
             print("=" * 62)
             print("판정: ✅ 줄이 나오면 지역명만으로 상권 데이터 확보 = 제안서 상권 슬라이드 라이브 가능")
             PY
+
+      # ── 잔여 3종 실응답 탐색 (2026-08-05) ─────────────────────────────
+      # ⓐ 유동인구 시간대·요일(getPopularInfo — 기존 5조합 전부 500) 경로 재탐색
+      # ⓑ SNS 분석(snsAnaly) ⓒ 테마상권(hpReport) — 서비스 실존만 확인된 상태.
+      # 목적은 「어떤 경로·파라미터가 200 을 주는가」 확인뿐(읽기 전용·키 값 미출력).
+      - name: SNS·테마상권·유동인구 실응답 탐색
+        if: ${{ github.event.inputs.sns_theme_check == 'true' }}
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          SB_SIMPLE: ${{ secrets.SBIZ365_KEY_SIMPLE }}
+          SB_SNS: ${{ secrets.SBIZ365_KEY_SNS }}
+          SB_THEME: ${{ secrets.SBIZ365_KEY_THEME }}
+          SB_DETAIL: ${{ secrets.SBIZ365_KEY_DETAIL }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 420s
+          envs: SB_SIMPLE,SB_SNS,SB_THEME,SB_DETAIL
+          script: |
+            docker exec -i \
+              -e SB_SIMPLE="$SB_SIMPLE" -e SB_SNS="$SB_SNS" \
+              -e SB_THEME="$SB_THEME" -e SB_DETAIL="$SB_DETAIL" \
+              logic-analysis python3 - <<'PY'
+            import os, json, ssl, urllib.parse, urllib.request, urllib.error
+
+            BASE = "https://bigdata.sbiz.or.kr"
+            CTX = ssl.create_default_context(); CTX.check_hostname = False; CTX.verify_mode = ssl.CERT_NONE
+            HDR = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                                 "(KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+                   "Referer": BASE + "/", "Accept": "application/json, text/plain, */*",
+                   "X-Requested-With": "XMLHttpRequest"}
+
+            # 실검증된 표본 — 성수동 카페(간단분석이 200 을 주는 조합)
+            ADMI, UPJONG = "11200685", "I21201"
+            LOC = "서울특별시 성동구 성수2가1동"
+
+            def probe(label, path, params=None, method="GET", timeout=15):
+                url = BASE + path
+                data = None
+                if params and method == "GET":
+                    url += "?" + urllib.parse.urlencode(params)
+                elif params:
+                    data = urllib.parse.urlencode(params).encode()
+                try:
+                    rq = urllib.request.Request(url, data=data, headers=dict(HDR), method=method)
+                    with urllib.request.urlopen(rq, timeout=timeout, context=CTX) as r:
+                        st, body = r.status, r.read().decode("utf-8", "replace")
+                except urllib.error.HTTPError as e:
+                    print(f"  [{st_pad(label)}] HTTP {e.code}")
+                    return None
+                except Exception as e:
+                    print(f"  [{st_pad(label)}] {type(e).__name__}")
+                    return None
+                head = body.lstrip()[:1]
+                kind = "JSON" if head in "{[" else ("HTML" if head == "<" else "TEXT")
+                print(f"  [{st_pad(label)}] HTTP {st} · {kind} · {len(body)}B")
+                if kind == "JSON":
+                    try:
+                        j = json.loads(body)
+                        keys = list(j.keys())[:14] if isinstance(j, dict) else f"list({len(j)})"
+                        print(f"       keys: {keys}")
+                        return j
+                    except Exception:
+                        pass
+                return None
+
+            def st_pad(s): return (s + " " * 34)[:34]
+
+            SNS = (os.getenv("SB_SNS", "") or "").strip()
+            THEME = (os.getenv("SB_THEME", "") or "").strip()
+            SIMPLE = (os.getenv("SB_SIMPLE", "") or "").strip()
+            DETAIL = (os.getenv("SB_DETAIL", "") or "").strip()
+            print(f"키 보유: sns={'O' if SNS else 'X'} theme={'O' if THEME else 'X'} "
+                  f"simple={'O' if SIMPLE else 'X'} detail={'O' if DETAIL else 'X'}")
+
+            base_p = {"admiCd": ADMI, "upjongCd": UPJONG, "simpleLoc": LOC}
+
+            print()
+            print("=" * 62)
+            print("ⓐ 유동인구 시간대·요일 — getPopularInfo 경로·파라미터 재탐색")
+            for p in ["/gis/simpleAnls/getPopularInfo.json",
+                      "/gis/simpleAnls/getPopulationInfo.json",
+                      "/gis/simpleAnls/getFloatingInfo.json",
+                      "/gis/simpleAnls/getPopular.json",
+                      "/gis/anls/getPopularInfo.json",
+                      "/gis/simpleAnls/getLifeInfo.json"]:
+                probe(p.split("/")[-1] + " GET", p, dict(base_p, certKey=SIMPLE))
+            # 파라미터 축소·확장 변형(같은 경로)
+            PP = "/gis/simpleAnls/getPopularInfo.json"
+            probe("popular · admiCd only", PP, {"admiCd": ADMI, "certKey": SIMPLE})
+            probe("popular · +analyNo", PP, dict(base_p, analyNo="mililis", certKey=SIMPLE))
+            probe("popular · POST", PP, dict(base_p, certKey=SIMPLE), method="POST")
+            probe("popular · detail key", PP, dict(base_p, certKey=DETAIL))
+
+            print()
+            print("=" * 62)
+            print("ⓑ SNS 분석(snsAnaly) — 경로 탐색")
+            for p in ["/gis/snsAnaly/getSnsInfo.json",
+                      "/gis/snsAnaly/getSnsAnalyInfo.json",
+                      "/gis/snsAnaly/getBlogInfo.json",
+                      "/snsAnaly/getSnsInfo.json",
+                      "/gis/simpleAnls/getSnsInfo.json"]:
+                probe(p.split("/")[-1] + " GET", p, dict(base_p, certKey=SNS))
+
+            print()
+            print("=" * 62)
+            print("ⓒ 테마상권(hpReport) — 경로 탐색")
+            for p in ["/gis/hpReport/getThemeInfo.json",
+                      "/gis/hpReport/getHpReportInfo.json",
+                      "/gis/hpReport/getReportInfo.json",
+                      "/hpReport/getThemeInfo.json",
+                      "/gis/simpleAnls/getThemeInfo.json"]:
+                probe(p.split("/")[-1] + " GET", p, dict(base_p, certKey=THEME))
+
+            print()
+            print("=" * 62)
+            print("판정: HTTP 200 · JSON 줄이 하나라도 나오면 그 경로로 구현 가능.")
+            print("      전부 404/500 이면 포털 내부 경로 미공개 → 해당 슬라이드는 계속 자동 생략(무해).")
+            PY
+
       - name: Place tracking read-only query
         uses: appleboy/ssh-action@v1.0.3
         with:
