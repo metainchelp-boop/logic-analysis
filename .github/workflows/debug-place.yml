@@ -791,5 +791,49 @@ jobs:
                 except Exception as e:
                     print("  실패:", type(e).__name__, e); traceback.print_exc()
 
+
+            # 7) 업종 상위분류 집계 가능 여부 — parts[4]=="agg"
+            #    "업종을 세분화하지 않고 '음식점 전체'로 볼 수 있나?" 를 실측으로 판정한다.
+            if len(parts) > 4 and parts[4].strip() == "agg":
+                step("7. 업종 상위분류(종합) 집계 가능 여부")
+                try:
+                    import urllib.parse, urllib.request
+                    coord = sbiz365._region_coord(region)
+                    key = sbiz365._env_keys()["datago"]
+                    qs = urllib.parse.urlencode({"radius": "500", "cx": coord[0], "cy": coord[1],
+                                                 "type": "json", "numOfRows": "1", "pageNo": "1"})
+                    u = f"http://apis.data.go.kr/B553077/api/open/sdsc2/storeListInRadius?serviceKey={key}&{qs}"
+                    with urllib.request.urlopen(urllib.request.Request(u, headers={"Accept": "application/json"}), timeout=12) as r:
+                        it = ((json.loads(r.read().decode("utf-8", "replace")).get("body") or {}).get("items") or [{}])[0]
+                    cd = it.get("adongCd")
+                    loc = " ".join(x for x in (it.get("ctprvnNm"), it.get("signguNm"), it.get("adongNm")) if x)
+                    print(f"  기준: {cd} · {loc}")
+                    print("  (A) 상위분류 코드를 그대로 넣으면 집계해 주는가")
+                    for code in ["I20101", "I201", "I20", "I2", "I", ""]:
+                        got = sbiz365._fetch_avg(cd, code, loc)
+                        amt = got.get("saleAmt") if got else None
+                        cnt = got.get("saleCnt") if got else None
+                        print(f"    upjongCd={code!r:9s} → {'응답O' if got else '응답X'}  saleAmt={amt}  업소수={cnt}")
+                    print("  (B) 소분류를 우리가 직접 합산할 때의 비용·결과 — '음식' 전 소분류 실측")
+                    tot_amt = tot_cnt = 0.0
+                    nz = []
+                    import time as _t
+                    t0 = _t.time()
+                    foods = [(c, n) for c, n in (sbiz365._upjong_pairs() or []) if n.startswith("음식")]
+                    for c, n in foods:
+                        got = sbiz365._fetch_avg(cd, c, loc)
+                        a = (got or {}).get("saleAmt") or 0
+                        k = (got or {}).get("saleCnt") or 0
+                        if a and k:
+                            nz.append((c, n.split(">")[-1].strip(), a, k))
+                            tot_amt += a * k; tot_cnt += k
+                    print(f"    음식 소분류 {len(foods)}개 조회 · 소요 {_t.time()-t0:.0f}초 · 값 있는 분류 {len(nz)}개")
+                    for c, n, a, k in sorted(nz, key=lambda x: -x[3])[:8]:
+                        print(f"      {c} {n[:22]:24s} {int(a*1000):>12,}원 · {int(k)}곳")
+                    if tot_cnt:
+                        print(f"    ⇒ 업소수 가중평균(=음식점 종합) {int(tot_amt/tot_cnt*1000):,}원 · 총 {int(tot_cnt)}곳")
+                except Exception as e:
+                    print("  실패:", type(e).__name__, e); traceback.print_exc()
+
             print("=" * 66)
             PY
