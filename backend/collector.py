@@ -103,37 +103,94 @@ def _auth(token: Optional[str]):
 
 # ==================== 1) 수집할 키워드 목록 ====================
 
-@router.get("/keywords")
-def get_collect_keywords(x_collector_token: str = Header(None)):
-    """확장이 오늘 수집할 키워드 목록을 받아간다.
+# ── 24시간 분산 (2026-08-05) ────────────────────────────────────────────
+# 종전엔 새벽 01~07시에 전 키워드를 몰아 수집했다. 키워드 954개 × 4페이지 ≒ 3,800회를
+# 한 가정용 IP 에서 6시간에 보내는 셈(분당 10.6회)이라, 네이버의 「짧은 시간 내에 너무
+# 많은 요청」 문턱에 걸려 **IP 가 차단됐다**(2026-08-05 실사고 — 쇼핑 서비스 접속 제한).
+# → 하루 24시간에 흩뿌린다. 시간당 ~40개면 분당 2.7회로 떨어진다.
+#
+# ⚠️ 키워드마다 **매일 같은 시간대**에 재야 한다. 슬롯이 날마다 흔들리면
+#    「어제 5위 → 오늘 7위」가 순위 변동인지 측정 시각 차이인지 구분되지 않는다.
+#    그래서 키워드 문자열 해시로 슬롯을 고정한다(키워드가 그대로면 슬롯도 그대로).
+#
+# 전산① 배려: ①은 08:40 에 순위를 캐시해 간다. 업체(광고주) 키워드를 앞 시간대에
+# 몰아 두면 ① 이 보는 값의 신선도가 종전과 비슷하게 유지된다.
+PRIORITY_HOURS = 15          # 업체 키워드 슬롯 = 0~14시
+LATE_HOURS = 24 - PRIORITY_HOURS   # 나머지(추적 상품 전용) = 15~23시
+HOURLY_CAP = 60              # 한 시간에 내려주는 최대 개수(밀린 것 포함) — 급증 방지
 
-    기존 배치(_run_rank_tracking)와 같은 출처를 쓴다 — 추적 상품 키워드 + 업체 분석 이력 키워드.
-    오늘 이미 수집된 키워드는 빼고 준다(중간에 멈췄다 다시 켜도 이어서 진행).
+
+def _slot_of(keyword: str, priority: bool) -> int:
+    """키워드 → 수집 시간대(0~23). 문자열이 같으면 항상 같은 값(안정 해시)."""
+    import zlib
+    h = zlib.crc32(keyword.encode("utf-8"))
+    if priority:
+        return h % PRIORITY_HOURS
+    return PRIORITY_HOURS + (h % LATE_HOURS)
+
+
+def _keyword_universe(conn):
+    """수집 대상 키워드 → {키워드: 우선(업체) 여부}."""
+    uni = {}
+    try:
+        for r in conn.execute("SELECT DISTINCT keyword FROM tracked_keywords"):
+            k = (r["keyword"] or "").strip()
+            if k:
+                uni.setdefault(k, False)
+    except Exception as e:
+        logger.warning(f"[collector] 추적 키워드 조회 실패: {e}")
+    try:
+        for r in conn.execute("SELECT DISTINCT keyword FROM client_analyses"):
+            k = (r["keyword"] or "").strip()
+            if k:
+                uni[k] = True      # 업체(전산① 소비) 키워드 — 앞 시간대 우선
+    except Exception as e:
+        logger.warning(f"[collector] 업체 키워드 조회 실패: {e}")
+    return uni
+
+
+@router.get("/keywords")
+def get_collect_keywords(hour: int = None, x_collector_token: str = Header(None)):
+    """확장이 **이번 시간대에** 수집할 키워드를 받아간다.
+
+    hour 를 주면 그 시간대 슬롯 + 오늘 지나간 슬롯 중 아직 못 한 것(밀린 것)을 함께 준다.
+    hour 를 안 주면 종전대로 오늘 남은 전량을 준다(구버전 확장 호환 — 무회귀).
     """
     _auth(x_collector_token)
-    today = _effective_date()   # 회차 날짜 — 21시 이후는 다음 날 배치분
+    today = _effective_date()
     conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
     try:
-        kws = set()
-        for sql in (
-            "SELECT DISTINCT keyword FROM tracked_keywords",
-            "SELECT DISTINCT keyword FROM client_analyses",
-        ):
-            try:
-                for r in conn.execute(sql).fetchall():
-                    k = (r["keyword"] or "").strip()
-                    if k:
-                        kws.add(k)
-            except Exception as e:  # 테이블 구성이 다른 환경에서도 죽지 않게
-                logger.warning(f"[collector] 키워드 조회 일부 실패({sql[:40]}): {e}")
-
+        uni = _keyword_universe(conn)
         done = {r["keyword"] for r in conn.execute(
             "SELECT keyword FROM collected_serp WHERE collected_date = ?", (today,)).fetchall()}
-        todo = sorted(kws - done)[:MAX_KEYWORDS]
-        return {"success": True, "date": today,
-                "total": len(kws), "done": len(done), "todo": len(todo),
-                "keywords": todo}
+        remaining = {k: p for k, p in uni.items() if k not in done}
+
+        if hour is None:
+            todo = sorted(remaining)[:MAX_KEYWORDS]
+            return {"success": True, "date": today, "mode": "all",
+                    "total": len(uni), "done": len(done), "todo": len(todo),
+                    "keywords": todo}
+
+        h = max(0, min(23, int(hour)))
+        now_slot, overdue = [], []
+        for k, p in remaining.items():
+            s = _slot_of(k, p)
+            if s == h:
+                now_slot.append(k)
+            elif s < h:
+                overdue.append((s, k))   # 오늘 지나간 슬롯인데 아직 못 한 것
+
+        now_slot.sort()
+        overdue.sort()                    # 오래 밀린 것부터
+        picked = now_slot[:HOURLY_CAP]
+        if len(picked) < HOURLY_CAP:
+            picked += [k for _s, k in overdue[:HOURLY_CAP - len(picked)]]
+
+        return {"success": True, "date": today, "mode": "hourly", "hour": h,
+                "total": len(uni), "done": len(done),
+                "slot": len(now_slot), "overdue": len(overdue),
+                "todo": len(picked), "keywords": picked}
     finally:
         conn.close()
 
@@ -230,9 +287,21 @@ def upload_serp(req: SerpUpload, x_collector_token: str = Header(None)):
         # 이 키워드가 요청 큐(주간 온디맨드)에 있었다면 완료 처리
         conn.execute("UPDATE collect_requests SET status='done' WHERE keyword=?", (kw,))
         conn.commit()
-        return {"success": True, "keyword": kw, "saved": len(req.products)}
     finally:
         conn.close()
+
+    # ── 순위 즉시 기록 (24시간 분산의 짝, 2026-08-05) ──
+    # 수집이 하루에 흩어지면 08:00 배치 한 번으로는 그날치를 다 못 담는다.
+    # 올라온 그 자리에서 이 키워드의 순위를 적는다(하루 1점 갱신이라 배치와 중복 무해).
+    # 실패해도 업로드는 성공으로 돌려준다 — 수집이 멈추면 안 된다.
+    recorded = {}
+    try:
+        from rank_record import record_ranks_for_keyword
+        recorded = record_ranks_for_keyword(
+            kw, [_normalize_collected(p.model_dump()) for p in req.products])
+    except Exception as e:
+        logger.warning(f"[collector] 순위 즉시 기록 실패(업로드는 성공) [{kw}]: {e}")
+    return {"success": True, "keyword": kw, "saved": len(req.products), "ranked": recorded}
 
 
 # ==================== 3) 수집 현황 ====================

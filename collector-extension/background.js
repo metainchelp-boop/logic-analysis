@@ -22,10 +22,16 @@ const CFG = {
   maxRank: 300,          // 300위까지 = 80 × 4페이지
   minGapMs: 1500,        // 요청 간 최소 간격
   maxGapMs: 4000,        // 요청 간 최대 간격 (이 사이 랜덤 — 여유 확대 2026-08-04)
-  keywordGapMs: 8000,    // 키워드 사이 추가 휴식 (여유 확대 — 총 소요 ~6시간)
-  maxConsecutiveFail: 5, // 연속 실패가 이만큼이면 그날 수집 중단(차단 의심)
-  runHour: 1,            // 매일 새벽 1시 시작 → 아침 7시경 완료 (운영자 확정 2026-08-04:
-                         // '당일' 데이터여야 하고 완료 데드라인은 오전 10시. 서버 순위 기록은 08:00)
+  // ── 24시간 분산 (2026-08-05 운영자 확정) ─────────────────────────────
+  // 종전: 새벽 1시부터 6시간에 954개를 몰아침 → 분당 10.6회 → 네이버가 IP 차단
+  //       (「쇼핑 서비스 접속이 일시적으로 제한되었습니다」 — 사유에 '짧은 시간 내에
+  //        너무 많은 요청이 이루어진 IP' 명시).
+  // 지금: 서버가 키워드를 24개 시간대로 나눠 주고, 확장은 **매시간 자기 몫만** 한다.
+  //       시간당 ~40개 → 분당 2.7회. 맥북이 24시간 켜져 있으니 창을 넓게 쓰는 게 이득.
+  keywordGapMs: 45000,   // 키워드 사이 휴식 45초 (시간당 40개 기준 여유 있게)
+  hourBudgetMs: 50 * 60 * 1000,  // 한 회차는 50분 안에 끝낸다(다음 시간대와 겹치지 않게)
+  maxConsecutiveFail: 5, // 연속 실패가 이만큼이면 이번 회차 중단(차단 의심)
+  runHour: 1,            // (유지) 회차 날짜 계산용 — 수집은 이제 24시간 상시
 };
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -332,23 +338,34 @@ async function runCollection(manual = false) {
   await setState({ running: true, startedAt: new Date().toISOString(), done: 0, failed: 0 });
   await log(manual ? '▶ 수동 수집 시작' : '▶ 자동 수집 시작');
 
+  const hourStart = Date.now();
+  const hourTag = hourKey();
   try {
-    const res = await fetch(`${CFG.serverBase}/api/collector/keywords`, {
+    // 이번 시간대 몫만 받아온다(24시간 분산). 서버가 슬롯 + 밀린 것을 함께 준다.
+    const nowHour = new Date().getHours();
+    const res = await fetch(`${CFG.serverBase}/api/collector/keywords?hour=${nowHour}`, {
       headers: { 'X-Collector-Token': token },
     });
     if (!res.ok) throw new Error(`키워드 조회 실패 HTTP ${res.status}`);
-    const { keywords = [], done: already = 0, total = 0 } = await res.json();
-    await log(`대상 ${keywords.length}개 (전체 ${total} · 오늘 완료 ${already})`);
+    const { keywords = [], done: already = 0, total = 0,
+            slot = null, overdue = 0 } = await res.json();
+    await log(`⏱ ${nowHour}시 몫 ${keywords.length}개`
+      + (slot === null ? '' : ` (이 시간대 ${slot} · 밀린 것 ${overdue})`)
+      + ` — 전체 ${total} · 오늘 완료 ${already}`);
     if (!keywords.length) {
-      // 이번 회차 수집할 게 없음(이미 완료) — 회차 완료로 기록해 매시 헛돌지 않게
-      await setState({ running: false, finishedCycle: cycleDate(), current: '' });
-      await log('이번 회차 수집 대상 없음 — 완료 처리');
+      await setState({ running: false, finishedHour: hourTag, current: '' });
+      await log('이번 시간대 수집 대상 없음');
       return;
     }
     await setState({ target: keywords.length });
 
     let done = 0, failed = 0, streak = 0;
     for (const kw of keywords) {
+      // 다음 시간대와 겹치지 않게 — 남은 것은 서버가 '밀린 것'으로 다시 내려준다
+      if (Date.now() - hourStart > CFG.hourBudgetMs) {
+        await log(`⏱ 이번 시간대 시간 소진 — ${keywords.length - done - failed}개는 다음 회차로`);
+        break;
+      }
       try {
         const payload = await collectKeyword(kw);
         if (!payload.products.length) throw new Error('상품 0건');
@@ -366,7 +383,7 @@ async function runCollection(manual = false) {
         await log(`⚠️ [${kw}] 실패: ${e.message}`);
         await setState({ done, failed, current: kw });
         if (streak >= CFG.maxConsecutiveFail) {
-          await log(`🛑 연속 ${streak}회 실패 — 차단 의심으로 오늘 수집 중단`);
+          await log(`🛑 연속 ${streak}회 실패 — 차단 의심으로 이번 회차 중단`);
           break;
         }
         await sleep(jitter() * (1 + streak));   // 실패할수록 더 길게 쉰다
@@ -374,14 +391,14 @@ async function runCollection(manual = false) {
       await sleep(jitter() + CFG.keywordGapMs);
     }
     if (done > 0) await clearBlocked();   // 값을 실제로 받았다 = 차단 풀림
-    await log(`✅ 수집 종료 — 성공 ${done} · 실패 ${failed}`);
-    // 성공 0 = 사실상 실패한 날 — finishedAt 을 남기지 않아 매시 만회 로직이 재시도하게 한다
+    await log(`✅ ${new Date().getHours()}시 회차 종료 — 성공 ${done} · 실패 ${failed}`);
+    // 못 한 키워드는 서버가 다음 시간대에 '밀린 것'으로 다시 내려주므로 여기서 표시만 남긴다
     if (done > 0) {
       await setState({ running: false, finishedAt: new Date().toISOString(),
-                       finishedCycle: cycleDate(), done, failed, current: '' });
+                       finishedHour: hourTag, done, failed, current: '' });
     } else {
       await setState({ running: false, done, failed, current: '' });
-      await log('⚠️ 성공 0건 — 완료로 기록하지 않음(다음 시각에 자동 재시도)');
+      await log('⚠️ 성공 0건 — 다음 시간대에 자동 재시도');
     }
   } catch (e) {
     await log(`❌ 수집 중단: ${e.message}`);
@@ -450,7 +467,9 @@ async function runOnDemand() {
 //  · daily   : 매시 확인, 03시 이후 오늘 수집이 없으면 실행(새벽에 꺼져 있었어도 켜지면 자동 만회)
 //  · ondemand: 1분 주기, 낮에 들어온 새 키워드 요청 즉시 수집
 function armAlarms() {
-  chrome.alarms.create('daily', { periodInMinutes: 60 });
+  // 'daily' 는 이름만 남았고 실제로는 **매시간 자기 몫**을 수집하는 알람이다(24시간 분산).
+  // when 을 1분 뒤로 둬 브라우저를 켜자마자 그 시간대 몫을 이어받는다.
+  chrome.alarms.create('daily', { periodInMinutes: 60, when: Date.now() + 60000 });
   // 30초 오프셋 — daily 와 만기가 매시 정각에 겹치지 않게(동시 발화 자체를 회피)
   chrome.alarms.create('ondemand', { periodInMinutes: 1, when: Date.now() + 30000 });
 }
@@ -468,15 +487,19 @@ function cycleDate() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+/** 이번 '시간대' 식별자 — 같은 시간에 두 번 돌지 않게 하는 표식. */
+function hourKey() {
+  const d = new Date();
+  return `${cycleDate()}:${String(d.getHours()).padStart(2, '0')}`;
+}
+
 chrome.alarms.onAlarm.addListener(async (a) => {
   if (a.name === 'ondemand') { runOnDemand(); return; }
   if (a.name !== 'daily') return;
-  // 새벽 1시 이전(자정~0시대)엔 시작하지 않는다 — 1시 이후 매시 확인에서
-  // 이번 회차 미완료면 실행(놓친 날 자동 만회·이어받기는 서버 done 필터가 보장).
-  const now = new Date();
-  if (CFG.runHour < 13 && now.getHours() < CFG.runHour) return;
+  // 24시간 분산 — 매시간 자기 시간대 몫만 수집한다(시각 제한 없음).
+  // 같은 시간대를 이미 돌았으면 건너뛴다(알람이 시간당 두 번 뜨는 경우 방어).
   const { state = {} } = await chrome.storage.local.get('state');
-  if (state.finishedCycle === cycleDate()) return;   // 이번 회차 이미 완료
+  if (state.finishedHour === hourKey()) return;
   runCollection(false);
 });
 
