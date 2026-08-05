@@ -736,10 +736,16 @@ def get_keyword_volume(keywords: List[str]) -> List[Dict]:
 
             results = []
             keyword_data_list = data.get("keywordList", [])
+            # ⚠️ 요청은 위에서 공백을 지워 보내고 네이버도 공백 없는 형태로 돌려주는데,
+            #    필터가 원문 리스트(공백 포함)와 비교하고 있었다 → '구로동 고기' 처럼 공백이
+            #    들어간 키워드는 응답이 와도 전부 걸러져 **항상 0건**(2026-08-05 실측).
+            #    지역+키워드를 합성하는 플레이스 경로는 늘 공백이 있어 100% 해당됐다.
+            #    비교 축을 양쪽 다 공백 제거로 맞춘다(낱말 키워드는 지울 공백이 없어 무회귀).
+            wanted = {(k or "").strip().replace(" ", "") for k in keywords}
             for kd in keyword_data_list:
                 # 요청한 키워드만 필터 (연관 키워드 제외)
                 rel_keyword = kd.get("relKeyword", "")
-                if rel_keyword in keywords:
+                if (rel_keyword or "").replace(" ", "") in wanted:
                     results.append({
                         "keyword": rel_keyword,
                         "monthlyPcQcCnt": _safe_int(kd.get("monthlyPcQcCnt")),
