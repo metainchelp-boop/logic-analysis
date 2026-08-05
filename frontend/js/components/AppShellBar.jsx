@@ -10,7 +10,7 @@
  *  - 첫 진입 1회 안내(「메뉴가 왼쪽으로 이동했어요」, localStorage).
  */
 
-var _AS_W = 206, _AS_WC = 60, _AS_TOP = 50;
+var _AS_W = 206, _AS_WC = 60, _AS_TOP = 50, _AS_BANNER = 38;
 var _AS_GROUPS = function(cu) {
     var role = (cu && cu.role) || '';
     return [
@@ -56,19 +56,23 @@ window.AppShellBar = function AppShellBar(props) {
     var collapsed = _c[0], setCollapsed = _c[1];
     var _up = useState(null); var upTotal = _up[0], setUpTotal = _up[1];
     var _q = useState(''); var q = _q[0], setQ = _q[1];
+    var _ch = useState(null); var colHealth = _ch[0], setColHealth = _ch[1];   // 수집 파이프라인 상태
+    var _chX = useState(false); var colDismissed = _chX[0], setColDismissed = _chX[1];
     var _in = useState(function() {
         try { return !localStorage.getItem('logic_nav_intro_v7'); } catch (e) { return false; }
     });
     var showIntro = _in[0], setShowIntro = _in[1];
     var searchRef = useRef(null);
 
-    /* 본문 밀어내기 — 페이지 내부 컨테이너 무수정으로 셸 폭 반영 */
+    /* 본문 밀어내기 — 페이지 내부 컨테이너 무수정으로 셸 폭 반영.
+       경보 배너가 뜨면 그 높이만큼 더 내려 본문 첫 줄이 가려지지 않게 한다. */
+    var _bannerOn = !!(colHealth && !colDismissed);
     useEffect(function() {
         var w = collapsed ? _AS_WC : _AS_W;
         document.body.style.paddingLeft = w + 'px';
-        document.body.style.paddingTop = _AS_TOP + 'px';
+        document.body.style.paddingTop = (_AS_TOP + (_bannerOn ? _AS_BANNER : 0)) + 'px';
         return function() { document.body.style.paddingLeft = ''; document.body.style.paddingTop = ''; };
-    }, [collapsed]);
+    }, [collapsed, _bannerOn]);
 
     /* 좁은 화면 자동 접힘(수동 설정 없을 때만) */
     useEffect(function() {
@@ -85,6 +89,22 @@ window.AppShellBar = function AppShellBar(props) {
         api.get('/cd/rank-overview').then(function(res) {
             if (res && res.success && res.totals) setUpTotal(res.totals.up_total || 0);
         }).catch(function() {});
+    }, []);
+
+    /* 수집 파이프라인 경보 — 오늘 수집이 없으면 전 화면 상단 배너.
+       하루 단위로 닫기 기억(다음 날 다시 노출), 조회 실패는 무음(기존 동작 유지) */
+    useEffect(function() {
+        var today = new Date().toISOString().slice(0, 10);
+        try { if (localStorage.getItem('logic_collect_alert_off') === today) setColDismissed(true); } catch (e) {}
+        var load = function() {
+            api.get('/collector/health').then(function(res) {
+                if (res && res.success && res.state && res.state !== 'ok') setColHealth(res);
+                else setColHealth(null);
+            }).catch(function() {});
+        };
+        load();
+        var t = setInterval(load, 10 * 60 * 1000);   // 10분 주기 — 낮 만회 수집 시 자동 해제
+        return function() { clearInterval(t); };
     }, []);
 
     /* Ctrl+K → 검색 포커스 */
@@ -112,6 +132,10 @@ window.AppShellBar = function AppShellBar(props) {
         try { window.dispatchEvent(new CustomEvent('logic-global-search', { detail: v })); } catch (e) {}
         setQ('');
         go('home');
+    };
+    var dismissCollect = function() {
+        setColDismissed(true);
+        try { localStorage.setItem('logic_collect_alert_off', new Date().toISOString().slice(0, 10)); } catch (e) {}
     };
     var dismissIntro = function() {
         setShowIntro(false);
@@ -209,6 +233,26 @@ window.AppShellBar = function AppShellBar(props) {
                 currentUser.name || currentUser.username),
             React.createElement('span', { style: { fontSize: 10.5, fontWeight: 800, color: roleFg, background: roleBg, borderRadius: 999, padding: '2px 8px', whiteSpace: 'nowrap' } },
                 roleLabel)
+        ),
+
+        /* ── 수집 중단 경보 배너 (전 화면 공통) ── */
+        colHealth && !colDismissed && React.createElement('div', {
+            style: { position: 'fixed', top: _AS_TOP, left: W, right: 0, zIndex: 998,
+                     display: 'flex', alignItems: 'center', gap: 10, padding: '0 18px', height: _AS_BANNER,
+                     fontSize: 12.5, fontWeight: 600, transition: 'left .15s ease',
+                     background: colHealth.state === 'down' ? '#fef2f2' : '#fffbeb',
+                     borderBottom: '1px solid ' + (colHealth.state === 'down' ? '#fecaca' : '#fde68a'),
+                     color: colHealth.state === 'down' ? '#991b1b' : '#92400e' }
+        },
+            React.createElement('span', { style: { fontSize: 14 } }, colHealth.state === 'down' ? '🚨' : '⚠️'),
+            React.createElement('span', { style: { fontWeight: 800 } },
+                colHealth.state === 'down' ? '순위 수집 중단' : '오늘 새벽 수집 미실행'),
+            React.createElement('span', { style: { flex: 1, minWidth: 0, fontWeight: 500 } }, colHealth.message || ''),
+            React.createElement('button', {
+                onClick: dismissCollect, title: '오늘 하루 숨기기',
+                style: { border: 'none', background: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 800,
+                         color: 'inherit', opacity: .65, padding: '0 2px', fontFamily: 'inherit' }
+            }, '✕')
         )
     );
 };

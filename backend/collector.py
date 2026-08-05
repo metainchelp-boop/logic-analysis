@@ -20,7 +20,8 @@ import logging
 from datetime import date, datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, Header
+from fastapi import APIRouter, HTTPException, Header, Depends
+from auth import get_current_user
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -220,6 +221,55 @@ def collect_status(x_collector_token: str = Header(None)):
                 "days": [dict(r) for r in rows]}
     finally:
         conn.close()
+
+
+@router.get("/health")
+def collect_health(current_user: dict = Depends(get_current_user)):
+    """수집 파이프라인 건강 상태 — 화면 상단 경보 배너용 (로그인 사용자 전용).
+
+    수집(맥북 크롬 확장)이 조용히 멈춰도 아무 신호가 없어, 다음 날 아침에야
+    「순위가 안 쌓였다」로 발견되던 공백을 메운다(2026-08-05 실사고: 8/5 새벽
+    수집 0건 → 08:00 순위 기록 0건, 종일 인지 못함).
+
+    판정 — 서빙 창(오늘·어제 수집분)이 곧 사용 가능 조건이다:
+      ok    : 오늘 수집분 있음 (정상)
+      stale : 오늘 없음 + 어제 있음 → 분석은 되지만 **오늘 자정까지**.
+              오늘 밤 수집이 돌지 않으면 내일 분석 불가.
+      down  : 오늘·어제 모두 없음 → 분석 불가(수집 즉시 필요)
+    """
+    today = date.today().isoformat()
+    conn = sqlite3.connect(DB_PATH, timeout=10)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute("""
+            SELECT collected_date, COUNT(*) AS keywords, MAX(created_at) AS last_at
+            FROM collected_serp
+            WHERE collected_date >= date('now','localtime','-1 day')
+            GROUP BY collected_date ORDER BY collected_date DESC
+        """).fetchall()
+    finally:
+        conn.close()
+
+    by_date = {r["collected_date"]: r for r in rows}
+    t = by_date.get(today)
+    others = [r for d, r in by_date.items() if d != today]
+    if t and (t["keywords"] or 0) > 0:
+        state, msg = "ok", ""
+    elif others:
+        y = others[0]
+        state = "stale"
+        msg = (f"오늘 새벽 수집이 실행되지 않았습니다(마지막 수집 {y['collected_date']}). "
+               "분석은 어제 수집분으로 정상 동작하지만 오늘 자정까지만 유효합니다 — "
+               "수집 PC(맥북)의 전원·크롬·확장 상태를 확인해 주세요.")
+    else:
+        state = "down"
+        msg = ("최근 2일간 수집분이 없어 분석이 불가합니다. "
+               "수집 PC(맥북)의 전원·크롬·확장을 확인한 뒤 「지금 수집」을 실행해 주세요.")
+
+    return {"success": True, "state": state, "today": today, "message": msg,
+            "todayKeywords": (t["keywords"] if t else 0),
+            "lastCollectedDate": (rows[0]["collected_date"] if rows else None),
+            "lastAt": (rows[0]["last_at"] if rows else None)}
 
 
 def _safe_int(v):
