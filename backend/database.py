@@ -194,6 +194,15 @@ def init_db():
             conn.commit()
         except Exception:
             pass  # 이미 존재하면 무시
+        # 플레이스 지표 스냅샷 — 순위와 같은 시점의 방문자/블로그 리뷰·저장수.
+        # 맞춤제안서가 이 값을 쓰기 전에는 화면에 **난수(예시)** 가 실측처럼 찍혔다(2026-08-05).
+        # 캡처 파싱으로 이미 확보하던 값을 저장만 안 하고 버리고 있던 것.
+        for _col in ("visitor_reviews INTEGER", "blog_reviews INTEGER", "saves INTEGER"):
+            try:
+                conn.execute(f"ALTER TABLE place_rank_history ADD COLUMN {_col}")
+                conn.commit()
+            except Exception:
+                pass  # 이미 존재하면 무시
         logger.info("✅ 데이터베이스 초기화 완료")
     except Exception as e:
         logger.error(f"DB 초기화 실패: {e}")
@@ -206,10 +215,12 @@ def init_db():
 
 def save_place_rank(business_key: str, keyword: str, rank_position=None,
                     rank_state: str = "", business_name: str = "",
-                    region: str = "", user_id: int = 0):
+                    region: str = "", user_id: int = 0,
+                    visitor_reviews=None, blog_reviews=None, saves=None):
     """플레이스 (업체·키워드) 순위를 하루 1점으로 누적 저장.
     같은 날 재분석 시 그날 값을 최신으로 대체(하루 1점 유지) → 일자별 차트가 깔끔.
-    rank_position None = 미노출/미확인(state로 구분)."""
+    rank_position None = 미노출/미확인(state로 구분).
+    visitor_reviews·blog_reviews·saves 는 같은 시점의 지표 스냅샷(없으면 None — 가짜 0 금지)."""
     if not business_key or not keyword:
         return
     conn = _get_conn()
@@ -223,10 +234,12 @@ def save_place_rank(business_key: str, keyword: str, rank_position=None,
         )
         conn.execute(
             "INSERT INTO place_rank_history "
-            "(business_key, business_name, region, keyword, rank_position, rank_state, user_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "(business_key, business_name, region, keyword, rank_position, rank_state, user_id, "
+            " visitor_reviews, blog_reviews, saves) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (business_key, business_name or "", region or "", keyword,
-             rank_position, rank_state or "", user_id or 0)
+             rank_position, rank_state or "", user_id or 0,
+             visitor_reviews, blog_reviews, saves)
         )
         conn.commit()
     except Exception as e:
@@ -1055,3 +1068,44 @@ def save_cached_shopping_search(keyword: str, max_results: int,
     finally:
         if conn is not None:
             conn.close()
+
+
+def get_place_latest_metrics(business_key: str, keyword: str = "", days: int = 120) -> Dict:
+    """(업체) 최신 지표 스냅샷 — 방문자 리뷰·블로그 리뷰·저장수.
+
+    맞춤제안서가 쓰던 값이 난수(예시)였던 것을 실측으로 바꾸기 위한 조회(2026-08-05).
+    · 키워드를 주면 그 키워드 기록을 우선 보고, 없으면 같은 업체의 아무 키워드나 본다
+      (지표는 키워드와 무관한 업체 속성이라 최신 1건이면 충분).
+    · 지표마다 **각각 가장 최근에 값이 있는 기록**을 쓴다 — 저장수는 담당자 입력이라
+      리뷰보다 드물게 채워지므로, 한 행만 보면 있는 값도 버리게 된다.
+    · 값이 없으면 키를 빼고 반환(가짜 0 금지 → 제안서가 '—' 로 표시).
+    """
+    out = {}
+    if not business_key:
+        return out
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT keyword, visitor_reviews, blog_reviews, saves, checked_at "
+            "FROM place_rank_history "
+            "WHERE business_key = ? "
+            "AND date(checked_at) >= date('now', 'localtime', ?) "
+            "ORDER BY checked_at DESC",
+            (business_key, f"-{int(days)} days")
+        ).fetchall()
+        kw = (keyword or "").strip()
+        for scope in ("kw", "any"):
+            for r in rows:
+                if scope == "kw" and (not kw or r["keyword"] != kw):
+                    continue
+                for col in ("visitor_reviews", "blog_reviews", "saves"):
+                    if col not in out and r[col] is not None:
+                        out[col] = int(r[col])
+            if len(out) == 3:
+                break
+        return out
+    except Exception as e:
+        logger.warning(f"플레이스 지표 조회 실패(무시): {e}")
+        return {}
+    finally:
+        conn.close()

@@ -1197,6 +1197,11 @@ def _place_seo_analyze(req: "SeoAnalysisRequest", current_user: dict = None):
                     business_name=req.target_name or "",
                     region=region,
                     user_id=(current_user or {}).get("id", 0),
+                    # 지표 스냅샷 — 캡처 파싱값(방문자·블로그 리뷰) + 담당자 입력(저장수).
+                    # 종전엔 파싱해 놓고 버려서, 제안서가 난수를 실측처럼 찍었다(2026-08-05).
+                    visitor_reviews=place_in.get("visitor_reviews"),
+                    blog_reviews=place_in.get("blog_reviews"),
+                    saves=place_in.get("saves"),
                 )
         except Exception as _e:
             logger.warning(f"플레이스 순위 이력 저장 건너뜀: {_e}")
@@ -1327,14 +1332,17 @@ def place_proposal_enrich(req: PlaceProposalEnrichRequest,
         #    ⚠️ 제안서는 계약 전 영업 대상 자료라 실제로는 후자가 주 경로다.
         #    ⚠️ 키워드 저장 형태가 두 경로에서 다르다: 수동 분석은 화면에 적은 키워드를 그대로
         #       저장(예: '카페')하는데 여기선 지역을 합성해('성수동 카페') 찾는다 → 영업사원이
-        #       두 화면에 다르게 적으면 순위가 있는데도 못 찾는다. 합성형으로 먼저 찾고,
-        #       없으면 원 키워드로 한 번 더 찾는다(사람이 표기를 맞추지 않아도 되게).
+        #       두 화면에 다르게 적으면 순위가 있는데도 못 찾는다.
+        #    ⚠️ 2026-08-05: 제안서 FE 가 **이미 지역을 합쳐서** keyword 를 보내기 때문에
+        #       ('성수동'+'카페' → '성수동 카페') 서버에서 다시 합성해도 같은 문자열이 되어
+        #       「원 키워드로 한 번 더」 방어가 한 번도 발동하지 못했다. 지역을 **떼어낸**
+        #       형태까지 후보에 넣어야 수동 분석이 저장한 '카페' 를 만난다.
         rank = None
         rank_state = ""
         rank_series = []
         matched_kw = combined_kw
         if business_key:
-            for _kw_try in [k for k in (combined_kw, base_kw) if k]:
+            for _kw_try in _keyword_lookup_candidates(region, base_kw, combined_kw):
                 rank_series = get_place_rank_history(business_key, _kw_try, days=90)
                 if rank_series:
                     matched_kw = _kw_try
@@ -1373,12 +1381,25 @@ def place_proposal_enrich(req: PlaceProposalEnrichRequest,
         except Exception as e:
             logger.warning(f"[proposal-enrich] 키워드 표 구성 실패(무시): {e}")
 
+        # 3-b) 지표 스냅샷(방문자·블로그 리뷰·저장수) — 「플레이스 분석」이 남긴 실측.
+        #      없으면 빈 dict → 제안서가 그 칸을 '—' 로 비운다(예시 숫자 금지).
+        place_metrics = {}
+        try:
+            from database import get_place_latest_metrics
+            if business_key:
+                place_metrics = get_place_latest_metrics(business_key, matched_kw) or {}
+        except Exception as e:
+            logger.warning(f"[proposal-enrich] 지표 스냅샷 조회 실패(무시): {e}")
+
         # 4) 소상공인365 상권 데이터(가산) — 키 미설정·매칭 실패·API 파손 시 None
         #    → 제안서가 상권 슬라이드만 조용히 생략(기존 필드·동작 전부 불변).
         sbiz_block = None
         try:
             from sbiz365 import get_place_sbiz
-            sbiz_block = get_place_sbiz(region, req.industry)
+            # 업체명·키워드를 업종 힌트로 함께 넘긴다 — 드롭다운은 「음식점」처럼 넓은 13종뿐이라
+            # 삼겹살집에 백반/한정식 평균이 잡히는 일이 있었다(2026-08-05 실측: 백반 2,970 vs
+            # 돼지고기 구이 3,447 만원). 힌트에서 못 읽으면 종전 라벨 경로 그대로.
+            sbiz_block = get_place_sbiz(region, req.industry, hint=f"{name} {base_kw}")
         except Exception as e:
             logger.warning(f"[proposal-enrich] 상권 데이터 조회 실패(무시): {e}")
 
@@ -1387,6 +1408,7 @@ def place_proposal_enrich(req: PlaceProposalEnrichRequest,
             "isPlace": True,
             "sbiz": sbiz_block,        # 상권 블록(소상공인365) — null이면 상권 슬라이드 생략
             "businessKey": business_key,
+            "metrics": place_metrics,  # 방문자/블로그 리뷰·저장수 실측(없는 키는 생략 — 가짜 0 금지)
             "keyword": matched_kw,
             "volume": volume,               # 월 검색량(실측) — null=미확인
             "compIdx": comp_idx,
@@ -1449,6 +1471,37 @@ def _place_track_denied(current_user) -> bool:
 
 _PLACE_TRACK_DENY_MSG = ("플레이스 순위 추적 등록·관리는 관리팀만 가능합니다. "
                          "영업 대상 분석은 「📍 플레이스 분석」 탭을 이용해주세요. (스토어 순위 추적과 동일 기준)")
+
+
+def _keyword_lookup_candidates(region: str, base_kw: str, combined_kw: str):
+    """순위 이력 조회에 쓸 키워드 후보(순서대로 시도, 중복 제거).
+
+    순위를 저장하는 경로가 둘이고 키워드 표기가 서로 다르다:
+      · 무인 추적(계약 광고주) — 등록 시 지역을 합성해 저장('성수동 카페')
+      · 「플레이스 분석」 수동 분석(영업 대상) — 화면에 적은 그대로 저장('카페')
+    제안서 FE 는 항상 합성형을 보내므로, **지역을 떼어낸 형태**까지 시도해야
+    영업 대상의 수동 분석 기록을 만난다. 조회는 정확 일치라 표기가 곧 키다."""
+    import re
+    cands = [combined_kw, base_kw]
+    reg = place_crawler._norm(region or "")
+    for kw in (combined_kw, base_kw):
+        k = (kw or "").strip()
+        if not k or not reg:
+            continue
+        # '성수동 카페' → '카페' / '성수동카페' → '카페'
+        stripped = re.sub(r"^\s*" + re.escape((region or "").strip()) + r"\s*", "", k).strip()
+        if stripped and stripped != k:
+            cands.append(stripped)
+        n = place_crawler._norm(k)
+        if n.startswith(reg) and len(n) > len(reg):
+            cands.append(n[len(reg):])
+    out, seen = [], set()
+    for c in cands:
+        c = (c or "").strip()
+        if c and c not in seen:
+            seen.add(c)
+            out.append(c)
+    return out
 
 
 def _combine_region_keyword(region: str, keyword: str) -> str:

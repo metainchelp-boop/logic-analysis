@@ -84,6 +84,15 @@ def _http_json(method: str, url: str, params=None, data=None):
 _cache_table_ready = False
 
 
+# 캐시 네임스페이스(스키마 버전).
+# ⚠️ 캐시에 담기는 건 원문이 아니라 **우리가 가공한 결과**(단위 환산·집계)라,
+# 가공 규칙을 바꾸면 TTL(14일)이 만료될 때까지 옛 규칙으로 계산된 값이 계속 나간다.
+# 2026-08-05 실사고: 금액 단위를 천원→만원으로 고쳤는데 「업종 종합」만 옛 값(1/10)이
+# 그대로 노출됐다(소분류 캐시는 키에 hint 가 붙어 우연히 재계산됐고, 종합 캐시는 키가 같아 적중).
+# 앞으로 **가공 규칙을 바꾸면 이 숫자를 올릴 것** — 전 캐시가 한 번에 무효화된다.
+CACHE_NS = "v2"
+
+
 def _cache_conn():
     from database import _get_conn  # 지연 import — 모듈 로드 순서·테스트 격리
     global _cache_table_ready
@@ -96,6 +105,8 @@ def _cache_conn():
                 fetched_at TEXT
             )
         """)
+        # 옛 네임스페이스 잔재 정리(읽히지 않는 행이 계속 쌓이지 않게) — 프로세스당 1회
+        conn.execute("DELETE FROM sbiz_cache WHERE cache_key NOT LIKE ?", (f"{CACHE_NS}:%",))
         conn.commit()
         _cache_table_ready = True
     return conn
@@ -105,7 +116,8 @@ def _cache_get(key: str, ttl_seconds: int):
     try:
         conn = _cache_conn()
         row = conn.execute(
-            "SELECT payload, fetched_at FROM sbiz_cache WHERE cache_key = ?", (key,)
+            "SELECT payload, fetched_at FROM sbiz_cache WHERE cache_key = ?",
+            (f"{CACHE_NS}:{key}",),
         ).fetchone()
         conn.close()
         if not row:
@@ -124,7 +136,8 @@ def _cache_put(key: str, payload):
         conn = _cache_conn()
         conn.execute(
             "INSERT OR REPLACE INTO sbiz_cache (cache_key, payload, fetched_at) VALUES (?, ?, ?)",
-            (key, json.dumps(payload, ensure_ascii=False), datetime.now().isoformat()),
+            (f"{CACHE_NS}:{key}",
+             json.dumps(payload, ensure_ascii=False), datetime.now().isoformat()),
         )
         conn.commit()
         conn.close()
@@ -153,10 +166,21 @@ def _int_or_none(v):
     return int(round(n)) if n is not None else None
 
 
+# 소상공인365 금액 필드(saleAmt·minAmt·maxAmt·guAmt·siAmt·avgList[].saleAmt)의 단위.
+# ⚠️ 종전엔 천원으로 보고 ×1000 했는데 화면 금액이 실제의 1/10 로 찍혔다.
+# 2026-08-05 구로3동 실측으로 만원 확정(unit_check 프로브 원문):
+#   돼지고기 구이/찜  평균 3,447 · 최저 1,757 · 최고 6,579 (업소 55)
+#   소고기 구이/찜    평균 3,686 · 최저 2,734 · 최고 5,679 (업소 13)
+#   국수/칼국수      평균 1,585 · 최저 1,268 · 최고 2,713 (업소 29)
+# 천원이면 「구로동 고깃집 평균 월매출 3만원 · 최고 7만원」이 되어 성립하지 않는다.
+# 만원이면 평균 3,447만원/최고 6,579만원 = 실제 상권 감각과 맞는다.
+AMT_UNIT_WON = 10_000
+
+
 def _won(v):
-    """천원 단위 → 원 단위 정수. 실패 시 None."""
+    """소상공인365 금액(만원 단위) → 원 단위 정수. 실패 시 None."""
     n = _num(v)
-    return int(round(n * 1000)) if n is not None else None
+    return int(round(n * AMT_UNIT_WON)) if n is not None else None
 
 
 def _pick(resp, markers):
@@ -358,22 +382,57 @@ def _is_residual_bucket(name: str) -> bool:
     return last.startswith("기타") or ("그 외" in last) or ("분류 안된" in last)
 
 
-def _resolve_upjong_candidates(industry_label: str, limit: int = 3):
-    """업종 라벨 → 소분류 후보 목록(우선순위 순, 최대 limit개).
+def _hint_terms(hint: str):
+    """업체명·키워드에서 소분류를 좁힐 낱말을 뽑는다.
+    드롭다운은 「음식점」처럼 넓은 13종뿐이라, 삼겹살집인데 백반/한정식 평균이 잡히는 일이 생긴다
+    (2026-08-05 구로3동 실측: 백반/한정식 2,970 vs 돼지고기 구이/찜 3,447 — 업종이 어긋나면 근거가 흔들림).
+    업체명·키워드에 업종이 드러나 있으면 그걸 먼저 쓴다. 못 찾으면 종전 라벨 경로 그대로."""
+    h = str(hint or "")
+    if not h:
+        return []
+    out = []
+    for word, terms in _HINT_UPJONG.items():
+        if word in h:
+            out.extend(terms)
+    return list(dict.fromkeys(out))
+
+
+# 업체명·키워드에 흔히 드러나는 낱말 → 소분류 트리 검색어.
+# 값은 `getHierarchyTpbizCode` 소분류명에 실제로 들어 있는 문자열이어야 한다.
+_HINT_UPJONG = {
+    "삼겹살": ["돼지고기"], "돼지": ["돼지고기"], "goldsam": ["돼지고기"],
+    "소고기": ["소고기"], "한우": ["소고기"], "갈비": ["소고기", "돼지고기"],
+    "곱창": ["곱창"], "막창": ["곱창"], "대창": ["곱창"],
+    "닭": ["닭/오리"], "오리": ["닭/오리"], "치킨": ["치킨"],
+    "횟집": ["해산물"], "회": ["해산물"], "조개": ["해산물"], "해물": ["해산물"],
+    "칼국수": ["국수/칼국수"], "국수": ["국수/칼국수"], "면": ["국수/칼국수"],
+    "찌개": ["국/탕/찌개"], "탕": ["국/탕/찌개"], "국밥": ["국/탕/찌개"],
+    "분식": ["김밥/만두/분식"], "김밥": ["김밥/만두/분식"], "떡볶이": ["김밥/만두/분식"],
+    "피자": ["피자"], "햄버거": ["햄버거"], "파스타": ["서양식"], "스테이크": ["서양식"],
+    "중국집": ["중식"], "짜장": ["중식"], "마라": ["중식"],
+    "초밥": ["일식"], "스시": ["일식"], "돈까스": ["일식"], "라멘": ["일식"],
+    "카페": ["커피"], "커피": ["커피"], "베이커리": ["제과"], "빵": ["제과"],
+    "호프": ["호프"], "포차": ["호프"], "이자카야": ["호프"], "바": ["호프"],
+}
+
+
+def _resolve_upjong_candidates(industry_label: str, limit: int = 3, hint: str = ""):
+    """업종 라벨(+업체명·키워드 힌트) → 소분류 후보 목록(우선순위 순, 최대 limit개).
     ⚠️ 종전에는 후보 중 '코드가 가장 큰 것' 하나만 골랐는데, 그게 하필 '그 외 기타…' 잔여 버킷이라
     상권 매출이 항상 0으로 나왔다(2026-08-05 실측). 이제 잔여 버킷을 뒤로 미루고, 실제 값이
     있는 후보를 만날 때까지 호출부가 순서대로 시도한다."""
     label = (industry_label or "").strip()
-    if not label:
+    if not label and not hint:
         return []
     pairs = _upjong_pairs()
     if not pairs:
         return []
-    terms = []
+    terms = list(_hint_terms(hint))   # 업체명·키워드에서 읽은 업종이 항상 우선
     for lk, ts in _UPJONG_SEARCH_TERMS.items():
-        if lk in label or label in lk:
+        if label and (lk in label or label in lk):
             terms.extend(ts)
-    terms.append(label)  # 사전 미등재 라벨은 라벨 자체 부분일치 폴백
+    if label:
+        terms.append(label)  # 사전 미등재 라벨은 라벨 자체 부분일치 폴백
 
     # ⚠️ 검색어별로 따로 고르면 안 된다. '음식점'이라는 낱말은 트리에서 하필 잔여 버킷
     #    (기타 한식 음식점·기타 일식 음식점·그 외 기타 간이 음식점…)에만 들어 있어서,
@@ -529,7 +588,7 @@ def _aggregate_major(admi_cd: str, loc: str, major: str):
     ⚠️ 2026-08-05 실측: getAvgAmtInfo 는 **소분류 6자리 코드만** 받는다.
     상위분류 코드(I201·I20·I2·I)와 빈 값은 전부 무응답 → '업종 전체' 를 서버가 계산해 주지 않는다.
     그래서 대분류에 속한 소분류를 우리가 모두 조회해 직접 합산한다(구로3동 음식 = 43개 소분류 중
-    29개에 값 존재 · 가중평균 3,058,703원 · 895곳). 순차 조회는 24초라 병렬로 돌리고,
+    29개에 값 존재 · 가중평균 약 3,059만원 · 895곳). 순차 조회는 24초라 병렬로 돌리고,
     시간 상한을 둬서 제안서 생성이 늘어지지 않게 한다. 결과는 다른 캐시와 같은 TTL 로 보관."""
     if not major:
         return None
@@ -582,7 +641,7 @@ def _aggregate_major(admi_cd: str, loc: str, major: str):
     return result
 
 
-def get_place_sbiz(region: str, industry_label: str) -> dict | None:
+def get_place_sbiz(region: str, industry_label: str, hint: str = "") -> dict | None:
     """지역명×업종 라벨 → 상권 데이터 블록(제안서 sbiz).
     반환 스키마(전 필드 optional·없으면 null) — FE 5차 배선이 이 스키마에 고정:
       {"source":"sbiz365-simple", "baseYm", "district":{admiCd,admiNm,guNm},
@@ -597,17 +656,19 @@ def get_place_sbiz(region: str, industry_label: str) -> dict | None:
             return None  # 키 미설정 → 모듈 전체 조용히 비활성
         region = (region or "").strip()
         label = (industry_label or "").strip()
+        hint = (hint or "").strip()
         if not region or not label:
             return None
 
         admi = _resolve_admi(region)
         if not admi or not admi.get("admiCd"):
             return None
-        candidates = _resolve_upjong_candidates(label, limit=3)
+        candidates = _resolve_upjong_candidates(label, limit=3, hint=hint)
         if not candidates:
             return None
 
-        cache_key = f"sbiz:simple:{admi['admiCd']}|{_norm(label)}"
+        # 힌트가 후보를 바꾸므로 캐시 키에도 넣는다(같은 동네 같은 라벨이어도 삼겹살집/칼국수집이 다른 업종).
+        cache_key = f"sbiz:simple:{admi['admiCd']}|{_norm(label)}|{_norm(hint)}"
         cached = _cache_get(cache_key, SBIZ_CACHE_TTL)
         if cached is not None:
             return cached
