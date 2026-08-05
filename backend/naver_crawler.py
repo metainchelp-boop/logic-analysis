@@ -713,8 +713,13 @@ def get_keyword_volume(keywords: List[str]) -> List[Dict]:
         "X-Customer": SEARCHAD_CUSTOMER_ID,
         "X-Signature": signature,
     }
+    # ⚠️ keywordstool 은 hintKeywords 에 공백이 있으면 400 을 낸다(2026-08-05 실측:
+    #    '구로동 고기' → 400 Bad Request 3회 재시도 전부 실패). 같은 검색광고 계열인
+    #    get_bid_estimates 는 이미 공백을 지우고 있다 — 동일 규칙을 여기에도 맞춘다.
+    #    단일 낱말 키워드(기존 스토어 경로)는 지울 공백이 없어 동작 100% 동일.
+    #    응답의 keyword 는 네이버가 정규화해 돌려주므로 형식 변화 없음.
     params = {
-        "hintKeywords": ",".join(keywords),
+        "hintKeywords": ",".join((k or "").strip().replace(" ", "") for k in keywords),
         "showDetail": "1",
     }
 

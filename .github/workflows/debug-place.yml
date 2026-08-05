@@ -25,6 +25,9 @@ on:
       sns_theme_check:
         description: 'SNS·테마상권·유동인구(시간대/요일) 실응답 탐색 (true — 잔여 3종·키 값 미출력)'
         default: ''
+      enrich_probe:
+        description: '맞춤제안서 실데이터 재현 — "지역|업종|키워드|업체명" (예: 구로동|음식점|고기|메타). 읽기 전용'
+        default: ''
 
 jobs:
   diagnose:
@@ -554,3 +557,283 @@ jobs:
               df -h / | tail -1
               docker images | head -8
             fi
+      # ── 맞춤제안서(플레이스) enrich 재현 진단 (2026-08-05) ──────────────
+      # 실제 제안서와 같은 입력으로 서버 안에서 같은 함수를 호출해, 어느 단계에서
+      # 값이 비는지(검색량/순위/상권) 단계별로 드러낸다. 전부 읽기 전용 조회.
+      - name: 제안서 enrich 재현 진단
+        if: ${{ github.event.inputs.enrich_probe != '' }}
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          PROBE: ${{ github.event.inputs.enrich_probe }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 300s
+          envs: PROBE
+          script: |
+            docker exec -i -e PROBE="$PROBE" logic-analysis python3 - <<'PY'
+            import os, time, json, traceback
+
+            parts = (os.getenv("PROBE", "") or "").split("|")
+            region   = (parts[0] if len(parts) > 0 else "").strip()
+            industry = (parts[1] if len(parts) > 1 else "").strip()
+            keyword  = (parts[2] if len(parts) > 2 else "").strip()
+            name     = (parts[3] if len(parts) > 3 else "").strip()
+            print("=" * 66)
+            print(f"입력  지역={region!r} 업종={industry!r} 키워드={keyword!r} 업체명={name!r}")
+
+            def step(title):
+                print("-" * 66); print(f"[{title}]")
+
+            # 0) 인증키 등록 상태 — 존재 여부만(값 미출력)
+            step("0. 인증키 등록 상태")
+            try:
+                import sbiz365
+                ks = sbiz365._env_keys()
+                for k, v in ks.items():
+                    print(f"  {k:8s}: {'등록됨 len=' + str(len(v)) if v else '없음'}")
+            except Exception as e:
+                print("  sbiz365 import 실패:", e); traceback.print_exc()
+
+            # 1) 검색량 — 제안서 '월 검색량' 칸의 원천
+            step("1. 검색량(검색광고 API)")
+            try:
+                import main as _m
+                combined = _m._combine_region_keyword(region, keyword)
+                print(f"  합성 키워드: {combined!r}")
+                from naver_crawler import get_keyword_volume
+                t0 = time.time()
+                rows = get_keyword_volume([combined]) or []
+                print(f"  소요 {time.time()-t0:.1f}s · 응답 {len(rows)}건")
+                print("  원문:", json.dumps(rows[:2], ensure_ascii=False)[:600])
+            except Exception as e:
+                print("  실패:", type(e).__name__, e); traceback.print_exc()
+
+            # 2) 순위 이력 — '순위 추이' 슬라이드의 원천
+            step("2. 무인 추적 순위 이력")
+            try:
+                import place_crawler
+                from database import get_place_rank_history, get_place_tracked_keywords
+                bk = f"nm:{place_crawler._norm(name)}|{place_crawler._norm(region)}" if name else ""
+                print(f"  business_key: {bk!r}")
+                series = get_place_rank_history(bk, combined, days=90) if bk else []
+                print(f"  순위 점: {len(series)}개  (2개 미만이면 추이 슬라이드 생략)")
+                tracked = get_place_tracked_keywords(bk) if bk else []
+                print(f"  추적 중 키워드: {len(tracked)}개")
+                if tracked:
+                    print("  ", [t.get('keyword') for t in tracked[:8]])
+            except Exception as e:
+                print("  실패:", type(e).__name__, e); traceback.print_exc()
+
+            # 3) 상권 체인 — '우리 동네 상권' 6장의 원천. 단계별로 어디서 끊기는지 본다.
+            step("3. 상권(소상공인365) 체인")
+            try:
+                t0 = time.time()
+                admi = sbiz365._resolve_admi(region)
+                print(f"  ③-1 지역→행정동  {time.time()-t0:.1f}s  →  {admi}")
+                up = sbiz365._resolve_upjong(industry)
+                print(f"  ③-2 업종→분류코드  →  {up}")
+                if admi and admi.get("admiCd") and up:
+                    t1 = time.time()
+                    avg = sbiz365._fetch_avg(admi["admiCd"], up["code"], region)
+                    print(f"  ③-3 매출 조회  {time.time()-t1:.1f}s  →  {'수신' if avg else 'None'}")
+                    if avg:
+                        print("      키:", sorted(avg.keys()))
+                        print("      saleAmt(천원):", avg.get("saleAmt"), " guAmt:", avg.get("guAmt"), " siAmt:", avg.get("siAmt"))
+                else:
+                    print("  ③-3 건너뜀(행정동 또는 업종 매칭 실패)")
+                t2 = time.time()
+                block = sbiz365.get_place_sbiz(region, industry)
+                print(f"  ③-4 최종 블록  {time.time()-t2:.1f}s  →  {'생성됨' if block else 'None(상권 슬라이드 생략)'}")
+                if block:
+                    print("      ", json.dumps(block, ensure_ascii=False)[:900])
+            except Exception as e:
+                print("  실패:", type(e).__name__, e); traceback.print_exc()
+
+
+            # 4) 실패 격리 매트릭스 — parts[4]=="matrix" 일 때만
+            if len(parts) > 4 and parts[4].strip() == "matrix":
+                step("4. 실패 격리 매트릭스 (업종코드 × simpleLoc)")
+                try:
+                    pairs = sbiz365._upjong_pairs() or []
+                    cands = [(c, n) for c, n in pairs if "음식" in n][:10]
+                    print(f"  '음식' 포함 업종 후보 {len(cands)}개 — 같은 행정동({admi['admiCd']})에 하나씩 시험")
+                    for c, n in cands:
+                        r = sbiz365._fetch_avg(admi["admiCd"], c, region)
+                        print(f"    {c}  {'OK saleAmt=' + str(r.get('saleAmt')) if r else '실패'}   {n[:44]}")
+                    print("  simpleLoc 변형 시험 (업종 = 위 진단이 고른 코드)")
+                    for loc in [region, admi.get("admiNm", ""), f"서울특별시 {admi.get('guNm','')} {admi.get('admiNm','')}", ""]:
+                        r = sbiz365._fetch_avg(admi["admiCd"], up["code"], loc)
+                        print(f"    simpleLoc={loc!r:34s} → {'OK' if r else '실패'}")
+                    print("  대조군 — 검증 성공했던 행정동(역삼1동 11680640)에 같은 업종 코드")
+                    r = sbiz365._fetch_avg("11680640", up["code"], "역삼동")
+                    print(f"    11680640 × {up['code']} → {'OK saleAmt=' + str(r.get('saleAmt')) if r else '실패'}")
+                except Exception as e:
+                    print("  실패:", type(e).__name__, e); traceback.print_exc()
+
+
+            # 5) 수정안 사전 검증 — parts[4]=="verify". 배포 전에 고친 로직이 실제로 통하는지 확인.
+            #    (서버 컨테이너는 아직 옛 코드라, 고친 규칙을 이 자리에서 그대로 재현해 본다)
+            if len(parts) > 4 and parts[4].strip() == "verify":
+                step("5. 수정안 사전 검증")
+                try:
+                    import urllib.parse, urllib.request
+                    # (A) 행정동 조회가 정식 주소 3필드를 실제로 주는지
+                    coord = sbiz365._region_coord(region)
+                    print(f"  A-1 좌표: {coord}")
+                    key = sbiz365._env_keys()["datago"]
+                    qs = urllib.parse.urlencode({"radius": "500", "cx": coord[0], "cy": coord[1],
+                                                 "type": "json", "numOfRows": "1", "pageNo": "1"})
+                    u = f"http://apis.data.go.kr/B553077/api/open/sdsc2/storeListInRadius?serviceKey={key}&{qs}"
+                    with urllib.request.urlopen(urllib.request.Request(u, headers={"Accept": "application/json"}), timeout=12) as r:
+                        it = ((json.loads(r.read().decode("utf-8", "replace")).get("body") or {}).get("items") or [{}])[0]
+                    sido, gu, dong = it.get("ctprvnNm"), it.get("signguNm"), it.get("adongNm")
+                    loc = " ".join(x for x in (sido, gu, dong) if x)
+                    print(f"  A-2 주소 3필드: 시도={sido!r} 시군구={gu!r} 행정동={dong!r}")
+                    print(f"  A-3 조립된 simpleLoc: {loc!r}")
+                    # (B) 그 주소로 매출 조회
+                    got = sbiz365._fetch_avg(it.get("adongCd"), up["code"], loc)
+                    print(f"  B   매출 조회 → {'✅ 성공' if got else '❌ 실패'}")
+                    if got:
+                        print(f"      점포당 월평균 {got.get('saleAmt')}천원 · 시군구평균 {got.get('guAmt')} · 시도평균 {got.get('siAmt')}")
+                        print(f"      월별 시계열 {len(got.get('series') or [])}개 · 업소수 시계열 {len(got.get('shopSeries') or [])}개")
+                    # (C) 검색량 — 공백 제거 키워드
+                    from naver_crawler import get_keyword_volume as _kv
+                    stripped = combined.replace(" ", "")
+                    rows = _kv([stripped]) or []
+                    print(f"  C   검색량('{stripped}') → {len(rows)}건")
+                    if rows:
+                        r0 = rows[0]
+                        pc, mo = r0.get("monthlyPcQcCnt"), r0.get("monthlyMobileQcCnt")
+                        print(f"      keyword={r0.get('keyword')!r} PC={pc} 모바일={mo} 경쟁={r0.get('compIdx')}")
+                    # (D) 업종 대표성 비교 — 같은 동네에서 코드별 매출 차이
+                    print("  D   업종 코드별 점포당 매출(같은 행정동) — 대표 코드 선정 근거")
+                    for c, n in [(c, n) for c, n in (sbiz365._upjong_pairs() or []) if "음식 >" in n][:12]:
+                        rr = sbiz365._fetch_avg(it.get("adongCd"), c, loc)
+                        if rr and rr.get("saleAmt") is not None:
+                            print(f"      {c}  {str(rr.get('saleAmt')):>8}천원  {n[:40]}")
+                except Exception as e:
+                    print("  실패:", type(e).__name__, e); traceback.print_exc()
+
+
+            # 6) 고친 규칙 전체 재현 — parts[4]=="fixed". 배포 후 실제로 나올 값을 미리 본다.
+            if len(parts) > 4 and parts[4].strip() == "fixed":
+                step("6. 수정 후 예상 결과(실서버 데이터로 재현)")
+                try:
+                    import urllib.parse, urllib.request
+                    pairs = sbiz365._upjong_pairs() or []
+                    print(f"  업종 트리 {len(pairs)}건")
+
+                    def residual(n):
+                        last = str(n or "").split(">")[-1].strip()
+                        return last.startswith("기타") or ("그 외" in last)
+
+                    def cands(label, limit=3):
+                        terms = []
+                        for lk, ts in sbiz365._UPJONG_SEARCH_TERMS.items():
+                            if lk in label or label in lk:
+                                terms.extend(ts)
+                        terms.append(label)
+                        sc, seen = [], set()
+                        for rank, term in enumerate(terms):
+                            if not term:
+                                continue
+                            for c, n in pairs:
+                                if term in n and c not in seen:
+                                    seen.add(c); sc.append((residual(n), rank, len(c), c, n))
+                        sc.sort()
+                        return [(c, n) for _, _, _, c, n in sc[:limit]]
+
+                    # 좌표 → 정식 주소
+                    coord = sbiz365._region_coord(region)
+                    key = sbiz365._env_keys()["datago"]
+                    qs = urllib.parse.urlencode({"radius": "500", "cx": coord[0], "cy": coord[1],
+                                                 "type": "json", "numOfRows": "1", "pageNo": "1"})
+                    u = f"http://apis.data.go.kr/B553077/api/open/sdsc2/storeListInRadius?serviceKey={key}&{qs}"
+                    with urllib.request.urlopen(urllib.request.Request(u, headers={"Accept": "application/json"}), timeout=12) as r:
+                        it = ((json.loads(r.read().decode("utf-8", "replace")).get("body") or {}).get("items") or [{}])[0]
+                    loc = " ".join(x for x in (it.get("ctprvnNm"), it.get("signguNm"), it.get("adongNm")) if x)
+                    print(f"  행정동: {it.get('adongCd')} · simpleLoc={loc!r}")
+
+                    cs = cands(industry)
+                    print(f"  업종 후보(고친 규칙): " + ", ".join(f"{c}={n.split('>')[-1].strip()}" for c, n in cs))
+                    chosen = None
+                    for c, n in cs:
+                        got = sbiz365._fetch_avg(it.get("adongCd"), c, loc)
+                        amt = got.get("saleAmt") if got else None
+                        print(f"    시도 {c} ({n.split('>')[-1].strip()}) → saleAmt={amt}")
+                        if got and amt:
+                            chosen = (c, n, got); break
+                    if chosen:
+                        c, n, got = chosen
+                        print(f"  ✅ 채택: {c} {n.split('>')[-1].strip()}")
+                        print(f"     점포당 월평균 {int(got['saleAmt']*1000):,}원 · 시군구평균 {int((got.get('guAmt') or 0)*1000):,}원 · 시도평균 {int((got.get('siAmt') or 0)*1000):,}원")
+                        gu = got.get("guAmt") or 0
+                        if gu:
+                            print(f"     → 제안서 헤드라인: 시군구 평균 대비 {round((got['saleAmt']/gu-1)*100):+d}%")
+                        print(f"     업소수 {got.get('saleCnt')} · 매출 시계열 {len(got.get('series') or [])}개 · 업소수 시계열 {len(got.get('shopSeries') or [])}개")
+                        print(f"     → 상권 슬라이드 렌더 가능 ✅")
+                    else:
+                        print("  ❌ 후보 3개 모두 값 없음 → 상권 슬라이드 생략(정상 폴백)")
+
+                    from naver_crawler import get_keyword_volume as _kv
+                    rows = _kv([combined.replace(" ", "")]) or []
+                    if rows:
+                        r0 = rows[0]
+                        pc = r0.get("monthlyPcQcCnt"); mo = r0.get("monthlyMobileQcCnt")
+                        def _i(v):
+                            try: return int(str(v).replace("<", "").strip())
+                            except Exception: return 0
+                        print(f"  ✅ 검색량: {_i(pc)+_i(mo):,}회/월 (PC {pc} · 모바일 {mo}) · 경쟁 {r0.get('compIdx')}")
+                    else:
+                        print("  ❌ 검색량 없음")
+                except Exception as e:
+                    print("  실패:", type(e).__name__, e); traceback.print_exc()
+
+
+            # 7) 업종 상위분류 집계 가능 여부 — parts[4]=="agg"
+            #    "업종을 세분화하지 않고 '음식점 전체'로 볼 수 있나?" 를 실측으로 판정한다.
+            if len(parts) > 4 and parts[4].strip() == "agg":
+                step("7. 업종 상위분류(종합) 집계 가능 여부")
+                try:
+                    import urllib.parse, urllib.request
+                    coord = sbiz365._region_coord(region)
+                    key = sbiz365._env_keys()["datago"]
+                    qs = urllib.parse.urlencode({"radius": "500", "cx": coord[0], "cy": coord[1],
+                                                 "type": "json", "numOfRows": "1", "pageNo": "1"})
+                    u = f"http://apis.data.go.kr/B553077/api/open/sdsc2/storeListInRadius?serviceKey={key}&{qs}"
+                    with urllib.request.urlopen(urllib.request.Request(u, headers={"Accept": "application/json"}), timeout=12) as r:
+                        it = ((json.loads(r.read().decode("utf-8", "replace")).get("body") or {}).get("items") or [{}])[0]
+                    cd = it.get("adongCd")
+                    loc = " ".join(x for x in (it.get("ctprvnNm"), it.get("signguNm"), it.get("adongNm")) if x)
+                    print(f"  기준: {cd} · {loc}")
+                    print("  (A) 상위분류 코드를 그대로 넣으면 집계해 주는가")
+                    for code in ["I20101", "I201", "I20", "I2", "I", ""]:
+                        got = sbiz365._fetch_avg(cd, code, loc)
+                        amt = got.get("saleAmt") if got else None
+                        cnt = got.get("saleCnt") if got else None
+                        print(f"    upjongCd={code!r:9s} → {'응답O' if got else '응답X'}  saleAmt={amt}  업소수={cnt}")
+                    print("  (B) 소분류를 우리가 직접 합산할 때의 비용·결과 — '음식' 전 소분류 실측")
+                    tot_amt = tot_cnt = 0.0
+                    nz = []
+                    import time as _t
+                    t0 = _t.time()
+                    foods = [(c, n) for c, n in (sbiz365._upjong_pairs() or []) if n.startswith("음식")]
+                    for c, n in foods:
+                        got = sbiz365._fetch_avg(cd, c, loc)
+                        a = (got or {}).get("saleAmt") or 0
+                        k = (got or {}).get("saleCnt") or 0
+                        if a and k:
+                            nz.append((c, n.split(">")[-1].strip(), a, k))
+                            tot_amt += a * k; tot_cnt += k
+                    print(f"    음식 소분류 {len(foods)}개 조회 · 소요 {_t.time()-t0:.0f}초 · 값 있는 분류 {len(nz)}개")
+                    for c, n, a, k in sorted(nz, key=lambda x: -x[3])[:8]:
+                        print(f"      {c} {n[:22]:24s} {int(a*1000):>12,}원 · {int(k)}곳")
+                    if tot_cnt:
+                        print(f"    ⇒ 업소수 가중평균(=음식점 종합) {int(tot_amt/tot_cnt*1000):,}원 · 총 {int(tot_cnt)}곳")
+                except Exception as e:
+                    print("  실패:", type(e).__name__, e); traceback.print_exc()
+
+            print("=" * 66)
+            PY

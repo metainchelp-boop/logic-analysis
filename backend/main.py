@@ -1328,15 +1328,20 @@ def place_proposal_enrich(req: PlaceProposalEnrichRequest,
         try:
             tracked = get_place_tracked_keywords(business_key) if business_key else []
             tk = [t.get("keyword") for t in tracked[:8] if t.get("keyword")]
+            # 검색광고 API 는 키워드를 공백 없이 정규화해 돌려주므로(예: '구로동 고기' → '구로동고기')
+            # 양쪽 다 공백을 지운 형태로 대조해야 매칭된다.
+            def _kn(s):
+                return "".join(str(s or "").split()).upper()
+
             vmap = {}
             if tk:
                 for vr in (_kw_vol(tk) or []):
                     kn = vr.get("keyword")
                     if kn is not None:
-                        vmap[str(kn)] = vr
+                        vmap[_kn(kn)] = vr
             for t in tracked[:8]:
                 kw = t.get("keyword")
-                vr = vmap.get(str(kw), {}) if kw else {}
+                vr = vmap.get(_kn(kw), {}) if kw else {}
                 pc, mo = vr.get("monthlyPcQcCnt"), vr.get("monthlyMobileQcCnt")
                 vol = (_pe_int(pc) + _pe_int(mo)) if (pc is not None or mo is not None) else None
                 keyword_rows.append({
