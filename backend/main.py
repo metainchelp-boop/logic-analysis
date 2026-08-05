@@ -1322,12 +1322,23 @@ def place_proposal_enrich(req: PlaceProposalEnrichRequest,
         except Exception as e:
             logger.warning(f"[proposal-enrich] 검색량 조회 실패(무시): {e}")
 
-        # 2) 무인 추적 순위 이력(최근 90일) + 최신 순위·상태 (Q3 순위 추이 슬라이드)
+        # 2) 순위 이력(최근 90일) + 최신 순위·상태 (Q3 순위 추이 슬라이드)
+        #    출처는 두 가지 — 무인 추적(계약 광고주·관리팀 등록)과 **「플레이스 분석」 수동 분석**.
+        #    ⚠️ 제안서는 계약 전 영업 대상 자료라 실제로는 후자가 주 경로다.
+        #    ⚠️ 키워드 저장 형태가 두 경로에서 다르다: 수동 분석은 화면에 적은 키워드를 그대로
+        #       저장(예: '카페')하는데 여기선 지역을 합성해('성수동 카페') 찾는다 → 영업사원이
+        #       두 화면에 다르게 적으면 순위가 있는데도 못 찾는다. 합성형으로 먼저 찾고,
+        #       없으면 원 키워드로 한 번 더 찾는다(사람이 표기를 맞추지 않아도 되게).
         rank = None
         rank_state = ""
         rank_series = []
+        matched_kw = combined_kw
         if business_key:
-            rank_series = get_place_rank_history(business_key, combined_kw, days=90)
+            for _kw_try in [k for k in (combined_kw, base_kw) if k]:
+                rank_series = get_place_rank_history(business_key, _kw_try, days=90)
+                if rank_series:
+                    matched_kw = _kw_try
+                    break
             if rank_series:
                 last = rank_series[-1]
                 rank = last.get("rank")
@@ -1376,7 +1387,7 @@ def place_proposal_enrich(req: PlaceProposalEnrichRequest,
             "isPlace": True,
             "sbiz": sbiz_block,        # 상권 블록(소상공인365) — null이면 상권 슬라이드 생략
             "businessKey": business_key,
-            "keyword": combined_kw,
+            "keyword": matched_kw,
             "volume": volume,               # 월 검색량(실측) — null=미확인
             "compIdx": comp_idx,
             "rank": rank,                   # 무인 추적 최신 순위 — null=미추적/미노출
