@@ -5,6 +5,11 @@ name: Debug Rank Batch (읽기 전용 진단)
 
 on:
   workflow_dispatch:
+    inputs:
+      rank_link:
+        description: '순위 축 브리지 — off(기본) / impact(통합 시 영향 측정·배포 전 가능) / stats / preview / apply'
+        required: false
+        default: 'off'
 
 jobs:
   diagnose:
@@ -110,5 +115,122 @@ jobs:
             print(f"  총 {tot} / 슬러그 {slug}")
             PY
             echo
+            RL="${{ github.event.inputs.rank_link }}"
+            if [ "$RL" = "impact" ]; then
+              # 조회 통합(4단계)을 하면 전산① portal-summary 가 실제로 얼마나 달라지는지 측정.
+              # rank_link 배포 이전에도 돌 수 있게 순수 SQL 로만 읽는다(쓰기 없음).
+              echo "== 조회 통합 영향 측정 (읽기 전용) =="
+              docker exec -i logic-analysis python3 - <<'PY'
+            import re, sqlite3
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+
+            def pid(u):
+                u = u or ""
+                for pat in (r"[?&]nvMid=(\d+)", r"/products/(\d+)", r"/catalog/(\d+)"):
+                    m = re.search(pat, u)
+                    if m: return m.group(1)
+                return ""
+
+            # 축A: 상품ID → {키워드: 최신 순위}
+            a_rank = {}
+            for r in c.execute("""
+                SELECT p.product_url, k.keyword, rk.rank_position, rk.checked_at
+                  FROM tracked_products p
+                  JOIN tracked_keywords k ON k.product_id = p.id
+                  JOIN rankings rk ON rk.id = (SELECT MAX(id) FROM rankings
+                                                WHERE keyword_id = k.id)
+            """):
+                key = pid(r["product_url"])
+                if key:
+                    a_rank.setdefault(key, {})[r["keyword"]] = (r["rank_position"], r["checked_at"])
+
+            # 축B: 업체별 키워드 최신 순위
+            filled = same = diff = still = 0
+            diff_samples = []
+            cells = 0
+            linked_clients = set()
+            # ⚠ 바깥 루프를 커서로 돌면서 같은 커서로 안쪽 질의를 하면 이터레이션이 끊긴다
+            #   (첫 업체만 돌고 끝남 — 실측 「총 1개」로 드러남). 목록을 먼저 확정하고
+            #   안쪽 질의는 conn.execute(매번 새 커서)로 돈다.
+            client_rows = c.execute("""SELECT id, name, naver_store_url FROM clients
+                                        WHERE status='active' AND COALESCE(vertical,'store')='store'""").fetchall()
+            for cl in client_rows:
+                key = pid(cl["naver_store_url"])
+                amap = a_rank.get(key) if key else None
+                # portal-summary 와 같은 선택: client_analyses 키워드별 최신 8개
+                kws = [r["keyword"] for r in conn.execute("""
+                    SELECT keyword, MAX(analyzed_date) d FROM client_analyses
+                     WHERE client_id=? GROUP BY keyword ORDER BY d DESC LIMIT 8""", (cl["id"],))]
+                if not kws:
+                    continue
+                bmap = {}
+                for r in conn.execute("""
+                    SELECT keyword, rank_position FROM client_rank_history
+                     WHERE client_id=? AND id IN (SELECT MAX(id) FROM client_rank_history
+                                                   WHERE client_id=? GROUP BY keyword)""",
+                    (cl["id"], cl["id"])):
+                    bmap[r["keyword"]] = r["rank_position"]
+                if amap:
+                    linked_clients.add(cl["id"])
+                for kw in kws:
+                    cells += 1
+                    b = bmap.get(kw)
+                    a = (amap or {}).get(kw)
+                    av = a[0] if a else None
+                    if b in (None, 0):
+                        if av not in (None, 0):
+                            filled += 1          # 「-」 → 실제 순위 (개선)
+                        else:
+                            still += 1           # 여전히 「-」 (변화 없음)
+                    else:
+                        if av in (None, 0):
+                            pass                 # 축B 값 유지 (변화 없음)
+                        elif av == b:
+                            same += 1            # 두 축이 같은 값 (안전 확인)
+                        else:
+                            diff += 1            # 두 축이 다른 값 (⚠ 검토 대상)
+                            if len(diff_samples) < 10:
+                                diff_samples.append((cl["name"], kw, b, av, a[1]))
+
+            print(f"  전산① 이 보는 칸(업체×키워드) 총 {cells}개")
+            print(f"  ├ 지금 「-」인데 축A 에 순위가 있는 칸 : {filled}개  ← 통합하면 채워짐")
+            print(f"  ├ 지금도 앞으로도 「-」               : {still}개  ← 변화 없음")
+            print(f"  ├ 두 축 값이 같음                     : {same}개  ← 안전")
+            print(f"  └ 두 축 값이 다름                     : {diff}개  ← 다르면 검토 필요")
+            print(f"  축A 링크가 있는 업체: {len(linked_clients)}곳")
+            if diff_samples:
+                print("  값이 다른 샘플(업체 · 키워드 · 축B · 축A · 축A측정시각):")
+                for s in diff_samples:
+                    print(f"   - {s[0]} · {s[1]} · 축B {s[2]} vs 축A {s[3]} ({s[4]})")
+            PY
+              echo
+            fi
+            if [ -n "$RL" ] && [ "$RL" != "off" ] && [ "$RL" != "impact" ]; then
+              echo "== 순위 축 브리지 ($RL) =="
+              # 실제 진입점(rank_link 모듈)을 그대로 호출한다 — 내부 로직 재현 금지 원칙.
+              docker exec -i -e RL_MODE="$RL" logic-analysis python3 - <<'PY'
+            import os, sys, json
+            sys.path.insert(0, "/app")   # Dockerfile WORKDIR=/app 에 backend 내용이 그대로 복사됨
+            import rank_link
+            mode = os.getenv("RL_MODE", "stats")
+            if mode == "apply":
+                rank_link.init_rank_link_db()
+                print(json.dumps(rank_link.run_maintenance(), ensure_ascii=False, indent=2))
+            elif mode == "preview":
+                rank_link.init_rank_link_db()
+                r = rank_link.preview_backfill(limit=10)
+                s = r.pop("samples", [])
+                print(json.dumps(r, ensure_ascii=False, indent=2))
+                print("  샘플(최대 10):")
+                for x in s:
+                    print(f"   - 업체 {x['client_id']} {x['client_name']} ↔ 상품 {x['tracked_product_id']} "
+                          f"{x['product_name'][:30]} (키 {x['product_key']})")
+            else:
+                print(json.dumps(rank_link.link_stats(), ensure_ascii=False, indent=2))
+            PY
+              echo
+            fi
             echo "== 최근 오류 tail =="
             docker logs --tail 60 logic-analysis 2>&1 | grep -iE 'error|exception|traceback' | tail -15 || echo "(오류 없음)"

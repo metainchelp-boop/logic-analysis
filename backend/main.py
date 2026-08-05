@@ -36,6 +36,8 @@ from client_dashboard import router as cd_router, init_client_dashboard_db
 from chat import router as chat_router, init_chat_db
 from seo_generate import router as seo_generate_router, init_seo_db
 from collector import router as collector_router, init_collector_db
+import rank_link
+from rank_link import init_rank_link_db
 from datalab import analyze_datalab
 
 logger = logging.getLogger(__name__)
@@ -298,6 +300,7 @@ async def lifespan(app):
     init_chat_db()
     init_seo_db()
     init_collector_db()   # 수집기 테이블(collected_serp)
+    init_rank_link_db()   # 순위 두 축 브리지(rank_link) — 읽기 경로 무변경
 
     # DB 무결성 검증 후 백업 (테이블 초기화 이후)
     _backup_db_on_startup()
@@ -965,6 +968,35 @@ def keyword_volume(keywords: List[str], current_user: dict = Depends(get_current
     except Exception as e:
         logger.error(f"키워드 볼륨 조회 실패: {e}")
         raise HTTPException(status_code=500, detail="키워드 볼륨 조회 중 오류가 발생했습니다.")
+
+
+# ==================== 순위 저장소 통합(브리지) API ====================
+# 두 축(tracked_products / clients)을 잇는 링크만 다룬다. 기존 순위 조회 경로는
+# 아직 아무것도 바꾸지 않는다 — 조회 통합은 전산① portal-summary 를 지나므로
+# 사전 통지 후 별도 단계로 진행한다.
+
+@app.get("/api/rank-link/preview")
+def rank_link_preview(limit: int = 20, current_user: dict = Depends(require_role(UserRole.ADMIN))):
+    """무엇이 연결될지 먼저 본다(읽기 전용). 적용 전 확인용."""
+    return rank_link.preview_backfill(limit=max(1, min(200, limit)))
+
+
+@app.post("/api/rank-link/apply")
+def rank_link_apply(current_user: dict = Depends(require_role(UserRole.ADMIN))):
+    """미리보기와 같은 규칙으로 링크를 기록한다(멱등 — 여러 번 눌러도 안전)."""
+    return rank_link.apply_backfill(linked_by=current_user.get("id") or 0)
+
+
+@app.get("/api/rank-link/stats")
+def rank_link_stats(current_user: dict = Depends(require_role(UserRole.ADMIN))):
+    """현황 — 얼마나 이어졌고 얼마가 남았는지."""
+    return rank_link.link_stats()
+
+
+@app.get("/api/rank-link/client/{client_id}")
+def rank_link_by_client(client_id: int, current_user: dict = Depends(get_current_user)):
+    """업체에 이어진 추적 상품 목록."""
+    return {"success": True, "links": rank_link.get_links_for_client(client_id)}
 
 
 # ==================== 알림톡 API ====================
