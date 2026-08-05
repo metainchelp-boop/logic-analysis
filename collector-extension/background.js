@@ -57,6 +57,60 @@ async function log(line) {
 let fetchMode = 'direct';          // 'direct' | 'page'
 let workTabId = null;
 
+/* ⚠️ workTabId 는 메모리 변수라 MV3 서비스워커가 잠들었다 깨면 null 로 돌아간다.
+ * 그러면 매번 새 작업 탭을 만들어 옛 탭이 영원히 쌓였다(2026-08-05 현장: 네이버쇼핑
+ * 탭이 잔뜩 열린 채 자동입력 방지 페이지에 머물러 있었음).
+ * 탭이 쌓이면 한 IP 에서 동시 요청이 늘어 봇 판정을 자초하고, 캡차에 걸리면
+ * URL 이 바뀌어 「유효한 작업 탭 아님」으로 또 새 탭을 만드는 악순환이 된다.
+ * → 탭 id 를 storage 에 남겨 재기동에도 이어 쓰고, 남은 탭은 정리하며,
+ *   캡차가 뜨면 탭을 더 만들지 않고 즉시 멈춘다. */
+const TAB_KEY = 'workTabId';
+const BLOCK_KEY = 'blockedUntil';
+const WORK_URL = 'https://search.shopping.naver.com/search/all?query=' + encodeURIComponent('쇼핑');
+const BLOCK_COOLDOWN_MS = 6 * 60 * 60 * 1000;   // 캡차 확인 시 6시간 쉼(계속 두드리면 더 깊이 막힌다)
+
+/** 캡차·차단 페이지로 넘어갔는지 — URL 이 검색 도메인을 벗어났으면 차단으로 본다. */
+function isBlockedUrl(url) {
+  const u = String(url || '');
+  if (!u) return false;
+  if (u.includes('search.shopping.naver.com')) return false;
+  return /naver\.com/.test(u);   // ncpt·nid 등 네이버 안의 다른 페이지 = 캡차/로그인 유도
+}
+
+async function getBlockedUntil() {
+  const o = await chrome.storage.local.get(BLOCK_KEY);
+  return Number(o[BLOCK_KEY] || 0);
+}
+
+async function markBlocked(reason) {
+  const until = Date.now() + BLOCK_COOLDOWN_MS;
+  await chrome.storage.local.set({ [BLOCK_KEY]: until });
+  await setState({ blocked: true, blockedUntil: until, blockedReason: reason });
+  await log(`🧱 네이버 자동입력 방지(캡차) 확인 — ${reason}. 6시간 쉬었다 재개합니다.`);
+  await log('   해제하려면: 크롬에서 네이버쇼핑을 직접 열어 캡차를 한 번 풀어주세요.');
+  // 쌓인 작업 탭을 닫아 둔다 — 열어둘수록 봇 판정이 깊어지고 화면도 지저분해진다.
+  await closeAllWorkTabs();
+}
+
+async function clearBlocked() {
+  await chrome.storage.local.remove(BLOCK_KEY);
+  await setState({ blocked: false, blockedUntil: 0, blockedReason: '' });
+}
+
+/** 네이버쇼핑 작업 탭 전부 닫기 — 누적분 청소용. */
+async function closeAllWorkTabs() {
+  try {
+    const tabs = await chrome.tabs.query({ url: '*://search.shopping.naver.com/*' });
+    const ids = tabs.map((t) => t.id).filter((id) => id !== undefined);
+    if (ids.length) {
+      await chrome.tabs.remove(ids);
+      await log(`🧹 작업 탭 ${ids.length}개 정리`);
+    }
+  } catch (e) { /* 이미 닫힘 등 — 무시 */ }
+  workTabId = null;
+  await chrome.storage.local.remove(TAB_KEY);
+}
+
 function waitTabLoaded(tabId) {
   return new Promise((resolve) => {
     const iv = setInterval(async () => {
@@ -69,28 +123,91 @@ function waitTabLoaded(tabId) {
   });
 }
 
-/** 네이버쇼핑 작업 탭 확보 — 없으면 백그라운드(비활성)·고정 탭으로 생성.
- *  사용자가 닫아도 다음 요청 때 자동 재생성된다. */
+/** 네이버쇼핑 작업 탭 확보 — 항상 **한 개만** 유지한다.
+ *
+ *  ① 메모리 → ② storage → ③ 이미 열려 있는 탭 순으로 이어 쓰고, 남는 탭은 닫는다.
+ *  ④ 그래도 없으면 새로 만드는데, **열린 크롬 창이 하나도 없으면**
+ *     `chrome.tabs.create` 가 'No current window' 로 실패하므로(맥에서 창만 닫고
+ *     크롬은 살아 있는 상태 — 2026-08-05 실사고) 최소화된 창을 먼저 만든다. */
 async function ensureWorkTab() {
+  // ① 메모리에 들고 있던 탭
   if (workTabId !== null) {
     try {
       const t = await chrome.tabs.get(workTabId);
       if (t && (t.url || '').includes('search.shopping.naver.com')) return workTabId;
-    } catch (e) { /* 닫힘 — 재생성 */ }
+      if (isBlockedUrl(t && t.url)) throw new Error('BLOCKED:' + (t.url || ''));
+    } catch (e) {
+      if (String(e.message || '').startsWith('BLOCKED:')) throw e;
+      /* 닫힘 — 아래로 */
+    }
   }
-  const tab = await chrome.tabs.create({
-    url: 'https://search.shopping.naver.com/search/all?query=' + encodeURIComponent('쇼핑'),
-    active: false,    // 화면을 뺏지 않게 백그라운드로
-    pinned: true,     // 실수로 닫기 어렵게 고정
-  });
+  // ② 지난 기동에서 남긴 탭
+  try {
+    const saved = (await chrome.storage.local.get(TAB_KEY))[TAB_KEY];
+    if (saved) {
+      const t = await chrome.tabs.get(saved);
+      if (t && (t.url || '').includes('search.shopping.naver.com')) {
+        workTabId = saved;
+        return workTabId;
+      }
+      if (isBlockedUrl(t && t.url)) throw new Error('BLOCKED:' + (t.url || ''));
+    }
+  } catch (e) {
+    if (String(e.message || '').startsWith('BLOCKED:')) throw e;
+  }
+  // ③ 이미 열려 있는 네이버쇼핑 탭 재사용 + 나머지 정리(누적 방지)
+  try {
+    const tabs = await chrome.tabs.query({ url: '*://search.shopping.naver.com/*' });
+    if (tabs.length) {
+      workTabId = tabs[0].id;
+      const extra = tabs.slice(1).map((t) => t.id).filter((id) => id !== undefined);
+      if (extra.length) {
+        await chrome.tabs.remove(extra);
+        await log(`🧹 중복 작업 탭 ${extra.length}개 정리 (1개만 유지)`);
+      }
+      await chrome.storage.local.set({ [TAB_KEY]: workTabId });
+      return workTabId;
+    }
+  } catch (e) { /* 조회 실패 — 아래에서 새로 만든다 */ }
+
+  // ④ 새로 만든다 — 창이 없으면 창부터
+  let tab;
+  let wins = [];
+  try { wins = await chrome.windows.getAll({ windowTypes: ['normal'] }); } catch (e) { wins = []; }
+  if (!wins.length) {
+    // 창이 하나도 없는 상태(맥: 창만 닫고 크롬은 실행 중) — 최소화 창을 만들어 그 안에서 작업
+    const w = await chrome.windows.create({ url: WORK_URL, focused: false, state: 'minimized' });
+    tab = (w.tabs && w.tabs[0]) || null;
+    if (!tab) throw new Error('작업 창 생성 실패');
+    await log('🪟 열린 크롬 창이 없어 최소화 창을 만들어 진행합니다.');
+  } else {
+    tab = await chrome.tabs.create({
+      url: WORK_URL,
+      active: false,    // 화면을 뺏지 않게 백그라운드로
+      pinned: true,     // 실수로 닫기 어렵게 고정
+      windowId: wins[0].id,
+    });
+  }
   workTabId = tab.id;
+  await chrome.storage.local.set({ [TAB_KEY]: workTabId });
   await waitTabLoaded(workTabId);
   await sleep(2500);               // 페이지 초기 스크립트·쿠키 정착 대기
-  await log('🪟 네이버쇼핑 작업 탭 준비 완료 (고정 탭 — 닫혀도 자동 재생성)');
+  // 로딩 끝난 주소가 검색 도메인을 벗어났으면 캡차로 넘어간 것
+  try {
+    const t = await chrome.tabs.get(workTabId);
+    if (isBlockedUrl(t && t.url)) throw new Error('BLOCKED:' + t.url);
+  } catch (e) {
+    if (String(e.message || '').startsWith('BLOCKED:')) throw e;
+  }
+  await log('🪟 네이버쇼핑 작업 탭 준비 완료 (1개만 유지 — 닫혀도 자동 재생성)');
   return workTabId;
 }
 
-/** 실제 페이지 컨텍스트에서 fetch — 사이트 자신의 요청과 동일(같은 출처·쿠키·Sec-Fetch) */
+/** 실제 페이지 컨텍스트에서 fetch — 사이트 자신의 요청과 동일(같은 출처·쿠키·Sec-Fetch)
+ *
+ *  ⚠️ 캡차에 걸리면 JSON 대신 HTML 이 돌아온다. 종전엔 `r.json()` 이 터진 것을
+ *  평범한 실패로 세어 계속 재시도했고, 그 재시도가 차단을 더 깊게 만들었다.
+ *  → 응답이 JSON 이 아니면 **차단으로 판정**하고 즉시 멈춘다. */
 async function fetchViaPage(url) {
   const tabId = await ensureWorkTab();
   const [res] = await chrome.scripting.executeScript({
@@ -98,7 +215,13 @@ async function fetchViaPage(url) {
     func: async (u) => {
       try {
         const r = await fetch(u, { credentials: 'include', headers: { 'Accept': 'application/json' } });
-        if (!r.ok) return { err: 'HTTP ' + r.status };
+        const ct = r.headers.get('content-type') || '';
+        if (!r.ok) return { err: 'HTTP ' + r.status, blocked: r.status === 418 || r.status === 429 };
+        if (!ct.includes('json')) {
+          // 캡차·안내 페이지가 HTML 로 돌아온 경우
+          const head = (await r.text()).slice(0, 200);
+          return { err: 'JSON 이 아닌 응답', blocked: true, head };
+        }
         return { data: await r.json() };
       } catch (e) { return { err: String(e && e.message || e) }; }
     },
@@ -106,6 +229,7 @@ async function fetchViaPage(url) {
   });
   const out = res && res.result;
   if (!out) throw new Error('페이지 주입 실패');
+  if (out.blocked) throw new Error('BLOCKED:' + out.err);
   if (out.err) throw new Error(out.err);
   return out.data;
 }
@@ -194,6 +318,14 @@ let running = false;
 async function runCollection(manual = false) {
   if (running) { await log('이미 수집 중 — 중복 실행 무시'); return; }
   running = 'daily';   // ⚠️ 첫 await 이전에 '동기' 선점 — ondemand 와 알람이 겹쳐도 이중 진입 불가
+  // 캡차 쉼 중이면 들어가지 않는다(계속 두드리면 차단이 깊어진다). 수동 실행은 사람이
+  // 캡차를 풀고 눌렀을 수 있으므로 통과시킨다.
+  const bu = await getBlockedUntil();
+  if (!manual && bu > Date.now()) {
+    await log(`⏸ 자동입력 방지 쉼 중 — ${new Date(bu).toLocaleTimeString('ko-KR')} 이후 재개`);
+    running = false; return;
+  }
+  if (manual && bu) await clearBlocked();
   const token = await getToken();
   if (!token) { await log('❌ 토큰이 없습니다. 팝업에서 먼저 저장하세요.'); running = false; return; }
 
@@ -225,6 +357,11 @@ async function runCollection(manual = false) {
         await setState({ done, failed, current: kw });
         if (done % 25 === 0) await log(`… ${done}/${keywords.length} 진행 중`);
       } catch (e) {
+        // 캡차로 확인되면 더 두드리지 않고 즉시 접는다(재시도가 차단을 깊게 만든다)
+        if (String(e.message || '').startsWith('BLOCKED:')) {
+          await markBlocked(e.message.slice(8) || '수집 중 감지');
+          break;
+        }
         failed++; streak++;
         await log(`⚠️ [${kw}] 실패: ${e.message}`);
         await setState({ done, failed, current: kw });
@@ -236,6 +373,7 @@ async function runCollection(manual = false) {
       }
       await sleep(jitter() + CFG.keywordGapMs);
     }
+    if (done > 0) await clearBlocked();   // 값을 실제로 받았다 = 차단 풀림
     await log(`✅ 수집 종료 — 성공 ${done} · 실패 ${failed}`);
     // 성공 0 = 사실상 실패한 날 — finishedAt 을 남기지 않아 매시 만회 로직이 재시도하게 한다
     if (done > 0) {
@@ -260,6 +398,8 @@ async function runOnDemand() {
   if (running) return;
   running = 'ondemand';   // ⚠️ 첫 await 이전에 '동기' 선점 — daily 와 알람이 겹쳐도 이중 진입 불가
   try {
+    // 캡차 쉼 중이면 아예 들어가지 않는다(매분 재타격 = 차단 연장)
+    if (await getBlockedUntil() > Date.now()) return;
     // 직전 회차가 전량 실패(차단 의심)였으면 10분 쉰다 — 차단 중 매분 재타격으로 차단을 연장시키지 않기 위함
     const { odBackoffUntil = 0 } = await chrome.storage.local.get('odBackoffUntil');
     if (Date.now() < odBackoffUntil) return;
@@ -284,8 +424,13 @@ async function runOnDemand() {
         if (!payload.products.length) throw new Error('상품 0건');
         await uploadKeyword(token, kw, payload);
         ok++; streak = 0;
+        if (ok === 1) await clearBlocked();   // 값을 실제로 받았다 = 차단 풀림
         await log(`  ✅ [${kw}] 온디맨드 완료 (${payload.products.length}개)`);
       } catch (e) {
+        if (String(e.message || '').startsWith('BLOCKED:')) {
+          await markBlocked(e.message.slice(8) || '온디맨드 중 감지');
+          break;
+        }
         fail++; streak++;
         await log(`  ⚠️ [${kw}] 온디맨드 실패: ${e.message}`);
         if (streak >= 3) { await log('  🛑 연속 3회 실패 — 이번 회차 중단(차단 의심)'); break; }

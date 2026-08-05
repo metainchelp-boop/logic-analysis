@@ -4,9 +4,18 @@ const $ = (id) => document.getElementById(id);
 async function render() {
   const { token = '', state = {}, logs = [], rawSample = null } = await chrome.storage.local.get(['token', 'state', 'logs', 'rawSample']);
   $('token').value = token;
-  const running = state.running ? '<span class="b ok">수집 중</span>' : '대기';
+  // 캡차에 걸려 쉬는 중이면 그게 가장 중요한 정보다 — 맨 위에 눈에 띄게.
+  const bu = Number(state.blockedUntil || 0);
+  const blockedNow = state.blocked && bu > Date.now();
+  const running = blockedNow
+    ? '<span class="b bad">자동입력 방지(캡차)로 쉬는 중</span>'
+    : (state.running ? '<span class="b ok">수집 중</span>' : '대기');
   $('stat').innerHTML =
     `상태: ${running}<br>` +
+    (blockedNow
+      ? `<span class="b bad">▸ ${new Date(bu).toLocaleTimeString('ko-KR')} 이후 자동 재개</span><br>` +
+        '<span style="font-size:11px">네이버쇼핑을 직접 열어 캡차를 한 번 풀고 「지금 수집 실행」을 누르면 바로 재개됩니다.</span><br>'
+      : '') +
     `대상 <span class="b">${state.target ?? '-'}</span>개 · ` +
     `성공 <span class="b ok">${state.done ?? 0}</span> · ` +
     `실패 <span class="b bad">${state.failed ?? 0}</span><br>` +

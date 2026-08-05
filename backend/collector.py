@@ -160,6 +160,42 @@ class SerpUpload(BaseModel):
     products: List[SerpProduct] = []
 
 
+# 수집이 이만큼 끊겼다가 돌아오면 '환경 장애였다'고 보고 소진된 재시도를 되살린다.
+REVIVE_GAP_HOURS = 6
+
+
+def _revive_after_outage(conn) -> int:
+    """수집이 오래 끊겼다 재개되면 시도 5회를 소진한 대기 키워드를 되살린다.
+
+    배경(2026-08-05): 맥북 크롬에 창이 없어(`No current window`) + 네이버 자동입력 방지에
+    걸려 수집이 **전량** 실패했는데, 그 실패가 키워드마다 attempts 를 5까지 올려
+    `attempts < 5` 필터에서 영구 제외됐다(124건). 확장이 정상으로 돌아와도 이 키워드들은
+    다시는 내려가지 않는다 — 「그 키워드가 나쁜 것」과 「수집기 환경이 죽은 것」을
+    구분하지 못한 탓이다.
+
+    판정: 마지막 성공 업로드가 6시간 넘게 없다가 지금 성공했다면 환경 장애 복구로 본다.
+    이때만 되살리므로, 정상 가동 중에는 발동하지 않는다(무한 재시도 루프 불가 —
+    복구 후에는 업로드가 계속 성공해 간격이 6시간을 넘지 않는다).
+    """
+    try:
+        last = conn.execute("SELECT MAX(created_at) FROM collected_serp").fetchone()[0]
+        if last:
+            gap = conn.execute(
+                "SELECT (julianday('now','localtime') - julianday(?)) * 24", (last,)).fetchone()[0]
+            if gap is None or gap < REVIVE_GAP_HOURS:
+                return 0
+        cur = conn.execute(
+            "UPDATE collect_requests SET attempts = 0 WHERE status='pending' AND attempts >= 5")
+        n = cur.rowcount or 0
+        if n:
+            logger.info(f"[collector] 수집 재개 감지 — 소진된 대기 키워드 {n}건 재시도 복원")
+        return n
+    except Exception as e:
+        # 복구는 부가 기능 — 실패해도 업로드 자체는 계속돼야 한다
+        logger.warning(f"[collector] 재시도 복원 실패(무시): {e}")
+        return 0
+
+
 @router.post("/serp")
 def upload_serp(req: SerpUpload, x_collector_token: str = Header(None)):
     """확장이 키워드 1건 수집 결과를 올린다. 같은 날 같은 키워드는 덮어쓴다."""
@@ -182,6 +218,7 @@ def upload_serp(req: SerpUpload, x_collector_token: str = Header(None)):
     payload = json.dumps([p.model_dump() for p in req.products], ensure_ascii=False)
     conn = sqlite3.connect(DB_PATH, timeout=10)
     try:
+        _revive_after_outage(conn)
         conn.execute("""
             INSERT INTO collected_serp (keyword, collected_date, total, products_json, product_count)
             VALUES (?, ?, ?, ?, ?)
