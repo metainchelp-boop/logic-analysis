@@ -1232,6 +1232,7 @@ class PlaceProposalEnrichRequest(BaseModel):
     region: str = ""                     # 지역(동/구/시)
     keyword: str = ""                    # 대표 키워드(지역 미포함 가능 — 서버가 합성)
     place_id: Optional[str] = None       # 플레이스 ID(있으면 순위 매칭 정확도 ↑)
+    industry: str = ""                   # 업종 라벨(선택 — 소상공인365 상권 데이터 매칭용)
 
 
 def _pe_int(x):
@@ -1318,9 +1319,19 @@ def place_proposal_enrich(req: PlaceProposalEnrichRequest,
         except Exception as e:
             logger.warning(f"[proposal-enrich] 키워드 표 구성 실패(무시): {e}")
 
+        # 4) 소상공인365 상권 데이터(가산) — 키 미설정·매칭 실패·API 파손 시 None
+        #    → 제안서가 상권 슬라이드만 조용히 생략(기존 필드·동작 전부 불변).
+        sbiz_block = None
+        try:
+            from sbiz365 import get_place_sbiz
+            sbiz_block = get_place_sbiz(region, req.industry)
+        except Exception as e:
+            logger.warning(f"[proposal-enrich] 상권 데이터 조회 실패(무시): {e}")
+
         return {"success": True, "data": {
             "connected": True,
             "isPlace": True,
+            "sbiz": sbiz_block,        # 상권 블록(소상공인365) — null이면 상권 슬라이드 생략
             "businessKey": business_key,
             "keyword": combined_kw,
             "volume": volume,               # 월 검색량(실측) — null=미확인

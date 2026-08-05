@@ -78,6 +78,30 @@ jobs:
               echo "COLLECTOR_TOKEN 주입 완료 (.env.bak-collector 백업)"
             fi
 
+            # ── 소상공인365 인증키 6종 멱등 주입 (2026-08-05, 상권 데이터 고도화) ──
+            # 서비스(오퍼레이션)별로 개별 발급되는 인증키. COLLECTOR_TOKEN 선례와 동일하게
+            # 「시크릿이 있고 .env 에 아직 없을 때만」 추가 — 기존 키 덮어쓰기 없음.
+            # 미설정 키는 그냥 건너뜀(해당 API 만 조용히 비활성, 무해).
+            _sbiz_backed_up=0
+            for _pair in \
+              "SBIZ365_KEY_SIMPLE=${{ secrets.SBIZ365_KEY_SIMPLE }}" \
+              "SBIZ365_KEY_DETAIL=${{ secrets.SBIZ365_KEY_DETAIL }}" \
+              "SBIZ365_KEY_SLSIDX=${{ secrets.SBIZ365_KEY_SLSIDX }}" \
+              "SBIZ365_KEY_STOR=${{ secrets.SBIZ365_KEY_STOR }}" \
+              "SBIZ365_KEY_SNS=${{ secrets.SBIZ365_KEY_SNS }}" \
+              "SBIZ365_KEY_THEME=${{ secrets.SBIZ365_KEY_THEME }}" ; do
+              _name="${_pair%%=*}"
+              _val="${_pair#*=}"
+              if [ -n "$_val" ] && ! grep -q "^${_name}=" .env 2>/dev/null; then
+                if [ "$_sbiz_backed_up" = "0" ]; then
+                  cp .env .env.bak-sbiz365 2>/dev/null || true
+                  _sbiz_backed_up=1
+                fi
+                echo "${_name}=${_val}" >> .env
+                echo "${_name} 주입 완료"
+              fi
+            done
+
             # docker-compose.yml 작성
             cat > docker-compose.yml << 'COMPEOF'
             version: '3.8'

@@ -16,11 +16,139 @@ on:
       retention:
         description: 'client_analyses 보관정책 — preview(미리보기만) / apply(실제 삭제, B안=최근30일+키워드별 최신)'
         default: ''
+      sbiz_check:
+        description: '소상공인365 인증키 6종 실응답 검증 (true — 키 값 미출력·읽기 전용·한국 IP=VPS에서 호출)'
+        default: ''
 
 jobs:
   diagnose:
     runs-on: ubuntu-latest
     steps:
+      # ── 소상공인365 실응답 검증 (2026-08-05) ────────────────────────────
+      # 인증키는 서비스별로 발급되므로 6종을 각각 점검한다. 키 값은 절대 출력하지 않고
+      # 존재/길이/HTTP 상태/응답 키 이름만 찍는다(전산 gemini_check 선례).
+      # 한국 공공 사이트는 해외 IP 차단이 잦아 반드시 VPS(국내)에서 호출한다.
+      - name: SBIZ365 인증키 실응답 검증
+        if: ${{ github.event.inputs.sbiz_check == 'true' }}
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          SB_SIMPLE: ${{ secrets.SBIZ365_KEY_SIMPLE }}
+          SB_DETAIL: ${{ secrets.SBIZ365_KEY_DETAIL }}
+          SB_SLSIDX: ${{ secrets.SBIZ365_KEY_SLSIDX }}
+          SB_STOR: ${{ secrets.SBIZ365_KEY_STOR }}
+          SB_SNS: ${{ secrets.SBIZ365_KEY_SNS }}
+          SB_THEME: ${{ secrets.SBIZ365_KEY_THEME }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 300s
+          envs: SB_SIMPLE,SB_DETAIL,SB_SLSIDX,SB_STOR,SB_SNS,SB_THEME
+          script: |
+            docker exec -i \
+              -e SB_SIMPLE="$SB_SIMPLE" -e SB_DETAIL="$SB_DETAIL" -e SB_SLSIDX="$SB_SLSIDX" \
+              -e SB_STOR="$SB_STOR" -e SB_SNS="$SB_SNS" -e SB_THEME="$SB_THEME" \
+              logic-analysis python3 - <<'PY'
+            import os, json, ssl, urllib.parse, urllib.request
+
+            BASE = "https://bigdata.sbiz.or.kr"
+            CTX = ssl.create_default_context()
+            CTX.check_hostname = False
+            CTX.verify_mode = ssl.CERT_NONE
+            HDR = {
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                              "(KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+                "Referer": BASE + "/",
+                "Accept": "application/json, text/plain, */*",
+                "X-Requested-With": "XMLHttpRequest",
+            }
+            KEYS = {k: (os.getenv("SB_" + k.upper(), "") or "").strip()
+                    for k in ["simple", "detail", "slsidx", "stor", "sns", "theme"]}
+
+            print("=" * 62)
+            print("[1] 인증키 등록 상태 (값은 출력하지 않음)")
+            for k, v in KEYS.items():
+                print(f"  {k:<7} : {'있음 len=' + str(len(v)) if v else '없음'}")
+
+            def call(url, params=None, data=None, timeout=15):
+                """(status, body_text) — 예외도 문자열로 반환(진단용)."""
+                try:
+                    if params:
+                        url = url + "?" + urllib.parse.urlencode(params)
+                    body = urllib.parse.urlencode(data).encode() if data else None
+                    req = urllib.request.Request(url, data=body, headers=dict(HDR))
+                    if body:
+                        req.add_header("Content-Type", "application/x-www-form-urlencoded")
+                    with urllib.request.urlopen(req, timeout=timeout, context=CTX) as r:
+                        return r.status, r.read().decode("utf-8", "replace")
+                except Exception as e:
+                    return None, f"EXC {type(e).__name__}: {e}"
+
+            def show(tag, st, txt, limit=700):
+                print(f"  -> HTTP {st}")
+                t = (txt or "").strip()
+                if st == 200:
+                    try:
+                        j = json.loads(t)
+                        if isinstance(j, dict):
+                            print(f"  -> JSON dict · 최상위 키: {list(j.keys())[:25]}")
+                            for k, v in list(j.items())[:12]:
+                                s = json.dumps(v, ensure_ascii=False)
+                                print(f"     · {k} = {s[:150]}")
+                        elif isinstance(j, list):
+                            print(f"  -> JSON list · {len(j)}건")
+                            if j:
+                                print(f"     · [0] = {json.dumps(j[0], ensure_ascii=False)[:300]}")
+                        return
+                    except Exception:
+                        print(f"  -> JSON 아님(길이 {len(t)}) · 앞부분: {t[:limit]}")
+                        return
+                print(f"  -> 본문 앞부분: {t[:limit]}")
+
+            # 표본: 서울 강남구 역삼1동(11680640) × 음식점 계열 소분류(I21201)
+            ADMI, UPJONG = "11680640", "I21201"
+            LOC = "서울특별시 강남구 역삼1동"
+            ck = KEYS["simple"]
+
+            print()
+            print("=" * 62)
+            print("[2] 공식 오픈API(iframe 화면) — certKey 유효성")
+            st, tx = call(BASE + "/openApiIfrm/simple", {"certKey": ck} if ck else None)
+            show("openapi", st, tx, limit=300)
+
+            print()
+            print("=" * 62)
+            print("[3] 간단분석 내부 JSON — getAvgAmtInfo.json (핵심 경로)")
+            for label, kw in [
+                ("POST form + certKey", dict(data={"admiCd": ADMI, "upjongCd": UPJONG, "simpleLoc": LOC, "certKey": ck})),
+                ("POST form (키 없이)", dict(data={"admiCd": ADMI, "upjongCd": UPJONG, "simpleLoc": LOC})),
+                ("GET query + certKey", dict(params={"admiCd": ADMI, "upjongCd": UPJONG, "simpleLoc": LOC, "certKey": ck})),
+            ]:
+                print(f"\n  [{label}]")
+                st, tx = call(BASE + "/gis/simpleAnls/getAvgAmtInfo.json", **kw)
+                show(label, st, tx)
+
+            print()
+            print("=" * 62)
+            print("[4] 유동인구 — getPopularInfo.json")
+            st, tx = call(BASE + "/gis/simpleAnls/getPopularInfo.json",
+                          params={"admiCd": ADMI, "upjongCd": UPJONG, "certKey": ck})
+            show("popular", st, tx)
+
+            print()
+            print("=" * 62)
+            print("[5] 보조 경로 — 좌표→행정동 / 업종 트리")
+            st, tx = call(BASE + "/gis/api/getCoordToAdmPoint.json",
+                          params={"x": "127.0364", "y": "37.5000", "certKey": ck})
+            print("  getCoordToAdmPoint.json"); show("coord", st, tx, limit=400)
+            st, tx = call(BASE + "/gis/api/getHierarchyTpbizCode", params={"certKey": ck})
+            print("\n  getHierarchyTpbizCode"); show("tree", st, tx, limit=400)
+
+            print()
+            print("=" * 62)
+            print("검증 종료 — HTTP 200 + JSON dict 면 그 경로 사용 가능,")
+            print("401/403/로그인 HTML 이면 세션 필요(공식 iframe 또는 공공데이터포털 대체 경로로 전환).")
+            PY
       - name: Place tracking read-only query
         uses: appleboy/ssh-action@v1.0.3
         with:
