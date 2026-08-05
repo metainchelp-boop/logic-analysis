@@ -1290,8 +1290,18 @@ def place_proposal_enrich(req: PlaceProposalEnrichRequest,
 
         # 업체 식별키 — doc:{place_id} 우선, 없으면 nm:{정규화명}|{정규화지역}
         # (플레이스 무인 추적 save_place_rank·수동 분석 _place_business_key 와 동일 규칙)
-        if req.place_id:
-            business_key = f"doc:{str(req.place_id).strip()}"
+        # ⚠️ 2026-08-05: 제안서 폼은 place_id 를 받지 않는데 무인 수집은 place_id 가 있으면
+        #    항상 doc: 키로 저장한다 → nm: 키로만 찾으면 **등록된 업체인데도 순위 이력 0건**.
+        #    그래서 place_id 가 없으면 추적 레지스트리에서 업체명(+지역)으로 먼저 찾아본다.
+        place_id = (str(req.place_id).strip() if req.place_id else "")
+        if not place_id:
+            try:
+                from database import find_place_track_place_id
+                place_id = find_place_track_place_id(name, region) or ""
+            except Exception as e:
+                logger.warning(f"[proposal-enrich] 추적 ID 조회 실패(무시): {e}")
+        if place_id:
+            business_key = f"doc:{place_id}"
         else:
             nm = place_crawler._norm(name)
             rg = place_crawler._norm(region)

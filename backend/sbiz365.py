@@ -492,6 +492,37 @@ def _major_of(name: str) -> str:
     return str(name or "").split(">")[0].strip()
 
 
+def _simple_loc_variants(admi: dict, region: str):
+    """getAvgAmtInfo 의 simpleLoc 표기 후보(우선순위 순).
+    ⚠️ 2026-08-05 실측: 지역마다 받아주는 형태가 다르다.
+      · 서울 구로3동  → '서울특별시 구로구 구로3동' 만 200(동명 단독·빈 값은 500)
+      · 경기 성사2동  → 위와 같은 4단 표기('경기도 고양시 덕양구 성사2동')로는 응답 없음
+    시군구가 '고양시 덕양구' 처럼 두 단인 지역이 있어 조합을 몇 가지 시험해야 한다."""
+    sido = (admi.get("sidoNm") or "").strip()
+    gu = (admi.get("guNm") or "").strip()
+    dong = (admi.get("admiNm") or "").strip()
+    out = []
+    for cand in (
+        " ".join(x for x in (sido, gu, dong) if x),          # 서울특별시 구로구 구로3동
+        " ".join(x for x in (sido, gu.replace(" ", ""), dong) if x),  # 경기도 고양시덕양구 성사2동
+        " ".join(x for x in (gu, dong) if x),                # 고양시 덕양구 성사2동
+        (admi.get("simpleLoc") or "").strip(),
+        (region or "").strip(),
+    ):
+        if cand and cand not in out:
+            out.append(cand)
+    return out
+
+
+def _pick_simple_loc(admi: dict, region: str, probe_code: str):
+    """표기 후보 중 **서버가 응답하는 첫 표기**를 고른다(매출 0원이어도 응답이면 표기는 맞은 것).
+    전부 무응답이면 None → 호출부가 상권 블록을 생략한다."""
+    for loc in _simple_loc_variants(admi, region):
+        if _fetch_avg(admi["admiCd"], probe_code, loc) is not None:
+            return loc
+    return None
+
+
 def _aggregate_major(admi_cd: str, loc: str, major: str):
     """대분류 종합(예: 그 동네 '음식' 전체) — 업소수 가중평균 점포당 매출 + 총 업소수.
 
@@ -581,11 +612,17 @@ def get_place_sbiz(region: str, industry_label: str) -> dict | None:
         if cached is not None:
             return cached
 
-        # simpleLoc = 행정동 정식 주소(시도+시군구+행정동). 사용자 입력 지역명을 그대로 쓰면 500.
+        # simpleLoc = 행정동 정식 주소. 사용자 입력 지역명을 그대로 쓰면 500 이라 조립해서 넘긴다.
+        # ⚠️ 지역마다 받아주는 표기가 달라(서울 '서울특별시 구로구 구로3동' 은 되는데
+        #    경기 '경기도 고양시 덕양구 성사2동' 은 안 됨 — 시군구가 2단인 지역) 표기 후보를
+        #    순서대로 시험해 **응답이 오는 표기 하나를 먼저 확정**한 뒤, 그 표기로 업종 후보를 돈다.
+        #    (표기 확정에 최대 4콜 · 업종 후보에 최대 3콜 — 첫 표기가 맞으면 1콜로 끝난다)
+        loc, avg, upjong = _pick_simple_loc(admi, region, candidates[0]["code"]), None, None
+        if not loc:
+            return None
+
         # 후보 업종을 순서대로 시도하고, 점포당 매출이 실제로 잡히는 첫 후보를 채택한다
         # (그 동네에 그 소분류 점포가 없으면 0원으로 와서 상권 슬라이드가 '0원'이 되어버림).
-        loc = admi.get("simpleLoc") or region
-        upjong, avg = None, None
         for cand in candidates:
             got = _fetch_avg(admi["admiCd"], cand["code"], loc)
             if got and _num(got.get("saleAmt")):
