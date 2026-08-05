@@ -96,6 +96,11 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
         setLoading(true);
         lastHtmlRef.current = html;
         var body = {
+            // ⚠️ product_url 은 SeoAnalysisRequest 의 **필수 필드**다(쇼핑 경로용).
+            //    플레이스는 상품 URL 이 없어 안 보냈는데, 그러면 요청이 서버 검증에서
+            //    422 로 튕기고 화면엔 「[object Object]」만 떴다(2026-08-05 대표 신고).
+            //    플레이스 분기는 product_url 을 읽지 않으므로 빈 문자열로 형식만 맞춘다.
+            product_url: '',
             vertical: 'place', keyword: kw, region: region.trim(),
             target_name: businessName.trim(), place_html: html, place: suppPayload()
         };

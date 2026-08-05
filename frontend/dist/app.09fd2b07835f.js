@@ -134,6 +134,28 @@ function _handleResponse(r) {
       if (body && typeof body === 'object' && !body.hasOwnProperty('success')) {
         body.success = false;
       }
+      // ⚠️ FastAPI 422(요청 형식 오류)는 detail 이 **객체 배열**이라, 화면들이
+      //    toast.error(res.detail) 하면 「[object Object]」만 뜬다(2026-08-05 신고).
+      //    detail 을 여기서 한 번만 사람이 읽을 문장으로 바꿔 전 화면을 함께 고친다.
+      if (body && typeof body === 'object' && body.detail && typeof body.detail !== 'string') {
+        body.detailRaw = body.detail; // 원문 보존(진단용)
+        var d = body.detail;
+        try {
+          if (Array.isArray(d)) {
+            body.detail = d.map(function (x) {
+              var where = Array.isArray(x && x.loc) ? x.loc.filter(function (v) {
+                return v !== 'body';
+              }).join('.') : '';
+              var msg = x && (x.msg || x.message) || '형식 오류';
+              return where ? where + ': ' + msg : msg;
+            }).join(' · ');
+          } else {
+            body.detail = d && (d.msg || d.message) || JSON.stringify(d);
+          }
+        } catch (e) {
+          body.detail = '요청 형식 오류 (' + status + ')';
+        }
+      }
       return body;
     });
   }
@@ -24588,6 +24610,11 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
     setLoading(true);
     lastHtmlRef.current = html;
     var body = {
+      // ⚠️ product_url 은 SeoAnalysisRequest 의 **필수 필드**다(쇼핑 경로용).
+      //    플레이스는 상품 URL 이 없어 안 보냈는데, 그러면 요청이 서버 검증에서
+      //    422 로 튕기고 화면엔 「[object Object]」만 떴다(2026-08-05 대표 신고).
+      //    플레이스 분기는 product_url 을 읽지 않으므로 빈 문자열로 형식만 맞춘다.
+      product_url: '',
       vertical: 'place',
       keyword: kw,
       region: region.trim(),
