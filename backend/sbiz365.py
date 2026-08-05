@@ -14,6 +14,8 @@ sbiz365.py — 소상공인365(bigdata.sbiz.or.kr) 상권 데이터 클라이언
 import os
 import json
 import logging
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 import requests
@@ -32,6 +34,9 @@ _HEADERS = {
 
 # 캐시 TTL — (행정동×업종) 데이터 14일 · 업종 트리 30일
 SBIZ_CACHE_TTL = 14 * 24 * 3600
+AGG_WORKERS = 8          # 대분류 종합 집계 동시 호출 수
+AGG_MAX_CODES = 60       # 대분류당 조회할 소분류 상한
+AGG_TIME_BUDGET = 12.0   # 대분류 종합 집계 시간 상한(초) — 초과분은 건너뛰고 있는 것만 집계
 SBIZ_TREE_TTL = 30 * 24 * 3600
 
 
@@ -482,6 +487,70 @@ def _fetch_popular(admi_cd: str, upjong_cd: str, analy_no):
     return None
 
 
+def _major_of(name: str) -> str:
+    """소분류 경로('음식 > 한식 > 백반/한정식')의 대분류('음식')."""
+    return str(name or "").split(">")[0].strip()
+
+
+def _aggregate_major(admi_cd: str, loc: str, major: str):
+    """대분류 종합(예: 그 동네 '음식' 전체) — 업소수 가중평균 점포당 매출 + 총 업소수.
+
+    ⚠️ 2026-08-05 실측: getAvgAmtInfo 는 **소분류 6자리 코드만** 받는다.
+    상위분류 코드(I201·I20·I2·I)와 빈 값은 전부 무응답 → '업종 전체' 를 서버가 계산해 주지 않는다.
+    그래서 대분류에 속한 소분류를 우리가 모두 조회해 직접 합산한다(구로3동 음식 = 43개 소분류 중
+    29개에 값 존재 · 가중평균 3,058,703원 · 895곳). 순차 조회는 24초라 병렬로 돌리고,
+    시간 상한을 둬서 제안서 생성이 늘어지지 않게 한다. 결과는 다른 캐시와 같은 TTL 로 보관."""
+    if not major:
+        return None
+    cache_key = f"sbiz:major:{admi_cd}|{_norm(major)}"
+    cached = _cache_get(cache_key, SBIZ_CACHE_TTL)
+    if cached is not None:
+        return cached
+
+    pairs = _upjong_pairs() or []
+    codes = [c for c, n in pairs if _major_of(n) == major][:AGG_MAX_CODES]
+    if not codes:
+        return None
+
+    started = time.time()
+
+    skipped = []
+
+    def one(code):
+        if time.time() - started > AGG_TIME_BUDGET:   # 예산 초과분은 조용히 건너뜀
+            skipped.append(code)
+            return None
+        got = _fetch_avg(admi_cd, code, loc)
+        if not got:
+            return None
+        amt, cnt = _num(got.get("saleAmt")), _num(got.get("saleCnt"))
+        return (amt, cnt) if (amt and cnt) else None
+
+    rows = []
+    try:
+        with ThreadPoolExecutor(max_workers=AGG_WORKERS) as ex:
+            rows = [r for r in ex.map(one, codes) if r]
+    except Exception as e:
+        logger.warning(f"[sbiz365] 대분류 집계 실패(무시): {e}")
+        return None
+    if not rows:
+        return None
+
+    tot_cnt = sum(c for _, c in rows)
+    if not tot_cnt:
+        return None
+    weighted = sum(a * c for a, c in rows) / tot_cnt
+    result = {
+        "label": major,                     # '음식'·'미용' 등 대분류 이름
+        "avgAmt": _won(weighted),           # 업소수 가중평균 점포당 월매출(원)
+        "shopCnt": int(tot_cnt),            # 대분류 전체 업소수
+        "kinds": len(rows),                 # 값이 잡힌 소분류 수
+        "partial": bool(skipped),           # 시간 예산 때문에 못 본 소분류가 있는지
+    }
+    _cache_put(cache_key, result)
+    return result
+
+
 def get_place_sbiz(region: str, industry_label: str) -> dict | None:
     """지역명×업종 라벨 → 상권 데이터 블록(제안서 sbiz).
     반환 스키마(전 필드 optional·없으면 null) — FE 5차 배선이 이 스키마에 고정:
@@ -541,6 +610,13 @@ def get_place_sbiz(region: str, industry_label: str) -> dict | None:
             shops = {"count": shop_cnt, "series": shop_series,
                      "momRate": avg.get("prevMonCntRate"), "yoyRate": avg.get("prevYearCntRate")}
 
+        # 업종 대분류 종합 — 소분류를 우리가 합산(서버는 상위분류 코드를 안 받는다)
+        major_block = None
+        try:
+            major_block = _aggregate_major(admi["admiCd"], loc, _major_of(upjong.get("name")))
+        except Exception as e:
+            logger.warning(f"[sbiz365] 대분류 종합 생략(무시): {e}")
+
         # 매출 시계열(원 환산) — 시안 「시장의 크기」 추이선
         sales_series = [{"ym": r["ym"], "amt": _won(r["amt"])}
                         for r in (avg.get("series") or []) if r.get("amt") is not None] or None
@@ -556,6 +632,9 @@ def get_place_sbiz(region: str, industry_label: str) -> dict | None:
             # 어떤 소분류로 집계했는지 — 응답에 없으면 우리가 고른 후보의 소분류명으로 표기
             # (제안서에서 '무슨 업종 기준 수치인지'를 밝히기 위한 값).
             "industryNm": avg.get("upjongNm") or str(upjong.get("name") or "").split(">")[-1].strip(),
+            # 업종 대분류 종합(예: 그 동네 '음식' 전체) — 업종 선택지를 세분화하지 않고도
+            # '우리 동네 전체 시장' 을 보여주기 위한 축. 실패하면 그냥 없음(기존 표기 그대로).
+            "major": major_block,
             "sales": {
                 "avgAmt": _won(avg.get("saleAmt")),     # 점포당 월평균(원)
                 "minAmt": _won(avg.get("minAmt")),
