@@ -73,68 +73,45 @@ jobs:
             LOC = "서울특별시 강남구 역삼1동"
 
             print("=" * 62)
-            print("[A] getAvgAmtInfo 전체 필드 (값 포함 — 스키마 확정용)")
-            st, tx = get("/gis/simpleAnls/getAvgAmtInfo.json",
-                         {"admiCd": ADMI, "upjongCd": UPJONG, "simpleLoc": LOC, "certKey": CK})
-            print(f"  HTTP {st}")
-            AVG = None
-            if st == 200:
-                try:
-                    AVG = json.loads(tx)
-                    for k in sorted(AVG.keys()):
-                        v = json.dumps(AVG[k], ensure_ascii=False)
-                        print(f"   {k:<18} = {v[:210]}")
-                except Exception as e:
-                    print("  파싱 실패:", e, tx[:300])
+            print("[A] simpleLoc 단독 동작 여부 — admiCd 매핑 없이 가능한가")
+            UP = "I21007"   # 김밥/만두/분식
+            cases = [
+                ("정답 admiCd + simpleLoc(역삼1동)", {"admiCd": ADMI, "upjongCd": UP, "simpleLoc": LOC}),
+                ("admiCd 없음 + simpleLoc(역삼1동)", {"upjongCd": UP, "simpleLoc": LOC}),
+                ("admiCd 빈값 + simpleLoc(역삼1동)", {"admiCd": "", "upjongCd": UP, "simpleLoc": LOC}),
+                ("admiCd만(성수동 코드) simpleLoc 없음", {"admiCd": "11200710", "upjongCd": UP}),
+                ("성수동 admiCd + 역삼 simpleLoc(어느쪽이 이기나)",
+                 {"admiCd": "11200710", "upjongCd": UP, "simpleLoc": LOC}),
+                ("simpleLoc 만(동 이름만)", {"upjongCd": UP, "simpleLoc": "성수동"}),
+            ]
+            for label, pr in cases:
+                pr = dict(pr); pr["certKey"] = CK
+                st, tx = get("/gis/simpleAnls/getAvgAmtInfo.json", pr)
+                mark = ""
+                if st == 200:
+                    try:
+                        j = json.loads(tx)
+                        mark = (f"saleAmt={j.get('saleAmt')} guAmt={j.get('guAmt')} "
+                                f"adminCnt={j.get('saleCnt')} top1={(j.get('topFive') or [{}])[0].get('admiNm')}")
+                    except Exception as e:
+                        mark = f"파싱실패 {e}"
+                else:
+                    mark = tx[:90]
+                print(f"  [{label}]\n     HTTP {st} · {mark}")
 
             print()
             print("=" * 62)
-            print("[B] getPopularInfo 파라미터 탐색 (500 원인 규명)")
-            cands = [("admiCd+upjongCd+certKey", {"admiCd": ADMI, "upjongCd": UPJONG, "certKey": CK}),
-                     ("admiCd만+certKey", {"admiCd": ADMI, "certKey": CK}),
-                     ("admiCd+simpleLoc+certKey", {"admiCd": ADMI, "simpleLoc": LOC, "certKey": CK})]
-            if AVG:
-                if AVG.get("mililis"):
-                    cands.append(("+analyNo=mililis", {"admiCd": ADMI, "upjongCd": UPJONG,
-                                                       "analyNo": AVG["mililis"], "certKey": CK}))
-                if AVG.get("path"):
-                    cands.append(("+path", {"admiCd": ADMI, "upjongCd": UPJONG,
-                                            "path": AVG["path"], "certKey": CK}))
-            for label, pr in cands:
-                st, tx = get("/gis/simpleAnls/getPopularInfo.json", pr)
-                head = tx[:220] if st == 200 else tx[:120]
-                print(f"  [{label}] HTTP {st} · {head}")
-
-            print()
-            print("=" * 62)
-            print("[C] 행정동코드 조회 경로 탐색 (지역명 → admiCd)")
-            for path, pr in [("/gis/api/getCoordToAdmPoint.json", {"x": "127.0364", "y": "37.5000", "certKey": CK}),
-                             ("/gis/api/getAdmiInfo.json", {"admiCd": ADMI, "certKey": CK}),
-                             ("/gis/api/getAdmiList.json", {"ctprvnCd": "11", "certKey": CK}),
-                             ("/gis/api/getSidoList.json", {"certKey": CK}),
-                             ("/gis/api/getAdmiSearch.json", {"searchWord": "역삼", "certKey": CK}),
-                             ("/gis/api/searchTotal.json", {"searchWord": "역삼동", "certKey": CK}),
-                             ("/gis/api/getHierarchyAdmiCode", {"certKey": CK})]:
-                st, tx = get(path, pr, timeout=12)
-                print(f"  {path:<40} HTTP {st} · {tx[:150]}")
-
-            print()
-            print("=" * 62)
-            print("[D] 업종 트리 형식 (247건 — 매핑 사전 구성용)")
-            st, tx = get("/gis/api/getHierarchyTpbizCode", {"certKey": CK})
-            if st == 200:
-                try:
-                    tree = json.loads(tx)
-                    print(f"  {len(tree)}건 · 샘플 5:")
-                    for x in tree[:5]:
-                        print("   ", json.dumps(x, ensure_ascii=False)[:160])
-                    hits = [x for x in tree if any(w in json.dumps(x, ensure_ascii=False)
-                            for w in ["분식", "커피", "미용", "치킨", "제과"])]
-                    print(f"  업종 라벨 매칭 후보 {len(hits)}건:")
-                    for x in hits[:10]:
-                        print("   ", json.dumps(x, ensure_ascii=False)[:160])
-                except Exception as e:
-                    print("  파싱 실패:", e)
+            print("[B] 지역 검색 → admiCd 경로 재탐색 (다른 이름 후보)")
+            for path, pr in [("/gis/simpleAnls/getAdmiList.json", {"searchWord": "역삼"}),
+                             ("/gis/simpleAnls/searchAdmi.json", {"searchWord": "역삼"}),
+                             ("/gis/api/getAdmi.json", {"searchWord": "역삼"}),
+                             ("/gis/api/getRegionList.json", {"upperCd": "11"}),
+                             ("/gis/api/getHierarchyAdmiCd", {}),
+                             ("/gis/api/getHierarchyRegionCode", {}),
+                             ("/gis/api/getAddrToAdmPoint.json", {"addr": "서울특별시 강남구 역삼동"})]:
+                pr = dict(pr); pr["certKey"] = CK
+                st, tx = get(path, pr, timeout=10)
+                print(f"  {path:<40} HTTP {st} · {tx[:110]}")
             PY
       - name: Place tracking read-only query
         uses: appleboy/ssh-action@v1.0.3
