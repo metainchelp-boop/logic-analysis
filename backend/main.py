@@ -165,13 +165,19 @@ def _backup_db_on_startup():
     backup_dir = os.path.join(os.path.dirname(os.path.abspath(db_path)), "backups")
     os.makedirs(backup_dir, exist_ok=True)
 
-    # 보관 개수: 1.2GB×5 ≈ 6GB. 이전 14개(약 17GB)는 36GB 디스크에서 과다 → 디스크 풀 유발.
-    MAX_BACKUPS = 5
+    # 보관 개수 — scheduler.BACKUP_KEEP 과 동일하게 2개.
+    # ⚠️ 종전 5개는 DB 1.2GB 시절 산정치(1.2×5≈6GB)인데 DB 가 4.8GB 로 커져
+    #    5개=24GB → 36GB 디스크를 혼자 채우는 값이 돼 있었다. 크기가 커졌으면
+    #    세대 수도 같이 내려야 한다(2026-08-05 디스크 89% 재발로 확인).
+    MAX_BACKUPS = 2
 
     def _list_backups():
+        """세대 정리 대상 — 압축(.db.gz)·비압축(.db) 모두 포함.
+        ⚠️ 종전엔 .db 만 세어 스케줄러가 만든 .db.gz 가 프루너에 안 잡혔다
+           (두 백업 경로가 서로의 파일을 못 보고 각자 쌓임)."""
         return sorted(
             f for f in os.listdir(backup_dir)
-            if f.startswith("logic_analysis_backup_") and f.endswith(".db")
+            if f.startswith("logic_analysis_backup_") and (f.endswith(".db") or f.endswith(".db.gz"))
         )
 
     def _prune(keep):
@@ -216,6 +222,26 @@ def _backup_db_on_startup():
     # 4) 백업 생성
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_path = os.path.join(backup_dir, f"logic_analysis_backup_{ts}.db")
+
+    def _compress(raw_path):
+        """비압축 .db → .db.gz 로 압축하고 원본 제거(스케줄 백업과 동일 규칙).
+        DB 4.8GB → 약 0.5GB. 실패하면 비압축 원본을 그대로 남긴다(백업 자체는 성립)."""
+        import gzip
+        gz_path = raw_path + ".gz"
+        try:
+            with open(raw_path, "rb") as f_in, gzip.open(gz_path, "wb", compresslevel=6) as f_out:
+                shutil.copyfileobj(f_in, f_out, length=1024 * 1024)
+            os.remove(raw_path)
+            _sz = os.path.getsize(gz_path) // (1024 ** 2)
+            logger.info(f"  🗜️ 백업 압축 완료: {os.path.basename(gz_path)} ({_sz}MB)")
+        except Exception as _ce:
+            try:
+                if os.path.exists(gz_path):
+                    os.remove(gz_path)
+            except Exception:
+                pass
+            logger.warning(f"백업 압축 실패(비압축 원본 유지): {_ce}")
+
     try:
         # SQLite online backup API 사용 (WAL 안전)
         src = sqlite3.connect(db_path)
@@ -224,6 +250,7 @@ def _backup_db_on_startup():
         dst.close()
         src.close()
         logger.info(f"✅ DB 백업 완료: {backup_path} (업체 {client_count}건)")
+        _compress(backup_path)
     except Exception as e:
         # 실패 시 부분 파일 제거(공간 점유 방지) 후 파일 복사 fallback
         try:
@@ -234,6 +261,7 @@ def _backup_db_on_startup():
         try:
             shutil.copy2(db_path, backup_path)
             logger.info(f"✅ DB 백업 완료 (파일 복사): {backup_path}")
+            _compress(backup_path)
         except Exception as e2:
             try:
                 if os.path.exists(backup_path):
