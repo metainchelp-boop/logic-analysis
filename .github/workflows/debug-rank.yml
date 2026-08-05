@@ -64,6 +64,40 @@ jobs:
                 print("  collected_serp 조회 실패:", e)
                 print("  테이블 목록:", [t[0] for t in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%collect%'")])
 
+            print("\n[통합 설계용 — 두 축 규모·겹침]")
+            import re as _re
+            def _pid(u):
+                u = u or ""
+                for pat in (r"[?&]nvMid=(\d+)", r"/products/(\d+)", r"/catalog/(\d+)"):
+                    m = _re.search(pat, u)
+                    if m: return m.group(1)
+                return ""
+            tp = c.execute("SELECT COUNT(*) n FROM tracked_products").fetchone()["n"]
+            tk = c.execute("SELECT COUNT(*) n FROM tracked_keywords").fetchone()["n"]
+            cl = c.execute("SELECT COUNT(*) n FROM clients WHERE status='active'").fetchone()["n"]
+            crh = c.execute("SELECT COUNT(*) n FROM client_rank_history").fetchone()["n"]
+            rk = c.execute("SELECT COUNT(*) n FROM rankings").fetchone()["n"]
+            print(f"  축A 추적상품 {tp} · 추적키워드 {tk} · rankings {rk}행")
+            print(f"  축B 업체(active) {cl} · client_rank_history {crh}행")
+            a_pids = set()
+            for r in c.execute("SELECT product_url FROM tracked_products"):
+                p = _pid(r["product_url"])
+                if p: a_pids.add(p)
+            b_pids = set()
+            for r in c.execute("SELECT naver_store_url FROM clients WHERE status='active'"):
+                p = _pid(r["naver_store_url"])
+                if p: b_pids.add(p)
+            inter = a_pids & b_pids
+            print(f"  상품ID 보유: 축A {len(a_pids)}/{tp} · 축B {len(b_pids)}/{cl}")
+            pa = round(len(inter)*100/max(1,len(a_pids)))
+            pb = round(len(inter)*100/max(1,len(b_pids)))
+            print(f"  * 상품ID 기준 겹침 {len(inter)}건 (축A의 {pa}% / 축B의 {pb}%)")
+            orph = c.execute("SELECT COUNT(*) n FROM client_rank_history WHERE client_id NOT IN (SELECT id FROM clients)").fetchone()["n"]
+            print(f"  고아 순위행(업체 삭제됨): {orph}")
+            kw_a = {r[0] for r in c.execute("SELECT DISTINCT keyword FROM tracked_keywords")}
+            kw_b = {r[0] for r in c.execute("SELECT DISTINCT keyword FROM client_rank_history")}
+            print(f"  키워드 축A {len(kw_a)} · 축B {len(kw_b)} · 공통 {len(kw_a & kw_b)} · 합집합 {len(kw_a | kw_b)}")
+
             print("\n[추적 상품 스토어명 슬러그]")
             import re
             tot = slug = 0
