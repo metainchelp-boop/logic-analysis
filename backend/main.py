@@ -165,13 +165,19 @@ def _backup_db_on_startup():
     backup_dir = os.path.join(os.path.dirname(os.path.abspath(db_path)), "backups")
     os.makedirs(backup_dir, exist_ok=True)
 
-    # 보관 개수: 1.2GB×5 ≈ 6GB. 이전 14개(약 17GB)는 36GB 디스크에서 과다 → 디스크 풀 유발.
-    MAX_BACKUPS = 5
+    # 보관 개수 — scheduler.BACKUP_KEEP 과 동일하게 2개.
+    # ⚠️ 종전 5개는 DB 1.2GB 시절 산정치(1.2×5≈6GB)인데 DB 가 4.8GB 로 커져
+    #    5개=24GB → 36GB 디스크를 혼자 채우는 값이 돼 있었다. 크기가 커졌으면
+    #    세대 수도 같이 내려야 한다(2026-08-05 디스크 89% 재발로 확인).
+    MAX_BACKUPS = 2
 
     def _list_backups():
+        """세대 정리 대상 — 압축(.db.gz)·비압축(.db) 모두 포함.
+        ⚠️ 종전엔 .db 만 세어 스케줄러가 만든 .db.gz 가 프루너에 안 잡혔다
+           (두 백업 경로가 서로의 파일을 못 보고 각자 쌓임)."""
         return sorted(
             f for f in os.listdir(backup_dir)
-            if f.startswith("logic_analysis_backup_") and f.endswith(".db")
+            if f.startswith("logic_analysis_backup_") and (f.endswith(".db") or f.endswith(".db.gz"))
         )
 
     def _prune(keep):
@@ -216,6 +222,26 @@ def _backup_db_on_startup():
     # 4) 백업 생성
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_path = os.path.join(backup_dir, f"logic_analysis_backup_{ts}.db")
+
+    def _compress(raw_path):
+        """비압축 .db → .db.gz 로 압축하고 원본 제거(스케줄 백업과 동일 규칙).
+        DB 4.8GB → 약 0.5GB. 실패하면 비압축 원본을 그대로 남긴다(백업 자체는 성립)."""
+        import gzip
+        gz_path = raw_path + ".gz"
+        try:
+            with open(raw_path, "rb") as f_in, gzip.open(gz_path, "wb", compresslevel=6) as f_out:
+                shutil.copyfileobj(f_in, f_out, length=1024 * 1024)
+            os.remove(raw_path)
+            _sz = os.path.getsize(gz_path) // (1024 ** 2)
+            logger.info(f"  🗜️ 백업 압축 완료: {os.path.basename(gz_path)} ({_sz}MB)")
+        except Exception as _ce:
+            try:
+                if os.path.exists(gz_path):
+                    os.remove(gz_path)
+            except Exception:
+                pass
+            logger.warning(f"백업 압축 실패(비압축 원본 유지): {_ce}")
+
     try:
         # SQLite online backup API 사용 (WAL 안전)
         src = sqlite3.connect(db_path)
@@ -224,6 +250,7 @@ def _backup_db_on_startup():
         dst.close()
         src.close()
         logger.info(f"✅ DB 백업 완료: {backup_path} (업체 {client_count}건)")
+        _compress(backup_path)
     except Exception as e:
         # 실패 시 부분 파일 제거(공간 점유 방지) 후 파일 복사 fallback
         try:
@@ -234,6 +261,7 @@ def _backup_db_on_startup():
         try:
             shutil.copy2(db_path, backup_path)
             logger.info(f"✅ DB 백업 완료 (파일 복사): {backup_path}")
+            _compress(backup_path)
         except Exception as e2:
             try:
                 if os.path.exists(backup_path):
@@ -1225,6 +1253,126 @@ def place_tracked_keywords_api(business: str = "", current_user: dict = Depends(
     except Exception as e:
         logger.error(f"플레이스 추적 키워드 조회 실패: {e}")
         return {"success": False, "error": "추적 키워드 조회 중 오류가 발생했습니다."}
+
+
+class PlaceProposalEnrichRequest(BaseModel):
+    name: str = ""                       # 업체(광고주)명
+    region: str = ""                     # 지역(동/구/시)
+    keyword: str = ""                    # 대표 키워드(지역 미포함 가능 — 서버가 합성)
+    place_id: Optional[str] = None       # 플레이스 ID(있으면 순위 매칭 정확도 ↑)
+    industry: str = ""                   # 업종 라벨(선택 — 소상공인365 상권 데이터 매칭용)
+
+
+def _pe_int(x):
+    """검색량 문자열('12,300'·'< 10') → 정수. 실패 시 0."""
+    try:
+        return int(str(x).replace("<", "").replace(",", "").strip())
+    except (ValueError, TypeError):
+        return 0
+
+
+@app.post("/api/place/proposal-enrich")
+def place_proposal_enrich(req: PlaceProposalEnrichRequest,
+                          current_user: dict = Depends(get_current_user)):
+    """맞춤제안서(플레이스) 실데이터 enrich — 검색량·무인 추적 순위·순위 이력·추적 키워드를
+    한 번에 반환한다. 스토어 제안서의 directEnrich(검색량·순위·데이터랩)와 같은 취지의 플레이스판.
+    ★ 신규 경로 — 전산(①) 소비 계약(portal-summary·seo/analyze 등)과 무접점.
+    데이터 없는 필드는 비워서(null/[]) 반환 → 제안서가 예시 수치로 폴백(무회귀)."""
+    try:
+        from database import get_place_rank_history, get_place_tracked_keywords
+        from naver_crawler import get_keyword_volume as _kw_vol
+
+        name = (req.name or "").strip()
+        region = (req.region or "").strip()
+        base_kw = (req.keyword or "").strip()
+        if not base_kw:
+            return {"success": False, "error": "키워드가 필요합니다."}
+
+        # 업체 식별키 — doc:{place_id} 우선, 없으면 nm:{정규화명}|{정규화지역}
+        # (플레이스 무인 추적 save_place_rank·수동 분석 _place_business_key 와 동일 규칙)
+        if req.place_id:
+            business_key = f"doc:{str(req.place_id).strip()}"
+        else:
+            nm = place_crawler._norm(name)
+            rg = place_crawler._norm(region)
+            business_key = f"nm:{nm}|{rg}" if nm else ""
+
+        # 지역+키워드 합성(추적·제안서 동일 규칙 — 지역 포함 시 순위 재현성)
+        combined_kw = _combine_region_keyword(region, base_kw)
+
+        # 1) 검색량(검색광고 API) — 실패/미조회 시 null(가짜 0 금지)
+        volume = None
+        comp_idx = None
+        try:
+            v0 = ((_kw_vol([combined_kw]) or [{}])[0]) or {}
+            pc, mo = v0.get("monthlyPcQcCnt"), v0.get("monthlyMobileQcCnt")
+            if pc is not None or mo is not None:
+                volume = _pe_int(pc) + _pe_int(mo)
+            comp_idx = v0.get("compIdx")
+        except Exception as e:
+            logger.warning(f"[proposal-enrich] 검색량 조회 실패(무시): {e}")
+
+        # 2) 무인 추적 순위 이력(최근 90일) + 최신 순위·상태 (Q3 순위 추이 슬라이드)
+        rank = None
+        rank_state = ""
+        rank_series = []
+        if business_key:
+            rank_series = get_place_rank_history(business_key, combined_kw, days=90)
+            if rank_series:
+                last = rank_series[-1]
+                rank = last.get("rank")
+                rank_state = last.get("state") or ""
+
+        # 3) 이 업체가 추적 중인 키워드 전체 + 각 최신 순위·검색량 (지역 황금 키워드 축·실데이터)
+        keyword_rows = []
+        try:
+            tracked = get_place_tracked_keywords(business_key) if business_key else []
+            tk = [t.get("keyword") for t in tracked[:8] if t.get("keyword")]
+            vmap = {}
+            if tk:
+                for vr in (_kw_vol(tk) or []):
+                    kn = vr.get("keyword")
+                    if kn is not None:
+                        vmap[str(kn)] = vr
+            for t in tracked[:8]:
+                kw = t.get("keyword")
+                vr = vmap.get(str(kw), {}) if kw else {}
+                pc, mo = vr.get("monthlyPcQcCnt"), vr.get("monthlyMobileQcCnt")
+                vol = (_pe_int(pc) + _pe_int(mo)) if (pc is not None or mo is not None) else None
+                keyword_rows.append({
+                    "keyword": kw, "volume": vol,
+                    "rank": t.get("rank"), "state": t.get("state") or "",
+                    "compIdx": vr.get("compIdx"),
+                })
+        except Exception as e:
+            logger.warning(f"[proposal-enrich] 키워드 표 구성 실패(무시): {e}")
+
+        # 4) 소상공인365 상권 데이터(가산) — 키 미설정·매칭 실패·API 파손 시 None
+        #    → 제안서가 상권 슬라이드만 조용히 생략(기존 필드·동작 전부 불변).
+        sbiz_block = None
+        try:
+            from sbiz365 import get_place_sbiz
+            sbiz_block = get_place_sbiz(region, req.industry)
+        except Exception as e:
+            logger.warning(f"[proposal-enrich] 상권 데이터 조회 실패(무시): {e}")
+
+        return {"success": True, "data": {
+            "connected": True,
+            "isPlace": True,
+            "sbiz": sbiz_block,        # 상권 블록(소상공인365) — null이면 상권 슬라이드 생략
+            "businessKey": business_key,
+            "keyword": combined_kw,
+            "volume": volume,               # 월 검색량(실측) — null=미확인
+            "compIdx": comp_idx,
+            "rank": rank,                   # 무인 추적 최신 순위 — null=미추적/미노출
+            "rankState": rank_state,        # 노출/미노출/미확인
+            "rankSeries": rank_series,      # Q3 순위 추이 [{date,rank,state}]
+            "trackedKeywords": keyword_rows,  # 지역 황금 키워드 축(추적 중 키워드+검색량+순위)
+            "hasTracking": bool(rank_series),
+        }}
+    except Exception as e:
+        logger.error(f"[proposal-enrich] 실패: {e}")
+        return {"success": False, "error": "제안서 데이터 조회 중 오류가 발생했습니다."}
 
 
 # ==================== 플레이스 무인 추적 (v6.7) ====================
