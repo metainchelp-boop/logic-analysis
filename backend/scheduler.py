@@ -328,7 +328,8 @@ def _run_rank_tracking():
     import os
 
     RANK_PAGES = 3          # 페이지 수 (100개 × 3 = 300위) — 호출 다이어트 D3(운영자 승인 2026-07-20): 400→300위, 배치 API 25% 절감
-    DELAY_PER_KEYWORD = 18  # 키워드당 대기 시간 (초) — 50분 분산
+    DELAY_PER_KEYWORD = 18  # 키워드당 대기 시간 (초) — 네이버 실호출이 있는 키워드에만 적용
+    DELAY_COLLECTED = 0.2   # 수집분 사용 키워드 간 양보 (초) — 네이버 미호출이라 간격 불필요
     DELAY_PER_PAGE = 1.5    # 같은 키워드 내 페이지 간 대기 (초)
 
     DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
@@ -373,6 +374,7 @@ def _run_rank_tracking():
                 # 다른 환경(로컬·테스트)에서는 종전과 똑같이 동작한다(무회귀).
                 all_prods = []
                 total_shop = 0
+                _naver_called = False   # 이 키워드에서 네이버를 실제로 불렀는지(대기 판단용)
                 _collected = None
                 try:
                     from collector import load_collected
@@ -389,6 +391,7 @@ def _run_rank_tracking():
                     start = page_idx * 100 + 1
                     shop_result = search_naver_shopping_api(keyword, display=100, start=start)
                     total_api_calls += 1
+                    _naver_called = True
                     # ── 스테일 수집분 차단 ──
                     # 서빙 훅은 2일 창이라 '어제' 수집분도 돌려줄 수 있다(주간 분석용으론 유용).
                     # 그러나 순위 '기록'은 오늘 데이터여야 한다 — 어제 스냅샷을 오늘 순위로 저장하면
@@ -450,6 +453,7 @@ def _run_rank_tracking():
                                 try:
                                     from naver_crawler import get_review_count
                                     _review_cache[_purl] = get_review_count(_purl)
+                                    _naver_called = True   # 실제 네트워크 호출 → 종전 간격 유지
                                 except Exception:
                                     _review_cache[_purl] = None
                             save_ranking(
@@ -480,9 +484,15 @@ def _run_rank_tracking():
                     except Exception as e:
                         logger.error(f"  ❌ 업체 순위 저장 실패 [{client['name']}:{keyword}]: {e}")
 
-                # 키워드 간 대기 (Rate Limit 방지 — 50분 분산)
+                # ── 키워드 간 대기 (Rate Limit 방지) ──
+                # 2026-08-05 수정: 이 대기는 네이버 검색 API 호출 간격을 벌리려는 것이었다.
+                # 쇼핑 검색 API 종료(7/31) 후 수집분을 쓰는 키워드는 네이버를 **한 번도 부르지 않으므로**
+                # 대기할 이유가 없다. 그런데 조건 없이 18초를 쉬어 08:00~08:30 창에서
+                # 약 100개 키워드만 처리되고(가나다순 고정) 나머지 800여 개는 매일 전일값으로 남았다.
+                #   → 실제 네이버 호출이 있었던 키워드만 종전 간격을 유지한다(리뷰수 조회 포함).
+                # 수집분 경로는 짧은 양보만 둬 DB·CPU 를 독점하지 않게 한다.
                 if ki < len(all_keywords) - 1:
-                    time.sleep(DELAY_PER_KEYWORD)
+                    time.sleep(DELAY_PER_KEYWORD if _naver_called else DELAY_COLLECTED)
 
             except Exception as e:
                 total_errors += 1

@@ -736,16 +736,26 @@ def get_keyword_volume(keywords: List[str]) -> List[Dict]:
 
             results = []
             keyword_data_list = data.get("keywordList", [])
-            # ⚠️ 요청은 위에서 공백을 지워 보내고 네이버도 공백 없는 형태로 돌려주는데,
-            #    필터가 원문 리스트(공백 포함)와 비교하고 있었다 → '구로동 고기' 처럼 공백이
-            #    들어간 키워드는 응답이 와도 전부 걸러져 **항상 0건**(2026-08-05 실측).
-            #    지역+키워드를 합성하는 플레이스 경로는 늘 공백이 있어 100% 해당됐다.
-            #    비교 축을 양쪽 다 공백 제거로 맞춘다(낱말 키워드는 지울 공백이 없어 무회귀).
-            wanted = {(k or "").strip().replace(" ", "") for k in keywords}
+            # ── 요청 키워드 매칭 (2026-08-05, 두 세션 수정 통합) ──
+            # 요청은 위에서 공백을 지워 보내고 네이버도 공백 없는 형태(영문은 대문자)로
+            # 돌려주는데, 필터가 원문 리스트(공백 포함)와 비교하고 있었다 → '구로동 고기'
+            # 처럼 공백이 들어간 키워드는 응답이 와도 전부 걸러져 **항상 0건**(실측).
+            #   · 지역+키워드를 합성하는 플레이스/제안서 경로는 늘 공백이 있어 100% 해당
+            #   · 스토어 경로에서도 검색량·클릭수·경쟁지수·평균 광고 개수가 통째로 비어
+            #     "숫자에 편차가 있다"는 신고로 나타났다(이예은 2026-08-05)
+            # → 비교 축을 공백 제거 + 소문자로 맞추고(영문 대문자 응답까지 수용),
+            #   결과 표기는 **사용자가 입력한 원문**으로 되돌린다(화면·저장·다운스트림
+            #   매칭이 입력 그대로 유지되도록). 낱말 키워드는 지울 공백이 없어 무회귀.
+            def _norm_kw(v):
+                return "".join(str(v or "").split()).lower()
+            _req_map = {}
+            for _k in keywords:
+                _req_map.setdefault(_norm_kw(_k), _k)
             for kd in keyword_data_list:
-                # 요청한 키워드만 필터 (연관 키워드 제외)
                 rel_keyword = kd.get("relKeyword", "")
-                if (rel_keyword or "").replace(" ", "") in wanted:
+                _matched = _req_map.get(_norm_kw(rel_keyword))
+                if _matched is not None:
+                    rel_keyword = _matched   # 화면·저장은 사용자 입력 표기로 통일
                     results.append({
                         "keyword": rel_keyword,
                         "monthlyPcQcCnt": _safe_int(kd.get("monthlyPcQcCnt")),

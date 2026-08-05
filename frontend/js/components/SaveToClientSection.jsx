@@ -71,6 +71,43 @@ window.SaveToClientSection = function SaveToClientSection({
         }
     };
 
+    /* 순위 저장 후속 호출 (2026-08-05 신설)
+       분석 결과를 업체에 저장해도 순위가 어디에도 기록되지 않던 문제 수정 —
+       종전엔 /cd/rank-save 를 부르는 곳이 업체관리 화면 1곳뿐이라, 스토어 분석에서
+       저장한 건은 아침 배치가 훑기 전까지 순위 이력이 비어 있었다.
+       · 상품ID 3형식(nvMid·/products/·/catalog/) 인식 — 서버 규칙과 동일
+       · 서버는 admin·manager 전용이라 그 외 권한은 조용히 생략(에러 표시 안 함)
+       · 순위를 못 찾았으면 저장하지 않음(허위 미노출 기록 방지 — 8/1~3 오염 선례) */
+    var extractPid = function(url) {
+        var u = String(url || '');
+        var m = u.match(/[?&]nvMid=(\d+)/);
+        if (m) return m[1];
+        m = u.match(/\/products\/(\d+)/);
+        if (m) return m[1];
+        m = u.match(/\/catalog\/(\d+)/);
+        if (m) return m[1];
+        return u;
+    };
+    var saveRankIfPossible = function(clientId) {
+        try {
+            if (!clientId || !keyword || !productUrl) return;
+            if (isViewer) return;              // 서버가 admin·manager 전용 → 영업사원은 호출 자체 생략
+            var list = shopProducts || [];
+            if (!list || !list.length) return;
+            var pid = extractPid(productUrl);
+            var hit = null;
+            for (var i = 0; i < list.length; i++) {
+                var p = list[i];
+                if (p.product_id === pid || (p.product_url && String(p.product_url).indexOf(pid) !== -1)) { hit = p; break; }
+            }
+            if (!hit || !hit.rank) return;   // 못 찾으면 기록하지 않는다
+            api.post('/cd/rank-save', {
+                client_id: clientId, keyword: keyword, product_url: productUrl,
+                rank_position: hit.rank, page_number: Math.ceil(hit.rank / 40)
+            }).catch(function() {});
+        } catch (e) {}
+    };
+
     var handleSave = function() {
         setSaving(true);
         setMessage('');
@@ -120,6 +157,7 @@ window.SaveToClientSection = function SaveToClientSection({
                 if (res.success) {
                     setSuccess(true);
                     setMessage(res.message);
+                    saveRankIfPossible(res.client_id);
                     if (isCompMode && onCompetitorSaved) { try { onCompetitorSaved(); } catch(e) {} }
                 } else {
                     var errMsg = typeof res.detail === 'string' ? res.detail : '저장에 실패했습니다.';
@@ -141,6 +179,7 @@ window.SaveToClientSection = function SaveToClientSection({
                 if (res.success) {
                     setSuccess(true);
                     setMessage(res.message);
+                    saveRankIfPossible(selectedClientId);
                 } else {
                     var errMsg = typeof res.detail === 'string' ? res.detail : '저장에 실패했습니다.';
                     setMessage(errMsg);

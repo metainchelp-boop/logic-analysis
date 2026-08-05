@@ -5,6 +5,7 @@ on:
     branches: [ main ]
     paths-ignore:
       - '.github/workflows/debug-place.yml'   # 읽기 전용 진단 — 수정이 재배포를 유발하지 않게(① debug-logs 선례)
+      - '.github/workflows/debug-rank.yml'    # 〃 (순위 배치·저장소 통합 실측용, 2026-08-05)
   workflow_dispatch:   # 수동 실행 — 시크릿 변경 반영 등
 
 jobs:
