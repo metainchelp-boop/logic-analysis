@@ -859,6 +859,7 @@ jobs:
                     print(f"  success={res.get('success')} · 소요 {took:.1f}s")
                     print(f"  businessKey : {d.get('businessKey')!r}")
                     print(f"  검색량       : {d.get('volume')}")
+                    print(f"  원 키워드 병기: {d.get('baseKeyword')} {d.get('baseVolume')}")
                     print(f"  현재 순위    : {d.get('rank')} ({d.get('rankState')})")
                     print(f"  순위 추이    : {len(d.get('rankSeries') or [])}점   → 슬라이드 {'노출' if len(d.get('rankSeries') or []) >= 2 else '생략'}")
                     print(f"  추적 키워드  : {len(d.get('trackedKeywords') or [])}개")
