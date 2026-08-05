@@ -257,27 +257,31 @@ _UPJONG_SEARCH_TERMS = {
 
 
 def _flatten_upjong(node, out):
-    """업종 트리 JSON 을 (code, name) 쌍으로 평탄화 — 키 이름 편차(…Cd/…Nm 계열) 흡수.
-    한 행에 대·중·소분류가 같이 실리는 형태도 접두사 짝(…Cd ↔ …Nm)으로 전부 수집한다."""
-    if isinstance(node, dict):
-        for k, v in node.items():
-            kl = str(k).lower()
-            stem = None
-            if kl.endswith("cd"):
-                stem = k[:-2]
-            elif kl.endswith("code"):
-                stem = k[:-4]
-            if stem is not None and isinstance(v, (str, int)) and str(v).strip():
-                for nk in (stem + "Nm", stem + "nm", stem + "Name", stem + "name"):
-                    nv = node.get(nk)
-                    if isinstance(nv, str) and nv.strip():
-                        out.append((str(v).strip(), nv.strip()))
-                        break
-        for v in node.values():
-            if isinstance(v, (dict, list)):
-                _flatten_upjong(v, out)
-    elif isinstance(node, list):
+    """업종 목록 → (code, name) 쌍. 실측 형식(2026-08-05 검증):
+      [{"upjong3cd": "I21007", "tpbiznm": "음식 > 기타 간이 > 김밥/만두/분식"}, ...] 247건 평탄 리스트.
+    tpbiznm 은 '대 > 중 > 소' 경로라 마지막 조각이 소분류명. 다른 키 이름 편차도 흡수한다."""
+    if isinstance(node, list):
         for v in node:
+            _flatten_upjong(v, out)
+        return
+    if not isinstance(node, dict):
+        return
+    code = None
+    for k in ("upjong3cd", "upjong3Cd", "upjongCd", "code"):
+        v = node.get(k)
+        if isinstance(v, (str, int)) and str(v).strip():
+            code = str(v).strip()
+            break
+    name = None
+    for k in ("tpbiznm", "tpbizNm", "upjong3nm", "upjong3Nm", "name"):
+        v = node.get(k)
+        if isinstance(v, str) and v.strip():
+            name = v.strip()
+            break
+    if code and name:
+        out.append((code, name))
+    for v in node.values():           # 중첩 구조도 대비(현 응답은 평탄)
+        if isinstance(v, (dict, list)):
             _flatten_upjong(v, out)
 
 
@@ -331,68 +335,92 @@ def _resolve_upjong(industry_label: str):
 # 6. 간단분석 조회 — 평균 매출(getAvgAmtInfo) + 유동인구(getPopularInfo)
 # ============================================================
 def _fetch_avg(admi_cd: str, upjong_cd: str, simple_loc: str):
-    """행정동×업종 평균 매출 정보. 전 필드 optional — 실패 시 None."""
+    """행정동×업종 상권 정보. **GET 전용**(POST 는 500 — 2026-08-05 실측).
+    실측 확인 필드(강남구 역삼1동×I21201 표본):
+      saleAmt/maxAmt/minAmt/saleCnt(천원·건) · guAmt/siAmt(구·시 평균 = 벤치마크)
+      prevMon*/prevYear*(증감) · avgList(월별 시계열) · storeCntAdmin(행정동 업소수 시계열)
+      storeCnt(시도·시군구 업소수) · topFive(업종 상위 5개 행정동 + dayAvg 유동인구)
+      upjongTypeMap(업종명) · analyNo · amtStdYm/storeStdYm(기준연월) · baemin
+    전 필드 optional — 실패 시 None."""
     key = _env_keys()["simple"]
-    resp = _http_json(
-        "POST", f"{_BASE}/gis/simpleAnls/getAvgAmtInfo.json",
-        params={"certKey": key},
-        data={"admiCd": admi_cd, "upjongCd": upjong_cd,
-              "simpleLoc": simple_loc, "certKey": key},
-    )
-    body = _pick(resp, ("saleAmt", "analyNo", "stdYm"))
+    resp = _http_json("GET", f"{_BASE}/gis/simpleAnls/getAvgAmtInfo.json",
+                      params={"admiCd": admi_cd, "upjongCd": upjong_cd,
+                              "simpleLoc": simple_loc, "certKey": key})
+    body = _pick(resp, ("saleAmt", "avgList", "analyNo"))
     if body is None:
         return None
-    std_ym = body.get("stdYm")
+
+    def _arr(v):
+        return v if isinstance(v, list) else []
+
+    # 월별 매출 시계열 — [{crtrYm, saleAmt(천원)}] 최신순으로 오는 걸 과거→최신으로 정렬
+    series = []
+    for row in _arr(body.get("avgList")):
+        if not isinstance(row, dict):
+            continue
+        ym, amt = row.get("crtrYm"), _num(row.get("saleAmt"))
+        if ym and amt is not None:
+            series.append({"ym": str(ym), "amt": amt})
+    series.sort(key=lambda r: r["ym"])
+
+    # 행정동 업소수 시계열 — storeCntAdmin: [{storeCnt, areaGb:'13'(행정동), yymm}]
+    shop_series = []
+    for row in _arr(body.get("storeCntAdmin")):
+        if not isinstance(row, dict):
+            continue
+        ym, cnt = row.get("yymm"), _int_or_none(row.get("storeCnt"))
+        if ym and cnt is not None:
+            shop_series.append({"ym": str(ym), "cnt": cnt})
+    shop_series.sort(key=lambda r: r["ym"])
+
+    # 업종 상위 5개 행정동(전국) — 우리 행정동이 포함되면 그 dayAvg(유동인구)를 쓴다
+    top5, day_avg = [], None
+    for row in _arr(body.get("topFive")):
+        if not isinstance(row, dict):
+            continue
+        item = {"admiCd": str(row.get("admiCd") or ""), "admiNm": row.get("admiNm"),
+                "ctyNm": row.get("ctyNm"), "megaNm": row.get("megaNm"),
+                "saleAmt": _num(row.get("saleAmt")), "storeCnt": _int_or_none(row.get("storeCnt")),
+                "dayAvg": _int_or_none(row.get("dayAvg"))}
+        top5.append(item)
+        if item["admiCd"] and item["admiCd"] == str(admi_cd) and item["dayAvg"] is not None:
+            day_avg = item["dayAvg"]
+
+    up_map = body.get("upjongTypeMap") if isinstance(body.get("upjongTypeMap"), dict) else {}
+
     return {
-        "saleAmt": _num(body.get("saleAmt")),            # 천원 단위
+        "saleAmt": _num(body.get("saleAmt")),              # 점포당 월평균(천원)
         "maxAmt": _num(body.get("maxAmt")),
         "minAmt": _num(body.get("minAmt")),
-        "saleCnt": _num(body.get("saleCnt")),
+        "saleCnt": _num(body.get("saleCnt")),              # 행정동 업소수(=storeCntAdmin 최신)
+        "guAmt": _num(body.get("guAmt")),                  # 시군구 평균(천원) — 벤치마크
+        "siAmt": _num(body.get("siAmt")),                  # 시도 평균(천원) — 벤치마크
         "prevMonRate": _num(body.get("prevMonRate")),
         "prevYearRate": _num(body.get("prevYearRate")),
-        # 아래 3개는 파싱만 해 캐시 payload 재조립 없이 후속 차수에서 쓸 수 있게 보관
         "prevMonCntRate": _num(body.get("prevMonCntRate")),
         "prevYearCntRate": _num(body.get("prevYearCntRate")),
+        "series": series,                                  # [{ym, amt(천원)}]
+        "shopSeries": shop_series,                         # [{ym, cnt}]
+        "topFive": top5,
+        "dayAvg": day_avg,                                 # 우리 행정동이 top5 에 있을 때만
+        "upjongNm": up_map.get("upjong3nm"),
         "baemin": body.get("baemin"),
         "analyNo": body.get("analyNo"),
-        "stdYm": str(std_ym).strip() if std_ym is not None else None,
-        "guNm": body.get("guNm"),
-        "dongNm": body.get("dongNm"),
+        "stdYm": str(body.get("amtStdYm") or body.get("stdYmCh") or "").strip() or None,
+        "storeStdYm": str(body.get("storeStdYm") or "").strip() or None,
     }
 
 
 def _fetch_popular(admi_cd: str, upjong_cd: str, analy_no):
-    """행정동 유동인구(일평균·시간대 6구간·요일·주말 비중). 실패 시 None(부분 강등)."""
-    key = _env_keys()["simple"]
-    params = {"admiCd": admi_cd, "upjongCd": upjong_cd, "certKey": key}
-    if analy_no:
-        params["analyNo"] = analy_no
-    resp = _http_json("GET", f"{_BASE}/gis/simpleAnls/getPopularInfo.json", params=params)
-    if resp is None:
-        return None
-    if isinstance(resp, dict) and isinstance(resp.get("population"), dict):
-        body = resp["population"]
-    else:
-        body = _pick(resp, ("dayAvg", "firstHour", "mon"))
-    if body is None:
-        return None
-    hours = [_num(body.get(k)) for k in
-             ("firstHour", "secondHour", "thirdHour", "fourthHour", "fifthHour", "sixthHour")]
-    days = [_num(body.get(k)) for k in ("mon", "tue", "wed", "thu", "fri", "sat", "sun")]
-    out = {
-        "dayAvg": _num(body.get("dayAvg")),
-        "hours": hours if any(h is not None for h in hours) else None,
-        "days": days if any(d is not None for d in days) else None,
-        "weekendShare": _num(body.get("weekend")),
-    }
-    if all(v is None for v in out.values()):
-        return None
-    return out
+    """행정동 유동인구 상세.
+    ⚠️ 2026-08-05 실측: `/gis/simpleAnls/getPopularInfo.json` 은 파라미터 조합 5종 전부 HTTP 500
+    (admiCd만 / +upjongCd / +simpleLoc / +analyNo / +path). 포털 내부 경로가 바뀐 것으로 보여
+    **현재는 사용하지 않는다**. 유동인구는 getAvgAmtInfo 의 topFive[].dayAvg 로 부분 확보하고,
+    시간대·요일 분해는 미확보(2단계 — 상세분석 축 또는 경로 재확인 후).
+    이 함수는 경로가 되살아났을 때를 위해 남겨두되 항상 None 을 반환한다."""
+    return None
 
 
-# ============================================================
-# 7. 공개 함수
-# ============================================================
 def get_place_sbiz(region: str, industry_label: str) -> dict | None:
     """지역명×업종 라벨 → 상권 데이터 블록(제안서 sbiz).
     반환 스키마(전 필드 optional·없으면 null) — FE 5차 배선이 이 스키마에 고정:
@@ -428,28 +456,52 @@ def get_place_sbiz(region: str, industry_label: str) -> dict | None:
             return None
         pop = _fetch_popular(admi["admiCd"], upjong["code"], avg.get("analyNo"))
 
+        # 유동인구: topFive 에 우리 행정동이 있으면 dayAvg 확보(없으면 null — 가짜 값 금지)
+        traffic = None
+        if avg.get("dayAvg") is not None:
+            traffic = {"dayAvg": avg["dayAvg"], "hours": None, "days": None, "weekendShare": None}
+
+        # 업소수: 행정동 최신값(saleCnt) 우선, 없으면 shopSeries 마지막
+        shop_cnt = _int_or_none(avg.get("saleCnt"))
+        shop_series = avg.get("shopSeries") or []
+        if shop_cnt is None and shop_series:
+            shop_cnt = shop_series[-1].get("cnt")
+        shops = None
+        if shop_cnt is not None:
+            shops = {"count": shop_cnt, "series": shop_series,
+                     "momRate": avg.get("prevMonCntRate"), "yoyRate": avg.get("prevYearCntRate")}
+
+        # 매출 시계열(원 환산) — 시안 「시장의 크기」 추이선
+        sales_series = [{"ym": r["ym"], "amt": _won(r["amt"])}
+                        for r in (avg.get("series") or []) if r.get("amt") is not None] or None
+
         result = {
             "source": "sbiz365-simple",
             "baseYm": avg.get("stdYm"),
             "district": {
                 "admiCd": admi.get("admiCd"),
-                "admiNm": avg.get("dongNm") or admi.get("admiNm"),
-                "guNm": avg.get("guNm"),
+                "admiNm": admi.get("admiNm"),
+                "guNm": admi.get("guNm"),
             },
+            "industryNm": avg.get("upjongNm"),
             "sales": {
-                "avgAmt": _won(avg.get("saleAmt")),   # 천원 → 원 환산
+                "avgAmt": _won(avg.get("saleAmt")),     # 점포당 월평균(원)
                 "minAmt": _won(avg.get("minAmt")),
                 "maxAmt": _won(avg.get("maxAmt")),
-                "cnt": _int_or_none(avg.get("saleCnt")),
+                "cnt": None,                            # 결제건수는 현 응답에 없음(saleCnt=업소수)
                 "momRate": avg.get("prevMonRate"),
                 "yoyRate": avg.get("prevYearRate"),
+                "guAvgAmt": _won(avg.get("guAmt")),      # 시군구 평균 — 벤치마크
+                "siAvgAmt": _won(avg.get("siAmt")),      # 시도 평균 — 벤치마크
             },
-            "traffic": pop,
-            # ── 실응답 검증 후 채울 자리(지금은 항상 null — 키만 예약) ──
-            "shops": None,        # 업소현황(STOR 키·공공데이터포털 병행 검토)
-            "sns": None,          # SNS 분석(snsAnaly)
-            "theme": None,        # 테마상권 분석(hpReport)
-            "salesSeries": None,  # 점포당 매출액 추이(SLSIDX 키)
+            "salesSeries": sales_series,                 # [{ym, amt(원)}] 월별 추이
+            "shops": shops,                              # 업소수 + 시계열 + 증감
+            "traffic": traffic,                          # dayAvg 만(시간대·요일은 2단계)
+            "topFive": avg.get("topFive") or None,       # 업종 상위 5개 행정동(비교군)
+            "delivery": avg.get("baemin"),
+            # ── 미확보(2단계) — 실응답 검증 후 채울 자리 ──
+            "sns": None,                                 # SNS 분석(snsAnaly)
+            "theme": None,                               # 테마상권(hpReport)
         }
         _cache_put(cache_key, result)
         return result
