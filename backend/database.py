@@ -380,7 +380,7 @@ def find_place_track_place_id(business_name: str, region: str = "") -> str:
         rows = conn.execute(
             "SELECT business_name, region, place_id FROM place_track_target "
             "WHERE place_id IS NOT NULL AND place_id <> ''").fetchall()
-        loose = ""
+        near, loose = "", ""
         for r in rows:
             rn = "".join(str(r["business_name"] or "").split()).lower()
             if rn != name_n:
@@ -388,10 +388,59 @@ def find_place_track_place_id(business_name: str, region: str = "") -> str:
             rr = "".join(str(r["region"] or "").split()).lower()
             if reg_n and rr == reg_n:
                 return str(r["place_id"])          # 이름·지역 모두 일치 — 최우선
-            loose = loose or str(r["place_id"])     # 이름만 일치 — 폴백 후보
-        return loose
+            # 지역 표기만 다른 같은 동네(성수동 ⊂ 서울성동구성수동) — 정확 일치 다음 순위.
+            # 두 화면의 지역 안내가 서로 다른 값을 유도해 생기는 불일치를 여기서 흡수한다.
+            if reg_n and rr and (rr in reg_n or reg_n in rr):
+                near = near or str(r["place_id"])
+            loose = loose or str(r["place_id"])     # 이름만 일치 — 마지막 폴백
+        return near or loose
     except Exception as e:
         logger.warning(f"플레이스 추적 ID 조회 실패(무시): {e}")
+        return ""
+    finally:
+        conn.close()
+
+
+def resolve_place_business_key(business_name: str, region: str = "") -> str:
+    """수동 분석(「플레이스 분석」) 기록에서 그 업체의 실제 `nm:` 키를 찾는다.
+
+    ⚠️ 왜 필요한가(2026-08-05): 키가 `nm:{정규화명}|{정규화지역}` 이라 **지역을 어떻게 적었는지가
+    곧 키**인데, 두 화면의 안내가 서로 다른 값을 유도했다 —
+        「플레이스 분석」  지역 (동/구/시/군)  예: 서울 성동구 성수동   (선택)
+        맞춤제안서        지역 *              예: 성수동              (필수)
+    안내를 각각 그대로 따르면 `…|서울성동구성수동` 과 `…|성수동` 이 되어 **다른 업체로 인식**되고,
+    분석을 해 뒀는데도 순위·리뷰·저장수가 영영 안 붙는다. 영업사원에겐 「분석했는데 왜 안 나오지」로만
+    보이는 함정이라, **사람이 표기를 맞추는 방어 대신 코드가 흡수**한다.
+
+    순서: ① 정확 일치 → ② 이름이 같고 지역이 서로를 포함(성수동 ⊂ 서울성동구성수동) → ③ 이름만 일치.
+    ②③ 은 후보가 여럿이면 가장 최근 기록을 쓴다. 못 찾으면 빈 문자열(호출부가 정확 키로 폴백).
+    ⚠️ 이름이 아예 다르면 절대 매칭하지 않는다 — 엉뚱한 업체 자료가 제안서에 실리는 것이 미노출보다 나쁘다."""
+    name_n = "".join(str(business_name or "").split()).lower()
+    if not name_n:
+        return ""
+    reg_n = "".join(str(region or "").split()).lower()
+    exact = f"nm:{name_n}|{reg_n}"
+    prefix = f"nm:{name_n}|"
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT business_key, MAX(checked_at) AS last_at FROM place_rank_history "
+            "WHERE business_key LIKE ? GROUP BY business_key ORDER BY last_at DESC",
+            (prefix + "%",)
+        ).fetchall()
+        if not rows:
+            return ""
+        keys = [str(r["business_key"]) for r in rows]      # 최근 기록 순
+        if exact in keys:
+            return exact
+        if reg_n:
+            for k in keys:                                  # 지역 표기만 다른 같은 동네
+                kr = k[len(prefix):]
+                if kr and (kr in reg_n or reg_n in kr):
+                    return k
+        return keys[0]                                      # 이름만 일치 — 가장 최근 기록
+    except Exception as e:
+        logger.warning(f"플레이스 업체 키 해석 실패(무시): {e}")
         return ""
     finally:
         conn.close()

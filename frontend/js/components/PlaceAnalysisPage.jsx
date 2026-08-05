@@ -203,9 +203,10 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
                     // 2행: 지역 + 캡처
                     React_.createElement('div', { className: 'grid-in' },
                         React_.createElement('div', { className: 'field' },
-                            React_.createElement('label', null, '지역 ', React_.createElement('span', { style: { color: '#94a3b8', fontWeight: 400 } }, '(동/구/시/군)')),
+                            React_.createElement('label', null, '지역 ',
+                                React_.createElement('span', { style: { color: '#94a3b8', fontWeight: 400 } }, '(동 이름 — 맞춤제안서와 같게)')),
                             React_.createElement('input', { className: 'inp' + (region ? ' filled' : ''), value: region,
-                                onChange: function(e) { setRegion(e.target.value); }, placeholder: '예: 서울 성동구 성수동' })),
+                                onChange: function(e) { setRegion(e.target.value); }, placeholder: '예: 성수동' })),
                         React_.createElement('div', { className: 'field' },
                             React_.createElement('label', null, '플레이스 검색결과 캡처 ', React_.createElement('span', { className: 'req' }, '*'),
                                 ' ', React_.createElement('span', { style: { color: '#94a3b8', fontWeight: 400 } }, '(선택한 키워드의 검색결과)')),

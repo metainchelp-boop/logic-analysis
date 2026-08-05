@@ -24713,13 +24713,13 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
         color: '#94a3b8',
         fontWeight: 400
       }
-    }, '(동/구/시/군)')), React_.createElement('input', {
+    }, '(동 이름 — 맞춤제안서와 같게)')), React_.createElement('input', {
       className: 'inp' + (region ? ' filled' : ''),
       value: region,
       onChange: function (e) {
         setRegion(e.target.value);
       },
-      placeholder: '예: 서울 성동구 성수동'
+      placeholder: '예: 성수동'
     })), React_.createElement('div', {
       className: 'field'
     }, React_.createElement('label', null, '플레이스 검색결과 캡처 ', React_.createElement('span', {
