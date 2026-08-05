@@ -350,7 +350,7 @@ def _is_residual_bucket(name: str) -> bool:
     점포당 매출이 0으로 나온다(구로3동: 그 외 기타 간이 음식점·기타 한식·기타 일식·기타 서양식 전부 0,
     반면 곱창 전골/구이 3,340천원·국/탕/찌개류 2,938천원). 대표 업종으로 골라선 안 된다."""
     last = str(name or "").split(">")[-1].strip()
-    return last.startswith("기타") or ("그 외" in last)
+    return last.startswith("기타") or ("그 외" in last) or ("분류 안된" in last)
 
 
 def _resolve_upjong_candidates(industry_label: str, limit: int = 3):
