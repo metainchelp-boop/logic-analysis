@@ -84,6 +84,15 @@ def _http_json(method: str, url: str, params=None, data=None):
 _cache_table_ready = False
 
 
+# 캐시 네임스페이스(스키마 버전).
+# ⚠️ 캐시에 담기는 건 원문이 아니라 **우리가 가공한 결과**(단위 환산·집계)라,
+# 가공 규칙을 바꾸면 TTL(14일)이 만료될 때까지 옛 규칙으로 계산된 값이 계속 나간다.
+# 2026-08-05 실사고: 금액 단위를 천원→만원으로 고쳤는데 「업종 종합」만 옛 값(1/10)이
+# 그대로 노출됐다(소분류 캐시는 키에 hint 가 붙어 우연히 재계산됐고, 종합 캐시는 키가 같아 적중).
+# 앞으로 **가공 규칙을 바꾸면 이 숫자를 올릴 것** — 전 캐시가 한 번에 무효화된다.
+CACHE_NS = "v2"
+
+
 def _cache_conn():
     from database import _get_conn  # 지연 import — 모듈 로드 순서·테스트 격리
     global _cache_table_ready
@@ -96,6 +105,8 @@ def _cache_conn():
                 fetched_at TEXT
             )
         """)
+        # 옛 네임스페이스 잔재 정리(읽히지 않는 행이 계속 쌓이지 않게) — 프로세스당 1회
+        conn.execute("DELETE FROM sbiz_cache WHERE cache_key NOT LIKE ?", (f"{CACHE_NS}:%",))
         conn.commit()
         _cache_table_ready = True
     return conn
@@ -105,7 +116,8 @@ def _cache_get(key: str, ttl_seconds: int):
     try:
         conn = _cache_conn()
         row = conn.execute(
-            "SELECT payload, fetched_at FROM sbiz_cache WHERE cache_key = ?", (key,)
+            "SELECT payload, fetched_at FROM sbiz_cache WHERE cache_key = ?",
+            (f"{CACHE_NS}:{key}",),
         ).fetchone()
         conn.close()
         if not row:
@@ -124,7 +136,8 @@ def _cache_put(key: str, payload):
         conn = _cache_conn()
         conn.execute(
             "INSERT OR REPLACE INTO sbiz_cache (cache_key, payload, fetched_at) VALUES (?, ?, ?)",
-            (key, json.dumps(payload, ensure_ascii=False), datetime.now().isoformat()),
+            (f"{CACHE_NS}:{key}",
+             json.dumps(payload, ensure_ascii=False), datetime.now().isoformat()),
         )
         conn.commit()
         conn.close()
@@ -575,7 +588,7 @@ def _aggregate_major(admi_cd: str, loc: str, major: str):
     ⚠️ 2026-08-05 실측: getAvgAmtInfo 는 **소분류 6자리 코드만** 받는다.
     상위분류 코드(I201·I20·I2·I)와 빈 값은 전부 무응답 → '업종 전체' 를 서버가 계산해 주지 않는다.
     그래서 대분류에 속한 소분류를 우리가 모두 조회해 직접 합산한다(구로3동 음식 = 43개 소분류 중
-    29개에 값 존재 · 가중평균 3,058,703원 · 895곳). 순차 조회는 24초라 병렬로 돌리고,
+    29개에 값 존재 · 가중평균 약 3,059만원 · 895곳). 순차 조회는 24초라 병렬로 돌리고,
     시간 상한을 둬서 제안서 생성이 늘어지지 않게 한다. 결과는 다른 캐시와 같은 TTL 로 보관."""
     if not major:
         return None
