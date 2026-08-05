@@ -5,6 +5,11 @@ name: Debug Rank Batch (읽기 전용 진단)
 
 on:
   workflow_dispatch:
+    inputs:
+      rank_link:
+        description: '순위 축 브리지 — off(기본) / stats(현황) / preview(연결 대상 미리보기) / apply(링크 기록·멱등)'
+        required: false
+        default: 'off'
 
 jobs:
   diagnose:
@@ -110,5 +115,31 @@ jobs:
             print(f"  총 {tot} / 슬러그 {slug}")
             PY
             echo
+            RL="${{ github.event.inputs.rank_link }}"
+            if [ -n "$RL" ] && [ "$RL" != "off" ]; then
+              echo "== 순위 축 브리지 ($RL) =="
+              # 실제 진입점(rank_link 모듈)을 그대로 호출한다 — 내부 로직 재현 금지 원칙.
+              docker exec -i -e RL_MODE="$RL" logic-analysis python3 - <<'PY'
+            import os, sys, json
+            sys.path.insert(0, "/app")   # Dockerfile WORKDIR=/app 에 backend 내용이 그대로 복사됨
+            import rank_link
+            mode = os.getenv("RL_MODE", "stats")
+            if mode == "apply":
+                rank_link.init_rank_link_db()
+                print(json.dumps(rank_link.run_maintenance(), ensure_ascii=False, indent=2))
+            elif mode == "preview":
+                rank_link.init_rank_link_db()
+                r = rank_link.preview_backfill(limit=10)
+                s = r.pop("samples", [])
+                print(json.dumps(r, ensure_ascii=False, indent=2))
+                print("  샘플(최대 10):")
+                for x in s:
+                    print(f"   - 업체 {x['client_id']} {x['client_name']} ↔ 상품 {x['tracked_product_id']} "
+                          f"{x['product_name'][:30]} (키 {x['product_key']})")
+            else:
+                print(json.dumps(rank_link.link_stats(), ensure_ascii=False, indent=2))
+            PY
+              echo
+            fi
             echo "== 최근 오류 tail =="
             docker logs --tail 60 logic-analysis 2>&1 | grep -iE 'error|exception|traceback' | tail -15 || echo "(오류 없음)"

@@ -119,8 +119,20 @@ def start_scheduler():
         max_instances=1,
     )
 
+    # 6) 순위 두 축 브리지 갱신 — 매일 01:20 (보관정책 직후, 배치 전 새벽 한산한 시각).
+    #    낮에 새로 등록된 업체·추적 상품을 이어 붙이고 삭제된 것들을 털어낸다.
+    #    링크만 건드리므로 순위 데이터·조회 경로에는 영향이 없다.
+    _scheduler.add_job(
+        _run_rank_link_maintenance,
+        trigger=CronTrigger(hour=1, minute=20),
+        id="rank_link_maintenance",
+        name="순위 축 브리지 갱신 (01:20)",
+        replace_existing=True,
+        max_instances=1,
+    )
+
     _scheduler.start()
-    logger.info("✅ 스케줄러 시작 (계약동기화: 04:00, 순위: 08:00, 분석: 08:30, 리포트: 09:30(발송 비활성), DB백업: 00:30, 보관정책: 01:00)")
+    logger.info("✅ 스케줄러 시작 (계약동기화: 04:00, 순위: 08:00, 분석: 08:30, 리포트: 09:30(발송 비활성), DB백업: 00:30, 보관정책: 01:00, 축 브리지: 01:20)")
 
     # 1회성 VACUUM — 보관정책 1회 삭제(2026-08-04)로 생긴 freelist(~2.2GB)를 디스크로 반환.
     # 스케줄러는 단일 워커에서만 기동(위 파일락)하므로 여기서 부르면 중복 실행 없음.
@@ -891,6 +903,24 @@ def _run_daily_db_backup():
 
     # 오래된 백업 정리 (최신 BACKUP_KEEP개 보관; 압축·비압축 모두 대상)
     _prune_old_backups(backup_dir)
+
+
+# ==================== 01:20 순위 두 축 브리지 갱신 ====================
+# 순위가 tracked_products 축과 clients 축으로 갈려 있어 같은 상품이 두 번 관리된다.
+# rank_link 가 둘을 이어 두면 다음 단계(조회 통합)에서 한쪽만 읽는 화면을 고칠 수 있다.
+# 이 잡은 링크 행만 만들고 지운다 — 순위 데이터·조회 경로는 건드리지 않는다.
+def _run_rank_link_maintenance():
+    try:
+        from rank_link import run_maintenance
+        res = run_maintenance()
+        if res.get("success"):
+            logger.info(f"🔗 순위 축 브리지 — 신규 {res.get('inserted', 0)}건 · "
+                        f"고아 정리 {res.get('pruned', 0)}건 · 총 {res.get('linked_total', 0)}건")
+        else:
+            logger.warning(f"순위 축 브리지 갱신 실패: {res.get('detail')}")
+    except Exception as e:
+        # 부가 기능이라 실패해도 다른 배치에 영향을 주지 않는다.
+        logger.warning(f"순위 축 브리지 갱신 예외: {e}")
 
 
 # ==================== 01:00 분석 보관정책 (client_analyses 정리) ====================
