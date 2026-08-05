@@ -716,5 +716,80 @@ jobs:
                 except Exception as e:
                     print("  실패:", type(e).__name__, e); traceback.print_exc()
 
+
+            # 6) 고친 규칙 전체 재현 — parts[4]=="fixed". 배포 후 실제로 나올 값을 미리 본다.
+            if len(parts) > 4 and parts[4].strip() == "fixed":
+                step("6. 수정 후 예상 결과(실서버 데이터로 재현)")
+                try:
+                    import urllib.parse, urllib.request
+                    pairs = sbiz365._upjong_pairs() or []
+                    print(f"  업종 트리 {len(pairs)}건")
+
+                    def residual(n):
+                        last = str(n or "").split(">")[-1].strip()
+                        return last.startswith("기타") or ("그 외" in last)
+
+                    def cands(label, limit=3):
+                        terms = []
+                        for lk, ts in sbiz365._UPJONG_SEARCH_TERMS.items():
+                            if lk in label or label in lk:
+                                terms.extend(ts)
+                        terms.append(label)
+                        sc, seen = [], set()
+                        for rank, term in enumerate(terms):
+                            if not term:
+                                continue
+                            for c, n in pairs:
+                                if term in n and c not in seen:
+                                    seen.add(c); sc.append((residual(n), rank, len(c), c, n))
+                        sc.sort()
+                        return [(c, n) for _, _, _, c, n in sc[:limit]]
+
+                    # 좌표 → 정식 주소
+                    coord = sbiz365._region_coord(region)
+                    key = sbiz365._env_keys()["datago"]
+                    qs = urllib.parse.urlencode({"radius": "500", "cx": coord[0], "cy": coord[1],
+                                                 "type": "json", "numOfRows": "1", "pageNo": "1"})
+                    u = f"http://apis.data.go.kr/B553077/api/open/sdsc2/storeListInRadius?serviceKey={key}&{qs}"
+                    with urllib.request.urlopen(urllib.request.Request(u, headers={"Accept": "application/json"}), timeout=12) as r:
+                        it = ((json.loads(r.read().decode("utf-8", "replace")).get("body") or {}).get("items") or [{}])[0]
+                    loc = " ".join(x for x in (it.get("ctprvnNm"), it.get("signguNm"), it.get("adongNm")) if x)
+                    print(f"  행정동: {it.get('adongCd')} · simpleLoc={loc!r}")
+
+                    cs = cands(industry)
+                    print(f"  업종 후보(고친 규칙): " + ", ".join(f"{c}={n.split('>')[-1].strip()}" for c, n in cs))
+                    chosen = None
+                    for c, n in cs:
+                        got = sbiz365._fetch_avg(it.get("adongCd"), c, loc)
+                        amt = got.get("saleAmt") if got else None
+                        print(f"    시도 {c} ({n.split('>')[-1].strip()}) → saleAmt={amt}")
+                        if got and amt:
+                            chosen = (c, n, got); break
+                    if chosen:
+                        c, n, got = chosen
+                        print(f"  ✅ 채택: {c} {n.split('>')[-1].strip()}")
+                        print(f"     점포당 월평균 {int(got['saleAmt']*1000):,}원 · 시군구평균 {int((got.get('guAmt') or 0)*1000):,}원 · 시도평균 {int((got.get('siAmt') or 0)*1000):,}원")
+                        gu = got.get("guAmt") or 0
+                        if gu:
+                            print(f"     → 제안서 헤드라인: 시군구 평균 대비 {round((got['saleAmt']/gu-1)*100):+d}%")
+                        print(f"     업소수 {got.get('saleCnt')} · 매출 시계열 {len(got.get('series') or [])}개 · 업소수 시계열 {len(got.get('shopSeries') or [])}개")
+                        print(f"     → 상권 슬라이드 렌더 가능 ✅")
+                    else:
+                        print("  ❌ 후보 3개 모두 값 없음 → 상권 슬라이드 생략(정상 폴백)")
+
+                    from naver_crawler import get_keyword_volume as _kv
+                    rows = _kv([combined.replace(" ", "")]) or []
+                    if rows:
+                        r0 = rows[0]
+                        pc = r0.get("monthlyPcQcCnt"); mo = r0.get("monthlyMobileQcCnt")
+                        def _i(v):
+                            try: return int(str(v).replace("<", "").strip())
+                            except Exception: return 0
+                        print(f"  ✅ 검색량: {_i(pc)+_i(mo):,}회/월 (PC {pc} · 모바일 {mo}) · 경쟁 {r0.get('compIdx')}")
+                    else:
+                        print("  ❌ 검색량 없음")
+                except Exception as e:
+                    print("  실패:", type(e).__name__, e); traceback.print_exc()
+
             print("=" * 66)
             PY
