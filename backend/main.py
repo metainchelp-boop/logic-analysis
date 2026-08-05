@@ -1311,6 +1311,15 @@ def place_proposal_enrich(req: PlaceProposalEnrichRequest,
             nm = place_crawler._norm(name)
             rg = place_crawler._norm(region)
             business_key = f"nm:{nm}|{rg}" if nm else ""
+            # ⚠️ 지역을 어떻게 적었는지가 곧 키라, 두 화면에 다르게 적으면(「서울 성동구 성수동」 vs
+            #    「성수동」) 분석해 둔 업체인데도 순위·리뷰가 영영 안 붙는다. 사람이 표기를 맞추게
+            #    하는 대신, 실제 저장된 키에서 같은 업체를 찾아 흡수한다(이름이 다르면 매칭 안 함).
+            if business_key:
+                try:
+                    from database import resolve_place_business_key
+                    business_key = resolve_place_business_key(name, region) or business_key
+                except Exception as e:
+                    logger.warning(f"[proposal-enrich] 업체 키 해석 실패(무시): {e}")
 
         # 지역+키워드 합성(추적·제안서 동일 규칙 — 지역 포함 시 순위 재현성)
         combined_kw = _combine_region_keyword(region, base_kw)
