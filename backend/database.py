@@ -347,6 +347,43 @@ def list_place_track_targets(active_only: bool = False, user_id: int = None,
         conn.close()
 
 
+def find_place_track_place_id(business_name: str, region: str = "") -> str:
+    """업체명(+지역)으로 추적 레지스트리에서 플레이스 ID 를 찾는다.
+
+    ⚠️ 왜 필요한가(2026-08-05 실측): 무인 수집은 순위를 `doc:{place_id}` 키로 저장하는데
+    (`_place_registry_business_key` — place_id 가 있으면 항상 doc: 우선), 맞춤제안서는
+    업체명·지역만 받으므로 `nm:{이름}|{지역}` 키로 조회해 **등록된 업체인데도 순위 이력이
+    0건**으로 나왔다. 등록된 대상은 대부분 place_id 를 갖고 있어 두 키가 영영 안 만난다.
+    → 제안서가 조회 전에 이 함수로 place_id 를 찾아 doc: 키를 우선 시도하게 한다.
+
+    이름은 공백·대소문자를 무시하고 비교하며, 지역이 주어지면 지역까지 맞는 행을 우선한다.
+    못 찾으면 빈 문자열(호출부는 기존 nm: 키로 폴백)."""
+    name_n = "".join(str(business_name or "").split()).lower()
+    if not name_n:
+        return ""
+    reg_n = "".join(str(region or "").split()).lower()
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT business_name, region, place_id FROM place_track_target "
+            "WHERE place_id IS NOT NULL AND place_id <> ''").fetchall()
+        loose = ""
+        for r in rows:
+            rn = "".join(str(r["business_name"] or "").split()).lower()
+            if rn != name_n:
+                continue
+            rr = "".join(str(r["region"] or "").split()).lower()
+            if reg_n and rr == reg_n:
+                return str(r["place_id"])          # 이름·지역 모두 일치 — 최우선
+            loose = loose or str(r["place_id"])     # 이름만 일치 — 폴백 후보
+        return loose
+    except Exception as e:
+        logger.warning(f"플레이스 추적 ID 조회 실패(무시): {e}")
+        return ""
+    finally:
+        conn.close()
+
+
 def set_place_track_target_active(target_id: int, active: bool, user_id: int = None,
                                   is_admin: bool = False) -> bool:
     """추적 대상 활성/일시중지 토글 — 본인 등록분만(admin 전체, 스토어 삭제 규칙과 동일)."""
