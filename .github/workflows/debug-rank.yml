@@ -149,6 +149,21 @@ jobs:
             for r in c.execute("""SELECT status, COUNT(*) n, MIN(requested_at) oldest, MAX(attempts) mx
                                     FROM collect_requests GROUP BY status"""):
                 print(f"  {r['status']}: {r['n']}건 (가장 오래된 {r['oldest']} · 최대 시도 {r['mx']})")
+            print("\n[수집 깊이 실측 — pagingSize=80 이 실제로 먹히는지]")
+            # 한 키워드당 몇 개를 모았는지. 300 근처면 80 이 정상 수용된 것,
+            # 40·80 에서 멈춰 있으면 페이지를 더 못 넘긴 것(= 300위 추적이 깨져 있던 것).
+            try:
+                rows = list(c.execute("""SELECT product_count n, COUNT(*) c
+                                          FROM collected_serp
+                                         GROUP BY product_count ORDER BY c DESC LIMIT 8"""))
+                for r in rows:
+                    print(f"  {r['n']}개 수집 — 키워드 {r['c']}건")
+                agg = c.execute("""SELECT MIN(product_count) mn, MAX(product_count) mx,
+                                          AVG(product_count) av FROM collected_serp""").fetchone()
+                print(f"  최소 {agg['mn']} · 최대 {agg['mx']} · 평균 {round(agg['av'] or 0, 1)}")
+            except Exception as e:
+                print("  조회 실패:", e)
+
             print("\n[수집 대상 키워드 규모]")
             kws = set()
             for sql in ("SELECT DISTINCT keyword FROM tracked_keywords",
