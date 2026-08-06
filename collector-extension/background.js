@@ -60,7 +60,12 @@ async function log(line) {
  *   fetch 를 실행한다. 이는 사이트 자신의 페이지네이션 요청과 완전히 동일해 차단 불가.
  * 직접 fetch 를 1차로 시도하되(언젠가 풀릴 수 있음), 418 이 확인되면 그 세션 동안은
  * 페이지 경로로 영구 전환한다(차단당한 경로를 계속 두드리지 않기 위함). */
-let fetchMode = 'direct';          // 'direct' | 'page'
+// ⚠️ 'direct'(서비스워커에서 바로 fetch)는 2026-08-04 이후 **한 번도 성공한 적이 없다** —
+//    매번 418 을 받고 페이지 경로로 넘어간다. 그런데 서비스워커가 잠들었다 깨면 이 값이
+//    'direct' 로 되돌아가 **매 회차마다 418 을 한 번씩 새로 유발**했다. 차단당한 경로를
+//    반복해 두드리는 셈이라, 그 자체가 봇 판정을 되살릴 수 있다.
+//    → 기본값을 'page' 로 둔다. 직접 경로는 이제 시도하지 않는다.
+let fetchMode = 'page';            // 'direct' | 'page'
 let workTabId = null;
 
 /* ⚠️ workTabId 는 메모리 변수라 MV3 서비스워커가 잠들었다 깨면 null 로 돌아간다.
@@ -218,6 +223,12 @@ async function fetchViaPage(url) {
   const tabId = await ensureWorkTab();
   const [res] = await chrome.scripting.executeScript({
     target: { tabId },
+    // ⚠️ world:'MAIN' — 페이지 **자신의 자바스크립트 세계**에서 fetch 를 돌린다.
+    //    기본값(ISOLATED)은 같은 출처·쿠키를 쓰지만 페이지가 fetch 를 감싸 넣는
+    //    검증 헤더·토큰(2026-08-06 확인: 페이지가 ncpt.naver.com 에서 봇 검증 토큰을
+    //    받아 온다)이 붙지 않아, 사이트 자신의 요청과 완전히 같아지지 않는다.
+    //    플레이스 추적기가 이미 MAIN 으로 판독해 잘 도는 검증된 방식이다.
+    world: 'MAIN',
     func: async (u) => {
       try {
         const r = await fetch(u, { credentials: 'include', headers: { 'Accept': 'application/json' } });
