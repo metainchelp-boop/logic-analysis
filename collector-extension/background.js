@@ -242,9 +242,21 @@ async function fetchViaPage(url) {
 
 /** 네이버 검색 결과 1페이지 */
 async function fetchPage(keyword, pagingIndex) {
+  // 2026-08-06 PC 개발자도구 실측 — 실제 페이지는 아래 파라미터를 전부 붙여 보낸다.
+  // 종전엔 sort·pagingIndex·pagingSize·query 넷만 보냈다. 사람이 안 보내는 모양의
+  // 요청은 그 자체가 봇 신호라(차단 사유 「특정 확장 프로그램 이용 시」), 나머지를 채운다.
+  //
+  // ⚠️ pagingSize 만은 실제 페이지(40)와 다른 80 을 **의도적으로 유지**한다.
+  //    맞추면 300위까지 4페이지 → 8페이지가 되어 요청이 두 배가 되는데, 이번 차단 사유가
+  //    바로 「짧은 시간 내에 너무 많은 요청」이라 모양을 맞추려다 원인을 키우게 된다.
+  //    80 이 실제로 수용되는지는 추측하지 않고 수집분으로 실측했다 —
+  //    키워드당 최대 300개·평균 287.8개(2026-08-06, collected_serp 전수) = 정상 수용.
+  const q = encodeURIComponent(keyword);
   const url = 'https://search.shopping.naver.com/api/search/all'
     + `?sort=rel&pagingIndex=${pagingIndex}&pagingSize=${CFG.pageSize}`
-    + `&query=${encodeURIComponent(keyword)}`;
+    + '&viewType=list&productSet=total'
+    + `&query=${q}&origQuery=${q}&adQuery=${q}`
+    + '&iq=&eq=&xq=';
   let data;
   if (fetchMode === 'direct') {
     try {
