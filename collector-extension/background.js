@@ -18,17 +18,23 @@
 
 const CFG = {
   serverBase: 'https://logic.metainc.co.kr',
-  pageSize: 80,          // 한 요청당 상품 수 (네이버 허용 상한)
-  maxRank: 300,          // 300위까지 = 80 × 4페이지
-  minGapMs: 1500,        // 요청 간 최소 간격
-  maxGapMs: 4000,        // 요청 간 최대 간격 (이 사이 랜덤 — 여유 확대 2026-08-04)
+  // ⚠️ 2026-08-06 플랜 B — API 호출을 폐기하고 **사람이 보는 검색 페이지**를 연다.
+  //    그래서 한 페이지 개수도 화면 기본값(40)에 맞춘다. 300위 = 8페이지.
+  //    종전 80(API 상한)은 사람이 안 만드는 모양이라, 모양을 맞추는 쪽을 택했다.
+  //    ⇒ 페이지 이동 횟수가 4 → 8 로 늘어나므로 아래 간격으로 시간당 총량을 맞춘다.
+  //      (페이지 이동은 그 자체로 ~3초가 걸려 API 호출보다 원래 느리다)
+  pageSize: 40,          // 한 페이지 상품 수 (실제 화면과 동일)
+  maxRank: 300,          // 300위까지 — 실제 받은 개수로 누적해 판단(고정 페이지 수 아님)
+  maxPages: 10,          // 안전 상한(빈 페이지·무한 루프 방지)
+  minGapMs: 1200,        // 페이지 사이 최소 간격
+  maxGapMs: 3000,        // 페이지 사이 최대 간격 (이 사이 랜덤)
   // ── 24시간 분산 (2026-08-05 운영자 확정) ─────────────────────────────
   // 종전: 새벽 1시부터 6시간에 954개를 몰아침 → 분당 10.6회 → 네이버가 IP 차단
   //       (「쇼핑 서비스 접속이 일시적으로 제한되었습니다」 — 사유에 '짧은 시간 내에
   //        너무 많은 요청이 이루어진 IP' 명시).
   // 지금: 서버가 키워드를 24개 시간대로 나눠 주고, 확장은 **매시간 자기 몫만** 한다.
   //       시간당 ~40개 → 분당 2.7회. 맥북이 24시간 켜져 있으니 창을 넓게 쓰는 게 이득.
-  keywordGapMs: 45000,   // 키워드 사이 휴식 45초 (시간당 40개 기준 여유 있게)
+  keywordGapMs: 30000,   // 키워드 사이 휴식 30초 (페이지가 8장으로 늘어난 만큼 조정)
   hourBudgetMs: 50 * 60 * 1000,  // 한 회차는 50분 안에 끝낸다(다음 시간대와 겹치지 않게)
   maxConsecutiveFail: 5, // 연속 실패가 이만큼이면 이번 회차 중단(차단 의심)
   runHour: 1,            // (유지) 회차 날짜 계산용 — 수집은 이제 24시간 상시
@@ -53,19 +59,13 @@ async function log(line) {
   await chrome.storage.local.set({ logs: logs.slice(0, 200) });
 }
 
-/* ── 요청 경로 2단 구조 (2026-08-04 실측 후 개편) ──
- * 확장 백그라운드에서 보내는 직접 fetch 는 실제 페이지 요청과 헤더(Sec-Fetch-*)·쿠키가
- * 달라 네이버가 418 로 차단함을 현장에서 확인했다.
- * → 실제 네이버쇼핑 페이지를 백그라운드 고정 탭으로 하나 열어두고, '그 페이지 안에서'
- *   fetch 를 실행한다. 이는 사이트 자신의 페이지네이션 요청과 완전히 동일해 차단 불가.
- * 직접 fetch 를 1차로 시도하되(언젠가 풀릴 수 있음), 418 이 확인되면 그 세션 동안은
- * 페이지 경로로 영구 전환한다(차단당한 경로를 계속 두드리지 않기 위함). */
-// ⚠️ 'direct'(서비스워커에서 바로 fetch)는 2026-08-04 이후 **한 번도 성공한 적이 없다** —
-//    매번 418 을 받고 페이지 경로로 넘어간다. 그런데 서비스워커가 잠들었다 깨면 이 값이
-//    'direct' 로 되돌아가 **매 회차마다 418 을 한 번씩 새로 유발**했다. 차단당한 경로를
-//    반복해 두드리는 셈이라, 그 자체가 봇 판정을 되살릴 수 있다.
-//    → 기본값을 'page' 로 둔다. 직접 경로는 이제 시도하지 않는다.
-let fetchMode = 'page';            // 'direct' | 'page'
+/* ── 수집 경로 = 검색 페이지 이동 (2026-08-06 플랜 B) ──
+ * 이력: ① 서비스워커에서 직접 fetch → 418 ② 페이지 안에서 fetch(ISOLATED) → 418
+ *      ③ 페이지 안에서 fetch(MAIN) → 418. 즉 **`/api/search/all` 을 부르는 순간 막힌다.**
+ *      우리 쪽 변수를 하나씩 바꿔 좁히려던 시도는 시도할 때마다 차단이 깊어져 실패했다.
+ * → API 호출을 폐기하고, 작업 탭의 **주소를 검색 페이지로 옮겨 다니며** 화면에 이미
+ *   그려진 데이터(__NEXT_DATA__)를 읽는다. 요청 1건 = 사람의 페이지 이동 1번.
+ *   플레이스 추적기가 __APOLLO_STATE__ 로 매일 같은 구조로 성공하고 있다. */
 let workTabId = null;
 
 /* ⚠️ workTabId 는 메모리 변수라 MV3 서비스워커가 잠들었다 깨면 null 로 돌아간다.
@@ -214,80 +214,125 @@ async function ensureWorkTab() {
   return workTabId;
 }
 
-/** 실제 페이지 컨텍스트에서 fetch — 사이트 자신의 요청과 동일(같은 출처·쿠키·Sec-Fetch)
+/** 페이지 안에서 실행 — 화면에 이미 그려진 검색 결과 데이터를 그대로 읽어온다.
  *
- *  ⚠️ 캡차에 걸리면 JSON 대신 HTML 이 돌아온다. 종전엔 `r.json()` 이 터진 것을
- *  평범한 실패로 세어 계속 재시도했고, 그 재시도가 차단을 더 깊게 만들었다.
- *  → 응답이 JSON 이 아니면 **차단으로 판정**하고 즉시 멈춘다. */
-async function fetchViaPage(url) {
-  const tabId = await ensureWorkTab();
-  const [res] = await chrome.scripting.executeScript({
-    target: { tabId },
-    // ⚠️ world:'MAIN' — 페이지 **자신의 자바스크립트 세계**에서 fetch 를 돌린다.
-    //    기본값(ISOLATED)은 같은 출처·쿠키를 쓰지만 페이지가 fetch 를 감싸 넣는
-    //    검증 헤더·토큰(2026-08-06 확인: 페이지가 ncpt.naver.com 에서 봇 검증 토큰을
-    //    받아 온다)이 붙지 않아, 사이트 자신의 요청과 완전히 같아지지 않는다.
-    //    플레이스 추적기가 이미 MAIN 으로 판독해 잘 도는 검증된 방식이다.
-    world: 'MAIN',
-    func: async (u) => {
-      try {
-        const r = await fetch(u, { credentials: 'include', headers: { 'Accept': 'application/json' } });
-        const ct = r.headers.get('content-type') || '';
-        if (!r.ok) return { err: 'HTTP ' + r.status, blocked: r.status === 418 || r.status === 429 };
-        if (!ct.includes('json')) {
-          // 캡차·안내 페이지가 HTML 로 돌아온 경우
-          const head = (await r.text()).slice(0, 200);
-          return { err: 'JSON 이 아닌 응답', blocked: true, head };
-        }
-        return { data: await r.json() };
-      } catch (e) { return { err: String(e && e.message || e) }; }
-    },
-    args: [url],
-  });
-  const out = res && res.result;
-  if (!out) throw new Error('페이지 주입 실패');
-  if (out.blocked) throw new Error('BLOCKED:' + out.err);
-  if (out.err) throw new Error(out.err);
-  return out.data;
+ *  ⚠️ 이 함수는 문자열로 직렬화돼 페이지 세계(MAIN)로 주입된다.
+ *     바깥 변수를 참조하면 안 되고, 반환값은 JSON 으로 옮겨진다.
+ *
+ *  판독 규칙 — 경로를 고정하지 않는다.
+ *     `props.pageProps.initialState.products.list` 같은 경로는 네이버가 자주 바꾼다.
+ *     그래서 __NEXT_DATA__ 전체를 훑어 **'상품처럼 생긴 객체들의 배열'**(productTitle·
+ *     mallName 등을 가진) 중 가장 긴 것을 고른다. 구조가 바뀌어도 계속 읽힌다.
+ *     플레이스 추적기가 __APOLLO_STATE__ 를 같은 방식으로 판독해 매일 성공 중이다. */
+function pageExtract() {
+  function looksProduct(o) {
+    if (!o || typeof o !== 'object') return false;
+    var hasTitle = typeof o.productTitle === 'string' || typeof o.productName === 'string';
+    if (!hasTitle) return false;
+    return o.mallName !== undefined || o.nvMid !== undefined || o.id !== undefined
+        || o.mallProductUrl !== undefined || o.crUrl !== undefined;
+  }
+  function unwrap(el) {
+    if (looksProduct(el)) return el;
+    if (el && typeof el === 'object' && looksProduct(el.item)) return el.item;
+    return null;
+  }
+  var nd = null;
+  try { nd = window.__NEXT_DATA__ || null; } catch (e) { nd = null; }
+  var href = '';
+  try { href = String(location.href); } catch (e) { href = ''; }
+  var title = '';
+  try { title = String(document.title || '').slice(0, 120); } catch (e) { title = ''; }
+  if (!nd) return { err: 'NO_NEXT_DATA', href: href, title: title };
+
+  var best = null, total = 0;
+  var seen = new Set();
+  var stack = [nd], guard = 0;
+  while (stack.length && guard++ < 300000) {
+    var cur = stack.pop();
+    if (!cur || typeof cur !== 'object') continue;
+    if (seen.has(cur)) continue;
+    seen.add(cur);
+    if (Array.isArray(cur)) {
+      var got = [];
+      for (var i = 0; i < cur.length; i++) {
+        var u = unwrap(cur[i]);
+        if (u) got.push(u);
+      }
+      // 절반 이상이 상품이어야 '상품 목록'으로 인정(광고·배너가 섞인 배열도 통과)
+      if (got.length && got.length * 2 >= cur.length) {
+        if (!best || got.length > best.length) best = got;
+      }
+      for (var j = 0; j < cur.length; j++) {
+        if (cur[j] && typeof cur[j] === 'object') stack.push(cur[j]);
+      }
+    } else {
+      for (var k in cur) {
+        var v = cur[k];
+        if (typeof v === 'number' && v > total && (k === 'total' || k === 'totalCount' || k === 'productCount')) total = v;
+        if (v && typeof v === 'object') stack.push(v);
+      }
+    }
+  }
+  if (!best || !best.length) return { err: 'NO_LIST', href: href, title: title };
+  return { total: total, list: best.slice(0, 200), href: href };
 }
 
-/** 네이버 검색 결과 1페이지 */
+/** 탭이 목표 주소로 이동을 끝낼 때까지 대기 */
+function waitNavigated(tabId, needle) {
+  return new Promise((resolve) => {
+    const started = Date.now();
+    const iv = setInterval(async () => {
+      try {
+        const t = await chrome.tabs.get(tabId);
+        const u = String(t.url || '');
+        // 캡차로 튕겼으면 더 기다릴 것 없이 즉시 반환(호출부가 판정한다)
+        if (u && !u.includes('search.shopping.naver.com')) { clearInterval(iv); resolve(); return; }
+        // 주소가 목표와 맞고 로딩이 끝났으면 바로 진행.
+        // ⚠️ 네이버가 주소를 정규화해 needle 이 안 보일 수도 있다 — 그때 25초를 통째로
+        //    기다리면 회차 예산(50분)이 날아간다. 로딩만 끝났으면 6초 뒤 진행한다.
+        if (t.status === 'complete' && (u.includes(needle) || Date.now() - started > 6000)) {
+          clearInterval(iv); resolve(); return;
+        }
+      } catch (e) { clearInterval(iv); resolve(); return; }
+      if (Date.now() - started > 25000) { clearInterval(iv); resolve(); }
+    }, 400);
+  });
+}
+
+/** 네이버 검색 결과 1페이지 — **실제 검색 페이지를 열어서** 읽는다(플랜 B, 2026-08-06)
+ *
+ *  왜 바꿨나: 종전엔 `/api/search/all` 을 (페이지 안에서라도) 직접 불렀다. 8/4 이후
+ *  이 경로는 418 로 막혔고, 파라미터 모양·MAIN 세계 실행 등 우리 쪽 변수를 바꿔가며
+ *  좁히려던 시도가 전부 실패했다(찔러볼 때마다 차단이 깊어지기만 했다).
+ *  → API 호출을 **완전히 폐기**하고, 사람이 보는 검색 페이지를 그대로 열어
+ *    이미 렌더된 데이터(__NEXT_DATA__)를 읽는다. 요청 한 건 = 사람의 페이지 이동 한 번.
+ *    플레이스 추적기가 매일 이 구조로 성공하고 있고, 실측(2026-08-06)에서
+ *    pagingIndex=2 페이지에 40개 상품과 필요한 필드가 전부 들어 있음을 확인했다. */
 async function fetchPage(keyword, pagingIndex) {
-  // 2026-08-06 PC 개발자도구 실측 — 실제 페이지는 아래 파라미터를 전부 붙여 보낸다.
-  // 종전엔 sort·pagingIndex·pagingSize·query 넷만 보냈다. 사람이 안 보내는 모양의
-  // 요청은 그 자체가 봇 신호라(차단 사유 「특정 확장 프로그램 이용 시」), 나머지를 채운다.
-  //
-  // ⚠️ pagingSize 만은 실제 페이지(40)와 다른 80 을 **의도적으로 유지**한다.
-  //    맞추면 300위까지 4페이지 → 8페이지가 되어 요청이 두 배가 되는데, 이번 차단 사유가
-  //    바로 「짧은 시간 내에 너무 많은 요청」이라 모양을 맞추려다 원인을 키우게 된다.
-  //    80 이 실제로 수용되는지는 추측하지 않고 수집분으로 실측했다 —
-  //    키워드당 최대 300개·평균 287.8개(2026-08-06, collected_serp 전수) = 정상 수용.
   const q = encodeURIComponent(keyword);
-  const url = 'https://search.shopping.naver.com/api/search/all'
-    + `?sort=rel&pagingIndex=${pagingIndex}&pagingSize=${CFG.pageSize}`
-    + '&viewType=list&productSet=total'
-    + `&query=${q}&origQuery=${q}&adQuery=${q}`
-    + '&iq=&eq=&xq=';
-  let data;
-  if (fetchMode === 'direct') {
-    try {
-      const res = await fetch(url, {
-        headers: { 'Accept': 'application/json', 'Referer': 'https://search.shopping.naver.com/' },
-        credentials: 'include',
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      data = await res.json();
-    } catch (e) {
-      // 직접 경로 차단 확인 → 이 세션은 페이지 경로로 전환(차단 경로 재타격 방지)
-      fetchMode = 'page';
-      await log(`↪ 직접 요청 차단(${e.message}) — 실제 페이지 경로로 전환`);
-      data = await fetchViaPage(url);
-    }
-  } else {
-    data = await fetchViaPage(url);
-  }
-  const node = data?.shoppingResult || {};
-  return { total: node.total || 0, list: node.products || [] };
+  // 사람이 페이지를 넘길 때와 같은 주소(pagingSize 도 화면 기본값 40 그대로)
+  const url = 'https://search.shopping.naver.com/search/all'
+    + `?query=${q}&origQuery=${q}&adQuery=${q}`
+    + `&pagingIndex=${pagingIndex}&pagingSize=${CFG.pageSize}`
+    + '&productSet=total&viewType=list&sort=rel&iq=&eq=&xq=';
+
+  const tabId = await ensureWorkTab();
+  await chrome.tabs.update(tabId, { url });
+  await waitNavigated(tabId, `pagingIndex=${pagingIndex}`);
+  // 렌더 정착 대기(사람이 화면을 보는 시간 — 값도 매번 조금씩 달리 준다)
+  await sleep(1400 + Math.floor(Math.random() * 1200));
+
+  let cur;
+  try { cur = await chrome.tabs.get(tabId); } catch (e) { throw new Error('작업 탭이 사라졌습니다'); }
+  if (isBlockedUrl(cur && cur.url)) throw new Error('BLOCKED:' + cur.url);
+
+  const [res] = await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func: pageExtract });
+  const out = res && res.result;
+  if (!out) throw new Error('페이지 판독 실패');
+  if (out.err === 'NO_NEXT_DATA') throw new Error(`BLOCKED:검색 페이지가 아님(${out.title || out.href})`);
+  if (out.err) throw new Error(`${out.err} (${out.title || out.href})`);
+  return { total: out.total || 0, list: out.list || [] };
 }
 
 /** 네이버 응답 → 서버가 쓰는 형태로 정리 */
@@ -307,11 +352,15 @@ function toProduct(p, rank) {
   };
 }
 
-/** 키워드 1건을 300위까지 수집 */
+/** 키워드 1건을 300위까지 수집
+ *
+ *  ⚠️ 순위는 **실제로 받은 개수로 누적**한다(종전엔 `(페이지-1)×pageSize+1` 로 계산).
+ *     페이지가 요청한 개수를 그대로 주지 않는 경우(광고 제외·마지막 페이지 등)
+ *     고정 계산은 순위를 통째로 어긋나게 만든다. 누적이면 어떤 경우에도 맞다. */
 async function collectKeyword(keyword) {
   const products = [];
   let total = 0;
-  const pages = Math.ceil(CFG.maxRank / CFG.pageSize);
+  const pages = CFG.maxPages;
   for (let i = 1; i <= pages; i++) {
     const { total: t, list } = await fetchPage(keyword, i);
     if (i === 1) total = t;
@@ -322,11 +371,13 @@ async function collectKeyword(keyword) {
     if (i === 1 && list[0]) {
       chrome.storage.local.set({ rawSample: { keyword, at: new Date().toISOString(), item: list[0] } });
     }
-    list.forEach((p, idx) => {
-      const rank = (i - 1) * CFG.pageSize + idx + 1;
-      if (rank <= CFG.maxRank) products.push(toProduct(p, rank));
-    });
-    if (list.length < CFG.pageSize) break;   // 더 이상 페이지 없음
+    for (let idx = 0; idx < list.length; idx++) {
+      const rank = products.length + 1;
+      if (rank > CFG.maxRank) break;
+      products.push(toProduct(list[idx], rank));
+    }
+    if (products.length >= CFG.maxRank) break;   // 목표 깊이 도달
+    if (list.length < CFG.pageSize) break;       // 마지막 페이지
     if (i < pages) await sleep(jitter());
   }
   return { total, products };
