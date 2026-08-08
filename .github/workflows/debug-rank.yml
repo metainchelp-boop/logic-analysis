@@ -177,6 +177,50 @@ jobs:
             print("\n[서버 토큰 설정]")
             tok = os.getenv("COLLECTOR_TOKEN", "")
             print(f"  COLLECTOR_TOKEN: {'설정됨(len=%d)' % len(tok) if tok else '❌ 미설정 — 전 경로 503'}")
+
+            # ⚠️ 「수집됐다」와 「값이 맞다」는 다른 명제다(2026-08-05 검색량 오판 교훈).
+            #    플랜 B(2026-08-06)로 판독 원천이 API 응답 → 페이지 __NEXT_DATA__ 로 바뀌었으므로
+            #    필드 이름이 달라져 title·productId 가 빈 채로 쌓일 수 있다. 실제 적재분을 열어본다.
+            print("\n[적재 품질 — 오늘 수집분 실측]")
+            import json as _json
+            rows = list(c.execute("""SELECT keyword, products_json, product_count
+                                       FROM collected_serp
+                                      WHERE collected_date = date('now','localtime')
+                                      ORDER BY created_at DESC LIMIT 20"""))
+            if not rows:
+                print("  (오늘 수집분 없음)")
+            else:
+                tot = 0
+                miss = {"productId": 0, "title": 0, "link": 0, "price": 0, "mallName": 0}
+                rank_bad = 0
+                for r in rows:
+                    try:
+                        prods = _json.loads(r["products_json"]) or []
+                    except Exception:
+                        print(f"  ⚠️ {r['keyword']}: products_json 파손"); continue
+                    for i, p in enumerate(prods):
+                        tot += 1
+                        for k in miss:
+                            if not str(p.get(k) or "").strip():
+                                miss[k] += 1
+                    ranks = [p.get("rank") for p in prods]
+                    if ranks != list(range(1, len(prods) + 1)):
+                        rank_bad += 1
+                print(f"  표본 키워드 {len(rows)}건 · 상품 {tot}개")
+                for k, v in miss.items():
+                    pct = round(v * 100 / tot, 1) if tot else 0
+                    mark = "❌" if pct > 5 else ("⚠️" if pct > 0 else "✅")
+                    print(f"  {mark} {k} 빈 값 {v}개 ({pct}%)")
+                print(f"  {'❌' if rank_bad else '✅'} 순위 1..n 연속 — 어긋난 키워드 {rank_bad}건")
+                s = None
+                for r in rows:
+                    try:
+                        s = (_json.loads(r["products_json"]) or [None])[0]
+                    except Exception:
+                        s = None
+                    if s: break
+                if s:
+                    print(f"  샘플 1위: {_json.dumps(s, ensure_ascii=False)[:400]}")
             PY
               echo
             fi
