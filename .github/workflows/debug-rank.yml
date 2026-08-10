@@ -129,6 +129,16 @@ jobs:
               echo "-- 접속 횟수(경로별·24시간) --"
               docker logs --since 24h logic-analysis 2>&1 | grep -oE 'GET /api/collector/[a-z]+|POST /api/collector/[a-z]+' \
                 | sort | uniq -c || echo "  (없음)"
+              echo "-- 수집기가 몇 대인가(접속 IP 개수·24시간) --"
+              # 도커 로그의 클라이언트는 전부 nginx(172.18.0.1)라 구분이 안 된다 → 호스트 nginx 로그를 본다.
+              # ⚠️ 저장소가 공개라 Actions 로그에 실제 IP 를 찍지 않는다. 뒤 두 자리를 가리고 대수만 센다.
+              for f in /var/log/nginx/access.log /var/log/nginx/access.log.1; do
+                [ -f "$f" ] && cat "$f"
+              done 2>/dev/null | grep -E 'api/collector/(serp|keywords|requests)' \
+                | awk '{print $1}' | sed -E 's/^([0-9]+\.[0-9]+)\..*/\1.x.x/' \
+                | sort | uniq -c | sort -rn | head -10 \
+                || echo "  (nginx 로그를 못 읽음 — 권한·경로 확인)"
+              echo "  ↑ 줄이 2개 이상이면 수집기가 2대 이상 돌고 있다는 뜻"
               echo
               docker exec -i logic-analysis python3 - <<'PY'
             import os, sqlite3
