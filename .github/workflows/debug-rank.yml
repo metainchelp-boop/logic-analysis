@@ -139,6 +139,18 @@ jobs:
                 | sort | uniq -c | sort -rn | head -10 \
                 || echo "  (nginx 로그를 못 읽음 — 권한·경로 확인)"
               echo "  ↑ 줄이 2개 이상이면 수집기가 2대 이상 돌고 있다는 뜻"
+              echo "-- IP별 시간대 분포(2대인가 / 한 대의 IP가 바뀐 건가) --"
+              # 겹치는 시간대가 있으면 = 동시에 두 대. 시간대가 앞뒤로 갈리면 = 한 대의 IP 변경.
+              for f in /var/log/nginx/access.log /var/log/nginx/access.log.1; do
+                [ -f "$f" ] && cat "$f"
+              done 2>/dev/null | grep -E 'api/collector/(serp|keywords|requests)' \
+                | awk '{ip=$1; sub(/^([0-9]+\.[0-9]+)\..*/,"",ip);
+                        split($1,o,"."); m=o[1]"."o[2]".x.x";
+                        t=$4; gsub(/^\[/,"",t); split(t,d,":"); hh=d[2];
+                        key=m" "hh; cnt[key]++ }
+                   END { for (k in cnt) print k, cnt[k] }' \
+                | sort | awk '{printf "  %-14s %s시  %s건\n", $1, $2, $3}' \
+                || echo "  (집계 실패)"
               echo
               docker exec -i logic-analysis python3 - <<'PY'
             import os, sqlite3

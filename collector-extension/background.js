@@ -35,6 +35,14 @@ const CFG = {
   // 지금: 서버가 키워드를 24개 시간대로 나눠 주고, 확장은 **매시간 자기 몫만** 한다.
   //       시간당 ~40개 → 분당 2.7회. 맥북이 24시간 켜져 있으니 창을 넓게 쓰는 게 이득.
   keywordGapMs: 30000,   // 키워드 사이 휴식 30초 (페이지가 8장으로 늘어난 만큼 조정)
+  // ⚠️ 온디맨드도 같은 규칙을 지켜야 한다(2026-08-11 실측 교훈).
+  //    종전 온디맨드는 키워드 사이를 jitter(1.2~3초)만 쉬어서 10건×8페이지를 몰아쳤다
+  //    = 분당 ~12회. 24시간 분산 설계 목표(분당 2.7회)의 4배 이상이라, 밀린 큐가
+  //    쌓여 있던 8/8 에는 이게 하루 종일 돌며 시간대 슬롯 수집을 굶기기까지 했다.
+  //    → 간격을 주고, 시간당 처리량에 상한을 둔다(직원이 방금 요청한 건은 여전히
+  //      몇 분 안에 처리되지만, 큐가 밀려도 시간당 총량이 설계치를 못 넘는다).
+  onDemandGapMs: 20000,  // 온디맨드 키워드 사이 휴식 20초
+  onDemandHourCap: 12,   // 온디맨드는 시간당 최대 12키워드까지만(나머지는 다음 시간대)
   hourBudgetMs: 50 * 60 * 1000,  // 한 회차는 50분 안에 끝낸다(다음 시간대와 겹치지 않게)
   maxConsecutiveFail: 5, // 연속 실패가 이만큼이면 이번 회차 중단(차단 의심)
   runHour: 1,            // (유지) 회차 날짜 계산용 — 수집은 이제 24시간 상시
@@ -374,7 +382,22 @@ async function collectKeyword(keyword) {
     for (let idx = 0; idx < list.length; idx++) {
       const rank = products.length + 1;
       if (rank > CFG.maxRank) break;
-      products.push(toProduct(list[idx], rank));
+      const mapped = toProduct(list[idx], rank);
+      // ⚠️ 스토어명(mallName)이 13.3% 비어 있다(2026-08-11 서버 실측). 판독 원천이
+      //    API 응답 → 페이지 데이터로 바뀌면서 일부 상품(가격비교 추정)이 다른 필드에
+      //    스토어명을 싣는 것으로 보이는데, **필드 이름을 추측해서 붙이면 안 된다**
+      //    (틀린 값이 들어가면 순위 매칭 보조 축이 오염된다).
+      //    → 값이 빈 상품의 '원본'을 하나 남겨 팝업에서 실제 키 이름을 확인한 뒤 붙인다.
+      if (!mapped.mallName) {
+        chrome.storage.local.get('rawSampleNoMall').then((o) => {
+          if (!o.rawSampleNoMall) {
+            chrome.storage.local.set({
+              rawSampleNoMall: { keyword, rank, at: new Date().toISOString(), item: list[idx] },
+            });
+          }
+        });
+      }
+      products.push(mapped);
     }
     if (products.length >= CFG.maxRank) break;   // 목표 깊이 도달
     if (list.length < CFG.pageSize) break;       // 마지막 페이지
@@ -394,6 +417,9 @@ async function uploadKeyword(token, keyword, payload) {
 }
 
 let running = false;
+/* 시간대 슬롯 수집이 대기 중임을 온디맨드에게 알리는 깃발.
+ * 온디맨드가 락을 계속 쥐면 시간대 경로가 굶는다(2026-08-08 실사고). */
+let dailyDue = false;
 
 async function runCollection(manual = false) {
   if (running) { await log('이미 수집 중 — 중복 실행 무시'); return; }
@@ -495,6 +521,14 @@ async function runOnDemand() {
     const { odBackoffUntil = 0 } = await chrome.storage.local.get('odBackoffUntil');
     if (Date.now() < odBackoffUntil) return;
 
+    // 시간당 상한 — 밀린 큐가 아무리 커도 이 시간대에 정해진 양만 한다.
+    // (남은 것은 서버 큐에 그대로 있으니 다음 시간대에 이어서 처리된다)
+    const hourTag = hourKey();
+    const { odHour = {} } = await chrome.storage.local.get('odHour');
+    const usedThisHour = odHour.hour === hourTag ? Number(odHour.n || 0) : 0;
+    const room = CFG.onDemandHourCap - usedThisHour;
+    if (room <= 0) return;
+
     const token = await getToken();
     if (!token) return;
     let kws = [];
@@ -506,9 +540,12 @@ async function runOnDemand() {
       kws = (await res.json()).keywords || [];
     } catch (e) { return; }
     if (!kws.length) return;
+    const skipped = Math.max(0, kws.length - room);
+    if (skipped) kws = kws.slice(0, room);
 
-    await log(`🔎 온디맨드 수집 ${kws.length}건: ${kws.join(', ')}`);
-    let ok = 0, fail = 0, streak = 0;
+    await log(`🔎 온디맨드 수집 ${kws.length}건: ${kws.join(', ')}`
+      + (skipped ? ` (시간당 상한 — ${skipped}건은 다음 시간대로)` : ''));
+    let ok = 0, fail = 0, streak = 0, done = 0;
     for (const kw of kws) {
       try {
         const payload = await collectKeyword(kw);
@@ -526,7 +563,13 @@ async function runOnDemand() {
         await log(`  ⚠️ [${kw}] 온디맨드 실패: ${e.message}`);
         if (streak >= 3) { await log('  🛑 연속 3회 실패 — 이번 회차 중단(차단 의심)'); break; }
       }
-      await sleep(jitter());
+      // 시도한 건 성공·실패 상관없이 시간당 상한에 센다(실패도 요청은 나갔으므로)
+      done++;
+      await chrome.storage.local.set({ odHour: { hour: hourTag, n: usedThisHour + done } });
+      // 시간대 슬롯 수집이 대기 중이면 여기서 양보한다 — 온디맨드가 락을 계속 쥐고 있어
+      // 시간대 경로가 하루 종일 굶던 사고(2026-08-08)를 막는다.
+      if (dailyDue) { await log('  ↩ 시간대 수집 차례 — 온디맨드 양보'); break; }
+      await sleep(jitter() + CFG.onDemandGapMs);
     }
     if (ok === 0 && fail > 0) {
       await chrome.storage.local.set({ odBackoffUntil: Date.now() + 10 * 60 * 1000 });
@@ -574,6 +617,14 @@ chrome.alarms.onAlarm.addListener(async (a) => {
   // 같은 시간대를 이미 돌았으면 건너뛴다(알람이 시간당 두 번 뜨는 경우 방어).
   const { state = {} } = await chrome.storage.local.get('state');
   if (state.finishedHour === hourKey()) return;
+  if (running === 'ondemand') {
+    // 온디맨드가 돌고 있으면 한 건 끝나는 대로 비켜달라고 표시하고, 비면 이어받는다.
+    // (종전엔 그냥 return 이라 온디맨드가 계속 도는 동안 시간대 수집이 영영 안 돌았다)
+    dailyDue = true;
+    await log('⏳ 시간대 수집 대기 — 온디맨드가 끝나는 대로 시작합니다');
+    for (let i = 0; i < 60 && running; i++) await sleep(5000);
+    dailyDue = false;
+  }
   runCollection(false);
 });
 

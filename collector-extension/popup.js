@@ -2,7 +2,8 @@
 const $ = (id) => document.getElementById(id);
 
 async function render() {
-  const { token = '', state = {}, logs = [], rawSample = null } = await chrome.storage.local.get(['token', 'state', 'logs', 'rawSample']);
+  const { token = '', state = {}, logs = [], rawSample = null, rawSampleNoMall = null } =
+    await chrome.storage.local.get(['token', 'state', 'logs', 'rawSample', 'rawSampleNoMall']);
   $('token').value = token;
   // 캡차에 걸려 쉬는 중이면 그게 가장 중요한 정보다 — 맨 위에 눈에 띄게.
   const bu = Number(state.blockedUntil || 0);
@@ -24,6 +25,11 @@ async function render() {
   $('logs').textContent = logs.join('\n');
   const rawEl = document.getElementById('raw');
   if (rawEl) rawEl.textContent = rawSample ? `[${rawSample.keyword}] ${rawSample.at}\n` + JSON.stringify(rawSample.item, null, 1) : '아직 없음 — 수집 1회 실행 후 표시';
+  // 스토어명이 빈 상품의 원본 — 어느 키에 스토어명이 들어 있는지 눈으로 확인용
+  const nmEl = document.getElementById('rawNoMall');
+  if (nmEl) nmEl.textContent = rawSampleNoMall
+    ? `[${rawSampleNoMall.keyword}] ${rawSampleNoMall.rank}위 ${rawSampleNoMall.at}\n` + JSON.stringify(rawSampleNoMall.item, null, 1)
+    : '아직 없음 — 수집 중 스토어명 빈 상품을 만나면 표시';
 }
 
 $('save').onclick = async () => {
