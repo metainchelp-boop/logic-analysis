@@ -1228,6 +1228,10 @@ def add_track_keyword(client_id: int, req: TrackKeywordRequest,
     kw = (req.keyword or "").strip()
     if not kw or len(kw) > 40:
         raise HTTPException(status_code=400, detail="키워드는 1~40자로 입력해주세요.")
+    # main_keywords 저장 형식이 쉼표 목록이라, 쉼표가 들어오면 목록 자체가 파손된다
+    # (소비처 전부 split(",") — 「수제쿠키,선물세트」가 키워드 2개로 해석됨). 명확히 거절.
+    if "," in kw:
+        raise HTTPException(status_code=400, detail="키워드는 한 번에 한 개씩 등록해주세요(쉼표 없이).")
     conn = _get_conn()
     try:
         _verify_client_access(conn, client_id, current_user)
