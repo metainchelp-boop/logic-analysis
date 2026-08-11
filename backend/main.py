@@ -1165,6 +1165,7 @@ class SeoAnalysisRequest(BaseModel):
     target_name: Optional[str] = None            # 내 업체명(doc-id 없을 때 매칭 폴백)
     region: Optional[str] = None                 # 지역(동/구/시) — 업체 식별키·표시용
     place: Optional[Dict[str, Any]] = None       # 담당자 보완 지표(저장수·예약·사진·소식 등)
+    industry: Optional[str] = None               # 오프라인 업종 라벨 — 소상공인365 상권 매칭용(선택)
 
 
 def _place_business_key(req: "SeoAnalysisRequest", region: str = "") -> str:
@@ -1174,6 +1175,311 @@ def _place_business_key(req: "SeoAnalysisRequest", region: str = "") -> str:
     name = place_crawler._norm(req.target_name or "")
     reg = place_crawler._norm(region or req.region or "")
     return f"nm:{name}|{reg}" if name else ""
+
+
+# ==================== 플레이스 분석 — 시장·상권·기회 블록 ====================
+# 대표 지시(2026-08-11): 「스토어 분석 자료와 대등할 정도로」.
+# 종전 플레이스 보고서는 **붙여넣은 캡처 한 장**에서 뽑은 것만 담았다(4카드). 검색량·상권은
+# 맞춤제안서 경로(`place_proposal_enrich`)에만 붙어 있어 분석 화면에서는 한 줄도 안 나왔다.
+# 여기서 같은 원천을 분석 화면에도 연결한다 — **가진 데이터를 옮겨 붙이는 것**이 대부분이고,
+# 없는 값은 만들지 않는다(전부 None/[] → 화면이 그 카드만 생략).
+#
+# ⚠️ 어느 한 조각이 실패해도 분석 자체는 성립해야 한다 → 조각마다 try/except.
+
+def _pl_norm_kw(s) -> str:
+    """키워드 비교용 정규화 — 공백 제거 + 대문자(검색광고 응답 표기 흡수)."""
+    return "".join(str(s or "").split()).upper()
+
+
+def _place_related_keywords(region: str, base_kw: str, combined_kw: str,
+                            tracked_rows=None, limit: int = 12):
+    """연관 키워드 — 씨앗(지역 뗀 원 키워드)의 검색광고 연관 목록에서 고르고,
+    지역을 결합한 형태와 그 검색량을 함께 돌려준다.
+
+    반환: [{keyword, volume, compIdx, combined, combinedVolume, rank, state}]
+      · keyword        : 원 키워드('스포츠마사지')
+      · volume         : 그 원 키워드 월 검색량(광역 수요)
+      · combined       : 지역 결합형('조원동 스포츠마사지') — 실제 공략 키워드
+      · combinedVolume : 결합형 검색량(상위 N개만 조회 — 호출 수 절약)
+      · rank/state     : 이 업체가 이미 추적 중이면 최신 순위(추가 호출 없음)
+
+    ⚠️ 검색량은 **씨앗을 품은 키워드만** 남긴다 — keywordstool 은 연관성이 옅은 것도
+       섞어 주는데, 사장님께 「이 키워드를 공략하세요」로 나가는 자리라 관련 없는 게
+       끼면 신뢰가 깎인다. 판단 못 하면 넣지 않는 쪽.
+    """
+    out = []
+    try:
+        from naver_crawler import get_keyword_ideas, get_keyword_volume as _kw_vol
+    except Exception:
+        return out
+
+    seed = (base_kw or "").strip()
+    if not seed:
+        return out
+    seed_n = _pl_norm_kw(seed)
+    comb_n = _pl_norm_kw(combined_kw)
+
+    try:
+        ideas = get_keyword_ideas(seed, limit=200) or []
+    except Exception as e:
+        logger.warning(f"[place-market] 연관 키워드 조회 실패(무시): {e}")
+        return out
+
+    cand = []
+    for it in ideas:
+        kw = (it.get("keyword") or "").strip()
+        kn = _pl_norm_kw(kw)
+        if not kn or kn == seed_n or kn == comb_n:
+            continue
+        if seed_n not in kn:          # 씨앗을 품지 않으면 연관도 판단 불가 → 제외
+            continue
+        vol = _pe_int(it.get("monthlyPcQcCnt")) + _pe_int(it.get("monthlyMobileQcCnt"))
+        cand.append({"keyword": kw, "volume": (vol or None), "compIdx": it.get("compIdx") or ""})
+    cand.sort(key=lambda x: (x["volume"] or 0), reverse=True)
+    cand = cand[: max(1, int(limit))]
+    if not cand:
+        return out
+
+    # 지역 결합형 — 이미 지역이 들어있으면 그대로(중복 방지, 추적 등록 규칙과 동일)
+    for c in cand:
+        c["combined"] = _combine_region_keyword(region, c["keyword"])
+        c["combinedVolume"] = None
+
+    # 결합형 검색량은 상위 5개만(keywordstool 은 hintKeywords 5개가 상한) — 호출 1회.
+    try:
+        head = [c for c in cand[:5] if _pl_norm_kw(c["combined"]) != _pl_norm_kw(c["keyword"])]
+        if head:
+            vmap = {}
+            for vr in (_kw_vol([c["combined"] for c in head]) or []):
+                vmap[_pl_norm_kw(vr.get("keyword"))] = vr
+            for c in head:
+                vr = vmap.get(_pl_norm_kw(c["combined"]))
+                if vr:
+                    pc, mo = vr.get("monthlyPcQcCnt"), vr.get("monthlyMobileQcCnt")
+                    if pc is not None or mo is not None:
+                        c["combinedVolume"] = (_pe_int(pc) + _pe_int(mo)) or None
+        else:
+            # 지역이 없거나 이미 포함돼 결합형이 원형과 같은 경우 — 원 검색량이 곧 결합 검색량
+            for c in cand[:5]:
+                c["combinedVolume"] = c["volume"]
+    except Exception as e:
+        logger.warning(f"[place-market] 결합 키워드 검색량 조회 실패(무시): {e}")
+
+    # 이미 추적 중인 키워드면 최신 순위를 붙인다(추가 호출 0).
+    rmap = {}
+    for t in (tracked_rows or []):
+        kn = _pl_norm_kw(t.get("keyword"))
+        if kn:
+            rmap[kn] = t
+    for c in cand:
+        hit = rmap.get(_pl_norm_kw(c["combined"])) or rmap.get(_pl_norm_kw(c["keyword"]))
+        c["rank"] = (hit or {}).get("rank")
+        c["state"] = (hit or {}).get("state") or ""
+    return cand
+
+
+def _place_golden_keywords(related, limit: int = 6):
+    """지역 황금 키워드 — 검색량은 있는데 **아직 순위가 없는** 키워드를 먼저 제시.
+
+    새로 부르는 API 없음(연관 키워드 결과 재가공). 순위를 이미 잡고 있는 키워드는
+    「지킬 것」이지 「팔 것」이 아니므로 뺀다."""
+    rows = []
+    for c in (related or []):
+        if c.get("rank"):                      # 이미 노출 중 → 공략 대상 아님
+            continue
+        vol = c.get("combinedVolume") or c.get("volume")
+        if not vol:
+            continue
+        rows.append({
+            "keyword": c.get("combined") or c.get("keyword"),
+            "baseKeyword": c.get("keyword"),
+            "volume": vol,
+            "compIdx": c.get("compIdx") or "",
+            "state": c.get("state") or "미확인",
+            # 경쟁 정도가 낮을수록 먼저 — 같은 검색량이면 뚫기 쉬운 쪽
+            "priority": ("우선 공략" if (c.get("compIdx") or "") in ("낮음", "중간") else "장기"),
+        })
+    rows.sort(key=lambda x: x["volume"], reverse=True)
+    return rows[: max(1, int(limit))]
+
+
+def _place_review_gap(place_in, competitors):
+    """리뷰 현황 — 내 실측 vs 상위권 중앙값. 값이 없으면 그 축을 통째로 뺀다(가짜 0 금지)."""
+    def _med(vals):
+        v = sorted([x for x in vals if isinstance(x, (int, float))])
+        if not v:
+            return None
+        n = len(v)
+        return v[n // 2] if n % 2 else int((v[n // 2 - 1] + v[n // 2]) / 2)
+
+    top = [c for c in (competitors or []) if c.get("rank")][:5]
+    out = {}
+    for key, field in (("visitor", "visitor_reviews"), ("blog", "blog_reviews")):
+        mine = place_in.get(field)
+        med = _med([c.get(field) for c in top])
+        if mine is None and med is None:
+            continue
+        out[key] = {"mine": mine, "topMedian": med,
+                    "gap": ((mine - med) if (mine is not None and med is not None) else None)}
+    if place_in.get("saves") is not None:
+        out["saves"] = {"mine": place_in.get("saves"), "topMedian": None, "gap": None}
+    out["topCount"] = len(top)
+    return out or None
+
+
+def _place_improve_plan(scores: dict, weights: dict, labels: dict, metric_source: dict):
+    """노출 개선 시뮬레이션 + 90일 로드맵 — **외부 호출 0, 가진 점수만으로 계산**.
+
+    가중 점수(합 1.00)를 그대로 역산한다: 낮은 지표를 목표선까지 올리면 총점이 얼마가 되는지.
+    ⚠️ 「몇 위가 된다」고 쓰지 않는다 — 순위는 경쟁·거리·알고리즘에 좌우되므로 **관리 목표**로만
+       표기한다(플레이스 화면 하단 고지와 같은 원칙). 단계별 문구도 「기대」로 맞춘다.
+
+    반환: {"steps":[{label, total, delta, focus[]}], "roadmap":[{phase, title, items[]}]}
+          점수가 없으면 {}.
+    """
+    if not scores or not weights:
+        return {}
+
+    keys = [k for k in weights.keys() if k != "total"]
+    cur = {k: int(scores.get(k) or 0) for k in keys}
+    base_total = int(scores.get("total") or 0)
+
+    def _total(vals):
+        return int(round(sum(vals.get(k, 0) * weights.get(k, 0) for k in keys)))
+
+    # 올릴 여지가 큰 순서 = (목표선 - 현재) × 가중치. 값이 아예 없는 지표(default)는
+    # 「올린다」가 아니라 「채운다」라 우선순위를 더 높게 본다(빈 칸이 곧 손실이므로).
+    TARGET = 75
+    gaps = []
+    for k in keys:
+        gap = max(0, TARGET - cur[k])
+        if gap <= 0:
+            continue
+        w = weights.get(k, 0)
+        unknown = (metric_source or {}).get(k) == "default"
+        gaps.append({"key": k, "label": labels.get(k, k), "gain": gap * w,
+                     "gap": gap, "unknown": unknown})
+    gaps.sort(key=lambda x: (x["gain"], x["unknown"]), reverse=True)
+    if not gaps:
+        return {}
+
+    steps = [{"label": "지금", "total": base_total, "delta": 0, "focus": []}]
+    vals = dict(cur)
+    for n in (2, 4):
+        picked = gaps[:n]
+        if not picked:
+            break
+        for g in picked:
+            vals[g["key"]] = max(vals[g["key"]], TARGET)
+        t = _total(vals)
+        steps.append({
+            "label": ("상위 2개 지표 보강 시" if n == 2 else "상위 4개 지표 보강 시"),
+            "total": t, "delta": t - base_total,
+            "focus": [g["label"] for g in picked],
+        })
+    # 개선 여지가 사실상 없으면(총점 변화 0) 시뮬레이션을 만들지 않는다.
+    if len(steps) < 2 or steps[-1]["total"] <= base_total:
+        return {}
+
+    # 90일 로드맵 — 지표 격차에서 자동 생성. 조치 문구는 지표별 고정 매핑(추측 금지).
+    ACTION = {
+        "visitor_review": "방문 고객 영수증 리뷰 요청 동선 만들기(테이블·카운터 안내)",
+        "blog_review":    "지역 블로그 체험단으로 블로그 리뷰 확보",
+        "save":           "저장(즐겨찾기) 유도 이벤트 — 저장 시 소액 혜택",
+        "photo":          "메뉴·내부·외부 사진 보강(대표 사진 교체 포함)",
+        "booking":        "예약·톡톡·주문 중 가능한 채널 연결",
+        "activity":       "소식(공지·이벤트) 주 1회 발행",
+        "info":           "업체정보 100% 채우기(영업시간·편의시설·설명)",
+        "relevance":      "대표키워드 등록·업체명 정비(지역+업종어 포함 여부 점검)",
+        "review_keyword": "리뷰 키워드 결 맞추기 — 받고 싶은 키워드를 안내 문구에 반영",
+        "rank":           "상위 노출 키워드 확대(황금 키워드부터 순위 추적 등록)",
+    }
+    PHASES = [("즉시 (2주)", gaps[0:2]), ("1개월", gaps[2:4]), ("3개월", gaps[4:6])]
+    roadmap = []
+    for title, group in PHASES:
+        items = [ACTION.get(g["key"]) or (g["label"] + " 보강") for g in group if g]
+        if items:
+            roadmap.append({"phase": title, "items": items})
+    return {"steps": steps, "roadmap": roadmap, "target": TARGET}
+
+
+def _place_market_block(region: str, base_kw: str, combined_kw: str, industry: str,
+                        biz_name: str, business_key: str, place_in: dict, competitors: list):
+    """분석 화면에 실을 시장·상권·기회 데이터 묶음.
+
+    ⚠️ 전부 **이미 서버에 있는 원천**이다 — 새로 만든 외부 연동은 없다(검색광고·소상공인365·
+       추적 기록). 어느 조각이 비어도 화면은 그 카드만 생략한다."""
+    market = {
+        "keyword": combined_kw,
+        "baseKeyword": base_kw,
+        "volume": None, "baseVolume": None, "compIdx": None, "adDepth": None,
+        "sbiz": None, "related": [], "golden": [], "reviewGap": None, "trend": None,
+    }
+
+    # ① 검색량 — 지역 키워드 + 지역 뗀 원 키워드를 **한 호출로** 함께(제안서와 동일 규칙).
+    #    지역 키워드는 실제 검색량이 매우 작아(실측 '구로동 고기' 20회/월) 그 숫자만 내밀면
+    #    설득이 안 된다 → 원 키워드(광역 수요)를 병기한다.
+    try:
+        from naver_crawler import get_keyword_volume as _kw_vol
+        ask = [combined_kw] + ([base_kw] if _pl_norm_kw(base_kw) != _pl_norm_kw(combined_kw) else [])
+        vmap = {}
+        for vr in (_kw_vol(ask) or []):
+            vmap[_pl_norm_kw(vr.get("keyword"))] = vr
+
+        def _sum(vr):
+            pc, mo = (vr or {}).get("monthlyPcQcCnt"), (vr or {}).get("monthlyMobileQcCnt")
+            return (_pe_int(pc) + _pe_int(mo)) if (pc is not None or mo is not None) else None
+
+        v0 = vmap.get(_pl_norm_kw(combined_kw)) or {}
+        market["volume"] = _sum(v0)
+        market["compIdx"] = v0.get("compIdx") or None
+        # plAvgDepth = 검색광고(파워링크) 월평균 노출 광고 **개수**. 플레이스 순위와 다른 축이라
+        # 화면에서 그 사실을 명시한다(2026-08-05 「광고 노출 깊이」 오독 교훈).
+        market["adDepth"] = v0.get("plAvgDepth")
+        if len(ask) > 1:
+            market["baseVolume"] = _sum(vmap.get(_pl_norm_kw(base_kw)))
+    except Exception as e:
+        logger.warning(f"[place-market] 검색량 조회 실패(무시): {e}")
+
+    # ② 동네 상권(소상공인365) — 키 미설정·행정동 매칭 실패·API 파손 시 None.
+    try:
+        from sbiz365 import get_place_sbiz
+        if region and industry:
+            market["sbiz"] = get_place_sbiz(region, industry, hint=f"{biz_name} {base_kw}")
+    except Exception as e:
+        logger.warning(f"[place-market] 상권 조회 실패(무시): {e}")
+
+    # ③ 연관·황금 키워드 — 이 업체가 이미 추적 중인 키워드는 순위를 붙여 「지킬 것/팔 것」을 가른다.
+    tracked = []
+    try:
+        from database import get_place_tracked_keywords
+        if business_key:
+            tracked = get_place_tracked_keywords(business_key) or []
+    except Exception as e:
+        logger.warning(f"[place-market] 추적 키워드 조회 실패(무시): {e}")
+    try:
+        market["related"] = _place_related_keywords(region, base_kw, combined_kw, tracked_rows=tracked)
+        market["golden"] = _place_golden_keywords(market["related"])
+    except Exception as e:
+        logger.warning(f"[place-market] 연관 키워드 구성 실패(무시): {e}")
+
+    # ④ 리뷰 현황 — 캡처 실측 + 상위권 중앙값 격차(추가 호출 0).
+    try:
+        market["reviewGap"] = _place_review_gap(place_in or {}, competitors or [])
+    except Exception as e:
+        logger.warning(f"[place-market] 리뷰 비교 구성 실패(무시): {e}")
+
+    # ⑤ 검색 수요 추이(데이터랩 통합검색어 트렌드) — 성수기·요일·성별/연령.
+    #    ⚠️ 씨앗은 **지역을 뗀 원 키워드**를 쓴다. 지역 키워드는 표본이 너무 작아
+    #       계절성·요일이 노이즈가 되는데, 성수기·요일 패턴은 업종 단위로 봐야 의미가 있다.
+    #       화면에는 무엇을 기준으로 잰 값인지(`trend.keyword`) 그대로 표기한다.
+    try:
+        from datalab import get_search_trend
+        market["trend"] = get_search_trend(base_kw) or None
+    except Exception as e:
+        logger.warning(f"[place-market] 검색 트렌드 조회 실패(무시): {e}")
+
+    return market
 
 
 def _place_seo_analyze(req: "SeoAnalysisRequest", current_user: dict = None):
@@ -1215,6 +1521,76 @@ def _place_seo_analyze(req: "SeoAnalysisRequest", current_user: dict = None):
         scored = place_crawler.score_place(place_in, competitors=competitors)
         region = req.region or parsed.get("region") or ""
         business_key = _place_business_key(req, region)
+
+        # ── 캡처 판독 결과(2026-08-11) ──
+        # 붙여넣은 HTML 이 아예 안 읽히면 경쟁사 0건·순위 미확인이 되는데, 화면은 그래도
+        # 점수를 내줘서 「27점 F」 같은 숫자가 실측처럼 나갔다(대표 보고서 실사례).
+        # 판독 실패는 **점수가 낮은 것이 아니라 입력이 빈 것**이므로 화면에 그대로 알린다.
+        _items = parsed.get("items", []) or []
+        _organic = [it for it in _items if not it.get("is_ad")]
+        capture = {
+            "ok": bool(_organic),
+            "items": len(_items),
+            "organic": len(_organic),
+            "matched": bool(_matched),
+            "warning": None,
+        }
+        if not _organic:
+            capture["warning"] = (
+                "붙여넣은 검색결과에서 업체 목록을 읽지 못했습니다. "
+                "플레이스 검색 화면을 아래로 충분히 스크롤한 뒤 다시 복사해 주세요. "
+                "(순위·경쟁사·리뷰가 비어 점수가 실제보다 낮게 나옵니다)"
+            )
+        elif not _matched:
+            capture["warning"] = (
+                "검색결과에서 내 업체를 찾지 못했습니다. 업체명이 플레이스 등록명과 같은지, "
+                "또는 순위가 캡처 범위 밖인지 확인해 주세요."
+            )
+
+        # ── 지표별 출처(2026-08-11) ──
+        # 종전 화면은 지표마다 「측정/보완」을 **하드코딩된 목록**으로 찍었다. 그런데
+        # `score_place` 는 값이 없으면 기본값(적합도 50·리뷰키워드 55·업체정보 70…)을 넣으므로,
+        # 캡처가 실패해도 그 기본값이 「측정」 배지를 달고 나갔다. → 실제 입력 유무로 판정한다.
+        #   measured = 캡처에서 읽음 · input = 담당자가 채움 · default = 값 없음(기본값)
+        def _src(key, present, kind):
+            return kind if present else "default"
+
+        metric_source = {
+            "rank": _src("rank", (rank_info.get("state") == "노출" and rank_info.get("rank")), "measured"),
+            "relevance": _src("relevance", place_in.get("relevance") is not None, "measured"),
+            "visitor_review": _src("visitor_review", place_in.get("visitor_reviews") is not None, "measured"),
+            "blog_review": _src("blog_review", place_in.get("blog_reviews") is not None, "measured"),
+            "review_keyword": _src("review_keyword", place_in.get("review_keyword_focus") is not None, "measured"),
+            "photo": _src("photo", bool(place_in.get("photos")), "input"),
+            "save": _src("save", place_in.get("saves") is not None, "input"),
+            "booking": _src("booking", any([place_in.get("has_booking"), place_in.get("has_talk"),
+                                            place_in.get("has_order")]), "input"),
+            "activity": _src("activity", place_in.get("news_days") is not None, "input"),
+            "info": _src("info", place_in.get("info_complete") is not None, "input"),
+        }
+        # 기본값이 섞인 점수는 「참고」임을 화면이 밝힐 수 있게 개수를 함께 넘긴다.
+        default_metrics = [k for k, v in metric_source.items() if v == "default"]
+
+        # ── 시장·상권·기회(2026-08-11 고도화) ──
+        base_kw = (req.keyword or "").strip()
+        combined_kw = _combine_region_keyword(region, base_kw)
+        market = {}
+        try:
+            market = _place_market_block(
+                region=region, base_kw=base_kw, combined_kw=combined_kw,
+                industry=(req.industry or ""), biz_name=(req.target_name or ""),
+                business_key=business_key, place_in=place_in, competitors=competitors,
+            ) or {}
+        except Exception as e:
+            logger.warning(f"[플레이스 분석] 시장 블록 생략(무시): {e}")
+
+        # 노출 개선 시뮬레이션 · 90일 로드맵 — 가진 점수만 재가공(외부 호출 0).
+        improve = {}
+        try:
+            improve = _place_improve_plan(scored.get("scores") or {}, scored.get("weights") or {},
+                                          scored.get("labels") or {}, metric_source) or {}
+        except Exception as e:
+            logger.warning(f"[플레이스 분석] 개선 계획 생략(무시): {e}")
 
         # 순위 이력 누적(하루 1점) — 플레이스는 캡처로만 순위가 확보되므로 분석 시점에 저장.
         # 실패해도 분석 응답은 정상 반환(무회귀).
@@ -1259,6 +1635,14 @@ def _place_seo_analyze(req: "SeoAnalysisRequest", current_user: dict = None):
                 "data_quality": scored.get("data_quality"),
                 "suggestions": scored.get("suggestions"),
                 "competitors": competitors[:5],
+                # 캡처 판독 결과 · 지표별 출처 — 기본값을 실측처럼 보이게 하지 않기 위한 축
+                "capture": capture,
+                "metric_source": metric_source,
+                "default_metrics": default_metrics,
+                # 시장·상권·기회 — 검색량·소상공인365 상권·연관/황금 키워드·리뷰 격차·검색 트렌드
+                "market": market,
+                # 노출 개선 시뮬레이션 · 90일 로드맵(계산 — 보장 아님)
+                "improve": improve,
                 "analyzed_at": datetime.now().isoformat(),
             }
         }

@@ -24589,6 +24589,9 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
   var _html = useState('');
   var placeHtml = _html[0],
     setPlaceHtml = _html[1];
+  var _ind = useState('');
+  var industry = _ind[0],
+    setIndustry = _ind[1];
 
   // 담당자 보완 지표
   var _supp = useState({
@@ -24656,6 +24659,10 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
 
   // ==================== 유틸 ====================
   var METRIC_ORDER = ['rank', 'relevance', 'visitor_review', 'blog_review', 'save', 'photo', 'booking', 'review_keyword', 'activity', 'info'];
+  // ⚠️ 지표 배지는 **서버가 알려주는 실제 출처**(result.metric_source)로 찍는다.
+  //    종전엔 이 목록으로 하드코딩해, 값이 없어 기본값(적합도 50·리뷰키워드 55…)이 들어간
+  //    지표에도 「측정」이 붙어 캡처 실패가 실측처럼 보였다(2026-08-11 대표 보고서 실사례).
+  //    metric_source 를 안 주는 구 서버에서는 이 목록으로 폴백(무회귀).
   var MEASURED = {
     rank: 1,
     visitor_review: 1,
@@ -24664,6 +24671,27 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
     review_keyword: 1,
     photo: 1
   };
+  var SRC_BADGE = {
+    measured: {
+      t: '측정',
+      c: 'meas'
+    },
+    input: {
+      t: '입력',
+      c: 'inp'
+    },
+    "default": {
+      t: '미확인',
+      c: 'unk'
+    }
+  };
+  var srcOf = function (k) {
+    var ms = result && result.metric_source || null;
+    if (ms && ms[k]) return ms[k];
+    return MEASURED[k] ? 'measured' : 'input';
+  };
+  // 맞춤제안서 #catPlace 와 **같은 13종** — 값이 같아야 같은 상권(소상공인365 소분류)이 잡힌다.
+  var INDUSTRY_OPTIONS = ['음식점', '카페·디저트', '베이커리·제과', '분식', '주점·바', '미용·뷰티', '네일·에스테틱', '병원·의원', '약국·건강', '헬스·피트니스·필라테스', '학원·교육', '반려동물', '숙박·펜션'];
   var scoreCol = function (s) {
     return window.scoreColor ? window.scoreColor(s) : s >= 70 ? '#059669' : s >= 40 ? '#d97706' : '#dc2626';
   };
@@ -24759,7 +24787,8 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
       region: region.trim(),
       target_name: businessName.trim(),
       place_html: html,
-      place: suppPayload()
+      place: suppPayload(),
+      industry: industry // 동네 상권(소상공인365) 매칭 — 미선택 시 상권 카드만 생략
     };
     api.post('/seo/analyze', body).then(function (res) {
       setLoading(false);
@@ -24964,7 +24993,30 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
         setRegion(e.target.value);
       },
       placeholder: '예: 성수동'
-    })), React_.createElement('div', {
+    })),
+    // 업종 — 소상공인365 동네 상권(점포당 매출·업소수·벤치마크) 매칭키.
+    // 맞춤제안서와 **같은 13종 목록**을 쓴다(같은 값이어야 같은 상권이 잡힌다).
+    React_.createElement('div', {
+      className: 'field'
+    }, React_.createElement('label', null, '업종 ', React_.createElement('span', {
+      style: {
+        color: '#94a3b8',
+        fontWeight: 400
+      }
+    }, '(선택 — 동네 상권 분석용)')), React_.createElement('select', {
+      className: 'inp' + (industry ? ' filled' : ''),
+      value: industry,
+      onChange: function (e) {
+        setIndustry(e.target.value);
+      }
+    }, React_.createElement('option', {
+      value: ''
+    }, '오프라인 업종 선택 (상권분석 가능 업종)'), INDUSTRY_OPTIONS.map(function (o) {
+      return React_.createElement('option', {
+        key: o,
+        value: o
+      }, o);
+    }))), React_.createElement('div', {
       className: 'field'
     }, React_.createElement('label', null, '플레이스 검색결과 캡처 ', React_.createElement('span', {
       className: 'req'
@@ -25037,22 +25089,31 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
   // 대표 지시(2026-08-11): 「쇼핑 분석과 디자인·배치·사용법을 동일하게」. 표지(.report-cover)·
   // 배지 범례(.report-legend)·모바일 목차(.anchor-nav)·좌측 목차(.report-toc)를 스토어 마크업
   // 그대로 쓴다(report-theme.css 공용) — 내용(업체명·지역 축)만 플레이스.
+  // 스토어 보고서와 같은 6섹션 골격(2026-08-11 고도화) — 「대등하게」 지시.
   var TOC_SECTIONS = [{
     id: 'sec-place-score',
-    icon: '🎯',
-    label: '종합 경쟁력'
+    icon: '📋',
+    label: '종합 요약'
   }, {
-    id: 'sec-place-kw',
-    icon: '📍',
-    label: '키워드 노출 순위'
+    id: 'sec-place-market',
+    icon: '📊',
+    label: '시장·수요 진단'
   }, {
     id: 'sec-place-comp',
     icon: '⚔️',
-    label: '경쟁 비교'
+    label: '경쟁 진단'
+  }, {
+    id: 'sec-place-kw',
+    icon: '📍',
+    label: '내 업체 현황'
+  }, {
+    id: 'sec-place-opp',
+    icon: '💎',
+    label: '기회 발굴'
   }, {
     id: 'sec-ai-feedback',
-    icon: '🤖',
-    label: 'AI 진단·처방'
+    icon: '🧭',
+    label: '전략·결론'
   }, {
     id: 'sec-save-client',
     icon: '💾',
@@ -25137,11 +25198,96 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
     })))));
   };
 
-  // ── §1 종합 경쟁력 ──
+  // ==================== 표기 유틸 ====================
+  // ⚠️ 값이 없으면 **숫자를 만들지 않는다** — 「미확인」으로 비운다(가짜 0 금지).
+  var UNK = React_.createElement('span', {
+    className: 'unkv'
+  }, '미확인');
+  var manwon = function (won) {
+    if (won == null || isNaN(won)) return null;
+    return Math.round(Number(won) / 10000).toLocaleString() + '만원';
+  };
+  var pctStr = function (a, b) {
+    if (!a || !b) return null;
+    var r = Math.round((a - b) / b * 100);
+    return (r >= 0 ? '+' : '') + r + '%';
+  };
+
+  // ── 캡처 판독 경고 ──
+  // 「점수가 낮은 것」과 「입력이 빈 것」은 완전히 다른 이야기다. 판독이 안 됐으면
+  // 점수 위에 그 사실부터 알린다(no-export: 광고주 전달본에는 나가지 않는다).
+  var renderCaptureWarn = function () {
+    var cap = result.capture || {};
+    if (!cap.warning) return null;
+    return React_.createElement('div', {
+      className: 'capwarn no-export'
+    }, React_.createElement('span', {
+      className: 'ci'
+    }, '⚠️'), React_.createElement('div', null, React_.createElement('b', null, cap.ok ? '내 업체를 찾지 못했습니다' : '검색결과를 읽지 못했습니다'), React_.createElement('div', {
+      className: 'cw'
+    }, cap.warning), React_.createElement('div', {
+      className: 'cm'
+    }, '판독된 업체 ', React_.createElement('b', null, cap.organic || 0), '곳', result.default_metrics && result.default_metrics.length ? React_.createElement(React_.Fragment, null, ' · 값이 없어 기본값으로 채운 지표 ', React_.createElement('b', null, result.default_metrics.length), '개') : null)));
+  };
+
+  // ── §1 종합 요약 — 광고주가 가장 먼저 보는 네 숫자 ──
+  var renderKpis = function () {
+    var m = result.market || {};
+    var sb = m.sbiz || null;
+    var sc = result.scores || {};
+    var vol = m.volume;
+    var rankTxt = result.rank_state === '노출' && result.rank ? result.rank + '위' : result.rank_state === '미노출' ? '순위 밖' : null;
+    var cells = [{
+      k: '월 검색량',
+      v: vol != null ? vol.toLocaleString() + '회' : null,
+      s: m.baseVolume != null && m.baseKeyword ? '전체 시장 ‘' + m.baseKeyword + '’ ' + m.baseVolume.toLocaleString() + '회' : '‘' + (m.keyword || result.keyword || '') + '’ 기준',
+      hint: '검색광고 실측'
+    }, {
+      k: '현재 노출 순위',
+      v: rankTxt,
+      s: result.rank_state === '미확인' ? '캡처 재시도 필요' : '‘' + (result.keyword || '') + '’ 오가닉 기준',
+      hint: '광고 제외'
+    }, {
+      k: '동네 상권 점포당',
+      v: sb && sb.sales ? manwon(sb.sales.avgAmt) : null,
+      s: sb && sb.sales && sb.sales.guAvgAmt ? '시군구 평균 대비 ' + (pctStr(sb.sales.avgAmt, sb.sales.guAvgAmt) || '-') : '업종을 고르면 표시됩니다',
+      hint: '소상공인365'
+    }, {
+      k: '종합 경쟁력',
+      v: sc.total != null ? sc.total + '/100' : null,
+      s: '등급 ' + gradeOf(sc.total || 0),
+      hint: '10지표 가중'
+    }];
+    return React_.createElement('div', {
+      className: 'card'
+    }, React_.createElement('h3', {
+      className: 'rt-h3'
+    }, React_.createElement('span', {
+      className: 'rt-hic'
+    }, '🎯'), '한눈에 보기 ', React_.createElement('span', {
+      className: 'badge b-ok'
+    }, '✅ 실측')), React_.createElement('div', {
+      className: 'rt-desc'
+    }, result.business_name || businessName || '이 업체', ' · ', result.region || region || '지역 미지정', industry ? ' · ' + industry : '', ' 기준으로 모은 네 숫자입니다. 값이 없는 칸은 지어내지 않고 「미확인」으로 둡니다.'), React_.createElement('div', {
+      className: 'kpi4'
+    }, cells.map(function (c, i) {
+      return React_.createElement('div', {
+        key: i,
+        className: 'kpi' + (c.v ? '' : ' empty')
+      }, React_.createElement('div', {
+        className: 'kk'
+      }, c.k, React_.createElement('span', {
+        className: 'kh'
+      }, c.hint)), React_.createElement('div', {
+        className: 'kv'
+      }, c.v || UNK), React_.createElement('div', {
+        className: 'ks'
+      }, c.s));
+    })));
+  };
   var renderSec1 = function () {
     var sc = result.scores || {};
     var labels = result.labels || {};
-    var weights = result.weights || {};
     var total = sc.total || 0;
     var col = scoreCol(total);
     // 강·약점 도출
@@ -25167,26 +25313,29 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
       return x.label;
     });
     return React_.createElement(React_.Fragment, null, React_.createElement(window.SectionDivider, {
-      label: '1. 종합 경쟁력',
-      icon: '🎯',
+      label: '1. 종합 요약',
+      icon: '📋',
       color: '#3b82f6',
-      sub: '플레이스 로컬 10지표 가중 점수 · 강·약점'
+      sub: '광고주가 가장 먼저 보는 숫자 · 종합 경쟁력 · 강·약점'
     }), React_.createElement('section', {
       id: 'sec-place-score',
       className: 'section'
     }, React_.createElement('div', {
       className: 'container'
-    }, React_.createElement('div', {
-      className: 'card'
+    }, renderCaptureWarn(), renderKpis(), React_.createElement('div', {
+      className: 'card',
+      style: {
+        marginTop: 14
+      }
     }, React_.createElement('h3', {
       className: 'rt-h3'
     }, React_.createElement('span', {
       className: 'rt-hic'
-    }, '🎯'), '플레이스 종합 경쟁력 ', React_.createElement('span', {
+    }, '🏅'), '플레이스 종합 경쟁력 ', React_.createElement('span', {
       className: 'badge b-est'
     }, '≈ 가중')), React_.createElement('div', {
       className: 'rt-desc'
-    }, '10개 지표를 0~100점으로 채점하고 가중치(합 1.00)로 종합 점수를 산출합니다. 스토어 분석과 동일한 엔진 구조 — 지표·프리셋만 플레이스로 교체.'), React_.createElement('div', {
+    }, '10개 지표를 0~100점으로 채점하고 가중치(합 1.00)로 종합 점수를 산출합니다. 스토어 분석과 동일한 엔진 구조 — 지표·프리셋만 플레이스로 교체. 지표별 상세는 「4. 내 업체 현황」에 있습니다.'), React_.createElement('div', {
       className: 'scorewrap'
     }, React_.createElement('div', {
       className: 'ring',
@@ -25216,41 +25365,182 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
       className: 'row mid'
     }, React_.createElement('span', {
       className: 'ic'
-    }, '→'), React_.createElement('div', null, React_.createElement('b', null, '기회'), ' — 저장·블로그 등 인기도 지표를 보강하면 대표키워드 방어 + 중위 키워드 상승 여지가 큽니다.')))),
-    // 10 지표 막대
-    React_.createElement('div', {
-      className: 'metrics'
-    }, METRIC_ORDER.map(function (k) {
-      var v = sc[k] || 0;
-      var low = v < 50;
-      return React_.createElement('div', {
-        key: k,
-        className: 'scorebar' + (low ? ' low' : '')
-      }, React_.createElement('div', {
-        className: 'lbl'
-      }, React_.createElement('span', {
-        className: 'nm'
-      }, labels[k] || k, React_.createElement('span', {
-        className: 'w'
-      }, weights[k] != null ? weights[k].toFixed(2) : ''), React_.createElement('span', {
-        className: 'mk ' + (MEASURED[k] ? 'meas' : 'inp')
-      }, MEASURED[k] ? '측정' : '보완')), React_.createElement('span', {
-        className: 'sc'
-      }, v)), React_.createElement('div', {
-        className: 'track'
-      }, React_.createElement('i', {
-        style: {
-          width: v + '%'
-        }
-      })));
-    })),
-    // 보완 지표 편집
-    renderSuppEditor(), React_.createElement('div', {
-      className: 'note',
+    }, '→'), React_.createElement('div', null, React_.createElement('b', null, '기회'), ' — 저장·블로그 등 인기도 지표를 보강하면 대표키워드 방어 + 중위 키워드 상승 여지가 큽니다.')))), result.default_metrics && result.default_metrics.length ? React_.createElement('div', {
+      className: 'note est',
       style: {
         marginTop: 14
       }
-    }, React_.createElement('b', null, '측정 vs 보완:'), ' 순위·리뷰·적합도·사진은 캡처에서 ', React_.createElement('b', null, '자동 측정'), ', 저장수·예약·소식·업체정보는 담당자가 ', React_.createElement('b', null, '보완 입력'), '(하이브리드). 보완 지표를 채우고 ', React_.createElement('b', null, '재점수화'), '하면 점수에 반영됩니다.')))));
+    }, React_.createElement('b', null, '참고:'), ' 값이 확인되지 않아 기본값으로 채운 지표가 ', React_.createElement('b', null, result.default_metrics.length), '개 있습니다. 그만큼 종합 점수는 ', React_.createElement('b', null, '참고치'), '입니다 — 「4. 내 업체 현황」에서 「미확인」 표시된 지표를 채우면 실제 점수가 나옵니다.') : null))));
+  };
+
+  // ── §2 시장·수요 진단 ──
+  var renderTrendChart = function (tr) {
+    var ms = tr && tr.months || [];
+    if (ms.length < 3) return null;
+    var W = 620,
+      H = 90,
+      P = 4;
+    var vals = ms.map(function (m) {
+      return m.ratio;
+    });
+    var mx = Math.max.apply(null, vals),
+      mn = Math.min.apply(null, vals);
+    var span = mx - mn || 1;
+    var pts = ms.map(function (m, i) {
+      var x = P + (W - P * 2) * (ms.length > 1 ? i / (ms.length - 1) : 0);
+      var y = P + (H - P * 2) * (1 - (m.ratio - mn) / span);
+      return Math.round(x) + ',' + Math.round(y);
+    }).join(' ');
+    return React_.createElement('div', {
+      className: 'trendbox'
+    }, React_.createElement('svg', {
+      viewBox: '0 0 ' + W + ' ' + H,
+      preserveAspectRatio: 'none',
+      style: {
+        width: '100%',
+        height: 90,
+        display: 'block'
+      }
+    }, React_.createElement('polyline', {
+      points: pts,
+      fill: 'none',
+      stroke: '#0ea5e9',
+      strokeWidth: 2.5,
+      strokeLinejoin: 'round',
+      strokeLinecap: 'round'
+    })), React_.createElement('div', {
+      className: 'tlabels'
+    }, ms.map(function (m, i) {
+      return React_.createElement('span', {
+        key: i
+      }, i === 0 || i === ms.length - 1 || i % 3 === 0 ? m.label : '');
+    })));
+  };
+  var renderSec2Market = function () {
+    var m = result.market || {};
+    var tr = m.trend || null;
+    var sb = m.sbiz || null;
+    var hasAny = m.volume != null || tr || sb;
+    return React_.createElement(React_.Fragment, null, React_.createElement(window.SectionDivider, {
+      label: '2. 시장·수요 진단',
+      icon: '📊',
+      color: '#0ea5e9',
+      sub: '이 동네에 손님이 얼마나 있나 — 검색 수요 · 계절성 · 상권 규모'
+    }), React_.createElement('section', {
+      id: 'sec-place-market',
+      className: 'section'
+    }, React_.createElement('div', {
+      className: 'container'
+    }, !hasAny ? React_.createElement('div', {
+      className: 'card'
+    }, React_.createElement('h3', {
+      className: 'rt-h3'
+    }, React_.createElement('span', {
+      className: 'rt-hic'
+    }, '📊'), '시장·수요'), React_.createElement('div', {
+      className: 'note est',
+      style: {
+        marginTop: 12
+      }
+    }, '검색량·상권 데이터를 불러오지 못했습니다. ', React_.createElement('b', null, '업종'), '을 선택하고 다시 분석하면 동네 상권이 함께 나옵니다.')) : null,
+    // 검색 수요
+    m.volume != null || tr ? React_.createElement('div', {
+      className: 'card'
+    }, React_.createElement('h3', {
+      className: 'rt-h3'
+    }, React_.createElement('span', {
+      className: 'rt-hic'
+    }, '🔍'), '검색 수요 ', React_.createElement('span', {
+      className: 'badge b-ok'
+    }, '✅ 실측')), React_.createElement('div', {
+      className: 'rt-desc'
+    }, '지역 키워드는 검색량이 원래 작습니다. 그 숫자만으로는 시장 크기를 알 수 없어 ', React_.createElement('b', null, '지역을 뗀 원 키워드'), ' 검색량을 함께 봅니다.'), React_.createElement('div', {
+      className: 'grid3'
+    }, React_.createElement('div', {
+      className: 'ratecard p'
+    }, React_.createElement('div', {
+      className: 'v'
+    }, m.volume != null ? m.volume.toLocaleString() : '—'), React_.createElement('div', {
+      className: 'k'
+    }, '‘' + (m.keyword || '') + '’ 월 검색량')), React_.createElement('div', {
+      className: 'ratecard g'
+    }, React_.createElement('div', {
+      className: 'v'
+    }, m.baseVolume != null ? m.baseVolume.toLocaleString() : '—'), React_.createElement('div', {
+      className: 'k'
+    }, '‘' + (m.baseKeyword || '') + '’ 전체 시장')), React_.createElement('div', {
+      className: 'ratecard'
+    }, React_.createElement('div', {
+      className: 'v',
+      style: {
+        fontSize: 20
+      }
+    }, m.compIdx || '—'), React_.createElement('div', {
+      className: 'k'
+    }, '검색광고 경쟁 정도'))), tr ? React_.createElement('div', {
+      className: 'subcard'
+    }, React_.createElement('div', {
+      className: 'h'
+    }, React_.createElement('span', {
+      className: 't'
+    }, '📈 최근 12개월 검색 추이'), React_.createElement('span', {
+      className: 'badge b-ok',
+      style: {
+        marginLeft: 6
+      }
+    }, '✅ 데이터랩')), renderTrendChart(tr), React_.createElement('div', {
+      className: 'trendfacts'
+    }, tr.peakMonth ? React_.createElement('span', null, React_.createElement('b', null, '성수기'), ' ', tr.peakMonth) : null, tr.lowMonth ? React_.createElement('span', null, React_.createElement('b', null, '비수기'), ' ', tr.lowMonth) : null, tr.peakWeekday ? React_.createElement('span', null, React_.createElement('b', null, '요일 피크'), ' ', tr.peakWeekday + '요일') : null, tr.gender && tr.gender.top ? React_.createElement('span', null, React_.createElement('b', null, '주 이용층'), ' ', (tr.topAge ? tr.topAge + ' ' : '') + tr.gender.top) : null, tr.yoyRate != null ? React_.createElement('span', null, React_.createElement('b', null, '전년 동월 대비'), ' ', (tr.yoyRate >= 0 ? '+' : '') + tr.yoyRate + '%') : null), React_.createElement('div', {
+      className: 'chartfoot'
+    }, '데이터랩 통합검색어 트렌드 · ‘', tr.keyword, '’ 기준(지역을 뗀 업종 키워드 — 지역 키워드는 표본이 작아 계절성이 노이즈가 됩니다). 값은 기간 내 상대 지수입니다.')) : null) : null,
+    // 동네 상권
+    sb ? React_.createElement('div', {
+      className: 'card',
+      style: {
+        marginTop: 14
+      }
+    }, React_.createElement('h3', {
+      className: 'rt-h3'
+    }, React_.createElement('span', {
+      className: 'rt-hic'
+    }, '🏙'), '우리 동네 상권 ', React_.createElement('span', {
+      className: 'badge b-ok'
+    }, '✅ 소상공인365')), React_.createElement('div', {
+      className: 'rt-desc'
+    }, sb.district && sb.district.admiNm ? sb.district.admiNm : result.region || region, sb.industryNm ? ' · ' + sb.industryNm + ' 기준' : '', sb.baseYm ? ' · ' + String(sb.baseYm).slice(0, 4) + '.' + String(sb.baseYm).slice(4, 6) + ' 기준' : '', ' — 이 금액은 ', React_.createElement('b', null, '상권 평균'), '이지 이 업체의 매출이 아닙니다.'), React_.createElement('div', {
+      className: 'grid3'
+    }, React_.createElement('div', {
+      className: 'ratecard p'
+    }, React_.createElement('div', {
+      className: 'v',
+      style: {
+        fontSize: 22
+      }
+    }, sb.sales && manwon(sb.sales.avgAmt) || '—'), React_.createElement('div', {
+      className: 'k'
+    }, '점포당 월평균')), React_.createElement('div', {
+      className: 'ratecard g'
+    }, React_.createElement('div', {
+      className: 'v',
+      style: {
+        fontSize: 22
+      }
+    }, sb.sales && sb.sales.guAvgAmt ? pctStr(sb.sales.avgAmt, sb.sales.guAvgAmt) || '—' : '—'), React_.createElement('div', {
+      className: 'k'
+    }, '시군구 평균 대비')), React_.createElement('div', {
+      className: 'ratecard'
+    }, React_.createElement('div', {
+      className: 'v'
+    }, sb.shops && sb.shops.count != null ? sb.shops.count : '—'), React_.createElement('div', {
+      className: 'k'
+    }, '동종 업소 수'))), sb.major && sb.major.avgAmt ? React_.createElement('div', {
+      className: 'note ok'
+    }, '🏙 이 동네 ', React_.createElement('b', null, sb.major.label || '업종'), ' 전체로 보면 ', React_.createElement('b', null, (sb.major.shopCnt || 0).toLocaleString()), '곳이 영업 중이고, 점포당 월평균은 ', React_.createElement('b', null, manwon(sb.major.avgAmt)), '입니다', sb.major.partial ? ' (일부 세부업종 집계 생략)' : '', '.') : null, React_.createElement('div', {
+      className: 'note est',
+      style: {
+        marginTop: 10
+      }
+    }, React_.createElement('b', null, '시간대·요일 유동인구는 넣지 않습니다'), ' — 공공 API 경로가 막혀 있어(20개 조합 실측 확인) 값을 만들 수 없습니다. 없는 데이터는 비워 둡니다.')) : null)));
   };
   var chkBtn = function (key, label) {
     return React_.createElement('button', {
@@ -25348,10 +25638,10 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
     });
     var rate = chips.length ? Math.round(exposed.length / chips.length * 100) : 0;
     return React_.createElement(React_.Fragment, null, React_.createElement(window.SectionDivider, {
-      label: '2. 키워드 노출 순위',
+      label: '4. 내 업체 현황',
       icon: '📍',
       color: '#059669',
-      sub: '지역+키워드 기준 노출/미노출/미확인 · 일자별 추적'
+      sub: '지금 어디에 서 있나 — 노출 순위 · 리뷰 현황 · 최적화 10지표'
     }), React_.createElement('section', {
       id: 'sec-place-kw',
       className: 'section'
@@ -25420,7 +25710,130 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
       days: chartDays,
       businessName: businessName,
       onDays: onChartDays
-    })))));
+    })), renderReviewCard(), renderMetricsCard())));
+  };
+
+  // ── §4-b 리뷰 현황 (실측 + 상위권 격차) ──
+  var renderReviewCard = function () {
+    var g = (result.market || {}).reviewGap;
+    if (!g || !g.visitor && !g.blog && !g.saves) return null;
+    var rows = [];
+    if (g.visitor) rows.push({
+      k: '방문자(영수증) 리뷰',
+      d: g.visitor
+    });
+    if (g.blog) rows.push({
+      k: '블로그 리뷰',
+      d: g.blog
+    });
+    if (g.saves) rows.push({
+      k: '저장수(즐겨찾기)',
+      d: g.saves
+    });
+    return React_.createElement('div', {
+      className: 'card',
+      style: {
+        marginTop: 14
+      }
+    }, React_.createElement('h3', {
+      className: 'rt-h3'
+    }, React_.createElement('span', {
+      className: 'rt-hic'
+    }, '💬'), '리뷰 현황 ', React_.createElement('span', {
+      className: 'badge b-ok'
+    }, '✅ 실측')), React_.createElement('div', {
+      className: 'rt-desc'
+    }, '캡처에서 읽은 내 업체 값과 ', React_.createElement('b', null, '상위 노출 ' + (g.topCount || 0) + '곳의 중앙값'), '을 나란히 둡니다. 상위권 중앙값은 「이 키워드에서 노출되려면 대략 이 정도」의 기준선입니다.'), React_.createElement('div', {
+      className: 'twrap'
+    }, React_.createElement('table', null, React_.createElement('thead', null, React_.createElement('tr', null, React_.createElement('th', null, '지표'), React_.createElement('th', {
+      className: 'n'
+    }, '내 업체'), React_.createElement('th', {
+      className: 'n'
+    }, '상위권 중앙값'), React_.createElement('th', {
+      className: 'n'
+    }, '격차'))), React_.createElement('tbody', null, rows.map(function (r, i) {
+      var gp = r.d.gap;
+      return React_.createElement('tr', {
+        key: i
+      }, React_.createElement('td', null, r.k), React_.createElement('td', {
+        className: 'n'
+      }, r.d.mine != null ? fmtN(r.d.mine) : UNK), React_.createElement('td', {
+        className: 'n'
+      }, r.d.topMedian != null ? fmtN(r.d.topMedian) : '—'), React_.createElement('td', {
+        className: 'n',
+        style: {
+          fontWeight: 800,
+          color: gp == null ? '#94a3b8' : gp >= 0 ? '#059669' : '#dc2626'
+        }
+      }, gp == null ? '—' : (gp >= 0 ? '+' : '') + fmtN(gp)));
+    })))),
+    // ⚠️ 광고주 전달본에 들어가는 카드다 — 여기 문구는 「사장님이 읽을 말」이어야 한다.
+    //    직원에게 하는 지시(「보완 지표에 입력하세요」)는 no-export 영역에만 둔다.
+    React_.createElement('div', {
+      className: 'note est',
+      style: {
+        marginTop: 13
+      }
+    }, React_.createElement('b', null, '저장수(즐겨찾기)'), '는 검색결과 화면에 표시되지 않아 자동으로 읽히지 않습니다 — 담당자가 확인한 값이 있을 때만 표기됩니다.'), React_.createElement('div', {
+      className: 'note no-export',
+      style: {
+        marginTop: 10
+      }
+    }, React_.createElement('b', null, '담당자 안내:'), ' 저장수는 「4. 내 업체 현황」 아래 ', React_.createElement('b', null, '담당자 보완 지표'), '에 입력하면 경쟁력 점수에 반영됩니다.'));
+  };
+
+  // ── §4-c 최적화 10지표 + 보완 입력 ──
+  var renderMetricsCard = function () {
+    var sc = result.scores || {};
+    var labels = result.labels || {};
+    var weights = result.weights || {};
+    return React_.createElement('div', {
+      className: 'card',
+      style: {
+        marginTop: 14
+      }
+    }, React_.createElement('h3', {
+      className: 'rt-h3'
+    }, React_.createElement('span', {
+      className: 'rt-hic'
+    }, '📊'), '플레이스 최적화 10지표 ', React_.createElement('span', {
+      className: 'badge b-est'
+    }, '≈ 가중')), React_.createElement('div', {
+      className: 'rt-desc'
+    }, '지표마다 값의 출처를 표시합니다 — ', React_.createElement('b', null, '측정'), '은 캡처에서 읽은 값, ', React_.createElement('b', null, '입력'), '은 담당자가 채운 값, ', React_.createElement('b', null, '미확인'), '은 값이 없어 기본값이 들어간 자리입니다(그 지표 점수는 참고치).'), React_.createElement('div', {
+      className: 'metrics'
+    }, METRIC_ORDER.map(function (k) {
+      var v = sc[k] || 0;
+      var src = srcOf(k);
+      var bd = SRC_BADGE[src] || SRC_BADGE.input;
+      return React_.createElement('div', {
+        key: k,
+        className: 'scorebar' + (v < 50 ? ' low' : '') + (src === 'default' ? ' unknown' : '')
+      }, React_.createElement('div', {
+        className: 'lbl'
+      }, React_.createElement('span', {
+        className: 'nm'
+      }, labels[k] || k, React_.createElement('span', {
+        className: 'w'
+      }, weights[k] != null ? weights[k].toFixed(2) : ''), React_.createElement('span', {
+        className: 'mk ' + bd.c
+      }, bd.t)), React_.createElement('span', {
+        className: 'sc'
+      }, v)), React_.createElement('div', {
+        className: 'track'
+      }, React_.createElement('i', {
+        style: {
+          width: v + '%'
+        }
+      })));
+    })), renderSuppEditor(),
+    // 「재점수화」는 직원 조작 안내라 전달본에서 제외(no-export). 배지 뜻 설명은 위 rt-desc 가 담당.
+    React_.createElement('div', {
+      className: 'note no-export',
+      style: {
+        marginTop: 14
+      }
+    }, React_.createElement('b', null, '측정 vs 입력:'), ' 순위·리뷰·적합도는 캡처에서 ', React_.createElement('b', null, '자동 측정'), ', 저장수·예약·소식·업체정보는 담당자가 ', React_.createElement('b', null, '보완 입력'), '(하이브리드). 보완 지표를 채우고 ', React_.createElement('b', null, '재점수화'), '하면 점수에 반영됩니다.'));
   };
 
   // ── 업체 저장 카드 (스토어와 동일 규칙: viewer=영업 대상 30일 유예 / 관리팀=광고주 영구) ──
@@ -25652,10 +26065,10 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
       return r == null ? '' : r <= 5 ? 'rk-hi' : r <= 15 ? 'rk-mid' : 'rk-lo';
     };
     return React_.createElement(React_.Fragment, null, React_.createElement(window.SectionDivider, {
-      label: '3. 경쟁 비교',
+      label: '3. 경쟁 진단',
       icon: '⚔️',
       color: '#ef4444',
-      sub: "'" + (result.keyword || '') + "' 상위 노출 업체 대비 지표"
+      sub: "누구와 싸우고 있나 — '" + (result.keyword || '') + "' 상위 노출 업체 · 상권 경쟁 밀도"
     }), React_.createElement('section', {
       id: 'sec-place-comp',
       className: 'section'
@@ -25711,7 +26124,210 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
       style: {
         marginTop: 13
       }
-    }, React_.createElement('b', null, '격차 진단 ≈ 추정:'), ' 방문자·블로그 리뷰가 상위권과 벌어질수록 인기도(순위) 병목이 큽니다. 저장수는 캡처로 인식되지 않으므로 §1 보완 지표에서 입력해 경쟁력에 반영하세요.')))));
+    }, React_.createElement('b', null, '격차 진단 ≈ 추정:'), ' 방문자·블로그 리뷰가 상위권과 벌어질수록 인기도(순위) 병목이 큽니다. 저장수는 캡처로 인식되지 않으므로 「4. 내 업체 현황」의 보완 지표에서 입력해 경쟁력에 반영하세요.')), renderDensityCard())));
+  };
+
+  // ── §3-b 경쟁 밀도 · 광고 경쟁 ──
+  var renderDensityCard = function () {
+    var m = result.market || {};
+    var sb = m.sbiz || null;
+    var shops = sb && sb.shops && sb.shops.count != null ? sb.shops.count : null;
+    var ad = m.adDepth;
+    if (shops == null && !ad) return null;
+    return React_.createElement('div', {
+      className: 'card',
+      style: {
+        marginTop: 14
+      }
+    }, React_.createElement('h3', {
+      className: 'rt-h3'
+    }, React_.createElement('span', {
+      className: 'rt-hic'
+    }, '🏘'), '경쟁 밀도 ', React_.createElement('span', {
+      className: 'badge b-ok'
+    }, '✅ 실측')), React_.createElement('div', {
+      className: 'rt-desc'
+    }, '검색결과 안의 경쟁(위 표)과 별개로, ', React_.createElement('b', null, '동네에 같은 업종이 몇 곳인지'), '가 상위 노출 난이도를 좌우합니다.'), React_.createElement('div', {
+      className: 'two'
+    }, shops != null ? React_.createElement('div', {
+      className: 'mini'
+    }, React_.createElement('h4', null, '🏘 상권 내 동종 업소'), React_.createElement('div', {
+      style: {
+        fontSize: 26,
+        fontWeight: 900,
+        letterSpacing: '-1px'
+      }
+    }, shops.toLocaleString(), '곳'), React_.createElement('div', {
+      style: {
+        fontSize: 12,
+        color: 'var(--pa-sub)',
+        marginTop: 4
+      }
+    }, sb.district && sb.district.admiNm ? sb.district.admiNm : result.region || region, sb.industryNm ? ' · ' + sb.industryNm : '', sb.shops && sb.shops.momRate != null ? ' · 전월 대비 ' + (sb.shops.momRate > 0 ? '+' : '') + sb.shops.momRate + '%' : '')) : null, ad ? React_.createElement('div', {
+      className: 'mini'
+    }, React_.createElement('h4', null, '📢 검색광고 경쟁'), React_.createElement('div', {
+      style: {
+        fontSize: 26,
+        fontWeight: 900,
+        letterSpacing: '-1px'
+      }
+    }, ad, '개'), React_.createElement('div', {
+      style: {
+        fontSize: 12,
+        color: 'var(--pa-sub)',
+        marginTop: 4
+      }
+    }, '‘', m.keyword || '', '’ 월평균 광고 개수', m.compIdx ? ' · 경쟁 ' + m.compIdx : '')) : null), ad ? React_.createElement('div', {
+      className: 'note est',
+      style: {
+        marginTop: 12
+      }
+    }, React_.createElement('b', null, '⚠️ 다른 축입니다:'), ' 이 숫자는 네이버 ', React_.createElement('b', null, '검색광고(파워링크)'), ' 기준이고, 우리가 추적하는 노출 순위는 ', React_.createElement('b', null, '플레이스(지도) 오가닉'), ' 기준입니다. 광고를 많이 하는 키워드라는 뜻이지 플레이스 순위가 그만큼 밀린다는 뜻이 아닙니다.') : null);
+  };
+
+  // ── §5 기회 발굴 — 연관 키워드 · 지역 황금 키워드 ──
+  var renderSec5Opp = function () {
+    var m = result.market || {};
+    var rel = m.related || [];
+    var gold = m.golden || [];
+    if (!rel.length && !gold.length) return null;
+    return React_.createElement(React_.Fragment, null, React_.createElement(window.SectionDivider, {
+      label: '5. 기회 발굴',
+      icon: '💎',
+      color: '#7c3aed',
+      sub: '어디를 파고들면 되나 — 지역 황금 키워드 · 연관 키워드'
+    }), React_.createElement('section', {
+      id: 'sec-place-opp',
+      className: 'section'
+    }, React_.createElement('div', {
+      className: 'container'
+    }, gold.length ? React_.createElement('div', {
+      className: 'card'
+    }, React_.createElement('h3', {
+      className: 'rt-h3'
+    }, React_.createElement('span', {
+      className: 'rt-hic'
+    }, '💎'), '지역 황금 키워드 ', React_.createElement('span', {
+      className: 'badge b-est'
+    }, '≈ 계산')), React_.createElement('div', {
+      className: 'rt-desc'
+    }, React_.createElement('b', null, '검색량은 있는데 아직 순위가 없는'), ' 키워드를 먼저 제시합니다. 이미 노출 중인 키워드는 「지킬 것」이라 여기서 뺐습니다. 그대로 ', React_.createElement('b', null, '플레이스 추적'), '에 등록하면 다음 날부터 순위 기록이 쌓입니다.'), React_.createElement('div', {
+      className: 'twrap'
+    }, React_.createElement('table', null, React_.createElement('thead', null, React_.createElement('tr', null, React_.createElement('th', null, '키워드'), React_.createElement('th', {
+      className: 'n'
+    }, '월 검색량'), React_.createElement('th', null, '경쟁'), React_.createElement('th', null, '현재'), React_.createElement('th', null, '판단'))), React_.createElement('tbody', null, gold.map(function (r, i) {
+      return React_.createElement('tr', {
+        key: i
+      }, React_.createElement('td', {
+        style: {
+          fontWeight: 700
+        }
+      }, r.keyword), React_.createElement('td', {
+        className: 'n'
+      }, (r.volume || 0).toLocaleString()), React_.createElement('td', null, r.compIdx || '—'), React_.createElement('td', null, r.state || '미확인'), React_.createElement('td', null, React_.createElement('span', {
+        className: 'ps ' + (r.priority === '우선 공략' ? 'ps-g' : 'ps-n'),
+        style: {
+          fontSize: 11,
+          padding: '3px 9px'
+        }
+      }, r.priority)));
+    }))))) : null, rel.length ? React_.createElement('div', {
+      className: 'card',
+      style: {
+        marginTop: gold.length ? 14 : 0
+      }
+    }, React_.createElement('h3', {
+      className: 'rt-h3'
+    }, React_.createElement('span', {
+      className: 'rt-hic'
+    }, '🔗'), '연관 키워드 ', React_.createElement('span', {
+      className: 'badge b-ok'
+    }, '✅ 실측')), React_.createElement('div', {
+      className: 'rt-desc'
+    }, '‘', m.baseKeyword || '', '’ 에서 파생된 연관 키워드와, 여기에 지역을 결합한 실제 공략 키워드입니다. 결합 검색량은 상위 5개만 조회합니다(호출 절약).'), React_.createElement('div', {
+      className: 'twrap'
+    }, React_.createElement('table', null, React_.createElement('thead', null, React_.createElement('tr', null, React_.createElement('th', null, '연관 키워드'), React_.createElement('th', {
+      className: 'n'
+    }, '전체 검색량'), React_.createElement('th', null, '지역 결합'), React_.createElement('th', {
+      className: 'n'
+    }, '결합 검색량'), React_.createElement('th', null, '내 순위'))), React_.createElement('tbody', null, rel.map(function (r, i) {
+      return React_.createElement('tr', {
+        key: i
+      }, React_.createElement('td', null, r.keyword), React_.createElement('td', {
+        className: 'n'
+      }, r.volume != null ? r.volume.toLocaleString() : '—'), React_.createElement('td', {
+        style: {
+          fontWeight: 700
+        }
+      }, r.combined), React_.createElement('td', {
+        className: 'n'
+      }, r.combinedVolume != null ? r.combinedVolume.toLocaleString() : '—'), React_.createElement('td', null, r.rank ? r.rank + '위' : r.state || '미확인'));
+    }))))) : null)));
+  };
+
+  // ── §6-a 노출 개선 시뮬레이션 · 90일 로드맵 ──
+  var renderImprove = function () {
+    var im = result.improve || {};
+    var steps = im.steps || [];
+    var road = im.roadmap || [];
+    if (!steps.length && !road.length) return null;
+    var maxT = Math.max.apply(null, steps.map(function (s) {
+      return s.total;
+    }).concat([1]));
+    return React_.createElement('div', {
+      className: 'card',
+      style: {
+        marginBottom: 14
+      }
+    }, React_.createElement('h3', {
+      className: 'rt-h3'
+    }, React_.createElement('span', {
+      className: 'rt-hic'
+    }, '🚀'), '노출 개선 시뮬레이션 ', React_.createElement('span', {
+      className: 'badge b-est'
+    }, '≈ 계산')), React_.createElement('div', {
+      className: 'rt-desc'
+    }, '지금 낮은 지표를 목표선(', im.target || 75, '점)까지 올리면 종합 경쟁력이 얼마가 되는지 가중치로 역산한 값입니다. ', React_.createElement('b', null, '순위 보장이 아니라 관리 목표'), '입니다 — 순위는 경쟁·거리·알고리즘에 따라 변동합니다.'), steps.length ? React_.createElement('div', {
+      className: 'simrows'
+    }, steps.map(function (s, i) {
+      return React_.createElement('div', {
+        key: i,
+        className: 'simrow' + (i === 0 ? ' now' : '')
+      }, React_.createElement('div', {
+        className: 'sl'
+      }, s.label), React_.createElement('div', {
+        className: 'sb'
+      }, React_.createElement('i', {
+        style: {
+          width: Math.round(s.total / maxT * 100) + '%'
+        }
+      })), React_.createElement('div', {
+        className: 'sv'
+      }, s.total, React_.createElement('small', null, '/100'), s.delta ? React_.createElement('span', {
+        className: 'sd'
+      }, '+' + s.delta) : null), React_.createElement('div', {
+        className: 'sf'
+      }, (s.focus || []).join(' · ')));
+    })) : null, road.length ? React_.createElement('div', {
+      className: 'subcard'
+    }, React_.createElement('div', {
+      className: 'h'
+    }, React_.createElement('span', {
+      className: 't'
+    }, '🧭 90일 실행 로드맵')), road.map(function (p, i) {
+      return React_.createElement('div', {
+        key: i,
+        className: 'rmrow'
+      }, React_.createElement('span', {
+        className: 'ph'
+      }, p.phase), React_.createElement('div', {
+        className: 'it'
+      }, (p.items || []).map(function (t, j) {
+        return React_.createElement('div', {
+          key: j
+        }, '· ', t);
+      })));
+    })) : null);
   };
 
   // ── §4 AI 진단 ──
@@ -25779,10 +26395,10 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
     // #sec-ai-feedback + 숨김 .ai-state 마커는 ReportCapture(보고서 내보내기)가 읽는 계약 —
     // AI 미완료 상태에서 내보내면 로딩 문구 대신 「완료 후 별도 전달」 안내로 치환된다.
     return React_.createElement(React_.Fragment, null, React_.createElement(window.SectionDivider, {
-      label: '4. AI 진단·처방',
-      icon: '🤖',
-      color: '#7c3aed',
-      sub: '무엇을·왜·얼마나 하면 몇 위가 되는가'
+      label: '6. 전략·결론',
+      icon: '🧭',
+      color: '#1e293b',
+      sub: '그래서 무엇부터 — 개선 시뮬레이션 · 90일 로드맵 · AI 종합 진단'
     }), React_.createElement('section', {
       id: 'sec-ai-feedback',
       className: 'section'
@@ -25794,7 +26410,7 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
       'data-state': aiLoading ? 'loading' : ai ? 'done' : 'idle'
     }), React_.createElement('div', {
       className: 'container'
-    }, React_.createElement('div', {
+    }, renderImprove(), React_.createElement('div', {
       className: 'card',
       style: {
         padding: '20px 22px',
@@ -25997,7 +26613,13 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
   }, 'AI'), ' AI 생성'))), /* 본문 — 이후 모든 섹션이 report-main 의 자식(내보내기 캡처 범위) */
   React_.createElement('div', {
     className: 'report-main place-analysis'
-  }, renderCover(), renderSec1(), renderSec2(), renderSec3(), renderSec4(), renderSaveCard(), renderReportSection())));
+  }, renderCover(), renderSec1(), /* 1. 종합 요약 */
+  renderSec2Market(), /* 2. 시장·수요 진단 */
+  renderSec3(), /* 3. 경쟁 진단 */
+  renderSec2(), /* 4. 내 업체 현황 */
+  renderSec5Opp(), /* 5. 기회 발굴 */
+  renderSec4(), /* 6. 전략·결론 (개선 계획 + AI) */
+  renderSaveCard(), renderReportSection())));
 };
 
 ;/* ===== js/components/PlaceTrackingPage.jsx ===== */

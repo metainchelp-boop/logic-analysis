@@ -824,3 +824,204 @@ def analyze_datalab(keyword: str, category1: str = "", related_keywords: list = 
 
     logger.info(f"데이터랩 분석 완료: {list(result.keys())}")
     return result
+
+
+# ============================================================
+# 통합검색어 트렌드 (/v1/datalab/search) — 플레이스(지역 업종) 전용 (2026-08-11)
+# ============================================================
+# ⚠️ 위 지표들이 쓰는 `DATALAB_BASE` 는 **쇼핑인사이트**라 요청에 쇼핑 카테고리 코드가
+#    반드시 들어간다 → 카페·미용·병원 같은 오프라인 업종에는 쓸 수 없다(코드 자체가 없음).
+#    통합검색어 트렌드는 **키워드만으로** 조회되므로 플레이스에 그대로 적용된다.
+#    같은 계정·같은 일일 한도(1,000회)를 공유하므로 소진 가드(`datalab_quota_exhausted`)를
+#    그대로 재사용하고, 실패·소진 시에는 전부 {} 를 돌려 화면이 그 카드만 생략하게 한다.
+#
+# 호출 예산(키워드 1개당, 캐시 미적중 시): 추이 1 + 요일 1 + 성별 2 + 연령 4 = **8회**.
+# 캐시(1시간)에 걸리면 0회. 소진 상태면 첫 호출에서 즉시 빠져나온다.
+
+DATALAB_SEARCH_URL = "https://openapi.naver.com/v1/datalab/search"
+
+# 안전 밸브 — 일일 한도가 빠듯해지면 재배포 없이 서버 .env 에서 끌 수 있다.
+# (`PORTAL_SEO_AUTO_ENABLED` 선례. 끄면 검색 트렌드 카드만 조용히 사라지고 나머지는 그대로)
+PLACE_TREND_ENABLED = os.getenv("PLACE_TREND_ENABLED", "true").strip().lower() not in ("false", "0", "off", "no")
+
+# 네이버 연령 코드: 1(0~12) 2(13~18) 3(19~24) 4(25~29) 5(30~34) 6(35~39)
+#                  7(40~44) 8(45~49) 9(50~54) 10(55~59) 11(60~)
+_SEARCH_AGE_BANDS = [
+    ("20대", ["3", "4"]),
+    ("30대", ["5", "6"]),
+    ("40대", ["7", "8"]),
+    ("50대+", ["9", "10", "11"]),
+]
+
+_WEEKDAY_LABEL = ["월", "화", "수", "목", "금", "토", "일"]
+
+
+def _datalab_search_post(body: dict) -> dict:
+    """통합검색어 트렌드 POST — 쇼핑인사이트와 동일한 한도 가드·백오프를 공유한다."""
+    if datalab_quota_exhausted():
+        return {}
+    for attempt in range(3):
+        try:
+            resp = requests.post(DATALAB_SEARCH_URL, json=body, headers=_datalab_headers(), timeout=10)
+            if resp.status_code == 200:
+                return resp.json()
+            if resp.status_code == 429 and ('"errorCode":"010"' in resp.text
+                                            or "Query limit exceeded" in resp.text
+                                            or "쿼리 한도" in resp.text):
+                _mark_quota_exhausted()
+                return {}
+            if resp.status_code == 429 and attempt < 2:
+                time.sleep(0.8 * (attempt + 1))
+                continue
+            logger.warning(f"Datalab search 응답 코드: {resp.status_code} — {resp.text[:200]}")
+            return {}
+        except Exception as e:
+            logger.error(f"Datalab search 오류: {e}")
+            if attempt < 2:
+                time.sleep(0.5)
+                continue
+            return {}
+    return {}
+
+
+def _search_body(keyword: str, start: str, end: str, time_unit: str,
+                 gender: str = "", ages=None) -> dict:
+    body = {
+        "startDate": start, "endDate": end, "timeUnit": time_unit,
+        "keywordGroups": [{"groupName": keyword, "keywords": [keyword]}],
+    }
+    if gender:
+        body["gender"] = gender
+    if ages:
+        body["ages"] = list(ages)
+    return body
+
+
+def _search_points(data: dict) -> list:
+    """응답 → [{period, ratio}] (없으면 [])"""
+    try:
+        results = (data or {}).get("results") or []
+        if not results:
+            return []
+        return [{"period": p.get("period", ""), "ratio": float(p.get("ratio") or 0)}
+                for p in (results[0].get("data") or [])]
+    except Exception:
+        return []
+
+
+def _search_sum(data: dict) -> float:
+    return round(sum(p["ratio"] for p in _search_points(data)), 2)
+
+
+def get_search_trend(keyword: str) -> dict:
+    """플레이스용 검색 수요 4종 — 최근 12개월 추이 · 성수기/비수기 · 요일 패턴 · 성별/연령.
+
+    반환(전 필드 optional — 없으면 그 축을 화면이 생략):
+      {"keyword", "months":[{period,label,ratio}], "peakMonth","lowMonth","yoyRate",
+       "weekdays":[{label,ratio}], "peakWeekday",
+       "gender":{"male","female","top"}, "ages":[{label,ratio}], "topAge"}
+    실패·한도 소진·키 미설정 시 {}(카드 자체를 렌더하지 않는다)."""
+    kw = (keyword or "").strip()
+    if not PLACE_TREND_ENABLED:
+        return {}
+    if not kw or not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
+        return {}
+    if datalab_quota_exhausted():
+        return {}
+
+    ck = f"placetrend|{kw}"
+    cached = _cache_get(ck)
+    if cached is not None:
+        return cached
+
+    today = datetime.now()
+    out = {"keyword": kw}
+
+    # ① 최근 13개월 월별 추이 — 12개월 표시 + 전년 동월 대비 성장률
+    try:
+        start13 = (today - timedelta(days=395)).strftime("%Y-%m-01")
+        pts = _search_points(_datalab_search_post(
+            _search_body(kw, start13, today.strftime("%Y-%m-%d"), "month")))
+        months = []
+        for p in pts:
+            try:
+                dt = datetime.strptime(p["period"], "%Y-%m-%d")
+                label = f"{dt.month}월"
+            except Exception:
+                label = p["period"]
+            months.append({"period": p["period"], "label": label, "ratio": round(p["ratio"], 1)})
+        if months:
+            recent = months[-12:]
+            out["months"] = recent
+            top = max(recent, key=lambda m: m["ratio"])
+            bot = min(recent, key=lambda m: m["ratio"])
+            # 전 구간이 같은 값이면 성수기라 부를 수 없다(비교 대상 없음).
+            if top["ratio"] > bot["ratio"]:
+                out["peakMonth"] = top["label"]
+                out["lowMonth"] = bot["label"]
+            if len(months) >= 13 and months[-13]["ratio"] > 0:
+                out["yoyRate"] = round((months[-1]["ratio"] - months[-13]["ratio"])
+                                       / months[-13]["ratio"] * 100, 1)
+    except Exception as e:
+        logger.warning(f"[검색트렌드] 월별 추이 실패(무시): {e}")
+
+    # ② 요일 패턴 — 최근 12주 일별을 요일로 접는다
+    try:
+        start90 = (today - timedelta(days=84)).strftime("%Y-%m-%d")
+        pts = _search_points(_datalab_search_post(
+            _search_body(kw, start90, today.strftime("%Y-%m-%d"), "date")))
+        buckets = defaultdict(list)
+        for p in pts:
+            try:
+                dt = datetime.strptime(p["period"], "%Y-%m-%d")
+            except Exception:
+                continue
+            buckets[dt.weekday()].append(p["ratio"])
+        if buckets:
+            wk = []
+            for i in range(7):
+                vals = buckets.get(i) or []
+                if vals:
+                    wk.append({"label": _WEEKDAY_LABEL[i], "ratio": round(sum(vals) / len(vals), 1)})
+            if wk:
+                out["weekdays"] = wk
+                hi = max(wk, key=lambda x: x["ratio"])
+                lo = min(wk, key=lambda x: x["ratio"])
+                if hi["ratio"] > lo["ratio"]:
+                    out["peakWeekday"] = hi["label"]
+    except Exception as e:
+        logger.warning(f"[검색트렌드] 요일 패턴 실패(무시): {e}")
+
+    # ③ 성별 — 최근 3개월 합계 비교(절대값이 아니라 비중)
+    try:
+        start90 = (today - timedelta(days=90)).strftime("%Y-%m-%d")
+        end = today.strftime("%Y-%m-%d")
+        m = _search_sum(_datalab_search_post(_search_body(kw, start90, end, "month", gender="m")))
+        f = _search_sum(_datalab_search_post(_search_body(kw, start90, end, "month", gender="f")))
+        if (m + f) > 0:
+            male = round(m / (m + f) * 100)
+            out["gender"] = {"male": male, "female": 100 - male,
+                             "top": ("남성" if male >= 50 else "여성")}
+    except Exception as e:
+        logger.warning(f"[검색트렌드] 성별 실패(무시): {e}")
+
+    # ④ 연령대 — 4구간(20/30/40/50+) 합계 비중. 10대 이하는 동네 업종 수요와 거리가 멀어 제외.
+    try:
+        start90 = (today - timedelta(days=90)).strftime("%Y-%m-%d")
+        end = today.strftime("%Y-%m-%d")
+        raw = []
+        for label, codes in _SEARCH_AGE_BANDS:
+            raw.append((label, _search_sum(_datalab_search_post(
+                _search_body(kw, start90, end, "month", ages=codes)))))
+        total = sum(v for _, v in raw)
+        if total > 0:
+            out["ages"] = [{"label": l, "ratio": round(v / total * 100)} for l, v in raw]
+            out["topAge"] = max(out["ages"], key=lambda x: x["ratio"])["label"]
+    except Exception as e:
+        logger.warning(f"[검색트렌드] 연령 실패(무시): {e}")
+
+    # 아무 축도 못 채웠으면 카드를 만들지 않는다(빈 껍데기 렌더 방지).
+    if not any(k in out for k in ("months", "weekdays", "gender", "ages")):
+        return {}
+    _cache_set(ck, out)
+    return out

@@ -193,3 +193,56 @@
 @keyframes paspin{to{transform:rotate(360deg)}}
 .place-analysis .empty{text-align:center;color:var(--pa-muted);font-size:13px;padding:26px 10px}
 @media (prefers-reduced-motion:reduce){.place-analysis .spin{animation:none}}
+
+/* ── 보고서 고도화 (2026-08-11) — 스토어 6섹션 대등 ── */
+/* 캡처 판독 경고 — 「점수가 낮다」와 「입력이 비었다」를 구분해 보여준다 */
+.place-analysis .capwarn{display:flex;gap:11px;align-items:flex-start;background:var(--pa-amberbg);border:1px solid var(--pa-amberln);border-radius:14px;padding:14px 16px;margin-bottom:14px}
+.place-analysis .capwarn .ci{font-size:18px;line-height:1.2;flex:none}
+.place-analysis .capwarn b{font-size:13.5px;font-weight:800;color:var(--pa-amber2)}
+.place-analysis .capwarn .cw{font-size:12.5px;color:var(--pa-sub);line-height:1.65;margin-top:3px}
+.place-analysis .capwarn .cm{font-size:11.5px;color:var(--pa-muted);margin-top:5px}
+
+/* KPI 4칸 — 광고주가 가장 먼저 보는 숫자 */
+.place-analysis .kpi4{display:grid;grid-template-columns:repeat(4,1fr);gap:11px;margin-top:14px}
+@media(max-width:860px){.place-analysis .kpi4{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:460px){.place-analysis .kpi4{grid-template-columns:1fr}}
+.place-analysis .kpi{border:1px solid var(--pa-line);border-radius:14px;padding:14px 15px;background:var(--pa-bg)}
+.place-analysis .kpi.empty{border-style:dashed;background:var(--pa-card)}
+.place-analysis .kpi .kk{font-size:11.5px;font-weight:800;color:var(--pa-sub);display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.place-analysis .kpi .kk .kh{font-size:9.5px;font-weight:700;color:var(--pa-muted);background:var(--pa-track);border-radius:5px;padding:1px 6px}
+.place-analysis .kpi .kv{font-size:25px;font-weight:900;letter-spacing:-1px;margin-top:6px;font-variant-numeric:tabular-nums;line-height:1.15}
+.place-analysis .kpi .ks{font-size:11.5px;color:var(--pa-muted);margin-top:4px;line-height:1.5}
+.place-analysis .unkv{font-size:17px;font-weight:800;color:var(--pa-muted)}
+
+/* 검색 트렌드 */
+.place-analysis .trendbox{margin-top:4px}
+.place-analysis .tlabels{display:flex;justify-content:space-between;font-size:10px;color:var(--pa-muted);margin-top:3px}
+.place-analysis .trendfacts{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.place-analysis .trendfacts span{font-size:11.5px;color:var(--pa-sub);background:var(--pa-card);border:1px solid var(--pa-line);border-radius:999px;padding:4px 11px}
+.place-analysis .trendfacts b{color:var(--pa-ink);font-weight:800;margin-right:3px}
+
+/* 지표 출처 배지 — 「미확인」(기본값) 추가 */
+.place-analysis .scorebar .mk.unk{background:var(--pa-track);color:var(--pa-muted)}
+.place-analysis .scorebar.unknown .track>i{background:repeating-linear-gradient(45deg,var(--pa-line2),var(--pa-line2) 5px,var(--pa-track) 5px,var(--pa-track) 10px)}
+.place-analysis .scorebar.unknown .lbl .sc{color:var(--pa-muted)}
+
+/* 개선 시뮬레이션 */
+.place-analysis .simrows{display:flex;flex-direction:column;gap:9px;margin-top:13px}
+.place-analysis .simrow{display:grid;grid-template-columns:130px 1fr 96px;grid-template-areas:"l b v" "f f f";gap:5px 11px;align-items:center}
+@media(max-width:640px){.place-analysis .simrow{grid-template-columns:90px 1fr 82px}}
+.place-analysis .simrow .sl{grid-area:l;font-size:12px;font-weight:700;color:var(--pa-sub)}
+.place-analysis .simrow.now .sl{color:var(--pa-ink)}
+.place-analysis .simrow .sb{grid-area:b;height:11px;background:var(--pa-track);border-radius:6px;overflow:hidden}
+.place-analysis .simrow .sb>i{display:block;height:100%;border-radius:6px;background:linear-gradient(90deg,var(--pa-ind),var(--pa-pur))}
+.place-analysis .simrow.now .sb>i{background:var(--pa-muted)}
+.place-analysis .simrow .sv{grid-area:v;font-size:15px;font-weight:900;font-variant-numeric:tabular-nums;text-align:right}
+.place-analysis .simrow .sv small{font-size:10px;color:var(--pa-muted);font-weight:700}
+.place-analysis .simrow .sv .sd{font-size:11px;font-weight:800;color:var(--pa-ok2);margin-left:5px}
+.place-analysis .simrow .sf{grid-area:f;font-size:11px;color:var(--pa-muted);padding-left:141px}
+@media(max-width:640px){.place-analysis .simrow .sf{padding-left:101px}}
+
+/* 90일 로드맵 */
+.place-analysis .rmrow{display:flex;gap:11px;align-items:flex-start;padding:9px 0;border-bottom:1px dashed var(--pa-line)}
+.place-analysis .rmrow:last-child{border-bottom:none}
+.place-analysis .rmrow .ph{flex:none;min-width:76px;font-size:11.5px;font-weight:800;color:#fff;background:var(--pa-ind);border-radius:7px;padding:4px 9px;text-align:center}
+.place-analysis .rmrow .it{font-size:12.5px;color:var(--pa-sub);line-height:1.75}
