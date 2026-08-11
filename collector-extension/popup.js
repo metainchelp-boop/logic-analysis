@@ -2,11 +2,21 @@
 const $ = (id) => document.getElementById(id);
 
 async function render() {
-  const { token = '', state = {}, logs = [], rawSample = null } = await chrome.storage.local.get(['token', 'state', 'logs', 'rawSample']);
+  const { token = '', state = {}, logs = [], rawSample = null, rawSampleNoMall = null, readFail = null } =
+    await chrome.storage.local.get(['token', 'state', 'logs', 'rawSample', 'rawSampleNoMall', 'readFail']);
   $('token').value = token;
-  const running = state.running ? '<span class="b ok">수집 중</span>' : '대기';
+  // 캡차에 걸려 쉬는 중이면 그게 가장 중요한 정보다 — 맨 위에 눈에 띄게.
+  const bu = Number(state.blockedUntil || 0);
+  const blockedNow = state.blocked && bu > Date.now();
+  const running = blockedNow
+    ? '<span class="b bad">자동입력 방지(캡차)로 쉬는 중</span>'
+    : (state.running ? '<span class="b ok">수집 중</span>' : '대기');
   $('stat').innerHTML =
     `상태: ${running}<br>` +
+    (blockedNow
+      ? `<span class="b bad">▸ ${new Date(bu).toLocaleTimeString('ko-KR')} 이후 자동 재개</span><br>` +
+        '<span style="font-size:11px">네이버쇼핑을 직접 열어 캡차를 한 번 풀고 「지금 수집 실행」을 누르면 바로 재개됩니다.</span><br>'
+      : '') +
     `대상 <span class="b">${state.target ?? '-'}</span>개 · ` +
     `성공 <span class="b ok">${state.done ?? 0}</span> · ` +
     `실패 <span class="b bad">${state.failed ?? 0}</span><br>` +
@@ -15,6 +25,16 @@ async function render() {
   $('logs').textContent = logs.join('\n');
   const rawEl = document.getElementById('raw');
   if (rawEl) rawEl.textContent = rawSample ? `[${rawSample.keyword}] ${rawSample.at}\n` + JSON.stringify(rawSample.item, null, 1) : '아직 없음 — 수집 1회 실행 후 표시';
+  // 스토어명이 빈 상품의 원본 — 어느 키에 스토어명이 들어 있는지 눈으로 확인용
+  const nmEl = document.getElementById('rawNoMall');
+  if (nmEl) nmEl.textContent = rawSampleNoMall
+    ? `[${rawSampleNoMall.keyword}] ${rawSampleNoMall.rank}위 ${rawSampleNoMall.at}\n` + JSON.stringify(rawSampleNoMall.item, null, 1)
+    : '아직 없음 — 수집 중 스토어명 빈 상품을 만나면 표시';
+  // 판독 실패 진단 — '차단'과 '못 읽음'을 가르기 위한 근거(제목·주소·본문 일부)
+  const rfEl = document.getElementById('readFail');
+  if (rfEl) rfEl.textContent = readFail
+    ? `[${readFail.keyword}] ${readFail.pagingIndex}페이지 ${readFail.at}\n원인: ${readFail.err}\n제목: ${readFail.title}\n주소: ${readFail.href}\n본문: ${readFail.body}`
+    : '없음 — 정상';
 }
 
 $('save').onclick = async () => {

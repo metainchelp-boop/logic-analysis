@@ -6,6 +6,10 @@ name: Debug Rank Batch (읽기 전용 진단)
 on:
   workflow_dispatch:
     inputs:
+      collector:
+        description: '수집기 진단 — off(기본) / on(확장이 서버에 접속했는지·큐·토큰 상태)'
+        required: false
+        default: 'off'
       rank_link:
         description: '순위 축 브리지 — off(기본) / impact(통합 시 영향 측정·배포 전 가능) / stats / preview / apply'
         required: false
@@ -115,6 +119,133 @@ jobs:
             print(f"  총 {tot} / 슬러그 {slug}")
             PY
             echo
+            if [ "${{ github.event.inputs.collector }}" = "on" ]; then
+              echo "== 수집기 진단 =="
+              echo "-- 확장이 서버에 접속한 기록(오늘) --"
+              # 확장은 GET /api/collector/keywords 로 목록을 받고 POST /serp 로 올린다.
+              # 한 줄도 없으면 '확장이 서버에 아예 말을 걸지 않은 것' = 맥북 쪽 문제.
+              docker logs --since 24h logic-analysis 2>&1 | grep -E 'api/collector' \
+                | awk '{print $0}' | tail -25 || echo "  (접속 기록 없음)"
+              echo "-- 접속 횟수(경로별·24시간) --"
+              docker logs --since 24h logic-analysis 2>&1 | grep -oE 'GET /api/collector/[a-z]+|POST /api/collector/[a-z]+' \
+                | sort | uniq -c || echo "  (없음)"
+              echo "-- 수집기가 몇 대인가(접속 IP 개수·24시간) --"
+              # 도커 로그의 클라이언트는 전부 nginx(172.18.0.1)라 구분이 안 된다 → 호스트 nginx 로그를 본다.
+              # ⚠️ 저장소가 공개라 Actions 로그에 실제 IP 를 찍지 않는다. 뒤 두 자리를 가리고 대수만 센다.
+              for f in /var/log/nginx/access.log /var/log/nginx/access.log.1; do
+                [ -f "$f" ] && cat "$f"
+              done 2>/dev/null | grep -E 'api/collector/(serp|keywords|requests)' \
+                | awk '{print $1}' | sed -E 's/^([0-9]+\.[0-9]+)\..*/\1.x.x/' \
+                | sort | uniq -c | sort -rn | head -10 \
+                || echo "  (nginx 로그를 못 읽음 — 권한·경로 확인)"
+              echo "  ↑ 줄이 2개 이상이면 수집기가 2대 이상 돌고 있다는 뜻"
+              echo "-- IP별 시간대 분포(2대인가 / 한 대의 IP가 바뀐 건가) --"
+              # 겹치는 시간대가 있으면 = 동시에 두 대. 시간대가 앞뒤로 갈리면 = 한 대의 IP 변경.
+              for f in /var/log/nginx/access.log /var/log/nginx/access.log.1; do
+                [ -f "$f" ] && cat "$f"
+              done 2>/dev/null | grep -E 'api/collector/(serp|keywords|requests)' \
+                | awk '{ip=$1; sub(/^([0-9]+\.[0-9]+)\..*/,"",ip);
+                        split($1,o,"."); m=o[1]"."o[2]".x.x";
+                        t=$4; gsub(/^\[/,"",t); split(t,d,":"); hh=d[2];
+                        key=m" "hh; cnt[key]++ }
+                   END { for (k in cnt) print k, cnt[k] }' \
+                | sort | awk '{printf "  %-14s %s시  %s건\n", $1, $2, $3}' \
+                || echo "  (집계 실패)"
+              echo
+              docker exec -i logic-analysis python3 - <<'PY'
+            import os, sqlite3
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            print("[수집 적재 — 최근 7일]")
+            n = 0
+            for r in c.execute("""SELECT collected_date d, COUNT(*) kw, MAX(created_at) last_at
+                                    FROM collected_serp
+                                   WHERE collected_date >= date('now','localtime','-6 day')
+                                   GROUP BY collected_date ORDER BY d DESC"""):
+                n += 1
+                print(f"  {r['d']}: 키워드 {r['kw']}건 · 마지막 업로드 {r['last_at']}")
+            if not n:
+                print("  (최근 7일 수집 없음)")
+            print("\n[온디맨드 요청 큐]")
+            for r in c.execute("""SELECT status, COUNT(*) n, MIN(requested_at) oldest, MAX(attempts) mx
+                                    FROM collect_requests GROUP BY status"""):
+                print(f"  {r['status']}: {r['n']}건 (가장 오래된 {r['oldest']} · 최대 시도 {r['mx']})")
+            print("\n[수집 깊이 실측 — pagingSize=80 이 실제로 먹히는지]")
+            # 한 키워드당 몇 개를 모았는지. 300 근처면 80 이 정상 수용된 것,
+            # 40·80 에서 멈춰 있으면 페이지를 더 못 넘긴 것(= 300위 추적이 깨져 있던 것).
+            try:
+                rows = list(c.execute("""SELECT product_count n, COUNT(*) c
+                                          FROM collected_serp
+                                         GROUP BY product_count ORDER BY c DESC LIMIT 8"""))
+                for r in rows:
+                    print(f"  {r['n']}개 수집 — 키워드 {r['c']}건")
+                agg = c.execute("""SELECT MIN(product_count) mn, MAX(product_count) mx,
+                                          AVG(product_count) av FROM collected_serp""").fetchone()
+                print(f"  최소 {agg['mn']} · 최대 {agg['mx']} · 평균 {round(agg['av'] or 0, 1)}")
+            except Exception as e:
+                print("  조회 실패:", e)
+
+            print("\n[수집 대상 키워드 규모]")
+            kws = set()
+            for sql in ("SELECT DISTINCT keyword FROM tracked_keywords",
+                        "SELECT DISTINCT keyword FROM client_analyses"):
+                for r in c.execute(sql):
+                    k = (r[0] or "").strip()
+                    if k: kws.add(k)
+            done = {r[0] for r in c.execute(
+                "SELECT keyword FROM collected_serp WHERE collected_date = date('now','localtime')")}
+            print(f"  대상 {len(kws)} · 오늘 완료 {len(done)} · 남음 {len(kws - done)}")
+            print("\n[서버 토큰 설정]")
+            tok = os.getenv("COLLECTOR_TOKEN", "")
+            print(f"  COLLECTOR_TOKEN: {'설정됨(len=%d)' % len(tok) if tok else '❌ 미설정 — 전 경로 503'}")
+
+            # ⚠️ 「수집됐다」와 「값이 맞다」는 다른 명제다(2026-08-05 검색량 오판 교훈).
+            #    플랜 B(2026-08-06)로 판독 원천이 API 응답 → 페이지 __NEXT_DATA__ 로 바뀌었으므로
+            #    필드 이름이 달라져 title·productId 가 빈 채로 쌓일 수 있다. 실제 적재분을 열어본다.
+            print("\n[적재 품질 — 오늘 수집분 실측]")
+            import json as _json
+            rows = list(c.execute("""SELECT keyword, products_json, product_count
+                                       FROM collected_serp
+                                      WHERE collected_date = date('now','localtime')
+                                      ORDER BY created_at DESC LIMIT 20"""))
+            if not rows:
+                print("  (오늘 수집분 없음)")
+            else:
+                tot = 0
+                miss = {"productId": 0, "title": 0, "link": 0, "price": 0, "mallName": 0}
+                rank_bad = 0
+                for r in rows:
+                    try:
+                        prods = _json.loads(r["products_json"]) or []
+                    except Exception:
+                        print(f"  ⚠️ {r['keyword']}: products_json 파손"); continue
+                    for i, p in enumerate(prods):
+                        tot += 1
+                        for k in miss:
+                            if not str(p.get(k) or "").strip():
+                                miss[k] += 1
+                    ranks = [p.get("rank") for p in prods]
+                    if ranks != list(range(1, len(prods) + 1)):
+                        rank_bad += 1
+                print(f"  표본 키워드 {len(rows)}건 · 상품 {tot}개")
+                for k, v in miss.items():
+                    pct = round(v * 100 / tot, 1) if tot else 0
+                    mark = "❌" if pct > 5 else ("⚠️" if pct > 0 else "✅")
+                    print(f"  {mark} {k} 빈 값 {v}개 ({pct}%)")
+                print(f"  {'❌' if rank_bad else '✅'} 순위 1..n 연속 — 어긋난 키워드 {rank_bad}건")
+                s = None
+                for r in rows:
+                    try:
+                        s = (_json.loads(r["products_json"]) or [None])[0]
+                    except Exception:
+                        s = None
+                    if s: break
+                if s:
+                    print(f"  샘플 1위: {_json.dumps(s, ensure_ascii=False)[:400]}")
+            PY
+              echo
+            fi
             RL="${{ github.event.inputs.rank_link }}"
             if [ "$RL" = "impact" ]; then
               # 조회 통합(4단계)을 하면 전산① portal-summary 가 실제로 얼마나 달라지는지 측정.

@@ -690,6 +690,49 @@ def save_ranking(product_id: int, keyword_id: int, keyword: str,
         conn.close()
 
 
+def save_ranking_daily(product_id: int, keyword_id: int, keyword: str,
+                       rank_position: Optional[int], page_number: Optional[int],
+                       check_type: str = "scheduled", review_count: Optional[int] = None):
+    """순위 기록 저장 — **하루 1점**(같은 상품·키워드·유형이면 그날 것을 갱신).
+
+    24시간 분산 수집(2026-08-05)으로 순위를 '수집되는 즉시' 적기 시작하면서 필요해졌다.
+    종전 save_ranking 은 그냥 INSERT 라, 같은 날 두 경로(수집 즉시 기록 + 08:00 배치)가
+    모두 쓰면 같은 날짜에 행이 둘 생겨 추이 그래프가 중복 점을 그린다.
+    업체 쪽(client_rank_history)이 이미 쓰던 '당일 upsert' 규칙을 상품 쪽에도 맞춘 것.
+    """
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            """SELECT id FROM rankings
+                WHERE product_id=? AND keyword_id=? AND check_type=?
+                  AND DATE(checked_at)=DATE('now','localtime')
+                ORDER BY id DESC LIMIT 1""",
+            (product_id, keyword_id, check_type)).fetchone()
+        if row:
+            try:
+                conn.execute(
+                    """UPDATE rankings
+                          SET rank_position=?, page_number=?, review_count=?,
+                              checked_at=datetime('now','localtime')
+                        WHERE id=?""",
+                    (rank_position, page_number, review_count, row["id"]))
+            except Exception:
+                conn.execute(
+                    """UPDATE rankings
+                          SET rank_position=?, page_number=?,
+                              checked_at=datetime('now','localtime')
+                        WHERE id=?""",
+                    (rank_position, page_number, row["id"]))
+            conn.commit()
+            return
+    except Exception as e:
+        logger.warning(f"순위 당일 갱신 조회 실패(신규 저장으로 진행): {e}")
+    finally:
+        conn.close()
+    save_ranking(product_id, keyword_id, keyword, rank_position, page_number,
+                 check_type, review_count)
+
+
 def heal_tracked_product_info(db_product_id: int, product_url: str, prods: List[Dict]) -> bool:
     """수집 SERP에서 매칭된 아이템의 실제 스토어명·상품명으로 표시 정보를 보정한다.
 
