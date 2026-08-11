@@ -856,15 +856,30 @@ _SEARCH_AGE_BANDS = [
 _WEEKDAY_LABEL = ["월", "화", "수", "목", "금", "토", "일"]
 
 
+# 이 앱 키에 「통합검색어 트렌드」 사용 권한(스코프)이 없으면 401 errorCode 024 가 온다.
+# 재시도해도 소용없고, 한 번의 분석에 8콜이 전부 401 로 낭비되므로 프로세스 수명 동안 끈다.
+# (2026-08-11 실측: "Scope Status Invalid : Authentication failed." — 네이버 개발자센터에서
+#  해당 앱에 데이터랩 검색어트렌드 API 를 추가 등록하면 해제된다. 등록 후엔 재기동만 하면 됨)
+_search_scope_denied = [False]
+
+
 def _datalab_search_post(body: dict) -> dict:
     """통합검색어 트렌드 POST — 쇼핑인사이트와 동일한 한도 가드·백오프를 공유한다."""
-    if datalab_quota_exhausted():
+    if datalab_quota_exhausted() or _search_scope_denied[0]:
         return {}
     for attempt in range(3):
         try:
             resp = requests.post(DATALAB_SEARCH_URL, json=body, headers=_datalab_headers(), timeout=10)
             if resp.status_code == 200:
                 return resp.json()
+            if resp.status_code in (401, 403):
+                if not _search_scope_denied[0]:
+                    _search_scope_denied[0] = True
+                    logger.warning(
+                        "데이터랩 통합검색어 트렌드 권한 없음 — 이 앱 키에 해당 API 가 등록돼 있지 않습니다. "
+                        "네이버 개발자센터에서 「데이터랩(검색어트렌드)」 사용 신청 후 서버를 재기동하면 켜집니다. "
+                        f"(응답: {resp.text[:120]})")
+                return {}
             if resp.status_code == 429 and ('"errorCode":"010"' in resp.text
                                             or "Query limit exceeded" in resp.text
                                             or "쿼리 한도" in resp.text):
