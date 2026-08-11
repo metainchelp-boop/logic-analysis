@@ -31,6 +31,9 @@ on:
       unit_check:
         description: '상권 매출 단위 검증 — 지역명만 (예: 구로동). saleAmt 원문·업종별 분포·공식 화면 표기로 천원/만원 확정'
         default: ''
+      market_probe:
+        description: '플레이스 분석 시장 블록 실호출 — "지역|업종|키워드|업체명" (예: 조원동|미용·뷰티|마사지|프로힐링지압안마원). 읽기 전용'
+        default: ''
 
 jobs:
   diagnose:
@@ -986,6 +989,122 @@ jobs:
                         print(f"    '{pat}' 없음")
             except Exception as e:
                 print("  화면 조회 실패:", type(e).__name__, e)
+
+            print("=" * 68)
+            PY
+
+      # ── 플레이스 분석 「시장·상권·기회」 블록 실호출 검증 (2026-08-11) ──────
+      # ⚠️ 내부 로직을 재현하지 않고 **실제 진입점**(_place_market_block / get_search_trend)을
+      #    그대로 호출한다 — 「내부 흉내 진단은 수정 검증에 쓸 수 없다」 교훈.
+      #    특히 데이터랩 통합검색어 트렌드(/v1/datalab/search)는 이번에 처음 붙인 경로라
+      #    실응답을 한 번은 봐야 한다. 키 값은 출력하지 않는다.
+      - name: 플레이스 시장 블록 실호출
+        if: ${{ github.event.inputs.market_probe != '' }}
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          MPROBE: ${{ github.event.inputs.market_probe }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 420s
+          envs: MPROBE
+          script: |
+            docker exec -i -e MPROBE="$MPROBE" logic-analysis python3 - <<'PY'
+            import os, time, json, traceback
+
+            parts = (os.getenv("MPROBE", "") or "").split("|")
+            region   = (parts[0] if len(parts) > 0 else "").strip()
+            industry = (parts[1] if len(parts) > 1 else "").strip()
+            keyword  = (parts[2] if len(parts) > 2 else "").strip()
+            name     = (parts[3] if len(parts) > 3 else "").strip()
+            print("=" * 68)
+            print(f"입력  지역={region!r} 업종={industry!r} 키워드={keyword!r} 업체명={name!r}")
+
+            def step(t):
+                print("-" * 68); print(f"[{t}]")
+
+            try:
+                import main
+            except Exception as e:
+                print("main import 실패:", e); traceback.print_exc(); raise SystemExit(1)
+
+            combined = main._combine_region_keyword(region, keyword)
+            print(f"합성 키워드: {combined!r}")
+
+            step("1. _place_market_block 실호출 (분석 화면이 부르는 그 함수)")
+            t0 = time.time()
+            mk = main._place_market_block(
+                region=region, base_kw=keyword, combined_kw=combined,
+                industry=industry, biz_name=name, business_key="",
+                place_in={"visitor_reviews": 376, "blog_reviews": 88},
+                competitors=[{"rank": 1, "visitor_reviews": 1284, "blog_reviews": 312},
+                             {"rank": 2, "visitor_reviews": 942, "blog_reviews": 198},
+                             {"rank": 3, "visitor_reviews": 600, "blog_reviews": 100}],
+            ) or {}
+            print(f"  소요 {time.time() - t0:.1f}초")
+
+            step("2. 검색량")
+            print(f"  지역 키워드 {mk.get('keyword')!r} → {mk.get('volume')}")
+            print(f"  원 키워드   {mk.get('baseKeyword')!r} → {mk.get('baseVolume')}")
+            print(f"  경쟁 {mk.get('compIdx')!r} · 평균 광고 개수 {mk.get('adDepth')}")
+
+            step("3. 동네 상권(소상공인365)")
+            sb = mk.get("sbiz")
+            if not sb:
+                print("  없음 — 업종 미선택·행정동 매칭 실패·키 미설정 중 하나(상권 카드만 생략)")
+            else:
+                d, sl = sb.get("district") or {}, sb.get("sales") or {}
+                print(f"  행정동 {d.get('admiNm')} ({d.get('admiCd')}) · 업종 {sb.get('industryNm')!r} · 기준 {sb.get('baseYm')}")
+                print(f"  점포당 {sl.get('avgAmt')} · 시군구평균 {sl.get('guAvgAmt')} · 시도평균 {sl.get('siAvgAmt')}")
+                sh = sb.get("shops") or {}
+                print(f"  업소수 {sh.get('count')} · 대분류 종합 {(sb.get('major') or {}).get('label')} "
+                      f"{(sb.get('major') or {}).get('avgAmt')} / {(sb.get('major') or {}).get('shopCnt')}곳")
+
+            step("4. 연관·황금 키워드")
+            rel, gold = mk.get("related") or [], mk.get("golden") or []
+            print(f"  연관 {len(rel)}건")
+            for r in rel[:5]:
+                print(f"    {r.get('keyword')!r} {r.get('volume')} → {r.get('combined')!r} {r.get('combinedVolume')} "
+                      f"(경쟁 {r.get('compIdx')}, 내 순위 {r.get('rank')})")
+            print(f"  황금 {len(gold)}건")
+            for g in gold[:5]:
+                print(f"    {g.get('keyword')!r} {g.get('volume')} · {g.get('compIdx')} · {g.get('priority')}")
+
+            step("5. ⭐ 검색 트렌드 (데이터랩 통합검색어 — 이번 신규 경로)")
+            tr = mk.get("trend")
+            if not tr:
+                try:
+                    import datalab
+                    print(f"  없음 — PLACE_TREND_ENABLED={datalab.PLACE_TREND_ENABLED} "
+                          f"· 한도소진={datalab.datalab_quota_exhausted()}")
+                except Exception as e:
+                    print("  없음 (datalab 확인 실패:", e, ")")
+            else:
+                ms = tr.get("months") or []
+                print(f"  기준 키워드 {tr.get('keyword')!r} · 월별 {len(ms)}점")
+                print(f"  성수기 {tr.get('peakMonth')} · 비수기 {tr.get('lowMonth')} · 전년대비 {tr.get('yoyRate')}")
+                print(f"  요일 {[(w.get('label'), w.get('ratio')) for w in (tr.get('weekdays') or [])]}")
+                print(f"  피크 요일 {tr.get('peakWeekday')}")
+                print(f"  성별 {tr.get('gender')} · 연령 {tr.get('ages')} · 주 연령 {tr.get('topAge')}")
+
+            step("6. 리뷰 격차")
+            print(" ", json.dumps(mk.get("reviewGap"), ensure_ascii=False))
+
+            step("7. 개선 시뮬레이션·로드맵 (_place_improve_plan 실호출)")
+            import place_crawler
+            scored = place_crawler.score_place(
+                {"rank": 7, "visitor_reviews": 376, "blog_reviews": 88},
+                competitors=[{"visitor_reviews": 1284}, {"visitor_reviews": 942}])
+            ms_src = {"rank": "measured", "visitor_review": "measured", "blog_review": "measured",
+                      "relevance": "default", "review_keyword": "default", "photo": "default",
+                      "save": "default", "booking": "default", "activity": "default", "info": "default"}
+            im = main._place_improve_plan(scored.get("scores") or {}, scored.get("weights") or {},
+                                          scored.get("labels") or {}, ms_src) or {}
+            for s2 in (im.get("steps") or []):
+                print(f"  {s2.get('label')}: {s2.get('total')} (+{s2.get('delta')}) ← {', '.join(s2.get('focus') or [])}")
+            for ph in (im.get("roadmap") or []):
+                print(f"  {ph.get('phase')}: " + " / ".join(ph.get("items") or []))
 
             print("=" * 68)
             PY
