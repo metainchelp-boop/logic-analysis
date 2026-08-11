@@ -15,14 +15,16 @@ var _AS_GROUPS = function(cu) {
     var role = (cu && cu.role) || '';
     return [
         { label: null, items: [ { page: 'home', icon: '🏠', name: '대시보드' } ] },
+        /* 명칭 통일(2026-08-11 대표 지시) — 같은 기능(순위 추적)은 같은 말로:
+           쇼핑 「쇼핑 순위 추적」 / 플레이스 「지도 순위 추적」. 분석도 짝을 맞춘다. */
         { label: '쇼핑', items: [
             (role === 'manager' || role === 'superadmin') && { page: 'seo', icon: '🔍', name: 'SEO 최적화' },
             { page: 'analysis', icon: '🛒', name: '스토어 분석' },
-            { page: 'rank', icon: '📊', name: '키워드 순위', badge: 'up' }
+            { page: 'rank', icon: '📊', name: '쇼핑 순위 추적', badge: 'up' }
         ].filter(Boolean) },
         { label: '플레이스', items: [
             { page: 'place', icon: '📍', name: '플레이스 분석' },
-            { page: 'placetrack', icon: '📊', name: '플레이스 추적' }
+            { page: 'placetrack', icon: '📊', name: '지도 순위 추적' }
         ] },
         { label: '통합', items: [
             { page: 'management', icon: '📈', name: '로직 분석 (업체)' },
@@ -33,8 +35,8 @@ var _AS_GROUPS = function(cu) {
     ].filter(Boolean);
 };
 var _AS_CRUMB = {
-    home: '홈 / 대시보드', seo: '쇼핑 / SEO 최적화', analysis: '쇼핑 / 스토어 분석', rank: '쇼핑 / 키워드 순위',
-    place: '플레이스 / 플레이스 분석', placetrack: '플레이스 / 플레이스 추적',
+    home: '홈 / 대시보드', seo: '쇼핑 / SEO 최적화', analysis: '쇼핑 / 스토어 분석', rank: '쇼핑 / 쇼핑 순위 추적',
+    place: '플레이스 / 플레이스 분석', placetrack: '플레이스 / 지도 순위 추적',
     management: '통합 / 로직 분석 (업체)', learning: '통합 / 학습센터', guide: '통합 / 설명서',
     settings: '관리 / 설정', users: '관리 / 직원'
 };

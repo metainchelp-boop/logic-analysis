@@ -1538,6 +1538,28 @@ def _place_seo_analyze(req: "SeoAnalysisRequest", current_user: dict = None):
         scored = place_crawler.score_place(place_in, competitors=competitors)
         region = req.region or parsed.get("region") or ""
         business_key = _place_business_key(req, region)
+        # ── 무인 추적과 같은 키로 합류(2026-08-11) ──
+        # 화면 폼은 target_doc_id 를 보내지 않아 이 키가 **항상 nm:** 이었고, 무인 수집은
+        # place_id 가 있으면 항상 doc: 로 저장한다 → 매일 수집이 정상인데도 분석 보고서의
+        # 순위 추이·키워드 칩에는 한 점도 안 실렸다(대표 확인 — 「추적은 되는데 보고서에
+        # 반영이 안 된다」). 캡처에서 매칭된 doc_id → 추적 레지스트리 ID → 기존 nm: 기록
+        # 순으로 키를 승격해 두 세계를 하나로 잇는다(제안서 place_proposal_enrich 와 동일 규칙).
+        if business_key and not business_key.startswith("doc:"):
+            _doc = str((_matched or {}).get("doc_id") or "").strip()
+            if not _doc:
+                try:
+                    from database import find_place_track_place_id as _find_pid
+                    _doc = _find_pid(req.target_name or "", region) or ""
+                except Exception:
+                    _doc = ""
+            if _doc:
+                business_key = f"doc:{_doc}"
+            else:
+                try:
+                    from database import resolve_place_business_key as _res_nm
+                    business_key = _res_nm(req.target_name or "", region) or business_key
+                except Exception:
+                    pass
 
         # ── 캡처 판독 결과(2026-08-11) ──
         # 붙여넣은 HTML 이 아예 안 읽히면 경쟁사 0건·순위 미확인이 되는데, 화면은 그래도
@@ -1601,6 +1623,28 @@ def _place_seo_analyze(req: "SeoAnalysisRequest", current_user: dict = None):
         except Exception as e:
             logger.warning(f"[플레이스 분석] 시장 블록 생략(무시): {e}")
 
+        # ── 무인 추적 최신 기록(2026-08-11) ──
+        # 캡처가 안 읽혀 순위가 「미확인」이어도, 이 업체가 지도 순위 추적에 등록돼 있으면
+        # 매일 수집된 최신 순위가 있다. 그 값을 보고서에 함께 싣는다(출처는 화면이 「추적
+        # 기록 기준」으로 명시 — 캡처 실측과 섞지 않는다). 키워드 표기가 달라도
+        # _place_tracked_rank_lookup(제안서와 동일 규칙)이 흡수한다.
+        tracking = None
+        try:
+            if business_key:
+                _t_kw, _t_series = _place_tracked_rank_lookup(
+                    business_key, region, base_kw, combined_kw, days=90)
+                if _t_series:
+                    _t_last = _t_series[-1]
+                    tracking = {
+                        "keyword": _t_kw,                    # 실제로 잰(등록된) 키워드
+                        "rank": _t_last.get("rank"),
+                        "state": _t_last.get("state") or "",
+                        "date": _t_last.get("date"),
+                        "points": len(_t_series),            # 90일 내 기록 일수
+                    }
+        except Exception as e:
+            logger.warning(f"[플레이스 분석] 추적 기록 조회 생략(무시): {e}")
+
         # 노출 개선 시뮬레이션 · 90일 로드맵 — 가진 점수만 재가공(외부 호출 0).
         improve = {}
         try:
@@ -1658,6 +1702,8 @@ def _place_seo_analyze(req: "SeoAnalysisRequest", current_user: dict = None):
                 "default_metrics": default_metrics,
                 # 시장·상권·기회 — 검색량·소상공인365 상권·연관/황금 키워드·리뷰 격차·검색 트렌드
                 "market": market,
+                # 지도 순위 추적 최신 기록 — 캡처 미확인이어도 추적 순위를 보고서에 반영
+                "tracking": tracking,
                 # 노출 개선 시뮬레이션 · 90일 로드맵(계산 — 보장 아님)
                 "improve": improve,
                 "analyzed_at": datetime.now().isoformat(),
@@ -1803,19 +1849,26 @@ def place_proposal_enrich(req: PlaceProposalEnrichRequest,
         rank_series = []
         matched_kw = combined_kw
         if business_key:
-            for _kw_try in _keyword_lookup_candidates(region, base_kw, combined_kw):
-                rank_series = get_place_rank_history(business_key, _kw_try, days=90)
-                if rank_series:
-                    matched_kw = _kw_try
+            # 조회 키 후보 — doc: 키에 기록이 하나도 없으면(등록 직후·수집 전) 수동 분석이
+            # 남긴 nm: 키까지 시도한다(키가 달라 이력이 두 세계로 갈리는 마지막 틈 흡수).
+            _keys = [business_key]
+            if business_key.startswith("doc:"):
+                try:
+                    from database import resolve_place_business_key as _res_nm
+                    _nm = _res_nm(name, region)
+                    if _nm and _nm not in _keys:
+                        _keys.append(_nm)
+                except Exception:
+                    pass
+            for _bk in _keys:
+                # 표기 후보 → 포함 별칭 → 같은 업체 추적 키워드 순의 **단일 조회 규칙**
+                # (분석 보고서와 동일 — _place_tracked_rank_lookup 하나만 쓴다).
+                _kw, _series = _place_tracked_rank_lookup(_bk, region, base_kw, combined_kw, days=90)
+                if _series:
+                    business_key = _bk       # 실제로 기록을 가진 키를 이후 조회(지표·키워드 표)에도 사용
+                    matched_kw = _kw
+                    rank_series = _series
                     break
-            # 표기 후보로 못 찾으면 이 업체가 **실제로 추적 중인** 키워드에서 찾는다.
-            # 등록은 '성사동 칼국수맛집' 인데 제안서엔 '칼국수' 라고 적는 식의 차이가 흔하다.
-            if not rank_series:
-                _alt = _tracked_keyword_alias(business_key, base_kw, combined_kw)
-                if _alt:
-                    rank_series = get_place_rank_history(business_key, _alt, days=90)
-                    if rank_series:
-                        matched_kw = _alt
             if rank_series:
                 last = rank_series[-1]
                 rank = last.get("rank")
@@ -1944,8 +1997,8 @@ def _place_track_denied(current_user) -> bool:
     return (current_user or {}).get("role") == "viewer"
 
 
-_PLACE_TRACK_DENY_MSG = ("플레이스 순위 추적 등록·관리는 관리팀만 가능합니다. "
-                         "영업 대상 분석은 「📍 플레이스 분석」 탭을 이용해주세요. (스토어 순위 추적과 동일 기준)")
+_PLACE_TRACK_DENY_MSG = ("지도 순위 추적 등록·관리는 관리팀만 가능합니다. "
+                         "영업 대상 분석은 「📍 플레이스 분석」 탭을 이용해주세요. (쇼핑 순위 추적과 동일 기준)")
 
 
 def _keyword_lookup_candidates(region: str, base_kw: str, combined_kw: str):
@@ -1979,42 +2032,79 @@ def _keyword_lookup_candidates(region: str, base_kw: str, combined_kw: str):
     return out
 
 
-def _tracked_keyword_alias(business_key: str, base_kw: str, combined_kw: str) -> str:
-    """표기 후보로 못 찾았을 때 **이 업체가 실제로 추적 중인 키워드** 중 가까운 것을 고른다.
+# (구 _tracked_keyword_alias 는 _place_tracked_rank_lookup 에 흡수 — 규칙을 두 벌 두지 않는다.
+#  포함 판정('칼국수' ⊂ '성사동칼국수맛집' / 한 글자 제외)은 아래 _contains 가 그대로 잇는다.)
+def _place_tracked_rank_lookup(business_key: str, region: str, base_kw: str,
+                               combined_kw: str, days: int = 90):
+    """이 업체의 순위 이력에서 (실제로 잰 키워드, 시계열)을 찾는 **단일 조회 규칙**.
 
-    추적 등록 키워드는 지역 합성에 더해 사장님이 쓰는 말이 붙는 일이 흔하다
-    (등록 '성사동 칼국수맛집' vs 제안서 입력 '칼국수'). 순위 조회가 정확 일치라
-    이 한 글자 차이로 순위·추이가 통째로 안 붙는다 — 매일 수집이 정상인데도
-    제안서에는 「미확인」이 찍혔다(2026-08-08 실측: 밀밭칼국수 3위 수집 중, 추이 0점).
+    제안서(place_proposal_enrich)와 분석 보고서(_place_seo_analyze)가 각자 다른 규칙으로
+    찾다가 「추적은 매일 잘 도는데 화면엔 안 실리는」 사고가 반복됐다(2026-08-11 대표 확인 —
+    팔당원조칼제비: 등록 '미사동 하남맛집' vs 입력 '미사리맛집' → 포함 관계가 아니라
+    별칭 폴백까지 전부 빗나가 순위 None). 두 소비자가 이 함수 하나를 지나게 한다.
 
-    ⚠️ 엉뚱한 키워드를 붙이면 미노출보다 나쁘다 — **원 키워드를 품은 것만** 고른다.
-       '칼국수' ⊂ '성사동칼국수맛집' ✅ / '고기' ⊄ '구디삼겹살' ❌.
-       한 글자는 아무 데나 걸리므로 제외. 여러 개면 최근 기록 순(조회가 그 순서)."""
-    try:
-        from database import get_place_tracked_keywords
-    except Exception:
-        return ""
+    순서(좁은 매칭 → 넓은 매칭):
+      ① 표기 후보(_keyword_lookup_candidates — 합성형·원형·지역 뗀 형) 정확 일치
+      ② 같은 업체가 추적 중인 키워드 — **입력을 품은(포함) 키워드 우선**('칼국수' ⊂
+         '성사동칼국수맛집' — 구 _tracked_keyword_alias 규칙 흡수), 같은 급에서는
+         **노출 기록이 있는 키워드 우선**(추이가 실제로 그려지는 쪽. 포함 매칭이 여럿일 때
+         최근 것이 미노출이라는 이유로 노출 3위 키워드를 제치던 문제를 검증에서 확인).
+    ②는 입력과 **다른 키워드**일 수 있으나 business_key 가 이미 같은 업체로 확정된 뒤라
+    엉뚱한 업체 자료가 실릴 위험은 없다 — 무엇을 잰 숫자인지는 반환된 키워드(rankKeyword)로
+    화면이 그대로 공개한다(「추적에 등록된 '…' 기준」). 못 찾으면 ("", []).
+    """
+    if not business_key:
+        return "", []
+    from database import get_place_rank_history, get_place_tracked_keywords
 
+    tried = set()
+
+    def _hist(kw):
+        tried.add(kw)
+        try:
+            return get_place_rank_history(business_key, kw, days=days) or []
+        except Exception:
+            return []
+
+    for kw_try in _keyword_lookup_candidates(region, base_kw, combined_kw):
+        s = _hist(kw_try)
+        if s:
+            return kw_try, s
+
+    # ② 같은 업체의 추적 키워드 — 버킷 순위: 포함+노출 > 포함 > 노출 > 아무거나(각 최근 우선).
+    #    한 글자 입력은 포함 판정에서 제외(아무 데나 걸림 — 구 별칭 규칙 유지).
     def _n(s):
         return "".join(str(s or "").split()).upper()
 
     base_n, comb_n = _n(base_kw), _n(combined_kw)
-    if len(base_n) < 2 or not business_key:
-        return ""
+
+    def _contains(kn):
+        return (len(base_n) >= 2 and base_n in kn) or (bool(comb_n) and len(kn) >= 2 and kn in comb_n)
+
     try:
         rows = get_place_tracked_keywords(business_key) or []
     except Exception:
-        return ""
-    for r in rows:
+        rows = []
+    buckets = [None, None, None, None]
+    for r in rows[:8]:
         kw = (r.get("keyword") or "").strip()
-        kn = _n(kw)
-        if not kn:
+        if not kw or kw in tried:
             continue
-        # 등록이 더 긴 경우('칼국수' ⊂ '성사동칼국수맛집')와
-        # 등록이 더 짧은 경우('칼국수' ⊃ 입력 '성사동 칼국수') 양쪽을 받는다.
-        if base_n in kn or (comb_n and kn in comb_n):
-            return kw
-    return ""
+        s = _hist(kw)
+        if not s:
+            continue
+        has_rank = any(p.get("rank") for p in s)
+        idx = (0 if (_contains(_n(kw)) and has_rank) else
+               1 if _contains(_n(kw)) else
+               2 if has_rank else 3)
+        if buckets[idx] is None:
+            buckets[idx] = (kw, s)
+        if idx == 0:
+            break                      # 최상 버킷은 즉시 확정
+    for b in buckets:
+        if b:
+            return b
+    return "", []
 
 
 def _combine_region_keyword(region: str, keyword: str) -> str:
@@ -2076,6 +2166,7 @@ def place_track_targets_list(active: int = 0, current_user: dict = Depends(get_c
             )
         # 업체별 최신 순위 채움(레지스트리는 소규모라 업체 단위 조회로 충분)
         latest_cache = {}
+        from database import get_place_rank_history as _hist
         for t in targets:
             bk = _place_registry_business_key(t["place_id"], t["business_name"], t["region"])
             t["business_key"] = bk
@@ -2087,6 +2178,28 @@ def place_track_targets_list(active: int = 0, current_user: dict = Depends(get_c
             k = latest_cache[bk].get(t["keyword"])
             t["last"] = ({"rank": k["rank"], "state": k["state"], "checked_at": k["checked_at"]}
                          if k else None)
+            # 화면 전용 가산(2026-08-11 — 쇼핑 순위 추적과 같은 보드 UI):
+            # 최근 7일 시계열(스파크라인)·전일 대비 Δ·연속 미노출 일수.
+            # 러너 동기화(active=1)는 목록만 쓰므로 건너뛴다(가벼운 응답 유지).
+            if not active:
+                try:
+                    series = _hist(bk, t["keyword"], days=7) or []
+                except Exception:
+                    series = []
+                t["series"] = series
+                delta = None
+                if len(series) >= 2:
+                    _p, _c = series[-2], series[-1]
+                    if _p.get("rank") is not None and _c.get("rank") is not None:
+                        delta = _p["rank"] - _c["rank"]     # +N = 상승(숫자 감소)
+                t["delta"] = delta
+                _ud = 0
+                for _pt in reversed(series):
+                    if _pt.get("state") == "미노출":
+                        _ud += 1
+                    else:
+                        break
+                t["unexposed_days"] = _ud
         return {"success": True, "data": {"targets": targets}}
     except Exception as e:
         logger.error(f"플레이스 추적 목록 조회 실패: {e}")
@@ -2115,10 +2228,20 @@ def place_track_targets_create(req: PlaceTrackCreateRequest,
             return {"success": False, "error": "추적 키워드를 1개 이상 입력해주세요."}
         if len(kws) > 10:
             return {"success": False, "error": "키워드는 업체당 최대 10개까지 등록할 수 있습니다."}
+        # place_id 서버 검증(2026-08-11) — 화면 extractPlaceId 의 옛 폴백이 등록 시각
+        # (YYYYMMDDHHMM)을 ID 로 오인해 저장한 실사례(흑해·금정산성). 잘못된 ID 는
+        # 러너 정확 매칭을 영영 빗나가게 하고 self-heal 도 못 고치므로(빈 값만 채움)
+        # 형식이 아니면 저장 전에 거절한다(구버전 화면 방어 — FE 와 이중).
+        pid = (req.place_id or "").strip()
+        if pid:
+            from database import _looks_like_timestamp_place_id
+            if (not pid.isdigit()) or len(pid) < 5 or _looks_like_timestamp_place_id(pid):
+                return {"success": False,
+                        "error": "플레이스 ID 형식이 아닙니다 — 네이버 지도 업체 페이지 주소나 숫자 ID를 넣거나, 비워두면 업체명으로 찾습니다."}
         from database import add_place_track_targets
         added = add_place_track_targets(
             business_name=name, region=region, keywords=kws,
-            place_id=(req.place_id or "").strip(),
+            place_id=pid,
             user_id=(current_user or {}).get("id", 0),
         )
         return {"success": True, "data": {"added": added, "keywords": kws}}

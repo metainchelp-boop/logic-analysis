@@ -388,7 +388,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                             }));
                         } catch (e) {}
                         onOpenRankTab();
-                    }}>📊 키워드 순위 탭에서 관리 →</button>}
+                    }}>📊 쇼핑 순위 추적 탭에서 관리 →</button>}
                     {!analysisOnly && canEdit !== false && <button className="btn btn-primary btn-sm" onClick={() => setShowAddForm(!showAddForm)}>
                         {showAddForm ? '취소' : '+ 상품 등록'}
                     </button>}

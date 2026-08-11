@@ -106,8 +106,8 @@ window.PlaceClientPanel = function PlaceClientPanel(props) {
         React.createElement('div', { style: { display: 'flex', gap: 10, flexWrap: 'wrap', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 12, padding: '12px 16px', alignItems: 'center' } },
             React.createElement('span', { style: { fontSize: 13, color: '#1d4ed8', fontWeight: 700 } }, '📍 플레이스 업체'),
             React.createElement('span', { style: { fontSize: 12.5, color: '#475569', flex: 1, minWidth: 200 } },
-                '새 분석은 「플레이스 분석」 탭에서, 무인 순위 추적 등록은 「플레이스 추적」 탭에서 합니다. 결과는 이 화면에 모입니다.'),
+                '새 분석은 「플레이스 분석」 탭에서, 무인 순위 추적 등록은 「지도 순위 추적」 탭에서 합니다. 결과는 이 화면에 모입니다.'),
             React.createElement('button', { onClick: function() { goPlaceTab('place'); }, style: { border: '1px solid #3b82f6', background: '#fff', color: '#1d4ed8', borderRadius: 9, padding: '7px 13px', fontSize: 12.5, fontWeight: 800, cursor: 'pointer' } }, '📍 플레이스 분석 →'),
-            React.createElement('button', { onClick: function() { goPlaceTab('placetrack'); }, style: { border: '1px solid #3b82f6', background: '#fff', color: '#1d4ed8', borderRadius: 9, padding: '7px 13px', fontSize: 12.5, fontWeight: 800, cursor: 'pointer' } }, '📊 플레이스 추적 →'))
+            React.createElement('button', { onClick: function() { goPlaceTab('placetrack'); }, style: { border: '1px solid #3b82f6', background: '#fff', color: '#1d4ed8', borderRadius: 9, padding: '7px 13px', fontSize: 12.5, fontWeight: 800, cursor: 'pointer' } }, '📊 지도 순위 추적 →'))
     );
 };

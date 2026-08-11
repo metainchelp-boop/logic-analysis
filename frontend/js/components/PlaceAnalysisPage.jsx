@@ -20,6 +20,7 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
     var _kin = useState('');          var kwInput = _kin[0], setKwInput = _kin[1];
     var _sel = useState('');          var selectedKw = _sel[0], setSelectedKw = _sel[1];
     var _html = useState('');         var placeHtml = _html[0], setPlaceHtml = _html[1];
+    var _hx = useState(false);        var htmlExpanded = _hx[0], setHtmlExpanded = _hx[1];
     var _ind = useState('');          var industry = _ind[0], setIndustry = _ind[1];
 
     // 담당자 보완 지표
@@ -129,8 +130,12 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
             setLoading(false);
             if (res && res.success && res.data) {
                 setResult(res.data);
-                setChartKeyword(kw);
-                loadHistory(res.data.business_key, kw, chartDays);
+                // 추이 차트 초기 키워드 — 서버가 찾아준 「실제 기록이 있는 키워드」(tracking.keyword)를
+                // 우선한다. 조회 규칙이 입력 키워드부터 시도하므로 입력에 기록이 있으면 그대로이고,
+                // 등록 표기가 다른 업체(예: 입력 '칼국수' vs 등록 '성사동 칼국수맛집')만 바뀐다.
+                var chartKw = (res.data.tracking && res.data.tracking.keyword) || kw;
+                setChartKeyword(chartKw);
+                loadHistory(res.data.business_key, chartKw, chartDays);
                 loadKeywords(res.data.business_key);
                 if (!opts.silent) {
                     try { window.scrollTo({ top: 260, behavior: 'smooth' }); } catch(e){}
@@ -224,82 +229,111 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
 
     var bookmarklet = "javascript:(function(){try{var h=document.documentElement.outerHTML;navigator.clipboard.writeText(h).then(function(){alert('\\u2705 \\ud50c\\ub808\\uc774\\uc2a4 HTML '+Math.round(h.length/1024)+'KB \\ubcf5\\uc0ac \\uc644\\ub8cc! \\ub85c\\uc9c1\\ubd84\\uc11d \\uce78\\uc5d0 \\ubd99\\uc5ec\\ub123\\uc73c\\uc138\\uc694.');}).catch(function(){var t=document.createElement('textarea');t.value=h;document.body.appendChild(t);t.select();document.execCommand('copy');document.body.removeChild(t);alert('\\u2705 HTML \\ubcf5\\uc0ac \\uc644\\ub8cc!');});}catch(e){alert('\\u274c \\ubcf5\\uc0ac \\uc2e4\\ud328: '+e.message);}})();";
 
-    // ── 입력 섹션 ──
+    // ── 입력 섹션 — 스토어 분석(SearchBar)과 **같은 배치·구도**(2026-08-11 대표 지시) ──
+    // 행 구성·라벨 스타일·접힘 textarea(포커스 시 확장·용량 배지·초기화)·북마클릿 파란 밴드·
+    // 우측 「분석 실행」 버튼 전부 SearchBar 와 동일. 플레이스만의 칸(지역·업종·키워드 칩)은
+    // 같은 시각 언어 안에 추가된다 — 내용이 다를 뿐 쓰는 법이 같아 보이는 것이 목적.
+    var _lbl = { display: 'block', fontSize: 11, fontWeight: 600, color: '#6b7280', marginBottom: 4, letterSpacing: '0.02em' };
+    var _req = React_.createElement('span', { style: { color: '#dc2626' } }, ' *');
+    var _hintTxt = function(t) { return React_.createElement('span', { style: { fontSize: 10, color: '#94a3b8', fontWeight: 400, marginLeft: 6 } }, t); };
+    var canSubmit = !!(businessName.trim() && (selectedKw || keywords[0]) && (placeHtml || '').trim().length >= 100);
     var renderInput = function() {
         return (
             React_.createElement('div', { className: 'search-section' },
-                React_.createElement('div', { className: 'ss-head' },
-                    React_.createElement('div', { className: 'ic' }, '📍'),
-                    React_.createElement('div', null,
-                        React_.createElement('h3', null, '플레이스 분석 실행'),
-                        React_.createElement('div', { className: 'sub' }, '오프라인·지역 업종 — 상품 HTML 대신 ', React_.createElement('b', null, '플레이스 검색결과'), '를 캡처해 분석합니다'))),
-                React_.createElement('div', { className: 'frm' },
-                    // 1행: 업체명 + 키워드
-                    React_.createElement('div', { className: 'grid-in' },
-                        React_.createElement('div', { className: 'field' },
-                            React_.createElement('label', null, '업체명 ', React_.createElement('span', { className: 'req' }, '*')),
-                            React_.createElement('input', { className: 'inp' + (businessName ? ' filled' : ''), value: businessName,
-                                onChange: function(e) { setBusinessName(e.target.value); }, placeholder: '예: 성수 감성커피' })),
-                        React_.createElement('div', { className: 'field' },
-                            React_.createElement('label', null, '추적 키워드 ', React_.createElement('span', { className: 'req' }, '*'),
-                                ' ', React_.createElement('span', { style: { color: '#94a3b8', fontWeight: 400 } }, '(최대 10개 · 칩 클릭=분석 대상 선택)')),
-                            React_.createElement('div', { className: 'kwbox' },
+                React_.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
+                    // 1행: 업체명 + 추적 키워드 (스토어 1행 = 업체명 + 키워드와 동일 구도)
+                    React_.createElement('div', { style: { display: 'grid', gridTemplateColumns: '240px 1fr', gap: 10, alignItems: 'end' } },
+                        React_.createElement('div', null,
+                            React_.createElement('label', { style: _lbl }, '업체명', _req),
+                            React_.createElement('input', { className: 'search-input', type: 'text', value: businessName,
+                                placeholder: '보고서 표지용 (필수)',
+                                onChange: function(e) { setBusinessName(e.target.value); },
+                                style: { width: '100%', fontSize: 13 } })),
+                        React_.createElement('div', null,
+                            React_.createElement('label', { style: _lbl }, '추적 키워드', _req,
+                                _hintTxt('최대 10개 · 칩 클릭 = 분석 대상 선택')),
+                            React_.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6,
+                                minHeight: 48, padding: '6px 12px', borderRadius: 10,
+                                border: '2px solid ' + (keywords.length ? '#a7f3d0' : '#e5e7eb'),
+                                background: keywords.length ? '#f0fdf4' : '#f9fafb' } },
                                 keywords.map(function(kw) {
                                     return React_.createElement('span', { key: kw, className: 'kwtag' + (kw === selectedKw ? ' sel' : ''),
-                                        onClick: function() { setSelectedKw(kw); }, title: '클릭 = 이 키워드를 분석 대상으로' },
+                                        onClick: function() { setSelectedKw(kw); }, title: '클릭 = 이 키워드를 분석 대상으로', style: { cursor: 'pointer' } },
                                         kw, React_.createElement('span', { className: 'x', onClick: function(e) { e.stopPropagation(); removeKeyword(kw); } }, '×'));
                                 }),
-                                React_.createElement('input', { className: 'kwin', value: kwInput, placeholder: keywords.length ? '키워드 추가…' : '예: 성수동 카페 (Enter)',
+                                React_.createElement('input', { value: kwInput, placeholder: keywords.length ? '키워드 추가…' : '예: 성수동 카페 (Enter)',
                                     onChange: function(e) { setKwInput(e.target.value); },
-                                    onKeyDown: function(e) { if (e.key === 'Enter') { e.preventDefault(); addKeyword(kwInput); } } })))),
-                    // 2행: 지역 + 캡처
-                    React_.createElement('div', { className: 'grid-in' },
-                        React_.createElement('div', { className: 'field' },
-                            React_.createElement('label', null, '지역 ',
-                                React_.createElement('span', { style: { color: '#94a3b8', fontWeight: 400 } }, '(동 이름 — 맞춤제안서와 같게)')),
-                            React_.createElement('input', { className: 'inp' + (region ? ' filled' : ''), value: region,
-                                onChange: function(e) { setRegion(e.target.value); }, placeholder: '예: 성수동' }),
-                            // 입력하는 자리에서 「무엇이 조회되는지」를 바로 보여준다.
-                            // ⚠️ 지역 칸은 검색어에 그대로 붙는 게 아니라, 키워드에 그 동네가 없을 때만 붙는다
-                            //    (utils.placeCombineKeyword — 서버와 같은 규칙). 직원이 결과를 미리 보고
-                            //    적게 해서 「해보기 전엔 모른다」를 없앤다.
-                            renderKeywordPreview()),
-                        // 업종 — 소상공인365 동네 상권(점포당 매출·업소수·벤치마크) 매칭키.
-                        // 맞춤제안서와 **같은 13종 목록**을 쓴다(같은 값이어야 같은 상권이 잡힌다).
-                        React_.createElement('div', { className: 'field' },
-                            React_.createElement('label', null, '업종 ',
-                                React_.createElement('span', { style: { color: '#94a3b8', fontWeight: 400 } }, '(선택 — 동네 상권 분석용)')),
-                            React_.createElement('select', { className: 'inp' + (industry ? ' filled' : ''), value: industry,
-                                onChange: function(e) { setIndustry(e.target.value); } },
-                                React_.createElement('option', { value: '' }, '오프라인 업종 선택 (상권분석 가능 업종)'),
+                                    onKeyDown: function(e) { if (e.nativeEvent && e.nativeEvent.isComposing) return; if (e.key === 'Enter') { e.preventDefault(); addKeyword(kwInput); } },
+                                    style: { flex: 1, minWidth: 110, border: 0, outline: 'none', background: 'transparent', fontSize: 13, fontFamily: 'inherit', padding: '4px 0' } })))),
+                    // 2행: 지역 + 업종 (플레이스 고유 칸 — 같은 라벨·인풋 언어로)
+                    React_.createElement('div', { style: { display: 'grid', gridTemplateColumns: '240px 240px 1fr', gap: 10, alignItems: 'end' } },
+                        React_.createElement('div', null,
+                            React_.createElement('label', { style: _lbl }, '지역', _hintTxt('동 이름 — 맞춤제안서와 같게')),
+                            React_.createElement('input', { className: 'search-input', type: 'text', value: region,
+                                placeholder: '예: 성수동',
+                                onChange: function(e) { setRegion(e.target.value); },
+                                style: { width: '100%', fontSize: 13 } })),
+                        // 업종 — 소상공인365 동네 상권 매칭키(맞춤제안서와 같은 13종 목록).
+                        React_.createElement('div', null,
+                            React_.createElement('label', { style: _lbl }, '업종', _hintTxt('선택 — 동네 상권 분석용')),
+                            React_.createElement('select', { className: 'search-input', value: industry,
+                                onChange: function(e) { setIndustry(e.target.value); },
+                                style: { width: '100%', fontSize: 13 } },
+                                React_.createElement('option', { value: '' }, '오프라인 업종 선택'),
                                 INDUSTRY_OPTIONS.map(function(o) {
                                     return React_.createElement('option', { key: o, value: o }, o);
                                 }))),
-                        React_.createElement('div', { className: 'field' },
-                            React_.createElement('label', null, '플레이스 검색결과 캡처 ', React_.createElement('span', { className: 'req' }, '*'),
-                                ' ', React_.createElement('span', { style: { color: '#94a3b8', fontWeight: 400 } }, '(선택한 키워드의 검색결과)')),
-                            placeHtml
-                                ? React_.createElement('div', { className: 'capbox' },
-                                    React_.createElement('span', { className: 'big' }, '✓ 검색결과 HTML 붙여넣음'),
-                                    React_.createElement('span', { className: 'kb' }, htmlKB + ' KB' + (organicHint ? (' · ' + organicHint) : '')),
-                                    React_.createElement('button', { type: 'button', className: 're', onClick: resetCapture }, '↻ 초기화'))
-                                : React_.createElement('textarea', { className: 'inp', style: { minHeight: 44 }, value: placeHtml,
+                        React_.createElement('div', null)),
+                    // 「이렇게 조회됩니다」 미리보기 — 지역·키워드 합성 결과를 보내기 전에 보여준다
+                    // (utils.placeCombineKeyword — 서버와 같은 규칙, 「해보기 전엔 모른다」 제거).
+                    renderKeywordPreview(),
+                    // 3행: 캡처 HTML + 분석 실행 (스토어 2행 = HTML + 버튼과 동일 구도)
+                    React_.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr auto', gap: 10, alignItems: 'end' } },
+                        React_.createElement('div', null,
+                            React_.createElement('label', { style: _lbl }, 'HTML 붙여넣기', _req,
+                                _hintTxt('플레이스 검색결과 페이지 HTML → 순위·경쟁사·리뷰 자동 추출')),
+                            React_.createElement('div', { style: { position: 'relative' } },
+                                React_.createElement('textarea', {
+                                    placeholder: '선택한 키워드의 플레이스 검색결과 HTML 전체를 붙여넣으세요 (필수) — 북마클릿 클릭 한 번으로 복사됩니다.',
+                                    value: placeHtml,
                                     onChange: function(e) { setPlaceHtml(e.target.value); },
-                                    placeholder: '네이버 플레이스 검색결과 페이지 HTML을 붙여넣으세요 (북마클릿 사용)' }))),
-                    // 북마클릿
-                    React_.createElement('div', { className: 'bmk' },
+                                    onFocus: function() { setHtmlExpanded(true); },
+                                    onBlur: function() { if (!placeHtml) setHtmlExpanded(false); },
+                                    style: { width: '100%', height: htmlExpanded ? 120 : 44, padding: '10px 14px', boxSizing: 'border-box',
+                                             border: '2px solid ' + (placeHtml ? '#a7f3d0' : '#e5e7eb'),
+                                             borderRadius: 10, fontSize: 12, fontFamily: 'inherit', outline: 'none',
+                                             background: placeHtml ? '#f0fdf4' : '#f9fafb', resize: 'none', transition: 'all 0.2s',
+                                             overflow: htmlExpanded ? 'auto' : 'hidden' } }),
+                                placeHtml && React_.createElement('div', { style: { position: 'absolute', top: 8, right: 8, display: 'flex', alignItems: 'center', gap: 8 } },
+                                    React_.createElement('span', { style: { fontSize: 10, color: '#059669', fontWeight: 600, background: '#ecfdf5', padding: '2px 8px', borderRadius: 10 } },
+                                        htmlKB + ' KB' + (organicHint ? (' · ' + organicHint) : '')),
+                                    React_.createElement('button', { type: 'button',
+                                        onClick: function() { resetCapture(); setHtmlExpanded(false); },
+                                        style: { border: 'none', background: '#fef2f2', color: '#dc2626', fontSize: 11, padding: '2px 8px', borderRadius: 10, cursor: 'pointer', fontWeight: 600 } },
+                                        '초기화')))),
+                        React_.createElement('button', { className: 'btn-search', disabled: loading || !canSubmit,
+                            onClick: function() { runAnalyze(); },
+                            title: canSubmit ? '' : '업체명·키워드·HTML 3가지를 모두 입력하세요',
+                            style: { height: 44, marginBottom: 0, opacity: (loading || !canSubmit) ? 0.55 : 1 } },
+                            loading
+                                ? React_.createElement(React_.Fragment, null, React_.createElement('span', { className: 'spinner', style: { width: 16, height: 16, borderWidth: 2 } }), ' 분석 중...')
+                                : '분석 실행')),
+                    // 4행: 북마클릿 안내 — 스토어와 같은 파란 밴드
+                    React_.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12, padding: '8px 14px',
+                        background: '#eff6ff', borderRadius: 10, border: '1px solid #bfdbfe' } },
                         React_.createElement('span', { style: { fontSize: 16 } }, '🔖'),
-                        React_.createElement('div', { style: { flex: 1, minWidth: 220 } },
-                            React_.createElement('b', null, '북마클릿(가장 쉬움)'), ' — 오른쪽 파란 버튼을 브라우저 북마크바로 ',
-                            React_.createElement('b', null, '드래그'), '해 두면, 네이버 플레이스 ', React_.createElement('b', null, '검색결과 페이지에서 클릭 한 번'), '으로 HTML이 복사됩니다 → 위 칸에 붙여넣기'),
-                        React_.createElement('a', { className: 'drag', href: bookmarklet, draggable: 'true',
-                            onClick: function(e) { e.preventDefault(); try { toast.info('클릭하지 말고 브라우저 북마크바로 드래그해서 놓으세요. (북마크바: Ctrl+Shift+B)'); } catch(er){} } },
-                            '📎 플레이스 캡처 (북마크바로 드래그)')),
-                    // 실행
-                    React_.createElement('div', { className: 'runrow' },
-                        React_.createElement('button', { className: 'btn btn-primary', disabled: loading, onClick: function() { runAnalyze(); } },
-                            loading ? React_.createElement(React_.Fragment, null, React_.createElement('span', { className: 'spin' }), ' 분석 중…') : '📍 분석 실행'),
-                        React_.createElement('span', { className: 'hint' }, '담당자 보완 지표(저장수·예약·소식 등)는 결과 화면에서 바로 입력·저장')))
+                        React_.createElement('div', { style: { flex: 1, minWidth: 200 } },
+                            React_.createElement('span', { style: { fontSize: 12, fontWeight: 700, color: '#1e40af' } }, '★ 가장 쉬운 방법: 북마클릿 사용'),
+                            React_.createElement('span', { style: { fontSize: 11, color: '#3730a3', marginLeft: 8 } },
+                                '아래 버튼을 북마크바로 ', React_.createElement('strong', null, '드래그'),
+                                ' → 네이버 플레이스 검색결과에서 클릭 한 번에 HTML 복사')),
+                        React_.createElement('a', { href: bookmarklet, draggable: 'true',
+                            onClick: function(e) { e.preventDefault(); try { toast.info('클릭하지 말고 브라우저 북마크바로 드래그해서 놓으세요. (북마크바: Ctrl+Shift+B)'); } catch(er){} },
+                            style: { display: 'inline-block', padding: '6px 14px', background: '#1e40af', color: '#fff', fontWeight: 700,
+                                     fontSize: 12, borderRadius: 6, textDecoration: 'none', cursor: 'grab',
+                                     boxShadow: '0 2px 4px rgba(0,0,0,0.1)', whiteSpace: 'nowrap', flexShrink: 0 } },
+                            '📎 플레이스 캡처 (북마크바로 드래그)'),
+                        React_.createElement('span', { style: { fontSize: 10, color: '#64748b', flexShrink: 0 } }, '← 이 파란 버튼을 위쪽 북마크바에 끌어다 놓으세요')))
             )
         );
     };
@@ -398,15 +432,24 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
         var vol = m.volume;
         var rankTxt = (result.rank_state === '노출' && result.rank) ? (result.rank + '위')
             : (result.rank_state === '미노출' ? '순위 밖' : null);
+        var rankSub = (result.rank_state === '미확인' ? '캡처 재시도 필요' : ('‘' + (result.keyword || '') + '’ 오가닉 기준'));
+        var rankHint = '광고 제외';
+        // 캡처로 못 잰 회차(미확인)라도 이 업체가 지도 순위 추적에 등록돼 있으면 매일 수집된
+        // 최신 순위가 있다 — 그 값을 대신 싣고 **출처를 명시**한다(캡처 실측과 섞지 않는다).
+        // 「추적은 매일 되는데 보고서엔 반영이 안 된다」(2026-08-11 대표 확인) 해소 지점.
+        var trk = result.tracking || null;
+        if (!rankTxt && trk && (trk.rank != null || trk.state === '미노출')) {
+            rankTxt = (trk.rank != null) ? (trk.rank + '위') : '순위 밖';
+            rankSub = '지도 순위 추적 기록 · ‘' + (trk.keyword || '') + '’' + (trk.date ? (' · ' + trk.date) : '');
+            rankHint = '추적 기록';
+        }
         var cells = [
             { k: '월 검색량', v: (vol != null ? vol.toLocaleString() + '회' : null),
               s: (m.baseVolume != null && m.baseKeyword)
                     ? ('전체 시장 ‘' + m.baseKeyword + '’ ' + m.baseVolume.toLocaleString() + '회')
                     : ('‘' + (m.keyword || result.keyword || '') + '’ 기준'),
               hint: '검색광고 실측' },
-            { k: '현재 노출 순위', v: rankTxt,
-              s: (result.rank_state === '미확인' ? '캡처 재시도 필요' : ('‘' + (result.keyword || '') + '’ 오가닉 기준')),
-              hint: '광고 제외' },
+            { k: '현재 노출 순위', v: rankTxt, s: rankSub, hint: rankHint },
             { k: '동네 상권 점포당', v: (sb && sb.sales) ? manwon(sb.sales.avgAmt) : null,
               s: (sb && sb.sales && sb.sales.guAvgAmt)
                     ? ('시군구 평균 대비 ' + (pctStr(sb.sales.avgAmt, sb.sales.guAvgAmt) || '-'))
@@ -938,7 +981,7 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
                         React_.createElement('div', { className: 'rt-desc' },
                             React_.createElement('b', null, '이 지역에서 실제로 검색되는데 아직 순위가 없는'), ' 키워드만 제시합니다. 이미 노출 중인 키워드는 「지킬 것」이라 뺐고, ',
                             React_.createElement('b', null, '지역 결합 검색량이 확인되지 않은'), ' 키워드도 뺐습니다. 그대로 ',
-                            React_.createElement('b', null, '플레이스 추적'), '에 등록하면 다음 날부터 순위 기록이 쌓입니다.'),
+                            React_.createElement('b', null, '지도 순위 추적'), '에 등록하면 다음 날부터 순위 기록이 쌓입니다.'),
                         React_.createElement('div', { className: 'twrap' },
                             React_.createElement('table', null,
                                 React_.createElement('thead', null, React_.createElement('tr', null,
