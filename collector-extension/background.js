@@ -23,7 +23,11 @@ const CFG = {
   //    종전 80(API 상한)은 사람이 안 만드는 모양이라, 모양을 맞추는 쪽을 택했다.
   //    ⇒ 페이지 이동 횟수가 4 → 8 로 늘어나므로 아래 간격으로 시간당 총량을 맞춘다.
   //      (페이지 이동은 그 자체로 ~3초가 걸려 API 호출보다 원래 느리다)
-  pageSize: 40,          // 한 페이지 상품 수 (실제 화면과 동일)
+  // pagingSize=80 은 화면의 「80개씩 보기」 옵션과 같은 모양이라 사람 범위 안이다.
+  //    300위 = 8페이지 → 4페이지로 **이동 횟수 절반**(2026-08-11, 총량이 차단 원인으로
+  //    확정된 뒤의 감축). 페이지가 80을 안 받아주고 40씩만 그려도 아래 수집 루프가
+  //    '실제 받은 개수 누적'이라 그대로 8페이지로 자동 적응한다(어느 쪽이든 순위 무손상).
+  pageSize: 80,          // 한 페이지 상품 수 (「80개씩 보기」와 동일)
   maxRank: 300,          // 300위까지 — 실제 받은 개수로 누적해 판단(고정 페이지 수 아님)
   maxPages: 10,          // 안전 상한(빈 페이지·무한 루프 방지)
   readTries: 12,         // 페이지 판독 재시도 횟수(값이 나올 때까지)
@@ -403,6 +407,7 @@ function toProduct(p, rank) {
  *     고정 계산은 순위를 통째로 어긋나게 만든다. 누적이면 어떤 경우에도 맞다. */
 async function collectKeyword(keyword) {
   const products = [];
+  const seenIds = new Set();   // 페이지 경계가 겹쳐도 같은 상품을 두 번 세지 않기 위함
   let total = 0;
   const pages = CFG.maxPages;
   for (let i = 1; i <= pages; i++) {
@@ -416,9 +421,13 @@ async function collectKeyword(keyword) {
       chrome.storage.local.set({ rawSample: { keyword, at: new Date().toISOString(), item: list[0] } });
     }
     for (let idx = 0; idx < list.length; idx++) {
-      const rank = products.length + 1;
-      if (rank > CFG.maxRank) break;
-      const mapped = toProduct(list[idx], rank);
+      if (products.length >= CFG.maxRank) break;
+      const mapped = toProduct(list[idx], products.length + 1);
+      // 페이지네이션이 겹치게 주는 경우(pagingSize 를 서버가 다르게 해석 등) 순위가
+      // 중복·어긋나지 않게, 이미 본 상품은 건너뛴다(id 없는 상품은 그대로 통과).
+      if (mapped.productId && seenIds.has(mapped.productId)) continue;
+      if (mapped.productId) seenIds.add(mapped.productId);
+      mapped.rank = products.length + 1;   // 건너뛴 자리를 메운 최종 순위
       // ⚠️ 스토어명(mallName)이 13.3% 비어 있다(2026-08-11 서버 실측). 판독 원천이
       //    API 응답 → 페이지 데이터로 바뀌면서 일부 상품(가격비교 추정)이 다른 필드에
       //    스토어명을 싣는 것으로 보이는데, **필드 이름을 추측해서 붙이면 안 된다**
@@ -436,7 +445,9 @@ async function collectKeyword(keyword) {
       products.push(mapped);
     }
     if (products.length >= CFG.maxRank) break;   // 목표 깊이 도달
-    if (list.length < CFG.pageSize) break;       // 마지막 페이지
+    // 마지막 페이지 판정 — 설정값(80)이 아니라 화면 최소 페이지 크기(40) 미만일 때만.
+    // 페이지가 pagingSize=80 을 무시하고 40씩 그려도 여기서 끊기지 않고 다음 장으로 간다.
+    if (list.length < 40) break;
     if (i < pages) await sleep(jitter());
   }
   return { total, products };
