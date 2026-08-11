@@ -31,6 +31,23 @@ def _get_conn() -> sqlite3.Connection:
     return conn
 
 
+def _looks_like_timestamp_place_id(v) -> bool:
+    """place_id 로 저장된 값이 타임스탬프(YYYYMMDDHHMM)인지 판정.
+
+    화면 extractPlaceId 의 「아무 7자리+ 숫자」 폴백이 등록 시각을 ID 로 오인해 저장한
+    실사례 정리용(2026-08-11 — 흑해 202608111048 ×2 · 금정산성 202608111049).
+    네이버 플레이스 doc_id 는 통상 7~11자리라 12자리 + 연월일시분 파싱 성공을
+    타임스탬프로 본다(오탐 방어: 연도 2020~2035 범위까지 확인)."""
+    s = str(v or "").strip()
+    if len(s) != 12 or not s.isdigit():
+        return False
+    try:
+        dt = datetime.strptime(s, "%Y%m%d%H%M")
+        return 2020 <= dt.year <= 2035
+    except ValueError:
+        return False
+
+
 def init_db():
     """데이터베이스 초기화 - 테이블 생성"""
     conn = _get_conn()
@@ -203,6 +220,26 @@ def init_db():
                 conn.commit()
             except Exception:
                 pass  # 이미 존재하면 무시
+        # 타임스탬프가 place_id 로 잘못 저장된 레지스트리 행 정리(2026-08-11) — 화면의
+        # extractPlaceId 가 「아무 7자리+ 숫자」를 ID 로 받아 등록 시각(YYYYMMDDHHMM)이
+        # ID 로 들어간 실사례(흑해 202608111048 ×2 · 금정산성 202608111049). 잘못된 값이
+        # 남아 있으면 러너가 그 ID 로 정확 매칭을 시도해 영영 못 찾고, self-heal 은
+        # **빈 값만** 채우므로 스스로 낫지 않는다 → 여기서 비워 self-heal 재충전을 연다.
+        # 자연 멱등 — 조건에 걸리는 행이 없으면 0건.
+        try:
+            _rows = conn.execute(
+                "SELECT id, place_id FROM place_track_target "
+                "WHERE place_id IS NOT NULL AND length(place_id) >= 12").fetchall()
+            _fixed = 0
+            for _r in _rows:
+                if _looks_like_timestamp_place_id(_r["place_id"]):
+                    conn.execute("UPDATE place_track_target SET place_id = '' WHERE id = ?", (_r["id"],))
+                    _fixed += 1
+            if _fixed:
+                conn.commit()
+                logger.info(f"place_track_target 타임스탬프형 place_id {_fixed}건 정리(빈 값 → self-heal 대기)")
+        except Exception:
+            pass
         logger.info("✅ 데이터베이스 초기화 완료")
     except Exception as e:
         logger.error(f"DB 초기화 실패: {e}")

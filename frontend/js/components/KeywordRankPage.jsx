@@ -511,7 +511,7 @@ window.KeywordRankPage = function KeywordRankPage(props) {
 
     return React.createElement('div', { style: _krWrap },
         React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 16, flexWrap: 'wrap' } },
-            React.createElement('h1', { style: { margin: 0, fontSize: 21, fontWeight: 800, color: '#0f172a', letterSpacing: '-.02em' } }, '📊 키워드 순위'),
+            React.createElement('h1', { style: { margin: 0, fontSize: 21, fontWeight: 800, color: '#0f172a', letterSpacing: '-.02em' } }, '📊 쇼핑 순위 추적'),
             React.createElement('span', { style: { fontSize: 12.5, color: '#94a3b8' } },
                 selected ? '업체 상세 — 키워드별 추적 현황' : (isViewer ? '내 영업 대상 업체별 순위 추적 현황' : '광고주 업체별 순위 추적 현황') + ' · 매일 아침 자동 기록')),
         selected ? renderDetail() : renderList(),
