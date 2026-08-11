@@ -97,12 +97,10 @@ window.PlaceTrackingPage = function PlaceTrackingPage(props) {
     useEffect(function () { load(); }, []);
 
     // ==================== 등록 폼 ====================
-    function combinedPreview(kw) {
-        var reg = (region || '').trim();
-        if (!reg) return kw;
-        var norm = function (s) { return String(s).toLowerCase().replace(/\s+/g, ''); };
-        return norm(kw).indexOf(norm(reg)) >= 0 ? kw : (reg + ' ' + kw);
-    }
+    // ⚠️ 합성 규칙은 utils.js `placeCombineKeyword` 하나만 쓴다(서버 규칙과 1:1).
+    //    종전엔 여기서 따로 계산해 '미사동'+'미사리맛집' → '미사동 미사리맛집' 을 미리보기가
+    //    그대로 보여줬다(2026-08-11 직원 신고). 규칙을 두 벌 두면 반드시 어긋난다.
+    function combinedPreview(kw) { return placeCombineKeyword(region, kw); }
     function addKw() {
         var v = (kwInput || '').trim().replace(/,$/, '');
         if (!v) return;

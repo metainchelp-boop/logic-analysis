@@ -188,6 +188,32 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
 
     var resetCapture = function() { setPlaceHtml(''); };
 
+    // 「이렇게 조회됩니다」 미리보기 — 지역·키워드가 어떻게 합쳐지는지 입력하는 자리에서 보여준다.
+    // ⚠️ 합성은 utils.placeCombineKeyword(서버 `_combine_region_keyword` 와 1:1) 하나만 쓴다.
+    // ⚠️ 상권은 **행정동 단위**라 동까지 적어야 붙는다 — 안 붙는 이유를 미리 알려 준다
+    //    (조용히 빠지면 「고장인지 데이터가 없는 건지」 직원이 구분 못 한다).
+    var renderKeywordPreview = function() {
+        var kw = (selectedKw || keywords[0] || '').trim();
+        if (!kw) return null;
+        var combined = placeCombineKeyword(region, kw);
+        var joined = combined !== kw;                       // 지역이 앞에 붙었나
+        var dong = placeRegionHasDong(region);
+        return React_.createElement('div', { style: { marginTop: 7, fontSize: 12, lineHeight: 1.7 } },
+            React_.createElement('div', { style: {
+                background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, padding: '7px 10px', color: '#1d4ed8' } },
+                '🔍 이렇게 조회됩니다 ',
+                React_.createElement('b', { style: { fontSize: 13 } }, combined),
+                React_.createElement('span', { style: { color: '#3b82f6', marginLeft: 6 } },
+                    joined ? '(지역을 붙였습니다)' : '(키워드에 지역이 이미 있어 그대로)')),
+            !region ? null : React_.createElement('div', { style: {
+                marginTop: 5, padding: '6px 10px', borderRadius: 8,
+                background: dong ? '#ecfdf5' : '#fffbeb',
+                border: '1px solid ' + (dong ? '#a7f3d0' : '#fde68a'),
+                color: dong ? '#047857' : '#b45309' } },
+                dong ? '✅ 동네 상권 분석이 붙습니다'
+                     : '⚠️ 동네 상권은 빠집니다 — 상권 통계가 행정동 단위라 동까지 적어야 합니다 (예: 하남시 미사동)'));
+    };
+
     // ==================== 렌더 헬퍼 ====================
     var htmlKB = placeHtml ? (new Blob([placeHtml]).size / 1024).toFixed(0) : 0;
     var organicHint = (function() {
@@ -232,7 +258,12 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
                             React_.createElement('label', null, '지역 ',
                                 React_.createElement('span', { style: { color: '#94a3b8', fontWeight: 400 } }, '(동 이름 — 맞춤제안서와 같게)')),
                             React_.createElement('input', { className: 'inp' + (region ? ' filled' : ''), value: region,
-                                onChange: function(e) { setRegion(e.target.value); }, placeholder: '예: 성수동' })),
+                                onChange: function(e) { setRegion(e.target.value); }, placeholder: '예: 성수동' }),
+                            // 입력하는 자리에서 「무엇이 조회되는지」를 바로 보여준다.
+                            // ⚠️ 지역 칸은 검색어에 그대로 붙는 게 아니라, 키워드에 그 동네가 없을 때만 붙는다
+                            //    (utils.placeCombineKeyword — 서버와 같은 규칙). 직원이 결과를 미리 보고
+                            //    적게 해서 「해보기 전엔 모른다」를 없앤다.
+                            renderKeywordPreview()),
                         // 업종 — 소상공인365 동네 상권(점포당 매출·업소수·벤치마크) 매칭키.
                         // 맞춤제안서와 **같은 13종 목록**을 쓴다(같은 값이어야 같은 상권이 잡힌다).
                         React_.createElement('div', { className: 'field' },

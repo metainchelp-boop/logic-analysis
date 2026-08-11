@@ -353,6 +353,43 @@ function trimHtmlDetail(hd) {
   }
 }
 
+// ===== 지역·키워드 합성 규칙 (플레이스 공용) =====
+// ⚠️ 서버 `main._combine_region_keyword` 와 **같은 규칙**이어야 한다.
+//    화면 미리보기가 서버와 다르면 「이렇게 조회됩니다」가 거짓말이 된다.
+//    서버 규칙을 고치면 이 함수도 같이 고칠 것(추적 등록·플레이스 분석 두 화면이 이걸 쓴다).
+//
+// 규칙(2026-08-11 대표 확정 A안):
+//   키워드가 이미 그 동네를 가리키면 안 붙이고, 아니면 지역을 앞에 붙인다.
+//   '미사동' + '미사리맛집' → '미사리맛집'   (어간 '미사' 가 이미 있음)
+//   '미사동' + '칼국수'     → '미사동 칼국수' (지역이 없으니 붙임 — 순위는 지역 키워드에서만 재현)
+function placeRegionStem(region) {
+  // 서버 sbiz365._region_stem + 합성 전용 시/군/구 제거까지(서버와 동일)
+  var parts = String(region || '').trim().split(/\s+/);
+  var tail = (parts[parts.length - 1] || '').replace(/[0-9]+/g, '');
+  tail = tail.replace(/[동가읍면리]$/, '');
+  return tail.replace(/(특별자치시|특별자치도|광역시|특별시|[시군구])$/, '').trim();
+}
+function placeCombineKeyword(region, keyword) {
+  var reg = String(region || '').trim();
+  var kw = String(keyword || '').trim();
+  if (!reg || !kw) return kw;
+  var norm = function (s) {
+    return String(s).replace(/\s+/g, '').toLowerCase();
+  };
+  var nk = norm(kw);
+  if (nk.indexOf(norm(reg)) >= 0) return kw; // 지역 표기가 통째로 있음
+  var stem = placeRegionStem(reg);
+  // ⚠️ 어간 1글자는 오탐 위험('신동'의 '신'이 '신메뉴'에 걸린다) → 2글자 이상만
+  if (stem.length >= 2 && nk.indexOf(norm(stem)) >= 0) return kw;
+  return reg + ' ' + kw;
+}
+// 상권 분석은 **행정동 단위**라 동까지 적어야 붙는다(시·군만 적으면 빠짐).
+function placeRegionHasDong(region) {
+  var parts = String(region || '').trim().split(/\s+/);
+  var tail = (parts[parts.length - 1] || '').replace(/[0-9]+/g, '');
+  return /[동가읍면리]$/.test(tail);
+}
+
 ;/* ===== js/rankImage.js ===== */
 /* rankImage.js — 순위 이력 이미지(PNG) 생성 공용 헬퍼
  *
@@ -24900,6 +24937,51 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
     setPlaceHtml('');
   };
 
+  // 「이렇게 조회됩니다」 미리보기 — 지역·키워드가 어떻게 합쳐지는지 입력하는 자리에서 보여준다.
+  // ⚠️ 합성은 utils.placeCombineKeyword(서버 `_combine_region_keyword` 와 1:1) 하나만 쓴다.
+  // ⚠️ 상권은 **행정동 단위**라 동까지 적어야 붙는다 — 안 붙는 이유를 미리 알려 준다
+  //    (조용히 빠지면 「고장인지 데이터가 없는 건지」 직원이 구분 못 한다).
+  var renderKeywordPreview = function () {
+    var kw = (selectedKw || keywords[0] || '').trim();
+    if (!kw) return null;
+    var combined = placeCombineKeyword(region, kw);
+    var joined = combined !== kw; // 지역이 앞에 붙었나
+    var dong = placeRegionHasDong(region);
+    return React_.createElement('div', {
+      style: {
+        marginTop: 7,
+        fontSize: 12,
+        lineHeight: 1.7
+      }
+    }, React_.createElement('div', {
+      style: {
+        background: '#eff6ff',
+        border: '1px solid #bfdbfe',
+        borderRadius: 8,
+        padding: '7px 10px',
+        color: '#1d4ed8'
+      }
+    }, '🔍 이렇게 조회됩니다 ', React_.createElement('b', {
+      style: {
+        fontSize: 13
+      }
+    }, combined), React_.createElement('span', {
+      style: {
+        color: '#3b82f6',
+        marginLeft: 6
+      }
+    }, joined ? '(지역을 붙였습니다)' : '(키워드에 지역이 이미 있어 그대로)')), !region ? null : React_.createElement('div', {
+      style: {
+        marginTop: 5,
+        padding: '6px 10px',
+        borderRadius: 8,
+        background: dong ? '#ecfdf5' : '#fffbeb',
+        border: '1px solid ' + (dong ? '#a7f3d0' : '#fde68a'),
+        color: dong ? '#047857' : '#b45309'
+      }
+    }, dong ? '✅ 동네 상권 분석이 붙습니다' : '⚠️ 동네 상권은 빠집니다 — 상권 통계가 행정동 단위라 동까지 적어야 합니다 (예: 하남시 미사동)'));
+  };
+
   // ==================== 렌더 헬퍼 ====================
   var htmlKB = placeHtml ? (new Blob([placeHtml]).size / 1024).toFixed(0) : 0;
   var organicHint = function () {
@@ -24993,7 +25075,12 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
         setRegion(e.target.value);
       },
       placeholder: '예: 성수동'
-    })),
+    }),
+    // 입력하는 자리에서 「무엇이 조회되는지」를 바로 보여준다.
+    // ⚠️ 지역 칸은 검색어에 그대로 붙는 게 아니라, 키워드에 그 동네가 없을 때만 붙는다
+    //    (utils.placeCombineKeyword — 서버와 같은 규칙). 직원이 결과를 미리 보고
+    //    적게 해서 「해보기 전엔 모른다」를 없앤다.
+    renderKeywordPreview()),
     // 업종 — 소상공인365 동네 상권(점포당 매출·업소수·벤치마크) 매칭키.
     // 맞춤제안서와 **같은 13종 목록**을 쓴다(같은 값이어야 같은 상권이 잡힌다).
     React_.createElement('div', {
@@ -26780,13 +26867,11 @@ window.PlaceTrackingPage = function PlaceTrackingPage(props) {
   }, []);
 
   // ==================== 등록 폼 ====================
+  // ⚠️ 합성 규칙은 utils.js `placeCombineKeyword` 하나만 쓴다(서버 규칙과 1:1).
+  //    종전엔 여기서 따로 계산해 '미사동'+'미사리맛집' → '미사동 미사리맛집' 을 미리보기가
+  //    그대로 보여줬다(2026-08-11 직원 신고). 규칙을 두 벌 두면 반드시 어긋난다.
   function combinedPreview(kw) {
-    var reg = (region || '').trim();
-    if (!reg) return kw;
-    var norm = function (s) {
-      return String(s).toLowerCase().replace(/\s+/g, '');
-    };
-    return norm(kw).indexOf(norm(reg)) >= 0 ? kw : reg + ' ' + kw;
+    return placeCombineKeyword(region, kw);
   }
   function addKw() {
     var v = (kwInput || '').trim().replace(/,$/, '');

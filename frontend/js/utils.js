@@ -275,3 +275,38 @@ function trimHtmlDetail(hd) {
         return copy;
     } catch (e) { return hd; }
 }
+
+// ===== 지역·키워드 합성 규칙 (플레이스 공용) =====
+// ⚠️ 서버 `main._combine_region_keyword` 와 **같은 규칙**이어야 한다.
+//    화면 미리보기가 서버와 다르면 「이렇게 조회됩니다」가 거짓말이 된다.
+//    서버 규칙을 고치면 이 함수도 같이 고칠 것(추적 등록·플레이스 분석 두 화면이 이걸 쓴다).
+//
+// 규칙(2026-08-11 대표 확정 A안):
+//   키워드가 이미 그 동네를 가리키면 안 붙이고, 아니면 지역을 앞에 붙인다.
+//   '미사동' + '미사리맛집' → '미사리맛집'   (어간 '미사' 가 이미 있음)
+//   '미사동' + '칼국수'     → '미사동 칼국수' (지역이 없으니 붙임 — 순위는 지역 키워드에서만 재현)
+function placeRegionStem(region) {
+    // 서버 sbiz365._region_stem + 합성 전용 시/군/구 제거까지(서버와 동일)
+    var parts = String(region || '').trim().split(/\s+/);
+    var tail = (parts[parts.length - 1] || '').replace(/[0-9]+/g, '');
+    tail = tail.replace(/[동가읍면리]$/, '');
+    return tail.replace(/(특별자치시|특별자치도|광역시|특별시|[시군구])$/, '').trim();
+}
+function placeCombineKeyword(region, keyword) {
+    var reg = String(region || '').trim();
+    var kw = String(keyword || '').trim();
+    if (!reg || !kw) return kw;
+    var norm = function (s) { return String(s).replace(/\s+/g, '').toLowerCase(); };
+    var nk = norm(kw);
+    if (nk.indexOf(norm(reg)) >= 0) return kw;              // 지역 표기가 통째로 있음
+    var stem = placeRegionStem(reg);
+    // ⚠️ 어간 1글자는 오탐 위험('신동'의 '신'이 '신메뉴'에 걸린다) → 2글자 이상만
+    if (stem.length >= 2 && nk.indexOf(norm(stem)) >= 0) return kw;
+    return reg + ' ' + kw;
+}
+// 상권 분석은 **행정동 단위**라 동까지 적어야 붙는다(시·군만 적으면 빠짐).
+function placeRegionHasDong(region) {
+    var parts = String(region || '').trim().split(/\s+/);
+    var tail = (parts[parts.length - 1] || '').replace(/[0-9]+/g, '');
+    return /[동가읍면리]$/.test(tail);
+}

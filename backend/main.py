@@ -2018,13 +2018,42 @@ def _tracked_keyword_alias(business_key: str, base_kw: str, combined_kw: str) ->
 
 
 def _combine_region_keyword(region: str, keyword: str) -> str:
-    """추적 키워드는 항상 지역 포함(순위 재현성 — 2026-08-04 스파이크 실측).
-    이미 지역이 들어있으면 그대로(중복 방지) — 맞춤제안서 합성 규칙과 동일."""
+    """추적 키워드는 지역을 포함해야 순위가 재현된다(2026-08-04 스파이크 실측).
+    ⚠️ 단 **키워드가 이미 그 동네를 가리키면 붙이지 않는다**(2026-08-11 대표 확정 A안).
+
+    종전 가드는 「지역 문자열이 통째로」 들어있을 때만 걸러서, 지역 '미사동' + 키워드
+    '미사리맛집' → **'미사동 미사리맛집'** 이라는 아무도 안 치는 검색어가 만들어졌다
+    (직원 신고 — 검색량 0·순위 미포착). '미사동' ⊄ '미사리맛집' 이라 못 걸렀던 것.
+    → 지역 **어간**으로 판정한다(`sbiz365._region_stem` — 상권 행정동 검증에 이미 쓰는
+      그 규칙을 재사용. 복제하면 두 규칙이 언젠가 어긋난다).
+      '미사동' → 어간 '미사' ⊂ '미사리맛집' → 안 붙임.
+    ⚠️ 어간 1글자는 오탐 위험('신동'의 '신'이 '신메뉴'에 걸린다)이라 **2글자 이상만** 본다.
+    ⚠️ 이 함수가 곧 규칙이다 — 제안서·플레이스 분석·추적 등록·황금 키워드 4경로가 전부
+       여기를 지나므로, 화면 미리보기(`PlaceTrackingPage.combinedPreview` 등)를 고칠 때
+       **같은 규칙으로** 맞춰야 미리보기가 거짓말을 하지 않는다."""
     kw = (keyword or "").strip()
     reg = (region or "").strip()
-    if not reg:
+    if not reg or not kw:
         return kw
-    if place_crawler._norm(reg) in place_crawler._norm(kw):
+    nk = place_crawler._norm(kw)
+    if place_crawler._norm(reg) in nk:          # 지역 표기가 통째로 들어있음
+        return kw
+    import re as _re
+    try:
+        from sbiz365 import _region_stem
+        base_stem = _region_stem(reg)
+    except Exception:                            # 모듈 로드 실패 시에만 종전 동작(붙임)으로 폴백
+        base_stem = ""
+    # ⚠️ 합성 판정 전용으로 **시/군/구까지 더 뗀다**. 상권용 `_region_stem` 은 동/가/읍/면/리만
+    #    떼므로 '하남시' → '하남시' 가 되어 '하남 칼국수' 를 못 알아본다(실측으로 잡은 실패 케이스).
+    #    ⚠️ 그렇다고 `_region_stem` 자체를 느슨하게 만들면 **상권 행정동 검증이 헐거워져**
+    #       엉뚱한 동네 수치가 붙는다(2026-08-11 조원동 사고). 그래서 여기서만 더 뗀다.
+    #    ⚠️ 두 판정은 실패 방향이 다르다: 상권은 느슨하면 **오데이터**(치명적),
+    #       합성은 느슨해도 **사용자가 적은 키워드 그대로 조회**(무해) → 여기만 관대해도 안전.
+    # ⚠️ 이 줄은 일부러 try 밖에 둔다 — 안에 두면 오타·NameError 가 조용히 폴백돼
+    #    「전 케이스가 종전대로 동작」하는 것처럼 보인다(실제로 한 번 겪었다).
+    stem = _re.sub(r"(특별자치시|특별자치도|광역시|특별시|[시군구])$", "", base_stem).strip()
+    if len(stem) >= 2 and place_crawler._norm(stem) in nk:
         return kw
     return f"{reg} {kw}"
 
