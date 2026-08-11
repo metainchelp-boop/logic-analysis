@@ -3584,6 +3584,7 @@ window.KeywordRankPage = function KeywordRankPage(props) {
   var _kwm = useState(null);
   var kwMsg = _kwm[0],
     setKwMsg = _kwm[1]; // {ok, text}
+  var selectedRef = React.useRef(null); // 늦은 응답 가드용 — 현재 보고 있는 업체
 
   /* 하단 RankTrackingSection 용 — 추적 상품은 이 페이지가 자체 로드 */
   var _pr = useState([]);
@@ -3855,11 +3856,17 @@ window.KeywordRankPage = function KeywordRankPage(props) {
   var submitKeyword = function () {
     var kw = kwInput.trim();
     if (!kw || kwBusy || !selected) return;
+    var cid = selected.id; // 요청 시점 업체 고정
     setKwBusy(true);
     setKwMsg(null);
-    api.post('/cd/' + selected.id + '/track-keyword', {
+    var stillHere = function () {
+      return selectedRef.current && selectedRef.current.id === cid;
+    };
+    api.post('/cd/' + cid + '/track-keyword', {
       keyword: kw
     }).then(function (res) {
+      // 업체를 이동한 뒤 도착한 늦은 응답이 다른 업체의 보드·메시지를 덮지 않게 가드
+      if (!stillHere()) return;
       if (res && res.success) {
         setKwMsg({
           ok: true,
@@ -3867,7 +3874,7 @@ window.KeywordRankPage = function KeywordRankPage(props) {
         });
         if (!res.already) {
           setKwInput('');
-          loadBoard(selected.id, boardDays);
+          loadBoard(cid, boardDays);
         }
       } else {
         setKwMsg({
@@ -3876,6 +3883,7 @@ window.KeywordRankPage = function KeywordRankPage(props) {
         });
       }
     }).catch(function (err) {
+      if (!stillHere()) return;
       setKwMsg({
         ok: false,
         text: err && err.message || '등록하지 못했습니다.'
@@ -3885,10 +3893,16 @@ window.KeywordRankPage = function KeywordRankPage(props) {
     });
   };
   var openDetail = function (c) {
+    selectedRef.current = {
+      id: c.id,
+      name: c.name
+    };
     setSelected({
       id: c.id,
       name: c.name
     });
+    setKwInput('');
+    setKwMsg(null);
     loadBoard(c.id, boardDays);
     try {
       window.scrollTo({
@@ -3903,6 +3917,7 @@ window.KeywordRankPage = function KeywordRankPage(props) {
     if (selected) loadBoard(selected.id, d);
   };
   var backToList = function () {
+    selectedRef.current = null;
     setSelected(null);
     setBoard(null);
     setKwInput('');

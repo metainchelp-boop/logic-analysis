@@ -75,6 +75,7 @@ window.KeywordRankPage = function KeywordRankPage(props) {
     var _kwi = useState(''); var kwInput = _kwi[0], setKwInput = _kwi[1];       // 추적 키워드 추가 입력
     var _kwb = useState(false); var kwBusy = _kwb[0], setKwBusy = _kwb[1];
     var _kwm = useState(null); var kwMsg = _kwm[0], setKwMsg = _kwm[1];          // {ok, text}
+    var selectedRef = React.useRef(null);   // 늦은 응답 가드용 — 현재 보고 있는 업체
 
     /* 하단 RankTrackingSection 용 — 추적 상품은 이 페이지가 자체 로드 */
     var _pr = useState([]); var products = _pr[0], setProducts = _pr[1];
@@ -227,20 +228,27 @@ window.KeywordRankPage = function KeywordRankPage(props) {
     var submitKeyword = function() {
         var kw = kwInput.trim();
         if (!kw || kwBusy || !selected) return;
+        var cid = selected.id;   // 요청 시점 업체 고정
         setKwBusy(true); setKwMsg(null);
-        api.post('/cd/' + selected.id + '/track-keyword', { keyword: kw }).then(function(res) {
+        var stillHere = function() { return selectedRef.current && selectedRef.current.id === cid; };
+        api.post('/cd/' + cid + '/track-keyword', { keyword: kw }).then(function(res) {
+            // 업체를 이동한 뒤 도착한 늦은 응답이 다른 업체의 보드·메시지를 덮지 않게 가드
+            if (!stillHere()) return;
             if (res && res.success) {
                 setKwMsg({ ok: true, text: res.already ? '「' + kw + '」 — 이미 추적 중인 키워드입니다.' : '「' + kw + '」 ' + (res.message || '등록되었습니다.') });
-                if (!res.already) { setKwInput(''); loadBoard(selected.id, boardDays); }
+                if (!res.already) { setKwInput(''); loadBoard(cid, boardDays); }
             } else {
                 setKwMsg({ ok: false, text: (res && res.detail) || '등록하지 못했습니다.' });
             }
         }).catch(function(err) {
+            if (!stillHere()) return;
             setKwMsg({ ok: false, text: (err && err.message) || '등록하지 못했습니다.' });
         }).finally(function() { setKwBusy(false); });
     };
     var openDetail = function(c) {
+        selectedRef.current = { id: c.id, name: c.name };
         setSelected({ id: c.id, name: c.name });
+        setKwInput(''); setKwMsg(null);
         loadBoard(c.id, boardDays);
         try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch (e) {}
     };
@@ -249,7 +257,7 @@ window.KeywordRankPage = function KeywordRankPage(props) {
         setBoardDays(d);
         if (selected) loadBoard(selected.id, d);
     };
-    var backToList = function() { setSelected(null); setBoard(null); setKwInput(''); setKwMsg(null); };
+    var backToList = function() { selectedRef.current = null; setSelected(null); setBoard(null); setKwInput(''); setKwMsg(null); };
 
     /* ---------- 업체 목록 (랜딩) ---------- */
     function renderList() {

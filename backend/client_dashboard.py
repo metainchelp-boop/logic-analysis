@@ -1167,9 +1167,14 @@ def rank_board(client_id: int, days: int = 8, current_user: dict = Depends(get_c
         # 등록됐지만 아직 기록이 없는 키워드도 「기록 대기」로 보여준다 — 키워드를 추가한
         # 직원이 화면에서 아무 변화도 못 보면 고장인지 구분할 수 없기 때문(반영 현황 원칙).
         # 광고주만: 영업 대상(prospect)은 자동 추적 대상이 아니라 「대기」가 영원히 안 풀린다.
-        if client["role"] == "advertiser":
+        _pending_ok = conn.execute(
+            "SELECT COALESCE(auto_analysis,1) AS a, naver_store_url AS u FROM clients WHERE id=?",
+            (client_id,)).fetchone()
+        if (client["role"] == "advertiser" and _pending_ok and _pending_ok["a"]
+                and (_pending_ok["u"] or "").strip()):
             _norm = lambda k: "".join(str(k).split()).lower()
             _known = {_norm(k) for k in per.keys()}
+            _vol_norm = {_norm(k): v for k, v in vol_map.items()}   # 공백 변형에도 검색량 매칭
             for mk in (client["main_keywords"] or "").split(","):
                 mk = mk.strip()
                 if mk and _norm(mk) not in _known:
@@ -1177,7 +1182,7 @@ def rank_board(client_id: int, days: int = 8, current_user: dict = Depends(get_c
                     board.append({
                         "keyword": mk, "rank": None, "page": None,
                         "prev_rank": None, "delta": None,
-                        "volume": vol_map.get(mk, "-"),
+                        "volume": _vol_norm.get(_norm(mk), "-"),
                         "last_checked": "", "series": [],
                         "unexposed_days": 0, "pending": True,
                     })
@@ -1236,7 +1241,7 @@ def add_track_keyword(client_id: int, req: TrackKeywordRequest,
     try:
         _verify_client_access(conn, client_id, current_user)
         client = conn.execute(
-            "SELECT id, name, main_keywords, COALESCE(role,'advertiser') AS role, "
+            "SELECT id, name, main_keywords, naver_store_url, COALESCE(role,'advertiser') AS role, "
             "COALESCE(vertical,'store') AS vertical, COALESCE(auto_analysis,1) AS auto_on "
             "FROM clients WHERE id=? AND status='active'", (client_id,)).fetchone()
         if not client:
@@ -1247,18 +1252,38 @@ def add_track_keyword(client_id: int, req: TrackKeywordRequest,
             raise HTTPException(status_code=400, detail=(
                 "영업 대상 업체는 일일 자동 추적 대상이 아닙니다. "
                 "분석 실행 시 순위가 기록되며, 광고주로 등록하면 키워드 추적이 시작됩니다."))
+        # ⚠️ 아래 두 조건은 기록 경로(배치·업로드 즉시 기록·수집 유니버스) 전부가 거르는
+        # 자격이라, 여기서 받아주면 「등록 성공 → 영원히 기록 대기」 함정이 된다(적대 리뷰 확정).
+        if not client["auto_on"]:
+            raise HTTPException(status_code=400, detail=(
+                "자동 분석이 꺼진 업체라 일일 순위 추적이 돌지 않습니다. "
+                "업체 관리에서 자동 분석을 켠 뒤 등록해주세요."))
+        if not (client["naver_store_url"] or "").strip():
+            raise HTTPException(status_code=400, detail=(
+                "스토어 주소가 등록되지 않은 업체입니다. "
+                "업체 관리에서 네이버 스토어 주소를 먼저 등록해주세요."))
 
         _norm = lambda k: "".join(str(k).split()).lower()
-        mk_list = [k.strip() for k in (client["main_keywords"] or "").split(",") if k.strip()]
-        existing = {_norm(k) for k in mk_list}
+        existing = set()
         for r in conn.execute("SELECT DISTINCT keyword FROM client_analyses WHERE client_id=?", (client_id,)):
             existing.add(_norm(r["keyword"] or ""))
         for r in conn.execute("SELECT DISTINCT keyword FROM client_rank_history WHERE client_id=?", (client_id,)):
             existing.add(_norm(r["keyword"] or ""))
+
+        # ⚠️ main_keywords 는 읽고-고쳐-쓰는 목록이라, 동시 등록이 겹치면 나중 쓰기가
+        # 먼저 쓰기를 지운다(lost update — 적대 리뷰 확정). 쓰기 락(BEGIN IMMEDIATE) 안에서
+        # 다시 읽고 → 중복·상한 검사 → 추가까지 한 덩어리로 처리해 경합을 직렬화한다.
+        conn.commit()   # 앞선 읽기의 암묵 트랜잭션 정리(BEGIN 중첩 방지)
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT main_keywords FROM clients WHERE id=?", (client_id,)).fetchone()
+        mk_list = [k.strip() for k in ((row["main_keywords"] if row else "") or "").split(",") if k.strip()]
+        existing |= {_norm(k) for k in mk_list}
         if _norm(kw) in existing:
+            conn.commit()
             return {"success": True, "already": True, "keyword": kw,
                     "message": "이미 추적 중인 키워드입니다."}
         if len(mk_list) >= 20:
+            conn.commit()
             raise HTTPException(status_code=400, detail=(
                 "직접 등록 키워드는 업체당 20개까지입니다. 안 쓰는 키워드를 정리한 뒤 등록해주세요."))
 
@@ -1293,8 +1318,7 @@ def add_track_keyword(client_id: int, req: TrackKeywordRequest,
         return {"success": True, "keyword": kw, "linked_products": linked, "queued": queued,
                 "message": ("등록되었습니다. " +
                             ("보통 수 분 안에 첫 순위가 기록됩니다 — 잠시 후 새로고침해 확인하세요."
-                             if queued else "다음 수집 회차에 첫 순위가 기록됩니다.") +
-                            (" 자동 분석이 꺼진 업체라 검색량은 분석 실행 후 채워집니다." if not client["auto_on"] else ""))}
+                             if queued else "다음 수집 회차에 첫 순위가 기록됩니다."))}
     except HTTPException:
         raise
     except Exception as e:
