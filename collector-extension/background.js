@@ -253,15 +253,13 @@ function pageExtract() {
   try { href = String(location.href); } catch (e) { href = ''; }
   var title = '';
   try { title = String(document.title || '').slice(0, 120); } catch (e) { title = ''; }
-  // 차단 페이지인지는 '문구'로 확인한다 — 데이터가 없다는 것만으로 차단이라 단정하면
-  // 네이버가 페이지를 조금 늦게 그린 것까지 차단으로 세어 6시간을 통째로 날린다
-  // (2026-08-11 실사고: 정상 페이지를 3초 만에 읽고 차단 판정 → 60개 회차 전멸).
   var body = '';
   try { body = String((document.body && document.body.innerText) || '').slice(0, 3000); } catch (e) { body = ''; }
-  var blockedText = /일시적으로 제한|자동입력 방지|비정상적인 접근|robot|captcha/i.test(body);
-  if (blockedText) return { err: 'BLOCK_TEXT', href: href, title: title, body: body.slice(0, 300) };
-  if (!nd) return { err: 'NO_NEXT_DATA', href: href, title: title, body: body.slice(0, 300) };
 
+  // ⚠️ 순서가 핵심 — **데이터부터 찾고, 못 찾았을 때만 차단을 의심한다.**
+  //    (2026-08-11 실사고: 차단 문구 검사를 먼저 해서, 상품 데이터가 바로 옆에 있는
+  //     정상 페이지도 낱말 하나만 스치면 차단으로 단정했다. 상품을 실제로 읽어냈다면
+  //     네이버가 우리에게 필요한 걸 내준 것이므로 그건 차단일 수 없다.)
   var best = null, total = 0;
   var seen = new Set();
   var stack = [nd], guard = 0;
@@ -291,8 +289,13 @@ function pageExtract() {
       }
     }
   }
-  if (!best || !best.length) return { err: 'NO_LIST', href: href, title: title, body: body.slice(0, 300) };
-  return { total: total, list: best.slice(0, 200), href: href };
+  // 상품을 읽어냈으면 무조건 성공 — 차단 검사조차 하지 않는다
+  if (best && best.length) return { total: total, list: best.slice(0, 200), href: href };
+
+  // 여기부터는 '못 읽은' 경우. 이제서야 차단인지 본다.
+  var blocked = /일시적으로 제한|자동입력 방지|비정상적인 접근|접근이 차단/.test(body);
+  if (blocked) return { err: 'BLOCK_TEXT', href: href, title: title, body: body.slice(0, 300) };
+  return { err: nd ? 'NO_LIST' : 'NO_NEXT_DATA', href: href, title: title, body: body.slice(0, 300) };
 }
 
 /** 탭이 목표 주소로 이동을 끝낼 때까지 대기 */
@@ -352,8 +355,16 @@ async function fetchPage(keyword, pagingIndex) {
     const [res] = await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func: pageExtract });
     out = res && res.result;
     if (out && !out.err) return { total: out.total || 0, list: out.list || [] };
-    // 차단 '문구'를 실제로 본 경우에만 차단으로 단정한다
-    if (out && out.err === 'BLOCK_TEXT') throw new Error(`BLOCKED:${out.title || out.href}`);
+    // 차단 '문구'를 실제로 본 경우에만 차단으로 단정한다.
+    // ⚠️ 이때도 무엇을 봤는지 반드시 남긴다 — 종전엔 차단 분기가 증거를 안 남겨
+    //    팝업 진단칸이 정작 필요할 때 비어 있었다(2026-08-11).
+    if (out && out.err === 'BLOCK_TEXT') {
+      chrome.storage.local.set({
+        readFail: { keyword, pagingIndex, at: new Date().toISOString(), err: 'BLOCK_TEXT(차단 문구 확인)',
+                    title: out.title || '', href: out.href || '', body: out.body || '' },
+      });
+      throw new Error(`BLOCKED:${out.title || out.href}`);
+    }
     lastErr = (out && out.err) || '주입 실패';
     await sleep(CFG.readGapMs);
   }
