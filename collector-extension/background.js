@@ -26,6 +26,8 @@ const CFG = {
   pageSize: 40,          // 한 페이지 상품 수 (실제 화면과 동일)
   maxRank: 300,          // 300위까지 — 실제 받은 개수로 누적해 판단(고정 페이지 수 아님)
   maxPages: 10,          // 안전 상한(빈 페이지·무한 루프 방지)
+  readTries: 12,         // 페이지 판독 재시도 횟수(값이 나올 때까지)
+  readGapMs: 800,        // 되읽기 간격 — 12×0.8초 ≈ 10초까지 기다린다
   minGapMs: 1200,        // 페이지 사이 최소 간격
   maxGapMs: 3000,        // 페이지 사이 최대 간격 (이 사이 랜덤)
   // ── 24시간 분산 (2026-08-05 운영자 확정) ─────────────────────────────
@@ -251,7 +253,14 @@ function pageExtract() {
   try { href = String(location.href); } catch (e) { href = ''; }
   var title = '';
   try { title = String(document.title || '').slice(0, 120); } catch (e) { title = ''; }
-  if (!nd) return { err: 'NO_NEXT_DATA', href: href, title: title };
+  // 차단 페이지인지는 '문구'로 확인한다 — 데이터가 없다는 것만으로 차단이라 단정하면
+  // 네이버가 페이지를 조금 늦게 그린 것까지 차단으로 세어 6시간을 통째로 날린다
+  // (2026-08-11 실사고: 정상 페이지를 3초 만에 읽고 차단 판정 → 60개 회차 전멸).
+  var body = '';
+  try { body = String((document.body && document.body.innerText) || '').slice(0, 3000); } catch (e) { body = ''; }
+  var blockedText = /일시적으로 제한|자동입력 방지|비정상적인 접근|robot|captcha/i.test(body);
+  if (blockedText) return { err: 'BLOCK_TEXT', href: href, title: title, body: body.slice(0, 300) };
+  if (!nd) return { err: 'NO_NEXT_DATA', href: href, title: title, body: body.slice(0, 300) };
 
   var best = null, total = 0;
   var seen = new Set();
@@ -282,7 +291,7 @@ function pageExtract() {
       }
     }
   }
-  if (!best || !best.length) return { err: 'NO_LIST', href: href, title: title };
+  if (!best || !best.length) return { err: 'NO_LIST', href: href, title: title, body: body.slice(0, 300) };
   return { total: total, list: best.slice(0, 200), href: href };
 }
 
@@ -328,19 +337,35 @@ async function fetchPage(keyword, pagingIndex) {
   const tabId = await ensureWorkTab();
   await chrome.tabs.update(tabId, { url });
   await waitNavigated(tabId, `pagingIndex=${pagingIndex}`);
-  // 렌더 정착 대기(사람이 화면을 보는 시간 — 값도 매번 조금씩 달리 준다)
-  await sleep(1400 + Math.floor(Math.random() * 1200));
 
-  let cur;
-  try { cur = await chrome.tabs.get(tabId); } catch (e) { throw new Error('작업 탭이 사라졌습니다'); }
-  if (isBlockedUrl(cur && cur.url)) throw new Error('BLOCKED:' + cur.url);
+  // ⚠️ 고정 시간만 기다리고 한 번 읽던 것을 **값이 나올 때까지 되읽기**로 바꾼다
+  //    (2026-08-11 실사고: 정상 페이지를 3초 만에 읽어 '데이터 없음' → 차단으로 오판 →
+  //     60개 회차 전멸 + 6시간 정지. 서버 통계의 '5개·9개 수집' 키워드도 같은 원인).
+  //    기다리는 대상이 '시간'이 아니라 '데이터'라, 페이지가 느린 날에도 성립한다.
+  let out = null, lastErr = '';
+  for (let attempt = 0; attempt < CFG.readTries; attempt++) {
+    let cur;
+    try { cur = await chrome.tabs.get(tabId); } catch (e) { throw new Error('작업 탭이 사라졌습니다'); }
+    // 주소가 검색 도메인을 벗어났으면 그건 진짜 차단(캡차·로그인 유도)
+    if (isBlockedUrl(cur && cur.url)) throw new Error('BLOCKED:' + cur.url);
 
-  const [res] = await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func: pageExtract });
-  const out = res && res.result;
-  if (!out) throw new Error('페이지 판독 실패');
-  if (out.err === 'NO_NEXT_DATA') throw new Error(`BLOCKED:검색 페이지가 아님(${out.title || out.href})`);
-  if (out.err) throw new Error(`${out.err} (${out.title || out.href})`);
-  return { total: out.total || 0, list: out.list || [] };
+    const [res] = await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func: pageExtract });
+    out = res && res.result;
+    if (out && !out.err) return { total: out.total || 0, list: out.list || [] };
+    // 차단 '문구'를 실제로 본 경우에만 차단으로 단정한다
+    if (out && out.err === 'BLOCK_TEXT') throw new Error(`BLOCKED:${out.title || out.href}`);
+    lastErr = (out && out.err) || '주입 실패';
+    await sleep(CFG.readGapMs);
+  }
+
+  // 여기까지 왔으면 '차단'이 아니라 '판독 실패'다 — 6시간 정지시키지 않고 다음 회차에 재시도한다.
+  // 무엇을 봤는지 남겨 둬야 다음에 사람 손 안 빌리고 원인을 가른다.
+  chrome.storage.local.set({
+    readFail: { keyword, pagingIndex, at: new Date().toISOString(),
+                err: lastErr, title: (out && out.title) || '', href: (out && out.href) || '',
+                body: (out && out.body) || '' },
+  });
+  throw new Error(`판독 실패(${lastErr}) — 차단 아님, 다음 회차 재시도`);
 }
 
 /** 네이버 응답 → 서버가 쓰는 형태로 정리 */

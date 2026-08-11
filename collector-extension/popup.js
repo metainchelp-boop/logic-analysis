@@ -2,8 +2,8 @@
 const $ = (id) => document.getElementById(id);
 
 async function render() {
-  const { token = '', state = {}, logs = [], rawSample = null, rawSampleNoMall = null } =
-    await chrome.storage.local.get(['token', 'state', 'logs', 'rawSample', 'rawSampleNoMall']);
+  const { token = '', state = {}, logs = [], rawSample = null, rawSampleNoMall = null, readFail = null } =
+    await chrome.storage.local.get(['token', 'state', 'logs', 'rawSample', 'rawSampleNoMall', 'readFail']);
   $('token').value = token;
   // 캡차에 걸려 쉬는 중이면 그게 가장 중요한 정보다 — 맨 위에 눈에 띄게.
   const bu = Number(state.blockedUntil || 0);
@@ -30,6 +30,11 @@ async function render() {
   if (nmEl) nmEl.textContent = rawSampleNoMall
     ? `[${rawSampleNoMall.keyword}] ${rawSampleNoMall.rank}위 ${rawSampleNoMall.at}\n` + JSON.stringify(rawSampleNoMall.item, null, 1)
     : '아직 없음 — 수집 중 스토어명 빈 상품을 만나면 표시';
+  // 판독 실패 진단 — '차단'과 '못 읽음'을 가르기 위한 근거(제목·주소·본문 일부)
+  const rfEl = document.getElementById('readFail');
+  if (rfEl) rfEl.textContent = readFail
+    ? `[${readFail.keyword}] ${readFail.pagingIndex}페이지 ${readFail.at}\n원인: ${readFail.err}\n제목: ${readFail.title}\n주소: ${readFail.href}\n본문: ${readFail.body}`
+    : '없음 — 정상';
 }
 
 $('save').onclick = async () => {
