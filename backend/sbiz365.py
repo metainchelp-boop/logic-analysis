@@ -198,18 +198,18 @@ def _pick(resp, markers):
 # ============================================================
 # 4. 행정동 매칭 체인 — 지역명 → 좌표 → admiCd(행정동 8자리)
 # ============================================================
-def _region_coord(region: str):
-    """「지역명」 → 좌표(경도, 위도). 네이버 지역검색(local) 사용 — 이미 보유한 자격 재사용.
+def _region_coord(query: str):
+    """검색어 → 좌표(경도, 위도). 네이버 지역검색(local) 사용 — 이미 보유한 자격 재사용.
     mapx/mapy 는 WGS84×10^7 정수라 10^7 로 나눈다. 실패 시 None."""
     cid = os.getenv("NAVER_CLIENT_ID", "").strip()
     csec = os.getenv("NAVER_CLIENT_SECRET", "").strip()
-    if not (cid and csec and region):
+    if not (cid and csec and query):
         return None
     try:
         import urllib.parse
         import urllib.request
         url = ("https://openapi.naver.com/v1/search/local.json?"
-               + urllib.parse.urlencode({"query": region, "display": 1}))
+               + urllib.parse.urlencode({"query": query, "display": 1}))
         req = urllib.request.Request(url, headers={
             "X-Naver-Client-Id": cid, "X-Naver-Client-Secret": csec})
         with urllib.request.urlopen(req, timeout=8) as r:
@@ -227,6 +227,31 @@ def _region_coord(region: str):
     except Exception as e:
         logger.warning(f"[sbiz365] 좌표 확보 실패(무시): {e}")
         return None
+
+
+def _region_stem(region: str) -> str:
+    """지역명의 어간 — 풀주소면 마지막 토큰, 끝의 동/가/읍/면/리 접미와 숫자를 뗀다.
+      '조원동' → '조원' · '서울 성동구 성수동' → '성수' · '성사2동' → '성사'
+    행정동명 검증에 쓴다('조원' ⊂ '조원1동' ✅ / '조원' ⊄ '신대방2동' ❌)."""
+    import re
+    tail = (str(region or "").strip().split() or [""])[-1]
+    tail = re.sub(r"\d+", "", tail)
+    return re.sub(r"[동가읍면리]$", "", tail).strip()
+
+
+def _admi_matches_region(admi: dict, region: str) -> bool:
+    """행정동 매칭 결과가 정말 그 지역인지 확인.
+
+    ⚠️ 2026-08-11 실측 사고: 지역검색에 지역명만 넣으면 **동명의 상호**가 먼저 잡힌다.
+       '조원동'(수원 장안구)을 검색했더니 첫 결과가 서울의 어느 업소여서
+       **신대방2동(11590680) 상권**이 붙었다 — 완전히 다른 동네 수치가 광고주 보고서에
+       실릴 뻔했다. 좌표가 어디서 왔든, 나온 행정동 이름이 입력 지역과 맞는지 확인한다.
+       ⚠️ 맞지 않으면 상권을 **생략**한다 — 틀린 상권은 없는 것보다 나쁘다."""
+    stem = _region_stem(region)
+    if not stem:
+        return False
+    nm = _norm((admi or {}).get("admiNm") or "")
+    return bool(nm) and _norm(stem) in nm
 
 
 def _coord_to_admi(x, y):
@@ -270,21 +295,50 @@ def _coord_to_admi(x, y):
     return None
 
 
-def _resolve_admi(region: str):
+def _resolve_admi(region: str, biz_name: str = ""):
     """지역명 → 행정동. 결과는 (행정동×업종) 데이터와 같은 TTL 로 캐시해
-    캐시 적중 시 좌표·행정동 변환 재호출을 없앤다. 실패 시 None."""
+    캐시 적중 시 좌표·행정동 변환 재호출을 없앤다. 실패 시 None.
+
+    ⚠️ 검색어를 지역명 하나로 두면 **동명의 상호**가 먼저 잡혀 엉뚱한 동네가 나온다
+       (2026-08-11 실측: '조원동' → 서울 신대방2동). 그래서
+       ⑴ 업체명이 있으면 그 업체로 먼저 찾고(우리가 아는 그 가게의 실제 위치라 가장 정확)
+       ⑵ 「{지역} 주민센터/행정복지센터」로 행정동 청사를 찾고
+       ⑶ 마지막에 지역명 단독을 시도한다.
+       각 후보는 **나온 행정동 이름이 입력 지역과 맞는지 검증**하고, 전부 어긋나면 None."""
     cache_key = f"sbiz:admi:{_norm(region)}"
     cached = _cache_get(cache_key, SBIZ_CACHE_TTL)
     # simpleLoc(정식 주소) 없이 캐시된 구버전 항목은 그대로 쓰면 매출 조회가 500 이므로 재해석한다.
-    if cached and cached.get("simpleLoc"):
+    # 캐시된 값이라도 지역과 안 맞으면(구버전이 잘못 넣은 것) 버리고 다시 찾는다.
+    if cached and cached.get("simpleLoc") and _admi_matches_region(cached, region):
         return cached
-    coord = _region_coord(region)
-    if not coord:
+
+    reg = (region or "").strip()
+    if not reg:
         return None
-    admi = _coord_to_admi(coord[0], coord[1])
-    if admi:
+    queries = []
+    if (biz_name or "").strip():
+        queries.append(f"{biz_name.strip()} {reg}")
+    queries += [f"{reg} 주민센터", f"{reg} 행정복지센터", reg]
+
+    seen = set()
+    for q in queries:
+        if q in seen:
+            continue
+        seen.add(q)
+        coord = _region_coord(q)
+        if not coord:
+            continue
+        admi = _coord_to_admi(coord[0], coord[1])
+        if not admi:
+            continue
+        if not _admi_matches_region(admi, reg):
+            logger.warning(f"[sbiz365] 행정동 불일치로 폐기 — 검색어 {q!r} → {admi.get('admiNm')!r} "
+                           f"(입력 지역 {reg!r})")
+            continue
         _cache_put(cache_key, admi)
-    return admi
+        return admi
+    logger.warning(f"[sbiz365] 행정동 매칭 실패 — 지역 {reg!r}(상권 생략)")
+    return None
 
 
 def _norm(s):
@@ -641,7 +695,8 @@ def _aggregate_major(admi_cd: str, loc: str, major: str):
     return result
 
 
-def get_place_sbiz(region: str, industry_label: str, hint: str = "") -> dict | None:
+def get_place_sbiz(region: str, industry_label: str, hint: str = "",
+                   biz_name: str = "") -> dict | None:
     """지역명×업종 라벨 → 상권 데이터 블록(제안서 sbiz).
     반환 스키마(전 필드 optional·없으면 null) — FE 5차 배선이 이 스키마에 고정:
       {"source":"sbiz365-simple", "baseYm", "district":{admiCd,admiNm,guNm},
@@ -660,7 +715,9 @@ def get_place_sbiz(region: str, industry_label: str, hint: str = "") -> dict | N
         if not region or not label:
             return None
 
-        admi = _resolve_admi(region)
+        # 업체명이 있으면 좌표를 그 업체로 먼저 찾는다 — 지역명 단독 검색은 동명의 상호에
+        # 걸려 엉뚱한 동네가 나온다(2026-08-11 실측 사고).
+        admi = _resolve_admi(region, biz_name=biz_name)
         if not admi or not admi.get("admiCd"):
             return None
         candidates = _resolve_upjong_candidates(label, limit=3, hint=hint)

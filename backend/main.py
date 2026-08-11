@@ -1245,14 +1245,19 @@ def _place_related_keywords(region: str, base_kw: str, combined_kw: str,
         c["combined"] = _combine_region_keyword(region, c["keyword"])
         c["combinedVolume"] = None
 
-    # 결합형 검색량은 상위 5개만(keywordstool 은 hintKeywords 5개가 상한) — 호출 1회.
+    # 결합형 검색량 — **전 후보를 조회한다**(keywordstool 은 hintKeywords 5개가 상한이라 5개씩 나눠서).
+    # ⚠️ 2026-08-11 실측: 상위 5개만 조회하면 나머지는 결합 검색량이 비어, 아래 황금 키워드가
+    #    **광역 검색량**(예 '마사지건' 17,150)을 「조원동 마사지건」의 수요인 것처럼 표시했다.
+    #    지역 결합 수요가 실제로 있는지는 결합형을 직접 물어봐야만 알 수 있다.
     try:
-        head = [c for c in cand[:5] if _pl_norm_kw(c["combined"]) != _pl_norm_kw(c["keyword"])]
-        if head:
+        need = [c for c in cand if _pl_norm_kw(c["combined"]) != _pl_norm_kw(c["keyword"])]
+        if need:
             vmap = {}
-            for vr in (_kw_vol([c["combined"] for c in head]) or []):
-                vmap[_pl_norm_kw(vr.get("keyword"))] = vr
-            for c in head:
+            for i in range(0, len(need), 5):
+                chunk = need[i:i + 5]
+                for vr in (_kw_vol([c["combined"] for c in chunk]) or []):
+                    vmap[_pl_norm_kw(vr.get("keyword"))] = vr
+            for c in need:
                 vr = vmap.get(_pl_norm_kw(c["combined"]))
                 if vr:
                     pc, mo = vr.get("monthlyPcQcCnt"), vr.get("monthlyMobileQcCnt")
@@ -1260,7 +1265,7 @@ def _place_related_keywords(region: str, base_kw: str, combined_kw: str,
                         c["combinedVolume"] = (_pe_int(pc) + _pe_int(mo)) or None
         else:
             # 지역이 없거나 이미 포함돼 결합형이 원형과 같은 경우 — 원 검색량이 곧 결합 검색량
-            for c in cand[:5]:
+            for c in cand:
                 c["combinedVolume"] = c["volume"]
     except Exception as e:
         logger.warning(f"[place-market] 결합 키워드 검색량 조회 실패(무시): {e}")
@@ -1278,22 +1283,33 @@ def _place_related_keywords(region: str, base_kw: str, combined_kw: str,
     return cand
 
 
-def _place_golden_keywords(related, limit: int = 6):
-    """지역 황금 키워드 — 검색량은 있는데 **아직 순위가 없는** 키워드를 먼저 제시.
+# 검색광고가 돌려주는 최저 표기 = PC 10 + 모바일 10 = 20 («10 미만»을 10으로 반올림).
+# 즉 결합 검색량 20 은 「그 지역에서 실제로 검색되지 않는다」는 뜻이다.
+PLACE_MIN_LOCAL_VOLUME = 20
 
-    새로 부르는 API 없음(연관 키워드 결과 재가공). 순위를 이미 잡고 있는 키워드는
-    「지킬 것」이지 「팔 것」이 아니므로 뺀다."""
+
+def _place_golden_keywords(related, limit: int = 6):
+    """지역 황금 키워드 — **지역 결합 검색량이 실제로 확인된** 키워드 중 아직 순위가 없는 것.
+
+    새로 부르는 API 없음(연관 키워드 결과 재가공).
+    ⚠️ 2026-08-11 실측 사고: 종전엔 결합 검색량이 없으면 **광역 검색량으로 폴백**했다.
+       그래서 「조원동 마사지건 17,150회」처럼, 실제로는 그 동네에서 아무도 안 찾는
+       상품 키워드가 1순위 공략 대상으로 나갔다(마사지 기계를 사려는 검색이지
+       안마원을 찾는 검색이 아니다). → **결합 검색량이 있고 최저 구간을 넘는 것만** 남긴다.
+       판단할 근거가 없으면 넣지 않는다 — 사장님께 나가는 자리다.
+    순위를 이미 잡고 있는 키워드는 「지킬 것」이지 「팔 것」이 아니므로 뺀다."""
     rows = []
     for c in (related or []):
         if c.get("rank"):                      # 이미 노출 중 → 공략 대상 아님
             continue
-        vol = c.get("combinedVolume") or c.get("volume")
-        if not vol:
+        vol = c.get("combinedVolume")
+        if not vol or vol <= PLACE_MIN_LOCAL_VOLUME:
             continue
         rows.append({
             "keyword": c.get("combined") or c.get("keyword"),
             "baseKeyword": c.get("keyword"),
-            "volume": vol,
+            "volume": vol,                      # 지역 결합 검색량(실측)
+            "baseVolume": c.get("volume"),      # 참고 — 지역을 뗀 전체 시장
             "compIdx": c.get("compIdx") or "",
             "state": c.get("state") or "미확인",
             # 경쟁 정도가 낮을수록 먼저 — 같은 검색량이면 뚫기 쉬운 쪽
@@ -1445,7 +1461,8 @@ def _place_market_block(region: str, base_kw: str, combined_kw: str, industry: s
     try:
         from sbiz365 import get_place_sbiz
         if region and industry:
-            market["sbiz"] = get_place_sbiz(region, industry, hint=f"{biz_name} {base_kw}")
+            market["sbiz"] = get_place_sbiz(region, industry, hint=f"{biz_name} {base_kw}",
+                                            biz_name=biz_name)
     except Exception as e:
         logger.warning(f"[place-market] 상권 조회 실패(무시): {e}")
 
@@ -1851,7 +1868,8 @@ def place_proposal_enrich(req: PlaceProposalEnrichRequest,
             # 업체명·키워드를 업종 힌트로 함께 넘긴다 — 드롭다운은 「음식점」처럼 넓은 13종뿐이라
             # 삼겹살집에 백반/한정식 평균이 잡히는 일이 있었다(2026-08-05 실측: 백반 2,970 vs
             # 돼지고기 구이 3,447 만원). 힌트에서 못 읽으면 종전 라벨 경로 그대로.
-            sbiz_block = get_place_sbiz(region, req.industry, hint=f"{name} {base_kw}")
+            sbiz_block = get_place_sbiz(region, req.industry, hint=f"{name} {base_kw}",
+                                        biz_name=name)
         except Exception as e:
             logger.warning(f"[proposal-enrich] 상권 데이터 조회 실패(무시): {e}")
 
