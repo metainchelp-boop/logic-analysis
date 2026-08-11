@@ -25490,7 +25490,7 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
       }
     }, '✅ 데이터랩')), renderTrendChart(tr), React_.createElement('div', {
       className: 'trendfacts'
-    }, tr.peakMonth ? React_.createElement('span', null, React_.createElement('b', null, '성수기'), ' ', tr.peakMonth) : null, tr.lowMonth ? React_.createElement('span', null, React_.createElement('b', null, '비수기'), ' ', tr.lowMonth) : null, tr.peakWeekday ? React_.createElement('span', null, React_.createElement('b', null, '요일 피크'), ' ', tr.peakWeekday + '요일') : null, tr.gender && tr.gender.top ? React_.createElement('span', null, React_.createElement('b', null, '주 이용층'), ' ', (tr.topAge ? tr.topAge + ' ' : '') + tr.gender.top) : null, tr.yoyRate != null ? React_.createElement('span', null, React_.createElement('b', null, '전년 동월 대비'), ' ', (tr.yoyRate >= 0 ? '+' : '') + tr.yoyRate + '%') : null), React_.createElement('div', {
+    }, tr.peakMonth ? React_.createElement('span', null, React_.createElement('b', null, '성수기'), ' ', tr.peakMonth) : null, tr.lowMonth ? React_.createElement('span', null, React_.createElement('b', null, '비수기'), ' ', tr.lowMonth) : null, tr.peakWeekday ? React_.createElement('span', null, React_.createElement('b', null, '요일 피크'), ' ', tr.peakWeekday + '요일') : null, tr.yoyRate != null ? React_.createElement('span', null, React_.createElement('b', null, '전년 동월 대비'), ' ', (tr.yoyRate >= 0 ? '+' : '') + tr.yoyRate + '%') : null), React_.createElement('div', {
       className: 'chartfoot'
     }, '데이터랩 통합검색어 트렌드 · ‘', tr.keyword, '’ 기준(지역을 뗀 업종 키워드 — 지역 키워드는 표본이 작아 계절성이 노이즈가 됩니다). 값은 기간 내 상대 지수입니다.')) : null) : null,
     // 동네 상권

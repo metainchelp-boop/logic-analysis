@@ -510,8 +510,6 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
                                     tr.peakMonth ? React_.createElement('span', null, React_.createElement('b', null, '성수기'), ' ', tr.peakMonth) : null,
                                     tr.lowMonth ? React_.createElement('span', null, React_.createElement('b', null, '비수기'), ' ', tr.lowMonth) : null,
                                     tr.peakWeekday ? React_.createElement('span', null, React_.createElement('b', null, '요일 피크'), ' ', tr.peakWeekday + '요일') : null,
-                                    (tr.gender && tr.gender.top) ? React_.createElement('span', null, React_.createElement('b', null, '주 이용층'), ' ',
-                                        (tr.topAge ? (tr.topAge + ' ') : '') + tr.gender.top) : null,
                                     (tr.yoyRate != null) ? React_.createElement('span', null, React_.createElement('b', null, '전년 동월 대비'), ' ',
                                         (tr.yoyRate >= 0 ? '+' : '') + tr.yoyRate + '%') : null),
                                 React_.createElement('div', { className: 'chartfoot' },

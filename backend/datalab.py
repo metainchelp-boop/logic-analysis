@@ -853,20 +853,11 @@ DATALAB_SEARCH_URL = "https://openapi.naver.com/v1/datalab/search"
 # (`PORTAL_SEO_AUTO_ENABLED` 선례. 끄면 검색 트렌드 카드만 조용히 사라지고 나머지는 그대로)
 PLACE_TREND_ENABLED = os.getenv("PLACE_TREND_ENABLED", "true").strip().lower() not in ("false", "0", "off", "no")
 
-# 네이버 연령 코드: 1(0~12) 2(13~18) 3(19~24) 4(25~29) 5(30~34) 6(35~39)
-#                  7(40~44) 8(45~49) 9(50~54) 10(55~59) 11(60~)
-_SEARCH_AGE_BANDS = [
-    ("20대", ["3", "4"]),
-    ("30대", ["5", "6"]),
-    ("40대", ["7", "8"]),
-    ("50대+", ["9", "10", "11"]),
-]
-
 _WEEKDAY_LABEL = ["월", "화", "수", "목", "금", "토", "일"]
 
 
 # 이 앱 키에 「통합검색어 트렌드」 사용 권한(스코프)이 없으면 401 errorCode 024 가 온다.
-# 재시도해도 소용없고, 한 번의 분석에 8콜이 전부 401 로 낭비되므로 프로세스 수명 동안 끈다.
+# 재시도해도 소용없고, 한 번의 분석에 2콜이 전부 401 로 낭비되므로 프로세스 수명 동안 끈다.
 # (2026-08-11 실측: "Scope Status Invalid : Authentication failed." — 네이버 개발자센터에서
 #  해당 앱에 데이터랩 검색어트렌드 API 를 추가 등록하면 해제된다. 등록 후엔 재기동만 하면 됨)
 _search_scope_denied = [False]
@@ -955,12 +946,11 @@ def _search_sum(data: dict) -> float:
 
 
 def get_search_trend(keyword: str) -> dict:
-    """플레이스용 검색 수요 4종 — 최근 12개월 추이 · 성수기/비수기 · 요일 패턴 · 성별/연령.
+    """플레이스용 검색 수요 — 최근 12개월 추이 · 성수기/비수기 · 요일 패턴.
 
     반환(전 필드 optional — 없으면 그 축을 화면이 생략):
       {"keyword", "months":[{period,label,ratio}], "peakMonth","lowMonth","yoyRate",
-       "weekdays":[{label,ratio}], "peakWeekday",
-       "gender":{"male","female","top"}, "ages":[{label,ratio}], "topAge"}
+       "weekdays":[{label,ratio}], "peakWeekday"}
     실패·한도 소진·키 미설정 시 {}(카드 자체를 렌더하지 않는다)."""
     kw = (keyword or "").strip()
     if not PLACE_TREND_ENABLED:
@@ -1033,36 +1023,17 @@ def get_search_trend(keyword: str) -> dict:
     except Exception as e:
         logger.warning(f"[검색트렌드] 요일 패턴 실패(무시): {e}")
 
-    # ③ 성별 — 최근 3개월 합계 비교(절대값이 아니라 비중)
-    try:
-        start90 = (today - timedelta(days=90)).strftime("%Y-%m-%d")
-        end = today.strftime("%Y-%m-%d")
-        m = _search_sum(_datalab_search_post(_search_body(kw, start90, end, "month", gender="m")))
-        f = _search_sum(_datalab_search_post(_search_body(kw, start90, end, "month", gender="f")))
-        if (m + f) > 0:
-            male = round(m / (m + f) * 100)
-            out["gender"] = {"male": male, "female": 100 - male,
-                             "top": ("남성" if male >= 50 else "여성")}
-    except Exception as e:
-        logger.warning(f"[검색트렌드] 성별 실패(무시): {e}")
-
-    # ④ 연령대 — 4구간(20/30/40/50+) 합계 비중. 10대 이하는 동네 업종 수요와 거리가 멀어 제외.
-    try:
-        start90 = (today - timedelta(days=90)).strftime("%Y-%m-%d")
-        end = today.strftime("%Y-%m-%d")
-        raw = []
-        for label, codes in _SEARCH_AGE_BANDS:
-            raw.append((label, _search_sum(_datalab_search_post(
-                _search_body(kw, start90, end, "month", ages=codes)))))
-        total = sum(v for _, v in raw)
-        if total > 0:
-            out["ages"] = [{"label": l, "ratio": round(v / total * 100)} for l, v in raw]
-            out["topAge"] = max(out["ages"], key=lambda x: x["ratio"])["label"]
-    except Exception as e:
-        logger.warning(f"[검색트렌드] 연령 실패(무시): {e}")
+    # ⚠️ 성별·연령 축은 **의도적으로 없다**(2026-08-11 실측으로 폐기).
+    # 통합검색어 트렌드는 **요청 단위로 최대값을 100 으로 정규화**해 돌려준다 —
+    # 같은 구간을 필터만 바꿔 7회 호출한 결과가 전부 max=100·합계 326~333 이었다
+    # (필터없음 326.0 / 남 326.8 / 여 329.3 / 20대 326.7 / 30대 326.9 / 40대 333.0 / 50대+ 327.7).
+    # 즉 남/여, 연령대끼리는 **서로 다른 자로 잰 값**이라 나눠도 늘 균등(50:50, 25×4)이 나온다.
+    # 그 값을 「주 이용층」이라 적어 사장님께 내보내는 건 실측을 가장한 허수이므로 축 자체를 뺐다.
+    # (덤으로 키워드당 호출이 8회 → 2회로 줄어 일일 한도 부담도 크게 준다.)
+    # 되살리려면 「한 응답 안에서 성별·연령 비중이 함께 오는」 다른 원천이 필요하다.
 
     # 아무 축도 못 채웠으면 카드를 만들지 않는다(빈 껍데기 렌더 방지).
-    if not any(k in out for k in ("months", "weekdays", "gender", "ages")):
+    if not any(k in out for k in ("months", "weekdays")):
         return {}
     _cache_set(ck, out)
     return out
