@@ -39,6 +39,10 @@ on:
         description: '데이터랩 스코프 대조 — 같은 앱 키로 쇼핑인사이트 vs 통합검색어 트렌드 각각 호출해 어느 쪽이 되는지 확인(true). 키 값은 출력 안 함'
         default: ''
 
+      secret_check:
+        description: '시크릿 배선 점검 — GitHub 에 등록됐는지 / 서버 .env 까지 갔는지 두 층을 각각 확인(true). 값은 출력 안 하고 설정 여부만'
+        default: ''
+
 jobs:
   diagnose:
     runs-on: ubuntu-latest
@@ -1188,4 +1192,45 @@ jobs:
             print("                        DATALAB_SEARCH_CLIENT_ID / _SECRET 시크릿으로 넣어야 합니다.")
             print("      A 401          → 기본 키 자체 문제(스토어 분석도 영향 — 우선 확인).")
             print("=" * 68)
+            PY
+
+      # 시크릿이 「등록은 됐는데 서버엔 없다」를 가르는 진단. 두 층을 따로 본다:
+      #   ① GitHub Actions 층 — 이 이름으로 시크릿이 존재하는가(값 대신 true/false 만 출력)
+      #   ② 서버 .env 층 — 배포 주입이 실제로 줄을 넣었는가(줄 수만 출력)
+      # ⚠️ 어느 쪽도 값을 찍지 않는다.
+      - name: 시크릿 배선 점검 — GitHub 층
+        if: ${{ github.event.inputs.secret_check == 'true' }}
+        run: |
+          echo "=== ① GitHub Actions 시크릿 등록 여부(값 아님) ==="
+          echo "DATALAB_SEARCH_CLIENT_ID     : ${{ secrets.DATALAB_SEARCH_CLIENT_ID != '' }}"
+          echo "DATALAB_SEARCH_CLIENT_SECRET : ${{ secrets.DATALAB_SEARCH_CLIENT_SECRET != '' }}"
+          echo "(대조군) NAVER_CLIENT_ID     : ${{ secrets.NAVER_CLIENT_ID != '' }}"
+          echo "(대조군) SBIZ_DATA_GO_KR_KEY : ${{ secrets.SBIZ_DATA_GO_KR_KEY != '' }}"
+          echo ""
+          echo "false 면 → 이 저장소(logic-analysis)의 Settings → Secrets and variables → Actions →"
+          echo "           'Repository secrets' 에 그 이름이 없다는 뜻(오타·다른 저장소·Environment/Dependabot 탭 등록)."
+
+      - name: 시크릿 배선 점검 — 서버 .env 층
+        if: ${{ github.event.inputs.secret_check == 'true' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 120s
+          script: |
+            cd /root/logic-analysis-deploy
+            echo "=== ② 서버 .env 에 줄이 들어갔는가(값 아님·줄 수만) ==="
+            for k in DATALAB_SEARCH_CLIENT_ID DATALAB_SEARCH_CLIENT_SECRET NAVER_CLIENT_ID SBIZ_DATA_GO_KR_KEY; do
+              n=$(grep -c "^${k}=" .env 2>/dev/null || echo 0)
+              echo "  ${k} : ${n} 줄"
+            done
+            echo ""
+            echo "=== ③ 컨테이너가 실제로 들고 있는가(설정 여부만) ==="
+            docker exec -i logic-analysis python3 - <<'PY'
+            import os
+            for k in ("DATALAB_SEARCH_CLIENT_ID", "DATALAB_SEARCH_CLIENT_SECRET",
+                      "NAVER_CLIENT_ID", "NAVER_CLIENT_SECRET"):
+                v = os.getenv(k, "")
+                print(f"  {k} : {'있음' if v else '없음'}(len={len(v)})")
             PY
