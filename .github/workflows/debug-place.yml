@@ -43,6 +43,10 @@ on:
         description: '시크릿 배선 점검 — GitHub 에 등록됐는지 / 서버 .env 까지 갔는지 두 층을 각각 확인(true). 값은 출력 안 하고 설정 여부만'
         default: ''
 
+      trend_raw:
+        description: '검색어트렌드 원문 확인 — 성별·연령 필터 응답이 요청마다 따로 정규화되는지(=서로 비교 불가인지) 실측. 키워드 입력(예: 마사지)'
+        default: ''
+
 jobs:
   diagnose:
     runs-on: ubuntu-latest
@@ -1233,4 +1237,66 @@ jobs:
                       "NAVER_CLIENT_ID", "NAVER_CLIENT_SECRET"):
                 v = os.getenv(k, "")
                 print(f"  {k} : {'있음' if v else '없음'}(len={len(v)})")
+            PY
+
+      # ⚠️ 성별 50/50 · 연령 25/25/25/25 처럼 「정확히 균등」이 나오면 실측이 아니라
+      # 정규화 특성을 우리가 잘못 쓴 것이다. 통합검색어 트렌드는 **요청 단위로** 최대값을
+      # 100 으로 맞춰 돌려줄 수 있는데, 그러면 gender=m 응답과 gender=f 응답의 값은
+      # 서로 다른 자를 쓴 셈이라 비중 계산에 쓸 수 없다. 원문 max/합계를 나란히 찍어 확정한다.
+      - name: 검색어트렌드 원문 정규화 확인
+        if: ${{ github.event.inputs.trend_raw != '' }}
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          TRKW: ${{ github.event.inputs.trend_raw }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 180s
+          envs: TRKW
+          script: |
+            docker exec -i -e TRKW="$TRKW" logic-analysis python3 - <<'PY'
+            import os, json, datetime, requests
+
+            kw = (os.getenv("TRKW") or "마사지").strip()
+            cid = os.getenv("DATALAB_SEARCH_CLIENT_ID") or os.getenv("NAVER_CLIENT_ID", "")
+            sec = os.getenv("DATALAB_SEARCH_CLIENT_SECRET") or os.getenv("NAVER_CLIENT_SECRET", "")
+            H = {"X-Naver-Client-Id": cid, "X-Naver-Client-Secret": sec,
+                 "Content-Type": "application/json"}
+            end = datetime.date.today()
+            start = end - datetime.timedelta(days=90)
+
+            def probe(label, extra):
+                body = {"startDate": start.isoformat(), "endDate": end.isoformat(),
+                        "timeUnit": "month",
+                        "keywordGroups": [{"groupName": kw, "keywords": [kw]}]}
+                body.update(extra)
+                try:
+                    r = requests.post("https://openapi.naver.com/v1/datalab/search",
+                                      json=body, headers=H, timeout=10)
+                    if r.status_code != 200:
+                        print(f"  {label:12s} HTTP {r.status_code} {r.text[:100]}")
+                        return
+                    res = (r.json().get("results") or [{}])[0].get("data") or []
+                    vals = [d.get("ratio") for d in res]
+                    mx = max(vals) if vals else None
+                    print(f"  {label:12s} 점 {len(vals)}개 · 최대 {mx} · 합계 {round(sum(vals),1) if vals else 0} · 값 {vals}")
+                except Exception as e:
+                    print(f"  {label:12s} 오류 {e}")
+
+            print("=" * 68)
+            print(f"키워드 {kw!r} · 최근 3개월 · 같은 구간을 필터만 바꿔 호출")
+            print("-" * 68)
+            probe("필터 없음", {})
+            probe("남성", {"gender": "m"})
+            probe("여성", {"gender": "f"})
+            probe("20대", {"ages": ["3", "4"]})
+            probe("30대", {"ages": ["5", "6"]})
+            probe("40대", {"ages": ["7", "8"]})
+            probe("50대+", {"ages": ["9", "10", "11"]})
+            print("-" * 68)
+            print("판독: 각 줄의 '최대'가 전부 100 이면 → 요청마다 자기 안에서 정규화된 것.")
+            print("      그러면 남/여, 연령대끼리 값을 비교하는 건 무의미하다(우리 계산이 틀림).")
+            print("      최대값이 서로 다르면 → 같은 자를 쓴 것이라 비중 계산 가능.")
+            print("=" * 68)
             PY
