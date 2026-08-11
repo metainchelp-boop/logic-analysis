@@ -1407,6 +1407,14 @@ def place_proposal_enrich(req: PlaceProposalEnrichRequest,
                 if rank_series:
                     matched_kw = _kw_try
                     break
+            # 표기 후보로 못 찾으면 이 업체가 **실제로 추적 중인** 키워드에서 찾는다.
+            # 등록은 '성사동 칼국수맛집' 인데 제안서엔 '칼국수' 라고 적는 식의 차이가 흔하다.
+            if not rank_series:
+                _alt = _tracked_keyword_alias(business_key, base_kw, combined_kw)
+                if _alt:
+                    rank_series = get_place_rank_history(business_key, _alt, days=90)
+                    if rank_series:
+                        matched_kw = _alt
             if rank_series:
                 last = rank_series[-1]
                 rank = last.get("rank")
@@ -1477,6 +1485,9 @@ def place_proposal_enrich(req: PlaceProposalEnrichRequest,
             "rank": rank,                   # 무인 추적 최신 순위 — null=미추적/미노출
             "rankState": rank_state,        # 노출/미노출/미확인
             "rankSeries": rank_series,      # Q3 순위 추이 [{date,rank,state}]
+            # 순위를 실제로 잰 키워드 — 입력과 다를 수 있다(등록 '성사동 칼국수맛집' vs 입력 '칼국수').
+            # 다르면 제안서가 「'…' 기준」이라고 밝힌다(무엇을 잰 숫자인지 숨기지 않는다).
+            "rankKeyword": (matched_kw if rank_series else None),
             "trackedKeywords": keyword_rows,  # 지역 황금 키워드 축(추적 중 키워드+검색량+순위)
             "hasTracking": bool(rank_series),
         }}
@@ -1564,6 +1575,44 @@ def _keyword_lookup_candidates(region: str, base_kw: str, combined_kw: str):
             seen.add(c)
             out.append(c)
     return out
+
+
+def _tracked_keyword_alias(business_key: str, base_kw: str, combined_kw: str) -> str:
+    """표기 후보로 못 찾았을 때 **이 업체가 실제로 추적 중인 키워드** 중 가까운 것을 고른다.
+
+    추적 등록 키워드는 지역 합성에 더해 사장님이 쓰는 말이 붙는 일이 흔하다
+    (등록 '성사동 칼국수맛집' vs 제안서 입력 '칼국수'). 순위 조회가 정확 일치라
+    이 한 글자 차이로 순위·추이가 통째로 안 붙는다 — 매일 수집이 정상인데도
+    제안서에는 「미확인」이 찍혔다(2026-08-08 실측: 밀밭칼국수 3위 수집 중, 추이 0점).
+
+    ⚠️ 엉뚱한 키워드를 붙이면 미노출보다 나쁘다 — **원 키워드를 품은 것만** 고른다.
+       '칼국수' ⊂ '성사동칼국수맛집' ✅ / '고기' ⊄ '구디삼겹살' ❌.
+       한 글자는 아무 데나 걸리므로 제외. 여러 개면 최근 기록 순(조회가 그 순서)."""
+    try:
+        from database import get_place_tracked_keywords
+    except Exception:
+        return ""
+
+    def _n(s):
+        return "".join(str(s or "").split()).upper()
+
+    base_n, comb_n = _n(base_kw), _n(combined_kw)
+    if len(base_n) < 2 or not business_key:
+        return ""
+    try:
+        rows = get_place_tracked_keywords(business_key) or []
+    except Exception:
+        return ""
+    for r in rows:
+        kw = (r.get("keyword") or "").strip()
+        kn = _n(kw)
+        if not kn:
+            continue
+        # 등록이 더 긴 경우('칼국수' ⊂ '성사동칼국수맛집')와
+        # 등록이 더 짧은 경우('칼국수' ⊃ 입력 '성사동 칼국수') 양쪽을 받는다.
+        if base_n in kn or (comb_n and kn in comb_n):
+            return kw
+    return ""
 
 
 def _combine_region_keyword(region: str, keyword: str) -> str:
