@@ -778,6 +778,61 @@ def get_keyword_volume(keywords: List[str]) -> List[Dict]:
                 return []
 
 
+def get_keyword_ideas(seed: str, limit: int = 200) -> List[Dict]:
+    """검색광고 keywordstool 의 **연관 키워드 원본** — 요청 키워드 필터를 걸지 않는다.
+
+    `get_keyword_volume` 은 「내가 물어본 키워드」만 돌려주도록 응답을 거르는데,
+    keywordstool 은 원래 씨앗 키워드에서 파생된 연관 키워드를 수백 개 함께 준다.
+    그 목록 자체가 필요한 경로(플레이스 분석의 연관·황금 키워드)를 위한 별도 함수 —
+    기존 함수의 필터 규약을 건드리지 않으려고 새로 뺀다(스토어 경로 무회귀).
+
+    Returns: [{"keyword", "monthlyPcQcCnt", "monthlyMobileQcCnt", "compIdx", "plAvgDepth"}]
+             — 실패·키 미설정 시 [](호출측이 그 카드를 생략).
+    """
+    kw = (seed or "").strip().replace(" ", "")
+    if not kw:
+        return []
+    if not SEARCHAD_API_KEY or not SEARCHAD_SECRET_KEY or not SEARCHAD_CUSTOMER_ID:
+        return []
+
+    uri = "/keywordstool"
+    timestamp = str(int(time.time() * 1000))
+    try:
+        resp = requests.get(
+            f"https://api.searchad.naver.com{uri}",
+            params={"hintKeywords": kw, "showDetail": "1"},
+            headers={
+                "X-Timestamp": timestamp,
+                "X-API-KEY": SEARCHAD_API_KEY,
+                "X-Customer": SEARCHAD_CUSTOMER_ID,
+                "X-Signature": _generate_searchad_signature(timestamp, "GET", uri),
+            },
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            logger.warning(f"연관 키워드 조회 응답 {resp.status_code} (씨앗 '{kw}')")
+            return []
+        rows = (resp.json() or {}).get("keywordList", []) or []
+    except Exception as e:
+        logger.warning(f"연관 키워드 조회 실패(무시): {e}")
+        return []
+
+    out = []
+    for kd in rows[: max(1, int(limit))]:
+        rel = (kd.get("relKeyword") or "").strip()
+        if not rel:
+            continue
+        out.append({
+            "keyword": rel,
+            "monthlyPcQcCnt": _safe_int(kd.get("monthlyPcQcCnt")),
+            "monthlyMobileQcCnt": _safe_int(kd.get("monthlyMobileQcCnt")),
+            "compIdx": kd.get("compIdx", ""),
+            "plAvgDepth": _safe_int(kd.get("plAvgDepth")),
+        })
+    logger.info(f"연관 키워드 조회: {len(out)}건 (씨앗 '{kw}')")
+    return out
+
+
 def _searchad_post(uri: str, body: dict) -> dict:
     """검색광고 API POST 호출(서명 인증) — 실패 시 {} (호출측 폴백)."""
     if not SEARCHAD_API_KEY or not SEARCHAD_SECRET_KEY or not SEARCHAD_CUSTOMER_ID:
