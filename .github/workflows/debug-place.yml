@@ -1131,23 +1131,30 @@ jobs:
 
             cid = os.getenv("NAVER_CLIENT_ID", "")
             sec = os.getenv("NAVER_CLIENT_SECRET", "")
+            tid = os.getenv("DATALAB_SEARCH_CLIENT_ID", "")
+            tsec = os.getenv("DATALAB_SEARCH_CLIENT_SECRET", "")
             print("=" * 68)
-            print(f"앱 키 설정 여부 — CLIENT_ID {'있음' if cid else '없음'}(len={len(cid)}) · "
+            print(f"기본 앱 키(지역·쇼핑검색·쇼핑인사이트) — ID {'있음' if cid else '없음'}(len={len(cid)}) · "
                   f"SECRET {'있음' if sec else '없음'}(len={len(sec)})")
-            print("※ 두 API 는 같은 이 키를 씁니다. 다른 건 개발자센터의 'API 설정' 등록 항목입니다.")
+            print(f"트렌드 전용 키(DATALAB_SEARCH_*)        — ID {'있음' if tid else '없음'}(len={len(tid)}) · "
+                  f"SECRET {'있음' if tsec else '없음'}(len={len(tsec)})")
+            if not tid:
+                print("※ 전용 키 미설정 → 트렌드도 기본 키로 호출(= 지금까지와 동일).")
 
             H = {"X-Naver-Client-Id": cid, "X-Naver-Client-Secret": sec,
                  "Content-Type": "application/json"}
+            HT = {"X-Naver-Client-Id": tid or cid, "X-Naver-Client-Secret": tsec or sec,
+                  "Content-Type": "application/json"}
             end = datetime.date.today().replace(day=1) - datetime.timedelta(days=1)
             start = (end - datetime.timedelta(days=180)).replace(day=1)
             sd, ed = start.isoformat(), end.isoformat()
 
-            def call(label, url, body):
+            def call(label, url, body, hdr=None):
                 print("-" * 68)
                 print(f"[{label}]")
                 print(f"  {url}")
                 try:
-                    r = requests.post(url, json=body, headers=H, timeout=10)
+                    r = requests.post(url, json=body, headers=(hdr or H), timeout=10)
                     print(f"  HTTP {r.status_code}")
                     txt = (r.text or "")[:220]
                     if r.status_code == 200:
@@ -1168,14 +1175,17 @@ jobs:
                  {"startDate": sd, "endDate": ed, "timeUnit": "month",
                   "category": [{"name": "패션의류", "param": ["50000000"]}]})
 
-            call("B. 데이터랩 통합검색어 트렌드 (플레이스 검색 트렌드가 쓰는 것)",
+            call(f"B. 데이터랩 통합검색어 트렌드 ({'전용 키' if tid else '기본 키'}로 호출)",
                  "https://openapi.naver.com/v1/datalab/search",
                  {"startDate": sd, "endDate": ed, "timeUnit": "month",
-                  "keywordGroups": [{"groupName": "마사지", "keywords": ["마사지"]}]})
+                  "keywordGroups": [{"groupName": "마사지", "keywords": ["마사지"]}]},
+                 HT)
 
             print("-" * 68)
-            print("판독: A 만 되고 B 가 401/errorCode 024 면 = 키는 정상, 앱에 「검색어트렌드」 미등록.")
-            print("      둘 다 되면 = 권한 해소됨(서버 재기동 후 트렌드 카드 자동 노출).")
-            print("      둘 다 실패면 = 키 자체 문제(등록 항목이 아니라 키를 확인).")
+            print("판독: A 200 + B 200  → 트렌드 켜짐(서버 재기동 후 카드 자동 노출).")
+            print("      A 200 + B 401  → 그 앱에 「검색어트렌드」 미등록.")
+            print("                        네이버가 신규 등록을 막아둔 API 라, **이미 등록된 앱**의 키를")
+            print("                        DATALAB_SEARCH_CLIENT_ID / _SECRET 시크릿으로 넣어야 합니다.")
+            print("      A 401          → 기본 키 자체 문제(스토어 분석도 영향 — 우선 확인).")
             print("=" * 68)
             PY

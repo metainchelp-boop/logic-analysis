@@ -118,6 +118,28 @@ jobs:
               fi
             done
 
+            # ── 데이터랩 검색어트렌드 전용 키 멱등 주입 (2026-08-11) ──
+            # 네이버가 「데이터랩(검색어트렌드)」 **신규 등록을 막아둔** 상태라(개발자센터에서
+            # 기존 앱에 추가 시 "신규로 등록할 수 없는 API" 거절), 그 권한을 이미 가진
+            # 다른 앱의 키로만 이 API 를 부른다. 나머지(지역·쇼핑검색·쇼핑인사이트)는
+            # 종전 NAVER_CLIENT_ID/SECRET 그대로 — 주력 경로의 한도를 남과 섞지 않기 위함.
+            # 미설정이면 코드가 기존 키로 폴백(=지금과 동일, 트렌드만 조용히 비활성).
+            _dl_backed_up=0
+            for _pair in \
+              "DATALAB_SEARCH_CLIENT_ID=${{ secrets.DATALAB_SEARCH_CLIENT_ID }}" \
+              "DATALAB_SEARCH_CLIENT_SECRET=${{ secrets.DATALAB_SEARCH_CLIENT_SECRET }}" ; do
+              _name="${_pair%%=*}"
+              _val="${_pair#*=}"
+              if [ -n "$_val" ] && ! grep -q "^${_name}=" .env 2>/dev/null; then
+                if [ "$_dl_backed_up" = "0" ]; then
+                  cp .env .env.bak-datalab 2>/dev/null || true
+                  _dl_backed_up=1
+                fi
+                echo "${_name}=${_val}" >> .env
+                echo "${_name} 주입 완료"
+              fi
+            done
+
             # docker-compose.yml 작성
             cat > docker-compose.yml << 'COMPEOF'
             version: '3.8'

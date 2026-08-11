@@ -15,6 +15,15 @@ logger = logging.getLogger(__name__)
 NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID", "")
 NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET", "")
 
+# ⚠️ 「데이터랩(검색어트렌드)」는 네이버가 **신규 등록을 막아둔** API 다(2026-08-11 실측 —
+# 개발자센터에서 기존 앱에 추가하면 "신규로 등록할 수 없는 API가 선택되었습니다" 로 거절).
+# 그래서 이 API 만 **그 권한을 이미 가진 다른 앱**의 키로 부른다. 나머지 경로
+# (지역검색·쇼핑검색·쇼핑인사이트)는 종전 NAVER_CLIENT_ID/SECRET 그대로 —
+# 주력 경로의 일일 한도를 다른 서비스와 섞지 않기 위해 **의도적으로 분리**한다.
+# 미설정이면 기존 키로 폴백(= 지금과 동일 동작, 트렌드만 401 로 조용히 비활성).
+DATALAB_SEARCH_CLIENT_ID = os.getenv("DATALAB_SEARCH_CLIENT_ID", "") or NAVER_CLIENT_ID
+DATALAB_SEARCH_CLIENT_SECRET = os.getenv("DATALAB_SEARCH_CLIENT_SECRET", "") or NAVER_CLIENT_SECRET
+
 DATALAB_BASE = "https://openapi.naver.com/v1/datalab/shopping"
 
 # ==================== 메모리 캐시 (TTL 1시간) ====================
@@ -863,21 +872,38 @@ _WEEKDAY_LABEL = ["월", "화", "수", "목", "금", "토", "일"]
 _search_scope_denied = [False]
 
 
+def _datalab_search_headers():
+    """통합검색어 트렌드 전용 헤더 — 쇼핑인사이트와 **다른 앱 키**를 쓸 수 있다."""
+    return {
+        "X-Naver-Client-Id": DATALAB_SEARCH_CLIENT_ID,
+        "X-Naver-Client-Secret": DATALAB_SEARCH_CLIENT_SECRET,
+        "Content-Type": "application/json",
+    }
+
+
+def datalab_search_uses_separate_key() -> bool:
+    """트렌드가 별도 앱 키를 쓰는 중인가(진단·로그용 — 키 값은 노출하지 않는다)."""
+    return bool(os.getenv("DATALAB_SEARCH_CLIENT_ID", "").strip())
+
+
 def _datalab_search_post(body: dict) -> dict:
     """통합검색어 트렌드 POST — 쇼핑인사이트와 동일한 한도 가드·백오프를 공유한다."""
     if datalab_quota_exhausted() or _search_scope_denied[0]:
         return {}
     for attempt in range(3):
         try:
-            resp = requests.post(DATALAB_SEARCH_URL, json=body, headers=_datalab_headers(), timeout=10)
+            resp = requests.post(DATALAB_SEARCH_URL, json=body, headers=_datalab_search_headers(), timeout=10)
             if resp.status_code == 200:
                 return resp.json()
             if resp.status_code in (401, 403):
                 if not _search_scope_denied[0]:
                     _search_scope_denied[0] = True
+                    _which = ("DATALAB_SEARCH_CLIENT_ID(전용 키)"
+                              if datalab_search_uses_separate_key() else "NAVER_CLIENT_ID(기본 키)")
                     logger.warning(
-                        "데이터랩 통합검색어 트렌드 권한 없음 — 이 앱 키에 해당 API 가 등록돼 있지 않습니다. "
-                        "네이버 개발자센터에서 「데이터랩(검색어트렌드)」 사용 신청 후 서버를 재기동하면 켜집니다. "
+                        f"데이터랩 통합검색어 트렌드 권한 없음 — 지금 쓰는 {_which} 앱에 해당 API 가 등록돼 있지 않습니다. "
+                        "네이버는 이 API 의 신규 등록을 막아둔 상태라, **이미 등록된 앱**의 키를 "
+                        "DATALAB_SEARCH_CLIENT_ID / DATALAB_SEARCH_CLIENT_SECRET 로 넣고 재기동해야 켜집니다. "
                         f"(응답: {resp.text[:120]})")
                 return {}
             if resp.status_code == 429 and ('"errorCode":"010"' in resp.text
@@ -939,7 +965,7 @@ def get_search_trend(keyword: str) -> dict:
     kw = (keyword or "").strip()
     if not PLACE_TREND_ENABLED:
         return {}
-    if not kw or not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
+    if not kw or not DATALAB_SEARCH_CLIENT_ID or not DATALAB_SEARCH_CLIENT_SECRET:
         return {}
     if datalab_quota_exhausted():
         return {}
