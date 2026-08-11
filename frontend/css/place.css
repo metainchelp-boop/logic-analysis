@@ -56,22 +56,11 @@
 .place-analysis .btn-success{background:linear-gradient(135deg,var(--pa-ok2),#10b981);color:#fff}
 .place-analysis .btn-sm{height:34px;padding:0 13px;font-size:12px;border-radius:8px}
 
-/* ── 리포트 ── */
-.place-analysis .cover{background:linear-gradient(120deg,var(--pa-card),var(--pa-ind-soft));border:1px solid var(--pa-ind-soft2);border-radius:16px;padding:17px 19px;box-shadow:var(--pa-shadow)}
-.place-analysis .cover .ttl{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap}
-.place-analysis .cover h1{font-size:clamp(19px,2.6vw,23px);font-weight:900;margin:0}
-.place-analysis .cover .rg{font-size:13px;color:var(--pa-sub);font-weight:700}
-.place-analysis .rc-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin-top:13px}
-@media(max-width:720px){.place-analysis .rc-grid{grid-template-columns:repeat(2,1fr)}}
-.place-analysis .rc{background:var(--pa-card);border:1px solid var(--pa-line);border-radius:11px;padding:9px 11px}
-.place-analysis .rc .k{font-size:10.5px;color:var(--pa-muted);font-weight:700}
-.place-analysis .rc .v{font-size:14px;font-weight:800;margin-top:2px}
-
-.place-analysis .divider{display:flex;align-items:center;gap:12px;margin:6px 2px 0}
-.place-analysis .divider .tile{width:40px;height:40px;border-radius:11px;display:grid;place-items:center;font-size:19px;color:#fff;flex:none}
-.place-analysis .divider h2{font-size:20px;font-weight:900;letter-spacing:-.5px;margin:0}
-.place-analysis .divider .s{font-size:12px;color:var(--pa-sub);margin-top:1px}
-
+/* ── 리포트 ──
+ * 표지(.report-cover)·구분 헤더(.report-divider)·목차(.report-toc)는 2026-08-11 파리티 개편부터
+ * 스토어 공용 report-theme.css 를 그대로 쓴다(대표 지시: 디자인·배치 통일). 종전의 전용
+ * .cover/.rc-grid/.rc/.divider/.tile 규칙은 삭제 — place.css 가 마지막에 로드돼 공용 표지
+ * 스타일(.report-cover .rc-grid 등)을 덮어쓰는 충돌이 있었다. */
 .place-analysis .card{background:var(--pa-card);border:1px solid var(--pa-line);border-radius:18px;box-shadow:var(--pa-shadow);padding:19px 21px}
 .place-analysis .rt-h3{display:flex;align-items:center;gap:9px;font-size:15.5px;font-weight:800;flex-wrap:wrap;margin:0}
 .place-analysis .rt-hic{width:32px;height:32px;border-radius:10px;background:linear-gradient(135deg,var(--pa-ind-soft),var(--pa-ind-soft2));display:grid;place-items:center;font-size:16px;flex:none}

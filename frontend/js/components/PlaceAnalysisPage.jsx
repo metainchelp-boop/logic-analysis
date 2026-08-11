@@ -31,6 +31,7 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
     var _res = useState(null);        var result = _res[0], setResult = _res[1];
     var _al = useState(false);        var aiLoading = _al[0], setAiLoading = _al[1];
     var _ai = useState(null);         var ai = _ai[0], setAi = _ai[1];
+    var _ax = useState(true);         var aiExpanded = _ax[0], setAiExpanded = _ax[1];
     var _cs = useState([]);           var chartSeries = _cs[0], setChartSeries = _cs[1];
     var _cd = useState(30);           var chartDays = _cd[0], setChartDays = _cd[1];
     var _ck = useState('');           var chartKeyword = _ck[0], setChartKeyword = _ck[1];
@@ -42,6 +43,11 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
     // ── 업체 저장 (스토어 SaveToClientSection 과 동일 규칙 — /cd/quick-register 재사용) ──
     var _sb = useState(false);        var saveBusy = _sb[0], setSaveBusy = _sb[1];
     var _sm = useState(null);         var saveMsg = _sm[0], setSaveMsg = _sm[1];
+
+    // ── 보고서 내보내기 (스토어 ReportSection 과 동일 사용법 — ReportCapture 공용 빌더 재사용) ──
+    var _eb = useState(false);        var exportBusy = _eb[0], setExportBusy = _eb[1];
+    var _ec = useState('');           var exportCompany = _ec[0], setExportCompany = _ec[1];
+    useEffect(function() { if (businessName) setExportCompany(businessName); }, [businessName]);
 
     // ==================== 유틸 ====================
     var METRIC_ORDER = ['rank', 'relevance', 'visitor_review', 'blog_review', 'save',
@@ -241,36 +247,54 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
         );
     };
 
-    // ── 커버 ──
+    // ── 커버 · 목차 · 범례 — 스토어(AnalysisResults)와 동일한 보고서 골격 ──
+    // 대표 지시(2026-08-11): 「쇼핑 분석과 디자인·배치·사용법을 동일하게」. 표지(.report-cover)·
+    // 배지 범례(.report-legend)·모바일 목차(.anchor-nav)·좌측 목차(.report-toc)를 스토어 마크업
+    // 그대로 쓴다(report-theme.css 공용) — 내용(업체명·지역 축)만 플레이스.
+    var TOC_SECTIONS = [
+        { id: 'sec-place-score', icon: '🎯', label: '종합 경쟁력' },
+        { id: 'sec-place-kw', icon: '📍', label: '키워드 노출 순위' },
+        { id: 'sec-place-comp', icon: '⚔️', label: '경쟁 비교' },
+        { id: 'sec-ai-feedback', icon: '🤖', label: 'AI 진단·처방' },
+        { id: 'sec-save-client', icon: '💾', label: '업체 저장' },
+        { id: 'sec-report', icon: '📄', label: '보고서 내보내기' }
+    ];
+    var scrollToSec = function(id) {
+        try { var el = document.getElementById(id); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch(e) {}
+    };
     var renderCover = function() {
-        var sc = result.scores || {};
-        var total = sc.total || 0;
-        var repRank = null, repKw = '';
-        (kwChips || []).forEach(function(c) { if (c.rank != null && (repRank == null || c.rank < repRank)) { repRank = c.rank; repKw = c.keyword; } });
-        if (repRank == null && result.rank != null) { repRank = result.rank; repKw = result.keyword; }
-        var exposedN = (kwChips || []).filter(function(c) { return c.state === '노출'; }).length;
         return (
-            React_.createElement('div', { className: 'cover' },
-                React_.createElement('div', { className: 'ttl' },
-                    React_.createElement('h1', null, result.business_name || businessName || '업체'),
-                    React_.createElement('span', { className: 'rg' }, '· ' + (result.region || region || '지역 미지정') + (result.category ? (' · ' + result.category) : ''))),
-                React_.createElement('div', { className: 'rc-grid' },
-                    React_.createElement('div', { className: 'rc' },
-                        React_.createElement('div', { className: 'k' }, '추적 키워드'),
-                        React_.createElement('div', { className: 'v' }, (kwChips.length || keywords.length) + '개 ',
-                            React_.createElement('small', { style: { color: '#94a3b8', fontWeight: 600 } }, '· 노출 ' + exposedN))),
-                    React_.createElement('div', { className: 'rc' },
-                        React_.createElement('div', { className: 'k' }, '종합 경쟁력'),
-                        React_.createElement('div', { className: 'v', style: { color: scoreCol(total) } }, total + ' / 100 · ' + gradeOf(total))),
-                    React_.createElement('div', { className: 'rc' },
-                        React_.createElement('div', { className: 'k' }, '대표키워드 순위'),
-                        repRank != null
-                            ? React_.createElement('div', { className: 'v', style: { color: '#059669' } }, repRank + '위 ', React_.createElement('small', { style: { color: '#94a3b8', fontWeight: 600 } }, repKw))
-                            : React_.createElement('div', { className: 'v', style: { color: '#94a3b8' } }, '미노출')),
-                    React_.createElement('div', { className: 'rc' },
-                        React_.createElement('div', { className: 'k' }, '분석일 · 데이터'),
-                        React_.createElement('div', { className: 'v' }, (result.analyzed_at || '').slice(0, 10) || '-',
-                            React_.createElement('small', { style: { color: '#94a3b8', fontWeight: 600 } }, ' · 캡처+보완')))))
+            React_.createElement(React_.Fragment, null,
+                React_.createElement('div', { className: 'report-cover' },
+                    React_.createElement('div', { className: 'report-cover-head' },
+                        React_.createElement('span', { className: 'rc-ic' }, '📋'),
+                        React_.createElement('span', { className: 'rc-title' }, '플레이스 분석 보고서')),
+                    React_.createElement('div', { className: 'rc-grid' },
+                        React_.createElement('div', { className: 'rc-field' },
+                            React_.createElement('div', { className: 'rc-k' }, '광고주 / 업체'),
+                            React_.createElement('div', { className: 'rc-v' }, result.business_name || businessName || '-')),
+                        React_.createElement('div', { className: 'rc-field' },
+                            React_.createElement('div', { className: 'rc-k' }, '분석 키워드'),
+                            React_.createElement('div', { className: 'rc-v' }, result.keyword || selectedKw || '-')),
+                        React_.createElement('div', { className: 'rc-field' },
+                            React_.createElement('div', { className: 'rc-k' }, '지역'),
+                            React_.createElement('div', { className: 'rc-v' }, (result.region || region || '미지정') + (result.category ? (' · ' + result.category) : ''))),
+                        React_.createElement('div', { className: 'rc-field' },
+                            React_.createElement('div', { className: 'rc-k' }, '분석일'),
+                            React_.createElement('div', { className: 'rc-v' }, (result.analyzed_at || '').slice(0, 10) || new Date().toLocaleDateString('ko'))))),
+                React_.createElement('div', { className: 'report-legend' },
+                    React_.createElement('b', { className: 'badge b-ok' }, '✅ 실측'), ' 캡처 검색결과 실제값',
+                    React_.createElement('span', { className: 'rl-sep' }, '·'),
+                    React_.createElement('b', { className: 'badge b-est' }, '≈ 추정'), ' 계산·근거 기반',
+                    React_.createElement('span', { className: 'rl-sep' }, '·'),
+                    React_.createElement('b', { className: 'badge b-ai' }, 'AI'), ' AI 생성'),
+                React_.createElement('div', { className: 'anchor-nav-wrap' },
+                    React_.createElement('div', { className: 'container' },
+                        React_.createElement('div', { className: 'anchor-nav' },
+                            TOC_SECTIONS.map(function(s) {
+                                return React_.createElement('button', { key: s.id, className: 'anchor-btn', onClick: function() { scrollToSec(s.id); } },
+                                    React_.createElement('span', { className: 'anchor-icon' }, s.icon), s.label);
+                            })))))
         );
     };
 
@@ -287,9 +311,9 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
         var weak = arr.filter(function(x) { return x.s < 50; }).sort(function(a, b) { return a.s - b.s; }).slice(0, 3).map(function(x) { return x.label; });
         return (
             React_.createElement(React_.Fragment, null,
-                React_.createElement('div', { className: 'divider' },
-                    React_.createElement('div', { className: 'tile', style: { background: 'linear-gradient(135deg,#3b82f6,#3b82f6cc)', boxShadow: '0 4px 12px #3b82f640' } }, '1'),
-                    React_.createElement('div', null, React_.createElement('h2', null, '종합 경쟁력'), React_.createElement('div', { className: 's' }, '플레이스 로컬 10지표 가중 점수 · 강·약점'))),
+                React_.createElement(window.SectionDivider, { label: '1. 종합 경쟁력', icon: '🎯', color: '#3b82f6', sub: '플레이스 로컬 10지표 가중 점수 · 강·약점' }),
+                React_.createElement('section', { id: 'sec-place-score', className: 'section' },
+                    React_.createElement('div', { className: 'container' },
                 React_.createElement('div', { className: 'card' },
                     React_.createElement('h3', { className: 'rt-h3' }, React_.createElement('span', { className: 'rt-hic' }, '🎯'), '플레이스 종합 경쟁력 ',
                         React_.createElement('span', { className: 'badge b-est' }, '≈ 가중')),
@@ -323,7 +347,7 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
                     renderSuppEditor(),
                     React_.createElement('div', { className: 'note', style: { marginTop: 14 } },
                         React_.createElement('b', null, '측정 vs 보완:'), ' 순위·리뷰·적합도·사진은 캡처에서 ', React_.createElement('b', null, '자동 측정'),
-                        ', 저장수·예약·소식·업체정보는 담당자가 ', React_.createElement('b', null, '보완 입력'), '(하이브리드). 보완 지표를 채우고 ', React_.createElement('b', null, '재점수화'), '하면 점수에 반영됩니다.'))
+                        ', 저장수·예약·소식·업체정보는 담당자가 ', React_.createElement('b', null, '보완 입력'), '(하이브리드). 보완 지표를 채우고 ', React_.createElement('b', null, '재점수화'), '하면 점수에 반영됩니다.'))))
             )
         );
     };
@@ -340,8 +364,9 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
                 onChange: function(e) { var n = Object.assign({}, supp); n[key] = e.target.value; setSupp(n); } }));
     };
     var renderSuppEditor = function() {
+        // no-export: 담당자 입력 도구 — 광고주 전달본(보고서 내보내기)에서 자동 제거
         return (
-            React_.createElement('div', { className: 'suppcard' },
+            React_.createElement('div', { className: 'suppcard no-export' },
                 React_.createElement('h4', null, '✍️ 담당자 보완 지표'),
                 React_.createElement('div', { className: 'sd' }, '캡처로 측정되지 않는 지표를 입력하세요. 방문자·블로그 리뷰는 캡처에서 자동 인식되며, 값을 직접 넣으면 그 값이 우선됩니다.'),
                 React_.createElement('div', { className: 'suppgrid' },
@@ -379,9 +404,9 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
         var rate = chips.length ? Math.round(exposed.length / chips.length * 100) : 0;
         return (
             React_.createElement(React_.Fragment, null,
-                React_.createElement('div', { className: 'divider' },
-                    React_.createElement('div', { className: 'tile', style: { background: 'linear-gradient(135deg,#059669,#059669cc)', boxShadow: '0 4px 12px #05966940' } }, '2'),
-                    React_.createElement('div', null, React_.createElement('h2', null, '키워드 노출 순위'), React_.createElement('div', { className: 's' }, '지역+키워드 기준 노출/미노출/미확인 · 일자별 추적'))),
+                React_.createElement(window.SectionDivider, { label: '2. 키워드 노출 순위', icon: '📍', color: '#059669', sub: '지역+키워드 기준 노출/미노출/미확인 · 일자별 추적' }),
+                React_.createElement('section', { id: 'sec-place-kw', className: 'section' },
+                    React_.createElement('div', { className: 'container' },
                 React_.createElement('div', { className: 'card' },
                     React_.createElement('h3', { className: 'rt-h3' }, React_.createElement('span', { className: 'rt-hic' }, '📍'), '키워드별 노출 순위 ',
                         React_.createElement('span', { className: 'badge b-ok' }, '✅ 실측')),
@@ -403,7 +428,7 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
                                 title: '클릭 = 이 키워드 순위 추이 보기', style: { cursor: 'pointer' } },
                                 React_.createElement('span', { className: 'rk' }, rk), c.keyword + (c.state === '미확인' ? ' · 미확인' : ''));
                         })),
-                    React_.createElement(window.PlaceRankChart, { series: chartSeries, keyword: chartKeyword || selectedKw, days: chartDays, businessName: businessName, onDays: onChartDays }))
+                    React_.createElement(window.PlaceRankChart, { series: chartSeries, keyword: chartKeyword || selectedKw, days: chartDays, businessName: businessName, onDays: onChartDays }))))
             )
         );
     };
@@ -441,7 +466,10 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
     var renderSaveCard = function () {
         var isViewer = (currentUser.role === 'viewer');
         var canAdv = (currentUser.role === 'manager' || currentUser.role === 'superadmin');
-        return React_.createElement('div', { className: 'card', style: { marginTop: 14 } },
+        // #sec-save-client — ReportCapture 가 이 id 로 내보내기에서 제거(직원 전용 도구 = 전달본 미포함)
+        return React_.createElement('section', { id: 'sec-save-client', className: 'section' },
+            React_.createElement('div', { className: 'container' },
+                React_.createElement('div', { className: 'card', style: { marginTop: 14 } },
             React_.createElement('h3', { className: 'rt-h3' }, React_.createElement('span', { className: 'rt-hic' }, '💾'), '업체 저장 ',
                 React_.createElement('span', { className: 'badge b-ok' }, '스토어와 동일 규칙')),
             React_.createElement('div', { className: 'rt-desc' },
@@ -454,7 +482,58 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
                 React_.createElement('button', { className: canAdv ? 'btn btn-secondary' : 'btn btn-primary', disabled: saveBusy,
                     onClick: function () { saveToClient('prospect'); } }, saveBusy ? '저장 중…' : '🎯 영업 대상으로 저장' + (isViewer ? ' (30일)' : ''))),
             saveMsg && React_.createElement('div', { className: 'note ' + (saveMsg.ok ? 'ok' : 'est'), style: { marginTop: 10 } },
-                (saveMsg.ok ? '✅ ' : '⚠️ ') + saveMsg.text));
+                (saveMsg.ok ? '✅ ' : '⚠️ ') + saveMsg.text))));
+    };
+
+    // ── 보고서 내보내기 — 스토어 ReportSection 의 HTML 경로와 동일(공용 ReportCapture 빌더 재사용).
+    //    JSON/CSV 는 스토어 추적상품(/report/export) 전용 데이터라 플레이스엔 해당 없음 — HTML 단일.
+    var handleHtmlExport = function() {
+        /* AI 종합 분석이 진행 중이면 완료 대기를 먼저 권유 (강행 시 해당 섹션은 '별도 전달' 안내로 대체) */
+        try {
+            if (window.ReportCapture && window.ReportCapture.aiState() === 'loading') {
+                var goNow = window.confirm('🤖 AI 종합 분석이 아직 진행 중입니다 (약 20~30초).\n완료 후 내보내면 AI 분석이 보고서에 포함됩니다.\n\n지금 바로 내보내시겠습니까?\n(AI 섹션은 "완료 후 별도 전달" 안내로 대체됩니다)');
+                if (!goNow) return;
+            }
+        } catch(eG) {}
+        setExportBusy(true);
+        try {
+            var nm = (exportCompany || businessName || '').trim();
+            var headerText = nm ? nm + ' 플레이스 분석 보고서' : '플레이스 분석 보고서';
+            var fullHtml = window.ReportCapture
+                ? window.ReportCapture.buildHtml({ title: headerText, managerName: currentUser && currentUser.name })
+                : '';
+            if (!fullHtml) { throw new Error('캡처 대상(.report-main)을 찾지 못했습니다'); }
+            var blob = new Blob([fullHtml], { type: 'text/html;charset=utf-8' });
+            var url = URL.createObjectURL(blob);
+            var a = document.createElement('a');
+            a.href = url;
+            a.download = (nm || '플레이스분석') + '_보고서_' + new Date().toISOString().slice(0, 10) + '.html';
+            a.click();
+            URL.revokeObjectURL(url);
+            alert('HTML 보고서가 다운로드되었습니다.');
+        } catch(e) {
+            alert('HTML 보고서 생성 실패: ' + e.message);
+        }
+        setExportBusy(false);
+    };
+    var renderReportSection = function() {
+        return React_.createElement('div', { className: 'section fade-in', id: 'sec-report' },
+            React_.createElement('div', { className: 'container' },
+                React_.createElement('div', { className: 'section-title' },
+                    React_.createElement('span', { className: 'icon', style: { background: '#eff6ff' } }, '📄'),
+                    '보고서 내보내기'),
+                React_.createElement('div', { className: 'section-line' }),
+                React_.createElement('p', { className: 'section-subtitle' }, '분석 결과를 광고주 전달용 HTML 보고서로 다운로드합니다'),
+                React_.createElement('div', { className: 'card' },
+                    React_.createElement('div', { style: { display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' } },
+                        React_.createElement('div', { className: 'form-group', style: { marginBottom: 0 } },
+                            React_.createElement('label', { className: 'form-label' }, '업체명 (선택)'),
+                            React_.createElement('input', { className: 'form-input', style: { width: 160 }, placeholder: '업체명 입력',
+                                value: exportCompany, onChange: function(e) { setExportCompany(e.target.value); } })),
+                        React_.createElement('button', { className: 'btn btn-primary', onClick: handleHtmlExport, disabled: exportBusy },
+                            exportBusy ? '생성 중...' : '📄 HTML 보고서 다운로드')),
+                    React_.createElement('div', { style: { marginTop: 12, padding: '10px 14px', background: '#f0f9ff', borderRadius: 8, fontSize: 13, color: '#0369a1' } },
+                        '💡 현재 페이지에 표시된 분석 결과를 그대로 HTML 파일로 내보냅니다. 직원 전용 도구(보완 지표 입력·업체 저장·이 카드)는 전달본에서 자동 제외됩니다.'))));
     };
 
     // ── §3 경쟁 비교 ──
@@ -470,9 +549,9 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
         var rkClass = function(r) { return r == null ? '' : r <= 5 ? 'rk-hi' : r <= 15 ? 'rk-mid' : 'rk-lo'; };
         return (
             React_.createElement(React_.Fragment, null,
-                React_.createElement('div', { className: 'divider' },
-                    React_.createElement('div', { className: 'tile', style: { background: 'linear-gradient(135deg,#ef4444,#ef4444cc)', boxShadow: '0 4px 12px #ef444440' } }, '3'),
-                    React_.createElement('div', null, React_.createElement('h2', null, '경쟁 비교'), React_.createElement('div', { className: 's' }, "'" + (result.keyword || '') + "' 상위 노출 업체 대비 지표"))),
+                React_.createElement(window.SectionDivider, { label: '3. 경쟁 비교', icon: '⚔️', color: '#ef4444', sub: "'" + (result.keyword || '') + "' 상위 노출 업체 대비 지표" }),
+                React_.createElement('section', { id: 'sec-place-comp', className: 'section' },
+                    React_.createElement('div', { className: 'container' },
                 React_.createElement('div', { className: 'card' },
                     React_.createElement('h3', { className: 'rt-h3' }, React_.createElement('span', { className: 'rt-hic' }, '⚔️'), '상위 노출 경쟁사 비교 ',
                         React_.createElement('span', { className: 'badge b-ok' }, '✅ 실측')),
@@ -497,12 +576,38 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
                                                 React_.createElement('div', { className: 'gapbar' }, React_.createElement('i', { className: 'me-f', style: { width: pct + '%' } })))));
                                     })))),
                     React_.createElement('div', { className: 'note est', style: { marginTop: 13 } },
-                        React_.createElement('b', null, '격차 진단 ≈ 추정:'), ' 방문자·블로그 리뷰가 상위권과 벌어질수록 인기도(순위) 병목이 큽니다. 저장수는 캡처로 인식되지 않으므로 §1 보완 지표에서 입력해 경쟁력에 반영하세요.'))
+                        React_.createElement('b', null, '격차 진단 ≈ 추정:'), ' 방문자·블로그 리뷰가 상위권과 벌어질수록 인기도(순위) 병목이 큽니다. 저장수는 캡처로 인식되지 않으므로 §1 보완 지표에서 입력해 경쟁력에 반영하세요.'))))
             )
         );
     };
 
     // ── §4 AI 진단 ──
+    // AI 서술 정돈 렌더 — 모델이 마크다운(###·**·표 구분선)을 섞어 보내도 기호가 화면에
+    // 그대로 노출되지 않게 다듬는다(2026-08-11 직원 신고: 「AI 진단 처방에 ### 으로 나온다」).
+    // 프롬프트에서도 금지하지만(원천), 규칙을 어긴 응답과 이미 생성된 텍스트까지 여기서 방어한다.
+    // 스토어 AI 리포트와 같은 「기호 없는 산문」 기준: 제목 줄은 굵게, 불릿은 · 로, 강조 기호는 제거.
+    var _aiInline = function(s) {
+        return String(s || '')
+            .replace(/\*\*\*([^*]+)\*\*\*/g, '$1')  // ***강조*** 를 먼저 — ** 규칙만 있으면 *강조* 별 1쌍이 잔류(검증에서 확인)
+            .replace(/\*\*([^*]+)\*\*/g, '$1')      // **강조** → 강조 (단일별 *X* 는 산식(10,000*2)·원문일 수 있어 손대지 않음)
+            .replace(/`([^`]+)`/g, '$1');           // `코드` → 코드
+    };
+    var renderAiText = function(txt) {
+        var out = [];
+        String(txt || '').split('\n').forEach(function(line, i) {
+            // ###제목(공백 없음)도 소제목으로 인식. 단 #{1} 무공백(#해시태그)은 헤딩 아님 — 해시태그 원문 보존.
+            var mHead = line.match(/^\s*(?:#{1,6}\s+|#{2,6})(.*)$/);
+            if (mHead) {   // ### 소제목 → 굵은 줄(기호 제거)
+                var ht = _aiInline(mHead[1]).trim();
+                if (ht) out.push(React_.createElement('div', { key: 'h' + i, style: { fontWeight: 800, color: 'var(--pa-ink)', marginTop: out.length ? 4 : 0 } }, ht));
+                return;
+            }
+            if (/^\s*[-*_]{3,}\s*$/.test(line)) return;          // --- 구분선 줄 제거
+            var mBullet = line.match(/^(\s*)[-*•]\s+(.*)$/);      // - 불릿 → · (·aiblock 이 pre-wrap 이라 \n 유지)
+            out.push((mBullet ? mBullet[1] + '· ' + _aiInline(mBullet[2]) : _aiInline(line)) + '\n');
+        });
+        return out;
+    };
     var PLACE_AI_SECTIONS = [
         { key: 'summary', label: '종합 진단', icon: '🧭' },
         { key: 'rank', label: '노출 순위', icon: '📍' },
@@ -513,57 +618,107 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
     ];
     var renderSec4 = function() {
         var suggestions = result.suggestions || [];
+        // 스토어 AiFeedbackAllSection 과 동일한 마크업·팔레트(대시 카드·그라데이션 버튼·접기/펼치기).
+        // #sec-ai-feedback + 숨김 .ai-state 마커는 ReportCapture(보고서 내보내기)가 읽는 계약 —
+        // AI 미완료 상태에서 내보내면 로딩 문구 대신 「완료 후 별도 전달」 안내로 치환된다.
         return (
             React_.createElement(React_.Fragment, null,
-                React_.createElement('div', { className: 'divider' },
-                    React_.createElement('div', { className: 'tile', style: { background: 'linear-gradient(135deg,#7c3aed,#7c3aedcc)', boxShadow: '0 4px 12px #7c3aed40' } }, '4'),
-                    React_.createElement('div', null, React_.createElement('h2', null, 'AI 진단·처방'), React_.createElement('div', { className: 's' }, '무엇을·왜·얼마나 하면 몇 위가 되는가'))),
-                React_.createElement('div', { className: 'card' },
-                    React_.createElement('h3', { className: 'rt-h3' }, React_.createElement('span', { className: 'rt-hic' }, '🤖'), 'AI 종합 진단 ',
-                        React_.createElement('span', { className: 'badge b-ai' }, 'AI'),
-                        React_.createElement('button', { className: 'btn btn-secondary btn-sm', style: { marginLeft: 'auto' }, disabled: aiLoading, onClick: function() { fetchAi(result); } },
-                            aiLoading ? '분석 중…' : '↻ 다시 분석')),
-                    React_.createElement('div', { className: 'rt-desc' }, '플레이스 상위노출 로직(적합도·인기도·거리)에 근거한 진단입니다. 근거가 약한 예측은 ‘추정’으로 표기합니다.'),
-                    // 규칙 기반 처방(즉시)
-                    React_.createElement('div', { style: { margin: '6px 0 4px', fontSize: 13, fontWeight: 800, color: '#0f172a' } }, '개선 처방 (우선순위)'),
-                    React_.createElement('div', null,
-                        suggestions.map(function(s, i) {
-                            return React_.createElement('div', { key: i, className: 'rx' },
-                                React_.createElement('span', { className: 'no' }, i + 1),
-                                React_.createElement('div', { className: 'tx' }, s));
-                        })),
-                    // AI 서술
-                    aiLoading
-                        ? React_.createElement('div', { className: 'empty' }, React_.createElement('span', { className: 'spin' }), ' AI 종합 진단 생성 중… (10~20초)')
-                        : (ai
-                            ? React_.createElement('div', { style: { marginTop: 10 } },
+                React_.createElement(window.SectionDivider, { label: '4. AI 진단·처방', icon: '🤖', color: '#7c3aed', sub: '무엇을·왜·얼마나 하면 몇 위가 되는가' }),
+                React_.createElement('section', { id: 'sec-ai-feedback', className: 'section' },
+                    React_.createElement('span', { className: 'ai-state', style: { display: 'none' },
+                        'data-state': aiLoading ? 'loading' : (ai ? 'done' : 'idle') }),
+                    React_.createElement('div', { className: 'container' },
+                        React_.createElement('div', { className: 'card',
+                            style: { padding: '20px 22px', border: '2px dashed #c7d2fe', background: 'linear-gradient(135deg,#eef2ff,#faf5ff)' } },
+                            // 헤더 — 스토어와 동일 배치(제목·설명 좌 / 접기·분석 버튼 우)
+                            React_.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 } },
+                                React_.createElement('div', null,
+                                    React_.createElement('h3', { className: 'rt-h3' },
+                                        React_.createElement('span', { className: 'rt-hic' }, '🤖'),
+                                        'METAINC AI 종합 분석 리포트',
+                                        React_.createElement('span', { className: 'badge b-ai' }, 'AI')),
+                                    React_.createElement('div', { className: 'rt-desc' },
+                                        '"' + (result.keyword || selectedKw || '') + '" 플레이스 상위노출 로직(적합도·인기도·거리)을 AI가 종합해 작성한 진단')),
+                                React_.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 } },
+                                    ai && React_.createElement('button', {
+                                        onClick: function() { setAiExpanded(!aiExpanded); },
+                                        style: { background: '#f1f5f9', border: '1px solid #e2e8f0', color: '#475569',
+                                            padding: '6px 14px', borderRadius: 8, fontSize: 12, cursor: 'pointer' }
+                                    }, aiExpanded ? '접기' : '펼치기'),
+                                    !aiLoading && React_.createElement('button', {
+                                        onClick: function() { fetchAi(result); },
+                                        style: { background: 'linear-gradient(135deg, #38bdf8, #0ea5e9)', color: '#fff', border: 'none',
+                                            padding: '8px 20px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                                            boxShadow: '0 4px 12px rgba(14, 165, 233, 0.4)' }
+                                    }, ai ? '다시 분석' : '✨ AI 종합 분석'),
+                                    /* no-export: 상태 마커가 실패해도 로딩 문구만은 전달본에서 항상 제거(이중 방어) */
+                                    aiLoading && React_.createElement('span', {
+                                        className: 'no-export',
+                                        style: { fontSize: 13, color: '#0ea5e9', fontWeight: 500 }
+                                    }, '⏳ AI 분석 중... (약 20~30초)'))),
+                            // 규칙 기반 처방(즉시) — 플레이스 전용 콘텐츠(스토어와 다른 부분은 내용뿐)
+                            React_.createElement('div', { style: { margin: '14px 0 4px', fontSize: 13, fontWeight: 800, color: '#0f172a' } }, '개선 처방 (우선순위)'),
+                            React_.createElement('div', null,
+                                suggestions.map(function(s, i) {
+                                    return React_.createElement('div', { key: i, className: 'rx' },
+                                        React_.createElement('span', { className: 'no' }, i + 1),
+                                        React_.createElement('div', { className: 'tx' }, s));
+                                })),
+                            // AI 서술 — 스토어와 동일한 블록 카드(요약=앰버)
+                            ai && aiExpanded && React_.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 16, marginTop: 18 } },
                                 PLACE_AI_SECTIONS.filter(function(s) { return ai[s.key]; }).map(function(s) {
-                                    return React_.createElement('div', { key: s.key, className: 'aiblock' },
-                                        React_.createElement('h5', null, s.icon + ' ' + s.label),
-                                        ai[s.key]);
-                                }))
-                            : React_.createElement('div', { className: 'note', style: { marginTop: 10 } }, 'AI 종합 진단은 분석 실행 후 자동 생성됩니다. 「↻ 다시 분석」으로 재생성할 수 있습니다.')),
-                    React_.createElement('div', { className: 'note', style: { marginTop: 13 } },
-                        React_.createElement('b', null, '관리 목표(보장 아님):'), ' 순위는 경쟁·거리·알고리즘에 따라 변동하므로 관리기준으로 표기합니다. 저장·블로그·소식 등 인기도 지표를 꾸준히 보강하는 것이 상위 방어의 핵심입니다.'))
+                                    var isSummary = s.key === 'summary';
+                                    return React_.createElement('div', { key: s.key,
+                                        style: { background: isSummary ? '#fffbeb' : '#f8fafc', borderRadius: 12,
+                                            padding: '16px 20px', border: isSummary ? '1px solid #fde68a' : '1px solid #e2e8f0' } },
+                                        React_.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 } },
+                                            React_.createElement('span', { style: { fontSize: 16 } }, s.icon),
+                                            React_.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: isSummary ? '#b45309' : '#0369a1' } }, s.label)),
+                                        React_.createElement('div', { style: { fontSize: 13, lineHeight: 1.75, color: '#334155', whiteSpace: 'pre-wrap' } },
+                                            renderAiText(ai[s.key])));
+                                })),
+                            !ai && !aiLoading && React_.createElement('div', { className: 'note', style: { marginTop: 10 } },
+                                'AI 종합 진단은 분석 실행 후 자동 생성됩니다. 「✨ AI 종합 분석」으로 다시 생성할 수 있습니다.'),
+                            React_.createElement('div', { className: 'note', style: { marginTop: 13 } },
+                                React_.createElement('b', null, '관리 목표(보장 아님):'), ' 순위는 경쟁·거리·알고리즘에 따라 변동하므로 관리기준으로 표기합니다. 저장·블로그·소식 등 인기도 지표를 꾸준히 보강하는 것이 상위 방어의 핵심입니다.'))))
             )
         );
     };
 
     // ==================== 최종 렌더 ====================
+    // 스토어(AnalysisResults)와 동일한 보고서 골격: report-shell(좌측 목차) + report-main(본문).
+    // ⚠️ place-analysis 클래스는 report-main 「자기 자신」에도 붙인다 — ReportCapture 가 report-main
+    //    만 복제해 내보내므로, 조상에만 있으면 전달본에서 .place-analysis 스코프 CSS 가 전부 죽는다.
     return (
         React_.createElement('div', { className: 'place-analysis' },
             React_.createElement('div', { className: 'pa-wrap' },
                 renderInput(),
-                result && renderCover(),
-                result && renderSec1(),
-                result && renderSec2(),
-                result && renderSec3(),
-                result && renderSec4(),
-                result && renderSaveCard(),
                 !result && React_.createElement('div', { className: 'card', style: { textAlign: 'center', color: '#94a3b8', padding: '34px 20px' } },
                     React_.createElement('div', { style: { fontSize: 30, marginBottom: 8 } }, '📍'),
                     React_.createElement('div', { style: { fontSize: 14, fontWeight: 700, color: '#64748b' } }, '업체명·키워드·플레이스 검색결과 캡처를 입력하고 「분석 실행」을 눌러주세요.'),
-                    React_.createElement('div', { style: { fontSize: 12, marginTop: 6 } }, '오프라인·지역 업종(카페·식당·병원·미용 등)의 플레이스 상위노출 경쟁력을 진단합니다.')))
+                    React_.createElement('div', { style: { fontSize: 12, marginTop: 6 } }, '오프라인·지역 업종(카페·식당·병원·미용 등)의 플레이스 상위노출 경쟁력을 진단합니다.'))),
+            result && React_.createElement('div', { className: 'report-shell' },
+                /* 좌측 고정 목차 (와이드 화면 전용) — 스토어와 동일 마크업 */
+                React_.createElement('nav', { className: 'report-toc' },
+                    React_.createElement('div', { className: 'report-toc-title' }, '목차'),
+                    TOC_SECTIONS.map(function(s) {
+                        return React_.createElement('a', { key: s.id, className: 'report-toc-link', onClick: function() { scrollToSec(s.id); } },
+                            React_.createElement('span', { className: 'report-toc-n' }, s.icon),
+                            s.label);
+                    }),
+                    React_.createElement('div', { className: 'report-toc-legend' },
+                        React_.createElement('div', null, React_.createElement('b', { className: 'badge b-ok' }, '✅ 실측'), ' 캡처 검색결과 실제값'),
+                        React_.createElement('div', null, React_.createElement('b', { className: 'badge b-est' }, '≈ 추정'), ' 계산·근거기반'),
+                        React_.createElement('div', null, React_.createElement('b', { className: 'badge b-ai' }, 'AI'), ' AI 생성'))),
+                /* 본문 — 이후 모든 섹션이 report-main 의 자식(내보내기 캡처 범위) */
+                React_.createElement('div', { className: 'report-main place-analysis' },
+                    renderCover(),
+                    renderSec1(),
+                    renderSec2(),
+                    renderSec3(),
+                    renderSec4(),
+                    renderSaveCard(),
+                    renderReportSection()))
         )
     );
 };
