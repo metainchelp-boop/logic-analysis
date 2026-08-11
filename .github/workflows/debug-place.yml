@@ -35,6 +35,10 @@ on:
         description: '플레이스 분석 시장 블록 실호출 — "지역|업종|키워드|업체명" (예: 조원동|미용·뷰티|마사지|프로힐링지압안마원). 읽기 전용'
         default: ''
 
+      datalab_scope_check:
+        description: '데이터랩 스코프 대조 — 같은 앱 키로 쇼핑인사이트 vs 통합검색어 트렌드 각각 호출해 어느 쪽이 되는지 확인(true). 키 값은 출력 안 함'
+        default: ''
+
 jobs:
   diagnose:
     runs-on: ubuntu-latest
@@ -1106,5 +1110,72 @@ jobs:
             for ph in (im.get("roadmap") or []):
                 print(f"  {ph.get('phase')}: " + " / ".join(ph.get("items") or []))
 
+            print("=" * 68)
+            PY
+
+      # 데이터랩은 「쇼핑인사이트」와 「통합검색어 트렌드」가 **서로 다른 API 등록 항목**이다.
+      # 같은 앱 키(NAVER_CLIENT_ID/SECRET)를 쓰지만 개발자센터에서 각각 등록해야 한다.
+      # 「데이터랩 이미 쓰고 있는데 왜 안 되나」를 추측이 아니라 **같은 키로 나란히 호출해** 답한다.
+      # ⚠️ 키 값은 절대 출력하지 않는다(설정 여부·길이만).
+      - name: 데이터랩 스코프 대조 (쇼핑인사이트 vs 통합검색어)
+        if: ${{ github.event.inputs.datalab_scope_check == 'true' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 180s
+          script: |
+            docker exec -i logic-analysis python3 - <<'PY'
+            import os, json, datetime, requests
+
+            cid = os.getenv("NAVER_CLIENT_ID", "")
+            sec = os.getenv("NAVER_CLIENT_SECRET", "")
+            print("=" * 68)
+            print(f"앱 키 설정 여부 — CLIENT_ID {'있음' if cid else '없음'}(len={len(cid)}) · "
+                  f"SECRET {'있음' if sec else '없음'}(len={len(sec)})")
+            print("※ 두 API 는 같은 이 키를 씁니다. 다른 건 개발자센터의 'API 설정' 등록 항목입니다.")
+
+            H = {"X-Naver-Client-Id": cid, "X-Naver-Client-Secret": sec,
+                 "Content-Type": "application/json"}
+            end = datetime.date.today().replace(day=1) - datetime.timedelta(days=1)
+            start = (end - datetime.timedelta(days=180)).replace(day=1)
+            sd, ed = start.isoformat(), end.isoformat()
+
+            def call(label, url, body):
+                print("-" * 68)
+                print(f"[{label}]")
+                print(f"  {url}")
+                try:
+                    r = requests.post(url, json=body, headers=H, timeout=10)
+                    print(f"  HTTP {r.status_code}")
+                    txt = (r.text or "")[:220]
+                    if r.status_code == 200:
+                        try:
+                            d = r.json()
+                            res = d.get("results") or []
+                            n = len(((res[0] if res else {}) or {}).get("data") or [])
+                            print(f"  ✅ 정상 — results {len(res)}개 · 데이터 포인트 {n}개")
+                        except Exception:
+                            print(f"  ✅ 200 (본문 파싱 생략) {txt}")
+                    else:
+                        print(f"  ❌ 실패 — {txt}")
+                except Exception as e:
+                    print(f"  호출 오류: {e}")
+
+            call("A. 데이터랩 쇼핑인사이트 (지금 스토어 분석이 쓰는 것)",
+                 "https://openapi.naver.com/v1/datalab/shopping/categories",
+                 {"startDate": sd, "endDate": ed, "timeUnit": "month",
+                  "category": [{"name": "패션의류", "param": ["50000000"]}]})
+
+            call("B. 데이터랩 통합검색어 트렌드 (플레이스 검색 트렌드가 쓰는 것)",
+                 "https://openapi.naver.com/v1/datalab/search",
+                 {"startDate": sd, "endDate": ed, "timeUnit": "month",
+                  "keywordGroups": [{"groupName": "마사지", "keywords": ["마사지"]}]})
+
+            print("-" * 68)
+            print("판독: A 만 되고 B 가 401/errorCode 024 면 = 키는 정상, 앱에 「검색어트렌드」 미등록.")
+            print("      둘 다 되면 = 권한 해소됨(서버 재기동 후 트렌드 카드 자동 노출).")
+            print("      둘 다 실패면 = 키 자체 문제(등록 항목이 아니라 키를 확인).")
             print("=" * 68)
             PY
