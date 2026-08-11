@@ -146,6 +146,26 @@ def _keyword_universe(conn):
                 uni[k] = True      # 업체(전산① 소비) 키워드 — 앞 시간대 우선
     except Exception as e:
         logger.warning(f"[collector] 업체 키워드 조회 실패: {e}")
+    # 직접 등록 키워드(clients.main_keywords) — 08:00 배치·rank_record 는 예전부터
+    # 이 목록을 업체 몫으로 인식하는데, 수집 유니버스에는 빠져 있어 「분석 이력이 없는
+    # 등록 키워드는 영영 수집되지 않는」 공백이 있었다(키워드 순위 탭의 추가 등록
+    # 기능이 이 경로를 쓰면서 실결함이 됨 — 2026-08-11). 배치와 같은 자격 조건만.
+    try:
+        n_new = 0
+        for r in conn.execute(
+                "SELECT main_keywords FROM clients WHERE status='active' "
+                "AND COALESCE(auto_analysis,1)=1 AND COALESCE(role,'advertiser')='advertiser' "
+                "AND COALESCE(vertical,'store')='store'"):
+            for k in (r["main_keywords"] or "").split(","):
+                k = k.strip()
+                if k and k not in uni:
+                    n_new += 1
+                if k:
+                    uni[k] = True   # 업체 키워드와 동급(앞 시간대 우선)
+        if n_new:
+            logger.info(f"[collector] 직접 등록 키워드 {n_new}개 유니버스 편입")
+    except Exception as e:
+        logger.warning(f"[collector] 직접 등록 키워드 조회 실패: {e}")
     return uni
 
 

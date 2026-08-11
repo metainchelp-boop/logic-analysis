@@ -25,6 +25,7 @@ function _krChip(kind) {
     var base = { display: 'inline-block', fontSize: 11.5, fontWeight: 800, borderRadius: 999, padding: '3px 10px', whiteSpace: 'nowrap' };
     if (kind === 'ok') return Object.assign({}, base, { color: '#16a34a', background: '#f0fdf4' });
     if (kind === 'warn') return Object.assign({}, base, { color: '#b45309', background: '#fffbeb' });
+    if (kind === 'info') return Object.assign({}, base, { color: '#1d4ed8', background: '#eff6ff' });
     return Object.assign({}, base, { color: '#64748b', background: '#f2f4f6' });
 }
 function _krDelta(delta) {
@@ -71,6 +72,10 @@ window.KeywordRankPage = function KeywordRankPage(props) {
     var _flt = useState('all'); var filter = _flt[0], setFilter = _flt[1]; // all|attention|up|down
     var _bs = useState('rank'); var boardSort = _bs[0], setBoardSort = _bs[1];   // rank|delta|volume|name (2차 확산)
     var _bd2 = useState(7); var boardDays = _bd2[0], setBoardDays = _bd2[1];     // 추이 기간 7|30
+    var _kwi = useState(''); var kwInput = _kwi[0], setKwInput = _kwi[1];       // 추적 키워드 추가 입력
+    var _kwb = useState(false); var kwBusy = _kwb[0], setKwBusy = _kwb[1];
+    var _kwm = useState(null); var kwMsg = _kwm[0], setKwMsg = _kwm[1];          // {ok, text}
+    var selectedRef = React.useRef(null);   // 늦은 응답 가드용 — 현재 보고 있는 업체
 
     /* 하단 RankTrackingSection 용 — 추적 상품은 이 페이지가 자체 로드 */
     var _pr = useState([]); var products = _pr[0], setProducts = _pr[1];
@@ -220,8 +225,30 @@ window.KeywordRankPage = function KeywordRankPage(props) {
             try { toast.error('키워드 보드를 불러오지 못했습니다.'); } catch (e) {}
         }).finally(function() { setBdLoading(false); });
     };
+    var submitKeyword = function() {
+        var kw = kwInput.trim();
+        if (!kw || kwBusy || !selected) return;
+        var cid = selected.id;   // 요청 시점 업체 고정
+        setKwBusy(true); setKwMsg(null);
+        var stillHere = function() { return selectedRef.current && selectedRef.current.id === cid; };
+        api.post('/cd/' + cid + '/track-keyword', { keyword: kw }).then(function(res) {
+            // 업체를 이동한 뒤 도착한 늦은 응답이 다른 업체의 보드·메시지를 덮지 않게 가드
+            if (!stillHere()) return;
+            if (res && res.success) {
+                setKwMsg({ ok: true, text: res.already ? '「' + kw + '」 — 이미 추적 중인 키워드입니다.' : '「' + kw + '」 ' + (res.message || '등록되었습니다.') });
+                if (!res.already) { setKwInput(''); loadBoard(cid, boardDays); }
+            } else {
+                setKwMsg({ ok: false, text: (res && res.detail) || '등록하지 못했습니다.' });
+            }
+        }).catch(function(err) {
+            if (!stillHere()) return;
+            setKwMsg({ ok: false, text: (err && err.message) || '등록하지 못했습니다.' });
+        }).finally(function() { setKwBusy(false); });
+    };
     var openDetail = function(c) {
+        selectedRef.current = { id: c.id, name: c.name };
         setSelected({ id: c.id, name: c.name });
+        setKwInput(''); setKwMsg(null);
         loadBoard(c.id, boardDays);
         try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch (e) {}
     };
@@ -230,7 +257,7 @@ window.KeywordRankPage = function KeywordRankPage(props) {
         setBoardDays(d);
         if (selected) loadBoard(selected.id, d);
     };
-    var backToList = function() { setSelected(null); setBoard(null); };
+    var backToList = function() { selectedRef.current = null; setSelected(null); setBoard(null); setKwInput(''); setKwMsg(null); };
 
     /* ---------- 업체 목록 (랜딩) ---------- */
     function renderList() {
@@ -381,6 +408,23 @@ window.KeywordRankPage = function KeywordRankPage(props) {
                     React.createElement('div', { style: _krKpiS }, '전일 대비'))
             ),
             React.createElement('div', { style: _krCard },
+                /* 추적 키워드 추가 등록 (2026-08-11 직원 기능 요청) — 서버가 권한·중복·
+                   영업대상 여부를 최종 판정하므로 입력은 항상 노출, 결과 메시지로 안내 */
+                React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10, padding: '10px 12px', background: '#f8fafc', border: '1px dashed #cbd5e1', borderRadius: 10 } },
+                    React.createElement('span', { style: { fontSize: 12.5, fontWeight: 700, color: '#475569' } }, '＋ 추적 키워드 등록'),
+                    React.createElement('input', {
+                        value: kwInput, disabled: kwBusy,
+                        onChange: function(e) { setKwInput(e.target.value); },
+                        onKeyDown: function(e) { if (e.key === 'Enter' && !e.nativeEvent.isComposing) submitKeyword(); },
+                        placeholder: '예: 수제쿠키 (Enter)',
+                        style: { flex: '1 1 180px', maxWidth: 260, padding: '7px 12px', border: '1px solid #e2e8f0', borderRadius: 9, fontSize: 13, outline: 'none' }
+                    }),
+                    React.createElement('button', {
+                        onClick: submitKeyword, disabled: kwBusy || !kwInput.trim(),
+                        style: { border: 'none', background: (kwBusy || !kwInput.trim()) ? '#93c5fd' : '#3b82f6', color: '#fff', borderRadius: 9, padding: '7px 16px', fontSize: 12.5, fontWeight: 700, cursor: (kwBusy || !kwInput.trim()) ? 'default' : 'pointer' }
+                    }, kwBusy ? '등록 중…' : '등록'),
+                    kwMsg && React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: kwMsg.ok ? '#16a34a' : '#dc2626', flexBasis: '100%' } }, kwMsg.text)
+                ),
                 /* 2차 확산: 정렬 · 추이 기간 컨트롤 */
                 React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 } },
                     React.createElement('select', {
@@ -404,7 +448,7 @@ window.KeywordRankPage = function KeywordRankPage(props) {
                 ),
                 bdLoading ? React.createElement('div', { style: { padding: '40px 0', textAlign: 'center', color: '#94a3b8', fontSize: 13 } }, '불러오는 중...') :
                 rows.length === 0 ? React.createElement('div', { style: { padding: '40px 0', textAlign: 'center', color: '#94a3b8', fontSize: 13 } },
-                    '최근 8일 순위 기록이 없습니다. 아래 「상품 순위 추적」에서 상품·키워드를 등록하면 매일 아침 자동 기록됩니다.') :
+                    '아직 순위 기록이 없습니다. 위 「＋ 추적 키워드 등록」에 키워드를 넣으면 수 분 안에 첫 순위가 기록됩니다.') :
                 React.createElement('div', { style: { overflowX: 'auto' } },
                     React.createElement('table', { style: { width: '100%', borderCollapse: 'collapse' } },
                         React.createElement('thead', null, React.createElement('tr', null,
@@ -434,6 +478,8 @@ window.KeywordRankPage = function KeywordRankPage(props) {
                                 React.createElement('td', { style: Object.assign({}, _krTd, { textAlign: 'right' }) },
                                     exposed
                                         ? React.createElement('span', { style: { fontSize: 16, fontWeight: 800, color: b.rank <= 10 ? '#16a34a' : '#0f172a', fontVariantNumeric: 'tabular-nums' } }, b.rank + '위')
+                                        : b.pending
+                                        ? React.createElement('span', { style: _krChip('info'), title: '등록됨 — 첫 순위 기록을 기다리는 중(보통 수 분)' }, '⏳ 기록 대기')
                                         : React.createElement('span', null,
                                             React.createElement('span', { style: _krChip('mute') }, '미노출'),
                                             (b.unexposed_days || 0) >= 2 && React.createElement('span', { style: Object.assign({}, _krChip('warn'), { marginLeft: 4 }), title: '연속 미노출 일수' }, b.unexposed_days + '일째'))),
