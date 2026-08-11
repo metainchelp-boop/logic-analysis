@@ -6,6 +6,7 @@ on:
     paths-ignore:
       - '.github/workflows/debug-place.yml'   # 읽기 전용 진단 — 수정이 재배포를 유발하지 않게(① debug-logs 선례)
       - '.github/workflows/debug-rank.yml'    # 〃 (순위 배치·저장소 통합 실측용, 2026-08-05)
+      - '.github/workflows/debug-consumption.yml'  # 〃 (수집 키워드 실소비 산출, 2026-08-11)
       # 크롬 확장은 **서버에 배포되지 않는다**(직원 PC 에 zip 으로 설치). 그런데 이 폴더만
       # 고쳐도 재배포가 돌아 컨테이너가 교체되고, 그 순간 수집기가 502 를 맞는다
       # (2026-08-06 실사고: 확장 수정 푸시 → 10:15 배포 중 '키워드 조회 실패 HTTP 502').
