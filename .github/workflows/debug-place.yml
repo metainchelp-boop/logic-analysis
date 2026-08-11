@@ -1204,24 +1204,37 @@ jobs:
       # ⚠️ 어느 쪽도 값을 찍지 않는다.
       - name: 시크릿 배선 점검 — GitHub 층
         if: ${{ github.event.inputs.secret_check == 'true' }}
+        env:
+          GH_NID: ${{ secrets.NAVER_CLIENT_ID }}
+          GH_NSEC: ${{ secrets.NAVER_CLIENT_SECRET }}
         run: |
           echo "=== ① GitHub Actions 시크릿 등록 여부(값 아님) ==="
           echo "DATALAB_SEARCH_CLIENT_ID     : ${{ secrets.DATALAB_SEARCH_CLIENT_ID != '' }}"
           echo "DATALAB_SEARCH_CLIENT_SECRET : ${{ secrets.DATALAB_SEARCH_CLIENT_SECRET != '' }}"
-          echo "(대조군) NAVER_CLIENT_ID     : ${{ secrets.NAVER_CLIENT_ID != '' }}"
+          echo "NAVER_CLIENT_ID              : ${{ secrets.NAVER_CLIENT_ID != '' }} (len=${#GH_NID})"
+          echo "NAVER_CLIENT_SECRET          : ${{ secrets.NAVER_CLIENT_SECRET != '' }} (len=${#GH_NSEC})"
           echo "(대조군) SBIZ_DATA_GO_KR_KEY : ${{ secrets.SBIZ_DATA_GO_KR_KEY != '' }}"
           echo ""
+          echo "※ 개발자센터 앱이면 ID 20자 · 시크릿 10자. NCP 앱(10/40)이면 잘못 등록한 것."
           echo "false 면 → 이 저장소(logic-analysis)의 Settings → Secrets and variables → Actions →"
           echo "           'Repository secrets' 에 그 이름이 없다는 뜻(오타·다른 저장소·Environment/Dependabot 탭 등록)."
 
+      # ⚠️ deploy.yml 의 주입 가드가 「.env 에 이미 있으면 건너뜀」이라, 시크릿을 **틀리게**
+      # 등록해도 지금 서버에선 아무 증상이 안 난다(서버는 옛 값으로 계속 정상 동작).
+      # 그래서 등록 직후에 ④ 값 일치 · ⑤ 실제 호출을 반드시 확인한다.
+      # 어느 단계도 값을 출력하지 않는다(일치 여부 · 길이 · HTTP 상태코드만).
       - name: 시크릿 배선 점검 — 서버 .env 층
         if: ${{ github.event.inputs.secret_check == 'true' }}
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          GH_NID: ${{ secrets.NAVER_CLIENT_ID }}
+          GH_NSEC: ${{ secrets.NAVER_CLIENT_SECRET }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          command_timeout: 120s
+          command_timeout: 180s
+          envs: GH_NID,GH_NSEC
           script: |
             cd /root/logic-analysis-deploy
             echo "=== ② 서버 .env 에 줄이 들어갔는가(값 아님·줄 수만) ==="
@@ -1238,6 +1251,49 @@ jobs:
                 v = os.getenv(k, "")
                 print(f"  {k} : {'있음' if v else '없음'}(len={len(v)})")
             PY
+
+            echo ""
+            echo "=== ④ 등록한 시크릿이 지금 서버 값과 같은가(값 아님·판정만) ==="
+            srv_id=$(grep -m1 '^NAVER_CLIENT_ID=' .env | cut -d= -f2-)
+            srv_sec=$(grep -m1 '^NAVER_CLIENT_SECRET=' .env | cut -d= -f2-)
+            if [ -z "$GH_NID" ]; then
+              echo "  NAVER_CLIENT_ID     : 시크릿 미등록"
+            elif [ -z "$srv_id" ]; then
+              echo "  NAVER_CLIENT_ID     : 서버 .env 에 없음"
+            elif [ "$GH_NID" = "$srv_id" ]; then
+              echo "  NAVER_CLIENT_ID     : ✅ 일치 (len=${#GH_NID})"
+            else
+              echo "  NAVER_CLIENT_ID     : ❌ 불일치 (등록 len=${#GH_NID} · 서버 len=${#srv_id})"
+            fi
+            if [ -z "$GH_NSEC" ]; then
+              echo "  NAVER_CLIENT_SECRET : 시크릿 미등록"
+            elif [ -z "$srv_sec" ]; then
+              echo "  NAVER_CLIENT_SECRET : 서버 .env 에 없음"
+            elif [ "$GH_NSEC" = "$srv_sec" ]; then
+              echo "  NAVER_CLIENT_SECRET : ✅ 일치 (len=${#GH_NSEC})"
+            else
+              echo "  NAVER_CLIENT_SECRET : ❌ 불일치 (등록 len=${#GH_NSEC} · 서버 len=${#srv_sec})"
+            fi
+
+            echo ""
+            echo "=== ⑤ 등록한 값으로 실제 네이버 호출(상태코드만) ==="
+            if [ -z "$GH_NID" ] || [ -z "$GH_NSEC" ]; then
+              echo "  (시크릿 미등록 — 건너뜀)"
+            else
+              c1=$(curl -s -o /dev/null -w '%{http_code}' \
+                -H "X-Naver-Client-Id: $GH_NID" -H "X-Naver-Client-Secret: $GH_NSEC" \
+                'https://openapi.naver.com/v1/search/local.json?query=%EC%B9%B4%ED%8E%98&display=1')
+              echo "  A. 지역검색(search/local)          : HTTP $c1"
+              c2=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+                -H "X-Naver-Client-Id: $GH_NID" -H "X-Naver-Client-Secret: $GH_NSEC" \
+                -H 'Content-Type: application/json' \
+                -d '{"startDate":"2026-07-01","endDate":"2026-07-31","timeUnit":"month","category":[{"name":"패션의류","param":["50000000"]}]}' \
+                'https://openapi.naver.com/v1/datalab/shopping/categories')
+              echo "  B. 데이터랩 쇼핑인사이트           : HTTP $c2"
+              echo ""
+              echo "  둘 다 200 이면 등록한 키가 지금 서버가 쓰는 권한을 그대로 갖고 있다는 뜻."
+              echo "  401 이면 키가 틀렸거나(오타·다른 앱) 그 앱에 해당 API 가 등록돼 있지 않다."
+            fi
 
       # ⚠️ 성별 50/50 · 연령 25/25/25/25 처럼 「정확히 균등」이 나오면 실측이 아니라
       # 정규화 특성을 우리가 잘못 쓴 것이다. 통합검색어 트렌드는 **요청 단위로** 최대값을
