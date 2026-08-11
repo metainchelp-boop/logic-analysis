@@ -1112,7 +1112,8 @@ def rank_board(client_id: int, days: int = 8, current_user: dict = Depends(get_c
         days = min(max(int(days or 8), 7), 90)
         _verify_client_access(conn, client_id, current_user)
         client = conn.execute(
-            "SELECT id, name, naver_store_url FROM clients WHERE id=?", (client_id,)).fetchone()
+            "SELECT id, name, naver_store_url, main_keywords, COALESCE(role,'advertiser') AS role "
+            "FROM clients WHERE id=?", (client_id,)).fetchone()
         if not client:
             raise HTTPException(status_code=404, detail="업체를 찾을 수 없습니다.")
 
@@ -1163,6 +1164,23 @@ def rank_board(client_id: int, days: int = 8, current_user: dict = Depends(get_c
                 "last_checked": latest["at"], "series": series,
                 "unexposed_days": unexposed_days,
             })
+        # 등록됐지만 아직 기록이 없는 키워드도 「기록 대기」로 보여준다 — 키워드를 추가한
+        # 직원이 화면에서 아무 변화도 못 보면 고장인지 구분할 수 없기 때문(반영 현황 원칙).
+        # 광고주만: 영업 대상(prospect)은 자동 추적 대상이 아니라 「대기」가 영원히 안 풀린다.
+        if client["role"] == "advertiser":
+            _norm = lambda k: "".join(str(k).split()).lower()
+            _known = {_norm(k) for k in per.keys()}
+            for mk in (client["main_keywords"] or "").split(","):
+                mk = mk.strip()
+                if mk and _norm(mk) not in _known:
+                    _known.add(_norm(mk))
+                    board.append({
+                        "keyword": mk, "rank": None, "page": None,
+                        "prev_rank": None, "delta": None,
+                        "volume": vol_map.get(mk, "-"),
+                        "last_checked": "", "series": [],
+                        "unexposed_days": 0, "pending": True,
+                    })
         # 정렬: 노출(순위 오름차순) 먼저, 미노출 뒤(키워드 가나다)
         board.sort(key=lambda b: (b["rank"] is None, b["rank"] if b["rank"] is not None else 0, b["keyword"]))
         kpis = {
@@ -1184,6 +1202,102 @@ def rank_board(client_id: int, days: int = 8, current_user: dict = Depends(get_c
     finally:
         conn.close()
 
+
+
+class TrackKeywordRequest(BaseModel):
+    keyword: str
+
+
+@router.post("/{client_id}/track-keyword")
+def add_track_keyword(client_id: int, req: TrackKeywordRequest,
+                      current_user: dict = Depends(get_current_user)):
+    """키워드 순위 탭에서 추적 키워드 추가 등록 (2026-08-11, 직원 기능 요청).
+
+    쓰기 3곳을 한 번에 정렬한다 — 어긋나면 「등록했는데 순위가 영영 안 붙는」 함정이 된다:
+      ① clients.main_keywords 에 추가 → 08:00 배치·업로드 즉시 기록(rank_record)이
+         이 키워드를 이 업체 몫으로 인식(둘 다 main_keywords ∪ 분석이력을 본다)
+      ② rank_link 로 이어진 추적 상품이 있으면 tracked_keywords 에도 추가(축A 일관)
+      ③ 온디맨드 수집 큐 등록 → 보통 수 분 안에 첫 순위가 기록됨
+    수집 유니버스에는 main_keywords 가 이번에 함께 편입돼(collector._keyword_universe)
+    다음 날부터는 슬롯 수집이 자동으로 커버한다.
+
+    권한 = 이 탭의 열람 스코프와 동일(_verify_client_access). 단 영업 대상(prospect)은
+    일일 자동 추적 대상이 아니므로(배치·즉시 기록 모두 광고주만) 명확한 안내와 함께 거절 —
+    조용히 받아서 영원히 「대기」로 두는 것보다 낫다.
+    """
+    kw = (req.keyword or "").strip()
+    if not kw or len(kw) > 40:
+        raise HTTPException(status_code=400, detail="키워드는 1~40자로 입력해주세요.")
+    conn = _get_conn()
+    try:
+        _verify_client_access(conn, client_id, current_user)
+        client = conn.execute(
+            "SELECT id, name, main_keywords, COALESCE(role,'advertiser') AS role, "
+            "COALESCE(vertical,'store') AS vertical, COALESCE(auto_analysis,1) AS auto_on "
+            "FROM clients WHERE id=? AND status='active'", (client_id,)).fetchone()
+        if not client:
+            raise HTTPException(status_code=404, detail="업체를 찾을 수 없습니다.")
+        if client["vertical"] != "store":
+            raise HTTPException(status_code=400, detail="플레이스 업체는 플레이스 추적 탭에서 등록해주세요.")
+        if client["role"] != "advertiser":
+            raise HTTPException(status_code=400, detail=(
+                "영업 대상 업체는 일일 자동 추적 대상이 아닙니다. "
+                "분석 실행 시 순위가 기록되며, 광고주로 등록하면 키워드 추적이 시작됩니다."))
+
+        _norm = lambda k: "".join(str(k).split()).lower()
+        mk_list = [k.strip() for k in (client["main_keywords"] or "").split(",") if k.strip()]
+        existing = {_norm(k) for k in mk_list}
+        for r in conn.execute("SELECT DISTINCT keyword FROM client_analyses WHERE client_id=?", (client_id,)):
+            existing.add(_norm(r["keyword"] or ""))
+        for r in conn.execute("SELECT DISTINCT keyword FROM client_rank_history WHERE client_id=?", (client_id,)):
+            existing.add(_norm(r["keyword"] or ""))
+        if _norm(kw) in existing:
+            return {"success": True, "already": True, "keyword": kw,
+                    "message": "이미 추적 중인 키워드입니다."}
+        if len(mk_list) >= 20:
+            raise HTTPException(status_code=400, detail=(
+                "직접 등록 키워드는 업체당 20개까지입니다. 안 쓰는 키워드를 정리한 뒤 등록해주세요."))
+
+        mk_list.append(kw)
+        conn.execute("UPDATE clients SET main_keywords=? WHERE id=?",
+                     (",".join(mk_list), client_id))
+
+        # 축A 동기화 — 이어진 추적 상품이 있으면 그쪽 키워드 목록에도(멱등)
+        linked = 0
+        try:
+            from rank_link import get_links_for_client
+            for ln in get_links_for_client(client_id):
+                conn.execute(
+                    "INSERT OR IGNORE INTO tracked_keywords (product_id, keyword) VALUES (?, ?)",
+                    (ln["tracked_product_id"], kw))
+                linked += 1
+        except Exception as e:
+            logger.warning(f"[track-keyword] 축A 동기화 실패(등록은 유효) [{kw}]: {e}")
+        conn.commit()
+
+        # 온디맨드 수집 — 커밋 뒤에 큐잉해야 수집기가 올렸을 때 main_keywords 가 보인다
+        queued = False
+        try:
+            from collector import _enqueue_request
+            _enqueue_request(kw)
+            queued = True
+        except Exception as e:
+            logger.warning(f"[track-keyword] 온디맨드 큐 등록 실패(다음 슬롯에서 수집) [{kw}]: {e}")
+
+        logger.info(f"[track-keyword] {client['name']}({client_id}) + '{kw}' "
+                    f"(축A {linked}건 동기화, 온디맨드 {'큐잉' if queued else '실패'})")
+        return {"success": True, "keyword": kw, "linked_products": linked, "queued": queued,
+                "message": ("등록되었습니다. " +
+                            ("보통 수 분 안에 첫 순위가 기록됩니다 — 잠시 후 새로고침해 확인하세요."
+                             if queued else "다음 수집 회차에 첫 순위가 기록됩니다.") +
+                            (" 자동 분석이 꺼진 업체라 검색량은 분석 실행 후 채워집니다." if not client["auto_on"] else ""))}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[track-keyword] {e}")
+        return {"success": False, "detail": str(e)}
+    finally:
+        conn.close()
 
 @router.get("/{client_id}/ai-insights")
 def get_ai_insights(client_id: int, current_user: dict = Depends(get_current_user)):

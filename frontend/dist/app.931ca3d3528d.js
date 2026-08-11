@@ -3,7 +3,7 @@
 /* ===== 로직 분석 — API 헬퍼 & 유틸리티 ===== */
 
 // ===== 앱 버전 (한 곳에서 관리) =====
-var APP_VERSION = window.APP_VERSION = 'v6.5.2';
+var APP_VERSION = window.APP_VERSION = 'v7.0.0';
 
 // ===== 401 중복 새로고침 방지 플래그 =====
 var _isAuthRedirecting = false;
@@ -134,6 +134,28 @@ function _handleResponse(r) {
       if (body && typeof body === 'object' && !body.hasOwnProperty('success')) {
         body.success = false;
       }
+      // ⚠️ FastAPI 422(요청 형식 오류)는 detail 이 **객체 배열**이라, 화면들이
+      //    toast.error(res.detail) 하면 「[object Object]」만 뜬다(2026-08-05 신고).
+      //    detail 을 여기서 한 번만 사람이 읽을 문장으로 바꿔 전 화면을 함께 고친다.
+      if (body && typeof body === 'object' && body.detail && typeof body.detail !== 'string') {
+        body.detailRaw = body.detail; // 원문 보존(진단용)
+        var d = body.detail;
+        try {
+          if (Array.isArray(d)) {
+            body.detail = d.map(function (x) {
+              var where = Array.isArray(x && x.loc) ? x.loc.filter(function (v) {
+                return v !== 'body';
+              }).join('.') : '';
+              var msg = x && (x.msg || x.message) || '형식 오류';
+              return where ? where + ': ' + msg : msg;
+            }).join(' · ');
+          } else {
+            body.detail = d && (d.msg || d.message) || JSON.stringify(d);
+          }
+        } catch (e) {
+          body.detail = '요청 형식 오류 (' + status + ')';
+        }
+      }
       return body;
     });
   }
@@ -176,6 +198,15 @@ var api = {
     return fetch(API_BASE + url, {
       method: 'DELETE',
       headers: _authHeaders()
+    }).then(_handleResponse).catch(_handleNetworkError);
+  },
+  patch: function (url, body) {
+    return fetch(API_BASE + url, {
+      method: 'PATCH',
+      headers: _authHeaders({
+        'Content-Type': 'application/json'
+      }),
+      body: JSON.stringify(body)
     }).then(_handleResponse).catch(_handleNetworkError);
   }
 };
@@ -335,6 +366,11 @@ function trimHtmlDetail(hd) {
  *   storeUrl:  'https://smartstore.naver.com/...'(선택),
  *   days:      0|7|30|...  // 0/미지정 = 전체, N = 최근 N일
  * })
+ *
+ * 플레이스 추적도 같은 빌더를 쓴다(2026-08-04 — 스토어와 동일 퀄리티). additive 옵션(미지정 시 기존과 동일):
+ *   typeHeader:        표 3번째 컬럼 제목(기본 '유형' — 플레이스는 '상태')
+ *   row.type_label:    3번째 컬럼 값(기본 check_type 수동/자동 — 플레이스는 노출/미노출/미확인)
+ *   row.rank_null_label: 순위 없음 표기(기본 '미노출' — 플레이스는 '–', 상태 컬럼이 사유를 설명)
  */
 (function () {
   function roundRect(ctx, x, y, w, h, r, fill, stroke) {
@@ -436,7 +472,7 @@ function trimHtmlDetail(hd) {
     ctx.font = 'bold 12px "Noto Sans KR", sans-serif';
     ctx.fillText('날짜', colX[0] + 12, tableY + 22);
     ctx.fillText('순위', colX[1] + 12, tableY + 22);
-    ctx.fillText('유형', colX[2] + 12, tableY + 22);
+    ctx.fillText(opts.typeHeader || '유형', colX[2] + 12, tableY + 22);
     tableY += tableHeaderH;
     data.forEach(function (r, i) {
       var rowY = tableY + i * tableRowH;
@@ -456,7 +492,7 @@ function trimHtmlDetail(hd) {
       var prevR = i > 0 ? data[i - 1] : null;
       var diff = prevR && r.rank_position && prevR.rank_position ? prevR.rank_position - r.rank_position : null;
       ctx.font = 'bold 13px "Noto Sans KR", sans-serif';
-      var rankText = r.rank_position ? r.rank_position + '위' : '미노출';
+      var rankText = r.rank_position ? r.rank_position + '위' : r.rank_null_label || '미노출';
       ctx.fillStyle = r.rank_position ? r.rank_position <= 10 ? '#059669' : r.rank_position <= 40 ? '#d97706' : '#dc2626' : '#94a3b8';
       ctx.fillText(rankText, colX[1] + 12, rowY + 20);
       if (diff != null && diff !== 0) {
@@ -468,7 +504,7 @@ function trimHtmlDetail(hd) {
       }
       ctx.font = '12px "Noto Sans KR", sans-serif';
       ctx.fillStyle = '#64748b';
-      ctx.fillText(r.check_type === 'manual' ? '수동' : '자동', colX[2] + 12, rowY + 20);
+      ctx.fillText(r.type_label || (r.check_type === 'manual' ? '수동' : '자동'), colX[2] + 12, rowY + 20);
     });
 
     // 라인 차트
@@ -892,7 +928,7 @@ function trimHtmlDetail(hd) {
           window.location.reload();
         },
         style: {
-          background: '#6C5CE7',
+          background: '#3b82f6',
           color: '#fff',
           border: 'none',
           padding: '12px 28px',
@@ -976,7 +1012,7 @@ function trimHtmlDetail(hd) {
       }, this.state.errorMsg), React.createElement('button', {
         onClick: this.handleRetry,
         style: {
-          background: '#6C5CE7',
+          background: '#3b82f6',
           color: '#fff',
           border: 'none',
           padding: '8px 20px',
@@ -1003,7 +1039,7 @@ function trimHtmlDetail(hd) {
 (function () {
   // 보고서 공통 색상 팔레트 (미리보기 시안과 동일)
   window.CHART_COLORS = {
-    IND: '#4f46e5',
+    IND: '#3b82f6',
     // 인디고(주색)
     PUR: '#9333ea',
     // 보라
@@ -1814,7 +1850,9 @@ window.DashboardSummary = function DashboardSummary({
 };
 
 ;/* ===== js/components/RankTrackingSection.jsx ===== */
-/* RankTrackingSection — 순위 추적 */
+/* RankTrackingSection — 순위 추적
+ * analysisOnly: 스토어 분석 화면 전용 모드 — 키워드별 노출 분석·1회성 조회만 렌더
+ * (추적 상품 목록·상품 등록 폼은 📊 키워드 순위 탭에서 관리, 2026-08-04 탭 분리) */
 window.RankTrackingSection = function RankTrackingSection({
   products,
   refreshProducts,
@@ -1824,7 +1862,9 @@ window.RankTrackingSection = function RankTrackingSection({
   relatedKeywords,
   onNavigateToClient,
   canEdit,
-  onRankResult
+  onRankResult,
+  analysisOnly,
+  onOpenRankTab
 }) {
   const {
     useState,
@@ -2137,8 +2177,8 @@ window.RankTrackingSection = function RankTrackingSection({
           padding: '3px 10px',
           borderRadius: 14,
           cursor: 'pointer',
-          border: '1px solid ' + (on ? '#4f46e5' : '#e2e8f0'),
-          background: on ? '#4f46e5' : '#fff',
+          border: '1px solid ' + (on ? '#3b82f6' : '#e2e8f0'),
+          background: on ? '#3b82f6' : '#fff',
           color: on ? '#fff' : '#475569'
         }
       }, _periodLabel[d]);
@@ -2467,7 +2507,20 @@ window.RankTrackingSection = function RankTrackingSection({
     className: "badge b-ok"
   }, "✅ 실측")), /*#__PURE__*/React.createElement("div", {
     className: "rt-desc"
-  }, "상품명에서 추출한 키워드별로 네이버 쇼핑 검색 순위를 조회한 결과 (검색 범위: 상위 200개 상품)")), canEdit !== false && /*#__PURE__*/React.createElement("button", {
+  }, "상품명에서 추출한 키워드별로 네이버 쇼핑 검색 순위를 조회한 결과 (검색 범위: 상위 200개 상품)")), analysisOnly && onOpenRankTab && /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-primary btn-sm",
+    onClick: () => {
+      try {
+        sessionStorage.setItem('logic_rank_ctx', JSON.stringify({
+          searchedKeyword: searchedKeyword || '',
+          searchedProductUrl: searchedProductUrl || '',
+          cachedProductName: cachedProductName || '',
+          relatedKeywords: relatedKeywords || []
+        }));
+      } catch (e) {}
+      onOpenRankTab();
+    }
+  }, "📊 키워드 순위 탭에서 관리 →"), !analysisOnly && canEdit !== false && /*#__PURE__*/React.createElement("button", {
     className: "btn btn-primary btn-sm",
     onClick: () => setShowAddForm(!showAddForm)
   }, showAddForm ? '취소' : '+ 상품 등록')), showAddForm && /*#__PURE__*/React.createElement("div", {
@@ -2761,13 +2814,14 @@ window.RankTrackingSection = function RankTrackingSection({
       padding: '9px 18px',
       borderRadius: 10,
       border: 'none',
-      background: 'linear-gradient(135deg,#4f46e5,#6366f1)',
+      background: 'linear-gradient(135deg,#3b82f6,#3b82f6)',
       color: '#fff',
       fontSize: 13,
       fontWeight: 700,
       cursor: 'pointer'
     }
   }, "🔄 다시 조회")), function () {
+    if (analysisOnly) return null;
     // viewer는 등록된 상품 목록 표시 안 함
     if (canEdit === false) {
       // 1회성 결과도 없고 로딩도 아닌 경우에만 빈 상태 표시
@@ -2837,7 +2891,7 @@ window.RankTrackingSection = function RankTrackingSection({
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
-            color: onNavigateToClient ? '#4f46e5' : 'inherit'
+            color: onNavigateToClient ? '#3b82f6' : 'inherit'
           }
         }, p.product_name || '상품', onNavigateToClient && React.createElement('span', {
           style: {
@@ -3193,7 +3247,7 @@ window.RankTrackingSection = function RankTrackingSection({
         style: {
           fontSize: 11,
           fontWeight: 700,
-          color: '#4f46e5',
+          color: '#3b82f6',
           background: '#ede9fe',
           border: 'none',
           borderRadius: 8,
@@ -3397,6 +3451,10 @@ function _krChip(kind) {
     color: '#b45309',
     background: '#fffbeb'
   });
+  if (kind === 'info') return Object.assign({}, base, {
+    color: '#1d4ed8',
+    background: '#eff6ff'
+  });
   return Object.assign({}, base, {
     color: '#64748b',
     background: '#f2f4f6'
@@ -3511,6 +3569,21 @@ window.KeywordRankPage = function KeywordRankPage(props) {
   var _flt = useState('all');
   var filter = _flt[0],
     setFilter = _flt[1]; // all|attention|up|down
+  var _bs = useState('rank');
+  var boardSort = _bs[0],
+    setBoardSort = _bs[1]; // rank|delta|volume|name (2차 확산)
+  var _bd2 = useState(7);
+  var boardDays = _bd2[0],
+    setBoardDays = _bd2[1]; // 추이 기간 7|30
+  var _kwi = useState('');
+  var kwInput = _kwi[0],
+    setKwInput = _kwi[1]; // 추적 키워드 추가 입력
+  var _kwb = useState(false);
+  var kwBusy = _kwb[0],
+    setKwBusy = _kwb[1];
+  var _kwm = useState(null);
+  var kwMsg = _kwm[0],
+    setKwMsg = _kwm[1]; // {ok, text}
 
   /* 하단 RankTrackingSection 용 — 추적 상품은 이 페이지가 자체 로드 */
   var _pr = useState([]);
@@ -3534,6 +3607,222 @@ window.KeywordRankPage = function KeywordRankPage(props) {
     return null;
   });
   var rankCtx = _ctx[0];
+
+  /* 하단 추적 상품 관리(전체 업체 도구) — 업체 목록에서만, 기본 접힘.
+     스토어 분석에서 컨텍스트를 들고 넘어온 경우엔 노출 확인이 이어지도록 자동 펼침 */
+  var _tk = useState(!!_ctx[0]);
+  var trackingOpen = _tk[0],
+    setTrackingOpen = _tk[1];
+
+  /* 키워드 펼침 패널 — 순위 추이 차트(이미지 저장과 동일 데이터) + 기간 선택 + 📸 저장 */
+  var _ex = useState(null);
+  var expandedKw = _ex[0],
+    setExpandedKw = _ex[1];
+  var _kd = useState({});
+  var kwDays = _kd[0],
+    setKwDays = _kd[1]; // { keyword: 7|30|0 }
+  var _hc = useState({});
+  var histCache = _hc[0],
+    setHistCache = _hc[1]; // { keyword: rows(90일) }
+  var loadKwHistory = function (client, keyword) {
+    if (histCache[keyword]) return;
+    api.get('/cd/' + client.id + '/rank-history?keyword=' + encodeURIComponent(keyword) + '&days=90').then(function (res) {
+      var rows = res && res.success && res.data || [];
+      setHistCache(function (prev) {
+        var n = Object.assign({}, prev);
+        n[keyword] = rows;
+        return n;
+      });
+    }).catch(function () {
+      setHistCache(function (prev) {
+        var n = Object.assign({}, prev);
+        n[keyword] = [];
+        return n;
+      });
+      try {
+        toast.error('순위 이력을 불러오지 못했습니다.');
+      } catch (e) {}
+    });
+  };
+  var toggleKw = function (client, keyword) {
+    if (expandedKw === keyword) {
+      setExpandedKw(null);
+      return;
+    }
+    setExpandedKw(keyword);
+    loadKwHistory(client, keyword);
+  };
+  var _kwPeriodLabel = {
+    7: '최근 7일',
+    30: '최근 30일',
+    0: '전체(90일)'
+  };
+  var _kwFilterRows = function (rows, days) {
+    if (!days) return rows;
+    var cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+    return rows.filter(function (r) {
+      return new Date((r.checked_at || '').replace(' ', 'T')) >= cutoff;
+    });
+  };
+  function renderKwPanel(client, b) {
+    var days = kwDays[b.keyword] != null ? kwDays[b.keyword] : 7; // 기본 = 최근 7일
+    var all = histCache[b.keyword];
+    var rows = all ? _kwFilterRows(all, days) : null;
+    var setPeriod = function (d) {
+      setKwDays(function (prev) {
+        var n = Object.assign({}, prev);
+        n[b.keyword] = d;
+        return n;
+      });
+    };
+    var header = React.createElement('div', {
+      style: {
+        display: 'flex',
+        gap: 6,
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        marginBottom: 8
+      }
+    }, [7, 30, 0].map(function (d) {
+      var on = days === d;
+      return React.createElement('button', {
+        key: d,
+        onClick: function (e) {
+          e.stopPropagation();
+          setPeriod(d);
+        },
+        style: {
+          fontSize: 11,
+          fontWeight: 700,
+          padding: '3px 10px',
+          borderRadius: 14,
+          cursor: 'pointer',
+          border: '1px solid ' + (on ? '#3b82f6' : '#e2e8f0'),
+          background: on ? '#3b82f6' : '#fff',
+          color: on ? '#fff' : '#475569'
+        }
+      }, _kwPeriodLabel[d]);
+    }), React.createElement('button', {
+      onClick: function (e) {
+        e.stopPropagation();
+        window.exportRankHistoryImage({
+          rows: all || [],
+          storeName: client.name || '업체',
+          keyword: b.keyword,
+          storeUrl: client.store_url || '',
+          days: days
+        });
+      },
+      style: {
+        marginLeft: 'auto',
+        fontSize: 11,
+        fontWeight: 700,
+        padding: '3px 10px',
+        borderRadius: 14,
+        cursor: 'pointer',
+        border: '1px solid #16a34a',
+        background: '#f0fdf4',
+        color: '#16a34a'
+      }
+    }, '📸 이미지 저장'));
+    var bodyEl;
+    if (!rows) {
+      bodyEl = React.createElement('div', {
+        style: {
+          padding: 8,
+          textAlign: 'center',
+          fontSize: 12,
+          color: '#94a3b8'
+        }
+      }, '순위 이력 불러오는 중...');
+    } else if (rows.length < 2) {
+      bodyEl = React.createElement('div', {
+        style: {
+          padding: 8,
+          textAlign: 'center',
+          fontSize: 12,
+          color: '#94a3b8'
+        }
+      }, _kwPeriodLabel[days] + ' 추이는 2회 이상의 순위 기록이 필요합니다. (현재 ' + rows.length + '회)');
+    } else {
+      var labels = rows.map(function (r) {
+        var d = new Date((r.checked_at || '').replace(' ', 'T'));
+        return isNaN(d) ? '' : d.getMonth() + 1 + '/' + d.getDate();
+      });
+      var data = rows.map(function (r) {
+        return r.rank_position && r.rank_position > 0 ? r.rank_position : null;
+      });
+      var valid = data.filter(function (v) {
+        return v != null;
+      });
+      var maxRank = valid.length ? Math.max.apply(null, valid) : 40;
+      bodyEl = React.createElement(React.Fragment, null, React.createElement('div', {
+        style: {
+          fontSize: 12,
+          fontWeight: 700,
+          color: '#0f172a',
+          marginBottom: 8
+        }
+      }, '"' + b.keyword + '" ' + _kwPeriodLabel[days] + ' 순위 추이'), React.createElement(window.ChartCanvas, {
+        canvasId: 'cdrank-' + client.id + '-' + encodeURIComponent(b.keyword),
+        type: 'line',
+        height: 180,
+        data: {
+          labels: labels,
+          datasets: [{
+            label: '순위',
+            data: data,
+            borderColor: '#16a34a',
+            backgroundColor: 'rgba(22,163,74,.12)',
+            fill: true,
+            tension: 0.35,
+            pointRadius: 2.5,
+            borderWidth: 2.5,
+            spanGaps: true
+          }]
+        },
+        options: {
+          plugins: {
+            legend: {
+              display: false
+            },
+            tooltip: {
+              callbacks: {
+                label: function (ctx) {
+                  return ctx.parsed.y != null ? ctx.parsed.y + '위' : '300위 밖';
+                }
+              }
+            }
+          },
+          scales: {
+            y: {
+              reverse: true,
+              suggestedMin: 1,
+              suggestedMax: Math.max(16, maxRank + 2),
+              title: {
+                display: true,
+                text: '순위 (낮을수록 상위 ↑)'
+              },
+              ticks: {
+                precision: 0
+              }
+            }
+          }
+        }
+      }));
+    }
+    return React.createElement('tr', {
+      key: b.keyword + '::panel'
+    }, React.createElement('td', {
+      colSpan: 8,
+      style: {
+        padding: '14px 18px 10px',
+        background: '#f8fafc',
+        borderBottom: '1px solid #e2e8f0'
+      }
+    }, header, bodyEl));
+  }
   var loadOverview = useCallback(function () {
     setOvLoading(true);
     api.get('/cd/rank-overview').then(function (res) {
@@ -3550,14 +3839,10 @@ window.KeywordRankPage = function KeywordRankPage(props) {
     loadOverview();
     loadProducts();
   }, [loadOverview, loadProducts]);
-  var openDetail = function (c) {
-    setSelected({
-      id: c.id,
-      name: c.name
-    });
+  var loadBoard = function (id, days) {
     setBoard(null);
     setBdLoading(true);
-    api.get('/cd/' + c.id + '/rank-board').then(function (res) {
+    api.get('/cd/' + id + '/rank-board?days=' + (days || boardDays)).then(function (res) {
       if (res && res.success) setBoard(res);else toast.error(res && res.detail || '키워드 보드를 불러오지 못했습니다.');
     }).catch(function () {
       try {
@@ -3566,6 +3851,45 @@ window.KeywordRankPage = function KeywordRankPage(props) {
     }).finally(function () {
       setBdLoading(false);
     });
+  };
+  var submitKeyword = function () {
+    var kw = kwInput.trim();
+    if (!kw || kwBusy || !selected) return;
+    setKwBusy(true);
+    setKwMsg(null);
+    api.post('/cd/' + selected.id + '/track-keyword', {
+      keyword: kw
+    }).then(function (res) {
+      if (res && res.success) {
+        setKwMsg({
+          ok: true,
+          text: res.already ? '「' + kw + '」 — 이미 추적 중인 키워드입니다.' : '「' + kw + '」 ' + (res.message || '등록되었습니다.')
+        });
+        if (!res.already) {
+          setKwInput('');
+          loadBoard(selected.id, boardDays);
+        }
+      } else {
+        setKwMsg({
+          ok: false,
+          text: res && res.detail || '등록하지 못했습니다.'
+        });
+      }
+    }).catch(function (err) {
+      setKwMsg({
+        ok: false,
+        text: err && err.message || '등록하지 못했습니다.'
+      });
+    }).finally(function () {
+      setKwBusy(false);
+    });
+  };
+  var openDetail = function (c) {
+    setSelected({
+      id: c.id,
+      name: c.name
+    });
+    loadBoard(c.id, boardDays);
     try {
       window.scrollTo({
         top: 0,
@@ -3573,9 +3897,16 @@ window.KeywordRankPage = function KeywordRankPage(props) {
       });
     } catch (e) {}
   };
+  var changeBoardDays = function (d) {
+    if (d === boardDays) return;
+    setBoardDays(d);
+    if (selected) loadBoard(selected.id, d);
+  };
   var backToList = function () {
     setSelected(null);
     setBoard(null);
+    setKwInput('');
+    setKwMsg(null);
   };
 
   /* ---------- 업체 목록 (랜딩) ---------- */
@@ -3825,6 +4156,17 @@ window.KeywordRankPage = function KeywordRankPage(props) {
     var kpis = board && board.kpis || {};
     var rows = board && board.board || [];
     var client = board && board.client || selected;
+    /* 2차 확산: 정렬 — 서버 기본(노출 순위순) 위에 클라이언트 재정렬 */
+    var _volNum = function (v) {
+      var n = parseInt(String(v || '').replace(/[^0-9]/g, ''), 10);
+      return isNaN(n) ? -1 : n;
+    };
+    rows = rows.slice().sort(function (a, b) {
+      if (boardSort === 'delta') return Math.abs(b.delta || 0) - Math.abs(a.delta || 0);
+      if (boardSort === 'volume') return _volNum(b.volume) - _volNum(a.volume);
+      if (boardSort === 'name') return String(a.keyword).localeCompare(String(b.keyword), 'ko');
+      return (a.rank == null) - (b.rank == null) || (a.rank || 0) - (b.rank || 0);
+    });
     return React.createElement(React.Fragment, null, React.createElement('div', {
       style: {
         display: 'flex',
@@ -3923,7 +4265,128 @@ window.KeywordRankPage = function KeywordRankPage(props) {
       style: _krKpiS
     }, '전일 대비'))), React.createElement('div', {
       style: _krCard
-    }, bdLoading ? React.createElement('div', {
+    },
+    /* 추적 키워드 추가 등록 (2026-08-11 직원 기능 요청) — 서버가 권한·중복·
+       영업대상 여부를 최종 판정하므로 입력은 항상 노출, 결과 메시지로 안내 */
+    React.createElement('div', {
+      style: {
+        display: 'flex',
+        gap: 8,
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        marginBottom: 10,
+        padding: '10px 12px',
+        background: '#f8fafc',
+        border: '1px dashed #cbd5e1',
+        borderRadius: 10
+      }
+    }, React.createElement('span', {
+      style: {
+        fontSize: 12.5,
+        fontWeight: 700,
+        color: '#475569'
+      }
+    }, '＋ 추적 키워드 등록'), React.createElement('input', {
+      value: kwInput,
+      disabled: kwBusy,
+      onChange: function (e) {
+        setKwInput(e.target.value);
+      },
+      onKeyDown: function (e) {
+        if (e.key === 'Enter' && !e.nativeEvent.isComposing) submitKeyword();
+      },
+      placeholder: '예: 수제쿠키 (Enter)',
+      style: {
+        flex: '1 1 180px',
+        maxWidth: 260,
+        padding: '7px 12px',
+        border: '1px solid #e2e8f0',
+        borderRadius: 9,
+        fontSize: 13,
+        outline: 'none'
+      }
+    }), React.createElement('button', {
+      onClick: submitKeyword,
+      disabled: kwBusy || !kwInput.trim(),
+      style: {
+        border: 'none',
+        background: kwBusy || !kwInput.trim() ? '#93c5fd' : '#3b82f6',
+        color: '#fff',
+        borderRadius: 9,
+        padding: '7px 16px',
+        fontSize: 12.5,
+        fontWeight: 700,
+        cursor: kwBusy || !kwInput.trim() ? 'default' : 'pointer'
+      }
+    }, kwBusy ? '등록 중…' : '등록'), kwMsg && React.createElement('span', {
+      style: {
+        fontSize: 12,
+        fontWeight: 600,
+        color: kwMsg.ok ? '#16a34a' : '#dc2626',
+        flexBasis: '100%'
+      }
+    }, kwMsg.text)), /* 2차 확산: 정렬 · 추이 기간 컨트롤 */
+    React.createElement('div', {
+      style: {
+        display: 'flex',
+        gap: 8,
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        marginBottom: 12
+      }
+    }, React.createElement('select', {
+      value: boardSort,
+      onChange: function (e) {
+        setBoardSort(e.target.value);
+      },
+      style: {
+        border: '1px solid #e2e8f0',
+        borderRadius: 9,
+        padding: '7px 11px',
+        fontSize: 12.5,
+        fontWeight: 600,
+        color: '#475569',
+        background: '#fff'
+      }
+    }, React.createElement('option', {
+      value: 'rank'
+    }, '정렬: 순위순'), React.createElement('option', {
+      value: 'delta'
+    }, '변동 큰 순'), React.createElement('option', {
+      value: 'volume'
+    }, '검색량 많은 순'), React.createElement('option', {
+      value: 'name'
+    }, '가나다순')), React.createElement('span', {
+      style: {
+        display: 'inline-flex',
+        border: '1px solid #e2e8f0',
+        borderRadius: 9,
+        overflow: 'hidden'
+      }
+    }, [7, 30].map(function (d) {
+      var on = boardDays === d;
+      return React.createElement('button', {
+        key: d,
+        onClick: function () {
+          changeBoardDays(d);
+        },
+        style: {
+          border: 'none',
+          padding: '7px 13px',
+          fontSize: 12.5,
+          fontWeight: 700,
+          cursor: 'pointer',
+          background: on ? '#3b82f6' : '#fff',
+          color: on ? '#fff' : '#475569'
+        }
+      }, d + '일');
+    })), React.createElement('span', {
+      style: {
+        fontSize: 12,
+        color: '#94a3b8',
+        marginLeft: 'auto'
+      }
+    }, '추이·전일 대비는 매일 08:00 기록 기준')), bdLoading ? React.createElement('div', {
       style: {
         padding: '40px 0',
         textAlign: 'center',
@@ -3937,7 +4400,7 @@ window.KeywordRankPage = function KeywordRankPage(props) {
         color: '#94a3b8',
         fontSize: 13
       }
-    }, '최근 8일 순위 기록이 없습니다. 아래 「상품 순위 추적」에서 상품·키워드를 등록하면 매일 아침 자동 기록됩니다.') : React.createElement('div', {
+    }, '아직 순위 기록이 없습니다. 위 「＋ 추적 키워드 등록」에 키워드를 넣으면 수 분 안에 첫 순위가 기록됩니다.') : React.createElement('div', {
       style: {
         overflowX: 'auto'
       }
@@ -3956,7 +4419,7 @@ window.KeywordRankPage = function KeywordRankPage(props) {
       style: _krTh
     }, '전일 대비'), React.createElement('th', {
       style: _krTh
-    }, '최근 7일'), React.createElement('th', {
+    }, '최근 ' + boardDays + '일'), React.createElement('th', {
       style: Object.assign({}, _krTh, {
         textAlign: 'right'
       })
@@ -3966,17 +4429,39 @@ window.KeywordRankPage = function KeywordRankPage(props) {
       })
     }, '페이지'), React.createElement('th', {
       style: _krTh
-    }, '확인 시각'))), React.createElement('tbody', null, rows.map(function (b) {
+    }, '확인 시각'), React.createElement('th', {
+      style: _krTh
+    }, '이미지'))), React.createElement('tbody', null, rows.map(function (b) {
       var d = _krDelta(b.delta === null || b.delta === undefined ? b.prev_rank == null && b.rank != null ? undefined : 0 : b.delta);
       var exposed = b.rank !== null && b.rank !== undefined;
-      return React.createElement('tr', {
-        key: b.keyword
+      var open = expandedKw === b.keyword;
+      var mainRow = React.createElement('tr', {
+        key: b.keyword,
+        onClick: function () {
+          toggleKw(client, b.keyword);
+        },
+        style: {
+          cursor: 'pointer',
+          background: open ? '#f8fafc' : 'transparent'
+        },
+        onMouseEnter: function (e) {
+          e.currentTarget.style.background = '#f8fafc';
+        },
+        onMouseLeave: function (e) {
+          e.currentTarget.style.background = open ? '#f8fafc' : 'transparent';
+        }
       }, React.createElement('td', {
         style: Object.assign({}, _krTd, {
           fontWeight: 700,
           color: '#0f172a'
         })
-      }, b.keyword), React.createElement('td', {
+      }, React.createElement('span', {
+        style: {
+          color: '#94a3b8',
+          fontSize: 10,
+          marginRight: 7
+        }
+      }, open ? '▼' : '▶'), b.keyword), React.createElement('td', {
         style: Object.assign({}, _krTd, {
           textAlign: 'right'
         })
@@ -3987,9 +4472,17 @@ window.KeywordRankPage = function KeywordRankPage(props) {
           color: b.rank <= 10 ? '#16a34a' : '#0f172a',
           fontVariantNumeric: 'tabular-nums'
         }
-      }, b.rank + '위') : React.createElement('span', {
+      }, b.rank + '위') : b.pending ? React.createElement('span', {
+        style: _krChip('info'),
+        title: '등록됨 — 첫 순위 기록을 기다리는 중(보통 수 분)'
+      }, '⏳ 기록 대기') : React.createElement('span', null, React.createElement('span', {
         style: _krChip('mute')
-      }, '미노출')), React.createElement('td', {
+      }, '미노출'), (b.unexposed_days || 0) >= 2 && React.createElement('span', {
+        style: Object.assign({}, _krChip('warn'), {
+          marginLeft: 4
+        }),
+        title: '연속 미노출 일수'
+      }, b.unexposed_days + '일째'))), React.createElement('td', {
         style: _krTd
       }, exposed && b.delta !== null && b.delta !== undefined ? React.createElement('span', {
         style: d.style
@@ -4016,7 +4509,30 @@ window.KeywordRankPage = function KeywordRankPage(props) {
           color: '#94a3b8',
           whiteSpace: 'nowrap'
         })
-      }, b.last_checked ? String(b.last_checked).slice(0, 16).replace('T', ' ') : '—'));
+      }, b.last_checked ? String(b.last_checked).slice(0, 16).replace('T', ' ') : '—'), React.createElement('td', {
+        style: Object.assign({}, _krTd, {
+          whiteSpace: 'nowrap'
+        })
+      }, React.createElement('button', {
+        onClick: function (e) {
+          e.stopPropagation();
+          if (!open) toggleKw(client, b.keyword);else setExpandedKw(null);
+        },
+        title: '순위 추이 그래프 + 이미지(PNG) 저장',
+        style: {
+          fontSize: 11,
+          fontWeight: 700,
+          padding: '3px 10px',
+          borderRadius: 14,
+          cursor: 'pointer',
+          border: '1px solid #16a34a',
+          background: '#f0fdf4',
+          color: '#16a34a'
+        }
+      }, open ? '▴ 접기' : '📸 그래프·저장')));
+      return open ? React.createElement(React.Fragment, {
+        key: b.keyword + '::grp'
+      }, mainRow, renderKwPanel(client, b)) : mainRow;
     }))))));
   }
   return React.createElement('div', {
@@ -4042,10 +4558,39 @@ window.KeywordRankPage = function KeywordRankPage(props) {
       fontSize: 12.5,
       color: '#94a3b8'
     }
-  }, selected ? '업체 상세 — 키워드별 추적 현황' : (isViewer ? '내 영업 대상 업체별 순위 추적 현황' : '광고주 업체별 순위 추적 현황') + ' · 매일 아침 자동 기록')), selected ? renderDetail() : renderList(), /* ---------- 기존 순위 추적 기능(등록·재확인·1회성 조회) — 무손실 이전 ---------- */
-  React.createElement('div', {
+  }, selected ? '업체 상세 — 키워드별 추적 현황' : (isViewer ? '내 영업 대상 업체별 순위 추적 현황' : '광고주 업체별 순위 추적 현황') + ' · 매일 아침 자동 기록')), selected ? renderDetail() : renderList(),
+  /* ---------- 추적 상품 관리(전체 업체 도구) — 업체 목록에서만, 기본 접힘 ----------
+     업체 상세는 그 업체 데이터만 보이도록 여기서 제외한다(운영자 지시 2026-08-04). */
+  !selected && React.createElement('div', {
     style: {
       marginTop: 28
+    }
+  }, React.createElement('button', {
+    onClick: function () {
+      setTrackingOpen(!trackingOpen);
+    },
+    style: {
+      width: '100%',
+      textAlign: 'left',
+      border: '1px solid #e2e8f0',
+      background: '#fff',
+      color: '#334155',
+      borderRadius: 12,
+      padding: '13px 18px',
+      fontSize: 13.5,
+      fontWeight: 700,
+      cursor: 'pointer'
+    }
+  }, (trackingOpen ? '▴ ' : '▾ ') + '🛠 추적 상품 관리 — 상품·키워드 등록/삭제 · 수동 재확인 · 노출 분석 (전체 업체)', !trackingOpen && React.createElement('span', {
+    style: {
+      fontSize: 12,
+      fontWeight: 500,
+      color: '#94a3b8',
+      marginLeft: 8
+    }
+  }, '펼쳐서 관리')), trackingOpen && React.createElement('div', {
+    style: {
+      marginTop: 12
     }
   }, React.createElement(window.SectionErrorBoundary, {
     name: '순위 추적'
@@ -4059,171 +4604,7 @@ window.KeywordRankPage = function KeywordRankPage(props) {
     onNavigateToClient: onNavigateToClient,
     canEdit: currentUser.role !== 'viewer',
     onRankResult: null
-  }))));
-};
-
-;/* ===== js/components/RankCheckCard.jsx ===== */
-/* RankCheckCard — 스토어 분석 안 「키워드별 노출 순위」 콤팩트 연동 카드 (탭 분리 1차)
- *
- * 상세 추적 UI(RankTrackingSection)는 📊 키워드 순위 탭으로 이전했고, 여기서는
- * ① 검색 컨텍스트의 1회성 순위 조회(/rank/check)를 기존과 동일하게 수행해
- *    onRankResult 로 올린다 — 진입 전략·시장 매출 섹션이 이 값을 계속 소비(무회귀).
- * ② 결과를 한 줄로 보여주고, 「키워드 순위 탭」으로 컨텍스트를 넘겨 이동한다
- *    (sessionStorage 'logic_rank_ctx' — KeywordRankPage 가 1회 소비).
- *
- * props: { searchedKeyword, searchedProductUrl, cachedProductName, relatedKeywords,
- *          onRankResult, onOpenRankTab }
- */
-window.RankCheckCard = function RankCheckCard(props) {
-  var useState = React.useState,
-    useEffect = React.useEffect,
-    useRef = React.useRef;
-  var searchedKeyword = props.searchedKeyword;
-  var searchedProductUrl = props.searchedProductUrl;
-  var onRankResult = props.onRankResult;
-  var onOpenRankTab = props.onOpenRankTab;
-  var _r = useState(null);
-  var result = _r[0],
-    setResult = _r[1];
-  var _l = useState(false);
-  var loading = _l[0],
-    setLoading = _l[1];
-  var lastKey = useRef('');
-
-  /* 1회성 순위 조회 (DB 미저장) — RankTrackingSection 에 있던 로직 그대로 */
-  useEffect(function () {
-    if (!searchedKeyword || !searchedProductUrl) {
-      setResult(null);
-      return;
-    }
-    var key = searchedProductUrl + '::' + searchedKeyword;
-    if (lastKey.current === key) return;
-    lastKey.current = key;
-    setLoading(true);
-    setResult(null);
-    api.post('/rank/check', {
-      keyword: searchedKeyword,
-      product_url: searchedProductUrl
-    }).then(function (res) {
-      if (res && res.success && res.data) {
-        setResult(res.data);
-        if (onRankResult) onRankResult(res.data);
-      } else if (res && !res.success && res.detail) {
-        toast.error(res.detail);
-      }
-    }).catch(function () {}).finally(function () {
-      setLoading(false);
-    });
-  }, [searchedKeyword, searchedProductUrl]);
-  var openTab = function () {
-    try {
-      sessionStorage.setItem('logic_rank_ctx', JSON.stringify({
-        searchedKeyword: searchedKeyword || '',
-        searchedProductUrl: searchedProductUrl || '',
-        cachedProductName: props.cachedProductName || '',
-        relatedKeywords: props.relatedKeywords || []
-      }));
-    } catch (e) {}
-    if (onOpenRankTab) onOpenRankTab();
-  };
-  var statusEl;
-  if (loading) {
-    statusEl = React.createElement('span', {
-      style: {
-        fontSize: 13,
-        color: '#64748b'
-      }
-    }, '🔄 현재 순위 조회 중...');
-  } else if (result && result.rank_position != null) {
-    statusEl = React.createElement('span', {
-      style: {
-        fontSize: 14,
-        fontWeight: 800,
-        color: result.rank_position <= 10 ? '#16a34a' : '#0f172a'
-      }
-    }, '현재 ' + result.rank_position + '위', result.page_number ? React.createElement('span', {
-      style: {
-        fontSize: 12,
-        fontWeight: 600,
-        color: '#94a3b8',
-        marginLeft: 6
-      }
-    }, result.page_number + '페이지') : null);
-  } else if (result) {
-    statusEl = React.createElement('span', {
-      style: {
-        fontSize: 13,
-        fontWeight: 700,
-        color: '#b45309'
-      }
-    }, '300위 내 미노출');
-  } else if (searchedKeyword && searchedProductUrl) {
-    statusEl = React.createElement('span', {
-      style: {
-        fontSize: 13,
-        color: '#94a3b8'
-      }
-    }, '—');
-  } else {
-    statusEl = React.createElement('span', {
-      style: {
-        fontSize: 13,
-        color: '#94a3b8'
-      }
-    }, '상품 URL 로 분석하면 현재 순위가 표시됩니다');
-  }
-  return React.createElement('div', {
-    id: 'sec-rank',
-    style: {
-      background: '#fff',
-      border: '1px solid #e2e8f0',
-      borderRadius: 14,
-      padding: '16px 20px',
-      marginBottom: 16
-    }
-  }, React.createElement('div', {
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 12,
-      flexWrap: 'wrap'
-    }
-  }, React.createElement('div', {
-    style: {
-      fontSize: 15,
-      fontWeight: 800,
-      color: '#0f172a'
-    }
-  }, '📊 키워드별 노출 순위'), searchedKeyword && React.createElement('span', {
-    style: {
-      fontSize: 12.5,
-      color: '#475569',
-      background: '#f1f5f9',
-      borderRadius: 999,
-      padding: '3px 10px',
-      fontWeight: 600
-    }
-  }, searchedKeyword), statusEl, React.createElement('button', {
-    onClick: openTab,
-    style: {
-      marginLeft: 'auto',
-      border: '1px solid #bfdbfe',
-      background: '#eff6ff',
-      color: '#1d4ed8',
-      borderRadius: 10,
-      padding: '7px 14px',
-      fontSize: 12.5,
-      fontWeight: 700,
-      cursor: 'pointer',
-      whiteSpace: 'nowrap'
-    }
-  }, '📊 키워드 순위 탭에서 상세 보기 →')), React.createElement('div', {
-    style: {
-      fontSize: 12,
-      color: '#94a3b8',
-      marginTop: 8
-    }
-  }, '업체별 순위 추적 현황·키워드별 노출 분석·상품 추적 등록은 상단 「📊 키워드 순위」 탭으로 이동했습니다.'));
+  })))));
 };
 
 ;/* ===== js/components/KeywordVolumeSection.jsx ===== */
@@ -4283,7 +4664,7 @@ window.KeywordVolumeSection = function KeywordVolumeSection({
   }, /*#__PURE__*/React.createElement("i", {
     style: {
       width: pcRatio + '%',
-      background: '#6366f1'
+      background: '#3b82f6'
     }
   }), /*#__PURE__*/React.createElement("i", {
     style: {
@@ -4406,7 +4787,7 @@ window.RelatedKeywordsSection = function RelatedKeywordsSection({
       padding: '10px 20px',
       borderRadius: 10,
       border: 'none',
-      background: tab === 'related' ? '#4f46e5' : '#f1f5f9',
+      background: tab === 'related' ? '#3b82f6' : '#f1f5f9',
       color: tab === 'related' ? '#fff' : '#64748b',
       fontSize: 13,
       fontWeight: 600,
@@ -4540,7 +4921,7 @@ window.RelatedKeywordsSection = function RelatedKeywordsSection({
         padding: '12px 20px',
         fontWeight: 700,
         fontSize: 14,
-        color: '#4f46e5'
+        color: '#3b82f6'
       }
     }, fmt(k.totalVolume)), /*#__PURE__*/React.createElement("td", {
       style: {
@@ -4587,7 +4968,7 @@ window.RelatedKeywordsSection = function RelatedKeywordsSection({
         width: volPct + '%',
         height: '100%',
         borderRadius: 3,
-        background: tab === 'golden' ? 'linear-gradient(90deg, #f59e0b, #fbbf24)' : 'linear-gradient(90deg, #4f46e5, #7c3aed)',
+        background: tab === 'golden' ? 'linear-gradient(90deg, #f59e0b, #fbbf24)' : 'linear-gradient(90deg, #3b82f6, #7c3aed)',
         transition: 'width 0.8s ease'
       }
     }))), tab === 'golden' && /*#__PURE__*/React.createElement("td", {
@@ -4786,9 +5167,9 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({
       datasets: [{
         label: 'SEO 점수',
         data: [result.scores.title || 0, result.scores.rank || 0, result.scores.price || 0, result.scores.review || 0, result.scores.sales || 0, result.scores.rating || 0, result.scores.category || 0, result.scores.brand || 0, result.scores.naverpay || 0, result.scores.freshness || 0],
-        borderColor: '#4f46e5',
+        borderColor: '#3b82f6',
         backgroundColor: 'rgba(79,70,229,.18)',
-        pointBackgroundColor: '#4f46e5',
+        pointBackgroundColor: '#3b82f6',
         borderWidth: 2
       }]
     },
@@ -5002,7 +5383,7 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({
       width: 22,
       height: 22,
       borderRadius: 6,
-      background: '#4f46e5',
+      background: '#3b82f6',
       color: '#fff',
       fontSize: 11,
       fontWeight: 700,
@@ -5302,7 +5683,7 @@ window.ProductNameSection = function ProductNameSection({
       justifyContent: 'center',
       width: 26,
       height: 26,
-      background: 'linear-gradient(135deg, #4f46e5, #7c3aed)',
+      background: 'linear-gradient(135deg, #3b82f6, #7c3aed)',
       color: '#fff',
       borderRadius: '50%',
       fontSize: 11,
@@ -5337,7 +5718,7 @@ window.ProductNameSection = function ProductNameSection({
       width: Math.min(k.ratio, 100) + '%',
       height: '100%',
       borderRadius: 8,
-      background: 'linear-gradient(135deg, #4f46e5, #7c3aed)',
+      background: 'linear-gradient(135deg, #3b82f6, #7c3aed)',
       transition: 'width 0.3s ease'
     }
   })), /*#__PURE__*/React.createElement("span", {
@@ -6195,9 +6576,10 @@ window.AdvertiserInfoCard = function AdvertiserInfoCard(props) {
     return x;
   };
   var items = [{
-    label: '광고 노출 깊이',
-    value: adDepth ? '상위 ' + adDepth + '개' : '-',
-    unit: ''
+    label: '평균 광고 개수',
+    value: adDepth ? adDepth + '개' : '데이터 없음',
+    unit: '',
+    tip: '이 키워드로 네이버에서 검색하면 통합검색 상단 파워링크 영역에 광고가 평균 몇 개 노출되는지(네이버 검색광고 「월평균노출광고수」). 많을수록 광고 경쟁이 치열해 입찰가 부담이 큽니다.'
   }, {
     label: 'PC 평균 클릭수',
     value: pcClicks || pcClicks === 0 ? num(pcClicks) : '-',
@@ -6224,11 +6606,15 @@ window.AdvertiserInfoCard = function AdvertiserInfoCard(props) {
     className: "rt-h3"
   }, /*#__PURE__*/React.createElement("span", {
     className: "rt-hic"
-  }, "📣"), "광고 경쟁 정보", /*#__PURE__*/React.createElement("span", {
+  }, "📣"), "검색광고(파워링크) 경쟁 정보", /*#__PURE__*/React.createElement("span", {
     className: "badge b-ok"
   }, "✅ 실측")), /*#__PURE__*/React.createElement("div", {
     className: "rt-desc"
-  }, "네이버 검색광고 기준 — 이 키워드에 광고로 들어올 때의 경쟁 환경"), /*#__PURE__*/React.createElement("div", {
+  }, "네이버 ", /*#__PURE__*/React.createElement("b", null, "검색광고(파워링크)"), " 기준 — 통합검색 상단 광고 영역의 경쟁 환경입니다.", /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: '#b45309'
+    }
+  }, " 이 화면의 쇼핑 검색 순위와는 다른 지표"), "입니다."), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'grid',
       gridTemplateColumns: 'repeat(4, 1fr)',
@@ -6240,7 +6626,15 @@ window.AdvertiserInfoCard = function AdvertiserInfoCard(props) {
       className: "rt-kpi"
     }, /*#__PURE__*/React.createElement("div", {
       className: "rt-kpi-k"
-    }, item.label), /*#__PURE__*/React.createElement("div", {
+    }, item.label, item.tip && /*#__PURE__*/React.createElement("span", {
+      title: item.tip,
+      style: {
+        marginLeft: 4,
+        cursor: 'help',
+        color: '#94a3b8',
+        fontWeight: 800
+      }
+    }, "ⓘ")), /*#__PURE__*/React.createElement("div", {
       className: "rt-kpi-v",
       style: {
         fontSize: 20
@@ -6248,7 +6642,16 @@ window.AdvertiserInfoCard = function AdvertiserInfoCard(props) {
     }, item.value, item.unit && /*#__PURE__*/React.createElement("small", null, item.unit)));
   })), /*#__PURE__*/React.createElement("div", {
     className: "note"
-  }, "'광고 노출 깊이 = 상위 N개'는 이 키워드에서 검색광고가 평균적으로 ", /*#__PURE__*/React.createElement("b", null, "상위 몇 번째 슬롯까지 노출"), "되는지를 뜻합니다(값이 클수록 광고 노출 경쟁이 넓음). 광고 경쟁이 치열할수록 입찰가 부담이 커지므로, SEO(자연노출)를 병행해 광고비 효율을 확보하는 것이 유리합니다."))));
+  }, /*#__PURE__*/React.createElement("b", null, "평균 광고 개수"), " = 이 키워드로 검색했을 때 ", /*#__PURE__*/React.createElement("b", null, "통합검색 상단 파워링크 영역"), "에 광고가 평균 몇 개 붙는지입니다 (네이버 검색광고 「월평균노출광고수」 원본값). 순위가 아니라 ", /*#__PURE__*/React.createElement("b", null, "개수"), "이며, 많을수록 광고 경쟁이 치열해 입찰가 부담이 큽니다.", /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8,
+      padding: '9px 12px',
+      background: '#fffbeb',
+      border: '1px solid #fde68a',
+      borderRadius: 8,
+      color: '#7c2d12'
+    }
+  }, "⚠️ ", /*#__PURE__*/React.createElement("b", null, "검색광고(파워링크)와 쇼핑검색은 다릅니다."), /*#__PURE__*/React.createElement("br", null), "· ", /*#__PURE__*/React.createElement("b", null, "검색광고(파워링크)"), " — 네이버 통합검색 결과 상단의 링크형 광고. 이 카드의 지표가 여기 기준입니다.", /*#__PURE__*/React.createElement("br", null), "· ", /*#__PURE__*/React.createElement("b", null, "쇼핑검색"), " — 쇼핑 탭의 상품 목록. 우리 ", /*#__PURE__*/React.createElement("b", null, "순위 추적·노출 순위"), "는 전부 이쪽 기준이며, 그 안의 광고(쇼핑검색광고)도 별개입니다.", /*#__PURE__*/React.createElement("br", null), "즉 이 숫자가 크다고 쇼핑 순위가 나쁜 것은 아닙니다 — ", /*#__PURE__*/React.createElement("b", null, "서로 다른 지면"), "입니다."), "광고 경쟁이 치열할수록 SEO(자연노출)를 병행해 광고비 효율을 확보하는 것이 유리합니다."))));
 };
 
 ;/* ===== js/components/SummaryCardsSection.jsx ===== */
@@ -6334,7 +6737,7 @@ window.SummaryCardsSection = function SummaryCardsSection(props) {
   }, showHero && /*#__PURE__*/React.createElement("div", {
     className: "card",
     style: {
-      background: 'linear-gradient(135deg, #4f46e5, #7c3aed)',
+      background: 'linear-gradient(135deg, #3b82f6, #7c3aed)',
       border: 'none',
       color: '#fff',
       padding: '22px 26px',
@@ -6494,7 +6897,7 @@ window.CategoryAnalysisSection = function CategoryAnalysisSection(props) {
     categoryLevels
   } = props.data;
   if (!categories || categories.length === 0) return null;
-  var gradients = ['linear-gradient(90deg, #4f46e5, #7c3aed)', 'linear-gradient(90deg, #7c3aed, #a78bfa)', 'linear-gradient(90deg, #a78bfa, #c4b5fd)', 'linear-gradient(90deg, #c4b5fd, #ddd6fe)', 'linear-gradient(90deg, #ddd6fe, #ede9fe)'];
+  var gradients = ['linear-gradient(90deg, #3b82f6, #7c3aed)', 'linear-gradient(90deg, #7c3aed, #a78bfa)', 'linear-gradient(90deg, #a78bfa, #c4b5fd)', 'linear-gradient(90deg, #c4b5fd, #ddd6fe)', 'linear-gradient(90deg, #ddd6fe, #ede9fe)'];
 
   /* 레벨별 분포 차트 렌더링 */
   var renderLevelChart = function (title, items, color) {
@@ -6676,7 +7079,7 @@ window.CategoryAnalysisSection = function CategoryAnalysisSection(props) {
     }, /*#__PURE__*/React.createElement("span", {
       style: {
         fontWeight: 700,
-        color: '#4f46e5',
+        color: '#3b82f6',
         marginRight: 4
       }
     }, item.count, "개"), "(", item.ratio, "%)")), /*#__PURE__*/React.createElement("div", {
@@ -6752,7 +7155,7 @@ window.KeywordTagSection = function KeywordTagSection(props) {
       fontSize: 12,
       fontWeight: 700,
       background: 'linear-gradient(135deg, #eef2ff, #dbeafe)',
-      color: '#4f46e5'
+      color: '#3b82f6'
     }
   }, "총 ", fmt(totalFound), "개 발견")), /*#__PURE__*/React.createElement("div", {
     className: "table-wrap",
@@ -6762,7 +7165,7 @@ window.KeywordTagSection = function KeywordTagSection(props) {
     }
   }, /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", {
     style: {
-      background: 'linear-gradient(135deg, #4f46e5, #7c3aed)'
+      background: 'linear-gradient(135deg, #3b82f6, #7c3aed)'
     }
   }, /*#__PURE__*/React.createElement("th", {
     style: {
@@ -6808,7 +7211,7 @@ window.KeywordTagSection = function KeywordTagSection(props) {
         justifyContent: 'center',
         width: 28,
         height: 28,
-        background: kw.isGolden ? 'linear-gradient(135deg, #f59e0b, #d97706)' : 'linear-gradient(135deg, #4f46e5, #7c3aed)',
+        background: kw.isGolden ? 'linear-gradient(135deg, #f59e0b, #d97706)' : 'linear-gradient(135deg, #3b82f6, #7c3aed)',
         color: '#fff',
         borderRadius: '50%',
         fontSize: 11,
@@ -6861,7 +7264,7 @@ window.KeywordTagSection = function KeywordTagSection(props) {
         width: barPercent + '%',
         height: '100%',
         borderRadius: 8,
-        background: kw.isGolden ? 'linear-gradient(135deg, #f59e0b, #d97706)' : 'linear-gradient(135deg, #4f46e5, #7c3aed)',
+        background: kw.isGolden ? 'linear-gradient(135deg, #f59e0b, #d97706)' : 'linear-gradient(135deg, #3b82f6, #7c3aed)',
         transition: 'width 0.3s ease'
       }
     })), /*#__PURE__*/React.createElement("span", {
@@ -7080,7 +7483,7 @@ window.ReviewAnalysisSection = function ReviewAnalysisSection(props) {
         }, {
           label: '상위 5',
           data: top5,
-          backgroundColor: C.IND || '#4f46e5',
+          backgroundColor: C.IND || '#3b82f6',
           borderRadius: 5
         }]
       },
@@ -7408,7 +7811,7 @@ window.ReviewTextAnalysisSection = function ReviewTextAnalysisSection(props) {
       style: {
         position: 'absolute',
         left: 0,
-        color: '#6366f1',
+        color: '#3b82f6',
         fontWeight: 700
       }
     }, '→'), insight);
@@ -8013,7 +8416,7 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
         data: salesBars.map(function (b) {
           return b.val;
         }),
-        backgroundColor: [C.OK || '#16a34a', C.IND || '#4f46e5', '#cbd5e1'],
+        backgroundColor: [C.OK || '#16a34a', C.IND || '#3b82f6', '#cbd5e1'],
         borderRadius: 6
       }]
     },
@@ -8150,7 +8553,7 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'space-between',
-      background: 'linear-gradient(135deg, #4f46e5, #7c3aed)'
+      background: 'linear-gradient(135deg, #3b82f6, #7c3aed)'
     }
   }, /*#__PURE__*/React.createElement("span", {
     style: {
@@ -8179,7 +8582,7 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
     style: {
       fontSize: 13,
       fontWeight: 700,
-      color: '#4f46e5'
+      color: '#3b82f6'
     }
   }, fmt(page1Card.avgSales), "건/월")), /*#__PURE__*/React.createElement("div", {
     style: v5MetricRow
@@ -8189,7 +8592,7 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
     style: {
       fontSize: 13,
       fontWeight: 700,
-      color: '#4f46e5'
+      color: '#3b82f6'
     }
   }, fmt(page1Card.totalSales), "건/월")), /*#__PURE__*/React.createElement("div", {
     style: v5MetricRow
@@ -8199,7 +8602,7 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
     style: {
       fontSize: 13,
       fontWeight: 700,
-      color: '#4f46e5'
+      color: '#3b82f6'
     }
   }, page1Card.maxRevenue)), /*#__PURE__*/React.createElement("div", {
     style: v5MetricRow
@@ -8209,7 +8612,7 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
     style: {
       fontSize: 13,
       fontWeight: 700,
-      color: '#4f46e5'
+      color: '#3b82f6'
     }
   }, page1Card.minRevenue)), /*#__PURE__*/React.createElement("div", {
     style: v5MetricRowLast
@@ -8219,7 +8622,7 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
     style: {
       fontSize: 13,
       fontWeight: 700,
-      color: '#4f46e5'
+      color: '#3b82f6'
     }
   }, page1Card.avgRevenue)), /*#__PURE__*/React.createElement("div", {
     style: v5TotalRow
@@ -8229,7 +8632,7 @@ window.SalesEstimationSection = function SalesEstimationSection(props) {
     style: {
       fontSize: 15,
       fontWeight: 800,
-      color: '#4f46e5'
+      color: '#3b82f6'
     }
   }, page1Card.totalRevenue)))), /*#__PURE__*/React.createElement("div", {
     style: {
@@ -9043,7 +9446,7 @@ window.EntryStrategySection = function EntryStrategySection(props) {
     style: {
       fontSize: 18,
       fontWeight: 800,
-      color: '#4f46e5'
+      color: '#3b82f6'
     }
   }, monthlyVolume + '회')), React.createElement('div', {
     style: Object.assign({}, v5Card, {
@@ -9082,7 +9485,7 @@ window.EntryStrategySection = function EntryStrategySection(props) {
     }
   }, React.createElement('thead', null, React.createElement('tr', {
     style: {
-      background: 'linear-gradient(135deg, #4f46e5, #7c3aed)'
+      background: 'linear-gradient(135deg, #3b82f6, #7c3aed)'
     }
   }, React.createElement('th', {
     style: {
@@ -9203,7 +9606,7 @@ window.EntryStrategySection = function EntryStrategySection(props) {
       }
     }, isMyProduct && React.createElement('span', {
       style: {
-        color: '#4f46e5',
+        color: '#3b82f6',
         marginRight: 4,
         fontWeight: 700
       }
@@ -9270,7 +9673,7 @@ window.EntryStrategySection = function EntryStrategySection(props) {
         borderRadius: 999,
         fontSize: 12,
         fontWeight: 700,
-        color: '#4f46e5',
+        color: '#3b82f6',
         border: '1px solid #c7d2fe'
       }
     }, brand);
@@ -9601,7 +10004,7 @@ window.EntryStrategySection = function EntryStrategySection(props) {
       style: {
         fontSize: 11,
         fontWeight: 700,
-        color: '#4f46e5',
+        color: '#3b82f6',
         textTransform: 'uppercase',
         letterSpacing: 1,
         marginBottom: 12,
@@ -9629,7 +10032,7 @@ window.EntryStrategySection = function EntryStrategySection(props) {
           alignItems: 'center',
           padding: '4px 12px',
           borderRadius: 999,
-          background: '#4f46e5',
+          background: '#3b82f6',
           color: '#fff',
           fontSize: 12,
           fontWeight: 700,
@@ -9821,7 +10224,7 @@ window.ApiUsageSection = function ApiUsageSection() {
     value: fmt(today.cost_krw || 0) + '원',
     sub: (today.calls || 0) + '회 호출',
     icon: '📊',
-    color: '#6366f1',
+    color: '#3b82f6',
     bg: '#eef2ff'
   }, {
     label: '이번 달 누적',
@@ -9955,7 +10358,7 @@ window.ApiUsageSection = function ApiUsageSection() {
         fontSize: 13,
         fontWeight: 600,
         background: active ? '#fff' : 'transparent',
-        color: active ? '#4f46e5' : '#64748b',
+        color: active ? '#3b82f6' : '#64748b',
         boxShadow: active ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
         transition: 'all 0.2s'
       }
@@ -10002,7 +10405,7 @@ window.ApiUsageSection = function ApiUsageSection() {
         fontSize: 12,
         cursor: 'pointer',
         fontWeight: 500,
-        background: active ? '#6366f1' : 'transparent',
+        background: active ? '#3b82f6' : 'transparent',
         color: active ? '#fff' : '#64748b'
       }
     }, p);
@@ -10054,7 +10457,7 @@ window.ApiUsageSection = function ApiUsageSection() {
         width: '100%',
         height: h,
         borderRadius: '3px 3px 0 0',
-        background: isHov ? 'linear-gradient(180deg, #6366f1, #4f46e5)' : i >= chartData.length - 5 ? 'linear-gradient(180deg, #818cf8, #6366f1)' : 'linear-gradient(180deg, #c7d2fe, #a5b4fc)',
+        background: isHov ? 'linear-gradient(180deg, #3b82f6, #3b82f6)' : i >= chartData.length - 5 ? 'linear-gradient(180deg, #818cf8, #3b82f6)' : 'linear-gradient(180deg, #c7d2fe, #a5b4fc)',
         transition: 'all 0.2s'
       }
     }));
@@ -10120,13 +10523,13 @@ window.ApiUsageSection = function ApiUsageSection() {
     style: {
       width: inputPct + '%',
       height: '100%',
-      background: 'linear-gradient(90deg, #818cf8, #6366f1)',
+      background: 'linear-gradient(90deg, #818cf8, #3b82f6)',
       borderRadius: 3
     }
   })), React.createElement('div', {
     style: {
       fontSize: 11,
-      color: '#6366f1',
+      color: '#3b82f6',
       marginTop: 4,
       fontWeight: 600
     }
@@ -10250,7 +10653,7 @@ window.ApiUsageSection = function ApiUsageSection() {
         padding: 12,
         textAlign: 'center',
         fontWeight: 700,
-        color: '#4f46e5'
+        color: '#3b82f6'
       }
     }, fmt(c.cost_krw) + '원'), React.createElement('td', {
       style: {
@@ -10276,7 +10679,7 @@ window.ApiUsageSection = function ApiUsageSection() {
       style: {
         width: pct + '%',
         height: '100%',
-        background: '#6366f1',
+        background: '#3b82f6',
         borderRadius: 3
       }
     })), React.createElement('span', {
@@ -10321,7 +10724,7 @@ window.ApiUsageSection = function ApiUsageSection() {
       padding: 12,
       textAlign: 'center',
       fontWeight: 700,
-      color: '#4f46e5',
+      color: '#3b82f6',
       fontSize: 14
     }
   }, fmt(totalClientCost) + '원'), React.createElement('td', {
@@ -10470,7 +10873,7 @@ window.ApiUsageSection = function ApiUsageSection() {
         padding: '8px 10px',
         textAlign: 'center',
         fontWeight: 600,
-        color: '#4f46e5',
+        color: '#3b82f6',
         fontSize: 12
       }
     }, log.cost_krw + '원'), React.createElement('td', {
@@ -11349,7 +11752,7 @@ window.CompetitorRadar = function CompetitorRadar(props) {
   }), C('polygon', {
     points: poly(adv),
     fill: 'rgba(79,70,229,.20)',
-    stroke: '#4f46e5',
+    stroke: '#3b82f6',
     strokeWidth: 2
   })), C('div', {
     style: {
@@ -11367,7 +11770,7 @@ window.CompetitorRadar = function CompetitorRadar(props) {
       width: 12,
       height: 12,
       borderRadius: 3,
-      background: '#4f46e5',
+      background: '#3b82f6',
       display: 'inline-block'
     }
   }), '광고주'), C('div', {
@@ -11489,6 +11892,49 @@ window.SaveToClientSection = function SaveToClientSection({
       return '';
     }
   };
+
+  /* 순위 저장 후속 호출 (2026-08-05 신설)
+     분석 결과를 업체에 저장해도 순위가 어디에도 기록되지 않던 문제 수정 —
+     종전엔 /cd/rank-save 를 부르는 곳이 업체관리 화면 1곳뿐이라, 스토어 분석에서
+     저장한 건은 아침 배치가 훑기 전까지 순위 이력이 비어 있었다.
+     · 상품ID 3형식(nvMid·/products/·/catalog/) 인식 — 서버 규칙과 동일
+     · 서버는 admin·manager 전용이라 그 외 권한은 조용히 생략(에러 표시 안 함)
+     · 순위를 못 찾았으면 저장하지 않음(허위 미노출 기록 방지 — 8/1~3 오염 선례) */
+  var extractPid = function (url) {
+    var u = String(url || '');
+    var m = u.match(/[?&]nvMid=(\d+)/);
+    if (m) return m[1];
+    m = u.match(/\/products\/(\d+)/);
+    if (m) return m[1];
+    m = u.match(/\/catalog\/(\d+)/);
+    if (m) return m[1];
+    return u;
+  };
+  var saveRankIfPossible = function (clientId) {
+    try {
+      if (!clientId || !keyword || !productUrl) return;
+      if (isViewer) return; // 서버가 admin·manager 전용 → 영업사원은 호출 자체 생략
+      var list = shopProducts || [];
+      if (!list || !list.length) return;
+      var pid = extractPid(productUrl);
+      var hit = null;
+      for (var i = 0; i < list.length; i++) {
+        var p = list[i];
+        if (p.product_id === pid || p.product_url && String(p.product_url).indexOf(pid) !== -1) {
+          hit = p;
+          break;
+        }
+      }
+      if (!hit || !hit.rank) return; // 못 찾으면 기록하지 않는다
+      api.post('/cd/rank-save', {
+        client_id: clientId,
+        keyword: keyword,
+        product_url: productUrl,
+        rank_position: hit.rank,
+        page_number: Math.ceil(hit.rank / 40)
+      }).catch(function () {});
+    } catch (e) {}
+  };
   var handleSave = function () {
     setSaving(true);
     setMessage('');
@@ -11538,6 +11984,7 @@ window.SaveToClientSection = function SaveToClientSection({
         if (res.success) {
           setSuccess(true);
           setMessage(res.message);
+          saveRankIfPossible(res.client_id);
           if (isCompMode && onCompetitorSaved) {
             try {
               onCompetitorSaved();
@@ -11563,6 +12010,7 @@ window.SaveToClientSection = function SaveToClientSection({
         if (res.success) {
           setSuccess(true);
           setMessage(res.message);
+          saveRankIfPossible(selectedClientId);
         } else {
           var errMsg = typeof res.detail === 'string' ? res.detail : '저장에 실패했습니다.';
           setMessage(errMsg);
@@ -11613,7 +12061,7 @@ window.SaveToClientSection = function SaveToClientSection({
     className: 'card',
     style: {
       padding: '24px 28px',
-      background: 'linear-gradient(135deg, #6C5CE7 0%, #a29bfe 100%)',
+      background: 'linear-gradient(135deg, #3b82f6 0%, #93c5fd 100%)',
       color: '#fff',
       textAlign: 'center',
       borderRadius: 14
@@ -11636,7 +12084,7 @@ window.SaveToClientSection = function SaveToClientSection({
     },
     style: {
       background: '#fff',
-      color: '#6C5CE7',
+      color: '#3b82f6',
       border: 'none',
       padding: '12px 32px',
       borderRadius: 10,
@@ -11744,7 +12192,7 @@ window.SaveToClientSection = function SaveToClientSection({
       padding: '12px',
       borderRadius: 10,
       border: 'none',
-      background: '#6C5CE7',
+      background: '#3b82f6',
       color: '#fff',
       fontSize: 14,
       fontWeight: 600,
@@ -11770,9 +12218,9 @@ window.SaveToClientSection = function SaveToClientSection({
       fontSize: 13,
       fontWeight: 600,
       cursor: 'pointer',
-      background: saveMode === 'new' ? '#6C5CE7' : '#f1f5f9',
+      background: saveMode === 'new' ? '#3b82f6' : '#f1f5f9',
       color: saveMode === 'new' ? '#fff' : '#64748b',
-      border: saveMode === 'new' ? '1px solid #6C5CE7' : '1px solid #e2e8f0'
+      border: saveMode === 'new' ? '1px solid #3b82f6' : '1px solid #e2e8f0'
     }
   }, '새 업체 등록'), React.createElement('button', {
     onClick: function () {
@@ -11785,9 +12233,9 @@ window.SaveToClientSection = function SaveToClientSection({
       fontSize: 13,
       fontWeight: 600,
       cursor: 'pointer',
-      background: saveMode === 'existing' ? '#6C5CE7' : '#f1f5f9',
+      background: saveMode === 'existing' ? '#3b82f6' : '#f1f5f9',
       color: saveMode === 'existing' ? '#fff' : '#64748b',
-      border: saveMode === 'existing' ? '1px solid #6C5CE7' : '1px solid #e2e8f0'
+      border: saveMode === 'existing' ? '1px solid #3b82f6' : '1px solid #e2e8f0'
     }
   }, '기존 업체에 추가 (' + existingClients.length + ')'), React.createElement('button', {
     onClick: function () {
@@ -11823,9 +12271,9 @@ window.SaveToClientSection = function SaveToClientSection({
       fontSize: 13,
       fontWeight: 700,
       cursor: 'pointer',
-      background: saveMode === 'prospect' ? '#4f46e5' : '#eef2ff',
+      background: saveMode === 'prospect' ? '#3b82f6' : '#eef2ff',
       color: saveMode === 'prospect' ? '#fff' : '#4338ca',
-      border: '1px solid ' + (saveMode === 'prospect' ? '#4f46e5' : '#c7d2fe')
+      border: '1px solid ' + (saveMode === 'prospect' ? '#3b82f6' : '#c7d2fe')
     }
   }, '🎯 영업 대상으로'), React.createElement('button', {
     onClick: function () {
@@ -12114,9 +12562,9 @@ window.SaveToClientSection = function SaveToClientSection({
           borderRadius: 8,
           cursor: 'pointer',
           marginBottom: 4,
-          background: isSelected ? '#6C5CE7' : '#f8fafc',
+          background: isSelected ? '#3b82f6' : '#f8fafc',
           color: isSelected ? '#fff' : '#1e293b',
-          border: '1px solid ' + (isSelected ? '#6C5CE7' : '#e2e8f0')
+          border: '1px solid ' + (isSelected ? '#3b82f6' : '#e2e8f0')
         }
       }, React.createElement('div', {
         style: {
@@ -12150,7 +12598,7 @@ window.SaveToClientSection = function SaveToClientSection({
       padding: '12px',
       borderRadius: 10,
       border: 'none',
-      background: saving ? '#94a3b8' : '#6C5CE7',
+      background: saving ? '#94a3b8' : '#3b82f6',
       color: '#fff',
       fontSize: 14,
       fontWeight: 600,
@@ -12177,7 +12625,17 @@ window.ClientListSection = function ClientListSection({
   var _s2 = useState(true);
   var loading = _s2[0];
   var setLoading = _s2[1];
-  var _s3 = useState('');
+  var _s3 = useState(function () {
+    /* 셸 전역 검색(Ctrl+K) 핸드오프 — 1회 소비 */
+    try {
+      var g = sessionStorage.getItem('logic_global_q');
+      if (g) {
+        sessionStorage.removeItem('logic_global_q');
+        return g;
+      }
+    } catch (e) {}
+    return '';
+  });
   var query = _s3[0];
   var setQuery = _s3[1];
   var _s4 = useState(null);
@@ -12193,6 +12651,64 @@ window.ClientListSection = function ClientListSection({
   var editMgrId = _s6[0];
   var setEditMgrId = _s6[1]; // 담당자 변경 중인 업체 id
 
+  /* 2차 확산(2026-08-05): 업체별 순위 롤업(rank-overview) — 카드에 대표 키워드
+     순위·변동·미니 추이 표시용. 실패해도 카드 기본 표시는 그대로(가산). */
+  var _s7 = useState({});
+  var rankOv = _s7[0];
+  var setRankOv = _s7[1]; // { clientId: overviewItem }
+  var _s8 = useState(false);
+  var attnOnly = _s8[0];
+  var setAttnOnly = _s8[1]; // ⚠️ 주의만 보기
+
+  useEffect(function () {
+    api.get('/cd/rank-overview').then(function (res) {
+      if (res && res.success && res.data) {
+        var m = {};
+        res.data.forEach(function (it) {
+          m[it.id] = it;
+        });
+        setRankOv(m);
+      }
+    }).catch(function () {});
+  }, []);
+
+  /* 카드 미니 스파크라인 — 대표 키워드 8일 추이 (낮은 순위 = 위) */
+  var miniSpark = function (series) {
+    var pts = (series || []).filter(function (p) {
+      return p.rank != null;
+    });
+    if (pts.length < 2) return null;
+    var w = 200,
+      h = 22,
+      pad = 2;
+    var rs = pts.map(function (p) {
+      return p.rank;
+    });
+    var mn = Math.min.apply(null, rs),
+      mx = Math.max.apply(null, rs);
+    var span = mx - mn || 1;
+    var coords = pts.map(function (p, i) {
+      return (pad + (w - pad * 2) * (i / (pts.length - 1))).toFixed(1) + ',' + (pad + (h - pad * 2) * ((p.rank - mn) / span)).toFixed(1);
+    });
+    var improving = rs[rs.length - 1] <= rs[0];
+    return React.createElement('svg', {
+      width: '100%',
+      height: h,
+      viewBox: '0 0 ' + w + ' ' + h,
+      preserveAspectRatio: 'none',
+      style: {
+        display: 'block',
+        margin: '4px 0 2px'
+      }
+    }, React.createElement('polyline', {
+      points: coords.join(' '),
+      fill: 'none',
+      stroke: improving ? '#16a34a' : '#dc2626',
+      strokeWidth: 1.8,
+      strokeLinejoin: 'round',
+      strokeLinecap: 'round'
+    }));
+  };
   useEffect(function () {
     if (!isAdmin) return;
     api.get('/clients/assignable-managers').then(function (res) {
@@ -12243,6 +12759,22 @@ window.ClientListSection = function ClientListSection({
     loadClients();
   }, [loadClients]);
 
+  /* 셸 전역 검색 이벤트 — 대시보드에 이미 있을 때도 검색어 반영 */
+  useEffect(function () {
+    var onSearch = function (ev) {
+      if (ev && typeof ev.detail === 'string') {
+        setQuery(ev.detail);
+        try {
+          sessionStorage.removeItem('logic_global_q');
+        } catch (e) {}
+      }
+    };
+    window.addEventListener('logic-global-search', onSearch);
+    return function () {
+      window.removeEventListener('logic-global-search', onSearch);
+    };
+  }, []);
+
   /* 업체에서 대표 키워드/상품URL 추출 */
   var getClientAnalysisParams = function (client) {
     // 1순위: 최근 분석한 키워드 + URL
@@ -12292,10 +12824,17 @@ window.ClientListSection = function ClientListSection({
     return '미분석';
   };
 
+  /* ⚠️ 주의 판정 — 추적 키워드는 있는데 노출 0 (rank-overview 기준) */
+  var isAttention = function (c) {
+    var ov = rankOv[c.id];
+    return !!(ov && ov.keywords > 0 && ov.exposed === 0);
+  };
+
   /* 검색 + 가나다 정렬 */
   var filtered = clients.filter(function (c) {
     // 담당자 탭 필터 (null = 전체)
     if (mgrFilter && (c.manager_name || '(미지정)') !== mgrFilter) return false;
+    if (attnOnly && !isAttention(c)) return false;
     if (!query.trim()) return true;
     var q = query.trim().toLowerCase();
     return (c.name || '').toLowerCase().indexOf(q) !== -1 || (c.main_keywords || '').toLowerCase().indexOf(q) !== -1;
@@ -12343,7 +12882,7 @@ window.ClientListSection = function ClientListSection({
     style: {
       fontSize: 14,
       fontWeight: 500,
-      color: '#6366f1',
+      color: '#3b82f6',
       marginLeft: 4
     }
   }, '(' + clients.length + '개)')), React.createElement('p', {
@@ -12367,7 +12906,67 @@ window.ClientListSection = function ClientListSection({
       minWidth: 240,
       outline: 'none'
     }
-  })), /* 담당자별 구분 탭 (상위 계정 전용) — 클릭 시 해당 담당자 업체만 모아보기 */
+  })), /* 2차 확산: KPI 스트립 — 업체·오늘 분석·상승 키워드·주의(클릭 필터) */
+  !loading && clients.length > 0 && function () {
+    var today = new Date().toISOString().slice(0, 10);
+    var analyzedToday = clients.filter(function (c) {
+      return c.analyzed_keywords && c.analyzed_keywords[0] && String(c.analyzed_keywords[0].analyzed_date || '').slice(0, 10) === today;
+    }).length;
+    var upTotal = 0,
+      attn = 0,
+      hasOv = false;
+    clients.forEach(function (c) {
+      var ov = rankOv[c.id];
+      if (ov) {
+        hasOv = true;
+        upTotal += ov.up || 0;
+        if (isAttention(c)) attn++;
+      }
+    });
+    var kpi = function (k, v, sub, subColor, onClick, active) {
+      return React.createElement('div', {
+        onClick: onClick || null,
+        style: {
+          background: active ? '#fffbeb' : '#f8fafc',
+          border: '1px solid ' + (active ? '#f59e0b' : '#eef2f6'),
+          borderRadius: 12,
+          padding: '11px 15px',
+          cursor: onClick ? 'pointer' : 'default',
+          flex: '1 1 150px',
+          minWidth: 140
+        }
+      }, React.createElement('div', {
+        style: {
+          fontSize: 11,
+          fontWeight: 700,
+          color: '#94a3b8',
+          letterSpacing: '.03em'
+        }
+      }, k), React.createElement('div', {
+        style: {
+          fontSize: 20,
+          fontWeight: 800,
+          color: '#0f172a',
+          marginTop: 1
+        }
+      }, v), sub && React.createElement('div', {
+        style: {
+          fontSize: 11,
+          color: subColor || '#94a3b8'
+        }
+      }, sub));
+    };
+    return React.createElement('div', {
+      style: {
+        display: 'flex',
+        gap: 10,
+        flexWrap: 'wrap',
+        marginBottom: 16
+      }
+    }, kpi('내 업체', clients.length, null), kpi('오늘 자동 분석', analyzedToday, '보고서 생성됨'), hasOv && kpi('상승 키워드', '▲ ' + upTotal, '전일 대비', '#16a34a'), hasOv && kpi('주의 필요', attn, attnOnly ? '필터 적용 중 — 클릭 해제' : '노출 0 — 클릭 시 필터', '#b45309', function () {
+      setAttnOnly(!attnOnly);
+    }, attnOnly));
+  }(), /* 담당자별 구분 탭 (상위 계정 전용) — 클릭 시 해당 담당자 업체만 모아보기 */
   isAdmin && !loading && clients.length > 0 && function () {
     var counts = {};
     clients.forEach(function (c) {
@@ -12468,11 +13067,21 @@ window.ClientListSection = function ClientListSection({
     }
   }, filtered.map(function (client) {
     var lastDate = getLastAnalyzedText(client);
+    var ov = rankOv[client.id];
+    var attn = isAttention(client);
+    var repKw = ov && ov.top_keywords && ov.top_keywords[0];
+    var repDelta = null;
+    if (ov && ov.rep_series && ov.rep_series.length >= 2) {
+      var _rs = ov.rep_series;
+      if (_rs[_rs.length - 1].rank != null && _rs[_rs.length - 2].rank != null) {
+        repDelta = _rs[_rs.length - 2].rank - _rs[_rs.length - 1].rank; // 양수=상승
+      }
+    }
     return React.createElement('div', {
       key: client.id,
       style: {
         background: '#fff',
-        border: '1px solid #e2e8f0',
+        border: '1px solid ' + (attn ? '#f59e0b' : '#e2e8f0'),
         borderRadius: 12,
         padding: '16px 18px',
         transition: 'all 0.15s ease',
@@ -12482,16 +13091,16 @@ window.ClientListSection = function ClientListSection({
         justifyContent: 'space-between'
       },
       onMouseEnter: function (e) {
-        e.currentTarget.style.borderColor = '#6c5ce7';
+        e.currentTarget.style.borderColor = '#3b82f6';
         e.currentTarget.style.boxShadow = '0 4px 12px rgba(108,92,231,0.15)';
         e.currentTarget.style.transform = 'translateY(-2px)';
       },
       onMouseLeave: function (e) {
-        e.currentTarget.style.borderColor = '#e2e8f0';
+        e.currentTarget.style.borderColor = attn ? '#f59e0b' : '#e2e8f0';
         e.currentTarget.style.boxShadow = '0 1px 2px rgba(0,0,0,0.04)';
         e.currentTarget.style.transform = 'translateY(0)';
       }
-    }, /* 업체명 + 마지막 분석 */
+    }, /* 업체명 + 대표 키워드 순위(2차 확산) + 마지막 분석 */
     React.createElement('div', null, React.createElement('div', {
       style: {
         fontSize: 15,
@@ -12502,7 +13111,59 @@ window.ClientListSection = function ClientListSection({
         whiteSpace: 'nowrap',
         marginBottom: 6
       }
-    }, client.name || '(이름 없음)'), React.createElement('div', {
+    }, client.vertical === 'place' && React.createElement('span', {
+      title: '플레이스 업체',
+      style: {
+        marginRight: 4
+      }
+    }, '📍'), client.name || '(이름 없음)'), /* 대표 키워드 현재 순위 + 변동 + 미니 추이 */
+    ov && React.createElement('div', {
+      style: {
+        marginBottom: 7
+      }
+    }, repKw ? React.createElement('div', {
+      style: {
+        display: 'flex',
+        alignItems: 'baseline',
+        gap: 6
+      }
+    }, React.createElement('span', {
+      style: {
+        fontSize: 12,
+        color: '#475569',
+        flex: 1,
+        minWidth: 0,
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap'
+      }
+    }, repKw.keyword), React.createElement('span', {
+      style: {
+        fontSize: 16,
+        fontWeight: 800,
+        color: repKw.rank <= 10 ? '#16a34a' : '#0f172a'
+      }
+    }, repKw.rank + '위'), repDelta != null && repDelta !== 0 && React.createElement('span', {
+      style: {
+        fontSize: 11,
+        fontWeight: 800,
+        borderRadius: 6,
+        padding: '1px 6px',
+        color: repDelta > 0 ? '#dc2626' : '#2563eb',
+        background: repDelta > 0 ? '#fef2f2' : '#eff6ff'
+      }
+    }, (repDelta > 0 ? '▲' : '▼') + Math.abs(repDelta))) : ov.keywords > 0 ? React.createElement('div', {
+      style: {
+        fontSize: 12,
+        fontWeight: 700,
+        color: '#b45309'
+      }
+    }, '⚠️ 추적 ' + ov.keywords + '개 전부 미노출') : null, miniSpark(ov.rep_series), ov.keywords > 0 && React.createElement('div', {
+      style: {
+        fontSize: 11,
+        color: '#94a3b8'
+      }
+    }, '키워드 ' + ov.keywords + ' · 노출 ' + ov.exposed + (ov.top10 ? ' · TOP10 ' + ov.top10 : ''))), React.createElement('div', {
       style: {
         fontSize: 11,
         color: '#dc2626',
@@ -12566,7 +13227,7 @@ window.ClientListSection = function ClientListSection({
         display: 'block',
         width: '100%',
         textAlign: 'center',
-        background: '#6c5ce7',
+        background: '#3b82f6',
         color: '#fff',
         border: 'none',
         padding: '8px 0',
@@ -12699,7 +13360,7 @@ window.LoginPage = function LoginPage(props) {
   var styles = {
     container: {
       minHeight: '100vh',
-      background: 'linear-gradient(135deg, #6C5CE7 0%, #a29bfe 100%)',
+      background: 'linear-gradient(135deg, #3b82f6 0%, #93c5fd 100%)',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
@@ -12735,7 +13396,7 @@ window.LoginPage = function LoginPage(props) {
     },
     badge: {
       display: 'inline-block',
-      background: '#6C5CE7',
+      background: '#3b82f6',
       color: 'white',
       padding: '4px 12px',
       borderRadius: '20px',
@@ -12758,12 +13419,12 @@ window.LoginPage = function LoginPage(props) {
       transition: 'border-color 0.3s'
     },
     inputWrapperFocus: {
-      borderColor: '#6C5CE7'
+      borderColor: '#3b82f6'
     },
     inputIcon: {
       marginRight: '12px',
       fontSize: '18px',
-      color: '#6C5CE7'
+      color: '#3b82f6'
     },
     input: {
       flex: 1,
@@ -12774,7 +13435,7 @@ window.LoginPage = function LoginPage(props) {
       fontFamily: 'inherit'
     },
     button: {
-      background: '#6C5CE7',
+      background: '#3b82f6',
       color: 'white',
       border: 'none',
       padding: '12px 24px',
@@ -12787,7 +13448,7 @@ window.LoginPage = function LoginPage(props) {
       marginTop: '12px'
     },
     buttonHover: {
-      background: '#5f3dc4'
+      background: '#2563eb'
     },
     error: {
       background: '#fff5f5',
@@ -13317,7 +13978,7 @@ window.UserManagementPage = function UserManagementPage(props) {
         borderRadius: 999,
         fontSize: 13,
         fontWeight: 700,
-        color: (analysisCounts[String(user.id)] || 0) > 0 ? '#6c5ce7' : '#94a3b8',
+        color: (analysisCounts[String(user.id)] || 0) > 0 ? '#3b82f6' : '#94a3b8',
         background: (analysisCounts[String(user.id)] || 0) > 0 ? '#ede9fe' : '#f1f5f9'
       }
     }, String(analysisCounts[String(user.id)] || 0) + '건')), React.createElement('td', {
@@ -14561,6 +15222,271 @@ window.AiInsightsView = function AiInsightsView({
   }())));
 };
 
+;/* ===== js/components/PlaceClientPanel.jsx ===== */
+/* PlaceClientPanel — 로직 분석(업체관리) 탭 안 플레이스 업체 상세 (통합 뷰, 2026-08-05)
+ *
+ * 운영자 지시: 「로직 분석」 탭에서 스토어·플레이스 구분 없이 업체를 검색해
+ * 분석 자료를 한 곳에서 확인. 플레이스 업체(clients.vertical='place')를 선택하면
+ * 스토어 분석 스키마(client_analyses) 대신 플레이스 축(place_rank_history)을 읽는다.
+ * 기존 플레이스 조회 API(/api/place/keywords·rank-history)와 PlaceRankChart 재사용 —
+ * 플레이스 분석·추적 코드는 손대지 않는 읽기 전용 소비.
+ *
+ * business_key: 업체 저장 시 product_url 이 map.naver.com/p/entry/place/{id} 형식
+ * → 'doc:{id}'. id 가 없으면(구 저장분) 안내만 표시.
+ *
+ * props: { client }  — clients 행 (vertical='place')
+ */
+window.PlaceClientPanel = function PlaceClientPanel(props) {
+  var useState = React.useState,
+    useEffect = React.useEffect;
+  var client = props.client || {};
+
+  /* 지도 URL → business_key */
+  var bk = function () {
+    try {
+      var m = String(client.naver_store_url || '').match(/entry\/place\/(\d+)/);
+      return m ? 'doc:' + m[1] : '';
+    } catch (e) {
+      return '';
+    }
+  }();
+  var _k = useState(null);
+  var kws = _k[0],
+    setKws = _k[1]; // [{keyword,rank,state,checked_at}]
+  var _sel = useState('');
+  var selKw = _sel[0],
+    setSelKw = _sel[1];
+  var _sr = useState([]);
+  var series = _sr[0],
+    setSeries = _sr[1];
+  var _d = useState(30);
+  var days = _d[0],
+    setDays = _d[1];
+  useEffect(function () {
+    setKws(null);
+    setSelKw('');
+    setSeries([]);
+    if (!bk) {
+      setKws([]);
+      return;
+    }
+    api.get('/place/keywords?business=' + encodeURIComponent(bk)).then(function (res) {
+      var list = res && res.success && res.data && res.data.keywords || [];
+      setKws(list);
+      if (list.length) setSelKw(list[0].keyword);
+    }).catch(function () {
+      setKws([]);
+    });
+  }, [bk, client.id]);
+  useEffect(function () {
+    if (!bk || !selKw) {
+      setSeries([]);
+      return;
+    }
+    api.get('/place/rank-history?business=' + encodeURIComponent(bk) + '&keyword=' + encodeURIComponent(selKw) + '&days=' + days).then(function (res) {
+      setSeries(res && res.success && res.data && res.data.series || []);
+    }).catch(function () {
+      setSeries([]);
+    });
+  }, [bk, selKw, days]);
+  var goPlaceTab = function (hash) {
+    try {
+      window.location.hash = hash;
+    } catch (e) {}
+  };
+  var chipColor = function (k) {
+    if (k.rank != null) return {
+      color: '#16a34a',
+      background: '#f0fdf4',
+      border: '1px solid #bbf7d0'
+    };
+    if ((k.state || '') === '미확인') return {
+      color: '#64748b',
+      background: '#f1f5f9',
+      border: '1px solid #e2e8f0'
+    };
+    return {
+      color: '#b45309',
+      background: '#fffbeb',
+      border: '1px solid #fde68a'
+    };
+  };
+  var exposed = (kws || []).filter(function (k) {
+    return k.rank != null;
+  });
+  var best = exposed.length ? exposed.slice().sort(function (a, b) {
+    return a.rank - b.rank;
+  })[0] : null;
+  return React.createElement('div', null, /* KPI */
+  kws && kws.length > 0 && React.createElement('div', {
+    style: {
+      display: 'flex',
+      gap: 10,
+      flexWrap: 'wrap',
+      marginBottom: 16
+    }
+  }, [['추적 키워드', kws.length, ''], ['노출 중', exposed.length, ''], ['최고 순위', best ? best.rank + '위' : '—', best ? best.keyword : '']].map(function (t, i) {
+    return React.createElement('div', {
+      key: i,
+      style: {
+        background: '#f8fafc',
+        border: '1px solid #eef2f6',
+        borderRadius: 12,
+        padding: '11px 16px',
+        flex: '1 1 130px'
+      }
+    }, React.createElement('div', {
+      style: {
+        fontSize: 11,
+        fontWeight: 700,
+        color: '#94a3b8'
+      }
+    }, t[0]), React.createElement('div', {
+      style: {
+        fontSize: 20,
+        fontWeight: 800,
+        color: '#0f172a'
+      }
+    }, t[1]), t[2] && React.createElement('div', {
+      style: {
+        fontSize: 11,
+        color: '#94a3b8',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap'
+      }
+    }, t[2]));
+  })), /* 키워드 칩 */
+  React.createElement('div', {
+    className: 'card',
+    style: {
+      padding: 16,
+      marginBottom: 16
+    }
+  }, React.createElement('div', {
+    style: {
+      fontSize: 15,
+      fontWeight: 600,
+      marginBottom: 12
+    }
+  }, '📍 플레이스 분석 키워드' + (kws && kws.length ? ' (' + kws.length + '개)' : '')), kws === null && React.createElement('div', {
+    style: {
+      color: '#94a3b8',
+      fontSize: 13
+    }
+  }, '불러오는 중...'), kws && kws.length === 0 && React.createElement('div', {
+    style: {
+      color: '#94a3b8',
+      fontSize: 13,
+      lineHeight: 1.7
+    }
+  }, bk ? '아직 이 업체의 플레이스 분석 기록이 없습니다. 「📍 플레이스 분석」 탭에서 분석하면 순위가 하루 1점씩 여기에 쌓입니다.' : '이 업체는 플레이스 식별자(지도 링크) 없이 저장돼 순위 이력을 연결할 수 없습니다. 「📍 플레이스 분석」 탭에서 재분석 후 업체 저장을 다시 하면 자동 연결됩니다.'), kws && kws.length > 0 && React.createElement('div', {
+    style: {
+      display: 'flex',
+      gap: 8,
+      flexWrap: 'wrap'
+    }
+  }, kws.map(function (k, i) {
+    var on = selKw === k.keyword;
+    var base = {
+      padding: '8px 14px',
+      borderRadius: 20,
+      cursor: 'pointer',
+      fontSize: 13,
+      fontWeight: 600,
+      fontFamily: 'inherit'
+    };
+    var st = on ? Object.assign(base, {
+      background: '#3b82f6',
+      color: '#fff',
+      border: '1px solid #3b82f6'
+    }) : Object.assign(base, chipColor(k));
+    return React.createElement('button', {
+      key: i,
+      onClick: function () {
+        setSelKw(k.keyword);
+      },
+      style: st
+    }, k.keyword, React.createElement('span', {
+      style: {
+        fontSize: 11,
+        opacity: .85,
+        marginLeft: 6,
+        fontWeight: 800
+      }
+    }, k.rank != null ? k.rank + '위' : k.state || '미노출'));
+  }))), /* 순위 추이 차트 (기존 PlaceRankChart 재사용 — 기간 토글·📸 이미지 저장 포함) */
+  selKw && React.createElement('div', {
+    className: 'card',
+    style: {
+      padding: 16,
+      marginBottom: 16
+    }
+  }, React.createElement(window.PlaceRankChart, {
+    series: series,
+    keyword: selKw,
+    days: days,
+    onDays: function (d) {
+      setDays(d);
+    },
+    businessName: client.name || '플레이스 업체',
+    placeUrl: client.naver_store_url || ''
+  })), /* 이동 링크 — 분석·추적 실행처 안내 */
+  React.createElement('div', {
+    style: {
+      display: 'flex',
+      gap: 10,
+      flexWrap: 'wrap',
+      background: '#eff6ff',
+      border: '1px solid #bfdbfe',
+      borderRadius: 12,
+      padding: '12px 16px',
+      alignItems: 'center'
+    }
+  }, React.createElement('span', {
+    style: {
+      fontSize: 13,
+      color: '#1d4ed8',
+      fontWeight: 700
+    }
+  }, '📍 플레이스 업체'), React.createElement('span', {
+    style: {
+      fontSize: 12.5,
+      color: '#475569',
+      flex: 1,
+      minWidth: 200
+    }
+  }, '새 분석은 「플레이스 분석」 탭에서, 무인 순위 추적 등록은 「플레이스 추적」 탭에서 합니다. 결과는 이 화면에 모입니다.'), React.createElement('button', {
+    onClick: function () {
+      goPlaceTab('place');
+    },
+    style: {
+      border: '1px solid #3b82f6',
+      background: '#fff',
+      color: '#1d4ed8',
+      borderRadius: 9,
+      padding: '7px 13px',
+      fontSize: 12.5,
+      fontWeight: 800,
+      cursor: 'pointer'
+    }
+  }, '📍 플레이스 분석 →'), React.createElement('button', {
+    onClick: function () {
+      goPlaceTab('placetrack');
+    },
+    style: {
+      border: '1px solid #3b82f6',
+      background: '#fff',
+      color: '#1d4ed8',
+      borderRadius: 9,
+      padding: '7px 13px',
+      fontSize: 12.5,
+      fontWeight: 800,
+      cursor: 'pointer'
+    }
+  }, '📊 플레이스 추적 →')));
+};
+
 ;/* ===== js/components/ClientDashboard.jsx ===== */
 /* ClientDashboard — 업체별 분석 관리 대시보드 v4.0 (AI 인사이트 탭 추가) */
 window.ClientDashboard = function ClientDashboard({
@@ -14589,6 +15515,7 @@ window.ClientDashboard = function ClientDashboard({
     return isOutageRow(r) ? '수집 중단' : '미노출';
   }
   const [clients, setClients] = useState([]);
+  const [rankOv, setRankOv] = useState({}); // 2차 확산: 업체별 순위 롤업(상태 점용, 실패 무해)
   const [selectedClient, setSelectedClient] = useState(null);
   const [analyses, setAnalyses] = useState([]);
   const [rankHistory, setRankHistory] = useState([]);
@@ -14698,6 +15625,17 @@ window.ClientDashboard = function ClientDashboard({
   });
 
   /* 업체 선택 → 저장된 분석 로드 (경량 summary 모드) */
+  useEffect(function () {
+    api.get('/cd/rank-overview').then(function (res) {
+      if (res && res.success && res.data) {
+        var m = {};
+        res.data.forEach(function (it) {
+          m[it.id] = it;
+        });
+        setRankOv(m);
+      }
+    }).catch(function () {});
+  }, []);
   var selectClient = function (client) {
     setSelectedClient(client);
     setActiveKeyword(null);
@@ -14855,9 +15793,19 @@ window.ClientDashboard = function ClientDashboard({
       setAnalyzing(false);
     });
   };
+
+  /* 상품ID 추출 — 서버(naver_crawler.extract_product_id_from_url)와 동일한 3형식 인식.
+     종전엔 /products/숫자 만 봐서 nvMid=·/catalog/ URL 이면 URL 전체가 pid 로 넘어가
+     순위 매칭이 무조건 실패했다(2026-08-05 수정). */
   function extractPid(url) {
-    var m = url.match(/products\/(\d+)/);
-    return m ? m[1] : url;
+    var u = String(url || '');
+    var m = u.match(/[?&]nvMid=(\d+)/);
+    if (m) return m[1];
+    m = u.match(/\/products\/(\d+)/);
+    if (m) return m[1];
+    m = u.match(/\/catalog\/(\d+)/);
+    if (m) return m[1];
+    return u;
   }
 
   /* 키워드별 분석 보기 (히스토리 + 순위 병렬 로드) */
@@ -15010,9 +15958,9 @@ window.ClientDashboard = function ClientDashboard({
         borderRadius: 8,
         cursor: 'pointer',
         marginBottom: 6,
-        background: isActive ? '#1B2A4A' : '#f8fafc',
+        background: isActive ? '#3b82f6' : '#f8fafc',
         color: isActive ? '#fff' : '#1e293b',
-        border: '1px solid ' + (isActive ? '#1B2A4A' : '#e2e8f0'),
+        border: '1px solid ' + (isActive ? '#3b82f6' : '#e2e8f0'),
         transition: 'all 0.15s'
       }
     }, /*#__PURE__*/React.createElement("div", {
@@ -15029,9 +15977,36 @@ window.ClientDashboard = function ClientDashboard({
     }, /*#__PURE__*/React.createElement("div", {
       style: {
         fontWeight: 600,
-        fontSize: 14
+        fontSize: 14,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6
       }
-    }, c.name || c.business_name), currentUser && (currentUser.role === 'admin' || currentUser.role === 'superadmin') && /*#__PURE__*/React.createElement("div", {
+    }, c.vertical === 'place' ? /*#__PURE__*/React.createElement("span", {
+      title: "플레이스 업체 — 이 화면에서 순위 확인, 분석은 플레이스 분석 탭"
+    }, "📍") : function () {
+      var ov = rankOv[c.id];
+      if (!ov || !ov.keywords) return null;
+      var col = ov.exposed === 0 ? '#f59e0b' : ov.down > ov.up ? '#dc2626' : '#16a34a';
+      var tip = ov.exposed === 0 ? '추적 중인데 노출 0 — 점검 필요' : '노출 ' + ov.exposed + '/' + ov.keywords + ' · ▲' + ov.up + ' ▼' + ov.down;
+      return /*#__PURE__*/React.createElement("span", {
+        title: tip,
+        style: {
+          width: 8,
+          height: 8,
+          borderRadius: '50%',
+          background: col,
+          flexShrink: 0,
+          display: 'inline-block'
+        }
+      });
+    }(), /*#__PURE__*/React.createElement("span", {
+      style: {
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap'
+      }
+    }, c.name || c.business_name)), currentUser && (currentUser.role === 'admin' || currentUser.role === 'superadmin') && /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 11,
         color: '#a78bfa',
@@ -15160,7 +16135,24 @@ window.ClientDashboard = function ClientDashboard({
       fontSize: 20,
       fontWeight: 700
     }
-  }, selectedClient.name), /*#__PURE__*/React.createElement("div", {
+  }, selectedClient.vertical === 'place' && /*#__PURE__*/React.createElement("span", {
+    title: "플레이스 업체",
+    style: {
+      marginRight: 6
+    }
+  }, "📍"), selectedClient.name, selectedClient.vertical === 'place' && /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      fontWeight: 800,
+      color: '#1d4ed8',
+      background: '#eff6ff',
+      border: '1px solid #bfdbfe',
+      borderRadius: 999,
+      padding: '2px 9px',
+      marginLeft: 8,
+      verticalAlign: 3
+    }
+  }, "플레이스")), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 13,
       color: '#64748b',
@@ -15181,12 +16173,14 @@ window.ClientDashboard = function ClientDashboard({
       fontSize: 12,
       color: '#94a3b8'
     }
-  }, selectedClient.last_analyzed && '마지막 분석: ' + selectedClient.last_analyzed.slice(0, 10)))), window.CompetitorCompareSection && React.createElement(window.CompetitorCompareSection, {
+  }, selectedClient.last_analyzed && '마지막 분석: ' + selectedClient.last_analyzed.slice(0, 10)))), selectedClient.vertical === 'place' && window.PlaceClientPanel && React.createElement(window.PlaceClientPanel, {
+    client: selectedClient
+  }), selectedClient.vertical !== 'place' && window.CompetitorCompareSection && React.createElement(window.CompetitorCompareSection, {
     client: selectedClient,
     canEdit: canEdit,
     isViewer: currentUser && currentUser.role === 'viewer',
     onRegisterCompetitor: onRegisterCompetitor
-  }), canEdit !== false && /*#__PURE__*/React.createElement(AnalysisForm, {
+  }), selectedClient.vertical !== 'place' && canEdit !== false && /*#__PURE__*/React.createElement(AnalysisForm, {
     client: selectedClient,
     onAnalyze: onRunAnalysis ? function (keyword, productUrl) {
       /* 분석 탭으로 전환하여 실제 분석 실행 + 자동 저장 */
@@ -15201,7 +16195,7 @@ window.ClientDashboard = function ClientDashboard({
     } : runAnalysis,
     analyzing: analyzing,
     message: message
-  }), uniqueKeywords.length > 0 && /*#__PURE__*/React.createElement("div", {
+  }), selectedClient.vertical !== 'place' && uniqueKeywords.length > 0 && /*#__PURE__*/React.createElement("div", {
     className: "card",
     style: {
       padding: 16,
@@ -15231,9 +16225,9 @@ window.ClientDashboard = function ClientDashboard({
         borderRadius: 20,
         cursor: 'pointer',
         fontSize: 13,
-        background: isActive ? '#1B2A4A' : '#f1f5f9',
+        background: isActive ? '#3b82f6' : '#f1f5f9',
         color: isActive ? '#fff' : '#475569',
-        border: isActive ? '1px solid #1B2A4A' : '1px solid #e2e8f0'
+        border: isActive ? '1px solid #3b82f6' : '1px solid #e2e8f0'
       }
     }, a.keyword, /*#__PURE__*/React.createElement("span", {
       style: {
@@ -15242,7 +16236,7 @@ window.ClientDashboard = function ClientDashboard({
         marginLeft: 6
       }
     }, (a.analyzed_date || '').slice(0, 10)));
-  }))), /*#__PURE__*/React.createElement("div", {
+  }))), selectedClient.vertical !== 'place' && /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       gap: 8,
@@ -15258,7 +16252,7 @@ window.ClientDashboard = function ClientDashboard({
       fontSize: 13,
       fontWeight: 600,
       cursor: 'pointer',
-      background: viewMode === 'history' ? '#1B2A4A' : '#fff',
+      background: viewMode === 'history' ? '#3b82f6' : '#fff',
       color: viewMode === 'history' ? '#fff' : '#475569',
       border: viewMode === 'history' ? 'none' : '1px solid #e2e8f0'
     }
@@ -15272,7 +16266,7 @@ window.ClientDashboard = function ClientDashboard({
       fontSize: 13,
       fontWeight: 600,
       cursor: 'pointer',
-      background: viewMode === 'rank' ? '#1B2A4A' : '#fff',
+      background: viewMode === 'rank' ? '#3b82f6' : '#fff',
       color: viewMode === 'rank' ? '#fff' : '#475569',
       border: viewMode === 'rank' ? 'none' : '1px solid #e2e8f0'
     }
@@ -15594,7 +16588,7 @@ window.ClientDashboard = function ClientDashboard({
         color: diff > 0 ? '#16a34a' : '#dc2626'
       }
     }, diff > 0 ? '▲' + diff : '▼' + Math.abs(diff))), /*#__PURE__*/React.createElement("td", null, r.check_type === 'manual' ? '수동' : '자동'));
-  })))))), !activeKeyword && (viewMode === 'history' || viewMode === 'rank') && /*#__PURE__*/React.createElement("div", {
+  })))))), selectedClient.vertical !== 'place' && !activeKeyword && (viewMode === 'history' || viewMode === 'rank') && /*#__PURE__*/React.createElement("div", {
     className: "card",
     style: {
       padding: 40,
@@ -15611,7 +16605,7 @@ window.ClientDashboard = function ClientDashboard({
       fontSize: 14,
       fontWeight: 500
     }
-  }, "위에서 키워드를 선택하면 ", viewMode === 'history' ? '일자별 추이' : '순위 이력', "가 표시됩니다.")), viewMode === 'insights' && /*#__PURE__*/React.createElement(AiInsightsView, {
+  }, "위에서 키워드를 선택하면 ", viewMode === 'history' ? '일자별 추이' : '순위 이력', "가 표시됩니다.")), selectedClient.vertical !== 'place' && viewMode === 'insights' && /*#__PURE__*/React.createElement(AiInsightsView, {
     aiLoading: aiLoading,
     aiInsights: aiInsights,
     aiSelectedKeyword: aiSelectedKeyword,
@@ -15916,8 +16910,9 @@ window.AnalysisResultView = function AnalysisResultView({
   }, "광고 경쟁강도:"), " ", /*#__PURE__*/React.createElement("strong", null, data.advertiserInfo.compIdx)), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
     style: {
       color: '#64748b'
-    }
-  }, "광고 노출 깊이:"), " ", /*#__PURE__*/React.createElement("strong", null, data.advertiserInfo.adDepth ? '상위 ' + data.advertiserInfo.adDepth + '개' : '-')), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+    },
+    title: "네이버 검색광고(파워링크) 기준 — 이 키워드 검색 시 통합검색 상단에 붙는 광고 평균 개수. 쇼핑검색 순위와는 다른 지표입니다."
+  }, "평균 광고 개수 ⓘ:"), " ", /*#__PURE__*/React.createElement("strong", null, data.advertiserInfo.adDepth ? data.advertiserInfo.adDepth + '개' : '데이터 없음')), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
     style: {
       color: '#64748b'
     }
@@ -16432,7 +17427,7 @@ window.UserGuidePage = function UserGuidePage({
     width: 24,
     height: 24,
     borderRadius: '50%',
-    background: '#6C5CE7',
+    background: '#3b82f6',
     color: '#fff',
     fontSize: 12,
     fontWeight: 700,
@@ -17502,7 +18497,7 @@ window.UserGuidePage = function UserGuidePage({
   }, /* 헤더 */
   React.createElement('div', {
     style: {
-      background: 'linear-gradient(135deg, #6C5CE7, #a29bfe)',
+      background: 'linear-gradient(135deg, #3b82f6, #93c5fd)',
       borderRadius: 16,
       padding: '32px 36px',
       marginBottom: 24,
@@ -17561,8 +18556,8 @@ window.UserGuidePage = function UserGuidePage({
         fontSize: 13,
         fontWeight: isActive ? 700 : 400,
         background: isActive ? '#f0f0ff' : 'transparent',
-        color: isActive ? '#6C5CE7' : '#475569',
-        borderLeft: isActive ? '3px solid #6C5CE7' : '3px solid transparent',
+        color: isActive ? '#3b82f6' : '#475569',
+        borderLeft: isActive ? '3px solid #3b82f6' : '3px solid transparent',
         transition: 'all 0.15s'
       }
     }, s.icon + ' ' + s.label);
@@ -18235,7 +19230,7 @@ window.SeoOptimizerPage = function SeoOptimizerPage(props) {
     }, (it.created_at || '').slice(0, 10), " · ", it.created_by)), it.tags && it.tags.length > 0 && /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 12,
-        color: '#6366f1',
+        color: '#3b82f6',
         marginTop: 4
       }
     }, it.tags.map(function (t) {
@@ -18414,7 +19409,7 @@ window.SeoRulesSection = function SeoRulesSection() {
 window.SectionDivider = function SectionDivider(props) {
   var label = props && props.label ? props.label : '';
   var icon = props && props.icon ? props.icon : '';
-  var color = props && props.color ? props.color : '#4f46e5';
+  var color = props && props.color ? props.color : '#3b82f6';
   var sub = props && props.sub ? props.sub : '';
   return /*#__PURE__*/React.createElement("div", {
     className: "report-divider"
@@ -18481,8 +19476,8 @@ window.DatalabDemographicsSection = function DatalabDemographicsSection(props) {
   }
   /* 성별 격차 10%p 미만 = 사실상 무차이 → 특정 성별 타겟 단정 금지 */
   var genderGapSmall = gender ? Math.abs((Number(gender.female) || 0) - (Number(gender.male) || 0)) < 10 : false;
-  var ageColors = ['#94a3b8', '#818cf8', '#4f46e5', '#7c3aed', '#a78bfa', '#94a3b8'];
-  var ageGrads = ['linear-gradient(90deg, #94a3b8, #cbd5e1)', 'linear-gradient(90deg, #818cf8, #a78bfa)', 'linear-gradient(90deg, #4f46e5, #6366f1)', 'linear-gradient(90deg, #7c3aed, #8b5cf6)', 'linear-gradient(90deg, #a78bfa, #c4b5fd)', 'linear-gradient(90deg, #94a3b8, #cbd5e1)'];
+  var ageColors = ['#94a3b8', '#818cf8', '#3b82f6', '#7c3aed', '#a78bfa', '#94a3b8'];
+  var ageGrads = ['linear-gradient(90deg, #94a3b8, #cbd5e1)', 'linear-gradient(90deg, #818cf8, #a78bfa)', 'linear-gradient(90deg, #3b82f6, #3b82f6)', 'linear-gradient(90deg, #7c3aed, #8b5cf6)', 'linear-gradient(90deg, #a78bfa, #c4b5fd)', 'linear-gradient(90deg, #94a3b8, #cbd5e1)'];
 
   /* 핵심 타겟 계산 */
   var targetGender = gender ? gender.female > gender.male ? '여성' : '남성' : '';
@@ -18509,7 +19504,7 @@ window.DatalabDemographicsSection = function DatalabDemographicsSection(props) {
       labels: ['남성', '여성'],
       datasets: [{
         data: [gender.male, gender.female],
-        backgroundColor: ['#4f46e5', '#ec4899'],
+        backgroundColor: ['#3b82f6', '#ec4899'],
         borderWidth: 0
       }]
     },
@@ -18697,7 +19692,7 @@ window.DatalabTrendSection = function DatalabTrendSection(props) {
         data: months.map(function (m) {
           return m.ratio;
         }),
-        borderColor: '#4f46e5',
+        borderColor: '#3b82f6',
         backgroundColor: function (c) {
           if (!c.chart.ctx) return 'rgba(79,70,229,.12)';
           return window.chartGrad ? window.chartGrad(c.chart.ctx, 'rgba(79,70,229,.22)', 'rgba(79,70,229,0)', 240) : 'rgba(79,70,229,.12)';
@@ -18709,10 +19704,10 @@ window.DatalabTrendSection = function DatalabTrendSection(props) {
           return m.ratio === d.maxRatio || m.ratio === d.minRatio ? 6 : 3;
         }),
         pointBackgroundColor: months.map(function (m) {
-          return m.ratio === d.maxRatio ? '#4f46e5' : m.ratio === d.minRatio ? '#ef4444' : '#fff';
+          return m.ratio === d.maxRatio ? '#3b82f6' : m.ratio === d.minRatio ? '#ef4444' : '#fff';
         }),
         pointBorderColor: months.map(function (m) {
-          return m.ratio === d.minRatio ? '#ef4444' : '#4f46e5';
+          return m.ratio === d.minRatio ? '#ef4444' : '#3b82f6';
         }),
         pointBorderWidth: 2
       }]
@@ -18841,7 +19836,7 @@ window.DatalabWeekdaySection = function DatalabWeekdaySection(props) {
           return Math.round(day.normalized);
         }),
         backgroundColor: days.map(function (day) {
-          return day.label === d.peakDay ? '#ec4899' : day.label === d.lowDay ? '#94a3b8' : day.normalized >= 85 ? '#7c3aed' : '#4f46e5';
+          return day.label === d.peakDay ? '#ec4899' : day.label === d.lowDay ? '#94a3b8' : day.normalized >= 85 ? '#7c3aed' : '#3b82f6';
         }),
         borderRadius: 6
       }]
@@ -18905,8 +19900,8 @@ window.DatalabGrowthSection = function DatalabGrowthSection(props) {
     grad: 'linear-gradient(90deg, #22c55e, #4ade80)',
     bg: '#f0fdf4'
   }, {
-    main: '#4f46e5',
-    grad: 'linear-gradient(90deg, #4f46e5, #818cf8)',
+    main: '#3b82f6',
+    grad: 'linear-gradient(90deg, #3b82f6, #818cf8)',
     bg: '#eef2ff'
   }, {
     main: '#f59e0b',
@@ -18959,14 +19954,14 @@ window.DatalabGrowthSection = function DatalabGrowthSection(props) {
         padding: 24,
         textAlign: 'center',
         position: 'relative',
-        border: isRecommended ? '2px solid #4f46e5' : undefined
+        border: isRecommended ? '2px solid #3b82f6' : undefined
       }
     }, isRecommended && /*#__PURE__*/React.createElement("div", {
       style: {
         position: 'absolute',
         top: -1,
         right: 16,
-        background: '#4f46e5',
+        background: '#3b82f6',
         color: '#fff',
         fontSize: 10,
         fontWeight: 700,
@@ -19362,7 +20357,7 @@ window.FeedbackManagement = function FeedbackManagement() {
         fontSize: 12,
         fontWeight: 600,
         cursor: 'pointer',
-        background: filter === f ? '#1B2A4A' : '#f1f5f9',
+        background: filter === f ? '#3b82f6' : '#f1f5f9',
         color: filter === f ? '#fff' : '#64748b',
         border: 'none'
       }
@@ -19516,7 +20511,7 @@ window.FeedbackManagement = function FeedbackManagement() {
         borderRadius: 6,
         fontSize: 11,
         cursor: 'pointer',
-        background: '#1B2A4A',
+        background: '#3b82f6',
         color: '#fff',
         border: 'none',
         fontWeight: 600
@@ -19950,7 +20945,7 @@ window.ManagerReassignSection = function ManagerReassignSection() {
       borderRadius: 8,
       cursor: busy ? 'default' : 'pointer',
       border: 'none',
-      background: '#4f46e5',
+      background: '#3b82f6',
       color: '#fff',
       opacity: busy ? 0.6 : 1
     }
@@ -20603,7 +21598,7 @@ window.ChatWidget = function ChatWidget({
       width: 56,
       height: 56,
       borderRadius: '50%',
-      background: isOpen ? '#64748b' : '#1B2A4A',
+      background: isOpen ? '#64748b' : '#3b82f6',
       color: '#fff',
       border: 'none',
       cursor: 'pointer',
@@ -20669,7 +21664,7 @@ window.ChatWidget = function ChatWidget({
   React.createElement('div', {
     style: {
       padding: '12px 18px',
-      background: '#1B2A4A',
+      background: '#3b82f6',
       color: '#fff',
       display: 'flex',
       alignItems: 'center',
@@ -20728,8 +21723,8 @@ window.ChatWidget = function ChatWidget({
       cursor: 'pointer',
       background: 'none',
       border: 'none',
-      color: activeTab === 'chat' ? '#1B2A4A' : '#94a3b8',
-      borderBottom: activeTab === 'chat' ? '2px solid #1B2A4A' : '2px solid transparent'
+      color: activeTab === 'chat' ? '#3b82f6' : '#94a3b8',
+      borderBottom: activeTab === 'chat' ? '2px solid #3b82f6' : '2px solid transparent'
     }
   }, '💬 AI 채팅'), React.createElement('button', {
     onClick: function () {
@@ -20743,8 +21738,8 @@ window.ChatWidget = function ChatWidget({
       cursor: 'pointer',
       background: 'none',
       border: 'none',
-      color: activeTab === 'feedback' ? '#1B2A4A' : '#94a3b8',
-      borderBottom: activeTab === 'feedback' ? '2px solid #1B2A4A' : '2px solid transparent'
+      color: activeTab === 'feedback' ? '#3b82f6' : '#94a3b8',
+      borderBottom: activeTab === 'feedback' ? '2px solid #3b82f6' : '2px solid transparent'
     }
   }, '📝 의견함')), /* ===== AI 채팅 탭 ===== */
   activeTab === 'chat' && React.createElement(React.Fragment, null, /* 메시지 영역 */
@@ -20798,7 +21793,7 @@ window.ChatWidget = function ChatWidget({
         maxWidth: '80%',
         padding: '10px 14px',
         borderRadius: 12,
-        background: isUser ? '#1B2A4A' : '#f1f5f9',
+        background: isUser ? '#3b82f6' : '#f1f5f9',
         color: isUser ? '#fff' : '#1e293b',
         fontSize: 13,
         lineHeight: 1.6,
@@ -20955,7 +21950,7 @@ window.ChatWidget = function ChatWidget({
       width: 36,
       height: 36,
       borderRadius: '50%',
-      background: sending || !input.trim() && !imageB64 ? '#e2e8f0' : '#1B2A4A',
+      background: sending || !input.trim() && !imageB64 ? '#e2e8f0' : '#3b82f6',
       color: '#fff',
       border: 'none',
       cursor: sending || !input.trim() && !imageB64 ? 'default' : 'pointer',
@@ -21151,7 +22146,7 @@ window.ChatWidget = function ChatWidget({
       width: '100%',
       padding: '10px 0',
       borderRadius: 10,
-      background: fbSending || !fbContent.trim() ? '#e2e8f0' : '#1B2A4A',
+      background: fbSending || !fbContent.trim() ? '#e2e8f0' : '#3b82f6',
       color: fbSending || !fbContent.trim() ? '#94a3b8' : '#fff',
       border: 'none',
       fontSize: 13,
@@ -21303,6 +22298,525 @@ window.ChatWidget = function ChatWidget({
   }))))));
 };
 
+;/* ===== js/components/AppShellBar.jsx ===== */
+/* AppShellBar — B+A 대개편 셸 (2026-08-05, 대표 확정)
+ *
+ * 상단 TopBar 를 대체하는 「좌측 사이드바 + 상단 바」. TopBar 와 동일한 props
+ * 계약({ activePage, currentUser, health, onNavigate })이라 페이지 블록들은
+ * 마운트 치환만으로 이전된다(라우팅·권한 게이트 불변).
+ *  - 사이드바: 쇼핑/플레이스/통합 그룹 · 상승 키워드 뱃지(rank-overview totals)
+ *    · 접기(수동 토글 localStorage + 좁은 화면 자동) — position:fixed,
+ *    본문은 body padding 으로 밀어낸다(페이지 내부 레이아웃 무수정).
+ *  - 상단 바: 크럼 · 전역 검색(Ctrl+K, Enter → 대시보드 검색 핸드오프) · 사용자.
+ *  - 첫 진입 1회 안내(「메뉴가 왼쪽으로 이동했어요」, localStorage).
+ */
+
+var _AS_W = 206,
+  _AS_WC = 60,
+  _AS_TOP = 50,
+  _AS_BANNER = 38;
+var _AS_GROUPS = function (cu) {
+  var role = cu && cu.role || '';
+  return [{
+    label: null,
+    items: [{
+      page: 'home',
+      icon: '🏠',
+      name: '대시보드'
+    }]
+  }, {
+    label: '쇼핑',
+    items: [(role === 'manager' || role === 'superadmin') && {
+      page: 'seo',
+      icon: '🔍',
+      name: 'SEO 최적화'
+    }, {
+      page: 'analysis',
+      icon: '🛒',
+      name: '스토어 분석'
+    }, {
+      page: 'rank',
+      icon: '📊',
+      name: '키워드 순위',
+      badge: 'up'
+    }].filter(Boolean)
+  }, {
+    label: '플레이스',
+    items: [{
+      page: 'place',
+      icon: '📍',
+      name: '플레이스 분석'
+    }, {
+      page: 'placetrack',
+      icon: '📊',
+      name: '플레이스 추적'
+    }]
+  }, {
+    label: '통합',
+    items: [{
+      page: 'management',
+      icon: '📈',
+      name: '로직 분석 (업체)'
+    }, {
+      page: 'learning',
+      icon: '🎓',
+      name: '학습센터'
+    }, {
+      page: 'guide',
+      icon: '📖',
+      name: '설명서'
+    }]
+  }, role === 'superadmin' ? {
+    label: '관리',
+    items: [{
+      page: 'settings',
+      icon: '⚙️',
+      name: '설정'
+    }]
+  } : null].filter(Boolean);
+};
+var _AS_CRUMB = {
+  home: '홈 / 대시보드',
+  seo: '쇼핑 / SEO 최적화',
+  analysis: '쇼핑 / 스토어 분석',
+  rank: '쇼핑 / 키워드 순위',
+  place: '플레이스 / 플레이스 분석',
+  placetrack: '플레이스 / 플레이스 추적',
+  management: '통합 / 로직 분석 (업체)',
+  learning: '통합 / 학습센터',
+  guide: '통합 / 설명서',
+  settings: '관리 / 설정',
+  users: '관리 / 직원'
+};
+window.AppShellBar = function AppShellBar(props) {
+  var useState = React.useState,
+    useEffect = React.useEffect,
+    useRef = React.useRef;
+  var activePage = props.activePage;
+  var currentUser = props.currentUser || {};
+  var health = props.health;
+  var go = props.onNavigate || function () {};
+  var _c = useState(function () {
+    try {
+      var saved = localStorage.getItem('logic_nav_collapsed');
+      if (saved != null) return saved === '1';
+    } catch (e) {}
+    return typeof window !== 'undefined' && window.innerWidth < 1080;
+  });
+  var collapsed = _c[0],
+    setCollapsed = _c[1];
+  var _up = useState(null);
+  var upTotal = _up[0],
+    setUpTotal = _up[1];
+  var _q = useState('');
+  var q = _q[0],
+    setQ = _q[1];
+  var _ch = useState(null);
+  var colHealth = _ch[0],
+    setColHealth = _ch[1]; // 수집 파이프라인 상태
+  var _chX = useState(false);
+  var colDismissed = _chX[0],
+    setColDismissed = _chX[1];
+  var _in = useState(function () {
+    try {
+      return !localStorage.getItem('logic_nav_intro_v7');
+    } catch (e) {
+      return false;
+    }
+  });
+  var showIntro = _in[0],
+    setShowIntro = _in[1];
+  var searchRef = useRef(null);
+
+  /* 본문 밀어내기 — 페이지 내부 컨테이너 무수정으로 셸 폭 반영.
+     경보 배너가 뜨면 그 높이만큼 더 내려 본문 첫 줄이 가려지지 않게 한다. */
+  var _bannerOn = !!(colHealth && !colDismissed);
+  useEffect(function () {
+    var w = collapsed ? _AS_WC : _AS_W;
+    document.body.style.paddingLeft = w + 'px';
+    document.body.style.paddingTop = _AS_TOP + (_bannerOn ? _AS_BANNER : 0) + 'px';
+    return function () {
+      document.body.style.paddingLeft = '';
+      document.body.style.paddingTop = '';
+    };
+  }, [collapsed, _bannerOn]);
+
+  /* 좁은 화면 자동 접힘(수동 설정 없을 때만) */
+  useEffect(function () {
+    var onR = function () {
+      try {
+        if (localStorage.getItem('logic_nav_collapsed') != null) return;
+      } catch (e) {}
+      setCollapsed(window.innerWidth < 1080);
+    };
+    window.addEventListener('resize', onR);
+    return function () {
+      window.removeEventListener('resize', onR);
+    };
+  }, []);
+
+  /* 상승 키워드 뱃지 — 실패 무해 */
+  useEffect(function () {
+    api.get('/cd/rank-overview').then(function (res) {
+      if (res && res.success && res.totals) setUpTotal(res.totals.up_total || 0);
+    }).catch(function () {});
+  }, []);
+
+  /* 수집 파이프라인 경보 — 오늘 수집이 없으면 전 화면 상단 배너.
+     하루 단위로 닫기 기억(다음 날 다시 노출), 조회 실패는 무음(기존 동작 유지) */
+  useEffect(function () {
+    var today = new Date().toISOString().slice(0, 10);
+    try {
+      if (localStorage.getItem('logic_collect_alert_off') === today) setColDismissed(true);
+    } catch (e) {}
+    var load = function () {
+      api.get('/collector/health').then(function (res) {
+        if (res && res.success && res.state && res.state !== 'ok') setColHealth(res);else setColHealth(null);
+      }).catch(function () {});
+    };
+    load();
+    var t = setInterval(load, 10 * 60 * 1000); // 10분 주기 — 낮 만회 수집 시 자동 해제
+    return function () {
+      clearInterval(t);
+    };
+  }, []);
+
+  /* Ctrl+K → 검색 포커스 */
+  useEffect(function () {
+    var onKey = function (e) {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault();
+        if (searchRef.current) searchRef.current.focus();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return function () {
+      window.removeEventListener('keydown', onKey);
+    };
+  }, []);
+  var toggle = function () {
+    var next = !collapsed;
+    setCollapsed(next);
+    try {
+      localStorage.setItem('logic_nav_collapsed', next ? '1' : '0');
+    } catch (e) {}
+  };
+  var submitSearch = function () {
+    var v = q.trim();
+    if (!v) return;
+    try {
+      sessionStorage.setItem('logic_global_q', v);
+    } catch (e) {}
+    /* 이미 대시보드에 있어도 반영되게 이벤트 병행(리스트가 리스닝) */
+    try {
+      window.dispatchEvent(new CustomEvent('logic-global-search', {
+        detail: v
+      }));
+    } catch (e) {}
+    setQ('');
+    go('home');
+  };
+  var dismissCollect = function () {
+    setColDismissed(true);
+    try {
+      localStorage.setItem('logic_collect_alert_off', new Date().toISOString().slice(0, 10));
+    } catch (e) {}
+  };
+  var dismissIntro = function () {
+    setShowIntro(false);
+    try {
+      localStorage.setItem('logic_nav_intro_v7', '1');
+    } catch (e) {}
+  };
+  var W = collapsed ? _AS_WC : _AS_W;
+  var _r = currentUser.role;
+  var roleLabel = _r === 'superadmin' ? '최고관리자' : _r === 'admin' ? '관리자' : _r === 'manager' ? '매니저' : '뷰어';
+  var roleBg = _r === 'admin' || _r === 'superadmin' ? '#ede9fe' : _r === 'manager' ? '#dbeafe' : '#f1f5f9';
+  var roleFg = _r === 'admin' || _r === 'superadmin' ? '#6d28d9' : _r === 'manager' ? '#1d4ed8' : '#475569';
+  var navBtn = function (item) {
+    var on = activePage === item.page;
+    return React.createElement('button', {
+      key: item.page,
+      onClick: function () {
+        go(item.page);
+      },
+      title: collapsed ? item.name : undefined,
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 9,
+        width: '100%',
+        border: 'none',
+        background: on ? '#1d2a44' : 'none',
+        color: on ? '#fff' : '#aeb8c8',
+        fontFamily: 'inherit',
+        fontSize: 13,
+        fontWeight: on ? 800 : 600,
+        textAlign: 'left',
+        borderRadius: 9,
+        padding: collapsed ? '9px 0' : '8px 11px',
+        cursor: 'pointer',
+        justifyContent: collapsed ? 'center' : 'flex-start',
+        whiteSpace: 'nowrap'
+      },
+      onMouseEnter: function (e) {
+        if (!on) {
+          e.currentTarget.style.background = '#18202f';
+          e.currentTarget.style.color = '#e2e8f0';
+        }
+      },
+      onMouseLeave: function (e) {
+        if (!on) {
+          e.currentTarget.style.background = 'none';
+          e.currentTarget.style.color = '#aeb8c8';
+        }
+      }
+    }, React.createElement('span', {
+      style: {
+        fontSize: 14,
+        flex: 'none'
+      }
+    }, item.icon), !collapsed && React.createElement('span', {
+      style: {
+        overflow: 'hidden',
+        textOverflow: 'ellipsis'
+      }
+    }, item.name), !collapsed && item.badge === 'up' && upTotal > 0 && React.createElement('span', {
+      style: {
+        marginLeft: 'auto',
+        fontSize: 10,
+        fontWeight: 800,
+        background: '#324467',
+        color: '#cfe0ff',
+        borderRadius: 999,
+        padding: '1px 7px'
+      }
+    }, '▲' + upTotal));
+  };
+  return React.createElement(React.Fragment, null, /* ── 좌측 사이드바 ── */
+  React.createElement('nav', {
+    'aria-label': '주요 메뉴',
+    style: {
+      position: 'fixed',
+      top: 0,
+      left: 0,
+      bottom: 0,
+      width: W,
+      zIndex: 1000,
+      background: '#101623',
+      display: 'flex',
+      flexDirection: 'column',
+      padding: collapsed ? '14px 8px 12px' : '16px 12px 14px',
+      gap: 2,
+      overflowY: 'auto',
+      overflowX: 'hidden',
+      transition: 'width .15s ease'
+    }
+  }, React.createElement('div', {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      padding: collapsed ? '2px 0 12px' : '4px 10px 14px',
+      justifyContent: collapsed ? 'center' : 'flex-start'
+    }
+  }, collapsed ? React.createElement('span', {
+    style: {
+      fontWeight: 900,
+      color: '#6ea8ff',
+      fontSize: 14
+    }
+  }, 'M') : React.createElement('span', {
+    style: {
+      fontWeight: 900,
+      color: '#fff',
+      fontSize: 14.5,
+      whiteSpace: 'nowrap'
+    }
+  }, 'META ', React.createElement('em', {
+    style: {
+      color: '#6ea8ff',
+      fontStyle: 'normal'
+    }
+  }, '로직분석'))), _AS_GROUPS(currentUser).map(function (g, gi) {
+    return React.createElement(React.Fragment, {
+      key: gi
+    }, g.label && !collapsed && React.createElement('div', {
+      style: {
+        fontSize: 10,
+        fontWeight: 800,
+        letterSpacing: '.12em',
+        color: '#5b6880',
+        padding: '13px 11px 5px'
+      }
+    }, g.label), g.label && collapsed && React.createElement('div', {
+      style: {
+        height: 1,
+        background: '#1c2534',
+        margin: '9px 4px'
+      }
+    }), g.items.map(navBtn));
+  }), React.createElement('div', {
+    style: {
+      marginTop: 'auto',
+      paddingTop: 10,
+      borderTop: '1px solid #1c2534'
+    }
+  }, React.createElement('button', {
+    onClick: toggle,
+    title: collapsed ? '메뉴 펼치기' : '메뉴 접기',
+    style: {
+      width: '100%',
+      border: 'none',
+      background: 'none',
+      color: '#5b6880',
+      fontSize: 12,
+      fontWeight: 700,
+      cursor: 'pointer',
+      padding: '6px 0',
+      fontFamily: 'inherit',
+      textAlign: 'center'
+    }
+  }, collapsed ? '»' : '« 접기'), !collapsed && React.createElement('div', {
+    style: {
+      fontSize: 11,
+      color: '#5b6880',
+      padding: '4px 11px 0',
+      whiteSpace: 'nowrap'
+    }
+  }, typeof APP_VERSION !== 'undefined' ? APP_VERSION : '', health && React.createElement('span', {
+    style: {
+      color: '#4ade80',
+      marginLeft: 6,
+      fontWeight: 700
+    }
+  }, '● 정상')))), /* ── 상단 바 ── */
+  React.createElement('div', {
+    style: {
+      position: 'fixed',
+      top: 0,
+      left: W,
+      right: 0,
+      height: _AS_TOP,
+      zIndex: 999,
+      background: '#fff',
+      borderBottom: '1px solid #e9ecf0',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      padding: '0 18px',
+      transition: 'left .15s ease'
+    }
+  }, React.createElement('span', {
+    style: {
+      fontSize: 13,
+      fontWeight: 700,
+      color: '#4e5968',
+      whiteSpace: 'nowrap'
+    }
+  }, _AS_CRUMB[activePage] || ''), showIntro && React.createElement('span', {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 700,
+      color: '#1d4ed8',
+      background: '#eff4ff',
+      border: '1px solid #bfdbfe',
+      borderRadius: 999,
+      padding: '3px 10px',
+      whiteSpace: 'nowrap',
+      cursor: 'pointer'
+    },
+    onClick: dismissIntro,
+    title: '닫기'
+  }, '💡 메뉴가 왼쪽으로 이동했어요 ✕'), React.createElement('input', {
+    ref: searchRef,
+    value: q,
+    onChange: function (e) {
+      setQ(e.target.value);
+    },
+    onKeyDown: function (e) {
+      if (e.key === 'Enter' && !e.nativeEvent.isComposing) submitSearch();
+    },
+    placeholder: '🔍 업체·키워드 검색 (Ctrl+K)',
+    style: {
+      marginLeft: 'auto',
+      border: '1px solid #e5e8ec',
+      borderRadius: 9,
+      padding: '6px 12px',
+      fontSize: 12.5,
+      background: '#f7f8fa',
+      minWidth: 150,
+      maxWidth: 260,
+      flex: '0 1 260px',
+      outline: 'none'
+    }
+  }), React.createElement('span', {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: '#4e5968',
+      whiteSpace: 'nowrap'
+    }
+  }, currentUser.name || currentUser.username), React.createElement('span', {
+    style: {
+      fontSize: 10.5,
+      fontWeight: 800,
+      color: roleFg,
+      background: roleBg,
+      borderRadius: 999,
+      padding: '2px 8px',
+      whiteSpace: 'nowrap'
+    }
+  }, roleLabel)), /* ── 수집 중단 경보 배너 (전 화면 공통) ── */
+  colHealth && !colDismissed && React.createElement('div', {
+    style: {
+      position: 'fixed',
+      top: _AS_TOP,
+      left: W,
+      right: 0,
+      zIndex: 998,
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      padding: '0 18px',
+      height: _AS_BANNER,
+      fontSize: 12.5,
+      fontWeight: 600,
+      transition: 'left .15s ease',
+      background: colHealth.state === 'down' ? '#fef2f2' : '#fffbeb',
+      borderBottom: '1px solid ' + (colHealth.state === 'down' ? '#fecaca' : '#fde68a'),
+      color: colHealth.state === 'down' ? '#991b1b' : '#92400e'
+    }
+  }, React.createElement('span', {
+    style: {
+      fontSize: 14
+    }
+  }, colHealth.state === 'down' ? '🚨' : '⚠️'), React.createElement('span', {
+    style: {
+      fontWeight: 800
+    }
+  }, colHealth.state === 'down' ? '순위 수집 중단' : '오늘 새벽 수집 미실행'), React.createElement('span', {
+    style: {
+      flex: 1,
+      minWidth: 0,
+      fontWeight: 500
+    }
+  }, colHealth.message || ''), React.createElement('button', {
+    onClick: dismissCollect,
+    title: '오늘 하루 숨기기',
+    style: {
+      border: 'none',
+      background: 'none',
+      cursor: 'pointer',
+      fontSize: 13,
+      fontWeight: 800,
+      color: 'inherit',
+      opacity: .65,
+      padding: '0 2px',
+      fontFamily: 'inherit'
+    }
+  }, '✕')));
+};
+
 ;/* ===== js/components/TopBar.jsx ===== */
 /* TopBar — 상단 카테고리 바 (App.jsx에서 분리)
  * props: { activePage, currentUser, health, onNavigate(page) }
@@ -21419,6 +22933,11 @@ window.TopBar = function TopBar(props) {
     },
     style: _navBtn(activePage === 'place')
   }, '📍 플레이스 분석'), React.createElement('button', {
+    onClick: function () {
+      go('placetrack');
+    },
+    style: _navBtn(activePage === 'placetrack')
+  }, '📊 플레이스 추적'), React.createElement('button', {
     onClick: function () {
       go('analysis');
     },
@@ -21865,7 +23384,7 @@ window.RankDeltaROISimulation = function RankDeltaROISimulation(props) {
       flexWrap: 'wrap',
       alignItems: 'stretch'
     }
-  }, Col('현재 (' + curLabel + ')', isRanked ? '~' + fmt(curSales) + '건' : '0건', '예상 월 판매', '#64748b'), Col('목표 (1위)', '~' + fmt(tgtSales) + '건', '예상 월 판매', '#4f46e5'), Col('증분 (Δ)', '+' + fmt(deltaSales) + '건', pct != null ? '현재 대비 +' + pct + '%' : '1위 도달 시 순증', '#16a34a')), React.createElement('div', {
+  }, Col('현재 (' + curLabel + ')', isRanked ? '~' + fmt(curSales) + '건' : '0건', '예상 월 판매', '#64748b'), Col('목표 (1위)', '~' + fmt(tgtSales) + '건', '예상 월 판매', '#3b82f6'), Col('증분 (Δ)', '+' + fmt(deltaSales) + '건', pct != null ? '현재 대비 +' + pct + '%' : '1위 도달 시 순증', '#16a34a')), React.createElement('div', {
     style: {
       marginTop: 12,
       padding: '10px 14px',
@@ -22098,7 +23617,7 @@ window.CpcBidEstimateSection = function CpcBidEstimateSection(props) {
     style: {
       marginTop: 10
     }
-  }, Kpi('예상 CPC(중간)', won(band.base), '클릭당 예상 단가', '#0f172a'), Kpi('권장 입찰가 범위', fmt(band.low) + '~' + fmt(band.high) + '원', '저가~상위노출가'), Kpi('예상 월 클릭', fmt(clicks) + '회', '네이버 실측 평균클릭'), Kpi('예상 월 광고비', '~' + won(estSpendMid), '클릭 30% 확보 가정', '#4f46e5')), bidTable, React.createElement('div', {
+  }, Kpi('예상 CPC(중간)', won(band.base), '클릭당 예상 단가', '#0f172a'), Kpi('권장 입찰가 범위', fmt(band.low) + '~' + fmt(band.high) + '원', '저가~상위노출가'), Kpi('예상 월 클릭', fmt(clicks) + '회', '네이버 실측 평균클릭'), Kpi('예상 월 광고비', '~' + won(estSpendMid), '클릭 30% 확보 가정', '#3b82f6')), bidTable, React.createElement('div', {
     style: {
       marginTop: 14,
       background: '#f8fafc',
@@ -22166,7 +23685,8 @@ window.TrackRegisterButton = function TrackRegisterButton(props) {
     setAdding(true);
     api.post('/products/track', {
       product_url: searchedProductUrl,
-      keywords: [searchedKeyword]
+      keywords: [searchedKeyword],
+      store_name_hint: props.storeNameHint || undefined
     }).then(function (res) {
       if (res && res.success) {
         if (typeof toast !== 'undefined' && toast.success) toast.success('순위 추적에 등록했습니다. 첫 순위 체크를 시작합니다.');
@@ -22215,7 +23735,7 @@ window.TrackRegisterButton = function TrackRegisterButton(props) {
         borderRadius: 10,
         border: '1px solid #c7d2fe',
         background: '#eef2ff',
-        color: '#4f46e5',
+        color: '#3b82f6',
         fontSize: 12.5,
         fontWeight: 700,
         cursor: adding ? 'default' : 'pointer'
@@ -22236,7 +23756,7 @@ window.TrackRegisterButton = function TrackRegisterButton(props) {
       padding: '10px 18px',
       borderRadius: 10,
       border: 'none',
-      background: adding ? '#94a3b8' : 'linear-gradient(135deg,#4f46e5,#6366f1)',
+      background: adding ? '#94a3b8' : 'linear-gradient(135deg,#3b82f6,#3b82f6)',
       color: '#fff',
       fontSize: 13,
       fontWeight: 700,
@@ -22499,7 +24019,7 @@ window.AnalysisResults = function AnalysisResults(props) {
     style: {
       fontSize: 15,
       fontWeight: 600,
-      color: '#4f46e5',
+      color: '#3b82f6',
       marginBottom: 6
     }
   }, '"' + searchedKeyword + '" 분석 중...'), React.createElement('div', {
@@ -22513,7 +24033,7 @@ window.AnalysisResults = function AnalysisResults(props) {
   analysisData && React.createElement(window.SectionDivider, {
     label: '1. 종합 요약',
     icon: '📋',
-    color: '#4f46e5',
+    color: '#3b82f6',
     sub: '광고주가 가장 먼저 보는 핵심 지표'
   }), analysisData && analysisData.summaryCards && React.createElement(window.SectionErrorBoundary, {
     name: '종합 요약'
@@ -22547,7 +24067,19 @@ window.AnalysisResults = function AnalysisResults(props) {
   }, React.createElement(KeywordVolumeSection, {
     keyword: searchedKeyword,
     data: volumeData
-  })), /* [DATALAB] 12개월 검색량 트렌드 (꺾은선) */
+  })), /* [DATALAB] 일일 한도 소진 안내 — 서버 quotaNotice 수신 시에만 노출 */
+  datalabData && datalabData.quotaNotice && React.createElement('div', {
+    className: 'section fade-in',
+    style: {
+      background: '#fffbeb',
+      border: '1px solid #fde68a',
+      borderRadius: 10,
+      padding: '10px 14px',
+      color: '#92400e',
+      fontSize: 13,
+      lineHeight: 1.6
+    }
+  }, '⏳ ' + datalabData.quotaNotice), /* [DATALAB] 12개월 검색량 트렌드 (꺾은선) */
   datalabData && datalabData.trend && React.createElement(window.SectionErrorBoundary, {
     name: '검색량 트렌드'
   }, React.createElement(window.DatalabTrendSection, {
@@ -22644,19 +24176,25 @@ window.AnalysisResults = function AnalysisResults(props) {
     color: '#059669',
     sub: '노출순위 · 판매추정 · 리뷰 · SEO 4종'
   }),
-  /* 키워드별 노출 순위 — 상세 추적 UI는 📊 키워드 순위 탭으로 분리(2026-08-04).
-     1회성 조회는 이 카드가 계속 수행해 진입 전략·시장 매출이 소비(무회귀). */
+  /* 키워드별 노출 순위 — analysisOnly 모드(노출 분석·1회성 조회만, 보고서 구성 요소).
+     추적 상품 목록·등록 관리만 📊 키워드 순위 탭으로 분리(2026-08-04, 직원 신고로
+     노출 분석 블록은 복구 — 탭 분리 대상은 '추적 현황 열람'이지 분석 결과가 아님). */
   React.createElement(window.SectionErrorBoundary, {
     name: '순위 추적'
-  }, React.createElement(window.RankCheckCard, {
+  }, React.createElement(RankTrackingSection, {
+    analysisOnly: true,
+    onOpenRankTab: props.onOpenRankTab,
+    products: products,
+    refreshProducts: loadProducts,
     searchedKeyword: searchedKeyword,
     searchedProductUrl: searchedProductUrl,
-    cachedProductName: advertiserReport && advertiserReport.product_name ? advertiserReport.product_name : analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo.product_name : null,
+    cachedProductName: advertiserReport && advertiserReport.product_info && advertiserReport.product_info.product_name ? advertiserReport.product_info.product_name : advertiserReport && advertiserReport.product_name ? advertiserReport.product_name : analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo.product_name : null,
     relatedKeywords: relatedData ? (relatedData.golden_keywords || []).concat(relatedData.related_keywords || []).map(function (k) {
       return typeof k === 'string' ? k : k && k.keyword || '';
     }).filter(Boolean) : [],
-    onRankResult: setRankCheckResult,
-    onOpenRankTab: props.onOpenRankTab
+    onNavigateToClient: handleNavigateToClient,
+    canEdit: currentUser.role !== 'viewer',
+    onRankResult: setRankCheckResult
   })), /* 분석 상품 순위추적 원클릭 등록 */
   searchedProductUrl && React.createElement(window.SectionErrorBoundary, {
     name: '추적 등록'
@@ -22665,7 +24203,8 @@ window.AnalysisResults = function AnalysisResults(props) {
     searchedKeyword: searchedKeyword,
     products: products,
     refreshProducts: loadProducts,
-    canEdit: currentUser.role !== 'viewer'
+    canEdit: currentUser.role !== 'viewer',
+    storeNameHint: _realStoreName
   })), /* 판매량 추정 */
   analysisData && analysisData.salesEstimation && React.createElement(window.SectionErrorBoundary, {
     name: '판매량 추정'
@@ -22707,7 +24246,7 @@ window.AnalysisResults = function AnalysisResults(props) {
       var m = rankText.match(/(\d+)위/);
       return m ? parseInt(m[1]) : null;
     }() : null : null,
-    cachedProductName: advertiserReport && advertiserReport.product_name ? advertiserReport.product_name : analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo.product_name : null,
+    cachedProductName: advertiserReport && advertiserReport.product_info && advertiserReport.product_info.product_name ? advertiserReport.product_info.product_name : advertiserReport && advertiserReport.product_name ? advertiserReport.product_name : analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo.product_name : null,
     cachedTotalVolume: volumeData && volumeData[0] ? (volumeData[0].monthlyPcQcCnt || 0) + (volumeData[0].monthlyMobileQcCnt || 0) : null,
     cachedProductInfo: analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo : null,
     shopProducts: shopProducts,
@@ -22899,8 +24438,34 @@ window.PlaceRankChart = function PlaceRankChart(props) {
     }
   };
   var CANVAS_ID = 'place-rankchart';
+  /* 📸 이미지 저장 — 스토어 순위 추적과 동일한 공용 빌더(exportRankHistoryImage)로 렌더
+   * (헤더 카드·이력 표·변동 ▲▼·추이 차트·워터마크). 날것 차트 캔버스 덤프는 폴백만. */
   var saveImg = function () {
     try {
+      if (!series.length) {
+        try {
+          toast.warn('저장할 순위 데이터가 없습니다.');
+        } catch (e) {}
+        return;
+      }
+      if (window.exportRankHistoryImage) {
+        window.exportRankHistoryImage({
+          rows: series.map(function (p) {
+            return {
+              checked_at: p.date || '',
+              rank_position: p.rank == null ? null : p.rank,
+              type_label: p.state || '미확인',
+              rank_null_label: '–'
+            };
+          }),
+          storeName: props.businessName || '플레이스 업체',
+          keyword: keyword,
+          storeUrl: props.placeUrl || '',
+          days: days >= 365 ? 0 : days,
+          typeHeader: '상태'
+        });
+        return;
+      }
       var cv = document.getElementById(CANVAS_ID);
       var url = '';
       var ch = window.Chart && window.Chart.getChart && cv ? window.Chart.getChart(cv) : null;
@@ -23052,6 +24617,14 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
   var lastHtmlRef = useRef('');
   var aiTimerRef = useRef(null);
 
+  // ── 업체 저장 (스토어 SaveToClientSection 과 동일 규칙 — /cd/quick-register 재사용) ──
+  var _sb = useState(false);
+  var saveBusy = _sb[0],
+    setSaveBusy = _sb[1];
+  var _sm = useState(null);
+  var saveMsg = _sm[0],
+    setSaveMsg = _sm[1];
+
   // ==================== 유틸 ====================
   var METRIC_ORDER = ['rank', 'relevance', 'visitor_review', 'blog_review', 'save', 'photo', 'booking', 'review_keyword', 'activity', 'info'];
   var MEASURED = {
@@ -23147,6 +24720,11 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
     setLoading(true);
     lastHtmlRef.current = html;
     var body = {
+      // ⚠️ product_url 은 SeoAnalysisRequest 의 **필수 필드**다(쇼핑 경로용).
+      //    플레이스는 상품 URL 이 없어 안 보냈는데, 그러면 요청이 서버 검증에서
+      //    422 로 튕기고 화면엔 「[object Object]」만 떴다(2026-08-05 대표 신고).
+      //    플레이스 분기는 product_url 을 읽지 않으므로 빈 문자열로 형식만 맞춘다.
+      product_url: '',
       vertical: 'place',
       keyword: kw,
       region: region.trim(),
@@ -23350,13 +24928,13 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
         color: '#94a3b8',
         fontWeight: 400
       }
-    }, '(동/구/시/군)')), React_.createElement('input', {
+    }, '(동 이름 — 맞춤제안서와 같게)')), React_.createElement('input', {
       className: 'inp' + (region ? ' filled' : ''),
       value: region,
       onChange: function (e) {
         setRegion(e.target.value);
       },
-      placeholder: '예: 서울 성동구 성수동'
+      placeholder: '예: 성수동'
     })), React_.createElement('div', {
       className: 'field'
     }, React_.createElement('label', null, '플레이스 검색결과 캡처 ', React_.createElement('span', {
@@ -23540,8 +25118,8 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
     }, React_.createElement('div', {
       className: 'tile',
       style: {
-        background: 'linear-gradient(135deg,#4f46e5,#4f46e5cc)',
-        boxShadow: '0 4px 12px #4f46e540'
+        background: 'linear-gradient(135deg,#3b82f6,#3b82f6cc)',
+        boxShadow: '0 4px 12px #3b82f640'
       }
     }, '1'), React_.createElement('div', null, React_.createElement('h2', null, '종합 경쟁력'), React_.createElement('div', {
       className: 's'
@@ -23786,8 +25364,106 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
       series: chartSeries,
       keyword: chartKeyword || selectedKw,
       days: chartDays,
+      businessName: businessName,
       onDays: onChartDays
     })));
+  };
+
+  // ── 업체 저장 카드 (스토어와 동일 규칙: viewer=영업 대상 30일 유예 / 관리팀=광고주 영구) ──
+  var saveToClient = function (role) {
+    if (saveBusy) return;
+    var name = (businessName || '').trim();
+    var kw = (selectedKw || keywords[0] || '').trim();
+    if (!name) {
+      try {
+        toast.warn('업체명이 없습니다.');
+      } catch (e) {}
+      return;
+    }
+    if (!kw) {
+      try {
+        toast.warn('키워드가 없습니다.');
+      } catch (e) {}
+      return;
+    }
+    // 매칭된 플레이스 doc-id → 지도 링크.
+    // ⚠️ 종전엔 `result.rank_info.matched` 를 읽었는데 **응답에 rank_info 키 자체가 없어**
+    //    지도 링크가 늘 빈 값이었다(저장한 영업 대상을 다시 열면 빈 패널). 2026-08-05 수정.
+    //    서버가 내려주는 place_id 를 쓰고, 없으면 business_key 의 `doc:` 접두에서 뽑는다.
+    var pid = '';
+    try {
+      pid = String(result && result.place_id || '');
+      if (!pid) {
+        var bk = String(result && result.business_key || '');
+        if (bk.indexOf('doc:') === 0) pid = bk.slice(4);
+      }
+    } catch (e) {}
+    setSaveBusy(true);
+    setSaveMsg(null);
+    api.post('/cd/quick-register', {
+      name: name,
+      keyword: kw,
+      product_url: pid ? 'https://map.naver.com/p/entry/place/' + pid : '',
+      vertical: 'place',
+      role: role
+    }).then(function (res) {
+      setSaveBusy(false);
+      if (res && res.success) setSaveMsg({
+        ok: true,
+        text: res.message || '저장되었습니다.'
+      });else setSaveMsg({
+        ok: false,
+        text: res && (typeof res.detail === 'string' ? res.detail : res.error) || '저장에 실패했습니다.'
+      });
+    }).catch(function () {
+      setSaveBusy(false);
+      setSaveMsg({
+        ok: false,
+        text: '저장 중 오류가 발생했습니다.'
+      });
+    });
+  };
+  var renderSaveCard = function () {
+    var isViewer = currentUser.role === 'viewer';
+    var canAdv = currentUser.role === 'manager' || currentUser.role === 'superadmin';
+    return React_.createElement('div', {
+      className: 'card',
+      style: {
+        marginTop: 14
+      }
+    }, React_.createElement('h3', {
+      className: 'rt-h3'
+    }, React_.createElement('span', {
+      className: 'rt-hic'
+    }, '💾'), '업체 저장 ', React_.createElement('span', {
+      className: 'badge b-ok'
+    }, '스토어와 동일 규칙')), React_.createElement('div', {
+      className: 'rt-desc'
+    }, isViewer ? '이 업체를 내 영업 대상으로 저장합니다 — 본인만 열람 · 30일 후 자동 삭제(재저장 시 연장). 스토어 분석과 동일합니다.' : '이 업체를 광고주로 등록(영구)하거나 영업 대상으로 저장합니다 — 광고주 대시보드 목록·권한이 스토어와 동일한 파이프라인입니다.'), React_.createElement('div', {
+      style: {
+        display: 'flex',
+        gap: 8,
+        flexWrap: 'wrap',
+        alignItems: 'center'
+      }
+    }, canAdv && React_.createElement('button', {
+      className: 'btn btn-primary',
+      disabled: saveBusy,
+      onClick: function () {
+        saveToClient('advertiser');
+      }
+    }, saveBusy ? '저장 중…' : '⭐ 광고주로 등록 (영구)'), React_.createElement('button', {
+      className: canAdv ? 'btn btn-secondary' : 'btn btn-primary',
+      disabled: saveBusy,
+      onClick: function () {
+        saveToClient('prospect');
+      }
+    }, saveBusy ? '저장 중…' : '🎯 영업 대상으로 저장' + (isViewer ? ' (30일)' : ''))), saveMsg && React_.createElement('div', {
+      className: 'note ' + (saveMsg.ok ? 'ok' : 'est'),
+      style: {
+        marginTop: 10
+      }
+    }, (saveMsg.ok ? '✅ ' : '⚠️ ') + saveMsg.text));
   };
 
   // ── §3 경쟁 비교 ──
@@ -23993,7 +25669,7 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
     className: 'place-analysis'
   }, React_.createElement('div', {
     className: 'pa-wrap'
-  }, renderInput(), result && renderCover(), result && renderSec1(), result && renderSec2(), result && renderSec3(), result && renderSec4(), !result && React_.createElement('div', {
+  }, renderInput(), result && renderCover(), result && renderSec1(), result && renderSec2(), result && renderSec3(), result && renderSec4(), result && renderSaveCard(), !result && React_.createElement('div', {
     className: 'card',
     style: {
       textAlign: 'center',
@@ -24017,6 +25693,772 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
       marginTop: 6
     }
   }, '오프라인·지역 업종(카페·식당·병원·미용 등)의 플레이스 상위노출 경쟁력을 진단합니다.'))));
+};
+
+;/* ===== js/components/PlaceTrackingPage.jsx ===== */
+/* PlaceTrackingPage — 로직분석 「플레이스 추적」 전용 탭 (무인 순위 추적, v1)
+ *
+ * 확정 시안(2026-08-04 v2, Artifact 790e1710) 기준:
+ *  - 추적 대상 등록: 업체명·지역·키워드(최대 10, 지역 자동 합성 — 맞춤제안서와 동일 규칙)
+ *  - 추적 현황: 노출/미노출/미확인 필, (업체×키워드) 표, 행 클릭 → 순위 추이(PlaceRankChart 재사용)
+ *  - 수집은 「플레이스 순위 추적기」 확장(별개 설치)이 매일 06:30 무인 수행 → /api/place/ingest 기록
+ *  - 이 화면은 확장에 추적 목록을 동기화(METAINC_PLACE_TARGETS)하고 즉시 수집(METAINC_PLACE_RUN)을 요청
+ *
+ * 스파이크 실측(2026-08-04): 키워드에 지역이 포함되면 오가닉 순위는 검색 위치와 무관하게 재현
+ *  → 등록 시 지역 합성이 재현성의 핵심(좌표 고정 불필요).
+ * 스타일: css/place.css(.place-analysis 스코프) 재사용. */
+window.PlaceTrackingPage = function PlaceTrackingPage(props) {
+  var useState = React.useState,
+    useEffect = React.useEffect,
+    useRef = React.useRef;
+
+  // 사용 범주 = 스토어 순위 추적과 동일(2026-08-04 대표 확정):
+  // 영업사원(viewer)은 열람만(등록·삭제·일시중지·지금 수집 불가), 관리팀·관리자는 전체 가능. 서버 게이트와 이중.
+  var currentUser = props.currentUser;
+  var isViewer = !!(currentUser && currentUser.role === 'viewer');
+
+  // ── 목록 상태 ──
+  var _t = useState([]);
+  var targets = _t[0],
+    setTargets = _t[1];
+  var _ld = useState(false);
+  var loading = _ld[0],
+    setLoading = _ld[1];
+
+  // ── 등록 폼 ──
+  var _n = useState('');
+  var bizName = _n[0],
+    setBizName = _n[1];
+  var _r = useState('');
+  var region = _r[0],
+    setRegion = _r[1];
+  var _ki = useState('');
+  var kwInput = _ki[0],
+    setKwInput = _ki[1];
+  var _ks = useState([]);
+  var kws = _ks[0],
+    setKws = _ks[1];
+  var _sv = useState(false);
+  var saving = _sv[0],
+    setSaving = _sv[1];
+
+  // ── 확장 연동 상태 ──
+  var _ex = useState(false);
+  var extReady = _ex[0],
+    setExtReady = _ex[1];
+
+  // ── 행 펼침 차트 ──
+  var _open = useState('');
+  var openKey = _open[0],
+    setOpenKey = _open[1]; // 'bk||keyword'
+  var _cs = useState([]);
+  var chartSeries = _cs[0],
+    setChartSeries = _cs[1];
+  var _cd = useState(30);
+  var chartDays = _cd[0],
+    setChartDays = _cd[1];
+  var _pid = useState('');
+  var placeIdInput = _pid[0],
+    setPlaceIdInput = _pid[1];
+
+  // 플레이스 링크/ID → 숫자 ID 추출 (지도 주소 어느 형식이든: .../place/12345, m.place.naver.com/restaurant/12345/..., 숫자 단독)
+  function extractPlaceId(v) {
+    v = String(v || '').trim();
+    if (!v) return '';
+    if (/^\d{5,}$/.test(v)) return v;
+    var m = v.match(/(?:place|restaurant|cafe|hairshop|hospital|accommodation|attraction)\/(\d{5,})/);
+    if (m) return m[1];
+    m = v.match(/(\d{7,})/);
+    return m ? m[1] : '';
+  }
+
+  // ==================== 확장 브리지 ====================
+  // 러너 동기화는 항상 서버 전체 활성 목록(?active=1 — 러너 전용 격리 예외)으로 push:
+  // 화면 목록은 본인 것만(개인화)이지만, 무인 수집은 전 직원 등록분을 커버해야 하기 때문.
+  function pushTargetsToExt() {
+    api.get('/place/track-targets?active=1').then(function (res) {
+      if (!(res && res.success)) return;
+      var actives = (res.data && res.data.targets || []).map(function (t) {
+        return {
+          id: t.id,
+          business_name: t.business_name,
+          region: t.region,
+          place_id: t.place_id || '',
+          keyword: t.keyword
+        };
+      });
+      window.postMessage({
+        type: 'METAINC_PLACE_TARGETS',
+        payload: {
+          targets: actives
+        }
+      }, window.location.origin);
+    }).catch(function () {});
+  }
+  useEffect(function () {
+    var onMsg = function (ev) {
+      if (ev.source !== window || !ev.data) return;
+      if (ev.data.type === 'METAINC_PLACE_EXT_READY') {
+        setExtReady(true);
+        pushTargetsToExt(); // 연동 확인 즉시 목록 동기화
+      }
+    };
+    window.addEventListener('message', onMsg);
+    try {
+      window.postMessage({
+        type: 'METAINC_PLACE_PING'
+      }, window.location.origin);
+    } catch (e) {}
+    return function () {
+      window.removeEventListener('message', onMsg);
+    };
+  }, []);
+  function requestRunNow() {
+    try {
+      window.postMessage({
+        type: 'METAINC_PLACE_RUN'
+      }, window.location.origin);
+    } catch (e) {}
+    if (extReady) toast.success('⟳ 이 컴퓨터의 추적기에 수집을 요청했습니다 — 키워드당 30~50초, 완료되면 자동 기록됩니다.');else toast.warn('이 브라우저에 「플레이스 순위 추적기」 확장이 없습니다 — 추적 PC(맥북)에서는 매일 06:30 자동 수집됩니다.');
+  }
+
+  // ==================== 데이터 ====================
+  function load() {
+    setLoading(true);
+    api.get('/place/track-targets').then(function (res) {
+      setLoading(false);
+      if (res && res.success) {
+        var list = res.data && res.data.targets || [];
+        setTargets(list);
+        pushTargetsToExt();
+      }
+    }).catch(function () {
+      setLoading(false);
+    });
+  }
+  useEffect(function () {
+    load();
+  }, []);
+
+  // ==================== 등록 폼 ====================
+  function combinedPreview(kw) {
+    var reg = (region || '').trim();
+    if (!reg) return kw;
+    var norm = function (s) {
+      return String(s).toLowerCase().replace(/\s+/g, '');
+    };
+    return norm(kw).indexOf(norm(reg)) >= 0 ? kw : reg + ' ' + kw;
+  }
+  function addKw() {
+    var v = (kwInput || '').trim().replace(/,$/, '');
+    if (!v) return;
+    if (kws.length >= 10) {
+      toast.warn('키워드는 업체당 최대 10개입니다.');
+      return;
+    }
+    if (kws.indexOf(v) >= 0) {
+      setKwInput('');
+      return;
+    }
+    setKws(kws.concat([v]));
+    setKwInput('');
+  }
+  function onKwKey(e) {
+    if (e.nativeEvent && e.nativeEvent.isComposing) return; // 한글 IME 중복 방지
+    if (e.key === 'Enter' || e.key === ',') {
+      e.preventDefault();
+      addKw();
+    }
+  }
+  function submit() {
+    if (saving) return;
+    var name = (bizName || '').trim(),
+      reg = (region || '').trim();
+    var pending = (kwInput || '').trim();
+    var list = pending && kws.indexOf(pending) < 0 && kws.length < 10 ? kws.concat([pending]) : kws;
+    if (!name) {
+      toast.warn('업체명을 입력해주세요.');
+      return;
+    }
+    if (!reg) {
+      toast.warn('지역을 입력해주세요. (예: 성수동 — 순위 재현에 필요)');
+      return;
+    }
+    if (!list.length) {
+      toast.warn('추적 키워드를 1개 이상 입력해주세요.');
+      return;
+    }
+    var pid = '';
+    if ((placeIdInput || '').trim()) {
+      pid = extractPlaceId(placeIdInput);
+      if (!pid) {
+        toast.warn('플레이스 링크/ID를 인식하지 못했습니다 — 네이버 지도 업체 페이지 주소나 숫자 ID를 붙여넣어주세요. (비워두면 업체명으로 찾습니다)');
+        return;
+      }
+    }
+    setSaving(true);
+    api.post('/place/track-targets', {
+      business_name: name,
+      region: reg,
+      keywords: list,
+      place_id: pid
+    }).then(function (res) {
+      setSaving(false);
+      if (res && res.success) {
+        toast.success('✅ 추적 등록: ' + name + ' · 키워드 ' + (res.data && res.data.added || 0) + '개 — 다음 자동 수집부터 기록됩니다.');
+        setBizName('');
+        setRegion('');
+        setKws([]);
+        setKwInput('');
+        setPlaceIdInput('');
+        load();
+      } else {
+        toast.error(res && res.error || '등록에 실패했습니다.');
+      }
+    }).catch(function () {
+      setSaving(false);
+    });
+  }
+
+  // ==================== 행 액션 ====================
+  function toggleActive(t) {
+    api.patch('/place/track-targets/' + t.id, {
+      active: !t.active
+    }).then(function (res) {
+      if (res && res.success) load();
+    });
+  }
+  function removeTarget(t) {
+    if (!window.confirm('「' + t.business_name + ' · ' + t.keyword + '」 추적을 삭제할까요?\n(그동안 쌓인 순위 이력은 보존됩니다 — 재등록하면 이어집니다)')) return;
+    api.del('/place/track-targets/' + t.id).then(function (res) {
+      if (res && res.success) {
+        toast.success('삭제했습니다.');
+        load();
+      }
+    });
+  }
+  function toggleChart(t) {
+    var key = (t.business_key || '') + '||' + t.keyword;
+    if (openKey === key) {
+      setOpenKey('');
+      return;
+    }
+    setOpenKey(key);
+    loadSeries(t, chartDays);
+  }
+  function loadSeries(t, days) {
+    if (!t.business_key) {
+      setChartSeries([]);
+      return;
+    }
+    api.get('/place/rank-history?business=' + encodeURIComponent(t.business_key) + '&keyword=' + encodeURIComponent(t.keyword) + '&days=' + days).then(function (res) {
+      if (res && res.success) setChartSeries(res.data && res.data.series || []);
+    });
+  }
+
+  // ==================== 렌더 ====================
+  var pills = {
+    exposed: 0,
+    missing: 0,
+    unknown: 0,
+    none: 0
+  };
+  targets.forEach(function (t) {
+    if (!t.last) pills.none++;else if (t.last.state === '노출') pills.exposed++;else if (t.last.state === '미노출') pills.missing++;else pills.unknown++;
+  });
+
+  // 업체별 그룹(카드형) — 스토어 분석과 같은 개념: 업체 카드 안에 그 업체의 키워드·순위가 모임
+  var bizGroups = [];
+  var bizIdx = {};
+  targets.forEach(function (t) {
+    var gk = (t.business_name || '') + '|' + (t.region || '');
+    if (bizIdx[gk] === undefined) {
+      bizIdx[gk] = bizGroups.length;
+      bizGroups.push({
+        name: t.business_name,
+        region: t.region,
+        place_id: t.place_id || '',
+        items: []
+      });
+    }
+    var g = bizGroups[bizIdx[gk]];
+    if (!g.place_id && t.place_id) g.place_id = t.place_id;
+    g.items.push(t);
+  });
+  function bizSummary(g) {
+    var s = {
+      exposed: 0,
+      missing: 0,
+      wait: 0,
+      best: null
+    };
+    g.items.forEach(function (t) {
+      if (!t.last) s.wait++;else if (t.last.state === '노출') {
+        s.exposed++;
+        if (t.last.rank != null && (s.best === null || t.last.rank < s.best)) s.best = t.last.rank;
+      } else if (t.last.state === '미노출') s.missing++;else s.wait++;
+    });
+    return s;
+  }
+  function rankCell(t) {
+    if (!t.last || t.last.rank == null) {
+      return React.createElement('span', {
+        style: {
+          color: '#94a3b8',
+          fontWeight: 800
+        }
+      }, t.last && t.last.state === '미노출' ? '–' : '?');
+    }
+    var r = t.last.rank;
+    var col = r <= 10 ? '#059669' : r <= 30 ? '#d97706' : '#dc2626';
+    return React.createElement('span', null, React.createElement('span', {
+      style: {
+        fontFamily: 'SF Mono,JetBrains Mono,monospace',
+        fontWeight: 800,
+        fontSize: 15,
+        color: col
+      }
+    }, r), React.createElement('span', {
+      style: {
+        color: '#94a3b8',
+        fontSize: 11
+      }
+    }, '위'));
+  }
+  function stateChip(t) {
+    var st = t.last ? t.last.state : null;
+    var cls = st === '노출' ? 'kwchip' : st === '미노출' ? 'kwchip off' : 'kwchip unk';
+    var label = st || '이력 없음';
+    return React.createElement('span', {
+      className: cls,
+      style: {
+        cursor: 'default'
+      }
+    }, label);
+  }
+  function fmtDate(s) {
+    if (!s) return '-';
+    return String(s).slice(5, 10).replace('-', '.');
+  }
+  var bizCards = bizGroups.map(function (g, gi) {
+    var s = bizSummary(g);
+    var rowEls = [];
+    g.items.forEach(function (t) {
+      var key = (t.business_key || '') + '||' + t.keyword;
+      rowEls.push(React.createElement('div', {
+        key: 'r' + t.id,
+        onClick: function () {
+          toggleChart(t);
+        },
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '8px 2px',
+          borderTop: '1px solid #f1f5f9',
+          cursor: 'pointer',
+          opacity: t.active ? 1 : 0.45
+        }
+      }, React.createElement('span', {
+        title: t.keyword,
+        style: {
+          flex: 1,
+          minWidth: 0,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          fontFamily: 'SF Mono,JetBrains Mono,monospace',
+          fontSize: 12.5,
+          color: '#334155'
+        }
+      }, t.keyword), React.createElement('span', {
+        style: {
+          width: 52,
+          textAlign: 'right',
+          flexShrink: 0
+        }
+      }, rankCell(t)), React.createElement('span', {
+        style: {
+          flexShrink: 0
+        }
+      }, stateChip(t)), React.createElement('span', {
+        style: {
+          width: 42,
+          textAlign: 'center',
+          flexShrink: 0,
+          color: '#94a3b8',
+          fontFamily: 'SF Mono,monospace',
+          fontSize: 11.5
+        }
+      }, t.last ? fmtDate(t.last.checked_at) : '-'), isViewer ? null : React.createElement('button', {
+        className: 'btn btn-secondary btn-sm',
+        style: {
+          flexShrink: 0
+        },
+        onClick: function (e) {
+          e.stopPropagation();
+          toggleActive(t);
+        },
+        title: t.active ? '일시중지 — 자동 수집에서 제외' : '재개'
+      }, t.active ? '⏸' : '▶'), isViewer ? null : React.createElement('button', {
+        className: 'btn btn-secondary btn-sm',
+        style: {
+          flexShrink: 0
+        },
+        onClick: function (e) {
+          e.stopPropagation();
+          removeTarget(t);
+        }
+      }, '✕')));
+      if (openKey === key) {
+        rowEls.push(React.createElement('div', {
+          key: 'x' + t.id,
+          className: 'subcard',
+          style: {
+            margin: '4px 0 8px'
+          }
+        }, window.PlaceRankChart ? React.createElement(window.PlaceRankChart, {
+          series: chartSeries,
+          keyword: t.keyword,
+          days: chartDays,
+          businessName: t.business_name,
+          placeUrl: t.place_id ? 'https://map.naver.com/p/entry/place/' + t.place_id : '',
+          onDays: function (d) {
+            setChartDays(d);
+            loadSeries(t, d);
+          }
+        }) : React.createElement('div', {
+          className: 'empty'
+        }, '차트 컴포넌트를 불러올 수 없습니다.')));
+      }
+    });
+    return React.createElement('div', {
+      key: 'g' + gi,
+      className: 'card',
+      style: {
+        padding: '14px 16px',
+        alignSelf: 'start'
+      }
+    }, React.createElement('div', {
+      style: {
+        display: 'flex',
+        alignItems: 'baseline',
+        justifyContent: 'space-between',
+        gap: 8,
+        flexWrap: 'wrap',
+        marginBottom: 8
+      }
+    }, React.createElement('div', {
+      style: {
+        minWidth: 0
+      }
+    }, React.createElement('div', {
+      style: {
+        fontWeight: 800,
+        fontSize: 15,
+        color: '#0f172a'
+      }
+    }, '📍 ' + (g.name || '')), React.createElement('div', {
+      style: {
+        color: '#94a3b8',
+        fontSize: 11.5,
+        marginTop: 1
+      }
+    }, (g.region || '') + (g.place_id ? ' · ID ' + g.place_id : ''))), React.createElement('div', {
+      style: {
+        display: 'flex',
+        gap: 6,
+        alignItems: 'center',
+        flexWrap: 'wrap'
+      }
+    }, s.best != null ? React.createElement('span', {
+      style: {
+        fontSize: 12.5,
+        fontWeight: 800,
+        color: '#059669'
+      }
+    }, '최고 ' + s.best + '위') : null, React.createElement('span', {
+      className: 'ps ps-g',
+      style: {
+        fontSize: 11
+      }
+    }, '노출 ' + s.exposed), React.createElement('span', {
+      className: 'ps ps-r',
+      style: {
+        fontSize: 11
+      }
+    }, '미노출 ' + s.missing), s.wait ? React.createElement('span', {
+      className: 'ps ps-n',
+      style: {
+        fontSize: 11
+      }
+    }, '대기 ' + s.wait) : null)), rowEls);
+  });
+  var kwChipsEls = kws.map(function (k, i) {
+    return React.createElement('span', {
+      key: k,
+      className: 'kwchip cur',
+      style: {
+        margin: '2px 4px 2px 0',
+        cursor: 'pointer'
+      },
+      title: '분석 키워드: ' + combinedPreview(k) + ' (클릭 시 제거)',
+      onClick: function () {
+        setKws(kws.filter(function (_, j) {
+          return j !== i;
+        }));
+      }
+    }, combinedPreview(k) + ' ✕');
+  });
+  return React.createElement('div', {
+    className: 'place-analysis'
+  }, React.createElement('div', {
+    className: 'pa-wrap',
+    style: {
+      maxWidth: 1180,
+      margin: '0 auto',
+      padding: '18px 16px 60px'
+    }
+  },
+  // ── 헤더 ──
+  React.createElement('div', {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      flexWrap: 'wrap',
+      gap: 10,
+      margin: '4px 0 12px'
+    }
+  }, React.createElement('div', null, React.createElement('h2', {
+    style: {
+      margin: 0,
+      fontSize: 19
+    }
+  }, '📊 플레이스 추적'), React.createElement('div', {
+    style: {
+      color: '#64748b',
+      fontSize: 12.5,
+      marginTop: 2
+    }
+  }, '등록한 업체×키워드를 추적 PC가 매일 06:30 무인 수집 → 순위 이력 자동 기록')), isViewer ? React.createElement('span', {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 700,
+      borderRadius: 999,
+      padding: '3px 10px',
+      background: '#f1f5f9',
+      border: '1px solid #e2e8f0',
+      color: '#64748b'
+    }
+  }, '👁 열람 전용 (등록·관리는 관리팀)') : React.createElement('div', {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement('span', {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 700,
+      borderRadius: 999,
+      padding: '3px 10px',
+      background: extReady ? '#dcfce7' : '#f1f5f9',
+      border: '1px solid ' + (extReady ? '#bbf7d0' : '#e2e8f0'),
+      color: extReady ? '#059669' : '#94a3b8'
+    }
+  }, extReady ? '🧩 이 브라우저 추적기 연동됨' : '🧩 이 브라우저엔 추적기 없음'), React.createElement('button', {
+    className: 'btn btn-primary btn-sm',
+    onClick: requestRunNow
+  }, '⟳ 지금 수집'))),
+  // ── 등록 카드 (영업사원은 안내로 대체 — 스토어 순위 추적과 동일 범주) ──
+  isViewer ? React.createElement('div', {
+    className: 'note est',
+    style: {
+      marginBottom: 14
+    }
+  }, '🔒 플레이스 순위 추적 등록·관리는 관리팀 권한입니다(스토어 순위 추적과 동일 기준). ', '영업 대상 분석은 「📍 플레이스 분석」 탭에서 자유롭게 사용할 수 있습니다. 추적이 필요한 업체는 관리팀에 요청해주세요.') : React.createElement('div', {
+    className: 'card',
+    style: {
+      marginBottom: 14
+    }
+  }, React.createElement('div', {
+    style: {
+      fontWeight: 800,
+      fontSize: 14.5,
+      marginBottom: 10
+    }
+  }, '➕ 추적 대상 등록'), React.createElement('div', {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'minmax(160px,1.2fr) minmax(120px,0.9fr) minmax(220px,2fr) auto',
+      gap: 10,
+      alignItems: 'end'
+    }
+  }, React.createElement('div', null, React.createElement('label', {
+    style: {
+      display: 'block',
+      fontSize: 11.5,
+      fontWeight: 700,
+      color: '#64748b',
+      marginBottom: 4
+    }
+  }, '업체명 *'), React.createElement('input', {
+    type: 'text',
+    value: bizName,
+    placeholder: '예: 성수동 감성카페',
+    onChange: function (e) {
+      setBizName(e.target.value);
+    },
+    style: {
+      width: '100%',
+      boxSizing: 'border-box',
+      border: '1px solid #e2e8f0',
+      borderRadius: 9,
+      padding: '8px 10px',
+      fontSize: 13
+    }
+  })), React.createElement('div', null, React.createElement('label', {
+    style: {
+      display: 'block',
+      fontSize: 11.5,
+      fontWeight: 700,
+      color: '#64748b',
+      marginBottom: 4
+    }
+  }, '지역 *'), React.createElement('input', {
+    type: 'text',
+    value: region,
+    placeholder: '예: 성수동',
+    onChange: function (e) {
+      setRegion(e.target.value);
+    },
+    style: {
+      width: '100%',
+      boxSizing: 'border-box',
+      border: '1px solid #e2e8f0',
+      borderRadius: 9,
+      padding: '8px 10px',
+      fontSize: 13
+    }
+  })), React.createElement('div', null, React.createElement('label', {
+    style: {
+      display: 'block',
+      fontSize: 11.5,
+      fontWeight: 700,
+      color: '#64748b',
+      marginBottom: 4
+    }
+  }, '추적 키워드 (Enter로 추가 · 최대 10)'), React.createElement('div', {
+    style: {
+      border: '1px solid #e2e8f0',
+      borderRadius: 9,
+      padding: '4px 8px',
+      background: '#fbfcfe',
+      display: 'flex',
+      flexWrap: 'wrap',
+      alignItems: 'center',
+      minHeight: 36
+    }
+  }, kwChipsEls, React.createElement('input', {
+    type: 'text',
+    value: kwInput,
+    placeholder: kws.length ? '' : '예: 카페, 브런치',
+    onChange: function (e) {
+      setKwInput(e.target.value);
+    },
+    onKeyDown: onKwKey,
+    style: {
+      flex: 1,
+      minWidth: 90,
+      border: 0,
+      outline: 'none',
+      background: 'transparent',
+      fontSize: 13,
+      padding: '4px 2px'
+    }
+  }))), React.createElement('button', {
+    className: 'btn btn-primary',
+    onClick: submit,
+    disabled: saving
+  }, saving ? '등록 중…' : '등록')), React.createElement('div', {
+    style: {
+      marginTop: 10
+    }
+  }, React.createElement('label', {
+    style: {
+      display: 'block',
+      fontSize: 11.5,
+      fontWeight: 700,
+      color: '#64748b',
+      marginBottom: 4
+    }
+  }, '플레이스 링크 또는 ID (선택 — 넣으면 이름 대신 ID로 정확 매칭)'), React.createElement('input', {
+    type: 'text',
+    value: placeIdInput,
+    placeholder: '예: https://m.place.naver.com/restaurant/1234567890 · 네이버 지도 업체 페이지 주소를 그대로 붙여넣으세요',
+    onChange: function (e) {
+      setPlaceIdInput(e.target.value);
+    },
+    style: {
+      width: '100%',
+      boxSizing: 'border-box',
+      border: '1px solid #e2e8f0',
+      borderRadius: 9,
+      padding: '8px 10px',
+      fontSize: 13
+    }
+  }), (placeIdInput || '').trim() ? React.createElement('div', {
+    style: {
+      fontSize: 11.5,
+      marginTop: 4,
+      fontWeight: 700,
+      color: extractPlaceId(placeIdInput) ? '#059669' : '#dc2626'
+    }
+  }, extractPlaceId(placeIdInput) ? '✓ 인식된 플레이스 ID: ' + extractPlaceId(placeIdInput) : '✕ ID를 인식하지 못했습니다 — 지도 업체 페이지 주소 또는 숫자 ID를 넣어주세요') : null), React.createElement('div', {
+    className: 'note est',
+    style: {
+      marginTop: 10
+    }
+  }, 'ℹ️ 키워드는 자동으로 「지역 + 키워드」로 저장됩니다(예: 성수동 + 카페 → 성수동 카페). 지역이 포함된 키워드는 검색 위치와 무관하게 순위가 재현됩니다(실측 검증). 플레이스 ID를 비워두면 업체명으로 찾고, 첫 노출 때 ID가 자동 저장됩니다.')),
+  // ── 현황 필 ──
+  React.createElement('div', {
+    className: 'pills',
+    style: {
+      margin: '2px 0 10px'
+    }
+  }, React.createElement('span', {
+    className: 'ps ps-g'
+  }, '노출 ' + pills.exposed), React.createElement('span', {
+    className: 'ps ps-r'
+  }, '미노출 ' + pills.missing), React.createElement('span', {
+    className: 'ps ps-n'
+  }, '미확인 ' + pills.unknown + (pills.none ? ' · 이력 없음 ' + pills.none : ''))),
+  // ── 목록 (업체별 카드) ──
+  loading ? React.createElement('div', {
+    className: 'card'
+  }, React.createElement('div', {
+    className: 'empty'
+  }, '불러오는 중…')) : targets.length === 0 ? React.createElement('div', {
+    className: 'card'
+  }, React.createElement('div', {
+    className: 'empty'
+  }, '아직 추적 대상이 없습니다 — 위에서 업체와 키워드를 등록하면 다음 자동 수집(매일 06:30)부터 순위가 기록됩니다.')) : React.createElement('div', {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 430px), 1fr))',
+      gap: 12,
+      alignItems: 'start'
+    }
+  }, bizCards),
+  // ── 안내 ──
+  React.createElement('div', {
+    className: 'note ok',
+    style: {
+      marginTop: 12
+    }
+  }, '✅ 수집은 「플레이스 순위 추적기」 확장이 설치된 추적 PC(24시간 크롬)가 매일 06:30 자동으로 수행합니다. ', '확장이 없는 PC에서도 등록만 해두면 됩니다 — 추적 PC가 수집 직전 최신 등록 목록을 자동으로 받아 갑니다. ', '키워드 행을 클릭하면 일자별 순위 추이를 볼 수 있고, 수동 「📍 플레이스 분석」과 같은 이력에 이어집니다.')));
 };
 
 ;/* ===== js/analysis.jsx ===== */
@@ -24845,7 +27287,7 @@ window.createDoSearch = function (deps) {
             label: '상품명 최적화',
             score: kwInTitle ? titleLen >= 20 && titleLen <= 50 ? 95 : 70 : 30,
             maxScore: 100,
-            color: '#6366f1'
+            color: '#3b82f6'
           }, {
             label: '가격 경쟁력',
             score: function () {
@@ -25159,7 +27601,7 @@ window.App = function App() {
   // URL hash에서 현재 페이지 복원 (새로고침 시 탭 유지)
   var _getPageFromHash = function () {
     var hash = window.location.hash.replace('#', '');
-    var validPages = ['home', 'place', 'analysis', 'rank', 'management', 'learning', 'seo', 'guide', 'settings'];
+    var validPages = ['home', 'place', 'placetrack', 'analysis', 'rank', 'management', 'learning', 'seo', 'guide', 'settings'];
     return validPages.indexOf(hash) !== -1 ? hash : 'home';
   };
   const [currentPage, setCurrentPage] = useState(_getPageFromHash);
@@ -25346,6 +27788,47 @@ window.App = function App() {
     };
   }, []);
 
+  /* 📊 플레이스 추적기 브리지 — 무인 수집 결과 수신 → /api/place/ingest 기록 → ACK.
+     추적기(별개 확장) 미설치·결과 없음이면 아무 일도 하지 않음(기존 흐름 무영향). */
+  const lastPlaceIngestRef = React.useRef(0);
+  const placeIngestBusyRef = React.useRef(false);
+  useEffect(function () {
+    var onPlaceMsg = function (ev) {
+      if (ev.source !== window || !ev.data || ev.data.type !== 'METAINC_PLACE_RESULTS') return;
+      if (!currentUserRef.current) return; // 로그인 전 — 브리지가 재시도(최대 20시간)
+      var p = ev.data.payload || {};
+      var results = p.results || [];
+      if (!results.length) return;
+      var runId = Number(p.created_at) || 0;
+      if (runId && runId === lastPlaceIngestRef.current) return; // 같은 수집분 중복 기록 방지
+      if (placeIngestBusyRef.current) return; // 기록 중 재시도 무시
+      placeIngestBusyRef.current = true;
+      api.post('/place/ingest', {
+        results: results,
+        ran_at: p.ran_at || null,
+        source: p.source || null
+      }).then(function (res) {
+        placeIngestBusyRef.current = false;
+        if (res && res.success) {
+          lastPlaceIngestRef.current = runId || Date.now();
+          window.postMessage({
+            type: 'METAINC_PLACE_RESULTS_ACK'
+          }, window.location.origin);
+          var s = p.summary || {};
+          try {
+            toast.success('📊 플레이스 무인 수집 기록: 노출 ' + (s.exposed || 0) + ' · 미노출 ' + (s.missing || 0) + (s.unknown ? ' · 미확인 ' + s.unknown : ''));
+          } catch (e) {}
+        }
+      }).catch(function () {
+        placeIngestBusyRef.current = false;
+      }); // 실패 시 ACK 없음 → 브리지 재시도
+    };
+    window.addEventListener('message', onPlaceMsg);
+    return function () {
+      window.removeEventListener('message', onPlaceMsg);
+    };
+  }, []);
+
   /* 🧩 경쟁사 등록 모드 복원 — 확장이 연 새 로직 탭에서도 '이 분석 = 경쟁사' 흐름이 이어지게.
      진입(handleRegisterCompetitor) 시 localStorage에 저장한 컨텍스트를, 새 탭 로드 시 30분 이내면 복원.
      (일반 흐름엔 무영향: 저장된 값 없으면 아무 일도 안 함) */
@@ -25453,7 +27936,7 @@ window.App = function App() {
       justifyContent: 'center',
       alignItems: 'center',
       height: '100vh',
-      background: 'linear-gradient(135deg,#6C5CE7,#a29bfe)',
+      background: 'linear-gradient(135deg,#3b82f6,#93c5fd)',
       gap: 16
     }
   }, React.createElement('img', {
@@ -25573,7 +28056,7 @@ window.App = function App() {
   };
 
   /* ==================== 스토어 분석 → 키워드 순위 탭 이동 ====================
-     검색 컨텍스트는 RankCheckCard 가 sessionStorage('logic_rank_ctx')에 기록한 뒤 호출 */
+     검색 컨텍스트는 RankTrackingSection(analysisOnly)이 sessionStorage('logic_rank_ctx')에 기록한 뒤 호출 */
   var handleOpenRankTab = function () {
     setCurrentPage('rank');
     try {
@@ -25807,7 +28290,7 @@ window.App = function App() {
   /* ==================== 페이지별 콘텐츠 렌더링 ==================== */
 
   /* 홈 탭 — 업체 리스트 + 검색 */
-  if (currentPage === 'home') return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.TopBar, {
+  if (currentPage === 'home') return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.AppShellBar, {
     activePage: 'home',
     currentUser: currentUser,
     health: health,
@@ -25836,7 +28319,7 @@ window.App = function App() {
   React.createElement(window.Footer, null)), React.createElement(window.ChatWidget, {
     currentUser: currentUser
   }));
-  if (currentPage === 'management') return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.TopBar, {
+  if (currentPage === 'management') return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.AppShellBar, {
     activePage: 'management',
     currentUser: currentUser,
     health: health,
@@ -25853,7 +28336,7 @@ window.App = function App() {
   }));
 
   /* 📊 키워드 순위 탭 — 업체별 순위 추적 (스토어 분석에서 분리, 2026-08-04) */
-  if (currentPage === 'rank') return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.TopBar, {
+  if (currentPage === 'rank') return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.AppShellBar, {
     activePage: 'rank',
     currentUser: currentUser,
     health: health,
@@ -25866,7 +28349,7 @@ window.App = function App() {
   }));
 
   /* 플레이스 분석 탭 — 오프라인·지역 업종(자체완결 페이지, 스토어 분석 흐름과 독립) */
-  if (currentPage === 'place') return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.TopBar, {
+  if (currentPage === 'place') return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.AppShellBar, {
     activePage: 'place',
     currentUser: currentUser,
     health: health,
@@ -25876,7 +28359,17 @@ window.App = function App() {
   })), React.createElement(window.ChatWidget, {
     currentUser: currentUser
   }));
-  if (currentPage === 'learning') return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.TopBar, {
+  if (currentPage === 'placetrack') return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.AppShellBar, {
+    activePage: 'placetrack',
+    currentUser: currentUser,
+    health: health,
+    onNavigate: setCurrentPage
+  }), React.createElement(window.PlaceTrackingPage, {
+    currentUser: currentUser
+  })), React.createElement(window.ChatWidget, {
+    currentUser: currentUser
+  }));
+  if (currentPage === 'learning') return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.AppShellBar, {
     activePage: 'learning',
     currentUser: currentUser,
     health: health,
@@ -25886,7 +28379,7 @@ window.App = function App() {
   })), React.createElement(window.ChatWidget, {
     currentUser: currentUser
   }));
-  if (currentPage === 'guide') return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.TopBar, {
+  if (currentPage === 'guide') return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.AppShellBar, {
     activePage: 'guide',
     currentUser: currentUser,
     health: health,
@@ -25896,7 +28389,7 @@ window.App = function App() {
   })), React.createElement(window.ChatWidget, {
     currentUser: currentUser
   }));
-  if (currentPage === 'seo' && (currentUser.role === 'manager' || currentUser.role === 'superadmin')) return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.TopBar, {
+  if (currentPage === 'seo' && (currentUser.role === 'manager' || currentUser.role === 'superadmin')) return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.AppShellBar, {
     activePage: 'seo',
     currentUser: currentUser,
     health: health,
@@ -25906,7 +28399,7 @@ window.App = function App() {
   })), React.createElement(window.ChatWidget, {
     currentUser: currentUser
   }));
-  if (currentPage === 'users' && (currentUser.role === 'admin' || currentUser.role === 'superadmin')) return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.TopBar, {
+  if (currentPage === 'users' && (currentUser.role === 'admin' || currentUser.role === 'superadmin')) return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.AppShellBar, {
     activePage: 'users',
     currentUser: currentUser,
     health: health,
@@ -25917,7 +28410,7 @@ window.App = function App() {
   })), React.createElement(window.ChatWidget, {
     currentUser: currentUser
   }));
-  if (currentPage === 'settings' && currentUser.role === 'superadmin') return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.TopBar, {
+  if (currentPage === 'settings' && currentUser.role === 'superadmin') return React.createElement(React.Fragment, null, React.createElement('div', null, React.createElement(window.AppShellBar, {
     activePage: 'settings',
     currentUser: currentUser,
     health: health,
@@ -25936,7 +28429,7 @@ window.App = function App() {
   return React.createElement(React.Fragment, null, React.createElement('div', {
     className: 'analysis-page'
   }, /* 네비게이션 바 */
-  React.createElement(window.TopBar, {
+  React.createElement(window.AppShellBar, {
     activePage: 'analysis',
     currentUser: currentUser,
     health: health,
