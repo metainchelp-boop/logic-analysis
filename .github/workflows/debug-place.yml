@@ -615,8 +615,12 @@ jobs:
           command_timeout: 60s
           script: |
             echo "== 자동 등록 가드 (업체명 == 키워드면 등록 안 함) =="
-            N=$(docker exec -i logic-analysis grep -c "업체명과 같은 키워드" /app/backend/main.py || echo 0)
-            echo "매칭 $N 건 → $([ "$N" -gt 0 ] && echo '가드 있음(배포 반영됨)' || echo '가드 없음(미반영)')"
+            # ⚠️ 컨테이너 안 코드 경로를 가정하지 말 것 — 먼저 찾고 센다(경로 오타는 「가드 없음」 오판을 만든다).
+            F=$(docker exec -i logic-analysis sh -c "find /app -maxdepth 3 -name main.py 2>/dev/null | head -1")
+            echo "코드 경로: ${F:-찾지 못함}"
+            N=$(docker exec -i logic-analysis sh -c "grep -c '업체명과 같은 키워드' '$F' 2>/dev/null" || echo 0)
+            N=${N:-0}
+            echo "매칭 $N 건 → $([ "$N" -gt 0 ] && echo '가드 있음(배포 반영됨)' || echo '가드 없음 — 경로부터 의심할 것')"
             docker inspect -f 'StartedAt={{.State.StartedAt}}' logic-analysis
 
       - name: 제안서 enrich 재현 진단
