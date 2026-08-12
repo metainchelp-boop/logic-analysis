@@ -257,17 +257,7 @@ jobs:
             #    ③ 우리 추적 상품이 '광고 자리' 순위로 기록되고 있었는지
             import re as _re
             print("\n[광고 혼입 실측 — 오늘 수집분 전수]")
-            ids = set()
-            for sql in ("SELECT product_id FROM tracked_products",
-                        "SELECT product_url FROM clients"):
-                try:
-                    for r in c.execute(sql):
-                        m2 = _re.findall(r"(\d{8,})", str(r[0] or ""))
-                        if m2: ids.add(m2[-1])
-                except Exception as e:
-                    print("  대상 조회 실패:", e)
-            a100, a300, deep, shifts, samples = [], [], [], [], []
-            hit = adhit = 0
+            a100, a300, deep = [], [], []
             for r in c.execute("""SELECT keyword, products_json FROM collected_serp
                                    WHERE collected_date = date('now','localtime')"""):
                 try:
@@ -277,21 +267,11 @@ jobs:
                 o = 0
                 ad_all = ad_100 = 0
                 for p in prods:
-                    isad = "adcr" in str(p.get("link") or "")
-                    if isad:
+                    if "adcr" in str(p.get("link") or ""):
                         ad_all += 1
                         if int(p.get("rank") or 0) <= 100: ad_100 += 1
                     else:
                         o += 1
-                    pid = str(p.get("productId") or "")
-                    if pid and pid in ids:
-                        hit += 1
-                        if isad:
-                            adhit += 1
-                            if len(samples) < 5:
-                                samples.append(f"{r['keyword']} · 기록순위 {p.get('rank')} · {str(p.get('title'))[:24]}")
-                        else:
-                            shifts.append(int(p.get("rank") or 0) - o)
                 a100.append(ad_100); a300.append(ad_all); deep.append(o)
             if a100:
                 a100.sort(); a300.sort(); deep.sort()
@@ -301,12 +281,41 @@ jobs:
                 print(f"     전체 수집분 중 광고: 중앙값 {a300[m]}개 · 최대 {a300[-1]}")
                 print(f"  ② 광고 빼면 남는 깊이: 중앙값 {deep[m]}개 · 최소 {deep[0]} · 최대 {deep[-1]}")
                 print(f"     ⇒ 300 미만이면 4페이지로는 오가닉 300위를 못 채운다(페이지 추가 판단 근거)")
-            print(f"  ③ 추적 상품 매칭 {hit}건 · 그중 광고 자리로 기록된 것 {adhit}건")
-            if shifts:
-                shifts.sort()
-                print(f"     오가닉 매칭분 순위 보정폭: 중앙값 {shifts[len(shifts)//2]}계단 앞당겨짐 · 최대 {shifts[-1]}계단")
-            for x in samples:
-                print(f"     [광고 자리 표본] {x}")
+
+            # ③ 우리 추적 상품이 '자기 광고 자리'로 기록돼 있었는지.
+            #    ⚠️ 이게 있으면 광고를 빼는 순간 그 업체 순위는 오히려 뒤로 간다(진짜 오가닉 위치).
+            #    무거운 JSON 파싱 대신 sqlite json_each 로 서버가 걸러내게 한다.
+            print("\n[추적 상품이 '광고 자리'로 기록됐는지 — 최근 3일 수집분]")
+            ids = set()
+            for sql in ("SELECT product_id FROM tracked_products",
+                        "SELECT naver_store_url FROM clients"):
+                try:
+                    for r in c.execute(sql):
+                        m2 = _re.findall(r"(\d{8,})", str(r[0] or ""))
+                        if m2: ids.add(m2[-1])
+                except Exception as e:
+                    print("  대상 조회 실패:", e)
+            print(f"  대조 대상 상품ID {len(ids)}개")
+            if ids:
+                ph = ",".join("?" * len(ids))
+                q3 = f"""SELECT cs.keyword k, json_extract(j.value,'$.rank') r,
+                                json_extract(j.value,'$.link') l
+                           FROM collected_serp cs, json_each(cs.products_json) j
+                          WHERE cs.collected_date >= date('now','localtime','-2 day')
+                            AND json_extract(j.value,'$.productId') IN ({ph})"""
+                tot3 = ad3 = 0; ex = []
+                try:
+                    for r in c.execute(q3, tuple(ids)):
+                        tot3 += 1
+                        if "adcr" in str(r["l"] or ""):
+                            ad3 += 1
+                            if len(ex) < 8: ex.append(f"{r['k']} · 기록순위 {r['r']}")
+                    pct3 = round(ad3 * 100 / tot3, 1) if tot3 else 0
+                    print(f"  매칭 {tot3}건 · 그중 광고 자리 {ad3}건 ({pct3}%)")
+                    for x in ex: print(f"    [광고 자리] {x}")
+                    print("  ⇒ 광고 자리 건은 수정 후 '진짜 오가닉 위치'로 바뀐다(더 뒤일 수 있음)")
+                except Exception as e:
+                    print("  대조 실패:", e)
 
             # ⭐ 광고 혼입이 '플랜 B 전환(8/8)부터의 회귀'인지, 원래 그랬는지.
             #    7/31 공식 API 종료 전 = 광고 없는 오가닉이었다 → 창을 셋으로 갈라 계단이 어디서 생겼는지 본다.
