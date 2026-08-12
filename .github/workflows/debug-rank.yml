@@ -11,7 +11,7 @@ on:
         required: false
         default: 'off'
       rank_link:
-        description: '순위 축 브리지 — off(기본) / impact(통합 시 영향 측정·배포 전 가능) / stats / preview / apply'
+        description: '순위 축 브리지 — off(기본) / stats / preview / apply'
         required: false
         default: 'off'
 
@@ -301,7 +301,7 @@ jobs:
               echo
             fi
             RL="${{ github.event.inputs.rank_link }}"
-            if [ -n "$RL" ] && [ "$RL" != "off" ] && [ "$RL" != "impact" ]; then
+            if [ -n "$RL" ] && [ "$RL" != "off" ]; then
               echo "== 순위 축 브리지 ($RL) =="
               # 실제 진입점(rank_link 모듈)을 그대로 호출한다 — 내부 로직 재현 금지 원칙.
               docker exec -i -e RL_MODE="$RL" logic-analysis python3 - <<'PY'
