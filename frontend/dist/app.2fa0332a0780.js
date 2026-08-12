@@ -25301,10 +25301,9 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
     // (utils.placeCombineKeyword — 서버와 같은 규칙, 「해보기 전엔 모른다」 제거).
     renderKeywordPreview(),
     // 3행: 분석 실행 (스토어 2행과 동일 구도 — 왼쪽 안내 · 오른쪽 실행 버튼)
-    // ⭐ 종전엔 이 자리가 「HTML 붙여넣기(필수)」였다. 순위·리뷰를 캡처로만 얻던
-    //    시절의 구조인데, 실제로는 그 경로가 한 번도 성공하지 못했고(2026-08-12 실측:
-    //    수동 분석 기록 전건 미확인·리뷰 0행) 지금은 지도 순위 추적이 매일 무인으로
-    //    채운다 → 붙여넣기를 **선택(고급)** 으로 내리고 동선을 두 칸으로 줄였다.
+    // ⭐ 분석은 **등록하지 않는다**(2026-08-12 대표 확정 — 스토어와 같은 규칙).
+    //    이 업체의 순위를 매일 재려면 관리팀이 지도 순위 추적에 등록해야 하고,
+    //    등록 전이라면 이 회차 순위는 아래 붙여넣기로만 잰다.
     React_.createElement('div', {
       style: {
         display: 'grid',
@@ -25318,8 +25317,8 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
         alignItems: 'center',
         gap: 10,
         padding: '9px 14px',
-        background: '#ecfdf5',
-        border: '1px solid #a7f3d0',
+        background: '#f8fafc',
+        border: '1px solid #e2e8f0',
         borderRadius: 10
       }
     }, React_.createElement('span', {
@@ -25335,15 +25334,15 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
       style: {
         fontSize: 12,
         fontWeight: 700,
-        color: '#065f46'
+        color: '#334155'
       }
-    }, '준비 끝 — 바로 실행하세요'), React_.createElement('span', {
+    }, '분석은 검색량·동네 상권·기회 키워드까지 함께 만듭니다'), React_.createElement('span', {
       style: {
         fontSize: 11,
-        color: '#047857',
+        color: '#64748b',
         marginLeft: 8
       }
-    }, '분석하면 이 업체가 ', React_.createElement('strong', null, '지도 순위 추적'), '에 자동 등록되고, 순위·리뷰는 ', React_.createElement('strong', null, '매일 아침 자동'), '으로 채워집니다. 따로 등록할 필요 없습니다.'))), React_.createElement('button', {
+    }, '순위·경쟁사는 아래 ', React_.createElement('strong', null, '검색결과 붙여넣기'), '로 잽니다. 매일 자동으로 재려면 관리팀이 ', React_.createElement('strong', null, '지도 순위 추적'), '에 등록합니다.'))), React_.createElement('button', {
       className: 'btn-search',
       disabled: loading || !canSubmit,
       onClick: function () {
@@ -25363,8 +25362,10 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
         borderWidth: 2
       }
     }), ' 분석 중...') : '분석 실행')),
-    // 4행: 고급(선택) — 캡처 붙여넣기. 기본 접힘이라 평소엔 눈에 안 띈다.
+    // 4행: 검색결과 붙여넣기(선택). ⭐ 자동 등록을 없앤 뒤로 **추적 미등록 업체의
+    //    순위를 재는 유일한 경로**라 기본 펼침으로 둔다(접어 두면 순위 칸이 조용히 빈다).
     React_.createElement('details', {
+      open: true,
       style: {
         border: '1px solid #e5e7eb',
         borderRadius: 10,
@@ -25379,14 +25380,14 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
         color: '#475569',
         listStyle: 'revert'
       }
-    }, '🔎 경쟁사 목록까지 보려면 (선택)', React_.createElement('span', {
+    }, '🔎 순위·경쟁사를 보려면 — 검색결과 붙여넣기 (선택)', React_.createElement('span', {
       style: {
         fontWeight: 400,
         color: '#94a3b8',
         marginLeft: 8,
         fontSize: 11
       }
-    }, '검색결과 화면을 캡처해 붙여넣으면 그 시점의 경쟁 업체가 함께 분석됩니다')), React_.createElement('div', {
+    }, '붙이지 않으면 순위·경쟁사만 비고 나머지 분석은 그대로 나옵니다')), React_.createElement('div', {
       style: {
         padding: '4px 14px 14px',
         display: 'flex',
@@ -25656,23 +25657,6 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
   // ── 캡처 판독 경고 ──
   // 「점수가 낮은 것」과 「입력이 빈 것」은 완전히 다른 이야기다. 판독이 안 됐으면
   // 점수 위에 그 사실부터 알린다(no-export: 광고주 전달본에는 나가지 않는다).
-  // ── 자동 추적 등록 알림 ──
-  // 분석을 뽑는 것만으로 추적 등록이 끝났음을 그 자리에서 알린다. 순위 칸이 비어 있어도
-  // 「고장」이 아니라 「아직 안 잰 것」임을 읽히게 하는 것이 목적(no-export: 광고주 전달본 제외).
-  var renderAutoTracked = function () {
-    if (!result || !result.auto_tracked) return null;
-    return React_.createElement('div', {
-      className: 'capwarn no-export',
-      style: {
-        background: '#ecfdf5',
-        borderColor: '#a7f3d0'
-      }
-    }, React_.createElement('span', {
-      className: 'ci'
-    }, '📍'), React_.createElement('div', null, React_.createElement('b', null, '지도 순위 추적에 등록했습니다'), React_.createElement('div', {
-      className: 'cw'
-    }, '이 업체·키워드가 방금 자동 등록됐습니다. 내일 아침부터 순위와 리뷰 수가 매일 자동으로 쌓이고, ', '제안서·보고서에도 그 값이 실립니다. 따로 등록하실 필요 없습니다.')));
-  };
   var renderCaptureWarn = function () {
     var cap = result.capture || {};
     if (!cap.warning) return null;
@@ -25696,8 +25680,9 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
     var rankTxt = result.rank_state === '노출' && result.rank ? result.rank + '위' : result.rank_state === '미노출' ? '순위 밖' : null;
     // ⚠️ 캡처가 선택이 된 뒤로 「미확인」의 뜻이 갈린다 — 안 붙인 정상 경로에까지
     //    「캡처 재시도 필요」를 띄우면 멀쩡한 흐름이 고장으로 읽힌다(2026-08-12).
+    //    붙이지 않았고 추적 등록도 없으면 「아직 아무도 안 쟀다」가 정확한 말이다.
     var _capGiven = !!(result.capture && result.capture.provided);
-    var rankSub = result.rank_state === '미확인' ? _capGiven ? '캡처 재시도 필요' : '지도 순위 추적이 매일 자동으로 잽니다' : '‘' + (result.keyword || '') + '’ 오가닉 기준';
+    var rankSub = result.rank_state === '미확인' ? _capGiven ? '캡처 재시도 필요' : '검색결과를 붙여넣으면 이 회차 순위를 잽니다' : '‘' + (result.keyword || '') + '’ 오가닉 기준';
     var rankHint = '광고 제외';
     // 캡처로 못 잰 회차(미확인)라도 이 업체가 지도 순위 추적에 등록돼 있으면 매일 수집된
     // 최신 순위가 있다 — 그 값을 대신 싣고 **출처를 명시**한다(캡처 실측과 섞지 않는다).
@@ -25793,7 +25778,7 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
       className: 'section'
     }, React_.createElement('div', {
       className: 'container'
-    }, renderAutoTracked(), renderCaptureWarn(), renderKpis(), React_.createElement('div', {
+    }, renderCaptureWarn(), renderKpis(), React_.createElement('div', {
       className: 'card',
       style: {
         marginTop: 14

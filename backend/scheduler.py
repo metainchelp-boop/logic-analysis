@@ -937,11 +937,11 @@ def _run_rank_link_maintenance():
 
 
 def _run_place_auto_track_cleanup():
-    """자동 등록된 플레이스 추적 대상 중 30일 넘게 안 쓰인 것을 비활성으로 내린다.
+    """(레거시 정리) 자동 등록으로 생긴 추적 대상 중 30일 넘게 안 쓰인 것을 비활성으로 내린다.
 
-    ⚠️ 「안 쓰였다」의 기준은 마지막으로 그 업체의 제안서·분석을 뽑은 시각(`last_used_at`)이다 —
-       수집이 도는 것만으로는 갱신되지 않는다(수집은 등록돼 있으면 무조건 돌기 때문).
-    행은 남기므로 다시 제안서를 뽑으면 그 자리에서 되살아난다(ensure 가 last_used_at 갱신).
+    ⚠️ 자동 등록 기능은 폐지됐다(2026-08-12 — 분석·제안서는 추적에 등록하지 않는다. 스토어와
+       같은 규칙). 신규 auto_added=1 행은 더는 생기지 않으므로, 이 잡은 폐지 전에 생긴 행만
+       정리한다. 사람이 등록한 행(auto_added=0)은 영향 없음.
     """
     try:
         from database import deactivate_stale_auto_place_targets

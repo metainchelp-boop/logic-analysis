@@ -1625,11 +1625,9 @@ def _place_seo_analyze(req: "SeoAnalysisRequest", current_user: dict = None):
         # 적어도('미사동맛집') 이 축이 살아 있어야 한다(2026-08-12). 추적 등록·조회에는 안 쓴다.
         origin_kw = _strip_region_from_keyword(region, base_kw)
 
-        # 분석을 한 번 돌리면 그 업체×키워드가 추적에 자동 등록된다(2026-08-12) — 이 회차의 캡처
-        # 판독 성패와 무관하게, 다음 수집부터 순위·리뷰가 무인으로 쌓인다.
-        _auto = _place_auto_track(
-            (req.target_name or "").strip(), region, base_kw,
-            (business_key[4:] if business_key.startswith("doc:") else ""), current_user)
+        # ⚠️ 분석은 **등록하지 않는다**(2026-08-12 대표 확정 — 스토어 규칙에 통일).
+        #    한때 분석·제안서를 뽑으면 추적 키워드가 자동 등록되게 했으나, 스토어는 분석과 등록이
+        #    분리돼 있고 그쪽이 기준이다. 추적 등록은 지도 순위 추적 화면에서 관리팀이 명시적으로.
         market = {}
         try:
             market = _place_market_block(
@@ -1721,9 +1719,6 @@ def _place_seo_analyze(req: "SeoAnalysisRequest", current_user: dict = None):
                 "market": market,
                 # 지도 순위 추적 최신 기록 — 캡처 미확인이어도 추적 순위를 보고서에 반영
                 "tracking": tracking,
-                # 이번 분석으로 추적 등록이 새로 생겼는지 — 화면이 「내일 아침부터 자동으로
-                # 순위·리뷰가 쌓입니다」를 안내한다(빈 칸이 「고장」이 아니라 「아직 안 잼」임을 밝힘).
-                "auto_tracked": bool(_auto.get("created")),
                 # 노출 개선 시뮬레이션 · 90일 로드맵(계산 — 보장 아님)
                 "improve": improve,
                 "analyzed_at": datetime.now().isoformat(),
@@ -1829,9 +1824,9 @@ def place_proposal_enrich(req: PlaceProposalEnrichRequest,
         # 이 축이 없으면 병기가 영영 비어 있다(2026-08-12 실측: '미사동맛집' → 전체 시장 None).
         origin_kw = _strip_region_from_keyword(region, base_kw)
 
-        # 제안서를 뽑는 것만으로 추적 등록이 된다 — 영업사원이 등록 화면을 따로 열 필요가 없다.
-        # (이번 응답에는 아직 순위가 없을 수 있고, 다음 수집부터 쌓인다.)
-        _auto = _place_auto_track(name, region, base_kw, place_id, current_user)
+        # ⚠️ 제안서 발행은 **등록하지 않는다**(2026-08-12 대표 확정 — 스토어 규칙에 통일).
+        #    이 경로는 사람(영업사원)만 부르는 게 아니라 ①(전산) 공유 대시보드 배치도 매일 부른다.
+        #    조회 전용이어야 안전하다(부수효과를 붙이면 기계 호출이 데이터를 만든다).
 
         # 1) 검색량(검색광고 API) — 실패/미조회 시 null(가짜 0 금지)
         #    ⚠️ 지역 키워드는 검색량이 매우 작다(실측: '구로동 고기' 20회/월). 그 숫자만 내밀면
@@ -1900,6 +1895,15 @@ def place_proposal_enrich(req: PlaceProposalEnrichRequest,
                 last = rank_series[-1]
                 rank = last.get("rank")
                 rank_state = last.get("state") or ""
+
+        # 2-b) 지도 순위 추적 **등록 여부** — 기록이 없을 때 「미등록」과 「등록됐는데 아직 수집 전」을
+        #      화면이 구분해 안내하기 위한 신호(제안서 발행은 등록하지 않는다).
+        _tracked_registered = False
+        try:
+            from database import is_place_tracked
+            _tracked_registered = is_place_tracked(name, region, place_id)
+        except Exception as e:
+            logger.warning(f"[proposal-enrich] 추적 등록 여부 조회 생략(무시): {e}")
 
         # 3) 이 업체가 추적 중인 키워드 전체 + 각 최신 순위·검색량 (지역 황금 키워드 축·실데이터)
         keyword_rows = []
@@ -1972,9 +1976,9 @@ def place_proposal_enrich(req: PlaceProposalEnrichRequest,
             "rankKeyword": (matched_kw if rank_series else None),
             "trackedKeywords": keyword_rows,  # 지역 황금 키워드 축(추적 중 키워드+검색량+순위)
             "hasTracking": bool(rank_series),
-            # 이번에 추적 등록이 새로 생겼는지 — 제안서 화면이 「내일 아침부터 순위가 쌓입니다」를
-            # 안내해 「왜 순위가 비었지」를 「아직 안 잰 것」으로 읽히게 한다(가산 필드·무회귀).
-            "autoTracked": bool(_auto.get("created")),
+            # 지도 순위 추적 **등록 여부**(기록 유무와 다른 질문 — 순위 칸이 빈 이유를 가른다).
+            # 제안서 발행은 등록하지 않으므로, 미등록이면 화면이 「관리팀에 등록 요청」을 안내한다.
+            "registered": _tracked_registered,
         }}
     except Exception as e:
         logger.error(f"[proposal-enrich] 실패: {e}")
@@ -2023,44 +2027,6 @@ def _place_registry_business_key(place_id: str, business_name: str, region: str)
     name = place_crawler._norm(business_name or "")
     reg = place_crawler._norm(region or "")
     return f"nm:{name}|{reg}" if name else ""
-
-
-def _place_auto_track(name: str, region: str, base_kw: str, place_id: str, current_user) -> dict:
-    """제안서·플레이스 분석을 뽑으면 그 업체×키워드를 **추적에 자동 등록**한다(2026-08-12).
-
-    영업사원 동선을 0으로 만드는 지점 — 등록 화면에 갈 필요 없이 평소대로 제안서/분석만 뽑으면
-    다음 수집부터 순위·리뷰가 저절로 쌓인다. 이미 있으면 「방금 또 썼다」만 갱신한다.
-
-    ⚠️ 등록 키워드는 **추적이 쓰는 형태(지역 합성)** 여야 한다 — 화면에 적은 원 키워드로 넣으면
-       러너가 다른 검색어로 수집해 조회 키가 또 갈린다(`_combine_region_keyword` 단일 규칙).
-    ⚠️ 실패해도 본 작업(제안서·분석)은 그대로 성립해야 하므로 전부 무해 실패.
-
-    ⚠️ **업체명과 같은 키워드는 등록하지 않는다**(2026-08-12). 자기 상호로 지도를 검색하면
-       당연히 자기가 1위라 순위 지표가 되지 못하는데, 그게 등록되면
-         · 수집기가 매일 그 검색어를 실제로 조회하고(불필요한 네이버 호출)
-         · 「업체명 → 1위」가 광고주 화면에 성과처럼 표시된다.
-       실제로 ①(전산) 공유 대시보드가 이 엔드포인트를 소비하면서 사람이 적는 키워드가 없어
-       **`keyword` 자리에 업체명을** 넣어 보내는 것이 확인됐다(2026-08-12 ①→② 통지).
-       사람이 직접 상호를 키워드로 적어도 결과는 같으므로, 호출자를 가리지 않고 여기서 막는다.
-       (등록이 필요하면 지도 순위 추적 화면에서 사람이 명시적으로 넣으면 된다.)
-    """
-    try:
-        if not (name or "").strip() or not (base_kw or "").strip():
-            return {"created": False}
-        if place_crawler._norm(base_kw) == place_crawler._norm(name):
-            return {"created": False, "reason": "업체명과 같은 키워드 — 순위 지표가 아니라 등록하지 않음"}
-        from database import ensure_place_track_target
-        r = ensure_place_track_target(
-            business_name=name, region=region,
-            keyword=_combine_region_keyword(region, base_kw),
-            place_id=place_id or "",
-            user_id=(current_user or {}).get("id", 0))
-        if r.get("created"):
-            logger.info(f"[플레이스] 추적 자동 등록 — {name} · {r.get('id')}")
-        return r
-    except Exception as e:
-        logger.warning(f"[플레이스] 추적 자동 등록 실패(무시): {e}")
-        return {"created": False}
 
 
 def _place_track_denied(current_user) -> bool:
