@@ -1247,7 +1247,7 @@ def add_track_keyword(client_id: int, req: TrackKeywordRequest,
         if not client:
             raise HTTPException(status_code=404, detail="업체를 찾을 수 없습니다.")
         if client["vertical"] != "store":
-            raise HTTPException(status_code=400, detail="플레이스 업체는 플레이스 추적 탭에서 등록해주세요.")
+            raise HTTPException(status_code=400, detail="플레이스 업체는 「지도 순위 추적」 탭에서 등록해주세요.")
         if client["role"] != "advertiser":
             raise HTTPException(status_code=400, detail=(
                 "영업 대상 업체는 일일 자동 추적 대상이 아닙니다. "
