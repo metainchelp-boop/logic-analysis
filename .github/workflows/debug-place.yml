@@ -51,6 +51,10 @@ on:
         description: '행정동 매칭 정확도 실측 — 지역명 쉼표 구분(예: 역삼동,성사동,구로동,미사동). 반경 안 상가를 여러 건 받아 행정동 분포·최빈값·시군구 일치를 본다. 읽기 전용'
         default: ''
 
+      addr_probe:
+        description: '주소 기반 해석 가능성 실측 — "업체명|지역" 세미콜론 구분(예: 밀밭칼국수|성사동;프로힐링지압안마원|조원동). 지역검색이 주는 주소·상가 응답 필드를 본다. 읽기 전용'
+        default: ''
+
 jobs:
   diagnose:
     runs-on: ubuntu-latest
@@ -1505,4 +1509,96 @@ jobs:
             print("=" * 74)
             print("판독: 최빈 행정동이 입력 지역과 맞고 1건째만 어긋난다면 → 원인은 '표본 1건'이다.")
             print("      시군구 분포가 한 곳으로 몰리면 → 시군구 단위는 안전하게 확정할 수 있다.")
+            PY
+
+      # ── 주소 기반 해석 가능성 실측 (2026-08-12) ──────────────────────────
+      # 대표 질문: 「100%가 되려면?」
+      # 지금 우리는 지역검색을 부르면서 mapx/mapy 만 쓰고 **address·roadAddress 를 버린다**.
+      # 주소에는 시·도/시군구/동이 다 들어 있으므로, 그걸 쓰면 ⑴ 동명이동(수원 조원동 vs
+      # 관악구 조원동)이 원천 해결되고 ⑵ 좌표로 얻은 행정동이 맞는 시군구인지 대조할 수 있다.
+      # 추가 호출 0(이미 부르는 응답의 안 쓰던 필드) — 실제로 오는지 눈으로 확인한다.
+      # 전 호출 읽기 전용·키 값 미출력.
+      - name: 주소 기반 해석 가능성 실측
+        if: ${{ github.event.inputs.addr_probe != '' }}
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          ADDRQ: ${{ github.event.inputs.addr_probe }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 420s
+          envs: ADDRQ
+          script: |
+            docker exec -i -e ADDRQ="$ADDRQ" logic-analysis python3 - <<'PY'
+            import os, re, json, urllib.parse, urllib.request, traceback
+            import sbiz365
+
+            pairs = []
+            for chunk in (os.getenv("ADDRQ", "") or "").split(";"):
+                if not chunk.strip():
+                    continue
+                bits = chunk.split("|")
+                pairs.append(((bits[0] if bits else "").strip(),
+                              (bits[1] if len(bits) > 1 else "").strip()))
+            print("=" * 76)
+            print(f"[주소 기반 해석] 대상 {pairs}")
+
+            cid = os.getenv("NAVER_CLIENT_ID", "").strip()
+            csec = os.getenv("NAVER_CLIENT_SECRET", "").strip()
+            print(f"네이버 지역검색 키: {'있음' if (cid and csec) else '없음'}")
+
+            def local(q, n=3):
+                url = ("https://openapi.naver.com/v1/search/local.json?"
+                       + urllib.parse.urlencode({"query": q, "display": n}))
+                req = urllib.request.Request(url, headers={
+                    "X-Naver-Client-Id": cid, "X-Naver-Client-Secret": csec})
+                with urllib.request.urlopen(req, timeout=8) as r:
+                    return (json.loads(r.read().decode("utf-8", "replace")).get("items") or [])
+
+            for name, reg in pairs:
+                print("-" * 76)
+                print(f"■ 업체 {name!r} · 지역 {reg!r}")
+                for q in ([f"{name} {reg}", name] if name else [reg]):
+                    try:
+                        items = local(q)
+                    except Exception as e:
+                        print(f"  검색어 {q!r} → 실패 {type(e).__name__} {e}")
+                        continue
+                    print(f"  검색어 {q!r} → {len(items)}건")
+                    for it in items[:3]:
+                        t = re.sub(r"<[^>]+>", "", str(it.get("title") or ""))
+                        print(f"     · {t}")
+                        print(f"       address     = {it.get('address')!r}")
+                        print(f"       roadAddress = {it.get('roadAddress')!r}")
+                        print(f"       category    = {it.get('category')!r}")
+                    if items:
+                        break
+
+            # data.go.kr 상가 응답에 법정동/행정동 코드가 함께 오는지 — 주소→코드 매핑 가능성
+            print("-" * 76)
+            print("■ 상가 응답 필드(법정동·행정동 코드가 같이 오는가)")
+            try:
+                key = sbiz365._env_keys()["datago"]
+                base = "http://apis.data.go.kr/B553077/api/open/sdsc2/storeListInRadius"
+                qs = urllib.parse.urlencode({"radius": "500", "cx": 127.0276, "cy": 37.4979,
+                                             "type": "json", "numOfRows": "1", "pageNo": "1"})
+                req = urllib.request.Request(f"{base}?serviceKey={key}&{qs}",
+                                             headers={"Accept": "application/json"})
+                with urllib.request.urlopen(req, timeout=15) as r:
+                    d = json.loads(r.read().decode("utf-8", "replace"))
+                items = ((d.get("body") or {}).get("items")) or []
+                if items:
+                    it = items[0]
+                    keys = sorted(it.keys())
+                    print(f"  필드 {len(keys)}개: {keys}")
+                    for k in keys:
+                        if any(w in k.lower() for w in ("dong", "cd", "nm", "adr", "addr")):
+                            print(f"    {k:16s} = {it.get(k)!r}")
+            except Exception as e:
+                print("  실패:", type(e).__name__, e); traceback.print_exc()
+
+            print("=" * 76)
+            print("판독: address 에 시·도/시군구/동이 다 들어 있으면 → 동명이동을 입력 없이도 가른다.")
+            print("      상가 응답에 법정동·행정동 코드가 함께 오면 → 주소만으로 admiCd 확정 가능.")
             PY
