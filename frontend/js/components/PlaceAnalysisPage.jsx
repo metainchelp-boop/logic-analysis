@@ -76,6 +76,13 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
         if (t >= 30) return 'D'; return 'F';
     };
     var fmtN = function(n) { return (window.fmt ? window.fmt(n) : (n == null ? '-' : String(n))); };
+    // 외부 통계 API 의 증감률은 소수점이 그대로 온다(-2.8169014084507045) — 표기는 소수 1자리로.
+    // 맞춤제안서 pctTxt 와 같은 규칙(공통 파일이 없어 규칙만 맞춘다).
+    var pctTxt = function(r) {
+        if (r == null || isNaN(Number(r))) return '';
+        var n = Number(r);
+        return (n >= 0 ? '+' : '') + (Math.round(n * 10) / 10) + '%';
+    };
 
     var suppPayload = function() {
         var p = {};
@@ -953,6 +960,9 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
         rows.sort(function(a, b) { return (a.rank || 999) - (b.rank || 999); });
         var maxV = Math.max.apply(null, rows.map(function(r) { return r.visitor_reviews || 0; }).concat([1]));
         var rkClass = function(r) { return r == null ? '' : r <= 5 ? 'rk-hi' : r <= 15 ? 'rk-mid' : 'rk-lo'; };
+        // ⚠️ 캡처는 선택이다 — 안 붙인 정상 경로에 「다시 캡처해 보세요」를 띄우면
+        //    멀쩡한 흐름이 고장으로 읽힌다(§1 KPI 와 같은 규칙, 2026-08-12).
+        var _capGiven = !!(result.capture && result.capture.provided);
         return (
             React_.createElement(React_.Fragment, null,
                 React_.createElement(window.SectionDivider, { label: '3. 경쟁 진단', icon: '⚔️', color: '#ef4444', sub: "누구와 싸우고 있나 — '" + (result.keyword || '') + "' 상위 노출 업체 · 상권 경쟁 밀도" }),
@@ -961,9 +971,15 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
                 React_.createElement('div', { className: 'card' },
                     React_.createElement('h3', { className: 'rt-h3' }, React_.createElement('span', { className: 'rt-hic' }, '⚔️'), '상위 노출 경쟁사 비교 ',
                         React_.createElement('span', { className: 'badge b-ok' }, '✅ 실측')),
-                    React_.createElement('div', { className: 'rt-desc' }, '캡처 검색결과의 상위 오가닉 업체를 내 업체와 정면 비교합니다. 방문자·블로그 리뷰는 캡처에서 인식된 값입니다.'),
+                    React_.createElement('div', { className: 'rt-desc' },
+                        (comps.length === 0 && !_capGiven)
+                            ? '검색결과를 붙여넣으면 상위 오가닉 업체를 내 업체와 정면 비교합니다.'
+                            : '캡처 검색결과의 상위 오가닉 업체를 내 업체와 정면 비교합니다. 방문자·블로그 리뷰는 캡처에서 인식된 값입니다.'),
                     comps.length === 0
-                        ? React_.createElement('div', { className: 'empty' }, '캡처에서 경쟁사 지표를 인식하지 못했습니다. 검색결과 HTML을 다시 캡처해 보세요.')
+                        ? React_.createElement('div', { className: 'empty' },
+                            _capGiven
+                                ? '캡처에서 경쟁사 지표를 인식하지 못했습니다. 검색결과 목록 화면에서(업체 상세 화면이 아니라) 다시 캡처해 보세요.'
+                                : '아직 경쟁사를 비교하지 않았습니다. 위 「검색결과 붙여넣기」에 지도 검색결과를 넣고 다시 분석하면 상위 업체와 나란히 볼 수 있습니다.')
                         : React_.createElement('div', { className: 'twrap' },
                             React_.createElement('table', null,
                                 React_.createElement('thead', null, React_.createElement('tr', null,
@@ -1007,7 +1023,7 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
                         React_.createElement('div', { style: { fontSize: 12, color: 'var(--pa-sub)', marginTop: 4 } },
                             (sb.district && sb.district.admiNm ? sb.district.admiNm : (result.region || region)),
                             (sb.industryNm ? (' · ' + sb.industryNm) : ''),
-                            (sb.shops && sb.shops.momRate != null) ? (' · 전월 대비 ' + (sb.shops.momRate > 0 ? '+' : '') + sb.shops.momRate + '%') : ''))
+                            (sb.shops && sb.shops.momRate != null) ? (' · 전월 대비 ' + pctTxt(sb.shops.momRate)) : ''))
                     : null,
                 ad
                     ? React_.createElement('div', { className: 'mini' },
