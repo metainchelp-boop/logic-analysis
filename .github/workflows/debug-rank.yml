@@ -177,6 +177,16 @@ jobs:
                    END { for (k in last) printf "  %-14s 마지막접속 %s (%d건) · 마지막업로드 %s (%d건)\n",
                                               k, last[k], n[k], (k in lastup ? lastup[k] : "없음"), up[k] }' \
                 || echo "  (집계 실패)"
+              echo "-- 지도 순위 기록(place/ingest)을 보내는 IP — 어느 기계가 플레이스를 도는지 --"
+              # 플레이스 러너는 로직 탭(브라우저)을 거쳐 기록하므로 그 PC 의 IP 로 잡힌다.
+              for f in /var/log/nginx/access.log.1 /var/log/nginx/access.log; do
+                [ -f "$f" ] && cat "$f"
+              done 2>/dev/null | grep -E 'api/place/(ingest|track-targets)' \
+                | awk '{ split($1,o,"."); m=o[1]"."o[2]".x.x"; t=$4; gsub(/^\[/,"",t);
+                        p=$7; sub(/\?.*$/,"",p); sub(/^.*\/place\//,"",p);
+                        key=m" "p; cnt[key]++; last[key]=t }
+                   END { for (k in cnt) printf "  %-26s %s건 · 마지막 %s\n", k, cnt[k], last[k] }' \
+                | sort || echo "  (기록 없음)"
               echo
               docker exec -i logic-analysis python3 - <<'PY'
             import os, sqlite3
