@@ -47,6 +47,10 @@ on:
         description: '검색어트렌드 원문 확인 — 성별·연령 필터 응답이 요청마다 따로 정규화되는지(=서로 비교 불가인지) 실측. 키워드 입력(예: 마사지)'
         default: ''
 
+      admi_probe:
+        description: '행정동 매칭 정확도 실측 — 지역명 쉼표 구분(예: 역삼동,성사동,구로동,미사동). 반경 안 상가를 여러 건 받아 행정동 분포·최빈값·시군구 일치를 본다. 읽기 전용'
+        default: ''
+
 jobs:
   diagnose:
     runs-on: ubuntu-latest
@@ -1419,4 +1423,86 @@ jobs:
             print("      그러면 남/여, 연령대끼리 값을 비교하는 건 무의미하다(우리 계산이 틀림).")
             print("      최대값이 서로 다르면 → 같은 자를 쓴 것이라 비중 계산 가능.")
             print("=" * 68)
+            PY
+
+      # ── 행정동 매칭 정확도 실측 (2026-08-12) ────────────────────────────
+      # 대표 지적: 「너무 세부적으로 가면 범위가 좁아 정확하지 않은 데이터가 나온다.
+      #            큰 범위로 지정해 보고서가 실행되게 하면 안 되나」
+      # 지금 `_coord_to_admi` 는 반경 안 상가를 **numOfRows=1** 로 딱 1건만 받아
+      # 그 1건의 adongCd 를 쓴다 → 경계 근처면 옆 동이 잡힌다(역삼동→서초2동 실측).
+      # 여러 건을 받아 분포를 보면 ⑴ 최빈 행정동이 맞는지 ⑵ 시군구는 흔들리는지가 갈린다.
+      # 전 호출 읽기 전용·키 값 미출력.
+      - name: 행정동 매칭 정확도 실측
+        if: ${{ github.event.inputs.admi_probe != '' }}
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          ADMIQ: ${{ github.event.inputs.admi_probe }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 420s
+          envs: ADMIQ
+          script: |
+            docker exec -i -e ADMIQ="$ADMIQ" logic-analysis python3 - <<'PY'
+            import os, json, collections, urllib.parse, urllib.request, traceback
+            import sbiz365
+
+            regions = [r.strip() for r in (os.getenv("ADMIQ", "") or "").split(",") if r.strip()]
+            print("=" * 74)
+            print(f"[행정동 매칭 정확도] 대상 {regions}")
+            key = sbiz365._env_keys()["datago"]
+            print(f"data.go.kr 키: {'등록됨 len=' + str(len(key)) if key else '없음'}")
+
+            def stores_in_radius(x, y, radius, rows=100):
+                base = "http://apis.data.go.kr/B553077/api/open/sdsc2/storeListInRadius"
+                qs = urllib.parse.urlencode({"radius": str(radius), "cx": x, "cy": y,
+                                             "type": "json", "numOfRows": str(rows), "pageNo": "1"})
+                url = f"{base}?serviceKey={key}&{qs}"
+                req = urllib.request.Request(url, headers={"Accept": "application/json"})
+                with urllib.request.urlopen(req, timeout=15) as r:
+                    d = json.loads(r.read().decode("utf-8", "replace"))
+                return ((d.get("body") or {}).get("items")) or []
+
+            for reg in regions:
+                print("-" * 74)
+                print(f"■ 지역 {reg!r}")
+                # 지금 코드와 같은 검색어 순서로 좌표를 얻는다(업체명 없음 = 최악 조건)
+                for q in (f"{reg} 주민센터", reg):
+                    coord = sbiz365._region_coord(q)
+                    print(f"  검색어 {q!r} → 좌표 {coord}")
+                    if not coord:
+                        continue
+                    for radius in (500, 1000):
+                        try:
+                            items = stores_in_radius(coord[0], coord[1], radius)
+                        except Exception as e:
+                            print(f"    반경 {radius}m: 조회 실패 {type(e).__name__} {e}")
+                            continue
+                        if not items:
+                            print(f"    반경 {radius}m: 상가 0건")
+                            continue
+                        dong = collections.Counter()
+                        gu = collections.Counter()
+                        for it in items:
+                            dn, gn = it.get("adongNm"), it.get("signguNm")
+                            if dn: dong[dn] += 1
+                            if gn: gu[gn] += 1
+                        top_d = dong.most_common(3)
+                        top_g = gu.most_common(2)
+                        first = items[0]
+                        print(f"    반경 {radius}m · 상가 {len(items)}건")
+                        print(f"      지금 방식(1건째)   : {first.get('signguNm')} {first.get('adongNm')}")
+                        print(f"      행정동 분포 상위3   : {top_d}")
+                        print(f"      시군구 분포 상위2   : {top_g}")
+                        # 지금 가드가 통과시킬지 — 1건째 기준 vs 최빈 기준
+                        mk = lambda nm, gn: {"admiNm": nm, "guNm": gn}
+                        ok_first = sbiz365._admi_matches_region(mk(first.get("adongNm"), None), reg)
+                        ok_top = sbiz365._admi_matches_region(mk(top_d[0][0] if top_d else "", None), reg)
+                        print(f"      가드 통과 — 1건째 {ok_first} / 최빈 {ok_top}")
+                    break   # 첫 좌표만 본다(지금 코드도 후보 순서대로 하나씩 시도)
+
+            print("=" * 74)
+            print("판독: 최빈 행정동이 입력 지역과 맞고 1건째만 어긋난다면 → 원인은 '표본 1건'이다.")
+            print("      시군구 분포가 한 곳으로 몰리면 → 시군구 단위는 안전하게 확정할 수 있다.")
             PY
