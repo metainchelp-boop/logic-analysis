@@ -15583,6 +15583,21 @@ window.ClientDashboard = function ClientDashboard({
   const [viewMode, setViewMode] = useState('history');
   const [message, setMessage] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  /* 업체 종류 분리(2026-08-12 대표 지시 — 「스토어랑 플레이스가 같이 있으니 불편하다」).
+     목록 자체를 갈라 본다. 고른 값은 사람별로 기억한다(매번 다시 누르지 않게). */
+  const [vertical, setVertical] = useState(function () {
+    try {
+      return localStorage.getItem('cdVertical') || 'all';
+    } catch (e) {
+      return 'all';
+    }
+  });
+  var setVerticalKeep = function (v) {
+    setVertical(v);
+    try {
+      localStorage.setItem('cdVertical', v);
+    } catch (e) {}
+  };
   const [showExportMenu, setShowExportMenu] = useState(false);
   const exportMenuRef = React.useRef(null);
   const [aiInsights, setAiInsights] = useState(null);
@@ -15673,8 +15688,25 @@ window.ClientDashboard = function ClientDashboard({
     });
   };
 
-  /* 업체 검색 필터 */
-  var filteredClients = clients.filter(function (c) {
+  /* 업체 종류 — 'place' 가 아니면 전부 스토어(옛 행은 vertical 이 비어 있다).
+     목록 배지(📍)가 쓰는 판정과 같은 규칙이라 화면 안에서 어긋나지 않는다. */
+  var isPlaceClient = function (c) {
+    return (c && c.vertical) === 'place';
+  };
+  var placeCount = clients.filter(isPlaceClient).length;
+  var storeCount = clients.length - placeCount;
+  /* 한 종류만 있으면 버튼이 소음이라 감춘다. 감춘 상태에서 옛 선택(localStorage)이
+     남아 목록이 텅 비면 되돌릴 방법이 없으므로, 감출 땐 '전체'로 취급한다. */
+  var showVerticalTabs = placeCount > 0 && storeCount > 0;
+  var effVertical = showVerticalTabs ? vertical : 'all';
+
+  /* 업체 검색 필터 — **고른 종류 안에서만** 찾는다(검색 목록 자체를 분리) */
+  var byVertical = clients.filter(function (c) {
+    if (effVertical === 'place') return isPlaceClient(c);
+    if (effVertical === 'store') return !isPlaceClient(c);
+    return true;
+  });
+  var filteredClients = byVertical.filter(function (c) {
     if (!searchQuery.trim()) return true;
     var q = searchQuery.trim().toLowerCase();
     return (c.name || '').toLowerCase().indexOf(q) !== -1 || (c.main_keywords || '').toLowerCase().indexOf(q) !== -1 || (c.business_name || '').toLowerCase().indexOf(q) !== -1;
@@ -15963,11 +15995,60 @@ window.ClientDashboard = function ClientDashboard({
     style: {
       fontSize: 16,
       fontWeight: 700,
-      marginBottom: 12
+      marginBottom: showVerticalTabs ? 8 : 12
     }
-  }, currentUser && currentUser.role === 'viewer' ? '내 영업 대상' : '내 업체 목록', " (", clients.length, ")"), clients.length > 3 && /*#__PURE__*/React.createElement("input", {
+  }, currentUser && currentUser.role === 'viewer' ? '내 영업 대상' : '내 업체 목록', " (", byVertical.length, ")"), showVerticalTabs && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 4,
+      marginBottom: 10,
+      background: '#f1f5f9',
+      borderRadius: 8,
+      padding: 3
+    }
+  }, [{
+    k: 'all',
+    label: '전체',
+    n: clients.length
+  }, {
+    k: 'store',
+    label: '🛒 스토어',
+    n: storeCount
+  }, {
+    k: 'place',
+    label: '📍 플레이스',
+    n: placeCount
+  }].map(function (t) {
+    var on = effVertical === t.k;
+    return /*#__PURE__*/React.createElement("button", {
+      key: t.k,
+      type: "button",
+      onClick: function () {
+        setVerticalKeep(t.k);
+      },
+      title: t.k === 'store' ? '스마트스토어 — 쇼핑 순위' : t.k === 'place' ? '스마트플레이스 — 지도 순위' : '스토어·플레이스 전부',
+      style: {
+        flex: 1,
+        border: 0,
+        cursor: 'pointer',
+        borderRadius: 6,
+        padding: '6px 4px',
+        fontSize: 11.5,
+        fontWeight: 800,
+        background: on ? '#fff' : 'transparent',
+        color: on ? '#1d4ed8' : '#64748b',
+        boxShadow: on ? '0 1px 3px rgba(15,23,42,.12)' : 'none',
+        whiteSpace: 'nowrap'
+      }
+    }, t.label, " ", /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontVariantNumeric: 'tabular-nums',
+        opacity: .75
+      }
+    }, t.n));
+  })), clients.length > 3 && /*#__PURE__*/React.createElement("input", {
     className: "form-input",
-    placeholder: "업체명 / 키워드 검색...",
+    placeholder: effVertical === 'place' ? '플레이스 업체 검색...' : effVertical === 'store' ? '스토어 업체 / 키워드 검색...' : '업체명 / 키워드 검색...',
     value: searchQuery,
     onChange: function (e) {
       setSearchQuery(e.target.value);
@@ -15997,7 +16078,23 @@ window.ClientDashboard = function ClientDashboard({
       padding: '20px 0',
       textAlign: 'center'
     }
-  }, "검색 결과가 없습니다."), /*#__PURE__*/React.createElement("div", {
+  }, byVertical.length === 0 ? /*#__PURE__*/React.createElement("span", null, effVertical === 'place' ? '플레이스' : '스토어', " 업체가 없습니다.", /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: function () {
+      setVerticalKeep('all');
+    },
+    style: {
+      marginTop: 8,
+      border: 0,
+      background: '#eff6ff',
+      color: '#1d4ed8',
+      fontWeight: 800,
+      fontSize: 12,
+      borderRadius: 6,
+      padding: '5px 10px',
+      cursor: 'pointer'
+    }
+  }, "전체 보기")) : '검색 결과가 없습니다.'), /*#__PURE__*/React.createElement("div", {
     style: {
       maxHeight: 'calc(100vh - 220px)',
       overflowY: 'auto'
