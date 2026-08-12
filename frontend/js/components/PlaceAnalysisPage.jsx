@@ -83,6 +83,15 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
         var n = Number(r);
         return (n >= 0 ? '+' : '') + (Math.round(n * 10) / 10) + '%';
     };
+    // 상권을 어느 범위로 쟀는지 — 서버가 동 단위로 지역을 못 맞히면 시군구로 넓혀서 준다
+    // (2026-08-12 대표 확정). 화면은 **잰 범위를 그대로** 밝힌다 — 동 이름으로 적어 두고
+    // 구 단위 수치를 보여주면 그게 곧 거짓말이 된다.
+    var sbizIsGu = function(sb) { return !!(sb && sb.scope === 'gu'); };
+    var sbizArea = function(sb) {
+        if (sb && sb.scopeLabel) return sb.scopeLabel;
+        if (sb && sb.district && sb.district.admiNm) return sb.district.admiNm;
+        return (result && result.region) || region;
+    };
 
     var suppPayload = function() {
         var p = {};
@@ -663,18 +672,31 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
                         React_.createElement('h3', { className: 'rt-h3' }, React_.createElement('span', { className: 'rt-hic' }, '🏙'), '우리 동네 상권 ',
                             React_.createElement('span', { className: 'badge b-ok' }, '✅ 소상공인365')),
                         React_.createElement('div', { className: 'rt-desc' },
-                            (sb.district && sb.district.admiNm ? sb.district.admiNm : (result.region || region)),
+                            sbizArea(sb),
                             (sb.industryNm ? (' · ' + sb.industryNm + ' 기준') : ''),
                             (sb.baseYm ? (' · ' + String(sb.baseYm).slice(0, 4) + '.' + String(sb.baseYm).slice(4, 6) + ' 기준') : ''),
                             ' — 이 금액은 ', React_.createElement('b', null, '상권 평균'), '이지 이 업체의 매출이 아닙니다.'),
+                        // 시군구로 넓혀 잰 회차는 그 사실을 먼저 밝힌다(동 단위 수치인 척하지 않는다)
+                        sbizIsGu(sb)
+                            ? React_.createElement('div', { className: 'note est', style: { marginBottom: 10 } },
+                                React_.createElement('b', null, '📍 ' + sbizArea(sb) + ' 전체 기준입니다'),
+                                ' — 적어주신 지역을 동 단위로 특정하지 못해 범위를 넓혔습니다. 동 단위로 보려면 ',
+                                React_.createElement('b', null, '시·구까지'), ' 적어주세요(예: 고양시 성사동).')
+                            : null,
                         React_.createElement('div', { className: 'grid3' },
                             React_.createElement('div', { className: 'ratecard p' },
                                 React_.createElement('div', { className: 'v', style: { fontSize: 22 } }, (sb.sales && manwon(sb.sales.avgAmt)) || '—'),
                                 React_.createElement('div', { className: 'k' }, '점포당 월평균')),
-                            React_.createElement('div', { className: 'ratecard g' },
-                                React_.createElement('div', { className: 'v', style: { fontSize: 22 } },
-                                    (sb.sales && sb.sales.guAvgAmt) ? (pctStr(sb.sales.avgAmt, sb.sales.guAvgAmt) || '—') : '—'),
-                                React_.createElement('div', { className: 'k' }, '시군구 평균 대비')),
+                            // 시군구 모드에서는 헤드라인이 곧 시군구 평균이라 비교 축을 시도로 올린다
+                            sbizIsGu(sb)
+                                ? React_.createElement('div', { className: 'ratecard g' },
+                                    React_.createElement('div', { className: 'v', style: { fontSize: 22 } },
+                                        (sb.sales && sb.sales.siAvgAmt) ? (pctStr(sb.sales.avgAmt, sb.sales.siAvgAmt) || '—') : '—'),
+                                    React_.createElement('div', { className: 'k' }, '시도 평균 대비'))
+                                : React_.createElement('div', { className: 'ratecard g' },
+                                    React_.createElement('div', { className: 'v', style: { fontSize: 22 } },
+                                        (sb.sales && sb.sales.guAvgAmt) ? (pctStr(sb.sales.avgAmt, sb.sales.guAvgAmt) || '—') : '—'),
+                                    React_.createElement('div', { className: 'k' }, '시군구 평균 대비')),
                             React_.createElement('div', { className: 'ratecard' },
                                 React_.createElement('div', { className: 'v' }, (sb.shops && sb.shops.count != null) ? sb.shops.count : '—'),
                                 React_.createElement('div', { className: 'k' }, '동종 업소 수'))),
@@ -1021,7 +1043,7 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
                         React_.createElement('h4', null, '🏘 상권 내 동종 업소'),
                         React_.createElement('div', { style: { fontSize: 26, fontWeight: 900, letterSpacing: '-1px' } }, shops.toLocaleString(), '곳'),
                         React_.createElement('div', { style: { fontSize: 12, color: 'var(--pa-sub)', marginTop: 4 } },
-                            (sb.district && sb.district.admiNm ? sb.district.admiNm : (result.region || region)),
+                            sbizArea(sb),
                             (sb.industryNm ? (' · ' + sb.industryNm) : ''),
                             (sb.shops && sb.shops.momRate != null) ? (' · 전월 대비 ' + pctTxt(sb.shops.momRate)) : ''))
                     : null,
