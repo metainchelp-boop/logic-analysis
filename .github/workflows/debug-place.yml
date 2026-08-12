@@ -906,6 +906,20 @@ jobs:
                 step("8. 실제 엔드포인트 응답 (제안서가 받는 그대로)")
                 try:
                     from main import place_proposal_enrich, PlaceProposalEnrichRequest
+                    # ⭐ 자동 등록 폐지 실증(2026-08-12) — 호출 전후 레지스트리 행 수를 함께 찍는다.
+                    #    「등록되지 않는다」는 코드가 없다는 말로는 못 믿고, 부르고도 안 늘어야 참이다.
+                    import database as _db
+                    def _cnt():
+                        try:
+                            conn = _db._get_conn()
+                            try:
+                                return conn.execute("SELECT COUNT(*) FROM place_track_target").fetchone()[0]
+                            finally:
+                                conn.close()
+                        except Exception as e:
+                            return f"조회실패({e})"
+                    _before = _cnt()
+                    print(f"  place_track_target 행 수(호출 전): {_before}")
                     t0 = time.time()
                     res = place_proposal_enrich(
                         PlaceProposalEnrichRequest(name=name, region=region,
@@ -918,6 +932,8 @@ jobs:
                     sal = (sb.get("sales") or {}) if sb else {}
                     print(f"  success={res.get('success')} · 소요 {took:.1f}s")
                     print(f"  businessKey : {d.get('businessKey')!r}")
+                    print(f"  registered  : {d.get('registered')}   (레지스트리 등록 여부 — 기록 유무(hasTracking)와 다른 질문)")
+                    print(f"  hasTracking : {d.get('hasTracking')}")
                     print(f"  검색량       : {d.get('volume')}")
                     print(f"  원 키워드 병기: {d.get('baseKeyword')} {d.get('baseVolume')}")
                     print(f"  현재 순위    : {d.get('rank')} ({d.get('rankState')})")
@@ -927,6 +943,9 @@ jobs:
                     if sb:
                         print(f"     점포당 월평균 {sal.get('avgAmt')} · 시군구평균 {sal.get('guAvgAmt')} · 업종 {sb.get('industryNm')}")
                         print(f"     업종 종합 {mj.get('label')} {mj.get('avgAmt')}원 · {mj.get('shopCnt')}곳")
+                    _after = _cnt()
+                    print(f"  place_track_target 행 수(호출 후): {_after}"
+                          + ("   ✅ 자동 등록 없음" if _after == _before else "   ❌ 늘었다 — 자동 등록 경로 잔존"))
                 except Exception as e:
                     print("  실패:", type(e).__name__, e); traceback.print_exc()
 
