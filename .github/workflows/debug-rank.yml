@@ -303,10 +303,12 @@ jobs:
                                         FROM collected_serp
                                        WHERE collected_date >= date('now','localtime','-2 day')
                                        GROUP BY keyword LIMIT 400"""):
+                    # ⚠️ _normalize_collected 는 '상품 1건' 을 받는다(목록 아님).
+                    #    목록째 넘겨 전건 예외 → scanned 0 으로 조용히 비던 것을 수정(2026-08-12).
                     try:
-                        prods = _norm(_json.loads(r["products_json"]) or [])
-                    except Exception:
-                        continue
+                        prods = [_norm(x) for x in (_json.loads(r["products_json"]) or [])]
+                    except Exception as e:
+                        print("  정규화 실패:", e); break
                     scanned += 1
                     urls = [t["product_url"] for t in _rr._tracked_targets(rc, r["keyword"])]
                     urls += [t["naver_store_url"] for t in _rr._client_targets(rc, r["keyword"])]
