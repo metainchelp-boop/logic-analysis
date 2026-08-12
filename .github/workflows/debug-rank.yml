@@ -151,6 +151,20 @@ jobs:
                    END { for (k in cnt) print k, cnt[k] }' \
                 | sort | awk '{printf "  %-14s %s시  %s건\n", $1, $2, $3}' \
                 || echo "  (집계 실패)"
+              echo "-- IP별 · 경로별 · 응답코드(24시간) — '돌긴 했는데 못 받아온 것'과 '아예 안 돈 것'을 가른다 --"
+              # keywords = 할 일을 받아간 횟수 / serp = 실제로 수집해서 올린 횟수.
+              #  · keywords 는 꾸준한데 serp 가 거의 0  → 확장은 돌았는데 네이버에서 못 받아왔다(차단·판독 실패).
+              #    이 경우 그 기계는 큐에서 할 일만 가져가고 결과를 안 올려 그날 커버리지를 깎는다.
+              #  · keywords 도 거의 0                   → 확장/크롬이 사실상 안 돌았다(기계 전원과 별개).
+              for f in /var/log/nginx/access.log /var/log/nginx/access.log.1; do
+                [ -f "$f" ] && cat "$f"
+              done 2>/dev/null | grep -E 'api/collector/(serp|keywords|requests)' \
+                | awk '{ split($1,o,"."); m=o[1]"."o[2]".x.x";
+                        p=$7; sub(/\?.*$/,"",p); sub(/^.*\/collector\//,"",p);
+                        key=m" "p" "$9; cnt[key]++ }
+                   END { for (k in cnt) print k, cnt[k] }' \
+                | sort | awk '{printf "  %-14s %-9s HTTP %-4s %s건\n", $1, $2, $3, $4}' \
+                || echo "  (집계 실패)"
               echo
               docker exec -i logic-analysis python3 - <<'PY'
             import os, sqlite3
