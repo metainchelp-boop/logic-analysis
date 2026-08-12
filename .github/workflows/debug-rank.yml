@@ -129,54 +129,23 @@ jobs:
               echo "-- 접속 횟수(경로별·24시간) --"
               docker logs --since 24h logic-analysis 2>&1 | grep -oE 'GET /api/collector/[a-z]+|POST /api/collector/[a-z]+' \
                 | sort | uniq -c || echo "  (없음)"
-              echo "-- 수집기가 몇 대인가(접속 IP 개수·24시간) --"
-              # 도커 로그의 클라이언트는 전부 nginx(172.18.0.1)라 구분이 안 된다 → 호스트 nginx 로그를 본다.
-              # ⚠️ 저장소가 공개라 Actions 로그에 실제 IP 를 찍지 않는다. 뒤 두 자리를 가리고 대수만 센다.
-              for f in /var/log/nginx/access.log /var/log/nginx/access.log.1; do
-                [ -f "$f" ] && cat "$f"
-              done 2>/dev/null | grep -E 'api/collector/(serp|keywords|requests)' \
-                | awk '{print $1}' | sed -E 's/^([0-9]+\.[0-9]+)\..*/\1.x.x/' \
-                | sort | uniq -c | sort -rn | head -10 \
-                || echo "  (nginx 로그를 못 읽음 — 권한·경로 확인)"
-              echo "  ↑ 줄이 2개 이상이면 수집기가 2대 이상 돌고 있다는 뜻"
-              echo "-- IP별 시간대 분포(2대인가 / 한 대의 IP가 바뀐 건가) --"
-              # 겹치는 시간대가 있으면 = 동시에 두 대. 시간대가 앞뒤로 갈리면 = 한 대의 IP 변경.
-              for f in /var/log/nginx/access.log /var/log/nginx/access.log.1; do
-                [ -f "$f" ] && cat "$f"
-              done 2>/dev/null | grep -E 'api/collector/(serp|keywords|requests)' \
-                | awk '{ip=$1; sub(/^([0-9]+\.[0-9]+)\..*/,"",ip);
-                        split($1,o,"."); m=o[1]"."o[2]".x.x";
-                        t=$4; gsub(/^\[/,"",t); split(t,d,":"); hh=d[2];
-                        key=m" "hh; cnt[key]++ }
-                   END { for (k in cnt) print k, cnt[k] }' \
-                | sort | awk '{printf "  %-14s %s시  %s건\n", $1, $2, $3}' \
-                || echo "  (집계 실패)"
-              echo "-- IP별 · 경로별 · 응답코드(24시간) — '돌긴 했는데 못 받아온 것'과 '아예 안 돈 것'을 가른다 --"
-              # keywords = 할 일을 받아간 횟수 / serp = 실제로 수집해서 올린 횟수.
-              #  · keywords 는 꾸준한데 serp 가 거의 0  → 확장은 돌았는데 네이버에서 못 받아왔다(차단·판독 실패).
-              #    이 경우 그 기계는 큐에서 할 일만 가져가고 결과를 안 올려 그날 커버리지를 깎는다.
-              #  · keywords 도 거의 0                   → 확장/크롬이 사실상 안 돌았다(기계 전원과 별개).
-              for f in /var/log/nginx/access.log /var/log/nginx/access.log.1; do
-                [ -f "$f" ] && cat "$f"
-              done 2>/dev/null | grep -E 'api/collector/(serp|keywords|requests)' \
-                | awk '{ split($1,o,"."); m=o[1]"."o[2]".x.x";
-                        p=$7; sub(/\?.*$/,"",p); sub(/^.*\/collector\//,"",p);
-                        key=m" "p" "$9; cnt[key]++ }
-                   END { for (k in cnt) print k, cnt[k] }' \
-                | sort | awk '{printf "  %-14s %-9s HTTP %-4s %s건\n", $1, $2, $3, $4}' \
-                || echo "  (집계 실패)"
-              echo "-- IP별 마지막 접속 · 마지막 결과 업로드 시각(어느 기계가 무엇인지 확정) --"
-              # 기계를 껐다면 그 IP 의 '마지막 접속'이 끈 시각에서 멈춘다 → IP↔기계 매핑을 실측으로 굳힌다.
-              # 로그를 오래된 파일부터 읽어 마지막 값이 최신이 되게 한다.
+              echo "-- 기계별 집계(24시간) — 같은 통신사 대역이면 앞 두 자리가 같아 뭉친다 --"
+              # ⚠️ 저장소가 공개라 실제 IP 를 찍지 않는다. **전체 IP 로 묶은 뒤** 앞 두 자리 + 그룹번호로만 표기.
+              #    같은 앞자리에 그룹이 둘 이상이면 = 같은 통신사 대역의 서로 다른 기계다(집·회사가 겹칠 수 있음).
               for f in /var/log/nginx/access.log.1 /var/log/nginx/access.log; do
                 [ -f "$f" ] && cat "$f"
-              done 2>/dev/null | grep -E 'api/collector/(serp|keywords|requests)' \
-                | awk '{ split($1,o,"."); m=o[1]"."o[2]".x.x"; t=$4; gsub(/^\[/,"",t);
-                        last[m]=t; n[m]++;
-                        if ($7 ~ /\/serp/) { lastup[m]=t; up[m]++ } }
-                   END { for (k in last) printf "  %-14s 마지막접속 %s (%d건) · 마지막업로드 %s (%d건)\n",
-                                              k, last[k], n[k], (k in lastup ? lastup[k] : "없음"), up[k] }' \
-                || echo "  (집계 실패)"
+              done 2>/dev/null | grep -E 'api/(collector/(serp|keywords|requests)|place/(ingest|track-targets))' \
+                | awk '{ ip=$1; split(ip,o,"."); pre=o[1]"."o[2];
+                        if (!(ip in gid)) { gid[ip] = ++gn[pre]; order[++m]=ip }
+                        t=$4; gsub(/^\[/,"",t); split(t,d,":"); hh=d[2];
+                        p=$7; sub(/\?.*$/,"",p); sub(/^.*\/api\//,"",p); sub(/^collector\//,"",p); sub(/^place\//,"",p);
+                        tot[ip]++; last[ip]=t; ep[ip" "p]++; hrs[ip" "hh]=1; pfx[ip]=pre }
+                   END { for (i=1;i<=m;i++) { ip=order[i]; hc=0;
+                           for (k in hrs) { split(k,a," "); if (a[1]==ip) hc++ }
+                           printf "  [%s · 그룹%d] 총 %d건 · 활동시간대 %d/24 · 마지막 %s\n", pfx[ip], gid[ip], tot[ip], hc, last[ip];
+                           for (k in ep) { split(k,b," "); if (b[1]==ip) printf "        %-14s %d건\n", b[2], ep[k] } } }' \
+                | sort -s -t'[' -k2,2 || echo "  (집계 실패)"
+              echo "  ↑ 같은 앞자리에 그룹이 2개 이상이면 같은 통신사 대역의 다른 기계 = 앞자리만으로는 못 가른다"
               echo "-- 지도 순위 기록(place/ingest)을 보내는 IP — 어느 기계가 플레이스를 도는지 --"
               # 플레이스 러너는 로직 탭(브라우저)을 거쳐 기록하므로 그 PC 의 IP 로 잡힌다.
               for f in /var/log/nginx/access.log.1 /var/log/nginx/access.log; do
