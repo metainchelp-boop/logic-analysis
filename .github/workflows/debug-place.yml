@@ -429,6 +429,33 @@ jobs:
             print()
             last = c.execute("SELECT MAX(checked_at) m, COUNT(*) n FROM place_rank_history").fetchone()
             print(f"[전체] 누적 {last['n']}행 / 마지막 기록 {last['m']}")
+
+            # 리뷰·저장수(지표) 적재 실태 — 북마클릿 캡처 경로가 실제로 채우고 있는지 확인.
+            # (무인 수집은 순위만 저장하므로 이 값이 있는 행 = 「플레이스 분석」 수동 기록)
+            print()
+            print("[지표 적재 실태] 방문자리뷰·블로그리뷰·저장수")
+            m = c.execute("""
+                SELECT COUNT(*) n,
+                       SUM(CASE WHEN visitor_reviews IS NOT NULL THEN 1 ELSE 0 END) v,
+                       SUM(CASE WHEN blog_reviews    IS NOT NULL THEN 1 ELSE 0 END) b,
+                       SUM(CASE WHEN saves           IS NOT NULL THEN 1 ELSE 0 END) s
+                FROM place_rank_history
+            """).fetchone()
+            print(f"  전체 {m['n']}행 중 — 방문자리뷰 {m['v']}행 · 블로그리뷰 {m['b']}행 · 저장수 {m['s']}행")
+            print("  · 값이 들어간 기록(최근 10건):")
+            got = c.execute("""
+                SELECT business_name, keyword, rank_position, rank_state,
+                       visitor_reviews, blog_reviews, saves, checked_at
+                FROM place_rank_history
+                WHERE visitor_reviews IS NOT NULL OR blog_reviews IS NOT NULL OR saves IS NOT NULL
+                ORDER BY checked_at DESC LIMIT 10
+            """).fetchall()
+            if not got:
+                print("    (한 건도 없음 — 캡처 경로가 지표를 한 번도 저장하지 못했다는 뜻)")
+            for g in got:
+                rk = g["rank_position"] if g["rank_position"] is not None else "-"
+                print(f"    {g['checked_at']} | {g['business_name']} | {g['keyword']} | {rk}위 {g['rank_state']}"
+                      f" | 방문자 {g['visitor_reviews']} · 블로그 {g['blog_reviews']} · 저장 {g['saves']}")
             PY
             echo
             echo "== 최근 ingest 요청 로그 =="

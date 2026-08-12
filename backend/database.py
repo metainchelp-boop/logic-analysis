@@ -220,6 +220,16 @@ def init_db():
                 conn.commit()
             except Exception:
                 pass  # 이미 존재하면 무시
+        # 자동 등록 표시(2026-08-12) — 제안서·분석을 뽑으면 그 업체·키워드가 저절로 추적에 올라간다.
+        # 영업사원이 등록 화면을 따로 열 필요가 없게 만드는 대신, 계약으로 이어지지 않은 건이
+        # 영원히 쌓이지 않도록 **자동 등록분만** 30일 미사용 시 자동 해제한다.
+        # (사람이 직접 등록한 행은 auto_added=0 이라 이 정리에서 제외 — 손으로 넣은 건 손으로 뺀다.)
+        for _col in ("auto_added INTEGER DEFAULT 0", "last_used_at TEXT"):
+            try:
+                conn.execute(f"ALTER TABLE place_track_target ADD COLUMN {_col}")
+                conn.commit()
+            except Exception:
+                pass  # 이미 존재하면 무시
         # 타임스탬프가 place_id 로 잘못 저장된 레지스트리 행 정리(2026-08-11) — 화면의
         # extractPlaceId 가 「아무 7자리+ 숫자」를 ID 로 받아 등록 시각(YYYYMMDDHHMM)이
         # ID 로 들어간 실사례(흑해 202608111048 ×2 · 금정산성 202608111049). 잘못된 값이
@@ -363,6 +373,97 @@ def add_place_track_targets(business_name: str, region: str, keywords: List[str]
     except Exception as e:
         logger.warning(f"플레이스 추적 대상 추가 실패(무시): {e}")
         return added
+    finally:
+        conn.close()
+
+
+AUTO_TRACK_MAX_PER_BUSINESS = 5     # 자동 등록은 업체당 이만큼만(사람이 등록한 건 무제한)
+AUTO_TRACK_STALE_DAYS = 30          # 자동 등록분이 이 기간 동안 안 쓰이면 자동 해제
+
+
+def ensure_place_track_target(business_name: str, region: str, keyword: str,
+                              place_id: str = "", user_id: int = 0) -> Dict:
+    """제안서·플레이스 분석을 뽑을 때 그 업체×키워드를 추적 대상으로 **자동 등록**한다(2026-08-12).
+
+    영업사원이 「등록」이라는 동선을 따로 밟지 않아도 다음 수집부터 순위·리뷰가 쌓이게 하는 것이
+    목적이다. 이미 있으면 만들지 않고 `last_used_at` 만 갱신한다(= 계속 쓰이는 업체는 안 지워짐).
+
+    ⚠️ 권한 게이트 없음 — 사람이 등록 화면에서 만드는 게 아니라 **시스템이 만드는 행**이라
+       영업사원(viewer)이 제안서를 뽑아도 등록돼야 한다(ingest 경로와 같은 취지).
+       단 `created_by` 는 요청자로 남겨 개인화 목록에서 본인 것으로 보이게 한다.
+    ⚠️ 상한 = 업체당 자동 등록 5개. 초과분은 **조용히 등록하지 않는다**(기존 행 삭제 금지 —
+       사람이 안 지운 걸 시스템이 지우면 안 된다).
+
+    반환: {"ok": bool, "created": bool, "id": int|None, "reason": str}
+    """
+    name = (business_name or "").strip()
+    kw = (keyword or "").strip()
+    reg = (region or "").strip()
+    pid = (place_id or "").strip()
+    if not name or not kw:
+        return {"ok": False, "created": False, "id": None, "reason": "이름·키워드 없음"}
+
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT id, place_id FROM place_track_target "
+            "WHERE business_name = ? AND region = ? AND keyword = ?",
+            (name, reg, kw)).fetchone()
+        if row:
+            # 이미 있다 — 「방금 또 썼다」만 남긴다(자동 해제 시계를 되돌리는 것이 핵심).
+            conn.execute(
+                "UPDATE place_track_target SET last_used_at = datetime('now', 'localtime') WHERE id = ?",
+                (row["id"],))
+            # place_id 를 이번에 알아냈고 기존이 비어 있으면 채운다(self-heal 과 같은 규칙).
+            if pid and not (row["place_id"] or "").strip():
+                conn.execute("UPDATE place_track_target SET place_id = ? WHERE id = ?", (pid, row["id"]))
+            conn.commit()
+            return {"ok": True, "created": False, "id": row["id"], "reason": "이미 등록됨"}
+
+        cnt = conn.execute(
+            "SELECT COUNT(*) c FROM place_track_target "
+            "WHERE business_name = ? AND region = ? AND COALESCE(auto_added, 0) = 1",
+            (name, reg)).fetchone()["c"]
+        if cnt >= AUTO_TRACK_MAX_PER_BUSINESS:
+            return {"ok": False, "created": False, "id": None,
+                    "reason": f"자동 등록 상한({AUTO_TRACK_MAX_PER_BUSINESS}개)"}
+
+        cur = conn.execute(
+            "INSERT INTO place_track_target "
+            "(business_name, region, place_id, keyword, active, created_by, auto_added, last_used_at) "
+            "VALUES (?, ?, ?, ?, 1, ?, 1, datetime('now', 'localtime'))",
+            (name, reg, pid, kw, user_id or 0))
+        conn.commit()
+        return {"ok": True, "created": True, "id": cur.lastrowid, "reason": "자동 등록"}
+    except Exception as e:
+        logger.warning(f"플레이스 추적 자동 등록 실패(무시): {e}")
+        return {"ok": False, "created": False, "id": None, "reason": "오류"}
+    finally:
+        conn.close()
+
+
+def deactivate_stale_auto_place_targets(days: int = AUTO_TRACK_STALE_DAYS) -> int:
+    """오래 안 쓰인 **자동 등록분**을 비활성으로 내린다(행은 남긴다 — 이력·재개 가능).
+
+    제안서는 계약 전 영업 활동이라 전환되지 않는 건도 등록된다. 그대로 두면 매일 수집 대상이
+    한없이 늘어 수집 시간·차단 위험이 커지므로, 다시 쓰이지 않은 건만 조용히 내린다.
+    사람이 직접 등록한 행(auto_added=0)은 **건드리지 않는다.**
+    """
+    conn = _get_conn()
+    try:
+        cur = conn.execute(
+            "UPDATE place_track_target SET active = 0 "
+            "WHERE COALESCE(auto_added, 0) = 1 AND active = 1 "
+            "AND COALESCE(last_used_at, created_at) < datetime('now', 'localtime', ?)",
+            (f"-{int(days)} days",))
+        conn.commit()
+        n = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        if n:
+            logger.info(f"플레이스 자동 등록 추적 대상 {n}건 비활성(마지막 사용 {days}일 초과)")
+        return n
+    except Exception as e:
+        logger.warning(f"플레이스 자동 등록 정리 실패(무시): {e}")
+        return 0
     finally:
         conn.close()
 

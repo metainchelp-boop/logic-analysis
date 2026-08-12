@@ -11,7 +11,11 @@
  */
 
 /* ---------- 정적 스타일 (렌더 밖) ---------- */
-var _krWrap = { maxWidth: 1200, margin: '0 auto', padding: '24px 16px 48px' };
+/* 페이지 폭·정렬 = 앱 표준(styles.css `.container` = max-width 1920 · margin 0 · 좌우 24px).
+   ⚠️ `margin:'0 auto'`(가운데 고정)로 되돌리지 말 것 — 스토어 분석(.container)·보고서(.report-shell)가
+   전부 왼쪽 정렬 전체 폭이라 이 화면만 가운데면 넓은 모니터에서 혼자 좁은 칸이 된다(2026-08-11 대표 지적).
+   지도 순위 추적(PlaceTrackingPage)도 이 상수를 그대로 쓰므로 여기만 고치면 두 화면이 함께 맞는다. */
+var _krWrap = { maxWidth: 1920, margin: 0, padding: '24px 24px 48px' };
 var _krCard = { background: '#fff', border: '1px solid #e2e8f0', borderRadius: 14, padding: '18px 20px', marginBottom: 16 };
 var _krKpiGrid = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 10, marginBottom: 16 };
 var _krKpi = { background: '#f8fafc', border: '1px solid #eef2f6', borderRadius: 12, padding: '13px 16px' };

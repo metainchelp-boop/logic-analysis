@@ -1567,18 +1567,26 @@ def _place_seo_analyze(req: "SeoAnalysisRequest", current_user: dict = None):
         # 판독 실패는 **점수가 낮은 것이 아니라 입력이 빈 것**이므로 화면에 그대로 알린다.
         _items = parsed.get("items", []) or []
         _organic = [it for it in _items if not it.get("is_ad")]
+        # ⚠️ 「안 붙여넣은 것」과 「붙여넣었는데 못 읽은 것」은 완전히 다르다(2026-08-12).
+        #    캡처는 이제 **선택**이라(순위·리뷰는 무인 추적이 매일 채운다), 안 붙였는데 빨간
+        #    경고를 띄우면 정상 사용이 고장처럼 보인다. provided 로 갈라서 경고를 억제한다.
+        _provided = bool((req.place_html or "").strip())
         capture = {
+            "provided": _provided,
             "ok": bool(_organic),
             "items": len(_items),
             "organic": len(_organic),
             "matched": bool(_matched),
             "warning": None,
         }
-        if not _organic:
+        if not _provided:
+            pass   # 캡처를 안 붙인 정상 경로 — 경고 없음(순위·리뷰는 지도 순위 추적이 채운다)
+        elif not _organic:
             capture["warning"] = (
                 "붙여넣은 검색결과에서 업체 목록을 읽지 못했습니다. "
-                "플레이스 검색 화면을 아래로 충분히 스크롤한 뒤 다시 복사해 주세요. "
-                "(순위·경쟁사·리뷰가 비어 점수가 실제보다 낮게 나옵니다)"
+                "네이버 지도 **검색결과 목록** 화면에서(업체 상세 화면이 아니라) 아래로 충분히 "
+                "스크롤한 뒤 다시 복사해 주세요. "
+                "(경쟁사 비교가 비어 점수가 실제보다 낮게 나옵니다 — 순위·리뷰는 지도 순위 추적이 채웁니다)"
             )
         elif not _matched:
             capture["warning"] = (
@@ -1613,6 +1621,12 @@ def _place_seo_analyze(req: "SeoAnalysisRequest", current_user: dict = None):
         # ── 시장·상권·기회(2026-08-11 고도화) ──
         base_kw = (req.keyword or "").strip()
         combined_kw = _combine_region_keyword(region, base_kw)
+
+        # 분석을 한 번 돌리면 그 업체×키워드가 추적에 자동 등록된다(2026-08-12) — 이 회차의 캡처
+        # 판독 성패와 무관하게, 다음 수집부터 순위·리뷰가 무인으로 쌓인다.
+        _auto = _place_auto_track(
+            (req.target_name or "").strip(), region, base_kw,
+            (business_key[4:] if business_key.startswith("doc:") else ""), current_user)
         market = {}
         try:
             market = _place_market_block(
@@ -1704,6 +1718,9 @@ def _place_seo_analyze(req: "SeoAnalysisRequest", current_user: dict = None):
                 "market": market,
                 # 지도 순위 추적 최신 기록 — 캡처 미확인이어도 추적 순위를 보고서에 반영
                 "tracking": tracking,
+                # 이번 분석으로 추적 등록이 새로 생겼는지 — 화면이 「내일 아침부터 자동으로
+                # 순위·리뷰가 쌓입니다」를 안내한다(빈 칸이 「고장」이 아니라 「아직 안 잼」임을 밝힘).
+                "auto_tracked": bool(_auto.get("created")),
                 # 노출 개선 시뮬레이션 · 90일 로드맵(계산 — 보장 아님)
                 "improve": improve,
                 "analyzed_at": datetime.now().isoformat(),
@@ -1805,6 +1822,10 @@ def place_proposal_enrich(req: PlaceProposalEnrichRequest,
 
         # 지역+키워드 합성(추적·제안서 동일 규칙 — 지역 포함 시 순위 재현성)
         combined_kw = _combine_region_keyword(region, base_kw)
+
+        # 제안서를 뽑는 것만으로 추적 등록이 된다 — 영업사원이 등록 화면을 따로 열 필요가 없다.
+        # (이번 응답에는 아직 순위가 없을 수 있고, 다음 수집부터 쌓인다.)
+        _auto = _place_auto_track(name, region, base_kw, place_id, current_user)
 
         # 1) 검색량(검색광고 API) — 실패/미조회 시 null(가짜 0 금지)
         #    ⚠️ 지역 키워드는 검색량이 매우 작다(실측: '구로동 고기' 20회/월). 그 숫자만 내밀면
@@ -1945,6 +1966,9 @@ def place_proposal_enrich(req: PlaceProposalEnrichRequest,
             "rankKeyword": (matched_kw if rank_series else None),
             "trackedKeywords": keyword_rows,  # 지역 황금 키워드 축(추적 중 키워드+검색량+순위)
             "hasTracking": bool(rank_series),
+            # 이번에 추적 등록이 새로 생겼는지 — 제안서 화면이 「내일 아침부터 순위가 쌓입니다」를
+            # 안내해 「왜 순위가 비었지」를 「아직 안 잰 것」으로 읽히게 한다(가산 필드·무회귀).
+            "autoTracked": bool(_auto.get("created")),
         }}
     except Exception as e:
         logger.error(f"[proposal-enrich] 실패: {e}")
@@ -1974,6 +1998,10 @@ class PlaceIngestItem(BaseModel):
     place_id: Optional[str] = None       # 수집 중 매칭된 doc_id(있으면 레지스트리 self-heal)
     rank: Optional[int] = None
     state: Optional[str] = None          # 노출/미노출/미확인 — find_place_rank 3-state 어휘
+    # 목록 데이터에 함께 실려 오는 리뷰 수(2026-08-12). 못 찾은 회차는 None(가짜 0 금지).
+    # 저장수는 목록에 없어 여기로 안 온다 — 담당자 직접 입력이 유일한 출처.
+    visitor_reviews: Optional[int] = None
+    blog_reviews: Optional[int] = None
 
 
 class PlaceIngestRequest(BaseModel):
@@ -1989,6 +2017,33 @@ def _place_registry_business_key(place_id: str, business_name: str, region: str)
     name = place_crawler._norm(business_name or "")
     reg = place_crawler._norm(region or "")
     return f"nm:{name}|{reg}" if name else ""
+
+
+def _place_auto_track(name: str, region: str, base_kw: str, place_id: str, current_user) -> dict:
+    """제안서·플레이스 분석을 뽑으면 그 업체×키워드를 **추적에 자동 등록**한다(2026-08-12).
+
+    영업사원 동선을 0으로 만드는 지점 — 등록 화면에 갈 필요 없이 평소대로 제안서/분석만 뽑으면
+    다음 수집부터 순위·리뷰가 저절로 쌓인다. 이미 있으면 「방금 또 썼다」만 갱신한다.
+
+    ⚠️ 등록 키워드는 **추적이 쓰는 형태(지역 합성)** 여야 한다 — 화면에 적은 원 키워드로 넣으면
+       러너가 다른 검색어로 수집해 조회 키가 또 갈린다(`_combine_region_keyword` 단일 규칙).
+    ⚠️ 실패해도 본 작업(제안서·분석)은 그대로 성립해야 하므로 전부 무해 실패.
+    """
+    try:
+        if not (name or "").strip() or not (base_kw or "").strip():
+            return {"created": False}
+        from database import ensure_place_track_target
+        r = ensure_place_track_target(
+            business_name=name, region=region,
+            keyword=_combine_region_keyword(region, base_kw),
+            place_id=place_id or "",
+            user_id=(current_user or {}).get("id", 0))
+        if r.get("created"):
+            logger.info(f"[플레이스] 추적 자동 등록 — {name} · {r.get('id')}")
+        return r
+    except Exception as e:
+        logger.warning(f"[플레이스] 추적 자동 등록 실패(무시): {e}")
+        return {"created": False}
 
 
 def _place_track_denied(current_user) -> bool:
@@ -2307,6 +2362,11 @@ def place_ingest(req: PlaceIngestRequest, current_user: dict = Depends(get_curre
                     business_name=item.business_name or "",
                     region=item.region or "",
                     user_id=(current_user or {}).get("id", 0),
+                    # 리뷰 수는 목록 데이터에 실려 오므로 무인 수집만으로 매일 채워진다(2026-08-12).
+                    # 종전엔 순위만 저장해, 리뷰는 「수동 분석에서 캡처를 붙여넣을 때만」 채워지는
+                    # 구조였고 그 경로가 실제로는 한 번도 성공하지 못했다.
+                    visitor_reviews=item.visitor_reviews,
+                    blog_reviews=item.blog_reviews,
                 )
                 saved += 1
                 # 첫 노출로 doc_id 를 알아냈으면 레지스트리에 채움(self-heal)

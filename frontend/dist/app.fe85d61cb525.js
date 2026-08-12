@@ -3410,10 +3410,14 @@ window.RankTrackingSection = function RankTrackingSection({
  */
 
 /* ---------- 정적 스타일 (렌더 밖) ---------- */
+/* 페이지 폭·정렬 = 앱 표준(styles.css `.container` = max-width 1920 · margin 0 · 좌우 24px).
+   ⚠️ `margin:'0 auto'`(가운데 고정)로 되돌리지 말 것 — 스토어 분석(.container)·보고서(.report-shell)가
+   전부 왼쪽 정렬 전체 폭이라 이 화면만 가운데면 넓은 모니터에서 혼자 좁은 칸이 된다(2026-08-11 대표 지적).
+   지도 순위 추적(PlaceTrackingPage)도 이 상수를 그대로 쓰므로 여기만 고치면 두 화면이 함께 맞는다. */
 var _krWrap = {
-  maxWidth: 1200,
-  margin: '0 auto',
-  padding: '24px 16px 48px'
+  maxWidth: 1920,
+  margin: 0,
+  padding: '24px 24px 48px'
 };
 var _krCard = {
   background: '#fff',
@@ -24811,12 +24815,10 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
       } catch (e) {}
       return;
     }
-    if ((html || '').trim().length < 100) {
-      try {
-        toast.warn('플레이스 검색결과 HTML을 붙여넣어주세요. (북마클릿으로 캡처)');
-      } catch (e) {}
-      return;
-    }
+    // ⚠️ 캡처 HTML 은 2026-08-12 부터 **선택**이다 — 순위·리뷰는 지도 순위 추적이 매일 무인으로
+    //    채우고, 캡처는 「그 시점의 경쟁사 목록」을 더 볼 때만 쓴다. 필수로 두면 영업사원이
+    //    분석 한 번에 8단계(지도 이동→검색→북마클릿→복귀→붙여넣기)를 밟아야 한다.
+
     setLoading(true);
     lastHtmlRef.current = html;
     var body = {
@@ -24999,7 +25001,12 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
     var m = (placeHtml.match(/data-nmb_res-doc-id=/g) || []).length;
     return m ? '오가닉 ' + m + '곳 인식' : '';
   }();
-  var bookmarklet = "javascript:(function(){try{var h=document.documentElement.outerHTML;navigator.clipboard.writeText(h).then(function(){alert('\\u2705 \\ud50c\\ub808\\uc774\\uc2a4 HTML '+Math.round(h.length/1024)+'KB \\ubcf5\\uc0ac \\uc644\\ub8cc! \\ub85c\\uc9c1\\ubd84\\uc11d \\uce78\\uc5d0 \\ubd99\\uc5ec\\ub123\\uc73c\\uc138\\uc694.');}).catch(function(){var t=document.createElement('textarea');t.value=h;document.body.appendChild(t);t.select();document.execCommand('copy');document.body.removeChild(t);alert('\\u2705 HTML \\ubcf5\\uc0ac \\uc644\\ub8cc!');});}catch(e){alert('\\u274c \\ubcf5\\uc0ac \\uc2e4\\ud328: '+e.message);}})();";
+
+  // ⚠️ 네이버 지도(map.naver.com) 의 검색결과 목록은 pcmap 도메인 **iframe 안**에 있다.
+  //    바깥 문서 outerHTML 에는 목록이 없어서(=서버 파서가 찾는 __APOLLO_STATE__ 부재)
+  //    2026-08-12 이전 캡처는 71건 전부 판독 실패였다. 무인 러너가 pcmap 주소로
+  //    직접 가는 것과 같은 이유 — 목록 화면이 아니면 그 주소로 옮겨준 뒤 다시 누르게 한다.
+  var bookmarklet = "javascript:(function(){try{if(location.host.indexOf('pcmap.place.naver.com')<0){var q='';try{q=new URLSearchParams(location.search).get('query')||'';}catch(e){}if(!q){var p=location.href.split('/search/')[1];if(p){q=decodeURIComponent(p.split('?')[0].split('#')[0].split('/')[0]);}}if(!q){alert('\\u274c \\ub124\\uc774\\ubc84 \\uc9c0\\ub3c4\\uc5d0\\uc11c \\ud0a4\\uc6cc\\ub4dc\\ub97c \\uac80\\uc0c9\\ud55c \\ub4a4, \\uac80\\uc0c9\\uacb0\\uacfc \\ubaa9\\ub85d \\ud654\\uba74\\uc5d0\\uc11c \\ub20c\\ub7ec\\uc8fc\\uc138\\uc694.');return;}alert('\\u27a1 \\uac80\\uc0c9\\uacb0\\uacfc \\ubaa9\\ub85d \\ud654\\uba74\\uc73c\\ub85c \\uc774\\ub3d9\\ud569\\ub2c8\\ub2e4. \\ud654\\uba74\\uc774 \\uc5f4\\ub9ac\\uba74 \\ubd81\\ub9c8\\ud074\\ub9bf\\uc744 \\ud55c \\ubc88 \\ub354 \\ub20c\\ub7ec\\uc8fc\\uc138\\uc694.');location.href='https://pcmap.place.naver.com/place/list?query='+encodeURIComponent(q);return;}var h=document.documentElement.outerHTML;if(h.indexOf('__APOLLO_STATE__')<0){alert('\\u26a0 \\ubaa9\\ub85d\\uc774 \\uc544\\uc9c1 \\uc548 \\uc77d\\ud614\\uc2b5\\ub2c8\\ub2e4. \\uc544\\ub798\\ub85c \\uc870\\uae08 \\uc2a4\\ud06c\\ub864\\ud55c \\ub4a4 \\ub2e4\\uc2dc \\ub20c\\ub7ec\\uc8fc\\uc138\\uc694.');return;}navigator.clipboard.writeText(h).then(function(){alert('\\u2705 \\ud50c\\ub808\\uc774\\uc2a4 HTML '+Math.round(h.length/1024)+'KB \\ubcf5\\uc0ac \\uc644\\ub8cc! \\ub85c\\uc9c1\\ubd84\\uc11d \\uce78\\uc5d0 \\ubd99\\uc5ec\\ub123\\uc73c\\uc138\\uc694.');}).catch(function(){var t=document.createElement('textarea');t.value=h;document.body.appendChild(t);t.select();document.execCommand('copy');document.body.removeChild(t);alert('\\u2705 HTML \\ubcf5\\uc0ac \\uc644\\ub8cc!');});}catch(e){alert('\\u274c \\ubcf5\\uc0ac \\uc2e4\\ud328: '+e.message);}})();";
 
   // ── 입력 섹션 — 스토어 분석(SearchBar)과 **같은 배치·구도**(2026-08-11 대표 지시) ──
   // 행 구성·라벨 스타일·접힘 textarea(포커스 시 확장·용량 배지·초기화)·북마클릿 파란 밴드·
@@ -25028,7 +25035,8 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
       }
     }, t);
   };
-  var canSubmit = !!(businessName.trim() && (selectedKw || keywords[0]) && (placeHtml || '').trim().length >= 100);
+  // 입력 최소 = 업체명 + 키워드. 캡처 HTML 은 선택(경쟁사 비교를 더 볼 때만).
+  var canSubmit = !!(businessName.trim() && (selectedKw || keywords[0]));
   var renderInput = function () {
     return React_.createElement('div', {
       className: 'search-section'
@@ -25164,7 +25172,11 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
     // 「이렇게 조회됩니다」 미리보기 — 지역·키워드 합성 결과를 보내기 전에 보여준다
     // (utils.placeCombineKeyword — 서버와 같은 규칙, 「해보기 전엔 모른다」 제거).
     renderKeywordPreview(),
-    // 3행: 캡처 HTML + 분석 실행 (스토어 2행 = HTML + 버튼과 동일 구도)
+    // 3행: 분석 실행 (스토어 2행과 동일 구도 — 왼쪽 안내 · 오른쪽 실행 버튼)
+    // ⭐ 종전엔 이 자리가 「HTML 붙여넣기(필수)」였다. 순위·리뷰를 캡처로만 얻던
+    //    시절의 구조인데, 실제로는 그 경로가 한 번도 성공하지 못했고(2026-08-12 실측:
+    //    수동 분석 기록 전건 미확인·리뷰 0행) 지금은 지도 순위 추적이 매일 무인으로
+    //    채운다 → 붙여넣기를 **선택(고급)** 으로 내리고 동선을 두 칸으로 줄였다.
     React_.createElement('div', {
       style: {
         display: 'grid',
@@ -25172,14 +25184,95 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
         gap: 10,
         alignItems: 'end'
       }
+    }, React_.createElement('div', {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        padding: '9px 14px',
+        background: '#ecfdf5',
+        border: '1px solid #a7f3d0',
+        borderRadius: 10
+      }
+    }, React_.createElement('span', {
+      style: {
+        fontSize: 16
+      }
+    }, '📍'), React_.createElement('div', {
+      style: {
+        flex: 1,
+        minWidth: 200
+      }
+    }, React_.createElement('span', {
+      style: {
+        fontSize: 12,
+        fontWeight: 700,
+        color: '#065f46'
+      }
+    }, '준비 끝 — 바로 실행하세요'), React_.createElement('span', {
+      style: {
+        fontSize: 11,
+        color: '#047857',
+        marginLeft: 8
+      }
+    }, '분석하면 이 업체가 ', React_.createElement('strong', null, '지도 순위 추적'), '에 자동 등록되고, 순위·리뷰는 ', React_.createElement('strong', null, '매일 아침 자동'), '으로 채워집니다. 따로 등록할 필요 없습니다.'))), React_.createElement('button', {
+      className: 'btn-search',
+      disabled: loading || !canSubmit,
+      onClick: function () {
+        runAnalyze();
+      },
+      title: canSubmit ? '' : '업체명·키워드를 입력하세요',
+      style: {
+        height: 44,
+        marginBottom: 0,
+        opacity: loading || !canSubmit ? 0.55 : 1
+      }
+    }, loading ? React_.createElement(React_.Fragment, null, React_.createElement('span', {
+      className: 'spinner',
+      style: {
+        width: 16,
+        height: 16,
+        borderWidth: 2
+      }
+    }), ' 분석 중...') : '분석 실행')),
+    // 4행: 고급(선택) — 캡처 붙여넣기. 기본 접힘이라 평소엔 눈에 안 띈다.
+    React_.createElement('details', {
+      style: {
+        border: '1px solid #e5e7eb',
+        borderRadius: 10,
+        background: '#fbfcfd'
+      }
+    }, React_.createElement('summary', {
+      style: {
+        cursor: 'pointer',
+        padding: '8px 14px',
+        fontSize: 12,
+        fontWeight: 600,
+        color: '#475569',
+        listStyle: 'revert'
+      }
+    }, '🔎 경쟁사 목록까지 보려면 (선택)', React_.createElement('span', {
+      style: {
+        fontWeight: 400,
+        color: '#94a3b8',
+        marginLeft: 8,
+        fontSize: 11
+      }
+    }, '검색결과 화면을 캡처해 붙여넣으면 그 시점의 경쟁 업체가 함께 분석됩니다')), React_.createElement('div', {
+      style: {
+        padding: '4px 14px 14px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 10
+      }
     }, React_.createElement('div', null, React_.createElement('label', {
       style: _lbl
-    }, 'HTML 붙여넣기', _req, _hintTxt('플레이스 검색결과 페이지 HTML → 순위·경쟁사·리뷰 자동 추출')), React_.createElement('div', {
+    }, 'HTML 붙여넣기', _hintTxt('선택 — 붙이지 않아도 분석은 그대로 실행됩니다')), React_.createElement('div', {
       style: {
         position: 'relative'
       }
     }, React_.createElement('textarea', {
-      placeholder: '선택한 키워드의 플레이스 검색결과 HTML 전체를 붙여넣으세요 (필수) — 북마클릿 클릭 한 번으로 복사됩니다.',
+      placeholder: '네이버 지도 검색결과 목록 화면에서 북마클릿을 눌러 복사한 뒤 여기에 붙여넣으세요 (선택).',
       value: placeHtml,
       onChange: function (e) {
         setPlaceHtml(e.target.value);
@@ -25239,27 +25332,8 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
         cursor: 'pointer',
         fontWeight: 600
       }
-    }, '초기화')))), React_.createElement('button', {
-      className: 'btn-search',
-      disabled: loading || !canSubmit,
-      onClick: function () {
-        runAnalyze();
-      },
-      title: canSubmit ? '' : '업체명·키워드·HTML 3가지를 모두 입력하세요',
-      style: {
-        height: 44,
-        marginBottom: 0,
-        opacity: loading || !canSubmit ? 0.55 : 1
-      }
-    }, loading ? React_.createElement(React_.Fragment, null, React_.createElement('span', {
-      className: 'spinner',
-      style: {
-        width: 16,
-        height: 16,
-        borderWidth: 2
-      }
-    }), ' 분석 중...') : '분석 실행')),
-    // 4행: 북마클릿 안내 — 스토어와 같은 파란 밴드
+    }, '초기화')))),
+    // 북마클릿 안내 — 스토어와 같은 파란 밴드
     React_.createElement('div', {
       style: {
         display: 'flex',
@@ -25291,7 +25365,7 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
         color: '#3730a3',
         marginLeft: 8
       }
-    }, '아래 버튼을 북마크바로 ', React_.createElement('strong', null, '드래그'), ' → 네이버 플레이스 검색결과에서 클릭 한 번에 HTML 복사')), React_.createElement('a', {
+    }, '아래 버튼을 북마크바로 ', React_.createElement('strong', null, '드래그'), ' → 네이버 지도에서 키워드를 검색한 뒤 클릭. ', React_.createElement('strong', null, '목록 화면으로 옮겨지면 한 번 더 클릭'), '하면 복사됩니다(업체 상세 화면에서는 목록이 복사되지 않습니다).')), React_.createElement('a', {
       href: bookmarklet,
       draggable: 'true',
       onClick: function (e) {
@@ -25320,7 +25394,7 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
         color: '#64748b',
         flexShrink: 0
       }
-    }, '← 이 파란 버튼을 위쪽 북마크바에 끌어다 놓으세요'))));
+    }, '← 이 파란 버튼을 위쪽 북마크바에 끌어다 놓으세요'))))));
   };
 
   // ── 커버 · 목차 · 범례 — 스토어(AnalysisResults)와 동일한 보고서 골격 ──
@@ -25454,6 +25528,23 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
   // ── 캡처 판독 경고 ──
   // 「점수가 낮은 것」과 「입력이 빈 것」은 완전히 다른 이야기다. 판독이 안 됐으면
   // 점수 위에 그 사실부터 알린다(no-export: 광고주 전달본에는 나가지 않는다).
+  // ── 자동 추적 등록 알림 ──
+  // 분석을 뽑는 것만으로 추적 등록이 끝났음을 그 자리에서 알린다. 순위 칸이 비어 있어도
+  // 「고장」이 아니라 「아직 안 잰 것」임을 읽히게 하는 것이 목적(no-export: 광고주 전달본 제외).
+  var renderAutoTracked = function () {
+    if (!result || !result.auto_tracked) return null;
+    return React_.createElement('div', {
+      className: 'capwarn no-export',
+      style: {
+        background: '#ecfdf5',
+        borderColor: '#a7f3d0'
+      }
+    }, React_.createElement('span', {
+      className: 'ci'
+    }, '📍'), React_.createElement('div', null, React_.createElement('b', null, '지도 순위 추적에 등록했습니다'), React_.createElement('div', {
+      className: 'cw'
+    }, '이 업체·키워드가 방금 자동 등록됐습니다. 내일 아침부터 순위와 리뷰 수가 매일 자동으로 쌓이고, ', '제안서·보고서에도 그 값이 실립니다. 따로 등록하실 필요 없습니다.')));
+  };
   var renderCaptureWarn = function () {
     var cap = result.capture || {};
     if (!cap.warning) return null;
@@ -25475,7 +25566,10 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
     var sc = result.scores || {};
     var vol = m.volume;
     var rankTxt = result.rank_state === '노출' && result.rank ? result.rank + '위' : result.rank_state === '미노출' ? '순위 밖' : null;
-    var rankSub = result.rank_state === '미확인' ? '캡처 재시도 필요' : '‘' + (result.keyword || '') + '’ 오가닉 기준';
+    // ⚠️ 캡처가 선택이 된 뒤로 「미확인」의 뜻이 갈린다 — 안 붙인 정상 경로에까지
+    //    「캡처 재시도 필요」를 띄우면 멀쩡한 흐름이 고장으로 읽힌다(2026-08-12).
+    var _capGiven = !!(result.capture && result.capture.provided);
+    var rankSub = result.rank_state === '미확인' ? _capGiven ? '캡처 재시도 필요' : '지도 순위 추적이 매일 자동으로 잽니다' : '‘' + (result.keyword || '') + '’ 오가닉 기준';
     var rankHint = '광고 제외';
     // 캡처로 못 잰 회차(미확인)라도 이 업체가 지도 순위 추적에 등록돼 있으면 매일 수집된
     // 최신 순위가 있다 — 그 값을 대신 싣고 **출처를 명시**한다(캡처 실측과 섞지 않는다).
@@ -25571,7 +25665,7 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
       className: 'section'
     }, React_.createElement('div', {
       className: 'container'
-    }, renderCaptureWarn(), renderKpis(), React_.createElement('div', {
+    }, renderAutoTracked(), renderCaptureWarn(), renderKpis(), React_.createElement('div', {
       className: 'card',
       style: {
         marginTop: 14

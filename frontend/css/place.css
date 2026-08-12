@@ -14,7 +14,13 @@
   --pa-mono:"SF Mono","JetBrains Mono",ui-monospace,Menlo,monospace;
   color:var(--pa-ink);word-break:keep-all;
 }
-.place-analysis .pa-wrap{max-width:1180px;margin:0 auto;padding:16px 24px 60px;display:flex;flex-direction:column;gap:16px}
+/* 폭·정렬 = 앱 표준(styles.css `.container`) — 왼쪽 정렬 전체 폭.
+   ⚠️ `margin:0 auto`(가운데 고정)로 되돌리지 말 것: 스토어 분석 보고서(.report-shell)가 왼쪽 정렬
+   전체 폭이라 플레이스만 가운데면 같은 기능인데 배치가 어긋난다(2026-08-11 대표 지적). */
+.place-analysis .pa-wrap{max-width:1920px;margin:0;padding:16px 24px 60px;display:flex;flex-direction:column;gap:16px}
+/* pa-wrap 이 이미 좌우 24px 를 주므로 그 안의 보고서 골격은 좌우 패딩을 빼서
+   스토어 보고서와 시작 지점을 정확히 맞춘다(안 빼면 24+24=48px 로 혼자 더 들어간다). */
+.place-analysis .pa-wrap > .report-shell{padding-left:0;padding-right:0}
 .place-analysis .num{font-variant-numeric:tabular-nums}
 .place-analysis .mono{font-family:var(--pa-mono)}
 

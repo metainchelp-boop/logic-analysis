@@ -131,8 +131,21 @@ def start_scheduler():
         max_instances=1,
     )
 
+    # 7) 플레이스 자동 등록 추적 대상 정리 — 매일 01:40 (플레이스 수집 06:30 한참 전).
+    #    제안서·분석을 뽑으면 추적이 자동 등록되므로(영업사원 동선 0), 계약으로 이어지지 않은
+    #    건이 쌓여 매일 수집량을 무한히 키우지 않도록 **자동 등록분만** 30일 미사용 시 비활성.
+    #    사람이 직접 등록한 행은 손대지 않는다.
+    _scheduler.add_job(
+        _run_place_auto_track_cleanup,
+        trigger=CronTrigger(hour=1, minute=40),
+        id="place_auto_track_cleanup",
+        name="플레이스 자동 추적 정리 (01:40)",
+        replace_existing=True,
+        max_instances=1,
+    )
+
     _scheduler.start()
-    logger.info("✅ 스케줄러 시작 (계약동기화: 04:00, 순위: 08:00, 분석: 08:30, 리포트: 09:30(발송 비활성), DB백업: 00:30, 보관정책: 01:00, 축 브리지: 01:20)")
+    logger.info("✅ 스케줄러 시작 (계약동기화: 04:00, 순위: 08:00, 분석: 08:30, 리포트: 09:30(발송 비활성), DB백업: 00:30, 보관정책: 01:00, 축 브리지: 01:20, 플레이스 자동추적 정리: 01:40)")
 
     # 1회성 VACUUM — 보관정책 1회 삭제(2026-08-04)로 생긴 freelist(~2.2GB)를 디스크로 반환.
     # 스케줄러는 단일 워커에서만 기동(위 파일락)하므로 여기서 부르면 중복 실행 없음.
@@ -921,6 +934,23 @@ def _run_rank_link_maintenance():
     except Exception as e:
         # 부가 기능이라 실패해도 다른 배치에 영향을 주지 않는다.
         logger.warning(f"순위 축 브리지 갱신 예외: {e}")
+
+
+def _run_place_auto_track_cleanup():
+    """자동 등록된 플레이스 추적 대상 중 30일 넘게 안 쓰인 것을 비활성으로 내린다.
+
+    ⚠️ 「안 쓰였다」의 기준은 마지막으로 그 업체의 제안서·분석을 뽑은 시각(`last_used_at`)이다 —
+       수집이 도는 것만으로는 갱신되지 않는다(수집은 등록돼 있으면 무조건 돌기 때문).
+    행은 남기므로 다시 제안서를 뽑으면 그 자리에서 되살아난다(ensure 가 last_used_at 갱신).
+    """
+    try:
+        from database import deactivate_stale_auto_place_targets
+        n = deactivate_stale_auto_place_targets()
+        if n:
+            logger.info(f"📍 플레이스 자동 추적 정리 — {n}건 비활성")
+    except Exception as e:
+        # 부가 기능이라 실패해도 다른 배치에 영향을 주지 않는다.
+        logger.warning(f"플레이스 자동 추적 정리 예외: {e}")
 
 
 # ==================== 01:00 분석 보관정책 (client_analyses 정리) ====================
