@@ -29,6 +29,15 @@ const CFG = {
   //    '실제 받은 개수 누적'이라 그대로 8페이지로 자동 적응한다(어느 쪽이든 순위 무손상).
   pageSize: 80,          // 한 페이지 상품 수 (「80개씩 보기」와 동일)
   maxRank: 300,          // 300위까지 — 실제 받은 개수로 누적해 판단(고정 페이지 수 아님)
+  // ⚠️ 광고를 순위에서 빼면(2026-08-12) 같은 4페이지에서 모이는 '오가닉' 개수가 300에
+  //    못 미쳐, 종전 조건(300개 채울 때까지)만으로는 루프가 5페이지째로 넘어간다
+  //    = 페이지 이동 +25%. 지금 이 IP 는 하루 986개 중 205개밖에 못 도는 상태라
+  //    총량을 늘리는 선택은 할 수 없다. 실측(2026-08-12, 오늘 수집분 205키워드 전수):
+  //      · 지금 저장되는 300개 중 광고가 중앙값 23개 → 실질 오가닉 ≈ 277
+  //      · 광고를 빼고 같은 4페이지를 돌면 오가닉 ≈ 274~295
+  //    ⇒ 깊이는 사실상 그대로다. 그래서 페이지 수를 4로 못박아 총량을 유지한다.
+  //    수집 여력이 늘면 이 값만 5로 올리면 오가닉 300위가 채워진다.
+  pagesPerKeyword: 4,    // 키워드당 페이지 수 상한(총량 고정 — 함부로 올리지 말 것)
   maxPages: 10,          // 안전 상한(빈 페이지·무한 루프 방지)
   readTries: 12,         // 페이지 판독 재시도 횟수(값이 나올 때까지)
   readGapMs: 800,        // 되읽기 간격 — 12×0.8초 ≈ 10초까지 기다린다
@@ -383,6 +392,33 @@ async function fetchPage(keyword, pagingIndex) {
   throw new Error(`판독 실패(${lastErr}) — 차단 아님, 다음 회차 재시도`);
 }
 
+/** 이 상품이 '광고'인가 — 순위 번호를 주지 않기 위한 판별.
+ *
+ *  ⚠️ 필드 이름을 추측하지 않는다. 판별 축은 **실측으로 확정된 링크 하나**다:
+ *     네이버는 광고 상품의 클릭 주소를 `cr.shopping.naver.com/adcr?...` 로 내보내고,
+ *     광고 상품은 단일 판매처가 없어 mallName 이 비어 있다.
+ *     2026-08-12 서버 실측 — 스토어명이 빈 상품 1,045개가 **전부** adcr 링크였고,
+ *     스마트스토어·브랜드스토어·카탈로그 링크로 빈 것은 0개였다.
+ *
+ *  ⚠️ 이 판별은 '덜 거르는' 쪽으로만 틀리게 설계했다. 광고인데 못 걸러내면 순위가
+ *     종전처럼 조금 밀릴 뿐이지만, 오가닉을 광고로 잘못 걸러내면 그 상품이 통째로
+ *     사라져 **멀쩡히 노출 중인 광고주가 「미노출」로 보고된다**(미노출보다 나쁜 오류).
+ *     그래서 `adId` 같은 짐작 필드로는 거르지 않고, 대신 아래 countAdHints 로
+ *     '광고 표식은 있는데 링크로는 안 걸린 상품'의 수만 세어 다음 판에 근거로 쓴다. */
+function isAdItem(p) {
+  const url = String((p && (p.mallProductUrl || p.adcrUrl || p.crUrl)) || '');
+  return url.includes('adcr');
+}
+
+/** 링크로는 광고로 안 걸렸는데 광고 표식처럼 보이는 키를 가진 상품 수(진단 전용·거르지 않음) */
+function hasAdHint(p) {
+  if (!p || typeof p !== 'object') return false;
+  for (const k in p) {
+    if (/^ad(Id|cr|Product|Type|Rank)/i.test(k) && p[k]) return true;
+  }
+  return false;
+}
+
 /** 네이버 응답 → 서버가 쓰는 형태로 정리 */
 function toProduct(p, rank) {
   return {
@@ -409,7 +445,9 @@ async function collectKeyword(keyword) {
   const products = [];
   const seenIds = new Set();   // 페이지 경계가 겹쳐도 같은 상품을 두 번 세지 않기 위함
   let total = 0;
-  const pages = CFG.maxPages;
+  let adSkipped = 0;           // 순위를 주지 않고 건너뛴 광고 수(로그·팝업용)
+  let adHintMissed = 0;        // 광고 표식은 있는데 링크로는 안 걸린 수(다음 판 근거)
+  const pages = Math.min(CFG.pagesPerKeyword, CFG.maxPages);
   for (let i = 1; i <= pages; i++) {
     const { total: t, list } = await fetchPage(keyword, i);
     if (i === 1) total = t;
@@ -422,26 +460,35 @@ async function collectKeyword(keyword) {
     }
     for (let idx = 0; idx < list.length; idx++) {
       if (products.length >= CFG.maxRank) break;
+      // ⭐ 광고는 순위 번호를 먹지 않는다(2026-08-12 대표 확정 「광고 제외로 가야 해」).
+      //    ⚠️ 여기서 `continue` 하기 전에 **seenIds 에 넣지 않는 것이 핵심**이다.
+      //       광고주 상품은 같은 검색 결과에 '광고 자리'와 '오가닉 자리'로 두 번 나올 수
+      //       있는데, 광고 자리에서 id 를 선점해 버리면 뒤따라오는 진짜 오가닉 자리가
+      //       중복으로 걸러져 **그 업체가 통째로 미노출로 보고된다**.
+      if (isAdItem(list[idx])) {
+        adSkipped++;
+        // 광고 원본 1건을 남겨 둔다 — 다음에 판별 규칙을 넓힐 때 추측 대신 이걸 본다.
+        if (adSkipped === 1) {
+          chrome.storage.local.get('rawSampleAd').then((o) => {
+            if (!o.rawSampleAd) {
+              chrome.storage.local.set({
+                rawSampleAd: { keyword, at: new Date().toISOString(), item: list[idx] },
+              });
+            }
+          });
+        }
+        continue;
+      }
+      if (hasAdHint(list[idx])) adHintMissed++;
       const mapped = toProduct(list[idx], products.length + 1);
       // 페이지네이션이 겹치게 주는 경우(pagingSize 를 서버가 다르게 해석 등) 순위가
       // 중복·어긋나지 않게, 이미 본 상품은 건너뛴다(id 없는 상품은 그대로 통과).
       if (mapped.productId && seenIds.has(mapped.productId)) continue;
       if (mapped.productId) seenIds.add(mapped.productId);
-      mapped.rank = products.length + 1;   // 건너뛴 자리를 메운 최종 순위
-      // ⚠️ 스토어명(mallName)이 13.3% 비어 있다(2026-08-11 서버 실측). 판독 원천이
-      //    API 응답 → 페이지 데이터로 바뀌면서 일부 상품(가격비교 추정)이 다른 필드에
-      //    스토어명을 싣는 것으로 보이는데, **필드 이름을 추측해서 붙이면 안 된다**
-      //    (틀린 값이 들어가면 순위 매칭 보조 축이 오염된다).
-      //    → 값이 빈 상품의 '원본'을 하나 남겨 팝업에서 실제 키 이름을 확인한 뒤 붙인다.
-      if (!mapped.mallName) {
-        chrome.storage.local.get('rawSampleNoMall').then((o) => {
-          if (!o.rawSampleNoMall) {
-            chrome.storage.local.set({
-              rawSampleNoMall: { keyword, rank, at: new Date().toISOString(), item: list[idx] },
-            });
-          }
-        });
-      }
+      mapped.rank = products.length + 1;   // 광고·중복을 건너뛴 자리를 메운 최종 순위
+      // ⚠️ mallName 빈 값 건은 **종결**됐다(2026-08-12): 빈 값 1,045개가 전부 광고
+      //    상품이었고, 광고는 단일 판매처가 없어 애초에 채울 값이 없다. 이제 그 상품들은
+      //    위에서 광고로 걸러지므로 빈 mallName 자체가 거의 사라진다. 필드 추측 금지.
       products.push(mapped);
     }
     if (products.length >= CFG.maxRank) break;   // 목표 깊이 도달
@@ -450,7 +497,10 @@ async function collectKeyword(keyword) {
     if (list.length < 40) break;
     if (i < pages) await sleep(jitter());
   }
-  return { total, products };
+  await chrome.storage.local.set({
+    lastAdStat: { keyword, at: new Date().toISOString(), kept: products.length, ads: adSkipped, hint: adHintMissed },
+  });
+  return { total, products, adSkipped, adHintMissed };
 }
 
 async function uploadKeyword(token, keyword, payload) {
@@ -519,7 +569,9 @@ async function runCollection(manual = false) {
         await uploadKeyword(token, kw, payload);
         done++; streak = 0;
         await setState({ done, failed, current: kw });
-        if (done % 25 === 0) await log(`… ${done}/${keywords.length} 진행 중`);
+        if (done % 25 === 0) {
+          await log(`… ${done}/${keywords.length} 진행 중 (직전 [${kw}] 오가닉 ${payload.products.length}개 · 광고 ${payload.adSkipped}개 제외)`);
+        }
       } catch (e) {
         // 캡차로 확인되면 더 두드리지 않고 즉시 접는다(재시도가 차단을 깊게 만든다)
         if (String(e.message || '').startsWith('BLOCKED:')) {
@@ -600,7 +652,7 @@ async function runOnDemand() {
         await uploadKeyword(token, kw, payload);
         ok++; streak = 0;
         if (ok === 1) await clearBlocked();   // 값을 실제로 받았다 = 차단 풀림
-        await log(`  ✅ [${kw}] 온디맨드 완료 (${payload.products.length}개)`);
+        await log(`  ✅ [${kw}] 온디맨드 완료 (오가닉 ${payload.products.length}개 · 광고 ${payload.adSkipped}개 제외)`);
       } catch (e) {
         if (String(e.message || '').startsWith('BLOCKED:')) {
           await markBlocked(e.message.slice(8) || '온디맨드 중 감지');

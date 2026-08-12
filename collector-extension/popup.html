@@ -12,6 +12,9 @@
   #logs{background:#0f172a;color:#e2e8f0;border-radius:8px;padding:9px;height:130px;overflow:auto;font-size:11px;line-height:1.55;white-space:pre-wrap}
 </style>
 <h1>메타아이앤씨 순위 수집기</h1>
+<!-- 버전은 manifest 에서 읽어 넣는다. 숫자를 여기 박아두면 폴더를 교체해도 옛 버전으로
+     보여 「안 바뀌었다」는 오판을 부른다(2026-08-12 플레이스 추적기 실사고). -->
+<div id="ver" style="margin:-6px 0 10px;font-size:11.5px;color:#64748b"></div>
 <div class="row">
   <input id="token" type="password" placeholder="수집기 토큰 붙여넣기">
   <button id="save">저장</button>
@@ -23,6 +26,6 @@
 </div>
 <div id="logs"></div>
 <details style="margin-top:8px"><summary style="cursor:pointer;font-size:12px;color:#475569">🔬 수집 원본 샘플(필드명 검증용)</summary><pre id="raw" style="max-height:150px;overflow:auto;font-size:10.5px">아직 없음 — 수집 1회 실행 후 표시</pre></details>
-<details style="margin-top:6px"><summary style="cursor:pointer;font-size:12px;color:#475569">🏪 스토어명 없는 상품 원본(1건)</summary><pre id="rawNoMall" style="max-height:150px;overflow:auto;font-size:10.5px">아직 없음</pre></details>
+<details style="margin-top:6px"><summary style="cursor:pointer;font-size:12px;color:#475569">📢 광고 제외 현황 · 광고 상품 원본(1건)</summary><pre id="rawAd" style="max-height:150px;overflow:auto;font-size:10.5px">아직 없음</pre></details>
 <details style="margin-top:6px"><summary style="cursor:pointer;font-size:12px;color:#475569">🩺 마지막 판독 실패(원인 진단용)</summary><pre id="readFail" style="max-height:150px;overflow:auto;font-size:10.5px">없음 — 정상</pre></details>
 <script src="popup.js"></script>
