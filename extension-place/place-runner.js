@@ -1,4 +1,4 @@
-/* METAINC 플레이스 순위 추적기 — 무인 러너 (v1.0.2)
+/* METAINC 플레이스 순위 추적기 — 무인 러너 (v1.0.3)
  *
  * 매일 06:30(로컬) chrome.alarms 로 기동해, 로직분석에 등록된 추적 대상(업체×키워드)을
  * 키워드별로 pcmap.place.naver.com 목록 탭에서 수집(자동 스크롤 + __APOLLO_STATE__ 판독)하고,
@@ -218,7 +218,23 @@ function pageExtract() {
             || key.indexOf('RestaurantAdSummary') === 0 || (('id' in val) && ('name' in val));
           if (!isBiz) return;
           var name = val.name || val.businessName; if (!name) return;
-          items.push({ id: String(val.id || val.businessId || ''), name: String(name), ad: !!isAd });
+          // 리뷰 수도 함께 담는다(2026-08-12) — 목록 데이터에 이미 들어 있는데 종전엔 버렸다.
+          // 이 값이 없으면 리뷰는 「수동 분석에서 캡처를 붙여넣을 때만」 채워지는데
+          // 그 경로가 실제로는 한 번도 성공한 적이 없었다(DB 71행 중 리뷰 0행).
+          // 저장수는 목록 데이터에 없다 → 담당자 직접 입력이 유일한 출처(서버와 동일 규약).
+          // 숫자만 남겨 정수화 — 서버 파서 place_crawler._to_int 와 같은 규칙.
+          // ⚠️ parseInt 만 쓰면 '1,204' 가 1 이 된다(검증에서 실제로 잡힌 건).
+          //    단 값이 아예 없을 때는 서버(0)와 달리 null 을 준다 — 가짜 0 을 보내지 않기 위해.
+          var n = function (v) {
+            if (v === null || v === undefined) return null;
+            var d = String(v).replace(/[^\d]/g, '');
+            return d ? parseInt(d, 10) : null;
+          };
+          items.push({
+            id: String(val.id || val.businessId || ''), name: String(name), ad: !!isAd,
+            vr: n(val.visitorReviewCount),
+            br: n(val.blogCafeReviewCount != null ? val.blogCafeReviewCount : val.blogReviewCount)
+          });
         });
       }
       var rank = 0;
@@ -276,7 +292,11 @@ function onExtracted(out, item) {
         target_id: t.id, keyword: item.keyword, business_name: t.business_name, region: t.region,
         place_id: (matched && matched.id) || t.place_id || null,
         rank: matched ? matched.rank : null,
-        state: matched ? '노출' : '미노출'
+        state: matched ? '노출' : '미노출',
+        // 목록에서 내 업체를 찾았을 때만 리뷰가 있다(못 찾았으면 잴 대상이 없으므로 null).
+        // 가짜 0 금지 — 서버가 None 을 그대로 저장해 화면이 「미확인」으로 표기한다.
+        visitor_reviews: matched ? (matched.vr != null ? matched.vr : null) : null,
+        blog_reviews: matched ? (matched.br != null ? matched.br : null) : null
       });
     });
 
