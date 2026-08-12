@@ -2,9 +2,16 @@
 const $ = (id) => document.getElementById(id);
 
 async function render() {
-  const { token = '', state = {}, logs = [], rawSample = null, rawSampleNoMall = null, readFail = null } =
-    await chrome.storage.local.get(['token', 'state', 'logs', 'rawSample', 'rawSampleNoMall', 'readFail']);
+  const { token = '', state = {}, logs = [], rawSample = null, rawSampleAd = null,
+          lastAdStat = null, readFail = null } =
+    await chrome.storage.local.get(['token', 'state', 'logs', 'rawSample', 'rawSampleAd',
+                                    'lastAdStat', 'readFail']);
   $('token').value = token;
+  try {
+    const v = chrome.runtime.getManifest().version;
+    const ve = $('ver');
+    if (ve) ve.textContent = `v${v} · 광고 제외 오가닉 순위`;
+  } catch (e) { /* 무시 */ }
   // 캡차에 걸려 쉬는 중이면 그게 가장 중요한 정보다 — 맨 위에 눈에 띄게.
   const bu = Number(state.blockedUntil || 0);
   const blockedNow = state.blocked && bu > Date.now();
@@ -25,11 +32,18 @@ async function render() {
   $('logs').textContent = logs.join('\n');
   const rawEl = document.getElementById('raw');
   if (rawEl) rawEl.textContent = rawSample ? `[${rawSample.keyword}] ${rawSample.at}\n` + JSON.stringify(rawSample.item, null, 1) : '아직 없음 — 수집 1회 실행 후 표시';
-  // 스토어명이 빈 상품의 원본 — 어느 키에 스토어명이 들어 있는지 눈으로 확인용
-  const nmEl = document.getElementById('rawNoMall');
-  if (nmEl) nmEl.textContent = rawSampleNoMall
-    ? `[${rawSampleNoMall.keyword}] ${rawSampleNoMall.rank}위 ${rawSampleNoMall.at}\n` + JSON.stringify(rawSampleNoMall.item, null, 1)
-    : '아직 없음 — 수집 중 스토어명 빈 상품을 만나면 표시';
+  // 광고 제외가 실제로 돌고 있는지 + 광고 상품 원본(판별 규칙을 넓힐 때 근거로 쓴다)
+  const adEl = document.getElementById('rawAd');
+  if (adEl) {
+    const head = lastAdStat
+      ? `직전 키워드 [${lastAdStat.keyword}] ${lastAdStat.at}\n` +
+        `  오가닉 ${lastAdStat.kept}개 기록 · 광고 ${lastAdStat.ads}개 순위 제외\n` +
+        `  (광고 표식은 있는데 링크로 못 거른 상품 ${lastAdStat.hint}개)\n\n`
+      : '아직 없음 — 수집 1회 실행 후 표시\n\n';
+    adEl.textContent = head + (rawSampleAd
+      ? `[광고 상품 원본] ${rawSampleAd.keyword} ${rawSampleAd.at}\n` + JSON.stringify(rawSampleAd.item, null, 1)
+      : '(광고 상품 원본 아직 없음)');
+  }
   // 판독 실패 진단 — '차단'과 '못 읽음'을 가르기 위한 근거(제목·주소·본문 일부)
   const rfEl = document.getElementById('readFail');
   if (rfEl) rfEl.textContent = readFail
