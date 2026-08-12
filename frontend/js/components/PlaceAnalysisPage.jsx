@@ -229,7 +229,11 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
         return m ? ('오가닉 ' + m + '곳 인식') : '';
     })();
 
-    var bookmarklet = "javascript:(function(){try{var h=document.documentElement.outerHTML;navigator.clipboard.writeText(h).then(function(){alert('\\u2705 \\ud50c\\ub808\\uc774\\uc2a4 HTML '+Math.round(h.length/1024)+'KB \\ubcf5\\uc0ac \\uc644\\ub8cc! \\ub85c\\uc9c1\\ubd84\\uc11d \\uce78\\uc5d0 \\ubd99\\uc5ec\\ub123\\uc73c\\uc138\\uc694.');}).catch(function(){var t=document.createElement('textarea');t.value=h;document.body.appendChild(t);t.select();document.execCommand('copy');document.body.removeChild(t);alert('\\u2705 HTML \\ubcf5\\uc0ac \\uc644\\ub8cc!');});}catch(e){alert('\\u274c \\ubcf5\\uc0ac \\uc2e4\\ud328: '+e.message);}})();";
+    // ⚠️ 네이버 지도(map.naver.com) 의 검색결과 목록은 pcmap 도메인 **iframe 안**에 있다.
+    //    바깥 문서 outerHTML 에는 목록이 없어서(=서버 파서가 찾는 __APOLLO_STATE__ 부재)
+    //    2026-08-12 이전 캡처는 71건 전부 판독 실패였다. 무인 러너가 pcmap 주소로
+    //    직접 가는 것과 같은 이유 — 목록 화면이 아니면 그 주소로 옮겨준 뒤 다시 누르게 한다.
+    var bookmarklet = "javascript:(function(){try{if(location.host.indexOf('pcmap.place.naver.com')<0){var q='';try{q=new URLSearchParams(location.search).get('query')||'';}catch(e){}if(!q){var p=location.href.split('/search/')[1];if(p){q=decodeURIComponent(p.split('?')[0].split('#')[0].split('/')[0]);}}if(!q){alert('\\u274c \\ub124\\uc774\\ubc84 \\uc9c0\\ub3c4\\uc5d0\\uc11c \\ud0a4\\uc6cc\\ub4dc\\ub97c \\uac80\\uc0c9\\ud55c \\ub4a4, \\uac80\\uc0c9\\uacb0\\uacfc \\ubaa9\\ub85d \\ud654\\uba74\\uc5d0\\uc11c \\ub20c\\ub7ec\\uc8fc\\uc138\\uc694.');return;}alert('\\u27a1 \\uac80\\uc0c9\\uacb0\\uacfc \\ubaa9\\ub85d \\ud654\\uba74\\uc73c\\ub85c \\uc774\\ub3d9\\ud569\\ub2c8\\ub2e4. \\ud654\\uba74\\uc774 \\uc5f4\\ub9ac\\uba74 \\ubd81\\ub9c8\\ud074\\ub9bf\\uc744 \\ud55c \\ubc88 \\ub354 \\ub20c\\ub7ec\\uc8fc\\uc138\\uc694.');location.href='https://pcmap.place.naver.com/place/list?query='+encodeURIComponent(q);return;}var h=document.documentElement.outerHTML;if(h.indexOf('__APOLLO_STATE__')<0){alert('\\u26a0 \\ubaa9\\ub85d\\uc774 \\uc544\\uc9c1 \\uc548 \\uc77d\\ud614\\uc2b5\\ub2c8\\ub2e4. \\uc544\\ub798\\ub85c \\uc870\\uae08 \\uc2a4\\ud06c\\ub864\\ud55c \\ub4a4 \\ub2e4\\uc2dc \\ub20c\\ub7ec\\uc8fc\\uc138\\uc694.');return;}navigator.clipboard.writeText(h).then(function(){alert('\\u2705 \\ud50c\\ub808\\uc774\\uc2a4 HTML '+Math.round(h.length/1024)+'KB \\ubcf5\\uc0ac \\uc644\\ub8cc! \\ub85c\\uc9c1\\ubd84\\uc11d \\uce78\\uc5d0 \\ubd99\\uc5ec\\ub123\\uc73c\\uc138\\uc694.');}).catch(function(){var t=document.createElement('textarea');t.value=h;document.body.appendChild(t);t.select();document.execCommand('copy');document.body.removeChild(t);alert('\\u2705 HTML \\ubcf5\\uc0ac \\uc644\\ub8cc!');});}catch(e){alert('\\u274c \\ubcf5\\uc0ac \\uc2e4\\ud328: '+e.message);}})();";
 
     // ── 입력 섹션 — 스토어 분석(SearchBar)과 **같은 배치·구도**(2026-08-11 대표 지시) ──
     // 행 구성·라벨 스타일·접힘 textarea(포커스 시 확장·용량 배지·초기화)·북마클릿 파란 밴드·
@@ -351,8 +355,9 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
                             React_.createElement('span', { style: { fontSize: 12, fontWeight: 700, color: '#1e40af' } }, '★ 가장 쉬운 방법: 북마클릿 사용'),
                             React_.createElement('span', { style: { fontSize: 11, color: '#3730a3', marginLeft: 8 } },
                                 '아래 버튼을 북마크바로 ', React_.createElement('strong', null, '드래그'),
-                                ' → 네이버 지도 ', React_.createElement('strong', null, '검색결과 목록'),
-                                ' 화면에서(업체 상세 화면이 아니라) 클릭 한 번에 HTML 복사')),
+                                ' → 네이버 지도에서 키워드를 검색한 뒤 클릭. ',
+                                React_.createElement('strong', null, '목록 화면으로 옮겨지면 한 번 더 클릭'),
+                                '하면 복사됩니다(업체 상세 화면에서는 목록이 복사되지 않습니다).')),
                         React_.createElement('a', { href: bookmarklet, draggable: 'true',
                             onClick: function(e) { e.preventDefault(); try { toast.info('클릭하지 말고 브라우저 북마크바로 드래그해서 놓으세요. (북마크바: Ctrl+Shift+B)'); } catch(er){} },
                             style: { display: 'inline-block', padding: '6px 14px', background: '#1e40af', color: '#fff', fontWeight: 700,
