@@ -172,15 +172,39 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
         if (!data) return;
         if (aiTimerRef.current) { clearTimeout(aiTimerRef.current); aiTimerRef.current = null; }
         setAiLoading(true); setAi(null);
-        var sc = data.scores || {};
+        var scAll = data.scores || {};
         var comp = (data.competitors || []).slice(0, 5);
+        // ⚠️ **미확인(기본값) 지표는 AI 에 숫자로 넘기지 않는다**(2026-08-12).
+        //    화면은 「미확인·참고치」라고 정직하게 밝히는데 AI 에는 기본값 숫자만 전달돼,
+        //    「예약 점수 0점 = 예약 연동이 전혀 안 돼 있다」 같은 **사실 아닌 단정**이
+        //    광고주 전달본에 실렸다(실보고서 실측 — 10지표 전부 기본값인 회차).
+        //    → 확인된 지표만 넘기고, 미확인 항목은 **이름만** 알려 「확인이 필요하다」로 쓰게 한다.
+        var msrc = data.metric_source || null;
+        var LBL = data.labels || {};
+        var sc = {}, unknown = [];
+        Object.keys(scAll).forEach(function(k) {
+            if (k === 'total') { sc.total = scAll.total; return; }
+            if (msrc && msrc[k] === 'default') { unknown.push(LBL[k] || k); return; }
+            sc[k] = scAll[k];
+        });
+        var unknownNote = unknown.length
+            ? { unknown_metrics: unknown,
+                note: '위 항목은 값이 확인되지 않아 기본값이 들어간 자리입니다. 점수를 인용하거나 상태를 단정하지 마세요.' }
+            : null;
         var sections = {
             rank: { keyword: data.keyword, region: data.region, rank_state: data.rank_state, rank: data.rank, page: data.page },
             review: { visitor_review_score: sc.visitor_review, blog_review_score: sc.blog_review, review_keyword_score: sc.review_keyword },
             competition: { my_rank: data.rank, competitors: comp },
             opportunity: { scores: sc, suggestions: data.suggestions || [] },
-            strategy: { total: sc.total, scores: sc, weights: data.weights }
+            strategy: { total: sc.total, scores: sc, weights: data.weights,
+                        score_is_reference: unknown.length > 0 }
         };
+        if (unknownNote) {
+            sections.review.unknown_metrics = unknownNote.unknown_metrics;
+            sections.review.note = unknownNote.note;
+            sections.opportunity.unknown_metrics = unknownNote.unknown_metrics;
+            sections.strategy.unknown_metrics = unknownNote.unknown_metrics;
+        }
         api.post('/ai/feedback-all', {
             vertical: 'place', keyword: data.keyword, sections: sections,
             client_name: (businessName || ''), call_type: 'place'
@@ -1015,6 +1039,17 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
                 : null);
     };
 
+    // ⚠️ 섹션 번호는 **실제로 렌더되는 섹션 기준**으로 매긴다(2026-08-12).
+    //    「기회 발굴」은 연관·황금 키워드가 없으면 통째로 생략되는데 뒷 섹션 번호가 6 으로
+    //    고정돼 있어, 광고주가 받는 목차가 1·2·3·4·6 이 됐다(실보고서에서 확인).
+    var hasOpp = function() {
+        var m = result.market || {};
+        return !!(((m.related || []).length) || ((m.golden || []).length));
+    };
+    var secNo = function(key) {
+        return key === 'ai' ? (hasOpp() ? '6' : '5') : ({ score: '1', market: '2', comp: '3', kw: '4', opp: '5' }[key] || '');
+    };
+
     // ── §5 기회 발굴 — 연관 키워드 · 지역 황금 키워드 ──
     var renderSec5Opp = function() {
         var m = result.market || {};
@@ -1023,7 +1058,7 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
         if (!rel.length && !gold.length) return null;
         return (
             React_.createElement(React_.Fragment, null,
-                React_.createElement(window.SectionDivider, { label: '5. 기회 발굴', icon: '💎', color: '#7c3aed', sub: '어디를 파고들면 되나 — 지역 황금 키워드 · 연관 키워드' }),
+                React_.createElement(window.SectionDivider, { label: secNo('opp') + '. 기회 발굴', icon: '💎', color: '#7c3aed', sub: '어디를 파고들면 되나 — 지역 황금 키워드 · 연관 키워드' }),
                 React_.createElement('section', { id: 'sec-place-opp', className: 'section' },
                     React_.createElement('div', { className: 'container' },
                 gold.length
@@ -1166,7 +1201,7 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
         // AI 미완료 상태에서 내보내면 로딩 문구 대신 「완료 후 별도 전달」 안내로 치환된다.
         return (
             React_.createElement(React_.Fragment, null,
-                React_.createElement(window.SectionDivider, { label: '6. 전략·결론', icon: '🧭', color: '#1e293b', sub: '그래서 무엇부터 — 개선 시뮬레이션 · 90일 로드맵 · AI 종합 진단' }),
+                React_.createElement(window.SectionDivider, { label: secNo('ai') + '. 전략·결론', icon: '🧭', color: '#1e293b', sub: '그래서 무엇부터 — 개선 시뮬레이션 · 90일 로드맵 · AI 종합 진단' }),
                 React_.createElement('section', { id: 'sec-ai-feedback', className: 'section' },
                     React_.createElement('span', { className: 'ai-state', style: { display: 'none' },
                         'data-state': aiLoading ? 'loading' : (ai ? 'done' : 'idle') }),

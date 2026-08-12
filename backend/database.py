@@ -267,11 +267,45 @@ def save_place_rank(business_key: str, keyword: str, rank_position=None,
     """플레이스 (업체·키워드) 순위를 하루 1점으로 누적 저장.
     같은 날 재분석 시 그날 값을 최신으로 대체(하루 1점 유지) → 일자별 차트가 깔끔.
     rank_position None = 미노출/미확인(state로 구분).
-    visitor_reviews·blog_reviews·saves 는 같은 시점의 지표 스냅샷(없으면 None — 가짜 0 금지)."""
+    visitor_reviews·blog_reviews·saves 는 같은 시점의 지표 스냅샷(없으면 None — 가짜 0 금지).
+
+    ⚠️ **「미확인」은 그날의 실측을 덮지 않는다**(2026-08-12). 종전엔 같은 날 행을 무조건
+       지우고 새로 넣어서, 새벽 수집기가 잰 실제 순위가 있어도 낮에 캡처 없이 분석을 한 번
+       돌리면 그 기록이 **삭제되고 「미확인」으로 바뀌었다**(실측 소실). 캡처로 못 잰 회차는
+       「우리가 안 봤다」는 뜻일 뿐 「없다」가 아니므로, 본 값이 있으면 그쪽이 이긴다.
+         · 실측 = 순위가 잡혔거나(노출) 찾아봤는데 없었거나(미노출)
+         · 미확인 = 캡처가 없거나 판독 실패 — 아무것도 안 본 상태
+       미확인 회차라도 **담당자가 채운 지표(리뷰·저장수)는 기존 행에 병합**한다(입력 유실 방지).
+    """
     if not business_key or not keyword:
         return
+    MEASURED = ("노출", "미노출")
+    incoming_measured = (rank_position is not None
+                         or str(rank_state or "").strip() in MEASURED)
     conn = _get_conn()
     try:
+        if not incoming_measured:
+            prev = conn.execute(
+                "SELECT id, rank_position, rank_state FROM place_rank_history "
+                "WHERE business_key = ? AND keyword = ? "
+                "AND date(checked_at) = date('now', 'localtime') "
+                "ORDER BY checked_at DESC LIMIT 1",
+                (business_key, keyword)).fetchone()
+            prev_measured = bool(prev and (prev["rank_position"] is not None
+                                           or str(prev["rank_state"] or "").strip() in MEASURED))
+            if prev_measured:
+                # 실측 보존 — 순위는 그대로 두고, 이번에 새로 확보된 지표만 채운다.
+                sets, vals = [], []
+                for col, v in (("visitor_reviews", visitor_reviews),
+                               ("blog_reviews", blog_reviews), ("saves", saves)):
+                    if v is not None:
+                        sets.append(f"{col} = ?")
+                        vals.append(v)
+                if sets:
+                    vals.append(prev["id"])
+                    conn.execute(f"UPDATE place_rank_history SET {', '.join(sets)} WHERE id = ?", vals)
+                    conn.commit()
+                return
         # 오늘 같은 (업체·키워드) 점은 최신으로 대체
         conn.execute(
             "DELETE FROM place_rank_history "
