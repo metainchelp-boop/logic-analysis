@@ -291,7 +291,7 @@ jobs:
                                             FROM collected_serp
                                            WHERE collected_date = date('now','localtime')
                                            ORDER BY created_at DESC LIMIT 30"""))
-                clean = dirty = 0; cnts = []; first = last = None
+                clean = dirty = 0; cnts = []; first = last = None; lines = []
                 for r in nrows:
                     try:
                         ps = _json.loads(r["products_json"]) or []
@@ -301,68 +301,27 @@ jobs:
                     cnts.append(len(ps))
                     if ads: dirty += 1
                     else:   clean += 1
+                    lines.append(f"{r['created_at'][11:]} · 광고 {ads:>3}개 · 상품 {len(ps):>3}개 · {r['keyword'][:16]}")
                     last = last or r["created_at"]
                     first = r["created_at"]
                 if cnts:
                     cnts.sort()
                     print(f"  {first} ~ {last} · {len(cnts)}건")
-                    print(f"  광고 0개(=신버전) {clean}건 · 광고 남아 있음(=구버전) {dirty}건")
+                    print(f"  광고 0개 {clean}건 · 광고 남아 있음 {dirty}건")
                     print(f"  건당 상품 수: 중앙값 {cnts[len(cnts)//2]}개 · 최소 {cnts[0]} · 최대 {cnts[-1]}")
-                    print("  ⇒ 신버전이면 광고 0 · 상품 수 274~300 · mallName 빈 값이 거의 사라진다")
+                    # ⚠️ '광고 0건' 만으로는 못 가른다 — 원래 광고가 없는 키워드도 0 이다.
+                    #    **시간순으로 늘어놓아야** 교체 시점부터 0 으로 바뀌는지가 보인다.
+                    print("  [최근 업로드 시간순 — 교체 시점부터 광고가 0 으로 바뀌면 신버전]")
+                    for x in lines[:14]:
+                        print("   ", x)
                 else:
                     print("  (오늘 업로드 없음)")
             except Exception as e:
                 print("  조회 실패:", e)
 
-            # ③ 우리 추적 상품이 '자기 광고 자리'로 기록돼 있었는지.
-            #    ⚠️ 이게 있으면 광고를 빼는 순간 그 업체 순위는 오히려 뒤로 간다(진짜 오가닉 위치).
-            #    무거운 JSON 파싱 대신 sqlite json_each 로 서버가 걸러내게 한다.
-            #    ⚠️ 상품ID 로 직접 대조하면 안 된다(2026-08-12 실패): 수집분의 productId 는
-            #       nvMid 인데 우리 추적 대상은 스마트스토어 상품번호라 영원히 0건이 나온다.
-            #       순위 판정은 3단(nvMid 일치 → URL 포함 → 스토어명) 규칙이므로
-            #       **실제 판정 함수를 그대로 호출**한다(내부 재현 금지 원칙).
-            print("\n[추적 상품이 '광고 자리'로 기록됐는지 — 실제 순위 판정 함수로 대조]")
-            try:
-                import sys as _sys, logging as _lg
-                _sys.path.insert(0, "/app")
-                _lg.getLogger("naver_crawler").setLevel(_lg.WARNING)   # 건별 INFO 로그 폭주 방지
-                from naver_crawler import find_product_rank_from_cache as _find
-                from collector import _normalize_collected as _norm
-                import rank_record as _rr
-                rc = _rr._conn()
-                scanned = tot4 = ad4 = 0; ex4 = []
-                for r in c.execute("""SELECT keyword, MAX(products_json) products_json
-                                        FROM collected_serp
-                                       WHERE collected_date >= date('now','localtime','-2 day')
-                                       GROUP BY keyword LIMIT 400"""):
-                    # ⚠️ _normalize_collected 는 '상품 1건' 을 받는다(목록 아님).
-                    #    목록째 넘겨 전건 예외 → scanned 0 으로 조용히 비던 것을 수정(2026-08-12).
-                    try:
-                        prods = [_norm(x) for x in (_json.loads(r["products_json"]) or [])]
-                    except Exception as e:
-                        print("  정규화 실패:", e); break
-                    scanned += 1
-                    urls = [t["product_url"] for t in _rr._tracked_targets(rc, r["keyword"])]
-                    urls += [t["naver_store_url"] for t in _rr._client_targets(rc, r["keyword"])]
-                    for u in urls:
-                        if not u: continue
-                        rk, _pg, _cp = _find(r["keyword"], u, prods)
-                        if not rk: continue
-                        tot4 += 1
-                        it = prods[rk - 1] if 0 < rk <= len(prods) else {}
-                        if "adcr" in str(it.get("product_url") or ""):
-                            ad4 += 1
-                            if len(ex4) < 8: ex4.append(f"{r['keyword']} · {rk}위")
-                rc.close()
-                print(f"  키워드 {scanned}건 대조 · 순위가 잡힌 건 {tot4}건 · 그중 광고 자리 {ad4}건")
-                for x in ex4: print(f"    [광고 자리] {x}")
-                print("  ⇒ 광고 자리 건은 수정 후 '진짜 오가닉 위치'로 바뀐다(더 뒤일 수 있음)")
-            except Exception as e:
-                print("  대조 실패:", e)
-
-            # ⚠️ '수집 방식 전환 전후 순위 계단' 측정은 **종결**됐다(2026-08-12 실측):
-            #    공식API→수집기API -0.3계단 / 수집기API→플랜B +3.7계단 / 공식API→플랜B +2.8계단
-            #    = 광고 혼입은 8/8 플랜 B 전환 때 생긴 회귀. 다시 재지 말 것(길이 상한 절약).
+            # ⚠️ '추적 상품이 광고 자리로 기록됐는지' 는 **종결**(2026-08-12 실측:
+            #    순위가 잡힌 206건 중 광고 자리 0건 = 광고를 빼도 뒤로 가는 업체 없음).
+            #    다시 재지 말 것 — 그 측정은 rw 커넥션을 열어 수집 중 쓰기와 겹칠 수 있었다.
             PY
               echo
             fi
