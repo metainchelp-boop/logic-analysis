@@ -220,7 +220,6 @@ jobs:
                 tot = 0
                 miss = {"productId": 0, "title": 0, "link": 0, "price": 0, "mallName": 0}
                 rank_bad = 0
-                nomall, hasmall, nomall_sample = {}, {}, None
                 for r in rows:
                     try:
                         prods = _json.loads(r["products_json"]) or []
@@ -231,21 +230,9 @@ jobs:
                         for k in miss:
                             if not str(p.get(k) or "").strip():
                                 miss[k] += 1
-                        # ⭐ mallName 빈 값의 정체를 링크로 가른다(추측 금지 — 저장된 값만 씀).
-                        #    스마트스토어·브랜드스토어 = 단일 판매처라 스토어명이 있어야 정상 → 빈 값이면 진짜 결함
-                        #    가격비교(카탈로그)·광고 리다이렉트 = 애초에 단일 스토어명이 없음 → 빈 값이 정상
-                        u = str(p.get("link") or "")
-                        if "smartstore.naver.com" in u:      kind = "스마트스토어"
-                        elif "brand.naver.com" in u:          kind = "브랜드스토어"
-                        elif "/catalog/" in u:                kind = "가격비교(카탈로그)"
-                        elif "cr.shopping.naver.com" in u or "adcr" in u: kind = "광고 리다이렉트"
-                        elif not u:                           kind = "링크 없음"
-                        else:                                 kind = "기타"
-                        bucket = nomall if not str(p.get("mallName") or "").strip() else hasmall
-                        bucket[kind] = bucket.get(kind, 0) + 1
-                        if not str(p.get("mallName") or "").strip() and nomall_sample is None:
-                            nomall_sample = {k2: p.get(k2) for k2 in
-                                             ("rank", "productId", "title", "link", "price", "brand")}
+                    # ⚠️ mallName 빈 값의 정체는 **종결**됐다(2026-08-12 실측: 1,045개 전부
+                    #    광고 리다이렉트 링크(adcr) — 광고 상품엔 단일 판매처명이 없다).
+                    #    다시 분류하지 말 것. 이제 볼 것은 '광고가 순위 자리를 먹는 규모'다.
                     ranks = [p.get("rank") for p in prods]
                     if ranks != list(range(1, len(prods) + 1)):
                         rank_bad += 1
@@ -254,39 +241,6 @@ jobs:
                     pct = round(v * 100 / tot, 1) if tot else 0
                     mark = "❌" if pct > 5 else ("⚠️" if pct > 0 else "✅")
                     print(f"  {mark} {k} 빈 값 {v}개 ({pct}%)")
-                if nomall:
-                    print("  [스토어명 빈 상품의 정체 — 링크로 판별]")
-                    real = 0
-                    for k2 in sorted(nomall, key=lambda x: -nomall[x]):
-                        ok = k2 in ("가격비교(카탈로그)", "광고 리다이렉트")
-                        if not ok:
-                            real += nomall[k2]
-                        print(f"    {'✅ 정상(단일 스토어 아님)' if ok else '❌ 결함 의심'}  {k2:18} {nomall[k2]}개")
-                    print(f"    ⇒ 진짜 결함 후보 {real}개 / 빈 값 {sum(nomall.values())}개")
-                    print("  [대조군 — 스토어명이 있는 상품의 링크 분포]")
-                    for k2 in sorted(hasmall, key=lambda x: -hasmall[x])[:5]:
-                        print(f"    {k2:18} {hasmall[k2]}개")
-                    if nomall_sample:
-                        print(f"  [빈 값 표본 1건] {_json.dumps(nomall_sample, ensure_ascii=False)[:300]}")
-                # ⭐ 광고가 순위 번호를 차지하는 규모 — 우리가 기록하는 순위가
-                #    「광고 포함」인지, 오가닉 대비 몇 계단 밀려 있는지 실측한다.
-                #    (광고 판별은 추측이 아니라 링크 실측 — 빈 mallName 1045개가 전부 adcr 였다)
-                a100, a300 = [], []
-                for r in rows:
-                    try:
-                        prods = _json.loads(r["products_json"]) or []
-                    except Exception:
-                        continue
-                    isad = ["adcr" in str(p.get("link") or "") for p in prods]
-                    a100.append(sum(isad[:100]))
-                    a300.append(sum(isad))
-                if a100:
-                    a100.sort(); a300.sort()
-                    mid = len(a100) // 2
-                    print("  [광고가 차지한 순위 자리 — 키워드별]")
-                    print(f"    상위 100위 중 광고: 중앙값 {a100[mid]}개 · 최소 {a100[0]} · 최대 {a100[-1]}")
-                    print(f"    전체 수집분 중 광고: 중앙값 {a300[mid]}개 · 최대 {a300[-1]}")
-                    print(f"    ⇒ 광고를 빼면 100위권 상품 순위가 약 {a100[mid]}계단 앞당겨진다")
                 print(f"  {'❌' if rank_bad else '✅'} 순위 1..n 연속 — 어긋난 키워드 {rank_bad}건")
                 s = None
                 for r in rows:
@@ -297,6 +251,85 @@ jobs:
                     if s: break
                 if s:
                     print(f"  샘플 1위: {_json.dumps(s, ensure_ascii=False)[:400]}")
+
+            # ⭐ 광고 제외 결정(2026-08-12 대표)에 필요한 실측 — 오늘 수집분 전수 1회 스캔.
+            #    ① 광고가 먹는 자리 ② 광고를 빼면 남는 깊이(300 채워지나)
+            #    ③ 우리 추적 상품이 '광고 자리' 순위로 기록되고 있었는지
+            import re as _re
+            print("\n[광고 혼입 실측 — 오늘 수집분 전수]")
+            ids = set()
+            for sql in ("SELECT product_id FROM tracked_products",
+                        "SELECT product_url FROM clients"):
+                try:
+                    for r in c.execute(sql):
+                        m2 = _re.findall(r"(\d{8,})", str(r[0] or ""))
+                        if m2: ids.add(m2[-1])
+                except Exception as e:
+                    print("  대상 조회 실패:", e)
+            a100, a300, deep, shifts, samples = [], [], [], [], []
+            hit = adhit = 0
+            for r in c.execute("""SELECT keyword, products_json FROM collected_serp
+                                   WHERE collected_date = date('now','localtime')"""):
+                try:
+                    prods = _json.loads(r["products_json"]) or []
+                except Exception:
+                    continue
+                o = 0
+                ad_all = ad_100 = 0
+                for p in prods:
+                    isad = "adcr" in str(p.get("link") or "")
+                    if isad:
+                        ad_all += 1
+                        if int(p.get("rank") or 0) <= 100: ad_100 += 1
+                    else:
+                        o += 1
+                    pid = str(p.get("productId") or "")
+                    if pid and pid in ids:
+                        hit += 1
+                        if isad:
+                            adhit += 1
+                            if len(samples) < 5:
+                                samples.append(f"{r['keyword']} · 기록순위 {p.get('rank')} · {str(p.get('title'))[:24]}")
+                        else:
+                            shifts.append(int(p.get("rank") or 0) - o)
+                a100.append(ad_100); a300.append(ad_all); deep.append(o)
+            if a100:
+                a100.sort(); a300.sort(); deep.sort()
+                m = len(a100) // 2
+                print(f"  키워드 {len(a100)}건")
+                print(f"  ① 상위 100위 중 광고: 중앙값 {a100[m]}개 · 최소 {a100[0]} · 최대 {a100[-1]}")
+                print(f"     전체 수집분 중 광고: 중앙값 {a300[m]}개 · 최대 {a300[-1]}")
+                print(f"  ② 광고 빼면 남는 깊이: 중앙값 {deep[m]}개 · 최소 {deep[0]} · 최대 {deep[-1]}")
+                print(f"     ⇒ 300 미만이면 4페이지로는 오가닉 300위를 못 채운다(페이지 추가 판단 근거)")
+            print(f"  ③ 추적 상품 매칭 {hit}건 · 그중 광고 자리로 기록된 것 {adhit}건")
+            if shifts:
+                shifts.sort()
+                print(f"     오가닉 매칭분 순위 보정폭: 중앙값 {shifts[len(shifts)//2]}계단 앞당겨짐 · 최대 {shifts[-1]}계단")
+            for x in samples:
+                print(f"     [광고 자리 표본] {x}")
+
+            # ⭐ 광고 혼입이 '플랜 B 전환(8/8)부터의 회귀'인지, 원래 그랬는지.
+            #    7/31 공식 API 종료 전 = 광고 없는 오가닉이었다 → 창을 셋으로 갈라 계단이 어디서 생겼는지 본다.
+            #    ⚠️ 순위는 자연 변동도 있으니 '개별 값'이 아니라 '중앙값 계단'으로만 읽을 것.
+            print("\n[순위 계단 — 수집 방식 전환 전후 (같은 업체·키워드)]")
+            try:
+                q = """SELECT client_id, keyword,
+                         AVG(CASE WHEN DATE(checked_at) BETWEEN '2026-07-22' AND '2026-07-31' THEN rank_position END) w1,
+                         AVG(CASE WHEN DATE(checked_at) BETWEEN '2026-08-01' AND '2026-08-05' THEN rank_position END) w2,
+                         AVG(CASE WHEN DATE(checked_at) >= '2026-08-09' THEN rank_position END) w3
+                       FROM client_rank_history WHERE rank_position IS NOT NULL
+                       GROUP BY client_id, keyword"""
+                rows2 = list(c.execute(q))
+                def _med(vals):
+                    v = sorted(vals); return round(v[len(v)//2], 1) if v else None
+                for lbl, x, y in (("공식API(7/22~31) → 수집기API(8/1~5)", "w1", "w2"),
+                                  ("수집기API(8/1~5) → 플랜B(8/9~)", "w2", "w3"),
+                                  ("공식API(7/22~31) → 플랜B(8/9~)", "w1", "w3")):
+                    d = [r2[y] - r2[x] for r2 in rows2 if r2[x] is not None and r2[y] is not None]
+                    print(f"  {lbl}: 쌍 {len(d)}건 · 중앙값 {_med(d)}계단 (＋면 뒤로 밀림)" if d
+                          else f"  {lbl}: 대조 가능한 쌍 없음")
+            except Exception as e:
+                print("  조회 실패:", e)
             PY
               echo
             fi
