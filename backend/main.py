@@ -2028,10 +2028,21 @@ def _place_auto_track(name: str, region: str, base_kw: str, place_id: str, curre
     ⚠️ 등록 키워드는 **추적이 쓰는 형태(지역 합성)** 여야 한다 — 화면에 적은 원 키워드로 넣으면
        러너가 다른 검색어로 수집해 조회 키가 또 갈린다(`_combine_region_keyword` 단일 규칙).
     ⚠️ 실패해도 본 작업(제안서·분석)은 그대로 성립해야 하므로 전부 무해 실패.
+
+    ⚠️ **업체명과 같은 키워드는 등록하지 않는다**(2026-08-12). 자기 상호로 지도를 검색하면
+       당연히 자기가 1위라 순위 지표가 되지 못하는데, 그게 등록되면
+         · 수집기가 매일 그 검색어를 실제로 조회하고(불필요한 네이버 호출)
+         · 「업체명 → 1위」가 광고주 화면에 성과처럼 표시된다.
+       실제로 ①(전산) 공유 대시보드가 이 엔드포인트를 소비하면서 사람이 적는 키워드가 없어
+       **`keyword` 자리에 업체명을** 넣어 보내는 것이 확인됐다(2026-08-12 ①→② 통지).
+       사람이 직접 상호를 키워드로 적어도 결과는 같으므로, 호출자를 가리지 않고 여기서 막는다.
+       (등록이 필요하면 지도 순위 추적 화면에서 사람이 명시적으로 넣으면 된다.)
     """
     try:
         if not (name or "").strip() or not (base_kw or "").strip():
             return {"created": False}
+        if place_crawler._norm(base_kw) == place_crawler._norm(name):
+            return {"created": False, "reason": "업체명과 같은 키워드 — 순위 지표가 아니라 등록하지 않음"}
         from database import ensure_place_track_target
         r = ensure_place_track_target(
             business_name=name, region=region,
