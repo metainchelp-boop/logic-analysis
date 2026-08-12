@@ -398,6 +398,9 @@ jobs:
             echo "== 컨테이너 상태 =="
             docker ps --filter name=logic-analysis --format '{{.Names}} {{.Status}}'
             echo
+            echo "== 배포된 코드 확인 (자동 등록 가드) =="
+            docker exec -i logic-analysis grep -c "업체명과 같은 키워드" /app/backend/main.py || echo "0 (가드 없음)"
+            echo
             echo "== 플레이스 추적 DB (읽기 전용) =="
             docker exec -i logic-analysis python3 - <<'PY'
             import sqlite3
