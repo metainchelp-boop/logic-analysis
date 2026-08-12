@@ -398,9 +398,6 @@ jobs:
             echo "== 컨테이너 상태 =="
             docker ps --filter name=logic-analysis --format '{{.Names}} {{.Status}}'
             echo
-            echo "== 배포된 코드 확인 (자동 등록 가드) =="
-            docker exec -i logic-analysis grep -c "업체명과 같은 키워드" /app/backend/main.py || echo "0 (가드 없음)"
-            echo
             echo "== 플레이스 추적 DB (읽기 전용) =="
             docker exec -i logic-analysis python3 - <<'PY'
             import sqlite3
@@ -608,6 +605,20 @@ jobs:
       # ── 맞춤제안서(플레이스) enrich 재현 진단 (2026-08-05) ──────────────
       # 실제 제안서와 같은 입력으로 서버 안에서 같은 함수를 호출해, 어느 단계에서
       # 값이 비는지(검색량/순위/상권) 단계별로 드러낸다. 전부 읽기 전용 조회.
+      # 배포 반영 확인 — 로그 꼬리에서 바로 보이도록 큰 조회 뒤에 둔다.
+      - name: 배포된 코드 확인 (자동 등록 가드)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 60s
+          script: |
+            echo "== 자동 등록 가드 (업체명 == 키워드면 등록 안 함) =="
+            N=$(docker exec -i logic-analysis grep -c "업체명과 같은 키워드" /app/backend/main.py || echo 0)
+            echo "매칭 $N 건 → $([ "$N" -gt 0 ] && echo '가드 있음(배포 반영됨)' || echo '가드 없음(미반영)')"
+            docker inspect -f 'StartedAt={{.State.StartedAt}}' logic-analysis
+
       - name: 제안서 enrich 재현 진단
         if: ${{ github.event.inputs.enrich_probe != '' }}
         uses: appleboy/ssh-action@v1.0.3
