@@ -360,28 +360,9 @@ jobs:
             except Exception as e:
                 print("  대조 실패:", e)
 
-            # ⭐ 광고 혼입이 '플랜 B 전환(8/8)부터의 회귀'인지, 원래 그랬는지.
-            #    7/31 공식 API 종료 전 = 광고 없는 오가닉이었다 → 창을 셋으로 갈라 계단이 어디서 생겼는지 본다.
-            #    ⚠️ 순위는 자연 변동도 있으니 '개별 값'이 아니라 '중앙값 계단'으로만 읽을 것.
-            print("\n[순위 계단 — 수집 방식 전환 전후 (같은 업체·키워드)]")
-            try:
-                q = """SELECT client_id, keyword,
-                         AVG(CASE WHEN DATE(checked_at) BETWEEN '2026-07-22' AND '2026-07-31' THEN rank_position END) w1,
-                         AVG(CASE WHEN DATE(checked_at) BETWEEN '2026-08-01' AND '2026-08-05' THEN rank_position END) w2,
-                         AVG(CASE WHEN DATE(checked_at) >= '2026-08-09' THEN rank_position END) w3
-                       FROM client_rank_history WHERE rank_position IS NOT NULL
-                       GROUP BY client_id, keyword"""
-                rows2 = list(c.execute(q))
-                def _med(vals):
-                    v = sorted(vals); return round(v[len(v)//2], 1) if v else None
-                for lbl, x, y in (("공식API(7/22~31) → 수집기API(8/1~5)", "w1", "w2"),
-                                  ("수집기API(8/1~5) → 플랜B(8/9~)", "w2", "w3"),
-                                  ("공식API(7/22~31) → 플랜B(8/9~)", "w1", "w3")):
-                    d = [r2[y] - r2[x] for r2 in rows2 if r2[x] is not None and r2[y] is not None]
-                    print(f"  {lbl}: 쌍 {len(d)}건 · 중앙값 {_med(d)}계단 (＋면 뒤로 밀림)" if d
-                          else f"  {lbl}: 대조 가능한 쌍 없음")
-            except Exception as e:
-                print("  조회 실패:", e)
+            # ⚠️ '수집 방식 전환 전후 순위 계단' 측정은 **종결**됐다(2026-08-12 실측):
+            #    공식API→수집기API -0.3계단 / 수집기API→플랜B +3.7계단 / 공식API→플랜B +2.8계단
+            #    = 광고 혼입은 8/8 플랜 B 전환 때 생긴 회귀. 다시 재지 말 것(길이 상한 절약).
             PY
               echo
             fi
