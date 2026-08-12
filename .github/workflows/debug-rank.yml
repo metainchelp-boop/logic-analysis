@@ -220,6 +220,7 @@ jobs:
                 tot = 0
                 miss = {"productId": 0, "title": 0, "link": 0, "price": 0, "mallName": 0}
                 rank_bad = 0
+                nomall, hasmall, nomall_sample = {}, {}, None
                 for r in rows:
                     try:
                         prods = _json.loads(r["products_json"]) or []
@@ -230,6 +231,21 @@ jobs:
                         for k in miss:
                             if not str(p.get(k) or "").strip():
                                 miss[k] += 1
+                        # ⭐ mallName 빈 값의 정체를 링크로 가른다(추측 금지 — 저장된 값만 씀).
+                        #    스마트스토어·브랜드스토어 = 단일 판매처라 스토어명이 있어야 정상 → 빈 값이면 진짜 결함
+                        #    가격비교(카탈로그)·광고 리다이렉트 = 애초에 단일 스토어명이 없음 → 빈 값이 정상
+                        u = str(p.get("link") or "")
+                        if "smartstore.naver.com" in u:      kind = "스마트스토어"
+                        elif "brand.naver.com" in u:          kind = "브랜드스토어"
+                        elif "/catalog/" in u:                kind = "가격비교(카탈로그)"
+                        elif "cr.shopping.naver.com" in u or "adcr" in u: kind = "광고 리다이렉트"
+                        elif not u:                           kind = "링크 없음"
+                        else:                                 kind = "기타"
+                        bucket = nomall if not str(p.get("mallName") or "").strip() else hasmall
+                        bucket[kind] = bucket.get(kind, 0) + 1
+                        if not str(p.get("mallName") or "").strip() and nomall_sample is None:
+                            nomall_sample = {k2: p.get(k2) for k2 in
+                                             ("rank", "productId", "title", "link", "price", "brand")}
                     ranks = [p.get("rank") for p in prods]
                     if ranks != list(range(1, len(prods) + 1)):
                         rank_bad += 1
@@ -238,6 +254,20 @@ jobs:
                     pct = round(v * 100 / tot, 1) if tot else 0
                     mark = "❌" if pct > 5 else ("⚠️" if pct > 0 else "✅")
                     print(f"  {mark} {k} 빈 값 {v}개 ({pct}%)")
+                if nomall:
+                    print("  [스토어명 빈 상품의 정체 — 링크로 판별]")
+                    real = 0
+                    for k2 in sorted(nomall, key=lambda x: -nomall[x]):
+                        ok = k2 in ("가격비교(카탈로그)", "광고 리다이렉트")
+                        if not ok:
+                            real += nomall[k2]
+                        print(f"    {'✅ 정상(단일 스토어 아님)' if ok else '❌ 결함 의심'}  {k2:18} {nomall[k2]}개")
+                    print(f"    ⇒ 진짜 결함 후보 {real}개 / 빈 값 {sum(nomall.values())}개")
+                    print("  [대조군 — 스토어명이 있는 상품의 링크 분포]")
+                    for k2 in sorted(hasmall, key=lambda x: -hasmall[x])[:5]:
+                        print(f"    {k2:18} {hasmall[k2]}개")
+                    if nomall_sample:
+                        print(f"  [빈 값 표본 1건] {_json.dumps(nomall_sample, ensure_ascii=False)[:300]}")
                 print(f"  {'❌' if rank_bad else '✅'} 순위 1..n 연속 — 어긋난 키워드 {rank_bad}건")
                 s = None
                 for r in rows:
