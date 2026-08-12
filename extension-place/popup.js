@@ -55,3 +55,11 @@
   refresh();
   setInterval(refresh, 3000);
 })();
+
+/* 버전은 manifest 에서 읽는다 — 팝업에 숫자를 박아두면 교체해도 옛 버전으로 보여
+   '안 바뀌었다'는 오판을 부른다(2026-08-12 실사고). */
+try {
+  var _v = chrome.runtime.getManifest().version;
+  var _e = document.getElementById('ver');
+  if (_e) _e.textContent = 'v' + _v + ' · 무인 추적';
+} catch (e) {}
