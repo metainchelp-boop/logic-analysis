@@ -231,7 +231,12 @@ def _region_coord(query: str):
         # title 에 <b> 강조 태그가 섞여 오므로 걷어낸다
         import re as _re
         title = _re.sub(r"<[^>]+>", "", str(items[0].get("title") or ""))
-        return x, y, title
+        # ⭐ 네 번째 값 = **지번 주소**(2026-08-12 실측으로 확인 — 우리가 받고도 버리던 필드).
+        #    '경기도 수원시 장안구 조원동 894' 처럼 시도·시군구·법정동이 다 들어 있어
+        #    ⑴ 나온 업체가 정말 그 동네인지 좌표 없이 먼저 거를 수 있고
+        #    ⑵ 법정동으로 행정동을 확정할 수 있다(동명이동·법정동≠행정동 양쪽 해소).
+        #    roadAddress(도로명)에는 법정동이 없으므로 반드시 address 를 쓴다.
+        return x, y, title, str(items[0].get("address") or "")
     except Exception as e:
         logger.warning(f"[sbiz365] 좌표 확보 실패(무시): {e}")
         return None
@@ -266,8 +271,61 @@ def _admi_matches_region(admi: dict, region: str) -> bool:
 # 그 시군구는 확정된 것으로 본다(실측: 성사동 100%·미사동 100%·구로동 63%·역삼동 82%).
 GU_CONFIDENT_SHARE = 0.60
 
+# 지번 주소에서 법정동으로 읽을 꼬리말
+_ADDR_DONG_TAIL = ("동", "가", "읍", "면", "리")
 
-def _coord_to_admi(x, y):
+
+def _parse_addr(address: str) -> dict:
+    """지번 주소 → {sido, gu, ldong}. 없으면 빈 dict.
+
+    예) '경기도 고양시 덕양구 성사동 243-4 1층' → sido 경기도 · gu 고양시 덕양구 · ldong 성사동
+        '경기도 수원시 장안구 조원동 894'      → sido 경기도 · gu 수원시 장안구 · ldong 조원동
+
+    ⚠️ **지번 주소(address)** 전용이다 — roadAddress(도로명)에는 법정동이 없다.
+    ⚠️ 번지가 나오면 거기서 끊는다(그 뒤는 층·호수라 지역 정보가 아니다)."""
+    import re                                      # 이 파일은 함수 안에서 re 를 쓴다
+    toks = [t for t in re.split(r"\s+", str(address or "").strip()) if t]
+    if len(toks) < 3:
+        return {}
+    sido = toks[0]
+    ldong, ldong_i = "", -1
+    for i in range(1, len(toks)):
+        t = toks[i]
+        if any(ch.isdigit() for ch in t):
+            break                                  # 번지부터는 주소가 아니다
+        if t.endswith(_ADDR_DONG_TAIL):
+            ldong, ldong_i = t, i                  # 마지막으로 만난 것이 법정동
+    if not ldong:
+        return {"sido": sido, "gu": " ".join(toks[1:2]), "ldong": ""}
+    return {"sido": sido, "gu": " ".join(toks[1:ldong_i]), "ldong": ldong}
+
+
+def _addr_matches_region(addr: dict, region: str) -> bool:
+    """지역검색이 내준 **업체 주소**가 사장님이 적은 지역과 같은 동네인가.
+
+    ⭐ 이 검사가 2026-08-11 조원동 사고를 **좌표를 쓰기도 전에** 끊는다 — 그때는
+       '조원동'으로 검색해 나온 서울 업소의 좌표를 그대로 믿었는데, 그 업소의 주소를
+       읽어 보면 애초에 조원동이 아니다. 주소는 이미 받아 놓은 값이라 추가 호출 0.
+
+    ⚠️ 판정은 **관대해도 안전하다** — 여기서 걸러진 후보는 다음 후보로 넘어갈 뿐이고,
+       통과해도 뒤에서 법정동·행정동으로 한 번 더 확인한다."""
+    if not addr:
+        return True                                # 주소가 없으면 근거 없음 — 막지 않는다
+    reg = _norm(region)
+    if not reg:
+        return False
+    ld, gu = _norm(addr.get("ldong") or ""), _norm(addr.get("gu") or "")
+    if ld and (ld in reg or reg in ld):
+        return True
+    # 사장님이 동을 안 적고 시·군·구만 적은 경우('하남시')
+    if gu and (gu in reg or reg in gu):
+        return True
+    # '성사1동' ↔ '성사동' 처럼 숫자만 다른 표기
+    stem = _norm(_region_stem(region))
+    return bool(stem) and bool(ld) and stem in ld
+
+
+def _coord_to_admi(x, y, want_ldong: str = "", want_gu: str = ""):
     """좌표 → 행정동(admiCd 8자리) + 그 반경의 행정동·시군구 **분포**.
 
     ⚠️ 2026-08-05 실측: 소상공인365 내부 `getCoordToAdmPoint.json` 은 500, 다른 후보 경로도 전부 404.
@@ -277,7 +335,13 @@ def _coord_to_admi(x, y):
     경계 근처면 옆 동이 잡혀 통째로 어긋났다(역삼동 주민센터 좌표 → 1건째 '서초구 서초2동'
     → 상권 생략). 같은 반경을 **100건** 받아 세어 보면 '역삼1동 82%'로 명백하다.
     호출 수는 그대로(1회)이고 응답만 커진다 → **최빈 행정동**을 채택한다.
-    덤으로 시군구 분포도 함께 돌려준다 — 동이 안 맞을 때 시군구로 후퇴할지 판정하는 근거."""
+    덤으로 시군구 분포도 함께 돌려준다 — 동이 안 맞을 때 시군구로 후퇴할지 판정하는 근거.
+
+    ⭐⭐ 2026-08-12 실측 — 이 응답에는 **법정동(ldongCd/ldongNm)과 행정동(adongCd/adongNm)이
+    나란히** 온다. 업체 주소의 법정동('성사동')으로 걸러 그 안에서 행정동을 고르면
+    **동을 정확히 짚는다**. 종전에 성사동→흥도동·역삼동→서초2동으로 어긋난 건 좌표가
+    틀려서가 아니라 **법정동과 행정동이 다른 축인데 이름 어간으로 비교**했기 때문이다.
+    `want_ldong` 이 없거나 걸리는 상가가 없으면 종전대로 최빈 행정동(무회귀)."""
     key = _env_keys()["datago"]
     if not key:
         return None
@@ -301,6 +365,9 @@ def _coord_to_admi(x, y):
             dong_cnt = collections.Counter()
             dong_meta = {}
             gu_cnt = collections.Counter()
+            ld_cnt = collections.Counter()          # 업체 주소의 법정동에 걸리는 것만
+            ld_meta = {}
+            wl, wg = _norm(want_ldong), _norm(want_gu)
             for it in items:
                 cd = str(it.get("adongCd") or "").strip()
                 if len(cd) != 8:
@@ -310,11 +377,22 @@ def _coord_to_admi(x, y):
                 gn = (it.get("signguNm") or "").strip()
                 if gn:
                     gu_cnt[gn] += 1
+                if wl and _norm(it.get("ldongNm") or "") == wl:
+                    # 같은 이름의 법정동이 다른 시군구에도 있으므로 시군구까지 맞춘다
+                    if not wg or _norm(gn) in wg or wg in _norm(gn):
+                        ld_cnt[cd] += 1
+                        ld_meta.setdefault(cd, it)
             if not dong_cnt:
                 continue
 
-            admi_cd, _hit = dong_cnt.most_common(1)[0]
-            it = dong_meta[admi_cd]
+            if ld_cnt:                              # ⭐ 법정동으로 확정된 경우
+                admi_cd, _hit = ld_cnt.most_common(1)[0]
+                it = ld_meta[admi_cd]
+                matched_by = "ldong"
+            else:
+                admi_cd, _hit = dong_cnt.most_common(1)[0]
+                it = dong_meta[admi_cd]
+                matched_by = "mode"
             sido, gu, dong = it.get("ctprvnNm"), it.get("signguNm"), it.get("adongNm")
             total = sum(gu_cnt.values()) or 1
             top_gu, top_gu_cnt = (gu_cnt.most_common(1)[0] if gu_cnt else (None, 0))
@@ -326,6 +404,9 @@ def _coord_to_admi(x, y):
                     "guNm": gu,
                     "sidoNm": sido,
                     "simpleLoc": " ".join(v for v in (sido, gu, dong) if v),
+                    # 무엇으로 골랐나 — 'ldong'(업체 주소의 법정동으로 확정) / 'mode'(최빈)
+                    "matchedBy": matched_by,
+                    "ldongNm": (it.get("ldongNm") or "").strip(),
                     # 시군구 후퇴 판정용 — 이 반경에서 시군구가 얼마나 한 곳으로 몰렸나
                     "guTop": top_gu,
                     "guShare": round(top_gu_cnt / total, 3),
@@ -351,7 +432,10 @@ def _resolve_admi(region: str, biz_name: str = ""):
     # 캐시된 값이라도 지역과 안 맞으면(구버전이 잘못 넣은 것) 버리고 다시 찾는다.
     # scope 가 없는 구버전 항목도 재해석한다(시군구 후퇴 판정을 못 하므로).
     if cached and cached.get("simpleLoc") and cached.get("scope"):
-        if cached["scope"] == "gu" or _admi_matches_region(cached, region):
+        # 법정동으로 확정한 항목은 이름 어간 대조를 다시 하지 않는다 — 그 대조가
+        # 못 맞히는 경우(성사동→성사1동·역삼동→역삼1동)를 풀려고 넣은 근거이기 때문.
+        if (cached["scope"] == "gu" or cached.get("matchedBy") == "ldong"
+                or _admi_matches_region(cached, region)):
             return cached
 
     reg = (region or "").strip()
@@ -371,10 +455,19 @@ def _resolve_admi(region: str, biz_name: str = ""):
         coord = _region_coord(q)
         if not coord:
             continue
-        admi = _coord_to_admi(coord[0], coord[1])
+        # ⭐ 좌표를 쓰기 전에 **그 업체의 주소**로 먼저 거른다(추가 호출 0).
+        #    2026-08-11 조원동 사고는 여기서 끊긴다 — 서울 업소의 주소는 조원동이 아니다.
+        addr = _parse_addr(coord[3] if len(coord) > 3 else "")
+        if addr and not _addr_matches_region(addr, reg):
+            logger.warning(f"[sbiz365] 주소 불일치로 후보 제외 — 검색어 {q!r} → "
+                           f"{addr.get('gu')} {addr.get('ldong')} (입력 지역 {reg!r})")
+            continue
+        admi = _coord_to_admi(coord[0], coord[1],
+                              want_ldong=addr.get("ldong", ""), want_gu=addr.get("gu", ""))
         if not admi:
             continue
-        if _admi_matches_region(admi, reg):
+        # 법정동으로 확정했으면 이름 어간 대조는 불필요(그게 못 맞히는 경우를 푼 것)
+        if admi.get("matchedBy") == "ldong" or _admi_matches_region(admi, reg):
             admi["scope"] = "dong"
             _cache_put(cache_key, admi)
             return admi
