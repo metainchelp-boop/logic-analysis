@@ -268,6 +268,25 @@ jobs:
                         print(f"    {k2:18} {hasmall[k2]}개")
                     if nomall_sample:
                         print(f"  [빈 값 표본 1건] {_json.dumps(nomall_sample, ensure_ascii=False)[:300]}")
+                # ⭐ 광고가 순위 번호를 차지하는 규모 — 우리가 기록하는 순위가
+                #    「광고 포함」인지, 오가닉 대비 몇 계단 밀려 있는지 실측한다.
+                #    (광고 판별은 추측이 아니라 링크 실측 — 빈 mallName 1045개가 전부 adcr 였다)
+                a100, a300 = [], []
+                for r in rows:
+                    try:
+                        prods = _json.loads(r["products_json"]) or []
+                    except Exception:
+                        continue
+                    isad = ["adcr" in str(p.get("link") or "") for p in prods]
+                    a100.append(sum(isad[:100]))
+                    a300.append(sum(isad))
+                if a100:
+                    a100.sort(); a300.sort()
+                    mid = len(a100) // 2
+                    print("  [광고가 차지한 순위 자리 — 키워드별]")
+                    print(f"    상위 100위 중 광고: 중앙값 {a100[mid]}개 · 최소 {a100[0]} · 최대 {a100[-1]}")
+                    print(f"    전체 수집분 중 광고: 중앙값 {a300[mid]}개 · 최대 {a300[-1]}")
+                    print(f"    ⇒ 광고를 빼면 100위권 상품 순위가 약 {a100[mid]}계단 앞당겨진다")
                 print(f"  {'❌' if rank_bad else '✅'} 순위 1..n 연속 — 어긋난 키워드 {rank_bad}건")
                 s = None
                 for r in rows:
