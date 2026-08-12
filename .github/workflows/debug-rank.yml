@@ -282,6 +282,38 @@ jobs:
                 print(f"  ② 광고 빼면 남는 깊이: 중앙값 {deep[m]}개 · 최소 {deep[0]} · 최대 {deep[-1]}")
                 print(f"     ⇒ 300 미만이면 4페이지로는 오가닉 300위를 못 채운다(페이지 추가 판단 근거)")
 
+            # ⭐ 교체 검증 — **가장 최근 업로드분**에 광고가 남아 있는지.
+            #    광고 제외(수집기 v1.7.0)가 실제로 도는지는 '오늘 전체'가 아니라
+            #    '교체 이후 올라온 것'으로만 갈린다(교체 전 분이 섞이면 판정이 흐려진다).
+            print("\n[교체 검증 — 최근 업로드 30건]")
+            try:
+                nrows = list(c.execute("""SELECT keyword, created_at, product_count, products_json
+                                            FROM collected_serp
+                                           WHERE collected_date = date('now','localtime')
+                                           ORDER BY created_at DESC LIMIT 30"""))
+                clean = dirty = 0; cnts = []; first = last = None
+                for r in nrows:
+                    try:
+                        ps = _json.loads(r["products_json"]) or []
+                    except Exception:
+                        continue
+                    ads = sum(1 for p in ps if "adcr" in str(p.get("link") or ""))
+                    cnts.append(len(ps))
+                    if ads: dirty += 1
+                    else:   clean += 1
+                    last = last or r["created_at"]
+                    first = r["created_at"]
+                if cnts:
+                    cnts.sort()
+                    print(f"  {first} ~ {last} · {len(cnts)}건")
+                    print(f"  광고 0개(=신버전) {clean}건 · 광고 남아 있음(=구버전) {dirty}건")
+                    print(f"  건당 상품 수: 중앙값 {cnts[len(cnts)//2]}개 · 최소 {cnts[0]} · 최대 {cnts[-1]}")
+                    print("  ⇒ 신버전이면 광고 0 · 상품 수 274~300 · mallName 빈 값이 거의 사라진다")
+                else:
+                    print("  (오늘 업로드 없음)")
+            except Exception as e:
+                print("  조회 실패:", e)
+
             # ③ 우리 추적 상품이 '자기 광고 자리'로 기록돼 있었는지.
             #    ⚠️ 이게 있으면 광고를 빼는 순간 그 업체 순위는 오히려 뒤로 간다(진짜 오가닉 위치).
             #    무거운 JSON 파싱 대신 sqlite json_each 로 서버가 걸러내게 한다.
