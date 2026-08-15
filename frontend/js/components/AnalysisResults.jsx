@@ -2,6 +2,7 @@
  * report-shell(좌측 목차 + 본문 전 섹션). App의 상태/핸들러를 props로 받음. */
 window.AnalysisResults = function AnalysisResults(props) {
     var advertiserLoading = props.advertiserLoading;
+    var advertiserNotice = props.advertiserNotice;
     var advertiserReport = props.advertiserReport;
     var analysisData = props.analysisData;
     var companyName = props.companyName;
@@ -130,6 +131,21 @@ window.AnalysisResults = function AnalysisResults(props) {
                 advertiserLoading && !advertiserReport && React.createElement('div', { id: 'sec-strategy', className: 'section' },
                     React.createElement('div', { className: 'container' },
                         React.createElement(LoadingSpinner, { text: '1페이지 진입 전략 분석 중... 약 10~15초 소요됩니다' })
+                    )
+                ),
+
+                advertiserNotice && !advertiserLoading && React.createElement('div', { id: 'sec-strategy', className: 'section fade-in' },
+                    React.createElement('div', { className: 'container' },
+                        React.createElement('div', {
+                            role: 'status',
+                            style: { background: '#fff7ed', border: '1px solid #fdba74', borderRadius: 12, padding: '16px 18px', color: '#9a3412' }
+                        },
+                            React.createElement('div', { style: { fontWeight: 800, marginBottom: 6 } },
+                                advertiserNotice.pending ? '경쟁사 데이터 수집 대기 중' : '경쟁사 분석을 완료하지 못했습니다'),
+                            React.createElement('div', { style: { fontSize: 13, lineHeight: 1.6 } }, advertiserNotice.message),
+                            React.createElement('div', { style: { fontSize: 12, marginTop: 6, color: '#c2410c' } },
+                                '상단 입력값은 유지되어 있으므로 안내 시간 후 분석 실행을 다시 누르면 됩니다.')
+                        )
                     )
                 ),
     

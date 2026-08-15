@@ -2921,7 +2921,7 @@ class ProductSearchRequest(BaseModel):
 def search_products(req: ProductSearchRequest, current_user: dict = Depends(get_current_user)):
     """네이버 쇼핑에서 키워드로 상품 검색 (인증 필수)"""
     try:
-        from naver_crawler import search_naver_shopping_api, _parse_api_item
+        from naver_crawler import search_products as _search_products
         result = search_naver_shopping_api(req.keyword, display=min(req.count, 100), retry_on_429=True)
         items = result.get("items", [])
         products = [_parse_api_item(item, idx + 1) for idx, item in enumerate(items)]
@@ -3205,6 +3205,40 @@ def compute_advertiser_report(keyword: str, product_url: str):
         # [A] 수집 깊이 1000→500 + [B] 3시간 공유 캐시. 같은 키워드를 여러 직원/워커가 분석하면
         #     _shared_crawl가 1회 크롤 결과를 공유(캐시 우선, 실패 시 직접 크롤 폴백 → 분석 안 멈춤).
         all_products = _shared_crawl(req.keyword, 500)
+        used_recent_snapshot = False
+        if not all_products:
+            # 당일 순위 기록은 기존 2일 제한을 유지한다. 다만 경쟁 비교는 최신 데이터가
+            # 없다는 이유로 통째로 사라지지 않도록 최근 7일 이내의 실제 브라우저 수집분을
+            # 사용하고, 아래 collection 메타로 기준일을 사용자에게 명확히 알린다.
+            all_products = _search_products(
+                req.keyword, max_results=500, retry_on_429=False,
+                collected_max_age_days=7)
+            used_recent_snapshot = bool(all_products)
+
+        collection = None
+        try:
+            from collector import serve_from_collected
+            _snapshot = serve_from_collected(
+                req.keyword, display=1, start=1, enqueue_on_miss=False,
+                max_age_days=7 if used_recent_snapshot else 2)
+            if _snapshot:
+                collection = {
+                    "source": "browser_collector",
+                    "collected_date": _snapshot.get("collectedDate"),
+                    "used_recent_snapshot": used_recent_snapshot,
+                }
+        except Exception as _collection_error:
+            logger.warning(f"광고주분석 수집 기준일 조회 실패(분석은 계속): {_collection_error}")
+
+        if not all_products:
+            logger.warning(f"광고주분석: 최근 7일 수집 결과 없음 (keyword={req.keyword})")
+            return {
+                "success": False,
+                "pending": True,
+                "code": "COMPETITOR_DATA_PENDING",
+                "message": "이 키워드의 경쟁사 실측 데이터 수집을 요청했습니다. 약 1~5분 뒤 분석 실행을 다시 눌러주세요.",
+                "retry_after_seconds": 60,
+            }
         rank, page, top_competitors = find_product_rank(
             keyword=req.keyword, product_url=req.product_url, max_pages=5,
             product_name=product_info.get("product_name", ""),
@@ -3646,6 +3680,7 @@ def compute_advertiser_report(keyword: str, product_url: str):
                     "overall_score": score,
                     "strategies": strategies,
                 },
+                "collection": collection,
                 "analyzed_at": datetime.now().isoformat(),
             }
         }

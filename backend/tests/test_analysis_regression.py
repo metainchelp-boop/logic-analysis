@@ -7,7 +7,11 @@
 실행:  python tests/test_analysis_regression.py   (또는 pytest tests/)
 """
 import os
+import json
+import sqlite3
 import sys
+import tempfile
+from datetime import date, timedelta
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -185,6 +189,47 @@ def test_keyword_volume_contract_fields():
         assert f in r0, f"계약 필드 누락: {f} — 제안서 '월 검색량' 깨짐. keys={list(r0.keys())}"
     assert r0["monthlyPcQcCnt"] == 12000 and r0["monthlyMobileQcCnt"] == 30000, \
         f"검색량 파싱 오류: {r0!r}"
+
+
+def test_competitor_analysis_can_use_recent_measured_snapshot_without_changing_rank_default():
+    """오류신고 2026-08-13: 일반 순위는 2일 제한을 유지하되 경쟁 분석만 최근 7일 실측을 쓴다."""
+    import collector
+
+    old_db = collector.DB_PATH
+    with tempfile.TemporaryDirectory() as td:
+        collector.DB_PATH = os.path.join(td, "logic.db")
+        collector.init_collector_db()
+        measured_date = (date.today() - timedelta(days=3)).isoformat()
+        product = {
+            "rank": 1, "title": "한라봉 선물세트", "productId": "123",
+            "link": "https://smartstore.naver.com/test/products/123", "price": 19900,
+            "mallName": "테스트몰", "brand": "테스트", "category1": "식품",
+        }
+        with sqlite3.connect(collector.DB_PATH) as conn:
+            conn.execute(
+                "INSERT INTO collected_serp(keyword,collected_date,total,products_json,product_count) VALUES(?,?,?,?,?)",
+                ("한라봉", measured_date, 1, json.dumps([product], ensure_ascii=False), 1),
+            )
+        try:
+            assert collector.serve_from_collected("한라봉", enqueue_on_miss=False) is None
+            served = collector.serve_from_collected(
+                "한라봉", enqueue_on_miss=False, max_age_days=7)
+            assert served and len(served["items"]) == 1, served
+            assert served["collectedDate"] == measured_date
+        finally:
+            collector.DB_PATH = old_db
+
+
+def test_competitor_failure_is_not_silently_hidden_in_frontend():
+    """수집분이 전혀 없을 때 로딩 종료 후 섹션이 사라지는 회귀를 막는다."""
+    frontend = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "js"))
+    with open(os.path.join(frontend, "analysis.jsx"), encoding="utf-8") as f:
+        analysis_source = f.read()
+    with open(os.path.join(frontend, "components", "AnalysisResults.jsx"), encoding="utf-8") as f:
+        results_source = f.read()
+    assert "setAdvertiserNotice" in analysis_source
+    assert "advertiserNotice" in results_source
+    assert "수집" in results_source and "다시" in results_source
 
 
 if __name__ == "__main__":

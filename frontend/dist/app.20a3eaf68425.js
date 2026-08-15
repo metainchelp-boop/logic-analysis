@@ -9105,6 +9105,7 @@ window.EntryStrategySection = function EntryStrategySection(props) {
   }
   var productInfo = advertiserData && advertiserData.product_info || {};
   var comparison = advertiserData && advertiserData.competitor_comparison || {};
+  var collection = advertiserData && advertiserData.collection || null;
   var compItems = comparison.items || [];
   var compStats = comparison.stats || {};
   var strategy = advertiserData && advertiserData.entry_strategy || {};
@@ -9223,7 +9224,19 @@ window.EntryStrategySection = function EntryStrategySection(props) {
     className: 'section fade-in'
   }, React.createElement('div', {
     className: 'container'
-  }, React.createElement('div', {
+  }, showComp && collection && collection.collected_date && React.createElement('div', {
+    role: 'status',
+    style: {
+      marginBottom: 14,
+      padding: '10px 14px',
+      borderRadius: 10,
+      background: collection.used_recent_snapshot ? '#fffbeb' : '#eff6ff',
+      border: '1px solid ' + (collection.used_recent_snapshot ? '#fde68a' : '#bfdbfe'),
+      color: collection.used_recent_snapshot ? '#92400e' : '#1e40af',
+      fontSize: 12.5,
+      fontWeight: 700
+    }
+  }, '브라우저 실측 데이터 · ' + collection.collected_date + ' 수집 기준' + (collection.used_recent_snapshot ? ' (최신 당일 수집분이 없어 최근 실측 스냅샷 사용)' : '')), React.createElement('div', {
     className: 'card',
     style: {
       padding: '20px 22px'
@@ -23932,6 +23945,7 @@ window.TrackRegisterButton = function TrackRegisterButton(props) {
  * report-shell(좌측 목차 + 본문 전 섹션). App의 상태/핸들러를 props로 받음. */
 window.AnalysisResults = function AnalysisResults(props) {
   var advertiserLoading = props.advertiserLoading;
+  var advertiserNotice = props.advertiserNotice;
   var advertiserReport = props.advertiserReport;
   var analysisData = props.analysisData;
   var companyName = props.companyName;
@@ -24094,7 +24108,37 @@ window.AnalysisResults = function AnalysisResults(props) {
     className: 'container'
   }, React.createElement(LoadingSpinner, {
     text: '1페이지 진입 전략 분석 중... 약 10~15초 소요됩니다'
-  }))), /* 대시보드 요약 — 분석 전 메인 화면에서만 표시, 특정 업체 분석 시 숨김 */
+  }))), advertiserNotice && !advertiserLoading && React.createElement('div', {
+    id: 'sec-strategy',
+    className: 'section fade-in'
+  }, React.createElement('div', {
+    className: 'container'
+  }, React.createElement('div', {
+    role: 'status',
+    style: {
+      background: '#fff7ed',
+      border: '1px solid #fdba74',
+      borderRadius: 12,
+      padding: '16px 18px',
+      color: '#9a3412'
+    }
+  }, React.createElement('div', {
+    style: {
+      fontWeight: 800,
+      marginBottom: 6
+    }
+  }, advertiserNotice.pending ? '경쟁사 데이터 수집 대기 중' : '경쟁사 분석을 완료하지 못했습니다'), React.createElement('div', {
+    style: {
+      fontSize: 13,
+      lineHeight: 1.6
+    }
+  }, advertiserNotice.message), React.createElement('div', {
+    style: {
+      fontSize: 12,
+      marginTop: 6,
+      color: '#c2410c'
+    }
+  }, '상단 입력값은 유지되어 있으므로 안내 시간 후 분석 실행을 다시 누르면 됩니다.')))), /* 대시보드 요약 — 분석 전 메인 화면에서만 표시, 특정 업체 분석 시 숨김 */
   !searchedProductUrl && React.createElement(DashboardSummary, {
     products: products,
     searchResult: relatedData
@@ -28685,6 +28729,7 @@ window.createDoSearch = function (deps) {
   var products = deps.products;
   var searchIdRef = deps.searchIdRef;
   var setAdvertiserLoading = deps.setAdvertiserLoading;
+  var setAdvertiserNotice = deps.setAdvertiserNotice || function () {};
   var setAdvertiserReport = deps.setAdvertiserReport;
   var setAnalysisData = deps.setAnalysisData;
   var setCompanyName = deps.setCompanyName;
@@ -28723,6 +28768,7 @@ window.createDoSearch = function (deps) {
     setAnalysisData(null);
     setShopProducts(null);
     setAdvertiserReport(null);
+    setAdvertiserNotice(null);
     setAdvertiserLoading(false);
     setHtmlReviewData(null);
     setHtmlDetailResult(null);
@@ -28764,10 +28810,24 @@ window.createDoSearch = function (deps) {
         product_url: cleanedUrl
       }).then(function (res) {
         if (searchIdRef.current !== currentSearchId) return;
-        if (res && res.success) setAdvertiserReport(res.data);
+        if (res && res.success) {
+          setAdvertiserReport(res.data);
+          setAdvertiserNotice(null);
+        } else {
+          setAdvertiserNotice({
+            code: res && res.code || 'COMPETITOR_ANALYSIS_FAILED',
+            pending: !!(res && res.pending),
+            message: res && res.message || '경쟁사 분석 데이터를 가져오지 못했습니다. 잠시 후 분석 실행을 다시 눌러주세요.'
+          });
+        }
         setAdvertiserLoading(false);
       }).catch(function () {
         if (searchIdRef.current !== currentSearchId) return;
+        setAdvertiserNotice({
+          code: 'COMPETITOR_ANALYSIS_REQUEST_FAILED',
+          pending: false,
+          message: '경쟁사 분석 요청에 실패했습니다. 네트워크를 확인한 뒤 분석 실행을 다시 눌러주세요.'
+        });
         setAdvertiserLoading(false);
       });
     }
@@ -29832,6 +29892,7 @@ window.App = function App() {
   const [shopProducts, setShopProducts] = useState(null);
   const [advertiserReport, setAdvertiserReport] = useState(null);
   const [advertiserLoading, setAdvertiserLoading] = useState(false);
+  const [advertiserNotice, setAdvertiserNotice] = useState(null);
   const [htmlReviewData, setHtmlReviewData] = useState(null);
   const [htmlDetailResult, setHtmlDetailResult] = useState(null);
   const [searchedProductUrl, setSearchedProductUrl] = useState('');
@@ -30238,6 +30299,7 @@ window.App = function App() {
     products: products,
     searchIdRef: searchIdRef,
     setAdvertiserLoading: setAdvertiserLoading,
+    setAdvertiserNotice: setAdvertiserNotice,
     setAdvertiserReport: setAdvertiserReport,
     setAnalysisData: setAnalysisData,
     setCompanyName: setCompanyName,
@@ -30471,7 +30533,7 @@ window.App = function App() {
     id: 'sec-strategy',
     label: '진입전략',
     icon: '🚀',
-    show: !!(advertiserReport || advertiserLoading || analysisData && analysisData.strategicAnalysis)
+    show: !!(advertiserReport || advertiserLoading || advertiserNotice || analysisData && analysisData.strategicAnalysis)
   }, {
     id: 'sec-report',
     label: '보고서',
@@ -30702,6 +30764,7 @@ window.App = function App() {
   }, '모드 해제')), /* ==================== 보고서 레이아웃: 좌측 목차 + 본문 ==================== */
   React.createElement(window.AnalysisResults, {
     advertiserLoading: advertiserLoading,
+    advertiserNotice: advertiserNotice,
     advertiserReport: advertiserReport,
     analysisData: analysisData,
     companyName: companyName,

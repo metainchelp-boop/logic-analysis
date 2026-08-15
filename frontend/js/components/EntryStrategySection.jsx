@@ -23,6 +23,7 @@ window.EntryStrategySection = function EntryStrategySection(props) {
     }
     var productInfo = (advertiserData && advertiserData.product_info) || {};
     var comparison = (advertiserData && advertiserData.competitor_comparison) || {};
+    var collection = (advertiserData && advertiserData.collection) || null;
     var compItems = comparison.items || [];
     var compStats = comparison.stats || {};
     var strategy = (advertiserData && advertiserData.entry_strategy) || {};
@@ -119,6 +120,13 @@ window.EntryStrategySection = function EntryStrategySection(props) {
 
     return React.createElement('div', { id: part === 'competition' ? 'sec-strategy-comp' : 'sec-strategy', className: 'section fade-in' },
         React.createElement('div', { className: 'container' },
+            showComp && collection && collection.collected_date && React.createElement('div', {
+                role: 'status',
+                style: { marginBottom: 14, padding: '10px 14px', borderRadius: 10, background: collection.used_recent_snapshot ? '#fffbeb' : '#eff6ff', border: '1px solid ' + (collection.used_recent_snapshot ? '#fde68a' : '#bfdbfe'), color: collection.used_recent_snapshot ? '#92400e' : '#1e40af', fontSize: 12.5, fontWeight: 700 }
+            },
+                '브라우저 실측 데이터 · ' + collection.collected_date + ' 수집 기준' +
+                (collection.used_recent_snapshot ? ' (최신 당일 수집분이 없어 최근 실측 스냅샷 사용)' : '')
+            ),
 
             React.createElement('div', { className: 'card', style: { padding: '20px 22px' } },
 

@@ -558,11 +558,13 @@ def _to_api_item(p: dict) -> dict:
 
 
 def serve_from_collected(keyword: str, display: int = 100, start: int = 1,
-                         enqueue_on_miss: bool = True) -> Optional[dict]:
+                         enqueue_on_miss: bool = True, max_age_days: int = 2) -> Optional[dict]:
     """죽은 쇼핑 검색 API 를 수집분으로 대체 서빙한다.
 
     search_naver_shopping_api 최상단에서 호출된다(원본 API 응답과 같은 형식으로 반환).
-    · 오늘/어제(2일 내) 수집분이 있으면 → {'total':…, 'items':[원본형식…]} 로 페이징 서빙
+    · 기본은 오늘/어제(2일 내) 수집분만 서빙한다.
+    · 경쟁 비교처럼 당일 순위 기록이 아닌 소비자는 max_age_days=7로 최근 실측 스냅샷을
+      제한적으로 재사용할 수 있다. 응답 collectedDate를 반드시 화면에 함께 표시한다.
     · 없으면 → 요청 큐에 등록하고 None (호출부가 기존 API 경로로 폴백 — API 부활 시 무회귀)
 
     이 한 지점으로 분석기·광고주 분석·키워드 노출·자동 분석이 전부 수집분 위에서 돌게 된다.
@@ -572,14 +574,16 @@ def serve_from_collected(keyword: str, display: int = 100, start: int = 1,
     kw = (keyword or "").strip()
     if not kw:
         return None
+    safe_max_age_days = max(1, min(int(max_age_days or 2), 30))
+    date_modifier = f"-{safe_max_age_days - 1} day"
     conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
     try:
         r = conn.execute("""
             SELECT total, products_json, collected_date FROM collected_serp
-            WHERE keyword=? AND collected_date >= date('now','localtime','-1 day')
+            WHERE keyword=? AND collected_date >= date('now','localtime',?)
             ORDER BY collected_date DESC LIMIT 1
-        """, (kw,)).fetchone()
+        """, (kw, date_modifier)).fetchone()
     finally:
         conn.close()
     if not r:

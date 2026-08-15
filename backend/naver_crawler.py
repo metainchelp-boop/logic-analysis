@@ -157,7 +157,7 @@ def get_search_api_usage_today() -> Dict:
 # ==================== 네이버 쇼핑 공식 API ====================
 
 def search_naver_shopping_api(keyword: str, display: int = 100, start: int = 1, sort: str = "sim", retry_on_429: bool = False,
-                              enqueue_on_miss: bool = True) -> Dict:
+                              enqueue_on_miss: bool = True, collected_max_age_days: int = 2) -> Dict:
     """
     네이버 검색 API - 쇼핑 검색
 
@@ -175,7 +175,8 @@ def search_naver_shopping_api(keyword: str, display: int = 100, start: int = 1, 
     try:
         from collector import serve_from_collected
         _served = serve_from_collected(keyword, display=display, start=start,
-                                       enqueue_on_miss=enqueue_on_miss)
+                                       enqueue_on_miss=enqueue_on_miss,
+                                       max_age_days=collected_max_age_days)
     except Exception as _se:
         _served = None
         logger.warning(f"수집분 서빙 실패(무시, API 폴백): {_se}")
@@ -293,7 +294,8 @@ def get_review_count(product_url: str) -> Optional[int]:
     return None
 
 
-def search_products(keyword: str, max_results: int = 200, retry_on_429: bool = True) -> List[Dict]:
+def search_products(keyword: str, max_results: int = 200, retry_on_429: bool = True,
+                    collected_max_age_days: int = 2) -> List[Dict]:
     """
     키워드로 상품 검색 (최대 1000개까지)
     여러 페이지를 자동으로 조회하여 합침
@@ -303,7 +305,9 @@ def search_products(keyword: str, max_results: int = 200, retry_on_429: bool = T
     per_page = 100
 
     for start in range(1, min(max_results, 1000) + 1, per_page):
-        result = search_naver_shopping_api(keyword, display=per_page, start=start, retry_on_429=retry_on_429)
+        result = search_naver_shopping_api(
+            keyword, display=per_page, start=start, retry_on_429=retry_on_429,
+            collected_max_age_days=collected_max_age_days)
         items = result.get("items", [])
         if not items:
             break

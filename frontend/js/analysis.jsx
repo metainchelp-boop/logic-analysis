@@ -6,6 +6,7 @@ window.createDoSearch = function(deps) {
     var products = deps.products;
     var searchIdRef = deps.searchIdRef;
     var setAdvertiserLoading = deps.setAdvertiserLoading;
+    var setAdvertiserNotice = deps.setAdvertiserNotice || function () {};
     var setAdvertiserReport = deps.setAdvertiserReport;
     var setAnalysisData = deps.setAnalysisData;
     var setCompanyName = deps.setCompanyName;
@@ -43,6 +44,7 @@ window.createDoSearch = function(deps) {
         setAnalysisData(null);
         setShopProducts(null);
         setAdvertiserReport(null);
+        setAdvertiserNotice(null);
         setAdvertiserLoading(false);
         setHtmlReviewData(null);
         setHtmlDetailResult(null);
@@ -81,11 +83,25 @@ window.createDoSearch = function(deps) {
             api.post('/advertiser/analyze', { keyword: keyword, product_url: cleanedUrl })
                 .then(function(res) {
                     if (searchIdRef.current !== currentSearchId) return;
-                    if (res && res.success) setAdvertiserReport(res.data);
+                    if (res && res.success) {
+                        setAdvertiserReport(res.data);
+                        setAdvertiserNotice(null);
+                    } else {
+                        setAdvertiserNotice({
+                            code: (res && res.code) || 'COMPETITOR_ANALYSIS_FAILED',
+                            pending: !!(res && res.pending),
+                            message: (res && res.message) || '경쟁사 분석 데이터를 가져오지 못했습니다. 잠시 후 분석 실행을 다시 눌러주세요.'
+                        });
+                    }
                     setAdvertiserLoading(false);
                 })
                 .catch(function() {
                     if (searchIdRef.current !== currentSearchId) return;
+                    setAdvertiserNotice({
+                        code: 'COMPETITOR_ANALYSIS_REQUEST_FAILED',
+                        pending: false,
+                        message: '경쟁사 분석 요청에 실패했습니다. 네트워크를 확인한 뒤 분석 실행을 다시 눌러주세요.'
+                    });
                     setAdvertiserLoading(false);
                 });
         }

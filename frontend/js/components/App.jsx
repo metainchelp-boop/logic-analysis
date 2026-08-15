@@ -29,6 +29,7 @@ window.App = function App() {
     const [shopProducts, setShopProducts] = useState(null);
     const [advertiserReport, setAdvertiserReport] = useState(null);
     const [advertiserLoading, setAdvertiserLoading] = useState(false);
+    const [advertiserNotice, setAdvertiserNotice] = useState(null);
     const [htmlReviewData, setHtmlReviewData] = useState(null);
     const [htmlDetailResult, setHtmlDetailResult] = useState(null);
     const [searchedProductUrl, setSearchedProductUrl] = useState('');
@@ -326,6 +327,7 @@ window.App = function App() {
         products: products,
         searchIdRef: searchIdRef,
         setAdvertiserLoading: setAdvertiserLoading,
+        setAdvertiserNotice: setAdvertiserNotice,
         setAdvertiserReport: setAdvertiserReport,
         setAnalysisData: setAnalysisData,
         setCompanyName: setCompanyName,
@@ -458,7 +460,7 @@ window.App = function App() {
         { id: 'sec-competitor', label: '경쟁사', icon: '🏆', show: !!(analysisData && analysisData.competitorTable) },
         { id: 'sec-seo', label: 'SEO 진단', icon: '🎯', show: !!searchedProductUrl },
         { id: 'sec-productname', label: '상품명', icon: '✏️', show: !!searchedProductUrl },
-        { id: 'sec-strategy', label: '진입전략', icon: '🚀', show: !!(advertiserReport || advertiserLoading || (analysisData && analysisData.strategicAnalysis)) },
+        { id: 'sec-strategy', label: '진입전략', icon: '🚀', show: !!(advertiserReport || advertiserLoading || advertiserNotice || (analysisData && analysisData.strategicAnalysis)) },
         { id: 'sec-report', label: '보고서', icon: '📄', show: !!searchedProductUrl },
     ].filter(function(s) { return s.show !== false; });
 
@@ -644,6 +646,7 @@ window.App = function App() {
             /* ==================== 보고서 레이아웃: 좌측 목차 + 본문 ==================== */
             React.createElement(window.AnalysisResults, {
                 advertiserLoading: advertiserLoading,
+                advertiserNotice: advertiserNotice,
                 advertiserReport: advertiserReport,
                 analysisData: analysisData,
                 companyName: companyName,
