@@ -18,6 +18,57 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           command_timeout: 90s
           script: |
+            echo "== 영업팀 분석 실행 총량 (읽기 전용) =="
+            docker exec -i logic-analysis python3 - <<'PY2'
+            import sqlite3, json
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            print("[일자별 분석 실행 총량 - 최근 14일]")
+            for r in c.execute(
+                "SELECT usage_date d, COUNT(DISTINCT user_id) users, SUM(query_count) total, "
+                "MAX(query_count) mx FROM daily_usage "
+                "WHERE usage_date >= date('now','localtime','-13 day') "
+                "GROUP BY usage_date ORDER BY d DESC"):
+                print(f"  {r['d']}: 총 {r['total']:4}회 · 사용자 {r['users']:2}명 · 최다 1인 {r['mx']}회")
+            print("")
+            print("[역할별 - 최근 14일 합계]")
+            try:
+                for r in c.execute(
+                    "SELECT COALESCE(u.role,'?') role, COUNT(DISTINCT d.user_id) users, "
+                    "SUM(d.query_count) total, ROUND(AVG(d.query_count),1) avg_day "
+                    "FROM daily_usage d LEFT JOIN users u ON u.id = d.user_id "
+                    "WHERE d.usage_date >= date('now','localtime','-13 day') "
+                    "GROUP BY COALESCE(u.role,'?') ORDER BY total DESC"):
+                    print(f"  {r['role']:12} {r['users']:2}명 · 총 {r['total']:4}회 · 1인1일 평균 {r['avg_day']}")
+            except Exception as e:
+                print("  역할 조인 실패:", e)
+            print("")
+            print("[한도 도달 실태 - 최근 30일]")
+            hit = c.execute("SELECT COUNT(*) n FROM daily_usage WHERE query_count >= 15 "
+                            "AND usage_date >= date('now','localtime','-29 day')").fetchone()["n"]
+            near = c.execute("SELECT COUNT(*) n FROM daily_usage WHERE query_count BETWEEN 10 AND 14 "
+                             "AND usage_date >= date('now','localtime','-29 day')").fetchone()["n"]
+            tot = c.execute("SELECT COUNT(*) n FROM daily_usage "
+                            "WHERE usage_date >= date('now','localtime','-29 day')").fetchone()["n"]
+            print(f"  15회 도달 {hit}건 / 10~14회 근접 {near}건 / 전체 사용자-일 {tot}건")
+            print("")
+            print("[사용자 역할 분포]")
+            try:
+                for r in c.execute("SELECT COALESCE(role,'?') role, COUNT(*) n FROM users "
+                                   "GROUP BY COALESCE(role,'?') ORDER BY n DESC"):
+                    print(f"  {r['role']:12} {r['n']}명")
+            except Exception as e:
+                print("  users 조회 실패:", e)
+            print("")
+            print("[검색 API 자체 계측(오늘)]")
+            try:
+                with open("/app/data/search_api_usage.json") as f:
+                    print("  ", json.load(f))
+            except Exception as e:
+                print("  파일 없음/읽기 실패:", e)
+            PY2
+            echo
             echo "== 수집 키워드 실소비 산출 (읽기 전용) =="
             docker exec -i logic-analysis python3 - <<'PY'
             import sqlite3
