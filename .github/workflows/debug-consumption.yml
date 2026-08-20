@@ -18,6 +18,64 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           command_timeout: 90s
           script: |
+            echo "== 중복 업체 전체 목록 (읽기 전용) =="
+            docker exec -i logic-analysis python3 - <<'PY4'
+            import sqlite3, re
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            _n = lambda k: "".join(str(k or "").split()).lower()
+            def slug(u):
+                m = re.search(r"smartstore\.naver\.com/([^/?#]+)", u or "")
+                return (m.group(1).lower() if m else "")
+            def pid(u):
+                for pat in (r"[?&]nvMid=(\d+)", r"/products/(\d+)", r"/catalog/(\d+)"):
+                    m = re.search(pat, u or "")
+                    if m: return m.group(1)
+                return ""
+
+            rows = [dict(r) for r in c.execute(
+                "SELECT id, name, naver_store_url, COALESCE(role,'advertiser') role, "
+                "COALESCE(auto_analysis,1) auto_on, created_by, created_at, main_keywords "
+                "FROM clients WHERE status='active' AND COALESCE(vertical,'store')='store' ORDER BY id")]
+
+            # 보조 정보: 업체별 순위기록 수·최근 기록일·분석 이력 수
+            def stat(cid):
+                r1 = c.execute("SELECT COUNT(*) n, MAX(substr(checked_at,1,10)) d FROM client_rank_history WHERE client_id=?", (cid,)).fetchone()
+                r2 = c.execute("SELECT COUNT(*) n, MAX(analyzed_date) d FROM client_analyses WHERE client_id=?", (cid,)).fetchone()
+                return r1["n"] or 0, r1["d"] or "-", r2["n"] or 0, r2["d"] or "-"
+
+            # 같은 실체로 묶기: 스토어 슬러그 > 상품ID > 정규화 업체명
+            groups = {}
+            for r in rows:
+                k = slug(r["naver_store_url"]) or pid(r["naver_store_url"]) or ("nm:" + _n(r["name"]))
+                groups.setdefault(k, []).append(r)
+            dup = {k: v for k, v in groups.items() if len(v) > 1}
+
+            # 이름만 같고 위 키로 안 묶인 것도 추가 검출
+            byname = {}
+            for r in rows:
+                byname.setdefault(_n(r["name"]), []).append(r)
+            for k, v in byname.items():
+                if len(v) > 1:
+                    ids = {x["id"] for x in v}
+                    if not any(ids <= {y["id"] for y in g} for g in dup.values()):
+                        dup["nm:" + k] = v
+
+            print(f"활성 스토어 업체 {len(rows)}곳 · 중복 그룹 {len(dup)}개 · 잉여 행 {sum(len(v)-1 for v in dup.values())}개")
+            print("")
+            for i, (k, v) in enumerate(sorted(dup.items()), 1):
+                print(f"[{i}] 기준: {k}")
+                for x in sorted(v, key=lambda z: z["id"]):
+                    rn, rd, an, ad = stat(x["id"])
+                    mk = (x["main_keywords"] or "").strip()
+                    mk = (mk[:40] + "…") if len(mk) > 40 else mk
+                    print(f"    id{x['id']:<4} {x['name'][:22]:24} {x['role']:11} "
+                          f"{'자동ON ' if x['auto_on'] else '자동OFF'} "
+                          f"순위{rn:5}건(최근 {rd}) 분석{an:4}건(최근 {ad}) 등록자={x['created_by'] or '-'} kw[{mk}]")
+                print("")
+            PY4
+            echo
             echo "== 수집 키워드 실소비 산출 (읽기 전용) =="
             docker exec -i logic-analysis python3 - <<'PY'
             import sqlite3
