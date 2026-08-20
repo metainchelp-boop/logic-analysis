@@ -1847,6 +1847,9 @@ def clients_lookup(q: str = Query(None, description="회사명 부분검색"),
 
 # ==================== 일일 조회 제한 ====================
 
+# 영업사원 일일 분석 한도(관리자·매니저는 무제한). 값을 바꾸는 곳은 여기 한 곳.
+VIEWER_DAILY_LIMIT = 30
+
 @router.get("/usage/check")
 def check_usage(current_user: dict = Depends(get_current_user)):
     """일일 조회 횟수 확인"""
@@ -1864,7 +1867,11 @@ def check_usage(current_user: dict = Depends(get_current_user)):
             role = current_user['role']
         except (KeyError, TypeError):
             role = 'readonly'
-        limit = -1 if role in ('admin', 'superadmin', 'manager') else 15
+        # 영업사원(viewer) 일일 분석 한도.
+        # 2026-08-20 대표 지시로 15 → 30. 실측 근거: 영업팀 실제 사용량이 한도에
+        # 눌려 있었고(15 에서 끊김), 30 이면 정상 사용이 걸리지 않는다.
+        # ⚠️ 이 숫자를 화면에 다시 쓰지 말 것 — 안내 문구는 이 응답의 limit 을 읽는다.
+        limit = -1 if role in ('admin', 'superadmin', 'manager') else VIEWER_DAILY_LIMIT
 
         return {
             "success": True,
