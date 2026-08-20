@@ -144,8 +144,23 @@ def start_scheduler():
         max_instances=1,
     )
 
+    # 8) 주간 로직 분석 보고서 — 매주 월요일 09:40 (08:30 분석 잡이 끝난 뒤).
+    #    ① 메타 전산이 광고주 공유 대시보드에 누적해 보여준다(2026-08-20 합의).
+    #    ⚠️ 새 분석을 돌리지 않는다 — 그 주 client_analyses.report_html 을 골라 등록만 한다.
+    #    ⚠️ 08:30 잡의 실제 소요 시간을 아직 못 쟀다(로그 미확보). 겹치면 이 시각을 뒤로
+    #       미루고 ①에 통지할 것. max_instances=1 이라 겹쳐도 중복 실행은 안 된다.
+    #    생성 직후 같은 잡 안에서 보관정책(12주)까지 돈다.
+    _scheduler.add_job(
+        _run_weekly_reports,
+        trigger=CronTrigger(day_of_week="mon", hour=9, minute=40),
+        id="weekly_reports",
+        name="주간 보고서 생성 (월 09:40)",
+        replace_existing=True,
+        max_instances=1,
+    )
+
     _scheduler.start()
-    logger.info("✅ 스케줄러 시작 (계약동기화: 04:00, 순위: 08:00, 분석: 08:30, 리포트: 09:30(발송 비활성), DB백업: 00:30, 보관정책: 01:00, 축 브리지: 01:20, 플레이스 자동추적 정리: 01:40)")
+    logger.info("✅ 스케줄러 시작 (계약동기화: 04:00, 순위: 08:00, 분석: 08:30, 리포트: 09:30(발송 비활성), DB백업: 00:30, 보관정책: 01:00, 축 브리지: 01:20, 플레이스 자동추적 정리: 01:40, 주간 보고서: 월 09:40)")
 
     # 1회성 VACUUM — 보관정책 1회 삭제(2026-08-04)로 생긴 freelist(~2.2GB)를 디스크로 반환.
     # 스케줄러는 단일 워커에서만 기동(위 파일락)하므로 여기서 부르면 중복 실행 없음.
@@ -1074,3 +1089,18 @@ def _run_one_time_vacuum():
 
     threading.Thread(target=_do, daemon=True, name="one-time-vacuum").start()
     logger.info("🧹 [VACUUM] 1회 축소 예약 — 기동 120초 후 백그라운드 실행(마커 없을 때만)")
+
+
+# ==================== 주간 로직 분석 보고서 (월 09:40) ====================
+
+def _run_weekly_reports():
+    """활성 광고주마다 주 1건 보고서를 reports 표에 등록 + 12주 보관정책.
+
+    구현은 weekly_report.py — 여기서는 스케줄러 진입점만 둔다.
+    실패해도 다른 배치에 영향이 없도록 통째로 감싼다.
+    """
+    try:
+        from weekly_report import run_weekly_reports
+        run_weekly_reports()
+    except Exception as e:
+        logger.error(f"❌ 주간 보고서 잡 실패: {e}")
