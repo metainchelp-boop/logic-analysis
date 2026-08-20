@@ -18,6 +18,88 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           command_timeout: 90s
           script: |
+            echo "== 중복 작업·중복 업체 점검 (읽기 전용) =="
+            echo "-- A. 같은 키워드를 하루에 두 번 수집했나 (nginx 업로드 수 vs 저장된 키워드 수) --"
+            for f in /var/log/nginx/access.log.1 /var/log/nginx/access.log; do
+              [ -f "$f" ] && cat "$f"
+            done 2>/dev/null | grep "POST /api/collector/serp" \
+              | awk -v d="$(date +%d/%b/%Y)" 'index($4,d)>0{n++} END{print "  오늘 업로드 요청(POST /serp): " n+0 "회"}'
+            docker exec -i logic-analysis python3 - <<'PY3'
+            import sqlite3
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            _n = lambda k: "".join(str(k or "").split()).lower()
+
+            n_today = c.execute("SELECT COUNT(*) n FROM collected_serp "
+                                "WHERE collected_date = date('now','localtime')").fetchone()["n"]
+            print(f"  오늘 저장된 키워드(고유): {n_today}개")
+            print("  ⇒ 업로드 요청 수가 저장 키워드 수보다 크면 그 차이가 '두 번 한 일'")
+
+            print("")
+            print("-- B. 온디맨드 큐와 시간대 슬롯이 같은 키워드를 동시에 요구하나 --")
+            pend = {_n(r[0]): r[0] for r in c.execute(
+                "SELECT keyword FROM collect_requests WHERE status='pending' AND attempts < 5")}
+            done_today = {_n(r[0]) for r in c.execute(
+                "SELECT keyword FROM collected_serp WHERE collected_date = date('now','localtime')")}
+            print(f"  대기 중 온디맨드: {len(pend)}개")
+            print(f"  그중 오늘 이미 수집 완료된 것: {len(set(pend) & done_today)}개  <- 이건 헛일(이미 있는데 또 요청)")
+
+            print("")
+            print("-- C. 쇼핑 순위 추적 업체 목록의 중복 등록 --")
+            rows = [dict(r) for r in c.execute(
+                "SELECT id, name, naver_store_url, COALESCE(role,'advertiser') role, "
+                "COALESCE(auto_analysis,1) auto_on, created_by, main_keywords "
+                "FROM clients WHERE status='active' AND COALESCE(vertical,'store')='store'")]
+            print(f"  활성 스토어 업체 {len(rows)}곳")
+
+            import re
+            def pid(u):
+                u = u or ""
+                for pat in (r"[?&]nvMid=(\d+)", r"/products/(\d+)", r"/catalog/(\d+)"):
+                    m = re.search(pat, u)
+                    if m: return m.group(1)
+                return ""
+            def slug(u):
+                m = re.search(r"smartstore\.naver\.com/([^/?#]+)", u or "")
+                return (m.group(1).lower() if m else "")
+
+            for label, keyfn in (("업체명(공백·대소문자 무시)", lambda r: _n(r["name"])),
+                                 ("스토어 주소 슬러그", lambda r: slug(r["naver_store_url"])),
+                                 ("상품ID", lambda r: pid(r["naver_store_url"]))):
+                g = {}
+                for r in rows:
+                    k = keyfn(r)
+                    if k: g.setdefault(k, []).append(r)
+                dup = {k: v for k, v in g.items() if len(v) > 1}
+                extra = sum(len(v)-1 for v in dup.values())
+                print(f"  [{label}] 중복 그룹 {len(dup)}개 · 잉여 행 {extra}개")
+                for k, v in list(dup.items())[:6]:
+                    names = " / ".join(f"{x['name']}(id{x['id']},{x['role']},{'ON' if x['auto_on'] else 'OFF'})" for x in v)
+                    print(f"      · {k[:28]:30} -> {names[:110]}")
+
+            print("")
+            print("-- D. 중복 업체가 만드는 중복 수집 --")
+            g = {}
+            for r in rows:
+                k = _n(r["name"])
+                if k: g.setdefault(k, []).append(r)
+            dupnames = {k: v for k, v in g.items() if len(v) > 1}
+            waste = set()
+            for k, v in dupnames.items():
+                sets = []
+                for x in v:
+                    s = {_n(t) for t in (x["main_keywords"] or "").split(",") if t.strip()}
+                    for rr in c.execute("SELECT DISTINCT keyword FROM client_analyses WHERE client_id=?", (x["id"],)):
+                        s.add(_n(rr[0] or ""))
+                    sets.append(s - {""})
+                for i in range(len(sets)):
+                    for j in range(i+1, len(sets)):
+                        waste |= (sets[i] & sets[j])
+            print(f"  같은 이름 업체끼리 겹치는 키워드: {len(waste)}개")
+            print("  (수집은 키워드 단위 1회라 네이버 부하는 안 늘지만, 순위 기록·화면 목록이 두 벌로 갈린다)")
+            PY3
+            echo
             echo "== 수집 키워드 실소비 산출 (읽기 전용) =="
             docker exec -i logic-analysis python3 - <<'PY'
             import sqlite3
