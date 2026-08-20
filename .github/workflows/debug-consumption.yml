@@ -18,6 +18,92 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           command_timeout: 90s
           script: |
+            echo "== 전산 계약연동(ad-sync) 실태 점검 (읽기 전용) =="
+            echo "-- 키 설정 여부(값 미출력) --"
+            docker exec logic-analysis sh -lc 'if [ -n "$ERP_AD_SYNC_API_KEY" ]; then echo "  ERP_AD_SYNC_API_KEY: 설정됨(len=${#ERP_AD_SYNC_API_KEY})"; else echo "  ERP_AD_SYNC_API_KEY: ❌ 미설정 — 연동 전체가 무동작"; fi'
+            echo "-- 최근 동기화 로그 --"
+            docker logs --since 72h logic-analysis 2>&1 | grep -E "계약단계 동기화" | tail -8 || echo "  (로그 없음)"
+            echo "-- 전산 API 응답 필드(읽기 전용·1콜) --"
+            docker exec -i logic-analysis python3 - <<'PY5'
+            import os, json, requests
+            key = os.getenv("ERP_AD_SYNC_API_KEY", "")
+            base = os.getenv("ERP_BASE_URL", "http://api.metainc.co.kr").rstrip("/")
+            if not key:
+                print("  키 미설정 — 호출 생략")
+            else:
+                try:
+                    r = requests.get(f"{base}/api/ad-sync/contracts",
+                                     params={"stage": "진행중", "has_contract": "true"},
+                                     headers={"X-Api-Key": key}, timeout=20)
+                    print(f"  HTTP {r.status_code}")
+                    if r.status_code == 200:
+                        items = ((r.json() or {}).get("result") or {}).get("items") or []
+                        print(f"  진행중 업체 {len(items)}건")
+                        if items:
+                            keys = sorted(items[0].keys())
+                            print(f"  응답 필드 {len(keys)}개: {keys}")
+                            date_like = [k for k in keys if any(t in k.lower() for t in ("date","start","end","expire","period","기간"))]
+                            print(f"  ⭐ 날짜·기간으로 보이는 필드: {date_like or '없음'}")
+                            s = items[0]
+                            safe = {k: s.get(k) for k in keys if k not in ("company_name","store_url")}
+                            print(f"  샘플(상호·URL 제외): {json.dumps(safe, ensure_ascii=False)[:500]}")
+                except Exception as e:
+                    print("  호출 실패:", e)
+            PY5
+            echo "-- 우리 업체 중 전산 매칭 성공률 --"
+            docker exec -i logic-analysis python3 - <<'PY6'
+            import os, re, sqlite3, requests
+            key = os.getenv("ERP_AD_SYNC_API_KEY", "")
+            base = os.getenv("ERP_BASE_URL", "http://api.metainc.co.kr").rstrip("/")
+            PAUSE = ["계약 만료", "환불중", "홀딩중"]; RESUME = ["진행중", "전략 관리", "사후 관리"]
+            _norm = lambda s: re.sub(r"\s+", "", str(s or "")).lower()
+            def slug(u):
+                m = re.search(r"smartstore\.naver\.com/([^/?#]+)", str(u or ""))
+                return m.group(1).lower() if m else ""
+            if not key:
+                print("  키 미설정 — 측정 불가")
+            else:
+                by_name, by_slug = {}, {}
+                got = 0
+                for st in PAUSE + RESUME:
+                    try:
+                        r = requests.get(f"{base}/api/ad-sync/contracts",
+                                         params={"stage": st, "has_contract": "true"},
+                                         headers={"X-Api-Key": key}, timeout=20)
+                        if r.status_code != 200: continue
+                        got += 1
+                        for it in ((r.json() or {}).get("result") or {}).get("items") or []:
+                            n = _norm(it.get("company_name"))
+                            if n: by_name[n] = st
+                            sg = slug(it.get("store_url"))
+                            if sg: by_slug[sg] = st
+                    except Exception as e:
+                        print(f"  {st} 조회 실패: {e}")
+                print(f"  전산 단계 조회 성공 {got}/6 · 상호 {len(by_name)}건 · 스토어URL {len(by_slug)}건")
+                conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(
+                    "SELECT id, name, business_name, naver_store_url, COALESCE(auto_analysis,1) a "
+                    "FROM clients WHERE status='active' AND COALESCE(role,'advertiser')='advertiser' "
+                    "AND COALESCE(vertical,'store')='store'").fetchall()
+                m_slug = m_name = miss = 0
+                stage_cnt = {}
+                for c in rows:
+                    st = None
+                    sg = slug(c["naver_store_url"])
+                    if sg and sg in by_slug: st = by_slug[sg]; m_slug += 1
+                    else:
+                        for nm in (c["name"], c["business_name"]):
+                            k = _norm(nm)
+                            if k and k in by_name: st = by_name[k]; m_name += 1; break
+                    if st is None: miss += 1
+                    else: stage_cnt[st] = stage_cnt.get(st, 0) + 1
+                tot = len(rows)
+                print(f"  우리 활성 광고주 {tot}곳 → 스토어URL 매칭 {m_slug} · 상호 매칭 {m_name} · ❌ 매칭 실패 {miss} ({round(miss*100/max(tot,1))}%)")
+                print(f"  매칭된 단계 분포: {stage_cnt}")
+                print("  ⇒ 매칭 실패분은 전산에서 계약이 끝나도 우리 쪽 자동중지가 안 걸린다")
+            PY6
+            echo
             echo "== 수집 키워드 실소비 산출 (읽기 전용) =="
             docker exec -i logic-analysis python3 - <<'PY'
             import sqlite3
