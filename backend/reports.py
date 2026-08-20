@@ -5,6 +5,7 @@ Generates shareable HTML reports from keyword analysis data
 
 import sqlite3
 import json
+import logging
 import os
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -41,9 +42,36 @@ from auth import get_current_user, require_role
 
 
 # Configuration
+logger = logging.getLogger(__name__)
+
 DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
-REPORTS_DIR = Path("reports")
-REPORTS_DIR.mkdir(exist_ok=True)
+
+# 보고서 HTML 저장 위치.
+# ⚠️ 종전 값은 상대경로 Path("reports") = 컨테이너 안 /app/reports 였는데,
+#    docker-compose 가 마운트하는 볼륨은 ./data:/app/data 하나뿐이다.
+#    즉 배포로 컨테이너가 새로 만들어질 때마다 HTML 파일이 통째로 사라지고,
+#    reports 행(DB=/app/data)만 남아 /view/{hash} 가 404「보고서 파일을 찾을 수
+#    없습니다」로 죽는다. reports 표가 0건이라 여태 아무도 못 겪었을 뿐이다.
+#    → 마운트된 데이터 볼륨 아래로 옮긴다(주간 자동 보고서는 이 위에서 산다).
+REPORTS_DIR = Path(os.getenv("REPORTS_DIR", str(Path(DB_PATH).parent / "reports")))
+REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+
+# 옛 위치. 읽기에만 쓴다(구버전이 남긴 파일이 있으면 계속 열리도록).
+LEGACY_REPORTS_DIR = Path("reports")
+
+
+def resolve_report_file(html_filename: str) -> Optional[Path]:
+    """보고서 HTML 실제 경로 — 새 위치 우선, 없으면 옛 위치."""
+    if not html_filename:
+        return None
+    for base in (REPORTS_DIR, LEGACY_REPORTS_DIR):
+        try:
+            cand = base / html_filename
+            if cand.exists():
+                return cand
+        except Exception:
+            continue
+    return None
 
 
 # Pydantic Models
@@ -138,6 +166,20 @@ def init_reports_db():
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_reports_created_at
         ON reports(created_at)
+    """)
+
+    # 마이그레이션: is_auto — 주간 자동 생성분과 영업용 수동 보고서를 가른다.
+    # ⚠️ 자동 생성 기능과 반드시 같은 배포에 있어야 한다(①메타 전산 요청·2026-08-20).
+    #    표시 없이 자동 생성만 먼저 켜면 첫 회차 수백 건이 표시 없이 들어가고,
+    #    나중에 컬럼을 붙이면 DEFAULT 0 때문에 그 행들이 전부 '수동'으로 둔갑한다.
+    #    되돌릴 근거가 남지 않으므로 나눠서 배포하지 않는다.
+    try:
+        cursor.execute("SELECT is_auto FROM reports LIMIT 1")
+    except Exception:
+        cursor.execute("ALTER TABLE reports ADD COLUMN is_auto INTEGER NOT NULL DEFAULT 0")
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_reports_is_auto
+        ON reports(is_auto, client_id, created_at)
     """)
 
     conn.commit()
@@ -953,6 +995,101 @@ def list_reports(
         )
 
 
+# ==================== 전산①(ERP) 소비 경로 ====================
+# ⚠️ 계약: 아래 응답 필드 이름·의미는 ① 메타 전산이 광고주 공유 대시보드에서 소비한다.
+#    (2026-08-20 합의) 바꾸려면 ①에 사전 통지. 읽기 전용이며 ①은 여기에 쓰지 않는다.
+# ⚠️ 라우트 순서 주의 — 반드시 @router.get("/{report_id}") 보다 위에 있어야 한다.
+#    아래에 두면 "for-erp" 가 report_id(int) 로 해석돼 422 로 막힌다.
+
+@router.get("/for-erp")
+def list_reports_for_erp(
+    client_ids: Optional[str] = Query(None, description="쉼표 구분 업체 id. 생략 시 전체"),
+    since: Optional[str] = Query(None, description="YYYY-MM-DD. 이 날짜 이후 생성분만"),
+    auto_only: bool = Query(True, description="자동 생성분만(전산은 항상 true)"),
+    limit: int = Query(2000, ge=1, le=10000),
+    current_user: dict = Depends(get_current_user),
+):
+    """전산①이 주 1회 훑어가는 보고서 목록. 본문 HTML 은 주지 않는다
+    (광고주는 기존 공개 주소 /api/reports/view/{hash} 로 연다).
+
+    ⚠️ 권한: 이 경로만 전 업체를 열어 준다. 서비스 계정을 admin 으로 올리지 않는 이유는
+    그러면 보고서 삭제·업체 관리까지 함께 열리기 때문이다(최소 권한).
+    읽기 전용이고 auto_only 기본값이 True 라 영업용 수동 보고서는 기본적으로 안 나간다.
+    """
+    try:
+        where = ["1=1"]
+        params: List[Any] = []
+
+        if auto_only:
+            where.append("COALESCE(r.is_auto,0) = 1")
+
+        if client_ids:
+            ids = [int(x) for x in str(client_ids).split(",") if str(x).strip().isdigit()]
+            if not ids:
+                return {"success": True, "reports": []}
+            where.append(f"r.client_id IN ({','.join('?' * len(ids))})")
+            params.extend(ids)
+
+        if since:
+            # 형식이 어긋나면 조용히 무시하지 않고 400 — 전산이 빈 목록을 정상으로 오해하지 않도록.
+            try:
+                datetime.strptime(since, "%Y-%m-%d")
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail={"success": False, "message": "since 는 YYYY-MM-DD 형식이어야 합니다."},
+                )
+            where.append("date(r.created_at) >= date(?)")
+            params.append(since)
+
+        conn = get_db()
+        try:
+            rows = conn.execute(
+                f"""SELECT r.client_id, r.title, r.keyword, r.report_hash, r.created_at,
+                           COALESCE(r.is_auto,0) AS is_auto, r.report_data
+                      FROM reports r
+                     WHERE {' AND '.join(where)}
+                     ORDER BY r.created_at DESC
+                     LIMIT ?""",
+                (*params, limit),
+            ).fetchall()
+        finally:
+            conn.close()
+
+        base = os.getenv("PUBLIC_BASE_URL", "https://logic.metainc.co.kr").rstrip("/")
+        out = []
+        for r in rows:
+            # keywordCount — 업체당 1건으로 굽느라 어차피 세는 값이라 함께 실어 준다.
+            kw_count = None
+            try:
+                d = json.loads(r["report_data"] or "{}")
+                kws = d.get("keywords")
+                if isinstance(kws, list):
+                    kw_count = len(kws)
+            except Exception:
+                kw_count = None
+            out.append({
+                "clientId": r["client_id"],
+                "reportHash": r["report_hash"],
+                "title": r["title"],
+                "keyword": r["keyword"],
+                "keywordCount": kw_count,
+                "auto": bool(r["is_auto"]),
+                "createdAt": r["created_at"],
+                "viewUrl": f"{base}/api/reports/view/{r['report_hash']}",
+            })
+        return {"success": True, "reports": out}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[for-erp] {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={"success": False, "message": "보고서 목록 조회 중 오류가 발생했습니다."},
+        )
+
+
 @router.get("/{report_id}")
 def get_report(
     report_id: int,
@@ -1036,10 +1173,10 @@ def view_public_report(report_hash: str, request: Request):
         conn.commit()
         conn.close()
 
-        # Read HTML file
-        html_path = REPORTS_DIR / report["html_filename"]
+        # Read HTML file (새 위치 → 옛 위치 순으로 찾는다)
+        html_path = resolve_report_file(report["html_filename"])
 
-        if not html_path.exists():
+        if html_path is None:
             raise HTTPException(
                 status_code=404,
                 detail="보고서 파일을 찾을 수 없습니다."
@@ -1093,10 +1230,10 @@ def delete_report(
                 detail={"success": False, "message": "다른 직원의 보고서는 삭제할 수 없습니다."}
             )
 
-        # Delete HTML file
-        html_path = REPORTS_DIR / report["html_filename"]
-        if html_path.exists():
-            html_path.unlink()
+        # Delete HTML file (옛 위치에 남은 파일도 함께 지운다)
+        html_path = resolve_report_file(report["html_filename"])
+        if html_path is not None:
+            html_path.unlink(missing_ok=True)
 
         # Delete from database
         cursor.execute("DELETE FROM reports WHERE id = ?", (report_id,))
