@@ -1,6 +1,6 @@
 name: Debug Consumption (수집 키워드 실소비 산출)
 
-# 배포 후 실서버 검증 v3 — 라이브 번들 마커. ⚠️ 저장소 공개 — 키 값 미출력.
+# 배포 후 실서버 검증 v4 — 실제 소스 문구로 마커 재확인. ⚠️ 저장소 공개 — 키 값 미출력.
 
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ jobs:
   consumption:
     runs-on: ubuntu-latest
     steps:
-      - name: Live bundle markers (read-only)
+      - name: Live bundle markers v4 (read-only)
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -17,22 +17,11 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           command_timeout: 120s
           script: |
-            echo "=== 라이브가 실제로 참조하는 번들 확인 ==="
-            # 실서비스 index.html 이 가리키는 파일명을 먼저 읽는다(가정 금지)
             REF=$(curl -sL http://logic.metainc.co.kr/ | grep -o 'app\.[a-f0-9]*\.js' | head -1)
-            echo "index.html 참조 번들: $REF"
-            F=$(find /root/logic-analysis-deploy/frontend -name "$REF" 2>/dev/null | head -1)
-            echo "호스트 실제 파일: $F"
-            ls -l "$F"
-            echo ""
-            echo "[새 UI 마커]"
-            for m in "track_months" "키워드만 추가" "기한 없음" "이미 등록된" "순위 추적 기간"; do
-              printf '  %-16s %s\n' "$m" "$(grep -c -- "$m" "$F")"
+            F=/root/logic-analysis-deploy/frontend/dist/$REF
+            echo "라이브 번들: $REF"
+            echo "[새 UI — 실제 소스 문구]"
+            for m in "매일 순위 추적 시작" "추적 기간" "종료일이 지나면 추적이 자동으로 멈춥니다" \
+                     "이번 분석 결과만 저장됩니다" "이 업체에 키워드만 추가" "취소"; do
+              printf '  %-40s %s\n' "$m" "$(grep -c -- "$m" "$F")"
             done
-            echo "[무회귀 마커]"
-            for m in "영업 대상으로 저장" "광고주로 등록" "업체 저장"; do
-              printf '  %-16s %s\n' "$m" "$(grep -c -- "$m" "$F")"
-            done
-            echo ""
-            echo "라이브 번들 직접 수신 크기: $(curl -sL "http://logic.metainc.co.kr/dist/$REF" | wc -c) bytes"
-            echo "라이브 번들 안 track_months: $(curl -sL "http://logic.metainc.co.kr/dist/$REF" | grep -c 'track_months')"
