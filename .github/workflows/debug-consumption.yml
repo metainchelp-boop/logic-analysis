@@ -1,7 +1,6 @@
 name: Debug Consumption (수집 키워드 실소비 산출)
 
-# 배포 후 실서버 검증(읽기 전용). 수동 실행 전용 · deploy.yml paths-ignore 등재로 재배포 미유발.
-# ⚠️ 저장소가 공개라 키 값은 절대 출력하지 않는다(존재 여부·길이만).
+# 배포 후 실서버 검증 v2(읽기 전용). ⚠️ 저장소 공개 — 키 값 절대 미출력.
 
 on:
   workflow_dispatch:
@@ -10,7 +9,7 @@ jobs:
   consumption:
     runs-on: ubuntu-latest
     steps:
-      - name: Post-deploy verification (read-only)
+      - name: Post-deploy verification v2 (read-only)
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -18,76 +17,54 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           command_timeout: 180s
           script: |
-            cd /root/logic-analysis-deploy
-            echo "=== ① 키 주입 확인 (값 미출력) ==="
-            echo ".env 안 ERP_AD_SYNC_API_KEY 줄 수: $(grep -c '^ERP_AD_SYNC_API_KEY=' .env 2>/dev/null || echo 0)"
-            echo ".env 안 COLLECTOR_TOKEN 줄 수:     $(grep -c '^COLLECTOR_TOKEN=' .env 2>/dev/null || echo 0)"
-            docker exec logic-analysis sh -c 'if [ -n "$ERP_AD_SYNC_API_KEY" ]; then echo "컨테이너 env 보유: 예 (길이 ${#ERP_AD_SYNC_API_KEY})"; else echo "컨테이너 env 보유: 아니오"; fi'
-            echo "컨테이너 기동 시각: $(docker inspect -f '{{.State.StartedAt}}' logic-analysis)"
-
-            echo ""
-            echo "=== ② 배포된 코드 확인 (경로는 찾아서) ==="
-            MAINPY=$(docker exec logic-analysis find /app -maxdepth 2 -name main.py | head -1)
-            COLPY=$(docker exec logic-analysis find /app -maxdepth 2 -name collector.py | head -1)
-            CDPY=$(docker exec logic-analysis find /app -maxdepth 2 -name client_dashboard.py | head -1)
-            SCHPY=$(docker exec logic-analysis find /app -maxdepth 2 -name scheduler.py | head -1)
-            echo "collector.py=$COLPY  client_dashboard.py=$CDPY  scheduler.py=$SCHPY"
-            echo "collector _tracking_client_ids : $(docker exec logic-analysis grep -c '_tracking_client_ids' $COLPY)"
-            echo "client_dashboard _store_slug   : $(docker exec logic-analysis grep -c '_store_slug' $CDPY)"
-            echo "client_dashboard force_attach  : $(docker exec logic-analysis grep -c 'force_attach' $CDPY)"
-            echo "scheduler 계약 종료일 반영     : $(docker exec logic-analysis grep -c 'track_until' $SCHPY)"
-
-            echo ""
-            echo "=== ③ 라이브 번들 마커 (내용 grep — 해시 대조 아님) ==="
-            BUNDLE=$(docker exec logic-analysis sh -c 'ls -S /app/frontend/dist/app.*.js 2>/dev/null | head -1')
-            echo "번들: $BUNDLE ($(docker exec logic-analysis sh -c "wc -c < $BUNDLE") bytes)"
-            for m in "순위 추적" "track_months" "이 업체에 키워드만 추가" "기한 없음" "이미 등록된 업체"; do
-              echo "  [$m] $(docker exec logic-analysis grep -c "$m" $BUNDLE)"
+            echo "=== ③ 라이브 번들 마커 (경로는 find 로 찾아서) ==="
+            docker exec logic-analysis find /app -name "app.*.js" -not -path "*/node_modules/*" 2>/dev/null | head -5
+            BUNDLE=$(docker exec logic-analysis find /app -name "app.*.js" -not -path "*/node_modules/*" 2>/dev/null | head -1)
+            echo "선택 번들: $BUNDLE"
+            docker exec logic-analysis wc -c "$BUNDLE"
+            for m in "track_months" "키워드만 추가" "기한 없음" "이미 등록된" "순위 추적"; do
+              echo "  [$m] $(docker exec logic-analysis grep -c -- "$m" "$BUNDLE")"
             done
+            echo "라이브 화면 HTTP: $(curl -s -o /dev/null -w '%{http_code}' -L http://logic.metainc.co.kr/)"
+            echo "API 헬스: $(curl -s -o /dev/null -w '%{http_code}' -L http://logic.metainc.co.kr/api/health)"
 
             echo ""
-            echo "=== ④ DDL·자격 분포·유니버스 (실제 진입점 호출) ==="
+            echo "=== ④ 수집 실적 (컬럼명 먼저 확인) ==="
             docker exec -i logic-analysis python3 - <<'PY'
-            import sqlite3, sys, os
+            import sqlite3, sys
             sys.path.insert(0, "/app")
             conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
-            conn.row_factory = sqlite3.Row
             c = conn.cursor()
+            cols = [r[1] for r in c.execute("PRAGMA table_info(collected_serp)")]
+            print("[collected_serp 컬럼]", ", ".join(cols))
+            tcol = next((x for x in cols if "date" in x.lower() or "at" in x.lower() or "time" in x.lower()), None)
+            print("[시각 컬럼 채택]", tcol)
+            if tcol:
+                for d in (0, 1, 2, 3):
+                    n = c.execute(f"SELECT COUNT(DISTINCT keyword) FROM collected_serp"
+                                  f" WHERE date({tcol},'localtime')=date('now','localtime',?)",
+                                  (f"-{d} day",)).fetchone()[0]
+                    print(f"[수집 실적] {d}일 전: {n}개 키워드")
 
-            cols = {r[1] for r in c.execute("PRAGMA table_info(clients)")}
-            print("[DDL] track_enabled 컬럼:", "있음" if "track_enabled" in cols else "없음")
-            print("[DDL] track_until  컬럼:", "있음" if "track_until"  in cols else "없음")
-
-            r = c.execute(
-                "SELECT COUNT(*) tot,"
-                " SUM(CASE WHEN COALESCE(track_enabled,1)=1 THEN 1 ELSE 0 END) on_,"
-                " SUM(CASE WHEN COALESCE(track_enabled,1)=0 THEN 1 ELSE 0 END) off_,"
-                " SUM(CASE WHEN track_until IS NOT NULL AND track_until<>'' THEN 1 ELSE 0 END) until_"
-                " FROM clients WHERE status='active' AND COALESCE(role,'advertiser')='advertiser'"
-                " AND COALESCE(vertical,'store')='store'").fetchone()
-            print(f"[자격] 활성 스토어 광고주 {r['tot']}곳 — 추적 켜짐 {r['on_']} · 꺼짐 {r['off_']} · 종료일 설정 {r['until_']}")
-
-            pros = c.execute("SELECT COUNT(*) FROM clients WHERE status='active'"
-                             " AND COALESCE(role,'advertiser')!='advertiser'").fetchone()[0]
-            print(f"[제외] 영업사원 등록(가망) {pros}곳 — 유니버스에서 빠짐")
-
-            # ⚠️ 내부 재현 금지 — 실제 수집기 함수를 그대로 호출
+            # 게이트 밖으로 빠진 업체가 실제로 어떤 단계인지 (감축의 정체)
             import collector
-            ids = collector._tracking_client_ids(conn)
-            uni = collector._keyword_universe(conn)
-            print(f"\n[★ 자격 업체] {len(ids)}곳")
-            print(f"[★ 수집 유니버스] {len(uni)}개 키워드 (게이트 적용 후 · 실함수 호출)")
-            print(f"[부하 환산] {len(uni)}키워드 x 4페이지 = {len(uni)*4}페이지/일 · 시간당 {round(len(uni)*4/24)}")
-
-            # 오늘 실제 수집량
-            for d in (0, 1, 2):
-                n = c.execute("SELECT COUNT(DISTINCT keyword) FROM collected_serp"
-                              " WHERE date(collected_at,'localtime')=date('now','localtime',?)",
-                              (f"-{d} day",)).fetchone()[0]
-                print(f"[수집 실적] {d}일 전: {n}개 키워드")
+            conn.row_factory = sqlite3.Row
+            ids = set(collector._tracking_client_ids(conn))
+            rows = conn.execute(
+                "SELECT id, name, COALESCE(role,'advertiser') role,"
+                " COALESCE(auto_analysis,1) auto, COALESCE(track_enabled,1) tk,"
+                " COALESCE(auto_analysis_manual,0) man"
+                " FROM clients WHERE status='active' AND COALESCE(vertical,'store')='store'"
+                " AND COALESCE(role,'advertiser')='advertiser'").fetchall()
+            out = [r for r in rows if r["id"] not in ids]
+            print(f"\n[게이트 밖] 활성 스토어 광고주 {len(rows)}곳 중 {len(out)}곳 제외")
+            from collections import Counter
+            why = Counter()
+            for r in out:
+                if not r["auto"]: why["자동분석 꺼짐"] += 1
+                elif not r["tk"]: why["추적 꺼짐"] += 1
+                else: why["기타"] += 1
+            for k, v in why.most_common(): print(f"   - {k}: {v}곳")
+            print(f"[직원 수동 토글 보호] auto_analysis_manual=1 인 업체: "
+                  f"{sum(1 for r in rows if r['man'])}곳 (계약연동이 건드리지 않음)")
             PY
-
-            echo ""
-            echo "=== ⑤ 계약단계 동기화 (다음 04:00 예정 — 지금은 읽기만) ==="
-            docker exec logic-analysis sh -c 'grep -c "04:00\|hour=4" /app/scheduler.py || true'
-            docker logs logic-analysis 2>&1 | grep -i "계약단계\|ad-sync\|ad_sync" | tail -5 || echo "(아직 동기화 로그 없음 — 다음 04:00 첫 실행)"
