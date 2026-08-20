@@ -18,6 +18,93 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           command_timeout: 90s
           script: |
+            echo "== 수집 유니버스 자격 필터 시뮬레이션 (읽기 전용) =="
+            docker exec -i logic-analysis python3 - <<'PY3'
+            import sqlite3
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            _n = lambda k: "".join(str(k or "").split()).lower()
+
+            def kwset(sql, *a):
+                s = {}
+                for r in c.execute(sql, a):
+                    v = r[0]
+                    if v is None: continue
+                    for part in str(v).split(","):
+                        k = part.strip()
+                        if k: s.setdefault(_n(k), k)
+                return s
+
+            # ── 현재 유니버스 (collector._keyword_universe 그대로) ──
+            cur_home = kwset("SELECT DISTINCT keyword FROM tracked_keywords")
+            cur_anal = kwset("SELECT DISTINCT keyword FROM client_analyses")
+            cur_main = kwset("SELECT main_keywords FROM clients WHERE status='active' "
+                             "AND COALESCE(auto_analysis,1)=1 AND COALESCE(role,'advertiser')='advertiser' "
+                             "AND COALESCE(vertical,'store')='store'")
+            CUR = set(cur_home) | set(cur_anal) | set(cur_main)
+            print(f"[현재 유니버스] {len(CUR)}개")
+            print(f"   홈탭 추적(무필터) {len(cur_home)} / 분석이력(무필터) {len(cur_anal)} / 대표키워드(필터O) {len(cur_main)}")
+
+            # ── 자격 있는 업체 = 진행 중 계약(활성·자동분석ON·광고주·스토어) ──
+            ok_ids = [r[0] for r in c.execute(
+                "SELECT id FROM clients WHERE status='active' AND COALESCE(auto_analysis,1)=1 "
+                "AND COALESCE(role,'advertiser')='advertiser' AND COALESCE(vertical,'store')='store'")]
+            ph = ",".join("?"*len(ok_ids)) or "NULL"
+            print("")
+            print("[업체 분류]")
+            for r in c.execute(
+                "SELECT COALESCE(role,'advertiser') role, COALESCE(auto_analysis,1) auto_on, "
+                "COUNT(*) n FROM clients WHERE status='active' AND COALESCE(vertical,'store')='store' "
+                "GROUP BY 1,2 ORDER BY n DESC"):
+                tag = "자격O" if (r["role"]=="advertiser" and r["auto_on"]==1) else "제외대상"
+                label = "광고주" if r["role"]=="advertiser" else "영업대상(prospect)"
+                onoff = "자동분석ON" if r["auto_on"]==1 else "자동분석OFF(환불/홀딩/만료)"
+                print(f"  {label:20} {onoff:26} {r['n']:4}곳  [{tag}]")
+
+            # ── 필터 적용 시 유니버스 ──
+            new_anal = kwset(f"SELECT DISTINCT keyword FROM client_analyses WHERE client_id IN ({ph})", *ok_ids)
+            # 홈탭 추적상품: rank_link 로 자격 업체에 이어진 상품만
+            try:
+                new_home = kwset(
+                    "SELECT DISTINCT k.keyword FROM tracked_keywords k "
+                    "WHERE k.product_id IN (SELECT tracked_product_id FROM rank_link "
+                    f"                        WHERE client_id IN ({ph}))", *ok_ids)
+                linked_ok = True
+            except Exception as e:
+                new_home, linked_ok = {}, False
+                print("  rank_link 조회 실패:", e)
+            NEW = set(new_anal) | set(cur_main) | set(new_home)
+            print("")
+            print(f"[필터 적용 유니버스] {len(NEW)}개  (자격 업체 분석이력 {len(new_anal)} + 대표키워드 {len(cur_main)} + 연결된 홈탭 {len(new_home)})")
+            cut = len(CUR) - len(NEW)
+            print(f"[감축] {cut}개 · {round(cut*100/max(len(CUR),1))}% 감소 → 하루 페이지 {len(CUR)*4} → {len(NEW)*4}")
+
+            # ── 빠지는 것의 정체 ──
+            gone = CUR - NEW
+            paused = kwset("SELECT DISTINCT keyword FROM client_analyses WHERE client_id IN "
+                           "(SELECT id FROM clients WHERE status='active' AND COALESCE(auto_analysis,1)=0 "
+                           " AND COALESCE(role,'advertiser')='advertiser')")
+            prospect = kwset("SELECT DISTINCT keyword FROM client_analyses WHERE client_id IN "
+                             "(SELECT id FROM clients WHERE COALESCE(role,'advertiser')='prospect')")
+            inactive = kwset("SELECT DISTINCT keyword FROM client_analyses WHERE client_id IN "
+                             "(SELECT id FROM clients WHERE status!='active')")
+            print("")
+            print("[빠지는 키워드의 출처 - 중복 포함]")
+            print(f"  환불/홀딩/만료(자동분석OFF) 업체 이력: {len(set(paused)&gone)}개")
+            print(f"  영업팀 등록(prospect) 업체 이력:      {len(set(prospect)&gone)}개")
+            print(f"  비활성 업체 이력:                     {len(set(inactive)&gone)}개")
+            print(f"  자격업체에 안 이어진 홈탭 추적상품:    {len(set(cur_home)&gone)}개")
+
+            # ── 안전 점검: 전산① 계약 노출 키워드가 빠지나 ──
+            portal = kwset(f"SELECT DISTINCT keyword FROM client_analyses WHERE client_id IN ({ph})", *ok_ids)
+            lost_portal = set(portal) & gone
+            print("")
+            print(f"[안전 점검] 전산① 노출 대상(자격업체 분석이력) 중 빠지는 것: {len(lost_portal)}개  <- 0 이어야 안전")
+            print(f"[참고] 홈탭 추적상품 총 {c.execute('SELECT COUNT(*) n FROM tracked_products').fetchone()['n']}개 중 "
+                  f"자격업체 연결 {c.execute(f'SELECT COUNT(DISTINCT tracked_product_id) n FROM rank_link WHERE client_id IN ({ph})', ok_ids).fetchone()['n']}개")
+            PY3
+            echo
             echo "== 수집 키워드 실소비 산출 (읽기 전용) =="
             docker exec -i logic-analysis python3 - <<'PY'
             import sqlite3
