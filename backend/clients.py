@@ -272,6 +272,24 @@ def init_clients_db():
                 cursor.execute("ALTER TABLE clients ADD COLUMN vertical TEXT DEFAULT 'store'")
                 logger.info("[clients] vertical column added via migration")
 
+            # 마이그레이션(#7, 2026-08 추적 수명주기): 순위 추적을 '명시 등록 + 기간'으로.
+            #   track_enabled — 1이면 매일 순위 추적 대상. 종전에는 '분석 이력이 있으면
+            #     무조건 추적'이라 계약이 끝나도 영원히 돌았다(수집 1,001개 중 621개가 그것).
+            #   track_until   — 추적 종료일(YYYY-MM-DD). 지나면 수집 대상에서 자동으로 빠진다.
+            #     NULL = 기한 없음(종전과 동일 동작).
+            # ⚠️ 기본값 1 로 두는 이유: 이미 추적 중이던 광고주가 배포 순간 통째로 빠지는
+            #    회귀를 막기 위함. 신규 등록은 화면에서 명시 선택한 값이 들어온다.
+            try:
+                cursor.execute("SELECT track_enabled FROM clients LIMIT 1")
+            except Exception:
+                cursor.execute("ALTER TABLE clients ADD COLUMN track_enabled INTEGER DEFAULT 1")
+                logger.info("[clients] track_enabled column added via migration")
+            try:
+                cursor.execute("SELECT track_until FROM clients LIMIT 1")
+            except Exception:
+                cursor.execute("ALTER TABLE clients ADD COLUMN track_until TEXT DEFAULT NULL")
+                logger.info("[clients] track_until column added via migration")
+
             logger.info("Clients database initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize clients database: {str(e)}")
