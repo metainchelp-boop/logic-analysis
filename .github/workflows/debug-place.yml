@@ -1144,6 +1144,19 @@ jobs:
                 sh = sb.get("shops") or {}
                 print(f"  업소수 {sh.get('count')} · 대분류 종합 {(sb.get('major') or {}).get('label')} "
                       f"{(sb.get('major') or {}).get('avgAmt')} / {(sb.get('major') or {}).get('shopCnt')}곳")
+                # ⭐ 잰 범위 — 동으로 특정했는지, 시군구로 넓혀 냈는지(화면 라벨이 이 값으로 갈린다)
+                print(f"  범위 {sb.get('scope')} · 라벨 {sb.get('scopeLabel')!r}")
+
+            # ⭐ 어느 경로로 그 행정동이 정해졌는지 — 「법정동으로 확정(ldong)」인지
+            #    「반경 최빈 폴백(mode)」인지. 값이 맞아 보여도 경로를 모르면
+            #    우연히 맞은 것과 구분이 안 된다(2026-08-20).
+            try:
+                import sbiz365
+                ad = sbiz365._resolve_admi(region, name) or {}
+                print(f"  판정 경로 matchedBy={ad.get('matchedBy')!r} · 법정동 {ad.get('ldongNm')!r} "
+                      f"· simpleLoc {ad.get('simpleLoc')!r} · 표본 {ad.get('sampled')} · 시군구쏠림 {ad.get('guShare')}")
+            except Exception as _e:
+                print(f"  판정 경로 확인 실패: {_e}")
 
             step("4. 연관·황금 키워드")
             rel, gold = mk.get("related") or [], mk.get("golden") or []
