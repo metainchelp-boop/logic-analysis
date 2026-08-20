@@ -1,6 +1,6 @@
 name: Debug Consumption (수집 키워드 실소비 산출)
 
-# 배포 후 실서버 검증 v2(읽기 전용). ⚠️ 저장소 공개 — 키 값 절대 미출력.
+# 배포 후 실서버 검증 v3 — 라이브 번들 마커. ⚠️ 저장소 공개 — 키 값 미출력.
 
 on:
   workflow_dispatch:
@@ -9,62 +9,30 @@ jobs:
   consumption:
     runs-on: ubuntu-latest
     steps:
-      - name: Post-deploy verification v2 (read-only)
+      - name: Live bundle markers (read-only)
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          command_timeout: 180s
+          command_timeout: 120s
           script: |
-            echo "=== ③ 라이브 번들 마커 (경로는 find 로 찾아서) ==="
-            docker exec logic-analysis find /app -name "app.*.js" -not -path "*/node_modules/*" 2>/dev/null | head -5
-            BUNDLE=$(docker exec logic-analysis find /app -name "app.*.js" -not -path "*/node_modules/*" 2>/dev/null | head -1)
-            echo "선택 번들: $BUNDLE"
-            docker exec logic-analysis wc -c "$BUNDLE"
-            for m in "track_months" "키워드만 추가" "기한 없음" "이미 등록된" "순위 추적"; do
-              echo "  [$m] $(docker exec logic-analysis grep -c -- "$m" "$BUNDLE")"
-            done
-            echo "라이브 화면 HTTP: $(curl -s -o /dev/null -w '%{http_code}' -L http://logic.metainc.co.kr/)"
-            echo "API 헬스: $(curl -s -o /dev/null -w '%{http_code}' -L http://logic.metainc.co.kr/api/health)"
-
+            echo "=== 라이브가 실제로 참조하는 번들 확인 ==="
+            # 실서비스 index.html 이 가리키는 파일명을 먼저 읽는다(가정 금지)
+            REF=$(curl -sL http://logic.metainc.co.kr/ | grep -o 'app\.[a-f0-9]*\.js' | head -1)
+            echo "index.html 참조 번들: $REF"
+            F=$(find /root/logic-analysis-deploy/frontend -name "$REF" 2>/dev/null | head -1)
+            echo "호스트 실제 파일: $F"
+            ls -l "$F"
             echo ""
-            echo "=== ④ 수집 실적 (컬럼명 먼저 확인) ==="
-            docker exec -i logic-analysis python3 - <<'PY'
-            import sqlite3, sys
-            sys.path.insert(0, "/app")
-            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
-            c = conn.cursor()
-            cols = [r[1] for r in c.execute("PRAGMA table_info(collected_serp)")]
-            print("[collected_serp 컬럼]", ", ".join(cols))
-            tcol = next((x for x in cols if "date" in x.lower() or "at" in x.lower() or "time" in x.lower()), None)
-            print("[시각 컬럼 채택]", tcol)
-            if tcol:
-                for d in (0, 1, 2, 3):
-                    n = c.execute(f"SELECT COUNT(DISTINCT keyword) FROM collected_serp"
-                                  f" WHERE date({tcol},'localtime')=date('now','localtime',?)",
-                                  (f"-{d} day",)).fetchone()[0]
-                    print(f"[수집 실적] {d}일 전: {n}개 키워드")
-
-            # 게이트 밖으로 빠진 업체가 실제로 어떤 단계인지 (감축의 정체)
-            import collector
-            conn.row_factory = sqlite3.Row
-            ids = set(collector._tracking_client_ids(conn))
-            rows = conn.execute(
-                "SELECT id, name, COALESCE(role,'advertiser') role,"
-                " COALESCE(auto_analysis,1) auto, COALESCE(track_enabled,1) tk,"
-                " COALESCE(auto_analysis_manual,0) man"
-                " FROM clients WHERE status='active' AND COALESCE(vertical,'store')='store'"
-                " AND COALESCE(role,'advertiser')='advertiser'").fetchall()
-            out = [r for r in rows if r["id"] not in ids]
-            print(f"\n[게이트 밖] 활성 스토어 광고주 {len(rows)}곳 중 {len(out)}곳 제외")
-            from collections import Counter
-            why = Counter()
-            for r in out:
-                if not r["auto"]: why["자동분석 꺼짐"] += 1
-                elif not r["tk"]: why["추적 꺼짐"] += 1
-                else: why["기타"] += 1
-            for k, v in why.most_common(): print(f"   - {k}: {v}곳")
-            print(f"[직원 수동 토글 보호] auto_analysis_manual=1 인 업체: "
-                  f"{sum(1 for r in rows if r['man'])}곳 (계약연동이 건드리지 않음)")
-            PY
+            echo "[새 UI 마커]"
+            for m in "track_months" "키워드만 추가" "기한 없음" "이미 등록된" "순위 추적 기간"; do
+              printf '  %-16s %s\n' "$m" "$(grep -c -- "$m" "$F")"
+            done
+            echo "[무회귀 마커]"
+            for m in "영업 대상으로 저장" "광고주로 등록" "업체 저장"; do
+              printf '  %-16s %s\n' "$m" "$(grep -c -- "$m" "$F")"
+            done
+            echo ""
+            echo "라이브 번들 직접 수신 크기: $(curl -sL "http://logic.metainc.co.kr/dist/$REF" | wc -c) bytes"
+            echo "라이브 번들 안 track_months: $(curl -sL "http://logic.metainc.co.kr/dist/$REF" | grep -c 'track_months')"
