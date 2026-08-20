@@ -90,7 +90,7 @@ _cache_table_ready = False
 # 2026-08-05 실사고: 금액 단위를 천원→만원으로 고쳤는데 「업종 종합」만 옛 값(1/10)이
 # 그대로 노출됐다(소분류 캐시는 키에 hint 가 붙어 우연히 재계산됐고, 종합 캐시는 키가 같아 적중).
 # 앞으로 **가공 규칙을 바꾸면 이 숫자를 올릴 것** — 전 캐시가 한 번에 무효화된다.
-CACHE_NS = "v2"
+CACHE_NS = "v3"
 
 
 def _cache_conn():
@@ -199,8 +199,13 @@ def _pick(resp, markers):
 # 4. 행정동 매칭 체인 — 지역명 → 좌표 → admiCd(행정동 8자리)
 # ============================================================
 def _region_coord(query: str):
-    """검색어 → 좌표(경도, 위도). 네이버 지역검색(local) 사용 — 이미 보유한 자격 재사용.
-    mapx/mapy 는 WGS84×10^7 정수라 10^7 로 나눈다. 실패 시 None."""
+    """검색어 → **(경도, 위도, 나온 곳 이름)**. 네이버 지역검색(local) 사용 — 이미 보유한 자격 재사용.
+    mapx/mapy 는 WGS84×10^7 정수라 10^7 로 나눈다. 실패 시 None.
+
+    ⚠️ 세 번째 값(title)은 **좌표를 믿어도 되는지** 판정하는 근거다. 지역명으로 검색하면
+       동명의 상호가 먼저 잡히는데(2026-08-11 사고: '조원동' → 서울의 엉뚱한 업소),
+       「{지역} 주민센터」로 찾아 나온 곳 이름이 실제로 그 동 주민센터면 좌표를 신뢰할 수 있다.
+       기존 소비처는 coord[0]·coord[1] 만 쓰므로 튜플 확장은 무해하다."""
     cid = os.getenv("NAVER_CLIENT_ID", "").strip()
     csec = os.getenv("NAVER_CLIENT_SECRET", "").strip()
     if not (cid and csec and query):
@@ -223,7 +228,15 @@ def _region_coord(query: str):
         x, y = float(mx), float(my)
         if x > 1000:            # WGS84×10^7 정수 형식
             x, y = x / 1e7, y / 1e7
-        return x, y
+        # title 에 <b> 강조 태그가 섞여 오므로 걷어낸다
+        import re as _re
+        title = _re.sub(r"<[^>]+>", "", str(items[0].get("title") or ""))
+        # ⭐ 네 번째 값 = **지번 주소**(2026-08-12 실측으로 확인 — 우리가 받고도 버리던 필드).
+        #    '경기도 수원시 장안구 조원동 894' 처럼 시도·시군구·법정동이 다 들어 있어
+        #    ⑴ 나온 업체가 정말 그 동네인지 좌표 없이 먼저 거를 수 있고
+        #    ⑵ 법정동으로 행정동을 확정할 수 있다(동명이동·법정동≠행정동 양쪽 해소).
+        #    roadAddress(도로명)에는 법정동이 없으므로 반드시 address 를 쓴다.
+        return x, y, title, str(items[0].get("address") or "")
     except Exception as e:
         logger.warning(f"[sbiz365] 좌표 확보 실패(무시): {e}")
         return None
@@ -254,23 +267,92 @@ def _admi_matches_region(admi: dict, region: str) -> bool:
     return bool(nm) and _norm(stem) in nm
 
 
-def _coord_to_admi(x, y):
-    """좌표 → 행정동(admiCd 8자리).
+# 시군구 후퇴를 허용할 최소 쏠림 비율 — 반경 안 상가의 이 비율 이상이 한 시군구면
+# 그 시군구는 확정된 것으로 본다(실측: 성사동 100%·미사동 100%·구로동 63%·역삼동 82%).
+GU_CONFIDENT_SHARE = 0.60
+
+# 지번 주소에서 법정동으로 읽을 꼬리말
+_ADDR_DONG_TAIL = ("동", "가", "읍", "면", "리")
+
+
+def _parse_addr(address: str) -> dict:
+    """지번 주소 → {sido, gu, ldong}. 없으면 빈 dict.
+
+    예) '경기도 고양시 덕양구 성사동 243-4 1층' → sido 경기도 · gu 고양시 덕양구 · ldong 성사동
+        '경기도 수원시 장안구 조원동 894'      → sido 경기도 · gu 수원시 장안구 · ldong 조원동
+
+    ⚠️ **지번 주소(address)** 전용이다 — roadAddress(도로명)에는 법정동이 없다.
+    ⚠️ 번지가 나오면 거기서 끊는다(그 뒤는 층·호수라 지역 정보가 아니다)."""
+    import re                                      # 이 파일은 함수 안에서 re 를 쓴다
+    toks = [t for t in re.split(r"\s+", str(address or "").strip()) if t]
+    if len(toks) < 3:
+        return {}
+    sido = toks[0]
+    ldong, ldong_i = "", -1
+    for i in range(1, len(toks)):
+        t = toks[i]
+        if any(ch.isdigit() for ch in t):
+            break                                  # 번지부터는 주소가 아니다
+        if t.endswith(_ADDR_DONG_TAIL):
+            ldong, ldong_i = t, i                  # 마지막으로 만난 것이 법정동
+    if not ldong:
+        return {"sido": sido, "gu": " ".join(toks[1:2]), "ldong": ""}
+    return {"sido": sido, "gu": " ".join(toks[1:ldong_i]), "ldong": ldong}
+
+
+def _addr_matches_region(addr: dict, region: str) -> bool:
+    """지역검색이 내준 **업체 주소**가 사장님이 적은 지역과 같은 동네인가.
+
+    ⭐ 이 검사가 2026-08-11 조원동 사고를 **좌표를 쓰기도 전에** 끊는다 — 그때는
+       '조원동'으로 검색해 나온 서울 업소의 좌표를 그대로 믿었는데, 그 업소의 주소를
+       읽어 보면 애초에 조원동이 아니다. 주소는 이미 받아 놓은 값이라 추가 호출 0.
+
+    ⚠️ 판정은 **관대해도 안전하다** — 여기서 걸러진 후보는 다음 후보로 넘어갈 뿐이고,
+       통과해도 뒤에서 법정동·행정동으로 한 번 더 확인한다."""
+    if not addr:
+        return True                                # 주소가 없으면 근거 없음 — 막지 않는다
+    reg = _norm(region)
+    if not reg:
+        return False
+    ld, gu = _norm(addr.get("ldong") or ""), _norm(addr.get("gu") or "")
+    if ld and (ld in reg or reg in ld):
+        return True
+    # 사장님이 동을 안 적고 시·군·구만 적은 경우('하남시')
+    if gu and (gu in reg or reg in gu):
+        return True
+    # '성사1동' ↔ '성사동' 처럼 숫자만 다른 표기
+    stem = _norm(_region_stem(region))
+    return bool(stem) and bool(ld) and stem in ld
+
+
+def _coord_to_admi(x, y, want_ldong: str = "", want_gu: str = ""):
+    """좌표 → 행정동(admiCd 8자리) + 그 반경의 행정동·시군구 **분포**.
+
     ⚠️ 2026-08-05 실측: 소상공인365 내부 `getCoordToAdmPoint.json` 은 500, 다른 후보 경로도 전부 404.
     → **공공데이터포털 「소상공인시장진흥공단_상가(상권)정보」 공식 REST** 로 확보한다.
-    반경 안 상가 1건만 받아 그 업소의 `adongCd`(행정동코드)를 읽는 방식(검증 완료:
-    강남역 반경 500m → adongCd 11650531 서초4동). 인증키는 **인코딩 키를 그대로** 붙인다
-    (디코딩 키를 재인코딩하면 403)."""
+
+    ⚠️⚠️ 2026-08-12 실측 — 종전엔 `numOfRows=1` 로 **딱 1건**을 받아 그 업소의 행정동을 썼는데,
+    경계 근처면 옆 동이 잡혀 통째로 어긋났다(역삼동 주민센터 좌표 → 1건째 '서초구 서초2동'
+    → 상권 생략). 같은 반경을 **100건** 받아 세어 보면 '역삼1동 82%'로 명백하다.
+    호출 수는 그대로(1회)이고 응답만 커진다 → **최빈 행정동**을 채택한다.
+    덤으로 시군구 분포도 함께 돌려준다 — 동이 안 맞을 때 시군구로 후퇴할지 판정하는 근거.
+
+    ⭐⭐ 2026-08-12 실측 — 이 응답에는 **법정동(ldongCd/ldongNm)과 행정동(adongCd/adongNm)이
+    나란히** 온다. 업체 주소의 법정동('성사동')으로 걸러 그 안에서 행정동을 고르면
+    **동을 정확히 짚는다**. 종전에 성사동→흥도동·역삼동→서초2동으로 어긋난 건 좌표가
+    틀려서가 아니라 **법정동과 행정동이 다른 축인데 이름 어간으로 비교**했기 때문이다.
+    `want_ldong` 이 없거나 걸리는 상가가 없으면 종전대로 최빈 행정동(무회귀)."""
     key = _env_keys()["datago"]
     if not key:
         return None
+    import collections
     import urllib.parse
     import urllib.request
     base = "http://apis.data.go.kr/B553077/api/open/sdsc2/storeListInRadius"
     for radius in ("500", "1000", "2000"):     # 외곽 지역은 반경을 넓혀 재시도
         try:
             qs = urllib.parse.urlencode({"radius": radius, "cx": x, "cy": y,
-                                         "type": "json", "numOfRows": "1", "pageNo": "1"})
+                                         "type": "json", "numOfRows": "100", "pageNo": "1"})
             url = f"{base}?serviceKey={key}&{qs}"
             req = urllib.request.Request(url, headers={"Accept": "application/json"})
             with urllib.request.urlopen(req, timeout=12) as r:
@@ -278,18 +360,57 @@ def _coord_to_admi(x, y):
             items = ((data.get("body") or {}).get("items")) or []
             if not items:
                 continue
-            it = items[0]
-            admi_cd = str(it.get("adongCd") or "").strip()
-            if len(admi_cd) == 8:
-                sido, gu, dong = it.get("ctprvnNm"), it.get("signguNm"), it.get("adongNm")
-                # ⚠️ 2026-08-05 실측: getAvgAmtInfo 의 simpleLoc 은 **전체 주소 문자열**이어야 한다.
-                #    사용자가 적은 지역명(구로동)·행정동명(구로3동)·빈 값은 전부 HTTP 500,
-                #    '서울특별시 구로구 구로3동' 만 200. → 여기서 정식 주소를 만들어 함께 넘긴다.
-                return {"admiCd": admi_cd,
-                        "admiNm": dong,
-                        "guNm": gu,
-                        "sidoNm": sido,
-                        "simpleLoc": " ".join(x for x in (sido, gu, dong) if x)}
+
+            # 행정동은 코드까지 같이 세야 한다(같은 이름 다른 코드가 섞이면 안 된다)
+            dong_cnt = collections.Counter()
+            dong_meta = {}
+            gu_cnt = collections.Counter()
+            ld_cnt = collections.Counter()          # 업체 주소의 법정동에 걸리는 것만
+            ld_meta = {}
+            wl, wg = _norm(want_ldong), _norm(want_gu)
+            for it in items:
+                cd = str(it.get("adongCd") or "").strip()
+                if len(cd) != 8:
+                    continue
+                dong_cnt[cd] += 1
+                dong_meta.setdefault(cd, it)
+                gn = (it.get("signguNm") or "").strip()
+                if gn:
+                    gu_cnt[gn] += 1
+                if wl and _norm(it.get("ldongNm") or "") == wl:
+                    # 같은 이름의 법정동이 다른 시군구에도 있으므로 시군구까지 맞춘다
+                    if not wg or _norm(gn) in wg or wg in _norm(gn):
+                        ld_cnt[cd] += 1
+                        ld_meta.setdefault(cd, it)
+            if not dong_cnt:
+                continue
+
+            if ld_cnt:                              # ⭐ 법정동으로 확정된 경우
+                admi_cd, _hit = ld_cnt.most_common(1)[0]
+                it = ld_meta[admi_cd]
+                matched_by = "ldong"
+            else:
+                admi_cd, _hit = dong_cnt.most_common(1)[0]
+                it = dong_meta[admi_cd]
+                matched_by = "mode"
+            sido, gu, dong = it.get("ctprvnNm"), it.get("signguNm"), it.get("adongNm")
+            total = sum(gu_cnt.values()) or 1
+            top_gu, top_gu_cnt = (gu_cnt.most_common(1)[0] if gu_cnt else (None, 0))
+            # ⚠️ 2026-08-05 실측: getAvgAmtInfo 의 simpleLoc 은 **전체 주소 문자열**이어야 한다.
+            #    사용자가 적은 지역명(구로동)·행정동명(구로3동)·빈 값은 전부 HTTP 500,
+            #    '서울특별시 구로구 구로3동' 만 200. → 여기서 정식 주소를 만들어 함께 넘긴다.
+            return {"admiCd": admi_cd,
+                    "admiNm": dong,
+                    "guNm": gu,
+                    "sidoNm": sido,
+                    "simpleLoc": " ".join(v for v in (sido, gu, dong) if v),
+                    # 무엇으로 골랐나 — 'ldong'(업체 주소의 법정동으로 확정) / 'mode'(최빈)
+                    "matchedBy": matched_by,
+                    "ldongNm": (it.get("ldongNm") or "").strip(),
+                    # 시군구 후퇴 판정용 — 이 반경에서 시군구가 얼마나 한 곳으로 몰렸나
+                    "guTop": top_gu,
+                    "guShare": round(top_gu_cnt / total, 3),
+                    "sampled": len(items)}
         except Exception as e:
             logger.warning(f"[sbiz365] 행정동 조회 실패(radius={radius}·무시): {e}")
     return None
@@ -309,8 +430,13 @@ def _resolve_admi(region: str, biz_name: str = ""):
     cached = _cache_get(cache_key, SBIZ_CACHE_TTL)
     # simpleLoc(정식 주소) 없이 캐시된 구버전 항목은 그대로 쓰면 매출 조회가 500 이므로 재해석한다.
     # 캐시된 값이라도 지역과 안 맞으면(구버전이 잘못 넣은 것) 버리고 다시 찾는다.
-    if cached and cached.get("simpleLoc") and _admi_matches_region(cached, region):
-        return cached
+    # scope 가 없는 구버전 항목도 재해석한다(시군구 후퇴 판정을 못 하므로).
+    if cached and cached.get("simpleLoc") and cached.get("scope"):
+        # 법정동으로 확정한 항목은 이름 어간 대조를 다시 하지 않는다 — 그 대조가
+        # 못 맞히는 경우(성사동→성사1동·역삼동→역삼1동)를 풀려고 넣은 근거이기 때문.
+        if (cached["scope"] == "gu" or cached.get("matchedBy") == "ldong"
+                or _admi_matches_region(cached, region)):
+            return cached
 
     reg = (region or "").strip()
     if not reg:
@@ -320,6 +446,7 @@ def _resolve_admi(region: str, biz_name: str = ""):
         queries.append(f"{biz_name.strip()} {reg}")
     queries += [f"{reg} 주민센터", f"{reg} 행정복지센터", reg]
 
+    fallback = None            # 동은 안 맞지만 시군구는 믿을 만한 후보(첫 것만 쓴다)
     seen = set()
     for q in queries:
         if q in seen:
@@ -328,17 +455,80 @@ def _resolve_admi(region: str, biz_name: str = ""):
         coord = _region_coord(q)
         if not coord:
             continue
-        admi = _coord_to_admi(coord[0], coord[1])
+        # ⭐ 좌표를 쓰기 전에 **그 업체의 주소**로 먼저 거른다(추가 호출 0).
+        #    2026-08-11 조원동 사고는 여기서 끊긴다 — 서울 업소의 주소는 조원동이 아니다.
+        addr = _parse_addr(coord[3] if len(coord) > 3 else "")
+        if addr and not _addr_matches_region(addr, reg):
+            logger.warning(f"[sbiz365] 주소 불일치로 후보 제외 — 검색어 {q!r} → "
+                           f"{addr.get('gu')} {addr.get('ldong')} (입력 지역 {reg!r})")
+            continue
+        admi = _coord_to_admi(coord[0], coord[1],
+                              want_ldong=addr.get("ldong", ""), want_gu=addr.get("gu", ""))
         if not admi:
             continue
-        if not _admi_matches_region(admi, reg):
-            logger.warning(f"[sbiz365] 행정동 불일치로 폐기 — 검색어 {q!r} → {admi.get('admiNm')!r} "
-                           f"(입력 지역 {reg!r})")
-            continue
-        _cache_put(cache_key, admi)
-        return admi
-    logger.warning(f"[sbiz365] 행정동 매칭 실패 — 지역 {reg!r}(상권 생략)")
+        # 법정동으로 확정했으면 이름 어간 대조는 불필요(그게 못 맞히는 경우를 푼 것)
+        if admi.get("matchedBy") == "ldong" or _admi_matches_region(admi, reg):
+            admi["scope"] = "dong"
+            _cache_put(cache_key, admi)
+            return admi
+
+        logger.warning(f"[sbiz365] 행정동 불일치 — 검색어 {q!r} → {admi.get('admiNm')!r} "
+                       f"(입력 지역 {reg!r})")
+        # ⭐ 시군구 후퇴(2026-08-12 대표 확정) — 동 단위로 못 맞혀도 **시군구가 확실하면**
+        #    그 범위로 넓혀 보고서를 낸다. 다만 아무 때나 넓히면 8/11 조원동 사고
+        #    (엉뚱한 동네 수치가 광고주 보고서에 실릴 뻔)가 되살아나므로 조건을 셋 건다.
+        if fallback is None and _gu_trustworthy(admi, reg, q, coord):
+            fallback = dict(admi)
+            fallback["scope"] = "gu"
+
+    if fallback:
+        logger.info(f"[sbiz365] 시군구 단위로 후퇴 — 지역 {reg!r} → {fallback.get('guNm')!r} "
+                    f"(쏠림 {fallback.get('guShare')})")
+        _cache_put(cache_key, fallback)
+        return fallback
+    logger.warning(f"[sbiz365] 행정동·시군구 모두 매칭 실패 — 지역 {reg!r}(상권 생략)")
     return None
+
+
+def _gu_trustworthy(admi: dict, region: str, query: str, coord) -> bool:
+    """시군구 단위로 후퇴해도 되는가 — 셋 다 만족해야 한다.
+
+    ⑴ **반경 안 상가가 한 시군구로 쏠려 있을 것**(GU_CONFIDENT_SHARE 이상).
+       경계에 걸쳐 두 시군구가 반반이면 어느 쪽인지 모른다.
+    ⑵ **좌표를 믿을 근거가 있을 것** — 둘 중 하나:
+       · 입력 지역에 시·군·구가 이미 있고 그것이 나온 시군구와 맞거나(예: '하남시 미사동')
+       · 「{지역} 주민센터/행정복지센터」로 찾아 **나온 곳 이름에 그 지역명이 들어 있거나**
+         (그 동 청사를 제대로 찾았다는 뜻 — 지역명 단독 검색이 동명의 상호에 걸린 경우와 갈린다)
+    ⑶ 표본이 너무 적지 않을 것.
+
+    ⚠️ 지역명 단독 질의(마지막 후보)에서 나온 좌표는 후퇴에 쓰지 않는다 — 그게 바로
+       2026-08-11 사고('조원동' → 서울의 엉뚱한 업소 → 신대방2동)의 입력이었다.
+    ⚠️ 같은 이름의 동이 여러 곳인 경우(수원 조원동 vs 관악구 조원동)는 이 검사로도 못 가른다.
+       입력에 시·구를 적어야만 갈리며, 그건 화면 안내가 유도한다."""
+    if (admi.get("guShare") or 0) < GU_CONFIDENT_SHARE:
+        return False
+    if (admi.get("sampled") or 0) < 10:
+        return False
+
+    gu = _norm(admi.get("guNm") or "")
+    reg_n = _norm(region)
+    # ⑵-1 입력에 시군구가 들어 있고 그게 나온 시군구와 맞는다
+    if gu and gu in reg_n:
+        return True
+    # '고양시 덕양구' 처럼 두 단인 시군구는 앞 단(고양시)만 적었을 수도 있다
+    for part in str(admi.get("guNm") or "").split():
+        if part and _norm(part) in reg_n:
+            return True
+    # ⑵-2 주민센터/행정복지센터로 찾았고, **나온 곳이 정말 그 동네의 행정 청사**다.
+    # ⚠️ 검증이 잡은 실결함(2026-08-12): 어간만 대조하면 「성사동」→「성사네고깃집」,
+    #    「조원동」→「조원식당」 같은 **동명 상호**가 그대로 통과한다 — 그게 바로 8/11
+    #    사고의 모양이다. 청사 이름표(주민센터·행정복지센터·동사무소)까지 함께 요구한다.
+    title = _norm(coord[2] if (coord and len(coord) > 2) else "")
+    stem = _norm(_region_stem(region))
+    is_office = any(w in title for w in ("주민센터", "행정복지센터", "동사무소"))
+    if ("주민센터" in query or "행정복지센터" in query) and is_office and stem and stem in title:
+        return True
+    return False
 
 
 def _norm(s):
@@ -725,7 +915,10 @@ def get_place_sbiz(region: str, industry_label: str, hint: str = "",
             return None
 
         # 힌트가 후보를 바꾸므로 캐시 키에도 넣는다(같은 동네 같은 라벨이어도 삼겹살집/칼국수집이 다른 업종).
-        cache_key = f"sbiz:simple:{admi['admiCd']}|{_norm(label)}|{_norm(hint)}"
+        # ⚠️ scope 를 키에 넣는다 — 같은 admiCd 라도 동 모드/시군구 모드는 다른 결과다
+        #    (시군구 모드는 헤드라인이 guAmt 이고 동 단위 축이 비어 있다).
+        cache_key = (f"sbiz:simple:{admi['admiCd']}|{admi.get('scope') or 'dong'}"
+                     f"|{_norm(label)}|{_norm(hint)}")
         cached = _cache_get(cache_key, SBIZ_CACHE_TTL)
         if cached is not None:
             return cached
@@ -750,9 +943,19 @@ def get_place_sbiz(region: str, industry_label: str, hint: str = "",
             return None
         pop = _fetch_popular(admi["admiCd"], upjong["code"], avg.get("analyNo"))
 
+        # ⭐ 시군구 후퇴 모드(2026-08-12 대표 확정) — 동 단위로 지역을 못 맞혔을 때.
+        #    이때 행정동 기준 숫자(그 동의 점포당 매출·업소수·시계열·유동인구·대분류 종합)를
+        #    그대로 내보내면 **우리가 확신하지 못하는 동네의 수치**를 광고주에게 보이는 셈이다.
+        #    그래서 헤드라인을 시군구 평균(guAmt)으로 갈아끼우고 동 단위 축은 전부 비운다.
+        #    ⚠️ 이 분기의 요점은 하나 — **단위가 다른 숫자를 한 카드에 섞지 않는다.**
+        is_gu = (admi.get("scope") == "gu")
+        if is_gu and _num(avg.get("guAmt")) is None:
+            logger.warning("[sbiz365] 시군구 후퇴인데 시군구 평균이 없다 → 상권 생략")
+            return None
+
         # 유동인구: topFive 에 우리 행정동이 있으면 dayAvg 확보(없으면 null — 가짜 값 금지)
         traffic = None
-        if avg.get("dayAvg") is not None:
+        if not is_gu and avg.get("dayAvg") is not None:
             traffic = {"dayAvg": avg["dayAvg"], "hours": None, "days": None, "weekendShare": None}
 
         # 업소수: 행정동 최신값(saleCnt) 우선, 없으면 shopSeries 마지막
@@ -761,43 +964,56 @@ def get_place_sbiz(region: str, industry_label: str, hint: str = "",
         if shop_cnt is None and shop_series:
             shop_cnt = shop_series[-1].get("cnt")
         shops = None
-        if shop_cnt is not None:
+        if not is_gu and shop_cnt is not None:
             shops = {"count": shop_cnt, "series": shop_series,
                      "momRate": avg.get("prevMonCntRate"), "yoyRate": avg.get("prevYearCntRate")}
 
-        # 업종 대분류 종합 — 소분류를 우리가 합산(서버는 상위분류 코드를 안 받는다)
+        # 업종 대분류 종합 — 소분류를 우리가 합산(서버는 상위분류 코드를 안 받는다).
+        # 시군구 모드에서는 건너뛴다 — 행정동 기준 합산이라 단위가 안 맞고, 병렬 8콜도 아낀다.
         major_block = None
-        try:
-            major_block = _aggregate_major(admi["admiCd"], loc, _major_of(upjong.get("name")))
-        except Exception as e:
-            logger.warning(f"[sbiz365] 대분류 종합 생략(무시): {e}")
+        if not is_gu:
+            try:
+                major_block = _aggregate_major(admi["admiCd"], loc, _major_of(upjong.get("name")))
+            except Exception as e:
+                logger.warning(f"[sbiz365] 대분류 종합 생략(무시): {e}")
 
-        # 매출 시계열(원 환산) — 시안 「시장의 크기」 추이선
-        sales_series = [{"ym": r["ym"], "amt": _won(r["amt"])}
-                        for r in (avg.get("series") or []) if r.get("amt") is not None] or None
+        # 매출 시계열(원 환산) — 시안 「시장의 크기」 추이선. 시군구 모드에서는 동 기준이라 비운다.
+        sales_series = None
+        if not is_gu:
+            sales_series = [{"ym": r["ym"], "amt": _won(r["amt"])}
+                            for r in (avg.get("series") or []) if r.get("amt") is not None] or None
 
         result = {
             "source": "sbiz365-simple",
             "baseYm": avg.get("stdYm"),
+            # 어느 범위로 잰 수치인지 — 화면이 이 값으로 「…동 상권」/「…구 상권」을 가른다
+            "scope": "gu" if is_gu else "dong",
+            "scopeLabel": (admi.get("guNm") or "") if is_gu
+                          else " ".join(v for v in (admi.get("guNm"), admi.get("admiNm")) if v),
             "district": {
                 "admiCd": admi.get("admiCd"),
-                "admiNm": admi.get("admiNm"),
+                # 시군구 모드에서는 동 이름을 내보내지 않는다(우리가 확신하지 못하는 값이다)
+                "admiNm": None if is_gu else admi.get("admiNm"),
                 "guNm": admi.get("guNm"),
             },
             # 어떤 소분류로 집계했는지 — 응답에 없으면 우리가 고른 후보의 소분류명으로 표기
             # (제안서에서 '무슨 업종 기준 수치인지'를 밝히기 위한 값).
             "industryNm": avg.get("upjongNm") or str(upjong.get("name") or "").split(">")[-1].strip(),
+            # (아래 major·sales·salesSeries·shops·traffic 은 시군구 모드에서 동 단위 축을 비운다)
             # 업종 대분류 종합(예: 그 동네 '음식' 전체) — 업종 선택지를 세분화하지 않고도
             # '우리 동네 전체 시장' 을 보여주기 위한 축. 실패하면 그냥 없음(기존 표기 그대로).
             "major": major_block,
             "sales": {
-                "avgAmt": _won(avg.get("saleAmt")),     # 점포당 월평균(원)
-                "minAmt": _won(avg.get("minAmt")),
-                "maxAmt": _won(avg.get("maxAmt")),
+                # 시군구 모드에서는 헤드라인이 **시군구 평균**이다(동 평균을 쓰면 안 되는 값이다)
+                "avgAmt": _won(avg.get("guAmt") if is_gu else avg.get("saleAmt")),  # 점포당 월평균(원)
+                # 최저·최고·증감·는 전부 행정동 기준이라 시군구 모드에서는 비운다
+                "minAmt": None if is_gu else _won(avg.get("minAmt")),
+                "maxAmt": None if is_gu else _won(avg.get("maxAmt")),
                 "cnt": None,                            # 결제건수는 현 응답에 없음(saleCnt=업소수)
-                "momRate": avg.get("prevMonRate"),
-                "yoyRate": avg.get("prevYearRate"),
-                "guAvgAmt": _won(avg.get("guAmt")),      # 시군구 평균 — 벤치마크
+                "momRate": None if is_gu else avg.get("prevMonRate"),
+                "yoyRate": None if is_gu else avg.get("prevYearRate"),
+                # 벤치마크 — 시군구 모드에서는 헤드라인이 곧 시군구 평균이라 중복이므로 시도만 남긴다
+                "guAvgAmt": None if is_gu else _won(avg.get("guAmt")),
                 "siAvgAmt": _won(avg.get("siAmt")),      # 시도 평균 — 벤치마크
             },
             "salesSeries": sales_series,                 # [{ym, amt(원)}] 월별 추이
