@@ -18,6 +18,47 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           command_timeout: 90s
           script: |
+            echo "== 개편 적용 시 실제 감축량 (읽기 전용·현재 DB 기준) =="
+            docker exec -i logic-analysis python3 - <<'PY8'
+            import sqlite3
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            def kws(sql, *a):
+                s=set()
+                for r in c.execute(sql, a):
+                    for part in str(r[0] or "").split(","):
+                        k=part.strip()
+                        if k: s.add(k)
+                return s
+
+            # 현재(개편 전) 유니버스
+            cur = kws("SELECT DISTINCT keyword FROM tracked_keywords") | \
+                  kws("SELECT DISTINCT keyword FROM client_analyses") | \
+                  kws("SELECT main_keywords FROM clients WHERE status='active' "
+                      "AND COALESCE(auto_analysis,1)=1 AND COALESCE(role,'advertiser')='advertiser' "
+                      "AND COALESCE(vertical,'store')='store'")
+            print(f"[개편 전] {len(cur)}개")
+
+            # 개편 후 — track_enabled/track_until 은 아직 컬럼이 없으므로 그 조건은 통과로 간주
+            ids=[r[0] for r in c.execute(
+                "SELECT id FROM clients WHERE status='active' AND COALESCE(role,'advertiser')='advertiser' "
+                "AND COALESCE(vertical,'store')='store' AND COALESCE(auto_analysis,1)=1")]
+            ph=",".join("?"*len(ids)) or "NULL"
+            new = kws(f"SELECT main_keywords FROM clients WHERE id IN ({ph})", *ids) | \
+                  kws(f"SELECT DISTINCT keyword FROM client_analyses WHERE client_id IN ({ph})", *ids) | \
+                  kws("SELECT DISTINCT k.keyword FROM tracked_keywords k WHERE k.product_id IN "
+                      f"(SELECT tracked_product_id FROM rank_link WHERE client_id IN ({ph})) "
+                      "OR k.product_id NOT IN (SELECT tracked_product_id FROM rank_link)", *ids)
+            print(f"[개편 후] {len(new)}개 · 자격 업체 {len(ids)}곳")
+            cut=len(cur)-len(new)
+            print(f"[감축] {cut}개 ({round(cut*100/max(len(cur),1))}%) → 하루 페이지 {len(cur)*4} → {len(new)*4}")
+            print(f"[안전 점검] 개편 후에만 있는 키워드(있으면 버그): {len(new-cur)}개")
+            print("")
+            print("[전산 연동까지 켜지면 — 63곳 자동중지 반영 후 추가 감축 예상]")
+            print("  * 위 수치는 auto_analysis 현재값 기준. 첫 동기화로 63곳이 OFF 되면 더 줄어든다.")
+            PY8
+            echo
             echo "== 수집 키워드 실소비 산출 (읽기 전용) =="
             docker exec -i logic-analysis python3 - <<'PY'
             import sqlite3
