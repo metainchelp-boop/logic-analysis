@@ -1,6 +1,7 @@
 name: Debug Consumption (수집 키워드 실소비 산출)
 
 # 주간 보고서 배포 후 실서버 검증 (읽기 전용).
+
 on:
   workflow_dispatch:
 
@@ -17,61 +18,43 @@ jobs:
           command_timeout: 180s
           script: |
             echo "=== ① 배포된 코드 ==="
-            for f in reports weekly_report scheduler; do
-              P=$(docker exec logic-analysis find /app -maxdepth 2 -name "$f.py" | head -1)
-              echo "  $f.py = ${P:-없음}"
-            done
-            echo "  weekly_report 존재: $(docker exec logic-analysis sh -c 'test -f /app/weekly_report.py && echo 예 || echo 아니오')"
-            echo "  스케줄러 잡 등록: $(docker logs --since 30m logic-analysis 2>&1 | grep -c '주간 보고서 생성 (월 09:40)')"
-            docker logs --since 30m logic-analysis 2>&1 | grep "스케줄러 시작" | tail -1
+            echo "  weekly_report.py: $(docker exec logic-analysis sh -c 'test -f /app/weekly_report.py && echo 있음 || echo 없음')"
+            echo "  스케줄러 잡 등록: $(docker logs --since 60m logic-analysis 2>&1 | grep -c '주간 보고서')"
+            docker logs --since 60m logic-analysis 2>&1 | grep "스케줄러 시작" | tail -1
 
             echo ""
-            echo "=== ② DDL — is_auto 컬럼 ==="
-            docker exec -i logic-analysis python3 -c "
-import sqlite3
-c = sqlite3.connect('file:/app/data/logic_data.db?mode=ro', uri=True)
-cols = [r[1] for r in c.execute('PRAGMA table_info(reports)')]
-print('  reports 컬럼:', ', '.join(cols))
-print('  is_auto:', '있음' if 'is_auto' in cols else '❌ 없음')
-idx = [r[1] for r in c.execute(\"PRAGMA index_list('reports')\")]
-print('  is_auto 인덱스:', '있음' if 'idx_reports_is_auto' in idx else '없음')
-print('  현재 보고서:', c.execute('SELECT COUNT(*) FROM reports').fetchone()[0], '건')
-"
+            echo "=== ②③⑤ DDL · 저장위치 · 예상 건수 ==="
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sqlite3, sys
+            sys.path.insert(0, "/app")
+            c = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+
+            cols = [r[1] for r in c.execute("PRAGMA table_info(reports)")]
+            print("  reports 컬럼:", ", ".join(cols))
+            print("  is_auto 컬럼:", "있음" if "is_auto" in cols else "없음(문제)")
+            idx = [r[1] for r in c.execute("PRAGMA index_list('reports')")]
+            print("  is_auto 인덱스:", "있음" if "idx_reports_is_auto" in idx else "없음")
+            print("  현재 보고서:", c.execute("SELECT COUNT(*) FROM reports").fetchone()[0], "건")
+
+            import reports
+            print("  REPORTS_DIR =", reports.REPORTS_DIR)
+            print("  폴더 존재:", reports.REPORTS_DIR.exists())
+
+            n = c.execute("SELECT COUNT(DISTINCT ca.client_id) FROM client_analyses ca"
+                          " JOIN clients cl ON cl.id=ca.client_id"
+                          " WHERE ca.analyzed_date >= date('now','localtime','-6 day')"
+                          "   AND ca.report_html IS NOT NULL AND ca.report_html <> ''"
+                          "   AND cl.status='active' AND COALESCE(cl.role,'advertiser')='advertiser'"
+                          "   AND COALESCE(cl.vertical,'store')='store'"
+                          "   AND COALESCE(cl.auto_analysis,1)=1").fetchone()[0]
+            print(f"  월요일 09:40 예상 생성: 약 {n}건 · 12주 평형 총량 약 {round(n*12*18/1024)}MB")
+            PY
 
             echo ""
-            echo "=== ③ ⭐ 저장 위치가 마운트된 볼륨인가 (배포해도 안 사라지는가) ==="
-            docker exec -i logic-analysis python3 -c "
-import sys; sys.path.insert(0,'/app')
-import reports
-print('  REPORTS_DIR =', reports.REPORTS_DIR)
-print('  폴더 생성됨:', reports.REPORTS_DIR.exists())
-"
-            echo "  호스트에서 같은 폴더가 보이나: $(ls -d /root/logic-analysis-deploy/data/reports 2>/dev/null || echo '❌ 안 보임')"
-            echo "  ↑ 호스트에 보이면 마운트된 것 = 배포해도 파일이 남는다"
+            echo "=== ③-2 호스트에서 같은 폴더가 보이나 (마운트 확인) ==="
+            ls -ld /root/logic-analysis-deploy/data/reports 2>/dev/null || echo "  아직 파일 없음(폴더 미생성일 수 있음 — 첫 생성 때 만들어짐)"
+            echo "  data 볼륨: $(ls -ld /root/logic-analysis-deploy/data | awk '{print $NF}')"
 
-            echo ""
-            echo "=== ④ 전산 소비 경로 응답 (인증 없이 = 401 이어야 정상) ==="
-            echo "  인증 없음: HTTP $(curl -s -o /dev/null -w '%{http_code}' -L 'http://logic.metainc.co.kr/api/reports/for-erp?auto_only=true')"
-            echo "  (401 = 경로가 살아 있고 인증이 걸려 있다는 뜻. 404 면 라우트 문제)"
-            echo "  공개 열람 경로: HTTP $(curl -s -o /dev/null -w '%{http_code}' -L 'http://logic.metainc.co.kr/api/reports/view/nonexistent')"
-            echo "  (404 = 정상 — 없는 해시)"
-            echo "  화면: $(curl -s -o /dev/null -w '%{http_code}' -L http://logic.metainc.co.kr/)"
-            echo "  헬스: $(curl -s -o /dev/null -w '%{http_code}' -L http://logic.metainc.co.kr/api/health)"
-
-            echo ""
-            echo "=== ⑤ 다음 월요일 실행 시 예상 건수 ==="
-            docker exec -i logic-analysis python3 -c "
-import sqlite3
-c = sqlite3.connect('file:/app/data/logic_data.db?mode=ro', uri=True)
-n = c.execute('''SELECT COUNT(DISTINCT ca.client_id) FROM client_analyses ca
-  JOIN clients cl ON cl.id=ca.client_id
- WHERE ca.analyzed_date >= date('now','localtime','-6 day')
-   AND ca.report_html IS NOT NULL AND ca.report_html <> ''
-   AND cl.status='active' AND COALESCE(cl.role,'advertiser')='advertiser'
-   AND COALESCE(cl.vertical,'store')='store' AND COALESCE(cl.auto_analysis,1)=1''').fetchone()[0]
-print(f'  월요일 09:40 에 만들어질 보고서: 약 {n}건')
-print(f'  12주 뒤 평형 총량: 약 {round(n*12*18/1024)}MB')
-"
             echo ""
             echo "=== ⑥ 디스크 여유 ==="
             df -h / | tail -1
