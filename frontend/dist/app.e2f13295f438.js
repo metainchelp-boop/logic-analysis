@@ -11902,6 +11902,16 @@ window.SaveToClientSection = function SaveToClientSection({
   var _s9 = useState('');
   var clientSearch = _s9[0];
   var setClientSearch = _s9[1]; // 기존 업체 검색어
+  // 추적 수명주기(2026-08-20) — 분석했다고 자동 추적되지 않는다. 광고주 등록 시 명시 선택.
+  var _tk = useState(true);
+  var trackOn = _tk[0];
+  var setTrackOn = _tk[1];
+  var _tm = useState(6);
+  var trackMonths = _tm[0];
+  var setTrackMonths = _tm[1];
+  var _dp = useState(null);
+  var dupInfo = _dp[0];
+  var setDupInfo = _dp[1]; // 중복 등록 안내
   /* 경쟁사 저장(관리팀 경쟁사 탭) — 연결할 광고주 드롭다운 선택 */
   var _sa = useState(null);
   var compAdvId = _sa[0];
@@ -11991,7 +12001,23 @@ window.SaveToClientSection = function SaveToClientSection({
       }).catch(function () {});
     } catch (e) {}
   };
-  var handleSave = function () {
+
+  // 종료 예정일 미리보기 — 서버 _resolve_track_until 과 같은 규칙(월 말일 보정 포함)
+  var _addMonths = function (mo) {
+    var d = new Date();
+    var y = d.getFullYear(),
+      m = d.getMonth() + mo,
+      day = d.getDate();
+    y += Math.floor(m / 12);
+    m = (m % 12 + 12) % 12;
+    var last = new Date(y, m + 1, 0).getDate();
+    var dd = new Date(y, m, Math.min(day, last));
+    var p = function (n) {
+      return (n < 10 ? '0' : '') + n;
+    };
+    return dd.getFullYear() + '-' + p(dd.getMonth() + 1) + '-' + p(dd.getDate());
+  };
+  var handleSave = function (forceAttach) {
     setSaving(true);
     setMessage('');
 
@@ -12036,10 +12062,23 @@ window.SaveToClientSection = function SaveToClientSection({
         // 영업 대상 저장(영업사원 개인용)
         payload.role = 'prospect';
       }
+      // 추적 수명주기 — 광고주 신규 등록에만 붙인다(영업 대상·경쟁사는 추적 대상 아님)
+      if (!isCompMode && !isProspect) {
+        payload.track = !!trackOn;
+        if (trackOn && trackMonths) payload.track_months = trackMonths;
+      }
+      if (forceAttach) payload.force_attach = true;
       api.post('/cd/quick-register', payload).then(function (res) {
+        if (res && res.duplicate) {
+          // 이미 등록된 업체 — 조용히 붙이지 않고 담당자를 보여주고 물어본다
+          setDupInfo(res);
+          setSaving(false);
+          return;
+        }
         if (res.success) {
           setSuccess(true);
           setMessage(res.message);
+          setDupInfo(null);
           saveRankIfPossible(res.client_id);
           if (isCompMode && onCompetitorSaved) {
             try {
@@ -12635,7 +12674,181 @@ window.SaveToClientSection = function SaveToClientSection({
         }
       }, c.main_keywords));
     })));
-  }()), /* 오류 메시지 */
+  }()), /* 추적 수명주기 — 광고주 신규 등록일 때만 (영업 대상·경쟁사는 추적 대상 아님) */
+  saveMode === 'new' && !_fixedCompMode && !_prospectMode && React.createElement('div', {
+    style: {
+      marginBottom: 12
+    }
+  }, React.createElement('div', {
+    onClick: function () {
+      setTrackOn(!trackOn);
+    },
+    style: {
+      display: 'flex',
+      gap: 10,
+      alignItems: 'flex-start',
+      padding: '11px 13px',
+      cursor: 'pointer',
+      border: '1px solid ' + (trackOn ? '#3b82f6' : '#e2e8f0'),
+      background: trackOn ? '#eff6ff' : '#f8fafc',
+      borderRadius: 9
+    }
+  }, React.createElement('div', {
+    style: {
+      width: 17,
+      height: 17,
+      flex: '0 0 17px',
+      borderRadius: 4,
+      marginTop: 1,
+      border: '2px solid ' + (trackOn ? '#3b82f6' : '#cbd5e1'),
+      background: trackOn ? '#3b82f6' : '#fff',
+      color: '#fff',
+      fontSize: 12,
+      lineHeight: '14px',
+      textAlign: 'center',
+      fontWeight: 900
+    }
+  }, trackOn ? '✓' : ''), React.createElement('div', {
+    style: {
+      fontSize: 12.5
+    }
+  }, React.createElement('b', {
+    style: {
+      color: trackOn ? '#1d4ed8' : '#475569'
+    }
+  }, '매일 순위 추적 시작'), React.createElement('div', {
+    style: {
+      color: '#64748b',
+      marginTop: 2
+    }
+  }, trackOn ? '이 키워드가 매일 아침 자동으로 순위를 기록합니다.' : '체크하지 않으면 이번 분석 결과만 저장됩니다(추적 안 함).'))), trackOn && React.createElement('div', {
+    style: {
+      marginTop: 9
+    }
+  }, React.createElement('div', {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      color: '#475569',
+      marginBottom: 5
+    }
+  }, '추적 기간 ', React.createElement('span', {
+    style: {
+      fontWeight: 400,
+      color: '#94a3b8'
+    }
+  }, '— 종료일이 지나면 추적이 자동으로 멈춥니다')), React.createElement('div', {
+    style: {
+      display: 'flex',
+      gap: 7,
+      flexWrap: 'wrap',
+      alignItems: 'center'
+    }
+  }, [3, 6, 12].map(function (mo) {
+    var on = trackMonths === mo;
+    return React.createElement('button', {
+      key: mo,
+      onClick: function () {
+        setTrackMonths(mo);
+      },
+      style: {
+        border: '1px solid ' + (on ? '#3b82f6' : '#cbd5e1'),
+        background: on ? '#eff6ff' : '#fff',
+        color: on ? '#1d4ed8' : '#475569',
+        borderRadius: 999,
+        padding: '5px 14px',
+        fontSize: 12.5,
+        fontWeight: 700,
+        cursor: 'pointer'
+      }
+    }, mo + '개월');
+  }), React.createElement('button', {
+    onClick: function () {
+      setTrackMonths(0);
+    },
+    style: {
+      border: '1px solid ' + (trackMonths === 0 ? '#3b82f6' : '#cbd5e1'),
+      background: trackMonths === 0 ? '#eff6ff' : '#fff',
+      color: trackMonths === 0 ? '#1d4ed8' : '#475569',
+      borderRadius: 999,
+      padding: '5px 14px',
+      fontSize: 12.5,
+      fontWeight: 700,
+      cursor: 'pointer'
+    }
+  }, '기한 없음'), React.createElement('span', {
+    style: {
+      fontSize: 11.5,
+      color: '#94a3b8'
+    }
+  }, trackMonths ? '종료 예정 ' + _addMonths(trackMonths) : '수동으로 끌 때까지')), React.createElement('div', {
+    style: {
+      fontSize: 11,
+      color: '#94a3b8',
+      marginTop: 5
+    }
+  }, '전산에 계약이 등록돼 있으면 계약 종료일로 매일 자동 갱신됩니다.'))), /* 중복 등록 안내 — 조용히 붙이지 않고 담당자를 보여준다 */
+  dupInfo && React.createElement('div', {
+    style: {
+      border: '1px solid #fecaca',
+      background: '#fef2f2',
+      borderRadius: 9,
+      padding: '12px 14px',
+      marginBottom: 12,
+      fontSize: 12.8
+    }
+  }, React.createElement('div', {
+    style: {
+      fontWeight: 700,
+      color: '#dc2626',
+      marginBottom: 3
+    }
+  }, '이미 등록된 업체입니다'), React.createElement('div', null, React.createElement('b', null, dupInfo.existing_name), React.createElement('span', {
+    style: {
+      color: '#64748b'
+    }
+  }, ' · 담당 ' + (dupInfo.owner || '-') + (dupInfo.registered_at ? ' · ' + dupInfo.registered_at + ' 등록' : ''))), React.createElement('div', {
+    style: {
+      color: '#64748b',
+      marginTop: 3
+    }
+  }, (dupInfo.matched_by || '업체명') + '(으)로 이미 등록돼 있습니다.'), React.createElement('div', {
+    style: {
+      display: 'flex',
+      gap: 8,
+      marginTop: 10
+    }
+  }, React.createElement('button', {
+    onClick: function () {
+      setDupInfo(null);
+      handleSave(true);
+    },
+    disabled: saving,
+    style: {
+      border: 'none',
+      background: '#3b82f6',
+      color: '#fff',
+      borderRadius: 8,
+      padding: '8px 15px',
+      fontSize: 12.5,
+      fontWeight: 700,
+      cursor: 'pointer'
+    }
+  }, '이 업체에 키워드만 추가'), React.createElement('button', {
+    onClick: function () {
+      setDupInfo(null);
+    },
+    style: {
+      border: '1px solid #cbd5e1',
+      background: '#fff',
+      color: '#475569',
+      borderRadius: 8,
+      padding: '8px 15px',
+      fontSize: 12.5,
+      fontWeight: 700,
+      cursor: 'pointer'
+    }
+  }, '취소'))), /* 오류 메시지 */
   message && !success && React.createElement('div', {
     style: {
       color: '#dc2626',
@@ -12647,7 +12860,9 @@ window.SaveToClientSection = function SaveToClientSection({
     }
   }, message), /* 저장 버튼 */
   React.createElement('button', {
-    onClick: handleSave,
+    onClick: function () {
+      handleSave(false);
+    },
     disabled: saving,
     style: {
       width: '100%',

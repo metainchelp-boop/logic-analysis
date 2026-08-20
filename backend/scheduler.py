@@ -245,6 +245,7 @@ def _run_contract_stage_sync():
 
     logger.info("🔄 계약단계 동기화 시작 (전산 ad-sync)")
     stage_by_name, stage_by_slug = {}, {}
+    end_by_name, end_by_slug = {}, {}      # 전산 계약 종료일(가장 늦은 회차)
     fetched_stages = 0
     for stage in PAUSE_STAGES + RESUME_STAGES:
         try:
@@ -259,12 +260,20 @@ def _run_contract_stage_sync():
             items = ((resp.json() or {}).get("result") or {}).get("items") or []
             fetched_stages += 1
             for it in items:
+                # 계약 종료일 — 여러 계약(회차)이 있으면 **가장 늦은 종료일**을 쓴다.
+                # 연장 계약이 있는데 옛 회차 날짜로 추적을 끊으면 안 되기 때문.
+                ends = [c.get("end_date") for c in (it.get("contracts") or []) if c.get("end_date")]
+                end = max(ends) if ends else None
                 nm = _sync_norm(it.get("company_name"))
                 if nm:
                     stage_by_name[nm] = stage
+                    if end:
+                        end_by_name[nm] = max(end, end_by_name.get(nm, ""))
                 slug = _sync_store_slug(it.get("store_url"))
                 if slug:
                     stage_by_slug[slug] = stage
+                    if end:
+                        end_by_slug[slug] = max(end, end_by_slug.get(slug, ""))
         except Exception as e:
             logger.warning(f"  계약단계 조회 실패(stage={stage}): {e} — 이 단계 건너뜀")
 
@@ -276,7 +285,7 @@ def _run_contract_stage_sync():
         conn = sqlite3.connect(DB_PATH, timeout=10)
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            "SELECT id, name, business_name, naver_store_url, auto_analysis, "
+            "SELECT id, name, business_name, naver_store_url, auto_analysis, track_until, "
             "COALESCE(auto_analysis_manual, 0) AS auto_analysis_manual "
             "FROM clients WHERE status = 'active' AND COALESCE(role,'advertiser')='advertiser' "
             "AND COALESCE(vertical,'store')='store'"
@@ -286,10 +295,32 @@ def _run_contract_stage_sync():
             conn.execute("UPDATE clients SET auto_analysis = 0 WHERE id = ?", (cid,))
         for cid in resume_ids:
             conn.execute("UPDATE clients SET auto_analysis = 1 WHERE id = ?", (cid,))
+
+        # 계약 종료일 동기화 — 전산이 알려준 날짜를 추적 종료일로 그대로 쓴다.
+        # 계약이 연장되면 종료일도 따라 늘어나므로 사람이 손댈 일이 없다.
+        # ⚠️ 수동 토글 업체는 여기서도 건드리지 않는다(단계 동기화와 같은 원칙).
+        synced_end = 0
+        for c in rows:
+            if int(c["auto_analysis_manual"] or 0) == 1:
+                continue
+            end = None
+            slug = _sync_store_slug(c["naver_store_url"])
+            if slug and slug in end_by_slug:
+                end = end_by_slug[slug]
+            else:
+                for nm in (c["name"], c["business_name"]):
+                    k = _sync_norm(nm)
+                    if k and k in end_by_name:
+                        end = end_by_name[k]
+                        break
+            if end and end != (c["track_until"] or ""):
+                conn.execute("UPDATE clients SET track_until = ? WHERE id = ?", (end, c["id"]))
+                synced_end += 1
         conn.commit()
         conn.close()
         logger.info(
             f"✅ 계약단계 동기화 완료: 자동 중지 {len(pause_ids)}건 · 자동 재개 {len(resume_ids)}건 "
+            f"· 계약 종료일 반영 {synced_end}건 "
             f"(전산 매칭 {len(stage_by_name)}개 업체, 수동 설정 업체는 유지)"
         )
     except Exception as e:

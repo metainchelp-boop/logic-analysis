@@ -94,6 +94,16 @@ jobs:
               echo "COLLECTOR_TOKEN 주입 완료 (.env.bak-collector 백업)"
             fi
 
+            # ── 전산 계약연동 키 멱등 주입 (2026-08-20) ──
+            # 전산(①) 서버의 AD_SYNC_API_KEY 와 **같은 값**을 우리 쪽 이름으로 넣는다.
+            # 이 키가 있어야 매일 04:00 계약단계 동기화(자동 중지·재개·계약 종료일 반영)가 돈다.
+            # 종전에는 키가 없어 "미설정 — 건너뜀" 로그만 매일 찍히고 무동작이었다.
+            if [ -n "${{ secrets.ERP_AD_SYNC_API_KEY }}" ] && ! grep -q '^ERP_AD_SYNC_API_KEY=' .env 2>/dev/null; then
+              cp .env .env.bak-adsync 2>/dev/null || true
+              echo 'ERP_AD_SYNC_API_KEY=${{ secrets.ERP_AD_SYNC_API_KEY }}' >> .env
+              echo "ERP_AD_SYNC_API_KEY 주입 완료 (.env.bak-adsync 백업)"
+            fi
+
             # ── 소상공인365 인증키 6종 멱등 주입 (2026-08-05, 상권 데이터 고도화) ──
             # 서비스(오퍼레이션)별로 개별 발급되는 인증키. COLLECTOR_TOKEN 선례와 동일하게
             # 「시크릿이 있고 .env 에 아직 없을 때만」 추가 — 기존 키 덮어쓰기 없음.

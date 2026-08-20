@@ -321,6 +321,53 @@ class SaveAnalysisRequest(BaseModel):
     detail_html: Optional[str] = ''  # #1: 상세페이지 HTML(재분석/자동분석 재사용)
 
 
+def _store_slug(url):
+    """스마트스토어 URL → 스토어 슬러그. 중복 판정의 1순위 키(이름보다 안정적)."""
+    m = re.search(r"smartstore\.naver\.com/([^/?#]+)", str(url or ""))
+    return m.group(1).lower() if m else ""
+
+
+def _norm_company(name):
+    """업체명 정규화 — 공백 제거·소문자. 「달콩 농장」 == 「달콩농장」."""
+    return "".join(str(name or "").split()).lower()
+
+
+def _owner_label(conn, created_by):
+    """등록자 표시용 이름 — 중복 안내에 「담당: OOO」로 보여준다."""
+    if not created_by:
+        return "담당자 미상"
+    try:
+        r = conn.execute("SELECT name FROM users WHERE id = ?", (created_by,)).fetchone()
+        if r and r[0]:
+            return str(r[0])
+    except Exception:
+        pass
+    return f"사용자 {created_by}"
+
+
+def _resolve_track_until(req):
+    """추적 종료일 결정 — 명시 날짜 우선, 없으면 개월 수로 계산, 둘 다 없으면 무기한(None)."""
+    raw = (getattr(req, "track_until", None) or "").strip()
+    if raw:
+        try:
+            datetime.strptime(raw[:10], "%Y-%m-%d")
+            return raw[:10]
+        except ValueError:
+            pass  # 형식이 틀리면 개월 수로 폴백
+    months = getattr(req, "track_months", None)
+    try:
+        months = int(months) if months is not None else None
+    except (TypeError, ValueError):
+        months = None
+    if not months or months <= 0:
+        return None
+    d = date.today()
+    y, m = d.year + (d.month - 1 + months) // 12, (d.month - 1 + months) % 12 + 1
+    day = min(d.day, [31, 29 if y % 4 == 0 and (y % 100 or y % 400 == 0) else 28,
+                      31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1])
+    return date(y, m, day).isoformat()
+
+
 class QuickRegisterRequest(BaseModel):
     """분석 탭에서 빠른 업체 등록"""
     name: str
@@ -340,6 +387,15 @@ class QuickRegisterRequest(BaseModel):
     # 플레이스 축(2026-08): vertical='place' 로 등록하면 같은 권한·30일 유예 규칙을 타되
     # 스토어 전용 자동분석 배치에서 제외된다(순위 이력은 place_rank_history 별도 축).
     vertical: Optional[str] = 'store'
+    # 추적 수명주기(2026-08-20): 분석했다고 자동 추적되지 않는다 — 화면에서 명시 선택.
+    #   track: True 면 매일 순위 추적 시작 / track_months: 추적 기간(개월, 종료일 자동 계산)
+    #   track_until: 종료일 직접 지정(YYYY-MM-DD). 전산 계약 종료일을 그대로 넣을 때 사용.
+    # ⚠️ 미전송(None)이면 종전 동작 유지 — 구버전 화면이 보내는 요청이 깨지지 않게.
+    track: Optional[bool] = None
+    track_months: Optional[int] = None
+    track_until: Optional[str] = None
+    # 중복 안내를 보고 「이 업체에 키워드만 추가」를 누르면 True 로 다시 보낸다.
+    force_attach: Optional[bool] = False
 
 
 class SaveRankRequest(BaseModel):
@@ -396,13 +452,53 @@ def quick_register(req: QuickRegisterRequest, current_user: dict = Depends(get_c
             if not adv:
                 raise HTTPException(status_code=400, detail="연결할 대상(광고주·영업 대상)을 찾을 수 없습니다.")
 
-        # 같은 이름의 업체가 이미 있는지 확인 (본인 소유 · 같은 유형/연결 범위 내 — 경쟁사가 광고주를 덮지 않게)
-        existing = conn.execute(
-            "SELECT id FROM clients WHERE name = ? AND created_by = ? "
-            "AND COALESCE(role,'advertiser') = ? AND COALESCE(competitor_of,0) = ? "
-            "AND COALESCE(vertical,'store') = ?",
-            (req.name, user_id, role, comp_of or 0, vertical)
-        ).fetchone()
+        # ── 중복 판정 (2026-08-20 개편) ────────────────────────────────
+        # 종전: 「업체명 정확일치 AND 등록자=본인」 → ⑴ 띄어쓰기만 달라도 통과
+        #       ⑵ **담당자가 다르면 검사조차 안 함**. 실측 중복 20건 중 10건이 ⑵ 유형이었다
+        #       (달콩 농장/달콩농장, 안동두레농원 ×2, 남향농원 ×2 …).
+        # 이제: 스토어 주소(슬러그) 1순위 → 정규화 업체명 2순위로, **등록자와 무관하게** 본다.
+        #       경쟁사는 종전대로 competitor_of 범위 안에서만 비교(광고주를 덮지 않게).
+        _slug = _store_slug(req.product_url) or _store_slug(getattr(req, 'store_url', ''))
+        _nkey = _norm_company(req.name)
+        existing = None
+        _dup_owner = None
+        cand = conn.execute(
+            "SELECT id, name, naver_store_url, created_by, COALESCE(role,'advertiser') role, "
+            "       COALESCE(competitor_of,0) comp, created_at "
+            "  FROM clients "
+            " WHERE status='active' AND COALESCE(vertical,'store') = ? "
+            "   AND COALESCE(role,'advertiser') = ? AND COALESCE(competitor_of,0) = ?",
+            (vertical, role, comp_of or 0)
+        ).fetchall()
+        if _slug:
+            for c in cand:
+                if _store_slug(c["naver_store_url"]) == _slug:
+                    existing = c
+                    break
+        if existing is None and _nkey:
+            for c in cand:
+                if _norm_company(c["name"]) == _nkey:
+                    existing = c
+                    break
+        # 남이 등록한 업체면 조용히 붙이지 않고 화면에 알린다(누가 담당인지 보여줘야 정리가 된다)
+        if existing is not None and str(existing["created_by"] or "") != str(user_id):
+            _dup_owner = _owner_label(conn, existing["created_by"])
+
+        # 남이 등록한 업체면 여기서 멈추고 화면에 알린다 — 조용히 붙이면 「같은 업체 두 줄」이
+        # 계속 생기고, 어느 쪽에 순위가 붙는지 아무도 모르게 된다(실측 중복 20건의 원인).
+        # 화면은 이 응답을 받아 「이 업체에 키워드만 추가 / 취소」를 묻는다.
+        if _dup_owner and not req.force_attach:
+            return {
+                "success": False,
+                "duplicate": True,
+                "client_id": existing["id"],
+                "existing_name": existing["name"],
+                "owner": _dup_owner,
+                "registered_at": (existing["created_at"] or "")[:10],
+                "matched_by": "스토어 주소" if _slug and _store_slug(existing["naver_store_url"]) == _slug else "업체명",
+                "detail": (f"이미 등록된 업체입니다 — '{existing['name']}' "
+                           f"(담당: {_dup_owner}). 같은 업체라면 키워드만 추가할 수 있습니다."),
+            }
 
         if existing:
             client_id = existing['id']
@@ -425,12 +521,19 @@ def quick_register(req: QuickRegisterRequest, current_user: dict = Depends(get_c
                          else f"'{req.name}' 업체에 분석 결과가 추가되었습니다."))
         else:
             # 신규 업체 등록 (광고주 · 영업 대상 · 경쟁사)
+            # 추적 수명주기 — 광고주만 대상. 영업 대상·경쟁사는 계약 전/비교용이라 추적하지 않는다.
+            #   track 미전송(None) = 구버전 화면 → 종전 동작(추적 ON)으로 둬 회귀를 막는다.
+            _is_adv = (role == 'advertiser')
+            _track_on = 1 if (_is_adv and (req.track is None or req.track)) else 0
+            _track_until = _resolve_track_until(req) if _track_on else None
             cursor = conn.execute("""
                 INSERT INTO clients (name, business_name, main_keywords, naver_store_url,
-                    status, created_by, created_at, updated_at, role, competitor_of, expires_at, vertical)
-                VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)
+                    status, created_by, created_at, updated_at, role, competitor_of, expires_at, vertical,
+                    track_enabled, track_until)
+                VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (req.name, req.name, req.keyword, req.product_url or '',
-                  user_id, now, now, role, comp_of, expires_at, vertical))
+                  user_id, now, now, role, comp_of, expires_at, vertical,
+                  _track_on, _track_until))
             client_id = cursor.lastrowid
             msg = (f"경쟁사 '{req.name}'가 등록되고 분석되었습니다." if is_comp
                    else (f"영업 대상 '{req.name}'가 등록되고 분석되었습니다." if is_prospect

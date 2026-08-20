@@ -129,43 +129,92 @@ def _slot_of(keyword: str, priority: bool) -> int:
     return PRIORITY_HOURS + (h % LATE_HOURS)
 
 
-def _keyword_universe(conn):
-    """수집 대상 키워드 → {키워드: 우선(업체) 여부}."""
-    uni = {}
+def _tracking_client_ids(conn):
+    """순위 추적 자격이 있는 업체 id 목록.
+
+    자격 = 활성 · 광고주(영업대상·경쟁사 제외) · 스토어축 · 자동분석 ON
+           · 추적 켜짐(track_enabled) · 추적 기간이 남아 있음(track_until)
+
+    ⚠️ 2026-08-20 이전에는 이 조건이 `clients.main_keywords` 갈래에만 걸려 있었고,
+       `tracked_keywords`·`client_analyses` 갈래는 **무필터**였다. 그래서
+       계약 만료·환불중·홀딩중 업체와 영업사원이 등록한 영업 대상의 키워드가
+       그대로 매일 수집됐다(실측: 유니버스 1,001개 중 상당수). 이제 세 갈래 전부
+       이 한 곳을 지난다.
+    """
     try:
-        for r in conn.execute("SELECT DISTINCT keyword FROM tracked_keywords"):
-            k = (r["keyword"] or "").strip()
+        rows = conn.execute(
+            "SELECT id FROM clients "
+            " WHERE status='active' "
+            "   AND COALESCE(role,'advertiser')='advertiser' "
+            "   AND COALESCE(vertical,'store')='store' "
+            "   AND COALESCE(auto_analysis,1)=1 "
+            "   AND COALESCE(track_enabled,1)=1 "
+            "   AND (track_until IS NULL OR track_until='' "
+            "        OR date(track_until) >= date('now','localtime'))"
+        ).fetchall()
+        return [r[0] for r in rows]
+    except Exception as e:
+        logger.warning(f"[collector] 추적 자격 업체 조회 실패: {e}")
+        return []
+
+
+def _keyword_universe(conn):
+    """수집 대상 키워드 → {키워드: 우선(업체) 여부}.
+
+    세 갈래 모두 **추적 자격이 있는 업체의 것만** 모은다(2026-08-20 개편):
+      ① clients.main_keywords      — 담당자가 지정한 대표 키워드
+      ② client_analyses            — 그 업체의 분석 이력 키워드
+      ③ tracked_keywords           — rank_link 로 그 업체에 이어진 추적 상품의 키워드
+    자격 판정은 _tracking_client_ids() 한 곳에만 있다.
+    """
+    uni = {}
+    ids = _tracking_client_ids(conn)
+    if not ids:
+        logger.warning("[collector] 추적 자격 업체 0곳 — 수집 유니버스 비어 있음(설정 확인 필요)")
+        return uni
+    ph = ",".join("?" * len(ids))
+
+    # ① 대표 키워드
+    try:
+        for r in conn.execute(
+                f"SELECT main_keywords FROM clients WHERE id IN ({ph})", ids):
+            for k in (r[0] or "").split(","):
+                k = k.strip()
+                if k:
+                    uni[k] = True
+    except Exception as e:
+        logger.warning(f"[collector] 대표 키워드 조회 실패: {e}")
+
+    # ② 분석 이력 키워드(자격 업체 것만)
+    try:
+        for r in conn.execute(
+                f"SELECT DISTINCT keyword FROM client_analyses WHERE client_id IN ({ph})", ids):
+            k = (r[0] or "").strip()
+            if k:
+                uni[k] = True
+    except Exception as e:
+        logger.warning(f"[collector] 업체 키워드 조회 실패: {e}")
+
+    # ③ 홈탭 추적 상품 키워드.
+    #    ⚠️ 「자격 업체에 이어진 것만」으로 좁히면 안 된다 — rank_link 는 상품ID가 맞는
+    #    경우에만 맺어지는 보조 연결이라, 연결이 없는 추적 상품(실측 400개 중 136개)은
+    #    '계약이 끝난 것'이 아니라 '어느 업체 것인지 아직 모르는 것'이다. 그걸 빼면
+    #    직원이 손으로 등록한 상품 순위 추적이 통째로 죽는다.
+    #    → 규칙: **자격 업체에 이어졌거나, 아무 업체에도 안 이어진 상품**은 포함.
+    #            자격 없는 업체(계약만료·환불·홀딩·영업대상)에만 이어진 상품은 제외.
+    try:
+        for r in conn.execute(
+                "SELECT DISTINCT k.keyword FROM tracked_keywords k "
+                " WHERE k.product_id IN (SELECT tracked_product_id FROM rank_link "
+                f"                        WHERE client_id IN ({ph})) "
+                "    OR k.product_id NOT IN (SELECT tracked_product_id FROM rank_link)", ids):
+            k = (r[0] or "").strip()
             if k:
                 uni.setdefault(k, False)
     except Exception as e:
         logger.warning(f"[collector] 추적 키워드 조회 실패: {e}")
-    try:
-        for r in conn.execute("SELECT DISTINCT keyword FROM client_analyses"):
-            k = (r["keyword"] or "").strip()
-            if k:
-                uni[k] = True      # 업체(전산① 소비) 키워드 — 앞 시간대 우선
-    except Exception as e:
-        logger.warning(f"[collector] 업체 키워드 조회 실패: {e}")
-    # 직접 등록 키워드(clients.main_keywords) — 08:00 배치·rank_record 는 예전부터
-    # 이 목록을 업체 몫으로 인식하는데, 수집 유니버스에는 빠져 있어 「분석 이력이 없는
-    # 등록 키워드는 영영 수집되지 않는」 공백이 있었다(키워드 순위 탭의 추가 등록
-    # 기능이 이 경로를 쓰면서 실결함이 됨 — 2026-08-11). 배치와 같은 자격 조건만.
-    try:
-        n_new = 0
-        for r in conn.execute(
-                "SELECT main_keywords FROM clients WHERE status='active' "
-                "AND COALESCE(auto_analysis,1)=1 AND COALESCE(role,'advertiser')='advertiser' "
-                "AND COALESCE(vertical,'store')='store'"):
-            for k in (r["main_keywords"] or "").split(","):
-                k = k.strip()
-                if k and k not in uni:
-                    n_new += 1
-                if k:
-                    uni[k] = True   # 업체 키워드와 동급(앞 시간대 우선)
-        if n_new:
-            logger.info(f"[collector] 직접 등록 키워드 {n_new}개 유니버스 편입")
-    except Exception as e:
-        logger.warning(f"[collector] 직접 등록 키워드 조회 실패: {e}")
+
+    logger.info(f"[collector] 수집 유니버스 {len(uni)}개 (추적 자격 업체 {len(ids)}곳)")
     return uni
 
 
