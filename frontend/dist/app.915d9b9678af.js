@@ -25083,6 +25083,21 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
   var sbizIsGu = function (sb) {
     return !!(sb && sb.scope === 'gu');
   };
+  // ⚠️ 상권이 안 붙었을 때 **왜 안 붙었는지**를 그 자리에서 말한다.
+  //    카드만 조용히 빼면 직원은 고장인지 데이터가 없는 건지 구분할 수 없다.
+  //    문구는 「직원이 지금 할 수 있는 조치」로 쓴다(사유 나열이 목적이 아니다).
+  var SBIZ_WHY = {
+    'no-region': '지역을 적으면 이 동네 상권도 함께 나옵니다.',
+    'no-industry': '업종을 고르면 이 동네 상권(점포당 월평균·업소 수)이 함께 나옵니다.',
+    'industry-unmapped': '고른 업종에 맞는 상권 분류를 찾지 못했습니다. 다른 업종으로 한 번 더 시도해 보세요.',
+    'region-unresolved': '적어주신 지역이 어느 동네인지 특정하지 못했습니다. 업체명이 정확한지 확인하시고, 지역을 시·구까지 적어주세요(예: 수원시 조원동).',
+    'no-stats': '이 동네·이 업종은 공공 통계에 집계된 자료가 없습니다. 보고서의 나머지 내용은 정상입니다.',
+    'error': '상권 자료를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.',
+    'no-key': '상권 자료 연동이 꺼져 있습니다(관리자 설정).'
+  };
+  var sbizWhy = function (m) {
+    return m && !m.sbiz && m.sbizReason ? SBIZ_WHY[m.sbizReason] || null : null;
+  };
   var sbizArea = function (sb) {
     if (sb && sb.scopeLabel) return sb.scopeLabel;
     if (sb && sb.district && sb.district.admiNm) return sb.district.admiNm;
@@ -26182,6 +26197,22 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
     }, tr.peakMonth ? React_.createElement('span', null, React_.createElement('b', null, '성수기'), ' ', tr.peakMonth) : null, tr.lowMonth ? React_.createElement('span', null, React_.createElement('b', null, '비수기'), ' ', tr.lowMonth) : null, tr.peakWeekday ? React_.createElement('span', null, React_.createElement('b', null, '요일 피크'), ' ', tr.peakWeekday + '요일') : null, tr.yoyRate != null ? React_.createElement('span', null, React_.createElement('b', null, '전년 동월 대비'), ' ', (tr.yoyRate >= 0 ? '+' : '') + tr.yoyRate + '%') : null), React_.createElement('div', {
       className: 'chartfoot'
     }, '데이터랩 통합검색어 트렌드 · ‘', tr.keyword, '’ 기준(지역을 뗀 업종 키워드 — 지역 키워드는 표본이 작아 계절성이 노이즈가 됩니다). 값은 기간 내 상대 지수입니다.')) : null) : null,
+    // 상권이 안 붙은 회차는 그 사실과 사유를 밝힌다(카드만 빼면 고장으로 읽힌다)
+    !sb && sbizWhy(m) ? React_.createElement('div', {
+      className: 'card',
+      style: {
+        marginTop: 14
+      }
+    }, React_.createElement('h3', {
+      className: 'rt-h3'
+    }, React_.createElement('span', {
+      className: 'rt-hic'
+    }, '🏙'), '우리 동네 상권'), React_.createElement('div', {
+      className: 'note est',
+      style: {
+        marginTop: 10
+      }
+    }, React_.createElement('b', null, '이 회차에는 상권 자료가 붙지 않았습니다'), ' — ', sbizWhy(m))) : null,
     // 동네 상권
     sb ? React_.createElement('div', {
       className: 'card',
@@ -26203,7 +26234,7 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
       style: {
         marginBottom: 10
       }
-    }, React_.createElement('b', null, '📍 ' + sbizArea(sb) + ' 전체 기준입니다'), ' — 적어주신 지역을 동 단위로 특정하지 못해 범위를 넓혔습니다. 동 단위로 보려면 ', React_.createElement('b', null, '시·구까지'), ' 적어주세요(예: 고양시 성사동).') : null, React_.createElement('div', {
+    }, React_.createElement('b', null, '📍 ' + sbizArea(sb) + ' 전체 기준입니다'), sb.guReason === 'dong-no-stats' ? ' — 이 동네에는 이 업종의 공공 통계가 없어 한 단계 넓은 범위로 봅니다. 동네는 정확히 찾았습니다.' : ' — 적어주신 지역을 동 단위로 특정하지 못해 범위를 넓혔습니다. 동 단위로 보려면 시·구까지 적어주세요(예: 고양시 성사동).') : null, React_.createElement('div', {
       className: 'grid3'
     }, React_.createElement('div', {
       className: 'ratecard p'

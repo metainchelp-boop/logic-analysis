@@ -893,8 +893,16 @@ def _aggregate_major(admi_cd: str, loc: str, major: str):
     return result
 
 
+def _why(reason, code: str):
+    """상권이 왜 안 붙었는지 호출부에 알려 준다(선택 out-param).
+    ⚠️ 조용히 생략하는 설계는 화면에서 「고장」과 구분이 안 된다 — 이 저장소가
+       여러 번 겪은 실패 패턴이라, 생략할 때는 사유를 함께 남긴다."""
+    if isinstance(reason, dict):
+        reason["code"] = code
+
+
 def get_place_sbiz(region: str, industry_label: str, hint: str = "",
-                   biz_name: str = "") -> dict | None:
+                   biz_name: str = "", reason: dict | None = None) -> dict | None:
     """지역명×업종 라벨 → 상권 데이터 블록(제안서 sbiz).
     반환 스키마(전 필드 optional·없으면 null) — FE 5차 배선이 이 스키마에 고정:
       {"source":"sbiz365-simple", "baseYm", "district":{admiCd,admiNm,guNm},
@@ -906,20 +914,24 @@ def get_place_sbiz(region: str, industry_label: str, hint: str = "",
     SIMPLE 키 미설정·매칭 실패·API 파손 등 어떤 실패도 None(제안서 상권 블록 생략)."""
     try:
         if not _env_keys()["simple"]:
+            _why(reason, "no-key")
             return None  # 키 미설정 → 모듈 전체 조용히 비활성
         region = (region or "").strip()
         label = (industry_label or "").strip()
         hint = (hint or "").strip()
         if not region or not label:
+            _why(reason, "no-industry" if region else "no-region")
             return None
 
         # 업체명이 있으면 좌표를 그 업체로 먼저 찾는다 — 지역명 단독 검색은 동명의 상호에
         # 걸려 엉뚱한 동네가 나온다(2026-08-11 실측 사고).
         admi = _resolve_admi(region, biz_name=biz_name)
         if not admi or not admi.get("admiCd"):
+            _why(reason, "region-unresolved")
             return None
         candidates = _resolve_upjong_candidates(label, limit=3, hint=hint)
         if not candidates:
+            _why(reason, "industry-unmapped")
             return None
 
         # 힌트가 후보를 바꾸므로 캐시 키에도 넣는다(같은 동네 같은 라벨이어도 삼겹살집/칼국수집이 다른 업종).
@@ -938,17 +950,34 @@ def get_place_sbiz(region: str, industry_label: str, hint: str = "",
         #    (표기 확정에 최대 4콜 · 업종 후보에 최대 3콜 — 첫 표기가 맞으면 1콜로 끝난다)
         loc, avg, upjong = _pick_simple_loc(admi, region, candidates[0]["code"]), None, None
         if not loc:
+            _why(reason, "no-stats")
             return None
 
         # 후보 업종을 순서대로 시도하고, 점포당 매출이 실제로 잡히는 첫 후보를 채택한다
         # (그 동네에 그 소분류 점포가 없으면 0원으로 와서 상권 슬라이드가 '0원'이 되어버림).
+        gu_only = None   # 동 단위는 0인데 시군구 평균은 실려 온 첫 후보
         for cand in candidates:
             got = _fetch_avg(admi["admiCd"], cand["code"], loc)
-            if got and _num(got.get("saleAmt")):
+            if not got:
+                continue
+            if _num(got.get("saleAmt")):
                 upjong, avg = cand, got
                 break
+            # ⭐ 그 동에 그 소분류 점포가 없으면 saleAmt 가 0 으로 오는데, **같은 응답에
+            #    시군구·시도 평균은 그대로 실려 온다**(2026-08-21 실측: 조원2동 Q10204 —
+            #    saleAmt 0 · guAmt 17,059 · siAmt 14,606). 종전엔 이 응답을 버리고 상권을
+            #    통째로 생략했다 — 손에 든 근거를 버린 셈이라, 전 후보가 0이면 그 값으로
+            #    시군구 범위 보고서를 낸다. **추가 API 호출 0회.**
+            if gu_only is None and _num(got.get("guAmt")):
+                gu_only = (cand, got)
+
+        dong_no_stats = False
         if avg is None:
-            return None
+            if gu_only is None:
+                _why(reason, "no-stats")
+                return None
+            upjong, avg = gu_only
+            dong_no_stats = True   # 동은 맞혔다 — 그 동네에 그 업종 통계가 없을 뿐
         pop = _fetch_popular(admi["admiCd"], upjong["code"], avg.get("analyNo"))
 
         # ⭐ 시군구 후퇴 모드(2026-08-12 대표 확정) — 동 단위로 지역을 못 맞혔을 때.
@@ -956,9 +985,13 @@ def get_place_sbiz(region: str, industry_label: str, hint: str = "",
         #    그대로 내보내면 **우리가 확신하지 못하는 동네의 수치**를 광고주에게 보이는 셈이다.
         #    그래서 헤드라인을 시군구 평균(guAmt)으로 갈아끼우고 동 단위 축은 전부 비운다.
         #    ⚠️ 이 분기의 요점은 하나 — **단위가 다른 숫자를 한 카드에 섞지 않는다.**
-        is_gu = (admi.get("scope") == "gu")
+        # 시군구 범위로 내는 경우는 둘 — ⑴ 동을 못 맞혔다 ⑵ 동은 맞혔는데 그 동네에
+        # 그 업종 통계가 없다. 숫자를 다루는 규칙은 같고(동 단위 축을 전부 비운다),
+        # 화면에 적을 사유만 다르므로 guReason 으로 갈라 알려 준다.
+        is_gu = (admi.get("scope") == "gu") or dong_no_stats
         if is_gu and _num(avg.get("guAmt")) is None:
             logger.warning("[sbiz365] 시군구 후퇴인데 시군구 평균이 없다 → 상권 생략")
+            _why(reason, "no-stats")
             return None
 
         # 유동인구: topFive 에 우리 행정동이 있으면 dayAvg 확보(없으면 null — 가짜 값 금지)
@@ -996,6 +1029,9 @@ def get_place_sbiz(region: str, industry_label: str, hint: str = "",
             "baseYm": avg.get("stdYm"),
             # 어느 범위로 잰 수치인지 — 화면이 이 값으로 「…동 상권」/「…구 상권」을 가른다
             "scope": "gu" if is_gu else "dong",
+            # 왜 시군구로 넓혔는지 — 화면 안내 문구가 갈린다(동을 못 맞힌 것과
+            # 동은 맞혔는데 그 동네 그 업종 통계가 없는 것은 직원이 할 조치가 다르다)
+            "guReason": ("dong-no-stats" if dong_no_stats else "dong-unresolved") if is_gu else None,
             "scopeLabel": (admi.get("guNm") or "") if is_gu
                           else " ".join(v for v in (admi.get("guNm"), admi.get("admiNm")) if v),
             "district": {
@@ -1037,4 +1073,5 @@ def get_place_sbiz(region: str, industry_label: str, hint: str = "",
         return result
     except Exception as e:
         logger.warning(f"[sbiz365] 상권 데이터 조립 실패(무시): {e}")
+        _why(reason, "error")
         return None
