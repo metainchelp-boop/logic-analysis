@@ -9267,14 +9267,18 @@ window.EntryStrategySection = function EntryStrategySection(props) {
       flex: 1,
       minWidth: 200
     }
-  }, React.createElement('div', {
+  },
+  /* ⚠️ 종전엔 값이 비면 '상품 정보 로딩 중...' 이라고 적었다(박서연 신고 2026-08-13).
+     실제로는 아무것도 안 돌고 있는데 로딩처럼 보여, 직원이 영영 기다렸다.
+     실패는 실패로 적는다 — 왜 비었고 지금 무엇을 할 수 있는지까지. */
+  React.createElement('div', {
     style: {
       fontWeight: 700,
       fontSize: 15,
-      color: '#0f172a',
-      marginBottom: 4
+      marginBottom: 4,
+      color: productInfo.product_name ? '#0f172a' : '#b45309'
     }
-  }, productInfo.product_name || '상품 정보 로딩 중...'), React.createElement('div', {
+  }, productInfo.product_name || '상품 정보를 불러오지 못했습니다'), productInfo.product_name ? React.createElement('div', {
     style: {
       fontSize: 13,
       color: '#64748b'
@@ -9283,7 +9287,22 @@ window.EntryStrategySection = function EntryStrategySection(props) {
     style: {
       marginRight: 12
     }
-  }, '판매처: ' + productInfo.store_name), productInfo.price > 0 && React.createElement('span', null, '가격: ' + fmt(productInfo.price) + '원'))), React.createElement('div', {
+  }, '판매처: ' + productInfo.store_name), productInfo.price > 0 && React.createElement('span', null, '가격: ' + fmt(productInfo.price) + '원')) : React.createElement('div', {
+    style: {
+      fontSize: 12.5,
+      color: '#78350f',
+      background: '#fffbeb',
+      border: '1px solid #fde68a',
+      borderRadius: 8,
+      padding: '9px 11px',
+      marginTop: 2
+    }
+  }, React.createElement('div', {
+    style: {
+      fontWeight: 700,
+      marginBottom: 3
+    }
+  }, '네이버가 쇼핑 검색 API 를 종료해(2026-07-31) 아직 수집되지 않은 키워드는 상품 정보를 가져올 수 없습니다.'), React.createElement('div', null, '기다려도 채워지지 않습니다. 아래 경쟁사·격차 분석도 같은 이유로 비어 있을 수 있습니다.'))), React.createElement('div', {
     style: {
       display: 'flex',
       gap: 12,
