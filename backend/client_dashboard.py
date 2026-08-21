@@ -101,6 +101,22 @@ def init_client_dashboard_db():
                 FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
             );
 
+            -- 키워드별 상품 등록부 (2026-08-21, 이예은 신고)
+            -- 종전엔 업체당 상품 주소가 하나(clients.naver_store_url)뿐이라, 한 업체가 상품 둘을
+            -- 각각 다른 키워드로 추적하면 08:30 자동분석이 두 키워드 모두 '첫 상품' 으로 검사해
+            -- 두 번째 상품 키워드가 매일 「미노출」로 기록됐다(오류 없이 그럴듯한 틀린 답).
+            -- 여기에 적힌 게 있으면 그 주소를, 없으면 종전대로 업체 주소를 쓴다(무회귀).
+            CREATE TABLE IF NOT EXISTS client_keyword_product (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                keyword TEXT NOT NULL,
+                product_url TEXT NOT NULL,
+                updated_by INTEGER,
+                updated_at TEXT DEFAULT (datetime('now','localtime')),
+                UNIQUE(client_id, keyword),
+                FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS daily_usage (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL DEFAULT 0,
@@ -345,6 +361,47 @@ def _owner_label(conn, created_by):
     return f"사용자 {created_by}"
 
 
+def keyword_product_url(conn, client_id, keyword, fallback=""):
+    """이 (업체, 키워드) 로 추적할 상품 주소.
+
+    등록부에 적힌 게 있으면 그것, 없으면 업체 주소(fallback).
+    ⚠️ 자동분석·수동분석·보고서가 **같은 답**을 쓰도록 이 함수 하나만 지난다 —
+       두 벌이면 화면과 배치가 다른 상품을 보게 된다(이 저장소의 반복 교훈).
+    """
+    kw = (keyword or "").strip()
+    if not kw:
+        return fallback or ""
+    try:
+        row = conn.execute(
+            "SELECT product_url FROM client_keyword_product WHERE client_id=? AND keyword=?",
+            (client_id, kw)).fetchone()
+    except Exception:
+        return fallback or ""          # 표가 아직 없는 구버전 DB — 종전 동작
+    if row and (row["product_url"] or "").strip():
+        return row["product_url"].strip()
+    return fallback or ""
+
+
+def set_keyword_product(conn, client_id, keyword, product_url, user_id=None):
+    """키워드별 상품 등록·변경. 빈 주소면 등록부에서 지운다(= 업체 주소로 되돌림)."""
+    kw = (keyword or "").strip()
+    if not kw:
+        return False
+    url = (product_url or "").strip()
+    if not url:
+        conn.execute("DELETE FROM client_keyword_product WHERE client_id=? AND keyword=?",
+                     (client_id, kw))
+        return True
+    conn.execute(
+        "INSERT INTO client_keyword_product (client_id, keyword, product_url, updated_by, updated_at)"
+        " VALUES (?,?,?,?,datetime('now','localtime'))"
+        " ON CONFLICT(client_id, keyword) DO UPDATE SET"
+        "   product_url=excluded.product_url, updated_by=excluded.updated_by,"
+        "   updated_at=excluded.updated_at",
+        (client_id, kw, url, user_id))
+    return True
+
+
 def _resolve_track_until(req):
     """추적 종료일 결정 — 명시 날짜 우선, 없으면 개월 수로 계산, 둘 다 없으면 무기한(None)."""
     raw = (getattr(req, "track_until", None) or "").strip()
@@ -513,6 +570,16 @@ def quick_register(req: QuickRegisterRequest, current_user: dict = Depends(get_c
                     "UPDATE clients SET main_keywords = ?, updated_at = ? WHERE id = ?",
                     (', '.join(kw_list), now, client_id)
                 )
+            # ⭐ 이 키워드로 추적할 상품을 등록부에 남긴다 (2026-08-21, 이예은 신고).
+            #    업체 주소는 첫 등록 상품으로 굳어 있으므로, 두 번째 상품은 여기에만 남는다.
+            #    업체 주소와 같으면 굳이 안 적는다(등록부를 필요한 것만 담게).
+            _url = (req.product_url or "").strip()
+            if _url and _url != (existing["naver_store_url"] or "").strip():
+                try:
+                    set_keyword_product(conn, client_id, req.keyword, _url, user_id)
+                except Exception as _e:
+                    logger.warning(f"[quick-register] 키워드별 상품 등록 실패(무시): {_e}")
+
             # 영업사원이 영업 대상·경쟁사를 재등록하면 자동삭제 시점 30일 연장(갱신). 관리팀 재등록은 영구 유지.
             if expires_at is not None:
                 conn.execute("UPDATE clients SET expires_at = ? WHERE id = ?", (expires_at, client_id))
@@ -1227,6 +1294,19 @@ def rank_board(client_id: int, days: int = 8, current_user: dict = Depends(get_c
             WHERE client_id=? AND checked_at >= date('now','localtime','-{days} day')
             ORDER BY id
         """, (client_id,)).fetchall()
+        # 키워드별 상품 등록부 — 한 번만 읽어 행마다 붙인다
+        _client_url = (client["naver_store_url"] or "").strip() if client else ""
+        _kwp = {}
+        try:
+            for _r in conn.execute(
+                    "SELECT keyword, product_url FROM client_keyword_product WHERE client_id=?",
+                    (client_id,)):
+                _u = (_r["product_url"] or "").strip()
+                if _u:
+                    _kwp[(_r["keyword"] or "").strip()] = _u
+        except Exception:
+            _kwp = {}
+
         per = {}
         for r in rows:
             per.setdefault(r["keyword"], {})[r["d"]] = {
@@ -1262,6 +1342,9 @@ def rank_board(client_id: int, days: int = 8, current_user: dict = Depends(get_c
                 unexposed_days += 1
             board.append({
                 "keyword": kw, "rank": latest["rank"], "page": latest["page"],
+                # 이 키워드로 추적 중인 상품 (2026-08-21 이예은 신고 — 업체당 상품 하나 전제 해소)
+                "product_url": _kwp.get(kw, _client_url),
+                "product_assigned": kw in _kwp,
                 "prev_rank": prev_rank, "delta": delta,
                 "volume": vol_map.get(kw, "-"),
                 "last_checked": latest["at"], "series": series,
@@ -1284,6 +1367,8 @@ def rank_board(client_id: int, days: int = 8, current_user: dict = Depends(get_c
                     _known.add(_norm(mk))
                     board.append({
                         "keyword": mk, "rank": None, "page": None,
+                        "product_url": _kwp.get(mk, _client_url),
+                        "product_assigned": mk in _kwp,
                         "prev_rank": None, "delta": None,
                         "volume": _vol_norm.get(_norm(mk), "-"),
                         "last_checked": "", "series": [],
@@ -1314,6 +1399,96 @@ def rank_board(client_id: int, days: int = 8, current_user: dict = Depends(get_c
 
 class TrackKeywordRequest(BaseModel):
     keyword: str
+
+
+@router.get("/{client_id}/keyword-products")
+def list_keyword_products(client_id: int, current_user: dict = Depends(get_current_user)):
+    """이 업체의 키워드별 상품 지정 현황.
+
+    지정이 없는 키워드는 업체 주소를 쓴다는 뜻이라, 그 사실도 함께 내려준다
+    (화면이 「지정 안 함 = 업체 주소」를 그대로 보여줄 수 있게).
+    """
+    conn = _get_conn()
+    try:
+        c = conn.execute(
+            "SELECT id, name, naver_store_url, main_keywords FROM clients WHERE id=?",
+            (client_id,)).fetchone()
+        if not c:
+            raise HTTPException(status_code=404, detail="업체를 찾을 수 없습니다.")
+
+        mapped = {}
+        for r in conn.execute(
+                "SELECT keyword, product_url, updated_at FROM client_keyword_product WHERE client_id=?",
+                (client_id,)):
+            mapped[(r["keyword"] or "").strip()] = {
+                "productUrl": r["product_url"], "updatedAt": r["updated_at"]}
+
+        kws = [k.strip() for k in (c["main_keywords"] or "").split(",") if k.strip()]
+        base = (c["naver_store_url"] or "").strip()
+        rows = []
+        for kw in kws:
+            m = mapped.get(kw)
+            rows.append({
+                "keyword": kw,
+                "productUrl": (m["productUrl"] if m else base),
+                "assigned": bool(m),          # False = 업체 주소를 쓰는 중
+                "updatedAt": (m["updatedAt"] if m else None),
+            })
+        return {"success": True, "data": {
+            "clientId": client_id, "clientName": c["name"],
+            "clientProductUrl": base, "keywords": rows}}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[keyword-products] {e}")
+        raise HTTPException(status_code=500, detail="조회 중 오류가 발생했습니다.")
+    finally:
+        conn.close()
+
+
+class KeywordProductRequest(BaseModel):
+    keyword: str
+    product_url: str = ""      # 빈 값 = 지정 해제(업체 주소로 되돌림)
+
+
+@router.put("/{client_id}/keyword-product")
+def upsert_keyword_product(client_id: int, req: KeywordProductRequest,
+                           current_user: dict = Depends(get_current_user)):
+    """키워드별 상품 지정·변경·해제.
+
+    ⚠️ 지정한 다음 날 08:30 배치부터 그 상품으로 순위를 잰다 — 즉시 바뀌지 않는다.
+       화면이 그 사실을 알려 줘야 직원이 「안 됐다」고 오해하지 않는다.
+    """
+    kw = (req.keyword or "").strip()
+    if not kw:
+        raise HTTPException(status_code=400, detail="키워드를 입력해주세요.")
+    url = (req.product_url or "").strip()
+    if url and "smartstore.naver.com" not in url and "naver.com" not in url:
+        raise HTTPException(status_code=400, detail="네이버 상품 주소를 넣어주세요.")
+
+    conn = _get_conn()
+    try:
+        c = conn.execute("SELECT id, main_keywords FROM clients WHERE id=?", (client_id,)).fetchone()
+        if not c:
+            raise HTTPException(status_code=404, detail="업체를 찾을 수 없습니다.")
+        kws = [k.strip() for k in (c["main_keywords"] or "").split(",") if k.strip()]
+        if kw not in kws:
+            raise HTTPException(
+                status_code=400,
+                detail=f"'{kw}' 는 이 업체의 추적 키워드가 아닙니다. 먼저 키워드를 등록해주세요.")
+
+        set_keyword_product(conn, client_id, kw, url, current_user.get("id"))
+        conn.commit()
+        return {"success": True, "message": (
+            f"'{kw}' 를 지정한 상품으로 추적합니다. 내일 아침 배치부터 반영됩니다."
+            if url else f"'{kw}' 의 상품 지정을 해제했습니다. 업체 대표 상품으로 되돌아갑니다.")}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[keyword-product] {e}")
+        raise HTTPException(status_code=500, detail="저장 중 오류가 발생했습니다.")
+    finally:
+        conn.close()
 
 
 @router.post("/{client_id}/track-keyword")

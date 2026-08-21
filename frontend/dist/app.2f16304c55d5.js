@@ -3619,6 +3619,16 @@ window.KeywordRankPage = function KeywordRankPage(props) {
   var _kwi = useState('');
   var kwInput = _kwi[0],
     setKwInput = _kwi[1]; // 추적 키워드 추가 입력
+  // 키워드별 상품 지정 (2026-08-21 이예은 신고) — 업체당 상품 하나 전제 해소
+  var _kpE = useState(null);
+  var kpEdit = _kpE[0],
+    setKpEdit = _kpE[1]; // 편집 중 키워드
+  var _kpV = useState('');
+  var kpVal = _kpV[0],
+    setKpVal = _kpV[1];
+  var _kpB = useState(false);
+  var kpBusy = _kpB[0],
+    setKpBusy = _kpB[1];
   var _kwb = useState(false);
   var kwBusy = _kwb[0],
     setKwBusy = _kwb[1];
@@ -3854,6 +3864,126 @@ window.KeywordRankPage = function KeywordRankPage(props) {
         }
       }));
     }
+    /* 이 키워드로 추적할 상품 — 업체당 상품이 하나뿐이던 것을 키워드마다 지정 가능하게
+       (2026-08-21 이예은 신고). 지정이 없으면 업체 대표 상품을 쓴다. */
+    var editing = kpEdit === b.keyword;
+    var pUrl = b.product_url || '';
+    var prodRow = React.createElement('div', {
+      style: {
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 8,
+        alignItems: 'center',
+        padding: '9px 11px',
+        marginBottom: 11,
+        borderRadius: 9,
+        background: b.product_assigned ? '#eff6ff' : '#fff',
+        border: '1px solid ' + (b.product_assigned ? '#bfdbfe' : '#e2e8f0')
+      }
+    }, React.createElement('span', {
+      style: {
+        fontSize: 11.5,
+        fontWeight: 800,
+        color: '#475569',
+        whiteSpace: 'nowrap'
+      }
+    }, '🛒 이 키워드로 추적할 상품'), editing ? React.createElement(React.Fragment, null, React.createElement('input', {
+      value: kpVal,
+      disabled: kpBusy,
+      autoFocus: true,
+      onChange: function (e) {
+        setKpVal(e.target.value);
+      },
+      placeholder: 'https://smartstore.naver.com/…/products/000000',
+      style: {
+        flex: '1 1 320px',
+        minWidth: 200,
+        border: '1px solid #cbd5e1',
+        borderRadius: 7,
+        padding: '5px 9px',
+        fontSize: 12
+      }
+    }), React.createElement('button', {
+      onClick: function () {
+        saveKeywordProduct(client.id, b.keyword, kpVal.trim());
+      },
+      disabled: kpBusy,
+      style: {
+        border: 'none',
+        background: kpBusy ? '#93c5fd' : '#3b82f6',
+        color: '#fff',
+        borderRadius: 7,
+        padding: '5px 13px',
+        fontSize: 12,
+        fontWeight: 700,
+        cursor: kpBusy ? 'default' : 'pointer'
+      }
+    }, kpBusy ? '저장 중…' : '저장'), React.createElement('button', {
+      onClick: function () {
+        setKpEdit(null);
+        setKpVal('');
+      },
+      disabled: kpBusy,
+      style: {
+        border: '1px solid #e2e8f0',
+        background: '#fff',
+        color: '#64748b',
+        borderRadius: 7,
+        padding: '5px 11px',
+        fontSize: 12,
+        cursor: 'pointer'
+      }
+    }, '취소'), b.product_assigned && React.createElement('button', {
+      onClick: function () {
+        saveKeywordProduct(client.id, b.keyword, '');
+      },
+      disabled: kpBusy,
+      title: '지정을 해제하면 업체 대표 상품으로 되돌아갑니다',
+      style: {
+        border: '1px solid #fecaca',
+        background: '#fef2f2',
+        color: '#b91c1c',
+        borderRadius: 7,
+        padding: '5px 11px',
+        fontSize: 12,
+        cursor: 'pointer'
+      }
+    }, '지정 해제')) : React.createElement(React.Fragment, null, React.createElement('span', {
+      style: {
+        flex: '1 1 260px',
+        minWidth: 160,
+        fontSize: 11.5,
+        color: pUrl ? '#334155' : '#94a3b8',
+        wordBreak: 'break-all'
+      }
+    }, pUrl || '상품 주소가 없습니다', !b.product_assigned && pUrl && React.createElement('span', {
+      style: {
+        marginLeft: 6,
+        fontSize: 10.5,
+        color: '#94a3b8'
+      }
+    }, '(업체 대표 상품)')), React.createElement('button', {
+      onClick: function () {
+        setKpEdit(b.keyword);
+        setKpVal(b.product_assigned ? pUrl : '');
+      },
+      style: {
+        border: '1px solid #cbd5e1',
+        background: '#fff',
+        color: '#334155',
+        borderRadius: 7,
+        padding: '4px 11px',
+        fontSize: 11.5,
+        fontWeight: 700,
+        cursor: 'pointer'
+      }
+    }, b.product_assigned ? '변경' : '이 키워드만 다른 상품으로')), React.createElement('div', {
+      style: {
+        flexBasis: '100%',
+        fontSize: 11,
+        color: '#94a3b8'
+      }
+    }, '지정하면 내일 아침 자동 분석부터 그 상품으로 순위를 잽니다. 지정이 없으면 업체 대표 상품을 씁니다.'));
     return React.createElement('tr', {
       key: b.keyword + '::panel'
     }, React.createElement('td', {
@@ -3863,7 +3993,7 @@ window.KeywordRankPage = function KeywordRankPage(props) {
         background: '#f8fafc',
         borderBottom: '1px solid #e2e8f0'
       }
-    }, header, bodyEl));
+    }, prodRow, header, bodyEl));
   }
   var loadOverview = useCallback(function () {
     setOvLoading(true);
@@ -3931,6 +4061,33 @@ window.KeywordRankPage = function KeywordRankPage(props) {
       });
     }).finally(function () {
       setKwBusy(false);
+    });
+  };
+  var saveKeywordProduct = function (cid, kw, url) {
+    if (kpBusy) return;
+    setKpBusy(true);
+    api.put('/cd/' + cid + '/keyword-product', {
+      keyword: kw,
+      product_url: url
+    }).then(function (res) {
+      if (res && res.success) {
+        try {
+          toast.success(res.message || '저장되었습니다.');
+        } catch (e) {}
+        setKpEdit(null);
+        setKpVal('');
+        loadBoard(cid, boardDays);
+      } else {
+        try {
+          toast.error(res && res.detail || '저장하지 못했습니다.');
+        } catch (e) {}
+      }
+    }).catch(function (err) {
+      try {
+        toast.error(err && err.message || '저장하지 못했습니다.');
+      } catch (e) {}
+    }).finally(function () {
+      setKpBusy(false);
     });
   };
   var openDetail = function (c) {
@@ -4517,7 +4674,20 @@ window.KeywordRankPage = function KeywordRankPage(props) {
           fontSize: 10,
           marginRight: 7
         }
-      }, open ? '▼' : '▶'), b.keyword), React.createElement('td', {
+      }, open ? '▼' : '▶'), b.keyword, /* 이 키워드만 다른 상품으로 추적 중이면 표시 — 안 보이면 업체 대표 상품이다 */
+      b.product_assigned && React.createElement('span', {
+        style: {
+          marginLeft: 7,
+          fontSize: 10.5,
+          fontWeight: 800,
+          padding: '1px 7px',
+          borderRadius: 999,
+          background: '#eff6ff',
+          color: '#1d4ed8',
+          verticalAlign: 'middle'
+        },
+        title: '이 키워드는 지정한 상품으로 추적합니다'
+      }, '개별 상품')), React.createElement('td', {
         style: Object.assign({}, _krTd, {
           textAlign: 'right'
         })
