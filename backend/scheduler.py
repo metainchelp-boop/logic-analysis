@@ -671,6 +671,22 @@ def _run_daily_analysis():
 
             client_keyword_map[cid] = list(kw_set)
 
+        # 키워드별 상품 등록부를 한 번에 읽는다 (2026-08-21 이예은 신고).
+        # 업체 주소는 '첫 등록 상품' 으로 굳어 있어, 한 업체가 상품 둘을 각각 다른 키워드로
+        # 추적하면 두 번째 키워드가 매일 「미노출」로 기록됐다. 여기 적힌 게 있으면 그 주소를 쓴다.
+        # ⚠️ 루프 안에서 키워드마다 조회하지 않는다 — 배치가 900건을 도는 동안 쿼리가 그만큼 는다.
+        kw_product = {}
+        try:
+            for r in conn.execute("SELECT client_id, keyword, product_url FROM client_keyword_product"):
+                u = (r["product_url"] or "").strip()
+                if u:
+                    kw_product[(r["client_id"], (r["keyword"] or "").strip())] = u
+            if kw_product:
+                logger.info(f"  🔗 키워드별 상품 지정 {len(kw_product)}건 반영")
+        except Exception as _e:
+            # 표가 아직 없는 구버전 DB — 종전대로 업체 주소만 쓴다
+            logger.warning(f"  키워드별 상품 등록부 조회 실패(무시): {_e}")
+
         if not clients:
             logger.info("  등록된 활성 업체가 없습니다. 분석 건너뜀.")
             conn.close()
@@ -683,7 +699,10 @@ def _run_daily_analysis():
         for client in clients:
             cid = client['id']
             client_name = client['name']
-            product_url = client['naver_store_url'] or ''
+            # ⚠️ 업체 주소는 '첫 등록 상품' 으로 굳어 있다. 키워드마다 상품이 다를 수 있으므로
+            #    (2026-08-21 이예은 신고) 여기서 하나로 정하지 않고 키워드별로 찾는다.
+            #    등록부에 없으면 이 업체 주소를 그대로 쓴다(기존 업체 무회귀).
+            client_url = client['naver_store_url'] or ''
             keywords = client_keyword_map.get(cid, [])
 
             if not keywords:
@@ -693,6 +712,9 @@ def _run_daily_analysis():
 
             for keyword in keywords:
                 try:
+                    # 이 키워드로 추적할 상품 — 지정된 게 있으면 그것, 없으면 업체 주소
+                    product_url = kw_product.get((cid, keyword)) or client_url
+
                     # 08시 캐시에서 상품 데이터 가져오기
                     cached = _api_cache.get(keyword) if cache_valid else None
 
