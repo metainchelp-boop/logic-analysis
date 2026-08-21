@@ -55,6 +55,10 @@ on:
         description: '주소 기반 해석 가능성 실측 — "업체명|지역" 세미콜론 구분(예: 밀밭칼국수|성사동;프로힐링지압안마원|조원동). 지역검색이 주는 주소·상가 응답 필드를 본다. 읽기 전용'
         default: ''
 
+      gu_fallback_check:
+        description: '동 단위 통계가 없을 때 시군구 평균이 같은 응답에 실려 오는지 실측 — "지역|업종"(예: 조원동|미용·뷰티). 소분류를 여러 개 돌며 saleAmt/guAmt/siAmt 유무를 대조. 읽기 전용'
+        default: ''
+
 jobs:
   diagnose:
     runs-on: ubuntu-latest
@@ -1082,6 +1086,67 @@ jobs:
       #    그대로 호출한다 — 「내부 흉내 진단은 수정 검증에 쓸 수 없다」 교훈.
       #    특히 데이터랩 통합검색어 트렌드(/v1/datalab/search)는 이번에 처음 붙인 경로라
       #    실응답을 한 번은 봐야 한다. 키 값은 출력하지 않는다.
+      # 동 단위 통계가 없어 상권이 통째로 생략되는 케이스에서, 같은 응답에 시군구 평균이
+      # 실려 오는지 확인한다. 실려 온다면 추가 호출 0회로 「구 평균」 후퇴가 가능하다.
+      - name: 시군구 평균 동반 여부 실측
+        if: ${{ github.event.inputs.gu_fallback_check != '' }}
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          GUCHK: ${{ github.event.inputs.gu_fallback_check }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 420s
+          envs: GUCHK
+          script: |
+            docker exec -i -e GUCHK="$GUCHK" logic-analysis python3 - <<'PY'
+            import os, traceback
+            raw = (os.environ.get("GUCHK") or "").strip()
+            parts = [p.strip() for p in raw.split("|")]
+            region = parts[0] if parts else ""
+            label = parts[1] if len(parts) > 1 else ""
+            print("=" * 68)
+            print(f"입력  지역={region!r} 업종={label!r}")
+            try:
+                import sbiz365
+                admi = sbiz365._resolve_admi(region) or {}
+                if not admi.get("admiCd"):
+                    print("  행정동 해석 실패 — 여기서 끝(A/B/C 케이스)")
+                else:
+                    print(f"  행정동 {admi.get('admiNm')} ({admi.get('admiCd')}) "
+                          f"· 경로 {admi.get('matchedBy')!r} · 범위 {admi.get('scope')!r}")
+                    cands = sbiz365._resolve_upjong_candidates(label, limit=12) or []
+                    print(f"  소분류 후보 {len(cands)}개")
+                    loc = sbiz365._pick_simple_loc(admi, region, cands[0]["code"]) if cands else None
+                    print(f"  simpleLoc {loc!r}")
+                    print("-" * 68)
+                    print(f"  {'코드':<9}{'saleAmt':>10}{'guAmt':>10}{'siAmt':>10}  소분류")
+                    empty_with_gu = 0
+                    empty_total = 0
+                    for c in cands:
+                        got = sbiz365._fetch_avg(admi["admiCd"], c["code"], loc) or {}
+                        sa = sbiz365._num(got.get("saleAmt"))
+                        gu = sbiz365._num(got.get("guAmt"))
+                        si = sbiz365._num(got.get("siAmt"))
+                        nm = str(c.get("name") or "").split(">")[-1].strip()
+                        print(f"  {c['code']:<9}{str(sa):>10}{str(gu):>10}{str(si):>10}  {nm}")
+                        if sa is None:
+                            empty_total += 1
+                            if gu is not None:
+                                empty_with_gu += 1
+                    print("-" * 68)
+                    print(f"  ⭐ 동 단위 없음 {empty_total}건 중 시군구 평균이 온 건 {empty_with_gu}건")
+                    if empty_total and empty_with_gu == empty_total:
+                        print("  ⇒ 추가 호출 0회로 「구 평균 후퇴」 가능")
+                    elif empty_with_gu == 0 and empty_total:
+                        print("  ⇒ 동 단위가 비면 구 평균도 안 온다 — 별도 조회가 필요")
+            except Exception as e:
+                print("실패:", e)
+                traceback.print_exc()
+            print("=" * 68)
+            PY
+
       - name: 플레이스 시장 블록 실호출
         if: ${{ github.event.inputs.market_probe != '' }}
         uses: appleboy/ssh-action@v1.0.3

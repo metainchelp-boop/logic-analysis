@@ -1429,7 +1429,7 @@ def _place_market_block(region: str, base_kw: str, combined_kw: str, industry: s
         "keyword": combined_kw,
         "baseKeyword": base_kw,
         "volume": None, "baseVolume": None, "compIdx": None, "adDepth": None,
-        "sbiz": None, "related": [], "golden": [], "reviewGap": None, "trend": None,
+        "sbiz": None, "sbizReason": None, "related": [], "golden": [], "reviewGap": None, "trend": None,
     }
 
     # ① 검색량 — 지역 키워드 + 지역 뗀 원 키워드를 **한 호출로** 함께(제안서와 동일 규칙).
@@ -1458,13 +1458,21 @@ def _place_market_block(region: str, base_kw: str, combined_kw: str, industry: s
         logger.warning(f"[place-market] 검색량 조회 실패(무시): {e}")
 
     # ② 동네 상권(소상공인365) — 키 미설정·행정동 매칭 실패·API 파손 시 None.
+    #    ⚠️ 없으면 화면에서 카드가 조용히 빠지는데, 그러면 직원은 「고장인지 데이터가
+    #       없는 건지」를 구분할 방법이 없다. 생략 사유를 함께 내려 화면이 한 줄 적게 한다.
     try:
         from sbiz365 import get_place_sbiz
         if region and industry:
+            _sb_reason = {}
             market["sbiz"] = get_place_sbiz(region, industry, hint=f"{biz_name} {base_kw}",
-                                            biz_name=biz_name)
+                                            biz_name=biz_name, reason=_sb_reason)
+            if market["sbiz"] is None:
+                market["sbizReason"] = _sb_reason.get("code") or "no-stats"
+        else:
+            market["sbizReason"] = "no-industry" if region else "no-region"
     except Exception as e:
         logger.warning(f"[place-market] 상권 조회 실패(무시): {e}")
+        market["sbizReason"] = "error"
 
     # ③ 연관·황금 키워드 — 이 업체가 이미 추적 중인 키워드는 순위를 붙여 「지킬 것/팔 것」을 가른다.
     tracked = []
