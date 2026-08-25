@@ -92,4 +92,19 @@ jobs:
             fi
 
             echo ""
+            echo "=== ⑦ 시간대 확인 (created_at 이 00:40 로 찍힌 이유) ==="
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sqlite3, os, datetime, time
+            c = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            r = c.execute("SELECT datetime('now') utc, datetime('now','localtime') loc").fetchone()
+            print("  SQLite datetime('now')        =", r[0], "(UTC)")
+            print("  SQLite datetime('now','localtime') =", r[1])
+            print("  파이썬 datetime.now()          =", datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            print("  컨테이너 TZ 환경변수           =", os.getenv("TZ") or "(없음)")
+            print("  time.tzname                    =", time.tzname)
+            PY
+            echo "  ↑ localtime 이 UTC 와 같으면 SQLite 가 TZ 를 못 읽는 것 —"
+            echo "     스케줄러(APScheduler)는 KST 로 돌아도 저장 시각만 UTC 로 남는다"
+
+            echo ""
             echo "=== ⑥ 디스크 ==="; df -h / | tail -1
