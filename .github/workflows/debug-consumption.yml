@@ -107,4 +107,13 @@ jobs:
             echo "     스케줄러(APScheduler)는 KST 로 돌아도 저장 시각만 UTC 로 남는다"
 
             echo ""
+            echo "=== ⑧ ⭐ APScheduler 가 주간 잡을 언제로 잡고 있나 (확정 증거) ==="
+            docker logs logic-analysis 2>&1 | grep -iE "weekly_reports|주간 보고서" | tail -8 \
+              || echo "  (등록 로그 없음)"
+            echo ""
+            echo "  [같은 잡스토어의 다른 잡 — 대조군]"
+            docker logs logic-analysis 2>&1 | grep -oE "next run at: [0-9: -]+ KST\)\" \(scheduled" | tail -3
+            docker logs logic-analysis 2>&1 | grep -oE "Running job \"[^\"]{0,40}" | sort | uniq -c | sort -rn | head -8
+
+            echo ""
             echo "=== ⑥ 디스크 ==="; df -h / | tail -1
