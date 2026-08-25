@@ -116,4 +116,15 @@ jobs:
             docker logs logic-analysis 2>&1 | grep -oE "Running job \"[^\"]{0,40}" | sort | uniq -c | sort -rn | head -8
 
             echo ""
+            echo "=== ⑨ 실제 표의 created_at 기본값 (CREATE TABLE IF NOT EXISTS 는 기존 표를 안 고친다) ==="
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sqlite3, re
+            c = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            sql = c.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='reports'").fetchone()[0]
+            m = re.search(r"created_at[^,]*", sql)
+            print("  실제 표 정의:", m.group(0).strip() if m else "(못 찾음)")
+            print("  코드가 의도한 값: datetime('now','localtime')")
+            PY
+
+            echo ""
             echo "=== ⑥ 디스크 ==="; df -h / | tail -1
