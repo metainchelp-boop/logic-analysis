@@ -44,7 +44,9 @@ jobs:
             auto = q("SELECT COUNT(*) FROM reports WHERE COALESCE(is_auto,0)=1")
             man = tot - auto
             print(f"  전체 보고서 {tot}건 — 자동 {auto} · 수동 {man}")
-            print(f"  이번 주 자동 생성: {q(chr(34)+'SELECT COUNT(*) FROM reports WHERE COALESCE(is_auto,0)=1 AND date(created_at) >= date(\\'now\\',\\'localtime\\',\\'-6 day\\')'+chr(34))}건")
+            week = q("SELECT COUNT(*) FROM reports WHERE COALESCE(is_auto,0)=1"
+                     " AND date(created_at) >= date('now','localtime','-6 day')")
+            print("  최근 7일 자동 생성:", week, "건")
             print(f"  업체 수(자동): {q('SELECT COUNT(DISTINCT client_id) FROM reports WHERE COALESCE(is_auto,0)=1')}곳")
             r = c.execute("SELECT MIN(created_at) a, MAX(created_at) b FROM reports"
                           " WHERE COALESCE(is_auto,0)=1").fetchone()
