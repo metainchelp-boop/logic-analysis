@@ -117,6 +117,32 @@ def get_db():
     return conn
 
 
+def _migrate_reports_created_at_to_kst(conn, cursor):
+    """기존 행의 created_at(UTC) 을 KST 로 1회 보정.
+
+    ⚠️ `datetime(created_at, 'localtime')` 을 쓴다 — 「+9시간」을 박지 않는다.
+       서버 시간대가 바뀌어도 규칙이 따라가고, 서머타임 같은 예외도 OS 가 판단한다.
+    ⚠️ 1회성 마커(_app_migrations)로 보호 — 두 번 돌면 9시간이 두 번 더해진다.
+    ⚠️ 이 시점의 모든 행은 옛 UTC 기본값으로 들어간 것이다(신규 INSERT 는 이미 KST 명시).
+    """
+    FLAG = "reports_created_at_kst_2026_08_26"
+    try:
+        cursor.execute(
+            "CREATE TABLE IF NOT EXISTS _app_migrations "
+            "(key TEXT PRIMARY KEY, applied_at TEXT DEFAULT (datetime('now','localtime')))")
+        if cursor.execute("SELECT 1 FROM _app_migrations WHERE key=?", (FLAG,)).fetchone():
+            return
+        n = cursor.execute("SELECT COUNT(*) FROM reports").fetchone()[0]
+        if n:
+            cursor.execute("UPDATE reports SET created_at = datetime(created_at, 'localtime')")
+            logger.info(f"[reports] created_at UTC→KST 보정 {n}행 (1회성)")
+        cursor.execute("INSERT OR REPLACE INTO _app_migrations(key) VALUES(?)", (FLAG,))
+        conn.commit()
+    except Exception as e:
+        # 보정 실패가 부팅을 막지 않는다 — 시각 표시만 어긋난 채 서비스는 정상 동작한다
+        logger.warning(f"[reports] created_at 보정 건너뜀: {e}")
+
+
 def init_reports_db():
     """Initialize reports table with indexes"""
     conn = get_db()
@@ -167,6 +193,16 @@ def init_reports_db():
         CREATE INDEX IF NOT EXISTS idx_reports_created_at
         ON reports(created_at)
     """)
+
+    # ⚠️ created_at 은 **KST 로 저장**한다 — 표 기본값에 기대지 않고 INSERT 에서 명시한다.
+    #    이 표는 옛 정의(`DEFAULT CURRENT_TIMESTAMP` = UTC)로 이미 만들어져 있어,
+    #    아래 CREATE TABLE 의 `datetime('now','localtime')` 은 **한 번도 적용된 적이 없다**
+    #    (`CREATE TABLE IF NOT EXISTS` 는 기존 표를 고치지 않는다).
+    #    2026-08-24 첫 주간 배치가 09:40 KST 에 돌았는데 00:40 로 기록된 것이 그 결과다.
+    #    ⇒ SQLite 는 컬럼 기본값을 바꿀 수 없으므로(표 재생성 필요) **INSERT 에서 명시**하는 쪽을 택했다.
+    #       표를 다시 만드는 것보다 안전하고, 새 서버에서는 CREATE 정의가 그대로 맞다.
+    #    ⚠️ 앞으로 reports 에 INSERT 를 추가하는 곳은 반드시 created_at 을 함께 넣을 것.
+    _migrate_reports_created_at_to_kst(conn, cursor)
 
     # 마이그레이션: is_auto — 주간 자동 생성분과 영업용 수동 보고서를 가른다.
     # ⚠️ 자동 생성 기능과 반드시 같은 배포에 있어야 한다(①메타 전산 요청·2026-08-20).
@@ -875,8 +911,8 @@ def generate_report(
             cursor.execute("""
                 INSERT INTO reports (
                     client_id, title, keyword, product_url, report_data,
-                    report_hash, html_filename, status, created_by
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    report_hash, html_filename, status, created_by, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','localtime'))
             """, (
                 request.client_id,
                 title,

@@ -153,9 +153,11 @@ def run_weekly_reports():
 
                 try:
                     conn.execute(
+                        # ⚠️ created_at 을 명시한다 — 표 기본값이 옛 정의(UTC)라
+                        #    2026-08-24 첫 배치가 09:40 KST 에 돌고도 00:40 로 기록됐다.
                         "INSERT INTO reports (client_id, title, keyword, product_url, report_data,"
-                        " report_hash, html_filename, status, created_by, is_auto)"
-                        " VALUES (?,?,?,?,?,?,?,?,?,1)",
+                        " report_hash, html_filename, status, created_by, is_auto, created_at)"
+                        " VALUES (?,?,?,?,?,?,?,?,?,1,datetime('now','localtime'))",
                         (c["id"], title, (head["keyword"] or "").strip(),
                          head["product_url"] or "", report_data, report_hash,
                          html_filename, "generated", 0)
