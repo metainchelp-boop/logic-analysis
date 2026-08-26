@@ -152,6 +152,10 @@ def run_weekly_reports():
                 }, ensure_ascii=False)
 
                 try:
+                    # ⚠️ created_at 을 안 넣으면 표 기본값이 쓰이는데, 운영 표의 기본값은
+                    #    `CURRENT_TIMESTAMP` = **UTC** 다(reports.py CREATE 문 주석 참조).
+                    #    그래서 이 배치는 09:40 KST 에 돌고도 00:40 으로 기록된다.
+                    #    시각을 KST 로 맞추려면 여기에 `created_at` 을 명시해야 한다.
                     conn.execute(
                         "INSERT INTO reports (client_id, title, keyword, product_url, report_data,"
                         " report_hash, html_filename, status, created_by, is_auto)"

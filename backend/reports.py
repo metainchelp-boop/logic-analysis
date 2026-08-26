@@ -136,6 +136,30 @@ def init_reports_db():
             status TEXT DEFAULT 'generated',
             views INTEGER DEFAULT 0,
             created_by INTEGER NOT NULL,
+            -- ⚠️⚠️ 이 줄은 **운영 DB 에 적용돼 있지 않다**. 실제 표는
+            --     `created_at TEXT DEFAULT CURRENT_TIMESTAMP` = **UTC** 로 만들어져 있다.
+            --     `CREATE TABLE IF NOT EXISTS` 는 이미 있는 표를 고치지 않기 때문에,
+            --     이 정의로 바꿔 둔 뒤에도 한 번도 적용된 적이 없다(2026-08-26 실측).
+            --     ⇒ **운영에서 reports.created_at 은 UTC 다. 다른 표(client_analyses ·
+            --        collected_serp 등)는 KST 라, 나란히 보거나 조인하면 9시간 어긋난다.**
+            --
+            --     실제로 겪은 일: 2026-08-24 첫 주간 배치가 09:40 KST 에 정확히 돌았는데
+            --     (APScheduler 로그·weekly_report 로그 둘 다 09:40) 이 컬럼에는 00:40 로
+            --     남아, 「스케줄이 잘못됐나」를 한참 확인했다. 스케줄은 정상이었다.
+            --
+            --     영향(2026-08-26 대표 판단 — 고치지 않고 사실만 남기기로):
+            --       · 주간 보고서는 09:40 실행이라 UTC 로 옮겨도 **날짜가 안 바뀐다**(같은 날 00:40).
+            --         광고주 화면 표시·주차 묶음·보관정책(12주)·중복 가드(6일)에 실질 영향 없음.
+            --       · 다만 **수동 생성(POST /generate)을 새벽 0~9시에 하면 날짜가 하루 전으로**
+            --         기록된다. 현재 수동 보고서 0건이라 아직 드러나지 않았을 뿐이다.
+            --       · ①(메타 전산)이 이 값을 `createdAt` 으로 받아 광고주 화면에 쓴다.
+            --         고치면 그쪽 표시가 9시간 이동하므로 **사전 통지 대상**이다.
+            --
+            --     고치려면: SQLite 는 컬럼 기본값을 못 바꾸므로 표 재생성이 필요하다.
+            --     더 안전한 길은 **INSERT 두 곳(이 파일 generate_report · weekly_report.py)에서
+            --     created_at 을 명시**하고 기존 행을 `datetime(created_at,'localtime')` 로 1회
+            --     보정하는 것(「+9시간」을 박지 말 것 — 시간대가 바뀌면 규칙이 따라가야 한다).
+            --     구현·검증본이 브랜치 `fix/reports-created-at-kst` 에 있다(검증 9항 통과, 미배포).
             created_at TEXT DEFAULT (datetime('now','localtime')),
             FOREIGN KEY (client_id) REFERENCES clients(id),
             FOREIGN KEY (created_by) REFERENCES users(id)
