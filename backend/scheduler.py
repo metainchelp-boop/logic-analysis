@@ -420,27 +420,6 @@ def _run_rank_tracking():
 
         home_keyword_map, clients, client_keyword_map, all_keywords = _collect_all_keywords(conn)
 
-        # ── 이어진 짝 한 번 읽어 두기 (2026-08-27 대표 지시 「한 번만 재서 필요한 곳에 보내주기」) ──
-        # 순위를 두 번 재지 않는다. 위 유니버스는 이미 키워드 합집합이라 수집은 키워드당 1회다.
-        # 문제는 「기록하는 자리」가 둘로 나뉘어 있다는 것 —
-        #   축A 쇼핑 순위 추적 화면 = rankings           (tracked_products 에 등록한 것만 보인다)
-        #   축B 로직 분석 업체 화면 = client_rank_history (clients.main_keywords 에 있는 것만 보인다)
-        # 그래서 한쪽에만 등록된 키워드는 다른 화면에서 「기록 없음」으로 보였고,
-        # 그걸 메우려고 사람이 양쪽에 또 등록해 같은 것을 두 번 관리하게 됐다.
-        # rank_link 가 「이 추적 상품 = 이 업체」를 이미 이어 두었으니,
-        # 잰 값을 그 짝에도 적어 주면 화면 둘이 같은 것을 보게 된다(합치지 않는다 — 나눠 준다).
-        # ⚠️ 네이버 호출은 1건도 늘지 않는다. 이미 받아 둔 한 벌에서 뽑아 적을 뿐이다.
-        link_map = {}          # {tracked_product_id: [client_id, ...]}
-        try:
-            _active_ids = {c["id"] for c in clients}   # 자격 통과한 업체만 — 계약 끝난 곳엔 보내지 않는다
-            for _r in conn.execute("SELECT tracked_product_id, client_id FROM rank_link"):
-                if _r[1] in _active_ids:
-                    link_map.setdefault(_r[0], []).append(_r[1])
-        except Exception as _le:
-            logger.warning(f"  이어진 짝 조회 실패(무시하고 종전대로 진행): {_le}")
-            link_map = {}
-        logger.info(f"  🔗 이어진 짝 {sum(len(v) for v in link_map.values())}건 — 잰 값을 반대쪽에도 적는다")
-
         if not all_keywords:
             logger.info("  추적 키워드 없음. 순위 추적 건너뜀.")
             conn.close()
@@ -454,7 +433,6 @@ def _run_rank_tracking():
 
         total_api_calls = 0
         total_rank_saved = 0
-        total_shared = 0        # 이어진 짝에 나눠 적은 건수
         total_errors = 0
         _review_cache = {}  # product_url -> review_count (상품당 1회, 리뷰 델타 추정용)
 
@@ -561,22 +539,6 @@ def _run_rank_tracking():
                             if competitors:
                                 save_competitor_snapshot(kw_info["id"], competitors[:5])
                             total_rank_saved += 1
-
-                            # ── 이어진 업체에도 같은 값을 적어 준다 ──
-                            # 이 상품이 어느 업체 것인지 rank_link 가 알고 있으면, 방금 잰 순위를
-                            # 그 업체의 기록에도 남겨 로직 분석 화면에서 같은 것이 보이게 한다.
-                            # ⚠️ 그 업체가 이 키워드를 자기 대표 상품으로 이미 재고 있으면 손대지 않는다 —
-                            #    업체 대표 상품 기준 순위가 우선이고, 덮어쓰면 종전 화면이 바뀐다(무회귀).
-                            for _cid in link_map.get(product["id"], []):
-                                if keyword in client_keyword_map.get(_cid, []):
-                                    continue
-                                try:
-                                    _save_client_rank(conn, _cid, keyword,
-                                                      product.get("product_url") or "",
-                                                      rank, page, "scheduled")
-                                    total_shared += 1
-                                except Exception as _se:
-                                    logger.warning(f"  나눠 적기 실패(무시) [업체{_cid}:{keyword}]: {_se}")
                         except Exception as e:
                             logger.error(f"  ❌ 홈탭 순위 저장 실패 [{product.get('product_name','')}:{keyword}]: {e}")
 
@@ -623,7 +585,7 @@ def _run_rank_tracking():
 
         logger.info(
             f"✅ 순위 추적 완료: API {total_api_calls}회 (300위 범위), "
-            f"순위 {total_rank_saved}건 저장, 이어진 곳에 나눠 적음 {total_shared}건, 실패 {total_errors}건 "
+            f"순위 {total_rank_saved}건 저장, 실패 {total_errors}건 "
             f"(캐시 {len(_api_cache)}개 키워드 → 09시 분석 대기)"
         )
 
