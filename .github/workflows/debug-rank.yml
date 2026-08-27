@@ -18,6 +18,10 @@ on:
         description: '수집 소화량 — off(기본) / on. 1대가 실제로 하루 몇 개를 소화하는지·몇 시에 도는지·시간대별 몫이 고른지. 2대 배분 설계용(읽기 전용).'
         required: false
         default: 'off'
+      structure:
+        description: '구조 진단 — off(기본) / on. 자격 판정이 무엇을 거르는지 · 유니버스 868개의 출처 · 새는 곳 2군데 규모 · 이상적 분산(읽기 전용).'
+        required: false
+        default: 'off'
       use_branch_code:
         description: '이 브랜치의 rank_link.py 로 미리보기 — off(기본) / on. 배포 전에 새 규칙이 무엇을 이을지 먼저 보려는 용도(컨테이너 /tmp 에 얹었다 지운다·앱 파일 무접촉). apply 와 함께 쓰지 말 것.'
         required: false
@@ -40,9 +44,10 @@ jobs:
           IN_COLLECTOR: ${{ github.event.inputs.collector }}
           IN_RANK_LINK: ${{ github.event.inputs.rank_link }}
           IN_CAPACITY: ${{ github.event.inputs.capacity }}
+          IN_STRUCTURE: ${{ github.event.inputs.structure }}
           IN_BRANCH_CODE: ${{ github.event.inputs.use_branch_code }}
         with:
-          envs: RL_SRC_GZ,IN_COLLECTOR,IN_RANK_LINK,IN_CAPACITY,IN_BRANCH_CODE
+          envs: RL_SRC_GZ,IN_COLLECTOR,IN_RANK_LINK,IN_CAPACITY,IN_STRUCTURE,IN_BRANCH_CODE
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
@@ -543,6 +548,120 @@ jobs:
                     print(f"     {n}대: 1대당 배정 {share:>4} · 하루 소화 {each:>4} · 합 {tot:>4} · 완수율 {pct:>3}%{mark}")
                 need = -(-U // PER_MACHINE) if PER_MACHINE else 0
                 print(f"     ⇒ 전량 소화에 필요한 대수 {need}대 (정확히는 {U/PER_MACHINE:.2f}대분)")
+            conn.close()
+            PY
+              echo
+            fi
+            if [ "$IN_STRUCTURE" = "on" ]; then
+              echo "== 구조 진단 (읽기 전용) =="
+              docker exec -i logic-analysis python3 - <<'PY'
+            import sys, collections
+            sys.path.insert(0, "/app")
+            import sqlite3
+            from collector import (_keyword_universe, _tracking_client_ids, _slot_of,
+                                   HOURLY_CAP, PRIORITY_HOURS)
+
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            one = lambda q, a=(): conn.execute(q, a).fetchone()[0]
+
+            print("[A. 업체 — 누가 추적 자격이 있나]")
+            print("  자격 = 활성 · 광고주 · 스토어 · 자동분석 ON · 추적 ON · 추적기간 남음")
+            tot = one("SELECT COUNT(*) FROM clients")
+            ids = _tracking_client_ids(conn)
+            print(f"  전체 업체 {tot}곳 → 자격 {len(ids)}곳 (제외 {tot - len(ids)}곳)")
+            print("  제외 사유별(중복 계상 — 한 업체가 여러 사유에 걸릴 수 있다):")
+            reasons = [
+                ("활성 아님(status)",        "status <> 'active'"),
+                ("광고주 아님(영업대상·경쟁사)", "COALESCE(role,'advertiser') <> 'advertiser'"),
+                ("스토어 아님(플레이스 등)",   "COALESCE(vertical,'store') <> 'store'"),
+                ("자동분석 OFF ← 계약만료·환불·홀딩 자동 반영", "COALESCE(auto_analysis,1) = 0"),
+                ("추적 OFF(수동)",            "COALESCE(track_enabled,1) = 0"),
+                ("추적기간 지남(track_until)", "track_until IS NOT NULL AND track_until <> '' "
+                                               "AND date(track_until) < date('now','localtime')"),
+            ]
+            for label, cond in reasons:
+                try:
+                    print(f"    {one('SELECT COUNT(*) FROM clients WHERE ' + cond):>4}곳 — {label}")
+                except Exception as e:
+                    print(f"     ?곳 — {label} (조회 실패: {e})")
+            try:
+                soon = one("SELECT COUNT(*) FROM clients WHERE track_until IS NOT NULL AND track_until <> '' "
+                           " AND date(track_until) BETWEEN date('now','localtime') "
+                           "     AND date('now','localtime','+14 day')")
+                print(f"  추적기간 14일 안에 끝나는 업체 {soon}곳 (그만큼 대상이 자연 감소)")
+            except Exception as e:
+                print(f"  (임박 조회 실패: {e})")
+
+            print()
+            print("[B. 필요한 추적 작업량 — 유니버스 868개의 출처]")
+            uni = _keyword_universe(conn)
+            ph = ",".join("?" * len(ids)) if ids else "NULL"
+            br1 = set()
+            for r in conn.execute(f"SELECT main_keywords FROM clients WHERE id IN ({ph})", ids):
+                for k in (r[0] or "").split(","):
+                    if k.strip():
+                        br1.add(k.strip())
+            br2 = {(r[0] or "").strip() for r in conn.execute(
+                f"SELECT DISTINCT keyword FROM client_analyses WHERE client_id IN ({ph})", ids)} - {""}
+            br3_linked = {(r[0] or "").strip() for r in conn.execute(
+                f"SELECT DISTINCT k.keyword FROM tracked_keywords k "
+                f" WHERE k.product_id IN (SELECT tracked_product_id FROM rank_link "
+                f"                         WHERE client_id IN ({ph}))", ids)} - {""}
+            br3_orphan = {(r[0] or "").strip() for r in conn.execute(
+                "SELECT DISTINCT k.keyword FROM tracked_keywords k "
+                " WHERE k.product_id NOT IN (SELECT tracked_product_id FROM rank_link)")} - {""}
+            print(f"  ① 담당자 대표 키워드      {len(br1):>4}개")
+            print(f"  ② 분석 이력 키워드        {len(br2):>4}개")
+            print(f"  ③ 추적 상품(업체 연결됨)  {len(br3_linked):>4}개")
+            print(f"  ③ 추적 상품(연결 없음)    {len(br3_orphan):>4}개  ⚠️ 자격 판정을 우회한다")
+            print(f"  ─ 합집합(중복 제거)       {len(uni):>4}개  ← 매일 재야 할 양")
+            only3 = br3_orphan - br1 - br2 - br3_linked
+            print(f"  그중 '연결 없음' 때문에만 들어온 것 {len(only3)}개 "
+                  f"(다른 갈래에도 있으면 어차피 재야 하므로 뺀 값)")
+
+            print()
+            print("[C. 새는 곳 1 — 연결 없는 추적 상품]")
+            tp_tot = one("SELECT COUNT(*) FROM tracked_products")
+            tp_link = one("SELECT COUNT(DISTINCT tracked_product_id) FROM rank_link")
+            print(f"  추적 상품 {tp_tot}개 중 업체에 이어진 것 {tp_link}개 · 미연결 {tp_tot - tp_link}개")
+            print("  ⚠️ 미연결 상품은 '어느 업체 것인지 모르는 것'이라 유니버스에 무조건 포함된다.")
+            print("     그 업체의 계약이 끝나도 걸러낼 근거가 없어 계속 수집된다.")
+            print(f"     → PR #138 이 이 중 상당수를 이어 준다(적용 후 미연결 31개 안팎).")
+
+            print()
+            print("[D. 새는 곳 2 — 요청 큐가 스스로를 채운다]")
+            print("  큐에 넣는 경로는 둘이고, 둘 다 자격 판정을 지나지 않는다.")
+            print("   · 화면 검색/분석(main.py) — 직원이 아무 키워드나 조회하면 들어간다")
+            print("   · ⚠️ 배치 자신(scheduler·auto_analysis) — '수집분 없음'이면 넣는다")
+            print("     공식 쇼핑 API 가 2026-07-31 종료(404)라 수집분이 없으면 무조건 miss →")
+            print("     수집이 못 따라간 키워드가 매일 다시 큐로 들어온다.")
+            uni_set = set(uni)
+            try:
+                today_q = {r[0] for r in conn.execute(
+                    "SELECT keyword FROM collect_requests "
+                    " WHERE substr(requested_at,1,10)=date('now','localtime')")}
+                pend = {r[0] for r in conn.execute(
+                    "SELECT keyword FROM collect_requests WHERE status='pending' AND attempts < 5")}
+                print(f"  오늘 들어온 요청 {len(today_q)}개 — 유니버스 안 {len(today_q & uni_set)}개 "
+                      f"· 밖 {len(today_q - uni_set)}개")
+                print(f"  밀린 요청 {len(pend)}개 — 유니버스 안 {len(pend & uni_set)}개 "
+                      f"· 밖 {len(pend - uni_set)}개")
+                print("  ⇒ '유니버스 안'은 배치가 스스로 되넣은 것(자기 꼬리), '밖'은 화면 검색분이다.")
+            except Exception as e:
+                print(f"  (큐 분해 실패: {e})")
+
+            print()
+            print("[E. 이상적 분산 — 시간대별 몫과 대수]")
+            slot = collections.Counter()
+            for k, p in uni.items():
+                slot[_slot_of(k, bool(p))] += 1
+            lo, hi = min(slot[h] for h in range(24)), max(slot[h] for h in range(24))
+            print(f"  시간대별 몫 최소 {lo}개 · 최대 {hi}개 · 평균 {len(uni)/24:.1f}개 (서버 상한 {HOURLY_CAP})")
+            print(f"  업체 키워드는 0~{PRIORITY_HOURS-1}시, 추적 상품 전용은 {PRIORITY_HOURS}~23시에 배치된다")
+            print("  " + " ".join(f"{h}시:{slot[h]}" for h in range(24)))
+            print("  ⇒ 어느 시간대도 상한을 넘지 않는다 = 서버가 목록을 줄이는 게 아니라,")
+            print("     기계가 그 시간대에 다 못 하고 있다(50분 예산 중 11분만 사용).")
             conn.close()
             PY
               echo
