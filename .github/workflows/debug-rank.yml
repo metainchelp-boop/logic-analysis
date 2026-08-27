@@ -406,10 +406,15 @@ jobs:
             conn.row_factory = sqlite3.Row
 
             print("[① 하루에 실제로 몇 개를 소화했나 — 최근 10일]")
-            for r in conn.execute(
-                    "SELECT collected_date d, COUNT(DISTINCT keyword) n FROM collected_serp "
-                    " GROUP BY collected_date ORDER BY collected_date DESC LIMIT 10"):
-                print(f"  {r['d']}  {r['n']:>4}개")
+            daily = [(r["d"], r["n"]) for r in conn.execute(
+                "SELECT collected_date d, COUNT(DISTINCT keyword) n FROM collected_serp "
+                " GROUP BY collected_date ORDER BY collected_date DESC LIMIT 10")]
+            for d, n in daily:
+                print(f"  {d}  {n:>4}개")
+            # 오늘(진행 중)은 평균에서 뺀다 — 아직 안 끝난 날을 섞으면 능력이 과소평가된다
+            full = [n for d, n in daily[1:]] or [n for _d, n in daily]
+            PER_MACHINE = round(sum(full) / len(full)) if full else 0
+            print(f"  → 1대 하루 능력(오늘 제외 평균) {PER_MACHINE}개")
 
             print("[② 몇 시에 도나 — 최근 3일 시간대별 (기계가 켜져 있던 시간을 드러낸다)]")
             days = [r[0] for r in conn.execute(
@@ -483,6 +488,45 @@ jobs:
                     print(f"    → 유니버스 {len(uni)} → {len(uni)-len(gone)} (하루 부담 {len(gone)}개 감소)")
                 else:
                     print("    빠지는 키워드 없음 — 유니버스 변화 0")
+
+            print("[⑤ 온디맨드(밀린 요청) 큐 — 시간당 12개를 여기서 먹는다]")
+            print("  ⚠️ 이 큐가 차 있으면 확장이 매시간 12개를 먼저 처리하고 시간대 몫에 양보한다.")
+            print("     즉 대수를 늘려도 늘어난 몫이 이쪽으로 샐 수 있어 먼저 본다.")
+            try:
+                for r in conn.execute("SELECT status, COUNT(*) n FROM collect_requests GROUP BY status"):
+                    print(f"  {r[0]}: {r[1]}개")
+                pend = conn.execute("SELECT COUNT(*) FROM collect_requests "
+                                    " WHERE status='pending' AND attempts < 5").fetchone()[0]
+                dead = conn.execute("SELECT COUNT(*) FROM collect_requests "
+                                    " WHERE status='pending' AND attempts >= 5").fetchone()[0]
+                newq = conn.execute("SELECT COUNT(*) FROM collect_requests "
+                                    " WHERE substr(requested_at,1,10)=date('now','localtime')").fetchone()[0]
+                print(f"  실제 처리 대기(시도<5) {pend}개 · 시도 소진 {dead}개 · 오늘 새로 들어온 요청 {newq}개")
+                if pend == 0:
+                    print("  ⇒ 큐가 비어 있다 — 시간당 15개는 전부 시간대 몫이고, 온디맨드가 먹는 몫은 없다.")
+                else:
+                    print(f"  ⇒ 큐가 차 있다 — 매시간 최대 12개가 여기로 간다(하루 최대 288개).")
+                    print("     대수를 늘리기 전에 이 큐부터 비우거나 상한을 조정해야 늘린 만큼 남는다.")
+            except Exception as e:
+                print(f"  (조회 실패: {e})")
+
+            print("[⑥ 대수별 배분 — 겹치지 않게 나눴을 때 각각 몇 개 · 완수율 몇 %]")
+            UNI_NOW = len(uni)
+            try:
+                UNI_AFTER = UNI_NOW - len(gone)
+            except NameError:
+                UNI_AFTER = UNI_NOW
+            for label, U in (("지금", UNI_NOW), ("PR #138 적용 후", UNI_AFTER)):
+                print(f"  · 대상 {U}개 ({label}) — 1대 능력 {PER_MACHINE}개/일 기준")
+                for n in (1, 2, 3, 4):
+                    share = -(-U // n)                    # 1대당 배정(올림)
+                    each = min(share, PER_MACHINE)        # 능력 넘게는 못 한다
+                    tot = min(each * n, U)
+                    pct = round(tot * 100 / U) if U else 0
+                    mark = "  ← 전량" if tot >= U else ""
+                    print(f"     {n}대: 1대당 배정 {share:>4} · 하루 소화 {each:>4} · 합 {tot:>4} · 완수율 {pct:>3}%{mark}")
+                need = -(-U // PER_MACHINE) if PER_MACHINE else 0
+                print(f"     ⇒ 전량 소화에 필요한 대수 {need}대 (정확히는 {U/PER_MACHINE:.2f}대분)")
             conn.close()
             PY
               echo
