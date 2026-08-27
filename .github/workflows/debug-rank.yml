@@ -14,14 +14,27 @@ on:
         description: '순위 축 브리지 — off(기본) / stats / preview / apply'
         required: false
         default: 'off'
+      use_branch_code:
+        description: '이 브랜치의 rank_link.py 로 미리보기 — off(기본) / on. 배포 전에 새 규칙이 무엇을 이을지 먼저 보려는 용도(컨테이너 /tmp 에 얹었다 지운다·앱 파일 무접촉). apply 와 함께 쓰지 말 것.'
+        required: false
+        default: 'off'
 
 jobs:
   diagnose:
     runs-on: ubuntu-latest
     steps:
+      # 브랜치 코드 미리보기용 — 평소(off)엔 받아만 두고 쓰지 않는다.
+      - uses: actions/checkout@v4
+      - name: 브랜치 rank_link.py 인코딩
+        if: ${{ github.event.inputs.use_branch_code == 'on' }}
+        run: echo "RL_SRC_B64=$(base64 -w0 backend/rank_link.py)" >> "$GITHUB_ENV"
+
       - name: Rank batch read-only diagnosis
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          RL_SRC_B64: ${{ env.RL_SRC_B64 }}
         with:
+          envs: RL_SRC_B64
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
@@ -328,11 +341,27 @@ jobs:
             RL="${{ github.event.inputs.rank_link }}"
             if [ -n "$RL" ] && [ "$RL" != "off" ]; then
               echo "== 순위 축 브리지 ($RL) =="
+              RL_SRC="app"
+              if [ "${{ github.event.inputs.use_branch_code }}" = "on" ] && [ "$RL" != "apply" ]; then
+                # 배포 전에 새 규칙이 무엇을 이을지 먼저 본다.
+                # 컨테이너 /tmp 에 얹었다가 바로 지운다 — /app 의 실제 모듈은 손대지 않는다.
+                printf '%s' "$RL_SRC_B64" | base64 -d > /tmp/rl_preview.py
+                docker cp /tmp/rl_preview.py logic-analysis:/tmp/rank_link_preview.py
+                rm -f /tmp/rl_preview.py
+                RL_SRC="branch"
+                echo "  (이 브랜치 코드로 미리보기 — 서버 배포본은 그대로)"
+              fi
               # 실제 진입점(rank_link 모듈)을 그대로 호출한다 — 내부 로직 재현 금지 원칙.
-              docker exec -i -e RL_MODE="$RL" logic-analysis python3 - <<'PY'
+              docker exec -i -e RL_MODE="$RL" -e RL_SRC="$RL_SRC" logic-analysis python3 - <<'PY'
             import os, sys, json
             sys.path.insert(0, "/app")   # Dockerfile WORKDIR=/app 에 backend 내용이 그대로 복사됨
-            import rank_link
+            if os.getenv("RL_SRC") == "branch":
+                import importlib.util
+                spec = importlib.util.spec_from_file_location("rank_link", "/tmp/rank_link_preview.py")
+                rank_link = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(rank_link)
+            else:
+                import rank_link
             mode = os.getenv("RL_MODE", "stats")
             if mode == "apply":
                 rank_link.init_rank_link_db()
@@ -344,11 +373,15 @@ jobs:
                 print(json.dumps(r, ensure_ascii=False, indent=2))
                 print("  샘플(최대 10):")
                 for x in s:
-                    print(f"   - 업체 {x['client_id']} {x['client_name']} ↔ 상품 {x['tracked_product_id']} "
-                          f"{x['product_name'][:30]} (키 {x['product_key']})")
+                    how = x.get("match_method") or "product_id"
+                    mark = "상품번호" if how == "product_id" else "같은가게"
+                    print(f"   - [{mark}] 업체 {x['client_id']} {x['client_name']} ↔ 상품 "
+                          f"{x['tracked_product_id']} {x['product_name'][:30]} (키 {x['product_key']})")
             else:
                 print(json.dumps(rank_link.link_stats(), ensure_ascii=False, indent=2))
             PY
+              # 얹어 둔 미리보기 파일은 즉시 지운다 — 다음 진단에 옛 코드가 남지 않게.
+              docker exec logic-analysis rm -f /tmp/rank_link_preview.py 2>/dev/null || true
               echo
             fi
             echo "== 최근 오류 tail =="
