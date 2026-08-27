@@ -510,6 +510,22 @@ jobs:
             except Exception as e:
                 print(f"  (조회 실패: {e})")
 
+            print("[⑤-2 하루 처리량 중 실제로 목표에 쓰인 몫]")
+            print("  ⚠️ 확장은 시간대 몫과 온디맨드 큐를 함께 처리한다. 둘 다 collected_serp 에")
+            print("     쌓이므로 '하루 343개'만 봐서는 그중 몇 개가 유니버스인지 알 수 없다.")
+            uni_set = set(uni)
+            for d, n in daily[:4]:
+                got = {r[0] for r in conn.execute(
+                    "SELECT keyword FROM collected_serp WHERE collected_date=?", (d,))}
+                hit = len(got & uni_set)
+                print(f"  {d}  수집 {n:>4}개 중 유니버스 {hit:>4}개 "
+                      f"({round(hit*100/n) if n else 0}%) · 유니버스 밖 {n-hit}개")
+            pend_kw = {r[0] for r in conn.execute(
+                "SELECT keyword FROM collect_requests WHERE status='pending' AND attempts < 5")}
+            print(f"  밀린 요청 {len(pend_kw)}개 중 유니버스에 있는 것 {len(pend_kw & uni_set)}개 "
+                  f"· 유니버스 밖 {len(pend_kw - uni_set)}개")
+            print("  ⇒ 유니버스 밖이 크면 그만큼은 순위 추적과 무관한 일에 능력을 쓰고 있는 것이다.")
+
             print("[⑥ 대수별 배분 — 겹치지 않게 나눴을 때 각각 몇 개 · 완수율 몇 %]")
             UNI_NOW = len(uni)
             try:
