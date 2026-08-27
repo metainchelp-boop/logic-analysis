@@ -23,6 +23,7 @@
 """
 import os
 import logging
+import re
 import sqlite3
 from typing import Any, Dict, List, Optional
 
@@ -32,9 +33,10 @@ logger = logging.getLogger(__name__)
 
 DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
 
-# 자동 매칭 근거 — 지금은 상품ID 하나뿐이지만, 나중에 스토어명·수동 연결이 붙을 자리.
-MATCH_PRODUCT_ID = "product_id"
-MATCH_MANUAL = "manual"
+# 자동 매칭 근거. 어느 규칙으로 이었는지 rank_link 행마다 남는다.
+MATCH_PRODUCT_ID = "product_id"      # 상품ID 정확 일치 — 가장 확실
+MATCH_STORE_SLUG = "store_slug"      # 같은 스마트스토어(가게 이름) — 보조
+MATCH_MANUAL = "manual"              # 화면에서 사람이 지정
 
 
 def _get_conn() -> sqlite3.Connection:
@@ -47,6 +49,23 @@ def _get_conn() -> sqlite3.Connection:
 def _product_key(url: str) -> str:
     """URL → 정규화 상품ID. 못 뽑으면 빈 문자열(=매칭 대상 아님)."""
     return (extract_product_id_from_url(url or "") or "").strip()
+
+
+def _store_key(url: str) -> str:
+    """URL → 스마트스토어 가게 이름(슬러그). 못 뽑으면 빈 문자열.
+
+    ⚠️ 상품ID 매칭의 **보조**로만 쓴다(2026-08-27 신설).
+       업체의 naver_store_url 은 '첫 등록 상품' 하나로 굳어 있어, 직원이 홈탭에서
+       같은 가게의 **다른 상품**을 추적 등록하면 상품ID 가 영영 안 맞는다
+       (실측: 안 이어진 116개 중 115개가 이 경우).
+       같은 가게면 같은 업체이므로, 상품ID 로 못 이은 것만 여기로 내려온다.
+    """
+    m = re.search(r"smartstore\.naver\.com/([^/?#]+)", str(url or ""))
+    if not m:
+        return ""
+    slug = m.group(1).strip().lower()
+    # 'category' 같은 경로 조각이 가게 이름 자리에 오는 일은 없지만, 빈 값·숫자만은 거른다
+    return "" if (not slug or slug.isdigit()) else slug
 
 
 def init_rank_link_db():
@@ -92,21 +111,55 @@ def _collect_candidates(conn: sqlite3.Connection) -> Dict[str, Any]:
             {"id": r["id"], "name": r["product_name"] or "", "store": r["store_name"] or ""}
         )
 
+    # 추적 상품의 가게 이름(보조 축)
+    a_by_store: Dict[str, List[Dict[str, Any]]] = {}
+    for r in conn.execute("SELECT id, product_url, product_name, store_name FROM tracked_products"):
+        sk = _store_key(r["product_url"])
+        if sk:
+            a_by_store.setdefault(sk, []).append(
+                {"id": r["id"], "name": r["product_name"] or "", "store": r["store_name"] or ""}
+            )
+
     b_by_key: Dict[str, List[Dict[str, Any]]] = {}
+    b_by_store: Dict[str, List[Dict[str, Any]]] = {}
     b_total = b_with_key = 0
     for r in conn.execute(
         "SELECT id, name, naver_store_url FROM clients "
         "WHERE status='active' AND COALESCE(vertical,'store')='store'"
     ):
         b_total += 1
+        row = {"id": r["id"], "name": r["name"] or ""}
         key = _product_key(r["naver_store_url"])
-        if not key:
-            continue
-        b_with_key += 1
-        b_by_key.setdefault(key, []).append({"id": r["id"], "name": r["name"] or ""})
+        if key:
+            b_with_key += 1
+            b_by_key.setdefault(key, []).append(row)
+        sk = _store_key(r["naver_store_url"])
+        if sk:
+            b_by_store.setdefault(sk, []).append(row)
+
+    # ② 키워드별 상품 등록부도 비교 대상에 넣는다 (2026-08-21 이예은 신고로 만든 표).
+    #    업체 주소는 '첫 등록 상품' 하나뿐이라, 직원이 키워드마다 지정해 둔 상품은
+    #    여기에만 있다. 앞으로 지정할수록 자동으로 이어지는 몫이 늘어난다.
+    try:
+        for r in conn.execute(
+            "SELECT p.client_id AS cid, p.product_url AS url, c.name AS cname "
+            "  FROM client_keyword_product p JOIN clients c ON c.id = p.client_id "
+            " WHERE c.status='active' AND COALESCE(c.vertical,'store')='store'"
+        ):
+            row = {"id": r["cid"], "name": r["cname"] or ""}
+            key = _product_key(r["url"])
+            if key and not any(x["id"] == row["id"] for x in b_by_key.get(key, [])):
+                b_by_key.setdefault(key, []).append(row)
+            sk = _store_key(r["url"])
+            if sk and not any(x["id"] == row["id"] for x in b_by_store.get(sk, [])):
+                b_by_store.setdefault(sk, []).append(row)
+    except Exception as e:
+        # 표가 아직 없는 구버전 DB — 종전 동작(상품ID 축만)
+        logger.warning(f"[rank_link] 키워드별 상품 등록부 조회 건너뜀: {e}")
 
     return {
         "a_by_key": a_by_key, "b_by_key": b_by_key,
+        "a_by_store": a_by_store, "b_by_store": b_by_store,
         "a_total": a_total, "a_with_key": a_with_key,
         "b_total": b_total, "b_with_key": b_with_key,
     }
@@ -120,14 +173,40 @@ def _pairs(cand: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     out = []
     a_by_key, b_by_key = cand["a_by_key"], cand["b_by_key"]
+
+    # ① 1순위 — 상품ID 정확 일치. 가장 확실한 근거다.
+    matched_products = set()
     for key in sorted(set(a_by_key) & set(b_by_key)):
         for b in b_by_key[key]:
             for a in a_by_key[key]:
+                matched_products.add(a["id"])
                 out.append({
                     "client_id": b["id"], "client_name": b["name"],
                     "tracked_product_id": a["id"], "product_name": a["name"],
                     "store_name": a["store"], "product_key": key,
+                    "match_method": MATCH_PRODUCT_ID,
                 })
+
+    # ② 2순위 — 같은 스마트스토어(가게 이름). 상품ID 로 못 이은 것만 내려온다.
+    #    ⚠️ 이미 상품ID 로 이어진 상품은 건드리지 않는다 — 더 확실한 근거를 덮지 않는다.
+    #    ⚠️ 한 가게에 업체가 여럿 잡히면 **잇지 않는다.** 어느 쪽인지 모르는 채로
+    #       붙이면 남의 업체 순위가 섞인다 — 그건 화면에서 사람이 고르게 둔다.
+    a_by_store = cand.get("a_by_store") or {}
+    b_by_store = cand.get("b_by_store") or {}
+    for sk in sorted(set(a_by_store) & set(b_by_store)):
+        bs = b_by_store[sk]
+        if len(bs) != 1:
+            continue                     # 같은 가게에 업체가 둘 이상 — 사람 판단으로
+        b = bs[0]
+        for a in a_by_store[sk]:
+            if a["id"] in matched_products:
+                continue
+            out.append({
+                "client_id": b["id"], "client_name": b["name"],
+                "tracked_product_id": a["id"], "product_name": a["name"],
+                "store_name": a["store"], "product_key": sk,
+                "match_method": MATCH_STORE_SLUG,
+            })
     return out
 
 
@@ -150,6 +229,13 @@ def preview_backfill(limit: int = 20) -> Dict[str, Any]:
             "pairs_total": len(pairs),
             "already_linked": len(existing),
             "to_insert": len(new_pairs),
+            # 규칙별로 나눠 보여준다 — 「상품ID 로 확실히 이은 것」과
+            # 「같은 가게라서 이은 것」은 확신 정도가 다르므로 눈으로 갈라 봐야 한다.
+            "to_insert_by_product_id": sum(
+                1 for p in new_pairs
+                if (p.get("match_method") or MATCH_PRODUCT_ID) == MATCH_PRODUCT_ID),
+            "to_insert_by_store": sum(
+                1 for p in new_pairs if p.get("match_method") == MATCH_STORE_SLUG),
             "samples": new_pairs[:limit],
         }
     except Exception as e:
@@ -176,7 +262,10 @@ def apply_backfill(linked_by: int = 0) -> Dict[str, Any]:
             "INSERT OR IGNORE INTO rank_link "
             "(client_id, tracked_product_id, product_key, match_method, linked_by) "
             "VALUES (?, ?, ?, ?, ?)",
-            [(p["client_id"], p["tracked_product_id"], p["product_key"], MATCH_PRODUCT_ID, linked_by)
+            # ⚠️ 어느 규칙으로 이었는지 짝마다 남긴다 — 종전엔 전부 product_id 로 박혀
+            #    있어, 스토어로 이은 것과 구분이 안 됐다. 나중에 되돌리거나 검수할 때 필요하다.
+            [(p["client_id"], p["tracked_product_id"], p["product_key"],
+              p.get("match_method") or MATCH_PRODUCT_ID, linked_by)
              for p in pairs],
         )
         conn.commit()
