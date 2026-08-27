@@ -703,10 +703,17 @@ jobs:
             print()
             print("[D-3 두 축이 같은 상품을 두 번 재는가]")
             try:
-                both = conn.execute(
-                    "SELECT COUNT(*) FROM rank_link l JOIN clients c ON c.id = l.client_id "
-                    " WHERE c.naver_store_url IS NOT NULL AND c.naver_store_url <> ''").fetchone()[0]
-                print(f"  업체에 이어진 추적 상품 {tp_link}개 중 그 업체가 대표 상품 주소를 가진 것 {both}개")
+                # ⚠️ rank_link 행 수(업체×상품 짝)와 DISTINCT 상품 수는 축이 달라 서로 나눌 수 없다.
+                #    '같은 상품을 두 번 재는가'는 상품ID 집합의 교집합으로 센다.
+                from naver_crawler import extract_product_id_from_url as _pid
+                a_ids = {(_pid(r[0] or "") or "").strip() for r in conn.execute(
+                    "SELECT product_url FROM tracked_products")} - {""}
+                b_ids = {(_pid(r[0] or "") or "").strip() for r in conn.execute(
+                    f"SELECT naver_store_url FROM clients WHERE id IN ({ph})", ids)} - {""}
+                both = len(a_ids & b_ids)
+                print(f"  축A 추적 상품 상품ID {len(a_ids)}개 · 축B 자격 업체 대표 상품 상품ID {len(b_ids)}개")
+                print(f"  두 축이 가리키는 같은 상품 {both}개 "
+                      f"(축A의 {round(both*100/len(a_ids)) if a_ids else 0}%)")
                 print("  ⇒ 두 축은 네이버를 한 번만 부르지만(키워드 단위 공유 조회),")
                 print("     순위 판정·저장은 축A(rankings)·축B(client_rank_history) 에 각각 한 번씩 일어난다.")
             except Exception as e:
