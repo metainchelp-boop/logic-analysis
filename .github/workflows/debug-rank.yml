@@ -14,14 +14,45 @@ on:
         description: '순위 축 브리지 — off(기본) / stats / preview / apply'
         required: false
         default: 'off'
+      capacity:
+        description: '수집 소화량 — off(기본) / on. 1대가 실제로 하루 몇 개를 소화하는지·몇 시에 도는지·시간대별 몫이 고른지. 2대 배분 설계용(읽기 전용).'
+        required: false
+        default: 'off'
+      structure:
+        description: '구조 진단 — off(기본) / on. 자격 판정이 무엇을 거르는지 · 유니버스 868개의 출처 · 새는 곳 2군데 규모 · 이상적 분산(읽기 전용).'
+        required: false
+        default: 'off'
+      expired:
+        description: '추적 기간 지난 업체 목록 — off(기본) / on. 계약 살아 있는 곳과 끝난 곳을 갈라서 전수 출력(읽기 전용). ⚠️ 업체명이 실행 로그에 남는다 — 이 저장소는 공개이므로 결과를 받은 뒤 그 런의 로그를 삭제할 것.'
+        required: false
+        default: 'off'
+      use_branch_code:
+        description: '이 브랜치의 rank_link.py 로 미리보기 — off(기본) / on. 배포 전에 새 규칙이 무엇을 이을지 먼저 보려는 용도(컨테이너 /tmp 에 얹었다 지운다·앱 파일 무접촉). apply 와 함께 쓰지 말 것.'
+        required: false
+        default: 'off'
 
 jobs:
   diagnose:
     runs-on: ubuntu-latest
     steps:
+      # 브랜치 코드 미리보기용 — 평소(off)엔 받아만 두고 쓰지 않는다.
+      - uses: actions/checkout@v4
+      - name: 브랜치 rank_link.py 인코딩
+        if: ${{ github.event.inputs.use_branch_code == 'on' }}
+        run: echo "RL_SRC_GZ=$(gzip -9c backend/rank_link.py | base64 -w0)" >> "$GITHUB_ENV"
+
       - name: Rank batch read-only diagnosis
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          RL_SRC_GZ: ${{ env.RL_SRC_GZ }}
+          IN_COLLECTOR: ${{ github.event.inputs.collector }}
+          IN_RANK_LINK: ${{ github.event.inputs.rank_link }}
+          IN_CAPACITY: ${{ github.event.inputs.capacity }}
+          IN_STRUCTURE: ${{ github.event.inputs.structure }}
+          IN_EXPIRED: ${{ github.event.inputs.expired }}
+          IN_BRANCH_CODE: ${{ github.event.inputs.use_branch_code }}
         with:
+          envs: RL_SRC_GZ,IN_COLLECTOR,IN_RANK_LINK,IN_CAPACITY,IN_STRUCTURE,IN_EXPIRED,IN_BRANCH_CODE
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
@@ -119,7 +150,7 @@ jobs:
             print(f"  총 {tot} / 슬러그 {slug}")
             PY
             echo
-            if [ "${{ github.event.inputs.collector }}" = "on" ]; then
+            if [ "$IN_COLLECTOR" = "on" ]; then
               echo "== 수집기 진단 =="
               echo "-- 확장이 서버에 접속한 기록(오늘) --"
               # 확장은 GET /api/collector/keywords 로 목록을 받고 POST /serp 로 올린다.
@@ -325,14 +356,34 @@ jobs:
             PY
               echo
             fi
-            RL="${{ github.event.inputs.rank_link }}"
+            # 브랜치 코드 미리보기 — 컨테이너 /tmp 에 얹었다가 스크립트 끝에서 지운다.
+            # /app 의 실제 모듈은 손대지 않는다(배포본 무접촉). 아래 두 블록이 함께 쓴다.
+            BRANCH_CODE=0
+            if [ "$IN_BRANCH_CODE" = "on" ]; then
+              printf '%s' "$RL_SRC_GZ" | base64 -d | gunzip > /tmp/rl_preview.py
+              docker cp /tmp/rl_preview.py logic-analysis:/tmp/rank_link_preview.py
+              rm -f /tmp/rl_preview.py
+              BRANCH_CODE=1
+            fi
+            RL="$IN_RANK_LINK"
             if [ -n "$RL" ] && [ "$RL" != "off" ]; then
               echo "== 순위 축 브리지 ($RL) =="
+              RL_SRC="app"
+              if [ "$BRANCH_CODE" = "1" ] && [ "$RL" != "apply" ]; then
+                RL_SRC="branch"
+                echo "  (이 브랜치 코드로 미리보기 — 서버 배포본은 그대로)"
+              fi
               # 실제 진입점(rank_link 모듈)을 그대로 호출한다 — 내부 로직 재현 금지 원칙.
-              docker exec -i -e RL_MODE="$RL" logic-analysis python3 - <<'PY'
+              docker exec -i -e RL_MODE="$RL" -e RL_SRC="$RL_SRC" logic-analysis python3 - <<'PY'
             import os, sys, json
             sys.path.insert(0, "/app")   # Dockerfile WORKDIR=/app 에 backend 내용이 그대로 복사됨
-            import rank_link
+            if os.getenv("RL_SRC") == "branch":
+                import importlib.util
+                spec = importlib.util.spec_from_file_location("rank_link", "/tmp/rank_link_preview.py")
+                rank_link = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(rank_link)
+            else:
+                import rank_link
             mode = os.getenv("RL_MODE", "stats")
             if mode == "apply":
                 rank_link.init_rank_link_db()
@@ -344,12 +395,417 @@ jobs:
                 print(json.dumps(r, ensure_ascii=False, indent=2))
                 print("  샘플(최대 10):")
                 for x in s:
-                    print(f"   - 업체 {x['client_id']} {x['client_name']} ↔ 상품 {x['tracked_product_id']} "
-                          f"{x['product_name'][:30]} (키 {x['product_key']})")
+                    how = x.get("match_method") or "product_id"
+                    mark = "상품번호" if how == "product_id" else "같은가게"
+                    print(f"   - [{mark}] 업체 {x['client_id']} {x['client_name']} ↔ 상품 "
+                          f"{x['tracked_product_id']} {x['product_name'][:30]} (키 {x['product_key']})")
             else:
                 print(json.dumps(rank_link.link_stats(), ensure_ascii=False, indent=2))
             PY
               echo
+            fi
+            if [ "$IN_CAPACITY" = "on" ]; then
+              echo "== 수집 소화량 (읽기 전용) =="
+              docker exec -i logic-analysis python3 - <<'PY'
+            import os, sys, json, collections
+            sys.path.insert(0, "/app")
+            import sqlite3
+            from collector import _keyword_universe, _tracking_client_ids, _slot_of, HOURLY_CAP, PRIORITY_HOURS
+
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+
+            print("[① 하루에 실제로 몇 개를 소화했나 — 최근 10일]")
+            daily = [(r["d"], r["n"]) for r in conn.execute(
+                "SELECT collected_date d, COUNT(DISTINCT keyword) n FROM collected_serp "
+                " GROUP BY collected_date ORDER BY collected_date DESC LIMIT 10")]
+            for d, n in daily:
+                print(f"  {d}  {n:>4}개")
+            # 오늘(진행 중)은 평균에서 뺀다 — 아직 안 끝난 날을 섞으면 능력이 과소평가된다
+            full = [n for d, n in daily[1:]] or [n for _d, n in daily]
+            PER_MACHINE = round(sum(full) / len(full)) if full else 0
+            print(f"  → 1대 하루 능력(오늘 제외 평균) {PER_MACHINE}개")
+
+            print("[② 몇 시에 도나 — 최근 3일 시간대별 (기계가 켜져 있던 시간을 드러낸다)]")
+            days = [r[0] for r in conn.execute(
+                "SELECT DISTINCT collected_date FROM collected_serp "
+                " ORDER BY collected_date DESC LIMIT 3")]
+            for d in days:
+                per = collections.Counter()
+                for r in conn.execute(
+                        "SELECT created_at FROM collected_serp WHERE collected_date=?", (d,)):
+                    ca = r[0] or ""
+                    if len(ca) >= 13:
+                        per[ca[11:13]] += 1
+                line = " ".join(f"{h}시:{per[h]}" for h in sorted(per))
+                active = len(per)
+                print(f"  {d}  가동 시간대 {active}/24 · 합 {sum(per.values())}")
+                print(f"    {line}")
+
+            print("[③ 유니버스와 시간대별 몫 — 고르게 퍼져 있나]")
+            uni = _keyword_universe(conn)
+            slot = collections.Counter()
+            for k, prio in uni.items():
+                slot[_slot_of(k, bool(prio))] += 1
+            prio_n = sum(1 for v in uni.values() if v)
+            print(f"  유니버스 {len(uni)}개 (업체 키워드 {prio_n} · 추적 상품 전용 {len(uni)-prio_n})")
+            print(f"  시간당 서버 상한 {HOURLY_CAP}개 · 업체 슬롯 0~{PRIORITY_HOURS-1}시")
+            over = [h for h in range(24) if slot[h] > HOURLY_CAP]
+            print("  " + " ".join(f"{h}시:{slot[h]}" + ("*" if slot[h] > HOURLY_CAP else "") for h in range(24)))
+            print(f"  상한 초과 시간대(* = 그 시간에 다 못 줌): {len(over)}개 {over}")
+            print(f"  이론상 하루 최대 = min(슬롯몫, 상한) 합 = {sum(min(slot[h], HOURLY_CAP) for h in range(24))}개")
+
+            print("[④ PR #138 새 연결이 유니버스에 미치는 영향]")
+            print("  ⚠️ 유니버스는 rank_link 를 읽는다 — '연결 없는 상품'은 포함하고")
+            print("     '자격 없는 업체에만 이어진 상품'은 제외한다. 그래서 새로 이으면 줄 수 있다.")
+            src = "/tmp/rank_link_preview.py"
+            if not os.path.exists(src):
+                print("  (use_branch_code=on 이 아니어서 건너뜀)")
+            else:
+                import importlib.util
+                spec = importlib.util.spec_from_file_location("rl_new", src)
+                rl = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(rl)
+                pv = rl.preview_backfill(limit=1000)
+                pairs = pv.get("samples") or []
+                ok_ids = set(_tracking_client_ids(conn))
+                linked_now = set(r[0] for r in conn.execute("SELECT tracked_product_id FROM rank_link"))
+                # 새로 '자격 없는 업체에만' 이어지는 상품 = 유니버스에서 빠질 후보
+                by_prod = collections.defaultdict(set)
+                for p in pairs:
+                    by_prod[p["tracked_product_id"]].add(p["client_id"])
+                drop_prod = [pid for pid, cids in by_prod.items()
+                             if pid not in linked_now and cids and not (cids & ok_ids)]
+                keep_prod = [pid for pid, cids in by_prod.items()
+                             if pid not in linked_now and (cids & ok_ids)]
+                print(f"  새로 이어질 상품 {len(by_prod)}개 중 — 자격 업체행 {len(keep_prod)} · 자격 없는 업체행 {len(drop_prod)}")
+                if drop_prod:
+                    ph = ",".join("?" * len(drop_prod))
+                    kws = set()
+                    for r in conn.execute(
+                            f"SELECT DISTINCT keyword FROM tracked_keywords WHERE product_id IN ({ph})",
+                            drop_prod):
+                        k = (r[0] or "").strip()
+                        if k:
+                            kws.add(k)
+                    # 그 키워드가 다른 경로로도 유니버스에 남는지(업체 대표·분석 이력)
+                    still = set()
+                    for k in kws:
+                        if uni.get(k) is True:
+                            still.add(k)
+                    gone = kws - still
+                    print(f"    그 상품들의 키워드 {len(kws)}개 · 다른 경로로 남는 것 {len(still)} · 빠지는 것 {len(gone)}")
+                    print(f"    → 유니버스 {len(uni)} → {len(uni)-len(gone)} (하루 부담 {len(gone)}개 감소)")
+                else:
+                    print("    빠지는 키워드 없음 — 유니버스 변화 0")
+
+            print("[⑤ 온디맨드(밀린 요청) 큐 — 시간당 12개를 여기서 먹는다]")
+            print("  ⚠️ 이 큐가 차 있으면 확장이 매시간 12개를 먼저 처리하고 시간대 몫에 양보한다.")
+            print("     즉 대수를 늘려도 늘어난 몫이 이쪽으로 샐 수 있어 먼저 본다.")
+            try:
+                for r in conn.execute("SELECT status, COUNT(*) n FROM collect_requests GROUP BY status"):
+                    print(f"  {r[0]}: {r[1]}개")
+                pend = conn.execute("SELECT COUNT(*) FROM collect_requests "
+                                    " WHERE status='pending' AND attempts < 5").fetchone()[0]
+                dead = conn.execute("SELECT COUNT(*) FROM collect_requests "
+                                    " WHERE status='pending' AND attempts >= 5").fetchone()[0]
+                newq = conn.execute("SELECT COUNT(*) FROM collect_requests "
+                                    " WHERE substr(requested_at,1,10)=date('now','localtime')").fetchone()[0]
+                print(f"  실제 처리 대기(시도<5) {pend}개 · 시도 소진 {dead}개 · 오늘 새로 들어온 요청 {newq}개")
+                if pend == 0:
+                    print("  ⇒ 큐가 비어 있다 — 시간당 15개는 전부 시간대 몫이고, 온디맨드가 먹는 몫은 없다.")
+                else:
+                    print(f"  ⇒ 큐가 차 있다 — 매시간 최대 12개가 여기로 간다(하루 최대 288개).")
+                    print("     대수를 늘리기 전에 이 큐부터 비우거나 상한을 조정해야 늘린 만큼 남는다.")
+            except Exception as e:
+                print(f"  (조회 실패: {e})")
+
+            print("[⑤-2 하루 처리량 중 실제로 목표에 쓰인 몫]")
+            print("  ⚠️ 확장은 시간대 몫과 온디맨드 큐를 함께 처리한다. 둘 다 collected_serp 에")
+            print("     쌓이므로 '하루 343개'만 봐서는 그중 몇 개가 유니버스인지 알 수 없다.")
+            uni_set = set(uni)
+            for d, n in daily[:4]:
+                got = {r[0] for r in conn.execute(
+                    "SELECT keyword FROM collected_serp WHERE collected_date=?", (d,))}
+                hit = len(got & uni_set)
+                print(f"  {d}  수집 {n:>4}개 중 유니버스 {hit:>4}개 "
+                      f"({round(hit*100/n) if n else 0}%) · 유니버스 밖 {n-hit}개")
+            pend_kw = {r[0] for r in conn.execute(
+                "SELECT keyword FROM collect_requests WHERE status='pending' AND attempts < 5")}
+            print(f"  밀린 요청 {len(pend_kw)}개 중 유니버스에 있는 것 {len(pend_kw & uni_set)}개 "
+                  f"· 유니버스 밖 {len(pend_kw - uni_set)}개")
+            print("  ⇒ 유니버스 밖이 크면 그만큼은 순위 추적과 무관한 일에 능력을 쓰고 있는 것이다.")
+
+            print("[⑥ 대수별 배분 — 겹치지 않게 나눴을 때 각각 몇 개 · 완수율 몇 %]")
+            UNI_NOW = len(uni)
+            try:
+                UNI_AFTER = UNI_NOW - len(gone)
+            except NameError:
+                UNI_AFTER = UNI_NOW
+            for label, U in (("지금", UNI_NOW), ("PR #138 적용 후", UNI_AFTER)):
+                print(f"  · 대상 {U}개 ({label}) — 1대 능력 {PER_MACHINE}개/일 기준")
+                for n in (1, 2, 3, 4):
+                    share = -(-U // n)                    # 1대당 배정(올림)
+                    each = min(share, PER_MACHINE)        # 능력 넘게는 못 한다
+                    tot = min(each * n, U)
+                    pct = round(tot * 100 / U) if U else 0
+                    mark = "  ← 전량" if tot >= U else ""
+                    print(f"     {n}대: 1대당 배정 {share:>4} · 하루 소화 {each:>4} · 합 {tot:>4} · 완수율 {pct:>3}%{mark}")
+                need = -(-U // PER_MACHINE) if PER_MACHINE else 0
+                print(f"     ⇒ 전량 소화에 필요한 대수 {need}대 (정확히는 {U/PER_MACHINE:.2f}대분)")
+            conn.close()
+            PY
+              echo
+            fi
+            if [ "$IN_STRUCTURE" = "on" ]; then
+              echo "== 구조 진단 (읽기 전용) =="
+              docker exec -i logic-analysis python3 - <<'PY'
+            import sys, collections
+            sys.path.insert(0, "/app")
+            import sqlite3
+            from collector import (_keyword_universe, _tracking_client_ids, _slot_of,
+                                   HOURLY_CAP, PRIORITY_HOURS)
+
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            one = lambda q, a=(): conn.execute(q, a).fetchone()[0]
+
+            print("[A. 업체 — 누가 추적 자격이 있나]")
+            print("  자격 = 활성 · 광고주 · 스토어 · 자동분석 ON · 추적 ON · 추적기간 남음")
+            tot = one("SELECT COUNT(*) FROM clients")
+            ids = _tracking_client_ids(conn)
+            print(f"  전체 업체 {tot}곳 → 자격 {len(ids)}곳 (제외 {tot - len(ids)}곳)")
+            print("  제외 사유별(중복 계상 — 한 업체가 여러 사유에 걸릴 수 있다):")
+            reasons = [
+                ("활성 아님(status)",        "status <> 'active'"),
+                ("광고주 아님(영업대상·경쟁사)", "COALESCE(role,'advertiser') <> 'advertiser'"),
+                ("스토어 아님(플레이스 등)",   "COALESCE(vertical,'store') <> 'store'"),
+                ("자동분석 OFF ← 계약만료·환불·홀딩 자동 반영", "COALESCE(auto_analysis,1) = 0"),
+                ("추적 OFF(수동)",            "COALESCE(track_enabled,1) = 0"),
+                ("추적기간 지남(track_until)", "track_until IS NOT NULL AND track_until <> '' "
+                                               "AND date(track_until) < date('now','localtime')"),
+            ]
+            for label, cond in reasons:
+                try:
+                    print(f"    {one('SELECT COUNT(*) FROM clients WHERE ' + cond):>4}곳 — {label}")
+                except Exception as e:
+                    print(f"     ?곳 — {label} (조회 실패: {e})")
+            try:
+                soon = one("SELECT COUNT(*) FROM clients WHERE track_until IS NOT NULL AND track_until <> '' "
+                           " AND date(track_until) BETWEEN date('now','localtime') "
+                           "     AND date('now','localtime','+14 day')")
+                print(f"  추적기간 14일 안에 끝나는 업체 {soon}곳 (그만큼 대상이 자연 감소)")
+            except Exception as e:
+                print(f"  (임박 조회 실패: {e})")
+
+            print()
+            print("[B. 필요한 추적 작업량 — 유니버스 868개의 출처]")
+            uni = _keyword_universe(conn)
+            ph = ",".join("?" * len(ids)) if ids else "NULL"
+            br1 = set()
+            for r in conn.execute(f"SELECT main_keywords FROM clients WHERE id IN ({ph})", ids):
+                for k in (r[0] or "").split(","):
+                    if k.strip():
+                        br1.add(k.strip())
+            br2 = {(r[0] or "").strip() for r in conn.execute(
+                f"SELECT DISTINCT keyword FROM client_analyses WHERE client_id IN ({ph})", ids)} - {""}
+            br3_linked = {(r[0] or "").strip() for r in conn.execute(
+                f"SELECT DISTINCT k.keyword FROM tracked_keywords k "
+                f" WHERE k.product_id IN (SELECT tracked_product_id FROM rank_link "
+                f"                         WHERE client_id IN ({ph}))", ids)} - {""}
+            br3_orphan = {(r[0] or "").strip() for r in conn.execute(
+                "SELECT DISTINCT k.keyword FROM tracked_keywords k "
+                " WHERE k.product_id NOT IN (SELECT tracked_product_id FROM rank_link)")} - {""}
+            print(f"  ① 담당자 대표 키워드      {len(br1):>4}개")
+            print(f"  ② 분석 이력 키워드        {len(br2):>4}개")
+            print(f"  ③ 추적 상품(업체 연결됨)  {len(br3_linked):>4}개")
+            print(f"  ③ 추적 상품(연결 없음)    {len(br3_orphan):>4}개  ⚠️ 자격 판정을 우회한다")
+            print(f"  ─ 합집합(중복 제거)       {len(uni):>4}개  ← 매일 재야 할 양")
+            only3 = br3_orphan - br1 - br2 - br3_linked
+            print(f"  그중 '연결 없음' 때문에만 들어온 것 {len(only3)}개 "
+                  f"(다른 갈래에도 있으면 어차피 재야 하므로 뺀 값)")
+
+            print()
+            print("[C. 새는 곳 1 — 연결 없는 추적 상품]")
+            tp_tot = one("SELECT COUNT(*) FROM tracked_products")
+            tp_link = one("SELECT COUNT(DISTINCT tracked_product_id) FROM rank_link")
+            print(f"  추적 상품 {tp_tot}개 중 업체에 이어진 것 {tp_link}개 · 미연결 {tp_tot - tp_link}개")
+            print("  ⚠️ 미연결 상품은 '어느 업체 것인지 모르는 것'이라 유니버스에 무조건 포함된다.")
+            print("     그 업체의 계약이 끝나도 걸러낼 근거가 없어 계속 수집된다.")
+            print(f"     → PR #138 이 이 중 상당수를 이어 준다(적용 후 미연결 31개 안팎).")
+
+            print()
+            print("[D. 새는 곳 2 — 요청 큐가 스스로를 채운다]")
+            print("  큐에 넣는 경로는 둘이고, 둘 다 자격 판정을 지나지 않는다.")
+            print("   · 화면 검색/분석(main.py) — 직원이 아무 키워드나 조회하면 들어간다")
+            print("   · ⚠️ 배치 자신(scheduler·auto_analysis) — '수집분 없음'이면 넣는다")
+            print("     공식 쇼핑 API 가 2026-07-31 종료(404)라 수집분이 없으면 무조건 miss →")
+            print("     수집이 못 따라간 키워드가 매일 다시 큐로 들어온다.")
+            uni_set = set(uni)
+            try:
+                today_q = {r[0] for r in conn.execute(
+                    "SELECT keyword FROM collect_requests "
+                    " WHERE substr(requested_at,1,10)=date('now','localtime')")}
+                pend = {r[0] for r in conn.execute(
+                    "SELECT keyword FROM collect_requests WHERE status='pending' AND attempts < 5")}
+                print(f"  오늘 들어온 요청 {len(today_q)}개 — 유니버스 안 {len(today_q & uni_set)}개 "
+                      f"· 밖 {len(today_q - uni_set)}개")
+                print(f"  밀린 요청 {len(pend)}개 — 유니버스 안 {len(pend & uni_set)}개 "
+                      f"· 밖 {len(pend - uni_set)}개")
+                print("  ⇒ '유니버스 안'은 배치가 스스로 되넣은 것(자기 꼬리), '밖'은 화면 검색분이다.")
+            except Exception as e:
+                print(f"  (큐 분해 실패: {e})")
+
+            print()
+            print("[D-2 ⚠️ 자격 판정이 '수집'과 '기록'에서 다르다 — 실측]")
+            print("  수집(collector) 6조건 : 활성·광고주·스토어·자동분석·추적ON·추적기간")
+            print("  기록(08:00 배치) 4조건: 활성·광고주·스토어·자동분석   ← 추적ON·추적기간 없음")
+            print("  축A(추적 상품)        : 필터 0 — get_all_tracked_products() 는 전량 반환")
+            ok = set(ids)
+            try:
+                rows = list(conn.execute(
+                    "SELECT DISTINCT client_id FROM client_rank_history "
+                    " WHERE date(checked_at) = date('now','localtime')"))
+                today_cli = {r[0] for r in rows}
+                bad = today_cli - ok
+                print(f"  오늘 순위가 기록된 업체 {len(today_cli)}곳 중 자격 없는 곳 {len(bad)}곳")
+                if bad:
+                    ph2 = ",".join("?" * len(bad))
+                    for r in conn.execute(
+                            f"SELECT name, COALESCE(auto_analysis,1) a, COALESCE(track_enabled,1) t, "
+                            f"       COALESCE(track_until,'') u, COALESCE(role,'advertiser') ro "
+                            f"  FROM clients WHERE id IN ({ph2}) LIMIT 6", list(bad)):
+                        why = []
+                        if not r["a"]: why.append("계약만료·환불·홀딩")
+                        if not r["t"]: why.append("추적OFF")
+                        if r["u"] and r["u"] < __import__("datetime").date.today().isoformat():
+                            why.append(f"기간지남({r['u']})")
+                        if r["ro"] != "advertiser": why.append("광고주아님")
+                        print(f"    · {r['name']} — {' / '.join(why) or '사유 불명'}")
+                    print("  ⇒ 계약이 끝났는데도 순위 기록이 계속 쌓이고 있다는 뜻이다.")
+                else:
+                    print("  ⇒ 오늘은 자격 없는 업체 기록이 없다(수집 유니버스가 사실상 게이트 역할).")
+            except Exception as e:
+                print(f"  (축B 조회 실패: {e})")
+            try:
+                n_a = conn.execute(
+                    "SELECT COUNT(DISTINCT product_id) FROM rankings "
+                    " WHERE date(checked_at) = date('now','localtime')").fetchone()[0]
+                linked_bad = conn.execute(
+                    "SELECT COUNT(DISTINCT r.product_id) FROM rankings r "
+                    "  JOIN rank_link l ON l.tracked_product_id = r.product_id "
+                    " WHERE date(r.checked_at) = date('now','localtime') "
+                    f"   AND l.client_id NOT IN ({ph})", ids).fetchone()[0]
+                orphan = conn.execute(
+                    "SELECT COUNT(DISTINCT r.product_id) FROM rankings r "
+                    " WHERE date(r.checked_at) = date('now','localtime') "
+                    "   AND r.product_id NOT IN (SELECT tracked_product_id FROM rank_link)").fetchone()[0]
+                print(f"  오늘 순위가 기록된 추적 상품 {n_a}개 — 자격 없는 업체 것 {linked_bad}개 "
+                      f"· 어느 업체인지 모름 {orphan}개")
+            except Exception as e:
+                print(f"  (축A 조회 실패: {e})")
+
+            print()
+            print("[D-3 두 축이 같은 상품을 두 번 재는가]")
+            try:
+                # ⚠️ rank_link 행 수(업체×상품 짝)와 DISTINCT 상품 수는 축이 달라 서로 나눌 수 없다.
+                #    '같은 상품을 두 번 재는가'는 상품ID 집합의 교집합으로 센다.
+                from naver_crawler import extract_product_id_from_url as _pid
+                a_ids = {(_pid(r[0] or "") or "").strip() for r in conn.execute(
+                    "SELECT product_url FROM tracked_products")} - {""}
+                b_ids = {(_pid(r[0] or "") or "").strip() for r in conn.execute(
+                    f"SELECT naver_store_url FROM clients WHERE id IN ({ph})", ids)} - {""}
+                both = len(a_ids & b_ids)
+                print(f"  축A 추적 상품 상품ID {len(a_ids)}개 · 축B 자격 업체 대표 상품 상품ID {len(b_ids)}개")
+                print(f"  두 축이 가리키는 같은 상품 {both}개 "
+                      f"(축A의 {round(both*100/len(a_ids)) if a_ids else 0}%)")
+                print("  ⇒ 두 축은 네이버를 한 번만 부르지만(키워드 단위 공유 조회),")
+                print("     순위 판정·저장은 축A(rankings)·축B(client_rank_history) 에 각각 한 번씩 일어난다.")
+            except Exception as e:
+                print(f"  (겹침 조회 실패: {e})")
+
+            print("[E. 이상적 분산 — 시간대별 몫과 대수]")
+            slot = collections.Counter()
+            for k, p in uni.items():
+                slot[_slot_of(k, bool(p))] += 1
+            lo, hi = min(slot[h] for h in range(24)), max(slot[h] for h in range(24))
+            print(f"  시간대별 몫 최소 {lo}개 · 최대 {hi}개 · 평균 {len(uni)/24:.1f}개 (서버 상한 {HOURLY_CAP})")
+            print(f"  업체 키워드는 0~{PRIORITY_HOURS-1}시, 추적 상품 전용은 {PRIORITY_HOURS}~23시에 배치된다")
+            print("  " + " ".join(f"{h}시:{slot[h]}" for h in range(24)))
+            print("  ⇒ 어느 시간대도 상한을 넘지 않는다 = 서버가 목록을 줄이는 게 아니라,")
+            print("     기계가 그 시간대에 다 못 하고 있다(50분 예산 중 11분만 사용).")
+            conn.close()
+            PY
+              echo
+            fi
+            if [ "$IN_EXPIRED" = "on" ]; then
+              echo "== 추적 기간 지난 업체 (읽기 전용) =="
+              docker exec -i logic-analysis python3 - <<'PY'
+            import sys, datetime
+            sys.path.insert(0, "/app")
+            import sqlite3
+            from collector import _keyword_universe, _tracking_client_ids
+
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            today = datetime.date.today()
+
+            print("[추적 기간이 지난 업체 — 전수]")
+            print("  ⚠️ 이 목록에는 업체명이 실린다. 이 저장소는 공개이므로 "
+                  "결과를 받은 뒤 이 런의 로그를 삭제할 것.")
+            print("  ⚠️ 계약 상태(자동분석)와 기간 값이 어긋나는지가 판단의 핵심이라 두 갈래로 가른다.")
+            rows = list(conn.execute(
+                "SELECT id, name, track_until, COALESCE(auto_analysis,1) au, "
+                "       COALESCE(track_enabled,1) te, COALESCE(role,'advertiser') ro, status "
+                "  FROM clients "
+                " WHERE track_until IS NOT NULL AND track_until <> '' "
+                "   AND date(track_until) < date('now','localtime') "
+                " ORDER BY date(track_until) ASC"))
+
+            rec = {r[0] for r in conn.execute(
+                "SELECT DISTINCT client_id FROM client_rank_history "
+                " WHERE date(checked_at) >= date('now','localtime','-7 day')")}
+            kwn = {}
+            for r in conn.execute(
+                    "SELECT client_id, COUNT(DISTINCT keyword) n FROM client_analyses GROUP BY client_id"):
+                kwn[r[0]] = r[1]
+
+            live, dead = [], []
+            for r in rows:
+                (live if r["au"] == 1 else dead).append(r)
+
+            print(f"  총 {len(rows)}곳 — 계약 살아 있음 {len(live)}곳 · 계약도 끝남 {len(dead)}곳")
+            print()
+            print("  ── ⚠️ 계약은 살아 있는데 기간 값만 지난 곳 (기간 연장이 필요할 수 있음) ──")
+            print(f"  {'업체명':<26} {'기간 만료일':<12} {'지남':>6} {'키워드':>5} {'최근7일기록':>10}")
+            for r in live:
+                d = (today - datetime.date.fromisoformat(r["track_until"])).days
+                mark = "✅ 있음" if r["id"] in rec else "—"
+                print(f"  {(r['name'] or '')[:24]:<26} {r['track_until']:<12} {d:>4}일 "
+                      f"{kwn.get(r['id'], 0):>5} {mark:>10}")
+            print()
+            print("  ── 계약(자동분석)도 꺼져 있는 곳 (끝난 게 맞을 가능성 높음) ──")
+            print(f"  {'업체명':<26} {'기간 만료일':<12} {'지남':>6} {'키워드':>5} {'최근7일기록':>10}")
+            for r in dead:
+                d = (today - datetime.date.fromisoformat(r["track_until"])).days
+                mark = "✅ 있음" if r["id"] in rec else "—"
+                print(f"  {(r['name'] or '')[:24]:<26} {r['track_until']:<12} {d:>4}일 "
+                      f"{kwn.get(r['id'], 0):>5} {mark:>10}")
+
+            print()
+            print("[판정을 통일하면 무엇이 멈추나]")
+            uni = _keyword_universe(conn)
+            still = [r for r in rows if r["id"] in rec]
+            print(f"  기간 지난 {len(rows)}곳 중 최근 7일 안에 순위가 실제로 기록된 곳 {len(still)}곳")
+            print(f"  → 판정을 통일하면 그 {len(still)}곳의 기록이 즉시 멈춘다.")
+            print(f"  → 나머지 {len(rows) - len(still)}곳은 이미 수집이 안 돼 사실상 멈춰 있다(표시만 남음).")
+            conn.close()
+            PY
+              echo
+            fi
+            # 얹어 둔 미리보기 파일은 여기서 한 번만 지운다 — 다음 진단에 옛 코드가 남지 않게.
+            if [ "$BRANCH_CODE" = "1" ]; then
+              docker exec logic-analysis rm -f /tmp/rank_link_preview.py 2>/dev/null || true
             fi
             echo "== 최근 오류 tail =="
             docker logs --tail 60 logic-analysis 2>&1 | grep -iE 'error|exception|traceback' | tail -15 || echo "(오류 없음)"
