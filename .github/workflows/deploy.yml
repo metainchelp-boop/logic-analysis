@@ -23,6 +23,21 @@ on:
       - '**/*.md'
   workflow_dispatch:   # 수동 실행 — 시크릿 변경 반영 등
 
+# ⚠️ 배포는 한 번에 하나씩 (2026-08-27 실사고로 신설)
+#
+# 이 워크플로는 backend 폴더를 통째로 SCP 로 덮고 컨테이너를 다시 세운다. 그래서 두 배포가
+# 겹쳐 돌면 **나중에 끝난 쪽이 자기 시점의 스냅샷으로 앞 배포를 지운다.**
+#
+# 실제로 그렇게 됐다. 8/27 오전 배포 두 건이 35초 차로 겹쳐 돌아 둘 다 success 로 끝났는데,
+# 서버 /app/rank_link.py 에는 그날 배포한 함수가 없었다(진단에서 ImportError 로 드러남).
+# 런이 초록이라 아무도 몰랐고, 그날 밤 정기 갱신이 옛 규칙으로 돌 뻔했다.
+#
+# cancel-in-progress 는 **false** 다 — 취소하면 그 배포가 통째로 사라진다.
+# 뒤에 온 배포는 앞 배포가 끝날 때까지 기다렸다가 돈다(몇 분 늦을 뿐 안전하다).
+concurrency:
+  group: deploy-logic-analysis
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
