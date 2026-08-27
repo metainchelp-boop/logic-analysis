@@ -317,6 +317,37 @@ def run_maintenance(linked_by: int = 0) -> Dict[str, Any]:
     return res
 
 
+def share_targets(link_map, client_keyword_map, tracked_product_id, keyword):
+    """이 상품·이 키워드로 잰 값을 「어느 업체에 나눠 적을지」 고르는 규칙(순수 함수).
+
+    대표 지시(2026-08-27) 「순위 추적 1번만 진행하고 필요한 곳에 보내주기」의 판정부다.
+    순위는 08:00 배치가 키워드당 한 번만 잰다(유니버스가 키워드 합집합이라 원래 그렇다).
+    나뉘어 있던 건 「기록하는 자리」다 —
+      축A 쇼핑 순위 추적 화면 = rankings            (tracked_products 에 등록한 것만 보인다)
+      축B 로직 분석 업체 화면 = client_rank_history (clients.main_keywords 에 있는 것만 보인다)
+    이 표가 이미 「이 추적 상품 = 이 업체」를 알고 있으니, 잰 값을 그 짝에도 적어 주면
+    화면 둘이 같은 것을 보게 된다. 합치지 않는다 — 나눠 준다.
+
+    · link_map            {추적상품 id: [업체 id, ...]} — 자격 통과한 업체만 담겨 있다
+    · client_keyword_map  {업체 id: [그 업체가 자기 대표 상품으로 재는 키워드, ...]}
+
+    ⚠️ 배치 루프 안에 두지 않고 여기 둔 이유는 두 가지다.
+       ① 루프 안에서는 검사할 수가 없다 — 규칙이 두 곳으로 갈리면 화면에 보이는 것과
+          실제 적히는 것이 어긋난다.
+       ② 이 표(rank_link)가 「이 상품이 어느 업체 것인가」의 주인이므로, 그 답을 쓰는
+          규칙도 같은 자리에 있는 편이 다음 사람이 찾기 쉽다.
+
+    ⚠️ 그 업체가 이 키워드를 이미 자기 대표 상품으로 재고 있으면 뺀다.
+       업체 대표 상품 기준 순위가 우선이고, 덮어쓰면 종전 화면이 바뀐다(무회귀).
+    """
+    out = []
+    for cid in link_map.get(tracked_product_id, []):
+        if keyword in (client_keyword_map.get(cid) or []):
+            continue
+        out.append(cid)
+    return out
+
+
 def get_links_for_client(client_id: int) -> List[Dict[str, Any]]:
     """이 업체에 이어진 추적 상품 목록(다음 단계의 조회 통합이 쓸 입구)."""
     conn = _get_conn()

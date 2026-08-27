@@ -187,6 +187,39 @@ def test_keyword_volume_contract_fields():
         f"검색량 파싱 오류: {r0!r}"
 
 
+# ==================== 순위를 한 번만 재서 나눠 적기 (2026-08-27) ====================
+# 대표 지시 「순위 추적 1번만 진행하고 필요한 곳에 보내주기」.
+# 잘못되면 남의 업체 순위가 섞이거나, 업체 대표 상품 기준 순위가 덮여 화면이 바뀐다.
+from rank_link import share_targets  # noqa: E402
+
+
+def test_share_이어진_업체에_나눠_적는다():
+    assert share_targets({10: [100, 200]}, {}, 10, "고구마") == [100, 200]
+
+
+def test_share_안_이어진_상품은_아무데도_안_적는다():
+    assert share_targets({10: [100]}, {}, 99, "고구마") == []
+
+
+def test_share_그_업체가_이미_재는_키워드는_건드리지_않는다():
+    # 업체 100 은 「고구마」를 자기 대표 상품으로 이미 재고 있다 → 덮어쓰지 않는다(무회귀).
+    got = share_targets({10: [100, 200]}, {100: ["고구마", "밤고구마"]}, 10, "고구마")
+    assert got == [200], f"대표 상품 기준 순위를 덮어쓰려 한다: {got!r}"
+
+
+def test_share_다른_키워드는_그대로_나눠_적는다():
+    assert share_targets({10: [100]}, {100: ["고구마"]}, 10, "호박고구마") == [100]
+
+
+def test_share_자격_없는_업체는_애초에_목록에_없다():
+    # 계약이 끝난 업체는 배치가 link_map 을 만들 때 이미 걸러 낸다.
+    assert share_targets({10: []}, {}, 10, "고구마") == []
+
+
+def test_share_키워드_목록이_없어도_터지지_않는다():
+    assert share_targets({10: [100]}, {100: None}, 10, "고구마") == [100]
+
+
 if __name__ == "__main__":
     _tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     _failed = 0
