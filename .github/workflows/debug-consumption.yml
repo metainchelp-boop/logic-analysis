@@ -1,7 +1,7 @@
 name: Debug Consumption (수집 키워드 실소비 산출)
 
-# 수집 유니버스(확장이 매일 도는 대상) 중 실제 소비되는 규모를 소비 축별로 분해.
-# 범위 축소 결정용. 수동 실행 전용 · 전 쿼리 읽기 전용(SELECT) · deploy.yml paths-ignore 등재로 재배포 미유발.
+# 업체를 못 찾는 추적 상품 35개 — 누가 등록했나 (읽기 전용).
+# ⚠️ 저장소 공개 — 직원 이름·업체명·URL 전문 출력 금지(역할·집계만).
 
 on:
   workflow_dispatch:
@@ -10,91 +10,74 @@ jobs:
   consumption:
     runs-on: ubuntu-latest
     steps:
-      - name: Keyword consumption sizing (read-only)
+      - name: Orphan tracked products owner (read-only)
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          command_timeout: 90s
+          command_timeout: 180s
           script: |
-            echo "== 수집 키워드 실소비 산출 (읽기 전용) =="
             docker exec -i logic-analysis python3 - <<'PY'
-            import sqlite3
+            import sqlite3, re, sys
+            sys.path.insert(0, "/app")
             conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
             conn.row_factory = sqlite3.Row
-            c = conn.cursor()
-            _n = lambda k: "".join(str(k or "").split()).lower()
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(tracked_products)")]
+            print("[tracked_products 컬럼]", ", ".join(cols))
 
-            # 전체 수집 유니버스 = 지금 확장이 매일 도는 대상(collector._keyword_universe 재현)
-            uni = {}
-            for r in c.execute("SELECT DISTINCT keyword FROM tracked_keywords"):
-                k=(r[0] or "").strip()
-                if k: uni.setdefault(_n(k), k)
-            for r in c.execute("SELECT DISTINCT keyword FROM client_analyses"):
-                k=(r[0] or "").strip()
-                if k: uni.setdefault(_n(k), k)
-            for r in c.execute("SELECT main_keywords FROM clients WHERE status='active' "
-                               "AND COALESCE(auto_analysis,1)=1 AND COALESCE(role,'advertiser')='advertiser' "
-                               "AND COALESCE(vertical,'store')='store'"):
-                for k in (r[0] or "").split(","):
-                    k=k.strip()
-                    if k: uni.setdefault(_n(k), k)
-            U=set(uni)
-            print(f"[전체 수집 유니버스] {len(U)}개 (확장이 매일 도는 대상)")
+            def slug(u):
+                m = re.search(r"smartstore\.naver\.com/([^/?#]+)", str(u or ""))
+                return m.group(1).lower() if m else ""
 
-            def belongs(sql, *a):
-                s=set()
-                for r in c.execute(sql, a):
-                    v=r[0]
-                    if v is None: continue
-                    for part in str(v).split(","):
-                        p=_n(part)
-                        if p: s.add(p)
-                return s & U
+            bslug = set()
+            for r in conn.execute("SELECT naver_store_url FROM clients"
+                                  " WHERE status='active' AND COALESCE(vertical,'store')='store'"):
+                s = slug(r["naver_store_url"])
+                if s: bslug.add(s)
+            linked = {r[0] for r in conn.execute("SELECT DISTINCT tracked_product_id FROM rank_link")}
 
-            # 소비 축 1: 전산① portal-summary (계약상 최우선) — 활성 광고주 분석 키워드
-            adv_ids=[r[0] for r in c.execute(
-                "SELECT id FROM clients WHERE status='active' AND COALESCE(role,'advertiser')='advertiser' "
-                "AND COALESCE(vertical,'store')='store'")]
-            ph=",".join("?"*len(adv_ids)) or "NULL"
-            portal = belongs(f"SELECT DISTINCT keyword FROM client_analyses WHERE client_id IN ({ph})", *adv_ids)
-            print(f"[소비1·전산① 노출] 활성광고주 분석키워드 {len(portal)}개 — 계약상 반드시 유지")
+            orphans = []
+            for r in conn.execute("SELECT * FROM tracked_products"):
+                if r["id"] in linked: continue
+                s = slug(r["product_url"])
+                if s and s in bslug: continue      # 스토어로 이을 수 있는 것(83개)은 제외
+                orphans.append(dict(r))
+            print(f"\n[대상] 스토어로도 업체를 못 찾는 추적 상품: {len(orphans)}개")
 
-            # 소비 축 2: 최근 실제로 분석된 키워드(직원이 화면에서 본 흔적)
-            for days in (7,30,90):
-                recent = belongs(
-                    "SELECT DISTINCT keyword FROM client_analyses "
-                    "WHERE analyzed_date >= date('now','localtime',?)", f"-{days} day")
-                print(f"[소비2·최근분석] 최근 {days}일 내 분석된 키워드 {len(recent)}개")
+            ucol = "user_id" if "user_id" in cols else None
+            if ucol:
+                urole = {}
+                for r in conn.execute("SELECT id, role FROM users"):
+                    urole[r["id"]] = r["role"] or "(없음)"
+                from collections import Counter
+                by = Counter(urole.get(o.get(ucol), "(삭제된 계정)") for o in orphans)
+                print("\n[등록자 역할별]")
+                for k, v in by.most_common():
+                    print(f"  {k}: {v}개")
+            else:
+                print("\n[등록자 컬럼이 없어 역할 확인 불가]")
 
-            # 소비 축 3: 홈탭 추적상품(등록 상품이 이 키워드로 추적 중)
-            home = belongs("SELECT DISTINCT keyword FROM tracked_keywords")
-            print(f"[소비3·홈탭 추적] tracked_products 등록 키워드 {len(home)}개")
+            print("\n[등록 시점]")
+            dcol = next((c for c in ("created_at","added_at","registered_at") if c in cols), None)
+            if dcol:
+                from collections import Counter
+                by = Counter((o.get(dcol) or "")[:7] for o in orphans)
+                for k in sorted(by):
+                    print(f"  {k or '(없음)'}: {by[k]}개")
 
-            # 소비 축 4: 활성 광고주 main_keywords (담당자가 대표키워드로 지정)
-            mainkw = belongs("SELECT main_keywords FROM clients WHERE status='active' "
-                             "AND COALESCE(role,'advertiser')='advertiser' AND COALESCE(vertical,'store')='store'")
-            print(f"[소비4·대표키워드] 활성광고주 main_keywords {len(mainkw)}개")
+            print("\n[이 상품들이 물고 있는 추적 키워드 수]")
+            ids = [o["id"] for o in orphans]
+            ph = ",".join("?"*len(ids)) or "NULL"
+            n = conn.execute(f"SELECT COUNT(*) FROM tracked_keywords WHERE product_id IN ({ph})",
+                             ids).fetchone()[0] if ids else 0
+            print(f"  키워드 {n}개 — 지우면 수집 유니버스에서 그만큼 빠진다")
 
-            # 핵심 소비 합집합 = 실제로 쓰이는 것
-            core = portal | home | mainkw | belongs(
-                "SELECT DISTINCT keyword FROM client_analyses WHERE analyzed_date >= date('now','localtime','-30 day')")
-            print(f"\n[★ 핵심 소비 합집합] {len(core)}개 (전산①∪홈탭∪대표키워드∪최근30일분석)")
-            cut = len(U)-len(core)
-            print(f"[축소 여지] {cut}개 = 유니버스의 {round(cut*100/max(len(U),1))}% — 오래전 1회 분석 후 방치된 키워드")
-
-            # 방치분의 정체
-            orphan = U - core
-            stale_only = belongs(
-                "SELECT DISTINCT keyword FROM client_analyses WHERE client_id IN "
-                "(SELECT id FROM clients WHERE status!='active' OR COALESCE(role,'advertiser')!='advertiser' "
-                "OR COALESCE(auto_analysis,1)=0)") & orphan
-            print(f"  - 비활성·영업대상·자동꺼짐 업체 잔상: {len(stale_only)}개")
-            print(f"  - 그 외(90일+ 방치 등): {len(orphan)-len(stale_only)}개")
-
-            # 시간당 부하 환산
-            print(f"\n[부하 환산] 하루 페이지 이동 수 (300위·pagingSize80=4페이지 기준)")
-            for label, n in (("현재 전체", len(U)), ("핵심만", len(core)), ("전산①만", len(portal))):
-                print(f"  {label:8} {n:4}키워드 x 4 = {n*4:5}페이지/일 · 24시간 분산 시 시간당 {round(n*4/24)}")
+            print("\n[순위 기록이 쌓여 있나 — 지우면 사라지는 것]")
+            try:
+                m = conn.execute(f"SELECT COUNT(*) FROM rankings WHERE product_id IN ({ph})",
+                                 ids).fetchone()[0] if ids else 0
+                print(f"  순위 기록 {m}건")
+            except Exception as e:
+                print(f"  (순위 표 조회 실패: {e})")
             PY
