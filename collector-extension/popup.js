@@ -3,10 +3,13 @@ const $ = (id) => document.getElementById(id);
 
 async function render() {
   const { token = '', state = {}, logs = [], rawSample = null, rawSampleAd = null,
-          lastAdStat = null, readFail = null } =
+          lastAdStat = null, readFail = null, workerNo = 1, workerCount = 1 } =
     await chrome.storage.local.get(['token', 'state', 'logs', 'rawSample', 'rawSampleAd',
-                                    'lastAdStat', 'readFail']);
+                                    'lastAdStat', 'readFail', 'workerNo', 'workerCount']);
   $('token').value = token;
+  // ⚠️ 입력 중에는 덮어쓰지 않는다 — 3초마다 도는 render 가 타이핑을 지워 버린다.
+  if (document.activeElement !== $('workerNo')) $('workerNo').value = workerNo;
+  if (document.activeElement !== $('workerCount')) $('workerCount').value = workerCount;
   try {
     const v = chrome.runtime.getManifest().version;
     const ve = $('ver');
@@ -52,8 +55,16 @@ async function render() {
 }
 
 $('save').onclick = async () => {
-  await chrome.storage.local.set({ token: $('token').value.trim() });
-  alert('토큰을 저장했습니다.');
+  const wc = Math.min(9, Math.max(1, parseInt($('workerCount').value, 10) || 1));
+  const no = Math.min(wc, Math.max(1, parseInt($('workerNo').value, 10) || 1));
+  await chrome.storage.local.set({
+    token: $('token').value.trim(),
+    workerNo: no,
+    workerCount: wc,
+  });
+  alert(wc > 1
+    ? `저장했습니다. 이 기계는 ${wc}대 중 ${no}번 몫만 수집합니다.`
+    : '저장했습니다. 이 기계가 전량을 수집합니다.');
   render();
 };
 $('run').onclick = () => chrome.runtime.sendMessage({ cmd: 'run' }, () => setTimeout(render, 600));

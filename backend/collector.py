@@ -20,6 +20,8 @@ import logging
 from datetime import date, datetime
 from typing import List, Optional
 
+from split_rule import split_ok as _split_ok, normalize as _split_norm
+
 from fastapi import APIRouter, HTTPException, Header, Depends
 from auth import get_current_user
 from pydantic import BaseModel
@@ -219,11 +221,15 @@ def _keyword_universe(conn):
 
 
 @router.get("/keywords")
-def get_collect_keywords(hour: int = None, x_collector_token: str = Header(None)):
+def get_collect_keywords(hour: int = None, worker: int = 0, workers: int = 1,
+                         x_collector_token: str = Header(None)):
     """확장이 **이번 시간대에** 수집할 키워드를 받아간다.
 
     hour 를 주면 그 시간대 슬롯 + 오늘 지나간 슬롯 중 아직 못 한 것(밀린 것)을 함께 준다.
     hour 를 안 주면 종전대로 오늘 남은 전량을 준다(구버전 확장 호환 — 무회귀).
+
+    worker/workers 를 주면 그 기계 몫만 준다(2대 이상 나눠 돌릴 때).
+    안 주면 workers=1 이라 전량 — 지금 돌고 있는 1대는 아무것도 안 바뀐다.
     """
     _auth(x_collector_token)
     today = _effective_date()
@@ -234,6 +240,13 @@ def get_collect_keywords(hour: int = None, x_collector_token: str = Header(None)
         done = {r["keyword"] for r in conn.execute(
             "SELECT keyword FROM collected_serp WHERE collected_date = ?", (today,)).fetchall()}
         remaining = {k: p for k, p in uni.items() if k not in done}
+
+        # ── 기계별로 나눠 맡기 (2026-08-27) ──
+        # ⚠️ '오늘 할 일'을 세는 total 은 나누기 **전** 값을 쓴다 —
+        #    화면에 「전체 866」이라고 떠야 사람이 전체 진척을 읽는다.
+        w, wc = _split_norm(worker, workers)
+        if wc > 1:
+            remaining = {k: p for k, p in remaining.items() if _split_ok(k, w, wc)}
 
         if hour is None:
             todo = sorted(remaining)[:MAX_KEYWORDS]
@@ -259,6 +272,7 @@ def get_collect_keywords(hour: int = None, x_collector_token: str = Header(None)
         return {"success": True, "date": today, "mode": "hourly", "hour": h,
                 "total": len(uni), "done": len(done),
                 "slot": len(now_slot), "overdue": len(overdue),
+                "worker": w, "workers": wc,
                 "todo": len(picked), "keywords": picked}
     finally:
         conn.close()
@@ -519,10 +533,15 @@ def load_collected(keyword: str, on_date: Optional[str] = None) -> Optional[dict
 # ==================== 4) 주간 온디맨드 요청 큐 ====================
 
 @router.get("/requests")
-def get_pending_requests(x_collector_token: str = Header(None)):
+def get_pending_requests(worker: int = 0, workers: int = 1,
+                         x_collector_token: str = Header(None)):
     """확장이 1분 주기로 폴링 — 직원이 낮에 새 키워드를 분석하면 여기 쌓인다.
 
     소량(상한 10)만 내려 IP 부하를 묶는다. 수집·업로드되면 upload_serp 가 done 처리.
+
+    ⚠️ 이 큐도 기계별로 나눠야 한다(2026-08-27). 두 대가 같은 큐를 보면
+       같은 키워드를 각각 받아 **5회 재시도 한도를 2.5회 만에 태운다** —
+       실제로는 절반만 시도하고 포기하게 된다. 순위 목록만 나누면 안 되는 이유다.
     """
     _auth(x_collector_token)
     conn = sqlite3.connect(DB_PATH, timeout=10)
@@ -535,12 +554,15 @@ def get_pending_requests(x_collector_token: str = Header(None)):
         # 전달 5회가 넘도록 수집이 안 된 키워드(오타·결과 0건)는 제외 — 1분마다 영원히
         # 재시도해 네이버를 계속 두드리는 폭주를 막는다. 직원이 그 키워드를 다시 분석하면
         # _enqueue_request 가 attempts 를 리셋해 5회 더 시도한다.
+        w, wc = _split_norm(worker, workers)
+        # 나눠 맡을 때는 걸러낸 뒤 10개가 되도록 넉넉히 읽는다(그냥 LIMIT 10 이면
+        # 앞 10개가 전부 남의 몫일 때 자기 몫이 있는데도 빈손으로 돌아간다).
         rows = conn.execute("""
             SELECT keyword FROM collect_requests
             WHERE status='pending' AND attempts < 5
-            ORDER BY requested_at ASC LIMIT 10
-        """).fetchall()
-        kws = [r["keyword"] for r in rows]
+            ORDER BY requested_at ASC LIMIT ?
+        """, (10 if wc <= 1 else 200,)).fetchall()
+        kws = [r["keyword"] for r in rows if _split_ok(r["keyword"], w, wc)][:10]
         if kws:
             conn.executemany(
                 "UPDATE collect_requests SET attempts = attempts + 1 WHERE keyword=?",
