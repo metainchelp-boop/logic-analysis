@@ -16,7 +16,13 @@
      보여 「안 바뀌었다」는 오판을 부른다(2026-08-12 플레이스 추적기 실사고). -->
 <div id="ver" style="margin:-6px 0 10px;font-size:11.5px;color:#64748b"></div>
 <div class="row">
-  <input id="token" type="password" placeholder="수집기 토큰 붙여넣기">
+  <div style="display:flex;gap:6px;align-items:center">
+    <input id="token" type="password" placeholder="수집기 토큰 붙여넣기" style="flex:1">
+    <!-- 다른 기계에 옮겨 적으려면 눈으로 봐야 한다(2026-08-27).
+         종전엔 password 칸이라 저장된 토큰을 꺼낼 방법이 개발자도구뿐이었다. -->
+    <button id="peek" type="button" title="토큰 보기"
+            style="padding:6px 10px;border:1px solid #e2e8f0;border-radius:7px;background:#fff;cursor:pointer">👁</button>
+  </div>
 
   <!-- 여러 대로 나눠 돌릴 때만 쓴다. 1대면 그대로 두면 된다(2026-08-27). -->
   <div style="margin-top:10px;padding:10px;border:1px solid #e2e8f0;border-radius:8px;background:#f8fafc">

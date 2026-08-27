@@ -67,6 +67,15 @@ $('save').onclick = async () => {
     : '저장했습니다. 이 기계가 전량을 수집합니다.');
   render();
 };
+// 토큰을 다른 기계에 옮겨 적을 때 — 눌러서 보고, 다시 누르면 가린다.
+$('peek').onclick = () => {
+  const el = $('token');
+  const showing = el.type === 'text';
+  el.type = showing ? 'password' : 'text';
+  $('peek').textContent = showing ? '👁' : '🙈';
+  if (!showing) { el.select(); }   // 바로 복사할 수 있게
+};
+
 $('run').onclick = () => chrome.runtime.sendMessage({ cmd: 'run' }, () => setTimeout(render, 600));
 $('refresh').onclick = render;
 render();
