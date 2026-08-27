@@ -26,6 +26,10 @@ on:
         description: '추적 기간 지난 업체 목록 — off(기본) / on. 계약 살아 있는 곳과 끝난 곳을 갈라서 전수 출력(읽기 전용). ⚠️ 업체명이 실행 로그에 남는다 — 이 저장소는 공개이므로 결과를 받은 뒤 그 런의 로그를 삭제할 것.'
         required: false
         default: 'off'
+      orphans:
+        description: '주인 없는 추적 상품 목록 — off(기본) / on. 어느 업체에도 안 이어진 추적 상품을 전수 출력(읽기 전용). ⚠️ 상품명·가게명이 실행 로그에 남는다 — 이 저장소는 공개이므로 결과를 받은 뒤 그 런의 로그를 삭제할 것.'
+        required: false
+        default: 'off'
       use_branch_code:
         description: '이 브랜치의 rank_link.py 로 미리보기 — off(기본) / on. 배포 전에 새 규칙이 무엇을 이을지 먼저 보려는 용도(컨테이너 /tmp 에 얹었다 지운다·앱 파일 무접촉). apply 와 함께 쓰지 말 것.'
         required: false
@@ -50,9 +54,10 @@ jobs:
           IN_CAPACITY: ${{ github.event.inputs.capacity }}
           IN_STRUCTURE: ${{ github.event.inputs.structure }}
           IN_EXPIRED: ${{ github.event.inputs.expired }}
+          IN_ORPHANS: ${{ github.event.inputs.orphans }}
           IN_BRANCH_CODE: ${{ github.event.inputs.use_branch_code }}
         with:
-          envs: RL_SRC_GZ,IN_COLLECTOR,IN_RANK_LINK,IN_CAPACITY,IN_STRUCTURE,IN_EXPIRED,IN_BRANCH_CODE
+          envs: RL_SRC_GZ,IN_COLLECTOR,IN_RANK_LINK,IN_CAPACITY,IN_STRUCTURE,IN_EXPIRED,IN_ORPHANS,IN_BRANCH_CODE
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
@@ -799,6 +804,71 @@ jobs:
             print(f"  기간 지난 {len(rows)}곳 중 최근 7일 안에 순위가 실제로 기록된 곳 {len(still)}곳")
             print(f"  → 판정을 통일하면 그 {len(still)}곳의 기록이 즉시 멈춘다.")
             print(f"  → 나머지 {len(rows) - len(still)}곳은 이미 수집이 안 돼 사실상 멈춰 있다(표시만 남음).")
+            conn.close()
+            PY
+              echo
+            fi
+            if [ "$IN_ORPHANS" = "on" ]; then
+              echo "== 주인 없는 추적 상품 (읽기 전용) =="
+              docker exec -i logic-analysis python3 - <<'PY'
+            import sys
+            sys.path.insert(0, "/app")
+            import sqlite3
+
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+
+            print("[어느 업체에도 안 이어진 추적 상품 — 전수]")
+            print("  ⚠️ 상품명·가게명이 실린다. 이 저장소는 공개이므로 결과를 받은 뒤 이 런의 로그를 삭제할 것.")
+
+            # rank_link 에 없는 tracked_products
+            rows = list(conn.execute("""
+                SELECT tp.id, tp.product_name, tp.store_name, tp.product_id AS pno,
+                       tp.created_at, tp.user_id,
+                       COALESCE(u.name, u.username, '') AS uname,
+                       COALESCE(u.role, '') AS urole,
+                       (SELECT COUNT(*) FROM tracked_keywords tk WHERE tk.product_id = tp.id) AS kwn,
+                       (SELECT MAX(r.checked_at) FROM rankings r WHERE r.product_id = tp.id) AS last_rec
+                  FROM tracked_products tp
+                  LEFT JOIN users u ON u.id = tp.user_id
+                 WHERE tp.id NOT IN (SELECT tracked_product_id FROM rank_link)
+                 ORDER BY COALESCE(u.name, u.username, ''), tp.created_at
+            """))
+            total = conn.execute("SELECT COUNT(*) FROM tracked_products").fetchone()[0]
+            linked = conn.execute("SELECT COUNT(DISTINCT tracked_product_id) FROM rank_link").fetchone()[0]
+            print(f"  추적 상품 전체 {total}개 · 업체와 이어진 것 {linked}개 · 주인 없는 것 {len(rows)}개")
+            print()
+            print(f"  {'번호':>4} {'등록자':<10} {'가게명':<18} {'상품명':<34} {'키워드':>4} {'최근기록':<12} {'등록일':<11}")
+            for r in rows:
+                last = (r["last_rec"] or "")[:10] or "없음"
+                print(f"  {r['id']:>4} {(r['uname'] or '(모름)')[:9]:<10} "
+                      f"{(r['store_name'] or '')[:17]:<18} {(r['product_name'] or '')[:33]:<34} "
+                      f"{r['kwn']:>4} {last:<12} {(r['created_at'] or '')[:10]:<11}")
+
+            print()
+            print("[등록자별 요약 — 누구 것을 통째로 정리할지 판단용]")
+            agg = {}
+            for r in rows:
+                k = (r["uname"] or "(모름)", r["urole"] or "")
+                a = agg.setdefault(k, {"n": 0, "kw": 0, "rec": 0})
+                a["n"] += 1
+                a["kw"] += r["kwn"]
+                if r["last_rec"]:
+                    a["rec"] += 1
+            for (nm, ro), a in sorted(agg.items(), key=lambda x: -x[1]["n"]):
+                print(f"  {nm[:14]:<15} ({ro or '권한없음':<9}) 상품 {a['n']:>3}개 · 키워드 {a['kw']:>3}개 "
+                      f"· 순위 기록 있는 상품 {a['rec']:>3}개")
+
+            print()
+            print("[이 상품들이 유니버스에 얹는 몫]")
+            kws = set()
+            for r in conn.execute("""
+                SELECT DISTINCT tk.keyword FROM tracked_keywords tk
+                 WHERE tk.product_id NOT IN (SELECT tracked_product_id FROM rank_link)"""):
+                if r[0] and r[0].strip():
+                    kws.add(r[0].strip())
+            print(f"  주인 없는 상품이 끌고 오는 키워드 {len(kws)}개")
+            print("  → 정리하면 그만큼 매일 수집할 양이 줄어든다(다른 데서 같은 키워드를 쓰면 안 줄 수도 있다).")
             conn.close()
             PY
               echo
