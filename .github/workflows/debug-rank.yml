@@ -23,7 +23,7 @@ on:
         required: false
         default: 'off'
       expired:
-        description: '추적 기간 지난 업체 목록 — off(기본) / on. 계약 살아 있는 곳과 끝난 곳을 갈라서 전수 출력(읽기 전용).'
+        description: '추적 기간 지난 업체 목록 — off(기본) / on. 계약 살아 있는 곳과 끝난 곳을 갈라서 전수 출력(읽기 전용). ⚠️ 업체명이 실행 로그에 남는다 — 이 저장소는 공개이므로 결과를 받은 뒤 그 런의 로그를 삭제할 것.'
         required: false
         default: 'off'
       use_branch_code:
@@ -751,6 +751,8 @@ jobs:
             today = datetime.date.today()
 
             print("[추적 기간이 지난 업체 — 전수]")
+            print("  ⚠️ 이 목록에는 업체명이 실린다. 이 저장소는 공개이므로 "
+                  "결과를 받은 뒤 이 런의 로그를 삭제할 것.")
             print("  ⚠️ 계약 상태(자동분석)와 기간 값이 어긋나는지가 판단의 핵심이라 두 갈래로 가른다.")
             rows = list(conn.execute(
                 "SELECT id, name, track_until, COALESCE(auto_analysis,1) au, "
