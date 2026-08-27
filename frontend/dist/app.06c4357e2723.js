@@ -13120,6 +13120,14 @@ window.ClientListSection = function ClientListSection({
   var attnOnly = _s8[0];
   var setAttnOnly = _s8[1]; // ⚠️ 주의만 보기
 
+  /* 추적 상태 필터(2026-08-27 대표 지시) — null=전체 / 'on'=추적 중 / 'off'=꺼짐.
+     ⚠️ 라벨을 「진행중」으로 쓰지 말 것 — 전산의 계약 단계 이름과 겹친다.
+        여기 '추적 중'은 전산 단계 「진행중 · 전략 관리 · 사후 관리」 셋을 합친 것이라,
+        같은 말을 쓰면 「진행중만 걸렀는데 전략 관리 업체가 나온다」가 된다.
+     판정 축은 카드 버튼과 같은 auto_analysis 하나 — 두 곳이 갈리면 배지와 필터가 어긋난다. */
+  var _s9 = useState(null);
+  var trackFilter = _s9[0];
+  var setTrackFilter = _s9[1];
   useEffect(function () {
     api.get('/cd/rank-overview').then(function (res) {
       if (res && res.success && res.data) {
@@ -13295,6 +13303,9 @@ window.ClientListSection = function ClientListSection({
     // 담당자 탭 필터 (null = 전체)
     if (mgrFilter && (c.manager_name || '(미지정)') !== mgrFilter) return false;
     if (attnOnly && !isAttention(c)) return false;
+    // 추적 상태 — 카드 버튼과 같은 판정(auto_analysis === 0 이면 꺼짐)
+    if (trackFilter === 'on' && c.auto_analysis === 0) return false;
+    if (trackFilter === 'off' && c.auto_analysis !== 0) return false;
     if (!query.trim()) return true;
     var q = query.trim().toLowerCase();
     return (c.name || '').toLowerCase().indexOf(q) !== -1 || (c.main_keywords || '').toLowerCase().indexOf(q) !== -1;
@@ -13426,6 +13437,58 @@ window.ClientListSection = function ClientListSection({
     }, kpi('내 업체', clients.length, null), kpi('오늘 자동 분석', analyzedToday, '보고서 생성됨'), hasOv && kpi('상승 키워드', '▲ ' + upTotal, '전일 대비', '#16a34a'), hasOv && kpi('주의 필요', attn, attnOnly ? '필터 적용 중 — 클릭 해제' : '노출 0 — 클릭 시 필터', '#b45309', function () {
       setAttnOnly(!attnOnly);
     }, attnOnly));
+  }(),
+  /* 추적 상태 필터 (2026-08-27 대표 지시) — 계약이 끝난 업체를 목록에서 갈라 본다.
+     ⚠️ 영업사원(viewer)에게는 안 띄운다 — 그 화면은 영업 대상(prospect)만 보이는데,
+        자동 추적은 광고주(advertiser)에게만 도는 개념이라 늘 '추적 중'으로만 보인다. */
+  !loading && clients.length > 0 && currentUser && currentUser.role !== 'viewer' && function () {
+    var onN = 0,
+      offN = 0;
+    clients.forEach(function (c) {
+      if (c.auto_analysis === 0) offN++;else onN++;
+    });
+    var mkTab = function (label, val, count, color, bg, border) {
+      var on = trackFilter === val;
+      return React.createElement('button', {
+        key: label,
+        onClick: function () {
+          setTrackFilter(on ? null : val);
+        },
+        style: {
+          fontSize: 12,
+          fontWeight: 700,
+          padding: '6px 12px',
+          borderRadius: 999,
+          cursor: 'pointer',
+          whiteSpace: 'nowrap',
+          border: '1px solid ' + (on ? color : border),
+          background: on ? color : bg,
+          color: on ? '#fff' : color
+        }
+      }, label + ' ' + count);
+    };
+    return React.createElement('div', {
+      style: {
+        display: 'flex',
+        gap: 8,
+        flexWrap: 'wrap',
+        alignItems: 'center',
+        marginBottom: 16
+      }
+    }, React.createElement('span', {
+      style: {
+        fontSize: 12,
+        color: '#94a3b8',
+        fontWeight: 700,
+        marginRight: 2
+      }
+    }, '추적 상태'), mkTab('전체', null, clients.length, '#475569', '#f8fafc', '#e2e8f0'), mkTab('▶ 추적 중', 'on', onN, '#047857', '#ecfdf5', '#a7f3d0'), mkTab('⏸ 꺼짐', 'off', offN, '#b45309', '#fffbeb', '#fcd34d'), React.createElement('span', {
+      style: {
+        fontSize: 11,
+        color: '#94a3b8',
+        marginLeft: 2
+      }
+    }, '⏸ = 계약 만료·환불중·홀딩중 (매일 04시 전산 반영) + 직접 끈 것'));
   }(), /* 담당자별 구분 탭 (상위 계정 전용) — 클릭 시 해당 담당자 업체만 모아보기 */
   isAdmin && !loading && clients.length > 0 && function () {
     var counts = {};
@@ -13510,7 +13573,9 @@ window.ClientListSection = function ClientListSection({
       fontSize: 12,
       color: '#94a3b8'
     }
-  }, '상단에서 직접 키워드를 입력해 분석하거나, 업체관리 탭에서 업체를 먼저 등록해주세요.')), /* 검색 결과 없음 */
+  }, '상단에서 직접 키워드를 입력해 분석하거나, 업체관리 탭에서 업체를 먼저 등록해주세요.')),
+  /* 결과 없음 — 필터 때문인지 검색 때문인지 갈라서 알려준다.
+     「검색 결과가 없습니다」만 뜨면 필터를 켜 둔 걸 잊고 데이터가 없다고 오해한다. */
   !loading && filtered.length === 0 && clients.length > 0 && React.createElement('div', {
     style: {
       textAlign: 'center',
@@ -13518,7 +13583,22 @@ window.ClientListSection = function ClientListSection({
       color: '#94a3b8',
       fontSize: 13
     }
-  }, '검색 결과가 없습니다.'), /* 업체 카드 그리드 */
+  }, trackFilter ? React.createElement(React.Fragment, null, React.createElement('div', null, (trackFilter === 'on' ? '▶ 추적 중' : '⏸ 꺼짐') + ' 필터에 해당하는 업체가 없습니다.'), React.createElement('button', {
+    onClick: function () {
+      setTrackFilter(null);
+    },
+    style: {
+      marginTop: 10,
+      fontSize: 12,
+      fontWeight: 700,
+      padding: '6px 14px',
+      borderRadius: 999,
+      border: '1px solid #cbd5e1',
+      background: '#fff',
+      color: '#475569',
+      cursor: 'pointer'
+    }
+  }, '필터 해제')) : '검색 결과가 없습니다.'), /* 업체 카드 그리드 */
   !loading && filtered.length > 0 && React.createElement('div', {
     style: {
       display: 'grid',
