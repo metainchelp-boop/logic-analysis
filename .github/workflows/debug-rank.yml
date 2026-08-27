@@ -941,15 +941,15 @@ jobs:
               docker exec logic-analysis rm -f /tmp/rank_link_preview.py 2>/dev/null || true
             fi
             echo "== 배포 반영 확인 (서버 파일이 main 과 같은가) =="
-            for f in rank_link.py scheduler.py; do
+            for f in rank_link.py scheduler.py collector.py split_rule.py; do
               echo "-- $f --"
               docker exec logic-analysis sh -c "ls -l --time-style=+%Y-%m-%d\ %H:%M /app/$f; md5sum /app/$f" 2>/dev/null || echo "  (조회 실패)"
             done
-            echo "-- 어제 배포분 표지 --"
+            echo "-- 배포분 표지 --"
             docker exec logic-analysis sh -c "grep -c '_store_key' /app/rank_link.py" 2>/dev/null \
               | sed 's/^/  rank_link.py 안 _store_key 등장 횟수: /'
-            docker exec logic-analysis sh -c "grep -c 'trackFilter' /app/frontend/js/components/ClientListSection.jsx" 2>/dev/null \
-              | sed 's/^/  ClientListSection.jsx 안 trackFilter 등장 횟수: /'
+            docker exec logic-analysis sh -c "grep -c 'split_ok' /app/collector.py" 2>/dev/null \
+              | sed 's/^/  collector.py 안 split_ok 등장 횟수(2대 분할): /'
             echo
 
             echo "== 최근 오류 tail =="
