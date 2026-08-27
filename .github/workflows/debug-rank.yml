@@ -825,16 +825,34 @@ jobs:
             # ⚠️ 오늘 밤 01:20 정기 갱신이 자동으로 이을 것을 먼저 갈라낸다.
             #    안 가르면 대표가 「곧 저절로 이어질 것」까지 손으로 확인하게 된다(헛수고).
             will_link = set()
+            b_by_store = {}
+            store_of = {}      # {추적상품 id: 가게 슬러그}
             try:
-                from rank_link import _collect_candidates, _pairs, _get_conn
+                from rank_link import _collect_candidates, _pairs, _get_conn, _store_key
                 _c = _get_conn()
                 try:
-                    for _p in _pairs(_collect_candidates(_c)):
+                    _cand = _collect_candidates(_c)
+                    for _p in _pairs(_cand):
                         will_link.add(_p["tracked_product_id"])
+                    b_by_store = _cand.get("b_by_store") or {}
                 finally:
                     _c.close()
+                for _r in conn.execute("SELECT id, product_url FROM tracked_products"):
+                    store_of[_r[0]] = _store_key(_r[1] or "")
             except Exception as _pe:
                 print(f"  (자동 연결 예정 계산 실패 — 전량을 사람 확인 대상으로 본다: {_pe})")
+
+            def _why(pid):
+                """왜 안 이어지는지 — 사유마다 대표가 할 일이 다르다."""
+                sk = store_of.get(pid) or ""
+                if not sk:
+                    return "주소판독불가"          # 스마트스토어 주소가 아니거나 형식이 다름
+                n = len(b_by_store.get(sk) or [])
+                if n == 0:
+                    return "업체없음"              # 그 가게가 로직분석 업체로 등록돼 있지 않다
+                if n == 1:
+                    return "곧연결"                # 오늘 밤 01:20 에 저절로 이어진다
+                return f"업체{n}곳"                # 같은 가게에 업체가 여럿 — 사람이 골라야 한다
 
             rows = list(conn.execute("""
                 SELECT tp.id, tp.product_name, tp.store_name, tp.product_id AS pno,
@@ -856,12 +874,25 @@ jobs:
             print(f"  · 오늘 밤 01:20 에 저절로 이어질 것 {len(auto)}개 — 손댈 필요 없다")
             print(f"  · 그래도 주인을 모르는 것 {len(rows)}개 ← 사람이 봐야 하는 목록")
             print()
-            print(f"  {'번호':>4} {'등록자':<10} {'가게명':<18} {'상품명':<34} {'키워드':>4} {'최근기록':<12} {'등록일':<11}")
+            print(f"  {'번호':>4} {'사유':<12} {'등록자':<10} {'가게명':<18} {'상품명':<30} {'키워드':>4} {'최근기록':<11}")
             for r in rows:
                 last = (r["last_rec"] or "")[:10] or "없음"
-                print(f"  {r['id']:>4} {(r['uname'] or '(모름)')[:9]:<10} "
-                      f"{(r['store_name'] or '')[:17]:<18} {(r['product_name'] or '')[:33]:<34} "
-                      f"{r['kwn']:>4} {last:<12} {(r['created_at'] or '')[:10]:<11}")
+                print(f"  {r['id']:>4} {_why(r['id']):<12} {(r['uname'] or '(모름)')[:9]:<10} "
+                      f"{(r['store_name'] or '')[:17]:<18} {(r['product_name'] or '')[:29]:<30} "
+                      f"{r['kwn']:>4} {last:<11}")
+
+            print()
+            print("[사유별 요약 — 사유마다 할 일이 다르다]")
+            _agg2 = {}
+            for r in rows:
+                _agg2[_why(r["id"])] = _agg2.get(_why(r["id"]), 0) + 1
+            _guide = {
+                "업체없음": "그 가게가 로직 분석 업체로 등록돼 있지 않다 → 업체를 만들거나, 안 쓰면 지운다",
+                "주소판독불가": "스마트스토어 주소 형식이 아니다 → 주소를 고치거나 지운다",
+                "곧연결": "오늘 밤 01:20 에 저절로 이어진다 → 손댈 필요 없다",
+            }
+            for k, v in sorted(_agg2.items(), key=lambda x: -x[1]):
+                print(f"  {k:<12} {v:>4}개  {_guide.get(k, '같은 가게에 업체가 여럿 — 화면에서 사람이 고른다')}")
 
             print()
             print("[등록자별 요약 — 누구 것을 통째로 정리할지 판단용]")
