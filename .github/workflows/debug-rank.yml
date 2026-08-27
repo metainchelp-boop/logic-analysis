@@ -822,6 +822,20 @@ jobs:
             print("  ⚠️ 상품명·가게명이 실린다. 이 저장소는 공개이므로 결과를 받은 뒤 이 런의 로그를 삭제할 것.")
 
             # rank_link 에 없는 tracked_products
+            # ⚠️ 오늘 밤 01:20 정기 갱신이 자동으로 이을 것을 먼저 갈라낸다.
+            #    안 가르면 대표가 「곧 저절로 이어질 것」까지 손으로 확인하게 된다(헛수고).
+            will_link = set()
+            try:
+                from rank_link import _collect_candidates, _pairs, _get_conn
+                _c = _get_conn()
+                try:
+                    for _p in _pairs(_collect_candidates(_c)):
+                        will_link.add(_p["tracked_product_id"])
+                finally:
+                    _c.close()
+            except Exception as _pe:
+                print(f"  (자동 연결 예정 계산 실패 — 전량을 사람 확인 대상으로 본다: {_pe})")
+
             rows = list(conn.execute("""
                 SELECT tp.id, tp.product_name, tp.store_name, tp.product_id AS pno,
                        tp.created_at, tp.user_id,
@@ -836,7 +850,11 @@ jobs:
             """))
             total = conn.execute("SELECT COUNT(*) FROM tracked_products").fetchone()[0]
             linked = conn.execute("SELECT COUNT(DISTINCT tracked_product_id) FROM rank_link").fetchone()[0]
-            print(f"  추적 상품 전체 {total}개 · 업체와 이어진 것 {linked}개 · 주인 없는 것 {len(rows)}개")
+            auto = [r for r in rows if r["id"] in will_link]
+            rows = [r for r in rows if r["id"] not in will_link]
+            print(f"  추적 상품 전체 {total}개 · 업체와 이어진 것 {linked}개")
+            print(f"  · 오늘 밤 01:20 에 저절로 이어질 것 {len(auto)}개 — 손댈 필요 없다")
+            print(f"  · 그래도 주인을 모르는 것 {len(rows)}개 ← 사람이 봐야 하는 목록")
             print()
             print(f"  {'번호':>4} {'등록자':<10} {'가게명':<18} {'상품명':<34} {'키워드':>4} {'최근기록':<12} {'등록일':<11}")
             for r in rows:
