@@ -376,6 +376,13 @@ class ProductAddRequest(BaseModel):
     # 분석 화면에서 이미 확보한 실제 스토어명(상세 HTML·광고주 리포트) — 등록 시
     # 쇼핑 검색으로 이름을 못 구해 URL 슬러그가 저장되는 문제의 예방 힌트(선택)
     store_name_hint: Optional[str] = None
+    # 이 상품이 어느 업체 것인지 (2026-08-27 대표 지시).
+    # ⚠️ 종전엔 이 칸 자체가 없어 **등록하는 순간부터 주인이 없는** 상품이 생겼다.
+    #    그렇게 쌓인 것이 126개고, 주인을 모르면 계약이 끝나도 뺄 근거가 없어
+    #    영원히 순위를 잰다. 그래서 등록 자리에서 업체를 함께 받는다.
+    # ⚠️ 서버에서 필수로 막지는 않는다 — 옛 화면(브라우저 캐시)이 이 값을 안 보내면
+    #    등록이 통째로 막힌다. 대신 못 이으면 응답에 그 사실을 실어 화면이 경고한다.
+    client_id: Optional[int] = None
 
     @field_validator('product_url')
     @classmethod
@@ -683,6 +690,16 @@ def track_product(req: ProductAddRequest, background_tasks: BackgroundTasks, cur
             kid = add_tracked_keyword(db_product_id, kw)
             keyword_ids.append({"keyword": kw, "keyword_id": kid})
 
+        # ── 등록하는 자리에서 업체와 이어 둔다 (2026-08-27 대표 지시) ──
+        # 주인을 모르는 상품은 계약이 끝나도 뺄 근거가 없어 영원히 순위를 잰다.
+        # 실패해도 등록은 그대로 성립시키고, 못 이었다는 사실만 화면에 돌려준다.
+        link = {"linked": False, "client_id": None, "method": None, "reason": ""}
+        try:
+            from rank_link import link_on_register
+            link = link_on_register(db_product_id, req.client_id, current_user["id"])
+        except Exception as _le:
+            logger.warning(f"등록 시 업체 연결 실패(등록은 성립): {_le}")
+
         # 백그라운드에서 첫 순위 체크 실행
         background_tasks.add_task(
             run_initial_rank_check, db_product_id, req.product_url, keyword_ids
@@ -694,6 +711,7 @@ def track_product(req: ProductAddRequest, background_tasks: BackgroundTasks, cur
                 "product_id": db_product_id,
                 "product_info": product_info,
                 "keywords": keyword_ids,
+                "link": link,
                 "message": "상품이 등록되었습니다. 첫 순위 체크를 시작합니다."
             }
         }
