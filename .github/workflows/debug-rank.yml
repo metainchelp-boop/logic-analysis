@@ -22,6 +22,10 @@ on:
         description: '구조 진단 — off(기본) / on. 자격 판정이 무엇을 거르는지 · 유니버스 868개의 출처 · 새는 곳 2군데 규모 · 이상적 분산(읽기 전용).'
         required: false
         default: 'off'
+      expired:
+        description: '추적 기간 지난 업체 목록 — off(기본) / on. 계약 살아 있는 곳과 끝난 곳을 갈라서 전수 출력(읽기 전용).'
+        required: false
+        default: 'off'
       use_branch_code:
         description: '이 브랜치의 rank_link.py 로 미리보기 — off(기본) / on. 배포 전에 새 규칙이 무엇을 이을지 먼저 보려는 용도(컨테이너 /tmp 에 얹었다 지운다·앱 파일 무접촉). apply 와 함께 쓰지 말 것.'
         required: false
@@ -45,9 +49,10 @@ jobs:
           IN_RANK_LINK: ${{ github.event.inputs.rank_link }}
           IN_CAPACITY: ${{ github.event.inputs.capacity }}
           IN_STRUCTURE: ${{ github.event.inputs.structure }}
+          IN_EXPIRED: ${{ github.event.inputs.expired }}
           IN_BRANCH_CODE: ${{ github.event.inputs.use_branch_code }}
         with:
-          envs: RL_SRC_GZ,IN_COLLECTOR,IN_RANK_LINK,IN_CAPACITY,IN_STRUCTURE,IN_BRANCH_CODE
+          envs: RL_SRC_GZ,IN_COLLECTOR,IN_RANK_LINK,IN_CAPACITY,IN_STRUCTURE,IN_EXPIRED,IN_BRANCH_CODE
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
@@ -729,6 +734,69 @@ jobs:
             print("  " + " ".join(f"{h}시:{slot[h]}" for h in range(24)))
             print("  ⇒ 어느 시간대도 상한을 넘지 않는다 = 서버가 목록을 줄이는 게 아니라,")
             print("     기계가 그 시간대에 다 못 하고 있다(50분 예산 중 11분만 사용).")
+            conn.close()
+            PY
+              echo
+            fi
+            if [ "$IN_EXPIRED" = "on" ]; then
+              echo "== 추적 기간 지난 업체 (읽기 전용) =="
+              docker exec -i logic-analysis python3 - <<'PY'
+            import sys, datetime
+            sys.path.insert(0, "/app")
+            import sqlite3
+            from collector import _keyword_universe, _tracking_client_ids
+
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            today = datetime.date.today()
+
+            print("[추적 기간이 지난 업체 — 전수]")
+            print("  ⚠️ 계약 상태(자동분석)와 기간 값이 어긋나는지가 판단의 핵심이라 두 갈래로 가른다.")
+            rows = list(conn.execute(
+                "SELECT id, name, track_until, COALESCE(auto_analysis,1) au, "
+                "       COALESCE(track_enabled,1) te, COALESCE(role,'advertiser') ro, status "
+                "  FROM clients "
+                " WHERE track_until IS NOT NULL AND track_until <> '' "
+                "   AND date(track_until) < date('now','localtime') "
+                " ORDER BY date(track_until) ASC"))
+
+            rec = {r[0] for r in conn.execute(
+                "SELECT DISTINCT client_id FROM client_rank_history "
+                " WHERE date(checked_at) >= date('now','localtime','-7 day')")}
+            kwn = {}
+            for r in conn.execute(
+                    "SELECT client_id, COUNT(DISTINCT keyword) n FROM client_analyses GROUP BY client_id"):
+                kwn[r[0]] = r[1]
+
+            live, dead = [], []
+            for r in rows:
+                (live if r["au"] == 1 else dead).append(r)
+
+            print(f"  총 {len(rows)}곳 — 계약 살아 있음 {len(live)}곳 · 계약도 끝남 {len(dead)}곳")
+            print()
+            print("  ── ⚠️ 계약은 살아 있는데 기간 값만 지난 곳 (기간 연장이 필요할 수 있음) ──")
+            print(f"  {'업체명':<26} {'기간 만료일':<12} {'지남':>6} {'키워드':>5} {'최근7일기록':>10}")
+            for r in live:
+                d = (today - datetime.date.fromisoformat(r["track_until"])).days
+                mark = "✅ 있음" if r["id"] in rec else "—"
+                print(f"  {(r['name'] or '')[:24]:<26} {r['track_until']:<12} {d:>4}일 "
+                      f"{kwn.get(r['id'], 0):>5} {mark:>10}")
+            print()
+            print("  ── 계약(자동분석)도 꺼져 있는 곳 (끝난 게 맞을 가능성 높음) ──")
+            print(f"  {'업체명':<26} {'기간 만료일':<12} {'지남':>6} {'키워드':>5} {'최근7일기록':>10}")
+            for r in dead:
+                d = (today - datetime.date.fromisoformat(r["track_until"])).days
+                mark = "✅ 있음" if r["id"] in rec else "—"
+                print(f"  {(r['name'] or '')[:24]:<26} {r['track_until']:<12} {d:>4}일 "
+                      f"{kwn.get(r['id'], 0):>5} {mark:>10}")
+
+            print()
+            print("[판정을 통일하면 무엇이 멈추나]")
+            uni = _keyword_universe(conn)
+            still = [r for r in rows if r["id"] in rec]
+            print(f"  기간 지난 {len(rows)}곳 중 최근 7일 안에 순위가 실제로 기록된 곳 {len(still)}곳")
+            print(f"  → 판정을 통일하면 그 {len(still)}곳의 기록이 즉시 멈춘다.")
+            print(f"  → 나머지 {len(rows) - len(still)}곳은 이미 수집이 안 돼 사실상 멈춰 있다(표시만 남음).")
             conn.close()
             PY
               echo
