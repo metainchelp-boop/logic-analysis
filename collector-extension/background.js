@@ -61,9 +61,30 @@ const CFG = {
   hourBudgetMs: 50 * 60 * 1000,  // 한 회차는 50분 안에 끝낸다(다음 시간대와 겹치지 않게)
   maxConsecutiveFail: 5, // 연속 실패가 이만큼이면 이번 회차 중단(차단 의심)
   runHour: 1,            // (유지) 회차 날짜 계산용 — 수집은 이제 24시간 상시
+  // ── 여러 대로 나눠 돌리기 (2026-08-27 대표 지시) ──────────────────────
+  // 기본값은 1대(workerCount 1) = 전량을 혼자 맡는다. 지금 도는 기계는 안 바뀐다.
+  // 2대로 늘릴 때만 팝업에서 「몇 번 기계 / 총 몇 대」를 지정한다.
+  // ⚠️ 순위 목록만 나누면 안 된다 — 밀린 요청 큐도 같은 규칙으로 나눠야 한다.
+  //    두 대가 같은 큐를 보면 5회 재시도 한도를 2.5회 만에 태운다.
+  workerNo: 1,           // 이 기계가 몇 번인가 (1부터)
+  workerCount: 1,        // 전부 몇 대인가
 };
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** 팝업에서 지정한 기계 번호를 URL 파라미터로 만든다(1대면 빈 문자열 = 종전 요청 그대로). */
+async function workerParams() {
+  try {
+    const { workerNo = CFG.workerNo, workerCount = CFG.workerCount } =
+      await chrome.storage.local.get(['workerNo', 'workerCount']);
+    const wc = Math.max(1, parseInt(workerCount, 10) || 1);
+    if (wc <= 1) return '';
+    const no = Math.min(wc, Math.max(1, parseInt(workerNo, 10) || 1));
+    return `&worker=${no - 1}&workers=${wc}`;   // 서버는 0부터 센다
+  } catch (e) {
+    return '';
+  }
+}
 const jitter = () => CFG.minGapMs + Math.random() * (CFG.maxGapMs - CFG.minGapMs);
 
 async function getToken() {
@@ -540,7 +561,7 @@ async function runCollection(manual = false) {
   try {
     // 이번 시간대 몫만 받아온다(24시간 분산). 서버가 슬롯 + 밀린 것을 함께 준다.
     const nowHour = new Date().getHours();
-    const res = await fetch(`${CFG.serverBase}/api/collector/keywords?hour=${nowHour}`, {
+    const res = await fetch(`${CFG.serverBase}/api/collector/keywords?hour=${nowHour}${await workerParams()}`, {
       headers: { 'X-Collector-Token': token },
     });
     if (!res.ok) throw new Error(`키워드 조회 실패 HTTP ${res.status}`);
@@ -632,7 +653,7 @@ async function runOnDemand() {
     if (!token) return;
     let kws = [];
     try {
-      const res = await fetch(`${CFG.serverBase}/api/collector/requests`, {
+      const res = await fetch(`${CFG.serverBase}/api/collector/requests?_=1${await workerParams()}`, {
         headers: { 'X-Collector-Token': token },
       });
       if (!res.ok) return;

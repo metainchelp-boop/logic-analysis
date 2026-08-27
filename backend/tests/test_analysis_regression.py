@@ -220,6 +220,55 @@ def test_share_키워드_목록이_없어도_터지지_않는다():
     assert share_targets({10: [100]}, {100: None}, 10, "고구마") == [100]
 
 
+# ==================== 여러 대로 나눠 돌리기 (2026-08-27) ====================
+# 대표 지시 「1번 기기가 앞쪽, 2번 기기가 뒤쪽 — 겹치지 않게」.
+# 잘못되면 같은 키워드를 두 대가 같이 하거나(낭비), 아무도 안 한다(누락).
+# ⚠️ split_rule 은 표준 라이브러리만 쓴다 — collector.py 는 fastapi 를 임포트해서
+#    이 게이트가 도는 환경에서는 불러올 수가 없다(그래서 규칙을 따로 뒀다).
+from split_rule import split_ok, worker_of, normalize  # noqa: E402
+
+_KWS = [f"키워드{i}" for i in range(500)] + ["고구마", "한우", "제주감귤", "오메기떡"]
+
+
+def test_split_두대가_겹치지도_빠지지도_않는다():
+    a = [k for k in _KWS if split_ok(k, 0, 2)]
+    b = [k for k in _KWS if split_ok(k, 1, 2)]
+    assert not (set(a) & set(b)), "두 대가 같은 키워드를 맡는다(중복 수집)"
+    assert set(a) | set(b) == set(_KWS), "아무도 안 맡는 키워드가 있다(누락)"
+
+
+def test_split_세대도_마찬가지():
+    gs = [set(k for k in _KWS if split_ok(k, i, 3)) for i in range(3)]
+    assert sum(len(g) for g in gs) == len(_KWS)
+    assert set().union(*gs) == set(_KWS)
+    assert not (gs[0] & gs[1]) and not (gs[1] & gs[2]) and not (gs[0] & gs[2])
+
+
+def test_split_한대면_전량_종전그대로():
+    # ⚠️ 지금 도는 기계가 아무것도 안 바뀌어야 한다.
+    assert all(split_ok(k, 0, 1) for k in _KWS)
+    assert all(split_ok(k, 0, 0) for k in _KWS)
+
+
+def test_split_치우침이_심하지_않다():
+    a = sum(1 for k in _KWS if split_ok(k, 0, 2))
+    b = len(_KWS) - a
+    assert abs(a - b) <= len(_KWS) * 0.1, f"한쪽에 몰린다: {a} vs {b}"
+
+
+def test_split_같은_키워드는_항상_같은_기계():
+    # 재실행할 때마다 담당이 바뀌면 그날 수집이 통째로 어긋난다.
+    assert all(worker_of(k, 2) == worker_of(k, 2) for k in _KWS)
+    assert worker_of("고구마", 2) == worker_of("고구마", 2)
+
+
+def test_split_잘못된_번호는_안전하게_접힌다():
+    assert normalize(5, 2) == (0, 2)      # 범위 밖 번호 → 1번으로
+    assert normalize(-1, 2) == (0, 2)
+    assert normalize(0, 0) == (0, 1)      # 대수 0 → 1대
+    assert normalize(1, 3) == (1, 3)      # 정상값은 그대로
+
+
 if __name__ == "__main__":
     _tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     _failed = 0
