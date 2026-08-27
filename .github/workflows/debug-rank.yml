@@ -652,6 +652,66 @@ jobs:
                 print(f"  (큐 분해 실패: {e})")
 
             print()
+            print("[D-2 ⚠️ 자격 판정이 '수집'과 '기록'에서 다르다 — 실측]")
+            print("  수집(collector) 6조건 : 활성·광고주·스토어·자동분석·추적ON·추적기간")
+            print("  기록(08:00 배치) 4조건: 활성·광고주·스토어·자동분석   ← 추적ON·추적기간 없음")
+            print("  축A(추적 상품)        : 필터 0 — get_all_tracked_products() 는 전량 반환")
+            ok = set(ids)
+            try:
+                rows = list(conn.execute(
+                    "SELECT DISTINCT client_id FROM client_rank_history "
+                    " WHERE date(checked_at) = date('now','localtime')"))
+                today_cli = {r[0] for r in rows}
+                bad = today_cli - ok
+                print(f"  오늘 순위가 기록된 업체 {len(today_cli)}곳 중 자격 없는 곳 {len(bad)}곳")
+                if bad:
+                    ph2 = ",".join("?" * len(bad))
+                    for r in conn.execute(
+                            f"SELECT name, COALESCE(auto_analysis,1) a, COALESCE(track_enabled,1) t, "
+                            f"       COALESCE(track_until,'') u, COALESCE(role,'advertiser') ro "
+                            f"  FROM clients WHERE id IN ({ph2}) LIMIT 6", list(bad)):
+                        why = []
+                        if not r["a"]: why.append("계약만료·환불·홀딩")
+                        if not r["t"]: why.append("추적OFF")
+                        if r["u"] and r["u"] < __import__("datetime").date.today().isoformat():
+                            why.append(f"기간지남({r['u']})")
+                        if r["ro"] != "advertiser": why.append("광고주아님")
+                        print(f"    · {r['name']} — {' / '.join(why) or '사유 불명'}")
+                    print("  ⇒ 계약이 끝났는데도 순위 기록이 계속 쌓이고 있다는 뜻이다.")
+                else:
+                    print("  ⇒ 오늘은 자격 없는 업체 기록이 없다(수집 유니버스가 사실상 게이트 역할).")
+            except Exception as e:
+                print(f"  (축B 조회 실패: {e})")
+            try:
+                n_a = conn.execute(
+                    "SELECT COUNT(DISTINCT product_id) FROM rankings "
+                    " WHERE date(checked_at) = date('now','localtime')").fetchone()[0]
+                linked_bad = conn.execute(
+                    "SELECT COUNT(DISTINCT r.product_id) FROM rankings r "
+                    "  JOIN rank_link l ON l.tracked_product_id = r.product_id "
+                    " WHERE date(r.checked_at) = date('now','localtime') "
+                    f"   AND l.client_id NOT IN ({ph})", ids).fetchone()[0]
+                orphan = conn.execute(
+                    "SELECT COUNT(DISTINCT r.product_id) FROM rankings r "
+                    " WHERE date(r.checked_at) = date('now','localtime') "
+                    "   AND r.product_id NOT IN (SELECT tracked_product_id FROM rank_link)").fetchone()[0]
+                print(f"  오늘 순위가 기록된 추적 상품 {n_a}개 — 자격 없는 업체 것 {linked_bad}개 "
+                      f"· 어느 업체인지 모름 {orphan}개")
+            except Exception as e:
+                print(f"  (축A 조회 실패: {e})")
+
+            print()
+            print("[D-3 두 축이 같은 상품을 두 번 재는가]")
+            try:
+                both = conn.execute(
+                    "SELECT COUNT(*) FROM rank_link l JOIN clients c ON c.id = l.client_id "
+                    " WHERE c.naver_store_url IS NOT NULL AND c.naver_store_url <> ''").fetchone()[0]
+                print(f"  업체에 이어진 추적 상품 {tp_link}개 중 그 업체가 대표 상품 주소를 가진 것 {both}개")
+                print("  ⇒ 두 축은 네이버를 한 번만 부르지만(키워드 단위 공유 조회),")
+                print("     순위 판정·저장은 축A(rankings)·축B(client_rank_history) 에 각각 한 번씩 일어난다.")
+            except Exception as e:
+                print(f"  (겹침 조회 실패: {e})")
+
             print("[E. 이상적 분산 — 시간대별 몫과 대수]")
             slot = collections.Counter()
             for k, p in uni.items():
