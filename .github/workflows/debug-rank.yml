@@ -14,6 +14,10 @@ on:
         description: '순위 축 브리지 — off(기본) / stats / preview / apply'
         required: false
         default: 'off'
+      capacity:
+        description: '수집 소화량 — off(기본) / on. 1대가 실제로 하루 몇 개를 소화하는지·몇 시에 도는지·시간대별 몫이 고른지. 2대 배분 설계용(읽기 전용).'
+        required: false
+        default: 'off'
       use_branch_code:
         description: '이 브랜치의 rank_link.py 로 미리보기 — off(기본) / on. 배포 전에 새 규칙이 무엇을 이을지 먼저 보려는 용도(컨테이너 /tmp 에 얹었다 지운다·앱 파일 무접촉). apply 와 함께 쓰지 말 것.'
         required: false
@@ -338,16 +342,20 @@ jobs:
             PY
               echo
             fi
+            # 브랜치 코드 미리보기 — 컨테이너 /tmp 에 얹었다가 스크립트 끝에서 지운다.
+            # /app 의 실제 모듈은 손대지 않는다(배포본 무접촉). 아래 두 블록이 함께 쓴다.
+            BRANCH_CODE=0
+            if [ "${{ github.event.inputs.use_branch_code }}" = "on" ]; then
+              printf '%s' "$RL_SRC_B64" | base64 -d > /tmp/rl_preview.py
+              docker cp /tmp/rl_preview.py logic-analysis:/tmp/rank_link_preview.py
+              rm -f /tmp/rl_preview.py
+              BRANCH_CODE=1
+            fi
             RL="${{ github.event.inputs.rank_link }}"
             if [ -n "$RL" ] && [ "$RL" != "off" ]; then
               echo "== 순위 축 브리지 ($RL) =="
               RL_SRC="app"
-              if [ "${{ github.event.inputs.use_branch_code }}" = "on" ] && [ "$RL" != "apply" ]; then
-                # 배포 전에 새 규칙이 무엇을 이을지 먼저 본다.
-                # 컨테이너 /tmp 에 얹었다가 바로 지운다 — /app 의 실제 모듈은 손대지 않는다.
-                printf '%s' "$RL_SRC_B64" | base64 -d > /tmp/rl_preview.py
-                docker cp /tmp/rl_preview.py logic-analysis:/tmp/rank_link_preview.py
-                rm -f /tmp/rl_preview.py
+              if [ "$BRANCH_CODE" = "1" ] && [ "$RL" != "apply" ]; then
                 RL_SRC="branch"
                 echo "  (이 브랜치 코드로 미리보기 — 서버 배포본은 그대로)"
               fi
@@ -380,9 +388,104 @@ jobs:
             else:
                 print(json.dumps(rank_link.link_stats(), ensure_ascii=False, indent=2))
             PY
-              # 얹어 둔 미리보기 파일은 즉시 지운다 — 다음 진단에 옛 코드가 남지 않게.
-              docker exec logic-analysis rm -f /tmp/rank_link_preview.py 2>/dev/null || true
               echo
+            fi
+            if [ "${{ github.event.inputs.capacity }}" = "on" ]; then
+              echo "== 수집 소화량 (읽기 전용) =="
+              docker exec -i logic-analysis python3 - <<'PY'
+            import os, sys, json, collections
+            sys.path.insert(0, "/app")
+            import sqlite3
+            from collector import _keyword_universe, _tracking_client_ids, _slot_of, HOURLY_CAP, PRIORITY_HOURS
+
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+
+            print("[① 하루에 실제로 몇 개를 소화했나 — 최근 10일]")
+            for r in conn.execute(
+                    "SELECT collected_date d, COUNT(DISTINCT keyword) n FROM collected_serp "
+                    " GROUP BY collected_date ORDER BY collected_date DESC LIMIT 10"):
+                print(f"  {r['d']}  {r['n']:>4}개")
+
+            print("[② 몇 시에 도나 — 최근 3일 시간대별 (기계가 켜져 있던 시간을 드러낸다)]")
+            days = [r[0] for r in conn.execute(
+                "SELECT DISTINCT collected_date FROM collected_serp "
+                " ORDER BY collected_date DESC LIMIT 3")]
+            for d in days:
+                per = collections.Counter()
+                for r in conn.execute(
+                        "SELECT created_at FROM collected_serp WHERE collected_date=?", (d,)):
+                    ca = r[0] or ""
+                    if len(ca) >= 13:
+                        per[ca[11:13]] += 1
+                line = " ".join(f"{h}시:{per[h]}" for h in sorted(per))
+                active = len(per)
+                print(f"  {d}  가동 시간대 {active}/24 · 합 {sum(per.values())}")
+                print(f"    {line}")
+
+            print("[③ 유니버스와 시간대별 몫 — 고르게 퍼져 있나]")
+            uni = _keyword_universe(conn)
+            slot = collections.Counter()
+            for k, prio in uni.items():
+                slot[_slot_of(k, bool(prio))] += 1
+            prio_n = sum(1 for v in uni.values() if v)
+            print(f"  유니버스 {len(uni)}개 (업체 키워드 {prio_n} · 추적 상품 전용 {len(uni)-prio_n})")
+            print(f"  시간당 서버 상한 {HOURLY_CAP}개 · 업체 슬롯 0~{PRIORITY_HOURS-1}시")
+            over = [h for h in range(24) if slot[h] > HOURLY_CAP]
+            print("  " + " ".join(f"{h}시:{slot[h]}" + ("*" if slot[h] > HOURLY_CAP else "") for h in range(24)))
+            print(f"  상한 초과 시간대(* = 그 시간에 다 못 줌): {len(over)}개 {over}")
+            print(f"  이론상 하루 최대 = min(슬롯몫, 상한) 합 = {sum(min(slot[h], HOURLY_CAP) for h in range(24))}개")
+
+            print("[④ PR #138 새 연결이 유니버스에 미치는 영향]")
+            print("  ⚠️ 유니버스는 rank_link 를 읽는다 — '연결 없는 상품'은 포함하고")
+            print("     '자격 없는 업체에만 이어진 상품'은 제외한다. 그래서 새로 이으면 줄 수 있다.")
+            src = "/tmp/rank_link_preview.py"
+            if not os.path.exists(src):
+                print("  (use_branch_code=on 이 아니어서 건너뜀)")
+            else:
+                import importlib.util
+                spec = importlib.util.spec_from_file_location("rl_new", src)
+                rl = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(rl)
+                pv = rl.preview_backfill(limit=1000)
+                pairs = pv.get("samples") or []
+                ok_ids = set(_tracking_client_ids(conn))
+                linked_now = set(r[0] for r in conn.execute("SELECT tracked_product_id FROM rank_link"))
+                # 새로 '자격 없는 업체에만' 이어지는 상품 = 유니버스에서 빠질 후보
+                by_prod = collections.defaultdict(set)
+                for p in pairs:
+                    by_prod[p["tracked_product_id"]].add(p["client_id"])
+                drop_prod = [pid for pid, cids in by_prod.items()
+                             if pid not in linked_now and cids and not (cids & ok_ids)]
+                keep_prod = [pid for pid, cids in by_prod.items()
+                             if pid not in linked_now and (cids & ok_ids)]
+                print(f"  새로 이어질 상품 {len(by_prod)}개 중 — 자격 업체행 {len(keep_prod)} · 자격 없는 업체행 {len(drop_prod)}")
+                if drop_prod:
+                    ph = ",".join("?" * len(drop_prod))
+                    kws = set()
+                    for r in conn.execute(
+                            f"SELECT DISTINCT keyword FROM tracked_keywords WHERE product_id IN ({ph})",
+                            drop_prod):
+                        k = (r[0] or "").strip()
+                        if k:
+                            kws.add(k)
+                    # 그 키워드가 다른 경로로도 유니버스에 남는지(업체 대표·분석 이력)
+                    still = set()
+                    for k in kws:
+                        if uni.get(k) is True:
+                            still.add(k)
+                    gone = kws - still
+                    print(f"    그 상품들의 키워드 {len(kws)}개 · 다른 경로로 남는 것 {len(still)} · 빠지는 것 {len(gone)}")
+                    print(f"    → 유니버스 {len(uni)} → {len(uni)-len(gone)} (하루 부담 {len(gone)}개 감소)")
+                else:
+                    print("    빠지는 키워드 없음 — 유니버스 변화 0")
+            conn.close()
+            PY
+              echo
+            fi
+            # 얹어 둔 미리보기 파일은 여기서 한 번만 지운다 — 다음 진단에 옛 코드가 남지 않게.
+            if [ "$BRANCH_CODE" = "1" ]; then
+              docker exec logic-analysis rm -f /tmp/rank_link_preview.py 2>/dev/null || true
             fi
             echo "== 최근 오류 tail =="
             docker logs --tail 60 logic-analysis 2>&1 | grep -iE 'error|exception|traceback' | tail -15 || echo "(오류 없음)"
