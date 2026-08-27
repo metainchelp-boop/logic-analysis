@@ -348,6 +348,72 @@ def share_targets(link_map, client_keyword_map, tracked_product_id, keyword):
     return out
 
 
+def link_on_register(tracked_product_id: int, client_id: Optional[int],
+                     linked_by: int = 0) -> Dict[str, Any]:
+    """추적 상품을 등록하는 그 자리에서 업체와 이어 둔다 (2026-08-27 대표 지시).
+
+    ⚠️ 왜 등록 시점인가 — 종전엔 이을 기회가 매일 01:20 정기 갱신뿐이었고,
+       그 갱신은 상품번호·가게 이름이 맞아떨어질 때만 잇는다. 그래서 업체 주소와
+       다른 상품을 등록하면 **영영 주인이 없는 채로** 남았다(실측 126개).
+       등록하는 사람은 그 상품이 누구 것인지 알고 있으므로, 그때 받아 두는 게
+       가장 확실하고 되돌릴 일도 없다.
+
+    · client_id 를 주면 그것으로 잇는다(사람이 고른 것이라 `manual` 로 남긴다).
+    · 안 주면 정기 갱신과 **같은 규칙**으로 자동 매칭을 시도한다 —
+      여기서 규칙을 새로 만들면 등록으로 이은 것과 배치로 이은 것이 갈린다.
+    · 둘 다 실패해도 **등록 자체를 막지 않는다.** 옛 화면이 이 값을 안 보내는데
+      서버가 거절하면 등록이 통째로 멈춘다. 대신 못 이었다는 사실을 돌려준다.
+
+    반환: {"linked": bool, "client_id": int|None, "method": str|None, "reason": str}
+    """
+    conn = _get_conn()
+    try:
+        if client_id:
+            row = conn.execute(
+                "SELECT id, name FROM clients WHERE id = ? AND status='active'", (client_id,)
+            ).fetchone()
+            if not row:
+                return {"linked": False, "client_id": None, "method": None,
+                        "reason": "고른 업체를 찾을 수 없습니다(삭제됐거나 중지된 업체)."}
+            conn.execute(
+                "INSERT OR IGNORE INTO rank_link "
+                "(client_id, tracked_product_id, product_key, match_method, linked_by) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (row["id"], tracked_product_id, "", MATCH_MANUAL, linked_by),
+            )
+            conn.commit()
+            return {"linked": True, "client_id": row["id"], "method": MATCH_MANUAL,
+                    "reason": f"{row['name']} 업체로 이었습니다."}
+
+        # 업체를 안 골랐으면 정기 갱신과 같은 규칙으로 시도
+        pairs = [p for p in _pairs(_collect_candidates(conn))
+                 if p["tracked_product_id"] == tracked_product_id]
+        if len(pairs) == 1:
+            p = pairs[0]
+            conn.execute(
+                "INSERT OR IGNORE INTO rank_link "
+                "(client_id, tracked_product_id, product_key, match_method, linked_by) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (p["client_id"], tracked_product_id, p["product_key"],
+                 p.get("match_method") or MATCH_PRODUCT_ID, linked_by),
+            )
+            conn.commit()
+            return {"linked": True, "client_id": p["client_id"],
+                    "method": p.get("match_method") or MATCH_PRODUCT_ID,
+                    "reason": f"{p['client_name']} 업체로 자동으로 이었습니다."}
+        if len(pairs) > 1:
+            return {"linked": False, "client_id": None, "method": None,
+                    "reason": "같은 가게에 업체가 여럿이라 자동으로 못 정합니다. 업체를 골라 주세요."}
+        return {"linked": False, "client_id": None, "method": None,
+                "reason": "이 상품과 이어질 업체를 못 찾았습니다. 업체를 골라 주세요."}
+    except Exception as e:
+        logger.error(f"[rank_link] 등록 시 연결 실패: {e}")
+        return {"linked": False, "client_id": None, "method": None,
+                "reason": "연결 처리 중 문제가 생겼습니다."}
+    finally:
+        conn.close()
+
+
 def get_links_for_client(client_id: int) -> List[Dict[str, Any]]:
     """이 업체에 이어진 추적 상품 목록(다음 단계의 조회 통합이 쓸 입구)."""
     conn = _get_conn()
