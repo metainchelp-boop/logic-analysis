@@ -976,6 +976,21 @@ jobs:
             print("  한 번도 순위 없음      ", one("SELECT COUNT(*)" + N))
             print("  └ 그중 등록 7일 지남   ", one("SELECT COUNT(*)" + N + " AND date(COALESCE(k.created_at,'2000-01-01')) <= date('now','localtime','-7 day')"))
             print("  분석 이력 검색량 0     ", one("SELECT COUNT(DISTINCT keyword) FROM client_analyses WHERE COALESCE(search_volume,0)=0"))
+            # ⚠️ 「순위가 없다」는 오타 신호가 아니다 — 300위 밖이어도 순위가 없다.
+            #    가르는 축은 「그 키워드로 수집된 검색 결과가 있는가」다.
+            #      수집분 있는데 순위 없음  → 검색어 정상 · 상품이 300위 밖 (오타 아님)
+            #      수집분이 한 번도 없음    → 그 검색어로는 결과가 안 나온다 (오타 의심)
+            S = " AND NOT EXISTS (SELECT 1 FROM collected_serp s WHERE s.keyword = k.keyword)"
+            print("  ├ 수집분은 있음(300위 밖) ", one("SELECT COUNT(*)" + N + " AND EXISTS (SELECT 1 FROM collected_serp s WHERE s.keyword = k.keyword)"))
+            print("  └ 수집분이 한 번도 없음  ", one("SELECT COUNT(*)" + N + S), " <= 진짜 오타 후보")
+            print("     그중 등록 7일 지남    ", one("SELECT COUNT(*)" + N + S + " AND date(COALESCE(k.created_at,'2000-01-01')) <= date('now','localtime','-7 day')"))
+            print("")
+            print("[오늘 시간대별 수집량 — 고친 뒤 실제로 빨라졌나]")
+            rows = conn.execute("SELECT strftime('%H', collected_at) h, COUNT(*) n FROM collected_serp WHERE collected_date = date('now','localtime') GROUP BY h ORDER BY h").fetchall()
+            print("  " + " ".join([r[0] + "시:" + str(r[1]) for r in rows]))
+            print("  오늘 합계               ", sum([r[1] for r in rows]))
+            print("  ⇒ 13시 이후가 시간당 30개 안팎이면 고쳐진 것(고치기 전 12~15개)")
+
             conn.close()
             PYB
             echo
