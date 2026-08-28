@@ -1020,7 +1020,7 @@ jobs:
             print("총 " + str(len(rows)) + "곳")
             for r in rows:
                 live = r["a"] == 1 and r["t"] == 1 and (not r["track_until"] or r["track_until"] >= today)
-                bits = [r["name"] or "?"]
+                bits = ["#" + str(r["id"]), r["name"] or "?"]
                 if r["business_name"] and r["business_name"] != r["name"]:
                     bits.append("사업자명 " + r["business_name"])
                 bits.append("담당 " + (mgr.get(r["created_by"]) or "미지정"))
