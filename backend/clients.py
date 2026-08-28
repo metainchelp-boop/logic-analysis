@@ -290,6 +290,25 @@ def init_clients_db():
                 cursor.execute("ALTER TABLE clients ADD COLUMN track_until TEXT DEFAULT NULL")
                 logger.info("[clients] track_until column added via migration")
 
+            # ── 계약 단계 이름 (2026-08-28 대표 지시) ──────────────────────
+            #   contract_stage    — 전산이 알려 준 계약 단계 그대로(진행중·환불중·홀딩중·계약 만료…)
+            #   contract_stage_at — 그 값을 받은 시각
+            # ⚠️ 종전엔 04:00 동기화가 이 이름을 **읽고 스위치만 끄고 버렸다.**
+            #    그래서 화면은 「추적 꺼짐 128곳」까지만 알고 **왜 꺼졌는지**를 몰라
+            #    환불중·홀딩중·계약 만료를 갈라 볼 수가 없었다.
+            #    전산 쪽 작업은 0이다 — 이미 받고 있던 값을 저장만 한다.
+            # ⚠️ NULL = 아직 못 받음(=미상). 배포 직후에는 전부 NULL 이고
+            #    다음 04:00 동기화(또는 「지금 가져오기」)가 채운다.
+            for _col, _ddl in (
+                ("contract_stage", "ALTER TABLE clients ADD COLUMN contract_stage TEXT DEFAULT NULL"),
+                ("contract_stage_at", "ALTER TABLE clients ADD COLUMN contract_stage_at TEXT DEFAULT NULL"),
+            ):
+                try:
+                    cursor.execute(f"SELECT {_col} FROM clients LIMIT 1")
+                except Exception:
+                    cursor.execute(_ddl)
+                    logger.info(f"[clients] {_col} column added via migration")
+
             logger.info("Clients database initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize clients database: {str(e)}")

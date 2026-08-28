@@ -29,12 +29,32 @@ window.ClientListSection = function ClientListSection({ currentUser, onClientCli
     var _s7 = useState({}); var rankOv = _s7[0]; var setRankOv = _s7[1];         // { clientId: overviewItem }
     var _s8 = useState(false); var attnOnly = _s8[0]; var setAttnOnly = _s8[1];  // ⚠️ 주의만 보기
 
-    /* 추적 상태 필터(2026-08-27 대표 지시) — null=전체 / 'on'=추적 중 / 'off'=꺼짐.
-       ⚠️ 라벨을 「진행중」으로 쓰지 말 것 — 전산의 계약 단계 이름과 겹친다.
-          여기 '추적 중'은 전산 단계 「진행중 · 전략 관리 · 사후 관리」 셋을 합친 것이라,
-          같은 말을 쓰면 「진행중만 걸렀는데 전략 관리 업체가 나온다」가 된다.
-       판정 축은 카드 버튼과 같은 auto_analysis 하나 — 두 곳이 갈리면 배지와 필터가 어긋난다. */
-    var _s9 = useState(null); var trackFilter = _s9[0]; var setTrackFilter = _s9[1];
+    /* ⚠️ 2026-08-27 의 「추적 상태(추적 중/꺼짐)」 2칸 필터는 아래 5칸으로 대체됐다.
+       그때 라벨을 「진행중」으로 쓰지 말라고 적어 뒀는데, 이제는 전산 단계를 실제로
+       받아 저장하므로(contract_stage) 「진행중」이 전산의 그 단계와 같은 뜻이 됐다.
+       즉 지금의 ▶ 진행중 칸은 「추적 중」과 다르다 — 환불중·홀딩중·삭제 필요를 뺀 나머지다. */
+
+    /* 칸 나누기(2026-08-28 대표 확정) — null=전체 / run·refund·hold·delete·check.
+       ⚠️ 판정은 **서버가 한다**(client_buckets.py). 화면이 같은 규칙을 또 구현하면
+          두 곳이 갈려 「목록에는 있는데 숫자는 다른」 상태가 된다. 여기서는 c.bucket 을 읽기만 한다. */
+    var _sB = useState(null); var bucket = _sB[0], setBucket = _sB[1];
+    var _sS = useState(false); var syncing = _sS[0], setSyncing = _sS[1];
+    var _sM = useState(null); var syncMsg = _sM[0], setSyncMsg = _sM[1];
+
+    var pullStages = function() {
+        setSyncing(true); setSyncMsg(null);
+        api.post('/cd/contract-stage-sync', {}).then(function(res) {
+            if (res && res.success) {
+                var d = res.data || {};
+                setSyncMsg({ ok: true, text: '전산에서 계약 단계를 가져왔습니다 — 단계 저장 ' + (d.staged || 0) + '곳' });
+                loadClients();   // 새 단계 값으로 목록을 다시 그린다
+            } else {
+                setSyncMsg({ ok: false, text: (res && res.detail) || '가져오지 못했습니다.' });
+            }
+        }).catch(function(e) {
+            setSyncMsg({ ok: false, text: '가져오지 못했습니다 — ' + ((e && e.message) || '네트워크 오류') });
+        }).then(function() { setSyncing(false); });
+    };
 
     useEffect(function() {
         api.get('/cd/rank-overview').then(function(res) {
@@ -169,9 +189,9 @@ window.ClientListSection = function ClientListSection({ currentUser, onClientCli
             // 담당자 탭 필터 (null = 전체)
             if (mgrFilter && (c.manager_name || '(미지정)') !== mgrFilter) return false;
             if (attnOnly && !isAttention(c)) return false;
-            // 추적 상태 — 카드 버튼과 같은 판정(auto_analysis === 0 이면 꺼짐)
-            if (trackFilter === 'on' && c.auto_analysis === 0) return false;
-            if (trackFilter === 'off' && c.auto_analysis !== 0) return false;
+            // 칸 나누기 — 판정은 서버(c.bucket). 옛 서버 응답이면 bucket 이 없어
+            // 전부 '진행중'으로 흡수한다(배포 순서가 어긋나도 목록이 비지 않게).
+            if (bucket && (c.bucket || 'run') !== bucket) return false;
             if (!query.trim()) return true;
             var q = query.trim().toLowerCase();
             return (c.name || '').toLowerCase().indexOf(q) !== -1
@@ -250,26 +270,57 @@ window.ClientListSection = function ClientListSection({ currentUser, onClientCli
                 );
             })(),
 
-            /* 추적 상태 필터 (2026-08-27 대표 지시) — 계약이 끝난 업체를 목록에서 갈라 본다.
-               ⚠️ 영업사원(viewer)에게는 안 띄운다 — 그 화면은 영업 대상(prospect)만 보이는데,
-                  자동 추적은 광고주(advertiser)에게만 도는 개념이라 늘 '추적 중'으로만 보인다. */
+            /* ---------- 칸 나누기 (2026-08-28 대표 확정) ----------
+               진행중 / 환불중 / 홀딩중 / 삭제 필요 / 확인 필요.
+               ⚠️ 영업사원(viewer)에게는 안 띄운다 — 그 화면은 영업 대상만 보이는데
+                  계약 단계·자동 추적은 광고주에게만 도는 개념이라 칸이 늘 하나로 쏠린다. */
             !loading && clients.length > 0 && currentUser && currentUser.role !== 'viewer' && (function() {
-                var onN = 0, offN = 0;
-                clients.forEach(function(c) { if (c.auto_analysis === 0) offN++; else onN++; });
+                var n = { run: 0, refund: 0, hold: 0, delete: 0, check: 0 };
+                clients.forEach(function(c) { var b = c.bucket || 'run'; if (n[b] != null) n[b]++; });
+                var staged = clients.filter(function(c) { return !!c.contract_stage; }).length;
                 var mkTab = function(label, val, count, color, bg, border) {
-                    var on = trackFilter === val;
-                    return React.createElement('button', { key: label, onClick: function() { setTrackFilter(on ? null : val); },
+                    var on = bucket === val;
+                    return React.createElement('button', { key: label, onClick: function() { setBucket(on ? null : val); },
                         style: { fontSize: 12, fontWeight: 700, padding: '6px 12px', borderRadius: 999, cursor: 'pointer', whiteSpace: 'nowrap',
                                  border: '1px solid ' + (on ? color : border), background: on ? color : bg, color: on ? '#fff' : color } },
                         label + ' ' + count);
                 };
-                return React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 16 } },
-                    React.createElement('span', { style: { fontSize: 12, color: '#94a3b8', fontWeight: 700, marginRight: 2 } }, '추적 상태'),
-                    mkTab('전체', null, clients.length, '#475569', '#f8fafc', '#e2e8f0'),
-                    mkTab('▶ 추적 중', 'on', onN, '#047857', '#ecfdf5', '#a7f3d0'),
-                    mkTab('⏸ 꺼짐', 'off', offN, '#b45309', '#fffbeb', '#fcd34d'),
-                    React.createElement('span', { style: { fontSize: 11, color: '#94a3b8', marginLeft: 2 } },
-                        '⏸ = 계약 만료·환불중·홀딩중 (매일 04시 전산 반영) + 직접 끈 것')
+                return React.createElement('div', { style: { marginBottom: 16 } },
+                    React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' } },
+                        mkTab('전체', null, clients.length, '#475569', '#f8fafc', '#e2e8f0'),
+                        mkTab('▶ 진행중', 'run', n.run, '#047857', '#ecfdf5', '#a7f3d0'),
+                        mkTab('↩ 환불중', 'refund', n.refund, '#6d28d9', '#f5f3ff', '#ddd6fe'),
+                        mkTab('⏸ 홀딩중', 'hold', n.hold, '#b45309', '#fffbeb', '#fcd34d'),
+                        mkTab('🗑 삭제 필요', 'delete', n.delete, '#b91c1c', '#fef2f2', '#fecaca'),
+                        mkTab('🔍 확인 필요', 'check', n.check, '#0369a1', '#f0f9ff', '#bae6fd'),
+                        isAdmin && React.createElement('button', {
+                            onClick: pullStages, disabled: syncing,
+                            title: '전산에서 계약 단계(환불중·홀딩중·계약 만료)를 지금 가져옵니다',
+                            style: { marginLeft: 'auto', fontSize: 12, fontWeight: 700, padding: '6px 12px', borderRadius: 999,
+                                     cursor: syncing ? 'not-allowed' : 'pointer', border: '1px solid #cbd5e1',
+                                     background: '#fff', color: syncing ? '#94a3b8' : '#334155', whiteSpace: 'nowrap' }
+                        }, syncing ? '가져오는 중…' : '⟳ 계약 단계 지금 가져오기')
+                    ),
+                    /* ⚠️ 단계를 한 번도 못 받았으면 그 사실을 말해 준다. 안 그러면
+                       환불중·홀딩중이 0으로 보여 「환불 업체가 없다」고 오해한다. */
+                    staged === 0 && React.createElement('div', {
+                        style: { marginTop: 8, fontSize: 11.5, color: '#b45309', background: '#fffbeb',
+                                 border: '1px solid #fde68a', borderRadius: 8, padding: '7px 11px' }
+                    }, '아직 전산에서 계약 단계를 받아오지 않았습니다 — 환불중·홀딩중이 0으로 보입니다. '
+                     + (isAdmin ? '오른쪽 「⟳ 계약 단계 지금 가져오기」를 한 번 눌러 주세요.' : '관리자가 한 번 가져오면 채워집니다.')
+                     + ' (매일 04:00 에도 자동으로 갱신됩니다.)'),
+                    syncMsg && React.createElement('div', {
+                        style: { marginTop: 8, fontSize: 11.5, color: syncMsg.ok ? '#047857' : '#b91c1c' }
+                    }, syncMsg.text),
+                    bucket === 'delete' && React.createElement('div', {
+                        style: { marginTop: 8, fontSize: 11.5, color: '#64748b' }
+                    }, '더 이상 추적할 이유가 없는 등록건입니다. 사유를 확인하고 정리하세요 — 여기서 바로 지우지는 않습니다(순위 기록이 함께 사라집니다).'),
+                    bucket === 'check' && React.createElement('div', {
+                        style: { marginTop: 8, fontSize: 11.5, color: '#64748b' }
+                    }, '수집이 5회 연속 실패해 포기된 키워드가 있는 업체입니다. 오타이거나 검색이 안 되는 말입니다 — 고치면 되살아납니다.'),
+                    (bucket === 'refund' || bucket === 'hold') && React.createElement('div', {
+                        style: { marginTop: 8, fontSize: 11.5, color: '#64748b' }
+                    }, '추적이 자동으로 멈춰 있습니다. 전산에서 단계를 되돌리면 다음 날 04:00 에 자동으로 재개됩니다 — 여기서 손댈 것이 없습니다.')
                 );
             })(),
 
@@ -321,12 +372,14 @@ window.ClientListSection = function ClientListSection({ currentUser, onClientCli
             !loading && filtered.length === 0 && clients.length > 0 && React.createElement('div', {
                 style: { textAlign: 'center', padding: '30px 20px', color: '#94a3b8', fontSize: 13 }
             },
-                trackFilter
+                bucket
                     ? React.createElement(React.Fragment, null,
                         React.createElement('div', null,
-                            (trackFilter === 'on' ? '▶ 추적 중' : '⏸ 꺼짐') + ' 필터에 해당하는 업체가 없습니다.'),
+                            ({ run: '▶ 진행중', refund: '↩ 환불중', hold: '⏸ 홀딩중',
+                               'delete': '🗑 삭제 필요', check: '🔍 확인 필요' }[bucket] || bucket)
+                            + ' 칸에 해당하는 업체가 없습니다.'),
                         React.createElement('button', {
-                            onClick: function() { setTrackFilter(null); },
+                            onClick: function() { setBucket(null); },
                             style: { marginTop: 10, fontSize: 12, fontWeight: 700, padding: '6px 14px', borderRadius: 999,
                                      border: '1px solid #cbd5e1', background: '#fff', color: '#475569', cursor: 'pointer' }
                         }, '필터 해제')
@@ -485,7 +538,34 @@ window.ClientListSection = function ClientListSection({ currentUser, onClientCli
                         /* 중지 상태 배지(viewer 포함 전원에게 보임) */
                         client.auto_analysis === 0 && (!currentUser || currentUser.role === 'viewer') && React.createElement('div', {
                             style: { marginTop: 6, textAlign: 'center', fontSize: 11, fontWeight: 700, color: '#92400e' }
-                        }, '⏸ 자동 추적 중지됨')
+                        }, '⏸ 자동 추적 중지됨'),
+
+                        /* ---------- 왜 이 칸에 있는지 (2026-08-28) ----------
+                           ⚠️ 사유를 안 적으면 「삭제 필요」에 왜 들어왔는지 몰라 손을 못 댄다.
+                              한 업체가 여러 사유에 걸릴 수 있어 전부 보여 준다. */
+                        (function() {
+                            var chips = [];
+                            var st = client.contract_stage;
+                            if (st && (client.bucket === 'refund' || client.bucket === 'hold')) {
+                                chips.push({ t: st + ' · 일시정지', c: '#6d28d9', bg: '#f5f3ff', bd: '#ddd6fe' });
+                            }
+                            (client.delete_reasons || []).forEach(function(r) {
+                                chips.push({ t: r, c: '#b91c1c', bg: '#fef2f2', bd: '#fecaca' });
+                            });
+                            if (client.needs_check) {
+                                chips.push({ t: '수집 실패 — 키워드 확인', c: '#0369a1', bg: '#f0f9ff', bd: '#bae6fd' });
+                            }
+                            if (!chips.length) return null;
+                            return React.createElement('div', {
+                                style: { marginTop: 6, display: 'flex', gap: 4, flexWrap: 'wrap', justifyContent: 'center' }
+                            }, chips.map(function(ch, i) {
+                                return React.createElement('span', {
+                                    key: i,
+                                    style: { fontSize: 10.5, fontWeight: 800, borderRadius: 999, padding: '2px 8px',
+                                             color: ch.c, background: ch.bg, border: '1px solid ' + ch.bd, whiteSpace: 'nowrap' }
+                                }, ch.t);
+                            }));
+                        })()
                     );
                 })
             )
