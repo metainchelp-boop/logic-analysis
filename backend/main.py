@@ -46,7 +46,10 @@ logger = logging.getLogger(__name__)
 API_KEY = os.getenv("API_KEY", "")
 _DEV_MODE = os.getenv("DEV_MODE", "").lower() in ("1", "true", "yes")
 # 인증 면제 경로
-AUTH_EXEMPT_PATHS = ["/api/health", "/docs", "/openapi.json", "/redoc", "/api/auth/login", "/api/reports/view/"]
+AUTH_EXEMPT_PATHS = [
+    "/api/health", "/docs", "/openapi.json", "/redoc", "/api/auth/login",
+    "/api/reports/view/", "/api/internal/handovers/",
+]
 
 
 class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
@@ -71,12 +74,15 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 from database import (
+    DB_PATH,
     init_db, add_tracked_product, get_all_tracked_products,
     delete_tracked_product, add_tracked_keyword, get_keywords_for_product,
     get_keyword_product_and_count, delete_tracked_keyword,
     save_ranking, get_ranking_history, save_competitor_snapshot,
     get_notification_settings, update_notification_settings
 )
+from handover_transfer import HandoverTransferService
+from handover_transfer_api import create_handover_router
 from naver_crawler import (
     find_product_rank, get_product_info,
     generate_rank_analysis, extract_product_id_from_url,
@@ -301,6 +307,7 @@ async def lifespan(app):
     init_seo_db()
     init_collector_db()   # 수집기 테이블(collected_serp)
     init_rank_link_db()   # 순위 두 축 브리지(rank_link) — 읽기 경로 무변경
+    handover_transfer_service.initialize()
 
     # DB 무결성 검증 후 백업 (테이블 초기화 이후)
     _backup_db_on_startup()
@@ -324,7 +331,7 @@ app.add_middleware(
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE"],
-    allow_headers=["Content-Type", "Authorization", "X-API-Key"],
+    allow_headers=["Content-Type", "Authorization", "X-API-Key", "X-Handover-Key"],
 )
 
 # API 키 인증 미들웨어 등록
@@ -338,6 +345,13 @@ app.include_router(cd_router)
 app.include_router(chat_router)
 app.include_router(seo_generate_router)
 app.include_router(collector_router)  # 브라우저 수집기(크롬 확장) — 2026-08-03 쇼핑 API 종료 대응
+handover_transfer_service = HandoverTransferService(DB_PATH)
+app.include_router(
+    create_handover_router(
+        handover_transfer_service,
+        os.getenv("HANDOVER_TRANSFER_API_KEY", ""),
+    )
+)
 
 
 # ==================== 유저 격리 헬퍼 ====================

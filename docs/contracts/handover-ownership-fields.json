@@ -1,0 +1,18 @@
+{
+  "version": "2026-08-28",
+  "classifications": ["OPERATIONAL_OWNER", "HISTORICAL_ACTOR", "ACCESS_DERIVED", "UNRELATED"],
+  "fields": [
+    {"path": "clients.created_by", "classification": "OPERATIONAL_OWNER", "rule": "legacy-compatible current access owner"},
+    {"path": "clients.original_created_by", "classification": "HISTORICAL_ACTOR", "rule": "captured once before first transfer"},
+    {"path": "tracked_products.user_id", "classification": "OPERATIONAL_OWNER", "rule": "shopping rank tracker current owner"},
+    {"path": "tracked_products.original_user_id", "classification": "HISTORICAL_ACTOR", "rule": "captured once before first transfer"},
+    {"path": "place_track_target.created_by", "classification": "OPERATIONAL_OWNER", "rule": "place rank tracker current owner"},
+    {"path": "place_track_target.original_created_by", "classification": "HISTORICAL_ACTOR", "rule": "captured once before first transfer"},
+    {"path": "client_analyses.created_by", "classification": "HISTORICAL_ACTOR", "rule": "analysis author is immutable"},
+    {"path": "reports.created_by", "classification": "HISTORICAL_ACTOR", "rule": "report author is immutable"},
+    {"path": "client_analyses.client_id", "classification": "ACCESS_DERIVED", "rule": "successor access follows clients.created_by"},
+    {"path": "reports.client_id", "classification": "ACCESS_DERIVED", "rule": "successor access follows clients.created_by"},
+    {"path": "client_rank_history.client_id", "classification": "ACCESS_DERIVED", "rule": "accumulated history remains attached to client"},
+    {"path": "handover_transfer_requests.requested_by", "classification": "UNRELATED", "rule": "service request audit is not advertiser ownership"}
+  ]
+}
