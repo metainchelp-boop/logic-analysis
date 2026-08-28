@@ -591,9 +591,38 @@ let running = false;
 /* 시간대 슬롯 수집이 대기 중임을 온디맨드에게 알리는 깃발.
  * 온디맨드가 락을 계속 쥐면 시간대 경로가 굶는다(2026-08-08 실사고). */
 let dailyDue = false;
+const DAILY_DUE_KEY = 'dailyDueUntil';
+const DAILY_DUE_MS = 5 * 60 * 1000;   // 양보 신호 유효기간 — 만료되면 온디맨드가 다시 돈다
+
+/** 시간대 수집이 자기 차례를 기다리는 중인가.
+ *
+ * ⚠️ 이걸 storage 에 두는 이유(2026-08-28 실사용에서 드러남):
+ *    module 변수(dailyDue)는 배경 스크립트가 잠들면 사라진다. 그러면 다음 1분 알람에서
+ *    온디맨드가 다시 먼저 락을 잡고, 시간대 수집은 영영 자기 차례를 못 잡는다.
+ *    실제 로그:
+ *      1:08:01 온디맨드 8건 시작 → 1:08:39 「양보」 → 1:09:01 온디맨드 9건 **또 시작**
+ *      → 1:09:27 「지금 수집 실행」이 '이미 수집 중'으로 튕김
+ *    두 알람이 30초 어긋난 채 둘 다 1분 주기라, 온디맨드가 항상 먼저 잡는다. */
+async function dailyIsWaiting() {
+  try {
+    const o = await chrome.storage.local.get(DAILY_DUE_KEY);
+    return Number(o[DAILY_DUE_KEY] || 0) > Date.now();
+  } catch (e) { return false; }
+}
+async function markDailyWaiting(on) {
+  try {
+    await chrome.storage.local.set({ [DAILY_DUE_KEY]: on ? Date.now() + DAILY_DUE_MS : 0 });
+  } catch (e) { /* 무시 */ }
+}
 
 async function runCollection(manual = false) {
-  if (running) { await log('이미 수집 중 — 중복 실행 무시'); return; }
+  if (running) {
+    await log(running === 'ondemand'
+      ? '⏳ 밀린 요청을 처리하는 중입니다 — 한 건 끝나는 대로 시간대 수집이 이어받습니다'
+      : '이미 수집 중 — 중복 실행 무시');
+    if (manual && running === 'ondemand') await markDailyWaiting(true);   // 사람이 눌렀으니 차례를 예약
+    return;
+  }
   running = 'daily';   // ⚠️ 첫 await 이전에 '동기' 선점 — ondemand 와 알람이 겹쳐도 이중 진입 불가
   // 캡차 쉼 중이면 들어가지 않는다(계속 두드리면 차단이 깊어진다). 수동 실행은 사람이
   // 캡차를 풀고 눌렀을 수 있으므로 통과시킨다.
@@ -698,6 +727,7 @@ async function runCollection(manual = false) {
     await setState({ running: false, error: e.message });
   } finally {
     if (running === 'daily') running = false;   // 내 락만 해제 (남의 락 오해제 방지)
+    await markDailyWaiting(false);              // 내 차례가 끝났다 — 온디맨드 재개
   }
 }
 
@@ -710,6 +740,10 @@ async function runOnDemand() {
   try {
     // 캡차 쉼 중이면 아예 들어가지 않는다(매분 재타격 = 차단 연장)
     if (await getBlockedUntil() > Date.now()) return;
+    // ⭐ 시간대 수집이 차례를 기다리고 있으면 이번 분은 통째로 비켜 준다.
+    //    한 건 끝나고 양보하는 것만으로는 부족했다 — 다음 1분 알람에서 내가 또 먼저
+    //    잡아 버려서 시간대 수집이 영영 못 들어갔다(2026-08-28 실측).
+    if (await dailyIsWaiting()) return;
     // 직전 회차가 전량 실패(차단 의심)였으면 10분 쉰다 — 차단 중 매분 재타격으로 차단을 연장시키지 않기 위함
     const { odBackoffUntil = 0 } = await chrome.storage.local.get('odBackoffUntil');
     if (Date.now() < odBackoffUntil) return;
@@ -832,14 +866,16 @@ chrome.alarms.onAlarm.addListener(async (a) => {
   if (state.finishedHour === hourKey()) return;   // 이 시간대 몫은 이미 끝냈다
   if (running === 'daily') return;                // 이미 돌고 있다 — 조용히 물러난다
   if (running === 'ondemand') {
-    // 온디맨드가 돌고 있으면 한 건 끝나는 대로 비켜달라고 표시만 하고 물러난다.
-    // ⚠️ 종전엔 여기서 최대 5분을 기다렸다. 그런데 밀린 큐가 차 있으면 온디맨드가
-    //    12건(약 7분)을 쥐고 있어 **기다리다 포기하고 그 시간대를 날렸다.**
-    //    이제 알람이 1분마다 오므로 기다릴 필요가 없다 — 다음 분에 이어받는다.
+    // 온디맨드가 돌고 있으면 한 건 끝나는 대로 비켜달라고 표시하고 물러난다.
+    // ⚠️ 표시는 storage 에 남긴다 — 그래야 다음 1분 알람에서 온디맨드가 스스로
+    //    안 들어오고 내가 락을 잡는다. module 변수만 쓰면 워커가 잠들 때 사라져
+    //    온디맨드가 매분 먼저 잡아 버린다(2026-08-28 실사용에서 확인된 회귀).
     dailyDue = true;
+    await markDailyWaiting(true);
     return;
   }
   dailyDue = false;
+  await markDailyWaiting(false);   // 내가 잡았다 — 온디맨드를 다시 풀어 준다
   runCollection(false);
 });
 
