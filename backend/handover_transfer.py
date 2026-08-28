@@ -7,11 +7,26 @@
 from __future__ import annotations
 
 import json
+import re
 import secrets
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Iterable
+
+
+_SECRET_VALUE = re.compile(
+    r"(?i)(password|passwd|api[_-]?key|token|secret|authorization)"
+    r"(\s*[=:]\s*)([^\s,;}&]+)"
+)
+_BEARER_VALUE = re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}")
+
+
+def sanitize_handover_error(message: object) -> str:
+    """외부 오류가 원장·응답으로 갈 때 인증정보 모양을 제거한다."""
+    text = str(message or "담당자 변경 처리 오류")[:1000]
+    text = _SECRET_VALUE.sub(lambda match: f"{match.group(1)}{match.group(2)}[MASKED]", text)
+    return _BEARER_VALUE.sub("Bearer [MASKED]", text)
 
 
 @dataclass(frozen=True)
@@ -207,6 +222,11 @@ class HandoverTransferService:
                     "tracked_products": len(product_ids),
                     "place_targets": len(place_ids),
                 },
+                "asset_ids": {
+                    "clients": [str(command.client_id)],
+                    "tracked_products": [str(value) for value in product_ids],
+                    "place_targets": [str(value) for value in place_ids],
+                },
             }
         finally:
             conn.close()
@@ -344,7 +364,7 @@ class HandoverTransferService:
                            if self._normal(row["business_name"]) == self._normal(name)
                            and (not region or self._normal(row["region"]) == self._normal(region))]
             if not matches:
-                raise ValueError(f"플레이스 연결 자료를 찾을 수 없습니다: {key}")
+                raise ValueError("플레이스 연결 자료를 찾을 수 없습니다.")
             resolved.extend(matches)
         return sorted(set(resolved))
 
@@ -367,7 +387,7 @@ class HandoverTransferService:
     def _record_failure(self, command: HandoverTransferCommand, message: str) -> None:
         conn = self._connect()
         try:
-            result = {"success": False, "message": message[:500]}
+            result = {"success": False, "message": sanitize_handover_error(message)[:500]}
             conn.execute(
                 "INSERT INTO handover_transfer_request(request_key, client_id, from_username, to_username, status, result_json) "
                 "VALUES (?, ?, ?, ?, 'FAILED', ?) "

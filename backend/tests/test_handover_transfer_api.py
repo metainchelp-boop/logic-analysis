@@ -108,4 +108,3 @@ def test_internal_preview_transfer_status_and_residual_contract(tmp_path):
     ).lower()
     assert "password" not in response_text
     assert "internal-secret" not in response_text
-

@@ -119,6 +119,14 @@ jobs:
               echo "ERP_AD_SYNC_API_KEY 주입 완료 (.env.bak-adsync 백업)"
             fi
 
+            # ── 담당자 변경 전용 서비스 키 멱등 주입 (2026-08-28) ──
+            # 전산 BE 저장소의 같은 이름 Secret과 같은 값이어야 하며, 값은 로그에 출력하지 않는다.
+            if [ -n "${{ secrets.HANDOVER_TRANSFER_API_KEY }}" ] && ! grep -q '^HANDOVER_TRANSFER_API_KEY=' .env 2>/dev/null; then
+              cp .env .env.bak-handover 2>/dev/null || true
+              echo 'HANDOVER_TRANSFER_API_KEY=${{ secrets.HANDOVER_TRANSFER_API_KEY }}' >> .env
+              echo "HANDOVER_TRANSFER_API_KEY 주입 완료 (.env.bak-handover 백업)"
+            fi
+
             # ── 소상공인365 인증키 6종 멱등 주입 (2026-08-05, 상권 데이터 고도화) ──
             # 서비스(오퍼레이션)별로 개별 발급되는 인증키. COLLECTOR_TOKEN 선례와 동일하게
             # 「시크릿이 있고 .env 에 아직 없을 때만」 추가 — 기존 키 덮어쓰기 없음.

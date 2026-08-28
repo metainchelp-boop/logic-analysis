@@ -10,6 +10,8 @@ import os
 from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
+
+from report_access import can_manage_report, managed_report_predicate
 from typing import Optional, List, Dict, Any
 import hashlib
 import uuid
@@ -940,20 +942,20 @@ def list_reports(
         conn = get_db()
         cursor = conn.cursor()
 
-        # Build query (관리자는 전체 열람, 일반 유저는 본인 것만)
+        # Build query (관리자는 전체, 일반 사용자는 작성분 + 현재 담당 광고주 보고서)
         _is_adm = current_user.get("role") in ("admin", "superadmin")
         where_clauses = []
         params = []
         if not _is_adm:
-            where_clauses.append("created_by = ?")
-            params.append(current_user["id"])
+            where_clauses.append(managed_report_predicate("r"))
+            params.extend([current_user["id"], current_user["id"]])
 
         if client_id:
-            where_clauses.append("client_id = ?")
+            where_clauses.append("r.client_id = ?")
             params.append(client_id)
 
         if search:
-            where_clauses.append("(keyword LIKE ? ESCAPE '\\' OR title LIKE ? ESCAPE '\\')")
+            where_clauses.append("(r.keyword LIKE ? ESCAPE '\\' OR r.title LIKE ? ESCAPE '\\')")
             escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             search_term = f"%{escaped}%"
             params.extend([search_term, search_term])
@@ -961,14 +963,14 @@ def list_reports(
         where_clause = " AND ".join(where_clauses) if where_clauses else "1=1"
 
         # Get total count
-        cursor.execute(f"SELECT COUNT(*) as count FROM reports WHERE {where_clause}", params)
+        cursor.execute(f"SELECT COUNT(*) as count FROM reports r WHERE {where_clause}", params)
         total = cursor.fetchone()["count"]
 
         # Get reports with pagination
         offset = (page - 1) * per_page
         cursor.execute(f"""
             SELECT id, client_id, title, keyword, product_url, status, views, report_hash, created_at
-            FROM reports
+            FROM reports r
             WHERE {where_clause}
             ORDER BY created_at DESC
             LIMIT ? OFFSET ?
@@ -1113,8 +1115,8 @@ def get_report(
                 SELECT id, client_id, title, keyword, product_url, status, views,
                        report_hash, created_at, created_by
                 FROM reports
-                WHERE id = ? AND created_by = ?
-            """, (report_id, current_user["id"]))
+                WHERE id = ? AND """ + managed_report_predicate("reports"),
+                (report_id, current_user["id"], current_user["id"]))
 
         report = cursor.fetchone()
         conn.close()
@@ -1222,12 +1224,12 @@ def delete_report(
                 detail={"success": False, "message": "보고서를 찾을 수 없습니다."}
             )
 
-        # 관리자가 아니면 본인 보고서만 삭제 가능
+        # 관리자가 아니면 작성자 또는 현재 광고주 운영 담당자만 삭제 가능
         _is_adm = current_user.get("role") in ("admin", "superadmin")
-        if not _is_adm and report["created_by"] != current_user["id"]:
+        if not _is_adm and not can_manage_report(conn, report_id, current_user["id"]):
             raise HTTPException(
                 status_code=403,
-                detail={"success": False, "message": "다른 직원의 보고서는 삭제할 수 없습니다."}
+                detail={"success": False, "message": "담당 광고주의 보고서만 삭제할 수 있습니다."}
             )
 
         # Delete HTML file (옛 위치에 남은 파일도 함께 지운다)
@@ -1252,4 +1254,3 @@ def delete_report(
             status_code=500,
             detail={"success": False, "message": f"보고서 삭제 중 오류가 발생했습니다: {str(e)}"}
         )
-

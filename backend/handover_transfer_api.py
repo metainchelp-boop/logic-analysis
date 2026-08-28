@@ -8,7 +8,11 @@ from typing import Annotated
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from handover_transfer import HandoverTransferCommand, HandoverTransferService
+from handover_transfer import (
+    HandoverTransferCommand,
+    HandoverTransferService,
+    sanitize_handover_error,
+)
 
 
 class HandoverTransferRequest(BaseModel):
@@ -64,7 +68,7 @@ def create_handover_router(
                 status_code=409,
                 detail={
                     "code": "HANDOVER_TRANSFER_BLOCKED",
-                    "message": str(exc),
+                    "message": sanitize_handover_error(exc),
                     "action": "전산의 담당자 연결과 로직분석 자산 연결을 확인해 주세요.",
                 },
             ) from exc
