@@ -34,6 +34,10 @@ on:
         description: '관리 화면 칸 나누기 규모 재기 — off(기본) / on. 진행중·환불중·홀딩중·삭제 필요·확인 필요(오타 의심)가 각각 몇 건인지(읽기 전용·업체명 미출력).'
         required: false
         default: 'off'
+      missing:
+        description: '전산에 없음 목록 — off(기본) / on. 계약 단계를 못 받은 광고주 전수 출력(읽기 전용). ⚠️ 업체명이 실행 로그에 남는다 — 공개 저장소이므로 결과를 받은 뒤 그 런의 로그를 삭제할 것.'
+        required: false
+        default: 'off'
       use_branch_code:
         description: '이 브랜치의 rank_link.py 로 미리보기 — off(기본) / on. 배포 전에 새 규칙이 무엇을 이을지 먼저 보려는 용도(컨테이너 /tmp 에 얹었다 지운다·앱 파일 무접촉). apply 와 함께 쓰지 말 것.'
         required: false
@@ -60,9 +64,10 @@ jobs:
           IN_EXPIRED: ${{ github.event.inputs.expired }}
           IN_ORPHANS: ${{ github.event.inputs.orphans }}
           IN_BUCKETS: ${{ github.event.inputs.buckets }}
+          IN_MISSING: ${{ github.event.inputs.missing }}
           IN_BRANCH_CODE: ${{ github.event.inputs.use_branch_code }}
         with:
-          envs: RL_SRC_GZ,IN_COLLECTOR,IN_RANK_LINK,IN_CAPACITY,IN_STRUCTURE,IN_EXPIRED,IN_ORPHANS,IN_BUCKETS,IN_BRANCH_CODE
+          envs: RL_SRC_GZ,IN_COLLECTOR,IN_RANK_LINK,IN_CAPACITY,IN_STRUCTURE,IN_EXPIRED,IN_ORPHANS,IN_BUCKETS,IN_MISSING,IN_BRANCH_CODE
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
@@ -996,6 +1001,36 @@ jobs:
 
             conn.close()
             PYB
+            echo
+            fi
+
+            if [ "$IN_MISSING" = "on" ]; then
+            echo "== 전산에 없음 — 계약 단계를 못 받은 광고주 전수 (읽기 전용) =="
+            docker exec -i logic-analysis python3 - <<'PYM'
+            import sqlite3, datetime
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            mgr = {r["id"]: (r["name"] or r["username"] or "") for r in conn.execute("SELECT id,name,username FROM users")}
+            Q = ("SELECT id, name, business_name, naver_store_url, main_keywords, created_by, created_at, "
+                 "COALESCE(auto_analysis,1) a, COALESCE(track_enabled,1) t, track_until "
+                 "FROM clients WHERE status='active' AND COALESCE(role,'advertiser')='advertiser' "
+                 "AND (contract_stage IS NULL OR contract_stage='') ORDER BY name")
+            rows = conn.execute(Q).fetchall()
+            today = datetime.date.today().isoformat()
+            print("총 " + str(len(rows)) + "곳")
+            for r in rows:
+                live = r["a"] == 1 and r["t"] == 1 and (not r["track_until"] or r["track_until"] >= today)
+                bits = [r["name"] or "?"]
+                if r["business_name"] and r["business_name"] != r["name"]:
+                    bits.append("사업자명 " + r["business_name"])
+                bits.append("담당 " + (mgr.get(r["created_by"]) or "미지정"))
+                bits.append("추적 도는 중" if live else "추적 안 돎")
+                bits.append("등록 " + str(r["created_at"] or "")[:10])
+                bits.append("키워드 " + (r["main_keywords"] or "없음")[:40])
+                bits.append((r["naver_store_url"] or "주소 없음")[:60])
+                print("· " + " | ".join(bits))
+            conn.close()
+            PYM
             echo
             fi
 
