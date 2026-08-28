@@ -14,6 +14,11 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
+# 순위 추적 자격 판정 — 수집(collector)·기록(이 파일)·추적 상품이 같은 문장을 쓴다.
+# ⚠️ 여기서 조건을 늘리거나 줄이면 세 경로가 한꺼번에 바뀐다. 한쪽만 고치지 말 것.
+from tracking_eligibility import (eligible_clients_sql, eligible_tracked_product_ids,
+                                   ensure_disabled_column)
+
 logger = logging.getLogger(__name__)
 
 # 글로벌 스케줄러 인스턴스
@@ -155,6 +160,20 @@ def start_scheduler():
         trigger=CronTrigger(day_of_week="mon", hour=9, minute=40),
         id="weekly_reports",
         name="주간 보고서 생성 (월 09:40)",
+        replace_existing=True,
+        max_instances=1,
+    )
+
+    # 9) 큐 되먹임 1회 정리 — 부팅 2분 뒤 한 번.
+    #    ⚠️ 01:20 잡이 매일 돌지만, 배포 직후에도 즉시 털어야 한다. 큐가 차 있는 동안
+    #       확장은 매시간 12건을 거기에 먼저 쓰고 순위 추적이 굶기 때문이다(하룻밤 손해).
+    #       멱등하다 — 털 게 없으면 0건 로그만 남는다.
+    _scheduler.add_job(
+        _run_request_queue_prune,
+        trigger="date",
+        run_date=datetime.now() + timedelta(minutes=2),
+        id="request_queue_prune_boot",
+        name="요청 큐 되먹임 1회 정리 (부팅 +2분)",
         replace_existing=True,
         max_instances=1,
     )
@@ -349,7 +368,19 @@ def _collect_all_keywords(conn):
     from database import get_all_tracked_products, get_keywords_for_product
 
     # 홈탭 추적 상품 키워드
+    # ⚠️ 2026-08-28: 종전엔 get_all_tracked_products() 가 **전량**을 돌려주고 그대로
+    #    다 쟀다. 계약이 끝난 업체의 상품도, 어느 업체 것인지 모르는 상품도 매일
+    #    순위가 기록됐다(실측 98개 중 자격 없는 것 8 · 주인 모름 8).
+    #    이제 수집(collector)과 같은 자격 판정을 지난다.
     home_products = get_all_tracked_products() or []
+    ensure_disabled_column(conn)
+    _ok_pids = eligible_tracked_product_ids(conn)
+    if _ok_pids is not None:
+        _before = len(home_products)
+        home_products = [p for p in home_products if p["id"] in _ok_pids]
+        if _before != len(home_products):
+            logger.info(f"  🎯 추적 상품 자격 판정 — {_before}개 중 {len(home_products)}개만 잰다"
+                        f" (계약 종료·비활성 {_before - len(home_products)}개 제외)")
     home_keyword_map = {}  # {keyword: [(product, kw_info), ...]}
     for product in home_products:
         keywords = get_keywords_for_product(product["id"])
@@ -362,7 +393,11 @@ def _collect_all_keywords(conn):
 
     # 업체 키워드
     clients = conn.execute(
-        "SELECT id, name, main_keywords, naver_store_url FROM clients WHERE status = 'active' AND COALESCE(auto_analysis, 1) = 1 AND COALESCE(role,'advertiser')='advertiser' AND COALESCE(vertical,'store')='store'"  # 관리 중단 업체 제외(호출 다이어트) · 플레이스 축 제외(스토어 크롤 대상 아님)
+        eligible_clients_sql("id, name, main_keywords, naver_store_url")
+            # ⚠️ 2026-08-28: 종전 이 자리에 4조건(활성·자동분석·광고주·스토어)이 박혀
+            #    있었고 **추적 ON·추적 기간이 빠져 있었다**. 그래서 수집은 멈춘 계약
+            #    만료 업체 65곳의 순위가 여기서만 계속 기록됐다(대표 지적 「종료일이
+            #    적혀 있는데 왜 살아 있냐」의 정체). 판정은 tracking_eligibility 한 곳.
     ).fetchall()
 
     client_keyword_map = {}  # {client_id: [keywords]}
@@ -483,7 +518,15 @@ def _run_rank_tracking():
                 # ── 2순위: 기존 검색 API (최대 300개 = 100개 × 3페이지) ──
                 for page_idx in range(RANK_PAGES if not all_prods else 0):
                     start = page_idx * 100 + 1
-                    shop_result = search_naver_shopping_api(keyword, display=100, start=start)
+                    # ⚠️ enqueue_on_miss=False — 배치가 자기 일을 큐에 되돌려 넣지 않는다(2026-08-28).
+                    #    종전엔 수집분이 없으면 그 키워드를 요청 큐에 넣었는데, 쇼핑 API 가 7월 말에
+                    #    종료돼 수집분이 없으면 **무조건** 이 경로를 탔다. 그래서 수집이 못 따라간
+                    #    키워드가 매일 다시 큐로 들어가 813건까지 쌓였고, 확장은 매시간 12건을 거기에
+                    #    먼저 써서 정작 순위 추적 몫이 시간당 2~3개로 굶었다.
+                    #    이 키워드들은 어차피 수집 유니버스에 있어 매일 다시 배정된다.
+                    #    직원이 화면에서 직접 검색한 건은 종전대로 큐에 들어간다(그건 진짜 요청).
+                    shop_result = search_naver_shopping_api(keyword, display=100, start=start,
+                                                            enqueue_on_miss=False)
                     total_api_calls += 1
                     _naver_called = True
                     # ── 스테일 수집분 차단 ──
@@ -690,7 +733,11 @@ def _run_daily_analysis():
 
         # 활성 업체 + 키워드 수집
         clients = conn.execute(
-            "SELECT id, name, main_keywords, naver_store_url FROM clients WHERE status = 'active' AND COALESCE(auto_analysis, 1) = 1 AND COALESCE(role,'advertiser')='advertiser' AND COALESCE(vertical,'store')='store'"  # 관리 중단 업체 제외(호출 다이어트) · 플레이스 축 제외(스토어 크롤 대상 아님)
+            eligible_clients_sql("id, name, main_keywords, naver_store_url")
+            # ⚠️ 2026-08-28: 종전 이 자리에 4조건(활성·자동분석·광고주·스토어)이 박혀
+            #    있었고 **추적 ON·추적 기간이 빠져 있었다**. 그래서 수집은 멈춘 계약
+            #    만료 업체 65곳의 순위가 여기서만 계속 기록됐다(대표 지적 「종료일이
+            #    적혀 있는데 왜 살아 있냐」의 정체). 판정은 tracking_eligibility 한 곳.
         ).fetchall()
 
         client_keyword_map = {}
@@ -761,7 +808,15 @@ def _run_daily_analysis():
                         total_shop = cached["total"]
                     else:
                         # 캐시 미스 — fallback API 호출
-                        shop_result = search_naver_shopping_api(keyword, display=100)
+                        # ⚠️ enqueue_on_miss=False — 배치가 자기 일을 큐에 되돌려 넣지 않는다(2026-08-28).
+                        #    종전엔 수집분이 없으면 그 키워드를 요청 큐에 넣었는데, 쇼핑 API 가 7월 말에
+                        #    종료돼 수집분이 없으면 **무조건** 이 경로를 탔다. 그래서 수집이 못 따라간
+                        #    키워드가 매일 다시 큐로 들어가 813건까지 쌓였고, 확장은 매시간 12건을 거기에
+                        #    먼저 써서 정작 순위 추적 몫이 시간당 2~3개로 굶었다.
+                        #    이 키워드들은 어차피 수집 유니버스에 있어 매일 다시 배정된다.
+                        #    직원이 화면에서 직접 검색한 건은 종전대로 큐에 들어간다(그건 진짜 요청).
+                        shop_result = search_naver_shopping_api(keyword, display=100,
+                                                                enqueue_on_miss=False)
                         items = shop_result.get("items", [])
                         total_shop = shop_result.get("total", 0)
                         prods = [_parse_api_item(item, i + 1) for i, item in enumerate(items)]
@@ -1028,13 +1083,32 @@ def _run_daily_db_backup():
 # 순위가 tracked_products 축과 clients 축으로 갈려 있어 같은 상품이 두 번 관리된다.
 # rank_link 가 둘을 이어 두면 다음 단계(조회 통합)에서 한쪽만 읽는 화면을 고칠 수 있다.
 # 이 잡은 링크 행만 만들고 지운다 — 순위 데이터·조회 경로는 건드리지 않는다.
+def _run_request_queue_prune():
+    """요청 큐에서 배치가 스스로 되넣은 것을 턴다(부팅 1회 + 01:20 정기)."""
+    try:
+        from collector import prune_self_tail_requests
+        q = prune_self_tail_requests()
+        logger.info(f"🧹 요청 큐 정리 — {q.get('pruned', 0)}건 제거 · 남은 대기 {q.get('kept', 0)}건")
+    except Exception as e:
+        logger.warning(f"요청 큐 정리 실패(무시): {e}")
+
+
 def _run_rank_link_maintenance():
     try:
         from rank_link import run_maintenance
         res = run_maintenance()
+        # 큐 되먹임 정리도 같은 잡에서 — 브리지가 새로 이어 준 뒤라야 유니버스가 최신이다.
+        try:
+            from collector import prune_self_tail_requests
+            q = prune_self_tail_requests()
+            logger.info(f"🧹 요청 큐 정리 — {q.get('pruned', 0)}건 제거 · 남은 대기 {q.get('kept', 0)}건")
+        except Exception as _qe:
+            logger.warning(f"요청 큐 정리 실패(무시): {_qe}")
         if res.get("success"):
             logger.info(f"🔗 순위 축 브리지 — 신규 {res.get('inserted', 0)}건 · "
-                        f"고아 정리 {res.get('pruned', 0)}건 · 총 {res.get('linked_total', 0)}건")
+                        f"고아 정리 {res.get('pruned', 0)}건 · "
+                        f"주인 없어 추적 중지 {res.get('disabled', 0)}건 · "
+                        f"총 {res.get('linked_total', 0)}건")
         else:
             logger.warning(f"순위 축 브리지 갱신 실패: {res.get('detail')}")
     except Exception as e:

@@ -653,7 +653,9 @@ def run_single_analysis(client_id: int, client_name: str, keyword: str, product_
     if cached_prods is None:
         try:
             from naver_crawler import search_naver_shopping_api, _parse_api_item
-            shop_result = search_naver_shopping_api(keyword, display=40)
+            # ⚠️ enqueue_on_miss=False — 배치가 자기 일을 큐에 되돌려 넣지 않는다(2026-08-28).
+            #    이유는 scheduler 08:00 배치와 같다 — 그쪽 주석 참조.
+            shop_result = search_naver_shopping_api(keyword, display=40, enqueue_on_miss=False)
             total_shop_products = shop_result.get("total", 0)
             items = shop_result.get("items", [])
             prods = [_parse_api_item(item, idx + 1) for idx, item in enumerate(items)]

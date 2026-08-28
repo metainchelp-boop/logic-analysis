@@ -70,7 +70,38 @@ const CFG = {
   workerCount: 1,        // 전부 몇 대인가
 };
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const _rawSleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** ⭐ 잠들지 않고 쉬는 대기 (2026-08-28 — 수집이 시간당 2~3개로 굶던 원인).
+ *
+ * 크롬 확장의 배경 스크립트(서비스 워커)는 **30초 동안 확장 API 를 한 번도 부르지
+ * 않으면 브라우저가 꺼 버린다.** 그냥 setTimeout 으로 30초를 쉬면 그 사이 아무
+ * API 도 안 부르므로 워커가 죽고, **회차가 첫 키워드에서 통째로 끊긴다.**
+ *
+ * 실측(2026-08-28)이 이걸 그대로 보여줬다:
+ *   · 온디맨드 간격 20초 → 30초 미만이라 살아남는다 → 시간당 상한 12건을 다 채웠다
+ *   · 시간대 몫 간격 30초 → 죽는다              → 시간당 2~3개만 하고 끊겼다
+ *   그 결과 하루 345개 중 288개가 밀린 큐 몫이고 순위 추적은 57개뿐이었다.
+ *
+ * 그래서 긴 대기는 잘게 쪼개고 사이사이 확장 API(storage 읽기)를 한 번씩 부른다.
+ * 그 호출이 유휴 타이머를 되돌려 워커가 깨어 있는다.
+ *
+ * ⚠️ 이 함수를 다시 단순 setTimeout 으로 되돌리지 말 것. 간격을 20초 위로 올리는
+ *    순간 같은 사고가 조용히 재발한다(에러도 로그도 안 남는다 — 그냥 안 한다).
+ */
+const KEEPALIVE_TICK_MS = 15000;   // 30초 한도의 절반 — 여유를 두고 깨운다
+async function sleep(ms) {
+  let left = Number(ms) || 0;
+  while (left > 0) {
+    const step = Math.min(left, KEEPALIVE_TICK_MS);
+    await _rawSleep(step);
+    left -= step;
+    if (left > 0) {
+      // 확장 API 호출 = 유휴 타이머 리셋. 값은 쓰지 않는다(깨우는 것이 목적).
+      try { await chrome.storage.local.get('__keepalive__'); } catch (e) { /* 무시 */ }
+    }
+  }
+}
 
 /** 팝업에서 지정한 기계 번호를 URL 파라미터로 만든다(1대면 빈 문자열 = 종전 요청 그대로). */
 async function workerParams() {
@@ -141,10 +172,32 @@ async function markBlocked(reason) {
   const until = Date.now() + BLOCK_COOLDOWN_MS;
   await chrome.storage.local.set({ [BLOCK_KEY]: until });
   await setState({ blocked: true, blockedUntil: until, blockedReason: reason });
+  // ⭐ 복귀할 때 같은 속도로 돌아가면 또 막힌다 — 하루 동안 절반 속도로 간다(2026-08-28).
+  //    사람이 아무것도 안 해도 스스로 안전한 속도를 찾아간다. 하루 지나면 자동 원복.
+  const _slowUntil = Date.now() + SLOW_WINDOW_MS;
+  await chrome.storage.local.set({ [SLOW_KEY]: _slowUntil });
+  await setState({ slowUntil: _slowUntil });      // 팝업이 「안전 속도」 표시를 읽는다
   await log(`🧱 네이버 자동입력 방지(캡차) 확인 — ${reason}. 6시간 쉬었다 재개합니다.`);
+  await log('   재개 뒤 하루 동안은 절반 속도로 돌립니다(또 막히지 않도록).');
   await log('   해제하려면: 크롬에서 네이버쇼핑을 직접 열어 캡차를 한 번 풀어주세요.');
   // 쌓인 작업 탭을 닫아 둔다 — 열어둘수록 봇 판정이 깊어지고 화면도 지저분해진다.
   await closeAllWorkTabs();
+}
+
+const SLOW_KEY = 'slowUntil';
+const SLOW_WINDOW_MS = 24 * 60 * 60 * 1000;   // 한 번 막히면 하루 동안 느리게 간다
+
+/** 지금 '느리게 가기' 상태인가 — 캡차를 만난 뒤 하루 동안 켜진다. */
+async function isSlow() {
+  try {
+    const o = await chrome.storage.local.get(SLOW_KEY);
+    return Number(o[SLOW_KEY] || 0) > Date.now();
+  } catch (e) { return false; }
+}
+
+/** 이번에 쓸 키워드 사이 휴식(ms). 느리게 가기 상태면 2배. */
+async function gapFor(base) {
+  return (await isSlow()) ? base * 2 : base;
 }
 
 async function clearBlocked() {
@@ -558,6 +611,12 @@ async function runCollection(manual = false) {
 
   const hourStart = Date.now();
   const hourTag = hourKey();
+  // ⚠️ 예산은 '시작으로부터 50분'이 아니라 **이 시간대가 끝날 때까지**로 잡는다.
+  //    1분 알람으로 중간에 이어받을 수 있게 되면서, :40 에 이어받은 회차가 50분을
+  //    통으로 쓰면 다음 시간대까지 밀고 들어간다(두 시간대가 겹쳐 요청이 몰린다).
+  const _msLeftInHour = (60 - new Date().getMinutes()) * 60 * 1000
+                        - new Date().getSeconds() * 1000 - 5 * 60 * 1000;  // 5분 여유
+  const hourBudget = Math.max(60 * 1000, Math.min(CFG.hourBudgetMs, _msLeftInHour));
   try {
     // 이번 시간대 몫만 받아온다(24시간 분산). 서버가 슬롯 + 밀린 것을 함께 준다.
     const nowHour = new Date().getHours();
@@ -580,7 +639,7 @@ async function runCollection(manual = false) {
     let done = 0, failed = 0, streak = 0;
     for (const kw of keywords) {
       // 다음 시간대와 겹치지 않게 — 남은 것은 서버가 '밀린 것'으로 다시 내려준다
-      if (Date.now() - hourStart > CFG.hourBudgetMs) {
+      if (Date.now() - hourStart > hourBudget) {
         await log(`⏱ 이번 시간대 시간 소진 — ${keywords.length - done - failed}개는 다음 회차로`);
         break;
       }
@@ -608,7 +667,7 @@ async function runCollection(manual = false) {
         }
         await sleep(jitter() * (1 + streak));   // 실패할수록 더 길게 쉰다
       }
-      await sleep(jitter() + CFG.keywordGapMs);
+      await sleep(jitter() + await gapFor(CFG.keywordGapMs));
     }
     if (done > 0) await clearBlocked();   // 값을 실제로 받았다 = 차단 풀림
     await log(`✅ ${new Date().getHours()}시 회차 종료 — 성공 ${done} · 실패 ${failed}`);
@@ -689,7 +748,7 @@ async function runOnDemand() {
       // 시간대 슬롯 수집이 대기 중이면 여기서 양보한다 — 온디맨드가 락을 계속 쥐고 있어
       // 시간대 경로가 하루 종일 굶던 사고(2026-08-08)를 막는다.
       if (dailyDue) { await log('  ↩ 시간대 수집 차례 — 온디맨드 양보'); break; }
-      await sleep(jitter() + CFG.onDemandGapMs);
+      await sleep(jitter() + await gapFor(CFG.onDemandGapMs));
     }
     if (ok === 0 && fail > 0) {
       await chrome.storage.local.set({ odBackoffUntil: Date.now() + 10 * 60 * 1000 });
@@ -706,11 +765,31 @@ async function runOnDemand() {
 function armAlarms() {
   // 'daily' 는 이름만 남았고 실제로는 **매시간 자기 몫**을 수집하는 알람이다(24시간 분산).
   // when 을 1분 뒤로 둬 브라우저를 켜자마자 그 시간대 몫을 이어받는다.
-  chrome.alarms.create('daily', { periodInMinutes: 60, when: Date.now() + 60000 });
+  // ⭐ 1분 주기 (2026-08-28 — 종전 60분). 시간당 한 번만 깨우면, 회차가 중간에
+  //    끊겼을 때(브라우저가 워커를 껐다든지) **그 시간대가 통째로 날아간다.**
+  //    1분마다 깨워 두면 끊긴 자리에서 이어받는다. 이미 그 시간대 몫을 끝냈으면
+  //    state.finishedHour 를 보고 조용히 돌아가므로 헛도는 비용은 없다.
+  //    (서버는 오늘 이미 수집한 키워드를 빼고 내려주므로 다시 재는 일도 없다.)
+  chrome.alarms.create('daily', { periodInMinutes: 1, when: Date.now() + 60000 });
   // 30초 오프셋 — daily 와 만기가 매시 정각에 겹치지 않게(동시 발화 자체를 회피)
   chrome.alarms.create('ondemand', { periodInMinutes: 1, when: Date.now() + 30000 });
 }
-chrome.runtime.onInstalled.addListener(() => { armAlarms(); log('설치됨 — 03시 자동 수집 + 1분 주기 온디맨드 대기.'); });
+chrome.runtime.onInstalled.addListener(() => { armAlarms(); log('설치됨 — 1분 주기로 자기 시간대 몫과 밀린 요청을 처리합니다.'); });
+
+/** 워커가 깨어날 때마다 알람이 제대로 걸려 있는지만 확인한다(2026-08-28).
+ *  ⚠️ 여기서 무조건 armAlarms() 를 부르면 안 된다 — when 이 매번 1분 뒤로 밀려
+ *     알람이 영원히 안 뜬다. **주기가 틀렸을 때만** 다시 건다.
+ *     확장을 새로고침만 하고 버전이 그대로면 onInstalled 가 안 뜨는 경우가 있어
+ *     옛 60분 주기가 그대로 남는 것을 막는 안전망이다. */
+(async () => {
+  try {
+    const a = await chrome.alarms.get('daily');
+    if (!a || a.periodInMinutes !== 1) {
+      armAlarms();
+      await log('⏰ 알람 재장전 — 1분 주기로 맞췄습니다.');
+    }
+  } catch (e) { /* 무시 */ }
+})();
 chrome.runtime.onStartup.addListener(() => { armAlarms(); log('브라우저 시작 — 알람 재장전.'); });
 
 /** 수집 회차 날짜 — 서버 _effective_date 와 동일 규칙.
@@ -736,15 +815,17 @@ chrome.alarms.onAlarm.addListener(async (a) => {
   // 24시간 분산 — 매시간 자기 시간대 몫만 수집한다(시각 제한 없음).
   // 같은 시간대를 이미 돌았으면 건너뛴다(알람이 시간당 두 번 뜨는 경우 방어).
   const { state = {} } = await chrome.storage.local.get('state');
-  if (state.finishedHour === hourKey()) return;
+  if (state.finishedHour === hourKey()) return;   // 이 시간대 몫은 이미 끝냈다
+  if (running === 'daily') return;                // 이미 돌고 있다 — 조용히 물러난다
   if (running === 'ondemand') {
-    // 온디맨드가 돌고 있으면 한 건 끝나는 대로 비켜달라고 표시하고, 비면 이어받는다.
-    // (종전엔 그냥 return 이라 온디맨드가 계속 도는 동안 시간대 수집이 영영 안 돌았다)
+    // 온디맨드가 돌고 있으면 한 건 끝나는 대로 비켜달라고 표시만 하고 물러난다.
+    // ⚠️ 종전엔 여기서 최대 5분을 기다렸다. 그런데 밀린 큐가 차 있으면 온디맨드가
+    //    12건(약 7분)을 쥐고 있어 **기다리다 포기하고 그 시간대를 날렸다.**
+    //    이제 알람이 1분마다 오므로 기다릴 필요가 없다 — 다음 분에 이어받는다.
     dailyDue = true;
-    await log('⏳ 시간대 수집 대기 — 온디맨드가 끝나는 대로 시작합니다');
-    for (let i = 0; i < 60 && running; i++) await sleep(5000);
-    dailyDue = false;
+    return;
   }
+  dailyDue = false;
   runCollection(false);
 });
 
