@@ -941,7 +941,7 @@ jobs:
               docker exec logic-analysis rm -f /tmp/rank_link_preview.py 2>/dev/null || true
             fi
             echo "== 배포 반영 확인 (서버 파일이 main 과 같은가) =="
-            for f in rank_link.py scheduler.py collector.py split_rule.py; do
+            for f in rank_link.py scheduler.py collector.py split_rule.py tracking_eligibility.py; do
               echo "-- $f --"
               docker exec logic-analysis sh -c "ls -l --time-style=+%Y-%m-%d\ %H:%M /app/$f; md5sum /app/$f" 2>/dev/null || echo "  (조회 실패)"
             done
@@ -950,6 +950,23 @@ jobs:
               | sed 's/^/  rank_link.py 안 _store_key 등장 횟수: /'
             docker exec logic-analysis sh -c "grep -c 'split_ok' /app/collector.py" 2>/dev/null \
               | sed 's/^/  collector.py 안 split_ok 등장 횟수(2대 분할): /'
+            echo "  ↓ 2026-08-28 배포분 표지 (없으면 그 차수가 안 올라간 것)"
+            docker exec logic-analysis sh -c "grep -c 'prune_self_tail_requests' /app/collector.py" 2>/dev/null \
+              | sed 's/^/  collector.py 안 prune_self_tail_requests: /'
+            docker exec logic-analysis sh -c "grep -o 'HOURLY_CAP = [0-9]*' /app/collector.py" 2>/dev/null \
+              | sed 's/^/  collector.py 시간당 상한: /'
+            docker exec logic-analysis sh -c "grep -c 'eligible_clients_sql' /app/scheduler.py" 2>/dev/null \
+              | sed 's/^/  scheduler.py 안 eligible_clients_sql(자격 통일): /'
+            docker exec logic-analysis sh -c "grep -c 'enqueue_on_miss=False' /app/scheduler.py /app/auto_analysis.py" 2>/dev/null \
+              | sed 's/^/  큐 되먹임 차단: /'
+            docker exec logic-analysis sh -c "grep -c 'disable_ownerless' /app/rank_link.py" 2>/dev/null \
+              | sed 's/^/  rank_link.py 안 disable_ownerless(주인 없는 상품): /'
+            echo
+
+            echo "== 2026-08-28 차수 실행 확인 (부팅 +2분 큐 정리 · 자격 판정) =="
+            docker logs --since 30m logic-analysis 2>&1 \
+              | grep -E "요청 큐 정리|큐 되먹임 정리|추적 상품 자격 판정|주인 없어 추적 중지|수집 유니버스|스케줄러 시작" \
+              | tail -15 || echo "  (해당 로그 없음 — 아직 2분이 안 지났을 수 있다)"
             echo
 
             echo "== 어젯밤 예정분 결과 (01:20 연결 · 08:00 나눠 적기) =="
