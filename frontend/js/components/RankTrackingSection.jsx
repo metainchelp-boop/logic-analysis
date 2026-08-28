@@ -389,9 +389,13 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                         } catch (e) {}
                         onOpenRankTab();
                     }}>📊 쇼핑 순위 추적 탭에서 관리 →</button>}
-                    {!analysisOnly && canEdit !== false && <button className="btn btn-primary btn-sm" onClick={() => setShowAddForm(!showAddForm)}>
-                        {showAddForm ? '취소' : '+ 상품 등록'}
-                    </button>}
+                    {/* ⚠️ 등록 버튼을 여기서 뺐다(2026-08-28). 등록은 화면 맨 위 「＋ 추적 상품 등록」
+                        카드가 맡는다 — 그 카드에는 **업체 칸이 있고 서버가 업체를 필수로 받는다.**
+                        여기 폼에는 업체 칸이 없어서, 남겨 두면 눌러도 서버가 거절하는 죽은 버튼이 되고
+                        사람은 「등록이 안 된다」고만 느낀다. 목록·삭제·재확인은 그대로 둔다. */}
+                    {!analysisOnly && canEdit !== false && <span style={{ fontSize: 12, color: '#64748b' }}>
+                        상품 등록은 <b style={{ color: '#2563eb' }}>화면 맨 위 「＋ 추적 상품 등록」</b>에서 합니다
+                    </span>}
                 </div>
 
                 {showAddForm && (

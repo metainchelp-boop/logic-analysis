@@ -659,7 +659,20 @@ def keyword_exposure(req: KeywordExposureRequest, current_user: dict = Depends(g
 # --- 상품 추적 등록 ---
 @app.post("/api/products/track")
 def track_product(req: ProductAddRequest, background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
-    """상품 + 키워드 추적 등록 (유저별 격리)"""
+    """상품 + 키워드 추적 등록 (유저별 격리)
+
+    ⚠️ 업체(client_id)는 **필수**다(2026-08-28 대표 확정 「업체명 기재 필수로 해줘」).
+       종전엔 선택값이라 화면에 칸이 없어도 등록이 됐고, 그렇게 **주인이 없는 상품 41개**가
+       쌓였다. 주인을 모르면 그 업체 계약이 끝나도 추적을 멈출 근거가 없어 계속 수집된다.
+       화면(등록 카드)이 1차로 막고, 여기가 최종 방어선이다 — 옛 화면이 캐시로 남아 있어도
+       업체 없는 등록은 여기서 거절되고 사람에게 새로고침을 안내한다.
+    """
+    if not req.client_id:
+        raise HTTPException(
+            status_code=400,
+            detail="업체를 선택해야 등록됩니다. 화면을 새로고침(⌘⇧R)한 뒤 "
+                   "「＋ 추적 상품 등록」의 업체 칸에서 업체를 고르고 다시 등록해 주세요.",
+        )
     try:
         # 상품 정보 가져오기
         product_info = get_product_info(req.product_url)

@@ -2557,10 +2557,16 @@ window.RankTrackingSection = function RankTrackingSection({
       } catch (e) {}
       onOpenRankTab();
     }
-  }, "📊 쇼핑 순위 추적 탭에서 관리 →"), !analysisOnly && canEdit !== false && /*#__PURE__*/React.createElement("button", {
-    className: "btn btn-primary btn-sm",
-    onClick: () => setShowAddForm(!showAddForm)
-  }, showAddForm ? '취소' : '+ 상품 등록')), showAddForm && /*#__PURE__*/React.createElement("div", {
+  }, "📊 쇼핑 순위 추적 탭에서 관리 →"), !analysisOnly && canEdit !== false && /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12,
+      color: '#64748b'
+    }
+  }, "상품 등록은 ", /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: '#2563eb'
+    }
+  }, "화면 맨 위 「＋ 추적 상품 등록」"), "에서 합니다")), showAddForm && /*#__PURE__*/React.createElement("div", {
     className: "card fade-in",
     style: {
       marginBottom: 16
@@ -3468,6 +3474,39 @@ var _krTh = {
   borderBottom: '1px solid #e2e8f0',
   whiteSpace: 'nowrap'
 };
+/* ＋ 추적 상품 등록 카드 (2026-08-28 대표 확정) — 제목 바로 아래 항상 펼쳐 둔다.
+   ⚠️ 접이식으로 되돌리지 말 것. 종전엔 페이지 맨 아래 접힌 「추적 상품 관리」 안에 있어
+      스크롤 → 펼치기 → 버튼, 세 단계를 거쳐야 입력칸이 나왔다(대표 지적). */
+var _krRegBox = {
+  border: '1.5px solid #3b82f6',
+  background: '#eff6ff',
+  borderRadius: 12,
+  padding: '15px 16px',
+  marginBottom: 18
+};
+var _krRegRow = {
+  display: 'grid',
+  gridTemplateColumns: 'minmax(150px,1fr) minmax(220px,1.6fr) minmax(160px,1.3fr) auto',
+  gap: 9,
+  alignItems: 'end'
+};
+var _krRegLbl = {
+  display: 'block',
+  fontSize: 11.5,
+  color: '#334155',
+  fontWeight: 700,
+  marginBottom: 4
+};
+var _krRegInp = {
+  width: '100%',
+  border: '1px solid #cbd5e1',
+  borderRadius: 8,
+  padding: '8px 10px',
+  fontSize: 12.5,
+  fontFamily: 'inherit',
+  background: '#fff',
+  color: '#0f172a'
+};
 var _krTd = {
   padding: '11px 12px',
   fontSize: 13,
@@ -3646,6 +3685,88 @@ window.KeywordRankPage = function KeywordRankPage(props) {
       if (res && res.success) setProducts(res.data || []);
     }).catch(function () {});
   }, []);
+
+  /* ＋ 추적 상품 등록 (상단 고정 카드) — 2026-08-28
+     ⚠️ 업체는 **필수**다. 목록에서 고른 것만 저장한다 — 손으로 친 글자를 그대로 받으면
+        오타·유사 상호가 들어가 지금과 똑같이 주인을 못 찾는다(대표 확정). */
+  var _rgQ = useState('');
+  var regQuery = _rgQ[0],
+    setRegQuery = _rgQ[1]; // 업체 검색어
+  var _rgO = useState([]);
+  var regOpts = _rgO[0],
+    setRegOpts = _rgO[1]; // 검색 결과
+  var _rgC = useState(null);
+  var regClient = _rgC[0],
+    setRegClient = _rgC[1]; // 고른 업체 {id,name}
+  var _rgU = useState('');
+  var regUrl = _rgU[0],
+    setRegUrl = _rgU[1];
+  var _rgK = useState('');
+  var regKw = _rgK[0],
+    setRegKw = _rgK[1];
+  var _rgB = useState(false);
+  var regBusy = _rgB[0],
+    setRegBusy = _rgB[1];
+  var _rgM = useState(null);
+  var regMsg = _rgM[0],
+    setRegMsg = _rgM[1]; // {ok, text}
+
+  /* 업체 검색 — 이미 있는 피커 경로를 그대로 쓴다(신규 서버 작업 0).
+     입력이 멈추고 250ms 뒤 한 번만 부른다(글자마다 부르면 서버를 두드린다). */
+  React.useEffect(function () {
+    var q = (regQuery || '').trim();
+    if (regClient || !q) {
+      setRegOpts([]);
+      return;
+    }
+    var t = setTimeout(function () {
+      api.get('/cd/clients-lookup?q=' + encodeURIComponent(q)).then(function (res) {
+        setRegOpts(res && res.success && res.data ? res.data : []);
+      }).catch(function () {
+        setRegOpts([]);
+      });
+    }, 250);
+    return function () {
+      clearTimeout(t);
+    };
+  }, [regQuery, regClient]);
+  var regReady = !!(regClient && regUrl.trim() && regKw.trim()) && !regBusy;
+  var submitRegister = function () {
+    if (!regReady) return;
+    setRegBusy(true);
+    setRegMsg(null);
+    var kws = regKw.split(',').map(function (k) {
+      return k.trim();
+    }).filter(Boolean);
+    api.post('/products/track', {
+      product_url: regUrl.trim(),
+      keywords: kws,
+      client_id: regClient.id
+    }).then(function (res) {
+      if (res && res.success === false) throw new Error(res.detail || '등록 실패');
+      setRegUrl('');
+      setRegKw('');
+      /* ⚠️ 「등록됨」과 「업체에 이어짐」은 다른 일이다. 서버는 등록을 성립시키고
+         연결 결과를 link 로 따로 돌려준다 — 이어지지 않았으면 그렇게 말해야 한다.
+         성공했다고만 알리면 주인 없는 상품이 또 조용히 생긴다. */
+      var lk = res && res.data && res.data.link || null;
+      setRegMsg(lk && lk.linked === false ? {
+        ok: false,
+        text: '상품은 등록됐지만 「' + regClient.name + '」에 잇지 못했습니다' + (lk.reason ? ' — ' + lk.reason : '') + '. 아래 「추적 상품 관리」에서 확인해 주세요.'
+      } : {
+        ok: true,
+        text: '「' + regClient.name + '」에 등록했습니다 · 키워드 ' + kws.length + '개 · 첫 순위는 잠시 뒤 표시됩니다'
+      });
+      loadProducts();
+    }).catch(function (e) {
+      setRegMsg({
+        ok: false,
+        text: '등록하지 못했습니다 — ' + (e && e.message || '네트워크 오류')
+      });
+    }).then(function () {
+      setRegBusy(false);
+    });
+  };
 
   /* 스토어 분석 → 탭 이동 핸드오프 (1회 소비) */
   var _ctx = useState(function () {
@@ -4761,6 +4882,7 @@ window.KeywordRankPage = function KeywordRankPage(props) {
       }, mainRow, renderKwPanel(client, b)) : mainRow;
     }))))));
   }
+  var canEditHere = currentUser && currentUser.role !== 'viewer';
   return React.createElement('div', {
     style: _krWrap
   }, React.createElement('div', {
@@ -4784,7 +4906,158 @@ window.KeywordRankPage = function KeywordRankPage(props) {
       fontSize: 12.5,
       color: '#94a3b8'
     }
-  }, selected ? '업체 상세 — 키워드별 추적 현황' : (isViewer ? '내 영업 대상 업체별 순위 추적 현황' : '광고주 업체별 순위 추적 현황') + ' · 매일 아침 자동 기록')), selected ? renderDetail() : renderList(),
+  }, selected ? '업체 상세 — 키워드별 추적 현황' : (isViewer ? '내 영업 대상 업체별 순위 추적 현황' : '광고주 업체별 순위 추적 현황') + ' · 매일 아침 자동 기록')),
+  /* ---------- ＋ 추적 상품 등록 (항상 펼침) ----------
+     업체 목록 화면에서만 — 업체 상세는 그 업체 것만 보이게 두는 기존 규칙 그대로. */
+  !selected && canEditHere && React.createElement('div', {
+    style: _krRegBox
+  }, React.createElement('div', {
+    style: {
+      fontSize: 13.5,
+      fontWeight: 800,
+      color: '#2563eb',
+      marginBottom: 11
+    }
+  }, '＋ 추적 상품 등록'), React.createElement('div', {
+    style: _krRegRow
+  }, /* 업체 — 고른 것만 저장된다 */
+  React.createElement('div', {
+    style: {
+      position: 'relative'
+    }
+  }, React.createElement('label', {
+    style: _krRegLbl
+  }, '업체 ', React.createElement('span', {
+    style: {
+      color: '#ef4444'
+    }
+  }, '*')), regClient ? React.createElement('div', {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6,
+      background: '#fff',
+      border: '1px solid #3b82f6',
+      borderRadius: 99,
+      padding: '5px 8px 5px 11px',
+      fontSize: 12.5,
+      fontWeight: 800,
+      color: '#2563eb'
+    }
+  }, React.createElement('span', {
+    style: {
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap'
+    }
+  }, regClient.name), React.createElement('button', {
+    onClick: function () {
+      setRegClient(null);
+      setRegQuery('');
+    },
+    title: '업체 다시 고르기',
+    style: {
+      border: 0,
+      background: 'none',
+      color: '#94a3b8',
+      cursor: 'pointer',
+      fontSize: 12,
+      padding: '0 2px',
+      fontWeight: 400
+    }
+  }, '✕')) : React.createElement('input', {
+    style: _krRegInp,
+    value: regQuery,
+    placeholder: '업체명 검색',
+    autoComplete: 'off',
+    onChange: function (e) {
+      setRegQuery(e.target.value);
+    }
+  }), !regClient && regOpts.length > 0 && React.createElement('div', {
+    style: {
+      position: 'absolute',
+      zIndex: 20,
+      left: 0,
+      right: 0,
+      top: 'calc(100% + 4px)',
+      background: '#fff',
+      border: '1px solid #e2e8f0',
+      borderRadius: 8,
+      boxShadow: '0 8px 20px rgba(15,23,42,.12)',
+      maxHeight: 190,
+      overflow: 'auto'
+    }
+  }, regOpts.map(function (c) {
+    return React.createElement('button', {
+      key: c.id,
+      onClick: function () {
+        setRegClient(c);
+        setRegOpts([]);
+      },
+      style: {
+        display: 'block',
+        width: '100%',
+        textAlign: 'left',
+        border: 0,
+        background: 'none',
+        padding: '7px 11px',
+        fontSize: 12.5,
+        cursor: 'pointer',
+        fontFamily: 'inherit',
+        color: '#0f172a'
+      }
+    }, c.name);
+  }))), React.createElement('div', null, React.createElement('label', {
+    style: _krRegLbl
+  }, '상품 URL ', React.createElement('span', {
+    style: {
+      color: '#ef4444'
+    }
+  }, '*')), React.createElement('input', {
+    style: _krRegInp,
+    value: regUrl,
+    placeholder: 'https://smartstore.naver.com/…/products/12345',
+    onChange: function (e) {
+      setRegUrl(e.target.value);
+    }
+  })), React.createElement('div', null, React.createElement('label', {
+    style: _krRegLbl
+  }, '추적 키워드 ', React.createElement('span', {
+    style: {
+      color: '#ef4444'
+    }
+  }, '*')), React.createElement('input', {
+    style: _krRegInp,
+    value: regKw,
+    placeholder: '고구마, 꿀고구마',
+    onChange: function (e) {
+      setRegKw(e.target.value);
+    },
+    onKeyDown: function (e) {
+      if (e.key === 'Enter') submitRegister();
+    }
+  })), React.createElement('button', {
+    onClick: submitRegister,
+    disabled: !regReady,
+    style: {
+      border: 0,
+      background: regReady ? '#3b82f6' : '#cbd5e1',
+      color: '#fff',
+      borderRadius: 8,
+      padding: '9px 16px',
+      fontSize: 12.5,
+      fontWeight: 700,
+      cursor: regReady ? 'pointer' : 'not-allowed',
+      whiteSpace: 'nowrap',
+      fontFamily: 'inherit'
+    }
+  }, regBusy ? '등록 중…' : '등록')), React.createElement('div', {
+    style: {
+      fontSize: 11,
+      marginTop: 7,
+      color: regMsg ? regMsg.ok ? '#047857' : '#b91c1c' : '#64748b'
+    }
+  }, regMsg ? regMsg.text : regClient ? '「' + regClient.name + '」 것으로 등록됩니다 — 그 업체 계약이 끝나면 추적도 함께 멈춥니다.' : '업체는 목록에서 골라야 합니다. 여러 키워드는 쉼표(,)로 구분하세요.')), selected ? renderDetail() : renderList(),
   /* ---------- 추적 상품 관리(전체 업체 도구) — 업체 목록에서만, 기본 접힘 ----------
      업체 상세는 그 업체 데이터만 보이도록 여기서 제외한다(운영자 지시 2026-08-04). */
   !selected && React.createElement('div', {

@@ -347,6 +347,46 @@ def test_자격_컬럼_보장은_두번_불러도_안전():
     assert eligible_client_ids(c) == [1]
 
 
+# ─────────────────────────────────────────────────────────────────────
+# 추적 상품 등록 — 업체는 필수 (2026-08-28 대표 확정)
+#
+# ⚠️ 왜 검사하는가 — 종전엔 업체가 선택값이었고 **화면에 칸조차 없어서**, 등록하는 순간부터
+#    주인이 없는 상품이 만들어졌다. 그렇게 41개가 쌓였고, 주인을 모르면 그 업체 계약이
+#    끝나도 추적을 멈출 근거가 없어 계속 수집된다.
+#    화면이 1차로 막지만, 옛 화면이 브라우저에 캐시로 남아 있을 수 있어 서버가 최종 방어선이다.
+#    ⚠️ main.py 는 fastapi 를 import 하므로 게이트에서 못 읽는다 — 소스 문자열로 검사한다.
+
+def _main_src():
+    import os
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "..", "main.py"), encoding="utf-8") as f:
+        return f.read()
+
+
+def test_등록에_업체가_없으면_거절한다():
+    src = _main_src()
+    i = src.find("def track_product(")
+    assert i > 0, "track_product 를 찾지 못했다"
+    body = src[i:i + 2000]
+    assert "if not req.client_id:" in body, "업체 필수 가드가 없다 — 주인 없는 상품이 다시 생긴다"
+    assert "status_code=400" in body, "거절은 400 이어야 한다"
+
+
+def test_거절_문구가_할_일을_알려준다():
+    # 「등록 실패」만 뜨면 사람은 무엇을 해야 할지 모른다 — 새로고침을 안내해야 한다.
+    src = _main_src()
+    i = src.find("def track_product(")
+    body = src[i:i + 2000]
+    assert "새로고침" in body, "거절 문구가 다음 행동을 안내하지 않는다"
+
+
+def test_등록_요청에_업체_칸이_있다():
+    src = _main_src()
+    i = src.find("class ProductAddRequest")
+    assert i > 0
+    assert "client_id" in src[i:i + 800], "요청 모델에 client_id 가 없다"
+
+
 if __name__ == "__main__":
     _tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     _failed = 0
