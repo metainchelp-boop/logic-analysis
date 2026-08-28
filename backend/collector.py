@@ -119,7 +119,15 @@ def _auth(token: Optional[str]):
 # 몰아 두면 ① 이 보는 값의 신선도가 종전과 비슷하게 유지된다.
 PRIORITY_HOURS = 15          # 업체 키워드 슬롯 = 0~14시
 LATE_HOURS = 24 - PRIORITY_HOURS   # 나머지(추적 상품 전용) = 15~23시
-HOURLY_CAP = 60              # 한 시간에 내려주는 최대 개수(밀린 것 포함) — 급증 방지
+# 한 시간에 내려주는 최대 개수(밀린 것 포함) — 급증 방지.
+# ⚠️ 60 → 40 (2026-08-28). 이 값이 곧 네이버를 두드리는 속도의 상한이다.
+#    키워드 1건 = 페이지 4장 = 요청 4번이므로 시간당 요청 수는 이 값 × 4.
+#      · 2026-08-05 실제로 IP 가 막혔을 때  시간당 약 1,272요청
+#      · 지금(회차가 끊겨 굶던 상태)        시간당 약    56요청
+#      · 이 값 40일 때                      시간당      160요청  ← 차단선의 1/8
+#    필요량은 826개/24시간 = 시간당 35개라 40이면 하루치를 다 하고도 남는다.
+#    ⚠️ 올리기 전에 반드시 위 세 줄을 다시 계산할 것. 총량이 아니라 속도가 차단 기준이다.
+HOURLY_CAP = 40
 
 
 def _slot_of(keyword: str, priority: bool) -> int:
@@ -142,19 +150,17 @@ def _tracking_client_ids(conn):
        계약 만료·환불중·홀딩중 업체와 영업사원이 등록한 영업 대상의 키워드가
        그대로 매일 수집됐다(실측: 유니버스 1,001개 중 상당수). 이제 세 갈래 전부
        이 한 곳을 지난다.
+
+    ⚠️ 2026-08-28: 판정 문장을 tracking_eligibility 로 옮겼다. 08:00 순위 기록 배치가
+       같은 뜻의 조건을 4개만 갖고 있어서 **계약이 끝난 업체 65곳의 순위가 계속
+       기록되고 있었다**. 이제 수집·기록·추적 상품 세 경로가 같은 문장을 쓴다.
     """
     try:
-        rows = conn.execute(
-            "SELECT id FROM clients "
-            " WHERE status='active' "
-            "   AND COALESCE(role,'advertiser')='advertiser' "
-            "   AND COALESCE(vertical,'store')='store' "
-            "   AND COALESCE(auto_analysis,1)=1 "
-            "   AND COALESCE(track_enabled,1)=1 "
-            "   AND (track_until IS NULL OR track_until='' "
-            "        OR date(track_until) >= date('now','localtime'))"
-        ).fetchall()
-        return [r[0] for r in rows]
+        from tracking_eligibility import eligible_client_ids
+        ids = eligible_client_ids(conn)
+        if not ids:
+            logger.warning("[collector] 추적 자격 업체 0곳 — 조회 실패이거나 설정 확인 필요")
+        return ids
     except Exception as e:
         logger.warning(f"[collector] 추적 자격 업체 조회 실패: {e}")
         return []
@@ -204,12 +210,26 @@ def _keyword_universe(conn):
     #    직원이 손으로 등록한 상품 순위 추적이 통째로 죽는다.
     #    → 규칙: **자격 업체에 이어졌거나, 아무 업체에도 안 이어진 상품**은 포함.
     #            자격 없는 업체(계약만료·환불·홀딩·영업대상)에만 이어진 상품은 제외.
+    #    ⚠️ 2026-08-28 보강: 「주인 없는 상품」은 01:20 정리 잡이 이틀 지켜본 뒤
+    #    비활성으로 내린다. 내려간 것은 여기서도 빠진다(판정은 tracking_eligibility).
     try:
-        for r in conn.execute(
+        from tracking_eligibility import eligible_tracked_product_ids, ensure_disabled_column
+        ensure_disabled_column(conn)
+        ok_pids = eligible_tracked_product_ids(conn)
+        if ok_pids is None:          # 판정 실패 — 종전 규칙으로 폴백(추적이 멈추는 것보다 낫다)
+            rows = conn.execute(
                 "SELECT DISTINCT k.keyword FROM tracked_keywords k "
                 " WHERE k.product_id IN (SELECT tracked_product_id FROM rank_link "
                 f"                        WHERE client_id IN ({ph})) "
-                "    OR k.product_id NOT IN (SELECT tracked_product_id FROM rank_link)", ids):
+                "    OR k.product_id NOT IN (SELECT tracked_product_id FROM rank_link)", ids)
+        elif ok_pids:
+            pp = ",".join("?" * len(ok_pids))
+            rows = conn.execute(
+                f"SELECT DISTINCT keyword FROM tracked_keywords WHERE product_id IN ({pp})",
+                list(ok_pids))
+        else:
+            rows = []
+        for r in rows:
             k = (r[0] or "").strip()
             if k:
                 uni.setdefault(k, False)
@@ -569,6 +589,49 @@ def get_pending_requests(worker: int = 0, workers: int = 1,
                 [(k,) for k in kws])
         conn.commit()
         return {"success": True, "keywords": kws}
+    finally:
+        conn.close()
+
+
+def prune_self_tail_requests() -> dict:
+    """요청 큐에서 「배치가 스스로 되넣은 것」을 털어낸다(2026-08-28).
+
+    ⚠️ 이 함수가 생긴 경위 — 실측으로 확인된 되먹임 고리다.
+       08:00·08:30 배치가 순위를 적으려는데 그 키워드의 수집분이 없으면 요청 큐에
+       다시 넣었다. 쇼핑 API 가 7월 말 종료돼 수집분이 없으면 무조건 이 길을 탔고,
+       **수집이 못 따라간 키워드가 매일 자기를 다시 큐에 넣는** 구조가 됐다.
+       큐가 813건까지 부풀자 확장은 매시간 12건(상한)을 거기에 먼저 쓰고,
+       정작 순위 추적 몫은 시간당 2~3개만 했다. 하루 345개 중 288개가 이 큐였다.
+
+    되먹임 자체는 호출부에서 막았다(enqueue_on_miss=False). 여기서는 **이미 쌓인
+    것**을 턴다. 기준은 단순하다:
+
+      · 오늘 들어온 요청            → 남긴다 (직원이 방금 화면에서 찾은 것일 수 있다)
+      · 하루 지났는데 유니버스 안   → 지운다 (슬롯 수집이 어차피 매일 배정한다)
+      · 유니버스 밖                 → 남긴다 (직원 화면 검색분 — 슬롯이 안 맡는다)
+    """
+    conn = sqlite3.connect(DB_PATH, timeout=10)
+    conn.row_factory = sqlite3.Row
+    try:
+        uni = set(_keyword_universe(conn).keys())
+        if not uni:
+            return {"pruned": 0, "kept": 0}
+        rows = conn.execute(
+            "SELECT keyword FROM collect_requests "
+            " WHERE status='pending' "
+            "   AND date(requested_at) < date('now','localtime')").fetchall()
+        gone = [r["keyword"] for r in rows if r["keyword"] in uni]
+        if gone:
+            conn.executemany("DELETE FROM collect_requests WHERE keyword=? AND status='pending'",
+                             [(k,) for k in gone])
+            conn.commit()
+        kept = conn.execute(
+            "SELECT COUNT(*) FROM collect_requests WHERE status='pending'").fetchone()[0]
+        logger.info(f"[collector] 큐 되먹임 정리 — {len(gone)}건 제거(슬롯이 맡는 키워드) · 남은 대기 {kept}건")
+        return {"pruned": len(gone), "kept": kept}
+    except Exception as e:
+        logger.warning(f"[collector] 큐 되먹임 정리 실패(무시): {e}")
+        return {"pruned": 0, "kept": 0}
     finally:
         conn.close()
 

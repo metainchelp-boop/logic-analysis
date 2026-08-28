@@ -269,6 +269,84 @@ def test_split_잘못된_번호는_안전하게_접힌다():
     assert normalize(1, 3) == (1, 3)      # 정상값은 그대로
 
 
+# ─────────────────────────────────────────────────────────────────────
+# 순위 추적 자격 판정 (tracking_eligibility)
+#
+# ⚠️ 왜 검사하는가 — 2026-08-28 실측에서 이 판정이 **세 곳에 각각 다르게** 박혀
+#    있었고, 08:00 기록 배치만 조건이 2개 모자라 **계약이 끝난 업체 65곳의 순위가
+#    매일 계속 쌓이고 있었다**. 한 곳으로 모은 뒤로는 여기서 고정한다.
+from tracking_eligibility import (              # noqa: E402
+    eligible_client_ids, eligible_tracked_product_ids, ensure_disabled_column)
+
+
+def _elig_db():
+    import sqlite3
+    c = sqlite3.connect(":memory:")
+    c.executescript("""
+        CREATE TABLE clients(id INTEGER PRIMARY KEY, status TEXT, role TEXT,
+            vertical TEXT, auto_analysis INT, track_enabled INT, track_until TEXT);
+        CREATE TABLE tracked_products(id INTEGER PRIMARY KEY, created_at TEXT);
+        CREATE TABLE rank_link(tracked_product_id INT, client_id INT);
+    """)
+    rows = [
+        (1, "active", "advertiser", "store", 1, 1, ""),            # 정상
+        (2, "active", "advertiser", "store", 1, 1, "2020-01-01"),  # 추적기간 지남
+        (3, "active", "advertiser", "store", 0, 1, ""),            # 자동분석 OFF(계약만료·환불·홀딩)
+        (4, "active", "advertiser", "store", 1, 0, ""),            # 추적 OFF(수동)
+        (5, "active", "prospect",   "store", 1, 1, ""),            # 영업 대상
+        (6, "active", "advertiser", "place", 1, 1, ""),            # 플레이스 축
+        (7, "inactive", "advertiser", "store", 1, 1, ""),          # 비활성
+    ]
+    c.executemany("INSERT INTO clients VALUES(?,?,?,?,?,?,?)", rows)
+    ensure_disabled_column(c)
+    return c
+
+
+def test_자격_계약_끝난_업체는_빠진다():
+    c = _elig_db()
+    assert eligible_client_ids(c) == [1], "자격 업체는 1번뿐이어야 한다"
+
+
+def test_자격_추적기간_빈값은_통과한다():
+    # track_until 이 비어 있으면 '기간 제한 없음' — 이걸 만료로 읽으면 전 업체가 멈춘다.
+    c = _elig_db()
+    c.execute("UPDATE clients SET track_until=NULL WHERE id=1")
+    assert 1 in eligible_client_ids(c)
+
+
+def test_추적상품_자격없는_업체_것만_빠진다():
+    c = _elig_db()
+    for pid in (10, 11, 12):
+        c.execute("INSERT INTO tracked_products(id, created_at) VALUES(?, '2020-01-01')", (pid,))
+    c.execute("INSERT INTO rank_link VALUES(10, 1)")   # 자격 업체 것
+    c.execute("INSERT INTO rank_link VALUES(11, 2)")   # 계약 끝난 업체 것
+    got = eligible_tracked_product_ids(c)              # 12 = 아무데도 안 이어짐
+    assert got == {10, 12}, got
+
+
+def test_추적상품_주인없어_내린것은_빠진다():
+    # 01:20 정리 잡이 붙인 표시. 되돌리려면 이 칸만 비우면 된다.
+    c = _elig_db()
+    c.execute("INSERT INTO tracked_products(id, created_at) VALUES(12, '2020-01-01')")
+    assert eligible_tracked_product_ids(c) == {12}
+    c.execute("UPDATE tracked_products SET disabled_at='2026-08-28' WHERE id=12")
+    assert eligible_tracked_product_ids(c) == set()
+
+
+def test_추적상품_판정_실패하면_전부_잰다():
+    # 조회 하나가 실패했다고 순위 추적이 통째로 멈추면 안 된다 → None(=필터 안 함).
+    import sqlite3
+    c = sqlite3.connect(":memory:")   # 표가 아예 없다
+    assert eligible_tracked_product_ids(c) is None
+
+
+def test_자격_컬럼_보장은_두번_불러도_안전():
+    c = _elig_db()
+    ensure_disabled_column(c)         # 이미 있는 상태에서 또 불러도 터지지 않는다
+    ensure_disabled_column(c)
+    assert eligible_client_ids(c) == [1]
+
+
 if __name__ == "__main__":
     _tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     _failed = 0

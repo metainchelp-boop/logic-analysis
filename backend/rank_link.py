@@ -309,11 +309,58 @@ def prune_orphans() -> int:
         conn.close()
 
 
+GRACE_DAYS = 2          # 등록 후 이 날짜가 지나도 주인을 못 찾으면 비활성으로 내린다
+
+
+def disable_ownerless() -> Dict[str, Any]:
+    """주인을 못 찾은 추적 상품을 추적 대상에서 내린다(대표 확정 2026-08-28).
+
+    ⚠️ 지우지 않는다 — `disabled_at` 표시만 붙인다. 지워 버리면 그 상품에 달린
+       키워드·지금까지 쌓인 순위가 함께 사라져 되돌릴 수 없다. 표시만 붙이면
+       나중에 주인이 밝혀졌을 때 그 칸을 비우는 것으로 그대로 되살아난다.
+
+    ⚠️ 등록 직후는 건드리지 않는다(GRACE_DAYS). 직원이 방금 등록한 상품은
+       아직 연결이 안 맺어진 게 정상이고, 그걸 그 자리에서 내리면
+       「등록했는데 추적이 안 된다」가 된다.
+
+    ⚠️ 반드시 apply_backfill() **뒤에** 부를 것 — 앞에서 부르면 오늘 이어질 수
+       있었던 상품까지 내려간다.
+    """
+    conn = _conn()
+    try:
+        from tracking_eligibility import ensure_disabled_column
+        ensure_disabled_column(conn)
+        rows = conn.execute(
+            "SELECT p.id, p.product_name, p.store_name FROM tracked_products p "
+            " WHERE COALESCE(p.disabled_at,'') = '' "
+            "   AND p.id NOT IN (SELECT tracked_product_id FROM rank_link) "
+            "   AND date(COALESCE(p.created_at, '2000-01-01')) "
+            "       <= date('now','localtime',?)",
+            (f"-{GRACE_DAYS} day",)).fetchall()
+        ids = [r[0] for r in rows]
+        if ids:
+            conn.executemany(
+                "UPDATE tracked_products SET disabled_at = datetime('now','localtime') "
+                " WHERE id = ? AND COALESCE(disabled_at,'') = ''",
+                [(i,) for i in ids])
+            conn.commit()
+            for r in rows[:20]:
+                logger.info(f"[rank_link] 주인 없어 추적 중지: #{r[0]} {r[1] or ''} ({r[2] or '가게명 없음'})")
+        return {"disabled": len(ids)}
+    except Exception as e:
+        logger.warning(f"[rank_link] 주인 없는 상품 정리 실패(무시): {e}")
+        return {"disabled": 0}
+    finally:
+        conn.close()
+
+
 def run_maintenance(linked_by: int = 0) -> Dict[str, Any]:
-    """매일 한 번 — 새로 등록된 것들을 잇고 삭제된 것들을 털어낸다."""
+    """매일 한 번 — 새로 등록된 것들을 잇고, 삭제된 것들을 털고,
+       그래도 주인을 못 찾은 것은 추적에서 내린다."""
     pruned = prune_orphans()
     res = apply_backfill(linked_by=linked_by)
     res["pruned"] = pruned
+    res["disabled"] = disable_ownerless().get("disabled", 0)
     return res
 
 
