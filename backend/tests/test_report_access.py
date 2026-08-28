@@ -32,12 +32,18 @@ def test_successor_can_manage_historical_report_without_changing_author():
     assert conn.execute("SELECT created_by FROM reports WHERE id=500").fetchone()[0] == 10
 
 
+def test_historical_author_loses_management_access_after_owner_transfer():
+    conn = _connection()
+
+    assert can_manage_report(conn, 500, 10) is False
+
+
 def test_unrelated_user_cannot_manage_report_and_list_predicate_matches_owner():
     conn = _connection()
     predicate = managed_report_predicate("r")
 
     assert can_manage_report(conn, 500, 30) is False
     rows = conn.execute(
-        f"SELECT r.id FROM reports r WHERE {predicate}", (20, 20)
+        f"SELECT r.id FROM reports r WHERE {predicate}", (20,)
     ).fetchall()
     assert rows == [(500,)]

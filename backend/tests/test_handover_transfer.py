@@ -391,6 +391,10 @@ def test_six_advertisers_three_successors_partial_failure_retry_and_clean_revert
         )
     )
     assert service.residual("leaver")["total"] == 0
+    assert service.deactivate("leaver")["success"] is True
+    conn = sqlite3.connect(db_path)
+    assert conn.execute("SELECT is_active FROM users WHERE username='leaver'").fetchone()[0] == 0
+    conn.close()
 
     for index, client_id in enumerate(range(100, 106)):
         username, _ = successors[index % len(successors)]
@@ -405,6 +409,7 @@ def test_six_advertisers_three_successors_partial_failure_retry_and_clean_revert
                 to_username="leaver",
                 to_name="퇴사자",
                 place_business_keys=(f"doc:{place_id}",),
+                allow_inactive_target=True,
             )
         )
 

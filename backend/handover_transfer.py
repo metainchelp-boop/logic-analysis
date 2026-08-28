@@ -37,6 +37,7 @@ class HandoverTransferCommand:
     to_username: str
     to_name: str
     place_business_keys: tuple[str, ...] = ()
+    allow_inactive_target: bool = False
 
 
 class HandoverTransferService:
@@ -123,7 +124,9 @@ class HandoverTransferService:
 
             conn.execute("BEGIN IMMEDIATE")
             from_user = self._require_user(conn, command.from_username)
-            to_user = self._resolve_successor(conn, command.to_username, command.to_name)
+            to_user = self._resolve_successor(
+                conn, command.to_username, command.to_name, command.allow_inactive_target
+            )
             client = conn.execute(
                 "SELECT id, name, created_by FROM clients WHERE id=?", (command.client_id,)
             ).fetchone()
@@ -291,7 +294,8 @@ class HandoverTransferService:
         return row
 
     @staticmethod
-    def _resolve_successor(conn: sqlite3.Connection, username: str, name: str) -> sqlite3.Row:
+    def _resolve_successor(conn: sqlite3.Connection, username: str, name: str,
+                           allow_inactive: bool = False) -> sqlite3.Row:
         row = conn.execute(
             "SELECT id, username, is_active FROM users WHERE username=?", (username,)
         ).fetchone()
@@ -310,9 +314,26 @@ class HandoverTransferService:
             row = conn.execute(
                 "SELECT id, username, is_active FROM users WHERE username=?", (username,)
             ).fetchone()
-        if not bool(row["is_active"]):
+        if not bool(row["is_active"]) and not allow_inactive:
             raise ValueError("후임자 로직분석 계정이 비활성 상태입니다.")
         return row
+
+    def deactivate(self, username: str) -> dict:
+        """전체 이관 검증 뒤 퇴사자의 Logic 로그인을 멱등 차단한다."""
+        self.initialize()
+        conn = self._connect()
+        try:
+            row = conn.execute("SELECT id, is_active FROM users WHERE username=?", (username,)).fetchone()
+            if row is None:
+                return {"success": True, "deactivated": False}
+            changed = conn.execute(
+                "UPDATE users SET is_active=0, updated_at=datetime('now','localtime') "
+                "WHERE username=? AND is_active<>0", (username,)
+            ).rowcount
+            conn.commit()
+            return {"success": True, "deactivated": bool(changed)}
+        finally:
+            conn.close()
 
     @staticmethod
     def _assert_owner(current_owner: int, from_id: int, to_id: int, label: str) -> None:

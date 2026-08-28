@@ -24,6 +24,7 @@ class HandoverTransferRequest(BaseModel):
     to_username: str = Field(alias="toUsername", min_length=1, max_length=100)
     to_name: str = Field(alias="toName", default="", max_length=100)
     place_business_keys: list[str] = Field(alias="placeBusinessKeys", default_factory=list)
+    allow_inactive_target: bool = Field(alias="allowInactiveTarget", default=False)
 
     def command(self) -> HandoverTransferCommand:
         return HandoverTransferCommand(
@@ -33,6 +34,7 @@ class HandoverTransferRequest(BaseModel):
             to_username=self.to_username,
             to_name=self.to_name,
             place_business_keys=tuple(self.place_business_keys),
+            allow_inactive_target=self.allow_inactive_target,
         )
 
 
@@ -104,5 +106,13 @@ def create_handover_router(
     ):
         require_service_key(_)
         return invoke(lambda: service.residual(username))
+
+    @router.post("/deactivate/{username}")
+    def deactivate(
+        username: str,
+        _: Annotated[str | None, Header(alias="X-Handover-Key")] = None,
+    ):
+        require_service_key(_)
+        return invoke(lambda: service.deactivate(username))
 
     return router

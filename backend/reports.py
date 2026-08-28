@@ -948,7 +948,7 @@ def list_reports(
         params = []
         if not _is_adm:
             where_clauses.append(managed_report_predicate("r"))
-            params.extend([current_user["id"], current_user["id"]])
+            params.append(current_user["id"])
 
         if client_id:
             where_clauses.append("r.client_id = ?")
@@ -1116,7 +1116,7 @@ def get_report(
                        report_hash, created_at, created_by
                 FROM reports
                 WHERE id = ? AND """ + managed_report_predicate("reports"),
-                (report_id, current_user["id"], current_user["id"]))
+                (report_id, current_user["id"]))
 
         report = cursor.fetchone()
         conn.close()
