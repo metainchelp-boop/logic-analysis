@@ -39,6 +39,18 @@ function norm(s) { return String(s || '').toLowerCase().replace(/\s+/g, ''); }
 function sGet(keys) { return new Promise(function (res) { try { chrome.storage.local.get(keys, function (r) { res(r || {}); }); } catch (e) { res({}); } }); }
 function sSet(obj) { return new Promise(function (res) { try { chrome.storage.local.set(obj, function () { res(); }); } catch (e) { res(); } }); }
 function sRemove(keys) { return new Promise(function (res) { try { chrome.storage.local.remove(keys, function () { res(); }); } catch (e) { res(); } }); }
+/* 팝업 로그 (2026-08-28 대표 지시 「쇼핑 쪽에 맞춰서」) — 쇼핑 수집기와 같은 방식.
+ * ⚠️ 기록만 한다 — 수집 동작·타이밍은 어떤 것도 바꾸지 않는다(잘 도는 걸 만지지 않는다).
+ *    실패해도 조용히 무시(로그가 수집을 깨면 본말전도). */
+function plog(msg) {
+  var line = '[' + new Date().toLocaleTimeString('ko-KR') + '] ' + msg;
+  return sGet(['place_logs']).then(function (st) {
+    var logs = st.place_logs || [];
+    logs.unshift(line);
+    return sSet({ place_logs: logs.slice(0, 200) });
+  }).catch(function () {});
+}
+
 function closeTabQuiet(tabId) { if (!tabId) return; try { chrome.tabs.remove(tabId, function () { void chrome.runtime.lastError; }); } catch (e) {} }
 
 /* ---------- 매일 알람 ---------- */
@@ -59,6 +71,7 @@ ensureDailyAlarm();
 function maybeStartRun(source) {
   return sGet(['place_enabled', 'place_run', 'place_sync']).then(function (st) {
     if (st.place_enabled === false && source === 'daily') {
+      plog('⏸ 무인 추적이 꺼져 있어 오늘 자동 수집을 건너뜁니다');
       return sSet({ place_last_run: { finishedAt: Date.now(), source: source, skipped: 'disabled' } });
     }
     var run = st.place_run;
@@ -112,6 +125,7 @@ function buildAndGo(source) {
     var targets = (st.place_targets && st.place_targets.targets) || [];
     targets = targets.filter(function (t) { return t && t.keyword && t.business_name; });
     if (!targets.length) {
+      plog('⚠️ 추적 대상이 없어 수집을 건너뜁니다 — 로직분석 「📍 플레이스 추적」에서 대상을 등록하세요');
       return sSet({ place_last_run: { finishedAt: Date.now(), source: source, skipped: 'no-targets' } });
     }
     // 키워드별 그룹 — 같은 키워드의 여러 업체는 한 번의 검색으로 함께 판독
@@ -123,6 +137,7 @@ function buildAndGo(source) {
     });
     var queue = Object.keys(byKw).map(function (k) { return { keyword: k, targets: byKw[k] }; });
     var newRun = { queue: queue, idx: 0, tries: 0, results: [], startedAt: Date.now(), source: source || 'manual', tabId: null };
+    plog('▶ ' + (source === 'daily' ? '무인' : '수동') + ' 수집 시작 — 대상 ' + targets.length + '건 · 키워드 ' + queue.length + '개');
     return sSet({ place_run: newRun }).then(function () { scheduleStep(1500); });
   });
 }
@@ -147,6 +162,7 @@ function step() {
     var item = run.queue[run.idx];
     run.tries = (run.tries || 0) + 1;
     if (run.tries > MAX_TRIES_PER_STEP) {          // 이 키워드는 포기 — 전 대상 미확인 기록 후 전진
+      plog('⚠️ [' + item.keyword + '] 판독 실패 — ' + MAX_TRIES_PER_STEP + '회 시도 후 미확인 처리');
       item.targets.forEach(function (t) {
         run.results.push({ target_id: t.id, keyword: item.keyword, business_name: t.business_name,
           region: t.region, place_id: t.place_id || null, rank: null, state: '미확인' });
@@ -300,6 +316,24 @@ function onExtracted(out, item) {
       });
     });
 
+    // 이 키워드 결과 요약 로그 — 쇼핑 수집기의 키워드별 완료 줄과 같은 자리
+    var _ex = 0, _mi = 0, _un = 0, _bestRank = null;
+    item.targets.forEach(function (t, ti) {
+      var r = run.results[run.results.length - item.targets.length + ti];
+      if (!r) return;
+      if (r.state === '노출') { _ex++; if (r.rank && (_bestRank === null || r.rank < _bestRank)) _bestRank = r.rank; }
+      else if (r.state === '미노출') _mi++;
+      else _un++;
+    });
+    var _depth = (run.depths && run.depths.length) ? run.depths[run.depths.length - 1] : null;
+    plog((_un ? '⚠️' : '✅') + ' [' + item.keyword + '] '
+      + (_ex ? '노출 ' + _ex + '곳' + (_bestRank ? ' (최고 ' + _bestRank + '위)' : '') : '')
+      + (_ex && (_mi || _un) ? ' · ' : '')
+      + (_mi ? '미노출 ' + _mi + '곳' : '')
+      + ((_ex || _mi) && _un ? ' · ' : '')
+      + (_un ? '미확인 ' + _un + '곳' : '')
+      + (_depth && _depth.k === item.keyword && _depth.n ? ' — 판독 ' + _depth.n + '위까지' : ''));
+
     run.idx += 1; run.tries = 0;
     sSet({ place_run: run }).then(function () {
       scheduleStep(STEP_GAP_MS + Math.floor(Math.random() * 15000));
@@ -330,6 +364,9 @@ function finishRun(run, reason) {
     summary: counts
   };
   closeTabQuiet(run.tabId);
+  plog('✅ 수집 완료 — 노출 ' + counts.exposed + ' · 미노출 ' + counts.missing + ' · 미확인 ' + counts.unknown
+    + (depthMax ? ' · 판독 ' + (depthMin && depthMin !== depthMax ? depthMin + '~' : '~') + depthMax + '위' : '')
+    + (results.length ? ' — 서버 기록 대기' : ''));
   sRemove(['place_run']).then(function () {
     return sSet({
       place_pending_results: pending,
@@ -399,6 +436,7 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
     sGet(['place_pending_results', 'place_bridge_tab', 'place_last_run']).then(function (st) {
       var lr = st.place_last_run || {};
       lr.delivered = true;
+      plog('✓ 서버 기록 완료 — 오늘 결과가 로직분석에 반영됐습니다');
       closeTabQuiet(st.place_bridge_tab);
       return sRemove(['place_pending_results', 'place_bridge_tab']).then(function () {
         return sSet({ place_last_run: lr });
@@ -420,6 +458,20 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
         syncedAt: st.place_targets && st.place_targets.synced_at,
         running: !!(st.place_run && st.place_run.queue),
         progress: st.place_run ? { idx: st.place_run.idx, total: st.place_run.queue.length } : null,
+        // 진행 상세(2026-08-28) — 팝업의 「오늘 수집 n/전체 · 진행 막대」용. 기존 필드는 그대로.
+        progressDetail: (function () {
+          var run = st.place_run;
+          if (!run || !run.queue) return null;
+          var total = 0, ex = 0, mi = 0, un = 0;
+          run.queue.forEach(function (q) { total += (q.targets || []).length; });
+          (run.results || []).forEach(function (r) {
+            if (r.state === '노출') ex++; else if (r.state === '미노출') mi++; else un++;
+          });
+          var cur = run.queue[run.idx];
+          return { doneTargets: (run.results || []).length, totalTargets: total,
+                   exposed: ex, missing: mi, unknown: un,
+                   currentKeyword: cur ? cur.keyword : '' };
+        })(),
         lastRun: st.place_last_run || null,
         pending: !!st.place_pending_results
       });
@@ -427,6 +479,7 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
     return true;
   }
   if (msg.type === 'PLACE_TOGGLE') {                 // 팝업 ON/OFF
+    plog(msg.enabled ? '▶ 무인 추적을 켰습니다 — 매일 06:30 자동 수집' : '⏸ 무인 추적을 껐습니다');
     sSet({ place_enabled: !!msg.enabled }).then(function () { sendResponse({ ok: true }); });
     return true;
   }
