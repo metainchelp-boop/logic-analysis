@@ -634,7 +634,16 @@ async function runCollection(manual = false) {
       await log('이번 시간대 수집 대상 없음');
       return;
     }
-    await setState({ target: keywords.length });
+    // ⭐ 오늘 전체 진척을 팝업이 읽을 수 있게 싣는다(2026-08-28 대표 요청
+    //    「총 개수 / 추적 완료 / 추적 실패 결과값도 있어야 할 거 같아」).
+    //    ⚠️ target·done·failed 는 **이번 시간대 회차** 값이라 매 회차 0 으로 돌아간다.
+    //       그것만 보면 「오늘 얼마나 했나」를 알 수 없었다 — 그 값은 서버가 준다.
+    //    dayTotal  = 오늘 재야 할 전체(유니버스)
+    //    dayDone   = 오늘 이미 끝낸 것(서버 기준) + 이번 회차에서 더 한 것
+    await setState({
+      target: keywords.length, slot: slot ?? 0, overdue,
+      dayTotal: total, dayDone: already, dayKey: cycleDate(),
+    });
 
     let done = 0, failed = 0, streak = 0;
     for (const kw of keywords) {
@@ -648,7 +657,8 @@ async function runCollection(manual = false) {
         if (!payload.products.length) throw new Error('상품 0건');
         await uploadKeyword(token, kw, payload);
         done++; streak = 0;
-        await setState({ done, failed, current: kw });
+        // 오늘 완료 수도 같이 올린다 — 다음 시간대에 서버 값으로 다시 맞춰진다.
+        await setState({ done, failed, current: kw, dayDone: already + done });
         if (done % 25 === 0) {
           await log(`… ${done}/${keywords.length} 진행 중 (직전 [${kw}] 오가닉 ${payload.products.length}개 · 광고 ${payload.adSkipped}개 제외)`);
         }
@@ -660,7 +670,11 @@ async function runCollection(manual = false) {
         }
         failed++; streak++;
         await log(`⚠️ [${kw}] 실패: ${e.message}`);
-        await setState({ done, failed, current: kw });
+        // 오늘 누적 실패 — 회차가 바뀌어도 남게 따로 센다(그날 무엇이 안 됐는지 보려고).
+        const { state: _st = {} } = await chrome.storage.local.get('state');
+        const _today = cycleDate();
+        const _dayFail = (_st.dayKey === _today ? Number(_st.dayFailed || 0) : 0) + 1;
+        await setState({ done, failed, current: kw, dayFailed: _dayFail, dayKey: _today });
         if (streak >= CFG.maxConsecutiveFail) {
           await log(`🛑 연속 ${streak}회 실패 — 차단 의심으로 이번 회차 중단`);
           break;

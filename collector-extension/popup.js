@@ -28,6 +28,22 @@ async function render() {
   const running = blockedNow
     ? '<span class="b bad">자동입력 방지(캡차)로 쉬는 중</span>'
     : (state.running ? '<span class="b ok">수집 중</span>' : '대기');
+  // ⭐ 오늘 전체 진척 (2026-08-28 대표 요청 「총 개수 / 추적 완료 / 추적 실패」).
+  //    ⚠️ 아래 '이번 시간대' 숫자와 다른 축이다 — 그건 매시간 0 으로 돌아간다.
+  //       여기 값은 서버가 알려 준 '오늘 재야 할 전체'와 '오늘까지 끝낸 수'다.
+  const dTot = Number(state.dayTotal || 0);
+  const dDone = Number(state.dayDone || 0);
+  const dFail = Number(state.dayFailed || 0);
+  const pct = dTot ? Math.min(100, Math.round((dDone / dTot) * 100)) : 0;
+  const dayBlock = dTot
+    ? `<div class="sec"><b>오늘 진척</b> ` +
+      `<span class="b ok">${dDone.toLocaleString()}</span> / ${dTot.toLocaleString()}개 ` +
+      `<span class="b">${pct}%</span>` +
+      (dFail ? ` · 실패 <span class="b bad">${dFail.toLocaleString()}</span>` : '') +
+      `<div class="bar"><i style="width:${pct}%"></i></div>` +
+      `<span class="dim">남은 것 ${Math.max(0, dTot - dDone).toLocaleString()}개</span></div>`
+    : '<div class="sec dim">오늘 진척 — 수집을 한 번 돌리면 표시됩니다</div>';
+
   $('stat').innerHTML =
     `상태: ${running}<br>` +
     (blockedNow
@@ -38,9 +54,12 @@ async function render() {
       ? '<span class="b" style="color:#b45309">▸ 안전 속도로 돌리는 중</span>' +
         `<span style="font-size:11px"> — ${new Date(slowUntil).toLocaleString('ko-KR')}까지 (캡차를 만나서 절반 속도)</span><br>`
       : '') +
-    `대상 <span class="b">${state.target ?? '-'}</span>개 · ` +
-    `성공 <span class="b ok">${state.done ?? 0}</span> · ` +
-    `실패 <span class="b bad">${state.failed ?? 0}</span><br>` +
+    dayBlock +
+    `<div class="sec">이번 시간대 · 대상 <span class="b">${state.target ?? '-'}</span>개 · ` +
+    `완료 <span class="b ok">${state.done ?? 0}</span> · ` +
+    `실패 <span class="b bad">${state.failed ?? 0}</span>` +
+    (Number(state.overdue || 0) ? ` · 밀린 것 ${Number(state.overdue).toLocaleString()}개` : '') +
+    '</div>' +
     (state.current ? `진행 중: ${state.current}<br>` : '') +
     (state.finishedAt ? `마지막 완료: ${new Date(state.finishedAt).toLocaleString('ko-KR')}` : '아직 완료 기록 없음');
   $('logs').textContent = logs.join('\n');
