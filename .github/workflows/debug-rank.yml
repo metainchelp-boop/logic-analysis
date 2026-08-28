@@ -952,5 +952,11 @@ jobs:
               | sed 's/^/  collector.py 안 split_ok 등장 횟수(2대 분할): /'
             echo
 
+            echo "== 어젯밤 예정분 결과 (01:20 연결 · 08:00 나눠 적기) =="
+            docker logs --since 24h logic-analysis 2>&1 \
+              | grep -E "축 브리지|이어진 짝|나눠 적음|순위 추적 완료|rank_link" | tail -12 \
+              || echo "  (해당 로그 없음)"
+            echo
+
             echo "== 최근 오류 tail =="
             docker logs --tail 60 logic-analysis 2>&1 | grep -iE 'error|exception|traceback' | tail -15 || echo "(오류 없음)"
