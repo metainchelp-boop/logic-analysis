@@ -500,8 +500,26 @@ window.ClientListSection = function ClientListSection({ currentUser, onClientCli
                             }
                         }, '업체 상세 보기 →'),
 
+                        /* ---------- 기간이 지난 업체는 버튼 대신 사실을 말한다 (2026-08-28) ----------
+                           ⚠️ 종전엔 추적 종료일이 지나 수집·기록이 전부 멈춘 업체에도
+                              「▶ 자동 추적 중 — 끄기」가 떠서 배지(기간 지남)와 버튼이 서로
+                              다른 말을 했다(대표 화면 검증에서 발견). 종료일이 지나면 자격
+                              판정(tracking_eligibility)이 스위치와 무관하게 그 업체를 빼므로,
+                              버튼을 눌러도 아무 일도 일어나지 않는 죽은 버튼이었다.
+                           판정은 서버가 내려준 delete_reasons 를 그대로 쓴다 — 화면이 날짜를
+                           다시 계산하면 자정 부근·시간대 차이로 서버와 어긋난다. */
+                        (client.delete_reasons || []).indexOf('기간 지남') >= 0 && React.createElement('div', {
+                            style: { display: 'block', width: '100%', textAlign: 'center', marginTop: 6,
+                                     background: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca',
+                                     padding: '6px 0', borderRadius: 8, fontSize: 11.5, fontWeight: 700 }
+                        }, '⏸ 기간이 지나 추적 안 함' + (client.track_until ? ' — 종료일 ' + client.track_until : '')),
+                        (client.delete_reasons || []).indexOf('기간 지남') >= 0 && currentUser && currentUser.role !== 'viewer' && React.createElement('div', {
+                            style: { marginTop: 4, textAlign: 'center', fontSize: 10.5, color: '#94a3b8' }
+                        }, '전산에서 계약 단계를 옮기면 다음 날 04:00에 자동 재개됩니다'),
+
                         /* 자동 추적 켜기/끄기 (호출 다이어트) — 계약만료·환불·홀딩 등 관리 중단 업체는
                            일일 자동분석·순위추적에서 제외. 기록·조회는 유지. viewer는 조회만 */
+                        (client.delete_reasons || []).indexOf('기간 지남') < 0 &&
                         currentUser && currentUser.role !== 'viewer' && React.createElement('button', {
                             onClick: function(e) {
                                 e.stopPropagation();
@@ -536,6 +554,7 @@ window.ClientListSection = function ClientListSection({ currentUser, onClientCli
                         }, client.auto_analysis === 0 ? '⏸ 자동 추적 꺼짐 — 켜기' : '▶ 자동 추적 중 — 끄기'),
 
                         /* 중지 상태 배지(viewer 포함 전원에게 보임) */
+                        (client.delete_reasons || []).indexOf('기간 지남') < 0 &&
                         client.auto_analysis === 0 && (!currentUser || currentUser.role === 'viewer') && React.createElement('div', {
                             style: { marginTop: 6, textAlign: 'center', fontSize: 11, fontWeight: 700, color: '#92400e' }
                         }, '⏸ 자동 추적 중지됨'),
