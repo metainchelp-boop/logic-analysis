@@ -68,8 +68,22 @@ def require_key(value: str | None) -> None:
         raise HTTPException(status_code=401, detail="fixture key mismatch")
 
 
+class FixtureHandoverTransferService(HandoverTransferService):
+    """실제 연결·소유권 로직은 유지하고 지정 광고주 전송만 한 번 실패시키는 테스트 훅."""
+
+    def __init__(self, db_path: str):
+        super().__init__(db_path)
+        self.fail_once: set[int] = set()
+
+    def transfer(self, command):
+        if command.client_id in self.fail_once:
+            self.fail_once.remove(command.client_id)
+            raise ValueError("통합검증용 일시 장애")
+        return super().transfer(command)
+
+
 seed()
-service = HandoverTransferService(DB_PATH)
+service = FixtureHandoverTransferService(DB_PATH)
 service.initialize()
 app = FastAPI()
 app.include_router(create_handover_router(service, SERVICE_KEY))
@@ -116,6 +130,13 @@ def follow_up(client_id: int, username: str, x_handover_key: str | None = Header
         return {"created": True, "createdBy": user[0]}
     finally:
         conn.close()
+
+
+@app.post("/__fixture/fail-once/{client_id}")
+def fail_once(client_id: int, x_handover_key: str | None = Header(default=None)):
+    require_key(x_handover_key)
+    service.fail_once.add(client_id)
+    return {"armed": True, "clientId": client_id}
 
 
 if __name__ == "__main__":
