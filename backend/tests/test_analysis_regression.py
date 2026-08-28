@@ -387,6 +387,63 @@ def test_등록_요청에_업체_칸이_있다():
     assert "client_id" in src[i:i + 800], "요청 모델에 client_id 가 없다"
 
 
+# ─────────────────────────────────────────────────────────────────────
+# 업체 목록 5칸 분리 (client_buckets) — 2026-08-28 대표 확정
+from client_buckets import classify, delete_reasons   # noqa: E402
+
+_TODAY = "2026-08-28"
+
+
+def _row(**kw):
+    d = {"contract_stage": None, "track_until": None, "role": "advertiser", "_synced": True}
+    d.update(kw)
+    return d
+
+
+def test_칸_환불중이_기간지남보다_먼저다():
+    # 환불 처리 중이면 기간이 지났어도 환불 담당이 볼 일이지 삭제할 일이 아니다.
+    assert classify(_row(contract_stage="환불중", track_until="2020-01-01"), _TODAY) == "refund"
+
+
+def test_칸_홀딩중():
+    assert classify(_row(contract_stage="홀딩중"), _TODAY) == "hold"
+
+
+def test_칸_단계명_띄어쓰기가_달라도_같은_칸():
+    # 전산 단계명은 「계약 만료」처럼 공백이 섞여 오고 표기가 흔들린다.
+    # 공백을 그대로 비교하면 그 단계가 조용히 어느 칸에도 안 잡힌다.
+    assert classify(_row(contract_stage="계약 만료"), _TODAY) == "delete"
+    assert classify(_row(contract_stage="계약만료"), _TODAY) == "delete"
+
+
+def test_칸_삭제필요_사유를_전부_알려준다():
+    got = delete_reasons(_row(contract_stage="계약 만료", track_until="2026-08-01", role="prospect"), _TODAY)
+    assert got == ["계약 만료", "기간 지남", "광고주 아님"], got
+
+
+def test_칸_동기화_전에는_전산에없음을_안_센다():
+    # ⚠️ 이게 없으면 배포 직후(단계 전부 비어 있음)에 전 업체가 삭제 필요로 쏠린다.
+    assert delete_reasons(_row(_synced=False), _TODAY) == []
+    assert classify(_row(_synced=False), _TODAY) == "run"
+    assert delete_reasons(_row(_synced=True), _TODAY) == ["전산에 없음"]
+
+
+def test_칸_삭제필요가_확인필요보다_먼저다():
+    # 지울 업체의 키워드를 고칠 이유가 없다.
+    assert classify(_row(track_until="2026-08-01"), _TODAY, needs_check=True) == "delete"
+    assert classify(_row(contract_stage="진행중"), _TODAY, needs_check=True) == "check"
+
+
+def test_칸_정상_업체는_진행중():
+    assert classify(_row(contract_stage="진행중"), _TODAY) == "run"
+    assert classify(_row(contract_stage="사후 관리", track_until="2026-12-31"), _TODAY) == "run"
+
+
+def test_칸_추적종료일이_오늘이면_아직_살아있다():
+    # 경계 — 오늘까지는 유효하다. '<' 가 '<=' 로 바뀌면 오늘 만료 업체가 하루 일찍 사라진다.
+    assert delete_reasons(_row(contract_stage="진행중", track_until=_TODAY), _TODAY) == []
+
+
 if __name__ == "__main__":
     _tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     _failed = 0

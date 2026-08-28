@@ -695,7 +695,11 @@ def my_clients(current_user: dict = Depends(get_current_user)):
         _COLS = ("id, name, business_name, contact_name, contact_phone, contact_email, "
                  "website_url, naver_store_url, main_keywords, notes, status, auto_analysis, "
                  "created_by, created_at, updated_at, role, expires_at, "
-                 "COALESCE(vertical,'store') AS vertical")
+                 "COALESCE(vertical,'store') AS vertical, "
+                 # 5칸 분리(2026-08-28) 판정에 쓰는 값들. 목록 화면이 이것들로
+                 # 진행중·환불중·홀딩중·삭제 필요를 가른다.
+                 "COALESCE(track_enabled,1) AS track_enabled, track_until, "
+                 "contract_stage, contract_stage_at")
         if user_role == "viewer":
             # 영업사원(viewer) = 완전 개인 모드. 관리팀 광고주는 아예 보이지 않고,
             # 본인이 등록한 영업 대상(prospect)만 보인다(경쟁사는 각 대상 상세에서 조회).
@@ -767,10 +771,54 @@ def my_clients(current_user: dict = Depends(get_current_user)):
             ).fetchall():
                 mgr_map[u['id']] = (u['name'] or u['username'] or '')
 
+        # ── 5칸 분리 판정에 필요한 두 가지를 미리 모은다 (2026-08-28) ──
+        # ⑴ 수집이 5회 소진된 키워드를 가진 업체(= 「확인 필요」)
+        #    ⚠️ 업체당 조회하면 N+1 이 된다 — 한 번에 모아 집합으로 만든다.
+        check_ids = set()
+        try:
+            dead = [r[0] for r in conn.execute(
+                "SELECT keyword FROM collect_requests WHERE status='pending' AND attempts >= 5"
+            ).fetchall()]
+            if dead:
+                dph = ','.join('?' * len(dead))
+                # 그 업체가 대표 키워드로 쓰거나(main_keywords), 추적 상품으로 이어 둔 키워드
+                for r in conn.execute(
+                    f"""SELECT DISTINCT l.client_id FROM rank_link l
+                          JOIN tracked_keywords k ON k.product_id = l.tracked_product_id
+                         WHERE k.keyword IN ({dph})""", dead).fetchall():
+                    check_ids.add(r[0])
+                _dead_set = set(dead)
+                for c0 in clients:
+                    for kw in (c0['main_keywords'] or '').split(','):
+                        if kw.strip() and kw.strip() in _dead_set:
+                            check_ids.add(c0['id'])
+                            break
+        except Exception as _ce:
+            logger.warning(f"[my-clients] 확인 필요 집계 실패(무시): {_ce}")
+
+        # ⑵ 계약 단계를 한 번이라도 받아 본 적이 있는가.
+        #    ⚠️ 이게 없으면 배포 직후(전 업체 단계 NULL)에 전부 「전산에 없음」으로
+        #       삭제 필요에 쏠린다. 한 번이라도 받았을 때만 그 사유를 센다.
+        try:
+            _synced_once = bool(conn.execute(
+                "SELECT 1 FROM clients WHERE contract_stage IS NOT NULL AND contract_stage <> '' LIMIT 1"
+            ).fetchone())
+        except Exception:
+            _synced_once = False
+
+        from client_buckets import classify, delete_reasons
+        from datetime import date as _date
+        _today = _date.today().isoformat()
+
         result = []
         for c in clients:
             row = dict(c)
             cid = c['id']
+            row['_synced'] = _synced_once
+            row['delete_reasons'] = delete_reasons(row, _today)
+            row['needs_check'] = cid in check_ids
+            row['bucket'] = classify(row, _today, needs_check=row['needs_check'])
+            row.pop('_synced', None)
             a = agg_map.get(cid)
             row['analysis_count'] = (a['analysis_count'] if a else 0)
             row['last_analyzed'] = (a['last_analyzed'] if a else None)
@@ -1996,6 +2044,30 @@ def portal_summary(company: str = Query(None, description="전산 광고주 회�
         return {"found": False, "detail": str(e)}
     finally:
         conn.close()
+
+
+@router.post("/contract-stage-sync")
+def contract_stage_sync_now(current_user: dict = Depends(get_current_user)):
+    """계약 단계 「지금 가져오기」 (2026-08-28 대표 확정).
+
+    04:00 동기화와 **같은 함수**를 부른다 — 버튼과 배치가 다른 코드를 쓰면
+    「버튼으로는 되는데 새벽엔 안 된다」 같은 어긋남이 생긴다.
+
+    ⚠️ 이 버튼이 필요한 이유: 단계 이름 칸을 새로 만든 직후에는 값이 전부 비어 있고,
+       그대로 두면 다음 날 04:00 까지 환불중·홀딩중 칸이 「미상」으로 남는다.
+       한 번 눌러 즉시 채운다.
+    """
+    if not _is_admin(current_user):
+        raise HTTPException(status_code=403, detail="관리자만 실행할 수 있습니다.")
+    try:
+        from scheduler import _run_contract_stage_sync
+        res = _run_contract_stage_sync() or {}
+        if not res.get("ok"):
+            return {"success": False, "detail": res.get("error") or "동기화에 실패했습니다."}
+        return {"success": True, "data": res}
+    except Exception as e:
+        logger.error(f"[contract-stage-sync] {e}")
+        return {"success": False, "detail": f"동기화 중 오류: {str(e)[:150]}"}
 
 
 @router.get("/clients-lookup")

@@ -237,6 +237,23 @@ def _sync_store_slug(url):
     return m.group(1).lower() if m else ""
 
 
+def _match_stage(c, stage_by_name, stage_by_slug):
+    """이 업체의 전산 계약 단계 이름(못 찾으면 None).
+
+    ⚠️ 매칭 규칙을 여기 한 곳에만 둔다. 스위치를 끄는 판정(_decide_stage_actions)과
+       화면에 보여줄 단계 이름 저장이 서로 다른 규칙을 쓰면, 「추적은 멈췄는데
+       화면엔 진행중」 같은 어긋남이 생긴다(이 저장소에서 반복된 사고 유형).
+    """
+    slug = _sync_store_slug(c["naver_store_url"])
+    if slug and slug in stage_by_slug:
+        return stage_by_slug[slug]
+    for nm in (c["name"], c["business_name"]):
+        key = _sync_norm(nm)
+        if key and key in stage_by_name:
+            return stage_by_name[key]
+    return None
+
+
 def _decide_stage_actions(client_rows, stage_by_name, stage_by_slug):
     """순수 판정 로직(단위테스트 대상): 업체 행들과 전산 단계 맵 → (pause_ids, resume_ids).
     수동 토글 업체 제외, 매칭 안 되면 아무것도 안 함."""
@@ -244,16 +261,7 @@ def _decide_stage_actions(client_rows, stage_by_name, stage_by_slug):
     for c in client_rows:
         if int(c["auto_analysis_manual"] or 0) == 1:
             continue  # 수동 우선
-        stage = None
-        slug = _sync_store_slug(c["naver_store_url"])
-        if slug and slug in stage_by_slug:
-            stage = stage_by_slug[slug]
-        else:
-            for nm in (c["name"], c["business_name"]):
-                key = _sync_norm(nm)
-                if key and key in stage_by_name:
-                    stage = stage_by_name[key]
-                    break
+        stage = _match_stage(c, stage_by_name, stage_by_slug)
         if stage is None:
             continue  # 매칭 실패 — 변경 없음(수동 토글로 커버)
         cur = int(c["auto_analysis"] if c["auto_analysis"] is not None else 1)
@@ -273,7 +281,7 @@ def _run_contract_stage_sync():
     api_key = os.getenv("ERP_AD_SYNC_API_KEY", "")
     if not api_key:
         logger.info("계약단계 동기화: ERP_AD_SYNC_API_KEY 미설정 — 건너뜀 (합의 후 서버 .env에 설정)")
-        return
+        return {"ok": False, "error": "전산 연동 키가 서버에 설정돼 있지 않습니다."}
     base = os.getenv("ERP_BASE_URL", "http://api.metainc.co.kr").rstrip("/")
     DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
 
@@ -313,7 +321,7 @@ def _run_contract_stage_sync():
 
     if fetched_stages == 0:
         logger.warning("계약단계 동기화: 조회 전부 실패 — 아무것도 변경하지 않음(안전 기본값)")
-        return
+        return {"ok": False, "error": "전산 계약단계 조회가 전부 실패했습니다(잠시 뒤 다시 시도해 주세요)."}
 
     try:
         conn = sqlite3.connect(DB_PATH, timeout=10)
@@ -329,6 +337,25 @@ def _run_contract_stage_sync():
             conn.execute("UPDATE clients SET auto_analysis = 0 WHERE id = ?", (cid,))
         for cid in resume_ids:
             conn.execute("UPDATE clients SET auto_analysis = 1 WHERE id = ?", (cid,))
+
+        # ── 단계 이름 저장 (2026-08-28 대표 지시) ──────────────────────────
+        # 종전엔 이 이름을 읽고 스위치만 끄고 버렸다. 그래서 화면은 「꺼짐 128곳」까지만
+        # 알고 환불중·홀딩중·계약 만료를 갈라 볼 수 없었다.
+        # ⚠️ 수동 토글 업체(auto_analysis_manual=1)도 **이름은 저장한다.**
+        #    스위치는 사람 뜻대로 두되, 그 업체가 환불중인 것은 사실이므로 화면엔 보여야 한다.
+        #    (스위치를 건드리지 않는 것과 사실을 감추는 것은 다른 일이다.)
+        # ⚠️ 매칭 실패는 덮어쓰지 않는다 — 지난번에 받아 둔 이름을 지우면
+        #    「전산에 없음」과 「이번에 조회가 실패함」이 화면에서 구분되지 않는다.
+        staged = 0
+        for c in rows:
+            st = _match_stage(c, stage_by_name, stage_by_slug)
+            if not st:
+                continue
+            conn.execute(
+                "UPDATE clients SET contract_stage = ?, "
+                "contract_stage_at = datetime('now','localtime') WHERE id = ?",
+                (st, c["id"]))
+            staged += 1
 
         # 계약 종료일 동기화 — 전산이 알려준 날짜를 추적 종료일로 그대로 쓴다.
         # 계약이 연장되면 종료일도 따라 늘어나므로 사람이 손댈 일이 없다.
@@ -354,11 +381,17 @@ def _run_contract_stage_sync():
         conn.close()
         logger.info(
             f"✅ 계약단계 동기화 완료: 자동 중지 {len(pause_ids)}건 · 자동 재개 {len(resume_ids)}건 "
-            f"· 계약 종료일 반영 {synced_end}건 "
+            f"· 계약 종료일 반영 {synced_end}건 · 단계 이름 저장 {staged}건 "
             f"(전산 매칭 {len(stage_by_name)}개 업체, 수동 설정 업체는 유지)"
         )
+        # 「지금 가져오기」 버튼이 결과를 화면에 보여줄 수 있게 요약을 돌려준다.
+        # (스케줄러가 부를 때는 아무도 안 받으므로 종전과 동작 동일)
+        return {"ok": True, "paused": len(pause_ids), "resumed": len(resume_ids),
+                "staged": staged, "end_synced": synced_end,
+                "matched_companies": len(stage_by_name)}
     except Exception as e:
         logger.error(f"❌ 계약단계 동기화 DB 반영 실패: {e}")
+        return {"ok": False, "error": str(e)[:200]}
 
 
 # ==================== 08:00 순위 추적 ====================
