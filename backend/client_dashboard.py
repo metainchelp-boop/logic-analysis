@@ -193,8 +193,65 @@ def init_client_dashboard_db():
 
     # 일회성 정리(멱등): 비-매니저(영업팀 '배재민')의 상승 권한/잘못된 등록 정리
     cleanup_misassigned_clients()
+    # 일회성: 「전산에 없음」 17곳 처분(대표 확인 2026-08-28)
+    apply_missing_disposition_20260828()
     # 일회성: 신요섭 담당 업체를 실제 담당자로 재배정 + 나머지 삭제(사장님 매핑 기준)
     reassign_sinyoseop_clients()
+
+
+def apply_missing_disposition_20260828():
+    """일회성(플래그): 전산에서 계약 단계를 못 받은 광고주 17곳 처분 — 대표 확인 2026-08-28.
+
+    대표가 확인표(HTML)로 한 곳씩 판단한 결과를 그대로 반영한다:
+      · 지우기 11곳  → status='terminated' (이 표의 정식 상태값 — 소프트 종료).
+                       목록·수집·기록에서 빠지고 **데이터는 전부 보존**된다.
+                       ⚠️ 하드 DELETE 금지 — 지우면 그 업체의 순위 기록이 통째로 사라진다.
+      · 그대로 5곳   → contract_stage='전산 외 — 대표 확인'.
+                       전산 6단계 조회(ad-sync)에 안 잡히는 업체라 단계가 영영 비는데,
+                       비워 두면 「삭제 필요」 칸에 계속 남아 매번 다시 확인하게 된다.
+                       04:00 동기화는 매칭 실패 시 덮어쓰지 않으므로 이 표시는 유지된다.
+      · 이름 맞추기 1곳 → business_name 에 전산 표기를 넣는다.
+                       단계 매칭(_match_stage)이 name·business_name 둘 다 보므로
+                       화면 이름은 그대로 두고도 다음 04:00 부터 자동 매칭된다.
+
+    ⚠️ 업체는 이름이 아니라 **번호(id)** 로 고른다 — 이 저장소는 공개라 고객 업체명을
+       코드에 늘어놓지 않기 위함(번호는 서버 실측으로 확정, 2026-08-28 진단 #71).
+    ⚠️ 모든 UPDATE 에 「단계가 비어 있을 때만」 가드 — 번호가 어긋나 이미 전산과
+       매칭된 멀쩡한 업체를 건드리는 사고를 막는다(17곳은 전부 단계가 비어 있었다).
+    """
+    FLAG = 'missing_disposition_20260828'
+    TERMINATE_IDS = [653, 366, 781, 600, 544, 162, 199, 393, 157, 86, 187]   # 지우기 11
+    KEEP_IDS = [466, 750, 697, 756, 694]                                     # 그대로 5
+    RENAME_ID, RENAME_BIZ = 591, '서한푸드'                                   # 이름 맞추기 1
+    try:
+        conn = _get_conn()
+        try:
+            conn.execute("CREATE TABLE IF NOT EXISTS _app_migrations (key TEXT PRIMARY KEY)")
+            if conn.execute("SELECT 1 FROM _app_migrations WHERE key=?", (FLAG,)).fetchone():
+                return
+            cur = conn.cursor()
+            guard = " AND (contract_stage IS NULL OR contract_stage='')"
+            ph = ','.join('?' * len(TERMINATE_IDS))
+            cur.execute(f"UPDATE clients SET status='terminated' WHERE id IN ({ph}) "
+                        f"AND status='active'{guard}", TERMINATE_IDS)
+            n_term = cur.rowcount
+            ph2 = ','.join('?' * len(KEEP_IDS))
+            cur.execute("UPDATE clients SET contract_stage='전산 외 — 대표 확인', "
+                        "contract_stage_at=datetime('now','localtime') "
+                        f"WHERE id IN ({ph2}) AND status='active'{guard}", KEEP_IDS)
+            n_keep = cur.rowcount
+            cur.execute(f"UPDATE clients SET business_name=? WHERE id=? AND status='active'{guard}",
+                        (RENAME_BIZ, RENAME_ID))
+            n_ren = cur.rowcount
+            cur.execute("INSERT OR REPLACE INTO _app_migrations(key) VALUES(?)", (FLAG,))
+            conn.commit()
+            logger.info(f"[전산에없음처분] 완료(1회성) — 지우기 {n_term}/{len(TERMINATE_IDS)}곳(종료 처리·기록 보존) · "
+                        f"그대로 {n_keep}/{len(KEEP_IDS)}곳(단계 표시) · 이름 맞추기 {n_ren}/1곳")
+        finally:
+            conn.close()
+    except Exception as e:
+        # 부팅을 죽이지 않는다 — 실패하면 플래그가 안 남아 다음 부팅에 재시도된다.
+        logger.warning(f"[전산에없음처분] 실패(재시도 예정): {e}")
 
 
 def reassign_sinyoseop_clients():
