@@ -6,8 +6,11 @@ async function render() {
           lastAdStat = null, readFail = null, workerNo = 1, workerCount = 1 } =
     await chrome.storage.local.get(['token', 'state', 'logs', 'rawSample', 'rawSampleAd',
                                     'lastAdStat', 'readFail', 'workerNo', 'workerCount']);
-  $('token').value = token;
   // ⚠️ 입력 중에는 덮어쓰지 않는다 — 3초마다 도는 render 가 타이핑을 지워 버린다.
+  //    특히 토큰 칸은 새로 설치한 기계에서 저장값이 빈 문자열이라, 가드가 없으면
+  //    한 글자 칠 때마다 지워져 사실상 입력이 불가능하다(2026-08-28 실사용 신고).
+  //    붙여넣기로 3초 안에 끝내면 우연히 되던 것이라 여태 안 드러났다.
+  if (document.activeElement !== $('token')) $('token').value = token;
   if (document.activeElement !== $('workerNo')) $('workerNo').value = workerNo;
   if (document.activeElement !== $('workerCount')) $('workerCount').value = workerCount;
   try {
