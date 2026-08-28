@@ -986,7 +986,7 @@ jobs:
             print("     그중 등록 7일 지남    ", one("SELECT COUNT(*)" + N + S + " AND date(COALESCE(k.created_at,'2000-01-01')) <= date('now','localtime','-7 day')"))
             print("")
             print("[오늘 시간대별 수집량 — 고친 뒤 실제로 빨라졌나]")
-            rows = conn.execute("SELECT strftime('%H', collected_at) h, COUNT(*) n FROM collected_serp WHERE collected_date = date('now','localtime') GROUP BY h ORDER BY h").fetchall()
+            rows = conn.execute("SELECT strftime('%H', created_at) h, COUNT(*) n FROM collected_serp WHERE collected_date = date('now','localtime') GROUP BY h ORDER BY h").fetchall()
             print("  " + " ".join([r[0] + "시:" + str(r[1]) for r in rows]))
             print("  오늘 합계               ", sum([r[1] for r in rows]))
             print("  ⇒ 13시 이후가 시간당 30개 안팎이면 고쳐진 것(고치기 전 12~15개)")
