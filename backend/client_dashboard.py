@@ -1440,8 +1440,66 @@ def rank_board(client_id: int, days: int = 8, current_user: dict = Depends(get_c
         except Exception:
             _kwp = {}
 
+        # 그만 재기(억제) 키워드 — 보드에서도 뺀다. 수집이 안 도는 키워드가 화면에
+        # 남아 있으면 「미노출 n일」로 계속 늘어나 지운 게 아닌 것처럼 보인다.
+        try:
+            from keyword_mute import muted_set
+            _muted_kw = muted_set(conn, client_id)
+        except Exception:
+            _muted_kw = set()
+
+        # 이어진 추적 상품(rank_link) — 상품별 키워드 목록·출처 표시의 근거.
+        # 화면 통합(2026-08-29 대표 확정): 업체 보드가 자기 상품을 함께 보여준다.
+        _mk_set = {k.strip() for k in (client["main_keywords"] or "").split(",") if k.strip()}
+        products = []
+        _prod_kw = {}   # keyword(strip) → 첫 상품 이름 (출처 표시용)
+        try:
+            from rank_link import get_links_for_client
+            for ln in get_links_for_client(client_id):
+                pid = ln["tracked_product_id"]
+                _pkws = []
+                for _kr in conn.execute(
+                        "SELECT keyword FROM tracked_keywords WHERE product_id=?", (pid,)):
+                    _k = (_kr[0] or "").strip()
+                    if _k:
+                        _pkws.append(_k)
+                _dis = False
+                try:
+                    _dr = conn.execute(
+                        "SELECT COALESCE(disabled_at,'') FROM tracked_products WHERE id=?",
+                        (pid,)).fetchone()
+                    _dis = bool(_dr and (_dr[0] or "").strip())
+                except Exception:
+                    pass
+                products.append({
+                    "id": pid,
+                    "name": ln.get("product_name") or "",
+                    "store_name": ln.get("store_name") or "",
+                    "url": ln.get("product_url") or "",
+                    "keywords": _pkws,
+                    "disabled": _dis,
+                    "match_method": ln.get("match_method") or "",
+                })
+                if not _dis:
+                    for _k in _pkws:
+                        _prod_kw.setdefault(_k, ln.get("product_name") or "추적 상품")
+        except Exception as _pe:
+            logger.warning(f"[rank-board] 이어진 상품 조회 실패(보드는 정상) [{client_id}]: {_pe}")
+            products = []
+
+        def _source_of(k):
+            """행 출처 — 어디서 등록돼 재고 있는지. 지울 때 무엇이 빠지는지 알려면 필요하다."""
+            k = (k or "").strip()
+            if k in _mk_set:
+                return {"source": "client", "source_label": "업체 키워드"}
+            if k in _prod_kw:
+                return {"source": "product", "source_label": f"상품 · {_prod_kw[k]}"}
+            return {"source": "history", "source_label": "분석 이력"}
+
         per = {}
         for r in rows:
+            if (r["keyword"] or "").strip() in _muted_kw:
+                continue   # 그만 재기 지정 — 기록은 남아 있고 화면에서만 뺀다(재등록 시 복귀)
             per.setdefault(r["keyword"], {})[r["d"]] = {
                 "rank": r["rank_position"], "page": r["page_number"], "at": r["checked_at"]}
 
@@ -1482,6 +1540,7 @@ def rank_board(client_id: int, days: int = 8, current_user: dict = Depends(get_c
                 "volume": vol_map.get(kw, "-"),
                 "last_checked": latest["at"], "series": series,
                 "unexposed_days": unexposed_days,
+                **_source_of(kw),
             })
         # 등록됐지만 아직 기록이 없는 키워드도 「기록 대기」로 보여준다 — 키워드를 추가한
         # 직원이 화면에서 아무 변화도 못 보면 고장인지 구분할 수 없기 때문(반영 현황 원칙).
@@ -1493,10 +1552,11 @@ def rank_board(client_id: int, days: int = 8, current_user: dict = Depends(get_c
                 and (_pending_ok["u"] or "").strip()):
             _norm = lambda k: "".join(str(k).split()).lower()
             _known = {_norm(k) for k in per.keys()}
+            _muted_norm = {_norm(k) for k in _muted_kw}
             _vol_norm = {_norm(k): v for k, v in vol_map.items()}   # 공백 변형에도 검색량 매칭
             for mk in (client["main_keywords"] or "").split(","):
                 mk = mk.strip()
-                if mk and _norm(mk) not in _known:
+                if mk and _norm(mk) not in _known and _norm(mk) not in _muted_norm:
                     _known.add(_norm(mk))
                     board.append({
                         "keyword": mk, "rank": None, "page": None,
@@ -1506,6 +1566,22 @@ def rank_board(client_id: int, days: int = 8, current_user: dict = Depends(get_c
                         "volume": _vol_norm.get(_norm(mk), "-"),
                         "last_checked": "", "series": [],
                         "unexposed_days": 0, "pending": True,
+                        **_source_of(mk),
+                    })
+            # 이어진 상품에만 등록된 키워드도 「기록 대기」로 — 상품 쪽에서 등록한 직원이
+            # 업체 보드에서 아무것도 못 보면 양방향이 아니라 반쪽이다(같은 반영 현황 원칙).
+            for pk in _prod_kw:
+                if _norm(pk) not in _known and _norm(pk) not in _muted_norm:
+                    _known.add(_norm(pk))
+                    board.append({
+                        "keyword": pk, "rank": None, "page": None,
+                        "product_url": _kwp.get(pk, _client_url),
+                        "product_assigned": pk in _kwp,
+                        "prev_rank": None, "delta": None,
+                        "volume": _vol_norm.get(_norm(pk), "-"),
+                        "last_checked": "", "series": [],
+                        "unexposed_days": 0, "pending": True,
+                        **_source_of(pk),
                     })
         # 정렬: 노출(순위 오름차순) 먼저, 미노출 뒤(키워드 가나다)
         board.sort(key=lambda b: (b["rank"] is None, b["rank"] if b["rank"] is not None else 0, b["keyword"]))
@@ -1519,7 +1595,7 @@ def rank_board(client_id: int, days: int = 8, current_user: dict = Depends(get_c
         return {"success": True,
                 "client": {"id": client["id"], "name": client["name"],
                            "store_url": client["naver_store_url"] or ""},
-                "kpis": kpis, "board": board}
+                "kpis": kpis, "board": board, "products": products}
     except HTTPException:
         raise
     except Exception as e:
@@ -1689,8 +1765,45 @@ def add_track_keyword(client_id: int, req: TrackKeywordRequest,
         row = conn.execute("SELECT main_keywords FROM clients WHERE id=?", (client_id,)).fetchone()
         mk_list = [k.strip() for k in ((row["main_keywords"] if row else "") or "").split(",") if k.strip()]
         existing |= {_norm(k) for k in mk_list}
+
+        # 그만 재기(억제)로 빠져 있던 키워드면 재등록 = 복귀 — 이력이 그대로 살아난다.
+        # 억제 표는 strip 원문이라 공백 변형까지 _norm 으로 맞춰 전부 푼다.
+        _restored = False
+        try:
+            from keyword_mute import muted_set, unmute
+            for _m in [m for m in muted_set(conn, client_id) if _norm(m) == _norm(kw)]:
+                unmute(conn, client_id, _m)
+                _restored = True
+        except Exception as _ue:
+            logger.warning(f"[track-keyword] 억제 해제 실패(등록은 계속) [{kw}]: {_ue}")
+
         if _norm(kw) in existing:
+            # 억제 해제만으로 복귀 완료 — 이력·대표 키워드가 이미 있으니 더 쓸 것이 없다.
+            # ⚠️ 복귀인데 대표 키워드 목록에서 빠져 있으면(그만 재기가 뺐던 것) 다시 넣어
+            #    준다 — 안 넣으면 이력이 끊기는 순간 또 사라진다.
+            if _restored and _norm(kw) not in {_norm(k) for k in mk_list} and len(mk_list) < 20:
+                mk_list.append(kw)
+                conn.execute("UPDATE clients SET main_keywords=? WHERE id=?",
+                             (",".join(mk_list), client_id))
+            if _restored:
+                # 축A 도 복귀 — 그만 재기가 이어진 상품에서 뺐던 키워드를 되살리고,
+                # 키워드가 0개가 되어 쉬게 했던 상품이면 다시 깨운다.
+                try:
+                    from rank_link import get_links_for_client
+                    for ln in get_links_for_client(client_id):
+                        conn.execute(
+                            "INSERT OR IGNORE INTO tracked_keywords (product_id, keyword) VALUES (?, ?)",
+                            (ln["tracked_product_id"], kw))
+                        conn.execute(
+                            "UPDATE tracked_products SET disabled_at='' "
+                            "WHERE id=? AND COALESCE(disabled_at,'') != ''",
+                            (ln["tracked_product_id"],))
+                except Exception as _re:
+                    logger.warning(f"[track-keyword] 축A 복귀 실패(복귀는 유효) [{kw}]: {_re}")
             conn.commit()
+            if _restored:
+                return {"success": True, "restored": True, "keyword": kw,
+                        "message": "그만 재기로 빠져 있던 키워드입니다 — 다시 추적합니다(이전 기록 그대로 복귀)."}
             return {"success": True, "already": True, "keyword": kw,
                     "message": "이미 추적 중인 키워드입니다."}
         if len(mk_list) >= 20:
@@ -1737,6 +1850,119 @@ def add_track_keyword(client_id: int, req: TrackKeywordRequest,
         return {"success": False, "detail": str(e)}
     finally:
         conn.close()
+
+@router.post("/{client_id}/untrack-keyword")
+def untrack_keyword(client_id: int, req: TrackKeywordRequest,
+                    current_user: dict = Depends(get_current_user)):
+    """키워드 「그만 재기」 — 양방향 정리 (2026-08-29 대표 확정 「양방향으로 작동」).
+
+    지우지 않는다 — 억제한다(client_keyword_mute). 이유:
+      · 업체 키워드는 main_keywords ∪ 분석 이력(client_analyses) 두 갈래라, 대표
+        키워드에서 이름만 빼면 이력 갈래로 다시 들어와 영원히 수집된다.
+      · 이력을 지우면 순위·분석 기록이 사라져 되돌릴 수 없다. 억제는 재등록 한 번으로
+        기록이 그대로 복귀한다.
+    한 번에 정리되는 곳(안 맞추면 「뺐는데 어딘가에선 계속 재는」 반쪽이 된다):
+      ① clients.main_keywords 에서 제거   ② 억제 표에 기재(수집·기록·보드 전부가 본다)
+      ③ 이어진 추적 상품(rank_link)의 tracked_keywords 에서도 제거 — 남은 키워드가
+         0개가 된 상품은 지우지 않고 쉬게 한다(disabled_at — 기록 보존).
+    """
+    kw = (req.keyword or "").strip()
+    if not kw:
+        raise HTTPException(status_code=400, detail="키워드를 입력해주세요.")
+    conn = _get_conn()
+    try:
+        _verify_client_access(conn, client_id, current_user)
+        client = conn.execute("SELECT id, name FROM clients WHERE id=?", (client_id,)).fetchone()
+        if not client:
+            raise HTTPException(status_code=404, detail="업체를 찾을 수 없습니다.")
+
+        _norm = lambda k: "".join(str(k).split()).lower()
+        # main_keywords 는 읽고-고쳐-쓰는 목록 — 등록과 같은 이유로 쓰기 락 안에서 처리.
+        conn.commit()
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT main_keywords FROM clients WHERE id=?", (client_id,)).fetchone()
+        mk_list = [k.strip() for k in ((row["main_keywords"] if row else "") or "").split(",") if k.strip()]
+        kept = [k for k in mk_list if _norm(k) != _norm(kw)]
+        if len(kept) != len(mk_list):
+            conn.execute("UPDATE clients SET main_keywords=? WHERE id=?",
+                         (",".join(kept), client_id))
+
+        # 억제 기재 — 입력 원문 + 대표 키워드에 있던 공백 변형까지 전부(어긋나면 그
+        # 변형이 이력 갈래로 계속 잡힌다).
+        from keyword_mute import mute
+        _by = current_user.get("id") or 0
+        mute(conn, client_id, kw, by=_by)
+        for k in mk_list:
+            if _norm(k) == _norm(kw) and k != kw:
+                mute(conn, client_id, k, by=_by)
+
+        # 축A — 이어진 상품의 키워드 목록에서도 제거
+        unlinked = 0
+        rested = 0
+        try:
+            from rank_link import get_links_for_client
+            for ln in get_links_for_client(client_id):
+                pid = ln["tracked_product_id"]
+                cur = conn.execute(
+                    "DELETE FROM tracked_keywords WHERE product_id=? AND TRIM(keyword)=?",
+                    (pid, kw))
+                unlinked += cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+                left = conn.execute(
+                    "SELECT COUNT(*) FROM tracked_keywords WHERE product_id=?",
+                    (pid,)).fetchone()[0]
+                if left == 0:
+                    r2 = conn.execute(
+                        "UPDATE tracked_products SET disabled_at=datetime('now','localtime') "
+                        "WHERE id=? AND COALESCE(disabled_at,'')=''", (pid,))
+                    if r2.rowcount:
+                        rested += 1
+        except Exception as _ae:
+            logger.warning(f"[untrack-keyword] 축A 정리 실패(억제는 유효) [{kw}]: {_ae}")
+        conn.commit()
+
+        logger.info(f"[untrack-keyword] {client['name']}({client_id}) - '{kw}' "
+                    f"(대표 키워드 {'제거' if len(kept) != len(mk_list) else '없었음'}, "
+                    f"상품 키워드 {unlinked}건 제거, 상품 {rested}개 휴면)")
+        return {"success": True, "keyword": kw,
+                "removed_from_client": len(kept) != len(mk_list),
+                "unlinked_product_keywords": unlinked, "rested_products": rested,
+                "message": ("양쪽(업체·상품)에서 함께 빠졌습니다. 순위 기록은 보존되며, "
+                            "같은 키워드를 다시 등록하면 이전 기록 그대로 복귀합니다.")}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[untrack-keyword] {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return {"success": False, "detail": str(e)}
+    finally:
+        conn.close()
+
+
+@router.get("/rank-links")
+def list_rank_links(current_user: dict = Depends(get_current_user)):
+    """업체에 이어진 추적 상품 id 목록 — 화면 통합용 (2026-08-29).
+
+    쇼핑 순위 추적 하단 「전체 도구」가 이 목록으로 **미연결 상품만** 걸러 보여준다 —
+    이어진 상품은 업체 상세 보드가 이미 보여주므로 두 번 나오면 같은 것을 두 곳에서
+    관리하게 된다(이번 통합이 없애려는 바로 그 문제).
+    """
+    conn = _get_conn()
+    try:
+        try:
+            rows = conn.execute("SELECT DISTINCT tracked_product_id FROM rank_link").fetchall()
+            ids = [r[0] for r in rows]
+        except Exception:
+            ids = []   # 표가 아직 없는 구버전 DB — 전부 미연결로 보인다(종전 화면 그대로)
+        return {"success": True, "linked_product_ids": ids}
+    except Exception as e:
+        logger.error(f"[rank-links] {e}")
+        return {"success": False, "detail": str(e), "linked_product_ids": []}
+    finally:
+        conn.close()
+
 
 @router.get("/{client_id}/ai-insights")
 def get_ai_insights(client_id: int, current_user: dict = Depends(get_current_user)):

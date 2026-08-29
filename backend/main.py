@@ -727,6 +727,57 @@ def track_product(req: ProductAddRequest, background_tasks: BackgroundTasks, cur
         except Exception as _le:
             logger.warning(f"등록 시 업체 연결 실패(등록은 성립): {_le}")
 
+        # ── 양방향 즉시 반영 (2026-08-29 대표 확정) ──
+        # 상품에 붙인 키워드를 그 업체의 대표 키워드에도 넣어 준다 — 안 넣으면 로직
+        # 분석 화면(축B)은 다음 날 나눠 적기 전까지 이 키워드를 모른다.
+        # 그만 재기로 억제돼 있던 키워드면 재등록으로 보고 억제도 푼다.
+        # 실패해도 상품 등록은 성립(경고 로그만) — 종전 화면 무회귀.
+        if link.get("linked") and link.get("client_id"):
+            _lcid = link["client_id"]
+            _mconn = None
+            try:
+                import sqlite3 as _sq
+                from keyword_mute import muted_set, unmute
+                _mconn = _sq.connect(DB_PATH, timeout=10)
+                _mconn.row_factory = _sq.Row
+                _n = lambda k: "".join(str(k).split()).lower()
+                _mconn.execute("BEGIN IMMEDIATE")
+                _row = _mconn.execute(
+                    "SELECT main_keywords FROM clients WHERE id=?", (_lcid,)).fetchone()
+                _mk = [k.strip() for k in ((_row["main_keywords"] if _row else "") or "").split(",") if k.strip()]
+                _have = {_n(k) for k in _mk}
+                _added = 0
+                _muted_now = muted_set(_mconn, _lcid)
+                for _kw in req.keywords:
+                    _kw = (_kw or "").strip()
+                    if not _kw or "," in _kw:      # 쉼표는 목록 파손 — 등록 경로와 같은 이유로 제외
+                        continue
+                    for _m in [m for m in _muted_now if _n(m) == _n(_kw)]:
+                        unmute(_mconn, _lcid, _m)
+                    if _n(_kw) not in _have and len(_mk) < 20:   # 직접 등록 상한과 동일
+                        _mk.append(_kw)
+                        _have.add(_n(_kw))
+                        _added += 1
+                if _added:
+                    _mconn.execute("UPDATE clients SET main_keywords=? WHERE id=?",
+                                   (",".join(_mk), _lcid))
+                _mconn.commit()
+                if _added:
+                    logger.info(f"[track] 업체({_lcid}) 대표 키워드 {_added}건 동반 등록(양방향)")
+            except Exception as _me:
+                logger.warning(f"[track] 업체 키워드 동반 등록 실패(상품 등록은 성립): {_me}")
+                try:
+                    if _mconn:
+                        _mconn.rollback()
+                except Exception:
+                    pass
+            finally:
+                try:
+                    if _mconn:
+                        _mconn.close()
+                except Exception:
+                    pass
+
         # 백그라운드에서 첫 순위 체크 실행
         background_tasks.add_task(
             run_initial_rank_check, db_product_id, req.product_url, keyword_ids

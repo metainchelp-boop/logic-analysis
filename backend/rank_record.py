@@ -50,17 +50,18 @@ def _client_targets(conn, keyword: str) -> List[Dict[str, Any]]:
     배치(`_collect_all_keywords`)와 같은 두 출처를 본다 —
       · `clients.main_keywords` 쉼표 목록
       · `client_analyses` 에 그 키워드 분석 이력이 있는 업체
-    대상 조건(활성·자동분석 on·광고주·스토어)도 배치와 동일하게 맞춘다.
+    대상 조건도 배치와 같은 한 곳(tracking_eligibility)으로 판정한다.
+
+    ⚠️ 2026-08-29: 종전엔 4조건(활성·자동분석·광고주·스토어)이 여기 따로 박혀 있어
+       **추적 ON·추적 기간이 빠져 있었다** — 8/28 자격 통일이 배치·수집만 고치고
+       이 즉시 기록 경로를 빠뜨린 것. 계약 끝난 업체도 다른 업체와 키워드가 겹치면
+       수집이 올라올 때마다 여기로 계속 기록됐다. 같은 날 「그만 재기」 억제도 함께
+       건다(억제 키워드는 이력 갈래로 되살아나면 안 된다 — 배치와 같은 규칙).
     """
     try:
-        rows = [dict(r) for r in conn.execute("""
-            SELECT id, name, main_keywords, naver_store_url
-              FROM clients
-             WHERE status = 'active'
-               AND COALESCE(auto_analysis, 1) = 1
-               AND COALESCE(role, 'advertiser') = 'advertiser'
-               AND COALESCE(vertical, 'store') = 'store'
-        """)]
+        from tracking_eligibility import eligible_clients_sql
+        rows = [dict(r) for r in conn.execute(
+            eligible_clients_sql("id, name, main_keywords, naver_store_url"))]
     except Exception as e:
         logger.warning(f"[rank_record] 업체 조회 실패 [{keyword}]: {e}")
         return []
@@ -69,11 +70,18 @@ def _client_targets(conn, keyword: str) -> List[Dict[str, Any]]:
             "SELECT DISTINCT client_id FROM client_analyses WHERE keyword = ?", (keyword,))}
     except Exception:
         analyzed = set()
+    try:
+        from keyword_mute import muted_map
+        _muted = muted_map(conn)
+    except Exception:
+        _muted = {}
 
     out = []
     for c in rows:
         if not (c.get("naver_store_url") or "").strip():
             continue
+        if keyword in _muted.get(c["id"], ()):
+            continue   # 그만 재기 지정 — 이 업체 기록에는 적지 않는다
         if c["id"] in analyzed:
             out.append(c)
             continue
