@@ -52,20 +52,35 @@ def _product_key(url: str) -> str:
 
 
 def _store_key(url: str) -> str:
-    """URL → 스마트스토어 가게 이름(슬러그). 못 뽑으면 빈 문자열.
+    """URL → 가게 키(`ss:슬러그` / `br:슬러그`). 못 뽑으면 빈 문자열.
 
     ⚠️ 상품ID 매칭의 **보조**로만 쓴다(2026-08-27 신설).
        업체의 naver_store_url 은 '첫 등록 상품' 하나로 굳어 있어, 직원이 홈탭에서
        같은 가게의 **다른 상품**을 추적 등록하면 상품ID 가 영영 안 맞는다
        (실측: 안 이어진 116개 중 115개가 이 경우).
        같은 가게면 같은 업체이므로, 상품ID 로 못 이은 것만 여기로 내려온다.
+
+    ⚠️ 브랜드스토어(`brand.naver.com`)도 함께 읽는다(2026-08-29). 종전에는 스마트스토어만
+       봐서 브랜드스토어 주소는 가게 이름을 아예 못 뽑았다 — 그 상품은 상품ID 로 못 이으면
+       보조 축에서도 걸러지지 않아 그대로 「주인 없는 상품」이 된다.
+
+    ⚠️ **호스트를 접두어로 붙여 두 채널을 섞지 않는다.** 같은 슬러그가 스마트스토어와
+       브랜드스토어에서 같은 가게라는 보장이 없고, 잘못 이으면 **다른 업체의 순위가 남의
+       업체에 붙는다**(못 잇는 것보다 나쁘다).
+       실측(2026-08-29): 스마트스토어 슬러그 700종 · 브랜드스토어 2종 · 겹침 0종 —
+       접두어를 붙여도 지금 잃는 매칭은 없다. 나중에 겹침이 실제로 관측되고 그것이 같은
+       가게임이 확인되면 그때 접두어를 걷어낸다.
     """
-    m = re.search(r"smartstore\.naver\.com/([^/?#]+)", str(url or ""))
-    if not m:
-        return ""
-    slug = m.group(1).strip().lower()
-    # 'category' 같은 경로 조각이 가게 이름 자리에 오는 일은 없지만, 빈 값·숫자만은 거른다
-    return "" if (not slug or slug.isdigit()) else slug
+    u = str(url or "")
+    for host, pat in (("br", r"brand\.naver\.com/([^/?#]+)"),
+                      ("ss", r"smartstore\.naver\.com/([^/?#]+)")):
+        m = re.search(pat, u)
+        if not m:
+            continue
+        slug = m.group(1).strip().lower()
+        # 'category' 같은 경로 조각이 가게 이름 자리에 오는 일은 없지만, 빈 값·숫자만은 거른다
+        return f"{host}:{slug}" if (slug and not slug.isdigit()) else ""
+    return ""
 
 
 def init_rank_link_db():
