@@ -444,6 +444,49 @@ def test_칸_추적종료일이_오늘이면_아직_살아있다():
     assert delete_reasons(_row(contract_stage="진행중", track_until=_TODAY), _TODAY) == []
 
 
+# ─────────────────────────────────────────────────────────────────────
+# rank_link 유지보수 잡 — 실제로 실행해 본다 (2026-08-29 실사고 재발 방지)
+#
+# ⚠️ 왜 필요한가 — disable_ownerless 가 존재하지 않는 _conn() 을 불러 NameError 가
+#    났는데, 소스 검사·문자열 grep 으로는 못 잡는 종류다(이름이 그럴듯하니까).
+#    첫 실행이 서버의 01:20 이었고, 예외가 같은 잡의 큐 정리까지 건너뛰게 했다.
+#    여기서 **실제로 import 해 실제로 호출**하면 그런 오타는 배포 게이트에서 죽는다.
+#    (rank_link 는 fastapi 를 안 쓰므로 게이트 환경에서 import 가능 —
+#     naver_crawler 를 거치지만 그것도 requests 뿐이라 게이트에 있다.)
+
+def test_rank_link_유지보수를_실제로_실행한다(tmp_db=None):
+    import os, sqlite3, tempfile, importlib
+    db = tempfile.mktemp(suffix=".db")
+    conn = sqlite3.connect(db)
+    conn.executescript("""
+        CREATE TABLE clients(id INTEGER PRIMARY KEY, status TEXT, role TEXT, vertical TEXT,
+            auto_analysis INT, track_enabled INT, track_until TEXT,
+            name TEXT, business_name TEXT, naver_store_url TEXT, main_keywords TEXT);
+        CREATE TABLE tracked_products(id INTEGER PRIMARY KEY, product_url TEXT DEFAULT '',
+            product_name TEXT DEFAULT '', store_name TEXT DEFAULT '', product_id TEXT DEFAULT '',
+            created_at TEXT);
+        CREATE TABLE tracked_keywords(id INTEGER PRIMARY KEY, product_id INT, keyword TEXT);
+    """)
+    # 사흘 전 등록됐고 아무 업체에도 안 이어진 상품 — 정리 대상이어야 한다
+    conn.execute("INSERT INTO tracked_products(id, created_at) VALUES(7, date('now','-3 day'))")
+    conn.commit(); conn.close()
+
+    import rank_link
+    old_db = rank_link.DB_PATH
+    try:
+        rank_link.DB_PATH = db
+        rank_link.init_rank_link_db()              # 실제 부팅과 같은 경로로 브리지 표 생성
+        res = rank_link.run_maintenance()          # ← 예외가 나면 여기서 테스트가 죽는다
+        assert isinstance(res, dict), res
+        assert res.get("disabled") == 1, f"주인 없는 상품이 안 내려갔다: {res}"
+        res2 = rank_link.run_maintenance()          # 멱등 — 두 번째는 내릴 게 없다
+        assert res2.get("disabled") == 0, res2
+    finally:
+        rank_link.DB_PATH = old_db
+        try: os.unlink(db)
+        except OSError: pass
+
+
 if __name__ == "__main__":
     _tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     _failed = 0

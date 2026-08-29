@@ -326,8 +326,14 @@ def disable_ownerless() -> Dict[str, Any]:
     ⚠️ 반드시 apply_backfill() **뒤에** 부를 것 — 앞에서 부르면 오늘 이어질 수
        있었던 상품까지 내려간다.
     """
-    conn = _conn()
+    # ⚠️ 2026-08-29 실사고: 여기서 존재하지 않는 _conn() 을 불러 NameError 가 났고,
+    #    run_maintenance 전체가 넘어지면서 01:20 의 큐 2차 정리까지 함께 건너뛰었다
+    #    (첫 실행 로그: 「순위 축 브리지 갱신 예외: name '_conn' is not defined」).
+    #    이 파일의 연결 헬퍼는 _get_conn 이다. conn 획득도 try 안으로 — 어떤 실패도
+    #    호출자를 넘어뜨리지 않는다(부가 기능이 본 기능을 죽이면 안 된다).
+    conn = None
     try:
+        conn = _get_conn()
         from tracking_eligibility import ensure_disabled_column
         ensure_disabled_column(conn)
         rows = conn.execute(
@@ -351,7 +357,8 @@ def disable_ownerless() -> Dict[str, Any]:
         logger.warning(f"[rank_link] 주인 없는 상품 정리 실패(무시): {e}")
         return {"disabled": 0}
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
 
 def run_maintenance(linked_by: int = 0) -> Dict[str, Any]:
