@@ -1127,26 +1127,31 @@ def _run_request_queue_prune():
 
 
 def _run_rank_link_maintenance():
+    # ⚠️ 2026-08-29 실사고 교훈: 브리지(run_maintenance)가 예외로 넘어지자 같은 try 안에
+    #    있던 큐 정리까지 통째로 건너뛰었다. 두 일은 서로 독립이다 — 각자 try 로 가둔다.
+    res = {}
     try:
         from rank_link import run_maintenance
         res = run_maintenance()
-        # 큐 되먹임 정리도 같은 잡에서 — 브리지가 새로 이어 준 뒤라야 유니버스가 최신이다.
-        try:
-            from collector import prune_self_tail_requests
-            q = prune_self_tail_requests()
-            logger.info(f"🧹 요청 큐 정리 — {q.get('pruned', 0)}건 제거 · 남은 대기 {q.get('kept', 0)}건")
-        except Exception as _qe:
-            logger.warning(f"요청 큐 정리 실패(무시): {_qe}")
+    except Exception as e:
+        logger.warning(f"순위 축 브리지 갱신 예외: {e}")
+    # 큐 되먹임 정리 — 브리지가 새로 이어 준 뒤라야 유니버스가 최신이다(실패해도 여기는 돈다).
+    try:
+        from collector import prune_self_tail_requests
+        q = prune_self_tail_requests()
+        logger.info(f"🧹 요청 큐 정리 — {q.get('pruned', 0)}건 제거 · 남은 대기 {q.get('kept', 0)}건")
+    except Exception as _qe:
+        logger.warning(f"요청 큐 정리 실패(무시): {_qe}")
+    try:
         if res.get("success"):
             logger.info(f"🔗 순위 축 브리지 — 신규 {res.get('inserted', 0)}건 · "
                         f"고아 정리 {res.get('pruned', 0)}건 · "
                         f"주인 없어 추적 중지 {res.get('disabled', 0)}건 · "
                         f"총 {res.get('linked_total', 0)}건")
-        else:
+        elif res:
             logger.warning(f"순위 축 브리지 갱신 실패: {res.get('detail')}")
     except Exception as e:
-        # 부가 기능이라 실패해도 다른 배치에 영향을 주지 않는다.
-        logger.warning(f"순위 축 브리지 갱신 예외: {e}")
+        logger.warning(f"순위 축 브리지 결과 로그 실패(무시): {e}")
 
 
 def _run_place_auto_track_cleanup():
