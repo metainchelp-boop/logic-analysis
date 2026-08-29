@@ -195,8 +195,36 @@ def init_client_dashboard_db():
     cleanup_misassigned_clients()
     # 일회성: 「전산에 없음」 17곳 처분(대표 확인 2026-08-28)
     apply_missing_disposition_20260828()
+    # 일회성: #591 사업자명 정정(대표 확인 2026-08-29 — 시/쉬 한 글자 차이)
+    fix_client_591_bizname_20260829()
     # 일회성: 신요섭 담당 업체를 실제 담당자로 재배정 + 나머지 삭제(사장님 매핑 기준)
     reassign_sinyoseop_clients()
+
+
+def fix_client_591_bizname_20260829():
+    """일회성: #591 사업자명 「서한푸드」→「유성프레시」 (대표 확인 2026-08-29).
+
+    어제 「서한푸드」로 넣었는데 04:00 매칭이 계속 빗나갔다. 대표가 전산에서 직접 확인한
+    결과 — 전산 업체명은 「유성프레시」(우리 쪽 표기는 「유성프레쉬」, **시/쉬 한 글자 차이**)
+    이고 「서한푸드」는 전산의 주소 필드에 있던 문자열이라 회사명 매칭에 안 걸린다.
+    매칭 정규화(_sync_norm)는 공백·대소문자만 다듬지 한글 음절 차이는 못 흡수한다.
+
+    자연 멱등 — 바꾸고 나면 WHERE 가 다시는 안 잡힌다(플래그 불필요).
+    ⚠️ 화면 이름(name)은 그대로 둔다 — 직원이 보는 표기를 바꿀 이유가 없다.
+    """
+    try:
+        conn = _get_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute("UPDATE clients SET business_name='유성프레시' "
+                        "WHERE id=591 AND business_name='서한푸드'")
+            if cur.rowcount:
+                logger.info("[사업자명정정] #591 서한푸드 → 유성프레시 (다음 04:00 매칭 대상)")
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.warning(f"[사업자명정정] 실패(재시도 예정): {e}")
 
 
 def apply_missing_disposition_20260828():
