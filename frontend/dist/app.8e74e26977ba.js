@@ -3686,6 +3686,29 @@ window.KeywordRankPage = function KeywordRankPage(props) {
     }).catch(function () {});
   }, []);
 
+  /* 화면 통합(2026-08-29 대표 확정) — 업체에 이어진 상품 id 목록.
+     하단 「전체 도구」는 미연결 상품만 보여준다: 이어진 상품은 업체 상세가 이미
+     보여주므로 두 곳에 나오면 같은 것을 두 번 관리하게 된다(이번 통합의 이유). */
+  var _lk = useState(null);
+  var linkedIds = _lk[0],
+    setLinkedIds = _lk[1]; // null=아직 모름
+  useEffect(function () {
+    api.get('/cd/rank-links').then(function (res) {
+      if (res && res.success) setLinkedIds(res.linked_product_ids || []);
+    }).catch(function () {}); // 실패 시 null 유지 → 종전대로 전부 노출(조용한 소실 방지)
+  }, []);
+  var unlinkedProducts = React.useMemo(function () {
+    if (!linkedIds) return products;
+    var s = {};
+    linkedIds.forEach(function (i) {
+      s[i] = 1;
+    });
+    return products.filter(function (p) {
+      return !s[p.id];
+    });
+  }, [products, linkedIds]);
+  var linkedHiddenCount = linkedIds ? products.length - unlinkedProducts.length : 0;
+
   /* ＋ 추적 상품 등록 (상단 고정 카드) — 2026-08-28
      ⚠️ 업체는 **필수**다. 목록에서 고른 것만 저장한다 — 손으로 친 글자를 그대로 받으면
         오타·유사 상호가 들어가 지금과 똑같이 주인을 못 찾는다(대표 확정). */
@@ -4184,6 +4207,73 @@ window.KeywordRankPage = function KeywordRankPage(props) {
       setKwBusy(false);
     });
   };
+  /* 그만 재기(양방향) — 지우지 않고 억제한다. 업체·이어진 상품 양쪽에서 함께 빠지고,
+     순위 기록은 보존돼 같은 키워드를 다시 등록하면 이전 기록 그대로 복귀한다. */
+  var untrackKeyword = function (client, b) {
+    if (kwBusy) return;
+    if (!confirm('「' + b.keyword + '」 그만 재기\n\n' + '· 이 업체와 이어진 추적 상품 양쪽에서 함께 빠집니다.\n' + '· 순위 기록은 보존됩니다 — 같은 키워드를 다시 등록하면 이전 기록 그대로 복귀합니다.')) return;
+    var cid = client.id;
+    setKwBusy(true);
+    api.post('/cd/' + cid + '/untrack-keyword', {
+      keyword: b.keyword
+    }).then(function (res) {
+      if (res && res.success) {
+        try {
+          toast.success('「' + b.keyword + '」 ' + (res.message || '그만 잽니다.'));
+        } catch (e) {}
+        loadBoard(cid, boardDays);
+        loadProducts();
+      } else {
+        try {
+          toast.error(res && res.detail || '처리하지 못했습니다.');
+        } catch (e) {}
+      }
+    }).catch(function (err) {
+      try {
+        toast.error(err && err.message || '처리하지 못했습니다.');
+      } catch (e) {}
+    }).finally(function () {
+      setKwBusy(false);
+    });
+  };
+
+  /* 업체 상세의 추적 상품 관리 — 하단 전체 도구와 같은 서버 경로를 그대로 쓴다 */
+  var _dpB = useState(false);
+  var prodBusy = _dpB[0],
+    setProdBusy = _dpB[1];
+  var deleteDetailProduct = function (client, p) {
+    if (prodBusy) return;
+    if (!confirm('「' + (p.name || '이 상품') + '」 추적 상품을 삭제할까요?\n\n' + '· 이 상품의 키워드 등록과 순위 이력이 함께 삭제됩니다.\n' + '· 업체 쪽 순위 기록(로직 분석 화면)은 그대로 남습니다.')) return;
+    setProdBusy(true);
+    api.del('/products/' + p.id).then(function () {
+      try {
+        toast.success('상품 추적을 삭제했습니다.');
+      } catch (e) {}
+      loadBoard(client.id, boardDays);
+      loadProducts();
+    }).catch(function (err) {
+      try {
+        toast.error('삭제 실패: ' + (err && err.message || '네트워크 오류'));
+      } catch (e) {}
+    }).finally(function () {
+      setProdBusy(false);
+    });
+  };
+  var refreshDetailProduct = function (client, p) {
+    if (prodBusy) return;
+    setProdBusy(true);
+    api.post('/rank/refresh/' + p.id).then(function () {
+      try {
+        toast.success('「' + (p.name || '상품') + '」 순위 재확인을 시작했습니다 — 잠시 뒤 새로고침해 확인하세요.');
+      } catch (e) {}
+    }).catch(function (err) {
+      try {
+        toast.error('재확인 실패: ' + (err && err.message || '네트워크 오류'));
+      } catch (e) {}
+    }).finally(function () {
+      setProdBusy(false);
+    });
+  };
   var saveKeywordProduct = function (cid, kw, url) {
     if (kpBusy) return;
     setKpBusy(true);
@@ -4597,7 +4687,115 @@ window.KeywordRankPage = function KeywordRankPage(props) {
       }
     }, '▼' + (kpis.down != null ? kpis.down : '—'))), React.createElement('div', {
       style: _krKpiS
-    }, '전일 대비'))), React.createElement('div', {
+    }, '전일 대비'))),
+    /* 이 업체에 이어진 추적 상품 — 화면 통합(2026-08-29): 상품 관리가 하단 전체
+       도구에 떨어져 있어 「업체 따로 상품 따로」 관리 미스가 나던 것을 한 화면으로. */
+    board && board.products && board.products.length > 0 && React.createElement('div', {
+      style: {
+        background: '#fff',
+        border: '1px solid #e2e8f0',
+        borderRadius: 14,
+        padding: '13px 16px',
+        marginBottom: 14
+      }
+    }, React.createElement('div', {
+      style: {
+        fontSize: 13,
+        fontWeight: 800,
+        color: '#334155',
+        marginBottom: 9
+      }
+    }, '🛍 이 업체의 추적 상품 ' + board.products.length + '개', React.createElement('span', {
+      style: {
+        fontSize: 11.5,
+        fontWeight: 500,
+        color: '#94a3b8',
+        marginLeft: 8
+      }
+    }, '아래 키워드 표와 같은 기록입니다 — 상품을 지우면 그 상품의 키워드·이력만 빠집니다')), board.products.map(function (p) {
+      return React.createElement('div', {
+        key: p.id,
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          flexWrap: 'wrap',
+          padding: '7px 0',
+          borderTop: '1px solid #f1f5f9'
+        }
+      }, React.createElement('span', {
+        style: {
+          fontSize: 12.5,
+          fontWeight: 700,
+          color: '#0f172a',
+          maxWidth: 340,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap'
+        }
+      }, p.name || '(상품명 없음)'), p.disabled && React.createElement('span', {
+        style: {
+          fontSize: 10.5,
+          fontWeight: 800,
+          padding: '1px 8px',
+          borderRadius: 999,
+          background: '#f1f5f9',
+          color: '#64748b'
+        },
+        title: '키워드가 0개가 되어 수집을 쉬는 상품 — 키워드를 다시 등록하면 깨어납니다'
+      }, '휴면'), React.createElement('span', {
+        style: {
+          fontSize: 11.5,
+          color: '#64748b'
+        }
+      }, '키워드 ' + (p.keywords || []).length + '개' + ((p.keywords || []).length ? ' · ' + p.keywords.join(', ') : '')), p.url && React.createElement('a', {
+        href: p.url,
+        target: '_blank',
+        rel: 'noopener noreferrer',
+        style: {
+          fontSize: 11.5,
+          color: '#3b82f6',
+          fontWeight: 600,
+          textDecoration: 'none'
+        }
+      }, '상품 열기 ↗'), canEditHere && React.createElement('span', {
+        style: {
+          marginLeft: 'auto',
+          display: 'inline-flex',
+          gap: 6
+        }
+      }, React.createElement('button', {
+        onClick: function () {
+          refreshDetailProduct(client, p);
+        },
+        disabled: prodBusy,
+        style: {
+          border: '1px solid #bfdbfe',
+          background: '#eff6ff',
+          color: '#1d4ed8',
+          borderRadius: 8,
+          padding: '4px 10px',
+          fontSize: 11.5,
+          fontWeight: 700,
+          cursor: prodBusy ? 'default' : 'pointer'
+        }
+      }, '↻ 재확인'), React.createElement('button', {
+        onClick: function () {
+          deleteDetailProduct(client, p);
+        },
+        disabled: prodBusy,
+        style: {
+          border: '1px solid #fecaca',
+          background: '#fef2f2',
+          color: '#dc2626',
+          borderRadius: 8,
+          padding: '4px 10px',
+          fontSize: 11.5,
+          fontWeight: 700,
+          cursor: prodBusy ? 'default' : 'pointer'
+        }
+      }, '🗑 상품 삭제')));
+    })), React.createElement('div', {
       style: _krCard
     },
     /* 추적 키워드 추가 등록 (2026-08-11 직원 기능 요청) — 서버가 권한·중복·
@@ -4808,7 +5006,26 @@ window.KeywordRankPage = function KeywordRankPage(props) {
           verticalAlign: 'middle'
         },
         title: '이 키워드는 지정한 상품으로 추적합니다'
-      }, '개별 상품')), React.createElement('td', {
+      }, '개별 상품'), /* 출처 — 어디서 등록돼 재는지. 그만 재기 때 무엇이 빠지는지 알려면 필요하다 */
+      b.source_label && React.createElement('span', {
+        style: {
+          marginLeft: 7,
+          fontSize: 10.5,
+          fontWeight: 700,
+          padding: '1px 7px',
+          borderRadius: 999,
+          background: b.source === 'product' ? '#f5f3ff' : '#f8fafc',
+          color: b.source === 'product' ? '#7c3aed' : '#64748b',
+          border: '1px solid ' + (b.source === 'product' ? '#ddd6fe' : '#e2e8f0'),
+          verticalAlign: 'middle',
+          maxWidth: 180,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          display: 'inline-block'
+        },
+        title: '등록 출처 — ' + b.source_label
+      }, b.source_label)), React.createElement('td', {
         style: Object.assign({}, _krTd, {
           textAlign: 'right'
         })
@@ -4876,7 +5093,27 @@ window.KeywordRankPage = function KeywordRankPage(props) {
           background: '#f0fdf4',
           color: '#16a34a'
         }
-      }, open ? '▴ 접기' : '📸 그래프·저장')));
+      }, open ? '▴ 접기' : '📸 그래프·저장'),
+      /* 그만 재기 ✕ — 오타·안 쓰는 키워드 정리(2026-08-29 직원 신고).
+         지우는 게 아니라 억제 — 재등록 한 번이면 기록 그대로 복귀 */
+      canEditHere && React.createElement('button', {
+        onClick: function (e) {
+          e.stopPropagation();
+          untrackKeyword(client, b);
+        },
+        title: '그만 재기 — 업체·이어진 상품 양쪽에서 함께 빠집니다(기록 보존 · 재등록 시 복귀)',
+        style: {
+          marginLeft: 6,
+          fontSize: 11,
+          fontWeight: 800,
+          padding: '3px 9px',
+          borderRadius: 14,
+          cursor: 'pointer',
+          border: '1px solid #fca5a5',
+          background: '#fef2f2',
+          color: '#dc2626'
+        }
+      }, '✕')));
       return open ? React.createElement(React.Fragment, {
         key: b.keyword + '::grp'
       }, mainRow, renderKwPanel(client, b)) : mainRow;
@@ -5080,21 +5317,31 @@ window.KeywordRankPage = function KeywordRankPage(props) {
       fontWeight: 700,
       cursor: 'pointer'
     }
-  }, (trackingOpen ? '▴ ' : '▾ ') + '🛠 추적 상품 관리 — 상품·키워드 등록/삭제 · 수동 재확인 · 노출 분석 (전체 업체)', !trackingOpen && React.createElement('span', {
+  }, (trackingOpen ? '▴ ' : '▾ ') + '🛠 전체 도구 — 업체에 안 이어진 상품 · 1회성 노출 조회', !trackingOpen && React.createElement('span', {
     style: {
       fontSize: 12,
       fontWeight: 500,
       color: '#94a3b8',
       marginLeft: 8
     }
-  }, '펼쳐서 관리')), trackingOpen && React.createElement('div', {
+  }, linkedHiddenCount > 0 ? '업체에 이어진 상품 ' + linkedHiddenCount + '개는 각 업체 상세에서 관리합니다' : '펼쳐서 관리')), trackingOpen && React.createElement('div', {
     style: {
       marginTop: 12
     }
-  }, React.createElement(window.SectionErrorBoundary, {
+  }, linkedHiddenCount > 0 && React.createElement('div', {
+    style: {
+      fontSize: 12,
+      color: '#64748b',
+      background: '#f8fafc',
+      border: '1px solid #e2e8f0',
+      borderRadius: 10,
+      padding: '8px 12px',
+      marginBottom: 10
+    }
+  }, 'ℹ️ 업체에 이어진 상품 ' + linkedHiddenCount + '개는 여기 안 보입니다 — 위 업체 목록에서 그 업체를 열면 상품·키워드를 한 화면에서 관리합니다(같은 것을 두 곳에서 만지지 않게).'), React.createElement(window.SectionErrorBoundary, {
     name: '순위 추적'
   }, React.createElement(window.RankTrackingSection, {
-    products: products,
+    products: unlinkedProducts,
     refreshProducts: loadProducts,
     searchedKeyword: rankCtx && rankCtx.searchedKeyword || '',
     searchedProductUrl: rankCtx && rankCtx.searchedProductUrl || '',

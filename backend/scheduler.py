@@ -436,6 +436,14 @@ def _collect_all_keywords(conn):
     client_keyword_map = {}  # {client_id: [keywords]}
     all_client_keywords = set()
 
+    # 그만 재기(억제) 목록 — 대표 키워드에서 이름을 빼도 분석 이력(client_analyses)에
+    # 남아 있으면 아래 past 갈래로 다시 들어와 영원히 수집됐다. 삭제 대신 억제로 거른다.
+    try:
+        from keyword_mute import muted_map
+        _muted = muted_map(conn)
+    except Exception:
+        _muted = {}   # 조회 실패는 「억제 없음」 — 억제 실패로 수집이 멈추면 안 된다
+
     for client in clients:
         cid = client['id']
         keywords_str = client['main_keywords'] or ''
@@ -449,6 +457,7 @@ def _collect_all_keywords(conn):
             if kw:
                 kw_set.add(kw)
 
+        kw_set -= _muted.get(cid, set())
         client_keyword_map[cid] = list(kw_set)
         all_client_keywords.update(kw_set)
 
@@ -509,6 +518,16 @@ def _run_rank_tracking():
             logger.warning(f"  이어진 짝 조회 실패(무시하고 종전대로 진행): {_le}")
             link_map = {}
         logger.info(f"  🔗 이어진 짝 {sum(len(v) for v in link_map.values())}건 — 잰 값을 반대쪽에도 적는다")
+
+        # 그만 재기(억제) — 나눠 적기 자리에서도 한 번 더 거른다.
+        # client_keyword_map 에서 억제 키워드를 뺐기 때문에, share_targets 의 제외 기준
+        # (「그 업체가 이 키워드를 이미 자기 대표 상품으로 재고 있으면 뺀다」)이 오히려
+        # 그 업체를 나눠 적기 대상으로 되살린다 — 여기서 명시적으로 건너뛰어야 한다.
+        try:
+            from keyword_mute import muted_map as _mm
+            _share_muted = _mm(conn)
+        except Exception:
+            _share_muted = {}
 
         if not all_keywords:
             logger.info("  추적 키워드 없음. 순위 추적 건너뜀.")
@@ -646,6 +665,8 @@ def _run_rank_tracking():
                             #    업체 대표 상품 기준 순위가 우선이고, 덮어쓰면 종전 화면이 바뀐다(무회귀).
                             for _cid in share_targets(link_map, client_keyword_map,
                                                       product["id"], keyword):
+                                if keyword in _share_muted.get(_cid, ()):
+                                    continue   # 그만 재기 지정 — 그 업체 기록에는 적지 않는다
                                 try:
                                     _save_client_rank(conn, _cid, keyword,
                                                       product.get("product_url") or "",
@@ -774,6 +795,12 @@ def _run_daily_analysis():
         ).fetchall()
 
         client_keyword_map = {}
+        # 그만 재기(억제) — 08:00 순위 추적과 같은 이유·같은 규칙(keyword_mute 한 곳).
+        try:
+            from keyword_mute import muted_map
+            _muted = muted_map(conn)
+        except Exception:
+            _muted = {}
         for client in clients:
             cid = client['id']
             keywords_str = client['main_keywords'] or ''
@@ -787,6 +814,7 @@ def _run_daily_analysis():
                 if kw:
                     kw_set.add(kw)
 
+            kw_set -= _muted.get(cid, set())
             client_keyword_map[cid] = list(kw_set)
 
         # 키워드별 상품 등록부를 한 번에 읽는다 (2026-08-21 이예은 신고).

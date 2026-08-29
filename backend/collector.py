@@ -182,23 +182,31 @@ def _keyword_universe(conn):
         return uni
     ph = ",".join("?" * len(ids))
 
-    # ① 대표 키워드
+    # ① 대표 키워드 (「그만 재기」 벨트 — untrack 이 main_keywords 에서도 빼지만 이중 방어)
     try:
+        from keyword_mute import muted_map as _mm
+        _muted1 = _mm(conn)
         for r in conn.execute(
-                f"SELECT main_keywords FROM clients WHERE id IN ({ph})", ids):
-            for k in (r[0] or "").split(","):
+                f"SELECT id, main_keywords FROM clients WHERE id IN ({ph})", ids):
+            for k in (r[1] or "").split(","):
                 k = k.strip()
-                if k:
+                if k and k not in _muted1.get(r[0], ()):
                     uni[k] = True
     except Exception as e:
         logger.warning(f"[collector] 대표 키워드 조회 실패: {e}")
 
     # ② 분석 이력 키워드(자격 업체 것만)
+    #    ⚠️ 2026-08-29: 「그만 재기」(client_keyword_mute)를 뺀다. 대표 키워드에서 이름을
+    #       빼도 분석 이력에 남아 있으면 여기로 다시 들어와 영원히 수집됐다 — 오타 키워드를
+    #       지울 길이 없던 원인. 다른 업체가 같은 키워드를 쓰면 그쪽 몫으로는 남는다.
     try:
+        from keyword_mute import muted_map
+        _muted = muted_map(conn)
         for r in conn.execute(
-                f"SELECT DISTINCT keyword FROM client_analyses WHERE client_id IN ({ph})", ids):
-            k = (r[0] or "").strip()
-            if k:
+                f"SELECT client_id, keyword FROM client_analyses WHERE client_id IN ({ph}) "
+                "GROUP BY client_id, keyword", ids):
+            k = (r[1] or "").strip()
+            if k and k not in _muted.get(r[0], ()):
                 uni[k] = True
     except Exception as e:
         logger.warning(f"[collector] 업체 키워드 조회 실패: {e}")

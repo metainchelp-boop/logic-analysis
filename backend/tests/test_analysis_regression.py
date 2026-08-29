@@ -487,6 +487,158 @@ def test_rank_link_유지보수를_실제로_실행한다(tmp_db=None):
         except OSError: pass
 
 
+
+# ─────────────────────────────────────────────────────────────────────
+# 그만 재기(keyword_mute) — 억제 규칙 (2026-08-29 대표 확정 「양방향」)
+#
+# 지우지 않고 억제한다: 대표 키워드에서 빼도 분석 이력이 남아 있으면 수집이
+# 계속 돌던 구멍을 이 표 하나가 막는다. 수집 유니버스·나눠 적기·보드가 전부
+# 이 표를 본다 — 규칙이 갈라지면 「뺐는데 어딘가에선 계속 재는」 반쪽이 된다.
+
+def _mute_db():
+    import sqlite3, tempfile
+    db = tempfile.mktemp(suffix=".db")
+    conn = sqlite3.connect(db)
+    return db, conn
+
+
+def test_그만재기_기재하면_목록에_잡힌다():
+    import os
+    from keyword_mute import mute, muted_map, muted_set
+    db, conn = _mute_db()
+    try:
+        mute(conn, 7, "수제쿠키", by=3)
+        conn.commit()
+        assert muted_map(conn) == {7: {"수제쿠키"}}
+        assert muted_set(conn, 7) == {"수제쿠키"}
+        assert muted_set(conn, 8) == set()
+    finally:
+        conn.close(); os.unlink(db)
+
+
+def test_그만재기_해제는_멱등이고_기록을_되살린다():
+    import os
+    from keyword_mute import mute, unmute, muted_set
+    db, conn = _mute_db()
+    try:
+        mute(conn, 7, "수제쿠키")
+        unmute(conn, 7, "수제쿠키")
+        unmute(conn, 7, "수제쿠키")          # 표에 없어도 조용히 성공
+        conn.commit()
+        assert muted_set(conn, 7) == set()
+    finally:
+        conn.close(); os.unlink(db)
+
+
+def test_그만재기_조회_실패는_아무것도_안_뺀다():
+    # ⚠️ 실패를 「전부 억제」로 읽으면 수집이 통째로 멈춘다 — 빈 dict 폴백이 계약이다.
+    from keyword_mute import muted_map, muted_set
+
+    class _Broken:
+        in_transaction = False
+        def execute(self, *a, **k):
+            raise RuntimeError("db down")
+        def commit(self):
+            raise RuntimeError("db down")
+
+    assert muted_map(_Broken()) == {}
+    assert muted_set(_Broken(), 1) == set()
+
+
+def test_그만재기_트랜잭션_안에서는_커밋하지_않는다():
+    # ⚠️ ensure_mute_table 이 BEGIN IMMEDIATE 안에서 commit 하면 등록 경로의
+    #    lost-update 방지(쓰기 락 구간)가 조용히 끝난다 — 락 보존이 계약이다.
+    # 검증법: 트랜잭션 안에서 mute **앞에** 다른 쓰기(보초)를 해 두고 rollback —
+    #   중간 commit 이 있었다면 보초가 이미 굳어 rollback 으로 안 사라진다.
+    #   (mute 뒤의 in_transaction 검사만으로는 못 잡는다 — INSERT 가 암묵
+    #    트랜잭션을 새로 열어 True 로 돌아오기 때문. 실측으로 확인한 함정.)
+    import os
+    from keyword_mute import mute, muted_set
+    db, conn = _mute_db()
+    try:
+        conn.execute("CREATE TABLE sentinel(v TEXT)")
+        conn.commit()
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("INSERT INTO sentinel(v) VALUES('보초')")   # mute 앞의 쓰기
+        mute(conn, 7, "수제쿠키")
+        conn.rollback()                       # 전부 함께 사라져야 한다
+        left = conn.execute("SELECT COUNT(*) FROM sentinel").fetchone()[0]
+        assert left == 0, "mute 가 트랜잭션을 중간 commit 해 앞의 쓰기가 굳었다"
+        assert muted_set(conn, 7) == set()
+    finally:
+        conn.close(); os.unlink(db)
+
+
+def test_그만재기_키워드는_strip_원문_그대로_비교한다():
+    # main_keywords·유니버스가 strip 원문을 쓰므로 여기만 공백 제거를 더 하면 어긋난다.
+    import os
+    from keyword_mute import mute, muted_set
+    db, conn = _mute_db()
+    try:
+        mute(conn, 7, "  수제 쿠키  ")
+        conn.commit()
+        assert muted_set(conn, 7) == {"수제 쿠키"}   # strip 만, 내부 공백 보존
+    finally:
+        conn.close(); os.unlink(db)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# 즉시 기록(rank_record) 대상 선정 — 자격 통일 + 그만 재기 (2026-08-29)
+#
+# ⚠️ 8/28 자격 통일이 배치·수집만 고치고 이 경로를 빠뜨렸던 실구멍의 재발 방지 —
+#    계약 끝난 업체가 키워드만 겹치면 즉시 기록으로 계속 기록되던 것.
+
+def _rr_db():
+    import sqlite3, tempfile
+    db = tempfile.mktemp(suffix=".db")
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    conn.executescript("""
+        CREATE TABLE clients(id INTEGER PRIMARY KEY, status TEXT DEFAULT 'active',
+            role TEXT DEFAULT 'advertiser', vertical TEXT DEFAULT 'store',
+            auto_analysis INT DEFAULT 1, track_enabled INT DEFAULT 1, track_until TEXT DEFAULT '',
+            name TEXT, business_name TEXT DEFAULT '',
+            naver_store_url TEXT DEFAULT 'https://smartstore.naver.com/x', main_keywords TEXT DEFAULT '');
+        CREATE TABLE client_analyses(id INTEGER PRIMARY KEY, client_id INT, keyword TEXT);
+    """)
+    return db, conn
+
+
+def test_즉시기록_계약끝난_업체는_대상에서_빠진다():
+    import os
+    from rank_record import _client_targets
+    db, conn = _rr_db()
+    try:
+        conn.execute("INSERT INTO clients(id,name,main_keywords) VALUES(1,'살아있는곳','수제쿠키')")
+        conn.execute("INSERT INTO clients(id,name,main_keywords,track_until) "
+                     "VALUES(2,'계약끝난곳','수제쿠키','2020-01-01')")
+        conn.execute("INSERT INTO client_analyses(client_id,keyword) VALUES(2,'수제쿠키')")
+        conn.commit()
+        ids = [c["id"] for c in _client_targets(conn, "수제쿠키")]
+        assert ids == [1], f"계약 끝난 업체가 즉시 기록 대상에 남았다: {ids}"
+    finally:
+        conn.close(); os.unlink(db)
+
+
+def test_즉시기록_그만재기_키워드는_이력이_있어도_안_적는다():
+    import os
+    from rank_record import _client_targets
+    from keyword_mute import mute
+    db, conn = _rr_db()
+    try:
+        conn.execute("INSERT INTO clients(id,name) VALUES(1,'가게A')")
+        conn.execute("INSERT INTO client_analyses(client_id,keyword) VALUES(1,'오타키워드')")
+        mute(conn, 1, "오타키워드")
+        conn.commit()
+        assert _client_targets(conn, "오타키워드") == [], "억제 키워드가 이력 갈래로 되살아났다"
+        # 다른 키워드는 종전대로
+        conn.execute("INSERT INTO client_analyses(client_id,keyword) VALUES(1,'수제쿠키')")
+        conn.commit()
+        assert [c["id"] for c in _client_targets(conn, "수제쿠키")] == [1]
+    finally:
+        conn.close(); os.unlink(db)
+
+
 if __name__ == "__main__":
     _tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     _failed = 0
