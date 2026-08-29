@@ -873,16 +873,34 @@ jobs:
             print("  (겹침이 있으면 같은 이름공간 = 접두어 없이 한 키로 이어도 된다는 근거)")
 
             print()
+            print("[⭐ 브랜드스토어 슬러그가 상품쪽·업체쪽에서 서로 맞는가 — 고치면 실제로 이어지나]")
+            br_by_src = {}
+            for label, sql in SRC:
+                try:
+                    for r in conn.execute(sql):
+                        if host_of(r["u"]) != "brand":
+                            continue
+                        sl = slug_of(r["u"], "brand")
+                        if sl:
+                            br_by_src.setdefault(label, set()).add(sl)
+                except Exception:
+                    pass
+            prod = br_by_src.get("추적 상품", set())
+            cli  = br_by_src.get("업체 대표주소", set()) | br_by_src.get("키워드별 등록부", set())
+            print(f"  상품쪽 브랜드 슬러그 {len(prod)}종 · 업체쪽 {len(cli)}종 · 맞는 것 {len(prod & cli)}종")
+            print("  ⇒ 맞는 것이 0이면 지금 당장 이어지는 건 없고, 앞으로 등록될 것에만 효과가 있다.")
+
+            print()
             print("[주인 없는 추적 상품의 주소 모양]")
             try:
-                q = ("SELECT tp.product_url AS u FROM tracked_products tp "
-                     " WHERE tp.is_active=1 AND NOT EXISTS ("
-                     "   SELECT 1 FROM rank_link rl WHERE rl.tracked_product_id = tp.id)")
+                q = ("SELECT p.product_url AS u FROM tracked_products p "
+                     " WHERE COALESCE(p.disabled_at,'') = '' "
+                     "   AND p.id NOT IN (SELECT tracked_product_id FROM rank_link)")
                 cnt = collections.Counter(host_of(r["u"]) for r in conn.execute(q))
                 print(f"  총 {sum(cnt.values())}개")
                 for h, n in cnt.most_common():
                     print(f"      {h:<12} {n:>5}")
             except Exception as e:
-                print(f"  조회 실패(표 없음일 수 있음): {e}")
+                print(f"  조회 실패: {e}")
             conn.close()
             PY
