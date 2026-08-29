@@ -26,6 +26,10 @@ on:
         description: '추적 기간 지난 업체 목록 — off(기본) / on. 계약 살아 있는 곳과 끝난 곳을 갈라서 전수 출력(읽기 전용). ⚠️ 업체명이 실행 로그에 남는다 — 이 저장소는 공개이므로 결과를 받은 뒤 그 런의 로그를 삭제할 것.'
         required: false
         default: 'off'
+      urlshape:
+        description: '상품 주소 모양 실측 — off(기본) / on. 어느 호스트(스마트스토어·브랜드스토어·카탈로그)를 쓰는지, 같은 슬러그가 두 호스트에 걸쳐 있는지(읽기 전용·업체명 미출력).'
+        required: false
+        default: 'off'
       use_branch_code:
         description: '이 브랜치의 rank_link.py 로 미리보기 — off(기본) / on. 배포 전에 새 규칙이 무엇을 이을지 먼저 보려는 용도(컨테이너 /tmp 에 얹었다 지운다·앱 파일 무접촉). apply 와 함께 쓰지 말 것.'
         required: false
@@ -37,6 +41,79 @@ jobs:
     steps:
       # 브랜치 코드 미리보기용 — 평소(off)엔 받아만 두고 쓰지 않는다.
       - uses: actions/checkout@v4
+      - name: 상품 주소 모양 실측 (읽기 전용)
+        if: ${{ github.event.inputs.urlshape == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 5m
+          script: |
+            docker exec -i logic-analysis python3 - <<'PY'
+            # ⚠️ 저장소가 공개라 업체명·가게 이름(슬러그)은 출력하지 않는다 — 호스트와 건수만.
+            import re, sqlite3, collections
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+
+            def host_of(u):
+                u = str(u or "")
+                if "brand.naver.com" in u:            return "brand"
+                if "smartstore.naver.com" in u:       return "smartstore"
+                if "shopping.naver.com/catalog" in u: return "catalog"
+                if "naver.com" in u:                  return "naver(기타)"
+                return "빈값" if not u.strip() else "그 외"
+
+            def slug_of(u, host):
+                pat = r"brand\.naver\.com/([^/?#]+)" if host == "brand" else r"smartstore\.naver\.com/([^/?#]+)"
+                m = re.search(pat, str(u or ""))
+                if not m: return ""
+                sl = m.group(1).strip().lower()
+                return "" if (not sl or sl.isdigit()) else sl
+
+            SRC = [
+                ("추적 상품",      "SELECT id, product_url AS u FROM tracked_products"),
+                ("업체 대표주소",  "SELECT id, naver_store_url AS u FROM clients WHERE status='active' AND COALESCE(vertical,'store')='store'"),
+                ("키워드별 등록부","SELECT client_id AS id, product_url AS u FROM client_keyword_product"),
+            ]
+            ss_slugs, br_slugs = {}, {}
+            print("[호스트별 건수]")
+            for label, sql in SRC:
+                cnt = collections.Counter()
+                try:
+                    for r in conn.execute(sql):
+                        h = host_of(r["u"]); cnt[h] += 1
+                        sl = slug_of(r["u"], h)
+                        if sl and h == "smartstore": ss_slugs.setdefault(sl, set()).add((label, r["id"]))
+                        if sl and h == "brand":      br_slugs.setdefault(sl, set()).add((label, r["id"]))
+                except Exception as e:
+                    print(f"  {label}: 조회 실패 {e}"); continue
+                total = sum(cnt.values())
+                print(f"  {label} (총 {total})")
+                for h, n in cnt.most_common():
+                    print(f"      {h:<12} {n:>5}")
+
+            print()
+            print("[⭐ 같은 슬러그가 두 호스트에 걸쳐 있나 — 이름공간 판정]")
+            both = sorted(set(ss_slugs) & set(br_slugs))
+            print(f"  스마트스토어 슬러그 {len(ss_slugs)}종 · 브랜드스토어 슬러그 {len(br_slugs)}종 · 겹침 {len(both)}종")
+            print("  (겹침이 있으면 같은 이름공간 = 접두어 없이 한 키로 이어도 된다는 근거)")
+
+            print()
+            print("[주인 없는 추적 상품의 주소 모양]")
+            try:
+                q = ("SELECT tp.product_url AS u FROM tracked_products tp "
+                     " WHERE tp.is_active=1 AND NOT EXISTS ("
+                     "   SELECT 1 FROM rank_link rl WHERE rl.tracked_product_id = tp.id)")
+                cnt = collections.Counter(host_of(r["u"]) for r in conn.execute(q))
+                print(f"  총 {sum(cnt.values())}개")
+                for h, n in cnt.most_common():
+                    print(f"      {h:<12} {n:>5}")
+            except Exception as e:
+                print(f"  조회 실패(표 없음일 수 있음): {e}")
+            conn.close()
+            PY
+
       - name: 브랜치 rank_link.py 인코딩
         if: ${{ github.event.inputs.use_branch_code == 'on' }}
         run: echo "RL_SRC_GZ=$(gzip -9c backend/rank_link.py | base64 -w0)" >> "$GITHUB_ENV"
