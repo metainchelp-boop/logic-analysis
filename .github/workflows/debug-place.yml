@@ -727,8 +727,12 @@ jobs:
             # ⚠️ 컨테이너 안 코드 경로를 가정하지 말 것 — 먼저 찾고 센다(경로 오타는 「가드 없음」 오판을 만든다).
             F=$(docker exec -i logic-analysis sh -c "find /app -maxdepth 3 -name main.py 2>/dev/null | head -1")
             echo "코드 경로: ${F:-찾지 못함}"
-            N=$(docker exec -i logic-analysis sh -c "grep -c '업체명과 같은 키워드' '$F' 2>/dev/null" || echo 0)
-            N=${N:-0}
+            # ⚠️ `grep -c ... || echo 0` 은 0건일 때 **두 줄**("0" + "0")을 만든다 —
+            #    grep 이 0건에도 카운트를 찍고 exit 1 을 내기 때문이다. 그러면 [ -gt ] 가
+            #    "integer expression expected" 로 깨져 늘 「가드 없음」으로 읽힌다(8/30 실측).
+            #    ⇒ 마지막 줄만 취하고 숫자가 아니면 0 으로 떨어뜨린다.
+            N=$(docker exec -i logic-analysis sh -c "grep -c '업체명과 같은 키워드' '$F' 2>/dev/null" | tail -1)
+            case "$N" in ''|*[!0-9]*) N=0 ;; esac
             echo "매칭 $N 건 → $([ "$N" -gt 0 ] && echo '가드 있음(배포 반영됨)' || echo '가드 없음 — 경로부터 의심할 것')"
             docker inspect -f 'StartedAt={{.State.StartedAt}}' logic-analysis
             echo
@@ -737,8 +741,8 @@ jobs:
             #    서버에 놓인 파일과 스케줄러가 실제로 등록한 잡으로만 판정한다.
             D=$(dirname "${F:-/app/main.py}")
             docker exec -i logic-analysis sh -c "ls -l '$D/sbiz_health.py' 2>/dev/null" || echo "  sbiz_health.py 없음 — 배포 미반영"
-            J=$(docker exec -i logic-analysis sh -c "grep -c 'sbiz_health_probe' '$D/scheduler.py' 2>/dev/null" || echo 0)
-            J=${J:-0}
+            J=$(docker exec -i logic-analysis sh -c "grep -c 'sbiz_health_probe' '$D/scheduler.py' 2>/dev/null" | tail -1)
+            case "$J" in ''|*[!0-9]*) J=0 ;; esac
             echo "  스케줄러 등록 흔적 $J 건 → $([ "$J" -gt 0 ] && echo '05:00 잡 배선됨' || echo '미반영')"
             echo "  -- 기동 로그의 스케줄러 줄 (05:00 이 적혀 있어야 한다) --"
             docker logs logic-analysis 2>&1 | grep -m1 '스케줄러 시작' || echo "  (기동 로그가 밀려 사라졌을 수 있다)"
@@ -1851,17 +1855,35 @@ jobs:
             print()
             print("[③ 실제 코드 경로 — 서비스가 겪는 현실 그대로]")
             print("  ⚠️ 여기가 진짜 판정이다. sbiz_check=true 의 E2E 와 같은 함수를 부른다.")
+            print("  ⚠️ 표본을 여러 개 돌린다 — 2026-08-30 에 표본 하나(성수동)만 보고 판정하려다,")
+            print("     그 동네가 **지역 판정 단계에서** 걸린다는 걸 몰라 API 장애로 오인할 뻔했다.")
+            print("     region-unresolved 는 상권 API 를 **부르기도 전에** 끊긴 것이라 API 건강이 아니다.")
             try:
                 import sys
                 sys.path.insert(0, "/app")
                 from sbiz365 import get_place_sbiz
-                why = {}
-                blk = get_place_sbiz("성수동", "카페", reason=why)
-                if blk:
-                    sales = (blk.get("sales") or {})
-                    print(f"  ✅ 상권 블록 옴 — 점포당 {sales.get('avgAmt')}원 · 업소 {(blk.get('shops') or {}).get('cnt')}곳")
-                else:
-                    print(f"  ❌ 상권 블록 없음 — 사유 {why}")
+                CAND = [("성수동","카페"), ("구로동","분식"), ("역삼동","한식"),
+                        ("구로3동","분식"), ("성사동","칼국수"), ("복대동","고기집"),
+                        ("조원동","마사지"), ("서초동","한식"), ("연남동","카페")]
+                reached, blocked = [], []
+                for region, industry in CAND:
+                    why = {}
+                    try:
+                        blk = get_place_sbiz(region, industry, reason=why)
+                    except Exception as e:
+                        blk, why = None, {"code": f"exc:{type(e).__name__}"}
+                    code = str(why.get("code") or ("" if blk else "unknown"))
+                    if blk:
+                        sales = (blk.get("sales") or {})
+                        print(f"  ✅ {region}/{industry:<6} 상권 블록 옴 — 점포당 {sales.get('avgAmt')}원")
+                        reached.append((region, industry))
+                    else:
+                        mark = "지역판정에서 끊김(API 미호출)" if code == "region-unresolved" else "상권 API 까지 갔으나 실패"
+                        print(f"  ❌ {region}/{industry:<6} 사유={code} — {mark}")
+                        (blocked if code == "region-unresolved" else reached).append((region, industry))
+                print()
+                print(f"  ⇒ 자가 점검 표본으로 쓸 수 있는 곳(=API 까지 도달): {reached or '없음'}")
+                print(f"  ⇒ 표본으로 쓰면 안 되는 곳(지역 판정에서 끊김): {blocked or '없음'}")
             except Exception as e:
                 print(f"  호출 실패 {type(e).__name__}: {str(e)[:150]}")
             PY
