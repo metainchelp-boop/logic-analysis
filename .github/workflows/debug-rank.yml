@@ -30,6 +30,10 @@ on:
         description: '상품 주소 모양 실측 — off(기본) / on. 어느 호스트(스마트스토어·브랜드스토어·카탈로그)를 쓰는지, 같은 슬러그가 두 호스트에 걸쳐 있는지(읽기 전용·업체명 미출력).'
         required: false
         default: 'off'
+      audit:
+        description: '전수 점검 — off(기본) / on. 표 존재·시각 정합·오류 집계·잡 등록 상태를 한 번에(읽기 전용).'
+        required: false
+        default: 'off'
       slow:
         description: '느림 진단 — off(기본) / on. DB 크기·표별 용량·실제 쿼리 소요·컨테이너 자원(읽기 전용·전체 스캔 없음).'
         required: false
@@ -64,9 +68,10 @@ jobs:
           IN_EXPIRED: ${{ github.event.inputs.expired }}
           IN_VERIFY: ${{ github.event.inputs.verify }}
           IN_SLOW: ${{ github.event.inputs.slow }}
+          IN_AUDIT: ${{ github.event.inputs.audit }}
           IN_BRANCH_CODE: ${{ github.event.inputs.use_branch_code }}
         with:
-          envs: RL_SRC_GZ,IN_COLLECTOR,IN_RANK_LINK,IN_CAPACITY,IN_STRUCTURE,IN_EXPIRED,IN_VERIFY,IN_SLOW,IN_BRANCH_CODE
+          envs: RL_SRC_GZ,IN_COLLECTOR,IN_RANK_LINK,IN_CAPACITY,IN_STRUCTURE,IN_EXPIRED,IN_VERIFY,IN_SLOW,IN_AUDIT,IN_BRANCH_CODE
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
@@ -75,6 +80,41 @@ jobs:
             echo "== 컨테이너 상태 =="
             docker ps --filter name=logic-analysis --format '{{.Names}} {{.Status}}'
             docker inspect -f 'RestartCount={{.RestartCount}} StartedAt={{.State.StartedAt}} OOMKilled={{.State.OOMKilled}}' logic-analysis
+            echo
+            if [ "$IN_AUDIT" = "on" ]; then
+              echo "== 전수 점검 (읽기 전용) =="
+              echo "-- 등록된 잡 --"
+              docker logs --since 24h logic-analysis 2>&1 | grep -oE 'Added job "[^"]+"' | sort -u | sed "s/^/    /" | head -20
+              echo "-- 최근 24h 오류 상위 --"
+              docker logs --since 24h logic-analysis 2>&1 | grep -E "ERROR|CRITICAL|Traceback" | sed -E "s/\[[^]]*\]//g" | awk '{$1="";print}' | sort | uniq -c | sort -rn | head -8 | sed "s/^/    /"
+              echo "-- DB --"
+              timeout 60 docker exec -i logic-analysis python3 - <<'PY'
+            import sqlite3, time, datetime
+            c = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            print("  컨테이너 현재시각 %s" % datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            print("  -- 이번 주 만든 표가 실제로 있나 --")
+            for t in ["client_detail_html","client_keyword_mute","sbiz_health","rank_link","collected_serp"]:
+                try:
+                    n = c.execute("SELECT COUNT(*) FROM %s" % t).fetchone()[0]
+                    print("    %-22s 있음 · %d행" % (t, n))
+                except Exception as e:
+                    print("    %-22s ⚠️ %s" % (t, e))
+            print("  -- 시각 정합(① 전산 통지 검증) --")
+            for t, col in [("reports","created_at"), ("client_rank_history","checked_at"), ("collected_serp","created_at")]:
+                try:
+                    r = c.execute("SELECT MAX(%s) FROM %s" % (col, t)).fetchone()[0]
+                    print("    %-22s 최신 %s" % (t+"."+col, r))
+                except Exception as e:
+                    print("    %-22s %s" % (t, e))
+            print("  -- 주간 보고서(① 소비) --")
+            try:
+                for r in c.execute("SELECT substr(created_at,1,10) d, COUNT(*) n, MIN(created_at), MAX(created_at) FROM reports WHERE is_auto=1 GROUP BY d ORDER BY d DESC LIMIT 3"):
+                    print("    %s · %d건 · %s ~ %s" % (r[0], r[1], r[2], r[3]))
+            except Exception as e:
+                print("    조회 실패: %s" % e)
+            PY
+              echo
+            fi
             echo
             if [ "$IN_SLOW" = "on" ]; then
               echo "== 느림 진단 (읽기 전용) =="
