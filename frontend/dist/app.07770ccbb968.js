@@ -13657,6 +13657,17 @@ window.ClientListSection = function ClientListSection({
   var _sM = useState(null);
   var syncMsg = _sM[0],
     setSyncMsg = _sM[1];
+
+  /* 내린 업체(보관) — 2026-08-30 대표 확정 「지우지 말고 목록에서 내리기」.
+     ⚠️ 내리면 관리 목록(`/my-clients` = status='active')에서 빠지므로, **되돌릴 자리**가
+        함께 있어야 한다. 이 목록이 없으면 되돌릴 길 없는 한 방향 문이 된다. */
+  var _sA = useState([]);
+  var archived = _sA[0],
+    setArchived = _sA[1];
+  var _sAB = useState(null);
+  var archBusy = _sAB[0],
+    setArchBusy = _sAB[1]; // 처리 중인 업체 id
+
   var pullStages = function () {
     setSyncing(true);
     setSyncMsg(null);
@@ -13768,6 +13779,40 @@ window.ClientListSection = function ClientListSection({
     });
   };
 
+  /* 목록에서 내리기 / 되돌리기 — 2026-08-30 대표 확정.
+     ⚠️ **지우는 게 아니라 내린다**: status='terminated' 로 바꾸면 관리 목록·추적에서
+        빠지지만 순위 기록·분석 보고서는 그대로 남고 되돌릴 수 있다. 이번 주 키워드
+        「그만 재기」와 같은 방식이라 직원이 외울 규칙이 하나로 유지된다.
+     ⚠️ 저장은 자동 추적 토글이 이미 쓰는 경로(`PUT /clients/{id}`)를 그대로 쓴다 —
+        권한 경계도 그것과 같다(조회 전용 계정은 버튼 자체가 안 보인다). */
+  var setClientStatus = function (client, next) {
+    if (archBusy) return;
+    var toArchive = next === 'terminated';
+    if (toArchive && !window.confirm('「' + (client.name || '') + '」 목록에서 내릴까요?\n\n' + '· 관리 목록과 순위 추적에서 빠집니다.\n' + '· 순위 기록·분석 보고서는 그대로 보존됩니다.\n' + '· 「🗄 내린 업체」 탭에서 언제든 되돌릴 수 있습니다.\n\n' + '기록까지 완전히 지우려면 업체 리스트의 삭제를 쓰세요.')) return;
+    setArchBusy(client.id);
+    api.put('/clients/' + client.id, {
+      status: next
+    }).then(function (res) {
+      if (res && (res.success === undefined || res.success)) {
+        try {
+          toast.success(toArchive ? '「' + (client.name || '') + '」 목록에서 내렸습니다 — 기록은 그대로입니다.' : '「' + (client.name || '') + '」 되돌렸습니다 — 관리 목록으로 돌아갑니다.');
+        } catch (e) {}
+        loadClients();
+        loadArchived();
+      } else {
+        try {
+          toast.error(res && res.detail || '처리하지 못했습니다.');
+        } catch (e) {}
+      }
+    }).catch(function (err) {
+      try {
+        toast.error(err && err.message || '처리하지 못했습니다.');
+      } catch (e) {}
+    }).finally(function () {
+      setArchBusy(null);
+    });
+  };
+
   /* 업체 목록 로드 */
   var loadClients = useCallback(function () {
     setLoading(true);
@@ -13778,9 +13823,15 @@ window.ClientListSection = function ClientListSection({
       setLoading(false);
     });
   }, []);
+  var loadArchived = useCallback(function () {
+    api.get('/cd/archived-clients').then(function (res) {
+      if (res && res.success) setArchived(res.data || []);
+    }).catch(function () {}); // 실패해도 관리 목록은 그대로 — 탭 수만 0으로 보인다
+  }, []);
   useEffect(function () {
     loadClients();
-  }, [loadClients]);
+    loadArchived();
+  }, [loadClients, loadArchived]);
 
   /* 셸 전역 검색 이벤트 — 대시보드에 이미 있을 때도 검색어 반영 */
   useEffect(function () {
@@ -14043,7 +14094,8 @@ window.ClientListSection = function ClientListSection({
         flexWrap: 'wrap',
         alignItems: 'center'
       }
-    }, mkTab('전체', null, clients.length, '#475569', '#f8fafc', '#e2e8f0'), mkTab('▶ 진행중', 'run', n.run, '#047857', '#ecfdf5', '#a7f3d0'), mkTab('↩ 환불중', 'refund', n.refund, '#6d28d9', '#f5f3ff', '#ddd6fe'), mkTab('⏸ 홀딩중', 'hold', n.hold, '#b45309', '#fffbeb', '#fcd34d'), mkTab('🗑 삭제 필요', 'delete', n.delete, '#b91c1c', '#fef2f2', '#fecaca'), mkTab('🔍 확인 필요', 'check', n.check, '#0369a1', '#f0f9ff', '#bae6fd'), isAdmin && React.createElement('button', {
+    }, mkTab('전체', null, clients.length, '#475569', '#f8fafc', '#e2e8f0'), mkTab('▶ 진행중', 'run', n.run, '#047857', '#ecfdf5', '#a7f3d0'), mkTab('↩ 환불중', 'refund', n.refund, '#6d28d9', '#f5f3ff', '#ddd6fe'), mkTab('⏸ 홀딩중', 'hold', n.hold, '#b45309', '#fffbeb', '#fcd34d'), mkTab('🗑 삭제 필요', 'delete', n.delete, '#b91c1c', '#fef2f2', '#fecaca'), mkTab('🔍 확인 필요', 'check', n.check, '#0369a1', '#f0f9ff', '#bae6fd'), /* 내린 업체 — 이 칸이 있어야 「내리기」가 되돌릴 수 있는 일이 된다 */
+    mkTab('🗄 내린 업체', 'archived', archived.length, '#334155', '#f1f5f9', '#cbd5e1'), isAdmin && React.createElement('button', {
       onClick: pullStages,
       disabled: syncing,
       title: '전산에서 계약 단계(환불중·홀딩중·계약 만료)를 지금 가져옵니다',
@@ -14084,7 +14136,13 @@ window.ClientListSection = function ClientListSection({
         fontSize: 11.5,
         color: '#64748b'
       }
-    }, '더 이상 추적할 이유가 없는 등록건입니다. 사유를 확인하고 정리하세요 — 여기서 바로 지우지는 않습니다(순위 기록이 함께 사라집니다).'), bucket === 'check' && React.createElement('div', {
+    }, '더 이상 추적할 이유가 없는 등록건입니다. 사유를 확인하고 「🗄 목록에서 내리기」를 누르면 화면이 정리됩니다 — 순위 기록은 그대로 보존되고, 「🗄 내린 업체」 탭에서 언제든 되돌릴 수 있습니다.'), bucket === 'archived' && React.createElement('div', {
+      style: {
+        marginTop: 8,
+        fontSize: 11.5,
+        color: '#64748b'
+      }
+    }, '목록에서 내린 업체입니다. 기록은 그대로 남아 있고, ↩ 를 누르면 관리 목록으로 돌아옵니다 — 추적도 함께 재개됩니다.'), bucket === 'check' && React.createElement('div', {
       style: {
         marginTop: 8,
         fontSize: 11.5,
@@ -14156,7 +14214,7 @@ window.ClientListSection = function ClientListSection({
       fontSize: 14
     }
   }, '업체 목록 불러오는 중...'), /* 빈 상태 */
-  !loading && filtered.length === 0 && clients.length === 0 && React.createElement('div', {
+  bucket !== 'archived' && !loading && filtered.length === 0 && clients.length === 0 && React.createElement('div', {
     style: {
       textAlign: 'center',
       padding: '40px 20px',
@@ -14184,7 +14242,7 @@ window.ClientListSection = function ClientListSection({
   }, '상단에서 직접 키워드를 입력해 분석하거나, 업체관리 탭에서 업체를 먼저 등록해주세요.')),
   /* 결과 없음 — 필터 때문인지 검색 때문인지 갈라서 알려준다.
      「검색 결과가 없습니다」만 뜨면 필터를 켜 둔 걸 잊고 데이터가 없다고 오해한다. */
-  !loading && filtered.length === 0 && clients.length > 0 && React.createElement('div', {
+  bucket !== 'archived' && !loading && filtered.length === 0 && clients.length > 0 && React.createElement('div', {
     style: {
       textAlign: 'center',
       padding: '30px 20px',
@@ -14196,7 +14254,8 @@ window.ClientListSection = function ClientListSection({
     refund: '↩ 환불중',
     hold: '⏸ 홀딩중',
     'delete': '🗑 삭제 필요',
-    check: '🔍 확인 필요'
+    check: '🔍 확인 필요',
+    archived: '🗄 내린 업체'
   }[bucket] || bucket) + ' 칸에 해당하는 업체가 없습니다.'), React.createElement('button', {
     onClick: function () {
       setBucket(null);
@@ -14212,8 +14271,87 @@ window.ClientListSection = function ClientListSection({
       color: '#475569',
       cursor: 'pointer'
     }
-  }, '필터 해제')) : '검색 결과가 없습니다.'), /* 업체 카드 그리드 */
-  !loading && filtered.length > 0 && React.createElement('div', {
+  }, '필터 해제')) : '검색 결과가 없습니다.'),
+  /* 내린 업체 그리드 (2026-08-30) — 되돌리기 전용.
+     ⚠️ 일부러 가볍다: 순위 롤업·분석 집계를 붙이지 않는다. 여기서 할 일은
+        「왜 내렸는지 보고 되돌릴지 정하는 것」 하나뿐이다. */
+  bucket === 'archived' && !loading && React.createElement('div', {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))',
+      gap: 14
+    }
+  }, archived.length === 0 ? React.createElement('div', {
+    style: {
+      gridColumn: '1 / -1',
+      textAlign: 'center',
+      padding: '30px 20px',
+      color: '#94a3b8',
+      fontSize: 13
+    }
+  }, '내린 업체가 없습니다. 「🗑 삭제 필요」 칸에서 정리하면 여기에 쌓입니다.') : archived.map(function (a) {
+    return React.createElement('div', {
+      key: a.id,
+      style: {
+        background: '#fff',
+        border: '1px solid #e2e8f0',
+        borderRadius: 12,
+        padding: '13px 14px'
+      }
+    }, React.createElement('div', {
+      style: {
+        fontSize: 14,
+        fontWeight: 800,
+        color: '#0f172a',
+        marginBottom: 3
+      }
+    }, a.name || ''), React.createElement('div', {
+      style: {
+        fontSize: 11.5,
+        color: '#94a3b8',
+        marginBottom: 8
+      }
+    }, '내린 날 ' + String(a.updated_at || '').slice(0, 10)), React.createElement('div', {
+      style: {
+        display: 'flex',
+        gap: 5,
+        flexWrap: 'wrap',
+        marginBottom: 9
+      }
+    }, (a.delete_reasons || []).map(function (r) {
+      return React.createElement('span', {
+        key: r,
+        style: {
+          fontSize: 10.5,
+          fontWeight: 800,
+          padding: '2px 8px',
+          borderRadius: 999,
+          background: '#f1f5f9',
+          color: '#475569',
+          border: '1px solid #e2e8f0'
+        }
+      }, r);
+    })), currentUser && currentUser.role !== 'viewer' && React.createElement('button', {
+      onClick: function () {
+        setClientStatus(a, 'active');
+      },
+      disabled: archBusy === a.id,
+      style: {
+        display: 'block',
+        width: '100%',
+        textAlign: 'center',
+        borderRadius: 8,
+        padding: '7px 0',
+        fontSize: 11.5,
+        fontWeight: 800,
+        cursor: archBusy === a.id ? 'default' : 'pointer',
+        background: '#eff6ff',
+        color: '#1d4ed8',
+        border: '1px solid #bfdbfe'
+      }
+    }, archBusy === a.id ? '되돌리는 중…' : '↩ 되돌리기'));
+  })), /* 업체 카드 그리드 */
+  bucket !== 'archived' && !loading && filtered.length > 0 && React.createElement('div', {
     style: {
       display: 'grid',
       gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))',
@@ -14462,7 +14600,35 @@ window.ClientListSection = function ClientListSection({
         fontWeight: 700,
         cursor: 'pointer'
       }
-    }, client.auto_analysis === 0 ? '⏸ 자동 추적 꺼짐 — 켜기' : '▶ 자동 추적 중 — 끄기'), /* 중지 상태 배지(viewer 포함 전원에게 보임) */
+    }, client.auto_analysis === 0 ? '⏸ 자동 추적 꺼짐 — 켜기' : '▶ 자동 추적 중 — 끄기'),
+    /* 🗄 목록에서 내리기 — 「삭제 필요」 칸에서만 (2026-08-30 대표 확정).
+       ⚠️ 찾은 자리에서 바로 정리하게 한다. 종전에는 안내문이 「여기서 바로
+          지우지는 않습니다」라고만 말해, 정리하려면 업체 리스트로 건너가야 했다.
+       ⚠️ **진짜 삭제가 아니다** — 기록을 지우지 않고 목록에서만 내린다.
+          「전산에 없음」은 이름이 한 글자 달라 못 찾은 것일 수 있어(유성프레쉬→
+          유성프레시 실사례) 그 자리에서 하드 삭제를 시키면 멀쩡한 이력이 날아간다. */
+    client.bucket === 'delete' && currentUser && currentUser.role !== 'viewer' && React.createElement('button', {
+      onClick: function (e) {
+        e.stopPropagation();
+        setClientStatus(client, 'terminated');
+      },
+      disabled: archBusy === client.id,
+      title: '관리 목록·추적에서 내립니다 — 순위 기록은 보존되고 「🗄 내린 업체」 탭에서 되돌릴 수 있습니다',
+      style: {
+        display: 'block',
+        width: '100%',
+        textAlign: 'center',
+        marginTop: 6,
+        background: '#f1f5f9',
+        color: '#334155',
+        border: '1px solid #cbd5e1',
+        padding: '6px 0',
+        borderRadius: 8,
+        fontSize: 11.5,
+        fontWeight: 700,
+        cursor: archBusy === client.id ? 'default' : 'pointer'
+      }
+    }, archBusy === client.id ? '내리는 중…' : '🗄 목록에서 내리기'), /* 중지 상태 배지(viewer 포함 전원에게 보임) */
     (client.delete_reasons || []).indexOf('기간 지남') < 0 && client.auto_analysis === 0 && (!currentUser || currentUser.role === 'viewer') && React.createElement('div', {
       style: {
         marginTop: 6,

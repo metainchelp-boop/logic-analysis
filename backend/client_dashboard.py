@@ -923,6 +923,74 @@ def my_clients(current_user: dict = Depends(get_current_user)):
         conn.close()
 
 
+# ==================== 내린 업체(보관) 목록 — 되돌리기용 ====================
+
+@router.get("/archived-clients")
+def archived_clients(current_user: dict = Depends(get_current_user)):
+    """목록에서 내린 업체(status='terminated') — 「🗄 내린 업체」 탭 (2026-08-30 대표 확정).
+
+    ⚠️ **왜 별도 경로인가** — 관리 목록(`/my-clients`)은 `status='active'` 만 내려주므로
+       내린 업체를 볼 방법이 아예 없었다. 그대로 두면 **되돌릴 길 없는 한 방향 문**이 된다
+       (「케이스 삭제 경로만 열고 화면 버튼을 안 만든」 전산 선례와 같은 함정).
+       `/my-clients` 에 파라미터를 붙이지 않은 이유 = 그 경로는 분석·순위 집계까지 얹어
+       전 직원이 매일 여는 화면이라, 손대면 그 화면 전체가 회귀 위험을 진다.
+       여기는 **이름·사유·되돌리기**만 필요해 집계 없이 가볍게 읽는다.
+
+    범위는 관리 목록과 **같은 규칙**(대표·관리자=전체 / 영업사원=본인 영업 대상 /
+    그 외=본인 등록분) — 목록에서 못 보던 업체가 보관함에서 보이면 안 된다.
+    """
+    conn = _get_conn()
+    try:
+        user_id = current_user["id"]
+        is_adm = _is_admin(current_user)
+        user_role = current_user.get("role", "viewer")
+        cols = ("id, name, business_name, naver_store_url, main_keywords, created_by, "
+                "updated_at, role, COALESCE(vertical,'store') AS vertical, "
+                "COALESCE(track_enabled,1) AS track_enabled, track_until, "
+                "contract_stage, contract_stage_at")
+        if user_role == "viewer":
+            rows = conn.execute(
+                f"SELECT {cols} FROM clients WHERE status='terminated' "
+                "AND COALESCE(role,'advertiser')='prospect' AND created_by = ? "
+                "ORDER BY updated_at DESC", (user_id,)).fetchall()
+        elif is_adm:
+            rows = conn.execute(
+                f"SELECT {cols} FROM clients WHERE status='terminated' "
+                "AND COALESCE(role,'advertiser')='advertiser' ORDER BY updated_at DESC").fetchall()
+        else:
+            rows = conn.execute(
+                f"SELECT {cols} FROM clients WHERE status='terminated' "
+                "AND COALESCE(role,'advertiser')='advertiser' "
+                "AND (created_by = ? OR created_by IS NULL OR created_by = '') "
+                "ORDER BY updated_at DESC", (user_id,)).fetchall()
+
+        # 내릴 때의 사유를 그대로 다시 보여준다 — 왜 내렸는지 모르면 되돌릴지 판단할 수 없다.
+        # 판정은 목록 화면과 **같은 함수**(client_buckets)를 쓴다(두 곳이 갈리면 배지가 서로 다른 말을 한다).
+        try:
+            synced = bool(conn.execute(
+                "SELECT 1 FROM clients WHERE contract_stage IS NOT NULL AND contract_stage <> '' LIMIT 1"
+            ).fetchone())
+        except Exception:
+            synced = False
+        today = date.today().isoformat()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["_synced"] = synced
+            try:
+                from client_buckets import delete_reasons
+                d["delete_reasons"] = delete_reasons(d, today)
+            except Exception:
+                d["delete_reasons"] = []
+            out.append(d)
+        return {"success": True, "data": out}
+    except Exception as e:
+        logger.error(f"[archived-clients] {e}")
+        return {"success": False, "detail": str(e), "data": []}
+    finally:
+        conn.close()
+
+
 # ==================== 등록된 업체 간략 목록 (라우트 순서 중요: /{client_id} 보다 위) ====================
 
 @router.get("/registered-clients")

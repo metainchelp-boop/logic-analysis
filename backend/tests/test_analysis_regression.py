@@ -760,6 +760,50 @@ def test_즉시기록_축A_와_배치가_같은_판정함수를_쓴다():
         "08:00 배치가 공통 자격 판정을 안 쓴다"
 
 
+
+# ─────────────────────────────────────────────────────────────────────
+# 목록에서 내리기(status='terminated') — 내리면 추적도 함께 멈춘다 (2026-08-30)
+#
+# ⚠️ 이 약속이 화면 확인창에 그대로 적혀 있다(「관리 목록과 순위 추적에서 빠집니다」).
+#    자격 판정이 status 를 안 보면 화면 말과 서버 동작이 갈린다 — 그걸 여기서 고정한다.
+
+def test_내린업체는_추적자격에서_빠진다():
+    import os, sqlite3, tempfile
+    from tracking_eligibility import eligible_clients_sql
+    db = tempfile.mktemp(suffix=".db")
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.executescript("""
+            CREATE TABLE clients(id INTEGER PRIMARY KEY, status TEXT DEFAULT 'active',
+                role TEXT DEFAULT 'advertiser', vertical TEXT DEFAULT 'store',
+                auto_analysis INT DEFAULT 1, track_enabled INT DEFAULT 1, track_until TEXT DEFAULT '',
+                name TEXT, naver_store_url TEXT DEFAULT 'https://smartstore.naver.com/x',
+                main_keywords TEXT DEFAULT '');
+        """)
+        conn.execute("INSERT INTO clients(id,name) VALUES(1,'살아있는곳')")
+        conn.execute("INSERT INTO clients(id,name,status) VALUES(2,'내린곳','terminated')")
+        conn.commit()
+        ids = [r["id"] for r in conn.execute(eligible_clients_sql("id, name"))]
+        assert ids == [1], f"내린 업체가 추적 자격에 남았다: {ids}"
+
+        # 되돌리면 그대로 복귀한다 — 되돌리기가 말뿐이면 안 된다
+        conn.execute("UPDATE clients SET status='active' WHERE id=2")
+        conn.commit()
+        ids2 = sorted(r["id"] for r in conn.execute(eligible_clients_sql("id, name")))
+        assert ids2 == [1, 2], f"되돌렸는데 자격이 안 돌아왔다: {ids2}"
+    finally:
+        conn.close(); os.unlink(db)
+
+
+def test_내린업체_사유는_목록화면과_같은_규칙으로_붙는다():
+    # 보관함 카드의 배지도 client_buckets.delete_reasons 를 쓴다 — 두 곳이 갈리면
+    # 「목록에선 계약 만료였는데 보관함에선 아무 사유도 없는」 상태가 된다.
+    from client_buckets import delete_reasons
+    row = {"contract_stage": "계약 만료", "track_until": "", "role": "advertiser", "_synced": True}
+    assert delete_reasons(row, _TODAY) == ["계약 만료"]
+
+
 if __name__ == "__main__":
     _tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     _failed = 0
