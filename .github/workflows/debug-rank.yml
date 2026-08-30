@@ -920,7 +920,7 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           command_timeout: 5m
           script: |
-            docker exec logic-analysis python3 - <<'PY'
+            docker exec -i logic-analysis python3 - <<'PY'
             import sqlite3, collections
             # ⚠️ 저장소가 공개라 업체명은 절대 출력하지 않는다 — 단계 이름과 건수만.
             conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
