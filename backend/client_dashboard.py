@@ -700,10 +700,14 @@ def quick_register(req: QuickRegisterRequest, current_user: dict = Depends(get_c
                                     req.report_html or '', author_id=user_id)
 
         # #1: 상세 HTML 저장 (있을 때만)
+        # ⚠️ 2026-08-30: 업체 표가 아니라 **옆 표**(client_detail_html)에 넣는다.
+        #    업체 한 곳당 1.1MB 짜리 덩어리가 업체 표에 있으면, 그 뒤 칸(계약단계 등)을
+        #    읽는 모든 목록 조회가 그 덩어리를 지나가야 해서 300배 느려진다(서버 실측).
         if req.detail_html:
             try:
-                conn.execute("UPDATE clients SET detail_html = ?, updated_at = ? WHERE id = ?",
-                             (req.detail_html, now, client_id))
+                from detail_html_store import set_html
+                set_html(conn, client_id, req.detail_html)
+                conn.execute("UPDATE clients SET updated_at = ? WHERE id = ?", (now, client_id))
             except Exception:
                 pass
 

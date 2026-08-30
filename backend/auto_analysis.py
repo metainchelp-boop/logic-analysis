@@ -693,9 +693,10 @@ def run_single_analysis(client_id: int, client_name: str, keyword: str, product_
     #     analysis['htmlDetail']에 넣어 analysis_json으로 저장 → #2-A 다운로드 시 렌더.
     try:
         _conn_h = sqlite3.connect(DB_PATH, timeout=10)
-        _row = _conn_h.execute("SELECT detail_html FROM clients WHERE id=?", (client_id,)).fetchone()
+        # 2026-08-30: 상세 HTML 은 옆 표로 옮겼다(옛 칸은 이관 전 데이터용 폴백 — 모듈이 처리).
+        from detail_html_store import get_html as _get_detail_html
+        _detail_html = _get_detail_html(_conn_h, client_id) or ''
         _conn_h.close()
-        _detail_html = (_row[0] if _row else '') or ''
         if _detail_html and len(_detail_html) > 100:
             from naver_crawler import analyze_detail_page
             _dr = analyze_detail_page(_detail_html, product_url or '')
