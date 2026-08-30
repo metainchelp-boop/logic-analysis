@@ -31,9 +31,24 @@ def _conn() -> sqlite3.Connection:
 
 
 def _tracked_targets(conn, keyword: str) -> List[Dict[str, Any]]:
-    """이 키워드를 추적 중인 상품(축A)."""
+    """이 키워드를 추적 중인 상품(축A).
+
+    ⚠️ 2026-08-30: 종전엔 조건이 **키워드 일치 하나뿐**이라 자격 판정을 통째로 우회했다.
+       8/29 에 같은 파일의 축B(`_client_targets`)만 `eligible_clients_sql` 로 통일하고
+       이 축A 를 빠뜨린 것 — 그래서 계약이 끝난 업체의 상품도, 01:20 잡이 비활성으로
+       내려 둔 상품도 수집분이 올라올 때마다 여기서 계속 기록됐다.
+       실측(2026-08-30): 그날 기록된 추적 상품 196개 중 **자격 없는 업체에만 이어진 것 15개**
+       · **어느 업체에도 안 이어졌는데 기록된 것 9개**(연결 없는 41개는 전부 비활성이었다).
+
+    ⚠️ 이 경로가 `check_type="scheduled"` 로 적기 때문에 겉보기에는 08:00 배치가 쓴 것처럼
+       보였고, 「배치는 필터를 지나는데 왜 남지?」에서 원인 추적이 한 번 막혔다.
+       **check_type 은 경로를 뜻하지 않는다.**
+
+    판정은 배치(`scheduler._collect_all_keywords`)가 쓰는 것과 **같은 함수** 하나만 쓴다 —
+    두 곳이 갈리면 「수집은 멈췄는데 기록은 계속되는」 오늘 같은 일이 또 난다.
+    """
     try:
-        return [dict(r) for r in conn.execute("""
+        rows = [dict(r) for r in conn.execute("""
             SELECT k.id AS keyword_id, p.id AS product_id, p.product_url
               FROM tracked_keywords k
               JOIN tracked_products p ON p.id = k.product_id
@@ -42,6 +57,32 @@ def _tracked_targets(conn, keyword: str) -> List[Dict[str, Any]]:
     except Exception as e:
         logger.warning(f"[rank_record] 추적 상품 조회 실패 [{keyword}]: {e}")
         return []
+
+    # ⚠️ 자격 판정이 실패하면 None 이 온다 → 그때는 **거르지 않는다**.
+    #    판정 조회 하나가 실패했다고 순위 기록이 통째로 멈추는 쪽이 훨씬 나쁘다
+    #    (배치도 같은 폴백을 쓴다 — 규칙을 한 곳으로 모으는 것의 일부다).
+    # ⚠️ 「어느 업체에도 안 이어진 상품」을 여기서 곧바로 빼면 안 된다. 직원이 방금 등록해
+    #    아직 연결이 안 맺어진 상품까지 죽는다. eligible_tracked_product_ids 는 그 규칙을
+    #    이미 담고 있다(비활성 표시가 붙은 것만 뺀다) — 그래서 조건을 새로 쓰지 않고 그 함수를 부른다.
+    # ⚠️ 여기서 disabled_at 컬럼을 만들지 않는다(ALTER+commit). 이 함수는 기록 트랜잭션이
+    #    열리기 전에 불리지만, 중간 commit 을 넣는 습관은 8/29 에 한 번 데인 자리다.
+    #    컬럼 보장은 08:00 배치의 ensure_disabled_column 이 매일 하고 있고, 없으면
+    #    아래 판정이 예외로 떨어져 종전 동작(전부 기록)으로 안전하게 넘어간다.
+    try:
+        from tracking_eligibility import eligible_tracked_product_ids
+        ok = eligible_tracked_product_ids(conn)
+    except Exception as e:
+        logger.warning(f"[rank_record] 추적 상품 자격 판정 실패 [{keyword}]: {e}")
+        ok = None
+    if ok is None:
+        return rows
+
+    kept = [r for r in rows if r["product_id"] in ok]
+    if len(kept) != len(rows):
+        logger.info(f"[rank_record] {keyword} — 추적 상품 자격 판정: "
+                    f"{len(rows)}개 중 {len(kept)}개만 적는다 "
+                    f"(계약 종료·비활성 {len(rows) - len(kept)}개 제외)")
+    return kept
 
 
 def _client_targets(conn, keyword: str) -> List[Dict[str, Any]]:
