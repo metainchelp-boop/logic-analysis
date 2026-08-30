@@ -858,10 +858,14 @@ def test_상권건강_자가점검은_하나만_되면_정상으로_본다():
     conn = _sh_db(db)
     try:
         calls = []
+        # ⚠️ 표본 이름을 여기 박아 두지 않는다 — 목록에서 읽는다.
+        #    2026-08-30 에 표본을 바꿨더니 '성수동' 을 박아 둔 이 테스트가 깨졌다.
+        #    그때 깨진 건 코드가 아니라 **테스트의 결합**이었다.
+        first = sbiz_health.PROBE_SAMPLES[0][0]
 
         def fake(region, industry, reason=None, **kw):
             calls.append(region)
-            if region == "성수동":          # 첫 표본은 통계 없음
+            if region == first:            # 첫 표본은 통계 없음
                 if isinstance(reason, dict):
                     reason["code"] = "no-stats"
                 return None
@@ -896,13 +900,85 @@ def test_상권건강_자가점검은_전부_실패해야_실패로_남는다():
 def test_상권건강_불러보지도_않은_것은_기록하지_않는다():
     """업종 미선택·지역 미입력·키 미설정은 API 문제가 아니다.
        그것까지 실패로 세면 「며칠째 죽었다」가 늘 참이 돼 신호가 죽는다."""
-    import sbiz365
-    assert sbiz365._SBIZ_NOT_TRIED == {"no-key", "no-industry", "no-region"}, \
+    import sbiz365, sbiz_health
+    expected = {"no-key", "no-industry", "no-region", "region-unresolved"}
+    assert sbiz365._SBIZ_NOT_TRIED == expected, \
         f"기록 제외 사유 목록이 바뀌었다: {sbiz365._SBIZ_NOT_TRIED}"
+    # ⚠️ 같은 목록이 두 파일에 있다(sbiz365 를 import 하면 requests 가 딸려 와 게이트가 깨진다).
+    #    갈리면 「부르지도 않은 실패」가 한쪽에서만 걸러져 경보가 조용히 오염된다.
+    assert set(sbiz_health.NOT_TRIED_CODES) == expected, \
+        f"두 파일의 제외 목록이 갈렸다: {sbiz_health.NOT_TRIED_CODES}"
     import inspect
     src = inspect.getsource(sbiz365.get_place_sbiz)
     assert "_SBIZ_NOT_TRIED" in src, "공개 진입점이 제외 목록을 안 쓴다"
     assert "_get_place_sbiz_impl" in src, "공개 진입점이 본문을 안 부른다"
+
+
+def test_상권건강_지역판정_실패는_API_건강이_아니다():
+    """⚠️ 2026-08-30 배포 직후 실측으로 잡은 결함.
+
+    `region-unresolved` 는 **네이버 지역검색**이 동네를 못 찾은 것이라 상권 API 는
+    부르지도 않았다. 그런데 첫 판은 이걸 API 실패로 기록했고, 하필 표본 첫 곳(성수동)이
+    **상시** 이 사유로 끊겼다 — API 가 멀쩡한 날에도 매일 실패가 한 건씩 쌓여
+    정작 진짜 장애 때 그 신호가 묻혔을 것이다.
+    """
+    import os, tempfile, sbiz_health
+    db = tempfile.mktemp(suffix=".db")
+    conn = _sh_db(db)
+    try:
+        calls = []
+
+        def half(region, industry, reason=None, **kw):
+            calls.append(region)
+            if len(calls) == 1:                    # 첫 표본은 지역 판정에서 끊긴다
+                if isinstance(reason, dict):
+                    reason["code"] = "region-unresolved"
+                return None
+            return {"sales": {"avgAmt": 1}}        # 다음 표본은 정상
+
+        r = sbiz_health.run_probe(get_place_sbiz=half)
+        assert r["ok"] is True, f"뒤 표본이 됐는데 실패로 봤다: {r}"
+        assert r["reached"] == 1, f"API 에 닿은 표본만 세어야 한다: {r}"
+        s = sbiz_health.summary()
+        # 성공 1건만 남고, 지역 판정 실패는 어디에도 안 쌓인다.
+        assert s["last7_total"] == 1 and s["last7_ok"] == 1, s
+        assert s["recent_fail_reasons"] == {}, f"지역 판정 실패가 기록에 샜다: {s}"
+    finally:
+        conn.close(); os.unlink(db)
+
+
+def test_상권건강_표본이_전부_API에_못닿으면_아무것도_기록하지_않는다():
+    """「죽었다」가 아니라 「못 쟀다」 — 둘을 섞으면 기록이 거짓말을 한다."""
+    import os, tempfile, sbiz_health
+    db = tempfile.mktemp(suffix=".db")
+    conn = _sh_db(db)
+    try:
+        def unreachable(region, industry, reason=None, **kw):
+            if isinstance(reason, dict):
+                reason["code"] = "region-unresolved"
+            return None
+
+        r = sbiz_health.run_probe(get_place_sbiz=unreachable)
+        assert r["ok"] is None, f"판정 못 한 것을 실패로 단정했다: {r}"
+        assert r["reached"] == 0, r
+        s = sbiz_health.summary()
+        assert s["last7_total"] == 0, f"못 잰 회차가 기록에 남았다: {s}"
+    finally:
+        conn.close(); os.unlink(db)
+
+
+def test_상권건강_표본은_상권API까지_닿는_곳이어야_한다():
+    """⚠️ 표본을 바꿀 때 서버 실측 없이 넣으면 이 경보가 통째로 죽는다.
+
+    2026-08-30 서버 실측 — 성수동은 주소가 '성동구'로만 와서 **상시** 지역 판정에서
+    끊긴다(9곳 중 유일). 그 자리에 넣었던 탓에 배포 첫날부터 실패가 기록됐다.
+    """
+    import sbiz_health
+    bad = {"성수동"}
+    used = {r for r, _ in sbiz_health.PROBE_SAMPLES}
+    assert not (used & bad), \
+        f"상권 API 에 닿지 못하는 지역이 표본에 있다(2026-08-30 실측): {used & bad}"
+    assert len(sbiz_health.PROBE_SAMPLES) >= 2, "표본이 하나면 그 동네 사정이 곧 API 장애로 읽힌다"
 
 
 def test_상권건강_자가점검_잡이_등록돼_있다():
@@ -916,6 +992,10 @@ def test_상권건강_자가점검_잡이_등록돼_있다():
     assert "_run_sbiz_health_probe" in src, "자가 점검 함수가 없다"
     assert re.search(r'id="sbiz_health_probe"', src), "자가 점검 잡이 등록돼 있지 않다"
     assert re.search(r"CronTrigger\(hour=5, minute=0\)", src), "자가 점검 시각(05:00)이 바뀌었다"
+    # ⚠️ 「못 쟀다」와 「죽었다」를 로그가 갈라 말해야 한다 — 안 그러면 표본이 망가진 것을
+    #    API 장애로 읽고 엉뚱한 데를 파게 된다.
+    assert 'r.get("ok") is None' in src, "「판정 못 함」 분기가 없다(표본이 API 에 못 닿은 경우)"
+    assert "판정 못 함" in src, "「판정 못 함」 로그 문구가 없다"
 
 if __name__ == "__main__":
     _tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

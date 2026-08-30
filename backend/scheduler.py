@@ -423,9 +423,16 @@ def _run_sbiz_health_probe():
         r = run_probe()
         if r.get("ok"):
             logger.info(f"  🩺 소상공인365 자가 점검 — 정상 (표본 {r.get('tried')}개 중 확인)")
+        elif r.get("ok") is None:
+            # ⚠️ 「죽었다」가 아니라 「못 쟀다」 — 표본이 전부 지역 판정에서 끊겨 상권 API 에
+            #    닿지 못했다. 이때는 기록도 남기지 않으므로 로그가 유일한 흔적이다.
+            #    이 줄이 며칠 이어지면 **API 가 아니라 표본(또는 지역 판정)을 고쳐야 한다.**
+            logger.warning(f"  🩺 소상공인365 자가 점검 — ⚠️ 판정 못 함 "
+                           f"(표본 {r.get('tried')}개가 전부 지역 판정에서 끊겨 API 에 닿지 못했다 "
+                           f"— 표본을 바꿔야 한다)")
         else:
             logger.warning(f"  🩺 소상공인365 자가 점검 — ❌ 실패 "
-                           f"(표본 {r.get('tried')}개 전부 · 사유 {r.get('reason')})")
+                           f"(API 까지 간 표본 {r.get('reached')}개 전부 · 사유 {r.get('reason')})")
     except Exception as e:
         logger.warning(f"  🩺 소상공인365 자가 점검 실행 실패(무시): {e}")
 

@@ -27,7 +27,18 @@ DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
 
 # 자가 점검이 쓰는 표본 — 한 곳이면 그 동네만 통계가 없어도 실패로 보인다.
 # 성격이 다른 세 곳을 두고 **하나라도 되면 살아 있는 것**으로 본다.
-PROBE_SAMPLES = (("성수동", "카페"), ("구로동", "분식"), ("역삼동", "한식"))
+#
+# ⚠️ 표본은 「상권 API 까지 실제로 도달하는 곳」이어야 한다(2026-08-30 실측으로 교체).
+#    첫 판에 넣었던 성수동은 **상시** 지역 판정에서 끊긴다 — 네이버 지역검색이 주소를
+#    '성동구'로만 돌려줘 동 이름 대조에 걸린다. 상권 API 는 손도 안 대므로,
+#    그 표본으로는 API 가 살았는지 죽었는지 영영 알 수 없다.
+#    ⇒ 표본을 바꿀 때는 반드시 서버에서 실제로 돌려 도달 여부를 확인하고 넣을 것.
+PROBE_SAMPLES = (("구로동", "분식"), ("역삼동", "한식"), ("성사동", "칼국수"))
+
+# 상권 API 를 부르기도 전에 끊긴 사유 — 이건 API 건강이 아니다(sbiz365._SBIZ_NOT_TRIED 와 같은 뜻).
+# ⚠️ 두 곳에 적어 두는 이유: sbiz365 를 import 하면 requests 가 딸려 와 배포 게이트에서 깨진다.
+#    값이 갈리면 안 되므로 회귀 테스트가 두 집합이 같은지 대조한다.
+NOT_TRIED_CODES = frozenset({"no-key", "no-industry", "no-region", "region-unresolved"})
 
 
 def _conn() -> sqlite3.Connection:
@@ -135,7 +146,7 @@ def run_probe(get_place_sbiz=None) -> dict:
         from sbiz365 import get_place_sbiz as _f
         get_place_sbiz = _f
 
-    tried, ok, last_reason = 0, False, ""
+    tried, reached, ok, last_reason = 0, 0, False, ""
     for region, industry in PROBE_SAMPLES:
         tried += 1
         why = {}
@@ -144,9 +155,20 @@ def run_probe(get_place_sbiz=None) -> dict:
         except Exception as e:
             blk, why = None, {"code": f"exc:{type(e).__name__}"}
         if blk:
-            ok = True
+            ok, reached = True, reached + 1
             break
-        last_reason = str(why.get("code") or why or "unknown")[:80]
+        code = str(why.get("code") or why or "unknown")[:80]
+        # ⚠️ 상권 API 를 부르지도 못한 표본은 **판정에 쓰지 않는다** — 다음 표본으로 넘어간다.
+        #    이걸 실패로 세면 API 가 멀쩡한 날에도 실패가 쌓여 경보가 무뎌진다.
+        if code in NOT_TRIED_CODES:
+            continue
+        reached += 1
+        last_reason = code
+
+    # ⚠️ 표본이 하나도 API 에 닿지 못했으면 **아무것도 기록하지 않는다.**
+    #    「죽었다」가 아니라 「못 쟀다」이고, 둘을 섞으면 기록이 거짓말을 한다.
+    if reached == 0:
+        return {"ok": None, "tried": tried, "reached": 0, "reason": "not-reached"}
 
     record(ok, "" if ok else last_reason, source="probe")
-    return {"ok": ok, "tried": tried, "reason": last_reason}
+    return {"ok": ok, "tried": tried, "reached": reached, "reason": last_reason}
