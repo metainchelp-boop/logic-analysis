@@ -58,6 +58,16 @@ on:
       gu_fallback_check:
         description: '동 단위 통계가 없을 때 시군구 평균이 같은 응답에 실려 오는지 실측 — "지역|업종"(예: 조원동|미용·뷰티). 소분류를 여러 개 돌며 saleAmt/guAmt/siAmt 유무를 대조. 읽기 전용'
         default: ''
+      dbsize:
+        description: 'DB 용량 분석 — off(기본) / on. ⚠️ 3.1GB DB 를 통째로 스캔한다(테이블별 COUNT + JSON 컬럼 SUM(LENGTH)). 느려서 스텝 예산(240s)을 넘기면 뒤 스텝이 전부 안 돈다 — 필요할 때만 켠다.'
+        required: false
+        default: 'off'
+      sbiz_since:
+        description: '소상공인365 실패가 언제부터인지 — true. 컨테이너 로그의 [sbiz365] 실패를 시간대별로 센다(읽기 전용·업체명 미출력).'
+        required: false
+      hang_probe:
+        description: '진단 스텝이 어디서 멈추는지 — true. 이 워크플로가 쓰는 명령을 하나씩 timeout 을 씌워 걸리는 지점을 찾는다(읽기 전용).'
+        required: false
 
 jobs:
   diagnose:
@@ -67,6 +77,80 @@ jobs:
       # 행정동코드(admiCd) 매핑용 — 소상공인365 포털의 지역명→코드 경로가 전부 막혀
       # 이 공식 REST 로 「좌표 → 행정동코드」를 얻는다. 키 값은 출력하지 않는다.
       # ⚠️ 흔한 실수: 인코딩/디코딩 키 혼동 → 두 방식 모두 시험해 어느 쪽이 맞는지 알려준다.
+      # ⚠️ 이 두 스텝은 **일부러 맨 앞**에 둔다 — 아래 'Place tracking read-only query' 가
+      #    8/30 에 두 번 연속 멈췄고, 그 뒤 스텝은 영영 실행되지 않기 때문이다.
+      #    (로그 tail 에서는 잘리므로 결과는 전체 로그에서 찾아 읽는다.)
+      - name: 소상공인365 실패 시점 추적 (읽기 전용)
+        if: ${{ github.event.inputs.sbiz_since == 'true' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 120s
+          script: |
+            echo "== 컨테이너 기동 시각(로그가 남아 있는 범위) =="
+            docker inspect -f 'StartedAt={{.State.StartedAt}}' logic-analysis
+            echo
+            echo "== [sbiz365] 로그 — 시간대별 건수 (성공/실패) =="
+            # ⚠️ URL 에 인증키가 실려 있을 수 있어 원문을 찍지 않는다 — 시각과 종류만 센다.
+            docker logs --since 48h logic-analysis 2>&1 \
+              | grep -a '\[sbiz365\]' \
+              | sed -E 's/^([0-9-]+ [0-9]+):.*/\1시/' \
+              | sort | uniq -c | tail -60 || echo "(매칭 없음)"
+            echo
+            echo "== 실패 종류별 건수 (48h) =="
+            docker logs --since 48h logic-analysis 2>&1 | grep -a '\[sbiz365\]' \
+              | grep -oE 'HTTP [0-9]+|요청 실패|행정동·시군구 모두 매칭 실패|상권 데이터 조립 실패' \
+              | sort | uniq -c || echo "(매칭 없음)"
+            echo
+            echo "== 마지막으로 상권이 붙은 시각 (client_analyses·proposal 쪽 흔적) =="
+            docker logs --since 48h logic-analysis 2>&1 | grep -a '시군구 단위로 후퇴\|\[sbiz365\]' | tail -5 || true
+            echo
+            echo "⇒ 시간대별 건수가 어느 시각부터 실패로만 채워지는지 보면 시작 시점이 나온다."
+            echo "⇒ 컨테이너 기동 시각보다 앞이면 '적어도 그때부터'까지만 말할 수 있다."
+
+      - name: 진단 멈춤 지점 찾기 (읽기 전용)
+        if: ${{ github.event.inputs.hang_probe == 'true' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 180s
+          script: |
+            # ⚠️ 이 워크플로의 'Place tracking read-only query' 스텝이 8/30 에 두 번 연속 멈췄다.
+            #    command_timeout 도 안 먹어 런을 취소해야 로그를 읽었다.
+            #    그 스텝이 쓰는 명령을 하나씩 timeout 을 씌워 어느 것이 안 끝나는지 가른다.
+            #    ⚠️ sudo 는 tty 가 없으면 암호를 물으며 영원히 멈춘다 — '2>/dev/null || true' 로는 못 막는다.
+            #       그래서 sudo 계열은 </dev/null 로 입력을 끊고 timeout 을 씌워 확인한다.
+            probe() {
+              _n="$1"; shift
+              _t0=$(date +%s)
+              if timeout -s KILL 15 "$@" </dev/null >/dev/null 2>&1; then _r="OK"; else _r="타임아웃/실패(exit $?)"; fi
+              _t1=$(date +%s)
+              printf '  %-34s %-22s %ss\n' "$_n" "$_r" "$((_t1-_t0))"
+            }
+            echo "== 명령별 소요 시간 (각 15초 제한) =="
+            probe "docker ps"            docker ps
+            probe "docker inspect"       docker inspect logic-analysis
+            probe "docker logs --tail80" docker logs --tail 80 logic-analysis
+            probe "docker logs --tail400" docker logs --tail 400 logic-analysis
+            probe "free -m"              free -m
+            probe "df -h /"              df -h /
+            probe "lsblk"                lsblk -e7
+            probe "sudo pvs"             sudo pvs
+            probe "sudo vgs"             sudo vgs
+            probe "sudo lvs"             sudo lvs
+            probe "sudo dmidecode"       sudo dmidecode -s system-manufacturer
+            echo
+            echo "== 컨테이너 안 DB 읽기 (mode=ro) =="
+            _t0=$(date +%s)
+            if timeout -s KILL 30 docker exec -i logic-analysis python3 -c "import sqlite3;c=sqlite3.connect('file:/app/data/logic_data.db?mode=ro',uri=True);print(' place_track_target',c.execute('SELECT COUNT(*) FROM place_track_target').fetchone()[0]);print(' place_rank_history',c.execute('SELECT COUNT(*) FROM place_rank_history').fetchone()[0])" </dev/null; then echo "  DB 읽기 OK"; else echo "  ⚠️ DB 읽기 타임아웃/실패"; fi
+            _t1=$(date +%s); echo "  소요 $((_t1-_t0))s"
+            echo
+            echo "⇒ 15초를 다 쓰고 실패한 줄이 멈춤 지점이다. sudo 계열이면 원인은 암호 프롬프트다."
+
       - name: 공공데이터포털 인증키 검증
         if: ${{ github.event.inputs.datago_check == 'true' }}
         uses: appleboy/ssh-action@v1.0.3
@@ -518,56 +602,66 @@ jobs:
               echo "정리 후:"; sudo du -sh "$BK" 2>/dev/null; df -h / | tail -1
             fi
             echo
-            echo "== DB 테이블별 행 수·가장 오래된 데이터 (읽기 전용) =="
-            timeout 180 docker exec -i logic-analysis python3 - <<'PY' || echo "(DB 분석 시간 초과 — 백업 정리는 위에서 이미 완료)"
-            import sqlite3
-            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
-            c = conn.cursor()
-            spec = [
-                ("rankings", "checked_at"), ("competitor_snapshots", "captured_at"),
-                ("shopping_search_cache", "datetime(created_at,'unixepoch','localtime')"),
-                ("api_usage_logs", "called_at"), ("notification_logs", "created_at"),
-                ("place_rank_history", "checked_at"),
-            ]
-            for tbl, col in spec:
-                try:
-                    n, lo, hi = c.execute(f"SELECT COUNT(*), MIN({col}), MAX({col}) FROM {tbl}").fetchone()
-                    print(f"  {tbl:24s} {n:>10,}행  {str(lo)[:16]} → {str(hi)[:16]}")
-                except Exception as e:
-                    print(f"  {tbl:24s} (조회 불가: {e})")
-            print()
-            pc = c.execute("PRAGMA page_count").fetchone()[0]
-            fl = c.execute("PRAGMA freelist_count").fetchone()[0]
-            ps = c.execute("PRAGMA page_size").fetchone()[0]
-            av = c.execute("PRAGMA auto_vacuum").fetchone()[0]
-            print(f"[파일 구조] 총 {pc*ps/1073741824:.2f}GB · 빈 페이지(freelist) {fl*ps/1073741824:.2f}GB "
-                  f"({100*fl/pc:.0f}%) · auto_vacuum={av}(0=꺼짐)")
-            print()
-            print("[전체 테이블 행 수 — 누락 없이]")
-            tabs = [r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
-            for t in tabs:
-                try:
-                    n = c.execute(f"SELECT COUNT(*) FROM \"{t}\"").fetchone()[0]
-                    print(f"  {t:30s} {n:>10,}행")
-                except Exception as e:
-                    print(f"  {t:30s} (err {e})")
-            print()
-            print("[대용량 JSON 컬럼 실측 — 무엇이 4.7GB인가]")
-            def mb(q):
-                try: return (c.execute(q).fetchone()[0] or 0)/1048576
-                except Exception as e: return f"err:{e}"
-            print(f"  client_analyses.analysis_json      {mb('SELECT SUM(LENGTH(analysis_json)) FROM client_analyses'):8.0f} MB")
-            print(f"  client_analyses.shop_products_json {mb('SELECT SUM(LENGTH(shop_products_json)) FROM client_analyses'):8.0f} MB")
-            print(f"  client_analyses.advertiser_json    {mb('SELECT SUM(LENGTH(advertiser_json)) FROM client_analyses'):8.0f} MB")
-            print(f"  client_analyses.volume+related     {mb('SELECT SUM(LENGTH(volume_json)+LENGTH(related_json)) FROM client_analyses'):8.0f} MB")
-            print(f"  collected_serp.products_json       {mb('SELECT SUM(LENGTH(products_json)) FROM collected_serp'):8.0f} MB")
-            print(f"  competitor_snapshots(전 컬럼 근사) {mb('SELECT SUM(LENGTH(product_name)+LENGTH(store_name)+LENGTH(product_url)+LENGTH(image_url)) FROM competitor_snapshots'):8.0f} MB")
-            print()
-            print("[client_analyses 월별 분포 — 오래된 것 비중]")
-            for ym, n in c.execute("SELECT substr(analyzed_date,1,7), COUNT(*) FROM client_analyses GROUP BY 1 ORDER BY 1"):
-                print(f"  {ym}  {n:>7,}행")
-            conn.close()
-            PY
+            # ⚠️ 이 블록은 3.1GB DB 를 통째로 스캔한다(테이블별 COUNT + JSON 컬럼 SUM(LENGTH)).
+            #    2026-08-30 에 스텝 예산 240s 를 넘기기 시작했고, 이 스텝이 안 끝나면
+            #    **뒤 스텝이 전부 실행되지 않는다**(그날 진단이 세 번 막혔다).
+            #    DB 는 앞으로도 커지므로 기본을 끔으로 두고 필요할 때만 켠다.
+            if [ "${{ inputs.dbsize }}" = "on" ]; then
+              echo "== DB 테이블별 행 수·가장 오래된 데이터 (읽기 전용) =="
+              timeout 180 docker exec -i logic-analysis python3 - <<'PY' || echo "(DB 분석 시간 초과 — 백업 정리는 위에서 이미 완료)"
+              import sqlite3
+              conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+              c = conn.cursor()
+              spec = [
+                  ("rankings", "checked_at"), ("competitor_snapshots", "captured_at"),
+                  ("shopping_search_cache", "datetime(created_at,'unixepoch','localtime')"),
+                  ("api_usage_logs", "called_at"), ("notification_logs", "created_at"),
+                  ("place_rank_history", "checked_at"),
+              ]
+              for tbl, col in spec:
+                  try:
+                      n, lo, hi = c.execute(f"SELECT COUNT(*), MIN({col}), MAX({col}) FROM {tbl}").fetchone()
+                      print(f"  {tbl:24s} {n:>10,}행  {str(lo)[:16]} → {str(hi)[:16]}")
+                  except Exception as e:
+                      print(f"  {tbl:24s} (조회 불가: {e})")
+              print()
+              pc = c.execute("PRAGMA page_count").fetchone()[0]
+              fl = c.execute("PRAGMA freelist_count").fetchone()[0]
+              ps = c.execute("PRAGMA page_size").fetchone()[0]
+              av = c.execute("PRAGMA auto_vacuum").fetchone()[0]
+              print(f"[파일 구조] 총 {pc*ps/1073741824:.2f}GB · 빈 페이지(freelist) {fl*ps/1073741824:.2f}GB "
+                    f"({100*fl/pc:.0f}%) · auto_vacuum={av}(0=꺼짐)")
+              print()
+              print("[전체 테이블 행 수 — 누락 없이]")
+              tabs = [r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
+              for t in tabs:
+                  try:
+                      n = c.execute(f"SELECT COUNT(*) FROM \"{t}\"").fetchone()[0]
+                      print(f"  {t:30s} {n:>10,}행")
+                  except Exception as e:
+                      print(f"  {t:30s} (err {e})")
+              print()
+              print("[대용량 JSON 컬럼 실측 — 무엇이 4.7GB인가]")
+              def mb(q):
+                  try: return (c.execute(q).fetchone()[0] or 0)/1048576
+                  except Exception as e: return f"err:{e}"
+              print(f"  client_analyses.analysis_json      {mb('SELECT SUM(LENGTH(analysis_json)) FROM client_analyses'):8.0f} MB")
+              print(f"  client_analyses.shop_products_json {mb('SELECT SUM(LENGTH(shop_products_json)) FROM client_analyses'):8.0f} MB")
+              print(f"  client_analyses.advertiser_json    {mb('SELECT SUM(LENGTH(advertiser_json)) FROM client_analyses'):8.0f} MB")
+              print(f"  client_analyses.volume+related     {mb('SELECT SUM(LENGTH(volume_json)+LENGTH(related_json)) FROM client_analyses'):8.0f} MB")
+              print(f"  collected_serp.products_json       {mb('SELECT SUM(LENGTH(products_json)) FROM collected_serp'):8.0f} MB")
+              print(f"  competitor_snapshots(전 컬럼 근사) {mb('SELECT SUM(LENGTH(product_name)+LENGTH(store_name)+LENGTH(product_url)+LENGTH(image_url)) FROM competitor_snapshots'):8.0f} MB")
+              print()
+              print("[client_analyses 월별 분포 — 오래된 것 비중]")
+              for ym, n in c.execute("SELECT substr(analyzed_date,1,7), COUNT(*) FROM client_analyses GROUP BY 1 ORDER BY 1"):
+                  print(f"  {ym}  {n:>7,}행")
+              conn.close()
+              PY
+            else
+              echo
+              echo "== DB 용량 분석 — 건너뜀 (필요하면 dbsize=on) =="
+              echo "  3.1GB 전체 스캔이라 스텝 예산을 넘기면 뒤 스텝이 전부 안 돈다."
+            fi
             if [ -n "${{ inputs.retention }}" ]; then
               echo
               echo "== client_analyses 보관정책 B (최근 30일 + 업체·키워드별 최신 보존) — 모드: ${{ inputs.retention }} =="
