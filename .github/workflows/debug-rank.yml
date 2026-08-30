@@ -30,6 +30,10 @@ on:
         description: '상품 주소 모양 실측 — off(기본) / on. 어느 호스트(스마트스토어·브랜드스토어·카탈로그)를 쓰는지, 같은 슬러그가 두 호스트에 걸쳐 있는지(읽기 전용·업체명 미출력).'
         required: false
         default: 'off'
+      slow:
+        description: '느림 진단 — off(기본) / on. DB 크기·표별 용량·실제 쿼리 소요·컨테이너 자원(읽기 전용·전체 스캔 없음).'
+        required: false
+        default: 'off'
       verify:
         description: '배포 반영 확인 — off(기본) / on. 서버 파일 타임스탬프·크기와 이번 차수 표지 문자열을 센다(읽기 전용).'
         required: false
@@ -59,9 +63,10 @@ jobs:
           IN_STRUCTURE: ${{ github.event.inputs.structure }}
           IN_EXPIRED: ${{ github.event.inputs.expired }}
           IN_VERIFY: ${{ github.event.inputs.verify }}
+          IN_SLOW: ${{ github.event.inputs.slow }}
           IN_BRANCH_CODE: ${{ github.event.inputs.use_branch_code }}
         with:
-          envs: RL_SRC_GZ,IN_COLLECTOR,IN_RANK_LINK,IN_CAPACITY,IN_STRUCTURE,IN_EXPIRED,IN_VERIFY,IN_BRANCH_CODE
+          envs: RL_SRC_GZ,IN_COLLECTOR,IN_RANK_LINK,IN_CAPACITY,IN_STRUCTURE,IN_EXPIRED,IN_VERIFY,IN_SLOW,IN_BRANCH_CODE
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
@@ -70,6 +75,55 @@ jobs:
             echo "== 컨테이너 상태 =="
             docker ps --filter name=logic-analysis --format '{{.Names}} {{.Status}}'
             docker inspect -f 'RestartCount={{.RestartCount}} StartedAt={{.State.StartedAt}} OOMKilled={{.State.OOMKilled}}' logic-analysis
+            echo
+            if [ "$IN_SLOW" = "on" ]; then
+              echo "== 느림 진단 (읽기 전용) =="
+              echo "-- 컨테이너 자원 --"
+              timeout 20 docker stats --no-stream --format '  CPU {{.CPUPerc}} · MEM {{.MemUsage}} ({{.MemPerc}}) · IO {{.BlockIO}}' logic-analysis || echo "  (stats 실패)"
+              echo "-- 디스크·파일 --"
+              timeout 15 df -h / | tail -1 | awk '{print "  루트 "$3"/"$2" ("$5")"}'
+              timeout 20 du -sh /root/logic-analysis-deploy/data/*.db* 2>/dev/null | sed 's/^/  /' || true
+              echo "-- DB 내부 --"
+              timeout 90 docker exec -i logic-analysis python3 - <<'PY'
+            import sqlite3, time
+            c = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            def one(q):
+                return c.execute(q).fetchone()[0]
+            ps, pc, fl = one("PRAGMA page_size"), one("PRAGMA page_count"), one("PRAGMA freelist_count")
+            print("  파일 %.0f MB · 빈 페이지 %.0f MB (%.0f%%) · journal=%s" % (ps*pc/1048576, ps*fl/1048576, fl*100.0/max(pc,1), one("PRAGMA journal_mode")))
+            print("  -- 표별 크기(최근 200행 평균 × 행수) --")
+            for t, col in [("collected_serp","products_json"), ("client_analyses","analysis_json"), ("client_analyses","report_html"), ("clients","detail_html")]:
+                try:
+                    n = one("SELECT COUNT(*) FROM %s" % t)
+                    avg = c.execute("SELECT AVG(LENGTH(COALESCE(%s,''))) FROM (SELECT %s FROM %s ORDER BY rowid DESC LIMIT 200)" % (col, col, t)).fetchone()[0] or 0
+                    print("    %-30s %8d행 · 평균 %6.0f KB · 추정 %7.0f MB" % (t+"."+col, n, avg/1024, n*avg/1048576))
+                except Exception as e:
+                    print("    %s.%s 조회 실패: %s" % (t, col, e))
+            for t in ["rankings", "client_rank_history", "collect_requests"]:
+                try:
+                    print("    %-30s %8d행" % (t, one("SELECT COUNT(*) FROM %s" % t)))
+                except Exception as e:
+                    print("    %s: %s" % (t, e))
+            print("  -- 관리 목록이 매번 도는 쿼리 실제 소요 --")
+            def timed(label, q, args=()):
+                t0 = time.perf_counter()
+                try:
+                    rows = c.execute(q, args).fetchall()
+                    print("    %-32s %8.0f ms · %d행" % (label, (time.perf_counter()-t0)*1000, len(rows)))
+                except Exception as e:
+                    print("    %s 실패: %s" % (label, e))
+            timed("① 업체 목록", "SELECT id,name,status,contract_stage FROM clients WHERE status='active'")
+            ids = [r[0] for r in c.execute("SELECT id FROM clients WHERE status='active' LIMIT 400")]
+            ph = ",".join("?"*len(ids))
+            timed("② 분석 집계", "SELECT client_id,COUNT(*),MAX(updated_at),COUNT(DISTINCT keyword) FROM client_analyses WHERE client_id IN (%s) GROUP BY client_id" % ph, ids)
+            timed("③ 순위 롤업", "SELECT client_id,keyword,MAX(id) FROM client_rank_history WHERE client_id IN (%s) GROUP BY client_id,keyword" % ph, ids)
+            timed("④ 수집분 1건 읽기", "SELECT products_json FROM collected_serp ORDER BY id DESC LIMIT 1")
+            print("  -- 인덱스 사용 여부 --")
+            for lbl, q in [("분석 집계", "EXPLAIN QUERY PLAN SELECT client_id,COUNT(*) FROM client_analyses WHERE client_id IN (1,2) GROUP BY client_id"), ("순위 롤업", "EXPLAIN QUERY PLAN SELECT client_id,keyword,MAX(id) FROM client_rank_history WHERE client_id IN (1,2) GROUP BY client_id,keyword")]:
+                print("    %s: %s" % (lbl, " / ".join(r[-1] for r in c.execute(q))))
+            PY
+              echo
+            fi
             echo
             if [ "$IN_VERIFY" = "on" ]; then
               echo "== 배포 반영 확인 (읽기 전용) =="
