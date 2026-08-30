@@ -30,6 +30,10 @@ on:
         description: '상품 주소 모양 실측 — off(기본) / on. 어느 호스트(스마트스토어·브랜드스토어·카탈로그)를 쓰는지, 같은 슬러그가 두 호스트에 걸쳐 있는지(읽기 전용·업체명 미출력).'
         required: false
         default: 'off'
+      axis_a:
+        description: '축A 추적 상품 누수 정밀 측정 — off(기본) / on. 「자격 없는 업체에만」 이어진 상품이 실제로 몇 개인지(읽기 전용·업체명 미출력).'
+        required: false
+        default: 'off'
       stages:
         description: '계약 단계 반영 실측 — off(기본) / on. 전산에서 받아 온 계약 단계가 몇 곳에 저장됐는지·단계별 몇 곳인지(읽기 전용·업체명 미출력).'
         required: false
@@ -969,5 +973,68 @@ jobs:
                 print("  ⇒ 단계가 적힌 몫이 크면 04:00 동기화가 제대로 반영되고 있다는 뜻이다.")
             except Exception as e:
                 print(f"  조회 실패: {e}")
+            conn.close()
+            PY
+
+      - name: 축A 추적 상품 누수 정밀 측정 (읽기 전용)
+        if: ${{ github.event.inputs.axis_a == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 5m
+          script: |
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sqlite3
+            # ⚠️ 업체명·상품명은 출력하지 않는다(공개 저장소) — 건수만.
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            OK = ("SELECT id FROM clients WHERE status='active' "
+                  " AND COALESCE(role,'advertiser')='advertiser' "
+                  " AND COALESCE(vertical,'store')='store' "
+                  " AND COALESCE(auto_analysis,1)=1 "
+                  " AND COALESCE(track_enabled,1)=1 "
+                  " AND (track_until IS NULL OR track_until='' "
+                  "      OR date(track_until) >= date('now','localtime')))")
+            TODAY = "date(r.checked_at) = date('now','localtime')"
+
+            def one(sql):
+                try: return conn.execute(sql).fetchone()[0]
+                except Exception as e: return f"실패:{e}"
+
+            print("[오늘 순위가 기록된 추적 상품을 세 갈래로 가른다]")
+            tot = one(f"SELECT COUNT(DISTINCT r.product_id) FROM rankings r WHERE {TODAY}")
+            print(f"  오늘 기록된 상품 {tot}개")
+
+            # ⚠️ 핵심 — 「자격 없는 업체에도」가 아니라 「자격 없는 업체에만」이어야 누수다.
+            #    한 상품이 여러 업체에 이어질 수 있어, 자격 업체가 하나라도 있으면 재는 게 규칙이다.
+            only_bad = one(
+                f"SELECT COUNT(DISTINCT r.product_id) FROM rankings r WHERE {TODAY} "
+                "  AND r.product_id IN (SELECT tracked_product_id FROM rank_link) "
+                f"  AND r.product_id NOT IN (SELECT tracked_product_id FROM rank_link WHERE client_id IN {OK})")
+            some_ok = one(
+                f"SELECT COUNT(DISTINCT r.product_id) FROM rankings r WHERE {TODAY} "
+                f"  AND r.product_id IN (SELECT tracked_product_id FROM rank_link WHERE client_id IN {OK})")
+            orphan = one(
+                f"SELECT COUNT(DISTINCT r.product_id) FROM rankings r WHERE {TODAY} "
+                "  AND r.product_id NOT IN (SELECT tracked_product_id FROM rank_link)")
+            print(f"    ① 자격 업체에 이어짐(정상)        {some_ok}")
+            print(f"    ② 자격 없는 업체에만 이어짐(누수)  {only_bad}   ← 이 값이 0 이면 누수 없음")
+            print(f"    ③ 어느 업체에도 안 이어짐          {orphan}   ← 규칙상 의도된 것(방금 등록분 보호)")
+
+            print()
+            print("[대조 — 종전 진단이 세던 값(자격 없는 업체에 '도' 이어짐)]")
+            also_bad = one(
+                f"SELECT COUNT(DISTINCT r.product_id) FROM rankings r "
+                "  JOIN rank_link l ON l.tracked_product_id = r.product_id "
+                f" WHERE {TODAY} AND l.client_id NOT IN {OK}")
+            print(f"  {also_bad}개 — 이 중 자격 업체에도 함께 이어진 것은 정상 기록이다.")
+
+            print()
+            print("[③ 이 정말 의도된 것인지 — 비활성 표시 여부]")
+            print(f"  연결 없는 상품 중 비활성(disabled_at 있음) "
+                  f"{one('SELECT COUNT(*) FROM tracked_products p WHERE COALESCE(p.disabled_at,%s)<>%s AND p.id NOT IN (SELECT tracked_product_id FROM rank_link)' % (chr(39)+chr(39), chr(39)+chr(39)))}개")
+            print(f"  연결 없는 상품 중 살아 있음(disabled_at 없음) "
+                  f"{one('SELECT COUNT(*) FROM tracked_products p WHERE COALESCE(p.disabled_at,%s)=%s AND p.id NOT IN (SELECT tracked_product_id FROM rank_link)' % (chr(39)+chr(39), chr(39)+chr(39)))}개")
             conn.close()
             PY
