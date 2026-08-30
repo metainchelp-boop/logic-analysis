@@ -83,6 +83,8 @@ jobs:
                 done'
               echo "  -- 이번 차수 표지 --"
               docker exec logic-analysis sh -c '
+                echo "  archived-clients   : $(grep -c "archived-clients" /app/client_dashboard.py 2>/dev/null)"
+                echo "  보관 목록 범위 규칙: $(grep -c "status='"'"'terminated'"'"'" /app/client_dashboard.py 2>/dev/null)"
                 echo "  keyword_mute import: $(grep -rl "from keyword_mute import" /app/*.py 2>/dev/null | wc -l) 개 파일"
                 echo "  untrack-keyword    : $(grep -c "untrack-keyword" /app/client_dashboard.py 2>/dev/null)"
                 echo "  rank-links         : $(grep -c "rank-links" /app/client_dashboard.py 2>/dev/null)"
@@ -95,7 +97,7 @@ jobs:
                 B=$(ls -t /root/logic-analysis-deploy/frontend/dist/app.*.js 2>/dev/null | head -1)
                 if [ -n "$B" ]; then
                   echo "  $B ($(date -r $B +%m-%d\ %H:%M))"
-                  for m in "그만 재기" "untrack-keyword" "rank-links" "전체 도구"; do
+                  for m in "목록에서 내리기" "내린 업체" "되돌리기" "archived-clients" "그만 재기"; do
                     echo "    $m: $(grep -c "$m" $B)"
                   done
                 else
