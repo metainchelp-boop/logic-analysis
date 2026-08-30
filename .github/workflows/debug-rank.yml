@@ -106,8 +106,10 @@ jobs:
               docker logs --since 24h logic-analysis 2>&1 | grep -iE "주인 없어 추적 중지|백필 적용|고아|계약 단계|contract_stage|추적 상품 자격 판정|이어진 짝|나눠 적음|큐 정리|제거 · 남은 대기" | tail -30 || echo "(매칭 없음)"
               echo
             fi
+            if [ "$IN_VERIFY" != "on" ]; then
             echo "== 오늘 배치 로그 (순위/수집/스케줄러) =="
             docker logs --since 12h logic-analysis 2>&1 | grep -iE '순위 추적|수집 실패|검색 결과 0건|스케줄러|전체 분석|rank_tracking|daily_analysis' | tail -60 || echo "(매칭 없음)"
+            fi
             echo
             echo "== DB 현황 (읽기 전용) =="
             docker exec -i logic-analysis python3 - <<'PY'
@@ -851,6 +853,7 @@ jobs:
             if [ "$BRANCH_CODE" = "1" ]; then
               docker exec logic-analysis rm -f /tmp/rank_link_preview.py 2>/dev/null || true
             fi
+            [ "$IN_VERIFY" = "on" ] && exit 0
             echo "== 최근 오류 tail =="
             docker logs --tail 60 logic-analysis 2>&1 | grep -iE 'error|exception|traceback' | tail -15 || echo "(오류 없음)"
 
