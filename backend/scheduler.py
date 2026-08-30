@@ -124,6 +124,20 @@ def start_scheduler():
         max_instances=1,
     )
 
+    # 5-2) 수집 원문 보관정책 — 매일 01:05 (분석 보관정책 직후).
+    #      ⚠️ **별도 잡으로 둔다.** 처음엔 위 분석 보관정책 끝에 이어 붙였는데,
+    #         그 함수는 「지울 게 없으면」 early return 이라 조용한 날에는 이 정리가
+    #         통째로 건너뛰어졌다(자체 diff 재검토에서 발견). 한 잡의 사정이 다른 잡을
+    #         가리지 않게 분리한다 — 01:20 브리지 잡에서 이미 한 번 겪은 부류다.
+    _scheduler.add_job(
+        _run_collected_serp_retention,
+        trigger=CronTrigger(hour=1, minute=5),
+        id="collected_serp_retention",
+        name="수집 원문 보관정책 (01:05)",
+        replace_existing=True,
+        max_instances=1,
+    )
+
     # 6) 순위 두 축 브리지 갱신 — 매일 01:20 (보관정책 직후, 배치 전 새벽 한산한 시각).
     #    낮에 새로 등록된 업체·추적 상품을 이어 붙이고 삭제된 것들을 털어낸다.
     #    링크만 건드리므로 순위 데이터·조회 경로에는 영향이 없다.
@@ -186,6 +200,30 @@ def start_scheduler():
         run_date=datetime.now() + timedelta(minutes=2),
         id="request_queue_prune_boot",
         name="요청 큐 되먹임 1회 정리 (부팅 +2분)",
+        replace_existing=True,
+        max_instances=1,
+    )
+
+    # 11) 1회성 VACUUM — 매일 03:10 에 시도(마커가 있으면 즉시 종료).
+    #     ⚠️ 부팅 경로는 새벽 창에서만 도므로, 낮에 배포하면 이 잡이 그날 새벽에 처리한다.
+    _scheduler.add_job(
+        _run_one_time_vacuum,
+        trigger=CronTrigger(hour=3, minute=10),
+        id="one_time_vacuum_night",
+        name="1회 파일 축소 VACUUM (03:10, 마커 없을 때만)",
+        replace_existing=True,
+        max_instances=1,
+    )
+
+    # 10) 업체 상세 HTML 이관 — 부팅 3분 뒤 한 번(큐 정리 다음).
+    #     ⚠️ 이 이관이 끝나야 VACUUM 이 의미가 있다(빈 자리가 생겨야 파일이 준다).
+    #        그래서 VACUUM 은 아래에서 120초가 아니라 **넉넉히 뒤로** 미뤄 둔다.
+    _scheduler.add_job(
+        _run_detail_html_migration,
+        trigger="date",
+        run_date=datetime.now() + timedelta(minutes=3),
+        id="detail_html_migration_boot",
+        name="업체 상세 HTML 옆 표 이관 (부팅 +3분)",
         replace_existing=True,
         max_instances=1,
     )
@@ -1281,13 +1319,97 @@ def _run_client_analyses_retention():
                 pass
 
 
+# ==================== 수집 원문 보관정책 (2026-08-30) ====================
+# 배경: collected_serp 는 확장이 올린 검색 결과 원문(행당 평균 79KB)을 쌓기만 하고
+#   **지우는 규칙이 없었다** — 2026-08-30 실측 10,927행 · 840MB, 하루 800~1,100행(약 80MB)씩 증가.
+#   3.1GB DB 의 큰 몫을 차지해 메모리에서 다른 데이터를 밀어내 화면 전체가 느려졌다.
+# ⚠️ 보관 일수는 **읽는 곳보다 넉넉하게** 잡는다. 실제 소비 범위를 전수 확인한 결과
+#   가장 깊게 보는 곳이 수집 현황 화면의 **7일**(순위 기록은 1일)이라 **14일**로 둔다.
+#   ENV `COLLECTED_SERP_KEEP_DAYS` 로 조정 가능(잘못 줄여도 순위 기록은 당일 것을 쓴다).
+_COLLECTED_KEEP_DAYS_DEFAULT = 14
+
+
+def _run_collected_serp_retention():
+    import sqlite3
+    import os
+    DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
+    if not os.path.exists(DB_PATH):
+        return
+    try:
+        keep = int(os.getenv("COLLECTED_SERP_KEEP_DAYS", _COLLECTED_KEEP_DAYS_DEFAULT))
+    except (TypeError, ValueError):
+        keep = _COLLECTED_KEEP_DAYS_DEFAULT
+    keep = max(keep, 7)   # 7일은 수집 현황 화면이 실제로 읽는 범위 — 그 밑으로는 안 내린다
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=30)
+        cur = conn.cursor()
+        where = f"collected_date < date('now','localtime','-{keep} day')"
+        n = cur.execute(f"SELECT COUNT(*) FROM collected_serp WHERE {where}").fetchone()[0]
+        if not n:
+            logger.info(f"[보관정책] collected_serp 삭제 대상 없음 (보관 {keep}일)")
+            return
+        cur.execute(f"DELETE FROM collected_serp WHERE {where}")
+        conn.commit()
+        logger.info(f"✅ [보관정책] collected_serp {n:,}행 정리 (최근 {keep}일 보존)")
+    except Exception as e:
+        logger.error(f"[보관정책] collected_serp 실패(무시): {e}")
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+# ==================== 업체 상세 HTML 옆 표 이관 (2026-08-30) ====================
+# 배경·근거는 detail_html_store 모듈 주석 참조(서버 A/B 실측 2ms vs 635ms).
+# ⚠️ 조금씩 옮긴다 — 774MB 를 한 번에 다시 쓰면 그동안 DB 가 잠겨 화면이 멈춘다.
+#    한 묶음(20곳)마다 커밋하고 잠깐 쉬어 다른 요청이 끼어들 틈을 준다.
+# ⚠️ 멱등하다 — 옮길 게 없으면 곧바로 끝난다(배포마다 안전하게 다시 불려도 된다).
+
+def _run_detail_html_migration():
+    import sqlite3
+    import os
+    DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
+    if not os.path.exists(DB_PATH):
+        return
+    conn = None
+    try:
+        from detail_html_store import migrate_batch, pending_count
+        conn = sqlite3.connect(DB_PATH, timeout=30)
+        left = pending_count(conn)
+        if not left:
+            logger.info("[상세HTML] 이관할 업체 없음")
+            return
+        logger.info(f"[상세HTML] 이관 시작 — 남은 업체 {left}곳")
+        moved = 0
+        for _ in range(200):          # 20곳 × 200회 = 4,000곳까지(현재 714곳)
+            n = migrate_batch(conn, limit=20)
+            if not n:
+                break
+            moved += n
+            time.sleep(0.5)           # 잠금을 짧게 끊어 화면 요청이 끼어들 수 있게
+        logger.info(f"✅ [상세HTML] 이관 완료 — {moved}곳 옮김 · 남은 {pending_count(conn)}곳")
+    except Exception as e:
+        logger.error(f"[상세HTML] 이관 실패(무시·다음 배포 재시도): {e}")
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 # ==================== 1회성 VACUUM (freelist → 디스크 반환) ====================
 # 배경: 2026-08-04 보관정책 B 1회 삭제로 client_analyses 17,283행 제거 → DB 파일 안에
 #   ~2.2GB freelist(빈 페이지)만 남음. VACUUM 이 파일을 재구성해 그 공간을 실제 디스크로
 #   반환한다(4.7GB → ~2.5GB 예상). VACUUM 은 DB 를 잠그므로(수십 초~수 분) 아무 때나 하면
 #   그 사이 요청이 막힌다 → ① 기동 직후 저트래픽 시점까지 지연 ② 백그라운드 스레드(헬스체크
 #   비차단) ③ 1회성 마커로 배포마다 재실행 방지. 실패해도 마커 미생성 → 다음 배포에서 재시도.
-_VACUUM_MARKER_NAME = ".vacuum_done_2026_08_04"
+# ⚠️ 마커 이름을 바꾸면 한 번 더 돈다. 2026-08-30 정리(상세 HTML 이관 + 수집 원문 14일)로
+#    생긴 빈 페이지를 디스크로 돌려주기 위해 이번 차수용으로 새 이름을 쓴다.
+_VACUUM_MARKER_NAME = ".vacuum_done_2026_08_30"
 
 
 def _run_one_time_vacuum():
@@ -1303,8 +1425,16 @@ def _run_one_time_vacuum():
         import shutil
         conn = None
         try:
-            time.sleep(120)  # 기동 직후 부하·헬스체크 창을 피해 저트래픽까지 대기
+            # ⚠️ 2026-08-30: 120초 → 20분. 부팅 +3분에 시작하는 상세 HTML 이관이
+            #    끝난 뒤에 돌아야 빈 자리가 실제로 반환된다(먼저 돌면 헛일).
+            time.sleep(1200)
             if os.path.exists(marker):
+                return
+            # ⚠️ 2026-08-30: **새벽에만** 돌린다(대표께 약속한 조건). VACUUM 은 도는 동안
+            #    DB 를 통째로 잠그므로 업무시간에 시작하면 그 몇 분간 화면이 멈춘다.
+            #    창 밖이면 마커를 남기지 않고 그냥 넘어간다 — 아래 03:10 잡이 오늘 밤 처리한다.
+            if not (1 <= datetime.now().hour <= 5):
+                logger.info("[VACUUM] 지금은 업무 시간대 — 오늘 새벽 03:10 잡에서 실행")
                 return
             # 안전 가드: VACUUM 은 원본 크기만큼 임시 공간이 필요 → 여유 부족 시 이번엔 생략
             size = os.path.getsize(DB_PATH)

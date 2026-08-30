@@ -997,6 +997,113 @@ def test_상권건강_자가점검_잡이_등록돼_있다():
     assert 'r.get("ok") is None' in src, "「판정 못 함」 분기가 없다(표본이 API 에 못 닿은 경우)"
     assert "판정 못 함" in src, "「판정 못 함」 로그 문구가 없다"
 
+
+# ─────────────────────────────────────────────────────────────────────
+# 업체 상세 HTML 옆 표 이관 (2026-08-30) — 목록 조회가 느리던 원인 제거
+#
+# ⚠️ 실측 근거: 활성 703곳에서 덩어리 **앞** 칸 2ms vs **뒤** 칸 635ms(300배).
+#    이 이관이 되돌아가면(=업체 표에 덩어리가 다시 쌓이면) 그 느림이 그대로 돌아온다.
+
+def _dh_db():
+    import sqlite3, tempfile
+    db = tempfile.mktemp(suffix=".db")
+    conn = sqlite3.connect(db)
+    conn.executescript("""
+        CREATE TABLE clients(id INTEGER PRIMARY KEY, name TEXT, detail_html TEXT DEFAULT '',
+                             contract_stage TEXT);
+    """)
+    return db, conn
+
+
+def test_상세HTML_이관하면_업체표에서_비워진다():
+    import os
+    from detail_html_store import migrate_batch, get_html, pending_count
+    db, conn = _dh_db()
+    try:
+        big = "x" * 5000
+        conn.execute("INSERT INTO clients(id,name,detail_html) VALUES(1,'가',?)", (big,))
+        conn.execute("INSERT INTO clients(id,name,detail_html) VALUES(2,'나',?)", (big,))
+        conn.execute("INSERT INTO clients(id,name,detail_html) VALUES(3,'다','')")
+        conn.commit()
+        assert pending_count(conn) == 2
+        assert migrate_batch(conn, limit=10) == 2
+        # 값은 옆 표에 그대로, 업체 표는 비었다 — 그래야 목록 조회가 덩어리를 안 지난다
+        assert get_html(conn, 1) == big
+        left = conn.execute("SELECT COUNT(*) FROM clients WHERE COALESCE(detail_html,'') != ''").fetchone()[0]
+        assert left == 0, "업체 표에 덩어리가 남았다 — 느림이 그대로다"
+        assert migrate_batch(conn, limit=10) == 0     # 두 번 돌려도 안전(멱등)
+    finally:
+        conn.close(); os.unlink(db)
+
+
+def test_상세HTML_이관_전_데이터도_읽힌다():
+    # 이관 도중·이관 전이라도 값이 사라지면 안 된다(옛 칸 폴백).
+    import os
+    from detail_html_store import get_html
+    db, conn = _dh_db()
+    try:
+        conn.execute("INSERT INTO clients(id,name,detail_html) VALUES(1,'가','옛날값')")
+        conn.commit()
+        assert get_html(conn, 1) == "옛날값"
+    finally:
+        conn.close(); os.unlink(db)
+
+
+def test_상세HTML_저장하면_옛칸을_비운다():
+    # 새로 저장할 때 옛 칸을 안 비우면 덩어리가 업체 표에 되살아난다.
+    import os
+    from detail_html_store import set_html, get_html
+    db, conn = _dh_db()
+    try:
+        conn.execute("INSERT INTO clients(id,name,detail_html) VALUES(1,'가','옛날덩어리')")
+        conn.commit()
+        set_html(conn, 1, "새값")
+        conn.commit()
+        assert get_html(conn, 1) == "새값"
+        assert conn.execute("SELECT detail_html FROM clients WHERE id=1").fetchone()[0] == ""
+    finally:
+        conn.close(); os.unlink(db)
+
+
+def test_수집원문_보관일수는_읽는_범위보다_짧아지지_않는다():
+    # 수집 현황 화면이 실제로 읽는 가장 깊은 범위가 7일이다.
+    import os
+    for env_val, expect in [("3", 7), ("14", 14), ("30", 30), ("이상한값", 14)]:
+        old = os.environ.get("COLLECTED_SERP_KEEP_DAYS")
+        os.environ["COLLECTED_SERP_KEEP_DAYS"] = env_val
+        try:
+            try:
+                keep = int(os.getenv("COLLECTED_SERP_KEEP_DAYS", 14))
+            except (TypeError, ValueError):
+                keep = 14
+            keep = max(keep, 7)
+            assert keep == expect, f"{env_val} → {keep} (기대 {expect})"
+        finally:
+            if old is None:
+                os.environ.pop("COLLECTED_SERP_KEEP_DAYS", None)
+            else:
+                os.environ["COLLECTED_SERP_KEEP_DAYS"] = old
+
+
+def test_수집원문_정리는_분석정리와_독립된_잡이다():
+    """⚠️ 처음엔 분석 보관정책 함수 끝에 이어 붙였는데, 그 함수는 「지울 게 없으면」
+       early return 이라 조용한 날에는 수집 원문 정리가 통째로 건너뛰어졌다."""
+    import os
+    src = open(os.path.join(os.path.dirname(__file__), "..", "scheduler.py"), encoding="utf-8").read()
+    assert 'id="collected_serp_retention"' in src, "수집 원문 정리가 잡으로 등록돼 있지 않다"
+    body = src.split("def _run_client_analyses_retention()")[1].split("\ndef ")[0]
+    assert "_run_collected_serp_retention()" not in body, \
+        "분석 정리 끝에 꼬리 호출이 다시 생겼다 — early return 에 가려 조용히 안 돈다"
+
+
+def test_VACUUM_은_새벽에만_돈다():
+    """낮에 돌면 그 몇 분간 DB 가 잠겨 화면이 멈춘다(대표께 약속한 조건)."""
+    import os
+    src = open(os.path.join(os.path.dirname(__file__), "..", "scheduler.py"), encoding="utf-8").read()
+    assert "1 <= datetime.now().hour <= 5" in src, "VACUUM 새벽 창 가드가 사라졌다"
+    assert 'id="one_time_vacuum_night"' in src, "새벽 VACUUM 잡이 등록돼 있지 않다"
+
+
 if __name__ == "__main__":
     _tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     _failed = 0
