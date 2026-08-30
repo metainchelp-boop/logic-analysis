@@ -118,6 +118,14 @@ jobs:
             timed("② 분석 집계", "SELECT client_id,COUNT(*),MAX(updated_at),COUNT(DISTINCT keyword) FROM client_analyses WHERE client_id IN (%s) GROUP BY client_id" % ph, ids)
             timed("③ 순위 롤업", "SELECT client_id,keyword,MAX(id) FROM client_rank_history WHERE client_id IN (%s) GROUP BY client_id,keyword" % ph, ids)
             timed("④ 수집분 1건 읽기", "SELECT products_json FROM collected_serp ORDER BY id DESC LIMIT 1")
+            print("  -- 이관 결과 --")
+            try:
+                left = one("SELECT COUNT(*) FROM clients WHERE COALESCE(detail_html,'') != ''")
+                n2 = one("SELECT COUNT(*) FROM client_detail_html")
+                sz = c.execute("SELECT AVG(LENGTH(html)) FROM (SELECT html FROM client_detail_html LIMIT 200)").fetchone()[0] or 0
+                print("    옆 표 %d곳 · 평균 %.0f KB · 업체 표에 남은 덩어리 %d곳" % (n2, sz/1024, left))
+            except Exception as e:
+                print("    이관 확인 실패: %s" % e)
             print("  -- A/B: 큰 칸(detail_html)을 지나가야 하는가 --")
             timed("A. id 만(인덱스만)", "SELECT id FROM clients WHERE status='active'")
             timed("B. id+name(큰 칸 앞)", "SELECT id,name FROM clients WHERE status='active'")
