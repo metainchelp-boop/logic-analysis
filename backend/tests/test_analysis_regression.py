@@ -641,6 +641,171 @@ def test_즉시기록_그만재기_키워드는_이력이_있어도_안_적는�
 
 
 # ─────────────────────────────────────────────────────────────────────
+# 즉시 기록(rank_record) 축A — 추적 상품 자격 판정 (2026-08-30)
+#
+# ⚠️ 8/29 자격 통일이 축B(_client_targets)만 고치고 축A(_tracked_targets)를 빠뜨렸던
+#    실구멍의 재발 방지. 그 경로가 check_type="scheduled" 로 적어 08:00 배치가 쓴 것처럼
+#    보였고, 실측(2026-08-30) 그날 기록된 196개 중 15개가 계약 끝난 업체 것이었다.
+
+def _rr_a_db():
+    import sqlite3, tempfile
+    db = tempfile.mktemp(suffix=".db")
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    conn.executescript("""
+        CREATE TABLE clients(id INTEGER PRIMARY KEY, status TEXT DEFAULT 'active',
+            role TEXT DEFAULT 'advertiser', vertical TEXT DEFAULT 'store',
+            auto_analysis INT DEFAULT 1, track_enabled INT DEFAULT 1, track_until TEXT DEFAULT '',
+            name TEXT, naver_store_url TEXT DEFAULT '', main_keywords TEXT DEFAULT '');
+        CREATE TABLE tracked_products(id INTEGER PRIMARY KEY, product_url TEXT,
+            disabled_at TEXT DEFAULT '');
+        CREATE TABLE tracked_keywords(id INTEGER PRIMARY KEY, product_id INT, keyword TEXT);
+        CREATE TABLE rank_link(client_id INT, tracked_product_id INT);
+    """)
+    return db, conn
+
+
+def _rr_a_seed(conn):
+    """업체 2곳(살아있음 1 · 계약끝남 2) · 상품 4개 · 전부 같은 키워드."""
+    conn.execute("INSERT INTO clients(id,name) VALUES(1,'살아있는곳')")
+    conn.execute("INSERT INTO clients(id,name,track_until) VALUES(2,'계약끝난곳','2020-01-01')")
+    for pid in (10, 20, 30, 40):
+        conn.execute("INSERT INTO tracked_products(id,product_url) VALUES(?,?)",
+                     (pid, f"https://smartstore.naver.com/s/products/{pid}"))
+        conn.execute("INSERT INTO tracked_keywords(id,product_id,keyword) VALUES(?,?,?)",
+                     (pid, pid, "수제쿠키"))
+    conn.execute("INSERT INTO rank_link VALUES(1,10)")            # 자격 업체에만
+    conn.execute("INSERT INTO rank_link VALUES(2,20)")            # 자격 없는 업체에만
+    conn.execute("INSERT INTO rank_link VALUES(1,30)")            # 둘 다에 이어짐
+    conn.execute("INSERT INTO rank_link VALUES(2,30)")
+    #  40 은 어느 업체에도 안 이어짐(연결 없음)
+    conn.commit()
+
+
+def test_즉시기록_축A_계약끝난_업체에만_이어진_상품은_빠진다():
+    import os
+    from rank_record import _tracked_targets
+    db, conn = _rr_a_db()
+    try:
+        _rr_a_seed(conn)
+        ids = sorted(t["product_id"] for t in _tracked_targets(conn, "수제쿠키"))
+        assert 20 not in ids, f"계약 끝난 업체 상품이 즉시 기록 대상에 남았다: {ids}"
+    finally:
+        conn.close(); os.unlink(db)
+
+
+def test_즉시기록_축A_자격업체에도_함께_이어진_상품은_남는다():
+    """⚠️ 「자격 없는 업체에 **도** 이어짐」을 빼면 정상 기록이 죽는다.
+       한 상품이 여러 업체에 이어질 수 있고, 규칙은 '자격 업체가 하나라도 있으면 잰다'."""
+    import os
+    from rank_record import _tracked_targets
+    db, conn = _rr_a_db()
+    try:
+        _rr_a_seed(conn)
+        ids = sorted(t["product_id"] for t in _tracked_targets(conn, "수제쿠키"))
+        assert 10 in ids, f"자격 업체 상품이 사라졌다: {ids}"
+        assert 30 in ids, f"자격 업체에도 이어진 상품이 잘못 빠졌다: {ids}"
+    finally:
+        conn.close(); os.unlink(db)
+
+
+def test_즉시기록_축A_연결없는_상품은_살아있으면_남고_비활성이면_빠진다():
+    """⚠️ 연결 없음을 곧바로 빼면 직원이 방금 등록한 상품이 죽는다 — 비활성 표시된 것만 뺀다."""
+    import os
+    from rank_record import _tracked_targets
+    db, conn = _rr_a_db()
+    try:
+        _rr_a_seed(conn)
+        ids = sorted(t["product_id"] for t in _tracked_targets(conn, "수제쿠키"))
+        assert 40 in ids, f"방금 등록한(아직 연결 없는) 상품이 죽었다: {ids}"
+        conn.execute("UPDATE tracked_products SET disabled_at='2026-08-30' WHERE id=40")
+        conn.commit()
+        ids2 = sorted(t["product_id"] for t in _tracked_targets(conn, "수제쿠키"))
+        assert 40 not in ids2, f"비활성 상품이 그대로 기록된다: {ids2}"
+    finally:
+        conn.close(); os.unlink(db)
+
+
+def test_즉시기록_축A_자격판정이_실패하면_종전대로_전부_적는다():
+    """판정 조회 하나가 실패했다고 순위 기록이 통째로 멈추면 훨씬 나쁘다."""
+    import os
+    from rank_record import _tracked_targets
+    db, conn = _rr_a_db()
+    try:
+        _rr_a_seed(conn)
+        conn.execute("DROP TABLE rank_link")   # 판정 쿼리를 고장 낸다
+        conn.commit()
+        ids = sorted(t["product_id"] for t in _tracked_targets(conn, "수제쿠키"))
+        assert ids == [10, 20, 30, 40], f"판정 실패 시 폴백이 안 된다: {ids}"
+    finally:
+        conn.close(); os.unlink(db)
+
+
+def test_즉시기록_축A_와_배치가_같은_판정함수를_쓴다():
+    """두 곳이 갈리면 「수집은 멈췄는데 기록은 계속되는」 일이 또 난다.
+
+    ⚠️ scheduler 를 import 하지 않는다 — 배포 회귀 게이트 환경에는 apscheduler 가 없다
+       (tracking_eligibility·split_rule 을 별도 파일로 뺀 것과 같은 이유). 소스를 글자로 읽는다.
+    """
+    import inspect, os, re
+    import rank_record
+    assert "eligible_tracked_product_ids" in inspect.getsource(rank_record._tracked_targets), \
+        "축A 즉시 기록이 공통 자격 판정을 안 쓴다"
+
+    src = open(os.path.join(os.path.dirname(__file__), "..", "scheduler.py"),
+               encoding="utf-8").read()
+    body = re.search(r"def _collect_all_keywords\(.*?\n(?=def )", src, re.S)
+    assert body, "scheduler._collect_all_keywords 를 못 찾았다(이름이 바뀌었나)"
+    assert "eligible_tracked_product_ids" in body.group(0), \
+        "08:00 배치가 공통 자격 판정을 안 쓴다"
+
+
+
+# ─────────────────────────────────────────────────────────────────────
+# 목록에서 내리기(status='terminated') — 내리면 추적도 함께 멈춘다 (2026-08-30)
+#
+# ⚠️ 이 약속이 화면 확인창에 그대로 적혀 있다(「관리 목록과 순위 추적에서 빠집니다」).
+#    자격 판정이 status 를 안 보면 화면 말과 서버 동작이 갈린다 — 그걸 여기서 고정한다.
+
+def test_내린업체는_추적자격에서_빠진다():
+    import os, sqlite3, tempfile
+    from tracking_eligibility import eligible_clients_sql
+    db = tempfile.mktemp(suffix=".db")
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.executescript("""
+            CREATE TABLE clients(id INTEGER PRIMARY KEY, status TEXT DEFAULT 'active',
+                role TEXT DEFAULT 'advertiser', vertical TEXT DEFAULT 'store',
+                auto_analysis INT DEFAULT 1, track_enabled INT DEFAULT 1, track_until TEXT DEFAULT '',
+                name TEXT, naver_store_url TEXT DEFAULT 'https://smartstore.naver.com/x',
+                main_keywords TEXT DEFAULT '');
+        """)
+        conn.execute("INSERT INTO clients(id,name) VALUES(1,'살아있는곳')")
+        conn.execute("INSERT INTO clients(id,name,status) VALUES(2,'내린곳','terminated')")
+        conn.commit()
+        ids = [r["id"] for r in conn.execute(eligible_clients_sql("id, name"))]
+        assert ids == [1], f"내린 업체가 추적 자격에 남았다: {ids}"
+
+        # 되돌리면 그대로 복귀한다 — 되돌리기가 말뿐이면 안 된다
+        conn.execute("UPDATE clients SET status='active' WHERE id=2")
+        conn.commit()
+        ids2 = sorted(r["id"] for r in conn.execute(eligible_clients_sql("id, name")))
+        assert ids2 == [1, 2], f"되돌렸는데 자격이 안 돌아왔다: {ids2}"
+    finally:
+        conn.close(); os.unlink(db)
+
+
+def test_내린업체_사유는_목록화면과_같은_규칙으로_붙는다():
+    # 보관함 카드의 배지도 client_buckets.delete_reasons 를 쓴다 — 두 곳이 갈리면
+    # 「목록에선 계약 만료였는데 보관함에선 아무 사유도 없는」 상태가 된다.
+    from client_buckets import delete_reasons
+    row = {"contract_stage": "계약 만료", "track_until": "", "role": "advertiser", "_synced": True}
+    assert delete_reasons(row, _TODAY) == ["계약 만료"]
+
+
+
+# ─────────────────────────────────────────────────────────────────────
 # 소상공인365 상권 API 건강 기록 (2026-08-30, 대표 확정 안 「나」)
 #
 # ⚠️ 이 기능이 생긴 이유 — 11:50~12:24 API 가 죽어 있었는데 아무도 몰랐고,
@@ -751,7 +916,6 @@ def test_상권건강_자가점검_잡이_등록돼_있다():
     assert "_run_sbiz_health_probe" in src, "자가 점검 함수가 없다"
     assert re.search(r'id="sbiz_health_probe"', src), "자가 점검 잡이 등록돼 있지 않다"
     assert re.search(r"CronTrigger\(hour=5, minute=0\)", src), "자가 점검 시각(05:00)이 바뀌었다"
-
 
 if __name__ == "__main__":
     _tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
