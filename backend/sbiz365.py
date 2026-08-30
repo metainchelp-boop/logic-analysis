@@ -901,8 +901,8 @@ def _why(reason, code: str):
         reason["code"] = code
 
 
-def get_place_sbiz(region: str, industry_label: str, hint: str = "",
-                   biz_name: str = "", reason: dict | None = None) -> dict | None:
+def _get_place_sbiz_impl(region: str, industry_label: str, hint: str = "",
+                         biz_name: str = "", reason: dict | None = None) -> dict | None:
     """지역명×업종 라벨 → 상권 데이터 블록(제안서 sbiz).
     반환 스키마(전 필드 optional·없으면 null) — FE 5차 배선이 이 스키마에 고정:
       {"source":"sbiz365-simple", "baseYm", "district":{admiCd,admiNm,guNm},
@@ -1075,3 +1075,37 @@ def get_place_sbiz(region: str, industry_label: str, hint: str = "",
         logger.warning(f"[sbiz365] 상권 데이터 조립 실패(무시): {e}")
         _why(reason, "error")
         return None
+
+
+# ============================================================
+# 공개 진입점 — 결과를 sbiz_health 에 남긴다 (대표 확정 2026-08-30, 안 「나」)
+# ============================================================
+#
+# ⚠️ 왜 감싸는가 — 이 함수는 실패하면 **조용히 None** 을 돌려주고 화면은 상권 카드만 뺀다.
+#    서비스는 멀쩡해 보이고, 아무도 안 돌리면 로그에 흔적조차 안 남는다.
+#    2026-08-30 에 실제로 11:50~12:24 죽어 있었는데 「언제부터냐」에 답할 수가 없었다.
+#
+# ⚠️ 본문을 고치지 않고 한 겹 감쌌다 — 반환 지점이 여러 곳이라 그때마다 기록을 넣으면
+#    한 군데를 빠뜨리기 쉽고, 나중에 반환이 하나 늘면 또 조용히 새어 나간다.
+#
+# ⚠️ **「불러 보지도 않은 것」은 기록하지 않는다.** 업종 미선택·지역 미입력·키 미설정은
+#    API 문제가 아니다. 그것까지 실패로 세면 「며칠째 죽었다」가 늘 참이 돼 신호가 죽는다.
+_SBIZ_NOT_TRIED = {"no-key", "no-industry", "no-region"}
+
+
+def get_place_sbiz(region: str, industry_label: str, hint: str = "",
+                   biz_name: str = "", reason: dict | None = None) -> dict | None:
+    """지역명×업종 라벨 → 상권 데이터 블록. 동작은 `_get_place_sbiz_impl` 그대로."""
+    why = reason if isinstance(reason, dict) else {}
+    out = _get_place_sbiz_impl(region, industry_label, hint=hint,
+                               biz_name=biz_name, reason=why)
+    if isinstance(reason, dict) and reason is not why:
+        reason.update(why)
+    try:
+        code = str(why.get("code") or "")
+        if out is not None or code not in _SBIZ_NOT_TRIED:
+            from sbiz_health import record
+            record(out is not None, code, source="live")
+    except Exception:
+        pass          # 기록 실패가 분석을 멈추게 하지 않는다
+    return out

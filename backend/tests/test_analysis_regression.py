@@ -804,6 +804,119 @@ def test_내린업체_사유는_목록화면과_같은_규칙으로_붙는다():
     assert delete_reasons(row, _TODAY) == ["계약 만료"]
 
 
+
+# ─────────────────────────────────────────────────────────────────────
+# 소상공인365 상권 API 건강 기록 (2026-08-30, 대표 확정 안 「나」)
+#
+# ⚠️ 이 기능이 생긴 이유 — 11:50~12:24 API 가 죽어 있었는데 아무도 몰랐고,
+#    「언제부터냐」에 답할 수가 없었다(그 사이 호출이 0건이라 로그도 없었다).
+
+def _sh_db(monkey_path):
+    import sqlite3
+    import sbiz_health
+    sbiz_health.DB_PATH = monkey_path
+    conn = sqlite3.connect(monkey_path)
+    conn.row_factory = sqlite3.Row
+    sbiz_health.ensure_table(conn)
+    conn.commit()
+    return conn
+
+
+def test_상권건강_성공과_실패를_남기고_마지막_성공을_안다():
+    import os, tempfile, sbiz_health
+    db = tempfile.mktemp(suffix=".db")
+    conn = _sh_db(db)
+    try:
+        sbiz_health.record(True, "", source="probe")
+        sbiz_health.record(False, "no-stats", source="probe")
+        sbiz_health.record(False, "error", source="live")
+        s = sbiz_health.summary()
+        assert s["last_ok"], "성공 기록을 못 찾는다"
+        assert s["fail_streak"] == 2, f"마지막 성공 이후 실패 수가 틀렸다: {s['fail_streak']}"
+        assert s["last7_total"] == 3 and s["last7_ok"] == 1, s
+        assert s["recent_fail_reasons"].get("error") == 1, s
+    finally:
+        conn.close(); os.unlink(db)
+
+
+def test_상권건강_기록이_실패해도_예외를_안_던진다():
+    """기록이 안 되는 것보다 분석이 멈추는 게 훨씬 나쁘다."""
+    import sbiz_health
+    old = sbiz_health.DB_PATH
+    sbiz_health.DB_PATH = "/이런/경로는/없다/x.db"
+    try:
+        sbiz_health.record(True, "", source="probe")   # 예외가 나면 이 줄에서 터진다
+        assert sbiz_health.summary() == {}, "조회 실패는 빈 dict 여야 한다"
+    finally:
+        sbiz_health.DB_PATH = old
+
+
+def test_상권건강_자가점검은_하나만_되면_정상으로_본다():
+    """표본을 하나만 두면 그 동네에 통계가 없을 때 API 장애로 오인한다."""
+    import os, tempfile, sbiz_health
+    db = tempfile.mktemp(suffix=".db")
+    conn = _sh_db(db)
+    try:
+        calls = []
+
+        def fake(region, industry, reason=None, **kw):
+            calls.append(region)
+            if region == "성수동":          # 첫 표본은 통계 없음
+                if isinstance(reason, dict):
+                    reason["code"] = "no-stats"
+                return None
+            return {"sales": {"avgAmt": 1}}   # 두 번째는 성공
+
+        r = sbiz_health.run_probe(get_place_sbiz=fake)
+        assert r["ok"] is True, f"하나가 됐는데 실패로 봤다: {r}"
+        assert len(calls) == 2, f"성공하면 거기서 멈춰야 한다(외부 호출 낭비): {calls}"
+        assert sbiz_health.summary()["fail_streak"] == 0
+    finally:
+        conn.close(); os.unlink(db)
+
+
+def test_상권건강_자가점검은_전부_실패해야_실패로_남는다():
+    import os, tempfile, sbiz_health
+    db = tempfile.mktemp(suffix=".db")
+    conn = _sh_db(db)
+    try:
+        def dead(region, industry, reason=None, **kw):
+            if isinstance(reason, dict):
+                reason["code"] = "error"
+            return None
+
+        r = sbiz_health.run_probe(get_place_sbiz=dead)
+        assert r["ok"] is False and r["tried"] == len(sbiz_health.PROBE_SAMPLES), r
+        s = sbiz_health.summary()
+        assert s["fail_streak"] == 1 and s["recent_fail_reasons"].get("error") == 1, s
+    finally:
+        conn.close(); os.unlink(db)
+
+
+def test_상권건강_불러보지도_않은_것은_기록하지_않는다():
+    """업종 미선택·지역 미입력·키 미설정은 API 문제가 아니다.
+       그것까지 실패로 세면 「며칠째 죽었다」가 늘 참이 돼 신호가 죽는다."""
+    import sbiz365
+    assert sbiz365._SBIZ_NOT_TRIED == {"no-key", "no-industry", "no-region"}, \
+        f"기록 제외 사유 목록이 바뀌었다: {sbiz365._SBIZ_NOT_TRIED}"
+    import inspect
+    src = inspect.getsource(sbiz365.get_place_sbiz)
+    assert "_SBIZ_NOT_TRIED" in src, "공개 진입점이 제외 목록을 안 쓴다"
+    assert "_get_place_sbiz_impl" in src, "공개 진입점이 본문을 안 부른다"
+
+
+def test_상권건강_자가점검_잡이_등록돼_있다():
+    """직원 호출 기록만 있으면 「아무도 안 썼다」와 「죽었다」를 못 가른다.
+
+    ⚠️ scheduler 를 import 하지 않는다 — 게이트 환경에 apscheduler 가 없다.
+    """
+    import os, re
+    src = open(os.path.join(os.path.dirname(__file__), "..", "scheduler.py"),
+               encoding="utf-8").read()
+    assert "_run_sbiz_health_probe" in src, "자가 점검 함수가 없다"
+    assert re.search(r'id="sbiz_health_probe"', src), "자가 점검 잡이 등록돼 있지 않다"
+    assert re.search(r"CronTrigger\(hour=5, minute=0\)", src), "자가 점검 시각(05:00)이 바뀌었다"
+
 if __name__ == "__main__":
     _tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     _failed = 0
