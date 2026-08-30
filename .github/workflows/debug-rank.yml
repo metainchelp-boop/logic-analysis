@@ -1025,6 +1025,26 @@ jobs:
             print(f"    ③ 어느 업체에도 안 이어짐          {orphan}   ← 규칙상 의도된 것(방금 등록분 보호)")
 
             print()
+            print("[⚠️ 가장 중요 — 누수 15건이 수정 전 기록인가 수정 후 기록인가]")
+            # PR #166(Deploy #410) 은 2026-08-30 12:21 KST 에 서버에 올라갔다.
+            # 오늘 기록은 00:03 부터 쌓이므로 **오늘 치의 절반은 수정 전 코드가 쓴 것**이다.
+            # 그걸 안 가르면 「고쳤는데 그대로다」로 오판한다.
+            CUT = "2026-08-30 12:21:00"
+            for label, cond in (("수정 전(00:00~12:21)", "r.checked_at <  '%s'" % CUT),
+                                ("수정 후(12:21~지금)", "r.checked_at >= '%s'" % CUT)):
+                n = one(
+                    f"SELECT COUNT(DISTINCT r.product_id) FROM rankings r WHERE {TODAY} AND {cond} "
+                    "  AND r.product_id IN (SELECT tracked_product_id FROM rank_link) "
+                    f"  AND r.product_id NOT IN (SELECT tracked_product_id FROM rank_link WHERE client_id IN {OK})")
+                m = one(
+                    f"SELECT COUNT(DISTINCT r.product_id) FROM rankings r WHERE {TODAY} AND {cond} "
+                    "  AND r.product_id NOT IN (SELECT tracked_product_id FROM rank_link)")
+                t = one(f"SELECT COUNT(DISTINCT r.product_id) FROM rankings r WHERE {TODAY} AND {cond}")
+                print(f"  {label}: 전체 {t}개 · 누수(②) {n}개 · 미연결(③) {m}개")
+            print("  ⇒ 수정 후 구간의 ②·③ 이 0 이면 고침이 듣고 있고, 남은 15건은 오전 잔상이다.")
+            print("  ⇒ 수정 후 구간에도 남아 있으면 **아직 새고 있는 것**이다.")
+
+            print()
             print("[대조 — 종전 진단이 세던 값(자격 없는 업체에 '도' 이어짐)]")
             also_bad = one(
                 f"SELECT COUNT(DISTINCT r.product_id) FROM rankings r "
