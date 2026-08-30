@@ -30,6 +30,10 @@ on:
         description: '상품 주소 모양 실측 — off(기본) / on. 어느 호스트(스마트스토어·브랜드스토어·카탈로그)를 쓰는지, 같은 슬러그가 두 호스트에 걸쳐 있는지(읽기 전용·업체명 미출력).'
         required: false
         default: 'off'
+      stages:
+        description: '계약 단계 반영 실측 — off(기본) / on. 전산에서 받아 온 계약 단계가 몇 곳에 저장됐는지·단계별 몇 곳인지(읽기 전용·업체명 미출력).'
+        required: false
+        default: 'off'
       use_branch_code:
         description: '이 브랜치의 rank_link.py 로 미리보기 — off(기본) / on. 배포 전에 새 규칙이 무엇을 이을지 먼저 보려는 용도(컨테이너 /tmp 에 얹었다 지운다·앱 파일 무접촉). apply 와 함께 쓰지 말 것.'
         required: false
@@ -900,6 +904,69 @@ jobs:
                 print(f"  총 {sum(cnt.values())}개")
                 for h, n in cnt.most_common():
                     print(f"      {h:<12} {n:>5}")
+            except Exception as e:
+                print(f"  조회 실패: {e}")
+            conn.close()
+            PY
+
+      # ⚠️ 봐야 하는 스텝은 맨 뒤에 둔다 — 이 워크플로는 실행 전 스크립트 전문(52KB)을
+      #    로그에 먼저 찍어, 앞쪽 스텝 출력은 로그 tail 에서 잘려 영영 못 본다.
+      - name: 계약 단계 반영 실측 (읽기 전용)
+        if: ${{ github.event.inputs.stages == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 5m
+          script: |
+            docker exec logic-analysis python3 - <<'PY'
+            import sqlite3, collections
+            # ⚠️ 저장소가 공개라 업체명은 절대 출력하지 않는다 — 단계 이름과 건수만.
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+
+            print("[① 계약 단계를 받아 온 업체가 몇 곳인가]")
+            try:
+                tot = conn.execute("SELECT COUNT(*) c FROM clients WHERE status='active'").fetchone()["c"]
+                got = conn.execute("SELECT COUNT(*) c FROM clients "
+                                   " WHERE status='active' AND COALESCE(contract_stage,'') <> ''").fetchone()["c"]
+                print(f"  활성 업체 {tot}곳 중 단계가 채워진 곳 {got}곳")
+                print("  ⇒ 0 이면 아직 한 번도 못 받았다(버튼 미실행 또는 키 미설정).")
+            except Exception as e:
+                print(f"  조회 실패: {e}")
+
+            print()
+            print("[② 단계별 분포 — 전산이 준 이름 그대로]")
+            try:
+                for r in conn.execute("SELECT COALESCE(contract_stage,'(없음)') s, COUNT(*) c "
+                                      "  FROM clients WHERE status='active' "
+                                      " GROUP BY 1 ORDER BY c DESC"):
+                    print(f"      {r['s']:<14} {r['c']:>5}")
+            except Exception as e:
+                print(f"  조회 실패: {e}")
+
+            print()
+            print("[③ 화면 5칸이 어떻게 갈리나 — 환불중·홀딩중이 실제로 잡히는지]")
+            try:
+                for name, like in (("환불중", "환불"), ("홀딩중", "홀딩"), ("계약 만료", "만료")):
+                    n = conn.execute("SELECT COUNT(*) c FROM clients "
+                                     " WHERE status='active' AND contract_stage LIKE ?",
+                                     (f"%{like}%",)).fetchone()["c"]
+                    print(f"      {name:<10} {n:>5}곳")
+            except Exception as e:
+                print(f"  조회 실패: {e}")
+
+            print()
+            print("[④ 자동분석 OFF 와의 관계 — 단계가 실제로 추적을 끄고 있나]")
+            try:
+                r = conn.execute("SELECT "
+                                 " SUM(CASE WHEN COALESCE(auto_analysis,0)=0 THEN 1 ELSE 0 END) off_n, "
+                                 " SUM(CASE WHEN COALESCE(auto_analysis,0)=0 "
+                                 "           AND COALESCE(contract_stage,'') <> '' THEN 1 ELSE 0 END) off_staged "
+                                 "  FROM clients WHERE status='active'").fetchone()
+                print(f"      자동분석 OFF {r['off_n']}곳 · 그중 단계가 적힌 곳 {r['off_staged']}곳")
+                print("  ⇒ 단계가 적힌 몫이 크면 04:00 동기화가 제대로 반영되고 있다는 뜻이다.")
             except Exception as e:
                 print(f"  조회 실패: {e}")
             conn.close()
