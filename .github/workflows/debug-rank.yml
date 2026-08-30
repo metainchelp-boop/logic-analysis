@@ -989,13 +989,15 @@ jobs:
             import sqlite3
             # ⚠️ 업체명·상품명은 출력하지 않는다(공개 저장소) — 건수만.
             conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
-            OK = ("SELECT id FROM clients WHERE status='active' "
+            OK = ("(SELECT id FROM clients WHERE status='active' "
                   " AND COALESCE(role,'advertiser')='advertiser' "
                   " AND COALESCE(vertical,'store')='store' "
                   " AND COALESCE(auto_analysis,1)=1 "
                   " AND COALESCE(track_enabled,1)=1 "
                   " AND (track_until IS NULL OR track_until='' "
                   "      OR date(track_until) >= date('now','localtime')))")
+            # ⚠️ OK 는 괄호까지 포함한 완결 서브쿼리다. 여는 괄호를 파이썬 괄호로 착각해
+            #    빼먹었더니 IN SELECT ... 가 돼 syntax error 가 났다(2026-08-30).
             TODAY = "date(r.checked_at) = date('now','localtime')"
 
             def one(sql):
@@ -1036,5 +1038,20 @@ jobs:
                   f"{one('SELECT COUNT(*) FROM tracked_products p WHERE COALESCE(p.disabled_at,%s)<>%s AND p.id NOT IN (SELECT tracked_product_id FROM rank_link)' % (chr(39)+chr(39), chr(39)+chr(39)))}개")
             print(f"  연결 없는 상품 중 살아 있음(disabled_at 없음) "
                   f"{one('SELECT COUNT(*) FROM tracked_products p WHERE COALESCE(p.disabled_at,%s)=%s AND p.id NOT IN (SELECT tracked_product_id FROM rank_link)' % (chr(39)+chr(39), chr(39)+chr(39)))}개")
+
+            print()
+            print("[⚠️ ③ 은 어느 경로로 기록됐나 — 배치는 비활성 상품을 거른다]")
+            try:
+                for r in conn.execute(
+                        "SELECT COALESCE(r.check_type,'(없음)') t, COUNT(DISTINCT r.product_id) n "
+                        "  FROM rankings r "
+                        f" WHERE {TODAY} "
+                        "   AND r.product_id NOT IN (SELECT tracked_product_id FROM rank_link) "
+                        " GROUP BY 1 ORDER BY n DESC"):
+                    print(f"      {r[0]:<14} {r[1]:>4}개")
+                print("  ⇒ scheduled 로 잡히면 08:00 배치가 비활성을 안 거른 것이고,")
+                print("     다른 경로면 즉시 기록(업로드) 쪽에 자격 판정이 없는 것이다.")
+            except Exception as e:
+                print(f"  조회 실패: {e}")
             conn.close()
             PY
