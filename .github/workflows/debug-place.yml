@@ -62,6 +62,9 @@ on:
         description: 'DB 용량 분석 — off(기본) / on. ⚠️ 3.1GB DB 를 통째로 스캔한다(테이블별 COUNT + JSON 컬럼 SUM(LENGTH)). 느려서 스텝 예산(240s)을 넘기면 뒤 스텝이 전부 안 돈다 — 필요할 때만 켠다.'
         required: false
         default: 'off'
+      key_check:
+        description: '소상공인365 503 이 키 문제인지 서버 문제인지 가른다 — true. 진짜 키 / 틀린 키 / 키 없음 / 포털 첫 화면을 각각 불러 상태코드를 대조(읽기 전용·키 값 미출력).'
+        required: false
       sbiz_since:
         description: '소상공인365 실패가 언제부터인지 — true. 컨테이너 로그의 [sbiz365] 실패를 시간대별로 센다(읽기 전용·업체명 미출력).'
         required: false
@@ -728,6 +731,31 @@ jobs:
             N=${N:-0}
             echo "매칭 $N 건 → $([ "$N" -gt 0 ] && echo '가드 있음(배포 반영됨)' || echo '가드 없음 — 경로부터 의심할 것')"
             docker inspect -f 'StartedAt={{.State.StartedAt}}' logic-analysis
+            echo
+            echo "== 상권 API 자가 점검 배선 (2026-08-30 PR #170) =="
+            # ⚠️ 「배포됐나」를 HTTP 응답으로 묻지 말 것 — 인증 경로는 코드가 있든 없든 같은 코드를 준다.
+            #    서버에 놓인 파일과 스케줄러가 실제로 등록한 잡으로만 판정한다.
+            D=$(dirname "${F:-/app/main.py}")
+            docker exec -i logic-analysis sh -c "ls -l '$D/sbiz_health.py' 2>/dev/null" || echo "  sbiz_health.py 없음 — 배포 미반영"
+            J=$(docker exec -i logic-analysis sh -c "grep -c 'sbiz_health_probe' '$D/scheduler.py' 2>/dev/null" || echo 0)
+            J=${J:-0}
+            echo "  스케줄러 등록 흔적 $J 건 → $([ "$J" -gt 0 ] && echo '05:00 잡 배선됨' || echo '미반영')"
+            echo "  -- 기동 로그의 스케줄러 줄 (05:00 이 적혀 있어야 한다) --"
+            docker logs logic-analysis 2>&1 | grep -m1 '스케줄러 시작' || echo "  (기동 로그가 밀려 사라졌을 수 있다)"
+            echo "  -- 05:00 자가 점검이 남긴 기록 --"
+            docker logs logic-analysis 2>&1 | grep '자가 점검' | tail -5 || echo "  (아직 05:00 을 안 지났다)"
+            echo "  -- sbiz_health 표 (비어 있으면 첫 호출·첫 05:00 전이다) --"
+            docker exec -i logic-analysis python3 - <<'PYH'
+            import os, sqlite3
+            try:
+                c = sqlite3.connect(os.getenv("DB_PATH", "/app/data/logic_data.db"))
+                n = c.execute("SELECT COUNT(*) FROM sbiz_health").fetchone()[0]
+                print(f"    행 {n} 건")
+                for r in c.execute("SELECT checked_at, ok, reason, source FROM sbiz_health ORDER BY id DESC LIMIT 5"):
+                    print(f"    {r[0]} · {'성공' if r[1] else '실패'} · 사유={r[2] or '-'} · 출처={r[3]}")
+            except Exception as e:
+                print(f"    표 없음 또는 조회 실패: {type(e).__name__}: {str(e)[:80]}")
+            PYH
 
       - name: 제안서 enrich 재현 진단
         if: ${{ github.event.inputs.enrich_probe != '' }}
@@ -1773,4 +1801,67 @@ jobs:
             print("=" * 76)
             print("판독: address 에 시·도/시군구/동이 다 들어 있으면 → 동명이동을 입력 없이도 가른다.")
             print("      상가 응답에 법정동·행정동 코드가 함께 오면 → 주소만으로 admiCd 확정 가능.")
+            PY
+
+      - name: 소상공인365 — 키 문제인가 서버 문제인가 (읽기 전용)
+        if: ${{ github.event.inputs.key_check == 'true' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 180s
+          script: |
+            docker exec -i logic-analysis python3 - <<'PY'
+            # 대표 지적 「api 가 만료되었는지도 확인해야겠네」 — 상태코드만 보고는 못 가른다.
+            #
+            # ⚠️ 2026-08-30 이 진단의 첫 판을 내가 틀리게 만들었다. getAvgAmtInfo 를 **내가 지어낸
+            #    파라미터**(simpleLoc="1" 등)로 직접 불러 500 을 받고는 「그 엔드포인트가 죽었다」고
+            #    보고했다. 같은 시각 실제 코드 경로(E2E)는 **정상 200** 이었다 — 500 은 API 장애가
+            #    아니라 내 요청이 잘못된 것이었다.
+            #    ⇒ **파라미터를 지어내지 말 것.** 판정은 아래 두 가지로만 한다.
+            #       ① 같은 키로 파라미터가 필요 없는 API(업종트리)를 부른다 → 200 이면 키는 살아 있다
+            #       ② 실제 코드 경로(get_place_sbiz)를 그대로 부른다 → 그게 곧 서비스가 겪는 현실
+            import os, requests
+            BASE = "https://bigdata.sbiz.or.kr"
+            H = {"User-Agent": "Mozilla/5.0", "Referer": BASE + "/"}
+            real = os.getenv("SBIZ365_KEY_SIMPLE", "").strip()
+            print(f"[키] 설정됨={bool(real)} · 길이={len(real)}")
+
+            print()
+            print("[① 키가 살아 있나 — 파라미터가 필요 없는 API 로 확인]")
+            for label, key in (("진짜 키", real), ("틀린 키", (real[:-1] + "A") if real else "X"), ("키 없음", "")):
+                try:
+                    r = requests.get(f"{BASE}/gis/api/getHierarchyTpbizCode",
+                                     params=({"certKey": key} if key else None), headers=H, timeout=20)
+                    ok = "JSON" if r.headers.get("content-type", "").startswith("application/json") else "비JSON"
+                    print(f"  {label:<10} HTTP {r.status_code} · {ok} · {len(r.content)}B")
+                except Exception as e:
+                    print(f"  {label:<10} 예외 {type(e).__name__}: {str(e)[:80]}")
+            print("  ⇒ 진짜 키가 200·JSON 이면 **키 만료가 아니다**. 틀린 키와 코드가 갈리면 인증도 살아 있다.")
+
+            print()
+            print("[② 포털 자체]")
+            try:
+                r = requests.get(BASE + "/", headers=H, timeout=20)
+                print(f"  첫 화면    HTTP {r.status_code} · {len(r.content)}B")
+            except Exception as e:
+                print(f"  첫 화면    예외 {type(e).__name__}: {str(e)[:80]}")
+
+            print()
+            print("[③ 실제 코드 경로 — 서비스가 겪는 현실 그대로]")
+            print("  ⚠️ 여기가 진짜 판정이다. sbiz_check=true 의 E2E 와 같은 함수를 부른다.")
+            try:
+                import sys
+                sys.path.insert(0, "/app")
+                from sbiz365 import get_place_sbiz
+                why = {}
+                blk = get_place_sbiz("성수동", "카페", reason=why)
+                if blk:
+                    sales = (blk.get("sales") or {})
+                    print(f"  ✅ 상권 블록 옴 — 점포당 {sales.get('avgAmt')}원 · 업소 {(blk.get('shops') or {}).get('cnt')}곳")
+                else:
+                    print(f"  ❌ 상권 블록 없음 — 사유 {why}")
+            except Exception as e:
+                print(f"  호출 실패 {type(e).__name__}: {str(e)[:150]}")
             PY
