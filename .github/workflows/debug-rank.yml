@@ -118,6 +118,13 @@ jobs:
             timed("② 분석 집계", "SELECT client_id,COUNT(*),MAX(updated_at),COUNT(DISTINCT keyword) FROM client_analyses WHERE client_id IN (%s) GROUP BY client_id" % ph, ids)
             timed("③ 순위 롤업", "SELECT client_id,keyword,MAX(id) FROM client_rank_history WHERE client_id IN (%s) GROUP BY client_id,keyword" % ph, ids)
             timed("④ 수집분 1건 읽기", "SELECT products_json FROM collected_serp ORDER BY id DESC LIMIT 1")
+            print("  -- A/B: 큰 칸(detail_html)을 지나가야 하는가 --")
+            timed("A. id 만(인덱스만)", "SELECT id FROM clients WHERE status='active'")
+            timed("B. id+name(큰 칸 앞)", "SELECT id,name FROM clients WHERE status='active'")
+            timed("C. id+contract_stage(뒤)", "SELECT id,contract_stage FROM clients WHERE status='active'")
+            cols = [r[1] for r in c.execute("PRAGMA table_info(clients)")]
+            print("    clients 칸 순서 %d개 · detail_html 은 %d번째" % (len(cols), cols.index("detail_html")+1 if "detail_html" in cols else -1))
+            print("    detail_html 뒤 칸: %s" % ", ".join(cols[cols.index("detail_html")+1:]) if "detail_html" in cols else "")
             print("  -- 인덱스 사용 여부 --")
             for lbl, q in [("분석 집계", "EXPLAIN QUERY PLAN SELECT client_id,COUNT(*) FROM client_analyses WHERE client_id IN (1,2) GROUP BY client_id"), ("순위 롤업", "EXPLAIN QUERY PLAN SELECT client_id,keyword,MAX(id) FROM client_rank_history WHERE client_id IN (1,2) GROUP BY client_id,keyword")]:
                 print("    %s: %s" % (lbl, " / ".join(r[-1] for r in c.execute(q))))
