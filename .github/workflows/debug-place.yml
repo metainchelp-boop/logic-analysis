@@ -58,6 +58,10 @@ on:
       gu_fallback_check:
         description: '동 단위 통계가 없을 때 시군구 평균이 같은 응답에 실려 오는지 실측 — "지역|업종"(예: 조원동|미용·뷰티). 소분류를 여러 개 돌며 saleAmt/guAmt/siAmt 유무를 대조. 읽기 전용'
         default: ''
+      dbsize:
+        description: 'DB 용량 분석 — off(기본) / on. ⚠️ 3.1GB DB 를 통째로 스캔한다(테이블별 COUNT + JSON 컬럼 SUM(LENGTH)). 느려서 스텝 예산(240s)을 넘기면 뒤 스텝이 전부 안 돈다 — 필요할 때만 켠다.'
+        required: false
+        default: 'off'
       sbiz_since:
         description: '소상공인365 실패가 언제부터인지 — true. 컨테이너 로그의 [sbiz365] 실패를 시간대별로 센다(읽기 전용·업체명 미출력).'
         required: false
@@ -598,56 +602,66 @@ jobs:
               echo "정리 후:"; sudo du -sh "$BK" 2>/dev/null; df -h / | tail -1
             fi
             echo
-            echo "== DB 테이블별 행 수·가장 오래된 데이터 (읽기 전용) =="
-            timeout 180 docker exec -i logic-analysis python3 - <<'PY' || echo "(DB 분석 시간 초과 — 백업 정리는 위에서 이미 완료)"
-            import sqlite3
-            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
-            c = conn.cursor()
-            spec = [
-                ("rankings", "checked_at"), ("competitor_snapshots", "captured_at"),
-                ("shopping_search_cache", "datetime(created_at,'unixepoch','localtime')"),
-                ("api_usage_logs", "called_at"), ("notification_logs", "created_at"),
-                ("place_rank_history", "checked_at"),
-            ]
-            for tbl, col in spec:
-                try:
-                    n, lo, hi = c.execute(f"SELECT COUNT(*), MIN({col}), MAX({col}) FROM {tbl}").fetchone()
-                    print(f"  {tbl:24s} {n:>10,}행  {str(lo)[:16]} → {str(hi)[:16]}")
-                except Exception as e:
-                    print(f"  {tbl:24s} (조회 불가: {e})")
-            print()
-            pc = c.execute("PRAGMA page_count").fetchone()[0]
-            fl = c.execute("PRAGMA freelist_count").fetchone()[0]
-            ps = c.execute("PRAGMA page_size").fetchone()[0]
-            av = c.execute("PRAGMA auto_vacuum").fetchone()[0]
-            print(f"[파일 구조] 총 {pc*ps/1073741824:.2f}GB · 빈 페이지(freelist) {fl*ps/1073741824:.2f}GB "
-                  f"({100*fl/pc:.0f}%) · auto_vacuum={av}(0=꺼짐)")
-            print()
-            print("[전체 테이블 행 수 — 누락 없이]")
-            tabs = [r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
-            for t in tabs:
-                try:
-                    n = c.execute(f"SELECT COUNT(*) FROM \"{t}\"").fetchone()[0]
-                    print(f"  {t:30s} {n:>10,}행")
-                except Exception as e:
-                    print(f"  {t:30s} (err {e})")
-            print()
-            print("[대용량 JSON 컬럼 실측 — 무엇이 4.7GB인가]")
-            def mb(q):
-                try: return (c.execute(q).fetchone()[0] or 0)/1048576
-                except Exception as e: return f"err:{e}"
-            print(f"  client_analyses.analysis_json      {mb('SELECT SUM(LENGTH(analysis_json)) FROM client_analyses'):8.0f} MB")
-            print(f"  client_analyses.shop_products_json {mb('SELECT SUM(LENGTH(shop_products_json)) FROM client_analyses'):8.0f} MB")
-            print(f"  client_analyses.advertiser_json    {mb('SELECT SUM(LENGTH(advertiser_json)) FROM client_analyses'):8.0f} MB")
-            print(f"  client_analyses.volume+related     {mb('SELECT SUM(LENGTH(volume_json)+LENGTH(related_json)) FROM client_analyses'):8.0f} MB")
-            print(f"  collected_serp.products_json       {mb('SELECT SUM(LENGTH(products_json)) FROM collected_serp'):8.0f} MB")
-            print(f"  competitor_snapshots(전 컬럼 근사) {mb('SELECT SUM(LENGTH(product_name)+LENGTH(store_name)+LENGTH(product_url)+LENGTH(image_url)) FROM competitor_snapshots'):8.0f} MB")
-            print()
-            print("[client_analyses 월별 분포 — 오래된 것 비중]")
-            for ym, n in c.execute("SELECT substr(analyzed_date,1,7), COUNT(*) FROM client_analyses GROUP BY 1 ORDER BY 1"):
-                print(f"  {ym}  {n:>7,}행")
-            conn.close()
-            PY
+            # ⚠️ 이 블록은 3.1GB DB 를 통째로 스캔한다(테이블별 COUNT + JSON 컬럼 SUM(LENGTH)).
+            #    2026-08-30 에 스텝 예산 240s 를 넘기기 시작했고, 이 스텝이 안 끝나면
+            #    **뒤 스텝이 전부 실행되지 않는다**(그날 진단이 세 번 막혔다).
+            #    DB 는 앞으로도 커지므로 기본을 끔으로 두고 필요할 때만 켠다.
+            if [ "${{ inputs.dbsize }}" = "on" ]; then
+              echo "== DB 테이블별 행 수·가장 오래된 데이터 (읽기 전용) =="
+              timeout 180 docker exec -i logic-analysis python3 - <<'PY' || echo "(DB 분석 시간 초과 — 백업 정리는 위에서 이미 완료)"
+              import sqlite3
+              conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+              c = conn.cursor()
+              spec = [
+                  ("rankings", "checked_at"), ("competitor_snapshots", "captured_at"),
+                  ("shopping_search_cache", "datetime(created_at,'unixepoch','localtime')"),
+                  ("api_usage_logs", "called_at"), ("notification_logs", "created_at"),
+                  ("place_rank_history", "checked_at"),
+              ]
+              for tbl, col in spec:
+                  try:
+                      n, lo, hi = c.execute(f"SELECT COUNT(*), MIN({col}), MAX({col}) FROM {tbl}").fetchone()
+                      print(f"  {tbl:24s} {n:>10,}행  {str(lo)[:16]} → {str(hi)[:16]}")
+                  except Exception as e:
+                      print(f"  {tbl:24s} (조회 불가: {e})")
+              print()
+              pc = c.execute("PRAGMA page_count").fetchone()[0]
+              fl = c.execute("PRAGMA freelist_count").fetchone()[0]
+              ps = c.execute("PRAGMA page_size").fetchone()[0]
+              av = c.execute("PRAGMA auto_vacuum").fetchone()[0]
+              print(f"[파일 구조] 총 {pc*ps/1073741824:.2f}GB · 빈 페이지(freelist) {fl*ps/1073741824:.2f}GB "
+                    f"({100*fl/pc:.0f}%) · auto_vacuum={av}(0=꺼짐)")
+              print()
+              print("[전체 테이블 행 수 — 누락 없이]")
+              tabs = [r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
+              for t in tabs:
+                  try:
+                      n = c.execute(f"SELECT COUNT(*) FROM \"{t}\"").fetchone()[0]
+                      print(f"  {t:30s} {n:>10,}행")
+                  except Exception as e:
+                      print(f"  {t:30s} (err {e})")
+              print()
+              print("[대용량 JSON 컬럼 실측 — 무엇이 4.7GB인가]")
+              def mb(q):
+                  try: return (c.execute(q).fetchone()[0] or 0)/1048576
+                  except Exception as e: return f"err:{e}"
+              print(f"  client_analyses.analysis_json      {mb('SELECT SUM(LENGTH(analysis_json)) FROM client_analyses'):8.0f} MB")
+              print(f"  client_analyses.shop_products_json {mb('SELECT SUM(LENGTH(shop_products_json)) FROM client_analyses'):8.0f} MB")
+              print(f"  client_analyses.advertiser_json    {mb('SELECT SUM(LENGTH(advertiser_json)) FROM client_analyses'):8.0f} MB")
+              print(f"  client_analyses.volume+related     {mb('SELECT SUM(LENGTH(volume_json)+LENGTH(related_json)) FROM client_analyses'):8.0f} MB")
+              print(f"  collected_serp.products_json       {mb('SELECT SUM(LENGTH(products_json)) FROM collected_serp'):8.0f} MB")
+              print(f"  competitor_snapshots(전 컬럼 근사) {mb('SELECT SUM(LENGTH(product_name)+LENGTH(store_name)+LENGTH(product_url)+LENGTH(image_url)) FROM competitor_snapshots'):8.0f} MB")
+              print()
+              print("[client_analyses 월별 분포 — 오래된 것 비중]")
+              for ym, n in c.execute("SELECT substr(analyzed_date,1,7), COUNT(*) FROM client_analyses GROUP BY 1 ORDER BY 1"):
+                  print(f"  {ym}  {n:>7,}행")
+              conn.close()
+              PY
+            else
+              echo
+              echo "== DB 용량 분석 — 건너뜀 (필요하면 dbsize=on) =="
+              echo "  3.1GB 전체 스캔이라 스텝 예산을 넘기면 뒤 스텝이 전부 안 돈다."
+            fi
             if [ -n "${{ inputs.retention }}" ]; then
               echo
               echo "== client_analyses 보관정책 B (최근 30일 + 업체·키워드별 최신 보존) — 모드: ${{ inputs.retention }} =="
