@@ -723,17 +723,23 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           command_timeout: 60s
           script: |
-            echo "== 자동 등록 가드 (업체명 == 키워드면 등록 안 함) =="
-            # ⚠️ 컨테이너 안 코드 경로를 가정하지 말 것 — 먼저 찾고 센다(경로 오타는 「가드 없음」 오판을 만든다).
+            echo "== 플레이스 추적 자동 등록 폐지 확인 =="
+            # ⚠️ 컨테이너 안 코드 경로를 가정하지 말 것 — 먼저 찾고 센다.
             F=$(docker exec -i logic-analysis sh -c "find /app -maxdepth 3 -name main.py 2>/dev/null | head -1")
             echo "코드 경로: ${F:-찾지 못함}"
-            # ⚠️ `grep -c ... || echo 0` 은 0건일 때 **두 줄**("0" + "0")을 만든다 —
-            #    grep 이 0건에도 카운트를 찍고 exit 1 을 내기 때문이다. 그러면 [ -gt ] 가
-            #    "integer expression expected" 로 깨져 늘 「가드 없음」으로 읽힌다(8/30 실측).
+            # ⚠️ 2026-08-30 정정 — 종전엔 '업체명과 같은 키워드' 문구를 찾아 「가드 있음」을 판정했다.
+            #    그 문구는 8/12 「플레이스 추적 자동 등록 폐지」(9b11d07)에서 **일부러 지워졌다**
+            #    — 가드가 지키던 자동 등록 경로 자체가 사라졌기 때문이다. 그래서 이 진단은
+            #    그 뒤로 매번 「가드 없음 — 경로부터 의심할 것」이라는 **거짓 경보**를 찍고 있었다.
+            #    ⇒ 이제 진짜 불변식을 확인한다: 자동 등록 함수가 **없어야** 정상이다.
+            #    교훈 — 표지를 「있어야 한다」로 잡을 때는, 그 표지를 나중에 지울 계획이
+            #    없는지 함께 봐야 한다. 지워진 표지를 계속 찾으면 진단이 늑대 소년이 된다.
+            # ⚠️ `grep -c ... || echo 0` 은 0건일 때 두 줄("0" + "0")을 만든다 —
+            #    grep 이 0건에도 카운트를 찍고 exit 1 을 내기 때문이다(8/30 실측).
             #    ⇒ 마지막 줄만 취하고 숫자가 아니면 0 으로 떨어뜨린다.
-            N=$(docker exec -i logic-analysis sh -c "grep -c '업체명과 같은 키워드' '$F' 2>/dev/null" | tail -1)
+            N=$(docker exec -i logic-analysis sh -c "grep -c '_place_auto_track' '$F' 2>/dev/null" | tail -1)
             case "$N" in ''|*[!0-9]*) N=0 ;; esac
-            echo "매칭 $N 건 → $([ "$N" -gt 0 ] && echo '가드 있음(배포 반영됨)' || echo '가드 없음 — 경로부터 의심할 것')"
+            echo "자동 등록 함수 $N 건 → $([ "$N" -eq 0 ] && echo '폐지 상태 정상(8/12 배포 반영됨)' || echo '⚠️ 되살아났다 — 자동 등록이 다시 생겼는지 확인할 것')"
             docker inspect -f 'StartedAt={{.State.StartedAt}}' logic-analysis
             echo
             echo "== 상권 API 자가 점검 배선 (2026-08-30 PR #170) =="
