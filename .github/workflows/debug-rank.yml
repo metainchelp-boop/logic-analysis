@@ -30,6 +30,10 @@ on:
         description: '상품 주소 모양 실측 — off(기본) / on. 어느 호스트(스마트스토어·브랜드스토어·카탈로그)를 쓰는지, 같은 슬러그가 두 호스트에 걸쳐 있는지(읽기 전용·업체명 미출력).'
         required: false
         default: 'off'
+      cagg:
+        description: '분석 집계 A/B — off(기본) / on. my-clients 가 매번 도는 두 쿼리를 재고, 덩어리 뒤 칸을 하나씩 빼며 무엇이 값을 물어오는지 가른다(읽기 전용·업체명 미출력).'
+        required: false
+        default: 'off'
       rtime:
         description: '보고서 시각 판정 — off(기본) / on. reports.created_at 이 UTC 인지 KST 인지 행 단위로 판정하고, 소급 보정이 날짜를 넘기는 행이 있는지 센다(읽기 전용·업체명/제목 미출력).'
         required: false
@@ -74,9 +78,10 @@ jobs:
           IN_SLOW: ${{ github.event.inputs.slow }}
           IN_AUDIT: ${{ github.event.inputs.audit }}
           IN_RTIME: ${{ github.event.inputs.rtime }}
+          IN_CAGG: ${{ github.event.inputs.cagg }}
           IN_BRANCH_CODE: ${{ github.event.inputs.use_branch_code }}
         with:
-          envs: RL_SRC_GZ,IN_COLLECTOR,IN_RANK_LINK,IN_CAPACITY,IN_STRUCTURE,IN_EXPIRED,IN_VERIFY,IN_SLOW,IN_AUDIT,IN_RTIME,IN_BRANCH_CODE
+          envs: RL_SRC_GZ,IN_COLLECTOR,IN_RANK_LINK,IN_CAPACITY,IN_STRUCTURE,IN_EXPIRED,IN_VERIFY,IN_SLOW,IN_AUDIT,IN_RTIME,IN_CAGG,IN_BRANCH_CODE
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
@@ -222,6 +227,77 @@ jobs:
                             hits += 1
                 if not hits:
                     print("    없음 — reports 말고는 전부 localtime 이다.")
+            except Exception as e:
+                print("    조회 실패: %s" % e)
+            PY
+              echo
+            fi
+            echo
+            if [ "$IN_CAGG" = "on" ]; then
+              echo "== 분석 집계 A/B (읽기 전용 · 업체명 미출력) =="
+              timeout 180 docker exec -i logic-analysis python3 - <<'PY'
+            import sqlite3, os, time
+            c = sqlite3.connect(os.getenv("DB_PATH", "/app/data/logic_data.db"))
+            ids = [r[0] for r in c.execute("SELECT id FROM clients WHERE status='active' LIMIT 400")]
+            ph = ",".join("?" * len(ids))
+
+            def timed(label, sql, args=()):
+                # 두 번 재서 둘 다 적는다 — 첫 회는 캐시가 비어 있어 체감에 가깝고,
+                # 두 번째는 캐시가 찬 뒤라 「인덱스만으로 끝나는가」를 드러낸다.
+                out = []
+                for _ in range(2):
+                    t0 = time.perf_counter()
+                    n = len(c.execute(sql, args).fetchall())
+                    out.append((time.perf_counter() - t0) * 1000)
+                print("    %-44s %7.0f ms -> %6.0f ms · %d행" % (label, out[0], out[1], n))
+
+            print("  -- 칸 순서(덩어리 뒤에 무엇이 있나) --")
+            cols = [r[1] for r in c.execute("PRAGMA table_info(client_analyses)")]
+            print("    %d개: %s" % (len(cols), ", ".join(cols)))
+            big = [x for x in ("analysis_json", "report_html") if x in cols]
+            if big:
+                first = min(cols.index(x) for x in big)
+                print("    첫 덩어리 %s(%d번째) 뒤 칸: %s"
+                      % (cols[first], first + 1, ", ".join(cols[first + 1:])))
+
+            print("  -- 실제로 도는 두 쿼리(my-clients) --")
+            AGG = ("SELECT client_id, COUNT(*), MAX(updated_at), COUNT(DISTINCT keyword),"
+                   " COUNT(DISTINCT analyzed_date) FROM client_analyses"
+                   " WHERE client_id IN (%s) GROUP BY client_id" % ph)
+            LATEST = ("SELECT client_id, keyword, product_url, analyzed_date, updated_at"
+                      " FROM client_analyses WHERE client_id IN (%s)"
+                      " ORDER BY analyzed_date DESC, updated_at DESC" % ph)
+            timed("집계(그대로)", AGG, ids)
+            timed("최신1건(그대로)", LATEST, ids)
+
+            print("  -- 어느 칸이 값을 물어오나(한 칸씩 빼 본다) --")
+            timed("집계 - keyword", AGG.replace(", COUNT(DISTINCT keyword)", ""), ids)
+            timed("집계 - keyword - analyzed_date",
+                  AGG.replace(", COUNT(DISTINCT keyword)", "").replace(", COUNT(DISTINCT analyzed_date)", ""), ids)
+            timed("최신1건 - keyword - product_url",
+                  LATEST.replace(", keyword, product_url", ""), ids)
+
+            print("  -- 인덱스가 실제로 어떻게 쓰이나 --")
+            for lbl, q in [("집계", AGG), ("최신1건", LATEST)]:
+                plan = " / ".join(r[-1] for r in c.execute("EXPLAIN QUERY PLAN " + q, ids))
+                print("    %-10s %s" % (lbl, plan))
+            print("  -- client_analyses 에 걸린 인덱스 --")
+            for r in c.execute("SELECT name, sql FROM sqlite_master WHERE type='index'"
+                               " AND tbl_name='client_analyses'"):
+                print("    %-36s %s" % (r[0], (r[1] or "(자동)")))
+
+            print("  -- clients 시각: 두 경로가 섞였나 --")
+            print("     clients.py 등록분은 UTC 기본값 · client_dashboard 등록분은 KST 명시.")
+            print("     시각대가 두 무리로 갈리면 일괄 보정이 불가능하다는 뜻이다.")
+            try:
+                for r in c.execute(
+                        "SELECT substr(created_at,12,2) h, COUNT(*) n FROM clients"
+                        " WHERE created_at IS NOT NULL AND length(created_at) >= 13"
+                        " GROUP BY h ORDER BY h"):
+                    print("    %s시 · %4d곳" % (r[0], r[1]))
+                bad = c.execute("SELECT COUNT(*) FROM clients WHERE created_at IS NULL"
+                                " OR length(created_at) < 13").fetchone()[0]
+                print("    (시각 형식이 아닌 행 %d곳)" % bad)
             except Exception as e:
                 print("    조회 실패: %s" % e)
             PY
