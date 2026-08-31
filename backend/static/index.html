@@ -439,19 +439,12 @@
     <a data-go="home" onclick="go('home')">🏠 담당자 메인보드</a>
     <a data-go="dashboard" onclick="openDashboardNav()">📊 광고주 대시보드</a>
     <a data-go="status" onclick="openStatus()">📋 광고주 진행현황</a>
-    <a data-go="channel" onclick="openChannel()">🔍 매체별 진행현황</a>
-    <a data-go="spending" onclick="openSpending()">💰 스펜딩 소진현황</a>
-    <a data-go="records" onclick="openRecords()">📁 월별 소진 기록</a>
+    <a data-go="spending" onclick="openSpending()">💰 소진 관리</a>
     <div class="group">작업보드</div>
     <a data-go="register" onclick="openForm(null)">➕ 광고주 등록 관리</a>
-    <a data-go="upload" onclick="openUpload()">📥 광고주 매체 엑셀 등록</a>
     <a data-go="campaign" onclick="openCampaign()">🤖 AI 캠페인 설계</a>
     <div class="group">보고서</div>
     <a data-go="report" onclick="openReports()">📄 AI 리포트, 보고서</a>
-    <a data-go="insights" onclick="openInsights()">🚀 AI 인사이트</a>
-    <div class="group admin nav-admin">기록 관리</div>
-    <a data-go="team" class="admin nav-admin" onclick="openTeam()">👑 팀, 전체 현황</a>
-    <a data-go="learn" class="admin nav-admin" onclick="openLearn()">🧠 학습 센터</a>
     <div class="group">설정</div>
     <a data-go="settings" onclick="openSettings()">⚙️ 설정</a>
     <div class="group">계정</div>
@@ -630,15 +623,26 @@ const CHANNELS=[
  {key:"naver_commerce",name:"네이버 커머스(스토어)",color:"#03c75a",tcolor:"#fff",abbr:"N",hint:"판매자센터 › 커머스 API센터 발급 → 매출·주문 자동",fields:[{k:"app_id",label:"애플리케이션 ID"},{k:"app_secret",label:"시크릿",pw:true}]},
  {key:"naver_searchad",name:"네이버 검색광고",color:"#1ec800",tcolor:"#fff",abbr:"광",hint:"검색광고 › 도구 › API 사용 관리 → ROAS·키워드 자동",fields:[{k:"customer_id",label:"Customer ID"},{k:"api_license",label:"API 라이선스"},{k:"secret_key",label:"비밀키",pw:true}]},
  {key:"naver_gfa",name:"네이버 GFA(성과형 디스플레이)",color:"#16b378",tcolor:"#fff",abbr:"G",hint:"네이버 성과형 디스플레이(GFA) — 공식 파트너 등록 후 Beta API",fields:[{k:"account_id",label:"GFA 광고계정 ID"},{k:"api_key",label:"API 키",pw:true}]},
- {key:"kakao",name:"카카오모먼트",color:"#fee500",tcolor:"#3c1e1e",abbr:"K",hint:"카카오모먼트 광고계정 ID + 카카오 OAuth 액세스 토큰(moment 권한)",fields:[{k:"account_id",label:"광고계정 ID"},{k:"rest_key",label:"액세스 토큰(OAuth)",pw:true}]},
- {key:"meta_ads",name:"메타 광고(인스타·페북)",color:"#1877f2",tcolor:"#fff",abbr:"M",hint:"Meta 비즈니스 → 광고계정 접근권한(OAuth). 노출·클릭·비용·ROAS",fields:[{k:"account_id",label:"광고계정 ID(act_...)"},{k:"access_token",label:"액세스 토큰",pw:true}]},
+ {key:"kakao",name:"카카오모먼트",color:"#fee500",tcolor:"#3c1e1e",abbr:"K",hint:"카카오모먼트 광고계정 ID + 카카오 OAuth 액세스 토큰(moment 권한)",hidden:true,fields:[{k:"account_id",label:"광고계정 ID"},{k:"rest_key",label:"액세스 토큰(OAuth)",pw:true}]},
+ {key:"meta_ads",name:"메타 광고(인스타·페북)",color:"#1877f2",tcolor:"#fff",abbr:"M",hint:"Meta 비즈니스 → 광고계정 접근권한(OAuth). 노출·클릭·비용·ROAS",hidden:true,fields:[{k:"account_id",label:"광고계정 ID(act_...)"},{k:"access_token",label:"액세스 토큰",pw:true}]},
  {key:"coupang_ads",name:"쿠팡애즈",color:"#e30f1b",tcolor:"#fff",abbr:"쿠",hint:"쿠팡 광고센터 Open API — 업체ID·액세스키·시크릿 (판매자/대행 권한)",fields:[{k:"vendor_id",label:"업체 ID (Vendor)"},{k:"access_key",label:"액세스 키"},{k:"secret_key",label:"시크릿 키",pw:true}]},
- {key:"youtube",name:"유튜브",color:"#ff0000",tcolor:"#fff",abbr:"▶",hint:"영상 URL만 입력(여러 개 쉼표). API키는 회사 공용",fields:[{k:"video_url",label:"영상 URL"}]},
- {key:"meta_chehum",name:"메타체험단",color:"#6c5ce7",tcolor:"#fff",abbr:"체",hint:"메타체험단 광고주 ID와 매칭",fields:[{k:"advertiser_id",label:"체험단 광고주 ID"}]},
- {key:"daangn",name:"당근(엑셀 업로드)",color:"#ff6f0f",tcolor:"#fff",abbr:"당",hint:"당근은 API 없음 → 엑셀 업로드(다음 스프린트)",fields:[]},
+ {key:"youtube",name:"유튜브",color:"#ff0000",tcolor:"#fff",abbr:"▶",hint:"영상 URL만 입력(여러 개 쉼표). API키는 회사 공용",hidden:true,fields:[{k:"video_url",label:"영상 URL"}]},
+ {key:"meta_chehum",name:"메타체험단",color:"#6c5ce7",tcolor:"#fff",abbr:"체",hint:"메타체험단 광고주 ID와 매칭",hidden:true,fields:[{k:"advertiser_id",label:"체험단 광고주 ID"}]},
+ {key:"daangn",name:"당근(엑셀 업로드)",color:"#ff6f0f",tcolor:"#fff",abbr:"당",hint:"당근은 API 없음 → 엑셀 업로드(다음 스프린트)",hidden:true,fields:[]},
  {key:"toss_ads",name:"토스애즈",color:"#3182f6",tcolor:"#fff",abbr:"토",hint:"토스 광고 — 우선 엑셀 업로드/수동(공개 API 확인 후 자동 전환)",fields:[]},
- {key:"mobon",name:"모비온(디스플레이·리타게팅)",color:"#e11d48",tcolor:"#fff",abbr:"모",hint:"모비온 광고 — 우선 엑셀 업로드/수동(공개 API 확인 후 자동 전환)",fields:[]},
+ {key:"mobon",name:"모비온(디스플레이·리타게팅)",color:"#e11d48",tcolor:"#fff",abbr:"모",hint:"모비온 광고 — 우선 엑셀 업로드/수동(공개 API 확인 후 자동 전환)",hidden:true,fields:[]},
 ];
+// ★네이버 특화 재편(2026-08-29): hidden 채널은 '화면에서만' 감춘다.
+//   데이터·자격증명·자동수집은 그대로 유지되고, chMeta()는 CHANNELS 전체를 계속 조회한다
+//   (숨긴 채널의 과거 스냅샷도 이름·색이 정상 표시돼야 하므로).
+const VISIBLE_CHANNELS=CHANNELS.filter(c=>!c.hidden);
+// 연동 카운트는 '보이는 채널' 기준으로 센다 — 숨긴 채널이 연동돼 있어도 분자에 넣지 않는다(7/5 방지).
+function visConn(c){
+  if(c&&Array.isArray(c.channels)&&c.channels.length)
+    return c.channels.filter(function(x){return x.status==='connected'&&VISIBLE_CHANNELS.some(function(v){return v.key===x.channel;});}).length;
+  var n=(c&&(c.connected_count!=null?c.connected_count:c.connected))||0;
+  return Math.min(n,VISIBLE_CHANNELS.length);  // channels 미포함 payload(팀 현황) 폴백
+}
 // 채널별 키 발급·연동 방법 안내(등록 화면 '📖 연동 방법'에서 펼쳐짐)
 const CHANNEL_GUIDE={
  naver_searchad:{title:"네이버 검색광고 — 키 발급",steps:[
@@ -776,15 +780,15 @@ async function loadHome(){
       alerts.slice(0,8).map(function(a){return '<div class="alert-row" onclick="openDashboard('+a.client_id+')"><span class="dot '+a.severity+'"></span><b>'+esc(a.name)+'</b> — '+esc(a.reason)+'</div>';}).join('')+
       (alerts.length>8?'<div style="font-size:11.5px;color:var(--sub);margin-top:4px">외 '+(alerts.length-8)+'건…</div>':'')+
       '</div>'):'';
-    var noKey=clients.filter(c=>c.connected_count===0).length;
-    var todo=clients.filter(c=>c.connected_count<CHANNELS.length).slice(0,3).map(c=>'<span class="chip">'+esc(c.name)+' · 채널 '+c.connected_count+'/'+CHANNELS.length+'</span>').join("");
+    var noKey=clients.filter(c=>visConn(c)===0).length;
+    var todo=clients.filter(c=>visConn(c)<VISIBLE_CHANNELS.length).slice(0,3).map(c=>'<span class="chip">'+esc(c.name)+' · 채널 '+visConn(c)+'/'+VISIBLE_CHANNELS.length+'</span>').join("");
     var cards=clients.length?clients.map(cardHtml).join(""):'<div style="grid-column:1/-1;color:var(--sub);padding:30px;text-align:center;border:1px dashed var(--line2);border-radius:14px;background:#fff">아직 등록된 광고주가 없어요. <b>+ 신규 광고주</b>로 시작하세요.</div>';
     sec.innerHTML=
       '<div class="hello">안녕하세요, <span>'+esc(ME.name)+'</span>님 👋</div>'+
       '<div class="sub">'+roleKr+' · 담당 광고주 <b>'+clients.length+'곳</b></div>'+
       '<div class="summary">'+
         '<div class="scard"><div class="k">담당 광고주</div><div class="v">'+clients.length+'</div></div>'+
-        '<div class="scard"><div class="k">연동 진행</div><div class="v">'+clients.filter(c=>c.connected_count>0).length+'</div></div>'+
+        '<div class="scard"><div class="k">연동 진행</div><div class="v">'+clients.filter(c=>visConn(c)>0).length+'</div></div>'+
         '<div class="scard '+(noKey?'warn':'')+'"><div class="k">키 미연동</div><div class="v">'+noKey+'</div></div>'+
         '<div class="scard"><div class="k">데이터 수집</div><div class="v" style="font-size:13px;color:var(--sub);font-weight:700">다음 스프린트</div></div>'+
       '</div>'+
@@ -797,11 +801,11 @@ async function loadHome(){
 }
 function cardHtml(c){
   var stKr={active:"진행중",paused:"일시정지",ended:"종료"}[c.status]||c.status;
-  var chips=CHANNELS.map(ch=>{var on=c.channels.find(x=>x.channel===ch.key&&x.status==='connected');return '<span class="chip2'+(on?'':' off')+'" style="'+(on?'background:'+ch.color+';color:'+ch.tcolor:'')+'">'+ch.abbr+'</span>';}).join(" ");
-  var alert=c.connected_count===0?'<span class="alert a">✎ 키 미연동</span>':'<span class="alert ok">● 연동 '+c.connected_count+'/'+CHANNELS.length+'</span>';
+  var chips=VISIBLE_CHANNELS.map(ch=>{var on=c.channels.find(x=>x.channel===ch.key&&x.status==='connected');return '<span class="chip2'+(on?'':' off')+'" style="'+(on?'background:'+ch.color+';color:'+ch.tcolor:'')+'">'+ch.abbr+'</span>';}).join(" ");
+  var alert=visConn(c)===0?'<span class="alert a">✎ 키 미연동</span>':'<span class="alert ok">● 연동 '+visConn(c)+'/'+VISIBLE_CHANNELS.length+'</span>';
   return '<div class="acard" id="hc-'+c.id+'">'+
     '<div class="top"><div class="av" style="background:#03c75a">'+esc((c.name||'?')[0])+'</div><div><div class="nm">'+esc(c.name)+'</div><div class="cat">'+esc(c.category||'-')+'</div></div><span class="st '+(c.status==='active'?'run':'pause')+'">'+stKr+'</span></div>'+
-    '<div class="metrics"><div class="m"><div class="mk">매출</div><div class="mv" style="color:var(--muted);font-size:12px">연동예정</div></div><div class="m"><div class="mk">담당</div><div class="mv" style="font-size:13px">'+esc(c.owner_name||'-')+'</div></div><div class="m"><div class="mk">연동</div><div class="mv">'+c.connected_count+'/'+CHANNELS.length+'</div></div></div>'+
+    '<div class="metrics"><div class="m"><div class="mk">매출</div><div class="mv" style="color:var(--muted);font-size:12px">연동예정</div></div><div class="m"><div class="mk">담당</div><div class="mv" style="font-size:13px">'+esc(c.owner_name||'-')+'</div></div><div class="m"><div class="mk">연동</div><div class="mv">'+visConn(c)+'/'+VISIBLE_CHANNELS.length+'</div></div></div>'+
     '<div class="chans">'+chips+alert+'</div></div>';
 }
 async function openForm(id){
@@ -815,10 +819,10 @@ async function openForm(id){
   var c={name:"",category:"",status:"active",contact:"",contract_start:"",contract_end:"",memo:"",channels:[]};
   if(id){try{c=await api("/clients/"+id);}catch(e){toast(e.message);return;}}
   var chMap={};(c.channels||[]).forEach(x=>chMap[x.channel]=x);
-  var channelsHtml=CHANNELS.map(ch=>{
+  var channelsHtml=VISIBLE_CHANNELS.map(ch=>{
     var ex=chMap[ch.key];var conn=ex&&ex.status==='connected';
     var fields=ch.fields.map(f=>{var masked=ex&&ex.fields_masked?ex.fields_masked[f.k]:"";return '<div class="fg"><label>'+f.label+'</label><input data-ch="'+ch.key+'" data-k="'+f.k+'" type="'+(f.pw?'password':'text')+'" placeholder="'+(masked?esc(masked)+' (비우면 기존 유지)':'')+'"></div>';}).join("");
-    var TESTABLE=['naver_commerce','naver_searchad','meta_chehum','youtube','meta_ads','kakao','coupang_ads','naver_gfa'];
+    var TESTABLE=['naver_searchad','naver_commerce','naver_gfa','coupang_ads'];
     var testBtn=(id && TESTABLE.indexOf(ch.key)>=0) ? '<button type="button" class="cancel" style="margin-top:8px;border-color:var(--blue);color:var(--blue)" onclick="testChannel('+id+',\''+ch.key+'\',this)">🔌 연결 테스트</button><div class="test-result" id="tr-'+ch.key+'" style="margin-top:8px;font-size:12px;line-height:1.55"></div>' : '';
     var pickBtn=(ch.key==='meta_chehum') ? '<button type="button" class="cancel" style="margin-top:8px;border-color:#6c5ce7;color:#6c5ce7" onclick="pickChehum(this)">🔍 체험단 광고주 목록에서 찾기</button>' : '';
     var MANUAL_UP=['daangn','toss_ads','mobon'];
@@ -861,7 +865,7 @@ async function openForm(id){
   }
 }
 // 광고주에게서 키를 받을 수 있는(API 키가 필요한) 채널
-var CONNECT_CHANNELS=['naver_searchad','naver_commerce','naver_gfa','kakao','meta_ads','coupang_ads'];
+var CONNECT_CHANNELS=['naver_searchad','naver_commerce','naver_gfa','coupang_ads'];
 function genConnectLink(id, btn){
   var box=document.getElementById('connect-link-box');
   box.style.display='block'; box.style.marginTop='8px';
@@ -972,7 +976,7 @@ async function bulkUpload(btn){
   btn.disabled=false; btn.textContent=orig;
 }
 function collectChannels(){
-  return CHANNELS.map(ch=>{var fields={};ch.fields.forEach(f=>{var el=document.querySelector('input[data-ch="'+ch.key+'"][data-k="'+f.k+'"]');if(el&&el.value.trim())fields[f.k]=el.value.trim();});return {channel:ch.key,mode:ch.key==='naver_searchad'?'delegated':(ch.key==='daangn'?'upload':'direct'),fields:fields};});
+  return VISIBLE_CHANNELS.map(ch=>{var fields={};ch.fields.forEach(f=>{var el=document.querySelector('input[data-ch="'+ch.key+'"][data-k="'+f.k+'"]');if(el&&el.value.trim())fields[f.k]=el.value.trim();});return {channel:ch.key,mode:ch.key==='naver_searchad'?'delegated':(ch.key==='daangn'?'upload':'direct'),fields:fields};});
 }
 async function saveClient(id){
   var name=document.getElementById('f-name').value.trim();
@@ -1017,7 +1021,7 @@ async function openDashboardNav(){
   var crows=(d.clients||[]).map(function(c){var al=(c.alerts||[]).find(function(a){return a.severity==='warn';});
     var stk=STK[c.status]||[c.status,'var(--sub)'];
     var st=al?'<span style="color:#c0322f;font-weight:700">● '+esc(shortReason(al.reason))+'</span>':'<span style="color:'+stk[1]+';font-weight:600">● '+stk[0]+'</span>';
-    return '<tr style="cursor:pointer" onclick="openDashboard('+c.id+')"><td style="font-weight:700">'+esc(c.name)+'<div style="font-size:11px;color:var(--sub);font-weight:400">'+esc(c.category||'-')+'</div></td><td style="color:var(--sub)">'+esc(c.owner_name||'-')+'</td><td style="text-align:right">'+c.connected+'/'+CHANNELS.length+'</td><td>'+st+'</td></tr>';}).join('');
+    return '<tr style="cursor:pointer" onclick="openDashboard('+c.id+')"><td style="font-weight:700">'+esc(c.name)+'<div style="font-size:11px;color:var(--sub);font-weight:400">'+esc(c.category||'-')+'</div></td><td style="color:var(--sub)">'+esc(c.owner_name||'-')+'</td><td style="text-align:right">'+visConn(c)+'/'+VISIBLE_CHANNELS.length+'</td><td>'+st+'</td></tr>';}).join('');
   var clientTable='<div class="section-title"><span class="ic" style="background:var(--green)">★</span> 광고주별 현황 ('+((d.clients||[]).length)+')</div><div class="cards"><div class="card full">'+((d.clients||[]).length?'<table><thead><tr><th>광고주</th><th>담당</th><th style="text-align:right">연동 매체</th><th>상태</th></tr></thead><tbody>'+crows+'</tbody></table>':'<div style="padding:20px;text-align:center;color:var(--sub)">관리 중인 광고주가 없어요. <b>➕ 광고주 등록 관리</b>에서 추가하세요.</div>')+'</div></div>';
   document.getElementById('dn-body').innerHTML=kpis+chBox+monitor+clientTable;
 }
@@ -1025,8 +1029,8 @@ async function openDashboardNav(){
 async function openSpending(){
   if(!(TOKEN&&ME)){go('login');return;}
   var sec=activateScreen('s-spending','spending');
-  sec.innerHTML='<div class="crumbs">스펜딩 소진현황</div><div class="ptitle">💰 스펜딩 소진현황</div>'+
-    '<div style="color:var(--sub);font-size:12.5px;margin:4px 0 14px">내가 관리하는 광고주들의 <b>광고비 집행·소진</b> 현황입니다.</div>'+
+  sec.innerHTML='<div class="crumbs">소진 관리 › 실시간 스펜딩</div><div class="ptitle">💰 소진 관리</div>'+
+    '<div style="color:var(--sub);font-size:12.5px;margin:4px 0 14px">내가 관리하는 광고주들의 <b>광고비 집행·소진</b> 현황입니다.</div>'+moneyTabs('spending')+
     '<div id="sp-body" style="color:var(--sub)">불러오는 중…</div>';
   var d; try{ d=await api('/team/overview'); }catch(e){ document.getElementById('sp-body').innerHTML='<span style="color:var(--red)">'+esc(e.message)+'</span>'; return; }
   var t=d.totals||{}, CARD='background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 18px;margin-bottom:16px';
@@ -1051,7 +1055,7 @@ async function openSpending(){
 async function openRecords(){
   if(!(TOKEN&&ME)){go('login');return;}
   var sec=activateScreen('s-records','records');
-  sec.innerHTML='<div class="crumbs">월별 소진 기록</div><div class="ptitle">📁 월별 소진 기록</div>'+
+  sec.innerHTML='<div class="crumbs">소진 관리 › 월별 마감 기록</div><div class="ptitle">💰 소진 관리</div>'+moneyTabs('records')+
     '<div style="background:var(--bluebg);border:1px solid rgba(47,111,224,.2);border-radius:12px;padding:12px 15px;font-size:12px;color:var(--text);line-height:1.75;margin-bottom:14px">'+
       '<b>📌 사용법</b><br>① <b>[엑셀 등록]</b>에서 그 달 1일~말일까지 광고비 업로드 → ② <b>[스펜딩 소진현황]</b>에서 합계 확인 → ③ 여기서 그 달 <b>‘📁 마감·기록 저장’</b> 클릭 → <b>업체별 확정 소진액이 표로 영구 보관</b>됩니다. (다음 달 업로드에도 안 바뀜)'+
     '</div>'+
@@ -1146,8 +1150,8 @@ async function openDashboard(id){
   sec.innerHTML='<div class="crumbs"><a onclick="openDashboardNav()" style="color:var(--blue);cursor:pointer">← 광고주 대시보드</a> ›'+esc(c.name)+'</div>'+
     '<div class="ptitle" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">'+esc(c.name)+' <button class="cancel" style="font-size:12px;padding:5px 10px" onclick="openForm('+id+')">✏️ 편집</button> <button class="cancel" style="font-size:12px;padding:5px 10px;border-color:#6c5ce7;color:#6c5ce7" onclick="openDossier('+id+',\''+esc(c.name).replace(/'/g,"")+'\')">📄 운영 내역서</button></div>'+
     '<div id="dash-body" style="margin-top:14px"><div class="cards"><div class="card full" style="padding:20px;color:var(--sub)">채널 데이터 불러오는 중… (네이버에 실시간 조회 중)</div></div></div>';
-  var connCount=(c.channels||[]).filter(function(x){return x.status==='connected'}).length;
-  var head='<div class="kpi-grid"><div class="kpi"><div class="t">연동 채널</div><div class="v">'+connCount+'/'+CHANNELS.length+'</div></div>'+
+  var connCount=visConn(c);
+  var head='<div class="kpi-grid"><div class="kpi"><div class="t">연동 채널</div><div class="v">'+connCount+'/'+VISIBLE_CHANNELS.length+'</div></div>'+
     '<div class="kpi"><div class="t">업종</div><div class="v" style="font-size:15px">'+esc(c.category||'-')+'</div></div>'+
     '<div class="kpi"><div class="t">담당</div><div class="v" style="font-size:15px">'+esc(c.owner_name||'-')+'</div></div>'+
     '<div class="kpi"><div class="t">상태</div><div class="v" style="font-size:15px">'+({active:'진행중',paused:'일시정지',ended:'종료'}[c.status]||c.status)+'</div></div></div>';
@@ -1307,7 +1311,7 @@ function renderYoutube(d, collectedAt){
   return '<div id="yt-block"><div class="section-title"><span class="ic" style="background:#ff0000;color:#fff">▶</span> 유튜브 <span style="font-size:11px;color:var(--sub);font-weight:500;margin-left:4px">'+src+'</span></div>'+kpis+table+'</div>';
 }
 // ===== 광고비 집행형 채널(메타·카카오·쿠팡·GFA) 공용 렌더러 =====
-var ADS_KEYS=['meta_ads','kakao','coupang_ads','naver_gfa'];
+var ADS_KEYS=['naver_gfa','coupang_ads','toss_ads'];
 function chMeta(key){ return CHANNELS.find(function(c){return c.key===key})||{name:key,color:'#888',abbr:'?',tcolor:'#fff'}; }
 function renderAds(key, d, collectedAt){
   var cm=chMeta(key), t=(d&&d.totals)||{};
@@ -1327,13 +1331,29 @@ function renderAds(key, d, collectedAt){
 function channelErr(name,color,abbr,err){ return '<div class="section-title"><span class="ic" style="background:'+color+'">'+abbr+'</span> '+esc(name)+'</div><div class="cards"><div class="card full" style="color:var(--red);padding:16px">연결 오류: '+esc(err||'')+'</div></div>'; }
 // ===== 광고주 현황 (삭제요청 → 대표 승인 → 보관소) =====
 var ST_KR={active:['진행중','var(--green)','var(--greenbg)'],paused:['일시정지','#8a93a3','#eceff4'],ended:['종료','#8a93a3','#eceff4'],delete_requested:['삭제 요청중','var(--amber)','var(--amberbg)'],archived:['사후관리(보관)','#6b7280','#eceff4']};
+// 소진 관리 3탭(스펜딩·월별기록·엑셀등록)은 해시는 각자 유지하되 네비는 한 메뉴로 표시한다.
+var NAV_ALIAS={records:'spending',upload:'spending'};
 function activateScreen(id,navKey){
   if(navKey) setRoute(navKey);
   document.body.className='view-app';
   document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
   var sec=document.getElementById(id); sec.className='screen page active';
-  document.querySelectorAll('.nav a').forEach(a=>a.classList.toggle('active', a.dataset.go===navKey));
+  var navHi=NAV_ALIAS[navKey]||navKey;
+  document.querySelectorAll('.nav a').forEach(a=>a.classList.toggle('active', a.dataset.go===navHi));
   window.scrollTo(0,0); return sec;
+}
+// 💰 소진 관리 공용 탭바 — 세 화면 상단에 같은 모양으로 붙는다.
+function moneyTabs(active){
+  var T=[['spending','📈 실시간 스펜딩','openSpending()'],
+         ['records','📁 월별 마감 기록','openRecords()'],
+         ['upload','📥 엑셀 등록','openUpload()']];
+  return '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:0 0 16px">'+T.map(function(t){
+    var on=t[0]===active;
+    return '<button onclick="'+t[2]+'" style="border:1px solid '+(on?'var(--blue)':'var(--line2)')+
+      ';background:'+(on?'var(--blue)':'var(--panel)')+';color:'+(on?'#fff':'var(--sub)')+
+      ';border-radius:999px;padding:7px 15px;font-size:12.5px;font-weight:700;cursor:pointer;font-family:inherit">'+
+      t[1]+'</button>';
+  }).join('')+'</div>';
 }
 var STATUS_FILTERS=[['','전체'],['active','진행중'],['paused','일시정지'],['archived','사후관리'],['delete_requested','삭제요청'],['ended','종료']];
 async function openStatus(){
@@ -1371,7 +1391,7 @@ function renderStatusTable(f){
     return '<tr><td style="'+TD+'font-weight:700">'+esc(c.name)+'</td><td style="'+TD+'color:var(--sub)">'+esc(c.owner_name||'-')+'</td>'+
       '<td style="'+TD+'"><span style="font-size:11px;font-weight:700;padding:3px 9px;border-radius:20px;color:'+st[1]+';background:'+st[2]+'">'+st[0]+'</span></td>'+
       '<td style="'+TD+'color:var(--sub);font-size:12px">'+((c.contract_start||c.contract_end)?(esc(c.contract_start||'')+' ~ '+esc(c.contract_end||'')):'<span style="color:var(--muted)">-</span>')+'</td>'+
-      '<td style="'+TD+'text-align:center">'+c.connected_count+'/'+CHANNELS.length+'</td><td style="'+TD+'">'+acts+'</td></tr>';
+      '<td style="'+TD+'text-align:center">'+visConn(c)+'/'+VISIBLE_CHANNELS.length+'</td><td style="'+TD+'">'+acts+'</td></tr>';
   }).join('');
   var TH='text-align:left;padding:11px 14px;background:#f7f8fb;color:var(--sub);font-size:11.5px;';
   document.getElementById('st-body').innerHTML='<div style="background:#fff;border:1px solid var(--line);border-radius:14px;overflow:hidden"><table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr>'+
@@ -1564,8 +1584,8 @@ async function openCampaign(){
   if(!clients.length){ document.getElementById('cmp-form').innerHTML='<div style="background:var(--panel);border:1px dashed var(--line2);border-radius:12px;padding:26px;text-align:center;color:var(--sub)">광고주가 없어요. 먼저 광고주를 등록하세요.</div>'; return; }
   var opts=clients.map(function(c){return '<option value="'+c.id+'">'+esc(c.name)+'</option>';}).join('');
   var ic='background:var(--panel2);border:1px solid var(--line2);border-radius:8px;padding:9px 11px;font-size:13px;color:var(--text)';
-  var CAMPAIGN_CHANNELS=['naver_searchad','meta_ads','meta_chehum','coupang_ads','youtube','kakao','naver_gfa'];
-  var defOn={naver_searchad:1,meta_ads:1,meta_chehum:1};
+  var CAMPAIGN_CHANNELS=['naver_searchad','naver_gfa','naver_commerce','coupang_ads'];
+  var defOn={naver_searchad:1,naver_gfa:1};
   var chPick=CAMPAIGN_CHANNELS.map(function(k){var m=chMeta(k);return '<label style="display:inline-flex;align-items:center;gap:6px;background:var(--panel2);border:1px solid var(--line2);border-radius:8px;padding:7px 11px;font-size:12.5px;cursor:pointer"><input type="checkbox" class="cmp-ch" value="'+k+'" '+(defOn[k]?'checked':'')+'><span style="display:inline-flex;width:16px;height:16px;border-radius:4px;background:'+m.color+';color:'+m.tcolor+';font-size:9px;font-weight:800;align-items:center;justify-content:center">'+m.abbr+'</span>'+esc(m.name)+'</label>';}).join('');
   document.getElementById('cmp-form').innerHTML=
     '<div style="background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px">'+
@@ -1779,7 +1799,7 @@ async function openTeam(){
       '<td class="who">'+esc(c.owner_name||'-')+'</td>'+
       '<td class="num">'+(c.spend?fmtMoney(c.spend):'-')+'</td>'+
       '<td class="num '+roasCls+'">'+(c.roas!=null?c.roas+'%':'-')+'</td>'+
-      '<td class="num">'+c.connected+'/'+CHANNELS.length+'</td>'+
+      '<td class="num">'+visConn(c)+'/'+VISIBLE_CHANNELS.length+'</td>'+
       '<td>'+stTag+'</td></tr>';
   }).join('');
   document.getElementById('tm-body').innerHTML=kpis+monitor+
@@ -1873,8 +1893,8 @@ async function setUserRole(uid,sel){
 async function openUpload(){
   if(!(TOKEN&&ME)){go('login');return;}
   var sec=activateScreen('s-upload','upload');
-  sec.innerHTML='<div class="crumbs">엑셀 업로드·수동 입력</div><div class="ptitle">📥 엑셀 업로드 · 수동 입력</div>'+
-    '<div style="color:var(--sub);font-size:12.5px;margin:4px 0 14px;line-height:1.6">API가 없거나 아직 연동 전인 채널(<b>네이버 디스플레이(GFA)·당근·토스애즈·모비온</b> 등)은 여기서 <b>엑셀/CSV 업로드</b>하거나 <b>숫자를 직접 입력</b>해 채웁니다. 저장하면 스펜딩·대시보드·AI 리포트에 자동 반영돼요.</div>'+
+  sec.innerHTML='<div class="crumbs">소진 관리 › 엑셀 등록</div><div class="ptitle">💰 소진 관리</div>'+
+    '<div style="color:var(--sub);font-size:12.5px;margin:4px 0 14px;line-height:1.6">API 연동이 안 되는 매체(<b>네이버 디스플레이(GFA)·쿠팡애즈·토스애즈</b>)는 여기서 <b>엑셀/CSV 업로드</b>하거나 <b>숫자를 직접 입력</b>해 채웁니다. 저장하면 스펜딩·대시보드·AI 리포트에 자동 반영돼요.</div>'+moneyTabs('upload')+
     '<div id="up-bulk"></div>'+
     '<div id="up-pick">불러오는 중…</div><div id="up-body" style="margin-top:14px"></div>';
   if(!isEditor()){ document.getElementById('up-pick').innerHTML='<div style="background:var(--amberbg);border:1px solid rgba(217,119,6,.3);border-radius:12px;padding:16px;color:var(--amber);font-weight:700">👁 읽기 전용 권한입니다. 업로드·입력은 광고팀만 가능해요.</div>'; return; }
@@ -1883,7 +1903,7 @@ async function openUpload(){
       '<div style="font-size:14.5px;font-weight:800;color:var(--meta);margin-bottom:4px">📦 일괄 업로드 (자동 매칭)</div>'+
       '<div style="font-size:12px;color:var(--sub);margin-bottom:11px;line-height:1.6">여러 리포트 파일을 한 번에 올리면 <b>광고 계정 ID</b>로 광고주를 자동 인식해 각자 자리에 대입합니다. <b>한 파일에 여러 계정이 섞여 있어도</b> 계정별로 자동 분리돼요.</div>'+
       '<div style="display:flex;gap:9px;align-items:center;flex-wrap:wrap">'+
-        '<select id="bulk-ch" style="background:#fff;border:1px solid var(--line2);border-radius:8px;padding:9px 11px;font-size:13px;color:var(--text)"><option value="naver_gfa">네이버 디스플레이(GFA)</option><option value="meta_ads">메타 광고</option><option value="kakao">카카오모먼트</option><option value="coupang_ads">쿠팡애즈</option></select>'+
+        '<select id="bulk-ch" style="background:#fff;border:1px solid var(--line2);border-radius:8px;padding:9px 11px;font-size:13px;color:var(--text)"><option value="naver_gfa">네이버 디스플레이(GFA)</option><option value="coupang_ads">쿠팡애즈</option><option value="toss_ads">토스애즈</option></select>'+
         '<input type="file" id="bulk-files" multiple accept=".xlsx,.xls,.csv" style="font-size:12px;flex:1;min-width:200px">'+
         '<button onclick="bulkUpload(this)" style="background:var(--meta);color:#fff;border:none;padding:9px 18px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">일괄 업로드</button>'+
       '</div>'+
@@ -1902,8 +1922,8 @@ async function upRender(){
   var body=document.getElementById('up-body'); body.innerHTML='<div style="color:var(--sub);padding:16px">현황 불러오는 중…</div>';
   var stored={};
   try{ var ms=await api('/clients/'+id+'/metrics/latest'); (ms.metrics||[]).forEach(function(x){stored[x.channel]=x;}); }catch(e){}
-  var UP_EXTRA=['naver_gfa','meta_ads','kakao','coupang_ads'];  // API 승인 대기 채널도 엑셀로 채움
-  var manual=CHANNELS.filter(function(c){return (c.fields||[]).length===0 || UP_EXTRA.indexOf(c.key)>=0;});
+  var UP_EXTRA=['naver_gfa','coupang_ads'];  // API 승인 대기 채널도 엑셀로 채움
+  var manual=VISIBLE_CHANNELS.filter(function(c){return (c.fields||[]).length===0 || UP_EXTRA.indexOf(c.key)>=0;});
   body.innerHTML=manual.map(function(c){ return upCard(id,c,stored[c.key]); }).join('')+
     '<div style="margin-top:4px;background:var(--bluebg);border:1px solid rgba(47,111,224,.2);border-radius:11px;padding:13px 15px;font-size:12px;color:var(--text);line-height:1.6">💡 <b>엑셀 받는 법</b> — 각 매체(네이버 <b>디스플레이(GFA)</b>·당근 등)에서 광고 리포트를 엑셀로 받아 해당 칸에 올리면 노출·클릭·광고비·전환을 <b>자동 인식</b>해 스펜딩·대시보드·리포트에 합산됩니다. 숫자만 있으면 <b>직접 입력</b>이 더 빨라요. <b>디스플레이(GFA)는 API가 열리기 전까지 이 엑셀 방식으로 관리</b>하면 됩니다.</div>';
 }
@@ -2336,17 +2356,17 @@ var GUIDES = {
     '<div class="gqa"><span class="q">Q. 상태(진행중/종료 등)는 어떻게 바꾸나요?</span><span class="a">A. [등록 관리]에서 변경하거나, 전산 업무단계가 자동 반영됩니다.</span></div>'+
     '<div class="gtip">💡 계약기간이 비면 <b>전산에서 그 업체의 ‘📢 광고센터 등록’을 켜면</b> 계약일·담당자가 자동으로 채워집니다.</div>'},
   channel: {t:"🔍 매체별 진행현황", h:
-    '<p class="lead">검색광고·체험단·유튜브 등 <b>매체(채널)별</b>로 연동·성과 현황을 보는 화면입니다.</p>'+
+    '<p class="lead">네이버 검색광고·디스플레이(GFA)·커머스 등 <b>매체별</b> 연동·성과 현황을 보는 화면입니다.</p>'+
     '<h4>📋 사용 프로세스</h4><ol>'+
     '<li>매체 카드에서 연동 광고주 수·합계 성과를 확인합니다.</li>'+
     '<li>성과가 낮은 매체는 해당 광고주들을 점검합니다.</li>'+
     '<li>매체별 비교로 어디에 예산·성과가 몰렸는지 파악합니다.</li></ol>'+
     '<h4>💡 활용 방안</h4><ul>'+
-    '<li>신규 매체(예: 유튜브) 도입 효과를 모니터링</li>'+
+    '<li>신규 매체(예: 디스플레이) 도입 효과를 모니터링</li>'+
     '<li>매체별 효율 비교로 <b>예산 재배분 근거</b> 마련 ([AI 인사이트] 예산재배분과 연계)</li>'+
     '<li>연동 0건 매체를 발견 → 도입 검토</li></ul>'+
     '<h4>❓ 자주 묻는 질문</h4>'+
-    '<div class="gqa"><span class="q">Q. 우리가 쓰는 매체가 목록에 없어요.</span><span class="a">A. [등록 관리]에서 그 매체 키를 넣으면 연동됩니다. API 없는 매체(당근 등)는 엑셀 업로드로요.</span></div>'+
+    '<div class="gqa"><span class="q">Q. 우리가 쓰는 매체가 목록에 없어요.</span><span class="a">A. [등록 관리]에서 그 매체 키를 넣으면 연동됩니다. API 없는 매체(디스플레이 등)는 엑셀 업로드로요.</span></div>'+
     '<div class="gqa"><span class="q">Q. 연동했는데 성과가 0이에요.</span><span class="a">A. 연동 직후엔 데이터가 없습니다. 다음 자동 수집(매일) 후 채워져요.</span></div>'+
     '<div class="gtip">💡 연동이 안 된 매체는 [광고주 등록 관리]에서 키를 입력해 연결하세요.</div>'},
   spending: {t:"💰 스펜딩 소진현황", h:
@@ -2397,7 +2417,7 @@ var GUIDES = {
     '<li>저장하면 다음 수집부터 데이터가 쌓입니다.</li></ol>'+
     '<h4>💡 활용 방안</h4><ul>'+
     '<li>전산 상호명을 정확히 맞추면 <b>계약기간 자동연동</b> + (전산 ‘광고센터 등록’ ON 시) 자동 생성과 연계</li>'+
-    '<li>메타체험단은 ‘🔍 체험단 광고주 찾기’ 버튼으로 검색해 매칭</li>'+
+    '<li>네이버 검색광고는 광고주가 <b>연동 요청 링크</b>로 직접 키를 넣게 하는 방법이 가장 빠릅니다</li>'+
     '<li>연결 테스트 에러 메시지로 키 입력 오류를 즉시 발견</li></ul>'+
     '<h4>❓ 자주 묻는 질문</h4>'+
     '<div class="gqa"><span class="q">Q. 저장했는데 데이터가 안 떠요.</span><span class="a">A. 수집은 매일 자동입니다. 저장 즉시가 아니라 다음 수집 후 반영돼요.</span></div>'+
@@ -2412,7 +2432,7 @@ var GUIDES = {
     '</ul></div>'+
     '<div class="gtip">💡 광고주명 철자가 하나만 달라도 자동연동이 안 됩니다 — 전산과 <b>정확히 동일</b>하게.</div>'},
   upload: {t:"📥 광고주 매체 엑셀 등록", h:
-    '<p class="lead">API가 없거나 아직 연동 전인 매체(<b>네이버 디스플레이(GFA)</b>·당근 등)를 <b>엑셀로 올려</b> 스펜딩·대시보드·리포트에 채우는 화면입니다. <b>한 건씩</b> 또는 <b>여러 개를 한 번에(자동 매칭)</b> 올릴 수 있어요.</p>'+
+    '<p class="lead">API 연동이 안 되는 매체(<b>네이버 디스플레이(GFA)·쿠팡애즈·토스애즈</b>)를 <b>엑셀로 올려</b> 스펜딩·대시보드·리포트에 채우는 화면입니다. <b>한 건씩</b> 또는 <b>여러 개를 한 번에(자동 매칭)</b> 올릴 수 있어요. 상단 탭으로 스펜딩·월별 기록과 오갑니다.</p>'+
     '<h4>📋 한 건씩 올리기</h4><ol>'+
     '<li>위에서 <b>광고주</b>를 선택합니다.</li>'+
     '<li>해당 매체 칸에 리포트 <b>엑셀/CSV를 업로드</b>합니다 (열 제목에 노출·클릭·광고비·전환·매출이 있으면 자동 인식).</li>'+
@@ -2426,12 +2446,12 @@ var GUIDES = {
     '<h4>💡 활용 방안</h4><ul>'+
     '<li><b>네이버 디스플레이(GFA)</b>는 API가 열리기 전까지 이 엑셀 방식으로 관리</li>'+
     '<li>수백 광고주도 <b>계정 ID만 등록</b>해두면 리포트를 모아 한 번에 처리</li>'+
-    '<li>당근·토스 등 무API 매체, 과거 데이터 일괄 적재</li></ul>'+
+    '<li>디스플레이·쿠팡 등 무API 매체, 과거 데이터 일괄 적재</li></ul>'+
     '<h4>❓ 자주 묻는 질문</h4>'+
     '<div class="gqa"><span class="q">Q. 일괄 업로드했는데 ‘미매칭’이 떠요.</span><span class="a">A. 그 계정 ID가 광고주에 등록 안 돼 있어서예요. [광고주 등록 관리]에서 계정 ID를 넣고 다시 올리면 됩니다.</span></div>'+
     '<div class="gqa"><span class="q">Q. 광고비가 0으로 들어가요.</span><span class="a">A. 리포트의 합계 열(총비용)이 인식돼야 해요. ‘결과당 비용’·‘평균’ 같은 단가 열만 있으면 0이 됩니다(시스템이 단가 열은 자동 제외).</span></div>'+
-    '<div class="gqa"><span class="q">Q. 어떤 매체를 엑셀로 올리나요?</span><span class="a">A. 네이버 디스플레이(GFA)·메타·카카오·쿠팡(연동 전)·당근·토스·모비온. 검색광고·체험단·유튜브는 자동이라 불필요.</span></div>'+
-    '<div class="gtip">💡 자동 연동 매체(검색광고·체험단·유튜브)는 여기서 올릴 필요 없이 자동으로 모입니다.</div>'},
+    '<div class="gqa"><span class="q">Q. 어떤 매체를 엑셀로 올리나요?</span><span class="a">A. 네이버 디스플레이(GFA)·쿠팡애즈·토스애즈. 네이버 검색광고·커머스는 API 자동 수집이라 올릴 필요 없습니다.</span></div>'+
+    '<div class="gtip">💡 자동 연동 매체(네이버 검색광고·커머스)는 여기서 올릴 필요 없이 매일 자동으로 모입니다.</div>'},
   campaign: {t:"🤖 AI 캠페인 설계", h:
     '<p class="lead">AI가 광고주 데이터 기반으로 <b>캠페인·키워드·입찰가를 설계</b>하고, 실제 적용까지 해 줍니다.</p>'+
     '<h4>📋 사용 프로세스</h4><ol>'+
@@ -2529,7 +2549,7 @@ var GUIDES = {
     '<li>(관리자) 직원 권한(admin·lead·staff·viewer)을 지정합니다.</li></ol>'+
     '<h4>💡 활용 방안</h4><ul>'+
     '<li>정기 비밀번호 교체로 보안 유지</li>'+
-    '<li>공용키(유튜브 등)를 한 곳에서 관리 → 전 광고주에 일괄 적용</li>'+
+    '<li>회사 공용키를 한 곳에서 관리 → 전 광고주에 일괄 적용</li>'+
     '<li>신규 입사자 권한 부여·조정</li></ul>'+
     '<h4>❓ 자주 묻는 질문</h4>'+
     '<div class="gqa"><span class="q">Q. 비밀번호를 잊었어요.</span><span class="a">A. 관리자(metainchelp@gmail.com)에게 초기화를 요청하세요.</span></div>'+
