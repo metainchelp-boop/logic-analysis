@@ -1932,9 +1932,14 @@ jobs:
             [ -z "$LOG" ] && { echo "  ⚠️ nginx 접속 기록을 못 찾았다 — 경로가 다르거나 권한이 없다."; exit 0; }
 
             sudo -n true 2>/dev/null && S="sudo -n" || S=""
+            # ⚠️ 「마지막 요청 시각」은 **현재 로그만** 봐야 한다.
+            #    2026-08-31 실수 — 현재 로그와 회전분(.log.1)을 이어 붙이고 마지막 줄을 읽었더니,
+            #    회전 경계(00:00)가 「마지막 시각」으로 나와 「그 뒤로 안 온다」로 오독될 뻔했다.
+            #    ⇒ 겹침 판정은 둘을 합쳐 넓게 보고, 시각 판정은 현재 로그만 본다.
+            $S sh -c "cat $LOG" > /tmp/_now.txt 2>/dev/null || cat $LOG > /tmp/_now.txt 2>/dev/null
             $S sh -c "cat $LOG /var/log/nginx/*access*.log.1 2>/dev/null" > /tmp/_acc.txt 2>/dev/null || \
-              cat $LOG > /tmp/_acc.txt 2>/dev/null
-            echo "  읽은 줄 수: $(wc -l < /tmp/_acc.txt)"
+              cp /tmp/_now.txt /tmp/_acc.txt
+            echo "  읽은 줄 수: 합쳐서 $(wc -l < /tmp/_acc.txt) · 현재 로그만 $(wc -l < /tmp/_now.txt)"
 
             python3 - <<'PY2'
             import re, collections
@@ -1963,16 +1968,25 @@ jobs:
                 print("    ⇒ **같은 회선을 나눠 쓰고 있다.** 우리 캡차 원인에 이 축을 넣어야 한다.")
             else:
                 print("    ⇒ 겹치는 곳이 없다 — 자동입찰과 우리 수집은 다른 회선에서 온다.")
-            # 언제까지 왔나 — 「지금도 도는가」
+            # 언제까지 왔나 — 「지금도 도는가」. ⚠️ **현재 로그만** 본다(회전 경계 오독 방지).
+            try:
+                now_lines = open("/tmp/_now.txt", errors="ignore").read().splitlines()
+            except Exception:
+                now_lines = []
             def last_ts(pred):
-                for ln in reversed(lines):
+                for ln in reversed(now_lines):
                     if pred(ln):
                         m = re.search(r'\[([^\]]+)\]', ln)
                         return m.group(1) if m else "(시각 못 읽음)"
                 return None
             print()
+            print(f"  [현재 로그 {len(now_lines)}줄 기준]")
             print(f"  마지막 /autobid 요청 시각      : {last_ts(lambda l: '/autobid' in l) or '기록 없음'}")
             print(f"  마지막 /api/collector 요청 시각: {last_ts(lambda l: '/api/collector' in l) or '기록 없음'}")
-            print("  ⇒ /autobid 가 최근까지 계속 오면 에이전트는 도는 것이다(개발 대기와 무관).")
+            na = sum(1 for l in now_lines if '/autobid' in l)
+            nc = sum(1 for l in now_lines if '/api/collector' in l)
+            print(f"  현재 로그 안 건수 — 자동입찰 {na}건 · 우리 수집 {nc}건")
+            print("  ⇒ 두 시각이 비슷하게 최근이면 **지금도 함께 돌고 있다**.")
+            print("  ⇒ /autobid 만 옛 시각에 멈춰 있으면 에이전트는 지금 안 도는 것이다.")
             PY2
-            rm -f /tmp/_acc.txt
+            rm -f /tmp/_acc.txt /tmp/_now.txt
