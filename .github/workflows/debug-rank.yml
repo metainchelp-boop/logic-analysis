@@ -30,6 +30,10 @@ on:
         description: '상품 주소 모양 실측 — off(기본) / on. 어느 호스트(스마트스토어·브랜드스토어·카탈로그)를 쓰는지, 같은 슬러그가 두 호스트에 걸쳐 있는지(읽기 전용·업체명 미출력).'
         required: false
         default: 'off'
+      rtime:
+        description: '보고서 시각 판정 — off(기본) / on. reports.created_at 이 UTC 인지 KST 인지 행 단위로 판정하고, 소급 보정이 날짜를 넘기는 행이 있는지 센다(읽기 전용·업체명/제목 미출력).'
+        required: false
+        default: 'off'
       audit:
         description: '전수 점검 — off(기본) / on. 표 존재·시각 정합·오류 집계·잡 등록 상태를 한 번에(읽기 전용).'
         required: false
@@ -69,9 +73,10 @@ jobs:
           IN_VERIFY: ${{ github.event.inputs.verify }}
           IN_SLOW: ${{ github.event.inputs.slow }}
           IN_AUDIT: ${{ github.event.inputs.audit }}
+          IN_RTIME: ${{ github.event.inputs.rtime }}
           IN_BRANCH_CODE: ${{ github.event.inputs.use_branch_code }}
         with:
-          envs: RL_SRC_GZ,IN_COLLECTOR,IN_RANK_LINK,IN_CAPACITY,IN_STRUCTURE,IN_EXPIRED,IN_VERIFY,IN_SLOW,IN_AUDIT,IN_BRANCH_CODE
+          envs: RL_SRC_GZ,IN_COLLECTOR,IN_RANK_LINK,IN_CAPACITY,IN_STRUCTURE,IN_EXPIRED,IN_VERIFY,IN_SLOW,IN_AUDIT,IN_RTIME,IN_BRANCH_CODE
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
@@ -126,6 +131,103 @@ jobs:
             PY
               echo
             fi
+            if [ "$IN_RTIME" = "on" ]; then
+              echo "== 보고서 시각 판정 (읽기 전용 · 업체명/제목 미출력) =="
+              timeout 90 docker exec -i logic-analysis python3 - <<'PY'
+            import sqlite3, os
+            c = sqlite3.connect(os.getenv("DB_PATH", "/app/data/logic_data.db"))
+            print("  현재 UTC %s / localtime %s" % (
+                c.execute("SELECT datetime('now')").fetchone()[0],
+                c.execute("SELECT datetime('now','localtime')").fetchone()[0]))
+
+            print("  -- ① 서버 표 정의(코드가 아니라 실제 표) --")
+            for t in ["reports"]:
+                try:
+                    sql = c.execute("SELECT sql FROM sqlite_master WHERE name=?", (t,)).fetchone()[0]
+                    for line in sql.split("\n"):
+                        if "_at" in line:
+                            print("    %s" % line.strip())
+                except Exception as e:
+                    print("    %s 조회 실패: %s" % (t, e))
+
+            print("  -- ② 자동 보고서 시:분 분포 (실행은 항상 월 09:40 KST) --")
+            print("     00:4x = UTC 로 적힘 · 09:4x = KST 로 적힘")
+            try:
+                rows = list(c.execute(
+                    "SELECT substr(created_at,12,5) hm, COUNT(*) n, MIN(substr(created_at,1,10)),"
+                    " MAX(substr(created_at,1,10)) FROM reports WHERE is_auto=1"
+                    " GROUP BY hm ORDER BY n DESC LIMIT 12"))
+                for r in rows:
+                    print("    %s · %5d건 · %s ~ %s" % (r[0], r[1], r[2], r[3]))
+                if not rows:
+                    print("    (자동 보고서 없음)")
+            except Exception as e:
+                print("    조회 실패: %s" % e)
+
+            print("  -- ③ 수동 보고서 시각대 분포 (업무시간 09~19 KST 가 정상) --")
+            try:
+                for r in c.execute(
+                    "SELECT substr(created_at,12,2) h, COUNT(*) n FROM reports"
+                    " WHERE COALESCE(is_auto,0)=0 GROUP BY h ORDER BY h"):
+                    print("    %s시 · %5d건" % (r[0], r[1]))
+            except Exception as e:
+                print("    조회 실패: %s" % e)
+
+            print("  -- ④ 시계가 도중에 바뀌었나 (id 순 역행 점검) --")
+            print("     한 시계만 썼다면 id 가 커질수록 시각도 커진다. 9시간짜리 역행이 있으면 도중에 바뀐 것이다.")
+            try:
+                prev = None
+                jumps = []
+                for rid, ts in c.execute(
+                        "SELECT id, created_at FROM reports WHERE created_at IS NOT NULL"
+                        " AND created_at <> '' ORDER BY id"):
+                    if prev is not None and ts < prev[1]:
+                        d = (c.execute("SELECT (julianday(?) - julianday(?)) * 24",
+                                       (prev[1], ts)).fetchone()[0] or 0)
+                        if d >= 1.0:
+                            jumps.append((prev[0], rid, round(d, 2)))
+                    prev = (rid, ts)
+                if jumps:
+                    print("    ⚠️ 역행 %d곳:" % len(jumps))
+                    for a, b, d in jumps[:10]:
+                        print("      id %s → %s 에서 %s시간 되돌아감" % (a, b, d))
+                else:
+                    print("    역행 0곳 — 처음부터 끝까지 한 시계다.")
+            except Exception as e:
+                print("    조회 실패: %s" % e)
+
+            print("  -- ⑤ 소급 보정(+9시간)이 날짜를 넘기는 행 --")
+            print("     15시 이후에 적힌 행만 날짜가 하루 밀린다. 0건이면 보정해도 ①의 날짜 축은 그대로다.")
+            try:
+                tot = c.execute("SELECT COUNT(*) FROM reports").fetchone()[0]
+                cross = c.execute(
+                    "SELECT COUNT(*) FROM reports WHERE created_at IS NOT NULL"
+                    " AND substr(created_at,12,2) >= '15'").fetchone()[0]
+                nullish = c.execute(
+                    "SELECT COUNT(*) FROM reports WHERE created_at IS NULL OR created_at = ''"
+                    " OR length(created_at) < 16").fetchone()[0]
+                print("    전체 %d건 · 날짜 넘김 %d건 · 시각 없음/짧음 %d건" % (tot, cross, nullish))
+            except Exception as e:
+                print("    조회 실패: %s" % e)
+
+            print("  -- ⑥ 같은 병을 앓는 다른 표 (기본값이 UTC 인 칸) --")
+            try:
+                hits = 0
+                for name, sql in c.execute(
+                        "SELECT name, sql FROM sqlite_master WHERE type='table' AND sql IS NOT NULL"):
+                    for line in (sql or "").split("\n"):
+                        u = line.upper()
+                        if "CURRENT_TIMESTAMP" in u:
+                            print("    %-26s %s" % (name, line.strip()))
+                            hits += 1
+                if not hits:
+                    print("    없음 — reports 말고는 전부 localtime 이다.")
+            except Exception as e:
+                print("    조회 실패: %s" % e)
+            PY
+              echo
+            fi
+            echo
             echo
             if [ "$IN_SLOW" = "on" ]; then
               echo "== 느림 진단 (읽기 전용) =="
