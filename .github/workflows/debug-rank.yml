@@ -1581,6 +1581,26 @@ jobs:
               echo "    ↑ Content-Encoding 이 없으면 그 형식은 압축 안 되고 있다"
             done
             echo
+            echo "-- ②-b nginx 설정의 gzip 규칙 (읽기 전용 · 확정용) --"
+            # ⚠️ 74바이트 JSON 이 압축 안 된 것만으로는 「타입 때문」인지 「크기 때문」인지 못 가른다.
+            #    gzip_types 와 gzip_min_length 를 직접 읽어야 확정된다.
+            #    ⚠️ nginx 는 ③ 광고센터와 함께 쓰는 자원이다 — **읽기만** 한다.
+            sudo -n grep -rhiE '^\s*gzip[a-z_]*\s' /etc/nginx/nginx.conf /etc/nginx/conf.d/ \
+                 /etc/nginx/sites-enabled/ 2>/dev/null | sed 's/^\s*/    /' | sort -u \
+              || grep -rhiE '^\s*gzip[a-z_]*\s' /etc/nginx/nginx.conf /etc/nginx/conf.d/ \
+                 /etc/nginx/sites-enabled/ 2>/dev/null | sed 's/^\s*/    /' | sort -u \
+              || echo "    (설정을 읽을 권한이 없다 — 아래 큰 JSON 실측으로 판단)"
+            echo
+            echo "-- ②-c 큰 JSON 을 실제로 받아 본다 (크기 confound 제거) --"
+            # 정적으로 서빙되는 큰 JSON 이 있으면 그것이 가장 확실한 증거다.
+            for f in /dist/bundle.json /bundle.json; do
+              code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 10 "https://logic.metainc.co.kr$f")
+              [ "$code" = "200" ] || continue
+              echo "  경로 $f"
+              curl -sk -o /dev/null -D - -H 'Accept-Encoding: gzip' --max-time 10 \
+                "https://logic.metainc.co.kr$f" | grep -iE '^HTTP/|content-encoding|content-length|content-type' | sed 's/^/    /'
+            done
+            echo
             echo "-- ③ 547KB 응답을 압축하면 몇 KB 인가 (실제 데이터로) --"
             docker exec -i logic-analysis python3 - <<'PY'
             # ⚠️ 내용은 한 글자도 안 바꾼다. 같은 JSON 을 전송만 압축했을 때의 크기를 잰다.
