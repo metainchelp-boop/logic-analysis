@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel, field_validator
 from typing import Optional, List, Dict, Any
 from datetime import datetime, date
@@ -333,6 +334,38 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["Content-Type", "Authorization", "X-API-Key", "X-Handover-Key"],
 )
+
+# ==================== 응답 압축 (2026-08-31) ====================
+# 대표 지시 「절대 어떠한 것도 변경되거나 바뀌어선 안 되고 속도 체감만」에 정확히 맞는 수단이다.
+# 압축은 **내용을 한 글자도 바꾸지 않는다** — 브라우저가 알아서 풀기 때문에 화면·데이터·동작이 그대로다.
+#
+# 왜 필요한가(2026-08-31 서버 실측):
+#   · 관리자 화면의 업체 목록 응답이 **614곳 · 547KB**. 쿼리는 33.8ms 로 이미 작은데,
+#     전송이 사내 유선 45ms · 느린 회선 224ms · 모바일 896ms 로 훨씬 컸다.
+#   · nginx 설정에 `gzip on;` **한 줄뿐이고 gzip_types 가 없다** → nginx 기본값은 text/html 뿐이라
+#     HTML 은 압축되는데 **API 응답(application/json)은 그대로 나가고 있었다**(설정 원문으로 확인).
+#   · 실측 압축률: 547KB → **60KB(11%)**. 전송 45→5ms · 224→25ms · 896→99ms.
+#
+# ⚠️ nginx 를 고치지 않고 앱에서 한다. nginx 는 ③ 광고센터와 함께 쓰는 자원이라
+#    건드리려면 사전 통지가 필요하고(CLAUDE.md), 여기서 하면 우리 저장소 안에서 끝난다.
+#    앱이 Content-Encoding 을 붙여 보내면 nginx 는 그대로 통과시킨다(이중 압축 없음).
+#
+# ⚠️ compresslevel 을 6 으로 낮춘다. 기본값 9 는 실측 25~44ms 가 걸려,
+#    사내 유선에서는 아낀 전송 시간(40ms)을 CPU 로 도로 까먹는다.
+#    6 은 **6ms 에 60KB** 로 사실상 같은 크기다 — 여기서 기본값을 쓰면 손해다.
+#    ⚠️ 그런데 이 인자는 starlette 버전에 따라 없을 수 있다. 없는데 넘기면 기동이 통째로 죽으므로
+#       서명을 먼저 확인하고 넘긴다(add_middleware 는 즉시 생성하지 않아 try/except 로는 못 잡는다).
+#
+# ⚠️ minimum_size=500 — 작은 응답까지 압축하면 헤더 때문에 오히려 커지고 CPU 만 쓴다.
+_gzip_kwargs = {"minimum_size": 500}
+try:
+    import inspect as _inspect
+    if "compresslevel" in _inspect.signature(GZipMiddleware.__init__).parameters:
+        _gzip_kwargs["compresslevel"] = 6
+except Exception:
+    pass
+app.add_middleware(GZipMiddleware, **_gzip_kwargs)
+logger.info(f"🗜  응답 압축 활성화 — {_gzip_kwargs}")
 
 # API 키 인증 미들웨어 등록
 app.add_middleware(ApiKeyAuthMiddleware)

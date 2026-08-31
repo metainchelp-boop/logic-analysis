@@ -1249,6 +1249,59 @@ def test_인덱스가_실제로_커버링으로_쓰인다():
         f"커버링으로 안 쓰인다 — 칸 구성을 다시 볼 것: {plan}"
 
 
+# ==================== 응답 압축 (2026-08-31) ====================
+# 내용을 바꾸지 않고 전송만 줄인다. 켜져 있는지와, 켜는 방식이 안전한지를 지킨다.
+
+def test_응답_압축이_켜져_있다():
+    src = _src("main.py")
+    assert "from starlette.middleware.gzip import GZipMiddleware" in src, "압축 미들웨어 임포트가 없다"
+    assert "app.add_middleware(GZipMiddleware" in src, "압축 미들웨어 등록이 사라졌다"
+    assert '"minimum_size": 500' in src, "작은 응답까지 압축하면 오히려 커진다 — minimum_size 가 사라졌다"
+
+
+def test_압축수준을_기본값_9_로_두지_않는다():
+    """기본 9 는 실측 25~44ms. 사내 유선에서는 아낀 전송(40ms)을 CPU 로 도로 까먹는다.
+    6 은 6ms 에 사실상 같은 크기(60KB)다."""
+    src = _src("main.py")
+    assert '"compresslevel"] = 6' in src or '"compresslevel": 6' in src, \
+        "compresslevel 을 6 으로 낮추는 부분이 사라졌다 — 기본값 9 면 빠른 회선에서 손해다"
+
+
+def test_압축수준_인자가_없는_버전에서도_기동한다():
+    """⚠️ add_middleware 는 즉시 생성하지 않아 try/except 로는 못 잡는다 —
+       인자가 없는 starlette 을 만나면 기동이 통째로 죽는다. 서명을 먼저 보는지 확인한다."""
+    import inspect
+
+    class 옛버전:                      # compresslevel 을 안 받는다
+        def __init__(self, app, minimum_size=500): pass
+
+    class 새버전:
+        def __init__(self, app, minimum_size=500, compresslevel=9): pass
+
+    for cls, 기대 in ((옛버전, False), (새버전, True)):
+        kw = {"minimum_size": 500}
+        if "compresslevel" in inspect.signature(cls.__init__).parameters:
+            kw["compresslevel"] = 6
+        assert ("compresslevel" in kw) is 기대, f"{cls.__name__} 판정이 틀렸다"
+        cls(None, **kw)               # 실제로 만들어 봐서 TypeError 가 안 나는지 확인
+
+    src = _src("main.py")
+    assert "inspect.signature" in src or "_inspect.signature" in src, \
+        "서명 확인 없이 compresslevel 을 넘기고 있다 — 옛 starlette 에서 기동이 죽는다"
+
+
+def test_압축은_내용을_바꾸지_않는다():
+    """대표 조건 「절대 어떠한 것도 변경되거나 바뀌어선 안 된다」의 근거."""
+    import gzip
+    import json
+    본문 = json.dumps({"success": True, "data": [{"id": i, "name": "업체%d" % i,
+                                                 "키워드": ["가", "나", "다"]} for i in range(300)]},
+                     ensure_ascii=False).encode("utf-8")
+    묶음 = gzip.compress(본문, 6)
+    assert gzip.decompress(묶음) == 본문, "압축을 풀면 원본과 달라진다"
+    assert len(묶음) < len(본문) / 2, f"압축이 안 된다 ({len(본문)} → {len(묶음)})"
+
+
 if __name__ == "__main__":
     _tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     _failed = 0
