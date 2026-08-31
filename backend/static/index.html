@@ -436,7 +436,7 @@
   <aside class="nav">
     <div class="logo" style="display:flex;align-items:center;gap:8px"><img src="/logo.png" alt="METAINC" style="height:22px"><span style="font-size:13px;color:var(--sub);font-weight:700">광고 센터</span></div>
     <div class="group">대시보드</div>
-    <a data-go="home" onclick="go('home')">🏠 담당자 메인보드</a>
+    <a data-go="home" onclick="go('home')">🎯 네이버 관제</a>
     <a data-go="dashboard" onclick="openDashboardNav()">📊 광고주 대시보드</a>
     <a data-go="status" onclick="openStatus()">📋 광고주 진행현황</a>
     <a data-go="spending" onclick="openSpending()">💰 소진 관리</a>
@@ -777,39 +777,110 @@ function logout(){ TOKEN=""; ME=null; localStorage.removeItem("token"); localSto
 function applyRole(){ document.querySelectorAll('.nav-admin').forEach(a=>a.style.display=(ME&&ME.role==='admin')?'block':'none'); }
 function isEditor(){ return !!(ME && ME.role!=='viewer'); }
 
+// ═══ 🎯 네이버 관제 — 광고주 전체를 한 표에서(연동상태·성과·특이사항) ═══
+var BOARD={rows:[],filter:'all',q:''};
+var CONNECT_META={
+  connected:   ['연동완료','ok'],
+  link_sent:   ['링크발송됨','warn'],
+  link_expired:['링크만료','bad'],
+  not_requested:['미요청','mute'],
+  stale:       ['수집이상','info']
+};
+function naverConn(c){  // 네이버 계열 연동 수(관제의 핵심 지표)
+  var NV=['naver_searchad','naver_commerce','naver_gfa'];
+  return ((c&&c.connected_channels)||[]).filter(function(k){return NV.indexOf(k)>=0;}).length;
+}
+function boardState(c){
+  // 연동은 됐는데 최근 수집이 끊긴 경우를 따로 표시한다(옛 숫자가 계속 보이는 함정).
+  if(c.connect_state==='connected'&&c.last_collected){
+    var hrs=(Date.now()-new Date(c.last_collected).getTime())/3600000;
+    if(hrs>48) return 'stale';
+  }
+  return c.connect_state||'not_requested';
+}
 async function loadHome(){
   var sec=document.getElementById('s-home');
-  var roleKr={staff:"담당자",lead:"팀장",admin:"대표",viewer:"읽기 전용"}[ME.role]||ME.role;
-  sec.innerHTML='<div class="hello">안녕하세요, <span>'+esc(ME.name)+'</span>님 👋</div><div class="sub">불러오는 중…</div>';
+  sec.innerHTML='<div class="ptitle">🎯 네이버 관제</div><div class="sub">불러오는 중…</div>';
   try{
-    var clients=await api("/clients");
-    var alertsRes=await api("/alerts").catch(function(){return {alerts:[]};});
-    var alerts=(alertsRes&&alertsRes.alerts)||[];
-    var warnN=alerts.filter(a=>a.severity==='warn').length;
-    var alertHtml=alerts.length?(
-      '<div class="alert-banner '+(warnN?'crit':'')+'">'+
-      '<div class="ab-head">⚠️ 특이사항 '+alerts.length+'건'+(warnN?(' · 긴급 '+warnN):'')+'</div>'+
-      alerts.slice(0,8).map(function(a){return '<div class="alert-row" onclick="openDashboard('+a.client_id+')"><span class="dot '+a.severity+'"></span><b>'+esc(a.name)+'</b> — '+esc(a.reason)+'</div>';}).join('')+
-      (alerts.length>8?'<div style="font-size:11.5px;color:var(--sub);margin-top:4px">외 '+(alerts.length-8)+'건…</div>':'')+
-      '</div>'):'';
-    var noKey=clients.filter(c=>visConn(c)===0).length;
-    var todo=clients.filter(c=>visConn(c)<VISIBLE_CHANNELS.length).slice(0,3).map(c=>'<span class="chip">'+esc(c.name)+' · 채널 '+visConn(c)+'/'+VISIBLE_CHANNELS.length+'</span>').join("");
-    var cards=clients.length?clients.map(cardHtml).join(""):'<div style="grid-column:1/-1;color:var(--sub);padding:30px;text-align:center;border:1px dashed var(--line2);border-radius:14px;background:#fff">아직 등록된 광고주가 없어요. <b>+ 신규 광고주</b>로 시작하세요.</div>';
+    var d=await api('/team/overview');
+    BOARD.rows=(d.clients||[]).map(function(c){c._st=boardState(c);return c;});
+    var t=d.totals||{};
+    var n={all:BOARD.rows.length, alert:0, connected:0, link_sent:0, link_expired:0, not_requested:0, stale:0};
+    BOARD.rows.forEach(function(c){ n[c._st]=(n[c._st]||0)+1; if((c.alerts||[]).length) n.alert++; });
+    var K='background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:13px 15px;flex:1;min-width:150px';
+    function kp(k,v,col){return '<div style="'+K+'"><div style="font-size:11.5px;color:var(--sub)">'+k+'</div>'+
+      '<div style="font-size:22px;font-weight:800;color:'+(col||'var(--text)')+'">'+v+'</div></div>';}
     sec.innerHTML=
-      '<div class="hello">안녕하세요, <span>'+esc(ME.name)+'</span>님 👋</div>'+
-      '<div class="sub">'+roleKr+' · 담당 광고주 <b>'+clients.length+'곳</b></div>'+
-      '<div class="summary">'+
-        '<div class="scard"><div class="k">담당 광고주</div><div class="v">'+clients.length+'</div></div>'+
-        '<div class="scard"><div class="k">연동 진행</div><div class="v">'+clients.filter(c=>visConn(c)>0).length+'</div></div>'+
-        '<div class="scard '+(noKey?'warn':'')+'"><div class="k">키 미연동</div><div class="v">'+noKey+'</div></div>'+
-        '<div class="scard"><div class="k">데이터 수집</div><div class="v" style="font-size:13px;color:var(--sub);font-weight:700">다음 스프린트</div></div>'+
+      '<div class="ptitle">🎯 네이버 관제</div>'+
+      '<div class="sub" style="margin-bottom:14px">광고주 전체를 한 표에서 — 연동 상태 · 이번 달 성과 · 특이사항. <b>행을 누르면 상세</b>로 들어갑니다.</div>'+
+      '<div style="display:flex;gap:11px;flex-wrap:wrap;margin-bottom:14px">'+
+        kp('전체 광고주',n.all)+
+        kp('네이버 연동완료',n.connected,'var(--green)')+
+        kp('미연동',(n.link_sent+n.link_expired+n.not_requested),'var(--amber)')+
+        kp('특이사항',n.alert,n.alert?'var(--red)':'var(--text)')+
       '</div>'+
-      alertHtml+
-      (todo?'<div class="todo"><span>🔔 <b>할 일</b></span>'+todo+'</div>':'')+
-      '<div class="row-head"><h2>'+(isEditor()?'내 광고주':'전체 광고주 (읽기 전용)')+'</h2>'+(isEditor()?'<button onclick="openForm(null)" style="background:var(--blue);color:#fff;border:none;border-radius:10px;padding:9px 15px;font-weight:700;font-size:13px;cursor:pointer">+ 신규 광고주</button>':'<span style="font-size:12px;color:var(--amber);font-weight:700">👁 읽기 전용 — 광고 관리팀만 수정</span>')+'</div>'+
-      '<div class="adv-grid">'+cards+'</div>';
-    clients.forEach(c=>{var el=document.getElementById('hc-'+c.id);if(el)el.onclick=()=>openDashboard(c.id);});
+      '<div id="bd-filters" style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:11px"></div>'+
+      '<div style="margin-bottom:11px"><input id="bd-q" placeholder="🔍 광고주 이름 검색" oninput="BOARD.q=this.value;renderBoard()" '+
+        'style="width:100%;max-width:320px;border:1px solid var(--line2);border-radius:9px;padding:9px 13px;font-size:13px;font-family:inherit"></div>'+
+      '<div id="bd-body"></div>';
+    var F=[['all','전체',n.all],['alert','⚠️ 특이사항',n.alert],['connected','연동완료',n.connected],
+           ['link_sent','링크발송됨',n.link_sent],['link_expired','링크만료',n.link_expired],
+           ['not_requested','미요청',n.not_requested],['stale','수집이상',n.stale]];
+    document.getElementById('bd-filters').innerHTML=F.map(function(f){
+      return '<button onclick="BOARD.filter=\''+f[0]+'\';renderBoard()" data-bf="'+f[0]+'" '+
+        'style="border:1px solid var(--line2);background:var(--panel);color:var(--sub);border-radius:999px;'+
+        'padding:6px 13px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit">'+f[1]+' '+f[2]+'</button>';
+    }).join('');
+    renderBoard();
   }catch(e){ sec.innerHTML+='<div style="color:var(--red);padding:20px">'+esc(e.message)+'</div>'; }
+}
+function renderBoard(){
+  document.querySelectorAll('#bd-filters button').forEach(function(b){
+    var on=b.dataset.bf===BOARD.filter;
+    b.style.background=on?'var(--blue)':'var(--panel)';
+    b.style.color=on?'#fff':'var(--sub)';
+    b.style.borderColor=on?'var(--blue)':'var(--line2)';
+  });
+  var q=(BOARD.q||'').trim().toLowerCase();
+  var rows=BOARD.rows.filter(function(c){
+    if(q&&(c.name||'').toLowerCase().indexOf(q)<0) return false;
+    if(BOARD.filter==='all') return true;
+    if(BOARD.filter==='alert') return (c.alerts||[]).length>0;
+    return c._st===BOARD.filter;
+  });
+  var TH='text-align:left;padding:9px 8px;color:var(--sub);font-size:10.5px;font-weight:800;border-bottom:1px solid var(--line);white-space:nowrap';
+  var TD='padding:10px 8px;border-bottom:1px solid var(--line2);vertical-align:middle';
+  var body=rows.length?rows.map(function(c){
+    var m=CONNECT_META[c._st]||CONNECT_META.not_requested;
+    var C={ok:['var(--greenbg)','var(--green)'],warn:['var(--amberbg)','var(--amber)'],
+           bad:['var(--redbg)','var(--red)'],mute:['var(--panel2)','var(--sub)'],
+           info:['#f4f3ff','#6941c6']}[m[1]];
+    var sev=(c.alerts||[]).some(function(a){return a.severity==='warn';})?'var(--red)':
+            ((c.alerts||[]).length?'var(--amber)':'transparent');
+    var al=(c.alerts||[]).slice(0,2).map(function(a){
+      return '<span style="display:inline-block;background:'+(a.severity==='warn'?'var(--redbg)':'var(--amberbg)')+
+        ';color:'+(a.severity==='warn'?'var(--red)':'var(--amber)')+';border-radius:999px;padding:2px 8px;font-size:10.5px;font-weight:700;margin:1px 2px 1px 0">'+
+        esc(a.reason.split(':').pop().trim())+'</span>';}).join('')||'<span style="color:var(--line2)">—</span>';
+    var act=(c._st==='connected'||c._st==='stale')
+      ? '<button onclick="event.stopPropagation();openDashboard('+c.id+')" style="border:1px solid var(--blue);background:#fff;color:var(--blue);border-radius:8px;padding:4px 11px;font-size:11.5px;font-weight:700;cursor:pointer;font-family:inherit">상세</button>'
+      : (isEditor()?'<button onclick="event.stopPropagation();openForm('+c.id+')" style="border:none;background:var(--blue);color:#fff;border-radius:8px;padding:4px 11px;font-size:11.5px;font-weight:700;cursor:pointer;font-family:inherit">연동 요청</button>':'');
+    return '<tr onclick="openDashboard('+c.id+')" style="cursor:pointer">'+
+      '<td style="'+TD+';border-left:3px solid '+sev+';padding-left:11px"><b>'+esc(c.name)+'</b></td>'+
+      '<td style="'+TD+'"><span style="background:'+C[0]+';color:'+C[1]+';border-radius:999px;padding:2px 9px;font-size:10.5px;font-weight:800;white-space:nowrap">'+m[0]+'</span>'+
+        '<div style="font-size:10.5px;color:var(--sub);margin-top:2px">네이버 '+naverConn(c)+'/3</div></td>'+
+      '<td style="'+TD+';text-align:right;white-space:nowrap">'+(c.spend?fmtMoney(c.spend):'<span style="color:var(--line2)">—</span>')+'</td>'+
+      '<td style="'+TD+';text-align:right;font-weight:700;color:'+(c.roas==null?'var(--line2)':(c.roas<120?'var(--red)':(c.roas>=200?'var(--green)':'var(--text)')))+'">'+(c.roas!=null?c.roas+'%':'—')+'</td>'+
+      '<td style="'+TD+'">'+al+'</td>'+
+      '<td style="'+TD+';font-size:11.5px;color:var(--sub);max-width:190px">'+(c.note?esc(c.note).slice(0,40)+(c.note_at?' <span style="color:var(--line2)">'+c.note_at+'</span>':''):'<span style="color:var(--line2)">—</span>')+'</td>'+
+      '<td style="'+TD+';font-size:12px;color:var(--sub);white-space:nowrap">'+esc(c.owner_name||'-')+'</td>'+
+      '<td style="'+TD+';text-align:right">'+act+'</td></tr>';
+  }).join(''):'<tr><td colspan="8" style="padding:34px;text-align:center;color:var(--sub)">조건에 맞는 광고주가 없습니다.</td></tr>';
+  document.getElementById('bd-body').innerHTML=
+    '<div style="background:var(--panel);border:1px solid var(--line);border-radius:13px;overflow-x:auto">'+
+    '<table style="width:100%;border-collapse:collapse;font-size:13px;min-width:840px"><thead><tr>'+
+    ['광고주','연동 상태','이번 달 소진','ROAS','특이사항','메모','담당',''].map(function(h){return '<th style="'+TH+'">'+h+'</th>';}).join('')+
+    '</tr></thead><tbody>'+body+'</tbody></table></div>'+
+    '<div style="font-size:11.5px;color:var(--sub);margin-top:9px;line-height:1.7">연동 상태는 광고주 자가입력 링크 제출 여부·API 키·수집 신선도로 자동 판정합니다. 화면에서 숨긴 매체의 데이터는 지워지지 않고 그대로 보존됩니다.</div>';
 }
 function cardHtml(c){
   var stKr={active:"진행중",paused:"일시정지",ended:"종료"}[c.status]||c.status;

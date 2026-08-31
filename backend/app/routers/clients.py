@@ -770,6 +770,20 @@ def apply_campaign_proposal(
 # 팀·전체 현황 / 시스템 키 / 직원·권한 (설정·관리)
 # ════════════════════════════════════════════════════════════════════════
 
+# 관제 허브: 광고주 연동 상태를 한 단어로 판정한다.
+#   connected(연동완료) / link_sent(요청 링크 발송, 미제출) / link_expired(링크 만료)
+#   / not_requested(아직 요청 안 함)
+# ★'보이는 매체' 기준이 아니라 전체 연동 여부로 판정하되, 화면 쪽에서 네이버 계열만 따로 센다.
+def _connect_state(conn_channels: list, link, now_iso: str) -> str:
+    if conn_channels:
+        return "connected"
+    if link is None:
+        return "not_requested"
+    if (link.expires_at or "") and link.expires_at < now_iso:
+        return "link_expired"
+    return "link_sent"
+
+
 @router.get("/team/overview")
 def team_overview(
     db: Session = Depends(get_db),
@@ -777,6 +791,21 @@ def team_overview(
 ):
     """전사/팀 광고주 현황 — 광고주별 최신 KPI 합산 + 경고. 범위는 visible_clients가 강제."""
     clients = visible_clients(db, user).all()
+    ids = [c.id for c in clients]
+    # 관제 허브용 부가정보를 한 번에 모아둔다(광고주마다 개별 조회하면 수백 쿼리가 된다).
+    links = {}      # client_id -> 가장 최근 연동요청 링크
+    notes = {}      # client_id -> 최신 담당자 메모
+    if ids:
+        for lk in (db.query(models.ConnectLink)
+                   .filter(models.ConnectLink.client_id.in_(ids))
+                   .order_by(models.ConnectLink.id.desc()).all()):
+            links.setdefault(lk.client_id, lk)
+        for lg in (db.query(models.ActivityLog)
+                   .filter(models.ActivityLog.client_id.in_(ids),
+                           models.ActivityLog.type == "note")
+                   .order_by(models.ActivityLog.id.desc()).all()):
+            notes.setdefault(lg.client_id, lg)
+    now_iso = _now_kst_iso()
     rows = []
     totals = {"clients": 0, "spend": 0, "revenue": 0, "connected": 0, "alerts": 0}
     status_cnt = {"active": 0, "paused": 0, "archived": 0, "delete_requested": 0}
@@ -841,6 +870,10 @@ def team_overview(
             "connected": connected, "connected_channels": conn_channels,
             "spend": round(spend), "roas": roas,
             "alerts": anomalies,
+            "connect_state": _connect_state(conn_channels, links.get(c.id), now_iso),
+            "note": (notes[c.id].message if c.id in notes else None),
+            "note_at": (notes[c.id].created_at.strftime("%m/%d") if c.id in notes and notes[c.id].created_at else None),
+            "last_collected": max((m.collected_at for m in latest.values() if m.collected_at), default=None),
         })
         totals["clients"] += 1
         totals["spend"] += spend
@@ -1415,6 +1448,34 @@ def alerts(db: Session = Depends(get_db), user: models.User = Depends(get_curren
     # 경고(warn) 먼저
     out.sort(key=lambda x: 0 if x["severity"] == "warn" else 1)
     return {"count": len(out), "alerts": out}
+
+
+# ── 담당자 메모(특이사항) ──────────────────────────────────────────────
+# 별도 테이블을 만들지 않고 ActivityLog(type="note")에 쌓는다.
+# 작성자·시각이 기존 필드로 해결되고, 활동 이력·내역서에 자동으로 함께 노출된다.
+class NoteIn(schemas.BaseModel):
+    body: str
+
+
+@router.post("/clients/{client_id}/notes")
+def add_note(
+    client_id: int,
+    payload: NoteIn,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(require_editor),
+):
+    """광고주 특이사항 메모 한 줄 기록 — 관제 허브·상세에 최신 1건이 표시된다."""
+    c = db.get(models.Client, client_id)
+    if not c or not can_edit(user, c):
+        raise HTTPException(404, "광고주를 찾을 수 없습니다")
+    body = (payload.body or "").strip()
+    if not body:
+        raise HTTPException(400, "메모 내용을 입력하세요")
+    if len(body) > 500:
+        raise HTTPException(400, "메모는 500자 이내로 입력하세요")
+    log_activity(db, c.id, user, "note", body)
+    db.commit()
+    return {"ok": True, "body": body}
 
 
 @router.get("/clients/{client_id}/activity")
