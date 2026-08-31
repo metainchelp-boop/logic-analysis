@@ -30,6 +30,10 @@ on:
         description: '상품 주소 모양 실측 — off(기본) / on. 어느 호스트(스마트스토어·브랜드스토어·카탈로그)를 쓰는지, 같은 슬러그가 두 호스트에 걸쳐 있는지(읽기 전용·업체명 미출력).'
         required: false
         default: 'off'
+      payload:
+        description: '체감 원인 찾기 — off(기본) / on. my-clients 응답을 서버에서 실제로 조립해 총 소요·응답 크기·무엇이 크기를 차지하는지 잰다(읽기 전용·업체명 미출력).'
+        required: false
+        default: 'off'
       faster:
         description: '더 줄일 수 있나 — off(기본) / on. my-clients 전체 쿼리 소요를 재고, 최신1건을 업체별 1건으로 다시 쓰면 결과가 100% 같은지·얼마나 빨라지는지 실데이터로 대조(읽기 전용).'
         required: false
@@ -1469,4 +1473,78 @@ jobs:
                     n_tie += 1
             print("   맨 위가 동점인 업체 %d곳 / %d곳" % (n_tie, len(ids)))
             print("   ⇒ 0곳이면 두 방식이 항상 같은 행을 고른다(순서 의존 없음).")
+            PY
+
+      - name: 체감 원인 — 응답 크기·조립 시간 (읽기 전용)
+        if: ${{ github.event.inputs.payload == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 10m
+          script: |
+            echo "== 체감 원인 — 브라우저가 실제로 기다리는 것 (읽기 전용 · 업체명 미출력) =="
+            docker exec -i logic-analysis python3 - <<'PY'
+            # ⚠️ 쿼리 소요(33.8ms)만 재고 「빠르다」고 말하면 안 된다. 브라우저는
+            #    조립 + JSON 직렬화 + 전송까지 기다린다. 그 전체를 재고, 응답 크기가
+            #    무엇 때문에 커지는지 칸별로 가른다.
+            import os, sqlite3, time, json
+            c = sqlite3.connect(os.getenv("DB_PATH", "/app/data/logic_data.db"))
+            c.row_factory = sqlite3.Row
+
+            COLS = ("id, name, business_name, contact_name, contact_phone, contact_email, "
+                    "website_url, naver_store_url, main_keywords, notes, status, auto_analysis, "
+                    "created_by, created_at, updated_at, role, expires_at, "
+                    "COALESCE(vertical,'store') AS vertical, "
+                    "COALESCE(track_enabled,1) AS track_enabled, track_until, "
+                    "contract_stage, contract_stage_at")
+
+            t0 = time.perf_counter()
+            clients = c.execute("SELECT %s FROM clients WHERE status='active'"
+                                " AND COALESCE(role,'advertiser')='advertiser'"
+                                " ORDER BY updated_at DESC" % COLS).fetchall()
+            ids = [r["id"] for r in clients]
+            ph = ",".join("?" * len(ids))
+            agg = {r["client_id"]: dict(r) for r in c.execute(
+                "SELECT client_id, COUNT(*) analysis_count, MAX(updated_at) last_analyzed,"
+                " COUNT(DISTINCT keyword) uk, COUNT(DISTINCT analyzed_date) td"
+                " FROM client_analyses WHERE client_id IN (%s) GROUP BY client_id" % ph, ids)}
+            latest = {}
+            for r in c.execute("SELECT client_id, keyword, product_url, analyzed_date, updated_at"
+                               " FROM client_analyses WHERE client_id IN (%s)"
+                               " ORDER BY analyzed_date DESC, updated_at DESC" % ph, ids):
+                latest.setdefault(r["client_id"], dict(r))
+            rows = []
+            for cl in clients:
+                d = dict(cl)
+                d.update(agg.get(cl["id"], {}))
+                d["latest"] = latest.get(cl["id"])
+                rows.append(d)
+            t_build = (time.perf_counter() - t0) * 1000
+
+            t0 = time.perf_counter()
+            body = json.dumps({"success": True, "data": rows}, ensure_ascii=False, default=str)
+            t_json = (time.perf_counter() - t0) * 1000
+            size = len(body.encode("utf-8"))
+
+            print("  업체 %d곳 · 조립 %.0f ms · JSON 직렬화 %.0f ms · 합계 %.0f ms"
+                  % (len(rows), t_build, t_json, t_build + t_json))
+            print("  응답 크기 %.0f KB (업체당 평균 %.0f B)" % (size / 1024, size / max(len(rows), 1)))
+
+            print()
+            print("  -- 응답 크기를 무엇이 차지하나 (칸별 바이트 합) --")
+            tot = {}
+            for d in rows:
+                for k, v in d.items():
+                    if v is None: continue
+                    tot[k] = tot.get(k, 0) + len(json.dumps(v, ensure_ascii=False, default=str).encode("utf-8"))
+            for k, v in sorted(tot.items(), key=lambda x: -x[1])[:10]:
+                print("    %-18s %7.0f KB (%4.1f%%)" % (k, v / 1024, v * 100.0 / max(size, 1)))
+
+            print()
+            print("  -- 참고: 전송 시간 짐작 --")
+            for mbps, label in ((100, "사내 유선 100Mbps"), (20, "느린 회선 20Mbps")):
+                print("    %s → 약 %.0f ms" % (label, size * 8 / (mbps * 1000)))
+            print("  ⇒ 조립·직렬화·전송 합이 쿼리(33.8ms)보다 크면, 체감의 주인은 쿼리가 아니다.")
             PY
