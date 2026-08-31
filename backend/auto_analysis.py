@@ -11,6 +11,8 @@ import requests as req_lib
 from datetime import datetime
 import html as html_module
 
+from competitor_mask import mask_analysis
+
 logger = logging.getLogger(__name__)
 
 
@@ -710,7 +712,12 @@ def run_single_analysis(client_id: int, client_name: str, keyword: str, product_
         logger.warning(f"  [{keyword}] 상세페이지 분석(자동) 실패 — 스킵: {e}")
 
     # 5. HTML 보고서 생성
-    report_html = generate_html_report(keyword, client_name, analysis, vol_data, related_data)
+    # ⚠️ 보고서는 광고주가 공개 주소로 그대로 연다(2026-08-31~). 대표 확정에 따라
+    #    **경쟁사 상호만** 「경쟁사 A」로 가려서 만든다 — 순위·가격·검색량 등 숫자는 그대로다.
+    #    ⚠️ analysis 원본은 손대지 않는다(아래 analysis_json 저장분·분석 탭은 종전 그대로).
+    #       mask_analysis 는 사본을 돌려주므로 이 줄만 가려진 값을 쓴다.
+    report_html = generate_html_report(
+        keyword, client_name, mask_analysis(analysis, client_name), vol_data, related_data)
 
     # 6. DB 저장 (UPSERT)
     conn = sqlite3.connect(DB_PATH, timeout=10)
