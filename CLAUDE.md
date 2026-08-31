@@ -44,9 +44,31 @@
 >       우리만 시간당 상한을 60→40 으로 조인 셈이 된다.
 >
 >    ⚠️⚠️ **「개발 대기」와 「가동 중지」는 다른 축이다 — 섞지 말 것.**
->       개발이 멈춰도 이미 띄워 둔 프로세스는 계속 돈다. 코드 최종 수정이 2026-07-30 인 것은
->       「개발 대기」와 일치하지만, **그것만으로 에이전트가 안 돈다고 결론 내면 안 된다.**
->       ⇒ 판정은 **실행 여부를 직접 재서** 한다. 맥미니 프로세스 확인이 유일하게 확실한 근거다.
+>       개발이 멈춰도 이미 띄워 둔 프로세스는 계속 돈다.
+>
+>    ### 🔴 실측 확정 (2026-08-31) — **autobid 는 4주째 가동 중이다**
+>    공유 서버 `docker ps` 실측. 컨테이너 6개 중 **3개가 autobid** 다:
+>    ```
+>    NAMES              IMAGE                        STATUS            PORTS
+>    autobid_engine     autobid-autobid-engine       Up 4 weeks
+>    autobid_watchdog   autobid-autobid-watchdog     Up 4 weeks
+>    autobid_web        autobid-autobid-web          Up 4 weeks        0.0.0.0:5070->5070/tcp
+>    logic-analysis     logic-analysis:latest        Up About an hour  127.0.0.1:5050->5050/tcp
+>    content-studio     content-studio:latest        Up 7 weeks        127.0.0.1:5060->5060/tcp
+>    ad-api             ad-dashboard-deploy-ad-api   Up 51 minutes     127.0.0.1:5051->5051/tcp
+>    ```
+>    ⇒ **「개발 대기」는 맞지만 「안 돈다」는 아니다.** 4주 = 8/28 캡차 사고 기간을 통째로 덮는다.
+>    ⇒ `autobid_engine` 은 서버에서 `msearch.shopping.naver.com` 을 직접 부른다(③ `ranker.py`).
+>
+>    ⚠️ **아직 안 밝혀진 것 하나** — 사무실 맥미니의 **에이전트**(10분마다 크롤)가 도는지는
+>       서버 `docker ps` 로 알 수 없다. 그건 맥미니에서 봐야 한다. 서버 3개가 도는 것과 별개다.
+>    ⚠️ **`autobid_web` 만 `0.0.0.0:5070` 로 열려 있다** — 나머지 셋(우리 5050·스튜디오 5060·
+>       광고센터 5051)은 전부 `127.0.0.1` 바인딩이다. ③ 판단 사항이나 통지문에 적어 둘 것.
+>
+>    ⚠️ **교훈 — 「대표가 개발 안 한다고 했으니 안 돈다」로 넘어갈 뻔했다.**
+>       사람의 답은 「개발 상태」였고 우리가 필요한 건 「가동 상태」였다. 축이 다르면 다시 잰다.
+>    ⚠️ **진단 함정** — `hang_probe` 의 `probe()` 는 출력을 `/dev/null` 로 버리고 소요 시간만 잰다.
+>       `docker ps` 를 probe 로 돌려도 목록이 안 남는다. 목록은 따로 찍어야 한다(그래서 한 줄 추가했다).
 >    통지문: ③ 저장소 `docs/로직분석-통지-2026-08-31.md` (PR metainc-ad-dashboard#1)
 >
 > ✅ **데이터 계약은 문제 없다**(8/30 전수 확인) — ③ 신규 설계(A안)는 우리 API 미사용 ·
