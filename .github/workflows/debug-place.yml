@@ -723,6 +723,18 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           command_timeout: 60s
           script: |
+            echo "== 공유 서버에 무엇이 떠 있나 (③과 동거 — 2026-08-31 추가) =="
+            # ⚠️ 이 서버는 ②(로직분석)·③(스튜디오·autobid·광고센터)가 함께 쓴다.
+            #    「개발 대기」와 「가동 중지」는 다른 축이라, 도는지는 여기서 직접 봐야 한다.
+            # ⚠️ 위 hang_probe 의 probe() 는 출력을 /dev/null 로 버려 소요 시간만 잰다 —
+            #    목록을 보려면 이렇게 따로 찍어야 한다(2026-08-31 에 이것 때문에 한 번 헛돌았다).
+            docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}' 2>/dev/null \
+              || echo "  (docker ps 실패)"
+            echo "  -- 자동입찰 흔적 --"
+            A=$(docker ps -a --format '{{.Names}} {{.Status}}' 2>/dev/null | grep -i autobid | head -5)
+            echo "${A:-  autobid 컨테이너 없음(정지·미배포 포함 전체 조회)}"
+
+            echo
             echo "== 플레이스 추적 자동 등록 폐지 확인 =="
             # ⚠️ 컨테이너 안 코드 경로를 가정하지 말 것 — 먼저 찾고 센다.
             F=$(docker exec -i logic-analysis sh -c "find /app -maxdepth 3 -name main.py 2>/dev/null | head -1")
