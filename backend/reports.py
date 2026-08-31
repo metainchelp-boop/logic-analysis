@@ -11,6 +11,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from competitor_mask import build_alias_map, mask_html
 from report_access import can_manage_report, managed_report_predicate
 from typing import Optional, List, Dict, Any
 import hashlib
@@ -1253,7 +1254,9 @@ def view_public_analysis_report(analysis_id: int, token: str, request: Request):
         conn = get_db()
         try:
             row = conn.execute(
-                "SELECT report_html FROM client_analyses WHERE id = ?", (analysis_id,)
+                "SELECT ca.report_html, ca.analysis_json, c.name AS client_name "
+                "FROM client_analyses ca LEFT JOIN clients c ON c.id = ca.client_id "
+                "WHERE ca.id = ?", (analysis_id,)
             ).fetchone()
         finally:
             conn.close()
@@ -1262,7 +1265,21 @@ def view_public_analysis_report(analysis_id: int, token: str, request: Request):
         if not row or not (row["report_html"] or "").strip():
             raise HTTPException(status_code=404, detail="보고서를 찾을 수 없습니다.")
 
-        return HTMLResponse(content=row["report_html"])
+        # 경쟁사 상호 가리기 — 2026-08-31 대표 확정(상호만 · 숫자 유지).
+        # ⚠️ 새 보고서는 만들 때 이미 가려져 저장되므로 여기서는 아무것도 안 바뀐다(무해).
+        #    이 한 번이 필요한 이유는 **그 전에 저장된 보고서** 때문이다 — 광고주가 지금 여는
+        #    것이 대부분 그것이라, 생성 시점만 가리면 정작 오늘 노출을 못 막는다.
+        # ⚠️ 가리기가 실패해도 보고서는 나가야 한다 — 다만 그때는 원문이 나가므로 로그를 남긴다.
+        html = row["report_html"]
+        try:
+            analysis = json.loads(row["analysis_json"] or "{}")
+            alias_map = build_alias_map(analysis, row["client_name"] or "")
+            if alias_map:
+                html = mask_html(html, alias_map)
+        except Exception as e:
+            logger.warning(f"[view-analysis] 경쟁사 가리기 실패 — 원문 그대로 나감 id={analysis_id}: {e}")
+
+        return HTMLResponse(content=html)
 
     except HTTPException:
         raise
