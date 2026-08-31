@@ -821,20 +821,25 @@ def team_overview(
                     pdata = None
             for sev, reason in _channel_anomalies(ch, data, pdata):
                 anomalies.append({"severity": sev, "reason": reason})
-        connected = (
-            db.query(models.ChannelCredential)
+        conn_rows = (
+            db.query(models.ChannelCredential.channel)
             .filter(
                 models.ChannelCredential.client_id == c.id,
                 models.ChannelCredential.status == "connected",
             )
-            .count()
+            .all()
         )
+        # 연동 채널 키 목록도 함께 내려준다 — 화면에서 '보이는 채널'만 세려면 키가 필요하다
+        # (숫자만 주면 숨긴 매체까지 포함돼 연동 실태가 과대표시된다).
+        conn_channels = [r[0] for r in conn_rows]
+        connected = len(conn_channels)
         owner = db.get(models.User, c.owner_id) if c.owner_id else None
         roas = round(revenue / spend * 100, 1) if spend > 0 else None
         rows.append({
             "id": c.id, "name": c.name, "category": c.category, "status": c.status,
             "owner_name": owner.name if owner else None,
-            "connected": connected, "spend": round(spend), "roas": roas,
+            "connected": connected, "connected_channels": conn_channels,
+            "spend": round(spend), "roas": roas,
             "alerts": anomalies,
         })
         totals["clients"] += 1
