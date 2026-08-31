@@ -2356,8 +2356,11 @@ def portal_summary(company: str = Query(None, description="전산 광고주 회�
         cid = row["id"]
 
         # 키워드별 최신 분석 1건씩 (최대 8개) → 일일 리포트
+        # ⚠️ report_html 은 본문이 수백 KB 라 절대 SELECT 하지 않는다(이 응답은 매일 전산이 받아 간다).
+        #    「본문이 있는가」만 LENGTH 로 판정하고, 실제 본문은 광고주가 공개 주소를 열 때 읽는다.
         rep_rows = conn.execute("""
-            SELECT keyword, MAX(analyzed_date) AS analyzed_date, analysis_json
+            SELECT id, keyword, MAX(analyzed_date) AS analyzed_date, analysis_json,
+                   LENGTH(COALESCE(report_html, '')) AS report_len
             FROM client_analyses
             WHERE client_id = ?
             GROUP BY keyword
@@ -2394,10 +2397,20 @@ def portal_summary(company: str = Query(None, description="전산 광고주 회�
                 parts.append(f"검색량 {vol}")
             if comp is not None:
                 parts.append(f"경쟁강도 {comp}%")
+            # 실행 보고서 전문 열람 주소 — 본문이 실제로 있는 행에만 붙인다.
+            # 없는 행에 주소를 주면 광고주가 눌렀을 때 404 를 본다(있는 척하지 않는다).
+            view_url = None
+            if (r["report_len"] or 0) > 0:
+                try:
+                    from reports import analysis_view_url
+                    view_url = analysis_view_url(r["id"])
+                except Exception as e:  # 주소 생성 실패가 요약 응답 자체를 막지 않게
+                    logger.warning(f"[portal-summary] analysis view url skipped: {e}")
             daily.append({
                 "date": r["analyzed_date"],
                 "keyword": r["keyword"],
                 "summary": " · ".join(parts) if parts else "분석 완료",
+                "viewUrl": view_url,
             })
             # 검색량이 있는 키워드만 담는다(값 없는 행은 전산 화면에서 의미 없음).
             if vol not in (None, "-", ""):

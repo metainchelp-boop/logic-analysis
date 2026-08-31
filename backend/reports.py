@@ -14,6 +14,7 @@ from pathlib import Path
 from report_access import can_manage_report, managed_report_predicate
 from typing import Optional, List, Dict, Any
 import hashlib
+import hmac
 import uuid
 import html as html_module
 
@@ -191,6 +192,31 @@ def init_reports_db():
 def generate_report_hash() -> str:
     """Generate unique report hash for public sharing"""
     return hashlib.sha256(f"{uuid.uuid4()}{datetime.now()}".encode()).hexdigest()[:32]
+
+
+def analysis_view_token(analysis_id: int) -> str:
+    """개별 분석 보고서(client_analyses)의 공개 열람 토큰.
+
+    주간 보고서(reports)는 표에 report_hash 를 들고 있지만, client_analyses 에는 그런 칸이 없다.
+    칸을 새로 만들면 DDL 과 옛 행 백필이 따라오므로, **행 id 를 서버 시크릿으로 HMAC** 해
+    저장 없이 매번 같은 값을 만든다(추측 불가·재시작에도 동일).
+
+    ⚠️ 시크릿(JWT_SECRET_KEY 또는 .jwt_secret)이 바뀌면 앞서 내보낸 주소는 404 가 된다.
+       전산(①)은 portal-summary 를 매일 다시 받아 가므로 다음 갱신에서 자동으로 복구된다.
+    """
+    from auth import SECRET_KEY
+    return hmac.new(
+        SECRET_KEY.encode("utf-8"),
+        f"client_analysis:{int(analysis_id)}".encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()[:32]
+
+
+def analysis_view_url(analysis_id: int) -> str:
+    """광고주가 그대로 여는 공개 주소. 주간 보고서와 같은 /api/reports/view/ 아래라
+    인증 면제 경로(main.AUTH_EXEMPT_PATHS)에 이미 포함된다."""
+    base = os.getenv("PUBLIC_BASE_URL", "https://logic.metainc.co.kr").rstrip("/")
+    return f"{base}/api/reports/view/analysis/{int(analysis_id)}/{analysis_view_token(analysis_id)}"
 
 
 def format_korean_number(num: int) -> str:
@@ -1200,6 +1226,49 @@ def view_public_report(report_hash: str, request: Request):
             status_code=500,
             detail=f"보고서 조회 중 오류가 발생했습니다: {str(e)}"
         )
+
+
+@router.get("/view/analysis/{analysis_id}/{token}")
+def view_public_analysis_report(analysis_id: int, token: str, request: Request):
+    """개별 분석 보고서 전문(client_analyses.report_html)을 광고주에게 그대로 보여준다.
+
+    <b>왜</b>(대표 지시 2026-08-31) — 전산① 광고주 공유 링크의 「일일 분석 리포트」는 지금
+    날짜·키워드·요약 한 줄(「검색량 4,000 · 경쟁강도 95%」)만 받는다. 그 한 줄은 portal-summary
+    가 그 자리에서 합성하는 값이고, 실제 실행 보고서(표·차트·골든 키워드·경쟁사·실행 로드맵)는
+    같은 행의 report_html 에 이미 저장돼 있는데 아무 데서도 열리지 않았다.
+    ⇒ 주간 보고서가 쓰는 공개 열람 구조를 그대로 재사용해 광고주가 <b>같은 전문</b>을 본다.
+
+    ⚠️ 경로가 /view/analysis/... 라 기존 /view/{report_hash}(한 세그먼트)와 겹치지 않는다.
+    ⚠️ 인증은 토큰뿐이다 — 주간 보고서(/view/{hash})와 동일한 공개 모델이고, 같은 레이트 리밋을 쓴다.
+    """
+    try:
+        client_ip = request.client.host if request.client else "unknown"
+        if not _check_view_rate(client_ip):
+            raise HTTPException(status_code=429, detail="요청이 너무 많습니다. 잠시 후 다시 시도해주세요.")
+
+        # 토큰 검증 — 길이가 달라도 시간차가 안 나게 compare_digest.
+        if not hmac.compare_digest(token, analysis_view_token(analysis_id)):
+            raise HTTPException(status_code=404, detail="보고서를 찾을 수 없습니다.")
+
+        conn = get_db()
+        try:
+            row = conn.execute(
+                "SELECT report_html FROM client_analyses WHERE id = ?", (analysis_id,)
+            ).fetchone()
+        finally:
+            conn.close()
+
+        # 행이 없거나 본문이 비어 있으면 404 — 스켈레톤만 있는 분석을 빈 화면으로 보여주지 않는다.
+        if not row or not (row["report_html"] or "").strip():
+            raise HTTPException(status_code=404, detail="보고서를 찾을 수 없습니다.")
+
+        return HTMLResponse(content=row["report_html"])
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[view-analysis] {e}")
+        raise HTTPException(status_code=500, detail="보고서 조회 중 오류가 발생했습니다.")
 
 
 @router.delete("/{report_id}")
