@@ -1671,12 +1671,30 @@ jobs:
               || echo "  ⚠️ 로그 없음 — 미들웨어가 안 붙었거나 기동 실패"
             docker inspect -f '  기동 StartedAt={{.State.StartedAt}} RestartCount={{.RestartCount}}' logic-analysis
             echo
-            echo "== ③ 앱이 실제로 압축해 보내나 (컨테이너 안에서 앱에 직접) =="
-            # ⚠️ nginx 를 지나면 누가 압축했는지 못 가른다 — 앱에 직접 물어야 우리 변경이 듣는지 확인된다.
-            docker exec -i logic-analysis sh -c \
-              "curl -s -o /dev/null -D - -H 'Accept-Encoding: gzip' http://127.0.0.1:5050/api/health" \
-              | grep -iE '^HTTP/|content-encoding|content-length' | sed 's/^/    /'
-            echo "    ↑ /api/health 는 74B 라 minimum_size(500) 미만 — 압축 안 되는 게 정상이다"
+            echo "== ③ 앱이 실제로 압축해 보내나 (앱에 직접 — nginx 를 지나면 누가 했는지 못 가른다) =="
+            # ⚠️ 이 컨테이너에는 curl 이 없다(첫 시도에서 확인). 파이썬 표준 라이브러리로 부른다.
+            docker exec -i logic-analysis python3 - <<'PY'
+            import gzip, json, urllib.request
+            BASE = "http://127.0.0.1:5050"
+            # 인증 없이도 500B 를 넘는 경로가 필요하다 — FastAPI 의 openapi.json 이 그 조건에 맞는다.
+            for path, why in (("/api/health", "74B — minimum_size(500) 미만이라 **압축 안 되는 게 정상**"),
+                              ("/openapi.json", "수십 KB — 여기서 압축이 붙어야 우리 변경이 듣는 것")):
+                for enc in ("gzip", "identity"):
+                    req = urllib.request.Request(BASE + path, headers={"Accept-Encoding": enc})
+                    try:
+                        with urllib.request.urlopen(req, timeout=20) as r:
+                            raw = r.read()
+                            ce = r.headers.get("Content-Encoding") or "(없음)"
+                            print("  %-16s Accept-Encoding:%-8s → %6d B · Content-Encoding: %s"
+                                  % (path, enc, len(raw), ce))
+                            if enc == "gzip" and ce == "gzip":
+                                풀림 = gzip.decompress(raw)
+                                print("      풀어 보니 %d B · JSON 파싱 %s"
+                                      % (len(풀림), "✅" if json.loads(풀림) is not None else "❌"))
+                    except Exception as e:
+                        print("  %-16s %s 실패: %s" % (path, enc, str(e)[:70]))
+                print("      ↑ %s" % why)
+            PY
             echo
             echo "== ④ 큰 응답은 압축되나 + 본문이 원본과 같나 =="
             docker exec -i logic-analysis python3 - <<'PY'
@@ -1690,7 +1708,7 @@ jobs:
             import re
             src = io.open("/app/main.py", encoding="utf-8").read()
             m = re.search(r"_gzip_kwargs = (\{[^}]*\})", src)
-            print("    서버 파일의 설정: %s" % (m.group(1) if m else "못 찾음"))
+            print("    서버 파일의 compresslevel: %s" % (m.group(1) if m else "못 찾음 — 부팅 로그로 판정"))
             try:
                 import inspect
                 from starlette.middleware.gzip import GZipMiddleware
