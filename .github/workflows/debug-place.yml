@@ -68,6 +68,9 @@ on:
       sbiz_since:
         description: '소상공인365 실패가 언제부터인지 — true. 컨테이너 로그의 [sbiz365] 실패를 시간대별로 센다(읽기 전용·업체명 미출력).'
         required: false
+      autobid_traffic:
+        description: '자동입찰 에이전트가 실제로 보고하고 있나 — true. 우리 nginx 접속기록에서 /autobid 요청과 우리 수집기 요청이 같은 IP 인지 대조한다(읽기 전용 · ⚠️ IP 원문은 출력하지 않고 일치 여부·건수만).'
+        required: false
       hang_probe:
         description: '진단 스텝이 어디서 멈추는지 — true. 이 워크플로가 쓰는 명령을 하나씩 timeout 을 씌워 걸리는 지점을 찾는다(읽기 전용).'
         required: false
@@ -1905,3 +1908,71 @@ jobs:
             except Exception as e:
                 print(f"  호출 실패 {type(e).__name__}: {str(e)[:150]}")
             PY
+
+      - name: 자동입찰 보고 트래픽 대조 (읽기 전용 · IP 미출력)
+        if: ${{ github.event.inputs.autobid_traffic == 'true' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 120s
+          script: |
+            # 「자동입찰 에이전트가 지금 도는가 · 우리 수집기와 같은 IP 인가」를 서버에서 답한다.
+            #
+            # ⚠️ 왜 필요한가 — 대표 회신은 「개발 대기」였고 서버 컨테이너는 4주째 떠 있다.
+            #    둘 다 「사무실 맥미니 에이전트가 지금 크롤하는가」에는 답하지 못한다.
+            #    그 에이전트는 https://logic.metainc.co.kr/autobid 로 보고하므로
+            #    **우리 nginx 를 지난다** — 접속 기록이 유일하게 확실한 근거다.
+            #
+            # ⚠️ 이 저장소는 공개다. **IP 원문을 절대 찍지 않는다** — 일치 여부·건수·시간대만.
+            LOG=$(ls /var/log/nginx/*access*.log 2>/dev/null | head -3 | tr '\n' ' ')
+            echo "== 자동입찰 보고 트래픽 대조 (IP 미출력) =="
+            echo "  대상 로그: ${LOG:-찾지 못함}"
+            [ -z "$LOG" ] && { echo "  ⚠️ nginx 접속 기록을 못 찾았다 — 경로가 다르거나 권한이 없다."; exit 0; }
+
+            sudo -n true 2>/dev/null && S="sudo -n" || S=""
+            $S sh -c "cat $LOG /var/log/nginx/*access*.log.1 2>/dev/null" > /tmp/_acc.txt 2>/dev/null || \
+              cat $LOG > /tmp/_acc.txt 2>/dev/null
+            echo "  읽은 줄 수: $(wc -l < /tmp/_acc.txt)"
+
+            python3 - <<'PY2'
+            import re, collections
+            try:
+                lines = open("/tmp/_acc.txt", errors="ignore").read().splitlines()
+            except Exception as e:
+                print(f"  로그 읽기 실패: {e}"); raise SystemExit
+            ip_re = re.compile(r'^(\S+)')
+            def ips(pred):
+                c = collections.Counter()
+                for ln in lines:
+                    if pred(ln):
+                        m = ip_re.match(ln)
+                        if m: c[m.group(1)] += 1
+                return c
+            auto = ips(lambda l: "/autobid" in l)
+            coll = ips(lambda l: "/api/collector" in l)
+            print(f"  /autobid 요청 {sum(auto.values())}건 · 보낸 곳 {len(auto)}개")
+            print(f"  /api/collector 요청 {sum(coll.values())}건 · 보낸 곳 {len(coll)}개")
+            both = set(auto) & set(coll)
+            print()
+            print(f"  ★ 같은 곳에서 둘 다 보낸 경우: {len(both)}개")
+            if both:
+                n_a = sum(auto[i] for i in both); n_c = sum(coll[i] for i in both)
+                print(f"    → 그 곳들이 보낸 양: 자동입찰 {n_a}건 · 우리 수집 {n_c}건")
+                print("    ⇒ **같은 회선을 나눠 쓰고 있다.** 우리 캡차 원인에 이 축을 넣어야 한다.")
+            else:
+                print("    ⇒ 겹치는 곳이 없다 — 자동입찰과 우리 수집은 다른 회선에서 온다.")
+            # 언제까지 왔나 — 「지금도 도는가」
+            def last_ts(pred):
+                for ln in reversed(lines):
+                    if pred(ln):
+                        m = re.search(r'\[([^\]]+)\]', ln)
+                        return m.group(1) if m else "(시각 못 읽음)"
+                return None
+            print()
+            print(f"  마지막 /autobid 요청 시각      : {last_ts(lambda l: '/autobid' in l) or '기록 없음'}")
+            print(f"  마지막 /api/collector 요청 시각: {last_ts(lambda l: '/api/collector' in l) or '기록 없음'}")
+            print("  ⇒ /autobid 가 최근까지 계속 오면 에이전트는 도는 것이다(개발 대기와 무관).")
+            PY2
+            rm -f /tmp/_acc.txt
