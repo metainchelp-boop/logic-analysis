@@ -30,6 +30,10 @@ on:
         description: '상품 주소 모양 실측 — off(기본) / on. 어느 호스트(스마트스토어·브랜드스토어·카탈로그)를 쓰는지, 같은 슬러그가 두 호스트에 걸쳐 있는지(읽기 전용·업체명 미출력).'
         required: false
         default: 'off'
+      after179:
+        description: '배포 #179 확인 — off(기본) / on. 시각 보정 로그·보고서 시:분·커버링 인덱스 채택·서버 파일 표지를 한 번에(읽기 전용).'
+        required: false
+        default: 'off'
       cagg:
         description: '분석 집계 A/B — off(기본) / on. my-clients 가 매번 도는 두 쿼리를 재고, 덩어리 뒤 칸을 하나씩 빼며 무엇이 값을 물어오는지 가른다(읽기 전용·업체명 미출력).'
         required: false
@@ -1253,4 +1257,77 @@ jobs:
                 print("    (시각 형식이 아닌 행 %d곳)" % bad)
             except Exception as e:
                 print("    조회 실패: %s" % e)
+            PY
+
+      - name: 배포 #179 확인 (읽기 전용)
+        # ⚠️ 맨 뒤 스텝으로 둔다 — 큰 스크립트 안에 두면 로그 tail 에서 잘려 못 읽는다.
+        if: ${{ github.event.inputs.after179 == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 10m
+          script: |
+            echo "== ① 서버에 새 코드가 실제로 놓였나 (파일 표지) =="
+            docker exec -i logic-analysis sh -c 'ls -l /app/kst_backfill.py 2>/dev/null || echo "  ⚠️ kst_backfill.py 없음 — 배포 미반영"'
+            for pat in "idx_client_analyses_board:client_dashboard.py" \
+                       "reports_kst_backfill_boot:scheduler.py" \
+                       "is_auto, created_at:weekly_report.py" \
+                       "created_by, created_at:reports.py" \
+                       "created_at, updated_at:clients.py"; do
+              m="${pat%%:*}"; f="${pat##*:}"
+              n=$(docker exec -i logic-analysis sh -c "grep -c '$m' /app/$f 2>/dev/null" | tail -1)
+              case "$n" in ''|*[!0-9]*) n=0 ;; esac
+              echo "  $f  「$m」 $n 건 $([ "$n" -gt 0 ] && echo '✅' || echo '❌ 미반영')"
+            done
+            echo
+            echo "== ② 시각 보정이 실제로 돌았나 (부팅 로그) =="
+            docker logs logic-analysis 2>&1 | grep -E "시각 보정|reports_kst" | tail -5 \
+              || echo "  (로그 없음 — 부팅 +1분을 아직 안 지났거나 잡이 안 돌았다)"
+            docker inspect -f '  컨테이너 기동 StartedAt={{.State.StartedAt}}' logic-analysis
+            echo
+            echo "== ③ 보고서 시각이 실제로 바뀌었나 =="
+            docker exec -i logic-analysis python3 - <<'PY'
+            import os, sqlite3
+            c = sqlite3.connect(os.getenv("DB_PATH", "/app/data/logic_data.db"))
+            print("  지금 UTC %s / KST %s" % (
+                c.execute("SELECT datetime('now')").fetchone()[0],
+                c.execute("SELECT datetime('now','localtime')").fetchone()[0]))
+            print("  -- 자동 보고서 시:분 (00:40=UTC 그대로 · 09:40=고쳐짐) --")
+            for r in c.execute("SELECT substr(created_at,12,5) hm, COUNT(*) n,"
+                               " MIN(substr(created_at,1,10)), MAX(substr(created_at,1,10))"
+                               " FROM reports WHERE is_auto=1 GROUP BY hm ORDER BY n DESC LIMIT 6"):
+                mark = "✅ KST" if r[0].startswith("09:4") else ("❌ 아직 UTC" if r[0].startswith("00:4") else "?")
+                print("    %s · %5d건 · %s ~ %s  %s" % (r[0], r[1], r[2], r[3], mark))
+            print("  -- 마커 --")
+            import glob
+            g = glob.glob(os.path.join(os.path.dirname(
+                os.path.abspath(os.getenv("DB_PATH", "/app/data/logic_data.db"))), ".reports_kst*"))
+            print("    %s" % (g or "없음 — 보정이 아직 안 돌았거나 실패했다"))
+
+            print()
+            print("== ④ 커버링 인덱스가 실제로 쓰이나 ==")
+            names = [r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='index'"
+                                             " AND tbl_name='client_analyses'")]
+            print("  인덱스: %s" % ", ".join(names))
+            ids = [r[0] for r in c.execute("SELECT id FROM clients WHERE status='active' LIMIT 400")]
+            ph = ",".join("?" * len(ids))
+            import time
+            AGG = ("SELECT client_id, COUNT(*), MAX(updated_at), COUNT(DISTINCT keyword),"
+                   " COUNT(DISTINCT analyzed_date) FROM client_analyses"
+                   " WHERE client_id IN (%s) GROUP BY client_id" % ph)
+            LATEST = ("SELECT client_id, keyword, product_url, analyzed_date, updated_at"
+                      " FROM client_analyses WHERE client_id IN (%s)"
+                      " ORDER BY analyzed_date DESC, updated_at DESC" % ph)
+            for lbl, q, before in (("집계", AGG, 290), ("최신1건", LATEST, 563)):
+                t = []
+                for _ in range(2):
+                    t0 = time.perf_counter(); n = len(c.execute(q, ids).fetchall())
+                    t.append((time.perf_counter() - t0) * 1000)
+                plan = " / ".join(r[-1] for r in c.execute("EXPLAIN QUERY PLAN " + q, ids))
+                ok = "✅ 커버링" if "COVERING INDEX idx_client_analyses_board" in plan else "❌ 안 쓰임"
+                print("  %-8s %6.0f ms -> %5.0f ms (배포 전 %d ms) · %d행 · %s"
+                      % (lbl, t[0], t[1], before, n, ok))
+                print("      %s" % plan[:150])
             PY
