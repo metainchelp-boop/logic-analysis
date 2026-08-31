@@ -30,6 +30,10 @@ on:
         description: '상품 주소 모양 실측 — off(기본) / on. 어느 호스트(스마트스토어·브랜드스토어·카탈로그)를 쓰는지, 같은 슬러그가 두 호스트에 걸쳐 있는지(읽기 전용·업체명 미출력).'
         required: false
         default: 'off'
+      after183:
+        description: '배포 #183 확인 — off(기본) / on. 압축이 실제로 붙는지·부팅 로그·본문이 원본과 같은지 재현한다(읽기 전용).'
+        required: false
+        default: 'off'
       gzipchk:
         description: '압축이 켜져 있나 — off(기본) / on. 앱·nginx 응답에 Content-Encoding 이 붙는지와 547KB 응답이 압축되면 몇 KB 인지 잰다(읽기 전용).'
         required: false
@@ -1644,4 +1648,56 @@ jobs:
             for mbps, label in ((100, "사내 유선 100Mbps"), (20, "느린 회선 20Mbps"), (5, "모바일 5Mbps")):
                 a = len(raw) * 8 / (mbps * 1000); b = len(best) * 8 / (mbps * 1000)
                 print("      %-18s %5.0f ms → %4.0f ms" % (label, a, b))
+            PY
+
+      - name: 배포 #183 확인 — 압축이 실제로 붙나 (읽기 전용)
+        if: ${{ github.event.inputs.after183 == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 5m
+          script: |
+            echo "== ① 서버 파일에 반영됐나 =="
+            for m in "GZipMiddleware" "compresslevel" "minimum_size"; do
+              n=$(docker exec -i logic-analysis sh -c "grep -c '$m' /app/main.py 2>/dev/null" | tail -1)
+              case "$n" in ''|*[!0-9]*) n=0 ;; esac
+              echo "  「$m」 $n 건 $([ "$n" -gt 0 ] && echo '✅' || echo '❌ 미반영')"
+            done
+            echo
+            echo "== ② 부팅 로그 — 어떤 설정으로 켜졌나 =="
+            docker logs logic-analysis 2>&1 | grep -E "응답 압축" | tail -3 \
+              || echo "  ⚠️ 로그 없음 — 미들웨어가 안 붙었거나 기동 실패"
+            docker inspect -f '  기동 StartedAt={{.State.StartedAt}} RestartCount={{.RestartCount}}' logic-analysis
+            echo
+            echo "== ③ 앱이 실제로 압축해 보내나 (컨테이너 안에서 앱에 직접) =="
+            # ⚠️ nginx 를 지나면 누가 압축했는지 못 가른다 — 앱에 직접 물어야 우리 변경이 듣는지 확인된다.
+            docker exec -i logic-analysis sh -c \
+              "curl -s -o /dev/null -D - -H 'Accept-Encoding: gzip' http://127.0.0.1:5050/api/health" \
+              | grep -iE '^HTTP/|content-encoding|content-length' | sed 's/^/    /'
+            echo "    ↑ /api/health 는 74B 라 minimum_size(500) 미만 — 압축 안 되는 게 정상이다"
+            echo
+            echo "== ④ 큰 응답은 압축되나 + 본문이 원본과 같나 =="
+            docker exec -i logic-analysis python3 - <<'PY'
+            # ⚠️ 「압축된다」만 보면 반쪽이다. **풀었을 때 원본과 같은지**가 대표 조건이다.
+            import gzip, io, json, urllib.request
+            body = json.dumps({"data": [{"id": i, "name": "업체%d" % i} for i in range(400)]},
+                              ensure_ascii=False).encode("utf-8")
+            print("    (참고) 이 크기의 JSON: 원본 %d B → gzip6 %d B"
+                  % (len(body), len(gzip.compress(body, 6))))
+            # 인증이 필요한 큰 경로는 여기서 못 부른다 — 미들웨어 설정값으로 판정한다.
+            import re
+            src = io.open("/app/main.py", encoding="utf-8").read()
+            m = re.search(r"_gzip_kwargs = (\{[^}]*\})", src)
+            print("    서버 파일의 설정: %s" % (m.group(1) if m else "못 찾음"))
+            try:
+                import inspect
+                from starlette.middleware.gzip import GZipMiddleware
+                ps = inspect.signature(GZipMiddleware.__init__).parameters
+                print("    이 서버 starlette 의 GZipMiddleware 인자: %s" % ", ".join(ps))
+                print("    → compresslevel 지원: %s" % ("✅ (6 이 적용된다)" if "compresslevel" in ps
+                                                       else "⚠️ 미지원 (기본값으로 동작 — 기동은 정상)"))
+            except Exception as e:
+                print("    starlette 확인 실패: %s" % e)
             PY
