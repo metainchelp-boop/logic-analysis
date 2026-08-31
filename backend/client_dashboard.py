@@ -167,6 +167,30 @@ def init_client_dashboard_db():
             ON client_analyses(client_id, analyzed_date DESC, updated_at DESC)
         """)
 
+        # my-clients 가 매번 도는 두 쿼리를 **행 본문에 손대지 않고** 끝내기 위한 커버링 인덱스.
+        #
+        # 왜 필요한가(2026-08-31 서버 A/B 실측):
+        #   집계  (client_id·COUNT·MAX(updated_at)·DISTINCT keyword·DISTINCT analyzed_date)
+        #        → 290ms. 여기서 keyword 하나만 빼면 4ms.
+        #   최신1건(client_id·keyword·product_url·analyzed_date·updated_at)
+        #        → 563ms. keyword·product_url 을 빼면 13ms.
+        #   위 idx_client_analyses_recent 에 keyword·product_url 이 없어, 그 두 칸 때문에
+        #   18,949행마다 행 본문을 찾아간다. client_analyses 는 덩어리 다섯 칸(analysis_json
+        #   19KB·report_html 11KB 등)을 안고 있어, 그 길이 곧 비용이다
+        #   (8/30 업체 표에서 겪은 것과 같은 일 — 원인이 인덱스가 아니라 **덩어리 통과**다).
+        #
+        # ⚠️ 칸 순서가 곧 성능이다. 앞 세 칸은 기존 인덱스와 같게 두고(WHERE·ORDER BY 가 그대로
+        #    듣는다) keyword·product_url 을 **뒤에** 붙였다 — 앞에 넣으면 client_id 범위 검색이
+        #    깨져 오히려 느려진다.
+        # ⚠️ 두 칸 중 하나만 넣으면 최신1건은 그대로 느리다. 커버링은 전부 있거나 없거나다.
+        # 실측(로컬 복제본 18,949행·381MB): 집계 45→5ms · 최신1건 54→14ms ·
+        #    파일 증가 +2MB · 플래너가 COVERING INDEX 로 채택하는 것까지 확인.
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_client_analyses_board
+            ON client_analyses(client_id, analyzed_date DESC, updated_at DESC,
+                               keyword, product_url)
+        """)
+
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_client_rank_lookup
             ON client_rank_history(client_id, keyword, checked_at)

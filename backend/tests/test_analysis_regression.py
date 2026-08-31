@@ -1104,6 +1104,151 @@ def test_VACUUM_은_새벽에만_돈다():
     assert 'id="one_time_vacuum_night"' in src, "새벽 VACUUM 잡이 등록돼 있지 않다"
 
 
+# ==================== 시각을 KST 로 적는가 (2026-08-31) ====================
+# 서버의 reports·clients 표는 기본값이 CURRENT_TIMESTAMP(=UTC)다. 코드의 CREATE TABLE 은
+# localtime 으로 적혀 있지만 IF NOT EXISTS 는 기존 표를 안 고치므로 소용이 없다.
+# ⇒ 넣는 자리에서 KST 를 명시하는 것만이 유효하고, 그것이 지켜지는지 여기서 지킨다.
+
+def _src(name):
+    import os
+    return open(os.path.join(os.path.dirname(__file__), "..", name), encoding="utf-8").read()
+
+
+def test_보고서를_넣는_두_자리가_KST_를_명시한다():
+    """⚠️ 이 검사가 없으면 다음에 INSERT 를 손댈 때 조용히 UTC 로 되돌아간다 —
+       화면은 멀쩡해 보이고 날짜도 맞아서, 9시간 어긋난 걸 아무도 눈치채지 못한다."""
+    for name in ("weekly_report.py", "reports.py"):
+        src = _src(name)
+        i = src.index("INSERT INTO reports")
+        block = src[i:i + 700]
+        assert "created_at" in block, f"{name}: INSERT 에 created_at 이 없다 — 서버 기본값(UTC)이 쓰인다"
+        assert "datetime('now','localtime')" in block, f"{name}: KST 명시가 없다"
+
+
+def test_업체를_넣는_자리가_KST_를_명시한다():
+    src = _src("clients.py")
+    i = src.index("INSERT INTO clients")
+    block = src[i:i + 900]
+    for col in ("created_at", "updated_at"):
+        assert col in block, f"clients.py: INSERT 에 {col} 이 없다 — 서버 기본값(UTC)이 쓰인다"
+    assert block.count("datetime('now','localtime')") >= 2, "clients.py: KST 명시가 두 칸에 다 없다"
+
+
+def test_보고서_INSERT_가_실제로_KST_를_적는다():
+    """문자열 검사만으로는 「자리 수가 맞는가」를 못 잡는다 — 실제로 넣어 본다.
+    ⚠️ SQL 주석(--)을 앞에 붙였으므로 그것까지 통과하는지도 여기서 확인된다."""
+    import re
+    import sqlite3
+    from datetime import datetime
+    conn = sqlite3.connect(":memory:")
+    # 서버와 같은 병(기본값 UTC)을 일부러 재현한다 — 명시가 없으면 UTC 가 들어가야 한다.
+    conn.execute("""CREATE TABLE reports (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, client_id INTEGER, title TEXT, keyword TEXT,
+        product_url TEXT DEFAULT '', report_data TEXT, report_hash TEXT UNIQUE,
+        html_filename TEXT DEFAULT '', status TEXT DEFAULT 'generated', views INTEGER DEFAULT 0,
+        created_by INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        is_auto INTEGER NOT NULL DEFAULT 0)""")
+
+    src = _src("reports.py")
+    i = src.index("INSERT INTO reports")
+    sql = src[i:src.index('"""', i)]
+    conn.execute(sql, (1, "t", "k", "", "{}", "h1", "f", "generated", 1))
+
+    local = conn.execute("SELECT datetime('now','localtime')").fetchone()[0]
+    got = conn.execute("SELECT created_at FROM reports").fetchone()[0]
+    assert got[:13] == local[:13], f"KST 로 안 적혔다: {got} (지금 {local})"
+    utc = conn.execute("SELECT datetime('now')").fetchone()[0]
+    if utc[:13] != local[:13]:          # 컨테이너가 UTC 면 이 비교는 뜻이 없다
+        assert got[:13] != utc[:13], "UTC 가 들어갔다"
+
+
+def test_시각_보정은_옛_행만_옮기고_새_행은_안_건드린다():
+    """보정의 핵심 조건 두 겹(id 경계 · 1시간 뒤처짐)을 실제로 돌려서 확인한다."""
+    import sqlite3
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    from kst_backfill import backfill
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE reports (id INTEGER PRIMARY KEY, created_at TEXT)")
+    conn.executescript("""
+        INSERT INTO reports VALUES (1, datetime('now','localtime','-9 hours'));   -- 옛 UTC 행
+        INSERT INTO reports VALUES (2, datetime('now','localtime','-9 hours','-3 days'));
+        INSERT INTO reports VALUES (3, datetime('now','localtime'));              -- 새 KST 행
+        INSERT INTO reports VALUES (4, '');                                       -- 형식 아님
+        INSERT INTO reports VALUES (5, NULL);
+    """)
+    before = {r[0]: r[1] for r in conn.execute("SELECT id, created_at FROM reports")}
+    n = backfill(conn, max_id=5)
+    after = {r[0]: r[1] for r in conn.execute("SELECT id, created_at FROM reports")}
+
+    assert n == 2, f"옛 행 2건만 옮겨야 하는데 {n}건"
+    now = conn.execute("SELECT datetime('now','localtime')").fetchone()[0]
+    assert after[1][:13] == now[:13], "옛 행이 지금 시각으로 안 왔다"
+    assert after[3] == before[3], "새 행(이미 KST)을 건드렸다 — 9시간 밀렸다"
+    assert after[4] == "" and after[5] is None, "형식이 아닌 행의 값이 사라졌다"
+
+
+def test_시각_보정이_id_경계_밖을_안_건드린다():
+    import sqlite3
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    from kst_backfill import backfill
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE reports (id INTEGER PRIMARY KEY, created_at TEXT)")
+    conn.executescript("""
+        INSERT INTO reports VALUES (1, datetime('now','localtime','-9 hours'));
+        INSERT INTO reports VALUES (2, datetime('now','localtime','-9 hours'));
+    """)
+    keep = conn.execute("SELECT created_at FROM reports WHERE id=2").fetchone()[0]
+    assert backfill(conn, max_id=1) == 1
+    assert conn.execute("SELECT created_at FROM reports WHERE id=2").fetchone()[0] == keep, \
+        "id 경계 밖의 행을 건드렸다"
+
+
+def test_시각_보정_잡이_등록돼_있고_os_를_임포트한다():
+    """⚠️ scheduler.py 는 os 를 모듈 수준에서 임포트하지 않는다(9곳이 함수 안에서 한다).
+       빼먹으면 NameError 가 except 에 먹혀 보정이 조용히 안 돈다 — 실제로 한 번 그랬다."""
+    src = _src("scheduler.py")
+    assert 'id="reports_kst_backfill_boot"' in src, "시각 보정 잡이 등록돼 있지 않다"
+    body = src.split("def _run_reports_kst_backfill()")[1].split("\ndef ")[0]
+    assert "import os" in body, "os 임포트가 빠졌다 — NameError 가 except 에 먹혀 조용히 안 돈다"
+
+
+# ==================== 분석 집계 커버링 인덱스 (2026-08-31) ====================
+
+def test_분석_집계_커버링_인덱스가_있다():
+    """keyword·product_url 이 빠지면 행 본문(덩어리 5칸)을 찾아가 290ms·563ms 가 된다."""
+    src = _src("client_dashboard.py")
+    assert "idx_client_analyses_board" in src, "커버링 인덱스가 사라졌다"
+    i = src.index("idx_client_analyses_board")
+    block = src[i:i + 300]
+    for col in ("client_id", "analyzed_date", "updated_at", "keyword", "product_url"):
+        assert col in block, f"인덱스에 {col} 이 빠졌다 — 하나만 빠져도 커버링이 깨진다"
+
+
+def test_인덱스가_실제로_커버링으로_쓰인다():
+    """플래너가 그 인덱스를 고르는지 실제로 돌려 본다 — 만들어 두고 안 쓰이면 헛것이다."""
+    import sqlite3
+    conn = sqlite3.connect(":memory:")
+    conn.execute("""CREATE TABLE client_analyses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, client_id INTEGER NOT NULL, keyword TEXT NOT NULL,
+        product_url TEXT DEFAULT '', analysis_json TEXT DEFAULT '{}', volume_json TEXT DEFAULT '{}',
+        related_json TEXT DEFAULT '{}', shop_products_json TEXT DEFAULT '[]',
+        advertiser_json TEXT DEFAULT '{}', created_at TEXT, updated_at TEXT,
+        analyzed_date TEXT, report_html TEXT, created_by INTEGER)""")
+    src = _src("client_dashboard.py")
+    i = src.index("CREATE INDEX IF NOT EXISTS idx_client_analyses_board")
+    conn.execute(src[i:src.index('"""', i)])
+    rows = [(c, "k%d" % c, "u", "2026-08-%02d" % (c % 28 + 1), "2026-08-01 10:00:00")
+            for c in range(1, 60)]
+    conn.executemany("INSERT INTO client_analyses (client_id, keyword, product_url,"
+                     " analyzed_date, updated_at) VALUES (?,?,?,?,?)", rows)
+    plan = " ".join(r[-1] for r in conn.execute(
+        "EXPLAIN QUERY PLAN SELECT client_id, COUNT(*), MAX(updated_at),"
+        " COUNT(DISTINCT keyword), COUNT(DISTINCT analyzed_date) FROM client_analyses"
+        " WHERE client_id IN (1,2,3) GROUP BY client_id"))
+    assert "COVERING INDEX idx_client_analyses_board" in plan, \
+        f"커버링으로 안 쓰인다 — 칸 구성을 다시 볼 것: {plan}"
+
+
 if __name__ == "__main__":
     _tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     _failed = 0

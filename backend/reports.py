@@ -875,10 +875,14 @@ def generate_report(
         try:
             cursor = conn.cursor()
             cursor.execute("""
+                -- ⚠️ created_at 을 반드시 명시한다 — 서버 표의 기본값은
+                --    CURRENT_TIMESTAMP(=UTC) 라 9시간 이르게 적힌다.
+                --    위 CREATE TABLE 에는 localtime 으로 적혀 있지만, 그 표는
+                --    이 코드보다 먼저 만들어졌고 IF NOT EXISTS 는 기존 표를 안 고친다.
                 INSERT INTO reports (
                     client_id, title, keyword, product_url, report_data,
-                    report_hash, html_filename, status, created_by
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    report_hash, html_filename, status, created_by, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','localtime'))
             """, (
                 request.client_id,
                 title,

@@ -153,9 +153,13 @@ def run_weekly_reports():
 
                 try:
                     conn.execute(
+                        # ⚠️ created_at 을 반드시 명시한다 — 서버 표의 기본값은
+                        #    CURRENT_TIMESTAMP(=UTC) 라, 비워 두면 09:40 KST 실행이
+                        #    00:40 으로 적힌다(①이 2026-08-24 통지 · 08-31 실측 확인).
+                        #    표 정의는 못 고친다(SQLite 는 기본값 ALTER 가 없다).
                         "INSERT INTO reports (client_id, title, keyword, product_url, report_data,"
-                        " report_hash, html_filename, status, created_by, is_auto)"
-                        " VALUES (?,?,?,?,?,?,?,?,?,1)",
+                        " report_hash, html_filename, status, created_by, is_auto, created_at)"
+                        " VALUES (?,?,?,?,?,?,?,?,?,1,datetime('now','localtime'))",
                         (c["id"], title, (head["keyword"] or "").strip(),
                          head["product_url"] or "", report_data, report_hash,
                          html_filename, "generated", 0)

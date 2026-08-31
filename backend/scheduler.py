@@ -228,6 +228,22 @@ def start_scheduler():
         max_instances=1,
     )
 
+    # 12) 보고서 시각 1회 보정 — 부팅 1분 뒤 한 번(마커가 있으면 즉시 종료).
+    #     ⚠️ 이관·VACUUM 보다 **먼저** 둔다. 두 잡은 수 분씩 걸리는데, 이 보정은 977행
+    #        UPDATE 라 순식간이고, 늦출수록 화면이 틀린 시각을 더 오래 보여 준다.
+    #     ⚠️ 부팅과 보정 사이 1분에 새 보고서가 들어와도 그 행은 안 밀린다 —
+    #        보정이 「id 경계」와 「시각이 지금보다 1시간 이상 뒤처진 행」을 함께 요구한다.
+    #        새 코드가 쓴 행은 시각이 지금과 같아 그 조건에서 빠진다(kst_backfill 주석 참조).
+    _scheduler.add_job(
+        _run_reports_kst_backfill,
+        trigger="date",
+        run_date=datetime.now() + timedelta(minutes=1),
+        id="reports_kst_backfill_boot",
+        name="보고서 시각 KST 1회 보정 (부팅 +1분)",
+        replace_existing=True,
+        max_instances=1,
+    )
+
     _scheduler.start()
     logger.info("✅ 스케줄러 시작 (계약동기화: 04:00, 순위: 08:00, 분석: 08:30, 리포트: 09:30(발송 비활성), DB백업: 00:30, 보관정책: 01:00, 축 브리지: 01:20, 플레이스 자동추적 정리: 01:40, 주간 보고서: 월 09:40, 상권 API 자가 점검: 05:00)")
 
@@ -1399,6 +1415,24 @@ def _run_detail_html_migration():
                 conn.close()
             except Exception:
                 pass
+
+
+# ==================== 보고서 시각 1회 보정 (2026-08-31) ====================
+# 서버 reports 표의 기본값이 CURRENT_TIMESTAMP(=UTC)라 09:40 KST 실행이 00:40 으로 적혔다.
+# 넣는 자리에 KST 를 명시해 앞으로는 안 생기게 했고, 이미 적힌 977행을 여기서 한 번 옮긴다.
+# 판단 근거·안전 조건은 backend/kst_backfill.py 머리말에 적어 뒀다.
+
+
+def _run_reports_kst_backfill():
+    """이미 UTC 로 적힌 보고서 시각을 1회 보정 — 실패해도 다른 잡에 영향 없게 감싼다."""
+    # ⚠️ os 는 이 파일에서 모듈 수준 임포트가 아니다(9곳이 함수 안에서 한다).
+    #    여기서 빼먹으면 NameError 가 아래 except 에 먹혀, 보정이 조용히 안 돈다.
+    import os
+    try:
+        from kst_backfill import run_once
+        run_once(os.getenv("DB_PATH", "/app/data/logic_data.db"))
+    except Exception as e:
+        logger.error(f"[시각 보정] 진입 실패(무시): {e}")
 
 
 # ==================== 1회성 VACUUM (freelist → 디스크 반환) ====================

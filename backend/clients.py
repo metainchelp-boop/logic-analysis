@@ -407,10 +407,19 @@ def create_client(
                     raise ValueError(f"이미 동일한 스토어 URL로 등록된 업체가 있습니다: {dup['name']} (ID: {dup['id']})")
 
             cursor.execute("""
+                -- ⚠️ created_at·updated_at 을 반드시 명시한다 — 서버 clients 표의
+                --    기본값도 CURRENT_TIMESTAMP(=UTC) 다(2026-08-31 실측).
+                --    같은 표를 client_dashboard 는 KST 로 명시해 넣고 있어, 비워 두면
+                --    한 표에 두 시계가 섞인다.
+                -- ⚠️ 옛 행은 소급 보정하지 않는다. 실측(2026-08-31) 시각대 분포가
+                --    10~23시에 몰려 있고 00~09시는 5곳뿐 — 사실상 전부 KST 로 적혀 있다는
+                --    뜻이라 보정할 것이 없다. 그 5곳도 「UTC 로 적힌 것」인지 「밤늦게 등록한
+                --    것」인지 가릴 방법이 없어, 건드리면 맞는 행을 틀리게 만들 위험만 남는다.
                 INSERT INTO clients (
                     name, business_name, contact_name, contact_phone, contact_email,
-                    website_url, naver_store_url, main_keywords, notes, status, created_by
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    website_url, naver_store_url, main_keywords, notes, status, created_by,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','localtime'), datetime('now','localtime'))
             """, (
                 data.name,
                 data.business_name or "",
