@@ -1568,13 +1568,17 @@ jobs:
               "curl -s -o /dev/null -D - -H 'Accept-Encoding: gzip, deflate' http://127.0.0.1:5050/api/health 2>/dev/null | grep -iE '^HTTP|content-encoding|content-length|content-type'" \
               || echo "  (health 경로 없음 — 아래 nginx 결과로 판단)"
             echo
-            echo "-- ② nginx 를 지날 때 (서버에서 도메인으로) --"
-            for path in / /api/health; do
-              echo "  경로 $path"
-              curl -s -o /dev/null -D - -H 'Accept-Encoding: gzip, deflate' \
-                --max-time 10 "http://logic.metainc.co.kr$path" 2>/dev/null \
-                | grep -iE '^HTTP|content-encoding|content-length|content-type' | sed 's/^/    /' \
-                || echo "    (응답 없음)"
+            echo "-- ② nginx 를 지날 때 (https — http 는 301 이라 헤더를 못 본다) --"
+            # ⚠️ nginx 의 기본 gzip_types 는 text/html **뿐**이다. 압축이 켜져 있어도
+            #    JSON·JS 는 그대로 나가는 일이 흔하므로 형식별로 갈라 본다.
+            for path in "/ (HTML)" "/api/health (JSON)" "/dist/APPJS (JS)"; do
+              p="${path%% *}"; lbl="${path#* }"
+              [ "$p" = "/dist/APPJS" ] && p="/$(docker exec -i logic-analysis sh -c 'ls /app/frontend/dist/*.js 2>/dev/null | head -1 | sed "s#/app/frontend/##"' 2>/dev/null)"
+              echo "  경로 $p  $lbl"
+              curl -sk -o /dev/null -D - -H 'Accept-Encoding: gzip, deflate' \
+                --max-time 10 "https://logic.metainc.co.kr$p" 2>/dev/null \
+                | grep -iE '^HTTP/|content-encoding|content-length|content-type' | sed 's/^/    /'
+              echo "    ↑ Content-Encoding 이 없으면 그 형식은 압축 안 되고 있다"
             done
             echo
             echo "-- ③ 547KB 응답을 압축하면 몇 KB 인가 (실제 데이터로) --"
