@@ -30,6 +30,10 @@ on:
         description: '상품 주소 모양 실측 — off(기본) / on. 어느 호스트(스마트스토어·브랜드스토어·카탈로그)를 쓰는지, 같은 슬러그가 두 호스트에 걸쳐 있는지(읽기 전용·업체명 미출력).'
         required: false
         default: 'off'
+      gzipchk:
+        description: '압축이 켜져 있나 — off(기본) / on. 앱·nginx 응답에 Content-Encoding 이 붙는지와 547KB 응답이 압축되면 몇 KB 인지 잰다(읽기 전용).'
+        required: false
+        default: 'off'
       payload:
         description: '체감 원인 찾기 — off(기본) / on. my-clients 응답을 서버에서 실제로 조립해 총 소요·응답 크기·무엇이 크기를 차지하는지 잰다(읽기 전용·업체명 미출력).'
         required: false
@@ -1547,4 +1551,73 @@ jobs:
             for mbps, label in ((100, "사내 유선 100Mbps"), (20, "느린 회선 20Mbps")):
                 print("    %s → 약 %.0f ms" % (label, size * 8 / (mbps * 1000)))
             print("  ⇒ 조립·직렬화·전송 합이 쿼리(33.8ms)보다 크면, 체감의 주인은 쿼리가 아니다.")
+            PY
+
+      - name: 압축이 켜져 있나 (읽기 전용)
+        if: ${{ github.event.inputs.gzipchk == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 5m
+          script: |
+            echo "== 압축 여부 (읽기 전용) =="
+            echo "-- ① 앱이 직접 답할 때 (컨테이너 안 → 앱 포트) --"
+            docker exec -i logic-analysis sh -c \
+              "curl -s -o /dev/null -D - -H 'Accept-Encoding: gzip, deflate' http://127.0.0.1:5050/api/health 2>/dev/null | grep -iE '^HTTP|content-encoding|content-length|content-type'" \
+              || echo "  (health 경로 없음 — 아래 nginx 결과로 판단)"
+            echo
+            echo "-- ② nginx 를 지날 때 (서버에서 도메인으로) --"
+            for path in / /api/health; do
+              echo "  경로 $path"
+              curl -s -o /dev/null -D - -H 'Accept-Encoding: gzip, deflate' \
+                --max-time 10 "http://logic.metainc.co.kr$path" 2>/dev/null \
+                | grep -iE '^HTTP|content-encoding|content-length|content-type' | sed 's/^/    /' \
+                || echo "    (응답 없음)"
+            done
+            echo
+            echo "-- ③ 547KB 응답을 압축하면 몇 KB 인가 (실제 데이터로) --"
+            docker exec -i logic-analysis python3 - <<'PY'
+            # ⚠️ 내용은 한 글자도 안 바꾼다. 같은 JSON 을 전송만 압축했을 때의 크기를 잰다.
+            import os, sqlite3, json, gzip, time
+            c = sqlite3.connect(os.getenv("DB_PATH", "/app/data/logic_data.db"))
+            c.row_factory = sqlite3.Row
+            COLS = ("id, name, business_name, contact_name, contact_phone, contact_email, "
+                    "website_url, naver_store_url, main_keywords, notes, status, auto_analysis, "
+                    "created_by, created_at, updated_at, role, expires_at, "
+                    "COALESCE(vertical,'store') AS vertical, "
+                    "COALESCE(track_enabled,1) AS track_enabled, track_until, "
+                    "contract_stage, contract_stage_at")
+            clients = c.execute("SELECT %s FROM clients WHERE status='active'"
+                                " AND COALESCE(role,'advertiser')='advertiser'"
+                                " ORDER BY updated_at DESC" % COLS).fetchall()
+            ids = [r["id"] for r in clients]
+            ph = ",".join("?" * len(ids))
+            agg = {r["client_id"]: dict(r) for r in c.execute(
+                "SELECT client_id, COUNT(*) analysis_count, MAX(updated_at) last_analyzed,"
+                " COUNT(DISTINCT keyword) uk, COUNT(DISTINCT analyzed_date) td"
+                " FROM client_analyses WHERE client_id IN (%s) GROUP BY client_id" % ph, ids)}
+            latest = {}
+            for r in c.execute("SELECT client_id, keyword, product_url, analyzed_date, updated_at"
+                               " FROM client_analyses WHERE client_id IN (%s)"
+                               " ORDER BY analyzed_date DESC, updated_at DESC" % ph, ids):
+                latest.setdefault(r["client_id"], dict(r))
+            rows = []
+            for cl in clients:
+                d = dict(cl); d.update(agg.get(cl["id"], {})); d["latest"] = latest.get(cl["id"])
+                rows.append(d)
+            raw = json.dumps({"success": True, "data": rows}, ensure_ascii=False, default=str).encode("utf-8")
+            for lv in (1, 6, 9):
+                t0 = time.perf_counter(); z = gzip.compress(raw, lv)
+                ms = (time.perf_counter() - t0) * 1000
+                print("    gzip 수준 %d → %6.0f KB (원본의 %4.1f%%) · 압축에 %.0f ms"
+                      % (lv, len(z) / 1024, len(z) * 100.0 / len(raw), ms))
+            print("    원본 %.0f KB" % (len(raw) / 1024))
+            print()
+            print("    -- 전송 시간이 어떻게 바뀌나 --")
+            best = gzip.compress(raw, 6)
+            for mbps, label in ((100, "사내 유선 100Mbps"), (20, "느린 회선 20Mbps"), (5, "모바일 5Mbps")):
+                a = len(raw) * 8 / (mbps * 1000); b = len(best) * 8 / (mbps * 1000)
+                print("      %-18s %5.0f ms → %4.0f ms" % (label, a, b))
             PY
