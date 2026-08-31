@@ -30,6 +30,10 @@ on:
         description: '상품 주소 모양 실측 — off(기본) / on. 어느 호스트(스마트스토어·브랜드스토어·카탈로그)를 쓰는지, 같은 슬러그가 두 호스트에 걸쳐 있는지(읽기 전용·업체명 미출력).'
         required: false
         default: 'off'
+      faster:
+        description: '더 줄일 수 있나 — off(기본) / on. my-clients 전체 쿼리 소요를 재고, 최신1건을 업체별 1건으로 다시 쓰면 결과가 100% 같은지·얼마나 빨라지는지 실데이터로 대조(읽기 전용).'
+        required: false
+        default: 'off'
       after179:
         description: '배포 #179 확인 — off(기본) / on. 시각 보정 로그·보고서 시:분·커버링 인덱스 채택·서버 파일 표지를 한 번에(읽기 전용).'
         required: false
@@ -1330,4 +1334,139 @@ jobs:
                 print("  %-8s %6.0f ms -> %5.0f ms (배포 전 %d ms) · %d행 · %s"
                       % (lbl, t[0], t[1], before, n, ok))
                 print("      %s" % plan[:150])
+            PY
+
+      - name: 더 줄일 수 있나 (읽기 전용 · 업체명 미출력)
+        if: ${{ github.event.inputs.faster == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 10m
+          script: |
+            echo "== ⓪ 배포된 코드가 실제로 KST 를 적는가 (서버 파일을 그대로 실행) =="
+            docker exec -i logic-analysis python3 - <<'PY'
+            # ⚠️ 내 로컬 사본이 아니라 **서버에 놓인 파일**의 INSERT 문을 꺼내 실행한다.
+            #    배포가 반영됐는지를 「파일에 문자열이 있다」가 아니라 「그 문이 KST 를 적는다」로 확인한다.
+            import io, sqlite3
+            for name, needle in (("weekly_report.py", "INSERT INTO reports"),
+                                 ("reports.py", "INSERT INTO reports")):
+                src = io.open("/app/" + name, encoding="utf-8").read()
+                i = src.index(needle)
+                # weekly_report 은 파이썬 문자열 연결, reports 는 삼중따옴표라 꺼내는 법이 다르다
+                if name == "weekly_report.py":
+                    seg = src[i - 200:i + 400]
+                    sql = "".join(
+                        ln.strip().strip('"') for ln in seg.split("\n")
+                        if ln.strip().startswith('"') and "INSERT" in seg[:seg.index(ln)] + ln or
+                        (ln.strip().startswith('"INSERT INTO reports')))
+                else:
+                    sql = src[i:src.index('"""', i)]
+                has_kst = "datetime('now','localtime')" in src[i - 300:i + 600]
+                print("  %-18s KST 명시 %s" % (name, "✅" if has_kst else "❌"))
+
+            # 실제 실행 — reports.py 의 문을 서버 파일에서 꺼내 임시 표에 넣어 본다
+            src = io.open("/app/reports.py", encoding="utf-8").read()
+            i = src.index("INSERT INTO reports")
+            sql = src[i:src.index('"""', i)]
+            c = sqlite3.connect(":memory:")
+            c.execute("CREATE TABLE reports (id INTEGER PRIMARY KEY AUTOINCREMENT, client_id INTEGER,"
+                      " title TEXT, keyword TEXT, product_url TEXT, report_data TEXT,"
+                      " report_hash TEXT UNIQUE, html_filename TEXT, status TEXT, views INTEGER DEFAULT 0,"
+                      " created_by INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP,"
+                      " is_auto INTEGER NOT NULL DEFAULT 0)")
+            c.execute(sql, (1, "t", "k", "", "{}", "h", "f", "generated", 1))
+            got = c.execute("SELECT created_at FROM reports").fetchone()[0]
+            utc = c.execute("SELECT datetime('now')").fetchone()[0]
+            kst = c.execute("SELECT datetime('now','localtime')").fetchone()[0]
+            print("  서버 파일의 INSERT 실행 결과 → %s" % got)
+            print("    (지금 UTC %s · KST %s)" % (utc, kst))
+            print("  판정: %s" % ("✅ KST 로 적는다" if got[:16] == kst[:16]
+                                  else "❌ 아직 UTC 다" if got[:16] == utc[:16] else "? 알 수 없음"))
+            PY
+            echo
+            echo "== ① my-clients 가 도는 쿼리 전부 — 지금 무엇이 남았나 =="
+            docker exec -i logic-analysis python3 - <<'PY'
+            import os, sqlite3, time
+            c = sqlite3.connect(os.getenv("DB_PATH", "/app/data/logic_data.db"))
+            c.row_factory = sqlite3.Row
+            ids = [r[0] for r in c.execute("SELECT id FROM clients WHERE status='active' LIMIT 400")]
+            ph = ",".join("?" * len(ids))
+
+            def t(q, args=()):
+                out = []
+                for _ in range(3):
+                    t0 = time.perf_counter(); n = len(c.execute(q, args).fetchall())
+                    out.append((time.perf_counter() - t0) * 1000)
+                return min(out), n
+
+            Q = [
+              ("업체 목록", "SELECT id,name,status,contract_stage,created_by FROM clients WHERE status='active'", ()),
+              ("분석 집계", "SELECT client_id, COUNT(*), MAX(updated_at), COUNT(DISTINCT keyword),"
+                          " COUNT(DISTINCT analyzed_date) FROM client_analyses WHERE client_id IN (%s)"
+                          " GROUP BY client_id" % ph, ids),
+              ("최신1건(지금)", "SELECT client_id, keyword, product_url, analyzed_date, updated_at"
+                          " FROM client_analyses WHERE client_id IN (%s)"
+                          " ORDER BY analyzed_date DESC, updated_at DESC" % ph, ids),
+              ("순위 롤업", "SELECT client_id,keyword,MAX(id) FROM client_rank_history"
+                          " WHERE client_id IN (%s) GROUP BY client_id,keyword" % ph, ids),
+            ]
+            tot = 0
+            for lbl, q, a in Q:
+                ms, n = t(q, a); tot += ms
+                print("  %-14s %7.1f ms · %d행" % (lbl, ms, n))
+            print("  %-14s %7.1f ms" % ("합계", tot))
+
+            print()
+            print("== ② 최신1건을 업체별 1건으로 다시 쓰면 — 결과가 정말 같은가 ==")
+            print("   ⚠️ 「빨라졌다」보다 「값이 한 글자도 안 바뀌었다」가 먼저다. 실데이터로 대조한다.")
+
+            # (가) 지금 방식 — 전부 정렬해 받아 업체별 첫 행만 남긴다
+            t0 = time.perf_counter()
+            cur_map = {}
+            for r in c.execute("SELECT client_id, keyword, product_url, analyzed_date, updated_at"
+                               " FROM client_analyses WHERE client_id IN (%s)"
+                               " ORDER BY analyzed_date DESC, updated_at DESC" % ph, ids):
+                if r["client_id"] not in cur_map:
+                    cur_map[r["client_id"]] = (r["keyword"], r["product_url"],
+                                               r["analyzed_date"], r["updated_at"])
+            ms_cur = (time.perf_counter() - t0) * 1000
+
+            # (나) 업체마다 1건씩 — 같은 정렬, LIMIT 1
+            t0 = time.perf_counter()
+            new_map = {}
+            for cid in ids:
+                r = c.execute("SELECT keyword, product_url, analyzed_date, updated_at"
+                              " FROM client_analyses WHERE client_id=?"
+                              " ORDER BY analyzed_date DESC, updated_at DESC LIMIT 1", (cid,)).fetchone()
+                if r:
+                    new_map[cid] = (r["keyword"], r["product_url"], r["analyzed_date"], r["updated_at"])
+            ms_new = (time.perf_counter() - t0) * 1000
+
+            print("   (가) 지금 방식     %7.1f ms · 업체 %d곳" % (ms_cur, len(cur_map)))
+            print("   (나) 업체별 1건    %7.1f ms · 업체 %d곳" % (ms_new, len(new_map)))
+            same = cur_map == new_map
+            print("   값 대조: %s" % ("✅ 완전히 같다(키·값 전부)" if same else "❌ 다르다"))
+            if not same:
+                diff = [k for k in set(cur_map) | set(new_map) if cur_map.get(k) != new_map.get(k)]
+                print("   다른 업체 %d곳 (id 만 표시): %s" % (len(diff), diff[:10]))
+                for k in diff[:3]:
+                    print("     id=%s 지금=%r 새것=%r" % (k, cur_map.get(k), new_map.get(k)))
+
+            print()
+            print("== ③ 동점(tie)이 있나 — 있으면 정렬 밖 순서에 결과가 좌우된다 ==")
+            n_tie = 0
+            for cid in ids:
+                rows = c.execute(
+                    "SELECT COUNT(*) FROM client_analyses WHERE client_id=?"
+                    "  AND analyzed_date || ' ' || COALESCE(updated_at,'') ="
+                    "      (SELECT analyzed_date || ' ' || COALESCE(updated_at,'')"
+                    "         FROM client_analyses WHERE client_id=?"
+                    "        ORDER BY analyzed_date DESC, updated_at DESC LIMIT 1)",
+                    (cid, cid)).fetchone()[0]
+                if rows > 1:
+                    n_tie += 1
+            print("   맨 위가 동점인 업체 %d곳 / %d곳" % (n_tie, len(ids)))
+            print("   ⇒ 0곳이면 두 방식이 항상 같은 행을 고른다(순서 의존 없음).")
             PY
