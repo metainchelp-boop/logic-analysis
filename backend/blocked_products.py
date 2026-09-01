@@ -23,6 +23,8 @@
 
 배포 게이트 환경에는 fastapi 가 없어 main.py 를 임포트할 수 없다.
 판정·처분이 거기 있으면 검사할 방법이 없다. 여기는 표준 라이브러리만 쓴다.
+(예외 하나 — 「추정 업체」 계산만 rank_link 를 **지연 임포트**한다. 게이트에도 있는
+ requests 까지만 딸려 오고, 임포트가 실패하면 추정만 생략되고 목록은 그대로 나온다.)
 """
 import logging
 
@@ -93,6 +95,32 @@ def list_blocked(conn) -> dict:
             shelved.append(item)
         elif links and all(l["client_id"] not in ok_clients for l in links):
             stuck.append(item)
+
+    # 되살리기 편의 — 이어진 업체가 없는 보관 상품에 「추정 업체」를 덧붙인다
+    # (2026-09-01 대표 「업체명도 올려서」). 매칭 규칙은 rank_link 자동 연결 규칙
+    # 그대로다(한 규칙 한 곳 — 다르게 재면 01:20 자동 연결과 다른 답을 한다).
+    # 01:20 잡이 자동으로 못 이은 이유가 「업체 여럿」이면 후보를 다 보여
+    # 사람이 고르게 한다 — 그게 자동 연결과 이 화면의 역할 분담이다.
+    orphans = [i for i in shelved if not i["clients"]]
+    if orphans:
+        try:
+            from rank_link import _collect_candidates, _product_key, _store_key
+            cand = _collect_candidates(conn)
+            for i in orphans:
+                seen, sug = set(), []
+                for cli in (cand["b_by_key"].get(_product_key(i["url"]), [])
+                            + cand["b_by_store"].get(_store_key(i["url"]), [])):
+                    if cli["id"] in seen:
+                        continue
+                    seen.add(cli["id"])
+                    sug.append({"id": cli["id"], "name": cli["name"],
+                                "eligible": cli["id"] in ok_clients})
+                # 자격 있는 후보를 앞에 — 눌러서 살릴 수 있는 것부터 보인다
+                if sug:
+                    sug.sort(key=lambda s: not s["eligible"])
+                    i["suggestions"] = sug[:3]
+        except Exception as e:
+            logger.warning(f"[정리함] 추정 업체 계산 건너뜀: {e}")
 
     stuck.sort(key=lambda x: x["name"])
     shelved.sort(key=lambda x: (x.get("disabled_at", ""), x["name"]))

@@ -1390,7 +1390,7 @@ def _tray_db():
     c.executescript("""
         CREATE TABLE clients(id INTEGER PRIMARY KEY, name TEXT, status TEXT, role TEXT,
             vertical TEXT, auto_analysis INT, track_enabled INT, track_until TEXT,
-            contract_stage TEXT DEFAULT '');
+            contract_stage TEXT DEFAULT '', naver_store_url TEXT DEFAULT '');
         CREATE TABLE tracked_products(id INTEGER PRIMARY KEY, product_name TEXT,
             product_url TEXT DEFAULT '', store_name TEXT DEFAULT '', created_at TEXT);
         CREATE TABLE tracked_keywords(id INTEGER PRIMARY KEY, product_id INT, keyword TEXT);
@@ -1398,23 +1398,31 @@ def _tray_db():
             product_key TEXT DEFAULT '', match_method TEXT DEFAULT 'product_id',
             linked_by INT DEFAULT 0, created_at TEXT);
     """)
-    c.executemany("INSERT INTO clients(id,name,status,role,vertical,auto_analysis,track_enabled,track_until,contract_stage) VALUES(?,?,?,?,?,?,?,?,?)", [
-        (1, "산업체", "active", "advertiser", "store", 1, 1, "", "진행중"),
-        (2, "죽은업체", "active", "advertiser", "store", 0, 1, "", "계약 만료"),
+    c.executemany("INSERT INTO clients(id,name,status,role,vertical,auto_analysis,track_enabled,track_until,contract_stage,naver_store_url) VALUES(?,?,?,?,?,?,?,?,?,?)", [
+        (1, "산업체", "active", "advertiser", "store", 1, 1, "", "진행중",
+         "https://smartstore.naver.com/sanstore/products/111"),
+        (2, "죽은업체", "active", "advertiser", "store", 0, 1, "", "계약 만료",
+         "https://smartstore.naver.com/deadstore/products/222"),
     ])
-    c.executemany("INSERT INTO tracked_products(id,product_name) VALUES(?,?)", [
-        (10, "산상품"),      # 자격 업체에 이어짐 → 정리함 밖
-        (20, "갇힌상품"),    # 죽은 업체에만 이어짐 → stuck
-        (30, "내린상품"),    # 비활성 · 미연결 → shelved
-        (40, "자유상품"),    # 미연결 · 활성 → 정리함 밖(수집되고 있다)
+    c.executemany("INSERT INTO tracked_products(id,product_name,product_url) VALUES(?,?,?)", [
+        (10, "산상품", ""),      # 자격 업체에 이어짐 → 정리함 밖
+        (20, "갇힌상품", ""),    # 죽은 업체에만 이어짐 → stuck
+        (30, "내린상품",         # 비활성 · 미연결 → shelved. 가게 슬러그가 산업체와 같다
+         "https://smartstore.naver.com/sanstore/products/999"),
+        (35, "떠돌상품",         # 비활성 · 미연결 → shelved. 상품ID 가 죽은업체와 정확 일치
+         "https://smartstore.naver.com/deadstore/products/222"),
+        (40, "자유상품", ""),    # 미연결 · 활성 → 정리함 밖(수집되고 있다)
+        (45, "짝있는상품", ""),  # 비활성 · 죽은 업체에 이어짐 → shelved(이어진 업체가 보인다)
     ])
     c.executemany("INSERT INTO tracked_keywords(product_id,keyword) VALUES(?,?)", [
-        (10, "가"), (20, "나"), (20, "다"), (30, "라"), (40, "마")])
+        (10, "가"), (20, "나"), (20, "다"), (30, "라"), (40, "마"), (35, "바"), (45, "사")])
     c.executemany("INSERT INTO rank_link(client_id,tracked_product_id) VALUES(?,?)", [
-        (1, 10), (2, 20)])
+        (1, 10), (2, 20), (2, 45)])
     from tracking_eligibility import ensure_disabled_column
     ensure_disabled_column(c)
     c.execute("UPDATE tracked_products SET disabled_at='2026-08-29 01:20:00' WHERE id=30")
+    c.execute("UPDATE tracked_products SET disabled_at='2026-08-30 01:20:00' WHERE id=35")
+    c.execute("UPDATE tracked_products SET disabled_at='2026-08-31 01:20:00' WHERE id=45")
     return c
 
 
@@ -1425,9 +1433,9 @@ def test_정리함_두_무리를_정확히_가른다():
     from blocked_products import list_blocked
     r = list_blocked(_tray_db())
     assert [p["id"] for p in r["stuck"]] == [20], r["stuck"]
-    assert [p["id"] for p in r["shelved"]] == [30], r["shelved"]
+    assert [p["id"] for p in r["shelved"]] == [30, 35, 45], r["shelved"]
     assert r["stuck"][0]["clients"][0]["stage"] == "계약 만료", "전산 단계명이 사유로 나와야 한다"
-    assert r["stuck_keywords"] == 2 and r["shelved_keywords"] == 1
+    assert r["stuck_keywords"] == 2 and r["shelved_keywords"] == 3
 
 
 def test_내리기는_지우지_않고_비활성만_붙인다():
@@ -1481,6 +1489,33 @@ def test_정리함에_하드_삭제가_없다():
         "정리함 엔드포인트에 하드 삭제가 섞였다"
     for ep in ("/api/products/blocked", "/shelve", "/relink", "/revive"):
         assert ep in tray, f"엔드포인트 {ep} 가 없다"
+
+
+def test_보관_상품에_추정_업체가_붙는다():
+    """되살리기 편의(2026-09-01 대표 「업체명도 올려서」).
+
+    ⚠️ 매칭은 rank_link 자동 연결 규칙 그대로여야 한다(상품ID 정확 일치 · 가게 슬러그).
+       여기서 다른 규칙으로 재면 01:20 자동 연결과 화면이 서로 다른 업체를 말하게 된다.
+    """
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    from blocked_products import list_blocked
+    r = list_blocked(_tray_db())
+    by_id = {p["id"]: p for p in r["shelved"]}
+    # 가게 슬러그 일치 → 자격 있는 업체가 눌러서 살릴 수 있는 추정으로 붙는다
+    s30 = by_id[30].get("suggestions")
+    assert s30 and s30[0]["id"] == 1 and s30[0]["eligible"] is True, s30
+    # 상품ID 정확 일치라도 자격 없는 업체면 「계약 끝남」 표시용으로만 붙는다
+    s35 = by_id[35].get("suggestions")
+    assert s35 and s35[0]["id"] == 2 and s35[0]["eligible"] is False, s35
+    # 이어진 업체가 이미 보이는 상품에는 추정을 덧붙이지 않는다(정보가 겹친다)
+    assert "suggestions" not in by_id[45], by_id[45]
+    assert by_id[45]["clients"] and by_id[45]["clients"][0]["name"] == "죽은업체"
+    # 화면 몫 — 스토어명·추정 칩·검색창 프리필이 배선돼 있는지
+    fe = _src("../frontend/js/components/KeywordRankPage.jsx")
+    assert "추정 업체" in fe, "보관 탭에 추정 업체 칩이 없다"
+    assert "pd.suggestions" in fe, "화면이 suggestions 를 안 읽는다"
+    assert "setLinkQ(open ? '' : (pd.store || ''))" in fe, \
+        "업체 연결 검색창에 스토어명 프리필이 없다"
 
 
 def test_연결은_등록과_같은_함수를_쓴다():
