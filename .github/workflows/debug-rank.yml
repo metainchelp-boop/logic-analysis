@@ -30,6 +30,10 @@ on:
         description: '상품 주소 모양 실측 — off(기본) / on. 어느 호스트(스마트스토어·브랜드스토어·카탈로그)를 쓰는지, 같은 슬러그가 두 호스트에 걸쳐 있는지(읽기 전용·업체명 미출력).'
         required: false
         default: 'off'
+      after188:
+        description: '배포 #188 확인 — off(기본) / on. collect_slot 반영·대기 사유 응답·번들 배지를 잰다(읽기 전용).'
+        required: false
+        default: 'off'
       pending248:
         description: '신고 #248 — 추가 등록 키워드가 「기록 대기」에서 안 넘어가는 원인. 시간대 분포·축A 전용 키워드 수집률·자격/억제를 갈라 본다(읽기 전용·업체명 미출력).'
         required: false
@@ -1871,3 +1875,49 @@ jobs:
             print("    ⚠️ 「업체에 안 이어짐」은 규칙상 **수집은 된다**(방금 등록분 보호).")
             print("       여기 나오면 disabled_at 이 붙은 것이므로 위 비활성과 같은 뜻이다.")
             PY
+
+      - name: 배포 #188 확인 (읽기 전용)
+        if: ${{ github.event.inputs.after188 == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 5m
+          script: |
+            echo "== ① 서버 파일 표지 =="
+            docker exec -i logic-analysis sh -c 'ls -l /app/collect_slot.py 2>/dev/null || echo "  ❌ collect_slot.py 없음 — 미반영"'
+            for pat in "_pending_meta:client_dashboard.py" \
+                       "from collect_slot import:collector.py" \
+                       "오늘 안에 기록됩니다:client_dashboard.py"; do
+              m="${pat%%:*}"; f="${pat##*:}"
+              n=$(docker exec -i logic-analysis sh -c "grep -c '$m' /app/$f 2>/dev/null" | tail -1)
+              case "$n" in ''|*[!0-9]*) n=0 ;; esac
+              echo "  $f 「$m」 $n건 $([ "$n" -gt 0 ] && echo ✅ || echo '❌ 미반영')"
+            done
+            echo
+            echo "== ② 기동 상태 =="
+            docker inspect -f '  StartedAt={{.State.StartedAt}} RestartCount={{.RestartCount}}' logic-analysis
+            docker logs --since 10m logic-analysis 2>&1 | grep -cE "ERROR|Traceback" | sed 's/^/  최근 10분 오류 줄 /'
+            echo
+            echo "== ③ 서버의 규칙이 화면에 줄 값 (실행으로 확인) =="
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sys; sys.path.insert(0, "/app")
+            from collect_slot import slot_of, wait_hint
+            for k in ("흰다리새우", "호박고구마", "전복죽"):
+                print("  %-8s 슬롯 %2d → %s" % (k, slot_of(k, False), wait_hint(k, False)))
+            # 수집기 배분과 같은 값인지 — collector 의 _slot_of 를 직접 불러 대조
+            from collector import _slot_of
+            diff = sum(1 for k in ("흰다리새우","호박고구마","전복죽","한우","떡볶이")
+                       for p in (True, False) if _slot_of(k, p) != slot_of(k, p))
+            print("  수집기와 화면 규칙 대조: 다른 값 %d건 %s" % (diff, "✅" if diff == 0 else "❌"))
+            PY
+            echo
+            echo "== ④ 번들에 새 배지가 있나 =="
+            B=$(docker exec -i logic-analysis sh -c 'ls /app/frontend/dist/app.*.js | head -1')
+            echo "  번들: $B"
+            for m in "추적 안 됨" "pending_reason" "수집 시간대가 안 왔습니다"; do
+              n=$(docker exec -i logic-analysis sh -c "grep -c '$m' '$B' 2>/dev/null" | tail -1)
+              case "$n" in ''|*[!0-9]*) n=0 ;; esac
+              echo "  「$m」 $n건 $([ "$n" -gt 0 ] && echo ✅ || echo '❌')"
+            done
