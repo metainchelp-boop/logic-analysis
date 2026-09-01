@@ -732,7 +732,19 @@ window.KeywordRankPage = function KeywordRankPage(props) {
                                     exposed
                                         ? React.createElement('span', { style: { fontSize: 16, fontWeight: 800, color: b.rank <= 10 ? '#16a34a' : '#0f172a', fontVariantNumeric: 'tabular-nums' } }, b.rank + '위')
                                         : b.pending
-                                        ? React.createElement('span', { style: _krChip('info'), title: '등록됨 — 첫 순위 기록을 기다리는 중(보통 수 분)' }, '⏳ 기록 대기')
+                                        // 「기록 대기」를 두 종류로 가른다(신고 #248) —
+                                        // 기다리면 풀리는 것과, 사람이 손대기 전엔 영영 안 풀리는 것.
+                                        // ⚠️ 종전엔 둘 다 같은 배지에 「보통 수 분」이라고 적혀 있었다.
+                                        //    추가 등록 키워드는 오후 슬롯이라 실제로는 최대 하루다.
+                                        ? (b.pending_reason === 'blocked'
+                                            ? React.createElement('span', {
+                                                style: Object.assign({}, _krChip('warn'), { background: '#fef2f2', color: '#b91c1c', border: '1px solid #fecaca' }),
+                                                title: b.pending_hint || '지금은 기록되지 않습니다'
+                                              }, '⚠ 추적 안 됨')
+                                            : React.createElement('span', {
+                                                style: _krChip('info'),
+                                                title: '등록됐고 아직 그 키워드의 수집 시간대가 안 왔습니다 — ' + (b.pending_hint || '오늘 안에 수집')
+                                              }, '⏳ ' + (b.pending_hint || '수집 대기')))
                                         : React.createElement('span', null,
                                             React.createElement('span', { style: _krChip('mute') }, '미노출'),
                                             (b.unexposed_days || 0) >= 2 && React.createElement('span', { style: Object.assign({}, _krChip('warn'), { marginLeft: 4 }), title: '연속 미노출 일수' }, b.unexposed_days + '일째'))),
