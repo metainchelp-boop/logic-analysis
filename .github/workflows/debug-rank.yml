@@ -30,6 +30,10 @@ on:
         description: '상품 주소 모양 실측 — off(기본) / on. 어느 호스트(스마트스토어·브랜드스토어·카탈로그)를 쓰는지, 같은 슬러그가 두 호스트에 걸쳐 있는지(읽기 전용·업체명 미출력).'
         required: false
         default: 'off'
+      pending248:
+        description: '신고 #248 — 추가 등록 키워드가 「기록 대기」에서 안 넘어가는 원인. 시간대 분포·축A 전용 키워드 수집률·자격/억제를 갈라 본다(읽기 전용·업체명 미출력).'
+        required: false
+        default: 'off'
       after183:
         description: '배포 #183 확인 — off(기본) / on. 압축이 실제로 붙는지·부팅 로그·본문이 원본과 같은지 재현한다(읽기 전용).'
         required: false
@@ -1718,4 +1722,110 @@ jobs:
                                                        else "⚠️ 미지원 (기본값으로 동작 — 기동은 정상)"))
             except Exception as e:
                 print("    starlette 확인 실패: %s" % e)
+            PY
+
+      - name: 신고 #248 — 기록 대기 원인 (읽기 전용 · 업체명 미출력)
+        if: ${{ github.event.inputs.pending248 == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 10m
+          script: |
+            echo "== 신고 #248 — 추가 등록 키워드가 「기록 대기」에서 안 넘어간다 =="
+            docker exec -i logic-analysis python3 - <<'PY'
+            import os, sqlite3, zlib
+            c = sqlite3.connect(os.getenv("DB_PATH", "/app/data/logic_data.db"))
+            c.row_factory = sqlite3.Row
+
+            # 서버 코드와 같은 규칙(collector._slot_of)을 그대로 옮긴다.
+            PRIORITY_HOURS, LATE_HOURS = 15, 9
+            def slot(k, pri):
+                h = zlib.crc32(k.encode("utf-8"))
+                return h % PRIORITY_HOURS if pri else PRIORITY_HOURS + (h % LATE_HOURS)
+
+            print("  -- ① 수집기가 실제로 몇 시에 도나 (최근 4일 · 시간대별) --")
+            print("     ⚠️ 추적 상품 전용 키워드는 **15~23시 슬롯**에만 배정된다.")
+            print("        그 시간대에 수집기가 안 돌면 그 키워드는 영원히 기록 대기다.")
+            rows = list(c.execute(
+                "SELECT collected_date d, CAST(strftime('%H', created_at) AS INT) h, COUNT(*) n"
+                "  FROM collected_serp WHERE collected_date >= date('now','localtime','-3 day')"
+                " GROUP BY d, h ORDER BY d, h"))
+            by = {}
+            for r in rows:
+                by.setdefault(r["d"], {})[r["h"]] = r["n"]
+            for d in sorted(by):
+                hrs = by[d]
+                line = " ".join("%02d:%-3d" % (h, hrs[h]) for h in sorted(hrs))
+                조간 = sum(v for h, v in hrs.items() if h < 15)
+                야간 = sum(v for h, v in hrs.items() if h >= 15)
+                print("    %s  0~14시 %4d건 · **15~23시 %4d건**" % (d, 조간, 야간))
+                print("        %s" % line)
+
+            print()
+            print("  -- ② 축A 전용 키워드(추가 등록분)가 실제로 수집되고 있나 --")
+            try:
+                from tracking_eligibility import eligible_tracked_product_ids
+                ok = eligible_tracked_product_ids(c)
+            except Exception as e:
+                ok = None
+                print("    자격 판정 실패: %s" % e)
+            축A = set()
+            q = "SELECT DISTINCT keyword FROM tracked_keywords"
+            if ok:
+                q += " WHERE product_id IN (%s)" % ",".join("?" * len(ok))
+                축A = {r[0].strip() for r in c.execute(q, list(ok)) if (r[0] or "").strip()}
+            else:
+                축A = {r[0].strip() for r in c.execute(q) if (r[0] or "").strip()}
+            업체 = set()
+            for r in c.execute("SELECT main_keywords FROM clients WHERE status='active'"):
+                for k in (r[0] or "").split(","):
+                    if k.strip(): 업체.add(k.strip())
+            for r in c.execute("SELECT DISTINCT keyword FROM client_analyses"):
+                if (r[0] or "").strip(): 업체.add(r[0].strip())
+            전용 = 축A - 업체
+            print("    축A 자격 키워드 %d개 · 그중 **업체 키워드와 안 겹치는 것 %d개**" % (len(축A), len(전용)))
+
+            for days, lbl in ((0, "오늘"), (1, "어제"), (7, "최근 7일")):
+                d = "date('now','localtime')" if days == 0 else \
+                    ("date('now','localtime','-1 day')" if days == 1 else
+                     "date('now','localtime','-6 day')")
+                op = "=" if days < 7 else ">="
+                got = {r[0] for r in c.execute(
+                    "SELECT DISTINCT keyword FROM collected_serp WHERE collected_date %s %s" % (op, d))}
+                a = len(전용 & got); b = len(업체 & got)
+                print("    %-8s 전용 %3d/%3d (%3.0f%%) · 업체 %3d/%3d (%3.0f%%)"
+                      % (lbl, a, len(전용), a * 100.0 / max(len(전용), 1),
+                         b, len(업체), b * 100.0 / max(len(업체), 1)))
+
+            print()
+            print("  -- ③ 전용 키워드가 배정된 슬롯 분포 --")
+            dist = {}
+            for k in 전용:
+                dist[slot(k, False)] = dist.get(slot(k, False), 0) + 1
+            print("    %s" % " ".join("%02d시:%d" % (h, dist[h]) for h in sorted(dist)))
+            print("    ⇒ 전부 15~23시다. 그 시간대 수집이 0이면 100%% 기록 대기가 된다.")
+
+            print()
+            print("  -- ④ 순위가 실제로 언제 마지막으로 쌓였나(축A) --")
+            for r in c.execute(
+                    "SELECT DATE(checked_at) d, COUNT(*) n FROM rankings"
+                    " WHERE checked_at >= date('now','localtime','-6 day')"
+                    " GROUP BY d ORDER BY d"):
+                print("    %s · %d건" % (r[0], r[1]))
+
+            print()
+            print("  -- ⑤ 다른 원인 배제 --")
+            n_mute = c.execute("SELECT COUNT(*) FROM client_keyword_mute").fetchone()[0]
+            n_prod = c.execute("SELECT COUNT(*) FROM tracked_products").fetchone()[0]
+            try:
+                n_dis = c.execute("SELECT COUNT(*) FROM tracked_products"
+                                  " WHERE COALESCE(disabled_at,'') <> ''").fetchone()[0]
+            except Exception:
+                n_dis = -1
+            print("    그만 재기 %d건 · 추적 상품 %d개(비활성 %d) · 자격 통과 %s개"
+                  % (n_mute, n_prod, n_dis, len(ok) if ok is not None else "판정실패"))
+            q = c.execute("SELECT COUNT(*) FROM collect_requests WHERE COALESCE(done,0)=0").fetchone()[0]
+            print("    대기 중인 온디맨드 요청 %d건" % q)
             PY
