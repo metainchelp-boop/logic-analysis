@@ -38,6 +38,10 @@ on:
         description: '배포 #189 확인 — off(기본) / on. 정리함(blocked_products) 반영·두 무리 실측 건수·번들 문구를 잰다(읽기 전용·업체명 미출력).'
         required: false
         default: 'off'
+      ownerhint:
+        description: '추정 업체 커버리지 — off(기본) / on. 보관 상품 중 몇 개에 추정 업체가 붙는지 서버 매칭 규칙으로 실측(읽기 전용·업체명 미출력).'
+        required: false
+        default: 'off'
       pending248:
         description: '신고 #248 — 추가 등록 키워드가 「기록 대기」에서 안 넘어가는 원인. 시간대 분포·축A 전용 키워드 수집률·자격/억제를 갈라 본다(읽기 전용·업체명 미출력).'
         required: false
@@ -1978,3 +1982,45 @@ jobs:
               n=$(grep -c "$m" "$B" 2>/dev/null); case "$n" in ''|*[!0-9]*) n=0 ;; esac
               echo "  「$m」 $n건 $([ "$n" -gt 0 ] && echo ✅ || echo '❌')"
             done
+
+      - name: 추정 업체 커버리지 실측 (읽기 전용·업체명 미출력)
+        if: ${{ github.event.inputs.ownerhint == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 3m
+          script: |
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sys, sqlite3
+            sys.path.insert(0, "/app")
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            from rank_link import _collect_candidates, _product_key, _store_key
+            from tracking_eligibility import eligible_client_ids
+            ok = set(eligible_client_ids(conn))
+            cand = _collect_candidates(conn)
+            shelved = conn.execute(
+                "SELECT id, product_url FROM tracked_products WHERE COALESCE(disabled_at,'')<>''").fetchall()
+            linked = {r[0] for r in conn.execute("SELECT DISTINCT tracked_product_id FROM rank_link")}
+            n_l = sum(1 for p in shelved if p["id"] in linked)
+            n_o = n_any = n_elig = n_multi = 0
+            for p in shelved:
+                if p["id"] in linked:
+                    continue
+                n_o += 1
+                cs = {}
+                for c in (cand["b_by_key"].get(_product_key(p["product_url"]), [])
+                          + cand["b_by_store"].get(_store_key(p["product_url"]), [])):
+                    cs[c["id"]] = c
+                if cs:
+                    n_any += 1
+                    if any(cid in ok for cid in cs):
+                        n_elig += 1
+                    if len(cs) > 1:
+                        n_multi += 1
+            print("  보관 상품 %d개 = 이어진 것 %d + 미연결 %d" % (len(shelved), n_l, n_o))
+            print("  미연결 중 추정 업체가 붙는 것: %d개 (자격 있는 후보 포함 %d · 후보 여럿 %d)" % (n_any, n_elig, n_multi))
+            print("  추정이 하나도 안 붙는 것: %d개 — 스토어명·검색창 자동 채움이 전부" % (n_o - n_any))
+            PY
