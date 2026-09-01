@@ -117,8 +117,10 @@ def _auth(token: Optional[str]):
 #
 # 전산① 배려: ①은 08:40 에 순위를 캐시해 간다. 업체(광고주) 키워드를 앞 시간대에
 # 몰아 두면 ① 이 보는 값의 신선도가 종전과 비슷하게 유지된다.
-PRIORITY_HOURS = 15          # 업체 키워드 슬롯 = 0~14시
-LATE_HOURS = 24 - PRIORITY_HOURS   # 나머지(추적 상품 전용) = 15~23시
+# ⚠️ 슬롯 규칙은 collect_slot.py 한 곳에만 둔다 — 화면(client_dashboard)이 「언제 수집되나」를
+#    같은 식으로 계산해 직원에게 알려주기 때문이다. 두 곳이 갈리면 화면이 거짓말을 한다.
+#    (게이트 환경에 fastapi 가 없어 이 파일을 임포트할 수 없는 것도 같은 이유다 — split_rule 선례)
+from collect_slot import PRIORITY_HOURS, LATE_HOURS, slot_of as _slot_rule  # noqa: F401
 # 한 시간에 내려주는 최대 개수(밀린 것 포함) — 급증 방지.
 # ⚠️ 60 → 40 (2026-08-28). 이 값이 곧 네이버를 두드리는 속도의 상한이다.
 #    키워드 1건 = 페이지 4장 = 요청 4번이므로 시간당 요청 수는 이 값 × 4.
@@ -131,12 +133,8 @@ HOURLY_CAP = 40
 
 
 def _slot_of(keyword: str, priority: bool) -> int:
-    """키워드 → 수집 시간대(0~23). 문자열이 같으면 항상 같은 값(안정 해시)."""
-    import zlib
-    h = zlib.crc32(keyword.encode("utf-8"))
-    if priority:
-        return h % PRIORITY_HOURS
-    return PRIORITY_HOURS + (h % LATE_HOURS)
+    """키워드 → 수집 시간대(0~23). 규칙은 collect_slot 에 있다(화면과 공유)."""
+    return _slot_rule(keyword, priority)
 
 
 def _tracking_client_ids(conn):

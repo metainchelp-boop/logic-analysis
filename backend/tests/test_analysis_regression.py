@@ -1302,6 +1302,84 @@ def test_압축은_내용을_바꾸지_않는다():
     assert len(묶음) < len(본문) / 2, f"압축이 안 된다 ({len(본문)} → {len(묶음)})"
 
 
+# ============ 「기록 대기」를 두 종류로 가른다 (신고 #248 · 2026-08-31) ============
+
+def test_수집_슬롯_규칙이_한_곳에만_있다():
+    """⚠️ 화면이 「오후 5시경 수집」이라고 말하려면 수집기와 **같은 식**을 써야 한다.
+       두 곳이 각자 계산하면 화면이 거짓말을 하고, 그건 지금 고치는 문제와 똑같은 종류다."""
+    col = _src("collector.py")
+    assert "from collect_slot import" in col, "collector 가 공용 규칙을 안 쓴다"
+    assert "def _slot_of" in col and "_slot_rule(" in col, "_slot_of 가 공용 규칙에 위임하지 않는다"
+    assert "import zlib" not in col.split("def _slot_of")[1][:200], \
+        "_slot_of 안에 식이 다시 박혀 있다 — 규칙이 두 곳으로 갈렸다"
+    cd = _src("client_dashboard.py")
+    assert "from collect_slot import wait_hint" in cd, "화면이 공용 규칙을 안 쓴다"
+
+
+def test_슬롯_계산이_종전과_같다():
+    """규칙을 옮기기만 했다 — 값이 하나라도 달라지면 그날 수집이 통째로 재배정된다."""
+    import zlib
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    from collect_slot import slot_of
+    for k in ("흰다리새우", "한우", "a", "", "가" * 40, "키워드 사이 공백"):
+        h = zlib.crc32(k.encode("utf-8"))
+        assert slot_of(k, True) == h % 15, f"우선 슬롯이 달라졌다: {k}"
+        assert slot_of(k, False) == 15 + (h % 9), f"후순위 슬롯이 달라졌다: {k}"
+
+
+def test_상품_전용_키워드는_오후_슬롯이다():
+    """신고의 핵심 — 추가 등록 키워드는 15~23시에만 돈다. 그걸 화면이 말해 줘야 한다."""
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    from collect_slot import slot_of
+    for k in ("흰다리새우", "호박고구마", "전복죽", "곱창", "바지락"):
+        assert 15 <= slot_of(k, False) <= 23, f"{k} 가 오후 슬롯 밖이다"
+        assert 0 <= slot_of(k, True) <= 14, f"{k} 의 우선 슬롯이 범위 밖이다"
+
+
+def test_대기_안내가_지킬_수_있는_말만_한다():
+    """⚠️ 종전엔 「보통 수 분」이라고 적혀 있었다 — 오후 슬롯 키워드는 최대 하루다.
+       지킬 수 없는 약속이 「고장났다」는 신고를 만들었다."""
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    from collect_slot import wait_hint, slot_label
+    h = wait_hint("흰다리새우", False)
+    assert "분" not in h, f"「분」 단위를 약속하고 있다: {h}"
+    assert "수집" in h and any(w in h for w in ("오전", "오후", "밤", "정오", "자정")), h
+    # 이미 지난 시각을 앞으로 올 것처럼 적지 않는다
+    assert wait_hint("흰다리새우", False, now_hour=23) == "오늘 안에 수집"
+    for hh, want in ((0, "자정"), (9, "오전"), (12, "정오"), (15, "오후"), (23, "밤")):
+        assert want in slot_label(hh), f"{hh}시 라벨이 이상하다: {slot_label(hh)}"
+
+    # 화면·등록 안내 어디에도 「수 분」 약속이 남아 있으면 안 된다(주석 설명은 예외)
+    for name in ("client_dashboard.py",):
+        for line in _src(name).split("\n"):
+            st = line.strip()
+            if st.startswith("#"):
+                continue
+            assert "수 분 안에" not in st, f"{name} 에 「수 분」 약속이 남아 있다: {st[:70]}"
+
+
+def test_대기_사유를_두_종류로_가른다():
+    src = _src("client_dashboard.py")
+    assert "_pending_meta" in src, "대기 사유 판정이 사라졌다"
+    assert '"pending_reason": "blocked"' in src and '"pending_reason": "slot"' in src, \
+        "두 종류(blocked/slot)를 안 가른다"
+    assert "track_enabled" in src and "track_until" in src, \
+        "막힌 사유(추적 꺼짐·기간 만료) 판정이 빠졌다"
+    # 두 곳의 대기 행 모두에 실려야 한다 — 한쪽만 붙이면 그 화면은 종전 그대로다
+    assert src.count("**_pending_meta(") == 2, \
+        f"대기 행 두 곳 중 일부에만 붙었다({src.count('**_pending_meta(')}곳)"
+
+
+def test_화면이_두_배지를_그린다():
+    import os as _os
+    fe = _os.path.join(_os.path.dirname(__file__), "..", "..",
+                       "frontend", "js", "components", "KeywordRankPage.jsx")
+    src = open(fe, encoding="utf-8").read()
+    assert "pending_reason === 'blocked'" in src, "막힌 것과 대기 중인 것을 안 가른다"
+    assert "추적 안 됨" in src, "막힌 배지 문구가 없다"
+    assert "pending_hint" in src, "예상 시각을 안 보여준다"
+
+
 if __name__ == "__main__":
     _tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     _failed = 0

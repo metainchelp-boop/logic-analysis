@@ -1642,8 +1642,43 @@ def rank_board(client_id: int, days: int = 8, current_user: dict = Depends(get_c
         # 직원이 화면에서 아무 변화도 못 보면 고장인지 구분할 수 없기 때문(반영 현황 원칙).
         # 광고주만: 영업 대상(prospect)은 자동 추적 대상이 아니라 「대기」가 영원히 안 풀린다.
         _pending_ok = conn.execute(
-            "SELECT COALESCE(auto_analysis,1) AS a, naver_store_url AS u FROM clients WHERE id=?",
-            (client_id,)).fetchone()
+            "SELECT COALESCE(auto_analysis,1) AS a, naver_store_url AS u,"
+            "       COALESCE(track_enabled,1) AS te, COALESCE(track_until,'') AS tu"
+            "  FROM clients WHERE id=?", (client_id,)).fetchone()
+
+        # 「기록 대기」는 두 종류인데 종전엔 한 가지로만 보였다(신고 #248, 2026-08-31).
+        #   ㉠ 아직 그 키워드의 수집 시간대가 안 온 것 → 그날 안에 풀린다
+        #   ㉡ 이 업체가 수집 대상에서 빠져 있는 것    → 사람이 손대기 전엔 영영 안 풀린다
+        # 둘을 같은 배지로 보여주면 직원은 기다릴 일인지 손댈 일인지 알 수 없다.
+        # ⚠️ 종전 툴팁은 「보통 수 분」이라고 적혀 있었다 — 추가 등록 키워드는 오후 슬롯이라
+        #    실제로는 최대 하루다. 그 문구가 「고장났다」는 오해를 만들었다.
+        _blocked = None
+        if _pending_ok:
+            if not _pending_ok["te"]:
+                _blocked = "이 업체의 자동 추적이 꺼져 있어 기록되지 않습니다"
+            elif (_pending_ok["tu"] or "").strip():
+                try:
+                    from datetime import date as _d
+                    if _d.fromisoformat(str(_pending_ok["tu"])[:10]) < _d.today():
+                        _blocked = "추적 기간이 끝났습니다 — 기간을 늘리면 다시 기록됩니다"
+                except Exception:
+                    pass          # 형식이 이상하면 막힌 것으로 단정하지 않는다
+
+        _now_h = datetime.now().hour
+
+        def _pending_meta(kw, is_product_kw):
+            """그 키워드가 왜 대기 중인지 + 언제 수집되는지."""
+            if _blocked:
+                return {"pending_reason": "blocked", "pending_hint": _blocked}
+            # 우선 슬롯(0~14시)은 업체 대표 키워드·분석 이력 몫이고,
+            # 상품에만 등록된 키워드는 뒤쪽(15~23시)이다 — 수집기와 같은 규칙을 쓴다.
+            try:
+                from collect_slot import wait_hint
+                return {"pending_reason": "slot",
+                        "pending_hint": wait_hint(kw, not is_product_kw, _now_h)}
+            except Exception:
+                return {"pending_reason": "slot", "pending_hint": "오늘 안에 수집"}
+
         if (client["role"] == "advertiser" and _pending_ok and _pending_ok["a"]
                 and (_pending_ok["u"] or "").strip()):
             _norm = lambda k: "".join(str(k).split()).lower()
@@ -1662,6 +1697,7 @@ def rank_board(client_id: int, days: int = 8, current_user: dict = Depends(get_c
                         "volume": _vol_norm.get(_norm(mk), "-"),
                         "last_checked": "", "series": [],
                         "unexposed_days": 0, "pending": True,
+                        **_pending_meta(mk, False),
                         **_source_of(mk),
                     })
             # 이어진 상품에만 등록된 키워드도 「기록 대기」로 — 상품 쪽에서 등록한 직원이
@@ -1677,6 +1713,7 @@ def rank_board(client_id: int, days: int = 8, current_user: dict = Depends(get_c
                         "volume": _vol_norm.get(_norm(pk), "-"),
                         "last_checked": "", "series": [],
                         "unexposed_days": 0, "pending": True,
+                        **_pending_meta(pk, True),
                         **_source_of(pk),
                     })
         # 정렬: 노출(순위 오름차순) 먼저, 미노출 뒤(키워드 가나다)
@@ -1805,7 +1842,10 @@ def add_track_keyword(client_id: int, req: TrackKeywordRequest,
       ① clients.main_keywords 에 추가 → 08:00 배치·업로드 즉시 기록(rank_record)이
          이 키워드를 이 업체 몫으로 인식(둘 다 main_keywords ∪ 분석이력을 본다)
       ② rank_link 로 이어진 추적 상품이 있으면 tracked_keywords 에도 추가(축A 일관)
-      ③ 온디맨드 수집 큐 등록 → 보통 수 분 안에 첫 순위가 기록됨
+      ③ 온디맨드 수집 큐 등록 → 그날 안에 첫 순위가 기록됨
+         ⚠️ 「수 분」이 아니다. 확장은 이 큐를 시간당 12개까지만 처리하고, 밀린 대기가
+            100건대인 날도 있다(실측). 지킬 수 없는 약속을 화면에 적으면 직원은
+            「고장났다」고 신고하게 된다 — 실제로 그렇게 들어왔다(#248, 2026-08-31).
     수집 유니버스에는 main_keywords 가 이번에 함께 편입돼(collector._keyword_universe)
     다음 날부터는 슬롯 수집이 자동으로 커버한다.
 
@@ -1937,7 +1977,7 @@ def add_track_keyword(client_id: int, req: TrackKeywordRequest,
                     f"(축A {linked}건 동기화, 온디맨드 {'큐잉' if queued else '실패'})")
         return {"success": True, "keyword": kw, "linked_products": linked, "queued": queued,
                 "message": ("등록되었습니다. " +
-                            ("보통 수 분 안에 첫 순위가 기록됩니다 — 잠시 후 새로고침해 확인하세요."
+                            ("첫 순위는 오늘 안에 기록됩니다 — 수집 순번에 따라 몇 시간 걸릴 수 있습니다."
                              if queued else "다음 수집 회차에 첫 순위가 기록됩니다."))}
     except HTTPException:
         raise
