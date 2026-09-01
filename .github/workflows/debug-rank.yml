@@ -34,6 +34,10 @@ on:
         description: '배포 #188 확인 — off(기본) / on. collect_slot 반영·대기 사유 응답·번들 배지를 잰다(읽기 전용).'
         required: false
         default: 'off'
+      after189:
+        description: '배포 #189 확인 — off(기본) / on. 정리함(blocked_products) 반영·두 무리 실측 건수·번들 문구를 잰다(읽기 전용·업체명 미출력).'
+        required: false
+        default: 'off'
       pending248:
         description: '신고 #248 — 추가 등록 키워드가 「기록 대기」에서 안 넘어가는 원인. 시간대 분포·축A 전용 키워드 수집률·자격/억제를 갈라 본다(읽기 전용·업체명 미출력).'
         required: false
@@ -1926,3 +1930,51 @@ jobs:
             echo "== ⑤ 기동 후 오류 12줄의 정체 =="
             docker logs --since 15m logic-analysis 2>&1 | grep -E "ERROR|Traceback" \
               | sed -E "s/\[[^]]*\]//g" | awk '{$1="";print}' | sort | uniq -c | sort -rn | head -4 | sed 's/^/  /'
+
+      - name: 배포 #189 확인 — 정리함 (읽기 전용)
+        if: ${{ github.event.inputs.after189 == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 5m
+          script: |
+            echo "== ① 서버 파일 표지 =="
+            docker exec -i logic-analysis sh -c 'ls -l /app/blocked_products.py 2>/dev/null || echo "  ❌ blocked_products.py 없음 — 미반영"'
+            for m in "_tray_conn" "/api/products/blocked" "/shelve" "/relink" "/revive"; do
+              n=$(docker exec -i logic-analysis sh -c "grep -c -- '$m' /app/main.py 2>/dev/null" | tail -1)
+              case "$n" in ''|*[!0-9]*) n=0 ;; esac
+              echo "  main.py 「$m」 $n건 $([ "$n" -gt 0 ] && echo ✅ || echo '❌ 미반영')"
+            done
+            echo
+            echo "== ② 기동 상태 =="
+            docker inspect -f '  StartedAt={{.State.StartedAt}} RestartCount={{.RestartCount}}' logic-analysis
+            docker logs --since 15m logic-analysis 2>&1 | grep -cE "ERROR|Traceback" | sed 's/^/  최근 15분 오류 줄 /'
+            echo
+            echo "== ③ 서버 규칙 실행 — 정리함 두 무리 실측 (건수만·업체명 미출력) =="
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sys, sqlite3
+            sys.path.insert(0, "/app")
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            from blocked_products import list_blocked
+            d = list_blocked(conn)
+            print("  계약 끝난 업체의 상품(stuck): %d개 · 키워드 %d건" % (len(d["stuck"]), d["stuck_keywords"]))
+            print("  내려간 상품(shelved):        %d개 · 키워드 %d건" % (len(d["shelved"]), d["shelved_keywords"]))
+            agg = {}
+            for r in d["stuck"]:
+                for s in (r.get("stages") or ["?"]):
+                    agg[s] = agg.get(s, 0) + 1
+            for s, n in sorted(agg.items(), key=lambda x: -x[1]):
+                print("    stuck 사유 %-12s %3d상품" % (s, n))
+            PY
+            echo
+            echo "== ④ 번들에 정리함이 있나 (호스트 경로) =="
+            B=$(ls -t /root/logic-analysis-deploy/frontend/dist/app.*.js 2>/dev/null | head -1)
+            echo "  번들: $B ($(date -r "$B" '+%m-%d %H:%M' 2>/dev/null))"
+            case "$B" in *fe7401885e0d*) echo "  ✅ 예상 번들 app.fe7401885e0d.js" ;; *) echo "  ⚠️ 예상과 다른 번들 이름" ;; esac
+            for m in "추적 안 되는 키워드" "정리함 열기" "내려간 상품(보관)" "하드 삭제는 없습니다"; do
+              n=$(grep -c "$m" "$B" 2>/dev/null); case "$n" in ''|*[!0-9]*) n=0 ;; esac
+              echo "  「$m」 $n건 $([ "$n" -gt 0 ] && echo ✅ || echo '❌')"
+            done
