@@ -4139,6 +4139,74 @@ window.KeywordRankPage = function KeywordRankPage(props) {
       }
     }, prodRow, header, bodyEl));
   }
+
+  /* ── 「추적 안 됨」 정리함 (신고 #248 후속 · 2026-09-01 대표 확정) ──
+     진입은 이 화면의 배너 하나뿐. 파괴 동작은 전부 「내리기」 계열(하드 삭제 없음).
+     빨간 배너는 stuck(계약 끝난 업체의 상품)만 센다 — 내려간 상품은 문제가 아니라
+     보관 상태라, stuck 이 0이면 회색 한 줄로만 남는다. */
+  var _tr = useState(null);
+  var tray = _tr[0],
+    setTray = _tr[1];
+  var _tro = useState(false);
+  var trayOpen = _tro[0],
+    setTrayOpen = _tro[1];
+  var _trt = useState('stuck');
+  var trayTab = _trt[0],
+    setTrayTab = _trt[1];
+  var _trb = useState(0);
+  var trayBusy = _trb[0],
+    setTrayBusy = _trb[1]; // 처리 중인 상품 id
+  var _trl = useState(null);
+  var linkFor = _trl[0],
+    setLinkFor = _trl[1]; // 연결 입력이 열린 상품 id
+  var _trq = useState('');
+  var linkQ = _trq[0],
+    setLinkQ = _trq[1];
+  var _trOpt = useState([]);
+  var linkOpts = _trOpt[0],
+    setLinkOpts = _trOpt[1];
+  var loadTray = useCallback(function () {
+    if (isViewer) return; // 영업사원 화면에는 광고주 상품 정리함이 없다
+    api.get('/products/blocked').then(function (res) {
+      if (res && res.success) setTray(res);
+    }).catch(function () {});
+  }, [isViewer]);
+  React.useEffect(function () {
+    var q = (linkQ || '').trim();
+    if (!linkFor || !q) {
+      setLinkOpts([]);
+      return;
+    }
+    var t = setTimeout(function () {
+      api.get('/cd/clients-lookup?q=' + encodeURIComponent(q)).then(function (res) {
+        setLinkOpts(res && res.success && res.data ? res.data : []);
+      }).catch(function () {
+        setLinkOpts([]);
+      });
+    }, 250);
+    return function () {
+      clearTimeout(t);
+    };
+  }, [linkQ, linkFor]);
+  var trayAct = function (pid, path, body, okMsg) {
+    setTrayBusy(pid);
+    api.post('/products/' + pid + path, body || {}).then(function (res) {
+      if (res && res.success === false) throw new Error(res.detail || '실패');
+      try {
+        toast.success(res && res.message || okMsg);
+      } catch (e) {}
+      setLinkFor(null);
+      setLinkQ('');
+      loadTray();
+      loadProducts();
+    }).catch(function (e) {
+      try {
+        toast.error(e && e.message || '처리하지 못했습니다');
+      } catch (x) {}
+    }).finally(function () {
+      setTrayBusy(0);
+    });
+  };
   var loadOverview = useCallback(function () {
     setOvLoading(true);
     api.get('/cd/rank-overview').then(function (res) {
@@ -4154,7 +4222,8 @@ window.KeywordRankPage = function KeywordRankPage(props) {
   useEffect(function () {
     loadOverview();
     loadProducts();
-  }, [loadOverview, loadProducts]);
+    loadTray();
+  }, [loadOverview, loadProducts, loadTray]);
   var loadBoard = function (id, days) {
     setBoard(null);
     setBdLoading(true);
@@ -5155,7 +5224,295 @@ window.KeywordRankPage = function KeywordRankPage(props) {
       fontSize: 12.5,
       color: '#94a3b8'
     }
-  }, selected ? '업체 상세 — 키워드별 추적 현황' : (isViewer ? '내 영업 대상 업체별 순위 추적 현황' : '광고주 업체별 순위 추적 현황') + ' · 매일 아침 자동 기록')),
+  }, selected ? '업체 상세 — 키워드별 추적 현황' : (isViewer ? '내 영업 대상 업체별 순위 추적 현황' : '광고주 업체별 순위 추적 현황') + ' · 매일 아침 자동 기록')), /* ---------- ⚠ 추적 안 됨 정리함 (신고 #248 후속) ---------- */
+  !selected && canEditHere && tray && function () {
+    var stuck = tray.stuck || [],
+      shelved = tray.shelved || [];
+    if (!stuck.length && !shelved.length) return null; // 0건이면 아무것도 안 보인다
+    var red = stuck.length > 0;
+    var banner = React.createElement('div', {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        marginBottom: trayOpen ? 0 : 18,
+        padding: red ? '11px 16px' : '7px 14px',
+        borderRadius: trayOpen ? '10px 10px 0 0' : 10,
+        background: red ? '#fef2f2' : '#f8fafc',
+        border: '1px solid ' + (red ? '#fecaca' : '#e2e8f0'),
+        borderBottom: trayOpen ? 'none' : undefined,
+        fontSize: 13.5
+      }
+    }, React.createElement('span', {
+      style: {
+        fontSize: red ? 16 : 14
+      }
+    }, red ? '⚠' : '🗄'), React.createElement('span', {
+      style: {
+        flex: 1,
+        color: red ? '#b91c1c' : '#64748b'
+      }
+    }, red ? React.createElement('span', null, React.createElement('b', null, '추적 안 되는 키워드 ' + tray.stuck_keywords + '개'), ' — 계약이 끝난 업체의 상품 ' + stuck.length + '개에 걸려 있습니다.') : '내려간 상품 ' + shelved.length + '개 — 업체를 이으면 되살릴 수 있습니다.'), React.createElement('button', {
+      onClick: function () {
+        setTrayOpen(!trayOpen);
+        if (!trayOpen) setTrayTab(red ? 'stuck' : 'shelved');
+      },
+      style: {
+        border: 0,
+        borderRadius: 7,
+        padding: '6px 13px',
+        fontSize: 12.5,
+        fontWeight: 700,
+        cursor: 'pointer',
+        background: red ? '#3b82f6' : '#fff',
+        color: red ? '#fff' : '#475569',
+        boxShadow: red ? 'none' : 'inset 0 0 0 1px #cbd5e1'
+      }
+    }, trayOpen ? '닫기' : '정리함 열기'));
+    if (!trayOpen) return banner;
+    var tabBtn = function (key, label, n) {
+      var on = trayTab === key;
+      return React.createElement('button', {
+        key: key,
+        onClick: function () {
+          setTrayTab(key);
+        },
+        style: {
+          border: 0,
+          background: 'none',
+          padding: '9px 13px',
+          fontSize: 13,
+          fontWeight: 700,
+          cursor: 'pointer',
+          color: on ? '#1d4ed8' : '#64748b',
+          borderBottom: '2px solid ' + (on ? '#3b82f6' : 'transparent')
+        }
+      }, label + ' ' + n);
+    };
+    var stageChip = function (c) {
+      return React.createElement('span', {
+        key: c.id,
+        style: {
+          fontSize: 11,
+          padding: '1px 8px',
+          borderRadius: 99,
+          marginLeft: 5,
+          whiteSpace: 'nowrap',
+          background: c.eligible ? '#f0fdf4' : '#fef2f2',
+          color: c.eligible ? '#15803d' : '#b91c1c',
+          border: '1px solid ' + (c.eligible ? '#bbf7d0' : '#fecaca')
+        }
+      }, c.name + (c.stage ? ' · ' + c.stage : ''));
+    };
+    var rowBase = {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      padding: '9px 14px',
+      borderBottom: '1px solid #f1f5f9',
+      fontSize: 13,
+      flexWrap: 'wrap'
+    };
+    var actBtn = function (label, primary, onClick, disabled) {
+      return React.createElement('button', {
+        onClick: onClick,
+        disabled: !!disabled,
+        style: {
+          border: 0,
+          borderRadius: 6,
+          padding: '5px 11px',
+          fontSize: 12,
+          fontWeight: 700,
+          cursor: disabled ? 'default' : 'pointer',
+          opacity: disabled ? .5 : 1,
+          background: primary ? '#3b82f6' : '#fff',
+          color: primary ? '#fff' : '#475569',
+          boxShadow: primary ? 'none' : 'inset 0 0 0 1px #cbd5e1'
+        }
+      }, label);
+    };
+    var body;
+    if (trayTab === 'stuck') {
+      body = [React.createElement('div', {
+        key: 'n',
+        style: {
+          margin: '10px 14px 4px',
+          padding: '8px 12px',
+          borderRadius: 7,
+          fontSize: 12.5,
+          background: '#f0fdf4',
+          border: '1px solid #bbf7d0',
+          color: '#166534'
+        }
+      }, '계약이 다시 살아나면 다음 날 새벽부터 자동 재개됩니다 — 지우지 않아도 됩니다. 다시 볼 일 없는 것만 내려 주세요(되돌릴 수 있습니다).')].concat(stuck.map(function (pd) {
+        return React.createElement('div', {
+          key: pd.id,
+          style: rowBase
+        }, React.createElement('span', {
+          style: {
+            fontWeight: 600,
+            flex: '1 1 240px',
+            minWidth: 0,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap'
+          },
+          title: pd.name
+        }, pd.name || '(이름 없음)'), React.createElement('span', {
+          style: {
+            flex: '1 1 200px'
+          }
+        }, pd.clients.map(stageChip)), React.createElement('span', {
+          style: {
+            color: '#94a3b8',
+            fontSize: 12
+          },
+          title: pd.keywords.join(', ')
+        }, '키워드 ' + pd.keywords.length), actBtn(trayBusy === pd.id ? '내리는 중…' : '🗄 내리기', false, function () {
+          trayAct(pd.id, '/shelve', null, '내렸습니다');
+        }, trayBusy === pd.id));
+      }));
+    } else {
+      body = [React.createElement('div', {
+        key: 'n',
+        style: {
+          margin: '10px 14px 4px',
+          padding: '8px 12px',
+          borderRadius: 7,
+          fontSize: 12.5,
+          background: '#fffbeb',
+          border: '1px solid #fde68a',
+          color: '#92400e'
+        }
+      }, '내려간 상품입니다(주인 없어 자동으로 내려간 것 + 직접 내린 것). 업체를 이으면 그 자리에서 되살아나 다음 수집부터 다시 잽니다.')].concat(shelved.map(function (pd) {
+        var canRevive = pd.clients.some(function (c) {
+          return c.eligible;
+        });
+        var open = linkFor === pd.id;
+        return React.createElement('div', {
+          key: pd.id,
+          style: rowBase
+        }, React.createElement('span', {
+          style: {
+            fontWeight: 600,
+            flex: '1 1 240px',
+            minWidth: 0,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap'
+          },
+          title: pd.name
+        }, pd.name || '(이름 없음)'), React.createElement('span', {
+          style: {
+            flex: '1 1 160px',
+            color: '#94a3b8',
+            fontSize: 12,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap'
+          },
+          title: pd.keywords.join(', ')
+        }, pd.keywords.join(' · ') || '—'), React.createElement('span', {
+          style: {
+            color: '#94a3b8',
+            fontSize: 11.5,
+            whiteSpace: 'nowrap'
+          }
+        }, '내린 날 ' + (pd.disabled_at || '—')), pd.clients.length > 0 && React.createElement('span', null, pd.clients.map(stageChip)), canRevive && actBtn(trayBusy === pd.id ? '…' : '↩ 되살리기', true, function () {
+          trayAct(pd.id, '/revive', null, '되살렸습니다');
+        }, trayBusy === pd.id), actBtn(open ? '연결 취소' : '업체 연결', !canRevive, function () {
+          setLinkFor(open ? null : pd.id);
+          setLinkQ('');
+          setLinkOpts([]);
+        }), open && React.createElement('div', {
+          style: {
+            flexBasis: '100%',
+            display: 'flex',
+            gap: 8,
+            alignItems: 'center',
+            background: '#eff6ff',
+            border: '1px solid #bfdbfe',
+            borderRadius: 7,
+            padding: '8px 10px',
+            position: 'relative'
+          }
+        }, React.createElement('input', {
+          value: linkQ,
+          autoFocus: true,
+          onChange: function (e) {
+            setLinkQ(e.target.value);
+          },
+          placeholder: '업체명 검색 — 목록에서 고른 것만 연결됩니다',
+          style: {
+            flex: 1,
+            border: '1px solid #cbd5e1',
+            borderRadius: 6,
+            padding: '6px 10px',
+            font: 'inherit',
+            fontSize: 12.5
+          }
+        }), linkOpts.length > 0 && React.createElement('div', {
+          style: {
+            position: 'absolute',
+            top: '100%',
+            left: 10,
+            right: 10,
+            zIndex: 20,
+            background: '#fff',
+            border: '1px solid #cbd5e1',
+            borderRadius: 7,
+            boxShadow: '0 8px 20px rgba(15,23,42,.12)',
+            maxHeight: 180,
+            overflowY: 'auto'
+          }
+        }, linkOpts.slice(0, 8).map(function (c) {
+          return React.createElement('button', {
+            key: c.id,
+            onClick: function () {
+              trayAct(pd.id, '/relink', {
+                client_id: c.id
+              }, '연결했습니다');
+            },
+            style: {
+              display: 'block',
+              width: '100%',
+              textAlign: 'left',
+              border: 0,
+              background: 'none',
+              padding: '7px 11px',
+              fontSize: 12.5,
+              cursor: 'pointer'
+            }
+          }, c.name);
+        }))));
+      }));
+    }
+    return React.createElement('div', {
+      style: {
+        marginBottom: 18
+      }
+    }, banner, React.createElement('div', {
+      style: {
+        border: '1px solid ' + (red ? '#fecaca' : '#e2e8f0'),
+        borderTop: 'none',
+        borderRadius: '0 0 10px 10px',
+        background: '#fff'
+      }
+    }, React.createElement('div', {
+      style: {
+        display: 'flex',
+        gap: 2,
+        borderBottom: '1px solid #f1f5f9',
+        padding: '0 8px'
+      }
+    }, tabBtn('stuck', '계약 끝난 업체의 상품', stuck.length), tabBtn('shelved', '🗄 내려간 상품(보관)', shelved.length)), body, React.createElement('div', {
+      style: {
+        padding: '8px 14px 10px',
+        fontSize: 11.5,
+        color: '#94a3b8'
+      }
+    }, '하드 삭제는 없습니다 — 전부 내리기·되살리기로 오갑니다(대표 확정 2026-09-01).')));
+  }(),
   /* ---------- ＋ 추적 상품 등록 (항상 펼침) ----------
      업체 목록 화면에서만 — 업체 상세는 그 업체 것만 보이게 두는 기존 규칙 그대로. */
   !selected && canEditHere && React.createElement('div', {
