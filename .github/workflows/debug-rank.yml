@@ -1826,6 +1826,48 @@ jobs:
                 n_dis = -1
             print("    그만 재기 %d건 · 추적 상품 %d개(비활성 %d) · 자격 통과 %s개"
                   % (n_mute, n_prod, n_dis, len(ok) if ok is not None else "판정실패"))
-            q = c.execute("SELECT COUNT(*) FROM collect_requests WHERE COALESCE(done,0)=0").fetchone()[0]
-            print("    대기 중인 온디맨드 요청 %d건" % q)
+
+            print()
+            print("  -- ⑥ 「영원히 기록 대기」에 걸린 키워드는 몇 개인가 --")
+            print("     ⚠️ 두 가지 대기를 갈라야 한다:")
+            print("        ㉠ 오늘 아직 슬롯 차례가 안 온 것 → 오후에 풀린다(정상)")
+            print("        ㉡ 상품이 자격 미통과라 유니버스에 아예 없는 것 → **영영 안 풀린다**")
+            tot_kw = c.execute("SELECT COUNT(DISTINCT keyword) FROM tracked_keywords").fetchone()[0]
+            tot_pair = c.execute("SELECT COUNT(*) FROM tracked_keywords").fetchone()[0]
+            print("    추적 키워드 전체 %d개(짝 %d건) · 자격 통과 상품의 것 %d개"
+                  % (tot_kw, tot_pair, len(축A)))
+            죽은 = set()
+            if ok is not None:
+                ph2 = ",".join("?" * len(ok)) if ok else "NULL"
+                죽은 = {r[0].strip() for r in c.execute(
+                    "SELECT DISTINCT keyword FROM tracked_keywords"
+                    " WHERE product_id NOT IN (%s)" % ph2, list(ok)) if (r[0] or "").strip()}
+                죽은 -= 축A          # 다른 상품으로도 살아 있으면 죽은 게 아니다
+                죽은 -= 업체          # 업체 대표 키워드로도 도는 것은 살아 있다
+            print("    ⇒ **어느 경로로도 안 도는 키워드 %d개**" % len(죽은))
+
+            print()
+            print("  -- ⑦ 그 키워드들이 왜 빠졌나 (상품 단위 사유) --")
+            try:
+                rows = list(c.execute("""
+                    SELECT p.id,
+                           CASE WHEN COALESCE(p.disabled_at,'') <> '' THEN '비활성(주인 없어 내림)'
+                                WHEN NOT EXISTS (SELECT 1 FROM rank_link l WHERE l.tracked_product_id=p.id)
+                                     THEN '업체에 안 이어짐'
+                                ELSE '자격 없는 업체에만 이어짐' END AS 사유,
+                           (SELECT COUNT(*) FROM tracked_keywords k WHERE k.product_id=p.id) AS kw
+                      FROM tracked_products p"""))
+            except Exception as e:
+                rows = []
+                print("    조회 실패: %s" % e)
+            agg = {}
+            for r in rows:
+                if ok is not None and r[0] in ok:
+                    continue
+                a = agg.setdefault(r[1], [0, 0])
+                a[0] += 1; a[1] += r[2]
+            for 사유, (np_, nk) in sorted(agg.items(), key=lambda x: -x[1][1]):
+                print("    %-24s 상품 %3d개 · 키워드 %3d건" % (사유, np_, nk))
+            print("    ⚠️ 「업체에 안 이어짐」은 규칙상 **수집은 된다**(방금 등록분 보호).")
+            print("       여기 나오면 disabled_at 이 붙은 것이므로 위 비활성과 같은 뜻이다.")
             PY
