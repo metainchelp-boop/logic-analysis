@@ -5389,22 +5389,33 @@ window.KeywordRankPage = function KeywordRankPage(props) {
           return c.eligible;
         });
         var open = linkFor === pd.id;
+        var sugs = !pd.clients.length && pd.suggestions ? pd.suggestions : [];
         return React.createElement('div', {
           key: pd.id,
           style: rowBase
         }, React.createElement('span', {
           style: {
             fontWeight: 600,
-            flex: '1 1 240px',
+            flex: '1 1 220px',
             minWidth: 0,
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap'
           },
           title: pd.name
-        }, pd.name || '(이름 없음)'), React.createElement('span', {
+        }, pd.name || '(이름 없음)'), pd.store && React.createElement('span', {
           style: {
-            flex: '1 1 160px',
+            color: '#64748b',
+            fontSize: 12,
+            maxWidth: 140,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap'
+          },
+          title: '스토어: ' + pd.store
+        }, '🏬 ' + pd.store), React.createElement('span', {
+          style: {
+            flex: '1 1 140px',
             color: '#94a3b8',
             fontSize: 12,
             overflow: 'hidden',
@@ -5418,11 +5429,55 @@ window.KeywordRankPage = function KeywordRankPage(props) {
             fontSize: 11.5,
             whiteSpace: 'nowrap'
           }
-        }, '내린 날 ' + (pd.disabled_at || '—')), pd.clients.length > 0 && React.createElement('span', null, pd.clients.map(stageChip)), canRevive && actBtn(trayBusy === pd.id ? '…' : '↩ 되살리기', true, function () {
+        }, '내린 날 ' + (pd.disabled_at || '—')), pd.clients.length > 0 && React.createElement('span', null, pd.clients.map(stageChip)), sugs.length > 0 && React.createElement('span', {
+          style: {
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 5,
+            flexWrap: 'wrap'
+          }
+        }, React.createElement('span', {
+          style: {
+            fontSize: 11,
+            color: '#94a3b8'
+          }
+        }, '추정 업체'), sugs.map(function (s) {
+          return s.eligible ? React.createElement('button', {
+            key: s.id,
+            disabled: trayBusy === pd.id,
+            onClick: function () {
+              trayAct(pd.id, '/relink', {
+                client_id: s.id
+              }, '연결하고 되살렸습니다');
+            },
+            title: '누르면 이 업체로 연결되고 그 자리에서 되살아납니다',
+            style: {
+              fontSize: 11,
+              fontWeight: 700,
+              padding: '2px 9px',
+              borderRadius: 99,
+              cursor: 'pointer',
+              background: '#eff6ff',
+              color: '#1d4ed8',
+              border: '1px solid #bfdbfe'
+            }
+          }, '↩ ' + s.name + ' 연결') : React.createElement('span', {
+            key: s.id,
+            title: '계약이 끝난 업체라 연결해도 살아나지 않습니다',
+            style: {
+              fontSize: 11,
+              padding: '1px 8px',
+              borderRadius: 99,
+              background: '#fef2f2',
+              color: '#b91c1c',
+              border: '1px solid #fecaca'
+            }
+          }, s.name + ' · 계약 끝남');
+        })), canRevive && actBtn(trayBusy === pd.id ? '…' : '↩ 되살리기', true, function () {
           trayAct(pd.id, '/revive', null, '되살렸습니다');
         }, trayBusy === pd.id), actBtn(open ? '연결 취소' : '업체 연결', !canRevive, function () {
           setLinkFor(open ? null : pd.id);
-          setLinkQ('');
+          setLinkQ(open ? '' : pd.store || '');
           setLinkOpts([]);
         }), open && React.createElement('div', {
           style: {
