@@ -1914,10 +1914,15 @@ jobs:
             PY
             echo
             echo "== ④ 번들에 새 배지가 있나 =="
-            B=$(docker exec -i logic-analysis sh -c 'ls /app/frontend/dist/app.*.js | head -1')
-            echo "  번들: $B"
+            # ⚠️ FE 번들은 컨테이너가 아니라 **호스트**에 있다(/root/logic-analysis-deploy/) —
+            #    nginx 가 직접 서빙한다. 첫 판을 컨테이너 경로로 재서 헛돌았다(verify 스텝 참조).
+            B=$(ls -t /root/logic-analysis-deploy/frontend/dist/app.*.js 2>/dev/null | head -1)
+            echo "  번들: $B ($(date -r "$B" '+%m-%d %H:%M' 2>/dev/null))"
             for m in "추적 안 됨" "pending_reason" "수집 시간대가 안 왔습니다"; do
-              n=$(docker exec -i logic-analysis sh -c "grep -c '$m' '$B' 2>/dev/null" | tail -1)
-              case "$n" in ''|*[!0-9]*) n=0 ;; esac
+              n=$(grep -c "$m" "$B" 2>/dev/null); case "$n" in ''|*[!0-9]*) n=0 ;; esac
               echo "  「$m」 $n건 $([ "$n" -gt 0 ] && echo ✅ || echo '❌')"
             done
+            echo
+            echo "== ⑤ 기동 후 오류 12줄의 정체 =="
+            docker logs --since 15m logic-analysis 2>&1 | grep -E "ERROR|Traceback" \
+              | sed -E "s/\[[^]]*\]//g" | awk '{$1="";print}' | sort | uniq -c | sort -rn | head -4 | sed 's/^/  /'
