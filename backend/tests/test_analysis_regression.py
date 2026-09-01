@@ -1380,6 +1380,120 @@ def test_화면이_두_배지를_그린다():
     assert "pending_hint" in src, "예상 시각을 안 보여준다"
 
 
+# ============ 「추적 안 됨」 정리함 (신고 #248 후속 · 2026-09-01 대표 확정) ============
+# 파괴 동작 전부 「내리기」 통일 · 하드 삭제 없음 · 판정은 tracking_eligibility 한 곳.
+
+def _tray_db():
+    import sqlite3
+    c = sqlite3.connect(":memory:")
+    c.row_factory = sqlite3.Row
+    c.executescript("""
+        CREATE TABLE clients(id INTEGER PRIMARY KEY, name TEXT, status TEXT, role TEXT,
+            vertical TEXT, auto_analysis INT, track_enabled INT, track_until TEXT,
+            contract_stage TEXT DEFAULT '');
+        CREATE TABLE tracked_products(id INTEGER PRIMARY KEY, product_name TEXT,
+            product_url TEXT DEFAULT '', store_name TEXT DEFAULT '', created_at TEXT);
+        CREATE TABLE tracked_keywords(id INTEGER PRIMARY KEY, product_id INT, keyword TEXT);
+        CREATE TABLE rank_link(id INTEGER PRIMARY KEY, client_id INT, tracked_product_id INT,
+            product_key TEXT DEFAULT '', match_method TEXT DEFAULT 'product_id',
+            linked_by INT DEFAULT 0, created_at TEXT);
+    """)
+    c.executemany("INSERT INTO clients(id,name,status,role,vertical,auto_analysis,track_enabled,track_until,contract_stage) VALUES(?,?,?,?,?,?,?,?,?)", [
+        (1, "산업체", "active", "advertiser", "store", 1, 1, "", "진행중"),
+        (2, "죽은업체", "active", "advertiser", "store", 0, 1, "", "계약 만료"),
+    ])
+    c.executemany("INSERT INTO tracked_products(id,product_name) VALUES(?,?)", [
+        (10, "산상품"),      # 자격 업체에 이어짐 → 정리함 밖
+        (20, "갇힌상품"),    # 죽은 업체에만 이어짐 → stuck
+        (30, "내린상품"),    # 비활성 · 미연결 → shelved
+        (40, "자유상품"),    # 미연결 · 활성 → 정리함 밖(수집되고 있다)
+    ])
+    c.executemany("INSERT INTO tracked_keywords(product_id,keyword) VALUES(?,?)", [
+        (10, "가"), (20, "나"), (20, "다"), (30, "라"), (40, "마")])
+    c.executemany("INSERT INTO rank_link(client_id,tracked_product_id) VALUES(?,?)", [
+        (1, 10), (2, 20)])
+    from tracking_eligibility import ensure_disabled_column
+    ensure_disabled_column(c)
+    c.execute("UPDATE tracked_products SET disabled_at='2026-08-29 01:20:00' WHERE id=30")
+    return c
+
+
+def test_정리함_두_무리를_정확히_가른다():
+    """⚠️ 「미연결+활성」이 stuck 에 들어오면 안 된다 — 그건 수집되고 있는 상품이라
+       여기 넣으면 「추적 안 됨」이라는 이름이 거짓말이 된다."""
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    from blocked_products import list_blocked
+    r = list_blocked(_tray_db())
+    assert [p["id"] for p in r["stuck"]] == [20], r["stuck"]
+    assert [p["id"] for p in r["shelved"]] == [30], r["shelved"]
+    assert r["stuck"][0]["clients"][0]["stage"] == "계약 만료", "전산 단계명이 사유로 나와야 한다"
+    assert r["stuck_keywords"] == 2 and r["shelved_keywords"] == 1
+
+
+def test_내리기는_지우지_않고_비활성만_붙인다():
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    from blocked_products import shelve, list_blocked
+    c = _tray_db()
+    assert shelve(c, 20) is True
+    assert shelve(c, 20) is False, "이미 내려간 것을 또 내리면 안 된다(멱등 확인)"
+    row = c.execute("SELECT COALESCE(disabled_at,'') d FROM tracked_products WHERE id=20").fetchone()
+    assert row["d"], "disabled_at 이 안 붙었다"
+    assert c.execute("SELECT COUNT(*) c FROM tracked_keywords WHERE product_id=20").fetchone()["c"] == 2, \
+        "⚠️ 키워드가 지워졌다 — 내리기는 삭제가 아니다"
+    r = list_blocked(c)
+    assert [p["id"] for p in r["stuck"]] == [] and 20 in [p["id"] for p in r["shelved"]], \
+        "내린 상품이 shelved 무리로 옮겨 가야 한다"
+
+
+def test_내리기_시각은_KST_다():
+    """표 기본값에 기대면 8/31 reports 와 같은 UTC 병이 또 생긴다."""
+    src = _src("blocked_products.py")
+    i = src.index("SET disabled_at")
+    assert "datetime('now','localtime')" in src[i:i + 120], "내리기 시각이 KST 명시가 아니다"
+
+
+def test_되살리기는_자격_있는_업체가_이어져_있어야만():
+    """⚠️ 자격 없는 업체뿐인데 살리면 stuck 으로 자리만 옮겨 간다 — 처분이 아니다."""
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    from blocked_products import revive
+    c = _tray_db()
+    r = revive(c, 30)                     # 미연결 → 거절 + 이유
+    assert not r["ok"] and "연결" in r["reason"]
+    c.execute("INSERT INTO rank_link(client_id,tracked_product_id) VALUES(2,30)")
+    r = revive(c, 30)                     # 죽은 업체뿐 → 거절 + 이유
+    assert not r["ok"] and "자격" in r["reason"]
+    c.execute("INSERT INTO rank_link(client_id,tracked_product_id) VALUES(1,30)")
+    r = revive(c, 30)                     # 자격 업체 연결 → 살아난다
+    assert r["ok"], r
+    d = c.execute("SELECT COALESCE(disabled_at,'') d FROM tracked_products WHERE id=30").fetchone()["d"]
+    assert d == "", "disabled_at 이 안 지워졌다"
+
+
+def test_정리함에_하드_삭제가_없다():
+    """대표 확정 「내리기로 통일」 — 정리함 경로 어디에도 DELETE 가 없어야 한다."""
+    assert "DELETE" not in _src("blocked_products.py").upper().replace("삭제", ""), \
+        "blocked_products 에 DELETE 가 생겼다"
+    src = _src("main.py")
+    i = src.index("「추적 안 됨」 정리함")
+    j = src.index("키워드 개별 삭제", i)
+    tray = src[i:j]
+    assert "DELETE FROM" not in tray.upper() and "delete_tracked_product" not in tray, \
+        "정리함 엔드포인트에 하드 삭제가 섞였다"
+    for ep in ("/api/products/blocked", "/shelve", "/relink", "/revive"):
+        assert ep in tray, f"엔드포인트 {ep} 가 없다"
+
+
+def test_연결은_등록과_같은_함수를_쓴다():
+    src = _src("main.py")
+    i = src.index("def relink_product")
+    block = src[i:i + 1600]
+    assert "link_on_register" in block, "연결 규칙이 갈렸다 — 등록과 같은 함수를 써야 한다"
+    # ⚠️ 「eligible_client_ids 가 블록에 있다」로는 못 잡는다 — 임포트 문만 남아도 통과한다
+    #    (고장 내기 검증에서 실제로 그렇게 빠져나갔다). 판정이 조건문으로 쓰이는지를 본다.
+    assert "if req.client_id not in set(eligible_client_ids" in block, \
+        "자격 없는 업체로의 연결을 안 막는다 — 판정이 조건문에서 사라졌다"
+
+
 if __name__ == "__main__":
     _tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     _failed = 0

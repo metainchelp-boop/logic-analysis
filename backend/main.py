@@ -999,6 +999,121 @@ def remove_product(product_id: int, current_user: dict = Depends(get_current_use
     return {"success": True, "message": "상품이 삭제되었습니다."}
 
 
+# ==================== 「추적 안 됨」 정리함 (신고 #248 후속 · 2026-09-01 대표 확정) ====================
+# 진입은 순위 추적 화면 배너 하나뿐이고, 0건이면 배너도 안 뜬다.
+# 파괴 동작은 전부 「내리기」 계열 — 하드 삭제 없음(대표 확정 「내리기로 통일」).
+# 판정·처분 로직은 blocked_products.py(표준 라이브러리) — 게이트가 실제로 돌려 검사한다.
+
+
+def _tray_conn():
+    import sqlite3 as _sq
+    c = _sq.connect(DB_PATH, timeout=15)
+    c.row_factory = _sq.Row          # blocked_products 는 Row 접근을 전제로 한다
+    c.execute("PRAGMA busy_timeout=15000")
+    return c
+
+
+@app.get("/api/products/blocked")
+def blocked_products_list(current_user: dict = Depends(get_current_user)):
+    """정리함 목록 — 자격 없는 업체에만 이어진 상품(stuck) + 내려간 상품(shelved)."""
+    conn = _tray_conn()
+    try:
+        from blocked_products import list_blocked
+        return {"success": True, **list_blocked(conn)}
+    except Exception as e:
+        logger.error(f"[blocked-tray] 목록 실패: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
+
+@app.post("/api/products/{product_id}/shelve")
+def shelve_product(product_id: int, current_user: dict = Depends(get_current_user)):
+    """상품 내리기 — 지우지 않는다. 수집·기록에서 빠지고 「내려간 상품」 칸으로 간다."""
+    conn = _tray_conn()
+    try:
+        from blocked_products import shelve
+        ok = shelve(conn, product_id)
+        conn.commit()
+        if not ok:
+            raise HTTPException(status_code=404, detail="상품이 없거나 이미 내려가 있습니다.")
+        logger.info(f"[blocked-tray] 상품 {product_id} 내림 (by user {current_user['id']})")
+        return {"success": True, "message": "내렸습니다 — 기록은 남아 있고 되돌릴 수 있습니다."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[blocked-tray] 내리기 실패 [{product_id}]: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
+
+class RelinkRequest(BaseModel):
+    client_id: int
+
+
+@app.post("/api/products/{product_id}/relink")
+def relink_product(product_id: int, req: RelinkRequest,
+                   current_user: dict = Depends(get_current_user)):
+    """업체 연결(+내려가 있으면 되살리기).
+
+    ⚠️ 연결은 등록 화면과 **같은 함수**(rank_link.link_on_register, manual)를 쓴다 —
+       여기서 규칙을 새로 만들면 어느 쪽 연결이 맞는지 알 수 없게 된다.
+    ⚠️ 자격 없는 업체로 이으면 되살려도 그대로 「추적 안 됨」이다 — 400 으로 막고 이유를 말한다.
+    """
+    conn = _tray_conn()
+    try:
+        from tracking_eligibility import eligible_client_ids
+        if req.client_id not in set(eligible_client_ids(conn)):
+            raise HTTPException(status_code=400,
+                                detail="그 업체는 지금 추적 자격이 없습니다(계약 만료·홀딩 등) — 다른 업체를 골라 주세요.")
+    finally:
+        conn.close()
+
+    from rank_link import link_on_register
+    link = link_on_register(product_id, req.client_id, current_user["id"])
+    if not (link or {}).get("linked"):
+        raise HTTPException(status_code=500, detail="연결에 실패했습니다 — 잠시 후 다시 시도해 주세요.")
+
+    conn = _tray_conn()
+    try:
+        from blocked_products import revive
+        r = revive(conn, product_id)
+        conn.commit()
+        revived = bool(r.get("ok"))
+        logger.info(f"[blocked-tray] 상품 {product_id} → 업체 {req.client_id} 연결"
+                    f"{' + 되살림' if revived else ''} (by user {current_user['id']})")
+        return {"success": True, "revived": revived,
+                "message": ("연결했고 되살렸습니다 — 다음 수집 슬롯부터 다시 잽니다."
+                            if revived else "연결했습니다.")}
+    except Exception as e:
+        logger.error(f"[blocked-tray] 되살리기 실패 [{product_id}]: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
+
+@app.post("/api/products/{product_id}/revive")
+def revive_product(product_id: int, current_user: dict = Depends(get_current_user)):
+    """되살리기 — 자격 있는 업체에 이어진 내려간 상품만. 아니면 이유를 400 으로 말한다."""
+    conn = _tray_conn()
+    try:
+        from blocked_products import revive
+        r = revive(conn, product_id)
+        conn.commit()
+        if not r.get("ok"):
+            raise HTTPException(status_code=400, detail=r.get("reason") or "되살릴 수 없습니다.")
+        logger.info(f"[blocked-tray] 상품 {product_id} 되살림 (by user {current_user['id']})")
+        return {"success": True, "message": "되살렸습니다 — 다음 수집 슬롯부터 다시 잽니다."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[blocked-tray] 되살리기 실패 [{product_id}]: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
+
 # --- 키워드 개별 삭제 (건의 2026-07-22, 이예은) ---
 @app.delete("/api/keywords/{keyword_id}")
 def remove_keyword(keyword_id: int, current_user: dict = Depends(get_current_user)):
