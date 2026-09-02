@@ -718,7 +718,9 @@ async function testHtmlMeasurementsHideStaleFrontDiagnosticsAndReachSeoDiagnosis
     htmlDetailResult: { productName: '실측 상품명', storeInfo: { name: 'Vaya' } },
     htmlReviewData: {
       price: 12300,
-      category: '생활/건강>반려동물',
+      // FE 기존 진단은 category1/2까지만 사용한다. HTML이 category3를 더
+      // 풍부하게 제공하더라도 이미 정확한 진단 블록을 숨기면 안 된다.
+      category: '생활/건강>반려동물>강아지 간식',
       category1: '생활/건강',
     },
   });

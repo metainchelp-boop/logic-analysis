@@ -30551,7 +30551,9 @@ window.shouldHideStaleFrontDiagnostics = function shouldHideStaleFrontDiagnostic
     if (Number(source.price || 0) !== Number(resolved.price || 0)) return true;
   }
   if (normalized(html.category) || normalized(html.category1)) {
-    var categoryKeys = ['category1', 'category2', 'category3'];
+    // 기존 FE 진단은 category1/2만 계산에 사용한다. HTML 파서가 category3를
+    // 추가로 확보한 것만으로 이미 정확한 기존 진단을 stale로 보지 않는다.
+    var categoryKeys = ['category1', 'category2'];
     for (var i = 0; i < categoryKeys.length; i += 1) {
       var key = categoryKeys[i];
       if (normalized(resolved[key]) && normalized(source[key]) !== normalized(resolved[key])) return true;
