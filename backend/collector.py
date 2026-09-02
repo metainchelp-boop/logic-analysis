@@ -89,6 +89,15 @@ def init_collector_db():
                 conn.execute("ALTER TABLE collect_requests ADD COLUMN attempts INTEGER DEFAULT 0")
         except Exception as e:
             logger.warning(f"[collector] attempts 컬럼 가드 실패(무시): {e}")
+        # 수집 메타 칸(2026-09-02 신고 #253) — CREATE TABLE IF NOT EXISTS 는 기존 표를
+        # 못 고치므로 같은 방식의 멱등 가드로 가산한다. 광고 표식이 toProduct 변환에서
+        # 사라지는 문제를 겪은 뒤, 걸러낸 광고 수 등 수집 조건을 함께 남기기로 했다.
+        try:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(collected_serp)").fetchall()}
+            if "meta_json" not in cols:
+                conn.execute("ALTER TABLE collected_serp ADD COLUMN meta_json TEXT")
+        except Exception as e:
+            logger.warning(f"[collector] meta_json 컬럼 가드 실패(무시): {e}")
         conn.commit()
         logger.info("수집 테이블 준비 완료")
     finally:
@@ -324,6 +333,9 @@ class SerpUpload(BaseModel):
     keyword: str
     total: int = 0
     products: List[SerpProduct] = []
+    # 사후 재구성용 메타(2026-09-02 신고 #253 교훈 — toProduct 변환에서 광고 표식이
+    # 사라져 서버 저장본만으로는 광고 혼입을 판정할 수 없었다). 구확장은 안 보낸다.
+    meta: Optional[dict] = None
 
 
 # 수집이 이만큼 끊겼다가 돌아오면 '환경 장애였다'고 보고 소진된 재시도를 되살린다.
@@ -385,14 +397,21 @@ def upload_serp(req: SerpUpload, x_collector_token: str = Header(None)):
     conn = sqlite3.connect(DB_PATH, timeout=10)
     try:
         _revive_after_outage(conn)
+        meta_json = json.dumps(req.meta, ensure_ascii=False) if req.meta else None
         conn.execute("""
-            INSERT INTO collected_serp (keyword, collected_date, total, products_json, product_count)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO collected_serp (keyword, collected_date, total, products_json, product_count, meta_json)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(keyword, collected_date) DO UPDATE SET
                 total=excluded.total, products_json=excluded.products_json,
-                product_count=excluded.product_count,
+                product_count=excluded.product_count, meta_json=excluded.meta_json,
                 created_at=datetime('now','localtime')
-        """, (kw, today, req.total, payload, len(req.products)))
+        """, (kw, today, req.total, payload, len(req.products), meta_json))
+        if req.meta:
+            # 걸러낸 광고 수가 서버 로그에도 남는다 — 다음 순위 신고 때
+            # 「광고 포함 눈 순번」으로 바로 환산해 답할 수 있다(신고 #253 재발 방지).
+            logger.info(f"[수집] {kw}: 오가닉 {len(req.products)}개 · 광고 {req.meta.get('adSkipped', '?')}개 제외 · "
+                        f"중복 {req.meta.get('dupSkipped', '?')} · 원본 {req.meta.get('rawCount', '?')} · "
+                        f"확장 v{req.meta.get('collectorVersion', '?')}")
         # 이 키워드가 요청 큐(주간 온디맨드)에 있었다면 완료 처리
         conn.execute("UPDATE collect_requests SET status='done' WHERE keyword=?", (kw,))
         conn.commit()

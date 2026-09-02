@@ -16,6 +16,14 @@
  *   · 속도를 올리면 사무실 IP가 통째로 차단돼 직원들 네이버 접속까지 막힐 수 있다
  */
 
+// ⭐ 순위 규칙은 rank_rules.js 한 곳에만 있다(신고 #253 후속, 2026-09-02) —
+//    chrome 의존이 없어 node 회귀 테스트가 같은 파일을 검사한다.
+importScripts('rank_rules.js');
+// ⚠️ rank_rules.js 는 전역에 RankRules 객체 하나만 내놓는다(IIFE) — 개별 함수 이름을
+//    여기서 다시 선언하거나 전역으로 받지 말 것. 'already been declared' 워커 등록
+//    사망이 2026-09-02 맥미니 적용에서 실제로 두 번 났다. 호출은 RR.takeOrganic 식으로.
+const RR = globalThis.RankRules;
+
 const CFG = {
   serverBase: 'https://logic.metainc.co.kr',
   // ⚠️ 2026-08-06 플랜 B — API 호출을 폐기하고 **사람이 보는 검색 페이지**를 연다.
@@ -466,49 +474,8 @@ async function fetchPage(keyword, pagingIndex) {
   throw new Error(`판독 실패(${lastErr}) — 차단 아님, 다음 회차 재시도`);
 }
 
-/** 이 상품이 '광고'인가 — 순위 번호를 주지 않기 위한 판별.
- *
- *  ⚠️ 필드 이름을 추측하지 않는다. 판별 축은 **실측으로 확정된 링크 하나**다:
- *     네이버는 광고 상품의 클릭 주소를 `cr.shopping.naver.com/adcr?...` 로 내보내고,
- *     광고 상품은 단일 판매처가 없어 mallName 이 비어 있다.
- *     2026-08-12 서버 실측 — 스토어명이 빈 상품 1,045개가 **전부** adcr 링크였고,
- *     스마트스토어·브랜드스토어·카탈로그 링크로 빈 것은 0개였다.
- *
- *  ⚠️ 이 판별은 '덜 거르는' 쪽으로만 틀리게 설계했다. 광고인데 못 걸러내면 순위가
- *     종전처럼 조금 밀릴 뿐이지만, 오가닉을 광고로 잘못 걸러내면 그 상품이 통째로
- *     사라져 **멀쩡히 노출 중인 광고주가 「미노출」로 보고된다**(미노출보다 나쁜 오류).
- *     그래서 `adId` 같은 짐작 필드로는 거르지 않고, 대신 아래 countAdHints 로
- *     '광고 표식은 있는데 링크로는 안 걸린 상품'의 수만 세어 다음 판에 근거로 쓴다. */
-function isAdItem(p) {
-  const url = String((p && (p.mallProductUrl || p.adcrUrl || p.crUrl)) || '');
-  return url.includes('adcr');
-}
-
-/** 링크로는 광고로 안 걸렸는데 광고 표식처럼 보이는 키를 가진 상품 수(진단 전용·거르지 않음) */
-function hasAdHint(p) {
-  if (!p || typeof p !== 'object') return false;
-  for (const k in p) {
-    if (/^ad(Id|cr|Product|Type|Rank)/i.test(k) && p[k]) return true;
-  }
-  return false;
-}
-
-/** 네이버 응답 → 서버가 쓰는 형태로 정리 */
-function toProduct(p, rank) {
-  return {
-    rank,
-    productId: String(p.id || p.nvMid || ''),
-    title: String(p.productTitle || p.productName || '').replace(/<[^>]*>/g, ''),
-    link: String(p.mallProductUrl || p.adcrUrl || p.crUrl || ''),
-    price: String(p.price || p.lowPrice || ''),
-    mallName: String(p.mallName || p.mallNm || ''),
-    brand: String(p.brand || p.maker || ''),
-    category1: String(p.category1Name || ''),
-    category2: String(p.category2Name || ''),
-    category3: String(p.category3Name || ''),
-    reviewCount: String(p.reviewCount || ''),
-  };
-}
+/* (isAdItem·hasAdHint·toProduct 는 rank_rules.js 로 이사 — 2026-09-02 신고 #253.
+   광고 판별이 눈멀어 광고가 순번을 먹던 사고의 수정과 그 회귀 테스트가 거기 있다.) */
 
 /** 키워드 1건을 300위까지 수집
  *
@@ -516,72 +483,65 @@ function toProduct(p, rank) {
  *     페이지가 요청한 개수를 그대로 주지 않는 경우(광고 제외·마지막 페이지 등)
  *     고정 계산은 순위를 통째로 어긋나게 만든다. 누적이면 어떤 경우에도 맞다. */
 async function collectKeyword(keyword) {
-  const products = [];
-  const seenIds = new Set();   // 페이지 경계가 겹쳐도 같은 상품을 두 번 세지 않기 위함
+  // 순번 부여의 실체는 rank_rules.takeOrganic 하나다 — 광고 제외가 seenIds 중복 처리보다
+  // 먼저인 순서까지가 계약이고, node 회귀 테스트가 그 계약을 검사한다(신고 #253 후속).
+  const st = {
+    products: [], seenIds: new Set(), maxRank: CFG.maxRank,
+    adSkipped: 0, dupSkipped: 0, adHintMissed: 0,
+    // 광고 원본 1건을 남겨 둔다 — 다음에 판별 규칙을 넓힐 때 추측 대신 이걸 본다.
+    onFirstAd: (item) => {
+      chrome.storage.local.get('rawSampleAd').then((o) => {
+        if (!o.rawSampleAd) {
+          chrome.storage.local.set({ rawSampleAd: { keyword, at: new Date().toISOString(), item } });
+        }
+      });
+    },
+  };
   let total = 0;
-  let adSkipped = 0;           // 순위를 주지 않고 건너뛴 광고 수(로그·팝업용)
-  let adHintMissed = 0;        // 광고 표식은 있는데 링크로는 안 걸린 수(다음 판 근거)
+  let rawCount = 0;            // 걸러내기 전 원본 개수 — 사후 재구성용(신고 #253 교훈)
   const pages = Math.min(CFG.pagesPerKeyword, CFG.maxPages);
   for (let i = 1; i <= pages; i++) {
     const { total: t, list } = await fetchPage(keyword, i);
     if (i === 1) total = t;
     if (!list.length) break;
+    rawCount += list.length;
     // ⚠️ 첫 키워드 첫 상품의 '원본 JSON'을 저장해 둔다. toProduct 의 필드명 가정
     //    (p.productTitle·p.category1Name 등)이 실제 네이버 응답과 맞는지 내일 첫 실행 때
     //    팝업에서 눈으로 검증하기 위함(맞으면 매핑 확정, 다르면 즉시 교정).
     if (i === 1 && list[0]) {
       chrome.storage.local.set({ rawSample: { keyword, at: new Date().toISOString(), item: list[0] } });
     }
-    for (let idx = 0; idx < list.length; idx++) {
-      if (products.length >= CFG.maxRank) break;
-      // ⭐ 광고는 순위 번호를 먹지 않는다(2026-08-12 대표 확정 「광고 제외로 가야 해」).
-      //    ⚠️ 여기서 `continue` 하기 전에 **seenIds 에 넣지 않는 것이 핵심**이다.
-      //       광고주 상품은 같은 검색 결과에 '광고 자리'와 '오가닉 자리'로 두 번 나올 수
-      //       있는데, 광고 자리에서 id 를 선점해 버리면 뒤따라오는 진짜 오가닉 자리가
-      //       중복으로 걸러져 **그 업체가 통째로 미노출로 보고된다**.
-      if (isAdItem(list[idx])) {
-        adSkipped++;
-        // 광고 원본 1건을 남겨 둔다 — 다음에 판별 규칙을 넓힐 때 추측 대신 이걸 본다.
-        if (adSkipped === 1) {
-          chrome.storage.local.get('rawSampleAd').then((o) => {
-            if (!o.rawSampleAd) {
-              chrome.storage.local.set({
-                rawSampleAd: { keyword, at: new Date().toISOString(), item: list[idx] },
-              });
-            }
-          });
-        }
-        continue;
-      }
-      if (hasAdHint(list[idx])) adHintMissed++;
-      const mapped = toProduct(list[idx], products.length + 1);
-      // 페이지네이션이 겹치게 주는 경우(pagingSize 를 서버가 다르게 해석 등) 순위가
-      // 중복·어긋나지 않게, 이미 본 상품은 건너뛴다(id 없는 상품은 그대로 통과).
-      if (mapped.productId && seenIds.has(mapped.productId)) continue;
-      if (mapped.productId) seenIds.add(mapped.productId);
-      mapped.rank = products.length + 1;   // 광고·중복을 건너뛴 자리를 메운 최종 순위
-      // ⚠️ mallName 빈 값 건은 **종결**됐다(2026-08-12): 빈 값 1,045개가 전부 광고
-      //    상품이었고, 광고는 단일 판매처가 없어 애초에 채울 값이 없다. 이제 그 상품들은
-      //    위에서 광고로 걸러지므로 빈 mallName 자체가 거의 사라진다. 필드 추측 금지.
-      products.push(mapped);
-    }
-    if (products.length >= CFG.maxRank) break;   // 목표 깊이 도달
+    RR.takeOrganic(list, st);
+    if (st.products.length >= CFG.maxRank) break;   // 목표 깊이 도달
     // 마지막 페이지 판정 — 설정값(80)이 아니라 화면 최소 페이지 크기(40) 미만일 때만.
     // 페이지가 pagingSize=80 을 무시하고 40씩 그려도 여기서 끊기지 않고 다음 장으로 간다.
     if (list.length < 40) break;
     if (i < pages) await sleep(jitter());
   }
   await chrome.storage.local.set({
-    lastAdStat: { keyword, at: new Date().toISOString(), kept: products.length, ads: adSkipped, hint: adHintMissed },
+    lastAdStat: { keyword, at: new Date().toISOString(), kept: st.products.length,
+                  ads: st.adSkipped, dup: st.dupSkipped, hint: st.adHintMissed, raw: rawCount },
   });
-  return { total, products, adSkipped, adHintMissed };
+  return { total, products: st.products, adSkipped: st.adSkipped,
+           dupSkipped: st.dupSkipped, adHintMissed: st.adHintMissed, rawCount };
 }
 
 async function uploadKeyword(token, keyword, payload) {
   const res = await fetch(`${CFG.serverBase}/api/collector/serp`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Collector-Token': token },
-    body: JSON.stringify({ keyword, total: payload.total, products: payload.products }),
+    body: JSON.stringify({
+      keyword, total: payload.total, products: payload.products,
+      // 사후 재구성용 메타(신고 #253 교훈 — 서버 저장본에서 광고 증거가 사라져
+      // 「광고 0건」이라는 거짓 정상을 봤다). 구서버는 이 필드를 몰라도 무시한다.
+      meta: {
+        collectorVersion: (chrome.runtime.getManifest && chrome.runtime.getManifest().version) || '',
+        rankPolicy: 'organic-v2(ad:legacy-or-adId+adType+adcrUrl)',
+        pageSize: CFG.pageSize, productSet: 'total', sort: 'rel',
+        rawCount: payload.rawCount || 0, adSkipped: payload.adSkipped || 0,
+        dupSkipped: payload.dupSkipped || 0, adHintMissed: payload.adHintMissed || 0,
+      },
+    }),
   });
   if (!res.ok) throw new Error(`업로드 실패 HTTP ${res.status}`);
   return res.json();
