@@ -42,6 +42,10 @@ on:
         description: '신고 253 수정 검증 — v1.10.2 적용 후 재수집·순위 45위 재계산(읽기 전용·업체명 미출력).'
         required: false
         default: 'off'
+      requeue253:
+        description: '신고 253 — 청귤을 온디맨드 대기줄에 1행 등록(쓰기 1행 · 수집기가 재수집하게).'
+        required: false
+        default: 'off'
       ownerhint:
         description: '추정 업체 커버리지 — off(기본) / on. 보관 상품 중 몇 개에 추정 업체가 붙는지 서버 매칭 규칙으로 실측(읽기 전용·업체명 미출력).'
         required: false
@@ -2443,4 +2447,26 @@ jobs:
             print("  기록표 최신: %s위 (%s)" % (rec["rank_position"] if rec else "—",
                                                 rec["checked_at"] if rec else "—"))
             print("  판정: 45 부근이면 광고 제외 정상 · 56 부근이면 아직 구판 수집분")
+            PY
+
+      - name: 신고 253 — 청귤 재수집 요청 넣기 (쓰기 1행 · collect_requests)
+        if: ${{ github.event.inputs.requeue253 == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 2m
+          script: |
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sqlite3
+            # ⚠️ 유일한 쓰기: 온디맨드 대기줄에 1행 — 화면 조회 miss 때 서버가 하는 동작과 동일.
+            #    수집기가 다음 폴링에서 가져가 재수집·업로드하면 upload_serp 가 done 처리한다.
+            conn = sqlite3.connect("/app/data/logic_data.db", timeout=10)
+            conn.execute("""INSERT INTO collect_requests(keyword, status, attempts)
+                            VALUES('청귤','pending',0)
+                            ON CONFLICT(keyword) DO UPDATE SET status='pending', attempts=0""")
+            conn.commit()
+            r = conn.execute("SELECT keyword, status, requested_at FROM collect_requests WHERE keyword='청귤'").fetchone()
+            print("대기줄 등록:", r)
             PY
