@@ -30,30 +30,6 @@ on:
         description: '상품 주소 모양 실측 — off(기본) / on. 어느 호스트(스마트스토어·브랜드스토어·카탈로그)를 쓰는지, 같은 슬러그가 두 호스트에 걸쳐 있는지(읽기 전용·업체명 미출력).'
         required: false
         default: 'off'
-      after188:
-        description: '배포 #188 확인 — off(기본) / on. collect_slot 반영·대기 사유 응답·번들 배지를 잰다(읽기 전용).'
-        required: false
-        default: 'off'
-      after189:
-        description: '배포 #189 확인 — off(기본) / on. 정리함(blocked_products) 반영·두 무리 실측 건수·번들 문구를 잰다(읽기 전용·업체명 미출력).'
-        required: false
-        default: 'off'
-      after190:
-        description: '배포 #190 확인 — off(기본) / on. 추정 업체 반영·서버 실행 건수·번들 문구를 잰다(읽기 전용·업체명 미출력).'
-        required: false
-        default: 'off'
-      report253:
-        description: '신고 253 — 청귤 집계 56위 vs 실제 45위. 수집 원본·매칭 자리·구간 생김새·변동폭을 가른다(읽기 전용·업체명 미출력).'
-        required: false
-        default: 'off'
-      report253b:
-        description: '신고 253 2차 — 필드 보유율 날짜별·링크 호스트·전 키워드 확산·날짜별 순위 재계산(읽기 전용·업체명 미출력).'
-        required: false
-        default: 'off'
-      report253c:
-        description: '신고 253 3차 — 실제 배관(load_collected)으로 재현·같은 가게 다중 상품·광고 잔류(읽기 전용·업체명 미출력).'
-        required: false
-        default: 'off'
       report253d:
         description: '신고 253 4차 — 광고 누수 지문: 기타 링크 실체·날짜별 구성·전 키워드 일제 하락 여부(읽기 전용·업체명 미출력).'
         required: false
@@ -70,28 +46,8 @@ on:
         description: '배포 #183 확인 — off(기본) / on. 압축이 실제로 붙는지·부팅 로그·본문이 원본과 같은지 재현한다(읽기 전용).'
         required: false
         default: 'off'
-      gzipchk:
-        description: '압축이 켜져 있나 — off(기본) / on. 앱·nginx 응답에 Content-Encoding 이 붙는지와 547KB 응답이 압축되면 몇 KB 인지 잰다(읽기 전용).'
-        required: false
-        default: 'off'
-      payload:
-        description: '체감 원인 찾기 — off(기본) / on. my-clients 응답을 서버에서 실제로 조립해 총 소요·응답 크기·무엇이 크기를 차지하는지 잰다(읽기 전용·업체명 미출력).'
-        required: false
-        default: 'off'
-      faster:
-        description: '더 줄일 수 있나 — off(기본) / on. my-clients 전체 쿼리 소요를 재고, 최신1건을 업체별 1건으로 다시 쓰면 결과가 100% 같은지·얼마나 빨라지는지 실데이터로 대조(읽기 전용).'
-        required: false
-        default: 'off'
       after179:
         description: '배포 #179 확인 — off(기본) / on. 시각 보정 로그·보고서 시:분·커버링 인덱스 채택·서버 파일 표지를 한 번에(읽기 전용).'
-        required: false
-        default: 'off'
-      cagg:
-        description: '분석 집계 A/B — off(기본) / on. my-clients 가 매번 도는 두 쿼리를 재고, 덩어리 뒤 칸을 하나씩 빼며 무엇이 값을 물어오는지 가른다(읽기 전용·업체명 미출력).'
-        required: false
-        default: 'off'
-      rtime:
-        description: '보고서 시각 판정 — off(기본) / on. reports.created_at 이 UTC 인지 KST 인지 행 단위로 판정하고, 소급 보정이 날짜를 넘기는 행이 있는지 센다(읽기 전용·업체명/제목 미출력).'
         required: false
         default: 'off'
       audit:
