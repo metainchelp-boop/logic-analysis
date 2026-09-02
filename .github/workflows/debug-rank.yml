@@ -2417,14 +2417,17 @@ jobs:
             print("  마지막 업로드 %s · 최근 30분 %s건" % (r["mx"], r["n30"]))
 
             print("\n== ② 청귤 재수집 여부 ==")
-            row = conn.execute("""SELECT created_at, total, product_count, meta_json
-                                    FROM collected_serp
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(collected_serp)")}
+            sel = "created_at, total, product_count" + (", meta_json" if "meta_json" in cols else "")
+            row = conn.execute(f"""SELECT {sel} FROM collected_serp
                                    WHERE keyword=? AND collected_date=DATE('now','localtime')""", (KW,)).fetchone()
             if not row:
                 print("  오늘 수집분 없음"); raise SystemExit
             print("  수집 시각 %s (아침 10:21이면 아직 구판 수집분 · 그 뒤면 재수집분)" % row["created_at"])
-            print("  meta_json: %s" % (row["meta_json"][:120] if row["meta_json"] else
-                                       "없음(서버가 아직 meta 미수용 배포 전 — 정상)"))
+            if "meta_json" in cols:
+                print("  meta_json: %s" % (row["meta_json"][:120] if row["meta_json"] else "NULL"))
+            else:
+                print("  meta 칸 없음 — 서버분 미배포 상태(정상, 확장 meta 는 무시되고 수집은 저장됨)")
 
             print("\n== ③ 새 수집분으로 순위 재계산 (실제 배관) ==")
             from collector import load_collected
