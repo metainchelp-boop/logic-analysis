@@ -54,6 +54,10 @@ on:
         description: '신고 253 3차 — 실제 배관(load_collected)으로 재현·같은 가게 다중 상품·광고 잔류(읽기 전용·업체명 미출력).'
         required: false
         default: 'off'
+      report253d:
+        description: '신고 253 4차 — 광고 누수 지문: 기타 링크 실체·날짜별 구성·전 키워드 일제 하락 여부(읽기 전용·업체명 미출력).'
+        required: false
+        default: 'off'
       ownerhint:
         description: '추정 업체 커버리지 — off(기본) / on. 보관 상품 중 몇 개에 추정 업체가 붙는지 서버 매칭 규칙으로 실측(읽기 전용·업체명 미출력).'
         required: false
@@ -2306,4 +2310,87 @@ jobs:
                                        WHERE keyword=? AND client_id=711 AND DATE(checked_at)=?
                                        ORDER BY checked_at DESC LIMIT 1""", (KW, d)).fetchone()
                 print("  %s: 재계산 %s위 · 기록 %s위" % (d, r2, rec[0] if rec else "—"))
+            PY
+
+      - name: 신고 253 4차 — 광고 누수 지문 (읽기 전용·업체명 미출력)
+        if: ${{ github.event.inputs.report253d == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 4m
+          script: |
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sys, sqlite3, re
+            sys.path.insert(0, "/app")
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            from collector import load_collected
+            KW = "청귤"
+
+            def host_of(u):
+                m = re.match(r"https?://([^/]+)", u or "")
+                return m.group(1) if m else ("빈링크" if not u else "형식외")
+            def kind(u):
+                u = u or ""
+                if "smartstore" in u: return "smartstore"
+                if "brand.naver" in u: return "brand"
+                if "/catalog/" in u or "cr.shopping" in u: return "catalog"
+                return "기타:" + host_of(u)
+
+            print("== ① 오늘 청귤 상위 60의 「기타」 6개 — 실체 ==")
+            got = load_collected(KW)
+            prods = got["prods"] if got else []
+            for p in prods:
+                r = p["rank"]
+                if r and r <= 60 and kind(p["product_url"]).startswith("기타"):
+                    print("  %2d위 %s · 가게명%s · 상품ID%s" % (
+                        r, kind(p["product_url"]),
+                        "有" if (p["store_name"] or "").strip() else "無",
+                        "有" if (p["product_id"] or "").strip() else "無"))
+            print("  [전체 300개 링크 종류 분포]")
+            from collections import Counter
+            c1 = Counter(kind(p["product_url"]).split(":")[0] for p in prods)
+            print("  ", dict(c1))
+
+            print("\n== ② 날짜별 청귤 상위 60 구성 (형식이 언제 변했나) ==")
+            for row in conn.execute("""SELECT collected_date FROM collected_serp
+                                        WHERE keyword=? ORDER BY collected_date DESC LIMIT 7""", (KW,)):
+                d = row["collected_date"]
+                g2 = load_collected(KW, d)
+                ps = [p for p in (g2["prods"] if g2 else []) if p["rank"] and p["rank"] <= 60]
+                c2 = Counter(kind(p["product_url"]).split(":")[0] for p in ps)
+                no_store = sum(1 for p in ps if not (p["store_name"] or "").strip())
+                print("  %s: %s · 가게명無 %d" % (d, dict(c2), no_store))
+
+            print("\n== ③ 전 키워드 순위 지문 — 같은 날 일제히 밀렸나 ==")
+            print("  (같은 업체·키워드 짝의 「8/20~25 평균 → 8/29~9/2 평균」 변화 분포)")
+            rows = conn.execute("""
+                SELECT client_id, keyword,
+                       AVG(CASE WHEN DATE(checked_at) BETWEEN '2026-08-20' AND '2026-08-25'
+                                THEN rank_position END) a,
+                       AVG(CASE WHEN DATE(checked_at) BETWEEN '2026-08-29' AND '2026-09-02'
+                                THEN rank_position END) b
+                  FROM client_rank_history
+                 WHERE rank_position IS NOT NULL
+                 GROUP BY client_id, keyword
+                HAVING a IS NOT NULL AND b IS NOT NULL""").fetchall()
+            import statistics
+            deltas = [r["b"] - r["a"] for r in rows]
+            if deltas:
+                up = sum(1 for d in deltas if d <= -3)
+                flat = sum(1 for d in deltas if -3 < d < 3)
+                down = sum(1 for d in deltas if d >= 3)
+                print("  짝 %d개 — 중앙값 %+.1f칸 · 평균 %+.1f칸" % (len(deltas), statistics.median(deltas), sum(deltas)/len(deltas)))
+                print("  좋아짐(-3 이상) %d · 그대로 %d · 나빠짐(+3 이상) %d" % (up, flat, down))
+                print("  ⚠️ 광고 누수라면 「나빠짐」이 압도적이고 중앙값이 +5~15 여야 한다.")
+                print("     순위가 원래 출렁이는 것이라면 좋아짐과 나빠짐이 비슷해야 한다.")
+            print("\n  [일별 전체 평균 순위 — 특정 날 계단이 있나]")
+            for r in conn.execute("""SELECT DATE(checked_at) d, COUNT(*) n, ROUND(AVG(rank_position),1) avg_r
+                                       FROM client_rank_history
+                                      WHERE rank_position IS NOT NULL
+                                        AND checked_at >= '2026-08-18'
+                                      GROUP BY d ORDER BY d"""):
+                print("  %s: %s건 · 평균 %s위" % (r["d"], r["n"], r["avg_r"]))
             PY
