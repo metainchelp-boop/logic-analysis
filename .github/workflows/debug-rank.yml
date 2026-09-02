@@ -50,6 +50,10 @@ on:
         description: '신고 253 2차 — 필드 보유율 날짜별·링크 호스트·전 키워드 확산·날짜별 순위 재계산(읽기 전용·업체명 미출력).'
         required: false
         default: 'off'
+      report253c:
+        description: '신고 253 3차 — 실제 배관(load_collected)으로 재현·같은 가게 다중 상품·광고 잔류(읽기 전용·업체명 미출력).'
+        required: false
+        default: 'off'
       ownerhint:
         description: '추정 업체 커버리지 — off(기본) / on. 보관 상품 중 몇 개에 추정 업체가 붙는지 서버 매칭 규칙으로 실측(읽기 전용·업체명 미출력).'
         required: false
@@ -2238,4 +2242,68 @@ jobs:
                                         AND checked_at >= datetime('now','localtime','-7 day')
                                       GROUP BY d ORDER BY d""", (KW,)):
                 print("  %s: %s~%s위" % (r["d"], r["mn"], r["mx"]))
+            PY
+
+      - name: 신고 253 3차 — 실제 배관으로 재현·같은 가게 다중 상품 (읽기 전용·업체명 미출력)
+        if: ${{ github.event.inputs.report253c == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 3m
+          script: |
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sys, sqlite3, re
+            sys.path.insert(0, "/app")
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            KW = "청귤"
+            from collector import load_collected
+            from naver_crawler import (find_product_rank_from_cache,
+                                       extract_product_id_from_url, extract_store_name_from_url)
+            url = conn.execute("SELECT naver_store_url FROM clients WHERE id=711").fetchone()[0]
+            tid = extract_product_id_from_url(url) or ""
+            tstore = (extract_store_name_from_url(url) or "").lower()
+
+            got = load_collected(KW)
+            prods = got["prods"] if got else []
+            print("== ① 실제 배관 재현 (오늘 수집분·정규화 후) ==")
+            r, pg, _ = find_product_rank_from_cache(KW, url, prods)
+            print("  기록 배관과 같은 함수 → %s위 (p%s) — 오늘 기록 56위와 %s" % (r, pg, "일치 ✅" if r == 56 else "불일치 ❌"))
+
+            print("\n== ② 같은 가게가 목록에 몇 자리인가 ==")
+            mine = [(p["rank"], ("동일상품" if tid and (tid == p["product_id"] or tid in p["product_url"]) else "다른상품"))
+                    for p in prods if tstore and tstore == (p["store_name"] or "").lower()]
+            print("  이 가게 상품 자리: %s" % (mine or "가게명 매칭 0 (슬러그·표기 다름일 수 있음)"))
+            # 가게명 말고 링크 슬러그로도
+            def slug(u):
+                m = re.search(r"smartstore\.naver\.com/([^/?]+)", u or "")
+                return (m.group(1).lower() if m else "")
+            ts = slug(url)
+            mine2 = [(p["rank"], ("동일상품" if tid and (tid == p["product_id"] or tid in p["product_url"]) else "다른상품"))
+                     for p in prods if ts and slug(p["product_url"]) == ts]
+            print("  링크 슬러그 기준: %s" % (mine2 or "0"))
+
+            print("\n== ③ 1~60위 구간의 링크 종류 (광고 잔류·카탈로그 비중) ==")
+            from collections import Counter
+            kinds = Counter(); ad = 0
+            for p in prods:
+                if not p["rank"] or p["rank"] > 60: continue
+                u = p["product_url"]
+                if "adcr" in u: ad += 1
+                kinds["smartstore" if "smartstore" in u else "brand" if "brand.naver" in u
+                      else "catalog" if ("/catalog/" in u or "cr.shopping" in u) else "기타"] += 1
+            print("  1~60위: %s · adcr 잔류 %d" % (dict(kinds), ad))
+
+            print("\n== ④ 날짜별 재계산 (실제 배관) vs 기록표 ==")
+            for row in conn.execute("""SELECT collected_date FROM collected_serp
+                                        WHERE keyword=? ORDER BY collected_date DESC LIMIT 6""", (KW,)):
+                d = row["collected_date"]
+                got2 = load_collected(KW, d)
+                r2, _, _ = find_product_rank_from_cache(KW, url, got2["prods"] if got2 else [])
+                rec = conn.execute("""SELECT rank_position FROM client_rank_history
+                                       WHERE keyword=? AND client_id=711 AND DATE(checked_at)=?
+                                       ORDER BY checked_at DESC LIMIT 1""", (KW, d)).fetchone()
+                print("  %s: 재계산 %s위 · 기록 %s위" % (d, r2, rec[0] if rec else "—"))
             PY
