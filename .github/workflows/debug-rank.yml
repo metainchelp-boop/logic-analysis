@@ -34,6 +34,10 @@ on:
         description: '신고 253 4차 — 광고 누수 지문: 기타 링크 실체·날짜별 구성·전 키워드 일제 하락 여부(읽기 전용·업체명 미출력).'
         required: false
         default: 'off'
+      report253e:
+        description: '신고 253 5차 — 담은 수 vs 네이버 총수 대조로 광고 거름 생사 판정(읽기 전용).'
+        required: false
+        default: 'off'
       ownerhint:
         description: '추정 업체 커버리지 — off(기본) / on. 보관 상품 중 몇 개에 추정 업체가 붙는지 서버 매칭 규칙으로 실측(읽기 전용·업체명 미출력).'
         required: false
@@ -2349,4 +2353,38 @@ jobs:
                                         AND checked_at >= '2026-08-18'
                                       GROUP BY d ORDER BY d"""):
                 print("  %s: %s건 · 평균 %s위" % (r["d"], r["n"], r["avg_r"]))
+            PY
+
+      - name: 신고 253 5차 — 담은 수 vs 네이버 총수 (읽기 전용·업체명 미출력)
+        if: ${{ github.event.inputs.report253e == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 3m
+          script: |
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sqlite3
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            # 광고는 네이버 '총 상품 수' 밖에서 끼어든다.
+            # 광고 거름이 죽었다면 총수가 작은 키워드에서 담은 수 > 총수 가 나온다.
+            for label, cond in (("오늘", "collected_date=DATE('now','localtime')"),
+                                ("8/25", "collected_date='2026-08-25'"),
+                                ("8/21", "collected_date='2026-08-21'")):
+                rows = conn.execute(f"""SELECT total, product_count FROM collected_serp
+                                         WHERE {cond} AND total > 0 AND total < 280""").fetchall()
+                n = len(rows)
+                over = [(r["total"], r["product_count"]) for r in rows if r["product_count"] > r["total"]]
+                under = sum(1 for r in rows if r["product_count"] < r["total"])
+                eq = sum(1 for r in rows if r["product_count"] == r["total"])
+                print("%s — 총수<280 키워드 %d개: 담은수>총수 %d개 · 같음 %d개 · 담은수<총수 %d개"
+                      % (label, n, len(over), eq, under))
+                for t, c in over[:6]:
+                    print("    초과 예: 총 %d → 담음 %d (+%d)" % (t, c, c - t))
+                # 담은수<총수 의 평균 부족분 = 광고+중복 제거로 빠진 몫의 짐작
+                gaps = [r["total"] - r["product_count"] for r in rows if r["product_count"] < r["total"]]
+                if gaps:
+                    print("    부족분 평균 %.1f개 (거른 광고+중복의 짐작치)" % (sum(gaps)/len(gaps)))
             PY
