@@ -9,6 +9,15 @@ const path = require('path');
 const vm = require('vm');
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'js', 'analysis.jsx'), 'utf8');
+const appSource = fs.readFileSync(path.join(__dirname, '..', 'js', 'components', 'App.jsx'), 'utf8');
+const analysisResultsSource = fs.readFileSync(
+  path.join(__dirname, '..', 'js', 'components', 'AnalysisResults.jsx'),
+  'utf8'
+);
+const seoDiagnosisSource = fs.readFileSync(
+  path.join(__dirname, '..', 'js', 'components', 'SeoDiagnosisSection.jsx'),
+  'utf8'
+);
 const context = {
   console,
   Promise,
@@ -53,7 +62,7 @@ function makeProducts(targetUrl) {
   })));
 }
 
-function runAnalysis(targetUrl, suppliedProducts) {
+function runAnalysis(targetUrl, suppliedProducts, capturedProductName) {
   const products = suppliedProducts || makeProducts(targetUrl);
   context.api = {
     post(endpoint) {
@@ -109,7 +118,9 @@ function runAnalysis(targetUrl, suppliedProducts) {
       setAuditStatus: noop,
     };
     try {
-      context.window.createDoSearch(deps)('방울양배추', targetUrl, '', '');
+      context.window.createDoSearch(deps)(
+        '방울양배추', targetUrl, '', '', capturedProductName || ''
+      );
     } catch (error) {
       reject(error);
     }
@@ -146,6 +157,50 @@ async function testBrandStoreProductIdStillWinsBeforeStoreFallback() {
 
   const result = await runAnalysis(url, products);
   assert.strictEqual(result.targetProductInfo.product_name, '신고 대상 정확 상품');
+  assert.strictEqual(result.seoDetail.trustworthy.items[0].pass, true);
+  assert.strictEqual(result.seoDetail.trustworthy.items[3].pass, true);
+
+  const directBrandProducts = products.map((product) => product.product_id === '9864738770'
+    ? { ...product, product_url: url }
+    : product);
+  const directBrand = await runAnalysis(url, directBrandProducts);
+  const catalogRow = result.competitorTable.find((row) => row.name === '신고 대상 정확 상품');
+  const directRow = directBrand.competitorTable.find((row) => row.name === '신고 대상 정확 상품');
+  assert.strictEqual(result.detailPageQuality.totalScore, directBrand.detailPageQuality.totalScore);
+  assert.strictEqual(catalogRow.seoScore, directRow.seoScore);
+}
+
+async function testProductIdWinsBeforeUntrustedUrlSubstringMatch() {
+  const url = 'https://brand.naver.com/vayapet/products/9864738770';
+  const products = [
+    {
+      rank: 1,
+      product_id: '1111111111',
+      product_url: `https://mall.example/redirect?next=${url}`,
+      product_name: '문자열만 포함한 다른 상품',
+      store_name: '다른 판매처',
+      price: 9900,
+      brand: '다른 브랜드',
+      category1: '생활/건강',
+      category2: '반려동물',
+      image_url: '',
+    },
+    {
+      rank: 2,
+      product_id: '9864738770',
+      product_url: 'https://search.shopping.naver.com/main/products/9864738770',
+      product_name: '정확한 상품 ID 대상',
+      store_name: '바야 프리미엄 펫푸드',
+      price: 12300,
+      brand: '바야',
+      category1: '생활/건강',
+      category2: '반려동물',
+      image_url: '',
+    },
+  ];
+
+  const result = await runAnalysis(url, products);
+  assert.strictEqual(result.targetProductInfo.product_name, '정확한 상품 ID 대상');
 }
 
 async function testBrandStoreSlugFallbackWorksAfterProductIdMiss() {
@@ -181,13 +236,165 @@ async function testUnrelatedHostContainingSmartstoreTextGetsNoNaverStoreCredit()
   assert.strictEqual(result.seoDetail.trustworthy.items[3].pass, false);
 }
 
+async function testCapturedProductNameSurvivesExtensionBridgeAndMatchingFailure() {
+  assert.match(
+    appSource,
+    /extSearchRef\.current\([\s\S]{0,220}String\(p\.product_name \|\| ''\)/
+  );
+  assert.match(
+    appSource,
+    /handleHomeSearch\(kw, url, undefined, html, productName\)/
+  );
+
+  const result = await runAnalysis(
+    'https://brand.naver.com/vayapet/products/9864738770',
+    [{
+      rank: 1,
+      product_id: '1111111111',
+      product_url: 'https://mall.example/products/1111111111',
+      product_name: '검색 결과의 다른 상품',
+      store_name: '다른 판매처',
+      price: 10000,
+      brand: '다른 브랜드',
+      category1: '생활/건강',
+      category2: '반려동물',
+      image_url: '',
+    }],
+    '캡처에서 확보한 브랜드 상품명'
+  );
+
+  assert.strictEqual(result.targetProductInfo.product_name, '캡처에서 확보한 브랜드 상품명');
+  assert.strictEqual(result.productNameOpt.currentName, '캡처에서 확보한 브랜드 상품명');
+  assert.strictEqual(result.seoDetail.trustworthy.items[0].pass, true);
+  assert.strictEqual(result.seoDetail.trustworthy.items[3].pass, true);
+  const priceScore = result.detailPageQuality.scoreBars.find(
+    (row) => row.label === '가격 경쟁력'
+  );
+  assert.strictEqual(priceScore.score, 0, '미확인 0원을 저렴한 가격으로 채점하면 안 된다');
+}
+
+async function testCapturedHtmlMeasurementsOverrideIncompleteSearchFallback() {
+  const fallback = {
+    product_name: '동결건조 강아지 간식 : 바야 프리미엄 펫푸드',
+    price: 0,
+    brand: '',
+    store_name: 'vayapet',
+    category1: '',
+    category2: '',
+    image_url: '',
+  };
+  const merged = context.window.mergeSeoCachedProductInfo(
+    fallback,
+    '동결건조 강아지 간식',
+    {
+      price: 12300,
+      category: '생활/건강>반려동물>강아지 간식>동결건조 간식',
+      category1: '생활/건강',
+      reviewCount: 540,
+      rating: 4.88,
+    }
+  );
+
+  assert.strictEqual(merged.product_name, '동결건조 강아지 간식');
+  assert.strictEqual(merged.price, 12300);
+  assert.strictEqual(merged.category1, '생활/건강');
+  assert.strictEqual(merged.category2, '반려동물');
+  assert.doesNotMatch(merged.product_name, / : /);
+  assert.match(seoDiagnosisSource, /buildSeoAnalysisBody/);
+}
+
+async function testParsedBrandNameWinsOverOgTitleSuffixInRenderedConsumers() {
+  assert.match(
+    analysisResultsSource,
+    /htmlDetailResult[\s\S]{0,180}productName[\s\S]{0,260}targetProductInfo/
+  );
+  assert.match(
+    analysisResultsSource,
+    /cachedProductName:\s*_resolvedProductName/
+  );
+  assert.match(
+    analysisResultsSource,
+    /cachedProductInfo:\s*_resolvedProductInfo/
+  );
+  const htmlNamePos = analysisResultsSource.indexOf('htmlDetailResult && htmlDetailResult.productName');
+  const targetNamePos = analysisResultsSource.indexOf('analysisData && analysisData.targetProductInfo && analysisData.targetProductInfo.product_name');
+  const advertiserNamePos = analysisResultsSource.indexOf('advertiserReport && advertiserReport.product_info && advertiserReport.product_info.product_name');
+  assert.ok(htmlNamePos >= 0 && targetNamePos > htmlNamePos && advertiserNamePos > targetNamePos);
+}
+
+async function testEmptyShoppingResultStillKeepsCapturedBrandMeasurementsUsable() {
+  const result = await runAnalysis(
+    'https://brand.naver.com/vayapet/products/9864738770',
+    [],
+    '동결건조 강아지 간식'
+  );
+  assert.strictEqual(result.targetProductInfo.product_name, '동결건조 강아지 간식');
+  const merged = context.window.mergeSeoCachedProductInfo(
+    result.targetProductInfo,
+    '동결건조 강아지 간식',
+    {
+      price: 12300,
+      category: '생활/건강>반려동물>강아지 간식',
+      category1: '생활/건강',
+    }
+  );
+  assert.strictEqual(merged.price, 12300);
+  assert.strictEqual(merged.category2, '반려동물');
+  assert.match(source, /setShopProducts\(prods\)/);
+  assert.match(source, /Array\.isArray\(data\.shopProducts\)/);
+  assert.match(analysisResultsSource, /var _resolvedCachedRank/);
+  assert.match(analysisResultsSource, /Array\.isArray\(shopProducts\)[\s\S]{0,120}\? 0/);
+  assert.match(
+    seoDiagnosisSource,
+    /\[keyword, productUrl,[^\]]*loading[^\]]*htmlReviewData\]/
+  );
+
+  const withoutMeasurements = context.window.canAutoRunSeoDiagnosis({
+    keyword: '방울양배추',
+    productUrl: 'https://brand.naver.com/vayapet/products/9864738770',
+    loading: false,
+    cachedProductName: '동결건조 강아지 간식',
+    shopProducts: [],
+    htmlReviewData: null,
+  });
+  assert.strictEqual(withoutMeasurements, false);
+
+  const exactRequest = context.window.buildSeoAnalysisBody({
+    productUrl: 'https://brand.naver.com/vayapet/products/9864738770',
+    keyword: '방울양배추',
+    cachedRank: 0,
+    cachedProductName: '동결건조 강아지 간식',
+    cachedProductInfo: result.targetProductInfo,
+    cachedTotalVolume: 1000,
+    shopProducts: [],
+    htmlReviewData: {
+      price: 12300,
+      category: '생활/건강>반려동물>강아지 간식',
+      category1: '생활/건강',
+      reviewCount: 540,
+      rating: 4.88,
+    },
+  });
+  assert.strictEqual(exactRequest.cached_rank, 0);
+  assert.strictEqual(exactRequest.cached_product_info.price, 12300);
+  assert.strictEqual(exactRequest.cached_product_info.category2, '반려동물');
+  assert.strictEqual(exactRequest.cached_review_count, 540);
+  assert.strictEqual(exactRequest.cached_rating, 4.88);
+  assert.deepStrictEqual(exactRequest.cached_competitors, []);
+}
+
 const tests = [
   testBrandStoreUsesSameNaverStorePolicyAsSmartstore,
   testBrandStoreProductIdStillWinsBeforeStoreFallback,
+  testProductIdWinsBeforeUntrustedUrlSubstringMatch,
   testBrandStoreSlugFallbackWorksAfterProductIdMiss,
   testMobileBrandStoreAlsoUsesNaverStorePolicy,
   testMobileSmartstoreKeepsExistingNaverStorePolicy,
   testUnrelatedHostContainingSmartstoreTextGetsNoNaverStoreCredit,
+  testCapturedProductNameSurvivesExtensionBridgeAndMatchingFailure,
+  testCapturedHtmlMeasurementsOverrideIncompleteSearchFallback,
+  testParsedBrandNameWinsOverOgTitleSuffixInRenderedConsumers,
+  testEmptyShoppingResultStillKeepsCapturedBrandMeasurementsUsable,
 ];
 (async () => {
   let failed = 0;

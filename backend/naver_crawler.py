@@ -2024,6 +2024,9 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
     # ── 0. __NEXT_DATA__에서 단가·카테고리 직접 추출 (크롤 없이 단가·데이터랩 카테고리 공급) ──
     nd_price, nd_cat, nd_cat1 = 0, "", ""
     brand_product = _extract_brand_store_product(html)
+    captured_product_name = str(
+        brand_product.get("name") or brand_product.get("productName") or ""
+    ).strip()
     try:
         import json as _json
         _m = re.search(r'<script\s+id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.DOTALL)
@@ -2233,9 +2236,13 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
                     product_info = state.get("product", {})
             review_amount = product_info.get("reviewAmount") or {}
             if actual_review_count is None:
-                rc = (review_amount.get("totalReviewCount")
-                      or product_info.get("reviewCount")
-                      or product_info.get("totalReviewCount"))
+                rc = next((
+                    value for value in (
+                        review_amount.get("totalReviewCount"),
+                        product_info.get("reviewCount"),
+                        product_info.get("totalReviewCount"),
+                    ) if value is not None
+                ), None)
                 if rc is not None:
                     actual_review_count = int(rc)
             if actual_rating is None:
@@ -2596,6 +2603,7 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
         },
         "scores": scores,
         "suggestions": suggestions,
+        "productName": captured_product_name,
         "reviewData": review_data,
         # 표시용 스토어/상호명 (슬러그 오표기 방지 — 2026-07-27). 실패 시 name=""
         "storeInfo": extract_store_display_name(html, product_url),

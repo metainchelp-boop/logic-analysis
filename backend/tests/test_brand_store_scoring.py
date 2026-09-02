@@ -48,7 +48,13 @@ except ModuleNotFoundError:
     })
 
 
-from main import SeoAnalysisRequest, seo_analyze  # noqa: E402
+from main import (  # noqa: E402
+    DetailPageAnalysisRequest,
+    SeoAnalysisRequest,
+    detail_page_analyze,
+    seo_analyze,
+)
+import main as main_module  # noqa: E402
 
 
 def _analyze(url):
@@ -190,6 +196,71 @@ def test_exact_product_id_wins_before_same_store_fallback():
     result = seo_analyze(req, current_user={"id": 1})["data"]
     assert result["product_info"]["product_name"] == "신고 대상 정확 상품"
     assert result["product_info"]["price"] == 12300
+
+
+def test_detail_page_api_exposes_captured_brand_product_name():
+    html = r'''
+        <html><body><div class="product-detail">상품 상세</div><script>
+        window.__PRELOADED_STATE__={
+          "simpleProductForDetailPage":{
+            "id":9864738770,
+            "name":"캡처에서 확보한 브랜드 상품명",
+            "salePrice":12300,
+            "reviewAmount":{"totalReviewCount":540,"averageReviewScore":4.88}
+          }
+        };
+        </script></body></html>
+    '''
+    response = detail_page_analyze(
+        DetailPageAnalysisRequest(
+            html=html,
+            product_url="https://brand.naver.com/vayapet/products/9864738770",
+        ),
+        current_user={"id": 1},
+    )
+
+    assert response["success"] is True
+    assert response["data"]["productName"] == "캡처에서 확보한 브랜드 상품명"
+
+
+def test_captured_measurements_with_empty_search_are_neutral_and_do_not_recrawl():
+    """성공적인 0건 검색은 재수집 대상이 아니며, 경쟁상품 없음은 실측값 실패가 아니다."""
+    original_crawl = main_module._shared_crawl
+    main_module._shared_crawl = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("cached_rank=0에서는 순위를 다시 수집하면 안 된다")
+    )
+    try:
+        response = seo_analyze(
+            SeoAnalysisRequest(
+                product_url="https://brand.naver.com/vayapet/products/9864738770",
+                keyword="방울양배추",
+                cached_rank=0,
+                cached_product_name="og 폴백 상품명",
+                cached_product_info={
+                    "product_name": "PRELOADED 실제 상품명",
+                    "price": 12300,
+                    "category1": "생활/건강",
+                    "category2": "반려동물",
+                    "store_name": "바야 프리미엄 펫푸드",
+                },
+                cached_competitors=[],
+                cached_total_volume=1000,
+                cached_review_count=540,
+                cached_rating=4.88,
+            ),
+            current_user={"id": 1},
+        )["data"]
+    finally:
+        main_module._shared_crawl = original_crawl
+
+    assert response["product_info"]["product_name"] == "PRELOADED 실제 상품명"
+    assert response["scores"]["price"] == 50
+    assert response["scores"]["category"] == 50
+    assert response["data_quality"]["review_count"]["status"] == "measured"
+    assert response["data_quality"]["review_count"]["sources"] == ["html_capture"]
+    assert response["data_quality"]["rating"]["status"] == "measured"
+    assert response["data_quality"]["rating"]["sources"] == ["html_capture"]
+    assert response["data_quality"]["price"]["sources"] == ["cached_product_info"]
 
 
 if __name__ == "__main__":

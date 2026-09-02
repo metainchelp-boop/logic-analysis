@@ -25,11 +25,18 @@
   }
 
   function productName() {
+    function withoutStoreSuffix(value) {
+      var name = String(value || '').trim();
+      var host = String((location && location.hostname) || '').toLowerCase();
+      if (host !== 'brand.naver.com' && host !== 'm.brand.naver.com') return name;
+      var separator = name.lastIndexOf(' : ');
+      return separator > 0 ? name.slice(0, separator).trim() : name;
+    }
     try {
       var og = document.querySelector('meta[property="og:title"]');
-      if (og && og.content) return og.content.trim();
+      if (og && og.content) return withoutStoreSuffix(og.content);
     } catch (e) {}
-    return (document.title || '').trim();
+    return withoutStoreSuffix(document.title);
   }
 
   function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }

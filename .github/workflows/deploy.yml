@@ -64,8 +64,10 @@ jobs:
 
       - name: Run backend regression tests
         run: |
-          pip install --quiet beautifulsoup4 requests
+          pip install --quiet -r backend/requirements.txt
           python backend/tests/test_analysis_regression.py
+          python backend/tests/test_brand_store_parser.py
+          python backend/tests/test_brand_store_scoring.py
 
       # 프론트 번들 자동 빌드 — .jsx 수정 시 번들 재생성을 깜빡해도 항상 최신으로 배포.
       # (실패해도 이후 SCP/재시작 단계 전이라 라이브에는 영향 없음 — 무중단)
@@ -77,6 +79,8 @@ jobs:
       - name: Build frontend bundle
         run: |
           npm install --no-save @babel/core @babel/preset-react
+          node frontend/tests/test_brand_store_parity.js
+          node extension/tests/brand-store-support.test.js
           node frontend/build.js
 
       - name: Deploy frontend to VPS

@@ -6,7 +6,7 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl:
     const [loading, setLoading] = useState(false);
 
     const autoTriggered = useRef(false);
-    const ranWithReview = useRef(false); // HTML 실측 리뷰 반영해 재실행했는지
+    const ranWithHtmlMeasurements = useRef(false); // HTML 실측값 반영해 재실행했는지
     // shopProducts ref — React 17 Promise 내 setState 비배치 문제 방지
     // useEffect 실행 시점에 shopProducts prop이 아직 null일 수 있으므로 ref로 최신값 보장
     const shopProductsRef = useRef(shopProducts);
@@ -18,7 +18,7 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl:
 
     useEffect(function() {
         autoTriggered.current = false;
-        ranWithReview.current = false;
+        ranWithHtmlMeasurements.current = false;
         setResult(null);
     }, [keyword, parentProductUrl]);
 
@@ -26,41 +26,43 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({ keyword, productUrl:
     // shopProducts를 deps에 포함하여 데이터 도착 후 재시도 보장.
     // 추가: HTML 실측 리뷰가 SEO 분석 후 늦게 도착하면 실측을 반영해 1회 재실행(리뷰 병목 모순 제거).
     useEffect(function() {
-        var canRun = keyword && productUrl && !loading
-            && (cachedRank || cachedProductName || cachedTotalVolume || cachedProductInfo)
-            && shopProducts && shopProducts.length > 0;
+        var canRun = window.canAutoRunSeoDiagnosis({
+            keyword: keyword,
+            productUrl: productUrl,
+            loading: loading,
+            cachedRank: cachedRank,
+            cachedProductName: cachedProductName,
+            cachedTotalVolume: cachedTotalVolume,
+            cachedProductInfo: cachedProductInfo,
+            shopProducts: shopProducts,
+            htmlReviewData: htmlReviewData
+        });
         if (!canRun) return;
-        var hasReview = htmlReviewData && htmlReviewData.reviewCount != null;
+        var hasHtmlMeasurements = window.hasSeoHtmlMeasurements(htmlReviewData);
         if (!autoTriggered.current && !result) {
             autoTriggered.current = true;
-            ranWithReview.current = hasReview;
+            ranWithHtmlMeasurements.current = hasHtmlMeasurements;
             handleAnalyze();
-        } else if (hasReview && !ranWithReview.current) {
-            ranWithReview.current = true;
+        } else if (hasHtmlMeasurements && !ranWithHtmlMeasurements.current) {
+            ranWithHtmlMeasurements.current = true;
             handleAnalyze();
         }
-    }, [keyword, productUrl, cachedRank, cachedProductName, cachedTotalVolume, cachedProductInfo, shopProducts, htmlReviewData]);
+    }, [keyword, productUrl, cachedRank, cachedProductName, cachedTotalVolume, cachedProductInfo, shopProducts, loading, htmlReviewData]);
 
     const handleAnalyze = async () => {
         if (!productUrl || !keyword) return;
         setLoading(true);
         try {
-            var seoBody = { product_url: productUrl, keyword: keyword };
-            // 메인 분석 데이터 재활용 → 네이버 API 중복 호출 방지
-            if (cachedRank != null) seoBody.cached_rank = cachedRank;
-            if (cachedProductName) seoBody.cached_product_name = cachedProductName;
-            if (cachedTotalVolume != null) seoBody.cached_total_volume = cachedTotalVolume;
-            if (cachedProductInfo) seoBody.cached_product_info = cachedProductInfo;
-            // HTML 실측 리뷰/평점 → SEO 진단이 순위 추정 대신 실측 사용(리뷰 병목 모순 제거)
-            if (htmlReviewData && htmlReviewData.reviewCount != null) seoBody.cached_review_count = htmlReviewData.reviewCount;
-            if (htmlReviewData && htmlReviewData.rating != null) seoBody.cached_rating = htmlReviewData.rating;
-            // shopProducts에서 competitor 정보 추출 (ref로 최신값 읽기)
-            var currentShopProducts = shopProductsRef.current;
-            if (currentShopProducts && currentShopProducts.length > 0) {
-                seoBody.cached_competitors = currentShopProducts.slice(0, 80).map(function(p) {
-                    return { product_id: p.product_id || '', product_name: p.product_name, price: p.price, store_name: p.store_name, brand: p.brand, category1: p.category1, category2: p.category2, product_url: p.product_url };
-                });
-            }
+            var seoBody = window.buildSeoAnalysisBody({
+                productUrl: productUrl,
+                keyword: keyword,
+                cachedRank: cachedRank,
+                cachedProductName: cachedProductName,
+                cachedTotalVolume: cachedTotalVolume,
+                cachedProductInfo: cachedProductInfo,
+                shopProducts: shopProductsRef.current,
+                htmlReviewData: htmlReviewData
+            });
             const res = await api.post('/seo/analyze', seoBody);
             if (res.success) setResult(res.data);
             else toast.warn(res.detail || 'SEO 분석 데이터 일부를 가져오지 못했습니다.');

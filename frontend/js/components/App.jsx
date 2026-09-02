@@ -140,7 +140,12 @@ window.App = function App() {
             try { toast.success('🧩 확장 수신: 상품 HTML ' + Math.round(html.length / 1024) + 'KB'); } catch (e) {}
             var kw = String(p.keyword || '').trim();
             if (kw && extSearchRef.current) {
-                extSearchRef.current(kw, String(p.product_url || ''), html);   // 분석 자동 시작
+                extSearchRef.current(
+                    kw,
+                    String(p.product_url || ''),
+                    html,
+                    String(p.product_name || '')
+                );   // 분석 자동 시작 — 캡처 상품명도 점수/보고서 폴백으로 보존
             } else {
                 setSearchBarInitial({ keyword: kw, companyName: String(p.product_name || ''), html: html, productUrl: String(p.product_url || '') });
                 setCurrentPage('home');
@@ -296,7 +301,7 @@ window.App = function App() {
     };
 
     // 통합 검색 (htmlInput: 검색바에서 입력된 HTML — 상세페이지 분석 + 리뷰 추출에 사용)
-    var handleSearch = function(keyword, productUrl, inputCompanyName, htmlInput) {
+    var handleSearch = function(keyword, productUrl, inputCompanyName, htmlInput, capturedProductName) {
         // Viewer 일일 분석 횟수 체크 (백엔드 연동)
         if (currentUser && currentUser.role === 'viewer') {
             api.get('/cd/usage/check').then(function(usageRes) {
@@ -310,18 +315,18 @@ window.App = function App() {
                 }
                 // 제한 내 → 카운트 증가 후 실제 분석 실행
                 api.post('/cd/usage/increment').then(function() {
-                    _doSearch(keyword, productUrl, inputCompanyName, htmlInput);
+                    _doSearch(keyword, productUrl, inputCompanyName, htmlInput, capturedProductName);
                 }).catch(function() {
-                    _doSearch(keyword, productUrl, inputCompanyName, htmlInput);
+                    _doSearch(keyword, productUrl, inputCompanyName, htmlInput, capturedProductName);
                 });
             }).catch(function() {
-                _doSearch(keyword, productUrl, inputCompanyName, htmlInput);
+                _doSearch(keyword, productUrl, inputCompanyName, htmlInput, capturedProductName);
             });
             return;
         }
         // 관리자/매니저도 수동 분석 카운팅
         api.post('/cd/usage/increment').catch(function() {});
-        _doSearch(keyword, productUrl, inputCompanyName, htmlInput);
+        _doSearch(keyword, productUrl, inputCompanyName, htmlInput, capturedProductName);
     };
 
     var _doSearch = window.createDoSearch({
@@ -476,14 +481,16 @@ window.App = function App() {
 
 
     /* ==================== 홈에서 검색 시 분석 탭으로 전환하는 핸들러 ==================== */
-    var handleHomeSearch = function(keyword, productUrl, inputCompanyName, htmlInput) {
+    var handleHomeSearch = function(keyword, productUrl, inputCompanyName, htmlInput, capturedProductName) {
         setCurrentClientId(null);
         setAutoSaveStatus('');
         setCurrentPage('analysis');
-        handleSearch(keyword, productUrl, inputCompanyName, htmlInput);
+        handleSearch(keyword, productUrl, inputCompanyName, htmlInput, capturedProductName);
     };
     // 크롬 확장 브리지에서 자동 분석 시작에 사용(최신 클로저 유지)
-    extSearchRef.current = function(kw, url, html) { handleHomeSearch(kw, url, undefined, html); };
+    extSearchRef.current = function(kw, url, html, productName) {
+        handleHomeSearch(kw, url, undefined, html, productName);
+    };
 
     /* ==================== 페이지별 콘텐츠 렌더링 ==================== */
 

@@ -26,6 +26,30 @@ window.AnalysisResults = function AnalysisResults(props) {
     var shopProducts = props.shopProducts;
     var volumeData = props.volumeData;
 
+    // 상세 HTML 파서는 og:title의 스토어 접미사를 제거한 실제 상품명을 제공한다.
+    // 검색결과 매칭 실패 시 캡처 폴백보다 이를 우선하고, HTML 실측 가격·카테고리를
+    // SEO 캐시에 합쳐 0원/미분류 값이 진단을 고정하지 않게 한다.
+    var _resolvedProductName =
+        (htmlDetailResult && htmlDetailResult.productName) ||
+        (analysisData && analysisData.targetProductInfo && analysisData.targetProductInfo.product_name) ||
+        (advertiserReport && advertiserReport.product_info && advertiserReport.product_info.product_name) ||
+        (advertiserReport && advertiserReport.product_name) ||
+        '';
+    var _resolvedProductInfo = window.mergeSeoCachedProductInfo
+        ? window.mergeSeoCachedProductInfo(
+            analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo : null,
+            _resolvedProductName,
+            htmlReviewData
+        )
+        : (analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo : null);
+    var _resolvedCachedRank = Array.isArray(shopProducts) ? 0 : null;
+    if (analysisData && analysisData.seoDetail && analysisData.seoDetail.popularity) {
+        var _rankItem = analysisData.seoDetail.popularity.items && analysisData.seoDetail.popularity.items[0];
+        var _rankLabel = _rankItem && _rankItem.label ? String(_rankItem.label) : '';
+        var _rankMatch = _rankLabel.match(/(\d+)위/);
+        if (_rankMatch) _resolvedCachedRank = parseInt(_rankMatch[1], 10);
+    }
+
     /* 광고주/스토어명 자동 채우기 (2026-07-27 수정)
        주의: 백엔드 store_name 은 쇼핑API 매칭·상품페이지 방문이 모두 실패하면
        'URL 슬러그'가 그대로 담긴다. 슬러그가 이메일 아이디인 업체가 있어 표지에
@@ -309,7 +333,7 @@ window.AnalysisResults = function AnalysisResults(props) {
                    추적 상품 목록·등록 관리만 📊 키워드 순위 탭으로 분리(2026-08-04, 직원 신고로
                    노출 분석 블록은 복구 — 탭 분리 대상은 '추적 현황 열람'이지 분석 결과가 아님). */
                 React.createElement(window.SectionErrorBoundary, { name: '순위 추적' },
-                    React.createElement(RankTrackingSection, { analysisOnly: true, onOpenRankTab: props.onOpenRankTab, products: products, refreshProducts: loadProducts, searchedKeyword: searchedKeyword, searchedProductUrl: searchedProductUrl, cachedProductName: (advertiserReport && advertiserReport.product_info && advertiserReport.product_info.product_name) ? advertiserReport.product_info.product_name : ((advertiserReport && advertiserReport.product_name) ? advertiserReport.product_name : (analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo.product_name : null)), relatedKeywords: (relatedData ? (relatedData.golden_keywords || []).concat(relatedData.related_keywords || []).map(function(k) { return typeof k === 'string' ? k : (k && k.keyword) || ''; }).filter(Boolean) : []), onNavigateToClient: handleNavigateToClient, canEdit: currentUser.role !== 'viewer', onRankResult: setRankCheckResult })
+                    React.createElement(RankTrackingSection, { analysisOnly: true, onOpenRankTab: props.onOpenRankTab, products: products, refreshProducts: loadProducts, searchedKeyword: searchedKeyword, searchedProductUrl: searchedProductUrl, cachedProductName: _resolvedProductName, relatedKeywords: (relatedData ? (relatedData.golden_keywords || []).concat(relatedData.related_keywords || []).map(function(k) { return typeof k === 'string' ? k : (k && k.keyword) || ''; }).filter(Boolean) : []), onNavigateToClient: handleNavigateToClient, canEdit: currentUser.role !== 'viewer', onRankResult: setRankCheckResult })
                 ),
 
                 /* 분석 상품 순위추적 원클릭 등록 */
@@ -354,14 +378,10 @@ window.AnalysisResults = function AnalysisResults(props) {
                         keyword: searchedKeyword,
                         productUrl: searchedProductUrl,
                         competitorData: analysisData && analysisData.competitorTable,
-                        cachedRank: analysisData && analysisData.seoDetail ? (analysisData.seoDetail.popularity.items[0].pass !== undefined ? (function() {
-                            var rankText = analysisData.seoDetail.popularity.items[0].label;
-                            var m = rankText.match(/(\d+)위/);
-                            return m ? parseInt(m[1]) : null;
-                        })() : null) : null,
-                        cachedProductName: (advertiserReport && advertiserReport.product_info && advertiserReport.product_info.product_name) ? advertiserReport.product_info.product_name : ((advertiserReport && advertiserReport.product_name) ? advertiserReport.product_name : (analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo.product_name : null)),
+                        cachedRank: _resolvedCachedRank,
+                        cachedProductName: _resolvedProductName,
                         cachedTotalVolume: volumeData && volumeData[0] ? ((volumeData[0].monthlyPcQcCnt || 0) + (volumeData[0].monthlyMobileQcCnt || 0)) : null,
-                        cachedProductInfo: analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo : null,
+                        cachedProductInfo: _resolvedProductInfo,
                         shopProducts: shopProducts,
                         htmlReviewData: htmlReviewData
                     })

@@ -137,6 +137,30 @@ function runProductContentScript(rawUrl) {
   return elements.has('metainc-logic-fab');
 }
 
+function readCapturedProductName(ogTitle, documentTitle, hostname) {
+  const start = productContentSource.indexOf('  function productName() {');
+  const end = productContentSource.indexOf('\n\n  function sleep', start);
+  assert.notEqual(start, -1, 'productName helper not found');
+  assert.notEqual(end, -1, 'productName helper end not found');
+  const helperSource = productContentSource.slice(start, end);
+  const context = {
+    document: {
+      title: documentTitle || '',
+      querySelector: function () {
+        return ogTitle == null ? null : { content: ogTitle };
+      }
+    },
+    location: { hostname: hostname || 'brand.naver.com' },
+    capturedName: ''
+  };
+  vm.runInNewContext(
+    `${helperSource}\n capturedName = productName();`,
+    context,
+    { filename: 'extension/content-smartstore-product-name.js' }
+  );
+  return context.capturedName;
+}
+
 test('supported Naver Store hosts receive the product-page content script', function () {
   const supportedMatches = [
     'https://smartstore.naver.com/*',
@@ -218,4 +242,26 @@ test('supported product pages preserve the existing popup-to-capture trigger', f
   assert.equal(elements.sentMessages[0].tabId, 246);
   assert.equal(elements.sentMessages[0].message.type, 'METAINC_TRIGGER');
   assert.equal(elements.getCloseCount(), 1);
+});
+
+test('captured product name removes the Naver Store title suffix', function () {
+  assert.equal(
+    readCapturedProductName(
+      '동결건조 강아지 간식 : 바야 프리미엄 펫푸드',
+      '무시되어야 할 문서 제목'
+    ),
+    '동결건조 강아지 간식'
+  );
+  assert.equal(
+    readCapturedProductName(null, '대체 상품명 : 대체 스토어'),
+    '대체 상품명'
+  );
+  assert.equal(
+    readCapturedProductName(
+      '기존 스마트스토어 상품 : 기존 판매처',
+      '',
+      'smartstore.naver.com'
+    ),
+    '기존 스마트스토어 상품 : 기존 판매처'
+  );
 });

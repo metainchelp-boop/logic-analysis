@@ -126,7 +126,33 @@ def test_brand_store_preloaded_detail_data():
     assert review.get("category1") == "생활/건강", review
     assert review.get("reviewCount") == 540, review
     assert review.get("rating") == 4.88, review
+    assert result.get("productName") == "바야 강아지 방울양배추 35g 동결건조 야채 비건 트릿 강아지 애견 간식"
     assert (result.get("storeInfo") or {}).get("name") == "Vaya", result.get("storeInfo")
+
+
+def test_brand_store_zero_review_count_is_preserved():
+    """리뷰가 아직 없는 신규 브랜드 상품은 미확인이 아니라 정확한 0건이다."""
+    html = r'''
+        <!DOCTYPE html><html><head></head><body>
+        <div class="product-detail">신규 상품 상세</div>
+        <script>
+        window.__PRELOADED_STATE__={
+          "simpleProductForDetailPage":{
+            "id":9864738771,
+            "name":"신규 브랜드 상품",
+            "salePrice":10000,
+            "reviewAmount":{"totalReviewCount":0,"averageReviewScore":0}
+          }
+        };
+        </script></body></html>
+    '''
+
+    result = nc.analyze_detail_page(
+        html,
+        "https://brand.naver.com/vayapet/products/9864738771",
+    )
+    review = (result or {}).get("reviewData") or {}
+    assert review.get("reviewCount") == 0, review
 
 
 def test_smartstore_next_data_detail_data_unchanged():

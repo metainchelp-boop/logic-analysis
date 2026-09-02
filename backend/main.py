@@ -1382,6 +1382,7 @@ def detail_page_analyze(req: DetailPageAnalysisRequest, current_user: dict = Dep
                 "metrics": result["metrics"],
                 "scores": result["scores"],
                 "suggestions": result["suggestions"],
+                "productName": result.get("productName") or "",
                 "reviewData": result.get("reviewData"),
                 # 표시용 스토어/상호명 — 보고서 표지의 슬러그 오표기 방지(2026-07-27)
                 "storeInfo": result.get("storeInfo") or {"name": "", "source": ""},
@@ -2818,7 +2819,9 @@ def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_curren
             except Exception as e:
                 logger.warning(f"get_product_info 실패 (빈 값 사용): {e}")
                 product_info = {}
-        product_name = req.cached_product_name or product_info.get("product_name", "")
+        # 구조화된 cached_product_info의 canonical 상품명을 우선한다. 별도 문자열 폴백은
+        # 과거 og:title처럼 판매처 접미사가 섞일 수 있어 정보 객체가 비었을 때만 사용한다.
+        product_name = product_info.get("product_name", "") or req.cached_product_name or ""
         product_url = req.product_url or ""
 
         if req.cached_rank is not None:
@@ -2901,6 +2904,10 @@ def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_curren
                 price_score = 40
             else:
                 price_score = 20
+        elif my_price > 0:
+            # 판매가는 실측됐지만 비교군이 없는 경우다. 0점(가격 누락)으로 오인하지 않고
+            # 카테고리의 비교 불가 정책과 같은 중립값을 사용한다.
+            price_score = 50
 
         # 3. 검색 순위 (15%)
         rank_score = 0
@@ -3137,17 +3144,28 @@ def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_curren
         if not suggestions:
             suggestions.append("전반적으로 양호합니다! 리뷰 확보와 찜 유도에 집중하세요.")
 
-        # ── 데이터 신뢰 등급: 실측(스마트스토어 API) vs 추정(순위 기반)을 구분해 부착(부가 필드) ──
+        # ── 데이터 신뢰 등급: HTML/API 실측 vs 순위 기반 추정을 구분해 부착(부가 필드) ──
         import data_quality as dq
-        _rev_measured = (review_source == "api")
+        _rev_measured = review_source in ("api", "actual")
+        _review_sources = (
+            ["smartstore_api"] if review_source == "api"
+            else ["html_capture"] if review_source == "actual"
+            else ["rank_based"]
+        )
+        _rating_measured = _rev_measured and actual_rating is not None
+        _price_sources = (
+            ["cached_product_info"] if req.cached_product_info and my_price
+            else ["crawl"] if my_price
+            else []
+        )
         data_quality = {
             "review_count": dq.metric(est_reviews, dq.MEASURED if _rev_measured else dq.ESTIMATED,
-                                      sources=["smartstore_api"] if _rev_measured else ["rank_based"]),
-            "rating": dq.metric(est_rating, dq.MEASURED if (_rev_measured and est_rating) else dq.ESTIMATED,
-                                sources=["smartstore_api"] if _rev_measured else ["rank_based"]),
+                                      sources=_review_sources),
+            "rating": dq.metric(est_rating, dq.MEASURED if _rating_measured else dq.ESTIMATED,
+                                sources=_review_sources if _rating_measured else ["rank_based"]),
             "monthly_sales": dq.metric(est_monthly_sales, dq.ESTIMATED, sources=["volume_ctr_model"]),
             "price": dq.metric((my_price or None), dq.status_from_presence(my_price or None),
-                               sources=["crawl"] if my_price else []),
+                               sources=_price_sources),
         }
 
         return {

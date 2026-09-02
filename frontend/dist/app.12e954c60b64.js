@@ -6197,7 +6197,7 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const autoTriggered = useRef(false);
-  const ranWithReview = useRef(false); // HTML 실측 리뷰 반영해 재실행했는지
+  const ranWithHtmlMeasurements = useRef(false); // HTML 실측값 반영해 재실행했는지
   // shopProducts ref — React 17 Promise 내 setState 비배치 문제 방지
   // useEffect 실행 시점에 shopProducts prop이 아직 null일 수 있으므로 ref로 최신값 보장
   const shopProductsRef = useRef(shopProducts);
@@ -6207,7 +6207,7 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({
   }, [parentProductUrl]);
   useEffect(function () {
     autoTriggered.current = false;
-    ranWithReview.current = false;
+    ranWithHtmlMeasurements.current = false;
     setResult(null);
   }, [keyword, parentProductUrl]);
 
@@ -6215,50 +6215,42 @@ window.SeoDiagnosisSection = function SeoDiagnosisSection({
   // shopProducts를 deps에 포함하여 데이터 도착 후 재시도 보장.
   // 추가: HTML 실측 리뷰가 SEO 분석 후 늦게 도착하면 실측을 반영해 1회 재실행(리뷰 병목 모순 제거).
   useEffect(function () {
-    var canRun = keyword && productUrl && !loading && (cachedRank || cachedProductName || cachedTotalVolume || cachedProductInfo) && shopProducts && shopProducts.length > 0;
+    var canRun = window.canAutoRunSeoDiagnosis({
+      keyword: keyword,
+      productUrl: productUrl,
+      loading: loading,
+      cachedRank: cachedRank,
+      cachedProductName: cachedProductName,
+      cachedTotalVolume: cachedTotalVolume,
+      cachedProductInfo: cachedProductInfo,
+      shopProducts: shopProducts,
+      htmlReviewData: htmlReviewData
+    });
     if (!canRun) return;
-    var hasReview = htmlReviewData && htmlReviewData.reviewCount != null;
+    var hasHtmlMeasurements = window.hasSeoHtmlMeasurements(htmlReviewData);
     if (!autoTriggered.current && !result) {
       autoTriggered.current = true;
-      ranWithReview.current = hasReview;
+      ranWithHtmlMeasurements.current = hasHtmlMeasurements;
       handleAnalyze();
-    } else if (hasReview && !ranWithReview.current) {
-      ranWithReview.current = true;
+    } else if (hasHtmlMeasurements && !ranWithHtmlMeasurements.current) {
+      ranWithHtmlMeasurements.current = true;
       handleAnalyze();
     }
-  }, [keyword, productUrl, cachedRank, cachedProductName, cachedTotalVolume, cachedProductInfo, shopProducts, htmlReviewData]);
+  }, [keyword, productUrl, cachedRank, cachedProductName, cachedTotalVolume, cachedProductInfo, shopProducts, loading, htmlReviewData]);
   const handleAnalyze = async () => {
     if (!productUrl || !keyword) return;
     setLoading(true);
     try {
-      var seoBody = {
-        product_url: productUrl,
-        keyword: keyword
-      };
-      // 메인 분석 데이터 재활용 → 네이버 API 중복 호출 방지
-      if (cachedRank != null) seoBody.cached_rank = cachedRank;
-      if (cachedProductName) seoBody.cached_product_name = cachedProductName;
-      if (cachedTotalVolume != null) seoBody.cached_total_volume = cachedTotalVolume;
-      if (cachedProductInfo) seoBody.cached_product_info = cachedProductInfo;
-      // HTML 실측 리뷰/평점 → SEO 진단이 순위 추정 대신 실측 사용(리뷰 병목 모순 제거)
-      if (htmlReviewData && htmlReviewData.reviewCount != null) seoBody.cached_review_count = htmlReviewData.reviewCount;
-      if (htmlReviewData && htmlReviewData.rating != null) seoBody.cached_rating = htmlReviewData.rating;
-      // shopProducts에서 competitor 정보 추출 (ref로 최신값 읽기)
-      var currentShopProducts = shopProductsRef.current;
-      if (currentShopProducts && currentShopProducts.length > 0) {
-        seoBody.cached_competitors = currentShopProducts.slice(0, 80).map(function (p) {
-          return {
-            product_id: p.product_id || '',
-            product_name: p.product_name,
-            price: p.price,
-            store_name: p.store_name,
-            brand: p.brand,
-            category1: p.category1,
-            category2: p.category2,
-            product_url: p.product_url
-          };
-        });
-      }
+      var seoBody = window.buildSeoAnalysisBody({
+        productUrl: productUrl,
+        keyword: keyword,
+        cachedRank: cachedRank,
+        cachedProductName: cachedProductName,
+        cachedTotalVolume: cachedTotalVolume,
+        cachedProductInfo: cachedProductInfo,
+        shopProducts: shopProductsRef.current,
+        htmlReviewData: htmlReviewData
+      });
       const res = await api.post('/seo/analyze', seoBody);
       if (res.success) setResult(res.data);else toast.warn(res.detail || 'SEO 분석 데이터 일부를 가져오지 못했습니다.');
     } catch (e) {
@@ -25729,6 +25721,19 @@ window.AnalysisResults = function AnalysisResults(props) {
   var shopProducts = props.shopProducts;
   var volumeData = props.volumeData;
 
+  // 상세 HTML 파서는 og:title의 스토어 접미사를 제거한 실제 상품명을 제공한다.
+  // 검색결과 매칭 실패 시 캡처 폴백보다 이를 우선하고, HTML 실측 가격·카테고리를
+  // SEO 캐시에 합쳐 0원/미분류 값이 진단을 고정하지 않게 한다.
+  var _resolvedProductName = htmlDetailResult && htmlDetailResult.productName || analysisData && analysisData.targetProductInfo && analysisData.targetProductInfo.product_name || advertiserReport && advertiserReport.product_info && advertiserReport.product_info.product_name || advertiserReport && advertiserReport.product_name || '';
+  var _resolvedProductInfo = window.mergeSeoCachedProductInfo ? window.mergeSeoCachedProductInfo(analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo : null, _resolvedProductName, htmlReviewData) : analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo : null;
+  var _resolvedCachedRank = Array.isArray(shopProducts) ? 0 : null;
+  if (analysisData && analysisData.seoDetail && analysisData.seoDetail.popularity) {
+    var _rankItem = analysisData.seoDetail.popularity.items && analysisData.seoDetail.popularity.items[0];
+    var _rankLabel = _rankItem && _rankItem.label ? String(_rankItem.label) : '';
+    var _rankMatch = _rankLabel.match(/(\d+)위/);
+    if (_rankMatch) _resolvedCachedRank = parseInt(_rankMatch[1], 10);
+  }
+
   /* 광고주/스토어명 자동 채우기 (2026-07-27 수정)
      주의: 백엔드 store_name 은 쇼핑API 매칭·상품페이지 방문이 모두 실패하면
      'URL 슬러그'가 그대로 담긴다. 슬러그가 이메일 아이디인 업체가 있어 표지에
@@ -26117,7 +26122,7 @@ window.AnalysisResults = function AnalysisResults(props) {
     refreshProducts: loadProducts,
     searchedKeyword: searchedKeyword,
     searchedProductUrl: searchedProductUrl,
-    cachedProductName: advertiserReport && advertiserReport.product_info && advertiserReport.product_info.product_name ? advertiserReport.product_info.product_name : advertiserReport && advertiserReport.product_name ? advertiserReport.product_name : analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo.product_name : null,
+    cachedProductName: _resolvedProductName,
     relatedKeywords: relatedData ? (relatedData.golden_keywords || []).concat(relatedData.related_keywords || []).map(function (k) {
       return typeof k === 'string' ? k : k && k.keyword || '';
     }).filter(Boolean) : [],
@@ -26170,14 +26175,10 @@ window.AnalysisResults = function AnalysisResults(props) {
     keyword: searchedKeyword,
     productUrl: searchedProductUrl,
     competitorData: analysisData && analysisData.competitorTable,
-    cachedRank: analysisData && analysisData.seoDetail ? analysisData.seoDetail.popularity.items[0].pass !== undefined ? function () {
-      var rankText = analysisData.seoDetail.popularity.items[0].label;
-      var m = rankText.match(/(\d+)위/);
-      return m ? parseInt(m[1]) : null;
-    }() : null : null,
-    cachedProductName: advertiserReport && advertiserReport.product_info && advertiserReport.product_info.product_name ? advertiserReport.product_info.product_name : advertiserReport && advertiserReport.product_name ? advertiserReport.product_name : analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo.product_name : null,
+    cachedRank: _resolvedCachedRank,
+    cachedProductName: _resolvedProductName,
     cachedTotalVolume: volumeData && volumeData[0] ? (volumeData[0].monthlyPcQcCnt || 0) + (volumeData[0].monthlyMobileQcCnt || 0) : null,
-    cachedProductInfo: analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo : null,
+    cachedProductInfo: _resolvedProductInfo,
     shopProducts: shopProducts,
     htmlReviewData: htmlReviewData
   })), /* SEO 상세 분석 (적합도/신뢰도/인기도) */
@@ -30512,6 +30513,73 @@ window.PlaceTrackingPage = function PlaceTrackingPage(props) {
 ;/* ===== js/analysis.jsx ===== */
 /* analysis.jsx — 분석 실행 로직(_doSearch)을 App.jsx에서 분리
  * window.createDoSearch(deps) → _doSearch 함수 반환. deps로 App의 setter/ref/값 주입. */
+window.mergeSeoCachedProductInfo = function mergeSeoCachedProductInfo(cachedProductInfo, cachedProductName, htmlReviewData) {
+  var source = cachedProductInfo && typeof cachedProductInfo === 'object' ? cachedProductInfo : {};
+  var merged = {};
+  ['product_name', 'brand', 'store_name', 'category1', 'category2', 'category3', 'image_url'].forEach(function (key) {
+    if (source[key] != null && String(source[key]).trim()) merged[key] = source[key];
+  });
+  var sourcePrice = Number(source.price);
+  if (Number.isFinite(sourcePrice) && sourcePrice > 0) merged.price = sourcePrice;
+  var resolvedName = String(cachedProductName || '').trim();
+  if (resolvedName) merged.product_name = resolvedName;
+  if (htmlReviewData && typeof htmlReviewData === 'object') {
+    var measuredPrice = Number(htmlReviewData.price);
+    if (Number.isFinite(measuredPrice) && measuredPrice > 0) merged.price = measuredPrice;
+    var categoryPath = String(htmlReviewData.category || '').trim();
+    var categoryParts = categoryPath ? categoryPath.split('>').map(function (value) {
+      return value.trim();
+    }).filter(Boolean) : [];
+    var measuredCategory1 = String(htmlReviewData.category1 || categoryParts[0] || '').trim();
+    if (measuredCategory1) merged.category1 = measuredCategory1;
+    if (categoryParts[1]) merged.category2 = categoryParts[1];
+    if (categoryParts[2]) merged.category3 = categoryParts[2];
+  }
+  return Object.keys(merged).length > 0 ? merged : null;
+};
+window.hasSeoHtmlMeasurements = function hasSeoHtmlMeasurements(htmlReviewData) {
+  return !!(htmlReviewData && (htmlReviewData.reviewCount != null || htmlReviewData.rating != null || htmlReviewData.price != null || htmlReviewData.category || htmlReviewData.category1));
+};
+window.canAutoRunSeoDiagnosis = function canAutoRunSeoDiagnosis(input) {
+  var data = input || {};
+  var hasCachedInput = data.cachedRank != null || !!data.cachedProductName || data.cachedTotalVolume != null || !!data.cachedProductInfo;
+  var searchSettled = Array.isArray(data.shopProducts);
+  var hasComparisonOrMeasurements = searchSettled && (data.shopProducts.length > 0 || window.hasSeoHtmlMeasurements(data.htmlReviewData));
+  return !!(data.keyword && data.productUrl && !data.loading && hasCachedInput && hasComparisonOrMeasurements);
+};
+window.buildSeoAnalysisBody = function buildSeoAnalysisBody(input) {
+  var data = input || {};
+  var body = {
+    product_url: data.productUrl || '',
+    keyword: data.keyword || ''
+  };
+  if (data.cachedRank != null) body.cached_rank = data.cachedRank;
+  if (data.cachedProductName) body.cached_product_name = data.cachedProductName;
+  if (data.cachedTotalVolume != null) body.cached_total_volume = data.cachedTotalVolume;
+  var resolvedProductInfo = window.mergeSeoCachedProductInfo(data.cachedProductInfo, data.cachedProductName, data.htmlReviewData);
+  if (resolvedProductInfo) body.cached_product_info = resolvedProductInfo;
+  if (data.htmlReviewData && data.htmlReviewData.reviewCount != null) {
+    body.cached_review_count = data.htmlReviewData.reviewCount;
+  }
+  if (data.htmlReviewData && data.htmlReviewData.rating != null) {
+    body.cached_rating = data.htmlReviewData.rating;
+  }
+  if (Array.isArray(data.shopProducts)) {
+    body.cached_competitors = data.shopProducts.slice(0, 80).map(function (p) {
+      return {
+        product_id: p.product_id || '',
+        product_name: p.product_name,
+        price: p.price,
+        store_name: p.store_name,
+        brand: p.brand,
+        category1: p.category1,
+        category2: p.category2,
+        product_url: p.product_url
+      };
+    });
+  }
+  return body;
+};
 window.createDoSearch = function (deps) {
   var cleanProductUrl = deps.cleanProductUrl;
   var lastHtmlRef = deps.lastHtmlRef;
@@ -30543,8 +30611,9 @@ window.createDoSearch = function (deps) {
     var match = String(url || '').match(_naverStoreSlugPattern);
     return match ? match[1].toLowerCase() : '';
   };
-  return function _doSearch(keyword, productUrl, inputCompanyName, htmlInput) {
+  return function _doSearch(keyword, productUrl, inputCompanyName, htmlInput, capturedProductName) {
     lastHtmlRef.current = htmlInput || ''; // #1: 저장/재사용용 상세 HTML 보관
+    var _capturedProductName = String(capturedProductName || '').trim();
     if (inputCompanyName !== undefined) setCompanyName(inputCompanyName);
     var cleanedUrl = cleanProductUrl(productUrl);
     // URL을 안 넣어도 됨: 붙여넣은 HTML에서 상품 URL 자동 추출 → 순위/광고주 분석 정상 동작
@@ -30670,7 +30739,58 @@ window.createDoSearch = function (deps) {
       if (relRes && relRes.success) setRelatedData(relRes.data);
       var prods = shopRes && shopRes.success && shopRes.data ? shopRes.data.products : [];
       var totalShopProducts = shopRes && shopRes.success && shopRes.data ? shopRes.data.total : 0;
-      if (prods.length > 0) setShopProducts(prods);
+      // 성공 응답의 빈 배열도 "조회 완료·검색 결과 없음"이라는 유효 상태다.
+      // null(아직 대기/실패)과 구분해야 캡처 HTML만으로도 SEO 진단을 이어갈 수 있다.
+      if (shopRes && shopRes.success && shopRes.data) setShopProducts(prods);
+
+      // 광고주 상품 공용 매칭: 전체 상품 ID 우선 → URL ID → 동일 스토어 폴백.
+      // 확장 캡처 상품명은 검색결과 매칭/직접 fetch가 실패해도 버리지 않는다.
+      var _targetStoreName = _naverStoreSlug(cleanedUrl);
+      var _findAdvProd = function (prodList) {
+        if (!cleanedUrl) return null;
+        var found = null;
+        var pidMatch = cleanedUrl.match(/\/products\/(\d+)/);
+        if (pidMatch) {
+          var pid = pidMatch[1];
+          found = prodList.find(function (p) {
+            return p.product_id && String(p.product_id) === pid;
+          });
+          if (found) return found;
+          found = prodList.find(function (p) {
+            return p.product_url && p.product_url.indexOf(pid) >= 0;
+          });
+          if (found) return found;
+        }
+        var targetBaseUrl = String(cleanedUrl).split(/[?#]/)[0].replace(/\/$/, '');
+        found = prodList.find(function (p) {
+          var candidateBaseUrl = String(p.product_url || '').split(/[?#]/)[0].replace(/\/$/, '');
+          return candidateBaseUrl && candidateBaseUrl === targetBaseUrl;
+        });
+        if (found) return found;
+        if (_targetStoreName) {
+          found = prodList.find(function (p) {
+            if ((p.store_name || '').toLowerCase() === _targetStoreName) return true;
+            return _naverStoreSlug(p.product_url) === _targetStoreName;
+          });
+        }
+        return found || null;
+      };
+      var _matchedTargetProduct = _findAdvProd(prods);
+      var targetProd = _matchedTargetProduct;
+      if (!targetProd && _capturedProductName) {
+        targetProd = {
+          rank: null,
+          product_id: (cleanedUrl.match(/\/products\/(\d+)/) || [])[1] || '',
+          product_url: cleanedUrl,
+          product_name: _capturedProductName,
+          store_name: _targetStoreName,
+          price: 0,
+          brand: '',
+          category1: '',
+          category2: '',
+          image_url: ''
+        };
+      }
 
       // 검색량 데이터 추출
       var vol = volRes && volRes.success && volRes.data && volRes.data[0] ? volRes.data[0] : null;
@@ -31000,12 +31120,16 @@ window.createDoSearch = function (deps) {
           var pCat = p.category2 || p.category1 || '';
           var catSc = pCat === topCat ? 100 : pCat ? 60 : 20;
 
+          // 입력 URL과 상품 ID가 일치하는 내 상품은 검색 API의 catalog/search URL이어도
+          // 원래 브랜드스토어 주소의 플랫폼 판정을 보존한다.
+          var rowIsNaverStore = _isNaverStoreUrl(p.product_url) || p === _matchedTargetProduct && _isNaverStoreUrl(cleanedUrl);
+
           // 8. 브랜드 (8%)
-          var brandSc = (p.brand ? 40 : 0) + (p.store_name ? 30 : 0) + (_isNaverStoreUrl(p.product_url) ? 30 : 0);
+          var brandSc = (p.brand ? 40 : 0) + (p.store_name ? 30 : 0) + (rowIsNaverStore ? 30 : 0);
           brandSc = Math.min(brandSc, 100);
 
           // 9. 네이버페이 (6%)
-          var npSc = _isNaverStoreUrl(p.product_url) ? 100 : 50;
+          var npSc = rowIsNaverStore ? 100 : 50;
 
           // 10. 최신성 (6%)
           var freshSc = p.rank <= 20 ? 80 : p.rank <= 40 ? 60 : 40;
@@ -31142,44 +31266,6 @@ window.createDoSearch = function (deps) {
         };
       }
 
-      // URL에서 스토어명 추출 (매칭 검증용 — 섹션 12, 13에서 공통 사용)
-      var _targetStoreName = _naverStoreSlug(cleanedUrl);
-      // 안전한 advProd 매칭 헬퍼 (스토어 URL 슬러그 교차 검증)
-      var _findAdvProd = function (prodList) {
-        if (!cleanedUrl) return null;
-        // 1차: 전체 URL 포함 매칭 (가장 정확)
-        var found = prodList.find(function (p) {
-          return p.product_url && p.product_url.indexOf(cleanedUrl) >= 0;
-        });
-        if (found) return found;
-        // 2차: 채널상품ID(URL의 /products/ID)로 매칭
-        var pidMatch = cleanedUrl.match(/\/products\/(\d+)/);
-        if (pidMatch) {
-          var pid = pidMatch[1];
-          // 2-a: product_id 필드 직접 비교
-          found = prodList.find(function (p) {
-            return p.product_id && String(p.product_id) === pid;
-          });
-          if (found) return found;
-          // 2-b: product_url에 PID 포함 (네이버 API link = /main/products/채널ID)
-          found = prodList.find(function (p) {
-            return p.product_url && p.product_url.indexOf(pid) >= 0;
-          });
-          if (found) return found;
-        }
-        // 3차: 스토어명으로 매칭 (URL/PID 매칭 실패 시 — store_name 또는 URL 슬러그)
-        if (_targetStoreName) {
-          found = prodList.find(function (p) {
-            // store_name 필드 직접 비교
-            if ((p.store_name || '').toLowerCase() === _targetStoreName) return true;
-            // product_url에서 스토어 슬러그 추출하여 비교
-            if (_naverStoreSlug(p.product_url) === _targetStoreName) return true;
-            return false;
-          });
-        }
-        return found || null;
-      };
-
       // 12. 리뷰 분석 (상위 상품 기반 추정)
       if (prods.length >= 5) {
         var top5 = prods.slice(0, 5);
@@ -31265,9 +31351,7 @@ window.createDoSearch = function (deps) {
       // 13. SEO 상세 분석 (상품URL 있을 때)
       if (prods.length > 0) {
         // 공통 헬퍼로 안전하게 매칭
-        var advProd = _findAdvProd(prods);
-        // advProd가 없으면 (광고주 상품 매칭 실패) prods[0]을 사용하지 않음
-        var targetProd = advProd;
+        // 광고주 상품 매칭 실패 시에도 캡처 상품명이 있으면 그 이름으로만 정직하게 진단한다.
         if (targetProd) {
           var kwWords = keyword.toLowerCase().split(/\s+/);
           var titleLower = targetProd.product_name.toLowerCase();
@@ -31279,7 +31363,7 @@ window.createDoSearch = function (deps) {
             return titleLower.indexOf(w) >= 0;
           }) || kwNoSpace.length > 0 && titleNoSpace.indexOf(kwNoSpace) >= 0;
           var titleLen = targetProd.product_name.length;
-          var isNaverStore = _isNaverStoreUrl(targetProd.product_url);
+          var isNaverStore = _isNaverStoreUrl(cleanedUrl) || _isNaverStoreUrl(targetProd.product_url);
           var hasBrand = !!targetProd.brand;
           var hasCategory = !!(targetProd.category2 || targetProd.category1);
           var myRank = targetProd.rank || null;
@@ -31347,10 +31431,18 @@ window.createDoSearch = function (deps) {
           }, {
             label: '가격 경쟁력',
             score: function () {
-              var avgP = prods.slice(0, 20).reduce(function (s, p) {
-                return s + p.price;
-              }, 0) / 20;
-              return targetProd.price <= avgP ? 85 : targetProd.price <= avgP * 1.2 ? 60 : 35;
+              var targetPrice = Number(targetProd.price) || 0;
+              if (targetPrice <= 0) return 0;
+              var priced = prods.slice(0, 20).map(function (p) {
+                return Number(p.price) || 0;
+              }).filter(function (price) {
+                return price > 0;
+              });
+              if (priced.length === 0) return 0;
+              var avgP = priced.reduce(function (sum, price) {
+                return sum + price;
+              }, 0) / priced.length;
+              return targetPrice <= avgP ? 85 : targetPrice <= avgP * 1.2 ? 60 : 35;
             }(),
             maxScore: 100,
             color: '#22c55e'
@@ -31824,7 +31916,7 @@ window.App = function App() {
       } catch (e) {}
       var kw = String(p.keyword || '').trim();
       if (kw && extSearchRef.current) {
-        extSearchRef.current(kw, String(p.product_url || ''), html); // 분석 자동 시작
+        extSearchRef.current(kw, String(p.product_url || ''), html, String(p.product_name || '')); // 분석 자동 시작 — 캡처 상품명도 점수/보고서 폴백으로 보존
       } else {
         setSearchBarInitial({
           keyword: kw,
@@ -32050,7 +32142,7 @@ window.App = function App() {
   };
 
   // 통합 검색 (htmlInput: 검색바에서 입력된 HTML — 상세페이지 분석 + 리뷰 추출에 사용)
-  var handleSearch = function (keyword, productUrl, inputCompanyName, htmlInput) {
+  var handleSearch = function (keyword, productUrl, inputCompanyName, htmlInput, capturedProductName) {
     // Viewer 일일 분석 횟수 체크 (백엔드 연동)
     if (currentUser && currentUser.role === 'viewer') {
       api.get('/cd/usage/check').then(function (usageRes) {
@@ -32063,18 +32155,18 @@ window.App = function App() {
         }
         // 제한 내 → 카운트 증가 후 실제 분석 실행
         api.post('/cd/usage/increment').then(function () {
-          _doSearch(keyword, productUrl, inputCompanyName, htmlInput);
+          _doSearch(keyword, productUrl, inputCompanyName, htmlInput, capturedProductName);
         }).catch(function () {
-          _doSearch(keyword, productUrl, inputCompanyName, htmlInput);
+          _doSearch(keyword, productUrl, inputCompanyName, htmlInput, capturedProductName);
         });
       }).catch(function () {
-        _doSearch(keyword, productUrl, inputCompanyName, htmlInput);
+        _doSearch(keyword, productUrl, inputCompanyName, htmlInput, capturedProductName);
       });
       return;
     }
     // 관리자/매니저도 수동 분석 카운팅
     api.post('/cd/usage/increment').catch(function () {});
-    _doSearch(keyword, productUrl, inputCompanyName, htmlInput);
+    _doSearch(keyword, productUrl, inputCompanyName, htmlInput, capturedProductName);
   };
   var _doSearch = window.createDoSearch({
     cleanProductUrl: cleanProductUrl,
@@ -32335,15 +32427,15 @@ window.App = function App() {
   /* ==================== Topbar 스타일 (정적 객체는 컴포넌트 밖에 선언) ==================== */
 
   /* ==================== 홈에서 검색 시 분석 탭으로 전환하는 핸들러 ==================== */
-  var handleHomeSearch = function (keyword, productUrl, inputCompanyName, htmlInput) {
+  var handleHomeSearch = function (keyword, productUrl, inputCompanyName, htmlInput, capturedProductName) {
     setCurrentClientId(null);
     setAutoSaveStatus('');
     setCurrentPage('analysis');
-    handleSearch(keyword, productUrl, inputCompanyName, htmlInput);
+    handleSearch(keyword, productUrl, inputCompanyName, htmlInput, capturedProductName);
   };
   // 크롬 확장 브리지에서 자동 분석 시작에 사용(최신 클로저 유지)
-  extSearchRef.current = function (kw, url, html) {
-    handleHomeSearch(kw, url, undefined, html);
+  extSearchRef.current = function (kw, url, html, productName) {
+    handleHomeSearch(kw, url, undefined, html, productName);
   };
 
   /* ==================== 페이지별 콘텐츠 렌더링 ==================== */
