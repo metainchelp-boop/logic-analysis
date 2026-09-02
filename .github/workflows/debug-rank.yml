@@ -46,6 +46,10 @@ on:
         description: '신고 253 — 청귤 집계 56위 vs 실제 45위. 수집 원본·매칭 자리·구간 생김새·변동폭을 가른다(읽기 전용·업체명 미출력).'
         required: false
         default: 'off'
+      report253b:
+        description: '신고 253 2차 — 필드 보유율 날짜별·링크 호스트·전 키워드 확산·날짜별 순위 재계산(읽기 전용·업체명 미출력).'
+        required: false
+        default: 'off'
       ownerhint:
         description: '추정 업체 커버리지 — off(기본) / on. 보관 상품 중 몇 개에 추정 업체가 붙는지 서버 매칭 규칙으로 실측(읽기 전용·업체명 미출력).'
         required: false
@@ -2153,4 +2157,85 @@ jobs:
             print("  1위부터 %d위까지 · 빠진 구간 %d곳 %s" % (ranks[-1] if ranks else 0, len(gaps), gaps[:5]))
             ids = [str(p.get("product_id") or "") for p in prods if p.get("product_id")]
             print("  상품ID 중복: %d건" % (len(ids) - len(set(ids))))
+            PY
+
+      - name: 신고 253 2차 — 응답 형식 변화·광고 누수 판정 (읽기 전용·업체명 미출력)
+        if: ${{ github.event.inputs.report253b == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 3m
+          script: |
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sys, sqlite3, json, re
+            sys.path.insert(0, "/app")
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            KW = "청귤"
+
+            print("== ① 필드 보유율 — 날짜별 (형식이 언제부터 바뀌었나) ==")
+            for row in conn.execute("""SELECT collected_date, created_at, products_json
+                                         FROM collected_serp WHERE keyword=?
+                                        ORDER BY collected_date DESC LIMIT 7""", (KW,)):
+                ps = json.loads(row["products_json"])
+                n = len(ps)
+                st = sum(1 for p in ps if (p.get("store_name") or "").strip())
+                pid = sum(1 for p in ps if str(p.get("product_id") or "").strip())
+                ur = sum(1 for p in ps if (p.get("product_url") or "").strip())
+                tt = sum(1 for p in ps if (p.get("title") or "").strip())
+                print("  %s (%s) %d개 — 가게명 %d · 상품ID %d · 링크 %d · 제목 %d"
+                      % (row["collected_date"], row["created_at"][11:16], n, st, pid, ur, tt))
+
+            print("\n== ② 오늘 목록의 링크 호스트 분포 (앞부분만) ==")
+            row = conn.execute("""SELECT products_json FROM collected_serp
+                                   WHERE keyword=? AND collected_date=DATE('now','localtime')""", (KW,)).fetchone()
+            ps = json.loads(row["products_json"]) if row else []
+            from collections import Counter
+            hosts = Counter()
+            for p in ps:
+                u = str(p.get("product_url") or "")
+                m = re.match(r"https?://([^/]+)", u)
+                hosts[m.group(1) if m else ("빈값" if not u else "형식외")] += 1
+            for h, n in hosts.most_common(8):
+                print("  %-35s %d개" % (h, n))
+            adcr = sum(1 for p in ps if "adcr" in str(p.get("product_url") or ""))
+            print("  adcr(광고 링크) 포함: %d개" % adcr)
+
+            print("\n== ③ 다른 키워드도 같은가 — 오늘 수집 전체의 가게명 보유율 ==")
+            tot_kw = ok_kw = 0; tot_p = st_p = 0
+            for row in conn.execute("""SELECT keyword, products_json FROM collected_serp
+                                        WHERE collected_date=DATE('now','localtime')"""):
+                ps2 = json.loads(row["products_json"]); tot_kw += 1
+                st2 = sum(1 for p in ps2 if (p.get("store_name") or "").strip())
+                tot_p += len(ps2); st_p += st2
+                if ps2 and st2 * 2 >= len(ps2):
+                    ok_kw += 1
+            print("  오늘 키워드 %d개 · 상품 %d개 중 가게명 있는 것 %d개(%.0f%%) · 가게명 절반 이상인 키워드 %d개"
+                  % (tot_kw, tot_p, st_p, 100.0*st_p/max(1,tot_p), ok_kw))
+            print("  (어제와 대조)")
+            tot_kw = tot_p = st_p = 0
+            for row in conn.execute("""SELECT products_json FROM collected_serp
+                                        WHERE collected_date=DATE('now','localtime','-1 day')"""):
+                ps2 = json.loads(row["products_json"]); tot_kw += 1
+                tot_p += len(ps2); st_p += sum(1 for p in ps2 if (p.get("store_name") or "").strip())
+            print("  어제 키워드 %d개 · 상품 %d개 중 가게명 있는 것 %d개(%.0f%%)"
+                  % (tot_kw, tot_p, st_p, 100.0*st_p/max(1,tot_p)))
+
+            print("\n== ④ 업체#711 이 날짜별 몇 위였나 (저장 목록에 그날 규칙 그대로 적용) ==")
+            from naver_crawler import find_product_rank_from_cache
+            url = conn.execute("SELECT naver_store_url FROM clients WHERE id=711").fetchone()[0]
+            for row in conn.execute("""SELECT collected_date, products_json FROM collected_serp
+                                        WHERE keyword=? ORDER BY collected_date DESC LIMIT 7""", (KW,)):
+                ps2 = json.loads(row["products_json"])
+                r, pg, _ = find_product_rank_from_cache(KW, url, ps2)
+                print("  %s: %s위 (p%s)" % (row["collected_date"], r, pg))
+            print("\n  [축B 기록표 최근 7일]")
+            for r in conn.execute("""SELECT DATE(checked_at) d, MIN(rank_position) mn, MAX(rank_position) mx
+                                       FROM client_rank_history
+                                      WHERE keyword=? AND client_id=711
+                                        AND checked_at >= datetime('now','localtime','-7 day')
+                                      GROUP BY d ORDER BY d""", (KW,)):
+                print("  %s: %s~%s위" % (r["d"], r["mn"], r["mx"]))
             PY
