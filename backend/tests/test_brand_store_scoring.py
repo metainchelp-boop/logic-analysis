@@ -128,13 +128,26 @@ def test_naver_store_text_in_an_unrelated_host_does_not_receive_platform_credit(
     assert external["scores"]["detail"]["has_naverpay"] is False
 
 
-def test_naver_store_credit_requires_exact_product_path_without_query():
+def test_naver_store_credit_requires_exact_product_path_and_ignores_normal_query_hash():
+    accepted_urls = (
+        "https://brand.naver.com/vayapet/products/9864738770?foo=1",
+        "https://brand.naver.com/vayapet/products/9864738770#detail",
+        "https://brand.naver.com/vayapet/products/9864738770?NaPm=tracking#detail",
+    )
+    for url in accepted_urls:
+        result = _analyze(url)
+        detail = result["scores"]["detail"]
+        assert result["scores"]["brand"] == 100, url
+        assert result["scores"]["naverpay"] == 100, url
+        assert detail["is_naver_store"] is True, url
+        assert detail["has_naverpay"] is True, url
+
     rejected_urls = (
         "https://brand.naver.com/",
         "https://brand.naver.com/vayapet",
         "https://brand.naver.com/vayapet/products/not-a-number",
         "https://brand.naver.com/vayapet/products/9864738770/reviews",
-        "https://brand.naver.com/vayapet/products/9864738770?NaPm=tracking",
+        "https://brand.naver.com/?next=/vayapet/products/9864738770",
         "https://brand.naver.com:443/vayapet/products/9864738770",
         "https://smartstore.naver.com/example/products/12345/reviews",
     )

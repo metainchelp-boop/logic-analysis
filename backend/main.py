@@ -1452,9 +1452,6 @@ def _is_naver_store_url(url: str) -> bool:
             return False
         if (parsed.hostname or "").lower() not in _NAVER_STORE_HOSTS:
             return False
-        if "?" in raw_url or "#" in raw_url:
-            return False
-
         path_parts = parsed.path.split("/")
         if len(path_parts) == 5 and path_parts[-1] == "":
             path_parts = path_parts[:-1]

@@ -21,6 +21,7 @@ const seoDiagnosisSource = fs.readFileSync(
 const context = {
   console,
   Promise,
+  URL,
   setTimeout,
   clearTimeout,
   fmt: (value) => Number(value || 0).toLocaleString('en-US'),
@@ -296,13 +297,24 @@ async function testUnrelatedHostContainingSmartstoreTextGetsNoNaverStoreCredit()
   assert.strictEqual(result.seoDetail.trustworthy.items[3].pass, false);
 }
 
-async function testNaverStoreCreditRequiresExactProductPathWithoutQuery() {
+async function testNaverStoreCreditRequiresExactProductPathAndIgnoresNormalQueryHash() {
+  const acceptedUrls = [
+    'https://brand.naver.com/vayapet/products/9864738770?foo=1',
+    'https://brand.naver.com/vayapet/products/9864738770#detail',
+    'https://brand.naver.com/vayapet/products/9864738770?NaPm=tracking#detail',
+  ];
+  for (const url of acceptedUrls) {
+    const result = await runAnalysis(url);
+    assert.strictEqual(result.seoDetail.trustworthy.items[0].pass, true, url);
+    assert.strictEqual(result.seoDetail.trustworthy.items[3].pass, true, url);
+  }
+
   const rejectedUrls = [
     'https://brand.naver.com/',
     'https://brand.naver.com/vayapet',
     'https://brand.naver.com/vayapet/products/not-a-number',
     'https://brand.naver.com/vayapet/products/9864738770/reviews',
-    'https://brand.naver.com/vayapet/products/9864738770?NaPm=tracking',
+    'https://brand.naver.com/?next=/vayapet/products/9864738770',
     'https://brand.naver.com:443/vayapet/products/9864738770',
     'https://smartstore.naver.com/example/products/12345/reviews',
   ];
@@ -312,6 +324,30 @@ async function testNaverStoreCreditRequiresExactProductPathWithoutQuery() {
     assert.strictEqual(result.seoDetail.trustworthy.items[0].pass, false, url);
     assert.strictEqual(result.seoDetail.trustworthy.items[3].pass, false, url);
   }
+}
+
+async function testProductIdExtractionReadsOnlyRealNvMidQueryParameter() {
+  const extract = context.window.extractNaverProductIdFromUrl;
+  assert.strictEqual(
+    extract('https://search.shopping.naver.com/search/all?nvMid=123#detail'),
+    '123'
+  );
+  assert.strictEqual(
+    extract('https://search.shopping.naver.com/search/all#?nvMid=123'),
+    ''
+  );
+  assert.strictEqual(
+    extract('https://search.shopping.naver.com/search/all?next=https://x/?nvMid=123'),
+    ''
+  );
+  assert.strictEqual(
+    extract('https://search.shopping.naver.com/main/products/9123?next=https://x/?nvMid=123'),
+    '9123'
+  );
+  assert.strictEqual(
+    extract('https://search.shopping.naver.com/search/all?nvMid=12x'),
+    ''
+  );
 }
 
 async function testCapturedProductNameSurvivesExtensionBridgeAndMatchingFailure() {
@@ -536,7 +572,8 @@ const tests = [
   testMobileBrandStoreAlsoUsesNaverStorePolicy,
   testMobileSmartstoreKeepsExistingNaverStorePolicy,
   testUnrelatedHostContainingSmartstoreTextGetsNoNaverStoreCredit,
-  testNaverStoreCreditRequiresExactProductPathWithoutQuery,
+  testNaverStoreCreditRequiresExactProductPathAndIgnoresNormalQueryHash,
+  testProductIdExtractionReadsOnlyRealNvMidQueryParameter,
   testCapturedProductNameSurvivesExtensionBridgeAndMatchingFailure,
   testCapturedHtmlMeasurementsOverrideIncompleteSearchFallback,
   testParsedBrandNameWinsOverOgTitleSuffixInRenderedConsumers,

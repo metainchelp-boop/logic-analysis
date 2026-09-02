@@ -37,6 +37,18 @@ def test_product_id_extraction_uses_path_segments_and_exact_numeric_identity():
     assert nc.extract_product_id_from_url(
         "https://search.shopping.naver.com/main/products/123abc"
     ) is None
+    assert nc.extract_product_id_from_url(
+        "https://search.shopping.naver.com/search/all?nvMid=123#detail"
+    ) == "123"
+    assert nc.extract_product_id_from_url(
+        "https://search.shopping.naver.com/search/all#?nvMid=123"
+    ) is None
+    assert nc.extract_product_id_from_url(
+        "https://search.shopping.naver.com/search/all?next=https://x/?nvMid=123"
+    ) is None
+    assert nc.extract_product_id_from_url(
+        "https://search.shopping.naver.com/main/products/9123?next=https://x/?nvMid=123"
+    ) == "9123"
 
 
 def test_naver_store_slug_requires_exact_supported_host():

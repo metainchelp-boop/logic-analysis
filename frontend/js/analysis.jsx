@@ -111,13 +111,17 @@ window.extractNaverProductIdFromUrl = function extractNaverProductIdFromUrl(url)
     var rawUrl = String(url || '').trim();
     if (!rawUrl) return '';
 
-    // 기존 nvMid 계약은 보존하되, 다른 query 값 속 '/products/ID'는 경로로 오인하지 않는다.
-    var nvMidMatch = rawUrl.match(/[?&]nvMid=(\d+)(?=&|#|$)/);
-    if (nvMidMatch) return nvMidMatch[1];
+    try {
+        var parsedUrl = new window.URL(rawUrl);
+        // URLSearchParams가 실제 query만 파싱하므로 nested 값·fragment는 호출자 nvMid가 아니다.
+        var nvMid = parsedUrl.searchParams.get('nvMid') || '';
+        if (/^\d+$/.test(nvMid)) return nvMid;
 
-    var pathname = rawUrl.split(/[?#]/)[0];
-    var pathMatch = pathname.match(/\/(?:products|catalog)\/(\d+)(?:\/|$)/);
-    return pathMatch ? pathMatch[1] : '';
+        var pathMatch = parsedUrl.pathname.match(/\/(?:products|catalog)\/(\d+)(?:\/|$)/);
+        return pathMatch ? pathMatch[1] : '';
+    } catch (_urlParseError) {
+        return '';
+    }
 };
 
 window.createDoSearch = function(deps) {
@@ -149,11 +153,19 @@ window.createDoSearch = function(deps) {
     };
     var _extractProductId = window.extractNaverProductIdFromUrl;
     var _parseNaverStoreProductUrl = function(url) {
-        var outerMatch = String(url || '').match(/^https?:\/\/([^/?#]+)(\/[^?#]*)$/i);
-        if (!outerMatch || !_naverStoreHosts[String(outerMatch[1] || '').toLowerCase()]) return null;
-        var pathMatch = String(outerMatch[2] || '').match(/^\/([^/]+)\/products\/(\d+)\/?$/);
-        if (!pathMatch) return null;
-        return { store: pathMatch[1], productId: pathMatch[2] };
+        var rawUrl = String(url || '').trim();
+        // URL parser가 default port를 생략하기 전에 raw authority도 exact host인지 확인한다.
+        var authorityMatch = rawUrl.match(/^https?:\/\/([^/?#]+)/i);
+        if (!authorityMatch || !_naverStoreHosts[String(authorityMatch[1] || '').toLowerCase()]) return null;
+        try {
+            var parsedUrl = new window.URL(rawUrl);
+            if (!_naverStoreHosts[String(parsedUrl.hostname || '').toLowerCase()]) return null;
+            var pathMatch = parsedUrl.pathname.match(/^\/([^/]+)\/products\/(\d+)\/?$/);
+            if (!pathMatch) return null;
+            return { store: pathMatch[1], productId: pathMatch[2] };
+        } catch (_urlParseError) {
+            return null;
+        }
     };
     var _isNaverStoreUrl = function(url) {
         return !!_parseNaverStoreProductUrl(url);
