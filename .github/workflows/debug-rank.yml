@@ -46,6 +46,10 @@ on:
         description: '신고 253 — 청귤을 온디맨드 대기줄에 1행 등록(쓰기 1행 · 수집기가 재수집하게).'
         required: false
         default: 'off'
+      reportdump:
+        description: '보고서 리디자인용 실데이터 추출 — off(기본) / on. 최근 자동 분석 보고서 1건의 HTML을 업체명 가림 처리 후 base64 로 출력(읽기 전용·업체명 미출력 — 이름은 □□□로 치환 후 인코딩).'
+        required: false
+        default: 'off'
       ownerhint:
         description: '추정 업체 커버리지 — off(기본) / on. 보관 상품 중 몇 개에 추정 업체가 붙는지 서버 매칭 규칙으로 실측(읽기 전용·업체명 미출력).'
         required: false
@@ -2472,4 +2476,40 @@ jobs:
             conn.commit()
             r = conn.execute("SELECT keyword, status, requested_at FROM collect_requests WHERE keyword='청귤'").fetchone()
             print("대기줄 등록:", r)
+            PY
+
+      - name: 보고서 리디자인용 실데이터 추출 (읽기 전용·업체명 가림)
+        if: ${{ github.event.inputs.reportdump == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 3m
+          script: |
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sqlite3, base64, json
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            # 최근 3일 중 가장 내용이 풍부한(=가장 긴) 자동 보고서 1건 — 실데이터 그대로,
+            # 업체명만 □□□로 치환한 뒤 인코딩한다(이 저장소는 공개 → 로그에 이름을 남기지 않는다).
+            row = conn.execute("""
+                SELECT ca.report_html, ca.keyword, c.name AS cname, ca.analysis_date
+                  FROM client_analyses ca JOIN clients c ON c.id = ca.client_id
+                 WHERE ca.report_html IS NOT NULL AND LENGTH(ca.report_html) > 5000
+                   AND ca.analysis_date >= date('now','localtime','-3 day')
+                 ORDER BY LENGTH(ca.report_html) DESC LIMIT 1""").fetchone()
+            if not row:
+                print("표본 없음 — 최근 3일 report_html 5KB 초과 0건"); raise SystemExit
+            html = row["report_html"]; name = (row["cname"] or "").strip()
+            if name:
+                html = html.replace(name, "□□□")
+            print("표본: 키워드=%s · 날짜=%s · 원본 %dB · 이름 치환 %s" %
+                  (row["keyword"], row["analysis_date"], len(row["report_html"]),
+                   "함" if name and name in row["report_html"] else "대상 없음"))
+            b = base64.b64encode(html.encode("utf-8")).decode()
+            print("=====B64 START=====")
+            for i in range(0, len(b), 6000):
+                print(b[i:i+6000])
+            print("=====B64 END=====")
             PY
