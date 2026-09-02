@@ -2513,3 +2513,50 @@ jobs:
                 print(b[i:i+6000])
             print("=====B64 END=====")
             PY
+
+      - name: 보고서 리디자인용 원천 JSON 추출 (읽기 전용·업체명 가림·gzip+sha256)
+        if: ${{ github.event.inputs.reportdump == 'json' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 3m
+          script: |
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sqlite3, base64, json, gzip, hashlib
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            # reportdump=on 과 같은 표본(순살족발 · 최근 3일 중 가장 긴 보고서)의 원천 JSON 5종
+            row = conn.execute("""
+                SELECT ca.id, ca.keyword, ca.product_url, ca.analyzed_date, ca.created_at, c.name AS cname,
+                       ca.analysis_json, ca.volume_json, ca.related_json, ca.shop_products_json, ca.advertiser_json
+                  FROM client_analyses ca JOIN clients c ON c.id = ca.client_id
+                 WHERE ca.report_html IS NOT NULL AND LENGTH(ca.report_html) > 5000
+                   AND ca.analyzed_date >= date('now','localtime','-3 day')
+                 ORDER BY LENGTH(ca.report_html) DESC LIMIT 1""").fetchone()
+            if not row:
+                print("표본 없음"); raise SystemExit
+            name = (row["cname"] or "").strip()
+            pack = {k: row[k] for k in ("id","keyword","product_url","analyzed_date","created_at",
+                                        "analysis_json","volume_json","related_json","shop_products_json","advertiser_json")}
+            # 순위 이력(같은 업체·키워드 최근 60일)도 함께 — 추이 차트용
+            hist = conn.execute("""SELECT checked_at, rank_position, page_number, check_type FROM client_rank_history
+                                    WHERE client_id=(SELECT client_id FROM client_analyses WHERE id=?) AND keyword=?
+                                      AND checked_at >= datetime('now','localtime','-60 day')
+                                    ORDER BY checked_at""", (row["id"], row["keyword"])).fetchall()
+            pack["rank_history"] = [dict(h) for h in hist]
+            raw = json.dumps(pack, ensure_ascii=False)
+            if name:
+                raw = raw.replace(name, "비공개 업체")
+            gz = gzip.compress(raw.encode("utf-8"))
+            b = base64.b64encode(gz).decode()
+            print("표본: 키워드=%s · 날짜=%s · JSON %d바이트 · gzip %d · 이름 치환 %s · 순위이력 %d행" %
+                  (row["keyword"], row["analyzed_date"], len(raw.encode()), len(gz),
+                   "함" if name and name in json.dumps(dict(row), ensure_ascii=False, default=str) else "대상 없음", len(hist)))
+            print("SHA256(gzip)=" + hashlib.sha256(gz).hexdigest())
+            print("=====GZB64 START=====")
+            for i in range(0, len(b), 6000):
+                print(b[i:i+6000])
+            print("=====GZB64 END=====")
+            PY
