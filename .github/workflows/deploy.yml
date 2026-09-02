@@ -74,6 +74,11 @@ jobs:
         with:
           node-version: '20'
 
+      # 수집 순위 규칙 회귀(신고 #253) — 광고 판별·순번 부여는 rank_rules.js 한 곳이고,
+      # 확장은 서버 배포 대상이 아니라 이 게이트가 코드 상태를 지키는 유일한 자동 검사다.
+      - name: Collector rank rules regression
+        run: node collector-extension/tests/rank_rules.test.js
+
       - name: Build frontend bundle
         run: |
           npm install --no-save @babel/core @babel/preset-react

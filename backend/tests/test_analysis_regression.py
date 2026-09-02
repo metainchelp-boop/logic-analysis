@@ -1529,6 +1529,31 @@ def test_연결은_등록과_같은_함수를_쓴다():
         "자격 없는 업체로의 연결을 안 막는다 — 판정이 조건문에서 사라졌다"
 
 
+def test_광고_판별_규칙이_한_곳에만_있다():
+    """신고 #253(2026-09-02) — 광고 판별이 눈멀어 광고가 순번을 먹었다.
+
+    규칙은 rank_rules.js 한 곳: 확장(importScripts)과 node 회귀 테스트가 같은 파일을 읽는다.
+    행동 검사는 node 쪽(collector-extension/tests/rank_rules.test.js)이 배포 게이트에서 돈다 —
+    여기서는 배선(한 곳 규칙·게이트 등록·서버 메타 보존)이 풀리지 않았는지만 지킨다.
+    """
+    rules = _src("../collector-extension/rank_rules.js")
+    assert "p.adId && p.adType && p.adcrUrl" in rules, "새 광고 표식 조합 판별이 사라졌다"
+    assert "includes('adcr')" in rules, "레거시 판별(무회귀)이 사라졌다"
+    bg = _src("../collector-extension/background.js")
+    assert "importScripts('rank_rules.js')" in bg, "확장이 rank_rules.js 를 안 읽는다"
+    assert "function isAdItem" not in bg, "판별이 background.js 에 다시 생겼다 — 규칙이 갈린다"
+    assert "meta:" in bg and "adSkipped" in bg, "수집 메타 업로드가 사라졌다(사후 재구성 불가로 회귀)"
+    import os as _os
+    assert _os.path.exists(_os.path.join(_os.path.dirname(__file__), "..", "..",
+                                         "collector-extension", "tests", "rank_rules.test.js")), \
+        "node 회귀 테스트 파일이 없다"
+    dy = _src("../.github/workflows/deploy.yml")
+    assert "rank_rules.test.js" in dy, "배포 게이트가 순위 규칙 회귀를 안 돌린다"
+    col = _src("collector.py")
+    assert "meta_json" in col and "meta: Optional[dict]" in col, \
+        "서버가 수집 메타를 안 받는다 — 광고 증거가 또 소실된다(신고 #253 의 거짓 정상 재발)"
+
+
 if __name__ == "__main__":
     _tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     _failed = 0
