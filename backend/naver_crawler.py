@@ -60,6 +60,28 @@ def _assert_allowed_fetch_url(url: str):
 
 # ==================== 유틸리티 ====================
 
+_SMARTSTORE_HOSTS = frozenset({"smartstore.naver.com", "m.smartstore.naver.com"})
+_BRANDSTORE_HOSTS = frozenset({"brand.naver.com", "m.brand.naver.com"})
+_NAVER_STORE_HOSTS = _SMARTSTORE_HOSTS | _BRANDSTORE_HOSTS
+
+
+def _parse_naver_store_url(url: str) -> Tuple[str, List[str]]:
+    """지원하는 네이버 스토어 exact host와 경로 조각을 반환한다."""
+    if not isinstance(url, str) or not url.strip():
+        return "", []
+    raw_url = url.strip()
+    candidate = raw_url if "://" in raw_url or raw_url.startswith("//") else f"//{raw_url}"
+    try:
+        parsed = urlparse(candidate)
+    except (TypeError, ValueError):
+        return "", []
+    if parsed.scheme and parsed.scheme.lower() not in ("http", "https"):
+        return "", []
+    host = (parsed.hostname or "").lower()
+    if host not in _NAVER_STORE_HOSTS:
+        return "", []
+    return host, [part for part in parsed.path.split("/") if part]
+
 def extract_product_id_from_url(product_url: str) -> Optional[str]:
     """상품 URL에서 nvMid / 상품 ID 추출"""
     if not product_url:
@@ -85,13 +107,9 @@ def extract_product_id_from_url(product_url: str) -> Optional[str]:
 
 
 def extract_store_name_from_url(url: str) -> Optional[str]:
-    """URL에서 스토어명 추출"""
-    if not url:
-        return None
-    match = re.search(r'smartstore\.naver\.com/([^/]+)', url)
-    if match:
-        return match.group(1)
-    return None
+    """일반·모바일 스마트스토어/브랜드스토어 URL에서 스토어 슬러그를 추출한다."""
+    _host, path_parts = _parse_naver_store_url(url)
+    return path_parts[0] if path_parts else None
 
 
 # ==================== 검색 API 일일 사용량 계측 (호출 다이어트 2026-07) ====================
@@ -271,8 +289,7 @@ def get_review_count(product_url: str) -> Optional[int]:
     """스마트스토어 내부 API로 '리뷰수'만 가볍게 조회 (리뷰 델타 추정용).
     실패하면 None 반환 — 호출부(순위 기록)가 절대 깨지지 않도록 완전 방어적."""
     try:
-        store = extract_store_name_from_url(product_url)
-        pno = extract_product_id_from_url(product_url)
+        store, pno = _extract_smartstore_info(product_url)
         if not store or not pno:
             return None
         api_url = f"https://smartstore.naver.com/i/v1/stores/{store}/products/{pno}"
@@ -1010,15 +1027,15 @@ def _get_realistic_headers(referer: str = "") -> Dict:
 
 
 def _extract_smartstore_info(product_url: str) -> Tuple[Optional[str], Optional[str]]:
-    """스마트스토어 URL에서 store_name과 product_no 추출"""
-    # https://smartstore.naver.com/{store_name}/products/{product_no}
-    match = re.search(r'smartstore\.naver\.com/([^/]+)/products/(\d+)', product_url)
-    if match:
-        return match.group(1), match.group(2)
-    # 브랜드스토어: brand.naver.com/{store}/products/{no}
-    match = re.search(r'brand\.naver\.com/([^/]+)/products/(\d+)', product_url)
-    if match:
-        return match.group(1), match.group(2)
+    """스마트스토어 exact host에서 store_name과 product_no를 추출한다."""
+    host, path_parts = _parse_naver_store_url(product_url)
+    if (
+        host in _SMARTSTORE_HOSTS
+        and len(path_parts) >= 3
+        and path_parts[1] == "products"
+        and path_parts[2].isdigit()
+    ):
+        return path_parts[0], path_parts[2]
     return None, None
 
 
@@ -1891,6 +1908,98 @@ def extract_store_display_name(html: str, product_url: str = "") -> Dict:
     return {"name": "", "source": ""}
 
 
+def _extract_js_object_property(source: str, property_name: str) -> Optional[str]:
+    """JavaScript 객체의 특정 object 속성만 실행 없이 잘라낸다."""
+    match = re.search(rf'"{re.escape(property_name)}"\s*:\s*', source)
+    if not match:
+        return None
+
+    start = match.end()
+    while start < len(source) and source[start].isspace():
+        start += 1
+    if start >= len(source) or source[start] != "{":
+        return None
+
+    depth = 0
+    in_string = False
+    escaped = False
+    for index in range(start, len(source)):
+        char = source[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return source[start:index + 1]
+    return None
+
+
+def _replace_unquoted_undefined(source: str) -> str:
+    """문자열 안의 값은 보존하고 JS undefined 리터럴만 JSON null로 바꾼다."""
+    result = []
+    index = 0
+    in_string = False
+    escaped = False
+    token = "undefined"
+    while index < len(source):
+        char = source[index]
+        if in_string:
+            result.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            result.append(char)
+            index += 1
+            continue
+        if source.startswith(token, index):
+            before = source[index - 1] if index else ""
+            after_index = index + len(token)
+            after = source[after_index] if after_index < len(source) else ""
+            if not (before.isalnum() or before in "_$") and not (after.isalnum() or after in "_$"):
+                result.append("null")
+                index = after_index
+                continue
+        result.append(char)
+        index += 1
+    return "".join(result)
+
+
+def _extract_brand_store_product(html: str) -> Dict:
+    """브랜드스토어 preload의 상세 상품 객체를 안전한 JSON 파싱으로 읽는다."""
+    state_match = re.search(r'window\.__PRELOADED_STATE__\s*=', html)
+    if not state_match:
+        return {}
+    raw_product = _extract_js_object_property(
+        html[state_match.end():],
+        "simpleProductForDetailPage",
+    )
+    if not raw_product:
+        return {}
+    try:
+        import json as _json
+        product = _json.loads(_replace_unquoted_undefined(raw_product))
+        return product if isinstance(product, dict) else {}
+    except (TypeError, ValueError):
+        return {}
+
+
 def analyze_detail_page(html: str, product_url: str = "") -> Dict:
     """
     상세페이지 HTML을 분석하여 품질 지표를 추출
@@ -1914,6 +2023,7 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
 
     # ── 0. __NEXT_DATA__에서 단가·카테고리 직접 추출 (크롤 없이 단가·데이터랩 카테고리 공급) ──
     nd_price, nd_cat, nd_cat1 = 0, "", ""
+    brand_product = _extract_brand_store_product(html)
     try:
         import json as _json
         _m = re.search(r'<script\s+id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.DOTALL)
@@ -1929,6 +2039,28 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
                 nd_cat1 = nd_cat.split(">")[0].strip() if nd_cat else ""
     except Exception:
         pass
+
+    # 브랜드스토어는 __NEXT_DATA__ 대신 PRELOADED_STATE의 이 객체에 상세값을 둔다.
+    # 기존 스마트스토어 값을 우선하고, 비어 있는 값만 보완한다.
+    if brand_product:
+        if not nd_price:
+            benefits = brand_product.get("benefitsView") or {}
+            if not isinstance(benefits, dict):
+                benefits = {}
+            try:
+                nd_price = int(float(
+                    benefits.get("discountedSalePrice")
+                    or brand_product.get("salePrice")
+                    or brand_product.get("dispSalePrice")
+                    or 0
+                ) or 0)
+            except (TypeError, ValueError):
+                nd_price = 0
+        if not nd_cat:
+            category = brand_product.get("category") or {}
+            if isinstance(category, dict):
+                nd_cat = category.get("wholeCategoryName") or category.get("categoryName") or ""
+                nd_cat1 = nd_cat.split(">")[0].strip() if nd_cat else ""
 
     # 합성 HTML(주 크롤 경로)에는 __NEXT_DATA__ 스크립트가 없어 위에서 nd_price=0 →
     # 빌더가 보존한 api-price 메타에서 판매가 회수(가격 유실 방지)
@@ -2090,18 +2222,26 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
     # 방법 2: window.__PRELOADED_STATE__ (Naver SmartStore SPA)
     # 각 필드 독립 체크 (방법 1에서 일부만 추출된 경우에도 나머지 보완)
     preloaded_match = re.search(r'window\.__PRELOADED_STATE__\s*=\s*({.+?})\s*;?\s*</script>', html, re.DOTALL)
-    if preloaded_match:
+    if brand_product or preloaded_match:
         try:
-            state = _json.loads(preloaded_match.group(1))
-            product_info = state.get("product", {}).get("A", {})
-            if not product_info:
-                product_info = state.get("product", {})
+            state = {}
+            product_info = brand_product
+            if not product_info and preloaded_match:
+                state = _json.loads(preloaded_match.group(1))
+                product_info = state.get("product", {}).get("A", {})
+                if not product_info:
+                    product_info = state.get("product", {})
+            review_amount = product_info.get("reviewAmount") or {}
             if actual_review_count is None:
-                rc = product_info.get("reviewCount") or product_info.get("totalReviewCount")
+                rc = (review_amount.get("totalReviewCount")
+                      or product_info.get("reviewCount")
+                      or product_info.get("totalReviewCount"))
                 if rc is not None:
                     actual_review_count = int(rc)
             if actual_rating is None:
-                rt = product_info.get("reviewScore") or product_info.get("averageReviewScore")
+                rt = (review_amount.get("averageReviewScore")
+                      or product_info.get("reviewScore")
+                      or product_info.get("averageReviewScore"))
                 if rt is not None:
                     actual_rating = round(float(rt), 2)
             if actual_wish_count is None:

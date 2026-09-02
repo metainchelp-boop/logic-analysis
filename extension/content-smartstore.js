@@ -9,7 +9,7 @@
   var running = false;
 
   function isProductPage() {
-    return /\/products\/\d+/.test(location.pathname);
+    return /^\/[^/]+\/products\/\d+\/?$/.test(location.pathname);
   }
 
   function $(id) { return document.getElementById(id); }

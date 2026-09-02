@@ -21,6 +21,16 @@ window.createDoSearch = function(deps) {
     var setShopProducts = deps.setShopProducts;
     var setVolumeData = deps.setVolumeData;
     var setAuditStatus = deps.setAuditStatus || function () {};
+    var _naverStoreHostPattern = '(?:smartstore\\.naver\\.com|(?:m\\.)?brand\\.naver\\.com)';
+    var _naverStoreUrlPattern = new RegExp('^https?://' + _naverStoreHostPattern + '(?:/|$)', 'i');
+    var _naverStoreSlugPattern = new RegExp('^https?://' + _naverStoreHostPattern + '/([^/?#]+)', 'i');
+    var _isNaverStoreUrl = function(url) {
+        return _naverStoreUrlPattern.test(String(url || ''));
+    };
+    var _naverStoreSlug = function(url) {
+        var match = String(url || '').match(_naverStoreSlugPattern);
+        return match ? match[1].toLowerCase() : '';
+    };
 
     return function _doSearch(keyword, productUrl, inputCompanyName, htmlInput) {
         lastHtmlRef.current = htmlInput || '';  // #1: 저장/재사용용 상세 HTML 보관
@@ -424,11 +434,11 @@ window.createDoSearch = function(deps) {
                     var catSc = pCat === topCat ? 100 : pCat ? 60 : 20;
 
                     // 8. 브랜드 (8%)
-                    var brandSc = (p.brand ? 40 : 0) + (p.store_name ? 30 : 0) + (p.product_url && p.product_url.indexOf('smartstore.naver.com') >= 0 ? 30 : 0);
+                    var brandSc = (p.brand ? 40 : 0) + (p.store_name ? 30 : 0) + (_isNaverStoreUrl(p.product_url) ? 30 : 0);
                     brandSc = Math.min(brandSc, 100);
 
                     // 9. 네이버페이 (6%)
-                    var npSc = p.product_url && p.product_url.indexOf('smartstore.naver.com') >= 0 ? 100 : 50;
+                    var npSc = _isNaverStoreUrl(p.product_url) ? 100 : 50;
 
                     // 10. 최신성 (6%)
                     var freshSc = p.rank <= 20 ? 80 : p.rank <= 40 ? 60 : 40;
@@ -548,8 +558,7 @@ window.createDoSearch = function(deps) {
             }
 
             // URL에서 스토어명 추출 (매칭 검증용 — 섹션 12, 13에서 공통 사용)
-            var _storeMatch = cleanedUrl ? cleanedUrl.match(/smartstore\.naver\.com\/([^\/]+)/) : null;
-            var _targetStoreName = _storeMatch ? _storeMatch[1].toLowerCase() : '';
+            var _targetStoreName = _naverStoreSlug(cleanedUrl);
             // 안전한 advProd 매칭 헬퍼 (스토어 URL 슬러그 교차 검증)
             var _findAdvProd = function(prodList) {
                 if (!cleanedUrl) return null;
@@ -575,8 +584,7 @@ window.createDoSearch = function(deps) {
                         // store_name 필드 직접 비교
                         if ((p.store_name || '').toLowerCase() === _targetStoreName) return true;
                         // product_url에서 스토어 슬러그 추출하여 비교
-                        var pSlugMatch = (p.product_url || '').match(/smartstore\.naver\.com\/([^\/\?]+)/);
-                        if (pSlugMatch && pSlugMatch[1].toLowerCase() === _targetStoreName) return true;
+                        if (_naverStoreSlug(p.product_url) === _targetStoreName) return true;
                         return false;
                     });
                 }
@@ -649,14 +657,14 @@ window.createDoSearch = function(deps) {
                     var kwInTitle = kwWords.every(function(w) { return titleLower.indexOf(w) >= 0; })
                         || (kwNoSpace.length > 0 && titleNoSpace.indexOf(kwNoSpace) >= 0);
                     var titleLen = targetProd.product_name.length;
-                    var isSmartStore = targetProd.product_url && targetProd.product_url.indexOf('smartstore.naver.com') >= 0;
+                    var isNaverStore = _isNaverStoreUrl(targetProd.product_url);
                     var hasBrand = !!targetProd.brand;
                     var hasCategory = !!(targetProd.category2 || targetProd.category1);
                     var myRank = targetProd.rank || null;
                     var myRankLabel = myRank ? myRank + '위' : '미노출';
 
                     var relScore = (kwInTitle ? 40 : 0) + (titleLen >= 20 && titleLen <= 50 ? 30 : titleLen >= 10 ? 15 : 5) + (hasCategory ? 30 : 10);
-                    var trustScore = (isSmartStore ? 35 : 15) + (hasBrand ? 30 : 10) + (myRank && myRank <= 20 ? 35 : myRank && myRank <= 40 ? 20 : 10);
+                    var trustScore = (isNaverStore ? 35 : 15) + (hasBrand ? 30 : 10) + (myRank && myRank <= 20 ? 35 : myRank && myRank <= 40 ? 20 : 10);
                     var popScore = (myRank && myRank <= 5 ? 40 : myRank && myRank <= 10 ? 30 : myRank && myRank <= 20 ? 20 : 10)
                         + (myRank && myRank <= 10 ? 30 : myRank && myRank <= 20 ? 20 : 10)
                         + (myRank && myRank <= 10 ? 30 : myRank && myRank <= 30 ? 20 : 10);
@@ -674,10 +682,10 @@ window.createDoSearch = function(deps) {
                         trustworthy: {
                             score: trustScore,
                             items: [
-                                { pass: isSmartStore, label: '네이버 스마트스토어 입점' },
+                                { pass: isNaverStore, label: '네이버 스토어 입점' },
                                 { pass: hasBrand, label: '브랜드 등록: ' + (targetProd.brand || '미등록') },
                                 { pass: myRank && myRank <= 20, label: myRank ? '상위 노출 달성 (현재 ' + myRankLabel + ')' : '검색 결과 내 미노출' },
-                                { pass: isSmartStore, label: '네이버페이 결제 지원' }
+                                { pass: isNaverStore, label: '네이버페이 결제 지원' }
                             ]
                         },
                         popularity: {
@@ -695,7 +703,7 @@ window.createDoSearch = function(deps) {
                     var dpScores = [
                         { label: '상품명 최적화', score: kwInTitle ? (titleLen >= 20 && titleLen <= 50 ? 95 : 70) : 30, maxScore: 100, color: '#3b82f6' },
                         { label: '가격 경쟁력', score: (function() { var avgP = prods.slice(0, 20).reduce(function(s, p) { return s + p.price; }, 0) / 20; return targetProd.price <= avgP ? 85 : targetProd.price <= avgP * 1.2 ? 60 : 35; })(), maxScore: 100, color: '#22c55e' },
-                        { label: '브랜드/스토어 신뢰도', score: (hasBrand ? 40 : 0) + (isSmartStore ? 40 : 20) + 10, maxScore: 100, color: '#f59e0b' },
+                        { label: '브랜드/스토어 신뢰도', score: (hasBrand ? 40 : 0) + (isNaverStore ? 40 : 20) + 10, maxScore: 100, color: '#f59e0b' },
                         { label: '카테고리 적합도', score: hasCategory ? 80 : 30, maxScore: 100, color: '#06b6d4' },
                         { label: '검색 노출 순위', score: myRank ? (myRank <= 5 ? 95 : myRank <= 10 ? 80 : myRank <= 20 ? 60 : myRank <= 40 ? 40 : 20) : 10, maxScore: 100, color: '#ec4899' }
                     ];
@@ -716,11 +724,11 @@ window.createDoSearch = function(deps) {
                             ]},
                             { category: '가격/혜택', items: [
                                 { pass: targetProd.price > 0, text: '정상 가격 등록' },
-                                { pass: isSmartStore, text: '네이버페이 지원' }
+                                { pass: isNaverStore, text: '네이버페이 지원' }
                             ]},
                             { category: '신뢰도', items: [
                                 { pass: hasBrand, text: '브랜드 등록 완료' },
-                                { pass: isSmartStore, text: '스마트스토어 입점' },
+                                { pass: isNaverStore, text: '네이버 스토어 입점' },
                                 { pass: hasCategory, text: '정확한 카테고리 설정' }
                             ]}
                         ],
@@ -785,7 +793,7 @@ window.createDoSearch = function(deps) {
                 // → 백엔드에서 cached_competitors 스토어명 매칭으로 get_product_info 호출 방지
                 var _sameStoreProd = prods.find(function(p) {
                     return (p.store_name || '').toLowerCase() === _targetStoreName ||
-                           ((p.product_url || '').match(/smartstore\.naver\.com\/([^\/\?]+)/) || [])[1] === _targetStoreName;
+                           _naverStoreSlug(p.product_url) === _targetStoreName;
                 });
                 analysis.targetProductInfo = {
                     product_name: _sameStoreProd ? _sameStoreProd.product_name : '',

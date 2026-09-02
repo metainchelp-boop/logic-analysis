@@ -11,6 +11,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel, field_validator
 from typing import Optional, List, Dict, Any
 from datetime import datetime, date
+from urllib.parse import urlparse
 import os
 import time
 import logging
@@ -1412,6 +1413,58 @@ class SeoAnalysisRequest(BaseModel):
     industry: Optional[str] = None               # 오프라인 업종 라벨 — 소상공인365 상권 매칭용(선택)
 
 
+_NAVER_STORE_HOSTS = frozenset({
+    "smartstore.naver.com",
+    "brand.naver.com",
+    "m.brand.naver.com",
+})
+
+
+def _url_hostname(url: str) -> str:
+    try:
+        return (urlparse(url or "").hostname or "").lower().rstrip(".")
+    except (TypeError, ValueError):
+        return ""
+
+
+def _is_naver_store_url(url: str) -> bool:
+    """일반·브랜드스토어를 같은 네이버 판매 플랫폼으로 판정한다."""
+    return _url_hostname(url) in _NAVER_STORE_HOSTS
+
+
+def _naver_store_slug(url: str) -> str:
+    """지원하는 네이버 스토어 URL의 첫 경로(스토어 ID)만 반환한다."""
+    if not _is_naver_store_url(url):
+        return ""
+    try:
+        return next((part.lower() for part in urlparse(url).path.split("/") if part), "")
+    except (TypeError, ValueError):
+        return ""
+
+
+def _find_naver_product(product_url: str, products: list) -> Optional[dict]:
+    """상품 ID 전체 탐색을 우선하고, 없을 때만 같은 스토어로 폴백한다."""
+    candidates = products or []
+    target_pid = str(extract_product_id_from_url(product_url) or "")
+    if target_pid:
+        for product in candidates:
+            if str(product.get("product_id") or "") == target_pid:
+                return product
+        for product in candidates:
+            if str(extract_product_id_from_url(product.get("product_url") or "") or "") == target_pid:
+                return product
+
+    target_store = _naver_store_slug(product_url)
+    if target_store:
+        for product in candidates:
+            if (product.get("store_name") or "").strip().lower() == target_store:
+                return product
+        for product in candidates:
+            if _naver_store_slug(product.get("product_url") or "") == target_store:
+                return product
+    return None
+
+
 def _place_business_key(req: "SeoAnalysisRequest", region: str = "") -> str:
     """업체 식별키 — doc_id 우선, 없으면 정규화한 업체명+지역(캡처마다 안정적)."""
     if req.target_doc_id:
@@ -2712,52 +2765,37 @@ def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_curren
             product_info = {"product_name": req.cached_product_name}
             # cached_competitors에서 자기 상품 정보 보완 (가격/브랜드/카테고리)
             if req.cached_competitors:
-                target_store = (extract_store_name_from_url(req.product_url) or "").lower()
-                for _cp in req.cached_competitors:
-                    cp_store = (_cp.get("store_name") or "").lower()
-                    cp_url = (_cp.get("product_url") or "").lower()
-                    # 스토어명 일치 또는 URL 포함으로 매칭
-                    if (target_store and (cp_store == target_store or target_store in cp_url)):
-                        product_info["price"] = _cp.get("price", 0)
-                        product_info["brand"] = _cp.get("brand", "")
-                        product_info["store_name"] = _cp.get("store_name", "")
-                        product_info["category1"] = _cp.get("category1", "")
-                        product_info["category2"] = _cp.get("category2", "")
-                        logger.info(f"SEO product_info 캐시 보완: {_cp.get('store_name', '')}")
-                        break
+                _matched_cp = _find_naver_product(req.product_url, req.cached_competitors)
+                if _matched_cp:
+                    product_info["price"] = _matched_cp.get("price", 0)
+                    product_info["brand"] = _matched_cp.get("brand", "")
+                    product_info["store_name"] = _matched_cp.get("store_name", "")
+                    product_info["category1"] = _matched_cp.get("category1", "")
+                    product_info["category2"] = _matched_cp.get("category2", "")
+                    logger.info(f"SEO product_info 캐시 보완: {_matched_cp.get('store_name', '')}")
         elif req.cached_competitors:
             # cached_product_info/name 없지만 competitors에서 스토어명으로 매칭 시도
             # → get_product_info() API 호출 없이 상품 정보 확보 (429 방지 핵심)
             product_info = {}
-            target_store = (extract_store_name_from_url(req.product_url) or "").lower()
-            target_pid = extract_product_id_from_url(req.product_url) or ""
-            for _cp in req.cached_competitors:
-                cp_store = (_cp.get("store_name") or "").lower()
-                cp_url = (_cp.get("product_url") or "").lower()
-                cp_pid = str(_cp.get("product_id", ""))
-                cp_matched = False
-                # 매칭 1: product_id 필드 직접 비교 (API productId = 스마트스토어 상품 ID)
-                if target_pid and cp_pid and target_pid == cp_pid:
-                    cp_matched = True
-                # 매칭 2: productId가 URL에 포함
-                elif target_pid and target_pid in cp_url:
-                    cp_matched = True
-                # 매칭 3: 스토어명 일치 또는 URL에 스토어 슬러그 포함
-                elif target_store and (cp_store == target_store or target_store in cp_url):
-                    cp_matched = True
-                if cp_matched:
-                    product_info = {
-                        "product_name": _cp.get("product_name", ""),
-                        "price": _cp.get("price", 0),
-                        "brand": _cp.get("brand", ""),
-                        "store_name": _cp.get("store_name", ""),
-                        "category1": _cp.get("category1", ""),
-                        "category2": _cp.get("category2", ""),
-                    }
-                    logger.info(f"SEO competitors 스토어 매칭 성공: {_cp.get('product_name', '')[:30]} (store: {target_store})")
-                    break
+            _matched_cp = _find_naver_product(req.product_url, req.cached_competitors)
+            if _matched_cp:
+                product_info = {
+                    "product_name": _matched_cp.get("product_name", ""),
+                    "price": _matched_cp.get("price", 0),
+                    "brand": _matched_cp.get("brand", ""),
+                    "store_name": _matched_cp.get("store_name", ""),
+                    "category1": _matched_cp.get("category1", ""),
+                    "category2": _matched_cp.get("category2", ""),
+                }
+                logger.info(
+                    f"SEO competitors 상품 매칭 성공: {_matched_cp.get('product_name', '')[:30]} "
+                    f"(store: {_naver_store_slug(req.product_url)})"
+                )
             if not product_info:
-                logger.info(f"SEO competitors 스토어 매칭 실패 — get_product_info 호출 (store: {target_store})")
+                logger.info(
+                    "SEO competitors 상품 매칭 실패 — get_product_info 호출 "
+                    f"(store: {_naver_store_slug(req.product_url)})"
+                )
                 try:
                     product_info = get_product_info(req.product_url, keyword=req.keyword)
                 except Exception as e:
@@ -2792,38 +2830,21 @@ def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_curren
         if not product_name and not req.cached_product_name:
             try:
                 target_pid = extract_product_id_from_url(req.product_url) or ""
-                target_store = extract_store_name_from_url(req.product_url) or ""
+                target_store = _naver_store_slug(req.product_url)
                 # 주의: 이 모듈에 동명의 라우트(search_products)가 있어 import가 가려짐 → 크롤러 함수를 별칭으로 호출
                 from naver_crawler import search_products as _sp_crawler
                 _prods = _sp_crawler(req.keyword, max_results=200)
-                for _p in _prods:
-                    p_url = _p.get("product_url", "")
-                    p_pid = _p.get("product_id", "")
-                    p_mall = (_p.get("store_name", "") or "").lower()
-                    # 매칭 1: productId 정확 일치
-                    matched = target_pid and target_pid == p_pid
-                    # 매칭 2: productId가 URL에 포함 + 스토어 검증 (다른 스토어 오염 방지)
-                    if not matched and target_pid and target_pid in p_url:
-                        if target_store:
-                            store_in_url = target_store.lower() in p_url.lower()
-                            store_in_mall = p_mall == target_store.lower()
-                            matched = store_in_url or store_in_mall
-                        else:
-                            matched = True
-                    # 매칭 3: 스토어명이 URL에 포함 (스토어 슬러그 비교)
-                    if not matched and target_store:
-                        matched = target_store.lower() in p_url.lower()
-                    if matched:
-                        product_name = _p.get("product_name", "")
-                        product_info["product_name"] = product_name
-                        product_info["price"] = _p.get("price", 0)
-                        product_info["image_url"] = _p.get("image_url", "")
-                        product_info["store_name"] = _p.get("store_name", "") or target_store
-                        product_info["brand"] = _p.get("brand", "")
-                        product_info["category1"] = _p.get("category1", "")
-                        product_info["category2"] = _p.get("category2", "")
-                        logger.info(f"SEO 보완 매칭 성공: {product_name[:30]} (pid: {target_pid})")
-                        break
+                _matched_product = _find_naver_product(req.product_url, _prods)
+                if _matched_product:
+                    product_name = _matched_product.get("product_name", "")
+                    product_info["product_name"] = product_name
+                    product_info["price"] = _matched_product.get("price", 0)
+                    product_info["image_url"] = _matched_product.get("image_url", "")
+                    product_info["store_name"] = _matched_product.get("store_name", "") or target_store
+                    product_info["brand"] = _matched_product.get("brand", "")
+                    product_info["category1"] = _matched_product.get("category1", "")
+                    product_info["category2"] = _matched_product.get("category2", "")
+                    logger.info(f"SEO 보완 매칭 성공: {product_name[:30]} (pid: {target_pid})")
             except Exception as e:
                 logger.warning(f"SEO 폴백 검색 실패 (스킵): {e}")
 
@@ -3028,18 +3049,20 @@ def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_curren
         # 8. 판매처/브랜드 파워 (8%)
         brand_score = 0
         product_brand = product_info.get("brand", "")
-        is_smartstore = "smartstore.naver.com" in product_url
+        _product_host = _url_hostname(product_url)
+        is_smartstore = _product_host == "smartstore.naver.com"
+        is_naver_store = _is_naver_store_url(product_url)
         if product_brand:
             brand_score += 40
-        if is_smartstore:
-            brand_score += 30  # 스마트스토어 = 네이버 플랫폼 우대
+        if is_naver_store:
+            brand_score += 30  # 일반·브랜드스토어 = 같은 네이버 판매 플랫폼
         if product_info.get("store_name"):
             brand_score += 30
         brand_score = min(brand_score, 100)
 
         # 9. 네이버페이 여부 (6%)
         naverpay_score = 0
-        has_naverpay = is_smartstore  # 스마트스토어는 기본 네이버페이
+        has_naverpay = is_naver_store  # 일반·브랜드스토어는 네이버페이 결제 지원
         if has_naverpay:
             naverpay_score = 100
         else:
@@ -3099,7 +3122,7 @@ def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_curren
         if not has_naverpay:
             suggestions.append("네이버페이 연동 시 구매 전환율과 노출 순위가 개선됩니다.")
         if brand_score < 50:
-            suggestions.append("브랜드명을 등록하고 스마트스토어 입점을 고려하세요.")
+            suggestions.append("브랜드명을 등록하고 네이버 스토어 입점을 고려하세요.")
         if not suggestions:
             suggestions.append("전반적으로 양호합니다! 리뷰 확보와 찜 유도에 집중하세요.")
 
@@ -3147,6 +3170,7 @@ def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_curren
                         "est_monthly_sales": est_monthly_sales,
                         "has_naverpay": has_naverpay,
                         "is_smartstore": is_smartstore,
+                        "is_naver_store": is_naver_store,
                         "product_brand": product_brand,
                         "product_category": product_category,
                     }
@@ -3429,27 +3453,25 @@ def compute_advertiser_report(keyword: str, product_url: str):
 
         # get_product_info 실패 시 (스마트스토어 ID ≠ nvMid) → 키워드 검색에서 productId로 보완
         if not product_info.get("product_name"):
-            from naver_crawler import extract_product_id_from_url as _extract_pid
-            from naver_crawler import extract_store_name_from_url as _extract_store
             from naver_crawler import search_products as _sp
-            target_pid = _extract_pid(req.product_url) or ""
-            target_store = _extract_store(req.product_url) or ""
             _prods = _sp(req.keyword, max_results=200)
-            for _p in _prods:
-                p_url = _p.get("product_url", "")
-                p_pid = _p.get("product_id", "")
-                matched = target_pid and (target_pid in p_url or target_pid == p_pid)
-                if not matched and target_store:
-                    matched = target_store.lower() in p_url.lower()
-                if matched:
-                    product_info["product_name"] = _p.get("product_name", "")
-                    product_info["price"] = _p.get("price", 0)
-                    product_info["image_url"] = _p.get("image_url", "")
-                    product_info["store_name"] = _p.get("store_name", "") or target_store
-                    product_info["brand"] = _p.get("brand", "")
-                    product_info["category"] = _p.get("category2") or _p.get("category1") or ""
-                    logger.info(f"광고주분석 보완 매칭 성공: {product_info['product_name'][:30]} (pid: {target_pid})")
-                    break
+            _matched_product = _find_naver_product(req.product_url, _prods)
+            if _matched_product:
+                product_info["product_name"] = _matched_product.get("product_name", "")
+                product_info["price"] = _matched_product.get("price", 0)
+                product_info["image_url"] = _matched_product.get("image_url", "")
+                product_info["store_name"] = (
+                    _matched_product.get("store_name", "") or _naver_store_slug(req.product_url)
+                )
+                product_info["brand"] = _matched_product.get("brand", "")
+                product_info["category"] = (
+                    _matched_product.get("category2") or _matched_product.get("category1") or ""
+                )
+                logger.info(
+                    "광고주분석 보완 매칭 성공: "
+                    f"{product_info['product_name'][:30]} "
+                    f"(pid: {extract_product_id_from_url(req.product_url) or ''})"
+                )
 
         # 2~3) 키워드로 1회만 검색 → 순위 계산 + 1페이지(상위 80) 분석에 공용 사용
         #      (기존엔 find_product_rank 내부 검색 + 쇼핑 API 재검색으로 같은 키워드를 두 번 호출)
@@ -3475,27 +3497,26 @@ def compute_advertiser_report(keyword: str, product_url: str):
         #      (없으면 "상품 가격/상품명을 확인할 수 없습니다"가 뜨는데, 이미 순위로 존재하므로 모순)
         if (not my_name or not my_price) and rank and all_products:
             try:
-                from naver_crawler import extract_product_id_from_url as _epid, extract_store_name_from_url as _estore
-                _tpid = _epid(req.product_url) or ""
-                _tstore = (_estore(req.product_url) or "").lower()
-                for _p in all_products:
-                    _u = (_p.get("product_url") or "")
-                    _hit = (_tpid and (_tpid in _u or _tpid == _p.get("product_id", ""))) or (_tstore and _tstore in _u.lower())
-                    if _hit:
-                        if not my_name:
-                            my_name = _p.get("product_name", "") or my_name
-                            product_info["product_name"] = my_name
-                        if not my_price:
-                            my_price = _p.get("price", 0) or my_price
-                            product_info["price"] = my_price
-                        if not product_info.get("store_name"):
-                            product_info["store_name"] = _p.get("store_name", "")
-                        if not product_info.get("brand"):
-                            product_info["brand"] = _p.get("brand", "")
-                        if not product_info.get("category"):
-                            product_info["category"] = _p.get("category2") or _p.get("category1") or ""
-                        logger.info(f"[R1] 자기상품 정보 순위검색 결과로 보완: {(my_name or '')[:30]} / {my_price}원 (rank {rank})")
-                        break
+                _matched_product = _find_naver_product(req.product_url, all_products)
+                if _matched_product:
+                    if not my_name:
+                        my_name = _matched_product.get("product_name", "") or my_name
+                        product_info["product_name"] = my_name
+                    if not my_price:
+                        my_price = _matched_product.get("price", 0) or my_price
+                        product_info["price"] = my_price
+                    if not product_info.get("store_name"):
+                        product_info["store_name"] = _matched_product.get("store_name", "")
+                    if not product_info.get("brand"):
+                        product_info["brand"] = _matched_product.get("brand", "")
+                    if not product_info.get("category"):
+                        product_info["category"] = (
+                            _matched_product.get("category2") or _matched_product.get("category1") or ""
+                        )
+                    logger.info(
+                        f"[R1] 자기상품 정보 순위검색 결과로 보완: "
+                        f"{(my_name or '')[:30]} / {my_price}원 (rank {rank})"
+                    )
             except Exception as _e:
                 logger.warning(f"[R1] 자기상품 보완 실패(무시): {_e}")
 
