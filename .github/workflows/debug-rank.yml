@@ -38,6 +38,10 @@ on:
         description: '신고 253 5차 — 담은 수 vs 네이버 총수 대조로 광고 거름 생사 판정(읽기 전용).'
         required: false
         default: 'off'
+      verify253:
+        description: '신고 253 수정 검증 — v1.10.2 적용 후 재수집·순위 45위 재계산(읽기 전용·업체명 미출력).'
+        required: false
+        default: 'off'
       ownerhint:
         description: '추정 업체 커버리지 — off(기본) / on. 보관 상품 중 몇 개에 추정 업체가 붙는지 서버 매칭 규칙으로 실측(읽기 전용·업체명 미출력).'
         required: false
@@ -2387,4 +2391,53 @@ jobs:
                 gaps = [r["total"] - r["product_count"] for r in rows if r["product_count"] < r["total"]]
                 if gaps:
                     print("    부족분 평균 %.1f개 (거른 광고+중복의 짐작치)" % (sum(gaps)/len(gaps)))
+            PY
+
+      - name: 신고 253 수정 검증 — v1.10.2 적용 후 (읽기 전용·업체명 미출력)
+        if: ${{ github.event.inputs.verify253 == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 3m
+          script: |
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sys, sqlite3, json
+            sys.path.insert(0, "/app")
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            KW = "청귤"
+
+            print("== ① 확장이 살아 있나 — 최근 업로드 ==")
+            r = conn.execute("""SELECT MAX(created_at) mx,
+                                       SUM(CASE WHEN created_at >= datetime('now','localtime','-30 minute')
+                                                THEN 1 ELSE 0 END) n30
+                                  FROM collected_serp""").fetchone()
+            print("  마지막 업로드 %s · 최근 30분 %s건" % (r["mx"], r["n30"]))
+
+            print("\n== ② 청귤 재수집 여부 ==")
+            row = conn.execute("""SELECT created_at, total, product_count, meta_json
+                                    FROM collected_serp
+                                   WHERE keyword=? AND collected_date=DATE('now','localtime')""", (KW,)).fetchone()
+            if not row:
+                print("  오늘 수집분 없음"); raise SystemExit
+            print("  수집 시각 %s (아침 10:21이면 아직 구판 수집분 · 그 뒤면 재수집분)" % row["created_at"])
+            print("  meta_json: %s" % (row["meta_json"][:120] if row["meta_json"] else
+                                       "없음(서버가 아직 meta 미수용 배포 전 — 정상)"))
+
+            print("\n== ③ 새 수집분으로 순위 재계산 (실제 배관) ==")
+            from collector import load_collected
+            from naver_crawler import find_product_rank_from_cache
+            url = conn.execute("SELECT naver_store_url FROM clients WHERE id=711").fetchone()[0]
+            got = load_collected(KW)
+            rk, pg, _ = find_product_rank_from_cache(KW, url, got["prods"] if got else [])
+            print("  업체#711 %s위 (p%s)" % (rk, pg))
+            rec = conn.execute("""SELECT rank_position, checked_at FROM client_rank_history
+                                   WHERE keyword=? AND client_id=711
+                                     AND DATE(checked_at)=DATE('now','localtime')
+                                   ORDER BY checked_at DESC LIMIT 1""", (KW,)).fetchone()
+            print("  기록표 최신: %s위 (%s)" % (rec["rank_position"] if rec else "—",
+                                                rec["checked_at"] if rec else "—"))
+            print("  판정: 45 부근이면 광고 제외 정상 · 56 부근이면 아직 구판 수집분")
             PY
