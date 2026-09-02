@@ -2432,6 +2432,9 @@ jobs:
                 print("  meta_json: %s" % (row["meta_json"][:120] if row["meta_json"] else "NULL"))
             else:
                 print("  meta 칸 없음 — 서버분 미배포 상태(정상, 확장 meta 는 무시되고 수집은 저장됨)")
+            rq = conn.execute("SELECT status, attempts, requested_at FROM collect_requests WHERE keyword=?", (KW,)).fetchone()
+            if rq:
+                print("  대기줄: status=%s attempts=%s (0=아직 차례 안 옴 · 5=가져갔는데 실패)" % (rq["status"], rq["attempts"]))
 
             print("\n== ③ 새 수집분으로 순위 재계산 (실제 배관) ==")
             from collector import load_collected
