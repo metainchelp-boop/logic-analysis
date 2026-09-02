@@ -19,9 +19,10 @@
 // ⭐ 순위 규칙은 rank_rules.js 한 곳에만 있다(신고 #253 후속, 2026-09-02) —
 //    chrome 의존이 없어 node 회귀 테스트가 같은 파일을 검사한다.
 importScripts('rank_rules.js');
-// ⚠️ importScripts 는 같은 전역에 합쳐 읽으므로 함수들이 이미 이 자리에 있다.
-//    같은 이름을 const 로 다시 선언하면 'already been declared' 로 워커 등록이 죽는다
-//    (2026-09-02 실사고 — 맥미니 적용 첫 판에서 그렇게 죽었다). 재선언 금지.
+// ⚠️ rank_rules.js 는 전역에 RankRules 객체 하나만 내놓는다(IIFE) — 개별 함수 이름을
+//    여기서 다시 선언하거나 전역으로 받지 말 것. 'already been declared' 워커 등록
+//    사망이 2026-09-02 맥미니 적용에서 실제로 두 번 났다. 호출은 RR.takeOrganic 식으로.
+const RR = globalThis.RankRules;
 
 const CFG = {
   serverBase: 'https://logic.metainc.co.kr',
@@ -510,7 +511,7 @@ async function collectKeyword(keyword) {
     if (i === 1 && list[0]) {
       chrome.storage.local.set({ rawSample: { keyword, at: new Date().toISOString(), item: list[0] } });
     }
-    takeOrganic(list, st);
+    RR.takeOrganic(list, st);
     if (st.products.length >= CFG.maxRank) break;   // 목표 깊이 도달
     // 마지막 페이지 판정 — 설정값(80)이 아니라 화면 최소 페이지 크기(40) 미만일 때만.
     // 페이지가 pagingSize=80 을 무시하고 40씩 그려도 여기서 끊기지 않고 다음 장으로 간다.
