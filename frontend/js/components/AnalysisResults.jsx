@@ -42,13 +42,9 @@ window.AnalysisResults = function AnalysisResults(props) {
             htmlReviewData
         )
         : (analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo : null);
-    var _resolvedCachedRank = Array.isArray(shopProducts) ? 0 : null;
-    if (analysisData && analysisData.seoDetail && analysisData.seoDetail.popularity) {
-        var _rankItem = analysisData.seoDetail.popularity.items && analysisData.seoDetail.popularity.items[0];
-        var _rankLabel = _rankItem && _rankItem.label ? String(_rankItem.label) : '';
-        var _rankMatch = _rankLabel.match(/(\d+)위/);
-        if (_rankMatch) _resolvedCachedRank = parseInt(_rankMatch[1], 10);
-    }
+    var _resolvedCachedRank = window.resolveSeoCachedRank
+        ? window.resolveSeoCachedRank(shopProducts, analysisData)
+        : null;
 
     /* 광고주/스토어명 자동 채우기 (2026-07-27 수정)
        주의: 백엔드 store_name 은 쇼핑API 매칭·상품페이지 방문이 모두 실패하면

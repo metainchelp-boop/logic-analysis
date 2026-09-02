@@ -20,6 +20,25 @@ _requests.post = _no_net
 import naver_crawler as nc  # noqa: E402
 
 
+def test_product_id_extraction_uses_path_segments_and_exact_numeric_identity():
+    """상품 ID는 path의 products/catalog 숫자 세그먼트와 nvMid만 인정한다."""
+    assert nc.extract_product_id_from_url(
+        "https://brand.naver.com/vayapet/products/123"
+    ) == "123"
+    assert nc.extract_product_id_from_url(
+        "https://search.shopping.naver.com/catalog/123/"
+    ) == "123"
+    assert nc.extract_product_id_from_url(
+        "https://search.shopping.naver.com/search/all?query=x&nvMid=123"
+    ) == "123"
+    assert nc.extract_product_id_from_url(
+        "https://search.shopping.naver.com/main/products/9123?next=/products/123"
+    ) == "9123"
+    assert nc.extract_product_id_from_url(
+        "https://search.shopping.naver.com/main/products/123abc"
+    ) is None
+
+
 def test_naver_store_slug_requires_exact_supported_host():
     """스마트·브랜드스토어 슬러그만 읽고 유사/악성 호스트는 거부한다."""
     supported = {

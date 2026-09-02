@@ -87,19 +87,19 @@ def extract_product_id_from_url(product_url: str) -> Optional[str]:
     if not product_url:
         return None
 
-    # 네이버 쇼핑 URL: nvMid 파라미터
-    parsed = urlparse(product_url)
+    try:
+        parsed = urlparse(str(product_url).strip())
+    except (TypeError, ValueError):
+        return None
+
+    # 네이버 쇼핑 URL: 정확한 nvMid 파라미터
     params = parse_qs(parsed.query)
-    if 'nvMid' in params:
-        return params['nvMid'][0]
+    nv_mid = (params.get('nvMid') or [""])[0]
+    if str(nv_mid).isdigit():
+        return str(nv_mid)
 
-    # 스마트스토어: /products/12345
-    match = re.search(r'/products/(\d+)', product_url)
-    if match:
-        return match.group(1)
-
-    # 카탈로그: /catalog/12345
-    match = re.search(r'/catalog/(\d+)', product_url)
+    # query 문자열은 제외하고 path 세그먼트에서만 ID를 읽는다.
+    match = re.search(r'/(?:products|catalog)/(\d+)(?:/|$)', parsed.path)
     if match:
         return match.group(1)
 

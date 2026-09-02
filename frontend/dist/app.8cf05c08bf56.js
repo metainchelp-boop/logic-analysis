@@ -25726,13 +25726,7 @@ window.AnalysisResults = function AnalysisResults(props) {
   // SEO 캐시에 합쳐 0원/미분류 값이 진단을 고정하지 않게 한다.
   var _resolvedProductName = htmlDetailResult && htmlDetailResult.productName || analysisData && analysisData.targetProductInfo && analysisData.targetProductInfo.product_name || advertiserReport && advertiserReport.product_info && advertiserReport.product_info.product_name || advertiserReport && advertiserReport.product_name || '';
   var _resolvedProductInfo = window.mergeSeoCachedProductInfo ? window.mergeSeoCachedProductInfo(analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo : null, _resolvedProductName, htmlReviewData) : analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo : null;
-  var _resolvedCachedRank = Array.isArray(shopProducts) ? 0 : null;
-  if (analysisData && analysisData.seoDetail && analysisData.seoDetail.popularity) {
-    var _rankItem = analysisData.seoDetail.popularity.items && analysisData.seoDetail.popularity.items[0];
-    var _rankLabel = _rankItem && _rankItem.label ? String(_rankItem.label) : '';
-    var _rankMatch = _rankLabel.match(/(\d+)위/);
-    if (_rankMatch) _resolvedCachedRank = parseInt(_rankMatch[1], 10);
-  }
+  var _resolvedCachedRank = window.resolveSeoCachedRank ? window.resolveSeoCachedRank(shopProducts, analysisData) : null;
 
   /* 광고주/스토어명 자동 채우기 (2026-07-27 수정)
      주의: 백엔드 store_name 은 쇼핑API 매칭·상품페이지 방문이 모두 실패하면
@@ -30580,6 +30574,26 @@ window.buildSeoAnalysisBody = function buildSeoAnalysisBody(input) {
   }
   return body;
 };
+window.resolveSeoCachedRank = function resolveSeoCachedRank(shopProducts, analysisData) {
+  var resolvedRank = Array.isArray(shopProducts) ? 0 : null;
+  var popularity = analysisData && analysisData.seoDetail && analysisData.seoDetail.popularity;
+  var rankItem = popularity && popularity.items && popularity.items[0];
+  var rankLabel = rankItem && rankItem.label ? String(rankItem.label) : '';
+  var rankMatch = rankLabel.match(/(\d+)위/);
+  if (rankMatch) resolvedRank = parseInt(rankMatch[1], 10);
+  return resolvedRank;
+};
+window.extractNaverProductIdFromUrl = function extractNaverProductIdFromUrl(url) {
+  var rawUrl = String(url || '').trim();
+  if (!rawUrl) return '';
+
+  // 기존 nvMid 계약은 보존하되, 다른 query 값 속 '/products/ID'는 경로로 오인하지 않는다.
+  var nvMidMatch = rawUrl.match(/[?&]nvMid=(\d+)(?=&|#|$)/);
+  if (nvMidMatch) return nvMidMatch[1];
+  var pathname = rawUrl.split(/[?#]/)[0];
+  var pathMatch = pathname.match(/\/(?:products|catalog)\/(\d+)(?:\/|$)/);
+  return pathMatch ? pathMatch[1] : '';
+};
 window.createDoSearch = function (deps) {
   var cleanProductUrl = deps.cleanProductUrl;
   var lastHtmlRef = deps.lastHtmlRef;
@@ -30601,15 +30615,29 @@ window.createDoSearch = function (deps) {
   var setShopProducts = deps.setShopProducts;
   var setVolumeData = deps.setVolumeData;
   var setAuditStatus = deps.setAuditStatus || function () {};
-  var _naverStoreHostPattern = '(?:(?:m\\.)?smartstore\\.naver\\.com|(?:m\\.)?brand\\.naver\\.com)';
-  var _naverStoreUrlPattern = new RegExp('^https?://' + _naverStoreHostPattern + '(?:/|$)', 'i');
-  var _naverStoreSlugPattern = new RegExp('^https?://' + _naverStoreHostPattern + '/([^/?#]+)', 'i');
+  var _naverStoreHosts = {
+    'smartstore.naver.com': true,
+    'm.smartstore.naver.com': true,
+    'brand.naver.com': true,
+    'm.brand.naver.com': true
+  };
+  var _extractProductId = window.extractNaverProductIdFromUrl;
+  var _parseNaverStoreProductUrl = function (url) {
+    var outerMatch = String(url || '').match(/^https?:\/\/([^/?#]+)(\/[^?#]*)$/i);
+    if (!outerMatch || !_naverStoreHosts[String(outerMatch[1] || '').toLowerCase()]) return null;
+    var pathMatch = String(outerMatch[2] || '').match(/^\/([^/]+)\/products\/(\d+)\/?$/);
+    if (!pathMatch) return null;
+    return {
+      store: pathMatch[1],
+      productId: pathMatch[2]
+    };
+  };
   var _isNaverStoreUrl = function (url) {
-    return _naverStoreUrlPattern.test(String(url || ''));
+    return !!_parseNaverStoreProductUrl(url);
   };
   var _naverStoreSlug = function (url) {
-    var match = String(url || '').match(_naverStoreSlugPattern);
-    return match ? match[1].toLowerCase() : '';
+    var parsed = _parseNaverStoreProductUrl(url);
+    return parsed ? parsed.store.toLowerCase() : '';
   };
   return function _doSearch(keyword, productUrl, inputCompanyName, htmlInput, capturedProductName) {
     lastHtmlRef.current = htmlInput || ''; // #1: 저장/재사용용 상세 HTML 보관
@@ -30699,12 +30727,15 @@ window.createDoSearch = function (deps) {
         });
       } catch (e) {}
     };
+    var _isSuccessfulProductSearch = function (response) {
+      return !!(response && response.success && response.data && Array.isArray(response.data.products));
+    };
     var _fetchTriple = function (prev) {
       prev = prev || [null, null, null];
       var ok = {
         vol: !!(prev[0] && prev[0].success && prev[0].data && prev[0].data[0]),
         rel: !!(prev[1] && prev[1].success),
-        shop: !!(prev[2] && prev[2].success && prev[2].data && (prev[2].data.products || []).length > 0)
+        shop: _isSuccessfulProductSearch(prev[2])
       };
       // 성공한 항목은 재호출하지 않고 그대로 유지 — 실패분만 다시 받는다
       return Promise.all([ok.vol ? Promise.resolve(prev[0]) : api.post('/keyword/volume', [keyword]).catch(function () {
@@ -30749,15 +30780,14 @@ window.createDoSearch = function (deps) {
       var _findAdvProd = function (prodList) {
         if (!cleanedUrl) return null;
         var found = null;
-        var pidMatch = cleanedUrl.match(/\/products\/(\d+)/);
-        if (pidMatch) {
-          var pid = pidMatch[1];
+        var pid = _extractProductId(cleanedUrl);
+        if (pid) {
           found = prodList.find(function (p) {
             return p.product_id && String(p.product_id) === pid;
           });
           if (found) return found;
           found = prodList.find(function (p) {
-            return p.product_url && p.product_url.indexOf(pid) >= 0;
+            return _extractProductId(p.product_url) === pid;
           });
           if (found) return found;
         }
@@ -30780,7 +30810,7 @@ window.createDoSearch = function (deps) {
       if (!targetProd && _capturedProductName) {
         targetProd = {
           rank: null,
-          product_id: (cleanedUrl.match(/\/products\/(\d+)/) || [])[1] || '',
+          product_id: _extractProductId(cleanedUrl),
           product_url: cleanedUrl,
           product_name: _capturedProductName,
           store_name: _targetStoreName,
@@ -31687,7 +31717,8 @@ window.createDoSearch = function (deps) {
       var ok = {
         vol: !!(results[0] && results[0].success && results[0].data && results[0].data[0]),
         rel: !!(results[1] && results[1].success),
-        shop: !!(results[2] && results[2].success && results[2].data && (results[2].data.products || []).length > 0)
+        // 성공 응답의 []는 장애가 아니라 확정 미노출이다. 응답 실패만 재조회한다.
+        shop: _isSuccessfulProductSearch(results[2])
       };
       var retrying = (!ok.vol || !ok.rel || !ok.shop) && round < 2;
       _auditItems['검색량'] = ok.vol ? 'ok' : retrying ? 'retry' : 'fail';

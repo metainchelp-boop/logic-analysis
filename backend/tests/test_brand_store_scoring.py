@@ -92,7 +92,7 @@ def test_brand_store_uses_same_naver_store_scoring_as_smartstore():
 
 
 def test_mobile_brand_store_is_also_a_naver_store_without_changing_legacy_flag():
-    mobile = _analyze("https://m.brand.naver.com/vayapet/products/9864738770")
+    mobile = _analyze("https://m.brand.naver.com/vayapet/products/9864738770/")
     detail = mobile["scores"]["detail"]
 
     assert detail["is_naver_store"] is True
@@ -101,7 +101,7 @@ def test_mobile_brand_store_is_also_a_naver_store_without_changing_legacy_flag()
 
 
 def test_mobile_smartstore_keeps_its_existing_platform_and_legacy_flags():
-    mobile = _analyze("https://m.smartstore.naver.com/vayapet/products/9864738770")
+    mobile = _analyze("https://m.smartstore.naver.com/vayapet/products/9864738770/")
     detail = mobile["scores"]["detail"]
 
     assert detail["is_naver_store"] is True
@@ -126,6 +126,27 @@ def test_naver_store_text_in_an_unrelated_host_does_not_receive_platform_credit(
     assert external["scores"]["naverpay"] == 50
     assert external["scores"]["detail"]["is_naver_store"] is False
     assert external["scores"]["detail"]["has_naverpay"] is False
+
+
+def test_naver_store_credit_requires_exact_product_path_without_query():
+    rejected_urls = (
+        "https://brand.naver.com/",
+        "https://brand.naver.com/vayapet",
+        "https://brand.naver.com/vayapet/products/not-a-number",
+        "https://brand.naver.com/vayapet/products/9864738770/reviews",
+        "https://brand.naver.com/vayapet/products/9864738770?NaPm=tracking",
+        "https://brand.naver.com:443/vayapet/products/9864738770",
+        "https://smartstore.naver.com/example/products/12345/reviews",
+    )
+
+    for url in rejected_urls:
+        result = _analyze(url)
+        detail = result["scores"]["detail"]
+        assert result["scores"]["brand"] == 70, url
+        assert result["scores"]["naverpay"] == 50, url
+        assert detail["is_naver_store"] is False, url
+        assert detail["has_naverpay"] is False, url
+        assert detail["is_smartstore"] is False, url
 
 
 def test_malformed_url_remains_a_safe_non_naver_store_input():
@@ -195,6 +216,42 @@ def test_exact_product_id_wins_before_same_store_fallback():
 
     result = seo_analyze(req, current_user={"id": 1})["data"]
     assert result["product_info"]["product_name"] == "신고 대상 정확 상품"
+    assert result["product_info"]["price"] == 12300
+
+
+def test_cached_product_info_url_match_uses_exact_parsed_id_after_direct_id_miss():
+    wrong = {
+        "rank": 1,
+        "product_id": "9123",
+        "product_url": "https://search.shopping.naver.com/main/products/9123?next=/products/123",
+        "product_name": "부분 문자열만 겹친 다른 상품",
+        "price": 9900,
+        "brand": "다른 브랜드",
+        "store_name": "다른 판매처",
+        "category1": "생활/건강",
+        "category2": "반려동물",
+    }
+    exact_url = dict(
+        wrong,
+        rank=2,
+        product_id="",
+        product_url="https://search.shopping.naver.com/catalog/123",
+        product_name="경로에서 정확히 추출한 상품",
+        price=12300,
+        brand="바야",
+        store_name="바야 프리미엄 펫푸드",
+    )
+    req = SeoAnalysisRequest(
+        product_url="https://brand.naver.com/vayapet/products/123",
+        keyword="방울양배추",
+        cached_rank=2,
+        cached_product_info={"product_name": ""},
+        cached_competitors=[wrong, exact_url],
+        cached_total_volume=1000,
+    )
+
+    result = seo_analyze(req, current_user={"id": 1})["data"]
+    assert result["product_info"]["product_name"] == "경로에서 정확히 추출한 상품"
     assert result["product_info"]["price"] == 12300
 
 

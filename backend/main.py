@@ -1440,8 +1440,33 @@ def _url_hostname(url: str) -> str:
 
 
 def _is_naver_store_url(url: str) -> bool:
-    """일반·브랜드스토어를 같은 네이버 판매 플랫폼으로 판정한다."""
-    return _url_hostname(url) in _NAVER_STORE_HOSTS
+    """정확한 일반·브랜드스토어 상품 URL만 네이버 판매 플랫폼으로 판정한다."""
+    try:
+        raw_url = str(url or "").strip()
+        parsed = urlparse(raw_url)
+        if parsed.scheme.lower() not in ("http", "https"):
+            return False
+        if parsed.username is not None or parsed.password is not None:
+            return False
+        if parsed.port is not None:
+            return False
+        if (parsed.hostname or "").lower() not in _NAVER_STORE_HOSTS:
+            return False
+        if "?" in raw_url or "#" in raw_url:
+            return False
+
+        path_parts = parsed.path.split("/")
+        if len(path_parts) == 5 and path_parts[-1] == "":
+            path_parts = path_parts[:-1]
+        return (
+            len(path_parts) == 4
+            and path_parts[0] == ""
+            and bool(path_parts[1])
+            and path_parts[2] == "products"
+            and path_parts[3].isdigit()
+        )
+    except (TypeError, ValueError):
+        return False
 
 
 def _naver_store_slug(url: str) -> str:
@@ -2755,10 +2780,14 @@ def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_curren
                             _matched_cp = _cp
                             logger.info(f"SEO product_id 필드 매칭: {_cp.get('product_name', '')[:30]}")
                             break
-                    # 2차: product_url에 PID 포함 (네이버 API link = /main/products/채널ID)
+                    # 2차: product_url에서 추출한 PID 정확 비교
+                    # (네이버 API link의 /main/products/ID, /catalog/ID, nvMid 모두 동일 경계 사용)
                     if not _matched_cp:
                         for _cp in req.cached_competitors:
-                            if _fix_pid in (_cp.get("product_url") or ""):
+                            _candidate_pid = extract_product_id_from_url(
+                                _cp.get("product_url") or ""
+                            ) or ""
+                            if str(_candidate_pid) == str(_fix_pid):
                                 _matched_cp = _cp
                                 logger.info(f"SEO URL-PID 매칭: {_cp.get('product_name', '')[:30]}")
                                 break
@@ -3068,8 +3097,8 @@ def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_curren
         brand_score = 0
         product_brand = product_info.get("brand", "")
         _product_host = _url_hostname(product_url)
-        is_smartstore = _product_host in _SMARTSTORE_HOSTS
         is_naver_store = _is_naver_store_url(product_url)
+        is_smartstore = is_naver_store and _product_host in _SMARTSTORE_HOSTS
         if product_brand:
             brand_score += 40
         if is_naver_store:

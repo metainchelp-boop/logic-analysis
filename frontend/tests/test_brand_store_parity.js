@@ -62,8 +62,22 @@ function makeProducts(targetUrl) {
   })));
 }
 
-function runAnalysis(targetUrl, suppliedProducts, capturedProductName) {
-  const products = suppliedProducts || makeProducts(targetUrl);
+function runAnalysisWithTrace(targetUrl, suppliedProducts, capturedProductName, options) {
+  const products = suppliedProducts === undefined ? makeProducts(targetUrl) : suppliedProducts;
+  const trace = {
+    productSearchCalls: 0,
+    auditStatuses: [],
+    shopProductStates: [],
+    timerDelays: [],
+  };
+  const originalSetTimeout = context.setTimeout;
+  if (options && options.runTimersImmediately) {
+    context.setTimeout = (callback, delay) => {
+      trace.timerDelays.push(delay);
+      callback();
+      return trace.timerDelays.length;
+    };
+  }
   context.api = {
     post(endpoint) {
       if (endpoint === '/keyword/volume') {
@@ -82,6 +96,10 @@ function runAnalysis(targetUrl, suppliedProducts, capturedProductName) {
         } });
       }
       if (endpoint === '/products/search') {
+        trace.productSearchCalls += 1;
+        if (options && typeof options.productSearchResponse === 'function') {
+          return options.productSearchResponse(trace.productSearchCalls);
+        }
         return Promise.resolve({ success: true, data: { products, total: products.length } });
       }
       if (endpoint === '/datalab/analyze') {
@@ -102,7 +120,9 @@ function runAnalysis(targetUrl, suppliedProducts, capturedProductName) {
       searchIdRef: { current: 0 },
       setAdvertiserLoading: noop,
       setAdvertiserReport: noop,
-      setAnalysisData: (data) => { if (data) resolve(data); },
+      setAnalysisData: (data) => {
+        if (data) resolve({ analysis: data, trace });
+      },
       setCompanyName: noop,
       setDatalabData: noop,
       setDatalabLoading: noop,
@@ -113,9 +133,9 @@ function runAnalysis(targetUrl, suppliedProducts, capturedProductName) {
       setSearchLoading: noop,
       setSearchedKeyword: noop,
       setSearchedProductUrl: noop,
-      setShopProducts: noop,
+      setShopProducts: (value) => { trace.shopProductStates.push(value); },
       setVolumeData: noop,
-      setAuditStatus: noop,
+      setAuditStatus: (value) => { trace.auditStatuses.push(value); },
     };
     try {
       context.window.createDoSearch(deps)(
@@ -124,7 +144,14 @@ function runAnalysis(targetUrl, suppliedProducts, capturedProductName) {
     } catch (error) {
       reject(error);
     }
+  }).finally(() => {
+    context.setTimeout = originalSetTimeout;
   });
+}
+
+function runAnalysis(targetUrl, suppliedProducts, capturedProductName) {
+  return runAnalysisWithTrace(targetUrl, suppliedProducts, capturedProductName)
+    .then((result) => result.analysis);
 }
 
 async function testBrandStoreUsesSameNaverStorePolicyAsSmartstore() {
@@ -203,6 +230,39 @@ async function testProductIdWinsBeforeUntrustedUrlSubstringMatch() {
   assert.strictEqual(result.targetProductInfo.product_name, '정확한 상품 ID 대상');
 }
 
+async function testProductUrlIdMatchUsesExactParsedIdAfterDirectIdMiss() {
+  const url = 'https://brand.naver.com/vayapet/products/123';
+  const products = [
+    {
+      rank: 1,
+      product_id: '9123',
+      product_url: 'https://search.shopping.naver.com/main/products/9123?next=/products/123',
+      product_name: '부분 문자열만 겹친 다른 상품',
+      store_name: '다른 판매처',
+      price: 9900,
+      brand: '다른 브랜드',
+      category1: '생활/건강',
+      category2: '반려동물',
+      image_url: '',
+    },
+    {
+      rank: 2,
+      product_id: '',
+      product_url: 'https://search.shopping.naver.com/catalog/123',
+      product_name: '경로에서 정확히 추출한 상품',
+      store_name: '바야 프리미엄 펫푸드',
+      price: 12300,
+      brand: '바야',
+      category1: '생활/건강',
+      category2: '반려동물',
+      image_url: '',
+    },
+  ];
+
+  const result = await runAnalysis(url, products);
+  assert.strictEqual(result.targetProductInfo.product_name, '경로에서 정확히 추출한 상품');
+}
+
 async function testBrandStoreSlugFallbackWorksAfterProductIdMiss() {
   const url = 'https://brand.naver.com/vayapet/products/9864738770';
   const products = [{
@@ -217,13 +277,13 @@ async function testBrandStoreSlugFallbackWorksAfterProductIdMiss() {
 }
 
 async function testMobileBrandStoreAlsoUsesNaverStorePolicy() {
-  const result = await runAnalysis('https://m.brand.naver.com/vayapet/products/9864738770');
+  const result = await runAnalysis('https://m.brand.naver.com/vayapet/products/9864738770/');
   assert.strictEqual(result.seoDetail.trustworthy.items[0].pass, true);
   assert.strictEqual(result.seoDetail.trustworthy.items[3].pass, true);
 }
 
 async function testMobileSmartstoreKeepsExistingNaverStorePolicy() {
-  const result = await runAnalysis('https://m.smartstore.naver.com/vayapet/products/9864738770');
+  const result = await runAnalysis('https://m.smartstore.naver.com/vayapet/products/9864738770/');
   assert.strictEqual(result.seoDetail.trustworthy.items[0].pass, true);
   assert.strictEqual(result.seoDetail.trustworthy.items[3].pass, true);
 }
@@ -234,6 +294,24 @@ async function testUnrelatedHostContainingSmartstoreTextGetsNoNaverStoreCredit()
 
   assert.strictEqual(result.seoDetail.trustworthy.items[0].pass, false);
   assert.strictEqual(result.seoDetail.trustworthy.items[3].pass, false);
+}
+
+async function testNaverStoreCreditRequiresExactProductPathWithoutQuery() {
+  const rejectedUrls = [
+    'https://brand.naver.com/',
+    'https://brand.naver.com/vayapet',
+    'https://brand.naver.com/vayapet/products/not-a-number',
+    'https://brand.naver.com/vayapet/products/9864738770/reviews',
+    'https://brand.naver.com/vayapet/products/9864738770?NaPm=tracking',
+    'https://brand.naver.com:443/vayapet/products/9864738770',
+    'https://smartstore.naver.com/example/products/12345/reviews',
+  ];
+
+  for (const url of rejectedUrls) {
+    const result = await runAnalysis(url);
+    assert.strictEqual(result.seoDetail.trustworthy.items[0].pass, false, url);
+    assert.strictEqual(result.seoDetail.trustworthy.items[3].pass, false, url);
+  }
 }
 
 async function testCapturedProductNameSurvivesExtensionBridgeAndMatchingFailure() {
@@ -342,8 +420,10 @@ async function testEmptyShoppingResultStillKeepsCapturedBrandMeasurementsUsable(
   assert.strictEqual(merged.category2, '반려동물');
   assert.match(source, /setShopProducts\(prods\)/);
   assert.match(source, /Array\.isArray\(data\.shopProducts\)/);
-  assert.match(analysisResultsSource, /var _resolvedCachedRank/);
-  assert.match(analysisResultsSource, /Array\.isArray\(shopProducts\)[\s\S]{0,120}\? 0/);
+  assert.match(
+    analysisResultsSource,
+    /resolveSeoCachedRank\(shopProducts, analysisData\)/
+  );
   assert.match(
     seoDiagnosisSource,
     /\[keyword, productUrl,[^\]]*loading[^\]]*htmlReviewData\]/
@@ -383,18 +463,86 @@ async function testEmptyShoppingResultStillKeepsCapturedBrandMeasurementsUsable(
   assert.deepStrictEqual(exactRequest.cached_competitors, []);
 }
 
+async function testSuccessfulEmptyShoppingResultIsSettledWithoutRetryOrFailure() {
+  const { analysis, trace } = await runAnalysisWithTrace(
+    'https://brand.naver.com/vayapet/products/9864738770',
+    [],
+    '동결건조 강아지 간식',
+    { runTimersImmediately: true }
+  );
+
+  assert.strictEqual(analysis.targetProductInfo.product_name, '동결건조 강아지 간식');
+  assert.strictEqual(trace.productSearchCalls, 1);
+  assert.deepStrictEqual(trace.timerDelays, []);
+  assert.ok(trace.shopProductStates.some((value) => Array.isArray(value) && value.length === 0));
+  const productAuditStates = trace.auditStatuses.flatMap((status) => (
+    status && Array.isArray(status.items)
+      ? status.items.filter((item) => item.name === '상품 검색').map((item) => item.st)
+      : []
+  ));
+  assert.ok(productAuditStates.length > 0);
+  assert.deepStrictEqual([...new Set(productAuditStates)], ['ok']);
+
+  const settledProducts = trace.shopProductStates[trace.shopProductStates.length - 1];
+  const cachedRank = context.window.resolveSeoCachedRank(settledProducts, analysis);
+  const seoBody = context.window.buildSeoAnalysisBody({
+    productUrl: 'https://brand.naver.com/vayapet/products/9864738770',
+    keyword: '방울양배추',
+    cachedRank,
+    cachedProductName: analysis.targetProductInfo.product_name,
+    cachedProductInfo: analysis.targetProductInfo,
+    shopProducts: settledProducts,
+    htmlReviewData: {
+      price: 12300,
+      category: '생활/건강>반려동물>강아지 간식',
+      category1: '생활/건강',
+    },
+  });
+  assert.strictEqual(cachedRank, 0);
+  assert.strictEqual(seoBody.cached_rank, 0);
+}
+
+async function testFailedShoppingRequestStillRetriesAndSettlesOnLaterEmptySuccess() {
+  const { trace } = await runAnalysisWithTrace(
+    'https://brand.naver.com/vayapet/products/9864738770',
+    [],
+    '동결건조 강아지 간식',
+    {
+      runTimersImmediately: true,
+      productSearchResponse(callNumber) {
+        if (callNumber < 3) return Promise.reject(new Error('temporary network failure'));
+        return Promise.resolve({ success: true, data: { products: [], total: 0 } });
+      },
+    }
+  );
+
+  assert.strictEqual(trace.productSearchCalls, 3);
+  assert.deepStrictEqual(trace.timerDelays, [2500, 5000]);
+  const productAuditStates = trace.auditStatuses.flatMap((status) => (
+    status && Array.isArray(status.items)
+      ? status.items.filter((item) => item.name === '상품 검색').map((item) => item.st)
+      : []
+  ));
+  assert.deepStrictEqual(productAuditStates.slice(0, 3), ['retry', 'retry', 'ok']);
+  assert.ok(!productAuditStates.includes('fail'));
+}
+
 const tests = [
   testBrandStoreUsesSameNaverStorePolicyAsSmartstore,
   testBrandStoreProductIdStillWinsBeforeStoreFallback,
   testProductIdWinsBeforeUntrustedUrlSubstringMatch,
+  testProductUrlIdMatchUsesExactParsedIdAfterDirectIdMiss,
   testBrandStoreSlugFallbackWorksAfterProductIdMiss,
   testMobileBrandStoreAlsoUsesNaverStorePolicy,
   testMobileSmartstoreKeepsExistingNaverStorePolicy,
   testUnrelatedHostContainingSmartstoreTextGetsNoNaverStoreCredit,
+  testNaverStoreCreditRequiresExactProductPathWithoutQuery,
   testCapturedProductNameSurvivesExtensionBridgeAndMatchingFailure,
   testCapturedHtmlMeasurementsOverrideIncompleteSearchFallback,
   testParsedBrandNameWinsOverOgTitleSuffixInRenderedConsumers,
   testEmptyShoppingResultStillKeepsCapturedBrandMeasurementsUsable,
+  testSuccessfulEmptyShoppingResultIsSettledWithoutRetryOrFailure,
+  testFailedShoppingRequestStillRetriesAndSettlesOnLaterEmptySuccess,
 ];
 (async () => {
   let failed = 0;
