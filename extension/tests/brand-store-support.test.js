@@ -165,7 +165,8 @@ test('popup enables only exact product pages on supported Naver Store hosts', fu
     'https://brand.naver.com/vayapet/products/not-a-number',
     'https://brand.naver.com/vayapet/products/9864738770/reviews',
     'https://evilbrand.naver.com/vayapet/products/9864738770',
-    'https://brand.naver.com.example.com/vayapet/products/9864738770'
+    'https://brand.naver.com.example.com/vayapet/products/9864738770',
+    'http://brand.naver.com/vayapet/products/9864738770'
   ];
 
   supportedUrls.forEach(function (url) {

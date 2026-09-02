@@ -94,6 +94,23 @@ def test_mobile_brand_store_is_also_a_naver_store_without_changing_legacy_flag()
     assert detail["has_naverpay"] is True
 
 
+def test_mobile_smartstore_keeps_its_existing_platform_and_legacy_flags():
+    mobile = _analyze("https://m.smartstore.naver.com/vayapet/products/9864738770")
+    detail = mobile["scores"]["detail"]
+
+    assert detail["is_naver_store"] is True
+    assert detail["is_smartstore"] is True
+    assert detail["has_naverpay"] is True
+
+
+def test_non_http_brand_url_gets_no_naver_store_credit():
+    external = _analyze("ftp://brand.naver.com/vayapet/products/9864738770")
+
+    assert external["scores"]["brand"] == 70
+    assert external["scores"]["naverpay"] == 50
+    assert external["scores"]["detail"]["is_naver_store"] is False
+
+
 def test_naver_store_text_in_an_unrelated_host_does_not_receive_platform_credit():
     external = _analyze(
         "https://mall.example/products/9864738770?next=https://smartstore.naver.com/vayapet"

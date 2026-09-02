@@ -3,7 +3,7 @@ function isNaverStoreProductUrl(rawUrl) {
   try {
     var url = new URL(rawUrl);
     var supportedHosts = ['smartstore.naver.com', 'brand.naver.com', 'm.brand.naver.com'];
-    return supportedHosts.indexOf(url.hostname) !== -1 && /^\/[^/]+\/products\/\d+\/?$/.test(url.pathname);
+    return url.protocol === 'https:' && supportedHosts.indexOf(url.hostname) !== -1 && /^\/[^/]+\/products\/\d+\/?$/.test(url.pathname);
   } catch (e) {
     return false;
   }

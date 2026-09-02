@@ -1415,14 +1415,25 @@ class SeoAnalysisRequest(BaseModel):
 
 _NAVER_STORE_HOSTS = frozenset({
     "smartstore.naver.com",
+    "m.smartstore.naver.com",
     "brand.naver.com",
     "m.brand.naver.com",
+})
+
+_SMARTSTORE_HOSTS = frozenset({
+    "smartstore.naver.com",
+    "m.smartstore.naver.com",
 })
 
 
 def _url_hostname(url: str) -> str:
     try:
-        return (urlparse(url or "").hostname or "").lower().rstrip(".")
+        raw_url = str(url or "").strip()
+        candidate = raw_url if "://" in raw_url or raw_url.startswith("//") else f"//{raw_url}"
+        parsed = urlparse(candidate)
+        if parsed.scheme and parsed.scheme.lower() not in ("http", "https"):
+            return ""
+        return (parsed.hostname or "").lower().rstrip(".")
     except (TypeError, ValueError):
         return ""
 
@@ -3050,7 +3061,7 @@ def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_curren
         brand_score = 0
         product_brand = product_info.get("brand", "")
         _product_host = _url_hostname(product_url)
-        is_smartstore = _product_host == "smartstore.naver.com"
+        is_smartstore = _product_host in _SMARTSTORE_HOSTS
         is_naver_store = _is_naver_store_url(product_url)
         if product_brand:
             brand_score += 40

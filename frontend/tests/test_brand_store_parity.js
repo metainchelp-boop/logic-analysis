@@ -167,6 +167,12 @@ async function testMobileBrandStoreAlsoUsesNaverStorePolicy() {
   assert.strictEqual(result.seoDetail.trustworthy.items[3].pass, true);
 }
 
+async function testMobileSmartstoreKeepsExistingNaverStorePolicy() {
+  const result = await runAnalysis('https://m.smartstore.naver.com/vayapet/products/9864738770');
+  assert.strictEqual(result.seoDetail.trustworthy.items[0].pass, true);
+  assert.strictEqual(result.seoDetail.trustworthy.items[3].pass, true);
+}
+
 async function testUnrelatedHostContainingSmartstoreTextGetsNoNaverStoreCredit() {
   const url = 'https://mall.example/products/9864738770?next=https://smartstore.naver.com/vayapet';
   const result = await runAnalysis(url);
@@ -180,6 +186,7 @@ const tests = [
   testBrandStoreProductIdStillWinsBeforeStoreFallback,
   testBrandStoreSlugFallbackWorksAfterProductIdMiss,
   testMobileBrandStoreAlsoUsesNaverStorePolicy,
+  testMobileSmartstoreKeepsExistingNaverStorePolicy,
   testUnrelatedHostContainingSmartstoreTextGetsNoNaverStoreCredit,
 ];
 (async () => {
