@@ -39,6 +39,35 @@ window.hasSeoHtmlMeasurements = function hasSeoHtmlMeasurements(htmlReviewData) 
     ));
 };
 
+window.shouldHideStaleFrontDiagnostics = function shouldHideStaleFrontDiagnostics(
+    sourceProductInfo,
+    resolvedProductInfo,
+    htmlReviewData,
+    htmlDetailResult
+) {
+    var source = sourceProductInfo && typeof sourceProductInfo === 'object' ? sourceProductInfo : {};
+    var resolved = resolvedProductInfo && typeof resolvedProductInfo === 'object' ? resolvedProductInfo : {};
+    var html = htmlReviewData && typeof htmlReviewData === 'object' ? htmlReviewData : {};
+    var normalized = function(value) { return String(value == null ? '' : value).trim(); };
+
+    var measuredName = normalized(htmlDetailResult && htmlDetailResult.productName);
+    if (measuredName && normalized(source.product_name) !== normalized(resolved.product_name)) return true;
+
+    var measuredPrice = Number(html.price);
+    if (Number.isFinite(measuredPrice) && measuredPrice > 0) {
+        if (Number(source.price || 0) !== Number(resolved.price || 0)) return true;
+    }
+
+    if (normalized(html.category) || normalized(html.category1)) {
+        var categoryKeys = ['category1', 'category2', 'category3'];
+        for (var i = 0; i < categoryKeys.length; i += 1) {
+            var key = categoryKeys[i];
+            if (normalized(resolved[key]) && normalized(source[key]) !== normalized(resolved[key])) return true;
+        }
+    }
+    return false;
+};
+
 window.canAutoRunSeoDiagnosis = function canAutoRunSeoDiagnosis(input) {
     var data = input || {};
     var hasCachedInput =
@@ -98,7 +127,8 @@ window.buildSeoAnalysisBody = function buildSeoAnalysisBody(input) {
 };
 
 window.resolveSeoCachedRank = function resolveSeoCachedRank(shopProducts, analysisData) {
-    var resolvedRank = Array.isArray(shopProducts) ? 0 : null;
+    // 0건만 확정 미노출이다. 1건 이상에서 대상이 없으면 BE 500위 심층 확인을 열어둔다.
+    var resolvedRank = Array.isArray(shopProducts) && shopProducts.length === 0 ? 0 : null;
     var popularity = analysisData && analysisData.seoDetail && analysisData.seoDetail.popularity;
     var rankItem = popularity && popularity.items && popularity.items[0];
     var rankLabel = rankItem && rankItem.label ? String(rankItem.label) : '';

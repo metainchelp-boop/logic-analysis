@@ -45,6 +45,16 @@ window.AnalysisResults = function AnalysisResults(props) {
     var _resolvedCachedRank = window.resolveSeoCachedRank
         ? window.resolveSeoCachedRank(shopProducts, analysisData)
         : null;
+    // HTML 실측값이 0원/미분류 폴백을 바꾼 뒤에는 이전 FE 추정 블록을 함께 노출하지 않는다.
+    // 아래 SEO 종합 진단은 _resolvedProductInfo로 재실행되므로 stale 블록을 이중 노출하지 않는다.
+    var _hideStaleFrontDiagnostics = window.shouldHideStaleFrontDiagnostics
+        ? window.shouldHideStaleFrontDiagnostics(
+            analysisData && analysisData.targetProductInfo ? analysisData.targetProductInfo : null,
+            _resolvedProductInfo,
+            htmlReviewData,
+            htmlDetailResult
+        )
+        : false;
 
     /* 광고주/스토어명 자동 채우기 (2026-07-27 수정)
        주의: 백엔드 store_name 은 쇼핑API 매칭·상품페이지 방문이 모두 실패하면
@@ -384,12 +394,12 @@ window.AnalysisResults = function AnalysisResults(props) {
                 ),
     
                 /* SEO 상세 분석 (적합도/신뢰도/인기도) */
-                analysisData && analysisData.seoDetail && React.createElement(window.SectionErrorBoundary, { name: 'SEO 상세' },
+                analysisData && analysisData.seoDetail && !_hideStaleFrontDiagnostics && React.createElement(window.SectionErrorBoundary, { name: 'SEO 상세' },
                     React.createElement(window.SeoDetailSection, { data: analysisData.seoDetail })
                 ),
     
                 /* 상세페이지 품질 진단 */
-                analysisData && analysisData.detailPageQuality && React.createElement(window.SectionErrorBoundary, { name: '상세페이지 품질' },
+                analysisData && analysisData.detailPageQuality && !_hideStaleFrontDiagnostics && React.createElement(window.SectionErrorBoundary, { name: '상세페이지 품질' },
                     React.createElement(window.DetailPageQualitySection, { data: analysisData.detailPageQuality })
                 ),
     

@@ -155,6 +155,65 @@ function runAnalysis(targetUrl, suppliedProducts, capturedProductName) {
     .then((result) => result.analysis);
 }
 
+function renderAnalysisResults(overrides) {
+  if (!context.window.AnalysisResults) {
+    const componentNames = [...analysisResultsSource.matchAll(
+      /React\.createElement\((?:window\.)?([A-Z][A-Za-z0-9_]*)/g
+    )].map((match) => match[1]);
+    for (const name of componentNames) {
+      if (!context[name]) context[name] = function StubComponent() {};
+    }
+    context.React = {
+      createElement(type, props, ...children) {
+        return { type, props: { ...(props || {}), children } };
+      },
+    };
+    vm.runInContext(analysisResultsSource, context, { filename: 'AnalysisResults.jsx' });
+  }
+
+  const props = {
+    advertiserLoading: false,
+    advertiserReport: null,
+    analysisData: null,
+    companyName: '',
+    currentUser: { role: 'viewer', name: '검수자' },
+    datalabData: null,
+    datalabLoading: false,
+    auditStatus: null,
+    handleNavigateToClient() {},
+    htmlDetailResult: null,
+    htmlReviewData: null,
+    lastHtmlRef: { current: '' },
+    loadProducts() {},
+    products: [],
+    rankCheckResult: null,
+    relatedData: null,
+    scrollTo() {},
+    searchLoading: false,
+    searchedKeyword: '방울양배추',
+    searchedProductUrl: 'https://brand.naver.com/vayapet/products/9864738770',
+    sections: [],
+    setRankCheckResult() {},
+    shopProducts: [],
+    volumeData: [{ monthlyPcQcCnt: 100, monthlyMobileQcCnt: 200 }],
+    ...overrides,
+  };
+  return context.window.AnalysisResults(props);
+}
+
+function findElementsByType(node, targetType, found = []) {
+  if (Array.isArray(node)) {
+    node.forEach((child) => findElementsByType(child, targetType, found));
+    return found;
+  }
+  if (!node || typeof node !== 'object') return found;
+  if (node.type === targetType) found.push(node);
+  if (node.props && node.props.children) {
+    findElementsByType(node.props.children, targetType, found);
+  }
+  return found;
+}
+
 async function testBrandStoreUsesSameNaverStorePolicyAsSmartstore() {
   const smart = await runAnalysis('https://smartstore.naver.com/vayapet/products/9864738770');
   const brand = await runAnalysis('https://brand.naver.com/vayapet/products/9864738770');
@@ -538,6 +597,135 @@ async function testSuccessfulEmptyShoppingResultIsSettledWithoutRetryOrFailure()
   assert.strictEqual(seoBody.cached_rank, 0);
 }
 
+async function testNonEmptyShoppingResultWithoutTargetLeavesCachedRankUnsetForDeepSearch() {
+  const targetUrl = 'https://brand.naver.com/vayapet/products/9864738770';
+  const competitors = Array.from({ length: 80 }, (_, index) => ({
+    rank: index + 1,
+    product_id: String(3000000000 + index),
+    product_url: `https://example.com/catalog/${3000000000 + index}`,
+    product_name: `다른 스토어 경쟁상품 ${index + 1}`,
+    store_name: '다른 판매처',
+    price: 10000 + index,
+    brand: '다른 브랜드',
+    category1: '생활/건강',
+    category2: '반려동물',
+    image_url: '',
+  }));
+  const analysis = await runAnalysis(targetUrl, competitors, '신고 대상 상품');
+
+  const cachedRank = context.window.resolveSeoCachedRank(competitors, analysis);
+  const seoBody = context.window.buildSeoAnalysisBody({
+    productUrl: targetUrl,
+    keyword: '방울양배추',
+    cachedRank,
+    cachedProductName: analysis.targetProductInfo.product_name,
+    cachedProductInfo: analysis.targetProductInfo,
+    shopProducts: competitors,
+  });
+
+  assert.strictEqual(cachedRank, null);
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(seoBody, 'cached_rank'), false);
+  assert.strictEqual(seoBody.cached_competitors.length, 80);
+  assert.strictEqual(context.window.resolveSeoCachedRank(competitors, {
+    seoDetail: { popularity: { items: [{ label: '검색 결과 37위' }] } },
+  }), 37);
+}
+
+async function testHtmlMeasurementsHideStaleFrontDiagnosticsAndReachSeoDiagnosis() {
+  const staleAnalysis = {
+    targetProductInfo: {
+      product_name: '캡처 폴백 상품명',
+      price: 0,
+      category1: '',
+      category2: '',
+    },
+    seoDetail: {
+      relevance: { score: 10, items: [{ pass: false, label: '카테고리 정보 없음' }] },
+      trustworthy: { score: 10, items: [] },
+      popularity: { score: 10, items: [{ pass: false, label: '검색 결과 내 미노출' }] },
+    },
+    detailPageQuality: {
+      totalScore: 24,
+      grade: 'D',
+      scoreBars: [
+        { label: '가격 경쟁력', score: 0, maxScore: 100 },
+        { label: '카테고리 적합도', score: 30, maxScore: 100 },
+      ],
+    },
+    goldenKeyword: null,
+  };
+  const competitors = Array.from({ length: 80 }, (_, index) => ({
+    rank: index + 1,
+    product_id: String(4000000000 + index),
+    product_url: `https://example.com/catalog/${4000000000 + index}`,
+    product_name: `경쟁상품 ${index + 1}`,
+    store_name: '다른 판매처',
+    price: 10000,
+  }));
+
+  const before = renderAnalysisResults({ analysisData: staleAnalysis, shopProducts: competitors });
+  assert.strictEqual(findElementsByType(before, context.SeoDetailSection).length, 1);
+  assert.strictEqual(findElementsByType(before, context.DetailPageQualitySection).length, 1);
+  const beforeSeo = findElementsByType(before, context.SeoDiagnosisSection)[0];
+  assert.ok(beforeSeo);
+  assert.strictEqual(beforeSeo.props.cachedProductInfo.price, undefined);
+
+  const after = renderAnalysisResults({
+    analysisData: staleAnalysis,
+    shopProducts: competitors,
+    htmlDetailResult: { productName: '실측 상품명', storeInfo: { name: 'Vaya' } },
+    htmlReviewData: {
+      price: 12300,
+      category: '생활/건강>반려동물>강아지 간식',
+      category1: '생활/건강',
+      reviewCount: 540,
+      rating: 4.88,
+    },
+  });
+  assert.strictEqual(findElementsByType(after, context.SeoDetailSection).length, 0);
+  assert.strictEqual(findElementsByType(after, context.DetailPageQualitySection).length, 0);
+  const afterSeo = findElementsByType(after, context.SeoDiagnosisSection)[0];
+  assert.ok(afterSeo);
+  assert.strictEqual(afterSeo.props.cachedRank, null);
+  assert.strictEqual(afterSeo.props.cachedProductName, '실측 상품명');
+  assert.strictEqual(afterSeo.props.cachedProductInfo.price, 12300);
+  assert.strictEqual(afterSeo.props.cachedProductInfo.category1, '생활/건강');
+  assert.strictEqual(afterSeo.props.cachedProductInfo.category2, '반려동물');
+  assert.strictEqual(context.window.shouldHideStaleFrontDiagnostics(
+    staleAnalysis.targetProductInfo,
+    afterSeo.props.cachedProductInfo,
+    { price: 12300, category1: '생활/건강' },
+    { productName: '실측 상품명' }
+  ), true);
+
+  const completeInfo = {
+    product_name: '실측 상품명',
+    price: 12300,
+    category1: '생활/건강',
+    category2: '반려동물',
+  };
+  assert.strictEqual(context.window.shouldHideStaleFrontDiagnostics(
+    completeInfo,
+    completeInfo,
+    { price: 12300, category1: '생활/건강' },
+    { productName: '실측 상품명' }
+  ), false);
+
+  const unchangedSmartstore = renderAnalysisResults({
+    analysisData: { ...staleAnalysis, targetProductInfo: completeInfo },
+    searchedProductUrl: 'https://smartstore.naver.com/vayapet/products/9864738770',
+    shopProducts: competitors,
+    htmlDetailResult: { productName: '실측 상품명', storeInfo: { name: 'Vaya' } },
+    htmlReviewData: {
+      price: 12300,
+      category: '생활/건강>반려동물',
+      category1: '생활/건강',
+    },
+  });
+  assert.strictEqual(findElementsByType(unchangedSmartstore, context.SeoDetailSection).length, 1);
+  assert.strictEqual(findElementsByType(unchangedSmartstore, context.DetailPageQualitySection).length, 1);
+}
+
 async function testFailedShoppingRequestStillRetriesAndSettlesOnLaterEmptySuccess() {
   const { trace } = await runAnalysisWithTrace(
     'https://brand.naver.com/vayapet/products/9864738770',
@@ -579,6 +767,8 @@ const tests = [
   testParsedBrandNameWinsOverOgTitleSuffixInRenderedConsumers,
   testEmptyShoppingResultStillKeepsCapturedBrandMeasurementsUsable,
   testSuccessfulEmptyShoppingResultIsSettledWithoutRetryOrFailure,
+  testNonEmptyShoppingResultWithoutTargetLeavesCachedRankUnsetForDeepSearch,
+  testHtmlMeasurementsHideStaleFrontDiagnosticsAndReachSeoDiagnosis,
   testFailedShoppingRequestStillRetriesAndSettlesOnLaterEmptySuccess,
 ];
 (async () => {

@@ -333,6 +333,60 @@ def test_captured_measurements_with_empty_search_are_neutral_and_do_not_recrawl(
     assert response["data_quality"]["price"]["sources"] == ["cached_product_info"]
 
 
+def test_nonempty_top_results_without_target_still_run_deep_rank_search():
+    """80건 비교군에 대상이 없으면 cached_rank=0으로 닫지 않고 500위 경로를 탄다."""
+    calls = []
+    deep_target = {
+        "rank": 137,
+        "product_id": "9864738770",
+        "product_url": "https://search.shopping.naver.com/catalog/9864738770",
+        "product_name": "심층 검색에서 발견한 신고 상품",
+        "price": 12300,
+        "brand": "바야",
+        "store_name": "바야 프리미엄 펫푸드",
+        "category1": "생활/건강",
+        "category2": "반려동물",
+    }
+    original_crawl = main_module._shared_crawl
+    main_module._shared_crawl = lambda keyword, limit: (
+        calls.append((keyword, limit)) or [deep_target]
+    )
+    try:
+        response = seo_analyze(
+            SeoAnalysisRequest(
+                product_url="https://brand.naver.com/vayapet/products/9864738770",
+                keyword="방울양배추",
+                cached_product_info={
+                    "product_name": "신고 대상 상품",
+                    "price": 12300,
+                    "brand": "바야",
+                    "store_name": "바야 프리미엄 펫푸드",
+                    "category1": "생활/건강",
+                    "category2": "반려동물",
+                },
+                cached_competitors=[{
+                    "rank": index + 1,
+                    "product_id": str(5000000000 + index),
+                    "product_url": (
+                        "https://search.shopping.naver.com/catalog/"
+                        f"{5000000000 + index}"
+                    ),
+                    "product_name": f"80건 안의 다른 상품 {index + 1}",
+                    "price": 9900 + index,
+                } for index in range(80)],
+                cached_total_volume=1000,
+                cached_review_count=540,
+                cached_rating=4.88,
+            ),
+            current_user={"id": 1},
+        )["data"]
+    finally:
+        main_module._shared_crawl = original_crawl
+
+    assert calls == [("방울양배추", 500)]
+    assert response["scores"]["detail"]["current_rank"] == 137
+
+
 if __name__ == "__main__":
     tests = [value for name, value in sorted(globals().items())
              if name.startswith("test_") and callable(value)]
