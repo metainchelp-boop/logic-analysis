@@ -131,6 +131,21 @@ check('④-보조 신형 광고(세 필드 조합)가 걸린다', isAdItem(mkAd(
         '실제 ' + st.products.length);
 }
 
+/* 워커 전역 합본 컴파일 — importScripts 는 rank_rules.js 와 background.js 를 **같은
+ * 전역**에 합쳐 읽는다. 파일 한 장씩의 node --check 로는 이름 재선언 충돌을 못 잡아
+ * 맥미니 적용 첫 판에서 'isAdItem has already been declared' 로 워커가 죽었다(실사고).
+ * 그래서 두 파일을 실제로 이어 붙여 컴파일한다(실행은 안 함 — chrome.* 무해). */
+{
+  const fs = require('fs'), path = require('path'), vm = require('vm');
+  const dir = path.join(__dirname, '..');
+  const combined = fs.readFileSync(path.join(dir, 'rank_rules.js'), 'utf8')
+    + '\n' + fs.readFileSync(path.join(dir, 'background.js'), 'utf8')
+        .replace(/importScripts\([^)]*\);/, '');   // 합본이 곧 importScripts 결과다
+  let err = null;
+  try { new vm.Script(combined, { filename: 'worker-combined.js' }); } catch (e) { err = e; }
+  check('워커 전역 합본이 컴파일된다(이름 재선언 충돌 없음)', !err, err && err.message);
+}
+
 console.log('');
 if (failed) { console.log(failed + '개 실패'); process.exit(1); }
 console.log('rank_rules 회귀 전부 통과');

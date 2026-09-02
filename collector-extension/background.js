@@ -19,7 +19,9 @@
 // ⭐ 순위 규칙은 rank_rules.js 한 곳에만 있다(신고 #253 후속, 2026-09-02) —
 //    chrome 의존이 없어 node 회귀 테스트가 같은 파일을 검사한다.
 importScripts('rank_rules.js');
-const { isAdItem, hasAdHint, toProduct, takeOrganic } = globalThis.RankRules;
+// ⚠️ importScripts 는 같은 전역에 합쳐 읽으므로 함수들이 이미 이 자리에 있다.
+//    같은 이름을 const 로 다시 선언하면 'already been declared' 로 워커 등록이 죽는다
+//    (2026-09-02 실사고 — 맥미니 적용 첫 판에서 그렇게 죽었다). 재선언 금지.
 
 const CFG = {
   serverBase: 'https://logic.metainc.co.kr',
