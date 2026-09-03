@@ -54,6 +54,10 @@ on:
         description: '신고 253 사후 2 — 광고 제외가 과한 키워드(담긴 수가 적은 것)를 네이버 총수·어제 담긴 수와 대조해 과필터 여부 판정(읽기 전용·업체명 미출력).'
         required: false
         default: 'off'
+      verify253d:
+        description: '신고 253 사후 3 — 김치·청귤·커피: 어제 담겼는데 오늘 사라진 상품의 링크 호스트 분포(어느 판별 가지가 떨궜는지)·오늘 담긴 링크 호스트(읽기 전용·업체명 미출력).'
+        required: false
+        default: 'off'
       reportdump:
         description: '보고서 리디자인용 실데이터 추출 — off(기본) / on. 최근 자동 분석 보고서 1건의 HTML을 업체명 가림 처리 후 base64 로 출력(읽기 전용·업체명 미출력 — 이름은 □□□로 치환 후 인코딩).'
         required: false
@@ -2631,6 +2635,63 @@ jobs:
                   ON t.client_id=y.client_id AND t.keyword=y.keyword""").fetchall()
             d2 = [x["a"]-x["b"] for x in rows]
             if d2: print("   짝", len(d2), "| 이동 min/Q1/중앙/Q3/max:", q(d2), "| 평균", round(st.mean(d2),2))
+            PY
+
+      - name: 신고 253 사후 3 — 사라진 상품의 링크 종류 (읽기 전용·업체명 미출력)
+        if: ${{ github.event.inputs.verify253d == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 3m
+          script: |
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sqlite3, json, re
+            from collections import Counter
+            from urllib.parse import urlsplit
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            def kind(link):
+                u = urlsplit(link or "")
+                host = u.netloc.lower()
+                path = u.path.lower()
+                tag = host
+                if "adcr" in path: tag += " /adcr"
+                elif "catalog" in path: tag += " /catalog"
+                elif host in ("smartstore.naver.com","brand.naver.com"): tag += " /상품"
+                return tag or "(빈 링크)"
+            for kw in ("김치", "청귤", "커피"):
+                print("=" * 60)
+                rows = {}
+                for d in ("today", "yday", "y2"):
+                    off = {"today":"0 day","yday":"-1 day","y2":"-2 day"}[d]
+                    r = conn.execute("SELECT products_json, meta_json, created_at FROM collected_serp WHERE keyword=? AND collected_date=date('now','localtime',?) ORDER BY id DESC LIMIT 1", (kw, off)).fetchone()
+                    rows[d] = r
+                t, y = rows["today"], rows["yday"]
+                if not t or not y:
+                    print(kw, "— 오늘/어제 수집분 없음", bool(t), bool(y)); continue
+                tp = json.loads(t["products_json"] or "[]"); yp = json.loads(y["products_json"] or "[]")
+                m = json.loads(t["meta_json"] or "{}")
+                print(kw, "| 오늘", t["created_at"], "담김", len(tp), "| 어제", y["created_at"], "담김", len(yp))
+                print("  meta:", {k: m.get(k) for k in ("collectorVersion","pageSize","rawCount","adSkipped","dupSkipped","adHintMissed")})
+                tid = {p.get("productId") for p in tp if p.get("productId")}
+                yid = {p.get("productId") for p in yp if p.get("productId")}
+                gone = [p for p in yp if p.get("productId") and p.get("productId") not in tid]
+                new = [p for p in tp if p.get("productId") and p.get("productId") not in yid]
+                print("  어제→오늘 유지", len(yid & tid), "| 사라짐", len(gone), "| 새로 등장", len(new))
+                print("  사라진 상품의 링크 종류:", Counter(kind(p.get("link")) for p in gone).most_common(10))
+                print("  사라진 상품의 어제 순위 분포(10단위):", Counter((int(p.get("rank") or 0)-1)//10*10+1 for p in gone).most_common(20))
+                print("  오늘 담긴 링크 종류:", Counter(kind(p.get("link")) for p in tp).most_common(10))
+                print("  어제 담긴 링크 종류:", Counter(kind(p.get("link")) for p in yp).most_common(10))
+                # 오늘 담긴 80개 중 어제 순위와 비교(같은 id)
+                yr = {p.get("productId"): p.get("rank") for p in yp}
+                moves = [(int(yr[p["productId"]]), int(p["rank"])) for p in tp if p.get("productId") in yr]
+                print("  같은 상품 어제→오늘 순위 (앞 15):", moves[:15])
+                if rows["y2"]:
+                    y2p = json.loads(rows["y2"]["products_json"] or "[]")
+                    y2id = {p.get("productId") for p in y2p if p.get("productId")}
+                    print("  대조군 그제→어제: 그제 담김", len(y2p), "| 어제에서 사라짐", len(y2id - yid), "| 어제 새로", len(yid - y2id))
             PY
 
       - name: 신고 253 사후 2 — 과필터 후보 대조 (읽기 전용·업체명 미출력)
