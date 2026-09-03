@@ -66,6 +66,10 @@ on:
         description: 'requeue253 이 대기줄에 넣을 키워드(기본 청귤). 예: 김치'
         required: false
         default: '청귤'
+      impact253:
+        description: '신고 253 사후 6 — 과필터 의심 키워드(광고 비율 50%+ · 원본 200+)에 걸린 우리 업체·추적상품이 몇 건이고, 어제 노출→오늘 미노출로 바뀐 것이 몇 건인지(대조군 비교 · 읽기 전용 · 업체명 미출력).'
+        required: false
+        default: 'off'
       reportdump:
         description: '보고서 리디자인용 실데이터 추출 — off(기본) / on. 최근 자동 분석 보고서 1건의 HTML을 업체명 가림 처리 후 base64 로 출력(읽기 전용·업체명 미출력 — 이름은 □□□로 치환 후 인코딩).'
         required: false
@@ -2644,6 +2648,71 @@ jobs:
                   ON t.client_id=y.client_id AND t.keyword=y.keyword""").fetchall()
             d2 = [x["a"]-x["b"] for x in rows]
             if d2: print("   짝", len(d2), "| 이동 min/Q1/중앙/Q3/max:", q(d2), "| 평균", round(st.mean(d2),2))
+            PY
+
+      - name: 신고 253 사후 6 — 과필터가 우리 업체 기록에 미친 영향 (읽기 전용·업체명 미출력)
+        if: ${{ github.event.inputs.impact253 == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 3m
+          script: |
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sqlite3, json
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            def cols(t): return [r[1] for r in conn.execute("PRAGMA table_info(%s)" % t)]
+            print("client_rank_history 컬럼:", cols("client_rank_history"))
+            print("rankings 컬럼:", cols("rankings"))
+            sus, allk = set(), {}
+            for r in conn.execute("SELECT keyword, meta_json FROM collected_serp WHERE collected_date=date('now','localtime') AND meta_json IS NOT NULL"):
+                m = json.loads(r["meta_json"] or "{}")
+                if "adSkipped" not in m: continue
+                raw, ad = m.get("rawCount") or 0, m.get("adSkipped") or 0
+                allk[r["keyword"]] = (raw, ad)
+                if raw >= 200 and ad / raw >= 0.5: sus.add(r["keyword"])
+            print("오늘 meta 있는 키워드", len(allk), "| 과필터 의심(광고 50%+ · 원본 200+)", len(sus))
+            print("의심 키워드:", sorted(sus))
+            def day(t, kwcol, off):
+                return conn.execute("SELECT %s kw, rank_position rp FROM %s WHERE DATE(checked_at)=DATE('now','localtime',?)" % (kwcol, t), (off,)).fetchall()
+            for t in ("client_rank_history", "rankings"):
+                cs = cols(t)
+                if "keyword" not in cs:
+                    print("==", t, ": keyword 컬럼 없음 → 건너뜀"); continue
+                kwcol = "keyword"
+                today = day(t, kwcol, "0 day"); yday = day(t, kwcol, "-1 day")
+                def stat(rows, pick):
+                    rs = [r for r in rows if pick(r["kw"])]
+                    return len(rs), sum(1 for r in rs if r["rp"] is None)
+                for label, pick in (("의심 키워드", lambda k: k in sus), ("나머지(대조군)", lambda k: k in allk and k not in sus)):
+                    tn, tm = stat(today, pick); yn, ym = stat(yday, pick)
+                    print("== %s · %s: 오늘 %d건(미노출 %d, %d%%) | 어제 %d건(미노출 %d, %d%%)" % (t, label, tn, tm, tm*100//tn if tn else 0, yn, ym, ym*100//yn if yn else 0))
+                idcol = None
+                for c in ("client_id", "product_id", "tracked_product_id"):
+                    if c in cs: idcol = c; break
+                if not idcol:
+                    print("   대상 id 컬럼 없음 → 전환 계산 생략"); continue
+                q = ("SELECT t.keyword kw, COUNT(*) n FROM %s t JOIN %s y ON y.%s=t.%s AND y.keyword=t.keyword "
+                     "WHERE DATE(t.checked_at)=DATE('now','localtime') AND DATE(y.checked_at)=DATE('now','localtime','-1 day') "
+                     "AND y.rank_position IS NOT NULL AND t.rank_position IS NULL GROUP BY t.keyword") % (t, t, idcol, idcol)
+                flips = conn.execute(q).fetchall()
+                fs = [(r["kw"], r["n"]) for r in flips if r["kw"] in sus]
+                fo = [(r["kw"], r["n"]) for r in flips if r["kw"] not in sus]
+                print("   어제 노출→오늘 미노출: 의심 키워드 %d건 %s | 나머지 %d건" % (sum(n for _, n in fs), fs[:15], sum(n for _, n in fo)))
+                q2 = ("SELECT t.keyword kw, y.rank_position yr, t.rank_position tr FROM %s t JOIN %s y ON y.%s=t.%s AND y.keyword=t.keyword "
+                      "WHERE DATE(t.checked_at)=DATE('now','localtime') AND DATE(y.checked_at)=DATE('now','localtime','-1 day') "
+                      "AND y.rank_position IS NOT NULL AND t.rank_position IS NOT NULL") % (t, t, idcol, idcol)
+                pairs = [(r["kw"], r["yr"], r["tr"]) for r in conn.execute(q2)]
+                ps = [(k, a, b) for k, a, b in pairs if k in sus]
+                po = [(k, a, b) for k, a, b in pairs if k not in sus]
+                def summ(lst):
+                    if not lst: return "0건"
+                    d = [a - b for _, a, b in lst]
+                    return "%d건 · 평균 %.1f · 10계단+ 좋아짐 %d · 10계단+ 나빠짐 %d" % (len(lst), sum(d)/len(lst), sum(1 for x in d if x >= 10), sum(1 for x in d if x <= -10))
+                print("   순위 쌍(어제→오늘) 의심:", summ(ps), "| 나머지:", summ(po))
+                if ps: print("   의심 예:", ps[:12])
             PY
 
       - name: 신고 253 사후 5 — 광고 필드 지문 (읽기 전용·업체명 미출력)
