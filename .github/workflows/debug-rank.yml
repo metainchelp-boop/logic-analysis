@@ -58,6 +58,10 @@ on:
         description: '신고 253 사후 3 — 김치·청귤·커피: 어제 담겼는데 오늘 사라진 상품의 링크 호스트 분포(어느 판별 가지가 떨궜는지)·오늘 담긴 링크 호스트(읽기 전용·업체명 미출력).'
         required: false
         default: 'off'
+      naverprobe:
+        description: '신고 253 사후 4 — GitHub 러너에서 네이버 쇼핑 김치 1페이지(80개)를 읽어 상품별 광고 필드 유무만 출력(제목·가게명 미출력, 서버 무접촉). 러너 IP 가 막히면 상태코드만 남긴다.'
+        required: false
+        default: 'off'
       reportdump:
         description: '보고서 리디자인용 실데이터 추출 — off(기본) / on. 최근 자동 분석 보고서 1건의 HTML을 업체명 가림 처리 후 base64 로 출력(읽기 전용·업체명 미출력 — 이름은 □□□로 치환 후 인코딩).'
         required: false
@@ -2636,6 +2640,83 @@ jobs:
             d2 = [x["a"]-x["b"] for x in rows]
             if d2: print("   짝", len(d2), "| 이동 min/Q1/중앙/Q3/max:", q(d2), "| 평균", round(st.mean(d2),2))
             PY
+
+      - name: 신고 253 사후 4 — 네이버 원본 필드 지문 (러너에서 직접 · 제목/가게명 미출력)
+        if: ${{ github.event.inputs.naverprobe == 'on' }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, re, sys, urllib.request, urllib.parse
+          from collections import Counter
+          from urllib.parse import urlsplit
+          q = urllib.parse.quote("김치")
+          url = ("https://search.shopping.naver.com/search/all?query=%s&origQuery=%s&adQuery=%s"
+                 "&pagingIndex=1&pagingSize=80&productSet=total&viewType=list&sort=rel&iq=&eq=&xq=") % (q, q, q)
+          req = urllib.request.Request(url, headers={
+              "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+              "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+              "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8",
+          })
+          try:
+              with urllib.request.urlopen(req, timeout=30) as r:
+                  code = r.status; html = r.read().decode("utf-8", "replace")
+          except urllib.error.HTTPError as e:
+              print("HTTP", e.code, "— 러너 IP 차단/거부. 본문 앞 200자:", e.read()[:200].decode("utf-8","replace").replace("\n"," "))
+              sys.exit(0)
+          except Exception as e:
+              print("요청 실패:", type(e).__name__, str(e)[:200]); sys.exit(0)
+          print("HTTP", code, "| 본문", len(html), "자 | title:", re.search(r"<title>(.*?)</title>", html, re.S).group(1)[:80] if re.search(r"<title>(.*?)</title>", html, re.S) else "(없음)")
+          m = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', html, re.S)
+          if not m:
+              print("__NEXT_DATA__ 없음 — 차단 페이지일 가능성. 본문에 '보안'/'captcha' 포함?", ("captcha" in html.lower()), ("보안" in html))
+              sys.exit(0)
+          nd = json.loads(m.group(1))
+          def looks(o):
+              return isinstance(o, dict) and (isinstance(o.get("productTitle"), str) or isinstance(o.get("productName"), str)) and \
+                     any(k in o for k in ("mallName","nvMid","id","mallProductUrl","crUrl"))
+          def unwrap(el):
+              if looks(el): return el
+              if isinstance(el, dict) and looks(el.get("item")): return el["item"]
+              return None
+          best = None; stack = [nd]; seen = set(); guard = 0
+          while stack and guard < 300000:
+              guard += 1; cur = stack.pop()
+              if not isinstance(cur, (dict, list)) or id(cur) in seen: continue
+              seen.add(id(cur))
+              if isinstance(cur, list):
+                  got = [u for u in (unwrap(x) for x in cur) if u]
+                  if got and len(got)*2 >= len(cur) and (best is None or len(got) > len(best)): best = got
+                  stack.extend(x for x in cur if isinstance(x, (dict, list)))
+              else:
+                  stack.extend(v for v in cur.values() if isinstance(v, (dict, list)))
+          if not best:
+              print("상품 배열을 못 찾음"); sys.exit(0)
+          print("상품", len(best), "개")
+          def host(u): return urlsplit(str(u or "")).netloc.lower()
+          def first_url(p): return str(p.get("mallProductUrl") or p.get("adcrUrl") or p.get("crUrl") or "")
+          rows = []
+          for i, p in enumerate(best, 1):
+              legacy = "adcr" in first_url(p)
+              combo = bool(p.get("adId") and p.get("adType") and p.get("adcrUrl"))
+              rows.append((i, legacy, combo, bool(p.get("mallProductUrl")), bool(p.get("adId")), str(p.get("adType") or ""),
+                           host(p.get("adcrUrl")), host(p.get("crUrl")) + ("/adcr" if "adcr" in str(p.get("crUrl") or "") else ""),
+                           host(p.get("mallProductUrl"))))
+          print("== 새 규칙 판정: 광고", sum(1 for r in rows if r[1] or r[2]), "/", len(rows),
+                "| 레거시(첫URL adcr)", sum(1 for r in rows if r[1]), "| 세필드조합", sum(1 for r in rows if r[2]))
+          print("== adType 값 분포:", Counter(r[5] for r in rows).most_common())
+          print("== adcrUrl 호스트 분포:", Counter(r[6] for r in rows).most_common())
+          print("== crUrl 호스트 분포:", Counter(r[7] for r in rows).most_common())
+          print("== mallProductUrl 호스트 분포:", Counter(r[8] for r in rows).most_common(8))
+          print("== 광고성 키 목록(전 상품 합집합):", sorted({k for p in best for k in p if re.match(r"^ad", k, re.I)}))
+          print("idx | 레거시 | 세필드 | mallUrl | adId | adType | adcr호스트 | cr호스트 | mall호스트")
+          for r in rows[:80]:
+              print("  ", " | ".join(str(v) for v in r))
+          # 광고로 판정된 것과 아닌 것의 키 집합 차이
+          ad_keys = Counter(k for p in best if (("adcr" in first_url(p)) or (p.get("adId") and p.get("adType") and p.get("adcrUrl"))) for k in p)
+          org_keys = Counter(k for p in best if not (("adcr" in first_url(p)) or (p.get("adId") and p.get("adType") and p.get("adcrUrl"))) for k in p)
+          print("== 광고 판정 상품에만 있는 키:", sorted(set(ad_keys) - set(org_keys)))
+          print("== 오가닉 판정 상품에만 있는 키:", sorted(set(org_keys) - set(ad_keys)))
+          PY
 
       - name: 신고 253 사후 3 — 사라진 상품의 링크 종류 (읽기 전용·업체명 미출력)
         if: ${{ github.event.inputs.verify253d == 'on' }}
