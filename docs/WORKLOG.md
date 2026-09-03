@@ -12,7 +12,7 @@
 
 ---
 
-## 2026-09-03 신고 #259 (이진희) — 업체 삭제 시 「FOREIGN KEY constraint failed」 [BE · 삭제 순서 1줄 · 배포 대기]
+## 2026-09-03 신고 #259 (이진희) — 업체 삭제 시 「FOREIGN KEY constraint failed」 [BE · 삭제 순서 1줄 · 배포 완료]
 
 > 전산(① 섹션)에서 이관받아 이 저장소에서 처리(대표 「B로 여기서 하자」 2026-09-03). 브랜치 `fix/client-delete-reports-fk-259`.
 > 화면 alert 원문 「logic.metainc.co.kr 내용: FOREIGN KEY constraint failed」 = **로직분석 앱**에서 난 것(전산은 SSO 로 새 탭만 연다).
@@ -36,7 +36,9 @@
 ① 고치기 전 순서 = FK 오류 재현 ② 고친 순서 = 업체·경쟁사·자식(보고서 포함) 전부 제거 ③ CASCADE 세 자식 자동 삭제 + reports 만 막는 것 재확인 ④ **실제 소스가 reports 를 clients 앞에서 지우는지** 확인.
 사보타주(fix stash) 시 ④ FAIL → 복구 시 4/4 PASS. 배포 게이트(`deploy.yml`)에 회귀 스텝 1개 추가(추가 설치 불필요).
 
-**배포** — 실서비스라 대표 「배포하자」 후 `main` 머지. DDL 0 · 화면 변경 0 · 다른 경로 무변경. 전 직원 안내 불요(내부 삭제 동작 정상화).
+**배포** — 대표 「배포하자」(2026-09-03) → PR #193 squash 머지(main `17cbee1c`, AI 식별자 없는 클린 메시지) → **Deploy to VPS #423 success(18:05 KST)**. 게이트 통과: backend 회귀 + **Client delete FK regression(신고 #259) 스텝 success** + collector 회귀 + 프론트 번들 빌드 → 컨테이너 재기동·헬스체크 통과(자동 롤백 없음). DDL 0 · 화면 변경 0 · 다른 경로 무변경. 전 직원 안내 불요(내부 삭제 동작 정상화).
+
+**후속(선택) — 과거 고아 보고서 정리** — 오류 경로가 아닌 1회성 정리·재배정 삭제 경로는 `foreign_keys=ON` 을 안 켜, 과거에 그 경로로 지워진 업체의 `reports` 가 주인 없이 남아 있을 수 있다(오류 아님·흔적만). 이번 버그와 별개라 미포함. 원하면 `SELECT COUNT(*) FROM reports WHERE client_id NOT IN (SELECT id FROM clients)` 로 선점검 후 1회성 정리 가능(대표 판단).
 
 ---
 
