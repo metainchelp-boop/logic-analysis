@@ -50,6 +50,10 @@ on:
         description: '신고 253 사후 — 오늘 수집분의 광고 제외 수·원본 수 분포와 전 업체 어제→오늘 순위 이동 분포(과필터 여부 판정, 읽기 전용·업체명 미출력).'
         required: false
         default: 'off'
+      verify253c:
+        description: '신고 253 사후 2 — 광고 제외가 과한 키워드(담긴 수가 적은 것)를 네이버 총수·어제 담긴 수와 대조해 과필터 여부 판정(읽기 전용·업체명 미출력).'
+        required: false
+        default: 'off'
       reportdump:
         description: '보고서 리디자인용 실데이터 추출 — off(기본) / on. 최근 자동 분석 보고서 1건의 HTML을 업체명 가림 처리 후 base64 로 출력(읽기 전용·업체명 미출력 — 이름은 □□□로 치환 후 인코딩).'
         required: false
@@ -2627,4 +2631,53 @@ jobs:
                   ON t.client_id=y.client_id AND t.keyword=y.keyword""").fetchall()
             d2 = [x["a"]-x["b"] for x in rows]
             if d2: print("   짝", len(d2), "| 이동 min/Q1/중앙/Q3/max:", q(d2), "| 평균", round(st.mean(d2),2))
+            PY
+
+      - name: 신고 253 사후 2 — 과필터 후보 대조 (읽기 전용·업체명 미출력)
+        if: ${{ github.event.inputs.verify253c == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 3m
+          script: |
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sqlite3, json
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(collected_serp)")]
+            has_total = "total" in cols
+            print("collected_serp 컬럼:", cols)
+            rows = conn.execute("SELECT keyword, meta_json, products_json" + (", total" if has_total else "") +
+                                " FROM collected_serp WHERE collected_date=date('now','localtime') AND meta_json IS NOT NULL").fetchall()
+            out = []
+            for x in rows:
+                m = json.loads(x["meta_json"] or "{}")
+                if "adSkipped" not in m: continue
+                kept = len(json.loads(x["products_json"] or "[]"))
+                y = conn.execute("SELECT products_json" + (", total" if has_total else "") + " FROM collected_serp WHERE keyword=? AND collected_date=date('now','localtime','-1 day')", (x["keyword"],)).fetchone()
+                ykept = len(json.loads(y["products_json"] or "[]")) if y else None
+                tot = x["total"] if has_total else None
+                out.append((x["keyword"], m.get("rawCount"), m.get("adSkipped"), m.get("dupSkipped"), kept, tot, ykept))
+            # 과필터 후보: 담긴 수 < 100 인데 원본은 200 이상
+            sus = [o for o in out if (o[4] or 0) < 100 and (o[1] or 0) >= 200]
+            print("== 과필터 후보(담긴<100 & 원본>=200):", len(sus), "/", len(out))
+            print("   키워드 | 원본 | 광고제외 | 중복 | 담김 | 네이버총수 | 어제담김")
+            for o in sorted(sus, key=lambda o: o[4])[:25]:
+                print("   ", " | ".join(str(v) for v in o))
+            # 광고 제외 비율 상위(광고 비중이 이상하게 높은 것)
+            hi = sorted([o for o in out if (o[1] or 0) >= 200], key=lambda o: -(o[2] or 0)/(o[1] or 1))[:15]
+            print("== 광고 비율 상위 15(원본>=200):")
+            print("   키워드 | 원본 | 광고제외 | 비율 | 담김 | 어제담김")
+            for o in hi:
+                print("   ", o[0], "|", o[1], "|", o[2], "|", "%.0f%%" % ((o[2] or 0)/(o[1] or 1)*100), "|", o[4], "|", o[6])
+            # 어제 대비 담긴 수 급감(어제 300 → 오늘 <150)
+            drop = [o for o in out if o[6] and o[6] >= 280 and (o[4] or 0) < 150]
+            print("== 어제 280+ → 오늘 150 미만:", len(drop))
+            for o in drop[:20]: print("   ", o[0], "| 원본", o[1], "| 광고", o[2], "| 담김", o[4], "| 어제", o[6])
+            # 참고: 어제(수정 전) 같은 키워드들의 담긴 수 분포
+            yk = [o[6] for o in out if o[6] is not None]
+            if yk:
+                yk.sort(); print("== 어제 담긴 수 분포 min/중앙/max:", yk[0], yk[len(yk)//2], yk[-1], "| 오늘:", sorted(o[4] for o in out)[0], sorted(o[4] for o in out)[len(out)//2], max(o[4] for o in out))
             PY
