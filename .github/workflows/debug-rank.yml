@@ -58,10 +58,14 @@ on:
         description: '신고 253 사후 3 — 김치·청귤·커피: 어제 담겼는데 오늘 사라진 상품의 링크 호스트 분포(어느 판별 가지가 떨궜는지)·오늘 담긴 링크 호스트(읽기 전용·업체명 미출력).'
         required: false
         default: 'off'
-      naverprobe:
-        description: '신고 253 사후 4 — GitHub 러너에서 네이버 쇼핑 김치 1페이지(80개)를 읽어 상품별 광고 필드 유무만 출력(제목·가게명 미출력, 서버 무접촉). 러너 IP 가 막히면 상태코드만 남긴다.'
+      adfp:
+        description: '신고 253 사후 5 — v1.10.3 확장이 남긴 광고 필드 지문(meta.adFp)을 키워드별로 출력(읽기 전용·업체명 미출력). 김치·청귤 우선, 나머지는 지문 종류 요약.'
         required: false
         default: 'off'
+      requeue_kw:
+        description: 'requeue253 이 대기줄에 넣을 키워드(기본 청귤). 예: 김치'
+        required: false
+        default: '청귤'
       reportdump:
         description: '보고서 리디자인용 실데이터 추출 — off(기본) / on. 최근 자동 분석 보고서 1건의 HTML을 업체명 가림 처리 후 base64 로 출력(읽기 전용·업체명 미출력 — 이름은 □□□로 치환 후 인코딩).'
         required: false
@@ -2486,11 +2490,12 @@ jobs:
             # ⚠️ 유일한 쓰기: 온디맨드 대기줄에 1행 — 화면 조회 miss 때 서버가 하는 동작과 동일.
             #    수집기가 다음 폴링에서 가져가 재수집·업로드하면 upload_serp 가 done 처리한다.
             conn = sqlite3.connect("/app/data/logic_data.db", timeout=10)
+            KW = "${{ github.event.inputs.requeue_kw }}".strip() or "청귤"
             conn.execute("""INSERT INTO collect_requests(keyword, status, attempts)
-                            VALUES('청귤','pending',0)
-                            ON CONFLICT(keyword) DO UPDATE SET status='pending', attempts=0""")
+                            VALUES(?,'pending',0)
+                            ON CONFLICT(keyword) DO UPDATE SET status='pending', attempts=0""", (KW,))
             conn.commit()
-            r = conn.execute("SELECT keyword, status, requested_at FROM collect_requests WHERE keyword='청귤'").fetchone()
+            r = conn.execute("SELECT keyword, status, requested_at FROM collect_requests WHERE keyword=?", (KW,)).fetchone()
             print("대기줄 등록:", r)
             PY
 
@@ -2641,8 +2646,39 @@ jobs:
             if d2: print("   짝", len(d2), "| 이동 min/Q1/중앙/Q3/max:", q(d2), "| 평균", round(st.mean(d2),2))
             PY
 
+      - name: 신고 253 사후 5 — 광고 필드 지문 (읽기 전용·업체명 미출력)
+        if: ${{ github.event.inputs.adfp == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 3m
+          script: |
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sqlite3, json
+            from collections import Counter
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("SELECT keyword, created_at, meta_json, product_count FROM collected_serp WHERE meta_json LIKE '%adFp%' AND collected_date >= date('now','localtime','-1 day') ORDER BY id DESC").fetchall()
+            print("adFp 보유 수집분:", len(rows))
+            agg = Counter(); ver = Counter()
+            for r in rows:
+                m = json.loads(r["meta_json"] or "{}"); ver[m.get("collectorVersion")] += 1
+                for k, v in (m.get("adFp") or {}).items(): agg[k] += int(v)
+            print("확장 버전:", dict(ver))
+            print("== 전체 지문 합계(상위 20):")
+            for k, v in agg.most_common(20): print("   %6d  %s" % (v, k))
+            for kw in ("김치", "청귤", "커피"):
+                r = conn.execute("SELECT created_at, meta_json, product_count FROM collected_serp WHERE keyword=? AND meta_json LIKE '%adFp%' ORDER BY id DESC LIMIT 1", (kw,)).fetchone()
+                if not r: print("==", kw, "— adFp 있는 수집분 없음"); continue
+                m = json.loads(r["meta_json"] or "{}")
+                print("==", kw, r["created_at"], "| v", m.get("collectorVersion"), "| 원본", m.get("rawCount"), "광고", m.get("adSkipped"), "담김", r["product_count"], "| 정책", m.get("rankPolicy"))
+                for k, v in sorted((m.get("adFp") or {}).items(), key=lambda x: -x[1]): print("   %4d  %s" % (v, k))
+            PY
+
       - name: 신고 253 사후 4 — 네이버 원본 필드 지문 (러너에서 직접 · 제목/가게명 미출력)
-        if: ${{ github.event.inputs.naverprobe == 'on' }}
+        if: ${{ github.event.inputs.adfp == 'never' }}   # 러너 IP 는 418 로 막힘(실측 #149) — 이력으로만 남긴다
         shell: bash
         run: |
           python3 - <<'PY'
