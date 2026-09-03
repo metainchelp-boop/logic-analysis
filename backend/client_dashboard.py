@@ -1273,6 +1273,13 @@ def delete_client(client_id: int, current_user: dict = Depends(get_current_user)
             # 관련 데이터 삭제 (FOREIGN KEY CASCADE가 안 될 수 있으므로 명시적 삭제)
             conn.execute("DELETE FROM client_analyses WHERE client_id = ?", (cid,))
             conn.execute("DELETE FROM client_rank_history WHERE client_id = ?", (cid,))
+            # reports 는 clients(id) 를 참조하지만 다른 세 자식(client_analyses·client_rank_history·
+            # client_keyword_product)과 달리 ON DELETE CASCADE 가 없다. foreign_keys=ON 인 이 경로에선
+            # 보고서가 남아 있는 업체를 지울 때 「FOREIGN KEY constraint failed」로 삭제가 막힌다
+            # (신고 #259, 이진희 — 계약 만료처럼 오래된 업체일수록 보고서가 쌓여 더 잘 걸린다).
+            # 업체를 지우면 그 업체의 보고서도 함께 지운다 — 위 분석·순위 이력과 같은 하드삭제 규약,
+            # reports 를 참조하는 다른 표는 없어(고아 없음) 순서상 clients 보다 먼저 지우면 충분하다.
+            conn.execute("DELETE FROM reports WHERE client_id = ?", (cid,))
             conn.execute("DELETE FROM clients WHERE id = ?", (cid,))
         conn.commit()
 
