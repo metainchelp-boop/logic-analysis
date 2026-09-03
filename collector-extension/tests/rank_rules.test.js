@@ -9,7 +9,7 @@
  * 실행: node collector-extension/tests/rank_rules.test.js  (배포 게이트에서 매번 돈다)
  */
 'use strict';
-const { isAdItem, hasAdHint, toProduct, takeOrganic } = require('../rank_rules.js');
+const { isAdItem, hasAdHint, toProduct, takeOrganic, adFingerprint } = require('../rank_rules.js');
 
 let failed = 0;
 function check(name, cond, detail) {
@@ -129,6 +129,53 @@ check('④-보조 신형 광고(세 필드 조합)가 걸린다', isAdItem(mkAd(
   takeOrganic(orgs, st);
   check('번외 오가닉 40개 전량 보존(과잉 판별 없음)', st.products.length === 40,
         '실제 ' + st.products.length);
+}
+
+/* ⑧ v1.10.3 — 세 필드가 있어도 adcrUrl 호스트가 ader.naver.com 이 아니면 광고가 아니다.
+ * (2026-09-03 실사고: 김치 원본 407 중 326 을 광고로 봐 어제 1~10위 오가닉 8개가 사라졌다.
+ *  대표 실측 1페이지 광고 16개. 근거가 잡힐 때까지 '덜 거르는 쪽'으로 좁힌다.) */
+function mkKimchiOrg(id) {
+  return {   // 오가닉인데 광고성 필드 3종이 채워져 있는 모양(가설) — adcrUrl 이 ader 가 아님
+    id: String(id), productTitle: '오가닉(광고 필드 동반) ' + id, mallName: '가게' + id,
+    mallProductUrl: 'https://smartstore.naver.com/shop' + id + '/products/' + (700000 + (seq++)),
+    adId: '0', adType: 'NONE', adcrUrl: 'https://cr.shopping.naver.com/adcr?x=' + id,
+    crUrl: 'https://cr.shopping.naver.com/adcr?x=' + id, price: '10000',
+  };
+}
+check('⑧ 세 필드 있어도 adcrUrl 이 ader 가 아니면 오가닉', !isAdItem(mkKimchiOrg('K1')), '');
+check('⑧-보조 ader 호스트 광고는 여전히 걸린다', isAdItem(mkAd('N2')), '');
+check('⑧-보조 대소문자·서브도메인(ADER.naver.com)도 걸린다',
+      isAdItem(Object.assign(mkAd('N3'), { adcrUrl: 'https://ADER.naver.com/v1/click/N3' })), '');
+{
+  const st = freshState();
+  takeOrganic([mkKimchiOrg('K1'), mkOrg('O1'), mkAd('A1'), mkKimchiOrg('K2')], st);
+  check('⑧-보조 김치형 목록: 오가닉 3 보존 · 광고 1 제외', st.products.length === 3 && st.adSkipped === 1,
+        '실제 보존 ' + st.products.length + ' · 광고 ' + st.adSkipped);
+}
+
+/* ⑨ 광고 필드 지문 — 값(제목·가게명·ID)이 절대 섞이지 않고, 가지별 유무·호스트만 담긴다 */
+{
+  const fpAd = adFingerprint(mkAd('N9')), fpOrg = adFingerprint(mkOrg('O9')), fpK = adFingerprint(mkKimchiOrg('K9'));
+  check('⑨ 광고 지문 = L-|C+|M+|I+|T=PRODUCT_AD|A=ader.naver.com|R=cr.shopping.naver.com/adcr',
+        fpAd === 'L-|C+|M+|I+|T=PRODUCT_AD|A=ader.naver.com|R=cr.shopping.naver.com/adcr', fpAd);
+  check('⑨-보조 오가닉 지문 = L-|C-|M+|I-|T-|A-|R=cr.shopping.naver.com/adcr',
+        fpOrg === 'L-|C-|M+|I-|T-|A-|R=cr.shopping.naver.com/adcr', fpOrg);
+  check('⑨-보조 김치형 지문에 A=cr.shopping.naver.com 이 찍힌다', fpK.includes('|A=cr.shopping.naver.com|'), fpK);
+  const leak = [fpAd, fpOrg, fpK].join(' ');
+  check('⑨-보조 지문에 제목·가게명·상품ID·상품 경로가 없다',
+        !/상품|가게|N9|O9|K9|products\//.test(leak), leak);
+}
+
+/* ⑩ takeOrganic 이 st.fp 에 전 상품 지문을 집계한다(있을 때만 — 구호출은 무영향) */
+{
+  const st = Object.assign(freshState(), { fp: {} });
+  takeOrganic([mkAd('A1'), mkOrg('O1'), mkOrg('O2'), mkKimchiOrg('K1')], st);
+  const total = Object.values(st.fp).reduce((a, b) => a + b, 0);
+  check('⑩ 지문 집계 합 = 원본 4', total === 4, '실제 ' + total + ' ' + JSON.stringify(st.fp));
+  check('⑩-보조 지문 종류 3(광고·오가닉·김치형)', Object.keys(st.fp).length === 3, JSON.stringify(st.fp));
+  const st2 = freshState();
+  takeOrganic([mkAd('A1'), mkOrg('O1')], st2);
+  check('⑩-보조 fp 없는 상태에서도 동작(무회귀)', st2.products.length === 1 && st2.fp === undefined, '');
 }
 
 /* 워커 전역 합본 컴파일 — importScripts 는 rank_rules.js 와 background.js 를 **같은

@@ -488,6 +488,7 @@ async function collectKeyword(keyword) {
   const st = {
     products: [], seenIds: new Set(), maxRank: CFG.maxRank,
     adSkipped: 0, dupSkipped: 0, adHintMissed: 0,
+    fp: {},   // 광고 필드 지문 집계(v1.10.3) — 값 없이 필드 유무·호스트만. 서버 meta.adFp 로 간다.
     // 광고 원본 1건을 남겨 둔다 — 다음에 판별 규칙을 넓힐 때 추측 대신 이걸 본다.
     onFirstAd: (item) => {
       chrome.storage.local.get('rawSampleAd').then((o) => {
@@ -518,12 +519,15 @@ async function collectKeyword(keyword) {
     if (list.length < 40) break;
     if (i < pages) await sleep(jitter());
   }
+  // 지문은 많아야 열댓 종류다 — 상위 20개만(키워드 하나 meta 가 커지지 않게).
+  const adFp = Object.entries(st.fp || {}).sort((a, b) => b[1] - a[1]).slice(0, 20)
+    .reduce((o, [k, v]) => { o[k] = v; return o; }, {});
   await chrome.storage.local.set({
     lastAdStat: { keyword, at: new Date().toISOString(), kept: st.products.length,
-                  ads: st.adSkipped, dup: st.dupSkipped, hint: st.adHintMissed, raw: rawCount },
+                  ads: st.adSkipped, dup: st.dupSkipped, hint: st.adHintMissed, raw: rawCount, fp: adFp },
   });
   return { total, products: st.products, adSkipped: st.adSkipped,
-           dupSkipped: st.dupSkipped, adHintMissed: st.adHintMissed, rawCount };
+           dupSkipped: st.dupSkipped, adHintMissed: st.adHintMissed, rawCount, adFp };
 }
 
 async function uploadKeyword(token, keyword, payload) {
@@ -536,10 +540,12 @@ async function uploadKeyword(token, keyword, payload) {
       // 「광고 0건」이라는 거짓 정상을 봤다). 구서버는 이 필드를 몰라도 무시한다.
       meta: {
         collectorVersion: (chrome.runtime.getManifest && chrome.runtime.getManifest().version) || '',
-        rankPolicy: 'organic-v2(ad:legacy-or-adId+adType+adcrUrl)',
+        rankPolicy: 'organic-v3(ad:legacy-or-adId+adType+adcrUrl@ader)',
         pageSize: CFG.pageSize, productSet: 'total', sort: 'rel',
         rawCount: payload.rawCount || 0, adSkipped: payload.adSkipped || 0,
         dupSkipped: payload.dupSkipped || 0, adHintMissed: payload.adHintMissed || 0,
+        // v1.10.3 — 광고 필드 지문 집계(제목·가게명 없음). 과필터 원인을 서버 데이터로 가른다.
+        adFp: payload.adFp || {},
       },
     }),
   });

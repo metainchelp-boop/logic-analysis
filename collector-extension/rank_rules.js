@@ -34,7 +34,36 @@
     if (!p || typeof p !== 'object') return false;
     const url = String((p.mallProductUrl || p.adcrUrl || p.crUrl) || '');
     if (url.includes('adcr')) return true;
-    return !!(p.adId && p.adType && p.adcrUrl);
+    // v1.10.3(2026-09-03): 세 필드 조합을 **adcrUrl 호스트가 ader.naver.com 일 때로 좁힌다.**
+    //  실사고: v1.10.2 가 김치 원본 407 중 326 을 광고로 봤다(대표 실측 1페이지 광고 16개).
+    //  어제 1~10위였던 스마트스토어 오가닉 8개가 통째로 사라졌다 — 세 필드가 오가닉에도
+    //  실리는 키워드가 있다는 뜻이다(9/2 실측 51건 표본에는 없던 모양). 근거가 잡힐 때까지
+    //  '덜 거르는 쪽'으로 — 9/2 실측 광고 11건은 전부 ader.naver.com 이었다.
+    //  ⚠️ 이래도 김치가 계속 빠지면 오가닉도 ader 호스트를 갖는 것 — 그때는 adFp 지문으로 본다.
+    return !!(p.adId && p.adType && p.adcrUrl) && hostOf(p.adcrUrl).endsWith('ader.naver.com');
+  }
+
+  /** URL 의 호스트만(제목·가게명 같은 값은 절대 지문에 넣지 않는다 — 공개 저장소 로그 보호) */
+  function hostOf(u) {
+    const m = /^[a-z]+:\/\/([^/?#]+)/i.exec(String(u || ''));
+    return m ? m[1].toLowerCase() : '';
+  }
+
+  /** 상품 1건의 '광고 필드 지문' — 어느 판별 가지가 왜 걸렸는지 서버에서 되짚기 위한 것.
+   *  값은 넣지 않는다(adType 만 짧게). 예: L-|C+|M+|I+|T=PRODUCT_AD|A=ader.naver.com|R=cr.shopping.naver.com/adcr */
+  function adFingerprint(p) {
+    if (!p || typeof p !== 'object') return '(비객체)';
+    const first = String((p.mallProductUrl || p.adcrUrl || p.crUrl) || '');
+    const cr = String(p.crUrl || '');
+    return [
+      'L' + (first.includes('adcr') ? '+' : '-'),
+      'C' + ((p.adId && p.adType && p.adcrUrl) ? '+' : '-'),
+      'M' + (p.mallProductUrl ? '+' : '-'),
+      'I' + (p.adId ? '+' : '-'),
+      p.adType ? 'T=' + String(p.adType).slice(0, 24) : 'T-',
+      p.adcrUrl ? 'A=' + hostOf(p.adcrUrl) : 'A-',
+      cr ? 'R=' + hostOf(cr) + (cr.includes('adcr') ? '/adcr' : '') : 'R-',
+    ].join('|');
   }
 
   /** 링크·조합으로는 광고로 안 걸렸는데 광고 표식처럼 보이는 키를 가진 상품 수(진단 전용·거르지 않음) */
@@ -65,7 +94,7 @@
 
   /** 페이지 1장의 상품 목록에서 오가닉만 골라 누적 순번을 붙인다.
    *
-   *  st = { products, seenIds, maxRank, adSkipped, dupSkipped, adHintMissed, onFirstAd? }
+   *  st = { products, seenIds, maxRank, adSkipped, dupSkipped, adHintMissed, onFirstAd?, fp? }
    *  — 광고·중복 제외 순서가 계약이다:
    *  ⭐ 광고는 순위 번호를 먹지 않는다(2026-08-12 대표 확정 「광고 제외로 가야 해」).
    *  ⚠️ 광고를 거를 때 seenIds 에 넣지 않는 것이 핵심 — 광고주 상품은 '광고 자리'와
@@ -77,6 +106,8 @@
     for (let idx = 0; idx < list.length; idx++) {
       if (st.products.length >= st.maxRank) break;
       const item = list[idx];
+      // 지문 집계(판정과 무관하게 전 상품) — st.fp 가 있을 때만. 값 없음·호스트만이라 안전.
+      if (st.fp) { const f = adFingerprint(item); st.fp[f] = (st.fp[f] || 0) + 1; }
       if (isAdItem(item)) {
         st.adSkipped++;
         if (st.adSkipped === 1 && typeof st.onFirstAd === 'function') st.onFirstAd(item);
@@ -92,7 +123,7 @@
     return st;
   }
 
-  const RankRules = { isAdItem, hasAdHint, toProduct, takeOrganic };
+  const RankRules = { isAdItem, hasAdHint, toProduct, takeOrganic, adFingerprint, hostOf };
   if (typeof module !== 'undefined' && module.exports) module.exports = RankRules;
   if (typeof globalThis !== 'undefined') globalThis.RankRules = RankRules;
 })();
