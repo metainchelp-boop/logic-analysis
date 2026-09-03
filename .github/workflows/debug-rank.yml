@@ -46,6 +46,10 @@ on:
         description: '신고 253 — 청귤을 온디맨드 대기줄에 1행 등록(쓰기 1행 · 수집기가 재수집하게).'
         required: false
         default: 'off'
+      verify253b:
+        description: '신고 253 사후 — 오늘 수집분의 광고 제외 수·원본 수 분포와 전 업체 어제→오늘 순위 이동 분포(과필터 여부 판정, 읽기 전용·업체명 미출력).'
+        required: false
+        default: 'off'
       reportdump:
         description: '보고서 리디자인용 실데이터 추출 — off(기본) / on. 최근 자동 분석 보고서 1건의 HTML을 업체명 가림 처리 후 base64 로 출력(읽기 전용·업체명 미출력 — 이름은 □□□로 치환 후 인코딩).'
         required: false
@@ -2559,4 +2563,68 @@ jobs:
             for i in range(0, len(b), 6000):
                 print(b[i:i+6000])
             print("=====GZB64 END=====")
+            PY
+
+      - name: 신고 253 사후 — 광고 제외 분포·순위 이동 분포 (읽기 전용·업체명 미출력)
+        if: ${{ github.event.inputs.verify253b == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 3m
+          script: |
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sqlite3, json, statistics as st
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            print("== ① 청귤 오늘 수집분 meta 전문 ==")
+            r = conn.execute("SELECT meta_json, products_json, created_at FROM collected_serp WHERE keyword='청귤' AND collected_date=date('now','localtime')").fetchone()
+            if r:
+                m = json.loads(r["meta_json"] or "{}"); n = len(json.loads(r["products_json"] or "[]"))
+                print("  ", r["created_at"], "| 담긴 상품", n, "| meta:", json.dumps({k: m.get(k) for k in ("collectorVersion","rawCount","adSkipped","dupSkipped","adHintMissed","pageSize")}, ensure_ascii=False))
+            else:
+                print("   오늘 청귤 행 없음")
+            print("== ② 오늘 전체 수집분 — meta 있는 키워드의 광고 제외·원본 분포 ==")
+            rows = conn.execute("SELECT meta_json, products_json FROM collected_serp WHERE collected_date=date('now','localtime') AND meta_json IS NOT NULL").fetchall()
+            ads=[]; dups=[]; raws=[]; prods=[]; hint=[]
+            for x in rows:
+                m = json.loads(x["meta_json"] or "{}")
+                if "adSkipped" not in m: continue
+                ads.append(m.get("adSkipped",0)); dups.append(m.get("dupSkipped",0)); raws.append(m.get("rawCount",0)); hint.append(m.get("adHintMissed",0))
+                prods.append(len(json.loads(x["products_json"] or "[]")))
+            def q(a): 
+                a=sorted(a); return (a[0], a[len(a)//4], st.median(a), a[3*len(a)//4], a[-1]) if a else None
+            print("   meta 보유 키워드", len(ads))
+            print("   광고 제외 수 min/Q1/중앙/Q3/max:", q(ads))
+            print("   중복 제외 수:", q(dups))
+            print("   원본 수:", q(raws), "| 담긴 상품 수:", q(prods))
+            print("   광고 힌트만 있고 판별 안 된 것(adHintMissed) 합계:", sum(hint))
+            print("   광고 제외 0인 키워드:", sum(1 for a in ads if a==0), "| 40 이상:", sum(1 for a in ads if a>=40))
+            print("== ③ 전 업체 어제→오늘 순위 이동(scheduled·같은 키워드·둘 다 300 이내) ==")
+            rows = conn.execute("""
+              SELECT t.client_id, t.keyword, t.rank_position AS today, y.rank_position AS yday
+                FROM (SELECT client_id, keyword, rank_position FROM client_rank_history
+                       WHERE DATE(checked_at)=DATE('now','localtime') AND rank_position IS NOT NULL) t
+                JOIN (SELECT client_id, keyword, rank_position FROM client_rank_history
+                       WHERE DATE(checked_at)=DATE('now','localtime','-1 day') AND rank_position IS NOT NULL) y
+                  ON t.client_id=y.client_id AND t.keyword=y.keyword""").fetchall()
+            d = [x["today"]-x["yday"] for x in rows]
+            if d:
+                print("   짝", len(d), "| 이동(오늘-어제) min/Q1/중앙/Q3/max:", q(d))
+                up = sum(1 for v in d if v<0); dn = sum(1 for v in d if v>0); same = sum(1 for v in d if v==0)
+                print("   상승", up, "| 하락", dn, "| 동일", same, "| 평균", round(st.mean(d),2))
+                print("   10계단 이상 상승", sum(1 for v in d if v<=-10), "| 10계단 이상 하락", sum(1 for v in d if v>=10))
+            else:
+                print("   짝 0 (오늘 기록 아직 없음?)")
+            print("== ④ 어제→그제 이동(대조군: 같은 방법, 수정 전 구간) ==")
+            rows = conn.execute("""
+              SELECT t.rank_position AS a, y.rank_position AS b
+                FROM (SELECT client_id, keyword, rank_position FROM client_rank_history
+                       WHERE DATE(checked_at)=DATE('now','localtime','-1 day') AND rank_position IS NOT NULL) t
+                JOIN (SELECT client_id, keyword, rank_position FROM client_rank_history
+                       WHERE DATE(checked_at)=DATE('now','localtime','-2 day') AND rank_position IS NOT NULL) y
+                  ON t.client_id=y.client_id AND t.keyword=y.keyword""").fetchall()
+            d2 = [x["a"]-x["b"] for x in rows]
+            if d2: print("   짝", len(d2), "| 이동 min/Q1/중앙/Q3/max:", q(d2), "| 평균", round(st.mean(d2),2))
             PY
