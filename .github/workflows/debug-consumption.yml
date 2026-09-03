@@ -146,14 +146,14 @@ jobs:
             else:
                 print("[보조] clients.original_created_by 칼럼 없음 — 이관 실행 이력 없음일 수 있음")
 
-            print("[비활성 소유자별 보고서 상위 20]")
+            # ② 계정은 아무도 비활성이 아니므로, ERP 퇴사자 대조용으로 '보고서 있는 소유자'를 username 기준으로 전부 낸다.
+            print("[보고서 있는 소유자 — username 기준 (ERP 퇴사자 대조용)]")
             try:
-                q = "SELECT u.id AS id, u.name AS name, u.is_active AS act, COUNT(DISTINCT c.id) AS ncl, (SELECT COUNT(*) FROM reports r2 JOIN clients c2 ON r2.client_id=c2.id WHERE c2.created_by=u.id) AS nrp FROM users u JOIN clients c ON c.created_by=u.id WHERE COALESCE(u.is_active,1)=0 GROUP BY u.id ORDER BY nrp DESC LIMIT 20"
+                q = "SELECT u.username AS un, u.name AS nm, u.is_active AS act, COUNT(DISTINCT c.id) AS ncl, (SELECT COUNT(*) FROM reports r2 JOIN clients c2 ON r2.client_id=c2.id WHERE c2.created_by=u.id) AS nrp FROM users u JOIN clients c ON c.created_by=u.id GROUP BY u.id HAVING nrp > 0 ORDER BY nrp DESC"
                 rows = list(c.execute(q))
-                if not rows:
-                    print("  (비활성 직원이 소유한 업체 없음 — 퇴사자 계정이 ②에서 비활성 처리 안 됐을 수 있음)")
+                print("  소유자 %s명이 보고서를 보유" % len(rows))
                 for r in rows:
-                    print("  uid=%s %s active=%s 업체 %s · 보고서 %s" % (r["id"], r["name"], r["act"], r["ncl"], r["nrp"]))
+                    print("  username=%s (%s) active=%s 업체 %s · 보고서 %s" % (r["un"], r["nm"], r["act"], r["ncl"], r["nrp"]))
             except Exception as e:
                 print("  (조회 실패: %s)" % e)
             PY
