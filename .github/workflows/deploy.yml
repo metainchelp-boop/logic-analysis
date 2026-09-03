@@ -67,6 +67,11 @@ jobs:
           pip install --quiet beautifulsoup4 requests
           python backend/tests/test_analysis_regression.py
 
+      # 업체 삭제 FK 회귀(신고 #259, 이진희) — reports 자식이 남으면 삭제가 막히던 것.
+      # stdlib(sqlite3)만 쓰므로 추가 설치 불필요.
+      - name: Client delete FK regression (신고 #259)
+        run: python backend/tests/test_client_delete_reports.py
+
       # 프론트 번들 자동 빌드 — .jsx 수정 시 번들 재생성을 깜빡해도 항상 최신으로 배포.
       # (실패해도 이후 SCP/재시작 단계 전이라 라이브에는 영향 없음 — 무중단)
       - name: Setup Node

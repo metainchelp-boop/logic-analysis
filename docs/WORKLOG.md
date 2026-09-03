@@ -12,6 +12,34 @@
 
 ---
 
+## 2026-09-03 신고 #259 (이진희) — 업체 삭제 시 「FOREIGN KEY constraint failed」 [BE · 삭제 순서 1줄 · 배포 대기]
+
+> 전산(① 섹션)에서 이관받아 이 저장소에서 처리(대표 「B로 여기서 하자」 2026-09-03). 브랜치 `fix/client-delete-reports-fk-259`.
+> 화면 alert 원문 「logic.metainc.co.kr 내용: FOREIGN KEY constraint failed」 = **로직분석 앱**에서 난 것(전산은 SSO 로 새 탭만 연다).
+
+**신고** — 「업체 중 계약 만료인 업체를 삭제하려고 했을 때 해당 오류가 확인」. 스크린샷 = 브라우저 alert `FOREIGN KEY constraint failed`.
+
+**원인(코드 실측)** — 삭제 경로는 `client_dashboard.delete_client`(`DELETE /api/cd/{client_id}`, FE `ClientDashboard.jsx` `api.del('/cd/'+id)`).
+- 이 경로는 `_get_conn()` = `PRAGMA foreign_keys=ON`. clients(id) 를 참조하는 자식은 **4표**:
+  - `client_analyses` · `client_rank_history` · `client_keyword_product` → **ON DELETE CASCADE**(업체 삭제 시 자동 제거).
+  - `reports`(reports.py) → **cascade 없음**. 보고서가 남은 업체를 지우면 SQLite 가 삭제를 막는다.
+- 삭제 로직은 analyses·rank_history 만 명시 삭제하고 **reports 를 안 지웠다**. 계약 만료처럼 오래된 업체일수록 보고서가 쌓여 더 잘 걸린다.
+- 게다가 `except Exception: raise HTTPException(500, detail=str(e))` 가 **원문(FOREIGN KEY constraint failed)** 을 그대로 내려 화면 alert 에 노출.
+- 다른 삭제 경로(1회성 정리·재배정)는 `foreign_keys=ON` 을 안 켜 오류 대신 **보고서 고아**를 남기고 있었다(같은 뿌리·다른 증상).
+
+**고침(최소·무회귀)** — `delete_client` 의 삭제 루프에서 `DELETE FROM clients` **앞에** `DELETE FROM reports WHERE client_id=?` 한 줄 추가.
+- 업체 + 붙은 경쟁사(루프가 이미 함께 처리)의 보고서까지 제거 → 고아 없음(reports 를 참조하는 표는 없음 = 추가 FK 오류 없음).
+- 하드삭제 규약은 기존 analyses·rank_history 와 동일. 언링크(client_id=NULL)는 `report_access` 규칙상 **관리 불가 고아**가 되어 채택 안 함.
+- CASCADE 세 자식은 이미 자동 삭제라 손대지 않음(무회귀).
+
+**검증** — `backend/tests/test_client_delete_reports.py` 신설(stdlib·자체 실행) 4/4:
+① 고치기 전 순서 = FK 오류 재현 ② 고친 순서 = 업체·경쟁사·자식(보고서 포함) 전부 제거 ③ CASCADE 세 자식 자동 삭제 + reports 만 막는 것 재확인 ④ **실제 소스가 reports 를 clients 앞에서 지우는지** 확인.
+사보타주(fix stash) 시 ④ FAIL → 복구 시 4/4 PASS. 배포 게이트(`deploy.yml`)에 회귀 스텝 1개 추가(추가 설치 불필요).
+
+**배포** — 실서비스라 대표 「배포하자」 후 `main` 머지. DDL 0 · 화면 변경 0 · 다른 경로 무변경. 전 직원 안내 불요(내부 삭제 동작 정상화).
+
+---
+
 ## 2026-09-03 로직분석 자동 보고서 디자인 리뉴얼 — 실데이터 사실화 시안 [FE · 시안 단계 · 코드 무변경] — ⛔ 대표 중단 지시(2026-09-03 새벽) 「아니 하지마, 다 마음에 안 든다」
 
 > **이 차수는 닫혔다. 다음 세션은 이어받지 말 것.** v1(예시 3안) · v2(실보고서 리컬러 4안+슬라이드) · v3(문서형 재설계) 전부 대표 불채택.

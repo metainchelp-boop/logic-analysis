@@ -148,6 +148,7 @@
 
 ## 현재 진행 중 작업 (append-only)
 
+- **[배포 대기 2026-09-03] 신고 #259 (이진희) — 업체 삭제 시 「FOREIGN KEY constraint failed」 [BE·삭제 순서 1줄]** — 전산(①)에서 이관받아 여기서 처리(대표 「B로 여기서 하자」). `client_dashboard.delete_client` 이 clients 를 지우기 전 `reports`(cascade 없는 유일한 자식)를 안 지워 보고서 남은 업체 삭제가 FK 오류로 막히던 것. 삭제 루프에 `DELETE FROM reports` 1줄 추가. 회귀 테스트 `backend/tests/test_client_delete_reports.py` 4/4 + 게이트 스텝. 브랜치 `fix/client-delete-reports-fk-259`. 대표 「배포하자」 후 main 머지. 상세는 `docs/WORKLOG.md` 맨 위.
 - **[진행 중 2026-08-28] 담당자 변경 전체 이관 API·과거 보고서 운영권한 연계 [로직분석]** — 상세는 `docs/WORKLOG.md` 맨 위.
 
 > ⚠️ **완료된 차수의 상세 기록은 [`docs/WORKLOG.md`](docs/WORKLOG.md) 로 옮겼습니다** (2026-08-21 대표 확정).
