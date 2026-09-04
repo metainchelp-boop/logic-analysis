@@ -99,7 +99,7 @@ jobs:
                 print(f"  {label:8} {n:4}키워드 x 4 = {n*4:5}페이지/일 · 24시간 분산 시 시간당 {round(n*4/24)}")
             PY
 
-      - name: Per-client report owner dump (read-only) — 신고 #256
+      - name: Report owner vs ERP manager mismatch (read-only) — 신고 #256
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -107,19 +107,195 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           command_timeout: 90s
           script: |
-            echo "== 신고 #256 — 업체별 보고서 소유자 덤프 (읽기 전용 · 로컬 조인용) =="
+            echo "== 신고 #256 — ② 보고서 소유자 vs ERP 현재 담당자 어긋남 (읽기 전용) =="
             docker exec -i logic-analysis python3 - <<'PY'
             import sqlite3
+            # ERP 프로브(debug-logs report_owner_mismatch)에서 뽑은 LOGIC_CLIENT 연결 154건: "② client id  ERP 담당자 로그인"
+            ERP_RAW = """
+            116 didrmsgud
+            158 dlwlsgml
+            171 dldPdms
+            182 dlwlsgml
+            185 dlwlsgml
+            201 dlwlsgml
+            205 qkrtjdtjq
+            206 qkrtjdtjq
+            207 qkrtjdtjq
+            216 qkrgkrtns
+            221 dlwlsgml
+            229 tlswnsdn
+            237 qkrgkrtns
+            239 didrmsgud
+            245 dlwlsgml
+            247 dldPdms
+            253 tlswnsdn
+            265 qkrtjdtjq
+            266 dlwlsgml
+            269 qkrtjdtjq
+            275 dlwlsgml
+            281 tlswnsdn
+            285 tlswnsdn
+            287 qkrtjdtjq
+            292 qkrtjdtjq
+            294 qkrtjdtjq
+            296 qkrtjdtjq
+            298 qkrtjdtjq
+            299 tlswnsdn
+            303 tlswnsdn
+            304 tlswnsdn
+            305 tlswnsdn
+            307 qkrtjdtjq
+            308 qkrtjdtjq
+            31 tlswnsdn
+            313 qkrtjdtjq
+            314 qkrtjdtjq
+            320 tlswnsdn
+            328 tlswnsdn
+            33 qkrgkrtns
+            337 tlswnsdn
+            338 qkrtjdtjq
+            348 tlswnsdn
+            362 tlswnsdn
+            363 tlswnsdn
+            364 qkrtjdtjq
+            375 qkrgkrtns
+            379 dlwlsgml
+            384 dlwoals
+            385 dlwoals
+            389 dlwoals
+            397 dlwoals
+            398 dlwoals
+            399 dlwoals
+            400 dlwoals
+            403 dlwoals
+            404 dlwoals
+            406 dlwoals
+            408 dlwoals
+            41 dlwlsgml
+            422 dlwoals
+            428 rladnfl
+            43 dldPdms
+            459 rkdtlsdnr
+            46 qkrtjdtjq
+            464 dldPdms
+            465 qkrgkrtns
+            468 rkdtlsdnr
+            471 rkdtlsdnr
+            473 rkdtlsdnr
+            476 rkdtlsdnr
+            482 rkdtlsdnr
+            483 rkdtlsdnr
+            484 rkdtlsdnr
+            485 rkdtlsdnr
+            486 rkdtlsdnr
+            493 rkdtlsdnr
+            494 dlwlsgml
+            496 rkdtlsdnr
+            50 dlwlsgml
+            503 rkdtlsdnr
+            512 rkdtlsdnr
+            513 rkdtlsdnr
+            519 rkdtlsdnr
+            521 rkdtlsdnr
+            524 rkdtlsdnr
+            525 rkdtlsdnr
+            528 rkdtlsdnr
+            530 rkdtlsdnr
+            531 rkdtlsdnr
+            534 rkdtlsdnr
+            541 dlwlsgml
+            543 rkdtlsdnr
+            550 dlwlsgml
+            554 dlwlsgml
+            556 dlwoals
+            562 didrmsgud
+            568 didrmsgud
+            572 dlwlsgml
+            577 qkrtjdtjq
+            582 qkrgkrtns
+            585 didrmsgud
+            601 qkrgkrtns
+            602 dlwoals
+            610 dlwoals
+            623 rkdtlsdnr
+            630 didrmsgud
+            650 dlwlsgml
+            655 dlwlsgml
+            657 didrmsgud
+            658 qkrtjdtjq
+            660 qkrtjdtjq
+            668 qkrgkrtns
+            67 dlwlsgml
+            672 dlwlsgml
+            676 dlwlsgml
+            677 qkrgkrtns
+            677 dlwoals
+            681 qkrgkrtns
+            682 dlwlsgml
+            684 dlwlsgml
+            685 dlwlsgml
+            691 tlswnsdn
+            692 dldPdms
+            693 rkdtlsdnr
+            695 dlwlsgml
+            698 dlwlsgml
+            702 dlwlsgml
+            705 dlwlsgml
+            712 rladnfl
+            715 qkrtjdtjq
+            717 rladnfl
+            719 dlwlsgml
+            72 dlwlsgml
+            721 dlwlsgml
+            73 dlwlsgml
+            737 rladnfl
+            749 didrmsgud
+            753 qkrgkrtns
+            755 rnqhstjd
+            757 qkrtjdtjq
+            779 rnqhstjd
+            780 dlwlsgml
+            806 rnqhstjd
+            817 rnqhstjd
+            821 rnqhstjd
+            824 dldPdms
+            825 qkrgkrtns
+            859 rnqhstjd
+            90 qkrgkrtns
+            95 dlwlsgml
+            """
+            erp = {}
+            for line in ERP_RAW.strip().splitlines():
+                p = line.split()
+                if len(p) != 2: continue
+                erp.setdefault(int(p[0]), set()).add(p[1])
             conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
             c = conn.cursor()
-            # 보고서가 있는 ② 업체별: client_id · 소유자 username · 보고서수. ERP source_key=clients.id 로 로컬 조인.
-            rows = list(c.execute(
-                "SELECT c.id AS cid, u.username AS un, COUNT(r.id) AS nrp "
-                "FROM clients c JOIN users u ON c.created_by=u.id "
-                "JOIN reports r ON r.client_id=c.id "
-                "GROUP BY c.id HAVING nrp>0 ORDER BY c.id"))
-            print("ROWS %d" % len(rows))
-            for r in rows:
-                print("C|%s|%s|%s" % (r[0], r[1], r[2]))
-            print("END")
+            names = {r[0]: r[1] for r in c.execute("SELECT username, name FROM users")}
+            conn_clients = len(erp)
+            no_client=matched=mismatched=0
+            stuck_reports=0
+            from collections import Counter
+            per_pair = Counter()   # (owner->mgr) 어긋남 보고서수
+            for cid, mgrs in erp.items():
+                row = c.execute("SELECT u.username, (SELECT COUNT(*) FROM reports r WHERE r.client_id=?) "
+                                "FROM clients cl JOIN users u ON cl.created_by=u.id WHERE cl.id=?",
+                                (cid, cid)).fetchone()
+                if row is None:
+                    no_client += 1; continue
+                owner, nrp = row[0], row[1]
+                if owner in mgrs:
+                    matched += 1
+                else:
+                    mismatched += 1
+                    stuck_reports += nrp
+                    tgt = sorted(mgrs)[0]
+                    per_pair[(owner, tgt)] += nrp
+            print("[연결 업체(중복 client id 제거)] %d" % conn_clients)
+            print("[② 에 client 없음(연결이 유령 id 가리킴)] %d" % no_client)
+            print("[★ 소유자 일치] %d개 업체" % matched)
+            print("[★ 소유자 어긋남] %d개 업체 · 그 업체들의 보고서 %d건 = 지금 새 담당자가 못 보는 보고서" % (mismatched, stuck_reports))
+            print("[어긋남 상위 — 현재소유자 → 실제담당자 (보고서수)]")
+            for (owner, mgr), n in per_pair.most_common(20):
+                print("  %s(%s) → %s(%s) : %d건" % (owner, names.get(owner,'?'), mgr, names.get(mgr,'?'), n))
             PY
