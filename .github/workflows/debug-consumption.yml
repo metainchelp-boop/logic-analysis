@@ -1,6 +1,6 @@
 name: Debug Consumption (수집 키워드 실소비 산출)
 
-# [일시 진단 — 신고 #256] 보고서 담당자 정렬 배포 검증용. 읽기 전용(dry_run).
+# [일시 진단 — 신고 #256] 보고서 담당자 정렬 첫 실행(적용) + 즉시 재검증.
 # deploy.yml paths-ignore 등재로 재배포 미유발. 검증 후 main 원복.
 
 on:
@@ -10,20 +10,32 @@ jobs:
   consumption:
     runs-on: ubuntu-latest
     steps:
-      - name: Report owner sync preview (read-only, #256)
+      - name: Report owner sync apply + verify (#256)
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          command_timeout: 90s
+          command_timeout: 120s
           script: |
-            echo "== [#256] 스케줄러 등록 확인 =="
-            docker logs logic-analysis 2>&1 | grep -F "보고서 담당자 정렬" | tail -3 || echo "(스케줄러 로그 라인 없음)"
-            echo "== [#256] 보고서 담당자 정렬 미리보기 (dry_run · 읽기 전용) =="
+            echo "== [#256] 보고서 담당자 정렬 첫 실행 (적용) =="
+            docker exec -i logic-analysis python3 - <<'PY'
+            import json
+            from report_owner_sync import run_report_owner_sync
+            r = run_report_owner_sync(dry_run=False, run_id="issue256-firstrun")
+            print("APPLY:", json.dumps(r, ensure_ascii=False))
+            PY
+            echo "== [#256] 적용 직후 재검증 (dry_run — would_change 가 0에 수렴해야 정상) =="
             docker exec -i logic-analysis python3 - <<'PY'
             import json
             from report_owner_sync import run_report_owner_sync
             r = run_report_owner_sync(dry_run=True)
-            print(json.dumps(r, ensure_ascii=False))
+            print("VERIFY:", json.dumps(r, ensure_ascii=False))
+            PY
+            echo "== [#256] 되돌릴 근거 로그 건수 (report_owner_sync_log) =="
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sqlite3, os
+            conn = sqlite3.connect("file:" + os.getenv("DB_PATH","/app/data/logic_data.db") + "?mode=ro", uri=True)
+            n = conn.execute("SELECT COUNT(*) FROM report_owner_sync_log WHERE run_id='issue256-firstrun'").fetchone()[0]
+            print("LOG rows(issue256-firstrun):", n)
             PY
