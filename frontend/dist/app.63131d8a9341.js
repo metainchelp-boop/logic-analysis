@@ -14081,6 +14081,13 @@ window.ClientListSection = function ClientListSection({
   var _sM = useState(null);
   var syncMsg = _sM[0],
     setSyncMsg = _sM[1];
+  /* 보고서 담당자 정렬(신고 #256) — 전산 현재 담당자에 맞춰 보고서 소유(열람 권한)를 즉시 맞춘다. */
+  var _sO = useState(false);
+  var syncingOwner = _sO[0],
+    setSyncingOwner = _sO[1];
+  var _sOM = useState(null);
+  var ownerMsg = _sOM[0],
+    setOwnerMsg = _sOM[1];
 
   /* 내린 업체(보관) — 2026-08-30 대표 확정 「지우지 말고 목록에서 내리기」.
      ⚠️ 내리면 관리 목록(`/my-clients` = status='active')에서 빠지므로, **되돌릴 자리**가
@@ -14116,6 +14123,34 @@ window.ClientListSection = function ClientListSection({
       });
     }).then(function () {
       setSyncing(false);
+    });
+  };
+
+  /* 보고서 담당자 정렬(신고 #256) — 04:20 배치와 같은 서버 함수(/cd/report-owner-sync)를 부른다.
+     전산에서 담당자를 방금 바꾼 직후, 다음 날 04:20 을 기다리지 않고 즉시 열람 권한을 맞춘다. */
+  var syncOwners = function () {
+    setSyncingOwner(true);
+    setOwnerMsg(null);
+    api.post('/cd/report-owner-sync', {}).then(function (res) {
+      if (res && res.success) {
+        var d = res.data || {};
+        setOwnerMsg({
+          ok: true,
+          text: '전산 현재 담당자에 맞춰 보고서 소유를 정렬했습니다 — ' + (d.changed || 0) + '곳 이동' + (d.created_accounts ? ' · 계정 생성 ' + d.created_accounts : '') + (d.aligned_already ? ' · 이미 맞음 ' + d.aligned_already : '')
+        });
+      } else {
+        setOwnerMsg({
+          ok: false,
+          text: res && res.detail || '정렬하지 못했습니다.'
+        });
+      }
+    }).catch(function (e) {
+      setOwnerMsg({
+        ok: false,
+        text: '정렬하지 못했습니다 — ' + (e && e.message || '네트워크 오류')
+      });
+    }).then(function () {
+      setSyncingOwner(false);
     });
   };
   useEffect(function () {
@@ -14535,7 +14570,22 @@ window.ClientListSection = function ClientListSection({
         color: syncing ? '#94a3b8' : '#334155',
         whiteSpace: 'nowrap'
       }
-    }, syncing ? '가져오는 중…' : '⟳ 계약 단계 지금 가져오기')),
+    }, syncing ? '가져오는 중…' : '⟳ 계약 단계 지금 가져오기'), isAdmin && React.createElement('button', {
+      onClick: syncOwners,
+      disabled: syncingOwner,
+      title: '전산의 현재 담당자에 맞춰 보고서 소유(열람 권한)를 지금 정렬합니다 (신고 #256)',
+      style: {
+        fontSize: 12,
+        fontWeight: 700,
+        padding: '6px 12px',
+        borderRadius: 999,
+        cursor: syncingOwner ? 'not-allowed' : 'pointer',
+        border: '1px solid #cbd5e1',
+        background: '#fff',
+        color: syncingOwner ? '#94a3b8' : '#334155',
+        whiteSpace: 'nowrap'
+      }
+    }, syncingOwner ? '정렬 중…' : '⟳ 보고서 담당자 정렬')),
     /* ⚠️ 단계를 한 번도 못 받았으면 그 사실을 말해 준다. 안 그러면
        환불중·홀딩중이 0으로 보여 「환불 업체가 없다」고 오해한다. */
     staged === 0 && React.createElement('div', {
@@ -14554,7 +14604,13 @@ window.ClientListSection = function ClientListSection({
         fontSize: 11.5,
         color: syncMsg.ok ? '#047857' : '#b91c1c'
       }
-    }, syncMsg.text), bucket === 'delete' && React.createElement('div', {
+    }, syncMsg.text), ownerMsg && React.createElement('div', {
+      style: {
+        marginTop: 8,
+        fontSize: 11.5,
+        color: ownerMsg.ok ? '#047857' : '#b91c1c'
+      }
+    }, ownerMsg.text), bucket === 'delete' && React.createElement('div', {
       style: {
         marginTop: 8,
         fontSize: 11.5,

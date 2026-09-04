@@ -72,6 +72,19 @@ def start_scheduler():
         max_instances=1,
     )
 
+    # 0-b) 보고서 담당자 정렬 — 매일 04:20 (신고 #256. 04:00 계약단계 동기화 뒤, 08:00 순위 전)
+    #    전산 ①의 현재 담당자를 읽어 보고서 소유(clients.created_by)를 맞춘다. 읽기 전용·하루 1회·
+    #    ③ 06:00·② 04:00 과 시각 분리. 작성자 이력·original_created_by 무접촉, 되돌릴 근거 로그.
+    #    (키·조회 실패 시 무동작. 이미 맞으면 무변경 — 매일 돌아도 자가 유지.)
+    _scheduler.add_job(
+        _run_report_owner_sync,
+        trigger=CronTrigger(hour=4, minute=20),
+        id="report_owner_sync",
+        name="보고서 담당자 정렬 (04:20)",
+        replace_existing=True,
+        max_instances=1,
+    )
+
     # 1) 순위 추적 — 매일 08:00 (2026-08-04 운영자 확정: 수집 01~07시 완료 후 소비, 데드라인 10시)
     _scheduler.add_job(
         _run_rank_tracking,
@@ -245,7 +258,7 @@ def start_scheduler():
     )
 
     _scheduler.start()
-    logger.info("✅ 스케줄러 시작 (계약동기화: 04:00, 순위: 08:00, 분석: 08:30, 리포트: 09:30(발송 비활성), DB백업: 00:30, 보관정책: 01:00, 축 브리지: 01:20, 플레이스 자동추적 정리: 01:40, 주간 보고서: 월 09:40, 상권 API 자가 점검: 05:00)")
+    logger.info("✅ 스케줄러 시작 (계약동기화: 04:00, 보고서 담당자 정렬: 04:20, 순위: 08:00, 분석: 08:30, 리포트: 09:30(발송 비활성), DB백업: 00:30, 보관정책: 01:00, 축 브리지: 01:20, 플레이스 자동추적 정리: 01:40, 주간 보고서: 월 09:40, 상권 API 자가 점검: 05:00)")
 
     # 1회성 VACUUM — 보관정책 1회 삭제(2026-08-04)로 생긴 freelist(~2.2GB)를 디스크로 반환.
     # 스케줄러는 단일 워커에서만 기동(위 파일락)하므로 여기서 부르면 중복 실행 없음.
@@ -457,6 +470,22 @@ def _run_contract_stage_sync():
                 "matched_companies": len(stage_by_name)}
     except Exception as e:
         logger.error(f"❌ 계약단계 동기화 DB 반영 실패: {e}")
+        return {"ok": False, "error": str(e)[:200]}
+
+
+# ==================== 04:20 보고서 담당자 정렬 (신고 #256) ====================
+
+def _run_report_owner_sync():
+    """04:20 — 전산 현재 담당자에 맞춰 보고서 소유(clients.created_by)를 정렬한다.
+
+    배치와 「⟳ 지금 갱신」 버튼이 **같은 함수**를 부른다(어긋남 방지). 실패해도 예외를
+    밖으로 내지 않는다 — 정렬이 다른 배치를 넘어뜨리면 안 된다.
+    """
+    try:
+        from report_owner_sync import run_report_owner_sync
+        return run_report_owner_sync()
+    except Exception as e:
+        logger.error(f"❌ 보고서 담당자 정렬 실패: {e}")
         return {"ok": False, "error": str(e)[:200]}
 
 
