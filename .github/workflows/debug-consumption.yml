@@ -98,3 +98,28 @@ jobs:
             for label, n in (("현재 전체", len(U)), ("핵심만", len(core)), ("전산①만", len(portal))):
                 print(f"  {label:8} {n:4}키워드 x 4 = {n*4:5}페이지/일 · 24시간 분산 시 시간당 {round(n*4/24)}")
             PY
+
+      - name: Per-client report owner dump (read-only) — 신고 #256
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 90s
+          script: |
+            echo "== 신고 #256 — 업체별 보고서 소유자 덤프 (읽기 전용 · 로컬 조인용) =="
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sqlite3
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            c = conn.cursor()
+            # 보고서가 있는 ② 업체별: client_id · 소유자 username · 보고서수. ERP source_key=clients.id 로 로컬 조인.
+            rows = list(c.execute(
+                "SELECT c.id AS cid, u.username AS un, COUNT(r.id) AS nrp "
+                "FROM clients c JOIN users u ON c.created_by=u.id "
+                "JOIN reports r ON r.client_id=c.id "
+                "GROUP BY c.id HAVING nrp>0 ORDER BY c.id"))
+            print("ROWS %d" % len(rows))
+            for r in rows:
+                print("C|%s|%s|%s" % (r[0], r[1], r[2]))
+            print("END")
+            PY
