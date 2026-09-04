@@ -2537,6 +2537,34 @@ def contract_stage_sync_now(current_user: dict = Depends(get_current_user)):
         return {"success": False, "detail": f"동기화 중 오류: {str(e)[:150]}"}
 
 
+@router.post("/report-owner-sync")
+def report_owner_sync_now(dry_run: bool = Query(False, description="미리보기(변경 없이 규모만)"),
+                          current_user: dict = Depends(get_current_user)):
+    """보고서 담당자 정렬 「⟳ 지금 갱신」 (신고 #256).
+
+    04:20 배치와 **같은 함수**를 부른다 — 버튼과 배치가 다른 코드를 쓰면 어긋난다.
+    전산의 현재 담당자를 지금 읽어 보고서 소유(clients.created_by)를 즉시 맞춘다.
+    담당자를 방금 바꾼 직후, 다음 날 04:20 을 기다리지 않고 한 번 눌러 즉시 반영한다.
+
+    dry_run=true 면 아무것도 바꾸지 않고 「몇 건이 바뀔지」만 돌려준다(배포 전 규모 확인).
+    """
+    if not _is_admin(current_user):
+        raise HTTPException(status_code=403, detail="관리자만 실행할 수 있습니다.")
+    try:
+        from scheduler import _run_report_owner_sync
+        if dry_run:
+            from report_owner_sync import run_report_owner_sync
+            res = run_report_owner_sync(dry_run=True) or {}
+        else:
+            res = _run_report_owner_sync() or {}
+        if not res.get("ok"):
+            return {"success": False, "detail": res.get("error") or "정렬에 실패했습니다."}
+        return {"success": True, "data": res}
+    except Exception as e:
+        logger.error(f"[report-owner-sync] {e}")
+        return {"success": False, "detail": f"정렬 중 오류: {str(e)[:150]}"}
+
+
 @router.get("/clients-lookup")
 def clients_lookup(q: str = Query(None, description="회사명 부분검색"),
                    current_user: dict = Depends(get_current_user)):
