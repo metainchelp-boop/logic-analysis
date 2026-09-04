@@ -12,6 +12,32 @@
 
 ---
 
+## 2026-09-04 신고 #256 (김우리) — 보고서 담당자 정렬: 매일 자가 동기화 + 즉시 갱신 [②·DDL 멱등·배포 완료]
+
+**신고** — 「퇴사자가 등록한 로직 분석 보고서가 변경된 담당자들에게 분배되지 않아 최신 보고서 공유가 불가」.
+**원인** — 보고서 열람 권한은 `clients.created_by`(현재 담당자)로만 준다(`report_access.managed_report_predicate`). 작성자(`reports.created_by`)는 이력. 전산에서 담당자를 바꿔도(가망 수정 페이지) 그 신호가 로직분석까지 오지 않아 옛 담당자에게 묶여 있었다. `handover_transfer`(퇴사 인수인계 최종 확정)만 소유를 옮기는데 그 흐름은 거의 안 돈다.
+
+**설계(②안 — 대표 확정 「2로 가자」)** — 전산 ①이 새로 낸 읽기전용 엔드포인트를 매일 읽어 소유를 맞춘다(per-change 훅이 아니라 매일 자가 동기화 + 즉시 갱신 버튼).
+- `report_owner_sync.py` — ① `GET /api/report-sync/client-managers` 를 읽어 `clients.created_by` 를 담당자 로그인(=`users.username`)에 맞춘다. **순수 판정 `plan_owner_changes`(단위테스트) + 적용 분리.** 계정 없는 담당자는 SSO 가 만들 계정을 미리 생성(role=manager·같은 username 이면 SSO 가 그대로 재사용 — `auth.py` `username=sub=employee.id` 확인).
+- **04:20 배치**(scheduler·04:00 계약동기화 뒤) + **`POST /cd/report-owner-sync` 「⟳ 지금 갱신」**(관리자·`_is_admin`)이 **같은 함수**를 부른다. `dry_run` 미리보기.
+- **FE**: 🏠 대시보드 「🏢 등록 업체」 구역, 계약단계 버튼 옆에 「⟳ 보고서 담당자 정렬」 버튼(`ClientListSection.jsx`) + 결과 안내. 번들 재빌드.
+- **안전** — 덧붙이기만: 작성자 이력·`original_created_by` 무접촉. 변경 전 소유는 `handover_owner_backup_20260828`(멱등 baseline·`INSERT OR IGNORE`) + `report_owner_sync_log`(from→to·run_id)로 되돌린다. 멱등(이미 맞으면 무변경). 키·조회 실패 시 무동작. 미배정(null)·업체없음은 세고 건너뜀.
+
+**검증·배포** — `test_report_owner_sync.py` 5건(순수 판정·엔드투엔드 정렬·작성자 보존·멱등·계정 생성·키 없음) + 기존 handover/report_access/client-delete 회귀 통과. 배포 게이트(회귀 4종 + 프런트 재빌드) 통과. **PR #194(main `0c7bf5d`) · Deploy #424 success.**
+
+**실서버 검증(진단 워크플로 dispatch·읽기 전용→적용)** —
+- 스케줄러 등록 확인: `Added job "보고서 담당자 정렬 (04:20)"` + 시작 로그에 `보고서 담당자 정렬: 04:20`.
+- 미리보기(dry_run·② → ① HTTP 실호출): `total 157 · would_change 62 · aligned_already 94 · unassigned 0 · unknown_client 1 · would_create_accounts 0`.
+- **첫 실행(attended·`run_id=issue256-firstrun`)**: `changed 60 · created_accounts 0 · aligned_already 94 · unassigned 0 · unknown_client 1`.
+- **적용 직후 재검증**: `would_change 0 · aligned_already 156` — **어긋남 0 수렴(멱등 확인).** 되돌림 로그 60행.
+- ⚠️ `unknown_client 1` = ①의 CONNECTED LOGIC_CLIENT 연결 중 그 `source_key` 가 ② `clients.id` 에 없는 stale 1건 — 안전 skip(무접촉). 정리 대상이면 별건.
+
+**① 짝(전산)** — BE#660(master `f862c0a5`) · deploy-vps #347 success. 계약 명세 `ERP_CONTRACT_SYNC_API.md` §8. ① 소비 계약 등재(호스트·`X-Api-Key`·snake_case·`logic_client_id=② clients.id`·`manager_login=② users.username`·미배정 null 포함·무페이징) — 변경 시 상호 통지.
+
+⚠️ **진단은 throwaway 브랜치(`diag/issue-256-verify`)로 돌렸다** — `debug-consumption.yml` 을 임시 수정해 dispatch(미머지). main 의 debug-consumption.yml 은 원래 소비 산출 스크립트 그대로다.
+
+---
+
 ## 2026-09-03 신고 #259 (이진희) — 업체 삭제 시 「FOREIGN KEY constraint failed」 [BE · 삭제 순서 1줄 · 배포 완료]
 
 > 전산(① 섹션)에서 이관받아 이 저장소에서 처리(대표 「B로 여기서 하자」 2026-09-03). 브랜치 `fix/client-delete-reports-fk-259`.
