@@ -2667,7 +2667,8 @@ jobs:
             print("client_rank_history 컬럼:", cols("client_rank_history"))
             print("rankings 컬럼:", cols("rankings"))
             # 기준일 = meta 가 있는 가장 최근 수집일(자정 직후에 돌리면 '오늘'이 비어 0건이 나오던 것 — 2026-09-06 00:00 실측)
-            D = conn.execute("SELECT MAX(collected_date) FROM collected_serp WHERE meta_json LIKE '%adSkipped%'").fetchone()[0]
+            # 자정 직후엔 새 날짜에 몇 건만 있어 MAX 가 빈 날을 고른다(9/6 00:01 실측 2건) → meta 100건 이상인 마지막 날
+            D = conn.execute("SELECT collected_date FROM collected_serp WHERE meta_json LIKE '%adSkipped%' GROUP BY collected_date HAVING COUNT(*) >= 100 ORDER BY collected_date DESC LIMIT 1").fetchone()[0]
             print("기준일:", D)
             sus, allk = set(), {}
             for r in conn.execute("SELECT keyword, meta_json FROM collected_serp WHERE collected_date=? AND meta_json IS NOT NULL", (D,)):
