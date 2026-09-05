@@ -2666,8 +2666,11 @@ jobs:
             def cols(t): return [r[1] for r in conn.execute("PRAGMA table_info(%s)" % t)]
             print("client_rank_history 컬럼:", cols("client_rank_history"))
             print("rankings 컬럼:", cols("rankings"))
+            # 기준일 = meta 가 있는 가장 최근 수집일(자정 직후에 돌리면 '오늘'이 비어 0건이 나오던 것 — 2026-09-06 00:00 실측)
+            D = conn.execute("SELECT MAX(collected_date) FROM collected_serp WHERE meta_json LIKE '%adSkipped%'").fetchone()[0]
+            print("기준일:", D)
             sus, allk = set(), {}
-            for r in conn.execute("SELECT keyword, meta_json FROM collected_serp WHERE collected_date=date('now','localtime') AND meta_json IS NOT NULL"):
+            for r in conn.execute("SELECT keyword, meta_json FROM collected_serp WHERE collected_date=? AND meta_json IS NOT NULL", (D,)):
                 m = json.loads(r["meta_json"] or "{}")
                 if "adSkipped" not in m: continue
                 raw, ad = m.get("rawCount") or 0, m.get("adSkipped") or 0
@@ -2676,7 +2679,7 @@ jobs:
             print("오늘 meta 있는 키워드", len(allk), "| 과필터 의심(광고 50%+ · 원본 200+)", len(sus))
             print("의심 키워드:", sorted(sus))
             def day(t, kwcol, off):
-                return conn.execute("SELECT %s kw, rank_position rp FROM %s WHERE DATE(checked_at)=DATE('now','localtime',?)" % (kwcol, t), (off,)).fetchall()
+                return conn.execute("SELECT %s kw, rank_position rp FROM %s WHERE DATE(checked_at)=DATE(?,?)" % (kwcol, t), (D, off)).fetchall()
             for t in ("client_rank_history", "rankings"):
                 cs = cols(t)
                 if "keyword" not in cs:
@@ -2695,15 +2698,15 @@ jobs:
                 if not idcol:
                     print("   대상 id 컬럼 없음 → 전환 계산 생략"); continue
                 q = ("SELECT t.keyword kw, COUNT(*) n FROM %s t JOIN %s y ON y.%s=t.%s AND y.keyword=t.keyword "
-                     "WHERE DATE(t.checked_at)=DATE('now','localtime') AND DATE(y.checked_at)=DATE('now','localtime','-1 day') "
-                     "AND y.rank_position IS NOT NULL AND t.rank_position IS NULL GROUP BY t.keyword") % (t, t, idcol, idcol)
+                     "WHERE DATE(t.checked_at)=DATE('%s') AND DATE(y.checked_at)=DATE('%s','-1 day') "
+                     "AND y.rank_position IS NOT NULL AND t.rank_position IS NULL GROUP BY t.keyword") % (t, t, idcol, idcol, D, D)
                 flips = conn.execute(q).fetchall()
                 fs = [(r["kw"], r["n"]) for r in flips if r["kw"] in sus]
                 fo = [(r["kw"], r["n"]) for r in flips if r["kw"] not in sus]
                 print("   어제 노출→오늘 미노출: 의심 키워드 %d건 %s | 나머지 %d건" % (sum(n for _, n in fs), fs[:15], sum(n for _, n in fo)))
                 q2 = ("SELECT t.keyword kw, y.rank_position yr, t.rank_position tr FROM %s t JOIN %s y ON y.%s=t.%s AND y.keyword=t.keyword "
-                      "WHERE DATE(t.checked_at)=DATE('now','localtime') AND DATE(y.checked_at)=DATE('now','localtime','-1 day') "
-                      "AND y.rank_position IS NOT NULL AND t.rank_position IS NOT NULL") % (t, t, idcol, idcol)
+                      "WHERE DATE(t.checked_at)=DATE('%s') AND DATE(y.checked_at)=DATE('%s','-1 day') "
+                      "AND y.rank_position IS NOT NULL AND t.rank_position IS NOT NULL") % (t, t, idcol, idcol, D, D)
                 pairs = [(r["kw"], r["yr"], r["tr"]) for r in conn.execute(q2)]
                 ps = [(k, a, b) for k, a, b in pairs if k in sus]
                 po = [(k, a, b) for k, a, b in pairs if k not in sus]
