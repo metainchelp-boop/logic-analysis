@@ -3263,7 +3263,7 @@ jobs:
                                  MIN(time(checked_at)) t0, MAX(time(checked_at)) t1,
                                  SUM(CASE WHEN time(checked_at) <= '08:35' THEN 1 ELSE 0 END) before0835
                           FROM client_rank_history
-                          WHERE check_type='scheduled' AND checked_at >= date('now','localtime','-7 day')
+                          WHERE check_type='scheduled' AND checked_at >= date('now','localtime','-75 day')
                           GROUP BY d ORDER BY d"""):
                 pct = (r["before0835"] / r["n"] * 100) if r["n"] else 0
                 print(f"   {r['d']}  총 {r['n']:5}건  {r['t0']}~{r['t1']}  08:35 이전 {r['before0835']:5}건 ({pct:.0f}%)")
