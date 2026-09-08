@@ -3341,8 +3341,10 @@ jobs:
             docker logs --since 24h logic-analysis 2>&1 | grep "^ERROR" | grep -v "검색 결과 0건" \
               | sed 's/\[[^]]*\]/[·]/g' | sed 's/[0-9]\+/N/g' | sort | uniq -c | sort -rn | head -10 || true
             echo
-            echo "== I. 08:00 배치 실제 소요 (오늘 로그) =="
-            docker logs --since 24h logic-analysis 2>&1 | grep -E "순위 추적 시작|순위 추적 완료" | tail -4 || true
+            echo "== I. 08:00 배치 실제 소요 (시각 포함) =="
+            docker logs -t --since 72h logic-analysis 2>&1 | grep -E "순위 추적 시작|순위 추적 완료|전체 분석 시작|전체 분석 완료" | tail -12 || true
+            echo "   -- 배치 진행 중 찍히는 마지막 줄들(끝났는지) --"
+            docker logs -t --since 24h logic-analysis 2>&1 | grep -E "순위 추적|추적 상품 자격 판정|이어진 짝" | tail -6 || true
             echo
             echo "== J. 컨테이너 =="
             docker inspect -f 'RestartCount={{.RestartCount}} StartedAt={{.State.StartedAt}} OOMKilled={{.State.OOMKilled}}' logic-analysis
