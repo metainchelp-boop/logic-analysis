@@ -2903,6 +2903,58 @@ jobs:
                 print("      %s  %02d시까지 %4d개 = 유니버스의 %d%% (나머지 %d%% 는 지금 분석하면 순위 안 나옴)"
                       % (d[5:], hh, got, got*100//max(uni,1), 100 - got*100//max(uni,1)))
             PY
+            echo
+            echo "== ⑨ v1.10.2 전후 대조 (v1.10.3 이 되돌릴 수 있는 최대치) =="
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sqlite3, json
+            from collections import Counter
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            def med(v):
+                v = sorted(v); return v[len(v)//2] if v else None
+            print("  날짜   건수 | 확장버전 분포            | 담긴수 중앙 p25 | 광고비율 중앙 | 담긴<150 건수")
+            for off in range(11, -1, -1):
+                d = conn.execute("SELECT date('now','localtime',?)", ("-%d day" % off,)).fetchone()[0]
+                rows = conn.execute("SELECT meta_json, product_count FROM collected_serp WHERE collected_date=?", (d,)).fetchall()
+                if not rows: continue
+                ver = Counter(); kept = []; ratio = []
+                for r in rows:
+                    k = r["product_count"] or 0; kept.append(k)
+                    m = json.loads(r["meta_json"] or "{}")
+                    ver[m.get("collectorVersion") or "meta없음"] += 1
+                    raw, ad = m.get("rawCount") or 0, m.get("adSkipped")
+                    if raw and ad is not None: ratio.append(ad / raw)
+                mr = med(ratio); ks = sorted(kept)
+                print("  %s %5d | %-24s | %4s %4s | %8s | %4d (%d%%)" % (
+                    d[5:], len(rows), str(dict(ver))[:24],
+                    med(kept), ks[len(ks)//4] if ks else None,
+                    ("%.1f%%" % (mr*100)) if mr is not None else "없음",
+                    sum(1 for k in kept if k < 150), sum(1 for k in kept if k < 150)*100//max(len(kept),1)))
+            print("\n  [T] 같은 키워드 v1.10.2 전후 담긴 수 변화 (전=9/1~2 · 후=오늘)")
+            rows = conn.execute("""
+                SELECT a.keyword kw, a.product_count before_n, b.product_count after_n
+                FROM collected_serp a JOIN collected_serp b ON b.keyword=a.keyword
+                WHERE a.collected_date=date('now','localtime','-7 day')
+                  AND b.collected_date=date('now','localtime')
+            """).fetchall()
+            if not rows:
+                print("      7일 전 수집분이 없어 대조 불가")
+            else:
+                diffs = [(r["kw"], r["before_n"] or 0, r["after_n"] or 0) for r in rows]
+                worse = [d for d in diffs if d[2] < d[1] - 50]
+                print("      대조 가능 %d쌍 · 담긴 수가 50개 넘게 줄어든 키워드 %d개 (%d%%)"
+                      % (len(diffs), len(worse), len(worse)*100//max(len(diffs),1)))
+                print("      줄어든 총량 중앙값:", med([d[1]-d[2] for d in worse]) if worse else "-")
+                for kw, b, a in sorted(worse, key=lambda x: x[2]-x[1])[:15]:
+                    print("        %-16s %3d → %3d  (%+d)" % (kw[:16], b, a, a-b))
+            print("\n  [U] 지금 담긴 수가 적은 키워드 = v1.10.3 으로 값이 바뀔 후보")
+            today = conn.execute("SELECT date('now','localtime')").fetchone()[0]
+            n_all = conn.execute("SELECT COUNT(*) FROM collected_serp WHERE collected_date=?", (today,)).fetchone()[0]
+            for lo, hi, lbl in ((0, 100, "100 미만"), (100, 200, "100~199"), (200, 300, "200~299"), (300, 99999, "300 이상")):
+                n = conn.execute("SELECT COUNT(*) FROM collected_serp WHERE collected_date=?"
+                                 " AND product_count>=? AND product_count<?", (today, lo, hi)).fetchone()[0]
+                print("      %-8s %4d건 (%d%%)" % (lbl, n, n*100//max(n_all,1)))
+            PY
 
       - name: 신고 253 사후 6 — 과필터가 우리 업체 기록에 미친 영향 (읽기 전용·업체명 미출력)
         if: ${{ github.event.inputs.impact253 == 'on' }}
