@@ -7,6 +7,10 @@ name: Debug Place Tracking (읽기 전용 진단)
 on:
   workflow_dispatch:
     inputs:
+      place:
+        description: '플레이스 추적 현황 — off(기본) / on. ⚠️ 가게 이름이 실행 기록에 남는다 — 이 저장소는 공개다. 결과를 받은 뒤 그 런의 로그를 지울 것.'
+        required: false
+        default: 'off'
       prune:
         description: '디스크 정리 실행 (dangling 이미지+빌드 캐시+저널 — 롤백 이미지·실행 컨테이너·DB 보존)'
         default: 'false'
@@ -489,7 +493,11 @@ jobs:
             print("      전부 404/500 이면 포털 내부 경로 미공개 → 해당 슬라이드는 계속 자동 생략(무해).")
             PY
 
+      # ⚠️ 이 스텝은 가게 이름을 그대로 찍는다. 저장소가 공개라 실행 기록도 공개다.
+      #    종전엔 조건이 없어 이 워크플로를 무슨 이유로 돌리든(인증키 확인만 해도) 함께 돌았다.
+      #    이제 place=on 일 때만 돈다 — debug-rank.yml 의 expired 입력과 같은 방식.
       - name: Place tracking read-only query
+        if: ${{ github.event.inputs.place == 'on' }}
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.VPS_HOST }}
