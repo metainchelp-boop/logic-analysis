@@ -30,14 +30,6 @@ on:
         description: '상품 주소 모양 실측 — off(기본) / on. 어느 호스트(스마트스토어·브랜드스토어·카탈로그)를 쓰는지, 같은 슬러그가 두 호스트에 걸쳐 있는지(읽기 전용·업체명 미출력).'
         required: false
         default: 'off'
-      report253d:
-        description: '신고 253 4차 — 광고 누수 지문: 기타 링크 실체·날짜별 구성·전 키워드 일제 하락 여부(읽기 전용·업체명 미출력).'
-        required: false
-        default: 'off'
-      report253e:
-        description: '신고 253 5차 — 담은 수 vs 네이버 총수 대조로 광고 거름 생사 판정(읽기 전용).'
-        required: false
-        default: 'off'
       verify253:
         description: '신고 253 수정 검증 — v1.10.2 적용 후 재수집·순위 45위 재계산(읽기 전용·업체명 미출력).'
         required: false
@@ -68,6 +60,10 @@ on:
         default: '청귤'
       impact253:
         description: '신고 253 사후 6 — 과필터 의심 키워드(광고 비율 50%+ · 원본 200+)에 걸린 우리 업체·추적상품이 몇 건이고, 어제 노출→오늘 미노출로 바뀐 것이 몇 건인지(대조군 비교 · 읽기 전용 · 업체명 미출력).'
+        required: false
+        default: 'off'
+      fail50:
+        description: '수집 실패 급증 진단 — 오늘 확장 업로드 시간대별·간격 공백·meta 분포·대기줄·업로드 오류 로그를 한 번에(읽기 전용·업체명 미출력).'
         required: false
         default: 'off'
       reportdump:
@@ -2649,6 +2645,115 @@ jobs:
             d2 = [x["a"]-x["b"] for x in rows]
             if d2: print("   짝", len(d2), "| 이동 min/Q1/중앙/Q3/max:", q(d2), "| 평균", round(st.mean(d2),2))
             PY
+
+      - name: 수집 실패 급증 진단 (읽기 전용·업체명 미출력)
+        if: ${{ github.event.inputs.fail50 == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 8m
+          script: |
+            echo "== ⓪ 컨테이너 상태 =="
+            docker inspect -f '  StartedAt={{.State.StartedAt}} RestartCount={{.RestartCount}} OOMKilled={{.State.OOMKilled}}' logic-analysis
+            date -u '+  지금 UTC=%Y-%m-%d %H:%M'
+            echo
+            echo "== ① 서버가 받은 업로드 — 시간대별 (docker logs, UTC) =="
+            docker logs -t --since 48h logic-analysis 2>&1 | grep '\[수집\]' \
+              | awk '{print substr($1,1,13)}' | sort | uniq -c | tail -40
+            echo "  -- 최근 업로드 5줄 --"
+            docker logs -t --since 48h logic-analysis 2>&1 | grep '\[수집\]' | tail -5
+            echo
+            echo "== ② 업로드 경로 오류 (500·예외·기록 실패) =="
+            docker logs -t --since 24h logic-analysis 2>&1 \
+              | grep -Ei 'collector|serp|Traceback|500 Internal|429|Too Many' \
+              | grep -viE '\[수집\] ' | tail -40
+            echo "  -- 오류 패턴별 건수 --"
+            docker logs -t --since 24h logic-analysis 2>&1 \
+              | grep -Eio 'ERROR:[a-z_]+|Traceback|500 Internal Server Error|429' | sort | uniq -c | sort -rn | head -15
+            echo
+            echo "== ③ DB 실측 =="
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sqlite3, json
+            from collections import Counter
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            print("  지금 KST:", conn.execute("SELECT datetime('now','localtime')").fetchone()[0])
+            print("\n  [A] 최근 6일 수집 건수")
+            for r in conn.execute("SELECT collected_date d, COUNT(*) n, MIN(created_at) a, MAX(created_at) b"
+                                  " FROM collected_serp WHERE collected_date>=date('now','localtime','-5 day')"
+                                  " GROUP BY d ORDER BY d"):
+                print("    %s  %4d건  %s ~ %s" % (r["d"], r["n"], r["a"], r["b"]))
+            print("\n  [B] 시간대별 수집 건수 (행=날짜, 열=시)")
+            rows = conn.execute("SELECT collected_date d, CAST(substr(created_at,12,2) AS INT) h, COUNT(*) n"
+                                " FROM collected_serp WHERE collected_date>=date('now','localtime','-5 day')"
+                                " GROUP BY d,h").fetchall()
+            days = sorted({r["d"] for r in rows}); grid = {}
+            for r in rows: grid[(r["d"], r["h"])] = r["n"]
+            print("        " + "".join("%4d" % h for h in range(24)))
+            for d in days:
+                print("    %s" % d[5:] + "".join("%4s" % (grid.get((d,h)) or "·") for h in range(24)))
+            print("\n  [C] 오늘 meta 요약 (확장이 실제로 무엇을 올렸나)")
+            today = conn.execute("SELECT date('now','localtime')").fetchone()[0]
+            ver, raws, kept, pages = Counter(), [], [], Counter()
+            nometa = 0
+            for r in conn.execute("SELECT meta_json, product_count FROM collected_serp WHERE collected_date=?", (today,)):
+                m = json.loads(r["meta_json"] or "{}")
+                if not m: nometa += 1; continue
+                ver[m.get("collectorVersion")] += 1
+                pages[m.get("pageSize")] += 1
+                if m.get("rawCount") is not None: raws.append(m["rawCount"])
+                kept.append(r["product_count"] or 0)
+            print("    확장 버전:", dict(ver), "| pageSize:", dict(pages), "| meta 없음:", nometa)
+            def q(v):
+                if not v: return "없음"
+                v = sorted(v); n = len(v)
+                return "n=%d min=%d p25=%d 중앙=%d p75=%d max=%d" % (n, v[0], v[n//4], v[n//2], v[3*n//4], v[-1])
+            print("    원본 rawCount:", q(raws))
+            print("    담긴 product_count:", q(kept))
+            buckets = Counter()
+            for k in kept:
+                buckets["0" if k == 0 else "1~39" if k < 40 else "40~99" if k < 100 else "100~299" if k < 300 else "300+"] += 1
+            print("    담긴 수 구간:", dict(buckets))
+            print("\n  [D] 업로드 간격 (오늘, 인접 수집 시각 차)")
+            ts = [r[0] for r in conn.execute("SELECT created_at FROM collected_serp WHERE collected_date=? ORDER BY created_at", (today,))]
+            import datetime as dt
+            gaps = []
+            for a, b in zip(ts, ts[1:]):
+                try:
+                    gaps.append((dt.datetime.fromisoformat(b) - dt.datetime.fromisoformat(a)).total_seconds())
+                except Exception: pass
+            gb = Counter()
+            for g in gaps:
+                gb["~60초" if g <= 60 else "1~5분" if g <= 300 else "5~30분" if g <= 1800 else "30분+"] += 1
+            print("    간격 분포:", dict(gb), "| 총", len(gaps), "칸")
+            big = [(a, round(g/60)) for a, g in zip(ts, gaps) if g > 900]
+            print("    15분 넘는 공백(시작시각·분):", big[:15])
+            print("\n  [E] 대기줄 collect_requests")
+            for r in conn.execute("SELECT status, COUNT(*) n, MIN(requested_at) a, MAX(requested_at) b FROM collect_requests GROUP BY status"):
+                print("    %-10s %4d건  %s ~ %s" % (r["status"], r["n"], r["a"], r["b"]))
+            print("    attempts 분포:", dict(Counter(r[0] for r in conn.execute("SELECT attempts FROM collect_requests"))))
+            print("\n  [F] 오늘 순위 기록 시간대별 미노출율")
+            for t in ("client_rank_history", "rankings"):
+                print("    --", t)
+                for r in conn.execute("SELECT CAST(substr(checked_at,12,2) AS INT) h, COUNT(*) n,"
+                                      " SUM(CASE WHEN rank_position IS NULL THEN 1 ELSE 0 END) miss"
+                                      " FROM %s WHERE DATE(checked_at)=date('now','localtime') GROUP BY h ORDER BY h" % t):
+                    print("      %02d시  %4d건 · 미노출 %4d (%d%%)" % (r["h"], r["n"], r["miss"], r["miss"]*100//max(r["n"],1)))
+            print("\n  [G] 어제 대비 같은 시각까지 누적")
+            hh = conn.execute("SELECT CAST(strftime('%H','now','localtime') AS INT)").fetchone()[0]
+            for off in ("0 day", "-1 day", "-2 day"):
+                n = conn.execute("SELECT COUNT(*) FROM collected_serp WHERE collected_date=date('now','localtime',?)"
+                                 " AND CAST(substr(created_at,12,2) AS INT) <= ?", (off, hh)).fetchone()[0]
+                print("    %s (%02d시까지 누적): %d건" % (off, hh, n))
+            PY
+            echo
+            echo "== ④ 오늘 배치·수집 관련 로그 요약 =="
+            docker logs -t --since 24h logic-analysis 2>&1 | grep -E '수집 유니버스|수집 재개 감지|큐 되먹임|순위 추적 완료|검색 결과 0건' \
+              | grep -v '검색 결과 0건' | tail -15
+            echo "  -- 검색 결과 0건 줄 수(서버 크롤러 폴백) --"
+            docker logs -t --since 24h logic-analysis 2>&1 | grep -c '검색 결과 0건'
 
       - name: 신고 253 사후 6 — 과필터가 우리 업체 기록에 미친 영향 (읽기 전용·업체명 미출력)
         if: ${{ github.event.inputs.impact253 == 'on' }}
