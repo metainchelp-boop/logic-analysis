@@ -2754,6 +2754,81 @@ jobs:
               | grep -v '검색 결과 0건' | tail -15
             echo "  -- 검색 결과 0건 줄 수(서버 크롤러 폴백) --"
             docker logs -t --since 24h logic-analysis 2>&1 | grep -c '검색 결과 0건'
+            echo
+            echo "== ⑤ 날짜별 대조 (오늘만 다른가) =="
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sqlite3, json
+            from collections import Counter
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            HH = conn.execute("SELECT CAST(strftime('%H','now','localtime') AS INT)").fetchone()[0]
+            print("  ※ 모든 비교는 00시~%02d시 같은 창으로 자른다" % HH)
+            print("\n  [H] 일자별 담긴 수 구간 · 광고비율 (같은 창)")
+            print("    날짜     건수  300+  100~299  40~99  1~39   0   |  광고비율 중앙  원본 중앙  담김 중앙")
+            for off in range(5, -1, -1):
+                d = conn.execute("SELECT date('now','localtime',?)", ("-%d day" % off,)).fetchone()[0]
+                rows = conn.execute("SELECT meta_json, product_count FROM collected_serp"
+                                    " WHERE collected_date=? AND CAST(substr(created_at,12,2) AS INT)<=?", (d, HH)).fetchall()
+                if not rows: continue
+                b = Counter(); ratios = []; raws = []; kept = []
+                for r in rows:
+                    k = r["product_count"] or 0; kept.append(k)
+                    b["300+" if k >= 300 else "100~299" if k >= 100 else "40~99" if k >= 40 else "1~39" if k > 0 else "0"] += 1
+                    m = json.loads(r["meta_json"] or "{}")
+                    raw, ad = m.get("rawCount") or 0, m.get("adSkipped")
+                    if raw and ad is not None: ratios.append(ad / raw); raws.append(raw)
+                med = lambda v: (sorted(v)[len(v)//2] if v else None)
+                mr = med(ratios)
+                print("    %s %5d %5d %8d %6d %5d %4d   |  %s %10s %10s" % (
+                    d[5:], len(rows), b["300+"], b["100~299"], b["40~99"], b["1~39"], b["0"],
+                    ("%5.1f%%" % (mr*100)) if mr is not None else "  없음", med(raws), med(kept)))
+            print("\n  [I] 일자별 순위 기록 미노출율 (같은 창)")
+            for t in ("client_rank_history", "rankings"):
+                print("    --", t)
+                for off in range(5, -1, -1):
+                    r = conn.execute("SELECT COUNT(*) n, SUM(CASE WHEN rank_position IS NULL THEN 1 ELSE 0 END) m"
+                                     " FROM %s WHERE DATE(checked_at)=date('now','localtime',?)"
+                                     " AND CAST(substr(checked_at,12,2) AS INT)<=?" % t, ("-%d day" % off, HH)).fetchone()
+                    if not r["n"]: continue
+                    d = conn.execute("SELECT date('now','localtime',?)", ("-%d day" % off,)).fetchone()[0]
+                    print("      %s  %5d건 · 미노출 %4d (%d%%)" % (d[5:], r["n"], r["m"] or 0, (r["m"] or 0)*100//r["n"]))
+            print("\n  [J] 일자별 수집 키워드 커버리지")
+            for off in range(5, -1, -1):
+                d = conn.execute("SELECT date('now','localtime',?)", ("-%d day" % off,)).fetchone()[0]
+                n = conn.execute("SELECT COUNT(DISTINCT keyword) FROM collected_serp WHERE collected_date=?", (d,)).fetchone()[0]
+                prev = conn.execute("SELECT COUNT(*) FROM collected_serp c WHERE c.collected_date=? AND EXISTS"
+                                    "(SELECT 1 FROM collected_serp p WHERE p.keyword=c.keyword AND p.collected_date=date(?, '-1 day'))", (d, d)).fetchone()[0]
+                print("      %s  고유키워드 %4d · 어제도 수집된 것 %4d" % (d[5:], n, prev))
+            print("\n  [K] 대기줄 pending 상세")
+            for r in conn.execute("SELECT attempts, COUNT(*) n, MIN(requested_at) a, MAX(requested_at) b"
+                                  " FROM collect_requests WHERE status='pending' GROUP BY attempts ORDER BY attempts"):
+                print("      attempts=%d  %4d건  %s ~ %s" % (r["attempts"], r["n"], r["a"], r["b"]))
+            n_today = conn.execute("SELECT COUNT(*) FROM collect_requests WHERE status='pending'"
+                                   " AND DATE(requested_at)=date('now','localtime')").fetchone()[0]
+            print("      그중 오늘 요청분: %d건" % n_today)
+            print("      5회 소진 키워드(앞 20):", [r[0] for r in conn.execute(
+                "SELECT keyword FROM collect_requests WHERE status='pending' AND attempts>=5 LIMIT 20")])
+            print("\n  [L] 플레이스 추적 (다른 확장) 최근 6일")
+            try:
+                for r in conn.execute("SELECT DATE(checked_at) d, COUNT(*) n,"
+                                      " SUM(CASE WHEN rank_position IS NULL THEN 1 ELSE 0 END) m"
+                                      " FROM place_rank_history WHERE checked_at>=datetime('now','localtime','-6 day')"
+                                      " GROUP BY d ORDER BY d"):
+                    print("      %s  %4d건 · 순위없음 %3d (%d%%)" % (r["d"], r["n"], r["m"] or 0, (r["m"] or 0)*100//max(r["n"],1)))
+                print("      rank_state 분포(최근 2일):", dict(Counter(r[0] for r in conn.execute(
+                    "SELECT COALESCE(rank_state,'') FROM place_rank_history WHERE checked_at>=datetime('now','localtime','-2 day')"))))
+                print("      추적 대상 place_track_target active:", conn.execute("SELECT COUNT(*) FROM place_track_target WHERE active=1").fetchone()[0])
+            except Exception as e:
+                print("      플레이스 표 조회 실패:", e)
+            PY
+            echo
+            echo "== ⑥ naver_crawler 오류 메시지 종류별 (24h) =="
+            docker logs -t --since 24h logic-analysis 2>&1 | grep 'ERROR:naver_crawler' \
+              | sed -E 's/.*ERROR:naver_crawler:?//' | sed -E 's/\(keyword: .*//' \
+              | sed -E 's/https?:[^ ]*/<URL>/g' | sed -E 's/[0-9]{3,}/<N>/g' \
+              | sort | uniq -c | sort -rn | head -12
+            echo "  -- 429 시각 분포(시간대별) --"
+            docker logs -t --since 24h logic-analysis 2>&1 | grep '429' | awk '{print substr($1,1,13)}' | sort | uniq -c | tail -26
 
       - name: 신고 253 사후 6 — 과필터가 우리 업체 기록에 미친 영향 (읽기 전용·업체명 미출력)
         if: ${{ github.event.inputs.impact253 == 'on' }}
