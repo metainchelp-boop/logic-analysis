@@ -2870,6 +2870,39 @@ jobs:
             n = conn.execute("SELECT COUNT(DISTINCT keyword) FROM collected_serp WHERE collected_date=date('now','localtime')").fetchone()[0]
             print("      오늘 수집된 고유 키워드 %d개" % n)
             PY
+            echo
+            echo "== ⑧ 화면 분석이 「수집분 없음」에 부딪힌 횟수 (오늘 vs 어제) =="
+            docker logs -t --since 48h logic-analysis 2>&1 | grep '쇼핑 검색 API' \
+              | awk '{print substr($1,1,13)}' | sort | uniq -c | tail -50
+            echo "  -- 그중 배치(scheduler)가 아닌 것 = 화면 분석 --"
+            docker logs -t --since 48h logic-analysis 2>&1 | grep 'ERROR:naver_crawler:쇼핑 검색 API' \
+              | awk '{print substr($1,1,10)}' | sort | uniq -c
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sqlite3
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            print("\n  [R] 일자별 대기줄 요청 건수 (=화면 분석이 수집분을 못 찾은 횟수)")
+            for r in conn.execute("SELECT DATE(requested_at) d, COUNT(*) n,"
+                                  " SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) done,"
+                                  " SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) pend"
+                                  " FROM collect_requests GROUP BY d ORDER BY d"):
+                print("      %s  요청 %4d · 처리 %4d · 대기 %4d" % (r["d"], r["n"], r["done"], r["pend"]))
+            print("\n  [S] 지금 이 시각 기준 '분석하면 실패할' 키워드 비율")
+            uni = conn.execute("SELECT COUNT(DISTINCT keyword) FROM collected_serp"
+                               " WHERE collected_date >= date('now','localtime','-2 day')").fetchone()[0]
+            for off in range(3, -1, -1):
+                d = conn.execute("SELECT date('now','localtime',?)", ("-%d day" % off,)).fetchone()[0]
+                got = conn.execute("SELECT COUNT(DISTINCT keyword) FROM collected_serp WHERE collected_date=?", (d,)).fetchone()[0]
+                print("      %s  그날 수집 %4d개" % (d[5:], got))
+            print("      최근 3일 등장한 고유 키워드(대략의 유니버스): %d개" % uni)
+            hh = conn.execute("SELECT CAST(strftime('%H','now','localtime') AS INT)").fetchone()[0]
+            for off in range(3, -1, -1):
+                d = conn.execute("SELECT date('now','localtime',?)", ("-%d day" % off,)).fetchone()[0]
+                got = conn.execute("SELECT COUNT(DISTINCT keyword) FROM collected_serp WHERE collected_date=?"
+                                   " AND CAST(substr(created_at,12,2) AS INT)<=?", (d, hh)).fetchone()[0]
+                print("      %s  %02d시까지 %4d개 = 유니버스의 %d%% (나머지 %d%% 는 지금 분석하면 순위 안 나옴)"
+                      % (d[5:], hh, got, got*100//max(uni,1), 100 - got*100//max(uni,1)))
+            PY
 
       - name: 신고 253 사후 6 — 과필터가 우리 업체 기록에 미친 영향 (읽기 전용·업체명 미출력)
         if: ${{ github.event.inputs.impact253 == 'on' }}
