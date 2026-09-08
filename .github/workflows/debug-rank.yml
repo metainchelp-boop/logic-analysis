@@ -98,6 +98,10 @@ on:
         description: '배포 반영 확인 — off(기본) / on. 서버 파일 타임스탬프·크기와 이번 차수 표지 문자열을 센다(읽기 전용).'
         required: false
         default: 'off'
+      health:
+        description: '건전성 점검 — off(기본) / on. 배치 종료 시각(①의 08:40 계약)·표별 보관·로그 오류 비중·고아 행·컨테이너 자원(읽기 전용·업체명 미출력).'
+        required: false
+        default: 'off'
       use_branch_code:
         description: '이 브랜치의 rank_link.py 로 미리보기 — off(기본) / on. 배포 전에 새 규칙이 무엇을 이을지 먼저 보려는 용도(컨테이너 /tmp 에 얹었다 지운다·앱 파일 무접촉). apply 와 함께 쓰지 말 것.'
         required: false
@@ -3238,3 +3242,108 @@ jobs:
             if yk:
                 yk.sort(); print("== 어제 담긴 수 분포 min/중앙/max:", yk[0], yk[len(yk)//2], yk[-1], "| 오늘:", sorted(o[4] for o in out)[0], sorted(o[4] for o in out)[len(out)//2], max(o[4] for o in out))
             PY
+
+      - name: 건전성 점검 (읽기 전용·업체명 미출력)
+        if: ${{ github.event.inputs.health == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 240s
+          script: |
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sqlite3, os, json
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            q = lambda s, p=(): conn.execute(s, p).fetchall()
+
+            print("== A. 08:00 배치가 몇 시에 끝나나 (①의 08:40 캐시 계약 검증) ==")
+            for r in q("""SELECT date(checked_at) d, COUNT(*) n,
+                                 MIN(time(checked_at)) t0, MAX(time(checked_at)) t1,
+                                 SUM(CASE WHEN time(checked_at) <= '08:35' THEN 1 ELSE 0 END) before0835
+                          FROM client_rank_history
+                          WHERE check_type='scheduled' AND checked_at >= date('now','localtime','-7 day')
+                          GROUP BY d ORDER BY d"""):
+                pct = (r["before0835"] / r["n"] * 100) if r["n"] else 0
+                print(f"   {r['d']}  총 {r['n']:5}건  {r['t0']}~{r['t1']}  08:35 이전 {r['before0835']:5}건 ({pct:.0f}%)")
+
+            print()
+            print("== B. 오늘 시간대별 순위 기록 ==")
+            for r in q("""SELECT strftime('%H', checked_at) h, COUNT(*) n
+                          FROM client_rank_history
+                          WHERE date(checked_at)=date('now','localtime') AND check_type='scheduled'
+                          GROUP BY h ORDER BY h"""):
+                print(f"   {r['h']}시  {r['n']:5}건  " + "#" * min(60, r["n"] // 8))
+
+            print()
+            print("== C. 표별 보관 현황 (가장 오래된 행 / 일자 수) ==")
+            for tbl, col in [("collected_serp", "collected_date"), ("client_analyses", "created_at"),
+                             ("client_rank_history", "checked_at"), ("rankings", "checked_at"),
+                             ("reports", "created_at"), ("collect_requests", "requested_at")]:
+                try:
+                    r = q(f"SELECT MIN({col}) a, MAX({col}) b, COUNT(*) n, COUNT(DISTINCT date({col})) d FROM {tbl}")[0]
+                    print(f"   {tbl:22} {r['n']:7}행 · {r['d']:4}일치 · {str(r['a'])[:10]} ~ {str(r['b'])[:10]}")
+                except Exception as e:
+                    print(f"   {tbl:22} 조회 실패: {e}")
+
+            print()
+            print("== D. client_analyses 가 1GB 인 이유 — 일자별 행수·평균 크기 ==")
+            for r in q("""SELECT date(created_at) d, COUNT(*) n,
+                                 AVG(LENGTH(report_html)) rh, AVG(LENGTH(analysis_json)) aj
+                          FROM client_analyses WHERE created_at >= date('now','localtime','-10 day')
+                          GROUP BY d ORDER BY d"""):
+                print(f"   {r['d']}  {r['n']:5}행 · 보고서 평균 {int(r['rh'] or 0)//1024:4}KB · 분석 평균 {int(r['aj'] or 0)//1024:3}KB")
+            r = q("SELECT COUNT(*) n FROM client_analyses WHERE created_at < date('now','localtime','-90 day')")[0]
+            print(f"   90일보다 오래된 행: {r['n']}")
+
+            print()
+            print("== E. reports.created_at 이 UTC 인 행이 남아 있나 ==")
+            for r in q("""SELECT CASE WHEN time(created_at) < '09:00' THEN 'UTC 의심(09시 이전)' ELSE 'KST 정상' END k,
+                                 COUNT(*) n, MIN(date(created_at)) a, MAX(date(created_at)) b
+                          FROM reports GROUP BY k"""):
+                print(f"   {r['k']:20} {r['n']:5}건 · {r['a']} ~ {r['b']}")
+            print("   -- 최근 10건 --")
+            for r in q("SELECT created_at, is_auto FROM reports ORDER BY id DESC LIMIT 10"):
+                print(f"     {r['created_at']}  is_auto={r['is_auto']}")
+
+            print()
+            print("== F. 대기줄(collect_requests) 누적 상태 ==")
+            for r in q("""SELECT status, COUNT(*) n, MIN(date(requested_at)) a, MAX(date(requested_at)) b
+                          FROM collect_requests GROUP BY status"""):
+                print(f"   {r['status']:10} {r['n']:5}건 · {r['a']} ~ {r['b']}")
+            r = q("SELECT COUNT(*) n FROM collect_requests WHERE status='pending' AND requested_at < date('now','localtime')")[0]
+            print(f"   어제 이전인데 아직 pending: {r['n']}건")
+            r = q("SELECT COUNT(*) n FROM collect_requests WHERE attempts >= 5")[0]
+            print(f"   5회 소진: {r['n']}건")
+
+            print()
+            print("== G. 고아·이상 행 ==")
+            checks = [
+              ("업체 없는 순위행", "SELECT COUNT(*) n FROM client_rank_history WHERE client_id NOT IN (SELECT id FROM clients)"),
+              ("업체 없는 분석행", "SELECT COUNT(*) n FROM client_analyses WHERE client_id NOT IN (SELECT id FROM clients)"),
+              ("업체 없는 보고서", "SELECT COUNT(*) n FROM reports WHERE client_id IS NOT NULL AND client_id NOT IN (SELECT id FROM clients)"),
+              ("상품 없는 rankings", "SELECT COUNT(*) n FROM rankings WHERE product_id NOT IN (SELECT id FROM tracked_products)"),
+            ]
+            for name, sql in checks:
+                try: print(f"   {name:22} {q(sql)[0]['n']}")
+                except Exception as e: print(f"   {name:22} 조회 실패: {e}")
+            conn.close()
+            PY
+            echo
+            echo "== H. 오늘 로그에서 오류 줄이 몇 줄인가 (진짜 오류가 묻히나) =="
+            docker logs --since 24h logic-analysis 2>&1 | grep -c "^ERROR" || true
+            echo "   -- 그중 '검색 결과 0건'(죽은 API) --"
+            docker logs --since 24h logic-analysis 2>&1 | grep -c "검색 결과 0건" || true
+            echo "   -- 죽은 API 404 로그 --"
+            docker logs --since 24h logic-analysis 2>&1 | grep -c "쇼핑 검색 API 404" || true
+            echo "   -- 그 밖의 ERROR 종류 상위 10 (키워드·업체명 제거) --"
+            docker logs --since 24h logic-analysis 2>&1 | grep "^ERROR" | grep -v "검색 결과 0건" \
+              | sed 's/\[[^]]*\]/[·]/g' | sed 's/[0-9]\+/N/g' | sort | uniq -c | sort -rn | head -10 || true
+            echo
+            echo "== I. 08:00 배치 실제 소요 (오늘 로그) =="
+            docker logs --since 24h logic-analysis 2>&1 | grep -E "순위 추적 시작|순위 추적 완료" | tail -4 || true
+            echo
+            echo "== J. 컨테이너 =="
+            docker inspect -f 'RestartCount={{.RestartCount}} StartedAt={{.State.StartedAt}} OOMKilled={{.State.OOMKilled}}' logic-analysis
+            docker stats --no-stream --format '{{.Name}} CPU={{.CPUPerc}} MEM={{.MemPerc}} ({{.MemUsage}})' logic-analysis
