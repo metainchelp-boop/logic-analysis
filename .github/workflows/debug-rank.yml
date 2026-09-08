@@ -2829,6 +2829,47 @@ jobs:
               | sort | uniq -c | sort -rn | head -12
             echo "  -- 429 시각 분포(시간대별) --"
             docker logs -t --since 24h logic-analysis 2>&1 | grep '429' | awk '{print substr($1,1,13)}' | sort | uniq -c | tail -26
+            echo
+            echo "== ⑦ 오늘 대기줄 급증의 정체 =="
+            echo "  -- [track-keyword] 등록 로그 (24h, 업체명 가림) --"
+            docker logs -t --since 24h logic-analysis 2>&1 | grep 'track-keyword' \
+              | sed -E "s/\] [^(]*\(([0-9]+)\)/] 업체#\1/" | tail -25
+            echo "  -- 24h 총 등록 건수 --"
+            docker logs -t --since 24h logic-analysis 2>&1 | grep -c '\[track-keyword\]'
+            echo "  -- 시간대별 --"
+            docker logs -t --since 24h logic-analysis 2>&1 | grep '\[track-keyword\]' | awk '{print substr($1,1,13)}' | sort | uniq -c | tail -20
+            echo "  -- 확장이 /requests 를 얼마나 자주 받아갔나(시간대별 200 OK) --"
+            docker logs -t --since 24h logic-analysis 2>&1 | grep 'GET /api/collector/requests' | awk '{print substr($1,1,13)}' | sort | uniq -c | tail -20
+            echo "  -- /keywords 슬롯 요청(시간대별) --"
+            docker logs -t --since 24h logic-analysis 2>&1 | grep 'GET /api/collector/keywords' | awk '{print substr($1,1,13)}' | sort | uniq -c | tail -20
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sqlite3
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            print("\n  [M] 오늘 대기줄 유입 — 분 단위 묶음")
+            for r in conn.execute("SELECT substr(requested_at,1,16) t, COUNT(*) n FROM collect_requests"
+                                  " WHERE DATE(requested_at)=date('now','localtime')"
+                                  " GROUP BY t ORDER BY t"):
+                print("      %s  %3d건" % (r["t"], r["n"]))
+            print("\n  [N] 오늘 대기줄 처리 결과")
+            for r in conn.execute("SELECT status, COUNT(*) n FROM collect_requests"
+                                  " WHERE DATE(requested_at)=date('now','localtime') GROUP BY status"):
+                print("      %-8s %4d건" % (r["status"], r["n"]))
+            print("\n  [O] pending 키워드가 이미 오늘 수집됐는지(=화면엔 대기, 실제론 있음)")
+            r = conn.execute("SELECT COUNT(*) FROM collect_requests q WHERE q.status='pending'"
+                             " AND EXISTS(SELECT 1 FROM collected_serp c WHERE c.keyword=q.keyword"
+                             " AND c.collected_date=date('now','localtime'))").fetchone()[0]
+            tot = conn.execute("SELECT COUNT(*) FROM collect_requests WHERE status='pending'").fetchone()[0]
+            print("      pending %d건 중 오늘 수집분이 이미 있는 것 %d건" % (tot, r))
+            print("\n  [P] 5회 소진 26건이 여태 한 번이라도 수집된 적 있나")
+            for r in conn.execute("SELECT q.keyword, (SELECT MAX(collected_date) FROM collected_serp c"
+                                  " WHERE c.keyword=q.keyword) last FROM collect_requests q"
+                                  " WHERE q.status='pending' AND q.attempts>=5 ORDER BY q.requested_at"):
+                print("      %-24s 마지막 수집: %s" % (r["keyword"][:24], r["last"] or "없음"))
+            print("\n  [Q] 오늘 수집분이 없는 추적 키워드 수(유니버스 대비)")
+            n = conn.execute("SELECT COUNT(DISTINCT keyword) FROM collected_serp WHERE collected_date=date('now','localtime')").fetchone()[0]
+            print("      오늘 수집된 고유 키워드 %d개" % n)
+            PY
 
       - name: 신고 253 사후 6 — 과필터가 우리 업체 기록에 미친 영향 (읽기 전용·업체명 미출력)
         if: ${{ github.event.inputs.impact253 == 'on' }}
