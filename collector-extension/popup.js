@@ -1,5 +1,6 @@
 // 팝업 — 토큰 저장 / 수동 실행 / 진행 상황 확인
 const $ = (id) => document.getElementById(id);
+let setupChecked = false;   // ⚙ 설정칸 자동 펼침은 처음 한 번만(render 3초 주기)
 
 async function render() {
   const { token = '', state = {}, logs = [], rawSample = null, rawSampleAd = null,
@@ -11,6 +12,14 @@ async function render() {
   //    한 글자 칠 때마다 지워져 사실상 입력이 불가능하다(2026-08-28 실사용 신고).
   //    붙여넣기로 3초 안에 끝내면 우연히 되던 것이라 여태 안 드러났다.
   if (document.activeElement !== $('token')) $('token').value = token;
+  // ⚙ 설정칸은 기본으로 접혀 있다(팝업 600px 상한 안에 들어가게).
+  //    처음 열 때만 — 토큰이 없거나 여러 대로 나눠 돌리는 중이면 펼쳐 준다.
+  //    ⚠️ 매번 열면 3초마다 사용자가 접은 것을 다시 여는 꼴이 된다(render 는 3초 주기다).
+  if (!setupChecked) {
+    setupChecked = true;
+    const sp = $('setup');
+    if (sp && (!token || Number(workerCount) > 1 || Number(workerNo) > 1)) sp.open = true;
+  }
   if (document.activeElement !== $('workerNo')) $('workerNo').value = workerNo;
   if (document.activeElement !== $('workerCount')) $('workerCount').value = workerCount;
   try {

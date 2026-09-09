@@ -102,6 +102,11 @@ jobs:
       - name: Collector log flood regression
         run: node collector-extension/tests/log_collapse.test.js
 
+      # 팝업 높이(2026-09-09) — 크롬 팝업은 600px 상한이라 넘으면 아래 칸이 잘린다.
+      # 설정칸을 다시 펼쳐 두거나 로그창을 키우면 스크롤이 되살아난다 — 그걸 막는다.
+      - name: Collector popup layout regression
+        run: node collector-extension/tests/popup_layout.test.js
+
       - name: Build frontend bundle
         run: |
           npm install --no-save @babel/core @babel/preset-react
