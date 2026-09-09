@@ -219,7 +219,10 @@ def search_naver_shopping_api(keyword: str, display: int = 100, start: int = 1, 
             # 404 = 쇼핑 검색 API 서비스 종료(SE05, 2026-07-31). 재시도해도 소용없으니 즉시 반환
             if response.status_code == 404:
                 logger.error(f"쇼핑 검색 API 404(서비스 종료) — 수집분도 없음 (keyword: {keyword})")
-                return {"error": "쇼핑 검색 API 종료(수집분 없음)", "items": [], "total": 0}
+                # apiRetired = 부르는 쪽이 「이 API 는 죽었다」를 기계로 알아보는 표식(2026-09-09).
+                # 이걸 보고 08:00 배치가 그 회차 남은 키워드에서 호출 자체를 멈춘다(차단기).
+                return {"error": "쇼핑 검색 API 종료(수집분 없음)", "items": [], "total": 0,
+                        "apiRetired": True}
             response.raise_for_status()
             data = response.json()
             logger.info(f"API 검색 '{keyword}': {data.get('total', 0)}건 중 {len(data.get('items', []))}건 조회")

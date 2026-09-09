@@ -666,6 +666,21 @@ def _run_rank_tracking():
         _api_cache = {}
         _api_cache_date = today
 
+        # ── 죽은 API 차단기 (2026-09-09) ──
+        # 네이버 쇼핑 검색 API 는 2026-07-31 에 종료됐다(404 SE05). 그런데 배치는 수집분이
+        # 없는 키워드마다 그것을 계속 불렀고, 실패 자리에서 조건 없이 18초를 쉬었다.
+        # 실측(2026-09-08): 861개 중 661개가 그 경로 → 661 × 18초 = 3.3시간.
+        # 배치가 08:00~11:52(3시간 52분) 걸려, 전산①이 08:40 에 가져갈 때 완료율이 10~12% 였다
+        # (04:30 스케줄이던 7월엔 77~89% 였다 — 08:00 으로 옮기면서 어긋났다).
+        # ⇒ 죽은 응답이 연속 N회면 그 회차 남은 키워드에서는 **호출 자체를 건너뛴다.**
+        # ⚠️ 대기만 없애면 안 된다 — 661건을 2분에 쏘게 되고 일일 쿼터에도 그대로 잡힌다.
+        #    부르지 않으면 쉴 이유도 사라진다는 것이 이 방식의 핵심이다.
+        # ⚠️ 회차마다 초기화된다 — API 가 되살아나면 다음 날 스스로 복구된다(사람 손 불요).
+        API_DEAD_AFTER = 5
+        _api_dead = False
+        _api_dead_streak = 0
+        _api_skipped = 0        # 차단기가 건너뛴 키워드 수(완료 로그에 남긴다)
+
         total_api_calls = 0
         total_rank_saved = 0
         total_shared = 0        # 이어진 짝에 나눠 적은 건수
@@ -694,7 +709,11 @@ def _run_rank_tracking():
                     logger.info(f"  📥 [{keyword}] 브라우저 수집분 사용 — 상품 {len(all_prods)}개")
 
                 # ── 2순위: 기존 검색 API (최대 300개 = 100개 × 3페이지) ──
-                for page_idx in range(RANK_PAGES if not all_prods else 0):
+                # 차단기가 켜졌으면 죽은 API 를 더 부르지 않는다(수집분이 있으면 애초에 안 부른다).
+                _pages = 0 if (all_prods or _api_dead) else RANK_PAGES
+                if _api_dead and not all_prods:
+                    _api_skipped += 1
+                for page_idx in range(_pages):
                     start = page_idx * 100 + 1
                     # ⚠️ enqueue_on_miss=False — 배치가 자기 일을 큐에 되돌려 넣지 않는다(2026-08-28).
                     #    종전엔 수집분이 없으면 그 키워드를 요청 큐에 넣었는데, 쇼핑 API 가 7월 말에
@@ -707,6 +726,18 @@ def _run_rank_tracking():
                                                             enqueue_on_miss=False)
                     total_api_calls += 1
                     _naver_called = True
+                    # 죽은 응답이 연속으로 쌓이면 그 회차 동안 호출을 멈춘다.
+                    if shop_result.get("apiRetired"):
+                        _api_dead_streak += 1
+                        if _api_dead_streak >= API_DEAD_AFTER and not _api_dead:
+                            _api_dead = True
+                            logger.warning(
+                                f"  🔌 쇼핑 검색 API 가 연속 {_api_dead_streak}회 「종료」 응답 — "
+                                f"이번 회차 남은 키워드에서는 호출을 건너뛴다"
+                                f"(수집분 있는 키워드는 그대로 처리). 다음 회차에 다시 시도한다.")
+                        break
+                    if shop_result.get("items"):
+                        _api_dead_streak = 0
                     # ── 스테일 수집분 차단 ──
                     # 서빙 훅은 2일 창이라 '어제' 수집분도 돌려줄 수 있다(주간 분석용으론 유용).
                     # 그러나 순위 '기록'은 오늘 데이터여야 한다 — 어제 스냅샷을 오늘 순위로 저장하면
@@ -739,10 +770,18 @@ def _run_rank_tracking():
                 # (진짜 미노출은 all_prods 가 채워진 상태에서 내 상품이 안 잡히는 경우다.)
                 if not all_prods:
                     total_errors += 1
-                    logger.error(f"  ⚠️ [{keyword}] 검색 결과 0건 — 수집 실패로 보고 순위 저장 건너뜀"
-                                 f" (미노출로 잘못 기록되는 것 방지)")
+                    # ⚠️ 로그 도배 방지 — 실측(9/8) 이 줄이 하루 661번 찍혀 24시간 ERROR 의
+                    #    전부를 차지했다. 진짜 오류가 그 안에 묻힌다. 앞 10건만 남기고 센다.
+                    if total_errors <= 10:
+                        logger.error(f"  ⚠️ [{keyword}] 검색 결과 0건 — 수집 실패로 보고 순위 저장 건너뜀"
+                                     f" (미노출로 잘못 기록되는 것 방지)")
+                    elif total_errors == 11:
+                        logger.error("  ⚠️ 검색 결과 0건이 계속됨 — 개별 줄은 접는다"
+                                     "(총계는 완료 로그에 남긴다)")
+                    # ⚠️ 2026-08-05 수정이 성공 경로(아래 키워드 간 대기)만 고치고 **이 자리를 빠뜨렸다.**
+                    #    네이버를 실제로 부르지 않았으면 간격을 벌릴 이유가 없다 — 같은 판단을 여기에도 건다.
                     if ki < len(all_keywords) - 1:
-                        time.sleep(DELAY_PER_KEYWORD)
+                        time.sleep(DELAY_PER_KEYWORD if _naver_called else DELAY_COLLECTED)
                     continue
 
                 # 09시 분석용 캐시 저장 (첫 100개만 — 기존 호환)
@@ -846,6 +885,7 @@ def _run_rank_tracking():
 
         logger.info(
             f"✅ 순위 추적 완료: API {total_api_calls}회 (300위 범위), "
+            + (f"죽은 API 건너뜀 {_api_skipped}개, " if _api_skipped else "") +
             f"순위 {total_rank_saved}건 저장, 이어진 곳에 나눠 적음 {total_shared}건, 실패 {total_errors}건 "
             f"(캐시 {len(_api_cache)}개 키워드 → 09시 분석 대기)"
         )
