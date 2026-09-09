@@ -206,6 +206,36 @@ def _extract_keywords_from_message(message: str) -> List[str]:
     return []
 
 
+def _is_admin(user) -> bool:
+    """관리자 판정 — client_dashboard._is_admin 과 같은 규칙(한 규칙 두 곳이 갈리면 안 된다)."""
+    try:
+        return (user or {}).get("role") in ("admin", "superadmin")
+    except (AttributeError, TypeError):
+        return False
+
+
+def _client_scope(current_user):
+    """채팅이 참고 자료로 끌어올 수 있는 업체 범위.
+
+    ⚠️ 화면(client_dashboard._verify_client_access)이 이미 「admin 은 전체 ·
+       그 외는 본인이 등록한 업체만」으로 막고 있는데 **여기에만 그 판정이 없었다**.
+       그래서 업체 이름만 넣으면 담당 아닌 업체의 키워드·순위·분석 이력이
+       AI 답변에 실려 나갔다(2026-09-08 점검). 같은 규칙을 여기에도 건다.
+
+    반환 = (SQL 조건 조각, 파라미터 튜플). 조각은 고정 문자열이라 주입 위험이 없다.
+    ⚠️ 판정에 실패하면 **넓히지 말고 좁힌다** — 사용자를 못 알아보면 아무것도 안 보여준다.
+    """
+    if _is_admin(current_user):
+        return "", ()
+    try:
+        uid = (current_user or {}).get("id")
+    except (AttributeError, TypeError):
+        uid = None
+    if uid is None:
+        return " AND 1=0", ()      # 누군지 모르면 참고 자료를 주지 않는다
+    return " AND c.created_by = ?", (uid,)
+
+
 def _extract_client_names(message: str) -> List[str]:
     """사용자 메시지에서 업체명을 추출"""
     # '업체', '광고주' 뒤의 이름 추출
@@ -219,9 +249,14 @@ def _extract_client_names(message: str) -> List[str]:
     return []
 
 
-def _fetch_context_data(message: str) -> str:
-    """사용자 메시지를 분석하여 관련 DB 데이터를 조회하고 컨텍스트 문자열 반환"""
+def _fetch_context_data(message: str, current_user: dict) -> str:
+    """사용자 메시지를 분석하여 관련 DB 데이터를 조회하고 컨텍스트 문자열 반환.
+
+    ⚠️ current_user 는 선택 인자가 아니다 — 이 값이 없으면 업체 범위를 못 좁힌다.
+       기본값을 주지 않은 것은 다음에 새 호출처가 생겨도 그냥 지나가지 못하게 하려는 것이다.
+    """
     context_parts = []
+    scope_sql, scope_args = _client_scope(current_user)
     conn = _get_conn()
 
     try:
@@ -234,9 +269,9 @@ def _fetch_context_data(message: str) -> str:
                        c.name as client_name
                 FROM client_analyses ca
                 JOIN clients c ON ca.client_id = c.id
-                WHERE ca.keyword LIKE ?
+                WHERE ca.keyword LIKE ?""" + scope_sql + """
                 ORDER BY ca.analyzed_date DESC LIMIT 3
-            """, (f"%{kw}%",)).fetchall()
+            """, (f"%{kw}%",) + scope_args).fetchall()
 
             if rows:
                 for r in rows:
@@ -273,9 +308,9 @@ def _fetch_context_data(message: str) -> str:
                 SELECT crh.keyword, crh.rank_position, crh.checked_at, c.name as client_name
                 FROM client_rank_history crh
                 JOIN clients c ON crh.client_id = c.id
-                WHERE crh.keyword LIKE ?
+                WHERE crh.keyword LIKE ?""" + scope_sql + """
                 ORDER BY crh.checked_at DESC LIMIT 5
-            """, (f"%{kw}%",)).fetchall()
+            """, (f"%{kw}%",) + scope_args).fetchall()
 
             if rank_rows:
                 rank_info = [f"\n📈 키워드 '{kw}' 최근 순위 추적:"]
@@ -287,10 +322,11 @@ def _fetch_context_data(message: str) -> str:
         client_names = _extract_client_names(message)
         for cn in client_names[:2]:  # 최대 2개
             client_row = conn.execute("""
-                SELECT id, name, business_name, main_keywords, status
-                FROM clients WHERE name LIKE ? OR business_name LIKE ?
+                SELECT c.id, c.name, c.business_name, c.main_keywords, c.status
+                FROM clients c
+                WHERE (c.name LIKE ? OR c.business_name LIKE ?)""" + scope_sql + """
                 LIMIT 1
-            """, (f"%{cn}%", f"%{cn}%")).fetchone()
+            """, (f"%{cn}%", f"%{cn}%") + scope_args).fetchone()
 
             if client_row:
                 parts = [f"\n🏢 업체 '{client_row['name']}' 정보:"]
@@ -322,16 +358,25 @@ def _fetch_context_data(message: str) -> str:
         # === 3. 일반적인 질문이면 전체 현황 요약 제공 ===
         general_triggers = ["현황", "요약", "전체", "몇 개", "총", "업체", "상태", "통계", "어떤 데이터", "분석 현황"]
         if any(t in message for t in general_triggers) and not keywords and not client_names:
-            summary = conn.execute("""
-                SELECT
-                    (SELECT COUNT(*) FROM clients WHERE status = 'active') as active_clients,
-                    (SELECT COUNT(DISTINCT keyword) FROM client_analyses) as unique_keywords,
-                    (SELECT COUNT(*) FROM client_analyses) as total_analyses,
-                    (SELECT COUNT(*) FROM client_rank_history) as total_ranks
-            """).fetchone()
+            # ⚠️ 세는 대상도 같은 범위로 — 안 그러면 「활성 업체 703곳」처럼
+            #    자기가 볼 수 없는 규모가 숫자로 새어 나간다.
+            #    scope_sql 은 "" 또는 " AND c.created_by = ?" 또는 " AND 1=0" 고정 문자열이다.
+            _sum_sql = (
+                "SELECT "
+                " (SELECT COUNT(*) FROM clients c"
+                "   WHERE c.status = 'active'" + scope_sql + ") AS active_clients,"
+                " (SELECT COUNT(DISTINCT ca.keyword) FROM client_analyses ca"
+                "   JOIN clients c ON ca.client_id = c.id WHERE 1=1" + scope_sql + ") AS unique_keywords,"
+                " (SELECT COUNT(*) FROM client_analyses ca"
+                "   JOIN clients c ON ca.client_id = c.id WHERE 1=1" + scope_sql + ") AS total_analyses,"
+                " (SELECT COUNT(*) FROM client_rank_history crh"
+                "   JOIN clients c ON crh.client_id = c.id WHERE 1=1" + scope_sql + ") AS total_ranks"
+            )
+            summary = conn.execute(_sum_sql, scope_args * 4).fetchone()
 
             if summary:
-                parts = ["\n📋 시스템 현황 요약:"]
+                _scope_label = "시스템 현황 요약" if not scope_sql else "현황 요약(내가 볼 수 있는 업체 기준)"
+                parts = [f"\n📋 {_scope_label}:"]
                 parts.append(f"  - 활성 업체: {summary['active_clients']}개")
                 parts.append(f"  - 분석된 고유 키워드: {summary['unique_keywords']}개")
                 parts.append(f"  - 총 분석 이력: {summary['total_analyses']}건")
@@ -339,11 +384,13 @@ def _fetch_context_data(message: str) -> str:
                 context_parts.append("\n".join(parts))
 
             # 최근 분석된 키워드 TOP 10
-            recent = conn.execute("""
-                SELECT keyword, COUNT(*) as cnt, MAX(analyzed_date) as last_date
-                FROM client_analyses
-                GROUP BY keyword ORDER BY last_date DESC LIMIT 10
-            """).fetchall()
+            _recent_sql = (
+                "SELECT ca.keyword AS keyword, COUNT(*) AS cnt, MAX(ca.analyzed_date) AS last_date"
+                " FROM client_analyses ca JOIN clients c ON ca.client_id = c.id"
+                " WHERE 1=1" + scope_sql +
+                " GROUP BY ca.keyword ORDER BY last_date DESC LIMIT 10"
+            )
+            recent = conn.execute(_recent_sql, scope_args).fetchall()
             if recent:
                 parts = ["\n🔥 최근 분석된 키워드 TOP 10:"]
                 for i, r in enumerate(recent, 1):
@@ -515,7 +562,7 @@ def send_message(req: ChatRequest, current_user: dict = Depends(get_current_user
         history = [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
 
         # DB에서 관련 데이터 조회 (RAG)
-        context_data = _fetch_context_data(message)
+        context_data = _fetch_context_data(message, current_user)
         if context_data:
             logger.info(f"[Chat] RAG 데이터 주입: {len(context_data)}자")
 

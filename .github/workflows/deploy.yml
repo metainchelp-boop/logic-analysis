@@ -72,6 +72,18 @@ jobs:
       - name: Client delete FK regression (신고 #259)
         run: python backend/tests/test_client_delete_reports.py
 
+      # 채팅 참고 자료 범위(2026-09-08 점검) — 업체 화면은 담당자별로 막는데
+      # 채팅 조회에만 그 판정이 없어 남의 담당 업체 정보가 AI 답변에 실려 나갔다.
+      # 조회 자리 한 곳만 조건을 떼도 이 시험이 깨진다. stdlib 만 쓴다.
+      - name: Chat RAG scope regression (담당자 범위)
+        run: python backend/tests/test_chat_scope.py
+
+      # 죽은 쇼핑 API 차단기(2026-09-09) — 종료된 API 를 매일 661번 부르며
+      # 실패 자리에서 18초씩 쉬어 08:00 배치가 3시간 52분 걸리던 것.
+      # 전산① 이 08:40 에 당일 순위를 가져가는 계약을 이 시험이 지킨다.
+      - name: Dead shopping API breaker regression
+        run: python backend/tests/test_dead_api_breaker.py
+
       # 프론트 번들 자동 빌드 — .jsx 수정 시 번들 재생성을 깜빡해도 항상 최신으로 배포.
       # (실패해도 이후 SCP/재시작 단계 전이라 라이브에는 영향 없음 — 무중단)
       - name: Setup Node
