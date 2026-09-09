@@ -42,8 +42,8 @@ on:
         description: '신고 253 사후 — 오늘 수집분의 광고 제외 수·원본 수 분포와 전 업체 어제→오늘 순위 이동 분포(과필터 여부 판정, 읽기 전용·업체명 미출력).'
         required: false
         default: 'off'
-      verify253c:
-        description: '신고 253 사후 2 — 광고 제외가 과한 키워드(담긴 수가 적은 것)를 네이버 총수·어제 담긴 수와 대조해 과필터 여부 판정(읽기 전용·업체명 미출력).'
+      prune_preview:
+        description: '유니버스 다이어트 미리보기 — off(기본) / on. 분석 이력 기간 창(30·60·90·120일)과 영영 안 되는 키워드를 뺐을 때 재는 양이 얼마나 주는지 실제 함수로 계산(읽기 전용·업체명 미출력).'
         required: false
         default: 'off'
       verify253d:
@@ -3349,3 +3349,104 @@ jobs:
             echo "== J. 컨테이너 =="
             docker inspect -f 'RestartCount={{.RestartCount}} StartedAt={{.State.StartedAt}} OOMKilled={{.State.OOMKilled}}' logic-analysis
             docker stats --no-stream --format '{{.Name}} CPU={{.CPUPerc}} MEM={{.MemPerc}} ({{.MemUsage}})' logic-analysis
+
+      - name: 유니버스 다이어트 미리보기 (읽기 전용·업체명 미출력)
+        if: ${{ github.event.inputs.prune_preview == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 240s
+          script: |
+            docker exec -i -w /app logic-analysis python3 - <<'PY'
+            import sqlite3, os, sys
+            sys.path.insert(0, "/app")
+            import collector
+
+            conn = sqlite3.connect(os.getenv("DB_PATH", "/app/data/logic_data.db"), timeout=20)
+            conn.row_factory = sqlite3.Row
+
+            # ── 지금 유니버스 (실제 함수 그대로) ──
+            now_uni = collector._keyword_universe(conn)
+            print(f"== 지금 재는 키워드: {len(now_uni)}개")
+
+            ids = collector._tracking_client_ids(conn)
+            ph = ",".join("?" * len(ids))
+
+            # ── 갈래별 몫 ──
+            from keyword_mute import muted_map
+            _m = muted_map(conn)
+            a1 = set()
+            for r in conn.execute(f"SELECT id, main_keywords FROM clients WHERE id IN ({ph})", ids):
+                for k in (r[1] or "").split(","):
+                    k = k.strip()
+                    if k and k not in _m.get(r[0], ()):
+                        a1.add(k)
+            a2 = set()
+            a2_recent = {}
+            for days in (30, 60, 90, 120):
+                s = set()
+                for r in conn.execute(
+                        f"SELECT client_id, keyword FROM client_analyses WHERE client_id IN ({ph}) "
+                        f"AND analyzed_date >= date('now','localtime','-{days} day') "
+                        "GROUP BY client_id, keyword", ids):
+                    k = (r[1] or "").strip()
+                    if k and k not in _m.get(r[0], ()):
+                        s.add(k)
+                a2_recent[days] = s
+            for r in conn.execute(
+                    f"SELECT client_id, keyword FROM client_analyses WHERE client_id IN ({ph}) "
+                    "GROUP BY client_id, keyword", ids):
+                k = (r[1] or "").strip()
+                if k and k not in _m.get(r[0], ()):
+                    a2.add(k)
+            a3 = set(now_uni) - a1 - a2
+
+            print(f"   ① 대표 키워드      {len(a1)}개")
+            print(f"   ② 분석 이력(전체)  {len(a2)}개")
+            print(f"   ③ 추적 상품        {len(a3)}개 (①② 에 없는 것)")
+            print()
+
+            print("== 조치 ②: 분석 이력에 기간 창을 걸면 ==")
+            print("   창    ②남음   전체 유니버스   지금 대비")
+            for days in (30, 60, 90, 120):
+                new_uni = a1 | a2_recent[days] | a3
+                print(f"   {days:3}일  {len(a2_recent[days]):5}   {len(new_uni):8}       -{len(now_uni)-len(new_uni)}")
+            print()
+
+            # ── 조치 ①: 영영 안 되는 키워드 ──
+            print("== 조치 ①: 5회를 다 썼는데 여태 한 번도 수집된 적 없는 키워드 ==")
+            dead = [r[0] for r in conn.execute(
+                "SELECT DISTINCT cr.keyword FROM collect_requests cr "
+                " WHERE cr.attempts >= 5 "
+                "   AND NOT EXISTS (SELECT 1 FROM collected_serp cs WHERE cs.keyword = cr.keyword)")]
+            print(f"   {len(dead)}개")
+            in_uni = [k for k in dead if k in now_uni]
+            print(f"   그중 지금도 매일 재고 있는 것: {len(in_uni)}개")
+            print(f"   예시 12개: {in_uni[:12]}")
+            print()
+
+            print("== 두 조치를 함께 하면 (60일 창 기준) ==")
+            final = (a1 | a2_recent[60] | a3) - set(dead)
+            print(f"   {len(now_uni)}개 → {len(final)}개  (-{len(now_uni)-len(final)}개)")
+            cap = 52 * 24
+            print(f"   한 대 하루 한계 약 {cap}개 대비: {len(now_uni)/cap*100:.0f}% → {len(final)/cap*100:.0f}%")
+            print()
+
+            print("== 무회귀 확인: 60일 창으로 빠지는 것 중 진짜로 잃는 것 ==")
+            lost = a2 - a2_recent[60]
+            lost_only = lost - a1 - a3          # ①③ 이 안 받쳐 주는 것 = 정말 빠지는 것
+            print(f"   ② 에서 빠지는 키워드 {len(lost)}개 · 그중 ①③ 에도 없어 정말 빠지는 것 {len(lost_only)}개")
+            # 그 키워드들이 최근에 순위가 기록된 적 있나(= 아직 쓰이는가)
+            if lost_only:
+                sample = list(lost_only)[:400]
+                qs = ",".join("?" * len(sample))
+                used = conn.execute(
+                    f"SELECT COUNT(DISTINCT keyword) FROM client_rank_history "
+                    f" WHERE keyword IN ({qs}) AND checked_at >= date('now','localtime','-14 day')",
+                    sample).fetchone()[0]
+                print(f"   표본 {len(sample)}개 중 최근 14일 순위가 기록된 것: {used}개")
+                print(f"   예시 12개: {list(lost_only)[:12]}")
+            conn.close()
+            PY
