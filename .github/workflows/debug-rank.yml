@@ -548,7 +548,13 @@ jobs:
             except Exception as e:
                 print("  조회 실패:", e)
 
-            print("\n[수집 대상 키워드 규모]")
+            # ⚠️ 2026-09-09 정정 — 이 숫자는 「수집 대상」이 아니다.
+            #    자격·억제 필터를 하나도 안 거친 **역대 전체 키워드**의 합집합이라,
+            #    계약 끝난 업체 것·그만 재기 한 것·5회 소진된 것이 다 들어 있다.
+            #    실제 수집 대상은 collector._keyword_universe() 이고 그 값이 훨씬 작다
+            #    (9/9 실측: 이 숫자 1,182 vs 진짜 유니버스 867).
+            #    ⇒ 이 줄을 「일이 늘었다」의 근거로 쓰면 안 된다. 진짜 값을 함께 찍는다.
+            print("\n[키워드 규모]")
             kws = set()
             for sql in ("SELECT DISTINCT keyword FROM tracked_keywords",
                         "SELECT DISTINCT keyword FROM client_analyses"):
@@ -557,7 +563,15 @@ jobs:
                     if k: kws.add(k)
             done = {r[0] for r in c.execute(
                 "SELECT keyword FROM collected_serp WHERE collected_date = date('now','localtime')")}
-            print(f"  대상 {len(kws)} · 오늘 완료 {len(done)} · 남음 {len(kws - done)}")
+            print(f"  역대 전체(필터 없음, ⚠️ 수집 대상 아님) {len(kws)} · 오늘 완료 {len(done)}")
+            try:
+                import sys as _s; _s.path.insert(0, "/app")
+                import collector as _col
+                _real = _col._keyword_universe(c)
+                print(f"  ★ 실제 수집 대상(자격·억제 반영) {len(_real)} · 오늘 완료 {len(done & set(_real))}"
+                      f" · 남음 {len(set(_real) - done)}")
+            except Exception as _e:
+                print(f"  ★ 실제 수집 대상 계산 실패: {_e}")
             print("\n[서버 토큰 설정]")
             tok = os.getenv("COLLECTOR_TOKEN", "")
             print(f"  COLLECTOR_TOKEN: {'설정됨(len=%d)' % len(tok) if tok else '❌ 미설정 — 전 경로 503'}")
