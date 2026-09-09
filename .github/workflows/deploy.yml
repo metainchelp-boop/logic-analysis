@@ -96,6 +96,12 @@ jobs:
       - name: Collector rank rules regression
         run: node collector-extension/tests/rank_rules.test.js
 
+      # 로그 도배 방지(2026-09-09) — 캡차로 쉬는 동안 같은 안내가 1분마다 쌓여
+      # 200줄 보관이 3.3시간 만에 다 밀렸고, 그날 오전에 무엇이 멈췄는지 증거가 사라졌다.
+      # 확장은 서버 배포 대상이 아니라 이 게이트가 코드 상태를 지키는 유일한 자동 검사다.
+      - name: Collector log flood regression
+        run: node collector-extension/tests/log_collapse.test.js
+
       - name: Build frontend bundle
         run: |
           npm install --no-save @babel/core @babel/preset-react

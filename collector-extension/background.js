@@ -136,10 +136,32 @@ async function setState(patch) {
   await chrome.storage.local.set({ state: { ...cur, ...patch, updatedAt: new Date().toISOString() } });
 }
 
+const LOG_KEEP = 200;
+
+/** 로그 한 줄 남기기.
+ *
+ *  ⭐ 같은 문장이 연달아 오면 **줄을 늘리지 않고 맨 윗줄을 갱신**한다(2026-09-09).
+ *  왜 — 캡차로 쉬는 동안 `daily` 알람(1분 주기, :781)이 매분 차단 안내를 한 줄씩 찍었다.
+ *       보관은 200줄이라 **1분당 1줄 × 200 = 3.3시간**이면 그 전 기록이 통째로 밀린다.
+ *       2026-09-09 에 실제로 그 일이 났다 — 14:08 캡차 → 18:00 조회 시점(3.9시간 뒤)에
+ *       로그가 전부 같은 줄이었고, **그날 오전에 무엇이 왜 멈췄는지 증거가 사라져 원인을 못 갈랐다.**
+ *  ⚠️ 안내를 없애지 않는다 — 없애면 「쉬는 중」인 것 자체가 로그에서 안 보인다.
+ *     대신 **한 줄로 접고 (×N) 과 최신 시각**을 보여 준다. 그 아래 기록이 살아남는 것이 핵심이다.
+ *  ⚠️ 접히는 것은 **바로 앞줄과 완전히 같은 문장**뿐이다. 키워드·건수가 들어간 줄은
+ *     문장이 서로 달라 접히지 않는다(진행 기록은 종전 그대로 쌓인다).
+ */
 async function log(line) {
   const { logs = [] } = await chrome.storage.local.get('logs');
-  logs.unshift(`[${new Date().toLocaleTimeString('ko-KR')}] ${line}`);
-  await chrome.storage.local.set({ logs: logs.slice(0, 200) });
+  const stamp = `[${new Date().toLocaleTimeString('ko-KR')}]`;
+  const prev = logs[0] || '';
+  const prevBody = prev.replace(/^\[[^\]]*\]\s*/, '').replace(/\s*\(×\d+\)$/, '');
+  if (logs.length && prevBody === line) {
+    const m = /\(×(\d+)\)$/.exec(prev);
+    logs[0] = `${stamp} ${line} (×${m ? Number(m[1]) + 1 : 2})`;
+  } else {
+    logs.unshift(`${stamp} ${line}`);
+  }
+  await chrome.storage.local.set({ logs: logs.slice(0, LOG_KEEP) });
 }
 
 /* ── 수집 경로 = 검색 페이지 이동 (2026-08-06 플랜 B) ──
