@@ -3474,38 +3474,62 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           command_timeout: 240s
           script: |
-            LOGS=$(ls -1 /var/log/nginx/access.log /var/log/nginx/access.log.1 2>/dev/null | tr '\n' ' ')
+            # 「/api/collector 를 보내는 곳이 몇 군데인가」를 서버 접속기록으로 답한다.
+            # ⚠️ 이 저장소는 공개다 — IP 원문을 절대 찍지 않는다(해시 6자리로만 구분).
+            # ⚠️ nginx 로그는 권한이 있어야 읽힌다. sudo 없이 cat 하면 조용히 0줄이 되고
+            #    파서가 「한 줄도 못 읽음」인데 결과가 빈 것처럼 보인다(2026-09-10 실수).
+            LOG=$(ls /var/log/nginx/*access*.log 2>/dev/null | head -3 | tr '\n' ' ')
             echo "== 수집 요청 출처 대조 =="
-            echo "   대상 로그: $LOGS"
-            echo "   저장소가 공개라 IP 원문은 찍지 않는다 — 해시 앞 6자리로만 구분한다."
-            echo
-            cat $LOGS 2>/dev/null | python3 - <<'PYEOF'
-            import sys, re, hashlib, collections
+            echo "  대상 로그: ${LOG:-찾지 못함}"
+            [ -z "$LOG" ] && { echo "  nginx 접속 기록을 못 찾았다 — 경로가 다르거나 권한이 없다."; exit 0; }
+            sudo -n true 2>/dev/null && S="sudo -n" || S=""
+            echo "  sudo 사용: ${S:-없음}"
+            $S sh -c "cat $LOG /var/log/nginx/*access*.log.1 2>/dev/null" > /tmp/_src.txt 2>/dev/null || \
+              cat $LOG > /tmp/_src.txt 2>/dev/null
+            echo "  읽은 줄 수: $(wc -l < /tmp/_src.txt)"
+            python3 - <<'PYEOF'
+            import re, collections
+            try:
+                lines = open("/tmp/_src.txt", errors="ignore").read().splitlines()
+            except Exception as e:
+                print("  로그 읽기 실패:", e); raise SystemExit
+            print("  파싱 대상 %d줄" % len(lines))
+            ip_re = re.compile(r"^(\S+)")
+            ts_re = re.compile(r"\[([^\]]+)\]")
+            req_re = re.compile(r'"(\S+) (\S+) [^"]*"')
+            ua_re = re.compile(r'"([^"]*)"\s*$')
             SRC = collections.defaultdict(lambda: {
                 "total": 0, "paths": collections.Counter(), "first": None, "last": None,
                 "ua": collections.Counter(), "autobid": 0, "worker": collections.Counter(),
                 "serp_today": 0, "today": 0})
-            line_re = re.compile(r'^(\S+) .*?\[([^\]]+)\] "(\S+) (\S+) [^"]*" (\d{3})')
-            ua_re = re.compile(r'"([^"]*)"\s*$')
-            rows = []
-            for ln in sys.stdin:
-                m = line_re.match(ln)
-                if not m:
+            import hashlib
+            matched = 0
+            last_ts = None
+            parsed = []
+            for ln in lines:
+                if ("/api/collector" not in ln) and ("/autobid" not in ln):
                     continue
-                um = ua_re.search(ln)
-                rows.append(m.groups() + ((um.group(1) if um else ""),))
-            today = rows[-1][1].split(":")[0] if rows else None
-            for ip, ts, meth, path, st, ua in rows:
-                is_col = path.startswith("/api/collector")
-                is_bid = path.startswith("/autobid")
-                if not (is_col or is_bid):
+                mi, mt, mr = ip_re.match(ln), ts_re.search(ln), req_re.search(ln)
+                if not (mi and mt and mr):
                     continue
+                matched += 1
+                mu = ua_re.search(ln)
+                parsed.append((mi.group(1), mt.group(1), mr.group(1), mr.group(2), mu.group(1) if mu else ""))
+                last_ts = mt.group(1)
+            print("  그중 수집·자동입찰 줄 %d건" % matched)
+            if not matched:
+                print("  ** 한 줄도 못 읽었다 — 아래 표본으로 형식을 확인할 것(IP 는 가림) **")
+                for ln in lines[-3:]:
+                    print("    " + re.sub(r"^\S+", "0.0.0.0", ln)[:160])
+                raise SystemExit
+            today = last_ts.split(":")[0]
+            for ip, ts, meth, path, ua in parsed:
                 h = hashlib.sha256(ip.encode()).hexdigest()[:6]
                 d = SRC[h]
                 if d["first"] is None:
                     d["first"] = ts
                 d["last"] = ts
-                if is_bid:
+                if path.startswith("/autobid"):
                     d["autobid"] += 1
                     continue
                 d["total"] += 1
@@ -3514,19 +3538,19 @@ jobs:
                 kind = "Mac" if "Macintosh" in ua else ("Windows" if "Windows" in ua else "기타/미상")
                 d["ua"][kind] += 1
                 wm = re.search(r"[?&]workers=(\d+)", path)
-                d["worker"][wm.group(1) + "대로 나눔" if wm else "미지정(=1대 전량)"] += 1
-                if today and ts.startswith(today):
+                d["worker"][(wm.group(1) + "대로 나눔") if wm else "미지정(=1대 전량)"] += 1
+                if ts.startswith(today):
                     d["today"] += 1
                     if meth == "POST" and base.endswith("/serp"):
                         d["serp_today"] += 1
-            print("로그 마지막 날짜:", today)
+            print("  로그 마지막 날짜:", today)
             print()
             order = sorted(SRC.items(), key=lambda kv: -(kv[1]["total"] + kv[1]["autobid"]))
             for i, (h, d) in enumerate(order):
                 print("== 곳 %s  (구분값 %s)" % (chr(ord("A") + i), h))
                 print("   수집 요청 %d건 (오늘 %d건)" % (d["total"], d["today"]))
                 print("   >> 오늘 실제 수집 업로드(POST /serp): %d건" % d["serp_today"])
-                both = "  <-- 같은 곳에서 둘 다 보낸다" if (d["autobid"] and d["total"]) else ""
+                both = "   <-- 같은 곳에서 둘 다 보낸다" if (d["autobid"] and d["total"]) else ""
                 print("   자동입찰 보고 %d건%s" % (d["autobid"], both))
                 print("   기간 %s ~ %s" % (d["first"], d["last"]))
                 print("   기계 종류: %s" % dict(d["ua"]))
@@ -3538,3 +3562,4 @@ jobs:
             print("  - 두 곳 다 '미지정(=1대 전량)' 이면 같은 키워드를 둘 다 긁는다(회선 부하 2배).")
             print("  - 자동입찰을 함께 보내는 곳이 사무실 맥미니다.")
             PYEOF
+            rm -f /tmp/_src.txt
