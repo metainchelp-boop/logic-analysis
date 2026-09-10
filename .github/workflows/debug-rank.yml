@@ -3517,6 +3517,35 @@ jobs:
             echo "-- 판정 도움말 --"
             echo "  문자 발송 켜짐=False 이거나 키가 없으면 **표·로그에만 남고 문자는 안 간다.**"
 
+            echo ""
+            echo "== 알림 설정 저장이 500 나는 원인 =="
+            echo "-- 서버가 남긴 오류 줄 --"
+            docker logs logic-analysis 2>&1 | grep -i "설정 변경 실패" | tail -5 || echo "  (그 줄 없음)"
+            echo "-- 표 구조와 행 --"
+            docker exec -i logic-analysis python3 - <<'PYEOF'
+            import sqlite3, os, traceback, sys
+            sys.path.insert(0, "/app")
+            db = os.getenv("DB_PATH", "/app/data/logic_data.db")
+            conn = sqlite3.connect(db)
+            try:
+                cols = conn.execute("PRAGMA table_info(notification_settings)").fetchall()
+                print("  칸:", [c[1] for c in cols])
+                rows = conn.execute("SELECT id FROM notification_settings").fetchall()
+                print("  행 개수:", len(rows), "· id 목록:", [r[0] for r in rows])
+            except Exception as e:
+                print("  표 조회 실패:", type(e).__name__, e)
+            conn.close()
+            # ⚠️ 실제 저장 함수를 그대로 부른다 — 다만 **빈 문자열**로 부른다.
+            #    진짜 번호를 넣으면 20:10 점검이 그 번호로 문자를 보낼 수 있다.
+            try:
+                from database import update_notification_settings
+                r = update_notification_settings(receiver_phone="")
+                print("  저장 함수 직접 호출: 성공 ·", {k: r.get(k) for k in ("notify_enabled", "report_time")})
+            except Exception:
+                print("  저장 함수 직접 호출: 실패")
+                traceback.print_exc()
+            PYEOF
+
       - name: 수집 요청이 어디서 오는가 (읽기 전용 · IP 원문 미출력)
         if: ${{ github.event.inputs.sources == 'on' }}
         uses: appleboy/ssh-action@v1.0.3
