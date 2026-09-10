@@ -3522,7 +3522,17 @@ jobs:
                 for ln in lines[-3:]:
                     print("    " + re.sub(r"^\S+", "0.0.0.0", ln)[:160])
                 raise SystemExit
-            today = last_ts.split(":")[0]
+            # 오늘 판정 — 마지막 줄의 날짜를 쓰면 안 된다(2026-09-10 실수).
+            # 현재 로그 뒤에 회전분(.log.1)을 이어 붙이므로 **마지막 줄이 어제**가 된다.
+            # 로그에 나온 날짜 중 가장 큰 것을 오늘로 본다.
+            import datetime as _dt
+            _dates = {t.split(":")[0] for _, t, _, _, _ in parsed}
+            def _key(x):
+                try:
+                    return _dt.datetime.strptime(x, "%d/%b/%Y")
+                except Exception:
+                    return _dt.datetime.min
+            today = max(_dates, key=_key)
             for ip, ts, meth, path, ua in parsed:
                 h = hashlib.sha256(ip.encode()).hexdigest()[:6]
                 d = SRC[h]
