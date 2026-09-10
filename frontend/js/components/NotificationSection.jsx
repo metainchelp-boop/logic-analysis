@@ -6,6 +6,9 @@ window.NotificationSection = function NotificationSection() {
     /* 수신 번호는 입력 중에 서버 값으로 덮이면 안 된다 — 따로 들고 있다가 저장할 때만 보낸다. */
     const [phone, setPhone] = useState('');
     const [phoneSaved, setPhoneSaved] = useState(false);
+    /* ⚠️ 실패를 말하지 않으면 사람은 「눌렀는데 아무 일도 안 난다」로 겪는다.
+       2026-09-10 에 서버가 500 을 돌려주는데 화면이 조용해서, 왜 안 되는지 알 수 없었다. */
+    const [phoneErr, setPhoneErr] = useState('');
 
     useEffect(() => {
         api.get('/notify/settings').then(res => {
@@ -15,18 +18,25 @@ window.NotificationSection = function NotificationSection() {
     }, []);
 
     const toggleNotify = async (enabled) => {
+        setPhoneErr('');
         const res = await api.put('/notify/settings', { notify_enabled: enabled });
-        if (res.success) setSettings(res.data);
+        if (res && res.success) setSettings(res.data);
+        else setPhoneErr((res && (res.detail || res.message)) || '설정을 바꾸지 못했습니다.');
     };
 
     /* 수신 번호 저장 — 수집이 멈췄을 때 문자가 갈 곳이다.
        ⚠️ 이 번호가 비어 있으면 경보는 표·로그에만 남고 아무도 모른다(2026-09-10). */
     const savePhone = async () => {
+        setPhoneErr('');
         const res = await api.put('/notify/settings', { receiver_phone: phone.trim() });
-        if (res.success) {
+        if (res && res.success) {
             setSettings(res.data);
+            setPhone((res.data && res.data.receiver_phone) || '');   // 서버가 받은 값으로 되맞춘다
             setPhoneSaved(true);
             setTimeout(() => setPhoneSaved(false), 2500);
+        } else {
+            /* 서버가 준 사유를 그대로 보여 준다 — 「형식이 틀렸다」와 「서버가 아프다」는 다른 일이다. */
+            setPhoneErr((res && (res.detail || res.message)) || '저장하지 못했습니다. 잠시 후 다시 시도해 주세요.');
         }
     };
 
@@ -81,6 +91,11 @@ window.NotificationSection = function NotificationSection() {
                             <button className="btn" onClick={savePhone} style={{ padding: '8px 14px' }}>저장</button>
                             {phoneSaved && <span style={{ color: '#16a34a', fontSize: 12, fontWeight: 600 }}>저장됨</span>}
                         </div>
+                        {phoneErr && (
+                            <div style={{ marginTop: 8, color: '#b91c1c', fontSize: 12, fontWeight: 600 }}>
+                                ⚠️ {phoneErr}
+                            </div>
+                        )}
                     </div>
                 </div>
             </div>

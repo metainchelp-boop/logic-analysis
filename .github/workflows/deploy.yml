@@ -123,6 +123,13 @@ jobs:
       - name: Collect watch regression
         run: python backend/tests/test_collect_watch.py
 
+      # 알림 설정 검증기(2026-09-10) — main.py 가 `re` 를 함수 안에서만 import 해서,
+      # 클래스 본문의 Pydantic 검증기가 그 이름을 못 보고 매번 NameError → 500 이었다.
+      # 아무도 수신 번호를 저장할 수 없었고, 그래서 수집 멈춤 경보가 갈 곳이 없었다.
+      # 이 시험은 **main.py 최상단 import 만으로** 이름 공간을 만들어 검증기를 실제로 돌린다.
+      - name: Notify validator regression (전역 import)
+        run: python backend/tests/test_notify_validator.py
+
       - name: Build frontend bundle
         run: |
           npm install --no-save @babel/core @babel/preset-react

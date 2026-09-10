@@ -12,6 +12,9 @@ from pydantic import BaseModel, field_validator
 from typing import Optional, List, Dict, Any
 from datetime import datetime, date
 import os
+import re          # ⚠️ 전역에 없어서 Pydantic 검증기(전화번호·리포트 시각)가
+                   #    매번 NameError → 500 이었다(2026-09-10 실측). 함수 안에서만
+                   #    import 하던 탓에 클래스 본문의 검증기는 그 이름을 못 봤다.
 import time
 import logging
 import faulthandler
