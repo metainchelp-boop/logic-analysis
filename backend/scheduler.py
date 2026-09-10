@@ -552,17 +552,23 @@ def _run_collect_health_check():
         def _send(text: str) -> bool:
             """알림톡/문자로 보낸다. 설정이 없으면 조용히 안 보낸 것으로 둔다.
 
-            ⚠️ 수신자·발송 설정은 **이미 있는 알림 설정을 그대로 쓴다**(새 설정 안 만든다).
-               설정이 꺼져 있으면 표와 로그에는 남고 문자만 안 간다.
+            ⚠️ 수신자는 **이미 있는 알림 설정의 수신 번호를 그대로 쓴다**(새 설정 안 만든다).
+               번호가 비어 있으면 표와 로그에는 남고 문자만 안 간다.
+
+            ⚠️ **`notify_enabled` 는 보지 않는다.** 그 스위치는 화면 문구 그대로
+               「일일 리포트 알림」(매일 순위 변동 요약)의 것이다. 그걸 켜야만 고장 경보가
+               온다면, 요약 문자를 원치 않는 사람은 **고장도 못 받는다.**
+               고장 경보는 **보낼 곳이 적혀 있으면 보낸다** — 번호를 적는 행위가 곧 동의다.
             """
             try:
                 from database import get_notification_settings, save_notification_log
                 from kakao_notify import is_configured, send_report_notification
                 st = get_notification_settings() or {}
                 receiver = (st.get("receiver_phone") or "").strip()
-                if not st.get("notify_enabled") or not receiver or not is_configured():
-                    logger.warning("  📵 수집 경보 — 알림 설정이 없어 문자는 못 보냈다"
-                                   "(표·로그에는 남는다). 관리자 화면의 알림 설정을 켜 두면 문자로도 온다.")
+                if not receiver or not is_configured():
+                    logger.warning("  📵 수집 경보 — 수신 번호가 없어 문자는 못 보냈다"
+                                   "(표·로그에는 남는다). 관리 → ⚙️ 설정 → 🔔 알림 설정에서"
+                                   " 수신 번호를 넣어 두면 문자로도 온다.")
                     return False
                 r = send_report_notification(text, receiver)
                 ok = bool(r.get("success"))
