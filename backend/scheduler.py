@@ -565,10 +565,19 @@ def _run_collect_health_check():
                 from kakao_notify import is_configured, send_report_notification
                 st = get_notification_settings() or {}
                 receiver = (st.get("receiver_phone") or "").strip()
-                if not receiver or not is_configured():
-                    logger.warning("  📵 수집 경보 — 수신 번호가 없어 문자는 못 보냈다"
+                # ⚠️ **두 원인을 뭉뚱그리지 않는다**(2026-09-10 실측으로 데였다).
+                #    종전엔 둘 다 「수신 번호가 없어」로 찍혀서, 번호는 멀쩡한데 발송 키가
+                #    없는 상황을 「번호 문제」로 읽었다. 경보가 원인을 틀리게 말하면
+                #    그 경보를 고치는 데 시간이 더 걸린다.
+                if not receiver:
+                    logger.warning("  📵 수집 경보 — **수신 번호가 없어** 문자는 못 보냈다"
                                    "(표·로그에는 남는다). 관리 → ⚙️ 설정 → 🔔 알림 설정에서"
-                                   " 수신 번호를 넣어 두면 문자로도 온다.")
+                                   " 번호를 넣어 두면 문자로도 온다.")
+                    return False
+                if not is_configured():
+                    logger.warning("  📵 수집 경보 — **문자 발송 키(Solapi)가 서버에 없어** 못 보냈다"
+                                   "(번호는 등록돼 있다. 표·로그에는 남는다). 서버 .env 에"
+                                   " SOLAPI_API_KEY·SOLAPI_API_SECRET·SOLAPI_SENDER_PHONE 이 필요하다.")
                     return False
                 r = send_report_notification(text, receiver)
                 ok = bool(r.get("success"))
