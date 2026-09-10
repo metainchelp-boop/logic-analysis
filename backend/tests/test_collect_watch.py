@@ -150,6 +150,16 @@ db4 = _fresh_db(last_upload_hours_ago=9)
 cw5 = _mod(db4)
 r8 = cw5.run_check(send=None)
 ok("⑧ 보낼 곳이 없어도 판정과 기록은 한다", r8["state"] == cw5.STATE_QUIET and r8["sent"] is False)
+ok("⑧ 보낼 수단이 없다는 것을 표시한다", r8.get("no_channel") is True)
+
+# ⑧-2 🔴 보낼 수단이 아예 없으면 **쿨다운을 건다** — 매시간 다시 시도해도 결과가 같고
+#      로그만 하루 13줄씩 더러워진다(2026-09-09 로그 도배가 원인 6줄을 지운 적이 있다).
+#      ⚠️ 일시적 발송 실패(⑦-2)와는 반대로 굴어야 한다 — 그건 다시 시도해야 한다.
+r8b = cw5.run_check(send=None)
+ok("⑧-2 수단이 없으면 다음 점검에서는 조용하다", r8b["notice"] is None)
+row = sqlite3.connect(db4).execute(
+    "SELECT notified, note FROM collect_watch ORDER BY id ASC LIMIT 1").fetchone()
+ok("⑧-2 첫 판정은 nochannel 로 남는다", row[0] == 1 and "nochannel" in row[1])
 
 # ⑨ 상한 값이 살아 있다 — 아무도 몰래 100시간으로 늘려 놓으면 경보가 무의미해진다
 src = open(os.path.join(os.path.dirname(HERE), "collect_watch.py"), encoding="utf-8").read()

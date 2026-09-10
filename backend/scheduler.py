@@ -592,11 +592,25 @@ def _run_collect_health_check():
                 logger.warning(f"  📵 수집 경보 발송 실패(무시): {e}")
                 return False
 
-        r = collect_watch.run_check(send=_send)
+        # ⚠️ **보낼 수단이 있을 때만** 발송기를 넘긴다.
+        #    대표 결정(2026-09-10): 「문자 안 받을게」 — Solapi 키를 넣지 않기로 했다.
+        #    그 상태로 매시간 발송을 시도하면 경고가 하루 13줄씩 쌓인다. 수단이 없으면
+        #    아예 시도하지 않고(send=None), 판정·기록만 남긴다.
+        _has_channel = False
+        try:
+            from database import get_notification_settings as _gns
+            from kakao_notify import is_configured as _isc
+            _st = _gns() or {}
+            _has_channel = bool((_st.get("receiver_phone") or "").strip()) and _isc()
+        except Exception:
+            _has_channel = False
+        r = collect_watch.run_check(send=_send if _has_channel else None)
         gap, state, notice = r.get("gap_hours"), r.get("state"), r.get("notice")
         if state == collect_watch.STATE_QUIET:
+            _how = ("문자 보냄" if r.get("sent")
+                    else ("문자 안 씀 — 기록만" if r.get("no_channel") else "발송 실패"))
             logger.warning(f"  🚨 수집 경보 — 마지막 업로드 {r.get('last_upload')} "
-                           f"(약 {gap}시간 전) · 알림 {'보냄' if r.get('sent') else '안 보냄'}")
+                           f"(약 {gap}시간 전) · {_how}")
         elif notice == "recovered":
             logger.info(f"  ✅ 수집 재개 확인 — 마지막 업로드 {r.get('last_upload')}")
         else:

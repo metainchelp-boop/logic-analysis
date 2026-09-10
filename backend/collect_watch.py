@@ -215,18 +215,25 @@ def run_check(send=None, conn=None) -> dict:
         notice = decide_notice(conn, ev["state"])
         out["notice"] = notice
         sent = False
-        if notice and send is not None:
+        no_channel = send is None          # 보낼 수단 자체가 없다(문자를 안 쓰기로 한 상태)
+        if notice and not no_channel:
             try:
                 sent = bool(send(_text(notice, ev.get("gap_hours"))))
             except Exception:
                 sent = False
         out["sent"] = sent
-        # ⚠️ **실제로 나간 것만** notified 로 남긴다.
-        #    처음엔 「보내려고 했으면」으로 적었는데 그게 틀렸다 — 수신 번호가 없어 못 보낸 판정이
-        #    쿨다운을 걸어, 번호를 넣은 뒤에도 그날은 문자가 안 오는 상태가 됐다(2026-09-10).
-        #    못 나간 것은 도배가 될 수 없다(문자가 없으니까). 사정은 note 에 남긴다.
-        record(conn, ev["state"], ev.get("gap_hours"), bool(notice) and sent,
-               note=("" if not notice else f"{notice}/{'sent' if sent else 'nosend'}"),
+        out["no_channel"] = no_channel
+        # 쿨다운을 걸 것인가 — **재시도가 의미 있는가**로 가른다.
+        #  · sent      : 실제로 나갔다 → 쿨다운을 건다(도배 방지).
+        #  · nosend    : 일시적 발송 실패 → **쿨다운을 걸지 않는다**. 다음 점검에서 다시 시도한다
+        #                (못 나간 것은 도배가 될 수 없다 — 문자가 없으니까).
+        #  · nochannel : 보낼 수단 자체가 없다(문자를 안 쓰기로 한 상태) → **쿨다운을 건다**.
+        #                매시간 다시 시도해도 결과가 같고, 로그만 하루 13줄씩 더러워진다.
+        #                ⚠️ 9/9 에 로그 도배가 원인 6줄을 지운 적이 있다 — 같은 실수를 반복하지 않는다.
+        _how = "sent" if sent else ("nochannel" if no_channel else "nosend")
+        record(conn, ev["state"], ev.get("gap_hours"),
+               bool(notice) and (sent or no_channel),
+               note=("" if not notice else f"{notice}/{_how}"),
                commit=own)   # 남의 연결이면 커밋은 그쪽 몫이다
         return out
     except Exception:
