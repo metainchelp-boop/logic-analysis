@@ -117,6 +117,12 @@ jobs:
       - name: Collector safe speed regression
         run: node collector-extension/tests/safe_speed.test.js
 
+      # 수집 멈춤 감시(2026-09-10) — 하루가 통째로 0건이 되어도 아무도 몰랐다.
+      # 상한(5시간)·쿨다운(6시간)·문자 90바이트·기록 커밋을 지킨다.
+      # ⚠️ 그중 「기록 커밋」이 핵심이다 — 안 되면 매시간 같은 문자가 도배된다.
+      - name: Collect watch regression
+        run: python backend/tests/test_collect_watch.py
+
       - name: Build frontend bundle
         run: |
           npm install --no-save @babel/core @babel/preset-react

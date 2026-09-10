@@ -207,6 +207,19 @@ def start_scheduler():
         max_instances=1,
     )
 
+    # 수집이 멈춘 것을 서버가 스스로 알아챈다 — 낮 시간대 매시 10분 (2026-09-10).
+    # ⚠️ :00 은 시간대 수집 회차가 도는 시각이라 피한다.
+    # ⚠️ 09~21시로 묶은 이유는 **새벽에 문자를 보내지 않기 위함**이다. 밤새 멈춰 있었으면
+    #    09:10 첫 점검에서 잡힌다(그때가 사람이 조치할 수 있는 첫 시각이다).
+    _scheduler.add_job(
+        _run_collect_health_check,
+        trigger=CronTrigger(hour="9-21", minute=10),
+        id="collect_health_check",
+        name="수집 멈춤 감시 (09~21시 매시 10분)",
+        replace_existing=True,
+        max_instances=1,
+    )
+
     _scheduler.add_job(
         _run_request_queue_prune,
         trigger="date",
@@ -518,6 +531,63 @@ def _run_sbiz_health_probe():
                            f"(API 까지 간 표본 {r.get('reached')}개 전부 · 사유 {r.get('reason')})")
     except Exception as e:
         logger.warning(f"  🩺 소상공인365 자가 점검 실행 실패(무시): {e}")
+
+
+def _run_collect_health_check():
+    """수집이 멈춘 것을 서버가 스스로 알아챈다 (대표 확정 2026-09-10).
+
+    ⚠️ 왜 필요한가 — 2026-09-10 에 수집이 **하루 통째로 0건**이 됐는데 아무도 몰랐다.
+       서비스는 멀쩡히 돌고 화면은 어제 순위를 그대로 보여 준다. 대표가 확장 팝업을
+       열어 보기 전까지 「멈췄다」는 신호가 어디에도 없었다.
+
+    ⚠️ **요청이 아니라 업로드로 잰다** — `/api/collector/health` 는 수집을 꺼 둔 기계도
+       계속 보낸다. 그걸로 판정하면 「살아 있다」는 착각을 한다(2026-09-10 실수).
+
+    ⚠️ 낮(09~21시)에만 부른다 — 새벽에 문자를 보내지 않기 위함. 밤새 멈춰 있었으면
+       아침 첫 점검에서 잡힌다.
+    """
+    try:
+        import collect_watch
+
+        def _send(text: str) -> bool:
+            """알림톡/문자로 보낸다. 설정이 없으면 조용히 안 보낸 것으로 둔다.
+
+            ⚠️ 수신자·발송 설정은 **이미 있는 알림 설정을 그대로 쓴다**(새 설정 안 만든다).
+               설정이 꺼져 있으면 표와 로그에는 남고 문자만 안 간다.
+            """
+            try:
+                from database import get_notification_settings, save_notification_log
+                from kakao_notify import is_configured, send_report_notification
+                st = get_notification_settings() or {}
+                receiver = (st.get("receiver_phone") or "").strip()
+                if not st.get("notify_enabled") or not receiver or not is_configured():
+                    logger.warning("  📵 수집 경보 — 알림 설정이 없어 문자는 못 보냈다"
+                                   "(표·로그에는 남는다). 관리자 화면의 알림 설정을 켜 두면 문자로도 온다.")
+                    return False
+                r = send_report_notification(text, receiver)
+                ok = bool(r.get("success"))
+                try:
+                    save_notification_log(log_type="collect_health",
+                                          status="success" if ok else "failed",
+                                          message=text[:500], receiver_phone=receiver)
+                except Exception:
+                    pass
+                return ok
+            except Exception as e:
+                logger.warning(f"  📵 수집 경보 발송 실패(무시): {e}")
+                return False
+
+        r = collect_watch.run_check(send=_send)
+        gap, state, notice = r.get("gap_hours"), r.get("state"), r.get("notice")
+        if state == collect_watch.STATE_QUIET:
+            logger.warning(f"  🚨 수집 경보 — 마지막 업로드 {r.get('last_upload')} "
+                           f"(약 {gap}시간 전) · 알림 {'보냄' if r.get('sent') else '안 보냄'}")
+        elif notice == "recovered":
+            logger.info(f"  ✅ 수집 재개 확인 — 마지막 업로드 {r.get('last_upload')}")
+        else:
+            logger.info(f"  🩺 수집 점검 — 정상 (마지막 업로드 {gap}시간 전)")
+    except Exception as e:
+        logger.warning(f"  🩺 수집 점검 실행 실패(무시): {e}")
 
 
 # ==================== 08:00 순위 추적 ====================

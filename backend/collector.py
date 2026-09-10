@@ -500,10 +500,22 @@ def collect_health(current_user: dict = Depends(get_current_user)):
         msg = ("최근 2일간 수집분이 없어 분석이 불가합니다. "
                "수집 PC(맥북)의 전원·크롬·확장을 확인한 뒤 「지금 수집」을 실행해 주세요.")
 
+    # ⭐ 「몇 시간째 조용한가」를 함께 싣는다 (2026-09-10 가산 — 기존 필드는 그대로).
+    #    위 state 는 **날짜** 축이라 오늘 새벽에 한 건만 올라와도 종일 ok 로 보인다.
+    #    2026-09-09 처럼 낮에 캡차로 멈춘 날을 그 축으로는 못 잡는다.
+    #    ⚠️ 실패해도 응답을 깨뜨리지 않는다 — 이 값이 없다고 화면이 죽으면 안 된다.
+    hours_since = None
+    try:
+        from collect_watch import summary as _watch_summary
+        hours_since = (_watch_summary() or {}).get("gap_hours")
+    except Exception:
+        hours_since = None
+
     return {"success": True, "state": state, "today": today, "message": msg,
             "todayKeywords": (t["keywords"] if t else 0),
             "lastCollectedDate": (rows[0]["collected_date"] if rows else None),
-            "lastAt": (rows[0]["last_at"] if rows else None)}
+            "lastAt": (rows[0]["last_at"] if rows else None),
+            "hoursSinceUpload": hours_since}
 
 
 def _safe_int(v):
