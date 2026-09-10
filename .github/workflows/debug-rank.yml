@@ -3513,7 +3513,28 @@ jobs:
             conn.close()
             PYEOF
             echo "-- Solapi 키가 들어와 있나 (값은 안 찍는다) --"
-            docker exec -i logic-analysis sh -lc 'for k in SOLAPI_API_KEY SOLAPI_API_SECRET SOLAPI_SENDER_PHONE; do v=$(printenv $k); echo "  $k: $([ -n \"$v\" ] && echo 설정됨 || echo 없음)"; done'
+            # 🔴 종전 판정은 **항상 「설정됨」** 이었다(2026-09-10). YAML 블록 안 작은따옴표에서
+            #    `\"$v\"` 가 역슬래시째 남아 `[ -n \...\ ]` 가 늘 참이었다.
+            #    ⇒ 쉘 따옴표를 아예 안 쓰고 파이썬으로 읽는다. 값은 찍지 않고 길이만 본다.
+            docker exec -i logic-analysis python3 - <<'PYENV'
+            import os
+            for k in ("SOLAPI_API_KEY", "SOLAPI_API_SECRET", "SOLAPI_SENDER_PHONE", "SOLAPI_PFID"):
+                v = os.getenv(k)
+                if v is None:
+                    print("  %s: 없음(환경변수 자체가 없다)" % k)
+                elif not v.strip():
+                    print("  %s: 비어 있음(이름은 있는데 값이 없다)" % k)
+                else:
+                    print("  %s: 설정됨 (%d자)" % (k, len(v.strip())))
+            # 실제 판정 함수를 그대로 부른다 — 읽기만 한다.
+            try:
+                import sys
+                sys.path.insert(0, "/app")
+                from kakao_notify import is_configured
+                print("  ⇒ is_configured():", is_configured())
+            except Exception as e:
+                print("  ⇒ is_configured() 확인 실패:", type(e).__name__, e)
+            PYENV
             echo "-- 판정 도움말 --"
             echo "  문자 발송 켜짐=False 이거나 키가 없으면 **표·로그에만 남고 문자는 안 간다.**"
 
