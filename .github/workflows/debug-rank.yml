@@ -38,12 +38,15 @@ on:
         description: '신고 253 — 청귤을 온디맨드 대기줄에 1행 등록(쓰기 1행 · 수집기가 재수집하게).'
         required: false
         default: 'off'
-      verify253b:
-        description: '신고 253 사후 — 오늘 수집분의 광고 제외 수·원본 수 분포와 전 업체 어제→오늘 순위 이동 분포(과필터 여부 판정, 읽기 전용·업체명 미출력).'
-        required: false
-        default: 'off'
+      # ⚠️ workflow_dispatch 입력 상한은 25개다. 신고 253 이 종결돼 `verify253b` 입력을 내렸다
+      #    (2026-09-10). 스텝은 남아 있으나 입력이 없어 실행되지 않는다 — 다시 필요하면
+      #    다른 입력 하나를 내리고 이 자리에 되살릴 것.
       prune_preview:
         description: '유니버스 다이어트 미리보기 — off(기본) / on. 분석 이력 기간 창(30·60·90·120일)과 영영 안 되는 키워드를 뺐을 때 재는 양이 얼마나 주는지 실제 함수로 계산(읽기 전용·업체명 미출력).'
+        required: false
+        default: 'off'
+      watch:
+        description: '수집 멈춤 경보 점검 — off(기본) / on. 잡이 등록됐는지·표가 생겼는지·판정 이력·문자 설정이 켜져 있는지(읽기 전용 · ⚠️ 전화번호·키 원문 미출력).'
         required: false
         default: 'off'
       sources:
@@ -3464,6 +3467,55 @@ jobs:
                 print(f"   예시 12개: {list(lost_only)[:12]}")
             conn.close()
             PY
+
+      - name: 수집 멈춤 경보 점검 (읽기 전용 · 전화번호·키 원문 미출력)
+        if: ${{ github.event.inputs.watch == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 180s
+          script: |
+            echo "== 수집 멈춤 경보 =="
+            echo "-- 잡이 등록됐나 (부팅 로그) --"
+            docker logs logic-analysis 2>&1 | grep -i "수집 멈춤 감시" | tail -3 || echo "  (등록 줄 없음)"
+            echo "-- 점검이 돌았나 --"
+            docker logs logic-analysis 2>&1 | grep -E "수집 점검|수집 경보|수집 재개 확인" | tail -8 || echo "  (아직 안 돌았다 — 09~21시 매시 10분)"
+            echo "-- 표·판정 이력 --"
+            docker exec -i logic-analysis python3 - <<'PYEOF'
+            import sqlite3, os
+            conn = sqlite3.connect(os.getenv("DB_PATH", "/app/data/logic_data.db"))
+            conn.row_factory = sqlite3.Row
+            t = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='collect_watch'").fetchone()
+            print("  collect_watch 표:", "있음" if t else "아직 없음(첫 점검 때 생긴다)")
+            if t:
+                n = conn.execute("SELECT COUNT(*) c FROM collect_watch").fetchone()["c"]
+                print("  판정 기록:", n, "건")
+                for r in conn.execute("SELECT checked_at, gap_hours, state, notified, note"
+                                      " FROM collect_watch ORDER BY id DESC LIMIT 5"):
+                    print(f"    {r['checked_at']} · {r['state']} · {r['gap_hours']}시간 ·"
+                          f" 알림 {'보냄' if r['notified'] else '-'} {r['note'] or ''}")
+            r = conn.execute("SELECT MAX(created_at) m FROM collected_serp").fetchone()
+            print("  마지막 업로드:", r["m"])
+            g = conn.execute("SELECT (julianday('now','localtime') - julianday(?))*24 g",
+                             (r["m"],)).fetchone()["g"] if r["m"] else None
+            print("  지금까지 공백:", None if g is None else round(g, 2), "시간")
+            # ⚠️ 전화번호·키는 절대 찍지 않는다 — 이 저장소는 공개다. 켜졌는지만 본다.
+            try:
+                s = conn.execute("SELECT notify_enabled, receiver_phone FROM notification_settings"
+                                 " LIMIT 1").fetchone()
+                ph = (s["receiver_phone"] or "") if s else ""
+                print("  문자 발송 켜짐:", bool(s and s["notify_enabled"]))
+                print("  수신 번호 등록됨:", bool(ph.strip()), f"(끝 2자리 {ph.strip()[-2:]})" if ph.strip() else "")
+            except Exception as e:
+                print("  알림 설정 조회 실패:", type(e).__name__)
+            conn.close()
+            PYEOF
+            echo "-- Solapi 키가 들어와 있나 (값은 안 찍는다) --"
+            docker exec -i logic-analysis sh -lc 'for k in SOLAPI_API_KEY SOLAPI_API_SECRET SOLAPI_SENDER_PHONE; do v=$(printenv $k); echo "  $k: $([ -n \"$v\" ] && echo 설정됨 || echo 없음)"; done'
+            echo "-- 판정 도움말 --"
+            echo "  문자 발송 켜짐=False 이거나 키가 없으면 **표·로그에만 남고 문자는 안 간다.**"
 
       - name: 수집 요청이 어디서 오는가 (읽기 전용 · IP 원문 미출력)
         if: ${{ github.event.inputs.sources == 'on' }}
