@@ -1456,6 +1456,38 @@ def alerts(db: Session = Depends(get_db), user: models.User = Depends(get_curren
 ALLOWED_SETUP_TYPES = {"bid", "kw_off", "kw_add", "budget"}
 
 
+DAILY_CUM_LIMIT_PCT = 50   # 한 대상에 대해 24시간 누적 변경폭 상한(%)
+
+
+def _daily_baseline(db: Session, client_id: int, target_id: str):
+    """최근 24시간 안에 우리가 이 대상을 바꾼 적이 있으면, 그날의 '최초 값'을 돌려준다.
+    제안을 반복 생성·적용해 ±50% 가 복리로 쌓이는 것을 막기 위한 기준선."""
+    if not target_id:
+        return None
+    since = datetime.now(timezone(timedelta(hours=9))) - timedelta(hours=24)
+    rows = (db.query(models.SetupProposal)
+            .filter(models.SetupProposal.client_id == client_id,
+                    models.SetupProposal.status == "applied")
+            .order_by(models.SetupProposal.id.asc()).all())
+    for r in rows:
+        if not r.applied_at:
+            continue
+        try:
+            if datetime.fromisoformat(r.applied_at) < since:
+                continue
+        except ValueError:
+            continue
+        for d in (json.loads(r.result_json or "{}").get("details") or []):
+            if d.get("ok") and d.get("before") is not None:
+                # 같은 대상을 찾기 위해 그 제안의 항목에서 target_id 를 조회
+                its = json.loads(r.items_json or "[]")
+                idx = d.get("index")
+                if isinstance(idx, int) and 0 <= idx < len(its):
+                    if its[idx].get("target_id") == target_id:
+                        return int(d["before"])   # 그날 첫 변경 직전 값
+    return None
+
+
 def _searchad_creds(db: Session, client_id: int) -> dict:
     """광고주의 검색광고 자격증명을 복호화해 돌려준다. 없으면 400."""
     cred = (
@@ -1656,9 +1688,12 @@ def apply_setup_proposal(
         raise HTTPException(400, "이미 적용된 제안입니다. 새로 제안을 생성하세요.")
     if not payload.confirm:
         raise HTTPException(400, "확인(confirm)이 필요합니다.")
+    # 오래된 제안은 그 사이 실제 값이 달라졌을 수 있다 — 다시 생성하게 한다.
+    if row.created_at and (datetime.utcnow() - row.created_at) > timedelta(hours=2):
+        raise HTTPException(400, "제안이 2시간이 지나 만료됐습니다. 최신 성과로 다시 생성해 주세요.")
 
     items = json.loads(row.items_json or "[]")
-    picked = [i for i in (payload.item_indexes or []) if 0 <= i < len(items)]
+    picked = sorted({i for i in (payload.item_indexes or []) if isinstance(i, int) and 0 <= i < len(items)})
     if not picked:
         raise HTTPException(400, "적용할 항목을 하나 이상 선택하세요.")
 
@@ -1673,16 +1708,55 @@ def apply_setup_proposal(
         entry = {"index": i, "type": t, "label": it.get("label") or ""}
         try:
             if t == "bid":
-                safe, _, _ = naver_searchad.clamp_bid(it.get("current_value") or 0, it.get("value") or 0)
+                # ★적용 직전에 '지금' 입찰가를 다시 읽어 그 값 기준으로 자른다.
+                #   제안 생성 이후 값이 바뀌었을 수 있어, 저장된 값으로 자르면 ±50% 가 뚫린다.
+                live = naver_searchad.get_keyword(ak, sk, cid, it["target_id"])
+                now_bid = int(live.get("bidAmt") or it.get("current_value") or 0)
+                if not now_bid and live.get("nccAdgroupId"):
+                    # 그룹 입찰가를 따르는 키워드는 bidAmt 가 0으로 온다.
+                    # 앵커가 없으면 ±50% 가드가 꺼지므로 그룹 입찰가를 기준으로 삼는다.
+                    try:
+                        g = naver_searchad.get_adgroup(ak, sk, cid, live["nccAdgroupId"])
+                        now_bid = int(g.get("bidAmt") or 0)
+                    except Exception:  # noqa: BLE001
+                        now_bid = 0
+                safe, clamped, note = naver_searchad.clamp_bid(now_bid, it.get("value") or 0)
+                # 24시간 누적 상한 — 제안을 반복해도 하루 총 변화가 ±50% 를 넘지 못하게
+                base = _daily_baseline(db, row.client_id, it["target_id"])
+                if base:
+                    lo = int(base * (100 - DAILY_CUM_LIMIT_PCT) / 100)
+                    hi = int(base * (100 + DAILY_CUM_LIMIT_PCT) / 100)
+                    capped = max(lo, min(hi, safe))
+                    if capped != safe:
+                        note = f"24시간 누적 상한 적용(오늘 기준 {base}원): {safe}원 → {capped}원"
+                        safe, clamped = capped, True
                 naver_searchad.set_keyword_bid(ak, sk, cid, it["target_id"], safe)
-                entry.update({"ok": True, "applied": f"입찰가 {safe}원"})
+                entry.update({"ok": True, "applied": f"입찰가 {now_bid}원 → {safe}원",
+                              "before": now_bid, "after": safe})
+                if clamped:
+                    entry["note"] = note
             elif t == "kw_off":
+                live = naver_searchad.get_keyword(ak, sk, cid, it["target_id"])
+                entry["before"] = int(live.get("bidAmt") or 0)   # 되살릴 때 쓸 입찰가
                 naver_searchad.set_keyword_enabled(ak, sk, cid, it["target_id"], False)
-                entry.update({"ok": True, "applied": "키워드 중지"})
+                entry.update({"ok": True, "applied": "키워드 중지(되살리려면 네이버에서 재개)"})
             elif t == "budget":
-                safe, _, _ = naver_searchad.clamp_budget(it.get("current_value") or 0, it.get("value") or 0)
+                live = naver_searchad.get_adgroup(ak, sk, cid, it["target_id"])
+                now_bg = int(live.get("dailyBudget") or it.get("current_value") or 0)
+                safe, clamped, note = naver_searchad.clamp_budget(now_bg, it.get("value") or 0)
+                base = _daily_baseline(db, row.client_id, it["target_id"])
+                if base:
+                    lo = int(base * (100 - DAILY_CUM_LIMIT_PCT) / 100)
+                    hi = int(base * (100 + DAILY_CUM_LIMIT_PCT) / 100)
+                    capped = (max(lo, min(hi, safe)) // 10) * 10
+                    if capped != safe:
+                        note = f"24시간 누적 상한 적용(오늘 기준 {base}원): {safe}원 → {capped}원"
+                        safe, clamped = capped, True
                 naver_searchad.set_adgroup_budget(ak, sk, cid, it["target_id"], safe)
-                entry.update({"ok": True, "applied": f"일 예산 {safe}원"})
+                entry.update({"ok": True, "applied": f"일 예산 {now_bg}원 → {safe}원",
+                              "before": now_bg, "after": safe})
+                if clamped:
+                    entry["note"] = note
             elif t == "kw_add":
                 safe, _, _ = naver_searchad.clamp_bid(0, it.get("value") or naver_searchad.MIN_BID)
                 naver_searchad.add_keywords(ak, sk, cid, it["adgroup_id"],
@@ -1698,6 +1772,11 @@ def apply_setup_proposal(
             fail_n += 1
             entry.update({"ok": False, "error": str(e)[:200]})
         results.append(entry)
+        # ★네이버에는 이미 반영됐는데 뒤에서 죽으면 기록이 통째로 롤백된다.
+        #   항목마다 즉시 저장해 '돈은 움직였는데 흔적이 없는' 구간을 없앤다.
+        row.result_json = json.dumps({"ok": ok_n, "failed": fail_n, "details": results},
+                                     ensure_ascii=False)
+        db.commit()
 
     result = {"ok": ok_n, "failed": fail_n, "details": results}
     row.result_json = json.dumps(result, ensure_ascii=False)
@@ -1705,7 +1784,10 @@ def apply_setup_proposal(
         row.status = "applied"
         row.applied_by = user.id
         row.applied_at = _now_kst_iso()
-    done = " · ".join(f"{r['type']}:{'성공' if r.get('ok') else '실패'}" for r in results)
+    done = " · ".join(
+        (f"{r.get('label') or r['type']} {r.get('applied')}" if r.get("ok")
+         else f"{r.get('label') or r['type']} 실패({(r.get('error') or '')[:40]})")
+        for r in results)
     log_activity(db, row.client_id, user, "setup_applied",
                  f"AI 세팅 적용 — 성공 {ok_n}건 · 실패 {fail_n}건 ({done})")
     db.commit()

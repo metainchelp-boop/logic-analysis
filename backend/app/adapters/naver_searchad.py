@@ -283,6 +283,11 @@ MAX_CHANGE_PCT = 50      # 입찰가·예산 1회 변경폭 상한(%)
 MIN_BID = 70             # 네이버 최소 입찰가(원)
 MAX_BID_LIMIT = 100000   # 1회 요청으로 올릴 수 있는 절대 상한(원)
 MIN_DAILY_BUDGET = 100   # 일 예산 하한(원)
+# ★기준값(현재값)이 0이면 ±% 앵커가 없어 가드가 사라진다.
+#   그런 경우(신규 키워드 추가·예산 미설정 그룹)에는 보수적인 절대 상한을 대신 건다.
+#   더 큰 값이 필요하면 담당자가 네이버에서 직접 올리게 한다.
+NO_ANCHOR_MAX_BID = 3000        # 앵커 없을 때 입찰가 상한(원)
+NO_ANCHOR_MAX_BUDGET = 100000   # 앵커 없을 때 일 예산 상한(원)
 
 
 def clamp_bid(current: int, proposed: int) -> tuple:
@@ -293,8 +298,10 @@ def clamp_bid(current: int, proposed: int) -> tuple:
         lo = max(MIN_BID, int(cur * (100 - MAX_CHANGE_PCT) / 100))
         hi = min(MAX_BID_LIMIT, int(cur * (100 + MAX_CHANGE_PCT) / 100))
     else:
-        lo, hi = MIN_BID, MAX_BID_LIMIT
+        lo, hi = MIN_BID, NO_ANCHOR_MAX_BID   # 앵커 없음 → 보수적 상한
     safe = max(lo, min(hi, want))
+    safe = max(MIN_BID, safe)
+    safe = (safe // 10) * 10          # 네이버는 10원 단위
     safe = max(MIN_BID, safe)
     if safe != want:
         return safe, True, f"안전범위(±{MAX_CHANGE_PCT}%·최소 {MIN_BID}원)로 조정: {want}원 → {safe}원"
@@ -310,7 +317,7 @@ def clamp_budget(current: int, proposed: int) -> tuple:
         hi = int(cur * (100 + MAX_CHANGE_PCT) / 100)
         safe = max(lo, min(hi, want))
     else:
-        safe = max(MIN_DAILY_BUDGET, want)
+        safe = max(MIN_DAILY_BUDGET, min(NO_ANCHOR_MAX_BUDGET, want))  # 앵커 없음 → 상한 필수
     safe = (safe // 10) * 10  # 네이버는 10원 단위
     if safe != want:
         return safe, True, f"안전범위(±{MAX_CHANGE_PCT}%·10원 단위)로 조정: {want}원 → {safe}원"
@@ -463,3 +470,15 @@ def collect_keyword_performance(api_key: str, secret_key: str, customer_id: str,
         "keyword_count": len(kw_rows),
         "measured": len([k for k in kw_rows if k.get("spend")]),
     }
+
+
+def get_keyword(api_key: str, secret_key: str, customer_id: str, keyword_id: str) -> dict:
+    """키워드 1건 현재 상태 — 적용 직전 재검증용."""
+    r = _get(api_key, secret_key, customer_id, f"/ncc/keywords/{keyword_id}")
+    return (r[0] if isinstance(r, list) and r else r) or {}
+
+
+def get_adgroup(api_key: str, secret_key: str, customer_id: str, adgroup_id: str) -> dict:
+    """광고그룹 1건 현재 상태 — 적용 직전 재검증용."""
+    r = _get(api_key, secret_key, customer_id, f"/ncc/adgroups/{adgroup_id}")
+    return (r[0] if isinstance(r, list) and r else r) or {}

@@ -1346,6 +1346,16 @@ async function runDiagnose(id, btn){
   btn.disabled=false;
 }
 var SETUP={id:null,items:[]};
+// ★화면·확인창에 쓰는 값은 반드시 '서버가 실제로 적용할 값'이어야 한다.
+//   AI가 쓴 설명 문구(current/proposed)를 그대로 믿으면 승인한 숫자와 반영되는 숫자가 어긋날 수 있다.
+function setupChange(it){
+  var v=(it.value!=null?it.value:0), cv=(it.current_value!=null?it.current_value:0);
+  if(it.type==='bid')    return cv?(cv+'원 → '+v+'원'):(v+'원');
+  if(it.type==='budget') return cv?('일 '+cv.toLocaleString()+'원 → 일 '+v.toLocaleString()+'원'):('일 '+v.toLocaleString()+'원');
+  if(it.type==='kw_off') return '운영중 → 중지';
+  if(it.type==='kw_add') return '추가 · 입찰 '+v+'원 · 중지 상태';
+  return (it.proposed||'');
+}
 function setupHtml(d){
   SETUP.id=d.id; SETUP.items=d.items||[];
   if(!SETUP.items.length) return '<div style="color:var(--sub);font-size:12.5px">지금은 바꿀 것이 없다고 판단했습니다.</div>';
@@ -1357,7 +1367,7 @@ function setupHtml(d){
       '<input type="checkbox" class="su-ck" data-i="'+i+'" '+(it.checked?'checked':'')+' style="margin-top:3px;width:16px;height:16px;accent-color:var(--blue)">'+
       '<div style="flex:1;min-width:0">'+
         '<div style="font-size:13px;font-weight:800;color:var(--text)">'+esc(it.label||'')+
-          ' <span style="font-family:Consolas,monospace;font-size:11.5px;background:var(--panel2);border:1px solid var(--line2);border-radius:6px;padding:1px 7px;margin-left:4px">'+esc(it.current||'')+' → '+esc(it.proposed||'')+'</span></div>'+
+          ' <span style="font-family:Consolas,monospace;font-size:11.5px;background:var(--panel2);border:1px solid var(--line2);border-radius:6px;padding:1px 7px;margin-left:4px">'+esc(setupChange(it))+'</span></div>'+
         '<div style="font-size:12px;color:var(--sub);margin-top:3px;line-height:1.6">'+esc(it.why||'')+'</div>'+
         (it.clamped?'<div style="font-size:11.5px;color:var(--amber);margin-top:3px;font-weight:700">⚠️ '+esc(it.clamp_note||'')+'</div>':'')+
       '</div>'+
@@ -1388,14 +1398,15 @@ async function runSetup(id, btn){
 async function applySetup(btn){
   var picked=Array.prototype.slice.call(document.querySelectorAll('.su-ck:checked')).map(function(c){return parseInt(c.dataset.i,10);});
   if(!picked.length){ toast('적용할 항목을 선택하세요'); return; }
-  var lines=picked.map(function(i){var it=SETUP.items[i];return '· '+(it.label||'')+' : '+(it.current||'')+' → '+(it.proposed||'');}).join('\n');
+  var lines=picked.map(function(i){var it=SETUP.items[i];return '· '+(it.label||'')+' : '+setupChange(it);}).join('\n');
   if(!confirm('선택한 '+picked.length+'건을 네이버 실계정에 적용합니다.\n\n'+lines+'\n\n되돌리려면 네이버 광고관리에서 직접 수정해야 합니다. 진행할까요?')) return;
   btn.disabled=true; var o=btn.textContent; btn.textContent='적용 중…';
   try{
     var r=await api('/setup-proposals/'+SETUP.id+'/apply',{method:'POST',body:JSON.stringify({item_indexes:picked,confirm:true})});
     var det=(r.details||[]).map(function(d){
       return '<div style="font-size:12px;margin:3px 0">'+(d.ok?'<span style="color:var(--green);font-weight:700">✅</span> ':'<span style="color:var(--red);font-weight:700">❌</span> ')+
-        esc(d.label||d.type)+' — '+esc(d.ok?(d.applied||'적용됨'):(d.error||'실패'))+'</div>';}).join('');
+        esc(d.label||d.type)+' — '+esc(d.ok?(d.applied||'적용됨'):(d.error||'실패'))+
+        (d.note?' <span style="color:var(--amber)">('+esc(d.note)+')</span>':'')+'</div>';}).join('');
     document.getElementById('su-result').innerHTML=
       '<div style="background:'+(r.failed?'var(--amberbg)':'var(--greenbg)')+';border-radius:10px;padding:12px 15px">'+
       '<b style="font-size:13px;color:'+(r.failed?'var(--amber)':'var(--green)')+'">적용 완료 — 성공 '+r.ok+'건'+(r.failed?(' · 실패 '+r.failed+'건'):'')+'</b>'+det+'</div>';
