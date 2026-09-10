@@ -46,8 +46,8 @@ on:
         description: '유니버스 다이어트 미리보기 — off(기본) / on. 분석 이력 기간 창(30·60·90·120일)과 영영 안 되는 키워드를 뺐을 때 재는 양이 얼마나 주는지 실제 함수로 계산(읽기 전용·업체명 미출력).'
         required: false
         default: 'off'
-      verify253d:
-        description: '신고 253 사후 3 — 김치·청귤·커피: 어제 담겼는데 오늘 사라진 상품의 링크 호스트 분포(어느 판별 가지가 떨궜는지)·오늘 담긴 링크 호스트(읽기 전용·업체명 미출력).'
+      sources:
+        description: '수집 요청 출처 대조 — off(기본) / on. /api/collector 를 보내는 곳이 몇 군데인지, 각각 오늘 실제 업로드를 했는지, 나눠 돌리기 설정이 무엇인지(읽기 전용 · ⚠️ IP 원문 미출력 · 해시 6자리로만 구분).'
         required: false
         default: 'off'
       adfp:
@@ -3464,3 +3464,77 @@ jobs:
                 print(f"   예시 12개: {list(lost_only)[:12]}")
             conn.close()
             PY
+
+      - name: 수집 요청이 어디서 오는가 (읽기 전용 · IP 원문 미출력)
+        if: ${{ github.event.inputs.sources == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 240s
+          script: |
+            LOGS=$(ls -1 /var/log/nginx/access.log /var/log/nginx/access.log.1 2>/dev/null | tr '\n' ' ')
+            echo "== 수집 요청 출처 대조 =="
+            echo "   대상 로그: $LOGS"
+            echo "   저장소가 공개라 IP 원문은 찍지 않는다 — 해시 앞 6자리로만 구분한다."
+            echo
+            cat $LOGS 2>/dev/null | python3 - <<'PYEOF'
+            import sys, re, hashlib, collections
+            SRC = collections.defaultdict(lambda: {
+                "total": 0, "paths": collections.Counter(), "first": None, "last": None,
+                "ua": collections.Counter(), "autobid": 0, "worker": collections.Counter(),
+                "serp_today": 0, "today": 0})
+            line_re = re.compile(r'^(\S+) .*?\[([^\]]+)\] "(\S+) (\S+) [^"]*" (\d{3})')
+            ua_re = re.compile(r'"([^"]*)"\s*$')
+            rows = []
+            for ln in sys.stdin:
+                m = line_re.match(ln)
+                if not m:
+                    continue
+                um = ua_re.search(ln)
+                rows.append(m.groups() + ((um.group(1) if um else ""),))
+            today = rows[-1][1].split(":")[0] if rows else None
+            for ip, ts, meth, path, st, ua in rows:
+                is_col = path.startswith("/api/collector")
+                is_bid = path.startswith("/autobid")
+                if not (is_col or is_bid):
+                    continue
+                h = hashlib.sha256(ip.encode()).hexdigest()[:6]
+                d = SRC[h]
+                if d["first"] is None:
+                    d["first"] = ts
+                d["last"] = ts
+                if is_bid:
+                    d["autobid"] += 1
+                    continue
+                d["total"] += 1
+                base = path.split("?")[0]
+                d["paths"][base] += 1
+                kind = "Mac" if "Macintosh" in ua else ("Windows" if "Windows" in ua else "기타/미상")
+                d["ua"][kind] += 1
+                wm = re.search(r"[?&]workers=(\d+)", path)
+                d["worker"][wm.group(1) + "대로 나눔" if wm else "미지정(=1대 전량)"] += 1
+                if today and ts.startswith(today):
+                    d["today"] += 1
+                    if meth == "POST" and base.endswith("/serp"):
+                        d["serp_today"] += 1
+            print("로그 마지막 날짜:", today)
+            print()
+            order = sorted(SRC.items(), key=lambda kv: -(kv[1]["total"] + kv[1]["autobid"]))
+            for i, (h, d) in enumerate(order):
+                print("== 곳 %s  (구분값 %s)" % (chr(ord("A") + i), h))
+                print("   수집 요청 %d건 (오늘 %d건)" % (d["total"], d["today"]))
+                print("   >> 오늘 실제 수집 업로드(POST /serp): %d건" % d["serp_today"])
+                both = "  <-- 같은 곳에서 둘 다 보낸다" if (d["autobid"] and d["total"]) else ""
+                print("   자동입찰 보고 %d건%s" % (d["autobid"], both))
+                print("   기간 %s ~ %s" % (d["first"], d["last"]))
+                print("   기계 종류: %s" % dict(d["ua"]))
+                print("   나눠 돌리기: %s" % dict(d["worker"]))
+                print("   경로별: %s" % dict(d["paths"].most_common(6)))
+                print()
+            print("== 판정 도움말 ==")
+            print("  - 오늘 업로드(POST /serp)를 보낸 곳이 실제로 네이버를 긁는 기계다.")
+            print("  - 두 곳 다 '미지정(=1대 전량)' 이면 같은 키워드를 둘 다 긁는다(회선 부하 2배).")
+            print("  - 자동입찰을 함께 보내는 곳이 사무실 맥미니다.")
+            PYEOF
