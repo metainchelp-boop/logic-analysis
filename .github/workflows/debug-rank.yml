@@ -141,11 +141,11 @@ jobs:
                                      headers={"X-Api-Key": key}, timeout=20)
                     if r.status_code != 200:
                         print(f"   전산 조회 {r.status_code} (stage={st}) — 건너뜀"); continue
-                    rows = (r.json() or {}).get("result") or []
+                    rows = ((r.json() or {}).get("result") or {}).get("items") or []
                     got += len(rows)
                     for c in rows:
-                        n = norm(c.get("store_name"))
-                        s = slug(c.get("store_link"))
+                        n = norm(c.get("company_name"))
+                        s = slug(c.get("store_url"))
                         mgr = (c.get("sales_manager") or "").strip()
                         if n:
                             if n in by_name and by_name[n][0] != mgr: dup_names.add(n)
