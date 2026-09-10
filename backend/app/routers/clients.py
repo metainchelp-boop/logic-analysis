@@ -1450,6 +1450,268 @@ def alerts(db: Session = Depends(get_db), user: models.User = Depends(get_curren
     return {"count": len(out), "alerts": out}
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# 네이버 검색광고 — AI 진단 · AI 세팅(제안 → 담당자 승인 → 실계정 적용)
+# ══════════════════════════════════════════════════════════════════════════
+ALLOWED_SETUP_TYPES = {"bid", "kw_off", "kw_add", "budget"}
+
+
+def _searchad_creds(db: Session, client_id: int) -> dict:
+    """광고주의 검색광고 자격증명을 복호화해 돌려준다. 없으면 400."""
+    cred = (
+        db.query(models.ChannelCredential)
+        .filter(models.ChannelCredential.client_id == client_id,
+                models.ChannelCredential.channel == "naver_searchad",
+                models.ChannelCredential.status == "connected")
+        .first()
+    )
+    if not cred:
+        raise HTTPException(400, "네이버 검색광고가 연동돼 있어야 합니다. 먼저 키를 연동하세요.")
+    f = {k: security.decrypt(v) for k, v in json.loads(cred.fields_json or "{}").items()}
+    if not all(f.get(k) for k in ("api_license", "secret_key", "customer_id")):
+        raise HTTPException(400, "검색광고 키가 불완전합니다(라이선스·비밀키·Customer ID 확인).")
+    return f
+
+
+def _client_notes(db: Session, client_id: int, limit: int = 3) -> list:
+    rows = (db.query(models.ActivityLog)
+            .filter(models.ActivityLog.client_id == client_id,
+                    models.ActivityLog.type == "note")
+            .order_by(models.ActivityLog.id.desc()).limit(limit).all())
+    return [r.message for r in rows if r.message]
+
+
+@router.post("/clients/{client_id}/searchad/diagnose")
+def searchad_diagnose(
+    client_id: int,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    """AI 진단 — 캠페인·키워드 성과를 읽고 원인을 진단한다(쓰기 없음)."""
+    c = db.get(models.Client, client_id)
+    if not c or not (user.role in ("admin", "viewer") or can_edit(user, c)):
+        raise HTTPException(404, "광고주를 찾을 수 없습니다")
+    f = _searchad_creds(db, client_id)
+    from ..adapters import naver_searchad
+    from .. import ai_insights
+    try:
+        perf = naver_searchad.collect_keyword_performance(
+            f["api_license"], f["secret_key"], f["customer_id"], days=30)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(400, f"검색광고 데이터를 가져오지 못했습니다: {str(e)[:200]}")
+    if not perf.get("keyword_count"):
+        raise HTTPException(400, "집행 중인 키워드가 없어 진단할 수 없습니다.")
+    payload = {
+        "client": c.name, "category": c.category,
+        "notes": _client_notes(db, client_id),
+        "period_days": perf.get("days"),
+        "campaigns": perf.get("campaigns"),
+        "adgroups": perf.get("adgroups"),
+        "keywords": perf.get("keywords", [])[:60],
+    }
+    try:
+        diag = ai_insights.diagnose_searchad(payload)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(400, str(e)[:300])
+    return {"diagnosis": diag, "keyword_count": perf.get("keyword_count"),
+            "measured": perf.get("measured"), "days": perf.get("days")}
+
+
+@router.post("/clients/{client_id}/setup-proposals")
+def create_setup_proposal(
+    client_id: int,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(require_editor),
+):
+    """AI 세팅 제안 생성 — 진단 + 변경안을 만들어 draft 로 저장(집행 없음)."""
+    c = db.get(models.Client, client_id)
+    if not c or not can_edit(user, c):
+        raise HTTPException(404, "광고주를 찾을 수 없습니다")
+    f = _searchad_creds(db, client_id)
+    from ..adapters import naver_searchad
+    from .. import ai_insights
+    try:
+        perf = naver_searchad.collect_keyword_performance(
+            f["api_license"], f["secret_key"], f["customer_id"], days=30)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(400, f"검색광고 데이터를 가져오지 못했습니다: {str(e)[:200]}")
+    if not perf.get("keyword_count"):
+        raise HTTPException(400, "집행 중인 키워드가 없어 제안할 수 없습니다.")
+    payload = {
+        "client": c.name, "category": c.category,
+        "notes": _client_notes(db, client_id),
+        "period_days": perf.get("days"),
+        "campaigns": perf.get("campaigns"),
+        "adgroups": perf.get("adgroups"),
+        "keywords": perf.get("keywords", [])[:60],
+    }
+    try:
+        diag = ai_insights.diagnose_searchad(payload)
+        prop = ai_insights.propose_searchad_setup(payload)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(400, str(e)[:300])
+
+    # AI 응답 정규화 — 허용 타입·필수값만 남기고 안전값을 미리 계산해 보여준다.
+    kw_by_id = {k["keyword_id"]: k for k in perf.get("keywords", [])}
+    ag_by_id = {g["adgroup_id"]: g for g in perf.get("adgroups", [])}
+    items = []
+    for raw in (prop.get("items") or [])[:8]:
+        t = (raw.get("type") or "").strip()
+        if t not in ALLOWED_SETUP_TYPES:
+            continue
+        tid = str(raw.get("target_id") or "").strip()
+        agid = str(raw.get("adgroup_id") or "").strip()
+        it = {
+            "type": t, "target_id": tid, "adgroup_id": agid,
+            "label": raw.get("label") or "", "why": raw.get("why") or "",
+            "current": raw.get("current") or "", "proposed": raw.get("proposed") or "",
+            "keyword": (raw.get("keyword") or "").strip(),
+            "checked": bool(raw.get("checked")),
+            "clamped": False, "clamp_note": "",
+        }
+        try:
+            val = int(raw.get("proposed_value") or 0)
+        except (TypeError, ValueError):
+            val = 0
+        if t == "bid":
+            if tid not in kw_by_id:
+                continue
+            cur = int(kw_by_id[tid].get("bid") or 0)
+            safe, clamped, note = naver_searchad.clamp_bid(cur, val)
+            it.update({"value": safe, "current_value": cur, "clamped": clamped, "clamp_note": note})
+        elif t == "budget":
+            if tid not in ag_by_id:
+                continue
+            cur = int(ag_by_id[tid].get("daily_budget") or 0)
+            safe, clamped, note = naver_searchad.clamp_budget(cur, val)
+            it.update({"value": safe, "current_value": cur, "clamped": clamped, "clamp_note": note})
+        elif t == "kw_off":
+            if tid not in kw_by_id:
+                continue
+            it.update({"value": 0, "current_value": 0})
+        elif t == "kw_add":
+            if not agid or not it["keyword"]:
+                continue
+            safe, clamped, note = naver_searchad.clamp_bid(0, val or naver_searchad.MIN_BID)
+            it.update({"value": safe, "current_value": 0, "clamped": clamped, "clamp_note": note})
+        items.append(it)
+
+    row = models.SetupProposal(
+        client_id=client_id, summary=prop.get("summary") or "",
+        diagnosis_json=json.dumps(diag, ensure_ascii=False),
+        items_json=json.dumps(items, ensure_ascii=False),
+        status="draft", created_by=user.id,
+    )
+    db.add(row)
+    log_activity(db, client_id, user, "setup_proposal", f"AI 세팅 제안 생성 — {len(items)}건")
+    db.commit()
+    db.refresh(row)
+    return {"id": row.id, "summary": row.summary, "diagnosis": diag, "items": items,
+            "status": row.status, "keyword_count": perf.get("keyword_count")}
+
+
+@router.get("/clients/{client_id}/setup-proposals")
+def list_setup_proposals(
+    client_id: int,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    c = db.get(models.Client, client_id)
+    if not c or not (user.role in ("admin", "viewer") or can_edit(user, c)):
+        raise HTTPException(404, "광고주를 찾을 수 없습니다")
+    rows = (db.query(models.SetupProposal)
+            .filter(models.SetupProposal.client_id == client_id)
+            .order_by(models.SetupProposal.id.desc()).limit(10).all())
+    return {"items": [{
+        "id": r.id, "summary": r.summary, "status": r.status,
+        "diagnosis": json.loads(r.diagnosis_json or "{}"),
+        "items": json.loads(r.items_json or "[]"),
+        "result": json.loads(r.result_json or "{}"),
+        "created_at": r.created_at.isoformat() if r.created_at else None,
+        "applied_at": r.applied_at,
+    } for r in rows]}
+
+
+class SetupApplyIn(schemas.BaseModel):
+    item_indexes: list[int] = []
+    confirm: bool = False
+
+
+@router.post("/setup-proposals/{pid}/apply")
+def apply_setup_proposal(
+    pid: int,
+    payload: SetupApplyIn,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(require_editor),
+):
+    """선택한 변경만 네이버 실계정에 적용한다.
+    ★confirm=True 가 없으면 절대 집행하지 않는다. 항목별로 성공/실패를 기록한다."""
+    row = db.get(models.SetupProposal, pid)
+    if not row:
+        raise HTTPException(404, "제안을 찾을 수 없습니다")
+    c = db.get(models.Client, row.client_id)
+    if not c or not can_edit(user, c):
+        raise HTTPException(404, "광고주를 찾을 수 없습니다")
+    if row.status == "applied":
+        raise HTTPException(400, "이미 적용된 제안입니다. 새로 제안을 생성하세요.")
+    if not payload.confirm:
+        raise HTTPException(400, "확인(confirm)이 필요합니다.")
+
+    items = json.loads(row.items_json or "[]")
+    picked = [i for i in (payload.item_indexes or []) if 0 <= i < len(items)]
+    if not picked:
+        raise HTTPException(400, "적용할 항목을 하나 이상 선택하세요.")
+
+    f = _searchad_creds(db, row.client_id)
+    from ..adapters import naver_searchad
+    ak, sk, cid = f["api_license"], f["secret_key"], f["customer_id"]
+
+    results, ok_n, fail_n = [], 0, 0
+    for i in picked:
+        it = items[i]
+        t = it.get("type")
+        entry = {"index": i, "type": t, "label": it.get("label") or ""}
+        try:
+            if t == "bid":
+                safe, _, _ = naver_searchad.clamp_bid(it.get("current_value") or 0, it.get("value") or 0)
+                naver_searchad.set_keyword_bid(ak, sk, cid, it["target_id"], safe)
+                entry.update({"ok": True, "applied": f"입찰가 {safe}원"})
+            elif t == "kw_off":
+                naver_searchad.set_keyword_enabled(ak, sk, cid, it["target_id"], False)
+                entry.update({"ok": True, "applied": "키워드 중지"})
+            elif t == "budget":
+                safe, _, _ = naver_searchad.clamp_budget(it.get("current_value") or 0, it.get("value") or 0)
+                naver_searchad.set_adgroup_budget(ak, sk, cid, it["target_id"], safe)
+                entry.update({"ok": True, "applied": f"일 예산 {safe}원"})
+            elif t == "kw_add":
+                safe, _, _ = naver_searchad.clamp_bid(0, it.get("value") or naver_searchad.MIN_BID)
+                naver_searchad.add_keywords(ak, sk, cid, it["adgroup_id"],
+                                            [{"keyword": it.get("keyword"), "bid": safe}])
+                entry.update({"ok": True, "applied": f"키워드 추가(중지 상태) {safe}원"})
+            else:
+                entry.update({"ok": False, "error": "알 수 없는 변경 유형"})
+            if entry.get("ok"):
+                ok_n += 1
+            else:
+                fail_n += 1
+        except Exception as e:  # noqa: BLE001
+            fail_n += 1
+            entry.update({"ok": False, "error": str(e)[:200]})
+        results.append(entry)
+
+    result = {"ok": ok_n, "failed": fail_n, "details": results}
+    row.result_json = json.dumps(result, ensure_ascii=False)
+    if ok_n:
+        row.status = "applied"
+        row.applied_by = user.id
+        row.applied_at = _now_kst_iso()
+    done = " · ".join(f"{r['type']}:{'성공' if r.get('ok') else '실패'}" for r in results)
+    log_activity(db, row.client_id, user, "setup_applied",
+                 f"AI 세팅 적용 — 성공 {ok_n}건 · 실패 {fail_n}건 ({done})")
+    db.commit()
+    return result
+
+
 # ── 담당자 메모(특이사항) ──────────────────────────────────────────────
 # 별도 테이블을 만들지 않고 ActivityLog(type="note")에 쌓는다.
 # 작성자·시각이 기존 필드로 해결되고, 활동 이력·내역서에 자동으로 함께 노출된다.

@@ -270,3 +270,196 @@ def fetch_performance(api_key: str, secret_key: str, customer_id: str, days: int
     out["totals"] = tot
     out.update(_derive(tot))
     return out
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 키워드 단위 조회 + 세팅 변경(쓰기)
+#   서명은 method 를 포함하므로(_signature) GET 과 동일한 방식으로 PUT 도 인증된다.
+#   ★서명 uri 에는 쿼리스트링을 넣지 않는다 — path 만 서명하고 쿼리는 params 로 보낸다.
+# ══════════════════════════════════════════════════════════════════════════
+
+# 안전 한계 — 어댑터 자체에서 막는다(호출부 실수로도 넘지 못하게).
+MAX_CHANGE_PCT = 50      # 입찰가·예산 1회 변경폭 상한(%)
+MIN_BID = 70             # 네이버 최소 입찰가(원)
+MAX_BID_LIMIT = 100000   # 1회 요청으로 올릴 수 있는 절대 상한(원)
+MIN_DAILY_BUDGET = 100   # 일 예산 하한(원)
+
+
+def clamp_bid(current: int, proposed: int) -> tuple:
+    """입찰가 변경을 안전 범위로 자른다 → (적용값, 잘렸는지, 사유)."""
+    cur = max(int(current or 0), 0)
+    want = int(proposed or 0)
+    if cur > 0:
+        lo = max(MIN_BID, int(cur * (100 - MAX_CHANGE_PCT) / 100))
+        hi = min(MAX_BID_LIMIT, int(cur * (100 + MAX_CHANGE_PCT) / 100))
+    else:
+        lo, hi = MIN_BID, MAX_BID_LIMIT
+    safe = max(lo, min(hi, want))
+    safe = max(MIN_BID, safe)
+    if safe != want:
+        return safe, True, f"안전범위(±{MAX_CHANGE_PCT}%·최소 {MIN_BID}원)로 조정: {want}원 → {safe}원"
+    return safe, False, ""
+
+
+def clamp_budget(current: int, proposed: int) -> tuple:
+    """일 예산 변경을 안전 범위로 자른다 → (적용값, 잘렸는지, 사유)."""
+    cur = max(int(current or 0), 0)
+    want = int(proposed or 0)
+    if cur > 0:
+        lo = max(MIN_DAILY_BUDGET, int(cur * (100 - MAX_CHANGE_PCT) / 100))
+        hi = int(cur * (100 + MAX_CHANGE_PCT) / 100)
+        safe = max(lo, min(hi, want))
+    else:
+        safe = max(MIN_DAILY_BUDGET, want)
+    safe = (safe // 10) * 10  # 네이버는 10원 단위
+    if safe != want:
+        return safe, True, f"안전범위(±{MAX_CHANGE_PCT}%·10원 단위)로 조정: {want}원 → {safe}원"
+    return safe, False, ""
+
+
+def _get(api_key: str, secret_key: str, customer_id: str, uri: str, params: dict = None) -> list:
+    r = requests.get(BASE + uri, headers=_headers(api_key, secret_key, customer_id, "GET", uri),
+                     params=params or {}, timeout=TIMEOUT)
+    if r.status_code != 200:
+        raise RuntimeError(f"{uri} 조회 실패 ({r.status_code}): {r.text[:300]}")
+    return r.json() if r.text else []
+
+
+def _put(api_key: str, secret_key: str, customer_id: str, uri: str, body: dict,
+         fields: str = None) -> dict:
+    """부분 수정 — 네이버는 ?fields=<바꿀 필드> 로 대상 필드를 지정한다."""
+    h = _headers(api_key, secret_key, customer_id, "PUT", uri)  # 서명은 path 만
+    h["Content-Type"] = "application/json"
+    r = requests.put(BASE + uri, headers=h, params=({"fields": fields} if fields else {}),
+                     data=jsonlib.dumps(body), timeout=TIMEOUT)
+    if r.status_code not in (200, 201):
+        raise RuntimeError(f"{uri} 변경 실패 ({r.status_code}): {r.text[:300]}")
+    return r.json() if r.text else {}
+
+
+def get_adgroups(api_key: str, secret_key: str, customer_id: str, campaign_id: str) -> list:
+    return _get(api_key, secret_key, customer_id, "/ncc/adgroups",
+                {"nccCampaignId": campaign_id}) or []
+
+
+def get_keywords(api_key: str, secret_key: str, customer_id: str, adgroup_id: str) -> list:
+    return _get(api_key, secret_key, customer_id, "/ncc/keywords",
+                {"nccAdgroupId": adgroup_id}) or []
+
+
+def set_keyword_bid(api_key: str, secret_key: str, customer_id: str,
+                    keyword_id: str, bid: int) -> dict:
+    """키워드 입찰가 변경. bid 는 호출 전에 clamp_bid 로 잘라서 넘길 것."""
+    uri = f"/ncc/keywords/{keyword_id}"
+    return _put(api_key, secret_key, customer_id, uri,
+                {"nccKeywordId": keyword_id, "bidAmt": int(bid), "useGroupBidAmt": False},
+                fields="bidAmt")
+
+
+def set_keyword_enabled(api_key: str, secret_key: str, customer_id: str,
+                        keyword_id: str, enabled: bool) -> dict:
+    """키워드 on/off — userLock=True 가 '중지'."""
+    uri = f"/ncc/keywords/{keyword_id}"
+    return _put(api_key, secret_key, customer_id, uri,
+                {"nccKeywordId": keyword_id, "userLock": (not enabled)},
+                fields="userLock")
+
+
+def set_adgroup_budget(api_key: str, secret_key: str, customer_id: str,
+                       adgroup_id: str, daily_budget: int) -> dict:
+    """광고그룹 일 예산 변경. clamp_budget 으로 자른 값을 넘길 것."""
+    uri = f"/ncc/adgroups/{adgroup_id}"
+    return _put(api_key, secret_key, customer_id, uri,
+                {"nccAdgroupId": adgroup_id, "dailyBudget": int(daily_budget),
+                 "useDailyBudget": True},
+                fields="budget")
+
+
+def add_keywords(api_key: str, secret_key: str, customer_id: str,
+                 adgroup_id: str, keywords: list) -> list:
+    """키워드 추가 — ★항상 '중지 상태'(userLock=True)로 만든다.
+    담당자가 네이버에서 직접 확인하고 켜도록 해서, 의도치 않은 즉시 집행을 막는다."""
+    uri = "/ncc/keywords"
+    body = [{
+        "nccAdgroupId": adgroup_id,
+        "keyword": (k.get("keyword") or "").strip(),
+        "bidAmt": int(k.get("bid") or MIN_BID),
+        "useGroupBidAmt": False,
+        "userLock": True,
+    } for k in keywords if (k.get("keyword") or "").strip()]
+    if not body:
+        return []
+    h = _headers(api_key, secret_key, customer_id, "POST", uri)
+    h["Content-Type"] = "application/json"
+    r = requests.post(BASE + uri, headers=h, params={"nccAdgroupId": adgroup_id},
+                      data=jsonlib.dumps(body), timeout=TIMEOUT)
+    if r.status_code not in (200, 201):
+        raise RuntimeError(f"키워드 추가 실패 ({r.status_code}): {r.text[:300]}")
+    return r.json() if r.text else []
+
+
+def collect_keyword_performance(api_key: str, secret_key: str, customer_id: str,
+                                days: int = 30, max_keywords: int = 120) -> dict:
+    """AI 진단·세팅 제안의 입력 — 캠페인→그룹→키워드를 훑어 키워드별 성과까지 모은다.
+    호출량이 커질 수 있어 max_keywords 로 자른다(소진 상위 기준)."""
+    campaigns = get_campaigns(api_key, secret_key, customer_id) or []
+    live = [c for c in campaigns if not c.get("userLock")]
+    kw_rows, groups = [], []
+    for c in live[:10]:
+        cid = c.get("nccCampaignId")
+        if not cid:
+            continue
+        for g in (get_adgroups(api_key, secret_key, customer_id, cid) or [])[:10]:
+            gid = g.get("nccAdgroupId")
+            if not gid:
+                continue
+            groups.append({
+                "adgroup_id": gid, "name": g.get("name"),
+                "campaign_id": cid, "campaign": c.get("name"),
+                "daily_budget": g.get("dailyBudget"),
+                "paused": bool(g.get("userLock")),
+            })
+            for k in (get_keywords(api_key, secret_key, customer_id, gid) or []):
+                kid = k.get("nccKeywordId")
+                if not kid:
+                    continue
+                kw_rows.append({
+                    "keyword_id": kid, "keyword": k.get("keyword"),
+                    "bid": k.get("bidAmt"), "use_group_bid": bool(k.get("useGroupBidAmt")),
+                    "paused": bool(k.get("userLock")),
+                    "adgroup_id": gid, "adgroup": g.get("name"),
+                    "campaign_id": cid, "campaign": c.get("name"),
+                })
+    # 키워드 성과(최대 max_keywords) — /stats 는 id 배열을 받는다
+    ids = [k["keyword_id"] for k in kw_rows][:max_keywords]
+    stats = {}
+    for i in range(0, len(ids), 50):  # 한 번에 너무 많이 보내지 않는다
+        chunk = ids[i:i + 50]
+        try:
+            res = get_stats(api_key, secret_key, customer_id, chunk, days=days)
+            for row in (res.get("data") or []):
+                stats[row.get("id")] = row
+        except Exception:
+            continue
+    for k in kw_rows:
+        s = stats.get(k["keyword_id"]) or {}
+        spend = s.get("salesAmt") or 0
+        rev = s.get("convAmt") or 0
+        clk = s.get("clkCnt") or 0
+        k.update({
+            "impressions": s.get("impCnt") or 0, "clicks": clk, "spend": spend,
+            "conversions": s.get("ccnt") or 0, "conv_value": rev,
+            "roas": round(rev / spend * 100, 1) if spend else None,
+            "cpc": round(spend / clk) if clk else None,
+        })
+    kw_rows.sort(key=lambda x: -(x.get("spend") or 0))
+    return {
+        "days": days,
+        "campaigns": [{"campaign_id": c.get("nccCampaignId"), "name": c.get("name"),
+                       "daily_budget": c.get("dailyBudget"),
+                       "paused": bool(c.get("userLock"))} for c in campaigns],
+        "adgroups": groups,
+        "keywords": kw_rows,
+        "keyword_count": len(kw_rows),
+        "measured": len([k for k in kw_rows if k.get("spend")]),
+    }

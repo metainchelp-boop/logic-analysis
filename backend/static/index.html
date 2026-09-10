@@ -1295,7 +1295,113 @@ async function openDashboard(id){
     if(mch2 && stored[mkey]){ parts.push(renderAds(mkey, stored[mkey].data, stored[mkey].collected_at)); }
   }
   if(!parts.length){ parts.push('<div class="cards"><div class="card full" style="padding:30px;text-align:center;color:var(--sub)">네이버 검색광고·커머스가 아직 연결 안 됐어요. <b>✏️ 편집</b>에서 키를 넣거나 <b>연동 요청 링크</b>를 보내고, 디스플레이(GFA)·쿠팡·토스는 <b>소진 관리 › 엑셀 등록</b>으로 채워주세요.</div></div>'); }
-  document.getElementById('dash-body').innerHTML=head+parts.join('');
+  // 네이버 검색광고가 연동돼 있으면 AI 진단·세팅 패널을 붙인다.
+  var hasSA=(c.channels||[]).some(function(x){return x.channel==='naver_searchad'&&x.status==='connected'});
+  var aiPanel = hasSA ? aiPanelHtml(id) : '';
+  document.getElementById('dash-body').innerHTML=head+parts.join('')+aiPanel;
+}
+
+// ═══ 🩺 AI 진단 · 🛠 AI 세팅 (네이버 검색광고) ═══
+function aiPanelHtml(id){
+  var CARD='background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 20px;margin-top:16px';
+  var BTN='background:var(--blue);color:#fff;border:none;border-radius:9px;padding:8px 15px;font-size:12.5px;font-weight:700;cursor:pointer;font-family:inherit';
+  return '<div style="'+CARD+'">'+
+      '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">'+
+        '<div style="font-size:15px;font-weight:800;color:var(--text)">🩺 AI 진단</div>'+
+        '<button id="ai-diag-btn" style="'+BTN+'" onclick="runDiagnose('+id+',this)">진단 실행</button>'+
+        '<span style="font-size:12px;color:var(--sub)">최근 30일 캠페인·키워드 성과를 읽고 원인을 진단합니다</span>'+
+      '</div>'+
+      '<div id="ai-diag-out" style="margin-top:12px"></div>'+
+    '</div>'+
+    '<div style="'+CARD+'">'+
+      '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">'+
+        '<div style="font-size:15px;font-weight:800;color:var(--text)">🛠 AI 세팅</div>'+
+        (isEditor()?'<button id="ai-setup-btn" style="'+BTN+'" onclick="runSetup('+id+',this)">제안 생성</button>':'')+
+        '<span style="font-size:12px;color:var(--sub)">제안 → 담당자가 체크 → 승인해야 실제 반영됩니다 · 변경폭 ±50% 자동 제한</span>'+
+      '</div>'+
+      (isEditor()?'':'<div style="margin-top:10px;font-size:12.5px;color:var(--amber);font-weight:700">👁 읽기 전용 권한입니다.</div>')+
+      '<div id="ai-setup-out" style="margin-top:12px"></div>'+
+    '</div>';
+}
+function diagHtml(d){
+  var SEV={high:['var(--redbg)','var(--red)','긴급'],mid:['var(--amberbg)','var(--amber)','주의'],low:['var(--greenbg)','var(--green)','양호']};
+  var sv=SEV[d.severity]||SEV.mid;
+  return '<div style="background:'+sv[0]+';border-radius:10px;padding:12px 15px;margin-bottom:10px">'+
+      '<span style="font-size:11px;font-weight:800;color:'+sv[1]+'">'+sv[2]+'</span>'+
+      '<div style="font-size:14.5px;font-weight:800;color:var(--text);margin-top:2px">'+esc(d.headline||'')+'</div></div>'+
+    (d.problem?'<p style="margin:0 0 8px;font-size:13px;line-height:1.7"><b style="color:var(--red)">문제</b> — '+esc(d.problem)+'</p>':'')+
+    (d.good?'<p style="margin:0 0 8px;font-size:13px;line-height:1.7"><b style="color:var(--green)">잘되는 것</b> — '+esc(d.good)+'</p>':'')+
+    (d.advice?'<p style="margin:0;font-size:13px;line-height:1.7"><b style="color:var(--blue)">권고</b> — '+esc(d.advice)+'</p>':'');
+}
+async function runDiagnose(id, btn){
+  var out=document.getElementById('ai-diag-out');
+  btn.disabled=true; var o=btn.textContent; btn.textContent='진단 중…';
+  out.innerHTML='<span style="color:var(--sub);font-size:12.5px">캠페인·키워드 성과를 불러오는 중… (10~30초)</span>';
+  try{
+    var d=await api('/clients/'+id+'/searchad/diagnose',{method:'POST'});
+    out.innerHTML=diagHtml(d.diagnosis||{})+
+      '<div style="font-size:11.5px;color:var(--sub);margin-top:10px">최근 '+(d.days||30)+'일 · 키워드 '+(d.keyword_count||0)+'개(성과 있는 것 '+(d.measured||0)+'개) 기준</div>';
+    btn.textContent='다시 진단';
+  }catch(e){ out.innerHTML='<span style="color:var(--red);font-size:12.5px">'+esc(e.message)+'</span>'; btn.textContent=o; }
+  btn.disabled=false;
+}
+var SETUP={id:null,items:[]};
+function setupHtml(d){
+  SETUP.id=d.id; SETUP.items=d.items||[];
+  if(!SETUP.items.length) return '<div style="color:var(--sub);font-size:12.5px">지금은 바꿀 것이 없다고 판단했습니다.</div>';
+  var TY={bid:['입찰','var(--amberbg)','var(--amber)'],kw_off:['중지','var(--redbg)','var(--red)'],
+          kw_add:['추가','var(--greenbg)','var(--green)'],budget:['예산','var(--bluebg)','var(--blue)']};
+  var rows=SETUP.items.map(function(it,i){
+    var t=TY[it.type]||['변경','var(--panel2)','var(--sub)'];
+    return '<label style="display:flex;gap:11px;align-items:flex-start;border:1px solid var(--line2);border-radius:11px;padding:12px 14px;margin-bottom:8px;cursor:pointer;background:var(--panel)">'+
+      '<input type="checkbox" class="su-ck" data-i="'+i+'" '+(it.checked?'checked':'')+' style="margin-top:3px;width:16px;height:16px;accent-color:var(--blue)">'+
+      '<div style="flex:1;min-width:0">'+
+        '<div style="font-size:13px;font-weight:800;color:var(--text)">'+esc(it.label||'')+
+          ' <span style="font-family:Consolas,monospace;font-size:11.5px;background:var(--panel2);border:1px solid var(--line2);border-radius:6px;padding:1px 7px;margin-left:4px">'+esc(it.current||'')+' → '+esc(it.proposed||'')+'</span></div>'+
+        '<div style="font-size:12px;color:var(--sub);margin-top:3px;line-height:1.6">'+esc(it.why||'')+'</div>'+
+        (it.clamped?'<div style="font-size:11.5px;color:var(--amber);margin-top:3px;font-weight:700">⚠️ '+esc(it.clamp_note||'')+'</div>':'')+
+      '</div>'+
+      '<span style="background:'+t[1]+';color:'+t[2]+';border-radius:999px;padding:2px 9px;font-size:10.5px;font-weight:800;white-space:nowrap">'+t[0]+'</span>'+
+    '</label>';
+  }).join('');
+  return (d.summary?'<div style="font-size:13px;color:var(--text);margin-bottom:10px"><b>제안 요약</b> — '+esc(d.summary)+'</div>':'')+
+    rows+
+    '<div style="display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin-top:12px">'+
+      '<button onclick="applySetup(this)" style="background:var(--green);color:#fff;border:none;border-radius:9px;padding:9px 17px;font-size:13px;font-weight:800;cursor:pointer;font-family:inherit">✅ 선택 항목 적용</button>'+
+      '<span style="font-size:11.5px;color:var(--sub)">적용하면 <b>네이버 실계정에 반영</b>되고 활동 이력에 남습니다. 추가되는 키워드는 <b>중지 상태</b>로 들어갑니다.</span>'+
+    '</div><div id="su-result" style="margin-top:11px"></div>';
+}
+async function runSetup(id, btn){
+  var out=document.getElementById('ai-setup-out');
+  btn.disabled=true; var o=btn.textContent; btn.textContent='생성 중…';
+  out.innerHTML='<span style="color:var(--sub);font-size:12.5px">성과를 분석해 변경안을 만드는 중… (20~40초)</span>';
+  try{
+    var d=await api('/clients/'+id+'/setup-proposals',{method:'POST'});
+    out.innerHTML=setupHtml(d);
+    if(d.diagnosis&&document.getElementById('ai-diag-out')&&!document.getElementById('ai-diag-out').innerHTML.trim()){
+      document.getElementById('ai-diag-out').innerHTML=diagHtml(d.diagnosis);
+    }
+    btn.textContent='다시 생성';
+  }catch(e){ out.innerHTML='<span style="color:var(--red);font-size:12.5px">'+esc(e.message)+'</span>'; btn.textContent=o; }
+  btn.disabled=false;
+}
+async function applySetup(btn){
+  var picked=Array.prototype.slice.call(document.querySelectorAll('.su-ck:checked')).map(function(c){return parseInt(c.dataset.i,10);});
+  if(!picked.length){ toast('적용할 항목을 선택하세요'); return; }
+  var lines=picked.map(function(i){var it=SETUP.items[i];return '· '+(it.label||'')+' : '+(it.current||'')+' → '+(it.proposed||'');}).join('\n');
+  if(!confirm('선택한 '+picked.length+'건을 네이버 실계정에 적용합니다.\n\n'+lines+'\n\n되돌리려면 네이버 광고관리에서 직접 수정해야 합니다. 진행할까요?')) return;
+  btn.disabled=true; var o=btn.textContent; btn.textContent='적용 중…';
+  try{
+    var r=await api('/setup-proposals/'+SETUP.id+'/apply',{method:'POST',body:JSON.stringify({item_indexes:picked,confirm:true})});
+    var det=(r.details||[]).map(function(d){
+      return '<div style="font-size:12px;margin:3px 0">'+(d.ok?'<span style="color:var(--green);font-weight:700">✅</span> ':'<span style="color:var(--red);font-weight:700">❌</span> ')+
+        esc(d.label||d.type)+' — '+esc(d.ok?(d.applied||'적용됨'):(d.error||'실패'))+'</div>';}).join('');
+    document.getElementById('su-result').innerHTML=
+      '<div style="background:'+(r.failed?'var(--amberbg)':'var(--greenbg)')+';border-radius:10px;padding:12px 15px">'+
+      '<b style="font-size:13px;color:'+(r.failed?'var(--amber)':'var(--green)')+'">적용 완료 — 성공 '+r.ok+'건'+(r.failed?(' · 실패 '+r.failed+'건'):'')+'</b>'+det+'</div>';
+    document.querySelectorAll('.su-ck:checked').forEach(function(c){c.disabled=true;});
+    btn.textContent='적용됨'; toast('네이버 실계정에 반영됐습니다');
+  }catch(e){ document.getElementById('su-result').innerHTML='<span style="color:var(--red);font-size:12.5px">'+esc(e.message)+'</span>'; btn.textContent=o; btn.disabled=false; }
 }
 async function refreshSearchad(id, btn, qs){
   var orig=btn.innerHTML; btn.innerHTML='⏳ 조회 중…'; btn.disabled=true;

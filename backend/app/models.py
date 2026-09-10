@@ -120,6 +120,27 @@ class CampaignProposal(Base):
     applied_at = Column(String)             # ISO(KST) 실제 적용 시각
 
 
+class SetupProposal(Base):
+    """네이버 검색광고 AI 세팅 제안 — 제안(draft) → 담당자 선택·승인 → 실계정 적용(applied).
+
+    items_json 의 각 항목이 하나의 변경(입찰가·키워드 중지·키워드 추가·예산)이며,
+    담당자가 체크한 것만 적용된다. 적용 결과는 항목별 성공/실패로 result_json 에 남는다.
+    ★적용은 항상 confirm=True 를 명시해야 하고, 변경폭은 어댑터가 ±50% 로 잘라낸다.
+    """
+    __tablename__ = "setup_proposals"
+    id = Column(Integer, primary_key=True)
+    client_id = Column(Integer, ForeignKey("clients.id"), index=True)
+    summary = Column(String)                        # 제안 전체 요약 한 줄
+    diagnosis_json = Column(Text, default="{}")     # 같이 생성된 AI 진단
+    items_json = Column(Text, default="[]")         # 변경 제안 목록
+    status = Column(String, default="draft")        # draft | applied | discarded
+    result_json = Column(Text, default="{}")        # 항목별 적용 결과
+    created_by = Column(Integer, ForeignKey("users.id"))
+    created_at = Column(DateTime, server_default=func.now())
+    applied_by = Column(Integer, ForeignKey("users.id"))
+    applied_at = Column(String)                     # ISO(KST)
+
+
 class ClientSetting(Base):
     """광고주별 설정 키-값 저장 — 오토파일럿 규칙·리포트 예약 등 확장용.
 

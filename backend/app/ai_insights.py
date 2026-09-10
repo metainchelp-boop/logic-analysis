@@ -71,3 +71,69 @@ def analyze_text(texts: list, brand: str = "") -> dict:
     joined = "\n".join(f"- {t}" for t in texts if t)[:6000]
     user = f"브랜드: {brand or '미상'}\n아래는 수집된 리뷰/댓글이다.\n{joined}"
     return _parse_json(_call(TEXT_SYSTEM, user, max_tokens=1200))
+
+
+# ── 네이버 검색광고 AI 진단 ───────────────────────────────────────────────
+DIAGNOSE_SYSTEM = """당신은 네이버 검색광고를 운영하는 광고대행사의 베테랑 마케터다.
+주어진 캠페인·광고그룹·키워드 성과 데이터를 읽고 원인을 진단한다.
+
+원칙:
+- 데이터에 있는 숫자로만 말한다. 없는 건 단정하지 않는다.
+- 광고주가 아니라 **담당 마케터**에게 말한다. 실무 용어는 써도 되지만 결론이 먼저다.
+- 소진이 큰데 성과가 없는 구간을 최우선으로 짚는다(돈이 새는 곳).
+- 담당자 메모가 있으면 반드시 반영한다(예: "리뉴얼 전이라 보수 운영" → 확장 제안 자제).
+
+아래 JSON 으로만 응답한다(코드펜스 금지):
+{
+ "headline": "한 줄 결론(40자 이내)",
+ "problem": "핵심 문제와 원인 — 캠페인·키워드 이름과 숫자를 넣어 2~3문장",
+ "good": "잘 되고 있는 것 — 이름과 숫자를 넣어 1~2문장",
+ "advice": "권고 방향 1~2문장(구체 실행안은 별도로 생성되니 방향만)",
+ "severity": "high | mid | low"
+}"""
+
+
+def diagnose_searchad(payload: dict) -> dict:
+    user = ("[광고주·성과 데이터(JSON)]\n" + json.dumps(payload, ensure_ascii=False))
+    return _parse_json(_call(DIAGNOSE_SYSTEM, user, max_tokens=1400))
+
+
+# ── 네이버 검색광고 AI 세팅 제안 ──────────────────────────────────────────
+SETUP_SYSTEM = """당신은 네이버 검색광고 운영 전문가다. 성과 데이터를 보고
+**담당자가 검토·승인할 변경안**을 만든다. 당신이 직접 집행하는 것이 아니다.
+
+만들 수 있는 변경은 4가지뿐이다:
+- "bid"      : 키워드 입찰가 변경    (target_id = keyword_id 필수)
+- "kw_off"   : 키워드 중지          (target_id = keyword_id 필수)
+- "kw_add"   : 키워드 추가          (adgroup_id 필수, target_id 없음)
+- "budget"   : 광고그룹 일예산 변경  (target_id = adgroup_id 필수)
+
+규칙:
+- **입찰가·예산 변경은 현재값 대비 ±50% 를 넘지 않게** 제안한다(넘으면 시스템이 자동으로 잘라낸다).
+- 소진이 0 이거나 데이터가 없는 대상은 건드리지 않는다.
+- 근거(why)에는 **숫자를 반드시 넣는다**(소진액·ROAS·클릭·전환).
+- 담당자 메모가 보수적 운영을 요구하면 확장(입찰 인상·키워드 추가)은 checked=false 로 둔다.
+- 제안은 최대 8개. 확실한 것부터.
+- checked: 담당자가 바로 적용해도 안전하다고 판단되면 true, 검토가 필요하면 false.
+
+아래 JSON 으로만 응답한다(코드펜스 금지):
+{
+ "summary": "제안 전체 요약 한 줄",
+ "items": [
+   {"type":"bid|kw_off|kw_add|budget",
+    "target_id":"대상 ID(kw_add 는 빈 문자열)",
+    "adgroup_id":"kw_add 일 때 필수, 그 외 빈 문자열",
+    "label":"사람이 읽는 대상 이름(예: 키워드 '굴비선물세트')",
+    "current":"현재 상태(예: 1200원 / 운영중)",
+    "proposed":"제안 상태(예: 700원 / 중지)",
+    "proposed_value": 700,
+    "keyword":"kw_add 일 때 추가할 검색어, 그 외 빈 문자열",
+    "why":"근거 — 숫자 포함 1~2문장",
+    "checked": true}
+ ]
+}"""
+
+
+def propose_searchad_setup(payload: dict) -> dict:
+    user = ("[광고주·성과 데이터(JSON)]\n" + json.dumps(payload, ensure_ascii=False))
+    return _parse_json(_call(SETUP_SYSTEM, user, max_tokens=2600))
