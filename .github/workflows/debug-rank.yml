@@ -137,6 +137,7 @@ jobs:
             PY
 
       - name: Rank batch read-only diagnosis
+        if: ${{ github.event.inputs.owner_sync != 'on' }}
         uses: appleboy/ssh-action@v1.0.3
         env:
           RL_SRC_GZ: ${{ env.RL_SRC_GZ }}
