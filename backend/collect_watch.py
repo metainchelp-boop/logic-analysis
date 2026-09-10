@@ -144,8 +144,13 @@ def decide_notice(conn, state: str) -> Optional[str]:
             return "quiet"
         # 이미 조용한 상태였다 — 마지막으로 **알림을 보낸** 시각 기준으로 쿨다운을 잰다.
         try:
+            # ⚠️ **실제로 나간 것만** 쿨다운을 건다.
+            #    「수신 번호가 없어 못 보냄(nosend)」을 보낸 것으로 세면, 번호를 나중에 넣어도
+            #    쿨다운이 남아 그날은 영영 안 온다(2026-09-10 실측으로 드러났다).
+            #    안 나간 것은 도배가 될 수 없다 — 문자가 없으니까.
             r = conn.execute(
-                "SELECT MAX(checked_at) m FROM collect_watch WHERE notified=1").fetchone()
+                "SELECT MAX(checked_at) m FROM collect_watch "
+                " WHERE notified=1 AND COALESCE(note,'') NOT LIKE '%nosend%'").fetchone()
             last_notified = r["m"] if r else None
         except Exception:
             last_notified = None
@@ -216,9 +221,11 @@ def run_check(send=None, conn=None) -> dict:
             except Exception:
                 sent = False
         out["sent"] = sent
-        # ⚠️ 알림을 **보내려고 했으면** notified 로 남긴다(발송 실패까지 매시간 재시도하면
-        #    문자가 도배된다). 보내지 못한 사정은 note 에 적어 나중에 읽을 수 있게 한다.
-        record(conn, ev["state"], ev.get("gap_hours"), bool(notice),
+        # ⚠️ **실제로 나간 것만** notified 로 남긴다.
+        #    처음엔 「보내려고 했으면」으로 적었는데 그게 틀렸다 — 수신 번호가 없어 못 보낸 판정이
+        #    쿨다운을 걸어, 번호를 넣은 뒤에도 그날은 문자가 안 오는 상태가 됐다(2026-09-10).
+        #    못 나간 것은 도배가 될 수 없다(문자가 없으니까). 사정은 note 에 남긴다.
+        record(conn, ev["state"], ev.get("gap_hours"), bool(notice) and sent,
                note=("" if not notice else f"{notice}/{'sent' if sent else 'nosend'}"),
                commit=own)   # 남의 연결이면 커밋은 그쪽 몫이다
         return out

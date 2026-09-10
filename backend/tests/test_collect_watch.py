@@ -134,7 +134,16 @@ ok("⑦ 발송이 터져도 예외가 밖으로 안 나온다", r7["state"] == c
 ok("⑦ 못 보낸 것으로 기록한다", r7["sent"] is False)
 row = sqlite3.connect(db3).execute(
     "SELECT notified, note FROM collect_watch ORDER BY id DESC LIMIT 1").fetchone()
-ok("⑦ 그래도 시도한 것으로 남겨 도배를 막는다", row[0] == 1 and "nosend" in row[1])
+ok("⑦ 못 나간 것은 보낸 것으로 세지 않는다", row[0] == 0 and "nosend" in row[1])
+
+# ⑦-2 못 보낸 판정이 **쿨다운을 걸지 않는다** — 번호를 나중에 넣어도 그날 문자가 오게.
+#     ⚠️ 이걸 안 지키면 「경보를 켜 둔 날 저녁에는 확인할 수 없다」가 된다(2026-09-10 실측).
+sent7 = []
+r7b = cw4.run_check(send=lambda t: sent7.append(t) or True)
+ok("⑦-2 못 보낸 뒤 다음 점검에서는 실제로 보낸다", len(sent7) == 1)
+row = sqlite3.connect(db3).execute(
+    "SELECT notified FROM collect_watch ORDER BY id DESC LIMIT 1").fetchone()
+ok("⑦-2 그때는 보낸 것으로 남는다", row[0] == 1)
 
 # ⑧ send 를 안 주면(설정 없음) 조용히 기록만 한다
 db4 = _fresh_db(last_upload_hours_ago=9)
