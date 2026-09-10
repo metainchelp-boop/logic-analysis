@@ -3521,6 +3521,12 @@ jobs:
             echo "== 알림 설정 저장이 500 나는 원인 =="
             echo "-- 서버가 남긴 오류 줄 --"
             docker logs logic-analysis 2>&1 | grep -i "설정 변경 실패" | tail -5 || echo "  (그 줄 없음)"
+            echo "-- 화면이 보낸 요청이 어떤 코드로 끝났나 (nginx · IP 미출력) --"
+            LOG=$(ls /var/log/nginx/*access*.log 2>/dev/null | head -2 | tr '\n' ' ')
+            sudo -n true 2>/dev/null && S="sudo -n" || S=""
+            $S sh -c "cat $LOG" 2>/dev/null | grep "notify/settings" | tail -12 | \
+              sed -E 's/^[^ ]+/(보낸곳가림)/' || echo "  (그 요청이 로그에 없다 = 서버까지 오지 않았다)"
+            echo "  ↑ 상태코드 판정: 422=번호 형식 / 403=권한 / 500=서버 / 없음=요청이 안 왔다"
             echo "-- 표 구조와 행 --"
             docker exec -i logic-analysis python3 - <<'PYEOF'
             import sqlite3, os, traceback, sys
