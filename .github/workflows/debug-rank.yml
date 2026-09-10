@@ -126,6 +126,60 @@ jobs:
             print(f"   그중 배치 시야 밖 {len(outside)}곳 → 없는 계정={d2}  비활성 계정={o2}  소유자 없음={n2}")
             print(f"   ⭐ 「비활성 계정이 쥐고 있는데 배치가 못 보는 곳」 = {o2}곳 — 사람 손 없이는 안 풀린다")
 
+            print("[6] 이름·슬러그로 이을 수 있는가 — 04:00 동기화가 쓰는 그 매칭 재현")
+            try:
+                import re, requests
+                base = os.getenv("ERP_BASE_URL", "http://api.metainc.co.kr")
+                key = os.getenv("ERP_AD_SYNC_API_KEY", "")
+                norm = lambda s: re.sub(r"\\s+", "", str(s or "")).lower()
+                slug = lambda u: (re.search(r"smartstore\\.naver\\.com/([^/?#]+)", str(u or "")) or [None, ""])[1].lower() if "smartstore" in str(u or "") else ""
+                by_name, by_slug, dup_names = {}, {}, set()
+                got = 0
+                for st in ["계약 만료", "환불중", "홀딩중", "진행중", "전략 관리", "사후 관리"]:
+                    r = requests.get(f"{base}/api/ad-sync/contracts",
+                                     params={"stage": st, "has_contract": "true"},
+                                     headers={"X-Api-Key": key}, timeout=20)
+                    if r.status_code != 200:
+                        print(f"   전산 조회 {r.status_code} (stage={st}) — 건너뜀"); continue
+                    rows = (r.json() or {}).get("result") or []
+                    got += len(rows)
+                    for c in rows:
+                        n = norm(c.get("store_name"))
+                        s = slug(c.get("store_link"))
+                        mgr = (c.get("sales_manager") or "").strip()
+                        if n:
+                            if n in by_name and by_name[n][0] != mgr: dup_names.add(n)
+                            by_name.setdefault(n, (mgr, s))
+                        if s: by_slug.setdefault(s, (mgr, n))
+                print(f"   전산 계약 업체 {got}건 · 이름키 {len(by_name)} · 슬러그키 {len(by_slug)} · 담당자 다른 동명 {len(dup_names)}")
+                rows = q("SELECT id, name, naver_store_url FROM clients WHERE status='active' AND COALESCE(role,'advertiser')='advertiser'")
+                out_ids = {int(r["id"]) for r in outside}
+                by_slug_hit = by_name_hit = ambiguous = no_mgr = miss = 0
+                hit_ids = []
+                for r in rows:
+                    if int(r["id"]) not in out_ids: continue
+                    s = slug(r["naver_store_url"]); n = norm(r["name"])
+                    if s and s in by_slug:
+                        mgr = by_slug[s][0]
+                        if mgr: by_slug_hit += 1; hit_ids.append(int(r["id"]))
+                        else: no_mgr += 1
+                    elif n in dup_names:
+                        ambiguous += 1
+                    elif n in by_name:
+                        mgr = by_name[n][0]
+                        if mgr: by_name_hit += 1; hit_ids.append(int(r["id"]))
+                        else: no_mgr += 1
+                    else:
+                        miss += 1
+                print(f"   시야 밖 {len(out_ids)}곳 중 → 슬러그로 확실히 이어짐={by_slug_hit}  이름으로 유일하게 이어짐={by_name_hit}")
+                print(f"                        담당자 다른 동명이라 보류={ambiguous}  전산에 담당자 없음={no_mgr}  전산 계약에 없음={miss}")
+                print(f"   ⭐ 안전하게 이을 수 있는 곳 = {by_slug_hit + by_name_hit}곳 / {len(out_ids)}곳")
+                ids2 = ",".join(str(i) for i in hit_ids) or "-1"
+                rr = q(f"SELECT COUNT(*) n FROM reports WHERE client_id IN ({ids2})")
+                if rr: print(f"   그 곳들에 묶인 보고서 = {rr[0]['n']}건")
+            except Exception as e:
+                print("   매칭 재현 실패:", e)
+
             print("[5] 보고서가 실제로 묶여 있는 규모")
             rows = q("SELECT COUNT(*) n FROM reports r JOIN clients c ON c.id=r.client_id "
                      "WHERE c.status='active' AND c.created_by IS NOT NULL")
