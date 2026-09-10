@@ -34,6 +34,13 @@ async function render() {
   // 「왜 느리지?」를 고장으로 오해하지 않는다(2026-08-28).
   const slowUntil = Number(state.slowUntil || 0);
   const slowNow = slowUntil > Date.now();
+  // 버튼 하나로 켜고 끈다 — 지금 어느 쪽인지 글자로 보이게 한다.
+  const slowBtn = $('slow');
+  if (slowBtn) {
+    slowBtn.textContent = slowNow ? '🐢 안전 속도 끄기' : '🐢 안전 속도';
+    slowBtn.style.background = slowNow ? '#fef3c7' : '';
+    slowBtn.style.color = slowNow ? '#b45309' : '';
+  }
   const running = blockedNow
     ? '<span class="b bad">자동입력 방지(캡차)로 쉬는 중</span>'
     : (state.running ? '<span class="b ok">수집 중</span>' : '대기');
@@ -61,7 +68,7 @@ async function render() {
       : '') +
     (slowNow && !blockedNow
       ? '<span class="b" style="color:#b45309">▸ 안전 속도로 돌리는 중</span>' +
-        `<span style="font-size:11px"> — ${new Date(slowUntil).toLocaleString('ko-KR')}까지 (캡차를 만나서 절반 속도)</span><br>`
+        `<span style="font-size:11px"> — ${new Date(slowUntil).toLocaleString('ko-KR')}까지 절반 속도</span><br>`
       : '') +
     dayBlock +
     `<div class="sec">이번 시간대 · 대상 <span class="b">${state.target ?? '-'}</span>개 · ` +
@@ -116,6 +123,12 @@ $('peek').onclick = () => {
 };
 
 $('run').onclick = () => chrome.runtime.sendMessage({ cmd: 'run' }, () => setTimeout(render, 600));
+// 🐢 안전 속도 — 누르면 켜지고, 켜진 상태에서 누르면 꺼진다. 24시간 뒤 스스로 풀린다.
+$('slow').onclick = async () => {
+  const { state = {} } = await chrome.storage.local.get('state');
+  const on = Number(state.slowUntil || 0) > Date.now();
+  chrome.runtime.sendMessage({ cmd: on ? 'slowOff' : 'slowOn' }, () => setTimeout(render, 400));
+};
 $('refresh').onclick = render;
 render();
 setInterval(render, 3000);

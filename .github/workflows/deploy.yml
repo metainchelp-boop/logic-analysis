@@ -107,6 +107,16 @@ jobs:
       - name: Collector popup layout regression
         run: node collector-extension/tests/popup_layout.test.js
 
+      # 캡차 6시간 쉼이 스스로 취소되던 것(2026-09-10) — 회차 앞부분이 성공했다는 이유로
+      # 방금 건 쉼을 지워, 차단된 채로 다음 시간대에 또 두드렸다. 차단이 깊어지는 경로다.
+      - name: Collector captcha rest regression
+        run: node collector-extension/tests/captcha_rest.test.js
+
+      # 안전 속도(2026-09-10) — 사람이 미리 절반 속도로 켤 수 있는 스위치.
+      # 창(24시간)이 줄거나 스위치가 사라지면 재개할 때 쓸 안전장치가 없어진다.
+      - name: Collector safe speed regression
+        run: node collector-extension/tests/safe_speed.test.js
+
       - name: Build frontend bundle
         run: |
           npm install --no-save @babel/core @babel/preset-react

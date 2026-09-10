@@ -657,6 +657,9 @@ async function runCollection(manual = false) {
     });
 
     let done = 0, failed = 0, streak = 0;
+    // ⚠️ 이번 회차에서 캡차를 만났는가 — 아래 clearBlocked 가 방금 건 6시간 쉼을
+    //    스스로 취소하지 않게 하는 표식이다(2026-09-10 수정).
+    let blockedThisRound = false;
     for (const kw of keywords) {
       // 다음 시간대와 겹치지 않게 — 남은 것은 서버가 '밀린 것'으로 다시 내려준다
       if (Date.now() - hourStart > hourBudget) {
@@ -677,6 +680,7 @@ async function runCollection(manual = false) {
         // 캡차로 확인되면 더 두드리지 않고 즉시 접는다(재시도가 차단을 깊게 만든다)
         if (String(e.message || '').startsWith('BLOCKED:')) {
           await markBlocked(e.message.slice(8) || '수집 중 감지');
+          blockedThisRound = true;
           break;
         }
         failed++; streak++;
@@ -694,7 +698,12 @@ async function runCollection(manual = false) {
       }
       await sleep(jitter() + await gapFor(CFG.keywordGapMs));
     }
-    if (done > 0) await clearBlocked();   // 값을 실제로 받았다 = 차단 풀림
+    // ⭐ 값을 실제로 받았으면 차단이 풀린 것으로 보고 쉼을 지운다.
+    // ⚠️ 단 **이번 회차에서 캡차를 만났으면 절대 지우지 않는다** — 앞부분 몇 개가
+    //    성공했다는 이유로 방금 건 6시간 쉼을 스스로 취소해 버리면, 다음 시간대에
+    //    차단된 채로 다시 두드려 차단이 깊어진다(2026-09-10 수정. 종전 코드는
+    //    `if (done > 0)` 하나뿐이라 캡차를 만난 회차에서도 쉼이 지워졌다).
+    if (done > 0 && !blockedThisRound) await clearBlocked();
     await log(`✅ ${new Date().getHours()}시 회차 종료 — 성공 ${done} · 실패 ${failed}`);
     // 못 한 키워드는 서버가 다음 시간대에 '밀린 것'으로 다시 내려주므로 여기서 표시만 남긴다
     if (done > 0) {
@@ -754,18 +763,19 @@ async function runOnDemand() {
 
     await log(`🔎 온디맨드 수집 ${kws.length}건: ${kws.join(', ')}`
       + (skipped ? ` (시간당 상한 — ${skipped}건은 다음 시간대로)` : ''));
-    let ok = 0, fail = 0, streak = 0, done = 0;
+    let ok = 0, fail = 0, streak = 0, done = 0, blockedThisRound = false;
     for (const kw of kws) {
       try {
         const payload = await collectKeyword(kw);
         if (!payload.products.length) throw new Error('상품 0건');
         await uploadKeyword(token, kw, payload);
         ok++; streak = 0;
-        if (ok === 1) await clearBlocked();   // 값을 실제로 받았다 = 차단 풀림
+        if (ok === 1 && !blockedThisRound) await clearBlocked();   // 값을 실제로 받았다 = 차단 풀림
         await log(`  ✅ [${kw}] 온디맨드 완료 (오가닉 ${payload.products.length}개 · 광고 ${payload.adSkipped}개 제외)`);
       } catch (e) {
         if (String(e.message || '').startsWith('BLOCKED:')) {
           await markBlocked(e.message.slice(8) || '온디맨드 중 감지');
+          blockedThisRound = true;
           break;
         }
         fail++; streak++;
@@ -863,5 +873,25 @@ chrome.alarms.onAlarm.addListener(async (a) => {
 
 chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
   if (msg?.cmd === 'run') { runCollection(true); sendResponse({ ok: true }); }
+  // 🐢 사람이 켜는 안전 속도 — 캡차를 만나 자동으로 켜지는 것과 **같은 장치**를 쓴다.
+  //    차단이 의심되는 때(회선이 막 시끄러웠던 직후 등)에 사람이 미리 절반 속도로
+  //    돌릴 수 있게 한 것. 24시간 뒤 스스로 풀린다(끄는 것을 잊어도 원복된다).
+  if (msg?.cmd === 'slowOn') {
+    (async () => {
+      const until = Date.now() + SLOW_WINDOW_MS;
+      await chrome.storage.local.set({ [SLOW_KEY]: until });
+      await setState({ slowUntil: until });
+      await log('🐢 안전 속도 켜짐 — 24시간 동안 절반 속도로 돕니다(사람이 켠 것).');
+    })();
+    sendResponse({ ok: true });
+  }
+  if (msg?.cmd === 'slowOff') {
+    (async () => {
+      await chrome.storage.local.remove(SLOW_KEY);
+      await setState({ slowUntil: 0 });
+      await log('🐇 안전 속도 꺼짐 — 평소 속도로 돌아갑니다.');
+    })();
+    sendResponse({ ok: true });
+  }
   return true;
 });
