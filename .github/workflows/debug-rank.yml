@@ -3521,6 +3521,9 @@ jobs:
             echo "== 알림 설정 저장이 500 나는 원인 =="
             echo "-- 서버가 남긴 오류 줄 --"
             docker logs logic-analysis 2>&1 | grep -i "설정 변경 실패" | tail -5 || echo "  (그 줄 없음)"
+            echo "-- 서버가 남긴 traceback (알림 설정 근처) --"
+            docker logs logic-analysis 2>&1 | grep -nE "Traceback|Exception|Error|설정 변경 실패|notify" \
+              | tail -25 || echo "  (없음)"
             echo "-- 화면이 보낸 요청이 어떤 코드로 끝났나 (nginx · IP 미출력) --"
             LOG=$(ls /var/log/nginx/*access*.log 2>/dev/null | head -2 | tr '\n' ' ')
             sudo -n true 2>/dev/null && S="sudo -n" || S=""
@@ -3541,15 +3544,12 @@ jobs:
             except Exception as e:
                 print("  표 조회 실패:", type(e).__name__, e)
             conn.close()
-            # ⚠️ 실제 저장 함수를 그대로 부른다 — 다만 **빈 문자열**로 부른다.
-            #    진짜 번호를 넣으면 20:10 점검이 그 번호로 문자를 보낼 수 있다.
-            try:
-                from database import update_notification_settings
-                r = update_notification_settings(receiver_phone="")
-                print("  저장 함수 직접 호출: 성공 ·", {k: r.get(k) for k in ("notify_enabled", "report_time")})
-            except Exception:
-                print("  저장 함수 직접 호출: 실패")
-                traceback.print_exc()
+            # 🔴 여기서 저장 함수를 실제로 불렀던 것을 **제거했다**(2026-09-10).
+            #    `update_notification_settings(receiver_phone="")` 로 불러서
+            #    **대표가 방금 저장한 수신 번호를 진단이 지워 버렸다.**
+            #    스텝 이름에 「읽기 전용」이라고 적어 두고 쓰기를 넣은 것이 잘못이다.
+            #    ⇒ 진단은 읽기만 한다. 저장 경로 확인은 서버가 남긴 traceback 으로 한다.
+            print("  (저장 함수 직접 호출은 제거했다 — 진단이 실제 설정을 덮어썼기 때문)")
             PYEOF
 
       - name: 수집 요청이 어디서 오는가 (읽기 전용 · IP 원문 미출력)
