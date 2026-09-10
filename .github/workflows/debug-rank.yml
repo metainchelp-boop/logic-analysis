@@ -30,6 +30,10 @@ on:
         description: '상품 주소 모양 실측 — off(기본) / on. 어느 호스트(스마트스토어·브랜드스토어·카탈로그)를 쓰는지, 같은 슬러그가 두 호스트에 걸쳐 있는지(읽기 전용·업체명 미출력).'
         required: false
         default: 'off'
+      owner_sync:
+        description: '보고서 담당자 정렬 진단 — off(기본) / on. 신고 #262. 04:20 배치가 실제로 도는지 · 지금 어긋난 건수 · 전산이 안 주는(배치 시야 밖) 업체 규모(읽기 전용·업체명/직원명 미출력).'
+        required: false
+        default: 'off'
       use_branch_code:
         description: '이 브랜치의 rank_link.py 로 미리보기 — off(기본) / on. 배포 전에 새 규칙이 무엇을 이을지 먼저 보려는 용도(컨테이너 /tmp 에 얹었다 지운다·앱 파일 무접촉). apply 와 함께 쓰지 말 것.'
         required: false
@@ -44,6 +48,93 @@ jobs:
       - name: 브랜치 rank_link.py 인코딩
         if: ${{ github.event.inputs.use_branch_code == 'on' }}
         run: echo "RL_SRC_GZ=$(gzip -9c backend/rank_link.py | base64 -w0)" >> "$GITHUB_ENV"
+
+      # 신고 #262 — 「퇴사자 변경 업체 로직분석 보고서가 새 담당자에게 안 넘어옴」 진단.
+      # 전 구간 읽기 전용(sqlite mode=ro + 순수 판정 함수). 공개 저장소라 업체명·직원명·로그인은 출력하지 않는다.
+      - name: 보고서 담당자 정렬 진단 (읽기 전용 · 신고 #262)
+        if: ${{ github.event.inputs.owner_sync == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 120s
+          script: |
+            echo "== 컨테이너 =="
+            docker inspect -f 'StartedAt={{.State.StartedAt}} RestartCount={{.RestartCount}}' logic-analysis
+            echo
+            echo "== 스케줄러 등록 · 04:20 실행 흔적 (컨테이너 로그 전 구간) =="
+            docker logs logic-analysis 2>&1 | grep -aE '보고서 담당자 정렬' | tail -30 || echo "(매칭 없음)"
+            echo
+            echo "== DB 실측 (읽기 전용) =="
+            docker exec -i logic-analysis python3 - <<'PY'
+            import os, sqlite3, sys
+            sys.path.insert(0, "/app/backend"); sys.path.insert(0, "/app")
+            DB = os.getenv("DB_PATH", "/app/data/logic_data.db")
+            conn = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            def q(sql, *a):
+                try: return conn.execute(sql, a).fetchall()
+                except Exception as e: print("   (조회 실패:", e, ")"); return []
+
+            print("[1] 정렬 실행 기록 (report_owner_sync_log)")
+            rows = q("SELECT run_id, COUNT(*) n, MIN(changed_at) t FROM report_owner_sync_log GROUP BY run_id ORDER BY t DESC LIMIT 8")
+            if not rows: print("   기록 0건 — 첫 실행 이후 바뀐 것이 한 건도 없거나 표가 없다")
+            for r in rows: print(f"   run_id={r['run_id']}  바뀐행={r['n']}  최초시각={r['t']}")
+
+            print("[2] 지금 어긋난 규모 — 순수 판정 재현 (쓰기 0)")
+            try:
+                from report_owner_sync import fetch_client_managers, plan_owner_changes
+                base = os.getenv("ERP_BASE_URL", "http://api.metainc.co.kr")
+                key = os.getenv("ERP_AD_SYNC_API_KEY", "")
+                if not key:
+                    print("   ERP_AD_SYNC_API_KEY 미설정 — 배치는 무동작으로 건너뛴다(이것 자체가 원인일 수 있다)")
+                    items = []
+                else:
+                    items = fetch_client_managers(base, key)
+                    print(f"   전산이 준 항목 수 = {len(items)}")
+                    owners = {int(r["id"]): (r["created_by"] if r["created_by"] is not None else 0)
+                              for r in conn.execute("SELECT id, created_by FROM clients")}
+                    users = {str(r["username"]): int(r["id"]) for r in conn.execute("SELECT id, username FROM users")}
+                    plan = plan_owner_changes(items, owners, users)
+                    print(f"   바꿀 것={len(plan.changes)}  이미맞음={plan.aligned_already}  "
+                          f"전산미배정={plan.unassigned}  업체없음={plan.unknown_client}")
+            except Exception as e:
+                print("   판정 재현 실패:", e); items = []
+
+            print("[3] 커버리지 — 배치 시야 밖 업체 (전산이 주지 않는 업체)")
+            given = set()
+            for it in items:
+                try: given.add(int(it.get("logic_client_id")))
+                except Exception: pass
+            act = q("SELECT id, created_by, COALESCE(role,'advertiser') role FROM clients WHERE status='active'")
+            adv = [r for r in act if r["role"] == "advertiser"]
+            outside = [r for r in adv if int(r["id"]) not in given]
+            print(f"   활성 업체={len(act)}  그중 광고주={len(adv)}  전산이 준 것={len(given)}")
+            print(f"   ⇒ 배치가 못 보는 광고주={len(outside)}  (담당자가 바뀌어도 영영 안 맞춰지는 쪽)")
+
+            print("[4] 소유자 상태 — 지금 보고서가 누구에게 묶여 있나 (이름 미출력)")
+            ua = {int(r["id"]): int(r["is_active"] or 0) for r in conn.execute("SELECT id, is_active FROM users")}
+            def bucket(rows):
+                dead = sum(1 for r in rows if r["created_by"] and int(r["created_by"]) not in ua)
+                off  = sum(1 for r in rows if r["created_by"] and ua.get(int(r["created_by"])) == 0)
+                nul  = sum(1 for r in rows if not r["created_by"])
+                return dead, off, nul
+            d, o, n = bucket(adv)
+            print(f"   광고주 전체 {len(adv)}곳 → 없는 계정 소유={d}  비활성(퇴사) 계정 소유={o}  소유자 없음={n}")
+            d2, o2, n2 = bucket(outside)
+            print(f"   그중 배치 시야 밖 {len(outside)}곳 → 없는 계정={d2}  비활성 계정={o2}  소유자 없음={n2}")
+            print(f"   ⭐ 「비활성 계정이 쥐고 있는데 배치가 못 보는 곳」 = {o2}곳 — 사람 손 없이는 안 풀린다")
+
+            print("[5] 보고서가 실제로 묶여 있는 규모")
+            rows = q("SELECT COUNT(*) n FROM reports r JOIN clients c ON c.id=r.client_id "
+                     "WHERE c.status='active' AND c.created_by IS NOT NULL")
+            if rows: print(f"   활성 업체에 붙은 보고서 총 {rows[0]['n']}건")
+            ids = ",".join(str(int(r["id"])) for r in outside) or "-1"
+            rows = q(f"SELECT COUNT(*) n FROM reports WHERE client_id IN ({ids})")
+            if rows: print(f"   그중 배치 시야 밖 업체의 보고서 = {rows[0]['n']}건")
+            conn.close()
+            PY
 
       - name: Rank batch read-only diagnosis
         uses: appleboy/ssh-action@v1.0.3
