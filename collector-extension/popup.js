@@ -71,7 +71,11 @@ async function render() {
     const head = lastAdStat
       ? `직전 키워드 [${lastAdStat.keyword}] ${lastAdStat.at}\n` +
         `  오가닉 ${lastAdStat.kept}개 기록 · 광고 ${lastAdStat.ads}개 순위 제외\n` +
-        `  (광고 표식은 있는데 링크로 못 거른 상품 ${lastAdStat.hint}개)\n\n`
+        `  (광고 표식은 있는데 링크로 못 거른 상품 ${lastAdStat.hint}개)\n` +
+        (lastAdStat.fp && Object.keys(lastAdStat.fp).length
+          ? `  광고 필드 지문(원본 ${lastAdStat.raw}개 · L=첫링크adcr C=세필드 M=상품주소 I=adId T=adType A=adcr호스트 R=cr호스트):\n` +
+            Object.entries(lastAdStat.fp).map(([k, v]) => `    ${v}개  ${k}`).join('\n') + '\n\n'
+          : '\n')
       : '아직 없음 — 수집 1회 실행 후 표시\n\n';
     adEl.textContent = head + (rawSampleAd
       ? `[광고 상품 원본] ${rawSampleAd.keyword} ${rawSampleAd.at}\n` + JSON.stringify(rawSampleAd.item, null, 1)
