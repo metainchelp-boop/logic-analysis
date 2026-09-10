@@ -3505,7 +3505,8 @@ jobs:
                 "total": 0, "paths": collections.Counter(), "first": None, "last": None,
                 "ua": collections.Counter(), "autobid": 0, "worker": collections.Counter(),
                 "serp_today": 0, "today": 0,
-                "ab_today": 0, "ab_last": None, "ab_status": collections.Counter()})
+                "ab_today": 0, "ab_last": None, "ab_status": collections.Counter(),
+                "_ft": None, "_lt": None})
             import hashlib
             matched = 0
             last_ts = None
@@ -3535,6 +3536,11 @@ jobs:
             # 로그에 나온 날짜 중 가장 큰 것을 오늘로 본다.
             import datetime as _dt
             _dates = {t.split(":")[0] for _, t, _, _, _, _ in parsed}
+            def _parse_ts(x):
+                try:
+                    return _dt.datetime.strptime(x.split()[0], "%d/%b/%Y:%H:%M:%S")
+                except Exception:
+                    return _dt.datetime.min
             def _key(x):
                 try:
                     return _dt.datetime.strptime(x, "%d/%b/%Y")
@@ -3544,14 +3550,19 @@ jobs:
             for ip, ts, meth, path, ua, st in parsed:
                 h = hashlib.sha256(ip.encode()).hexdigest()[:6]
                 d = SRC[h]
-                if d["first"] is None:
-                    d["first"] = ts
-                d["last"] = ts
+                # ⚠️ 로그는 [현재분, 회전분] 순으로 이어 붙는다 — 줄 순서가 시간 순이 아니다.
+                #    그냥 마지막 줄을 쓰면 「마지막 요청이 어제」로 보인다(8/31·9/10 두 번 밟은 함정).
+                _t = _parse_ts(ts)
+                if d["first"] is None or _t < d["_ft"]:
+                    d["first"], d["_ft"] = ts, _t
+                if d["last"] is None or _t > d["_lt"]:
+                    d["last"], d["_lt"] = ts, _t
                 if path.startswith("/autobid"):
                     d["autobid"] += 1
                     if ts.startswith(today):
                         d["ab_today"] += 1
-                        d["ab_last"] = ts
+                        if d["ab_last"] is None or _t > _parse_ts(d["ab_last"]):
+                            d["ab_last"] = ts
                         d["ab_status"][st] += 1
                     continue
                 d["total"] += 1
