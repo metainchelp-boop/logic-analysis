@@ -1288,27 +1288,33 @@ BACKUP_KEEP = 2  # 보관 개수 — DB가 ~3.5GB로 성장해 gzip 개당 ~3GB.
 
 
 def _prune_old_backups(backup_dir, keep=BACKUP_KEEP):
-    """오래된 백업 정리 — 압축(.db.gz)·비압축(.db) 모두 대상, 최신 keep개만 보관.
-    파일명이 logic_analysis_backup_YYYYMMDD_HHMMSS 라 이름 정렬 = 시간 정렬."""
+    """오래된 백업 정리 — 최신 keep **세대**만 보관(한 세대의 .db·.db.gz 는 함께 처리).
+
+    ⚠️ 2026-09-11 수정 — 종전엔 **파일 개수**를 셌다. 압축이 끊겨 비압축 원본이
+       남은 날에는 그 하루가 파일 2개를 차지해 **보관 2세대가 실질 1세대로 줄었고**
+       지난 세대가 밀려났다(그날 실측: 파일 2개 · 실제 보관 세대 1개).
+       판단 규칙은 db_backup.plan_prune 에 있고 회귀 시험이 지킨다.
+    """
     import os
     try:
-        backups = sorted([
-            f for f in os.listdir(backup_dir)
-            if f.startswith("logic_analysis_backup_") and (f.endswith(".db") or f.endswith(".db.gz"))
-        ])
-        while len(backups) > keep:
-            old = backups.pop(0)
+        from db_backup import plan_prune
+    except Exception as e:            # 모듈이 없으면 정리를 건너뛴다(백업을 지우는 쪽으로 실패하지 않는다)
+        logger.warning(f"[DB백업] 정리 규칙 로드 실패 — 이번 정리 건너뜀: {e}")
+        return
+    try:
+        names = os.listdir(backup_dir)
+        for f in plan_prune(names, keep):
             try:
-                os.remove(os.path.join(backup_dir, old))
-                logger.info(f"  🗑️ [DB백업] 오래된 백업 삭제: {old}")
+                os.remove(os.path.join(backup_dir, f))
+                logger.info(f"  🗑️ [DB백업] 오래된 백업 삭제: {f}")
             except Exception as e:
-                logger.warning(f"[DB백업] 삭제 실패({old}): {e}")
+                logger.warning(f"[DB백업] 삭제 실패({f}): {e}")
     except Exception as e:
         logger.warning(f"[DB백업] 정리 실패: {e}")
 
 
 def _run_daily_db_backup():
-    """매일 자정 30분에 DB 백업 수행 (gzip 압축 · 최신 5개 보관 · 디스크 가드).
+    """매일 자정 30분에 DB 백업 수행 (gzip 압축 · 압축 검증 · 최신 BACKUP_KEEP 세대 보관 · 디스크 가드).
     업체(광고주) 데이터 보호를 위해 SQLite online backup API 사용.
     ⚠️ 복원 시: gunzip logic_analysis_backup_YYYYMMDD_HHMMSS.db.gz 로 풀어서 사용.
     (2026-07-10 개정) DB가 수 GB로 성장하며 비압축 14개 보관이 공유서버 디스크를
@@ -1381,13 +1387,52 @@ def _run_daily_db_backup():
                     pass
             return
 
-    # gzip 압축 → 원본 .db 제거 (수 GB → ~1GB, 디스크 절약)
+    # gzip 압축 → **검증 통과 후에만** 원본 .db 제거 (수 GB → ~1GB, 디스크 절약)
+    #
+    # ⚠️ 2026-09-11 수정 — 종전엔 압축 직후 원본을 지웠고, **압축본이 끝까지 풀리는지
+    #    아무도 안 봤다.** 그날 00:29 에 나간 배포가 컨테이너를 00:31:23 에 교체해
+    #    gzip 이 9.0%(243MB/2.7GB)에서 프로세스와 함께 죽었는데, 로그에는 흔적이
+    #    없었다. 원본이 우연히 남아 복구 수단이 살아 있었을 뿐이다.
+    #    ⇒ 풀어서 크기까지 맞는지 보고, 아니면 **압축본을 버리고 원본을 남긴다.**
+    #    ⭐ 「백업을 만들었다」와 「그 백업으로 되돌릴 수 있다」는 다른 축이다.
+    raw_size = None
+    try:
+        raw_size = os.path.getsize(raw_path)
+    except Exception:
+        pass
+
     final_path = raw_path
     try:
         with open(raw_path, "rb") as f_in, gzip.open(gz_path, "wb", compresslevel=6) as f_out:
             shutil.copyfileobj(f_in, f_out, length=4 * 1024 * 1024)
-        os.remove(raw_path)
-        final_path = gz_path
+
+        ok, n, why = True, None, None
+        try:
+            from db_backup import verify_gzip, keep_raw_reason
+            ok, n, why = verify_gzip(gz_path, expect_bytes=raw_size)
+        except Exception as e:
+            logger.warning(f"[DB백업] 압축 검증을 못 돌렸다 — 원본을 남긴다: {e}")
+            ok, why = False, f"검증 불가({type(e).__name__})"
+            keep_raw_reason = lambda *_a, **_k: None  # noqa: E731
+
+        if ok:
+            logger.info(f"  🔎 [DB백업] 압축 검증 통과 — 푼 크기 {n:,} bytes = 원본과 일치")
+            os.remove(raw_path)
+            final_path = gz_path
+        else:
+            msg = None
+            try:
+                msg = keep_raw_reason(ok, why)
+            except Exception:
+                pass
+            logger.error(f"❌ [DB백업] 압축본이 복구에 쓸 수 없다 — {why}")
+            if msg:
+                logger.error(f"   {msg}")
+            try:
+                os.remove(gz_path)           # 깨진 압축본은 남기지 않는다(복구 때 헷갈린다)
+            except Exception:
+                pass
+            final_path = raw_path            # 비압축 원본이 그날의 백업이다
     except Exception as e:
         logger.error(f"[DB백업] 압축 실패 — 비압축본 유지: {e}")
         if os.path.exists(gz_path):

@@ -26,6 +26,10 @@ on:
         description: '추적 기간 지난 업체 목록 — off(기본) / on. 계약 살아 있는 곳과 끝난 곳을 갈라서 전수 출력(읽기 전용). ⚠️ 업체명이 실행 로그에 남는다 — 이 저장소는 공개이므로 결과를 받은 뒤 그 런의 로그를 삭제할 것.'
         required: false
         default: 'off'
+      queue:
+        description: '온디맨드 요청 큐 해부 — off(기본) / on. 무엇이 몇 건 쌓였고 언제 들어왔는지, 누가 넣었는지(배치 되먹임 vs 직원 화면), 재개하면 몫을 얼마나 먹는지(읽기 전용·키워드 미출력).'
+        required: false
+        default: 'off'
       urlshape:
         description: '상품 주소 모양 실측 — off(기본) / on. 어느 호스트(스마트스토어·브랜드스토어·카탈로그)를 쓰는지, 같은 슬러그가 두 호스트에 걸쳐 있는지(읽기 전용·업체명 미출력).'
         required: false
@@ -67,7 +71,15 @@ jobs:
             docker inspect -f 'RestartCount={{.RestartCount}} StartedAt={{.State.StartedAt}} OOMKilled={{.State.OOMKilled}}' logic-analysis
             echo
             echo "== 오늘 배치 로그 (순위/수집/스케줄러) =="
-            docker logs --since 12h logic-analysis 2>&1 | grep -iE '순위 추적|수집 실패|검색 결과 0건|스케줄러|전체 분석|rank_tracking|daily_analysis' | tail -60 || echo "(매칭 없음)"
+            # ⚠️ 이 줄이 검색 키워드를 공개 실행 로그에 그대로 남기고 있었다(2026-09-11 실측).
+            #    개별 「검색 결과 0건」 줄은 총계가 완료 로그에 이미 있어 정보가 겹친다 — 빼고,
+            #    남는 줄의 대괄호·keyword: 도 가린다. 이 저장소는 공개다.
+            #    (9/8 PR #196 이 place=on 쪽만 막았고 이 자리는 입력과 무관하게 늘 실행됐다.)
+            docker logs --since 12h logic-analysis 2>&1 \
+              | grep -iE '순위 추적|수집 실패|검색 결과 0건|스케줄러|전체 분석|rank_tracking|daily_analysis' \
+              | grep -v '검색 결과 0건 — 수집 실패로 보고' \
+              | sed -E "s/\\[[^]]{1,60}\\]/[**]/g; s/keyword: [^)]*/keyword: **/g" \
+              | tail -60 || echo "(매칭 없음)"
             echo
             echo "== DB 현황 (읽기 전용) =="
             docker exec -i logic-analysis python3 - <<'PY'
@@ -812,7 +824,9 @@ jobs:
               docker exec logic-analysis rm -f /tmp/rank_link_preview.py 2>/dev/null || true
             fi
             echo "== 최근 오류 tail =="
-            docker logs --tail 60 logic-analysis 2>&1 | grep -iE 'error|exception|traceback' | tail -15 || echo "(오류 없음)"
+            docker logs --tail 60 logic-analysis 2>&1 | grep -iE 'error|exception|traceback' \
+              | sed -E "s/\\[[^]]{1,60}\\]/[**]/g; s/keyword: [^)]*/keyword: **/g; s#https?://[^ ]*#(주소 가림)#g; s/'[^']{1,60}'/'**'/g" \
+              | tail -15 || echo "(오류 없음)"
 
       - name: 상품 주소 모양 실측 (읽기 전용)
         if: ${{ github.event.inputs.urlshape == 'on' }}
@@ -904,3 +918,108 @@ jobs:
                 print(f"  조회 실패: {e}")
             conn.close()
             PY
+
+      - name: 요청 큐 해부 (읽기 전용 · 키워드 미출력)
+        if: ${{ github.event.inputs.queue == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 180s
+          script: |
+            echo "== 온디맨드 요청 큐 해부 (읽기 전용) =="
+            docker exec -i logic-analysis python3 - <<'PYQ'
+            import sys, sqlite3, collections
+            sys.path.insert(0, "/app")
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+
+            print("[① 지금 무엇이 얼마나 쌓였나]")
+            for r in c.execute("SELECT status, COUNT(*) n FROM collect_requests GROUP BY status"):
+                print(f"  {r['status']:<10} {r['n']:>6}건")
+            print("  -- pending 의 시도 횟수 분포 (5회 소진분은 7일 뒤 정리 대상) --")
+            for r in c.execute("SELECT attempts, COUNT(*) n FROM collect_requests "
+                               " WHERE status='pending' GROUP BY attempts ORDER BY attempts"):
+                print(f"    attempts={r['attempts']}  {r['n']:>6}건")
+
+            print()
+            print("[② 언제 들어왔나 — 최근 12일 유입]")
+            for r in c.execute("SELECT substr(requested_at,1,10) d, status, COUNT(*) n "
+                               "  FROM collect_requests "
+                               " WHERE requested_at >= date('now','localtime','-12 day') "
+                               " GROUP BY d, status ORDER BY d DESC, status"):
+                print(f"  {r['d']}  {r['status']:<8} {r['n']:>5}건")
+            old = c.execute("SELECT MIN(requested_at) FROM collect_requests "
+                            " WHERE status='pending'").fetchone()[0]
+            print(f"  가장 오래된 대기 요청: {old}")
+
+            print()
+            print("[③ 오늘 들어온 것은 누가 넣었나 — 시각 분포가 답한다]")
+            print("  ⚠️ 배치(08:00·08:30)에 몰려 있으면 **배치가 스스로 되넣는 것**이다.")
+            print("     고르게 퍼져 있으면 직원 화면 검색분이다.")
+            hh = collections.Counter()
+            for r in c.execute("SELECT substr(requested_at,12,2) h FROM collect_requests "
+                               " WHERE date(requested_at)=date('now','localtime')"):
+                hh[r['h']] += 1
+            tot = sum(hh.values())
+            print(f"  오늘 유입 {tot}건")
+            if tot:
+                print("  " + " ".join(f"{h}시:{hh[h]}" for h in sorted(hh)))
+                mm = collections.Counter()
+                for r in c.execute("SELECT substr(requested_at,12,5) hm FROM collect_requests "
+                                   " WHERE date(requested_at)=date('now','localtime') "
+                                   "   AND substr(requested_at,12,2) IN ('08','09')"):
+                    mm[r['hm']] += 1
+                if mm:
+                    top = mm.most_common(6)
+                    print("  08~09시 분 단위 상위: " + " · ".join(f"{k} {v}건" for k, v in top))
+                    if top[0][1] >= max(10, tot * 0.3):
+                        print(f"  🔴 {top[0][0]} 한 분에 {top[0][1]}건 — 배치 되먹임으로 본다"
+                              f"(enqueue_on_miss 가 어딘가에서 살아 있다)")
+
+            print()
+            print("[④ 유니버스 안인가 밖인가 — 정리 규칙이 갈리는 지점]")
+            print("  ⚠️ prune_self_tail_requests 는 **유니버스 안**만 턴다.")
+            print("     유니버스 밖(직원 화면 검색분)은 attempts<5 로 남으면 **영원히 안 지워진다** —")
+            print("     확장이 꺼져 있으면 아무도 attempts 를 올리지 않기 때문이다.")
+            try:
+                from collector import _keyword_universe
+                uni = set(_keyword_universe(conn).keys())
+            except Exception as e:
+                uni = set()
+                print(f"  (유니버스 계산 실패: {type(e).__name__}: {str(e)[:70]})")
+            _n = lambda k: "".join(str(k or "").split()).lower()
+            if uni:
+                inn = out = 0
+                oldest_out = None
+                for r in c.execute("SELECT keyword, requested_at FROM collect_requests "
+                                   " WHERE status='pending' AND attempts < 5"):
+                    if _n(r['keyword']) in uni:
+                        inn += 1
+                    else:
+                        out += 1
+                        if oldest_out is None or r['requested_at'] < oldest_out:
+                            oldest_out = r['requested_at']
+                print(f"  처리 대기 {inn + out}건 — 유니버스 안 {inn}건 · 밖 {out}건")
+                print(f"  유니버스 밖 중 가장 오래된 것: {oldest_out}")
+                print(f"  ⇒ 재개하면 매시간 최대 12건이 이 큐로 간다(하루 최대 288건).")
+                if out:
+                    print(f"  ⇒ 그중 {100*out//(inn+out)}% 는 순위 추적과 무관한 일이다.")
+
+            print()
+            print("[⑤ 재개 시 며칠이면 큐가 비나 — 상한 기준]")
+            try:
+                from collector import HOURLY_CAP
+            except Exception:
+                HOURLY_CAP = 40
+            pend = c.execute("SELECT COUNT(*) FROM collect_requests "
+                             " WHERE status='pending' AND attempts < 5").fetchone()[0]
+            per_day = 12 * 24
+            print(f"  대기 {pend}건 · 큐 몫 하루 최대 {per_day}건(시간당 12) "
+                  f"⇒ {pend / per_day:.1f}일")
+            print(f"  같은 기간 순위 몫은 시간당 {HOURLY_CAP - 12}건으로 눌린다"
+                  f"(상한 {HOURLY_CAP} 중 12 를 큐가 먼저 먹는다).")
+            conn.close()
+            PYQ
