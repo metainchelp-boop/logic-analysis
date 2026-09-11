@@ -785,6 +785,11 @@ jobs:
             docker logs logic-analysis 2>&1 | grep -m1 '스케줄러 시작' || echo "  (기동 로그가 밀려 사라졌을 수 있다)"
             echo "  -- 05:00 자가 점검이 남긴 기록 --"
             docker logs logic-analysis 2>&1 | grep '자가 점검' | tail -5 || echo "  (아직 05:00 을 안 지났다)"
+            echo "  -- DB 백업 로그 (언제·어떻게 돌았나 · 압축 검증 줄 포함) --"
+            # ⚠️ 2026-09-11 — 배포 직후 00:30 이 아닌 시각(14:37:56)에 백업이 하나 생겼다.
+            #    출처를 추측으로 적지 않기 위해 로그를 직접 본다. 이름·키워드 없는 줄만 나온다.
+            docker logs logic-analysis 2>&1 | grep -E 'DB백업|압축 검증' | tail -12 \
+              || echo "  (이 컨테이너 로그에는 백업 줄이 없다 — 기동 이전에 돌았다는 뜻)"
             echo "  -- sbiz_health 표 (비어 있으면 첫 호출·첫 05:00 전이다) --"
             docker exec -i logic-analysis python3 - <<'PYH'
             import os, sqlite3
