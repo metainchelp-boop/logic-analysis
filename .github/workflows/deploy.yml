@@ -74,6 +74,13 @@ jobs:
       - name: Request queue regression (되먹임·오래된 대기)
         run: python backend/tests/test_request_queue.py
 
+      # 업체 삭제 자식 정리 회귀(2026-09-11) — 하드삭제 경로가 5개인데 지우는 자식이
+      # 제각각이었다. clients.py 의 연결만 PRAGMA foreign_keys 를 안 켜 CASCADE 가 안 돌았고,
+      # 그 경로로 지운 업체의 분석·순위이력이 통째로 고아가 됐다.
+      # 새 삭제 경로가 자식을 안 치우면 이 시험이 먼저 깨진다. stdlib(sqlite3)만 쓴다.
+      - name: Client purge regression (삭제 경로 자식 정리)
+        run: python backend/tests/test_client_purge.py
+
       # DB 백업 회귀(2026-09-11) — 압축본이 9% 에서 끊겼는데 로그는 「완료」만 찍던 것.
       # 「백업을 만들었다」와 「그 백업으로 되돌릴 수 있다」는 다른 축이다.
       # 보관 정리가 파일 개수를 세어 보관 2세대가 실질 1세대였던 것도 함께 지킨다.

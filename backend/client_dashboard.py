@@ -368,8 +368,15 @@ def reassign_sinyoseop_clients():
             if len(satisfied) == len(REASSIGN):
                 rest = [(cid, cname) for cid, cname in clients if cid not in matched_cids]
                 for cid, cname in rest:
+                    # 자식 목록은 client_purge 한 곳에서만 정한다(2026-09-11).
+                    # 이 두 줄과 겹쳐도 무해하고(이미 0건), 목록이 늘면 여기도 따라온다.
                     cur.execute("DELETE FROM client_analyses WHERE client_id=?", (cid,))
                     cur.execute("DELETE FROM client_rank_history WHERE client_id=?", (cid,))
+                    try:
+                        from client_purge import purge_client_children
+                        purge_client_children(cur, cid)
+                    except Exception as _pe:
+                        logger.warning(f"자식 정리 보강 실패(기존 삭제는 유효): {_pe}")
                     cur.execute("DELETE FROM clients WHERE id=?", (cid,))
                     logger.info(f"[reassign] '{cname}' 하드삭제(신요섭 잔여분)")
                 cur.execute("INSERT OR REPLACE INTO _app_migrations(key) VALUES(?)", (FLAG,))
@@ -411,8 +418,15 @@ def cleanup_misassigned_clients():
             for uid, role in users:
                 cids = [r[0] for r in cur.execute("SELECT id FROM clients WHERE created_by=?", (uid,)).fetchall()]
                 for cid in cids:
+                    # 자식 목록은 client_purge 한 곳에서만 정한다(2026-09-11).
+                    # 이 두 줄과 겹쳐도 무해하고(이미 0건), 목록이 늘면 여기도 따라온다.
                     cur.execute("DELETE FROM client_analyses WHERE client_id=?", (cid,))
                     cur.execute("DELETE FROM client_rank_history WHERE client_id=?", (cid,))
+                    try:
+                        from client_purge import purge_client_children
+                        purge_client_children(cur, cid)
+                    except Exception as _pe:
+                        logger.warning(f"자식 정리 보강 실패(기존 삭제는 유효): {_pe}")
                     cur.execute("DELETE FROM clients WHERE id=?", (cid,))
                 cur.execute("UPDATE users SET role='viewer' WHERE id=?", (uid,))
                 total += len(cids)
@@ -1280,6 +1294,13 @@ def delete_client(client_id: int, current_user: dict = Depends(get_current_user)
             # 업체를 지우면 그 업체의 보고서도 함께 지운다 — 위 분석·순위 이력과 같은 하드삭제 규약,
             # reports 를 참조하는 다른 표는 없어(고아 없음) 순서상 clients 보다 먼저 지우면 충분하다.
             conn.execute("DELETE FROM reports WHERE client_id = ?", (cid,))
+            # 자식 목록은 client_purge 한 곳에서만 정한다(2026-09-11) — 위 세 줄과 겹쳐도
+            # 무해하고(이미 지워져 0건), 목록이 늘면 여기도 자동으로 따라온다.
+            try:
+                from client_purge import purge_client_children
+                purge_client_children(conn, cid)
+            except Exception as _pe:
+                logger.warning(f"[delete] 자식 정리 보강 실패(기존 삭제는 유효): {_pe}")
             conn.execute("DELETE FROM clients WHERE id = ?", (cid,))
         conn.commit()
 
@@ -2202,7 +2223,14 @@ def cleanup_expired_competitors():
                     expired_ids.add(c["id"])
                     rows.append(c)
         for r in rows:
-            conn.execute("DELETE FROM client_analyses WHERE client_id = ?", (r["id"],))
+            # ⚠️ 2026-09-11 — 여기엔 client_rank_history 가 빠져 있었다.
+            #    이 연결은 foreign_keys=ON 이라 CASCADE 가 돌긴 하지만, 목록을 한 곳에서
+            #    정해 두면 PRAGMA 가 어떻든 같은 결과가 난다.
+            try:
+                from client_purge import purge_client_children
+                purge_client_children(conn, r["id"])
+            except Exception as _pe:
+                logger.warning(f"[cleanup] 자식 정리 실패(계속): {_pe}")
             conn.execute("DELETE FROM clients WHERE id = ?", (r["id"],))
         conn.commit()
         if rows:

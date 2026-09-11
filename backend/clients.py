@@ -522,9 +522,19 @@ def delete_client(client_id: int) -> bool:
             raise ValueError("클라이언트를 찾을 수 없습니다")
 
         with get_db_connection() as conn:
+            # ⚠️ 2026-09-11 — 종전엔 `clients` 행만 지웠다. 이 연결은
+            #    `PRAGMA foreign_keys=ON` 을 켜지 않으므로 **ON DELETE CASCADE 가 안 돈다**
+            #    (database.py·client_dashboard.py 의 연결은 켠다 — 이 파일만 빠져 있었다).
+            #    그래서 이 경로로 지운 업체는 분석·순위이력이 통째로 고아가 됐다.
+            #    ⇒ 자식 목록은 client_purge 한 곳에서만 정하고, 여기선 그걸 부른다.
+            from client_purge import purge_client_children
+            removed = purge_client_children(conn, client_id)
             cursor = conn.cursor()
             cursor.execute("DELETE FROM clients WHERE id = ?", (client_id,))
-            logger.info(f"Client deleted: ID={client_id}")
+            if removed:
+                logger.info(f"Client deleted: ID={client_id} · 자식 정리 {removed}")
+            else:
+                logger.info(f"Client deleted: ID={client_id}")
             return True
     except Exception as e:
         logger.error(f"Error deleting client {client_id}: {str(e)}")
