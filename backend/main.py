@@ -546,7 +546,10 @@ class NotificationSettingsRequest(BaseModel):
 #   - read_cache=True : 캐시 우선(분석·스냅샷용, 3시간 staleness 허용)
 #   - read_cache=False: 항상 새로 크롤(실시간 조회용)하되 결과는 캐시에 채워 후속 분석과 공유
 # 캐시 조회/저장 실패는 전부 방어적으로 무시하고 직접 크롤로 폴백 → 기능은 절대 멈추지 않음.
-def _shared_crawl(keyword: str, max_results: int = 500, read_cache: bool = True, ttl: int = None) -> list:
+def _shared_crawl(keyword: str, max_results: int = 500, read_cache: bool = True, ttl: int = None,
+                  enqueue_on_miss: bool = True) -> list:
+    # ⚠️ enqueue_on_miss — 기본 True(직원 화면은 종전 그대로: 수집분이 없으면 큐에 넣는다).
+    #    배치가 이 함수를 빌려 쓸 때만 False 로 불러 자기 일을 큐에 되돌려 넣지 않게 한다(2026-09-12).
     from naver_crawler import search_products as _sp
     products = None
     cache_ok = False
@@ -561,7 +564,8 @@ def _shared_crawl(keyword: str, max_results: int = 500, read_cache: bool = True,
         logger.warning(f"[크롤캐시] 우회(직접 크롤): {_ce}")
         products, cache_ok = None, False
     if products is None:
-        products = _sp(keyword, max_results=max_results, retry_on_429=True)
+        products = _sp(keyword, max_results=max_results, retry_on_429=True,
+                       enqueue_on_miss=enqueue_on_miss)
         if cache_ok:
             try:
                 save_cached_shopping_search(keyword, max_results, products)
@@ -3453,8 +3457,15 @@ class AdvertiserAnalysisRequest(BaseModel):
             raise ValueError('유효한 상품 URL을 입력하세요')
         return v
 
-def compute_advertiser_report(keyword: str, product_url: str):
-    """광고주 맞춤 분석 — 엔드포인트/스케줄러 공용 재사용 함수. {"success","data"} 반환."""
+def compute_advertiser_report(keyword: str, product_url: str, enqueue_on_miss: bool = True):
+    """광고주 맞춤 분석 — 엔드포인트/스케줄러 공용 재사용 함수. {"success","data"} 반환.
+
+    ⚠️ enqueue_on_miss — 기본 True(직원이 화면에서 부른 것은 진짜 요청이니 종전대로 큐에 넣는다).
+       **08:30 분석 배치가 키워드마다 이 함수를 빌려 쓴다**(auto_analysis). 그 경로는 False 로
+       불러야 배치가 자기 일을 큐에 되돌려 넣지 않는다 — 2026-09-12 실측에서 이 경로 하나로
+       하루 수백 건이 들어오고 있었다(PR #199 는 auto_analysis·scheduler 의 **직접** 호출만
+       막았고, 배치가 화면용 함수를 빌려 쓰는 이 경로를 세지 않았다).
+    """
     from types import SimpleNamespace
     req = SimpleNamespace(keyword=keyword, product_url=product_url)
     try:
@@ -3463,7 +3474,8 @@ def compute_advertiser_report(keyword: str, product_url: str):
         # 1) 광고주 상품 정보 조회
         #    keyword를 함께 넘겨 빠른 키워드-검색 경로를 사용 → 가격/카테고리까지 채움
         #    (미전달 시 my_price 0원·주요카테고리 공란 발생)
-        product_info = get_product_info(req.product_url, keyword=req.keyword)
+        product_info = get_product_info(req.product_url, keyword=req.keyword,
+                                        enqueue_on_miss=enqueue_on_miss)
 
         # get_product_info 실패 시 (스마트스토어 ID ≠ nvMid) → 키워드 검색에서 productId로 보완
         if not product_info.get("product_name"):
@@ -3472,7 +3484,7 @@ def compute_advertiser_report(keyword: str, product_url: str):
             from naver_crawler import search_products as _sp
             target_pid = _extract_pid(req.product_url) or ""
             target_store = _extract_store(req.product_url) or ""
-            _prods = _sp(req.keyword, max_results=200)
+            _prods = _sp(req.keyword, max_results=200, enqueue_on_miss=enqueue_on_miss)
             for _p in _prods:
                 p_url = _p.get("product_url", "")
                 p_pid = _p.get("product_id", "")
@@ -3494,11 +3506,12 @@ def compute_advertiser_report(keyword: str, product_url: str):
         #      매칭 로직은 그대로(cached_products로 결과만 재사용). retry_on_429=True로 429 빈결과 방지.
         # [A] 수집 깊이 1000→500 + [B] 3시간 공유 캐시. 같은 키워드를 여러 직원/워커가 분석하면
         #     _shared_crawl가 1회 크롤 결과를 공유(캐시 우선, 실패 시 직접 크롤 폴백 → 분석 안 멈춤).
-        all_products = _shared_crawl(req.keyword, 500)
+        all_products = _shared_crawl(req.keyword, 500, enqueue_on_miss=enqueue_on_miss)
         rank, page, top_competitors = find_product_rank(
             keyword=req.keyword, product_url=req.product_url, max_pages=5,
             product_name=product_info.get("product_name", ""),
             cached_products=all_products,
+            enqueue_on_miss=enqueue_on_miss,
         )
         page1_products = all_products[:80]
         if not page1_products:
