@@ -1459,7 +1459,7 @@ def _run_request_queue_prune():
     try:
         from collector import prune_self_tail_requests
         q = prune_self_tail_requests()
-        logger.info(f"🧹 요청 큐 정리 — {q.get('pruned', 0)}건 제거 · 남은 대기 {q.get('kept', 0)}건")
+        logger.info(f"🧹 요청 큐 정리 — {q.get('pruned', 0)}건 제거(슬롯이 맡음) · {q.get('stale', 0)}건 제거(오래된 대기) · 남은 대기 {q.get('kept', 0)}건")
     except Exception as e:
         logger.warning(f"요청 큐 정리 실패(무시): {e}")
 
@@ -1477,7 +1477,7 @@ def _run_rank_link_maintenance():
     try:
         from collector import prune_self_tail_requests
         q = prune_self_tail_requests()
-        logger.info(f"🧹 요청 큐 정리 — {q.get('pruned', 0)}건 제거 · 남은 대기 {q.get('kept', 0)}건")
+        logger.info(f"🧹 요청 큐 정리 — {q.get('pruned', 0)}건 제거(슬롯이 맡음) · {q.get('stale', 0)}건 제거(오래된 대기) · 남은 대기 {q.get('kept', 0)}건")
     except Exception as _qe:
         logger.warning(f"요청 큐 정리 실패(무시): {_qe}")
     try:
