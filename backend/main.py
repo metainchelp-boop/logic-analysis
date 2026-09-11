@@ -193,12 +193,23 @@ def _backup_db_on_startup():
         )
 
     def _prune(keep):
+        """최신 keep **세대**만 남긴다(한 세대의 .db·.db.gz 는 함께 처리).
+
+        ⚠️ 2026-09-11 수정 — 종전엔 **파일 개수**를 셌다. 압축이 끊겨 비압축 원본이
+           남은 날에는 그 하루가 파일 2개를 차지해, keep=1 이면 **지난 세대가 통째로
+           밀려났다.** 그날 실측: 부팅 백업이 00:30 세대의 비압축본을 지웠고 그것이
+           **그 시점 유일하게 복구 가능한 백업**이었다(자기가 만든 것이 정상이라 무해했을 뿐).
+           판단 규칙은 db_backup.plan_prune 에 있고 회귀 시험이 지킨다.
+        """
         try:
-            bks = _list_backups()
-            while len(bks) > keep:
-                old = bks.pop(0)
-                os.remove(os.path.join(backup_dir, old))
-                logger.info(f"  🗑️ 오래된 백업 삭제: {old}")
+            from db_backup import plan_prune
+        except Exception as _ie:   # 규칙을 못 읽으면 지우지 않는다(백업을 잃는 쪽으로 실패하지 않는다)
+            logger.warning(f"백업 정리 규칙 로드 실패 — 이번 정리 건너뜀: {_ie}")
+            return
+        try:
+            for _f in plan_prune(os.listdir(backup_dir), keep):
+                os.remove(os.path.join(backup_dir, _f))
+                logger.info(f"  🗑️ 오래된 백업 삭제: {_f}")
         except Exception as _pe:
             logger.warning(f"백업 정리 실패(무시): {_pe}")
 
@@ -236,15 +247,39 @@ def _backup_db_on_startup():
     backup_path = os.path.join(backup_dir, f"logic_analysis_backup_{ts}.db")
 
     def _compress(raw_path):
-        """비압축 .db → .db.gz 로 압축하고 원본 제거(스케줄 백업과 동일 규칙).
-        DB 4.8GB → 약 0.5GB. 실패하면 비압축 원본을 그대로 남긴다(백업 자체는 성립)."""
+        """비압축 .db → .db.gz 로 압축하고, **끝까지 풀리는지 확인한 뒤에만** 원본을 지운다.
+
+        ⚠️ 2026-09-11 수정 — 종전엔 압축 직후 원본을 지웠고 **압축본이 쓸 수 있는지
+           아무도 안 봤다.** 9/11 00:30 백업이 9.0%(243MB/2.7GB)에서 끊겼는데 로그는
+           「완료」만 찍었다(배포가 컨테이너를 교체하며 gzip 을 죽였다).
+           스케줄 백업(scheduler._run_daily_db_backup)은 그날 고쳤는데 **이 경로가 빠져
+           있었다** — 백업 경로가 둘인 것을 놓쳤다.
+        ⭐ 「백업을 만들었다」와 「그 백업으로 되돌릴 수 있다」는 다른 축이다.
+        """
         import gzip
         gz_path = raw_path + ".gz"
         try:
+            _raw_size = os.path.getsize(raw_path)
+        except Exception:
+            _raw_size = None
+        try:
             with open(raw_path, "rb") as f_in, gzip.open(gz_path, "wb", compresslevel=6) as f_out:
                 shutil.copyfileobj(f_in, f_out, length=1024 * 1024)
-            os.remove(raw_path)
+
+            from db_backup import verify_gzip
+            _ok, _n, _why = verify_gzip(gz_path, expect_bytes=_raw_size)
+            if not _ok:
+                # 깨진 압축본은 버리고 **비압축 원본을 그날의 백업으로 남긴다.**
+                logger.error(f"❌ 백업 압축본이 복구에 쓸 수 없다 — {_why}")
+                logger.error("   압축본을 버리고 비압축 원본을 백업으로 남긴다.")
+                try:
+                    os.remove(gz_path)
+                except Exception:
+                    pass
+                return
             _sz = os.path.getsize(gz_path) // (1024 ** 2)
+            logger.info(f"  🔎 백업 압축 검증 통과 — 푼 크기 {_n:,} bytes = 원본과 일치")
+            os.remove(raw_path)
             logger.info(f"  🗜️ 백업 압축 완료: {os.path.basename(gz_path)} ({_sz}MB)")
         except Exception as _ce:
             try:
