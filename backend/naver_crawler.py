@@ -296,7 +296,8 @@ def get_review_count(product_url: str) -> Optional[int]:
     return None
 
 
-def search_products(keyword: str, max_results: int = 200, retry_on_429: bool = True) -> List[Dict]:
+def search_products(keyword: str, max_results: int = 200, retry_on_429: bool = True,
+                    enqueue_on_miss: bool = True) -> List[Dict]:
     """
     키워드로 상품 검색 (최대 1000개까지)
     여러 페이지를 자동으로 조회하여 합침
@@ -306,7 +307,10 @@ def search_products(keyword: str, max_results: int = 200, retry_on_429: bool = T
     per_page = 100
 
     for start in range(1, min(max_results, 1000) + 1, per_page):
-        result = search_naver_shopping_api(keyword, display=per_page, start=start, retry_on_429=retry_on_429)
+        # ⚠️ enqueue_on_miss 는 그대로 넘긴다 — 배치가 부를 때 큐에 되넣지 않게(2026-09-11).
+        result = search_naver_shopping_api(keyword, display=per_page, start=start,
+                                          retry_on_429=retry_on_429,
+                                          enqueue_on_miss=enqueue_on_miss)
         items = result.get("items", [])
         if not items:
             break
@@ -331,7 +335,8 @@ def _normalize_name(name: str) -> str:
 
 def find_product_rank(keyword: str, product_url: str,
                       max_pages: int = 10, product_name: str = "",
-                      cached_products: Optional[List[Dict]] = None) -> Tuple[Optional[int], Optional[int], List[Dict]]:
+                      cached_products: Optional[List[Dict]] = None,
+                      enqueue_on_miss: bool = True) -> Tuple[Optional[int], Optional[int], List[Dict]]:
     """
     키워드 검색에서 특정 상품의 순위를 찾는다. (공식 API 기반)
 
@@ -353,7 +358,9 @@ def find_product_rank(keyword: str, product_url: str,
     # max_pages * 100개 결과까지 검색
     # cached_products가 주어지면 재검색 없이 재사용 (중복 API 호출 방지) — 매칭 로직은 동일
     max_results = max_pages * 100
-    products = cached_products if cached_products is not None else search_products(keyword, max_results=max_results)
+    products = (cached_products if cached_products is not None
+                else search_products(keyword, max_results=max_results,
+                                     enqueue_on_miss=enqueue_on_miss))
 
     if not products:
         logger.warning(f"검색 결과 없음: '{keyword}'")
@@ -408,7 +415,8 @@ def find_product_rank(keyword: str, product_url: str,
     ref_name = product_name
     if not ref_name:
         try:
-            info = get_product_info(product_url, keyword=keyword)
+            info = get_product_info(product_url, keyword=keyword,
+                                    enqueue_on_miss=enqueue_on_miss)
             ref_name = info.get("product_name", "")
         except Exception:
             pass
@@ -507,13 +515,15 @@ _PRODUCT_INFO_CACHE = {}      # product_url -> (timestamp, result_dict)
 _PRODUCT_INFO_TTL = 900       # 15분
 
 
-def get_product_info(product_url: str, keyword: str = "") -> Dict:
+def get_product_info(product_url: str, keyword: str = "",
+                     enqueue_on_miss: bool = True) -> Dict:
     """상품정보 조회 (TTL 캐시 래퍼). TTL 내 성공 결과가 있으면 네이버 재호출 없이 반환."""
     now = time.time()
     hit = _PRODUCT_INFO_CACHE.get(product_url)
     if hit and (now - hit[0]) < _PRODUCT_INFO_TTL:
         return dict(hit[1])  # 사본 반환 (호출측 변형 방지)
-    result = _get_product_info_impl(product_url, keyword=keyword)
+    result = _get_product_info_impl(product_url, keyword=keyword,
+                                    enqueue_on_miss=enqueue_on_miss)
     # 의미있는 결과(상품명 확보)만 캐시 — 실패는 캐시하지 않아 다음 기회에 재시도
     if result and result.get("product_name"):
         if len(_PRODUCT_INFO_CACHE) > 5000:
@@ -522,7 +532,8 @@ def get_product_info(product_url: str, keyword: str = "") -> Dict:
     return result
 
 
-def _get_product_info_impl(product_url: str, keyword: str = "") -> Dict:
+def _get_product_info_impl(product_url: str, keyword: str = "",
+                           enqueue_on_miss: bool = True) -> Dict:
     """
     상품 URL에서 상품 정보 가져오기
     - 1차: 추적 키워드로 네이버 쇼핑 API 검색 → URL/productId 매칭 (빠르고 안정적)
@@ -592,7 +603,13 @@ def _get_product_info_impl(product_url: str, keyword: str = "") -> Dict:
             # 300위 밖 상품은 아래 스토어명 폴백이 정보를 잡아주므로 실사용 영향 미미,
             # 검색 API 소모 상한은 호출당 11 → 4로 감소(일일 25,000 한도 보호).
             for page_start in [1, 101, 201]:
-                api_result = search_naver_shopping_api(keyword, display=100, start=page_start, retry_on_429=True)
+                # ⚠️ 2026-09-11 — 여기가 새는 자리였다. 아래 2차(스토어명)는 8/28 에
+                #    enqueue_on_miss=False 를 받았는데 **1차 키워드 경로는 빠졌다.**
+                #    08:30 배치가 상품마다 이 길을 지나 큐를 되채웠다(9/11 실측:
+                #    오늘 유입 576건 중 513건이 08~09시 배치 창, 분당 15~16건 균일).
+                api_result = search_naver_shopping_api(keyword, display=100, start=page_start,
+                                                      retry_on_429=True,
+                                                      enqueue_on_miss=enqueue_on_miss)
                 items = api_result.get("items", [])
                 if not items:
                     break

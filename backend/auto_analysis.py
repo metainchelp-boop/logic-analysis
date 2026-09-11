@@ -772,7 +772,10 @@ def run_single_analysis(client_id: int, client_name: str, keyword: str, product_
                         from naver_crawler import find_product_rank_from_cache
                         rank, page, _ = find_product_rank_from_cache(keyword, product_url, prods)
                     else:
-                        rank, page, _ = find_product_rank(keyword, product_url, max_pages=2)
+                        # ⚠️ enqueue_on_miss=False — 배치가 자기 일을 큐에 되돌려 넣지 않는다.
+                        #    8/28 에 바로 위 shop_result 만 막고 **이 줄이 빠져 있었다**(2026-09-11).
+                        rank, page, _ = find_product_rank(keyword, product_url, max_pages=2,
+                                                         enqueue_on_miss=False)
                     if rank:
                         conn.execute("""
                             INSERT INTO client_rank_history

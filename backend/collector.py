@@ -140,6 +140,16 @@ from collect_slot import PRIORITY_HOURS, LATE_HOURS, slot_of as _slot_rule  # no
 #    ⚠️ 올리기 전에 반드시 위 세 줄을 다시 계산할 것. 총량이 아니라 속도가 차단 기준이다.
 HOURLY_CAP = 40
 
+# 대기 요청의 나이 상한 — 이 날수를 넘긴 pending 은 시도 횟수와 무관하게 정리한다.
+# ⚠️ 왜 필요한가(2026-09-11 실측) — 종전 정리 규칙 둘 다 빈틈이 있었다:
+#    · 7일 정리는 `attempts >= 5` 만 본다 → **확장이 꺼져 있으면 아무도 attempts 를
+#      올리지 않아** 0 에 머물고 영원히 안 지워진다(그날 pending 956건 중 934건이 0이었다).
+#    · prune_self_tail_requests 는 **유니버스 안**만 턴다 → 유니버스 밖(직원 화면
+#      검색분) 380건이 계속 남았다. 가장 오래된 대기는 9/4 였다.
+#    수집분은 2일 내만 서빙되므로(serve_from_collected) 7일 지난 요청을 이제 수집해도
+#    그 화면은 이미 다른 경로로 답을 냈다. 기존 정리 규칙과 같은 7일로 맞춘다.
+STALE_PENDING_DAYS = 7
+
 
 def _slot_of(keyword: str, priority: bool) -> int:
     """키워드 → 수집 시간대(0~23). 규칙은 collect_slot 에 있다(화면과 공유)."""
@@ -661,11 +671,21 @@ def prune_self_tail_requests() -> dict:
         if gone:
             conn.executemany("DELETE FROM collect_requests WHERE keyword=? AND status='pending'",
                              [(k,) for k in gone])
+        # 나이 상한 — 유니버스 밖이든 안이든, 시도 횟수가 0이든, 너무 오래된 것은 턴다.
+        # ⚠️ 이 잡은 확장과 무관하게 부팅 1회 + 01:20 에 도므로, 수집이 꺼져 있어도 큐가
+        #    무한히 자라지 않는다. 종전 두 규칙만으로는 그 경우를 못 막았다
+        #    (STALE_PENDING_DAYS 주석 참조 — 9/11 실측으로 확인).
+        stale = conn.execute(
+            "DELETE FROM collect_requests WHERE status='pending' "
+            "   AND requested_at < datetime('now','localtime',?)",
+            (f"-{STALE_PENDING_DAYS} day",)).rowcount or 0
+        if gone or stale:
             conn.commit()
         kept = conn.execute(
             "SELECT COUNT(*) FROM collect_requests WHERE status='pending'").fetchone()[0]
-        logger.info(f"[collector] 큐 되먹임 정리 — {len(gone)}건 제거(슬롯이 맡는 키워드) · 남은 대기 {kept}건")
-        return {"pruned": len(gone), "kept": kept}
+        logger.info(f"[collector] 큐 되먹임 정리 — {len(gone)}건 제거(슬롯이 맡는 키워드) · "
+                    f"{stale}건 제거({STALE_PENDING_DAYS}일 넘은 대기) · 남은 대기 {kept}건")
+        return {"pruned": len(gone), "stale": stale, "kept": kept}
     except Exception as e:
         logger.warning(f"[collector] 큐 되먹임 정리 실패(무시): {e}")
         return {"pruned": 0, "kept": 0}

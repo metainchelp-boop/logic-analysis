@@ -67,6 +67,20 @@ jobs:
           pip install --quiet beautifulsoup4 requests
           python backend/tests/test_analysis_regression.py
 
+      # 요청 큐 회귀(2026-09-11) — 수집을 꺼 둔 날인데 큐에 하루 576건이 들어왔다.
+      # 89% 가 08~09시 배치 창(분당 15~16건 균일) = 배치가 자기 일을 되넣고 있었다.
+      # 8/28 에 6곳을 막았는데 상품정보 1차 키워드 경로와 search_products 가 빠져 있었다.
+      # stdlib 만 쓴다(소스 검사 — collector·naver_crawler 는 게이트에서 import 불가).
+      - name: Request queue regression (되먹임·오래된 대기)
+        run: python backend/tests/test_request_queue.py
+
+      # DB 백업 회귀(2026-09-11) — 압축본이 9% 에서 끊겼는데 로그는 「완료」만 찍던 것.
+      # 「백업을 만들었다」와 「그 백업으로 되돌릴 수 있다」는 다른 축이다.
+      # 보관 정리가 파일 개수를 세어 보관 2세대가 실질 1세대였던 것도 함께 지킨다.
+      # stdlib(gzip·os) 만 쓰므로 추가 설치 불필요.
+      - name: DB backup verify regression (복구 가능성)
+        run: python backend/tests/test_db_backup.py
+
       # 업체 삭제 FK 회귀(신고 #259, 이진희) — reports 자식이 남으면 삭제가 막히던 것.
       # stdlib(sqlite3)만 쓰므로 추가 설치 불필요.
       - name: Client delete FK regression (신고 #259)
