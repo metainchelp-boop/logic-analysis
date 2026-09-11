@@ -31,7 +31,11 @@ on:
         required: false
         default: 'off'
       owner_sync:
-        description: '보고서 담당자 정렬 진단 — off(기본) / on. 신고 #262. 04:20 배치가 실제로 도는지 · 지금 어긋난 건수 · 전산이 안 주는(배치 시야 밖) 업체 규모(읽기 전용·업체명/직원명 미출력).'
+        description: '보고서 담당자 정렬 — off(기본) / on(읽기 전용 진단) / preview(바꿀 건수만) / apply(실제 정렬 — 화면의 「⟳ 보고서 담당자 정렬」 버튼과 같은 함수).'
+        required: false
+        default: 'off'
+      owner_sync_unused:
+        description: '(미사용) 이전 설명 보존. 신고 #262. 04:20 배치가 실제로 도는지 · 지금 어긋난 건수 · 전산이 안 주는(배치 시야 밖) 업체 규모(읽기 전용·업체명/직원명 미출력).'
         required: false
         default: 'off'
       use_branch_code:
@@ -52,14 +56,31 @@ jobs:
       # 신고 #262 — 「퇴사자 변경 업체 로직분석 보고서가 새 담당자에게 안 넘어옴」 진단.
       # 전 구간 읽기 전용(sqlite mode=ro + 순수 판정 함수). 공개 저장소라 업체명·직원명·로그인은 출력하지 않는다.
       - name: 보고서 담당자 정렬 진단 (읽기 전용 · 신고 #262)
-        if: ${{ github.event.inputs.owner_sync == 'on' }}
+        if: ${{ github.event.inputs.owner_sync != '' && github.event.inputs.owner_sync != 'off' }}
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          OS_MODE: ${{ github.event.inputs.owner_sync }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          command_timeout: 120s
+          command_timeout: 300s
+          envs: OS_MODE
           script: |
+            echo "== 모드: ${OS_MODE} =="
+            if [ "${OS_MODE}" = "preview" ] || [ "${OS_MODE}" = "apply" ]; then
+              echo "== 담당자 정렬 실행 (화면 버튼과 같은 함수) =="
+              docker exec -i -e OS_MODE="${OS_MODE}" logic-analysis python3 - <<'PY2'
+            import os, sys, json
+            sys.path.insert(0, "/app/backend"); sys.path.insert(0, "/app")
+            from report_owner_sync import run_report_owner_sync
+            mode = os.getenv("OS_MODE")
+            res = run_report_owner_sync(dry_run=(mode == "preview"),
+                                        run_id=None if mode == "preview" else "issue262-postdeploy")
+            print(json.dumps(res, ensure_ascii=False))
+            PY2
+              echo
+            fi
             echo "== 컨테이너 =="
             docker inspect -f 'StartedAt={{.State.StartedAt}} RestartCount={{.RestartCount}}' logic-analysis
             echo
@@ -191,7 +212,7 @@ jobs:
             PY
 
       - name: Rank batch read-only diagnosis
-        if: ${{ github.event.inputs.owner_sync != 'on' }}
+        if: ${{ github.event.inputs.owner_sync == '' || github.event.inputs.owner_sync == 'off' }}
         uses: appleboy/ssh-action@v1.0.3
         env:
           RL_SRC_GZ: ${{ env.RL_SRC_GZ }}
