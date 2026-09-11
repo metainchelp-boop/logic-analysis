@@ -117,6 +117,11 @@ jobs:
       - name: Collector safe speed regression
         run: node collector-extension/tests/safe_speed.test.js
 
+      # 작업 탭 정리가 사람 창을 닫아 버리던 것(2026-09-11 실사고) — 「수집 실행」을 눌렀더니
+      # 크롬 창이 통째로 꺼졌다. 창의 마지막 탭은 닫지 않고 빈 페이지로 둔다.
+      - name: Collector tab safety regression
+        run: node collector-extension/tests/tab_safety.test.js
+
       # 수집 멈춤 감시(2026-09-10) — 하루가 통째로 0건이 되어도 아무도 몰랐다.
       # 상한(5시간)·쿨다운(6시간)·문자 90바이트·기록 커밋을 지킨다.
       # ⚠️ 그중 「기록 커밋」이 핵심이다 — 안 되면 매시간 같은 문자가 도배된다.

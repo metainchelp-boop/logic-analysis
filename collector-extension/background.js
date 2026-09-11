@@ -235,15 +235,54 @@ async function clearBlocked() {
   await setState({ blocked: false, blockedUntil: 0, blockedReason: '' });
 }
 
+/** 탭을 닫되 **창은 절대 없애지 않는다** (2026-09-11 실사고).
+ *
+ * ⚠️ 대표가 「지금 수집 실행」을 눌렀더니 **크롬 창이 통째로 꺼졌다.**
+ *    원인: 창에 네이버쇼핑 탭 하나만 열려 있었는데(차단 확인하려고 사람이 직접 연 탭)
+ *    정리 코드가 그 탭을 지웠고, 크롬은 **마지막 탭이 닫히면 창을 닫는다.**
+ * ⇒ 창별로 세어, 그 창의 마지막 탭이 되는 것은 **닫지 않고 빈 페이지로 돌려 둔다.**
+ *    사람이 보던 창이 사라지는 것보다 탭 하나가 남는 편이 훨씬 낫다.
+ */
+async function removeTabsKeepWindows(tabs, why) {
+  let closed = 0, spared = 0;
+  // 창별 전체 탭 수를 먼저 센다(우리가 지울 것 말고 남는 게 있는지).
+  const perWindow = {};
+  for (const t of tabs) {
+    if (t.windowId === undefined) continue;
+    perWindow[t.windowId] = (perWindow[t.windowId] || 0) + 1;
+  }
+  const total = {};
+  for (const wid of Object.keys(perWindow)) {
+    try {
+      const all = await chrome.tabs.query({ windowId: Number(wid) });
+      total[wid] = all.length;
+    } catch (e) { total[wid] = 99; }   // 못 세면 안전한 쪽(닫아도 창이 남는다고 보지 않음)
+  }
+  const left = { ...perWindow };
+  for (const t of tabs) {
+    if (t.id === undefined) continue;
+    const wid = t.windowId;
+    const willEmpty = wid !== undefined && (total[wid] || 0) - left[wid] < 1;
+    if (willEmpty) {
+      // 이 창의 마지막 한 장 — 닫지 말고 빈 페이지로 비켜 둔다.
+      try { await chrome.tabs.update(t.id, { url: 'about:blank' }); spared++; } catch (e) { /* 무시 */ }
+      left[wid] -= 1;
+      continue;
+    }
+    try { await chrome.tabs.remove(t.id); closed++; } catch (e) { /* 이미 닫힘 */ }
+    if (wid !== undefined) { left[wid] -= 1; total[wid] -= 1; }
+  }
+  if (closed || spared) {
+    await log(`🧹 ${why} ${closed}개 정리`
+      + (spared ? ` (창이 사라지지 않게 ${spared}개는 빈 페이지로 두었습니다)` : ''));
+  }
+}
+
 /** 네이버쇼핑 작업 탭 전부 닫기 — 누적분 청소용. */
 async function closeAllWorkTabs() {
   try {
     const tabs = await chrome.tabs.query({ url: '*://search.shopping.naver.com/*' });
-    const ids = tabs.map((t) => t.id).filter((id) => id !== undefined);
-    if (ids.length) {
-      await chrome.tabs.remove(ids);
-      await log(`🧹 작업 탭 ${ids.length}개 정리`);
-    }
+    if (tabs.length) await removeTabsKeepWindows(tabs, '작업 탭');
   } catch (e) { /* 이미 닫힘 등 — 무시 */ }
   workTabId = null;
   await chrome.storage.local.remove(TAB_KEY);
@@ -297,14 +336,19 @@ async function ensureWorkTab() {
   try {
     const tabs = await chrome.tabs.query({ url: '*://search.shopping.naver.com/*' });
     if (tabs.length) {
-      workTabId = tabs[0].id;
-      const extra = tabs.slice(1).map((t) => t.id).filter((id) => id !== undefined);
-      if (extra.length) {
-        await chrome.tabs.remove(extra);
-        await log(`🧹 중복 작업 탭 ${extra.length}개 정리 (1개만 유지)`);
+      // ⚠️ **사람이 지금 보고 있는 탭은 뺏지 않는다**(2026-09-11).
+      //    차단이 풀렸는지 확인하려고 사람이 직접 연 탭을 작업 탭으로 삼으면,
+      //    보고 있던 화면이 키워드마다 제멋대로 넘어간다. 그런 탭밖에 없으면
+      //    재사용을 포기하고 아래에서 새 탭을 만든다.
+      const usable = tabs.filter((t) => !t.active);
+      if (usable.length) {
+        workTabId = usable[0].id;
+        const extra = tabs.filter((t) => t.id !== workTabId && !t.active);
+        if (extra.length) await removeTabsKeepWindows(extra, '중복 작업 탭');
+        await chrome.storage.local.set({ [TAB_KEY]: workTabId });
+        return workTabId;
       }
-      await chrome.storage.local.set({ [TAB_KEY]: workTabId });
-      return workTabId;
+      await log('👀 열려 있는 네이버쇼핑 탭을 사람이 보고 있어 그대로 두고, 새 탭을 씁니다.');
     }
   } catch (e) { /* 조회 실패 — 아래에서 새로 만든다 */ }
 
