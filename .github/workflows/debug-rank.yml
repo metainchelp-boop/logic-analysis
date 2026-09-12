@@ -1035,9 +1035,13 @@ jobs:
             docker exec -i logic-analysis sh -c "grep -c '이 줄이 빠져 있었다' /app/auto_analysis.py" 2>/dev/null | sed 's/^/   auto_analysis 정정주석: /'
             docker exec -i logic-analysis sh -c "grep -c '1차 키워드 경로는 빠졌다' /app/naver_crawler.py" 2>/dev/null | sed 's/^/   naver_crawler 정정주석: /'
             echo
-            echo "== [08:25~08:40 에 무엇이 돌았나] 앱 로그 (경로·잡 이름만·키워드 가림) =="
+            echo "== [오늘 05:50~08:40 에 무엇이 돌았나] 앱 로그 (경로·잡 이름만·키워드 가림) =="
+            # ⚠️ 날짜를 박아 두면 다음 날부터 늘 0줄이 나온다(2026-09-13 실측 — 그날 이 칸이 통째로 비었다).
+            #    ⭐ 진단에 날짜·시각을 쓸 때는 **서버 날짜로 만들어 넣는다.**
+            #    창을 06시까지 앞으로 넓혔다 — 08시대 되먹임이 막힌 뒤 06시 유입만 남아 그 축을 봐야 한다.
+            TODAY=$(date +%Y-%m-%d)
             docker logs logic-analysis 2>&1 \
-              | grep -aE '2026-09-12 08:(2[5-9]|3[0-9]|40)' \
+              | grep -aE "$TODAY 0(5:5[0-9]|6:|7:|8:[0-3][0-9]|8:40)" \
               | grep -aviE 'keyword|검색 결과|수집분 서빙' \
               | sed -E "s/\\[[^]]{1,60}\\]/[**]/g; s#https?://[^ ]*#(주소 가림)#g; s/'[^']{1,80}'/'**'/g" \
               | tail -40 || echo "(해당 시각 로그 없음)"
