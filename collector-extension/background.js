@@ -35,8 +35,13 @@ const CFG = {
   //    300위 = 8페이지 → 4페이지로 **이동 횟수 절반**(2026-08-11, 총량이 차단 원인으로
   //    확정된 뒤의 감축). 페이지가 80을 안 받아주고 40씩만 그려도 아래 수집 루프가
   //    '실제 받은 개수 누적'이라 그대로 8페이지로 자동 적응한다(어느 쪽이든 순위 무손상).
-  pageSize: 80,          // 한 페이지 상품 수 (「80개씩 보기」와 동일)
-  maxRank: 300,          // 300위까지 — 실제 받은 개수로 누적해 판단(고정 페이지 수 아님)
+  // ⚠️ 2026-09-12 — **주소에 pagingSize 를 붙이지 않는다.** 화면 기본값(40개)을 그대로 쓴다.
+  //    8/11 에 페이지 이동을 줄이려고 40→80 으로 올렸는데, 그 값이 사람 주소에는 잘 안 붙는
+  //    모양이라 **자동화 표식**이 됐을 가능성이 크다(9/12 대표 A/B: 짧은 주소는 캡차를 주는데
+  //    pagingSize 가 붙은 긴 주소는 캡차조차 없이 즉시 차단).
+  //    ⇒ 깊이는 **페이지 수**로 벌고, 그 페이지 이동은 아래 「클릭으로 넘기기」가 감당한다.
+  pageSize: 40,          // 화면 기본값 — 주소에는 안 붙이고, 마지막 페이지 판정에만 쓴다
+  maxRank: 400,          // 400위까지 (대표 요구 2026-09-12) — 실제 받은 개수로 누적해 판단
   // ⚠️ 광고를 순위에서 빼면(2026-08-12) 같은 4페이지에서 모이는 '오가닉' 개수가 300에
   //    못 미쳐, 종전 조건(300개 채울 때까지)만으로는 루프가 5페이지째로 넘어간다
   //    = 페이지 이동 +25%. 지금 이 IP 는 하루 986개 중 205개밖에 못 도는 상태라
@@ -45,7 +50,10 @@ const CFG = {
   //      · 광고를 빼고 같은 4페이지를 돌면 오가닉 ≈ 274~295
   //    ⇒ 깊이는 사실상 그대로다. 그래서 페이지 수를 4로 못박아 총량을 유지한다.
   //    수집 여력이 늘면 이 값만 5로 올리면 오가닉 300위가 채워진다.
-  pagesPerKeyword: 4,    // 키워드당 페이지 수 상한(총량 고정 — 함부로 올리지 말 것)
+  // ⚠️ 400위 = 40개 × 11장. 종전에는 「페이지를 늘리면 위험도 같이 는다」라 4장으로 못박았는데,
+  //    이제 2장째부터는 **주소창 이동이 아니라 화면 안 클릭**이라 그 사슬이 끊겼다.
+  //    키워드당 주소창 이동은 **1회**다(종전 4회). 깊이를 더 원하면 이 값만 올리면 된다.
+  pagesPerKeyword: 11,   // 키워드당 페이지 수 상한 (40개 × 11 = 440 → 광고 제외 ≈ 400위)
   maxPages: 10,          // 안전 상한(빈 페이지·무한 루프 방지)
   readTries: 12,         // 페이지 판독 재시도 횟수(값이 나올 때까지)
   readGapMs: 800,        // 되읽기 간격 — 12×0.8초 ≈ 10초까지 기다린다
@@ -384,23 +392,32 @@ async function ensureWorkTab() {
     }
   } catch (e) { /* 조회 실패 — 아래에서 새로 만든다 */ }
 
-  // ④ 새로 만든다 — 창이 없으면 창부터
-  let tab;
-  let wins = [];
-  try { wins = await chrome.windows.getAll({ windowTypes: ['normal'] }); } catch (e) { wins = []; }
-  if (!wins.length) {
-    // 창이 하나도 없는 상태(맥: 창만 닫고 크롬은 실행 중) — 최소화 창을 만들어 그 안에서 작업
-    const w = await chrome.windows.create({ url: WORK_URL, focused: false, state: 'minimized' });
-    tab = (w.tabs && w.tabs[0]) || null;
-    if (!tab) throw new Error('작업 창 생성 실패');
-    await log('🪟 열린 크롬 창이 없어 최소화 창을 만들어 진행합니다.');
-  } else {
-    tab = await chrome.tabs.create({
-      url: WORK_URL,
-      active: false,    // 화면을 뺏지 않게 백그라운드로
-      pinned: true,     // 실수로 닫기 어렵게 고정
-      windowId: wins[0].id,
+  // ④ 새로 만든다 — **전용 창**을 쓴다 (2026-09-12 변경)
+  //
+  // ⚠️ 종전엔 남의 창에 `active:false` 배경 탭으로 만들었다. 배경 탭은 페이지가
+  //    `document.visibilityState === 'hidden'` 으로 읽는다 —
+  //    **「사람이 안 보는 탭에서 검색만 계속 도는 것」**은 판별하기 쉬운 신호다.
+  // ⇒ 우리 전용 창을 하나 만들고, 그 창의 **활성 탭**으로 둔다.
+  //    창은 `focused:false` 라 사람이 쓰던 창을 가리지 않으면서,
+  //    최소화가 아니므로 페이지는 자기를 **보이는 상태**로 읽는다.
+  // ⚠️ 최소화(state:'minimized')로 만들면 다시 hidden 이 된다 — 그래서 최소화하지 않는다.
+  let tab = null;
+  try {
+    const w = await chrome.windows.create({
+      url: WORK_URL, focused: false, state: 'normal', width: 1280, height: 900,
     });
+    tab = (w.tabs && w.tabs[0]) || null;
+    if (tab) await log('🪟 수집 전용 창에서 진행합니다(사람 창을 가리지 않습니다).');
+  } catch (e) { tab = null; }
+  if (!tab) {
+    // 전용 창을 못 만들면 종전 방식으로 — 수집이 멈추는 것보다 낫다.
+    let wins = [];
+    try { wins = await chrome.windows.getAll({ windowTypes: ['normal'] }); } catch (e2) { wins = []; }
+    if (!wins.length) throw new Error('작업 창 생성 실패');
+    tab = await chrome.tabs.create({
+      url: WORK_URL, active: false, pinned: true, windowId: wins[0].id,
+    });
+    await log('⚠️ 전용 창을 못 만들어 배경 탭으로 진행합니다(차단 위험이 조금 더 높습니다).');
   }
   workTabId = tab.id;
   await chrome.storage.local.set({ [TAB_KEY]: workTabId });
@@ -491,6 +508,72 @@ function pageExtract() {
   return { err: nd ? 'NO_LIST' : 'NO_NEXT_DATA', href: href, title: title, body: body.slice(0, 300) };
 }
 
+/** 이번 회차에 어떤 방식으로 페이지를 넘겼나 — 서버 meta 로 올려 현장에서 판명되게 한다. */
+let _navMode = { url: 0, click: 0, fallback: 0, reported: false };
+
+/** 화면 안에서 실행돼 **페이지 버튼을 실제로 클릭**한다.
+ *
+ * ⚠️ 네이버 화면 구조는 우리가 정하는 게 아니라 바뀔 수 있다. 그래서 **여러 모양을 차례로**
+ *    시도하고, 하나도 못 찾으면 `false` 를 돌려 호출부가 옛 방식으로 폴백하게 한다.
+ *    「못 찾으면 수집을 멈춘다」로 만들면 화면이 조금만 바뀌어도 전량이 죽는다.
+ * ⚠️ 이 함수는 페이지 안(MAIN world)에서 돈다 — 바깥 변수를 쓸 수 없다.
+ */
+function pagerClick(target) {
+  var want = String(target);
+  function vis(el) {
+    if (!el) return false;
+    var r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  }
+  // ① 페이지네이션 영역 안에서 숫자가 정확히 맞는 링크·버튼
+  var scopes = document.querySelectorAll('[class*="pagination"],[class*="paging"],[role="navigation"]');
+  for (var s = 0; s < scopes.length; s++) {
+    var cands = scopes[s].querySelectorAll('a,button');
+    for (var i = 0; i < cands.length; i++) {
+      var el = cands[i];
+      if (!vis(el)) continue;
+      if ((el.textContent || '').trim() === want) { el.click(); return 'num'; }
+    }
+  }
+  // ② 「다음」 버튼 (한 장씩 넘어갈 때만 옳다 — 호출부가 순서대로 부르므로 성립)
+  for (var s2 = 0; s2 < scopes.length; s2++) {
+    var c2 = scopes[s2].querySelectorAll('a,button');
+    for (var j = 0; j < c2.length; j++) {
+      var e2 = c2[j];
+      if (!vis(e2)) continue;
+      var t = (e2.textContent || '').trim();
+      var aria = e2.getAttribute('aria-label') || '';
+      if (t === '다음' || /다음/.test(aria) || /next/i.test(e2.className || '')) {
+        if (e2.getAttribute('aria-disabled') === 'true' || e2.disabled) continue;
+        e2.click(); return 'next';
+      }
+    }
+  }
+  // ③ 영역을 못 찾았을 때 — 문서 전체에서 숫자가 정확히 맞는 링크
+  var all = document.querySelectorAll('a');
+  for (var k = 0; k < all.length; k++) {
+    var e3 = all[k];
+    if (!vis(e3)) continue;
+    if ((e3.textContent || '').trim() !== want) continue;
+    var href = e3.getAttribute('href') || '';
+    if (href.indexOf('pagingIndex') < 0 && href !== '#') continue;
+    e3.click(); return 'loose';
+  }
+  return '';
+}
+
+/** 작업 탭에서 pagerClick 을 돌린다. 클릭했으면 true. */
+async function clickToPage(tabId, target) {
+  try {
+    const [res] = await chrome.scripting.executeScript({
+      target: { tabId }, world: 'MAIN', func: pagerClick, args: [target],
+    });
+    return !!(res && res.result);
+  } catch (e) {
+    return false;   // 주입 실패도 폴백 대상
+  }
+}
+
 /** 탭이 목표 주소로 이동을 끝낼 때까지 대기 */
 function waitNavigated(tabId, needle) {
   return new Promise((resolve) => {
@@ -523,16 +606,44 @@ function waitNavigated(tabId, needle) {
  *    플레이스 추적기가 매일 이 구조로 성공하고 있고, 실측(2026-08-06)에서
  *    pagingIndex=2 페이지에 40개 상품과 필요한 필드가 전부 들어 있음을 확인했다. */
 async function fetchPage(keyword, pagingIndex) {
-  const q = encodeURIComponent(keyword);
-  // 사람이 페이지를 넘길 때와 같은 주소(pagingSize 도 화면 기본값 40 그대로)
-  const url = 'https://search.shopping.naver.com/search/all'
-    + `?query=${q}&origQuery=${q}&adQuery=${q}`
-    + `&pagingIndex=${pagingIndex}&pagingSize=${CFG.pageSize}`
-    + '&productSet=total&viewType=list&sort=rel&iq=&eq=&xq=';
-
   const tabId = await ensureWorkTab();
-  await chrome.tabs.update(tabId, { url });
-  await waitNavigated(tabId, `pagingIndex=${pagingIndex}`);
+  // ⭐ 2026-09-12 — **페이지를 주소창으로 넘기지 않는다.**
+  //
+  // 종전엔 장마다 `chrome.tabs.update({url})` 로 이동했다. 그건 **주소창에 붙여넣고
+  // 엔터를 치는 것과 같아서**, 어디서 왔는지(referrer)가 비어 있고 클릭도 없다.
+  // 2페이지를 주소창에 쳐서 여는 사람은 없다 — 우리는 그걸 **시간당 160번** 했다.
+  //
+  // 이제 이렇게 한다:
+  //   · 1페이지 = 주소로 연다(사람이 검색창에 치는 것과 같은 **1회**)
+  //   · 2페이지부터 = **화면 안의 페이지 버튼을 실제로 클릭**한다
+  // ⚠️ 클릭이 안 되면(버튼을 못 찾으면) **옛 방식으로 폴백**하고 그 사실을 서버에 알린다.
+  //    현장에서 자동으로 판명되게 — 사람이 확인하러 들어가지 않아도 되게.
+  if (pagingIndex <= 1) {
+    // 사람 주소와 같은 최소 형태. pagingSize·productSet·viewType 을 붙이지 않는다.
+    const url = 'https://search.shopping.naver.com/search/all'
+      + `?query=${encodeURIComponent(keyword)}`;
+    await chrome.tabs.update(tabId, { url });
+    await waitNavigated(tabId, encodeURIComponent(keyword));
+    _navMode.url += 1;
+  } else {
+    const clicked = await clickToPage(tabId, pagingIndex);
+    if (clicked) {
+      _navMode.click += 1;
+      await waitNavigated(tabId, `pagingIndex=${pagingIndex}`);
+    } else {
+      // 폴백 — 버튼을 못 찾았다. 옛 방식으로 간다(수집이 멈추는 것보다 낫다).
+      _navMode.fallback += 1;
+      if (!_navMode.reported) {
+        _navMode.reported = true;
+        reportBlocked({ keyword, pagingIndex, err: 'NO_PAGER(페이지 버튼 못 찾음)',
+                        note: '클릭 이동 불가 — 주소 이동으로 폴백' });
+      }
+      const url = 'https://search.shopping.naver.com/search/all'
+        + `?query=${encodeURIComponent(keyword)}&pagingIndex=${pagingIndex}`;
+      await chrome.tabs.update(tabId, { url });
+      await waitNavigated(tabId, `pagingIndex=${pagingIndex}`);
+    }
+  }
 
   // ⚠️ 고정 시간만 기다리고 한 번 읽던 것을 **값이 나올 때까지 되읽기**로 바꾼다
   //    (2026-08-11 실사고: 정상 페이지를 3초 만에 읽어 '데이터 없음' → 차단으로 오판 →
@@ -589,6 +700,7 @@ async function fetchPage(keyword, pagingIndex) {
  *     페이지가 요청한 개수를 그대로 주지 않는 경우(광고 제외·마지막 페이지 등)
  *     고정 계산은 순위를 통째로 어긋나게 만든다. 누적이면 어떤 경우에도 맞다. */
 async function collectKeyword(keyword) {
+  _navMode = { url: 0, click: 0, fallback: 0, reported: _navMode.reported };   // 키워드마다 새로 센다
   // 순번 부여의 실체는 rank_rules.takeOrganic 하나다 — 광고 제외가 seenIds 중복 처리보다
   // 먼저인 순서까지가 계약이고, node 회귀 테스트가 그 계약을 검사한다(신고 #253 후속).
   const st = {
@@ -644,6 +756,9 @@ async function uploadKeyword(token, keyword, payload) {
         collectorVersion: (chrome.runtime.getManifest && chrome.runtime.getManifest().version) || '',
         rankPolicy: 'organic-v2(ad:legacy-or-adId+adType+adcrUrl)',
         pageSize: CFG.pageSize, productSet: 'total', sort: 'rel',
+        // 2026-09-12 — 페이지를 **어떻게** 넘겼는지. 클릭이 실제로 되는지가
+        // 현장에서만 확인 가능해, 서버가 집계로 알 수 있게 싣는다.
+        nav: { url: _navMode.url, click: _navMode.click, fallback: _navMode.fallback },
         rawCount: payload.rawCount || 0, adSkipped: payload.adSkipped || 0,
         dupSkipped: payload.dupSkipped || 0, adHintMissed: payload.adHintMissed || 0,
       },

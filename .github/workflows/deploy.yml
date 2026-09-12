@@ -141,6 +141,12 @@ jobs:
       - name: Collector block report regression
         run: python backend/tests/test_block_report.py
 
+      # 사람처럼 넘기기(2026-09-12, v1.11.0) — 페이지를 주소창으로 넘기던 것을 클릭으로 바꿨다.
+      # 「주소창 붙여넣기」는 referrer 도 클릭도 없어 자동화 표식이었다(8/28 새 IP 에서도
+      # 첫 요청부터 막힌 것이 그 증거). 깊이 400위·폴백·전용 창까지 이 시험이 지킨다.
+      - name: Collector human nav regression
+        run: node collector-extension/tests/human_nav.test.js
+
       # 수집 멈춤 감시(2026-09-10) — 하루가 통째로 0건이 되어도 아무도 몰랐다.
       # 상한(5시간)·쿨다운(6시간)·문자 90바이트·기록 커밋을 지킨다.
       # ⚠️ 그중 「기록 커밋」이 핵심이다 — 안 되면 매시간 같은 문자가 도배된다.
