@@ -193,12 +193,23 @@ def _backup_db_on_startup():
         )
 
     def _prune(keep):
+        """최신 keep **세대**만 남긴다(한 세대의 .db·.db.gz 는 함께 처리).
+
+        ⚠️ 2026-09-11 수정 — 종전엔 **파일 개수**를 셌다. 압축이 끊겨 비압축 원본이
+           남은 날에는 그 하루가 파일 2개를 차지해, keep=1 이면 **지난 세대가 통째로
+           밀려났다.** 그날 실측: 부팅 백업이 00:30 세대의 비압축본을 지웠고 그것이
+           **그 시점 유일하게 복구 가능한 백업**이었다(자기가 만든 것이 정상이라 무해했을 뿐).
+           판단 규칙은 db_backup.plan_prune 에 있고 회귀 시험이 지킨다.
+        """
         try:
-            bks = _list_backups()
-            while len(bks) > keep:
-                old = bks.pop(0)
-                os.remove(os.path.join(backup_dir, old))
-                logger.info(f"  🗑️ 오래된 백업 삭제: {old}")
+            from db_backup import plan_prune
+        except Exception as _ie:   # 규칙을 못 읽으면 지우지 않는다(백업을 잃는 쪽으로 실패하지 않는다)
+            logger.warning(f"백업 정리 규칙 로드 실패 — 이번 정리 건너뜀: {_ie}")
+            return
+        try:
+            for _f in plan_prune(os.listdir(backup_dir), keep):
+                os.remove(os.path.join(backup_dir, _f))
+                logger.info(f"  🗑️ 오래된 백업 삭제: {_f}")
         except Exception as _pe:
             logger.warning(f"백업 정리 실패(무시): {_pe}")
 
@@ -236,15 +247,39 @@ def _backup_db_on_startup():
     backup_path = os.path.join(backup_dir, f"logic_analysis_backup_{ts}.db")
 
     def _compress(raw_path):
-        """비압축 .db → .db.gz 로 압축하고 원본 제거(스케줄 백업과 동일 규칙).
-        DB 4.8GB → 약 0.5GB. 실패하면 비압축 원본을 그대로 남긴다(백업 자체는 성립)."""
+        """비압축 .db → .db.gz 로 압축하고, **끝까지 풀리는지 확인한 뒤에만** 원본을 지운다.
+
+        ⚠️ 2026-09-11 수정 — 종전엔 압축 직후 원본을 지웠고 **압축본이 쓸 수 있는지
+           아무도 안 봤다.** 9/11 00:30 백업이 9.0%(243MB/2.7GB)에서 끊겼는데 로그는
+           「완료」만 찍었다(배포가 컨테이너를 교체하며 gzip 을 죽였다).
+           스케줄 백업(scheduler._run_daily_db_backup)은 그날 고쳤는데 **이 경로가 빠져
+           있었다** — 백업 경로가 둘인 것을 놓쳤다.
+        ⭐ 「백업을 만들었다」와 「그 백업으로 되돌릴 수 있다」는 다른 축이다.
+        """
         import gzip
         gz_path = raw_path + ".gz"
         try:
+            _raw_size = os.path.getsize(raw_path)
+        except Exception:
+            _raw_size = None
+        try:
             with open(raw_path, "rb") as f_in, gzip.open(gz_path, "wb", compresslevel=6) as f_out:
                 shutil.copyfileobj(f_in, f_out, length=1024 * 1024)
-            os.remove(raw_path)
+
+            from db_backup import verify_gzip
+            _ok, _n, _why = verify_gzip(gz_path, expect_bytes=_raw_size)
+            if not _ok:
+                # 깨진 압축본은 버리고 **비압축 원본을 그날의 백업으로 남긴다.**
+                logger.error(f"❌ 백업 압축본이 복구에 쓸 수 없다 — {_why}")
+                logger.error("   압축본을 버리고 비압축 원본을 백업으로 남긴다.")
+                try:
+                    os.remove(gz_path)
+                except Exception:
+                    pass
+                return
             _sz = os.path.getsize(gz_path) // (1024 ** 2)
+            logger.info(f"  🔎 백업 압축 검증 통과 — 푼 크기 {_n:,} bytes = 원본과 일치")
+            os.remove(raw_path)
             logger.info(f"  🗜️ 백업 압축 완료: {os.path.basename(gz_path)} ({_sz}MB)")
         except Exception as _ce:
             try:
@@ -511,7 +546,10 @@ class NotificationSettingsRequest(BaseModel):
 #   - read_cache=True : 캐시 우선(분석·스냅샷용, 3시간 staleness 허용)
 #   - read_cache=False: 항상 새로 크롤(실시간 조회용)하되 결과는 캐시에 채워 후속 분석과 공유
 # 캐시 조회/저장 실패는 전부 방어적으로 무시하고 직접 크롤로 폴백 → 기능은 절대 멈추지 않음.
-def _shared_crawl(keyword: str, max_results: int = 500, read_cache: bool = True, ttl: int = None) -> list:
+def _shared_crawl(keyword: str, max_results: int = 500, read_cache: bool = True, ttl: int = None,
+                  enqueue_on_miss: bool = True) -> list:
+    # ⚠️ enqueue_on_miss — 기본 True(직원 화면은 종전 그대로: 수집분이 없으면 큐에 넣는다).
+    #    배치가 이 함수를 빌려 쓸 때만 False 로 불러 자기 일을 큐에 되돌려 넣지 않게 한다(2026-09-12).
     from naver_crawler import search_products as _sp
     products = None
     cache_ok = False
@@ -526,7 +564,8 @@ def _shared_crawl(keyword: str, max_results: int = 500, read_cache: bool = True,
         logger.warning(f"[크롤캐시] 우회(직접 크롤): {_ce}")
         products, cache_ok = None, False
     if products is None:
-        products = _sp(keyword, max_results=max_results, retry_on_429=True)
+        products = _sp(keyword, max_results=max_results, retry_on_429=True,
+                       enqueue_on_miss=enqueue_on_miss)
         if cache_ok:
             try:
                 save_cached_shopping_search(keyword, max_results, products)
@@ -3418,8 +3457,15 @@ class AdvertiserAnalysisRequest(BaseModel):
             raise ValueError('유효한 상품 URL을 입력하세요')
         return v
 
-def compute_advertiser_report(keyword: str, product_url: str):
-    """광고주 맞춤 분석 — 엔드포인트/스케줄러 공용 재사용 함수. {"success","data"} 반환."""
+def compute_advertiser_report(keyword: str, product_url: str, enqueue_on_miss: bool = True):
+    """광고주 맞춤 분석 — 엔드포인트/스케줄러 공용 재사용 함수. {"success","data"} 반환.
+
+    ⚠️ enqueue_on_miss — 기본 True(직원이 화면에서 부른 것은 진짜 요청이니 종전대로 큐에 넣는다).
+       **08:30 분석 배치가 키워드마다 이 함수를 빌려 쓴다**(auto_analysis). 그 경로는 False 로
+       불러야 배치가 자기 일을 큐에 되돌려 넣지 않는다 — 2026-09-12 실측에서 이 경로 하나로
+       하루 수백 건이 들어오고 있었다(PR #199 는 auto_analysis·scheduler 의 **직접** 호출만
+       막았고, 배치가 화면용 함수를 빌려 쓰는 이 경로를 세지 않았다).
+    """
     from types import SimpleNamespace
     req = SimpleNamespace(keyword=keyword, product_url=product_url)
     try:
@@ -3428,7 +3474,8 @@ def compute_advertiser_report(keyword: str, product_url: str):
         # 1) 광고주 상품 정보 조회
         #    keyword를 함께 넘겨 빠른 키워드-검색 경로를 사용 → 가격/카테고리까지 채움
         #    (미전달 시 my_price 0원·주요카테고리 공란 발생)
-        product_info = get_product_info(req.product_url, keyword=req.keyword)
+        product_info = get_product_info(req.product_url, keyword=req.keyword,
+                                        enqueue_on_miss=enqueue_on_miss)
 
         # get_product_info 실패 시 (스마트스토어 ID ≠ nvMid) → 키워드 검색에서 productId로 보완
         if not product_info.get("product_name"):
@@ -3437,7 +3484,7 @@ def compute_advertiser_report(keyword: str, product_url: str):
             from naver_crawler import search_products as _sp
             target_pid = _extract_pid(req.product_url) or ""
             target_store = _extract_store(req.product_url) or ""
-            _prods = _sp(req.keyword, max_results=200)
+            _prods = _sp(req.keyword, max_results=200, enqueue_on_miss=enqueue_on_miss)
             for _p in _prods:
                 p_url = _p.get("product_url", "")
                 p_pid = _p.get("product_id", "")
@@ -3459,11 +3506,12 @@ def compute_advertiser_report(keyword: str, product_url: str):
         #      매칭 로직은 그대로(cached_products로 결과만 재사용). retry_on_429=True로 429 빈결과 방지.
         # [A] 수집 깊이 1000→500 + [B] 3시간 공유 캐시. 같은 키워드를 여러 직원/워커가 분석하면
         #     _shared_crawl가 1회 크롤 결과를 공유(캐시 우선, 실패 시 직접 크롤 폴백 → 분석 안 멈춤).
-        all_products = _shared_crawl(req.keyword, 500)
+        all_products = _shared_crawl(req.keyword, 500, enqueue_on_miss=enqueue_on_miss)
         rank, page, top_competitors = find_product_rank(
             keyword=req.keyword, product_url=req.product_url, max_pages=5,
             product_name=product_info.get("product_name", ""),
             cached_products=all_products,
+            enqueue_on_miss=enqueue_on_miss,
         )
         page1_products = all_products[:80]
         if not page1_products:

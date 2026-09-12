@@ -684,7 +684,9 @@ def run_single_analysis(client_id: int, client_name: str, keyword: str, product_
     if product_url:
         try:
             from main import compute_advertiser_report
-            _adv = compute_advertiser_report(keyword, product_url)
+            # ⚠️ enqueue_on_miss=False — 배치가 화면용 함수를 빌려 쓰는 경로다.
+            #    이 한 줄이 빠져 있어 08:30 배치가 키워드마다 큐에 1건씩 되넣고 있었다(2026-09-12 실측).
+            _adv = compute_advertiser_report(keyword, product_url, enqueue_on_miss=False)
             if isinstance(_adv, dict) and _adv.get("success"):
                 advertiser_data = _adv.get("data", {}) or {}
                 logger.info(f"  [{keyword}] 광고주 분석(자동) 완료")

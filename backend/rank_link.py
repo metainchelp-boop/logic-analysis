@@ -380,6 +380,23 @@ def run_maintenance(linked_by: int = 0) -> Dict[str, Any]:
     """매일 한 번 — 새로 등록된 것들을 잇고, 삭제된 것들을 털고,
        그래도 주인을 못 찾은 것은 추적에서 내린다."""
     pruned = prune_orphans()
+    # 업체가 사라졌는데 남은 자식 행(분석·순위이력 등)도 여기서 함께 치운다(2026-09-11).
+    # ⚠️ 새로 생기는 것은 삭제 경로마다 client_purge 를 쓰는 것으로 막았고, 이 줄은
+    #    **과거에 새던 경로가 남긴 것**을 청소한다(진단이 세던 「고아 순위행」).
+    # ⚠️ 연결을 새로 열면 **커밋·닫기까지** 해야 한다 — DELETE 는 커밋 없이는 사라지고
+    #    닫지 않으면 연결이 샌다(이 줄을 쓰다가 실제로 한 번 빠뜨렸다).
+    try:
+        from client_purge import prune_orphans as _prune_client_children
+        _c = _get_conn()
+        try:
+            _left = _prune_client_children(_c)
+            if _left:
+                _c.commit()
+                logger.info(f"[rank_link] 업체 없는 자식 행 정리: {_left}")
+        finally:
+            _c.close()
+    except Exception as _ce:
+        logger.warning(f"[rank_link] 자식 고아 정리 실패(무시): {_ce}")
     res = apply_backfill(linked_by=linked_by)
     res["pruned"] = pruned
     res["disabled"] = disable_ownerless().get("disabled", 0)

@@ -40,8 +40,11 @@ def _calls_with_window(src, names, window=4):
     return out
 
 
+# ⚠️ 2026-09-12 추가 — 배치가 **화면용 함수를 빌려 쓰는** 경로도 같은 목록에 넣는다.
+#    PR #199 는 이 목록에 없던 `compute_advertiser_report` 때문에 절반만 막혔다.
 _FETCHERS = ["search_naver_shopping_api", "search_products",
-             "find_product_rank", "get_product_info"]
+             "find_product_rank", "get_product_info",
+             "compute_advertiser_report", "_shared_crawl"]
 
 
 def test_batch_never_refills_the_queue():
@@ -142,6 +145,95 @@ def test_live_db_is_never_a_prune_target():
     for danger in ("os.remove", "DROP TABLE", "DELETE FROM collected_serp",
                    "DELETE FROM clients", "DELETE FROM rankings"):
         assert danger not in body, f"정리 함수가 위험한 일을 한다: {danger}"
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# 2026-09-12 — 배치가 화면용 함수(main.py)를 빌려 쓰는 경로
+#
+# ⚠️ 경위: PR #199 를 배포한 다음 날 아침에도 큐가 찼다(08:30~ 분당 ~12.5건, 그날 오전만
+#    200건 넘게). 배포본에는 고침이 분명히 들어 있었다(서버 실측: 표지·정정 주석 확인).
+#    범인은 `auto_analysis` 가 키워드마다 부르는 **`main.compute_advertiser_report`** 였다.
+#    그 안에서 `get_product_info` · `search_products` · `_shared_crawl` 이 기본값(True)으로
+#    돌아 키워드 1개당 큐 1건이 들어갔다.
+#
+# ⭐ 교훈: 「배치가 무엇을 부르는가」를 셀 때 **직접 호출만 세면 절반이다.**
+#    배치가 화면 쪽 함수를 빌려 쓰면 그 안쪽은 화면 기본값으로 돈다.
+#    아래 시험은 이름을 하나 더 적는 대신 **빌려 쓰는 관계 자체**를 검사한다 —
+#    다음에 새 함수를 빌려 써도 먼저 깨진다.
+# ──────────────────────────────────────────────────────────────────────────
+
+_BATCH_MODULES = ("scheduler.py", "auto_analysis.py", "rank_record.py")
+
+
+def _borrowed_from_main(src):
+    """배치 모듈이 main 에서 끌어다 쓰는 이름들 (지연 임포트 포함)."""
+    out = set()
+    for m in re.finditer(r"from\s+main\s+import\s+([^\n(]+)", src):
+        for name in m.group(1).split(","):
+            name = name.strip().split(" as ")[0].strip()
+            if name and not name.startswith("*"):
+                out.add(name)
+    return out
+
+
+def test_every_borrowed_screen_function_is_called_with_the_flag_off():
+    """⭐ 배치가 main 에서 빌려 쓰는 함수는 전부 enqueue_on_miss=False 로 불러야 한다.
+
+    이름 목록을 늘리는 방식이 아니라 **빌려 쓰는 관계**를 보므로,
+    다음에 새 함수를 빌려 써도 이 시험이 먼저 깨진다.
+    """
+    bad = []
+    for f in _BATCH_MODULES:
+        try:
+            src = _src(f)
+        except IOError:
+            continue
+        borrowed = _borrowed_from_main(src)
+        if not borrowed:
+            continue
+        for ln, line, win in _calls_with_window(src, [re.escape(n) for n in borrowed]):
+            if "enqueue_on_miss=False" not in win:
+                bad.append("%s:%d  %s" % (f, ln, line[:70]))
+    assert not bad, ("배치가 화면용 함수를 기본값(True)으로 부른다 — 큐가 매일 다시 찬다:\n  "
+                     + "\n  ".join(bad))
+
+
+def test_the_borrowed_function_threads_the_flag_inward():
+    """빌려 쓰는 함수가 플래그를 받아 **안쪽까지** 넘기지 않으면 False 를 줘도 소용없다."""
+    mn = _src("main.py")
+    for sig in ("def compute_advertiser_report(", "def _shared_crawl("):
+        i = mn.find(sig)
+        assert i >= 0, "함수를 못 찾았다: %s" % sig
+        head = mn[i:i + 400].split(":\n", 1)[0]
+        assert "enqueue_on_miss: bool = True" in head, \
+            "%s 가 플래그를 기본 True 로 받지 않는다(화면 무회귀 + 배치 차단 둘 다 필요)" % sig
+
+    i = mn.find("def compute_advertiser_report(")
+    body = mn[i:i + 6000]
+    inner = [w for _, _, w in _calls_with_window(
+        body, ["get_product_info", "_sp", "_shared_crawl", "find_product_rank"], window=6)]
+    assert inner, "compute_advertiser_report 안에서 수집 호출을 못 찾았다 — 구조가 바뀌었다"
+    for w in inner:
+        assert "enqueue_on_miss=enqueue_on_miss" in w, \
+            "compute_advertiser_report 안에 플래그를 안 넘기는 수집 호출이 남아 있다"
+
+    i = mn.find("def _shared_crawl(")
+    body = mn[i:i + 2000]
+    j = body.find("_sp(keyword")
+    assert j >= 0, "_shared_crawl 안에서 실제 크롤 호출을 못 찾았다"
+    assert "enqueue_on_miss=enqueue_on_miss" in body[j:j + 300], \
+        "_shared_crawl 이 크롤 호출에 플래그를 안 넘긴다"
+
+
+def test_screen_still_enqueues_through_the_borrowed_function():
+    """무회귀 — 직원이 화면에서 부르는 자리는 플래그를 안 준다(= 기본 True 로 큐에 들어간다)."""
+    mn = _src("main.py")
+    i = mn.find("def check_rank(")
+    assert i >= 0, "화면 순위 조회 경로가 사라졌다"
+    body = mn[i:i + 1500]
+    assert "_shared_crawl(req.keyword" in body, "화면 경로가 공용 크롤을 안 쓴다"
+    assert "enqueue_on_miss=False" not in body, \
+        "화면 순위 조회가 큐에 안 들어가게 바뀌었다 — 무회귀 위반"
 
 
 if __name__ == "__main__":

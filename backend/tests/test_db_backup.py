@@ -147,6 +147,39 @@ def test_scheduler_verifies_before_deleting_the_raw_copy():
     assert "os.remove(gz_path)" in blk, "깨진 압축본을 버리지 않는다"
 
 
+def test_startup_backup_path_is_fixed_too():
+    """⭐ 백업 경로는 **둘**이다 — 스케줄(00:30)과 앱 기동.
+
+    2026-09-11 에 스케줄 경로만 고치고 기동 경로를 놓쳤다. 그날 배포 직후 기동 백업이
+    돌면서 00:30 세대의 비압축본을 지웠는데, **그것이 그 시점 유일하게 복구 가능한
+    백업**이었다(자기가 만든 것이 정상이라 무해했을 뿐이다).
+    ⇒ 한쪽만 고치면 다른 쪽이 같은 사고를 낸다. 두 경로를 함께 지킨다.
+    """
+    m = _src("main.py")
+    i = m.find("def _backup_db_on_startup(")
+    assert i >= 0, "기동 백업 함수가 없다 — 이름이 바뀌었으면 이 시험을 함께 고칠 것"
+    body = m[i:i + 9000]
+    assert "from db_backup import verify_gzip" in body, \
+        "기동 백업이 압축 검증을 안 부른다 — 깨진 압축본이 그대로 백업이 된다"
+    assert "from db_backup import plan_prune" in body, \
+        "기동 백업이 세대 기준 정리를 안 쓴다 — 파일 개수로 세면 지난 세대가 밀려난다"
+    i_ok = body.find("if not _ok:")
+    i_rm = body.find("os.remove(raw_path)")
+    assert 0 <= i_ok < i_rm, "검증 전에 원본을 지운다 — 9/11 사고가 이 경로에서 재발한다"
+
+
+def test_both_backup_paths_share_one_rule():
+    """두 경로가 같은 판단 규칙(db_backup)을 쓰는지 — 복사본이 갈라지면 또 어긋난다."""
+    for f in ("main.py", "scheduler.py"):
+        src = _src(f)
+        assert "from db_backup import" in src, f"{f} 가 공용 백업 규칙을 안 쓴다"
+    # 옛 방식(파일 개수를 세는 while 루프)이 남아 있지 않은지
+    m = _src("main.py")
+    i = m.find("def _backup_db_on_startup(")
+    body = m[i:i + 9000]
+    assert "while len(bks) > keep" not in body, "파일 개수로 세는 옛 정리 루프가 남아 있다"
+
+
 def test_backup_keep_is_at_least_two_generations():
     s = _src("scheduler.py")
     assert "BACKUP_KEEP = 2" in s or "BACKUP_KEEP = 3" in s, \
