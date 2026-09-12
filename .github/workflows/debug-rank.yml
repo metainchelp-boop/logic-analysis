@@ -3482,6 +3482,27 @@ jobs:
             docker logs logic-analysis 2>&1 | grep -i "수집 멈춤 감시" | tail -3 || echo "  (등록 줄 없음)"
             echo "-- 점검이 돌았나 --"
             docker logs logic-analysis 2>&1 | grep -E "수집 점검|수집 경보|수집 재개 확인" | tail -8 || echo "  (아직 안 돌았다 — 09~21시 매시 10분)"
+            echo "== 🧱 막힘 보고 (확장이 서버로 보낸 증거) =="
+            docker exec -i logic-analysis python3 - <<'PYBLK'
+            import sqlite3, os
+            conn = sqlite3.connect(os.getenv("DB_PATH", "/app/data/logic_data.db"))
+            conn.row_factory = sqlite3.Row
+            t = conn.execute("SELECT name FROM sqlite_master WHERE type='table'"
+                             " AND name='collector_blocks'").fetchone()
+            if not t:
+                print("  collector_blocks 표 없음(아직 한 건도 안 왔다)")
+            else:
+                n = conn.execute("SELECT COUNT(*) c FROM collector_blocks").fetchone()["c"]
+                print("  보고 누적:", n, "건")
+                for r in conn.execute("SELECT * FROM collector_blocks ORDER BY id DESC LIMIT 5"):
+                    print("  " + "-" * 58)
+                    print("  [%s] v%s | %s | %s" % (r["at"], r["ext_version"], r["note"], r["err"]))
+                    print("    키워드: %s (p%s)" % (r["keyword"], r["paging_index"]))
+                    print("    주소: %s" % (r["href"] or ""))
+                    print("    제목: %s" % (r["title"] or ""))
+                    print("    본문: %s" % (r["body"] or "").replace(chr(10), " "))
+            conn.close()
+            PYBLK
             echo "-- 표·판정 이력 --"
             docker exec -i logic-analysis python3 - <<'PYEOF'
             import sqlite3, os
