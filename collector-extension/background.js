@@ -138,6 +138,38 @@ async function setState(patch) {
 
 const LOG_KEEP = 200;
 
+/** 막힌 근거를 **서버로도** 보낸다 (2026-09-12 신설).
+ *
+ * ⚠️ 왜 필요한가 — 2026-09-09~11 에 수집이 멈췄을 때, 네이버가 무엇을 돌려줬는지가
+ *    **이 기계 팝업에만** 남아 있었다. 사람이 그 칸을 열어 읽어 주기 전에는
+ *    「IP 차단」인지 「확장 감지」인지 가릴 수 없었고, 그렇게 사흘을 썼다.
+ *    ⇒ 이제 막히면 확장이 스스로 이유를 서버에 남긴다.
+ * ⚠️ **절대 예외를 밖으로 내지 않는다.** 보고가 수집을 넘어뜨리면 본말전도다.
+ * ⚠️ 개인정보를 담지 않는다 — 우리가 만든 검색 주소·페이지 제목·본문 앞 500자뿐.
+ */
+async function reportBlocked(info) {
+  try {
+    const token = await getToken();
+    if (!token) return;
+    let ver = '';
+    try { ver = chrome.runtime.getManifest().version; } catch (e) { /* 무시 */ }
+    await fetch(`${CFG.serverBase}/api/collector/blocked`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Collector-Token': token },
+      body: JSON.stringify({
+        keyword: info.keyword || '',
+        pagingIndex: info.pagingIndex || 0,
+        err: info.err || '',
+        title: (info.title || '').slice(0, 200),
+        href: (info.href || '').slice(0, 500),
+        body: (info.body || '').slice(0, 500),
+        extVersion: ver,
+        note: info.note || '',
+      }),
+    });
+  } catch (e) { /* 보고 실패는 무시한다 — 수집이 우선이다 */ }
+}
+
 /** 로그 한 줄 남기기.
  *
  *  ⭐ 같은 문장이 연달아 오면 **줄을 늘리지 않고 맨 윗줄을 갱신**한다(2026-09-09).
@@ -511,7 +543,13 @@ async function fetchPage(keyword, pagingIndex) {
     let cur;
     try { cur = await chrome.tabs.get(tabId); } catch (e) { throw new Error('작업 탭이 사라졌습니다'); }
     // 주소가 검색 도메인을 벗어났으면 그건 진짜 차단(캡차·로그인 유도)
-    if (isBlockedUrl(cur && cur.url)) throw new Error('BLOCKED:' + cur.url);
+    if (isBlockedUrl(cur && cur.url)) {
+      // 주소가 아예 다른 곳으로 튕겼다 — 그 주소 자체가 증거다.
+      reportBlocked({ keyword, pagingIndex, err: 'REDIRECT(검색 도메인 이탈)',
+                      href: (cur && cur.url) || '', title: (cur && cur.title) || '',
+                      note: '주소 이탈' });
+      throw new Error('BLOCKED:' + cur.url);
+    }
 
     const [res] = await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func: pageExtract });
     out = res && res.result;
@@ -520,10 +558,10 @@ async function fetchPage(keyword, pagingIndex) {
     // ⚠️ 이때도 무엇을 봤는지 반드시 남긴다 — 종전엔 차단 분기가 증거를 안 남겨
     //    팝업 진단칸이 정작 필요할 때 비어 있었다(2026-08-11).
     if (out && out.err === 'BLOCK_TEXT') {
-      chrome.storage.local.set({
-        readFail: { keyword, pagingIndex, at: new Date().toISOString(), err: 'BLOCK_TEXT(차단 문구 확인)',
-                    title: out.title || '', href: out.href || '', body: out.body || '' },
-      });
+      const ev = { keyword, pagingIndex, at: new Date().toISOString(), err: 'BLOCK_TEXT(차단 문구 확인)',
+                   title: out.title || '', href: out.href || '', body: out.body || '' };
+      chrome.storage.local.set({ readFail: ev });
+      reportBlocked({ ...ev, note: '차단 문구' });     // 서버도 알게 한다(기다리지 않는다)
       throw new Error(`BLOCKED:${out.title || out.href}`);
     }
     lastErr = (out && out.err) || '주입 실패';
@@ -532,11 +570,13 @@ async function fetchPage(keyword, pagingIndex) {
 
   // 여기까지 왔으면 '차단'이 아니라 '판독 실패'다 — 6시간 정지시키지 않고 다음 회차에 재시도한다.
   // 무엇을 봤는지 남겨 둬야 다음에 사람 손 안 빌리고 원인을 가른다.
-  chrome.storage.local.set({
-    readFail: { keyword, pagingIndex, at: new Date().toISOString(),
-                err: lastErr, title: (out && out.title) || '', href: (out && out.href) || '',
-                body: (out && out.body) || '' },
-  });
+  const ev = { keyword, pagingIndex, at: new Date().toISOString(),
+               err: lastErr, title: (out && out.title) || '', href: (out && out.href) || '',
+               body: (out && out.body) || '' };
+  chrome.storage.local.set({ readFail: ev });
+  // ⚠️ 이건 차단이 아니라 **판독 실패**다. 그래도 서버에 남긴다 —
+  //    「막혔다」와 「못 읽었다」는 다른 축이고, 섞이면 또 사흘을 쓴다.
+  reportBlocked({ ...ev, note: '판독 실패(차단 아님)' });
   throw new Error(`판독 실패(${lastErr}) — 차단 아님, 다음 회차 재시도`);
 }
 

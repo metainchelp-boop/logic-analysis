@@ -136,6 +136,11 @@ jobs:
       - name: Collector tab safety regression
         run: node collector-extension/tests/tab_safety.test.js
 
+      # 막힘 보고(2026-09-12) — 무엇에 막혔는지를 서버가 갖게 한다. 이게 없어서
+      # 9/9~9/11 사흘을 「IP 차단인지 확장 감지인지」 못 가른 채 보냈다.
+      - name: Collector block report regression
+        run: python backend/tests/test_block_report.py
+
       # 수집 멈춤 감시(2026-09-10) — 하루가 통째로 0건이 되어도 아무도 몰랐다.
       # 상한(5시간)·쿨다운(6시간)·문자 90바이트·기록 커밋을 지킨다.
       # ⚠️ 그중 「기록 커밋」이 핵심이다 — 안 되면 매시간 같은 문자가 도배된다.

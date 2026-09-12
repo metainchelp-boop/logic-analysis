@@ -75,6 +75,24 @@ def init_collector_db():
                 ON collected_serp(keyword, collected_date);
             CREATE INDEX IF NOT EXISTS idx_collected_serp_date
                 ON collected_serp(collected_date);
+            -- 막혔을 때 **네이버가 무엇을 돌려줬는지**를 서버가 갖는다 (2026-09-12).
+            -- ⚠️ 이게 없어서 사흘을 헤맸다 — 증거가 맥미니 팝업에만 남아, 대표가 그 칸을
+            --    열어 읽어 주기 전에는 원인을 가릴 수 없었다. 사람 손을 빌리지 않게 한다.
+            -- ⚠️ 개인정보는 담지 않는다: 본문 앞 500자·제목·주소(우리가 만든 검색 주소)뿐.
+            CREATE TABLE IF NOT EXISTS collector_blocks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                at TEXT DEFAULT (datetime('now','localtime')),
+                keyword TEXT,
+                paging_index INTEGER,
+                err TEXT,
+                title TEXT,
+                href TEXT,
+                body TEXT,
+                ext_version TEXT,
+                note TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_collector_blocks_at
+                ON collector_blocks(at);
             CREATE TABLE IF NOT EXISTS collect_requests (
                 keyword TEXT PRIMARY KEY,
                 requested_at TEXT DEFAULT (datetime('now','localtime')),
@@ -382,6 +400,47 @@ def _revive_after_outage(conn) -> int:
         # 복구는 부가 기능 — 실패해도 업로드 자체는 계속돼야 한다
         logger.warning(f"[collector] 재시도 복원 실패(무시): {e}")
         return 0
+
+
+class BlockReport(BaseModel):
+    """막힌 순간의 증거 — 확장이 보낸다. 전부 선택값이라 일부만 와도 받는다."""
+    keyword: Optional[str] = None
+    pagingIndex: Optional[int] = None
+    err: Optional[str] = None
+    title: Optional[str] = None
+    href: Optional[str] = None
+    body: Optional[str] = None
+    extVersion: Optional[str] = None
+    note: Optional[str] = None
+
+
+@router.post("/blocked")
+def report_blocked(req: BlockReport, x_collector_token: str = Header(None)):
+    """확장이 「막혔다」를 알릴 때 그 근거를 함께 남긴다 (2026-09-12 신설).
+
+    ⚠️ 왜 만들었나 — 2026-09-09~11 에 수집이 멈췄는데 **무엇에 막혔는지**를
+       서버가 몰랐다. 증거(네이버가 돌려준 화면)가 맥미니 팝업에만 있어서,
+       사람이 그 칸을 열어 읽어 주기 전에는 「IP 차단」인지 「확장 감지」인지
+       가릴 수 없었다. 사흘을 그렇게 썼다.
+    ⚠️ 저장은 **잘라서** 한다(본문 500자) — 원문을 통째로 쌓을 이유가 없다.
+    ⚠️ 실패해도 확장 쪽을 멈추지 않는다(확장은 응답을 안 본다).
+    """
+    _auth(x_collector_token)
+    conn = sqlite3.connect(DB_PATH, timeout=10)
+    try:
+        conn.execute(
+            "INSERT INTO collector_blocks(keyword, paging_index, err, title, href, body,"
+            " ext_version, note) VALUES(?,?,?,?,?,?,?,?)",
+            ((req.keyword or "")[:120], req.pagingIndex, (req.err or "")[:120],
+             (req.title or "")[:200], (req.href or "")[:500], (req.body or "")[:500],
+             (req.extVersion or "")[:20], (req.note or "")[:200]))
+        conn.commit()
+    finally:
+        conn.close()
+    logger.warning(f"[collector] 🧱 막힘 보고 — kw={(req.keyword or '?')[:30]} "
+                   f"err={(req.err or '?')[:40]} title={(req.title or '')[:60]} "
+                   f"v{req.extVersion or '?'}")
+    return {"success": True}
 
 
 @router.post("/serp")
