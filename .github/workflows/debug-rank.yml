@@ -3564,8 +3564,11 @@ jobs:
             echo "-- 서버가 남긴 오류 줄 --"
             docker logs logic-analysis 2>&1 | grep -i "설정 변경 실패" | tail -5 || echo "  (그 줄 없음)"
             echo "-- 서버가 남긴 traceback (알림 설정 근처) --"
-            docker logs logic-analysis 2>&1 | grep -nE "Traceback|Exception|Error|설정 변경 실패|notify" \
-              | tail -25 || echo "  (없음)"
+            # ⚠️ 종전 패턴(Error|Exception)은 **무관한 경고를 다 끌어와** 정작 봐야 할 위쪽
+            #    출력(막힘 보고)을 화면 밖으로 밀어냈다(2026-09-13). 알림 설정 쪽만 본다.
+            docker logs logic-analysis 2>&1 \
+              | grep -nE "notify/settings|설정 변경 실패|NameError|Traceback \(most recent" \
+              | tail -8 || echo "  (없음)"
             echo "-- 화면이 보낸 요청이 어떤 코드로 끝났나 (nginx · IP 미출력) --"
             LOG=$(ls /var/log/nginx/*access*.log 2>/dev/null | head -2 | tr '\n' ' ')
             sudo -n true 2>/dev/null && S="sudo -n" || S=""
