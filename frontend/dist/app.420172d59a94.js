@@ -211,6 +211,16 @@ var api = {
   }
 };
 
+/* 업체명 비교용 정규화 — 서버 `client_dashboard.lookup_norm` 과 **같은 규칙**이어야 한다.
+   ⚠️ 왜 필요한가(2026-09-14 신고 #265) — 업체 검색이 글자 그대로 비교라
+      **띄어쓰기 하나만 달라도 0건**이었다. 실측: 활성 업체 787곳 중 **234곳(30%)**이
+      이름에 공백·기호를 갖고 있다. 「메타 아이앤씨」를 「메타아이앤씨」로 치면 못 찾는다.
+   ⚠️ 저장된 이름은 건드리지 않는다 — **비교할 때만** 정규화한다(표시는 원문 그대로).
+   ⚠️ 서버 규칙을 바꾸면 여기도 함께 바꿀 것. 한쪽만 고치면 「검색은 되는데 서버는 모른다」가 된다. */
+window.lookupNorm = function lookupNorm(x) {
+  return String(x == null ? '' : x).replace(/[\s\-_.,()\[\]/·&+'"]/g, '').toLowerCase();
+};
+
 // 숫자 포맷팅
 function fmt(n) {
   return n != null ? Number(n).toLocaleString() : '-';
@@ -1908,10 +1918,8 @@ window.RankTrackingSection = function RankTrackingSection({
     useEffect,
     useRef
   } = React;
-  const [showAddForm, setShowAddForm] = useState(false);
-  const [newUrl, setNewUrl] = useState('');
-  const [newKeywords, setNewKeywords] = useState('');
-  const [adding, setAdding] = useState(false);
+  /* ⚠️ showAddForm·newUrl·newKeywords·adding 상태를 지웠다 (2026-09-14).
+     이 화면에는 더 이상 등록 폼이 없다 — 아래 handleAdd 주석 참조. */
   const [refreshing, setRefreshing] = useState({});
   const [expandedProduct, setExpandedProduct] = useState(null);
   const [expandedKeyword, setExpandedKeyword] = useState(null);
@@ -2051,24 +2059,16 @@ window.RankTrackingSection = function RankTrackingSection({
   // 자동 등록 + 자동 순위체크 제거 — 수동 버튼으로만 실행 (서버 부하 방지)
   // 기존 DB 데이터(스케줄러 수집분)만 표시, 필요시 사용자가 직접 새로고침
 
-  const handleAdd = async () => {
-    if (!newUrl || !newKeywords) return;
-    setAdding(true);
-    try {
-      const kws = newKeywords.split(',').map(k => k.trim()).filter(Boolean);
-      await api.post('/products/track', {
-        product_url: newUrl,
-        keywords: kws
-      });
-      setNewUrl('');
-      setNewKeywords('');
-      setShowAddForm(false);
-      refreshProducts();
-    } catch (e) {
-      toast.error('등록 실패: ' + (e.message || '네트워크 오류'));
-    }
-    setAdding(false);
-  };
+  /* ⚠️ 등록 핸들러(handleAdd)와 그 입력 폼을 **지웠다** (2026-09-14 · 신고 #266 후속).
+     2026-08-28 에 「업체 칸이 없어 죽은 버튼이 된다」며 등록 **버튼만** 뺐는데,
+     폼과 핸들러는 남겨 뒀다 — `setShowAddForm(true)` 를 부르는 곳이 한 군데도 없어
+     **화면에 나오지 않는 코드**가 됐고, 그 안의 `api.post('/products/track')` 는
+     `client_id` 를 안 보내 **되살리는 순간 400** 이 나는 함정이었다.
+     (같은 빠뜨림이 형제 컴포넌트 `TrackRegisterButton` 에서 17일간 실제 사고로 터졌다.)
+     ⇒ 등록은 화면 맨 위 「＋ 추적 상품 등록」 카드(업체 칸 있음) 한 곳이 맡는다.
+        다시 만들 일이 생기면 **업체 피커부터** 붙일 것 — `backend/tests/test_client_picker.py`
+        가 업체 없이 보내는 호출을 잡는다. */
+
   const handleRefresh = async productId => {
     setRefreshing(prev => ({
       ...prev,
@@ -2566,46 +2566,7 @@ window.RankTrackingSection = function RankTrackingSection({
     style: {
       color: '#2563eb'
     }
-  }, "화면 맨 위 「＋ 추적 상품 등록」"), "에서 합니다")), showAddForm && /*#__PURE__*/React.createElement("div", {
-    className: "card fade-in",
-    style: {
-      marginBottom: 16
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "form-group"
-  }, /*#__PURE__*/React.createElement("label", {
-    className: "form-label"
-  }, "상품 URL"), /*#__PURE__*/React.createElement("input", {
-    className: "form-input",
-    placeholder: "https://smartstore.naver.com/스토어명/products/12345",
-    value: newUrl,
-    onChange: e => setNewUrl(e.target.value)
-  }), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 11,
-      color: '#94a3b8',
-      marginTop: 4
-    }
-  }, "네이버 스마트스토어 상품 페이지 URL을 입력하세요")), /*#__PURE__*/React.createElement("div", {
-    className: "form-group"
-  }, /*#__PURE__*/React.createElement("label", {
-    className: "form-label"
-  }, "추적 키워드 (쉼표로 구분)"), /*#__PURE__*/React.createElement("input", {
-    className: "form-input",
-    placeholder: "예: 스마트워치, 블루투스 이어폰",
-    value: newKeywords,
-    onChange: e => setNewKeywords(e.target.value)
-  }), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 11,
-      color: '#94a3b8',
-      marginTop: 4
-    }
-  }, "여러 키워드는 쉼표(,)로 구분해서 입력하세요 (최대 10개)")), /*#__PURE__*/React.createElement("button", {
-    className: "btn btn-primary",
-    onClick: handleAdd,
-    disabled: adding || !newUrl.trim() || !newKeywords.trim()
-  }, adding ? '등록 중...' : '상품 등록')), exposureLoading && /*#__PURE__*/React.createElement("div", {
+  }, "화면 맨 위 「＋ 추적 상품 등록」"), "에서 합니다")), exposureLoading && /*#__PURE__*/React.createElement("div", {
     className: "card fade-in",
     style: {
       textAlign: 'center',
@@ -3721,6 +3682,10 @@ window.KeywordRankPage = function KeywordRankPage(props) {
   var _rgC = useState(null);
   var regClient = _rgC[0],
     setRegClient = _rgC[1]; // 고른 업체 {id,name}
+  /* 검색 결과가 왜 이런지 (2026-09-14 신고 #265) — {total,truncated,blocked} */
+  var _rgM = useState(null);
+  var regMeta = _rgM[0],
+    setRegMeta = _rgM[1];
   var _rgU = useState('');
   var regUrl = _rgU[0],
     setRegUrl = _rgU[1];
@@ -3745,8 +3710,16 @@ window.KeywordRankPage = function KeywordRankPage(props) {
     var t = setTimeout(function () {
       api.get('/cd/clients-lookup?q=' + encodeURIComponent(q)).then(function (res) {
         setRegOpts(res && res.success && res.data ? res.data : []);
+        /* 「없다」와 「내린 업체라 안 나온다」와 「30개에서 잘렸다」는 다른 일이다.
+           종전엔 셋 다 빈 목록이라 직원이 구분할 수 없었다(신고 #265). */
+        setRegMeta(res && res.success ? {
+          total: res.total || 0,
+          truncated: !!res.truncated,
+          blocked: res.blocked || []
+        } : null);
       }).catch(function () {
         setRegOpts([]);
+        setRegMeta(null);
       });
     }, 250);
     return function () {
@@ -5654,6 +5627,7 @@ window.KeywordRankPage = function KeywordRankPage(props) {
       onClick: function () {
         setRegClient(c);
         setRegOpts([]);
+        setRegMeta(null);
       },
       style: {
         display: 'block',
@@ -5667,8 +5641,22 @@ window.KeywordRankPage = function KeywordRankPage(props) {
         fontFamily: 'inherit',
         color: '#0f172a'
       }
-    }, c.name);
-  }))), React.createElement('div', null, React.createElement('label', {
+    }, c.name, c.role && c.role !== 'advertiser' && React.createElement('span', {
+      style: {
+        marginLeft: 6,
+        fontSize: 10.5,
+        fontWeight: 800,
+        color: '#b45309'
+      }
+    }, c.role === 'prospect' ? '가망' : '경쟁사'));
+  }), regMeta && regMeta.truncated && React.createElement('div', {
+    style: {
+      padding: '6px 11px',
+      fontSize: 11,
+      color: '#94a3b8',
+      borderTop: '1px solid #f1f5f9'
+    }
+  }, regMeta.total + '곳 중 앞 30곳만 보입니다 — 더 입력해 좁혀 주세요.'))), React.createElement('div', null, React.createElement('label', {
     style: _krRegLbl
   }, '상품 URL ', React.createElement('span', {
     style: {
@@ -5718,7 +5706,7 @@ window.KeywordRankPage = function KeywordRankPage(props) {
       marginTop: 7,
       color: regMsg ? regMsg.ok ? '#047857' : '#b91c1c' : '#64748b'
     }
-  }, regMsg ? regMsg.text : regClient ? '「' + regClient.name + '」 것으로 등록됩니다 — 그 업체 계약이 끝나면 추적도 함께 멈춥니다.' : '업체는 목록에서 골라야 합니다. 여러 키워드는 쉼표(,)로 구분하세요.')), selected ? renderDetail() : renderList(),
+  }, regMsg ? regMsg.text : regClient ? '「' + regClient.name + '」 것으로 등록됩니다 — 그 업체 계약이 끝나면 추적도 함께 멈춥니다.' : regQuery.trim() && regMeta && regOpts.length === 0 ? regMeta.blocked && regMeta.blocked.length > 0 ? '「' + regMeta.blocked[0].name + '」은(는) 내린 업체라 고를 수 없습니다 — 「🗄 내린 업체」에서 ↩ 로 되살려 주세요.' : '로직분석에 등록된 업체가 아닙니다 — 스토어 분석에서 보고서를 저장하면 업체가 만들어집니다.' : '업체는 목록에서 골라야 합니다. 여러 키워드는 쉼표(,)로 구분하세요.')), selected ? renderDetail() : renderList(),
   /* ---------- 추적 상품 관리(전체 업체 도구) — 업체 목록에서만, 기본 접힘 ----------
      업체 상세는 그 업체 데이터만 보이도록 여기서 제외한다(운영자 지시 2026-08-04). */
   !selected && React.createElement('div', {
@@ -7146,17 +7134,45 @@ window.NotificationSection = function NotificationSection() {
   } = React;
   const [settings, setSettings] = useState(null);
   const [loading, setLoading] = useState(true);
+  /* 수신 번호는 입력 중에 서버 값으로 덮이면 안 된다 — 따로 들고 있다가 저장할 때만 보낸다. */
+  const [phone, setPhone] = useState('');
+  const [phoneSaved, setPhoneSaved] = useState(false);
+  /* ⚠️ 실패를 말하지 않으면 사람은 「눌렀는데 아무 일도 안 난다」로 겪는다.
+     2026-09-10 에 서버가 500 을 돌려주는데 화면이 조용해서, 왜 안 되는지 알 수 없었다. */
+  const [phoneErr, setPhoneErr] = useState('');
   useEffect(() => {
     api.get('/notify/settings').then(res => {
-      if (res.success) setSettings(res.data);
+      if (res.success) {
+        setSettings(res.data);
+        setPhone(res.data.receiver_phone || '');
+      }
       setLoading(false);
     }).catch(() => setLoading(false));
   }, []);
   const toggleNotify = async enabled => {
+    setPhoneErr('');
     const res = await api.put('/notify/settings', {
       notify_enabled: enabled
     });
-    if (res.success) setSettings(res.data);
+    if (res && res.success) setSettings(res.data);else setPhoneErr(res && (res.detail || res.message) || '설정을 바꾸지 못했습니다.');
+  };
+
+  /* 수신 번호 저장 — 수집이 멈췄을 때 문자가 갈 곳이다.
+     ⚠️ 이 번호가 비어 있으면 경보는 표·로그에만 남고 아무도 모른다(2026-09-10). */
+  const savePhone = async () => {
+    setPhoneErr('');
+    const res = await api.put('/notify/settings', {
+      receiver_phone: phone.trim()
+    });
+    if (res && res.success) {
+      setSettings(res.data);
+      setPhone(res.data && res.data.receiver_phone || ''); // 서버가 받은 값으로 되맞춘다
+      setPhoneSaved(true);
+      setTimeout(() => setPhoneSaved(false), 2500);
+    } else {
+      /* 서버가 준 사유를 그대로 보여 준다 — 「형식이 틀렸다」와 「서버가 아프다」는 다른 일이다. */
+      setPhoneErr(res && (res.detail || res.message) || '저장하지 못했습니다. 잠시 후 다시 시도해 주세요.');
+    }
   };
   if (loading) return null;
   if (!settings) return null;
@@ -7205,7 +7221,61 @@ window.NotificationSection = function NotificationSection() {
       marginTop: 12,
       marginBottom: 0
     }
-  }, "솔라피 API가 설정되지 않았습니다. 알림을 사용하려면 환경변수를 설정하세요."))));
+  }, "솔라피 API가 설정되지 않았습니다. 알림을 사용하려면 환경변수를 설정하세요."), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 14,
+      paddingTop: 14,
+      borderTop: '1px solid #e2e8f0'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 600,
+      fontSize: 14
+    }
+  }, "문자 받을 번호"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: '#64748b',
+      margin: '2px 0 8px'
+    }
+  }, "순위 수집이 ", /*#__PURE__*/React.createElement("b", null, "5시간 넘게 멈추면"), " 이 번호로 문자가 갑니다. 비워 두면 기록만 남고 아무에게도 알리지 않습니다."), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      alignItems: 'center'
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "tel",
+    value: phone,
+    onChange: e => setPhone(e.target.value),
+    placeholder: "01012345678",
+    style: {
+      flex: '0 1 220px',
+      padding: '8px 10px',
+      border: '1px solid #cbd5e1',
+      borderRadius: 6,
+      fontSize: 13
+    }
+  }), /*#__PURE__*/React.createElement("button", {
+    className: "btn",
+    onClick: savePhone,
+    style: {
+      padding: '8px 14px'
+    }
+  }, "저장"), phoneSaved && /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: '#16a34a',
+      fontSize: 12,
+      fontWeight: 600
+    }
+  }, "저장됨")), phoneErr && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8,
+      color: '#b91c1c',
+      fontSize: 12,
+      fontWeight: 600
+    }
+  }, "⚠️ ", phoneErr)))));
 };
 
 ;/* ===== js/components/CompetitionIndexSection.jsx ===== */
@@ -13035,6 +13105,12 @@ window.SaveToClientSection = function SaveToClientSection({
   var _s9 = useState('');
   var clientSearch = _s9[0];
   var setClientSearch = _s9[1]; // 기존 업체 검색어
+  /* 검색해도 안 나올 때 **왜** 안 나오는지 (2026-09-14 신고 #265).
+     종전엔 「'○○' 검색 결과가 없습니다」로 끝나서, 내린 업체인지·가망인지·아예 없는지를
+     직원이 알 길이 없었다. 목록에 없으면 서버에 한 번만 물어 이유를 받아 온다. */
+  var _s10 = useState(null);
+  var missWhy = _s10[0];
+  var setMissWhy = _s10[1];
   // 추적 수명주기(2026-08-20) — 분석했다고 자동 추적되지 않는다. 광고주 등록 시 명시 선택.
   var _tk = useState(true);
   var trackOn = _tk[0];
@@ -13076,6 +13152,67 @@ window.SaveToClientSection = function SaveToClientSection({
       if (!clientName && defaultName) setClientName(defaultName);
     }
   }, [showModal, loadClients, _fullMode, _prospectMode, _fixedCompMode, defaultName]);
+
+  /* 검색해도 목록에 없을 때 **이유**를 서버에 한 번만 묻는다 (2026-09-14 신고 #265).
+     ⚠️ 이 목록(`registered-clients`)은 **활성 광고주만** 담는다. 그래서
+        「내린 업체」·「가망」·「아예 없음」이 화면에서 전부 똑같이 0건으로 보였다.
+        직원은 셋을 구분할 수 없어 「업체 연결이 안 된다」고 신고한다.
+     입력이 멈추고 300ms 뒤, 그리고 **목록에 진짜로 없을 때만** 부른다(서버 부담 최소). */
+  useEffect(function () {
+    var q = (clientSearch || '').trim();
+    if (!showModal || !q) {
+      setMissWhy(null);
+      return;
+    }
+    var nq = window.lookupNorm ? window.lookupNorm(q) : q.toLowerCase();
+    var lq = q.toLowerCase();
+    var hit = (existingClients || []).some(function (c) {
+      return (c.name || '').toLowerCase().indexOf(lq) !== -1 || (c.main_keywords || '').toLowerCase().indexOf(lq) !== -1 || !!nq && window.lookupNorm && window.lookupNorm(c.name).indexOf(nq) !== -1;
+    });
+    if (hit) {
+      setMissWhy(null);
+      return;
+    }
+    var t = setTimeout(function () {
+      api.get('/cd/clients-lookup?q=' + encodeURIComponent(q)).then(function (res) {
+        if (!res || !res.success) {
+          setMissWhy(null);
+          return;
+        }
+        var blocked = res.blocked || [];
+        var data = res.data || [];
+        if (blocked.length > 0) {
+          setMissWhy({
+            q: q,
+            kind: 'terminated',
+            text: '「' + blocked[0].name + '」은(는) 내린 업체입니다 — ' + '🏠 대시보드 → 🏢 등록 업체 → 「🗄 내린 업체」에서 ↩ 로 되살리면 다시 고를 수 있습니다.'
+          });
+          return;
+        }
+        var other = data.filter(function (c) {
+          return c.role && c.role !== 'advertiser';
+        });
+        if (other.length > 0) {
+          setMissWhy({
+            q: q,
+            kind: 'role',
+            text: '「' + other[0].name + '」은(는) ' + (other[0].role === 'prospect' ? '영업 대상(가망)' : '경쟁사') + '으로 등록돼 있어 광고주 목록에는 나오지 않습니다.'
+          });
+          return;
+        }
+        setMissWhy({
+          q: q,
+          kind: 'none',
+          text: '로직분석에 등록된 업체가 아닙니다 — 위 「새 업체」로 지금 만들 수 있습니다.'
+        });
+      }).catch(function () {
+        setMissWhy(null);
+      });
+    }, 300);
+    return function () {
+      clearTimeout(t);
+    };
+  }, [clientSearch, showModal, existingClients]);
   if (!keyword || !analysisData) return null;
 
   /* DOM 캡처 — 공용 빌더(ReportCapture) 사용 (v6.7 통일)
@@ -13746,8 +13883,12 @@ window.SaveToClientSection = function SaveToClientSection({
     }
   }, '등록된 업체가 없습니다. 새 업체를 등록해주세요.') : function () {
     var q = clientSearch.trim().toLowerCase();
+    /* ⚠️ 정규화 비교를 **더한다**(기존 글자 그대로 비교는 그대로 둔다).
+       띄어쓰기·기호 하나 때문에 0건이 되던 것을 막는다 — 활성 업체의
+       30%가 이름에 공백·기호를 갖고 있다(2026-09-14 실측·신고 #265). */
+    var nq = window.lookupNorm ? window.lookupNorm(clientSearch) : q;
     var filtered = q ? existingClients.filter(function (c) {
-      return (c.name || '').toLowerCase().indexOf(q) !== -1 || (c.main_keywords || '').toLowerCase().indexOf(q) !== -1;
+      return (c.name || '').toLowerCase().indexOf(q) !== -1 || (c.main_keywords || '').toLowerCase().indexOf(q) !== -1 || !!nq && window.lookupNorm && window.lookupNorm(c.name).indexOf(nq) !== -1;
     }) : existingClients;
     return React.createElement(React.Fragment, null, /* 업체명 검색 (업체 多 → 빠르게 찾기) */
     React.createElement('input', {
@@ -13770,10 +13911,20 @@ window.SaveToClientSection = function SaveToClientSection({
       style: {
         textAlign: 'center',
         padding: 16,
-        color: '#94a3b8',
         fontSize: 13
       }
-    }, "'" + clientSearch + "' 검색 결과가 없습니다.") : React.createElement('div', {
+    }, React.createElement('div', {
+      style: {
+        color: '#94a3b8'
+      }
+    }, "'" + clientSearch + "' 검색 결과가 없습니다."), missWhy && missWhy.q === clientSearch.trim() && React.createElement('div', {
+      style: {
+        marginTop: 7,
+        color: missWhy.kind === 'none' ? '#94a3b8' : '#b45309',
+        fontSize: 12.5,
+        lineHeight: 1.65
+      }
+    }, missWhy.text)) : React.createElement('div', {
       style: {
         maxHeight: 200,
         overflowY: 'auto'
@@ -20599,12 +20750,15 @@ window.SeoOptimizerPage = function SeoOptimizerPage(props) {
     }).catch(function () {});
   }, []);
 
-  /* 업체별 저장 이력 로드 */
+  /* 업체별 저장 이력 로드
+     ⚠️ **업체를 바꾸는 순간 먼저 비운다** (2026-09-14). 종전엔 조회가 실패하면
+        `setSavedList` 를 아예 안 불러 **직전 업체의 목록이 새 업체명 아래 그대로 남았다**
+        (헤더는 `{clientName} · 저장된 SEO 작업 (N)` 로 새 이름을 찍는다 = 데이터 오귀속).
+        `api` 계층은 403 을 예외로 던지지 않고 `{success:false}` 로 돌려주므로
+        `.catch()` 로는 못 잡는다 — 그래서 성공/실패와 무관하게 먼저 비운다. */
   const loadSaved = function (cid) {
-    if (!cid) {
-      setSavedList([]);
-      return;
-    }
+    setSavedList([]);
+    if (!cid) return;
     api.get('/seo/client/' + cid + '/saved').then(function (res) {
       if (res && res.success) setSavedList(res.data || []);
     }).catch(function () {});
@@ -25648,7 +25802,16 @@ window.CpcBidEstimateSection = function CpcBidEstimateSection(props) {
 
 ;/* ===== js/components/TrackRegisterButton.jsx ===== */
 /* TrackRegisterButton — 분석한 상품을 순위추적에 원클릭 등록
- * 기존 POST /api/products/track 재사용. 자동등록이 아니라 명시적 1클릭(서버 부하 방지). */
+ * 기존 POST /api/products/track 재사용. 자동등록이 아니라 명시적 1클릭(서버 부하 방지).
+ *
+ * ⚠️ **업체 칸은 빼지 말 것** (2026-09-14 신고 #266 · 17일간 죽어 있던 버튼).
+ *    2026-08-28 에 서버가 `client_id` 를 **필수**로 받게 바뀌었다(주인 없는 추적 상품 41개 차단).
+ *    그때 `RankTrackingSection` 의 등록 버튼은 「업체 칸이 없으니 죽은 버튼이 된다」며 뺐는데,
+ *    **같은 화면에 따로 렌더되는 이 형제 컴포넌트를 빠뜨렸다**(AnalysisResults.jsx).
+ *    그래서 이 버튼은 8/28 부터 **누를 때마다 400** 이었다(9/14 실측: 400 10건 · 200 6건).
+ *    ⭐ 교훈 — 「죽은 버튼을 뺐다」고 적을 때 **같은 일을 하는 버튼이 몇 개인지부터 센다.**
+ *       `grep products/track` 를 했으면 3곳이 나왔다.
+ */
 window.TrackRegisterButton = function TrackRegisterButton(props) {
   var searchedProductUrl = props.searchedProductUrl;
   var searchedKeyword = props.searchedKeyword;
@@ -25658,6 +25821,55 @@ window.TrackRegisterButton = function TrackRegisterButton(props) {
   var st = React.useState(false);
   var adding = st[0],
     setAdding = st[1];
+
+  /* 업체 피커 — 순위 추적 탭(KeywordRankPage)과 **같은 경로·같은 동작**을 쓴다.
+     화면마다 다른 규칙으로 고르게 두면 「여기선 되는데 저기선 안 된다」가 또 생긴다. */
+  var _q = React.useState('');
+  var query = _q[0],
+    setQuery = _q[1];
+  var _o = React.useState([]);
+  var opts = _o[0],
+    setOpts = _o[1];
+  var _c = React.useState(null);
+  var client = _c[0],
+    setClient = _c[1];
+  var _m = React.useState(null);
+  var meta = _m[0],
+    setMeta = _m[1]; // {total,truncated,blocked}
+  var _e = React.useState('');
+  var err = _e[0],
+    setErr = _e[1];
+
+  /* 입력이 멈추고 250ms 뒤 한 번만 부른다(글자마다 부르면 서버를 두드린다). */
+  React.useEffect(function () {
+    var q = (query || '').trim();
+    if (client || !q) {
+      setOpts([]);
+      setMeta(null);
+      return;
+    }
+    var t = setTimeout(function () {
+      api.get('/cd/clients-lookup?q=' + encodeURIComponent(q)).then(function (res) {
+        if (res && res.success) {
+          setOpts(res.data || []);
+          setMeta({
+            total: res.total || 0,
+            truncated: !!res.truncated,
+            blocked: res.blocked || []
+          });
+        } else {
+          setOpts([]);
+          setMeta(null);
+        }
+      }).catch(function () {
+        setOpts([]);
+        setMeta(null);
+      });
+    }, 250);
+    return function () {
+      clearTimeout(t);
+    };
+  }, [query, client]);
   if (!searchedProductUrl || !searchedKeyword || !canEdit) return null;
   var already = (products || []).find(function (p) {
     return p.product_url === searchedProductUrl;
@@ -25667,21 +25879,41 @@ window.TrackRegisterButton = function TrackRegisterButton(props) {
   });
   var onClick = function () {
     if (adding) return;
+    /* ⚠️ 업체 없이 보내지 않는다 — 서버가 400 으로 거절한다(위 주석 참조).
+       화면에서 먼저 막고 이유를 말해 주는 것이 이 수정의 핵심이다. */
+    if (!client) {
+      setErr('먼저 업체를 골라 주세요 — 목록에서 고른 업체만 등록됩니다.');
+      return;
+    }
+    setErr('');
     setAdding(true);
     api.post('/products/track', {
       product_url: searchedProductUrl,
       keywords: [searchedKeyword],
+      client_id: client.id,
       store_name_hint: props.storeNameHint || undefined
     }).then(function (res) {
       if (res && res.success) {
-        if (typeof toast !== 'undefined' && toast.success) toast.success('순위 추적에 등록했습니다. 첫 순위 체크를 시작합니다.');
+        /* ⚠️ 「등록됨」과 「업체에 이어짐」은 다른 일이다 — 서버가 link 로 따로 답한다.
+           성공했다고만 알리면 주인 없는 상품이 또 조용히 생긴다(순위 추적 탭과 같은 규칙). */
+        var lk = res.data && res.data.link || null;
+        if (lk && lk.linked === false) {
+          setErr('상품은 등록됐지만 「' + client.name + '」에 잇지 못했습니다' + (lk.reason ? ' — ' + lk.reason : '') + '.');
+          if (typeof toast !== 'undefined' && toast.error) toast.error('업체 연결에 실패했습니다 — 순위 추적 탭에서 확인해 주세요.');
+        } else {
+          if (typeof toast !== 'undefined' && toast.success) toast.success('「' + client.name + '」 상품으로 등록했습니다. 첫 순위 체크를 시작합니다.');
+        }
         if (refreshProducts) refreshProducts();
       } else {
-        if (typeof toast !== 'undefined' && toast.error) toast.error(res && res.detail || '추적 등록에 실패했습니다.');
+        var msg = res && res.detail || '추적 등록에 실패했습니다.';
+        setErr(msg);
+        if (typeof toast !== 'undefined' && toast.error) toast.error(msg);
       }
       setAdding(false);
     }).catch(function (e) {
-      if (typeof toast !== 'undefined' && toast.error) toast.error('추적 등록 실패: ' + (e.message || '네트워크 오류'));
+      var msg = '추적 등록 실패: ' + (e && e.message || '네트워크 오류');
+      setErr(msg);
+      if (typeof toast !== 'undefined' && toast.error) toast.error(msg);
       setAdding(false);
     });
   };
@@ -25692,6 +25924,159 @@ window.TrackRegisterButton = function TrackRegisterButton(props) {
     margin: '4px 0 4px',
     flexWrap: 'wrap'
   };
+  var inp = {
+    border: '1px solid #cbd5e1',
+    borderRadius: 8,
+    padding: '8px 10px',
+    fontSize: 12.5,
+    fontFamily: 'inherit',
+    background: '#fff',
+    color: '#0f172a',
+    width: 200
+  };
+
+  /* 업체 고르는 칸 — 직원 운영 도구라 광고주 전달본(내보내기)에서는 제외(no-export) */
+  function picker() {
+    return React.createElement('div', {
+      className: 'no-export',
+      style: {
+        position: 'relative'
+      }
+    }, client ? React.createElement('div', {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        background: '#fff',
+        border: '1px solid #3b82f6',
+        borderRadius: 99,
+        padding: '5px 8px 5px 11px',
+        fontSize: 12.5,
+        fontWeight: 800,
+        color: '#2563eb',
+        maxWidth: 220
+      }
+    }, React.createElement('span', {
+      style: {
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap'
+      }
+    }, client.name), React.createElement('button', {
+      onClick: function () {
+        setClient(null);
+        setQuery('');
+        setErr('');
+      },
+      title: '업체 다시 고르기',
+      style: {
+        border: 0,
+        background: 'none',
+        color: '#94a3b8',
+        cursor: 'pointer',
+        fontSize: 12,
+        padding: '0 2px',
+        fontWeight: 400
+      }
+    }, '✕')) : React.createElement('input', {
+      style: inp,
+      value: query,
+      placeholder: '업체명 검색 *',
+      autoComplete: 'off',
+      onChange: function (e) {
+        setQuery(e.target.value);
+        setErr('');
+      }
+    }), !client && opts.length > 0 && React.createElement('div', {
+      style: {
+        position: 'absolute',
+        zIndex: 20,
+        left: 0,
+        minWidth: 220,
+        top: 'calc(100% + 4px)',
+        background: '#fff',
+        border: '1px solid #e2e8f0',
+        borderRadius: 8,
+        boxShadow: '0 8px 20px rgba(15,23,42,.12)',
+        maxHeight: 190,
+        overflow: 'auto'
+      }
+    }, opts.map(function (c) {
+      return React.createElement('button', {
+        key: c.id,
+        onClick: function () {
+          setClient(c);
+          setOpts([]);
+          setMeta(null);
+          setErr('');
+        },
+        style: {
+          display: 'block',
+          width: '100%',
+          textAlign: 'left',
+          border: 0,
+          background: 'none',
+          padding: '7px 11px',
+          fontSize: 12.5,
+          cursor: 'pointer',
+          fontFamily: 'inherit',
+          color: '#0f172a'
+        }
+      }, c.name, c.role && c.role !== 'advertiser' && React.createElement('span', {
+        style: {
+          marginLeft: 6,
+          fontSize: 10.5,
+          fontWeight: 800,
+          color: '#b45309'
+        }
+      }, c.role === 'prospect' ? '가망' : '경쟁사'));
+    }), meta && meta.truncated && React.createElement('div', {
+      style: {
+        padding: '6px 11px',
+        fontSize: 11,
+        color: '#94a3b8',
+        borderTop: '1px solid #f1f5f9'
+      }
+    }, meta.total + '곳 중 앞 30곳만 보입니다 — 더 입력해 좁혀 주세요.')));
+  }
+
+  /* 왜 안 나오는지를 화면이 말한다 — 종전엔 그냥 0건이라 「업체가 사라졌다」로 읽혔다(신고 #265) */
+  function hint() {
+    if (err) return {
+      color: '#b91c1c',
+      text: err
+    };
+    if (client) return {
+      color: '#64748b',
+      text: '「' + client.name + '」 것으로 등록됩니다 — 그 업체 계약이 끝나면 추적도 함께 멈춥니다.'
+    };
+    if (meta && opts.length === 0 && (query || '').trim()) {
+      if (meta.blocked && meta.blocked.length > 0) {
+        return {
+          color: '#b45309',
+          text: '「' + meta.blocked[0].name + '」은(는) 내린 업체라 고를 수 없습니다 — 🏠 대시보드 → 🏢 등록 업체 → 「🗄 내린 업체」에서 ↩ 로 되살려 주세요.'
+        };
+      }
+      return {
+        color: '#b45309',
+        text: '로직분석에 등록된 업체가 아닙니다 — 아래 「업체 저장」에서 새 업체로 먼저 만들어 주세요.'
+      };
+    }
+    return {
+      color: '#94a3b8',
+      text: '업체는 목록에서 고른 것만 등록됩니다.'
+    };
+  }
+  var h = hint();
+  var hintEl = React.createElement('div', {
+    className: 'no-export',
+    style: {
+      fontSize: 11.5,
+      color: h.color,
+      marginTop: 2,
+      flexBasis: '100%'
+    }
+  }, h.text);
   if (already) {
     return React.createElement('div', {
       className: 'container'
@@ -25712,28 +26097,29 @@ window.TrackRegisterButton = function TrackRegisterButton(props) {
         fontSize: 12.5,
         fontWeight: 700
       }
-    }, '✓ 이미 추적 중인 상품입니다' + (alreadyHasKw ? ' (이 키워드 포함)' : '')), !alreadyHasKw ? React.createElement('button', {
+    }, '✓ 이미 추적 중인 상품입니다' + (alreadyHasKw ? ' (이 키워드 포함)' : '')), !alreadyHasKw && picker(), !alreadyHasKw ? React.createElement('button', {
       onClick: onClick,
-      disabled: adding,
+      disabled: adding || !client,
+      className: 'no-export',
       style: {
         padding: '8px 14px',
         borderRadius: 10,
         border: '1px solid #c7d2fe',
-        background: '#eef2ff',
-        color: '#3b82f6',
+        background: client ? '#eef2ff' : '#f1f5f9',
+        color: client ? '#3b82f6' : '#94a3b8',
         fontSize: 12.5,
         fontWeight: 700,
-        cursor: adding ? 'default' : 'pointer'
+        cursor: adding || !client ? 'default' : 'pointer'
       }
-    }, adding ? '등록 중...' : '＋ 이 키워드도 추적 추가') : null));
+    }, adding ? '등록 중...' : '＋ 이 키워드도 추적 추가') : null, !alreadyHasKw && hintEl));
   }
   return React.createElement('div', {
     className: 'container'
   }, React.createElement('div', {
     style: wrap
-  }, React.createElement('button', {
+  }, picker(), React.createElement('button', {
     onClick: onClick,
-    disabled: adding,
+    disabled: adding || !client,
     style: {
       display: 'inline-flex',
       alignItems: 'center',
@@ -25741,19 +26127,20 @@ window.TrackRegisterButton = function TrackRegisterButton(props) {
       padding: '10px 18px',
       borderRadius: 10,
       border: 'none',
-      background: adding ? '#94a3b8' : 'linear-gradient(135deg,#3b82f6,#3b82f6)',
+      background: adding || !client ? '#94a3b8' : 'linear-gradient(135deg,#3b82f6,#3b82f6)',
       color: '#fff',
       fontSize: 13,
       fontWeight: 700,
-      cursor: adding ? 'default' : 'pointer',
+      cursor: adding || !client ? 'default' : 'pointer',
       boxShadow: '0 3px 10px rgba(79,70,229,0.3)'
     }
   }, adding ? '⏳ 등록 중...' : '🔍 이 상품 순위 추적 시작'), React.createElement('span', {
+    className: 'no-export',
     style: {
       fontSize: 11.5,
       color: '#94a3b8'
     }
-  }, '이후 이 키워드의 순위 변화를 자동 기록합니다')));
+  }, '이후 이 키워드의 순위 변화를 자동 기록합니다'), hintEl));
 };
 
 ;/* ===== js/components/AnalysisResults.jsx ===== */

@@ -48,11 +48,31 @@ def _days_left(expires_at):
         return None
 
 
+# 관리팀(manager)이 「모두 보게」 되는 역할 목록 — 목록 질의와 접근 검사가 **같은 이름**을 쓴다.
+# ⚠️ 한 곳만 고치면 「보이는데 저장은 403」이 된다(2026-09-14 에 실제로 그럴 뻔했다).
+TEAM_ROLES = ("admin", "superadmin", "manager")
+
+
 def _verify_client_access(conn, client_id: int, current_user: dict):
-    """업체 소유권 확인. admin은 통과, manager는 created_by 확인,
-    viewer(영업사원)는 본인이 등록한 영업 대상·경쟁사만(완전 개인 모드).
-    업체가 없으면 404, 권한 없으면 403 반환."""
-    row = conn.execute("SELECT id, created_by FROM clients WHERE id = ?", (client_id,)).fetchone()
+    """업체 소유권 확인. 업체가 없으면 404, 권한 없으면 403.
+
+    · admin·superadmin → 전체
+    · manager(관리팀)   → **활성 광고주는 전부**(2026-09-14 대표 확정 「모두 보게 하자」).
+                          가망(prospect)·경쟁사(competitor)는 종전대로 **본인 등록분만**.
+    · viewer(영업사원)  → 완전 개인 모드(본인 등록분만) — **한 글자도 안 바꾼다.**
+
+    ⚠️ **왜 manager 를 넓히는가** — 같은 날 `registered-clients` 목록을 광고주 전체로 넓혔다.
+       목록만 넓히고 이 검사를 두면 **피커에 609곳이 보이는데 고르면 403** 이 된다.
+       그러면 신고 #265(「업체 연결이 안 된다」)를 고치면서 똑같은 신고를 새로 만드는 셈이다.
+       ⇒ **「목록에 보이는 것은 쓸 수 있다」를 한 커밋 안에서 보장한다.**
+    ⚠️ 넓히는 범위는 **광고주(advertiser)뿐**이다. 가망·경쟁사는 영업사원 개인 자산이라
+       관리팀에게도 열지 않는다 — 대표 확정의 문맥이 「업체 연결」(광고주)이었다.
+    ⚠️ created_by 가 NULL/'' 인 광고주는 종전엔 목록엔 보이는데 여기서 403 이었다(선재 불일치).
+       광고주 전체를 통과시키면서 그 틈도 함께 닫힌다.
+    """
+    row = conn.execute(
+        "SELECT id, created_by, COALESCE(role,'advertiser') AS role FROM clients WHERE id = ?",
+        (client_id,)).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="업체를 찾을 수 없습니다.")
     if _is_admin(current_user):
@@ -61,6 +81,9 @@ def _verify_client_access(conn, client_id: int, current_user: dict):
     if current_user.get("role") == "viewer":
         if row["created_by"] != current_user.get("id"):
             raise HTTPException(status_code=403, detail="본인이 등록한 영업 대상만 볼 수 있습니다.")
+        return row
+    # 관리팀 — 광고주는 담당이 아니어도 통과(목록 범위와 동일).
+    if current_user.get("role") in TEAM_ROLES and row["role"] == "advertiser":
         return row
     if row["created_by"] != current_user.get("id"):
         raise HTTPException(status_code=403, detail="해당 업체에 대한 접근 권한이 없습니다.")
@@ -1037,16 +1060,26 @@ def archived_clients(current_user: dict = Depends(get_current_user)):
 
 @router.get("/registered-clients")
 def registered_clients(current_user: dict = Depends(get_current_user)):
-    """분석 탭에서 업체 선택 드롭다운용 간략 목록"""
+    """분석 탭에서 업체 선택 드롭다운용 간략 목록
+
+    ⚠️ **관리팀(manager)은 광고주를 전부 본다** (2026-09-14 대표 확정 「모두 보게 하자」).
+       종전엔 `created_by = 본인` 으로 좁혀 **자기가 만든 업체만** 보였다. 그런데 주인 없는
+       광고주가 **0곳**이라 남의 것은 하나도 안 보였다 — 실측하니 manager 12명 중
+       **4명은 0~1곳**, 제일 많이 보는 사람도 609곳 중 125곳(21%)뿐이었다.
+       그래서 「일부 업체가 연결이 안 된다」(신고 #265)가 사실은 「거의 전부」였다.
+       ⇒ manager 는 admin 과 같은 범위를 본다. **viewer(영업사원) 격리는 그대로 둔다** —
+         영업사원은 여전히 본인이 등록한 영업 대상(prospect)만 본다.
+    """
     conn = _get_conn()
     try:
         user_id = current_user["id"]
-        is_adm = _is_admin(current_user)
 
         user_role = current_user.get("role", "viewer")
 
         # viewer(영업사원) → 본인 등록 영업 대상만(관리팀 광고주 비노출),
-        # admin → 전체 광고주, manager → 본인 등록 광고주만
+        # 관리팀(admin·superadmin·manager) → 광고주 전체,
+        # ⚠️ **그 밖의 모르는 역할은 넓히지 않고 좁힌다.** 화이트리스트로 적는 이유가 이것이다 —
+        #    `else` 에 전량 질의를 두면 역할이 하나 늘거나 오타가 나는 순간 **전체 공개**가 된다.
         if user_role == "viewer":
             rows = conn.execute(
                 "SELECT id, name, main_keywords FROM clients "
@@ -1054,14 +1087,14 @@ def registered_clients(current_user: dict = Depends(get_current_user)):
                 "ORDER BY name ASC",
                 (user_id,)
             ).fetchall()
-        elif is_adm:
+        elif user_role in TEAM_ROLES:
             rows = conn.execute(
                 "SELECT id, name, main_keywords FROM clients WHERE status = 'active' AND COALESCE(role,'advertiser')='advertiser' ORDER BY name ASC"
             ).fetchall()
         else:
             rows = conn.execute(
                 "SELECT id, name, main_keywords FROM clients "
-                "WHERE status = 'active' AND COALESCE(role,'advertiser')='advertiser' AND (created_by = ? OR created_by IS NULL OR created_by = '') "
+                "WHERE status = 'active' AND COALESCE(role,'advertiser')='advertiser' AND created_by = ? "
                 "ORDER BY name ASC",
                 (user_id,)
             ).fetchall()
@@ -2593,24 +2626,83 @@ def report_owner_sync_now(dry_run: bool = Query(False, description="미리보기
         return {"success": False, "detail": f"정렬 중 오류: {str(e)[:150]}"}
 
 
+_LOOKUP_LIMIT = 30      # 한 번에 돌려주는 최대 개수(화면 드롭다운 높이 기준)
+
+
+def lookup_norm(x: str) -> str:
+    """업체명 비교용 정규화 — 공백·기호를 지우고 소문자로.
+
+    ⚠️ 왜 필요한가(2026-09-14 신고 #265) — 종전 검색은 `name LIKE %q%` 단순 매칭이라
+       **띄어쓰기 하나만 달라도 결과가 0건**이었다. 실측: 활성 업체 787곳 중 **234곳(30%)**이
+       이름에 공백·기호를 갖고 있다. 「메타 아이앤씨」를 「메타아이앤씨」로 치면 못 찾는다.
+       직원은 「그 업체가 없다」로 읽고 신고를 올린다.
+    ⚠️ 저장된 이름은 건드리지 않는다 — **비교할 때만** 정규화한다(표시·저장은 원문 그대로).
+    """
+    import re as _re
+    return _re.sub(r"[\s\-_.,()\[\]/·&+'\"]", "", x or "").lower()
+
+
 @router.get("/clients-lookup")
 def clients_lookup(q: str = Query(None, description="회사명 부분검색"),
                    current_user: dict = Depends(get_current_user)):
-    """전산 관리 화면 피커용 — 로직분석 업체 [{id,name}] 목록(q 부분검색, 최대 30)."""
+    """업체 피커용 — 로직분석 업체 [{id,name,role}] 목록(q 부분검색).
+
+    반환(가산만 — 기존 `data[]` 의 의미·형식은 그대로다):
+      data      : 고를 수 있는 업체(status='active'). `role` 이 붙었다.
+      total     : 잘리기 전 실제 매칭 수
+      truncated : total 이 한도를 넘어 잘렸는가 (화면이 「더 있습니다」를 말할 수 있게)
+      blocked   : **매칭은 됐지만 고를 수 없는 업체**와 그 이유
+                  (지금은 `terminated` = 「삭제 필요」에서 내린 업체 한 종류)
+
+    ⚠️ `blocked` 가 이 API 의 핵심 추가다 — 종전엔 내린 업체를 검색하면 그냥 **0건**이라
+       직원이 「업체가 사라졌다」로 읽었다(신고 #265). 이제 화면이 「내린 업체라 안 나온다,
+       🗄 내린 업체 탭에서 되살려라」로 말할 수 있다.
+    """
     conn = _get_conn()
     try:
         key = (q or "").strip()
-        if key:
-            rows = conn.execute(
-                "SELECT id, name FROM clients WHERE status = 'active' AND name LIKE ? "
-                "ORDER BY name LIMIT 30", (f"%{key}%",)).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT id, name FROM clients WHERE status = 'active' ORDER BY name LIMIT 30").fetchall()
-        return {"success": True, "data": [{"id": r["id"], "name": r["name"]} for r in rows]}
+        # 전체를 읽어 파이썬에서 고른다 — 업체는 800곳 규모라 부담이 없고,
+        # 이래야 정규화 비교(공백·기호 무시)와 「왜 안 나오는지」를 함께 답할 수 있다.
+        rows = conn.execute(
+            "SELECT id, name, COALESCE(role,'advertiser') AS role, "
+            "COALESCE(status,'') AS status FROM clients ORDER BY name").fetchall()
+
+        nkey = lookup_norm(key)
+        lkey = key.lower()
+
+        def hit(nm):
+            """원문·정규화 **양쪽**으로 본다 — 검색어에 공백이 있어도, 없어도 찾힌다."""
+            if not key:
+                return True
+            return (lkey in (nm or "").lower()) or (nkey and nkey in lookup_norm(nm))
+
+        def rank(nm):
+            """정확일치 → 앞에서 시작 → 포함 순으로."""
+            n = lookup_norm(nm)
+            if nkey and n == nkey:
+                return 0
+            if nkey and n.startswith(nkey):
+                return 1
+            return 2
+
+        matched = [r for r in rows if hit(r["name"])]
+        active = [r for r in matched if r["status"] == "active"]
+        active.sort(key=lambda r: (rank(r["name"]), r["name"] or ""))
+
+        blocked = [{"id": r["id"], "name": r["name"], "reason": "terminated"}
+                   for r in matched if r["status"] != "active"][:5]
+
+        return {
+            "success": True,
+            "data": [{"id": r["id"], "name": r["name"], "role": r["role"]}
+                     for r in active[:_LOOKUP_LIMIT]],
+            "total": len(active),
+            "truncated": len(active) > _LOOKUP_LIMIT,
+            "blocked": blocked,
+        }
     except Exception as e:
         logger.error(f"[clients-lookup] {e}")
-        return {"success": False, "data": []}
+        return {"success": False, "data": [], "total": 0, "truncated": False, "blocked": []}
     finally:
         conn.close()
 

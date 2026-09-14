@@ -395,10 +395,27 @@ class SaveSeoToClientRequest(BaseModel):
 
 
 def _client_belongs(conn, client_id: int, current_user: dict) -> bool:
-    """superadmin은 전체, manager는 본인 등록 업체만 저장 허용."""
-    if current_user.get("role") == "superadmin":
+    """이 업체를 열고 저장할 수 있는가.
+
+    · admin·superadmin → 전체
+    · manager(관리팀)   → **활성 광고주는 전부**(2026-09-14 대표 확정 「모두 보게 하자」)
+                          + 종전대로 본인 등록분(가망 등)
+    · 그 외              → 본인 등록분만
+
+    ⚠️ `client_dashboard._verify_client_access` 와 **같은 규칙**이어야 한다.
+       같은 날 업체 피커를 광고주 전체로 넓혔는데 여기만 좁으면,
+       SEO 탭에서 업체를 고르는 순간 「접근 권한이 없습니다」 토스트가 뜨고
+       직전 업체의 저장 이력이 새 업체명 아래 그대로 남는다(데이터 오귀속).
+    """
+    if current_user.get("role") in ("admin", "superadmin"):
         row = conn.execute("SELECT 1 FROM clients WHERE id = ?", (client_id,)).fetchone()
         return row is not None
+    if current_user.get("role") == "manager":
+        row = conn.execute(
+            "SELECT 1 FROM clients WHERE id = ? AND status='active' "
+            "AND COALESCE(role,'advertiser')='advertiser'", (client_id,)).fetchone()
+        if row is not None:
+            return True
     row = conn.execute(
         "SELECT 1 FROM clients WHERE id = ? AND (created_by = ? OR created_by IS NULL OR created_by = '')",
         (client_id, current_user["id"]),

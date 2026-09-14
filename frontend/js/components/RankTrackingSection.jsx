@@ -3,10 +3,8 @@
  * (추적 상품 목록·상품 등록 폼은 📊 키워드 순위 탭에서 관리, 2026-08-04 탭 분리) */
 window.RankTrackingSection = function RankTrackingSection({ products, refreshProducts, searchedKeyword, searchedProductUrl, cachedProductName, relatedKeywords, onNavigateToClient, canEdit, onRankResult, analysisOnly, onOpenRankTab }) {
     const { useState, useEffect, useRef } = React;
-    const [showAddForm, setShowAddForm] = useState(false);
-    const [newUrl, setNewUrl] = useState('');
-    const [newKeywords, setNewKeywords] = useState('');
-    const [adding, setAdding] = useState(false);
+    /* ⚠️ showAddForm·newUrl·newKeywords·adding 상태를 지웠다 (2026-09-14).
+       이 화면에는 더 이상 등록 폼이 없다 — 아래 handleAdd 주석 참조. */
     const [refreshing, setRefreshing] = useState({});
     const [expandedProduct, setExpandedProduct] = useState(null);
     const [expandedKeyword, setExpandedKeyword] = useState(null);
@@ -135,17 +133,15 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
     // 자동 등록 + 자동 순위체크 제거 — 수동 버튼으로만 실행 (서버 부하 방지)
     // 기존 DB 데이터(스케줄러 수집분)만 표시, 필요시 사용자가 직접 새로고침
 
-    const handleAdd = async () => {
-        if (!newUrl || !newKeywords) return;
-        setAdding(true);
-        try {
-            const kws = newKeywords.split(',').map(k => k.trim()).filter(Boolean);
-            await api.post('/products/track', { product_url: newUrl, keywords: kws });
-            setNewUrl(''); setNewKeywords(''); setShowAddForm(false);
-            refreshProducts();
-        } catch (e) { toast.error('등록 실패: ' + (e.message || '네트워크 오류')); }
-        setAdding(false);
-    };
+    /* ⚠️ 등록 핸들러(handleAdd)와 그 입력 폼을 **지웠다** (2026-09-14 · 신고 #266 후속).
+       2026-08-28 에 「업체 칸이 없어 죽은 버튼이 된다」며 등록 **버튼만** 뺐는데,
+       폼과 핸들러는 남겨 뒀다 — `setShowAddForm(true)` 를 부르는 곳이 한 군데도 없어
+       **화면에 나오지 않는 코드**가 됐고, 그 안의 `api.post('/products/track')` 는
+       `client_id` 를 안 보내 **되살리는 순간 400** 이 나는 함정이었다.
+       (같은 빠뜨림이 형제 컴포넌트 `TrackRegisterButton` 에서 17일간 실제 사고로 터졌다.)
+       ⇒ 등록은 화면 맨 위 「＋ 추적 상품 등록」 카드(업체 칸 있음) 한 곳이 맡는다.
+          다시 만들 일이 생기면 **업체 피커부터** 붙일 것 — `backend/tests/test_client_picker.py`
+          가 업체 없이 보내는 호출을 잡는다. */
 
     const handleRefresh = async (productId) => {
         setRefreshing(prev => ({ ...prev, [productId]: true }));
@@ -397,24 +393,6 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                         상품 등록은 <b style={{ color: '#2563eb' }}>화면 맨 위 「＋ 추적 상품 등록」</b>에서 합니다
                     </span>}
                 </div>
-
-                {showAddForm && (
-                    <div className="card fade-in" style={{ marginBottom: 16 }}>
-                        <div className="form-group">
-                            <label className="form-label">상품 URL</label>
-                            <input className="form-input" placeholder="https://smartstore.naver.com/스토어명/products/12345" value={newUrl} onChange={e => setNewUrl(e.target.value)} />
-                            <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>네이버 스마트스토어 상품 페이지 URL을 입력하세요</div>
-                        </div>
-                        <div className="form-group">
-                            <label className="form-label">추적 키워드 (쉼표로 구분)</label>
-                            <input className="form-input" placeholder="예: 스마트워치, 블루투스 이어폰" value={newKeywords} onChange={e => setNewKeywords(e.target.value)} />
-                            <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>여러 키워드는 쉼표(,)로 구분해서 입력하세요 (최대 10개)</div>
-                        </div>
-                        <button className="btn btn-primary" onClick={handleAdd} disabled={adding || !newUrl.trim() || !newKeywords.trim()}>
-                            {adding ? '등록 중...' : '상품 등록'}
-                        </button>
-                    </div>
-                )}
 
                 {/* 키워드별 노출 분석 */}
                 {exposureLoading && (

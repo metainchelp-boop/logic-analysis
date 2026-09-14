@@ -122,6 +122,8 @@ window.KeywordRankPage = function KeywordRankPage(props) {
     var _rgQ = useState(''); var regQuery = _rgQ[0], setRegQuery = _rgQ[1];      // 업체 검색어
     var _rgO = useState([]); var regOpts = _rgO[0], setRegOpts = _rgO[1];        // 검색 결과
     var _rgC = useState(null); var regClient = _rgC[0], setRegClient = _rgC[1];  // 고른 업체 {id,name}
+    /* 검색 결과가 왜 이런지 (2026-09-14 신고 #265) — {total,truncated,blocked} */
+    var _rgM = useState(null); var regMeta = _rgM[0], setRegMeta = _rgM[1];
     var _rgU = useState(''); var regUrl = _rgU[0], setRegUrl = _rgU[1];
     var _rgK = useState(''); var regKw = _rgK[0], setRegKw = _rgK[1];
     var _rgB = useState(false); var regBusy = _rgB[0], setRegBusy = _rgB[1];
@@ -134,8 +136,15 @@ window.KeywordRankPage = function KeywordRankPage(props) {
         if (regClient || !q) { setRegOpts([]); return; }
         var t = setTimeout(function() {
             api.get('/cd/clients-lookup?q=' + encodeURIComponent(q))
-               .then(function(res) { setRegOpts((res && res.success && res.data) ? res.data : []); })
-               .catch(function() { setRegOpts([]); });
+               .then(function(res) {
+                   setRegOpts((res && res.success && res.data) ? res.data : []);
+                   /* 「없다」와 「내린 업체라 안 나온다」와 「30개에서 잘렸다」는 다른 일이다.
+                      종전엔 셋 다 빈 목록이라 직원이 구분할 수 없었다(신고 #265). */
+                   setRegMeta((res && res.success)
+                       ? { total: res.total || 0, truncated: !!res.truncated, blocked: res.blocked || [] }
+                       : null);
+               })
+               .catch(function() { setRegOpts([]); setRegMeta(null); });
         }, 250);
         return function() { clearTimeout(t); };
     }, [regQuery, regClient]);
@@ -983,13 +992,21 @@ window.KeywordRankPage = function KeywordRankPage(props) {
                         }),
                     !regClient && regOpts.length > 0 && React.createElement('div', {
                         style: { position: 'absolute', zIndex: 20, left: 0, right: 0, top: 'calc(100% + 4px)', background: '#fff', border: '1px solid #e2e8f0', borderRadius: 8, boxShadow: '0 8px 20px rgba(15,23,42,.12)', maxHeight: 190, overflow: 'auto' }
-                    }, regOpts.map(function(c) {
-                        return React.createElement('button', {
-                            key: c.id,
-                            onClick: function() { setRegClient(c); setRegOpts([]); },
-                            style: { display: 'block', width: '100%', textAlign: 'left', border: 0, background: 'none', padding: '7px 11px', fontSize: 12.5, cursor: 'pointer', fontFamily: 'inherit', color: '#0f172a' }
-                        }, c.name);
-                    }))
+                    },
+                        regOpts.map(function(c) {
+                            return React.createElement('button', {
+                                key: c.id,
+                                onClick: function() { setRegClient(c); setRegOpts([]); setRegMeta(null); },
+                                style: { display: 'block', width: '100%', textAlign: 'left', border: 0, background: 'none', padding: '7px 11px', fontSize: 12.5, cursor: 'pointer', fontFamily: 'inherit', color: '#0f172a' }
+                            },
+                                c.name,
+                                c.role && c.role !== 'advertiser' && React.createElement('span', {
+                                    style: { marginLeft: 6, fontSize: 10.5, fontWeight: 800, color: '#b45309' }
+                                }, c.role === 'prospect' ? '가망' : '경쟁사'));
+                        }),
+                        regMeta && regMeta.truncated && React.createElement('div', {
+                            style: { padding: '6px 11px', fontSize: 11, color: '#94a3b8', borderTop: '1px solid #f1f5f9' }
+                        }, regMeta.total + '곳 중 앞 30곳만 보입니다 — 더 입력해 좁혀 주세요.'))
                 ),
                 React.createElement('div', null,
                     React.createElement('label', { style: _krRegLbl }, '상품 URL ', React.createElement('span', { style: { color: '#ef4444' } }, '*')),
@@ -1013,7 +1030,11 @@ window.KeywordRankPage = function KeywordRankPage(props) {
                 regMsg ? regMsg.text
                        : (regClient
                             ? '「' + regClient.name + '」 것으로 등록됩니다 — 그 업체 계약이 끝나면 추적도 함께 멈춥니다.'
-                            : '업체는 목록에서 골라야 합니다. 여러 키워드는 쉼표(,)로 구분하세요.'))
+                            : (regQuery.trim() && regMeta && regOpts.length === 0
+                                ? (regMeta.blocked && regMeta.blocked.length > 0
+                                    ? '「' + regMeta.blocked[0].name + '」은(는) 내린 업체라 고를 수 없습니다 — 「🗄 내린 업체」에서 ↩ 로 되살려 주세요.'
+                                    : '로직분석에 등록된 업체가 아닙니다 — 스토어 분석에서 보고서를 저장하면 업체가 만들어집니다.')
+                                : '업체는 목록에서 골라야 합니다. 여러 키워드는 쉼표(,)로 구분하세요.')))
         ),
 
         selected ? renderDetail() : renderList(),
