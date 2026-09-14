@@ -101,6 +101,10 @@ on:
         description: '건전성 점검 — off(기본) / on. 배치 종료 시각(①의 08:40 계약)·표별 보관·로그 오류 비중·고아 행·컨테이너 자원(읽기 전용·업체명 미출력).'
         required: false
         default: 'off'
+      backup:
+        description: '백업 건전성 — off(기본) / on. 지금 복구에 쓸 수 있는 백업이 있는지 **끝까지 풀어** 확인 + 기동 백업이 워커마다 도는지·디스크 여유(읽기 전용 · 파일 생성 없음).'
+        required: false
+        default: 'off'
       use_branch_code:
         description: '이 브랜치의 rank_link.py 로 미리보기 — off(기본) / on. 배포 전에 새 규칙이 무엇을 이을지 먼저 보려는 용도(컨테이너 /tmp 에 얹었다 지운다·앱 파일 무접촉). apply 와 함께 쓰지 말 것.'
         required: false
@@ -2492,6 +2496,114 @@ jobs:
                                                 rec["checked_at"] if rec else "—"))
             print("  판정: 45 부근이면 광고 제외 정상 · 56 부근이면 아직 구판 수집분")
             PY
+
+      - name: 백업 건전성 — 지금 되돌릴 수 있나 (읽기 전용 · 파일 생성 없음)
+        if: ${{ github.event.inputs.backup == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 600s
+          script: |
+            # ⚠️ 읽기만 한다. 파일을 만들지도 지우지도 않는다.
+            #    압축본은 **메모리로 흘려 보며** 크기만 센다(디스크에 풀지 않는다).
+            echo "===================================================================="
+            echo " 백업 건전성 — 2026-09-14 기동 백업 압축 실패 규명"
+            echo "===================================================================="
+
+            echo "-- ① 지금 백업 폴더에 무엇이 있나 --"
+            docker exec -i logic-analysis sh -c 'ls -l --time-style="+%m-%d %H:%M" /app/data/backups 2>/dev/null' \
+              | sed 's/^/   /' || echo "   (폴더를 못 읽음)"
+
+            echo ""
+            echo "-- ② ★ 그 백업으로 정말 되돌릴 수 있나 (끝까지 풀어 본다) --"
+            echo "   ⭐ 「백업을 만들었다」와 「그 백업으로 되돌릴 수 있다」는 다른 축이다."
+            docker exec -i logic-analysis python3 - <<'PYEOF'
+            import os, sys, gzip, sqlite3
+            sys.path.insert(0, "/app")
+            D = "/app/data/backups"
+            try:
+                names = sorted(os.listdir(D))
+            except Exception as e:
+                print("   폴더 조회 실패:", e); raise SystemExit
+            live = "/app/data/logic_data.db"
+            live_sz = os.path.getsize(live) if os.path.exists(live) else 0
+            print("   살아 있는 DB : %s bytes (%.2f GB)" % (f"{live_sz:,}", live_sz / 1024**3))
+            usable = 0
+            for n in names:
+                if not n.startswith("logic_analysis_backup_"):
+                    continue
+                path = os.path.join(D, n)
+                sz = os.path.getsize(path)
+                if n.endswith(".db.gz"):
+                    # 메모리로 흘려 보며 크기만 센다 — 디스크에 풀지 않는다
+                    total, why = 0, ""
+                    try:
+                        with gzip.open(path, "rb") as f:
+                            while True:
+                                b = f.read(1024 * 1024)
+                                if not b:
+                                    break
+                                total += len(b)
+                    except Exception as e:
+                        why = "%s: %s" % (type(e).__name__, e)
+                    ok = (not why) and total > 0
+                    match = (total == live_sz)
+                    print("   %-46s %12s B  →  %s" % (n, f"{sz:,}",
+                          ("✅ 끝까지 풀림 %s B%s" % (f"{total:,}", " · 살아있는 DB 와 일치" if match else " · ⚠️ 크기 다름"))
+                          if ok else ("❌ %s (%s B 지점에서 끊김)" % (why, f"{total:,}"))))
+                    if ok:
+                        usable += 1
+                else:
+                    # 비압축본 — sqlite 로 열어 무결성 대신 **헤더·테이블 수**만 본다(가볍게)
+                    st = "?"
+                    try:
+                        c = sqlite3.connect("file:%s?mode=ro" % path, uri=True)
+                        t = c.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table'").fetchone()[0]
+                        cl = c.execute("SELECT COUNT(*) FROM clients").fetchone()[0]
+                        c.close()
+                        st = "✅ 열린다 · 표 %d개 · 업체 %d건" % (t, cl)
+                        usable += 1
+                    except Exception as e:
+                        st = "❌ %s: %s" % (type(e).__name__, e)
+                    print("   %-46s %12s B  →  %s" % (n, f"{sz:,}", st))
+            print()
+            print("   ══ 판정 ══ 복구에 쓸 수 있는 백업 **%d개**%s" % (usable, "" if usable else "  ← 🔴 없다!"))
+            PYEOF
+
+            echo ""
+            echo "-- ③ 디스크 여유 --"
+            df -h / 2>/dev/null | sed 's/^/   /'
+            echo "   백업 폴더가 차지하는 양:"
+            docker exec -i logic-analysis sh -c 'du -sh /app/data/backups 2>/dev/null' | sed 's/^/     /'
+
+            echo ""
+            echo "-- ④ ★ 기동 백업이 워커마다 도는가 (원인 가설 검증) --"
+            echo "   가설: gunicorn -w 3 이라 lifespan 이 워커 3개에서 각각 돌고,"
+            echo "        같은 초에 같은 파일 이름으로 동시에 백업·압축해 서로를 밟는다."
+            echo "   판정: 한 번 기동에 「DB 백업 완료」가 **2줄 이상**이면 가설이 맞다."
+            echo ""
+            echo "   실행 중인 워커 프로세스:"
+            docker exec -i logic-analysis sh -c 'ps -eo pid,ppid,etime,cmd 2>/dev/null | grep -c "[u]vicorn.workers\|[g]unicorn"' \
+              | sed 's/^/     gunicorn·uvicorn 프로세스 수: /'
+            echo ""
+            echo "   최근 기동 로그 — 백업 관련 줄 전부:"
+            docker logs --since 60m logic-analysis 2>&1 \
+              | grep -E "DB 백업 완료|백업 압축|압축 검증|오래된 백업 삭제|백업 생략|디스크 여유 부족|백업 정리" \
+              | sed 's/^/     /' || echo "     (없음)"
+            echo ""
+            docker logs --since 60m logic-analysis 2>&1 | grep -c "DB 백업 완료" \
+              | awk '{print "   ⇒ 최근 1시간 「DB 백업 완료」 줄 수: " $1 ($1>1 ? "  🔴 가설 확정(워커마다 돈다)" : ($1==1 ? "  (1줄 — 다른 원인일 수 있다)" : "  (0줄)"))}'
+            docker logs --since 60m logic-analysis 2>&1 | grep -c "Application startup complete" \
+              | awk '{print "   ⇒ 최근 1시간 「Application startup complete」 줄 수: " $1 "  (= 기동한 워커 수)"}'
+
+            echo ""
+            echo "-- ⑤ 스케줄 백업(00:30)은 같은 문제인가 --"
+            echo "   스케줄러는 워커 간 잠금이 있다(「다른 워커에서 이미 실행 중, 건너뜀」)."
+            docker logs --since 24h logic-analysis 2>&1 | grep -cE "스케줄러 — 다른 워커에서 이미 실행 중" \
+              | sed 's/^/     그 잠금이 걸린 횟수(24시간): /'
+            echo "   ⇒ 잠금이 있으면 00:30 백업은 한 워커만 돈다 = 이 사고와 다른 축."
 
       - name: 신고 265·266 — 업체 연결이 왜 안 되는가 (읽기 전용 · 업체명 미출력)
         if: ${{ github.event.inputs.pickers == 'on' }}
