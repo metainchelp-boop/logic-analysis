@@ -167,6 +167,12 @@ jobs:
       - name: Notify validator regression (전역 import)
         run: python backend/tests/test_notify_validator.py
 
+      # 업체 피커·추적 등록 (신고 #265 #266) — 화면에서 /products/track 를 부르는 자리가
+      # 전부 client_id 를 보내는지, 관리팀이 광고주를 전부 보는지, 이름 정규화 규칙이
+      # 서버·화면에서 같은지. 2026-08-28 에 버튼 하나를 빠뜨려 17일간 죽어 있던 것을 막는다.
+      - name: Client picker regression (신고 #265 #266)
+        run: python backend/tests/test_client_picker.py
+
       - name: Build frontend bundle
         run: |
           npm install --no-save @babel/core @babel/preset-react

@@ -25,6 +25,10 @@ window.SaveToClientSection = function SaveToClientSection({
     var _s7 = useState(''); var message = _s7[0]; var setMessage = _s7[1];
     var _s8 = useState(false); var success = _s8[0]; var setSuccess = _s8[1];
     var _s9 = useState(''); var clientSearch = _s9[0]; var setClientSearch = _s9[1];  // 기존 업체 검색어
+    /* 검색해도 안 나올 때 **왜** 안 나오는지 (2026-09-14 신고 #265).
+       종전엔 「'○○' 검색 결과가 없습니다」로 끝나서, 내린 업체인지·가망인지·아예 없는지를
+       직원이 알 길이 없었다. 목록에 없으면 서버에 한 번만 물어 이유를 받아 온다. */
+    var _s10 = useState(null); var missWhy = _s10[0]; var setMissWhy = _s10[1];
     // 추적 수명주기(2026-08-20) — 분석했다고 자동 추적되지 않는다. 광고주 등록 시 명시 선택.
     var _tk = useState(true); var trackOn = _tk[0]; var setTrackOn = _tk[1];
     var _tm = useState(6); var trackMonths = _tm[0]; var setTrackMonths = _tm[1];
@@ -60,6 +64,48 @@ window.SaveToClientSection = function SaveToClientSection({
             if (!clientName && defaultName) setClientName(defaultName);
         }
     }, [showModal, loadClients, _fullMode, _prospectMode, _fixedCompMode, defaultName]);
+
+    /* 검색해도 목록에 없을 때 **이유**를 서버에 한 번만 묻는다 (2026-09-14 신고 #265).
+       ⚠️ 이 목록(`registered-clients`)은 **활성 광고주만** 담는다. 그래서
+          「내린 업체」·「가망」·「아예 없음」이 화면에서 전부 똑같이 0건으로 보였다.
+          직원은 셋을 구분할 수 없어 「업체 연결이 안 된다」고 신고한다.
+       입력이 멈추고 300ms 뒤, 그리고 **목록에 진짜로 없을 때만** 부른다(서버 부담 최소). */
+    useEffect(function() {
+        var q = (clientSearch || '').trim();
+        if (!showModal || !q) { setMissWhy(null); return; }
+        var nq = window.lookupNorm ? window.lookupNorm(q) : q.toLowerCase();
+        var lq = q.toLowerCase();
+        var hit = (existingClients || []).some(function(c) {
+            return ((c.name || '').toLowerCase().indexOf(lq) !== -1)
+                || ((c.main_keywords || '').toLowerCase().indexOf(lq) !== -1)
+                || (!!nq && window.lookupNorm && window.lookupNorm(c.name).indexOf(nq) !== -1);
+        });
+        if (hit) { setMissWhy(null); return; }
+        var t = setTimeout(function() {
+            api.get('/cd/clients-lookup?q=' + encodeURIComponent(q)).then(function(res) {
+                if (!res || !res.success) { setMissWhy(null); return; }
+                var blocked = res.blocked || [];
+                var data = res.data || [];
+                if (blocked.length > 0) {
+                    setMissWhy({ q: q, kind: 'terminated',
+                        text: '「' + blocked[0].name + '」은(는) 내린 업체입니다 — '
+                            + '🏠 대시보드 → 🏢 등록 업체 → 「🗄 내린 업체」에서 ↩ 로 되살리면 다시 고를 수 있습니다.' });
+                    return;
+                }
+                var other = data.filter(function(c) { return c.role && c.role !== 'advertiser'; });
+                if (other.length > 0) {
+                    setMissWhy({ q: q, kind: 'role',
+                        text: '「' + other[0].name + '」은(는) '
+                            + (other[0].role === 'prospect' ? '영업 대상(가망)' : '경쟁사')
+                            + '으로 등록돼 있어 광고주 목록에는 나오지 않습니다.' });
+                    return;
+                }
+                setMissWhy({ q: q, kind: 'none',
+                    text: '로직분석에 등록된 업체가 아닙니다 — 위 「새 업체」로 지금 만들 수 있습니다.' });
+            }).catch(function() { setMissWhy(null); });
+        }, 300);
+        return function() { clearTimeout(t); };
+    }, [clientSearch, showModal, existingClients]);
 
     if (!keyword || !analysisData) return null;
 
@@ -483,10 +529,16 @@ window.SaveToClientSection = function SaveToClientSection({
                                 '등록된 업체가 없습니다. 새 업체를 등록해주세요.')
                             : (function() {
                                 var q = clientSearch.trim().toLowerCase();
+                                /* ⚠️ 정규화 비교를 **더한다**(기존 글자 그대로 비교는 그대로 둔다).
+                                   띄어쓰기·기호 하나 때문에 0건이 되던 것을 막는다 — 활성 업체의
+                                   30%가 이름에 공백·기호를 갖고 있다(2026-09-14 실측·신고 #265). */
+                                var nq = (window.lookupNorm ? window.lookupNorm(clientSearch) : q);
                                 var filtered = q
                                     ? existingClients.filter(function(c) {
                                         return ((c.name || '').toLowerCase().indexOf(q) !== -1)
-                                            || ((c.main_keywords || '').toLowerCase().indexOf(q) !== -1);
+                                            || ((c.main_keywords || '').toLowerCase().indexOf(q) !== -1)
+                                            || (!!nq && window.lookupNorm
+                                                && window.lookupNorm(c.name).indexOf(nq) !== -1);
                                     })
                                     : existingClients;
                                 return React.createElement(React.Fragment, null,
@@ -501,8 +553,13 @@ window.SaveToClientSection = function SaveToClientSection({
                                         }
                                     }),
                                     filtered.length === 0
-                                        ? React.createElement('div', { style: { textAlign: 'center', padding: 16, color: '#94a3b8', fontSize: 13 } },
-                                            "'" + clientSearch + "' 검색 결과가 없습니다.")
+                                        ? React.createElement('div', { style: { textAlign: 'center', padding: 16, fontSize: 13 } },
+                                            React.createElement('div', { style: { color: '#94a3b8' } },
+                                                "'" + clientSearch + "' 검색 결과가 없습니다."),
+                                            missWhy && missWhy.q === clientSearch.trim() && React.createElement('div', {
+                                                style: { marginTop: 7, color: missWhy.kind === 'none' ? '#94a3b8' : '#b45309',
+                                                         fontSize: 12.5, lineHeight: 1.65 }
+                                            }, missWhy.text))
                                         : React.createElement('div', { style: { maxHeight: 200, overflowY: 'auto' } },
                                             filtered.map(function(c) {
                                                 var isSelected = selectedClientId === c.id;
