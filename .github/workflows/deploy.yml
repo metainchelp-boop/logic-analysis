@@ -173,6 +173,11 @@ jobs:
       - name: Client picker regression (신고 #265 #266)
         run: python backend/tests/test_client_picker.py
 
+      # 시작 시 백업 — 워커 간 잠금. gunicorn -w 3 이라 lifespan 이 워커마다 돌고,
+      # 잠금이 없으면 세 워커가 같은 백업 파일을 동시에 써서 압축본이 깨진다(2026-09-14 실측).
+      - name: Startup backup worker lock regression
+        run: python backend/tests/test_backup_lock.py
+
       - name: Build frontend bundle
         run: |
           npm install --no-save @babel/core @babel/preset-react

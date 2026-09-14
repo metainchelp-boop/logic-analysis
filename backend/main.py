@@ -153,7 +153,69 @@ def _verify_db_integrity():
 
 
 def _backup_db_on_startup():
-    """앱 시작 시 DB 자동 백업 (데이터가 있는 경우에만)"""
+    """앱 시작 시 DB 백업 — **워커 간 잠금 래퍼.** 실제 작업은 아래 `_backup_db_on_startup_locked`.
+
+    ⚠️ **왜 잠금이 필요한가 (2026-09-14 실측으로 확정)**
+       이 앱은 `gunicorn -w 3` 으로 뜬다(Dockerfile). FastAPI lifespan 은 **워커마다**
+       돌기 때문에 이 함수도 **3번** 실행된다. 그런데 백업 파일 이름은 `초` 단위 시각이라
+       세 워커가 **같은 파일 이름**을 잡고 동시에 쓴다.
+
+       배포 #437 기동 로그가 그 장면이다(UTC):
+         06:34:31  ℹ️ 최근(0분 전) 백업 존재 — 시작 시 백업 생략   ← 세 줄(워커 3개)
+         06:34:59  ✅ DB 백업 완료: …_20260914_153431.db
+         06:37:46  ✅ DB 백업 완료: …_20260914_153431.db          ← **같은 파일에 두 번**
+         06:38:57  ❌ 압축본이 복구에 쓸 수 없다 — Error -3 … invalid stored block lengths
+         06:40:14  ❌ 압축본이 복구에 쓸 수 없다 — FileNotFoundError: …db.gz
+       ⇒ 둘이 같은 `.gz` 에 겹쳐 써서 깨졌고(-3), 한쪽이 깨진 것을 지우자 다른 쪽은
+         그 파일을 못 찾았다(FileNotFoundError). **압축이 실패해 비압축 2.7GB 가 남는다.**
+
+    ⚠️ **왜 `fcntl.flock` 인가** — 잠금 파일을 만들었다 지우는 방식은 프로세스가 죽으면
+       파일이 남아 **다음 기동부터 영영 백업이 안 도는** 더 나쁜 고장이 된다.
+       `flock` 은 프로세스가 죽으면 커널이 알아서 푼다.
+    ⚠️ **잠금을 못 걸면 건너뛴다(백업을 두 번 하지 않는다).** 단 `fcntl` 자체를 못 쓰는
+       환경에서는 **종전 동작 그대로** 진행한다 — 잠금 때문에 백업이 사라지면 안 된다.
+    ⭐ 스케줄러(00:30)는 이미 워커 잠금이 있어 이 사고와 무관하다 — **경로가 둘인 것을 또 놓쳤다.**
+    """
+    backup_dir = os.getenv("BACKUP_DIR", "/app/data/backups")
+    try:
+        import fcntl
+    except Exception:
+        return _backup_db_on_startup_locked()      # 잠금을 못 쓰는 환경 — 종전대로
+
+    lock_fd = None
+    try:
+        os.makedirs(backup_dir, exist_ok=True)
+        lock_fd = os.open(os.path.join(backup_dir, ".startup_backup.lock"),
+                          os.O_CREAT | os.O_RDWR, 0o644)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (OSError, IOError, BlockingIOError):
+        # 다른 워커가 이미 하고 있다 — 조용히 건너뛴다(백업은 한 번이면 된다).
+        if lock_fd is not None:
+            try:
+                os.close(lock_fd)
+            except Exception:
+                pass
+        logger.info("ℹ️ 다른 워커가 시작 시 백업을 진행 중 — 이 워커는 건너뜁니다")
+        return
+    try:
+        return _backup_db_on_startup_locked()
+    finally:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        except Exception:
+            pass
+        try:
+            os.close(lock_fd)
+        except Exception:
+            pass
+
+
+def _backup_db_on_startup_locked():
+    """앱 시작 시 DB 자동 백업 (데이터가 있는 경우에만)
+
+    ⚠️ 이 함수는 **위 래퍼를 통해서만** 부른다 — 직접 부르면 워커 잠금이 빠진다.
+       본문은 2026-09-14 에 한 글자도 고치지 않았다(잠금만 바깥에 씌웠다).
+    """
     import sqlite3
     import shutil
     db_path = os.getenv("DB_PATH", "/app/data/logic_data.db")
