@@ -159,13 +159,22 @@ def test_registered_clients_scope():
        "viewer" in fn and "created_by = ?" in fn,
        "영업사원 격리가 풀리면 보안 경계가 뚫린다")
 
-    # viewer 분기 **밖**에 created_by 필터가 남아 있으면 안 된다
+    # 관리팀(TEAM_ROLES) 분기 **안에** created_by 필터가 남아 있으면 안 된다.
     #   (대표 확정 2026-09-14 「모두 보게 하자」 — manager 도 광고주 전체를 본다)
-    viewer_q = re.findall(r"role\s*,'advertiser'\)='prospect'[^\"]*created_by = \?", fn)
-    total_q = re.findall(r"created_by = \?", fn)
-    ok("manager 분기에 created_by 필터가 없다",
-       len(total_q) == len(viewer_q) == 1,
-       f"created_by 조건 {len(total_q)}개 발견 — viewer 용 1개만 있어야 한다")
+    # ⚠️ 함수 전체의 `created_by = ?` 개수를 세는 방식은 쓰지 않는다 —
+    #    viewer 분기와 「모르는 역할」 폴백에도 정당하게 하나씩 있어서,
+    #    개수만 세면 **정당한 분기를 늘릴 때마다 시험이 깨진다**(첫 판에 그랬다).
+    #    대신 **그 분기의 본문만** 잘라 내 묻는다.
+    m = re.search(r"elif user_role in TEAM_ROLES:(.*?)(?:\n        else:|\n\n)", fn, re.S)
+    ok("관리팀 분기를 찾았다", m is not None)
+    if m:
+        ok("관리팀 분기에 created_by 필터가 없다", "created_by" not in m.group(1),
+           "담당이 아닌 광고주가 목록에서 빠진다 — 신고 #265 의 주원인")
+        ok("관리팀 분기가 광고주 전체를 준다", "='advertiser'" in m.group(1))
+    viewer_m = re.search(r'if user_role == "viewer":(.*?)elif', fn, re.S)
+    ok("viewer 분기는 여전히 본인 것만 본다",
+       viewer_m is not None and "created_by = ?" in viewer_m.group(1),
+       "영업사원 격리가 풀리면 보안 경계가 뚫린다")
 
     ok("advertiser 전체를 주는 분기가 있다",
        "='advertiser' ORDER BY name ASC" in fn.replace("COALESCE(role,'advertiser')", "").replace(" ", " "),
@@ -266,6 +275,74 @@ def test_lookup_matching_logic():
     ok("빈 검색어는 전부 통과(목록 전체)", hit("", names[0]))
 
 
+# ==================================================================
+# ⑤ 「목록에 보이면 쓸 수도 있다」 — 읽기 범위와 쓰기 게이트가 같아야 한다
+# ==================================================================
+def test_read_and_write_scopes_agree():
+    """⚠️ 이것이 이 시험의 심장이다.
+
+    2026-09-14 에 목록(`registered-clients`)만 광고주 전체로 넓혔다가,
+    쓰기 검사(`_verify_client_access`)가 여전히 `created_by = 본인` 인 것을 조사에서 잡았다.
+    그대로 배포했으면 **피커에 609곳이 보이는데 고르면 403** — 신고 #265 를 고치면서
+    똑같은 신고를 새로 만들 뻔했다. 두 곳이 다시 갈리면 여기서 막는다.
+    """
+    src = read(os.path.join(BACKEND, "client_dashboard.py"))
+    gate = _func_src(src, "_verify_client_access")
+    ok("_verify_client_access 를 찾았다", bool(gate))
+
+    ok("관리팀은 광고주를 담당이 아니어도 통과한다",
+       "TEAM_ROLES" in gate and "advertiser" in gate,
+       "목록만 넓히고 여기가 좁으면 「보이는데 403」이 된다")
+    ok("viewer 격리는 그대로다",
+       'role") == "viewer"' in gate and "본인이 등록한 영업 대상만" in gate,
+       "영업사원 격리가 풀리면 보안 경계가 뚫린다")
+    ok("역할 목록을 한 곳(TEAM_ROLES)에서 정의한다",
+       "TEAM_ROLES = " in src,
+       "두 곳에 각자 적으면 또 갈린다")
+
+    lst = _func_src(src, "registered_clients")
+    ok("목록도 같은 TEAM_ROLES 를 쓴다", "TEAM_ROLES" in lst)
+    ok("모르는 역할은 넓히지 않는다(화이트리스트)",
+       "elif user_role in TEAM_ROLES" in lst and lst.count("created_by = ?") == 2,
+       "else 에 전량 질의를 두면 역할 오타 하나에 전체 공개가 된다")
+
+    seo = read(os.path.join(BACKEND, "seo_generate.py"))
+    belongs = _func_src(seo, "_client_belongs")
+    ok("SEO 탭 쓰기 게이트도 같은 범위로 맞췄다",
+       '"manager"' in belongs and "='advertiser'" in belongs,
+       "여기만 좁으면 업체를 고를 때마다 권한 없음 토스트가 뜬다")
+
+
+# ==================================================================
+# ⑥ 추적 연결 — 광고주만 · 한 상품은 한 업체
+# ==================================================================
+def test_link_guards():
+    src = read(os.path.join(BACKEND, "rank_link.py"))
+    fn = _func_src(src, "link_on_register")
+    ok("link_on_register 를 찾았다", bool(fn))
+    ok("광고주가 아니면 잇지 않는다",
+       '"advertiser"' in fn and "광고주만 순위 추적에" in fn,
+       "가망·경쟁사를 이으면 자격 판정에서 빠져 조용히 순위가 안 재진다")
+    ok("이미 다른 업체에 이어져 있으면 잇지 않는다",
+       "이미 「" in fn and "rank_link l JOIN clients" in fn,
+       "주인이 둘이면 계약이 끝나도 뺄 근거가 흐려진다")
+    ok("거절해도 이유를 돌려준다(화면이 그대로 띄운다)", fn.count('"reason"') >= 3)
+
+
+# ==================================================================
+# ⑦ 이 시험이 배포 게이트에 등록돼 있는가 (스스로를 지킨다)
+# ==================================================================
+def test_self_registered_in_gate():
+    """게이트는 파일을 하나씩 `python …` 으로 부른다 — 등록을 빠뜨리면 영영 안 돈다.
+
+    ⚠️ 파일명을 하드코딩하지 않는다. `__file__` 에서 뽑아야 이름을 바꿔도 가드가 따라온다.
+    """
+    me = os.path.basename(__file__)
+    dy = read(os.path.join(ROOT, ".github", "workflows", "deploy.yml"))
+    ok(f"deploy.yml 이 {me} 를 부른다", me in dy,
+       "만들어 놓고 안 도는 시험이 된다")
+
+
 if __name__ == "__main__":
     print("=== 업체 피커·추적 등록 회귀 시험 (신고 #265 #266) ===")
     test_track_callers_send_client_id()
@@ -274,5 +351,8 @@ if __name__ == "__main__":
     test_norm_rules_match_between_server_and_screen()
     test_lookup_explains_why()
     test_lookup_matching_logic()
+    test_read_and_write_scopes_agree()
+    test_link_guards()
+    test_self_registered_in_gate()
     print(f"\n통과 {_pass} · 실패 {_fail}")
     sys.exit(1 if _fail else 0)

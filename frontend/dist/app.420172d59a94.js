@@ -20750,12 +20750,15 @@ window.SeoOptimizerPage = function SeoOptimizerPage(props) {
     }).catch(function () {});
   }, []);
 
-  /* 업체별 저장 이력 로드 */
+  /* 업체별 저장 이력 로드
+     ⚠️ **업체를 바꾸는 순간 먼저 비운다** (2026-09-14). 종전엔 조회가 실패하면
+        `setSavedList` 를 아예 안 불러 **직전 업체의 목록이 새 업체명 아래 그대로 남았다**
+        (헤더는 `{clientName} · 저장된 SEO 작업 (N)` 로 새 이름을 찍는다 = 데이터 오귀속).
+        `api` 계층은 403 을 예외로 던지지 않고 `{success:false}` 로 돌려주므로
+        `.catch()` 로는 못 잡는다 — 그래서 성공/실패와 무관하게 먼저 비운다. */
   const loadSaved = function (cid) {
-    if (!cid) {
-      setSavedList([]);
-      return;
-    }
+    setSavedList([]);
+    if (!cid) return;
     api.get('/seo/client/' + cid + '/saved').then(function (res) {
       if (res && res.success) setSavedList(res.data || []);
     }).catch(function () {});

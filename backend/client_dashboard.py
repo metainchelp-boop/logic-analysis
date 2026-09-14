@@ -48,11 +48,31 @@ def _days_left(expires_at):
         return None
 
 
+# 관리팀(manager)이 「모두 보게」 되는 역할 목록 — 목록 질의와 접근 검사가 **같은 이름**을 쓴다.
+# ⚠️ 한 곳만 고치면 「보이는데 저장은 403」이 된다(2026-09-14 에 실제로 그럴 뻔했다).
+TEAM_ROLES = ("admin", "superadmin", "manager")
+
+
 def _verify_client_access(conn, client_id: int, current_user: dict):
-    """업체 소유권 확인. admin은 통과, manager는 created_by 확인,
-    viewer(영업사원)는 본인이 등록한 영업 대상·경쟁사만(완전 개인 모드).
-    업체가 없으면 404, 권한 없으면 403 반환."""
-    row = conn.execute("SELECT id, created_by FROM clients WHERE id = ?", (client_id,)).fetchone()
+    """업체 소유권 확인. 업체가 없으면 404, 권한 없으면 403.
+
+    · admin·superadmin → 전체
+    · manager(관리팀)   → **활성 광고주는 전부**(2026-09-14 대표 확정 「모두 보게 하자」).
+                          가망(prospect)·경쟁사(competitor)는 종전대로 **본인 등록분만**.
+    · viewer(영업사원)  → 완전 개인 모드(본인 등록분만) — **한 글자도 안 바꾼다.**
+
+    ⚠️ **왜 manager 를 넓히는가** — 같은 날 `registered-clients` 목록을 광고주 전체로 넓혔다.
+       목록만 넓히고 이 검사를 두면 **피커에 609곳이 보이는데 고르면 403** 이 된다.
+       그러면 신고 #265(「업체 연결이 안 된다」)를 고치면서 똑같은 신고를 새로 만드는 셈이다.
+       ⇒ **「목록에 보이는 것은 쓸 수 있다」를 한 커밋 안에서 보장한다.**
+    ⚠️ 넓히는 범위는 **광고주(advertiser)뿐**이다. 가망·경쟁사는 영업사원 개인 자산이라
+       관리팀에게도 열지 않는다 — 대표 확정의 문맥이 「업체 연결」(광고주)이었다.
+    ⚠️ created_by 가 NULL/'' 인 광고주는 종전엔 목록엔 보이는데 여기서 403 이었다(선재 불일치).
+       광고주 전체를 통과시키면서 그 틈도 함께 닫힌다.
+    """
+    row = conn.execute(
+        "SELECT id, created_by, COALESCE(role,'advertiser') AS role FROM clients WHERE id = ?",
+        (client_id,)).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="업체를 찾을 수 없습니다.")
     if _is_admin(current_user):
@@ -61,6 +81,9 @@ def _verify_client_access(conn, client_id: int, current_user: dict):
     if current_user.get("role") == "viewer":
         if row["created_by"] != current_user.get("id"):
             raise HTTPException(status_code=403, detail="본인이 등록한 영업 대상만 볼 수 있습니다.")
+        return row
+    # 관리팀 — 광고주는 담당이 아니어도 통과(목록 범위와 동일).
+    if current_user.get("role") in TEAM_ROLES and row["role"] == "advertiser":
         return row
     if row["created_by"] != current_user.get("id"):
         raise HTTPException(status_code=403, detail="해당 업체에 대한 접근 권한이 없습니다.")
@@ -1054,7 +1077,9 @@ def registered_clients(current_user: dict = Depends(get_current_user)):
         user_role = current_user.get("role", "viewer")
 
         # viewer(영업사원) → 본인 등록 영업 대상만(관리팀 광고주 비노출),
-        # 그 외(admin·superadmin·manager) → 광고주 전체
+        # 관리팀(admin·superadmin·manager) → 광고주 전체,
+        # ⚠️ **그 밖의 모르는 역할은 넓히지 않고 좁힌다.** 화이트리스트로 적는 이유가 이것이다 —
+        #    `else` 에 전량 질의를 두면 역할이 하나 늘거나 오타가 나는 순간 **전체 공개**가 된다.
         if user_role == "viewer":
             rows = conn.execute(
                 "SELECT id, name, main_keywords FROM clients "
@@ -1062,9 +1087,16 @@ def registered_clients(current_user: dict = Depends(get_current_user)):
                 "ORDER BY name ASC",
                 (user_id,)
             ).fetchall()
-        else:
+        elif user_role in TEAM_ROLES:
             rows = conn.execute(
                 "SELECT id, name, main_keywords FROM clients WHERE status = 'active' AND COALESCE(role,'advertiser')='advertiser' ORDER BY name ASC"
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, name, main_keywords FROM clients "
+                "WHERE status = 'active' AND COALESCE(role,'advertiser')='advertiser' AND created_by = ? "
+                "ORDER BY name ASC",
+                (user_id,)
             ).fetchall()
 
         return {"success": True, "data": [dict(r) for r in rows]}

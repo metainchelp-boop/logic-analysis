@@ -456,11 +456,34 @@ def link_on_register(tracked_product_id: int, client_id: Optional[int],
     try:
         if client_id:
             row = conn.execute(
-                "SELECT id, name FROM clients WHERE id = ? AND status='active'", (client_id,)
+                "SELECT id, name, COALESCE(role,'advertiser') AS role FROM clients "
+                "WHERE id = ? AND status='active'", (client_id,)
             ).fetchone()
             if not row:
                 return {"linked": False, "client_id": None, "method": None,
                         "reason": "고른 업체를 찾을 수 없습니다(삭제됐거나 중지된 업체)."}
+            # ⚠️ 광고주만 순위 추적에 잇는다 (2026-09-14).
+            #    피커(`/cd/clients-lookup`)에는 역할 필터가 없어 가망·경쟁사도 목록에 뜬다.
+            #    고르면 연결은 되는데 자격 판정(`tracking_eligibility`)에서 빠져
+            #    **조용히 순위가 안 재진다** — 등록한 사람은 됐다고 믿는다.
+            #    ⇒ 이을 때 거절하고 이유를 말한다(화면 3곳이 이미 link.reason 을 띄운다).
+            if row["role"] != "advertiser":
+                return {"linked": False, "client_id": None, "method": None,
+                        "reason": ("광고주만 순위 추적에 이을 수 있습니다 — 「"
+                                   + str(row["name"]) + "」은(는) "
+                                   + ("영업 대상(가망)" if row["role"] == "prospect" else "경쟁사")
+                                   + "으로 등록돼 있습니다.")}
+            # ⚠️ 한 상품이 두 업체에 이어지지 않게 한다 (2026-09-14).
+            #    종전엔 등록 창구가 하나뿐이라 부딪힐 일이 드물었는데, 보고서 화면에도
+            #    업체 피커가 생기면서 **같은 상품을 다른 업체로 다시 등록**할 수 있게 됐다.
+            #    주인이 둘이면 계약이 끝나도 뺄 근거가 흐려진다(주인 없는 상품과 같은 병).
+            owned = conn.execute(
+                "SELECT c.id, c.name FROM rank_link l JOIN clients c ON c.id = l.client_id "
+                "WHERE l.tracked_product_id = ? LIMIT 1", (tracked_product_id,)).fetchone()
+            if owned and owned["id"] != row["id"]:
+                return {"linked": False, "client_id": owned["id"], "method": None,
+                        "reason": ("이 상품은 이미 「" + str(owned["name"]) + "」에 이어져 있습니다 — "
+                                   "옮기려면 순위 추적 탭에서 업체 연결을 바꿔 주세요.")}
             conn.execute(
                 "INSERT OR IGNORE INTO rank_link "
                 "(client_id, tracked_product_id, product_key, match_method, linked_by) "
