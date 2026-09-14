@@ -2639,6 +2639,22 @@ jobs:
             echo ""
             echo "   판정: Booting worker 가 3줄인데 startup complete 가 5줄이면 **워커 재기동**이고,"
             echo "         Booting worker 도 5줄이면 **-w 3 이 안 먹은 것**(명령 확인 [2] 를 볼 것)."
+            echo ""
+            echo "   [5] ★ 메모리 — 루트 Dockerfile 주석이 「6개는 스왑 thrashing」이라 경고한 그 서버다"
+            free -m 2>/dev/null | sed 's/^/     /'
+            echo "     컨테이너가 쓰는 양:"
+            docker stats --no-stream --format "     {{.Name}}  MEM {{.MemUsage}}  ({{.MemPerc}})  CPU {{.CPUPerc}}" 2>/dev/null \
+              | head -8 || echo "     (못 읽음)"
+            echo "     워커별 RSS (MB):"
+            docker top logic-analysis -eo pid,rss,args 2>/dev/null \
+              | awk 'NR>1 {printf "       pid %-8s %6.0f MB\n", $1, $2/1024}' | head -8 \
+              || echo "       (못 읽음)"
+            echo ""
+            echo "   [6] 두 Dockerfile 중 어느 것이 쓰이나 (같은 저장소에 둘이 있다)"
+            echo "     배포가 서버에 쓰는 compose 는 build: ./backend 다 ⇒ backend/Dockerfile 이 쓰인다."
+            echo "     루트 Dockerfile(gunicorn -w 3)은 **배포에 안 쓰인다.**"
+            docker inspect logic-analysis --format '     실제 Cmd = {{json .Config.Cmd}}' 2>/dev/null
+
 
             echo ""
             echo "-- ⑤ 스케줄 백업(00:30)은 같은 문제인가 --"
