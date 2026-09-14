@@ -2608,6 +2608,39 @@ jobs:
               || echo "     (해당 줄 없음)"
 
             echo ""
+            echo "-- ④-b ★ 워커가 정말 몇 개인가 (Dockerfile 은 -w 3 인데 로그엔 5줄이었다) --"
+            echo "   ⭐ 설정 파일에 적힌 수와 실제로 도는 수는 다른 축이다 — 둘 다 잰다."
+            echo ""
+            echo "   [1] 컨테이너가 몇 개인가 (blue-green 으로 둘이 같이 떠 있나)"
+            docker ps -a --filter "name=logic" --format "     {{.Names}}  {{.Status}}  {{.Image}}" 2>/dev/null \
+              || echo "     (못 읽음)"
+            echo ""
+            echo "   [2] 컨테이너가 실제로 받은 명령 + 재시작 횟수"
+            docker inspect logic-analysis \
+              --format '     Cmd={{json .Config.Cmd}}{{"\n"}}     StartedAt={{.State.StartedAt}}{{"\n"}}     RestartCount={{.RestartCount}}{{"\n"}}     Pid={{.State.Pid}}' \
+              2>/dev/null || echo "     (못 읽음)"
+            echo ""
+            echo "   [3] 지금 도는 프로세스 전부 (docker top · 잘림 없이)"
+            docker top logic-analysis -eo pid,ppid,etime,args 2>/dev/null | sed 's/^/     /' \
+              || docker top logic-analysis 2>/dev/null | sed 's/^/     /' \
+              || echo "     (못 읽음)"
+            echo ""
+            echo "   [4] ★ gunicorn 이 워커를 띄우며 남긴 줄 — 이게 직접 증거다"
+            docker logs -t logic-analysis 2>&1 \
+              | grep -iE "Booting worker|Starting gunicorn|Listening at|Using worker|Worker exiting|Shutting down|was sent SIGKILL|Worker with pid|WORKER TIMEOUT" \
+              | sed 's/^/     /' | tail -30 || echo "     (해당 줄 없음)"
+            echo ""
+            docker logs logic-analysis 2>&1 | grep -c "Booting worker" \
+              | awk '{print "   ⇒ 「Booting worker」 줄 수      : " $1}'
+            docker logs logic-analysis 2>&1 | grep -c "Application startup complete" \
+              | awk '{print "   ⇒ 「Application startup complete」: " $1 "  (= lifespan 이 돈 횟수)"}'
+            docker logs logic-analysis 2>&1 | grep -ciE "Worker exiting|WORKER TIMEOUT|was sent SIGKILL" \
+              | awk '{print "   ⇒ 워커가 죽은 줄            : " $1 "  (>0 이면 재기동분이 섞인 것)"}'
+            echo ""
+            echo "   판정: Booting worker 가 3줄인데 startup complete 가 5줄이면 **워커 재기동**이고,"
+            echo "         Booting worker 도 5줄이면 **-w 3 이 안 먹은 것**(명령 확인 [2] 를 볼 것)."
+
+            echo ""
             echo "-- ⑤ 스케줄 백업(00:30)은 같은 문제인가 --"
             echo "   스케줄러는 워커 간 잠금이 있다(「다른 워커에서 이미 실행 중, 건너뜀」)."
             docker logs --since 24h logic-analysis 2>&1 | grep -cE "스케줄러 — 다른 워커에서 이미 실행 중" \
