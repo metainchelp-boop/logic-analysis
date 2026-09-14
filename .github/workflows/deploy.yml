@@ -173,10 +173,16 @@ jobs:
       - name: Client picker regression (신고 #265 #266)
         run: python backend/tests/test_client_picker.py
 
-      # 시작 시 백업 — 워커 간 잠금. gunicorn -w 3 이라 lifespan 이 워커마다 돌고,
-      # 잠금이 없으면 세 워커가 같은 백업 파일을 동시에 써서 압축본이 깨진다(2026-09-14 실측).
+      # 시작 시 백업 — 워커 간 잠금. 배포가 쓰는 backend/Dockerfile 이 uvicorn --workers 5 라
+      # lifespan 이 워커마다 돌고, 잠금이 없으면 워커들이 같은 백업 파일을 동시에 써서
+      # 압축본이 깨진다(2026-09-14 실측). ⚠️ 루트 Dockerfile(gunicorn -w 3)은 배포에 안 쓰인다.
       - name: Startup backup worker lock regression
         run: python backend/tests/test_backup_lock.py
+
+      # 배포가 어느 파일을 집어 가는가 — 저장소에 Dockerfile 이 둘이라
+      # 엉뚱한 쪽을 읽고 서버 동작을 단정하는 일이 실제로 있었다(2026-09-14).
+      - name: Deploy source-of-truth regression
+        run: python backend/tests/test_deploy_source.py
 
       - name: Build frontend bundle
         run: |

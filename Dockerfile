@@ -1,3 +1,21 @@
+# ⛔ 이 파일은 **배포에 쓰이지 않습니다.**
+#
+#    실제로 서버에 올라가는 것은  ➜  backend/Dockerfile  (CMD: uvicorn --workers 5)
+#
+#    왜 그런가 — 배포 스크립트(.github/workflows/deploy.yml)가 서버에 docker-compose.yml 을
+#    **직접 써 넣는데**, 그 안이 `build: ./backend` 다. 그래서 저장소 루트의 이 Dockerfile 도,
+#    루트 docker-compose.yml 도 배포 경로에 들어가지 않는다.
+#
+# ⚠️ 2026-09-14 실사고 — 백업이 깨진 원인을 파다가 **이 파일을 읽고**
+#    「gunicorn 워커 3개」라고 단정해 보고했다. 실제 서버는 **uvicorn 워커 5개**였다.
+#    원인 진단 자체는 맞았지만(여럿이 돈다) 수와 실행기를 틀리게 적었다.
+#    ⭐ 교훈 — 「설정 파일에 뭐라고 적혀 있나」가 아니라 **「배포가 어느 파일을 집어 가나」**를 따라갈 것.
+#
+# ⚠️ 아래 「RAM 1.9GB」 주석도 낡았다 — 2026-09-14 실측 **3.9GB**(available 2.7GB).
+#
+# ⛔ 여기를 고쳐도 서버는 안 바뀐다. 서버 동작을 바꾸려면 backend/Dockerfile 을 고칠 것.
+#    (로컬에서 단독 실행할 때만 쓰인다. 지우지 않는 이유가 그것이다.)
+#
 FROM python:3.11-slim
 
 WORKDIR /app
