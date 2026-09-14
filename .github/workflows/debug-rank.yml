@@ -35,7 +35,7 @@ on:
         required: false
         default: 'off'
       pickers:
-        description: '신고 265·266 — 업체 연결이 왜 안 되는가. 두 피커(로직분석 저장 / 순위 추적 등록)가 각각 무엇을 거르는지·추적 등록 요청이 어떤 코드로 끝났는지(읽기 전용 · 업체명 미출력 · 수는 세되 이름은 안 찍는다).'
+        description: '신고 265·266 — 업체 연결이 왜 안 되는가. 피커 두 개가 각각 무엇을 거르는지 · 후보 6개(내린 업체·가망·남의 업체·30개 잘림·로직분석 미등록·이름 표기 차이)의 규모 · 추적 등록 요청 응답코드(읽기 전용 · 업체명 미출력).'
         required: false
         default: 'off'
       # ⚠️ workflow_dispatch 입력 상한은 25개다. 신고 253 이 종결돼 `verify253b` 입력을 내렸다
@@ -2676,6 +2676,70 @@ jobs:
             print("     두 글자 검색어 중 30개를 넘겨 **잘리는** 조각 : %d종 (최대 %d개 매칭)"
                   % (len(over), over[0] if over else 0))
             print("     ⇒ 0종이면 후보④는 성립하지 않는다.")
+            conn.close()
+            PYEOF
+
+            echo ""
+            echo "===================================================================="
+            echo " E. 후보 ⑤⑥ — 내가 처음에 안 세었던 두 가지"
+            echo "===================================================================="
+            docker exec -i logic-analysis python3 - <<'PYEOF'
+            import sqlite3, re
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            print("  -- 후보⑤ 로직분석에 아예 없는 업체 → **검색해도 당연히 0건** --")
+            print("     ⚠️ 04:00 전산 동기화는 계약 단계를 **채워 넣기만** 하고 업체를 만들지 않는다")
+            print("        (scheduler.py — SELECT … FROM clients 로 이미 있는 행만 훑는다).")
+            print("        ⇒ 전산에만 있는 업체는 두 화면 어디에도 안 나온다.")
+            nostage = conn.execute(
+                "SELECT COUNT(*) FROM clients WHERE status='active' "
+                "AND COALESCE(role,'advertiser')='advertiser' "
+                "AND (contract_stage IS NULL OR TRIM(contract_stage)='')").fetchone()[0]
+            adv = conn.execute(
+                "SELECT COUNT(*) FROM clients WHERE status='active' "
+                "AND COALESCE(role,'advertiser')='advertiser'").fetchone()[0]
+            print("     활성 광고주 %d곳 중 **전산 단계가 안 붙은 곳 %d곳**" % (adv, nostage))
+            print("     ⇒ 이 수는 반대 방향(로직분석엔 있는데 전산 대조 실패)이다.")
+            print("        진짜 ⑤(전산엔 있는데 로직분석에 없음)는 ① API 를 불러야 세는데,")
+            print("        ad-sync 는 「하루 1회」가 계약이라 진단으로 더 부르지 않는다.")
+            print("")
+            print("  -- 후보⑥ 이름 표기가 달라 LIKE 검색이 0건 --")
+            print("     ⚠️ clients-lookup 은 `name LIKE %q%` 단순 매칭이다(정규화 없음).")
+            print("        띄어쓰기·괄호·하이픈 하나만 달라도 **검색 결과 0건**이 된다.")
+            rows = conn.execute("SELECT name FROM clients WHERE status='active'").fetchall()
+            names = [(r["name"] or "") for r in rows]
+            def norm(x):
+                return re.sub(r"[\s\-_.,()\[\]/·&+'\"]", "", x).lower()
+            has_space = sum(1 for n in names if " " in n.strip())
+            has_punct = sum(1 for n in names if re.search(r"[\-_.,()\[\]/·&+]", n))
+            risky = sum(1 for n in names if norm(n) != n.strip().lower())
+            print("     활성 업체 %d곳 중" % len(names))
+            print("       · 이름에 **공백**이 있는 곳       : %d곳 (붙여서 치면 0건)" % has_space)
+            print("       · 이름에 **기호**가 있는 곳       : %d곳 (빼고 치면 0건)" % has_punct)
+            print("       · 정규화하면 달라지는 곳(합계)   : **%d곳** ← 표기 차이에 취약한 모수" % risky)
+            from collections import defaultdict
+            g = defaultdict(int)
+            for n in names:
+                g[norm(n)] += 1
+            collide = sum(1 for k, v in g.items() if v > 1)
+            print("       · 정규화하면 **같아지는** 이름 묶음 : %d종 (고를 때 헷갈린다)" % collide)
+            print("")
+            print("  -- 후보③ 실측 — 계정별로 지금 몇 곳이 보이나 (직원 이름 미출력) --")
+            owners = conn.execute(
+                "SELECT COALESCE(NULLIF(TRIM(COALESCE(created_by,'')),''),'0') o, COUNT(*) n "
+                "FROM clients WHERE status='active' AND COALESCE(role,'advertiser')='advertiser' "
+                "GROUP BY 1").fetchall()
+            made = {r["o"]: r["n"] for r in owners}
+            mgrs = conn.execute("SELECT id FROM users WHERE role='manager' ORDER BY id").fetchall()
+            noown = made.get("0", 0)
+            print("     주인 없는 광고주(누구에게나 보임) : %d곳" % noown)
+            print("     manager 계정 %d명이 지금 보는 수 :" % len(mgrs))
+            for i, m in enumerate(mgrs, 1):
+                mine = made.get(str(m["id"]), 0)
+                vis = mine + noown
+                print("       계정#%-2d  보임 %4d / 전체 %d곳   (%.0f%%)"
+                      % (i, vis, adv, 100.0 * vis / max(adv, 1)))
+            print("     ⇒ 대표 확정 「모두 보게 하자」를 적용하면 전원 %d곳으로 올라간다." % adv)
             conn.close()
             PYEOF
 
