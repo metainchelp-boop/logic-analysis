@@ -2584,19 +2584,28 @@ jobs:
             echo "        같은 초에 같은 파일 이름으로 동시에 백업·압축해 서로를 밟는다."
             echo "   판정: 한 번 기동에 「DB 백업 완료」가 **2줄 이상**이면 가설이 맞다."
             echo ""
-            echo "   실행 중인 워커 프로세스:"
-            docker exec -i logic-analysis sh -c 'ps -eo pid,ppid,etime,cmd 2>/dev/null | grep -c "[u]vicorn.workers\|[g]unicorn"' \
-              | sed 's/^/     gunicorn·uvicorn 프로세스 수: /'
+            echo "   실행 중인 워커 프로세스 (docker top — 컨테이너에 ps 가 없어도 보인다):"
+            docker top logic-analysis 2>/dev/null | grep -cE "gunicorn|uvicorn" \
+              | sed 's/^/     gunicorn·uvicorn 프로세스 수: /' || echo "     (못 셈)"
             echo ""
-            echo "   최근 기동 로그 — 백업 관련 줄 전부:"
-            docker logs --since 60m logic-analysis 2>&1 \
+            echo "   ⚠️ **시간 창을 넓게 본다** — 첫 판에 --since 60m 으로 재서 0줄이 나왔는데,"
+            echo "      기동이 77분 전이라 **창 밖이었다.** 「0줄」을 「안 일어났다」로 읽을 뻔했다."
+            echo ""
+            echo "   최근 24시간 백업 관련 줄 전부 (시각 포함):"
+            docker logs -t --since 24h logic-analysis 2>&1 \
               | grep -E "DB 백업 완료|백업 압축|압축 검증|오래된 백업 삭제|백업 생략|디스크 여유 부족|백업 정리" \
               | sed 's/^/     /' || echo "     (없음)"
             echo ""
-            docker logs --since 60m logic-analysis 2>&1 | grep -c "DB 백업 완료" \
-              | awk '{print "   ⇒ 최근 1시간 「DB 백업 완료」 줄 수: " $1 ($1>1 ? "  🔴 가설 확정(워커마다 돈다)" : ($1==1 ? "  (1줄 — 다른 원인일 수 있다)" : "  (0줄)"))}'
-            docker logs --since 60m logic-analysis 2>&1 | grep -c "Application startup complete" \
-              | awk '{print "   ⇒ 최근 1시간 「Application startup complete」 줄 수: " $1 "  (= 기동한 워커 수)"}'
+            docker logs --since 24h logic-analysis 2>&1 | grep -c "DB 백업 완료" \
+              | awk '{print "   ⇒ 24시간 「DB 백업 완료」 줄 수: " $1}'
+            docker logs --since 24h logic-analysis 2>&1 | grep -c "Application startup complete" \
+              | awk '{print "   ⇒ 24시간 「Application startup complete」 줄 수: " $1 "  (= 기동한 워커 수 누적)"}'
+            echo ""
+            echo "   ★ 같은 기동(같은 분)에 「DB 백업 완료」가 몇 줄인가 — 이게 가설의 답이다:"
+            docker logs -t --since 24h logic-analysis 2>&1 | grep "DB 백업 완료" \
+              | awk '{print substr($1,1,16)}' | sort | uniq -c \
+              | awk '{printf "     %s  %d줄  %s\n", $2, $1, ($1>1 ? "🔴 워커마다 돈다" : "1줄")}' \
+              || echo "     (해당 줄 없음)"
 
             echo ""
             echo "-- ⑤ 스케줄 백업(00:30)은 같은 문제인가 --"
