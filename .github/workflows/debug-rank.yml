@@ -2634,6 +2634,64 @@ jobs:
             echo ""
             echo ""
             echo "===================================================================="
+            echo " F. 배포 #437 실측 — 서버에 정말 올라갔나 (2026-09-14 신고 265·266)"
+            echo "===================================================================="
+            echo "-- ① 서버 파일 타임스탬프·크기 (컨테이너 안 = 실제로 도는 코드) --"
+            for f in client_dashboard.py rank_link.py seo_generate.py tests/test_client_picker.py; do
+              docker exec -i logic-analysis sh -c "ls -l --time-style='+%m-%d %H:%M' /app/$f 2>/dev/null | awk '{printf \"   %-34s %10s  %s %s\\n\", \"$f\", \$5, \$6, \$7}'" \
+                || echo "   $f  (없음)"
+            done
+            echo ""
+            echo "-- ② 이번 차수 표지 문자열 (있어야 정상) --"
+            check() {
+              N=$(docker exec -i logic-analysis sh -c "grep -c -- '$2' /app/$1 2>/dev/null" || echo 0)
+              printf "   %-26s %-44s %s\n" "$1" "$2" "$([ "$N" -gt 0 ] && echo "✅ ${N}건" || echo '❌ 없음')"
+            }
+            check client_dashboard.py "TEAM_ROLES"
+            check client_dashboard.py "def lookup_norm"
+            check client_dashboard.py "elif user_role in TEAM_ROLES"
+            check client_dashboard.py '"blocked"'
+            check client_dashboard.py '"truncated"'
+            check rank_link.py "광고주만 순위 추적에"
+            check rank_link.py "이미 「"
+            check seo_generate.py "COALESCE(role,'advertiser')='advertiser'"
+            echo ""
+            echo "-- ③ 옛 코드가 남아 있지 않나 (있으면 배포가 덜 된 것) --"
+            OLD=$(docker exec -i logic-analysis sh -c "grep -c \"created_by = ? OR created_by IS NULL\" /app/client_dashboard.py 2>/dev/null" || echo 0)
+            printf "   %-70s %s\n" "registered-clients 의 옛 manager 질의" "$([ "$OLD" -eq 0 ] && echo '✅ 0건(제거됨)' || echo "❌ ${OLD}건 남음")"
+            echo ""
+            echo "-- ④ 화면 번들이 바뀌었나 (nginx 가 직접 서빙 · 캐시 무력화) --"
+            TS=$(date +%s)
+            IDX=$(curl -s -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+                    "https://logic.metainc.co.kr/index.html?cb=$TS" 2>/dev/null)
+            BUNDLE=$(printf '%s' "$IDX" | grep -o 'dist/app\.[0-9a-f]*\.js' | head -1)
+            echo "   index.html 이 가리키는 번들 : ${BUNDLE:-(못 읽음)}"
+            if [ -n "$BUNDLE" ]; then
+              # ⚠️ 크기가 말이 안 되면 내용을 먼저 볼 것 — 옛 실수: index.html(864B)을 번들로 착각
+              SZ=$(curl -s -o /tmp/_b.js -w '%{size_download}' -H 'Cache-Control: no-cache' \
+                     "https://logic.metainc.co.kr/${BUNDLE}?cb=$TS" 2>/dev/null)
+              echo "   받은 크기                  : ${SZ} bytes"
+              if [ "${SZ:-0}" -lt 100000 ]; then
+                echo "   ⚠️ 너무 작다 — 번들이 아니라 다른 문서를 받았을 수 있다. 내용 앞머리:"
+                head -c 200 /tmp/_b.js; echo
+              else
+                for M in lookupNorm "client_id: client.id" missWhy regMeta "내린 업체라 고를 수 없습니다"; do
+                  C=$(grep -c -- "$M" /tmp/_b.js 2>/dev/null || echo 0)
+                  printf "   %-40s %s\n" "$M" "$([ "$C" -gt 0 ] && echo "✅ ${C}건" || echo '❌ 없음')"
+                done
+                DEAD=$(grep -cE "handleAdd[ ]*[=(]" /tmp/_b.js 2>/dev/null || echo 0)
+                printf "   %-40s %s\n" "죽은 handleAdd(정의·호출)" "$([ "$DEAD" -eq 0 ] && echo '✅ 0건' || echo "❌ ${DEAD}건")"
+              fi
+            fi
+            echo ""
+            echo "-- ⑤ 기동 로그 — 오류 없이 떴나 --"
+            docker exec -i logic-analysis sh -c "true" && echo "   컨테이너 살아 있음 ✅"
+            docker logs --since 20m logic-analysis 2>&1 | grep -icE "traceback|ImportError|SyntaxError" \
+              | awk '{print "   부팅 이후 치명 오류 줄: " $1 ($1==0 ? "  ✅" : "  ❌")}'
+            docker logs --since 20m logic-analysis 2>&1 | tail -6 | sed 's/^/     /'
+
+            echo ""
+            echo "===================================================================="
             echo " D. 「둘 다 안 보이는 업체」가 정말 그 10곳인가 — 후보별 규모"
             echo "===================================================================="
             docker exec -i logic-analysis python3 - <<'PYEOF'
