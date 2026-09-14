@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "메타아이앤씨 순위 수집기",
+  "version": "1.12.0",
+  "description": "사내 전용 — 자동 수집이 중지된 안전 상태와 서버 운영 상태를 확인합니다.",
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "https://logic.metainc.co.kr/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "순위 수집기 — 자동 수집 OFF"
+  }
+}

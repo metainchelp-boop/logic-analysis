@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>순위 수집기 — 자동 수집 OFF</title>
+  <style>
+    :root{color-scheme:light}
+    *{box-sizing:border-box}
+    body{width:360px;margin:0;padding:14px;background:#f8fafc;color:#172033;font-family:-apple-system,BlinkMacSystemFont,"Malgun Gothic","맑은 고딕",sans-serif;font-size:13px}
+    h1{margin:0;font-size:16px;line-height:1.35}
+    h2{margin:0 0 9px;font-size:13px}
+    p{margin:0}
+    .version{margin-top:4px;color:#475569;font-size:12px;font-weight:700}
+    .notice{margin:12px 0;padding:11px;border:1px solid #86efac;border-radius:9px;background:#f0fdf4;line-height:1.55}
+    .notice strong{display:block;color:#166534;font-size:14px}
+    .notice span{color:#3f6212;font-size:12px}
+    .card{margin-top:10px;padding:11px;border:1px solid #dbe3ee;border-radius:9px;background:#fff}
+    .summary{padding:8px 9px;border-radius:7px;background:#f1f5f9;color:#475569;font-weight:800}
+    .summary.ok{background:#ecfdf5;color:#047857}
+    .summary.warn{background:#fffbeb;color:#b45309}
+    .summary.bad{background:#fef2f2;color:#b91c1c}
+    dl{display:grid;grid-template-columns:132px 1fr;gap:7px 8px;margin:11px 0 0}
+    dt{color:#64748b}
+    dd{margin:0;text-align:right;font-weight:700;overflow-wrap:anywhere}
+    .actions{display:flex;justify-content:flex-end;margin-top:11px}
+    button{padding:7px 11px;border:0;border-radius:6px;background:#2563eb;color:#fff;font:inherit;font-weight:800;cursor:pointer}
+    button:disabled{cursor:wait;opacity:.65}
+    details{margin-top:10px;border:1px solid #dbe3ee;border-radius:9px;background:#fff}
+    summary{padding:10px 11px;cursor:pointer;color:#475569;font-weight:800}
+    .settings{padding:0 11px 11px}
+    label{display:block;margin-top:8px;color:#475569;font-size:12px;font-weight:700}
+    input{width:100%;margin-top:4px;padding:8px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;color:#172033;font:inherit}
+    .worker-row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+    .save-row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:10px}
+    #saveResult,#lastError{color:#64748b;font-size:11px;overflow-wrap:anywhere}
+    .footnote{margin-top:10px;color:#64748b;font-size:11px;line-height:1.5}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>메타아이앤씨 순위 수집기</h1>
+    <div class="version">v1.12.0 · 자동 수집 OFF</div>
+  </header>
+
+  <section class="notice" aria-label="확장 안전 상태">
+    <strong>확장 자동 동작이 중지되어 있습니다</strong>
+    <span>이 버전은 쇼핑 페이지를 열거나 읽거나 변경하지 않습니다.</span>
+  </section>
+
+  <section class="card" aria-labelledby="serverTitle">
+    <h2 id="serverTitle">회사 서버 상태</h2>
+    <div id="serverSummary" class="summary" role="status" aria-live="polite">상태 확인 전</div>
+    <dl>
+      <dt>운영 모드</dt><dd id="operationMode">확인 불가</dd>
+      <dt>기존 수집 경로</dt><dd id="effectivePaused">확인 불가</dd>
+      <dt>회로 상태</dt><dd id="circuitState">확인 불가</dd>
+      <dt>v2 스키마</dt><dd id="schemaReady">확인 불가</dd>
+      <dt>기존 쓰기 허용</dt><dd id="legacyWritesEnabled">확인 불가</dd>
+      <dt>마지막 확인</dt><dd id="checkedAt">아직 확인하지 않음</dd>
+    </dl>
+    <div class="actions"><button id="refresh" type="button">서버 상태 새로고침</button></div>
+  </section>
+
+  <details id="setup">
+    <summary>연결 정보</summary>
+    <div class="settings">
+      <label for="token">서버 토큰</label>
+      <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="수집기 토큰">
+      <label for="workerId">Worker ID</label>
+      <input id="workerId" type="text" autocomplete="off" spellcheck="false" placeholder="설정된 경우에만 유지">
+      <div class="worker-row">
+        <label for="workerNo">기존 기계 번호
+          <input id="workerNo" type="number" min="1" max="99" value="1">
+        </label>
+        <label for="workerCount">기존 전체 대수
+          <input id="workerCount" type="number" min="1" max="99" value="1">
+        </label>
+      </div>
+      <div class="save-row">
+        <span id="saveResult" role="status" aria-live="polite"></span>
+        <button id="save" type="button">연결 정보 저장</button>
+      </div>
+    </div>
+  </details>
+
+  <p class="footnote">서버 상태를 확인할 수 없으면 안전 상태로 추정하지 않습니다. 확장 자체의 자동 수집은 항상 OFF입니다.</p>
+  <p id="lastError" class="footnote"></p>
+
+  <script src="popup.js"></script>
+</body>
+</html>
