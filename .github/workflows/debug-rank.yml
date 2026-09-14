@@ -34,8 +34,8 @@ on:
         description: '신고 253 수정 검증 — v1.10.2 적용 후 재수집·순위 45위 재계산(읽기 전용·업체명 미출력).'
         required: false
         default: 'off'
-      requeue253:
-        description: '신고 253 — 청귤을 온디맨드 대기줄에 1행 등록(쓰기 1행 · 수집기가 재수집하게).'
+      pickers:
+        description: '신고 265·266 — 업체 연결이 왜 안 되는가. 두 피커(로직분석 저장 / 순위 추적 등록)가 각각 무엇을 거르는지·추적 등록 요청이 어떤 코드로 끝났는지(읽기 전용 · 업체명 미출력 · 수는 세되 이름은 안 찍는다).'
         required: false
         default: 'off'
       # ⚠️ workflow_dispatch 입력 상한은 25개다. 신고 253 이 종결돼 `verify253b` 입력을 내렸다
@@ -57,10 +57,6 @@ on:
         description: '신고 253 사후 5 — v1.10.3 확장이 남긴 광고 필드 지문(meta.adFp)을 키워드별로 출력(읽기 전용·업체명 미출력). 김치·청귤 우선, 나머지는 지문 종류 요약.'
         required: false
         default: 'off'
-      requeue_kw:
-        description: 'requeue253 이 대기줄에 넣을 키워드(기본 청귤). 예: 김치'
-        required: false
-        default: '청귤'
       impact253:
         description: '신고 253 사후 6 — 과필터 의심 키워드(광고 비율 50%+ · 원본 200+)에 걸린 우리 업체·추적상품이 몇 건이고, 어제 노출→오늘 미노출로 바뀐 것이 몇 건인지(대조군 비교 · 읽기 전용 · 업체명 미출력).'
         required: false
@@ -2497,28 +2493,164 @@ jobs:
             print("  판정: 45 부근이면 광고 제외 정상 · 56 부근이면 아직 구판 수집분")
             PY
 
-      - name: 신고 253 — 청귤 재수집 요청 넣기 (쓰기 1행 · collect_requests)
-        if: ${{ github.event.inputs.requeue253 == 'on' }}
+      - name: 신고 265·266 — 업체 연결이 왜 안 되는가 (읽기 전용 · 업체명 미출력)
+        if: ${{ github.event.inputs.pickers == 'on' }}
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          command_timeout: 2m
+          command_timeout: 240s
           script: |
-            docker exec -i logic-analysis python3 - <<'PY'
+            # ⚠️ 이 저장소는 공개다 — **업체명·IP 원문을 절대 찍지 않는다.** 수만 센다.
+            # ⚠️ 읽기만 한다. 2026-09-10 에 「읽기 전용」이라 적어 둔 스텝에 쓰기를 넣어
+            #    대표가 방금 저장한 값을 지운 사고가 있었다. 여기엔 SELECT 밖에 없다.
+            echo "===================================================================="
+            echo " A. 수집이 멈춘 영향 — 분석 화면이 무엇을 못 그리나 (신고 267)"
+            echo "===================================================================="
+            docker exec -i logic-analysis python3 - <<'PYEOF'
             import sqlite3
-            # ⚠️ 유일한 쓰기: 온디맨드 대기줄에 1행 — 화면 조회 miss 때 서버가 하는 동작과 동일.
-            #    수집기가 다음 폴링에서 가져가 재수집·업로드하면 upload_serp 가 done 처리한다.
-            conn = sqlite3.connect("/app/data/logic_data.db", timeout=10)
-            KW = "${{ github.event.inputs.requeue_kw }}".strip() or "청귤"
-            conn.execute("""INSERT INTO collect_requests(keyword, status, attempts)
-                            VALUES(?,'pending',0)
-                            ON CONFLICT(keyword) DO UPDATE SET status='pending', attempts=0""", (KW,))
-            conn.commit()
-            r = conn.execute("SELECT keyword, status, requested_at FROM collect_requests WHERE keyword=?", (KW,)).fetchone()
-            print("대기줄 등록:", r)
-            PY
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("""
+                SELECT collected_date, COUNT(*) n, MAX(created_at) last_at
+                  FROM collected_serp
+                 WHERE collected_date >= date('now','localtime','-10 day')
+                 GROUP BY collected_date ORDER BY collected_date DESC""").fetchall()
+            print("  최근 10일 수집 (날짜 · 키워드수 · 마지막 시각)")
+            if not rows:
+                print("    (10일 안에 수집분 0건)")
+            for r in rows:
+                print("    %s  %5d건  %s" % (r["collected_date"], r["n"], r["last_at"]))
+            last = conn.execute("SELECT MAX(collected_date) d, MAX(created_at) t FROM collected_serp").fetchone()
+            print("  전체 마지막 수집: %s (%s)" % (last["d"], last["t"]))
+            w = conn.execute("""SELECT COUNT(*) n FROM collected_serp
+                                 WHERE collected_date >= date('now','localtime','-1 day')""").fetchone()["n"]
+            print("  서빙 창(오늘·어제) 안의 수집분: %d건" % w)
+            print("  ⇒ 0건이면 serve_from_collected 가 None 을 돌려주고, 쇼핑 검색 API 는")
+            print("     2026-07-31 종료(404 SE05)라 폴백도 비어 있다.")
+            print("     그래서 **상품 목록을 쓰는 축이 통째로 빈다**:")
+            print("       경쟁사 비교표 · 판매량 추정 · 가격/카테고리 분포 · 진입 난이도 ·")
+            print("       키워드별 노출 순위 · 상품 순위 즉시 조회")
+            print("     반대로 **안 쓰는 축은 그대로 돈다**: 검색량 · 연관/골든 키워드 ·")
+            print("       데이터랩 추이 · 플레이스(지도) 분석 · 소상공인365 상권 · 보고서 저장/조회")
+            conn.close()
+            PYEOF
+
+            echo ""
+            echo "===================================================================="
+            echo " B. 업체 피커 두 개가 각각 무엇을 거르나 (신고 265)"
+            echo "===================================================================="
+            docker exec -i logic-analysis python3 - <<'PYEOF'
+            import sqlite3
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            def one(sql, *a):
+                return conn.execute(sql, a).fetchone()[0]
+            print("  -- clients 전체 구성 (수만) --")
+            for r in conn.execute("""SELECT COALESCE(status,'(없음)') s, COUNT(*) n
+                                       FROM clients GROUP BY 1 ORDER BY n DESC"""):
+                print("    status=%-12s %5d" % (r["s"], r["n"]))
+            for r in conn.execute("""SELECT COALESCE(role,'(없음)') r, COUNT(*) n
+                                       FROM clients GROUP BY 1 ORDER BY n DESC"""):
+                print("    role  =%-12s %5d" % (r["r"], r["n"]))
+            act = one("SELECT COUNT(*) FROM clients WHERE status='active'")
+            adv = one("SELECT COUNT(*) FROM clients WHERE status='active' AND COALESCE(role,'advertiser')='advertiser'")
+            pro = one("SELECT COUNT(*) FROM clients WHERE status='active' AND COALESCE(role,'advertiser')='prospect'")
+            print("")
+            print("  -- ① 로직분석 보고서 저장 피커 = GET /cd/registered-clients --")
+            print("     admin  이 보는 수 : %d  (status=active AND role=advertiser)" % adv)
+            print("     viewer 가 보는 수 : 본인이 만든 prospect 만 (전체 prospect %d 중)" % pro)
+            print("     manager 가 보는 수 : advertiser 중 **본인이 만든 것 + 주인 없는 것**")
+            mrows = conn.execute("""
+                SELECT COALESCE(NULLIF(TRIM(COALESCE(created_by,'')),''),'(주인없음)') owner, COUNT(*) n
+                  FROM clients
+                 WHERE status='active' AND COALESCE(role,'advertiser')='advertiser'
+                 GROUP BY 1 ORDER BY n DESC""").fetchall()
+            noown = sum(r["n"] for r in mrows if r["owner"] == "(주인없음)")
+            print("       · 주인 없는 것(누구에게나 보임) : %d" % noown)
+            print("       · 특정 직원이 만든 것           : %d  (직원 %d명에 나뉘어 있다)"
+                  % (adv - noown, len([r for r in mrows if r["owner"] != "(주인없음)"])))
+            for i, r in enumerate(mrows):
+                if r["owner"] == "(주인없음)":
+                    continue
+                print("         - 직원#%d 가 만든 것 %d개 → **다른 manager 에게는 안 보인다**"
+                      % (i + 1, r["n"]))
+            print("     ⇒ manager 계정으로 보면 최대 %d개가 목록에서 빠진다." % (adv - noown))
+            print("")
+            print("  -- ② 순위 추적 등록 피커 = GET /cd/clients-lookup --")
+            print("     보는 수 : %d  (status=active 만 · role 무관 · created_by 무관)" % act)
+            print("     ⚠️ 단 **한 번에 30개까지만** 돌려준다(LIMIT 30) — 검색어가 짧으면 잘린다.")
+            print("")
+            print("  -- ③ 두 피커가 **둘 다** 못 보는 것 = status 가 active 가 아닌 업체 --")
+            for r in conn.execute("""SELECT COALESCE(status,'(없음)') s, COUNT(*) n
+                                       FROM clients WHERE COALESCE(status,'')<>'active'
+                                      GROUP BY 1 ORDER BY n DESC"""):
+                print("     status=%-12s %5d개 → 두 화면 어디에도 안 나온다" % (r["s"], r["n"]))
+            print("")
+            print("  -- ④ 이름이 겹치거나 비슷해 못 찾는 경우 --")
+            dup = conn.execute("""SELECT COUNT(*) n FROM (
+                    SELECT TRIM(name) t FROM clients WHERE status='active'
+                     GROUP BY TRIM(name) HAVING COUNT(*)>1)""").fetchone()["n"]
+            print("     같은 이름이 2개 이상인 활성 업체 이름 수 : %d" % dup)
+            sp = conn.execute("""SELECT COUNT(*) n FROM clients
+                                  WHERE status='active' AND (name LIKE ' %' OR name LIKE '% ')""").fetchone()["n"]
+            print("     이름 앞뒤에 공백이 있는 활성 업체 수     : %d  (검색어와 안 맞는다)" % sp)
+            conn.close()
+            PYEOF
+
+            echo ""
+            echo "===================================================================="
+            echo " C. 「이 상품 순위 추적 시작」 이 서버에서 어떻게 끝났나 (신고 266)"
+            echo "===================================================================="
+            sudo -n true 2>/dev/null && S="sudo -n" || S=""
+            LOG=$(ls /var/log/nginx/*access*.log /var/log/nginx/*access*.log.1 2>/dev/null | head -4 | tr '\n' ' ')
+            if [ -z "$LOG" ]; then
+              echo "  nginx 접속 기록을 못 찾았다 — 경로가 다르거나 권한이 없다."
+            else
+              echo "  -- POST /api/products/track — 날짜별 · 상태코드별 건수 (IP 미출력) --"
+              $S sh -c "cat $LOG" 2>/dev/null \
+                | grep 'POST /api/products/track' \
+                | awk '{ d=$4; gsub(/^\[/,"",d); split(d,p,":"); code="?";
+                         for(i=1;i<=NF;i++) if ($i ~ /^"POST$/) { code=$(i+3); }
+                         print p[1], code }' \
+                | sort | uniq -c | sort -k2,2 \
+                | awk '{ printf "     %-12s 코드 %-4s %4d건\n", $2, $3, $1 }' \
+                || echo "     (그 요청이 기록에 없다)"
+              echo "  판정: 400 = 서버가 「업체를 선택해야 등록됩니다」로 거절한 것"
+              echo "        200 = 정상 등록 · 500 = 서버 오류 · 없음 = 요청이 서버까지 안 왔다"
+            fi
+            echo ""
+            echo "  -- 실제로 배포된 화면 코드가 client_id 를 보내는가 --"
+            DIST=$(docker exec -i logic-analysis sh -c 'ls /app/frontend/dist/app.*.js 2>/dev/null | head -1')
+            if [ -n "$DIST" ]; then
+              echo "     번들: $DIST"
+              docker exec -i logic-analysis sh -c "grep -o \"products/track[^;]\\{0,220\\}\" '$DIST' | head -5" \
+                | sed 's/^/       /'
+              echo "     ↑ client_id 가 없는 자리가 보이면 그 버튼은 **누를 때마다 400** 이다."
+            else
+              echo "     (번들을 못 찾았다 — 경로 확인 필요)"
+            fi
+            echo ""
+            echo "  -- 최근 등록이 실제로 업체에 이어졌나 (tracked_products) --"
+            docker exec -i logic-analysis python3 - <<'PYEOF'
+            import sqlite3
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("""
+                SELECT date(tp.created_at) d, COUNT(*) n,
+                       SUM(CASE WHEN EXISTS(SELECT 1 FROM rank_link rl
+                                             WHERE rl.tracked_product_id = tp.id)
+                                THEN 1 ELSE 0 END) linked
+                  FROM tracked_products tp
+                 WHERE tp.created_at >= date('now','localtime','-21 day')
+                 GROUP BY 1 ORDER BY 1 DESC""").fetchall()
+            if not rows:
+                print("     최근 21일 신규 추적 상품 0건 — **등록 자체가 안 되고 있다.**")
+            for r in rows:
+                print("     %s  신규 %3d개 중 업체에 이어진 것 %3d개" % (r["d"], r["n"], r["linked"]))
+            conn.close()
+            PYEOF
 
       - name: 보고서 리디자인용 실데이터 추출 (읽기 전용·업체명 가림)
         if: ${{ github.event.inputs.reportdump == 'on' }}
