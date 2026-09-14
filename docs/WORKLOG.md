@@ -58,6 +58,64 @@
 - 📌 같은 구조라 **다른 기동 초기화도 워커마다 돈다** — `init_*_db()` 들은 멱등으로 보이지만
   **확인한 것은 아니다.** 별건으로 남긴다.
 
+#### ✅ 워커 5개인 이유 — 확정 (2026-09-14, 대표 지시 「워커 5개인 이유도 확인해봐」)
+
+**원인 = `Dockerfile` 이 두 개이고, 배포는 내가 읽은 쪽이 아니다.**
+
+```
+저장소 루트  Dockerfile          CMD gunicorn -w 3 -k uvicorn.workers.UvicornWorker   ← 배포에 안 쓰인다
+backend/     Dockerfile          CMD uvicorn main:app --workers 5                      ← 실제로 쓰이는 것
+```
+
+배포 스크립트(`deploy.yml`)가 **서버에 `docker-compose.yml` 을 직접 써 넣는데**, 그 안이
+**`build: ./backend`** 다. 저장소 루트의 `docker-compose.yml`(`build: .`)도, 루트 `Dockerfile` 도
+**배포 경로에 들어가지 않는다.**
+
+**서버 실측으로 확정**
+```
+Cmd = ["uvicorn","main:app","--host","0.0.0.0","--port","5050","--workers","5"]
+RestartCount = 0  ·  StartedAt = 2026-09-14T08:37:56Z (= Deploy #438)
+프로세스 = uvicorn 마스터 1 + multiprocessing spawn 5 + resource_tracker 1
+「Booting worker」 0줄        ← gunicorn 이 아니니 당연
+「Application startup complete」 5줄  ← uvicorn 워커 5개 = lifespan 5회
+「Worker exiting / TIMEOUT / SIGKILL」 0줄  ← 재기동분이 섞인 게 아니다
+```
+⇒ **워커 재기동이 아니라 처음부터 5개다.**
+
+#### ⚠️ 내가 「gunicorn -w 3」이라고 적은 것은 틀렸다 — 근거 파일을 잘못 읽었다
+
+PR #205 · 커밋 메시지 · 조사 보고서에 **「`gunicorn -w 3`(Dockerfile)」** 이라고 단정해 적었다.
+**루트 `Dockerfile` 한 줄만 보고, 배포가 실제로 어느 파일을 쓰는지 안 따라갔다.**
+- 고침의 **원인 진단과 타당성은 그대로다** — 「여럿이 돈다」가 원인이었고 그건 맞았다(3이든 5든).
+- 하지만 **수와 실행기(gunicorn/uvicorn) 기재는 틀렸다.** 고쳐 적는다: **uvicorn `--workers 5`.**
+⭐ **교훈 — 「설정 파일에 뭐라고 적혀 있나」가 아니라 「배포가 어느 파일을 집어 가나」를 따라갈 것.**
+   오늘만 **같은 모양의 함정이 세 번째**다: 백업 경로 둘 · 등록 버튼 둘 · **Dockerfile 둘.**
+
+#### ✅ 메모리는 위험하지 않다 — 내 걱정도 근거가 낡았다
+
+루트 `Dockerfile` 주석은 「**RAM 1.9GB** 서버라 6개는 스왑 thrashing」이라고 경고한다.
+그걸 읽고 「5개면 위험하겠다」고 생각했는데 **실측하니 아니었다.**
+```
+Mem   : 3,923 MB 총 · 898 사용 · available 2,732 MB     ← 주석의 「1.9GB」는 낡았다(실제 3.9GB)
+Swap  : 3,811 MB 총 · 512 사용
+컨테이너: logic-analysis 504.5 MiB (12.86%) · content-studio 72 · ad-api 61
+워커별 RSS: 마스터 26 + 트래커 11 + 워커 5개(106·139·115·133·108) ≈ 합계 638 MB
+```
+⇒ **여유 2.7GB. 지금 5개는 무리가 아니다.** 스왑 512MB 가 쓰이고 있는 건 눈여겨볼 만하지만
+  available 이 2.7GB 라 급한 일이 아니다.
+⚠️ **「주석에 적힌 사양」도 실측으로 확인할 것** — 1.9GB 라는 전제로 판단할 뻔했다.
+
+#### 📌 남기는 것 (대표 확인 대기 — 코드 변경이라 승인 전엔 안 건드린다)
+
+1. **루트 `Dockerfile` 과 루트 `docker-compose.yml` 은 죽은 파일이다.** 배포가 안 쓴다.
+   그대로 두면 **다음 사람도 나처럼 그 파일을 읽고 틀린 결론을 낸다.**
+   ⇒ 제안: 두 파일 맨 위에 **「이 파일은 배포에 쓰이지 않는다 — 실제는 `backend/Dockerfile`」** 한 줄.
+   ⚠️ `Dockerfile` 은 paths-ignore 가 아니라 **고치면 재배포가 돈다.** 승인 필요.
+2. **워커 5개를 줄일 이유는 지금 없다**(메모리 여유 2.7GB). 다만 lifespan 이 5번 도는 구조라
+   **기동 초기화가 전부 5번씩** 돈다 — `init_*_db()` 들은 멱등으로 보이나 **확인한 것은 아니다.**
+
+---
+
 #### 다음에 확인할 것
 - 다음 기동(6시간 가드 밖)에서 **「DB 백업 완료」가 1줄**인지 · 압축 오류 0인지
 - 오늘 00:30 백업 뒤 **비압축 2.7GB 가 세대 정리로 걷혔는지**(손으로 지우지 않는다)
