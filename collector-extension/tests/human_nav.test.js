@@ -117,7 +117,9 @@ const fp = grab('fetchPage', 'async');
 ok('⑦ 1페이지는 주소로 연다', /pagingIndex <= 1/.test(fp));
 ok('⑦ 1페이지 주소에 pagingSize 를 안 붙인다', !/pagingSize=\$\{CFG\.pageSize\}/.test(fp));
 ok('⑦ 2페이지부터 클릭을 쓴다', /clickToPage\(tabId, pagingIndex\)/.test(fp));
-ok('⑦ 클릭 실패 시 주소 이동으로 폴백한다', /_navMode\.fallback \+= 1/.test(fp));
+const FPX = grab('fetchPage', 'async');
+ok('⑦ 클릭 실패(버튼 못 찾음) 시에도 주소 이동은 하지 않는다 — 라우터 이동 시도 후 종료',
+   /NO_PAGER/.test(FPX) && /주소 이동 안 함 — 라우터 이동 시도/.test(FPX) && !/tabs\.update\(tabId, \{ url \}\);\s*\n\s*await waitNavigated\(tabId, `pagingIndex=\$\{pagingIndex\}`\)/.test(FPX.slice(FPX.indexOf('NO_PAGER'))));
 ok('⑦ 폴백을 서버에 한 번 알린다', /NO_PAGER/.test(fp) && /_navMode\.reported = true/.test(fp));
 
 // ⑧ 400위 요구 — 설정값이 실제로 그만큼인가
@@ -176,10 +178,29 @@ ok('⑪ pageExtract 가 라우터 현재 props(rt.components[rt.route].props) �
 const FP = grab('fetchPage', 'async');
 ok('⑫ fetchPage 가 이전 장 첫 상품(prevFirstId)을 받는다', /async function fetchPage\(keyword, pagingIndex, prevFirstId\)/.test(SRC));
 ok('⑫ 첫 상품이 이전 장과 같으면 STALE_PAGE 로 다시 읽는다', /fid === prevFirstId/.test(FP) && /STALE_PAGE/.test(FP));
-ok('⑫ 끝까지 그대로면 그 장만 주소 이동으로 되돌리고 서버에 알린다', /_navMode\.stale \+= 1/.test(FP) && /STALE_PAGE\(클릭 뒤 내용 불변\)/.test(FP));
+// v1.11.3 — 주소 이동 폴백은 **금지**다(v1.11.2 가 그 폴백을 탔다가 pagingIndex=2 주소를 연 1초 뒤 캡차).
+{
+  const stalePart = FP.slice(FP.indexOf('STALE_PAGE'));
+  ok('⑫ 안 넘어가도 주소 이동(chrome.tabs.update)으로 되돌리지 않는다', !/chrome\.tabs\.update/.test(stalePart));
+  ok('⑫ 대신 라우터 이동(routerPush)을 한 번 시도한다', /func: routerPush/.test(FP) && /triedRouterPush/.test(FP));
+  ok('⑫ 끝내 안 바뀌면 그 키워드는 여기까지만 담고 끝낸다(빈 목록)', /lastErr === 'STALE_PAGE'/.test(FP) && /return \{ total: 0, list: \[\] \}/.test(FP) && /_navMode\.stale \+= 1/.test(FP));
+  ok('⑫ 왜 안 넘어갔는지(navProbe)를 서버에 1회 남긴다', /func: navProbe/.test(FP) && /_staleReported/.test(FP) && /STALE_PAGE\(클릭·라우터 이동 뒤 내용 불변\)/.test(FP));
+}
+{
+  // 실제 routerPush 를 가짜 window 로 돌린다 — 라우터가 있으면 pagingIndex 만 바꿔 push 한다.
+  const rp = grab('routerPush');
+  const calls = [];
+  const fakeWin = { next: { router: { pathname: '/search/all', query: { query: 'x', pagingIndex: '1' }, push: (a) => calls.push(a) } } };
+  const run = new Function('window', 'location', rp + '\nreturn routerPush(3);');
+  const r = run(fakeWin, { pathname: '/search/all' });
+  ok('⑫ routerPush — 라우터에 pagingIndex=3 으로 push 한다(주소창 이동 아님)',
+     r === 'pushed' && calls.length === 1 && calls[0].pathname === '/search/all' && calls[0].query.pagingIndex === '3' && calls[0].query.query === 'x');
+  const r0 = new Function('window', 'location', rp + '\nreturn routerPush(3);')({}, { pathname: '/x' });
+  ok('⑫ routerPush — 라우터가 없으면 no-router 로 물러난다(아무 이동도 안 한다)', r0 === 'no-router');
+}
 ok('⑫ collectKeyword 가 장마다 prevFirstId 를 넘긴다', /fetchPage\(keyword, i, prevFirstId\)/.test(SRC) && /prevFirstId = firstIdOf\(list\)/.test(SRC));
 ok('⑬ 서버 meta.nav 에 stale 이 실린다', /nav: \{ url: _navMode\.url, click: _navMode\.click, fallback: _navMode\.fallback, stale: _navMode\.stale \}/.test(SRC));
-ok('⑬ 버전 1.11.2 이상', _ge(MANIFEST.version, '1.11.2'));
+ok('⑬ 버전 1.11.3 이상', _ge(MANIFEST.version, '1.11.3'));
 
 
 console.log(fail ? `\n❌ 실패 ${fail}건 / 전체 ${pass + fail}` : '\n사람처럼 넘기기 시험 전부 통과');
