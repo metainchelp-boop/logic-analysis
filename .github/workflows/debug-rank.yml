@@ -4169,13 +4169,14 @@ jobs:
             echo "===================================================================="
             echo " 영업 준비 시간 — 로직분석 보고서 + 맞춤제안서"
             echo "===================================================================="
-            LOG=""
-            for C in /var/log/nginx/logic-analysis.access.log /var/log/nginx/access.log; do
-              if sudo test -f "$C"; then LOG="$C"; break; fi
-            done
+            # ⚠️ 2026-09-15 첫 판 실수 — 후보를 하나씩 보고 **처음 존재하는 것 하나만** 골랐더니
+            #    로직분석 vhost 가 아닌 access.log 를 집어 분석 API 가 전부 0건으로 나왔다.
+            #    「호출이 없었다」로 읽을 뻔했다. 피커 섹션과 **같은 방식**(glob 전부)으로 맞춘다.
+            #    ⭐ 교훈 — 전부 0이 나오면 결론 내기 전에 **내가 옳은 파일을 보고 있는지** 먼저 본다.
+            LOG=$(ls /var/log/nginx/*access*.log 2>/dev/null | head -4 | tr '\n' ' ')
             echo "-- ⓪ nginx 로그가 소요시간을 남기나 --"
             if [ -n "$LOG" ]; then
-              echo "   로그 파일: $(basename $LOG)"
+              echo "   읽는 로그 파일: $(echo $LOG | tr ' ' '\n' | xargs -r -n1 basename | tr '\n' ' ')"
               # combined 포맷이면 $request_time 이 없다 — 있는지 없는지를 먼저 밝힌다.
               sudo sh -c "tail -1 $LOG" 2>/dev/null | sed 's/^[0-9a-fA-F.:]*/(보낸곳가림)/' | cut -c1-200
               echo "   ⇒ 끝에 소요시간(초)이 안 보이면 combined 포맷이라 **요청별 소요는 못 읽는다.**"
