@@ -118,8 +118,8 @@ ok('⑦ 1페이지는 주소로 연다', /pagingIndex <= 1/.test(fp));
 ok('⑦ 1페이지 주소에 pagingSize 를 안 붙인다', !/pagingSize=\$\{CFG\.pageSize\}/.test(fp));
 ok('⑦ 2페이지부터 클릭을 쓴다', /clickToPage\(tabId, pagingIndex\)/.test(fp));
 const FPX = grab('fetchPage', 'async');
-ok('⑦ 클릭 실패(버튼 못 찾음) 시에도 주소 이동은 하지 않는다 — 라우터 이동 시도 후 종료',
-   /NO_PAGER/.test(FPX) && /주소 이동 안 함 — 라우터 이동 시도/.test(FPX) && !/tabs\.update\(tabId, \{ url \}\);\s*\n\s*await waitNavigated\(tabId, `pagingIndex=\$\{pagingIndex\}`\)/.test(FPX.slice(FPX.indexOf('NO_PAGER'))));
+ok('⑦ 클릭 실패(버튼 못 찾음) 시에도 주소 이동은 하지 않는다 — 키워드 종료(v1.13.1: 라우터 이동도 없음)',
+   !/tabs\.update\([^)]*pagingIndex/.test(fp) && /return \{ total: 0, list: \[\] \};   \/\/ 이 키워드는 여기까지/.test(fp) && !/func: routerPush/.test(fp));
 ok('⑦ 폴백을 서버에 한 번 알린다', /NO_PAGER/.test(fp) && /_navMode\.reported = true/.test(fp));
 
 // ⑧ 400위 요구 — 설정값이 실제로 그만큼인가
@@ -182,21 +182,14 @@ ok('⑫ 광고 뺀 ID 집합이 이전 장 안에 다 들어 있으면 STALE_PAG
 {
   const stalePart = FP.slice(FP.indexOf('STALE_PAGE'));
   ok('⑫ 안 넘어가도 주소 이동(chrome.tabs.update)으로 되돌리지 않는다', !/chrome\.tabs\.update/.test(stalePart));
-  ok('⑫ 대신 라우터 이동(routerPush)을 한 번 시도한다', /func: routerPush/.test(FP) && /triedRouterPush/.test(FP));
+  // v1.13.1 — routerPush 는 삭제됐다(그 이동이 주소창 이동으로 되돌아가 퍼즐을 불렀다 · 22:02 실측).
+  ok('⑫ 라우터 이동(routerPush)을 걸지 않는다(v1.13.1 에서 삭제)', !/func: routerPush/.test(SRC) && !/triedRouterPush/.test(SRC));
   ok('⑫ 끝내 안 바뀌면 그 키워드는 여기까지만 담고 끝낸다(빈 목록)', /lastErr === 'STALE_PAGE'/.test(FP) && /return \{ total: 0, list: \[\] \}/.test(FP) && /_navMode\.stale \+= 1/.test(FP));
-  ok('⑫ 왜 안 넘어갔는지(navProbe)를 서버에 1회 남긴다', /func: navProbe/.test(FP) && /_staleReported/.test(FP) && /STALE_PAGE\(클릭·라우터 이동 뒤 내용 불변\)/.test(FP));
+  ok('⑫ 왜 안 넘어갔는지(navProbe)를 서버에 1회 남긴다', /func: navProbe/.test(FP) && /_staleReported/.test(FP) && /STALE_PAGE\(클릭 뒤 내용 불변\)/.test(FP));
 }
 {
-  // 실제 routerPush 를 가짜 window 로 돌린다 — 라우터가 있으면 pagingIndex 만 바꿔 push 한다.
-  const rp = grab('routerPush');
-  const calls = [];
-  const fakeWin = { next: { router: { pathname: '/search/all', query: { query: 'x', pagingIndex: '1' }, push: (a) => calls.push(a) } } };
-  const run = new Function('window', 'location', rp + '\nreturn routerPush(3);');
-  const r = run(fakeWin, { pathname: '/search/all' });
-  ok('⑫ routerPush — 라우터에 pagingIndex=3 으로 push 한다(주소창 이동 아님)',
-     r === 'pushed' && calls.length === 1 && calls[0].pathname === '/search/all' && calls[0].query.pagingIndex === '3' && calls[0].query.query === 'x');
-  const r0 = new Function('window', 'location', rp + '\nreturn routerPush(3);')({}, { pathname: '/x' });
-  ok('⑫ routerPush — 라우터가 없으면 no-router 로 물러난다(아무 이동도 안 한다)', r0 === 'no-router');
+  // v1.13.1 — routerPush 함수 자체가 없어야 한다(되살리면 여기서 걸린다).
+  ok('⑫ routerPush 함수가 소스에 없다(v1.13.1 삭제 · 되살리기 금지)', !/function routerPush\(/.test(SRC) && !/rt\.push\(/.test(SRC));
 }
 ok('⑫ collectKeyword 가 장마다 prevIds 를 넘긴다', /fetchPage\(keyword, i, prevIds\)/.test(SRC) && /prevIds = organicIds\(list\)/.test(SRC));
 ok('⑬ 서버 meta.nav 에 stale 이 실린다', /nav: \{ url: _navMode\.url, click: _navMode\.click, fallback: _navMode\.fallback, stale: _navMode\.stale(, src: _navMode\.src)? \}/.test(SRC));
@@ -243,7 +236,7 @@ console.log('\n[긴 대기 · DOM 프로브]');
 {
   const FP6 = grab('fetchPage', 'async');
   ok('⑯ 2페이지부터 readTriesPaged 만큼 되읽는다', /pagingIndex > 1 \? \(CFG\.readTriesPaged/.test(FP6) && /readTriesPaged: 36/.test(SRC));
-  ok('⑯ 라우터 이동은 약 10초(12회) 뒤에 건다', /staleTries >= 12 && !triedRouterPush/.test(FP6));
+  ok('⑯ 클릭 뒤엔 기다리기만 한다(라우터 이동 없음 · v1.13.1)', !/staleTries >= 12/.test(FP6) && /staleTries \+= 1; lastErr = 'STALE_PAGE'/.test(FP6));
   const np = grab('navProbe');
   const fakeDoc = {
     querySelectorAll: (sel) => {
@@ -371,8 +364,8 @@ console.log('\n[응답 가로채기 — net_tap]');
     const FP = grab('fetchPage', 'async');
     ok('⑰ fetchPage 가 클릭 시각(_clickedAt)을 적고 pageExtract 에 {page, since} 를 넘긴다',
        /_clickedAt = Date\.now\(\);/.test(FP) && /func: pageExtract, args: \[\{ page: pagingIndex, since: _clickedAt \}\]/.test(FP));
-    ok('⑰ STALE 때 응답 요약(TAP_PROBE)을 따로 한 건 더 보낸다(서버 500자 한도)', /TAP_PROBE\(화면이 받은 응답 요약\)/.test(FP) && /delete probe\.tap/.test(FP));
-    ok('⑰ STALE 보고는 짧은 값(click·push·prev·got·src)이 앞에 온다', /const front = \{ click: _lastClickBranch, push: _lastPushResult, prev:/.test(FP));
+    ok('⑰ STALE 때 응답 요약(TAP_PROBE)을 따로 한 건 더 보낸다(서버 500자 한도)', /TAP_PROBE\(화면이 받은 응답 요약\)/.test(SRC) && /delete probe\.tap/.test(FP));
+    ok('⑰ STALE 보고는 짧은 값(click·prev·got·src)이 앞에 온다', /const front = \{ click: _lastClickBranch, prev:/.test(FP));
     ok('⑰ 2페이지부터 어느 출처(tap/router/nextdata)에서 읽었는지 meta.nav.src 로 센다', /_navMode\.src\[out\.src/.test(FP) && /src: _navMode\.src \}/.test(SRC));
     ok('⑰ 주소창 pagingIndex 이동은 여전히 0곳', (SRC.match(/pagingIndex=\$\{pagingIndex\}`;/g) || []).length === 0 && !/chrome\.tabs\.update\(tabId, \{ url: [^}]*pagingIndex/.test(SRC));
 
@@ -388,6 +381,21 @@ console.log('\n[응답 가로채기 — net_tap]');
     const pr0 = runNp({}, { href: 'https://x' }, fakeDoc);
     ok('⑰ net_tap 이 없는 탭(교체 전 열린 탭)은 tap: none 으로 밝힌다', pr0 && pr0.tap === 'none');
     ok('⑰ 버전 1.13.0 이상(안전 중지판 1.12.0 보다 위)', _ge(MANIFEST.version, '1.13.0'));
+
+    // ⑱ v1.13.1 — 22:02 실측: v1.13.0 첫 회차가 2페이지에서 퍼즐. 주소 `?query=…&pagingIndex=2` 는 routerPush 가 만드는 모양이고
+    //   Next 가 그 데이터를 못 받으면 주소창 이동으로 되돌린다. 퍼즐 세 건(21:17·21:18·22:02) 전부 그 모양 = 주소 이동과 같은 표식.
+    //   ⇒ routerPush 삭제. 그리고 tap 요약을 STALE 만이 아니라 BLOCK_TEXT·판독 실패·NO_PAGER 에서도 남긴다(22:02 는 tap 이 안 남았다).
+    console.log('\n[v1.13.1 — 라우터 이동 삭제 · 네 갈래 tap 보고]');
+    const TR = grab('tapReport', 'async');
+    ok('⑱ tapReport 가 navProbe 를 돌려 TAP_PROBE 로 why·q·tap 을 보낸다', /func: navProbe/.test(TR) && /TAP_PROBE\(화면이 받은 응답 요약\)/.test(TR) && /why: why, q: probe\.q/.test(TR));
+    const blockPart = FP.slice(FP.indexOf("out.err === 'BLOCK_TEXT'"), FP.indexOf('throw new Error(`BLOCKED:${out.title'));
+    ok('⑱ BLOCK_TEXT(퍼즐·차단 문구) 직전에 tap 요약을 남긴다', /await tapReport\(tabId, keyword, pagingIndex, 'BLOCK_TEXT'\)/.test(blockPart));
+    ok('⑱ STALE 끝에도 tap 요약을 남긴다', /await tapReport\(tabId, keyword, pagingIndex, 'STALE'\)/.test(FP));
+    const failPart = FP.slice(FP.indexOf("note: '판독 실패(차단 아님)'"));
+    ok('⑱ 판독 실패에도 tap 요약을 남긴다', /await tapReport\(tabId, keyword, pagingIndex, lastErr\)/.test(failPart));
+    ok('⑱ NO_PAGER 는 라우터 이동 없이 키워드를 끝내고 tap 요약을 남긴다', /NO_PAGER\(페이지 버튼 못 찾음\)/.test(FP) && /await tapReport\(tabId, keyword, pagingIndex, 'NO_PAGER'\)/.test(FP) && !/_lastPushResult/.test(SRC));
+    ok('⑱ 주소창·라우터 어느 쪽으로도 pagingIndex 이동을 만들지 않는다', !/rt\.push/.test(SRC) && !/tabs\.update\([^)]*pagingIndex/.test(SRC) && (SRC.match(/pagingIndex=\$\{pagingIndex\}`;/g) || []).length === 0);
+    ok('⑱ 버전 1.13.1 이상', _ge(MANIFEST.version, '1.13.1'));
 
     console.log(fail ? `\n❌ 실패 ${fail}건 / 전체 ${pass + fail}` : '\n사람처럼 넘기기 시험 전부 통과');
     process.exit(fail ? 1 : 0);

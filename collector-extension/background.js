@@ -647,7 +647,6 @@ function pagerClick(target) {
 }
 
 /** 작업 탭에서 pagerClick 을 돌린다. 클릭했으면 true. */
-let _lastPushResult = '';    // routerPush 결과('pushed'·'no-router'·…) — 진단 보고에 싣는다
 let _staleReported = false;  // 키워드당 1회만 보고
 let _lastClickBranch = '';   // pagerClick 이 어느 가지('num'·'next'·'loose')로 눌렀나 — 진단 보고에 싣는다
 async function clickToPage(tabId, target) {
@@ -663,21 +662,11 @@ async function clickToPage(tabId, target) {
   }
 }
 
-/** 화면 안에서 실행 — 사람 클릭이 내부적으로 하는 **라우터 이동**을 직접 건다(2026-09-15 v1.11.3).
- *  클릭이 눌리긴 하는데 페이지가 안 바뀌는 경우의 두 번째 시도. 주소창 이동이 아니다(SPA 이동).
- *  ⚠️ MAIN 세계에서 돈다 — 바깥 변수 참조 금지. */
-function routerPush(target) {
-  try {
-    var rt = window.next && window.next.router;
-    if (!rt || typeof rt.push !== 'function') return 'no-router';
-    var q = {};
-    var src = rt.query || {};
-    for (var k in src) q[k] = src[k];
-    q.pagingIndex = String(target);
-    rt.push({ pathname: rt.pathname || location.pathname, query: q });
-    return 'pushed';
-  } catch (e) { return 'push-error'; }
-}
+/* ⛔ routerPush 는 v1.13.1 에서 **삭제**했다(2026-09-15 22:02 실측).
+ *   `라우터.push(query+pagingIndex)` 는 네이버가 쓰는 주소 모양(adQuery·origQuery·pagingSize…)이 아니라
+ *   `?query=키워드&pagingIndex=2` 를 만들고, Next 가 그 데이터를 못 받으면 **주소창 이동으로 되돌린다**(하드 내비게이션).
+ *   그래서 퍼즐(보안 확인)이 뜬 세 건(21:17·21:18·22:02)의 주소가 전부 그 모양이었다 = 주소 이동과 같은 표식.
+ *   클릭이 만든 주소(adQuery…)는 29초를 기다려도 퍼즐이 안 떴다. ⇒ 클릭 뒤엔 **기다리기만** 한다. 되살리지 말 것. */
 
 /** 화면 안에서 실행 — 「왜 안 넘어갔나」를 서버에 남기기 위한 상태 조각(값 없음 · 구조만). */
 function navProbe() {
@@ -731,6 +720,20 @@ function navProbe() {
     out.domFirst = first;
   } catch (e) { out.dom = 'err'; }
   return out;
+}
+
+/** v1.13.1 — 「화면이 어떤 응답을 받았나」(net_tap 요약)를 서버에 따로 한 건 남긴다.
+ *  STALE·BLOCK_TEXT·판독 실패·NO_PAGER 네 갈래 모두에서 부른다 — 22:02 퍼즐 회차는 BLOCK_TEXT 로 끝나
+ *  tap 요약이 서버에 안 남았다. 진단용이라 실패해도 수집을 멈추지 않는다. */
+async function tapReport(tabId, keyword, pagingIndex, why) {
+  try {
+    const [pr] = await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func: navProbe });
+    const probe = (pr && pr.result) || {};
+    const tap = probe.tap === undefined ? 'none' : probe.tap;
+    await reportBlocked({ keyword, pagingIndex, err: 'TAP_PROBE(화면이 받은 응답 요약)',
+                          href: probe.href || '', body: JSON.stringify({ why: why, q: probe.q || '', tap: tap }),
+                          note: '진단 — 차단 아님. 클릭 뒤 화면이 어떤 응답을 받았나' });
+  } catch (e) { /* 진단 실패는 무시 */ }
 }
 
 /** 탭이 목표 주소로 이동을 끝낼 때까지 대기 */
@@ -794,19 +797,13 @@ async function fetchPage(keyword, pagingIndex, prevIds) {
       // 버튼을 못 찾았다 — v1.11.3: **주소 이동으로 가지 않는다**(pagingIndex 주소 = 차단 표식, 9/15 실측).
       // 라우터 이동(SPA)을 시도하고, 그것도 없으면 이 키워드는 여기까지만 담는다.
       _navMode.fallback += 1;
-      try {
-        const [r2] = await chrome.scripting.executeScript({
-          target: { tabId }, world: 'MAIN', func: routerPush, args: [pagingIndex],
-        });
-        _lastPushResult = (r2 && r2.result) || '';
-      } catch (e) { _lastPushResult = 'inject-error'; }
       if (!_navMode.reported) {
         _navMode.reported = true;
         reportBlocked({ keyword, pagingIndex, err: 'NO_PAGER(페이지 버튼 못 찾음)',
-                        note: '주소 이동 안 함 — 라우터 이동 시도: ' + _lastPushResult });
+                        note: '주소 이동·라우터 이동 안 함(v1.13.1) — 이 키워드는 여기까지만 담음' });
+        await tapReport(tabId, keyword, pagingIndex, 'NO_PAGER');
       }
-      if (_lastPushResult !== 'pushed') return { total: 0, list: [] };   // 이 키워드는 여기까지
-      await waitNavigated(tabId, `pagingIndex=${pagingIndex}`);
+      return { total: 0, list: [] };   // 이 키워드는 여기까지
     }
   }
 
@@ -824,7 +821,7 @@ async function fetchPage(keyword, pagingIndex, prevIds) {
   //    ⇒ 「주소창에 pagingIndex 를 붙여 여는 것」이 차단 표식이다(9/12 · 8/28 과 같은 결론).
   //    대신 라우터 이동(사람 클릭이 내부적으로 하는 것)을 한 번 더 시도하고, 그래도 안 바뀌면
   //    그 키워드는 여기까지만 담고 끝낸다. 왜 안 넘어갔는지는 navProbe 로 서버에 남긴다.
-  let staleTries = 0, triedRouterPush = false;
+  let staleTries = 0;
   const tries = pagingIndex > 1 ? (CFG.readTriesPaged || CFG.readTries) : CFG.readTries;
   for (let attempt = 0; attempt < tries; attempt++) {
     let cur;
@@ -846,16 +843,8 @@ async function fetchPage(keyword, pagingIndex, prevIds) {
       if (pagingIndex > 1 && !pageChanged(out.list, prevIds)) {
         // 내용이 이전 페이지 그대로 — 아직 안 넘어간 것이다.
         staleTries += 1; lastErr = 'STALE_PAGE';
-        if (staleTries >= 12 && !triedRouterPush) {
-          // 약 10초를 기다려도 그대로면 라우터 이동을 한 번 건다(주소창 이동 아님).
-          triedRouterPush = true;
-          try {
-            const [r2] = await chrome.scripting.executeScript({
-              target: { tabId }, world: 'MAIN', func: routerPush, args: [pagingIndex],
-            });
-            _lastPushResult = (r2 && r2.result) || '';
-          } catch (e) { _lastPushResult = 'inject-error'; }
-        }
+        // ⛔ v1.13.1 — 여기서 라우터 이동(routerPush)을 걸던 것을 **뺐다**. 그 이동이 주소창 이동으로
+        //    되돌아가 퍼즐을 불렀다(22:02 실측 · 주소 `?query=…&pagingIndex=2`). 클릭 뒤엔 기다리기만 한다.
         await sleep(CFG.readGapMs);
         continue;
       }
@@ -870,6 +859,7 @@ async function fetchPage(keyword, pagingIndex, prevIds) {
                    title: out.title || '', href: out.href || '', body: out.body || '' };
       chrome.storage.local.set({ readFail: ev });
       reportBlocked({ ...ev, note: '차단 문구' });     // 서버도 알게 한다(기다리지 않는다)
+      await tapReport(tabId, keyword, pagingIndex, 'BLOCK_TEXT');   // v1.13.1 — 막히기 직전 화면이 받은 응답
       throw new Error(`BLOCKED:${out.title || out.href}`);
     }
     lastErr = (out && out.err) || '주입 실패';
@@ -886,18 +876,16 @@ async function fetchPage(keyword, pagingIndex, prevIds) {
     } catch (e) { probe = { probe: 'inject-error' }; }
     // ⚠️ 서버는 body 를 500자에서 자른다(collector.py) — 짧은 값이 앞에 오게 순서를 정하고,
     //    응답 요약(tap)은 **따로 한 건** 더 보낸다(v1.13.0). 21:39 회차의 prev/got 이 잘려 나갔던 교훈.
-    const tap = probe.tap; delete probe.tap;
-    const front = { click: _lastClickBranch, push: _lastPushResult, prev: (prevIds || []).length,
+    delete probe.tap;
+    const front = { click: _lastClickBranch, prev: (prevIds || []).length,
                     got: organicIds((out && out.list) || []).length, src: (out && out.src) || '' };
     probe = Object.assign(front, probe);
     if (!_staleReported) {
       _staleReported = true;
-      reportBlocked({ keyword, pagingIndex, err: 'STALE_PAGE(클릭·라우터 이동 뒤 내용 불변)',
+      reportBlocked({ keyword, pagingIndex, err: 'STALE_PAGE(클릭 뒤 내용 불변)',
                       href: probe.href || '', body: JSON.stringify(probe),
-                      note: '주소 이동 안 함 — 이 키워드는 여기까지만 담음' });
-      reportBlocked({ keyword, pagingIndex, err: 'TAP_PROBE(화면이 받은 응답 요약)',
-                      href: probe.href || '', body: JSON.stringify(tap === undefined ? 'none' : tap),
-                      note: '진단 — 차단 아님. 클릭 뒤 화면이 어떤 응답을 받았나' });
+                      note: '주소 이동·라우터 이동 안 함 — 이 키워드는 여기까지만 담음' });
+      await tapReport(tabId, keyword, pagingIndex, 'STALE');
     }
     return { total: 0, list: [] };
   }
@@ -911,6 +899,7 @@ async function fetchPage(keyword, pagingIndex, prevIds) {
   // ⚠️ 이건 차단이 아니라 **판독 실패**다. 그래도 서버에 남긴다 —
   //    「막혔다」와 「못 읽었다」는 다른 축이고, 섞이면 또 사흘을 쓴다.
   reportBlocked({ ...ev, note: '판독 실패(차단 아님)' });
+  await tapReport(tabId, keyword, pagingIndex, lastErr);
   throw new Error(`판독 실패(${lastErr}) — 차단 아님, 다음 회차 재시도`);
 }
 
@@ -925,7 +914,7 @@ async function fetchPage(keyword, pagingIndex, prevIds) {
 async function collectKeyword(keyword) {
   _navMode = { url: 0, click: 0, fallback: 0, stale: 0, reported: _navMode.reported, src: {} };   // 키워드마다 새로 센다
   _clickedAt = 0;
-  _staleReported = false; _lastPushResult = ''; _lastClickBranch = '';
+  _staleReported = false; _lastClickBranch = '';
   // 순번 부여의 실체는 rank_rules.takeOrganic 하나다 — 광고 제외가 seenIds 중복 처리보다
   // 먼저인 순서까지가 계약이고, node 회귀 테스트가 그 계약을 검사한다(신고 #253 후속).
   const st = {
