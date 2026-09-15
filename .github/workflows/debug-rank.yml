@@ -362,13 +362,14 @@ jobs:
                     print("     ids=" + ",".join(ids))
             except Exception as e:
                 print(f"  (ID 조회 실패: {e})")
-            print("\n[🔬 오늘 STALE·TAP_PROBE 보고 본문 — 최신 6건 전문]")
+            print("\n[🔬 오늘 막힘 보고 전종 — 최신 6건 전문(err·note·href·body)]")
             try:
-                for r in c.execute("""SELECT at AS created_at, keyword, paging_index, err, body FROM collector_blocks
+                for r in c.execute("""SELECT at AS created_at, keyword, paging_index, err, body, note, href, title, ext_version FROM collector_blocks
                                        WHERE date(at) = date('now','localtime')
-                                         AND (err LIKE 'STALE%' OR err LIKE 'TAP_PROBE%')
+                                         AND 1=1
                                        ORDER BY at DESC LIMIT 6"""):
-                    print(f"  {r['created_at']} · {r['keyword']} · p{r['paging_index']} · {r['err']}")
+                    print(f"  {r['created_at']} · {r['keyword']} · p{r['paging_index']} · {r['err']} · v{r['ext_version']} · note={r['note']}")
+                    print(f"     title={r['title']} href={r['href']}")
                     print(f"     {r['body']}")
             except Exception as e:
                 print(f"  (STALE 조회 실패: {e})")
