@@ -30,8 +30,11 @@ on:
         description: '상품 주소 모양 실측 — off(기본) / on. 어느 호스트(스마트스토어·브랜드스토어·카탈로그)를 쓰는지, 같은 슬러그가 두 호스트에 걸쳐 있는지(읽기 전용·업체명 미출력).'
         required: false
         default: 'off'
-      verify253:
-        description: '신고 253 수정 검증 — v1.10.2 적용 후 재수집·순위 45위 재계산(읽기 전용·업체명 미출력).'
+      # ⚠️ 2026-09-15 — 입력 상한 25개를 다 써서, **종결된 신고 253** 의 `verify253` 자리를
+      #    영업 준비 시간 측정으로 바꿨다. 그 스텝은 남아 있으나 입력이 없어 실행되지 않는다.
+      #    253 을 다시 봐야 하면 다른 입력 하나를 내리고 이 자리에 되살릴 것.
+      salesprep:
+        description: '영업 준비 시간 — off(기본) / on. 로직분석 보고서와 맞춤제안서가 서버를 각각 몇 번·언제 부르는지, 같은 API 를 두 번 부르는지, AI 피드백이 얼마나 걸리는지(읽기 전용 · IP 원문 미출력 · 외부 호출 0).'
         required: false
         default: 'off'
       pickers:
@@ -4147,6 +4150,106 @@ jobs:
             #    ⇒ 진단은 읽기만 한다. 저장 경로 확인은 서버가 남긴 traceback 으로 한다.
             print("  (저장 함수 직접 호출은 제거했다 — 진단이 실제 설정을 덮어썼기 때문)")
             PYEOF
+
+      - name: 영업 준비 시간 — 보고서·제안서가 서버를 어떻게 부르나 (읽기 전용 · IP 원문 미출력)
+        if: ${{ github.event.inputs.salesprep == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          command_timeout: 5m
+          script: |
+            set -e
+            # ⚠️ 읽기 전용이다. 외부(네이버·AI) 호출을 **한 건도 하지 않는다** —
+            #    재려고 실제로 부르면 그 자체가 쿼터를 태우고, 수집 차단을 깊게 만들 수 있다.
+            #    그래서 **이미 남은 기록만** 읽어 시간을 복원한다.
+            # ⚠️ IP 원문은 절대 찍지 않는다(저장소 공개) — 6자리 해시만.
+            echo "===================================================================="
+            echo " 영업 준비 시간 — 로직분석 보고서 + 맞춤제안서"
+            echo "===================================================================="
+            LOG=""
+            for C in /var/log/nginx/logic-analysis.access.log /var/log/nginx/access.log; do
+              if sudo test -f "$C"; then LOG="$C"; break; fi
+            done
+            echo "-- ⓪ nginx 로그가 소요시간을 남기나 --"
+            if [ -n "$LOG" ]; then
+              echo "   로그 파일: $(basename $LOG)"
+              # combined 포맷이면 $request_time 이 없다 — 있는지 없는지를 먼저 밝힌다.
+              sudo sh -c "tail -1 $LOG" 2>/dev/null | sed 's/^[0-9a-fA-F.:]*/(보낸곳가림)/' | cut -c1-200
+              echo "   ⇒ 끝에 소요시간(초)이 안 보이면 combined 포맷이라 **요청별 소요는 못 읽는다.**"
+              echo "      그때는 아래 ②처럼 **호출 사이 간격**으로 복원한다(완료 시각끼리의 차)."
+            else
+              echo "   ⚠️ nginx 로그를 못 찾았다 — 아래 측정은 건너뛴다."
+            fi
+            echo ""
+            echo "-- ① 두 산출물이 같은 API 를 두 번 부르는가 (날짜별 호출 수) --"
+            echo "   로직분석 보고서와 맞춤제안서는 **같은 서버의 같은 API** 를 각자 부른다."
+            echo "   (제안서 directEnrich: keyword/volume · products/search · datalab/analyze · rank/keyword-exposure)"
+            if [ -n "$LOG" ]; then
+              for P in "api/keyword/volume" "api/keywords/related" "api/products/search" \
+                       "api/datalab/analyze" "api/advertiser/analyze" "api/rank/keyword-exposure" \
+                       "api/seo/detail-page" "api/ai/feedback-all" "api/report/export"; do
+                N=$(sudo sh -c "cat $LOG" 2>/dev/null | grep -c "$P" || true)
+                printf "     %-30s %s건\n" "$P" "${N:-0}"
+              done
+              echo "   ⇒ volume·products/search·datalab 이 나머지보다 **눈에 띄게 많으면**"
+              echo "      두 산출물이 같은 것을 두 번 부르고 있다는 뜻이다."
+            fi
+            echo ""
+            echo "-- ② 한 사람의 준비 한 번이 실제로 몇 분 걸렸나 (완료 시각 사이의 간격) --"
+            echo "   보낸 곳을 6자리 해시로 묶고, 분석 계열 호출만 시각순으로 본다."
+            echo "   ⚠️ nginx 는 **요청이 끝난 시각**을 적는다 — 간격이 곧 그 사이 작업 시간이다."
+            if [ -n "$LOG" ]; then
+              sudo sh -c "cat $LOG" 2>/dev/null \
+                | grep -E "api/(keyword/volume|keywords/related|products/search|datalab/analyze|advertiser/analyze|rank/keyword-exposure|seo/detail-page|ai/feedback-all|report/export|place/proposal-enrich)" \
+                | awk '{
+                    ip=$1; t=$4; gsub(/^\[/,"",t);
+                    split(t,p,":"); split(p[1],d,"/");
+                    # 보낸 곳은 6자리 해시로만 (IP 원문 금지)
+                    h=0; for(i=1;i<=length(ip);i++) h=(h*31+index("0123456789.:abcdef",substr(ip,i,1)))%16777216;
+                    path="?";
+                    for(i=1;i<=NF;i++) if ($i ~ /^"(GET|POST)$/) path=$(i+1);
+                    sub(/\?.*$/,"",path);
+                    sec=p[2]*3600+p[3]*60+p[4];
+                    printf "%s %06x %s %s:%s:%s %s\n", d[1]"/"d[2], h, sec, p[2],p[3],p[4], path }' \
+                | sort -k1,1 -k2,2 -k3,3n \
+                | awk '{
+                    key=$1" "$2;
+                    if (key!=prev) { if (prev!="") printf "\n"; printf "   [%s · 보낸곳 %s]\n", $1, $2; prevsec=""; }
+                    gap = (prevsec=="") ? 0 : ($3-prevsec);
+                    if (gap>900) { printf "     ---- (%d분 공백 — 다른 건으로 본다) ----\n", gap/60 }
+                    printf "     %s  %-34s %s\n", $4, $5, (prevsec==""||gap>900) ? "" : ("+" gap "초");
+                    prev=key; prevsec=$3 }' \
+                | tail -80
+              echo ""
+              # ⚠️ 백틱은 **반드시 작은따옴표** 안에 둔다 — 큰따옴표 안에 두면 bash 가 명령으로 실행한다
+              #    (2026-09-14 에 같은 실수로 안내문이 빈칸으로 나갔다. 여기서 또 낼 뻔했다.)
+              echo '   ⇒ 읽는 법 — `+n초` 는 **앞 호출이 끝난 뒤 이 호출이 끝나기까지** 걸린 시간이다.'
+              echo '      화면이 AI 피드백을 **20초 미뤄** 부르므로, feedback-all 의 `+n초` 에서'
+              echo '      20초를 빼면 대략 **AI 생성 시간**이다(max_tokens=8000).'
+            fi
+            echo ""
+            echo "-- ③ 상품 목록이 수집분으로 채워지나, 죽은 API 로 떨어지나 --"
+            echo "   ⚠️ 영업 대상은 **신규 키워드**라 수집분이 없을 가능성이 높다."
+            echo "      쇼핑 검색 API 는 2026-07-31 종료(404 SE05) — 수집분이 없으면 상품 축이 빈다."
+            CC=$(docker ps --filter "name=logic-analysis" --format "{{.Names}}" | head -1)
+            if [ -n "$CC" ]; then
+              echo "     수집분 서빙 줄      : $(docker logs --since 72h "$CC" 2>&1 | grep -c '수집분 서빙' || true)"
+              echo "     쇼핑 API 404 줄     : $(docker logs --since 72h "$CC" 2>&1 | grep -c '쇼핑 검색 API 404' || true)"
+              echo "     데이터랩 분석 시작  : $(docker logs --since 72h "$CC" 2>&1 | grep -c '데이터랩 분석 시작' || true)"
+              echo "     feedback-all 잘림   : $(docker logs --since 72h "$CC" 2>&1 | grep -c 'max_tokens 한도로 잘렸' || true)"
+            else
+              echo "     ⚠️ 컨테이너를 못 찾았다."
+            fi
+            echo ""
+            echo "-- ④ 캐시가 두 번째 호출을 실제로 막아 주나 --"
+            echo "   데이터랩은 지표별 1시간 TTL 캐시가 있다(analyze_datalab)."
+            echo "   ⇒ 제안서를 보고서 **직후** 만들면 데이터랩은 캐시 적중이어야 한다."
+            echo "      ②의 datalab 두 번째 호출이 첫 번째보다 **확연히 빠르면** 캐시가 듣고 있는 것이다."
+            echo "   ⚠️ keyword/volume·products/search 에도 같은 캐시가 있는지는 **코드로 확인할 것**"
+            echo "      (없으면 두 번째도 그대로 외부를 부른다 = 동시 생성의 실익이 줄어든다)."
 
       - name: 수집 요청이 어디서 오는가 (읽기 전용 · IP 원문 미출력)
         if: ${{ github.event.inputs.sources == 'on' }}
