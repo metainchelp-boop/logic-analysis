@@ -247,7 +247,7 @@ async function markBlocked(reason) {
   const _slowUntil = Date.now() + SLOW_WINDOW_MS;
   await chrome.storage.local.set({ [SLOW_KEY]: _slowUntil });
   await setState({ slowUntil: _slowUntil });      // 팝업이 「안전 속도」 표시를 읽는다
-  await log(`🧱 네이버 자동입력 방지(캡차) 확인 — ${reason}. 6시간 쉬었다 재개합니다.`);
+  await log(`🧱 네이버 캡차·보안 확인 페이지 확인 — ${reason}. 6시간 쉬었다 재개합니다.`);
   await log('   재개 뒤 하루 동안은 절반 속도로 돌립니다(또 막히지 않도록).');
   await log('   해제하려면: 크롬에서 네이버쇼핑을 직접 열어 캡차를 한 번 풀어주세요.');
   // 쌓인 작업 탭을 닫아 둔다 — 열어둘수록 봇 판정이 깊어지고 화면도 지저분해진다.
@@ -524,7 +524,10 @@ function pageExtract() {
   if (best && best.length) return { total: total, list: best.slice(0, 200), href: href, pageIndex: pageIndex, src: src };
 
   // 여기부터는 '못 읽은' 경우. 이제서야 차단인지 본다.
-  var blocked = /일시적으로 제한|자동입력 방지|비정상적인 접근|접근이 차단/.test(body);
+  // ⚠️ 2026-09-15 v1.11.4 — 새 IP·새 크롬의 첫 회차에서 네이버가 **「보안 확인」 퍼즐**(영수증 문제)을 냈다.
+  //    문구가 종전 차단문과 달라 「판독 실패 · 다음 회차 재시도」로 넘어가 매 정시마다 퍼즐 페이지를
+  //    두드릴 뻔했다. 퍼즐도 차단과 같이 다룬다 — 멈추고, 쉬고, 서버에 원문을 남긴다(사람이 풀어야 풀린다).
+  var blocked = /일시적으로 제한|자동입력 방지|비정상적인 접근|접근이 차단|보안 확인을 완료|실제 사용자임을 확인|빈 칸을 채워주세요/.test(body);
   if (blocked) return { err: 'BLOCK_TEXT', href: href, title: title, body: body.slice(0, 300) };
   return { err: nd ? 'NO_LIST' : 'NO_NEXT_DATA', href: href, title: title, body: body.slice(0, 300) };
 }

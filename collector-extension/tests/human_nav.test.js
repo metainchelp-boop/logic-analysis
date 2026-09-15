@@ -203,5 +203,21 @@ ok('⑬ 서버 meta.nav 에 stale 이 실린다', /nav: \{ url: _navMode\.url, c
 ok('⑬ 버전 1.11.3 이상', _ge(MANIFEST.version, '1.11.3'));
 
 
+// ⑭ 2026-09-15 v1.11.4 — 「보안 확인」 퍼즐 페이지를 차단으로 알아본다(못 알아보면 매 정시 퍼즐을 두드린다).
+console.log('\n[보안 확인 퍼즐을 차단으로 알아보나]');
+{
+  const pe = grab('pageExtract');
+  const run = new Function('window', 'location', 'document', pe + '\nreturn pageExtract();');
+  const puzzle = 'NAVER 보안 확인을 완료해 주세요. 이 절차는 귀하가 실제 사용자임을 확인하여 계정을 안전하게 보호하고 스팸을 방지하는 데 도움이 됩니다. 영수증의 가게 위치는 광릉내로 [?] 입니다. (빈 칸을 채워주세요)';
+  const r = run({}, { href: 'https://search.shopping.naver.com/search/all?query=x&pagingIndex=2', search: '?query=x&pagingIndex=2' },
+                { title: '', body: { innerText: puzzle } });
+  ok('⑭ 상품 데이터 없이 「보안 확인」 문구만 있으면 BLOCK_TEXT 로 판정한다', !!r && r.err === 'BLOCK_TEXT');
+  const r2 = run({}, { href: 'https://search.shopping.naver.com/search/all?query=x', search: '?query=x' },
+                 { title: '', body: { innerText: '아무 상품도 없는 빈 페이지' } });
+  ok('⑭ 차단 문구가 없으면 여전히 판독 실패(NO_NEXT_DATA)다 — 과잉 판정 없음', !!r2 && r2.err === 'NO_NEXT_DATA');
+  ok('⑭ 버전 1.11.4 이상', _ge(MANIFEST.version, '1.11.4'));
+}
+
+
 console.log(fail ? `\n❌ 실패 ${fail}건 / 전체 ${pass + fail}` : '\n사람처럼 넘기기 시험 전부 통과');
 process.exit(fail ? 1 : 0);
