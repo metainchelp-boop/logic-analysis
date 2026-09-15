@@ -344,6 +344,34 @@ jobs:
                     print(f"     meta={r['meta_json']}")
             except Exception as e:
                 print(f"  (meta 조회 실패: {e})")
+            # 🔬 2026-09-15 21:39 회차 판정용 — 최신 3건의 **담긴 상품 ID** 를 그대로 찍는다.
+            #    STALE 프로브의 domFirst(화면 상단 nvMid 3개)가 이 안에 있으면 「화면도 1페이지 그대로」,
+            #    없으면 「화면은 2페이지로 바뀌었는데 라우터 props 만 안 바뀐 것」. 업체명 없음·ID 만.
+            print("\n[🔬 최신 3건 — 담긴 상품 ID 순서대로]")
+            try:
+                for r in c.execute("""SELECT keyword, created_at, products_json
+                                        FROM collected_serp
+                                       WHERE collected_date = date('now','localtime')
+                                       ORDER BY created_at DESC LIMIT 3"""):
+                    try:
+                        ps = _json.loads(r["products_json"]) or []
+                    except Exception:
+                        ps = []
+                    ids = [str(p.get("productId") or "") for p in ps]
+                    print(f"  {r['created_at']} · {r['keyword']} · {len(ids)}개")
+                    print("     ids=" + ",".join(ids))
+            except Exception as e:
+                print(f"  (ID 조회 실패: {e})")
+            print("\n[🔬 오늘 STALE 보고 본문 — 최신 3건 전문]")
+            try:
+                for r in c.execute("""SELECT at AS created_at, keyword, paging_index, err, body FROM collector_blocks
+                                       WHERE date(created_at) = date('now','localtime')
+                                         AND err LIKE 'STALE%'
+                                       ORDER BY created_at DESC LIMIT 3"""):
+                    print(f"  {r['created_at']} · {r['keyword']} · {r['err']}")
+                    print(f"     {r['body']}")
+            except Exception as e:
+                print(f"  (STALE 조회 실패: {e})")
             print("\n[교체 검증 — 최근 업로드 30건]")
             try:
                 nrows = list(c.execute("""SELECT keyword, created_at, product_count, products_json
