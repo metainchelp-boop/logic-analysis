@@ -139,7 +139,10 @@ ok('⑨ 전용 창 실패 시 종전 방식 폴백이 있다', /배경 탭으로
 
 // ⑩ 서버가 「어떻게 넘겼나」를 알 수 있다
 ok('⑩ 이동 방식을 meta 로 올린다', /nav: \{ url: _navMode\.url, click: _navMode\.click/.test(SRC));
-ok('⑩ 버전이 올라갔다', MANIFEST.version === '1.11.0');
+// v1.11.1(2026-09-15)에서 == 를 >= 로 — 버전이 오를 때마다 이 줄을 고치면 시험이 시험이 아니다.
+const _ge = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number);
+  for (let i = 0; i < 3; i++) { if ((x[i]||0) !== (y[i]||0)) return (x[i]||0) > (y[i]||0); } return true; };
+ok('⑩ 버전이 올라갔다(1.11.0 이상)', _ge(MANIFEST.version, '1.11.0'));
 
 console.log(fail ? `\n❌ 실패 ${fail}건 / 전체 ${pass + fail}` : '\n사람처럼 넘기기 시험 전부 통과');
 process.exit(fail ? 1 : 0);
