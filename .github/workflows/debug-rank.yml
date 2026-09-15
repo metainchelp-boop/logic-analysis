@@ -4189,9 +4189,11 @@ jobs:
             echo "   로직분석 보고서와 맞춤제안서는 **같은 서버의 같은 API** 를 각자 부른다."
             echo "   (제안서 directEnrich: keyword/volume · products/search · datalab/analyze · rank/keyword-exposure)"
             if [ -n "$LOG" ]; then
+              # 2026-09-15 배포분 가산 — 동시 생성이 실제로 쓰이는지 보려면 이 둘이 필요하다.
               for P in "api/keyword/volume" "api/keywords/related" "api/products/search" \
                        "api/datalab/analyze" "api/advertiser/analyze" "api/rank/keyword-exposure" \
-                       "api/seo/detail-page" "api/ai/feedback-all" "api/report/export"; do
+                       "api/seo/detail-page" "api/ai/feedback-all" "api/report/export" \
+                       "api/sales-bundle"; do
                 N=$(sudo sh -c "cat $LOG" 2>/dev/null | grep -c "$P" || true)
                 printf "     %-30s %s건\n" "$P" "${N:-0}"
               done
@@ -4204,7 +4206,7 @@ jobs:
             echo "   ⚠️ nginx 는 **요청이 끝난 시각**을 적는다 — 간격이 곧 그 사이 작업 시간이다."
             if [ -n "$LOG" ]; then
               sudo sh -c "cat $LOG" 2>/dev/null \
-                | grep -E "api/(keyword/volume|keywords/related|products/search|datalab/analyze|advertiser/analyze|rank/keyword-exposure|seo/detail-page|ai/feedback-all|report/export|place/proposal-enrich)" \
+                | grep -E "api/(keyword/volume|keywords/related|products/search|datalab/analyze|advertiser/analyze|rank/keyword-exposure|seo/detail-page|ai/feedback-all|report/export|place/proposal-enrich|sales-bundle)" \
                 | awk '{
                     ip=$1; t=$4; gsub(/^\[/,"",t);
                     split(t,p,":"); split(p[1],d,"/");
