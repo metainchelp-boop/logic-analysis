@@ -3273,6 +3273,58 @@ class ProductSearchRequest(BaseModel):
     keyword: str
     count: int = 40
 
+# ==================== 영업 자료 인계 보관소 (2026-09-15) ====================
+# 보고서가 받아 온 자료를 제안서에 그대로 넘긴다. 같은 것을 두 번 외부에 묻지 않기 위해서다.
+# ⚠️ 워커가 5개라 메모리에 담으면 보관한 워커와 꺼내는 워커가 달라진다 → DB 에 둔다(sales_bundle).
+
+class SalesBundleRequest(BaseModel):
+    payload: Dict[str, Any]
+
+
+@app.post("/api/sales-bundle")
+def sales_bundle_put(req: SalesBundleRequest, current_user: dict = Depends(get_current_user)):
+    """영업 자료 인계 — 받아 둔 자료를 보관하고 키를 돌려준다 (인증 필수)."""
+    from database import _get_conn
+    import sales_bundle
+    conn = _get_conn()
+    try:
+        key = sales_bundle.put(conn, req.payload, user_id=current_user.get("id"))
+        conn.commit()
+        return {"success": True, "key": key, "ttl_seconds": sales_bundle.TTL_SECONDS}
+    except ValueError as e:
+        # 너무 크면 보관하지 않는다 — 잘라 넣으면 제안서가 반쪽 자료로 그럴듯한 장표를 그린다.
+        logger.warning(f"[sales-bundle] 보관 생략: {e}")
+        raise HTTPException(status_code=413, detail=str(e))
+    except Exception as e:
+        logger.error(f"[sales-bundle] 보관 실패: {e}")
+        raise HTTPException(status_code=500, detail="인계 자료 보관 중 오류가 발생했습니다.")
+    finally:
+        conn.close()
+
+
+@app.get("/api/sales-bundle/{key}")
+def sales_bundle_take(key: str, current_user: dict = Depends(get_current_user)):
+    """영업 자료 인계 — 한 번만 꺼낸다. 없거나 수명이 지났으면 found=False (인증 필수).
+
+    ⚠️ 못 찾아도 **오류가 아니다.** 부르는 쪽(제안서)은 이때 평소 경로로 돌아가면 된다.
+       404 로 만들면 제안서가 오류 화면을 띄워 「자료가 없다」가 「고장」으로 보인다.
+    """
+    from database import _get_conn
+    import sales_bundle
+    conn = _get_conn()
+    try:
+        data = sales_bundle.take(conn, key)
+        conn.commit()
+        if data is None:
+            return {"success": True, "found": False}
+        return {"success": True, "found": True, "data": data}
+    except Exception as e:
+        logger.error(f"[sales-bundle] 조회 실패: {e}")
+        return {"success": True, "found": False}
+    finally:
+        conn.close()
+
+
 @app.post("/api/products/search")
 def search_products(req: ProductSearchRequest, current_user: dict = Depends(get_current_user)):
     """네이버 쇼핑에서 키워드로 상품 검색 (인증 필수)"""

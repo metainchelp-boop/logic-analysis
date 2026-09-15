@@ -911,6 +911,185 @@ function placeRegionHasDong(region) {
   };
 })();
 
+;/* ===== js/sales-oneshot.js ===== */
+/* 영업 자료 동시 생성 — 보고서와 제안서를 한 번에 (2026-09-15 대표 확정)
+ *
+ * 왜 있나 — 영업사원이 대상 1명당 보고서 5분 + 제안서 3분을 따로 기다렸다.
+ * 두 자료는 서로의 결과를 쓰지 않고 **같은 서버에 같은 것을 각자** 물어볼 뿐이라,
+ * 한 번 받아 둘이 나눠 쓰면 제안서 쪽 기다림이 통째로 사라진다.
+ *
+ * ⚠️ 이 파일은 **켜져 있을 때만** 동작한다(주소에 both=1 이 있을 때).
+ *    평소 분석 화면은 이 파일이 있으나 없으나 똑같이 돈다 — 무회귀.
+ *
+ * ⚠️ 전역 하나만 내놓는다(window.SalesOneShot) — importScripts 가 아니라 번들 연결이라
+ *    같은 전역을 여러 파일이 선언하면 통째로 죽는다(collector-extension 선례).
+ */
+(function () {
+  'use strict';
+
+  var LOG = '[영업자료]';
+  function params() {
+    try {
+      return new URLSearchParams(window.location.search);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /** 지금 「동시 생성」으로 열린 창인가 */
+  function isActive() {
+    var p = params();
+    return !!(p && p.get('both') === '1');
+  }
+
+  /** 전산이 넘겨준 맥락 — 어느 기록에 「내려받았다」를 돌려줄지가 핵심이다. */
+  function context() {
+    var p = params();
+    if (!p) return {};
+    return {
+      genLogIdx: p.get('genlog') || '',
+      // 전산 proposal_gen_log.idx
+      erpBase: p.get('erp') || '',
+      // 전산 **API** 주소 — 기록을 돌려줄 곳
+      propBase: p.get('prop') || '',
+      // 전산 **화면** 주소 — 제안서(/proposal/)가 있는 곳
+      // ⚠️ 둘은 다른 호스트다. 섞으면 빈 탭이 열린다.
+      name: p.get('name') || '',
+      storeUrl: p.get('storeUrl') || ''
+    };
+  }
+
+  /* ── 진행 표시 ─────────────────────────────────────────────────────────── */
+  var STEPS = [{
+    id: 'data',
+    label: '검색량 · 연관어 · 상품 목록 받기'
+  }, {
+    id: 'ai',
+    label: 'AI 진단 작성'
+  }, {
+    id: 'report',
+    label: '보고서 만들기'
+  }, {
+    id: 'proposal',
+    label: '제안서 만들기'
+  }];
+  var _box = null;
+  function ensureBox() {
+    if (_box && document.body.contains(_box)) return _box;
+    var box = document.createElement('div');
+    box.id = 'sales-oneshot';
+    box.setAttribute('role', 'status');
+    box.setAttribute('aria-live', 'polite');
+    box.style.cssText = ['position:fixed', 'right:18px', 'bottom:18px', 'z-index:99999', 'width:320px', 'max-width:calc(100vw - 36px)', 'background:#fff', 'border:1px solid #bfdbfe', 'border-radius:12px', 'box-shadow:0 10px 30px rgba(15,23,42,.16)', 'padding:14px 16px', 'font-family:"Malgun Gothic","맑은 고딕",-apple-system,sans-serif', 'font-size:13.5px', 'color:#0f172a', 'line-height:1.6'].join(';');
+    var html = '<div style="font-weight:700;margin-bottom:8px;color:#1d4ed8">⚡ 영업 자료 만드는 중</div>';
+    STEPS.forEach(function (s) {
+      html += '<div data-step="' + s.id + '" style="display:flex;gap:8px;align-items:center;padding:3px 0;color:#64748b">' + '<span data-ic style="flex:0 0 18px;height:18px;border-radius:50%;background:#e2e8f0;color:#94a3b8;' + 'font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center">·</span>' + '<span data-lb style="flex:1">' + s.label + '</span></div>';
+    });
+    html += '<div data-note style="margin-top:9px;font-size:12.5px;color:#64748b"></div>';
+    box.innerHTML = html;
+    document.body.appendChild(box);
+    _box = box;
+    return box;
+  }
+  function mark(stepId, state, note) {
+    var box = ensureBox();
+    var row = box.querySelector('[data-step="' + stepId + '"]');
+    if (row) {
+      var ic = row.querySelector('[data-ic]');
+      if (state === 'run') {
+        ic.style.background = '#3b82f6';
+        ic.style.color = '#fff';
+        ic.textContent = '●';
+        row.style.color = '#0f172a';
+      } else if (state === 'done') {
+        ic.style.background = '#16a34a';
+        ic.style.color = '#fff';
+        ic.textContent = '✓';
+        row.style.color = '#0f172a';
+      } else if (state === 'fail') {
+        ic.style.background = '#dc2626';
+        ic.style.color = '#fff';
+        ic.textContent = '!';
+        row.style.color = '#991b1b';
+      }
+    }
+    if (note != null) {
+      var n = box.querySelector('[data-note]');
+      if (n) n.textContent = note;
+    }
+  }
+  function finish(ok, note) {
+    var box = ensureBox();
+    var head = box.firstChild;
+    if (head) {
+      head.textContent = ok ? '✅ 영업 자료를 내려받았습니다' : '⚠️ 영업 자료 생성이 끝나지 않았습니다';
+      head.style.color = ok ? '#15803d' : '#b45309';
+    }
+    var n = box.querySelector('[data-note]');
+    if (n) n.textContent = note || '';
+    if (ok) setTimeout(function () {
+      try {
+        box.remove();
+      } catch (e) {}
+    }, 12000);
+  }
+
+  /* ── 파일 내려받기 ─────────────────────────────────────────────────────── */
+  /** ⚠️ 두 파일을 같은 순간에 내려받으면 브라우저가 「여러 파일 허용?」을 묻는다.
+   *     그래서 부르는 쪽이 간격을 두고 순차로 부른다. */
+  function download(html, filename) {
+    var blob = new Blob([html], {
+      type: 'text/html;charset=utf-8'
+    });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () {
+      try {
+        URL.revokeObjectURL(a.href);
+      } catch (e) {}
+    }, 4000);
+  }
+
+  /* ── 전산에 「실제로 내려받았다」를 돌려준다 ───────────────────────────── */
+  /** ⚠️ 이게 이 기능의 핵심 중 하나다. 전산 기록은 지금까지 **버튼 누른 시각**만 남겨
+   *     탭만 열고 닫아도 「생성했다」로 보였다. 파일이 실제로 나간 뒤에만 부른다.
+   *  ⚠️ 실패해도 **자료 생성은 성공이다** — 조용히 넘기고 사람에게는 알리되 막지 않는다. */
+  function reportDownloaded(ctx) {
+    if (!ctx.genLogIdx || !ctx.erpBase) return Promise.resolve(false);
+    var url = ctx.erpBase.replace(/\/+$/, '') + '/api/my-prospective/sales-material-log/' + encodeURIComponent(ctx.genLogIdx) + '/downloaded';
+    var headers = {
+      'Content-Type': 'application/json'
+    };
+    try {
+      var t = localStorage.getItem('token');
+      if (t) headers['Authorization'] = t;
+    } catch (e) {}
+    return fetch(url, {
+      method: 'PATCH',
+      headers: headers
+    }).then(function (r) {
+      return r.ok;
+    }).catch(function () {
+      return false;
+    });
+  }
+  window.SalesOneShot = {
+    isActive: isActive,
+    context: context,
+    mark: mark,
+    finish: finish,
+    download: download,
+    reportDownloaded: reportDownloaded,
+    ensureBox: ensureBox,
+    STEPS: STEPS,
+    LOG: LOG
+  };
+})();
+
 ;/* ===== js/components/ErrorBoundary.jsx ===== */
 /* ErrorBoundary — React 에러 경계 (빈 화면 방지) */
 (function () {
@@ -1183,6 +1362,10 @@ window.AiFeedbackAllSection = function AiFeedbackAllSection(props) {
   var advertiserReport = props.advertiserReport;
   var htmlReviewData = props.htmlReviewData;
   var datalabData = props.datalabData;
+  /* ⚠️ 선택 props — 안 넘겨주면 undefined 라 아래에서 **종전과 같은 20초 고정 대기**로 떨어진다.
+   *    (무회귀: 이 파일을 쓰는 다른 화면이 있어도 동작이 바뀌지 않는다) */
+  var datalabLoading = props.datalabLoading;
+  var advertiserLoading = props.advertiserLoading;
   var _loading = React.useState(false);
   var loading = _loading[0];
   var setLoading = _loading[1];
@@ -1305,7 +1488,23 @@ window.AiFeedbackAllSection = function AiFeedbackAllSection(props) {
     });
   };
 
-  /* 키워드가 변경되면 자동 실행 (20초 딜레이 — 모든 분석 완료 대기) */
+  /* 키워드가 변경되면 자동 실행.
+   *
+   * ⚠️ **종전엔 무조건 20초를 기다렸다** — 「모든 분석 완료 대기」라는 이름이었지만
+   *    실제로 끝났는지는 안 보고 시계만 봤다. 자료가 3초 만에 다 와도 17초를 흘려보냈고,
+   *    영업 자료 한 건마다 그 시간이 그대로 쌓였다(2026-09-15 대표 지시로 개선).
+   *
+   * ⇒ 이제 **늦게 오는 두 가지(데이터랩·진입 전략)가 끝났는지**를 보고 그 즉시 시작한다.
+   *    끝났다 = 로딩 플래그가 꺼졌다(성공이든 실패든 「더 기다릴 것이 없다」는 뜻).
+   *
+   * ⚠️ 안전장치 둘을 같이 둔다:
+   *    ① 플래그를 안 넘겨주는 화면에서는 **종전 그대로 20초**(무회귀)
+   *    ② 플래그가 어떤 이유로든 안 꺼지면 20초에 **강제로** 시작(영영 안 도는 것 방지)
+   *    ③ 자료가 다 와도 **0.6초는 둔다** — 마지막 setState 가 화면에 반영될 틈
+   *      (AI 는 화면 값이 아니라 props 로 읽지만, 같은 틱에 몰린 갱신을 한 번에 태운다) */
+  var FALLBACK_MS = 20000;
+  var SETTLE_MS = 600;
+  var _startedAt = React.useRef(0);
   React.useEffect(function () {
     if (!keyword || !analysisData) return;
     if (_lastKeyword.current && _lastKeyword.current !== keyword) {
@@ -1314,17 +1513,36 @@ window.AiFeedbackAllSection = function AiFeedbackAllSection(props) {
         _timerRef.current = null;
       }
       _lastKeyword.current = '';
+      _startedAt.current = 0;
       setFeedbacks(null);
       setFullText('');
       setError('');
     }
     if (_lastKeyword.current === keyword) return;
     _lastKeyword.current = keyword;
+    _startedAt.current = Date.now();
     _timerRef.current = setTimeout(function () {
       _timerRef.current = null;
       doFetch();
-    }, 20000);
+    }, FALLBACK_MS);
   }, [keyword, analysisData]);
+
+  /* 늦게 오는 것들이 끝나면 위 예약을 앞당긴다 — 못 앞당기면 위 20초가 그대로 돈다. */
+  React.useEffect(function () {
+    if (!keyword || !analysisData) return;
+    if (_lastKeyword.current !== keyword) return;
+    if (!_timerRef.current) return; // 이미 시작했거나 예약이 없다
+    if (datalabLoading === undefined && advertiserLoading === undefined) return; // 옛 호출부 → 20초 유지
+    if (datalabLoading || advertiserLoading) return; // 아직 오는 중
+
+    var waited = Date.now() - (_startedAt.current || Date.now());
+    var wait = Math.max(0, SETTLE_MS - waited);
+    clearTimeout(_timerRef.current);
+    _timerRef.current = setTimeout(function () {
+      _timerRef.current = null;
+      doFetch();
+    }, wait);
+  }, [keyword, analysisData, datalabLoading, advertiserLoading, datalabData, advertiserReport]);
   React.useEffect(function () {
     return function () {
       if (_timerRef.current) clearTimeout(_timerRef.current);
@@ -26693,7 +26911,10 @@ window.AnalysisResults = function AnalysisResults(props) {
     relatedData: relatedData,
     advertiserReport: advertiserReport,
     htmlReviewData: htmlReviewData,
-    datalabData: datalabData
+    datalabData: datalabData,
+    /* 늦게 오는 두 가지가 끝났는지 — AI 호출을 20초 기다리지 않고 그 즉시 시작하려고 넘긴다 */
+    datalabLoading: datalabLoading,
+    advertiserLoading: advertiserLoading
   })), /* 20. 업체 등록/저장 — 관리팀은 업체+경쟁사, 영업사원(viewer)은 경쟁사 저장만 */
   analysisData && React.createElement(window.SectionErrorBoundary, {
     name: '업체 저장'
@@ -32636,6 +32857,119 @@ window.App = function App() {
       console.error('자동 DOM capture 실패:', e);
       return '';
     }
+  };
+
+  /* ==================== 영업 자료 동시 생성 (2026-09-15 대표 확정) ====================
+     전산 가망 수정 페이지의 [영업 자료 동시 생성] 이 이 화면을 `?both=1` 로 연다.
+     분석이 끝나고 AI 진단까지 마치면 **보고서를 만들어 내려받고**, 그때 받아 둔 자료를
+     보관소에 넣어 **제안서에 넘긴다**(제안서는 같은 것을 다시 묻지 않는다).
+      ⚠️ `both=1` 이 없으면 이 블록은 **한 줄도 돌지 않는다** — 평소 분석 화면 무변경.
+     ⚠️ 두 파일을 같은 순간에 내려받으면 브라우저가 「여러 파일 허용?」을 묻는다 →
+        제안서는 **간격을 두고** 새 탭으로 연다.
+     ⚠️ 전산에 「내려받았다」를 돌려주는 것이 이 기능의 핵심 절반이다 — 전산 기록은
+        지금까지 **버튼 누른 시각**만 남겨 탭만 열고 닫아도 「생성했다」로 보였다. */
+  var _oneShotDone = React.useRef(false);
+  React.useEffect(function () {
+    if (!window.SalesOneShot || !window.SalesOneShot.isActive()) return;
+    if (_oneShotDone.current) return;
+    if (!searchedKeyword || !analysisData) return;
+    var S = window.SalesOneShot;
+    S.ensureBox();
+    S.mark('data', 'done');
+
+    // AI 진단이 끝나야 보고서가 완성된다 — 화면이 심는 마커로 판정한다.
+    // ⚠️ 시계로 기다리지 않는다(그 방식이 20초 낭비의 원인이었다).
+    var startedAt = Date.now();
+    var AI_CAP_MS = 5 * 60 * 1000; // AI 가 영영 안 끝나도 보고서는 내보낸다
+    S.mark('ai', 'run', 'AI 가 진단을 작성하고 있습니다… 창을 닫지 마세요.');
+    var timer = setInterval(function () {
+      var st = 'none';
+      try {
+        st = window.ReportCapture ? window.ReportCapture.aiState() : 'none';
+      } catch (e) {}
+      var timedOut = Date.now() - startedAt > AI_CAP_MS;
+      if (st === 'loading' && !timedOut) return;
+      if (st === 'none' && Date.now() - startedAt < 8000) return; // 섹션이 아직 안 붙었을 수 있다
+
+      clearInterval(timer);
+      _oneShotDone.current = true;
+      if (timedOut) S.mark('ai', 'fail', 'AI 진단이 오래 걸려 그 부분 없이 보고서를 만듭니다.');else S.mark('ai', 'done', '');
+      _runOneShot(S);
+    }, 1000);
+    return function () {
+      clearInterval(timer);
+    };
+  }, [searchedKeyword, analysisData]);
+  var _runOneShot = function (S) {
+    var ctx = S.context();
+    var kw = searchedKeyword || '';
+    var who = ctx.name || companyName || '업체';
+
+    // ① 보고서 — 화면 그대로 캡처해 내려받는다(기존 경로 그대로 재사용)
+    S.mark('report', 'run');
+    var reportOk = false;
+    try {
+      var html = captureAutoReportHtml(kw);
+      if (html) {
+        S.download(html, who + '_' + kw + '_로직분석보고서.html');
+        reportOk = true;
+        S.mark('report', 'done');
+      } else {
+        S.mark('report', 'fail', '보고서를 만들지 못했습니다.');
+      }
+    } catch (e) {
+      S.mark('report', 'fail', '보고서 생성 실패: ' + (e && e.message ? e.message : ''));
+    }
+
+    // ② 제안서 — 받아 둔 자료를 보관소에 넣고 그 키로 연다.
+    //    ⚠️ 보관이 실패해도 **제안서는 연다** — 그때는 제안서가 평소대로 스스로 받아 온다
+    //       (느려질 뿐 결과는 같다. 여기서 멈추면 영업사원이 자료 하나를 통째로 잃는다).
+    S.mark('proposal', 'run');
+    var bundle = {
+      keyword: kw,
+      name: who,
+      storeUrl: ctx.storeUrl || searchedProductUrl || '',
+      volume: volumeData || null,
+      related: relatedData || null,
+      shopProducts: shopProducts || null,
+      datalab: datalabData || null,
+      advertiser: advertiserReport || null,
+      analysis: analysisData || null
+    };
+    var openProposal = function (key) {
+      var p = new URLSearchParams();
+      if (who) p.set('name', who);
+      if (bundle.storeUrl) p.set('storeUrl', bundle.storeUrl);
+      if (kw) p.set('keywords', kw);
+      if (key) p.set('handoff', key);
+      /* ⚠️ 제안서는 **전산 화면 주소**에 있다(정적 폴더 /proposal/). API 주소(erpBase)가 아니다 —
+       *    처음에 API 주소로 열도록 적었다가 고쳤다. 그래서 전산이 자기 주소를 prop 으로 넘겨준다.
+       *    못 받았으면 열지 않고 사람에게 알린다(엉뚱한 주소로 빈 탭을 띄우지 않는다). */
+      var base = (ctx.propBase || '').replace(/\/+$/, '');
+      if (!base) {
+        S.mark('proposal', 'fail', '제안서 주소를 못 받아 열지 못했습니다. 제안서는 전산에서 따로 만들어 주세요.');
+        S.finish(reportOk, reportOk ? '보고서는 다운로드 폴더에 있습니다.' : '');
+        if (reportOk) S.reportDownloaded(ctx);
+        return;
+      }
+      var url = base + '/proposal/index.html?' + p.toString();
+      setTimeout(function () {
+        try {
+          window.open(url, '_blank', 'noopener,noreferrer');
+        } catch (e) {}
+        S.mark('proposal', 'done');
+        var note = reportOk ? '보고서는 다운로드 폴더에 있습니다. 제안서는 새 탭에서 이어집니다.' : '제안서만 새 탭에서 이어집니다.';
+        S.finish(reportOk, note);
+        if (reportOk) S.reportDownloaded(ctx);
+      }, 600);
+    };
+    api.post('/sales-bundle', {
+      payload: bundle
+    }).then(function (res) {
+      openProposal(res && res.key ? res.key : '');
+    }).catch(function () {
+      openProposal('');
+    });
   };
 
   /* 저장된 분석 데이터를 실제 분석 화면으로 재렌더 → 화면과 동일하게 HTML 다운로드 (옵션 A) */

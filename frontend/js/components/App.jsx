@@ -410,6 +410,120 @@ window.App = function App() {
         }
     };
 
+    /* ==================== 영업 자료 동시 생성 (2026-09-15 대표 확정) ====================
+       전산 가망 수정 페이지의 [영업 자료 동시 생성] 이 이 화면을 `?both=1` 로 연다.
+       분석이 끝나고 AI 진단까지 마치면 **보고서를 만들어 내려받고**, 그때 받아 둔 자료를
+       보관소에 넣어 **제안서에 넘긴다**(제안서는 같은 것을 다시 묻지 않는다).
+
+       ⚠️ `both=1` 이 없으면 이 블록은 **한 줄도 돌지 않는다** — 평소 분석 화면 무변경.
+       ⚠️ 두 파일을 같은 순간에 내려받으면 브라우저가 「여러 파일 허용?」을 묻는다 →
+          제안서는 **간격을 두고** 새 탭으로 연다.
+       ⚠️ 전산에 「내려받았다」를 돌려주는 것이 이 기능의 핵심 절반이다 — 전산 기록은
+          지금까지 **버튼 누른 시각**만 남겨 탭만 열고 닫아도 「생성했다」로 보였다. */
+    var _oneShotDone = React.useRef(false);
+
+    React.useEffect(function() {
+        if (!window.SalesOneShot || !window.SalesOneShot.isActive()) return;
+        if (_oneShotDone.current) return;
+        if (!searchedKeyword || !analysisData) return;
+
+        var S = window.SalesOneShot;
+        S.ensureBox();
+        S.mark('data', 'done');
+
+        // AI 진단이 끝나야 보고서가 완성된다 — 화면이 심는 마커로 판정한다.
+        // ⚠️ 시계로 기다리지 않는다(그 방식이 20초 낭비의 원인이었다).
+        var startedAt = Date.now();
+        var AI_CAP_MS = 5 * 60 * 1000;      // AI 가 영영 안 끝나도 보고서는 내보낸다
+        S.mark('ai', 'run', 'AI 가 진단을 작성하고 있습니다… 창을 닫지 마세요.');
+
+        var timer = setInterval(function() {
+            var st = 'none';
+            try { st = window.ReportCapture ? window.ReportCapture.aiState() : 'none'; } catch (e) {}
+            var timedOut = (Date.now() - startedAt) > AI_CAP_MS;
+            if (st === 'loading' && !timedOut) return;
+            if (st === 'none' && (Date.now() - startedAt) < 8000) return;  // 섹션이 아직 안 붙었을 수 있다
+
+            clearInterval(timer);
+            _oneShotDone.current = true;
+            if (timedOut) S.mark('ai', 'fail', 'AI 진단이 오래 걸려 그 부분 없이 보고서를 만듭니다.');
+            else S.mark('ai', 'done', '');
+            _runOneShot(S);
+        }, 1000);
+
+        return function() { clearInterval(timer); };
+    }, [searchedKeyword, analysisData]);
+
+    var _runOneShot = function(S) {
+        var ctx = S.context();
+        var kw = searchedKeyword || '';
+        var who = ctx.name || companyName || '업체';
+
+        // ① 보고서 — 화면 그대로 캡처해 내려받는다(기존 경로 그대로 재사용)
+        S.mark('report', 'run');
+        var reportOk = false;
+        try {
+            var html = captureAutoReportHtml(kw);
+            if (html) {
+                S.download(html, who + '_' + kw + '_로직분석보고서.html');
+                reportOk = true;
+                S.mark('report', 'done');
+            } else {
+                S.mark('report', 'fail', '보고서를 만들지 못했습니다.');
+            }
+        } catch (e) {
+            S.mark('report', 'fail', '보고서 생성 실패: ' + (e && e.message ? e.message : ''));
+        }
+
+        // ② 제안서 — 받아 둔 자료를 보관소에 넣고 그 키로 연다.
+        //    ⚠️ 보관이 실패해도 **제안서는 연다** — 그때는 제안서가 평소대로 스스로 받아 온다
+        //       (느려질 뿐 결과는 같다. 여기서 멈추면 영업사원이 자료 하나를 통째로 잃는다).
+        S.mark('proposal', 'run');
+        var bundle = {
+            keyword: kw,
+            name: who,
+            storeUrl: ctx.storeUrl || searchedProductUrl || '',
+            volume: volumeData || null,
+            related: relatedData || null,
+            shopProducts: shopProducts || null,
+            datalab: datalabData || null,
+            advertiser: advertiserReport || null,
+            analysis: analysisData || null
+        };
+
+        var openProposal = function(key) {
+            var p = new URLSearchParams();
+            if (who) p.set('name', who);
+            if (bundle.storeUrl) p.set('storeUrl', bundle.storeUrl);
+            if (kw) p.set('keywords', kw);
+            if (key) p.set('handoff', key);
+            /* ⚠️ 제안서는 **전산 화면 주소**에 있다(정적 폴더 /proposal/). API 주소(erpBase)가 아니다 —
+             *    처음에 API 주소로 열도록 적었다가 고쳤다. 그래서 전산이 자기 주소를 prop 으로 넘겨준다.
+             *    못 받았으면 열지 않고 사람에게 알린다(엉뚱한 주소로 빈 탭을 띄우지 않는다). */
+            var base = (ctx.propBase || '').replace(/\/+$/, '');
+            if (!base) {
+                S.mark('proposal', 'fail', '제안서 주소를 못 받아 열지 못했습니다. 제안서는 전산에서 따로 만들어 주세요.');
+                S.finish(reportOk, reportOk ? '보고서는 다운로드 폴더에 있습니다.' : '');
+                if (reportOk) S.reportDownloaded(ctx);
+                return;
+            }
+            var url = base + '/proposal/index.html?' + p.toString();
+            setTimeout(function() {
+                try { window.open(url, '_blank', 'noopener,noreferrer'); } catch (e) {}
+                S.mark('proposal', 'done');
+                var note = reportOk
+                    ? '보고서는 다운로드 폴더에 있습니다. 제안서는 새 탭에서 이어집니다.'
+                    : '제안서만 새 탭에서 이어집니다.';
+                S.finish(reportOk, note);
+                if (reportOk) S.reportDownloaded(ctx);
+            }, 600);
+        };
+
+        api.post('/sales-bundle', { payload: bundle })
+            .then(function(res) { openProposal(res && res.key ? res.key : ''); })
+            .catch(function() { openProposal(''); });
+    };
+
     /* 저장된 분석 데이터를 실제 분석 화면으로 재렌더 → 화면과 동일하게 HTML 다운로드 (옵션 A) */
     var downloadSavedReport = function(saved) {
         if (!saved) { toast.error('보고서 데이터가 없습니다.'); return; }

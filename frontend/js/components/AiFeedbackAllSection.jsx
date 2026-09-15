@@ -7,6 +7,10 @@ window.AiFeedbackAllSection = function AiFeedbackAllSection(props) {
     var advertiserReport = props.advertiserReport;
     var htmlReviewData = props.htmlReviewData;
     var datalabData = props.datalabData;
+    /* ⚠️ 선택 props — 안 넘겨주면 undefined 라 아래에서 **종전과 같은 20초 고정 대기**로 떨어진다.
+     *    (무회귀: 이 파일을 쓰는 다른 화면이 있어도 동작이 바뀌지 않는다) */
+    var datalabLoading = props.datalabLoading;
+    var advertiserLoading = props.advertiserLoading;
 
     var _loading = React.useState(false);
     var loading = _loading[0];
@@ -105,13 +109,31 @@ window.AiFeedbackAllSection = function AiFeedbackAllSection(props) {
         });
     };
 
-    /* 키워드가 변경되면 자동 실행 (20초 딜레이 — 모든 분석 완료 대기) */
+    /* 키워드가 변경되면 자동 실행.
+     *
+     * ⚠️ **종전엔 무조건 20초를 기다렸다** — 「모든 분석 완료 대기」라는 이름이었지만
+     *    실제로 끝났는지는 안 보고 시계만 봤다. 자료가 3초 만에 다 와도 17초를 흘려보냈고,
+     *    영업 자료 한 건마다 그 시간이 그대로 쌓였다(2026-09-15 대표 지시로 개선).
+     *
+     * ⇒ 이제 **늦게 오는 두 가지(데이터랩·진입 전략)가 끝났는지**를 보고 그 즉시 시작한다.
+     *    끝났다 = 로딩 플래그가 꺼졌다(성공이든 실패든 「더 기다릴 것이 없다」는 뜻).
+     *
+     * ⚠️ 안전장치 둘을 같이 둔다:
+     *    ① 플래그를 안 넘겨주는 화면에서는 **종전 그대로 20초**(무회귀)
+     *    ② 플래그가 어떤 이유로든 안 꺼지면 20초에 **강제로** 시작(영영 안 도는 것 방지)
+     *    ③ 자료가 다 와도 **0.6초는 둔다** — 마지막 setState 가 화면에 반영될 틈
+     *      (AI 는 화면 값이 아니라 props 로 읽지만, 같은 틱에 몰린 갱신을 한 번에 태운다) */
+    var FALLBACK_MS = 20000;
+    var SETTLE_MS = 600;
+    var _startedAt = React.useRef(0);
+
     React.useEffect(function() {
         if (!keyword || !analysisData) return;
 
         if (_lastKeyword.current && _lastKeyword.current !== keyword) {
             if (_timerRef.current) { clearTimeout(_timerRef.current); _timerRef.current = null; }
             _lastKeyword.current = '';
+            _startedAt.current = 0;
             setFeedbacks(null);
             setFullText('');
             setError('');
@@ -119,12 +141,30 @@ window.AiFeedbackAllSection = function AiFeedbackAllSection(props) {
 
         if (_lastKeyword.current === keyword) return;
         _lastKeyword.current = keyword;
+        _startedAt.current = Date.now();
 
         _timerRef.current = setTimeout(function() {
             _timerRef.current = null;
             doFetch();
-        }, 20000);
+        }, FALLBACK_MS);
     }, [keyword, analysisData]);
+
+    /* 늦게 오는 것들이 끝나면 위 예약을 앞당긴다 — 못 앞당기면 위 20초가 그대로 돈다. */
+    React.useEffect(function() {
+        if (!keyword || !analysisData) return;
+        if (_lastKeyword.current !== keyword) return;
+        if (!_timerRef.current) return;                       // 이미 시작했거나 예약이 없다
+        if (datalabLoading === undefined && advertiserLoading === undefined) return;  // 옛 호출부 → 20초 유지
+        if (datalabLoading || advertiserLoading) return;      // 아직 오는 중
+
+        var waited = Date.now() - (_startedAt.current || Date.now());
+        var wait = Math.max(0, SETTLE_MS - waited);
+        clearTimeout(_timerRef.current);
+        _timerRef.current = setTimeout(function() {
+            _timerRef.current = null;
+            doFetch();
+        }, wait);
+    }, [keyword, analysisData, datalabLoading, advertiserLoading, datalabData, advertiserReport]);
 
     React.useEffect(function() {
         return function() {
