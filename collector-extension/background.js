@@ -592,15 +592,61 @@ function pagerClick(target) {
 }
 
 /** 작업 탭에서 pagerClick 을 돌린다. 클릭했으면 true. */
+let _lastPushResult = '';    // routerPush 결과('pushed'·'no-router'·…) — 진단 보고에 싣는다
+let _staleReported = false;  // 키워드당 1회만 보고
+let _lastClickBranch = '';   // pagerClick 이 어느 가지('num'·'next'·'loose')로 눌렀나 — 진단 보고에 싣는다
 async function clickToPage(tabId, target) {
   try {
     const [res] = await chrome.scripting.executeScript({
       target: { tabId }, world: 'MAIN', func: pagerClick, args: [target],
     });
+    _lastClickBranch = (res && res.result) || '';
     return !!(res && res.result);
   } catch (e) {
+    _lastClickBranch = '';
     return false;   // 주입 실패도 폴백 대상
   }
+}
+
+/** 화면 안에서 실행 — 사람 클릭이 내부적으로 하는 **라우터 이동**을 직접 건다(2026-09-15 v1.11.3).
+ *  클릭이 눌리긴 하는데 페이지가 안 바뀌는 경우의 두 번째 시도. 주소창 이동이 아니다(SPA 이동).
+ *  ⚠️ MAIN 세계에서 돈다 — 바깥 변수 참조 금지. */
+function routerPush(target) {
+  try {
+    var rt = window.next && window.next.router;
+    if (!rt || typeof rt.push !== 'function') return 'no-router';
+    var q = {};
+    var src = rt.query || {};
+    for (var k in src) q[k] = src[k];
+    q.pagingIndex = String(target);
+    rt.push({ pathname: rt.pathname || location.pathname, query: q });
+    return 'pushed';
+  } catch (e) { return 'push-error'; }
+}
+
+/** 화면 안에서 실행 — 「왜 안 넘어갔나」를 서버에 남기기 위한 상태 조각(값 없음 · 구조만). */
+function navProbe() {
+  var out = {};
+  try { out.href = String(location.href).slice(0, 160); } catch (e) {}
+  try {
+    var rt = window.next && window.next.router;
+    out.router = !!rt;
+    if (rt) { out.route = rt.route; out.q = (rt.query || {}).pagingIndex || ''; out.asPath = String(rt.asPath || '').slice(0, 80); }
+  } catch (e) { out.router = 'err'; }
+  try {
+    var scopes = document.querySelectorAll('[class*="pagination"],[class*="paging"],[role="navigation"]');
+    out.scopes = scopes.length;
+    var nums = [];
+    for (var s = 0; s < scopes.length && nums.length < 12; s++) {
+      var cands = scopes[s].querySelectorAll('a,button');
+      for (var i = 0; i < cands.length && nums.length < 12; i++) {
+        var t = (cands[i].textContent || '').trim();
+        if (t) nums.push(t.slice(0, 6) + (cands[i].tagName === 'A' ? '' : '(b)'));
+      }
+    }
+    out.pager = nums;
+  } catch (e) { out.scopes = 'err'; }
+  return out;
 }
 
 /** 탭이 목표 주소로 이동을 끝낼 때까지 대기 */
@@ -683,7 +729,12 @@ async function fetchPage(keyword, pagingIndex, prevFirstId) {
   //    v1.11.0·v1.11.1 실측: 클릭 9회가 전부 「됐다」로 셌는데 읽은 건 9번 다 1페이지였다
   //    (중복 제외 = 담긴 수 × 9). 첫 상품이 이전 페이지와 같으면 '아직'이다.
   //    끝까지 안 바뀌면 그 장만 주소 이동으로 되돌리고(stale) 서버에 알린다 — 수집이 멈추는 것보다 낫다.
-  let staleTries = 0, usedStaleFallback = false;
+  // ⚠️ v1.11.3 — 안 넘어가도 **주소 이동으로 되돌리지 않는다.** v1.11.2 가 그 폴백을 탔다가
+  //    `?query=…&pagingIndex=2` 주소를 연 1초 뒤 캡차(19:43:50). 1페이지 주소는 같은 날 네 번 통과했다.
+  //    ⇒ 「주소창에 pagingIndex 를 붙여 여는 것」이 차단 표식이다(9/12 · 8/28 과 같은 결론).
+  //    대신 라우터 이동(사람 클릭이 내부적으로 하는 것)을 한 번 더 시도하고, 그래도 안 바뀌면
+  //    그 키워드는 여기까지만 담고 끝낸다. 왜 안 넘어갔는지는 navProbe 로 서버에 남긴다.
+  let staleTries = 0, triedRouterPush = false;
   for (let attempt = 0; attempt < CFG.readTries; attempt++) {
     let cur;
     try { cur = await chrome.tabs.get(tabId); } catch (e) { throw new Error('작업 탭이 사라졌습니다'); }
@@ -703,18 +754,15 @@ async function fetchPage(keyword, pagingIndex, prevFirstId) {
       if (pagingIndex > 1 && prevFirstId && fid && fid === prevFirstId) {
         // 내용이 이전 페이지 그대로 — 아직 안 넘어간 것이다.
         staleTries += 1; lastErr = 'STALE_PAGE';
-        if (staleTries >= 6 && !usedStaleFallback) {
-          // 약 5초를 기다려도 그대로면 이 장만 주소 이동으로 되돌린다(1회).
-          usedStaleFallback = true; _navMode.stale += 1;
-          if (!_navMode.reported) {
-            _navMode.reported = true;
-            reportBlocked({ keyword, pagingIndex, err: 'STALE_PAGE(클릭 뒤 내용 불변)',
-                            note: '클릭은 됐으나 데이터가 이전 페이지 — 주소 이동으로 되돌림' });
-          }
-          const url = 'https://search.shopping.naver.com/search/all'
-            + `?query=${encodeURIComponent(keyword)}&pagingIndex=${pagingIndex}`;
-          await chrome.tabs.update(tabId, { url });
-          await waitNavigated(tabId, `pagingIndex=${pagingIndex}`);
+        if (staleTries >= 5 && !triedRouterPush) {
+          // 약 4초를 기다려도 그대로면 라우터 이동을 한 번 건다(주소창 이동 아님).
+          triedRouterPush = true;
+          try {
+            const [r2] = await chrome.scripting.executeScript({
+              target: { tabId }, world: 'MAIN', func: routerPush, args: [pagingIndex],
+            });
+            _lastPushResult = (r2 && r2.result) || '';
+          } catch (e) { _lastPushResult = 'inject-error'; }
         }
         await sleep(CFG.readGapMs);
         continue;
@@ -733,6 +781,24 @@ async function fetchPage(keyword, pagingIndex, prevFirstId) {
     }
     lastErr = (out && out.err) || '주입 실패';
     await sleep(CFG.readGapMs);
+  }
+
+  if (lastErr === 'STALE_PAGE') {
+    // 클릭도 라우터 이동도 내용을 못 바꿨다 — 이 키워드는 여기까지만 담고 끝낸다(주소 이동 금지).
+    _navMode.stale += 1;
+    let probe = {};
+    try {
+      const [pr] = await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func: navProbe });
+      probe = (pr && pr.result) || {};
+    } catch (e) { probe = { probe: 'inject-error' }; }
+    probe.click = _lastClickBranch; probe.push = _lastPushResult; probe.prev = String(prevFirstId).slice(0, 24);
+    if (!_staleReported) {
+      _staleReported = true;
+      reportBlocked({ keyword, pagingIndex, err: 'STALE_PAGE(클릭·라우터 이동 뒤 내용 불변)',
+                      href: probe.href || '', body: JSON.stringify(probe),
+                      note: '주소 이동 안 함 — 이 키워드는 여기까지만 담음' });
+    }
+    return { total: 0, list: [] };
   }
 
   // 여기까지 왔으면 '차단'이 아니라 '판독 실패'다 — 6시간 정지시키지 않고 다음 회차에 재시도한다.
@@ -757,6 +823,7 @@ async function fetchPage(keyword, pagingIndex, prevFirstId) {
  *     고정 계산은 순위를 통째로 어긋나게 만든다. 누적이면 어떤 경우에도 맞다. */
 async function collectKeyword(keyword) {
   _navMode = { url: 0, click: 0, fallback: 0, stale: 0, reported: _navMode.reported };   // 키워드마다 새로 센다
+  _staleReported = false; _lastPushResult = ''; _lastClickBranch = '';
   // 순번 부여의 실체는 rank_rules.takeOrganic 하나다 — 광고 제외가 seenIds 중복 처리보다
   // 먼저인 순서까지가 계약이고, node 회귀 테스트가 그 계약을 검사한다(신고 #253 후속).
   const st = {
