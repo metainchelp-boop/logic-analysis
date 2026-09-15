@@ -117,7 +117,9 @@ const fp = grab('fetchPage', 'async');
 ok('⑦ 1페이지는 주소로 연다', /pagingIndex <= 1/.test(fp));
 ok('⑦ 1페이지 주소에 pagingSize 를 안 붙인다', !/pagingSize=\$\{CFG\.pageSize\}/.test(fp));
 ok('⑦ 2페이지부터 클릭을 쓴다', /clickToPage\(tabId, pagingIndex\)/.test(fp));
-ok('⑦ 클릭 실패 시 주소 이동으로 폴백한다', /_navMode\.fallback \+= 1/.test(fp));
+const FPX = grab('fetchPage', 'async');
+ok('⑦ 클릭 실패(버튼 못 찾음) 시에도 주소 이동은 하지 않는다 — 라우터 이동 시도 후 종료',
+   /NO_PAGER/.test(FPX) && /주소 이동 안 함 — 라우터 이동 시도/.test(FPX) && !/tabs\.update\(tabId, \{ url \}\);\s*\n\s*await waitNavigated\(tabId, `pagingIndex=\$\{pagingIndex\}`\)/.test(FPX.slice(FPX.indexOf('NO_PAGER'))));
 ok('⑦ 폴백을 서버에 한 번 알린다', /NO_PAGER/.test(fp) && /_navMode\.reported = true/.test(fp));
 
 // ⑧ 400위 요구 — 설정값이 실제로 그만큼인가

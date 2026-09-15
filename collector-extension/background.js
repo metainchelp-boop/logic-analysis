@@ -706,16 +706,21 @@ async function fetchPage(keyword, pagingIndex, prevFirstId) {
       _navMode.click += 1;
       await waitNavigated(tabId, `pagingIndex=${pagingIndex}`);
     } else {
-      // 폴백 — 버튼을 못 찾았다. 옛 방식으로 간다(수집이 멈추는 것보다 낫다).
+      // 버튼을 못 찾았다 — v1.11.3: **주소 이동으로 가지 않는다**(pagingIndex 주소 = 차단 표식, 9/15 실측).
+      // 라우터 이동(SPA)을 시도하고, 그것도 없으면 이 키워드는 여기까지만 담는다.
       _navMode.fallback += 1;
+      try {
+        const [r2] = await chrome.scripting.executeScript({
+          target: { tabId }, world: 'MAIN', func: routerPush, args: [pagingIndex],
+        });
+        _lastPushResult = (r2 && r2.result) || '';
+      } catch (e) { _lastPushResult = 'inject-error'; }
       if (!_navMode.reported) {
         _navMode.reported = true;
         reportBlocked({ keyword, pagingIndex, err: 'NO_PAGER(페이지 버튼 못 찾음)',
-                        note: '클릭 이동 불가 — 주소 이동으로 폴백' });
+                        note: '주소 이동 안 함 — 라우터 이동 시도: ' + _lastPushResult });
       }
-      const url = 'https://search.shopping.naver.com/search/all'
-        + `?query=${encodeURIComponent(keyword)}&pagingIndex=${pagingIndex}`;
-      await chrome.tabs.update(tabId, { url });
+      if (_lastPushResult !== 'pushed') return { total: 0, list: [] };   // 이 키워드는 여기까지
       await waitNavigated(tabId, `pagingIndex=${pagingIndex}`);
     }
   }
