@@ -2887,18 +2887,31 @@ jobs:
             echo "-- ⑥ ★ 배포 뒤에도 400 이 나는가 (신고 #266 이 정말 풀렸는지) --"
             echo "   배포 완료 15:35 KST 기준으로 앞뒤를 가른다. 뒤쪽 400 이 0 이어야 고쳐진 것이다."
             if [ -n "$LOG" ]; then
-              $S sh -c "cat $LOG" 2>/dev/null | grep 'POST /api/products/track' | grep '14/Sep/2026' \
-                | awk '{ t=$4; gsub(/^\[/,"",t); split(t,p,":"); hm=p[2]":"p[3];
-                         code="?"; for(i=1;i<=NF;i++) if ($i ~ /^"POST$/) code=$(i+3);
-                         phase = (p[2]*60+p[3] >= 15*60+35) ? "배포후" : "배포전";
-                         print phase, code, hm }' \
-                | sort | awk '{ k=$1" 코드 "$2; cnt[k]++; last[k]=$3 }
+              # ⚠️ 2026-09-15 고침 — 여기 날짜가 '14/Sep/2026' 로 **하드코딩**돼 있었다.
+              #    그래서 9/15 에 네 번째로 재도 **9/14 숫자가 그대로** 나왔고,
+              #    「또 0건이네」로 읽을 뻔했다. 실제로는 **9/15 를 볼 수조차 없는 질의**였다.
+              #    ⭐ 교훈 — 같은 값이 반복되면 「안 변했다」가 아니라 **「내 질의가 그것밖에 못 본다」**
+              #       를 먼저 의심할 것. 재보기 전에 질의가 오늘을 포함하는지 확인한다.
+              #    이제 날짜를 안 거르고, 로그 시각을 YYYYMMDDHHMM 숫자로 만들어 배포 시각과 견준다.
+              $S sh -c "cat $LOG" 2>/dev/null | grep 'POST /api/products/track' \
+                | awk -v CUT=202609141535 '
+                    BEGIN { split("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec", M, " ");
+                            for (i in M) mn[M[i]] = sprintf("%02d", i) }
+                    { t=$4; gsub(/^\[/,"",t); split(t,p,":");          # p[1]=DD/Mon/YYYY
+                      split(p[1], d, "/");                              # d[1]=DD d[2]=Mon d[3]=YYYY
+                      if (!(d[2] in mn)) next;
+                      stamp = d[3] mn[d[2]] d[1] p[2] p[3];             # YYYYMMDDHHMM
+                      when = d[3]"-"mn[d[2]]"-"d[1]" "p[2]":"p[3];
+                      code="?"; for(i=1;i<=NF;i++) if ($i ~ /^"POST$/) code=$(i+3);
+                      phase = (stamp+0 >= CUT+0) ? "배포후" : "배포전";
+                      print phase, code, when }' \
+                | sort | awk '{ k=$1" 코드 "$2; cnt[k]++; last[k]=$3" "$4 }
                               END { for (k in cnt) printf "     %-16s %3d건  (마지막 %s)\n", k, cnt[k], last[k] }' \
                 | sort
               echo "   ⇒ 「배포후 코드 400」 줄이 **없으면** 해소, **줄 자체가 없으면 아직 안 재진 것**이다."
               echo "     ⚠️ 둘을 섞지 말 것 — 「0건」과 「요청이 없었다」는 다른 축이다."
               echo "   ⚠️ 브라우저 캐시는 원인에서 **제외됐다**(2026-09-14 실측):"
-              echo "      index.html 이 `Cache-Control: no-store` 로 나간다 — 매 접속마다 새로 받고,"
+              echo '      index.html 이 `Cache-Control: no-store` 로 나간다 — 매 접속마다 새로 받고,'
               echo "      번들은 내용 해시 파일명이라 옛것을 붙들 수 없다."
               echo "      ⇒ 배포 후 400 이 나오면 **캐시가 아니라 코드 문제**다. 바로 파고들 것."
               echo "      (단 15:32 이전부터 새로고침 없이 열어 둔 탭 하나는 예외 — 새로고침하면 끝난다.)"
@@ -3023,11 +3036,18 @@ jobs:
             PYEOF
 
             echo ""
-            echo "  -- 오늘 두 피커가 실제로 몇 번 불렸나 (nginx · IP 미출력) --"
+            # ⚠️ 2026-09-15 고침 — 「오늘」이라 적어 놓고 **날짜를 안 걸렀다**(로그 전체를 셌다).
+            #    그래서 「오늘 17건」이 실은 누적 17건이었다. 날짜별로 쪼개면 오해가 없다.
+            echo "  -- 두 피커가 날짜별로 몇 번 불렸나 (nginx · IP 미출력 · 로그에 남은 전 기간) --"
             if [ -n "$LOG" ]; then
               for P in "cd/registered-clients" "cd/clients-lookup" "products/track"; do
-                N=$($S sh -c "cat $LOG" 2>/dev/null | grep -c "$P" || true)
-                echo "     $P : ${N}건"
+                echo "     [$P]"
+                $S sh -c "cat $LOG" 2>/dev/null | grep "$P" \
+                  | awk '{ t=$4; gsub(/^\[/,"",t); split(t,p,":"); split(p[1], d, "/");
+                           print d[3]"-"d[2]"-"d[1] }' \
+                  | sort | uniq -c \
+                  | awk '{ printf "       %s : %s건\n", $2, $1 }' \
+                  || echo "       (0건)"
               done
             fi
             echo ""
