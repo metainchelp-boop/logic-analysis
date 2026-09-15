@@ -365,10 +365,10 @@ jobs:
             print("\n[🔬 오늘 STALE 보고 본문 — 최신 3건 전문]")
             try:
                 for r in c.execute("""SELECT at AS created_at, keyword, paging_index, err, body FROM collector_blocks
-                                       WHERE date(created_at) = date('now','localtime')
+                                       WHERE date(at) = date('now','localtime')
                                          AND err LIKE 'STALE%'
-                                       ORDER BY created_at DESC LIMIT 3"""):
-                    print(f"  {r['created_at']} · {r['keyword']} · {r['err']}")
+                                       ORDER BY at DESC LIMIT 3"""):
+                    print(f"  {r['created_at']} · {r['keyword']} · p{r["paging_index"]} · {r["err"]}")
                     print(f"     {r['body']}")
             except Exception as e:
                 print(f"  (STALE 조회 실패: {e})")
