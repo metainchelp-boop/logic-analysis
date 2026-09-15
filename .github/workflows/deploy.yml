@@ -184,6 +184,11 @@ jobs:
       - name: Deploy source-of-truth regression
         run: python backend/tests/test_deploy_source.py
 
+      # App.jsx 훅 순서 — 로그인 전 early return 뒤에 훅을 두면 로그인 직후 React #310 으로
+      # 전체 화면이 죽는다(2026-09-15 실사고 · 영업팀 신고 「화면 로드 오류」).
+      - name: App.jsx hooks-before-early-return regression
+        run: python backend/tests/test_app_hooks_order.py
+
       - name: Build frontend bundle
         run: |
           npm install --no-save @babel/core @babel/preset-react
