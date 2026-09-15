@@ -266,6 +266,58 @@ window.App = function App() {
         return function() { mounted = false; clearTimeout(timer); nestedTimers.forEach(function(t) { clearTimeout(t); }); };
     }, [analysisData, currentClientId, searchLoading, autoSaveStatus]);
 
+    /* ==================== 영업 자료 동시 생성 (2026-09-15 대표 확정) ====================
+       전산 가망 수정 페이지의 [영업 자료 동시 생성] 이 이 화면을 `?both=1` 로 연다.
+       분석이 끝나고 AI 진단까지 마치면 **보고서를 만들어 내려받고**, 그때 받아 둔 자료를
+       보관소에 넣어 **제안서에 넘긴다**(제안서는 같은 것을 다시 묻지 않는다).
+
+       ⚠️ `both=1` 이 없으면 이 블록은 **한 줄도 돌지 않는다** — 평소 분석 화면 무변경.
+       ⚠️ 두 파일을 같은 순간에 내려받으면 브라우저가 「여러 파일 허용?」을 묻는다 →
+          제안서는 **간격을 두고** 새 탭으로 연다.
+       ⚠️ 전산에 「내려받았다」를 돌려주는 것이 이 기능의 핵심 절반이다 — 전산 기록은
+          지금까지 **버튼 누른 시각**만 남겨 탭만 열고 닫아도 「생성했다」로 보였다.
+       ⚠️⚠️ 이 훅 두 개는 반드시 아래 `if (authChecking) return` · `if (!currentUser) return` **앞**에
+          있어야 한다 — 2026-09-15 실사고. 처음엔 그 뒤에 두었는데, 로그인 화면(훅 N개)에서
+          로그인 뒤 화면(훅 N+2개)으로 넘어가는 순간 React #310(렌더마다 훅 수가 다름)이 나서
+          **로직분석 전체가 로그인 직후 「화면 로드 오류」로 죽었다**(배포 14:19 → 영업팀 신고 14:43).
+          `_runOneShot` 은 early return 뒤에서 정의되므로 ref 로 최신본을 받는다(extSearchRef 와 같은 방식).
+          회귀 시험 — backend/tests/test_app_hooks_order.py 가 early return 뒤의 훅을 잡는다. */
+    var _oneShotDone = React.useRef(false);
+    var _runOneShotRef = React.useRef(null);   // early return 뒤에 정의되는 _runOneShot 의 최신본
+
+    React.useEffect(function() {
+        if (!currentUser) return;                                      // 로그인 전에는 아무것도 하지 않는다
+        if (!window.SalesOneShot || !window.SalesOneShot.isActive()) return;
+        if (_oneShotDone.current) return;
+        if (!searchedKeyword || !analysisData) return;
+
+        var S = window.SalesOneShot;
+        S.ensureBox();
+        S.mark('data', 'done');
+
+        // AI 진단이 끝나야 보고서가 완성된다 — 화면이 심는 마커로 판정한다.
+        // ⚠️ 시계로 기다리지 않는다(그 방식이 20초 낭비의 원인이었다).
+        var startedAt = Date.now();
+        var AI_CAP_MS = 5 * 60 * 1000;      // AI 가 영영 안 끝나도 보고서는 내보낸다
+        S.mark('ai', 'run', 'AI 가 진단을 작성하고 있습니다… 창을 닫지 마세요.');
+
+        var timer = setInterval(function() {
+            var st = 'none';
+            try { st = window.ReportCapture ? window.ReportCapture.aiState() : 'none'; } catch (e) {}
+            var timedOut = (Date.now() - startedAt) > AI_CAP_MS;
+            if (st === 'loading' && !timedOut) return;
+            if (st === 'none' && (Date.now() - startedAt) < 8000) return;  // 섹션이 아직 안 붙었을 수 있다
+
+            clearInterval(timer);
+            _oneShotDone.current = true;
+            if (timedOut) S.mark('ai', 'fail', 'AI 진단이 오래 걸려 그 부분 없이 보고서를 만듭니다.');
+            else S.mark('ai', 'done', '');
+            if (_runOneShotRef.current) _runOneShotRef.current(S);
+        }, 1000);
+
+        return function() { clearInterval(timer); };
+    }, [currentUser, searchedKeyword, analysisData]);
+
     if (authChecking) return React.createElement('div', { style: { display:'flex', flexDirection:'column', justifyContent:'center', alignItems:'center', height:'100vh', background:'linear-gradient(135deg,#3b82f6,#93c5fd)', gap:16 } },
         React.createElement('img', { src: '/img/logo_dark.png', alt: 'META INC', style: { height:40, width:'auto', marginBottom:8 } }),
         React.createElement('span', { className:'spinner', style:{ width:28, height:28, borderWidth:3, borderColor:'rgba(255,255,255,0.3)', borderTopColor:'#fff' } }),
@@ -410,49 +462,8 @@ window.App = function App() {
         }
     };
 
-    /* ==================== 영업 자료 동시 생성 (2026-09-15 대표 확정) ====================
-       전산 가망 수정 페이지의 [영업 자료 동시 생성] 이 이 화면을 `?both=1` 로 연다.
-       분석이 끝나고 AI 진단까지 마치면 **보고서를 만들어 내려받고**, 그때 받아 둔 자료를
-       보관소에 넣어 **제안서에 넘긴다**(제안서는 같은 것을 다시 묻지 않는다).
-
-       ⚠️ `both=1` 이 없으면 이 블록은 **한 줄도 돌지 않는다** — 평소 분석 화면 무변경.
-       ⚠️ 두 파일을 같은 순간에 내려받으면 브라우저가 「여러 파일 허용?」을 묻는다 →
-          제안서는 **간격을 두고** 새 탭으로 연다.
-       ⚠️ 전산에 「내려받았다」를 돌려주는 것이 이 기능의 핵심 절반이다 — 전산 기록은
-          지금까지 **버튼 누른 시각**만 남겨 탭만 열고 닫아도 「생성했다」로 보였다. */
-    var _oneShotDone = React.useRef(false);
-
-    React.useEffect(function() {
-        if (!window.SalesOneShot || !window.SalesOneShot.isActive()) return;
-        if (_oneShotDone.current) return;
-        if (!searchedKeyword || !analysisData) return;
-
-        var S = window.SalesOneShot;
-        S.ensureBox();
-        S.mark('data', 'done');
-
-        // AI 진단이 끝나야 보고서가 완성된다 — 화면이 심는 마커로 판정한다.
-        // ⚠️ 시계로 기다리지 않는다(그 방식이 20초 낭비의 원인이었다).
-        var startedAt = Date.now();
-        var AI_CAP_MS = 5 * 60 * 1000;      // AI 가 영영 안 끝나도 보고서는 내보낸다
-        S.mark('ai', 'run', 'AI 가 진단을 작성하고 있습니다… 창을 닫지 마세요.');
-
-        var timer = setInterval(function() {
-            var st = 'none';
-            try { st = window.ReportCapture ? window.ReportCapture.aiState() : 'none'; } catch (e) {}
-            var timedOut = (Date.now() - startedAt) > AI_CAP_MS;
-            if (st === 'loading' && !timedOut) return;
-            if (st === 'none' && (Date.now() - startedAt) < 8000) return;  // 섹션이 아직 안 붙었을 수 있다
-
-            clearInterval(timer);
-            _oneShotDone.current = true;
-            if (timedOut) S.mark('ai', 'fail', 'AI 진단이 오래 걸려 그 부분 없이 보고서를 만듭니다.');
-            else S.mark('ai', 'done', '');
-            _runOneShot(S);
-        }, 1000);
-
-        return function() { clearInterval(timer); };
-    }, [searchedKeyword, analysisData]);
+    /* 영업 자료 동시 생성 — 훅(useRef·useEffect)은 위쪽, `if (authChecking) return` **앞**에 있다.
+       여기 두면 로그인 뒤 훅 수가 달라져 React #310 으로 전체 화면이 죽는다(2026-09-15 실사고). */
 
     var _runOneShot = function(S) {
         var ctx = S.context();
@@ -523,6 +534,7 @@ window.App = function App() {
             .then(function(res) { openProposal(res && res.key ? res.key : ''); })
             .catch(function() { openProposal(''); });
     };
+    _runOneShotRef.current = _runOneShot;   // 위쪽 효과가 이 최신본을 부른다(훅은 early return 앞, 정의는 뒤)
 
     /* 저장된 분석 데이터를 실제 분석 화면으로 재렌더 → 화면과 동일하게 HTML 다운로드 (옵션 A) */
     var downloadSavedReport = function(saved) {
