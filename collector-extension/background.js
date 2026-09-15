@@ -459,6 +459,23 @@ function pageExtract() {
   }
   var nd = null;
   try { nd = window.__NEXT_DATA__ || null; } catch (e) { nd = null; }
+  // ⭐ 2026-09-15 실사고 — 클릭으로 넘긴 뒤에도 __NEXT_DATA__ 는 **1페이지 것 그대로**다
+  //    (서버가 렌더한 초기값이라 SPA 이동으로는 안 바뀐다). v1.11.0·v1.11.1 세 회차 모두
+  //    「중복 제외 = 담긴 수 × 9」 — 9번 클릭해 9번 같은 페이지를 읽었다.
+  //    ⇒ Next 라우터가 들고 있는 **현재 페이지 props** 를 먼저 읽고, 없을 때만 __NEXT_DATA__ 로 간다.
+  var rp = null, pageIndex = 0;
+  try {
+    var rt = window.next && window.next.router;
+    if (rt) {
+      var comp = rt.components && rt.components[rt.route];
+      rp = (comp && comp.props) || null;
+      pageIndex = parseInt((rt.query || {}).pagingIndex, 10) || 0;
+    }
+  } catch (e) { rp = null; }
+  if (!pageIndex) {
+    try { var pm = /[?&]pagingIndex=(\d+)/.exec(location.search); pageIndex = pm ? parseInt(pm[1], 10) : 1; }
+    catch (e) { pageIndex = 0; }
+  }
   var href = '';
   try { href = String(location.href); } catch (e) { href = ''; }
   var title = '';
@@ -470,9 +487,12 @@ function pageExtract() {
   //    (2026-08-11 실사고: 차단 문구 검사를 먼저 해서, 상품 데이터가 바로 옆에 있는
   //     정상 페이지도 낱말 하나만 스치면 차단으로 단정했다. 상품을 실제로 읽어냈다면
   //     네이버가 우리에게 필요한 걸 내준 것이므로 그건 차단일 수 없다.)
-  var best = null, total = 0;
+  var best = null, total = 0, src = '';
+  var roots = rp ? [['router', rp], ['nextdata', nd]] : [['nextdata', nd]];
+  for (var ri = 0; ri < roots.length && !(best && best.length); ri++) {
+  src = roots[ri][0];
   var seen = new Set();
-  var stack = [nd], guard = 0;
+  var stack = [roots[ri][1]], guard = 0;
   while (stack.length && guard++ < 300000) {
     var cur = stack.pop();
     if (!cur || typeof cur !== 'object') continue;
@@ -499,8 +519,9 @@ function pageExtract() {
       }
     }
   }
+  }
   // 상품을 읽어냈으면 무조건 성공 — 차단 검사조차 하지 않는다
-  if (best && best.length) return { total: total, list: best.slice(0, 200), href: href };
+  if (best && best.length) return { total: total, list: best.slice(0, 200), href: href, pageIndex: pageIndex, src: src };
 
   // 여기부터는 '못 읽은' 경우. 이제서야 차단인지 본다.
   var blocked = /일시적으로 제한|자동입력 방지|비정상적인 접근|접근이 차단/.test(body);
@@ -508,8 +529,16 @@ function pageExtract() {
   return { err: nd ? 'NO_LIST' : 'NO_NEXT_DATA', href: href, title: title, body: body.slice(0, 300) };
 }
 
-/** 이번 회차에 어떤 방식으로 페이지를 넘겼나 — 서버 meta 로 올려 현장에서 판명되게 한다. */
-let _navMode = { url: 0, click: 0, fallback: 0, reported: false };
+/** 페이지 목록의 첫 상품 식별자 — 「페이지가 실제로 바뀌었나」를 이걸로 판정한다(2026-09-15). */
+function firstIdOf(list) {
+  var p = (list && list[0]) || null;
+  if (!p) return '';
+  return String(p.nvMid || p.id || p.productId || p.mallProductUrl || p.productTitle || '');
+}
+
+/** 이번 회차에 어떤 방식으로 페이지를 넘겼나 — 서버 meta 로 올려 현장에서 판명되게 한다.
+ *  stale = 클릭은 됐는데 내용이 이전 페이지 그대로라 주소 이동으로 되돌린 횟수(2026-09-15). */
+let _navMode = { url: 0, click: 0, fallback: 0, stale: 0, reported: false };
 
 /** 화면 안에서 실행돼 **페이지 버튼을 실제로 클릭**한다.
  *
@@ -605,7 +634,7 @@ function waitNavigated(tabId, needle) {
  *    이미 렌더된 데이터(__NEXT_DATA__)를 읽는다. 요청 한 건 = 사람의 페이지 이동 한 번.
  *    플레이스 추적기가 매일 이 구조로 성공하고 있고, 실측(2026-08-06)에서
  *    pagingIndex=2 페이지에 40개 상품과 필요한 필드가 전부 들어 있음을 확인했다. */
-async function fetchPage(keyword, pagingIndex) {
+async function fetchPage(keyword, pagingIndex, prevFirstId) {
   const tabId = await ensureWorkTab();
   // ⭐ 2026-09-12 — **페이지를 주소창으로 넘기지 않는다.**
   //
@@ -650,6 +679,11 @@ async function fetchPage(keyword, pagingIndex) {
   //     60개 회차 전멸 + 6시간 정지. 서버 통계의 '5개·9개 수집' 키워드도 같은 원인).
   //    기다리는 대상이 '시간'이 아니라 '데이터'라, 페이지가 느린 날에도 성립한다.
   let out = null, lastErr = '';
+  // ⭐ 2026-09-15 — 클릭으로 넘긴 뒤엔 **내용이 실제로 바뀔 때까지** 기다린다(시간이 아니라 내용).
+  //    v1.11.0·v1.11.1 실측: 클릭 9회가 전부 「됐다」로 셌는데 읽은 건 9번 다 1페이지였다
+  //    (중복 제외 = 담긴 수 × 9). 첫 상품이 이전 페이지와 같으면 '아직'이다.
+  //    끝까지 안 바뀌면 그 장만 주소 이동으로 되돌리고(stale) 서버에 알린다 — 수집이 멈추는 것보다 낫다.
+  let staleTries = 0, usedStaleFallback = false;
   for (let attempt = 0; attempt < CFG.readTries; attempt++) {
     let cur;
     try { cur = await chrome.tabs.get(tabId); } catch (e) { throw new Error('작업 탭이 사라졌습니다'); }
@@ -664,7 +698,29 @@ async function fetchPage(keyword, pagingIndex) {
 
     const [res] = await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func: pageExtract });
     out = res && res.result;
-    if (out && !out.err) return { total: out.total || 0, list: out.list || [] };
+    if (out && !out.err) {
+      const fid = firstIdOf(out.list);
+      if (pagingIndex > 1 && prevFirstId && fid && fid === prevFirstId) {
+        // 내용이 이전 페이지 그대로 — 아직 안 넘어간 것이다.
+        staleTries += 1; lastErr = 'STALE_PAGE';
+        if (staleTries >= 6 && !usedStaleFallback) {
+          // 약 5초를 기다려도 그대로면 이 장만 주소 이동으로 되돌린다(1회).
+          usedStaleFallback = true; _navMode.stale += 1;
+          if (!_navMode.reported) {
+            _navMode.reported = true;
+            reportBlocked({ keyword, pagingIndex, err: 'STALE_PAGE(클릭 뒤 내용 불변)',
+                            note: '클릭은 됐으나 데이터가 이전 페이지 — 주소 이동으로 되돌림' });
+          }
+          const url = 'https://search.shopping.naver.com/search/all'
+            + `?query=${encodeURIComponent(keyword)}&pagingIndex=${pagingIndex}`;
+          await chrome.tabs.update(tabId, { url });
+          await waitNavigated(tabId, `pagingIndex=${pagingIndex}`);
+        }
+        await sleep(CFG.readGapMs);
+        continue;
+      }
+      return { total: out.total || 0, list: out.list || [] };
+    }
     // 차단 '문구'를 실제로 본 경우에만 차단으로 단정한다.
     // ⚠️ 이때도 무엇을 봤는지 반드시 남긴다 — 종전엔 차단 분기가 증거를 안 남겨
     //    팝업 진단칸이 정작 필요할 때 비어 있었다(2026-08-11).
@@ -700,7 +756,7 @@ async function fetchPage(keyword, pagingIndex) {
  *     페이지가 요청한 개수를 그대로 주지 않는 경우(광고 제외·마지막 페이지 등)
  *     고정 계산은 순위를 통째로 어긋나게 만든다. 누적이면 어떤 경우에도 맞다. */
 async function collectKeyword(keyword) {
-  _navMode = { url: 0, click: 0, fallback: 0, reported: _navMode.reported };   // 키워드마다 새로 센다
+  _navMode = { url: 0, click: 0, fallback: 0, stale: 0, reported: _navMode.reported };   // 키워드마다 새로 센다
   // 순번 부여의 실체는 rank_rules.takeOrganic 하나다 — 광고 제외가 seenIds 중복 처리보다
   // 먼저인 순서까지가 계약이고, node 회귀 테스트가 그 계약을 검사한다(신고 #253 후속).
   const st = {
@@ -719,11 +775,13 @@ async function collectKeyword(keyword) {
   let total = 0;
   let rawCount = 0;            // 걸러내기 전 원본 개수 — 사후 재구성용(신고 #253 교훈)
   const pages = Math.min(CFG.pagesPerKeyword, CFG.maxPages);
+  let prevFirstId = '';   // 이전 장의 첫 상품 — 다음 장이 실제로 바뀌었는지 이걸로 본다(2026-09-15)
   for (let i = 1; i <= pages; i++) {
-    const { total: t, list } = await fetchPage(keyword, i);
+    const { total: t, list } = await fetchPage(keyword, i, prevFirstId);
     if (i === 1) total = t;
     if (!list.length) break;
     rawCount += list.length;
+    prevFirstId = firstIdOf(list);
     // ⚠️ 첫 키워드 첫 상품의 '원본 JSON'을 저장해 둔다. toProduct 의 필드명 가정
     //    (p.productTitle·p.category1Name 등)이 실제 네이버 응답과 맞는지 내일 첫 실행 때
     //    팝업에서 눈으로 검증하기 위함(맞으면 매핑 확정, 다르면 즉시 교정).
@@ -762,7 +820,7 @@ async function uploadKeyword(token, keyword, payload) {
         pageSize: CFG.pageSize, productSet: 'total', sort: 'rel',
         // 2026-09-12 — 페이지를 **어떻게** 넘겼는지. 클릭이 실제로 되는지가
         // 현장에서만 확인 가능해, 서버가 집계로 알 수 있게 싣는다.
-        nav: { url: _navMode.url, click: _navMode.click, fallback: _navMode.fallback },
+        nav: { url: _navMode.url, click: _navMode.click, fallback: _navMode.fallback, stale: _navMode.stale },
         rawCount: payload.rawCount || 0, adSkipped: payload.adSkipped || 0,
         dupSkipped: payload.dupSkipped || 0, adHintMissed: payload.adHintMissed || 0,
         // v1.10.3 — 광고 필드 지문 집계(제목·가게명 없음). 과필터 원인을 서버 데이터로 가른다.

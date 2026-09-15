@@ -144,5 +144,43 @@ const _ge = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map
   for (let i = 0; i < 3; i++) { if ((x[i]||0) !== (y[i]||0)) return (x[i]||0) > (y[i]||0); } return true; };
 ok('⑩ 버전이 올라갔다(1.11.0 이상)', _ge(MANIFEST.version, '1.11.0'));
 
+// ⑪⑫⑬ 2026-09-15 실사고 — 클릭은 됐는데 읽은 건 매번 1페이지(중복 제외 = 담긴 수 × 9).
+//     __NEXT_DATA__ 는 SPA 이동으로 안 바뀐다. 라우터 현재 props 를 먼저 읽고, 내용이 바뀔 때까지 기다린다.
+console.log('\n[클릭 뒤 내용이 실제로 바뀌었나]');
+ok('⑪ pageExtract 가 라우터 현재 props(rt.components[rt.route].props) 를 먼저 본다',
+   /rt\.components\s*&&\s*rt\.components\[rt\.route\]/.test(grab('pageExtract')) && /roots = rp \?/.test(grab('pageExtract')));
+{
+  // 실제 pageExtract 를 가짜 window 로 돌린다 — __NEXT_DATA__ 는 1페이지, 라우터는 2페이지.
+  const pe = grab('pageExtract');
+  const mkList = (ids) => ids.map((id) => ({ productTitle: 't' + id, mallName: 'm', id: String(id) }));
+  const fakeWin = {
+    __NEXT_DATA__: { props: { pageProps: { initialState: { products: { list: mkList([1, 2, 3]).map((item) => ({ item })), total: 999 } } } } },
+    next: { router: { route: '/search/all', query: { pagingIndex: '2' },
+                      components: { '/search/all': { props: { pageProps: { initialState: { products: { list: mkList([41, 42, 43]).map((item) => ({ item })), total: 999 } } } } } } } },
+  };
+  const run = new Function('window', 'location', 'document', pe + '\nreturn pageExtract();');
+  const r = run(fakeWin, { href: 'https://search.shopping.naver.com/search/all?query=x&pagingIndex=2', search: '?query=x&pagingIndex=2' },
+                { title: '네이버쇼핑', body: { innerText: '' } });
+  ok('⑪ 라우터에 2페이지가 있으면 그것을 읽는다(첫 상품 41)', !!r && !r.err && r.list && String(r.list[0].id) === '41' && r.src === 'router');
+  const fakeWin1 = { __NEXT_DATA__: fakeWin.__NEXT_DATA__ };   // 라우터 없음 → __NEXT_DATA__ 폴백
+  const r1 = run(fakeWin1, { href: 'https://search.shopping.naver.com/search/all?query=x', search: '?query=x' },
+                 { title: '네이버쇼핑', body: { innerText: '' } });
+  ok('⑪ 라우터가 없으면 __NEXT_DATA__ 로 폴백(첫 상품 1 · pageIndex 1)', !!r1 && !r1.err && String(r1.list[0].id) === '1' && r1.pageIndex === 1 && r1.src === 'nextdata');
+}
+{
+  const fio = grab('firstIdOf');
+  const f = new Function(fio + '\nreturn firstIdOf;')();
+  ok('⑫ firstIdOf — nvMid 우선, 없으면 id, 빈 목록은 빈 문자열',
+     f([{ nvMid: 'N1', id: 'I1' }]) === 'N1' && f([{ id: 'I2' }]) === 'I2' && f([]) === '' && f(null) === '');
+}
+const FP = grab('fetchPage', 'async');
+ok('⑫ fetchPage 가 이전 장 첫 상품(prevFirstId)을 받는다', /async function fetchPage\(keyword, pagingIndex, prevFirstId\)/.test(SRC));
+ok('⑫ 첫 상품이 이전 장과 같으면 STALE_PAGE 로 다시 읽는다', /fid === prevFirstId/.test(FP) && /STALE_PAGE/.test(FP));
+ok('⑫ 끝까지 그대로면 그 장만 주소 이동으로 되돌리고 서버에 알린다', /_navMode\.stale \+= 1/.test(FP) && /STALE_PAGE\(클릭 뒤 내용 불변\)/.test(FP));
+ok('⑫ collectKeyword 가 장마다 prevFirstId 를 넘긴다', /fetchPage\(keyword, i, prevFirstId\)/.test(SRC) && /prevFirstId = firstIdOf\(list\)/.test(SRC));
+ok('⑬ 서버 meta.nav 에 stale 이 실린다', /nav: \{ url: _navMode\.url, click: _navMode\.click, fallback: _navMode\.fallback, stale: _navMode\.stale \}/.test(SRC));
+ok('⑬ 버전 1.11.2 이상', _ge(MANIFEST.version, '1.11.2'));
+
+
 console.log(fail ? `\n❌ 실패 ${fail}건 / 전체 ${pass + fail}` : '\n사람처럼 넘기기 시험 전부 통과');
 process.exit(fail ? 1 : 0);
