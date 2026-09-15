@@ -492,29 +492,33 @@ jobs:
               echo "-- 접속 횟수(경로별·24시간) --"
               docker logs --since 24h logic-analysis 2>&1 | grep -oE 'GET /api/collector/[a-z]+|POST /api/collector/[a-z]+' \
                 | sort | uniq -c || echo "  (없음)"
-              echo "-- 기계별 집계(24시간) — 같은 통신사 대역이면 앞 두 자리가 같아 뭉친다 --"
-              # ⚠️ 저장소가 공개라 실제 IP 를 찍지 않는다. **전체 IP 로 묶은 뒤** 앞 두 자리 + 그룹번호로만 표기.
-              #    같은 앞자리에 그룹이 둘 이상이면 = 같은 통신사 대역의 서로 다른 기계다(집·회사가 겹칠 수 있음).
+              echo "-- 기계별 집계(24시간) — 보낸 곳은 런마다 다른 소금 해시 6자리로만 --"
+              # ⚠️ 저장소가 공개라 실제 IP 를 찍지 않는다. 2026-09-16 정정: 종전엔 「앞 두 자리 + 그룹번호」로 찍었는데
+              #    앞 두 옥텟만으로도 통신사·지역이 좁혀진다(공개 런 로그에 남았다). 이제 **전체 IP 를 런마다 새 소금으로
+              #    해시한 6자리**만 찍는다 — 같은 런 안에서만 같은 기계를 알아볼 수 있고, 다른 런·문서와는 대조할 수 없다.
+              IPSALT=$(head -c 16 /dev/urandom 2>/dev/null | od -An -tx1 | tr -d ' \n')
               for f in /var/log/nginx/access.log.1 /var/log/nginx/access.log; do
                 [ -f "$f" ] && cat "$f"
               done 2>/dev/null | grep -E 'api/(collector/(serp|keywords|requests)|place/(ingest|track-targets))' \
-                | awk '{ ip=$1; split(ip,o,"."); pre=o[1]"."o[2];
-                        if (!(ip in gid)) { gid[ip] = ++gn[pre]; order[++m]=ip }
+                | awk -v salt="$IPSALT" '{ ip=$1;
+                        if (!(ip in h6)) { cmd="printf %s " salt ip " | md5sum | cut -c1-6"; cmd | getline h6[ip]; close(cmd); order[++m]=ip }
                         t=$4; gsub(/^\[/,"",t); split(t,d,":"); hh=d[2];
                         p=$7; sub(/\?.*$/,"",p); sub(/^.*\/api\//,"",p); sub(/^collector\//,"",p); sub(/^place\//,"",p);
-                        tot[ip]++; last[ip]=t; ep[ip" "p]++; hrs[ip" "hh]=1; pfx[ip]=pre }
+                        tot[ip]++; last[ip]=t; ep[ip" "p]++; hrs[ip" "hh]=1 }
                    END { for (i=1;i<=m;i++) { ip=order[i]; hc=0;
                            for (k in hrs) { split(k,a," "); if (a[1]==ip) hc++ }
-                           printf "  [%s · 그룹%d] 총 %d건 · 활동시간대 %d/24 · 마지막 %s\n", pfx[ip], gid[ip], tot[ip], hc, last[ip];
+                           printf "  [곳 %s] 총 %d건 · 활동시간대 %d/24 · 마지막 %s\n", h6[ip], tot[ip], hc, last[ip];
                            for (k in ep) { split(k,b," "); if (b[1]==ip) printf "        %-14s %d건\n", b[2], ep[k] } } }' \
                 | sort -s -t'[' -k2,2 || echo "  (집계 실패)"
-              echo "  ↑ 같은 앞자리에 그룹이 2개 이상이면 같은 통신사 대역의 다른 기계 = 앞자리만으로는 못 가른다"
+              echo "  ↑ 해시는 이 런 안에서만 같은 기계를 가리킨다(다른 런과 대조 불가)"
               echo "-- 지도 순위 기록(place/ingest)을 보내는 IP — 어느 기계가 플레이스를 도는지 --"
               # 플레이스 러너는 로직 탭(브라우저)을 거쳐 기록하므로 그 PC 의 IP 로 잡힌다.
               for f in /var/log/nginx/access.log.1 /var/log/nginx/access.log; do
                 [ -f "$f" ] && cat "$f"
               done 2>/dev/null | grep -E 'api/place/(ingest|track-targets)' \
-                | awk '{ split($1,o,"."); m=o[1]"."o[2]".x.x"; t=$4; gsub(/^\[/,"",t);
+                | awk -v salt="$IPSALT" '{ ip=$1;
+                        if (!(ip in h6)) { cmd="printf %s " salt ip " | md5sum | cut -c1-6"; cmd | getline h6[ip]; close(cmd) }
+                        m="곳 " h6[ip]; t=$4; gsub(/^\[/,"",t);
                         p=$7; sub(/\?.*$/,"",p); sub(/^.*\/place\//,"",p);
                         key=m" "p; cnt[key]++; last[key]=t }
                    END { for (k in cnt) printf "  %-26s %s건 · 마지막 %s\n", k, cnt[k], last[k] }' \
