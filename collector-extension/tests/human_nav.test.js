@@ -238,5 +238,28 @@ console.log('\n[바뀜 판정 — 광고 제외 ID 집합]');
 }
 
 
+// ⑯ v1.11.6 — 2페이지부터는 내용이 바뀔 때까지 더 기다리고, 화면(DOM) 상품 신호를 프로브에 싣는다
+console.log('\n[긴 대기 · DOM 프로브]');
+{
+  const FP6 = grab('fetchPage', 'async');
+  ok('⑯ 2페이지부터 readTriesPaged 만큼 되읽는다', /pagingIndex > 1 \? \(CFG\.readTriesPaged/.test(FP6) && /readTriesPaged: 36/.test(SRC));
+  ok('⑯ 라우터 이동은 약 10초(12회) 뒤에 건다', /staleTries >= 12 && !triedRouterPush/.test(FP6));
+  const np = grab('navProbe');
+  const fakeDoc = {
+    querySelectorAll: (sel) => {
+      if (sel.indexOf('nvMid=') >= 0) return [{ getAttribute: () => 'https://x/?nvMid=111' }, { getAttribute: () => 'https://x/?nvMid=222' }, { getAttribute: () => 'https://x/?nvMid=111' }];
+      if (sel.indexOf('smartstore') >= 0) return [1, 2];
+      if (sel.indexOf('/catalog/') >= 0) return [];
+      return [];
+    },
+  };
+  const run = new Function('window', 'location', 'document', np + '\nreturn navProbe();');
+  const r = run({}, { href: 'https://search.shopping.naver.com/search/all?query=x' }, fakeDoc);
+  ok('⑯ navProbe 가 화면 상품 링크 수(nvMid·smartstore·catalog)를 센다', r && r.dom && r.dom.nvMid === 3 && r.dom.smartstore === 2 && r.dom.catalog === 0);
+  ok('⑯ navProbe 가 첫 상품 ID 조각을 중복 없이 최대 3개 싣는다', r && Array.isArray(r.domFirst) && r.domFirst.join(',') === '111,222');
+  ok('⑯ 버전 1.11.6 이상', _ge(MANIFEST.version, '1.11.6'));
+}
+
+
 console.log(fail ? `\n❌ 실패 ${fail}건 / 전체 ${pass + fail}` : '\n사람처럼 넘기기 시험 전부 통과');
 process.exit(fail ? 1 : 0);

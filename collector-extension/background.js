@@ -56,6 +56,10 @@ const CFG = {
   pagesPerKeyword: 11,   // 키워드당 페이지 수 상한 (40개 × 11 = 440 → 광고 제외 ≈ 400위)
   maxPages: 10,          // 안전 상한(빈 페이지·무한 루프 방지)
   readTries: 12,         // 페이지 판독 재시도 횟수(값이 나올 때까지)
+  // v1.11.6 — 2페이지부터는 **내용이 바뀔 때까지** 더 오래 기다린다(36×0.8초 ≈ 29초).
+  //   9/15 21:30 실측(갈비살 p2): 클릭도 되고 페이지네이션도 2가 현재인데 10초 안에 데이터가 안 바뀌어
+  //   멈췄다. 같은 날 21:22(갈릭버터새우 p2)는 10초 안에 바뀌었다 — 회선(VPN) 지연이 오락가락한다.
+  readTriesPaged: 36,
   readGapMs: 800,        // 되읽기 간격 — 12×0.8초 ≈ 10초까지 기다린다
   minGapMs: 1200,        // 페이지 사이 최소 간격
   maxGapMs: 3000,        // 페이지 사이 최대 간격 (이 사이 랜덤)
@@ -675,6 +679,21 @@ function navProbe() {
     }
     out.pager = nums;
   } catch (e) { out.scopes = 'err'; }
+  // v1.11.6 — 화면에 실제로 그려진 상품 링크(공개 상품 주소 · 값은 호스트+ID 조각만).
+  //   라우터 데이터가 안 바뀌어도 화면이 바뀌었다면 다음 판은 DOM 을 읽어야 한다 — 그 설계 근거.
+  try {
+    var mids = document.querySelectorAll('a[href*="nvMid="]');
+    var ss = document.querySelectorAll('a[href*="smartstore.naver.com/"]');
+    var cat = document.querySelectorAll('a[href*="/catalog/"]');
+    out.dom = { nvMid: mids.length, smartstore: ss.length, catalog: cat.length };
+    var first = [];
+    for (var m = 0; m < mids.length && first.length < 3; m++) {
+      var h = String(mids[m].getAttribute('href') || '');
+      var mm = /nvMid=(\d+)/.exec(h);
+      if (mm && first.indexOf(mm[1]) < 0) first.push(mm[1]);
+    }
+    out.domFirst = first;
+  } catch (e) { out.dom = 'err'; }
   return out;
 }
 
@@ -769,7 +788,8 @@ async function fetchPage(keyword, pagingIndex, prevIds) {
   //    대신 라우터 이동(사람 클릭이 내부적으로 하는 것)을 한 번 더 시도하고, 그래도 안 바뀌면
   //    그 키워드는 여기까지만 담고 끝낸다. 왜 안 넘어갔는지는 navProbe 로 서버에 남긴다.
   let staleTries = 0, triedRouterPush = false;
-  for (let attempt = 0; attempt < CFG.readTries; attempt++) {
+  const tries = pagingIndex > 1 ? (CFG.readTriesPaged || CFG.readTries) : CFG.readTries;
+  for (let attempt = 0; attempt < tries; attempt++) {
     let cur;
     try { cur = await chrome.tabs.get(tabId); } catch (e) { throw new Error('작업 탭이 사라졌습니다'); }
     // 주소가 검색 도메인을 벗어났으면 그건 진짜 차단(캡차·로그인 유도)
@@ -787,8 +807,8 @@ async function fetchPage(keyword, pagingIndex, prevIds) {
       if (pagingIndex > 1 && !pageChanged(out.list, prevIds)) {
         // 내용이 이전 페이지 그대로 — 아직 안 넘어간 것이다.
         staleTries += 1; lastErr = 'STALE_PAGE';
-        if (staleTries >= 5 && !triedRouterPush) {
-          // 약 4초를 기다려도 그대로면 라우터 이동을 한 번 건다(주소창 이동 아님).
+        if (staleTries >= 12 && !triedRouterPush) {
+          // 약 10초를 기다려도 그대로면 라우터 이동을 한 번 건다(주소창 이동 아님).
           triedRouterPush = true;
           try {
             const [r2] = await chrome.scripting.executeScript({
