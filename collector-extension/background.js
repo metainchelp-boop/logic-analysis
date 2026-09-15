@@ -448,7 +448,12 @@ async function ensureWorkTab() {
  *     그래서 __NEXT_DATA__ 전체를 훑어 **'상품처럼 생긴 객체들의 배열'**(productTitle·
  *     mallName 등을 가진) 중 가장 긴 것을 고른다. 구조가 바뀌어도 계속 읽힌다.
  *     플레이스 추적기가 __APOLLO_STATE__ 를 같은 방식으로 판독해 매일 성공 중이다. */
-function pageExtract() {
+function pageExtract(want) {
+  // v1.13.0 — want = { page, since }: 2페이지부터는 **화면이 받아 온 응답**(net_tap.js 가 복사해 둔 것)을
+  //   가장 먼저 읽는다. 라우터 props·__NEXT_DATA__ 가 1페이지 그대로여도, 화면이 2페이지 데이터를
+  //   받았다면 그 응답은 __mcTap.items 에 있다. 인자 없이 부르면(회귀 시험·1페이지) 종전과 같다.
+  want = want || {};
+  var wantPage = parseInt(want.page, 10) || 0, since = parseInt(want.since, 10) || 0;
   function looksProduct(o) {
     if (!o || typeof o !== 'object') return false;
     var hasTitle = typeof o.productTitle === 'string' || typeof o.productName === 'string';
@@ -480,6 +485,19 @@ function pageExtract() {
     try { var pm = /[?&]pagingIndex=(\d+)/.exec(location.search); pageIndex = pm ? parseInt(pm[1], 10) : 1; }
     catch (e) { pageIndex = 0; }
   }
+  var tap = null, tapPath = '';
+  if (wantPage > 1) {
+    try {
+      var T = window.__mcTap;
+      var items = (T && T.items) || [];
+      for (var ti = items.length - 1; ti >= 0; ti--) {
+        var it = items[ti];
+        if (!it || !it.json) continue;
+        // 주소에 pagingIndex 가 있으면 그것으로, 없으면 「클릭 뒤에 도착한 것」으로 고른다
+        if (it.page === wantPage || (!it.page && since && it.at >= since)) { tap = it.json; tapPath = it.path || ''; break; }
+      }
+    } catch (e) { tap = null; }
+  }
   var href = '';
   try { href = String(location.href); } catch (e) { href = ''; }
   var title = '';
@@ -492,7 +510,10 @@ function pageExtract() {
   //     정상 페이지도 낱말 하나만 스치면 차단으로 단정했다. 상품을 실제로 읽어냈다면
   //     네이버가 우리에게 필요한 걸 내준 것이므로 그건 차단일 수 없다.)
   var best = null, total = 0, src = '';
-  var roots = rp ? [['router', rp], ['nextdata', nd]] : [['nextdata', nd]];
+  var roots = [];
+  if (tap) roots.push(['tap', tap]);
+  if (rp) roots.push(['router', rp]);
+  roots.push(['nextdata', nd]);
   for (var ri = 0; ri < roots.length && !(best && best.length); ri++) {
   src = roots[ri][0];
   var seen = new Set();
@@ -525,7 +546,7 @@ function pageExtract() {
   }
   }
   // 상품을 읽어냈으면 무조건 성공 — 차단 검사조차 하지 않는다
-  if (best && best.length) return { total: total, list: best.slice(0, 200), href: href, pageIndex: pageIndex, src: src };
+  if (best && best.length) return { total: total, list: best.slice(0, 200), href: href, pageIndex: pageIndex, src: src, tapPath: tapPath };
 
   // 여기부터는 '못 읽은' 경우. 이제서야 차단인지 본다.
   // ⚠️ 2026-09-15 v1.11.4 — 새 IP·새 크롬의 첫 회차에서 네이버가 **「보안 확인」 퍼즐**(영수증 문제)을 냈다.
@@ -571,7 +592,8 @@ function pageChanged(list, prevIds) {
 
 /** 이번 회차에 어떤 방식으로 페이지를 넘겼나 — 서버 meta 로 올려 현장에서 판명되게 한다.
  *  stale = 클릭은 됐는데 내용이 이전 페이지 그대로라 주소 이동으로 되돌린 횟수(2026-09-15). */
-let _navMode = { url: 0, click: 0, fallback: 0, stale: 0, reported: false };
+let _navMode = { url: 0, click: 0, fallback: 0, stale: 0, reported: false, src: {} };
+let _clickedAt = 0;          // v1.13.0 — 마지막 페이지 클릭 시각(이 뒤에 도착한 응답만 그 장의 답으로 본다)
 
 /** 화면 안에서 실행돼 **페이지 버튼을 실제로 클릭**한다.
  *
@@ -660,11 +682,25 @@ function routerPush(target) {
 /** 화면 안에서 실행 — 「왜 안 넘어갔나」를 서버에 남기기 위한 상태 조각(값 없음 · 구조만). */
 function navProbe() {
   var out = {};
-  try { out.href = String(location.href).slice(0, 160); } catch (e) {}
+  // v1.13.0 — 화면이 주고받은 응답 요약(net_tap.js). 값은 안 싣는다 — 경로 끝·상태·크기·페이지·ID 앞 3개.
+  try {
+    var T = window.__mcTap;
+    if (!T) out.tap = 'none';
+    else {
+      var now = Date.now();
+      var one = function (e) {
+        return [Math.round((now - (e.at || now)) / 1000) + 's', 'p' + (e.page || 0), e.status, e.size,
+                String(e.path || '').slice(-28)].join('|') + (e.ids ? '|' + e.ids.join(',') : '');
+      };
+      out.tap = { n: (T.items || []).length, m: (T.misses || []).length,
+                  items: (T.items || []).slice(-4).map(one), misses: (T.misses || []).slice(-6).map(one) };
+    }
+  } catch (e) { out.tap = 'err'; }
+  try { out.href = String(location.href).slice(0, 100); } catch (e) {}
   try {
     var rt = window.next && window.next.router;
     out.router = !!rt;
-    if (rt) { out.route = rt.route; out.q = (rt.query || {}).pagingIndex || ''; out.asPath = String(rt.asPath || '').slice(0, 80); }
+    if (rt) { out.route = rt.route; out.q = (rt.query || {}).pagingIndex || ''; }
   } catch (e) { out.router = 'err'; }
   try {
     var scopes = document.querySelectorAll('[class*="pagination"],[class*="paging"],[role="navigation"]');
@@ -749,6 +785,7 @@ async function fetchPage(keyword, pagingIndex, prevIds) {
     await waitNavigated(tabId, encodeURIComponent(keyword));
     _navMode.url += 1;
   } else {
+    _clickedAt = Date.now();   // v1.13.0 — 이 시각 뒤에 도착한 응답이 「이 클릭의 답」이다
     const clicked = await clickToPage(tabId, pagingIndex);
     if (clicked) {
       _navMode.click += 1;
@@ -801,7 +838,9 @@ async function fetchPage(keyword, pagingIndex, prevIds) {
       throw new Error('BLOCKED:' + cur.url);
     }
 
-    const [res] = await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func: pageExtract });
+    const [res] = await chrome.scripting.executeScript({
+      target: { tabId }, world: 'MAIN', func: pageExtract, args: [{ page: pagingIndex, since: _clickedAt }],
+    });
     out = res && res.result;
     if (out && !out.err) {
       if (pagingIndex > 1 && !pageChanged(out.list, prevIds)) {
@@ -820,6 +859,7 @@ async function fetchPage(keyword, pagingIndex, prevIds) {
         await sleep(CFG.readGapMs);
         continue;
       }
+      if (pagingIndex > 1) _navMode.src[out.src || '?'] = (_navMode.src[out.src || '?'] || 0) + 1;
       return { total: out.total || 0, list: out.list || [] };
     }
     // 차단 '문구'를 실제로 본 경우에만 차단으로 단정한다.
@@ -844,13 +884,20 @@ async function fetchPage(keyword, pagingIndex, prevIds) {
       const [pr] = await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func: navProbe });
       probe = (pr && pr.result) || {};
     } catch (e) { probe = { probe: 'inject-error' }; }
-    probe.click = _lastClickBranch; probe.push = _lastPushResult; probe.prev = (prevIds || []).length;
-    probe.got = organicIds((out && out.list) || []).length;
+    // ⚠️ 서버는 body 를 500자에서 자른다(collector.py) — 짧은 값이 앞에 오게 순서를 정하고,
+    //    응답 요약(tap)은 **따로 한 건** 더 보낸다(v1.13.0). 21:39 회차의 prev/got 이 잘려 나갔던 교훈.
+    const tap = probe.tap; delete probe.tap;
+    const front = { click: _lastClickBranch, push: _lastPushResult, prev: (prevIds || []).length,
+                    got: organicIds((out && out.list) || []).length, src: (out && out.src) || '' };
+    probe = Object.assign(front, probe);
     if (!_staleReported) {
       _staleReported = true;
       reportBlocked({ keyword, pagingIndex, err: 'STALE_PAGE(클릭·라우터 이동 뒤 내용 불변)',
                       href: probe.href || '', body: JSON.stringify(probe),
                       note: '주소 이동 안 함 — 이 키워드는 여기까지만 담음' });
+      reportBlocked({ keyword, pagingIndex, err: 'TAP_PROBE(화면이 받은 응답 요약)',
+                      href: probe.href || '', body: JSON.stringify(tap === undefined ? 'none' : tap),
+                      note: '진단 — 차단 아님. 클릭 뒤 화면이 어떤 응답을 받았나' });
     }
     return { total: 0, list: [] };
   }
@@ -876,7 +923,8 @@ async function fetchPage(keyword, pagingIndex, prevIds) {
  *     페이지가 요청한 개수를 그대로 주지 않는 경우(광고 제외·마지막 페이지 등)
  *     고정 계산은 순위를 통째로 어긋나게 만든다. 누적이면 어떤 경우에도 맞다. */
 async function collectKeyword(keyword) {
-  _navMode = { url: 0, click: 0, fallback: 0, stale: 0, reported: _navMode.reported };   // 키워드마다 새로 센다
+  _navMode = { url: 0, click: 0, fallback: 0, stale: 0, reported: _navMode.reported, src: {} };   // 키워드마다 새로 센다
+  _clickedAt = 0;
   _staleReported = false; _lastPushResult = ''; _lastClickBranch = '';
   // 순번 부여의 실체는 rank_rules.takeOrganic 하나다 — 광고 제외가 seenIds 중복 처리보다
   // 먼저인 순서까지가 계약이고, node 회귀 테스트가 그 계약을 검사한다(신고 #253 후속).
@@ -941,7 +989,7 @@ async function uploadKeyword(token, keyword, payload) {
         pageSize: CFG.pageSize, productSet: 'total', sort: 'rel',
         // 2026-09-12 — 페이지를 **어떻게** 넘겼는지. 클릭이 실제로 되는지가
         // 현장에서만 확인 가능해, 서버가 집계로 알 수 있게 싣는다.
-        nav: { url: _navMode.url, click: _navMode.click, fallback: _navMode.fallback, stale: _navMode.stale },
+        nav: { url: _navMode.url, click: _navMode.click, fallback: _navMode.fallback, stale: _navMode.stale, src: _navMode.src },
         rawCount: payload.rawCount || 0, adSkipped: payload.adSkipped || 0,
         dupSkipped: payload.dupSkipped || 0, adHintMissed: payload.adHintMissed || 0,
         // v1.10.3 — 광고 필드 지문 집계(제목·가게명 없음). 과필터 원인을 서버 데이터로 가른다.
