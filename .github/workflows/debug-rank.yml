@@ -332,6 +332,18 @@ jobs:
             # ⭐ 교체 검증 — **가장 최근 업로드분**에 광고가 남아 있는지.
             #    광고 제외(수집기 v1.7.0)가 실제로 도는지는 '오늘 전체'가 아니라
             #    '교체 이후 올라온 것'으로만 갈린다(교체 전 분이 섞이면 판정이 흐려진다).
+            # 🧭 2026-09-15 — v1.11.0 첫 실전. 페이지를 **어떻게** 넘겼는지(meta.nav: url/click/fallback)와
+            #    네이버가 준 총수(total)·원본 수(rawCount)를 그대로 본다. 9개만 올라온 이유를 가르는 축이다.
+            print("\n[🧭 오늘 업로드 meta — 페이지 이동 방식·원본 수·확장 버전]")
+            try:
+                for r in c.execute("""SELECT keyword, created_at, total, product_count, meta_json
+                                        FROM collected_serp
+                                       WHERE collected_date = date('now','localtime')
+                                       ORDER BY created_at DESC LIMIT 30"""):
+                    print(f"  {r['created_at']} · {r['keyword']} · 네이버총수={r['total']} · 담긴 상품 {r['product_count']}")
+                    print(f"     meta={r['meta_json']}")
+            except Exception as e:
+                print(f"  (meta 조회 실패: {e})")
             print("\n[교체 검증 — 최근 업로드 30건]")
             try:
                 nrows = list(c.execute("""SELECT keyword, created_at, product_count, products_json
