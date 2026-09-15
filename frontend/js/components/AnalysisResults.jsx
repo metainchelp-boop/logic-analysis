@@ -430,7 +430,10 @@ window.AnalysisResults = function AnalysisResults(props) {
                         relatedData: relatedData,
                         advertiserReport: advertiserReport,
                         htmlReviewData: htmlReviewData,
-                        datalabData: datalabData
+                        datalabData: datalabData,
+                        /* 늦게 오는 두 가지가 끝났는지 — AI 호출을 20초 기다리지 않고 그 즉시 시작하려고 넘긴다 */
+                        datalabLoading: datalabLoading,
+                        advertiserLoading: advertiserLoading
                     })
                 ),
     

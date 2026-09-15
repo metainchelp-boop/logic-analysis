@@ -2,6 +2,7 @@
   "js/utils.js",
   "js/rankImage.js",
   "js/report-capture.js",
+  "js/sales-oneshot.js",
   "js/components/ErrorBoundary.jsx",
   "js/components/SectionErrorBoundary.jsx",
   "js/components/ChartCanvas.jsx",
