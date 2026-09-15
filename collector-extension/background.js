@@ -539,6 +539,32 @@ function firstIdOf(list) {
   return String(p.nvMid || p.id || p.productId || p.mallProductUrl || p.productTitle || '');
 }
 
+/** v1.11.5 — 「바뀌었나」를 첫 상품 하나가 아니라 **광고를 뺀 상품 ID 집합**으로 본다.
+ *  2026-09-15 21:22 실측: 2페이지는 클릭으로 실제로 넘어갔는데(담긴 69 · 중복 3) 3페이지에서
+ *  STALE 로 멈췄다. 라우터는 이미 3페이지(q=3)였고 페이지네이션도 3이 현재였다 —
+ *  네이버가 **페이지마다 맨 위에 같은 광고**를 놓으면 첫 상품 ID 만 보는 판정이 「안 바뀜」으로 속는다.
+ *  ⇒ 광고를 뺀 ID 들 중 이전 장에 없던 것이 하나라도 있으면 「바뀐 것」. */
+function organicIds(list) {
+  var out = [];
+  var arr = list || [];
+  for (var i = 0; i < arr.length; i++) {
+    var p = arr[i];
+    if (!p || typeof p !== 'object') continue;
+    try { if (RR && typeof RR.isAdItem === 'function' && RR.isAdItem(p)) continue; } catch (e) {}
+    var id = String(p.nvMid || p.id || p.productId || '');
+    if (id) out.push(id);
+  }
+  return out;
+}
+function pageChanged(list, prevIds) {
+  if (!prevIds || !prevIds.length) return true;      // 1페이지 · 비교 대상 없음
+  var prev = new Set(prevIds);
+  var ids = organicIds(list);
+  if (!ids.length) return false;                        // 광고뿐인 목록은 「바뀐 것」으로 안 본다
+  for (var i = 0; i < ids.length; i++) if (!prev.has(ids[i])) return true;
+  return false;
+}
+
 /** 이번 회차에 어떤 방식으로 페이지를 넘겼나 — 서버 meta 로 올려 현장에서 판명되게 한다.
  *  stale = 클릭은 됐는데 내용이 이전 페이지 그대로라 주소 이동으로 되돌린 횟수(2026-09-15). */
 let _navMode = { url: 0, click: 0, fallback: 0, stale: 0, reported: false };
@@ -683,7 +709,7 @@ function waitNavigated(tabId, needle) {
  *    이미 렌더된 데이터(__NEXT_DATA__)를 읽는다. 요청 한 건 = 사람의 페이지 이동 한 번.
  *    플레이스 추적기가 매일 이 구조로 성공하고 있고, 실측(2026-08-06)에서
  *    pagingIndex=2 페이지에 40개 상품과 필요한 필드가 전부 들어 있음을 확인했다. */
-async function fetchPage(keyword, pagingIndex, prevFirstId) {
+async function fetchPage(keyword, pagingIndex, prevIds) {
   const tabId = await ensureWorkTab();
   // ⭐ 2026-09-12 — **페이지를 주소창으로 넘기지 않는다.**
   //
@@ -758,8 +784,7 @@ async function fetchPage(keyword, pagingIndex, prevFirstId) {
     const [res] = await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func: pageExtract });
     out = res && res.result;
     if (out && !out.err) {
-      const fid = firstIdOf(out.list);
-      if (pagingIndex > 1 && prevFirstId && fid && fid === prevFirstId) {
+      if (pagingIndex > 1 && !pageChanged(out.list, prevIds)) {
         // 내용이 이전 페이지 그대로 — 아직 안 넘어간 것이다.
         staleTries += 1; lastErr = 'STALE_PAGE';
         if (staleTries >= 5 && !triedRouterPush) {
@@ -799,7 +824,8 @@ async function fetchPage(keyword, pagingIndex, prevFirstId) {
       const [pr] = await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func: navProbe });
       probe = (pr && pr.result) || {};
     } catch (e) { probe = { probe: 'inject-error' }; }
-    probe.click = _lastClickBranch; probe.push = _lastPushResult; probe.prev = String(prevFirstId).slice(0, 24);
+    probe.click = _lastClickBranch; probe.push = _lastPushResult; probe.prev = (prevIds || []).length;
+    probe.got = organicIds((out && out.list) || []).length;
     if (!_staleReported) {
       _staleReported = true;
       reportBlocked({ keyword, pagingIndex, err: 'STALE_PAGE(클릭·라우터 이동 뒤 내용 불변)',
@@ -850,13 +876,13 @@ async function collectKeyword(keyword) {
   let total = 0;
   let rawCount = 0;            // 걸러내기 전 원본 개수 — 사후 재구성용(신고 #253 교훈)
   const pages = Math.min(CFG.pagesPerKeyword, CFG.maxPages);
-  let prevFirstId = '';   // 이전 장의 첫 상품 — 다음 장이 실제로 바뀌었는지 이걸로 본다(2026-09-15)
+  let prevIds = [];   // 이전 장의 광고 제외 상품 ID — 다음 장이 실제로 바뀌었는지 집합으로 본다(v1.11.5)
   for (let i = 1; i <= pages; i++) {
-    const { total: t, list } = await fetchPage(keyword, i, prevFirstId);
+    const { total: t, list } = await fetchPage(keyword, i, prevIds);
     if (i === 1) total = t;
     if (!list.length) break;
     rawCount += list.length;
-    prevFirstId = firstIdOf(list);
+    prevIds = organicIds(list);
     // ⚠️ 첫 키워드 첫 상품의 '원본 JSON'을 저장해 둔다. toProduct 의 필드명 가정
     //    (p.productTitle·p.category1Name 등)이 실제 네이버 응답과 맞는지 내일 첫 실행 때
     //    팝업에서 눈으로 검증하기 위함(맞으면 매핑 확정, 다르면 즉시 교정).

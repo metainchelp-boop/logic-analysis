@@ -176,8 +176,8 @@ ok('⑪ pageExtract 가 라우터 현재 props(rt.components[rt.route].props) �
      f([{ nvMid: 'N1', id: 'I1' }]) === 'N1' && f([{ id: 'I2' }]) === 'I2' && f([]) === '' && f(null) === '');
 }
 const FP = grab('fetchPage', 'async');
-ok('⑫ fetchPage 가 이전 장 첫 상품(prevFirstId)을 받는다', /async function fetchPage\(keyword, pagingIndex, prevFirstId\)/.test(SRC));
-ok('⑫ 첫 상품이 이전 장과 같으면 STALE_PAGE 로 다시 읽는다', /fid === prevFirstId/.test(FP) && /STALE_PAGE/.test(FP));
+ok('⑫ fetchPage 가 이전 장 ID 집합(prevIds)을 받는다', /async function fetchPage\(keyword, pagingIndex, prevIds\)/.test(SRC));
+ok('⑫ 광고 뺀 ID 집합이 이전 장 안에 다 들어 있으면 STALE_PAGE 로 다시 읽는다', /!pageChanged\(out\.list, prevIds\)/.test(FP) && /STALE_PAGE/.test(FP));
 // v1.11.3 — 주소 이동 폴백은 **금지**다(v1.11.2 가 그 폴백을 탔다가 pagingIndex=2 주소를 연 1초 뒤 캡차).
 {
   const stalePart = FP.slice(FP.indexOf('STALE_PAGE'));
@@ -198,7 +198,7 @@ ok('⑫ 첫 상품이 이전 장과 같으면 STALE_PAGE 로 다시 읽는다', 
   const r0 = new Function('window', 'location', rp + '\nreturn routerPush(3);')({}, { pathname: '/x' });
   ok('⑫ routerPush — 라우터가 없으면 no-router 로 물러난다(아무 이동도 안 한다)', r0 === 'no-router');
 }
-ok('⑫ collectKeyword 가 장마다 prevFirstId 를 넘긴다', /fetchPage\(keyword, i, prevFirstId\)/.test(SRC) && /prevFirstId = firstIdOf\(list\)/.test(SRC));
+ok('⑫ collectKeyword 가 장마다 prevIds 를 넘긴다', /fetchPage\(keyword, i, prevIds\)/.test(SRC) && /prevIds = organicIds\(list\)/.test(SRC));
 ok('⑬ 서버 meta.nav 에 stale 이 실린다', /nav: \{ url: _navMode\.url, click: _navMode\.click, fallback: _navMode\.fallback, stale: _navMode\.stale \}/.test(SRC));
 ok('⑬ 버전 1.11.3 이상', _ge(MANIFEST.version, '1.11.3'));
 
@@ -216,6 +216,25 @@ console.log('\n[보안 확인 퍼즐을 차단으로 알아보나]');
                  { title: '', body: { innerText: '아무 상품도 없는 빈 페이지' } });
   ok('⑭ 차단 문구가 없으면 여전히 판독 실패(NO_NEXT_DATA)다 — 과잉 판정 없음', !!r2 && r2.err === 'NO_NEXT_DATA');
   ok('⑭ 버전 1.11.4 이상', _ge(MANIFEST.version, '1.11.4'));
+}
+
+
+// ⑮ v1.11.5 — 페이지마다 맨 위에 같은 광고가 있어도 「바뀜」을 맞게 본다
+console.log('\n[바뀜 판정 — 광고 제외 ID 집합]');
+{
+  const src = grab('organicIds') + '\n' + grab('pageChanged');
+  const mk = new Function('RR', src + '\nreturn { organicIds, pageChanged };');
+  const RRfake = { isAdItem: (p) => !!p.ad };
+  const { organicIds: oi, pageChanged: pc } = mk(RRfake);
+  const ad = { id: 'AD1', ad: true };
+  const p1 = [ad, { id: 'a' }, { id: 'b' }];
+  const p2 = [ad, { id: 'c' }, { id: 'd' }];       // 맨 위 같은 광고 · 상품은 새것
+  ok('⑮ 광고는 ID 집합에서 빠진다', oi(p1).join(',') === 'a,b');
+  ok('⑮ 맨 위 광고가 같아도 상품이 새로우면 「바뀜」', pc(p2, oi(p1)) === true);
+  ok('⑮ 상품이 전부 이전 장 것이면 「안 바뀜」', pc([ad, { id: 'a' }], oi(p1)) === false);
+  ok('⑮ 광고뿐인 목록은 「안 바뀜」', pc([ad], oi(p1)) === false);
+  ok('⑮ 1페이지(비교 대상 없음)는 항상 「바뀜」', pc(p1, []) === true);
+  ok('⑮ 버전 1.11.5 이상', _ge(MANIFEST.version, '1.11.5'));
 }
 
 
