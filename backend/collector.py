@@ -21,6 +21,7 @@ from datetime import date, datetime
 from typing import List, Optional
 
 from split_rule import split_ok as _split_ok, normalize as _split_norm
+from collect_cap import effective_cap as _test_cap, apply_cap as _apply_cap, ondemand_allowed as _ondemand_ok
 
 from fastapi import APIRouter, HTTPException, Header, Depends
 from auth import get_current_user
@@ -312,10 +313,10 @@ def get_collect_keywords(hour: int = None, worker: int = 0, workers: int = 1,
             remaining = {k: p for k, p in remaining.items() if _split_ok(k, w, wc)}
 
         if hour is None:
-            todo = sorted(remaining)[:MAX_KEYWORDS]
+            todo = _apply_cap(sorted(remaining)[:MAX_KEYWORDS], _test_cap())
             return {"success": True, "date": today, "mode": "all",
                     "total": len(uni), "done": len(done), "todo": len(todo),
-                    "keywords": todo}
+                    "test_cap": _test_cap(), "keywords": todo}
 
         h = max(0, min(23, int(hour)))
         now_slot, overdue = [], []
@@ -332,10 +333,16 @@ def get_collect_keywords(hour: int = None, worker: int = 0, workers: int = 1,
         if len(picked) < HOURLY_CAP:
             picked += [k for _s, k in overdue[:HOURLY_CAP - len(picked)]]
 
+        # 🧪 시험 상한(2026-09-15) — 재개 첫 회차를 키워드 1개로 묶는다. 0 이면 그대로.
+        cap = _test_cap()
+        if cap > 0:
+            picked = _apply_cap(picked, cap)
+            logger.info(f"[collector] 🧪 시험 상한 {cap}개 — 이번 회차 {len(picked)}개만 내보냄")
+
         return {"success": True, "date": today, "mode": "hourly", "hour": h,
                 "total": len(uni), "done": len(done),
                 "slot": len(now_slot), "overdue": len(overdue),
-                "worker": w, "workers": wc,
+                "worker": w, "workers": wc, "test_cap": cap,
                 "todo": len(picked), "keywords": picked}
     finally:
         conn.close()
@@ -670,6 +677,10 @@ def get_pending_requests(worker: int = 0, workers: int = 1,
        실제로는 절반만 시도하고 포기하게 된다. 순위 목록만 나누면 안 되는 이유다.
     """
     _auth(x_collector_token)
+    # 🧪 시험 상한이 켜져 있으면 온디맨드는 내보내지 않는다(2026-09-15) — 시험 회차는
+    #    서버가 정한 1개여야 예측 가능하다. 큐는 건드리지 않으므로 끄면 그대로 이어진다.
+    if not _ondemand_ok(_test_cap()):
+        return {"success": True, "keywords": [], "test_cap": _test_cap()}
     conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
     try:
