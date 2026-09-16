@@ -680,7 +680,36 @@ console.log('\n[응답 가로채기 — net_tap]');
          (SRC.match(/'Input\.insertText'/g) || []).length === 1 && tae.includes("'Input.insertText'"));
       ok('🔴㉑ 차단·퍼즐 처리 경로에는 입력 명령이 없다',
          !/Input\.(insertText|dispatchKeyEvent)/.test(grab('markBlocked', 'async') || ''));
-      ok('㉑ 버전 1.17.0 이상', _ge(MANIFEST.version, '1.17.0'));
+      /* 🔴 v1.17.1 — 2026-09-16 15:07 실사고.
+       *   `portalEntry` 가 연 네이버 첫 화면·통합검색을 옛 가드가 「캡차로 튕겼다」로 읽어
+       *   6시간 쉼에 들어갔다(서버 보고 `REDIRECT(검색 도메인 이탈) · title=과실주 : 네이버 검색`).
+       *   네이버는 아무것도 막지 않았다. **새 진입 경로를 더할 때 이 목록을 먼저 고쳐야 한다.**
+       */
+      const ibu = grab('isBlockedUrl');
+      const oeh = grab('onEntryHost');
+      // ⚠️ `ENTRY_HOSTS` 는 함수 **밖**에 있다 — isBlockedUrl 본문에서 찾으면 없다(방금 헛실패).
+      ok('🔴㉑ 우리가 일부러 거치는 곳은 차단으로 읽지 않는다',
+         /const ENTRY_HOSTS = \[/.test(SRC) && /onEntryHost\(u\)\) return false/.test(ibu));
+      ok('🔴㉑ 그 목록에 네이버 첫 화면·통합검색이 들어 있다',
+         /'search\.shopping\.naver\.com', 'www\.naver\.com', 'search\.naver\.com'/.test(SRC)
+         && /ENTRY_HOSTS\.some/.test(oeh));
+      ok('🔴㉑ ncpt·nid 같은 진짜 캡차 경로는 여전히 차단으로 본다',
+         /return \/naver\\\.com\/\.test\(u\)/.test(ibu));
+      ok('🔴㉑ 이동 대기도 같은 판정을 쓴다(한쪽만 고치면 또 헛차단)',
+         /if \(u && !onEntryHost\(u\)\)/.test(grab('waitNavigated')));
+      // 실제로 돌려 본다 — 사고 당시 그 주소가 이제 차단이 아니어야 한다.
+      {
+        const fn = new Function(`${grab('onEntryHost')}
+          const ENTRY_HOSTS = ['search.shopping.naver.com', 'www.naver.com', 'search.naver.com'];
+          ${grab('isBlockedUrl')}; return isBlockedUrl;`)();
+        ok('🔴㉑ 사고 당시 주소(통합검색)가 이제 차단이 아니다',
+           fn('https://search.naver.com/search.naver?where=nexearch&query=%EA%B3%BC%EC%8B%A4%EC%A3%BC') === false);
+        ok('🔴㉑ 네이버 첫 화면도 차단이 아니다', fn('https://www.naver.com') === false);
+        ok('🔴㉑ 쇼핑 결과는 그대로 차단 아님', fn('https://search.shopping.naver.com/search/all?query=x') === false);
+        ok('🔴㉑ 캡차 경로는 그대로 차단', fn('https://ncpt.naver.com/v2/captcha') === true);
+        ok('🔴㉑ 로그인 유도도 그대로 차단', fn('https://nid.naver.com/nidlogin.login') === true);
+      }
+      ok('㉑ 버전 1.17.1 이상', _ge(MANIFEST.version, '1.17.1'));
     }
 
     console.log(fail ? `\n❌ 실패 ${fail}건 / 전체 ${pass + fail}` : '\n사람처럼 넘기기 시험 전부 통과');

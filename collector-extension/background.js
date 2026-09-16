@@ -229,11 +229,26 @@ const BLOCK_KEY = 'blockedUntil';
 const WORK_URL = 'https://search.shopping.naver.com/search/all?query=' + encodeURIComponent('쇼핑');
 const BLOCK_COOLDOWN_MS = 6 * 60 * 60 * 1000;   // 캡차 확인 시 6시간 쉼(계속 두드리면 더 깊이 막힌다)
 
-/** 캡차·차단 페이지로 넘어갔는지 — URL 이 검색 도메인을 벗어났으면 차단으로 본다. */
+/** v1.17.1 — 사람 경로로 들어가느라 **일부러** 거치는 곳.
+ *
+ * 🔴 2026-09-16 15:07 실사고 — 이 목록이 없어서 `portalEntry` 가 연 **네이버 첫 화면과
+ *    통합검색**을 「캡차로 튕겼다」로 오판하고 6시간 쉼에 들어갔다.
+ *    서버 보고: `REDIRECT(검색 도메인 이탈) · title=과실주 : 네이버 검색`.
+ *    **네이버는 아무것도 막지 않았다. 우리 가드가 우리 발을 건 것이다.**
+ * ⚠️ 새 진입 경로를 더할 때는 **이 목록을 먼저 고칠 것.** 안 그러면 잘 돌던 회차가
+ *    「차단」으로 기록돼 6시간이 날아가고, 그 기록이 다음 진단을 통째로 오염시킨다.
+ */
+const ENTRY_HOSTS = ['search.shopping.naver.com', 'www.naver.com', 'search.naver.com'];
+function onEntryHost(url) {
+  const u = String(url || '');
+  return ENTRY_HOSTS.some((h) => u.includes(h));
+}
+
+/** 캡차·차단 페이지로 넘어갔는지 — 우리가 쓰는 화면을 벗어났으면 차단으로 본다. */
 function isBlockedUrl(url) {
   const u = String(url || '');
   if (!u) return false;
-  if (u.includes('search.shopping.naver.com')) return false;
+  if (onEntryHost(u)) return false;
   return /naver\.com/.test(u);   // ncpt·nid 등 네이버 안의 다른 페이지 = 캡차/로그인 유도
 }
 
@@ -1178,7 +1193,9 @@ function waitNavigated(tabId, needle) {
         const t = await chrome.tabs.get(tabId);
         const u = String(t.url || '');
         // 캡차로 튕겼으면 더 기다릴 것 없이 즉시 반환(호출부가 판정한다)
-        if (u && !u.includes('search.shopping.naver.com')) { clearInterval(iv); resolve(); return; }
+        // ⚠️ v1.17.1 — 「쇼핑이 아니면 튕긴 것」이 아니다. 사람 경로로 들어가느라 네이버 첫 화면·
+        //    통합검색을 거치므로 `onEntryHost` 로 판정한다(15:07 오판 사고).
+        if (u && !onEntryHost(u)) { clearInterval(iv); resolve(); return; }
         // 주소가 목표와 맞고 로딩이 끝났으면 바로 진행.
         // ⚠️ 네이버가 주소를 정규화해 needle 이 안 보일 수도 있다 — 그때 25초를 통째로
         //    기다리면 회차 예산(50분)이 날아간다. 로딩만 끝났으면 6초 뒤 진행한다.
