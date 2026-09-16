@@ -1019,7 +1019,30 @@ console.log('\n[응답 가로채기 — net_tap]');
              [mkL('11'), mkL('11'), mkL('22')]).first) === '["11","22"]');
       }
 
-      ok('㉑ 버전 1.17.6 이상', _ge(MANIFEST.version, '1.17.6'));
+      /* 🔴🔴 v1.17.7 — 2026-09-16 18:22 경주빵 + 대표 실측(사람은 그 화면에서 2페이지가 넘어감).
+       *   ⇒ 화면은 멀쩡하고 **우리 클릭만** 안 먹었다. 원인 후보 둘을 함께 고쳤다. */
+      const tc7 = grab('trustedClickToPage', 'async');
+      const ct7 = grab('clickToPage', 'async');
+      ok('🔴㉔ **붙이고 나서** 굴리고 좌표를 잰다(띠가 뜨면 화면이 아래로 밀린다)',
+         tc7.indexOf('dbgAttach') < tc7.indexOf('humanScrollDown')
+         && tc7.indexOf('humanScrollDown') < tc7.indexOf('pagerLocate'));
+      ok('🔴㉔ 띠가 자리 잡을 틈을 준다', /attached = true;\s*await sleep\(350\)/.test(tc7));
+      ok('🔴㉔ 좌표를 잰 뒤에는 붙이지 않는다(옛 순서로 되돌리지 말 것)',
+         tc7.indexOf('pagerLocate') > tc7.indexOf('dbgAttach'));
+      ok('🔴㉔ 「눌렀다」를 「먹혔다」로 읽지 않는다 — 현재 페이지를 본다',
+         /cur=\(\\d\+\)/.test(ct7) && /cur !== String\(target\)/.test(ct7));
+      ok('🔴㉔ 안 움직였으면 합성 클릭으로 한 번 더 간다(폴백이 실제로 돌게)',
+         ct7.indexOf("cur !== String(target)") < ct7.indexOf('func: pagerClick')
+         && /no-move@/.test(ct7));
+      ok('🔴㉔ 번호를 **못 읽으면** 폴백하지 않는다(이미 넘어갔는데 또 누르면 3페이지로 간다)',
+         /if \(cur && cur !== String\(target\)\)/.test(ct7));
+      ok('🔴㉔ 합성 클릭 뒤에도 같은 자로 현재 페이지를 남긴다(무엇이 먹었는지 보이게)',
+         /await readPagerState\(tabId\); \}\s*\n\s*return !!\(res && res\.result\)/.test(ct7)
+         || (/readPagerState/.test(ct7) && ct7.indexOf('func: pagerClick') < ct7.lastIndexOf('readPagerState')));
+      ok('🔴㉔ 표준 입력이 먹었으면 합성 클릭은 하지 않는다(중복 클릭 금지)',
+         /_navMode\.how\.trusted \+= 1;\s*return true;/.test(ct7));
+
+      ok('㉑ 버전 1.17.7 이상', _ge(MANIFEST.version, '1.17.7'));
     }
 
     console.log(fail ? `\n❌ 실패 ${fail}건 / 전체 ${pass + fail}` : '\n사람처럼 넘기기 시험 전부 통과');

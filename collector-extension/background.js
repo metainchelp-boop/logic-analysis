@@ -1246,6 +1246,21 @@ async function trustedClickToPage(tabId, target) {
      *   `scrollIntoView` 로 버튼을 화면 한가운데로 **순간이동**시킨 뒤 그 점을 눌렀다.
      *   ⚠️ 네이버에 보내는 요청은 0건 는다 — 화면을 굴리는 것뿐이다.
      *   ⚠️ 게으르게 그려지는 부분이 있으면 이 동안에 그려진다(그 자체가 이득). */
+    /* 🔴🔴 v1.17.7 — **순서를 뒤집는다. 이것이 이번 실패의 유력한 범인이다.**
+     *
+     *   종전 순서: 굴리고 → **좌표를 재고** → `dbgAttach` → 그 좌표를 누른다.
+     *   그런데 `dbgAttach` 하는 순간 크롬이 **「디버깅하고 있습니다」 띠**를 화면 맨 위에 붙인다.
+     *   띠가 붙으면 **콘텐츠 영역 전체가 그 높이만큼 아래로 밀린다.**
+     *   ⇒ 우리가 잰 좌표는 **띠가 없던 때의 좌표**다. 버튼 높이는 26px 인데 띠는 그보다 두껍다.
+     *     그래서 **정확히 빗나간다** — 2026-09-16 18:22 경주빵 회차가 그 모양이었다
+     *     (`hit` 은 그 버튼인데 `cur` 이 1 그대로 · 상품 ID 도 불변).
+     *   ⚠️ `hit`/`cov` 는 **좌표를 잰 시점**의 확인이지 **누른 시점**의 확인이 아니다.
+     *      그래서 「cov=0 이니 안 덮였다」가 「잘 눌렀다」를 뜻하지 않는다. 내가 그렇게 읽었다.
+     *   ⇒ **붙이고 나서 굴리고 재고 누른다.** 띠가 이미 떠 있는 화면의 좌표를 쓴다.
+     */
+    await dbgAttach(tabId);
+    attached = true;
+    await sleep(350);                 // 띠가 붙고 화면이 자리를 잡을 틈
     await humanScrollDown(tabId);
     const [loc] = await chrome.scripting.executeScript({
       target: { tabId }, world: 'MAIN', func: pagerLocate, args: [target],
@@ -1254,8 +1269,6 @@ async function trustedClickToPage(tabId, target) {
     if (!spot) { _trustedNote = 'no-spot'; return ''; }   // 버튼을 못 찾음 — 합성 클릭도 못 찾는다
     _clickHit = spot.hit || '';
     _clickCovered = spot.covered ? 1 : 0;
-    await dbgAttach(tabId);
-    attached = true;
     const base = { x: spot.x, y: spot.y, button: 'left' };
     // 사람 손과 같은 순서 — 움직이고, 누르고, 뗀다.
     await dbgSend(tabId, 'Input.dispatchMouseEvent', { ...base, type: 'mouseMoved', buttons: 0, clickCount: 0 });
@@ -1303,13 +1316,29 @@ let _lastClickHow = '';      // v1.15.0 — 'trusted'(표준 입력) · 'synth'(
 async function clickToPage(tabId, target) {
   // v1.15.0 — 먼저 표준 입력 경로, 안 되면 종전 합성 클릭으로 폴백.
   //   ⚠️ 폴백을 지우지 말 것 — 개발자 도구가 그 탭에 열려 있으면 attach 가 거부된다.
+  /* 🔴🔴 v1.17.7 — **「눌렀다」를 「먹혔다」로 읽지 않는다.**
+   *   종전에는 표준 입력 이벤트를 **보내기만 하면** 성공으로 보고 그대로 끝냈다.
+   *   그래서 화면이 1페이지 그대로인데도 합성 클릭 폴백이 **한 번도 돌지 않았다**
+   *   (2026-09-16 18:22 경주빵: `cur=1` 인데 성공 처리). 폴백을 만들어 두고 못 쓴 셈이다.
+   *   ⇒ 이제 누른 직후 **현재 페이지 번호**를 보고, 그것이 목표와 다르면 합성 클릭을 한 번 더 한다.
+   *   ⚠️ 번호를 **읽지 못한 화면에서는 폴백하지 않는다** — 이미 넘어간 뒤 또 누르면
+   *      3페이지로 가 버린다. 모를 때는 건드리지 않는 쪽이 안전하다.
+   *   ⭐ 합성 클릭은 종전 경로에서 **화면을 실제로 깨운 실적이 있다**(요청이 나가 418 을 맞았다).
+   *      「진짜 입력이 언제나 낫다」는 가정은 이번 측정으로 흔들렸다.
+   */
   if (await trustedEnabled()) {
     const br = await trustedClickToPage(tabId, target);
     if (br) {
-      _lastClickBranch = br;
-      _lastClickHow = 'trusted';
-      _navMode.how.trusted += 1;
-      return true;
+      const cur = (/cur=(\d+)/.exec(_pagerAfter || '') || [])[1] || '';
+      if (cur && cur !== String(target)) {
+        _trustedNote = (_trustedNote ? _trustedNote + '|' : '') + 'no-move@' + cur;
+        // 아래 합성 클릭으로 떨어진다(일부러 return 하지 않는다).
+      } else {
+        _lastClickBranch = br;
+        _lastClickHow = 'trusted';
+        _navMode.how.trusted += 1;
+        return true;
+      }
     }
   }
   try {
@@ -1318,6 +1347,8 @@ async function clickToPage(tabId, target) {
     });
     _lastClickBranch = (res && res.result) || '';
     if (res && res.result) { _lastClickHow = 'synth'; _navMode.how.synth += 1; }
+    // v1.17.7 — 합성 클릭 뒤의 현재 페이지도 같은 자로 남긴다(둘 중 무엇이 먹었는지 보이게).
+    if (res && res.result) { await sleep(300); await readPagerState(tabId); }
     return !!(res && res.result);
   } catch (e) {
     _lastClickBranch = '';
