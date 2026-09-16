@@ -133,6 +133,9 @@ $('slow').onclick = async () => {
   const on = Number(state.slowUntil || 0) > Date.now();
   chrome.runtime.sendMessage({ cmd: on ? 'slowOff' : 'slowOn' }, () => setTimeout(render, 400));
 };
+// 🔍 v1.14.0 — 사람이 연 화면이 받은 응답을 같은 자로 재서 서버에 보낸다(네이버 요청 0건).
+$('humanProbe').onclick = () =>
+  chrome.runtime.sendMessage({ cmd: 'humanProbe' }, () => setTimeout(render, 800));
 $('refresh').onclick = render;
 render();
 setInterval(render, 3000);

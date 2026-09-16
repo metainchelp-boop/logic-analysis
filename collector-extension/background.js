@@ -678,13 +678,35 @@ function navProbe() {
     else {
       var now = Date.now();
       var one = function (e) {
-        return [Math.round((now - (e.at || now)) / 1000) + 's', 'p' + (e.page || 0), e.status, e.size,
-                String(e.path || '').slice(-28)].join('|') + (e.ids ? '|' + e.ids.join(',') : '');
+        var s = [Math.round((now - (e.at || now)) / 1000) + 's', 'p' + (e.page || 0), e.status, e.size,
+                 String(e.path || '').slice(-28)].join('|');
+        if (e.ids) s += '|' + e.ids.join(',');
+        // v1.14.0 — 거절 응답은 **본문 앞머리 40자**를 함께 싣는다.
+        //   9/16 실측에서 `p2|418|2657` 을 받고도 그 2,657자가 「보안 확인」 퍼즐인지 차단 안내문인지
+        //   그냥 오류인지 가를 수 없었다. net_tap 은 이미 head 를 갖고 있었는데(net_tap.js) 여기서 버렸다.
+        if (e.status >= 400 && e.head) s += '|' + String(e.head).replace(/\s+/g, ' ').slice(0, 40);
+        return s;
       };
-      out.tap = { n: (T.items || []).length, m: (T.misses || []).length,
-                  items: (T.items || []).slice(-4).map(one), misses: (T.misses || []).slice(-6).map(one) };
+      // v1.14.0 — 서버가 본문을 500자에서 자르므로(collector.py) **거절 응답이 먼저 살아남게** 고른다.
+      //   종전엔 slice(-6) 이라 200 응답이 자리를 먹고 정작 볼 4xx 가 밀릴 수 있었다.
+      var ms = T.misses || [];
+      var bad = ms.filter(function (e) { return (e.status | 0) >= 400; }).slice(-3);
+      var rest = ms.filter(function (e) { return (e.status | 0) < 400; }).slice(-3);
+      out.tap = { n: (T.items || []).length, m: ms.length,
+                  items: (T.items || []).slice(-4).map(one), misses: bad.concat(rest).map(one) };
     }
   } catch (e) { out.tap = 'err'; }
+  // v1.14.0 — **그 순간의 창·문서 상태**. 지금까지 전부 코드 추론이었고 한 번도 잰 적이 없다
+  //   (9/16 반박 검증 지적). 다섯 값을 11글자로 압축해 싣는다 — 값이 아니라 예/아니오다.
+  //   f=창이 앞에 있었나 · v=화면에 보였나 · a=사람 입력(있었던 적/지금) · w=자동화 표식 · r=직전 주소
+  try {
+    var uact = navigator.userActivation || {};
+    out.env = 'f' + (document.hasFocus() ? 1 : 0)
+            + 'v' + (document.visibilityState === 'visible' ? 1 : 0)
+            + 'a' + (uact.hasBeenActive ? 1 : 0) + (uact.isActive ? 1 : 0)
+            + 'w' + (navigator.webdriver ? 1 : 0)
+            + 'r' + (document.referrer ? 1 : 0);
+  } catch (e) { out.env = 'err'; }
   try { out.href = String(location.href).slice(0, 100); } catch (e) {}
   try {
     var rt = window.next && window.next.router;
@@ -725,13 +747,14 @@ function navProbe() {
 /** v1.13.1 — 「화면이 어떤 응답을 받았나」(net_tap 요약)를 서버에 따로 한 건 남긴다.
  *  STALE·BLOCK_TEXT·판독 실패·NO_PAGER 네 갈래 모두에서 부른다 — 22:02 퍼즐 회차는 BLOCK_TEXT 로 끝나
  *  tap 요약이 서버에 안 남았다. 진단용이라 실패해도 수집을 멈추지 않는다. */
-async function tapReport(tabId, keyword, pagingIndex, why) {
+async function tapReport(tabId, keyword, pagingIndex, why, errLabel) {
   try {
     const [pr] = await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func: navProbe });
     const probe = (pr && pr.result) || {};
     const tap = probe.tap === undefined ? 'none' : probe.tap;
-    await reportBlocked({ keyword, pagingIndex, err: 'TAP_PROBE(화면이 받은 응답 요약)',
-                          href: probe.href || '', body: JSON.stringify({ why: why, q: probe.q || '', tap: tap }),
+    await reportBlocked({ keyword, pagingIndex, err: errLabel || 'TAP_PROBE(화면이 받은 응답 요약)',
+                          href: probe.href || '',
+                          body: JSON.stringify({ why: why, q: probe.q || '', env: probe.env || '', tap: tap }),
                           note: '진단 — 차단 아님. 클릭 뒤 화면이 어떤 응답을 받았나' });
   } catch (e) { /* 진단 실패는 무시 */ }
 }
@@ -1303,6 +1326,28 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
       await chrome.storage.local.set({ [SLOW_KEY]: until });
       await setState({ slowUntil: until });
       await log('🐢 안전 속도 켜짐 — 24시간 동안 절반 속도로 돕니다(사람이 켠 것).');
+    })();
+    sendResponse({ ok: true });
+  }
+  // v1.14.0 — 🔍 **사람이 연 화면을 같은 자로 잰다.**
+  //   9/16 A/B 의 치명적 결함이 이것이었다 — 대표가 손으로 2페이지를 눌렀을 때 확장이 꺼져 있어
+  //   net_tap 이 안 돌았고, 그래서 「사람의 2페이지 요청이 200 이었나」를 **잰 값이 0건**이다.
+  //   「사람은 되고 기계는 안 된다」가 서로 다른 자로 잰 것이라 판정에 쓸 수 없었다(9/12 교훈).
+  //   이 버튼은 **이미 화면에 있는 응답을 복사해 보낼 뿐** — 네이버에 요청을 한 건도 더 보내지 않는다.
+  if (msg?.cmd === 'humanProbe') {
+    (async () => {
+      try {
+        const tabs = await chrome.tabs.query({ url: '*://search.shopping.naver.com/*' });
+        const t = tabs.find((x) => x.active) || tabs[0];
+        if (!t) {
+          await log('🔍 네이버쇼핑 검색 결과 화면이 안 열려 있습니다 — 그 화면을 띄우고 다시 눌러 주세요.');
+          return;
+        }
+        await tapReport(t.id, '(사람 시험)', 0, 'HUMAN', 'HUMAN_PROBE(사람이 연 화면)');
+        await log('🔍 이 화면이 받은 응답을 서버에 보냈습니다 (진단 1건 · 네이버 요청 0건).');
+      } catch (e) {
+        await log('🔍 응답 보내기 실패 — ' + (e && e.message ? e.message : e));
+      }
     })();
     sendResponse({ ok: true });
   }

@@ -397,6 +397,84 @@ console.log('\n[응답 가로채기 — net_tap]');
     ok('⑱ 주소창·라우터 어느 쪽으로도 pagingIndex 이동을 만들지 않는다', !/rt\.push/.test(SRC) && !/tabs\.update\([^)]*pagingIndex/.test(SRC) && (SRC.match(/pagingIndex=\$\{pagingIndex\}`;/g) || []).length === 0);
     ok('⑱ 버전 1.13.1 이상', _ge(MANIFEST.version, '1.13.1'));
 
+
+    // ⑲ v1.14.0 — 9/16 실측(p2 418)을 반박 검증한 뒤 드러난 두 구멍을 메운다.
+    //   ⑴ 418 본문을 못 봐서 「퍼즐인가 차단문인가 오류인가」를 못 갈랐다(net_tap 은 head 를 갖고 있었는데 버렸다).
+    //   ⑵ 창·문서 상태(포커스·가시성·사용자 입력·자동화 표식·직전 주소)를 한 번도 안 쟀다 — 전부 코드 추론이었다.
+    //   ⑶ 사람 시험은 확장이 꺼져 있어 net_tap 이 안 돌았다 ⇒ 같은 자로 잰 값이 0건이었다.
+    console.log('\n[v1.14.0 — 418 본문 · 창 상태 · 사람 화면 같은 자로 재기]');
+    {
+      const np = grab('navProbe');
+      const runNp = new Function('window', 'location', 'document', 'navigator', np + '\nreturn navProbe();');
+      const emptyDoc = { querySelectorAll: () => [], hasFocus: () => false, visibilityState: 'visible', referrer: '' };
+
+      // env — 다섯 값이 11글자로
+      const r1 = runNp({}, { href: 'https://x' },
+        { querySelectorAll: () => [], hasFocus: () => true, visibilityState: 'visible', referrer: 'https://search.shopping.naver.com/' },
+        { userActivation: { hasBeenActive: true, isActive: false }, webdriver: false });
+      ok('⑲ navProbe env — 사람 창 모양(f1 v1 a10 w0 r1)', r1 && r1.env === 'f1v1a10w0r1');
+      const r0 = runNp({}, { href: 'https://x' },
+        { querySelectorAll: () => [], hasFocus: () => false, visibilityState: 'hidden', referrer: '' },
+        { userActivation: { hasBeenActive: false, isActive: false }, webdriver: true });
+      ok('⑲ navProbe env — 배경·무입력·자동화 모양(f0 v0 a00 w1 r0)', r0 && r0.env === 'f0v0a00w1r0');
+      const rNoUA = runNp({}, { href: 'https://x' }, emptyDoc, {});
+      ok('⑲ navProbe env — userActivation 이 없는 크롬에서도 죽지 않는다', rNoUA && rNoUA.env === 'f0v1a00w0r0');
+
+      // 거절 응답 본문 앞머리 + 4xx 우선
+      const mk = (at, page, status, size, path, head) => ({ at, page, status, size, path, head });
+      const T = { items: [], misses: [
+        mk(1000, 0, 200, 88379, 'x/api/modules/gnb/category/list'),
+        mk(1000, 0, 200, 16910, 'nam.veta.naver.com/gfp/v1'),
+        mk(1000, 0, 200, 30024, 'nam.veta.naver.com/gfp/v1'),
+        mk(1000, 0, 200, 102, 'ncpt.naver.com/v2/tokens'),
+        mk(1000, 0, 418, 2657, 'shopping.naver.com/api/product-zzim/products', 'NAVER 보안 확인을 완료해   주세요.\n이 절차는'),
+        mk(2000, 2, 418, 2657, 'search.shopping.naver.com/api/search/all', '쇼핑 서비스 접속이 일시적으로 제한되었습니다'),
+      ] };
+      const r2 = runNp({ __mcTap: T }, { href: 'https://x' }, emptyDoc, {});
+      // 거절 3건 + 나머지 3건 상한이라 6건 중 5건이 실린다(418 두 건 + 200 세 건).
+      const bad2 = r2 ? r2.tap.misses.filter((x) => /\|4\d\d\|/.test(x)) : [];
+      const rest2 = r2 ? r2.tap.misses.filter((x) => !/\|4\d\d\|/.test(x)) : [];
+      ok('⑲ 거절(4xx) 응답이 목록 맨 앞에 온다(서버 500자 절단에서 먼저 살아남게)',
+         r2 && r2.tap.misses.length === 5 && bad2.length === 2 && rest2.length === 3
+            && r2.tap.misses.slice(0, 2).every((x) => /\|4\d\d\|/.test(x)));
+      ok('⑲ 418 항목에 본문 앞머리가 붙고 줄바꿈·연속공백은 한 칸으로 접힌다',
+         bad2.some((x) => /\|쇼핑 서비스 접속이 일시적으로 제한되었습니다$/.test(x))
+         && bad2.some((x) => /\|NAVER 보안 확인을 완료해 주세요\. 이 절차는$/.test(x)));
+      ok('⑲ 200 항목에는 본문을 안 싣는다(칸 5개 그대로)',
+         rest2.length === 3 && rest2.every((x) => x.split('|').length === 5));
+      const rLong = runNp({ __mcTap: { items: [], misses: [mk(1000, 2, 418, 99, 'h/p', 'ㄱ'.repeat(200))] } },
+                          { href: 'https://x' }, emptyDoc, {});
+      ok('⑲ 본문 앞머리는 40자에서 자른다', rLong && rLong.tap.misses[0].split('|')[5].length === 40);
+      ok('⑲ m 은 자르기 전 전체 건수를 그대로 센다', r2 && r2.tap.m === 6);
+
+      // tapReport — env 를 싣고 이름표를 받는다
+      const TR = grab('tapReport', 'async');
+      ok('⑲ tapReport 가 env 를 본문에 싣는다', /env: probe\.env \|\| ''/.test(TR));
+      ok('⑲ tapReport 가 err 이름표를 받아 쓴다(기본값은 종전 그대로)',
+         /async function tapReport\(tabId, keyword, pagingIndex, why, errLabel\)/.test(TR)
+         && /err: errLabel \|\| 'TAP_PROBE\(화면이 받은 응답 요약\)'/.test(TR));
+      ok('⑲ 기존 네 갈래 호출은 이름표를 안 넘긴다(종전 동작 무변경)',
+         (SRC.match(/tapReport\(tabId, keyword, pagingIndex, '(BLOCK_TEXT|STALE|NO_PAGER)'\)/g) || []).length === 3
+         && /tapReport\(tabId, keyword, pagingIndex, lastErr\)/.test(SRC));
+
+      // 🔍 사람 화면 버튼 — 세 파일이 이어져 있나
+      const POPUP_HTML = fs.readFileSync(path.join(__dirname, '..', 'popup.html'), 'utf8');
+      const POPUP_JS = fs.readFileSync(path.join(__dirname, '..', 'popup.js'), 'utf8');
+      ok('⑲ 팝업에 「이 화면 응답 보내기」 버튼이 있다', /id="humanProbe"/.test(POPUP_HTML) && /이 화면 응답 보내기/.test(POPUP_HTML));
+      ok('⑲ 팝업 스크립트가 그 버튼을 humanProbe 로 배선한다', /\$\('humanProbe'\)\.onclick/.test(POPUP_JS) && /cmd: 'humanProbe'/.test(POPUP_JS));
+      const hp = SRC.slice(SRC.indexOf("msg?.cmd === 'humanProbe'"), SRC.indexOf("msg?.cmd === 'slowOff'"));
+      ok('⑲ 배경이 humanProbe 를 받아 사람이 보는 탭을 골라 잰다',
+         /chrome\.tabs\.query\(\{ url: '\*:\/\/search\.shopping\.naver\.com\/\*' \}\)/.test(hp)
+         && /tabs\.find\(\(x\) => x\.active\) \|\| tabs\[0\]/.test(hp)
+         && /tapReport\(t\.id, '\(사람 시험\)', 0, 'HUMAN', 'HUMAN_PROBE\(사람이 연 화면\)'\)/.test(hp));
+      ok('⑲ 화면이 안 열려 있으면 알려 주고 아무것도 안 한다', /검색 결과 화면이 안 열려 있습니다/.test(hp));
+      ok('⑲ 이 버튼은 네이버에 요청을 더 보내지 않는다(이미 받은 응답만 읽는다)',
+         !/fetch\(/.test(hp) && !/tabs\.update/.test(hp) && !/windows\.create/.test(hp));
+
+      ok('⑲ 주소창·라우터 pagingIndex 이동은 여전히 0곳', !/rt\.push/.test(SRC) && (SRC.match(/pagingIndex=\$\{pagingIndex\}`;/g) || []).length === 0);
+      ok('⑲ 버전 1.14.0 이상', _ge(MANIFEST.version, '1.14.0'));
+    }
+
     console.log(fail ? `\n❌ 실패 ${fail}건 / 전체 ${pass + fail}` : '\n사람처럼 넘기기 시험 전부 통과');
     process.exit(fail ? 1 : 0);
   })();
