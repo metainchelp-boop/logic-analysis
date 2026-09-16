@@ -97,6 +97,44 @@ jobs:
                                   GROUP BY check_type"""):
                 print(f"  {r['check_type']}: {r['n']}건 (미노출 {r['nr']}) {r['mn']} ~ {r['mx']}")
 
+            # 📏 2026-09-16 — 「1페이지(40위)만 수집」이 값을 얼마나 되찾는지 재는 블록.
+            #   2페이지부터가 418 로 막혀 있어 깊이를 1페이지로 줄이는 안이 올라와 있는데,
+            #   **우리가 추적하는 것들이 실제로 몇 위에 있는지**를 모르면 그 결정이 추측이 된다.
+            #   ⚠️ 마지막으로 정상 수집된 구간(9/9 이전)만 본다 — 그 뒤는 데이터가 없다.
+            #   ⚠️ 업체명·키워드는 찍지 않는다(저장소 공개). 분포 숫자만.
+            print("\n[📏 40위 커버리지 — 1페이지만 수집하면 무엇이 남나]")
+            for label, tbl, idcol in (("업체 키워드(축B)", "client_rank_history", "client_id"),
+                                      ("추적 상품(축A)", "rankings", "product_id")):
+                try:
+                    # 항목마다 **마지막 정상 측정 1건**만 — 같은 것을 여러 날 세면 분포가 왜곡된다.
+                    rows = list(c.execute(f"""
+                        SELECT rank_position AS rp FROM (
+                          SELECT {idcol} AS k, keyword, rank_position,
+                                 ROW_NUMBER() OVER (PARTITION BY {idcol}, keyword
+                                                    ORDER BY checked_at DESC) AS rn
+                            FROM {tbl}
+                           WHERE checked_at >= '2026-09-01' AND checked_at < '2026-09-10'
+                        ) WHERE rn = 1"""))
+                    tot = len(rows)
+                    if not tot:
+                        print(f"  {label}: (측정 없음)")
+                        continue
+                    got = [r["rp"] for r in rows if r["rp"] is not None]
+                    miss = tot - len(got)
+                    b40 = sum(1 for v in got if v <= 40)
+                    b80 = sum(1 for v in got if 40 < v <= 80)
+                    b120 = sum(1 for v in got if 80 < v <= 120)
+                    rest = len(got) - b40 - b80 - b120
+                    pc = lambda n: f"{round(n * 100.0 / tot, 1)}%"
+                    print(f"  {label}: 대상 {tot}개 · 순위 잡힌 것 {len(got)} · 300위 밖(미노출) {miss} ({pc(miss)})")
+                    print(f"     1~40위  {b40} ({pc(b40)})   ← 1페이지만 수집해도 그대로 보인다")
+                    print(f"     41~80   {b80} ({pc(b80)})")
+                    print(f"     81~120  {b120} ({pc(b120)})")
+                    print(f"     121~300 {rest} ({pc(rest)})")
+                    print(f"     ⇒ 1페이지만 수집하면 **순위가 보이던 것 중 {round(b40*100.0/max(1,len(got)),1)}%** 가 유지된다")
+                except Exception as e:
+                    print(f"  {label}: (조회 실패: {e})")
+
             print("\n[rankings(추적상품) 오늘 · check_type별]")
             for r in c.execute("""SELECT check_type, COUNT(*) n,
                                     SUM(CASE WHEN rank_position IS NULL THEN 1 ELSE 0 END) nr,
