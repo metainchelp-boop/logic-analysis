@@ -29,13 +29,18 @@ function grab(name, kind = 'function') {
 /** 아주 작은 가짜 DOM — 클릭됐는지만 본다. */
 function fakeDom(spec) {
   const clicked = [];
+  const scrolled = [];
   const mk = (tag, text, opts = {}) => ({
     tagName: tag.toUpperCase(), textContent: text, className: opts.cls || '',
     disabled: !!opts.disabled,
     getAttribute: (a) => (a === 'href' ? (opts.href ?? null)
                         : a === 'aria-label' ? (opts.aria ?? null)
                         : a === 'aria-disabled' ? (opts.ariaDisabled ?? null) : null),
-    getBoundingClientRect: () => (opts.hidden ? { width: 0, height: 0 } : { width: 30, height: 20 }),
+    // ⚠️ left·top 은 v1.15.0 의 pagerLocate 가 좌표를 내려면 필요하다. 기존 시험은 width·height 만
+    //    보므로 값을 더해도 영향이 없다(일부러 더하기만 했다).
+    getBoundingClientRect: () => (opts.hidden ? { width: 0, height: 0, left: 0, top: 0 }
+                                              : { width: 30, height: 20, left: opts.left ?? 100, top: opts.top ?? 200 }),
+    scrollIntoView: () => { scrolled.push(text); },
     click: () => clicked.push(text),
   });
   const scopes = (spec.scopes || []).map((items) => ({
@@ -48,7 +53,7 @@ function fakeDom(spec) {
       return [];
     },
   };
-  return { doc, clicked, mk };
+  return { doc, clicked, scrolled, mk };
 }
 
 function runPager(spec, target) {
@@ -57,6 +62,16 @@ function runPager(spec, target) {
   const fn = new Function('document', `${grab('pagerClick')}; return pagerClick;`)(doc);
   const how = fn(target);
   return { how, clicked };
+}
+
+/** v1.15.0 — 실제 `pagerLocate` 를 같은 가짜 DOM 위에서 돌린다(찾기만 하고 누르지 않아야 한다). */
+function runLocate(spec, target, win) {
+  const { doc, clicked, scrolled, mk } = fakeDom(spec);
+  spec.build && spec.build(mk);
+  const fn = new Function('document', 'window',
+    `${grab('pagerLocate')}; return pagerLocate;`)(doc, win || { innerWidth: 1280, innerHeight: 900 });
+  const spot = fn(target);
+  return { spot, clicked, scrolled };
 }
 
 console.log('\n[사람처럼 넘기기]');
@@ -192,7 +207,9 @@ ok('⑫ 광고 뺀 ID 집합이 이전 장 안에 다 들어 있으면 STALE_PAG
   ok('⑫ routerPush 함수가 소스에 없다(v1.13.1 삭제 · 되살리기 금지)', !/function routerPush\(/.test(SRC) && !/rt\.push\(/.test(SRC));
 }
 ok('⑫ collectKeyword 가 장마다 prevIds 를 넘긴다', /fetchPage\(keyword, i, prevIds\)/.test(SRC) && /prevIds = organicIds\(list\)/.test(SRC));
-ok('⑬ 서버 meta.nav 에 stale 이 실린다', /nav: \{ url: _navMode\.url, click: _navMode\.click, fallback: _navMode\.fallback, stale: _navMode\.stale(, src: _navMode\.src)? \}/.test(SRC));
+// ⚠️ 2026-09-16 — 이 줄은 원래 `nav: { … }` 를 **글자 그대로** 박아 두어, 필드를 하나 더할 때마다
+//    코드가 멀쩡한데도 실패했다(v1.15.0·v1.17.0 에서 두 번). 지금은 **뜻**만 본다 — nav 안에 stale 이 있는가.
+ok('⑬ 서버 meta.nav 에 stale 이 실린다', /nav: \{[\s\S]{0,500}?stale: _navMode\.stale/.test(SRC));
 ok('⑬ 버전 1.11.3 이상', _ge(MANIFEST.version, '1.11.3'));
 
 
@@ -365,8 +382,11 @@ console.log('\n[응답 가로채기 — net_tap]');
     ok('⑰ fetchPage 가 클릭 시각(_clickedAt)을 적고 pageExtract 에 {page, since} 를 넘긴다',
        /_clickedAt = Date\.now\(\);/.test(FP) && /func: pageExtract, args: \[\{ page: pagingIndex, since: _clickedAt \}\]/.test(FP));
     ok('⑰ STALE 때 응답 요약(TAP_PROBE)을 따로 한 건 더 보낸다(서버 500자 한도)', /TAP_PROBE\(화면이 받은 응답 요약\)/.test(SRC) && /delete probe\.tap/.test(FP));
-    ok('⑰ STALE 보고는 짧은 값(click·prev·got·src)이 앞에 온다', /const front = \{ click: _lastClickBranch, prev:/.test(FP));
-    ok('⑰ 2페이지부터 어느 출처(tap/router/nextdata)에서 읽었는지 meta.nav.src 로 센다', /_navMode\.src\[out\.src/.test(FP) && /src: _navMode\.src \}/.test(SRC));
+    // ⚠️ 위 ⑬ 과 같은 이유로 글자 그대로 박지 않는다 — front 맨 앞이 click 이고 prev 가 그 안에 있으면 된다.
+    ok('⑰ STALE 보고는 짧은 값(click·prev·got·src)이 앞에 온다',
+       /const front = \{ click: _lastClickBranch,[\s\S]{0,300}?prev: \(prevIds \|\| \[\]\)\.length/.test(FP));
+    ok('⑰ 2페이지부터 어느 출처(tap/router/nextdata)에서 읽었는지 meta.nav.src 로 센다',
+       /_navMode\.src\[out\.src/.test(FP) && /src: _navMode\.src/.test(SRC));
     ok('⑰ 주소창 pagingIndex 이동은 여전히 0곳', (SRC.match(/pagingIndex=\$\{pagingIndex\}`;/g) || []).length === 0 && !/chrome\.tabs\.update\(tabId, \{ url: [^}]*pagingIndex/.test(SRC));
 
     // navProbe — tap 요약
@@ -473,6 +493,194 @@ console.log('\n[응답 가로채기 — net_tap]');
 
       ok('⑲ 주소창·라우터 pagingIndex 이동은 여전히 0곳', !/rt\.push/.test(SRC) && (SRC.match(/pagingIndex=\$\{pagingIndex\}`;/g) || []).length === 0);
       ok('⑲ 버전 1.14.0 이상', _ge(MANIFEST.version, '1.14.0'));
+
+      /* ⑳ v1.15.0 — 페이지 넘김을 브라우저 표준 입력 경로(chrome.debugger + CDP)로.
+       *
+       * 왜 이 시험이 필요한가: 찾는 규칙이 **두 벌**이 됐다
+       *   (pagerClick = 찾아서 누름 / pagerLocate = 찾아서 좌표만).
+       *   한쪽만 고치면 두 경로가 **서로 다른 버튼**을 누르게 되어 비교가 무의미해진다.
+       *   ⭐ 이 저장소가 반복해 온 함정이 정확히 그것이다 — 「같은 일을 하는 파일·경로가 둘」.
+       */
+      console.log('\n[⑳ 표준 입력 클릭 — v1.15.0]');
+      const PH = fs.readFileSync(path.join(__dirname, '..', 'popup.html'), 'utf8');
+      const PJ = fs.readFileSync(path.join(__dirname, '..', 'popup.js'), 'utf8');
+
+      // — 찾기 규칙이 pagerClick 과 **같은 답**을 내는가(세 갈래 전부) —
+      {
+        // ⚠️ 두 규칙을 **각각 새 spec 으로** 돌린다. 하나를 나눠 쓰면 `build` 가 같은 배열에
+        //    두 번 밀어 넣어, 뒤 호출이 앞 호출이 만든 가짜 요소를 집는다(2026-09-16 실제로 겪음).
+        const mkSpec = () => {
+          const items = [];
+          return { scopes: [items], build: (mk) => {
+            items.push(mk('a', '1'), mk('a', '2'), mk('a', '3'), mk('a', '다음'));
+          } };
+        };
+        const c = runPager(mkSpec(), 2);
+        const l = runLocate(mkSpec(), 2);
+        ok('⑳ 숫자 갈래 — 두 규칙이 같은 가지를 고른다', c.how === 'num' && l.spot && l.spot.branch === 'num');
+        ok('⑳ 좌표는 그 버튼의 가운데다', l.spot.x === 115 && l.spot.y === 210);
+        ok('⑳ 찾기만 하고 누르지는 않는다', l.clicked.length === 0);
+        ok('⑳ 화면 밖일 수 있으니 먼저 가운데로 끌어온다', l.scrolled[0] === '2');
+      }
+      {
+        let items = [];
+        const spec = { scopes: [items], build: (mk) => { items.push(mk('button', '다음')); } };
+        ok('⑳ 「다음」 갈래 — 두 규칙이 같은 가지를 고른다',
+           runPager(spec, 2).how === 'next' && (runLocate(spec, 2).spot || {}).branch === 'next');
+      }
+      {
+        const spec = { scopes: [[]], anchors: [] };
+        const { doc, mk } = fakeDom(spec);
+        spec.anchors.push(mk('a', '2', { href: '/search/all?pagingIndex=2' }));
+        const fnL = new Function('document', 'window', `${grab('pagerLocate')}; return pagerLocate;`)(
+          doc, { innerWidth: 1280, innerHeight: 900 });
+        ok('⑳ 느슨한 갈래 — pagingIndex 링크도 같게 찾는다', (fnL(2) || {}).branch === 'loose');
+      }
+      // — 안 눌러야 할 것은 여기서도 안 찾는다 —
+      {
+        let items = [];
+        const spec = { scopes: [items], build: (mk) => { items.push(mk('button', '다음', { ariaDisabled: 'true' })); } };
+        ok('⑳ 비활성 「다음」은 좌표를 안 준다', runLocate(spec, 2).spot === null);
+      }
+      {
+        let items = [];
+        const spec = { scopes: [items], build: (mk) => { items.push(mk('a', '2', { hidden: true })); } };
+        ok('⑳ 안 보이는 버튼은 좌표를 안 준다', runLocate(spec, 2).spot === null);
+      }
+      ok('⑳ 못 찾으면 null — 호출부가 합성 클릭으로 폴백한다', runLocate({ scopes: [[]] }, 2).spot === null);
+      {
+        let items = [];
+        const spec = { scopes: [items], build: (mk) => { items.push(mk('a', '2', { left: 5000, top: 200 })); } };
+        ok('⑳ 창 밖 좌표면 포기한다(엉뚱한 곳 클릭 방지)',
+           runLocate(spec, 2, { innerWidth: 1280, innerHeight: 900 }).spot === null);
+      }
+
+      // — 배선: 표준 입력을 먼저 쓰고, 실패하면 반드시 폴백 —
+      const ctp = grab('clickToPage', 'async');
+      ok('⑳ clickToPage 가 표준 입력을 먼저 시도한다',
+         /await trustedEnabled\(\)/.test(ctp) && /await trustedClickToPage\(tabId, target\)/.test(ctp));
+      ok('⑳ 실패하면 종전 합성 클릭으로 폴백한다(수집이 통째로 죽지 않게)',
+         /func: pagerClick/.test(ctp) && ctp.indexOf('trustedClickToPage') < ctp.indexOf('func: pagerClick'));
+      ok('⑳ 어느 쪽으로 눌렀는지 기록한다', /_lastClickHow = 'trusted'/.test(ctp) && /_lastClickHow = 'synth'/.test(ctp));
+
+      const tcp = grab('trustedClickToPage', 'async');
+      ok('⑳ 누를 때만 붙고 **반드시** 뗀다(띠가 남지 않게)',
+         /finally \{\s*if \(attached\) await dbgDetach\(tabId\);/.test(tcp));
+      ok('⑳ 사람 손과 같은 순서 — 움직임·누름·뗌',
+         tcp.indexOf("'mouseMoved'") < tcp.indexOf("'mousePressed'")
+         && tcp.indexOf("'mousePressed'") < tcp.indexOf("'mouseReleased'"));
+      ok('⑳ 떼자마자 detach 하지 않는다(화면이 처리할 틈을 준다)',
+         /mouseReleased'[^]*?await sleep\(200\)/.test(tcp));
+      ok('⑳ 실패 사유를 남겨 서버에서 보이게 한다', /_trustedNote = String\(/.test(tcp));
+      ok('⑳ debugger API 가 없으면 조용히 폴백한다', /if \(!chrome\.debugger\)/.test(tcp));
+
+      ok('⑳ manifest 에 debugger 권한이 있다', (MANIFEST.permissions || []).includes('debugger'));
+      ok('⑳ 버전 1.15.0 이상', _ge(MANIFEST.version, '1.15.0'));
+
+      // — 끌 수 있어야 한다 · 기본값이 팝업과 배경에서 **같아야** 한다 —
+      ok('⑳ 팝업에 끄고 켜는 버튼이 있다', /id="trusted"/.test(PH) && /진짜 입력으로 클릭/.test(PH));
+      ok('⑳ 팝업이 그 버튼을 저장값 trustedClick 에 배선한다',
+         /\$\('trusted'\)\.onclick/.test(PJ) && /trustedClick: !on/.test(PJ));
+      ok('⑳ 기본값이 양쪽 다 「켬」이다(화면과 실제가 어긋나지 않게)',
+         /trustedClick === undefined \? true/.test(grab('trustedEnabled', 'async'))
+         && /trustedClick === undefined \? true/.test(PJ));
+
+      // — 서버가 집계로 갈라 볼 수 있어야 한다 —
+      ok('⑳ 업로드 meta 에 how(표준/합성)를 싣는다', /how: _navMode\.how/.test(SRC));
+      ok('⑳ STALE 보고에도 how 를 싣는다', /const front = \{ click: _lastClickBranch, how: _lastClickHow/.test(SRC));
+      ok('⑳ 키워드마다 how 를 0으로 되돌린다', (SRC.match(/how: \{ trusted: 0, synth: 0 \}/g) || []).length >= 2);
+
+      // — 🔴 넘지 않기로 한 선 —
+      ok('⑳ CDP 는 입력(마우스·키보드)만 쓴다 — 통신·화면 가로채기 명령 0곳',
+         (SRC.match(/'(Input|Network|Fetch|Emulation|Page|Security|Target)\.[A-Za-z]+'/g) || [])
+           .every((m) => m.startsWith("'Input.")));
+      ok('⑳ UA·헤더·쿠키를 손대지 않는다(권한에도 없다)',
+         !/declarativeNetRequest|webRequest|cookies/.test(JSON.stringify(MANIFEST)));
+      ok('⑳ 주소창·라우터 이동은 여전히 0곳(v1.11.3·v1.13.1 교훈 유지)',
+         !/rt\.push/.test(SRC) && (SRC.match(/pagingIndex=\$\{pagingIndex\}`;/g) || []).length === 0);
+
+      /* ㉑ v1.16.0 — 검색창에 쳐서 들어가기.
+       *
+       * 왜: 9/16 실측에서 **사람은 `/api/search/all` 200, 기계는 `_next/data/….json` 418** 이었다.
+       *   같은 기계·회선·크롬인데 부르는 주소가 달랐고, 다른 것은 **1페이지에 어떻게 들어갔는가**
+       *   하나였다(사람=검색창, 기계=주소 직접 열기). 그 차이를 없앤다.
+       * 🔴 여기서도 넘지 않는 선 — **퍼즐 칸에는 아무것도 입력하지 않는다.**
+       */
+      console.log('\n[㉑ 사람 경로로 들어가기 — v1.17.0]');
+      const sbl = grab('searchBoxLocate');
+      const stl = grab('shopTabLocate');
+      const tae = grab('typeAndEnter', 'async');
+      const pe = grab('portalEntry', 'async');
+      const sbe = grab('shopBoxEntry', 'async');
+      const he = grab('humanEntry', 'async');
+      const fp16 = grab('fetchPage', 'async');
+
+      // — 검색창 찾기 —
+      ok('㉑ 검색창을 여러 모양으로 찾는다(클래스명이 바뀌어도 죽지 않게)',
+         (sbl.match(/'[^']*'/g) || []).length >= 5 && /input\[name="query"\]/.test(sbl));
+      ok('㉑ 숨은 칸·아이콘은 고르지 않는다', /r\.width > 40 && r\.height > 10/.test(sbl));
+      ok('㉑ 화면 밖 좌표면 건너뛴다', /x < w && y < h/.test(sbl));
+
+      // — 「쇼핑」 탭 찾기 —
+      ok('㉑ 쇼핑 탭은 **주소로 먼저** 가른다(첫 화면 메뉴의 「쇼핑」과 헷갈리지 않게)',
+         /where=shop/.test(stl) && /ssc=tab\.shop/.test(stl)
+         && stl.indexOf('where=shop') < stl.indexOf('role="tablist"'));
+      ok('㉑ 글자가 정확히 「쇼핑」인 것만 본다', (stl.match(/!== '쇼핑'/g) || []).length >= 2);
+      ok('㉑ 못 찾으면 null(폴백 신호)', /return null;\s*\}\s*$/.test(stl.trim()));
+
+      // — 치는 동작 —
+      ok('㉑ 사람 순서대로 — 누르고 · 치고 · 엔터',
+         tae.indexOf("'Input.dispatchMouseEvent'") < tae.indexOf("'Input.insertText'")
+         && tae.indexOf("'Input.insertText'") < tae.lastIndexOf("'Input.dispatchKeyEvent'"));
+      ok('㉑ 한글은 insertText 로 한 번에 넣는다(글자 단위 키로는 조합이 깨진다)',
+         /'Input\.insertText', \{ text: String\(keyword\) \}/.test(tae));
+      ok('㉑ 엔터를 실제 키 이벤트로 보낸다', /key: 'Enter'[^]*windowsVirtualKeyCode: 13/.test(tae));
+      ok('㉑ 전 키워드 잔상을 지우고 덮어쓴다', /modifiers: 2/.test(tae));
+
+      // — 포털 경로(대표 지시) —
+      ok('㉑ 네이버 첫 화면부터 연다', /NAVER_HOME/.test(pe) && /'https:\/\/www\.naver\.com'/.test(SRC));
+      ok('㉑ 검색 → 통합검색 → 쇼핑 탭 순서다',
+         pe.indexOf('typeAndEnter') < pe.indexOf('search.naver.com')
+         && pe.indexOf('search.naver.com') < pe.indexOf('shopTabLocate'));
+      ok('㉑ 쇼핑 탭은 **눌러서** 넘어간다(주소를 직접 열지 않는다)',
+         /shopTabLocate/.test(pe) && !/tabs\.update\(tabId, \{ url: '[^']*shopping/.test(pe));
+      ok('㉑ 탭을 못 찾으면 폴백한다', /_entryNote = 'no-shop-tab'/.test(pe));
+      ok('㉑ 실패해도 **반드시** 뗀다(포털)', /finally \{\s*if \(attached\) await dbgDetach\(tabId\);/.test(pe));
+      ok('㉑ 이동 동안에는 떼어 둔다(띠를 짧게)', (pe.match(/await dbgDetach\(tabId\); attached = false;/g) || []).length >= 2);
+
+      // — 두 번째부터는 쇼핑 검색창 —
+      ok('㉑ 쇼핑 안에서는 그 검색창을 쓴다(매번 네이버로 되돌아가지 않는다)',
+         /findBox\(tabId\)/.test(sbe) && /typeAndEnter/.test(sbe));
+      ok('㉑ 이미 쇼핑이면 쇼핑 검색창을 먼저 쓴다',
+         /inShop && await shopBoxEntry/.test(he) && he.indexOf('shopBoxEntry') < he.indexOf('portalEntry'));
+      ok('㉑ 쇼핑 결과 화면이 아니면 폴백한다',
+         /indexOf\('search\.shopping\.naver\.com'\) < 0/.test(he) && /indexOf\('\/search\/all'\) < 0/.test(he));
+      ok('㉑ 어느 길로 들어갔는지 남긴다', /_entryVia = 'shopbox'/.test(he) && /_entryVia = 'portal'/.test(he));
+
+      // — 호출부 배선 —
+      ok('㉑ 1페이지에서 사람 경로를 먼저 시도한다',
+         /await searchEntryEnabled\(\)/.test(fp16) && /await humanEntry\(tabId, keyword\)/.test(fp16));
+      ok('㉑ 실패하면 종전 주소 열기로 폴백한다(수집이 통째로 멈추지 않게)',
+         /if \(!entered\) \{/.test(fp16) && /chrome\.tabs\.update\(tabId, \{ url \}\)/.test(fp16));
+      ok('㉑ 어느 길로 들어갔는지 센다',
+         /_navMode\.entry\[_entryVia\] \+= 1/.test(fp16) && /_navMode\.entry\.url \+= 1/.test(fp16));
+      ok('㉑ 서버 meta 에 진입 방식을 싣는다', /entry: _navMode\.entry/.test(SRC) && /via: _entryVia/.test(SRC));
+      ok('㉑ 세 갈래를 따로 센다', (SRC.match(/entry: \{ portal: 0, shopbox: 0, url: 0 \}/g) || []).length >= 2);
+      ok('㉑ 네이버·통합검색 호스트 권한이 있다',
+         (MANIFEST.host_permissions || []).some((h) => h.indexOf('www.naver.com') >= 0)
+         && (MANIFEST.host_permissions || []).some((h) => h.indexOf('search.naver.com') >= 0));
+
+      ok('㉑ 끌 수 있다(팝업 토글)', /id="searchEntry"/.test(PH) && /\$\('searchEntry'\)\.onclick/.test(PJ));
+      ok('㉑ 기본값이 양쪽 다 「켬」이다',
+         /searchEntry === undefined \? true/.test(grab('searchEntryEnabled', 'async'))
+         && /searchEntry === undefined \? true/.test(PJ));
+
+      // 🔴 퍼즐 가드 — 글자를 넣는 곳은 **한 곳뿐**이어야 한다.
+      ok('🔴㉑ 글자 입력은 검색창에 치는 한 곳에서만 쓴다(퍼즐 칸에 쓰지 않는다)',
+         (SRC.match(/'Input\.insertText'/g) || []).length === 1 && tae.includes("'Input.insertText'"));
+      ok('🔴㉑ 차단·퍼즐 처리 경로에는 입력 명령이 없다',
+         !/Input\.(insertText|dispatchKeyEvent)/.test(grab('markBlocked', 'async') || ''));
+      ok('㉑ 버전 1.17.0 이상', _ge(MANIFEST.version, '1.17.0'));
     }
 
     console.log(fail ? `\n❌ 실패 ${fail}건 / 전체 ${pass + fail}` : '\n사람처럼 넘기기 시험 전부 통과');

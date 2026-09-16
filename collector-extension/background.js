@@ -592,7 +592,12 @@ function pageChanged(list, prevIds) {
 
 /** 이번 회차에 어떤 방식으로 페이지를 넘겼나 — 서버 meta 로 올려 현장에서 판명되게 한다.
  *  stale = 클릭은 됐는데 내용이 이전 페이지 그대로라 주소 이동으로 되돌린 횟수(2026-09-15). */
-let _navMode = { url: 0, click: 0, fallback: 0, stale: 0, reported: false, src: {} };
+let _navMode = { url: 0, click: 0, fallback: 0, stale: 0, reported: false, src: {},
+                 // v1.15.0 — 그 클릭이 **진짜 입력**이었는지 합성이었는지. 서버 집계로 갈린다.
+                 how: { trusted: 0, synth: 0 },
+                 // v1.17.0 — 1페이지로 **어떻게 들어갔나**.
+                 //   portal = 네이버 → 검색 → 쇼핑 탭 / shopbox = 쇼핑 검색창 / url = 주소를 직접 엶(폴백)
+                 entry: { portal: 0, shopbox: 0, url: 0 } };
 let _clickedAt = 0;          // v1.13.0 — 마지막 페이지 클릭 시각(이 뒤에 도착한 응답만 그 장의 답으로 본다)
 
 /** 화면 안에서 실행돼 **페이지 버튼을 실제로 클릭**한다.
@@ -646,18 +651,423 @@ function pagerClick(target) {
   return '';
 }
 
-/** 작업 탭에서 pagerClick 을 돌린다. 클릭했으면 true. */
+/** 화면 안에서 실행 — 페이지 버튼을 **찾기만** 하고 누르지는 않는다(가운데 좌표를 돌려준다).
+ *
+ * ⚠️ `pagerClick` 과 **같은 순서·같은 조건**으로 찾아야 한다. 한쪽만 고치면 두 경로가
+ *    서로 다른 버튼을 누르게 되어 비교 자체가 무의미해진다(회귀 시험이 이를 지킨다).
+ * ⚠️ 이 함수는 페이지 안(MAIN world)에서 돈다 — 바깥 변수를 쓸 수 없다.
+ */
+function pagerLocate(target) {
+  var want = String(target);
+  function vis(el) {
+    if (!el) return false;
+    var r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  }
+  function at(el, branch) {
+    // 화면 밖이면 좌표가 음수라 엉뚱한 곳이 눌린다 — 가운데로 끌어온 뒤 다시 잰다.
+    try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) { /* 무시 */ }
+    var r = el.getBoundingClientRect();
+    var x = r.left + r.width / 2, y = r.top + r.height / 2;
+    var w = window.innerWidth || 0, h = window.innerHeight || 0;
+    if (!(x > 0 && y > 0 && x < w && y < h)) return null;   // 그래도 밖이면 포기(합성 클릭으로 폴백)
+    return { branch: branch, x: Math.round(x), y: Math.round(y) };
+  }
+  // ① 페이지네이션 영역 안에서 숫자가 정확히 맞는 링크·버튼
+  var scopes = document.querySelectorAll('[class*="pagination"],[class*="paging"],[role="navigation"]');
+  for (var s = 0; s < scopes.length; s++) {
+    var cands = scopes[s].querySelectorAll('a,button');
+    for (var i = 0; i < cands.length; i++) {
+      var el = cands[i];
+      if (!vis(el)) continue;
+      if ((el.textContent || '').trim() === want) return at(el, 'num');
+    }
+  }
+  // ② 「다음」 버튼
+  for (var s2 = 0; s2 < scopes.length; s2++) {
+    var c2 = scopes[s2].querySelectorAll('a,button');
+    for (var j = 0; j < c2.length; j++) {
+      var e2 = c2[j];
+      if (!vis(e2)) continue;
+      var t = (e2.textContent || '').trim();
+      var aria = e2.getAttribute('aria-label') || '';
+      if (t === '다음' || /다음/.test(aria) || /next/i.test(e2.className || '')) {
+        if (e2.getAttribute('aria-disabled') === 'true' || e2.disabled) continue;
+        return at(e2, 'next');
+      }
+    }
+  }
+  // ③ 영역을 못 찾았을 때 — 문서 전체에서 숫자가 정확히 맞는 링크
+  var all = document.querySelectorAll('a');
+  for (var k = 0; k < all.length; k++) {
+    var e3 = all[k];
+    if (!vis(e3)) continue;
+    if ((e3.textContent || '').trim() !== want) continue;
+    var href = e3.getAttribute('href') || '';
+    if (href.indexOf('pagingIndex') < 0 && href !== '#') continue;
+    return at(e3, 'loose');
+  }
+  return null;
+}
+
+/** 화면 안에서 실행 — **검색창**을 찾아 가운데 좌표를 돌려준다(v1.16.0).
+ *
+ * ⚠️ 네이버가 검색창 클래스명을 수시로 바꾼다. 그래서 **여러 모양을 차례로** 보고,
+ *    하나도 못 찾으면 null 을 돌려 호출부가 종전 주소 열기로 폴백하게 한다.
+ * ⚠️ 이 함수는 페이지 안(MAIN world)에서 돈다 — 바깥 변수를 쓸 수 없다.
+ */
+function searchBoxLocate() {
+  var sels = [
+    'input#input_search',
+    'input[name="query"]',
+    'form input[type="text"]',
+    'input[type="search"]',
+    '[role="searchbox"]',
+    'input[placeholder*="검색"]',
+  ];
+  for (var s = 0; s < sels.length; s++) {
+    var list = document.querySelectorAll(sels[s]);
+    for (var i = 0; i < list.length; i++) {
+      var el = list[i];
+      if (el.disabled || el.readOnly) continue;
+      var r = el.getBoundingClientRect();
+      if (!(r.width > 40 && r.height > 10)) continue;              // 숨은 칸·아이콘 제외
+      var x = r.left + r.width / 2, y = r.top + r.height / 2;
+      var w = window.innerWidth || 0, h = window.innerHeight || 0;
+      if (!(x > 0 && y > 0 && x < w && y < h)) continue;
+      return { sel: sels[s], x: Math.round(x), y: Math.round(y) };
+    }
+  }
+  return null;
+}
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * v1.16.0 — **검색창에 쳐서 들어간다** (2026-09-16 실측 근거 · 대표 지시)
+ *
+ * 무엇을 고치나: 지금까지 1페이지를 `chrome.tabs.update({url:'…/search/all?query=X'})`
+ *   로 **직접 열었다**. 9/16 같은 자로 사람·기계를 나란히 재 보니 **그 뒤가 갈렸다**:
+ *
+ *     사람(검색창으로 들어옴 · 주소 `?adQuery=…&origQuery=…`)
+ *       2페이지 클릭 → `/api/search/all` → **200** (312KB · 399KB · 425KB, 3/3)
+ *     기계(주소를 직접 엶 · 주소 `?query=X`)
+ *       2페이지 클릭 → `/_next/data/<빌드ID>/search/all.json` → **418** (재시도까지 두 번)
+ *
+ *   같은 기계·같은 회선·같은 크롬·15분 차이인데 **부르는 주소 자체가 다르다.**
+ *   주소를 직접 열면 화면이 「페이지를 통째로 다시 받는」 길로 가고,
+ *   검색창으로 들어가면 「목록만 갈아 끼우는」 길로 간다.
+ *
+ * 그래서: 사람과 같은 순서로 간다 — **쇼핑 홈을 열고 · 검색창을 누르고 · 키워드를 치고 · 엔터.**
+ *   ⭐ 이것은 사이트를 **원래 쓰는 대로 쓰는 것**이다. 무엇을 위장하거나 속이지 않는다.
+ *
+ * v1.17.0 (대표 지시 2026-09-16) — **포털부터 사람 경로 전체를 밟는다.**
+ *   「크롬창 열고 네이버 주소 입력 → 추적할 키워드 입력 → 쇼핑 탭 클릭 → 페이지 이동.
+ *    그 뒤로는 쇼핑 페이지 검색창에서 순차적으로 키워드 검색」
+ *   ⇒ 첫 키워드 = `portalEntry`(네이버 → 검색 → 「쇼핑」 탭 클릭)
+ *      그 뒤 키워드 = `shopBoxEntry`(쇼핑 검색창에 이어서 친다 — 사람도 매번 되돌아가지 않는다)
+ *   ⚠️ 첫 키워드만 페이지 로드가 2건 는다(네이버 첫 화면 · 통합검색). 그 뒤는 종전과 같다.
+ *
+ * 🔴 넘지 않는 선 (바꾸지 말 것)
+ *   · **퍼즐은 사람이 푼다.** 퍼즐 칸에는 아무것도 입력하지 않는다(아래 가드).
+ *   · IP 세탁·지문 위조 없음 · UA/헤더/쿠키 무접촉 · 상한과 감속 그대로.
+ *
+ * ⚠️ 요청이 한 건 는다 — 키워드마다 쇼핑 홈 1회. 그래서 **홈은 회차마다 한 번만** 열고
+ *    그 뒤 키워드들은 검색창만 다시 쓴다(아래 `_homeAt`).
+ * ⚠️ 실패하면 **반드시 종전 주소 열기로 폴백한다.** 검색창 모양이 바뀌어도 수집이 멈추지 않게.
+ * ─────────────────────────────────────────────────────────────────────────── */
+/** 화면 안에서 실행 — 검색 결과 위쪽 **「쇼핑」 탭 링크**를 찾아 좌표를 돌려준다(v1.17.0). */
+function shopTabLocate() {
+  function at(el) {
+    try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) { /* 무시 */ }
+    var r = el.getBoundingClientRect();
+    if (!(r.width > 0 && r.height > 0)) return null;
+    var x = r.left + r.width / 2, y = r.top + r.height / 2;
+    var w = window.innerWidth || 0, h = window.innerHeight || 0;
+    if (!(x > 0 && y > 0 && x < w && y < h)) return null;
+    return { x: Math.round(x), y: Math.round(y) };
+  }
+  var as = document.querySelectorAll('a');
+  // ① 주소가 실제로 쇼핑 검색으로 가는 「쇼핑」 링크 — 이게 우리가 원하는 탭이다.
+  //    ⚠️ 첫 화면 맨 위 메뉴에도 「쇼핑」이 있다. 주소로 갈라야 엉뚱한 데로 안 간다.
+  for (var i = 0; i < as.length; i++) {
+    var a = as[i];
+    if ((a.textContent || '').trim() !== '쇼핑') continue;
+    var h = a.getAttribute('href') || '';
+    if (h.indexOf('where=shop') >= 0 || h.indexOf('ssc=tab.shop') >= 0
+        || h.indexOf('search.shopping.naver.com') >= 0) {
+      var p = at(a);
+      if (p) { p.via = 'href'; return p; }
+    }
+  }
+  // ② 주소로 못 가르면 — 탭 줄(role=tab·nav) 안에서 글자가 정확히 「쇼핑」인 것
+  var scopes = document.querySelectorAll('[role="tablist"],[role="navigation"],nav,[class*="tab"]');
+  for (var s = 0; s < scopes.length; s++) {
+    var c = scopes[s].querySelectorAll('a');
+    for (var j = 0; j < c.length; j++) {
+      if ((c[j].textContent || '').trim() !== '쇼핑') continue;
+      var q = at(c[j]);
+      if (q) { q.via = 'tab'; return q; }
+    }
+  }
+  return null;
+}
+
+const NAVER_HOME = 'https://www.naver.com';
+let _entryNote = '';         // 진입이 실패한 사유(진단 보고용)
+let _entryVia = '';          // 'portal'(네이버부터) · 'shopbox'(쇼핑 검색창) · ''(실패)
+
+/** 검색창을 누르고 · 키워드를 치고 · 엔터. 사람 손과 같은 순서.
+ *  ⚠️ 부르는 쪽이 이미 `dbgAttach` 해 둔 상태여야 한다(띠를 한 번만 띄우려고 밖에서 관리한다). */
+async function typeAndEnter(tabId, box, keyword) {
+  const at = { x: box.x, y: box.y, button: 'left' };
+  await dbgSend(tabId, 'Input.dispatchMouseEvent', { ...at, type: 'mouseMoved', buttons: 0, clickCount: 0 });
+  await sleep(40 + Math.floor(Math.random() * 60));
+  await dbgSend(tabId, 'Input.dispatchMouseEvent', { ...at, type: 'mousePressed', buttons: 1, clickCount: 1 });
+  await sleep(30 + Math.floor(Math.random() * 50));
+  await dbgSend(tabId, 'Input.dispatchMouseEvent', { ...at, type: 'mouseReleased', buttons: 0, clickCount: 1 });
+  await sleep(120 + Math.floor(Math.random() * 180));
+  // 이미 적혀 있는 것(전 키워드 잔상)을 전체 선택해 덮어쓴다.
+  for (const type of ['keyDown', 'keyUp']) {
+    await dbgSend(tabId, 'Input.dispatchKeyEvent', {
+      type, key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2,
+    });
+  }
+  // ⚠️ 한글은 글자 단위 키 이벤트로 못 넣는다(조합 입력) — insertText 로 한 번에 넣는다.
+  //    ⛔ 이 호출은 **검색창에만** 쓴다. 퍼즐 칸에는 절대 쓰지 않는다(회귀 시험이 지킨다).
+  await dbgSend(tabId, 'Input.insertText', { text: String(keyword) });
+  await sleep(250 + Math.floor(Math.random() * 350));   // 자동완성이 뜨는 틈 — 사람도 잠깐 멈춘다
+  for (const type of ['keyDown', 'keyUp']) {
+    await dbgSend(tabId, 'Input.dispatchKeyEvent', {
+      type, key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13,
+      nativeVirtualKeyCode: 13, text: type === 'keyDown' ? '\r' : undefined,
+    });
+  }
+}
+
+/** 화면 안에서 검색창을 찾는다(없으면 null). */
+async function findBox(tabId) {
+  const [loc] = await chrome.scripting.executeScript({
+    target: { tabId }, world: 'MAIN', func: searchBoxLocate,
+  });
+  return (loc && loc.result) || null;
+}
+
+/** ㉮ 포털부터 — 네이버 → 검색창에 키워드 → 「쇼핑」 탭 클릭 → 쇼핑 결과.
+ *  대표 지시(2026-09-16): 「크롬창 열고 네이버 주소 입력 → 키워드 입력 → 쇼핑 탭 → 페이지 이동」. */
+async function portalEntry(tabId, keyword) {
+  let attached = false;
+  try {
+    await chrome.tabs.update(tabId, { url: NAVER_HOME });
+    await waitNavigated(tabId, 'naver.com');
+    await sleep(900 + Math.floor(Math.random() * 900));
+    const box = await findBox(tabId);
+    if (!box) { _entryNote = 'portal-no-searchbox'; return false; }
+
+    await dbgAttach(tabId); attached = true;
+    await typeAndEnter(tabId, box, keyword);
+    await dbgDetach(tabId); attached = false;      // 이동 동안에는 떼어 둔다(띠를 짧게)
+    await waitNavigated(tabId, 'search.naver.com');
+    await sleep(800 + Math.floor(Math.random() * 700));
+
+    // 「쇼핑」 탭을 눌러 넘어간다 — 주소를 직접 열지 않는다.
+    const [tl] = await chrome.scripting.executeScript({
+      target: { tabId }, world: 'MAIN', func: shopTabLocate,
+    });
+    const tab = tl && tl.result;
+    if (!tab) { _entryNote = 'no-shop-tab'; return false; }
+    await dbgAttach(tabId); attached = true;
+    const at = { x: tab.x, y: tab.y, button: 'left' };
+    await dbgSend(tabId, 'Input.dispatchMouseEvent', { ...at, type: 'mouseMoved', buttons: 0, clickCount: 0 });
+    await sleep(40 + Math.floor(Math.random() * 70));
+    await dbgSend(tabId, 'Input.dispatchMouseEvent', { ...at, type: 'mousePressed', buttons: 1, clickCount: 1 });
+    await sleep(30 + Math.floor(Math.random() * 60));
+    await dbgSend(tabId, 'Input.dispatchMouseEvent', { ...at, type: 'mouseReleased', buttons: 0, clickCount: 1 });
+    await dbgDetach(tabId); attached = false;
+    await waitNavigated(tabId, 'shopping.naver.com');
+    return true;
+  } catch (e) {
+    _entryNote = String((e && e.message) || e).slice(0, 60);
+    return false;
+  } finally {
+    if (attached) await dbgDetach(tabId);
+  }
+}
+
+/** ㉯ 쇼핑 안에서 — 쇼핑 페이지 검색창에 다음 키워드를 친다(사람도 두 번째부터는 이렇게 한다). */
+async function shopBoxEntry(tabId, keyword) {
+  let attached = false;
+  try {
+    const box = await findBox(tabId);
+    if (!box) { _entryNote = 'shop-no-searchbox'; return false; }
+    await dbgAttach(tabId); attached = true;
+    await typeAndEnter(tabId, box, keyword);
+    await dbgDetach(tabId); attached = false;
+    await waitNavigated(tabId, 'search/all');
+    return true;
+  } catch (e) {
+    _entryNote = String((e && e.message) || e).slice(0, 60);
+    return false;
+  } finally {
+    if (attached) await dbgDetach(tabId);
+  }
+}
+
+/** 사람과 같은 길로 1페이지에 들어간다. 성공하면 true, 실패하면 false(주소 열기로 폴백). */
+async function humanEntry(tabId, keyword) {
+  _entryVia = '';
+  if (!chrome.debugger) { _entryNote = 'no-debugger-api'; return false; }
+  try {
+    // 이미 쇼핑 안에 있으면 그 검색창을 쓴다 — 사람도 매번 네이버로 되돌아가지 않는다.
+    const t = await chrome.tabs.get(tabId);
+    const inShop = String(t.url || '').indexOf('search.shopping.naver.com') >= 0;
+    if (inShop && await shopBoxEntry(tabId, keyword)) { _entryVia = 'shopbox'; }
+    else if (await portalEntry(tabId, keyword)) { _entryVia = 'portal'; }
+    else return false;
+    // 정말 그 키워드의 쇼핑 결과 화면인가 — 아니면 폴백한다.
+    const t2 = await chrome.tabs.get(tabId);
+    const u = String(t2.url || '');
+    if (u.indexOf('search.shopping.naver.com') < 0 || u.indexOf('/search/all') < 0) {
+      _entryNote = _entryNote || 'not-result-page';
+      _entryVia = '';
+      return false;
+    }
+    _entryNote = '';
+    return true;
+  } catch (e) {
+    _entryNote = String((e && e.message) || e).slice(0, 60);
+    _entryVia = '';
+    return false;
+  }
+}
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * v1.15.0 — 페이지 넘김을 **브라우저 표준 입력 경로**로 보낸다 (2026-09-16)
+ *
+ * 무엇이 문제였나: `el.click()` 이 만드는 클릭은 브라우저가 `isTrusted=false` 로 표시한다.
+ *   9/16 같은 자(net_tap)로 사람·기계를 각각 재 보니 **같은 탭·문서·세션·IP·확장 ON** 에서
+ *   기계 3/3 은 `/api/search/all` 이 418, 사람 2/2 는 200(312KB·399KB)이었다.
+ *   후보 여덟(IP 평판·세션/쿠키·확장 유무·2페이지 자체·총량·경과 시간·탭 나이·주소 모양)이
+ *   전부 실측으로 닫혔다.
+ *
+ * 어떻게: `chrome.debugger`(크롬 공식 API)로 붙어 CDP `Input.dispatchMouseEvent` 를 보낸다.
+ *   ⭐ 이것은 **Playwright·Puppeteer 가 클릭하는 바로 그 방식**이다. 수집기를 처음부터
+ *      Playwright 로 짰으면 기본 동작이 이랬다. 없던 위장을 새로 입히는 것이 아니라
+ *      확장 안에서 쓰던 비표준 클릭(`el.click()`)을 표준 경로로 되돌리는 것이다.
+ *
+ * 🔴 넘지 않는 선 (바꾸지 말 것)
+ *   · **퍼즐은 사람이 푼다.** 자동 해제·솔버 없음. 캡차를 만나면 종전대로 쉰다.
+ *   · **IP 세탁 없음** — 프록시·VPN 없음. 같은 회선 그대로.
+ *   · **지문 위조 없음** — UA·헤더·쿠키 손대지 않는다(확장 권한에 그 항목이 아예 없다).
+ *   · **양은 늘리지 않는다** — 시간당 상한·캡차 후 감속 그대로.
+ *
+ * ⚠️ 대가 — 붙어 있는 동안 그 창에 「…이(가) 이 브라우저를 디버깅하고 있습니다」 띠가 뜬다.
+ *    그래서 **누를 때만 붙고 바로 뗀다**(회차 내내 붙어 있지 않는다).
+ * ⚠️ 실패하면 **반드시 옛 방식(합성 클릭)으로 폴백한다.** 개발자 도구가 그 탭에 열려 있으면
+ *    attach 가 거부되는데, 그때 수집이 통째로 죽으면 고장이 하나 더 느는 셈이다.
+ * ⚠️ 끌 수 있다 — 팝업의 「🖱 진짜 입력으로 클릭」. 저장값 `trustedClick`(없으면 켬).
+ * ─────────────────────────────────────────────────────────────────────────── */
+let _trustedNote = '';       // 마지막 실패 사유(진단 보고용 · 60자)
+
+function dbgAttach(tabId) {
+  return new Promise((res, rej) => {
+    try {
+      chrome.debugger.attach({ tabId }, '1.3', () => {
+        const e = chrome.runtime.lastError;
+        e ? rej(new Error(e.message || 'attach')) : res();
+      });
+    } catch (e) { rej(e); }
+  });
+}
+function dbgSend(tabId, method, params) {
+  return new Promise((res, rej) => {
+    try {
+      chrome.debugger.sendCommand({ tabId }, method, params, (r) => {
+        const e = chrome.runtime.lastError;
+        e ? rej(new Error(e.message || method)) : res(r);
+      });
+    } catch (e) { rej(e); }
+  });
+}
+function dbgDetach(tabId) {
+  return new Promise((res) => {
+    try {
+      chrome.debugger.detach({ tabId }, () => { void chrome.runtime.lastError; res(); });
+    } catch (e) { res(); }
+  });
+}
+
+/** 표준 입력 경로로 페이지 버튼을 누른다. 눌렀으면 가지 이름, 못 눌렀으면 ''(폴백하라는 뜻). */
+async function trustedClickToPage(tabId, target) {
+  let attached = false;
+  try {
+    if (!chrome.debugger) { _trustedNote = 'no-debugger-api'; return ''; }
+    const [loc] = await chrome.scripting.executeScript({
+      target: { tabId }, world: 'MAIN', func: pagerLocate, args: [target],
+    });
+    const spot = loc && loc.result;
+    if (!spot) { _trustedNote = 'no-spot'; return ''; }   // 버튼을 못 찾음 — 합성 클릭도 못 찾는다
+    await dbgAttach(tabId);
+    attached = true;
+    const base = { x: spot.x, y: spot.y, button: 'left' };
+    // 사람 손과 같은 순서 — 움직이고, 누르고, 뗀다.
+    await dbgSend(tabId, 'Input.dispatchMouseEvent', { ...base, type: 'mouseMoved', buttons: 0, clickCount: 0 });
+    await sleep(40 + Math.floor(Math.random() * 70));
+    await dbgSend(tabId, 'Input.dispatchMouseEvent', { ...base, type: 'mousePressed', buttons: 1, clickCount: 1 });
+    await sleep(30 + Math.floor(Math.random() * 60));
+    await dbgSend(tabId, 'Input.dispatchMouseEvent', { ...base, type: 'mouseReleased', buttons: 0, clickCount: 1 });
+    // ⚠️ 떼자마자 detach 하지 않는다 — 화면이 그 클릭을 처리할 틈을 준다.
+    await sleep(200);
+    _trustedNote = '';
+    return spot.branch || 'num';
+  } catch (e) {
+    _trustedNote = String((e && e.message) || e).slice(0, 60);
+    return '';
+  } finally {
+    if (attached) await dbgDetach(tabId);
+  }
+}
+
+/** 표준 입력 경로를 쓸지 — 저장값이 없으면 **켬**이 기본이다. */
+async function trustedEnabled() {
+  try {
+    const { trustedClick } = await chrome.storage.local.get('trustedClick');
+    return trustedClick === undefined ? true : !!trustedClick;
+  } catch (e) { return true; }
+}
+
+/** 검색창으로 들어갈지 — 저장값이 없으면 **켬**이 기본이다(v1.16.0 의 목적). */
+async function searchEntryEnabled() {
+  try {
+    const { searchEntry } = await chrome.storage.local.get('searchEntry');
+    return searchEntry === undefined ? true : !!searchEntry;
+  } catch (e) { return true; }
+}
+
+/** 작업 탭에서 페이지 버튼을 누른다. 눌렀으면 true. */
 let _staleReported = false;  // 키워드당 1회만 보고
-let _lastClickBranch = '';   // pagerClick 이 어느 가지('num'·'next'·'loose')로 눌렀나 — 진단 보고에 싣는다
+let _lastClickBranch = '';   // 어느 가지('num'·'next'·'loose')로 눌렀나 — 진단 보고에 싣는다
+let _lastClickHow = '';      // v1.15.0 — 'trusted'(표준 입력) · 'synth'(합성) · ''(못 누름)
 async function clickToPage(tabId, target) {
+  // v1.15.0 — 먼저 표준 입력 경로, 안 되면 종전 합성 클릭으로 폴백.
+  //   ⚠️ 폴백을 지우지 말 것 — 개발자 도구가 그 탭에 열려 있으면 attach 가 거부된다.
+  if (await trustedEnabled()) {
+    const br = await trustedClickToPage(tabId, target);
+    if (br) {
+      _lastClickBranch = br;
+      _lastClickHow = 'trusted';
+      _navMode.how.trusted += 1;
+      return true;
+    }
+  }
   try {
     const [res] = await chrome.scripting.executeScript({
       target: { tabId }, world: 'MAIN', func: pagerClick, args: [target],
     });
     _lastClickBranch = (res && res.result) || '';
+    if (res && res.result) { _lastClickHow = 'synth'; _navMode.how.synth += 1; }
     return !!(res && res.result);
   } catch (e) {
     _lastClickBranch = '';
+    _lastClickHow = '';
     return false;   // 주입 실패도 폴백 대상
   }
 }
@@ -804,11 +1214,21 @@ async function fetchPage(keyword, pagingIndex, prevIds) {
   // ⚠️ 클릭이 안 되면(버튼을 못 찾으면) **옛 방식으로 폴백**하고 그 사실을 서버에 알린다.
   //    현장에서 자동으로 판명되게 — 사람이 확인하러 들어가지 않아도 되게.
   if (pagingIndex <= 1) {
-    // 사람 주소와 같은 최소 형태. pagingSize·productSet·viewType 을 붙이지 않는다.
-    const url = 'https://search.shopping.naver.com/search/all'
-      + `?query=${encodeURIComponent(keyword)}`;
-    await chrome.tabs.update(tabId, { url });
-    await waitNavigated(tabId, encodeURIComponent(keyword));
+    // v1.16.0 — 먼저 **검색창에 쳐서** 들어간다(사람과 같은 순서). 안 되면 종전 주소 열기.
+    //   ⚠️ 폴백을 지우지 말 것 — 네이버가 검색창 모양을 바꾸면 수집이 통째로 멈춘다.
+    let entered = false;
+    if (await searchEntryEnabled()) {
+      entered = await humanEntry(tabId, keyword);
+      if (entered && _entryVia) _navMode.entry[_entryVia] += 1;
+    }
+    if (!entered) {
+      // 사람 주소와 같은 최소 형태. pagingSize·productSet·viewType 을 붙이지 않는다.
+      const url = 'https://search.shopping.naver.com/search/all'
+        + `?query=${encodeURIComponent(keyword)}`;
+      await chrome.tabs.update(tabId, { url });
+      await waitNavigated(tabId, encodeURIComponent(keyword));
+      _navMode.entry.url += 1;
+    }
     _navMode.url += 1;
   } else {
     _clickedAt = Date.now();   // v1.13.0 — 이 시각 뒤에 도착한 응답이 「이 클릭의 답」이다
@@ -900,7 +1320,8 @@ async function fetchPage(keyword, pagingIndex, prevIds) {
     // ⚠️ 서버는 body 를 500자에서 자른다(collector.py) — 짧은 값이 앞에 오게 순서를 정하고,
     //    응답 요약(tap)은 **따로 한 건** 더 보낸다(v1.13.0). 21:39 회차의 prev/got 이 잘려 나갔던 교훈.
     delete probe.tap;
-    const front = { click: _lastClickBranch, prev: (prevIds || []).length,
+    const front = { click: _lastClickBranch, how: _lastClickHow, tnote: _trustedNote || '',
+                    entry: _navMode.entry, enote: _entryNote || '', via: _entryVia || '', prev: (prevIds || []).length,
                     got: organicIds((out && out.list) || []).length, src: (out && out.src) || '' };
     probe = Object.assign(front, probe);
     if (!_staleReported) {
@@ -935,9 +1356,11 @@ async function fetchPage(keyword, pagingIndex, prevIds) {
  *     페이지가 요청한 개수를 그대로 주지 않는 경우(광고 제외·마지막 페이지 등)
  *     고정 계산은 순위를 통째로 어긋나게 만든다. 누적이면 어떤 경우에도 맞다. */
 async function collectKeyword(keyword) {
-  _navMode = { url: 0, click: 0, fallback: 0, stale: 0, reported: _navMode.reported, src: {} };   // 키워드마다 새로 센다
+  _navMode = { url: 0, click: 0, fallback: 0, stale: 0, reported: _navMode.reported, src: {},
+               how: { trusted: 0, synth: 0 },
+               entry: { portal: 0, shopbox: 0, url: 0 } };   // 키워드마다 새로 센다
   _clickedAt = 0;
-  _staleReported = false; _lastClickBranch = '';
+  _staleReported = false; _lastClickBranch = ''; _lastClickHow = '';
   // 순번 부여의 실체는 rank_rules.takeOrganic 하나다 — 광고 제외가 seenIds 중복 처리보다
   // 먼저인 순서까지가 계약이고, node 회귀 테스트가 그 계약을 검사한다(신고 #253 후속).
   const st = {
@@ -1001,7 +1424,11 @@ async function uploadKeyword(token, keyword, payload) {
         pageSize: CFG.pageSize, productSet: 'total', sort: 'rel',
         // 2026-09-12 — 페이지를 **어떻게** 넘겼는지. 클릭이 실제로 되는지가
         // 현장에서만 확인 가능해, 서버가 집계로 알 수 있게 싣는다.
-        nav: { url: _navMode.url, click: _navMode.click, fallback: _navMode.fallback, stale: _navMode.stale, src: _navMode.src },
+        // v1.15.0 — how = 표준 입력이었나 합성이었나 · tnote = 표준 입력이 실패한 사유.
+        nav: { url: _navMode.url, click: _navMode.click, fallback: _navMode.fallback, stale: _navMode.stale,
+               src: _navMode.src, how: _navMode.how, tnote: _trustedNote || undefined,
+               // v1.16.0 — 1페이지 진입 방식과 그 실패 사유.
+               entry: _navMode.entry, enote: _entryNote || undefined, via: _entryVia || undefined },
         rawCount: payload.rawCount || 0, adSkipped: payload.adSkipped || 0,
         dupSkipped: payload.dupSkipped || 0, adHintMissed: payload.adHintMissed || 0,
         // v1.10.3 — 광고 필드 지문 집계(제목·가게명 없음). 과필터 원인을 서버 데이터로 가른다.
