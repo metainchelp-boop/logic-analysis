@@ -698,6 +698,16 @@ console.log('\n[응답 가로채기 — net_tap]');
         ok('🔴㉑ 「쇼핑 새창」·「쇼핑새창」도 잡는다',
            !run([mkA('쇼핑 새창', 'https://search.shopping.naver.com/')], 'search.naver.com').miss
            && !run([mkA('쇼핑새창', 'https://search.shopping.naver.com/')], 'search.naver.com').miss);
+        /* 🔴 v1.17.4 — 대표 캡처로 확인한 **진짜 모양**:
+         *   <a role="tab" class="tab" target="_blank"
+         *      href="…/search/all?where=all&frm=NVSCTAB&query=…">쇼핑<span class="blind">새 창 열림</span></a>
+         *   v1.17.3 은 끝의 「열림」 하나만 떼어 「쇼핑새 창」이 남았다 — 되풀이해 떼야 한다.
+         */
+        const REAL_HREF = 'https://search.shopping.naver.com/search/all?where=all&frm=NVSCTAB&query=%EC%83%9D';
+        const realTab = run([mkA('쇼핑새 창 열림', REAL_HREF)], 'search.naver.com');
+        ok('🔴㉑ 진짜 모양 「쇼핑새 창 열림」을 잡는다(v1.17.3 이 놓친 것)',
+           !!realTab && !realTab.miss && realTab.via === 'href');
+        ok('🔴㉑ frm=NVSCTAB 주소도 탭으로 인정한다', !!realTab && !realTab.miss);
         ok('🔴㉑ 「쇼핑라이브」처럼 다른 탭은 안 잡는다(앞글자만 같다고 고르면 안 된다)',
            run([mkA('쇼핑라이브', 'https://search.shopping.naver.com/')], 'search.naver.com').miss === true);
         ok('🔴㉑ 첫 화면 메뉴의 「쇼핑」(쇼핑 홈)은 여전히 안 고른다',
@@ -721,7 +731,8 @@ console.log('\n[응답 가로채기 — net_tap]');
       ok('㉑ 쇼핑 탭은 **눌러서** 넘어간다(주소를 직접 열지 않는다)',
          /shopTabLocate/.test(pe) && !/tabs\.update\(tabId, \{ url: '[^']*shopping/.test(pe));
       // v1.17.2 에서 사유 문자열을 조립하게 바뀌었다 — 글자 그대로 박지 않는다(오늘 세 번째 같은 실수).
-      ok('㉑ 탭을 못 찾으면 폴백한다', /if \(!tab \|\| tab\.miss\)/.test(pe) && /return false;/.test(pe));
+      // ⚠️ v1.17.4 부터 실패는 `return 0`(= 탭 번호 없음)이다. 「false」를 찾으면 여기서 헛실패한다.
+      ok('㉑ 탭을 못 찾으면 폴백한다', /if \(!tab \|\| tab\.miss\)/.test(pe) && /return 0;/.test(pe));
       ok('㉑ 실패해도 **반드시** 뗀다(포털)', /finally \{\s*if \(attached\) await dbgDetach\(tabId\);/.test(pe));
       ok('㉑ 이동 동안에는 떼어 둔다(띠를 짧게)', (pe.match(/await dbgDetach\(tabId\); attached = false;/g) || []).length >= 2);
 
@@ -786,7 +797,40 @@ console.log('\n[응답 가로채기 — net_tap]');
         ok('🔴㉑ 캡차 경로는 그대로 차단', fn('https://ncpt.naver.com/v2/captcha') === true);
         ok('🔴㉑ 로그인 유도도 그대로 차단', fn('https://nid.naver.com/nidlogin.login') === true);
       }
-      ok('㉑ 버전 1.17.3 이상', _ge(MANIFEST.version, '1.17.3'));
+      /* 🔴 v1.17.4 — 쇼핑 탭은 `target="_blank"` 라 **새 탭**으로 열린다.
+       *   v1.17.3 까지는 누른 뒤 **원래 탭**만 보고 「결과 화면이 아니다」로 읽어 매번 폴백했다.
+       *   ⇒ 진입 함수는 이제 **탭 번호**를 돌려주고(0 = 실패), 호출부가 그 탭으로 갈아탄다.
+       *   ⚠️ 여기서 「true/false」를 기대하는 시험을 남겨 두면 다음 사람이 되돌려 놓는다.
+       */
+      ok('🔴㉑ 누르기 **전에** 탭 목록을 적어 둔다(새 탭을 가려내려면 기준이 필요하다)',
+         /const before = \(await chrome\.tabs\.query\(\{ windowId: winId \}\)\)\.map/.test(pe)
+         && pe.indexOf('const before') < pe.indexOf("'Input.dispatchMouseEvent'"));
+      ok('🔴㉑ 새로 생긴 쇼핑 탭만 이어받는다(원래 있던 탭·다른 사이트 탭은 건드리지 않는다)',
+         /before\.indexOf\(t\.id\) >= 0\) continue/.test(pe)
+         && /indexOf\('search\.shopping\.naver\.com'\) < 0\) continue/.test(pe));
+      ok('🔴㉑ 새 탭이 안 뜨면 **같은 탭에서 이동한 것**으로 보고 그대로 간다',
+         /const me = await chrome\.tabs\.get\(tabId\)/.test(pe)
+         && /break;\s*\/\/ 같은 탭에서 이동/.test(pe));
+      ok('🔴㉑ 무한정 기다리지 않는다(최대 15초)',
+         /for \(let i = 0; i < 30 && !adopted; i\+\+\)/.test(pe) && /await sleep\(500\)/.test(pe));
+      ok('🔴㉑ 이어받은 탭을 작업 탭으로 삼고 저장한다(워커가 잠들었다 깨도 잃지 않게)',
+         /workTabId = adopted/.test(pe) && /\[TAB_KEY\]: adopted/.test(pe));
+      ok('🔴㉑ 옛 탭은 닫는다(회차마다 쌓이면 메모리가 샌다)',
+         /chrome\.tabs\.remove\(tabId\)/.test(pe));
+      ok('🔴㉑ 이어받은 탭이 결과 화면이 될 때까지 기다린 뒤 넘긴다',
+         pe.indexOf("waitNavigated(adopted, 'search/all')") > 0
+         && pe.indexOf("waitNavigated(adopted") < pe.indexOf('return adopted'));
+      ok('🔴㉑ 진입 함수는 **탭 번호**를 돌려준다(성공 = 번호 · 실패 = 0)',
+         /return adopted;/.test(pe) && /return tabId;/.test(pe)
+         && !/return true;/.test(pe) && !/return false;/.test(pe));
+      ok('🔴㉑ humanEntry 도 탭 번호를 돌려준다', /return use;/.test(he) && !/return true;/.test(he));
+      ok('🔴㉑ 성공 여부는 「0 이 아닌가」로 본다(불리언 비교로 되돌리지 말 것)',
+         /if \(!use\) return 0;/.test(he) && /let use = 0;/.test(he));
+      ok('🔴㉑ 결과 화면 확인은 **이어받은 탭**을 본다(원래 탭이 아니라)',
+         /chrome\.tabs\.get\(use\)/.test(he));
+      ok('🔴㉑ 호출부가 그 탭으로 갈아탄다(안 갈아타면 통합검색을 읽는다)',
+         /let tabId = await ensureWorkTab\(\)/.test(fp16) && /tabId = use;/.test(fp16));
+      ok('㉑ 버전 1.17.4 이상', _ge(MANIFEST.version, '1.17.4'));
     }
 
     console.log(fail ? `\n❌ 실패 ${fail}건 / 전체 ${pass + fail}` : '\n사람처럼 넘기기 시험 전부 통과');

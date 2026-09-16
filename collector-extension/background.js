@@ -807,9 +807,28 @@ function shopTabLocate() {
    *   `textContent` 가 둘을 붙여 준다. 완전일치라 못 잡고 다섯 회차를 헛돌았다.
    * ⚠️ 그래서 **보조 문구를 떼고 비교**한다. 네이버가 그 문구를 바꿔도 앞글자가 「쇼핑」이면 잡힌다.
    */
+  /* 실제 모양(2026-09-16 대표 캡처):
+   *   <a role="tab" class="tab" target="_blank" href="…/search/all?where=all&frm=NVSCTAB&query=…">
+   *     "쇼핑"<span class="blind">새 창 열림</span>
+   *   </a>
+   * ⚠️ v1.17.3 은 끝의 「열림」 **하나만** 떼서 「쇼핑새 창」이 남았다. 한 번만 떼면 안 된다.
+   *    그래서 ① 낭독기 전용(.blind 등)을 아예 지우고 ② 그래도 남으면 되풀이해 떼어 낸다.
+   */
   function tabText(el) {
-    var t = String((el && el.textContent) || '').replace(/\s+/g, ' ').trim();
-    return t.replace(/\s*(새\s*창(에서\s*열기)?|새창|열림|link|new\s*window)\s*$/i, '').trim();
+    var t = '';
+    try {
+      var c = el.cloneNode(true);
+      var hid = c.querySelectorAll('.blind,.sr-only,.screen_out,.a11y,[aria-hidden="true"]');
+      for (var i = 0; i < hid.length; i++) { if (hid[i].remove) hid[i].remove(); }
+      t = String(c.textContent || '');
+    } catch (e) { t = String((el && el.textContent) || ''); }
+    t = t.replace(/\s+/g, ' ').trim();
+    for (var k = 0; k < 4; k++) {
+      var n = t.replace(/\s*(새\s*창\s*열림?|새\s*창|새창|열림|열기|link|new\s*window)\s*$/i, '').trim();
+      if (n === t) break;
+      t = n;
+    }
+    return t;
   }
   var as = document.querySelectorAll('a');
   // ① 주소가 실제로 쇼핑 검색으로 가는 「쇼핑」 링크 — 이게 우리가 원하는 탭이다.
@@ -819,9 +838,10 @@ function shopTabLocate() {
     if (tabText(a) !== '쇼핑') continue;
     var h = a.getAttribute('href') || '';
     if (h.indexOf('where=shop') >= 0 || h.indexOf('ssc=tab.shop') >= 0
-        || h.indexOf('search.shopping.naver.com') >= 0) {
+        || h.indexOf('frm=NVSCTAB') >= 0 || h.indexOf('search.shopping.naver.com') >= 0) {
       var p = at(a);
-      if (p) { p.via = 'href'; return p; }
+      // 새 창으로 열리는 탭인지 미리 알려 준다 — 호출부가 새 탭을 받아 이어 쓴다.
+      if (p) { p.via = 'href'; p.blank = (a.getAttribute('target') || '') === '_blank'; return p; }
     }
   }
   // ② 주소로 못 가르면 — 탭 줄(role=tab·nav) 안에서 글자가 정확히 「쇼핑」인 것
@@ -903,7 +923,7 @@ async function portalEntry(tabId, keyword) {
     await waitNavigated(tabId, 'naver.com');
     await sleep(900 + Math.floor(Math.random() * 900));
     const box = await findBox(tabId);
-    if (!box) { _entryNote = 'portal-no-searchbox'; return false; }
+    if (!box) { _entryNote = 'portal-no-searchbox'; return 0; }
 
     await dbgAttach(tabId); attached = true;
     await typeAndEnter(tabId, box, keyword);
@@ -930,8 +950,18 @@ async function portalEntry(tabId, keyword) {
       _entryNote = ('no-shop-tab@' + (d.host || '?') + (d.path || '')
                     + '|a' + (d.a || 0) + '|sc' + (d.sc || 0)
                     + '|' + ((d.seen || []).join(' ') || '쇼핑링크0')).slice(0, 150);
-      return false;
+      return 0;
     }
+    /* 🔴 v1.17.4 — 이 탭은 `target="_blank"` 다. **새 창(탭)으로 열린다.**
+     *   그래서 누른 뒤에도 우리가 보던 탭은 통합검색 그대로 남고, 결과는 **다른 탭**에 뜬다.
+     *   v1.17.3 까지는 그것을 「결과 화면이 아니다」로 읽고 폴백했다(2026-09-16 대표 캡처로 확인).
+     *   ⇒ 누르기 전 탭 목록을 적어 두고, 새로 생긴 쇼핑 탭을 **이어받아** 그 뒤를 진행한다.
+     *     사람도 새 탭이 뜨면 그 탭에서 계속 본다 — 같은 순서다.
+     */
+    const self0 = await chrome.tabs.get(tabId);
+    const winId = self0.windowId;
+    const before = (await chrome.tabs.query({ windowId: winId })).map((t) => t.id);
+
     await dbgAttach(tabId); attached = true;
     const at = { x: tab.x, y: tab.y, button: 'left' };
     await dbgSend(tabId, 'Input.dispatchMouseEvent', { ...at, type: 'mouseMoved', buttons: 0, clickCount: 0 });
@@ -940,11 +970,36 @@ async function portalEntry(tabId, keyword) {
     await sleep(30 + Math.floor(Math.random() * 60));
     await dbgSend(tabId, 'Input.dispatchMouseEvent', { ...at, type: 'mouseReleased', buttons: 0, clickCount: 1 });
     await dbgDetach(tabId); attached = false;
+
+    // 새 탭이 떴는지 최대 15초 동안 본다(안 뜨면 같은 탭에서 이동한 것 — 그대로 진행).
+    let adopted = 0;
+    for (let i = 0; i < 30 && !adopted; i++) {
+      await sleep(500);
+      const now = await chrome.tabs.query({ windowId: winId });
+      for (const t of now) {
+        if (before.indexOf(t.id) >= 0) continue;
+        if (String(t.url || '').indexOf('search.shopping.naver.com') < 0) continue;
+        adopted = t.id;
+        break;
+      }
+      if (!adopted) {
+        const me = await chrome.tabs.get(tabId).catch(() => null);
+        if (me && String(me.url || '').indexOf('search.shopping.naver.com') >= 0) break;  // 같은 탭에서 이동
+      }
+    }
+    if (adopted) {
+      // 새 탭을 작업 탭으로 이어받고 옛 탭은 닫는다(탭이 회차마다 쌓이면 메모리가 샌다).
+      await waitNavigated(adopted, 'search/all');
+      workTabId = adopted;
+      try { await chrome.storage.local.set({ [TAB_KEY]: adopted }); } catch (e) { /* 무시 */ }
+      try { await chrome.tabs.remove(tabId); } catch (e) { /* 무시 */ }
+      return adopted;
+    }
     await waitNavigated(tabId, 'shopping.naver.com');
-    return true;
+    return tabId;
   } catch (e) {
     _entryNote = String((e && e.message) || e).slice(0, 60);
-    return false;
+    return 0;
   } finally {
     if (attached) await dbgDetach(tabId);
   }
@@ -969,31 +1024,38 @@ async function shopBoxEntry(tabId, keyword) {
   }
 }
 
-/** 사람과 같은 길로 1페이지에 들어간다. 성공하면 true, 실패하면 false(주소 열기로 폴백). */
+/** 사람과 같은 길로 1페이지에 들어간다.
+ *  성공하면 **그 뒤를 진행할 탭 id**(새 탭을 이어받았으면 그 id), 실패하면 0(주소 열기로 폴백).
+ *  ⚠️ v1.17.4 — 쇼핑 탭이 `target="_blank"` 라 **탭이 바뀔 수 있다.** 그래서 true/false 가 아니라
+ *     탭 id 를 돌려준다. 호출부가 이 id 로 이어서 읽지 않으면 엉뚱한 탭(통합검색)을 읽는다. */
 async function humanEntry(tabId, keyword) {
   _entryVia = '';
-  if (!chrome.debugger) { _entryNote = 'no-debugger-api'; return false; }
+  if (!chrome.debugger) { _entryNote = 'no-debugger-api'; return 0; }
   try {
     // 이미 쇼핑 안에 있으면 그 검색창을 쓴다 — 사람도 매번 네이버로 되돌아가지 않는다.
     const t = await chrome.tabs.get(tabId);
     const inShop = String(t.url || '').indexOf('search.shopping.naver.com') >= 0;
-    if (inShop && await shopBoxEntry(tabId, keyword)) { _entryVia = 'shopbox'; }
-    else if (await portalEntry(tabId, keyword)) { _entryVia = 'portal'; }
-    else return false;
+    let use = 0;
+    if (inShop && await shopBoxEntry(tabId, keyword)) { use = tabId; _entryVia = 'shopbox'; }
+    else {
+      use = await portalEntry(tabId, keyword);
+      if (use) _entryVia = 'portal';
+    }
+    if (!use) return 0;
     // 정말 그 키워드의 쇼핑 결과 화면인가 — 아니면 폴백한다.
-    const t2 = await chrome.tabs.get(tabId);
+    const t2 = await chrome.tabs.get(use);
     const u = String(t2.url || '');
     if (u.indexOf('search.shopping.naver.com') < 0 || u.indexOf('/search/all') < 0) {
-      _entryNote = _entryNote || 'not-result-page';
+      _entryNote = _entryNote || ('not-result-page@' + u.slice(0, 60));
       _entryVia = '';
-      return false;
+      return 0;
     }
     _entryNote = '';
-    return true;
+    return use;
   } catch (e) {
     _entryNote = String((e && e.message) || e).slice(0, 60);
     _entryVia = '';
-    return false;
+    return 0;
   }
 }
 
@@ -1261,7 +1323,9 @@ function waitNavigated(tabId, needle) {
  *    플레이스 추적기가 매일 이 구조로 성공하고 있고, 실측(2026-08-06)에서
  *    pagingIndex=2 페이지에 40개 상품과 필요한 필드가 전부 들어 있음을 확인했다. */
 async function fetchPage(keyword, pagingIndex, prevIds) {
-  const tabId = await ensureWorkTab();
+  // ⚠️ v1.17.4 — `let` 이다. 쇼핑 탭이 `target="_blank"` 라 진입 중에 **탭이 바뀔 수 있고**,
+  //    그 뒤 읽기·클릭은 반드시 **바뀐 탭**에서 해야 한다(안 그러면 통합검색을 읽는다).
+  let tabId = await ensureWorkTab();
   // ⭐ 2026-09-12 — **페이지를 주소창으로 넘기지 않는다.**
   //
   // 종전엔 장마다 `chrome.tabs.update({url})` 로 이동했다. 그건 **주소창에 붙여넣고
@@ -1278,8 +1342,12 @@ async function fetchPage(keyword, pagingIndex, prevIds) {
     //   ⚠️ 폴백을 지우지 말 것 — 네이버가 검색창 모양을 바꾸면 수집이 통째로 멈춘다.
     let entered = false;
     if (await searchEntryEnabled()) {
-      entered = await humanEntry(tabId, keyword);
-      if (entered && _entryVia) _navMode.entry[_entryVia] += 1;
+      const use = await humanEntry(tabId, keyword);
+      if (use) {
+        entered = true;
+        tabId = use;                      // ⚠️ 새 탭을 이어받았으면 여기서 갈아탄다
+        if (_entryVia) _navMode.entry[_entryVia] += 1;
+      }
     }
     if (!entered) {
       // 사람 주소와 같은 최소 형태. pagingSize·productSet·viewType 을 붙이지 않는다.
