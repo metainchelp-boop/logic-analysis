@@ -626,7 +626,53 @@ console.log('\n[응답 가로채기 — net_tap]');
          /where=shop/.test(stl) && /ssc=tab\.shop/.test(stl)
          && stl.indexOf('where=shop') < stl.indexOf('role="tablist"'));
       ok('㉑ 글자가 정확히 「쇼핑」인 것만 본다', (stl.match(/!== '쇼핑'/g) || []).length >= 2);
-      ok('㉑ 못 찾으면 null(폴백 신호)', /return null;\s*\}\s*$/.test(stl.trim()));
+      /* v1.17.2 — 못 찾았을 때 **어디서 무엇을 봤는지** 남긴다.
+       * ⚠️ v1.17.1 에서 두 키워드 다 `no-shop-tab` 이었는데, 「탭이 없다」인지 「아직 첫 화면」인지
+       *    「규칙이 못 잡았다」인지 가를 수가 없었다. 추측 대신 찍게 한다. */
+      ok('㉑ 못 찾으면 어디서 무엇을 봤는지 남긴다(폴백 신호 겸 진단)',
+         /return \{ miss: true, host: location\.host/.test(stl)
+         && /a: all2\.length, sc: scopes\.length, seen: seen/.test(stl));
+      ok('㉑ 「쇼핑」으로 시작하는 링크를 최대 3개까지 표본으로 담는다',
+         /seen\.length < 3/.test(stl) && /indexOf\('쇼핑'\) === 0/.test(stl));
+      ok('㉑ 그 진단이 서버 보고에 실린다',
+         /no-shop-tab@/.test(pe) && /\.slice\(0, 150\)/.test(pe));
+      ok('㉑ 탭 줄이 늦게 그려질 수 있으니 한 번 더 본다(요청은 안 는다)',
+         /tl\.result\.miss/.test(pe) && (pe.match(/func: shopTabLocate/g) || []).length === 2);
+      // 가짜 화면으로 실제 판정을 돌려 본다 — 못 찾으면 miss 가 오고 표본이 담겨야 한다.
+      {
+        const mkA = (text, href) => ({
+          textContent: text,
+          getAttribute: (k) => (k === 'href' ? href : null),
+          getBoundingClientRect: () => ({ width: 40, height: 16, left: 100, top: 50 }),
+          scrollIntoView: () => {},
+        });
+        const anchors = [mkA('뉴스', '/news'), mkA('쇼핑', 'https://shopping.naver.com/home'),
+                         mkA('지도', '/map')];
+        const doc = { querySelectorAll: (s) => (s === 'a' ? anchors : []) };
+        const fn = new Function('document', 'window', 'location',
+          `${grab('shopTabLocate')}; return shopTabLocate;`)(
+          doc, { innerWidth: 1280, innerHeight: 900 }, { host: 'www.naver.com', pathname: '/' });
+        const r = fn();
+        ok('㉑ 쇼핑 검색으로 안 가는 「쇼핑」 링크는 안 고른다(첫 화면 메뉴 오클릭 방지)', !!r && r.miss === true);
+        ok('㉑ 그때 어디였는지·무엇을 봤는지 담긴다',
+           r.host === 'www.naver.com' && r.a === 3 && r.seen.length === 1
+           && r.seen[0].indexOf('쇼핑>') === 0);
+      }
+      {
+        const mkA = (text, href) => ({
+          textContent: text,
+          getAttribute: (k) => (k === 'href' ? href : null),
+          getBoundingClientRect: () => ({ width: 40, height: 16, left: 200, top: 80 }),
+          scrollIntoView: () => {},
+        });
+        const anchors = [mkA('쇼핑', '/search.naver?where=shop&query=x')];
+        const doc = { querySelectorAll: (s) => (s === 'a' ? anchors : []) };
+        const fn = new Function('document', 'window', 'location',
+          `${grab('shopTabLocate')}; return shopTabLocate;`)(
+          doc, { innerWidth: 1280, innerHeight: 900 }, { host: 'search.naver.com', pathname: '/search.naver' });
+        const r = fn();
+        ok('㉑ 통합검색의 쇼핑 탭은 제대로 고른다', !!r && !r.miss && r.via === 'href' && r.x === 220 && r.y === 88);
+      }
 
       // — 치는 동작 —
       ok('㉑ 사람 순서대로 — 누르고 · 치고 · 엔터',
@@ -644,7 +690,8 @@ console.log('\n[응답 가로채기 — net_tap]');
          && pe.indexOf('search.naver.com') < pe.indexOf('shopTabLocate'));
       ok('㉑ 쇼핑 탭은 **눌러서** 넘어간다(주소를 직접 열지 않는다)',
          /shopTabLocate/.test(pe) && !/tabs\.update\(tabId, \{ url: '[^']*shopping/.test(pe));
-      ok('㉑ 탭을 못 찾으면 폴백한다', /_entryNote = 'no-shop-tab'/.test(pe));
+      // v1.17.2 에서 사유 문자열을 조립하게 바뀌었다 — 글자 그대로 박지 않는다(오늘 세 번째 같은 실수).
+      ok('㉑ 탭을 못 찾으면 폴백한다', /if \(!tab \|\| tab\.miss\)/.test(pe) && /return false;/.test(pe));
       ok('㉑ 실패해도 **반드시** 뗀다(포털)', /finally \{\s*if \(attached\) await dbgDetach\(tabId\);/.test(pe));
       ok('㉑ 이동 동안에는 떼어 둔다(띠를 짧게)', (pe.match(/await dbgDetach\(tabId\); attached = false;/g) || []).length >= 2);
 
@@ -709,7 +756,7 @@ console.log('\n[응답 가로채기 — net_tap]');
         ok('🔴㉑ 캡차 경로는 그대로 차단', fn('https://ncpt.naver.com/v2/captcha') === true);
         ok('🔴㉑ 로그인 유도도 그대로 차단', fn('https://nid.naver.com/nidlogin.login') === true);
       }
-      ok('㉑ 버전 1.17.1 이상', _ge(MANIFEST.version, '1.17.1'));
+      ok('㉑ 버전 1.17.2 이상', _ge(MANIFEST.version, '1.17.2'));
     }
 
     console.log(fail ? `\n❌ 실패 ${fail}건 / 전체 ${pass + fail}` : '\n사람처럼 넘기기 시험 전부 통과');

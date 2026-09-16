@@ -823,7 +823,19 @@ function shopTabLocate() {
       if (q) { q.via = 'tab'; return q; }
     }
   }
-  return null;
+  // ③ v1.17.2 — 못 찾았으면 **어디서 무엇을 봤는지** 남긴다.
+  //    ⚠️ v1.17.1 에서 두 키워드 다 `no-shop-tab` 이었는데, 그게 「통합검색에 탭이 없다」인지
+  //       「아직 첫 화면이었다」인지 「탭은 있는데 내 규칙이 못 잡았다」인지 가를 수가 없었다.
+  //       추측하지 말고 찍는다(오늘만 추측으로 네 번 틀렸다).
+  var seen = [], all2 = document.querySelectorAll('a');
+  for (var m = 0; m < all2.length && seen.length < 3; m++) {
+    var t2 = (all2[m].textContent || '').trim();
+    if (t2 === '쇼핑' || t2.indexOf('쇼핑') === 0) {
+      seen.push(t2.slice(0, 6) + '>' + String(all2[m].getAttribute('href') || '-').slice(0, 34));
+    }
+  }
+  return { miss: true, host: location.host, path: location.pathname,
+           a: all2.length, sc: scopes.length, seen: seen };
 }
 
 const NAVER_HOME = 'https://www.naver.com';
@@ -881,14 +893,29 @@ async function portalEntry(tabId, keyword) {
     await typeAndEnter(tabId, box, keyword);
     await dbgDetach(tabId); attached = false;      // 이동 동안에는 떼어 둔다(띠를 짧게)
     await waitNavigated(tabId, 'search.naver.com');
-    await sleep(800 + Math.floor(Math.random() * 700));
+    // ⚠️ v1.17.2 — 통합검색 탭 줄은 늦게 그려진다. 1초로는 짧아 「탭이 없다」로 오판할 수 있어
+    //    2~3초로 늘리고, 그래도 없으면 한 번 더 본다(요청은 안 는다 — 화면만 다시 읽는다).
+    await sleep(2000 + Math.floor(Math.random() * 1200));
 
     // 「쇼핑」 탭을 눌러 넘어간다 — 주소를 직접 열지 않는다.
-    const [tl] = await chrome.scripting.executeScript({
+    let [tl] = await chrome.scripting.executeScript({
       target: { tabId }, world: 'MAIN', func: shopTabLocate,
     });
+    if (tl && tl.result && tl.result.miss) {       // 아직 안 그려졌을 수 있다 — 한 번 더
+      await sleep(1500 + Math.floor(Math.random() * 900));
+      [tl] = await chrome.scripting.executeScript({
+        target: { tabId }, world: 'MAIN', func: shopTabLocate,
+      });
+    }
     const tab = tl && tl.result;
-    if (!tab) { _entryNote = 'no-shop-tab'; return false; }
+    if (!tab || tab.miss) {
+      // v1.17.2 — 어디서 무엇을 봤는지까지 남긴다(위 ③ 참조).
+      const d = tab || {};
+      _entryNote = ('no-shop-tab@' + (d.host || '?') + (d.path || '')
+                    + '|a' + (d.a || 0) + '|sc' + (d.sc || 0)
+                    + '|' + ((d.seen || []).join(' ') || '쇼핑링크0')).slice(0, 150);
+      return false;
+    }
     await dbgAttach(tabId); attached = true;
     const at = { x: tab.x, y: tab.y, button: 'left' };
     await dbgSend(tabId, 'Input.dispatchMouseEvent', { ...at, type: 'mouseMoved', buttons: 0, clickCount: 0 });
