@@ -1139,7 +1139,7 @@ function scrollStep(px) {
 /* 🔴 v1.17.5 — 누른 직후의 페이지네이션 상태. '현재' 표식을 여러 모양으로 찾는다.
  *   ⚠️ 클래스 이름 한 가지에 걸면 네이버가 바꾸는 순간 죽는다 — 여러 모양을 함께 본다. */
 function pagerState() {
-  var cur = '';
+  var cur = '', raw = '';
   var scopes = document.querySelectorAll('[class*="pagination"],[class*="paging"],[role="navigation"]');
   for (var s = 0; s < scopes.length && !cur; s++) {
     /* 🔴 v1.17.5 — **span 을 꼭 넣는다.** 대표 캡처로 확인: 현재 페이지만 `<a>` 가 아니라
@@ -1153,13 +1153,32 @@ function pagerState() {
       var cls = String(el.className || '');
       if (ac === 'page' || ac === 'true'
           || /active|current|selected|_on\b|--on\b|is-on/i.test(cls)) {
-        cur = String(el.textContent || '').replace(/\s+/g, '').slice(0, 4);
+        /* 🔴 v1.17.6 — 2026-09-16 18:08 실측. 앞 4글자만 잘랐더니 `cur=현재페이` 가 나왔다.
+         *   그 span 안에는 낭독기용 안내문(「현재페이지」)이 숫자 **앞에** 붙어 있다.
+         *   ⇒ 글자를 자르지 말고 **숫자만** 뽑는다. 원문도 12자까지 같이 남겨,
+         *      다음에 모양이 또 다르면 짐작하지 않고 눈으로 확인한다. */
+        raw = String(el.textContent || '').replace(/\s+/g, '').slice(0, 12);
+        var digits = raw.match(/\d+/g);
+        cur = digits ? digits[digits.length - 1] : '';
         break;
       }
     }
   }
   var m = String(location.search || '').match(/pagingIndex=(\d+)/);
-  return { cur: cur, qp: m ? m[1] : '', y: Math.round(window.scrollY || window.pageYOffset || 0) };
+  /* 🔴 v1.17.6 — 클릭 **직후** 화면에 그려진 상품 ID 3개.
+   *   종전 `domFirst` 는 29초 뒤 프로브 값이라 그 사이에 무슨 일이 있었는지 섞인다.
+   *   이 셋이 1페이지 것과 다르면 **화면은 넘어간 것**이고, 우리가 읽는 자리(라우터)만 안 바뀐 것이다.
+   *   ⇒ 그게 이 회차의 판가름이다. 요청은 0건 는다(이미 그려진 것을 읽을 뿐). */
+  var first = [];
+  try {
+    var mids = document.querySelectorAll('a[href*="nvMid="]');
+    for (var k = 0; k < mids.length && first.length < 3; k++) {
+      var mm = /nvMid=(\d+)/.exec(String(mids[k].getAttribute('href') || ''));
+      if (mm && first.indexOf(mm[1]) < 0) first.push(mm[1]);
+    }
+  } catch (e) { /* 무시 */ }
+  return { cur: cur, raw: raw, qp: m ? m[1] : '',
+           y: Math.round(window.scrollY || window.pageYOffset || 0), first: first };
 }
 
 /* 사람처럼 훑어 내려간다 — 여덟 번에 나눠 굴리고 사이에 잠깐 멈춘다. */
@@ -1182,7 +1201,10 @@ async function readPagerState(tabId) {
       target: { tabId }, world: 'MAIN', func: pagerState,
     });
     const r = (ps && ps.result) || {};
-    _pagerAfter = 'cur=' + (r.cur || '-') + '|qp=' + (r.qp || '-') + '|y=' + (r.y || 0);
+    // v1.17.6 — 숫자·원문·직후 상품 ID 3개를 함께 남긴다(서버 500자 한도 안에 들도록 짧게).
+    _pagerAfter = 'cur=' + (r.cur || '-') + '/' + (r.raw || '-')
+                + '|qp=' + (r.qp || '-') + '|y=' + (r.y || 0)
+                + '|f=' + ((r.first || []).join(',') || '-');
   } catch (e) { _pagerAfter = 'read-error'; }
 }
 

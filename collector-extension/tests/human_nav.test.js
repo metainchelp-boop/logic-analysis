@@ -981,7 +981,45 @@ console.log('\n[응답 가로채기 — net_tap]');
       ok('🔴㉒ 500자에 잘리지 않게 앞쪽에 둔다',
          SRC.indexOf('hit: _clickHit') < SRC.indexOf('entry: _navMode.entry, enote:'));
 
-      ok('㉑ 버전 1.17.5 이상', _ge(MANIFEST.version, '1.17.5'));
+      /* 🔴 v1.17.6 — 2026-09-16 18:08 실측. 내가 만든 계측이 「cur=현재페이」를 냈다.
+       *   그 span 안에는 낭독기용 안내문(「현재페이지」)이 숫자 **앞에** 붙어 있어
+       *   앞 4글자만 자르면 숫자가 영영 안 나온다. 글자를 자르지 말고 숫자를 뽑는다. */
+      ok('🔴㉓ 글자를 자르지 않고 **숫자를** 뽑는다(「현재페이지2」 → 2)',
+         /raw\.match\(\/\\d\+\/g\)/.test(pst) && !/slice\(0, 4\)/.test(pst));
+      ok('🔴㉓ 숫자가 여러 개면 **마지막** 것을 쓴다(안내문에 섞인 숫자에 안 속게)',
+         /digits\[digits\.length - 1\]/.test(pst));
+      ok('🔴㉓ 원문도 남긴다(모양이 또 다르면 짐작하지 않고 눈으로 본다)',
+         /raw: raw/.test(pst) && /slice\(0, 12\)/.test(pst));
+      ok('🔴㉓ 클릭 직후 화면의 상품 ID 3개를 함께 찍는다(1페이지 것과 대조할 자)',
+         /a\[href\*="nvMid="\]/.test(pst) && /first\.length < 3/.test(pst));
+      ok('🔴㉓ 셋 다 보고 문자열에 실린다',
+         /\/' \+ \(r\.raw \|\| '-'\)/.test(rps) && /\|f=' \+ \(\(r\.first \|\| \[\]\)/.test(rps));
+      {
+        const run6 = (els, search, links) => new Function('document', 'location', 'window',
+          `${grab('pagerState')}; return pagerState;`)(
+          { querySelectorAll: (s) => (/pagination|paging|navigation/.test(s)
+              ? [{ querySelectorAll: () => els }]
+              : (/nvMid/.test(s) ? (links || []) : [])) },
+          { search: search || '' }, { scrollY: 7665 })();
+        const mkP = (t, cls, cur) => ({
+          textContent: t, className: cls || '',
+          getAttribute: (a) => (a === 'aria-current' ? (cur || null) : null),
+        });
+        const mkL = (id) => ({ getAttribute: () => '/x?nvMid=' + id });
+        ok('🔴㉓ 실제로 겪은 모양 「현재페이지2」에서 2를 뽑는다',
+           run6([mkP('현재페이지2', 'active')], '').cur === '2');
+        ok('🔴㉓ 원문이 그대로 담긴다', run6([mkP('현재페이지2', 'active')], '').raw === '현재페이지2');
+        ok('🔴㉓ 숫자가 없으면 빈 값이다(지어내지 않는다)',
+           run6([mkP('현재페이지', 'active')], '').cur === '');
+        ok('🔴㉓ 상품 ID 3개까지만 담는다',
+           JSON.stringify(run6([mkP('현재페이지1', 'active')], '',
+             [mkL('11'), mkL('22'), mkL('33'), mkL('44')]).first) === '["11","22","33"]');
+        ok('🔴㉓ 같은 ID 는 한 번만 담는다',
+           JSON.stringify(run6([mkP('현재페이지1', 'active')], '',
+             [mkL('11'), mkL('11'), mkL('22')]).first) === '["11","22"]');
+      }
+
+      ok('㉑ 버전 1.17.6 이상', _ge(MANIFEST.version, '1.17.6'));
     }
 
     console.log(fail ? `\n❌ 실패 ${fail}건 / 전체 ${pass + fail}` : '\n사람처럼 넘기기 시험 전부 통과');
