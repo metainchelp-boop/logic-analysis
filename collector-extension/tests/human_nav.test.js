@@ -625,7 +625,8 @@ console.log('\n[응답 가로채기 — net_tap]');
       ok('㉑ 쇼핑 탭은 **주소로 먼저** 가른다(첫 화면 메뉴의 「쇼핑」과 헷갈리지 않게)',
          /where=shop/.test(stl) && /ssc=tab\.shop/.test(stl)
          && stl.indexOf('where=shop') < stl.indexOf('role="tablist"'));
-      ok('㉑ 글자가 정확히 「쇼핑」인 것만 본다', (stl.match(/!== '쇼핑'/g) || []).length >= 2);
+      ok('㉑ 탭 글자는 보조 문구를 떼고 본다(완전일치 금지 — v1.17.3 교훈)',
+         /function tabText/.test(stl) && (stl.match(/tabText\((a|c\[j\])\) !== '쇼핑'/g) || []).length >= 2);
       /* v1.17.2 — 못 찾았을 때 **어디서 무엇을 봤는지** 남긴다.
        * ⚠️ v1.17.1 에서 두 키워드 다 `no-shop-tab` 이었는데, 「탭이 없다」인지 「아직 첫 화면」인지
        *    「규칙이 못 잡았다」인지 가를 수가 없었다. 추측 대신 찍게 한다. */
@@ -672,6 +673,35 @@ console.log('\n[응답 가로채기 — net_tap]');
           doc, { innerWidth: 1280, innerHeight: 900 }, { host: 'search.naver.com', pathname: '/search.naver' });
         const r = fn();
         ok('㉑ 통합검색의 쇼핑 탭은 제대로 고른다', !!r && !r.miss && r.via === 'href' && r.x === 220 && r.y === 88);
+      }
+      /* 🔴 v1.17.3 — 2026-09-16 16:19 실측.
+       *   진단이 남긴 것: `…|쇼핑새 창 >https://search.shopping.naver.com/`
+       *   탭은 거기 있었는데 글자가 「쇼핑」이 아니라 **「쇼핑새 창」** 이었다(낭독기용 안내가 안에 있다).
+       *   완전일치라 못 잡고 다섯 회차를 헛돌았다. **탭 글자는 완전일치로 보지 말 것.**
+       */
+      {
+        const mkA = (text, href) => ({
+          textContent: text,
+          getAttribute: (k) => (k === 'href' ? href : null),
+          getBoundingClientRect: () => ({ width: 40, height: 16, left: 300, top: 60 }),
+          scrollIntoView: () => {},
+        });
+        const run = (anchors, host) => {
+          const doc = { querySelectorAll: (s) => (s === 'a' ? anchors : []) };
+          return new Function('document', 'window', 'location',
+            `${grab('shopTabLocate')}; return shopTabLocate;`)(
+            doc, { innerWidth: 1280, innerHeight: 900 }, { host, pathname: '/search.naver' })();
+        };
+        const real = run([mkA('쇼핑새 창', 'https://search.shopping.naver.com/')], 'search.naver.com');
+        ok('🔴㉑ 「쇼핑새 창」처럼 낭독기 안내가 붙어도 잡는다(실제로 겪은 모양)',
+           !!real && !real.miss && real.via === 'href');
+        ok('🔴㉑ 「쇼핑 새창」·「쇼핑새창」도 잡는다',
+           !run([mkA('쇼핑 새창', 'https://search.shopping.naver.com/')], 'search.naver.com').miss
+           && !run([mkA('쇼핑새창', 'https://search.shopping.naver.com/')], 'search.naver.com').miss);
+        ok('🔴㉑ 「쇼핑라이브」처럼 다른 탭은 안 잡는다(앞글자만 같다고 고르면 안 된다)',
+           run([mkA('쇼핑라이브', 'https://search.shopping.naver.com/')], 'search.naver.com').miss === true);
+        ok('🔴㉑ 첫 화면 메뉴의 「쇼핑」(쇼핑 홈)은 여전히 안 고른다',
+           run([mkA('쇼핑새 창', 'https://shopping.naver.com/home')], 'www.naver.com').miss === true);
       }
 
       // — 치는 동작 —
@@ -756,7 +786,7 @@ console.log('\n[응답 가로채기 — net_tap]');
         ok('🔴㉑ 캡차 경로는 그대로 차단', fn('https://ncpt.naver.com/v2/captcha') === true);
         ok('🔴㉑ 로그인 유도도 그대로 차단', fn('https://nid.naver.com/nidlogin.login') === true);
       }
-      ok('㉑ 버전 1.17.2 이상', _ge(MANIFEST.version, '1.17.2'));
+      ok('㉑ 버전 1.17.3 이상', _ge(MANIFEST.version, '1.17.3'));
     }
 
     console.log(fail ? `\n❌ 실패 ${fail}건 / 전체 ${pass + fail}` : '\n사람처럼 넘기기 시험 전부 통과');

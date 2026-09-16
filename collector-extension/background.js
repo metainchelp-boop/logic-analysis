@@ -800,12 +800,23 @@ function shopTabLocate() {
     if (!(x > 0 && y > 0 && x < w && y < h)) return null;
     return { x: Math.round(x), y: Math.round(y) };
   }
+  /* 🔴 v1.17.3 — 탭 글자를 **완전일치로 보면 안 된다**(2026-09-16 16:19 실측).
+   *   진단이 남긴 것: `no-shop-tab@search.naver.com/search.naver|a650|sc32|쇼핑새 창 >https://search.shopping.naver.com/`
+   *   탭은 **거기 있었다.** 다만 글자가 「쇼핑」이 아니라 **「쇼핑새 창」** 이었다 —
+   *   `<a>쇼핑<span>새 창</span></a>` 처럼 화면 낭독기용 안내가 안에 들어 있어
+   *   `textContent` 가 둘을 붙여 준다. 완전일치라 못 잡고 다섯 회차를 헛돌았다.
+   * ⚠️ 그래서 **보조 문구를 떼고 비교**한다. 네이버가 그 문구를 바꿔도 앞글자가 「쇼핑」이면 잡힌다.
+   */
+  function tabText(el) {
+    var t = String((el && el.textContent) || '').replace(/\s+/g, ' ').trim();
+    return t.replace(/\s*(새\s*창(에서\s*열기)?|새창|열림|link|new\s*window)\s*$/i, '').trim();
+  }
   var as = document.querySelectorAll('a');
   // ① 주소가 실제로 쇼핑 검색으로 가는 「쇼핑」 링크 — 이게 우리가 원하는 탭이다.
   //    ⚠️ 첫 화면 맨 위 메뉴에도 「쇼핑」이 있다. 주소로 갈라야 엉뚱한 데로 안 간다.
   for (var i = 0; i < as.length; i++) {
     var a = as[i];
-    if ((a.textContent || '').trim() !== '쇼핑') continue;
+    if (tabText(a) !== '쇼핑') continue;
     var h = a.getAttribute('href') || '';
     if (h.indexOf('where=shop') >= 0 || h.indexOf('ssc=tab.shop') >= 0
         || h.indexOf('search.shopping.naver.com') >= 0) {
@@ -818,7 +829,12 @@ function shopTabLocate() {
   for (var s = 0; s < scopes.length; s++) {
     var c = scopes[s].querySelectorAll('a');
     for (var j = 0; j < c.length; j++) {
-      if ((c[j].textContent || '').trim() !== '쇼핑') continue;
+      if (tabText(c[j]) !== '쇼핑') continue;
+      // ⚠️ 여기서도 주소를 본다 — 첫 화면 메뉴의 「쇼핑」(shopping.naver.com 홈)을 누르면
+      //    결과 화면이 아니라 쇼핑 첫 화면으로 가서 회차를 한 번 버린다.
+      var h2 = c[j].getAttribute('href') || '';
+      if (h2.indexOf('shopping.naver.com') < 0 && h2.indexOf('where=shop') < 0
+          && h2.indexOf('ssc=tab.shop') < 0) continue;
       var q = at(c[j]);
       if (q) { q.via = 'tab'; return q; }
     }
