@@ -686,9 +686,48 @@ function pagerLocate(target) {
     var x = r.left + r.width / 2, y = r.top + r.height / 2;
     var w = window.innerWidth || 0, h = window.innerHeight || 0;
     if (!(x > 0 && y > 0 && x < w && y < h)) return null;   // 그래도 밖이면 포기(합성 클릭으로 폴백)
-    return { branch: branch, x: Math.round(x), y: Math.round(y) };
+    /* 🔴 v1.17.5 — **그 좌표에 정말 이 버튼이 있는가.**
+     *   좌표로 보내는 클릭은 브라우저가 「그 점에서 맨 위에 있는 것」에 꽂는다.
+     *   떠 있는 띠·광고·덮개가 가리고 있으면 클릭은 그쪽으로 가고, 우리 눈엔
+     *   「오류 없이 눌렀는데 아무 일도 안 일어남」으로 보인다 — 9/16 17:23·17:33 회차가
+     *   정확히 그 모양이었다(요청 0건). 여태 한 번도 확인한 적이 없어서 여기 넣는다.
+     *   ⚠️ 가려졌다고 클릭을 포기하지는 않는다 — 판정이 틀릴 수도 있으니 **찍기만** 하고
+     *      그대로 눌러 본다. 무엇이 덮었는지는 사유 문자열로 남는다. */
+    var hit = '', covered = 0;
+    try {
+      var top = document.elementFromPoint(x, y);
+      if (top) {
+        var cls = String(top.className || '').split(/\s+/).filter(Boolean).slice(0, 2).join('.');
+        hit = (top.tagName || '?').toLowerCase() + (cls ? '.' + cls : '')
+            + '>' + String(top.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 10);
+        var mine = (top === el) || (el.contains && el.contains(top)) || (top.contains && top.contains(el));
+        covered = mine ? 0 : 1;
+      } else {
+        hit = 'none';
+        covered = 1;
+      }
+    } catch (e) { hit = 'err'; }
+    return { branch: branch, x: Math.round(x), y: Math.round(y), hit: hit.slice(0, 40), covered: covered };
   }
-  // ① 페이지네이션 영역 안에서 숫자가 정확히 맞는 링크·버튼
+  /* ⓪ 🔴 v1.17.5 — 네이버가 직접 붙여 둔 표식으로 **정확히** 지목한다.
+   *   대표 캡처(2026-09-16)로 확인한 실제 모양:
+   *     <a href="#" class="pagination_btn_page__utqBz _nlog_click _nlog_impression_element"
+   *        data-shp-area="prd_pgn.pgn" data-shp-contents-id="2" …>2</a>
+   *   ⚠️ **클래스 이름에는 걸지 않는다** — `__utqBz` 는 빌드마다 바뀌는 해시다.
+   *      거기 걸면 네이버가 배포하는 날 조용히 죽는다.
+   *   ⚠️ 표식 숫자와 **글자가 둘 다** 맞을 때만 쓴다 — 표식의 뜻을 우리가 단정하지 않는다.
+   *      어긋나면 아래 종전 규칙으로 그냥 내려간다. */
+  var marked = document.querySelectorAll('[data-shp-area="prd_pgn.pgn"][data-shp-contents-id]');
+  for (var m = 0; m < marked.length; m++) {
+    var em = marked[m];
+    if (!vis(em)) continue;
+    if (em.getAttribute('data-shp-contents-id') !== want) continue;
+    if ((em.textContent || '').trim() !== want) continue;
+    return at(em, 'shp');
+  }
+  /* ① 페이지네이션 영역 안에서 숫자가 정확히 맞는 링크·버튼
+   * ⚠️ 이 영역은 **겹쳐 있다**(대표 캡처) — `pagination_pagination__…` 안에 `pagination_num__…`.
+   *    그래서 같은 버튼이 두 번 세어진다. 먼저 맞는 것을 쓰므로 동작에는 지장이 없다. */
   var scopes = document.querySelectorAll('[class*="pagination"],[class*="paging"],[role="navigation"]');
   for (var s = 0; s < scopes.length; s++) {
     var cands = scopes[s].querySelectorAll('a,button');
@@ -1086,6 +1125,66 @@ async function humanEntry(tabId, keyword) {
  * ⚠️ 끌 수 있다 — 팝업의 「🖱 진짜 입력으로 클릭」. 저장값 `trustedClick`(없으면 켬).
  * ─────────────────────────────────────────────────────────────────────────── */
 let _trustedNote = '';       // 마지막 실패 사유(진단 보고용 · 60자)
+// 🔴 v1.17.5 — 누를 때 잰 것. 진단 보고에만 쓰고 동작은 바꾸지 않는다.
+let _clickHit = '';          // 그 좌표에 실제로 있던 것(태그.클래스>글자)
+let _clickCovered = 0;       // 1 = 우리 버튼이 아니라 다른 것이 덮고 있었다
+let _pagerAfter = '';        // 누른 직후의 현재 페이지 표식 — 'cur=2|qp=2|y=5600'
+
+/* 🔴 v1.17.5 — 화면 안에서 한 칸 굴린다(요청 0건). 사람처럼 나눠 내려가려고 따로 뺐다. */
+function scrollStep(px) {
+  try { window.scrollBy(0, px); } catch (e) { /* 무시 */ }
+  return Math.round(window.scrollY || window.pageYOffset || 0);
+}
+
+/* 🔴 v1.17.5 — 누른 직후의 페이지네이션 상태. '현재' 표식을 여러 모양으로 찾는다.
+ *   ⚠️ 클래스 이름 한 가지에 걸면 네이버가 바꾸는 순간 죽는다 — 여러 모양을 함께 본다. */
+function pagerState() {
+  var cur = '';
+  var scopes = document.querySelectorAll('[class*="pagination"],[class*="paging"],[role="navigation"]');
+  for (var s = 0; s < scopes.length && !cur; s++) {
+    /* 🔴 v1.17.5 — **span 을 꼭 넣는다.** 대표 캡처로 확인: 현재 페이지만 `<a>` 가 아니라
+     *   `<span class="pagination_btn_page__utqBz active">` 다. 나머지 번호는 `<a href="#">`.
+     *   ⚠️ `a,button` 만 보면 「현재 페이지」를 영영 못 찾는다 — 이 함수를 만들 때 실제로
+     *      그렇게 짰다가 캡처를 보고 고쳤다. 우리 옛 `pager` 목록에 1이 빠져 있던 것도 같은 이유다. */
+    var c = scopes[s].querySelectorAll('a,button,span');
+    for (var i = 0; i < c.length; i++) {
+      var el = c[i];
+      var ac = el.getAttribute('aria-current') || '';
+      var cls = String(el.className || '');
+      if (ac === 'page' || ac === 'true'
+          || /active|current|selected|_on\b|--on\b|is-on/i.test(cls)) {
+        cur = String(el.textContent || '').replace(/\s+/g, '').slice(0, 4);
+        break;
+      }
+    }
+  }
+  var m = String(location.search || '').match(/pagingIndex=(\d+)/);
+  return { cur: cur, qp: m ? m[1] : '', y: Math.round(window.scrollY || window.pageYOffset || 0) };
+}
+
+/* 사람처럼 훑어 내려간다 — 여덟 번에 나눠 굴리고 사이에 잠깐 멈춘다. */
+async function humanScrollDown(tabId) {
+  try {
+    for (let i = 0; i < 8; i++) {
+      await chrome.scripting.executeScript({
+        target: { tabId }, world: 'MAIN', func: scrollStep,
+        args: [500 + Math.floor(Math.random() * 320)],
+      });
+      await sleep(180 + Math.floor(Math.random() * 260));
+    }
+  } catch (e) { /* 굴리기 실패는 치명적이지 않다 — 그대로 진행한다 */ }
+}
+
+/* 누른 직후 상태를 읽어 진단 문자열로 담아 둔다(실패해도 무시). */
+async function readPagerState(tabId) {
+  try {
+    const [ps] = await chrome.scripting.executeScript({
+      target: { tabId }, world: 'MAIN', func: pagerState,
+    });
+    const r = (ps && ps.result) || {};
+    _pagerAfter = 'cur=' + (r.cur || '-') + '|qp=' + (r.qp || '-') + '|y=' + (r.y || 0);
+  } catch (e) { _pagerAfter = 'read-error'; }
+}
 
 function dbgAttach(tabId) {
   return new Promise((res, rej) => {
@@ -1120,11 +1219,19 @@ async function trustedClickToPage(tabId, target) {
   let attached = false;
   try {
     if (!chrome.debugger) { _trustedNote = 'no-debugger-api'; return ''; }
+    /* 🔴 v1.17.5 — 대표 지시(「완전 실사용자 기반으로 움직이면 될 거 같은데」).
+     *   사람은 상품을 훑어 **내려가서** 아래쪽 번호 줄에 닿는다. 우리는 여태
+     *   `scrollIntoView` 로 버튼을 화면 한가운데로 **순간이동**시킨 뒤 그 점을 눌렀다.
+     *   ⚠️ 네이버에 보내는 요청은 0건 는다 — 화면을 굴리는 것뿐이다.
+     *   ⚠️ 게으르게 그려지는 부분이 있으면 이 동안에 그려진다(그 자체가 이득). */
+    await humanScrollDown(tabId);
     const [loc] = await chrome.scripting.executeScript({
       target: { tabId }, world: 'MAIN', func: pagerLocate, args: [target],
     });
     const spot = loc && loc.result;
     if (!spot) { _trustedNote = 'no-spot'; return ''; }   // 버튼을 못 찾음 — 합성 클릭도 못 찾는다
+    _clickHit = spot.hit || '';
+    _clickCovered = spot.covered ? 1 : 0;
     await dbgAttach(tabId);
     attached = true;
     const base = { x: spot.x, y: spot.y, button: 'left' };
@@ -1136,6 +1243,11 @@ async function trustedClickToPage(tabId, target) {
     await dbgSend(tabId, 'Input.dispatchMouseEvent', { ...base, type: 'mouseReleased', buttons: 0, clickCount: 1 });
     // ⚠️ 떼자마자 detach 하지 않는다 — 화면이 그 클릭을 처리할 틈을 준다.
     await sleep(200);
+    /* 🔴 v1.17.5 — **누른 직후 「지금 몇 페이지인가」를 찍는다.**
+     *   여태 보고에는 번호 줄 목록(pager)만 있고 「현재」 표식이 없어,
+     *   「눌렸는데 화면이 안 움직였다」와 「클릭이 헛나갔다」를 가를 수 없었다.
+     *   ⚠️ 여기서 재는 것이 핵심이다 — 29초 뒤 프로브에서 재면 이미 두 축이 섞인다. */
+    await readPagerState(tabId);
     _trustedNote = '';
     return spot.branch || 'num';
   } catch (e) {
@@ -1448,7 +1560,9 @@ async function fetchPage(keyword, pagingIndex, prevIds) {
     // ⚠️ 서버는 body 를 500자에서 자른다(collector.py) — 짧은 값이 앞에 오게 순서를 정하고,
     //    응답 요약(tap)은 **따로 한 건** 더 보낸다(v1.13.0). 21:39 회차의 prev/got 이 잘려 나갔던 교훈.
     delete probe.tap;
+    // ⚠️ v1.17.5 의 세 값(hit·cov·after)을 **앞쪽**에 둔다 — 서버가 body 를 500자에서 자른다.
     const front = { click: _lastClickBranch, how: _lastClickHow, tnote: _trustedNote || '',
+                    hit: _clickHit || '', cov: _clickCovered, after: _pagerAfter || '',
                     entry: _navMode.entry, enote: _entryNote || '', via: _entryVia || '', prev: (prevIds || []).length,
                     got: organicIds((out && out.list) || []).length, src: (out && out.src) || '' };
     probe = Object.assign(front, probe);

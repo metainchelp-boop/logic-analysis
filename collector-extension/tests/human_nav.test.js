@@ -53,6 +53,9 @@ function fakeDom(spec) {
       return [];
     },
   };
+  // 🔴 v1.17.5 — 「그 좌표에 무엇이 있나」. spec.topAt 을 준 시험에서만 붙인다
+  //    (안 주면 함수가 없어 pagerLocate 가 try 로 넘어가고, 옛 시험은 그대로 통과한다).
+  if (spec.topAt) doc.elementFromPoint = (x, y) => spec.topAt(x, y);
   return { doc, clicked, scrolled, mk };
 }
 
@@ -830,7 +833,155 @@ console.log('\n[응답 가로채기 — net_tap]');
          /chrome\.tabs\.get\(use\)/.test(he));
       ok('🔴㉑ 호출부가 그 탭으로 갈아탄다(안 갈아타면 통합검색을 읽는다)',
          /let tabId = await ensureWorkTab\(\)/.test(fp16) && /tabId = use;/.test(fp16));
-      ok('㉑ 버전 1.17.4 이상', _ge(MANIFEST.version, '1.17.4'));
+      /* 🔴 v1.17.5 — 2026-09-16 17:23·17:33 실측.
+       *   진입(portal)은 2/2 성공했는데 **2페이지 요청이 0건**이었다. 클릭은 오류 없이 나갔고
+       *   번호 줄도 정상인데 화면이 반응을 안 했다. 「네이버가 막았다」가 아니라
+       *   「클릭이 화면을 못 깨웠다」에 가깝다.
+       *   대표 지시(「완전 실사용자 기반으로 움직이면 될 거 같은데」)로 셋을 넣는다.
+       *   ⚠️ 셋 다 **재는 것**이고 동작을 바꾸지 않는다 — 네이버 요청은 0건 는다.
+       */
+      console.log('\n[㉒ 클릭이 헛나갔나 — v1.17.5]');
+      const pl5 = grab('pagerLocate');
+      const tc5 = grab('trustedClickToPage', 'async');
+      const hsd = grab('humanScrollDown', 'async');
+      const pst = grab('pagerState');
+      const rps = grab('readPagerState', 'async');
+
+      // ① 그 좌표에 무엇이 있는지 본다
+      ok('🔴㉒ 누를 좌표에 실제로 무엇이 있는지 확인한다', /document\.elementFromPoint\(x, y\)/.test(pl5));
+      ok('🔴㉒ 우리 버튼이 아니면 「덮였다」로 표시한다', /covered = mine \? 0 : 1/.test(pl5));
+      ok('🔴㉒ 자기 자신·자기 자식은 덮인 것이 아니다',
+         /top === el/.test(pl5) && /el\.contains\(top\)/.test(pl5));
+      ok('🔴㉒ 무엇이 덮었는지 이름을 남긴다(태그·클래스·글자)',
+         /top\.tagName/.test(pl5) && /top\.className/.test(pl5) && /top\.textContent/.test(pl5));
+      ok('🔴㉒ 덮였다고 **클릭을 포기하지는 않는다**(판정이 틀릴 수 있다 — 찍기만 한다)',
+         !/if \(covered\) return null/.test(pl5) && /return \{ branch: branch/.test(pl5));
+      ok('🔴㉒ 보고 문자열 길이를 묶는다(서버가 500자에서 자른다)', /hit\.slice\(0, 40\)/.test(pl5));
+
+      // 실제로 돌려 본다 — 덮인 경우와 안 덮인 경우
+      {
+        let btn = null;
+        const base = () => ({
+          build(mk) { btn = mk('a', '2', { href: '#', left: 400, top: 700 }); this.scopes[0].push(btn); },
+          scopes: [[]],
+        });
+        const clean = base();
+        clean.topAt = () => btn;                      // 좌표에 우리 버튼이 있다
+        const r1 = runLocate(clean, 2);
+        ok('🔴㉒ 가린 것이 없으면 cov=0', !!r1.spot && r1.spot.covered === 0);
+
+        const veiled = base();
+        veiled.topAt = () => ({ tagName: 'DIV', className: 'floating_ad sticky', textContent: '  광고  배너 ' });
+        const r2 = runLocate(veiled, 2);
+        ok('🔴㉒ 다른 것이 덮고 있으면 cov=1', !!r2.spot && r2.spot.covered === 1);
+        ok('🔴㉒ 그때 무엇이 덮었는지가 적힌다',
+           !!r2.spot && r2.spot.hit === 'div.floating_ad.sticky>광고 배너');
+
+        const empty = base();
+        empty.topAt = () => null;                     // 그 점에 아무것도 없다(화면 밖 등)
+        const r3 = runLocate(empty, 2);
+        ok('🔴㉒ 그 점이 비어 있어도 덮인 것으로 본다', !!r3.spot && r3.spot.covered === 1 && r3.spot.hit === 'none');
+
+        const old = base();                           // elementFromPoint 자체가 없는 환경
+        const r4 = runLocate(old, 2);
+        ok('🔴㉒ 확인이 불가능한 환경에서도 좌표는 그대로 낸다(수집이 멈추지 않게)',
+           !!r4.spot && r4.spot.hit === 'err');
+      }
+
+      /* 🔴 v1.17.5 — 대표 캡처(2026-09-16)로 확인한 **진짜 페이지 버튼**:
+       *   <a href="#" class="pagination_btn_page__utqBz _nlog_click _nlog_impression_element"
+       *      data-shp-area="prd_pgn.pgn" data-shp-contents-id="2" …>2</a>
+       *   현재 페이지만 <span … active> 다. */
+      ok('🔴㉒ 네이버 표식으로 정확히 지목한다', /data-shp-area="prd_pgn\.pgn"/.test(pl5));
+      // ⚠️ 주석에는 실제 모양을 적어 뒀다(다음 사람이 알아보게) — **주석을 뺀 코드**로만 본다.
+      //    이걸 안 해서 방금 헛실패했다. 오늘 네 번째 같은 실수다.
+      const pl5code = pl5.replace(/\/\*[^]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+      ok('🔴㉒ 클래스 이름에는 걸지 않는다(빌드마다 바뀌는 해시다)',
+         !/utqBz|pagination_btn_page__|_nlog_click/.test(pl5code));
+      ok('🔴㉒ 표식과 글자가 **둘 다** 맞을 때만 쓴다(표식의 뜻을 단정하지 않는다)',
+         /getAttribute\('data-shp-contents-id'\) !== want\) continue/.test(pl5)
+         && /textContent \|\| ''\)\.trim\(\) !== want\) continue/.test(pl5));
+      ok('🔴㉒ 그 규칙을 **맨 앞**에 둔다(가장 정확한 것부터)',
+         pl5.indexOf('prd_pgn.pgn') < pl5.indexOf('[class*="pagination"]'));
+      ok('🔴㉒ 못 찾으면 종전 규칙으로 내려간다(네이버가 표식을 떼도 안 죽게)',
+         /\[class\*="pagination"\]/.test(pl5) && /'loose'/.test(pl5));
+      {
+        // 진짜 모양을 그대로 세워 돌려 본다
+        const mkShp = (n, text) => ({
+          tagName: 'A', textContent: text === undefined ? String(n) : text,
+          className: 'pagination_btn_page__utqBz _nlog_click',
+          getAttribute: (a) => (a === 'href' ? '#'
+                              : a === 'data-shp-contents-id' ? String(n) : null),
+          getBoundingClientRect: () => ({ width: 26, height: 26, left: 340, top: 420 }),
+          scrollIntoView: () => {},
+        });
+        const runShp = (marked) => new Function('document', 'window',
+          `${grab('pagerLocate')}; return pagerLocate;`)(
+          { querySelectorAll: (s) => (/prd_pgn/.test(s) ? marked : []) },
+          { innerWidth: 1280, innerHeight: 900 })(2);
+        ok('🔴㉒ 진짜 모양의 2페이지 버튼을 잡는다',
+           (runShp([mkShp(2), mkShp(3)]) || {}).branch === 'shp');
+        ok('🔴㉒ 좌표는 그 버튼 한가운데다',
+           (runShp([mkShp(2)]) || {}).x === 353 && (runShp([mkShp(2)]) || {}).y === 433);
+        ok('🔴㉒ 표식은 2인데 글자가 다르면 안 쓴다(표식을 맹신하지 않는다)',
+           runShp([mkShp(2, '다음')]) === null);
+        ok('🔴㉒ 다른 번호는 안 고른다', runShp([mkShp(3), mkShp(4)]) === null);
+      }
+
+      // ② 사람처럼 나눠 내려간다
+      ok('🔴㉒ 누르기 **전에** 훑어 내려간다', tc5.indexOf('humanScrollDown') < tc5.indexOf('pagerLocate'));
+      ok('🔴㉒ 한 번에 순간이동하지 않고 여러 번에 나눈다',
+         /for \(let i = 0; i < 8; i\+\+\)/.test(hsd) && /func: scrollStep/.test(hsd));
+      ok('🔴㉒ 사이에 잠깐씩 멈춘다(사람 손 간격)', /await sleep\(180 \+ Math\.floor\(Math\.random\(\) \* 260\)\)/.test(hsd));
+      ok('🔴㉒ 굴리는 폭도 매번 다르다', /500 \+ Math\.floor\(Math\.random\(\) \* 320\)/.test(hsd));
+      ok('🔴㉒ 굴리기가 실패해도 수집은 계속한다', /catch \(e\) \{ \/\* 굴리기 실패는/.test(hsd));
+      ok('🔴㉒ 굴리기는 화면만 움직인다(네이버 요청 0건)',
+         /window\.scrollBy\(0, px\)/.test(grab('scrollStep')) && !/fetch|XMLHttpRequest|tabs\.update/.test(hsd));
+
+      // ③ 누른 직후 현재 페이지를 찍는다
+      ok('🔴㉒ 누른 **직후** 현재 페이지를 읽는다(29초 뒤가 아니라)',
+         tc5.indexOf('mouseReleased') < tc5.indexOf('readPagerState')
+         && tc5.indexOf('readPagerState') < tc5.indexOf("return spot.branch"));
+      ok('🔴㉒ 「현재」 표식을 한 가지 모양에만 걸지 않는다',
+         /aria-current/.test(pst) && /active\|current\|selected/.test(pst));
+      ok('🔴㉒ 주소의 pagingIndex 도 함께 본다(표식이 없을 때의 두 번째 근거)',
+         /pagingIndex=\(\\d\+\)/.test(pst));
+      ok('🔴㉒ 얼마나 내려와 있는지도 같이 찍는다(굴리기가 먹었는지 확인용)', /window\.scrollY/.test(pst));
+      ok('🔴㉒ 못 읽어도 수집을 멈추지 않는다', /_pagerAfter = 'read-error'/.test(rps));
+
+      // 실제로 돌려 본다
+      {
+        const run = (els, search) => new Function('document', 'location', 'window',
+          `${grab('pagerState')}; return pagerState;`)(
+          { querySelectorAll: (s) => (/pagination|paging|navigation/.test(s)
+              ? [{ querySelectorAll: () => els }] : []) },
+          { search: search || '' }, { scrollY: 5600 })();
+        const mkP = (t, cls, cur) => ({
+          textContent: t, className: cls || '',
+          getAttribute: (a) => (a === 'aria-current' ? (cur || null) : null),
+        });
+        ok('🔴㉒ aria-current 로 현재 페이지를 잡는다',
+           run([mkP('1'), mkP('2', '', 'page')], '').cur === '2');
+        ok('🔴㉒ 클래스 이름으로도 잡는다',
+           run([mkP('1'), mkP('2', 'pageNum is-on')], '').cur === '2');
+        /* 🔴 현재 페이지는 **span** 이다(대표 캡처). a,button 만 보면 영영 못 찾는다 —
+         *   실제로 그렇게 짰다가 캡처를 보고 고쳤다. */
+        ok('🔴㉒ 현재 페이지가 span 이어도 찾는다(진짜 모양)',
+           /querySelectorAll\('a,button,span'\)/.test(pst));
+        ok('🔴㉒ 표식이 하나도 없으면 빈 값이다(없는 것을 지어내지 않는다)',
+           run([mkP('1'), mkP('2')], '').cur === '');
+        ok('🔴㉒ 주소에 pagingIndex 가 있으면 함께 담는다',
+           run([mkP('1')], '?query=x&pagingIndex=2').qp === '2');
+        ok('🔴㉒ 스크롤 위치도 담긴다', run([mkP('1')], '').y === 5600);
+      }
+
+      // ④ 서버 보고에 실린다 — 잘리기 전 앞쪽에
+      ok('🔴㉒ 세 값이 서버 보고에 실린다',
+         /hit: _clickHit \|\| ''/.test(SRC) && /cov: _clickCovered/.test(SRC) && /after: _pagerAfter \|\| ''/.test(SRC));
+      ok('🔴㉒ 500자에 잘리지 않게 앞쪽에 둔다',
+         SRC.indexOf('hit: _clickHit') < SRC.indexOf('entry: _navMode.entry, enote:'));
+
+      ok('㉑ 버전 1.17.5 이상', _ge(MANIFEST.version, '1.17.5'));
     }
 
     console.log(fail ? `\n❌ 실패 ${fail}건 / 전체 ${pass + fail}` : '\n사람처럼 넘기기 시험 전부 통과');
