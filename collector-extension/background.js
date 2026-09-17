@@ -1053,7 +1053,15 @@ async function shopBoxEntry(tabId, keyword) {
     await dbgAttach(tabId); attached = true;
     await typeAndEnter(tabId, box, keyword);
     await dbgDetach(tabId); attached = false;
-    await waitNavigated(tabId, 'search/all');
+    /* 🔴🔴 v1.17.8 — **키워드가 주소에 들어올 때까지** 기다린다. 이게 2026-09-17 오염의 원인이다.
+     *   종전엔 `waitNavigated(tabId, 'search/all')` 이었다. 그런데 우리는 **이미 쇼핑 결과 화면**에
+     *   서 있으므로 주소에 `search/all` 이 처음부터 있다 ⇒ **검색이 안 돌아도 즉시 통과**한다.
+     *   그 결과 9/17 00:00~11:00 에 서로 다른 12개 키워드가 **같은 화면 하나**를 읽어
+     *   같은 상품 32개를 담았고, 오류도 막힘 보고도 없이 조용히 오염됐다.
+     *   ⭐ 종전 주소 열기 경로는 처음부터 `waitNavigated(tabId, encodeURIComponent(keyword))` 로
+     *      **키워드를 기다린다.** 같은 일을 하는 경로가 둘인데 하나만 확인하던 것 — 이 저장소가
+     *      반복해 온 함정이고, 내가 그 함정을 문서에 적어 둔 그 날 거기 빠졌다. */
+    await waitNavigated(tabId, encodeURIComponent(keyword));
     return true;
   } catch (e) {
     _entryNote = String((e && e.message) || e).slice(0, 60);
@@ -1086,6 +1094,20 @@ async function humanEntry(tabId, keyword) {
     const u = String(t2.url || '');
     if (u.indexOf('search.shopping.naver.com') < 0 || u.indexOf('/search/all') < 0) {
       _entryNote = _entryNote || ('not-result-page@' + u.slice(0, 60));
+      _entryVia = '';
+      return 0;
+    }
+    /* 🔴🔴 v1.17.8 — **그 화면이 「이 키워드」의 결과인가.** 두 번째 그물이다.
+     *   위 두 줄은 「쇼핑 결과 화면인가」만 본다. 그런데 9/17 오염 때 우리는 **남의 키워드**
+     *   결과 화면에 서 있었고, 그 화면도 이 조건을 통과했다.
+     *   ⚠️ 주소는 인코딩된 형태(%EA%B0%88…)일 수도, 디코딩된 한글일 수도 있다 — 둘 다 본다.
+     *   ⚠️ 못 맞추면 **실패로 떨어뜨린다**(0 반환). 그러면 호출부가 종전 주소 열기로 폴백하고,
+     *      그 경로는 처음부터 키워드를 기다리므로 안전하다. */
+    const enc = encodeURIComponent(keyword);
+    let dec = u;
+    try { dec = decodeURIComponent(u); } catch (e) { /* 잘못된 인코딩은 원문으로 본다 */ }
+    if (u.indexOf(enc) < 0 && dec.indexOf(keyword) < 0) {
+      _entryNote = 'wrong-keyword@' + u.slice(0, 70);
       _entryVia = '';
       return 0;
     }
@@ -1705,7 +1727,37 @@ async function collectKeyword(keyword) {
            dupSkipped: st.dupSkipped, adHintMissed: st.adHintMissed, rawCount, adFp };
 }
 
+/* 🔴🔴 v1.17.8 — **세 번째 그물: 직전 회차와 결과가 똑같으면 올리지 않는다.**
+ *
+ *   2026-09-17 00:00~11:00 에 서로 다른 12개 키워드가 **같은 상품 32개**를 올렸고,
+ *   오류도 막힘 보고도 없이 9시간을 갔다. 그물이 하나도 없었기 때문이다.
+ *   앞의 둘(검색창이 키워드를 기다린다 · 주소에 키워드가 있는가)이 뚫려도
+ *   여기서 잡힌다 — **다른 키워드가 같은 목록을 내놓는 일은 정상적으로 일어나지 않는다.**
+ *
+ *   ⚠️ 같은 키워드를 다시 재는 것은 정상이다(값이 같아도 된다) — 그래서 키워드가 **다를 때만** 막는다.
+ *   ⚠️ 막는 데서 그치지 않고 **서버에 사유를 알린다**. 조용히 건너뛰면 오늘 사고의 재판이다.
+ *   ⚠️ 상품이 없는 회차(0개)는 비교하지 않는다 — 「둘 다 0개」는 흔하고 오염이 아니다.
+ */
+let _lastUp = { keyword: '', sig: '' };
+
+function uploadSignature(products) {
+  const ids = (products || []).map((p) => String(p.nvMid || p.id || p.productId || ''));
+  return ids.length ? ids.length + ':' + ids.join(',') : '';
+}
+
 async function uploadKeyword(token, keyword, payload) {
+  const sig = uploadSignature(payload.products);
+  if (sig && _lastUp.sig === sig && _lastUp.keyword && _lastUp.keyword !== keyword) {
+    const note = 'same-as@' + String(_lastUp.keyword).slice(0, 20) + '|n' + (payload.products || []).length;
+    try {
+      await reportBlocked({ keyword, pagingIndex: 1, err: 'SAME_AS_PREV(직전 키워드와 결과가 동일)',
+                            href: '', body: JSON.stringify({ prevKeyword: _lastUp.keyword,
+                              n: (payload.products || []).length, via: _entryVia || '', enote: _entryNote || '' }),
+                            note: '검색이 안 바뀐 것으로 본다 — 이 회차는 올리지 않는다' });
+    } catch (e) { /* 보고 실패가 차단을 막지는 않는다 */ }
+    await log(`⛔ 직전 키워드와 결과가 같아 올리지 않음 (${note})`);
+    throw new Error('업로드 취소 — 직전 회차와 동일한 결과');
+  }
   const res = await fetch(`${CFG.serverBase}/api/collector/serp`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Collector-Token': token },
@@ -1732,6 +1784,8 @@ async function uploadKeyword(token, keyword, payload) {
     }),
   });
   if (!res.ok) throw new Error(`업로드 실패 HTTP ${res.status}`);
+  // 올린 뒤에 기억한다 — 실패한 회차는 기준이 되면 안 된다.
+  _lastUp = { keyword, sig };
   return res.json();
 }
 

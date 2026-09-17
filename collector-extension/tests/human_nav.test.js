@@ -26,6 +26,14 @@ function grab(name, kind = 'function') {
   return SRC.slice(i, k);
 }
 
+/* ⚠️ **주석을 코드로 읽지 말 것** — 2026-09-16·17 에 이것 때문에 두 번 헛실패했다.
+ *   우리 주석에는 「종전엔 이랬다」며 옛 코드를 그대로 적어 두는 관행이 있어서,
+ *   `!/옛코드/.test(본문)` 류의 검사가 주석에 걸려 항상 실패한다.
+ *   ⇒ 「무엇이 **없는지**」를 볼 때는 반드시 `code()` 로 감싼다. */
+function code(src) {
+  return String(src).replace(/\/\*[^]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+}
+
 /** 아주 작은 가짜 DOM — 클릭됐는지만 본다. */
 function fakeDom(spec) {
   const clicked = [];
@@ -895,7 +903,7 @@ console.log('\n[응답 가로채기 — net_tap]');
       ok('🔴㉒ 네이버 표식으로 정확히 지목한다', /data-shp-area="prd_pgn\.pgn"/.test(pl5));
       // ⚠️ 주석에는 실제 모양을 적어 뒀다(다음 사람이 알아보게) — **주석을 뺀 코드**로만 본다.
       //    이걸 안 해서 방금 헛실패했다. 오늘 네 번째 같은 실수다.
-      const pl5code = pl5.replace(/\/\*[^]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+      const pl5code = code(pl5);
       ok('🔴㉒ 클래스 이름에는 걸지 않는다(빌드마다 바뀌는 해시다)',
          !/utqBz|pagination_btn_page__|_nlog_click/.test(pl5code));
       ok('🔴㉒ 표식과 글자가 **둘 다** 맞을 때만 쓴다(표식의 뜻을 단정하지 않는다)',
@@ -1042,7 +1050,69 @@ console.log('\n[응답 가로채기 — net_tap]');
       ok('🔴㉔ 표준 입력이 먹었으면 합성 클릭은 하지 않는다(중복 클릭 금지)',
          /_navMode\.how\.trusted \+= 1;\s*return true;/.test(ct7));
 
-      ok('㉑ 버전 1.17.7 이상', _ge(MANIFEST.version, '1.17.7'));
+      /* 🚨 v1.17.8 — 2026-09-17 오염 사고.
+       *   00:00~11:00 에 서로 다른 12개 키워드가 **같은 상품 32개**를 올렸고,
+       *   오류도 막힘 보고도 없이 9시간을 갔다. 원인은 검색창 진입이
+       *   「주소에 키워드가 들어왔는가」를 안 본 것이고, 그물이 하나도 없었다.
+       *   ⇒ 그물을 셋 넣는다. 아래 시험은 **셋이 다 살아 있는지**를 지킨다. */
+      console.log('\n[㉔ 오염 방지 그물 셋 — v1.17.8]');
+      const sbe8 = grab('shopBoxEntry', 'async');
+      const he8 = grab('humanEntry', 'async');
+      const uk8 = grab('uploadKeyword', 'async');
+      const usig = grab('uploadSignature');
+
+      // ① 검색창 진입은 **키워드가 주소에 들어올 때까지** 기다린다
+      ok('🚨㉔ 검색창 진입이 키워드를 기다린다(search/all 만 기다리지 않는다)',
+         /waitNavigated\(tabId, encodeURIComponent\(keyword\)\)/.test(sbe8)
+         && !/waitNavigated\(tabId, 'search\/all'\)/.test(code(sbe8)));
+      ok('🚨㉔ 종전 주소 열기 경로도 여전히 키워드를 기다린다(둘이 같아야 한다)',
+         /waitNavigated\(tabId, encodeURIComponent\(keyword\)\)/.test(grab('fetchPage', 'async')));
+
+      // ② 진입 뒤 「이 키워드의 결과인가」를 확인한다
+      ok('🚨㉔ 주소에 그 키워드가 있는지 본다', /wrong-keyword@/.test(he8));
+      ok('🚨㉔ 인코딩본·한글 둘 다 본다(주소 형태가 둘이다)',
+         /encodeURIComponent\(keyword\)/.test(he8) && /decodeURIComponent\(u\)/.test(he8));
+      ok('🚨㉔ 못 맞추면 실패로 떨어뜨린다(폴백이 받는다)',
+         /_entryNote = 'wrong-keyword@'[^]*?return 0;/.test(he8));
+      /* ⚠️ 위 검사는 「글자가 남아 있나」만 본다 — `if (false)` 로 조건만 죽이면 안 잡힌다
+       *   (사보타주 검증에서 실제로 안 잡혔다). **조건 자체**를 지킨다. */
+      ok('🚨㉔ 그 판정 조건이 살아 있다(조건만 죽이는 되돌림도 잡는다)',
+         /if \(u\.indexOf\(enc\) < 0 && dec\.indexOf\(keyword\) < 0\)/.test(code(he8)));
+
+      // ③ 직전 회차와 같은 결과면 올리지 않는다
+      ok('🚨㉔ 직전 업로드와 상품 목록을 대조한다', /_lastUp\.sig === sig/.test(uk8));
+      ok('🚨㉔ **키워드가 다를 때만** 막는다(같은 키워드 재측정은 정상)',
+         /_lastUp\.keyword !== keyword/.test(uk8));
+      ok('🚨㉔ 상품 0개는 비교하지 않는다(둘 다 0 은 흔하다)',
+         /return ids\.length \? /.test(usig) && /if \(sig && /.test(uk8));
+      ok('🚨㉔ 조용히 건너뛰지 않고 서버에 사유를 알린다',
+         /SAME_AS_PREV/.test(uk8) && /reportBlocked/.test(uk8));
+      ok('🚨㉔ 성공한 회차만 기준으로 기억한다(실패분이 기준이 되면 안 된다)',
+         uk8.indexOf('업로드 실패 HTTP') < uk8.indexOf('_lastUp = { keyword, sig }'));
+
+      // 실제로 돌려 본다 — 같은 목록/다른 키워드면 막히고, 같은 키워드면 안 막힌다
+      {
+        const sig = new Function(`${usig}; return uploadSignature;`)();
+        ok('🚨㉔ 같은 상품 목록은 같은 지문이 된다',
+           sig([{ nvMid: '1' }, { nvMid: '2' }]) === sig([{ nvMid: '1' }, { nvMid: '2' }]));
+        ok('🚨㉔ 순서가 다르면 다른 지문이다(페이지가 바뀐 것을 오염으로 안 본다)',
+           sig([{ nvMid: '1' }, { nvMid: '2' }]) !== sig([{ nvMid: '2' }, { nvMid: '1' }]));
+        ok('🚨㉔ 빈 목록은 지문이 없다', sig([]) === '' && sig(null) === '');
+        ok('🚨㉔ id·productId 로 와도 읽는다',
+           sig([{ id: '7' }]) !== '' && sig([{ productId: '8' }]) !== '');
+      }
+
+      // 🔴 부르는 함수가 실제로 있는지 — 오늘 `pushLog` 를 부를 뻔했다(그 이름은 없다)
+      {
+        const names = (uk8.match(/await ([a-zA-Z_$][\w$]*)\(/g) || [])
+          .map((m) => m.replace(/await |\($/g, ''));
+        const missing = names.filter((n) => !['fetch'].includes(n)
+          && SRC.indexOf('function ' + n + '(') < 0 && SRC.indexOf('const ' + n + ' =') < 0);
+        ok('🔴㉔ 업로드 경로가 부르는 함수가 전부 실재한다(없는 이름은 실행 때 터진다)',
+           missing.length === 0 || (console.log('     없는 이름:', missing.join(',')), false));
+      }
+
+      ok('㉑ 버전 1.17.8 이상', _ge(MANIFEST.version, '1.17.8'));
     }
 
     console.log(fail ? `\n❌ 실패 ${fail}건 / 전체 ${pass + fail}` : '\n사람처럼 넘기기 시험 전부 통과');
