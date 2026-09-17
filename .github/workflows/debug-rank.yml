@@ -1017,6 +1017,63 @@ jobs:
               | sed -E "s/\\[[^]]{1,60}\\]/[**]/g; s/keyword: [^)]*/keyword: **/g; s#https?://[^ ]*#(주소 가림)#g; s/'[^']{1,60}'/'**'/g" \
               | tail -15 || echo "(오류 없음)"
 
+            # ── 🚨 2026-09-17 오염 측정 (읽기 전용 · 이 브랜치 전용) ───────────────
+            #   밤사이 9회차(00:00~08:00)가 서로 다른 키워드인데 같은 상품 32개를 담았다.
+            #   원인 = v1.17.7 의 쇼핑 검색창 진입이 「주소에 키워드가 들어왔는가」를 안 봤다.
+            #   ⚠️ 저장소 공개 — 업체명·상품명은 찍지 않는다(건수만).
+            echo ""
+            echo "===== 🚨 오염 측정 (9/17) ====="
+            docker exec -i logic-analysis python3 - <<'CONTAM'
+            import sqlite3
+            BAD = ['가죽나물','갓김치','간장 닭갈비','간편식','가오리회무침',
+                   '1등급한우','갈비찜','갈비','갈매기살']
+            c = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            c.row_factory = sqlite3.Row
+            q = c.cursor()
+            ph = ','.join('?' * len(BAD))
+
+            print("[A] 오염 키워드 %d개의 오늘 순위 기록" % len(BAD))
+            for tbl, idc in (('client_rank_history','client_id'), ('rankings','product_id')):
+                try:
+                    tot = q.execute(
+                        "SELECT COUNT(*) n FROM %s WHERE DATE(checked_at)=DATE('now','localtime')" % tbl
+                    ).fetchone()['n']
+                    r = q.execute(
+                        "SELECT COUNT(*) n, "
+                        "SUM(CASE WHEN rank_position IS NULL THEN 1 ELSE 0 END) nr, "
+                        "COUNT(DISTINCT %s) who "
+                        "FROM %s WHERE DATE(checked_at)=DATE('now','localtime') "
+                        "AND keyword IN (%s)" % (idc, tbl, ph), BAD).fetchone()
+                    print("  %s — 오늘 전체 %d행 / 오염 키워드 %d행 (미노출 %s · 대상 %s개)"
+                          % (tbl, tot, r['n'], r['nr'] or 0, r['who'] or 0))
+                except Exception as e:
+                    print("  %s 조회 실패: %s" % (tbl, e))
+
+            print("")
+            print("[B] 어제(9/16) 같은 키워드의 기록 — 비교용")
+            for tbl in ('client_rank_history','rankings'):
+                try:
+                    r = q.execute(
+                        "SELECT COUNT(*) n, "
+                        "SUM(CASE WHEN rank_position IS NULL THEN 1 ELSE 0 END) nr "
+                        "FROM %s WHERE DATE(checked_at)=DATE('now','localtime','-1 day') "
+                        "AND keyword IN (%s)" % (tbl, ph), BAD).fetchone()
+                    print("  %s — %d행 (미노출 %s)" % (tbl, r['n'], r['nr'] or 0))
+                except Exception as e:
+                    print("  %s 조회 실패: %s" % (tbl, e))
+
+            print("")
+            print("[C] 오늘 수집분 — 키워드별 상품 수(같으면 오염 신호)")
+            try:
+                for r in q.execute(
+                    "SELECT keyword, product_count, created_at FROM collected_serp "
+                    "WHERE collected_date = DATE('now','localtime') ORDER BY created_at"):
+                    print("  %s · %s · %s개" % (r['created_at'], r['keyword'], r['product_count']))
+            except Exception as e:
+                print("  조회 실패: %s" % e)
+            CONTAM
+            echo "===== 오염 측정 끝 ====="
+
       - name: 상품 주소 모양 실측 (읽기 전용)
         if: ${{ github.event.inputs.urlshape == 'on' }}
         uses: appleboy/ssh-action@v1.0.3
