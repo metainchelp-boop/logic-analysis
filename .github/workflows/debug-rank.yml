@@ -1371,6 +1371,42 @@ jobs:
             EXTVER
             echo "===== 확장 버전 확인 끝 ====="
 
+            echo ""
+            echo "===== 🔑 nvMid 실제 모양 — 직원 안내문을 정확히 쓰기 위한 실측 ====="
+            docker exec -i logic-analysis python3 - <<'NVSHAPE'
+            import sqlite3, json, re, collections
+            c = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            r = c.execute("""SELECT products_json FROM collected_serp
+                              WHERE collected_date = date('now','localtime')
+                              ORDER BY created_at DESC LIMIT 1""").fetchone()
+            ps = json.loads(r[0]) if r else []
+            print(f"   표본 상품 {len(ps)}개")
+            lens = collections.Counter()
+            hosts = collections.Counter()
+            shown = 0
+            for p in ps:
+                pid = str(p.get("productId") or "")
+                link = str(p.get("link") or "")
+                if pid:
+                    lens[len(pid)] += 1
+                m = re.match(r"https?://([^/]+)", link)
+                if m:
+                    hosts[m.group(1)] += 1
+                # ⚠️ 상품명·가게명은 안 찍는다(저장소 공개). 번호와 주소 모양만.
+                if shown < 6 and pid and link:
+                    # 주소에서 번호 부분만 남기고 나머지는 모양만 보이게 줄인다
+                    short = re.sub(r"\?.*$", "", link)
+                    print(f"   productId={pid} ({len(pid)}자리) · link={short}")
+                    print(f"      ↳ 주소 안에 그 번호가 있나: {'예' if pid in link else '아니오'}")
+                    shown += 1
+            print("   [productId 자릿수 분포]", dict(sorted(lens.items())))
+            print("   [주소 호스트 분포]", dict(hosts.most_common(6)))
+            same = sum(1 for p in ps if str(p.get("productId") or "") and str(p.get("productId")) in str(p.get("link") or ""))
+            print(f"   ★ productId 가 주소 안에 그대로 들어 있는 상품: {same}/{len(ps)}개")
+            c.close()
+            NVSHAPE
+            echo "===== nvMid 모양 실측 끝 ====="
+
       - name: 상품 주소 모양 실측 (읽기 전용)
         if: ${{ github.event.inputs.urlshape == 'on' }}
         uses: appleboy/ssh-action@v1.0.3
