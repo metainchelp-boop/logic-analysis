@@ -1587,5 +1587,60 @@ jobs:
                         print("     이건 단계로 가를 수 없다 — 주인을 모르기 때문이다.")
                     except sqlite3.Error as e:
                         print(f"  🔴 미연결 상품 조회 실패: {e}")
+
+            # ───────── 축7 · 대표 확정 규칙을 적용하면 얼마가 되나 (2026-09-18) ─────────
+            #   확정: 진행중만 · 분석 이력 제외 · 업체당 키워드 최대 5개
+            print("\n========== 축7 · 대표 확정 규칙 적용 시뮬레이션 ==========")
+            try:
+                from tracking_eligibility import ELIGIBLE_WHERE as EW
+            except Exception as e:
+                EW = None
+                print(f"  🔴 자격 조건을 못 불렀다: {e}")
+            if EW and "contract_stage" in cl_cols:
+                ids7 = [r[0] for r in conn.execute(
+                    f"SELECT id FROM clients WHERE {EW} AND TRIM(COALESCE(contract_stage,'')) = '진행중'")]
+                print(f"  진행중 + 기존 6조건 통과 업체 : {len(ids7)}곳")
+                if ids7:
+                    p7 = ",".join("?" * len(ids7))
+                    # 업체별 키워드 = 대표키워드 ∪ 추적상품키워드 (분석 이력은 대표 확정으로 제외)
+                    per = {}
+                    for r in conn.execute(
+                            f"SELECT id, main_keywords FROM clients WHERE id IN ({p7})", ids7):
+                        per.setdefault(r[0], set()).update(
+                            x.strip() for x in (r[1] or "").split(",") if x.strip())
+                    for r in conn.execute(
+                            f"SELECT l.client_id, k.keyword FROM tracked_keywords k"
+                            f"  JOIN rank_link l ON l.tracked_product_id = k.product_id"
+                            f"  JOIN tracked_products tp ON tp.id = k.product_id"
+                            f" WHERE l.client_id IN ({p7}) AND COALESCE(tp.disabled_at,'')=''", ids7):
+                        if (r[1] or "").strip():
+                            per.setdefault(r[0], set()).add(r[1].strip())
+                    sizes = sorted((len(v) for v in per.values()), reverse=True)
+                    uni_now = set().union(*per.values()) if per else set()
+                    print(f"  그 업체들의 키워드 합집합(분석 이력 제외) : {len(uni_now)}개")
+                    print(f"  업체당 키워드 수 — 최대 {sizes[0] if sizes else 0} · "
+                          f"중앙값 {sizes[len(sizes)//2] if sizes else 0} · "
+                          f"평균 {sum(sizes)/len(sizes):.1f}" if sizes else "  (없음)")
+                    dist = collections.Counter(min(s_, 11) for s_ in sizes)
+                    print("  [업체당 키워드 수 분포]")
+                    for k7 in sorted(dist):
+                        lab = "11개+" if k7 == 11 else f"{k7}개"
+                        print(f"    {lab:>6} : {dist[k7]:>4}곳")
+                    over = [s_ for s_ in sizes if s_ > 5]
+                    print(f"  ⇒ 5개를 넘는 업체 : {len(over)}곳 (넘는 몫 합계 {sum(s_-5 for s_ in over)}개)")
+                    # 5개 상한을 걸면 — 업체마다 앞에서 5개만
+                    capped = set()
+                    for v in per.values():
+                        capped.update(sorted(v)[:5])
+                    print(f"  ⇒ 5개 상한 적용 후 합집합 : {len(capped)}개")
+                    print()
+                    print(f"  {'기준':<40} {'키워드':>7}")
+                    print(f"  {'지금 (세 갈래 · 단계 무관)':<40} {875:>7}")
+                    print(f"  {'진행중만 + 분석이력 제외':<40} {len(uni_now):>7}")
+                    print(f"  {'위 + 업체당 5개 상한':<40} {len(capped):>7}")
+                    need7 = len(capped)
+                    for m7 in (1, 2, 3, 4):
+                        print(f"    상한 10 × {m7}대 × 24h = {10*24*m7:>5}"
+                              f"{'  ✅ 전량 커버' if 10*24*m7 >= need7 else ''}")
             PY
             docker exec logic-analysis rm -f /tmp/split_rule_preview.py 2>/dev/null || true
