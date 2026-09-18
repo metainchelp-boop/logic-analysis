@@ -1373,15 +1373,17 @@ jobs:
             try:
                 brows = list(conn.execute(
                     "SELECT keyword, paging_index, err, title, ext_version,"
-                    "       substr(created_at,12,5) AS hm, substr(created_at,1,10) AS d"
+                    "       substr(at,12,5) AS hm, substr(at,1,10) AS d"
                     "  FROM collector_blocks"
-                    " WHERE substr(created_at,1,10) = date('now','localtime')"
-                    " ORDER BY created_at"))
+                    " WHERE substr(at,1,10) = date('now','localtime')"
+                    " ORDER BY at"))
             except sqlite3.Error as e:
-                brows = []
-                print(f"  (막힘 표 조회 실패: {e})")
-            if not brows:
+                brows = None
+                print(f"  🔴 막힘 표 조회 실패: {e} — 「0건」이 아니라 **못 쟀다**는 뜻이다.")
+            if brows == []:
                 print("  오늘 막힘 보고 0건.")
+            elif brows is None:
+                pass
             else:
                 print(f"  오늘 막힘 보고 {len(brows)}건")
                 byw = collections.Counter()
