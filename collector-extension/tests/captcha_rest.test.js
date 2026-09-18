@@ -49,6 +49,7 @@ function makeRunner({ blockAt }) {
     jitter: () => 0,
     sleep: async () => {},
     gapFor: async () => 0,
+    spreadGap: async () => 0,
     getBlockedUntil: async () => store.blockedUntil,
     markBlocked: async () => { store.blockedUntil = 9e15; store.marked++; },
     clearBlocked: async () => { store.blockedUntil = 0; store.cleared++; },
