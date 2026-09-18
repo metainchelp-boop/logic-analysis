@@ -1074,6 +1074,50 @@ jobs:
             CONTAM
             echo "===== 오염 측정 끝 ====="
 
+            # ── ✅ 배포 후 확인 (Deploy #443) — 1회성 정리가 실제로 돌았는가 ─────────
+            #   ① 기동 로그의 [9/17오염정리] 전문(삭제예정 전건 + 합계)
+            #   ② 지금도 남아 있는 오염 행 수(0 이어야 정상)
+            #   ⚠️ 읽기 전용. 업체명·상품명은 안 찍는다(id·건수만).
+            echo ""
+            echo "===== ✅ 9/17 오염정리 — 배포 후 확인 ====="
+            echo "[① 기동 로그]"
+            docker logs --since 6h logic-analysis 2>&1 | grep -a '9/17오염정리' | tail -60 \
+              || echo "  (로그에 [9/17오염정리] 줄이 없다 — 마커가 이미 있었거나 아직 안 돌았다)"
+            echo ""
+            echo "[② 마커 파일]"
+            docker exec -i logic-analysis sh -c 'ls -l /app/data/.contam_20260917_cleaned 2>/dev/null && cat /app/data/.contam_20260917_cleaned' \
+              || echo "  (마커 없음)"
+            echo ""
+            echo "[③ 남아 있는 오염 행 — 0 이어야 정상]"
+            docker exec -i logic-analysis python3 - <<'CONTAMV'
+            import sqlite3
+            BAD = ['가죽나물','갓김치','간장 닭갈비','간편식','가오리회무침','1등급한우',
+                   '갈비찜','갈비','갈매기살','2등급한우','강아지육','간장게장']
+            ph = ','.join('?' * len(BAD))
+            c = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            for tbl in ('client_rank_history', 'rankings'):
+                try:
+                    n_bad = c.execute(
+                        f"SELECT COUNT(*) FROM {tbl} WHERE DATE(checked_at)='2026-09-17' "
+                        f"  AND checked_at < '2026-09-17 12:00:00' AND keyword IN ({ph}) "
+                        f"  AND rank_position IS NULL", BAD).fetchone()[0]
+                    n_keep = c.execute(
+                        f"SELECT COUNT(*) FROM {tbl} WHERE DATE(checked_at)='2026-09-17' "
+                        f"  AND keyword IN ({ph}) AND rank_position IS NOT NULL", BAD).fetchone()[0]
+                    n_pm = c.execute(
+                        f"SELECT COUNT(*) FROM {tbl} WHERE DATE(checked_at)='2026-09-17' "
+                        f"  AND checked_at >= '2026-09-17 12:00:00' AND keyword IN ({ph})", BAD).fetchone()[0]
+                    print(f"  {tbl}: 남은 오염 {n_bad}행 / 순위 있는 행(보존) {n_keep} / 12시 이후 행(보존) {n_pm}")
+                except sqlite3.Error as e:
+                    print(f"  {tbl}: 조회 실패 — {e}")
+            c.close()
+            CONTAMV
+            echo ""
+            echo "[④ 시험 상한 — 5 로 올라갔는가]"
+            docker exec -i logic-analysis sh -c "grep -n 'DEFAULT_TEST_CAP' /app/collect_cap.py" 2>/dev/null \
+              || echo "  (collect_cap.py 없음)"
+            echo "===== 배포 후 확인 끝 ====="
+
       - name: 상품 주소 모양 실측 (읽기 전용)
         if: ${{ github.event.inputs.urlshape == 'on' }}
         uses: appleboy/ssh-action@v1.0.3
