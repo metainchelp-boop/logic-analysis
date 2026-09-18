@@ -34,6 +34,10 @@ on:
         description: '상품 주소 모양 실측 — off(기본) / on. 어느 호스트(스마트스토어·브랜드스토어·카탈로그)를 쓰는지, 같은 슬러그가 두 호스트에 걸쳐 있는지(읽기 전용·업체명 미출력).'
         required: false
         default: 'off'
+      nvmid_manual:
+        description: 'nvMid 자동 채우기 미리보기 + 사람 손 목록 — off(기본) / on. 배포 전에 「배치가 몇 개를 채울지」와 「못 채우는 줄이 무엇인지」를 미리 본다(읽기 전용·DB 에 한 글자도 안 쓴다). ⚠️ 업체명·상품명이 실행 로그에 남는다 — 이 저장소는 공개이므로 결과를 받은 뒤 그 런의 로그를 삭제할 것.'
+        required: false
+        default: 'off'
       use_branch_code:
         description: '이 브랜치의 rank_link.py 로 미리보기 — off(기본) / on. 배포 전에 새 규칙이 무엇을 이을지 먼저 보려는 용도(컨테이너 /tmp 에 얹었다 지운다·앱 파일 무접촉). apply 와 함께 쓰지 말 것.'
         required: false
@@ -1055,3 +1059,123 @@ jobs:
               | grep -aE '\"(GET|POST) /api/' \
               | awk '{for(i=1;i<=NF;i++) if($i ~ /^\/api\//) {split($i,a,"?"); print a[1]}}' \
               | sort | uniq -c | sort -rn | head -15
+
+      # ───────── nvMid 자동 채우기 미리보기 + 사람 손 목록 (읽기 전용) ─────────
+      # 배포 전에 「배치가 몇 개를 채울지」와 「못 채우는 줄이 무엇인지」를 먼저 본다.
+      # ⚠️ DB 에 한 글자도 쓰지 않는다(mode=ro 로 연다).
+      # ⚠️ 업체명·상품명이 로그에 남는다 — 결과를 받은 뒤 그 런의 로그를 삭제할 것.
+      - name: 브랜치 nvmid.py 인코딩
+        if: ${{ github.event.inputs.nvmid_manual == 'on' }}
+        run: echo "NV_SRC_GZ=$(gzip -9c backend/nvmid.py | base64 -w0)" >> "$GITHUB_ENV"
+
+      - name: nvMid 자동 채우기 미리보기 + 사람 손 목록 (읽기 전용)
+        if: ${{ github.event.inputs.nvmid_manual == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          NV_SRC_GZ: ${{ env.NV_SRC_GZ }}
+        with:
+          envs: NV_SRC_GZ
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 10m
+          script: |
+            # 브랜치의 nvmid.py 를 컨테이너 /tmp 에 얹는다(앱 파일 무접촉·끝나면 지운다).
+            echo "$NV_SRC_GZ" | base64 -d | gzip -dc > /tmp/nvmid_preview.py
+            docker cp /tmp/nvmid_preview.py logic-analysis:/tmp/nvmid_preview.py
+            rm -f /tmp/nvmid_preview.py
+            docker exec -i logic-analysis python3 - <<'PY'
+            # ⚠️ 읽기 전용 — mode=ro 로 열어 쓰기가 아예 불가능하게 한다.
+            import sqlite3, importlib.util, collections
+            spec = importlib.util.spec_from_file_location("nvmid_preview", "/tmp/nvmid_preview.py")
+            nv = importlib.util.module_from_spec(spec); spec.loader.exec_module(nv)
+            print(f"[미리보기 코드] backfill_from_collected={hasattr(nv,'backfill_from_collected')} "
+                  f"lookup_from_collected={hasattr(nv,'lookup_from_collected')}")
+
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+
+            # ⚠️ 스키마 실측 기준(추측으로 쓰면 조회가 통째로 죽는다):
+            #    · 업체 연결은 p.client_id 가 아니라 브리지 표 rank_link 를 지난다.
+            #    · 키워드는 p.keywords 가 아니라 tracked_keywords 에 줄 단위로 있다.
+            #    · 업체 이름 칸은 company_name 이 아니라 clients.name 이다.
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(tracked_products)")}
+            has_nv  = "nv_mid" in cols
+            has_dis = "disabled_at" in cols
+            print(f"[칸 확인] nv_mid={has_nv} · disabled_at={has_dis}")
+            rows = conn.execute(f"""
+                SELECT p.id, p.product_url, p.product_name, p.store_name,
+                       {"COALESCE(p.nv_mid,'')" if has_nv else "''"} AS nv_mid,
+                       {"COALESCE(p.disabled_at,'')" if has_dis else "''"} AS disabled_at,
+                       (SELECT GROUP_CONCAT(k.keyword, ', ') FROM tracked_keywords k
+                         WHERE k.product_id = p.id) AS kws,
+                       (SELECT GROUP_CONCAT(c.name, ' / ') FROM rank_link l
+                          JOIN clients c ON c.id = l.client_id
+                         WHERE l.tracked_product_id = p.id) AS company
+                  FROM tracked_products p
+                 ORDER BY p.id
+            """).fetchall()
+            print(f"[추적 상품 총 {len(rows)}개]")
+
+            already, fillable, manual, retired = [], [], [], []
+            reason_cnt = collections.Counter()
+            for r in rows:
+                if str(r["disabled_at"] or "").strip():
+                    retired.append(r); continue
+                if str(r["nv_mid"] or "").strip():
+                    already.append(r); continue
+                # ⚠️ 배치와 **같은 규칙**으로 재야 한다 — 배치는 그 상품의 자기 키워드로만 찾는다.
+                #    키워드를 안 넘기면 아무 키워드나 400줄만 뒤져서 결과가 배치와 달라진다.
+                kws_of = [x[0] for x in conn.execute(
+                    "SELECT keyword FROM tracked_keywords WHERE product_id = ?", (r["id"],)).fetchall()]
+                res = nv.lookup_from_collected(conn, r["product_url"], kws_of)
+                if res.get("nv_mid"):
+                    fillable.append((r, res["nv_mid"]))
+                else:
+                    why = res.get("reason") or "unknown"
+                    reason_cnt[why] += 1
+                    manual.append((r, why))
+
+            print()
+            print("========== ① 자동 채우기가 무엇을 하는가 ==========")
+            print(f"  이미 nvMid 있음 : {len(already):>4}개  (배치가 건드리지 않는다)")
+            print(f"  배치가 채운다   : {len(fillable):>4}개  ← 네이버 요청 0건")
+            print(f"  사람 손 필요    : {len(manual):>4}개")
+            print(f"  휴면 처리된 것  : {len(retired):>4}개  (추적 대상이 아니라 목록에서 뺀다)")
+            print()
+            print("  [못 채우는 사유별]")
+            WHY = {
+              "no-channel-id": "상품 주소에서 번호를 못 읽음(주소 모양이 다름)",
+              "not-collected": "그 상품의 키워드를 아직 한 번도 수집하지 않음",
+              "not-in-serp":   "수집은 했는데 300위 안에 그 상품이 없음",
+            }
+            for w, n in reason_cnt.most_common():
+                print(f"    {w:<16} {n:>4}개  — {WHY.get(w, '(사유 미상)')}")
+
+            print()
+            print("========== ② 사람이 직접 확인해야 할 목록 ==========")
+            print("⚠️ 아래에 업체명·상품명이 있다 — 받은 뒤 이 런의 로그를 삭제할 것.")
+            print(f"{'id':>5} | {'사유':<14} | 업체 / 상품 / 키워드")
+            print("-" * 110)
+            for r, why in manual:
+                kw = str(r["kws"] or "(키워드 없음)").replace("\n", " ")[:70]
+                nm = str(r["product_name"] or r["store_name"] or "")[:40]
+                co = str(r["company"] or "(업체 미연결)")[:22]
+                print(f"{r['id']:>5} | {why:<14} | {co} / {nm} / {kw}")
+
+            print()
+            print("========== ③ 배치가 채울 줄 (확인용 표본 20개) ==========")
+            for r, mid in fillable[:20]:
+                print(f"{r['id']:>5} | {str(r['company'] or '(업체 미연결)')[:22]} / {str(r['product_name'] or '')[:40]} → {mid}")
+            if len(fillable) > 20:
+                print(f"  … 외 {len(fillable)-20}개")
+
+            print()
+            print("========== ④ 스위치를 켜면 어떻게 되나 ==========")
+            live = len(rows) - len(retired)
+            covered = len(already) + len(fillable)
+            print(f"  지금 켜면 추적되는 상품 : {len(already)}개 / {live}개")
+            print(f"  채운 뒤 켜면            : {covered}개 / {live}개")
+            print(f"  사람이 다 채우면        : {live}개 / {live}개")
+            PY
+            docker exec logic-analysis rm -f /tmp/nvmid_preview.py 2>/dev/null || true
