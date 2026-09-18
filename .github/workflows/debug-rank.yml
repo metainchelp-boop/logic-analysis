@@ -1083,6 +1083,13 @@ jobs:
             # 브랜치의 nvmid.py 를 컨테이너 /tmp 에 얹는다(앱 파일 무접촉·끝나면 지운다).
             echo "$NV_SRC_GZ" | base64 -d | gzip -dc > /tmp/nvmid_preview.py
             docker cp /tmp/nvmid_preview.py logic-analysis:/tmp/nvmid_preview.py
+            # 기동 배치가 실제로 돌았는지 — 사람이 채운 것과 배치가 채운 것을 가른다.
+            # ⚠️ 고정 문구만 찾는다(업체명·키워드가 섞이지 않는 줄이다).
+            echo "== 기동 nvMid 채우기 배치 로그 =="
+            docker inspect -f '컨테이너 기동: {{.State.StartedAt}}' logic-analysis
+            docker logs --since 24h logic-analysis 2>&1 | grep -E 'nvMid채움|nvMid 채움' | tail -10 \
+              || echo "(아직 없음 — 기동 +3분 전이거나 배치가 안 돌았다)"
+            echo
             rm -f /tmp/nvmid_preview.py
             docker exec -i logic-analysis python3 - <<'PY'
             # ⚠️ 읽기 전용 — mode=ro 로 열어 쓰기가 아예 불가능하게 한다.
