@@ -296,6 +296,33 @@ async function gapFor(base) {
   return (await isSlow()) ? base * 2 : base;
 }
 
+/* ─────────────────────────────────────────────────────────────────────────
+ * 2026-09-18 대표 확정 — 간격을 들쭉날쭉하게 (Ⓒ 간격 가변)
+ *
+ * 종전: 키워드마다 **고정 30초** 쉼 → 조기 종료로 회차가 6분에 끝나 몰아쳤다.
+ *       네이버 눈엔 「조용하다 갑자기 몰아치는」 패턴이라 로그인 화면에 걸렸다(9/18).
+ * 지금: **남은 시간 ÷ 남은 개수** 를 평균으로, 거기에 **랜덤 0.4~1.8배**.
+ *       → 대표가 그린 모양(2~3분·1~2분·3~4분…) 그대로인데 매 회차 무늬가 다르다.
+ *
+ * 🔴 넘지 않는 선:
+ *   · 못 채우면 **서두르지 않고 남긴다** — 밀린 것은 다음 시간대가 이어받는다.
+ *     (따라잡으려 몰아치면 지금 문제가 그대로 재발한다)
+ *   · **최소 40초** — 아무리 개수가 많아도 그 밑으로는 안 내려간다.
+ *   · 느리게 가기 상태면 그대로 2배.
+ * ───────────────────────────────────────────────────────────────────────── */
+const SPREAD_MIN_MS = 40 * 1000;    // 최소 간격
+async function spreadGap(msLeftInBudget, keywordsLeft) {
+  var left = Number(keywordsLeft) || 1;
+  if (left < 1) left = 1;
+  var budget = Number(msLeftInBudget) || 0;
+  // 이번이 마지막이면 굳이 오래 쉴 필요 없다(다음이 없다).
+  var avg = left <= 1 ? SPREAD_MIN_MS : budget / left;
+  // 랜덤 0.4~1.8배 — 사람처럼 들쭉날쭉.
+  var g = avg * (0.4 + Math.random() * 1.4);
+  if (g < SPREAD_MIN_MS) g = SPREAD_MIN_MS;
+  return (await isSlow()) ? g * 2 : g;
+}
+
 async function clearBlocked() {
   await chrome.storage.local.remove(BLOCK_KEY);
   await setState({ blocked: false, blockedUntil: 0, blockedReason: '' });
@@ -1903,7 +1930,15 @@ async function runCollection(manual = false) {
     });
     if (!res.ok) throw new Error(`키워드 조회 실패 HTTP ${res.status}`);
     const { keywords = [], done: already = 0, total = 0,
-            slot = null, overdue = 0, targets = null } = await res.json();
+            slot = null, overdue = 0, targets = null, paused = false } = await res.json();
+    // 🛑 화면에서 껐으면 이 회차를 통째로 건너뛴다(대표 확정 2026-09-18).
+    //    ⚠️ 이미 시작한 회차는 서버가 응답으로만 알리므로 여기서 멈추는 게 유일한 지점.
+    if (paused) {
+      await setState({ running: false, finishedHour: hourTag, current: '', pausedByScreen: true });
+      await log('🛑 화면에서 수집을 꺼 둔 상태 — 이번 회차 건너뜀 (화면에서 켜면 재개)');
+      return;
+    }
+    await setState({ pausedByScreen: false });
     // 🎯 조기 종료 목표 — 서버가 주면 쓰고, 안 주면(구버전 서버) 비운다 = 종전 동작.
     _targets = (targets && typeof targets === 'object') ? targets : {};
     const _nTgt = Object.keys(_targets).length;
@@ -1972,7 +2007,10 @@ async function runCollection(manual = false) {
         }
         await sleep(jitter() * (1 + streak));   // 실패할수록 더 길게 쉰다
       }
-      await sleep(jitter() + await gapFor(CFG.keywordGapMs));
+      // 2026-09-18 — 남은 예산을 남은 개수로 나눠 고르게 편다(몰아치기 방지).
+      var _kwLeft = keywords.length - done - failed;
+      var _msLeft = hourBudget - (Date.now() - hourStart);
+      await sleep(jitter() + await spreadGap(_msLeft, _kwLeft));
     }
     // ⭐ 값을 실제로 받았으면 차단이 풀린 것으로 보고 쉼을 지운다.
     // ⚠️ 단 **이번 회차에서 캡차를 만났으면 절대 지우지 않는다** — 앞부분 몇 개가

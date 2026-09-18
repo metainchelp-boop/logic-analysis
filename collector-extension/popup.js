@@ -60,9 +60,12 @@ async function render() {
     slowBtn.style.background = slowNow ? '#fef3c7' : '';
     slowBtn.style.color = slowNow ? '#b45309' : '';
   }
+  // 🛑 화면에서 꺼 둔 상태 — 그게 가장 중요한 정보라 캡차 다음으로 먼저 본다(2026-09-18).
+  const pausedByScreen = !!state.pausedByScreen;
   const running = blockedNow
     ? '<span class="b bad">자동입력 방지(캡차)로 쉬는 중</span>'
-    : (state.running ? '<span class="b ok">수집 중</span>' : '대기');
+    : (pausedByScreen ? '<span class="b bad">🛑 화면에서 꺼 둠 (로직분석 화면에서 켜세요)</span>'
+      : (state.running ? '<span class="b ok">수집 중</span>' : '대기'));
   // ⭐ 오늘 전체 진척 (2026-08-28 대표 요청 「총 개수 / 추적 완료 / 추적 실패」).
   //    ⚠️ 아래 '이번 시간대' 숫자와 다른 축이다 — 그건 매시간 0 으로 돌아간다.
   //       여기 값은 서버가 알려 준 '오늘 재야 할 전체'와 '오늘까지 끝낸 수'다.

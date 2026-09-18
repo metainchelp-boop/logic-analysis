@@ -210,6 +210,9 @@ jobs:
       - name: 회귀 — 순위 추적 대상(진행중만·분석이력 제외·키워드 5개)
         run: python backend/tests/test_track_scope.py
 
+      - name: 회귀 — 수집 켜고 끄기 스위치 + 간격 가변
+        run: python backend/tests/test_collector_control.py
+
       - name: Build frontend bundle
         run: |
           npm install --no-save @babel/core @babel/preset-react
