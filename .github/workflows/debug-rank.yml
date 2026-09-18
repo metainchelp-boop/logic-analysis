@@ -1405,5 +1405,66 @@ jobs:
                     print(f"      {r[5]} · {(r[0] or '?')[:20]} p{r[1] or '?'} · "
                           f"{(r[2] or '?')[:30]} · {(r[3] or '')[:40]} · v{r[4] or '?'}")
                 print("  ⇒ 한쪽 몫에만 몰려 있으면 그 기계·그 회선 문제다.")
+
+            # ───────── 축4 · 대수를 늘리면 여유가 생기나 (실측) ─────────
+            # ⚠️ 「대수」와 「상한」은 다른 축이다. 무엇이 실제로 묶고 있는지 재고 나서 답한다.
+            print("\n========== 축4 · 대수를 늘리면 여유가 생기나 ==========")
+            uni_set = sorted(set(uni)) if uni else []
+            print(f"  [분할 균형 — 실제 키워드 {len(uni_set)}종으로 직접 갈라 봄]")
+            for wc in (1, 2, 3, 4):
+                buckets = collections.Counter(sr.worker_of(k, wc) for k in uni_set)
+                got = sum(buckets.values())
+                sizes = " · ".join(f"{i+1}번 {buckets.get(i,0)}" for i in range(wc))
+                spread = (max(buckets.values()) - min(buckets.values())) if wc > 1 and buckets else 0
+                print(f"    {wc}대 → {sizes}   (합 {got} · 누락 {len(uni_set)-got} · 최대-최소 {spread})")
+            print("  ⇒ 대수만 바꾸면 전부 자동으로 다시 갈린다. 사람이 몫을 지정하지 않는다.")
+
+            # 실제 소화량 — 하루에 몇 개나 모으고 있나
+            print("\n  [실제 소화량 — 최근 7일]")
+            try:
+                for r in conn.execute(
+                        "SELECT collected_date, COUNT(*) n FROM collected_serp"
+                        " WHERE collected_date >= date('now','localtime','-6 day')"
+                        " GROUP BY collected_date ORDER BY collected_date"):
+                    print(f"    {r[0]}  {r[1]:>4}개")
+            except sqlite3.Error as e:
+                print(f"    🔴 조회 실패: {e} — 「0건」이 아니라 못 쟀다는 뜻이다.")
+
+            print("\n  [오늘 시각별 — 회차당 실제 몇 개를 처리하나]")
+            try:
+                hh = list(conn.execute(
+                    "SELECT substr(created_at,12,2) h, COUNT(*) n FROM collected_serp"
+                    " WHERE collected_date = date('now','localtime')"
+                    " GROUP BY h ORDER BY h"))
+                if hh:
+                    print("    " + " · ".join(f"{r[0]}시 {r[1]}" for r in hh))
+                    print(f"    회차 수 {len(hh)} · 합계 {sum(r[1] for r in hh)}"
+                          f" · 회차당 평균 {sum(r[1] for r in hh)/len(hh):.1f}개")
+                else:
+                    print("    오늘 수집분 0건.")
+            except sqlite3.Error as e:
+                print(f"    🔴 조회 실패: {e} — 못 쟀다는 뜻이다.")
+
+            # 무엇이 묶고 있나 — 상한 vs 대수
+            print("\n  [무엇이 묶고 있나 — 상한 × 대수 × 24시간]")
+            # ⚠️ uni 는 `tracked_keywords` 만이다 — 서버가 실제로 나눠 주는 유니버스는
+            #    `_keyword_universe()` 로 더 넓을 수 있다. 단정하지 않고 둘 다 찍는다.
+            need = len(uni_set)
+            try:
+                seen7 = conn.execute(
+                    "SELECT COUNT(DISTINCT keyword) FROM collected_serp"
+                    " WHERE collected_date >= date('now','localtime','-6 day')").fetchone()[0]
+                print(f"    추적 키워드(tracked_keywords) : {need}개")
+                print(f"    최근 7일 실제로 모은 키워드 종수 : {seen7}개  ← 진짜 유니버스에 더 가깝다")
+                need = max(need, seen7)
+            except sqlite3.Error as e:
+                print(f"    🔴 유니버스 조회 실패: {e} — 못 쟀다는 뜻이다.")
+            print(f"    하루에 다 돌려면 필요한 양(둘 중 큰 값) : {need}개")
+            print(f"    {'상한':>4} {'1대':>7} {'2대':>7} {'3대':>7} {'4대':>7}   ← 하루 최대(상한×24×대수)")
+            for cap in (10, 15, 20, 30, 40):
+                row = "  ".join(f"{cap*24*m:>5}" + ("✅" if cap*24*m >= need else "  ")
+                                for m in (1, 2, 3, 4))
+                print(f"    {cap:>4}   {row}")
+            print("  ⚠️ ✅ 는 산술상 가능하다는 뜻일 뿐이다 — 회선이 그 속도를 견디는지는 다른 축이다.")
             PY
             docker exec logic-analysis rm -f /tmp/split_rule_preview.py 2>/dev/null || true
