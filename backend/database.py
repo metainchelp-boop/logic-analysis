@@ -747,8 +747,20 @@ def delete_tracked_product(product_id: int, user_id: int = None, is_admin: bool 
 
 # ==================== 키워드 CRUD ====================
 
+class KeywordLimitError(Exception):
+    """키워드 상한을 넘겼다 — 호출처가 사람에게 그대로 보여 줄 문구를 담는다."""
+
+
 def add_tracked_keyword(product_id: int, keyword: str) -> int:
-    """키워드 추가 (중복이면 기존 ID 반환)"""
+    """키워드 추가 (중복이면 기존 ID 반환)
+
+    ⚠️ 2026-09-18 대표 확정 — 키워드는 최대 5개까지만 추가할 수 있다.
+       상한 판정은 `keyword_limit` 한 곳에 있다(화면 안내와 같은 수를 쓰기 위해).
+    ⚠️ **이미 있는 키워드는 막지 않는다** — 중복 호출은 새로 만드는 것이 아니라
+       기존 것을 그대로 돌려주는 것이므로 상한과 무관하다.
+    ⚠️ 세는 데 실패하면 막지 않는다(fail-open) — 조회 하나가 실패했다고
+       등록이 통째로 안 되는 쪽이 더 나쁘다.
+    """
     conn = _get_conn()
     try:
         row = conn.execute(
@@ -758,6 +770,15 @@ def add_tracked_keyword(product_id: int, keyword: str) -> int:
 
         if row:
             return row["id"]
+
+        try:
+            from keyword_limit import count_for_product, can_add, LIMIT_MESSAGE
+            if not can_add(count_for_product(conn, product_id), 1):
+                raise KeywordLimitError(LIMIT_MESSAGE)
+        except KeywordLimitError:
+            raise
+        except Exception as _e:          # 규칙 모듈을 못 불렀다 — 막지 않는다
+            logger.warning(f"키워드 상한 판정 실패(막지 않음): {_e}")
 
         cursor = conn.execute(
             "INSERT INTO tracked_keywords (product_id, keyword) VALUES (?, ?)",

@@ -21,6 +21,24 @@
 
 # 자격 = 활성 · 광고주(영업대상·경쟁사 제외) · 스토어축 · 자동분석 ON
 #        · 추적 켜짐 · 추적 기간이 남아 있음
+#
+# ⭐ 2026-09-18 대표 확정 — 「진행중 단계의 광고주만 순위 추적을 한다」
+#    순위 추적은 광고주에게 파는 상품 서비스다. 계약이 진행 중이 아니면 제공 대상이 아니다.
+#
+# ⚠️ 왜 계약 단계를 **직접** 조건에 넣나 (종전에는 없었다):
+#    종전에는 04:00 계약 동기화가 만료·환불·홀딩 업체의 `auto_analysis` 를 꺼서
+#    **간접**으로만 걸러졌다. 그 사슬은 세 곳에서 끊긴다 —
+#      ① 키(ERP_AD_SYNC_API_KEY)가 없으면 동기화 자체가 안 돈다
+#      ② 직원 수동 토글(auto_analysis_manual)이 항상 이긴다
+#      ③ 전산에 없는 업체·단계 미기재는 아무도 안 끈다
+#    실측(2026-09-18): 자격 업체 458곳 중 **홀딩중 1 · 계약 만료 1** 이 그대로 수집되고 있었다.
+#    이제 단계를 직접 보므로 동기화가 안 돌아도 즉시 걸러진다.
+#
+# ⚠️ 단계가 비어 있으면 **자격 없음**이다(대표 확정 「진행중만」).
+#    ⇒ 04:00 동기화가 오래 멈추면 수집 대상이 줄어드는 쪽으로 고장난다.
+#      조용히 0이 되지 않도록 eligible_client_ids() 가 수를 로그로 남긴다.
+TRACK_STAGE = "진행중"
+
 ELIGIBLE_WHERE = (
     "status='active' "
     "AND COALESCE(role,'advertiser')='advertiser' "
@@ -28,8 +46,25 @@ ELIGIBLE_WHERE = (
     "AND COALESCE(auto_analysis,1)=1 "
     "AND COALESCE(track_enabled,1)=1 "
     "AND (track_until IS NULL OR track_until='' "
-    "     OR date(track_until) >= date('now','localtime'))"
+    "     OR date(track_until) >= date('now','localtime')) "
+    f"AND TRIM(COALESCE(contract_stage,'')) = '{TRACK_STAGE}'"
 )
+
+
+def ensure_stage_column(conn) -> None:
+    """clients.contract_stage 보장(멱등).
+
+    ⚠️ ELIGIBLE_WHERE 가 이 칸을 읽는다. 칸이 없는 DB 에서 그 SQL 을 돌리면
+       **조회가 통째로 죽어** 수집·기록이 전부 멈춘다. 쓰기 직전에 보장한다
+       (ensure_disabled_column 과 같은 방식).
+    """
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(clients)").fetchall()}
+        if "contract_stage" not in cols:
+            conn.execute("ALTER TABLE clients ADD COLUMN contract_stage TEXT DEFAULT NULL")
+            conn.commit()
+    except Exception:
+        pass
 
 
 def eligible_clients_sql(columns: str = "id") -> str:
@@ -38,11 +73,26 @@ def eligible_clients_sql(columns: str = "id") -> str:
 
 
 def eligible_client_ids(conn) -> list:
-    """자격 있는 업체 id 목록. 조회가 실패하면 빈 목록(=아무것도 안 함)."""
+    """자격 있는 업체 id 목록. 조회가 실패하면 빈 목록(=아무것도 안 함).
+
+    ⚠️ 「진행중」 단계를 직접 보므로, 04:00 계약 동기화가 멈추면 이 수가 조용히 줄어든다.
+       그래서 **0곳이면 소리내어 남긴다** — 다음 사람이 「왜 아무것도 안 도나」를
+       로그 한 줄로 알 수 있게(이 저장소가 반복해 데인 「조용한 중단」 방지).
+    """
     try:
-        return [r[0] for r in conn.execute(eligible_clients_sql("id")).fetchall()]
+        ensure_stage_column(conn)
+        ids = [r[0] for r in conn.execute(eligible_clients_sql("id")).fetchall()]
     except Exception:
         return []
+    if not ids:
+        try:
+            import logging
+            logging.getLogger(__name__).warning(
+                "[자격] 순위 추적 자격 업체 0곳 — 계약 단계가 '%s' 인 업체가 없다. "
+                "04:00 계약 동기화가 도는지 확인할 것.", TRACK_STAGE)
+        except Exception:
+            pass
+    return ids
 
 
 # ── 추적 상품(홈탭) 자격 ──────────────────────────────────────────────

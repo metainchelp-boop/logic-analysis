@@ -205,11 +205,14 @@ def _tracking_client_ids(conn):
 def _keyword_universe(conn):
     """수집 대상 키워드 → {키워드: 우선(업체) 여부}.
 
-    세 갈래 모두 **추적 자격이 있는 업체의 것만** 모은다(2026-08-20 개편):
+    **추적 자격이 있는 업체(= 계약 단계 「진행중」)의 것만** 모은다:
       ① clients.main_keywords      — 담당자가 지정한 대표 키워드
-      ② client_analyses            — 그 업체의 분석 이력 키워드
+      ② client_analyses            — ⛔ **2026-09-18 대표 확정으로 제외**(아래 참조)
       ③ tracked_keywords           — rank_link 로 그 업체에 이어진 추적 상품의 키워드
     자격 판정은 _tracking_client_ids() 한 곳에만 있다.
+
+    ⚠️ 2026-09-18 실측 — 이 함수가 내는 수(참고):
+       세 갈래 전부 875 · ②를 뺀 뒤 863 · 「진행중」만으로 좁힌 뒤 852.
     """
     uni = {}
     ids = _tracking_client_ids(conn)
@@ -231,21 +234,31 @@ def _keyword_universe(conn):
     except Exception as e:
         logger.warning(f"[collector] 대표 키워드 조회 실패: {e}")
 
-    # ② 분석 이력 키워드(자격 업체 것만)
-    #    ⚠️ 2026-08-29: 「그만 재기」(client_keyword_mute)를 뺀다. 대표 키워드에서 이름을
-    #       빼도 분석 이력에 남아 있으면 여기로 다시 들어와 영원히 수집됐다 — 오타 키워드를
-    #       지울 길이 없던 원인. 다른 업체가 같은 키워드를 쓰면 그쪽 몫으로는 남는다.
-    try:
-        from keyword_mute import muted_map
-        _muted = muted_map(conn)
-        for r in conn.execute(
-                f"SELECT client_id, keyword FROM client_analyses WHERE client_id IN ({ph}) "
-                "GROUP BY client_id, keyword", ids):
-            k = (r[1] or "").strip()
-            if k and k not in _muted.get(r[0], ()):
-                uni[k] = True
-    except Exception as e:
-        logger.warning(f"[collector] 업체 키워드 조회 실패: {e}")
+    # ② 분석 이력 키워드 — ⛔ **2026-09-18 대표 확정으로 제외한다.**
+    #
+    #    대표 지시 원문: 「분석 이력에서도 영업팀도 분석 할 수 있잖아.
+    #                     무조건 진행중인 상태에서만 순위 추적이 유효해야 해.」
+    #
+    #    ⚠️ 왜 빼는가 — `client_analyses` 는 **직원이 한 번이라도 분석을 돌린 키워드**다.
+    #       영업팀이 제안용으로 돌린 것도, 오타로 한 번 돌린 것도 전부 들어온다.
+    #       「지금 관리 중인 키워드」와는 **다른 축**인데 수집 대상을 만들어 왔다.
+    #    ⚠️ 실측(2026-09-18): 이 갈래 589개 중 **이 갈래에만 있는 것은 12개**였다.
+    #       나머지는 ①·③과 겹친다 ⇒ 빼도 유니버스는 875 → 863 으로만 준다.
+    #       **양을 줄이려고 빼는 것이 아니라 기준을 바로잡으려고 빼는 것이다.**
+    #    ⚠️ 되돌리려면 이 블록만 살리면 된다(아래 원본을 지우지 않고 남겨 둔다).
+    #
+    # (원본 — 되살릴 때 이 주석을 풀 것)
+    # try:
+    #     from keyword_mute import muted_map
+    #     _muted = muted_map(conn)
+    #     for r in conn.execute(
+    #             f"SELECT client_id, keyword FROM client_analyses WHERE client_id IN ({ph}) "
+    #             "GROUP BY client_id, keyword", ids):
+    #         k = (r[1] or "").strip()
+    #         if k and k not in _muted.get(r[0], ()):
+    #             uni[k] = True
+    # except Exception as e:
+    #     logger.warning(f"[collector] 업체 키워드 조회 실패: {e}")
 
     # ③ 홈탭 추적 상품 키워드.
     #    ⚠️ 「자격 업체에 이어진 것만」으로 좁히면 안 된다 — rank_link 는 상품ID가 맞는
