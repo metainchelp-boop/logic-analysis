@@ -1530,5 +1530,62 @@ jobs:
                 print(f"  ⇒ ①+③ 만 하면            : {len(a | c)}개")
                 print("  ⚠️ ②(분석 이력)는 직원이 한 번 분석을 돌린 키워드가 전부 들어온다 —")
                 print("     업체가 실제로 관리 중인 키워드인지와는 다른 축이다.")
+
+            # ───────── 축6 · 자격을 계약 단계로 갈라 본다 (대표 재점검 2026-09-18) ─────────
+            # ⚠️ tracking_eligibility.ELIGIBLE_WHERE 에는 contract_stage 가 **없다**.
+            #    「진행중만 한다」는 합의와 코드가 같은지 여기서 갈라 본다.
+            print("\n========== 축6 · 자격 업체를 계약 단계로 갈라 보면 ==========")
+            cl_cols = {r[1] for r in conn.execute("PRAGMA table_info(clients)")}
+            if "contract_stage" not in cl_cols:
+                print("  🔴 clients.contract_stage 칸이 없다 — 단계별로 가를 수 없다.")
+            else:
+                try:
+                    from tracking_eligibility import ELIGIBLE_WHERE
+                    where = ELIGIBLE_WHERE
+                    print("  (자격 조건은 tracking_eligibility.ELIGIBLE_WHERE 를 그대로 쓴다)")
+                except Exception as e:
+                    where = None
+                    print(f"  🔴 자격 조건을 못 불렀다: {e} — 아래를 내지 않는다.")
+                if where:
+                    print(f"\n  {'계약 단계':<16} {'자격 업체':>8} {'대표키워드':>10} {'분석이력':>9} {'추적상품':>9}")
+                    tot = collections.Counter()
+                    rows6 = list(conn.execute(
+                        f"SELECT COALESCE(NULLIF(TRIM(contract_stage),''),'(단계 없음)') st,"
+                        f"       COUNT(*) n FROM clients WHERE {where} GROUP BY st ORDER BY n DESC"))
+                    for st, n in rows6:
+                        ids6 = [r[0] for r in conn.execute(
+                            f"SELECT id FROM clients WHERE {where}"
+                            f"   AND COALESCE(NULLIF(TRIM(contract_stage),''),'(단계 없음)') = ?", (st,))]
+                        if not ids6:
+                            continue
+                        p6 = ",".join("?" * len(ids6))
+                        ka = {x.strip() for r in conn.execute(
+                                  f"SELECT main_keywords FROM clients WHERE id IN ({p6})", ids6)
+                              for x in (r[0] or "").split(",") if x.strip()}
+                        kb = {(r[0] or "").strip() for r in conn.execute(
+                                  f"SELECT DISTINCT keyword FROM client_analyses WHERE client_id IN ({p6})",
+                                  ids6) if (r[0] or "").strip()}
+                        kc = {(r[0] or "").strip() for r in conn.execute(
+                                  f"SELECT DISTINCT k.keyword FROM tracked_keywords k"
+                                  f"  JOIN rank_link l ON l.tracked_product_id = k.product_id"
+                                  f" WHERE l.client_id IN ({p6})", ids6) if (r[0] or "").strip()}
+                        print(f"  {st:<16} {n:>8} {len(ka):>10} {len(kb):>9} {len(kc):>9}")
+                        tot[st] = n
+                    print(f"  {'합계':<16} {sum(tot.values()):>8}")
+                    print()
+                    print("  ⚠️ 읽는 법 — 「진행중」이 아닌 줄이 보이면, 그 업체들도 **지금 수집되고 있다**.")
+                    print("     자격 조건에 contract_stage 가 없기 때문이다(04:00 동기화가")
+                    print("     간접적으로 auto_analysis 를 끄는 방식이라, 동기화가 안 돌면 그대로 남는다).")
+                    # 업체에 안 이어진 추적 상품 — 단계로 가를 수 없는 몫
+                    try:
+                        orphan = conn.execute(
+                            "SELECT COUNT(DISTINCT k.keyword) FROM tracked_keywords k"
+                            "  JOIN tracked_products p ON p.id = k.product_id"
+                            " WHERE COALESCE(p.disabled_at,'')=''"
+                            "   AND p.id NOT IN (SELECT tracked_product_id FROM rank_link)").fetchone()[0]
+                        print(f"\n  ⚠️ 어느 업체에도 안 이어진 추적 상품의 키워드 : {orphan}개")
+                        print("     이건 단계로 가를 수 없다 — 주인을 모르기 때문이다.")
+                    except sqlite3.Error as e:
+                        print(f"  🔴 미연결 상품 조회 실패: {e}")
             PY
             docker exec logic-analysis rm -f /tmp/split_rule_preview.py 2>/dev/null || true
