@@ -333,6 +333,16 @@ def get_collect_keywords(hour: int = None, worker: int = 0, workers: int = 1,
     conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
     try:
+        # 화면에서 끈 상태면 이 회차를 통째로 건너뛴다(대표 확정 2026-09-18).
+        # ⚠️ worker 는 0-base(확장이 no-1 을 보낸다). 판정 실패는 「돎」으로 폴백.
+        try:
+            from collector_control import is_paused
+            if is_paused(conn, worker):
+                return {"success": True, "date": today, "mode": "paused",
+                        "paused": True, "total": 0, "done": 0, "todo": 0,
+                        "keywords": [], "targets": {}}
+        except Exception as _pe:
+            logger.warning(f"[collector] 중지 스위치 판정 실패(계속 돎): {_pe}")
         uni = _keyword_universe(conn)
         done = {r["keyword"] for r in conn.execute(
             "SELECT keyword FROM collected_serp WHERE collected_date = ?", (today,)).fetchall()}
@@ -564,6 +574,48 @@ def collect_status(x_collector_token: str = Header(None)):
             "SELECT COUNT(*) FROM collect_requests WHERE status='pending' AND attempts < 5").fetchone()[0]
         return {"success": True, "today": today, "pendingRequests": pending,
                 "days": [dict(r) for r in rows]}
+    finally:
+        conn.close()
+
+
+class CollectControlReq(BaseModel):
+    """화면에서 수집을 끄고 켤 때. worker=-1 = 전체, 0,1,2… = 그 기계(0-base)."""
+    worker: int = -1
+    stopped: bool = True
+
+
+@router.get("/control")
+def collector_control_get(current_user: dict = Depends(get_current_user)):
+    """지금 수집이 화면에서 꺼져 있나 — 화면 버튼 상태용(로그인 전용).
+
+    2026-09-18 대표 확정 — 확장 팝업에 안 가도 화면에서 끄고 켠다.
+    """
+    conn = sqlite3.connect(DB_PATH, timeout=10)
+    try:
+        from collector_control import get_state
+        return {"success": True, "control": get_state(conn)}
+    finally:
+        conn.close()
+
+
+@router.post("/control")
+def collector_control_set(req: CollectControlReq,
+                          current_user: dict = Depends(get_current_user)):
+    """화면에서 수집을 끄거나 켠다(로그인 전용).
+
+    ⚠️ 끄면 확장이 **다음 회차 시작 때** 서버 응답의 paused 를 보고 건너뛴다 —
+       이미 진행 중인 회차는 그 회차를 마친다(중간에 강제로 죽이지 않는다).
+    """
+    conn = sqlite3.connect(DB_PATH, timeout=10)
+    try:
+        from collector_control import set_paused, get_state
+        who = str(current_user.get("name") or current_user.get("id") or "")
+        ok = set_paused(conn, req.worker, req.stopped, who)
+        if not ok:
+            raise HTTPException(status_code=500, detail="상태 저장에 실패했습니다.")
+        logger.info(f"[collector] 화면 제어 — worker={req.worker} "
+                    f"{'중지' if req.stopped else '재개'} by {who[:20]}")
+        return {"success": True, "control": get_state(conn)}
     finally:
         conn.close()
 
