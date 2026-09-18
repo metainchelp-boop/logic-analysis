@@ -270,6 +270,19 @@ def start_scheduler():
         max_instances=1,
     )
 
+    # 13) 🚨 9/17 오염 기록 1회 정리 — 부팅 2분 뒤 한 번(마커가 있으면 즉시 종료).
+    #     ⚠️ 보고서 보정(+1분) **뒤**에 둔다. 둘 다 순식간이지만 순서를 고정해 두면
+    #        로그에서 어느 쪽이 무엇을 건드렸는지 섞이지 않는다.
+    _scheduler.add_job(
+        _run_contam_20260917_cleanup,
+        trigger="date",
+        run_date=datetime.now() + timedelta(minutes=2),
+        id="contam_20260917_cleanup_boot",
+        name="9/17 오염 순위 기록 1회 정리 (부팅 +2분)",
+        replace_existing=True,
+        max_instances=1,
+    )
+
     _scheduler.start()
     logger.info("✅ 스케줄러 시작 (계약동기화: 04:00, 보고서 담당자 정렬: 04:20, 순위: 08:00, 분석: 08:30, 리포트: 09:30(발송 비활성), DB백업: 00:30, 보관정책: 01:00, 축 브리지: 01:20, 플레이스 자동추적 정리: 01:40, 주간 보고서: 월 09:40, 상권 API 자가 점검: 05:00)")
 
@@ -1724,3 +1737,78 @@ def _run_weekly_reports():
         run_weekly_reports()
     except Exception as e:
         logger.error(f"❌ 주간 보고서 잡 실패: {e}")
+
+
+# ── 🚨 2026-09-17 오염 기록 1회 정리 ──────────────────────────────────────────
+#
+# 무슨 일이었나: 수집기 v1.17.7 의 쇼핑 검색창 진입이 「주소에 키워드가 들어왔는가」를
+#   안 보고 `search/all` 만 기다렸다. 우리는 **이미 쇼핑 결과 화면**에 서 있어서 그 글자가
+#   처음부터 있으므로, 검색이 안 돌아도 즉시 통과했다. 전날 회차가 화면을 9페이지에 남긴 채
+#   끝났고, 00:00~11:00 **12회차가 그 화면 하나를 다시 읽어** 같은 상품 32개를 올렸다.
+#   ⇒ 그 키워드들의 순위가 전부 **「순위 없음(300위 밖)」** 으로 잘못 기록됐다.
+#   ⇒ 확장은 v1.17.8 에서 그물 셋으로 막았다. 여기서는 **이미 들어간 잘못된 기록**만 지운다.
+#
+# ⚠️ 왜 지우는가 — 남겨 두면 화면·보고서·① portal-summary 가 그 값을 **사실로** 보여 준다.
+#    지우면 그 키워드는 「오늘 기록 없음」이 되고, 다음 회차가 정상값으로 다시 채운다.
+#
+# ⚠️ 안전장치 넷:
+#   ① **지우기 전 전건을 INFO 로그로 남긴다** — 되돌릴 근거(그 행을 그대로 복원할 수 있다).
+#   ② **조건을 셋 다 만족하는 행만** — 그 날짜 + 그 키워드 + 오염 시간대 + rank_position IS NULL.
+#      ⇒ 순위가 **있는** 행은 손대지 않는다(오염 회차는 전부 미노출이었다).
+#   ③ **1회성 마커** — 배포마다 재실행되지 않는다. 실패하면 마커를 안 남겨 다음 배포에서 재시도.
+#   ④ 오염 시간대(00:00~12:00) 밖은 제외 — 12:00 부터는 정상 회차였다(357·399·400개).
+_CONTAM_MARKER_NAME = ".contam_20260917_cleaned"
+
+# 그날 같은 화면을 읽은 키워드 12개(진단 #295·#296 으로 확정 — 상품 수가 전부 32개로 동일).
+_CONTAM_KEYWORDS_20260917 = [
+    "가죽나물", "갓김치", "간장 닭갈비", "간편식", "가오리회무침", "1등급한우",
+    "갈비찜", "갈비", "갈매기살", "2등급한우", "강아지육", "간장게장",
+]
+_CONTAM_DATE = "2026-09-17"
+_CONTAM_UNTIL = "2026-09-17 12:00:00"   # 이 시각 **앞**만 오염(그 뒤는 정상 회차)
+
+
+def _run_contam_20260917_cleanup():
+    """9/17 오염으로 잘못 기록된 순위 행을 1회 지운다(읽고 → 로그 남기고 → 지운다)."""
+    import os
+    import sqlite3
+    marker = os.path.join(os.path.dirname(os.path.abspath(DB_PATH)), _CONTAM_MARKER_NAME)
+    if not os.path.exists(DB_PATH) or os.path.exists(marker):
+        return
+    ph = ",".join("?" * len(_CONTAM_KEYWORDS_20260917))
+    where = (f"DATE(checked_at)=? AND checked_at < ? AND keyword IN ({ph}) "
+             "AND rank_position IS NULL")
+    args = [_CONTAM_DATE, _CONTAM_UNTIL] + _CONTAM_KEYWORDS_20260917
+    total = 0
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=30)
+        conn.row_factory = sqlite3.Row
+        try:
+            for tbl, idc in (("client_rank_history", "client_id"), ("rankings", "product_id")):
+                try:
+                    rows = conn.execute(
+                        f"SELECT id, {idc} AS who, keyword, checked_at, check_type "
+                        f"FROM {tbl} WHERE {where}", args).fetchall()
+                except sqlite3.Error as e:
+                    logger.warning(f"[9/17오염정리] {tbl} 조회 실패 — 건너뜀: {e}")
+                    continue
+                if not rows:
+                    logger.info(f"[9/17오염정리] {tbl} — 지울 행 없음")
+                    continue
+                # ① 되돌릴 근거: 지우기 전 전건을 남긴다(업체명·상품명은 안 찍는다 — id 만).
+                for r in rows:
+                    logger.info(
+                        f"[9/17오염정리] 삭제예정 {tbl} id={r['id']} {idc}={r['who']} "
+                        f"kw={r['keyword']} at={r['checked_at']} type={r['check_type']}")
+                conn.execute(f"DELETE FROM {tbl} WHERE {where}", args)
+                total += len(rows)
+                logger.info(f"✅ [9/17오염정리] {tbl} {len(rows)}행 삭제")
+            conn.commit()
+        finally:
+            conn.close()
+        with open(marker, "w") as f:
+            f.write(f"{_CONTAM_DATE} cleaned rows={total}\n")
+        logger.info(f"✅ [9/17오염정리] 완료 — 합계 {total}행 · 마커 생성(재실행 없음)")
+    except Exception as e:
+        # 마커를 남기지 않는다 — 다음 배포에서 다시 시도한다.
+        logger.error(f"❌ [9/17오염정리] 실패(마커 미생성, 다음 배포에서 재시도): {e}")
