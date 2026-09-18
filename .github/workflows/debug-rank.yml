@@ -1264,6 +1264,51 @@ jobs:
                 print()
                 print("  ⇒ 읽는 법: 「0/2」와 「1/2」가 **서로 다른 곳**에서 각각 오면 정상.")
                 print("             「-/-」(안 보냄)이 섞여 있으면 그 기계는 아직 1대 설정이다.")
+
+                # ⚠️ 하루치 합계만 보면 **이미 지운 확장의 옛 기록**을 「지금도 돈다」로 오독한다.
+                #    (2026-09-18 실제로 그럴 뻔했다 — 대표가 맥북·맥미니 확장을 지운 뒤였다.)
+                #    ⇒ 곳마다 **마지막으로 온 시각**과 **최근 60분 건수**를 따로 찍는다.
+                import datetime
+                def parse_t(s):
+                    try:
+                        return datetime.datetime.strptime(s.split()[0], "%d/%b/%Y:%H:%M:%S")
+                    except Exception:
+                        return None
+                last_by_who, recent = {}, collections.Counter()
+                newest = None
+                for ln in lines:
+                    if "/api/collector" not in ln:
+                        continue
+                    m = ip_re.match(ln); mt = t_re.search(ln)
+                    if not m or not mt:
+                        continue
+                    t = parse_t(mt.group(1))
+                    if not t:
+                        continue
+                    who = tag(m.group(1))
+                    if who not in last_by_who or t > last_by_who[who]:
+                        last_by_who[who] = t
+                    if newest is None or t > newest:
+                        newest = t
+                if newest:
+                    cut = newest - datetime.timedelta(minutes=60)
+                    for ln in lines:
+                        if "/api/collector" not in ln:
+                            continue
+                        m = ip_re.match(ln); mt = t_re.search(ln)
+                        if not m or not mt:
+                            continue
+                        t = parse_t(mt.group(1))
+                        if t and t >= cut:
+                            recent[tag(m.group(1))] += 1
+                    print()
+                    print(f"  [곳마다 마지막으로 온 시각 · 수집 경로 전체 · 기준 {newest.strftime('%H:%M:%S')}]")
+                    print(f"  {'곳':<10} {'마지막':<10} {'최근60분':>8}   판정")
+                    for who, t in sorted(last_by_who.items(), key=lambda x: x[1], reverse=True):
+                        n = recent.get(who, 0)
+                        verdict = "살아 있다" if n else "60분 넘게 조용 — 지웠거나 멈춤"
+                        print(f"  {who:<10} {t.strftime('%H:%M:%S'):<10} {n:>8}   {verdict}")
+                    print("  ⇒ 지운 확장은 여기서 '조용'으로 떨어진다. 하루치 합계로 판단하지 말 것.")
             PY2
 
             echo
