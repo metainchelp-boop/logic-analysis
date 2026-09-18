@@ -12,6 +12,9 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
     const [historyDays, setHistoryDays] = useState({}); // { keywordId: 7|30|365 } 기간 선택
     const [trackedSearch, setTrackedSearch] = useState('');   // 업체/상품 검색
     const [trackedSort, setTrackedSort] = useState('company'); // company|rank|checked
+    // 2026-09-18 대표 확정 — 화면에서 수집 켜고 끄기(확장 팝업 안 가도).
+    const [collCtl, setCollCtl] = useState(null);   // { all, workers, ... }
+    const [collBusy, setCollBusy] = useState(false);
     const lastAutoRegistered = useRef('');
     const productsRef = useRef(products);
     productsRef.current = products;
@@ -142,6 +145,34 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
        ⇒ 등록은 화면 맨 위 「＋ 추적 상품 등록」 카드(업체 칸 있음) 한 곳이 맡는다.
           다시 만들 일이 생기면 **업체 피커부터** 붙일 것 — `backend/tests/test_client_picker.py`
           가 업체 없이 보내는 호출을 잡는다. */
+
+    // 수집 제어 상태 로드 (편집 권한자만 · 목록 화면에서만)
+    useEffect(function() {
+        if (canEdit === false || analysisOnly || searchedProductUrl) return;
+        var cancelled = false;
+        api.get('/collector/control')
+            .then(function(res) { if (!cancelled && res && res.success) setCollCtl(res.control || {}); })
+            .catch(function() {});
+        return function() { cancelled = true; };
+    }, [canEdit, analysisOnly, searchedProductUrl]);
+
+    // 수집 끄기/켜기 — worker=-1 전체
+    const toggleCollector = async (worker, stopped) => {
+        setCollBusy(true);
+        try {
+            var res = await api.post('/collector/control', { worker: worker, stopped: stopped });
+            if (res && res.success) {
+                setCollCtl(res.control || {});
+                toast.success(stopped ? '수집을 껐습니다. 확장이 다음 회차부터 멈춥니다.' : '수집을 켰습니다. 확장이 다음 회차부터 재개합니다.');
+            } else {
+                toast.error('상태 변경에 실패했습니다.');
+            }
+        } catch (e) {
+            toast.error('상태 변경 실패: ' + (e.message || '네트워크 오류'));
+        } finally {
+            setCollBusy(false);
+        }
+    };
 
     const handleRefresh = async (productId) => {
         setRefreshing(prev => ({ ...prev, [productId]: true }));
@@ -647,7 +678,29 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                         return React.createElement('span', { style: { fontWeight: 800, color: c } }, rk + '위',
                             React.createElement('span', { style: { fontSize: 10, color: '#94a3b8', fontWeight: 600, marginLeft: 4 } }, Math.ceil(rk / 40) + 'P'));
                     };
+                    // 2026-09-18 대표 확정 — 수집 켜고 끄기 바(편집 권한자만).
+                    var _collAllOff = !!(collCtl && collCtl.all);
+                    var _collBar = React.createElement('div', {
+                        style: { display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap',
+                                 padding: '10px 14px', marginBottom: 12, borderRadius: 10,
+                                 border: '1px solid ' + (_collAllOff ? '#fecaca' : '#bbf7d0'),
+                                 background: _collAllOff ? '#fef2f2' : '#f0fdf4' } },
+                        React.createElement('span', { style: { fontSize: 13, fontWeight: 800, color: _collAllOff ? '#991b1b' : '#166534' } },
+                            _collAllOff ? '🛑 수집 꺼짐' : '● 수집 켜짐'),
+                        React.createElement('span', { style: { fontSize: 11.5, color: '#64748b' } },
+                            collCtl == null ? '상태 불러오는 중…'
+                                : (_collAllOff ? '확장이 다음 회차부터 멈춥니다.' : '각 기계가 자기 몫을 수집합니다.')),
+                        React.createElement('button', {
+                            className: 'btn btn-sm', disabled: collBusy || collCtl == null,
+                            onClick: function() { toggleCollector(-1, !_collAllOff); },
+                            style: { marginLeft: 'auto', fontSize: 12.5, fontWeight: 700, padding: '6px 14px',
+                                     borderRadius: 8, cursor: 'pointer', border: 'none',
+                                     background: _collAllOff ? '#059669' : '#dc2626', color: '#fff',
+                                     opacity: (collBusy || collCtl == null) ? 0.6 : 1 } },
+                            collBusy ? '처리 중…' : (_collAllOff ? '▶ 전체 수집 켜기' : '⏹ 전체 수집 끄기'))
+                    );
                     return React.createElement('div', null,
+                        (canEdit !== false) && _collBar,
                         React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', margin: '4px 0 12px' } },
                             React.createElement('input', { className: 'form-input', placeholder: '🔎 업체명·상품명 검색', value: trackedSearch, onChange: function(e){ setTrackedSearch(e.target.value); }, style: { maxWidth: 280, fontSize: 13 } }),
                             React.createElement('select', { className: 'form-input', value: trackedSort, onChange: function(e){ setTrackedSort(e.target.value); }, style: { maxWidth: 150, fontSize: 13 } },
