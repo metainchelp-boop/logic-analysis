@@ -284,6 +284,26 @@ def _keyword_universe(conn):
     return uni
 
 
+def _targets(conn, keywords) -> dict:
+    """{키워드: [nvMid, …]} — 확장의 **조기 종료** 근거 (2026-09-18 대표 확정).
+
+    「그 키워드로 찾아야 할 상품을 다 찾았으면 거기서 멈추고 다음 키워드로 간다」.
+    실측(진단 #301): 목표를 다 찾은 364개 키워드가 끝난 페이지는 **중앙값 1 · 최대 8** 이고,
+    11장씩 긁던 4,004장이 **783장**이면 된다(80% 절감).
+
+    ⚠️ **가산 필드다.** 구버전 확장은 이 키를 안 읽으므로 종전대로 깊이까지 간다(무회귀).
+    ⚠️ 목표가 없는 키워드는 **키를 아예 안 만든다** — 「빈 배열 = 목표 0개 = 즉시 종료」로
+       오해될 여지를 없앤다. 확장도 키가 없으면 종전 동작이다.
+    ⚠️ 조회가 깨져도 수집이 멈추면 안 된다 — 실패하면 빈 dict 로 종전 동작.
+    """
+    try:
+        from nvmid import targets_for_keywords
+        return targets_for_keywords(conn, keywords)
+    except Exception as e:
+        logger.warning(f"[collector] 조기 종료 목표 조회 실패(무시, 종전대로 깊이까지): {e}")
+        return {}
+
+
 @router.get("/keywords")
 def get_collect_keywords(hour: int = None, worker: int = 0, workers: int = 1,
                          x_collector_token: str = Header(None)):
@@ -316,7 +336,8 @@ def get_collect_keywords(hour: int = None, worker: int = 0, workers: int = 1,
             todo = _apply_cap(sorted(remaining)[:MAX_KEYWORDS], _test_cap())
             return {"success": True, "date": today, "mode": "all",
                     "total": len(uni), "done": len(done), "todo": len(todo),
-                    "test_cap": _test_cap(), "keywords": todo}
+                    "test_cap": _test_cap(), "keywords": todo,
+                    "targets": _targets(conn, todo)}
 
         h = max(0, min(23, int(hour)))
         now_slot, overdue = [], []
@@ -343,7 +364,8 @@ def get_collect_keywords(hour: int = None, worker: int = 0, workers: int = 1,
                 "total": len(uni), "done": len(done),
                 "slot": len(now_slot), "overdue": len(overdue),
                 "worker": w, "workers": wc, "test_cap": cap,
-                "todo": len(picked), "keywords": picked}
+                "todo": len(picked), "keywords": picked,
+                "targets": _targets(conn, picked)}
     finally:
         conn.close()
 

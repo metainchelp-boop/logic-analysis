@@ -48,12 +48,26 @@ def _tracked_targets(conn, keyword: str) -> List[Dict[str, Any]]:
     두 곳이 갈리면 「수집은 멈췄는데 기록은 계속되는」 오늘 같은 일이 또 난다.
     """
     try:
-        rows = [dict(r) for r in conn.execute("""
-            SELECT k.id AS keyword_id, p.id AS product_id, p.product_url
-              FROM tracked_keywords k
-              JOIN tracked_products p ON p.id = k.product_id
-             WHERE k.keyword = ?
-        """, (keyword,))]
+        # nv_mid — 2026-09-18 신설. 순위 매칭의 가장 정확한 열쇠다(사람이 확인해 넣은 값).
+        # ⚠️ 컬럼이 아직 없는 서버도 있으므로 **없으면 빈 값으로** 폴백한다 — 여기서
+        #    ALTER 를 돌리지 않는다(이 함수는 기록 트랜잭션 직전이라 중간 commit 을 피한다.
+        #    8/29 에 한 번 데인 자리다). 컬럼 보장은 등록 경로·08:00 배치가 한다.
+        try:
+            rows = [dict(r) for r in conn.execute("""
+                SELECT k.id AS keyword_id, p.id AS product_id, p.product_url,
+                       COALESCE(p.nv_mid, '') AS nv_mid
+                  FROM tracked_keywords k
+                  JOIN tracked_products p ON p.id = k.product_id
+                 WHERE k.keyword = ?
+            """, (keyword,))]
+        except Exception:
+            rows = [dict(r) for r in conn.execute("""
+                SELECT k.id AS keyword_id, p.id AS product_id, p.product_url,
+                       '' AS nv_mid
+                  FROM tracked_keywords k
+                  JOIN tracked_products p ON p.id = k.product_id
+                 WHERE k.keyword = ?
+            """, (keyword,))]
     except Exception as e:
         logger.warning(f"[rank_record] 추적 상품 조회 실패 [{keyword}]: {e}")
         return []
@@ -178,7 +192,7 @@ def record_ranks_for_keyword(keyword: str, prods: List[Dict[str, Any]],
         for t in _tracked_targets(conn, kw):
             try:
                 rank, page, _competitors = find_product_rank_from_cache(
-                    kw, t["product_url"], prods)
+                    kw, t["product_url"], prods, nv_mid=t.get("nv_mid") or "")
                 save_ranking_daily(
                     product_id=t["product_id"], keyword_id=t["keyword_id"], keyword=kw,
                     rank_position=rank, page_number=page, check_type=check_type)

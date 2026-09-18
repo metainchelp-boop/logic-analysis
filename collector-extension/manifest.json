@@ -1,16 +1,19 @@
 {
   "manifest_version": 3,
   "name": "메타아이앤씨 순위 수집기",
-  "version": "1.14.0",
+  "version": "1.18.0",
   "description": "사내 전용 — 네이버 쇼핑 검색 순위를 24시간에 나눠 모아 로직분석 서버로 보냅니다.",
   "permissions": [
     "alarms",
     "storage",
     "tabs",
-    "scripting"
+    "scripting",
+    "debugger"
   ],
   "host_permissions": [
     "https://search.shopping.naver.com/*",
+    "https://www.naver.com/*",
+    "https://search.naver.com/*",
     "https://logic.metainc.co.kr/*"
   ],
   "background": {

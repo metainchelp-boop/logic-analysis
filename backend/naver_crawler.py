@@ -463,10 +463,17 @@ def find_product_rank(keyword: str, product_url: str,
 
 
 def find_product_rank_from_cache(keyword: str, product_url: str,
-                                  cached_products: List[Dict]) -> Tuple[Optional[int], Optional[int], List[Dict]]:
+                                  cached_products: List[Dict],
+                                  nv_mid: str = "") -> Tuple[Optional[int], Optional[int], List[Dict]]:
     """
     이미 조회된 상품 목록(cached_products)에서 순위를 찾는다. (API 호출 없음)
     스케줄러 통합 작업에서 1회 API 호출 결과를 재사용하기 위한 함수.
+
+    nv_mid — 등록 때 사람이 넣어 둔 **네이버 쇼핑 상품 고유번호**(2026-09-18 신설).
+      ⚠️ 종전 1순위가 쓰던 `extract_product_id_from_url` 은 스마트스토어 주소에서
+         **채널 상품번호**를 뽑는다. 그건 nvMid 가 아니라서 1순위가 항상 빗나갔고
+         (실측: 목표 807건 중 1순위 0건), 2순위(주소 문자열 포함)가 혼자 떠받치고 있었다.
+      ⚠️ **선택 인자다** — 안 넘기면 종전 규칙 그대로 돈다(기존 443개가 그 경우다).
 
     Returns:
         (rank_position, page_number, top_competitors)
@@ -474,6 +481,7 @@ def find_product_rank_from_cache(keyword: str, product_url: str,
     if not cached_products:
         return None, None, []
 
+    target_nv_mid = str(nv_mid or "").strip()
     target_product_id = extract_product_id_from_url(product_url)
     target_store_name = extract_store_name_from_url(product_url)
     top_competitors = cached_products[:5]
@@ -481,8 +489,13 @@ def find_product_rank_from_cache(keyword: str, product_url: str,
     for product in cached_products:
         matched = False
 
-        # 1순위: productId(nvMid) 완전 일치
-        if target_product_id and product.get("product_id"):
+        # 0순위: 등록 때 받아 둔 nvMid 완전 일치 — 가장 정확하다(사람이 확인한 값).
+        if target_nv_mid and product.get("product_id"):
+            if target_nv_mid == str(product["product_id"]):
+                matched = True
+
+        # 1순위: 주소에서 뽑은 번호 완전 일치 (nvMid 주소면 맞고, 스토어 주소면 거의 안 맞는다)
+        if not matched and target_product_id and product.get("product_id"):
             if target_product_id == product["product_id"]:
                 matched = True
 

@@ -4,9 +4,28 @@ let setupChecked = false;   // ⚙ 설정칸 자동 펼침은 처음 한 번만(
 
 async function render() {
   const { token = '', state = {}, logs = [], rawSample = null, rawSampleAd = null,
-          lastAdStat = null, readFail = null, workerNo = 1, workerCount = 1 } =
+          lastAdStat = null, readFail = null, workerNo = 1, workerCount = 1,
+          trustedClick = undefined, searchEntry = undefined } =
     await chrome.storage.local.get(['token', 'state', 'logs', 'rawSample', 'rawSampleAd',
-                                    'lastAdStat', 'readFail', 'workerNo', 'workerCount']);
+                                    'lastAdStat', 'readFail', 'workerNo', 'workerCount',
+                                    'trustedClick', 'searchEntry']);
+  // v1.16.0 — ⌨ 검색창에 쳐서 들어가기. 기본 켬(background 의 판정과 같아야 한다).
+  const entryOn = searchEntry === undefined ? true : !!searchEntry;
+  const eBtn = $('searchEntry');
+  if (eBtn) {
+    eBtn.textContent = entryOn ? '⌨ 네이버부터 검색해 들어가기 — 켬' : '⌨ 네이버부터 검색해 들어가기 — 끔';
+    eBtn.style.background = entryOn ? '#dbeafe' : '';
+    eBtn.style.color = entryOn ? '#1d4ed8' : '';
+  }
+  // v1.15.0 — 🖱 진짜 입력으로 클릭. 저장값이 없으면 **켬**이 기본(background 판정과 같아야 한다).
+  //   ⚠️ 여기 기본값을 끔으로 바꾸면 background 와 어긋나 화면과 실제가 달라진다.
+  const trustedOn = trustedClick === undefined ? true : !!trustedClick;
+  const tBtn = $('trusted');
+  if (tBtn) {
+    tBtn.textContent = trustedOn ? '🖱 진짜 입력으로 클릭 — 켬' : '🖱 진짜 입력으로 클릭 — 끔';
+    tBtn.style.background = trustedOn ? '#dbeafe' : '';
+    tBtn.style.color = trustedOn ? '#1d4ed8' : '';
+  }
   // ⚠️ 입력 중에는 덮어쓰지 않는다 — 3초마다 도는 render 가 타이핑을 지워 버린다.
   //    특히 토큰 칸은 새로 설치한 기계에서 저장값이 빈 문자열이라, 가드가 없으면
   //    한 글자 칠 때마다 지워져 사실상 입력이 불가능하다(2026-08-28 실사용 신고).
@@ -136,6 +155,20 @@ $('slow').onclick = async () => {
 // 🔍 v1.14.0 — 사람이 연 화면이 받은 응답을 같은 자로 재서 서버에 보낸다(네이버 요청 0건).
 $('humanProbe').onclick = () =>
   chrome.runtime.sendMessage({ cmd: 'humanProbe' }, () => setTimeout(render, 800));
+// 🖱 v1.15.0 — 진짜 입력으로 클릭. 누를 때마다 켜고 끈다(background 가 같은 저장값을 읽는다).
+$('trusted').onclick = async () => {
+  const { trustedClick } = await chrome.storage.local.get('trustedClick');
+  const on = trustedClick === undefined ? true : !!trustedClick;
+  await chrome.storage.local.set({ trustedClick: !on });
+  render();
+};
+// ⌨ v1.16.0 — 검색창에 쳐서 들어가기. 끄면 종전처럼 주소를 직접 연다.
+$('searchEntry').onclick = async () => {
+  const { searchEntry } = await chrome.storage.local.get('searchEntry');
+  const on = searchEntry === undefined ? true : !!searchEntry;
+  await chrome.storage.local.set({ searchEntry: !on });
+  render();
+};
 $('refresh').onclick = render;
 render();
 setInterval(render, 3000);

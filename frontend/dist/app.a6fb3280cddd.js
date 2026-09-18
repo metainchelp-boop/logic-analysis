@@ -3910,6 +3910,20 @@ window.KeywordRankPage = function KeywordRankPage(props) {
   var _rgK = useState('');
   var regKw = _rgK[0],
     setRegKw = _rgK[1];
+  /* nvMid — 2026-09-18 대표 확정 「필수로 입력해야만 추적 작동」.
+     ⚠️ 우리가 종전에 저장하던 번호는 **스마트스토어 채널번호**라 순위 매칭 1순위가
+        항상 빗나갔다(실측: 목표 807건 중 1순위 0건 · 못 찾음 43%).
+        못 찾은 것이 「진짜 순위 밖」인지 「번호가 안 맞아서」인지 가르지 못하던 것이
+        이 칸의 진짜 이유다 — 속도(조기 종료)는 그 다음이다. */
+  var _rgN = useState('');
+  var regNv = _rgN[0],
+    setRegNv = _rgN[1];
+  var _rgNB = useState(false);
+  var nvBusy = _rgNB[0],
+    setNvBusy = _rgNB[1];
+  var _rgNM = useState(null);
+  var nvMsg = _rgNM[0],
+    setNvMsg = _rgNM[1]; // {ok, text}
   var _rgB = useState(false);
   var regBusy = _rgB[0],
     setRegBusy = _rgB[1];
@@ -3944,7 +3958,55 @@ window.KeywordRankPage = function KeywordRankPage(props) {
       clearTimeout(t);
     };
   }, [regQuery, regClient]);
-  var regReady = !!(regClient && regUrl.trim() && regKw.trim()) && !regBusy;
+
+  /* 🔎 자동 찾기 — **이미 모아 둔 수집분**에서만 본다(네이버 요청 0건).
+     그래서 눌러도 418·캡차 위험이 없다. 못 찾으면 서버가 이유를 사람 말로 돌려준다. */
+  var lookupNv = function () {
+    var u = (regUrl || '').trim();
+    if (!u || nvBusy) return;
+    setNvBusy(true);
+    setNvMsg(null);
+    var kws = (regKw || '').split(',').map(function (k) {
+      return k.trim();
+    }).filter(Boolean);
+    api.post('/products/nvmid-lookup', {
+      product_url: u,
+      keywords: kws
+    }).then(function (res) {
+      var d = res && res.data || {};
+      if (d.found && d.nv_mid) {
+        setRegNv(String(d.nv_mid));
+        setNvMsg({
+          ok: true,
+          text: d.message || '확인됨'
+        });
+      } else {
+        setNvMsg({
+          ok: false,
+          text: d.message || '찾지 못했습니다 — nvMid 를 직접 넣어 주세요.'
+        });
+      }
+    }).catch(function (e) {
+      setNvMsg({
+        ok: false,
+        text: '자동 찾기 실패 — ' + (e && e.message || '네트워크 오류') + '. nvMid 를 직접 넣어 주세요.'
+      });
+    }).then(function () {
+      setNvBusy(false);
+    });
+  };
+  /* ⚠️ 숫자만 남긴다 — 주소를 통째로 붙여넣으면 nvMid= 뒤 숫자를 뽑는다.
+        서버도 같은 규칙으로 한 번 더 정리한다(화면만 믿지 않는다). */
+  var cleanNv = function (v) {
+    var t = String(v || '');
+    var m = /[?&]nvMid=(\d+)/.exec(t);
+    return m ? m[1] : t.replace(/\D/g, '');
+  };
+  var nvOk = function (v) {
+    var t = cleanNv(v);
+    return t.length >= 8 && t.length <= 20;
+  };
+  var regReady = !!(regClient && regUrl.trim() && regKw.trim() && nvOk(regNv)) && !regBusy;
   var submitRegister = function () {
     if (!regReady) return;
     setRegBusy(true);
@@ -3955,11 +4017,14 @@ window.KeywordRankPage = function KeywordRankPage(props) {
     api.post('/products/track', {
       product_url: regUrl.trim(),
       keywords: kws,
-      client_id: regClient.id
+      client_id: regClient.id,
+      nv_mid: cleanNv(regNv)
     }).then(function (res) {
       if (res && res.success === false) throw new Error(res.detail || '등록 실패');
       setRegUrl('');
       setRegKw('');
+      setRegNv('');
+      setNvMsg(null);
       /* ⚠️ 「등록됨」과 「업체에 이어짐」은 다른 일이다. 서버는 등록을 성립시키고
          연결 결과를 link 로 따로 돌려준다 — 이어지지 않았으면 그렇게 말해야 한다.
          성공했다고만 알리면 주인 없는 상품이 또 조용히 생긴다. */
@@ -5903,7 +5968,55 @@ window.KeywordRankPage = function KeywordRankPage(props) {
     onKeyDown: function (e) {
       if (e.key === 'Enter') submitRegister();
     }
-  })), React.createElement('button', {
+  })),
+  /* 🆕 nvMid (2026-09-18 대표 확정 필수) — 「자동 찾기」는 이미 모은 수집분에서만
+     보므로 네이버 요청이 0건이다. 못 찾으면 서버가 이유를 사람 말로 준다. */
+  React.createElement('div', null, React.createElement('label', {
+    style: _krRegLbl
+  }, 'nvMid ', React.createElement('span', {
+    style: {
+      color: '#ef4444'
+    }
+  }, '*')), React.createElement('div', {
+    style: {
+      display: 'flex',
+      gap: 6
+    }
+  }, React.createElement('input', {
+    style: Object.assign({}, _krRegInp, {
+      flex: 1,
+      minWidth: 0
+    }),
+    value: regNv,
+    placeholder: '숫자만 · 예 84321234',
+    onChange: function (e) {
+      setRegNv(e.target.value);
+      setNvMsg(null);
+    },
+    onBlur: function (e) {
+      setRegNv(cleanNv(e.target.value));
+    },
+    onKeyDown: function (e) {
+      if (e.key === 'Enter') submitRegister();
+    }
+  }), React.createElement('button', {
+    onClick: lookupNv,
+    disabled: !regUrl.trim() || nvBusy,
+    title: '이미 모아 둔 수집분에서 찾습니다 — 네이버에 요청하지 않습니다',
+    style: {
+      border: '1px solid #bfdbfe',
+      background: '#fff',
+      color: '#1d4ed8',
+      borderRadius: 8,
+      padding: '0 10px',
+      fontSize: 11.5,
+      fontWeight: 700,
+      cursor: !regUrl.trim() || nvBusy ? 'not-allowed' : 'pointer',
+      whiteSpace: 'nowrap',
+      fontFamily: 'inherit',
+      opacity: !regUrl.trim() || nvBusy ? 0.5 : 1
+    }
+  }, nvBusy ? '찾는 중…' : '🔎 자동 찾기'))), React.createElement('button', {
     onClick: submitRegister,
     disabled: !regReady,
     style: {
@@ -5918,13 +6031,23 @@ window.KeywordRankPage = function KeywordRankPage(props) {
       whiteSpace: 'nowrap',
       fontFamily: 'inherit'
     }
-  }, regBusy ? '등록 중…' : '등록')), React.createElement('div', {
+  }, regBusy ? '등록 중…' : '등록')),
+  /* nvMid 결과는 **등록 메시지와 따로** 보여 준다 — 둘을 한 줄에 섞으면
+     「찾았다」와 「등록됐다」가 뒤섞여 직원이 무엇이 끝났는지 못 읽는다. */
+  nvMsg && React.createElement('div', {
+    style: {
+      fontSize: 11,
+      marginTop: 7,
+      fontWeight: 700,
+      color: nvMsg.ok ? '#047857' : '#b45309'
+    }
+  }, (nvMsg.ok ? '✅ ' : '⚠️ ') + nvMsg.text), React.createElement('div', {
     style: {
       fontSize: 11,
       marginTop: 7,
       color: regMsg ? regMsg.ok ? '#047857' : '#b91c1c' : '#64748b'
     }
-  }, regMsg ? regMsg.text : regClient ? '「' + regClient.name + '」 것으로 등록됩니다 — 그 업체 계약이 끝나면 추적도 함께 멈춥니다.' : regQuery.trim() && regMeta && regOpts.length === 0 ? regMeta.blocked && regMeta.blocked.length > 0 ? '「' + regMeta.blocked[0].name + '」은(는) 내린 업체라 고를 수 없습니다 — 「🗄 내린 업체」에서 ↩ 로 되살려 주세요.' : '로직분석에 등록된 업체가 아닙니다 — 스토어 분석에서 보고서를 저장하면 업체가 만들어집니다.' : '업체는 목록에서 골라야 합니다. 여러 키워드는 쉼표(,)로 구분하세요.')), selected ? renderDetail() : renderList(),
+  }, regMsg ? regMsg.text : regClient ? '「' + regClient.name + '」 것으로 등록됩니다 — 그 업체 계약이 끝나면 추적도 함께 멈춥니다.' : regQuery.trim() && regMeta && regOpts.length === 0 ? regMeta.blocked && regMeta.blocked.length > 0 ? '「' + regMeta.blocked[0].name + '」은(는) 내린 업체라 고를 수 없습니다 — 「🗄 내린 업체」에서 ↩ 로 되살려 주세요.' : '로직분석에 등록된 업체가 아닙니다 — 스토어 분석에서 보고서를 저장하면 업체가 만들어집니다.' : regClient === null && !regQuery.trim() && !nvOk(regNv) && regUrl.trim() ? 'nvMid 를 넣어야 등록됩니다 — 「🔎 자동 찾기」를 눌러 보세요(네이버 요청 없음).' : '업체는 목록에서 골라야 합니다. 여러 키워드는 쉼표(,)로 구분하세요.')), selected ? renderDetail() : renderList(),
   /* ---------- 추적 상품 관리(전체 업체 도구) — 업체 목록에서만, 기본 접힘 ----------
      업체 상세는 그 업체 데이터만 보이도록 여기서 제외한다(운영자 지시 2026-08-04). */
   !selected && React.createElement('div', {

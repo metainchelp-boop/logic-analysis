@@ -530,6 +530,10 @@ class ProductAddRequest(BaseModel):
     # ⚠️ 서버에서 필수로 막지는 않는다 — 옛 화면(브라우저 캐시)이 이 값을 안 보내면
     #    등록이 통째로 막힌다. 대신 못 이으면 응답에 그 사실을 실어 화면이 경고한다.
     client_id: Optional[int] = None
+    # nvMid — 네이버 쇼핑 상품 고유번호 (2026-09-18 대표 확정 「필수로 입력해야만 추적 작동」).
+    # ⚠️ 우리가 종전에 저장하던 product_id 는 **스마트스토어 채널번호**라 순위 매칭 1순위가
+    #    항상 빗나갔다(실측: 목표 807건 중 1순위 0건). 자세한 경위는 backend/nvmid.py 머리말.
+    nv_mid: Optional[str] = None
 
     @field_validator('product_url')
     @classmethod
@@ -807,6 +811,64 @@ def keyword_exposure(req: KeywordExposureRequest, current_user: dict = Depends(g
         raise HTTPException(status_code=500, detail="키워드 노출 분석 중 오류가 발생했습니다.")
 
 
+# --- nvMid 자동 찾기 (2026-09-18) ---
+class NvMidLookupRequest(BaseModel):
+    product_url: str
+    keywords: List[str] = []
+
+
+@app.post("/api/products/nvmid-lookup")
+def nvmid_lookup(req: NvMidLookupRequest, current_user: dict = Depends(get_current_user)):
+    """상품 주소로 **이미 모아 둔 수집분**에서 nvMid 를 되찾는다.
+
+    ⚠️ **네이버에 요청하지 않는다.** 최근 14일 수집분(우리가 가진 것)만 본다 —
+       그래서 눌러도 418·캡차 위험이 0 이다.
+    ⚠️ 못 찾았을 때 **왜인지 구분해 돌려준다**. 「없다」와 「지금 안 된다」를 섞으면
+       직원이 할 일을 못 고른다(이 저장소가 반복해 데인 지점).
+    """
+    url = (req.product_url or "").strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="상품 URL 을 먼저 넣어 주세요.")
+    conn = None
+    try:
+        import sqlite3 as _sq
+        from nvmid import lookup_from_collected
+        conn = _sq.connect(DB_PATH, timeout=10)
+        conn.row_factory = _sq.Row
+        got = lookup_from_collected(conn, url, req.keywords or [])
+    except Exception as e:
+        logger.warning(f"nvMid 자동 찾기 실패: {e}")
+        raise HTTPException(status_code=500, detail="자동 찾기 중 오류가 발생했습니다.")
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    reason = got.get("reason") or ""
+    if got.get("nv_mid"):
+        return {"success": True, "data": {
+            "nv_mid": got["nv_mid"], "keyword": got.get("keyword") or "",
+            "rank": got.get("rank"), "found": True,
+            "message": (f"확인됨 — 최근 수집분 「{got.get('keyword') or ''}」"
+                        + (f" {got.get('rank')}위" if got.get("rank") else "")
+                        + "에서 이 번호를 봤습니다"),
+        }}
+
+    # ⚠️ 못 찾은 이유를 **사람 말로** 돌려준다. 셋 다 다음에 할 일이 다르다.
+    msg = {
+        "no-channel-id": "이 주소에서는 상품번호를 못 뽑았습니다. 스마트스토어 상품 주소"
+                         "(…/products/숫자) 또는 네이버 쇼핑 주소를 넣어 주세요.",
+        "not-collected": "이 키워드를 아직 수집하지 않아 찾을 수 없습니다. 네이버 쇼핑에서"
+                         " 그 키워드로 검색해 내 상품을 열고, 주소의 nvMid= 뒤 숫자를 넣어 주세요.",
+        "not-in-serp": "수집한 결과 안에 이 상품이 없습니다 — 그 키워드에서 300위 밖일 수 있습니다."
+                       " 네이버 쇼핑에서 상품을 직접 열어 주소의 nvMid= 뒤 숫자를 넣어 주세요.",
+    }.get(reason, "찾지 못했습니다. nvMid 를 직접 넣어 주세요.")
+    return {"success": True, "data": {"nv_mid": "", "keyword": "", "rank": None,
+                                      "found": False, "reason": reason, "message": msg}}
+
+
 # --- 상품 추적 등록 ---
 @app.post("/api/products/track")
 def track_product(req: ProductAddRequest, background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
@@ -823,6 +885,26 @@ def track_product(req: ProductAddRequest, background_tasks: BackgroundTasks, cur
             status_code=400,
             detail="업체를 선택해야 등록됩니다. 화면을 새로고침(⌘⇧R)한 뒤 "
                    "「＋ 추적 상품 등록」의 업체 칸에서 업체를 고르고 다시 등록해 주세요.",
+        )
+    # ── nvMid 필수 (2026-09-18 대표 확정) ──
+    # ⚠️ **새로 등록하는 것만** 막는다. 이미 등록된 443개는 그대로 추적한다(대표 확정 A안) —
+    #    소급해 막으면 오늘부터 순위가 안 쌓이고 광고주 보고서가 빈다.
+    # ⚠️ 업체 칸과 같은 이유로 여기가 최종 방어선이다 — 옛 화면이 캐시로 남아 이 값을
+    #    안 보내도 여기서 거절되고 사람에게 새로고침을 안내한다.
+    from nvmid import normalize as _nv_norm, is_valid as _nv_ok
+    _nv = _nv_norm(req.nv_mid)
+    if not _nv:
+        raise HTTPException(
+            status_code=400,
+            detail="nvMid(네이버 쇼핑 상품번호)를 넣어야 등록됩니다. 화면을 새로고침(⌘⇧R)한 뒤 "
+                   "「＋ 추적 상품 등록」의 nvMid 칸에서 「🔎 자동 찾기」를 누르거나, "
+                   "네이버 쇼핑에서 그 상품을 열어 주소의 nvMid= 뒤 숫자를 넣어 주세요.",
+        )
+    if not _nv_ok(_nv):
+        raise HTTPException(
+            status_code=400,
+            detail=f"nvMid 모양이 맞지 않습니다(받은 값 {len(_nv)}자리). "
+                   "네이버 쇼핑 상품 주소의 nvMid= 뒤 숫자만 넣어 주세요.",
         )
     try:
         # 상품 정보 가져오기
@@ -846,6 +928,7 @@ def track_product(req: ProductAddRequest, background_tasks: BackgroundTasks, cur
             price=product_info.get("price"),
             product_id=product_id_str,
             user_id=current_user["id"],
+            nv_mid=_nv,
         )
 
         # 키워드 등록
