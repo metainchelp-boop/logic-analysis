@@ -60,12 +60,22 @@ async function render() {
     slowBtn.style.background = slowNow ? '#fef3c7' : '';
     slowBtn.style.color = slowNow ? '#b45309' : '';
   }
+  // ⏸ 이 기계에서 사람이 누른 일시정지(v1.20.0) — 사람이 직접 멈춘 것이라 가장 먼저 본다.
+  const pausedByLocal = state.pausedByLocal === true;
+  const pauseBtn = $('localPause');
+  if (pauseBtn) {
+    pauseBtn.textContent = pausedByLocal ? '▶ 재개 (지금 일시정지됨)' : '⏸ 일시정지';
+    pauseBtn.style.background = pausedByLocal ? '#dc2626' : '#0f172a';
+    pauseBtn.style.color = '#fff';
+  }
   // 🛑 화면에서 꺼 둔 상태 — 그게 가장 중요한 정보라 캡차 다음으로 먼저 본다(2026-09-18).
   const pausedByScreen = !!state.pausedByScreen;
-  const running = blockedNow
+  const running = pausedByLocal
+    ? '<span class="b bad">⏸ 일시정지됨 (이 수집기에서 · ▶ 재개를 누르세요)</span>'
+    : (blockedNow
     ? '<span class="b bad">자동입력 방지(캡차)로 쉬는 중</span>'
     : (pausedByScreen ? '<span class="b bad">🛑 화면에서 꺼 둠 (로직분석 화면에서 켜세요)</span>'
-      : (state.running ? '<span class="b ok">수집 중</span>' : '대기'));
+      : (state.running ? '<span class="b ok">수집 중</span>' : '대기')));
   // ⭐ 오늘 전체 진척 (2026-08-28 대표 요청 「총 개수 / 추적 완료 / 추적 실패」).
   //    ⚠️ 아래 '이번 시간대' 숫자와 다른 축이다 — 그건 매시간 0 으로 돌아간다.
   //       여기 값은 서버가 알려 준 '오늘 재야 할 전체'와 '오늘까지 끝낸 수'다.
@@ -171,6 +181,12 @@ $('searchEntry').onclick = async () => {
   const on = searchEntry === undefined ? true : !!searchEntry;
   await chrome.storage.local.set({ searchEntry: !on });
   render();
+};
+// ⏸ v1.20.0 — 이 수집기를 즉시 멈추고/재개한다(이 기계에서만 · 화면 스위치와 별개 · 자동으로 안 풀림).
+$('localPause').onclick = async () => {
+  const { state = {} } = await chrome.storage.local.get('state');
+  const on = state.pausedByLocal === true;   // 지금 멈춰 있으면 재개, 아니면 멈춤
+  chrome.runtime.sendMessage({ cmd: 'setLocalPause', on: !on }, () => setTimeout(render, 300));
 };
 $('refresh').onclick = render;
 render();
