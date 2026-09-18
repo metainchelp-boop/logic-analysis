@@ -1772,6 +1772,11 @@ def _run_contam_20260917_cleanup():
     """9/17 오염으로 잘못 기록된 순위 행을 1회 지운다(읽고 → 로그 남기고 → 지운다)."""
     import os
     import sqlite3
+    # ⚠️ DB_PATH 는 **이 파일의 모듈 전역에 없다** — 이 파일의 다른 잡들도 전부 자기 안에서
+    #    이 한 줄로 만들어 쓴다. 2026-09-18 배포(#443)에서 이 줄을 빠뜨려
+    #    `NameError: name 'DB_PATH' is not defined` 로 정리 작업이 통째로 실패했다.
+    #    (마커를 안 남기는 설계 덕에 데이터는 무사했고 다음 배포에서 재시도된다.)
+    DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
     marker = os.path.join(os.path.dirname(os.path.abspath(DB_PATH)), _CONTAM_MARKER_NAME)
     if not os.path.exists(DB_PATH) or os.path.exists(marker):
         return

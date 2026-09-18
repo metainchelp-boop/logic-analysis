@@ -195,6 +195,11 @@ jobs:
       - name: 회귀 — 9/17 오염 정리 범위
         run: python backend/tests/test_contam_cleanup.py
 
+      # ⚠️ 2026-09-18 신설 — 배포 #443 이 `NameError: DB_PATH` 로 잡을 통째로 실패했다.
+      #    문법은 맞고 글자만 보는 시험은 전부 통과했다. 여기서 「부르는 이름이 실재하는가」를 본다.
+      - name: 회귀 — 정의되지 않은 이름 (backend 전수)
+        run: python backend/tests/test_undefined_names.py
+
       - name: Build frontend bundle
         run: |
           npm install --no-save @babel/core @babel/preset-react
