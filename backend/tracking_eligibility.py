@@ -83,3 +83,33 @@ def ensure_disabled_column(conn) -> None:
             conn.commit()
     except Exception:
         pass
+
+# ──────────────────────────────────────────────────────────────────────────
+#  「nvMid 없으면 추적 대상이 아니다」 — 대표 지시 2026-09-18
+# ──────────────────────────────────────────────────────────────────────────
+#
+# 대표 지시 원문: 「미드값을 안 넣으면 추적 안 할거야. 무조건 미드값이 있어야만
+# 추적 대상이 되도록 하고 싶어.」
+#
+# ⛔ **기본은 꺼 둔다(False).** 지금 등록된 444개가 **전부 비어 있어서**(실측 0/444)
+#    그대로 켜면 **다음 회차부터 순위 기록이 0** 이 된다. 광고주 보고서와
+#    ① portal-summary 가 동시에 빈다 — 되돌리기 어려운 종류의 사고다.
+#
+# 켜는 순서(이 순서를 지키지 않으면 위 사고가 난다):
+#   ① 기동 백필이 돌아 채울 수 있는 것을 다 채운다(`nvmid.backfill_from_collected`)
+#   ② 남은 명단을 직원이 처리한다
+#   ③ 그때 이 값을 True 로 바꾸는 PR 하나 + 배포
+#
+# ⚠️ env `NVMID_REQUIRED` 로도 켤 수 있다(서버에서 즉시 되돌리기 위한 문).
+NVMID_REQUIRED_DEFAULT = False
+
+
+def nvmid_required() -> bool:
+    """지금 「nvMid 없으면 추적 안 함」이 켜져 있는가."""
+    import os
+    v = (os.getenv("NVMID_REQUIRED") or "").strip().lower()
+    if v in ("1", "true", "on", "yes"):
+        return True
+    if v in ("0", "false", "off", "no"):
+        return False
+    return NVMID_REQUIRED_DEFAULT

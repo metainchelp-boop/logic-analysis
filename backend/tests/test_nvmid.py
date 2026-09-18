@@ -163,6 +163,59 @@ ok("channel_id_from_url — 카탈로그", nvmid.channel_id_from_url(
 ok("channel_id_from_url — nvMid 주소가 먼저다", nvmid.channel_id_from_url(
     "https://x/catalog/111?nvMid=222") == "222")
 
+# ── ⑥ 일괄 채우기 + 「없으면 추적 안 함」 스위치 (2026-09-18 대표 지시) ──────
+print("\n[⑥ 일괄 채우기 — 서버가 444개를 스스로 메운다]")
+with tempfile.TemporaryDirectory() as d2:
+    import json as _j2
+    c2 = sqlite3.connect(os.path.join(d2, "b.db"))
+    c2.execute("CREATE TABLE collected_serp (keyword TEXT, collected_date TEXT, products_json TEXT)")
+    c2.execute("CREATE TABLE tracked_products (id INTEGER PRIMARY KEY, product_url TEXT, nv_mid TEXT)")
+    c2.execute("CREATE TABLE tracked_keywords (id INTEGER PRIMARY KEY, product_id INT, keyword TEXT)")
+    c2.execute("INSERT INTO collected_serp VALUES (?, date('now','localtime'), ?)",
+               ("갈치조림", _j2.dumps([
+                   {"rank": 3, "productId": "70000000001",
+                    "link": "https://smartstore.naver.com/a/products/5001"},
+               ])))
+    # 1 = 찾아짐 · 2 = 이미 채워짐(덮으면 안 됨) · 3 = 수집분에 없음
+    c2.execute("INSERT INTO tracked_products VALUES (1, 'https://smartstore.naver.com/a/products/5001', '')")
+    c2.execute("INSERT INTO tracked_products VALUES (2, 'https://smartstore.naver.com/a/products/5001', '99999999999')")
+    c2.execute("INSERT INTO tracked_products VALUES (3, 'https://smartstore.naver.com/b/products/6002', '')")
+    for i2, pid2 in ((1, 1), (2, 2), (3, 3)):
+        c2.execute("INSERT INTO tracked_keywords VALUES (?, ?, '갈치조림')", (i2, pid2))
+    c2.commit()
+
+    got2 = nvmid.backfill_from_collected(c2)
+    ok("⑥ 빈 것만 검사한다(이미 채워진 것은 안 본다)", got2["scanned"] == 2)
+    ok("⑥ 수집분에서 찾아 채운다", got2["filled"] == 1)
+    ok("⑥ 채운 값이 실제로 저장된다",
+       c2.execute("SELECT nv_mid FROM tracked_products WHERE id=1").fetchone()[0] == "70000000001")
+    ok("🔴⑥ **이미 채워진 값은 절대 안 덮는다**(사람이 넣은 값이 우선)",
+       c2.execute("SELECT nv_mid FROM tracked_products WHERE id=2").fetchone()[0] == "99999999999")
+    ok("⑥ 못 찾은 것은 비운 채 둔다(가짜 값을 넣지 않는다)",
+       (c2.execute("SELECT nv_mid FROM tracked_products WHERE id=3").fetchone()[0] or "") == "")
+    ok("⑥ 못 찾은 사유를 센다", got2["by_reason"].get("not-in-serp", 0) >= 1)
+    ok("⑥ 남은 명단을 낼 수 있다(직원이 처리할 목록)",
+       [r["id"] for r in nvmid.missing_rows(c2)] == [3])
+    ok("⑥ 두 번 돌려도 더 안 채운다(멱등)",
+       nvmid.backfill_from_collected(c2)["filled"] == 0)
+    c2.close()
+
+print("\n[⑥ 「nvMid 없으면 추적 안 함」 스위치 — 기본은 꺼짐]")
+TE = code(io.open(os.path.join(ROOT, "tracking_eligibility.py"), encoding="utf-8").read())
+ok("🔴⑥ **기본값이 꺼짐이다**(지금 444개가 전부 비어 있어 켜면 기록이 0 이 된다)",
+   re.search(r"NVMID_REQUIRED_DEFAULT\s*=\s*False", TE) is not None)
+ok("⑥ env 로도 켤 수 있다(서버에서 즉시 되돌리는 문)", "NVMID_REQUIRED" in TE)
+RR = code(io.open(os.path.join(ROOT, "rank_record.py"), encoding="utf-8").read())
+ok("⑥ 기록 경로가 그 스위치를 본다", "nvmid_required" in RR)
+ok("🔴⑥ 판정이 깨지면 **거르지 않는다**(기록이 멈추는 쪽이 더 나쁘다)",
+   "거르지 않음" in RR or "거르지 않는다" in RR)
+ok("⑥ 켜져 있을 때만 거른다(조건으로)",
+   re.search(r"if\s+nvmid_required\(\)\s*:", RR) is not None)
+
+print("\n[⑥ 상한 — 대표 지시 10]")
+CAP = code(io.open(os.path.join(ROOT, "collect_cap.py"), encoding="utf-8").read())
+ok("⑥ 회차당 상한이 10 이다", re.search(r"DEFAULT_TEST_CAP\s*=\s*10", CAP) is not None)
+
 # ── 조기 종료 계약 — 서버가 targets 를 실어 보내는가 ─────────────────────
 print("\n[계약 — 서버가 확장에 목표를 내려보낸다]")
 CO = code(COLL)

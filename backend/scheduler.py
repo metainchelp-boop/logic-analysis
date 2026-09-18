@@ -283,6 +283,19 @@ def start_scheduler():
         max_instances=1,
     )
 
+    # 14) 🔑 nvMid 일괄 채우기 — 부팅 3분 뒤 한 번(마커가 있으면 즉시 종료).
+    #     ⚠️ 오염 정리(+2분) **뒤**에 둔다. 둘 다 DB 를 만지므로 순서를 고정해
+    #        로그에서 어느 쪽이 무엇을 바꿨는지 섞이지 않게 한다.
+    _scheduler.add_job(
+        _run_nvmid_backfill,
+        trigger="date",
+        run_date=datetime.now() + timedelta(minutes=3),
+        id="nvmid_backfill_boot",
+        name="nvMid 일괄 채우기 (부팅 +3분)",
+        replace_existing=True,
+        max_instances=1,
+    )
+
     _scheduler.start()
     logger.info("✅ 스케줄러 시작 (계약동기화: 04:00, 보고서 담당자 정렬: 04:20, 순위: 08:00, 분석: 08:30, 리포트: 09:30(발송 비활성), DB백업: 00:30, 보관정책: 01:00, 축 브리지: 01:20, 플레이스 자동추적 정리: 01:40, 주간 보고서: 월 09:40, 상권 API 자가 점검: 05:00)")
 
@@ -1827,3 +1840,35 @@ def _run_contam_20260917_cleanup():
     except Exception as e:
         # 마커를 남기지 않는다 — 다음 배포에서 다시 시도한다.
         logger.error(f"❌ [9/17오염정리] 실패(마커 미생성, 다음 배포에서 재시도): {e}")
+
+
+def _run_nvmid_backfill():
+    """nv_mid 가 빈 추적 상품을 수집분에서 찾아 채운다 (부팅 1회 · 네이버 요청 0건).
+
+    왜 여기 있나 — 대표 지시가 「nvMid 없으면 추적 안 함」으로 바뀌었는데 지금 444개가
+    전부 비어 있다. 그대로 켜면 순위 기록이 0 이 되므로 **먼저 서버가 채운다**.
+
+    ⚠️ 이미 채워진 값은 안 덮는다 · 네이버에 요청하지 않는다(수집분 조회만).
+    ⚠️ 마커를 남기지만 **남은 것이 있으면 다음 배포에서 다시 돈다** — 수집분이 늘면
+       그때 찾아지는 상품이 있기 때문이다(한 번 돌고 끝낼 일이 아니다).
+    """
+    import os
+    import sqlite3
+    DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
+    if not os.path.exists(DB_PATH):
+        return
+    try:
+        from nvmid import backfill_from_collected, missing_rows
+        conn = sqlite3.connect(DB_PATH, timeout=30)
+        try:
+            got = backfill_from_collected(conn)
+            left = len(missing_rows(conn, limit=10000))
+            logger.info(f"🔑 [nvMid채움] 검사 {got['scanned']}개 · **채움 {got['filled']}개** · "
+                        f"남은 것 {left}개 · 사유 {got['by_reason']}")
+            if left:
+                logger.info(f"🔑 [nvMid채움] 아직 {left}개가 비어 있다 — "
+                            f"「nvMid 없으면 추적 안 함」을 켜면 그만큼 기록이 멈춘다")
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.error(f"❌ [nvMid채움] 실패(다음 기동에서 재시도): {e}")
