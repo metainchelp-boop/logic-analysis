@@ -1117,6 +1117,93 @@ jobs:
             docker exec -i logic-analysis sh -c "grep -n 'DEFAULT_TEST_CAP' /app/collect_cap.py" 2>/dev/null \
               || echo "  (collect_cap.py 없음)"
             echo "===== 배포 후 확인 끝 ====="
+            echo ""
+            echo "===== 🎯 nvMid 설계 실측 (읽기 전용) ====="
+            docker exec -i logic-analysis python3 - <<'NVSZ'
+            import sqlite3, json
+            c = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            c.row_factory = sqlite3.Row
+
+            # 최근 14일 수집분에서 실제로 본 상품 ID 집합 + 「몇 번째 순번에 있었나」
+            seen = {}          # nvMid -> 최선(가장 앞) 순번
+            kw_ids = {}        # keyword -> set(nvMid)
+            n_serp = 0
+            for r in c.execute("""SELECT keyword, products_json FROM collected_serp
+                                   WHERE collected_date >= date('now','localtime','-14 day')"""):
+                n_serp += 1
+                try:
+                    ps = json.loads(r["products_json"]) or []
+                except Exception:
+                    continue
+                s = kw_ids.setdefault(r["keyword"], set())
+                for p in ps:
+                    pid = str(p.get("productId") or "")
+                    if not pid:
+                        continue
+                    s.add(pid)
+                    rk = p.get("rank")
+                    try:
+                        rk = int(rk)
+                    except Exception:
+                        continue
+                    if pid not in seen or rk < seen[pid]:
+                        seen[pid] = rk
+            print(f"[0] 최근 14일 수집분 {n_serp}행 · 본 상품 ID {len(seen)}개 · 키워드 {len(kw_ids)}개")
+
+            # ① 추적 상품의 product_id 가 진짜 nvMid 인가
+            rows = list(c.execute("SELECT id, product_id, product_url FROM tracked_products"))
+            has = sum(1 for r in rows if (r["product_id"] or "").strip())
+            real = sum(1 for r in rows if (r["product_id"] or "").strip() in seen)
+            print(f"[1] 추적 상품 {len(rows)}개 — product_id 있음 {has} · **그 값이 수집분에 실재(=nvMid 로 확인) {real}**")
+            print(f"    ⇒ 나머지 {len(rows)-real}개는 nvMid 미확인(스마트스토어 채널번호이거나 300위 밖)")
+
+            # ② 키워드별 목표 상품 수 (축A = tracked_keywords)
+            tgt = {}
+            for r in c.execute("""SELECT k.keyword AS kw, p.product_id AS pid
+                                    FROM tracked_keywords k JOIN tracked_products p ON p.id=k.product_id"""):
+                tgt.setdefault(r["kw"], set()).add((r["pid"] or "").strip())
+            if tgt:
+                cnt = sorted(len(v) for v in tgt.values())
+                import statistics
+                print(f"[2] 축A 키워드 {len(tgt)}개 — 키워드당 목표 상품 수: "
+                      f"중앙값 {statistics.median(cnt)} · 평균 {round(sum(cnt)/len(cnt),2)} · 최대 {cnt[-1]}")
+                many = sum(1 for n in cnt if n >= 2)
+                print(f"    목표가 2개 이상인 키워드 {many}개 ({round(100*many/len(cnt))}%) — 나머지는 1개")
+
+            # ③ 💰 조기 종료가 얼마나 아끼나 — 목표를 '몇 페이지째'에 다 찾았나
+            #    (40개/페이지 기준. 광고 제외 뒤 순번이므로 실제 페이지는 이보다 크거나 같다.)
+            done_page, never = [], 0
+            for kw, pids in tgt.items():
+                ids = {p for p in pids if p}
+                if not ids:
+                    continue
+                got = [seen[p] for p in ids if p in seen]
+                if len(got) < len(ids):
+                    never += 1          # 하나라도 못 찾으면 끝까지 간다(절감 없음)
+                    continue
+                done_page.append((max(got) - 1) // 40 + 1)
+            if done_page:
+                done_page.sort()
+                import statistics
+                print(f"[3] 목표를 **전부 찾은** 키워드 {len(done_page)}개 — 다 찾은 페이지: "
+                      f"중앙값 {statistics.median(done_page)} · 평균 {round(sum(done_page)/len(done_page),2)} · 최대 {done_page[-1]}")
+                for p in (1, 2, 3, 5):
+                    n = sum(1 for d in done_page if d <= p)
+                    print(f"    {p}페이지 안에 끝나는 키워드: {n}개 ({round(100*n/len(done_page))}%)")
+                saved = sum(11 - d for d in done_page)
+                print(f"    ⇒ 11페이지 대신 그 자리에서 멈추면 **페이지 요청 {saved}장 절감**"
+                      f"(그 {len(done_page)}개 키워드 1회차 기준)")
+            print(f"    하나라도 못 찾아 끝까지 가는 키워드: {never}개")
+
+            # ④ 깊이 300 이면 잃는 것 — 301위 밖에서 발견된 목표 수
+            deep = [p for p in seen.items()]
+            over300 = sum(1 for kw, pids in tgt.items() for p in pids if p in seen and seen[p] > 300)
+            over400 = sum(1 for kw, pids in tgt.items() for p in pids if p in seen and seen[p] > 400)
+            print(f"[4] 목표 상품 중 301위 밖에서 발견된 것 {over300}개 · 401위 밖 {over400}개"
+                  f" (깊이를 300 으로 줄일 때 잃는 몫)")
+            c.close()
+            NVSZ
+            echo "===== nvMid 실측 끝 ====="
 
       - name: 상품 주소 모양 실측 (읽기 전용)
         if: ${{ github.event.inputs.urlshape == 'on' }}
