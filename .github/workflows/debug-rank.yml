@@ -1306,6 +1306,46 @@ jobs:
             NVSZ2
             echo "===== nvMid 실측 v2 끝 ====="
 
+            echo ""
+            echo "===== ✅ 배포 #445 확인 — nvMid 배선이 서버에 올라왔나 ====="
+            echo "[① 새 파일]"
+            docker exec -i logic-analysis sh -c 'ls -l /app/nvmid.py 2>/dev/null || echo "  ❌ nvmid.py 없음"'
+            echo ""
+            echo "[② 배선 표지]"
+            for pat in "nvmid-lookup:main.py" "if not _nv:main.py" "nv_mid=_nv:main.py" \
+                       "targets_for_keywords:nvmid.py" "def _targets:collector.py" \
+                       "target_nv_mid:naver_crawler.py" "nv_mid: str = None:database.py"; do
+              k=${pat%%:*}; f=${pat##*:}
+              n=$(docker exec -i logic-analysis sh -c "grep -c -- '$k' /app/$f" 2>/dev/null || echo 0)
+              echo "   $f : '$k' → ${n}건"
+            done
+            echo ""
+            echo "[③ nv_mid 컬럼 — 기동 때 보장됐나]"
+            docker exec -i logic-analysis python3 - <<'NVCOL'
+            import sqlite3
+            c = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            cols = [r[1] for r in c.execute("PRAGMA table_info(tracked_products)")]
+            print("   tracked_products 컬럼:", ",".join(cols))
+            print("   nv_mid 있음" if "nv_mid" in cols else "   ⏳ nv_mid 아직 없음(08:00 배치·첫 등록 때 생긴다)")
+            if "nv_mid" in cols:
+                n = c.execute("SELECT COUNT(*) FROM tracked_products WHERE TRIM(COALESCE(nv_mid,'')) <> ''").fetchone()[0]
+                t = c.execute("SELECT COUNT(*) FROM tracked_products").fetchone()[0]
+                print(f"   채워진 nvMid {n}/{t}개 (A안이라 새 등록·자동 찾기로 늘어난다)")
+            c.close()
+            NVCOL
+            echo ""
+            echo "[④ 오늘 회차 — 담긴 상품 수(깊이 300 이면 300 안팎)]"
+            docker exec -i logic-analysis python3 - <<'TODAY'
+            import sqlite3
+            c = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            for r in c.execute("""SELECT created_at, keyword, product_count FROM collected_serp
+                                   WHERE collected_date = date('now','localtime')
+                                   ORDER BY created_at"""):
+                print(f"   {r[0]} · {r[1]} · {r[2]}개")
+            c.close()
+            TODAY
+            echo "===== 배포 #445 확인 끝 ====="
+
       - name: 상품 주소 모양 실측 (읽기 전용)
         if: ${{ github.event.inputs.urlshape == 'on' }}
         uses: appleboy/ssh-action@v1.0.3
