@@ -110,6 +110,10 @@ def eligible_client_ids(conn) -> list:
 def eligible_tracked_product_ids(conn) -> set:
     """순위를 재야 할 추적 상품 id 집합."""
     try:
+        # ⚠️ 아래 subquery(eligible_clients_sql)가 contract_stage 를 읽는다 —
+        #    칸이 없는 DB 에서 돌면 조회가 죽어 None(=전부 잰다)로 폴백한다.
+        #    운영 clients 표엔 항상 있으나, 방어로 여기서도 보장한다.
+        ensure_stage_column(conn)
         rows = conn.execute(
             "SELECT p.id FROM tracked_products p "
             " WHERE COALESCE(p.disabled_at,'') = '' "

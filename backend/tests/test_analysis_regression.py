@@ -284,7 +284,8 @@ def _elig_db():
     c = sqlite3.connect(":memory:")
     c.executescript("""
         CREATE TABLE clients(id INTEGER PRIMARY KEY, status TEXT, role TEXT,
-            vertical TEXT, auto_analysis INT, track_enabled INT, track_until TEXT);
+            vertical TEXT, auto_analysis INT, track_enabled INT, track_until TEXT,
+            contract_stage TEXT DEFAULT '진행중');
         CREATE TABLE tracked_products(id INTEGER PRIMARY KEY, created_at TEXT);
         CREATE TABLE rank_link(tracked_product_id INT, client_id INT);
     """)
@@ -297,7 +298,7 @@ def _elig_db():
         (6, "active", "advertiser", "place", 1, 1, ""),            # 플레이스 축
         (7, "inactive", "advertiser", "store", 1, 1, ""),          # 비활성
     ]
-    c.executemany("INSERT INTO clients VALUES(?,?,?,?,?,?,?)", rows)
+    c.executemany("INSERT INTO clients(id,status,role,vertical,auto_analysis,track_enabled,track_until) VALUES(?,?,?,?,?,?,?)", rows)
     ensure_disabled_column(c)
     return c
 
@@ -461,7 +462,8 @@ def test_rank_link_유지보수를_실제로_실행한다(tmp_db=None):
     conn.executescript("""
         CREATE TABLE clients(id INTEGER PRIMARY KEY, status TEXT, role TEXT, vertical TEXT,
             auto_analysis INT, track_enabled INT, track_until TEXT,
-            name TEXT, business_name TEXT, naver_store_url TEXT, main_keywords TEXT);
+            name TEXT, business_name TEXT, naver_store_url TEXT, main_keywords TEXT,
+            contract_stage TEXT DEFAULT '진행중');
         CREATE TABLE tracked_products(id INTEGER PRIMARY KEY, product_url TEXT DEFAULT '',
             product_name TEXT DEFAULT '', store_name TEXT DEFAULT '', product_id TEXT DEFAULT '',
             created_at TEXT);
@@ -598,6 +600,7 @@ def _rr_db():
             role TEXT DEFAULT 'advertiser', vertical TEXT DEFAULT 'store',
             auto_analysis INT DEFAULT 1, track_enabled INT DEFAULT 1, track_until TEXT DEFAULT '',
             name TEXT, business_name TEXT DEFAULT '',
+            contract_stage TEXT DEFAULT '진행중',
             naver_store_url TEXT DEFAULT 'https://smartstore.naver.com/x', main_keywords TEXT DEFAULT '');
         CREATE TABLE client_analyses(id INTEGER PRIMARY KEY, client_id INT, keyword TEXT);
     """)
@@ -656,7 +659,8 @@ def _rr_a_db():
         CREATE TABLE clients(id INTEGER PRIMARY KEY, status TEXT DEFAULT 'active',
             role TEXT DEFAULT 'advertiser', vertical TEXT DEFAULT 'store',
             auto_analysis INT DEFAULT 1, track_enabled INT DEFAULT 1, track_until TEXT DEFAULT '',
-            name TEXT, naver_store_url TEXT DEFAULT '', main_keywords TEXT DEFAULT '');
+            name TEXT, naver_store_url TEXT DEFAULT '', main_keywords TEXT DEFAULT '',
+            contract_stage TEXT DEFAULT '진행중');
         CREATE TABLE tracked_products(id INTEGER PRIMARY KEY, product_url TEXT,
             disabled_at TEXT DEFAULT '');
         CREATE TABLE tracked_keywords(id INTEGER PRIMARY KEY, product_id INT, keyword TEXT);
@@ -779,6 +783,7 @@ def test_내린업체는_추적자격에서_빠진다():
                 role TEXT DEFAULT 'advertiser', vertical TEXT DEFAULT 'store',
                 auto_analysis INT DEFAULT 1, track_enabled INT DEFAULT 1, track_until TEXT DEFAULT '',
                 name TEXT, naver_store_url TEXT DEFAULT 'https://smartstore.naver.com/x',
+                contract_stage TEXT DEFAULT '진행중',
                 main_keywords TEXT DEFAULT '');
         """)
         conn.execute("INSERT INTO clients(id,name) VALUES(1,'살아있는곳')")
