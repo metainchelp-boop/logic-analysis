@@ -34,6 +34,10 @@ on:
         description: '상품 주소 모양 실측 — off(기본) / on. 어느 호스트(스마트스토어·브랜드스토어·카탈로그)를 쓰는지, 같은 슬러그가 두 호스트에 걸쳐 있는지(읽기 전용·업체명 미출력).'
         required: false
         default: 'off'
+      two_machines:
+        description: '2대 분할 확인 — off(기본) / on. 두 기계가 각자 다른 몫만 가져가는지(겹침·누락)를 접속 기록과 수집분으로 대조한다(읽기 전용). ⚠️ IP 원문은 절대 출력하지 않는다 — 건수·일치 여부만.'
+        required: false
+        default: 'off'
       nvmid_manual:
         description: 'nvMid 자동 채우기 미리보기 + 사람 손 목록 — off(기본) / on. 배포 전에 「배치가 몇 개를 채울지」와 「못 채우는 줄이 무엇인지」를 미리 본다(읽기 전용·DB 에 한 글자도 안 쓴다). ⚠️ 업체명·상품명이 실행 로그에 남는다 — 이 저장소는 공개이므로 결과를 받은 뒤 그 런의 로그를 삭제할 것.'
         required: false
@@ -1186,3 +1190,114 @@ jobs:
             print(f"  사람이 다 채우면        : {live}개 / {live}개")
             PY
             docker exec logic-analysis rm -f /tmp/nvmid_preview.py 2>/dev/null || true
+
+      # ───────── 2대 분할 확인 (읽기 전용 · IP 미출력) ─────────
+      # 「두 기계가 정말로 각자 다른 몫만 가져가는가」를 두 축으로 대조한다.
+      #   축1 접속 기록 — 몇 곳에서 오는가 · 각자 worker/workers 를 뭘로 보내는가
+      #   축2 수집분    — 오늘 모은 키워드가 두 몫에 갈려 들어갔는가
+      # ⚠️ 저장소가 공개다. IP 원문을 절대 찍지 않는다(해시 앞 6자·건수만).
+      - name: 브랜치 split_rule.py 인코딩
+        if: ${{ github.event.inputs.two_machines == 'on' }}
+        run: echo "SR_SRC_GZ=$(gzip -9c backend/split_rule.py | base64 -w0)" >> "$GITHUB_ENV"
+
+      - name: 2대 분할 확인 (읽기 전용 · IP 미출력)
+        if: ${{ github.event.inputs.two_machines == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          SR_SRC_GZ: ${{ env.SR_SRC_GZ }}
+        with:
+          envs: SR_SRC_GZ
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 5m
+          script: |
+            echo "========== 축1 · 누가 무엇을 달라고 했나 (접속 기록) =========="
+            # ⚠️ 여기서 if 로 감싸지 않는다 — 들여쓴 heredoc 은 종료 표시가 안 먹어서
+            #    파이썬이 통째로 죽는다(이번에 실제로 밟아서 고쳤다). 없는 경우는 파이썬 안에서 처리.
+            LOG=$(ls /var/log/nginx/*access*.log 2>/dev/null | head -3 | tr '\n' ' ')
+            echo "  대상 로그: ${LOG:-찾지 못함}"
+            sudo -n true 2>/dev/null && S="sudo -n" || S=""
+            # ⚠️ 시각 판정은 **현재 로그만** 본다(회전 경계를 마지막 시각으로 오독하지 않게).
+            rm -f /tmp/_c_now.txt
+            [ -n "$LOG" ] && { $S sh -c "cat $LOG" > /tmp/_c_now.txt 2>/dev/null || cat $LOG > /tmp/_c_now.txt 2>/dev/null; }
+            touch /tmp/_c_now.txt
+            echo "  읽은 줄 수: $(wc -l < /tmp/_c_now.txt)"
+            python3 - <<'PY2'
+            import re, collections, hashlib
+            try:
+                lines = open("/tmp/_c_now.txt", errors="ignore").read().splitlines()
+            except Exception as e:
+                print(f"  로그 읽기 실패: {e}"); raise SystemExit
+            if not lines:
+                print("  ⚠️ nginx 접속 기록을 못 읽었다 — 축2 만으로 판단할 것(권한·경로).")
+                raise SystemExit
+            ip_re = re.compile(r'^(\S+)')
+            t_re  = re.compile(r'\[([^\]]+)\]')
+            def tag(ip):   # ⚠️ 원문 대신 해시 앞 6자만 — 같은 곳인지 다른 곳인지만 가른다.
+                return hashlib.sha256(ip.encode()).hexdigest()[:6]
+            per = collections.defaultdict(lambda: {"n": 0, "who": collections.Counter(), "last": ""})
+            seen_any = collections.Counter()
+            for ln in lines:
+                if "/api/collector/keywords" not in ln:
+                    continue
+                m = ip_re.match(ln)
+                if not m:
+                    continue
+                who = tag(m.group(1))
+                seen_any[who] += 1
+                mw = re.search(r'[?&]worker=(\d+)', ln)
+                mc = re.search(r'[?&]workers=(\d+)', ln)
+                key = (mw.group(1) if mw else "-", mc.group(1) if mc else "-")
+                d = per[key]; d["n"] += 1; d["who"][who] += 1
+                mt = t_re.search(ln)
+                if mt: d["last"] = mt.group(1)
+            if not seen_any:
+                print("  키워드 요청이 한 건도 없다 — 확장이 아직 안 물었거나 경로가 다르다.")
+            else:
+                print(f"  키워드 요청 총 {sum(seen_any.values())}건 · 보낸 곳 {len(seen_any)}개")
+                print(f"  {'worker/workers':<16} {'건수':>6}  보낸 곳(해시 앞6)          마지막 시각")
+                for (w, c), d in sorted(per.items()):
+                    who = " ".join(f"{k}x{v}" for k, v in d["who"].most_common(4))
+                    lab = f"{w}/{c}" if c != "-" else "(안 보냄=1대)"
+                    print(f"  {lab:<16} {d['n']:>6}  {who:<26} {d['last']}")
+                print()
+                print("  ⇒ 읽는 법: 「0/2」와 「1/2」가 **서로 다른 곳**에서 각각 오면 정상.")
+                print("             「-/-」(안 보냄)이 섞여 있으면 그 기계는 아직 1대 설정이다.")
+            PY2
+
+            echo
+            echo "========== 축2 · 오늘 모은 것이 두 몫에 갈렸나 (수집분) =========="
+            echo "$SR_SRC_GZ" | base64 -d | gzip -dc > /tmp/split_rule_preview.py
+            docker cp /tmp/split_rule_preview.py logic-analysis:/tmp/split_rule_preview.py
+            rm -f /tmp/split_rule_preview.py
+            docker exec -i logic-analysis python3 - <<'PY'
+            # ⚠️ 읽기 전용 — mode=ro.
+            import sqlite3, importlib.util, collections
+            spec = importlib.util.spec_from_file_location("sr", "/tmp/split_rule_preview.py")
+            sr = importlib.util.module_from_spec(spec); spec.loader.exec_module(sr)
+
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            rows = [r[0] for r in conn.execute(
+                "SELECT keyword FROM collected_serp WHERE collected_date = date('now','localtime')")]
+            print(f"  오늘 모은 키워드 {len(rows)}개")
+            if rows:
+                b = collections.Counter(sr.worker_of(k, 2) for k in rows)
+                print(f"    1번 기계 몫(0) : {b.get(0,0)}개")
+                print(f"    2번 기계 몫(1) : {b.get(1,0)}개")
+                if b.get(0,0) and b.get(1,0):
+                    print("    ⇒ 양쪽 몫이 다 채워지고 있다.")
+                else:
+                    print("    ⚠️ 한쪽 몫이 0 이다 — 그 기계가 아직 일을 안 했거나 설정이 안 맞다.")
+                print("    ⚠️ 이 축만으로는 「2대가 나눠 했다」와 「1대가 전량 했다」를 못 가른다 — 축1과 함께 볼 것.")
+            # 겹침·누락은 규칙이 보장하는지 직접 재 본다(유니버스 전체 대상).
+            uni = [r[0] for r in conn.execute(
+                "SELECT DISTINCT keyword FROM tracked_keywords")]
+            if uni:
+                w0 = {k for k in uni if sr.split_ok(k, 0, 2)}
+                w1 = {k for k in uni if sr.split_ok(k, 1, 2)}
+                print(f"\n  [규칙 자체 검산] 추적 키워드 {len(set(uni))}종")
+                print(f"    1번 {len(w0)} · 2번 {len(w1)} · 겹침 {len(w0 & w1)} · 누락 {len(set(uni)) - len(w0 | w1)}")
+                print("    ⇒ 겹침 0 · 누락 0 이어야 정상.")
+            PY
+            docker exec logic-analysis rm -f /tmp/split_rule_preview.py 2>/dev/null || true
