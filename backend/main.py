@@ -80,11 +80,12 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
 from database import (
     DB_PATH,
     init_db, add_tracked_product, get_all_tracked_products,
-    delete_tracked_product, add_tracked_keyword, get_keywords_for_product,
+    delete_tracked_product, add_tracked_keyword, KeywordLimitError, get_keywords_for_product,
     get_keyword_product_and_count, delete_tracked_keyword,
     save_ranking, get_ranking_history, save_competitor_snapshot,
     get_notification_settings, update_notification_settings
 )
+from keyword_limit import MAX_MANUAL_KEYWORDS
 from handover_transfer import HandoverTransferService
 from handover_transfer_api import create_handover_router
 from naver_crawler import (
@@ -932,10 +933,17 @@ def track_product(req: ProductAddRequest, background_tasks: BackgroundTasks, cur
         )
 
         # 키워드 등록
+        # ⚠️ 2026-09-18 대표 확정 — 최대 5개. 상한을 넘기면 **이미 넣은 것은 그대로 두고**
+        #    넘긴 것만 돌려준다(전부 되돌리면 직원이 처음부터 다시 넣어야 한다).
         keyword_ids = []
+        keyword_rejected = []
         for kw in req.keywords:
-            kid = add_tracked_keyword(db_product_id, kw)
-            keyword_ids.append({"keyword": kw, "keyword_id": kid})
+            try:
+                kid = add_tracked_keyword(db_product_id, kw)
+                keyword_ids.append({"keyword": kw, "keyword_id": kid})
+            except KeywordLimitError as _ke:
+                keyword_rejected.append({"keyword": kw, "reason": str(_ke)})
+                logger.info(f"키워드 상한 초과로 건너뜀: {kw}")
 
         # ── 등록하는 자리에서 업체와 이어 둔다 (2026-08-27 대표 지시) ──
         # 주인을 모르는 상품은 계약이 끝나도 뺄 근거가 없어 영원히 순위를 잰다.
@@ -1009,8 +1017,15 @@ def track_product(req: ProductAddRequest, background_tasks: BackgroundTasks, cur
                 "product_id": db_product_id,
                 "product_info": product_info,
                 "keywords": keyword_ids,
+                # ⚠️ 상한을 넘겨 못 넣은 키워드 — **화면이 이걸 안 보여주면
+                #    직원은 「넣었는데 왜 없지」로 읽는다.** 구버전 화면은 이 키를
+                #    무시하므로 무회귀다(가산만 했다).
+                "keywords_rejected": keyword_rejected,
                 "link": link,
-                "message": "상품이 등록되었습니다. 첫 순위 체크를 시작합니다."
+                "message": ("상품이 등록되었습니다. 첫 순위 체크를 시작합니다."
+                            if not keyword_rejected else
+                            f"상품이 등록되었습니다. 키워드 {len(keyword_rejected)}개는 "
+                            f"상한({MAX_MANUAL_KEYWORDS}개)을 넘겨 등록되지 않았습니다.")
             }
         }
     except Exception as e:

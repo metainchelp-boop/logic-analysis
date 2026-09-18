@@ -207,6 +207,9 @@ jobs:
       - name: 회귀 — nvMid 필수·자동 찾기·조기 종료
         run: python backend/tests/test_nvmid.py
 
+      - name: 회귀 — 순위 추적 대상(진행중만·분석이력 제외·키워드 5개)
+        run: python backend/tests/test_track_scope.py
+
       - name: Build frontend bundle
         run: |
           npm install --no-save @babel/core @babel/preset-react
