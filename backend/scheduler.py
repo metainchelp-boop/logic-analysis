@@ -645,6 +645,13 @@ def _collect_all_keywords(conn):
     #    이제 수집(collector)과 같은 자격 판정을 지난다.
     home_products = get_all_tracked_products() or []
     ensure_disabled_column(conn)
+    # nv_mid 컬럼 보장(멱등) — 이 배치가 매일 한 번 확인한다. disabled_at 과 같은 자리·같은 방식.
+    # ⚠️ 여기서 보장해야 get_all_tracked_products 의 SELECT * 에 nv_mid 가 실린다.
+    try:
+        from nvmid import ensure_column as _nv_ensure
+        _nv_ensure(conn)
+    except Exception:
+        pass
     _ok_pids = eligible_tracked_product_ids(conn)
     if _ok_pids is not None:
         _before = len(home_products)
@@ -903,8 +910,11 @@ def _run_rank_tracking():
                 if keyword in home_keyword_map:
                     for product, kw_info in home_keyword_map[keyword]:
                         try:
+                            # nv_mid — 등록 때 받아 둔 값이 있으면 그것이 가장 정확한 열쇠다.
+                            # 없으면(기존 443개) 빈 값이라 종전 규칙 그대로 돈다(무회귀).
                             rank, page, competitors = find_product_rank_from_cache(
-                                keyword, product["product_url"], all_prods
+                                keyword, product["product_url"], all_prods,
+                                nv_mid=(product.get("nv_mid") or "")
                             )
                             # 슬러그로 저장된 스토어명 자가치유 (매칭 시 mallName 확보됨)
                             if rank is not None:

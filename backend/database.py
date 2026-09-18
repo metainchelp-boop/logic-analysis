@@ -655,10 +655,21 @@ def heal_place_track_target_place_id(target_id: int, place_id: str) -> None:
 def add_tracked_product(product_url: str, product_name: str = None,
                         store_name: str = None, image_url: str = None,
                         price: int = None, product_id: str = None,
-                        user_id: int = 0) -> int:
-    """추적 상품 등록, 중복이면 업데이트 후 ID 반환 (user_id별 격리, 레이스 컨디션 방지)"""
+                        user_id: int = 0, nv_mid: str = None) -> int:
+    """추적 상품 등록, 중복이면 업데이트 후 ID 반환 (user_id별 격리, 레이스 컨디션 방지)
+
+    nv_mid — 네이버 쇼핑 상품 고유번호(2026-09-18 신설). 순위 매칭 1순위가 쓰는 값이다.
+    ⚠️ **선택 인자로 둔다** — 이 함수를 부르는 다른 자리가 안 보내도 종전대로 동작해야 한다
+       (COALESCE 라 기존 값도 안 지운다). 새 등록에서 필수로 막는 곳은 main.py 한 곳이다.
+    """
     conn = _get_conn()
     try:
+        # nv_mid 컬럼 보장(멱등) — 쓰는 자리에서 확인한다. 배포 순서에 안 묶인다.
+        try:
+            from nvmid import ensure_column as _nv_ensure
+            _nv_ensure(conn)
+        except Exception:
+            pass
         # 기존 상품 확인 (URL + user_id 기준)
         row = conn.execute(
             "SELECT id FROM tracked_products WHERE product_url = ? AND user_id = ?",
@@ -674,18 +685,21 @@ def add_tracked_product(product_url: str, product_name: str = None,
                     image_url = COALESCE(?, image_url),
                     price = COALESCE(?, price),
                     product_id = COALESCE(?, product_id),
+                    nv_mid = COALESCE(NULLIF(?, ''), nv_mid),
                     updated_at = datetime('now', 'localtime')
                 WHERE id = ?
-            """, (product_name, store_name, image_url, price, product_id, row["id"]))
+            """, (product_name, store_name, image_url, price, product_id,
+                  nv_mid or '', row["id"]))
             conn.commit()
             return row["id"]
         else:
             cursor = conn.execute("""
                 INSERT INTO tracked_products
-                    (product_url, product_name, store_name, image_url, price, product_id, user_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                    (product_url, product_name, store_name, image_url, price, product_id,
+                     user_id, nv_mid)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (product_url, product_name or '', store_name or '',
-                  image_url or '', price or 0, product_id or '', user_id))
+                  image_url or '', price or 0, product_id or '', user_id, nv_mid or ''))
             conn.commit()
             return cursor.lastrowid
     except sqlite3.IntegrityError:

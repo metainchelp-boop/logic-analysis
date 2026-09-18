@@ -200,6 +200,13 @@ jobs:
       - name: 회귀 — 정의되지 않은 이름 (backend 전수)
         run: python backend/tests/test_undefined_names.py
 
+      # nvMid 필수·자동 찾기·조기 종료 (2026-09-18 대표 확정 3건).
+      # ⚠️ 이 시험이 지키는 것은 「막는다」만이 아니라 **「기존 443개를 안 막는다」**(A안)와
+      #    **「목표가 없으면 조기 종료하지 않는다」** 쪽이다 — 둘 다 조용히 깨지면
+      #    순위가 안 쌓이거나 수집이 1페이지로 쪼그라든다.
+      - name: 회귀 — nvMid 필수·자동 찾기·조기 종료
+        run: python backend/tests/test_nvmid.py
+
       - name: Build frontend bundle
         run: |
           npm install --no-save @babel/core @babel/preset-react
