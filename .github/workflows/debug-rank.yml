@@ -1204,6 +1204,107 @@ jobs:
             c.close()
             NVSZ
             echo "===== nvMid 실측 끝 ====="
+            echo ""
+            echo "===== 🎯 nvMid 설계 실측 v2 — 매칭 규칙을 코드와 똑같이 (읽기 전용) ====="
+            docker exec -i logic-analysis python3 - <<'NVSZ2'
+            import sqlite3, json, statistics
+            c = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            c.row_factory = sqlite3.Row
+
+            # ⚠️ v1 은 productId 완전일치만 봐서 「0개」가 나왔다. 그건 사실이지만
+            #    find_product_rank 는 **2순위로 「채널 ID 가 수집분 product_url 에 들어 있나」**
+            #    를 본다. 그 규칙까지 넣어야 「지금 실제로 찾아지는가」를 잰 것이 된다.
+            #    (3순위 스토어명+상품명 유사도는 여기선 제외 — 그건 오탐이 나는 축이다.)
+            serp = {}    # keyword -> [(pid, url, rank), ...]
+            n = 0
+            for r in c.execute("""SELECT keyword, products_json FROM collected_serp
+                                   WHERE collected_date >= date('now','localtime','-14 day')"""):
+                n += 1
+                try:
+                    ps = json.loads(r["products_json"]) or []
+                except Exception:
+                    continue
+                lst = serp.setdefault(r["keyword"], [])
+                for p in ps:
+                    try:
+                        rk = int(p.get("rank"))
+                    except Exception:
+                        continue
+                    lst.append((str(p.get("productId") or ""), str(p.get("link") or p.get("product_url") or ""), rk))
+            print(f"[0] 최근 14일 수집분 {n}행 · 키워드 {len(serp)}개")
+
+            tgt = {}   # keyword -> {tracked_id: channel_id}
+            for r in c.execute("""SELECT k.keyword AS kw, p.id AS tid, p.product_id AS pid
+                                    FROM tracked_keywords k JOIN tracked_products p ON p.id=k.product_id"""):
+                tgt.setdefault(r["kw"], {})[r["tid"]] = (r["pid"] or "").strip()
+
+            covered = [k for k in tgt if k in serp]
+            print(f"[1] 축A 키워드 {len(tgt)}개 중 **최근 14일 수집분이 있는 키워드 {len(covered)}개** "
+                  f"— 나머지는 수집 자체가 안 됐다(측정 불가)")
+
+            exact = url_hit = miss = 0
+            done_page, never_kw = [], 0
+            for kw in covered:
+                rows = serp[kw]
+                found = []
+                allfound = True
+                for tid, pid in tgt[kw].items():
+                    best = None
+                    if pid:
+                        for spid, surl, rk in rows:
+                            if spid and spid == pid:          # 1순위 nvMid 완전일치
+                                best = ("exact", rk); break
+                        if best is None:
+                            for spid, surl, rk in rows:
+                                if surl and pid in surl:      # 2순위 채널 ID 가 주소에 포함
+                                    best = ("url", rk); break
+                    if best is None:
+                        miss += 1
+                        allfound = False
+                    else:
+                        if best[0] == "exact":
+                            exact += 1
+                        else:
+                            url_hit += 1
+                        found.append(best[1])
+                if allfound and found:
+                    done_page.append((max(found) - 1) // 40 + 1)
+                else:
+                    never_kw += 1
+            tot = exact + url_hit + miss
+            print(f"[2] 목표 {tot}건 — **nvMid 완전일치 {exact}** · 주소 포함으로 찾음 {url_hit} · 못 찾음 {miss}")
+            print(f"    ⇒ 지금 매칭은 사실상 **주소 포함(2순위)이 떠받치고 있다**")
+
+            if done_page:
+                done_page.sort()
+                print(f"[3] 목표를 **전부 찾은** 키워드 {len(done_page)}개 · 못 찾은 키워드 {never_kw}개")
+                print(f"    다 찾은 페이지: 중앙값 {statistics.median(done_page)} · "
+                      f"평균 {round(sum(done_page)/len(done_page),2)} · 최대 {done_page[-1]}")
+                for p in (1, 2, 3, 5, 8):
+                    m = sum(1 for d in done_page if d <= p)
+                    print(f"    {p}페이지 안에 끝남: {m}개 ({round(100*m/len(done_page))}%)")
+                saved = sum(11 - d for d in done_page)
+                print(f"    ⇒ **조기 종료 절감 = 회차당 페이지 {saved}장**"
+                      f" (그 {len(done_page)}개 키워드가 11장씩 긁던 것 대비"
+                      f" {round(100*saved/(11*len(done_page)))}%)")
+
+            # 깊이 300 손실 — 실제로 찾은 순번 기준
+            ranks = []
+            for kw in covered:
+                rows = serp[kw]
+                for tid, pid in tgt[kw].items():
+                    if not pid: continue
+                    for spid, surl, rk in rows:
+                        if (spid and spid == pid) or (surl and pid in surl):
+                            ranks.append(rk); break
+            if ranks:
+                o3 = sum(1 for r in ranks if r > 300)
+                o4 = sum(1 for r in ranks if r > 400)
+                print(f"[4] 찾은 목표 {len(ranks)}건 중 301위 밖 {o3}건({round(100*o3/len(ranks))}%) · "
+                      f"401위 밖 {o4}건 — 깊이 400→300 으로 줄일 때 잃는 몫")
+            c.close()
+            NVSZ2
+            echo "===== nvMid 실측 v2 끝 ====="
 
       - name: 상품 주소 모양 실측 (읽기 전용)
         if: ${{ github.event.inputs.urlshape == 'on' }}
