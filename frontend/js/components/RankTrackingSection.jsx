@@ -320,7 +320,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                 options: {
                     plugins: {
                         legend: { display: false },
-                        tooltip: { callbacks: { label: function(ctx) { return ctx.parsed.y != null ? ctx.parsed.y + '위' : '200위 밖'; } } }
+                        tooltip: { callbacks: { label: function(ctx) { return ctx.parsed.y != null ? ctx.parsed.y + '위' : '300위 밖'; } } }
                     },
                     scales: {
                         y: { reverse: true, suggestedMin: 1, suggestedMax: Math.max(16, maxRank + 2), title: { display: true, text: '순위 (낮을수록 상위 ↑)' }, ticks: { precision: 0 } }
@@ -626,7 +626,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                                                             React.createElement('td', null,
                                                                 k.latest_rank
                                                                     ? React.createElement('span', { style: { fontWeight: 700, color: k.latest_rank <= 10 ? '#059669' : k.latest_rank <= 40 ? '#d97706' : '#dc2626' } }, k.latest_rank + '위')
-                                                                    : React.createElement('span', { className: 'badge badge-gray' }, '200위 밖')
+                                                                    : React.createElement('span', { className: 'badge badge-gray' }, '300위 밖')
                                                             ),
                                                             React.createElement('td', null, k.latest_rank ? Math.ceil(k.latest_rank / 40) + 'P' : '-'),
                                                             React.createElement('td', { style: { fontSize: 12, color: '#94a3b8' } }, k.last_checked ? new Date(k.last_checked).toLocaleString('ko') : '-'),
@@ -673,10 +673,61 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                     var _thS = { textAlign: 'left', padding: '9px 12px', borderBottom: '2px solid #e2e8f0', color: '#64748b', fontWeight: 700, whiteSpace: 'nowrap', fontSize: 12, background: '#f8fafc' };
                     var _thC = Object.assign({}, _thS, { textAlign: 'center' });
                     var _rankBadge = function(rk) {
-                        if (!rk) return React.createElement('span', { style: { fontSize: 12, color: '#94a3b8', fontWeight: 600 } }, '200위 밖');
+                        if (!rk) return React.createElement('span', { style: { fontSize: 12, color: '#94a3b8', fontWeight: 600 } }, '300위 밖');
                         var c = rk <= 10 ? '#059669' : rk <= 40 ? '#d97706' : '#dc2626';
                         return React.createElement('span', { style: { fontWeight: 800, color: c } }, rk + '위',
                             React.createElement('span', { style: { fontSize: 10, color: '#94a3b8', fontWeight: 600, marginLeft: 4 } }, Math.ceil(rk / 40) + 'P'));
+                    };
+                    /* 2026-09-18 화면 개편 — 며칠째·키워드 등록 상태(대표 지시) */
+                    var _daysSince = function(dstr) {
+                        if (!dstr) return null;
+                        var d = new Date(String(dstr).replace(' ', 'T'));
+                        if (isNaN(d)) return null;
+                        var diff = Math.floor((Date.now() - d.getTime()) / 86400000);
+                        return diff < 0 ? 0 : diff + 1;   // 등록/시작 당일 = 1일째
+                    };
+                    var _daysCell = function(p) {
+                        // 최초 순위 잡힌 날이 있으면 그걸로, 없으면 등록일로 「며칠째」
+                        var started = p.tracking_started_at || null;
+                        var base = started || p.created_at;
+                        var n = _daysSince(base);
+                        if (n == null) return React.createElement('span', { style: { color: '#94a3b8' } }, '-');
+                        return React.createElement('span', { style: { whiteSpace: 'nowrap' } },
+                            React.createElement('b', { style: { color: '#1d4ed8', fontSize: 14 } }, n),
+                            React.createElement('span', { style: { fontSize: 11, color: '#64748b' } }, '일째'),
+                            !started && React.createElement('span', { style: { display: 'block', fontSize: 10, color: '#f59e0b' } }, '아직 안 잡힘'));
+                    };
+                    // 키워드 하나의 등록 상태 — 대표 지시의 「제대로 등록됐나」
+                    var _kwState = function(k, hasNvMid) {
+                        var hasRec = (k.record_count && k.record_count > 0) || k.last_checked;
+                        if (!hasRec) return { t: '🆕 첫 수집 대기', c: '#1d4ed8', bg: '#dbeafe' };
+                        if (k.latest_rank && k.latest_rank > 0) return { t: '✅ 순위 잡힘', c: '#059669', bg: '#d1fae5' };
+                        // 기록은 있는데 순위가 없음 = 300위 밖. nvMid 없으면 번호 문제일 수 있음.
+                        if (hasNvMid === false) return { t: '⚠ 300위 밖 · nvMid 없음', c: '#dc2626', bg: '#fee2e2' };
+                        return { t: '⚠ 300위 밖', c: '#b45309', bg: '#fef3c7' };
+                    };
+                    var _stateChip = function(st, mini) {
+                        return React.createElement('span', { style: { display: 'inline-block', padding: mini ? '1px 7px' : '2px 9px', borderRadius: 99, fontSize: mini ? 10.5 : 11.5, fontWeight: 700, color: st.c, background: st.bg, whiteSpace: 'nowrap' } }, st.t);
+                    };
+                    // 상품 요약 배지 — 키워드 상태를 합쳐 한 칸에
+                    var _prodStatusCell = function(p) {
+                        var kws = p.keywords || [];
+                        if (!kws.length) return React.createElement('span', { style: { fontSize: 11, color: '#94a3b8' } }, '키워드 없음');
+                        var hasNv = !!(p.nv_mid && String(p.nv_mid).trim());
+                        var cnt = { ok: 0, out: 0, wait: 0, bad: 0 };
+                        kws.forEach(function(k) {
+                            var st = _kwState(k, hasNv);
+                            if (st.c === '#059669') cnt.ok++;
+                            else if (st.c === '#1d4ed8') cnt.wait++;
+                            else if (st.c === '#dc2626') cnt.bad++;
+                            else cnt.out++;
+                        });
+                        var chips = [];
+                        if (cnt.ok) chips.push(_stateChip({ t: '✅' + cnt.ok, c: '#059669', bg: '#d1fae5' }, true));
+                        if (cnt.out) chips.push(_stateChip({ t: '⚠' + cnt.out, c: '#b45309', bg: '#fef3c7' }, true));
+                        if (cnt.bad) chips.push(_stateChip({ t: '⚠' + cnt.bad + '(번호?)', c: '#dc2626', bg: '#fee2e2' }, true));
+                        if (cnt.wait) chips.push(_stateChip({ t: '🆕' + cnt.wait, c: '#1d4ed8', bg: '#dbeafe' }, true));
+                        return React.createElement('span', { style: { display: 'inline-flex', gap: 3, flexWrap: 'wrap', justifyContent: 'center' } }, chips);
                     };
                     // 2026-09-18 대표 확정 — 수집 켜고 끄기 바(편집 권한자만).
                     var _collAllOff = !!(collCtl && collCtl.all);
@@ -716,13 +767,15 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                                     React.createElement('th', { style: _thS }, '업체명'),
                                     React.createElement('th', { style: _thS }, '상품명'),
                                     React.createElement('th', { style: _thC }, '최고 순위'),
+                                    React.createElement('th', { style: _thC }, '추적'),
+                                    React.createElement('th', { style: _thC }, '등록 상태'),
                                     React.createElement('th', { style: _thC }, '노출 키워드'),
                                     React.createElement('th', { style: _thC }, '최근 체크'),
                                     canEdit !== false && React.createElement('th', { style: _thC }, '관리')
                                 )),
                                 React.createElement('tbody', null,
                                     displayed.length === 0
-                                        ? React.createElement('tr', null, React.createElement('td', { colSpan: 6, style: { padding: 24, textAlign: 'center', color: '#94a3b8' } }, _q ? '검색 결과가 없습니다.' : '추적 중인 상품이 없습니다. 상품을 등록해보세요.'))
+                                        ? React.createElement('tr', null, React.createElement('td', { colSpan: 8, style: { padding: 24, textAlign: 'center', color: '#94a3b8' } }, _q ? '검색 결과가 없습니다.' : '추적 중인 상품이 없습니다. 상품을 등록해보세요.'))
                                         : displayed.map(function(p) {
                                             var kws = p.keywords || [];
                                             var isOpen = expandedProduct === p.id;
@@ -737,6 +790,8 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                                                 ),
                                                 React.createElement('td', { style: { padding: '10px 12px', color: '#475569', maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: p.product_name || '' }, p.product_name || '-'),
                                                 React.createElement('td', { style: { padding: '10px 12px', textAlign: 'center' } }, _rankBadge(_bestRank(p))),
+                                                React.createElement('td', { style: { padding: '10px 12px', textAlign: 'center' } }, _daysCell(p)),
+                                                React.createElement('td', { style: { padding: '10px 12px', textAlign: 'center' } }, _prodStatusCell(p)),
                                                 React.createElement('td', { style: { padding: '10px 12px', textAlign: 'center', color: '#475569', whiteSpace: 'nowrap' } }, _exposedCount(p) + ' / ' + kws.length),
                                                 React.createElement('td', { style: { padding: '10px 12px', textAlign: 'center', fontSize: 12, color: '#94a3b8', whiteSpace: 'nowrap' } }, lc ? new Date((lc || '').replace(' ', 'T')).toLocaleDateString('ko') : '-'),
                                                 canEdit !== false && React.createElement('td', { style: { padding: '10px 12px', textAlign: 'center', whiteSpace: 'nowrap' } },
@@ -746,7 +801,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                                             );
                                             if (!isOpen) return rowMain;
                                             var detail = React.createElement('tr', { key: p.id + '-d' },
-                                                React.createElement('td', { colSpan: 6, style: { padding: 0, background: '#faf5ff' } },
+                                                React.createElement('td', { colSpan: 8, style: { padding: 0, background: '#faf5ff' } },
                                                     React.createElement('div', { style: { padding: '8px 12px 14px' } },
                                                         onNavigateToClient && React.createElement('button', { onClick: function(){ onNavigateToClient(p.store_name || '', p.product_url || ''); }, style: { fontSize: 11, fontWeight: 700, color: '#3b82f6', background: '#ede9fe', border: 'none', borderRadius: 8, padding: '4px 10px', cursor: 'pointer', marginBottom: 8 } }, '업체관리에서 상세 보기 →'),
                                                         kws.length === 0
@@ -755,6 +810,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                                                                 React.createElement('thead', null, React.createElement('tr', null,
                                                                     React.createElement('th', { style: { textAlign: 'left', padding: '6px 10px', color: '#94a3b8', fontWeight: 700, fontSize: 11 } }, '키워드'),
                                                                     React.createElement('th', { style: { textAlign: 'left', padding: '6px 10px', color: '#94a3b8', fontWeight: 700, fontSize: 11 } }, '현재 순위'),
+                                                                    React.createElement('th', { style: { textAlign: 'left', padding: '6px 10px', color: '#94a3b8', fontWeight: 700, fontSize: 11 } }, '등록 상태'),
                                                                     React.createElement('th', { style: { textAlign: 'left', padding: '6px 10px', color: '#94a3b8', fontWeight: 700, fontSize: 11 } }, '최근 체크'),
                                                                     canEdit !== false && React.createElement('th', { style: { textAlign: 'center', padding: '6px 10px', color: '#94a3b8', fontWeight: 700, fontSize: 11, width: 44 } }, '관리')
                                                                 )),
@@ -766,11 +822,14 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                                                                             React.createElement('td', { style: { padding: '6px 10px', fontWeight: 600, color: '#1e293b' } },
                                                                                 React.createElement('span', { style: { color: '#cbd5e1', marginRight: 5, fontSize: 9 } }, kOpen ? '▼' : '▶'), k.keyword),
                                                                             React.createElement('td', { style: { padding: '6px 10px' } }, _rankBadge(k.latest_rank)),
+                                                                            React.createElement('td', { style: { padding: '6px 10px' } },
+                                                                                _stateChip(_kwState(k, !!(p.nv_mid && String(p.nv_mid).trim())), true),
+                                                                                React.createElement('span', { style: { display: 'block', fontSize: 9.5, marginTop: 2, color: (p.nv_mid && String(p.nv_mid).trim()) ? '#059669' : '#dc2626' } }, (p.nv_mid && String(p.nv_mid).trim()) ? 'nvMid ✓' : 'nvMid 없음')),
                                                                             React.createElement('td', { style: { padding: '6px 10px', fontSize: 11, color: '#94a3b8' } }, k.last_checked ? new Date((k.last_checked || '').replace(' ', 'T')).toLocaleString('ko') : '-'),
                                                                             canEdit !== false && renderKeywordDeleteCell(k, kws.length, '6px 10px')
                                                                         );
                                                                         if (!kOpen) return krow;
-                                                                        return [krow, React.createElement('tr', { key: k.id + '-c' }, React.createElement('td', { colSpan: canEdit !== false ? 4 : 3, style: { padding: 0, background: '#f8fafc' } }, renderRankHistoryChart(k.id, k.keyword, { storeName: p.store_name, storeUrl: p.product_url })))];
+                                                                        return [krow, React.createElement('tr', { key: k.id + '-c' }, React.createElement('td', { colSpan: canEdit !== false ? 5 : 4, style: { padding: 0, background: '#f8fafc' } }, renderRankHistoryChart(k.id, k.keyword, { storeName: p.store_name, storeUrl: p.product_url })))];
                                                                     })
                                                                 )
                                                             )

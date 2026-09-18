@@ -1098,6 +1098,9 @@ def list_products(current_user: dict = Depends(get_current_user)):
         conn.execute("PRAGMA busy_timeout=30000")
         try:
             placeholders = ','.join('?' * len(product_ids))
+            # ⚠️ 2026-09-18 화면 개편 — 키워드별로 **처음 순위가 잡힌 시각**과
+            #    **순위 기록 수**를 함께 가산한다(며칠째·「첫 수집 대기」 판정용).
+            #    전부 서브쿼리 가산이라 기존 필드·구버전 화면 무회귀(가산만).
             all_keywords = conn.execute(f"""
                 SELECT tk.*,
                     (SELECT r.rank_position FROM rankings r
@@ -1105,7 +1108,11 @@ def list_products(current_user: dict = Depends(get_current_user)):
                      ORDER BY r.checked_at DESC LIMIT 1) as latest_rank,
                     (SELECT r.checked_at FROM rankings r
                      WHERE r.keyword_id = tk.id
-                     ORDER BY r.checked_at DESC LIMIT 1) as last_checked
+                     ORDER BY r.checked_at DESC LIMIT 1) as last_checked,
+                    (SELECT MIN(r.checked_at) FROM rankings r
+                     WHERE r.keyword_id = tk.id) as first_checked,
+                    (SELECT COUNT(*) FROM rankings r
+                     WHERE r.keyword_id = tk.id) as record_count
                 FROM tracked_keywords tk
                 WHERE tk.product_id IN ({placeholders})
                 ORDER BY tk.created_at ASC
@@ -1127,6 +1134,11 @@ def list_products(current_user: dict = Depends(get_current_user)):
 
     for p in products:
         p["keywords"] = kw_map.get(p["id"], [])
+        # 2026-09-18 화면 개편 — 이 상품의 **최초 추적 시작**(키워드 중 가장 이른 첫 기록).
+        #   순위가 한 번도 안 잡혔으면(전부 첫 수집 대기) None. 화면은 이걸로 「며칠째」를 센다.
+        #   ⚠️ created_at(등록일)과 다르다 — 등록만 하고 아직 한 번도 안 잰 상품이 있다.
+        _firsts = [k.get("first_checked") for k in p["keywords"] if k.get("first_checked")]
+        p["tracking_started_at"] = min(_firsts) if _firsts else None
 
         # 상품명이 비어있거나 스토어명이 URL 슬러그(등록 시 확보 실패 잔재)면
         # 목록에 추가 (응답은 즉시 반환, 업데이트는 백그라운드)
