@@ -289,7 +289,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                 options: {
                     plugins: {
                         legend: { display: false },
-                        tooltip: { callbacks: { label: function(ctx) { return ctx.parsed.y != null ? ctx.parsed.y + '위' : '200위 밖'; } } }
+                        tooltip: { callbacks: { label: function(ctx) { return ctx.parsed.y != null ? ctx.parsed.y + '위' : '300위 밖'; } } }
                     },
                     scales: {
                         y: { reverse: true, suggestedMin: 1, suggestedMax: Math.max(16, maxRank + 2), title: { display: true, text: '순위 (낮을수록 상위 ↑)' }, ticks: { precision: 0 } }
@@ -595,7 +595,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                                                             React.createElement('td', null,
                                                                 k.latest_rank
                                                                     ? React.createElement('span', { style: { fontWeight: 700, color: k.latest_rank <= 10 ? '#059669' : k.latest_rank <= 40 ? '#d97706' : '#dc2626' } }, k.latest_rank + '위')
-                                                                    : React.createElement('span', { className: 'badge badge-gray' }, '200위 밖')
+                                                                    : React.createElement('span', { className: 'badge badge-gray' }, '300위 밖')
                                                             ),
                                                             React.createElement('td', null, k.latest_rank ? Math.ceil(k.latest_rank / 40) + 'P' : '-'),
                                                             React.createElement('td', { style: { fontSize: 12, color: '#94a3b8' } }, k.last_checked ? new Date(k.last_checked).toLocaleString('ko') : '-'),
@@ -642,7 +642,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                     var _thS = { textAlign: 'left', padding: '9px 12px', borderBottom: '2px solid #e2e8f0', color: '#64748b', fontWeight: 700, whiteSpace: 'nowrap', fontSize: 12, background: '#f8fafc' };
                     var _thC = Object.assign({}, _thS, { textAlign: 'center' });
                     var _rankBadge = function(rk) {
-                        if (!rk) return React.createElement('span', { style: { fontSize: 12, color: '#94a3b8', fontWeight: 600 } }, '200위 밖');
+                        if (!rk) return React.createElement('span', { style: { fontSize: 12, color: '#94a3b8', fontWeight: 600 } }, '300위 밖');
                         var c = rk <= 10 ? '#059669' : rk <= 40 ? '#d97706' : '#dc2626';
                         return React.createElement('span', { style: { fontWeight: 800, color: c } }, rk + '위',
                             React.createElement('span', { style: { fontSize: 10, color: '#94a3b8', fontWeight: 600, marginLeft: 4 } }, Math.ceil(rk / 40) + 'P'));
