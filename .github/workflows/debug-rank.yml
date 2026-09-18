@@ -1407,6 +1407,69 @@ jobs:
             NVSHAPE
             echo "===== nvMid 모양 실측 끝 ====="
 
+            echo ""
+            echo "===== ⏱ 속도·부하 비교 — 구판(v1.17.x) vs 신판(v1.18.0) ====="
+            docker exec -i logic-analysis python3 - <<'SPEED'
+            import sqlite3, json
+            c = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            c.row_factory = sqlite3.Row
+            rows = list(c.execute("""SELECT created_at, keyword, product_count, meta_json
+                                       FROM collected_serp
+                                      WHERE collected_date >= date('now','localtime','-1 day')
+                                      ORDER BY created_at"""))
+            from datetime import datetime
+            def ts(x):
+                try: return datetime.strptime(x, "%Y-%m-%d %H:%M:%S")
+                except Exception: return None
+
+            recs = []
+            for r in rows:
+                try: m = json.loads(r["meta_json"] or "{}") or {}
+                except Exception: m = {}
+                nav = m.get("nav") or {}
+                pages = (nav.get("click") or 0) + (nav.get("url") or 0)   # 실제로 연 페이지 수
+                recs.append({"t": ts(r["created_at"]), "at": r["created_at"], "kw": r["keyword"],
+                             "n": r["product_count"], "v": m.get("collectorVersion") or "?",
+                             "pages": pages})
+
+            print("   [회차별 — 시각 · 버전 · 담긴수 · 페이지 · 직전과의 간격]")
+            prev = None
+            for x in recs:
+                gap = None
+                if prev is not None and x["t"] and prev["t"]:
+                    gap = (x["t"] - prev["t"]).total_seconds()
+                g = f"{gap:.0f}초" if gap is not None else "-"
+                print(f"   {x['at']} · v{x['v']} · {x['n']:>3}개 · {x['pages']}장 · 간격 {g}")
+                prev = x
+
+            # 버전별 집계 — 간격은 **같은 회차 안에서 이어진 것만**(간격 600초 초과는 회차 경계로 본다)
+            print("")
+            print("   [버전별 집계 — 회차 안에서 이어진 키워드만]")
+            agg = {}
+            prev = None
+            for x in recs:
+                if prev is not None and x["t"] and prev["t"]:
+                    gap = (x["t"] - prev["t"]).total_seconds()
+                    # ⚠️ 회차 경계(다음 정시까지 쉬는 시간)를 섞으면 속도가 거짓으로 느려 보인다.
+                    if 0 < gap <= 600 and x["v"] == prev["v"]:
+                        a2 = agg.setdefault(x["v"], {"n": 0, "sec": 0.0, "pages": 0})
+                        a2["n"] += 1; a2["sec"] += gap; a2["pages"] += x["pages"]
+                prev = x
+            for v, a2 in sorted(agg.items()):
+                if not a2["n"]:
+                    continue
+                per_kw = a2["sec"] / a2["n"]
+                per_pg = a2["sec"] / a2["pages"] if a2["pages"] else 0
+                rate = a2["pages"] / (a2["sec"] / 60) if a2["sec"] else 0
+                print(f"   v{v} — 표본 {a2['n']}건 · 키워드당 {per_kw:.0f}초"
+                      f" · 페이지당 {per_pg:.1f}초 · **분당 페이지 요청 {rate:.2f}건**")
+            print("")
+            print("   ※ 페이지 요청 = 네이버 화면을 새로 여는 횟수(1페이지 진입 + 페이지 클릭).")
+            print("   ※ 외부 같은 구조 팀의 안정값은 페이지 간 12~18초다(우리 기록 2026-09-16).")
+            c.close()
+            SPEED
+            echo "===== 속도 비교 끝 ====="
+
       - name: 상품 주소 모양 실측 (읽기 전용)
         if: ${{ github.event.inputs.urlshape == 'on' }}
         uses: appleboy/ssh-action@v1.0.3
