@@ -580,7 +580,33 @@ window.KeywordRankPage = function KeywordRankPage(props) {
         else st = { t: '⚠ 300위 밖', c: '#b45309', bg: '#fef3c7' };
         return React.createElement('span', { style: { display: 'inline-block', padding: '2px 9px', borderRadius: 99, fontSize: 11.5, fontWeight: 700, color: st.c, background: st.bg, whiteSpace: 'nowrap' } }, st.t);
     };
-    // 펼친 업체의 간단 정보 패널
+    // 며칠째 배지 — 접힌 줄에도 보인다(시안 정합 2026-09-18)
+    var _daysBadge = function(dstr) {
+        var d = _daysSince(dstr);
+        if (d == null) return React.createElement('span', { style: { fontSize: 12, color: '#cbd5e1' } }, '—');
+        return React.createElement('span', { style: { display: 'inline-block', padding: '2px 8px', borderRadius: 8, fontSize: 12, fontWeight: 700, color: '#1d4ed8', background: '#eff6ff', whiteSpace: 'nowrap' } }, d + '일째');
+    };
+    // 키워드 카드 — 시안의 kwc(순위·최고/최저·스파크라인·날짜 추이·nvMid 값)
+    var _kwCard = function(b, i) {
+        var pts = (b.series || []).filter(function(p) { return p.rank != null; });
+        var best = null, worst = null;
+        pts.forEach(function(p) { if (best == null || p.rank < best) best = p.rank; if (worst == null || p.rank > worst) worst = p.rank; });
+        var trend = pts.slice(-4).map(function(p) { return String(p.d).slice(5) + ' ' + p.rank + '위'; }).join(' → ');
+        var nvOk = b.has_nvmid !== false && b.nvmid;
+        return React.createElement('div', { key: i, style: { border: '1px solid #eef2f7', borderRadius: 10, padding: '10px 12px', background: '#fff', flex: '1 1 240px', minWidth: 200, maxWidth: 340 } },
+            React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 5 } },
+                React.createElement('span', { style: { fontSize: 13, fontWeight: 700, color: '#0f172a' } }, b.keyword),
+                _kwStateChip(b)),
+            (best != null) && React.createElement('div', { style: { fontSize: 11.5, color: '#94a3b8', marginBottom: 4 } }, '최고 ' + best + '위 · 최저 ' + worst + '위'),
+            React.createElement('div', { style: { margin: '2px 0 4px' } }, _krSparkline(b.series)),
+            trend && React.createElement('div', { style: { fontSize: 11, color: '#94a3b8', marginBottom: 6 } }, trend),
+            React.createElement('div', { style: { fontSize: 11.5, fontWeight: 700 } },
+                nvOk
+                    ? React.createElement('span', { style: { color: '#059669' } }, 'nvMid ✓ ' + b.nvmid)
+                    : React.createElement('span', { style: { color: '#dc2626' } }, 'nvMid 없음'))
+        );
+    };
+    // 펼친 업체의 간단 정보 패널 — 시안 정합(카드형)
     var _expandPanel = function(c) {
         var res = expBoard[c.id];
         if (expLoading === c.id || !res) {
@@ -599,15 +625,9 @@ window.KeywordRankPage = function KeywordRankPage(props) {
                 React.createElement('span', { style: { color: '#94a3b8' } }, '· 키워드 ' + brd.length + '개'),
                 hasNoNv && React.createElement('span', { style: { color: '#dc2626', fontWeight: 700 } }, '· ⚠ nvMid 없어 못 찾는 키워드 있음')
             ),
-            React.createElement('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap' } },
-                brd.length === 0
-                    ? React.createElement('span', { style: { fontSize: 12, color: '#94a3b8' } }, '추적 키워드가 없습니다.')
-                    : brd.map(function(b, i) {
-                        return React.createElement('span', { key: i, style: { display: 'inline-flex', alignItems: 'center', gap: 5, border: '1px solid #eef2f7', borderRadius: 8, padding: '4px 8px', background: '#fff' } },
-                            React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: '#334155' } }, b.keyword),
-                            _kwStateChip(b));
-                    })
-            ),
+            brd.length === 0
+                ? React.createElement('div', { style: { fontSize: 12, color: '#94a3b8' } }, '추적 키워드가 없습니다.')
+                : React.createElement('div', { style: { display: 'flex', gap: 10, flexWrap: 'wrap' } }, brd.map(_kwCard)),
             React.createElement('button', {
                 onClick: function(e) { e.stopPropagation(); openDetail(c); },
                 style: { marginTop: 12, fontSize: 12.5, fontWeight: 700, color: '#fff', background: '#3b82f6', border: 'none', borderRadius: 8, padding: '7px 15px', cursor: 'pointer' }
@@ -681,6 +701,7 @@ window.KeywordRankPage = function KeywordRankPage(props) {
                         React.createElement('thead', null, React.createElement('tr', null,
                             React.createElement('th', { style: _krTh }, '업체'),
                             React.createElement('th', { style: _krTh }, '상태'),
+                            React.createElement('th', { style: _krTh }, '추적'),
                             React.createElement('th', { style: Object.assign({}, _krTh, { textAlign: 'right' }) }, '키워드'),
                             React.createElement('th', { style: Object.assign({}, _krTh, { textAlign: 'right' }) }, '노출'),
                             React.createElement('th', { style: Object.assign({}, _krTh, { textAlign: 'right' }) }, 'TOP10'),
@@ -705,6 +726,7 @@ window.KeywordRankPage = function KeywordRankPage(props) {
                                 React.createElement('td', { style: Object.assign({}, _krTd, { fontWeight: 700, color: '#0f172a', whiteSpace: 'nowrap' }) },
                                     React.createElement('span', { style: { color: '#93c5fd', marginRight: 6, fontSize: 11 } }, _isOpen ? '▼' : '▶'), c.name),
                                 React.createElement('td', { style: _krTd }, chip),
+                                React.createElement('td', { style: _krTd }, _daysBadge(c.tracking_started)),
                                 React.createElement('td', { style: Object.assign({}, _krTd, { textAlign: 'right', fontVariantNumeric: 'tabular-nums' }) }, c.keywords),
                                 React.createElement('td', { style: Object.assign({}, _krTd, { textAlign: 'right', fontVariantNumeric: 'tabular-nums' }) }, c.exposed),
                                 React.createElement('td', { style: Object.assign({}, _krTd, { textAlign: 'right', fontVariantNumeric: 'tabular-nums' }) }, c.top10),
@@ -718,7 +740,7 @@ window.KeywordRankPage = function KeywordRankPage(props) {
                             );
                             if (!_isOpen) return mainRow;
                             var expandRow = React.createElement('tr', { key: c.id + '-x' },
-                                React.createElement('td', { colSpan: 8, style: { padding: 0, background: '#f8fbff', borderBottom: '1px solid #e2e8f0' } }, _expandPanel(c)));
+                                React.createElement('td', { colSpan: 9, style: { padding: 0, background: '#f8fbff', borderBottom: '1px solid #e2e8f0' } }, _expandPanel(c)));
                             return [mainRow, expandRow];
                         }))
                     )

@@ -51,6 +51,14 @@ ok("nvMid 있는 상품을 실제로 조회한다(COALESCE(nv_mid,'') <> '')",
    "COALESCE(nv_mid,'') <> ''" in body)
 ok("판정 실패 시 죽지 않는다(tracking_started None 폴백)",
    "tracking_started = None" in body)
+# 시안 정합(2026-09-18) — 펼침 카드가 nvMid 값을 그대로 보여주므로 값도 내려준다
+ok("🔴 board 행에 nvMid 값을 붙인다(불리언만이 아니라)",
+   re.search(r'b\["nvmid"\]\s*=', body) is not None)
+# 며칠째를 접힌 줄에도 보이게 — rank_overview 가 tracking_started 를 준다
+ok("🔴 rank_overview 가 업체별 tracking_started 를 준다",
+   re.search(r'"tracking_started":\s*_first_map\.get', cd) is not None)
+ok("첫 기록일을 MIN(checked_at) 로 업체별 조회한다",
+   re.search(r"SELECT client_id, MIN\(checked_at\)[\s\S]{0,200}GROUP BY client_id", cd) is not None)
 
 print("\n② FE — KeywordRankPage 펼치기(페이지 이동 없음)")
 fe = read("frontend/js/components/KeywordRankPage.jsx")
@@ -70,6 +78,17 @@ ok("🔴 nvMid 없음을 글자로 표기한다", "nvMid 없음" in fe)
 ok("첫 수집 대기 상태가 있다", "첫 수집 대기" in fe)
 ok("상태 배지 함수(_kwStateChip)가 has_nvmid 를 본다",
    "var _kwStateChip" in fe and "b.has_nvmid === false" in fe)
+
+print("\n④ FE — 시안 정합(며칠째 칸 · 카드형 펼침 2026-09-18)")
+ok("🔴 접힌 줄에 「추적」 칸(며칠째)이 있다",
+   re.search(r"React\.createElement\('th',[^)]*\},\s*'추적'\)", fe) is not None)
+ok("🔴 행이 _daysBadge(c.tracking_started) 를 그린다",
+   "_daysBadge(c.tracking_started)" in fe and "var _daysBadge" in fe)
+ok("🔴 펼침이 키워드 카드(_kwCard)를 그린다", "var _kwCard" in fe and "brd.map(_kwCard)" in fe)
+ok("🔴 카드가 스파크라인을 그린다", re.search(r"var _kwCard[\s\S]{0,1500}_krSparkline\(b\.series\)", fe) is not None)
+ok("🔴 카드가 nvMid 값을 보여준다(있으면 값·없으면 없음)",
+   re.search(r"var _kwCard[\s\S]{0,2000}nvMid[\s\S]{0,40}b\.nvmid", fe) is not None)
+ok("카드가 최고/최저를 series 에서 계산한다", "최고 ' + best" in fe and "최저 ' + worst" in fe)
 
 print(f"\n{'✅' if not failed else '🔴'} 통과 {passed} · 실패 {failed}")
 sys.exit(1 if failed else 0)
