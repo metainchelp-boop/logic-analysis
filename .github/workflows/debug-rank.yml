@@ -1346,6 +1346,31 @@ jobs:
             TODAY
             echo "===== 배포 #445 확인 끝 ====="
 
+            echo ""
+            echo "===== 🔖 확장 버전 — 최신 업로드가 어느 판에서 왔나 ====="
+            docker exec -i logic-analysis python3 - <<'EXTVER'
+            import sqlite3, json
+            c = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            c.row_factory = sqlite3.Row
+            for r in c.execute("""SELECT created_at, keyword, product_count, meta_json
+                                    FROM collected_serp
+                                   WHERE collected_date = date('now','localtime')
+                                   ORDER BY created_at DESC LIMIT 5"""):
+                try:
+                    m = json.loads(r["meta_json"] or "{}") or {}
+                except Exception:
+                    m = {}
+                nav = m.get("nav") or {}
+                print(f"   {r['created_at']} · {r['keyword']} · 담긴 {r['product_count']}개"
+                      f" · 확장 v{m.get('collectorVersion') or '?'}"
+                      f" · pageSize={m.get('pageSize')}"
+                      f" · 원본 {m.get('rawCount')} · 광고제외 {m.get('adSkipped')}")
+                print(f"      nav: 클릭 {nav.get('click')} · 주소 {nav.get('url')} · 폴백 {nav.get('fallback')}"
+                      f" · stoppedEarly={m.get('stoppedEarly')}")
+            c.close()
+            EXTVER
+            echo "===== 확장 버전 확인 끝 ====="
+
       - name: 상품 주소 모양 실측 (읽기 전용)
         if: ${{ github.event.inputs.urlshape == 'on' }}
         uses: appleboy/ssh-action@v1.0.3
