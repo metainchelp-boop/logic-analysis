@@ -1309,6 +1309,27 @@ jobs:
                         verdict = "살아 있다" if n else "60분 넘게 조용 — 지웠거나 멈춤"
                         print(f"  {who:<10} {t.strftime('%H:%M:%S'):<10} {n:>8}   {verdict}")
                     print("  ⇒ 지운 확장은 여기서 '조용'으로 떨어진다. 하루치 합계로 판단하지 말 것.")
+
+                    # ⚠️ 「몇 곳이 붙어 있나」만으로는 정체를 못 가른다 —
+                    #    살아 있는 확장(키워드 받아 업로드)과 껍데기(health 만 두드림)를 갈라야 한다.
+                    ep_re = re.compile(r'"[A-Z]+ (/api/collector[^ ?"]*)')
+                    by = collections.defaultdict(collections.Counter)
+                    for ln in lines:
+                        m = ip_re.match(ln); me = ep_re.search(ln); mt = t_re.search(ln)
+                        if not (m and me and mt):
+                            continue
+                        t = parse_t(mt.group(1))
+                        if t and t >= cut:
+                            by[tag(m.group(1))][me.group(1).rstrip('/')] += 1
+                    print()
+                    print("  [곳마다 무엇을 불렀나 · 최근 60분]")
+                    for who, c in sorted(by.items(), key=lambda x: -sum(x[1].values())):
+                        parts = " · ".join(f"{p.split('/')[-1]} {n}" for p, n in c.most_common(6))
+                        kw = c.get('/api/collector/keywords', 0)
+                        up = sum(n for p, n in c.items() if 'upload' in p or 'result' in p or 'serp' in p)
+                        role = "수집 중" if (kw or up) else "health 만 — 껍데기(확장이 일을 안 한다)"
+                        print(f"  {who:<10} {parts}")
+                        print(f"  {'':<10}   ⇒ {role}")
             PY2
 
             echo
