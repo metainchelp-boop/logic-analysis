@@ -83,6 +83,10 @@ window.KeywordRankPage = function KeywordRankPage(props) {
     var _flt = useState('all'); var filter = _flt[0], setFilter = _flt[1]; // all|attention|up|down
     var _bs = useState('rank'); var boardSort = _bs[0], setBoardSort = _bs[1];   // rank|delta|volume|name (2차 확산)
     var _bd2 = useState(7); var boardDays = _bd2[0], setBoardDays = _bd2[1];     // 추이 기간 7|30
+    // 2026-09-18 대표 확정 — 랜딩에서 펼치기(간단 정보). 상세는 별도 「상세 보기」로.
+    var _exC = useState(null); var expClient = _exC[0], setExpClient = _exC[1];   // 펼친 업체 id
+    var _exB = useState({}); var expBoard = _exB[0], setExpBoard = _exB[1];       // { id: board응답 }
+    var _exL = useState(null); var expLoading = _exL[0], setExpLoading = _exL[1]; // 로딩 중 id
     var _kwi = useState(''); var kwInput = _kwi[0], setKwInput = _kwi[1];       // 추적 키워드 추가 입력
     // 키워드별 상품 지정 (2026-08-21 이예은 신고) — 업체당 상품 하나 전제 해소
     var _kpE = useState(null); var kpEdit = _kpE[0], setKpEdit = _kpE[1];        // 편집 중 키워드
@@ -542,6 +546,74 @@ window.KeywordRankPage = function KeywordRankPage(props) {
         loadBoard(c.id, boardDays);
         try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch (e) {}
     };
+
+    /* 랜딩 펼치기 — 페이지 이동 없이 간단 정보만 (대표 지시 2026-09-18).
+       상세 보드는 지연 로드해 캐시하고, 두 번째 펼침부터는 즉시 표시. */
+    var toggleExpand = function(c) {
+        if (expClient === c.id) { setExpClient(null); return; }
+        setExpClient(c.id);
+        if (!expBoard[c.id]) {
+            setExpLoading(c.id);
+            api.get('/cd/' + c.id + '/rank-board?days=8')
+                .then(function(res) {
+                    if (res && res.success) setExpBoard(function(m) { var n = Object.assign({}, m); n[c.id] = res; return n; });
+                    setExpLoading(null);
+                })
+                .catch(function() { setExpLoading(null); });
+        }
+    };
+
+    // 며칠째 — 첫 순위 기록일 기준(등록/시작 당일 = 1일째). 없으면 null.
+    var _daysSince = function(dstr) {
+        if (!dstr) return null;
+        var d = new Date(String(dstr).replace(' ', 'T'));
+        if (isNaN(d)) return null;
+        var n = Math.floor((Date.now() - d.getTime()) / 86400000);
+        return n < 0 ? 1 : n + 1;
+    };
+    // 키워드 한 줄의 등록 상태 — 대표 지시의 「제대로 등록됐나」 + 「300위 밖·nvMid 없음」 표기
+    var _kwStateChip = function(b) {
+        var st;
+        if (b.pending) st = { t: '🆕 첫 수집 대기', c: '#1d4ed8', bg: '#dbeafe' };
+        else if (b.rank != null && b.rank > 0) st = { t: '✅ ' + b.rank + '위', c: '#059669', bg: '#d1fae5' };
+        else if (b.has_nvmid === false) st = { t: '⚠ 300위 밖 · nvMid 없음', c: '#dc2626', bg: '#fee2e2' };
+        else st = { t: '⚠ 300위 밖', c: '#b45309', bg: '#fef3c7' };
+        return React.createElement('span', { style: { display: 'inline-block', padding: '2px 9px', borderRadius: 99, fontSize: 11.5, fontWeight: 700, color: st.c, background: st.bg, whiteSpace: 'nowrap' } }, st.t);
+    };
+    // 펼친 업체의 간단 정보 패널
+    var _expandPanel = function(c) {
+        var res = expBoard[c.id];
+        if (expLoading === c.id || !res) {
+            return React.createElement('div', { style: { padding: '12px 16px', fontSize: 12, color: '#94a3b8' } }, '간단 정보 불러오는 중…');
+        }
+        var brd = res.board || [];
+        var days = _daysSince(res.tracking_started);
+        var hasNoNv = brd.some(function(b) { return b.has_nvmid === false && (b.rank == null); });
+        return React.createElement('div', { style: { padding: '12px 16px 16px' } },
+            React.createElement('div', { style: { display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10, fontSize: 12.5, color: '#475569' } },
+                React.createElement('span', null, '추적 ',
+                    days == null
+                        ? React.createElement('b', { style: { color: '#f59e0b' } }, '아직 순위 안 잡힘')
+                        : React.createElement('b', { style: { color: '#1d4ed8', fontSize: 15 } }, days + '일째')),
+                res.tracking_started && React.createElement('span', { style: { color: '#94a3b8' } }, '· 첫 기록 ' + String(res.tracking_started).slice(0, 10)),
+                React.createElement('span', { style: { color: '#94a3b8' } }, '· 키워드 ' + brd.length + '개'),
+                hasNoNv && React.createElement('span', { style: { color: '#dc2626', fontWeight: 700 } }, '· ⚠ nvMid 없어 못 찾는 키워드 있음')
+            ),
+            React.createElement('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap' } },
+                brd.length === 0
+                    ? React.createElement('span', { style: { fontSize: 12, color: '#94a3b8' } }, '추적 키워드가 없습니다.')
+                    : brd.map(function(b, i) {
+                        return React.createElement('span', { key: i, style: { display: 'inline-flex', alignItems: 'center', gap: 5, border: '1px solid #eef2f7', borderRadius: 8, padding: '4px 8px', background: '#fff' } },
+                            React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: '#334155' } }, b.keyword),
+                            _kwStateChip(b));
+                    })
+            ),
+            React.createElement('button', {
+                onClick: function(e) { e.stopPropagation(); openDetail(c); },
+                style: { marginTop: 12, fontSize: 12.5, fontWeight: 700, color: '#fff', background: '#3b82f6', border: 'none', borderRadius: 8, padding: '7px 15px', cursor: 'pointer' }
+            }, '📊 상세 보기 (달력·추이)')
+        );
+    };
     var changeBoardDays = function(d) {
         if (d === boardDays) return;
         setBoardDays(d);
@@ -623,13 +695,15 @@ window.KeywordRankPage = function KeywordRankPage(props) {
                                 : attention
                                     ? React.createElement('span', { style: _krChip('warn') }, '노출 0')
                                     : React.createElement('span', { style: _krChip('ok') }, '노출 ' + c.exposed + '/' + c.keywords);
-                            return React.createElement('tr', {
-                                key: c.id, onClick: function() { openDetail(c); },
-                                style: { cursor: 'pointer', background: attention ? '#fffbeb' : 'transparent' },
-                                onMouseEnter: function(e) { e.currentTarget.style.background = '#f8fafc'; },
-                                onMouseLeave: function(e) { e.currentTarget.style.background = attention ? '#fffbeb' : 'transparent'; }
+                            var _isOpen = expClient === c.id;
+                            var mainRow = React.createElement('tr', {
+                                key: c.id, onClick: function() { toggleExpand(c); },
+                                style: { cursor: 'pointer', background: _isOpen ? '#eff6ff' : (attention ? '#fffbeb' : 'transparent') },
+                                onMouseEnter: function(e) { if (!_isOpen) e.currentTarget.style.background = '#f8fafc'; },
+                                onMouseLeave: function(e) { e.currentTarget.style.background = _isOpen ? '#eff6ff' : (attention ? '#fffbeb' : 'transparent'); }
                             },
-                                React.createElement('td', { style: Object.assign({}, _krTd, { fontWeight: 700, color: '#0f172a', whiteSpace: 'nowrap' }) }, c.name),
+                                React.createElement('td', { style: Object.assign({}, _krTd, { fontWeight: 700, color: '#0f172a', whiteSpace: 'nowrap' }) },
+                                    React.createElement('span', { style: { color: '#93c5fd', marginRight: 6, fontSize: 11 } }, _isOpen ? '▼' : '▶'), c.name),
                                 React.createElement('td', { style: _krTd }, chip),
                                 React.createElement('td', { style: Object.assign({}, _krTd, { textAlign: 'right', fontVariantNumeric: 'tabular-nums' }) }, c.keywords),
                                 React.createElement('td', { style: Object.assign({}, _krTd, { textAlign: 'right', fontVariantNumeric: 'tabular-nums' }) }, c.exposed),
@@ -642,6 +716,10 @@ window.KeywordRankPage = function KeywordRankPage(props) {
                                     (c.top_keywords || []).map(function(t) { return t.keyword + ' ' + t.rank + '위'; }).join(' · ') || '—'),
                                 React.createElement('td', { style: Object.assign({}, _krTd, { fontSize: 12, color: '#94a3b8', whiteSpace: 'nowrap' }) }, c.last_checked || '—')
                             );
+                            if (!_isOpen) return mainRow;
+                            var expandRow = React.createElement('tr', { key: c.id + '-x' },
+                                React.createElement('td', { colSpan: 8, style: { padding: 0, background: '#f8fbff', borderBottom: '1px solid #e2e8f0' } }, _expandPanel(c)));
+                            return [mainRow, expandRow];
                         }))
                     )
                 )

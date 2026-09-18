@@ -1777,6 +1777,40 @@ def rank_board(client_id: int, days: int = 8, current_user: dict = Depends(get_c
                         **_pending_meta(pk, True),
                         **_source_of(pk),
                     })
+        # 2026-09-18 화면 개편(대표 지시) — 펼치기가 쓸 값 가산.
+        #   ⓐ 며칠째 = 이 업체의 첫 순위 기록일(없으면 None) → 화면이 「N일째」로 센다.
+        #   ⓑ 키워드별 nvMid 유무 = 이어진 추적 상품에 nvMid 가 있는가.
+        #      「300위 밖」인데 nvMid 가 없으면 진짜 밖인지 번호 문제인지 못 가른다 — 이걸 화면에 알린다.
+        tracking_started = None
+        try:
+            _ts = conn.execute(
+                "SELECT MIN(checked_at) FROM client_rank_history WHERE client_id=?",
+                (client_id,)).fetchone()
+            tracking_started = (_ts[0] if _ts and _ts[0] else None)
+        except Exception:
+            tracking_started = None
+        # 키워드 → nvMid 있음(이어진 상품 중 하나라도 nvMid 보유)
+        _kw_has_nv = {}
+        try:
+            _pids = [p["id"] for p in products if not p.get("disabled")]
+            if _pids:
+                _pp = ",".join("?" * len(_pids))
+                # 어떤 상품이 nvMid 를 갖고 있나
+                _nv_pid = set()
+                for _r in conn.execute(
+                        f"SELECT id FROM tracked_products WHERE id IN ({_pp}) "
+                        "AND COALESCE(nv_mid,'') <> ''", _pids):
+                    _nv_pid.add(_r[0])
+                for p in products:
+                    _has = p["id"] in _nv_pid
+                    for _k in (p.get("keywords") or []):
+                        # 하나라도 nvMid 있으면 True 로 굳힌다
+                        _kw_has_nv[(_k or "").strip()] = _kw_has_nv.get((_k or "").strip(), False) or _has
+        except Exception:
+            _kw_has_nv = {}
+        for b in board:
+            b["has_nvmid"] = bool(_kw_has_nv.get((b.get("keyword") or "").strip(), False))
+
         # 정렬: 노출(순위 오름차순) 먼저, 미노출 뒤(키워드 가나다)
         board.sort(key=lambda b: (b["rank"] is None, b["rank"] if b["rank"] is not None else 0, b["keyword"]))
         kpis = {
@@ -1789,7 +1823,8 @@ def rank_board(client_id: int, days: int = 8, current_user: dict = Depends(get_c
         return {"success": True,
                 "client": {"id": client["id"], "name": client["name"],
                            "store_url": client["naver_store_url"] or ""},
-                "kpis": kpis, "board": board, "products": products}
+                "kpis": kpis, "board": board, "products": products,
+                "tracking_started": tracking_started}
     except HTTPException:
         raise
     except Exception as e:
