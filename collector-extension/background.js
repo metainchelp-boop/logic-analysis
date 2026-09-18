@@ -296,6 +296,17 @@ async function gapFor(base) {
   return (await isSlow()) ? base * 2 : base;
 }
 
+// ⏸ 이 기계에서 사람이 누른 '일시정지'(v1.20.0). 화면(서버) 스위치와 별개로
+//    수집기 앞에서 즉시 멈추기 위한 로컬 스위치다 — 이 기계에서만 적용된다.
+//    ⚠️ 자동으로 풀리지 않는다(🐢 안전 속도와 다르다). 사람이 ▶ 재개를 눌러야 다시 돈다.
+const LOCAL_PAUSE_KEY = 'localPaused';
+async function isLocalPaused() {
+  try {
+    const o = await chrome.storage.local.get(LOCAL_PAUSE_KEY);
+    return o[LOCAL_PAUSE_KEY] === true;
+  } catch (e) { return false; }   // 조회 실패는 '멈춤'이 아니라 '돎'(fail-open)
+}
+
 /* ─────────────────────────────────────────────────────────────────────────
  * 2026-09-18 대표 확정 — 간격을 들쭉날쭉하게 (Ⓒ 간격 가변)
  *
@@ -1900,6 +1911,14 @@ async function runCollection(manual = false) {
     return;
   }
   running = 'daily';   // ⚠️ 첫 await 이전에 '동기' 선점 — ondemand 와 알람이 겹쳐도 이중 진입 불가
+  // ⏸ 이 기계에서 일시정지를 눌러 뒀으면 자동·수동 모두 들어가지 않는다(v1.20.0).
+  //    ⚠️ running='daily' 를 '먼저' 잡은 뒤 검사한다 — 순서를 바꾸면 첫 await 사이에
+  //       알람이 겹쳐 이중 진입할 수 있다(바로 위 주석의 그 이유).
+  if (await isLocalPaused()) {
+    await setState({ running: false, pausedByLocal: true, current: '' });
+    if (manual) await log('⏸ 이 수집기가 일시정지 상태입니다 — 팝업에서 ▶ 재개를 누르세요.');
+    running = false; return;
+  }
   // 캡차 쉼 중이면 들어가지 않는다(계속 두드리면 차단이 깊어진다). 수동 실행은 사람이
   // 캡차를 풀고 눌렀을 수 있으므로 통과시킨다.
   const bu = await getBlockedUntil();
@@ -2043,6 +2062,8 @@ async function runOnDemand() {
   if (running) return;
   running = 'ondemand';   // ⚠️ 첫 await 이전에 '동기' 선점 — daily 와 알람이 겹쳐도 이중 진입 불가
   try {
+    // ⏸ 이 기계에서 일시정지 중이면 밀린 요청 처리도 건너뛴다(v1.20.0). finally 가 락을 푼다.
+    if (await isLocalPaused()) return;
     // 캡차 쉼 중이면 아예 들어가지 않는다(매분 재타격 = 차단 연장)
     if (await getBlockedUntil() > Date.now()) return;
     // ⭐ 시간대 수집이 차례를 기다리고 있으면 이번 분은 통째로 비켜 준다.
@@ -2187,6 +2208,22 @@ chrome.alarms.onAlarm.addListener(async (a) => {
 
 chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
   if (msg?.cmd === 'run') { runCollection(true); sendResponse({ ok: true }); }
+  // ⏸ 사람이 팝업에서 누른 '일시정지 / 재개'(v1.20.0) — 이 기계에서만 적용된다.
+  //    화면(서버) 스위치와 별개다. 자동으로 풀리지 않으므로 다시 누를 때까지 멈춰 있다.
+  if (msg?.cmd === 'setLocalPause') {
+    (async () => {
+      if (msg.on) {
+        await chrome.storage.local.set({ [LOCAL_PAUSE_KEY]: true });
+        await setState({ running: false, pausedByLocal: true, current: '' });
+        await log('⏸ 이 수집기를 일시정지했습니다 (이 기계에서만 · 사람이 누름). ▶ 재개를 누르면 다시 돕니다.');
+      } else {
+        await chrome.storage.local.remove(LOCAL_PAUSE_KEY);
+        await setState({ pausedByLocal: false });
+        await log('▶ 이 수집기를 재개했습니다 — 다음 회차부터 다시 수집합니다.');
+      }
+    })();
+    sendResponse({ ok: true });
+  }
   // 🐢 사람이 켜는 안전 속도 — 캡차를 만나 자동으로 켜지는 것과 **같은 장치**를 쓴다.
   //    차단이 의심되는 때(회선이 막 시끄러웠던 직후 등)에 사람이 미리 절반 속도로
   //    돌릴 수 있게 한 것. 24시간 뒤 스스로 풀린다(끄는 것을 잊어도 원복된다).

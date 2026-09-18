@@ -98,7 +98,7 @@ ok("최소 간격 40초를 지킨다", "SPREAD_MIN_MS" in bg and "40 * 1000" in 
 ok("느리게 가기 상태면 2배 유지", re.search(r"isSlow\(\)\)\s*\?\s*g \* 2", bg) is not None)
 
 mf = ext("collector-extension/manifest.json")
-ok("확장 버전이 1.19.0 이다", '"version": "1.19.0"' in mf)
+ok("확장 버전이 1.20.0 이다", '"version": "1.20.0"' in mf)
 
 pop = ext("collector-extension/popup.js")
 ok("팝업이 화면에서 꺼짐을 표시한다", "pausedByScreen" in pop and "화면에서 꺼" in pop)
@@ -108,6 +108,31 @@ fe = src("../frontend/js/components/RankTrackingSection.jsx")
 ok("화면이 /collector/control 을 읽는다", "/collector/control" in fe)
 ok("화면에 전체 켜기/끄기 버튼이 있다",
    "toggleCollector(-1" in fe and ("전체 수집 켜기" in fe or "전체 수집 끄기" in fe))
+
+print("\n⑥ 확장 — 이 기계 로컬 일시정지/재개 (대표 지시 2026-09-18)")
+bg2 = ext("collector-extension/background.js")
+ok("로컬 일시정지 헬퍼가 있다", "async function isLocalPaused" in bg2 and "LOCAL_PAUSE_KEY" in bg2)
+ok("조회 실패는 멈춤이 아니라 돎(fail-open)",
+   re.search(r"async function isLocalPaused[\s\S]{0,300}catch \(e\) \{ return false;", bg2) is not None)
+ok("🔴 runCollection 이 로컬 일시정지면 회차를 건너뛴다",
+   re.search(r"if \(await isLocalPaused\(\)\) \{[\s\S]{0,200}running = false; return;", bg2) is not None)
+ok("🔴 running='daily' 를 먼저 잡은 뒤 검사한다(이중 진입 방지)",
+   re.search(r"running = 'daily';[\s\S]{0,400}if \(await isLocalPaused\(\)\)", bg2) is not None)
+ok("runOnDemand 도 로컬 일시정지면 건너뛴다",
+   re.search(r"running = 'ondemand';[\s\S]{0,400}if \(await isLocalPaused\(\)\) return;", bg2) is not None)
+ok("setLocalPause 메시지를 처리한다(켬/끔)",
+   "msg?.cmd === 'setLocalPause'" in bg2
+   and "chrome.storage.local.set({ [LOCAL_PAUSE_KEY]: true })" in bg2
+   and "chrome.storage.local.remove(LOCAL_PAUSE_KEY)" in bg2)
+
+ph = ext("collector-extension/popup.html")
+ok("🔴 팝업에 일시정지 버튼이 있다", 'id="localPause"' in ph)
+
+pop2 = ext("collector-extension/popup.js")
+ok("팝업이 버튼을 눌러 setLocalPause 를 보낸다",
+   "cmd: 'setLocalPause'" in pop2 and "$('localPause').onclick" in pop2)
+ok("팝업이 pausedByLocal 상태를 반영한다",
+   "state.pausedByLocal === true" in pop2 and "일시정지" in pop2)
 
 print(f"\n{'✅' if not failed else '🔴'} 통과 {passed} · 실패 {failed}")
 sys.exit(1 if failed else 0)
