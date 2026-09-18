@@ -92,6 +92,22 @@ def _tracked_targets(conn, keyword: str) -> List[Dict[str, Any]]:
         return rows
 
     kept = [r for r in rows if r["product_id"] in ok]
+
+    # ── 「nvMid 없으면 추적 안 함」 (2026-09-18 대표 지시 · 기본 꺼짐) ──
+    # ⛔ 켜져 있을 때만 거른다. 켜는 순서는 tracking_eligibility.nvmid_required 주석 참조.
+    # ⚠️ 판정 함수가 깨지면 **거르지 않는다** — 순위 기록이 통째로 멈추는 쪽이 훨씬 나쁘다
+    #    (이 파일의 자격 판정 폴백과 같은 원칙).
+    try:
+        from tracking_eligibility import nvmid_required
+        if nvmid_required():
+            _before = len(kept)
+            kept = [r for r in kept if str(r.get("nv_mid") or "").strip()]
+            if _before != len(kept):
+                logger.info(f"[rank_record] nvMid 없는 상품 제외 [{keyword}] — "
+                            f"{_before}개 중 {len(kept)}개만 적는다")
+    except Exception as e:
+        logger.warning(f"[rank_record] nvMid 필수 판정 실패(거르지 않음) [{keyword}]: {e}")
+
     if len(kept) != len(rows):
         logger.info(f"[rank_record] {keyword} — 추적 상품 자격 판정: "
                     f"{len(rows)}개 중 {len(kept)}개만 적는다 "

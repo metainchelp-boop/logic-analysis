@@ -195,3 +195,91 @@ def targets_for_keywords(conn, keywords) -> dict:
         if nv not in lst:
             lst.append(nv)
     return out
+
+# ──────────────────────────────────────────────────────────────────────────
+#  일괄 자동 채우기 — 444개를 서버가 스스로 메운다 (2026-09-18)
+# ──────────────────────────────────────────────────────────────────────────
+#
+# 왜 필요한가 — 대표 지시가 A안(새 등록만 필수)에서 **「nvMid 없으면 추적 안 함」**
+# 으로 바뀌었다. 그런데 지금 등록된 444개는 **전부 비어 있다**(실측 0/444).
+# 그대로 켜면 **내일부터 순위 기록이 0** 이 된다 — 되돌리기 어려운 종류의 사고다.
+#
+# ⇒ 순서를 바꾼다: ① 서버가 채울 수 있는 것을 전부 채우고 ② 남은 것 명단을 내고
+#    ③ 그 다음에 「없으면 추적 안 함」을 켠다.
+#
+# ⚠️ **네이버에 요청하지 않는다.** 이미 모아 둔 수집분에서만 찾는다(자동 찾기와 같은 함수).
+# ⚠️ **이미 채워진 값은 절대 안 덮는다** — 사람이 확인해 넣은 값이 기계 추정보다 낫다.
+
+NVMID_BACKFILL_MARKER = ".nvmid_backfilled"
+
+
+def backfill_from_collected(conn, limit: int = 0) -> dict:
+    """nv_mid 가 빈 추적 상품을 수집분에서 찾아 채운다.
+
+    반환 — {"scanned": n, "filled": n, "by_reason": {...}}
+
+    ⚠️ 상품의 **자기 키워드로만** 찾는다. 아무 키워드나 뒤지면 같은 채널번호를 쓰는
+       다른 상품을 잘못 집을 수 있다(자동 찾기 화면과 같은 규칙을 그대로 쓴다).
+    ⚠️ 한 건이 실패해도 전체가 멈추지 않는다 — 실패 사유를 세어서 돌려준다.
+    """
+    out = {"scanned": 0, "filled": 0, "by_reason": {}}
+    try:
+        ensure_column(conn)
+        rows = conn.execute(
+            "SELECT id, product_url FROM tracked_products "
+            " WHERE (nv_mid IS NULL OR TRIM(nv_mid) = '') "
+            "   AND product_url IS NOT NULL AND TRIM(product_url) <> '' "
+            " ORDER BY id").fetchall()
+    except sqlite3.Error:
+        return out
+    if limit and limit > 0:
+        rows = rows[:limit]
+
+    for r in rows:
+        pid = r[0] if not hasattr(r, "keys") else r["id"]
+        url = r[1] if not hasattr(r, "keys") else r["product_url"]
+        out["scanned"] += 1
+        try:
+            kws = [x[0] for x in conn.execute(
+                "SELECT keyword FROM tracked_keywords WHERE product_id = ?", (pid,)).fetchall()]
+        except sqlite3.Error:
+            kws = []
+        got = lookup_from_collected(conn, url, kws)
+        reason = got.get("reason") or "?"
+        out["by_reason"][reason] = out["by_reason"].get(reason, 0) + 1
+        nv = normalize(got.get("nv_mid"))
+        if not nv or not is_valid(nv):
+            continue
+        try:
+            # ⚠️ 조건에 빈 값 검사를 다시 건다 — 조회와 쓰기 사이에 사람이 넣었을 수 있다.
+            conn.execute(
+                "UPDATE tracked_products SET nv_mid = ? "
+                " WHERE id = ? AND (nv_mid IS NULL OR TRIM(nv_mid) = '')", (nv, pid))
+            out["filled"] += 1
+        except sqlite3.Error:
+            continue
+    try:
+        conn.commit()
+    except sqlite3.Error:
+        pass
+    return out
+
+
+def missing_rows(conn, limit: int = 500) -> list:
+    """아직 nv_mid 가 없는 추적 상품 — 직원에게 줄 명단의 재료.
+
+    ⚠️ 업체명·상품명은 여기서 붙이지 않는다(호출처가 필요하면 붙인다) — 이 모듈은
+       저장소 공개 로그에 그대로 찍히는 진단에서도 쓰인다.
+    """
+    try:
+        ensure_column(conn)
+        return [dict(zip(("id", "product_url", "keywords"), (r[0], r[1], r[2] or "")))
+                for r in conn.execute(
+                    "SELECT p.id, p.product_url, "
+                    "       (SELECT GROUP_CONCAT(k.keyword, ',') FROM tracked_keywords k "
+                    "         WHERE k.product_id = p.id) AS kws "
+                    "  FROM tracked_products p "
+                    " WHERE (p.nv_mid IS NULL OR TRIM(p.nv_mid) = '') "
+                    " ORDER BY p.id LIMIT ?", (int(limit),)).fetchall()]
+    except sqlite3.Error:
+        return []
