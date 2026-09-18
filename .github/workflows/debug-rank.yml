@@ -1466,5 +1466,69 @@ jobs:
                                 for m in (1, 2, 3, 4))
                 print(f"    {cap:>4}   {row}")
             print("  ⚠️ ✅ 는 산술상 가능하다는 뜻일 뿐이다 — 회선이 그 속도를 견디는지는 다른 축이다.")
+
+            # ───────── 축5 · 유니버스는 어디서 오나 (대표 질문 2026-09-18) ─────────
+            # ⚠️ 「추적 키워드 810종」은 tracked_keywords 하나만 센 값이다.
+            #    서버가 실제로 나눠 주는 유니버스는 _keyword_universe() = 세 갈래 합집합이다.
+            #    갈래마다 몇 개인지 갈라서 찍는다 — 추측으로 답하지 않기 위해.
+            print("\n========== 축5 · 수집 유니버스는 어디서 오나 ==========")
+            import sys
+            for pth in ("/app", "/app/backend"):
+                if pth not in sys.path:
+                    sys.path.insert(0, pth)
+            elig_ids = elig_pids = None
+            try:
+                from tracking_eligibility import eligible_client_ids, eligible_tracked_product_ids
+                elig_ids = eligible_client_ids(conn)
+                elig_pids = eligible_tracked_product_ids(conn)
+                print(f"  자격 업체 {len(elig_ids) if elig_ids is not None else '판정실패'}곳 · "
+                      f"자격 추적상품 {len(elig_pids) if elig_pids is not None else '판정실패'}개")
+            except Exception as e:
+                print(f"  🔴 자격 판정 모듈을 못 불렀다: {e}")
+                print("     ⇒ 아래 수는 **자격 필터 없이** 센 값이다(실제보다 클 수 있다).")
+
+            def kws(sql, args=()):
+                try:
+                    return {(r[0] or "").strip() for r in conn.execute(sql, args)
+                            if (r[0] or "").strip()}
+                except sqlite3.Error as e:
+                    print(f"    🔴 조회 실패: {e}")
+                    return None
+
+            if elig_ids:
+                ph2 = ",".join("?" * len(elig_ids))
+                a = kws(f"SELECT main_keywords FROM clients WHERE id IN ({ph2})", list(elig_ids))
+                # main_keywords 는 쉼표로 여러 개가 한 칸에 들어 있다 — 풀어서 센다.
+                if a is not None:
+                    a = {x.strip() for row in a for x in row.split(",") if x.strip()}
+                b = kws(f"SELECT DISTINCT keyword FROM client_analyses WHERE client_id IN ({ph2})",
+                        list(elig_ids))
+            else:
+                a = kws("SELECT main_keywords FROM clients WHERE status='active'")
+                if a is not None:
+                    a = {x.strip() for row in a for x in row.split(",") if x.strip()}
+                b = kws("SELECT DISTINCT keyword FROM client_analyses")
+            if elig_pids:
+                pp2 = ",".join("?" * len(elig_pids))
+                c = kws(f"SELECT DISTINCT keyword FROM tracked_keywords WHERE product_id IN ({pp2})",
+                        list(elig_pids))
+            else:
+                c = kws("SELECT DISTINCT keyword FROM tracked_keywords")
+
+            if None in (a, b, c):
+                print("  ⇒ 일부 조회가 실패해 합계를 내지 않는다(틀린 수를 내느니 안 낸다).")
+            else:
+                allk = a | b | c
+                print(f"\n  {'갈래':<34} {'개수':>6}   {'이것만 있는 것':>12}")
+                print(f"  {'① 대표 키워드 (clients.main_keywords)':<34} {len(a):>6}   {len(a - b - c):>12}")
+                print(f"  {'② 분석 이력 (client_analyses)':<34} {len(b):>6}   {len(b - a - c):>12}")
+                print(f"  {'③ 순위추적 화면 (tracked_keywords)':<34} {len(c):>6}   {len(c - a - b):>12}")
+                print(f"  {'합집합 = 지금 수집 유니버스':<34} {len(allk):>6}")
+                print()
+                print(f"  ⇒ ③(#rank 화면)만 추적하면 : {len(c)}개")
+                print(f"  ⇒ ②를 빼면 줄어드는 양     : {len(allk) - len(a | c)}개")
+                print(f"  ⇒ ①+③ 만 하면            : {len(a | c)}개")
+                print("  ⚠️ ②(분석 이력)는 직원이 한 번 분석을 돌린 키워드가 전부 들어온다 —")
+                print("     업체가 실제로 관리 중인 키워드인지와는 다른 축이다.")
             PY
             docker exec logic-analysis rm -f /tmp/split_rule_preview.py 2>/dev/null || true
