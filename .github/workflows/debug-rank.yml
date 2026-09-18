@@ -1411,7 +1411,7 @@ jobs:
             print("\n========== 축4 · 대수를 늘리면 여유가 생기나 ==========")
             uni_set = sorted(set(uni)) if uni else []
             print(f"  [분할 균형 — 실제 키워드 {len(uni_set)}종으로 직접 갈라 봄]")
-            for wc in (1, 2, 3, 4):
+            for wc in (1, 2, 3, 4, 5, 6, 7, 8, 9):
                 buckets = collections.Counter(sr.worker_of(k, wc) for k in uni_set)
                 got = sum(buckets.values())
                 sizes = " · ".join(f"{i+1}번 {buckets.get(i,0)}" for i in range(wc))
