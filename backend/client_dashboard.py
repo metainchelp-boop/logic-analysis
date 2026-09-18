@@ -1487,6 +1487,16 @@ def rank_overview(current_user: dict = Depends(get_current_user)):
 
         ids = [c["id"] for c in clients]
         ph = ",".join("?" * len(ids))
+        # 첫 기록일(며칠째) — 8일 창 밖이므로 전체 이력에서 업체별 MIN 을 따로 딴다(2026-09-18 시안 정합).
+        _first_map = {}
+        try:
+            for _fr in conn.execute(
+                    f"SELECT client_id, MIN(checked_at) AS f FROM client_rank_history "
+                    f"WHERE client_id IN ({ph}) GROUP BY client_id", ids):
+                if _fr["f"]:
+                    _first_map[_fr["client_id"]] = _fr["f"]
+        except Exception:
+            _first_map = {}
         rows = conn.execute(f"""
             SELECT client_id, keyword, rank_position,
                    substr(checked_at,1,10) AS d, id
@@ -1531,7 +1541,8 @@ def rank_overview(current_user: dict = Depends(get_current_user)):
                     "store_url": c["naver_store_url"] or "",
                     "role": c["role"] or "advertiser",
                     "keywords": 0, "exposed": 0, "top10": 0, "up": 0, "down": 0,
-                    "last_checked": "", "top_keywords": [], "rep_series": []}
+                    "last_checked": "", "top_keywords": [], "rep_series": [],
+                    "tracking_started": _first_map.get(c["id"])}
             if e:
                 e["tops"].sort()
                 item.update({k: e[k] for k in ("keywords", "exposed", "top10", "up", "down", "last_checked")})
@@ -1789,27 +1800,33 @@ def rank_board(client_id: int, days: int = 8, current_user: dict = Depends(get_c
             tracking_started = (_ts[0] if _ts and _ts[0] else None)
         except Exception:
             tracking_started = None
-        # 키워드 → nvMid 있음(이어진 상품 중 하나라도 nvMid 보유)
+        # 키워드 → nvMid 값(이어진 상품 중 하나라도 nvMid 보유하면 그 값). 2026-09-18 시안 정합:
+        #   화면 펼침 카드가 「nvMid ✓ 값」을 그대로 보여준다 → 불리언만이 아니라 실제 값을 내려준다.
         _kw_has_nv = {}
+        _kw_nv_val = {}
         try:
             _pids = [p["id"] for p in products if not p.get("disabled")]
             if _pids:
                 _pp = ",".join("?" * len(_pids))
-                # 어떤 상품이 nvMid 를 갖고 있나
-                _nv_pid = set()
+                _pid_nv = {}   # 상품 id → nv_mid 값
                 for _r in conn.execute(
-                        f"SELECT id FROM tracked_products WHERE id IN ({_pp}) "
+                        f"SELECT id, nv_mid FROM tracked_products WHERE id IN ({_pp}) "
                         "AND COALESCE(nv_mid,'') <> ''", _pids):
-                    _nv_pid.add(_r[0])
+                    _pid_nv[_r[0]] = _r[1]
                 for p in products:
-                    _has = p["id"] in _nv_pid
+                    _val = _pid_nv.get(p["id"])
                     for _k in (p.get("keywords") or []):
-                        # 하나라도 nvMid 있으면 True 로 굳힌다
-                        _kw_has_nv[(_k or "").strip()] = _kw_has_nv.get((_k or "").strip(), False) or _has
+                        _kk = (_k or "").strip()
+                        _kw_has_nv[_kk] = _kw_has_nv.get(_kk, False) or bool(_val)
+                        if _val and not _kw_nv_val.get(_kk):
+                            _kw_nv_val[_kk] = _val
         except Exception:
             _kw_has_nv = {}
+            _kw_nv_val = {}
         for b in board:
-            b["has_nvmid"] = bool(_kw_has_nv.get((b.get("keyword") or "").strip(), False))
+            _kk = (b.get("keyword") or "").strip()
+            b["has_nvmid"] = bool(_kw_has_nv.get(_kk, False))
+            b["nvmid"] = _kw_nv_val.get(_kk, "")
 
         # 정렬: 노출(순위 오름차순) 먼저, 미노출 뒤(키워드 가나다)
         board.sort(key=lambda b: (b["rank"] is None, b["rank"] if b["rank"] is not None else 0, b["keyword"]))
