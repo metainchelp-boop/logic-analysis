@@ -53,6 +53,7 @@ function makeRunner({ blockAt }) {
     getBlockedUntil: async () => store.blockedUntil,
     markBlocked: async () => { store.blockedUntil = 9e15; store.marked++; },
     clearBlocked: async () => { store.blockedUntil = 0; store.cleared++; },
+    isLocalPaused: async () => false,   // v1.20.0 로컬 일시정지 — 이 시험에선 '안 멈춤'
     closeAllWorkTabs: async () => {},
     uploadKeyword: async () => {},
     collectKeyword: async (kw) => {
