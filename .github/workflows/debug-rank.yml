@@ -11,6 +11,15 @@ on:
         options:
           - read_only
           - backup_verify
+          - backup_verify_existing
+      verification_phase:
+        description: Read-only continuation phase for the existing approved backup files
+        type: choice
+        default: digests
+        required: false
+        options:
+          - digests
+          - restored_metadata
       confirmation:
         description: Exact approved operation identifier is required for backup verification
         type: string
@@ -37,14 +46,15 @@ jobs:
         env:
           DIAG_OPERATION: ${{ inputs.operation }}
           DIAG_CONFIRMATION: ${{ inputs.confirmation }}
+          DIAG_VERIFICATION_PHASE: ${{ inputs.verification_phase }}
         run: |
           python3 - <<'PY'
           import base64, json, os, pathlib
           root = pathlib.Path('.github/diagnostics')
           operation = os.environ.get('DIAG_OPERATION') or 'read_only'
-          if operation not in {'read_only', 'backup_verify'}:
+          if operation not in {'read_only', 'backup_verify', 'backup_verify_existing'}:
               raise SystemExit('INVALID_OPERATION')
-          if operation == 'backup_verify' and os.environ.get('DIAG_CONFIRMATION') != 'approved-backup-only-20260921-op1':
+          if operation != 'read_only' and os.environ.get('DIAG_CONFIRMATION') != 'approved-backup-only-20260921-op1':
               raise SystemExit('BACKUP_APPROVAL_REQUIRED')
           bundle = {'hostScript': (root/'collector_host_probe.py').read_text(),
                     'dbScript': (root/'collector_db_probe.py').read_text(),
@@ -53,6 +63,13 @@ jobs:
           if operation == 'backup_verify':
               bundle['approval'] = 'approved-backup-only-20260921-op1'
               bundle['backupScript'] = (root/'collector_backup_probe.py').read_text()
+          if operation == 'backup_verify_existing':
+              phase = os.environ.get('DIAG_VERIFICATION_PHASE') or 'digests'
+              if phase not in {'digests', 'restored_metadata'}:
+                  raise SystemExit('INVALID_VERIFICATION_PHASE')
+              bundle['approval'] = 'approved-backup-only-20260921-op1'
+              bundle['verificationPhase'] = phase
+              bundle['backupVerificationScript'] = (root/'collector_backup_verify_existing.py').read_text()
           encoded = base64.b64encode(json.dumps(bundle).encode()).decode()
           with open(os.environ['GITHUB_ENV'], 'a') as f:
               f.write('COLLECTOR_DIAG_BUNDLE=' + encoded + '\n')

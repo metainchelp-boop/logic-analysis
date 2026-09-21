@@ -49,6 +49,30 @@ class HostBackupBoundaryTests(unittest.TestCase):
         self.assertFalse(report['backup']['passed'])
         self.assertEqual(report['commandExitCode'], 1)
 
+    def test_existing_verification_requires_exact_approval_and_phase(self):
+        with patch.object(host, 'command') as command:
+            with self.assertRaisesRegex(ValueError, 'BACKUP_APPROVAL_REQUIRED'):
+                host.collect({'operation': 'backup_verify_existing'})
+            with self.assertRaisesRegex(ValueError, 'INVALID_VERIFICATION_PHASE'):
+                host.collect({'operation': 'backup_verify_existing',
+                              'approval': 'approved-backup-only-20260921-op1',
+                              'verificationPhase': '../source'})
+            command.assert_not_called()
+
+    def test_existing_verification_has_no_new_copy_or_arbitrary_path_argument(self):
+        for phase in ('digests', 'restored_metadata'):
+            result = subprocess.CompletedProcess([], 0, b'{"passed":true}', b'private')
+            with self.subTest(phase=phase), patch.object(host, 'command', return_value=result) as command:
+                report = host.collect({'operation': 'backup_verify_existing',
+                    'approval': 'approved-backup-only-20260921-op1', 'verificationPhase': phase,
+                    'backupVerificationScript': '# read-only verifier', 'path': '/ignored'})
+                command.assert_called_once_with(
+                    ['docker', 'exec', '-i', '-e', 'PYTHONDONTWRITEBYTECODE=1', 'logic-analysis',
+                     'python3', '-', '--phase', phase], b'# read-only verifier', timeout=220)
+                self.assertEqual(report['mode'], 'READ_ONLY_EXISTING_BACKUP_VERIFICATION')
+                self.assertTrue(report['verification']['passed'])
+                self.assertEqual(report['commandExitCode'], 0)
+
     def test_invalid_child_result_is_rejected(self):
         for stdout in (b'private-not-json', b'[]', b'{"passed":"true"}', b'{}'):
             with self.subTest(stdout=stdout), patch.object(host, 'command', return_value=

@@ -147,6 +147,22 @@ def collect(bundle):
     operation = bundle.get('operation', 'read_only')
     if operation == 'backup_verify':
         return backup_collect(bundle)
+    if operation == 'backup_verify_existing':
+        if bundle.get('approval') != 'approved-backup-only-20260921-op1':
+            raise ValueError('BACKUP_APPROVAL_REQUIRED')
+        phase = bundle.get('verificationPhase')
+        if phase not in {'digests', 'restored_metadata'}:
+            raise ValueError('INVALID_VERIFICATION_PHASE')
+        started = dt.datetime.now(KST).isoformat()
+        args = ['docker', 'exec', '-i', '-e', 'PYTHONDONTWRITEBYTECODE=1', 'logic-analysis',
+                'python3', '-', '--phase', phase]
+        result = command(args, bundle['backupVerificationScript'].encode(), timeout=220)
+        value = json.loads(result.stdout)
+        if not isinstance(value, dict) or type(value.get('passed')) is not bool:
+            raise ValueError('INVALID_BACKUP_VERIFICATION_RESULT')
+        return {'observedAt': started, 'finishedAt': dt.datetime.now(KST).isoformat(),
+                'mode': 'READ_ONLY_EXISTING_BACKUP_VERIFICATION', 'phase': phase,
+                'verification': value, 'commandExitCode': result.returncode}
     if operation != 'read_only':
         raise ValueError('INVALID_OPERATION')
     now = dt.datetime.now(KST)
@@ -211,7 +227,7 @@ if __name__ == '__main__':
         def deadline(_signal, _frame):
             raise SystemExit(124)
         signal.signal(signal.SIGALRM, deadline)
-        signal.alarm(250 if DIAG_BUNDLE.get('operation') == 'backup_verify' else 160)
+        signal.alarm(250 if DIAG_BUNDLE.get('operation') in {'backup_verify', 'backup_verify_existing'} else 160)
         encrypted_main(DIAG_BUNDLE)
     except BaseException:
         print('DIAG_FAILED_NO_PLAINTEXT_OUTPUT')
