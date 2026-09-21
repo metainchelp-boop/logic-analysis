@@ -1,4 +1,4 @@
-"""One-shot read-only probe. Only encrypted output may leave stdout."""
+"""One-shot diagnosis or explicitly approved new backup. Encrypted stdout only."""
 import base64
 import collections
 import datetime as dt
@@ -125,7 +125,30 @@ def error_summary(text):
     return {'counts': dict(counts), 'recent': recent[-60:]}
 
 
+def backup_collect(bundle):
+    if bundle.get('approval') != 'approved-backup-only-20260921-op1':
+        raise ValueError('BACKUP_APPROVAL_REQUIRED')
+    report = {'observedAt': dt.datetime.now(KST).isoformat(),
+              'mode': 'APPROVED_NEW_BACKUP_AND_ISOLATED_RESTORE_ONLY'}
+    args = ['docker', 'exec', '-i', '-e', 'PYTHONDONTWRITEBYTECODE=1', 'logic-analysis',
+            'python3', '-', '--job-dir', '/app/data/backups/collector-validation-20260921-op1']
+    result = command(args, bundle['backupScript'].encode(), timeout=220)
+    # Do not surface stderr or arbitrary process output on parse failure.
+    value = json.loads(result.stdout)
+    if not isinstance(value, dict) or type(value.get('passed')) is not bool:
+        raise ValueError('INVALID_BACKUP_RESULT')
+    report['backup'] = value
+    report['commandExitCode'] = result.returncode
+    report['finishedAt'] = dt.datetime.now(KST).isoformat()
+    return report
+
+
 def collect(bundle):
+    operation = bundle.get('operation', 'read_only')
+    if operation == 'backup_verify':
+        return backup_collect(bundle)
+    if operation != 'read_only':
+        raise ValueError('INVALID_OPERATION')
     now = dt.datetime.now(KST)
     report = {'observedAt': now.isoformat(), 'mode': 'READ_ONLY_NO_APP_IMPORTS'}
     report['access'] = access_summary(['/var/log/nginx/access.log.1', '/var/log/nginx/access.log'], now)
@@ -188,7 +211,7 @@ if __name__ == '__main__':
         def deadline(_signal, _frame):
             raise SystemExit(124)
         signal.signal(signal.SIGALRM, deadline)
-        signal.alarm(160)
+        signal.alarm(250 if DIAG_BUNDLE.get('operation') == 'backup_verify' else 160)
         encrypted_main(DIAG_BUNDLE)
     except BaseException:
         print('DIAG_FAILED_NO_PLAINTEXT_OUTPUT')

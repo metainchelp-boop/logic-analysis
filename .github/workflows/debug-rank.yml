@@ -1,7 +1,21 @@
-name: Collector private read-only diagnosis
+name: Collector private diagnosis and approved backup verification
 
 on:
   workflow_dispatch:
+    inputs:
+      operation:
+        description: Read-only diagnosis or separately approved on-server backup verification
+        type: choice
+        default: read_only
+        required: true
+        options:
+          - read_only
+          - backup_verify
+      confirmation:
+        description: Exact approved operation identifier is required for backup verification
+        type: string
+        default: ''
+        required: false
 
 permissions:
   contents: read
@@ -20,18 +34,30 @@ jobs:
         with:
           persist-credentials: false
       - name: Bundle public diagnostic code and public encryption certificate
+        env:
+          DIAG_OPERATION: ${{ inputs.operation }}
+          DIAG_CONFIRMATION: ${{ inputs.confirmation }}
         run: |
           python3 - <<'PY'
           import base64, json, os, pathlib
           root = pathlib.Path('.github/diagnostics')
+          operation = os.environ.get('DIAG_OPERATION') or 'read_only'
+          if operation not in {'read_only', 'backup_verify'}:
+              raise SystemExit('INVALID_OPERATION')
+          if operation == 'backup_verify' and os.environ.get('DIAG_CONFIRMATION') != 'approved-backup-only-20260921-op1':
+              raise SystemExit('BACKUP_APPROVAL_REQUIRED')
           bundle = {'hostScript': (root/'collector_host_probe.py').read_text(),
                     'dbScript': (root/'collector_db_probe.py').read_text(),
+                    'operation': operation,
                     'certificate': (root/'recipient.pem').read_text()}
+          if operation == 'backup_verify':
+              bundle['approval'] = 'approved-backup-only-20260921-op1'
+              bundle['backupScript'] = (root/'collector_backup_probe.py').read_text()
           encoded = base64.b64encode(json.dumps(bundle).encode()).decode()
           with open(os.environ['GITHUB_ENV'], 'a') as f:
               f.write('COLLECTOR_DIAG_BUNDLE=' + encoded + '\n')
           PY
-      - name: Read-only server snapshot with ciphertext-only output
+      - name: Approved bounded server operation with ciphertext-only output
         uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
         env:
           COLLECTOR_DIAG_BUNDLE: ${{ env.COLLECTOR_DIAG_BUNDLE }}
@@ -40,7 +66,7 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           envs: COLLECTOR_DIAG_BUNDLE
-          command_timeout: 180s
+          command_timeout: 270s
           script: |
             python3 - <<'PY'
             import base64, json, os, sys
