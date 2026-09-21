@@ -5,6 +5,7 @@ No application modules are imported. Stored rows are not an upload event log:
 the application replaces a keyword/day row after a subsequent upload.
 """
 
+import ast
 import hashlib
 import json
 import os
@@ -196,7 +197,7 @@ def control_state(conn):
 
 def source_hashes():
     result = {}
-    for name in ("main.py", "collector.py", "auth.py", "split_rule.py"):
+    for name in ("main.py", "collector.py", "auth.py", "split_rule.py", "collect_cap.py"):
         try:
             path = Path("/app") / name
             if not path.exists():
@@ -212,12 +213,39 @@ def source_hashes():
     return result
 
 
+def cap_configuration():
+    # Parse the literal only. Never import application code or output env text.
+    try:
+        tree = ast.parse(Path('/app/collect_cap.py').read_text())
+        default = None
+        for item in tree.body:
+            if (isinstance(item, ast.Assign) and any(isinstance(target, ast.Name)
+                    and target.id == 'DEFAULT_TEST_CAP' for target in item.targets)
+                    and isinstance(item.value, ast.Constant) and type(item.value.value) is int):
+                default = item.value.value
+        raw = os.environ.get('COLLECT_TEST_CAP')
+        override = None
+        if raw is not None and str(raw).strip():
+            try:
+                candidate = int(str(raw).strip())
+                if candidate >= 0:
+                    override = candidate
+            except ValueError:
+                pass
+        effective = override if override is not None else default
+        return {'default_cap': default, 'override_present': raw is not None,
+                'valid_override': override, 'effective_cap_by_source_rule': effective,
+                'ondemand_enabled_by_source_rule': effective == 0}
+    except Exception as exc:
+        return {'error_type': type(exc).__name__}
+
+
 def main():
     result = {"probe_version": 1, "read_only": True,
               "row_count_semantics": "stored_rows_after_keyword_day_upsert",
               "environment_present": {name: bool(os.environ.get(name))
                                       for name in ("COLLECTOR_TOKEN", "API_KEY")},
-              "source_files": source_hashes(), "errors": []}
+              "source_files": source_hashes(), "collection_cap": cap_configuration(), "errors": []}
     conn = None
     try:
         db_path = Path(os.environ.get("DIAG_DB_PATH", "/app/data/logic_data.db")).absolute()
