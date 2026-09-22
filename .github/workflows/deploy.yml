@@ -154,6 +154,9 @@ jobs:
       - name: Collector human nav regression
         run: node collector-extension/tests/human_nav.test.js
 
+      - name: Collector heartbeat regression (v1.21.0 살아있음 신호)
+        run: node collector-extension/tests/heartbeat.test.js
+
       # 수집 멈춤 감시(2026-09-10) — 하루가 통째로 0건이 되어도 아무도 몰랐다.
       # 상한(5시간)·쿨다운(6시간)·문자 90바이트·기록 커밋을 지킨다.
       # ⚠️ 그중 「기록 커밋」이 핵심이다 — 안 되면 매시간 같은 문자가 도배된다.
@@ -225,6 +228,11 @@ jobs:
       #    탭 소속 규칙(서버 rank_axes.in_tab = 화면 _inTab)과 축 집계·sources 배선을 지킨다. 「300위 밖」 표기 유지.
       - name: 회귀 — 순위 추적 3탭 분리(출처 축)
         run: python backend/tests/test_rank_tabs.py
+
+      # 2026-09-22 수집기 자체 개발 1차 — 📡 살아있음 신호(heartbeat). 멈춰 있어도 5분마다 서버에 상태를 보낸다.
+      #    2번 노트북처럼 「조용히 안 도는」 기계를 서버가 가르는 장치 — 신호를 거르는 회귀를 막는다.
+      - name: 회귀 — 수집기 살아있음 신호(서버)
+        run: python backend/tests/test_collector_heartbeat.py
 
       - name: Build frontend bundle
         run: |

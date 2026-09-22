@@ -108,6 +108,12 @@ def init_collector_db():
                 conn.execute("ALTER TABLE collect_requests ADD COLUMN attempts INTEGER DEFAULT 0")
         except Exception as e:
             logger.warning(f"[collector] attempts 컬럼 가드 실패(무시): {e}")
+        # 📡 v1.21.0 — 기계별 살아있음 신호 표(멱등 · 실패해도 수집 표 생성은 이미 끝났다)
+        try:
+            from collector_heartbeat import ensure_table as _hb_ensure
+            _hb_ensure(conn)
+        except Exception as e:
+            logger.warning(f"[collector] heartbeat 표 보장 실패(무시): {e}")
         # 수집 메타 칸(2026-09-02 신고 #253) — CREATE TABLE IF NOT EXISTS 는 기존 표를
         # 못 고치므로 같은 방식의 멱등 가드로 가산한다. 광고 표식이 toProduct 변환에서
         # 사라지는 문제를 겪은 뒤, 걸러낸 광고 수 등 수집 조건을 함께 남기기로 했다.
@@ -454,6 +460,50 @@ def _revive_after_outage(conn) -> int:
         return 0
 
 
+class HeartbeatReport(BaseModel):
+    """📡 확장의 살아있음 신호(v1.21.0) — 5분마다, **멈춰 있어도** 온다. 전부 선택값."""
+    instanceId: Optional[str] = None
+    workerNo: Optional[int] = None
+    workerCount: Optional[int] = None
+    extVersion: Optional[str] = None
+    chromeVersion: Optional[str] = None
+    reason: Optional[str] = None
+    pausedByLocal: Optional[bool] = None
+    pausedByScreen: Optional[bool] = None
+    blockedUntil: Optional[float] = None
+    slowUntil: Optional[float] = None
+    running: Optional[bool] = None
+    lastFinishedAt: Optional[str] = None
+    dayDone: Optional[int] = None
+    dayTotal: Optional[int] = None
+    lastError: Optional[str] = None
+    alarms: Optional[List[str]] = None
+
+
+@router.post("/heartbeat")
+def report_heartbeat(req: HeartbeatReport, x_collector_token: str = Header(None)):
+    """확장이 자기 상태를 남긴다 (v1.21.0 · 대표 확정 2026-09-22 「수집기 자체 개발 → 버전 교체」).
+
+    ⚠️ 왜 — 2번 설정 노트북이 9/21 부터 요청 0건이었는데, 일시정지·캡차 쉼·크롬 종료·알람 소실이
+       서버에선 전부 「0건」으로 같아 **원인을 가를 수 없었다**. 이 신호는 멈춰 있어도 오므로
+       「신호 끊김」(확장이 안 돎)과 「신호는 오는데 수집 0」(이유가 상태에 있음)이 갈린다.
+    ⚠️ 기계 식별 = 확장이 만든 무작위 id. IP·개인정보는 받지 않는다. 실패해도 확장은 멈추지 않는다.
+    """
+    _auth(x_collector_token)
+    from collector_heartbeat import record as _hb_record
+    conn = sqlite3.connect(DB_PATH, timeout=10)
+    try:
+        row = _hb_record(conn, req.dict())
+    finally:
+        conn.close()
+    if row.get("skipped"):
+        return {"success": False, "detail": "instanceId 없음"}
+    logger.info(f"[collector] 📡 heartbeat {row['worker_no']}/{row['worker_count']} v{row['ext_version'] or '?'} "
+                f"{row['reason']} paused={row['paused_local']} screen={row['paused_screen']} "
+                f"blocked_until={row['blocked_until'] or '-'} running={row['running']}")
+    return {"success": True, "serverTime": row["last_seen"]}
+
+
 class BlockReport(BaseModel):
     """막힌 순간의 증거 — 확장이 보낸다. 전부 선택값이라 일부만 와도 받는다."""
     keyword: Optional[str] = None
@@ -674,11 +724,24 @@ def collect_health(current_user: dict = Depends(get_current_user)):
     except Exception:
         hours_since = None
 
+    # 📡 v1.21.0 — 기계별 살아있음 신호(additive). 실패하면 None(= 「못 쟀다」 · 빈 목록과 다르다).
+    machines_list = None
+    try:
+        from collector_heartbeat import machines as _hb_machines
+        _c2 = sqlite3.connect(DB_PATH, timeout=10)
+        try:
+            machines_list = _hb_machines(_c2)
+        finally:
+            _c2.close()
+    except Exception:
+        machines_list = None
+
     return {"success": True, "state": state, "today": today, "message": msg,
             "todayKeywords": (t["keywords"] if t else 0),
             "lastCollectedDate": (rows[0]["collected_date"] if rows else None),
             "lastAt": (rows[0]["last_at"] if rows else None),
-            "hoursSinceUpload": hours_since}
+            "hoursSinceUpload": hours_since,
+            "machines": machines_list}
 
 
 def _safe_int(v):

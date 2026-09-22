@@ -98,7 +98,10 @@ ok("최소 간격 40초를 지킨다", "SPREAD_MIN_MS" in bg and "40 * 1000" in 
 ok("느리게 가기 상태면 2배 유지", re.search(r"isSlow\(\)\)\s*\?\s*g \* 2", bg) is not None)
 
 mf = ext("collector-extension/manifest.json")
-ok("확장 버전이 1.20.0 이다", '"version": "1.20.0"' in mf)
+# v1.21.0(2026-09-22)부터는 「1.20.0 이상」으로 본다 — 버전이 오를 때마다 이 줄을 고치던 것이 게이트를 깨뜨렸다(#453·9/22 재발).
+import re as _re
+_mv = _re.search(r'"version":\s*"(\d+)\.(\d+)\.(\d+)"', mf)
+ok("확장 버전이 1.20.0 이상이다(일시정지 버튼 포함)", bool(_mv) and (int(_mv.group(1)), int(_mv.group(2))) >= (1, 20))
 
 pop = ext("collector-extension/popup.js")
 ok("팝업이 화면에서 꺼짐을 표시한다", "pausedByScreen" in pop and "화면에서 꺼" in pop)

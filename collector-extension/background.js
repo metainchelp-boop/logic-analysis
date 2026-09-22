@@ -1932,6 +1932,7 @@ async function runCollection(manual = false) {
 
   await setState({ running: true, startedAt: new Date().toISOString(), done: 0, failed: 0 });
   await log(manual ? '▶ 수동 수집 시작' : '▶ 자동 수집 시작');
+  sendHeartbeat(manual ? 'run-manual' : 'run');   // v1.21.0 — 회차 시작을 서버가 바로 본다(기다리지 않는다)
 
   const hourStart = Date.now();
   const hourTag = hourKey();
@@ -2137,6 +2138,97 @@ async function runOnDemand() {
 // 알람 2개 — 브라우저가 켜져 있어야 동작한다(맥북 절전 해제 필수)
 //  · daily   : 매시 확인, 03시 이후 오늘 수집이 없으면 실행(새벽에 꺼져 있었어도 켜지면 자동 만회)
 //  · ondemand: 1분 주기, 낮에 들어온 새 키워드 요청 즉시 수집
+/* ─────────────────────────────────────────────────────────────────────────
+ * 📡 살아있음 신호 (v1.21.0 · 대표 확정 2026-09-22 「수집기 자체 개발 → 버전 교체 → 재가동」)
+ *
+ * 왜 — 2번 설정 노트북이 9/21 07:29 부터 서버에 요청을 **한 건도** 안 보냈다. 일시정지·캡차 쉼·
+ *      크롬 종료·알람 소실 중 어느 것이든 서버에선 똑같이 「0건」이라 원인을 가를 수 없었다.
+ *      ⇒ 5분마다 **멈춰 있어도** 자기 상태를 보낸다. 서버가 「신호 끊김」(확장이 안 돎)과
+ *         「신호는 오는데 수집 0」(이유가 상태에 적혀 있음)을 가른다.
+ * ⚠️ 여기서 isLocalPaused()/getBlockedUntil() 로 **걸러서 안 보내면 안 된다** — 그 값을 알리는 것이 목적이다.
+ * ⚠️ 절대 예외를 밖으로 내지 않는다 — 신호가 수집을 넘어뜨리면 본말전도다.
+ * ⚠️ 개인정보 없음 — 기계 식별은 스스로 만든 무작위 id(instanceId). IP 는 보내지 않는다(서버도 저장 안 함).
+ * ─────────────────────────────────────────────────────────────────────── */
+const HEARTBEAT_ALARM = 'heartbeat';
+const HEARTBEAT_PERIOD_MIN = 5;
+const INSTANCE_KEY = 'instanceId';
+async function instanceId() {
+  try {
+    const o = await chrome.storage.local.get(INSTANCE_KEY);
+    if (o[INSTANCE_KEY]) return o[INSTANCE_KEY];
+    const id = (globalThis.crypto && crypto.randomUUID) ? crypto.randomUUID()
+      : `${Date.now().toString(16)}-${Math.random().toString(16).slice(2, 10)}`;
+    await chrome.storage.local.set({ [INSTANCE_KEY]: id });
+    return id;
+  } catch (e) { return ''; }
+}
+async function alarmNames() {
+  try { return (await chrome.alarms.getAll()).map((a) => `${a.name}:${a.periodInMinutes || 0}`); }
+  catch (e) { return []; }
+}
+async function sendHeartbeat(reason) {
+  const stamp = new Date().toISOString();
+  try {
+    const token = await getToken();
+    if (!token) {
+      await setState({ lastHeartbeatAt: stamp, lastHeartbeatOk: false, lastHeartbeatNote: '토큰 없음' });
+      return false;
+    }
+    const { state = {}, readFail = null, workerNo = CFG.workerNo, workerCount = CFG.workerCount } =
+      await chrome.storage.local.get(['state', 'readFail', 'workerNo', 'workerCount']);
+    let ver = ''; try { ver = chrome.runtime.getManifest().version; } catch (e) { /* 무시 */ }
+    let chromeVer = '';
+    try { const m = /Chrome\/([\d.]+)/.exec(navigator.userAgent || ''); chromeVer = m ? m[1] : ''; } catch (e) { /* 무시 */ }
+    const body = {
+      instanceId: await instanceId(),
+      workerNo: Number(workerNo) || 1,
+      workerCount: Number(workerCount) || 1,
+      extVersion: ver,
+      chromeVersion: chromeVer,
+      reason: String(reason || ''),
+      pausedByLocal: await isLocalPaused(),          // 멈춰 있어도 보낸다 — 그 사실을 알리려고
+      pausedByScreen: !!state.pausedByScreen,
+      blockedUntil: await getBlockedUntil(),
+      slowUntil: Number(state.slowUntil || 0),
+      running: !!running,
+      lastFinishedAt: state.finishedAt || '',
+      dayDone: Number(state.dayDone || 0),
+      dayTotal: Number(state.dayTotal || 0),
+      lastError: readFail ? `${readFail.at || ''} ${readFail.err || ''}`.slice(0, 200) : '',
+      alarms: await alarmNames(),
+    };
+    const res = await fetch(`${CFG.serverBase}/api/collector/heartbeat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Collector-Token': token },
+      body: JSON.stringify(body),
+    });
+    await setState({ lastHeartbeatAt: stamp, lastHeartbeatOk: !!res.ok,
+                     lastHeartbeatNote: res.ok ? '' : `HTTP ${res.status}` });
+    return !!res.ok;
+  } catch (e) {
+    try {
+      await setState({ lastHeartbeatAt: stamp, lastHeartbeatOk: false,
+                       lastHeartbeatNote: String((e && e.message) || e).slice(0, 80) });
+    } catch (e2) { /* 무시 */ }
+    return false;
+  }
+}
+/** 알람이 빠져 있으면 다시 건다 — 심장박동·사람 버튼에서 부른다. 다시 걸었으면 true. */
+async function ensureAlarms(why) {
+  try {
+    const d = await chrome.alarms.get('daily');
+    const o = await chrome.alarms.get('ondemand');
+    const h = await chrome.alarms.get(HEARTBEAT_ALARM);
+    const missing = [!d && 'daily', !o && 'ondemand', !h && 'heartbeat'].filter(Boolean);
+    if (missing.length || d.periodInMinutes !== 1) {
+      armAlarms();
+      await log(`⏰ 알람 재장전 (${why}) — ${missing.length ? '빠진 알람: ' + missing.join(', ') : '주기 틀림'}`);
+      return true;
+    }
+  } catch (e) { /* 무시 */ }
+  return false;
+}
+
 function armAlarms() {
   // 'daily' 는 이름만 남았고 실제로는 **매시간 자기 몫**을 수집하는 알람이다(24시간 분산).
   // when 을 1분 뒤로 둬 브라우저를 켜자마자 그 시간대 몫을 이어받는다.
@@ -2148,8 +2240,14 @@ function armAlarms() {
   chrome.alarms.create('daily', { periodInMinutes: 1, when: Date.now() + 60000 });
   // 30초 오프셋 — daily 와 만기가 매시 정각에 겹치지 않게(동시 발화 자체를 회피)
   chrome.alarms.create('ondemand', { periodInMinutes: 1, when: Date.now() + 30000 });
+  // 📡 v1.21.0 — 5분마다 살아있음 신호. 첫 신호는 15초 뒤(설치·재시작 직후 서버가 바로 본다).
+  chrome.alarms.create(HEARTBEAT_ALARM, { periodInMinutes: HEARTBEAT_PERIOD_MIN, when: Date.now() + 15000 });
 }
-chrome.runtime.onInstalled.addListener(() => { armAlarms(); log('설치됨 — 1분 주기로 자기 시간대 몫과 밀린 요청을 처리합니다.'); });
+chrome.runtime.onInstalled.addListener(() => {
+  armAlarms();
+  log('설치됨 — 1분 주기로 자기 시간대 몫과 밀린 요청을 처리합니다.');
+  sendHeartbeat('installed');
+});
 
 /** 워커가 깨어날 때마다 알람이 제대로 걸려 있는지만 확인한다(2026-08-28).
  *  ⚠️ 여기서 무조건 armAlarms() 를 부르면 안 된다 — when 이 매번 1분 뒤로 밀려
@@ -2159,13 +2257,14 @@ chrome.runtime.onInstalled.addListener(() => { armAlarms(); log('설치됨 — 1
 (async () => {
   try {
     const a = await chrome.alarms.get('daily');
-    if (!a || a.periodInMinutes !== 1) {
+    const h = await chrome.alarms.get(HEARTBEAT_ALARM);   // v1.21.0 — 새 버전으로 폴더만 바꿔도 걸리게
+    if (!a || a.periodInMinutes !== 1 || !h) {
       armAlarms();
-      await log('⏰ 알람 재장전 — 1분 주기로 맞췄습니다.');
+      await log('⏰ 알람 재장전 — 1분 주기(수집) + 5분 주기(살아있음 신호)로 맞췄습니다.');
     }
   } catch (e) { /* 무시 */ }
 })();
-chrome.runtime.onStartup.addListener(() => { armAlarms(); log('브라우저 시작 — 알람 재장전.'); });
+chrome.runtime.onStartup.addListener(() => { armAlarms(); log('브라우저 시작 — 알람 재장전.'); sendHeartbeat('startup'); });
 
 /** 수집 회차 날짜 — 서버 _effective_date 와 동일 규칙.
  *  21시 이후 수집은 '다음 날 04:30 배치'용이므로 다음 날짜 회차로 센다. */
@@ -2185,6 +2284,7 @@ function hourKey() {
 }
 
 chrome.alarms.onAlarm.addListener(async (a) => {
+  if (a.name === HEARTBEAT_ALARM) { await ensureAlarms('심장박동'); sendHeartbeat('alarm'); return; }
   if (a.name === 'ondemand') { runOnDemand(); return; }
   if (a.name !== 'daily') return;
   // 24시간 분산 — 매시간 자기 시간대 몫만 수집한다(시각 제한 없음).
@@ -2208,6 +2308,15 @@ chrome.alarms.onAlarm.addListener(async (a) => {
 
 chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
   if (msg?.cmd === 'run') { runCollection(true); sendResponse({ ok: true }); }
+  // 📡 v1.21.0 — 사람이 팝업에서 「지금 상태 보내기」. 알람이 빠져 있으면 함께 다시 건다.
+  if (msg?.cmd === 'heartbeat') {
+    (async () => {
+      await ensureAlarms('사람이 누름');
+      const ok = await sendHeartbeat('manual');
+      await log(ok ? '📡 이 기계의 상태를 서버에 보냈습니다.' : '📡 서버 보고 실패 — 상태 칸의 「서버 보고」 줄을 확인하세요.');
+    })();
+    sendResponse({ ok: true });
+  }
   // ⏸ 사람이 팝업에서 누른 '일시정지 / 재개'(v1.20.0) — 이 기계에서만 적용된다.
   //    화면(서버) 스위치와 별개다. 자동으로 풀리지 않으므로 다시 누를 때까지 멈춰 있다.
   if (msg?.cmd === 'setLocalPause') {

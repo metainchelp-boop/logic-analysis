@@ -79,6 +79,22 @@ async function render() {
   // ⭐ 오늘 전체 진척 (2026-08-28 대표 요청 「총 개수 / 추적 완료 / 추적 실패」).
   //    ⚠️ 아래 '이번 시간대' 숫자와 다른 축이다 — 그건 매시간 0 으로 돌아간다.
   //       여기 값은 서버가 알려 준 '오늘 재야 할 전체'와 '오늘까지 끝낸 수'다.
+  // 📡 v1.21.0 — 서버 보고(살아있음 신호) + 알람 점검. 2번 노트북처럼 「조용히 안 도는」 기계를
+  //    팝업만 열어도 알 수 있게 한다. 알람이 빠졌으면 빨갛게 — 「📡 지금 상태 보내기」가 다시 건다.
+  const hbAt = state.lastHeartbeatAt ? new Date(state.lastHeartbeatAt) : null;
+  const hbLine = hbAt
+    ? `📡 서버 보고 ${hbAt.toLocaleTimeString('ko-KR')} ` +
+      (state.lastHeartbeatOk ? '<span class="b ok">성공</span>' : '<span class="b bad">실패</span>') +
+      (state.lastHeartbeatNote ? ` · ${state.lastHeartbeatNote}` : '')
+    : '📡 서버 보고 — 아직 없음 (설치 후 15초 · 이후 5분마다)';
+  let alarmLine = '';
+  try {
+    const names = (await chrome.alarms.getAll()).map((a) => a.name);
+    const miss = ['daily', 'ondemand', 'heartbeat'].filter((n) => names.indexOf(n) === -1);
+    alarmLine = miss.length
+      ? `<span class="b bad">⚠ 알람 빠짐: ${miss.join(', ')}</span> — 「📡 지금 상태 보내기」를 누르면 다시 겁니다`
+      : '<span class="dim">⏰ 알람 3종 정상(수집 1분 · 밀린 요청 1분 · 신호 5분)</span>';
+  } catch (e) { alarmLine = '<span class="dim">⏰ 알람 상태를 읽지 못함</span>'; }
   const dTot = Number(state.dayTotal || 0);
   const dDone = Number(state.dayDone || 0);
   const dFail = Number(state.dayFailed || 0);
@@ -102,6 +118,7 @@ async function render() {
       ? '<span class="b" style="color:#b45309">▸ 안전 속도로 돌리는 중</span>' +
         `<span style="font-size:11px"> — ${new Date(slowUntil).toLocaleString('ko-KR')}까지 절반 속도</span><br>`
       : '') +
+    `<div class="sec">${hbLine}<br>${alarmLine}</div>` +
     dayBlock +
     `<div class="sec">이번 시간대 · 대상 <span class="b">${state.target ?? '-'}</span>개 · ` +
     `완료 <span class="b ok">${state.done ?? 0}</span> · ` +
@@ -188,6 +205,9 @@ $('localPause').onclick = async () => {
   const on = state.pausedByLocal === true;   // 지금 멈춰 있으면 재개, 아니면 멈춤
   chrome.runtime.sendMessage({ cmd: 'setLocalPause', on: !on }, () => setTimeout(render, 300));
 };
+// 📡 v1.21.0 — 지금 상태를 서버에 보낸다(+ 빠진 알람 재장전). 네이버 요청 0건.
+$('heartbeat').onclick = () =>
+  chrome.runtime.sendMessage({ cmd: 'heartbeat' }, () => setTimeout(render, 900));
 $('refresh').onclick = render;
 render();
 setInterval(render, 3000);
