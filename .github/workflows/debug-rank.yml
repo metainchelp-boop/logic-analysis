@@ -205,9 +205,13 @@ jobs:
                 for r in ws:
                     print(f"  기계 {r['w']}  {r['state']}  {r['worker_no']}/{r['worker_count']}  v{r['version']}  마지막 {(now-int(r['last_seen'] or 0))//60}분 전  쉼 {max(0,int(r['paused_until'] or 0)-now)//60}분  사유 {r['reason'] or '-'}")
                 if not ws: print("  기계: 0대(아직 v1.24.0 토글을 켠 기계 없음)")
-            obs = q("SELECT status, COUNT(*) n FROM collector_observations WHERE substr(received_at,1,10)=date('now','localtime') GROUP BY status")
+            obs = q("SELECT status, kind, reason, COUNT(*) n FROM collector_observations WHERE substr(received_at,1,10)=date('now','localtime') GROUP BY status, kind, reason ORDER BY n DESC")
             if obs is None: print("  관측 원장: (표 없음 — 못 쟀다)")
-            else: print("  오늘 관측(상태·건수):", ", ".join(f"{r['status']}={r['n']}" for r in obs) or "(0건 — v1.23.0 이상 확장만 봉투를 보낸다)")
+            else: print("  오늘 관측(상태·갈래·사유·건수):", " | ".join(f"{r['status']}/{r['kind']}/{r['reason']}={r['n']}" for r in obs) or "(0건 — v1.23.0 이상 확장만 봉투를 보낸다)")
+            last = q("SELECT substr(received_at,12,8) t, status, kind, reason, json_extract(meta_json,'$.collectorVersion') v FROM collector_observations ORDER BY received_at DESC LIMIT 5")
+            if last: print("  최근 관측 5건(시각·상태·갈래·사유·확장 버전):", " | ".join(f"{r['t']} {r['status']}/{r['kind']}/{r['reason']} v{r['v']}" for r in last))
+            hb = q("SELECT worker_no, ext_version, last_seen, seen_count, reason, upload_summary_json FROM collector_heartbeat ORDER BY worker_no")
+            if hb is not None: print("  heartbeat 원행:", " | ".join(f"{r['worker_no']} v{r['ext_version']} {r['last_seen']} x{r['seen_count']} {r['reason']} outbox={r['upload_summary_json']}" for r in hb))
             PY
             echo
             echo "== 최근 오류 (앱 로그 tail 200 · 마스킹) =="
