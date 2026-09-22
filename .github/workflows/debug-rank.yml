@@ -34,6 +34,10 @@ on:
         description: '상품 주소 모양 실측 — off(기본) / on. 어느 호스트(스마트스토어·브랜드스토어·카탈로그)를 쓰는지, 같은 슬러그가 두 호스트에 걸쳐 있는지(읽기 전용·업체명 미출력).'
         required: false
         default: 'off'
+      match_ab:
+        description: '순위 매칭 A/B(정확 식별 vs 종전 폴백 · B5) — off(기본) / on. 배포된 매처로 최근 14일 수집분에 추적 대상 전부를 대조해 「정확 식별만」·「지금 규칙(정확+폴백)」·「종전 규칙만」 셋의 매칭 수를 센다(읽기 전용 · 업체명·키워드 미출력). ⚠️ #256 배포 뒤에만 의미 있다(그 전엔 정확 식별 모듈이 없다).'
+        required: false
+        default: 'off'
       live_check:
         description: '3탭(#253) 라이브 확인 — off(기본) / on. 서버에 올라간 프론트 번들의 마커 · rank_axes.py 존재 · 오늘 /api/collector 접속처(해시 앞 6자·건수·마지막 시각 — IP 원문 미출력).'
         required: false
@@ -51,6 +55,83 @@ jobs:
   diagnose:
     runs-on: ubuntu-latest
     steps:
+      - name: 순위 매칭 A/B — 정확 식별 vs 폴백 (match_ab=on · 읽기 전용)
+        if: ${{ github.event.inputs.match_ab == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          command_timeout: 240s
+          script: |
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sys, json, sqlite3, collections
+            sys.path.insert(0, "/app")
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            try:
+                from product_identity import canonical_product_id as cpid, naver_product_identity as npi
+                from naver_crawler import find_product_rank_from_cache as ours, extract_product_id_from_url as xpid, extract_store_name_from_url as xstore
+                from collector import _normalize_collected
+            except Exception as e:
+                print("(배포 전 — 정확 식별 모듈 없음):", e); raise SystemExit(0)
+            def strict(url, prods, mid=""):
+                ident = npi(url); m = cpid(mid) if mid else None
+                if ident and ident[0] == "nvMid":
+                    if m and m != ident[1]: ident = None
+                    else: m = ident[1]
+                c = [p for p in prods if isinstance(p, dict) and type(p.get("rank")) is int and p["rank"] > 0]
+                hits = [p["rank"] for p in c if m and cpid(p.get("product_id")) == m]
+                if not hits and ident:
+                    for p in c:
+                        raw = p.get("product_id"); has = raw is not None and not (isinstance(raw, str) and not raw.strip())
+                        if has and (m or not cpid(raw)): continue
+                        if npi(p.get("product_url")) == ident: hits.append(p["rank"])
+                return min(hits) if hits else None
+            def legacy(url, prods, mid=""):
+                tm = str(mid or "").strip(); tp = xpid(url); ts = xstore(url)
+                for p in prods:
+                    if tm and p.get("product_id") and tm == str(p["product_id"]): return p["rank"]
+                    if tp and p.get("product_id") and tp == p["product_id"]: return p["rank"]
+                    if tp and p.get("product_url") and tp in p["product_url"]: return p["rank"]
+                    if ts and p.get("store_name") and ts.lower() == p["store_name"].lower() and tp and tp in str(p.get("product_url","")): return p["rank"]
+                return None
+            # 대상 = 살아 있는 추적 상품(키워드별) + 자격 업체 대표 키워드(store url)
+            targets = []
+            for r in conn.execute("SELECT p.product_url, COALESCE(p.nv_mid,'') nv, k.keyword FROM tracked_products p JOIN tracked_keywords k ON k.product_id=p.id WHERE COALESCE(p.disabled_at,'')=''"):
+                targets.append(("product", r["keyword"], r["product_url"], r["nv"]))
+            try:
+                from tracking_eligibility import eligible_clients_sql
+                for r in conn.execute(eligible_clients_sql("id, naver_store_url, main_keywords")):
+                    u = (r["naver_store_url"] or "").strip()
+                    if not u: continue
+                    for k in (r["main_keywords"] or "").split(","):
+                        if k.strip(): targets.append(("client", k.strip(), u, ""))
+            except Exception as e:
+                print("(업체 대상 조회 실패):", e)
+            serp = {}
+            for r in conn.execute("SELECT keyword, products_json FROM collected_serp WHERE collected_date >= date('now','localtime','-14 day') ORDER BY collected_date"):
+                serp[r["keyword"]] = r["products_json"]   # 키워드별 최신 날짜가 남는다
+            cnt = collections.Counter(); axis = collections.Counter(); shapes = collections.Counter()
+            for ax, kw, url, nv in targets:
+                raw = serp.get(kw)
+                if not raw: cnt["수집분 없음"] += 1; continue
+                try: prods = [_normalize_collected(p) for p in json.loads(raw)]
+                except Exception: cnt["수집분 파싱 실패"] += 1; continue
+                axis[ax] += 1
+                a = strict(url, prods, nv); b = ours(kw, url, prods, nv_mid=nv)[0]; c = legacy(url, prods, nv)
+                key = ("정확" if a is not None else "-") + "/" + ("지금" if b is not None else "-") + "/" + ("종전" if c is not None else "-")
+                cnt[key] += 1
+                if b is not None and a is None:
+                    # 정확 식별이 놓치고 폴백만 잡은 것 — 왜? 등록 주소 vs 수집 링크 모양
+                    reg = npi(url); shapes[(reg[0] if reg else "등록주소:식별불가")] += 1
+            print("[대상] 상품축", axis["product"], "· 업체축", axis["client"], "· 수집분 없음", cnt.pop("수집분 없음", 0), "· 파싱 실패", cnt.pop("수집분 파싱 실패", 0))
+            print("[매칭 수 — 정확/지금/종전]  (지금 = 정확 식별 + 종전 폴백 = 배포된 규칙)")
+            for k, v in sorted(cnt.items(), key=lambda x: -x[1]): print(f"  {k:>14}  {v}")
+            print("[정확 식별이 놓치고 폴백만 잡은 것 — 등록 주소 유형]", dict(shapes))
+            print("⇒ 「-/지금/종전」 이 크면 폴백을 지울 수 없다(B5 유지). 「정확/…」 이 종전과 같으면 폴백 삭제 가능.")
+            PY
       - name: 3탭 라이브 확인 (live_check=on · 읽기 전용)
         if: ${{ github.event.inputs.live_check == 'on' }}
         uses: appleboy/ssh-action@v1.0.3
