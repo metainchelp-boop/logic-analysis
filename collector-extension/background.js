@@ -1606,7 +1606,7 @@ async function fetchPage(keyword, pagingIndex, prevIds) {
                         note: '주소 이동·라우터 이동 안 함(v1.13.1) — 이 키워드는 여기까지만 담음' });
         await tapReport(tabId, keyword, pagingIndex, 'NO_PAGER');
       }
-      return { total: 0, list: [] };   // 이 키워드는 여기까지
+      return { total: 0, list: [], stopReason: 'NO_PAGER' };   // 이 키워드는 여기까지(부분 수집)
     }
   }
 
@@ -1652,7 +1652,8 @@ async function fetchPage(keyword, pagingIndex, prevIds) {
         continue;
       }
       if (pagingIndex > 1) _navMode.src[out.src || '?'] = (_navMode.src[out.src || '?'] || 0) + 1;
-      return { total: out.total || 0, list: out.list || [] };
+      // 📒 관측 봉투용 근거(코덱스 1.22.0 이식) — 어느 원천(tap·router·nextdata)에서 읽었고 그때 주소가 무엇이었나
+      return { total: out.total || 0, list: out.list || [], src: out.src || '', href: out.href || '' };
     }
     // 차단 '문구'를 실제로 본 경우에만 차단으로 단정한다.
     // ⚠️ 이때도 무엇을 봤는지 반드시 남긴다 — 종전엔 차단 분기가 증거를 안 남겨
@@ -1693,7 +1694,7 @@ async function fetchPage(keyword, pagingIndex, prevIds) {
                       note: '주소 이동·라우터 이동 안 함 — 이 키워드는 여기까지만 담음' });
       await tapReport(tabId, keyword, pagingIndex, 'STALE');
     }
-    return { total: 0, list: [] };
+    return { total: 0, list: [], stopReason: 'STALE_PAGE' };   // 부분 수집 — 이 키워드는 여기까지
   }
 
   // 여기까지 왔으면 '차단'이 아니라 '판독 실패'다 — 6시간 정지시키지 않고 다음 회차에 재시도한다.
@@ -1746,7 +1747,21 @@ function allTargetsFound(products, want) {
   return true;
 }
 
+const EVIDENCE_SOURCES = new Set(['tap', 'router', 'nextdata']);
 async function collectKeyword(keyword) {
+  // 📒 관측 봉투(코덱스 1.22.0 이식 · 2026-09-22) — 이 키워드를 **어디까지 어떻게** 봤는지 서버가 판정할 근거.
+  //   status: complete(300위·끝까지 봄) · target_complete(목표 다 찾아 조기 종료) · partial(중간에 막힘·판독 실패) · failed(0건)
+  //   ⚠️ 종전엔 중간에 막히면 담은 것을 통째로 버렸다 — 이제 담은 만큼은 partial 로 올린다(서버는 찾은 순위만 적는다).
+  const observation = {
+    schemaVersion: 1,
+    observationId: (globalThis.crypto && crypto.randomUUID) ? crypto.randomUUID() : '',
+    workerId: await instanceId(), keyword,
+    startedAt: new Date().toISOString(), finishedAt: '',
+    status: 'partial', stopReason: 'PAGE_CAP',
+    requestedDepth: CFG.maxRank, pagesRead: 0, organicCount: 0, coveredThroughRank: 0,
+    targetIds: targetsFor(keyword) || [], pageEvidence: [],
+  };
+  let blocked = '';
   _navMode = { url: 0, click: 0, fallback: 0, stale: 0, reported: _navMode.reported, src: {},
                how: { trusted: 0, synth: 0 },
                entry: { portal: 0, shopbox: 0, url: 0 } };   // 키워드마다 새로 센다
@@ -1771,10 +1786,16 @@ async function collectKeyword(keyword) {
   let rawCount = 0;            // 걸러내기 전 원본 개수 — 사후 재구성용(신고 #253 교훈)
   const pages = Math.min(CFG.pagesPerKeyword, CFG.maxPages);
   let prevIds = [];   // 이전 장의 광고 제외 상품 ID — 다음 장이 실제로 바뀌었는지 집합으로 본다(v1.11.5)
+  try {
   for (let i = 1; i <= pages; i++) {
-    const { total: t, list } = await fetchPage(keyword, i, prevIds);
+    const { total: t, list, src, href, stopReason } = await fetchPage(keyword, i, prevIds);
     if (i === 1) total = t;
-    if (!list.length) break;
+    if (stopReason) { observation.stopReason = stopReason; break; }     // NO_PAGER · STALE_PAGE — 여기까지가 부분 수집
+    if (!list.length) { observation.stopReason = 'UNPROVEN_EMPTY'; break; }
+    observation.pageEvidence.push({ page: i, keyword, verified: true,
+                                    source: EVIDENCE_SOURCES.has(src) ? src : 'nextdata',
+                                    href: String(href || '').slice(0, 300) });
+    observation.pagesRead++;
     rawCount += list.length;
     prevIds = organicIds(list);
     // ⚠️ 첫 키워드 첫 상품의 '원본 JSON'을 저장해 둔다. toProduct 의 필드명 가정
@@ -1783,21 +1804,39 @@ async function collectKeyword(keyword) {
     if (i === 1 && list[0]) {
       chrome.storage.local.set({ rawSample: { keyword, at: new Date().toISOString(), item: list[0] } });
     }
+    const _before = st.products.length;
     RR.takeOrganic(list, st);
+    // 담은 상품에 「몇 페이지에서」를 찍는다(부분 수집 증거) + nvMid 를 별도 칸으로도 싣는다(서버 정확 식별용).
+    for (let k = _before; k < st.products.length; k++) {
+      st.products[k].sourcePage = i;
+      if (!st.products[k].nvMid && st.products[k].productId) st.products[k].nvMid = st.products[k].productId;
+    }
     // 🎯 조기 종료 — 이 페이지까지 담은 것 안에 목표가 전부 들어왔으면 여기서 끝낸다.
     //    ⚠️ 이 판정은 **페이지를 다 담은 뒤**에 한다(위 takeOrganic 다음). 담기 전에
     //       끊으면 그 페이지가 반만 들어가 순위·경쟁사가 어긋난다.
     const _want = targetsFor(keyword);
     if (_want && allTargetsFound(st.products, _want)) {
       st.stoppedEarly = { page: i, targets: _want.length, kept: st.products.length };
+      // 목표는 다 찾았지만 300위까지 본 것은 아니다 — 서버는 수집분은 저장하되 **찾은 순위만** 적는다.
+      observation.status = 'target_complete'; observation.stopReason = 'TARGETS_FOUND';
       break;
     }
-    if (st.products.length >= CFG.maxRank) break;   // 목표 깊이 도달
+    if (st.products.length >= CFG.maxRank) { observation.status = 'complete'; observation.stopReason = 'DEPTH_REACHED'; break; }   // 목표 깊이 도달
     // 마지막 페이지 판정 — 설정값(80)이 아니라 화면 최소 페이지 크기(40) 미만일 때만.
     // 페이지가 pagingSize=80 을 무시하고 40씩 그려도 여기서 끊기지 않고 다음 장으로 간다.
-    if (list.length < 40) break;
+    if (list.length < 40) { observation.status = 'complete'; observation.stopReason = 'SHORT_PAGE'; break; }   // 결과가 여기서 끝 = 끝까지 봤다
+    if (i === pages) { observation.status = 'complete'; observation.stopReason = 'PAGE_CAP'; }
     if (i < pages) await sleep(jitter());
   }
+  } catch (e) {
+    // 막힘·판독 실패로 중간에 끊겼다 — 담은 것은 버리지 않고 partial 로 돌려준다. 막힘 처리는 호출자가 한다.
+    if (String((e && e.message) || '').startsWith('BLOCKED:')) { blocked = e.message; observation.stopReason = 'BLOCKED'; }
+    else { observation.stopReason = 'READ_FAILED'; observation.error = String((e && e.message) || e).slice(0, 120); }
+  }
+  if (!st.products.length) observation.status = 'failed';
+  observation.organicCount = st.products.length;
+  observation.coveredThroughRank = st.products.length;
+  observation.finishedAt = new Date().toISOString();
   // 지문은 많아야 열댓 종류다 — 상위 20개만(키워드 하나 meta 가 커지지 않게).
   const adFp = Object.entries(st.fp || {}).sort((a, b) => b[1] - a[1]).slice(0, 20)
     .reduce((o, [k, v]) => { o[k] = v; return o; }, {});
@@ -1809,7 +1848,8 @@ async function collectKeyword(keyword) {
            dupSkipped: st.dupSkipped, adHintMissed: st.adHintMissed, rawCount, adFp,
            // 조기 종료했으면 그 사실을 서버가 알아야 한다 — 「깊이를 덜 판 것」과
            // 「목표를 찾아 멈춘 것」은 완전히 다른 일이고, 섞이면 절감을 못 잰다.
-           stoppedEarly: st.stoppedEarly || null };
+           stoppedEarly: st.stoppedEarly || null,
+           observation, blocked };
 }
 
 /* 🔴🔴 v1.17.8 — **세 번째 그물: 직전 회차와 결과가 똑같으면 올리지 않는다.**
@@ -1865,6 +1905,8 @@ async function uploadKeyword(token, keyword, payload) {
         dupSkipped: payload.dupSkipped || 0, adHintMissed: payload.adHintMissed || 0,
         // v1.10.3 — 광고 필드 지문 집계(제목·가게명 없음). 과필터 원인을 서버 데이터로 가른다.
         adFp: payload.adFp || {},
+        // 📒 관측 봉투(코덱스 1.22.0 이식) — 서버가 complete/target_complete/partial 을 갈라 반영한다. 구서버는 무시.
+        observation: payload.observation || undefined,
       },
     }),
   });
@@ -1982,7 +2024,7 @@ async function runCollection(manual = false) {
       dayTotal: total, dayDone: already, dayKey: cycleDate(),
     });
 
-    let done = 0, failed = 0, streak = 0;
+    let done = 0, failed = 0, streak = 0, partial = 0;
     // ⚠️ 이번 회차에서 캡차를 만났는가 — 아래 clearBlocked 가 방금 건 6시간 쉼을
     //    스스로 취소하지 않게 하는 표식이다(2026-09-10 수정).
     let blockedThisRound = false;
@@ -1994,16 +2036,30 @@ async function runCollection(manual = false) {
       }
       try {
         const payload = await collectKeyword(kw);
-        if (!payload.products.length) throw new Error('상품 0건');
+        if (!payload.products.length) {
+          if (payload.blocked) throw new Error(payload.blocked);          // 담은 것 없이 막힘 — 종전과 같이 6시간 쉼
+          throw new Error('상품 0건' + (payload.observation && payload.observation.error ? ' — ' + payload.observation.error : ''));
+        }
         if (payload.stoppedEarly) {
           const se = payload.stoppedEarly;
           await log(`🎯 [${kw}] 찾을 상품 ${se.targets}개를 ${se.page}페이지에서 다 찾아 멈춤`
                     + ` (담긴 ${se.kept}개 · ${CFG.pagesPerKeyword - se.page}장 아낌)`);
         }
         await uploadKeyword(token, kw, payload);
-        done++; streak = 0;
+        if (payload.blocked) {
+          // 막히기 전까지 담은 것은 올렸다(서버는 찾은 순위만 적는다) — 막힘 처리는 아래 catch 가 한다.
+          await log(`◐ [${kw}] 막히기 전까지 ${payload.products.length}개는 올림(찾은 순위만 기록)`);
+          throw new Error(payload.blocked);
+        }
+        if (payload.observation && payload.observation.status === 'partial') {
+          partial++;
+          await log(`◐ [${kw}] 부분 수집 ${payload.products.length}개 · ${payload.observation.stopReason} — 찾은 순위만 기록(300위 밖 판정 없음)`);
+        } else {
+          done++;
+        }
+        streak = 0;
         // 오늘 완료 수도 같이 올린다 — 다음 시간대에 서버 값으로 다시 맞춰진다.
-        await setState({ done, failed, current: kw, dayDone: already + done });
+        await setState({ done, failed, partial, current: kw, dayDone: already + done });
         if (done % 25 === 0) {
           await log(`… ${done}/${keywords.length} 진행 중 (직전 [${kw}] 오가닉 ${payload.products.length}개 · 광고 ${payload.adSkipped}개 제외)`);
         }
@@ -2103,11 +2159,17 @@ async function runOnDemand() {
     for (const kw of kws) {
       try {
         const payload = await collectKeyword(kw);
-        if (!payload.products.length) throw new Error('상품 0건');
+        if (!payload.products.length) {
+          if (payload.blocked) throw new Error(payload.blocked);
+          throw new Error('상품 0건');
+        }
         await uploadKeyword(token, kw, payload);
+        if (payload.blocked) throw new Error(payload.blocked);          // 담은 것은 올렸다 — 막힘 처리는 catch 가
         ok++; streak = 0;
         if (ok === 1 && !blockedThisRound) await clearBlocked();   // 값을 실제로 받았다 = 차단 풀림
-        await log(`  ✅ [${kw}] 온디맨드 완료 (오가닉 ${payload.products.length}개 · 광고 ${payload.adSkipped}개 제외)`);
+        await log((payload.observation && payload.observation.status === 'partial')
+          ? `  ◐ [${kw}] 온디맨드 부분 수집 ${payload.products.length}개 · ${payload.observation.stopReason}(찾은 순위만 기록)`
+          : `  ✅ [${kw}] 온디맨드 완료 (오가닉 ${payload.products.length}개 · 광고 ${payload.adSkipped}개 제외)`);
       } catch (e) {
         if (String(e.message || '').startsWith('BLOCKED:')) {
           await markBlocked(e.message.slice(8) || '온디맨드 중 감지');

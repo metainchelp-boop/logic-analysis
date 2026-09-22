@@ -184,11 +184,17 @@ def _save_client_rank_daily(conn, client_id: int, keyword: str, product_url: str
 
 
 def record_ranks_for_keyword(keyword: str, prods: List[Dict[str, Any]],
-                             check_type: str = "scheduled") -> Dict[str, int]:
+                             check_type: str = "scheduled",
+                             positive_only: bool = False) -> Dict[str, int]:
     """수집분 1건으로 그 키워드의 순위를 즉시 기록한다.
 
     prods = `collector._normalize_collected` 를 거친 목록(배치가 쓰던 것과 같은 형태).
     실패해도 예외를 밖으로 내지 않는다 — 업로드 자체는 성공시켜야 수집이 이어진다.
+
+    positive_only (코덱스 1.22.0 「부분 관측은 양성만」 이식 · 2026-09-22):
+      True 면 **찾은 순위만** 적고 「못 찾음(300위 밖)」은 적지 않는다.
+      부분 수집(중간에 막힘 · 목표를 찾고 조기 종료)은 300위까지 본 것이 아니라서
+      「없다」를 증명하지 못한다 — 그 상태에서 300위 밖을 적으면 거짓이 광고주 보고서까지 간다.
     """
     kw = (keyword or "").strip()
     if not kw or not prods:
@@ -209,6 +215,8 @@ def record_ranks_for_keyword(keyword: str, prods: List[Dict[str, Any]],
             try:
                 rank, page, _competitors = find_product_rank_from_cache(
                     kw, t["product_url"], prods, nv_mid=t.get("nv_mid") or "")
+                if positive_only and rank is None:
+                    continue   # 부분 수집 — 「없다」는 못 적는다
                 save_ranking_daily(
                     product_id=t["product_id"], keyword_id=t["keyword_id"], keyword=kw,
                     rank_position=rank, page_number=page, check_type=check_type)
@@ -227,6 +235,8 @@ def record_ranks_for_keyword(keyword: str, prods: List[Dict[str, Any]],
         for c in _client_targets(conn, kw):
             try:
                 rank, page, _ = find_product_rank_from_cache(kw, c["naver_store_url"], prods)
+                if positive_only and rank is None:
+                    continue   # 부분 수집 — 「없다」는 못 적는다
                 _save_client_rank_daily(conn, c["id"], kw, c["naver_store_url"],
                                         rank, page, check_type)
                 n_client += 1

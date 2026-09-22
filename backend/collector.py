@@ -114,6 +114,15 @@ def init_collector_db():
             _hb_ensure(conn)
         except Exception as e:
             logger.warning(f"[collector] heartbeat 표 보장 실패(무시): {e}")
+        # 📒 관측 원장(코덱스 1.22.0 이식 · 2026-09-22) — 멱등 + 30일 보관정책(부팅 때 한 번 정리)
+        try:
+            from collector_observation import init_observation_db as _obs_init, purge_old as _obs_purge
+            _obs_init(conn)
+            _n = _obs_purge(conn)
+            if _n:
+                logger.info(f"[collector] 관측 원장 보관정책 — {_n}건 정리(30일)")
+        except Exception as e:
+            logger.warning(f"[collector] 관측 원장 표 보장 실패(무시): {e}")
         # 수집 메타 칸(2026-09-02 신고 #253) — CREATE TABLE IF NOT EXISTS 는 기존 표를
         # 못 고치므로 같은 방식의 멱등 가드로 가산한다. 광고 표식이 toProduct 변환에서
         # 사라지는 문제를 겪은 뒤, 걸러낸 광고 수 등 수집 조건을 함께 남기기로 했다.
@@ -353,6 +362,13 @@ def get_collect_keywords(hour: int = None, worker: int = 0, workers: int = 1,
         done = {r["keyword"] for r in conn.execute(
             "SELECT keyword FROM collected_serp WHERE collected_date = ?", (today,)).fetchall()}
         remaining = {k: p for k, p in uni.items() if k not in done}
+        # 코덱스 1.22.0 이식 — 오늘 시도했지만 완료 못 한 키워드(막힘·부분)는 **아직 안 해 본 키워드 뒤로** 돌린다.
+        # 조기 종료·막힘이 같은 키워드만 계속 두드리며 큐를 굶기는 것을 막는다. 실패하면 빈 dict = 종전 순서.
+        try:
+            from collector_observation import attempted_map as _attempted_map
+            attempted = _attempted_map(conn, today)
+        except Exception:
+            attempted = {}
 
         # ── 기계별로 나눠 맡기 (2026-08-27) ──
         # ⚠️ '오늘 할 일'을 세는 total 은 나누기 **전** 값을 쓴다 —
@@ -362,7 +378,7 @@ def get_collect_keywords(hour: int = None, worker: int = 0, workers: int = 1,
             remaining = {k: p for k, p in remaining.items() if _split_ok(k, w, wc)}
 
         if hour is None:
-            todo = _apply_cap(sorted(remaining)[:MAX_KEYWORDS], _test_cap())
+            todo = _apply_cap(sorted(remaining, key=lambda k: (attempted.get(k, ""), k))[:MAX_KEYWORDS], _test_cap())
             return {"success": True, "date": today, "mode": "all",
                     "total": len(uni), "done": len(done), "todo": len(todo),
                     "test_cap": _test_cap(), "keywords": todo,
@@ -377,8 +393,8 @@ def get_collect_keywords(hour: int = None, worker: int = 0, workers: int = 1,
             elif s < h:
                 overdue.append((s, k))   # 오늘 지나간 슬롯인데 아직 못 한 것
 
-        now_slot.sort()
-        overdue.sort()                    # 오래 밀린 것부터
+        now_slot.sort(key=lambda k: (attempted.get(k, ""), k))
+        overdue.sort(key=lambda pair: (attempted.get(pair[1], ""), pair[0], pair[1]))   # 오래 밀린 것부터 · 시도한 것은 뒤로
         picked = now_slot[:HOURLY_CAP]
         if len(picked) < HOURLY_CAP:
             picked += [k for _s, k in overdue[:HOURLY_CAP - len(picked)]]
@@ -404,6 +420,8 @@ def get_collect_keywords(hour: int = None, worker: int = 0, workers: int = 1,
 class SerpProduct(BaseModel):
     rank: int
     productId: Optional[str] = ""
+    nvMid: Optional[str] = ""            # 코덱스 1.22.0 이식 — 확장이 nvMid 를 따로 싣는다(없으면 빈 값)
+    sourcePage: Optional[int] = None     # 몇 페이지에서 담았나(부분 수집 증거)
     title: Optional[str] = ""
     link: Optional[str] = ""
     price: Optional[str] = ""
@@ -547,60 +565,92 @@ def report_blocked(req: BlockReport, x_collector_token: str = Header(None)):
 
 @router.post("/serp")
 def upload_serp(req: SerpUpload, x_collector_token: str = Header(None)):
-    """확장이 키워드 1건 수집 결과를 올린다. 같은 날 같은 키워드는 덮어쓴다."""
+    """확장이 키워드 1건 수집 결과를 올린다. 같은 날 같은 키워드는 덮어쓴다.
+
+    2026-09-22 코덱스 1.22.0 관측 원장 이식 — 업로드는 이제 네 갈래로 반영된다(`collector_observation.validate`):
+      full           봉투 없음(구확장) · complete       → 종전 그대로(수집분 저장 + 전 대상 순위 · 300위 밖 포함)
+      full_positive  target_complete(목표 다 찾고 조기 종료) → 수집분 저장 + **찾은 순위만**(못 찾은 대상에 300위 밖 안 적음)
+      positive       partial(중간에 막힘·판독 실패)          → 수집분 미저장 + 찾은 순위만
+      evidence_only  failed · paused · 상품 0건               → 원장에 기록만
+    ⚠️ 봉투가 어긋나도 거절하지 않는다(종전 경로 + 사유 기록) — 「조용히 멈추는 쪽이 더 나쁜 고장」.
+    """
     _auth(x_collector_token)
-    kw = (req.keyword or "").strip()
-    if not kw:
-        raise HTTPException(status_code=400, detail="keyword 가 비어 있습니다.")
-    # 빈 수집은 저장하지 않는다 — '수집 실패'가 '미노출'로 굳는 것을 막기 위함
-    # (2026-08-01~03 실제로 1,992건이 그렇게 오염됐다.)
-    if not req.products:
+    from collector_observation import validate as _obs_validate, ingest as _obs_ingest, ObservationError
+    try:
+        item = _obs_validate(req.model_dump())
+    except ObservationError as _oe:
+        raise HTTPException(status_code=_oe.status_code, detail=str(_oe))
+    kw = item["keyword"]
+    if not req.products and item["kind"] != "evidence_only":
+        # 빈 수집은 저장하지 않는다 — '수집 실패'가 '미노출'로 굳는 것을 막기 위함
+        # (2026-08-01~03 실제로 1,992건이 그렇게 오염됐다.)
         raise HTTPException(status_code=400, detail="상품이 0건입니다. 수집 실패로 보고 저장하지 않습니다.")
-    # 상품명·링크가 대부분 비면 확장 toProduct 필드 매핑 오류다 — 조용히 저장하면
-    # 배치·분석이 빈 이름으로 오염되므로 여기서 소리내어 거부한다.
-    filled = sum(1 for p in req.products if (p.title or "").strip() or (p.link or "").strip())
-    if filled < max(1, int(len(req.products) * 0.2)):
-        raise HTTPException(status_code=422,
-                            detail="상품명·링크가 대부분 비어 있습니다 — 확장 필드 매핑 오류 의심. 팝업의 '수집 원본 샘플'을 확인하세요.")
+    if req.products:
+        # 상품명·링크가 대부분 비면 확장 toProduct 필드 매핑 오류다 — 조용히 저장하면
+        # 배치·분석이 빈 이름으로 오염되므로 여기서 소리내어 거부한다.
+        filled = sum(1 for p in req.products if (p.title or "").strip() or (p.link or "").strip())
+        if filled < max(1, int(len(req.products) * 0.2)):
+            raise HTTPException(status_code=422,
+                                detail="상품명·링크가 대부분 비어 있습니다 — 확장 필드 매핑 오류 의심. 팝업의 '수집 원본 샘플'을 확인하세요.")
 
     today = _effective_date()   # 회차 날짜 — 21시 이후 수집은 다음 날 배치분으로 저장
     payload = json.dumps([p.model_dump() for p in req.products], ensure_ascii=False)
+    normalized = [_normalize_collected(p.model_dump()) for p in req.products]
+
+    def _store_full(positive_only: bool):
+        """종전 경로 — 수집분 저장 + 큐 완료 + 순위 즉시 기록(positive_only 면 찾은 것만)."""
+        conn = sqlite3.connect(DB_PATH, timeout=10)
+        try:
+            _revive_after_outage(conn)
+            meta_json = json.dumps(req.meta, ensure_ascii=False) if req.meta else None
+            conn.execute("""
+                INSERT INTO collected_serp (keyword, collected_date, total, products_json, product_count, meta_json)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(keyword, collected_date) DO UPDATE SET
+                    total=excluded.total, products_json=excluded.products_json,
+                    product_count=excluded.product_count, meta_json=excluded.meta_json,
+                    created_at=datetime('now','localtime')
+            """, (kw, today, req.total, payload, len(req.products), meta_json))
+            if req.meta:
+                # 걸러낸 광고 수가 서버 로그에도 남는다 — 다음 순위 신고 때
+                # 「광고 포함 눈 순번」으로 바로 환산해 답할 수 있다(신고 #253 재발 방지).
+                logger.info(f"[수집] {kw}: 오가닉 {len(req.products)}개 · 광고 {req.meta.get('adSkipped', '?')}개 제외 · "
+                            f"중복 {req.meta.get('dupSkipped', '?')} · 원본 {req.meta.get('rawCount', '?')} · "
+                            f"확장 v{req.meta.get('collectorVersion', '?')}"
+                            + (" · 목표 찾고 조기 종료(찾은 순위만 기록)" if positive_only else ""))
+            # 이 키워드가 요청 큐(주간 온디맨드)에 있었다면 완료 처리
+            conn.execute("UPDATE collect_requests SET status='done' WHERE keyword=?", (kw,))
+            conn.commit()
+        finally:
+            conn.close()
+        # ── 순위 즉시 기록 (24시간 분산의 짝, 2026-08-05) ──
+        # 실패해도 업로드는 성공으로 돌려준다 — 수집이 멈추면 안 된다.
+        try:
+            from rank_record import record_ranks_for_keyword
+            return record_ranks_for_keyword(kw, normalized, positive_only=positive_only)
+        except Exception as e:
+            logger.warning(f"[collector] 순위 즉시 기록 실패(업로드는 성공) [{kw}]: {e}")
+            return {}
+
+    def _project_positive():
+        """부분 관측 — 수집분은 저장하지 않고 찾은 순위만 적는다(「없다」는 못 적는다)."""
+        try:
+            from rank_record import record_ranks_for_keyword
+            r = record_ranks_for_keyword(kw, normalized, positive_only=True)
+            logger.info(f"[수집] {kw}: 부분 관측 {len(req.products)}개 — 찾은 순위만 기록(상품 {r.get('products', 0)} · 업체 {r.get('clients', 0)})")
+            return r
+        except Exception as e:
+            logger.warning(f"[collector] 부분 관측 순위 기록 실패 [{kw}]: {e}")
+            return {}
+
     conn = sqlite3.connect(DB_PATH, timeout=10)
     try:
-        _revive_after_outage(conn)
-        meta_json = json.dumps(req.meta, ensure_ascii=False) if req.meta else None
-        conn.execute("""
-            INSERT INTO collected_serp (keyword, collected_date, total, products_json, product_count, meta_json)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(keyword, collected_date) DO UPDATE SET
-                total=excluded.total, products_json=excluded.products_json,
-                product_count=excluded.product_count, meta_json=excluded.meta_json,
-                created_at=datetime('now','localtime')
-        """, (kw, today, req.total, payload, len(req.products), meta_json))
-        if req.meta:
-            # 걸러낸 광고 수가 서버 로그에도 남는다 — 다음 순위 신고 때
-            # 「광고 포함 눈 순번」으로 바로 환산해 답할 수 있다(신고 #253 재발 방지).
-            logger.info(f"[수집] {kw}: 오가닉 {len(req.products)}개 · 광고 {req.meta.get('adSkipped', '?')}개 제외 · "
-                        f"중복 {req.meta.get('dupSkipped', '?')} · 원본 {req.meta.get('rawCount', '?')} · "
-                        f"확장 v{req.meta.get('collectorVersion', '?')}")
-        # 이 키워드가 요청 큐(주간 온디맨드)에 있었다면 완료 처리
-        conn.execute("UPDATE collect_requests SET status='done' WHERE keyword=?", (kw,))
-        conn.commit()
+        try:
+            return _obs_ingest(conn, item, today, _store_full, _project_positive)
+        except ObservationError as _oe:
+            raise HTTPException(status_code=_oe.status_code, detail=str(_oe))
     finally:
         conn.close()
-
-    # ── 순위 즉시 기록 (24시간 분산의 짝, 2026-08-05) ──
-    # 수집이 하루에 흩어지면 08:00 배치 한 번으로는 그날치를 다 못 담는다.
-    # 올라온 그 자리에서 이 키워드의 순위를 적는다(하루 1점 갱신이라 배치와 중복 무해).
-    # 실패해도 업로드는 성공으로 돌려준다 — 수집이 멈추면 안 된다.
-    recorded = {}
-    try:
-        from rank_record import record_ranks_for_keyword
-        recorded = record_ranks_for_keyword(
-            kw, [_normalize_collected(p.model_dump()) for p in req.products])
-    except Exception as e:
-        logger.warning(f"[collector] 순위 즉시 기록 실패(업로드는 성공) [{kw}]: {e}")
-    return {"success": True, "keyword": kw, "saved": len(req.products), "ranked": recorded}
 
 
 # ==================== 3) 수집 현황 ====================
@@ -622,8 +672,13 @@ def collect_status(x_collector_token: str = Header(None)):
         """).fetchall()
         pending = conn.execute(
             "SELECT COUNT(*) FROM collect_requests WHERE status='pending' AND attempts < 5").fetchone()[0]
+        try:
+            from collector_observation import observation_summary as _obs_sum
+            observations = _obs_sum(conn, today)
+        except Exception:
+            observations = None
         return {"success": True, "today": today, "pendingRequests": pending,
-                "days": [dict(r) for r in rows]}
+                "days": [dict(r) for r in rows], "observations": observations}
     finally:
         conn.close()
 
@@ -736,12 +791,26 @@ def collect_health(current_user: dict = Depends(get_current_user)):
     except Exception:
         machines_list = None
 
+    # 📒 관측 원장 요약(코덱스 이식 · additive). 화면 state 는 그대로 — 부분 관측이 있어도 「수집 미실행」으로 그리지 않게
+    #    하려면 화면 짝이 필요하므로 이번 차수에선 수만 싣는다.
+    observations = None
+    try:
+        from collector_observation import observation_summary as _obs_sum
+        _c3 = sqlite3.connect(DB_PATH, timeout=10)
+        try:
+            observations = _obs_sum(_c3, today)
+        finally:
+            _c3.close()
+    except Exception:
+        observations = None
+
     return {"success": True, "state": state, "today": today, "message": msg,
             "todayKeywords": (t["keywords"] if t else 0),
             "lastCollectedDate": (rows[0]["collected_date"] if rows else None),
             "lastAt": (rows[0]["last_at"] if rows else None),
             "hoursSinceUpload": hours_since,
-            "machines": machines_list}
+            "machines": machines_list,
+            "observations": observations}
 
 
 def _safe_int(v):

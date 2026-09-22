@@ -157,6 +157,9 @@ jobs:
       - name: Collector heartbeat regression (v1.21.0 살아있음 신호)
         run: node collector-extension/tests/heartbeat.test.js
 
+      - name: Collector observation envelope regression (v1.23.0 관측 봉투·부분 수집)
+        run: node collector-extension/tests/observation_envelope.test.js
+
       # 수집 멈춤 감시(2026-09-10) — 하루가 통째로 0건이 되어도 아무도 몰랐다.
       # 상한(5시간)·쿨다운(6시간)·문자 90바이트·기록 커밋을 지킨다.
       # ⚠️ 그중 「기록 커밋」이 핵심이다 — 안 되면 매시간 같은 문자가 도배된다.
@@ -233,6 +236,13 @@ jobs:
       #    2번 노트북처럼 「조용히 안 도는」 기계를 서버가 가르는 장치 — 신호를 거르는 회귀를 막는다.
       - name: 회귀 — 수집기 살아있음 신호(서버)
         run: python backend/tests/test_collector_heartbeat.py
+
+      # 2026-09-22 코덱스 1.22.0 이식 1차 — 정확 식별(product_identity) 우선 + 종전 폴백 유지(B5 측정 전).
+      - name: 회귀 — 순위 매칭 정확 식별(코덱스 이식 · 폴백 유지)
+        run: python backend/tests/test_product_match_identity.py
+      # 관측 원장 — 봉투 없음/어긋남은 격리 없이 종전 경로(fail-open) · partial 은 찾은 순위만 · 같은 observationId 재전송 1회 반영.
+      - name: 회귀 — 수집 관측 원장(네 갈래 반영·멱등·보관정책)
+        run: python backend/tests/test_collector_observation.py
 
       - name: Build frontend bundle
         run: |
