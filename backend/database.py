@@ -657,6 +657,9 @@ def add_tracked_product(product_url: str, product_name: str = None,
                         price: int = None, product_id: str = None,
                         user_id: int = 0, nv_mid: str = None) -> int:
     """추적 상품 등록, 중복이면 업데이트 후 ID 반환 (user_id별 격리, 레이스 컨디션 방지)
+    ⭐ 2026-09-22 — 같은 상품을 다시 등록하면 **내려 둔 상태(disabled_at)를 푼다.** 9/22 전량 소프트
+       내리기(대표 확정) 뒤 직원이 재등록할 때 이전 순위 이력이 그대로 이어지게 하기 위함이다.
+       (내려진 행은 화면·수집에서 빠질 뿐 rankings 이력은 남아 있다.)
 
     nv_mid — 네이버 쇼핑 상품 고유번호(2026-09-18 신설). 순위 매칭 1순위가 쓰는 값이다.
     ⚠️ **선택 인자로 둔다** — 이 함수를 부르는 다른 자리가 안 보내도 종전대로 동작해야 한다
@@ -686,6 +689,7 @@ def add_tracked_product(product_url: str, product_name: str = None,
                     price = COALESCE(?, price),
                     product_id = COALESCE(?, product_id),
                     nv_mid = COALESCE(NULLIF(?, ''), nv_mid),
+                    disabled_at = '',
                     updated_at = datetime('now', 'localtime')
                 WHERE id = ?
             """, (product_name, store_name, image_url, price, product_id,
@@ -716,15 +720,29 @@ def add_tracked_product(product_url: str, product_name: str = None,
 
 def get_all_tracked_products(user_id: int = None, is_admin: bool = False) -> List[Dict]:
     """추적 중인 상품 목록 (user_id별 격리, admin은 전체 조회)"""
+    # 2026-09-22 — 내려 둔 상품(disabled_at)은 목록에서 뺀다(소프트 내리기 · 이력은 rankings 에 그대로).
+    #    ⚠️ 칸이 아직 없는 DB(옛 픽스처)에서는 필터를 걸지 않는다 — 조회가 통째로 죽는 쪽이 더 나쁘다.
+    _alive, _alive_and = "", ""
+    try:
+        _c0 = _get_conn()
+        try:
+            _cols = {r[1] for r in _c0.execute("PRAGMA table_info(tracked_products)")}
+        finally:
+            _c0.close()
+        if "disabled_at" in _cols:
+            _alive = "WHERE COALESCE(disabled_at,'')=''"
+            _alive_and = "AND COALESCE(disabled_at,'')=''"
+    except Exception:
+        pass
     conn = _get_conn()
     try:
         if is_admin or user_id is None:
             rows = conn.execute(
-                "SELECT * FROM tracked_products ORDER BY created_at DESC"
+                f"SELECT * FROM tracked_products {_alive} ORDER BY created_at DESC"
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM tracked_products WHERE user_id = ? ORDER BY created_at DESC",
+                f"SELECT * FROM tracked_products WHERE user_id = ? {_alive_and} ORDER BY created_at DESC",
                 (user_id,)
             ).fetchall()
         return [dict(r) for r in rows]

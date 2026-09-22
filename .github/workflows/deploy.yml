@@ -216,6 +216,11 @@ jobs:
       - name: 회귀 — 순위 추적 화면 펼치기(며칠째·nvMid 배지)
         run: python backend/tests/test_rank_screen.py
 
+      # 2026-09-22 대표 확정 — 추적 상품 전량 소프트 내리기(지우지 않는다) + 재등록 자동 복귀.
+      #    이 시험이 지키는 것은 「이력 행수 불변」과 「1회만 돈다」다 — 둘 다 조용히 깨지면 기록 손실/중복 내리기.
+      - name: 회귀 — 추적 상품 소프트 내리기·재등록 복귀
+        run: python backend/tests/test_tracked_reset.py
+
       - name: Build frontend bundle
         run: |
           npm install --no-save @babel/core @babel/preset-react
