@@ -84,6 +84,22 @@ jobs:
                 | awk '{ip=$1; t=$4; cmd="printf %s " ip " | sha256sum | cut -c1-6"; cmd | getline h; close(cmd); n[h]++; last[h]=t; if($7 ~ /serp/) s[h]++ } END { for (h in n) printf "  %s  요청 %4d  serp %4d  마지막 %s\n", h, n[h], s[h]+0, last[h] }'
             fi
             echo
+            echo "== 📡 기계별 살아있음 신호 (collector_heartbeat · v1.21.0 이상 확장만 보고 · IP 없음) =="
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sqlite3, sys
+            sys.path.insert(0, "/app")
+            c = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            try:
+                import collector_heartbeat as hb
+                rows = hb.machines(c)
+                print(" ", hb.summary_line(rows))
+                for r in rows:
+                    print(f"  {r['machine']}  v{r['ext_version'] or '?'}  마지막 {r['last_seen']}  ({r['minutes_since']}분 전 · {r['seen_count']}회)  {r['status']}"
+                          f"  | 알람 {r['alarms'] or '-'} | 오늘 {r['day_done']}/{r['day_total']} | 사유 {r['reason']}")
+            except Exception as e:
+                print("  (조회 실패 — 배포 전이거나 표 없음):", e)
+            PY
+            echo
             echo "== 최근 오류 (앱 로그 tail 200 · 마스킹) =="
             docker logs --tail 200 logic-analysis 2>&1 | grep -aiE 'error|exception|traceback|rank-overview|rank-board' \
               | sed -E "s/\\[[^]]{1,60}\\]/[**]/g; s#https?://[^ ]*#(주소 가림)#g; s/'[^']{1,60}'/'**'/g" | tail -12 || echo "(없음)"
