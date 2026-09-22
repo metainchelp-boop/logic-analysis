@@ -104,13 +104,26 @@ def lookup_from_collected(conn, product_url: str, keywords=None, days: int = LOO
         - "no-channel-id"   주소에서 상품번호를 못 뽑았다(주소 형식이 다르다)
         - "not-collected"   그 키워드를 우리가 아직 안 모았다
         - "not-in-serp"     모으긴 했는데 그 안에 이 상품이 없다(= 진짜로 순위 밖일 수 있다)
+        - "ambiguous-match" 같은 상품 주소에 서로 다른 nvMid 가 관측됐다(자동으로 넣지 않는다 · 사람 확인)
 
     ⚠️ 「못 찾음」을 한 덩어리로 돌려주면 안 된다 — 직원이 할 일이 셋 다 다르다.
        이 저장소가 반복해 데인 지점이다(「없다」와 「지금 안 된다」를 섞지 말 것).
+
+    코덱스 1.22.0 이식(2026-09-22 3차) — 매칭을 두 단계로:
+      ① **정확 식별**(product_identity.naver_product_identity — 호스트·스토어·상품번호 튜플 일치)
+      ② ①이 0건이면 종전 규칙(채널 번호가 주소 안에 있으면 그 상품 — 2순위 폴백 · B5 측정 전까지 유지)
+      후보의 nvMid 가 둘 이상 다르면 ambiguous-match(코덱스 채택). 순위는 양의 정수만 순위로 본다.
+    ⚠️ 코덱스가 「오늘의 검증된 관측만」으로 좁힌 것은 **가져오지 않았다** — 14일 창을 좁히면
+       not-collected 가 늘어 배치 채우기(nvmid_backfill)가 못 채운다. 창은 종전 그대로.
     """
     cid = channel_id_from_url(product_url)
     if not cid:
         return {"nv_mid": "", "keyword": "", "rank": None, "reason": "no-channel-id"}
+    try:
+        from product_identity import naver_product_identity, canonical_product_id
+        identity = naver_product_identity(product_url)
+    except Exception:
+        identity, canonical_product_id = None, (lambda v: str(v) if v else None)
 
     kws = [str(k).strip() for k in (keywords or []) if str(k or "").strip()]
     try:
@@ -134,6 +147,12 @@ def lookup_from_collected(conn, product_url: str, keywords=None, days: int = LOO
     if not rows:
         return {"nv_mid": "", "keyword": "", "rank": None, "reason": "not-collected"}
 
+    exact, loose = {}, {}   # nv_mid → 가장 좋은(작은 순위) 관측
+    def _put(bucket, pid, kw, rank):
+        cur = bucket.get(pid)
+        if cur is None or (rank is not None and (cur["rank"] is None or rank < cur["rank"])):
+            bucket[pid] = {"nv_mid": pid, "keyword": kw, "rank": rank, "reason": "ok"}
+
     for r in rows:
         kw = r[0] if not hasattr(r, "keys") else r["keyword"]
         raw = r[1] if not hasattr(r, "keys") else r["products_json"]
@@ -142,19 +161,27 @@ def lookup_from_collected(conn, product_url: str, keywords=None, days: int = LOO
         except (ValueError, TypeError):
             continue
         for p in ps:
+            if not isinstance(p, dict):
+                continue
             link = str(p.get("link") or p.get("product_url") or "")
-            pid = str(p.get("productId") or "")
-            # 지금 순위 매칭 2순위와 **같은 규칙** — 채널 번호가 상품 주소에 들어 있으면 그 상품이다.
-            if not link or cid not in link:
+            pid = canonical_product_id(p.get("nvMid") or p.get("productId")) or ""
+            if not link or not pid:
                 continue
-            if not pid:
-                continue
-            try:
-                rank = int(p.get("rank"))
-            except (TypeError, ValueError):
-                rank = None
-            return {"nv_mid": pid, "keyword": kw, "rank": rank, "reason": "ok"}
+            rank = p.get("rank")
+            rank = rank if (type(rank) is int and rank > 0) else None   # 양의 정수만 순위(코덱스)
+            if identity is not None and naver_product_identity(link) == identity:
+                if identity[0] == "nvMid" and identity[1] != pid:
+                    continue   # 카탈로그 주소의 nvMid 와 수집 ID 가 다르면 자동 등록하지 않는다
+                _put(exact, pid, kw, rank)
+            elif cid in link:
+                # 종전 2순위 규칙(채널 번호가 주소 안에) — 정확 식별이 0건일 때만 쓴다
+                _put(loose, pid, kw, rank)
 
+    found = exact or loose
+    if len(found) > 1:
+        return {"nv_mid": "", "keyword": "", "rank": None, "reason": "ambiguous-match"}
+    if found:
+        return next(iter(found.values()))
     return {"nv_mid": "", "keyword": "", "rank": None, "reason": "not-in-serp"}
 
 

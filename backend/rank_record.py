@@ -185,7 +185,8 @@ def _save_client_rank_daily(conn, client_id: int, keyword: str, product_url: str
 
 def record_ranks_for_keyword(keyword: str, prods: List[Dict[str, Any]],
                              check_type: str = "scheduled",
-                             positive_only: bool = False) -> Dict[str, int]:
+                             positive_only: bool = False,
+                             observation: Optional[Dict[str, Any]] = None) -> Dict[str, int]:
     """수집분 1건으로 그 키워드의 순위를 즉시 기록한다.
 
     prods = `collector._normalize_collected` 를 거친 목록(배치가 쓰던 것과 같은 형태).
@@ -195,10 +196,22 @@ def record_ranks_for_keyword(keyword: str, prods: List[Dict[str, Any]],
       True 면 **찾은 순위만** 적고 「못 찾음(300위 밖)」은 적지 않는다.
       부분 수집(중간에 막힘 · 목표를 찾고 조기 종료)은 300위까지 본 것이 아니라서
       「없다」를 증명하지 못한다 — 그 상태에서 300위 밖을 적으면 거짓이 광고주 보고서까지 간다.
+    observation (코덱스 1.22.0 순서 가드 이식 · 2026-09-22 3차):
+      업로드 봉투(observationId·finishedAt). 대상마다 마지막으로 적은 관측 시각을 남기고
+      **그보다 오래된 관측은 적지 않는다**(옛 전량 수집분이 새 양성 순위를 덮는 사고 방지 — rank_guard).
+      봉투가 없으면(구확장) 「지금」으로 본다 = 항상 최신 = 종전과 똑같이 적힌다.
     """
     kw = (keyword or "").strip()
     if not kw or not prods:
         return {"products": 0, "clients": 0}
+    try:
+        import rank_guard as _guard
+        _obs_key = _guard.observation_key(observation)
+        _obs_at = _guard.finished_epoch(observation)
+    except Exception:
+        _guard, _obs_key, _obs_at = None, "legacy", 0
+    _day = date.today().isoformat()
+    n_stale = 0
 
     try:
         from naver_crawler import find_product_rank_from_cache
@@ -217,6 +230,9 @@ def record_ranks_for_keyword(keyword: str, prods: List[Dict[str, Any]],
                     kw, t["product_url"], prods, nv_mid=t.get("nv_mid") or "")
                 if positive_only and rank is None:
                     continue   # 부분 수집 — 「없다」는 못 적는다
+                if _guard and not _guard.claim(conn, "product", t["keyword_id"], kw, _day, _obs_key, _obs_at):
+                    n_stale += 1
+                    continue   # 더 새로운 관측이 이미 적혀 있다 — 옛 수집분으로 덮지 않는다
                 save_ranking_daily(
                     product_id=t["product_id"], keyword_id=t["keyword_id"], keyword=kw,
                     rank_position=rank, page_number=page, check_type=check_type)
@@ -237,6 +253,9 @@ def record_ranks_for_keyword(keyword: str, prods: List[Dict[str, Any]],
                 rank, page, _ = find_product_rank_from_cache(kw, c["naver_store_url"], prods)
                 if positive_only and rank is None:
                     continue   # 부분 수집 — 「없다」는 못 적는다
+                if _guard and not _guard.claim(conn, "client", c["id"], kw, _day, _obs_key, _obs_at):
+                    n_stale += 1
+                    continue   # 더 새로운 관측이 이미 적혀 있다
                 _save_client_rank_daily(conn, c["id"], kw, c["naver_store_url"],
                                         rank, page, check_type)
                 n_client += 1
@@ -248,6 +267,7 @@ def record_ranks_for_keyword(keyword: str, prods: List[Dict[str, Any]],
     finally:
         conn.close()
 
-    if n_prod or n_client:
-        logger.info(f"[rank_record] {kw} — 상품 {n_prod}건 · 업체 {n_client}건 순위 기록")
-    return {"products": n_prod, "clients": n_client}
+    if n_prod or n_client or n_stale:
+        logger.info(f"[rank_record] {kw} — 상품 {n_prod}건 · 업체 {n_client}건 순위 기록"
+                    + (f" · 더 새로운 관측이 있어 건너뜀 {n_stale}건" if n_stale else ""))
+    return {"products": n_prod, "clients": n_client, "stale": n_stale}

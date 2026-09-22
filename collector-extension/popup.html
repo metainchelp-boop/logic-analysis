@@ -77,7 +77,11 @@
 <div class="row" style="margin-top:6px">
   <button id="heartbeat" class="ghost" style="flex:1"
           title="이 기계의 상태(일시정지·캡차 쉼·알람·버전)를 서버에 보냅니다. 빠진 알람이 있으면 다시 겁니다. 네이버에 요청을 보내지 않습니다.">📡 지금 상태 서버에 보내기</button>
+  <!-- 🧾 v1.25.0 — 상태·건수만 담은 진단 JSON 을 내려받는다(토큰·검색어·상품·기계 식별자·원문 제외 · 요청 0건). -->
+  <button id="diagnosticExport" class="ghost" type="button" style="flex:0 0 auto"
+          title="이 기계의 상태·건수만 JSON 파일로 저장합니다. 토큰·검색어·상품·기계 식별자·원문은 넣지 않습니다. 서버·네이버에 요청을 보내지 않습니다.">🧾 진단 파일</button>
 </div>
+<div id="diagnosticStatus" class="dim" role="status" hidden style="margin:-2px 0 6px"></div>
 <div class="row" style="margin-top:6px">
   <button id="coordinated" class="ghost" style="flex:1"
           title="서버가 키워드를 기계별로 나눠 배정합니다(임대·예산·간격). 서버 스위치가 꺼져 있으면 종전대로 시간대 몫을 수집합니다.">🧭 서버 자동 배정</button>
@@ -98,4 +102,5 @@
 <details style="margin-top:8px"><summary style="cursor:pointer;font-size:12px;color:#475569">🔬 수집 원본 샘플(필드명 검증용)</summary><pre id="raw" style="max-height:150px;overflow:auto;font-size:10.5px">아직 없음 — 수집 1회 실행 후 표시</pre></details>
 <details style="margin-top:6px"><summary style="cursor:pointer;font-size:12px;color:#475569">📢 광고 제외 현황 · 광고 상품 원본(1건)</summary><pre id="rawAd" style="max-height:150px;overflow:auto;font-size:10.5px">아직 없음</pre></details>
 <details style="margin-top:6px"><summary style="cursor:pointer;font-size:12px;color:#475569">🩺 마지막 판독 실패(원인 진단용)</summary><pre id="readFail" style="max-height:150px;overflow:auto;font-size:10.5px">없음 — 정상</pre></details>
+<script src="diagnostic_export.js"></script>
 <script src="popup.js"></script>

@@ -75,11 +75,22 @@
     return false;
   }
 
-  /** 네이버 응답 → 서버가 쓰는 형태로 정리 */
+  /** 상품 식별값 — 문자열은 다듬고, 양의 정수만 문자열로. 그 밖(객체·0·음수)은 빈 값(코덱스 1.22.0 이식 · 3차). */
+  function productIdentity(value) {
+    if (typeof value === 'string') return value.trim();
+    if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) return String(value);
+    return '';
+  }
+  /** 네이버 응답 → 서버가 쓰는 형태로 정리
+   *  ⚠️ productId 는 **nvMid 가 있으면 nvMid** 다(코덱스 이식) — 검색 결과의 정체성은 nvMid 이고,
+   *     행 id 는 페이지마다 바뀔 수 있어 중복 판정·조기 종료 목표 대조가 흔들린다. nvMid 가 없는 행만 id 로. */
   function toProduct(p, rank) {
+    const mid = productIdentity(p.nvMid);
+    const canonical = mid || productIdentity(p.id || p.productId);
     return {
       rank,
-      productId: String(p.id || p.nvMid || ''),
+      nvMid: mid,
+      productId: canonical,
       title: String(p.productTitle || p.productName || '').replace(/<[^>]*>/g, ''),
       link: String(p.mallProductUrl || p.adcrUrl || p.crUrl || ''),
       price: String(p.price || p.lowPrice || ''),
@@ -115,15 +126,18 @@
       }
       if (hasAdHint(item)) st.adHintMissed++;
       const mapped = toProduct(item, st.products.length + 1);
-      if (mapped.productId && st.seenIds.has(mapped.productId)) { st.dupSkipped++; continue; }
-      if (mapped.productId) st.seenIds.add(mapped.productId);
+      // 식별값이 없는 행은 담지 않는다(코덱스 이식) — 서버가 그 행을 어떤 상품과도 맞출 수 없고, 순번만 밀어낸다.
+      if (!mapped.productId) { st.invalidSkipped = (st.invalidSkipped || 0) + 1; continue; }
+      if (st.seenIds.has(mapped.productId)) { st.dupSkipped++; continue; }
+      st.seenIds.add(mapped.productId);
       mapped.rank = st.products.length + 1;   // 광고·중복을 건너뛴 자리를 메운 최종 순위
+      if (st.sourcePage) mapped.sourcePage = st.sourcePage;
       st.products.push(mapped);
     }
     return st;
   }
 
-  const RankRules = { isAdItem, hasAdHint, toProduct, takeOrganic, adFingerprint, hostOf };
+  const RankRules = { isAdItem, hasAdHint, toProduct, takeOrganic, adFingerprint, hostOf, productIdentity };
   if (typeof module !== 'undefined' && module.exports) module.exports = RankRules;
   if (typeof globalThis !== 'undefined') globalThis.RankRules = RankRules;
 })();

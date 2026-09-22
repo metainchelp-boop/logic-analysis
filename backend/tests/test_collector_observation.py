@@ -148,7 +148,7 @@ c = read("backend/collector.py")
 i = c.index('@router.post("/serp")'); body = c[i:c.index("# ==================== 3) 수집 현황", i)]
 ok("🔴 /serp 가 validate → ingest 를 지난다", re.search(r"item = _obs_validate\(req\.model_dump\(\)\)", body) is not None
    and re.search(r"_obs_ingest\(conn, item, today, _store_full, _project_positive\)", body) is not None)
-ok("🔴 _store_full 이 positive_only 를 record_ranks_for_keyword 에 넘긴다", re.search(r"record_ranks_for_keyword\(kw, normalized, positive_only=positive_only\)", body) is not None)
+ok("🔴 _store_full 이 positive_only 를 record_ranks_for_keyword 에 넘긴다", re.search(r"record_ranks_for_keyword\(kw, normalized, positive_only=positive_only[,)]", body) is not None)   # 3차: observation= 가산 허용
 ok("🔴 _project_positive 는 수집분 INSERT 없이 positive_only=True 만", "def _project_positive" in body
    and re.search(r"def _project_positive\(\):[\s\S]{0,600}positive_only=True", body) is not None
    and "INSERT INTO collected_serp" not in body[body.index("def _project_positive"):])

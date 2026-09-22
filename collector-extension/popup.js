@@ -220,6 +220,28 @@ $('localPause').onclick = async () => {
 // 📡 v1.21.0 — 지금 상태를 서버에 보낸다(+ 빠진 알람 재장전). 네이버 요청 0건.
 $('heartbeat').onclick = () =>
   chrome.runtime.sendMessage({ cmd: 'heartbeat' }, () => setTimeout(render, 900));
+// 🧾 v1.25.0 — 진단 파일 저장(코덱스 이식). 허용 목록 요약만 · 저장소 무변경 · 요청 0건.
+$('diagnosticExport').onclick = async () => {
+  const button = $('diagnosticExport');
+  const status = $('diagnosticStatus');
+  button.disabled = true;
+  status.hidden = false;
+  status.textContent = '저장된 상태를 읽고 있습니다…';
+  try {
+    const summary = await CollectorDiagnosticExport.collect({ chromeApi: chrome });
+    const blob = new Blob([JSON.stringify(summary, null, 2)], { type: 'application/json' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `collector-diagnostic-${(summary.exportedAt || '').slice(0, 19).replace(/[:T]/g, '-') || 'now'}.json`;
+    document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(link.href), 2000);
+    status.textContent = '진단 파일 저장을 요청했습니다. 토큰·검색어·상품·원문·기계 식별자는 넣지 않았습니다.';
+  } catch (e) {
+    status.textContent = '진단 파일을 저장하지 못했습니다. 다시 눌러 주세요.';
+  } finally {
+    button.disabled = false;
+  }
+};
 // 🧭 v2 — 서버 자동 배정 켜고 끄기(background 가 같은 저장값을 읽는다).
 $('coordinated').onclick = async () => {
   const { state = {} } = await chrome.storage.local.get('state');
