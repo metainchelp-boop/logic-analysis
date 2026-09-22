@@ -165,6 +165,39 @@ jobs:
                 | awk '{ip=$1; t=$4; cmd="printf %s " ip " | sha256sum | cut -c1-6"; cmd | getline h; close(cmd); n[h]++; last[h]=t; if($7 ~ /serp/) s[h]++ } END { for (h in n) printf "  %s  요청 %4d  serp %4d  마지막 %s\n", h, n[h], s[h]+0, last[h] }'
             fi
             echo
+            echo "== 최근 40분 /api/collector 출처 × 경로 (해시 앞 6자 · 새 기계 판별 · 같은 출처에서 두 기계가 오는지) =="
+            SINCE=$(date -d '40 min ago' +%H:%M)
+            if [ -n "$LOG" ]; then
+              grep -a "$TODAY" "$LOG" | awk -v since="$SINCE" '{
+                split($4,t,":"); hm=t[2] ":" t[3]; if (hm < since) next;
+                ip=$1; cmd="printf %s " ip " | sha256sum | cut -c1-6"; cmd | getline h; close(cmd);
+                n[h]++; if(!(h in first)) first[h]=hm; last[h]=hm;
+                p=$7; sub(/\?.*/,"",p);
+                if (p ~ /serp/) serp[h]++; else if (p ~ /heartbeat/) hb[h]++; else if (p ~ /health/) he[h]++; else if (p ~ /keywords/) kw[h]++; else if (p ~ /requests/) rq[h]++; else if (p ~ /blocked/) bl[h]++; else oth[h]++;
+                if ($9 >= 400) bad[h]++
+              } END { for (h in n) printf "  %s  %s~%s  요청 %3d | serp %d heartbeat %d keywords %d requests %d blocked %d health %d 기타 %d | 4xx/5xx %d\n", h, first[h], last[h], n[h], serp[h]+0, hb[h]+0, kw[h]+0, rq[h]+0, bl[h]+0, he[h]+0, oth[h]+0, bad[h]+0 }'
+              echo "  (health 만 있는 출처 = 로직분석 화면을 열어 둔 직원 브라우저 · heartbeat/keywords/serp 가 있는 출처 = 수집기)"
+              echo "  [같은 출처가 오늘 /autobid(③ 자동입찰)도 보냈나]"
+              A=$(grep -a "$TODAY" "$LOG" | grep -a '/autobid' | awk '{print $1}' | sort -u | while read -r ip; do printf %s "$ip" | sha256sum | cut -c1-6; done | tr '\n' ' ')
+              echo "   /autobid 출처: ${A:-(없음)}"
+              echo "  [옛 노트북 회선 해시] 1번=b9c354 · 2번=bc7fb8 — 새 출처가 이 둘과 다르면 새 회선"
+              echo "  [최근 40분 4xx/5xx 상세(출처·상태·경로 앞 40자)]"
+              grep -a "$TODAY" "$LOG" | awk -v since="$SINCE" '{split($4,t,":"); hm=t[2] ":" t[3]; if (hm < since) next; if ($9 < 400) next; if ($7 !~ /api\/collector/) next; ip=$1; cmd="printf %s " ip " | sha256sum | cut -c1-6"; cmd | getline h; close(cmd); p=$7; sub(/\?.*/,"",p); k=h " " $9 " " substr(p,1,40); n[k]++} END {for (k in n) printf "   %s x%d\n", k, n[k]}' | sort | head -20
+            fi
+            echo
+            echo "== 📡 heartbeat 원행 전부 (기계 ID 앞 6자 · 번호 · 버전 · 처음/마지막 · 오늘 진척) =="
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sqlite3
+            c = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True); c.row_factory = sqlite3.Row
+            try:
+                rows = c.execute("SELECT * FROM collector_heartbeat ORDER BY last_seen DESC").fetchall()
+                for r in rows:
+                    print(f"  id {r['instance_id'][:6]}  {r['worker_no']}/{r['worker_count']}  v{r['ext_version']}  크롬 {r['chrome_version']}  처음 {r['first_seen']}  마지막 {r['last_seen']}  x{r['seen_count']}  running={r['running']} paused={r['paused_local']}/{r['paused_screen']}  block='{r['blocked_until']}' slow='{r['slow_until']}'  오늘 {r['day_done']}/{r['day_total']}  마지막완료 '{r['last_finished_at']}'  오류 '{(r['last_error'] or '')[:60]}'  알람 {r['alarms']}  outbox={r['upload_summary_json']}")
+                if not rows: print("  (행 0)")
+            except Exception as e:
+                print("  (조회 실패 — 못 쟀다):", e)
+            PY
+            echo
             echo "== 📡 기계별 살아있음 신호 (collector_heartbeat · v1.21.0 이상 확장만 보고 · IP 없음) =="
             docker exec -i logic-analysis python3 - <<'PY'
             import sqlite3, sys
