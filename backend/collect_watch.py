@@ -82,9 +82,21 @@ def last_upload_at(conn) -> Optional[str]:
     """
     try:
         r = conn.execute("SELECT MAX(created_at) m FROM collected_serp").fetchone()
-        return r["m"] if r and r["m"] else None
+        last = r["m"] if r and r["m"] else None
     except Exception:
         return None
+    # 코덱스 1.22.0 이식(2026-09-22) — 부분 수집(partial)은 collected_serp 에 안 남고 관측 원장에만 남는다.
+    #    확장이 살아 있는데 막혀서 부분만 올리는 날, collected_serp 만 보면 「멈춤」으로 오판한다.
+    #    표가 없으면(배포 전) 종전 값 그대로.
+    try:
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='collector_observations'").fetchone():
+            r2 = conn.execute("SELECT MAX(received_at) m FROM collector_observations").fetchone()
+            obs = r2["m"] if r2 and r2["m"] else None
+            if obs and (not last or str(obs) > str(last)):
+                last = obs
+    except Exception:
+        pass
+    return last
 
 
 def evaluate(conn) -> dict:

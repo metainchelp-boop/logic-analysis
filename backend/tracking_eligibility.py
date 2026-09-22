@@ -67,9 +67,18 @@ def ensure_stage_column(conn) -> None:
         pass
 
 
-def eligible_clients_sql(columns: str = "id") -> str:
-    """자격 있는 업체를 고르는 SELECT 문. columns 로 필요한 칸만 가져간다."""
-    return f"SELECT {columns} FROM clients WHERE {ELIGIBLE_WHERE}"
+def eligible_clients_sql(columns: str = "id", *, day=None) -> str:
+    """자격 있는 업체를 고르는 SELECT 문. columns 로 필요한 칸만 가져간다.
+
+    day (코덱스 1.22.0 이식 · 2026-09-22) — 서버가 정한 KST 날짜를 넘기면 그 날짜 기준으로 판정한다
+    (중앙 배정 원장이 「그날」의 자격을 물을 때). 안 넘기면 종전대로 DB 의 오늘.
+    """
+    where = ELIGIBLE_WHERE
+    if day is not None:
+        from datetime import date
+        literal = date.fromisoformat(day).isoformat()   # 검증 뒤에만 SQL 에 박는다
+        where = where.replace("date('now','localtime')", f"date('{literal}')")
+    return f"SELECT {columns} FROM clients WHERE {where}"
 
 
 def eligible_client_ids(conn) -> list:
@@ -107,18 +116,22 @@ def eligible_client_ids(conn) -> list:
 #    그래서 '연결 없음'은 01:20 정리 잡이 하루 지켜본 뒤 비활성으로 내리고,
 #    여기서는 비활성 표시가 붙은 것만 뺀다. 되돌리려면 그 표시만 지우면 된다.
 
-def eligible_tracked_product_ids(conn) -> set:
-    """순위를 재야 할 추적 상품 id 집합."""
+def eligible_tracked_product_ids(conn, ensure_schema=True, *, day=None) -> set:
+    """순위를 재야 할 추적 상품 id 집합.
+
+    ensure_schema=False — 기록 트랜잭션 안에서 부를 때(ALTER+commit 을 끼우지 않는다 · 코덱스 이식).
+    """
     try:
         # ⚠️ 아래 subquery(eligible_clients_sql)가 contract_stage 를 읽는다 —
         #    칸이 없는 DB 에서 돌면 조회가 죽어 None(=전부 잰다)로 폴백한다.
         #    운영 clients 표엔 항상 있으나, 방어로 여기서도 보장한다.
-        ensure_stage_column(conn)
+        if ensure_schema:
+            ensure_stage_column(conn)
         rows = conn.execute(
             "SELECT p.id FROM tracked_products p "
             " WHERE COALESCE(p.disabled_at,'') = '' "
             "   AND ( p.id IN (SELECT tracked_product_id FROM rank_link "
-            f"                  WHERE client_id IN ({eligible_clients_sql('id')})) "
+            f"                  WHERE client_id IN ({eligible_clients_sql('id', day=day)})) "
             "      OR p.id NOT IN (SELECT tracked_product_id FROM rank_link) )"
         ).fetchall()
         return {r[0] for r in rows}

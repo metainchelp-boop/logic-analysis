@@ -121,6 +121,13 @@ def init_collector_db():
             _coord_purge(conn)
         except Exception as e:
             logger.warning(f"[collector] 중앙 배정 표 보장 실패(무시): {e}")
+        # 🧷 순위 기록 순서 가드 표(코덱스 이식 3차) — 멱등 · 30일 보관
+        try:
+            from rank_guard import init_db as _guard_init, purge_old as _guard_purge
+            _guard_init(conn)
+            _guard_purge(conn)
+        except Exception as e:
+            logger.warning(f"[collector] 순서 가드 표 보장 실패(무시): {e}")
         # 📒 관측 원장(코덱스 1.22.0 이식 · 2026-09-22) — 멱등 + 30일 보관정책(부팅 때 한 번 정리)
         try:
             from collector_observation import init_observation_db as _obs_init, purge_old as _obs_purge
@@ -634,7 +641,8 @@ def upload_serp(req: SerpUpload, x_collector_token: str = Header(None)):
         # 실패해도 업로드는 성공으로 돌려준다 — 수집이 멈추면 안 된다.
         try:
             from rank_record import record_ranks_for_keyword
-            return record_ranks_for_keyword(kw, normalized, positive_only=positive_only)
+            return record_ranks_for_keyword(kw, normalized, positive_only=positive_only,
+                                            observation=item.get("observation"))
         except Exception as e:
             logger.warning(f"[collector] 순위 즉시 기록 실패(업로드는 성공) [{kw}]: {e}")
             return {}
@@ -643,7 +651,8 @@ def upload_serp(req: SerpUpload, x_collector_token: str = Header(None)):
         """부분 관측 — 수집분은 저장하지 않고 찾은 순위만 적는다(「없다」는 못 적는다)."""
         try:
             from rank_record import record_ranks_for_keyword
-            r = record_ranks_for_keyword(kw, normalized, positive_only=True)
+            r = record_ranks_for_keyword(kw, normalized, positive_only=True,
+                                         observation=item.get("observation"))
             logger.info(f"[수집] {kw}: 부분 관측 {len(req.products)}개 — 찾은 순위만 기록(상품 {r.get('products', 0)} · 업체 {r.get('clients', 0)})")
             return r
         except Exception as e:
@@ -879,16 +888,22 @@ def _normalize_collected(p: dict) -> dict:
 def load_collected(keyword: str, on_date: Optional[str] = None) -> Optional[dict]:
     """배치용 — 수집분에서 키워드 1건을 꺼내 _parse_api_item 포맷으로 정규화해 돌려준다.
 
-    반환: {'total': int, 'prods': [ _parse_api_item 과 동일 키의 dict, … ]} 또는 None.
+    반환: {'total': int, 'prods': [ _parse_api_item 과 동일 키의 dict, … ], 'observation': dict|None} 또는 None.
     scheduler 의 find_product_rank_from_cache·auto_analysis 가 그대로 소비할 수 있어야 한다.
+    observation(3차 · additive) = 업로드 때 실린 봉투(meta.observation) — 08:00 배치가 순서 가드에 쓴다. 구확장분은 None.
     """
     on_date = on_date or date.today().isoformat()
     conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
     try:
-        r = conn.execute(
-            "SELECT total, products_json FROM collected_serp WHERE keyword=? AND collected_date=?",
-            (keyword, on_date)).fetchone()
+        try:
+            r = conn.execute(
+                "SELECT total, products_json, meta_json FROM collected_serp WHERE keyword=? AND collected_date=?",
+                (keyword, on_date)).fetchone()
+        except sqlite3.OperationalError:   # meta_json 칸이 없는 옛 DB
+            r = conn.execute(
+                "SELECT total, products_json, NULL AS meta_json FROM collected_serp WHERE keyword=? AND collected_date=?",
+                (keyword, on_date)).fetchone()
         if not r:
             return None
         try:
@@ -898,7 +913,14 @@ def load_collected(keyword: str, on_date: Optional[str] = None) -> Optional[dict
         if not raw:
             return None
         prods = [_normalize_collected(p) for p in raw]
-        return {"total": r["total"] or 0, "prods": prods}
+        observation = None
+        try:
+            _m = json.loads(r["meta_json"] or "{}") if r["meta_json"] else {}
+            if isinstance(_m, dict) and isinstance(_m.get("observation"), dict):
+                observation = _m["observation"]
+        except Exception:
+            observation = None
+        return {"total": r["total"] or 0, "prods": prods, "observation": observation}
     finally:
         conn.close()
 # ==================== 4) 주간 온디맨드 요청 큐 ====================

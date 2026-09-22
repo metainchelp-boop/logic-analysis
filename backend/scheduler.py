@@ -863,10 +863,29 @@ def _run_rank_tracking():
                     _collected = load_collected(keyword)
                 except Exception as _ce:
                     logger.warning(f"  [{keyword}] 수집분 조회 실패(무시): {_ce}")
+                _stale_targets = set()   # 순서 가드 — 이 수집분보다 새로운 관측이 이미 적힌 대상(건너뛴다)
+                _rg, _obs_at, _obs_key = None, None, None   # ⚠️ API 경로(_collected 없음)에서도 아래 참조가 안전해야 한다
                 if _collected:
                     all_prods = _collected["prods"]
                     total_shop = _collected["total"]
                     logger.info(f"  📥 [{keyword}] 브라우저 수집분 사용 — 상품 {len(all_prods)}개")
+                    # 🧷 코덱스 1.22.0 순서 가드(3차 · 2026-09-22) — 이 수집분(전량)보다 **나중에** 올라온 양성 관측
+                    #    (부분 수집이 찾은 순위)이 있으면 그 대상은 여기서 다시 적지 않는다. 옛 전량 재생이 새 순위를
+                    #    None 으로 되돌리던 구멍. 봉투 없는 구확장 수집분은 가드 없음(종전 그대로).
+                    try:
+                        import rank_guard as _rg
+                        _obs = _collected.get("observation") if isinstance(_collected, dict) else None
+                        if _obs:
+                            _obs_at = _rg.finished_epoch(_obs)
+                            _obs_key = _rg.observation_key(_obs)
+                            _stale_targets = _rg.newer_targets(conn, keyword, today, _obs_at)
+                            if _stale_targets:
+                                logger.info(f"  🧷 [{keyword}] 더 새로운 관측이 적힌 대상 {len(_stale_targets)}개는 건너뜀")
+                        else:
+                            _obs_at, _obs_key = None, None
+                    except Exception as _ge:
+                        _stale_targets, _obs_at, _obs_key = set(), None, None
+                        logger.warning(f"  [{keyword}] 순서 가드 조회 실패(거르지 않음): {_ge}")
 
                 # ── 2순위: 기존 검색 API (최대 300개 = 100개 × 3페이지) ──
                 # 차단기가 켜졌으면 죽은 API 를 더 부르지 않는다(수집분이 있으면 애초에 안 부른다).
@@ -950,6 +969,8 @@ def _run_rank_tracking():
                 # ── 홈탭 순위 저장 ──
                 if keyword in home_keyword_map:
                     for product, kw_info in home_keyword_map[keyword]:
+                        if ("product", int(kw_info["id"])) in _stale_targets:
+                            continue   # 🧷 더 새로운 관측이 이미 적혔다
                         try:
                             # nv_mid — 등록 때 받아 둔 값이 있으면 그것이 가장 정확한 열쇠다.
                             # 없으면(기존 443개) 빈 값이라 종전 규칙 그대로 돈다(무회귀).
@@ -985,6 +1006,11 @@ def _run_rank_tracking():
                             if competitors:
                                 save_competitor_snapshot(kw_info["id"], competitors[:5])
                             total_rank_saved += 1
+                            if _obs_key:
+                                try:
+                                    _rg.claim(conn, "product", kw_info["id"], keyword, today, _obs_key, _obs_at)
+                                except Exception:
+                                    pass
 
                             # ── 이어진 업체에도 같은 값을 적어 준다 ──
                             # 이 상품이 어느 업체 것인지 rank_link 가 알고 있으면, 방금 잰 순위를
@@ -1011,10 +1037,17 @@ def _run_rank_tracking():
                     product_url = client['naver_store_url'] or ''
                     if not product_url or keyword not in client_keyword_map.get(cid, []):
                         continue
+                    if ("client", int(cid)) in _stale_targets:
+                        continue   # 🧷 더 새로운 관측이 이미 적혔다
                     try:
                         rank, page, _ = find_product_rank_from_cache(keyword, product_url, all_prods)
                         _save_client_rank(conn, cid, keyword, product_url, rank, page, "scheduled")
                         total_rank_saved += 1
+                        if _obs_key:
+                            try:
+                                _rg.claim(conn, "client", cid, keyword, today, _obs_key, _obs_at)
+                            except Exception:
+                                pass
                     except Exception as e:
                         logger.error(f"  ❌ 업체 순위 저장 실패 [{client['name']}:{keyword}]: {e}")
 
@@ -1409,9 +1442,9 @@ def _run_daily_db_backup():
         if free < db_size + 2 * 1024 ** 3:
             logger.warning(
                 f"[DB백업] 디스크 여유 부족(free={free:,} < db={db_size:,}+2GB) — "
-                f"이번 백업 건너뜀(앱 쓰기 보호). 오래된 백업만 정리."
+                f"이번 백업 건너뜀(앱 쓰기 보호). 이전 복구 세대 보존."
             )
-            _prune_old_backups(backup_dir)
+            # (2026-09-22 코덱스 이식) 새 백업이 못 생기는데 이전 세대를 지우면 복구 수단만 준다 — 정리하지 않는다.
             return
     except Exception:
         pass
@@ -1422,34 +1455,29 @@ def _run_daily_db_backup():
 
     try:
         # 업체 수 확인 (빈 DB 백업 방지)
-        conn = sqlite3.connect(DB_PATH, timeout=10)
-        row = conn.execute("SELECT COUNT(*) FROM clients").fetchone()
+        from contextlib import closing
+        with closing(sqlite3.connect(DB_PATH, timeout=10)) as conn:
+            row = conn.execute("SELECT COUNT(*) FROM clients").fetchone()
         client_count = row[0] if row else 0
-        conn.close()
 
         if client_count == 0:
             logger.info("[DB백업] 업체 데이터 없음, 백업 건너뜀")
             return
 
         # SQLite online backup (WAL 안전) → 임시 .db
-        src = sqlite3.connect(DB_PATH)
-        dst = sqlite3.connect(raw_path)
-        src.backup(dst)
-        dst.close()
-        src.close()
+        with closing(sqlite3.connect(DB_PATH)) as src, closing(sqlite3.connect(raw_path)) as dst:
+            src.backup(dst)
 
     except Exception as e:
-        logger.error(f"❌ [DB백업] online backup 실패, 파일 복사로 대체: {e}")
-        try:
-            shutil.copy2(DB_PATH, raw_path)
-        except Exception as e2:
-            logger.error(f"❌ [DB백업] 파일 복사도 실패: {e2}")
-            if os.path.exists(raw_path):
-                try:
-                    os.remove(raw_path)
-                except Exception:
-                    pass
-            return
+        # (2026-09-22 코덱스 이식) .db 단독 복사 폴백을 **뺐다** — WAL 에 남은 커밋이 빠진 사본이 「백업 완료」로
+        #    승격되던 구멍(기동 백업과 같은 고침 · #257). 실패한 백업은 지우고 이전 세대를 그대로 둔다.
+        logger.error(f"❌ [DB백업] 일관 백업 실패 — 이전 백업 보존: {e}")
+        if os.path.exists(raw_path):
+            try:
+                os.remove(raw_path)
+            except Exception:
+                pass
+        return
 
     # gzip 압축 → **검증 통과 후에만** 원본 .db 제거 (수 GB → ~1GB, 디스크 절약)
     #

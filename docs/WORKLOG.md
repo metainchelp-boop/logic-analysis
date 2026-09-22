@@ -10,6 +10,21 @@
 > **적는 법(append-only 유지)** — 새 차수는 이 파일 **맨 위**(아래 목차 바로 다음)에 적습니다.
 > 진행 중인 동안에는 CLAUDE.md 에도 제목 한 줄을 두고, **배포가 끝나면 그 한 줄만 지웁니다.**
 
+## 2026-09-22 — 코덱스 1.22.0 이식 3차(#258 · feat/codex-port-3 · #257 위 stack) — 순서 가드 · nvMid 정확 식별 · 백업 안전 · 확장 v1.25.0
+
+- **대표 질문** 「코덱스에 전달 받은 내용 전부 반영한 거 맞아?」 — 답은 **「아니다」**였다. 2차까지 끝내고 「완성」이라 보고했는데, 코덱스 패키지의 `CANDIDATE-OVERLAY.json`(변경 28파일)을 하나씩 열어 보니 반영 6 · 부분 3 · **미반영 14 + 문서 4** 였다. ⭐ **교훈 — 「핵심은 다 넣었다」와 「전부 반영했다」는 다른 축이다.** 이식 보고는 원본의 파일 목록을 기준으로 「넣은 것/뺀 것/왜」를 표로 적어야 한다(이번 PR 본문부터 그렇게 했다).
+- **3차로 얹은 것과 원안과 다르게 한 이유**
+  ① 순서 가드 — 원안 `rank_record` 는 트랜잭션 통째 재작성(검증된 관측만 재생 · `collector_catalog` 의존 · raw 경로 거절)이라 구확장 업로드가 순위 0건이 된다(1차 때 뺀 이유 그대로). 그중 **가드(`_claim_rank_projection`)만** `rank_guard.py` 로 떼어 얹었다. 규칙: 더 새로운 관측이 있으면 안 적음 · 같은 관측은 멱등 · 봉투 없음(구확장)은 「지금」 · 가드 조회 실패는 **거르지 않음**. 08:00 배치는 `load_collected` 가 돌려주는 봉투로 `newer_targets` 를 재서 그 대상만 건너뛰고, 적은 뒤 claim 한다.
+  ② nvMid 자동 찾기 — 정확 식별(`naver_product_identity` 튜플)이 있으면 그것만, 없으면 종전 「채널 번호가 주소 안에」 폴백. 후보 nvMid 가 둘 이상이면 `ambiguous-match`(사람 확인). ⚠️ 코덱스는 조회 창을 「오늘 검증된 관측」으로 좁혔는데 그러면 `not-collected` 가 늘어 배치 채우기(9/18 #244 · 237개)가 못 채운다 → **14일 창 유지.**
+  ③ 00:30 백업 — 기동 백업(#257)과 같은 세 가지(복사 폴백 제거 · 디스크 가드 때 선정리 제거 · closing).
+  ④ 확장 — `rank_rules.toProduct` 의 productId 를 **nvMid 우선**으로(행 id 는 페이지마다 바뀌어 중복 판정·조기 종료 대조가 흔들린다) · 식별값 없는 행은 담지 않고 `invalidSkipped` 로 센다(담으면 순번만 밀어낸다) · `net_tap` 이 요청 범위(정렬 rel·productSet total·pagingSize 40·허용 칸만)와 응답 주소 대응을 **기록만** 한다(요청 0건 추가) · 진단 파일은 코덱스의 허용 목록 방식을 우리 state 키로 다시 썼다(IndexedDB 는 4차).
+- **검증** — `test_rank_guard` 19: 가짜 DB 에 가짜 매처·저장기를 끼워 실제 `record_ranks_for_keyword` 를 돌린다 — A(전량·None·30분 전) → B(양성·37·20분 전) → **A 재생 = stale 1 · 저장 0** → B 재생 = 멱등 → 구확장(봉투 없음) = 종전대로 적힘. `test_codex_port_3` 36(배선) · node `diagnostic_export` 20(모든 저장값에 SECRET 표식을 심고 결과 JSON 에 한 글자도 없음 · 저장소 set 금지 · fetch 금지 · 3초 타임아웃) · `reader_identity` 12. 게이트 42/42 · 사보타주 6종 전부 실패로 잡힘.
+- ⚠️ **함정** — `test_collector_observation` 이 1차 때 `record_ranks_for_keyword(kw, normalized, positive_only=positive_only)` 를 **글자 그대로** 못박아 3차의 `observation=` 가산에 깨졌다. `[,)]` 로 완화. **호출 모양을 고정할 땐 「이 인자가 있는가」로, 「정확히 이 인자들뿐인가」로 못박지 말 것**(#453·9/22 heartbeat 와 같은 축 세 번째).
+- **남은 것(4·5차)** — 4차: 미전송 보관함(IndexedDB `metainc-collector-v2`)·ACK 재전송·복구(`background_recovery`·`indexeddb_offline`·`mv3_storage_lifecycle`·`popup_recovery`·`server_integration`·`observation_hardening`) + `collector_telemetry`(업로드 요약) · 5차: 운영 화면(`KeywordRankPage`·`RankTrackingSection`·`rankImage` — 어제 결과·오늘 진행·설치별 최근 보고·미전송·중앙 정지/재개 — 3탭(#253) 위에 다시 얹기) + `collector_catalog` + 문서 4종(복구 런북·기기 인수·릴리스 절차).
+- **배포·교체** — 「배포하자」 → #256 → #257 → #258 → 두 노트북 `수집기-v1.25.0.zip`(v1.21/1.23/1.24 zip 전부 대체). 배포 뒤 확인 = 진단 `live_check=on`(가드 표 `collector_rank_projections` 존재 · 08:00 로그 「🧷 더 새로운 관측이 적힌 대상 n개는 건너뜀」) · `match_ab=on`.
+
+---
+
 ## 2026-09-22 — 코덱스 1.22.0 이식 2차(#257 · feat/codex-port-2 · #256 위 stack) — 서버 중앙 배정 v2 · 페이싱 · 기계별 쉼 · 백업 안전 · 확장 v1.24.0
 
 - **대표 지시** 「2차도 바로 진행해. 완성하고 배포하고 최신 버전으로 교체할거야.」 1차(#256 · 정확 식별·관측 원장·부분 수집)에 이어 코덱스의 **v2 조정 런타임**과 **WAL 온라인 백업**을 우리 식으로 고쳐 얹었다. 요점은 CLAUDE.md 한 줄·PR 본문. 여기엔 설계 선택과 함정만 적는다.
