@@ -166,7 +166,7 @@ jobs:
             fi
             echo
             echo "== 최근 40분 출처 × 경로 — ⚠️ 사이트 전체 요청(수집기 경로만이 아님 · 「기타」= /api/collector 밖 = 화면·정적 파일·스캐너) (해시 앞 6자) =="
-            SINCE=$(date -d '40 min ago' +%H:%M)
+            SINCE=$(date -d '40 min ago' +%H:%M); [ "$SINCE" \> "$(date +%H:%M)" ] && SINCE=00:00   # 자정 넘김이면 오늘 0시부터
             if [ -n "$LOG" ]; then
               grep -a "$TODAY" "$LOG" | awk -v since="$SINCE" '{
                 split($4,t,":"); hm=t[2] ":" t[3]; if (hm < since) next;
