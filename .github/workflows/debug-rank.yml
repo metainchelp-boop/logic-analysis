@@ -185,6 +185,13 @@ jobs:
               grep -a "$TODAY" "$LOG" | awk -v since="$SINCE" '{split($4,t,":"); hm=t[2] ":" t[3]; if (hm < since) next; if ($9 < 400) next; if ($7 !~ /api\/collector/) next; ip=$1; cmd="printf %s " ip " | sha256sum | cut -c1-6"; cmd | getline h; close(cmd); p=$7; sub(/\?.*/,"",p); k=h " " $9 " " substr(p,1,40); n[k]++} END {for (k in n) printf "   %s x%d\n", k, n[k]}' | sort | head -20
             fi
             echo
+            echo "== 최근 40분 출처별 /api/collector 경로 상위 6 (질의 제거 · 상태 · 건수) — 「기타」가 무엇인지 =="
+            if [ -n "$LOG" ]; then
+              grep -a "$TODAY" "$LOG" | awk -v since="$SINCE" '$7 ~ /api\/collector/ {split($4,t,":"); hm=t[2] ":" t[3]; if (hm < since) next; ip=$1; cmd="printf %s " ip " | sha256sum | cut -c1-6"; cmd | getline h; close(cmd); p=$7; sub(/\?.*/,"",p); k=h " " $6 " " substr(p,1,60) " " $9; n[k]++; ua[k]=$0} END {for (k in n) printf "%6d  %s\n", n[k], k}' | sort -k2,2 -k1,1nr | awk '{c[$2]++; if (c[$2] <= 6) print "  " $0}'
+              echo "  [같은 출처들의 User-Agent 앞 60자]"
+              grep -a "$TODAY" "$LOG" | awk -v since="$SINCE" '$7 ~ /api\/collector/ {split($4,t,":"); hm=t[2] ":" t[3]; if (hm < since) next; ip=$1; cmd="printf %s " ip " | sha256sum | cut -c1-6"; cmd | getline h; close(cmd); n=split($0, a, "\""); u=a[6]; k=h " " substr(u,1,60); c[k]++} END {for (k in c) printf "   %s x%d\n", k, c[k]}' | sort
+            fi
+            echo
             echo "== 🔀 분할 검증 — 각 출처가 보낸 worker/workers 값 (오늘 /api/collector/keywords·requests 의 질의 문자열) =="
             if [ -n "$LOG" ]; then
               grep -a "$TODAY" "$LOG" | awk '$7 ~ /api\/collector\/(keywords|requests)/ {ip=$1; cmd="printf %s " ip " | sha256sum | cut -c1-6"; cmd | getline h; close(cmd); q=$7; w=""; if (match(q,/worker=[0-9]+/)) w=substr(q,RSTART,RLENGTH); wc=""; if (match(q,/workers=[0-9]+/)) wc=substr(q,RSTART,RLENGTH); k=h " " (w==""?"worker=(없음)":w) " " (wc==""?"workers=(없음)":wc); n[k]++; last[k]=$4} END {for (k in n) printf "  %s x%d 마지막 %s\n", k, n[k], last[k]}' | sort
