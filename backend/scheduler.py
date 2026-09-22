@@ -241,6 +241,25 @@ def start_scheduler():
         max_instances=1,
     )
 
+    # 🧭 v2 중앙 배정 작업 원장 동기화(코덱스 이식 2차) — 부팅 +2분 1회 + 매시 05분. env 스위치가 꺼져 있어도 원장은 만들어 둔다
+    #    (켜는 순간 바로 배정 가능 · 읽기 전용 표라 무해). 실패해도 다른 잡에 영향 없음.
+    def _coord_sync_job():
+        try:
+            import sqlite3 as _sq
+            from collector import DB_PATH as _dbp
+            from collector_v2 import sync_today
+            _c = _sq.connect(_dbp, timeout=30)
+            try:
+                r = sync_today(_c)
+            finally:
+                _c.close()
+            if r.get("made") or r.get("error"):
+                logger.info(f"🧭 v2 작업 원장 동기화 — 신규 {r.get('made', 0)} · 갱신 {r.get('updated', 0)}" + (f" · 오류 {r['error']}" if r.get("error") else ""))
+        except Exception as _e:
+            logger.warning(f"v2 작업 원장 동기화 실패(무시): {_e}")
+    _scheduler.add_job(_coord_sync_job, trigger="date", run_date=datetime.now() + timedelta(minutes=2), id="coord_sync_boot")
+    _scheduler.add_job(_coord_sync_job, trigger="cron", minute=5, id="coord_sync_hourly", replace_existing=True)
+
     # 10) 업체 상세 HTML 이관 — 부팅 3분 뒤 한 번(큐 정리 다음).
     #     ⚠️ 이 이관이 끝나야 VACUUM 이 의미가 있다(빈 자리가 생겨야 파일이 준다).
     #        그래서 VACUUM 은 아래에서 120초가 아니라 **넉넉히 뒤로** 미뤄 둔다.

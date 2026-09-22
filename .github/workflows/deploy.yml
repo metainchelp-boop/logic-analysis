@@ -160,6 +160,9 @@ jobs:
       - name: Collector observation envelope regression (v1.23.0 관측 봉투·부분 수집)
         run: node collector-extension/tests/observation_envelope.test.js
 
+      - name: Collector coordinated regression (v1.24.0 서버 배정 · INACTIVE 폴백 · 기계별 쉼)
+        run: node collector-extension/tests/coordinated.test.js
+
       # 수집 멈춤 감시(2026-09-10) — 하루가 통째로 0건이 되어도 아무도 몰랐다.
       # 상한(5시간)·쿨다운(6시간)·문자 90바이트·기록 커밋을 지킨다.
       # ⚠️ 그중 「기록 커밋」이 핵심이다 — 안 되면 매시간 같은 문자가 도배된다.
@@ -243,6 +246,15 @@ jobs:
       # 관측 원장 — 봉투 없음/어긋남은 격리 없이 종전 경로(fail-open) · partial 은 찾은 순위만 · 같은 observationId 재전송 1회 반영.
       - name: 회귀 — 수집 관측 원장(네 갈래 반영·멱등·보관정책)
         run: python backend/tests/test_collector_observation.py
+
+      # 2026-09-22 코덱스 1.22.0 이식 2차 — 🧭 서버 중앙 배정(v2). env 스위치(COLLECTOR_V2_ENABLED) 기본 꺼짐 = INACTIVE 라
+      #    확장은 종전 경로로 폴백한다(코덱스 원안은 여기서 멈췄다). 켜기 전에도 원장·경로·백업 안전은 이 셋이 지킨다.
+      - name: 회귀 — 수집 페이싱(간격·벌점·상한)
+        run: python backend/tests/test_collector_pacing.py
+      - name: 회귀 — 수집 중앙 배정 원장(임대·예산·기계별 쉼·완료)
+        run: python backend/tests/test_collector_coord.py
+      - name: 회귀 — 중앙 배정 v2 배선(경로 인증·업로드 훅·스케줄·백업 안전·확장 폴백)
+        run: python backend/tests/test_collector_v2_wire.py
 
       - name: Build frontend bundle
         run: |

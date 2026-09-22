@@ -114,6 +114,13 @@ def init_collector_db():
             _hb_ensure(conn)
         except Exception as e:
             logger.warning(f"[collector] heartbeat 표 보장 실패(무시): {e}")
+        # 🧭 중앙 배정 원장(코덱스 1.22.0 이식 2차) — 멱등 · 14일 보관정책
+        try:
+            from collector_coord import init_db as _coord_init, purge_old as _coord_purge
+            _coord_init(conn)
+            _coord_purge(conn)
+        except Exception as e:
+            logger.warning(f"[collector] 중앙 배정 표 보장 실패(무시): {e}")
         # 📒 관측 원장(코덱스 1.22.0 이식 · 2026-09-22) — 멱등 + 30일 보관정책(부팅 때 한 번 정리)
         try:
             from collector_observation import init_observation_db as _obs_init, purge_old as _obs_purge
@@ -646,11 +653,23 @@ def upload_serp(req: SerpUpload, x_collector_token: str = Header(None)):
     conn = sqlite3.connect(DB_PATH, timeout=10)
     try:
         try:
-            return _obs_ingest(conn, item, today, _store_full, _project_positive)
+            result = _obs_ingest(conn, item, today, _store_full, _project_positive)
         except ObservationError as _oe:
             raise HTTPException(status_code=_oe.status_code, detail=str(_oe))
     finally:
         conn.close()
+    # 🧭 v2 중앙 배정 — 임대 계약(meta.job)이 실려 있으면 작업을 완료/보류 처리한다(없으면 무동작 · 실패해도 업로드는 성공).
+    try:
+        from collector_v2 import complete_from_upload
+        _stop = ""
+        if item.get("observation"):
+            _stop = str(item["observation"].get("stopReason") or "")
+        _job_out = complete_from_upload(req.meta, item["status"], item["observation_id"], _stop)
+        if _job_out:
+            result["job"] = _job_out
+    except Exception as _je:
+        logger.warning(f"[collector] v2 작업 완료 훅 실패(업로드는 성공): {_je}")
+    return result
 
 
 # ==================== 3) 수집 현황 ====================

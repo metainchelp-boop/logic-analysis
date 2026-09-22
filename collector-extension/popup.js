@@ -87,6 +87,17 @@ async function render() {
       (state.lastHeartbeatOk ? '<span class="b ok">성공</span>' : '<span class="b bad">실패</span>') +
       (state.lastHeartbeatNote ? ` · ${state.lastHeartbeatNote}` : '')
     : '📡 서버 보고 — 아직 없음 (설치 후 15초 · 이후 5분마다)';
+  // 🧭 v2 서버 자동 배정(코덱스 이식 2차) — 켜짐/꺼짐 + 서버 응답 상태
+  const coordOn = state.coordEnabled === true;
+  const coordBtn = $('coordinated');
+  if (coordBtn) {
+    coordBtn.textContent = coordOn ? '🧭 서버 자동 배정 — 켬' : '🧭 서버 자동 배정 — 끔';
+    coordBtn.style.background = coordOn ? '#dbeafe' : '';
+    coordBtn.style.color = coordOn ? '#1d4ed8' : '';
+  }
+  const coordLine = coordOn
+    ? `🧭 배정 ${state.coordState || '—'}${state.coordReason ? ' · ' + state.coordReason : ''}${state.coordNextAt ? ' · 다음 ' + new Date(state.coordNextAt).toLocaleTimeString('ko-KR') : ''}`
+    : '';
   let alarmLine = '';
   try {
     const names = (await chrome.alarms.getAll()).map((a) => a.name);
@@ -118,7 +129,7 @@ async function render() {
       ? '<span class="b" style="color:#b45309">▸ 안전 속도로 돌리는 중</span>' +
         `<span style="font-size:11px"> — ${new Date(slowUntil).toLocaleString('ko-KR')}까지 절반 속도</span><br>`
       : '') +
-    `<div class="sec">${hbLine}<br>${alarmLine}</div>` +
+    `<div class="sec">${hbLine}<br>${alarmLine}${coordLine ? '<br>' + coordLine : ''}</div>` +
     dayBlock +
     `<div class="sec">이번 시간대 · 대상 <span class="b">${state.target ?? '-'}</span>개 · ` +
     `완료 <span class="b ok">${state.done ?? 0}</span> · ` +
@@ -209,6 +220,12 @@ $('localPause').onclick = async () => {
 // 📡 v1.21.0 — 지금 상태를 서버에 보낸다(+ 빠진 알람 재장전). 네이버 요청 0건.
 $('heartbeat').onclick = () =>
   chrome.runtime.sendMessage({ cmd: 'heartbeat' }, () => setTimeout(render, 900));
+// 🧭 v2 — 서버 자동 배정 켜고 끄기(background 가 같은 저장값을 읽는다).
+$('coordinated').onclick = async () => {
+  const { state = {} } = await chrome.storage.local.get('state');
+  const on = state.coordEnabled === true;
+  chrome.runtime.sendMessage({ cmd: 'setCoordinated', on: !on }, () => setTimeout(render, 400));
+};
 $('refresh').onclick = render;
 render();
 setInterval(render, 3000);
