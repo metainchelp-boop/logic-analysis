@@ -82,6 +82,13 @@
           title="이 기계의 상태·건수만 JSON 파일로 저장합니다. 토큰·검색어·상품·기계 식별자·원문은 넣지 않습니다. 서버·네이버에 요청을 보내지 않습니다.">🧾 진단 파일</button>
 </div>
 <div id="diagnosticStatus" class="dim" role="status" hidden style="margin:-2px 0 6px"></div>
+<!-- 📤 v1.26.0 — 미전송 보관함(서버가 잠깐 죽어도 모은 것을 안 잃는다). 상태 칸의 「📤 미전송」 줄과 짝. -->
+<div class="row" style="margin-top:6px">
+  <button id="outboxFlush" class="ghost" style="flex:1"
+          title="서버에 못 올린 결과를 지금 다시 보냅니다. 네이버에 요청을 보내지 않습니다.">📤 미전송 다시 보내기</button>
+  <button id="outboxClear" class="ghost" style="flex:0 0 auto"
+          title="검토가 끝난 미전송·격리 결과를 이 기계에서 지웁니다. 되돌릴 수 없습니다.">🗑 검토 후 비우기</button>
+</div>
 <div class="row" style="margin-top:6px">
   <button id="coordinated" class="ghost" style="flex:1"
           title="서버가 키워드를 기계별로 나눠 배정합니다(임대·예산·간격). 서버 스위치가 꺼져 있으면 종전대로 시간대 몫을 수집합니다.">🧭 서버 자동 배정</button>

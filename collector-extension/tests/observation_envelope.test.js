@@ -102,10 +102,10 @@ async function run(pages, { targets = null, maxRank = 300, pagesPerKeyword = 8 }
   ok('🔴 uploadKeyword 가 meta.observation 으로 봉투를 싣는다', /observation: payload\.observation \|\| undefined/.test(up));
   const rc = extract('runCollection');
   ok('🔴 runCollection — partial 을 따로 세고 상태에 싣는다', /partial\+\+/.test(rc) && /setState\(\{ done, failed, partial, current: kw/.test(rc));
-  ok('🔴 runCollection — 담은 것이 있으면 올린 뒤 막힘 처리(throw → catch 가 6시간 쉼)', /await uploadKeyword\(token, kw, payload\);\s*\n\s*if \(payload\.blocked\) \{[\s\S]{0,300}throw new Error\(payload\.blocked\)/.test(rc));
+  ok('🔴 runCollection — 담은 것이 있으면 올린 뒤 막힘 처리(throw → catch 가 6시간 쉼)', /(const _up = )?await uploadKeyword\(token, kw, payload\);[\s\S]{0,260}?if \(payload\.blocked\) \{[\s\S]{0,300}throw new Error\(payload\.blocked\)/.test(rc));
   ok('runCollection — 0건인데 막힘이면 종전대로 즉시 막힘 처리', /if \(!payload\.products\.length\) \{\s*\n\s*if \(payload\.blocked\) throw new Error\(payload\.blocked\);/.test(rc));
   const od = extract('runOnDemand');
-  ok('runOnDemand 도 같은 규칙(올린 뒤 막힘 처리)', /await uploadKeyword\(token, kw, payload\);\s*\n\s*if \(payload\.blocked\) throw new Error\(payload\.blocked\);/.test(od));
+  ok('runOnDemand 도 같은 규칙(올린 뒤 막힘 처리)', /(const _up = )?await uploadKeyword\(token, kw, payload\);[\s\S]{0,260}?if \(payload\.blocked\) throw new Error\(payload\.blocked\);/.test(od));
   const fp = extract('fetchPage');
   ok('🔴 fetchPage 가 근거(src·href)를 돌려주고 NO_PAGER·STALE_PAGE 는 stopReason 으로', /src: out\.src \|\| '', href: out\.href \|\| ''/.test(fp) && /stopReason: 'NO_PAGER'/.test(fp) && /stopReason: 'STALE_PAGE'/.test(fp));
   ok('manifest 1.23.0 이상', (() => { const [a, b] = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'manifest.json'), 'utf8')).version.split('.').map(Number); return a > 1 || (a === 1 && b >= 23); })());

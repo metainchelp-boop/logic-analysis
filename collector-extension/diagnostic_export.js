@@ -51,6 +51,7 @@
       lastError: presence(state.error),                 // 오류 문장은 싣지 않는다
       heartbeat: { at: timestamp(state.lastHeartbeatAt), ok: flag(state.lastHeartbeatOk), note: presence(state.lastHeartbeatNote) },
       startedAt: timestamp(state.startedAt), finishedAt: timestamp(state.finishedAt),
+      outboxCount: count(state.outboxCount, 100), outboxReview: count(state.outboxReview, 100), outboxNextAt: timestamp(state.outboxNextAt),
       counts,
     };
   }
@@ -74,13 +75,57 @@
       return { availability: 'AVAILABLE', count: all.length, names };
     } catch (_) { return { availability: 'READ_ERROR' }; }
   }
-  async function collect({ chromeApi = globalThis.chrome, now = Date.now() } = {}) {
+  /** 📤 미전송 보관함(IndexedDB `metainc-collector-v2`/`outbox`) — 건수·바이트·격리·시도만. 본문·검색어·ID 는 안 읽는다. DB 가 없으면 만들지 않는다. */
+  function readOutbox(indexedDBApi = globalThis.indexedDB, now = Date.now()) {
+    if (!indexedDBApi || typeof indexedDBApi.open !== 'function') return Promise.resolve({ availability: 'UNSUPPORTED' });
+    return new Promise((resolve) => {
+      let db, done = false;
+      const finish = (v) => { if (done) return; done = true; clearTimeout(timer); try { if (db) db.close(); } catch (_) {} resolve(v); };
+      const timer = setTimeout(() => finish({ availability: 'READ_TIMEOUT' }), 3000);
+      (async () => {
+        if (typeof indexedDBApi.databases === 'function') {
+          const list = await indexedDBApi.databases();
+          if (Array.isArray(list) && !list.some((d) => d && d.name === 'metainc-collector-v2')) return finish({ availability: 'MISSING_DATABASE', count: 0 });
+        }
+        const req = indexedDBApi.open('metainc-collector-v2');
+        req.onupgradeneeded = () => { try { req.transaction.abort(); } catch (_) {} finish({ availability: 'MISSING_DATABASE', count: 0 }); };
+        req.onerror = () => finish({ availability: 'READ_ERROR' });
+        req.onblocked = () => finish({ availability: 'BLOCKED' });
+        req.onsuccess = () => {
+          db = req.result;
+          if (done) { try { db.close(); } catch (_) {} return; }
+          if (!db.objectStoreNames || !db.objectStoreNames.contains('outbox')) return finish({ availability: 'UNKNOWN_SCHEMA' });
+          try {
+            const tx = db.transaction('outbox', 'readonly');
+            const get = tx.objectStore('outbox').getAll();
+            let summary;
+            get.onsuccess = () => {
+              const items = Array.isArray(get.result) ? get.result : [];
+              let bytes = 0, quarantined = 0, maxAttempts = 0, oldest = null;
+              for (const it of items) {
+                bytes += count(it && it.bytes) || 0;
+                if (it && it.quarantined === true) quarantined++;
+                maxAttempts = Math.max(maxAttempts, count(it && it.attempts) || 0);
+                const at = count(it && it.addedAt, 4102444800000);
+                if (at !== null && at > 0) oldest = oldest === null ? at : Math.min(oldest, at);
+              }
+              summary = { availability: 'AVAILABLE', count: items.length, payloadBytes: bytes, quarantinedCount: quarantined,
+                          maximumAttempts: maxAttempts, oldestAgeMinutes: oldest === null ? null : Math.max(0, Math.floor((now - oldest) / 60000)) };
+            };
+            tx.oncomplete = () => finish(summary || { availability: 'READ_ERROR' });
+            tx.onerror = tx.onabort = () => finish({ availability: 'READ_ERROR' });
+          } catch (_) { finish({ availability: 'READ_ERROR' }); }
+        };
+      })().catch(() => finish({ availability: 'READ_ERROR' }));
+    });
+  }
+  async function collect({ chromeApi = globalThis.chrome, indexedDBApi = globalThis.indexedDB, now = Date.now() } = {}) {
     let extensionVersion = null;
     try { extensionVersion = version(chromeApi.runtime.getManifest().version); } catch (_) { /* 모르면 null */ }
-    const [local, alarms] = await Promise.all([readLocal(chromeApi, now), readAlarms(chromeApi)]);
-    return { schemaVersion: 1, exportedAt: timestamp(now), extensionVersion, snapshot: 'INDEPENDENT_LOCAL_READS', local, alarms };
+    const [local, alarms, outbox] = await Promise.all([readLocal(chromeApi, now), readAlarms(chromeApi), readOutbox(indexedDBApi, now)]);
+    return { schemaVersion: 1, exportedAt: timestamp(now), extensionVersion, snapshot: 'INDEPENDENT_LOCAL_READS', local, alarms, outbox };
   }
-  const api = { collect, summarizeLocal, timestamp, version };
+  const api = { collect, summarizeLocal, timestamp, version, readOutbox };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   globalThis.CollectorDiagnosticExport = api;
 })();

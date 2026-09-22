@@ -206,6 +206,7 @@ def ingest(conn, item: Dict[str, Any], collected_date: str,
             if old[0] != item["payload_hash"]:
                 raise ObservationError("OBSERVATION_ID_CONFLICT", "같은 observationId 에 다른 본문", 409)
             res = json.loads(old[1]); res["duplicate"] = True
+            res.setdefault("payloadHash", item["payload_hash"]); res.setdefault("protocol", 2)   # 4차 ACK 대조용
             return res
     ranked = {"products": 0, "clients": 0}
     if kind == "full":
@@ -219,7 +220,9 @@ def ingest(conn, item: Dict[str, Any], collected_date: str,
               "projected": projected, "projectionStatus": {"full": "full", "full_positive": "full_positive",
                                                             "positive": "partial_positive"}.get(kind, "evidence_only"),
               "observationStatus": item["status"], "observationId": oid, "reason": item["reason"],
-              "ranked": ranked, "duplicate": False}
+              "ranked": ranked, "duplicate": False,
+              # 📤 4차(코덱스 ACK 이식) — 확장이 「내가 보낸 그 본문이 저장됐다」를 대조하는 열쇠. 구확장은 무시한다.
+              "protocol": 2, "payloadHash": item["payload_hash"]}
     try:
         conn.execute("""INSERT OR IGNORE INTO collector_observations
             (observation_id, keyword, collected_date, status, kind, reason, payload_hash, products_json, meta_json, projected, result_json)

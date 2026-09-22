@@ -98,6 +98,15 @@ async function render() {
   const coordLine = coordOn
     ? `🧭 배정 ${state.coordState || '—'}${state.coordReason ? ' · ' + state.coordReason : ''}${state.coordNextAt ? ' · 다음 ' + new Date(state.coordNextAt).toLocaleTimeString('ko-KR') : ''}`
     : '';
+  // 📤 v1.26.0 — 미전송 보관함(이 기계에 남은 것). 0건이면 줄 자체를 안 그린다.
+  const obCount = Number(state.outboxCount || 0);
+  const obReview = Number(state.outboxReview || 0);
+  const outboxLine = obCount
+    ? `<span class="b bad">📤 미전송 ${obCount}건</span>` +
+      (obReview ? ` · 검토 필요 <span class="b bad">${obReview}</span>` : '') +
+      (state.outboxNextAt && obCount > obReview ? ` · 다음 재전송 ${new Date(state.outboxNextAt).toLocaleTimeString('ko-KR')}` : '') +
+      ' <span class="dim">— 서버가 받으면 자동으로 사라집니다</span>'
+    : '';
   let alarmLine = '';
   try {
     const names = (await chrome.alarms.getAll()).map((a) => a.name);
@@ -129,7 +138,7 @@ async function render() {
       ? '<span class="b" style="color:#b45309">▸ 안전 속도로 돌리는 중</span>' +
         `<span style="font-size:11px"> — ${new Date(slowUntil).toLocaleString('ko-KR')}까지 절반 속도</span><br>`
       : '') +
-    `<div class="sec">${hbLine}<br>${alarmLine}${coordLine ? '<br>' + coordLine : ''}</div>` +
+    `<div class="sec">${hbLine}<br>${alarmLine}${coordLine ? '<br>' + coordLine : ''}${outboxLine ? '<br>' + outboxLine : ''}</div>` +
     dayBlock +
     `<div class="sec">이번 시간대 · 대상 <span class="b">${state.target ?? '-'}</span>개 · ` +
     `완료 <span class="b ok">${state.done ?? 0}</span> · ` +
@@ -220,6 +229,16 @@ $('localPause').onclick = async () => {
 // 📡 v1.21.0 — 지금 상태를 서버에 보낸다(+ 빠진 알람 재장전). 네이버 요청 0건.
 $('heartbeat').onclick = () =>
   chrome.runtime.sendMessage({ cmd: 'heartbeat' }, () => setTimeout(render, 900));
+// 📤 v1.26.0 — 미전송 보관함(코덱스 이식 4차). 다시 보내기는 네이버 요청 0건 · 비우기는 사람이 검토한 뒤에만.
+$('outboxFlush').onclick = () =>
+  chrome.runtime.sendMessage({ cmd: 'flushOutbox' }, () => setTimeout(render, 1500));
+$('outboxClear').onclick = async () => {
+  const { state = {} } = await chrome.storage.local.get('state');
+  const n = Number(state.outboxCount || 0);
+  if (!n) { alert('비울 것이 없습니다.'); return; }
+  if (!confirm(`미전송 ${n}건을 이 기계에서 지웁니다. 서버에 올라가지 않은 결과는 사라집니다. 검토를 마쳤습니까?`)) return;
+  chrome.runtime.sendMessage({ cmd: 'clearOutbox' }, () => setTimeout(render, 800));
+};
 // 🧾 v1.25.0 — 진단 파일 저장(코덱스 이식). 허용 목록 요약만 · 저장소 무변경 · 요청 0건.
 $('diagnosticExport').onclick = async () => {
   const button = $('diagnosticExport');

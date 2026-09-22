@@ -314,7 +314,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                         borderColor: C.OK,
                         backgroundColor: 'rgba(22,163,74,.12)',
                         fill: true, tension: 0.35, pointRadius: 2.5, borderWidth: 2.5,
-                        spanGaps: true
+                        spanGaps: false   // 빈 날은 끊어 그린다(코덱스 이식 5차) — 표기는 「300위 밖」 유지
                     }]
                 },
                 options: {

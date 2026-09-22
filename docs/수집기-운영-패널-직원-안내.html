@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>수집기 운영 패널 · 미전송 보관함 — 직원 안내</title>
+<style>
+:root{--b:#3b82f6;--s:#0f172a;--m:#475569;--l:#94a3b8;--bg:#f8fafc;--line:#e2e8f0}
+body{margin:0;background:#fff;color:var(--s);font-family:-apple-system,"Malgun Gothic","맑은 고딕",sans-serif;line-height:1.6}
+main{max-width:820px;margin:0 auto;padding:28px 16px 60px}
+h1{font-size:22px;margin:0 0 6px}h2{font-size:16px;margin:26px 0 8px;padding-left:10px;border-left:4px solid var(--b)}
+.sub{color:var(--m);font-size:13px;margin:0 0 18px}
+.card{border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:10px 0;background:var(--bg)}
+.card b{color:var(--b)}
+table{width:100%;border-collapse:collapse;font-size:13px;margin:8px 0}th,td{border-bottom:1px solid var(--line);padding:8px 6px;text-align:left;vertical-align:top}th{color:var(--l);font-size:12px}
+.tag{display:inline-block;padding:1px 8px;border-radius:99px;font-size:11.5px;font-weight:700}
+.ok{background:#dcfce7;color:#166534}.no{background:#fee2e2;color:#991b1b}.wn{background:#fef3c7;color:#92400e}
+ul{padding-left:20px}li{margin:4px 0}
+.foot{color:var(--l);font-size:12px;margin-top:26px}
+</style></head><body><main>
+<h1>🧭 수집기 운영 패널 · 📤 미전송 보관함</h1>
+<p class="sub">2026-09-22 배포 · 로직분석 「📊 쇼핑 순위 추적」 맨 위 · 수집기 v1.26.0</p>
+
+<h2>무엇이 생겼나</h2>
+<div class="card"><b>① 순위 추적 화면 맨 위 「🧭 수집기 운영」</b> — 오늘 몇 개 모았고 몇 개 남았는지, 기계(노트북)마다 마지막 신호가 언제인지, 서버에 못 올린 결과가 몇 건인지 한 장으로. 5분마다 스스로 새로고침.</div>
+<div class="card"><b>② 수집기(확장) 팝업 「📤 미전송」</b> — 서버가 잠깐 죽어도 모은 결과를 버리지 않고 노트북 안에 두었다가 서버가 살아나면 자동으로 다시 보냅니다. 예전엔 그 자리에서 버렸습니다.</div>
+<div class="card"><b>③ 관리자용 「⏹ 전체 중지 / ▶ 검토 후 전체 재개」·「설정 점검」</b> — 모든 노트북의 다음 회차를 한 번에 막고, 원인을 검토했다고 체크해야만 다시 켤 수 있습니다.</div>
+
+<h2>직원(담당자) — 볼 것 3가지</h2>
+<ul>
+<li><b>오늘 완료 / 대상</b> — 오늘 몇 개 키워드가 저장됐는지. 「부분」은 막혀서 찾은 순위만 적은 것.</li>
+<li><b>상품 연결 확인 필요</b> — 상품 고유번호(nvMid)가 없어 「300위 밖」이 진짜인지 못 가르는 대상 수. 순위 추적 화면에서 「🔎 자동 찾기」로 채우세요.</li>
+<li><b>값이 「미확인」</b> — 못 잰 것이지 0 이 아닙니다. 관리자에게 알려 주세요.</li>
+</ul>
+
+<h2>수집 노트북 담당자 — 팝업 읽는 법</h2>
+<table><tr><th>팝업에 보이는 줄</th><th>뜻</th><th>할 일</th></tr>
+<tr><td>📤 미전송 3건 · 다음 재전송 14:05</td><td>서버에 못 올린 결과 3건. 서버가 받으면 사라짐</td><td>기다리면 됩니다. 급하면 「📤 미전송 다시 보내기」 한 번</td></tr>
+<tr><td>📤 미전송 3건 · <span class="tag no">검토 필요 2</span></td><td>서버가 그 결과를 거절했거나 응답이 이상함</td><td>「🧾 진단 파일」을 내려받아 관리자에게. 원인 확인 전엔 「🗑 검토 후 비우기」를 누르지 않습니다</td></tr>
+<tr><td>⛔ 신호 끊김 40분</td><td>크롬이나 확장이 안 도는 것</td><td>크롬을 열고 팝업 「📡 지금 상태 서버에 보내기」</td></tr>
+<tr><td>🧱 캡차 쉼</td><td>네이버 퍼즐이 떠서 6시간 쉬는 중</td><td>네이버쇼핑을 직접 열어 퍼즐을 푼 뒤 「지금 수집 실행」. 반복해서 누르지 않습니다</td></tr>
+</table>
+
+<h2>관리자 — 전체 중지와 재개</h2>
+<ul>
+<li><b>⏹ 전체 중지</b>: 모든 노트북의 다음 회차를 막습니다. 이미 시작한 키워드는 끝까지 갑니다.</li>
+<li><b>▶ 검토 후 전체 재개</b>: 「원인을 검토했습니다」에 체크해야 버튼이 살아납니다. 체크 없이는 요청이 나가지 않습니다.</li>
+<li><b>설정 점검</b>: 켜기 전에 무엇이 막는지 목록으로. 「서버 자동 배정 스위치 꺼짐」은 시간대 방식으로 도는 정상 상태일 수 있습니다.</li>
+<li>요청 처리 여부를 못 확인했다는 문구가 뜨면 <b>자동으로 다시 보내지 않습니다</b>. 새로고침으로 현재 상태를 보고 판단하세요.</li>
+</ul>
+
+<h2>바뀌지 않은 것</h2>
+<ul>
+<li>「300위 밖」 표기 그대로. 순위 판정 규칙·시간당 상한(40)·캡차 6시간 쉼 그대로.</li>
+<li>수집기 토글 「🧭 서버 자동 배정」은 기본 꺼짐 — 서버 스위치를 켜기 전까지는 종전 시간대 방식으로 돕니다.</li>
+<li>퍼즐은 사람만 풉니다. 다른 회선·다른 노트북으로 우회하지 않습니다.</li>
+</ul>
+
+<p class="foot">그래프의 끊긴 구간은 그날 순위가 없었다는 뜻입니다(이어 그리지 않습니다). 문의: 로직분석 관리자.</p>
+</main></body></html>

@@ -10,6 +10,24 @@
 > **적는 법(append-only 유지)** — 새 차수는 이 파일 **맨 위**(아래 목차 바로 다음)에 적습니다.
 > 진행 중인 동안에는 CLAUDE.md 에도 제목 한 줄을 두고, **배포가 끝나면 그 한 줄만 지웁니다.**
 
+## 2026-09-22 — 코덱스 1.22.0 이식 4·5차(#259 · feat/codex-port-4 · #258 위 stack) — 미전송 보관함 · 텔레메트리 · 카탈로그 · 운영 패널 · 차트 빈 구간 · 확장 v1.26.0
+
+- **대표 지시** 「4차, 5차 까지 완료해」. 3차 보고에서 남겼던 미반영 조각을 전부 처리했다. **코덱스 28파일 대조표(최종)**:
+  | 코덱스 파일 | 처리 |
+  |---|---|
+  | product_identity · collector_observation · collector_pacing · collector_v2 · collector_coordinator(→coord) · collector_telemetry · collector_time · collector_catalog · rank_record(가드만) · nvmid · tracking_eligibility · collect_watch · main(백업) · scheduler(백업·재생 가드) | 이식(우리 식 조정 포함) |
+  | collector_readiness | 간이 readiness + catalog unresolved 로 대체 |
+  | naver_crawler(정확 식별 0순위 · 폴백 유지) · rank_rules · net_tap · diagnostic_export · coordinated_runtime(→runCoordinated+outbox) · background/popup | 이식(판독기 전면 교체·action permit·payloadHash 대조는 제외) |
+  | KeywordRankPage · RankTrackingSection · rankImage | 운영 패널·차트 빈 구간 이식 · **「순위 미확인」 라벨은 미도입**(대표 확정 「300위 밖」) · 행별 실시간 요청은 온디맨드 큐로 갈음 |
+  | docs 4종 | 런북·실기기 점검표로 우리 상태명에 맞춰 재작성 · RELEASE-* 2종은 PR 본문·CLAUDE.md 로 갈음 |
+- **설계 선택(4차)** — ① 미전송이 있어도 **새 수집을 멈추지 않는다**(상한 100건 안에서). 원안은 WAIT_UPLOAD 로 멈췄는데, 서버가 30분 죽은 것 때문에 그 시간대 수집을 잃을 이유가 없다. ② **ACK 대조는 observationId 까지만** — payloadHash 는 서버가 pydantic `model_dump` 결과를 해시하므로 확장이 보낸 JSON 과 같을 수 없다(칸은 실어 둬 나중에 서버가 원문을 해시하면 그때 켠다). ③ 4xx(서버 거절)는 보관해도 다시 실패하므로 **격리** · 「검토 후 비우기」만 지운다(확인창). ④ IndexedDB 를 못 열면 메모리 보관(워커 수명) — 팝업에 표시는 같다.
+- **설계 선택(5차)** — 원안 운영 화면은 원안 서버 API(daily 원장 · realtime · readiness 특정 스키마)에 묶여 있어 그대로 못 옮긴다. 우리 API(`/v2/daily` 신설 · `/v2/status` · `/readiness` · `/control` · heartbeat machines)로 같은 정보를 그린다. **못 잰 값은 「미확인」**(0 아님) · 첫 조회 전엔 안 그림 · 재개는 **검토 체크 없이는 요청이 나가지 않는다**.
+- **검증** — `test_codex_port_4` 39(telemetry 거절 7종 · heartbeat 저장/INVALID/UNREPORTED · coord SESSION_CHANGED · ACK · catalog 6 · daily 3 · 배선) · `test_collector_ops_panel` 22 · node `outbox` 27(실제 uploadKeyword·flushOutbox 를 가짜 fetch·메모리 저장소로) · 게이트 45/45 · 빌드 · 사보타주 7종.
+- ⚠️ **함정 3건** ㉠ 사보타주 3종이 「FAIL 0」으로 보였다 — 시험이 **죽은** 것이라 FAIL 줄이 없었다. `grep -c FAIL` 이 아니라 **종료 코드**로 판정한다(이 저장소 두 번째 · 9/18 「조건식 자체를 못박을 것」과 같은 축). ㉡ heartbeat 저장 단계 검증을 빼도 판정 단계(reported_upload_summary)가 다시 걸러 시험이 안 잡았다 — 저장된 값('INVALID' 표식)까지 보게 고쳤다. ㉢ 커밋을 port-3 위에서 한 뒤 브랜치를 팠다 — 로컬 port-3 를 origin 으로 되돌렸다.
+- **배포·교체** — #256 → #257 → #258 → #259 → 두 노트북 `수집기-v1.26.0.zip`. 실기기 확인은 `docs/수집기-실기기-점검표.md`(전부 미실시) 순서로. 배포 뒤 진단 `live_check=on` 에서 heartbeat 행의 uploadSummary 가 찍히는지 본다.
+
+---
+
 ## 2026-09-22 — 코덱스 1.22.0 이식 3차(#258 · feat/codex-port-3 · #257 위 stack) — 순서 가드 · nvMid 정확 식별 · 백업 안전 · 확장 v1.25.0
 
 - **대표 질문** 「코덱스에 전달 받은 내용 전부 반영한 거 맞아?」 — 답은 **「아니다」**였다. 2차까지 끝내고 「완성」이라 보고했는데, 코덱스 패키지의 `CANDIDATE-OVERLAY.json`(변경 28파일)을 하나씩 열어 보니 반영 6 · 부분 3 · **미반영 14 + 문서 4** 였다. ⭐ **교훈 — 「핵심은 다 넣었다」와 「전부 반영했다」는 다른 축이다.** 이식 보고는 원본의 파일 목록을 기준으로 「넣은 것/뺀 것/왜」를 표로 적어야 한다(이번 PR 본문부터 그렇게 했다).

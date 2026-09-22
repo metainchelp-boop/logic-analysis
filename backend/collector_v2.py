@@ -85,6 +85,7 @@ class Register(BaseModel):
     workerCount: Optional[int] = 1
     state: Optional[str] = "READY"
     reason: Optional[str] = ""
+    uploadSummary: Optional[dict] = None   # 📤 4차 — 미전송 보관함 요약
 
 
 class Claim(BaseModel):
@@ -101,6 +102,7 @@ class Report(BaseModel):
     state: str
     reason: Optional[str] = ""
     job: Optional[dict] = None
+    uploadSummary: Optional[dict] = None   # 📤 4차
 
 
 class Control(BaseModel):
@@ -115,7 +117,7 @@ def register(req: Register, x_collector_token: str = Header(None)):
     try:
         now = int(time.time())
         out = core.register(conn, req.workerId, req.sessionId, req.version or "", req.workerNo or 1, req.workerCount or 1,
-                            now, policy(), state=req.state or "READY", reason=req.reason or "")
+                            now, policy(), state=req.state or "READY", reason=req.reason or "", upload_summary=req.uploadSummary)
         _maybe_sync(conn, now)
         return out
     except ValueError as e:
@@ -154,6 +156,8 @@ def report(req: Report, x_collector_token: str = Header(None)):
         now = int(time.time())
         out = core.report(conn, req.workerId, req.sessionId, req.state, now, policy(), reason=req.reason or "")
         out["protocol"] = 2
+        if req.uploadSummary is not None:
+            out["uploadSummaryStatus"] = core.store_upload_summary(conn, req.workerId, req.sessionId, req.uploadSummary, now)
         return out
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
@@ -190,7 +194,56 @@ def readiness(current_user: dict = Depends(get_current_user)):
     _admin(current_user)
     conn = _conn()
     try:
-        return core.readiness(conn, int(time.time()), policy())
+        out = core.readiness(conn, int(time.time()), policy())
+        # 4차 — 상품 연결 확인 필요(정확 식별자 없음) 수. 못 재면 None(0 이 아니다).
+        try:
+            from collector_catalog import unresolved_count
+            out["targets"] = {"unresolved": unresolved_count(conn, out.get("day"))}
+        except Exception:
+            out["targets"] = {"unresolved": None}
+        if out["targets"]["unresolved"]:
+            out["blockers"] = sorted(set(out.get("blockers", [])) | {"TARGET_IDENTITIES_UNRESOLVED"})
+            out["configurationReady"] = False
+        return out
+    finally:
+        conn.close()
+
+
+@router.get("/daily")
+def daily(current_user: dict = Depends(get_current_user)):
+    """운영 화면 「어제 결과 · 오늘 진행 · 기계별 보고 · 미전송 · 제어」(5차 · 코덱스 daily 이식판). 읽기 전용."""
+    from collector_daily import summary as _daily
+    conn = _conn()
+    try:
+        now = int(time.time())
+        try:
+            from collector import _keyword_universe, _effective_date
+            today = _effective_date()
+            universe_total = len(_keyword_universe(conn))
+        except Exception:
+            import datetime as _dt
+            today, universe_total = _dt.date.today().isoformat(), None
+        try:
+            from collector_catalog import unresolved_count
+            unresolved = unresolved_count(conn, today)
+        except Exception:
+            unresolved = None
+        try:
+            from collector_heartbeat import machines as _machines
+            machines = _machines(conn)
+        except Exception:
+            machines = None
+        try:
+            control = core.status(conn, now, policy())["control"]
+        except Exception:
+            control = None
+        try:
+            pending = conn.execute("SELECT COUNT(*) FROM collect_requests WHERE status='pending'").fetchone()[0]
+        except Exception:
+            pending = None
+        out = _daily(conn, today, universe_total, unresolved, machines, control, pending, policy().enabled, now)
+        out["isAdmin"] = current_user.get("role") in ("admin", "superadmin")
+        return out
     finally:
         conn.close()
 

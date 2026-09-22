@@ -168,6 +168,9 @@ jobs:
       - name: Collector reader identity regression (v1.25.0 nvMid 우선 식별 · net_tap 요청 범위)
         run: node collector-extension/tests/reader_identity.test.js
 
+      - name: Collector outbox regression (v1.26.0 미전송 보관함 · ACK · 재전송·격리 · 상한)
+        run: node collector-extension/tests/outbox.test.js
+
       # 수집 멈춤 감시(2026-09-10) — 하루가 통째로 0건이 되어도 아무도 몰랐다.
       # 상한(5시간)·쿨다운(6시간)·문자 90바이트·기록 커밋을 지킨다.
       # ⚠️ 그중 「기록 커밋」이 핵심이다 — 안 되면 매시간 같은 문자가 도배된다.
@@ -267,6 +270,12 @@ jobs:
         run: python backend/tests/test_rank_guard.py
       - name: 회귀 — 코덱스 이식 3차 배선(봉투 전달·배치 가드·백업·nvMid·확장)
         run: python backend/tests/test_codex_port_3.py
+
+      # 2026-09-22 코덱스 1.22.0 이식 4·5차 — 📤 미전송 보관함 요약(telemetry) · ACK · 수집 대상 카탈로그 · 운영 요약(daily) · 운영 패널.
+      - name: 회귀 — 코덱스 이식 4차(telemetry·ACK·카탈로그·daily·배선)
+        run: python backend/tests/test_codex_port_4.py
+      - name: 회귀 — 수집기 운영 패널 · 차트 빈 구간(5차 · 「300위 밖」 표기 유지)
+        run: python backend/tests/test_collector_ops_panel.py
 
       - name: Build frontend bundle
         run: |
