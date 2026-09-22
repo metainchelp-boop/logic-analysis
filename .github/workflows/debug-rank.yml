@@ -214,6 +214,19 @@ jobs:
             if hb is not None: print("  heartbeat 원행:", " | ".join(f"{r['worker_no']} v{r['ext_version']} {r['last_seen']} x{r['seen_count']} {r['reason']} outbox={r['upload_summary_json']}" for r in hb))
             PY
             echo
+            echo "== nginx error.log 최근 40줄 (IP 는 해시 앞 6자로 마스킹 · TLS/거절 흔적 확인용) =="
+            for f in /var/log/nginx/error.log /var/log/nginx/logic-analysis.error.log; do [ -f "$f" ] && ELOG="$f" && break; done
+            if [ -z "$ELOG" ]; then echo "(nginx 오류 로그 파일을 못 찾음)"; else
+              tail -n 40 "$ELOG" | sed -E 's/([0-9]{1,3}\.){3}[0-9]{1,3}/ip:***/g' | cut -c1-220
+            fi
+            echo
+            echo "== 오늘 접속 로그 — 상태별 건수(전체) · 출처별 4xx/5xx (해시) =="
+            if [ -n "$LOG" ]; then
+              grep -a "$TODAY" "$LOG" | awk '"'"'{s[$9]++} END {for (k in s) printf "  %s=%d", k, s[k]; print ""}'"'"'
+              grep -a "$TODAY" "$LOG" | awk '"'"'$9 >= 400 {ip=$1; cmd="printf %s " ip " | sha256sum | cut -c1-6"; cmd | getline h; close(cmd); n[h" "$9]++} END {for (k in n) printf "  %s x%d\n", k, n[k]}'"'"' | sort | head -20
+              echo "  (마지막 1시간 새 출처?)"; grep -a "$TODAY" "$LOG" | awk -v h="$(date +%H)" '"'"'{split($4,t,":"); if (t[2]==h) {ip=$1; cmd="printf %s " ip " | sha256sum | cut -c1-6"; cmd | getline x; close(cmd); n[x]++}} END {for (k in n) printf "  %s x%d\n", k, n[k]}'"'"'
+            fi
+            echo
             echo "== 최근 오류 (앱 로그 tail 200 · 마스킹) =="
             docker logs --tail 200 logic-analysis 2>&1 | grep -aiE 'error|exception|traceback|rank-overview|rank-board' \
               | sed -E "s/\\[[^]]{1,60}\\]/[**]/g; s#https?://[^ ]*#(주소 가림)#g; s/'[^']{1,60}'/'**'/g" | tail -12 || echo "(없음)"
