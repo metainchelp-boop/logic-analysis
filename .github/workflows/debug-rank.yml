@@ -181,6 +181,35 @@ jobs:
                 print("  (조회 실패 — 배포 전이거나 표 없음):", e)
             PY
             echo
+            echo "== 🧭 v2 중앙 배정 원장 · 📒 관측 원장 (코덱스 이식 1·2차 · 배포 전이면 표 없음 · 업체명 없음) =="
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sqlite3, os, time
+            c = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            c.row_factory = sqlite3.Row
+            def q(sql, args=()):
+                try:
+                    return c.execute(sql, args).fetchall()
+                except Exception as e:
+                    return None
+            print("  env COLLECTOR_V2_ENABLED =", repr(os.environ.get("COLLECTOR_V2_ENABLED", "(없음 = 꺼짐)")))
+            ctl = q("SELECT state, reason, version, updated_at FROM collector_coord_control LIMIT 1")
+            print("  제어 상태:", (dict(ctl[0]) if ctl else "(표 없음 — 못 쟀다)") if ctl is not None else "(표 없음 — 못 쟀다)")
+            jobs = q("SELECT day, state, COUNT(*) n FROM collector_coord_jobs GROUP BY day, state ORDER BY day DESC, state")
+            if jobs is None: print("  작업 원장: (표 없음 — 못 쟀다)")
+            else:
+                print("  작업 원장(일·상태·건수):", ", ".join(f"{r['day']} {r['state']}={r['n']}" for r in jobs) or "(0건 — 부팅 +2분 잡·매시 05분 동기화 전이거나 유니버스 0)")
+            ws = q("SELECT substr(worker_id,1,8) w, state, worker_no, worker_count, version, last_seen, paused_until, reason FROM collector_coord_workers ORDER BY last_seen DESC")
+            if ws is None: print("  기계: (표 없음 — 못 쟀다)")
+            else:
+                now = int(time.time())
+                for r in ws:
+                    print(f"  기계 {r['w']}  {r['state']}  {r['worker_no']}/{r['worker_count']}  v{r['version']}  마지막 {(now-int(r['last_seen'] or 0))//60}분 전  쉼 {max(0,int(r['paused_until'] or 0)-now)//60}분  사유 {r['reason'] or '-'}")
+                if not ws: print("  기계: 0대(아직 v1.24.0 토글을 켠 기계 없음)")
+            obs = q("SELECT status, COUNT(*) n FROM collector_observations WHERE substr(received_at,1,10)=date('now','localtime') GROUP BY status")
+            if obs is None: print("  관측 원장: (표 없음 — 못 쟀다)")
+            else: print("  오늘 관측(상태·건수):", ", ".join(f"{r['status']}={r['n']}" for r in obs) or "(0건 — v1.23.0 이상 확장만 봉투를 보낸다)")
+            PY
+            echo
             echo "== 최근 오류 (앱 로그 tail 200 · 마스킹) =="
             docker logs --tail 200 logic-analysis 2>&1 | grep -aiE 'error|exception|traceback|rank-overview|rank-board' \
               | sed -E "s/\\[[^]]{1,60}\\]/[**]/g; s#https?://[^ ]*#(주소 가림)#g; s/'[^']{1,60}'/'**'/g" | tail -12 || echo "(없음)"
