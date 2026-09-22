@@ -248,6 +248,11 @@ jobs:
       - name: 회귀 — 수집기 살아있음 신호(서버)
         run: python backend/tests/test_collector_heartbeat.py
 
+      # 2026-09-23 배치(00:30 백업·01:00 보관·08:00 순위)의 긴 쓰기 잠금에 heartbeat·blocked 가 500 으로 죽던 것 →
+      #    30초 대기 · 3회 재시도 · 그래도 안 되면 503. 10초 직접 연결로 되돌리는 회귀를 막는다.
+      - name: 회귀 — 수집기 신호 저장이 배치 잠금을 견딘다(db_busy)
+        run: python backend/tests/test_db_busy.py
+
       # 2026-09-22 코덱스 1.22.0 이식 1차 — 정확 식별(product_identity) 우선 + 종전 폴백 유지(B5 측정 전).
       - name: 회귀 — 순위 매칭 정확 식별(코덱스 이식 · 폴백 유지)
         run: python backend/tests/test_product_match_identity.py

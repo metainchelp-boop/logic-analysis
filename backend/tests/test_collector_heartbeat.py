@@ -77,7 +77,10 @@ print("\n② 서버 배선 — collector.py")
 c = read("backend/collector.py")
 i = c.index('@router.post("/heartbeat")'); body = c[i:c.index("\nclass BlockReport", i)]
 ok("🔴 POST /heartbeat 가 토큰 검사를 먼저 지난다", re.search(r"_auth\(x_collector_token\)", body) is not None)
-ok("🔴 record 를 실제로 부른다(req.dict())", re.search(r"_hb_record\(conn, req\.dict\(\)\)", body) is not None)
+# 2026-09-23: 배치 잠금 500 → write_with_retry 로 감싸며 payload 를 변수로 받는다(_payload = req.dict()) — 호출 모양 두 가지 허용
+ok("🔴 record 를 실제로 부른다(req.dict())",
+   re.search(r"_hb_record\(conn, req\.dict\(\)\)", body) is not None
+   or (re.search(r"_payload = req\.dict\(\)", body) is not None and re.search(r"_hb_record\(c, _payload\)", body) is not None))
 ok("HeartbeatReport 가 instanceId·pausedByLocal·blockedUntil·alarms 를 받는다",
    all(f in c[c.index("class HeartbeatReport"):i] for f in ("instanceId", "pausedByLocal", "blockedUntil", "alarms")))
 ok("init_collector_db 가 heartbeat 표를 보장한다", re.search(r"from collector_heartbeat import ensure_table as _hb_ensure\s*\n\s*_hb_ensure\(conn\)", c) is not None)
