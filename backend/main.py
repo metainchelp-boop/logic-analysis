@@ -289,8 +289,9 @@ def _backup_db_on_startup_locked():
     except Exception:
         pass
 
-    # 2) 새 백업 전에 먼저 정리해 공간 확보(꽉 찬 상태에서 백업 실패 방지)
-    _prune(MAX_BACKUPS - 1)
+    # 2) (2026-09-22 코덱스 이식) 새 일관 백업이 **생기기 전에는** 이전 복구 세대를 지우지 않는다.
+    #    종전엔 여기서 먼저 지워 공간을 확보했는데, 그 뒤 백업이 실패하면 복구 가능한 세대가 하나 줄어 있었다.
+    #    공간이 모자라면 아래 3) 디스크 가드가 백업을 생략한다(세대는 그대로).
 
     # 3) 디스크 여유 가드: 여유 < DB크기×1.5면 백업 생략(디스크 풀로 앱 마비 방지)
     try:
@@ -354,31 +355,21 @@ def _backup_db_on_startup_locked():
 
     try:
         # SQLite online backup API 사용 (WAL 안전)
-        src = sqlite3.connect(db_path)
-        dst = sqlite3.connect(backup_path)
-        src.backup(dst)
-        dst.close()
-        src.close()
+        from contextlib import closing
+        with closing(sqlite3.connect(db_path)) as src, closing(sqlite3.connect(backup_path)) as dst:
+            src.backup(dst)
         logger.info(f"✅ DB 백업 완료: {backup_path} (업체 {client_count}건)")
         _compress(backup_path)
     except Exception as e:
-        # 실패 시 부분 파일 제거(공간 점유 방지) 후 파일 복사 fallback
+        # (2026-09-22 코덱스 이식) .db 파일 단독 복사 폴백을 **뺐다** — WAL 에 남은 커밋이 빠진 사본이 「백업 완료」로
+        #    승격되던 구멍. 실패한 백업은 지우고 이전 세대를 그대로 둔다(그래서 위 2) 에서 미리 안 지운다).
         try:
             if os.path.exists(backup_path):
                 os.remove(backup_path)
         except Exception:
             pass
-        try:
-            shutil.copy2(db_path, backup_path)
-            logger.info(f"✅ DB 백업 완료 (파일 복사): {backup_path}")
-            _compress(backup_path)
-        except Exception as e2:
-            try:
-                if os.path.exists(backup_path):
-                    os.remove(backup_path)
-            except Exception:
-                pass
-            logger.error(f"❌ DB 백업 실패: {e2}")
+        logger.error(f"❌ DB 일관 백업 실패 — 이전 백업 보존: {e}")
+        return
 
     # 5) 최종 보관 개수 정리
     _prune(MAX_BACKUPS)
@@ -479,6 +470,8 @@ app.include_router(cd_router)
 app.include_router(chat_router)
 app.include_router(seo_generate_router)
 app.include_router(collector_router)  # 브라우저 수집기(크롬 확장) — 2026-08-03 쇼핑 API 종료 대응
+from collector_v2 import router as collector_v2_router   # 🧭 중앙 배정 v2(코덱스 이식 2차 · env 스위치 꺼지면 INACTIVE)
+app.include_router(collector_v2_router)
 handover_transfer_service = HandoverTransferService(DB_PATH)
 app.include_router(
     create_handover_router(

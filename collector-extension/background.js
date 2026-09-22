@@ -1870,7 +1870,7 @@ function uploadSignature(products) {
   return ids.length ? ids.length + ':' + ids.join(',') : '';
 }
 
-async function uploadKeyword(token, keyword, payload) {
+async function uploadKeyword(token, keyword, payload, job) {
   const sig = uploadSignature(payload.products);
   if (sig && _lastUp.sig === sig && _lastUp.keyword && _lastUp.keyword !== keyword) {
     const note = 'same-as@' + String(_lastUp.keyword).slice(0, 20) + '|n' + (payload.products || []).length;
@@ -1907,6 +1907,8 @@ async function uploadKeyword(token, keyword, payload) {
         adFp: payload.adFp || {},
         // 📒 관측 봉투(코덱스 1.22.0 이식) — 서버가 complete/target_complete/partial 을 갈라 반영한다. 구서버는 무시.
         observation: payload.observation || undefined,
+        // 🧭 v2 임대 계약 — 서버가 이 업로드로 작업을 완료/보류 처리한다(없으면 무동작).
+        job: job || undefined,
       },
     }),
   });
@@ -2201,6 +2203,153 @@ async function runOnDemand() {
 //  · daily   : 매시 확인, 03시 이후 오늘 수집이 없으면 실행(새벽에 꺼져 있었어도 켜지면 자동 만회)
 //  · ondemand: 1분 주기, 낮에 들어온 새 키워드 요청 즉시 수집
 /* ─────────────────────────────────────────────────────────────────────────
+ * 🧭 서버 중앙 배정(v2 · 코덱스 1.22.0 이식 2차 · 2026-09-22)
+ *
+ * 켜면(팝업 「🧭 서버 자동 배정」 · 기본 꺼짐) 매분 알람이 runCollection 대신 runCoordinated 를 돈다:
+ *   register(이 기계·세션·버전·번호) → claim(키워드 1건 임대) → collectKeyword → 업로드(meta.job 에 임대 계약)
+ *   → 서버가 작업을 완료/보류 처리 → 다음 claim. 서버가 예산(시간·일·간격)을 재서 WAIT_BUDGET 이면 그때까지 쉰다.
+ * ⚠️ 서버 스위치가 꺼져 있으면(INACTIVE) **종전 경로(runCollection)로 스스로 돌아간다** — 코덱스 원안은 여기서 멈췄다.
+ * ⚠️ 막히면 그 기계만 6시간 쉰다(서버에 PAUSED_BLOCK 보고 · 서버도 그 기계만 쉬게 한다). 전역 정지는 화면 스위치뿐.
+ * ⚠️ 페이지마다 서버 허가를 받지 않는다(원안의 action permit 삭제) — 키워드 1건 = 배정 1건.
+ * ─────────────────────────────────────────────────────────────────────── */
+const COORD_KEY = 'coordinatedEnabled';
+const COORD_SESSION_KEY = 'coordSessionId';
+async function coordinatedEnabled() {
+  try { const o = await chrome.storage.local.get(COORD_KEY); return o[COORD_KEY] === true; } catch (e) { return false; }
+}
+async function coordSessionId() {
+  // 세션 = 서비스워커/브라우저 수명. session 저장소가 없으면 local 에 두되 브라우저 시작 때 갈아 끼운다.
+  try {
+    const area = chrome.storage.session || chrome.storage.local;
+    const o = await area.get(COORD_SESSION_KEY);
+    if (o[COORD_SESSION_KEY]) return o[COORD_SESSION_KEY];
+    const id = (globalThis.crypto && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now().toString(16)}-${Math.random().toString(16).slice(2, 10)}`;
+    await area.set({ [COORD_SESSION_KEY]: id });
+    return id;
+  } catch (e) { return 'session-unknown'; }
+}
+async function coordRequest(endpoint, body) {
+  const token = await getToken();
+  if (!token) throw Object.assign(new Error('수집기 토큰이 없습니다'), { code: 'PAUSED_AUTH' });
+  const res = await fetch(`${CFG.serverBase}/api/collector/v2/${endpoint}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Collector-Token': token },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw Object.assign(new Error(`서버 HTTP ${res.status}`), { status: res.status, code: res.status === 404 ? 'NO_V2' : `HTTP_${res.status}` });
+  return res.json();
+}
+async function coordWho() {
+  const { workerNo = CFG.workerNo, workerCount = CFG.workerCount } = await chrome.storage.local.get(['workerNo', 'workerCount']);
+  return { protocol: 2, workerId: await instanceId(), sessionId: await coordSessionId(),
+           workerNo: Number(workerNo) || 1, workerCount: Number(workerCount) || 1 };
+}
+async function coordReport(state, reason) {
+  try { const who = await coordWho(); await coordRequest('report', { ...who, state, reason: String(reason || '').slice(0, 120) }); }
+  catch (e) { /* 보고 실패는 수집을 막지 않는다 */ }
+}
+/** 매분 알람에서 부른다. 서버가 INACTIVE 면 false 를 돌려주고 호출자가 종전 경로로 간다. */
+async function runCoordinated(manual = false) {
+  if (running) return true;
+  running = 'daily';
+  let leased = null;
+  try {
+    if (await isLocalPaused()) {
+      await setState({ running: false, pausedByLocal: true, current: '' });
+      return true;
+    }
+    const bu = await getBlockedUntil();
+    if (!manual && bu > Date.now()) return true;                 // 캡차 쉼 — 서버도 이 기계를 쉬게 두고 있다
+    const token = await getToken();
+    if (!token) { await log('❌ 토큰이 없습니다. 팝업에서 먼저 저장하세요.'); return true; }
+    let ver = ''; try { ver = chrome.runtime.getManifest().version; } catch (e) { /* 무시 */ }
+    const who = await coordWho();
+    let reg;
+    try {
+      reg = await coordRequest('register', { ...who, version: ver, state: 'READY' });
+    } catch (e) {
+      if (e.code === 'NO_V2') { await setState({ coordState: 'NO_V2', coordReason: '서버에 v2 경로 없음 — 종전 경로' }); return false; }
+      await setState({ coordState: 'SERVER_UNREACHABLE', coordReason: String(e.message || e).slice(0, 80) });
+      await log(`🧭 서버 등록 실패(${e.message}) — 이번 분은 쉼`);
+      return true;
+    }
+    if (reg && reg.enabled === false) {
+      await setState({ coordState: 'INACTIVE', coordReason: '서버 스위치 꺼짐 — 종전 경로로 수집' });
+      return false;                                              // ⚠️ 종전 경로로 폴백
+    }
+    const hourStart = Date.now();
+    const hourTag = hourKey();
+    const _msLeftInHour = (60 - new Date().getMinutes()) * 60 * 1000 - new Date().getSeconds() * 1000 - 5 * 60 * 1000;
+    const hourBudget = Math.max(60 * 1000, Math.min(CFG.hourBudgetMs, _msLeftInHour));
+    let done = 0, failed = 0, partial = 0, streak = 0;
+    await setState({ running: true, startedAt: new Date().toISOString(), coordState: 'READY', coordReason: '' });
+    for (let n = 0; n < 200; n++) {
+      if (Date.now() - hourStart > hourBudget) { await log('⏱ 이번 시간대 시간 소진 — 남은 몫은 서버가 다음 회차에 다시 배정'); break; }
+      if (await isLocalPaused()) { await log('⏸ 일시정지 — 배정 중단'); break; }
+      let c;
+      try { c = await coordRequest('claim', { protocol: 2, workerId: who.workerId, sessionId: who.sessionId, hour: new Date().getHours() }); }
+      catch (e) { await log(`🧭 배정 요청 실패(${e.message}) — 이번 분은 쉼`); break; }
+      if (c.state === 'INACTIVE') { await setState({ coordState: 'INACTIVE' }); return false; }
+      if (c.state !== 'LEASED' || !c.job) {
+        await setState({ coordState: c.state, coordReason: c.reason || '',
+                         coordNextAt: c.nextAllowedAt ? new Date(c.nextAllowedAt * 1000).toISOString() : '' });
+        if (c.state === 'IDLE') await log('🧭 오늘 몫이 없습니다(서버 배정 없음)');
+        else if (c.state === 'WAIT_BUDGET') await log(`🧭 예산 대기 — ${c.nextAllowedAt ? new Date(c.nextAllowedAt * 1000).toLocaleTimeString('ko-KR') : '잠시'} 뒤 다시`);
+        else await log(`🧭 배정 보류 — ${c.state}${c.reason ? ' · ' + c.reason : ''}`);
+        break;
+      }
+      leased = c.job;
+      const kw = leased.keyword;
+      _targets = (leased.targetIds && leased.targetIds.length) ? { [kw]: leased.targetIds } : {};
+      await setState({ current: kw, coordJobId: leased.jobId });
+      try {
+        const payload = await collectKeyword(kw);
+        if (!payload.products.length) {
+          if (payload.blocked) throw new Error(payload.blocked);
+          throw new Error('상품 0건' + (payload.observation && payload.observation.error ? ' — ' + payload.observation.error : ''));
+        }
+        if (payload.stoppedEarly) {
+          const se = payload.stoppedEarly;
+          await log(`🎯 [${kw}] 찾을 상품 ${se.targets}개를 ${se.page}페이지에서 다 찾아 멈춤 (담긴 ${se.kept}개)`);
+        }
+        await uploadKeyword(token, kw, payload, leased);         // meta.job 에 임대 계약 — 서버가 작업 완료 처리
+        leased = null;
+        if (payload.blocked) { await log(`◐ [${kw}] 막히기 전까지 ${payload.products.length}개는 올림`); throw new Error(payload.blocked); }
+        if (payload.observation && payload.observation.status === 'partial') {
+          partial++; await log(`◐ [${kw}] 부분 수집 ${payload.products.length}개 · ${payload.observation.stopReason}`);
+        } else { done++; }
+        streak = 0;
+        await setState({ done, failed, partial, current: kw });
+      } catch (e) {
+        if (String(e.message || '').startsWith('BLOCKED:')) {
+          await markBlocked(e.message.slice(8) || '수집 중 감지');
+          await coordReport('PAUSED_BLOCK', e.message.slice(8, 80));   // 이 기계만 6시간 — 서버도 같이
+          if (leased) { try { await coordRequest('release', { ...who, state: 'PAUSED_BLOCK', reason: 'BLOCKED', job: leased }); } catch (e2) { /* 무시 */ } leased = null; }
+          break;
+        }
+        failed++; streak++;
+        await log(`⚠️ [${kw}] 실패: ${e.message}`);
+        if (leased) { try { await coordRequest('release', { ...who, state: 'WAIT_BUDGET', reason: String(e.message || '').slice(0, 60), job: leased }); } catch (e2) { /* 무시 */ } leased = null; }
+        await setState({ done, failed, current: kw });
+        if (streak >= CFG.maxConsecutiveFail) { await log(`🛑 연속 ${streak}회 실패 — 이번 회차 중단`); break; }
+        await sleep(jitter() * (1 + streak));
+      }
+      await sleep(jitter());                                      // 간격은 서버가 claim 으로 재준다(min_gap · 예산)
+    }
+    if (done > 0) await clearBlocked();
+    await log(`✅ 🧭 ${new Date().getHours()}시 배정 회차 종료 — 성공 ${done} · 부분 ${partial} · 실패 ${failed}`);
+    await setState({ running: false, finishedAt: done ? new Date().toISOString() : undefined, finishedHour: done ? hourTag : undefined, done, failed, partial, current: '' });
+    return true;
+  } catch (e) {
+    await log(`❌ 🧭 배정 수집 중단: ${e.message}`);
+    await setState({ running: false, error: e.message });
+    return true;
+  } finally {
+    if (running === 'daily') running = false;
+    await markDailyWaiting(false);
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
  * 📡 살아있음 신호 (v1.21.0 · 대표 확정 2026-09-22 「수집기 자체 개발 → 버전 교체 → 재가동」)
  *
  * 왜 — 2번 설정 노트북이 9/21 07:29 부터 서버에 요청을 **한 건도** 안 보냈다. 일시정지·캡차 쉼·
@@ -2365,11 +2514,25 @@ chrome.alarms.onAlarm.addListener(async (a) => {
   }
   dailyDue = false;
   await markDailyWaiting(false);   // 내가 잡았다 — 온디맨드를 다시 풀어 준다
+  // 🧭 v2 — 켜져 있으면 서버 배정으로. 서버가 꺼져 있으면(INACTIVE) 종전 경로로 폴백.
+  if (await coordinatedEnabled()) { const handled = await runCoordinated(false); if (handled) return; }
   runCollection(false);
 });
 
 chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
-  if (msg?.cmd === 'run') { runCollection(true); sendResponse({ ok: true }); }
+  if (msg?.cmd === 'run') {
+    (async () => { if (await coordinatedEnabled()) { const handled = await runCoordinated(true); if (handled) return; } runCollection(true); })();
+    sendResponse({ ok: true });
+  }
+  // 🧭 v2 토글(팝업) — 켜고 끄기만. 실제 배정 여부는 서버 스위치가 정한다.
+  if (msg?.cmd === 'setCoordinated') {
+    (async () => {
+      await chrome.storage.local.set({ [COORD_KEY]: !!msg.on });
+      await setState({ coordEnabled: !!msg.on, coordState: msg.on ? 'READY' : 'OFF', coordReason: '' });
+      await log(msg.on ? '🧭 서버 자동 배정 켬 — 다음 회차부터 서버가 키워드를 나눠 줍니다(서버 스위치가 꺼져 있으면 종전대로).' : '🧭 서버 자동 배정 끔 — 종전 경로(시간대 몫)로 돕니다.');
+    })();
+    sendResponse({ ok: true });
+  }
   // 📡 v1.21.0 — 사람이 팝업에서 「지금 상태 보내기」. 알람이 빠져 있으면 함께 다시 건다.
   if (msg?.cmd === 'heartbeat') {
     (async () => {
