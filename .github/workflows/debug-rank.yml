@@ -34,6 +34,10 @@ on:
         description: '상품 주소 모양 실측 — off(기본) / on. 어느 호스트(스마트스토어·브랜드스토어·카탈로그)를 쓰는지, 같은 슬러그가 두 호스트에 걸쳐 있는지(읽기 전용·업체명 미출력).'
         required: false
         default: 'off'
+      live_check:
+        description: '3탭(#253) 라이브 확인 — off(기본) / on. 서버에 올라간 프론트 번들의 마커 · rank_axes.py 존재 · 오늘 /api/collector 접속처(해시 앞 6자·건수·마지막 시각 — IP 원문 미출력).'
+        required: false
+        default: 'off'
       tracked_reset:
         description: '추적 상품 소프트 내리기(9/22 배포) 확인 — off(기본) / on. 기동 로그의 [추적정리] 줄 + 마커 파일 + 활성/내려진 상품·이력 행수(읽기 전용·업체명 미출력).'
         required: false
@@ -47,6 +51,42 @@ jobs:
   diagnose:
     runs-on: ubuntu-latest
     steps:
+      - name: 3탭 라이브 확인 (live_check=on · 읽기 전용)
+        if: ${{ github.event.inputs.live_check == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          command_timeout: 120s
+          script: |
+            echo "== 컨테이너 기동 시각 =="
+            docker inspect -f 'StartedAt={{.State.StartedAt}}' logic-analysis
+            echo
+            echo "== 서버에 올라간 프론트 번들 마커 (파일명·크기·마커별 등장 수) =="
+            D=/root/logic-analysis-deploy/frontend/dist
+            ls -l "$D"/app.*.js 2>/dev/null | awk '{print "  " $5 "B  " $9}'
+            for m in '📊 전체' '로직분석 대표 키워드' '담당자 추가 키워드' 'kr_rank_tab' '담당자가 추가한 키워드가 아직 없습니다' '첫 수집 대기' '300위 밖' '순위 미확인'; do
+              n=$(cat "$D"/app.*.js 2>/dev/null | grep -o -- "$m" | wc -l)
+              echo "  [$n] $m"
+            done
+            echo "  (index.bundle.html 이 가리키는 번들)"; grep -o 'app\.[a-f0-9]*\.js' /root/logic-analysis-deploy/frontend/index.bundle.html | head -2
+            echo
+            echo "== 컨테이너 안 백엔드 파일 =="
+            docker exec -i logic-analysis sh -c 'ls -l /app/rank_axes.py /app/client_dashboard.py 2>&1; grep -c "registered_axes" /app/client_dashboard.py'
+            echo
+            echo "== 오늘 /api/collector 접속처 (해시 앞 6자 · 건수 · 마지막 시각 · IP 원문 없음) =="
+            TODAY=$(date +%d/%b/%Y)
+            for f in /var/log/nginx/access.log /var/log/nginx/logic-analysis.access.log; do [ -f "$f" ] && LOG="$f" && break; done
+            if [ -z "$LOG" ]; then echo "(nginx 접속 로그 파일을 못 찾음)"; else
+              grep -a "$TODAY" "$LOG" | grep -a '/api/collector' \
+                | awk '{ip=$1; t=$4; cmd="printf %s " ip " | sha256sum | cut -c1-6"; cmd | getline h; close(cmd); n[h]++; last[h]=t; if($7 ~ /serp/) s[h]++ } END { for (h in n) printf "  %s  요청 %4d  serp %4d  마지막 %s\n", h, n[h], s[h]+0, last[h] }'
+            fi
+            echo
+            echo "== 최근 오류 (앱 로그 tail 200 · 마스킹) =="
+            docker logs --tail 200 logic-analysis 2>&1 | grep -aiE 'error|exception|traceback|rank-overview|rank-board' \
+              | sed -E "s/\\[[^]]{1,60}\\]/[**]/g; s#https?://[^ ]*#(주소 가림)#g; s/'[^']{1,60}'/'**'/g" | tail -12 || echo "(없음)"
       - name: 추적 상품 소프트 내리기 확인 (tracked_reset=on · 읽기 전용)
         if: ${{ github.event.inputs.tracked_reset == 'on' }}
         uses: appleboy/ssh-action@v1.0.3
