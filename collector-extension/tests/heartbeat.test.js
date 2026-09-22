@@ -51,6 +51,7 @@ async function run({ token = 'tok', paused = false, blockedUntil = 0, fetchImpl,
     getBlockedUntil: async () => blockedUntil,
     instanceId: async () => store.instanceId,
     alarmNames: async () => ['daily:1', 'heartbeat:5'],
+    outboxSummary: async () => ({ schema: 1, count: 2, payloadBytes: 3000, reviewRequiredCount: 1, oldestObservedAt: 1790000000 }),   // 4차 — 미전송 요약 의존
     fetch: fetchImpl || (async (url, opt) => { calls.push({ url, opt }); return { ok: true, status: 200 }; }),
   };
   const fn = new Function(...Object.keys(deps), `${extract('sendHeartbeat')}\nreturn sendHeartbeat;`)(...Object.values(deps));
@@ -65,6 +66,7 @@ async function run({ token = 'tok', paused = false, blockedUntil = 0, fetchImpl,
   ok('🔴 일시정지 + 캡차 쉼 상태에서도 서버에 보낸다(요청 1건)', t.calls.length === 1 && t.r === true);
   const body = JSON.parse(t.calls[0].opt.body);
   ok('🔴 보낸 값에 pausedByLocal=true · blockedUntil 이 그대로 실린다', body.pausedByLocal === true && body.blockedUntil > Date.now());
+  ok('📤 4차 — 미전송 보관함 요약(uploadSummary)이 함께 실린다', body.uploadSummary && body.uploadSummary.count === 2 && body.uploadSummary.reviewRequiredCount === 1);
   ok('🔴 기계 번호 2/2 · 버전 · instanceId · 알람 목록이 실린다',
      body.workerNo === 2 && body.workerCount === 2 && body.extVersion === '9.9.9' && body.instanceId === 'abc-123' && Array.isArray(body.alarms) && body.alarms.length === 2);
   ok('경로·헤더 — /api/collector/heartbeat · X-Collector-Token', /\/api\/collector\/heartbeat$/.test(t.calls[0].url) && t.calls[0].opt.headers['X-Collector-Token'] === 'tok');
@@ -83,7 +85,7 @@ async function run({ token = 'tok', paused = false, blockedUntil = 0, fetchImpl,
   /* ③ 배선 — 알람·시작·버튼 */
   ok('🔴 armAlarms 가 heartbeat 알람을 5분 주기로 건다',
      /chrome\.alarms\.create\(HEARTBEAT_ALARM, \{ periodInMinutes: HEARTBEAT_PERIOD_MIN/.test(SRC) && /const HEARTBEAT_PERIOD_MIN = 5;/.test(SRC));
-  ok('🔴 onAlarm 이 heartbeat 를 받아 ensureAlarms → sendHeartbeat', /if \(a\.name === HEARTBEAT_ALARM\) \{ await ensureAlarms\([^)]*\); sendHeartbeat\('alarm'\); return; \}/.test(SRC));
+  ok('🔴 onAlarm 이 heartbeat 를 받아 ensureAlarms → sendHeartbeat', /if \(a\.name === HEARTBEAT_ALARM\) \{\s*await ensureAlarms\([^)]*\);[\s\S]{0,200}?sendHeartbeat\('alarm'\); return;\s*\}/.test(SRC));
   ok('설치·브라우저 시작·회차 시작에서 신호를 보낸다', /sendHeartbeat\('installed'\)/.test(SRC) && /sendHeartbeat\('startup'\)/.test(SRC) && /sendHeartbeat\(manual \? 'run-manual' : 'run'\)/.test(SRC));
   ok('워커 깨어날 때 heartbeat 알람이 빠졌으면 다시 건다', /const h = await chrome\.alarms\.get\(HEARTBEAT_ALARM\);[\s\S]{0,120}\|\| !h\)/.test(SRC));
   ok('🔴 sendHeartbeat 는 isLocalPaused/getBlockedUntil 로 **거르지 않는다**(값을 읽기만)',

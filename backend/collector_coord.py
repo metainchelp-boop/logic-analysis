@@ -116,7 +116,42 @@ CREATE INDEX IF NOT EXISTS idx_coord_claims_time ON collector_coord_claims(claim
 
 def init_db(conn) -> None:
     conn.executescript(DDL)
+    # 📤 4차 — 기계별 미전송 보관함 요약(ALTER 가드 · 멱등)
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(collector_coord_workers)").fetchall()}
+        for name, ddl in (("upload_summary_json", "TEXT"), ("upload_summary_at", "INTEGER"), ("upload_summary_session", "TEXT")):
+            if name not in cols:
+                conn.execute(f"ALTER TABLE collector_coord_workers ADD COLUMN {name} {ddl}")
+    except Exception:
+        pass
     conn.commit()
+
+
+def normalize_keyword(keyword) -> str:
+    """키워드 정규화(코덱스 이식) — NFKC + 공백 정리. 별칭이 억제·매핑을 비켜 가지 못하게 한 곳에서."""
+    import unicodedata
+    if not isinstance(keyword, str) or not keyword.strip() or len(keyword) > 200:
+        raise ValueError("INVALID_KEYWORD")
+    return " ".join(unicodedata.normalize("NFKC", keyword).split())
+
+
+def store_upload_summary(conn, worker_id: str, session_id: str, summary, now: int) -> str:
+    """register/report 에 실린 보관함 요약을 저장한다. 반환 = 'FRESH' | 'INVALID' | 'NONE'."""
+    if summary is None:
+        return "NONE"
+    try:
+        from collector_telemetry import validate_upload_summary
+        payload = json.dumps(validate_upload_summary(summary, now=now), ensure_ascii=False)
+        status = "FRESH"
+    except Exception:
+        payload, status = "INVALID", "INVALID"
+    try:
+        conn.execute("UPDATE collector_coord_workers SET upload_summary_json=?, upload_summary_at=?, upload_summary_session=? WHERE worker_id=?",
+                     (payload, now, session_id, worker_id))
+        conn.commit()
+    except Exception:
+        pass
+    return status
 
 
 def _one(conn, sql, args=()):
@@ -168,7 +203,7 @@ def sync_daily(conn, day: str, universe: Dict[str, bool], targets: Dict[str, lis
 
 # ── 기계 ─────────────────────────────────────────────────────────────
 def register(conn, worker_id: str, session_id: str, version: str, worker_no: int, worker_count: int,
-             now: int, policy: Policy, state: str = "READY", reason: str = "") -> dict:
+             now: int, policy: Policy, state: str = "READY", reason: str = "", upload_summary=None) -> dict:
     wid, sid = str(worker_id or "").strip()[:64], str(session_id or "").strip()[:64]
     if not wid or not sid:
         raise ValueError("INVALID_WORKER")
@@ -195,6 +230,8 @@ def register(conn, worker_id: str, session_id: str, version: str, worker_no: int
         conn.execute("UPDATE collector_coord_workers SET session_id=?, version=?, worker_no=?, worker_count=?, state=?, reason=?, paused_until=?, last_seen=? WHERE worker_id=?",
                      (sid, str(version or "")[:40], int(worker_no or 1), int(worker_count or 1), eff_state, reason[:120], paused_until, now, wid))
     conn.commit()
+    if upload_summary is not None:
+        store_upload_summary(conn, wid, sid, upload_summary, now)
     ctl = _control(conn)
     return {"protocol": 2, "workerId": wid, "sessionId": sid, "state": eff_state, "pausedUntil": paused_until,
             "controlState": ctl["state"], "controlVersion": ctl["version"], "serverNow": now,
@@ -414,9 +451,16 @@ def status(conn, now: int, policy: Policy) -> dict:
         st = w["state"]
         if int(w["paused_until"] or 0) > now and st not in PAUSES:
             st = "PAUSED_BLOCK"
+        try:
+            from collector_telemetry import reported_upload_summary
+            us, us_status = reported_upload_summary(w.get("upload_summary_json"), w.get("upload_summary_at"), now=now,
+                                                    session_id=w["session_id"], summary_session=w.get("upload_summary_session"))
+        except Exception:
+            us, us_status = None, "INVALID"
         workers.append({"workerId": w["worker_id"], "machine": f"{w['worker_no']}/{w['worker_count']}", "version": w["version"],
                         "state": st if online else "OFFLINE", "reason": w["reason"], "lastSeen": w["last_seen"], "online": online,
-                        "pausedUntil": int(w["paused_until"] or 0), "pace": json.loads(w["pace_json"] or "{}")})
+                        "pausedUntil": int(w["paused_until"] or 0), "pace": json.loads(w["pace_json"] or "{}"),
+                        "uploadSummary": us, "uploadSummaryStatus": us_status})
     day0 = _day_start(now)
     claims_today = _one(conn, "SELECT COUNT(*) n FROM collector_coord_claims WHERE claimed_at >= ?", (day0,))["n"]
     claims_hour = _one(conn, "SELECT COUNT(*) n FROM collector_coord_claims WHERE claimed_at > ?", (now - 3600,))["n"]

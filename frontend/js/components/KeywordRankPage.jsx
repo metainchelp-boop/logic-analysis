@@ -48,24 +48,182 @@ function _krDelta(delta) {
 
 /* 7일 스파크라인 — 순위는 낮을수록 좋음(위쪽) */
 function _krSparkline(series) {
-    var pts = (series || []).filter(function(p) { return p.rank !== null && p.rank !== undefined; });
-    if (pts.length < 2) return React.createElement('span', { style: { fontSize: 11, color: '#cbd5e1' } }, '—');
+    // 코덱스 1.22.0 이식(5차) — 빈 날(순위 없음)을 건너 이어 그리지 않는다. 이어 그리면 「측정이 계속 됐다」로 읽힌다.
+    //   빈 구간이 있으면 선을 끊고 회색으로(추세 판단 보류). 표기는 그대로 「300위 밖」이다(대표 확정 9/22).
+    var samples = series || [];
+    var pts = samples.filter(function(p) { return Number.isFinite(p.rank) && p.rank > 0; });
+    if (!pts.length) return React.createElement('span', { style: { fontSize: 11, color: '#cbd5e1' } }, '—');
     var w = 84, h = 26, pad = 3;
     var ranks = pts.map(function(p) { return p.rank; });
     var mn = Math.min.apply(null, ranks), mx = Math.max.apply(null, ranks);
     var span = (mx - mn) || 1;
-    var coords = pts.map(function(p, i) {
-        var x = pad + (w - pad * 2) * (i / (pts.length - 1));
+    var coords = samples.map(function(p, i) {
+        if (!Number.isFinite(p.rank) || p.rank <= 0) return null;
+        var x = pad + (w - pad * 2) * (i / Math.max(1, samples.length - 1));
         var y = pad + (h - pad * 2) * ((p.rank - mn) / span); // 순위↑(숫자↓) = 위
         return x.toFixed(1) + ',' + y.toFixed(1);
     });
-    var last = coords[coords.length - 1].split(',');
+    var previous = false;
+    var path = coords.map(function(c) {
+        if (c === null) { previous = false; return ''; }
+        var cmd = (previous ? 'L' : 'M') + c; previous = true; return cmd;
+    }).join(' ');
     var improving = ranks[ranks.length - 1] <= ranks[0];
-    var color = improving ? '#16a34a' : '#dc2626';
-    return React.createElement('svg', { width: w, height: h, style: { display: 'block' } },
-        React.createElement('polyline', { points: coords.join(' '), fill: 'none', stroke: color, strokeWidth: 1.6, strokeLinejoin: 'round', strokeLinecap: 'round' }),
-        React.createElement('circle', { cx: last[0], cy: last[1], r: 2.4, fill: color })
+    var gap = pts.length < samples.length;
+    var color = gap ? '#64748b' : (improving ? '#16a34a' : '#dc2626');
+    return React.createElement('svg', { width: w, height: h, style: { display: 'block' }, 'data-gap': gap ? '1' : '0' },
+        React.createElement('path', { d: path, fill: 'none', stroke: color, strokeWidth: 1.6, strokeLinejoin: 'round', strokeLinecap: 'round' }),
+        coords.map(function(c, i) {
+            if (c === null) return null;
+            var xy = c.split(',');
+            return React.createElement('circle', { key: i, cx: xy[0], cy: xy[1], r: 2.2, fill: color });
+        })
     );
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * 🧭 수집기 운영 패널 — 코덱스 1.22.0 「운영 화면」 이식판 (5차 · 2026-09-22)
+ *   어제 결과 · 오늘 진행(완료/남음/부분/상품 연결 확인 필요) · 기계별 마지막 보고(살아있음 신호 + 📤 미전송) ·
+ *   대기 요청 · 전체 제어(관리자 · 검토 체크 뒤 재개) · 가동 전 점검(관리자).
+ *   서버 = GET /api/collector/v2/daily(로그인) · GET /readiness · POST /control(관리자).
+ * ⚠️ 원안과 다른 점 — 원안의 실시간 요청(행별 즉시 측정 요청)은 우리 온디맨드 큐(분석 화면)가 이미 하므로 건수만 보인다.
+ *    「못 잰 값」은 0 이 아니라 「미확인」으로 그린다(이 저장소 규칙). 표기는 「300위 밖」 유지.
+ * ─────────────────────────────────────────────────────────────────────── */
+function _krOpsNum(v) { return (v === null || v === undefined) ? '미확인' : Number(v).toLocaleString('ko-KR'); }
+function _krOpsClock(v) {
+    if (!v) return '—';
+    var d = typeof v === 'number' ? new Date(v * (v > 1e11 ? 1 : 1000)) : new Date(String(v).replace(' ', 'T'));
+    return isNaN(d.getTime()) ? String(v).slice(0, 16) : d.toLocaleString('ko-KR', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+var _krOpsControlLabel = { READY: '가동', PAUSED_OPERATOR: '전체 중지(운영자)', PAUSED_BLOCK: '막힘으로 쉼' };
+var _krOpsBlockerLabel = {
+    V2_DISABLED: '서버 자동 배정 스위치가 꺼져 있습니다(종전 시간대 방식으로 돌고 있습니다).',
+    V2_ENABLED_INVALID: '서버 스위치 값이 잘못됐습니다.', V2_POLICY_INVALID: '수집 한도 설정(JSON)이 깨졌습니다.',
+    NO_READY_ONLINE_WORKER: '지금 배정을 받을 수 있는 기계가 없습니다(v1.24.0 이상 + 토글 켬 + 15분 안 신호).',
+    COLLECTION_PAUSED: '전체 수집이 중지 상태입니다.', 'NO_JOBS_TODAY(sync_daily 전)': '오늘 작업 원장이 아직 없습니다(부팅 +2분·매시 05분에 생깁니다).',
+    REMAINING_EXCEEDS_TODAY_BUDGET: '오늘 남은 한도로는 남은 키워드를 다 못 합니다.',
+    TARGET_IDENTITIES_UNRESOLVED: '상품 고유번호(nvMid)를 연결하지 못한 대상이 있습니다.'
+};
+function _krOpsUpload(m) {
+    var st = m.uploadSummaryStatus, us = m.uploadSummary;
+    if (st === 'UNREPORTED') return { t: '보고 없음', c: '#94a3b8' };
+    if (st === 'INVALID') return { t: '확인 불가', c: '#b45309' };
+    if (st === 'SESSION_CHANGED') return { t: '세션 바뀜 · 새 보고 대기', c: '#b45309' };
+    if (!us) return { t: '미확인', c: '#94a3b8' };
+    if (!us.count) return { t: '0건', c: '#16a34a' };
+    return { t: us.count + '건' + (us.reviewRequiredCount ? ' · 검토 필요 ' + us.reviewRequiredCount : '') + (st === 'STALE' ? ' (오래된 보고)' : ''), c: '#dc2626' };
+}
+function CollectorOpsPanel(props) {
+    var user = props.currentUser || {};
+    var isAdmin = user.role === 'admin' || user.role === 'superadmin';
+    var st = React.useState({ loading: true, data: null, error: '', readiness: null, readinessError: '', reviewed: false, controlMsg: '' });
+    var view = st[0], setView = st[1];
+    var alive = React.useRef(true);
+    function unwrap(res) {
+        var data = res && res.protocol === 2 ? res : (res && res.data);
+        if (!data || data.protocol !== 2) throw new Error('응답 형식을 확인할 수 없습니다.');
+        return data;
+    }
+    function load() {
+        setView(function(v) { return Object.assign({}, v, { loading: true }); });
+        Promise.resolve().then(function() { return api.get('/collector/v2/daily'); }).then(function(res) {
+            var data = unwrap(res);
+            if (alive.current) setView(function(v) { return Object.assign({}, v, { loading: false, data: data, error: '' }); });
+        }).catch(function() {
+            if (alive.current) setView(function(v) { return Object.assign({}, v, { loading: false, error: '수집기 상태를 읽지 못했습니다(서버 버전·연결 확인). 표시된 값은 마지막으로 읽은 것입니다.' }); });
+        });
+    }
+    React.useEffect(function() {
+        alive.current = true;
+        load();
+        var t = setInterval(load, 5 * 60 * 1000);   // 5분 — 살아있음 신호 주기와 같다
+        return function() { alive.current = false; clearInterval(t); };
+    }, [user.id, user.role]);
+    function check() {
+        if (!isAdmin) return;
+        setView(function(v) { return Object.assign({}, v, { readiness: null, readinessError: '점검 중…' }); });
+        Promise.resolve().then(function() { return api.get('/collector/v2/readiness'); }).then(function(res) {
+            var data = unwrap(res);
+            if (!Array.isArray(data.blockers)) throw new Error('READINESS_INVALID');
+            if (alive.current) setView(function(v) { return Object.assign({}, v, { readiness: data, readinessError: '' }); });
+        }).catch(function() {
+            if (alive.current) setView(function(v) { return Object.assign({}, v, { readiness: null, readinessError: '점검 결과를 확인하지 못했습니다(관리자 권한·서버 버전).' }); });
+        });
+    }
+    function control(next) {
+        if (!isAdmin) return;
+        if (next === 'READY' && !view.reviewed) return;          // 검토 체크 없이는 재개 요청을 보내지 않는다
+        var reason = next === 'READY' ? '화면에서 검토 후 재개' : '화면에서 전체 중지';
+        setView(function(v) { return Object.assign({}, v, { reviewed: false, controlMsg: '제어 요청 확인 중…' }); });
+        Promise.resolve().then(function() { return api.post('/collector/v2/control', { state: next, reason: reason }); }).then(function(res) {
+            var data = unwrap(res);
+            if (data.state !== next) throw new Error('제어 접수 상태 미확인');
+            if (alive.current) setView(function(v) { return Object.assign({}, v, { controlMsg: (next === 'READY' ? '전체 재개' : '전체 중지') + ' 요청이 접수됐습니다. 각 기계는 다음 회차(1분 안)에 반영합니다.' }); });
+            load();
+        }).catch(function() {
+            if (alive.current) setView(function(v) { return Object.assign({}, v, { controlMsg: '제어 요청 처리 여부를 확인하지 못했습니다. 자동 재전송하지 않습니다 — 새로고침으로 현재 상태를 확인하세요.' }); });
+        });
+    }
+    var d = view.data;
+    if (!d && !view.error) return null;                              // 첫 조회 전엔 아무것도 안 그린다(0 으로 그리면 거짓말)
+    var today = d && d.today || {}, y = d && d.yesterday || {};
+    var machines = d && Array.isArray(d.machines) ? d.machines : null;
+    var control_ = d && d.control;
+    var ctlState = control_ && control_.state;
+    var rd = view.readiness;
+    return React.createElement('section', { style: _krCard, 'aria-label': '수집기 운영', 'data-collector-ops': true },
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' } },
+            React.createElement('strong', { style: { fontSize: 15 } }, '🧭 수집기 운영' + (d ? ' · ' + d.day : '')),
+            React.createElement('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap' } },
+                React.createElement('button', { type: 'button', onClick: load, disabled: view.loading, style: _krOpsBtn }, view.loading ? '읽는 중…' : '새로고침'),
+                isAdmin && React.createElement('button', { type: 'button', onClick: check, style: _krOpsBtn }, '설정 점검'),
+                isAdmin && ctlState === 'READY' && React.createElement('button', { type: 'button', onClick: function() { control('PAUSED_OPERATOR'); }, style: Object.assign({}, _krOpsBtn, { color: '#b91c1c', borderColor: '#fecaca' }) }, '⏹ 전체 중지'),
+                isAdmin && ctlState && ctlState !== 'READY' && React.createElement('label', { style: { fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 4 } },
+                    React.createElement('input', { type: 'checkbox', checked: !!view.reviewed, onChange: function(e) { var on = e.target.checked; setView(function(v) { return Object.assign({}, v, { reviewed: on }); }); } }),
+                    '원인을 검토했습니다'),
+                isAdmin && ctlState && ctlState !== 'READY' && React.createElement('button', { type: 'button', disabled: !view.reviewed, onClick: function() { control('READY'); }, style: _krOpsBtn }, '▶ 검토 후 전체 재개'))),
+        view.error && React.createElement('p', { role: 'status', style: { fontSize: 12, color: '#b45309', margin: '6px 0 0' } }, view.error),
+        view.controlMsg && React.createElement('p', { role: 'status', style: { fontSize: 12, color: '#1d4ed8', margin: '6px 0 0' } }, view.controlMsg),
+        d && React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 8, marginTop: 10 } },
+            _krOpsTile('오늘 완료', _krOpsNum(today.completed) + ' / ' + _krOpsNum(today.total), '남음 ' + _krOpsNum(today.remaining) + (today.partial ? ' · 부분 ' + _krOpsNum(today.partial) : '')),
+            _krOpsTile('어제 완료', _krOpsNum(y.completed), y.day || ''),
+            _krOpsTile('상품 연결 확인 필요', _krOpsNum(today.unresolved), 'nvMid 없는 대상', today.unresolved ? '#b45309' : undefined),
+            _krOpsTile('대기 요청', _krOpsNum(d.pendingRequests), '직원이 낮에 요청한 키워드'),
+            _krOpsTile('전체 제어', ctlState ? (_krOpsControlLabel[ctlState] || ctlState) : '미확인', (control_ && control_.reason) || (d.enabled ? '서버 배정 켜짐' : '서버 배정 꺼짐 · 시간대 방식'), ctlState && ctlState !== 'READY' ? '#b91c1c' : undefined)),
+        d && React.createElement('div', { style: { overflowX: 'auto', marginTop: 10 } },
+            machines === null ? React.createElement('p', { style: { fontSize: 12, color: '#b45309' } }, '기계별 신호를 읽지 못했습니다(미확인).')
+            : !machines.length ? React.createElement('p', { style: { fontSize: 12, color: '#64748b' } }, '기계 신호 없음 — v1.21.0 이상 확장이 아직 보고하지 않았습니다.')
+            : React.createElement('table', { style: { width: '100%', borderCollapse: 'collapse' } },
+                React.createElement('thead', null, React.createElement('tr', null, ['기계', '버전', '상태', '마지막 신호', '오늘', '📤 미전송'].map(function(h) {
+                    return React.createElement('th', { key: h, scope: 'col', style: _krTh }, h); }))),
+                React.createElement('tbody', null, machines.map(function(m, i) {
+                    var up = _krOpsUpload(m);
+                    return React.createElement('tr', { key: m.instance_id || i },
+                        React.createElement('td', { style: _krTd }, m.machine || '—'),
+                        React.createElement('td', { style: _krTd }, m.ext_version ? 'v' + m.ext_version : '—'),
+                        React.createElement('td', { style: Object.assign({}, _krTd, { color: m.stale ? '#dc2626' : '#334155' }) }, m.status || '—'),
+                        React.createElement('td', { style: _krTd }, _krOpsClock(m.last_seen) + (m.minutes_since != null ? ' (' + m.minutes_since + '분 전)' : '')),
+                        React.createElement('td', { style: _krTd }, _krOpsNum(m.day_done) + ' / ' + _krOpsNum(m.day_total)),
+                        React.createElement('td', { style: Object.assign({}, _krTd, { color: up.c, fontWeight: 700 }) }, up.t));
+                })))),
+        isAdmin && (view.readinessError || rd) && React.createElement('div', { style: { marginTop: 10, padding: '10px 12px', background: '#f8fafc', borderRadius: 10, fontSize: 12.5 } },
+            view.readinessError && React.createElement('p', { style: { margin: 0, color: '#b45309' } }, view.readinessError),
+            rd && React.createElement('div', null,
+                React.createElement('strong', null, rd.configurationReady ? '설정 점검 통과 — 실제 수집 성공과는 다른 축입니다' : '가동 전 확인할 것 ' + rd.blockers.length + '건'),
+                React.createElement('div', { style: { color: '#64748b', marginTop: 4 } },
+                    '기계 ' + _krOpsNum(rd.workers && rd.workers.ready) + ' 준비 / ' + _krOpsNum(rd.workers && rd.workers.online) + ' 온라인 / ' + _krOpsNum(rd.workers && rd.workers.total) + ' 등록 · 남은 작업 ' + _krOpsNum(rd.capacity && rd.capacity.remainingJobs) + ' · 오늘 상한 ' + _krOpsNum(rd.capacity && rd.capacity.todayCeiling) + ' · 상품 연결 확인 필요 ' + _krOpsNum(rd.targets && rd.targets.unresolved)),
+                rd.blockers.length > 0 && React.createElement('ul', { style: { margin: '6px 0 0', paddingLeft: 18 } }, rd.blockers.map(function(code, i) {
+                    return React.createElement('li', { key: i }, _krOpsBlockerLabel[code] || ('확인 필요: ' + code)); })))),
+        React.createElement('p', { style: { fontSize: 11.5, color: '#94a3b8', margin: '8px 0 0' } },
+            '완료 = 그날 서버에 저장된 키워드 수 · 부분 = 막혀서 찾은 순위만 적은 키워드 · 미전송 = 기계가 아직 못 올린 결과(서버가 받으면 사라짐). 값이 「미확인」이면 못 잰 것이지 0 이 아닙니다.'));
+}
+var _krOpsBtn = { padding: '6px 11px', borderRadius: 8, border: '1px solid #cbd5e1', background: '#fff', fontSize: 12.5, cursor: 'pointer' };
+function _krOpsTile(label, value, sub, color) {
+    return React.createElement('div', { style: { padding: '9px 11px', border: '1px solid #e2e8f0', borderRadius: 10, background: '#fff' } },
+        React.createElement('div', { style: { fontSize: 11, color: '#94a3b8', fontWeight: 700 } }, label),
+        React.createElement('div', { style: { fontSize: 17, fontWeight: 800, color: color || '#0f172a', marginTop: 2 } }, value),
+        sub ? React.createElement('div', { style: { fontSize: 11, color: '#64748b', marginTop: 2 } }, sub) : null);
 }
 
 window.KeywordRankPage = function KeywordRankPage(props) {
@@ -324,7 +482,7 @@ window.KeywordRankPage = function KeywordRankPage(props) {
                         datasets: [{
                             label: '순위', data: data,
                             borderColor: '#16a34a', backgroundColor: 'rgba(22,163,74,.12)',
-                            fill: true, tension: 0.35, pointRadius: 2.5, borderWidth: 2.5, spanGaps: true
+                            fill: true, tension: 0.35, pointRadius: 2.5, borderWidth: 2.5, spanGaps: false   // 빈 날은 끊어 그린다(코덱스 이식 5차)
                         }]
                     },
                     options: {
@@ -1065,6 +1223,8 @@ window.KeywordRankPage = function KeywordRankPage(props) {
             React.createElement('h1', { style: { margin: 0, fontSize: 21, fontWeight: 800, color: '#0f172a', letterSpacing: '-.02em' } }, '📊 쇼핑 순위 추적'),
             React.createElement('span', { style: { fontSize: 12.5, color: '#94a3b8' } },
                 selected ? '업체 상세 — 키워드별 추적 현황' : (isViewer ? '내 영업 대상 업체별 순위 추적 현황' : '광고주 업체별 순위 추적 현황') + ' · 매일 아침 자동 기록')),
+        /* ---------- 🧭 수집기 운영 패널 (코덱스 이식 5차) — 업체 상세가 아닐 때 · 뷰어 제외 ---------- */
+        !selected && !isViewer && React.createElement(CollectorOpsPanel, { currentUser: currentUser }),
         /* ---------- ⚠ 추적 안 됨 정리함 (신고 #248 후속) ---------- */
         !selected && canEditHere && tray && (function() {
             var stuck = tray.stuck || [], shelved = tray.shelved || [];
@@ -1328,3 +1488,4 @@ window.KeywordRankPage = function KeywordRankPage(props) {
         )
     );
 };
+window.CollectorOpsPanel = CollectorOpsPanel;

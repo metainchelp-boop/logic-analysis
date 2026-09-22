@@ -1870,6 +1870,181 @@ function uploadSignature(products) {
   return ids.length ? ids.length + ':' + ids.join(',') : '';
 }
 
+/* ─────────────────────────────────────────────────────────────────────────
+ * 📤 미전송 보관함(outbox) — 코덱스 1.22.0 이식 4차 (v1.26.0 · 2026-09-22)
+ *
+ * 왜 — 서버가 잠깐 죽거나(배포·재기동) 회선이 끊기면 지금까지는 **모은 것을 그 자리에서 버렸다**(업로드 실패 = 실패 1건).
+ *      네이버에 요청은 이미 나갔는데 결과만 잃는 셈이다. 이제 실패한 업로드 본문을 **이 기계 안(IndexedDB)** 에 두고
+ *      회차 시작·5분 알람·브라우저 시작 때 다시 보낸다. 서버가 「저장했다」(stored·observationId 일치)고 답할 때만 지운다.
+ * 규칙
+ *   · 일시 장애(회선 · 408 · 429 · 5xx)만 보관한다. 4xx(서버가 본문을 거절)는 보관해도 다시 실패하므로 **격리**(검토 필요).
+ *   · 재시도 간격 30초 × 2^n(최대 1시간) · 6회 넘으면 자동 재시도 멈춤(검토 필요) — 팝업 「📤 다시 보내기」가 되살린다.
+ *   · 상한 100건 · 32MB. 넘치면 새 수집을 보관하지 않고 실패로 돌린다(무한 증식 금지).
+ *   · ACK = HTTP 200 + stored===true + (봉투가 있으면) observationId 일치. 그 밖은 저장됐다고 믿지 않는다(격리).
+ *   · 보관함 요약(건수·바이트·검토 필요·가장 오래된 관측)만 heartbeat 로 서버에 보낸다 — 본문·검색어는 이 기계 밖으로 안 나간다.
+ * ⚠️ 원안과 다른 점 — 원안은 미전송이 있으면 새 수집을 멈췄다(WAIT_UPLOAD). 우리는 상한 안에서 계속 모은다
+ *    (서버가 30분 죽었다고 그 시간대 수집까지 잃을 이유가 없다). IndexedDB 를 못 열면 메모리 보관(워커 수명)으로 폴백.
+ * ─────────────────────────────────────────────────────────────────────── */
+const OUTBOX_DB = 'metainc-collector-v2';
+const OUTBOX_STORE = 'outbox';
+const OUTBOX_MAX_ITEMS = 100;
+const OUTBOX_MAX_BYTES = 32 * 1024 * 1024;
+const OUTBOX_MAX_ATTEMPTS = 6;
+const OUTBOX_BASE_BACKOFF_MS = 30 * 1000;
+const OUTBOX_MAX_BACKOFF_MS = 60 * 60 * 1000;
+let _outboxMem = null;          // IndexedDB 폴백(워커가 살아 있는 동안만)
+let _outboxDb = null;
+function canonicalJson(value) {
+  // 키를 코드포인트 순으로 정렬한 JSON — 같은 본문이면 같은 문자열(중복 판정·크기 계산용). undefined 는 JSON 처럼 뺀다.
+  if (value === null || typeof value === 'boolean' || typeof value === 'number') return JSON.stringify(value);
+  if (typeof value === 'string') return JSON.stringify(value);
+  if (Array.isArray(value)) return '[' + value.map((v) => (v === undefined ? 'null' : canonicalJson(v))).join(',') + ']';
+  if (typeof value !== 'object') return 'null';
+  const keys = Object.keys(value).filter((k) => value[k] !== undefined).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return '{' + keys.map((k) => JSON.stringify(k) + ':' + canonicalJson(value[k])).join(',') + '}';
+}
+async function payloadHashOf(text) {
+  try {
+    const bytes = new TextEncoder().encode(text);
+    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    return Array.from(new Uint8Array(digest), (n) => n.toString(16).padStart(2, '0')).join('');
+  } catch (e) { return ''; }
+}
+function _outboxOpen() {
+  if (_outboxDb) return Promise.resolve(_outboxDb);
+  if (typeof indexedDB === 'undefined' || !indexedDB) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    try {
+      const req = indexedDB.open(OUTBOX_DB, 1);
+      req.onupgradeneeded = () => { try { req.result.createObjectStore(OUTBOX_STORE, { keyPath: 'observationId' }); } catch (e) { /* 이미 있음 */ } };
+      req.onsuccess = () => { _outboxDb = req.result; try { _outboxDb.onversionchange = () => { _outboxDb.close(); _outboxDb = null; }; } catch (e) {} resolve(_outboxDb); };
+      req.onerror = () => resolve(null);
+      req.onblocked = () => resolve(null);
+    } catch (e) { resolve(null); }
+  });
+}
+function _outboxTx(mode, fn) {
+  // fn(store) → request | undefined. IndexedDB 없으면 메모리 Map 으로.
+  return _outboxOpen().then((db) => new Promise((resolve, reject) => {
+    if (!db) { if (!_outboxMem) _outboxMem = new Map(); try { resolve(fn(null)); } catch (e) { reject(e); } return; }
+    let tx;
+    try { tx = db.transaction(OUTBOX_STORE, mode); } catch (e) { if (!_outboxMem) _outboxMem = new Map(); try { resolve(fn(null)); } catch (e2) { reject(e2); } return; }
+    let out;
+    try { out = fn(tx.objectStore(OUTBOX_STORE)); } catch (e) { reject(e); return; }
+    tx.oncomplete = () => resolve(out && out.result !== undefined ? out.result : out);
+    tx.onerror = tx.onabort = () => reject(tx.error || new Error('outbox tx failed'));
+  }));
+}
+const Outbox = {
+  async all() {
+    return _outboxTx('readonly', (store) => {
+      if (!store) return Array.from(_outboxMem.values());
+      return store.getAll();
+    });
+  },
+  async put(item) {
+    return _outboxTx('readwrite', (store) => { if (!store) { _outboxMem.set(item.observationId, item); return true; } store.put(item); return true; });
+  },
+  async del(id) {
+    return _outboxTx('readwrite', (store) => { if (!store) { _outboxMem.delete(id); return true; } store.delete(id); return true; });
+  },
+  async clear() {
+    return _outboxTx('readwrite', (store) => { if (!store) { _outboxMem.clear(); return true; } store.clear(); return true; });
+  },
+};
+function outboxNeedsReview(item) { return !!item.quarantined || Number(item.attempts || 0) >= OUTBOX_MAX_ATTEMPTS; }
+/** heartbeat 에 싣는 요약 — 본문·검색어 없이 건수·바이트·검토 필요·가장 오래된 관측(epoch 초). */
+async function outboxSummary(items) {
+  let list = items;
+  try { if (!list) list = await Outbox.all(); } catch (e) { list = []; }
+  let bytes = 0, review = 0, oldest = null, unknown = false;
+  for (const it of list) {
+    bytes += Number(it.bytes || 0);
+    if (outboxNeedsReview(it)) review++;
+    const fin = it.payload && it.payload.meta && it.payload.meta.observation && it.payload.meta.observation.finishedAt;
+    const ms = typeof fin === 'string' ? Date.parse(fin) : NaN;
+    if (!Number.isFinite(ms)) unknown = true; else { const sec = Math.floor(ms / 1000); oldest = oldest === null ? sec : Math.min(oldest, sec); }
+  }
+  return { schema: 1, count: list.length, payloadBytes: list.length ? Math.max(1, bytes) : 0, reviewRequiredCount: review,
+           oldestObservedAt: (unknown || !list.length) ? null : oldest };
+}
+/** 팝업이 읽는 상태 칸을 갱신한다. */
+async function outboxSync(items) {
+  try {
+    const list = items || await Outbox.all();
+    const review = list.filter(outboxNeedsReview).length;
+    const due = list.filter((it) => !outboxNeedsReview(it)).map((it) => Number(it.nextAttemptAt || 0));
+    await setState({ outboxCount: list.length, outboxReview: review,
+                     outboxNextAt: due.length ? new Date(Math.max(Date.now(), Math.min.apply(null, due))).toISOString() : '' });
+  } catch (e) { /* 표시 실패는 무시 */ }
+}
+/** 실패한 업로드 본문을 보관한다. 상한을 넘으면 예외(OUTBOX_FULL) — 호출자는 종전처럼 실패로 센다. */
+async function outboxAdd(body, reason, quarantined = false) {
+  const text = canonicalJson(body);
+  const bytes = new TextEncoder().encode(text).length;
+  const hash = await payloadHashOf(text);
+  const obs = body && body.meta && body.meta.observation;
+  const id = (obs && obs.observationId) ? String(obs.observationId).toLowerCase() : 'legacy:' + (hash || String(Date.now()));
+  const list = await Outbox.all();
+  const old = list.find((it) => it.observationId === id);
+  if (!old) {
+    const total = list.reduce((n, it) => n + Number(it.bytes || 0), 0);
+    if (list.length >= OUTBOX_MAX_ITEMS || total + bytes > OUTBOX_MAX_BYTES) throw new Error('OUTBOX_FULL');
+  }
+  await Outbox.put({ observationId: id, payloadHash: hash, payload: body, bytes, keyword: String(body.keyword || '').slice(0, 60),
+                     attempts: old ? old.attempts : 0, nextAttemptAt: old ? old.nextAttemptAt : 0,
+                     quarantined: !!quarantined || !!(old && old.quarantined), error: String(reason || '').slice(0, 80),
+                     addedAt: old ? old.addedAt : Date.now() });
+  await outboxSync();
+  return id;
+}
+function _isTransientStatus(status) { return status === 408 || status === 429 || status >= 500; }
+function _ackOk(ack, id) {
+  if (!ack || ack.stored !== true) return false;
+  if (id && !id.startsWith('legacy:') && ack.observationId && String(ack.observationId).toLowerCase() !== id) return false;
+  return true;
+}
+async function _postSerp(token, body) {
+  const res = await fetch(`${CFG.serverBase}/api/collector/serp`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Collector-Token': token }, body: JSON.stringify(body),
+  });
+  let json = null;
+  try { json = await res.json(); } catch (e) { json = null; }
+  return { ok: res.ok, status: res.status, json };
+}
+/** 보관함을 비운다(가능한 것만). force=true 면 검토 대기·대기 시각을 무시하고 전부 한 번 더 시도한다. 네이버 요청 0건. */
+async function flushOutbox(token, why, force = false) {
+  let list;
+  try { list = await Outbox.all(); } catch (e) { return { sent: 0, left: 0, error: 'STORE' }; }
+  if (!list.length) return { sent: 0, left: 0 };
+  if (!token) { await outboxSync(list); return { sent: 0, left: list.length, error: 'NO_TOKEN' }; }
+  const now = Date.now();
+  let sent = 0;
+  for (const it of list) {
+    if (!force && (it.quarantined || Number(it.attempts || 0) >= OUTBOX_MAX_ATTEMPTS || Number(it.nextAttemptAt || 0) > now)) continue;
+    if (force && it.quarantined) continue;                       // 격리는 「검토 후 비우기」로만
+    let r;
+    try { r = await _postSerp(token, it.payload); }
+    catch (e) { r = { ok: false, status: 0, json: null }; }
+    if (r.ok && _ackOk(r.json, it.observationId)) {
+      try { await Outbox.del(it.observationId); } catch (e) { /* 다음에 또 지운다 */ }
+      sent++;
+      continue;
+    }
+    const attempts = (force ? 0 : Number(it.attempts || 0)) + 1;
+    const quarantined = r.ok ? true : (r.status > 0 && !_isTransientStatus(r.status));   // 200 인데 ACK 불일치 · 4xx = 격리
+    const backoff = Math.min(OUTBOX_MAX_BACKOFF_MS, OUTBOX_BASE_BACKOFF_MS * Math.pow(2, Math.min(attempts - 1, 6)));
+    try {
+      await Outbox.put(Object.assign({}, it, { attempts, nextAttemptAt: Date.now() + backoff, quarantined: it.quarantined || quarantined,
+                                              error: r.ok ? 'ACK_MISMATCH' : (r.status ? 'HTTP_' + r.status : 'NETWORK') }));
+    } catch (e) { /* 무시 */ }
+  }
+  let left = 0;
+  try { const after = await Outbox.all(); left = after.length; await outboxSync(after); } catch (e) { /* 무시 */ }
+  if (sent || why) await log(`📤 보관함 재전송(${why || '수동'}) — 보냄 ${sent} · 남음 ${left}`);
+  return { sent, left };
+}
+
 async function uploadKeyword(token, keyword, payload, job) {
   const sig = uploadSignature(payload.products);
   if (sig && _lastUp.sig === sig && _lastUp.keyword && _lastUp.keyword !== keyword) {
@@ -1883,10 +2058,7 @@ async function uploadKeyword(token, keyword, payload, job) {
     await log(`⛔ 직전 키워드와 결과가 같아 올리지 않음 (${note})`);
     throw new Error('업로드 취소 — 직전 회차와 동일한 결과');
   }
-  const res = await fetch(`${CFG.serverBase}/api/collector/serp`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Collector-Token': token },
-    body: JSON.stringify({
+  const body = {
       keyword, total: payload.total, products: payload.products,
       // 사후 재구성용 메타(신고 #253 교훈 — 서버 저장본에서 광고 증거가 사라져
       // 「광고 0건」이라는 거짓 정상을 봤다). 구서버는 이 필드를 몰라도 무시한다.
@@ -1910,12 +2082,34 @@ async function uploadKeyword(token, keyword, payload, job) {
         // 🧭 v2 임대 계약 — 서버가 이 업로드로 작업을 완료/보류 처리한다(없으면 무동작).
         job: job || undefined,
       },
-    }),
-  });
-  if (!res.ok) throw new Error(`업로드 실패 HTTP ${res.status}`);
+  };
+  // 📤 4차 — 회선·서버 일시 장애면 본문을 이 기계에 보관하고(queued) 회차는 계속한다. 서버가 본문을 거절(4xx)하면 종전처럼 실패.
+  let r;
+  try { r = await _postSerp(token, body); }
+  catch (e) {
+    const id = await outboxAdd(body, 'NETWORK');                        // 꽉 찼으면 OUTBOX_FULL 예외 → 호출자가 실패로 센다
+    await log(`📤 [${keyword}] 서버에 닿지 않아 보관함에 저장 — 회선 회복 뒤 자동 재전송`);
+    return { queued: true, observationId: id };
+  }
+  if (!r.ok) {
+    if (_isTransientStatus(r.status)) {
+      const id = await outboxAdd(body, 'HTTP_' + r.status);
+      await log(`📤 [${keyword}] 서버 ${r.status} — 보관함에 저장(다음 회차·알람 때 재전송)`);
+      return { queued: true, observationId: id };
+    }
+    throw new Error(`업로드 실패 HTTP ${r.status}`);
+  }
+  const obs = body.meta.observation;
+  if (!_ackOk(r.json, obs && obs.observationId ? String(obs.observationId).toLowerCase() : '')) {
+    // 200 인데 「저장했다」는 답이 아니다(구서버는 stored 를 안 줄 수 있어 격리하지 않고 기록만) — 봉투 있는 확장에서만 격리 보관
+    if (obs && r.json && r.json.stored === true) {
+      try { await outboxAdd(body, 'ACK_MISMATCH', true); } catch (e) { /* 꽉 참 */ }
+      await log(`⚠️ [${keyword}] 서버 응답의 관측 ID 가 보낸 것과 다릅니다 — 사본을 격리 보관(검토 필요)`);
+    }
+  }
   // 올린 뒤에 기억한다 — 실패한 회차는 기준이 되면 안 된다.
   _lastUp = { keyword, sig };
-  return res.json();
+  return r.json || {};
 }
 
 let running = false;
@@ -1973,6 +2167,7 @@ async function runCollection(manual = false) {
   if (manual && bu) await clearBlocked();
   const token = await getToken();
   if (!token) { await log('❌ 토큰이 없습니다. 팝업에서 먼저 저장하세요.'); running = false; return; }
+  try { await flushOutbox(token, '회차 시작'); } catch (e) { /* 보관함 문제는 수집을 막지 않는다 */ }
 
   await setState({ running: true, startedAt: new Date().toISOString(), done: 0, failed: 0 });
   await log(manual ? '▶ 수동 수집 시작' : '▶ 자동 수집 시작');
@@ -2047,7 +2242,8 @@ async function runCollection(manual = false) {
           await log(`🎯 [${kw}] 찾을 상품 ${se.targets}개를 ${se.page}페이지에서 다 찾아 멈춤`
                     + ` (담긴 ${se.kept}개 · ${CFG.pagesPerKeyword - se.page}장 아낌)`);
         }
-        await uploadKeyword(token, kw, payload);
+        const _up = await uploadKeyword(token, kw, payload);
+        if (_up && _up.queued) await log(`  📤 [${kw}] 서버 응답 대기 — 보관함에 두고 계속 진행`);
         if (payload.blocked) {
           // 막히기 전까지 담은 것은 올렸다(서버는 찾은 순위만 적는다) — 막힘 처리는 아래 catch 가 한다.
           await log(`◐ [${kw}] 막히기 전까지 ${payload.products.length}개는 올림(찾은 순위만 기록)`);
@@ -2143,6 +2339,7 @@ async function runOnDemand() {
 
     const token = await getToken();
     if (!token) return;
+    try { await flushOutbox(token, ''); } catch (e) { /* 무시 */ }
     let kws = [];
     try {
       const res = await fetch(`${CFG.serverBase}/api/collector/requests?_=1${await workerParams()}`, {
@@ -2165,7 +2362,8 @@ async function runOnDemand() {
           if (payload.blocked) throw new Error(payload.blocked);
           throw new Error('상품 0건');
         }
-        await uploadKeyword(token, kw, payload);
+        const _up = await uploadKeyword(token, kw, payload);
+        if (_up && _up.queued) await log(`  📤 [${kw}] 서버 응답 대기 — 보관함에 두고 계속 진행`);
         if (payload.blocked) throw new Error(payload.blocked);          // 담은 것은 올렸다 — 막힘 처리는 catch 가
         ok++; streak = 0;
         if (ok === 1 && !blockedThisRound) await clearBlocked();   // 값을 실제로 받았다 = 차단 풀림
@@ -2261,6 +2459,7 @@ async function runCoordinated(manual = false) {
     if (!manual && bu > Date.now()) return true;                 // 캡차 쉼 — 서버도 이 기계를 쉬게 두고 있다
     const token = await getToken();
     if (!token) { await log('❌ 토큰이 없습니다. 팝업에서 먼저 저장하세요.'); return true; }
+    try { await flushOutbox(token, '회차 시작'); } catch (e) { /* 무시 */ }
     let ver = ''; try { ver = chrome.runtime.getManifest().version; } catch (e) { /* 무시 */ }
     const who = await coordWho();
     let reg;
@@ -2311,7 +2510,8 @@ async function runCoordinated(manual = false) {
           const se = payload.stoppedEarly;
           await log(`🎯 [${kw}] 찾을 상품 ${se.targets}개를 ${se.page}페이지에서 다 찾아 멈춤 (담긴 ${se.kept}개)`);
         }
-        await uploadKeyword(token, kw, payload, leased);         // meta.job 에 임대 계약 — 서버가 작업 완료 처리
+        const _up = await uploadKeyword(token, kw, payload, leased);   // meta.job 에 임대 계약 — 서버가 작업 완료 처리
+        if (_up && _up.queued) await log(`  📤 [${kw}] 서버 응답 대기 — 보관함에 두고 계속(임대는 만료 뒤 서버가 다시 배정)`);
         leased = null;
         if (payload.blocked) { await log(`◐ [${kw}] 막히기 전까지 ${payload.products.length}개는 올림`); throw new Error(payload.blocked); }
         if (payload.observation && payload.observation.status === 'partial') {
@@ -2407,6 +2607,7 @@ async function sendHeartbeat(reason) {
       dayTotal: Number(state.dayTotal || 0),
       lastError: readFail ? `${readFail.at || ''} ${readFail.err || ''}`.slice(0, 200) : '',
       alarms: await alarmNames(),
+      uploadSummary: await outboxSummary(),                 // 📤 4차 — 미전송 보관함 요약(본문 없음)
     };
     const res = await fetch(`${CFG.serverBase}/api/collector/heartbeat`, {
       method: 'POST',
@@ -2475,7 +2676,10 @@ chrome.runtime.onInstalled.addListener(() => {
     }
   } catch (e) { /* 무시 */ }
 })();
-chrome.runtime.onStartup.addListener(() => { armAlarms(); log('브라우저 시작 — 알람 재장전.'); sendHeartbeat('startup'); });
+chrome.runtime.onStartup.addListener(() => {
+  armAlarms(); log('브라우저 시작 — 알람 재장전.');
+  (async () => { try { await flushOutbox(await getToken(), '브라우저 시작'); } catch (e) { /* 무시 */ } sendHeartbeat('startup'); })();
+});
 
 /** 수집 회차 날짜 — 서버 _effective_date 와 동일 규칙.
  *  21시 이후 수집은 '다음 날 04:30 배치'용이므로 다음 날짜 회차로 센다. */
@@ -2495,7 +2699,11 @@ function hourKey() {
 }
 
 chrome.alarms.onAlarm.addListener(async (a) => {
-  if (a.name === HEARTBEAT_ALARM) { await ensureAlarms('심장박동'); sendHeartbeat('alarm'); return; }
+  if (a.name === HEARTBEAT_ALARM) {
+    await ensureAlarms('심장박동');
+    try { await flushOutbox(await getToken(), ''); } catch (e) { /* 무시 */ }   // 📤 5분마다 보관함 재전송(네이버 요청 0건)
+    sendHeartbeat('alarm'); return;
+  }
   if (a.name === 'ondemand') { runOnDemand(); return; }
   if (a.name !== 'daily') return;
   // 24시간 분산 — 매시간 자기 시간대 몫만 수집한다(시각 제한 없음).
@@ -2530,6 +2738,21 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
       await chrome.storage.local.set({ [COORD_KEY]: !!msg.on });
       await setState({ coordEnabled: !!msg.on, coordState: msg.on ? 'READY' : 'OFF', coordReason: '' });
       await log(msg.on ? '🧭 서버 자동 배정 켬 — 다음 회차부터 서버가 키워드를 나눠 줍니다(서버 스위치가 꺼져 있으면 종전대로).' : '🧭 서버 자동 배정 끔 — 종전 경로(시간대 몫)로 돕니다.');
+    })();
+    sendResponse({ ok: true });
+  }
+  // 📤 4차 — 팝업 「다시 보내기」(검토 대기·대기 시각 무시하고 한 번 더) · 「검토 후 비우기」(격리분 포함 전부 삭제 · 사람이 확인한 뒤)
+  if (msg?.cmd === 'flushOutbox') {
+    (async () => {
+      const r = await flushOutbox(await getToken(), '사람이 누름', true);
+      await log(r.error === 'NO_TOKEN' ? '📤 토큰이 없어 보낼 수 없습니다.' : `📤 다시 보내기 — 보냄 ${r.sent} · 남음 ${r.left}`);
+    })();
+    sendResponse({ ok: true });
+  }
+  if (msg?.cmd === 'clearOutbox') {
+    (async () => {
+      try { const n = (await Outbox.all()).length; await Outbox.clear(); await outboxSync([]); await log(`🗑 보관함 비움 — ${n}건 삭제(사람이 검토 후 누름)`); }
+      catch (e) { await log('🗑 보관함 비우기 실패: ' + e.message); }
     })();
     sendResponse({ ok: true });
   }

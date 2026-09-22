@@ -56,6 +56,15 @@ def ensure_table(conn) -> None:
         conn.commit()
     except Exception:
         pass
+    # 📤 4차(코덱스 이식) — 미전송 보관함 요약 칸. 옛 표에도 ALTER 로 더한다(멱등 · 실패 무시).
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(collector_heartbeat)").fetchall()}
+        for name, ddl in (("upload_summary_json", "TEXT"), ("upload_summary_at", "INTEGER")):
+            if name not in cols:
+                conn.execute(f"ALTER TABLE collector_heartbeat ADD COLUMN {name} {ddl}")
+        conn.commit()
+    except Exception:
+        pass
 
 
 def _ms_to_local(v: Any) -> str:
@@ -121,6 +130,17 @@ def record(conn, payload: Dict[str, Any], now: Optional[datetime] = None) -> Dic
         "alarms": alarms_s,
         "last_seen": ts,
     }
+    # 📤 미전송 보관함 요약 — 형식이 맞을 때만 저장한다(어긋나면 INVALID 표식 — 0 이 아니라 「못 쟀다」).
+    us = p.get("uploadSummary")
+    row["upload_summary_json"], row["upload_summary_at"] = None, None
+    if us is not None:
+        _now_epoch = int((now or datetime.now()).timestamp())
+        try:
+            from collector_telemetry import validate_upload_summary
+            row["upload_summary_json"] = json.dumps(validate_upload_summary(us, now=_now_epoch), ensure_ascii=False)
+        except Exception:
+            row["upload_summary_json"] = "INVALID"
+        row["upload_summary_at"] = _now_epoch
     conn.execute(
         """INSERT INTO collector_heartbeat(instance_id, worker_no, worker_count, ext_version, chrome_version,
                reason, paused_local, paused_screen, blocked_until, slow_until, running, last_finished_at,
@@ -137,6 +157,12 @@ def record(conn, payload: Dict[str, Any], now: Optional[datetime] = None) -> Dic
                last_error=excluded.last_error, alarms=excluded.alarms,
                last_seen=excluded.last_seen, seen_count=collector_heartbeat.seen_count+1""",
         row)
+    if row["upload_summary_at"] is not None:
+        try:
+            conn.execute("UPDATE collector_heartbeat SET upload_summary_json=?, upload_summary_at=? WHERE instance_id=?",
+                         (row["upload_summary_json"], row["upload_summary_at"], iid))
+        except Exception:
+            pass   # 칸이 없는 옛 표 — 신호 자체는 이미 저장됐다
     conn.commit()
     return row
 
@@ -158,9 +184,11 @@ def status_text(r: Dict[str, Any], now: Optional[datetime] = None) -> str:
         return f"🧱 캡차 쉼 — {bu[11:16]} 이후 재개"
     if r.get("paused_screen"):
         return "🛑 화면에서 꺼 둠"
-    if r.get("running"):
-        return "▶ 수집 중"
-    return "대기(정상)"
+    base = "▶ 수집 중" if r.get("running") else "대기(정상)"
+    us = r.get("uploadSummary")
+    if isinstance(us, dict) and us.get("count"):
+        base += f" · 📤 미전송 {us['count']}건" + (f"(검토 필요 {us['reviewRequiredCount']})" if us.get("reviewRequiredCount") else "")
+    return base
 
 
 def machines(conn, now: Optional[datetime] = None) -> List[Dict[str, Any]]:
@@ -179,6 +207,13 @@ def machines(conn, now: Optional[datetime] = None) -> List[Dict[str, Any]]:
             except ValueError:
                 r["minutes_since"] = None
             r["stale"] = r["minutes_since"] is None or r["minutes_since"] > STALE_MINUTES
+            # 📤 미전송 보관함 요약(4차) — 없음/손상은 0 이 아니라 UNREPORTED/INVALID
+            try:
+                from collector_telemetry import reported_upload_summary
+                r["uploadSummary"], r["uploadSummaryStatus"] = reported_upload_summary(
+                    r.get("upload_summary_json"), r.get("upload_summary_at"), now=int(n.timestamp()))
+            except Exception:
+                r["uploadSummary"], r["uploadSummaryStatus"] = None, "INVALID"
             r["status"] = status_text(r, n)
             r["machine"] = f"{r.get('worker_no', 1)}/{r.get('worker_count', 1)}"
             out.append(r)

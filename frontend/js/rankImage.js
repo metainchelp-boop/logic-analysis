@@ -185,38 +185,42 @@
       }
       ctx.textAlign = 'left';
 
-      validData.forEach(function (r, i) {
-        var xPos = chartLeft + (chartRight - chartLeft) * (i / (validData.length - 1));
-        ctx.save(); ctx.font = '9px "Noto Sans KR", sans-serif'; ctx.fillStyle = '#94a3b8';
+      // 코덱스 1.22.0 이식(5차) — x 축은 **전체 날짜**(빈 날 포함)로 잡고, 순위가 없는 날은 선을 끊는다.
+      //   종전엔 유효값만 이어 그려 「매일 측정된 것」처럼 보였다. 빈 구간이 있으면 면적도 채우지 않는다.
+      var xOf = function (i) { return chartLeft + (chartRight - chartLeft) * (i / Math.max(1, data.length - 1)); };
+      var yOf = function (r) { return chartInnerTop + (chartBottom - chartInnerTop) * ((r.rank_position - yMin) / (yMax - yMin)); };
+      var has = function (r) { return r.rank_position != null && r.rank_position > 0; };
+      data.forEach(function (r, i) {
+        var xPos = xOf(i);
+        ctx.save(); ctx.font = '9px "Noto Sans KR", sans-serif'; ctx.fillStyle = has(r) ? '#94a3b8' : '#cbd5e1';
         ctx.translate(xPos, chartBottom + 12); ctx.rotate(-0.4);
         ctx.fillText((r.checked_at || '').slice(5, 10), 0, 0); ctx.restore();
       });
 
       ctx.beginPath(); ctx.strokeStyle = '#3b82f6'; ctx.lineWidth = 2.5; ctx.lineJoin = 'round';
-      validData.forEach(function (r, i) {
-        var xPos = chartLeft + (chartRight - chartLeft) * (i / (validData.length - 1));
-        var yPos = chartInnerTop + (chartBottom - chartInnerTop) * ((r.rank_position - yMin) / (yMax - yMin));
-        if (i === 0) ctx.moveTo(xPos, yPos); else ctx.lineTo(xPos, yPos);
+      var connected = false;
+      data.forEach(function (r, i) {
+        if (!has(r)) { connected = false; return; }
+        if (!connected) ctx.moveTo(xOf(i), yOf(r)); else ctx.lineTo(xOf(i), yOf(r));
+        connected = true;
       });
       ctx.stroke();
 
-      ctx.beginPath();
-      validData.forEach(function (r, i) {
-        var xPos = chartLeft + (chartRight - chartLeft) * (i / (validData.length - 1));
-        var yPos = chartInnerTop + (chartBottom - chartInnerTop) * ((r.rank_position - yMin) / (yMax - yMin));
-        if (i === 0) ctx.moveTo(xPos, yPos); else ctx.lineTo(xPos, yPos);
-      });
-      ctx.lineTo(chartLeft + (chartRight - chartLeft), chartBottom);
-      ctx.lineTo(chartLeft, chartBottom);
-      ctx.closePath();
-      var areaGrad = ctx.createLinearGradient(0, chartInnerTop, 0, chartBottom);
-      areaGrad.addColorStop(0, 'rgba(59, 130, 246, 0.15)');
-      areaGrad.addColorStop(1, 'rgba(59, 130, 246, 0.02)');
-      ctx.fillStyle = areaGrad; ctx.fill();
+      if (validData.length === data.length) {
+        ctx.beginPath();
+        data.forEach(function (r, i) { if (i === 0) ctx.moveTo(xOf(i), yOf(r)); else ctx.lineTo(xOf(i), yOf(r)); });
+        ctx.lineTo(chartLeft + (chartRight - chartLeft), chartBottom);
+        ctx.lineTo(chartLeft, chartBottom);
+        ctx.closePath();
+        var areaGrad = ctx.createLinearGradient(0, chartInnerTop, 0, chartBottom);
+        areaGrad.addColorStop(0, 'rgba(59, 130, 246, 0.15)');
+        areaGrad.addColorStop(1, 'rgba(59, 130, 246, 0.02)');
+        ctx.fillStyle = areaGrad; ctx.fill();
+      }
 
-      validData.forEach(function (r, i) {
-        var xPos = chartLeft + (chartRight - chartLeft) * (i / (validData.length - 1));
-        var yPos = chartInnerTop + (chartBottom - chartInnerTop) * ((r.rank_position - yMin) / (yMax - yMin));
+      data.forEach(function (r, i) {
+        if (!has(r)) return;
+        var xPos = xOf(i), yPos = yOf(r);
         ctx.beginPath(); ctx.arc(xPos, yPos, 4, 0, Math.PI * 2);
         ctx.fillStyle = '#ffffff'; ctx.fill();
         ctx.strokeStyle = '#3b82f6'; ctx.lineWidth = 2; ctx.stroke();

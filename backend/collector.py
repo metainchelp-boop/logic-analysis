@@ -510,6 +510,7 @@ class HeartbeatReport(BaseModel):
     dayTotal: Optional[int] = None
     lastError: Optional[str] = None
     alarms: Optional[List[str]] = None
+    uploadSummary: Optional[dict] = None   # 📤 4차 — 미전송 보관함 요약(schema·count·payloadBytes·reviewRequiredCount·oldestObservedAt)
 
 
 @router.post("/heartbeat")
