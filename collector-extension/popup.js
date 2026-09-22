@@ -123,6 +123,7 @@ async function render() {
     `<div class="sec">이번 시간대 · 대상 <span class="b">${state.target ?? '-'}</span>개 · ` +
     `완료 <span class="b ok">${state.done ?? 0}</span> · ` +
     `실패 <span class="b bad">${state.failed ?? 0}</span>` +
+    (Number(state.partial || 0) ? ` · 부분 <span class="b" style="color:#b45309">${state.partial}</span>` : '') +
     (Number(state.overdue || 0) ? ` · 밀린 것 ${Number(state.overdue).toLocaleString()}개` : '') +
     '</div>' +
     (state.current ? `진행 중: ${state.current}<br>` : '') +

@@ -145,7 +145,7 @@ ok('⑦ 1페이지 주소에 pagingSize 를 안 붙인다', !/pagingSize=\$\{CFG
 ok('⑦ 2페이지부터 클릭을 쓴다', /clickToPage\(tabId, pagingIndex\)/.test(fp));
 const FPX = grab('fetchPage', 'async');
 ok('⑦ 클릭 실패(버튼 못 찾음) 시에도 주소 이동은 하지 않는다 — 키워드 종료(v1.13.1: 라우터 이동도 없음)',
-   !/tabs\.update\([^)]*pagingIndex/.test(fp) && /return \{ total: 0, list: \[\] \};   \/\/ 이 키워드는 여기까지/.test(fp) && !/func: routerPush/.test(fp));
+   !/tabs\.update\([^)]*pagingIndex/.test(fp) && /return \{ total: 0, list: \[\], stopReason: 'NO_PAGER' \};   \/\/ 이 키워드는 여기까지/.test(fp) && !/func: routerPush/.test(fp));
 ok('⑦ 폴백을 서버에 한 번 알린다', /NO_PAGER/.test(fp) && /_navMode\.reported = true/.test(fp));
 
 // ⑧ 깊이 요구 — 설정값이 실제로 그만큼인가
@@ -217,7 +217,7 @@ ok('⑫ 광고 뺀 ID 집합이 이전 장 안에 다 들어 있으면 STALE_PAG
   ok('⑫ 안 넘어가도 주소 이동(chrome.tabs.update)으로 되돌리지 않는다', !/chrome\.tabs\.update/.test(stalePart));
   // v1.13.1 — routerPush 는 삭제됐다(그 이동이 주소창 이동으로 되돌아가 퍼즐을 불렀다 · 22:02 실측).
   ok('⑫ 라우터 이동(routerPush)을 걸지 않는다(v1.13.1 에서 삭제)', !/func: routerPush/.test(SRC) && !/triedRouterPush/.test(SRC));
-  ok('⑫ 끝내 안 바뀌면 그 키워드는 여기까지만 담고 끝낸다(빈 목록)', /lastErr === 'STALE_PAGE'/.test(FP) && /return \{ total: 0, list: \[\] \}/.test(FP) && /_navMode\.stale \+= 1/.test(FP));
+  ok('⑫ 끝내 안 바뀌면 그 키워드는 여기까지만 담고 끝낸다(빈 목록)', /lastErr === 'STALE_PAGE'/.test(FP) && /return \{ total: 0, list: \[\], stopReason: 'STALE_PAGE' \}/.test(FP) && /_navMode\.stale \+= 1/.test(FP));
   ok('⑫ 왜 안 넘어갔는지(navProbe)를 서버에 1회 남긴다', /func: navProbe/.test(FP) && /_staleReported/.test(FP) && /STALE_PAGE\(클릭 뒤 내용 불변\)/.test(FP));
 }
 {

@@ -1570,6 +1570,18 @@ def _run_client_analyses_retention():
     DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
     if not os.path.exists(DB_PATH):
         return
+    # 📒 관측 원장 30일 보관정책(코덱스 1.22.0 이식 · 2026-09-22) — 같은 새벽 잡에 합류. 실패해도 아래 정리는 계속.
+    try:
+        from collector_observation import purge_old as _obs_purge
+        _oc = sqlite3.connect(DB_PATH, timeout=30)
+        try:
+            _n = _obs_purge(_oc)
+        finally:
+            _oc.close()
+        if _n > 0:
+            logger.info(f"🧹 관측 원장 보관정책 — {_n}건 정리(30일)")
+    except Exception as _e:
+        logger.warning(f"관측 원장 보관정책 실패(무시): {_e}")
     where = ("analyzed_date < date('now','localtime','-30 days') "
              "AND id NOT IN (SELECT MAX(id) FROM client_analyses GROUP BY client_id, keyword)")
     conn = None

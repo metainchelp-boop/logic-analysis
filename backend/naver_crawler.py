@@ -486,8 +486,61 @@ def find_product_rank_from_cache(keyword: str, product_url: str,
     target_store_name = extract_store_name_from_url(product_url)
     top_competitors = cached_products[:5]
 
+    # ── 정확 식별 우선 (코덱스 1.22.0 `product_identity` 이식 · 2026-09-22) ──
+    #   ⓐ 등록 nvMid 와 수집 product_id 가 **정규 형식으로 정확히** 같은 상품 — 순위와 무관하게 최우선.
+    #   ⓑ 등록 URL 의 정확 identity(호스트·스토어·상품번호 튜플 / nvMid) 와 수집 링크가 정확히 같은 상품.
+    #      단 등록 nvMid 를 아는데 수집 product_id 가 **다른 정규 nvMid** 면 URL 로 덮지 않는다(오탐 방지).
+    #   ⚠️ 코덱스는 여기서 끝냈지만(2·3순위 삭제) 우리는 **종전 폴백을 남긴다** — 9/18 실측에서
+    #      807건 중 462건이 2순위(주소 안 채널번호)로만 살아 있었고, 정확 규칙이 그중 몇 건을
+    #      받쳐 주는지 실데이터로 아직 안 쟀다(검토 보고 B5). 폴백 삭제는 그 측정 뒤의 일이다.
+    from product_identity import canonical_product_id as _cpid, naver_product_identity as _npi
+    from urllib.parse import urlparse
+    try:
+        _ident = _npi(product_url)
+        _mid = _cpid(target_nv_mid) if target_nv_mid else None
+        if _ident and _ident[0] == "nvMid":
+            if _mid and _mid != _ident[1]:
+                _ident = None          # 등록 nvMid 와 충돌하는 URL 은 폴백 근거가 아니다
+            else:
+                _mid = _ident[1]
+        _cands = [p for p in cached_products if isinstance(p, dict)
+                  and type(p.get("rank")) is int and p["rank"] > 0]   # bool(True) 는 순위가 아니다
+        _hits = [p["rank"] for p in _cands
+                 if _mid and _cpid(p.get("product_id")) == _mid]
+        if not _hits and _ident:
+            for _p in _cands:
+                _raw = _p.get("product_id")
+                _has = _raw is not None and not (isinstance(_raw, str) and not _raw.strip())
+                if _has and (_mid or not _cpid(_raw)):
+                    continue       # 알려진 nvMid 불일치·손상된 ID 는 URL 로 덮지 않는다
+                if _npi(_p.get("product_url")) == _ident:
+                    _hits.append(_p["rank"])
+        if _hits:
+            _r = min(_hits)
+            logger.info(f"[캐시] 상품 발견(정확 식별)! '{keyword}' → {_r}위 (페이지 {(_r - 1) // 40 + 1})")
+            return _r, (_r - 1) // 40 + 1, top_competitors
+    except Exception as _ie:
+        logger.warning(f"[캐시] 정확 식별 판정 실패(종전 규칙으로 계속): {_ie}")
+
+    # ── 종전 폴백(1~3순위) — 코덱스 시험이 잡아낸 결함 3건은 채택했다(2026-09-22):
+    #   ⓐ 순위가 양의 정수가 아닌 상품(0·-1·True·1.5)은 건너뛴다(그대로 돌려주면 0위·True위가 기록됐다).
+    #   ⓑ 등록 nvMid 를 아는데 수집 product_id 가 **다른 정규 nvMid** 인 상품은 URL 로 덮지 않는다.
+    #   ⓒ 수집 링크 호스트가 naver 가 아니면 주소 포함 규칙을 쓰지 않는다(엉뚱한 주소에 번호만 섞인 오탐).
+    _known_mid = _cpid(target_nv_mid) if target_nv_mid else None
     for product in cached_products:
         matched = False
+        if not isinstance(product, dict) or not isinstance(product.get("rank"), int) \
+                or isinstance(product.get("rank"), bool) or product["rank"] <= 0:
+            continue
+        if _known_mid:
+            _pid = _cpid(product.get("product_id"))
+            if _pid and _pid != _known_mid:
+                continue      # 알려진 nvMid 불일치 — 폴백 대상이 아니다
+        try:
+            _host = (urlparse(str(product.get("product_url") or "")).hostname or "").lower()
+        except Exception:
+            _host = ""
+        _naver_link = _host.endswith("naver.com") or _host.endswith("naver.net")
 
         # 0순위: 등록 때 받아 둔 nvMid 완전 일치 — 가장 정확하다(사람이 확인한 값).
         if target_nv_mid and product.get("product_id"):
@@ -499,13 +552,13 @@ def find_product_rank_from_cache(keyword: str, product_url: str,
             if target_product_id == product["product_id"]:
                 matched = True
 
-        # 2순위: productId가 URL에 포함
-        if not matched and target_product_id and product.get("product_url"):
+        # 2순위: productId가 URL에 포함 (naver 링크에서만)
+        if not matched and target_product_id and product.get("product_url") and _naver_link:
             if target_product_id in product["product_url"]:
                 matched = True
 
-        # 3순위: 스토어명 일치 + productId 부분 매칭
-        if not matched and target_store_name and product.get("store_name"):
+        # 3순위: 스토어명 일치 + productId 부분 매칭 (naver 링크에서만)
+        if not matched and target_store_name and product.get("store_name") and _naver_link:
             if target_store_name.lower() == product["store_name"].lower():
                 if target_product_id and target_product_id in str(product.get("product_url", "")):
                     matched = True

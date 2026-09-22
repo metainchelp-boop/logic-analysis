@@ -58,7 +58,8 @@ def test_wired_in_collector():
     hourly = src.find('"mode": "hourly"')
     allmode = src.find('"mode": "all"')
     ok("시간대 경로에 _apply_cap 이 걸린다", hourly > 0 and "_apply_cap(picked" in src[:hourly + 400])
-    ok("all 경로에도 _apply_cap 이 걸린다", allmode > 0 and "_apply_cap(sorted(remaining)" in src[:allmode + 50])
+    # 2026-09-22 — all 경로가 「시도한 키워드는 뒤로」 정렬(key=…)을 얻어 호출 모양이 바뀌었다. 상한은 그대로 걸린다.
+    ok("all 경로에도 _apply_cap 이 걸린다", allmode > 0 and "_apply_cap(sorted(remaining" in src[:allmode + 50])
     req = src.find('@router.get("/requests")')
     body = src[req:req + 2500] if req > 0 else ""
     ok("/requests 가 시험 중 빈 목록을 돌려준다", "_ondemand_ok(_test_cap())" in body and '"keywords": []' in body)
