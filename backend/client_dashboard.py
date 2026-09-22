@@ -1511,6 +1511,15 @@ def rank_overview(current_user: dict = Depends(get_current_user)):
         for r in rows:
             per.setdefault((r["client_id"], r["keyword"]), {})[r["d"]] = r["rank_position"]
 
+        # 3탭(대표 확정 2026-09-22) — 출처 축 집계의 근거. 실패하면 축 없이(전체만) 그린다.
+        try:
+            import rank_axes as _rx
+            _reg = _rx.registered_axes(conn, ids)
+        except Exception as _xe:
+            logger.warning(f"[rank-overview] 출처 축 조회 실패(전체 탭은 정상): {_xe}")
+            _rx, _reg = None, {}
+        _axis = {}   # cid → {"client": stat, "product": stat}
+
         by_client = {}
         for (cid, kw), days in per.items():
             ds = sorted(days.keys())
@@ -1520,6 +1529,13 @@ def rank_overview(current_user: dict = Depends(get_current_user)):
             e = by_client.setdefault(cid, {"keywords": 0, "exposed": 0, "top10": 0,
                                            "up": 0, "down": 0, "last_checked": "",
                                            "tops": []})
+            if _rx is not None and cid in _reg:
+                _nk = _rx.norm(kw)
+                _ax = _axis.setdefault(cid, {"client": _rx.new_stat(), "product": _rx.new_stat()})
+                if _nk in _reg[cid]["auto_kws"]:
+                    _rx.add_stat(_ax["client"], latest, prev, latest_d)
+                if _nk in _reg[cid]["manual_kws"]:
+                    _rx.add_stat(_ax["product"], latest, prev, latest_d)
             e["keywords"] += 1
             if latest is not None:
                 e["exposed"] += 1
@@ -1543,6 +1559,16 @@ def rank_overview(current_user: dict = Depends(get_current_user)):
                     "keywords": 0, "exposed": 0, "top10": 0, "up": 0, "down": 0,
                     "last_checked": "", "top_keywords": [], "rep_series": [],
                     "tracking_started": _first_map.get(c["id"])}
+            # 3탭 additive — 옛 화면은 이 키들을 읽지 않으므로 무회귀.
+            if _rx is not None and c["id"] in _reg:
+                _r = _reg[c["id"]]
+                _ax = _axis.get(c["id"], {})
+                item["axes"] = _rx.axes_payload(_r, _ax.get("client"), _ax.get("product"))
+                item["auto_keywords"] = len(_r["auto_kws"])
+                item["manual_keywords"] = len(_r["manual_kws"])
+                item["manual_products"] = _r["manual_products"]
+                item["contract_stage"] = _r["contract_stage"]
+                item["eligible"] = _r["eligible"]
             if e:
                 e["tops"].sort()
                 item.update({k: e[k] for k in ("keywords", "exposed", "top10", "up", "down", "last_checked")})
@@ -1562,6 +1588,10 @@ def rank_overview(current_user: dict = Depends(get_current_user)):
             "down_total": sum(i["down"] for i in out),
             "attention": sum(1 for i in out if i["keywords"] > 0 and i["exposed"] == 0),
         }
+        if _rx is not None:
+            totals["tabs"] = {"all": len(out),
+                              "auto": sum(1 for i in out if _rx.in_tab(i, "auto")),
+                              "manual": sum(1 for i in out if _rx.in_tab(i, "manual"))}
         return {"success": True, "data": out, "totals": totals}
     except Exception as e:
         logger.error(f"[rank-overview] {e}")
@@ -1658,13 +1688,22 @@ def rank_board(client_id: int, days: int = 8, current_user: dict = Depends(get_c
             products = []
 
         def _source_of(k):
-            """행 출처 — 어디서 등록돼 재고 있는지. 지울 때 무엇이 빠지는지 알려면 필요하다."""
+            """행 출처 — 어디서 등록돼 재고 있는지. 지울 때 무엇이 빠지는지 알려면 필요하다.
+            `source` 는 종전 우선순위(업체 > 상품 > 이력) 그대로, `sources` 는 3탭용으로
+            **속한 축 전부**(한 키워드가 대표·담당자 양쪽에 있으면 둘 다) — additive."""
             k = (k or "").strip()
+            srcs = []
             if k in _mk_set:
-                return {"source": "client", "source_label": "업체 키워드"}
+                srcs.append("client")
             if k in _prod_kw:
-                return {"source": "product", "source_label": f"상품 · {_prod_kw[k]}"}
-            return {"source": "history", "source_label": "분석 이력"}
+                srcs.append("product")
+            if not srcs:
+                srcs.append("history")
+            if k in _mk_set:
+                return {"source": "client", "source_label": "업체 키워드", "sources": srcs}
+            if k in _prod_kw:
+                return {"source": "product", "source_label": f"상품 · {_prod_kw[k]}", "sources": srcs}
+            return {"source": "history", "source_label": "분석 이력", "sources": srcs}
 
         per = {}
         for r in rows:

@@ -81,6 +81,13 @@ window.KeywordRankPage = function KeywordRankPage(props) {
     var _bdL = useState(false); var bdLoading = _bdL[0], setBdLoading = _bdL[1];
     var _q = useState(''); var query = _q[0], setQuery = _q[1];
     var _flt = useState('all'); var filter = _flt[0], setFilter = _flt[1]; // all|attention|up|down
+    // 3탭(대표 확정 2026-09-22 · 시안 v1) — all(전체) | auto(로직분석 대표 키워드) | manual(담당자 추가 키워드).
+    // 브라우저에 기억해 새로고침해도 보던 탭 유지. localStorage 가 막힌 환경이면 조용히 '전체'.
+    var _rt = useState(function() {
+        try { var v = localStorage.getItem('kr_rank_tab'); return (v === 'auto' || v === 'manual') ? v : 'all'; } catch (e) { return 'all'; }
+    });
+    var rankTab = _rt[0], _setRankTabRaw = _rt[1];
+    var setRankTab = function(t) { _setRankTabRaw(t); try { localStorage.setItem('kr_rank_tab', t); } catch (e) { /* 기억 못 해도 동작 */ } };
     var _bs = useState('rank'); var boardSort = _bs[0], setBoardSort = _bs[1];   // rank|delta|volume|name (2차 확산)
     var _bd2 = useState(7); var boardDays = _bd2[0], setBoardDays = _bd2[1];     // 추이 기간 7|30
     // 2026-09-18 대표 확정 — 랜딩에서 펼치기(간단 정보). 상세는 별도 「상세 보기」로.
@@ -587,6 +594,24 @@ window.KeywordRankPage = function KeywordRankPage(props) {
         return React.createElement('span', { style: { display: 'inline-block', padding: '2px 8px', borderRadius: 8, fontSize: 12, fontWeight: 700, color: '#1d4ed8', background: '#eff6ff', whiteSpace: 'nowrap' } }, d + '일째');
     };
     // 키워드 카드 — 시안의 kwc(순위·최고/최저·스파크라인·날짜 추이·nvMid 값)
+    // 탭 소속·축 값 — 서버 rank_axes.in_tab 과 같은 규칙. 옛 서버 응답(axes 없음)이면 전체 값으로 폴백(무회귀).
+    var _inTab = function(c, tab) {
+        if (tab === 'auto') { if (c.eligible == null) return (c.auto_keywords || 0) > 0; return !!c.eligible; }
+        if (tab === 'manual') return (c.manual_products || 0) > 0;
+        return true;
+    };
+    var _axisOf = function(c, tab) {
+        var ax = c.axes || {};
+        if (tab === 'auto' && ax.client) return ax.client;
+        if (tab === 'manual' && ax.product) return ax.product;
+        return c;
+    };
+    // 펼침 카드 — 그 탭의 축에 속한 키워드만(한 키워드가 두 축에 있으면 sources 에 둘 다 실려 온다)
+    var _boardInTab = function(b, tab) {
+        if (tab === 'all') return true;
+        var srcs = b.sources || (b.source ? [b.source] : []);
+        return srcs.indexOf(tab === 'auto' ? 'client' : 'product') !== -1;
+    };
     var _kwCard = function(b, i) {
         var pts = (b.series || []).filter(function(p) { return p.rank != null; });
         var best = null, worst = null;
@@ -612,9 +637,17 @@ window.KeywordRankPage = function KeywordRankPage(props) {
         if (expLoading === c.id || !res) {
             return React.createElement('div', { style: { padding: '12px 16px', fontSize: 12, color: '#94a3b8' } }, '간단 정보 불러오는 중…');
         }
-        var brd = res.board || [];
+        var brdAll = res.board || [];
+        var brd = brdAll.filter(function(b) { return _boardInTab(b, rankTab); });
         var days = _daysSince(res.tracking_started);
         var hasNoNv = brd.some(function(b) { return b.has_nvmid === false && (b.rank == null); });
+        var _axisNote = rankTab === 'all'
+            ? ('키워드 ' + brd.length + '개' + (function() {
+                var a = brdAll.filter(function(b) { return _boardInTab(b, 'auto'); }).length;
+                var m = brdAll.filter(function(b) { return _boardInTab(b, 'manual'); }).length;
+                return (a || m) ? ' (대표 ' + a + ' · 담당자 ' + m + ')' : '';
+            })())
+            : ((rankTab === 'auto' ? '대표 키워드 ' : '담당자 키워드 ') + brd.length + '개' + (brdAll.length > brd.length ? ' (다른 축 ' + (brdAll.length - brd.length) + '개는 전체 탭에서)' : ''));
         return React.createElement('div', { style: { padding: '12px 16px 16px' } },
             React.createElement('div', { style: { display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10, fontSize: 12.5, color: '#475569' } },
                 React.createElement('span', null, '추적 ',
@@ -622,11 +655,11 @@ window.KeywordRankPage = function KeywordRankPage(props) {
                         ? React.createElement('b', { style: { color: '#f59e0b' } }, '아직 순위 안 잡힘')
                         : React.createElement('b', { style: { color: '#1d4ed8', fontSize: 15 } }, days + '일째')),
                 res.tracking_started && React.createElement('span', { style: { color: '#94a3b8' } }, '· 첫 기록 ' + String(res.tracking_started).slice(0, 10)),
-                React.createElement('span', { style: { color: '#94a3b8' } }, '· 키워드 ' + brd.length + '개'),
+                React.createElement('span', { style: { color: '#94a3b8' } }, '· ' + _axisNote),
                 hasNoNv && React.createElement('span', { style: { color: '#dc2626', fontWeight: 700 } }, '· ⚠ nvMid 없어 못 찾는 키워드 있음')
             ),
             brd.length === 0
-                ? React.createElement('div', { style: { fontSize: 12, color: '#94a3b8' } }, '추적 키워드가 없습니다.')
+                ? React.createElement('div', { style: { fontSize: 12, color: '#94a3b8' } }, rankTab === 'all' ? '추적 키워드가 없습니다.' : '이 축의 추적 키워드가 없습니다.')
                 : React.createElement('div', { style: { display: 'flex', gap: 10, flexWrap: 'wrap' } }, brd.map(_kwCard)),
             React.createElement('button', {
                 onClick: function(e) { e.stopPropagation(); openDetail(c); },
@@ -646,13 +679,45 @@ window.KeywordRankPage = function KeywordRankPage(props) {
         var totals = (overview && overview.totals) || {};
         var rows = (overview && overview.data) || [];
         var q = query.trim().toLowerCase();
-        var shown = rows.filter(function(c) {
+        // 탭 = 출처 필터. 탭 안의 수치는 그 축의 값(a)으로 센다 — 전체 탭은 종전 값 그대로.
+        var tabRows = rows.filter(function(c) { return _inTab(c, rankTab); });
+        var tabCounts = totals.tabs || {
+            all: rows.length,
+            auto: rows.filter(function(c) { return _inTab(c, 'auto'); }).length,
+            manual: rows.filter(function(c) { return _inTab(c, 'manual'); }).length
+        };
+        if (rankTab !== 'all') {
+            var _t = { clients: tabRows.length, keywords: 0, exposed_clients: 0, up_total: 0, down_total: 0, attention: 0 };
+            tabRows.forEach(function(c) {
+                var a = _axisOf(c, rankTab);
+                _t.keywords += (a.keywords || 0); _t.up_total += (a.up || 0); _t.down_total += (a.down || 0);
+                if ((a.exposed || 0) > 0) _t.exposed_clients += 1;
+                if ((a.keywords || 0) > 0 && (a.exposed || 0) === 0) _t.attention += 1;
+            });
+            totals = _t;
+        }
+        var shown = tabRows.filter(function(c) {
+            var a = _axisOf(c, rankTab);
             if (q && c.name.toLowerCase().indexOf(q) === -1) return false;
-            if (filter === 'attention') return c.keywords > 0 && c.exposed === 0;
-            if (filter === 'up') return c.up > 0;
-            if (filter === 'down') return c.down > 0;
+            if (filter === 'attention') return a.keywords > 0 && a.exposed === 0;
+            if (filter === 'up') return a.up > 0;
+            if (filter === 'down') return a.down > 0;
             return true;
         });
+        var tabBtn = function(key, label) {
+            var on = rankTab === key;
+            var n = tabCounts[key];
+            return React.createElement('button', {
+                key: key, onClick: function() { if (!on) { setRankTab(key); setExpClient(null); } },
+                'data-rank-tab': key,
+                style: { border: 'none', borderBottom: '2px solid ' + (on ? '#3b82f6' : 'transparent'), marginBottom: -2, background: 'transparent', color: on ? '#1d4ed8' : '#64748b', padding: '8px 14px', fontSize: 13.5, fontWeight: 700, cursor: 'pointer' }
+            }, label, n != null && React.createElement('span', { style: { marginLeft: 6, fontSize: 11.5, fontWeight: 700, color: on ? '#1d4ed8' : '#94a3b8', background: on ? '#eff6ff' : '#f1f5f9', borderRadius: 999, padding: '1px 7px' } }, key === 'auto' ? n + '곳' : n));
+        };
+        var tabNote = rankTab === 'auto'
+            ? '진행중 업체 ' + (tabCounts.auto != null ? tabCounts.auto : '—') + '곳의 대표 키워드만. 04:00 계약단계 동기화가 진행중↔환불·홀딩·만료를 자동으로 넣고 뺍니다 — 이 탭은 직원이 손댈 것이 없습니다.'
+            : rankTab === 'manual'
+                ? '직원이 「추적 상품 등록」에서 업체 선택 → 상품 주소 → nvMid(필수) → 키워드(최대 5)로 등록한 축입니다. 정리 전 등록분은 내려 두었고, 같은 상품을 다시 등록하면 이전 순위 이력이 그대로 이어집니다.'
+                : '두 축(로직분석 대표 키워드 · 담당자 추가 키워드)의 합집합입니다. 한 업체가 두 축을 다 가지면 여기엔 한 줄, 각 탭엔 그 축의 키워드만 보입니다.';
         var fchip = function(key, label) {
             var on = filter === key;
             return React.createElement('button', {
@@ -661,9 +726,12 @@ window.KeywordRankPage = function KeywordRankPage(props) {
             }, label);
         };
         return React.createElement(React.Fragment, null,
+            React.createElement('div', { style: { display: 'flex', alignItems: 'flex-end', gap: 2, borderBottom: '2px solid #e2e8f0', marginBottom: 8, flexWrap: 'wrap' } },
+                tabBtn('all', '📊 전체'), tabBtn('auto', '🔗 로직분석 대표 키워드'), tabBtn('manual', '✍️ 담당자 추가 키워드')),
+            React.createElement('div', { style: { fontSize: 12, color: '#64748b', marginBottom: 12, lineHeight: 1.5 } }, tabNote),
             React.createElement('div', { style: _krKpiGrid },
                 React.createElement('div', { style: _krKpi },
-                    React.createElement('div', { style: _krKpiK }, isViewer ? '영업 대상 업체' : '광고주 업체'),
+                    React.createElement('div', { style: _krKpiK }, rankTab === 'auto' ? '진행중 업체' : rankTab === 'manual' ? '담당자 등록 업체' : (isViewer ? '영업 대상 업체' : '광고주 업체')),
                     React.createElement('div', { style: _krKpiV }, totals.clients != null ? totals.clients : '—'),
                     React.createElement('div', { style: _krKpiS }, '추적 키워드 ' + (totals.keywords != null ? totals.keywords : '—'))),
                 React.createElement('div', { style: _krKpi },
@@ -694,28 +762,44 @@ window.KeywordRankPage = function KeywordRankPage(props) {
                     React.createElement('span', { style: { marginLeft: 'auto', fontSize: 12, color: '#94a3b8' } }, shown.length + '개 업체')
                 ),
                 ovLoading ? React.createElement('div', { style: { padding: '40px 0', textAlign: 'center', color: '#94a3b8', fontSize: 13 } }, '불러오는 중...') :
-                shown.length === 0 ? React.createElement('div', { style: { padding: '40px 0', textAlign: 'center', color: '#94a3b8', fontSize: 13 } },
-                    rows.length === 0 ? '등록된 업체가 없습니다. 업체관리 탭에서 업체를 등록하고 키워드 추적을 시작하세요.' : '조건에 맞는 업체가 없습니다.') :
+                shown.length === 0 ? React.createElement('div', { style: { padding: '40px 0', textAlign: 'center', color: '#94a3b8', fontSize: 13, lineHeight: 1.7 } },
+                    rankTab === 'manual' && tabRows.length === 0
+                        ? React.createElement(React.Fragment, null,
+                            React.createElement('div', { style: { fontSize: 22, marginBottom: 6 } }, '✍️'),
+                            React.createElement('div', { style: { fontWeight: 700, color: '#475569' } }, '담당자가 추가한 키워드가 아직 없습니다.'),
+                            React.createElement('div', null, '위 「추적 상품 등록」에서 업체 선택 → 상품 주소 → nvMid(필수) → 키워드(최대 5)로 새로 등록하면 여기 쌓입니다.'),
+                            React.createElement('div', null, '정리 전 등록분은 내려 두었고, 같은 상품을 다시 등록하면 이전 순위 이력이 그대로 이어집니다.'))
+                        : rankTab === 'auto' && tabRows.length === 0
+                            ? (isViewer ? '영업 대상 업체는 자동 추적 대상이 아닙니다 — 이 탭은 진행중 광고주만 보입니다.' : '진행중(추적 자격) 업체가 없습니다. 04:00 계약단계 동기화 뒤 다시 확인하세요.')
+                            : rows.length === 0 ? '등록된 업체가 없습니다. 업체관리 탭에서 업체를 등록하고 키워드 추적을 시작하세요.' : '조건에 맞는 업체가 없습니다.') :
                 React.createElement('div', { style: { overflowX: 'auto' } },
                     React.createElement('table', { style: { width: '100%', borderCollapse: 'collapse' } },
                         React.createElement('thead', null, React.createElement('tr', null,
                             React.createElement('th', { style: _krTh }, '업체'),
-                            React.createElement('th', { style: _krTh }, '상태'),
+                            React.createElement('th', { style: _krTh }, rankTab === 'auto' ? '단계' : '상태'),
                             React.createElement('th', { style: _krTh }, '추적'),
                             React.createElement('th', { style: Object.assign({}, _krTh, { textAlign: 'right' }) }, '키워드'),
                             React.createElement('th', { style: Object.assign({}, _krTh, { textAlign: 'right' }) }, '노출'),
                             React.createElement('th', { style: Object.assign({}, _krTh, { textAlign: 'right' }) }, 'TOP10'),
                             React.createElement('th', { style: Object.assign({}, _krTh, { textAlign: 'right' }) }, '▲ / ▼'),
-                            React.createElement('th', { style: _krTh }, '대표 키워드'),
+                            React.createElement('th', { style: _krTh }, rankTab === 'manual' ? '상품 · 대표 키워드' : '대표 키워드'),
                             React.createElement('th', { style: _krTh }, '최근 확인')
                         )),
                         React.createElement('tbody', null, shown.map(function(c) {
-                            var attention = c.keywords > 0 && c.exposed === 0;
-                            var chip = c.keywords === 0
-                                ? React.createElement('span', { style: _krChip('mute') }, '추적 없음')
+                            var a = _axisOf(c, rankTab);
+                            var attention = a.keywords > 0 && a.exposed === 0;
+                            var _reg = a.registered || 0;   // 등록됐지만 아직 기록 없음 → 첫 수집 대기
+                            var chip = a.keywords === 0
+                                ? (_reg > 0
+                                    ? React.createElement('span', { style: _krChip('warn') }, '🆕 첫 수집 대기')
+                                    : React.createElement('span', { style: _krChip('mute') }, '추적 없음'))
                                 : attention
                                     ? React.createElement('span', { style: _krChip('warn') }, '노출 0')
-                                    : React.createElement('span', { style: _krChip('ok') }, '노출 ' + c.exposed + '/' + c.keywords);
+                                    : React.createElement('span', { style: _krChip('ok') }, '노출 ' + a.exposed + '/' + a.keywords);
+                            if (rankTab === 'auto') {
+                                var _st = (c.contract_stage || '').trim();
+                                chip = React.createElement('span', { style: _krChip(_st === '진행중' ? 'ok' : 'mute') }, _st || '단계 없음');
+                            }
                             var _isOpen = expClient === c.id;
                             var mainRow = React.createElement('tr', {
                                 key: c.id, onClick: function() { toggleExpand(c); },
@@ -727,15 +811,17 @@ window.KeywordRankPage = function KeywordRankPage(props) {
                                     React.createElement('span', { style: { color: '#93c5fd', marginRight: 6, fontSize: 11 } }, _isOpen ? '▼' : '▶'), c.name),
                                 React.createElement('td', { style: _krTd }, chip),
                                 React.createElement('td', { style: _krTd }, _daysBadge(c.tracking_started)),
-                                React.createElement('td', { style: Object.assign({}, _krTd, { textAlign: 'right', fontVariantNumeric: 'tabular-nums' }) }, c.keywords),
-                                React.createElement('td', { style: Object.assign({}, _krTd, { textAlign: 'right', fontVariantNumeric: 'tabular-nums' }) }, c.exposed),
-                                React.createElement('td', { style: Object.assign({}, _krTd, { textAlign: 'right', fontVariantNumeric: 'tabular-nums' }) }, c.top10),
+                                React.createElement('td', { style: Object.assign({}, _krTd, { textAlign: 'right', fontVariantNumeric: 'tabular-nums' }) },
+                                    a.keywords || (_reg > 0 ? React.createElement('span', { style: { color: '#b45309' } }, _reg + ' 대기') : 0)),
+                                React.createElement('td', { style: Object.assign({}, _krTd, { textAlign: 'right', fontVariantNumeric: 'tabular-nums' }) }, a.exposed || 0),
+                                React.createElement('td', { style: Object.assign({}, _krTd, { textAlign: 'right', fontVariantNumeric: 'tabular-nums' }) }, a.top10 || 0),
                                 React.createElement('td', { style: Object.assign({}, _krTd, { textAlign: 'right', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }) },
-                                    React.createElement('span', { style: { color: '#dc2626', fontWeight: 700 } }, '▲' + c.up),
+                                    React.createElement('span', { style: { color: '#dc2626', fontWeight: 700 } }, '▲' + (a.up || 0)),
                                     React.createElement('span', { style: { color: '#cbd5e1', margin: '0 4px' } }, '/'),
-                                    React.createElement('span', { style: { color: '#2563eb', fontWeight: 700 } }, '▼' + c.down)),
+                                    React.createElement('span', { style: { color: '#2563eb', fontWeight: 700 } }, '▼' + (a.down || 0))),
                                 React.createElement('td', { style: Object.assign({}, _krTd, { fontSize: 12, color: '#64748b' }) },
-                                    (c.top_keywords || []).map(function(t) { return t.keyword + ' ' + t.rank + '위'; }).join(' · ') || '—'),
+                                    (rankTab === 'manual' ? '상품 ' + (c.manual_products || 0) + '개 · ' : '') +
+                                    ((c.top_keywords || []).map(function(t) { return t.keyword + ' ' + t.rank + '위'; }).join(' · ') || '—')),
                                 React.createElement('td', { style: Object.assign({}, _krTd, { fontSize: 12, color: '#94a3b8', whiteSpace: 'nowrap' }) }, c.last_checked || '—')
                             );
                             if (!_isOpen) return mainRow;
