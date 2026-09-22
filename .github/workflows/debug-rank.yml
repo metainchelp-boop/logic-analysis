@@ -34,6 +34,10 @@ on:
         description: '상품 주소 모양 실측 — off(기본) / on. 어느 호스트(스마트스토어·브랜드스토어·카탈로그)를 쓰는지, 같은 슬러그가 두 호스트에 걸쳐 있는지(읽기 전용·업체명 미출력).'
         required: false
         default: 'off'
+      tracked_reset:
+        description: '추적 상품 소프트 내리기(9/22 배포) 확인 — off(기본) / on. 기동 로그의 [추적정리] 줄 + 마커 파일 + 활성/내려진 상품·이력 행수(읽기 전용·업체명 미출력).'
+        required: false
+        default: 'off'
       use_branch_code:
         description: '이 브랜치의 rank_link.py 로 미리보기 — off(기본) / on. 배포 전에 새 규칙이 무엇을 이을지 먼저 보려는 용도(컨테이너 /tmp 에 얹었다 지운다·앱 파일 무접촉). apply 와 함께 쓰지 말 것.'
         required: false
@@ -43,6 +47,38 @@ jobs:
   diagnose:
     runs-on: ubuntu-latest
     steps:
+      - name: 추적 상품 소프트 내리기 확인 (tracked_reset=on · 읽기 전용)
+        if: ${{ github.event.inputs.tracked_reset == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          command_timeout: 120s
+          script: |
+            echo "== 컨테이너 기동 시각 =="
+            docker inspect -f 'StartedAt={{.State.StartedAt}}' logic-analysis
+            echo
+            echo "== 기동 로그의 [추적정리] 줄 (업체명 없음 · 수만) =="
+            docker logs logic-analysis 2>&1 | grep -a '추적정리' | tail -10 || echo "(아직 없음 — 부팅 +3분 전이거나 잡 미등록)"
+            echo
+            echo "== 마커 파일 =="
+            docker exec -i logic-analysis sh -c 'ls -l /app/data/.tracked_products_reset_20260922 2>/dev/null || echo "(마커 없음)"'
+            echo
+            echo "== DB 현황 (읽기 전용) =="
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sqlite3
+            c = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            q = lambda s: c.execute(s).fetchone()[0]
+            print("tracked_products 전체     :", q("SELECT COUNT(*) FROM tracked_products"))
+            print("  활성(disabled_at 빈 값) :", q("SELECT COUNT(*) FROM tracked_products WHERE COALESCE(disabled_at,'')=''"))
+            print("  오늘 내려진 것          :", q("SELECT COUNT(*) FROM tracked_products WHERE substr(COALESCE(disabled_at,''),1,10)=date('now','localtime')"))
+            print("tracked_keywords 행수     :", q("SELECT COUNT(*) FROM tracked_keywords"))
+            print("rankings 행수(이력)       :", q("SELECT COUNT(*) FROM rankings"))
+            print("rank_link 행수            :", q("SELECT COUNT(*) FROM rank_link"))
+            print("client_rank_history 행수  :", q("SELECT COUNT(*) FROM client_rank_history"))
+            PY
       # 브랜치 코드 미리보기용 — 평소(off)엔 받아만 두고 쓰지 않는다.
       - uses: actions/checkout@v4
       - name: 브랜치 rank_link.py 인코딩
