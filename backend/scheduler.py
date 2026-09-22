@@ -282,6 +282,15 @@ def start_scheduler():
         replace_existing=True,
         max_instances=1,
     )
+    _scheduler.add_job(
+        _run_tracked_reset_20260922,
+        trigger="date",
+        run_date=datetime.now() + timedelta(minutes=3),
+        id="tracked_reset_20260922_boot",
+        name="추적 상품 전량 소프트 내리기 1회 (부팅 +3분 · 대표 확정 9/21)",
+        replace_existing=True,
+        max_instances=1,
+    )
 
     # 14) 🔑 nvMid 일괄 채우기 — 부팅 3분 뒤 한 번(마커가 있으면 즉시 종료).
     #     ⚠️ 오염 정리(+2분) **뒤**에 둔다. 둘 다 DB 를 만지므로 순서를 고정해
@@ -1840,6 +1849,63 @@ def _run_contam_20260917_cleanup():
     except Exception as e:
         # 마커를 남기지 않는다 — 다음 배포에서 다시 시도한다.
         logger.error(f"❌ [9/17오염정리] 실패(마커 미생성, 다음 배포에서 재시도): {e}")
+
+
+_TRACKED_RESET_MARKER_NAME = ".tracked_products_reset_20260922"
+
+
+def _run_tracked_reset_20260922():
+    """담당자 등록 추적 상품 **전량 소프트 내리기** (대표 확정 2026-09-21 · 부팅 1회).
+    직원 협의 결과 「등록분 없는 상태에서 새로 등록」이 낫다고 해 내린다.
+    ⚠️ **지우지 않는다** — rankings·tracked_keywords·rank_link 가 tracked_products 에 ON DELETE CASCADE 라
+       DELETE 하면 그 상품의 순위 이력이 같이 사라진다(진행중 업체 기록 보존 조건과 충돌).
+       disabled_at 만 찍는다: 화면(상세 카드·첫수집대기·하단 목록)·수집 자격에서 빠지고 이력은 그대로.
+    ⚠️ 대표 키워드(clients.main_keywords)·업체축 이력(client_rank_history = ① portal-summary 원천) 무접촉.
+    ⚠️ 같은 상품을 다시 등록하면 add_tracked_product 가 disabled_at 을 풀어 이력이 이어진다.
+    되돌리기 = UPDATE tracked_products SET disabled_at='' (마커 파일 삭제 불필요).
+    """
+    import os
+    import sqlite3
+    DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
+    marker = os.path.join(os.path.dirname(os.path.abspath(DB_PATH)), _TRACKED_RESET_MARKER_NAME)
+    if not os.path.exists(DB_PATH) or os.path.exists(marker):
+        return
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=30)
+        try:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(tracked_products)")}
+            if not cols:
+                logger.info("[추적정리 9/22] tracked_products 표 없음 — 건너뜀")
+                return
+            if "disabled_at" not in cols:
+                conn.execute("ALTER TABLE tracked_products ADD COLUMN disabled_at TEXT DEFAULT ''")
+            total = conn.execute("SELECT COUNT(*) FROM tracked_products").fetchone()[0]
+            active = conn.execute(
+                "SELECT COUNT(*) FROM tracked_products WHERE COALESCE(disabled_at,'')=''").fetchone()[0]
+            kws = conn.execute(
+                "SELECT COUNT(*) FROM tracked_keywords k JOIN tracked_products p ON p.id=k.product_id "
+                "WHERE COALESCE(p.disabled_at,'')=''").fetchone()[0]
+            hist_before = conn.execute("SELECT COUNT(*) FROM rankings").fetchone()[0]
+            logger.info(f"[추적정리 9/22] 내리기 전 — 상품 {total}개(활성 {active}) · 활성 키워드 {kws}건 · "
+                        f"순위 이력 {hist_before}행(무접촉)")
+            conn.execute("UPDATE tracked_products SET disabled_at=datetime('now','localtime') "
+                         "WHERE COALESCE(disabled_at,'')=''")
+            conn.commit()
+            hist_after = conn.execute("SELECT COUNT(*) FROM rankings").fetchone()[0]
+            left = conn.execute(
+                "SELECT COUNT(*) FROM tracked_products WHERE COALESCE(disabled_at,'')=''").fetchone()[0]
+        finally:
+            conn.close()
+        if hist_after != hist_before:
+            # 있을 수 없는 일이지만(UPDATE 뿐) 이력 행수가 변했으면 마커를 안 남기고 크게 알린다.
+            logger.error(f"❌ [추적정리 9/22] 이력 행수 변동 {hist_before}→{hist_after} — 마커 미생성, 확인 필요")
+            return
+        with open(marker, "w") as f:
+            f.write(f"2026-09-22 disabled={active} keywords={kws} history_rows={hist_after}\n")
+        logger.info(f"✅ [추적정리 9/22] 완료 — {active}개 내림 · 남은 활성 {left} · "
+                    f"이력 {hist_after}행 보존 · 마커 생성(재실행 없음)")
+    except Exception as e:
+        logger.error(f"❌ [추적정리 9/22] 실패(마커 미생성, 다음 배포에서 재시도): {e}")
 
 
 def _run_nvmid_backfill():

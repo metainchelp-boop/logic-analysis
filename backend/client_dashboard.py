@@ -1639,6 +1639,8 @@ def rank_board(client_id: int, days: int = 8, current_user: dict = Depends(get_c
                     _dis = bool(_dr and (_dr[0] or "").strip())
                 except Exception:
                     pass
+                if _dis:
+                    continue   # 2026-09-22 소프트 내리기 — 내려 둔 상품은 상세 카드·첫수집대기에서 빠진다(이력은 보존)
                 products.append({
                     "id": pid,
                     "name": ln.get("product_name") or "",
