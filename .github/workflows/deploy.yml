@@ -221,6 +221,11 @@ jobs:
       - name: 회귀 — 추적 상품 소프트 내리기·재등록 복귀
         run: python backend/tests/test_tracked_reset.py
 
+      # 2026-09-22 대표 확정 — 순위 추적 3탭(전체 / 로직분석 대표 키워드 / 담당자 추가 키워드).
+      #    탭 소속 규칙(서버 rank_axes.in_tab = 화면 _inTab)과 축 집계·sources 배선을 지킨다. 「300위 밖」 표기 유지.
+      - name: 회귀 — 순위 추적 3탭 분리(출처 축)
+        run: python backend/tests/test_rank_tabs.py
+
       - name: Build frontend bundle
         run: |
           npm install --no-save @babel/core @babel/preset-react
