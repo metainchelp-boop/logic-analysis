@@ -185,6 +185,41 @@ jobs:
               grep -a "$TODAY" "$LOG" | awk -v since="$SINCE" '{split($4,t,":"); hm=t[2] ":" t[3]; if (hm < since) next; if ($9 < 400) next; if ($7 !~ /api\/collector/) next; ip=$1; cmd="printf %s " ip " | sha256sum | cut -c1-6"; cmd | getline h; close(cmd); p=$7; sub(/\?.*/,"",p); k=h " " $9 " " substr(p,1,40); n[k]++} END {for (k in n) printf "   %s x%d\n", k, n[k]}' | sort | head -20
             fi
             echo
+            echo "== 🔀 분할 검증 — 각 출처가 보낸 worker/workers 값 (오늘 /api/collector/keywords·requests 의 질의 문자열) =="
+            if [ -n "$LOG" ]; then
+              grep -a "$TODAY" "$LOG" | awk '$7 ~ /api\/collector\/(keywords|requests)/ {ip=$1; cmd="printf %s " ip " | sha256sum | cut -c1-6"; cmd | getline h; close(cmd); q=$7; w=""; if (match(q,/worker=[0-9]+/)) w=substr(q,RSTART,RLENGTH); wc=""; if (match(q,/workers=[0-9]+/)) wc=substr(q,RSTART,RLENGTH); k=h " " (w==""?"worker=(없음)":w) " " (wc==""?"workers=(없음)":wc); n[k]++; last[k]=$4} END {for (k in n) printf "  %s x%d 마지막 %s\n", k, n[k], last[k]}' | sort
+              echo "  (확장은 no-1 을 보낸다: 1번 기계 = worker=0 · 2번 기계 = worker=1 · workers=2 면 2대 분할)"
+            fi
+            echo
+            echo "== 🔀 분할 검증 — 서버 규칙(split_rule.worker_of · 키워드 글자 해시)으로 유니버스와 18:40 이후 관측을 가른다 =="
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sqlite3, sys, collections
+            sys.path.insert(0, "/app")
+            from split_rule import worker_of
+            from collector import _keyword_universe
+            c = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True); c.row_factory = sqlite3.Row
+            uni = _keyword_universe(c)
+            side = collections.Counter(worker_of(k, 2) for k in uni)
+            print(f"  유니버스 {len(uni)}개 → 1번 몫 {side[0]} · 2번 몫 {side[1]} · 양쪽 다 0(규칙상 불가능)")
+            # 오늘 18:40 이후 관측(업로드) — 키워드별 건수와 몫
+            rows = c.execute("SELECT keyword, received_at, status, kind, reason FROM collector_observations WHERE received_at >= date('now','localtime')||' 18:40:00' ORDER BY received_at").fetchall()
+            per = collections.defaultdict(list)
+            for r in rows: per[r["keyword"]].append(r)
+            s0 = [k for k in per if worker_of(k,2)==0]; s1 = [k for k in per if worker_of(k,2)==1]
+            dup = {k: v for k, v in per.items() if len(v) > 1}
+            print(f"  18:40 이후 관측 {len(rows)}건 · 키워드 {len(per)}개 → 1번 몫 {len(s0)} · 2번 몫 {len(s1)} · 같은 키워드 2번 이상 {len(dup)}개")
+            for k, v in list(dup.items())[:8]:
+                print(f"    - (키워드 가림 · 몫 {worker_of(k,2)+1}번) " + " / ".join(f"{x['received_at'][11:19]} {x['status']}/{x['reason']}" for x in v))
+            # collected_serp 로도(옛 경로 포함) — 18:40 이후 created_at
+            rows2 = c.execute("SELECT keyword, created_at FROM collected_serp WHERE created_at >= date('now','localtime')||' 18:40:00'").fetchall()
+            sd = collections.Counter(worker_of(r["keyword"],2) for r in rows2)
+            print(f"  18:40 이후 collected_serp 저장 {len(rows2)}건 → 1번 몫 {sd[0]} · 2번 몫 {sd[1]}")
+            # 오늘 전체(옛 노트북 1대가 하루 종일 1/2 로 돌았던 몫 포함)
+            rows3 = c.execute("SELECT keyword, created_at FROM collected_serp WHERE collected_date=date('now','localtime')").fetchall()
+            sd3 = collections.Counter(worker_of(r["keyword"],2) for r in rows3)
+            print(f"  오늘 전체 collected_serp {len(rows3)}건 → 1번 몫 {sd3[0]} · 2번 몫 {sd3[1]}  (낮에는 1번 노트북만 1/2 로 돌았으니 1번 몫이 커야 정상)")
+            PY
+            echo
             echo "== 📡 heartbeat 원행 전부 (기계 ID 앞 6자 · 번호 · 버전 · 처음/마지막 · 오늘 진척) =="
             docker exec -i logic-analysis python3 - <<'PY'
             import sqlite3
