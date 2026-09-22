@@ -214,6 +214,12 @@ jobs:
             if hb is not None: print("  heartbeat 원행:", " | ".join(f"{r['worker_no']} v{r['ext_version']} {r['last_seen']} x{r['seen_count']} {r['reason']} outbox={r['upload_summary_json']}" for r in hb))
             PY
             echo
+            echo "== TLS 인증서(logic.metainc.co.kr) — 발급일·만료·발급자·체인 (2번 노트북 Failed to fetch 원인 후보) =="
+            echo | timeout 15 openssl s_client -connect 127.0.0.1:443 -servername logic.metainc.co.kr -showcerts 2>/dev/null \
+              | awk '/-----BEGIN CERTIFICATE-----/{n++} {print > "/tmp/chain_" n ".pem"}' ; for c in /tmp/chain_*.pem; do [ -f "$c" ] && openssl x509 -in "$c" -noout -subject -issuer -dates 2>/dev/null | sed 's/^/  /'; echo "  --"; done; rm -f /tmp/chain_*.pem
+            echo "  (nginx 가 보내는 체인 파일)"; grep -rhE "ssl_certificate " /etc/nginx/sites-enabled/ 2>/dev/null | sort -u | sed 's/^/  /'
+            for f in $(grep -rhoE "ssl_certificate\s+[^;]+" /etc/nginx/sites-enabled/ 2>/dev/null | awk '{print $2}' | sort -u); do echo "  $f: $(sudo -n openssl x509 -in "$f" -noout -dates 2>/dev/null | tr '\n' ' ')"; done
+            echo
             echo "== nginx error.log 최근 40줄 (IP 는 해시 앞 6자로 마스킹 · TLS/거절 흔적 확인용) =="
             for f in /var/log/nginx/error.log /var/log/nginx/logic-analysis.error.log; do [ -f "$f" ] && ELOG="$f" && break; done
             if [ -z "$ELOG" ]; then echo "(nginx 오류 로그 파일을 못 찾음)"; else
