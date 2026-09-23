@@ -2925,6 +2925,13 @@ def place_ingest(req: PlaceIngestRequest, current_user: dict = Depends(get_curre
             except Exception as _ie:
                 skipped += 1
                 logger.warning(f"플레이스 ingest 항목 건너뜀: {_ie}")
+        # 📍 추적기 도착 기록(2026-09-23 · 플레이스 멈춤 감시) — 순위 표만으로는 「추적기가 왔나」를
+        #    못 가른다(직원 분석도 같은 표에 쌓인다). 건수만 적는다. 실패해도 응답은 그대로.
+        try:
+            from place_watch import note_ingest as _pw_note
+            _pw_note(len(req.results or []), saved, skipped)
+        except Exception:
+            pass
         return {"success": True, "data": {"saved": saved, "skipped": skipped}}
     except Exception as e:
         logger.error(f"플레이스 ingest 실패: {e}")
@@ -2937,7 +2944,20 @@ def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_curren
     try:
         # 플레이스 업종은 전용 어댑터로 분기(기본 shopping 은 아래 기존 경로 100% 그대로)
         if (req.vertical or "shopping") == "place":
-            return _place_seo_analyze(req, current_user)
+            # 📊 분석기별 사용량(2026-09-23) — 플레이스 분석은 어디에도 세지 않았다(스토어는
+            #    화면이 /cd/usage/increment 로 센다). 성공·실패 모두 1회, 실패는 따로 센다.
+            #    ⚠️ 스토어 한도(daily_usage)에 더하지 않는다 — 더하면 플레이스만큼 스토어가 막힌다.
+            _pl_ok = False
+            try:
+                _pl_res = _place_seo_analyze(req, current_user)
+                _pl_ok = bool(isinstance(_pl_res, dict) and _pl_res.get("success"))
+                return _pl_res
+            finally:
+                try:
+                    from analyzer_usage import record as _au_record
+                    _au_record((current_user or {}).get("id", 0), "place", ok=_pl_ok)
+                except Exception:
+                    pass
         # 캐시된 데이터가 있으면 재활용, 없으면 API 호출
         if req.cached_product_info:
             product_info = req.cached_product_info

@@ -2886,11 +2886,22 @@ def today_stats(current_user: dict = Depends(get_current_user)):
         ).fetchone()
         report_count = row2['cnt'] if row2 else 0
 
+        # 📊 플레이스 분석 당일 횟수(2026-09-23 가산) — analysis_count 는 **스토어 분석**
+        #    그대로다(daily_usage). 조회 실패면 None — 「0회」로 찍히지 않게.
+        place_count = None
+        try:
+            from analyzer_usage import stats as _au_stats
+            _pl = ((_au_stats(conn, today=today_str) or {}).get("by_analyzer") or {}).get("place")
+            place_count = _pl.get("today") if _pl else None
+        except Exception:
+            place_count = None
+
         return {
             "success": True,
             "data": {
                 "analysis_count": analysis_count,
-                "report_count": report_count
+                "report_count": report_count,
+                "place_analysis_count": place_count,
             }
         }
     except Exception as e:

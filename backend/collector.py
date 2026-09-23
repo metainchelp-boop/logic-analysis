@@ -842,13 +842,25 @@ def collect_health(current_user: dict = Depends(get_current_user)):
     except Exception:
         observations = None
 
+    # 📍 플레이스(지도) 무인 추적 상태(2026-09-23 가산 · 기존 필드·state 는 그대로).
+    #    위 state 는 **쇼핑** 수집만 본다 — 플레이스가 이틀 빠져도(9/15·9/17) 배너가 안 떴다.
+    #    ⚠️ 화면 짝이 필요하므로 이번 차수에선 값만 싣는다(observations 와 같은 방식).
+    #    실패하면 None(= 「못 쟀다」) — 빈 값이 「정상」으로 읽히지 않게.
+    place = None
+    try:
+        from place_watch import summary as _pw_summary
+        place = _pw_summary() or None
+    except Exception:
+        place = None
+
     return {"success": True, "state": state, "today": today, "message": msg,
             "todayKeywords": (t["keywords"] if t else 0),
             "lastCollectedDate": (rows[0]["collected_date"] if rows else None),
             "lastAt": (rows[0]["last_at"] if rows else None),
             "hoursSinceUpload": hours_since,
             "machines": machines_list,
-            "observations": observations}
+            "observations": observations,
+            "place": place}
 
 
 def _safe_int(v):

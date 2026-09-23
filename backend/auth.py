@@ -1022,19 +1022,34 @@ def get_analysis_stats(current_user: Dict[str, Any] = Depends(get_current_user))
                ORDER BY total DESC, today DESC""",
             (today_str, month_start)
         ).fetchall()
-        per_user = [
-            {
+        # 📊 분석기별(2026-09-23 가산) — 위 숫자(total·today·this_month·per_user 의 기존 칸)는
+        #    **스토어 분석**(daily_usage) 그대로다. 플레이스는 analyzer_usage 에 따로 센다.
+        #    ⚠️ 조회 실패면 by_analyzer 를 None 으로 — 「플레이스 0회」로 찍히지 않게.
+        by_analyzer, place_by_user = None, {}
+        try:
+            from analyzer_usage import stats as _au_stats
+            _au = _au_stats(conn, today=today_str) or {}
+            by_analyzer = _au.get("by_analyzer")
+            place_by_user = _au.get("per_user") or {}
+        except Exception:
+            by_analyzer, place_by_user = None, {}
+        per_user = []
+        for r in rows:
+            _pu = place_by_user.get(str(r["id"]), {})
+            per_user.append({
                 "user_id": r["id"], "username": r["username"],
                 "name": r["name"] or r["username"], "role": r["role"],
                 "total": r["total"], "today": r["today"], "month": r["month"],
-            }
-            for r in rows
-        ]
+                "place_today": _pu.get("place_today", 0) if by_analyzer else None,
+                "place_month": _pu.get("place_month", 0) if by_analyzer else None,
+                "place_total": _pu.get("place_total", 0) if by_analyzer else None,
+            })
         conn.close()
         return {
             "success": True,
             "total": total, "today": today_total, "this_month": month_total,
             "per_user": per_user,
+            "by_analyzer": by_analyzer,
         }
     except Exception as e:
         logger.error(f"분석 통계 조회 실패: {e}")
