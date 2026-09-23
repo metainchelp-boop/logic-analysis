@@ -84,7 +84,7 @@ on:
         description: '진단 스텝이 어디서 멈추는지 — true. 이 워크플로가 쓰는 명령을 하나씩 timeout 을 씌워 걸리는 지점을 찾는다(읽기 전용).'
         required: false
       analysis_audit:
-        description: '로직분석 결과값 전수조사 — true(1차) / preload(4차: PRELOADED 자리) / detail2(5차: 판매가·본 상품 주소가 HTML 어디에) / detail(2차: 상세 HTML 구조·수집 커버리지·정확한 상태코드). 자동 분석 결과 칸별 빈값 · 배치 산출물 일별 · 외부 데이터원 1회 실호출 · 오류 로그 유형 · API 경로별 상태코드(읽기 전용 · 업체명·키워드·IP 미출력 · 그래도 읽은 뒤 런 로그 삭제)'
+        description: '로직분석 결과값 전수조사 — true(1차) / preload(4차: PRELOADED 자리) / detail2(5차: 판매가·본 상품 주소가 HTML 어디에) / ld(6차: JSON-LD 값 모양) / detail(2차: 상세 HTML 구조·수집 커버리지·정확한 상태코드). 자동 분석 결과 칸별 빈값 · 배치 산출물 일별 · 외부 데이터원 1회 실호출 · 오류 로그 유형 · API 경로별 상태코드(읽기 전용 · 업체명·키워드·IP 미출력 · 그래도 읽은 뒤 런 로그 삭제)'
         required: false
       place_capture_probe:
         description: '신고 #276 — 플레이스 분석 캡처 판독 재현. db = 기록 집계만 / auto = 9/22·9/23 사람 분석 행으로 네이버 목록 1~2회 받아 서버 판독기로 읽기 / at:시각;시각 = 그 시각 행을 그대로 재현 / at!:시각 = 같은데 이름을 그대로 찍는다(⚠️ 읽은 즉시 런 로그 삭제) / find!:업체명|검색어;검색어 = 이름으로 찾아 그 번호가 각 목록 몇 번째인지(⚠️ 로그 삭제) / depth:검색어;검색어 = 기록된 순위 분포 + 목록 데이터 칸 구조 / 그 밖의 글자 = 그 검색어로 1회. 업체명·키워드는 해시로만 찍는다(읽기 전용).'
@@ -97,6 +97,169 @@ jobs:
       # ── 로직분석 결과값 전수조사 (2026-09-23 · 읽기 전용) ──
       # 대표 질문 「로직분석 실행했을 때 나오는 값이 정확한가 · 안 나오거나 오류인 게 있나」에 서버에서 답한다.
       # ⚠️ 저장소 공개 — 칸 이름(코드 식별자)·건수·상태코드만 찍는다. 한글은 소스에 있는 낱말만 남기고 가린다.
+      - name: 로직분석 결과값 전수조사 6차 — JSON-LD 판매가·카테고리·상품 번호 모양 (읽기 전용)
+        if: ${{ github.event.inputs.analysis_audit == 'ld' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 240s
+          script: |
+            docker exec -i logic-analysis python3 - <<'PY'
+            # 전수조사 6차 — JSON-LD Product 의 판매가·카테고리·상품 번호 **모양**과, 그 번호로 상품 주소를 만들 수 있나
+            # (읽기 전용 · 모양·건수만 · 업체명·상품명·번호 원문 미출력)
+            import sqlite3, re, sys, json, collections, os
+            sys.path.insert(0, "/app")
+            try:
+                from detail_html_store import _unpack
+            except Exception:
+                _unpack = lambda x: x if isinstance(x, str) else (x or b"").decode("utf-8", "ignore")
+
+            DB = os.environ.get("PROBE_DB", "file:/app/data/logic_data.db?mode=ro")
+            c = sqlite3.connect(DB, uri=True, timeout=20)
+            LD_RE = re.compile(r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', re.DOTALL | re.I)
+            FULL_RE = re.compile(r'https?://(?:m\.)?(smartstore|brand)\.naver\.com/([A-Za-z0-9_-]+)/products/(\d+)')
+            SLUG_RE = re.compile(r'(?:https?:)?//(?:m\.)?(smartstore|brand)\.naver\.com/([A-Za-z0-9_-]+)')
+            BAD = {"main", "inflow", "i", "category", "products", "search", "profile", "v2", "api"}
+            UNDEF = re.compile(r'(?<=[:\[,])(\s*)undefined\b')
+            PRE_RE = re.compile(r'window\.__PRELOADED_STATE__\s*=\s*({.+?})\s*;?\s*</script>', re.DOTALL)
+            KC = re.compile(r'<meta[^>]+(?:property|name)=["\']kakao:commerce:(price|regular_price|category)["\'][^>]+content=["\']([^"\']*)["\']', re.I)
+
+
+            def vshape(v):
+                if v is None:
+                    return "없음"
+                if isinstance(v, bool):
+                    return "참거짓"
+                if isinstance(v, (int, float)):
+                    return "숫자"
+                if isinstance(v, str):
+                    s = v.strip()
+                    if re.fullmatch(r'\d+', s):
+                        return f"숫자글자({len(s)}자리)"
+                    if re.fullmatch(r'[\d,.]+', s):
+                        return "숫자글자(쉼표·점)"
+                    if ">" in s:
+                        return f"글자·'>'{s.count('>') + 1}단"
+                    if s.startswith("http"):
+                        return "주소"
+                    return "글자"
+                if isinstance(v, dict):
+                    return "묶음{" + ",".join(sorted(k for k in v.keys() if re.fullmatch(r'[@A-Za-z_]{1,30}', str(k))))[:80] + "}"
+                if isinstance(v, list):
+                    return f"목록({len(v)})"
+                return type(v).__name__
+
+
+            def num(v):
+                try:
+                    return float(str(v).replace(",", ""))
+                except Exception:
+                    return None
+
+
+            def ushape(u):
+                m = re.match(r'https?://([^/]+)(/.*)?', str(u))
+                if not m:
+                    return "기타"
+                segs = ["{n}" if s.isdigit() else (s if s in ("products", "main") else "{x}") for s in (m.group(2) or "").split("?")[0].split("/")[1:] if s]
+                return m.group(1) + "/" + "/".join(segs)
+
+
+            S = collections.Counter()
+            shapes = collections.defaultdict(collections.Counter)
+            n = 0
+            for (html,) in c.execute("SELECT html FROM client_detail_html"):
+                h = _unpack(html) or ""
+                if len(h) < 100:
+                    continue
+                n += 1
+                hh = h.replace("\\/", "/") if "\\/" in h else h
+                prod = None
+                for blk in LD_RE.findall(h):
+                    try:
+                        d = json.loads(blk.strip())
+                    except Exception:
+                        continue
+                    for it in (d if isinstance(d, list) else [d]):
+                        if isinstance(it, dict) and str(it.get("@type")) == "Product":
+                            prod = it
+                            break
+                    if prod:
+                        break
+                if not prod:
+                    S["JSON-LD Product 없음"] += 1
+                    continue
+                off = prod.get("offers")
+                if isinstance(off, list):
+                    S["offers 가 목록"] += 1
+                    off = off[0] if off else {}
+                off = off if isinstance(off, dict) else {}
+                for k in ("productID", "sku", "mpn", "category"):
+                    shapes[k][vshape(prod.get(k))] += 1
+                for k, v in off.items():
+                    if re.fullmatch(r'[@A-Za-z_]{1,30}', str(k)):
+                        shapes["offers." + k][vshape(v)] += 1
+                if off.get("url"):
+                    shapes["offers.url 모양"][ushape(off["url"])] += 1
+                pid = str(prod.get("productID") or "").strip()
+                sku = str(prod.get("sku") or "").strip()
+                mpn = str(prod.get("mpn") or "").strip()
+                S["productID=sku" if pid and pid == sku else "productID≠sku"] += 1
+                S["productID=mpn" if pid and pid == mpn else "productID≠mpn"] += 1
+                fulls = FULL_RE.findall(hh)
+                nums = {x[2] for x in fulls}
+                S["productID 가 본문 상품 주소 번호에 " + ("있음" if pid in nums else ("없음(주소 있음)" if nums else "없음(주소 0)"))] += 1
+                S["sku 가 본문 상품 주소 번호에 " + ("있음" if sku in nums else "없음")] += 1
+                # productID 와 같은 번호의 주소가 몇 번 나오나 — 그 주소의 스토어 슬러그가 본문 대표 슬러그와 같나
+                if pid in nums:
+                    same = [x for x in fulls if x[2] == pid]
+                    S["productID 주소 등장 " + ("1회" if len(same) == 1 else "2회+")] += 1
+                slugs = collections.Counter((x[0], x[1]) for x in SLUG_RE.findall(hh) if x[1] not in BAD)
+                S["스토어 슬러그 " + ("0" if not slugs else ("1종" if len(slugs) == 1 else "2종+"))] += 1
+                if slugs and len(slugs) >= 2:
+                    top, n1 = slugs.most_common(1)[0]
+                    n2 = slugs.most_common(2)[1][1]
+                    S["2종+ 중 최빈이 2위의 2배 이상" if n1 >= 2 * n2 else "2종+ 중 최빈이 뚜렷하지 않음"] += 1
+                ou = str(off.get("url") or "")
+                om = re.search(r'/products/(\d+)', ou)
+                S["offers.url 번호 = productID" if om and om.group(1) == pid else ("offers.url 에 번호 없음" if not om else "offers.url 번호 ≠ productID")] += 1
+                # 판매가 — offers.price 가 할인가인가 정가인가 (kakao 메타 · PRELOADED 없음 → kakao 로만)
+                op = num(off.get("price") or off.get("lowPrice"))
+                kc = {k.lower(): v for k, v in KC.findall(h)}
+                kp, kr = num(kc.get("price")), num(kc.get("regular_price"))
+                if kp is not None and op is not None:
+                    S["offers.price = kakao 판매가" if op == kp else ("offers.price = kakao 정가" if kr is not None and op == kr else "offers.price 가 kakao 두 값과 다름")] += 1
+                    if kr is not None and kp is not None:
+                        S["kakao 판매가<정가(할인 있음)" if kp < kr else "kakao 판매가=정가"] += 1
+                if op is not None:
+                    S["offers.price 범위 안(100~1억)" if 100 <= op <= 1e8 else "offers.price 범위 밖"] += 1
+                # 카테고리 — JSON-LD 와 PRELOADED(본 상품 id 가 simpleProductForDetailPage 에 있을 때) 비교
+                cat = prod.get("category")
+                if isinstance(cat, str) and pid:
+                    m = PRE_RE.search(h)
+                    if m:
+                        try:
+                            st = json.loads(UNDEF.sub(r'\1null', m.group(1)))
+                            sp = ((st.get("simpleProductForDetailPage") or {}).get("A") or {})
+                            if str(sp.get("id")) == pid and isinstance(sp.get("category"), dict):
+                                wc = sp["category"].get("wholeCategoryName") or ""
+                                S["JSON-LD category = PRELOADED wholeCategoryName" if cat.strip() == wc.strip() else "JSON-LD category ≠ PRELOADED wholeCategoryName"] += 1
+                                dp = num(sp.get("dispSalePrice")) or num((sp.get("benefitsView") or {}).get("discountedSalePrice"))
+                                if dp is not None and op is not None:
+                                    S["offers.price = PRELOADED 할인가" if op == dp else ("offers.price = PRELOADED salePrice" if op == num(sp.get("salePrice")) else "offers.price 가 PRELOADED 두 값과 다름")] += 1
+                        except Exception:
+                            pass
+
+            print(f"== 저장 HTML {n}건 — JSON-LD Product 값 모양 ==")
+            for k, v in sorted(S.items()):
+                print(f"  {k:<44} {v}")
+            for k in sorted(shapes):
+                print(f"== {k} ==")
+                for s, v in shapes[k].most_common(8):
+                    print(f"  {v:>4}  {s}")
+            PY
       - name: 로직분석 결과값 전수조사 5차 — 판매가·본 상품 주소가 HTML 어디에 (읽기 전용)
         if: ${{ github.event.inputs.analysis_audit == 'detail2' }}
         uses: appleboy/ssh-action@v1.0.3
