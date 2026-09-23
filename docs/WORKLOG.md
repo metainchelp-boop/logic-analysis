@@ -10,6 +10,44 @@
 > **적는 법(append-only 유지)** — 새 차수는 이 파일 **맨 위**(아래 목차 바로 다음)에 적습니다.
 > 진행 중인 동안에는 CLAUDE.md 에도 제목 한 줄을 두고, **배포가 끝나면 그 한 줄만 지웁니다.**
 
+## 2026-09-23 — PR #268 배포(Deploy #466 · squash `0ac4f13`) + 짝 FE #942(Cafe24 #1189) — 결과값 전수조사 후속 A·B·C 라이브 반영
+
+**대표 지시** — 「배포하자」(21:13 KST).
+
+**배포 전 확인**
+- 같은 서버 다른 배포 없음 — 로직분석 #266(Deploy #465) 11:56~11:59Z 끝남 · 전산 BE deploy-vps #403 11:16Z 끝남.
+- #266(플레이스 추적 멈춤 감시)이 먼저 main 에 들어와 `deploy.yml`·`CLAUDE.md`·`docs/WORKLOG.md` 가 겹쳤다 →
+  최신 main(`ac7686a`) 위로 옮김 · 양쪽 다 둠(지운 줄 0) · `collector.py` 는 서로 다른 함수라 자동 병합 ·
+  게이트 53단계(#266 이 더한 2단계 포함) 재실행 통과 · 번들 빌드 통과.
+
+**배포**
+- 로직분석: #268 squash `0ac4f13` → **Deploy #466 success**(12:14:03~12:16:38Z) · 게이트에 새 3단계(데이터랩 재사용 · 수집 순서 · JSON-LD) 포함 전부 통과.
+- 제안서: FE #942 squash `a2352129` → **Cafe24 #1189 success**(12:17:41~12:18:38Z). 순서 지킴(로직분석 먼저).
+
+**라이브 실측 — 로직분석(진단 debug-place #141 · `live268` · 이름·키워드 미출력)**
+- 컨테이너 `StartedAt 12:16:08Z`(21:16:08 KST) · 재시작 0 · running.
+- 새 파일 3종: `detail_ld.py` 6,176B · `collect_order.py` 2,999B · `datalab_cache.py` 6,747B.
+- 고친 줄 표지: `naver_crawler` html_json_ld 1 · detail_ld 사용 1 · `collector` _order_key 5 · `collector_coord` last_collected_map 2 · `datalab` import datalab_cache 1 · `CACHE_TTL = 24 * 3600`.
+- 서버 안 동작 표본(가짜 HTML · DB 무접촉): 주소 조립 OK(same-number) · `/main/` 미사용 OK · 판매가 12900 · 카테고리 A>B>C · 수집 순서(오래 안 모은 것 먼저) OK.
+- `datalab_cache` 표 **아직 없음** — 첫 데이터랩 호출 때 생긴다(설계대로 · 고장 아님).
+- 화면 번들 `app.d07dba97d58d.js` 1,294,042B(21:14) · 표지 `_productUrlFromLd` 2 · `_isGenericStoreUrl` 4 · `_ldProductNo` 2 · `_PRODUCT_NOT_SLUG` 4.
+- 기동 뒤 앱 로그 157줄 · **Traceback 0 · ERROR 0 · 500 0**.
+
+**라이브 실측 — 제안서(진단 debug-place #142 · `live942` · GET 전용)**
+- `metainc.co.kr/proposal/index.html` **200 · 647,115B = 합친 master 파일과 바이트 수 일치**.
+- 표지 `var _PRODUCT_NOT_SLUG=` 1 · `function _productUrlFromLd(` 1 · `function _isGenericStoreUrl(` 1 · `function _ldProductNo(` 1 · `function extractProductUrlFromHtml(` 1 · 앞 차수 #269 `function _benchOf(m)` 1 · `'상위 경쟁사'` 5(무회귀).
+
+**덤으로 본 것(우리 무관 · 기록만)** — 공유 서버 `docker ps` 에 **autobid 컨테이너가 없다**(8/31 기록엔 3개 가동). ③ 쪽 변화다. 9/18 「회선이 갈렸다」 정정과 같은 방향.
+
+**⏳ 아직 못 잰 것(효과는 내일부터)**
+1. 다음 08:30 자동 분석의 판매가 「미확인」 — 오늘 548건.
+2. 맞춤제안서 광고주 분석 422 — 7일 395건.
+3. 데이터랩 하루 한도 소진 시각 — 오늘은 재시작으로 로그가 없어 못 쟀다.
+4. 한 번도 안 모인 키워드 98개가 며칠 안에 줄어드는지.
+⚠️ 예전에 만든 제안서·저장된 분석 결과는 그대로다(다시 분석해야 새 값) — 직원 안내문에 적었다.
+
+**직원 안내문** — 「로직분석-판매가-상품주소-자동인식-직원-안내.html」(전달 · FE docs 사본은 FE 문서 PR).
+
 ## 2026-09-23 — 결과값 전수조사 후속 A·B·C: 상세 HTML 판매가·카테고리(②) · 상품 주소(③) · 수집 순서(B) · 데이터랩 재사용(C) [로직분석 · 서버+화면 · 새 표 1개(datalab_cache · IF NOT EXISTS) · 「배포하자」 대기]
 
 **대표 결정(원문)** — 「a. 2,3 고쳐. b. 응. 근데 그럼 작업 분량이 늘어나? c. 응 재사용 캐시를 늘려줘.」
