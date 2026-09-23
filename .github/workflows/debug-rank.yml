@@ -221,11 +221,18 @@ jobs:
             done
             for f in /var/log/nginx/access.log /var/log/nginx/logic-analysis.access.log; do [ -f "$f" ] && LOG2="$f" && break; done
             SINCE=$(date -d "$(docker inspect -f '{{.State.StartedAt}}' logic-analysis)" '+%d/%b/%Y:%H:%M:%S')
-            DAY=${SINCE%%:*}
-            echo "  기동 이후($SINCE~) 접속 기록 — /products/track · heartbeat · blocked 상태별"
-            grep -a "$DAY" "$LOG2" | awk -v since="$SINCE" '$7 ~ /\/api\/(products\/track|collector\/heartbeat|collector\/blocked)/ {
-                t=substr($4,2,20); if (t < since) next; p=$7; sub(/\?.*/,"",p); sub(/.*\/api\//,"",p); n[p" "$9]++ }
-              END { for (k in n) printf "   %s x%d\n", k, n[k] }' | sort
+            SK=$(date -d "$(docker inspect -f '{{.State.StartedAt}}' logic-analysis)" '+%Y%m%d%H%M%S')
+            echo "  기동 이후($SINCE~) 접속 기록 — /products/track · heartbeat · blocked 상태별 (⚠️ 자정 회전 뒤 파일 .1 까지 읽는다)"
+            # ⚠️ 종전엔 기동한 날짜로만 grep 해서 자정 로그 회전 뒤 빈 출력 = 「못 잼」이었다(0건 아님)
+            LN=$( { [ -f "$LOG2.1" ] && cat "$LOG2.1"; cat "$LOG2"; } | awk -v sk="$SK" 'BEGIN{split("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec",M," "); for(i in M) mo[M[i]]=sprintf("%02d",i)}
+              $7 ~ /\/api\/(products\/track|collector\/heartbeat|collector\/blocked)/ {
+                t=substr($4,2,20); k=substr(t,8,4) mo[substr(t,4,3)] substr(t,1,2) substr(t,13,2) substr(t,16,2) substr(t,19,2);
+                if (k < sk) next; seen++; p=$7; sub(/\?.*/,"",p); sub(/.*\/api\//,"",p); n[p" "$9]++;
+                if ($9 >= 500) { h[p" "$9" "substr(t,1,2)"일 "substr(t,13,2)"시"]++ } }
+              END { printf "   (읽은 해당 줄 %d)\n", seen; for (k in n) printf "   %s x%d\n", k, n[k]; for (k in h) printf "   5xx 시각별: %s x%d\n", k, h[k] }')
+            echo "$LN" | sort
+            printf "  앱 로그 기동 이후 'database is locked' 줄 수: "
+            docker logs --since "$(docker inspect -f '{{.State.StartedAt}}' logic-analysis)" logic-analysis 2>&1 | grep -c "database is locked"
       - name: '#265 배포 위험도 — 새 시간표 미리보기 (issue275=on · 읽기 전용)'
         if: ${{ github.event.inputs.issue275 == 'on' }}
         uses: appleboy/ssh-action@v1.0.3
