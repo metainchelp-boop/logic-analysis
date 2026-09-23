@@ -136,7 +136,7 @@ jobs:
             print("[정확 식별이 놓치고 폴백만 잡은 것 — 등록 주소 유형]", dict(shapes))
             print("⇒ 「-/지금/종전」 이 크면 폴백을 지울 수 없다(B5 유지). 「정확/…」 이 종전과 같으면 폴백 삭제 가능.")
             PY
-      - name: 신고 #275 확인 (issue275=on · 읽기 전용)
+      - name: '신고 #275 확인 (issue275=on · 읽기 전용)'
         if: ${{ github.event.inputs.issue275 == 'on' }}
         uses: appleboy/ssh-action@v1.0.3
         with:
