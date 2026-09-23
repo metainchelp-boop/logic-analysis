@@ -2026,6 +2026,22 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
             except Exception:
                 nd_price = 0
 
+    # 붙여넣은 스마트스토어 상세 HTML 에는 위 두 자리가 없다(2026-09-23 실측 751건 중 0건) →
+    # 검색엔진용 상품 정보(JSON-LD Product · 746건)에서 판매가·카테고리를 채운다. **비었을 때만** — 종전 값 우선.
+    ld_price_used = False
+    if not nd_price or not nd_cat:
+        try:
+            import detail_ld as _dld
+            _ld = _dld.product_ld(html)
+            if _ld:
+                if not nd_price:
+                    nd_price = _dld.price(_ld)
+                    ld_price_used = bool(nd_price)
+                if not nd_cat:
+                    nd_cat, nd_cat1 = _dld.category(_ld)
+        except Exception:
+            pass
+
     # ── 1. 이미지 분석 ──
     all_imgs = soup.find_all("img")
     # 상세페이지 영역 이미지 (상품 상세 설명 내부)
@@ -2505,7 +2521,7 @@ def analyze_detail_page(html: str, product_url: str = "") -> Dict:
         "wish": dq.metric(actual_wish_count, dq.status_from_presence(actual_wish_count),
                           sources=["html_meta"] if actual_wish_count is not None else []),
         "price": dq.metric(_price_val, dq.status_from_presence(_price_val),
-                           sources=["html_next_data"] if _price_val else []),
+                           sources=(["html_json_ld"] if ld_price_used else ["html_next_data"]) if _price_val else []),
     }
 
     # reviewData: 실제 HTML에서 추출된 리뷰/평점/찜수 (없으면 None)
