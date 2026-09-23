@@ -84,7 +84,7 @@ on:
         description: '진단 스텝이 어디서 멈추는지 — true. 이 워크플로가 쓰는 명령을 하나씩 timeout 을 씌워 걸리는 지점을 찾는다(읽기 전용).'
         required: false
       analysis_audit:
-        description: '로직분석 결과값 전수조사 — true(1차) / detail(2차: 상세 HTML 구조·수집 커버리지·정확한 상태코드). 자동 분석 결과 칸별 빈값 · 배치 산출물 일별 · 외부 데이터원 1회 실호출 · 오류 로그 유형 · API 경로별 상태코드(읽기 전용 · 업체명·키워드·IP 미출력 · 그래도 읽은 뒤 런 로그 삭제)'
+        description: '로직분석 결과값 전수조사 — true(1차) / preload(4차: PRELOADED 자리) / detail(2차: 상세 HTML 구조·수집 커버리지·정확한 상태코드). 자동 분석 결과 칸별 빈값 · 배치 산출물 일별 · 외부 데이터원 1회 실호출 · 오류 로그 유형 · API 경로별 상태코드(읽기 전용 · 업체명·키워드·IP 미출력 · 그래도 읽은 뒤 런 로그 삭제)'
         required: false
       place_capture_probe:
         description: '신고 #276 — 플레이스 분석 캡처 판독 재현. db = 기록 집계만 / auto = 9/22·9/23 사람 분석 행으로 네이버 목록 1~2회 받아 서버 판독기로 읽기 / at:시각;시각 = 그 시각 행을 그대로 재현 / at!:시각 = 같은데 이름을 그대로 찍는다(⚠️ 읽은 즉시 런 로그 삭제) / find!:업체명|검색어;검색어 = 이름으로 찾아 그 번호가 각 목록 몇 번째인지(⚠️ 로그 삭제) / depth:검색어;검색어 = 기록된 순위 분포 + 목록 데이터 칸 구조 / 그 밖의 글자 = 그 검색어로 1회. 업체명·키워드는 해시로만 찍는다(읽기 전용).'
@@ -97,6 +97,158 @@ jobs:
       # ── 로직분석 결과값 전수조사 (2026-09-23 · 읽기 전용) ──
       # 대표 질문 「로직분석 실행했을 때 나오는 값이 정확한가 · 안 나오거나 오류인 게 있나」에 서버에서 답한다.
       # ⚠️ 저장소 공개 — 칸 이름(코드 식별자)·건수·상태코드만 찍는다. 한글은 소스에 있는 낱말만 남기고 가린다.
+      - name: 로직분석 결과값 전수조사 4차 — PRELOADED 자리 (읽기 전용)
+        if: ${{ github.event.inputs.analysis_audit == 'preload' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 240s
+          script: |
+            docker exec -i logic-analysis python3 - <<'PY'
+            # 전수조사 4차 — 저장된 상세 HTML 의 __PRELOADED_STATE__ 안에서
+            # 판매가·카테고리·상품 번호·스토어 주소가 **어느 자리에** 있는지 (읽기 전용 · 칸 이름·건수·모양만)
+            import sqlite3, re, sys, json, collections, os
+            sys.path.insert(0, "/app")
+            try:
+                from detail_html_store import _unpack
+            except Exception:
+                _unpack = lambda x: x if isinstance(x, str) else (x or b"").decode("utf-8", "ignore")
+
+            DB = os.environ.get("PROBE_DB", "file:/app/data/logic_data.db?mode=ro")
+            c = sqlite3.connect(DB, uri=True, timeout=20)
+
+            CODE_RE = re.compile(r'window\.__PRELOADED_STATE__\s*=\s*({.+?})\s*;?\s*</script>', re.DOTALL)
+            START_RE = re.compile(r'__PRELOADED_STATE__\s*=\s*')
+            KEY_OK = re.compile(r'^[A-Za-z_][A-Za-z0-9_]{0,40}$')
+
+            PRICE = {"salePrice", "discountedSalePrice", "dispSalePrice", "dispDiscountedSalePrice",
+                     "mobileDiscountedSalePrice", "pcDiscountedSalePrice", "benefitsDiscountedSalePrice"}
+            CAT = {"wholeCategoryName", "wholeCategoryId", "categoryName", "categoryId", "category1Name", "lastCategoryName"}
+            PID = {"productNo", "channelProductNo", "originProductNo", "productId", "id"}
+            URLK = re.compile(r'url$', re.I)
+            WISH = {"wishCount", "zzimCount", "keepCount"}
+            REV = {"totalReviewCount", "reviewCount", "averageReviewScore", "reviewScore"}
+
+
+            def mkey(k):
+                k = str(k)
+                if k.isdigit():
+                    return "{n}"
+                return k if KEY_OK.match(k) else "{k}"
+
+
+            def shape(u):
+                u = str(u).split("?")[0].split("#")[0]
+                m = re.match(r'(?:https?:)?//([^/]+)(/.*)?$', u)
+                if not m:
+                    return "(상대/기타:" + ("/" if u.startswith("/") else "") + ")"
+                host, path = m.group(1), m.group(2) or ""
+                segs = []
+                for s in path.split("/")[1:]:
+                    if not s:
+                        continue
+                    segs.append("{n}" if s.isdigit() else (s if s in ("products", "main", "category", "profile") else "{x}"))
+                return host + "/" + "/".join(segs)
+
+
+            def walk(o, path, depth, out):
+                if depth > 9:
+                    return
+                if isinstance(o, dict):
+                    for k, v in o.items():
+                        p = path + "." + mkey(k) if path else mkey(k)
+                        leaf = str(k)
+                        if leaf in PRICE:
+                            ok = isinstance(v, (int, float)) and 100 <= v <= 100_000_000
+                            out["price"].add((p, "숫자(범위 안)" if ok else type(v).__name__))
+                        elif leaf in CAT:
+                            out["cat"].add((p, ("글자·'>'포함" if isinstance(v, str) and ">" in v else type(v).__name__)))
+                        elif leaf in PID and depth <= 5:
+                            good = (isinstance(v, int) and v > 0) or (isinstance(v, str) and v.isdigit())
+                            out["pid"].add((p, "숫자" if good else type(v).__name__))
+                        elif leaf in WISH:
+                            out["wish"].add((p, type(v).__name__))
+                        elif leaf in REV:
+                            out["rev"].add((p, type(v).__name__))
+                        if URLK.search(leaf) and isinstance(v, str) and v:
+                            out["url"].add((p, shape(v)))
+                        if isinstance(v, (dict, list)):
+                            walk(v, p, depth + 1, out)
+                elif isinstance(o, list):
+                    for v in o[:5]:
+                        walk(v, path + "[]", depth + 1, out)
+
+
+            n = 0
+            stat = collections.Counter()
+            agg = {g: collections.Counter() for g in ("price", "cat", "pid", "url", "wish", "rev")}
+            top_keys = collections.Counter()
+            raw_pid = collections.Counter()
+            build = collections.Counter()
+            for (html,) in c.execute("SELECT html FROM client_detail_html"):
+                h = _unpack(html) or ""
+                if len(h) < 100:
+                    continue
+                n += 1
+                if "__PRELOADED_STATE__" not in h:
+                    stat["PRELOADED 글자 없음"] += 1
+                    continue
+                m = CODE_RE.search(h)
+                st = None
+                if m:
+                    try:
+                        st = json.loads(m.group(1)); stat["지금 코드 정규식+json 성공"] += 1
+                    except Exception as e:
+                        stat["지금 코드 정규식 맞음·json 실패:" + type(e).__name__] += 1
+                else:
+                    stat["지금 코드 정규식 안 맞음"] += 1
+                if st is None:
+                    s = START_RE.search(h)
+                    if s:
+                        i = h.find("{", s.end())
+                        if i >= 0:
+                            try:
+                                st, _ = json.JSONDecoder().raw_decode(h[i:]); stat["raw_decode 로 성공"] += 1
+                            except Exception as e:
+                                stat["raw_decode 도 실패:" + type(e).__name__] += 1
+                if not isinstance(st, dict):
+                    continue
+                for k in list(st.keys())[:60]:
+                    top_keys[mkey(k)] += 1
+                out = {g: set() for g in agg}
+                walk(st, "", 0, out)
+                for g in agg:
+                    for t in out[g]:
+                        agg[g][t] += 1
+                # ③ 재료 — HTML 글자 그대로에서 상품 번호·스토어 주소
+                pids = set(re.findall(r'"productNo"\s*:\s*"?(\d{6,})"?', h))
+                raw_pid["productNo 값 종류 " + ("0" if not pids else ("1" if len(pids) == 1 else "2+"))] += 1
+                slugs = collections.Counter(re.findall(r'(?:https?:)?//(?:m\.)?smartstore\.naver\.com/([A-Za-z0-9_-]+)', h))
+                bslugs = collections.Counter(re.findall(r'(?:https?:)?//(?:m\.)?brand\.naver\.com/([A-Za-z0-9_-]+)', h))
+                for bad in ("main", "inflow", "i", "category", "products", "search", "profile"):
+                    slugs.pop(bad, None); bslugs.pop(bad, None)
+                build["스마트스토어 주소 슬러그 있음" if slugs else ("브랜드스토어 주소 슬러그 있음" if bslugs else "스토어 주소 슬러그 없음")] += 1
+                full = collections.Counter(x.split("?")[0] for x in re.findall(r'https?://(?:m\.)?(?:smartstore|brand)\.naver\.com/[A-Za-z0-9_-]+/products/\d+', h))
+                build["상품 주소 완성형 " + ("0회" if not full else ("1회" if full.most_common(1)[0][1] == 1 else "2회+"))] += 1
+
+            print(f"== 저장 HTML {n}건 — __PRELOADED_STATE__ 읽기 ==")
+            for k, v in stat.most_common():
+                print(f"  {k:<44} {v}")
+            print("  최상위 키(상위 20):", top_keys.most_common(20))
+            for g, title in (("price", "판매가 자리"), ("cat", "카테고리 자리"), ("pid", "상품 번호 자리(깊이 5 이내)"),
+                             ("url", "주소 칸 자리·모양"), ("wish", "찜 자리"), ("rev", "리뷰 자리")):
+                print(f"== {title} (문서 수 · 상위 14) ==")
+                for (p, t), v in agg[g].most_common(14):
+                    print(f"  {v:>4}  {p}  [{t}]")
+            print("== ③ 재료 (HTML 글자) ==")
+            for k, v in sorted(raw_pid.items()):
+                print(f"  {k:<36} {v}")
+            for k, v in sorted(build.items()):
+                print(f"  {k:<36} {v}")
+            PY
+
       - name: FE 제안서 라이브 문구 확인 (#269 · GET 전용)
         if: ${{ github.event.inputs.analysis_audit == 'live269' }}
         uses: appleboy/ssh-action@v1.0.3
