@@ -492,13 +492,19 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
     // ── 캡처 판독 경고 ──
     // 「점수가 낮은 것」과 「입력이 빈 것」은 완전히 다른 이야기다. 판독이 안 됐으면
     // 점수 위에 그 사실부터 알린다(no-export: 광고주 전달본에는 나가지 않는다).
+    // ⚠️ 신고 #276(2026-09-23) — 목록은 읽혔는데 이름이 없으면 오류가 아니라 「첫 N곳 밖」이다.
+    //    서버가 cap.outside(순위 밖 확정)·cap.near(비슷한 이름 후보)를 준다. 옛 서버면 둘 다 없어
+    //    종전 문구 그대로 나온다(무회귀).
     var renderCaptureWarn = function() {
         var cap = result.capture || {};
         if (!cap.warning) return null;
-        return React_.createElement('div', { className: 'capwarn no-export' },
-            React_.createElement('span', { className: 'ci' }, '⚠️'),
+        var head = !cap.ok ? '검색결과를 읽지 못했습니다'
+            : (cap.near ? '비슷한 이름이 있습니다 — 업체명을 확인해 주세요'
+                : (cap.outside ? ('이 검색어에서는 ' + (cap.organic || 0) + '위 밖입니다') : '내 업체를 찾지 못했습니다'));
+        return React_.createElement('div', { className: 'capwarn no-export' + (cap.outside ? ' neutral' : '') },
+            React_.createElement('span', { className: 'ci' }, cap.outside ? '📍' : '⚠️'),
             React_.createElement('div', null,
-                React_.createElement('b', null, cap.ok ? '내 업체를 찾지 못했습니다' : '검색결과를 읽지 못했습니다'),
+                React_.createElement('b', null, head),
                 React_.createElement('div', { className: 'cw' }, cap.warning),
                 React_.createElement('div', { className: 'cm' },
                     '판독된 업체 ', React_.createElement('b', null, cap.organic || 0), '곳',
@@ -514,15 +520,21 @@ window.PlaceAnalysisPage = function PlaceAnalysisPage(props) {
         var sb = m.sbiz || null;
         var sc = result.scores || {};
         var vol = m.volume;
+        var _cap = result.capture || {};
+        // 첫 N곳 밖이 확정된 회차는 「순위 밖」 대신 몇 곳까지 봤는지를 숫자로(신고 #276).
+        // 비슷한 이름 후보가 있으면(이름 문제일 수 있으니) 종전 「순위 밖」 그대로 둔다.
         var rankTxt = (result.rank_state === '노출' && result.rank) ? (result.rank + '위')
-            : (result.rank_state === '미노출' ? '순위 밖' : null);
+            : (result.rank_state === '미노출'
+                ? ((_cap.outside && _cap.organic) ? (_cap.organic + '위 밖') : '순위 밖') : null);
         // ⚠️ 캡처가 선택이 된 뒤로 「미확인」의 뜻이 갈린다 — 안 붙인 정상 경로에까지
         //    「캡처 재시도 필요」를 띄우면 멀쩡한 흐름이 고장으로 읽힌다(2026-08-12).
         //    붙이지 않았고 추적 등록도 없으면 「아직 아무도 안 쟀다」가 정확한 말이다.
         var _capGiven = !!(result.capture && result.capture.provided);
         var rankSub = (result.rank_state === '미확인'
             ? (_capGiven ? '캡처 재시도 필요' : '검색결과를 붙여넣으면 이 회차 순위를 잽니다')
-            : ('‘' + (result.keyword || '') + '’ 오가닉 기준'));
+            : ((result.rank_state === '미노출' && _cap.outside && _cap.organic)
+                ? ('‘' + (result.keyword || '') + '’ 첫 ' + _cap.organic + '곳 기준')
+                : ('‘' + (result.keyword || '') + '’ 오가닉 기준')));
         var rankHint = '광고 제외';
         // 캡처로 못 잰 회차(미확인)라도 이 업체가 지도 순위 추적에 등록돼 있으면 매일 수집된
         // 최신 순위가 있다 — 그 값을 대신 싣고 **출처를 명시**한다(캡처 실측과 섞지 않는다).

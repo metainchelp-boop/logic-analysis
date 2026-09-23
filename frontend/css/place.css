@@ -207,6 +207,9 @@
 .place-analysis .capwarn b{font-size:13.5px;font-weight:800;color:var(--pa-amber2)}
 .place-analysis .capwarn .cw{font-size:12.5px;color:var(--pa-sub);line-height:1.65;margin-top:3px}
 .place-analysis .capwarn .cm{font-size:11.5px;color:var(--pa-muted);margin-top:5px}
+/* 순위 밖 확정(신고 #276) — 오류가 아니라 사실 안내라 노란 경고 대신 차분한 회색 */
+.place-analysis .capwarn.neutral{background:var(--pa-bg);border-color:var(--pa-line)}
+.place-analysis .capwarn.neutral b{color:var(--pa-ink,#0f172a)}
 
 /* KPI 4칸 — 광고주가 가장 먼저 보는 숫자 */
 .place-analysis .kpi4{display:grid;grid-template-columns:repeat(4,1fr);gap:11px;margin-top:14px}

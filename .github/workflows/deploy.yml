@@ -277,6 +277,11 @@ jobs:
       - name: 회귀 — 수집기 운영 패널 · 차트 빈 구간(5차 · 「300위 밖」 표기 유지)
         run: python backend/tests/test_collector_ops_panel.py
 
+      # 2026-09-23 신고 #276 — 플레이스 캡처 판독. 필터 버튼(「거리순」)을 업체로 세지 않고(서버·무인 추적기 같은 규칙 —
+      #    node 로 추적기 함수를 실제로 돌려 대조하므로 setup-node 뒤에 둔다) · 목록 밖이면 「N위 밖」이라고 말한다.
+      - name: 회귀 — 플레이스 캡처 판독 · 「N위 밖」 표시(#276)
+        run: python backend/tests/test_place_capture.py
+
       - name: Build frontend bundle
         run: |
           npm install --no-save @babel/core @babel/preset-react

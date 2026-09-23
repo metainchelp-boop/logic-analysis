@@ -2030,6 +2030,17 @@ def _place_seo_analyze(req: "SeoAnalysisRequest", current_user: dict = None):
         #    캡처는 이제 **선택**이라(순위·리뷰는 무인 추적이 매일 채운다), 안 붙였는데 빨간
         #    경고를 띄우면 정상 사용이 고장처럼 보인다. provided 로 갈라서 경고를 억제한다.
         _provided = bool((req.place_html or "").strip())
+        _target_raw = (req.target_name or place_in.get("name") or "").strip()
+        _target_nm = _target_raw or "내 업체"
+        # 목록은 읽혔는데 내 업체가 없을 때 — 신고 #276(2026-09-23). 종전 문구는 「업체명이 등록명과
+        # 같은지 확인」부터 권해서, 이름이 정확히 같은 업체(첫 화면 52곳 밖)를 직원이 이름 문제로 읽었다.
+        # ⇒ 비슷한 이름이 목록에 **실제로 있을 때만** 이름 확인을 권하고, 아니면 「첫 N곳 밖」이라고 말한다.
+        _near = None
+        if _provided and _organic and not _matched:
+            try:
+                _near = place_crawler.similar_name_candidate(_target_raw, _organic)
+            except Exception:
+                _near = None
         capture = {
             "provided": _provided,
             "ok": bool(_organic),
@@ -2037,20 +2048,35 @@ def _place_seo_analyze(req: "SeoAnalysisRequest", current_user: dict = None):
             "organic": len(_organic),
             "matched": bool(_matched),
             "warning": None,
+            # ── 2026-09-23 가산(옛 화면은 모르는 칸이라 무시한다) ──
+            "near": _near,                              # 비슷한 이름 후보 {name, rank, ratio} 또는 None
+            "outside": bool(_provided and _organic and not _matched and not _near),   # 「첫 N곳 밖」 확정
+            "total": parsed.get("total"),               # 네이버가 밝힌 전체 업체 수(표시용 · 없으면 None)
         }
+        # ⚠️ 붙여넣는 목록은 네이버가 처음 내려 주는 한 묶음(약 50곳)뿐이다 — 스크롤해도 늘지 않는다.
+        #    실측(2026-09-23): 무인 추적 49일 노출 663건 중 최대 50위, 51위 이상 0건.
+        #    그래서 「아래로 스크롤한 뒤 복사」 안내를 뺐다(효과 없는 수고였다).
         if not _provided:
             pass   # 캡처를 안 붙인 정상 경로 — 경고 없음(순위·리뷰는 지도 순위 추적이 채운다)
         elif not _organic:
             capture["warning"] = (
                 "붙여넣은 검색결과에서 업체 목록을 읽지 못했습니다. "
-                "네이버 지도 **검색결과 목록** 화면에서(업체 상세 화면이 아니라) 아래로 충분히 "
-                "스크롤한 뒤 다시 복사해 주세요. "
+                "네이버 지도 검색결과 목록 화면(업체 상세 화면이 아니라)에서 북마클릿으로 다시 복사해 주세요. "
                 "(경쟁사 비교가 비어 점수가 실제보다 낮게 나옵니다 — 순위·리뷰는 지도 순위 추적이 채웁니다)"
             )
-        elif not _matched:
+        elif _near:
             capture["warning"] = (
-                "검색결과에서 내 업체를 찾지 못했습니다. 업체명이 플레이스 등록명과 같은지, "
-                "또는 순위가 캡처 범위 밖인지 확인해 주세요."
+                f"목록 {len(_organic)}곳 안에 「{_target_nm}」은(는) 없지만 비슷한 이름 "
+                f"「{_near.get('name')}」({_near.get('rank')}위)이 있습니다. 같은 업체라면 업체명을 "
+                "네이버 플레이스 등록명과 똑같이 고쳐 다시 돌려 주세요."
+            )
+        elif not _matched:
+            _tot = capture.get("total")
+            _scope = (f"전체 {_tot:,}곳 중 " if isinstance(_tot, int) and _tot > len(_organic) else "")
+            capture["warning"] = (
+                f"이 검색결과 {_scope}첫 {len(_organic)}곳 안에 「{_target_nm}」이(가) 없습니다 — "
+                f"이 검색어에서는 {len(_organic)}위 밖입니다. 붙여넣는 목록은 첫 한 묶음만 담겨서 그보다 "
+                "뒤 순위는 잴 수 없습니다. 순위를 재려면 이 업체가 첫 화면에 보이는 검색어로 다시 돌려 주세요."
             )
 
         # ── 지표별 출처(2026-08-11) ──
