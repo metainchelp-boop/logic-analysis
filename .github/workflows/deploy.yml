@@ -307,6 +307,11 @@ jobs:
       - name: 회귀 — 데이터랩 결과 재사용(일꾼 공유 · 24시간 · 한도 표시 공유)
         run: python backend/tests/test_datalab_cache.py
 
+      # 2026-09-23 대표 결정 B — 같은 시간대 안에서 오래 안 모은 키워드부터(가나다순 → 매일 같은 앞쪽만 담기던 것).
+      #    슬롯·시간당 상한·시험 상한·기계 나누기는 그대로 = 네이버 요청 수 불변(모의 실험으로 고정).
+      - name: 회귀 — 수집 순서(오래 안 모은 키워드부터 · 요청 수 불변)
+        run: python backend/tests/test_collect_order.py
+
       - name: Build frontend bundle
         run: |
           npm install --no-save @babel/core @babel/preset-react
