@@ -84,7 +84,7 @@ on:
         description: '진단 스텝이 어디서 멈추는지 — true. 이 워크플로가 쓰는 명령을 하나씩 timeout 을 씌워 걸리는 지점을 찾는다(읽기 전용).'
         required: false
       place_capture_probe:
-        description: '신고 #276 — 플레이스 분석 캡처 판독 재현. db = 기록 집계만 / auto = 9/22·9/23 사람 분석 행으로 네이버 목록 1~2회 받아 서버 판독기로 읽기 / 그 밖의 글자 = 그 검색어로 1회. 업체명·키워드는 해시로만 찍는다(읽기 전용).'
+        description: '신고 #276 — 플레이스 분석 캡처 판독 재현. db = 기록 집계만 / auto = 9/22·9/23 사람 분석 행으로 네이버 목록 1~2회 받아 서버 판독기로 읽기 / at:시각;시각 = 그 시각 행을 그대로 재현 / 그 밖의 글자 = 그 검색어로 1회. 업체명·키워드는 해시로만 찍는다(읽기 전용).'
         required: false
 
 jobs:
@@ -204,6 +204,26 @@ jobs:
                     targets.append(r)
                     if len(targets) >= 2:
                         break
+            elif MODE.startswith("at:"):
+                # 특정 시각의 행을 그대로 재현 — 「at:2026-09-22 13:55:48;2026-09-22 13:13:35」
+                for ts in [x.strip() for x in MODE[3:].split(";") if x.strip()]:
+                    for r in conn.execute("SELECT * FROM place_rank_history WHERE checked_at = ?", (ts,)):
+                        targets.append(dict(r))
+                print(f"\n[4-1] 재현 대상 {len(targets)}행")
+                reg = [dict(x) for x in conn.execute("SELECT business_name, region, place_id, keyword, active FROM place_track_target")]
+                for tg in targets:
+                    nn = pc._norm(tg["business_name"])
+                    hit = [x for x in reg if pc._norm(x["business_name"]) == nn]
+                    near = [x for x in reg if nn and (nn in pc._norm(x["business_name"]) or pc._norm(x["business_name"]) in nn)]
+                    print(f"  업체#{h(tg['business_name'])} — 무인 추적 등록 같은 이름 {len(hit)}건 · 비슷한 이름 {len(near)}건"
+                          f" · 그중 place_id 있음 {sum(1 for x in near if x['place_id'])}")
+                    print(f"    입력 업체명 글자 수 {len(tg['business_name'] or '')} · 공백 {str(tg['business_name'] or '').count(' ')} · 기호 {len(re.findall(r'[^0-9A-Za-z가-힣 ]', tg['business_name'] or ''))}"
+                          f" · 키워드 글자 수 {len(tg['keyword'] or '')} · 지역 입력 {'있음' if tg['region'] else '없음'} · 키워드에 지역 포함 {'예' if tg['region'] and tg['region'] in (tg['keyword'] or '') else '아니오'}")
+                    print("    같은 업체 이력(모든 계정):")
+                    for x in conn.execute("SELECT checked_at, user_id, business_key, keyword, rank_state, rank_position FROM place_rank_history "
+                                          "WHERE business_name = ? ORDER BY checked_at", (tg["business_name"],)):
+                        pre = (x["business_key"] or "?").split(":", 1)[0]
+                        print(f"      {x['checked_at']} · 계정{x['user_id']} · {pre} · 키워드#{h(x['keyword'])} · {x['rank_state'] or '(빈칸)'} {x['rank_position'] or '-'}")
             else:
                 targets.append({"business_name": "", "region": "", "keyword": MODE, "business_key": ""})
 
@@ -228,57 +248,61 @@ jobs:
 
             for i, tg in enumerate(targets, 1):
                 kw, region, name = tg["keyword"] or "", tg["region"] or "", tg["business_name"] or ""
-                q = kw if (not region or region in kw) else f"{region} {kw}"
-                print("\n" + "=" * 70)
-                print(f"[5-{i}] 대상 업체#{h(name)} 키워드#{h(kw)} · 검색어 = {'키워드 그대로' if q == kw else '지역+키워드'}")
-                if i > 1:
-                    time.sleep(4)
-                st, html = fetch(q)
-                print(f"  응답 {st} · {len(html):,}자 · __APOLLO_STATE__ {'있음' if '__APOLLO_STATE__' in html else '없음'}"
-                      f" · DOM 오가닉 {html.count('data-nmb_res-doc-id=')} · DOM 광고 {html.count('data-nmb_rese-doc-id=')}")
-                if st != 200 or "__APOLLO_STATE__" not in html:
-                    print("  본문 앞 200자(한글 가림):", mask(re.sub(r"\s+", " ", html[:200])))
-                    continue
-                naive = pc._parse_apollo(html)
-                print(f"  ① 서버 판독기(_parse_apollo) → 키 {len(naive)}개 {'✅' if naive else '❌ 실패(빈 값)'}")
-                robust = {}
-                try:
-                    k = html.index("__APOLLO_STATE__")
-                    j = html.index("{", k)
-                    robust, end = json.JSONDecoder().raw_decode(html, j)
-                    print(f"  ② 정식 JSON 판독(raw_decode) → 키 {len(robust)}개 ✅ (끝 위치 {end - j:,})")
-                except Exception as e:
-                    print(f"  ② 정식 JSON 판독 실패 — {type(e).__name__}: {mask(str(e)[:120])}")
-                if not naive and robust:
-                    print("  ⭐ 서버 판독기만 실패 — 괄호 세기 방식이 문자열 안의 괄호에 걸린 것")
-                base = naive or robust
-                types = Counter(str(key).split(":", 1)[0] for key in base)
-                print("  키 종류 상위:", ", ".join(f"{k}×{v}" for k, v in types.most_common(10)))
-                it_n = pc._items_from_apollo(naive) if naive else []
-                it_r = pc._items_from_apollo(robust) if robust else []
-                for lab, its in (("서버 판독", it_n), ("정식 판독", it_r)):
-                    if not its and lab == "서버 판독" and not naive:
-                        print(f"  [{lab}] 항목 0 → DOM 폴백(이름 없음) → 이름 대조 불가")
+                qs = [kw] + ([f"{region} {kw}"] if (region and region not in kw) else [])
+                for qi, q in enumerate(qs):
+                    print("\n" + "=" * 70)
+                    print(f"[5-{i}.{qi + 1}] 대상 업체#{h(name)} 키워드#{h(kw)} · 검색어 = {'키워드 그대로' if q == kw else '지역+키워드'}")
+                    if i > 1 or qi > 0:
+                        time.sleep(4)
+                    st, html = fetch(q)
+                    print(f"  응답 {st} · {len(html):,}자 · __APOLLO_STATE__ {'있음' if '__APOLLO_STATE__' in html else '없음'}"
+                          f" · DOM 오가닉 {html.count('data-nmb_res-doc-id=')} · DOM 광고 {html.count('data-nmb_rese-doc-id=')}")
+                    if st != 200 or "__APOLLO_STATE__" not in html:
+                        print("  본문 앞 200자(한글 가림):", mask(re.sub(r"\s+", " ", html[:200])))
                         continue
-                    org = [x for x in its if not x.get("is_ad")]
-                    print(f"  [{lab}] 항목 {len(its)} · 오가닉 {len(org)} · 광고 {len(its) - len(org)}")
-                parsed = pc.parse_place_search(html)
-                items = parsed["items"]
-                org = [x for x in items if not x.get("is_ad")]
-                named = [x for x in org if x.get("name")]
-                print(f"  ③ 분석 화면이 쓰는 결과(parse_place_search) — 항목 {len(items)} · 오가닉 {len(org)} · 이름 있음 {len(named)}")
-                if name:
-                    r = pc.find_place_rank(parsed, target_name=name)
-                    print(f"  ④ 내 업체 대조 = {r['state']} {r['rank'] or '-'}위")
-                    nn = pc._norm(name)
-                    in_html = nn in pc._norm(html)
-                    print(f"     원문 HTML 안에 입력한 업체명이 (공백 무시) 들어 있나 = {'예' if in_html else '아니오'}")
-                    if r["state"] != "노출" and named:
-                        best = max(named, key=lambda x: difflib.SequenceMatcher(None, nn, pc._norm(x["name"])).ratio())
-                        ratio = difflib.SequenceMatcher(None, nn, pc._norm(best["name"])).ratio()
-                        strip = lambda s: re.sub(r"[^0-9a-z가-힣]", "", pc._norm(s))
-                        print(f"     가장 비슷한 목록 이름 유사도 {ratio:.2f} · 순위 {best['rank']} · 기호 빼면 포함 = {'예' if strip(name) in strip(best['name']) else '아니오'}"
-                              f" · 길이 입력 {len(name)} / 목록 {len(best['name'])}")
+                    naive = pc._parse_apollo(html)
+                    print(f"  ① 서버 판독기(_parse_apollo) → 키 {len(naive)}개 {'✅' if naive else '❌ 실패(빈 값)'}")
+                    robust = {}
+                    try:
+                        k = html.index("__APOLLO_STATE__")
+                        j = html.index("{", k)
+                        robust, end = json.JSONDecoder().raw_decode(html, j)
+                        print(f"  ② 정식 JSON 판독(raw_decode) → 키 {len(robust)}개 ✅ (끝 위치 {end - j:,})")
+                    except Exception as e:
+                        print(f"  ② 정식 JSON 판독 실패 — {type(e).__name__}: {mask(str(e)[:120])}")
+                    if not naive and robust:
+                        print("  ⭐ 서버 판독기만 실패 — 괄호 세기 방식이 문자열 안의 괄호에 걸린 것")
+                    base = naive or robust
+                    types = Counter(str(key).split(":", 1)[0] for key in base)
+                    print("  키 종류 상위:", ", ".join(f"{k}×{v}" for k, v in types.most_common(10)))
+                    it_n = pc._items_from_apollo(naive) if naive else []
+                    it_r = pc._items_from_apollo(robust) if robust else []
+                    for lab, its in (("서버 판독", it_n), ("정식 판독", it_r)):
+                        if not its and lab == "서버 판독" and not naive:
+                            print(f"  [{lab}] 항목 0 → DOM 폴백(이름 없음) → 이름 대조 불가")
+                            continue
+                        org = [x for x in its if not x.get("is_ad")]
+                        print(f"  [{lab}] 항목 {len(its)} · 오가닉 {len(org)} · 광고 {len(its) - len(org)}")
+                    parsed = pc.parse_place_search(html)
+                    items = parsed["items"]
+                    org = [x for x in items if not x.get("is_ad")]
+                    named = [x for x in org if x.get("name")]
+                    print(f"  ③ 분석 화면이 쓰는 결과(parse_place_search) — 항목 {len(items)} · 오가닉 {len(org)} · 이름 있음 {len(named)}")
+                    if name:
+                        r = pc.find_place_rank(parsed, target_name=name)
+                        print(f"  ④ 내 업체 대조 = {r['state']} {r['rank'] or '-'}위")
+                        nn = pc._norm(name)
+                        in_html = nn in pc._norm(html)
+                        print(f"     원문 HTML 안에 입력한 업체명이 (공백 무시) 들어 있나 = {'예' if in_html else '아니오'}")
+                        if r["state"] != "노출" and named:
+                            best = max(named, key=lambda x: difflib.SequenceMatcher(None, nn, pc._norm(x["name"])).ratio())
+                            ratio = difflib.SequenceMatcher(None, nn, pc._norm(best["name"])).ratio()
+                            strip = lambda s: re.sub(r"[^0-9a-z가-힣]", "", pc._norm(s))
+                            print(f"     가장 비슷한 목록 이름 유사도 {ratio:.2f} · 순위 {best['rank']} · 기호 빼면 포함 = {'예' if strip(name) in strip(best['name']) else '아니오'}"
+                                  f" · 길이 입력 {len(name)} / 목록 {len(best['name'])}")
+                            print(f"     목록 이름이 입력 안에 들어 있나(입력이 더 김) = {'예' if strip(best['name']) and strip(best['name']) in strip(name) else '아니오'}")
+                            sims = sorted(((difflib.SequenceMatcher(None, strip(name), strip(x['name'])).ratio(), x['rank']) for x in named), reverse=True)[:3]
+                            print("     기호 뺀 유사도 상위 3:", ", ".join(f"{a:.2f}({b}위)" for a, b in sims), f"· 판독된 오가닉 {len(named)}곳 중")
             print("\n끝.")
             PY
 
