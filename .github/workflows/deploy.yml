@@ -302,6 +302,11 @@ jobs:
       - name: 회귀 — 분석기별 사용량(스토어·플레이스 분리)
         run: python backend/tests/test_analyzer_usage.py
 
+      # 2026-09-23 대표 결정 C — 데이터랩 결과 재사용을 일꾼 5개가 나눠 쓴다(DB 보관함 · 1시간 → 24시간).
+      #    실패(빈값)는 보관하지 않아 다음 호출이 다시 묻고, 한도 소진 표시도 일꾼끼리 나눈다.
+      - name: 회귀 — 데이터랩 결과 재사용(일꾼 공유 · 24시간 · 한도 표시 공유)
+        run: python backend/tests/test_datalab_cache.py
+
       - name: Build frontend bundle
         run: |
           npm install --no-save @babel/core @babel/preset-react

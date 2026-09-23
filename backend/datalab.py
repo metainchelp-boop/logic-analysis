@@ -26,11 +26,20 @@ DATALAB_SEARCH_CLIENT_SECRET = os.getenv("DATALAB_SEARCH_CLIENT_SECRET", "") or 
 
 DATALAB_BASE = "https://openapi.naver.com/v1/datalab/shopping"
 
-# ==================== 메모리 캐시 (TTL 1시간) ====================
+# ==================== 결과 재사용 (메모리 + 일꾼 공용 보관함 · 24시간) ====================
+# ⚠️ 2026-09-23 대표 확정(결정 C) — 종전은 **일꾼마다 따로인 메모리 1시간**이라 일꾼 5개가
+#    같은 키워드를 각자 다시 물어 하루 한도가 오후에 바닥났다. 이제 메모리는 빠른 앞단으로만
+#    두고, 뒤에 **DB 한 곳의 공용 보관함(datalab_cache)** 을 둔다. 재사용 기간은 24시간.
+#    배경·정확도 근거는 datalab_cache.py 머리말.
+try:
+    import datalab_cache as _shared
+except Exception:          # 보관함 모듈이 없어도 종전처럼 메모리만으로 돈다
+    _shared = None
+
 _cache = {}           # { cache_key: { "data": dict, "ts": float } }
 _cache_lock = threading.Lock()
-CACHE_TTL = 3600      # 1시간 (초)
-CACHE_MAX_SIZE = 200  # 최대 캐시 항목 수
+CACHE_TTL = 24 * 3600  # 24시간 (초) — 종전 1시간
+CACHE_MAX_SIZE = 500   # 최대 캐시 항목 수(일꾼당 메모리) — 종전 200
 
 
 def _cache_key(keyword: str, category: str, related: list = None) -> str:
@@ -50,18 +59,36 @@ def _cache_key(keyword: str, category: str, related: list = None) -> str:
 
 
 def _cache_get(key: str):
-    """캐시에서 유효한 데이터 조회. 만료 시 None 반환"""
+    """캐시에서 유효한 데이터 조회. 메모리 → 공용 보관함 순. 만료·없음이면 None."""
     with _cache_lock:
         entry = _cache.get(key)
         if entry and (time.time() - entry["ts"]) < CACHE_TTL:
             return entry["data"]
         if entry:
             del _cache[key]  # 만료된 항목 제거
+    if _shared is not None:
+        try:
+            hit, saved_at = _shared.lookup(key, CACHE_TTL)
+        except Exception:
+            hit, saved_at = None, None
+        if hit is not None:
+            # ⚠️ 메모리에는 **보관함에 적힌 시각**으로 넣는다 — 지금 시각으로 넣으면
+            #    보관함에서 23시간 지난 값이 메모리에서 다시 24시간을 살아 이틀 묵은 값이 된다.
+            _cache_set(key, hit, shared=False, ts=saved_at)
+            return hit
     return None
 
 
-def _cache_set(key: str, data: dict):
-    """캐시에 데이터 저장. 최대 크기 초과 시 가장 오래된 항목 제거"""
+def _cache_set(key: str, data: dict, shared: bool = True, ts: float = None):
+    """캐시에 데이터 저장. 최대 크기 초과 시 가장 오래된 항목 제거.
+
+    shared=True 면 공용 보관함에도 적는다(다른 일꾼·재시작 뒤에도 재사용). 빈값은 보관함이 거절한다.
+    ts 는 보관함에서 꺼내 온 값의 원래 시각 — 메모리 수명이 늘어나지 않게 그대로 쓴다."""
+    if shared and _shared is not None:
+        try:
+            _shared.put(key, data)
+        except Exception:
+            pass
     with _cache_lock:
         # 크기 제한: 초과 시 만료된 항목부터 정리, 그래도 초과하면 가장 오래된 것 제거
         if len(_cache) >= CACHE_MAX_SIZE:
@@ -72,7 +99,7 @@ def _cache_set(key: str, data: dict):
             if len(_cache) >= CACHE_MAX_SIZE:
                 oldest_key = min(_cache, key=lambda k: _cache[k]["ts"])
                 del _cache[oldest_key]
-        _cache[key] = {"data": data, "ts": time.time()}
+        _cache[key] = {"data": data, "ts": time.time() if ts is None else float(ts)}
 
 # ==================== 네이버 쇼핑 카테고리 코드 매핑 ====================
 CATEGORY_MAP = {
@@ -249,14 +276,30 @@ _quota_block_until = [0.0]  # 일일 한도(1000회) 소진 감지 시 자정(KS
 
 
 def datalab_quota_exhausted() -> bool:
-    """일일 한도 소진 상태인가 (자정 리셋 전까지 True)."""
-    return time.time() < _quota_block_until[0]
+    """일일 한도 소진 상태인가 (자정 리셋 전까지 True).
+
+    ⚠️ 2026-09-23 — 다른 일꾼이 남긴 소진 표시도 본다(공용 보관함 · 30초에 한 번만 DB 를 읽는다).
+       종전엔 일꾼 5개가 각자 한 번씩 한도 초과 응답을 받아야 멈췄다."""
+    now = time.time()
+    if now < _quota_block_until[0]:
+        return True
+    if _shared is not None:
+        try:
+            return now < _shared.quota_blocked_until(now)
+        except Exception:
+            return False
+    return False
 
 
 def _mark_quota_exhausted():
     now = datetime.now()  # 컨테이너 TZ=Asia/Seoul
     reset_at = (now + timedelta(days=1)).replace(hour=0, minute=0, second=30, microsecond=0)
     _quota_block_until[0] = reset_at.timestamp()
+    if _shared is not None:
+        try:
+            _shared.mark_quota_until(reset_at.timestamp())
+        except Exception:
+            pass
     logger.warning(f"데이터랩 일일 한도 소진(010) — {reset_at}까지 호출 중단·안내 문구 전환")
 
 
@@ -724,7 +767,7 @@ def get_category_popular_keywords(keyword: str, category_code: str, related_keyw
 # ==================== 통합 분석 함수 ====================
 def analyze_datalab(keyword: str, category1: str = "", related_keywords: list = None,
                     category2: str = "", category3: str = "") -> dict:
-    """모든 데이터랩 분석을 한 번에 실행 (지표별 1시간 TTL 캐시).
+    """모든 데이터랩 분석을 한 번에 실행 (지표별 24시간 재사용 — 2026-09-23 · 종전 1시간).
 
     ★ 지표별 개별 캐시(2026-07 검수 시스템): 성공한 지표는 보존하고 실패(빈값) 지표만
       다음 호출에서 재조회한다 → 검수 재조회 시 성공분은 API를 다시 쓰지 않아
@@ -845,7 +888,7 @@ def analyze_datalab(keyword: str, category1: str = "", related_keywords: list = 
 #    그대로 재사용하고, 실패·소진 시에는 전부 {} 를 돌려 화면이 그 카드만 생략하게 한다.
 #
 # 호출 예산(키워드 1개당, 캐시 미적중 시): 추이 1 + 요일 1 + 성별 2 + 연령 4 = **8회**.
-# 캐시(1시간)에 걸리면 0회. 소진 상태면 첫 호출에서 즉시 빠져나온다.
+# 캐시(24시간 · 일꾼 공용 — 2026-09-23 · 종전 1시간)에 걸리면 0회. 소진 상태면 첫 호출에서 즉시 빠져나온다.
 
 DATALAB_SEARCH_URL = "https://openapi.naver.com/v1/datalab/search"
 
@@ -1035,5 +1078,7 @@ def get_search_trend(keyword: str) -> dict:
     # 아무 축도 못 채웠으면 카드를 만들지 않는다(빈 껍데기 렌더 방지).
     if not any(k in out for k in ("months", "weekdays")):
         return {}
-    _cache_set(ck, out)
+    # ⚠️ 한 축만 채운 결과는 공용 보관함(24시간)에 굳히지 않는다 — 빠진 축이 하루 내내 비게 된다.
+    #    메모리에만 두고, 다음 요청이 다른 일꾼에 가면 다시 묻는다(종전 동작).
+    _cache_set(ck, out, shared=("months" in out and "weekdays" in out))
     return out
