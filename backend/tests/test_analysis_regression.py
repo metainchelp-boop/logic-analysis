@@ -1321,24 +1321,31 @@ def test_수집_슬롯_규칙이_한_곳에만_있다():
     assert "from collect_slot import wait_hint" in cd, "화면이 공용 규칙을 안 쓴다"
 
 
-def test_슬롯_계산이_종전과_같다():
-    """규칙을 옮기기만 했다 — 값이 하나라도 달라지면 그날 수집이 통째로 재배정된다."""
+def test_슬롯_계산이_24시간_가중표를_따른다():
+    """2026-09-23 대표 확정 — 모든 키워드를 24시간에 나누고 8~22시에 두 배 배정한다.
+       값이 하나라도 달라지면 그날 수집이 통째로 재배정되므로 식 자체를 못박는다."""
     import zlib
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-    from collect_slot import slot_of
+    import collect_slot as cs
+    table = [h for h in range(24) for _ in range(2 if 8 <= h <= 22 else 1)]
+    assert list(cs._BUCKETS) == table, "칸 표가 「8~22시 두 몫 · 나머지 한 몫」이 아니다"
+    assert len(table) == 39
     for k in ("흰다리새우", "한우", "a", "", "가" * 40, "키워드 사이 공백"):
-        h = zlib.crc32(k.encode("utf-8"))
-        assert slot_of(k, True) == h % 15, f"우선 슬롯이 달라졌다: {k}"
-        assert slot_of(k, False) == 15 + (h % 9), f"후순위 슬롯이 달라졌다: {k}"
+        want = table[zlib.crc32(k.encode("utf-8")) % 39]
+        assert cs.slot_of(k, True) == want, f"슬롯이 식과 다르다: {k}"
+        assert cs.slot_of(k, False) == want, f"업체·상품 키워드가 다른 시각을 받았다: {k}"
 
 
-def test_상품_전용_키워드는_오후_슬롯이다():
-    """신고의 핵심 — 추가 등록 키워드는 15~23시에만 돈다. 그걸 화면이 말해 줘야 한다."""
+def test_낮_시간대가_두_배로_받는다():
+    """「24시간 돌리는데 왜 15시간만 재나」(대표) — 모든 시각이 몫을 받고, 낮이 밤의 두 배다."""
+    import collections
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
     from collect_slot import slot_of
-    for k in ("흰다리새우", "호박고구마", "전복죽", "곱창", "바지락"):
-        assert 15 <= slot_of(k, False) <= 23, f"{k} 가 오후 슬롯 밖이다"
-        assert 0 <= slot_of(k, True) <= 14, f"{k} 의 우선 슬롯이 범위 밖이다"
+    c = collections.Counter(slot_of("키워드%d" % i) for i in range(20000))
+    assert set(c) == set(range(24)), f"몫을 못 받는 시각이 있다: {sorted(set(range(24)) - set(c))}"
+    day = sum(c[h] for h in range(8, 23)) / 15.0
+    night = sum(c[h] for h in list(range(0, 8)) + [23]) / 9.0
+    assert 1.8 <= day / night <= 2.2, f"낮/밤 비율이 2배가 아니다: {day / night:.2f}"
 
 
 def test_대기_안내가_지킬_수_있는_말만_한다():
@@ -1350,7 +1357,9 @@ def test_대기_안내가_지킬_수_있는_말만_한다():
     assert "분" not in h, f"「분」 단위를 약속하고 있다: {h}"
     assert "수집" in h and any(w in h for w in ("오전", "오후", "밤", "정오", "자정")), h
     # 이미 지난 시각을 앞으로 올 것처럼 적지 않는다
-    assert wait_hint("흰다리새우", False, now_hour=23) == "오늘 안에 수집"
+    from collect_slot import slot_of
+    _s = slot_of("흰다리새우", False)
+    assert wait_hint("흰다리새우", False, now_hour=_s + 1) == "오늘 안에 수집"
     for hh, want in ((0, "자정"), (9, "오전"), (12, "정오"), (15, "오후"), (23, "밤")):
         assert want in slot_label(hh), f"{hh}시 라벨이 이상하다: {slot_label(hh)}"
 

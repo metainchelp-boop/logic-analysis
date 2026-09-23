@@ -212,9 +212,9 @@ ok("🔴⑥ 판정이 깨지면 **거르지 않는다**(기록이 멈추는 쪽�
 ok("⑥ 켜져 있을 때만 거른다(조건으로)",
    re.search(r"if\s+nvmid_required\(\)\s*:", RR) is not None)
 
-print("\n[⑥ 상한 — 대표 지시 10]")
+print("\n[⑥ 상한 — 대표 지시 15(2026-09-23 · 종전 10)]")
 CAP = code(io.open(os.path.join(ROOT, "collect_cap.py"), encoding="utf-8").read())
-ok("⑥ 회차당 상한이 10 이다", re.search(r"DEFAULT_TEST_CAP\s*=\s*10", CAP) is not None)
+ok("⑥ 회차당 상한이 15 이다", re.search(r"DEFAULT_TEST_CAP\s*=\s*15\b", CAP) is not None)
 
 # ── 조기 종료 계약 — 서버가 targets 를 실어 보내는가 ─────────────────────
 print("\n[계약 — 서버가 확장에 목표를 내려보낸다]")

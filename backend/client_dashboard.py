@@ -1783,8 +1783,8 @@ def rank_board(client_id: int, days: int = 8, current_user: dict = Depends(get_c
             """그 키워드가 왜 대기 중인지 + 언제 수집되는지."""
             if _blocked:
                 return {"pending_reason": "blocked", "pending_hint": _blocked}
-            # 우선 슬롯(0~14시)은 업체 대표 키워드·분석 이력 몫이고,
-            # 상품에만 등록된 키워드는 뒤쪽(15~23시)이다 — 수집기와 같은 규칙을 쓴다.
+            # 2026-09-23 부터 모든 키워드를 24시간에 나누고 8~22시에 두 배 배정한다(collect_slot).
+            # 수집기와 같은 규칙을 쓴다 — 화면이 따로 계산하지 않는다.
             try:
                 from collect_slot import wait_hint
                 return {"pending_reason": "slot",
