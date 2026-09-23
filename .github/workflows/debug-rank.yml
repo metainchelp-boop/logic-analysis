@@ -225,7 +225,7 @@ jobs:
             echo "  기동 이후($SINCE~) 접속 기록 — /products/track · heartbeat · blocked 상태별 (⚠️ 자정 회전 뒤 파일 .1 까지 읽는다)"
             # ⚠️ 종전엔 기동한 날짜로만 grep 해서 자정 로그 회전 뒤 빈 출력 = 「못 잼」이었다(0건 아님)
             LN=$( { [ -f "$LOG2.1" ] && cat "$LOG2.1"; cat "$LOG2"; } | awk -v sk="$SK" 'BEGIN{split("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec",M," "); for(i in M) mo[M[i]]=sprintf("%02d",i)}
-              $7 ~ /\/api\/(products\/track|collector\/heartbeat|collector\/blocked)/ {
+              $7 ~ /\/api\/(products\/track|collector\/heartbeat|collector\/blocked|collector\/serp)/ {
                 t=substr($4,2,20); k=substr(t,8,4) mo[substr(t,4,3)] substr(t,1,2) substr(t,13,2) substr(t,16,2) substr(t,19,2);
                 if (k < sk) next; seen++; p=$7; sub(/\?.*/,"",p); sub(/.*\/api\//,"",p); n[p" "$9]++;
                 if ($9 >= 500) { h[p" "$9" "substr(t,1,2)"일 "substr(t,13,2)"시"]++ } }
@@ -235,7 +235,7 @@ jobs:
             docker logs --since "$(docker inspect -f '{{.State.StartedAt}}' logic-analysis)" logic-analysis 2>&1 | grep -c "database is locked"
             echo "  [잠금 줄의 앞뒤 — 어느 경로·배치에서 났나 (160자 · 숫자 외 질의 없음)]"
             docker logs --timestamps --since "$(docker inspect -f '{{.State.StartedAt}}' logic-analysis)" logic-analysis 2>&1 \
-              | grep -B3 "database is locked" | grep -v -E "keyword|키워드" | cut -c1-160 | tail -40
+              | grep -B3 "database is locked" | grep -E "File |Error|HTTP/1.1|저장 보류|동기화" | cut -c1-160 | tail -40
       - name: '#265 배포 위험도 — 새 시간표 미리보기 (issue275=on · 읽기 전용)'
         if: ${{ github.event.inputs.issue275 == 'on' }}
         uses: appleboy/ssh-action@v1.0.3
