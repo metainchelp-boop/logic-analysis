@@ -887,6 +887,32 @@ def track_product(req: ProductAddRequest, background_tasks: BackgroundTasks, cur
     #    안 보내도 여기서 거절되고 사람에게 새로고침을 안내한다.
     from nvmid import normalize as _nv_norm, is_valid as _nv_ok
     _nv = _nv_norm(req.nv_mid)
+    _nv_source = "request" if _nv else ""
+    if not _nv:
+        # ── 신고 #275 (2026-09-23) — 이미 등록한 같은 상품에 키워드만 더하는 요청은 「새 등록」이 아니다 ──
+        # 9/18 확정은 「새로 등록하는 것만 막는다」였는데 이 자리는 nvMid 없는 요청을 **전부** 막았다.
+        # 분석 화면 버튼(TrackRegisterButton)은 nvMid 칸이 없어 9/18 부터 누를 때마다 400 이었다
+        # (실측: 9/22 7건 · 9/23 3건 · 성공 0건 — 응답 303바이트 = 전부 이 문구).
+        # 이 요청이 고칠 행(같은 주소·같은 직원 = add_tracked_product 가 찾는 그 행)에 nvMid 가
+        # 이미 있으면 그 값을 쓴다. ⚠️ 새 상품은 종전대로 거절한다 — 대표 확정 ③ 그대로.
+        _nvc = None
+        try:
+            import sqlite3 as _nvsq
+            from nvmid import existing_for as _nv_existing
+            _nvc = _nvsq.connect(DB_PATH, timeout=10)
+            _nv = _nv_existing(_nvc, req.product_url, current_user["id"])
+        except Exception as _nve:
+            logger.warning(f"[track] 저장된 nvMid 조회 실패(종전대로 거절): {_nve}")
+            _nv = ""
+        finally:
+            if _nvc is not None:
+                try:
+                    _nvc.close()
+                except Exception:
+                    pass
+        if _nv:
+            _nv_source = "existing"
+            logger.info("[track] nvMid 없는 요청 — 이미 등록된 같은 상품(같은 주소·같은 직원)의 nvMid 로 처리")
     if not _nv:
         raise HTTPException(
             status_code=400,
@@ -1015,6 +1041,9 @@ def track_product(req: ProductAddRequest, background_tasks: BackgroundTasks, cur
                 #    무시하므로 무회귀다(가산만 했다).
                 "keywords_rejected": keyword_rejected,
                 "link": link,
+                # 신고 #275 — nvMid 가 어디서 왔나(request = 화면이 보냄 · existing = 이미 등록된 같은
+                #   상품에 저장된 값). 가산 필드라 구버전 화면은 무시한다(무회귀).
+                "nv_mid_source": _nv_source,
                 "message": ("상품이 등록되었습니다. 첫 순위 체크를 시작합니다."
                             if not keyword_rejected else
                             f"상품이 등록되었습니다. 키워드 {len(keyword_rejected)}개는 "

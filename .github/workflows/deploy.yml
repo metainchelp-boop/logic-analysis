@@ -190,6 +190,11 @@ jobs:
       - name: Client picker regression (신고 #265 #266)
         run: python backend/tests/test_client_picker.py
 
+      # 2026-09-23 신고 #275 — 분석 화면 「순위 추적」 버튼이 nvMid 칸이 없어 9/18 부터 누를 때마다 400(#266 과 같은 모양).
+      #    기존 상품은 저장된 nvMid 로 받고(같은 주소·같은 직원) 새 상품은 종전대로 거절 · 화면 칸·상한·훅 순서를 지킨다.
+      - name: 회귀 — 분석 화면 추적 버튼 nvMid(신고 #275)
+        run: python backend/tests/test_track_nvmid_fallback.py
+
       # 시작 시 백업 — 워커 간 잠금. 배포가 쓰는 backend/Dockerfile 이 uvicorn --workers 5 라
       # lifespan 이 워커마다 돌고, 잠금이 없으면 워커들이 같은 백업 파일을 동시에 써서
       # 압축본이 깨진다(2026-09-14 실측). ⚠️ 루트 Dockerfile(gunicorn -w 3)은 배포에 안 쓰인다.
