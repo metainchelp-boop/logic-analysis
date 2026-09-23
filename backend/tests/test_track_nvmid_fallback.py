@@ -98,6 +98,14 @@ ok("🔴 nvMid 가 없을 때 거절하기 **전에** 저장된 nvMid 를 찾는
 ok("🔴 찾는 기준 = 이 요청의 주소 + 로그인한 직원",
    re.search(r"existing\w*\(\s*_nvc\s*,\s*req\.product_url\s*,\s*current_user\[\"id\"\]\s*\)", fn) is not None)
 ok("🔴 새 상품은 여전히 400 — 거절 문구가 남아 있다(대표 확정 ③)", i_raise > 0 and "status_code=400" in fn[i_raise - 300:i_raise])
+# ⚠️ **문구가 아니라 조건으로 본다** — 사보타주에서 거절 위 조건을 `if False:` 로 바꿔도 문구가 남아
+#    위 검사가 통과했다(#243 때 적어 둔 함정의 재현). 이제 함수 안에 `if not _nv:` 가 두 번
+#    (폴백·거절) 있으므로 「어딘가에 있다」가 아니라 **거절 바로 위에 있다**를 못박는다.
+m_guard = re.search(r"\n(\s*)if not _nv:\s*\n\1    raise HTTPException\(\s*\n\s*status_code=400,\s*\n\s*"
+                    r"detail=\"nvMid\(네이버 쇼핑 상품번호\)를 넣어야 등록됩니다", fn)
+ok("🔴 거절 자리가 **조건으로** 살아 있다 — `if not _nv:` 바로 아래 400", m_guard is not None)
+ok("🔴 그 거절 조건은 폴백 **뒤**에 있다(폴백이 먼저 채우고, 그래도 비면 거절)",
+   bool(m_guard) and m_guard.start() > i_fb >= 0)
 # 폴백은 요청에 nvMid 가 **없을 때만** — 요청 값이 있으면 그 값이 우선이다
 guard = re.search(r"_nv = _nv_norm\(req\.nv_mid\)\s*\n\s*_nv_source = \"request\" if _nv else \"\"\s*\n\s*if not _nv:", fn)
 ok("폴백은 요청에 nvMid 가 없을 때만 돈다(요청 값이 우선)", guard is not None)
