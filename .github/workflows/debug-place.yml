@@ -84,7 +84,7 @@ on:
         description: '진단 스텝이 어디서 멈추는지 — true. 이 워크플로가 쓰는 명령을 하나씩 timeout 을 씌워 걸리는 지점을 찾는다(읽기 전용).'
         required: false
       analysis_audit:
-        description: '로직분석 결과값 전수조사 — true. 자동 분석 결과 칸별 빈값 · 배치 산출물 일별 · 외부 데이터원 1회 실호출 · 오류 로그 유형 · API 경로별 상태코드(읽기 전용 · 업체명·키워드·IP 미출력 · 그래도 읽은 뒤 런 로그 삭제)'
+        description: '로직분석 결과값 전수조사 — true(1차) / detail(2차: 상세 HTML 구조·수집 커버리지·정확한 상태코드). 자동 분석 결과 칸별 빈값 · 배치 산출물 일별 · 외부 데이터원 1회 실호출 · 오류 로그 유형 · API 경로별 상태코드(읽기 전용 · 업체명·키워드·IP 미출력 · 그래도 읽은 뒤 런 로그 삭제)'
         required: false
       place_capture_probe:
         description: '신고 #276 — 플레이스 분석 캡처 판독 재현. db = 기록 집계만 / auto = 9/22·9/23 사람 분석 행으로 네이버 목록 1~2회 받아 서버 판독기로 읽기 / at:시각;시각 = 그 시각 행을 그대로 재현 / at!:시각 = 같은데 이름을 그대로 찍는다(⚠️ 읽은 즉시 런 로그 삭제) / find!:업체명|검색어;검색어 = 이름으로 찾아 그 번호가 각 목록 몇 번째인지(⚠️ 로그 삭제) / depth:검색어;검색어 = 기록된 순위 분포 + 목록 데이터 칸 구조 / 그 밖의 글자 = 그 검색어로 1회. 업체명·키워드는 해시로만 찍는다(읽기 전용).'
@@ -97,6 +97,114 @@ jobs:
       # ── 로직분석 결과값 전수조사 (2026-09-23 · 읽기 전용) ──
       # 대표 질문 「로직분석 실행했을 때 나오는 값이 정확한가 · 안 나오거나 오류인 게 있나」에 서버에서 답한다.
       # ⚠️ 저장소 공개 — 칸 이름(코드 식별자)·건수·상태코드만 찍는다. 한글은 소스에 있는 낱말만 남기고 가린다.
+      - name: 로직분석 결과값 전수조사 2차 (읽기 전용)
+        if: ${{ github.event.inputs.analysis_audit == 'detail' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 240s
+          script: |
+            docker exec -i logic-analysis python3 - <<'PY'
+            # 전수조사 2차 — 상세 HTML 구조 · 수집 커버리지 (읽기 전용 · 건수만)
+            import sqlite3, re, sys, collections
+            sys.path.insert(0, "/app")
+            c = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True, timeout=20)
+            print("== A) 저장된 상세 HTML 구조 (client_detail_html) ==")
+            try:
+                from detail_html_store import _unpack
+            except Exception as e:
+                _unpack = lambda x: x if isinstance(x, str) else (x or b"").decode("utf-8", "ignore")
+                print(f"  (_unpack 못 가져옴: {e})")
+            marks = ["__NEXT_DATA__", "__PRELOADED_STATE__", "\"salePrice\"", "discountedSalePrice", "dispSalePrice",
+                     "product:price:amount", "name=\"api-price\"", "wholeCategoryName", "\"productNo\"", "\"reviewAmount\"", "og:title"]
+            cnt = collections.Counter(); n = 0; sizes = []; nd_prod = 0; nd_keys = collections.Counter()
+            try:
+                for (html,) in c.execute("SELECT html FROM client_detail_html"):
+                    h = _unpack(html) or ""
+                    if len(h) < 100: continue
+                    n += 1; sizes.append(len(h))
+                    for m in marks:
+                        if m in h: cnt[m] += 1
+                    mm = re.search(r'<script\s+id="__NEXT_DATA__"[^>]*>(.*?)</script>', h, re.DOTALL)
+                    if mm:
+                        try:
+                            import json
+                            pp = ((json.loads(mm.group(1)).get("props") or {}).get("pageProps")) or {}
+                            for k in list(pp.keys())[:30]:
+                                if re.match(r"^[A-Za-z_]\w{0,30}$", k): nd_keys[k] += 1
+                            if isinstance(pp.get("product") or pp.get("productDetail"), dict): nd_prod += 1
+                        except Exception:
+                            cnt["NEXT_DATA 해석 실패"] += 1
+            except Exception as e:
+                print(f"  ⚠️ 못 쟀다: {e}")
+            print(f"  HTML 있는 업체 {n}곳 · 크기 중앙값 {sorted(sizes)[len(sizes)//2]//1024 if sizes else 0}KB")
+            for m in marks + ["NEXT_DATA 해석 실패"]:
+                print(f"    {m:<26} {cnt[m]:>4}")
+            print(f"  __NEXT_DATA__ 의 pageProps 에 product/productDetail 있음: {nd_prod}")
+            print(f"  pageProps 키 상위: {nd_keys.most_common(12)}")
+
+            print("== B) 오늘 자동 분석 키워드가 수집분에 있었나 ==")
+            norm = lambda k: "".join(str(k or "").split()).lower()
+            try:
+                ld = c.execute("SELECT MAX(analyzed_date) FROM client_analyses").fetchone()[0]
+                rows = c.execute("SELECT keyword, shop_products_json FROM client_analyses WHERE analyzed_date=?", (ld,)).fetchall()
+                kws = {norm(k): (p not in ('', '[]', None)) for k, p in rows}
+                col2 = {norm(k) for (k,) in c.execute("SELECT DISTINCT keyword FROM collected_serp WHERE collected_date >= date(?, '-2 day')", (ld,))}
+                col_all = {norm(k) for (k,) in c.execute("SELECT DISTINCT keyword FROM collected_serp")}
+                tot = len(kws); has_prod = sum(1 for v in kws.values() if v)
+                in2 = sum(1 for k in kws if k in col2); ever = sum(1 for k in kws if k in col_all)
+                print(f"  {ld} 분석 키워드 {tot}개 · 상품목록 있음 {has_prod} · 최근 2일 수집분에 있음 {in2} · 한 번이라도 수집된 적 {ever} · 한 번도 없음 {tot-ever}")
+                last = collections.Counter()
+                for (k, d) in c.execute("SELECT keyword, MAX(collected_date) FROM collected_serp GROUP BY keyword"):
+                    if norm(k) in kws: last[d] += 1
+                print(f"  분석 키워드의 마지막 수집일 분포(최근 10): {sorted(last.items())[-10:]}")
+            except Exception as e:
+                print(f"  ⚠️ 못 쟀다: {e}")
+            print("== C) 수집기 하루 처리량 (collected_serp 일별 · 최근 21일) ==")
+            try:
+                for d, nn in c.execute("SELECT collected_date, COUNT(*) FROM collected_serp WHERE collected_date >= date('now','localtime','-21 day') GROUP BY collected_date ORDER BY collected_date"):
+                    print(f"    {d}  {nn}")
+            except Exception as e:
+                print(f"  ⚠️ 못 쟀다: {e}")
+            PY
+            cat > /tmp/_audit2_logs.py <<'PY'
+            import re, glob, gzip, os, collections
+            from datetime import datetime, timedelta
+            print("== D) nginx — 주요 경로의 정확한 상태 코드 (최근 7일) ==")
+            NG = re.compile(r'\[(\d{2})/(\w{3})/(\d{4}):(\d{2}):\d{2}:\d{2} [^\]]+\] "(GET|POST) (\S+) [^"]*" (\d{3}) \S+ "[^"]*" "([^"]*)"')
+            MON = {m: i for i, m in enumerate(["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"], 1)}
+            cut = datetime.now() - timedelta(days=7)
+            want = ["/api/advertiser/analyze", "/api/ai/feedback-all", "/api/auth/sso", "/api/seo/detail-page", "/api/products/track", "/api/datalab/analyze", "/api/seo/analyze", "/api/cd/portal-summary"]
+            st = collections.Counter(); ua = collections.Counter()
+            for f in sorted(glob.glob("/var/log/nginx/access.log*")):
+                try:
+                    fh = gzip.open(f, "rt", errors="ignore") if f.endswith(".gz") else open(f, errors="ignore")
+                    for ln in fh:
+                        m = NG.search(ln)
+                        if not m: continue
+                        d = datetime(int(m.group(3)), MON.get(m.group(2), 1), int(m.group(1)), int(m.group(4)))
+                        if d < cut: continue
+                        p = m.group(6).split("?")[0]
+                        if p in want:
+                            st[(p, m.group(7), d.strftime("%m-%d"))] += 1
+                            if p == "/api/advertiser/analyze" and m.group(7).startswith("4"):
+                                u = m.group(8)
+                                ua["Java(전산 서버)" if "Java" in u or "okhttp" in u.lower() or "Apache-HttpClient" in u else ("브라우저" if "Mozilla" in u else "기타")] += 1
+                except Exception as e:
+                    print(f"  ⚠️ {os.path.basename(f)}: {str(e)[:60]}")
+            agg = collections.defaultdict(collections.Counter)
+            for (p, s, d), n in st.items(): agg[(p, s)][d] += n
+            for (p, s) in sorted(agg):
+                days = agg[(p, s)]
+                print(f"  {p:<28} {s}  합 {sum(days.values()):>5}  " + " ".join(f"{d}:{days[d]}" for d in sorted(days)))
+            print(f"  광고주 분석 4xx 를 보낸 쪽: {dict(ua)}")
+            PY
+            sudo -n true 2>/dev/null && S="sudo -n" || S=""
+            $S python3 /tmp/_audit2_logs.py
+            rm -f /tmp/_audit2_logs.py
+
       - name: 로직분석 결과값 전수조사 (읽기 전용)
         if: ${{ github.event.inputs.analysis_audit == 'true' }}
         uses: appleboy/ssh-action@v1.0.3
