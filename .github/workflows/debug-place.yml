@@ -2633,4 +2633,66 @@ jobs:
             grep -aE '📍 플레이스 자동 추적 정리|플레이스 자동 추적 정리 예외' /tmp/_pl_log.txt | tail -3 | sed 's/^/     /'
             [ "$(grep -acE '📍 플레이스 자동 추적 정리' /tmp/_pl_log.txt)" = "0" ] && echo "     01:40 정리 줄 0건(기동 이후 01:40 을 안 지났거나 로그 없음)"
             grep -aE '🩺 소상공인365 자가 점검' /tmp/_pl_log.txt | tail -3 | sed 's/^/     /'
+            echo "  -- 플레이스 추적 멈춤 감시 (09~21시 매시 20분 · 2026-09-23 신설) --"
+            grep -aE '📍(🚨|✅)? ?플레이스 추적 (점검|경보|회복)|플레이스 추적 점검 실행 실패' /tmp/_pl_log.txt | tail -4 | sed 's/^/     /'
+            [ "$(grep -acE '📍(🚨|✅)? ?플레이스 추적 (점검|경보|회복)' /tmp/_pl_log.txt)" = "0" ] && echo "     감시 줄 0건(기동 뒤 :20 을 아직 안 지났거나 09~21시 밖)"
             rm -f /tmp/_pl_log.txt
+            echo
+            echo "== [E] 배포 반영 확인 — 감시·사용량·한도(PR #266 · 건수만) =="
+            # 서버 파일 표지 — 이번 차수에만 있는 글자만 센다(옛 코드에도 있는 글자는 판정력이 없다).
+            for m in "place_watch.py:def alert_of" "analyzer_usage.py:PLACE_VIEWER_DAILY_LIMIT = 30" "main.py:_au_check(" \
+                     "main.py:@app.get(\"/api/place/watch\")" "scheduler.py:def _run_place_watch" "collector.py:\"place\": place}" \
+                     "client_dashboard.py:place_analysis_count"; do
+              f=${m%%:*}; pat=${m#*:}
+              n=$(docker exec $CN grep -cF "$pat" /app/$f 2>/dev/null) || n="못 읽음"
+              printf "    %-24s %-40s %s\n" "$f" "$pat" "$n"
+            done
+            docker exec -i $CN python3 - <<'PYE'
+            # 읽기 전용 — 이름을 찍지 않는다(건수·상태·날짜만)
+            import sqlite3, sys
+            sys.path.insert(0, "/app")
+            con = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True, timeout=10)
+            con.row_factory = sqlite3.Row
+            tabs = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            for t in ("place_watch", "place_ingest_seen", "analyzer_usage"):
+                if t in tabs:
+                    n = con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+                    print(f"    표 {t:18s} 있음 · {n}행")
+                else:
+                    print(f"    표 {t:18s} 아직 없음(첫 호출 때 생긴다 — 0행과 다르다)")
+            try:
+                import place_watch as pw
+                sm = pw.summary(conn=con)
+                if not sm:
+                    print("    감시 요약: 못 읽음")
+                else:
+                    tr = sm.get("tracker")
+                    print(f"    감시 요약: 상태 {sm.get('state')} · 오늘 {sm.get('measured')}/{sm.get('active')}곳 · 미확인 {sm.get('unconfirmed')} · "
+                          f"기록 없음 {sm.get('missing')} · {sm.get('stale_days')}일째 {sm.get('stale')}곳 · 배너 {sm.get('alert')} · "
+                          f"추적기 {'도착 기록 전' if tr is None else str(tr.get('arrivals')) + '회 · 마지막 ' + str(tr.get('last_at'))[11:16]}")
+                    print("    14일: " + " ".join(f"{d['date'][5:]}:{d['measured']}/{d['active']}" for d in (sm.get("days") or [])))
+            except Exception as e:
+                print(f"    감시 요약 예외: {type(e).__name__}")
+            try:
+                import analyzer_usage as au
+                if "analyzer_usage" in tabs:
+                    st = au.stats(con) or {}
+                    ba = st.get("by_analyzer") or {}
+                    print(f"    분석기별: 스토어 {ba.get('store')} · 플레이스 {ba.get('place')}")
+                    print(f"    플레이스를 쓴 직원 수(오늘): {sum(1 for v in (st.get('per_user') or {}).values() if v.get('place_today'))}")
+                print(f"    한도 상수: 플레이스 영업사원 {au.PLACE_VIEWER_DAILY_LIMIT} · 무제한 역할 {au.UNLIMITED_ROLES}")
+            except Exception as e:
+                print(f"    사용량 예외: {type(e).__name__}")
+            try:
+                rows = con.execute("SELECT role, COUNT(*) n FROM users WHERE is_active=1 GROUP BY role ORDER BY role").fetchall()
+                print("    활성 계정 역할별(배너는 superadmin 만): " + " · ".join(f"{r['role']} {r['n']}" for r in rows))
+            except Exception as e:
+                print(f"    역할 집계 못 읽음: {type(e).__name__}")
+            PYE
+            D=/root/logic-analysis-deploy/frontend
+            B=$(grep -o 'app\.[a-f0-9]*\.js' $D/index.bundle.html 2>/dev/null | head -1)
+            echo "    화면이 가리키는 번들: ${B:-못 찾음} ($(stat -c %s $D/dist/$B 2>/dev/null)B · $(date -r $D/dist/$B '+%m-%d %H:%M' 2>/dev/null))"
+            # 새 코드에만 있는 문구만 센다
+            for w in "지도 순위 추적 보기" "logic_place_alert_off" "추적 상태를 불러오지 못했습니다" "스토어 수동 분석 · 플레이스 " "사용량을 불러오지 못했습니다"; do
+              printf "      %-28s %s\n" "$w" "$(grep -cF "$w" $D/dist/$B 2>/dev/null || echo 못읽음)"
+            done
