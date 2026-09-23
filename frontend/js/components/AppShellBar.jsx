@@ -60,6 +60,10 @@ window.AppShellBar = function AppShellBar(props) {
     var _q = useState(''); var q = _q[0], setQ = _q[1];
     var _ch = useState(null); var colHealth = _ch[0], setColHealth = _ch[1];   // 수집 파이프라인 상태
     var _chX = useState(false); var colDismissed = _chX[0], setColDismissed = _chX[1];
+    // 지도 순위 추적 멈춤 경보(2026-09-23 대표 확정 — 「나한테만 보이면 돼」 = 최고관리자만)
+    var _pa = useState(null); var placeAlert = _pa[0], setPlaceAlert = _pa[1];
+    var _paX = useState(false); var placeDismissed = _paX[0], setPlaceDismissed = _paX[1];
+    var isOwner = currentUser.role === 'superadmin';
     var _in = useState(function() {
         try { return !localStorage.getItem('logic_nav_intro_v7'); } catch (e) { return false; }
     });
@@ -69,12 +73,14 @@ window.AppShellBar = function AppShellBar(props) {
     /* 본문 밀어내기 — 페이지 내부 컨테이너 무수정으로 셸 폭 반영.
        경보 배너가 뜨면 그 높이만큼 더 내려 본문 첫 줄이 가려지지 않게 한다. */
     var _bannerOn = !!(colHealth && !colDismissed);
+    var _placeOn = !!(isOwner && placeAlert && !placeDismissed);
+    var _bannerN = (_bannerOn ? 1 : 0) + (_placeOn ? 1 : 0);   // 두 경보가 겹치면 두 줄로 쌓인다(쇼핑 먼저)
     useEffect(function() {
         var w = collapsed ? _AS_WC : _AS_W;
         document.body.style.paddingLeft = w + 'px';
-        document.body.style.paddingTop = (_AS_TOP + (_bannerOn ? _AS_BANNER : 0)) + 'px';
+        document.body.style.paddingTop = (_AS_TOP + _bannerN * _AS_BANNER) + 'px';
         return function() { document.body.style.paddingLeft = ''; document.body.style.paddingTop = ''; };
-    }, [collapsed, _bannerOn]);
+    }, [collapsed, _bannerN]);
 
     /* 좁은 화면 자동 접힘(수동 설정 없을 때만) */
     useEffect(function() {
@@ -98,10 +104,17 @@ window.AppShellBar = function AppShellBar(props) {
     useEffect(function() {
         var today = new Date().toISOString().slice(0, 10);
         try { if (localStorage.getItem('logic_collect_alert_off') === today) setColDismissed(true); } catch (e) {}
+        // 지도 순위 경보는 **로컬 날짜**로 닫기 기억(UTC 로 적으면 한국 오전 9시 전에 어제 날짜가 된다)
+        var _d = new Date();
+        var localDay = _d.getFullYear() + '-' + ('0' + (_d.getMonth() + 1)).slice(-2) + '-' + ('0' + _d.getDate()).slice(-2);
+        try { if (localStorage.getItem('logic_place_alert_off') === localDay) setPlaceDismissed(true); } catch (e) {}
         var load = function() {
             api.get('/collector/health').then(function(res) {
                 if (res && res.success && res.state && res.state !== 'ok') setColHealth(res);
                 else setColHealth(null);
+                // 띄울지(missed / 3일째 stale)는 서버 place_watch.alert_of 가 정한다 — 화면은 그대로 따른다.
+                var pl = res && res.success ? res.place : null;
+                setPlaceAlert(pl && pl.alert ? pl : null);
             }).catch(function() {});
         };
         load();
@@ -134,6 +147,11 @@ window.AppShellBar = function AppShellBar(props) {
         try { window.dispatchEvent(new CustomEvent('logic-global-search', { detail: v })); } catch (e) {}
         setQ('');
         go('home');
+    };
+    var dismissPlace = function() {
+        setPlaceDismissed(true);
+        var d = new Date();
+        try { localStorage.setItem('logic_place_alert_off', d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2)); } catch (e) {}
     };
     var dismissCollect = function() {
         setColDismissed(true);
@@ -252,6 +270,35 @@ window.AppShellBar = function AppShellBar(props) {
             React.createElement('span', { style: { flex: 1, minWidth: 0, fontWeight: 500 } }, colHealth.message || ''),
             React.createElement('button', {
                 onClick: dismissCollect, title: '오늘 하루 숨기기',
+                style: { border: 'none', background: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 800,
+                         color: 'inherit', opacity: .65, padding: '0 2px', fontFamily: 'inherit' }
+            }, '✕')
+        ),
+
+        /* ── 지도 순위 추적 멈춤 경보 (2026-09-23 · 최고관리자만) ──
+           빨강 = 오늘 한 곳도 못 잼 · 주황 = 같은 곳이 3일째 빠짐. 쇼핑 경보가 떠 있으면 그 아래 줄. */
+        _placeOn && React.createElement('div', {
+            style: { position: 'fixed', top: _AS_TOP + (_bannerOn ? _AS_BANNER : 0), left: W, right: 0, zIndex: 998,
+                     display: 'flex', alignItems: 'center', gap: 10, padding: '0 18px', height: _AS_BANNER,
+                     fontSize: 12.5, fontWeight: 600, transition: 'left .15s ease',
+                     background: placeAlert.alert === 'missed' ? '#fef2f2' : '#fffbeb',
+                     borderBottom: '1px solid ' + (placeAlert.alert === 'missed' ? '#fecaca' : '#fde68a'),
+                     color: placeAlert.alert === 'missed' ? '#991b1b' : '#92400e' }
+        },
+            React.createElement('span', { style: { fontSize: 14 } }, placeAlert.alert === 'missed' ? '🚨' : '⚠️'),
+            React.createElement('span', { style: { fontWeight: 800, whiteSpace: 'nowrap' } },
+                placeAlert.alert === 'missed'
+                    ? ((placeAlert.tracker && placeAlert.tracker.arrivals > 0) ? '지도 순위 판독 실패' : '지도 순위 추적 멈춤')
+                    : '지도 순위 일부 누락'),
+            React.createElement('span', { style: { flex: 1, minWidth: 0, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+                                          title: placeAlert.message || '' }, placeAlert.message || ''),
+            React.createElement('button', {
+                onClick: function() { go('placetrack'); },
+                style: { border: '1px solid currentColor', background: 'transparent', cursor: 'pointer', fontSize: 11.5, fontWeight: 800,
+                         color: 'inherit', borderRadius: 7, padding: '2px 9px', fontFamily: 'inherit', whiteSpace: 'nowrap' }
+            }, '지도 순위 추적 보기'),
+            React.createElement('button', {
+                onClick: dismissPlace, title: '오늘 하루 숨기기',
                 style: { border: 'none', background: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 800,
                          color: 'inherit', opacity: .65, padding: '0 2px', fontFamily: 'inherit' }
             }, '✕')

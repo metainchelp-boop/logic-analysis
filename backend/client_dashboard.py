@@ -2806,8 +2806,21 @@ def clients_lookup(q: str = Query(None, description="회사명 부분검색"),
 VIEWER_DAILY_LIMIT = 30
 
 @router.get("/usage/check")
-def check_usage(current_user: dict = Depends(get_current_user)):
-    """일일 조회 횟수 확인"""
+def check_usage(analyzer: str = "", current_user: dict = Depends(get_current_user)):
+    """일일 조회 횟수 확인
+
+    `?analyzer=place`(2026-09-23 가산) — 플레이스 분석 한도를 같은 모양으로 돌려준다.
+    인자 없이 부르면 종전 그대로 **스토어** 한도다(스토어 화면 무변경).
+    """
+    if (analyzer or "").strip() == "place":
+        try:
+            from analyzer_usage import usage_check as _au_check
+            _chk = _au_check(current_user.get("id", 0), current_user.get("role"), "place")
+            _chk.pop("error", None)
+            return {"success": True, "data": _chk}
+        except Exception as e:
+            logger.error(f"[check-usage place] {e}")
+            return {"success": True, "data": {"used": 0, "limit": -1, "remaining": -1, "can_query": True}}
     conn = _get_conn()
     try:
         user_id = current_user["id"]
@@ -2886,11 +2899,22 @@ def today_stats(current_user: dict = Depends(get_current_user)):
         ).fetchone()
         report_count = row2['cnt'] if row2 else 0
 
+        # 📊 플레이스 분석 당일 횟수(2026-09-23 가산) — analysis_count 는 **스토어 분석**
+        #    그대로다(daily_usage). 조회 실패면 None — 「0회」로 찍히지 않게.
+        place_count = None
+        try:
+            from analyzer_usage import stats as _au_stats
+            _pl = ((_au_stats(conn, today=today_str) or {}).get("by_analyzer") or {}).get("place")
+            place_count = _pl.get("today") if _pl else None
+        except Exception:
+            place_count = None
+
         return {
             "success": True,
             "data": {
                 "analysis_count": analysis_count,
-                "report_count": report_count
+                "report_count": report_count,
+                "place_analysis_count": place_count,
             }
         }
     except Exception as e:

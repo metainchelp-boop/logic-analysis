@@ -2259,6 +2259,18 @@ def place_rank_history_api(business: str = "", keyword: str = "", days: int = 30
         return {"success": False, "error": "순위 이력 조회 중 오류가 발생했습니다."}
 
 
+@app.get("/api/place/watch")
+def place_watch_api(current_user: dict = Depends(get_current_user)):
+    """지도 순위 추적 상태 줄(2026-09-23) — 오늘 잰 곳 · 지난 14일 · 3일째 못 잰 대상 번호.
+    건수·대상 번호만 돌려준다(업체명·키워드 없음). 조회 실패면 data=None(= 못 잼 · 0 이 아니다)."""
+    try:
+        from place_watch import summary as _pw_summary
+        return {"success": True, "data": (_pw_summary() or None)}
+    except Exception as e:
+        logger.warning(f"플레이스 추적 상태 조회 실패(무시): {e}")
+        return {"success": True, "data": None}
+
+
 @app.get("/api/place/keywords")
 def place_tracked_keywords_api(business: str = "", current_user: dict = Depends(get_current_user)):
     """플레이스 업체가 추적(분석)한 키워드 + 각 최신 순위/상태 — §2 키워드 칩용."""
@@ -2925,6 +2937,13 @@ def place_ingest(req: PlaceIngestRequest, current_user: dict = Depends(get_curre
             except Exception as _ie:
                 skipped += 1
                 logger.warning(f"플레이스 ingest 항목 건너뜀: {_ie}")
+        # 📍 추적기 도착 기록(2026-09-23 · 플레이스 멈춤 감시) — 순위 표만으로는 「추적기가 왔나」를
+        #    못 가른다(직원 분석도 같은 표에 쌓인다). 건수만 적는다. 실패해도 응답은 그대로.
+        try:
+            from place_watch import note_ingest as _pw_note
+            _pw_note(len(req.results or []), saved, skipped)
+        except Exception:
+            pass
         return {"success": True, "data": {"saved": saved, "skipped": skipped}}
     except Exception as e:
         logger.error(f"플레이스 ingest 실패: {e}")
@@ -2937,7 +2956,32 @@ def seo_analyze(req: SeoAnalysisRequest, current_user: dict = Depends(get_curren
     try:
         # 플레이스 업종은 전용 어댑터로 분기(기본 shopping 은 아래 기존 경로 100% 그대로)
         if (req.vertical or "shopping") == "place":
-            return _place_seo_analyze(req, current_user)
+            # 📊 분석기별 사용량(2026-09-23) — 플레이스 분석은 어디에도 세지 않았다(스토어는
+            #    화면이 /cd/usage/increment 로 센다). 성공·실패 모두 1회, 실패는 따로 센다.
+            #    ⚠️ 스토어 한도(daily_usage)에 더하지 않는다 — 더하면 플레이스만큼 스토어가 막힌다.
+            # 🚦 하루 한도(대표 확정 2026-09-23) — 영업사원 30회 · 관리자·매니저 무제한.
+            #    ⚠️ 예외를 던지면 아래 바깥 `except Exception` 이 500 으로 바꿔 버린다 → 응답을 직접 돌려준다.
+            #    ⚠️ 막힌 시도는 세지 않는다(돌리지 않았으니까). 조회 실패면 막지 않는다(usage_check).
+            try:
+                from analyzer_usage import usage_check as _au_check, limit_message as _au_msg
+                _pl_chk = _au_check((current_user or {}).get("id", 0),
+                                    (current_user or {}).get("role"), "place")
+                if not _pl_chk.get("can_query", True):
+                    return JSONResponse(status_code=429, content={
+                        "success": False, "detail": _au_msg(_pl_chk), "usage": _pl_chk})
+            except Exception:
+                pass
+            _pl_ok = False
+            try:
+                _pl_res = _place_seo_analyze(req, current_user)
+                _pl_ok = bool(isinstance(_pl_res, dict) and _pl_res.get("success"))
+                return _pl_res
+            finally:
+                try:
+                    from analyzer_usage import record as _au_record
+                    _au_record((current_user or {}).get("id", 0), "place", ok=_pl_ok)
+                except Exception:
+                    pass
         # 캐시된 데이터가 있으면 재활용, 없으면 API 호출
         if req.cached_product_info:
             product_info = req.cached_product_info

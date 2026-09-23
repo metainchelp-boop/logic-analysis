@@ -292,6 +292,16 @@ jobs:
       - name: 회귀 — 플레이스 캡처 판독 · 「N위 밖」 표시(#276)
         run: python backend/tests/test_place_capture.py
 
+      # 2026-09-23 대표 지시 — 플레이스(지도) 무인 추적이 9/15·9/17 에 하루 통째로 빠졌는데 아무 신호가 없었다.
+      #    활성 대상 중 오늘 잰 곳을 매시 세고(미확인은 잰 것이 아니다) · 09시 전엔 판정 안 하고 · 조회 실패를 0 으로 안 찍는다.
+      - name: 회귀 — 플레이스 추적 멈춤 감시
+        run: python backend/tests/test_place_watch.py
+
+      # 2026-09-23 대표 지시 — 분석기별 사용량. 플레이스 분석은 어디에도 안 셌다. 따로 세되
+      #    영업사원 스토어 한도(daily_usage 30회)에는 더하지 않는다(더하면 플레이스만큼 스토어가 막힌다).
+      - name: 회귀 — 분석기별 사용량(스토어·플레이스 분리)
+        run: python backend/tests/test_analyzer_usage.py
+
       - name: Build frontend bundle
         run: |
           npm install --no-save @babel/core @babel/preset-react

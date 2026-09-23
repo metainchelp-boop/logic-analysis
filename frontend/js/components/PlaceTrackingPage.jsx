@@ -34,6 +34,8 @@ window.PlaceTrackingPage = function PlaceTrackingPage(props) {
     var _sv = useState(false);    var saving = _sv[0], setSaving = _sv[1];
     var _pid = useState('');      var placeIdInput = _pid[0], setPlaceIdInput = _pid[1];
     var _ro = useState(false);    var regOpen = _ro[0], setRegOpen = _ro[1];      // 등록 카드 접기(기본 접힘 — 목록이 먼저)
+    // 추적 멈춤 감시 상태(2026-09-23) — undefined=불러오는 중 · null=못 불러옴(「0곳」과 다르다) · 객체=상태
+    var _pw = useState(undefined); var watch = _pw[0], setWatch = _pw[1];
 
     // ── 상세: 키워드 추가 등록 ──
     var _dki = useState('');      var dKwInput = _dki[0], setDKwInput = _dki[1];
@@ -103,8 +105,14 @@ window.PlaceTrackingPage = function PlaceTrackingPage(props) {
     }
 
     // ==================== 데이터 ====================
+    function loadWatch() {
+        api.get('/place/watch').then(function (res) {
+            setWatch(res && res.success && res.data ? res.data : null);
+        }).catch(function () { setWatch(null); });
+    }
     function load() {
         setLoading(true);
+        loadWatch();
         api.get('/place/track-targets').then(function (res) {
             setLoading(false);
             if (res && res.success) {
@@ -426,6 +434,65 @@ window.PlaceTrackingPage = function PlaceTrackingPage(props) {
     }
 
     // ==================== 랜딩(업체 목록) — 쇼핑 순위 추적 renderList 미러 ====================
+    // ==================== 추적 멈춤 감시 — 상태 줄(2026-09-23 대표 확정) ====================
+    // 서버 place_watch 가 센 값 그대로 그린다(판정은 서버 한 곳 — 화면이 다시 세지 않는다).
+    function _pwHm(ts) { return ts ? String(ts).slice(11, 16) : ''; }
+    function renderWatchStrip() {
+        if (watch === undefined) return null;
+        var box = { display: 'grid', gridTemplateColumns: 'minmax(220px,auto) 1fr', gap: 14, alignItems: 'center',
+                    background: '#fff', border: '1px solid #e2e8f0', borderRadius: 12, padding: '12px 16px', marginBottom: 14 };
+        if (watch === null) {
+            return React.createElement('div', { style: Object.assign({}, box, { display: 'block', fontSize: 12.5, color: '#94a3b8' }) },
+                '추적 상태를 불러오지 못했습니다 — 「0곳」이 아니라 이번에 확인을 못 한 것입니다.');
+        }
+        if (!watch.active) return null;
+        var st = watch.state, act = watch.active, meas = watch.measured || 0;
+        var pill = { display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 800, borderRadius: 999, padding: '4px 11px', border: '1px solid' };
+        var tone = st === 'ok' ? ['#dcfce7', '#bbf7d0', '#059669']
+                 : st === 'missed' ? ['#fef2f2', '#fecaca', '#991b1b']
+                 : st === 'partial' ? ['#fffbeb', '#fde68a', '#92400e']
+                 : ['#f1f5f9', '#e2e8f0', '#64748b'];
+        var label = st === 'pending'
+            ? '⏳ 오늘 ' + meas + '/' + act + '곳 · ' + (watch.check_from_hour || 9) + '시부터 판정'
+            : '● 오늘 ' + meas + '/' + act + '곳' + (st === 'ok' ? ' 잼' : '')
+              + (watch.unconfirmed ? ' · 미확인 ' + watch.unconfirmed : '')
+              + (watch.stale ? ' · ' + (watch.stale_days || 3) + '일째 ' + watch.stale + '곳' : '');
+        var tr = watch.tracker;
+        var sub = (tr == null ? '추적기 도착 기록 전'
+                   : tr.arrivals > 0 ? '추적기 도착 ' + _pwHm(tr.last_at) + ' · ' + tr.arrivals + '회'
+                   : '오늘 추적기 도착 없음')
+                + (watch.last_check ? ' · 마지막 점검 ' + _pwHm(watch.last_check) : '');
+        var days = watch.days || [];
+        var today = watch.date;
+        return React.createElement('div', { style: box },
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 5 } },
+                React.createElement('span', null,
+                    React.createElement('span', { style: Object.assign({}, pill, { background: tone[0], borderColor: tone[1], color: tone[2] }) }, label)),
+                React.createElement('span', { style: { fontSize: 12, color: '#64748b' } }, sub),
+                watch.message ? React.createElement('span', { style: { fontSize: 12, color: tone[2], fontWeight: 600 } }, watch.message) : null),
+            React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 } },
+                React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(' + Math.max(days.length, 1) + ', minmax(0,1fr))', gap: 4 } },
+                    days.map(function (d) {
+                        var isToday = d.date === today;
+                        var c = !d.active ? ['#f8fafc', '#eef2f6', '#cbd5e1']
+                              : d.measured >= d.active ? ['#dcfce7', '#bbf7d0', '#059669']
+                              : (isToday && st === 'pending') ? ['#f1f5f9', '#e2e8f0', '#64748b']
+                              : d.measured === 0 ? ['#fef2f2', '#fecaca', '#991b1b']
+                              : ['#fffbeb', '#fde68a', '#92400e'];
+                        return React.createElement('div', { key: d.date, style: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 } },
+                            React.createElement('div', {
+                                title: d.date + ' · ' + d.measured + '/' + d.active + '곳',
+                                style: { width: '100%', height: 28, borderRadius: 6, background: c[0], border: '1px solid ' + c[1], color: c[2],
+                                         display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10.5, fontWeight: 800,
+                                         fontVariantNumeric: 'tabular-nums', outline: isToday ? '2px solid #3b82f6' : 'none', outlineOffset: 1 }
+                            }, d.active ? d.measured : '—'),
+                            React.createElement('span', { style: { fontSize: 10.5, color: '#94a3b8', fontVariantNumeric: 'tabular-nums' } },
+                                Number(String(d.date).slice(5, 7)) + '/' + Number(String(d.date).slice(8, 10))));
+                    })),
+                React.createElement('div', { style: { fontSize: 11.5, color: '#94a3b8' } },
+                    '지난 ' + days.length + '일 · 칸 숫자 = 그날 잰 곳(노출·미노출) · 지금 활성 대상 ' + act + '곳 기준')));
+    }
+
     function renderList() {
         var q = query.trim().toLowerCase();
         var totals = { biz: groups.length, keywords: targets.length, exposedBiz: 0, up: 0, down: 0, attention: 0 };
@@ -448,7 +515,10 @@ window.PlaceTrackingPage = function PlaceTrackingPage(props) {
                 style: { border: '1px solid ' + (on ? '#3b82f6' : '#e2e8f0'), background: on ? '#eff6ff' : '#fff', color: on ? '#1d4ed8' : '#475569', borderRadius: 999, padding: '5px 13px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }
             }, label);
         };
+        var staleIds = {};
+        ((watch && watch.stale_ids) || []).forEach(function (id) { staleIds[id] = true; });
         return React.createElement(React.Fragment, null,
+            renderWatchStrip(),
             React.createElement('div', { style: _krKpiGrid },
                 React.createElement('div', { style: _krKpi },
                     React.createElement('div', { style: _krKpiK }, '추적 업체'),
@@ -516,7 +586,16 @@ window.PlaceTrackingPage = function PlaceTrackingPage(props) {
                             },
                                 React.createElement('td', { style: Object.assign({}, _krTd, { fontWeight: 700, color: '#0f172a', whiteSpace: 'nowrap' }) }, '📍 ' + (g.name || ''),
                                     React.createElement('span', { style: { fontWeight: 500, color: '#94a3b8', fontSize: 12, marginLeft: 6 } }, g.region || '')),
-                                React.createElement('td', { style: _krTd }, chip),
+                                React.createElement('td', { style: Object.assign({}, _krTd, { whiteSpace: 'nowrap' }) }, chip,
+                                    (function () {
+                                        // 3일째 못 잰 키워드가 있는 업체 — 18/19 가 매일 「거의 다 됐다」로 보이던 곳(9/16~9/21)
+                                        var n = g.items.filter(function (t) { return staleIds[t.id]; }).length;
+                                        return n ? React.createElement('span', {
+                                            title: '키워드·장소 번호를 확인해 주세요',
+                                            style: { display: 'inline-block', fontSize: 11.5, fontWeight: 800, borderRadius: 999, padding: '3px 10px', whiteSpace: 'nowrap',
+                                                     marginLeft: 6, color: '#dc2626', background: '#fef2f2' }
+                                        }, (watch.stale_days || 3) + '일째 못 잼' + (n > 1 ? ' ' + n : '')) : null;
+                                    })()),
                                 React.createElement('td', { style: Object.assign({}, _krTd, { textAlign: 'right', fontVariantNumeric: 'tabular-nums' }) }, s.keywords),
                                 React.createElement('td', { style: Object.assign({}, _krTd, { textAlign: 'right', fontVariantNumeric: 'tabular-nums' }) }, s.exposed),
                                 React.createElement('td', { style: Object.assign({}, _krTd, { textAlign: 'right', fontVariantNumeric: 'tabular-nums' }) }, s.top10),

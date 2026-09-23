@@ -220,6 +220,18 @@ def start_scheduler():
         max_instances=1,
     )
 
+    # 플레이스(지도) 무인 추적 멈춤 감시 — 낮 시간대 매시 20분 (2026-09-23 대표 지시).
+    # ⚠️ 추적기는 06:30 한 번 돈다 — 09시 전에는 판정하지 않는다(place_watch.CHECK_FROM_HOUR).
+    # ⚠️ :10 은 쇼핑 감시, :00 은 시간대 수집 회차라 피한다.
+    _scheduler.add_job(
+        _run_place_watch,
+        trigger=CronTrigger(hour="9-21", minute=20),
+        id="place_watch",
+        name="플레이스 추적 멈춤 감시 (09~21시 매시 20분)",
+        replace_existing=True,
+        max_instances=1,
+    )
+
     _scheduler.add_job(
         _run_request_queue_prune,
         trigger="date",
@@ -671,6 +683,36 @@ def _run_collect_health_check():
             logger.info(f"  🩺 수집 점검 — 정상 (마지막 업로드 {gap}시간 전)")
     except Exception as e:
         logger.warning(f"  🩺 수집 점검 실행 실패(무시): {e}")
+
+
+def _run_place_watch():
+    """플레이스(지도) 무인 순위 추적 멈춤 감시 — 낮 시간대 매시 20분 (2026-09-23 대표 지시).
+
+    ⚠️ 이게 생긴 이유 — 9/15·9/17 에 추적기가 하루 통째로 안 돌았는데(활성 19곳 중 0곳)
+       아무 신호가 없었다. 쇼핑 멈춤 감시(`collect_watch`)는 쇼핑 표만 본다.
+
+    ⚠️ 경고 줄은 **새로 알릴 것이 있을 때만** 찍는다(`notice`). 같은 상태가 이어지면
+       한 줄 정보로만 — 9/9 에 같은 경고 도배가 원인 줄을 밀어냈다.
+    ⚠️ 업체명·키워드는 찍지 않는다(건수만) — 진단이 이 로그를 공개 런 로그로 읽는다.
+    """
+    try:
+        import place_watch
+        r = place_watch.run_check()
+        st, notice = r.get("state"), r.get("notice")
+        act, meas = r.get("active"), r.get("measured")
+        tr = r.get("tracker")
+        _tr = ("도착 기록 전" if tr is None
+               else f"추적기 도착 {tr.get('arrivals', 0)}회")
+        if notice in (place_watch.STATE_MISSED, place_watch.STATE_PARTIAL):
+            logger.warning(f"  📍🚨 플레이스 추적 경보 — 오늘 {meas}/{act}곳 · 미확인 "
+                           f"{r.get('unconfirmed')} · 기록 없음 {r.get('missing')} · "
+                           f"{place_watch.STALE_DAYS}일째 못 잰 곳 {r.get('stale')} · {_tr}")
+        elif notice == "recovered":
+            logger.info(f"  📍✅ 플레이스 추적 회복 — 오늘 {meas}/{act}곳 · {_tr}")
+        else:
+            logger.info(f"  📍 플레이스 추적 점검 — {st} · 오늘 {meas}/{act}곳 · {_tr}")
+    except Exception as e:
+        logger.warning(f"  📍 플레이스 추적 점검 실행 실패(무시): {e}")
 
 
 # ==================== 08:00 순위 추적 ====================
