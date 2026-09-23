@@ -226,6 +226,42 @@ jobs:
             grep -a "$DAY" "$LOG2" | awk -v since="$SINCE" '$7 ~ /\/api\/(products\/track|collector\/heartbeat|collector\/blocked)/ {
                 t=substr($4,2,20); if (t < since) next; p=$7; sub(/\?.*/,"",p); sub(/.*\/api\//,"",p); n[p" "$9]++ }
               END { for (k in n) printf "   %s x%d\n", k, n[k] }' | sort
+      - name: '#265 배포 위험도 — 새 시간표 미리보기 (issue275=on · 읽기 전용)'
+        if: ${{ github.event.inputs.issue275 == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          command_timeout: 120s
+          script: |
+            echo "== ⑥ #265 새 시간표 미리보기(실제 유니버스 · 키워드 미출력) =="
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sys, sqlite3, zlib, collections, datetime
+            sys.path.insert(0, "/app")
+            from collector import _keyword_universe, _slot_of, _effective_date
+            from split_rule import worker_of
+            c = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            uni = _keyword_universe(c)
+            table = [h for h in range(24) for _ in range(2 if 8 <= h <= 22 else 1)]
+            new = {k: table[zlib.crc32((k or "").encode("utf-8")) % 39] for k in uni}
+            old = {k: _slot_of(k, bool(p)) for k, p in uni.items()}
+            cn = collections.Counter(new.values()); co = collections.Counter(old.values())
+            print(f"  유니버스 {len(uni)}개")
+            print("  새 시간표(두 대 합): " + " ".join(f"{h}:{cn[h]}" for h in range(24)))
+            print("  옛 시간표(두 대 합): " + " ".join(f"{h}:{co[h]}" for h in range(24)))
+            per_m = collections.Counter((new[k], worker_of(k, 2)) for k in uni)
+            mx = max(per_m.values()) if per_m else 0
+            print(f"  기계 한 대가 한 시간에 받는 최대 몫 {mx}개 (상한 15) · 15 넘는 칸 {sum(1 for v in per_m.values() if v > 15)}개")
+            today = _effective_date()
+            done = {r[0] for r in c.execute("SELECT keyword FROM collected_serp WHERE collected_date=?", (today,))}
+            hour = datetime.datetime.now().hour
+            rem = [k for k in uni if k not in done]
+            ov_new = sum(1 for k in rem if new[k] < hour); ov_old = sum(1 for k in rem if old[k] < hour)
+            print(f"  지금 {hour}시 · 오늘 남은 {len(rem)}개 중 이미 지난 시각에 속한 몫 — 옛 규칙 {ov_old}개 · 새 규칙 {ov_new}개")
+            print(f"  남은 시간 {24 - hour}시간 × 시간당 최대 30(두 대) = {(24 - hour) * 30}개 처리 가능")
+            PY
       - name: 3탭 라이브 확인 (live_check=on · 읽기 전용)
         if: ${{ github.event.inputs.live_check == 'on' }}
         uses: appleboy/ssh-action@v1.0.3
