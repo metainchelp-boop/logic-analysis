@@ -196,6 +196,13 @@ jobs:
                 print(f"  #{r['id']} 만든 {r['created_at'][5:16]} 고친 {(r['updated_at'] or '')[5:16]} user={r['user_id']} nvMid={'있음 '+str(len(nv))+'자리' if nv else '없음'}"
                       f" 상품번호={'있음' if pid else '없음'} 내림={'예' if (r['disabled_at'] if 'disabled_at' in cols else '') else '아니오'} 키워드 {kw}개"
                       f" 주소모양={shape(r['product_url'])} 같은상품번호 행 {dup}(같은직원 {same_user_dup}) 연결 {links or '없음'} | " + " / ".join(ana))
+                # 분석한 키워드가 이 상품의 추적 키워드 안에 있나(값 미출력 · 개수만)
+                pk = [x[0] for x in c.execute("SELECT keyword FROM tracked_keywords WHERE product_id=?", (r["id"],))]
+                norm = lambda k: "".join(str(k or "").split()).lower()
+                for cid in links:
+                    aks = [x[0] for x in c.execute("SELECT DISTINCT keyword FROM client_analyses WHERE client_id=? AND created_at >= '2026-09-21'", (cid,))]
+                    ex = sum(1 for k in aks if k in pk); nm = sum(1 for k in aks if norm(k) in {norm(x) for x in pk})
+                    print(f"      c{cid}: 9/21 이후 분석 키워드 {len(aks)}개 중 이 상품 키워드와 글자 그대로 같음 {ex} · 띄어쓰기 무시 같음 {nm} · 상품 키워드 {len(pk)}개")
             PY
       - name: 3탭 라이브 확인 (live_check=on · 읽기 전용)
         if: ${{ github.event.inputs.live_check == 'on' }}
