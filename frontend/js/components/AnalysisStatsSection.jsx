@@ -2,6 +2,7 @@
  *  - 요약 카드: 총 실행 / 이번 달 / 오늘
  *  - 직원별 표: 이름·역할 + 오늘/이번 달/누적 실행 건수
  *  데이터: daily_usage.query_count (분석 실행마다 +1, 모든 역할 카운트)
+ *  2026-09-23 — 스토어·플레이스를 따로 보여 준다(by_analyzer · 직원별 place_*). 옛 서버면 종전 화면.
  */
 var _asRoleLabels = { superadmin: '최고관리자', admin: '관리자', manager: '매니저', viewer: '뷰어' };
 var _asRoleColors = {
@@ -90,6 +91,12 @@ window.AnalysisStatsSection = function AnalysisStatsSection() {
         );
     };
 
+    // 분석기별 — 옛 서버(칸 없음)면 hasSplit=false 로 종전 화면 그대로.
+    var hasSplit = !!(data && Object.prototype.hasOwnProperty.call(data, 'by_analyzer'));
+    var place = (hasSplit && data.by_analyzer && data.by_analyzer.place) || null;
+    var showPlaceCols = !!place;   // 조회 실패면 직원별 플레이스 칸을 그리지 않는다(0으로 채우지 않게)
+    var colN = showPlaceCols ? 8 : 5;
+
     return React.createElement('div', { style: { background: '#fff', borderRadius: 16, padding: '22px 24px', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', marginBottom: 20 } },
         React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 } },
             React.createElement('div', null,
@@ -106,11 +113,30 @@ window.AnalysisStatsSection = function AnalysisStatsSection() {
         (!data && !loading) && React.createElement('div', { style: { padding: 24, textAlign: 'center', color: '#94a3b8', fontSize: 13 } }, '데이터를 불러오지 못했습니다.'),
 
         data && React.createElement(React.Fragment, null,
+            // ── 분석기별(2026-09-23 대표 지시 「분석기도 따로 사용량을」) ──
+            //    by_analyzer 가 **없으면**(옛 서버) 종전 화면 그대로. **null 이면** 조회 실패 — 「0회」로 그리지 않는다.
+            hasSplit && React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', marginBottom: 8 } },
+                React.createElement('span', { style: { fontSize: 13.5, fontWeight: 800, color: '#0f172a' } }, '🛒 스토어 분석'),
+                React.createElement('span', { style: { fontSize: 11.5, color: '#94a3b8' } }, '분석 버튼 한 번 = 1회 · 종전 숫자 그대로')),
             // 요약 카드
             React.createElement('div', { style: { display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 20 } },
                 card('총 누적 실행', data.total, '#6d28d9', '#f5f3ff'),
                 card('이번 달', data.this_month, '#2563eb', '#eff6ff'),
                 card('오늘', data.today, '#16a34a', '#f0fdf4')
+            ),
+            hasSplit && React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', marginBottom: 8 } },
+                React.createElement('span', { style: { fontSize: 13.5, fontWeight: 800, color: '#0f172a' } }, '📍 플레이스 분석'),
+                React.createElement('span', { style: { fontSize: 11.5, color: '#94a3b8' } },
+                    place
+                        ? ('서버가 분석을 한 번 돌리면 1회(「다시 계산」 포함) · '
+                           + (place.since ? (Number(place.since.slice(5, 7)) + '/' + Number(place.since.slice(8, 10)) + '부터 셈 — 그 전 기록은 없습니다')
+                                          : '아직 기록 없음 — 배포한 날부터 셉니다')
+                           + (place.viewer_daily_limit ? ' · 영업사원 하루 ' + place.viewer_daily_limit + '회(스토어와 따로)' : ''))
+                        : '사용량을 불러오지 못했습니다 — 「0회」가 아니라 이번에 확인을 못 한 것입니다.')),
+            hasSplit && place && React.createElement('div', { style: { display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 20 } },
+                card('누적 실행', place.total, '#0e7490', '#ecfeff'),
+                card('이번 달', place.this_month, '#0e7490', '#ecfeff'),
+                card(place.fails_today ? '오늘 · 그중 실패 ' + fmt(place.fails_today) : '오늘', place.today, '#0e7490', '#ecfeff')
             ),
             // 직원별 표
             React.createElement('div', { style: { fontSize: 13, fontWeight: 700, color: '#334155', marginBottom: 4 } }, '직원별 실행 건수'),
@@ -118,9 +144,14 @@ window.AnalysisStatsSection = function AnalysisStatsSection() {
             React.createElement('div', { style: { overflowX: 'auto' } },
                 React.createElement('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: 13 } },
                     React.createElement('thead', null,
-                        React.createElement('tr', null,
-                            th('직원'), th('권한'), th('오늘', 'right'), th('이번 달', 'right'), th('누적', 'right')
-                        )
+                        showPlaceCols
+                            ? React.createElement('tr', null,
+                                th('직원'), th('권한'),
+                                th('🛒 오늘', 'right'), th('🛒 이번 달', 'right'), th('🛒 누적', 'right'),
+                                th('📍 오늘', 'right'), th('📍 이번 달', 'right'), th('📍 누적', 'right'))
+                            : React.createElement('tr', null,
+                                th('직원'), th('권한'), th('오늘', 'right'), th('이번 달', 'right'), th('누적', 'right')
+                            )
                     ),
                     React.createElement('tbody', null,
                         (data.per_user || []).map(function(u) {
@@ -140,12 +171,15 @@ window.AnalysisStatsSection = function AnalysisStatsSection() {
                                     ),
                                     numCell(u.today),
                                     numCell(u.month),
-                                    numCell(u.total, true)
+                                    numCell(u.total, true),
+                                    showPlaceCols && numCell(u.place_today || 0),
+                                    showPlaceCols && numCell(u.place_month || 0),
+                                    showPlaceCols && numCell(u.place_total || 0, true)
                                 )
                             ];
                             if (isOpen) {
                                 rows.push(React.createElement('tr', { key: u.user_id + '_logs' },
-                                    React.createElement('td', { colSpan: 5, style: { padding: '4px 10px 12px 24px', borderBottom: '1px solid #f1f5f9', background: '#f8fafc' } },
+                                    React.createElement('td', { colSpan: colN, style: { padding: '4px 10px 12px 24px', borderBottom: '1px solid #f1f5f9', background: '#f8fafc' } },
                                         renderLogs(u.user_id)
                                     )
                                 ));
@@ -153,7 +187,7 @@ window.AnalysisStatsSection = function AnalysisStatsSection() {
                             return React.createElement(React.Fragment, { key: 'f_' + u.user_id }, rows);
                         }),
                         (!data.per_user || data.per_user.length === 0) && React.createElement('tr', null,
-                            React.createElement('td', { colSpan: 5, style: { padding: 18, textAlign: 'center', color: '#94a3b8' } }, '실행 기록이 없습니다.')
+                            React.createElement('td', { colSpan: colN, style: { padding: 18, textAlign: 'center', color: '#94a3b8' } }, '실행 기록이 없습니다.')
                         )
                     )
                 )

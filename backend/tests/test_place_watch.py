@@ -319,6 +319,35 @@ ok("⑲ 스케줄 로그가 업체명·키워드를 안 찍는다",
 ok("⑲ 도착 기록이 업체명·키워드를 안 받는다",
    "def note_ingest(items: int, saved: int, skipped: int" in pw_src)
 
+
+# ⑳ 배너를 띄울지 — 대표 확정(missed 빨강 · 3일째 주황 · 하루 빠짐은 안 띄움)
+path, pw = _fresh_db()
+ok("⑳ 못 잼 → missed", pw.alert_of({"state": "missed", "stale": 0}) == "missed")
+ok("⑳ 일부 빠짐 + 3일째 곳 → stale", pw.alert_of({"state": "partial", "stale": 1}) == "stale")
+ok("⑳ 일부 빠짐(하루) → 배너 없음", pw.alert_of({"state": "partial", "stale": 0}) is None)
+ok("⑳ 판정 전·다 잼·없음·못 잼 조회 실패 → 배너 없음",
+   all(pw.alert_of({"state": s_, "stale": 3}) is None for s_ in ("pending", "ok", "none", "unknown")))
+c = _c(path)
+_seed19(c)
+c.commit()
+ok("⑳ summary 가 alert 를 싣는다", pw.summary(conn=c, now=NOW).get("alert") == "missed")
+
+# ㉑ 화면 배선 — 대표에게만 · 판정은 서버를 따른다 · 옛 서버 무회귀
+shell = _read("frontend", "js", "components", "AppShellBar.jsx")
+ok("㉑ 배너는 최고관리자에게만", "var isOwner = currentUser.role === 'superadmin';" in shell
+   and "var _placeOn = !!(isOwner && placeAlert && !placeDismissed);" in shell)
+ok("㉑ 띄울지는 서버 alert 를 따른다(화면이 다시 판정하지 않는다)", "setPlaceAlert(pl && pl.alert ? pl : null);" in shell)
+ok("㉑ 두 경보가 겹치면 두 줄로 본문을 내린다", "_AS_TOP + _bannerN * _AS_BANNER" in shell)
+ok("㉑ 닫기는 로컬 날짜 · 쇼핑과 다른 열쇠", "'logic_place_alert_off'" in shell and "getFullYear()" in shell)
+track = _read("frontend", "js", "components", "PlaceTrackingPage.jsx")
+ok("㉑ 지도 순위 추적 화면이 상태를 읽는다", "api.get('/place/watch')" in track and "renderWatchStrip()" in track)
+ok("㉑ 조회 실패를 0곳으로 안 그린다", "추적 상태를 불러오지 못했습니다" in track and "setWatch(null)" in track)
+ok("㉑ 3일째 칩은 서버가 준 대상 번호로", "staleIds[t.id]" in track)
+_api = main_src[main_src.index('@app.get("/api/place/watch")'):]
+_api = _api[:_api.index("\n\n\n")]
+ok("㉑ /api/place/watch 는 로그인 필요", "Depends(get_current_user)" in _api)
+ok("㉑ /api/place/watch 는 조회 실패를 None 으로", '"data": None' in _api)
+
 for p in _paths:
     try:
         os.unlink(p)

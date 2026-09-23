@@ -151,7 +151,8 @@ ok("⑧ 기록 실패가 분석을 깨지 않는다(안쪽 try)", place_part.cou
 cd_src = _read("backend", "client_dashboard.py")
 chk = _fn(cd_src, '@router.get("/usage/check")')
 inc = _fn(cd_src, '@router.post("/usage/increment")')
-ok("⑨ 한도 판정은 daily_usage 만 본다", "daily_usage" in chk and "analyzer_usage" not in chk)
+_chk_store = chk[chk.index("    conn = _get_conn()"):]   # 인자 없는 스토어 경로(플레이스 가지 뒤)
+ok("⑨ 스토어 한도 판정은 daily_usage 만 본다", "daily_usage" in _chk_store and "analyzer_usage" not in _chk_store)
 ok("⑨ 증가 경로도 daily_usage 만 쓴다", "INSERT INTO daily_usage" in inc and "analyzer_usage" not in inc)
 ok("⑨ 영업사원 한도 상수는 30 그대로", "VIEWER_DAILY_LIMIT = 30" in cd_src)
 app_src = _read("frontend", "js", "components", "App.jsx")
@@ -170,6 +171,73 @@ ok("⑩ 조회 실패면 직원별 플레이스 칸 3개 모두 None(0 아님)",
 today_fn = _fn(cd_src, '@router.get("/today-stats")')
 ok("⑩ 당일 요약에 플레이스 횟수 가산", '"place_analysis_count": place_count' in today_fn)
 ok("⑩ 당일 요약의 기존 분석 횟수는 그대로", '"analysis_count": analysis_count' in today_fn)
+
+
+# ⑪ 플레이스 하루 한도(대표 확정 2026-09-23 — 쇼핑과 같은 수준 · 따로 센다)
+path, au, c = _fresh()
+ok("⑪ 한도 상수 30(스토어와 같은 수준)", au.PLACE_VIEWER_DAILY_LIMIT == 30)
+ok("⑪ 무제한 역할 목록이 스토어와 같다", au.UNLIMITED_ROLES == ("admin", "superadmin", "manager")
+   and "role in ('admin', 'superadmin', 'manager')" in _read("backend", "client_dashboard.py"))
+ok("⑪ 영업사원 30 · 관리자/매니저/최고관리자 무제한",
+   au.limit_for("viewer", "place") == 30 and au.limit_for("manager", "place") == -1
+   and au.limit_for("admin", "place") == -1 and au.limit_for("superadmin", "place") == -1)
+ok("⑪ 역할이 비어도 한도는 걸린다(스토어와 같다)", au.limit_for(None, "place") == 30)
+ok("⑪ 스토어는 이 모듈이 한도를 걸지 않는다", au.limit_for("viewer", "store") == -1)
+for _ in range(29):
+    au.record(9, "place", ok=True, conn=c, today=T)
+c.commit()
+chk = au.usage_check(9, "viewer", "place", conn=c, today=T)
+ok("⑪ 29회면 아직 된다", chk["used"] == 29 and chk["remaining"] == 1 and chk["can_query"] is True)
+au.record(9, "place", ok=True, conn=c, today=T); c.commit()
+chk = au.usage_check(9, "viewer", "place", conn=c, today=T)
+ok("⑪ 30회면 막힌다", chk["used"] == 30 and chk["remaining"] == 0 and chk["can_query"] is False)
+for _ in range(5):
+    au.record(10, "place", ok=False, conn=c, today=T)
+au.record(10, "place", ok=True, conn=c, today=T); c.commit()
+chk = au.usage_check(10, "viewer", "place", conn=c, today=T)
+ok("⑪ 한도는 결과를 낸 횟수로 센다(서버 실패 5회는 빼고 1)", chk["used"] == 1 and chk["can_query"] is True)
+chk = au.usage_check(9, "manager", "place", conn=c, today=T)
+ok("⑪ 매니저는 30회를 넘어도 된다", chk["can_query"] is True and chk["limit"] == -1 and chk["remaining"] == -1)
+ok("⑪ 어제 쓴 것은 오늘 한도에 안 들어간다",
+   au.usage_check(9, "viewer", "place", conn=c, today="2026-09-24")["used"] == 0)
+ok("⑪ 막힘 문구는 서버 숫자를 쓴다", au.limit_message({"limit": 30}) == "플레이스 분석 일일 제한(30회)을 초과했습니다. 내일 자정에 초기화됩니다.")
+ok("⑪ 설정 통계가 한도를 싣는다", au.stats(c, today=T)["by_analyzer"]["place"]["viewer_daily_limit"] == 30)
+os.environ["DB_PATH"] = os.path.dirname(path)
+sys.modules.pop("analyzer_usage", None)
+import analyzer_usage as au_bad2  # noqa: E402
+bad = au_bad2.usage_check(9, "viewer", "place", today=T)
+ok("⑪ 조회가 실패하면 막지 않는다(스토어와 같은 방향) · 실패 표시", bad["can_query"] is True and bad.get("error") is True)
+
+# ⑫ 배선 — 서버가 막는다 · 막힌 시도는 세지 않는다 · 예외가 아니라 응답으로
+main_src = _read("backend", "main.py")
+seo = _fn(main_src, '@app.post("/api/seo/analyze")')
+place_part = seo[seo.index('== "place":'):seo.index("# 캐시된 데이터가 있으면")]
+i_chk, i_run = place_part.index("_au_check("), place_part.index("_place_seo_analyze(req, current_user)")
+ok("⑫ 한도 확인이 분석보다 먼저다", i_chk < i_run)
+ok("⑫ 막히면 429 응답을 직접 돌려준다(바깥 except 가 500 으로 바꾸지 않게)",
+   "return JSONResponse(status_code=429" in place_part[i_chk:i_run] and "raise HTTPException(status_code=429" not in seo)
+ok("⑫ 막힌 시도는 세지 않는다(기록 try 보다 앞에서 돌아간다)",
+   place_part.index("return JSONResponse(status_code=429") < place_part.index("_pl_ok = False"))
+ok("⑫ 막는 조건식 자체를 못박는다(문구만 남기고 조건을 꺼도 잡히게)",
+   'if not _pl_chk.get("can_query", True):' in place_part[i_chk:i_run])
+ok("⑫ 역할을 넘긴다", '(current_user or {}).get("role")' in place_part[i_chk - 200:i_chk + 200])
+ok("⑫ 화면이 막힘 문구를 그대로 띄운다(detail)", '"detail": _au_msg(_pl_chk)' in place_part)
+place_page = _read("frontend", "js", "components", "PlaceAnalysisPage.jsx")
+ok("⑫ 플레이스 화면이 실패 응답의 detail 을 토스트로 띄운다", "toast.error((res && res.detail)" in place_page)
+utils = _read("frontend", "js", "utils.js")
+ok("⑫ 429 는 공용 오류 토스트가 덮지 않는다(401·403·500대만)", "status === 429" not in utils and "status >= 500" in utils)
+chk_fn = _fn(cd_src, '@router.get("/usage/check")')
+ok("⑫ /cd/usage/check 는 인자 없으면 종전 스토어 경로", 'if (analyzer or "").strip() == "place":' in chk_fn
+   and "SELECT query_count FROM daily_usage" in chk_fn)
+ok("⑫ /cd/usage/check?analyzer=place 는 같은 모양", "_au_check(current_user.get(\"id\", 0), current_user.get(\"role\"), \"place\")" in chk_fn)
+
+# ⑬ 화면 — 설정 통계 · 대시보드 카드(옛 서버 무회귀)
+stats_jsx = _read("frontend", "js", "components", "AnalysisStatsSection.jsx")
+ok("⑬ 옛 서버(칸 없음)면 종전 화면", "hasOwnProperty.call(data, 'by_analyzer')" in stats_jsx)
+ok("⑬ 조회 실패면 「0회」로 안 그린다", "사용량을 불러오지 못했습니다" in stats_jsx and "var showPlaceCols = !!place;" in stats_jsx)
+dash = _read("frontend", "js", "components", "DashboardSummary.jsx")
+ok("⑬ 대시보드 — 숫자가 올 때만 플레이스 문구", "typeof res.data.place_analysis_count === 'number'" in dash
+   and "placeCount == null ? '수동 분석 횟수'" in dash)
 
 for p in _paths:
     try:

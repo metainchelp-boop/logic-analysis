@@ -309,6 +309,22 @@ def _message(ev: dict) -> str:
     return ""
 
 
+def alert_of(ev: dict) -> Optional[str]:
+    """전 화면 배너를 띄울지 — **대표 확정(2026-09-23)** 을 서버 한 곳에 둔다.
+
+      missed                  → "missed"(빨강) — 오늘 한 곳도 못 쟀다
+      partial 이고 3일째 곳 있음 → "stale"(주황) — 하루 빠짐은 흔해서 배너를 안 띄운다
+      그 밖                   → None
+    ⚠️ 누구에게 보일지(대표만)는 화면이 정한다 — 이 값은 「띄울 만한 상태인가」만 말한다.
+    """
+    st = (ev or {}).get("state")
+    if st == STATE_MISSED:
+        return "missed"
+    if st == STATE_PARTIAL and (ev.get("stale") or 0) > 0:
+        return "stale"
+    return None
+
+
 def decide_notice(prev, ev: dict) -> Optional[str]:
     """이번 판정이 **새로** 알릴 것. 없으면 None.
 
@@ -398,6 +414,7 @@ def summary(conn=None, now: Optional[datetime] = None) -> dict:
         if ev.get("state") == STATE_UNKNOWN:
             return {}
         ev["message"] = _message(ev)
+        ev["alert"] = alert_of(ev)
         ev["days"] = history(conn, now=now)
         r = _last_row(conn)
         ev["last_check"] = r["checked_at"] if r else None

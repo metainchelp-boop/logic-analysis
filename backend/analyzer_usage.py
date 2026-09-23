@@ -29,6 +29,15 @@ DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
 # 이 표가 세는 분석기. 스토어는 여기서 세지 않는다(위 설명 — daily_usage 가 센다).
 ANALYZERS = ("place",)
 
+# 플레이스 분석 하루 한도(대표 확정 2026-09-23 — 「플레이스 분석도 한도는 정하자. 쇼핑 쪽에 맞춰서」).
+# ⚠️ 스토어 한도(`client_dashboard.VIEWER_DAILY_LIMIT` = 30)와 **같은 수준**이되 **따로 센다** —
+#    스토어 30회를 다 쓴 영업사원도 플레이스는 30회 돌릴 수 있고, 그 반대도 같다.
+# ⚠️ 스토어와 다른 점 하나 — 스토어는 화면이 한도를 확인하고(서버는 막지 않는다), 플레이스는
+#    **서버가 막는다**(`main.seo_analyze` 플레이스 분기). 화면을 우회해도 한도가 지켜진다.
+PLACE_VIEWER_DAILY_LIMIT = 30
+# 한도가 없는 역할 — 스토어 `check_usage` 와 같은 목록(관리자·매니저는 무제한).
+UNLIMITED_ROLES = ("admin", "superadmin", "manager")
+
 
 def _conn() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, timeout=10)
@@ -89,6 +98,57 @@ def record(user_id, analyzer: str, ok: bool = True, conn=None,
                 pass
 
 
+def limit_for(role, analyzer: str) -> int:
+    """그 역할의 하루 한도. -1 = 무제한. 모르는 분석기는 한도 없음(이 모듈이 세지 않는 것)."""
+    if analyzer != "place":
+        return -1
+    return -1 if (role or "") in UNLIMITED_ROLES else PLACE_VIEWER_DAILY_LIMIT
+
+
+def usage_check(user_id, role, analyzer: str = "place", conn=None,
+                today: Optional[str] = None) -> dict:
+    """오늘 몇 번 썼고 더 돌릴 수 있는가 — 스토어 `/cd/usage/check` 와 **같은 모양**.
+
+    ⚠️ 한도는 **결과를 낸 횟수(runs − fails)** 로 센다 — 서버 오류로 실패한 것까지 세면
+       직원이 우리 고장 때문에 하루 몫을 잃는다.
+    ⚠️ 조회가 실패하면 **막지 않는다**(can_query=True · error=True) — 스토어 `check_usage` 와
+       같은 방향이다. 세는 장치가 아파서 분석이 막히는 쪽이 더 나쁜 고장이다.
+    """
+    limit = limit_for(role, analyzer)
+    t = today or date.today().isoformat()
+    try:
+        uid = int(user_id or 0)
+    except (TypeError, ValueError):
+        uid = 0
+    own = conn is None
+    try:
+        if own:
+            conn = _conn()
+        ensure_table(conn)
+        r = conn.execute(
+            "SELECT COALESCE(SUM(runs - fails), 0) n FROM analyzer_usage "
+            " WHERE usage_date=? AND user_id=? AND analyzer=?", (t, uid, analyzer)).fetchone()
+        used = int((r[0] if r else 0) or 0)
+        return {"used": used, "limit": limit,
+                "remaining": (limit - used) if limit > 0 else -1,
+                "can_query": limit < 0 or used < limit}
+    except Exception:
+        return {"used": 0, "limit": limit, "remaining": -1, "can_query": True, "error": True}
+    finally:
+        if own and conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def limit_message(chk: dict) -> str:
+    """한도를 넘었을 때 화면에 그대로 뜨는 문장 — 숫자는 서버 값을 쓴다(스토어 화면과 같은 원칙)."""
+    lim = (chk or {}).get("limit")
+    return ("플레이스 분석 일일 제한" + (f"({lim}회)" if isinstance(lim, int) and lim > 0 else "")
+            + "을 초과했습니다. 내일 자정에 초기화됩니다.")
+
+
 def _has_table(conn, name: str) -> bool:
     try:
         return bool(conn.execute(
@@ -130,7 +190,8 @@ def stats(conn=None, today: Optional[str] = None) -> dict:
             "       MIN(usage_date) since "
             "  FROM analyzer_usage WHERE analyzer='place'", (m, t, m, t)).fetchone()
         place = {"total": r["total"], "this_month": r["month"], "today": r["day"],
-                 "fails_month": r["fmonth"], "fails_today": r["fday"], "since": r["since"]}
+                 "fails_month": r["fmonth"], "fails_today": r["fday"], "since": r["since"],
+                 "viewer_daily_limit": PLACE_VIEWER_DAILY_LIMIT}
         per_user = {}
         for u in conn.execute(
                 "SELECT user_id, "
