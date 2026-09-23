@@ -18,11 +18,17 @@
 
 // ⭐ 순위 규칙은 rank_rules.js 한 곳에만 있다(신고 #253 후속, 2026-09-02) —
 //    chrome 의존이 없어 node 회귀 테스트가 같은 파일을 검사한다.
-importScripts('rank_rules.js');
+importScripts('rank_rules.js', 'remote_settings.js', 'diagnostic_export.js');
 // ⚠️ rank_rules.js 는 전역에 RankRules 객체 하나만 내놓는다(IIFE) — 개별 함수 이름을
 //    여기서 다시 선언하거나 전역으로 받지 말 것. 'already been declared' 워커 등록
 //    사망이 2026-09-02 맥미니 적용에서 실제로 두 번 났다. 호출은 RR.takeOrganic 식으로.
 const RR = globalThis.RankRules;
+// ⚙ v1.27.0 — 서버가 주는 설정값(대표 확정 2026-09-23 「서버 배포만으로」). 규칙·기본값·안전선은 remote_settings.js 한 곳.
+const RS = globalThis.RemoteSettings;
+// 지금 쓰는 값 — 처음엔 기본값(= v1.26.0 과 같다). 서버 값을 받으면 applyRuntime() 이 갈아끼운다.
+// ⚠️ 함수 안에서는 `(typeof RT === 'object' && RT ? RT.x : 상수)` 로 읽는다 — node 시험이 함수만 떼어 돌릴 때도
+//    기본값(상수)으로 동작하게 하려는 것이다(상수는 기본값 문서 겸 폴백으로 남긴다).
+let RT = RS.merge({}).values;
 
 const CFG = {
   serverBase: 'https://logic.metainc.co.kr',
@@ -133,8 +139,7 @@ async function sleep(ms) {
 /** 팝업에서 지정한 기계 번호를 URL 파라미터로 만든다(1대면 빈 문자열 = 종전 요청 그대로). */
 async function workerParams() {
   try {
-    const { workerNo = CFG.workerNo, workerCount = CFG.workerCount } =
-      await chrome.storage.local.get(['workerNo', 'workerCount']);
+    const { workerNo = CFG.workerNo, workerCount = CFG.workerCount } = await effectiveWorker();
     const wc = Math.max(1, parseInt(workerCount, 10) || 1);
     if (wc <= 1) return '';
     const no = Math.min(wc, Math.max(1, parseInt(workerNo, 10) || 1));
@@ -212,7 +217,156 @@ async function log(line) {
   } else {
     logs.unshift(`${stamp} ${line}`);
   }
-  await chrome.storage.local.set({ logs: logs.slice(0, LOG_KEEP) });
+  await chrome.storage.local.set({ logs: logs.slice(0, (typeof RT === 'object' && RT ? RT.logKeep : LOG_KEEP)) });
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * ⚙ v1.27.0 — 서버 설정 받기 (대표 확정 2026-09-23 「서버 배포만으로」 · 시안 v1 「추천대로 확정」)
+ *
+ * 서버가 5분마다(살아있음 신호 응답) · 매시(작업 목록 응답) `settings` 를 싣는다.
+ *   { rev, hash, values, assign?, commands? }
+ * ① values → RemoteSettings.merge 로 **안전선 안에서만** 받아 RT 에 적용 · 저장(워커가 잠들었다 깨도 유지).
+ * ② assign → 서버가 정한 기계 번호(없으면 팝업 값 그대로).
+ * ③ commands → 한 번만 실행(id 로 기억 · 만료된 것·모르는 것은 무시). ⚠️ 캡차 쉼을 푸는 명령은 없다(대표 확정 ④).
+ * ⚠️ 무엇이 잘못돼도 예외를 밖으로 내지 않는다 — 설정 문제로 수집이 죽으면 본말전도다.
+ * ⚠️ 서버 설정을 못 받으면 마지막 값, 그것도 없으면 기본값(= v1.26.0 과 같다)으로 돈다.
+ * ─────────────────────────────────────────────────────────────────────── */
+const RT_KEY = 'remoteSettings';        // { rev, hash, values(서버 원문), note, at, via }
+const ASSIGN_KEY = 'serverAssign';      // { no, count } — 서버가 정한 기계 번호
+const CMD_DONE_KEY = 'commandsDone';    // [id, …] 최근 50개
+let _rtLoaded = false;
+
+/** RT 를 CFG 에도 옮긴다 — 종전 코드가 CFG.x 로 읽는 칸들. */
+function applyRuntime(v) {
+  RT = v;
+  CFG.pagesPerKeyword = v.pagesPerKeyword;
+  CFG.maxPages = v.pagesPerKeyword;
+  CFG.maxRank = Math.round(v.pagesPerKeyword * 37.5);   // 8장 → 300위(40개 × 8 − 광고) — 기본값 그대로
+  CFG.readTries = v.readTries;
+  CFG.readTriesPaged = v.readTriesPaged;
+  CFG.readGapMs = v.readGapMs;
+  CFG.minGapMs = v.pageGapMinMs;
+  CFG.maxGapMs = v.pageGapMaxMs;
+  CFG.onDemandGapMs = v.onDemandGapMs;
+  CFG.onDemandHourCap = v.onDemandHourCap;
+  CFG.hourBudgetMs = v.hourBudgetMs;
+  CFG.maxConsecutiveFail = v.maxConsecutiveFail;
+}
+
+/** 워커가 깨어날 때 저장해 둔 서버 설정을 다시 건다(한 번만). */
+async function loadRemote() {
+  if (_rtLoaded) return;
+  _rtLoaded = true;
+  try {
+    const o = await chrome.storage.local.get(RT_KEY);
+    const r = o[RT_KEY];
+    if (r && r.values) applyRuntime(RS.merge(r.values).values);
+  } catch (e) { /* 기본값으로 돈다 */ }
+}
+
+/** 서버 설정을 받는다. via = '신호' | '작업 목록'. */
+async function receiveSettings(st, via) {
+  try {
+    if (!st || typeof st !== 'object' || !st.values || typeof st.values !== 'object') return;
+    await loadRemote();
+    const m = RS.merge(st.values);
+    applyRuntime(m.values);
+    const note = [m.clamped.length ? '안전선으로 당김: ' + m.clamped.join('/') : '',
+                  m.rejected.length ? '버림: ' + m.rejected.map((k) => String(k).replace(/[^A-Za-z0-9_]/g, '').slice(0, 30)).join('/') : '']
+                  .filter(Boolean).join(' · ').slice(0, 180);   // ⚠️ 팝업이 그대로 그리므로 칸 이름만(글자 걸러서)
+    const prev = (await chrome.storage.local.get(RT_KEY))[RT_KEY] || {};
+    await chrome.storage.local.set({ [RT_KEY]: { rev: Number(st.rev) || 0, hash: String(st.hash || '').slice(0, 16),
+                                                 values: st.values, note, at: Date.now(), via } });
+    if (prev.hash !== st.hash) {
+      await log(`⚙ 서버 설정 ${st.rev}번 적용 (${via})` + (note ? ' — ' + note : ''));
+      if (m.values.machinePaused) await log('⏸ 서버가 이 기계를 멈춰 두었습니다 — 서버에서 풀면 다음 회차부터 다시 돕니다.');
+    }
+    // ② 서버 배정 — 형식이 맞을 때만. 없으면 지운다(= 팝업 값으로 돌아간다).
+    const a = st.assign;
+    if (a && Number.isInteger(a.no) && Number.isInteger(a.count) && a.count >= 1 && a.count <= 5 && a.no >= 1 && a.no <= a.count) {
+      const pa = (await chrome.storage.local.get(ASSIGN_KEY))[ASSIGN_KEY] || {};
+      if (pa.no !== a.no || pa.count !== a.count) {
+        await chrome.storage.local.set({ [ASSIGN_KEY]: { no: a.no, count: a.count } });
+        await log(`🧮 서버가 이 기계를 ${a.no}번 / 전체 ${a.count}대로 정했습니다.`);
+      }
+    } else {
+      await chrome.storage.local.remove(ASSIGN_KEY);
+    }
+    // 신호 주기가 바뀌었으면 알람을 다시 건다(다른 알람은 건드리지 않는다).
+    try {
+      const h = await chrome.alarms.get(HEARTBEAT_ALARM);
+      if (h && h.periodInMinutes !== m.values.heartbeatMin) {
+        chrome.alarms.create(HEARTBEAT_ALARM, { periodInMinutes: m.values.heartbeatMin, when: Date.now() + 60000 });
+      }
+    } catch (e) { /* 무시 */ }
+    // ③ 한 번짜리 명령
+    if (Array.isArray(st.commands) && st.commands.length) await runCommands(st.commands);
+  } catch (e) { /* 설정 문제로 수집을 멈추지 않는다 */ }
+}
+
+/** 이 기계의 번호 — 서버 배정이 있으면 그것, 없으면 팝업 값. */
+async function effectiveWorker() {
+  const o = await chrome.storage.local.get(['workerNo', 'workerCount', ASSIGN_KEY]);
+  const a = o[ASSIGN_KEY];
+  if (a && a.no && a.count) return { workerNo: a.no, workerCount: a.count, assigned: true };
+  return { workerNo: o.workerNo === undefined ? CFG.workerNo : o.workerNo,
+           workerCount: o.workerCount === undefined ? CFG.workerCount : o.workerCount, assigned: false };
+}
+
+/** 서버가 이 기계를 멈춰 뒀나(팝업 일시정지·화면 전체 끄기와 별개). */
+function serverPaused() {
+  return !!(typeof RT === 'object' && RT && RT.machinePaused);
+}
+
+/** 한 번짜리 명령 실행 — 이미 한 것·만료된 것·모르는 것은 RemoteSettings.pendingCommands 가 걸러 준다. */
+async function runCommands(list) {
+  const done = (await chrome.storage.local.get(CMD_DONE_KEY))[CMD_DONE_KEY] || [];
+  const todo = RS.pendingCommands(list, done, Date.now());
+  for (const c of todo) {
+    // 실행 전에 먼저 기억한다 — 실행 중에 워커가 죽어도 같은 명령을 두 번 하지 않게.
+    done.unshift(c.id);
+    await chrome.storage.local.set({ [CMD_DONE_KEY]: done.slice(0, 50) });
+    try {
+      if (c.kind === 'rearmAlarms') { armAlarms(); await log('⚙ 서버 명령 — 알람 다시 걸기'); }
+      else if (c.kind === 'flushOutbox') {
+        const r = await flushOutbox(await getToken(), '서버 명령', true);
+        await log(`⚙ 서버 명령 — 보관함 다시 보내기 (보냄 ${r.sent || 0} · 남음 ${r.left || 0})`);
+      }
+      else if (c.kind === 'uploadLogs') {
+        const { logs = [] } = await chrome.storage.local.get('logs');
+        const ok = await uploadReport('logs', logs.join('\n'));
+        await log(ok ? '⚙ 서버 명령 — 팝업 로그를 서버에 올렸습니다.' : '⚙ 서버 명령 — 로그 올리기 실패');
+      }
+      else if (c.kind === 'uploadDiag') {
+        let text = '';
+        try { text = JSON.stringify(await globalThis.CollectorDiagnosticExport.collect({ chromeApi: chrome })); }
+        catch (e) { text = JSON.stringify({ error: 'DIAG_BUILD_FAILED' }); }
+        const ok = await uploadReport('diag', text);
+        await log(ok ? '⚙ 서버 명령 — 진단 파일을 서버에 올렸습니다.' : '⚙ 서버 명령 — 진단 파일 올리기 실패');
+      }
+      else if (c.kind === 'runNow') {
+        // ⚠️ 캡차 쉼·일시정지·서버 멈춤은 그대로 지킨다(수동 실행과 다르다 — 쉼을 풀지 않는다).
+        await log('⚙ 서버 명령 — 지금 한 번 수집(쉼·일시정지는 그대로 지킴)');
+        runCollection(false);
+      }
+    } catch (e) {
+      await log(`⚙ 서버 명령 실패(${c.kind}) — ${String((e && e.message) || e).slice(0, 60)}`);
+    }
+  }
+}
+
+/** 로그·진단을 서버에 올린다(서버 명령으로만). 실패해도 예외를 내지 않는다. */
+async function uploadReport(kind, text) {
+  try {
+    const token = await getToken();
+    if (!token) return false;
+    const res = await fetch(`${CFG.serverBase}/api/collector/report`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Collector-Token': token },
+      body: JSON.stringify({ instanceId: await instanceId(), kind, text: String(text || '').slice(0, 250000) }),
+    });
+    return !!res.ok;
+  } catch (e) { return false; }
 }
 
 /* ── 수집 경로 = 검색 페이지 이동 (2026-08-06 플랜 B) ──
@@ -265,15 +419,15 @@ async function getBlockedUntil() {
 }
 
 async function markBlocked(reason) {
-  const until = Date.now() + BLOCK_COOLDOWN_MS;
+  const until = Date.now() + (typeof RT === 'object' && RT ? RT.blockCooldownMs : BLOCK_COOLDOWN_MS);   // ⚙ 안전선 1시간 밑 불가
   await chrome.storage.local.set({ [BLOCK_KEY]: until });
   await setState({ blocked: true, blockedUntil: until, blockedReason: reason });
   // ⭐ 복귀할 때 같은 속도로 돌아가면 또 막힌다 — 하루 동안 절반 속도로 간다(2026-08-28).
   //    사람이 아무것도 안 해도 스스로 안전한 속도를 찾아간다. 하루 지나면 자동 원복.
-  const _slowUntil = Date.now() + SLOW_WINDOW_MS;
+  const _slowUntil = Date.now() + (typeof RT === 'object' && RT ? RT.slowWindowMs : SLOW_WINDOW_MS);
   await chrome.storage.local.set({ [SLOW_KEY]: _slowUntil });
   await setState({ slowUntil: _slowUntil });      // 팝업이 「안전 속도」 표시를 읽는다
-  await log(`🧱 네이버 캡차·보안 확인 페이지 확인 — ${reason}. 6시간 쉬었다 재개합니다.`);
+  await log(`🧱 네이버 캡차·보안 확인 페이지 확인 — ${reason}. ${Math.round((until - Date.now()) / 3600000)}시간 쉬었다 재개합니다.`);
   await log('   재개 뒤 하루 동안은 절반 속도로 돌립니다(또 막히지 않도록).');
   await log('   해제하려면: 크롬에서 네이버쇼핑을 직접 열어 캡차를 한 번 풀어주세요.');
   // 쌓인 작업 탭을 닫아 둔다 — 열어둘수록 봇 판정이 깊어지고 화면도 지저분해진다.
@@ -293,7 +447,7 @@ async function isSlow() {
 
 /** 이번에 쓸 키워드 사이 휴식(ms). 느리게 가기 상태면 2배. */
 async function gapFor(base) {
-  return (await isSlow()) ? base * 2 : base;
+  return (await isSlow()) ? base * (typeof RT === 'object' && RT ? RT.slowFactor : 2) : base;
 }
 
 // ⏸ 이 기계에서 사람이 누른 '일시정지'(v1.20.0). 화면(서버) 스위치와 별개로
@@ -327,11 +481,14 @@ async function spreadGap(msLeftInBudget, keywordsLeft) {
   if (left < 1) left = 1;
   var budget = Number(msLeftInBudget) || 0;
   // 이번이 마지막이면 굳이 오래 쉴 필요 없다(다음이 없다).
-  var avg = left <= 1 ? SPREAD_MIN_MS : budget / left;
-  // 랜덤 0.4~1.8배 — 사람처럼 들쭉날쭉.
-  var g = avg * (0.4 + Math.random() * 1.4);
-  if (g < SPREAD_MIN_MS) g = SPREAD_MIN_MS;
-  return (await isSlow()) ? g * 2 : g;
+  var _rt = (typeof RT === 'object' && RT) ? RT : null;   // ⚙ v1.27.0 — 서버 값(없으면 종전 상수)
+  var minMs = _rt ? _rt.spreadMinMs : SPREAD_MIN_MS;
+  var lo = _rt ? _rt.spreadLo : 0.4, hi = _rt ? _rt.spreadHi : 1.8;
+  var avg = left <= 1 ? minMs : budget / left;
+  // 랜덤 0.4~1.8배(기본) — 사람처럼 들쭉날쭉.
+  var g = avg * (lo + Math.random() * (hi - lo));
+  if (g < minMs) g = minMs;
+  return (await isSlow()) ? g * (_rt ? _rt.slowFactor : 2) : g;
 }
 
 async function clearBlocked() {
@@ -508,7 +665,7 @@ async function ensureWorkTab() {
  *     그래서 __NEXT_DATA__ 전체를 훑어 **'상품처럼 생긴 객체들의 배열'**(productTitle·
  *     mallName 등을 가진) 중 가장 긴 것을 고른다. 구조가 바뀌어도 계속 읽힌다.
  *     플레이스 추적기가 __APOLLO_STATE__ 를 같은 방식으로 판독해 매일 성공 중이다. */
-function pageExtract(want) {
+function pageExtract(want, extraBlock) {
   // v1.13.0 — want = { page, since }: 2페이지부터는 **화면이 받아 온 응답**(net_tap.js 가 복사해 둔 것)을
   //   가장 먼저 읽는다. 라우터 props·__NEXT_DATA__ 가 1페이지 그대로여도, 화면이 2페이지 데이터를
   //   받았다면 그 응답은 __mcTap.items 에 있다. 인자 없이 부르면(회귀 시험·1페이지) 종전과 같다.
@@ -613,6 +770,13 @@ function pageExtract(want) {
   //    문구가 종전 차단문과 달라 「판독 실패 · 다음 회차 재시도」로 넘어가 매 정시마다 퍼즐 페이지를
   //    두드릴 뻔했다. 퍼즐도 차단과 같이 다룬다 — 멈추고, 쉬고, 서버에 원문을 남긴다(사람이 풀어야 풀린다).
   var blocked = /일시적으로 제한|자동입력 방지|비정상적인 접근|접근이 차단|보안 확인을 완료|실제 사용자임을 확인|빈 칸을 채워주세요/.test(body);
+  // ⚙ v1.27.0 — 서버가 준 문구를 **더해서** 본다(뺄 수는 없다). 네이버가 차단 문구를 바꿨을 때 교체 없이 따라간다.
+  if (!blocked && Array.isArray(extraBlock)) {
+    for (var bi = 0; bi < extraBlock.length && !blocked; bi++) {
+      var ph = extraBlock[bi];
+      if (typeof ph === 'string' && ph.length >= 2 && body.indexOf(ph) >= 0) blocked = true;
+    }
+  }
   if (blocked) return { err: 'BLOCK_TEXT', href: href, title: title, body: body.slice(0, 300) };
   return { err: nd ? 'NO_LIST' : 'NO_NEXT_DATA', href: href, title: title, body: body.slice(0, 300) };
 }
@@ -1005,7 +1169,8 @@ async function portalEntry(tabId, keyword) {
   try {
     await chrome.tabs.update(tabId, { url: NAVER_HOME });
     await waitNavigated(tabId, 'naver.com');
-    await sleep(900 + Math.floor(Math.random() * 900));
+    const _pr = (typeof RT === 'object' && RT) ? RT : { portalHomeMinMs: 900, portalHomeMaxMs: 1800, portalSearchMinMs: 2000, portalSearchMaxMs: 3200 };
+    await sleep(_pr.portalHomeMinMs + Math.floor(Math.random() * (_pr.portalHomeMaxMs - _pr.portalHomeMinMs)));
     const box = await findBox(tabId);
     if (!box) { _entryNote = 'portal-no-searchbox'; return 0; }
 
@@ -1015,7 +1180,7 @@ async function portalEntry(tabId, keyword) {
     await waitNavigated(tabId, 'search.naver.com');
     // ⚠️ v1.17.2 — 통합검색 탭 줄은 늦게 그려진다. 1초로는 짧아 「탭이 없다」로 오판할 수 있어
     //    2~3초로 늘리고, 그래도 없으면 한 번 더 본다(요청은 안 는다 — 화면만 다시 읽는다).
-    await sleep(2000 + Math.floor(Math.random() * 1200));
+    await sleep(_pr.portalSearchMinMs + Math.floor(Math.random() * (_pr.portalSearchMaxMs - _pr.portalSearchMinMs)));
 
     // 「쇼핑」 탭을 눌러 넘어간다 — 주소를 직접 열지 않는다.
     let [tl] = await chrome.scripting.executeScript({
@@ -1250,13 +1415,14 @@ function pagerState() {
 
 /* 사람처럼 훑어 내려간다 — 여덟 번에 나눠 굴리고 사이에 잠깐 멈춘다. */
 async function humanScrollDown(tabId) {
+  const _sc = (typeof RT === 'object' && RT) ? RT : { scrollPxMin: 500, scrollPxMax: 820, scrollWaitMinMs: 180, scrollWaitMaxMs: 440 };
   try {
     for (let i = 0; i < 8; i++) {
       await chrome.scripting.executeScript({
         target: { tabId }, world: 'MAIN', func: scrollStep,
-        args: [500 + Math.floor(Math.random() * 320)],
+        args: [_sc.scrollPxMin + Math.floor(Math.random() * (_sc.scrollPxMax - _sc.scrollPxMin))],
       });
-      await sleep(180 + Math.floor(Math.random() * 260));
+      await sleep(_sc.scrollWaitMinMs + Math.floor(Math.random() * (_sc.scrollWaitMaxMs - _sc.scrollWaitMinMs)));
     }
   } catch (e) { /* 굴리기 실패는 치명적이지 않다 — 그대로 진행한다 */ }
 }
@@ -1370,6 +1536,7 @@ async function trustedEnabled() {
 
 /** 검색창으로 들어갈지 — 저장값이 없으면 **켬**이 기본이다(v1.16.0 의 목적). */
 async function searchEntryEnabled() {
+  if (typeof RT === 'object' && RT && typeof RT.swSearchEntry === 'boolean') return RT.swSearchEntry;   // ⚙ 서버 스위치 우선
   try {
     const { searchEntry } = await chrome.storage.local.get('searchEntry');
     return searchEntry === undefined ? true : !!searchEntry;
@@ -1510,6 +1677,8 @@ function navProbe() {
  *  STALE·BLOCK_TEXT·판독 실패·NO_PAGER 네 갈래 모두에서 부른다 — 22:02 퍼즐 회차는 BLOCK_TEXT 로 끝나
  *  tap 요약이 서버에 안 남았다. 진단용이라 실패해도 수집을 멈추지 않는다. */
 async function tapReport(tabId, keyword, pagingIndex, why, errLabel) {
+  // ⚙ v1.27.0 스위치 — 서버가 진단 보고를 꺼 두면 보내지 않는다(사람이 누른 「이 화면 응답 보내기」는 예외).
+  if (why !== 'HUMAN' && typeof RT === 'object' && RT && RT.swTapProbe === false) return;
   try {
     const [pr] = await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func: navProbe });
     const probe = (pr && pr.result) || {};
@@ -1639,7 +1808,8 @@ async function fetchPage(keyword, pagingIndex, prevIds) {
     }
 
     const [res] = await chrome.scripting.executeScript({
-      target: { tabId }, world: 'MAIN', func: pageExtract, args: [{ page: pagingIndex, since: _clickedAt }],
+      target: { tabId }, world: 'MAIN', func: pageExtract,
+      args: [{ page: pagingIndex, since: _clickedAt }, (typeof RT === 'object' && RT ? RT.extraBlockPhrases : [])],
     });
     out = res && res.result;
     if (out && !out.err) {
@@ -1952,7 +2122,7 @@ const Outbox = {
     return _outboxTx('readwrite', (store) => { if (!store) { _outboxMem.clear(); return true; } store.clear(); return true; });
   },
 };
-function outboxNeedsReview(item) { return !!item.quarantined || Number(item.attempts || 0) >= OUTBOX_MAX_ATTEMPTS; }
+function outboxNeedsReview(item) { return !!item.quarantined || Number(item.attempts || 0) >= (typeof RT === 'object' && RT ? RT.outboxMaxAttempts : OUTBOX_MAX_ATTEMPTS); }
 /** heartbeat 에 싣는 요약 — 본문·검색어 없이 건수·바이트·검토 필요·가장 오래된 관측(epoch 초). */
 async function outboxSummary(items) {
   let list = items;
@@ -1989,7 +2159,7 @@ async function outboxAdd(body, reason, quarantined = false) {
   const old = list.find((it) => it.observationId === id);
   if (!old) {
     const total = list.reduce((n, it) => n + Number(it.bytes || 0), 0);
-    if (list.length >= OUTBOX_MAX_ITEMS || total + bytes > OUTBOX_MAX_BYTES) throw new Error('OUTBOX_FULL');
+    if (list.length >= (typeof RT === 'object' && RT ? RT.outboxMaxItems : OUTBOX_MAX_ITEMS) || total + bytes > OUTBOX_MAX_BYTES) throw new Error('OUTBOX_FULL');
   }
   await Outbox.put({ observationId: id, payloadHash: hash, payload: body, bytes, keyword: String(body.keyword || '').slice(0, 60),
                      attempts: old ? old.attempts : 0, nextAttemptAt: old ? old.nextAttemptAt : 0,
@@ -2021,7 +2191,7 @@ async function flushOutbox(token, why, force = false) {
   const now = Date.now();
   let sent = 0;
   for (const it of list) {
-    if (!force && (it.quarantined || Number(it.attempts || 0) >= OUTBOX_MAX_ATTEMPTS || Number(it.nextAttemptAt || 0) > now)) continue;
+    if (!force && (it.quarantined || Number(it.attempts || 0) >= (typeof RT === 'object' && RT ? RT.outboxMaxAttempts : OUTBOX_MAX_ATTEMPTS) || Number(it.nextAttemptAt || 0) > now)) continue;
     if (force && it.quarantined) continue;                       // 격리는 「검토 후 비우기」로만
     let r;
     try { r = await _postSerp(token, it.payload); }
@@ -2136,7 +2306,7 @@ async function dailyIsWaiting() {
 }
 async function markDailyWaiting(on) {
   try {
-    await chrome.storage.local.set({ [DAILY_DUE_KEY]: on ? Date.now() + DAILY_DUE_MS : 0 });
+    await chrome.storage.local.set({ [DAILY_DUE_KEY]: on ? Date.now() + (typeof RT === 'object' && RT ? RT.dailyDueMs : DAILY_DUE_MS) : 0 });
   } catch (e) { /* 무시 */ }
 }
 
@@ -2157,6 +2327,14 @@ async function runCollection(manual = false) {
     if (manual) await log('⏸ 이 수집기가 일시정지 상태입니다 — 팝업에서 ▶ 재개를 누르세요.');
     running = false; return;
   }
+  await loadRemote();   // ⚙ v1.27.0 — 워커가 막 깨어났으면 저장해 둔 서버 설정부터
+  // ⚙ 서버가 이 기계를 멈춰 두었으면 자동·수동 모두 들어가지 않는다(서버에서 풀어야 돈다).
+  if (serverPaused()) {
+    await setState({ running: false, pausedByServer: true, current: '' });
+    if (manual) await log('⏸ 서버가 이 기계를 멈춰 두었습니다 — 서버 설정에서 풀어야 돕니다.');
+    running = false; return;
+  }
+  await setState({ pausedByServer: false });
   // 캡차 쉼 중이면 들어가지 않는다(계속 두드리면 차단이 깊어진다). 수동 실행은 사람이
   // 캡차를 풀고 눌렀을 수 있으므로 통과시킨다.
   const bu = await getBlockedUntil();
@@ -2179,7 +2357,7 @@ async function runCollection(manual = false) {
   //    1분 알람으로 중간에 이어받을 수 있게 되면서, :40 에 이어받은 회차가 50분을
   //    통으로 쓰면 다음 시간대까지 밀고 들어간다(두 시간대가 겹쳐 요청이 몰린다).
   const _msLeftInHour = (60 - new Date().getMinutes()) * 60 * 1000
-                        - new Date().getSeconds() * 1000 - 5 * 60 * 1000;  // 5분 여유
+                        - new Date().getSeconds() * 1000 - (typeof RT === 'object' && RT ? RT.hourTailMs : 5 * 60 * 1000);  // 5분 여유(기본)
   const hourBudget = Math.max(60 * 1000, Math.min(CFG.hourBudgetMs, _msLeftInHour));
   try {
     // 이번 시간대 몫만 받아온다(24시간 분산). 서버가 슬롯 + 밀린 것을 함께 준다.
@@ -2189,7 +2367,7 @@ async function runCollection(manual = false) {
     });
     if (!res.ok) throw new Error(`키워드 조회 실패 HTTP ${res.status}`);
     const { keywords = [], done: already = 0, total = 0,
-            slot = null, overdue = 0, targets = null, paused = false } = await res.json();
+            slot = null, overdue = 0, targets = null, paused = false, settings = null } = await res.json();
     // 🛑 화면에서 껐으면 이 회차를 통째로 건너뛴다(대표 확정 2026-09-18).
     //    ⚠️ 이미 시작한 회차는 서버가 응답으로만 알리므로 여기서 멈추는 게 유일한 지점.
     if (paused) {
@@ -2200,6 +2378,8 @@ async function runCollection(manual = false) {
     await setState({ pausedByScreen: false });
     // 🎯 조기 종료 목표 — 서버가 주면 쓰고, 안 주면(구버전 서버) 비운다 = 종전 동작.
     _targets = (targets && typeof targets === 'object') ? targets : {};
+    if (settings) await receiveSettings(settings, '작업 목록');       // ⚙ v1.27.0 — 매시 응답에 실린 서버 설정
+    if (typeof RT === 'object' && RT && RT.swEarlyStop === false) _targets = {};   // ⚙ 스위치 — 조기 종료 끔 = 끝까지 잰다
     const _nTgt = Object.keys(_targets).length;
     await log(`⏱ ${nowHour}시 몫 ${keywords.length}개`
       + (slot === null ? '' : ` (이 시간대 ${slot} · 밀린 것 ${overdue})`)
@@ -2241,6 +2421,12 @@ async function runCollection(manual = false) {
           const se = payload.stoppedEarly;
           await log(`🎯 [${kw}] 찾을 상품 ${se.targets}개를 ${se.page}페이지에서 다 찾아 멈춤`
                     + ` (담긴 ${se.kept}개 · ${CFG.pagesPerKeyword - se.page}장 아낌)`);
+        }
+        // ⚙ v1.27.0 스위치 — 서버가 「부분 수집 올리기」를 꺼 두면 막혔거나 덜 모은 결과는 올리지 않는다.
+        const _isPartial = !!payload.blocked || !!(payload.observation && payload.observation.status === 'partial');
+        if (_isPartial && typeof RT === 'object' && RT && RT.swUploadPartial === false) {
+          if (payload.blocked) throw new Error(payload.blocked);
+          throw new Error('부분 수집 — 서버 스위치로 올리지 않음');
         }
         const _up = await uploadKeyword(token, kw, payload);
         if (_up && _up.queued) await log(`  📤 [${kw}] 서버 응답 대기 — 보관함에 두고 계속 진행`);
@@ -2319,6 +2505,8 @@ async function runOnDemand() {
   try {
     // ⏸ 이 기계에서 일시정지 중이면 밀린 요청 처리도 건너뛴다(v1.20.0). finally 가 락을 푼다.
     if (await isLocalPaused()) return;
+    await loadRemote();                // ⚙ v1.27.0
+    if (serverPaused()) return;        // ⚙ 서버가 이 기계를 멈춰 둠
     // 캡차 쉼 중이면 아예 들어가지 않는다(매분 재타격 = 차단 연장)
     if (await getBlockedUntil() > Date.now()) return;
     // ⭐ 시간대 수집이 차례를 기다리고 있으면 이번 분은 통째로 비켜 준다.
@@ -2361,6 +2549,11 @@ async function runOnDemand() {
         if (!payload.products.length) {
           if (payload.blocked) throw new Error(payload.blocked);
           throw new Error('상품 0건');
+        }
+        if (typeof RT === 'object' && RT && RT.swUploadPartial === false
+            && (payload.blocked || (payload.observation && payload.observation.status === 'partial'))) {
+          if (payload.blocked) throw new Error(payload.blocked);        // ⚙ 스위치 꺼짐 — 부분 결과는 올리지 않는다
+          throw new Error('부분 수집 — 서버 스위치로 올리지 않음');
         }
         const _up = await uploadKeyword(token, kw, payload);
         if (_up && _up.queued) await log(`  📤 [${kw}] 서버 응답 대기 — 보관함에 두고 계속 진행`);
@@ -2413,6 +2606,8 @@ async function runOnDemand() {
 const COORD_KEY = 'coordinatedEnabled';
 const COORD_SESSION_KEY = 'coordSessionId';
 async function coordinatedEnabled() {
+  // ⚙ v1.27.0 — 서버 스위치가 정해 두면(true/false) 그것을, 비어 있으면(null) 팝업 설정을 따른다.
+  if (typeof RT === 'object' && RT && typeof RT.swCoordinated === 'boolean') return RT.swCoordinated;
   try { const o = await chrome.storage.local.get(COORD_KEY); return o[COORD_KEY] === true; } catch (e) { return false; }
 }
 async function coordSessionId() {
@@ -2437,7 +2632,7 @@ async function coordRequest(endpoint, body) {
   return res.json();
 }
 async function coordWho() {
-  const { workerNo = CFG.workerNo, workerCount = CFG.workerCount } = await chrome.storage.local.get(['workerNo', 'workerCount']);
+  const { workerNo = CFG.workerNo, workerCount = CFG.workerCount } = await effectiveWorker();   // ⚙ 서버 배정 우선
   return { protocol: 2, workerId: await instanceId(), sessionId: await coordSessionId(),
            workerNo: Number(workerNo) || 1, workerCount: Number(workerCount) || 1 };
 }
@@ -2455,6 +2650,8 @@ async function runCoordinated(manual = false) {
       await setState({ running: false, pausedByLocal: true, current: '' });
       return true;
     }
+    await loadRemote();                                           // ⚙ v1.27.0
+    if (serverPaused()) { await setState({ running: false, pausedByServer: true, current: '' }); return true; }
     const bu = await getBlockedUntil();
     if (!manual && bu > Date.now()) return true;                 // 캡차 쉼 — 서버도 이 기계를 쉬게 두고 있다
     const token = await getToken();
@@ -2477,7 +2674,7 @@ async function runCoordinated(manual = false) {
     }
     const hourStart = Date.now();
     const hourTag = hourKey();
-    const _msLeftInHour = (60 - new Date().getMinutes()) * 60 * 1000 - new Date().getSeconds() * 1000 - 5 * 60 * 1000;
+    const _msLeftInHour = (60 - new Date().getMinutes()) * 60 * 1000 - new Date().getSeconds() * 1000 - (typeof RT === 'object' && RT ? RT.hourTailMs : 5 * 60 * 1000);
     const hourBudget = Math.max(60 * 1000, Math.min(CFG.hourBudgetMs, _msLeftInHour));
     let done = 0, failed = 0, partial = 0, streak = 0;
     await setState({ running: true, startedAt: new Date().toISOString(), coordState: 'READY', coordReason: '' });
@@ -2585,8 +2782,10 @@ async function sendHeartbeat(reason) {
       await setState({ lastHeartbeatAt: stamp, lastHeartbeatOk: false, lastHeartbeatNote: '토큰 없음' });
       return false;
     }
-    const { state = {}, readFail = null, workerNo = CFG.workerNo, workerCount = CFG.workerCount } =
-      await chrome.storage.local.get(['state', 'readFail', 'workerNo', 'workerCount']);
+    await loadRemote();   // ⚙ v1.27.0
+    const { state = {}, readFail = null, remoteSettings = null, commandsDone = [] } =
+      await chrome.storage.local.get(['state', 'readFail', 'remoteSettings', 'commandsDone']);
+    const { workerNo = CFG.workerNo, workerCount = CFG.workerCount } = await effectiveWorker();   // 서버 배정 우선
     let ver = ''; try { ver = chrome.runtime.getManifest().version; } catch (e) { /* 무시 */ }
     let chromeVer = '';
     try { const m = /Chrome\/([\d.]+)/.exec(navigator.userAgent || ''); chromeVer = m ? m[1] : ''; } catch (e) { /* 무시 */ }
@@ -2608,6 +2807,12 @@ async function sendHeartbeat(reason) {
       lastError: readFail ? `${readFail.at || ''} ${readFail.err || ''}`.slice(0, 200) : '',
       alarms: await alarmNames(),
       uploadSummary: await outboxSummary(),                 // 📤 4차 — 미전송 보관함 요약(본문 없음)
+      // ⚙ v1.27.0 — 지금 쓰는 서버 설정(번호·지문·당겨 쓴 칸)과 실행한 명령. 한 번도 못 받았으면 0·''.
+      settingsRev: remoteSettings ? Number(remoteSettings.rev) || 0 : 0,
+      settingsHash: remoteSettings ? String(remoteSettings.hash || '') : '',
+      settingsNote: (serverPaused() ? '⏸ 서버가 이 기계를 멈춤' : '') + (remoteSettings && remoteSettings.note ? (serverPaused() ? ' · ' : '') + remoteSettings.note : ''),
+      commandsDone: Array.isArray(commandsDone) ? commandsDone.slice(0, 10) : [],
+      pausedByServer: serverPaused(),
     };
     const res = await fetch(`${CFG.serverBase}/api/collector/heartbeat`, {
       method: 'POST',
@@ -2616,6 +2821,11 @@ async function sendHeartbeat(reason) {
     });
     await setState({ lastHeartbeatAt: stamp, lastHeartbeatOk: !!res.ok,
                      lastHeartbeatNote: res.ok ? '' : `HTTP ${res.status}` });
+    // ⚙ v1.27.0 — 응답에 실린 서버 설정을 받는다(5분 안 반영). 옛 서버면 settings 가 없다 = 아무것도 안 바뀐다.
+    if (res.ok) {
+      try { const j = await res.json(); if (j && j.settings) await receiveSettings(j.settings, '신호'); }
+      catch (e) { /* 응답 해석 실패는 무시 — 신호 자체는 보냈다 */ }
+    }
     return !!res.ok;
   } catch (e) {
     try {
@@ -2653,7 +2863,7 @@ function armAlarms() {
   // 30초 오프셋 — daily 와 만기가 매시 정각에 겹치지 않게(동시 발화 자체를 회피)
   chrome.alarms.create('ondemand', { periodInMinutes: 1, when: Date.now() + 30000 });
   // 📡 v1.21.0 — 5분마다 살아있음 신호. 첫 신호는 15초 뒤(설치·재시작 직후 서버가 바로 본다).
-  chrome.alarms.create(HEARTBEAT_ALARM, { periodInMinutes: HEARTBEAT_PERIOD_MIN, when: Date.now() + 15000 });
+  chrome.alarms.create(HEARTBEAT_ALARM, { periodInMinutes: (typeof RT === 'object' && RT ? RT.heartbeatMin : HEARTBEAT_PERIOD_MIN), when: Date.now() + 15000 });
 }
 chrome.runtime.onInstalled.addListener(() => {
   armAlarms();
@@ -2699,6 +2909,7 @@ function hourKey() {
 }
 
 chrome.alarms.onAlarm.addListener(async (a) => {
+  await loadRemote();   // ⚙ v1.27.0 — 워커가 막 깨어났으면 저장해 둔 서버 설정부터 건다
   if (a.name === HEARTBEAT_ALARM) {
     await ensureAlarms('심장박동');
     try { await flushOutbox(await getToken(), ''); } catch (e) { /* 무시 */ }   // 📤 5분마다 보관함 재전송(네이버 요청 0건)
@@ -2786,7 +2997,7 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
   //    돌릴 수 있게 한 것. 24시간 뒤 스스로 풀린다(끄는 것을 잊어도 원복된다).
   if (msg?.cmd === 'slowOn') {
     (async () => {
-      const until = Date.now() + SLOW_WINDOW_MS;
+      const until = Date.now() + (RT ? RT.slowWindowMs : SLOW_WINDOW_MS);
       await chrome.storage.local.set({ [SLOW_KEY]: until });
       await setState({ slowUntil: until });
       await log('🐢 안전 속도 켜짐 — 24시간 동안 절반 속도로 돕니다(사람이 켠 것).');

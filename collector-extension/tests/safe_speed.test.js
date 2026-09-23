@@ -78,7 +78,9 @@ function speedRunner(slowUntil) {
   ok('⑥ slowOn 이 캡차 자동 감속과 같은 열쇠를 쓴다', /\[SLOW_KEY\]: until/.test(BG));
 
   // ⑦ 캡차 자동 감속(무회귀) — markBlocked 는 여전히 절반 속도를 켠다
-  ok('⑦ 캡차를 만나면 여전히 자동으로 켜진다', /_slowUntil = Date\.now\(\) \+ SLOW_WINDOW_MS/.test(BG));
+  // ⚙ v1.27.0 — 기간은 서버 설정(RT.slowWindowMs)으로 옮겨졌다. 없으면 SLOW_WINDOW_MS(24시간) 그대로.
+  ok('⑦ 캡차를 만나면 여전히 자동으로 켜진다',
+     /_slowUntil = Date\.now\(\) \+ \(typeof RT === 'object' && RT \? RT\.slowWindowMs : SLOW_WINDOW_MS\)/.test(BG));
 
   console.log(fail ? `\n❌ 실패 ${fail}건 / 전체 ${pass + fail}` : '\n안전 속도 시험 전부 통과');
   process.exit(fail ? 1 : 0);

@@ -48,6 +48,10 @@ async function run({ token = 'tok', paused = false, blockedUntil = 0, fetchImpl,
     getToken: async () => store.token,
     setState: async (p) => { setStates.push(p); },
     isLocalPaused: async () => paused,
+    loadRemote: async () => {},                                   // ⚙ v1.27.0
+    effectiveWorker: async () => ({ workerNo: store.workerNo, workerCount: store.workerCount }),
+    serverPaused: () => false,
+    receiveSettings: async (st, via) => { store.received = { st, via }; },
     getBlockedUntil: async () => blockedUntil,
     instanceId: async () => store.instanceId,
     alarmNames: async () => ['daily:1', 'heartbeat:5'],
@@ -84,7 +88,7 @@ async function run({ token = 'tok', paused = false, blockedUntil = 0, fetchImpl,
 
   /* ③ 배선 — 알람·시작·버튼 */
   ok('🔴 armAlarms 가 heartbeat 알람을 5분 주기로 건다',
-     /chrome\.alarms\.create\(HEARTBEAT_ALARM, \{ periodInMinutes: HEARTBEAT_PERIOD_MIN/.test(SRC) && /const HEARTBEAT_PERIOD_MIN = 5;/.test(SRC));
+     /chrome\.alarms\.create\(HEARTBEAT_ALARM, \{ periodInMinutes: \(typeof RT === 'object' && RT \? RT\.heartbeatMin : HEARTBEAT_PERIOD_MIN\)/.test(SRC) && /const HEARTBEAT_PERIOD_MIN = 5;/.test(SRC));
   ok('🔴 onAlarm 이 heartbeat 를 받아 ensureAlarms → sendHeartbeat', /if \(a\.name === HEARTBEAT_ALARM\) \{\s*await ensureAlarms\([^)]*\);[\s\S]{0,200}?sendHeartbeat\('alarm'\); return;\s*\}/.test(SRC));
   ok('설치·브라우저 시작·회차 시작에서 신호를 보낸다', /sendHeartbeat\('installed'\)/.test(SRC) && /sendHeartbeat\('startup'\)/.test(SRC) && /sendHeartbeat\(manual \? 'run-manual' : 'run'\)/.test(SRC));
   ok('워커 깨어날 때 heartbeat 알람이 빠졌으면 다시 건다', /const h = await chrome\.alarms\.get\(HEARTBEAT_ALARM\);[\s\S]{0,120}\|\| !h\)/.test(SRC));

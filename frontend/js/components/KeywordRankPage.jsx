@@ -195,7 +195,7 @@ function CollectorOpsPanel(props) {
             machines === null ? React.createElement('p', { style: { fontSize: 12, color: '#b45309' } }, '기계별 신호를 읽지 못했습니다(미확인).')
             : !machines.length ? React.createElement('p', { style: { fontSize: 12, color: '#64748b' } }, '기계 신호 없음 — v1.21.0 이상 확장이 아직 보고하지 않았습니다.')
             : React.createElement('table', { style: { width: '100%', borderCollapse: 'collapse' } },
-                React.createElement('thead', null, React.createElement('tr', null, ['기계', '버전', '상태', '마지막 신호', '오늘', '📤 미전송'].map(function(h) {
+                React.createElement('thead', null, React.createElement('tr', null, ['기계', '버전', '상태', '마지막 신호', '오늘', '📤 미전송', '⚙ 서버 설정'].map(function(h) {
                     return React.createElement('th', { key: h, scope: 'col', style: _krTh }, h); }))),
                 React.createElement('tbody', null, machines.map(function(m, i) {
                     var up = _krOpsUpload(m);
@@ -205,7 +205,10 @@ function CollectorOpsPanel(props) {
                         React.createElement('td', { style: Object.assign({}, _krTd, { color: m.stale ? '#dc2626' : '#334155' }) }, m.status || '—'),
                         React.createElement('td', { style: _krTd }, _krOpsClock(m.last_seen) + (m.minutes_since != null ? ' (' + m.minutes_since + '분 전)' : '')),
                         React.createElement('td', { style: _krTd }, _krOpsNum(m.day_done) + ' / ' + _krOpsNum(m.day_total)),
-                        React.createElement('td', { style: Object.assign({}, _krTd, { color: up.c, fontWeight: 700 }) }, up.t));
+                        React.createElement('td', { style: Object.assign({}, _krTd, { color: up.c, fontWeight: 700 }) }, up.t),
+                        // ⚙ v1.27.0 — 서버가 보낸 설정을 이 기계가 쓰고 있나(맞음 초록 · 대기 주황 · 미보고 회색)
+                        React.createElement('td', { style: Object.assign({}, _krTd, { color: m.settingsMatch === true ? '#047857' : (m.settingsMatch === false && m.settings_hash ? '#b45309' : '#64748b') }) },
+                            (m.settingsText || '—') + (m.settings_note ? ' · ' + m.settings_note : '')));
                 })))),
         isAdmin && (view.readinessError || rd) && React.createElement('div', { style: { marginTop: 10, padding: '10px 12px', background: '#f8fafc', borderRadius: 10, fontSize: 12.5 } },
             view.readinessError && React.createElement('p', { style: { margin: 0, color: '#b45309' } }, view.readinessError),
