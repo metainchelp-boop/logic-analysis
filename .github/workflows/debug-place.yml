@@ -181,8 +181,33 @@ jobs:
                         walk(v, path + "[]", depth + 1, out)
 
 
+            IDENT = re.compile(r'[A-Za-z_$][A-Za-z0-9_$]*')
+            JS_TOK = {"undefined", "NaN", "Infinity", "true", "false", "null", "new", "function", "void"}
+
+
+            def tok_at(txt, pos):
+                frag = txt[pos:pos + 16]
+                m = IDENT.match(frag)
+                if m:
+                    return m.group(0) if m.group(0) in JS_TOK else "{식별자}"
+                ch = frag[:1]
+                if not ch:
+                    return "{끝}"
+                return repr(ch) if ord(ch) < 128 else "{비ASCII}"
+
+
+            UNDEF = re.compile(r'(?<=[:\[,])(\s*)undefined\b')
+
+
+            def sanitize(t):
+                t = UNDEF.sub(r'\1null', t)
+                t = re.sub(r'new Date\(([^)]*)\)', r'"\1"', t)
+                return t
+
+
             n = 0
             stat = collections.Counter()
+            errtok = collections.Counter()
             agg = {g: collections.Counter() for g in ("price", "cat", "pid", "url", "wish", "rev")}
             top_keys = collections.Counter()
             raw_pid = collections.Counter()
@@ -192,27 +217,39 @@ jobs:
                 if len(h) < 100:
                     continue
                 n += 1
+                # ③ 재료 — HTML 글자 그대로에서 상품 번호·스토어 주소 (해석 성공과 무관하게 센다)
+                pids = set(re.findall(r'"productNo"\s*:\s*"?(\d{6,})"?', h))
+                raw_pid["productNo 값 종류 " + ("0" if not pids else ("1" if len(pids) == 1 else "2+"))] += 1
+                slugs = collections.Counter(re.findall(r'(?:https?:)?//(?:m\.)?smartstore\.naver\.com/([A-Za-z0-9_-]+)', h))
+                bslugs = collections.Counter(re.findall(r'(?:https?:)?//(?:m\.)?brand\.naver\.com/([A-Za-z0-9_-]+)', h))
+                for bad in ("main", "inflow", "i", "category", "products", "search", "profile"):
+                    slugs.pop(bad, None); bslugs.pop(bad, None)
+                build["스마트스토어 주소 슬러그 있음" if slugs else ("브랜드스토어 주소 슬러그 있음" if bslugs else "스토어 주소 슬러그 없음")] += 1
+                build["슬러그 종류 " + ("0" if not (slugs or bslugs) else ("1" if len(slugs) + len(bslugs) == 1 else "2+"))] += 1
+                full = collections.Counter(x.split("?")[0] for x in re.findall(r'https?://(?:m\.)?(?:smartstore|brand)\.naver\.com/[A-Za-z0-9_-]+/products/\d+', h))
+                build["상품 주소 완성형 " + ("0회" if not full else ("1회" if full.most_common(1)[0][1] == 1 else "2회+"))] += 1
+                build["완성형 속 번호 = productNo " + ("예" if full and pids and any(u.rsplit('/', 1)[-1] in pids for u in full) else ("완성형 없음" if not full else "아니오"))] += 1
                 if "__PRELOADED_STATE__" not in h:
                     stat["PRELOADED 글자 없음"] += 1
                     continue
                 m = CODE_RE.search(h)
                 st = None
+                txt = None
                 if m:
+                    txt = m.group(1)
                     try:
-                        st = json.loads(m.group(1)); stat["지금 코드 정규식+json 성공"] += 1
-                    except Exception as e:
-                        stat["지금 코드 정규식 맞음·json 실패:" + type(e).__name__] += 1
+                        st = json.loads(txt); stat["지금 코드 정규식+json 성공"] += 1
+                    except json.JSONDecodeError as e:
+                        stat["지금 코드 정규식 맞음·json 실패"] += 1
+                        errtok[tok_at(txt, e.pos)] += 1
                 else:
                     stat["지금 코드 정규식 안 맞음"] += 1
-                if st is None:
-                    s = START_RE.search(h)
-                    if s:
-                        i = h.find("{", s.end())
-                        if i >= 0:
-                            try:
-                                st, _ = json.JSONDecoder().raw_decode(h[i:]); stat["raw_decode 로 성공"] += 1
-                            except Exception as e:
-                                stat["raw_decode 도 실패:" + type(e).__name__] += 1
+                if st is None and txt is not None:
+                    try:
+                        st = json.loads(sanitize(txt)); stat["undefined→null 치환 뒤 성공"] += 1
+                    except json.JSONDecodeError as e:
+                        stat["치환 뒤에도 실패"] += 1
+                        errtok["(치환 뒤) " + tok_at(sanitize(txt), e.pos)] += 1
                 if not isinstance(st, dict):
                     continue
                 for k in list(st.keys())[:60]:
@@ -222,20 +259,11 @@ jobs:
                 for g in agg:
                     for t in out[g]:
                         agg[g][t] += 1
-                # ③ 재료 — HTML 글자 그대로에서 상품 번호·스토어 주소
-                pids = set(re.findall(r'"productNo"\s*:\s*"?(\d{6,})"?', h))
-                raw_pid["productNo 값 종류 " + ("0" if not pids else ("1" if len(pids) == 1 else "2+"))] += 1
-                slugs = collections.Counter(re.findall(r'(?:https?:)?//(?:m\.)?smartstore\.naver\.com/([A-Za-z0-9_-]+)', h))
-                bslugs = collections.Counter(re.findall(r'(?:https?:)?//(?:m\.)?brand\.naver\.com/([A-Za-z0-9_-]+)', h))
-                for bad in ("main", "inflow", "i", "category", "products", "search", "profile"):
-                    slugs.pop(bad, None); bslugs.pop(bad, None)
-                build["스마트스토어 주소 슬러그 있음" if slugs else ("브랜드스토어 주소 슬러그 있음" if bslugs else "스토어 주소 슬러그 없음")] += 1
-                full = collections.Counter(x.split("?")[0] for x in re.findall(r'https?://(?:m\.)?(?:smartstore|brand)\.naver\.com/[A-Za-z0-9_-]+/products/\d+', h))
-                build["상품 주소 완성형 " + ("0회" if not full else ("1회" if full.most_common(1)[0][1] == 1 else "2회+"))] += 1
 
             print(f"== 저장 HTML {n}건 — __PRELOADED_STATE__ 읽기 ==")
             for k, v in stat.most_common():
                 print(f"  {k:<44} {v}")
+            print("  json 이 막힌 자리의 글자:", errtok.most_common(12))
             print("  최상위 키(상위 20):", top_keys.most_common(20))
             for g, title in (("price", "판매가 자리"), ("cat", "카테고리 자리"), ("pid", "상품 번호 자리(깊이 5 이내)"),
                              ("url", "주소 칸 자리·모양"), ("wish", "찜 자리"), ("rev", "리뷰 자리")):
