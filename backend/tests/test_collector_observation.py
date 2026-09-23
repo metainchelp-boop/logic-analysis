@@ -154,7 +154,16 @@ ok("🔴 _project_positive 는 수집분 INSERT 없이 positive_only=True 만", 
    and "INSERT INTO collected_serp" not in body[body.index("def _project_positive"):])
 ok("0건 업로드는 evidence_only 일 때만 통과(그 밖은 400 유지)", 'if not req.products and item["kind"] != "evidence_only":' in body)
 ok("SerpProduct 에 nvMid·sourcePage 가 추가됐다(additive)", "nvMid: Optional[str]" in c and "sourcePage: Optional[int]" in c)
-ok("🔴 /keywords 가 시도한 키워드를 뒤로 돌린다(attempted 정렬)", "attempted = _attempted_map(conn, today)" in c and "key=lambda k: (attempted.get(k, \"\"), k)" in c)
+# 2026-09-23 대표 결정 B — 정렬 열쇠가 collect_order.order_key 로 옮겨 갔다(시도한 것 뒤로 → 오래 안 모은 것 먼저 → 가나다).
+#    「시도한 것은 뒤로」가 여전히 **첫째 열쇠**인지 실제 함수로 확인한다(문구만 보지 않는다).
+try:
+    import collect_order as _co
+    _ord = sorted(["가", "나", "다"], key=lambda k: _co.order_key(k, {"가": "2026-09-23T10:00"}, {"나": "2026-09-22", "다": ""}))
+except Exception as _e:
+    _ord = [repr(_e)]
+ok("🔴 /keywords 가 시도한 키워드를 뒤로 돌린다(attempted 정렬)", "attempted = _attempted_map(conn, today)" in c
+   and ("key=lambda k: (attempted.get(k, \"\"), k)" in c or "_order_key(k, attempted, last)" in c)
+   and _ord == ["다", "나", "가"], str(_ord))
 ok("init 에서 관측 표 보장 + 보관정책", "_obs_init(conn)" in c and "_obs_purge(conn)" in c)
 ok("/status·/health 에 observations 가산", c.count('"observations": observations') == 2)
 rr = read("backend/rank_record.py")

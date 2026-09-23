@@ -383,6 +383,15 @@ def get_collect_keywords(hour: int = None, worker: int = 0, workers: int = 1,
             attempted = _attempted_map(conn, today)
         except Exception:
             attempted = {}
+        # 대표 결정 B(2026-09-23) — 같은 시간대 안에서 **오래 안 모은 키워드부터**.
+        # 가나다순으로 상한에서 잘라 매일 같은 앞쪽만 담기던 것을 바로잡는다(요청 수는 그대로).
+        # 실패하면 빈 dict = 종전 가나다순.
+        try:
+            from collect_order import last_collected_map as _last_map, order_key as _order_key
+            last = _last_map(conn)
+        except Exception:
+            last = {}
+            _order_key = lambda k, a=None, l=None: ((a or {}).get(k, ""), "", k)   # noqa: E731
 
         # ── 기계별로 나눠 맡기 (2026-08-27) ──
         # ⚠️ '오늘 할 일'을 세는 total 은 나누기 **전** 값을 쓴다 —
@@ -392,7 +401,7 @@ def get_collect_keywords(hour: int = None, worker: int = 0, workers: int = 1,
             remaining = {k: p for k, p in remaining.items() if _split_ok(k, w, wc)}
 
         if hour is None:
-            todo = _apply_cap(sorted(remaining, key=lambda k: (attempted.get(k, ""), k))[:MAX_KEYWORDS], _test_cap())
+            todo = _apply_cap(sorted(remaining, key=lambda k: _order_key(k, attempted, last))[:MAX_KEYWORDS], _test_cap())
             return {"success": True, "date": today, "mode": "all",
                     "total": len(uni), "done": len(done), "todo": len(todo),
                     "test_cap": _test_cap(), "keywords": todo,
@@ -407,8 +416,9 @@ def get_collect_keywords(hour: int = None, worker: int = 0, workers: int = 1,
             elif s < h:
                 overdue.append((s, k))   # 오늘 지나간 슬롯인데 아직 못 한 것
 
-        now_slot.sort(key=lambda k: (attempted.get(k, ""), k))
-        overdue.sort(key=lambda pair: (attempted.get(pair[1], ""), pair[0], pair[1]))   # 오래 밀린 것부터 · 시도한 것은 뒤로
+        now_slot.sort(key=lambda k: _order_key(k, attempted, last))
+        # 밀린 것 — 시도한 것은 뒤로 · 오래 안 모은 것부터 · 같으면 오래 밀린 슬롯부터(종전 순서)
+        overdue.sort(key=lambda pair: (_order_key(pair[1], attempted, last)[:2], pair[0], pair[1]))
         picked = now_slot[:HOURLY_CAP]
         if len(picked) < HOURLY_CAP:
             picked += [k for _s, k in overdue[:HOURLY_CAP - len(picked)]]

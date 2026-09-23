@@ -307,12 +307,18 @@ def claim(conn, worker_id: str, session_id: str, now: int, policy: Policy, hour:
     cands = _rows(conn, "SELECT * FROM collector_coord_jobs WHERE day=? AND state IN ('pending','deferred') AND next_at <= ? "
                         "ORDER BY (kind='realtime') DESC, requested_at", (day, now))
     h = max(0, min(23, int(hour)))
+    # 대표 결정 B(2026-09-23) — /keywords 와 같은 규칙: 시도 횟수 다음으로 **오래 안 모은 키워드부터**.
+    try:
+        from collect_order import last_collected_map
+        last = last_collected_map(conn)
+    except Exception:
+        last = {}
     now_slot, overdue, later = [], [], []
     for j in cands:
         if wcnt > 1 and not split_ok(j["keyword"], wno - 1, wcnt):
             continue
         s = int(j["slot"] or 0)
-        key = (j["attempts"], s, j["keyword"])
+        key = (j["attempts"], last.get(j["keyword"], "") or "", s, j["keyword"])
         if j["kind"] == "realtime" or s == h:
             now_slot.append((key, j))
         elif s < h:

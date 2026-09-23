@@ -240,6 +240,40 @@ var _naverProductUrlRe = /https?:\/\/(?:[a-z0-9-]+\.)*(?:smartstore|brand|shoppi
 // og:url/canonical 검증용 — 가격비교(search.shopping.naver.com/catalog/123)처럼
 // 도메인 바로 뒤에 catalog/products가 오는 경우까지 허용 (중간 경로 0개 이상)
 var _naverProductUrlTest = /naver\.com\/(?:[\w-]+\/)*(?:products|catalog)\/\d+/;
+// 2026-09-23 대표 결정 A(③) — 붙여넣는 HTML 에는 og:url·canonical 이 없다(저장본 751건 중 0건) →
+// 검색엔진용 상품 정보(JSON-LD · 746건)의 상품 번호 + **진짜 스토어 이름**으로 본 상품 주소를 만든다.
+// ⚠️ JSON-LD 안의 주소는 스토어 이름 대신 main 이 든 범용 주소라 쓰지 않는다(광고주 분석이 주소의 스토어
+//    이름으로 보조 대조를 해 'main' 이면 엉뚱한 상품과 맞춘다). main·inflow 같은 공용 경로 주소는 어느 경로로도 안 돌려준다.
+// ⚠️ 서버 backend/detail_ld.py(product_url_with_reason) · 맞춤제안서 public/proposal 과 같은 규칙.
+var _PRODUCT_NOT_SLUG = { main: 1, inflow: 1, i: 1, category: 1, products: 1, search: 1, profile: 1, v2: 1, api: 1 };
+function _ldProductNo(h) {
+    var re = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi, m;
+    while ((m = re.exec(h))) {
+        try {
+            var d = JSON.parse(m[1].trim()), items = Array.isArray(d) ? d : [d];
+            if (d && !Array.isArray(d) && Array.isArray(d['@graph'])) items = items.concat(d['@graph']);
+            for (var i = 0; i < items.length; i++) {
+                var it = items[i];
+                if (it && typeof it === 'object' && String(it['@type'] || '') === 'Product') {
+                    var ids = [it.productID, it.sku];
+                    for (var j = 0; j < ids.length; j++) { var v = String(ids[j] == null ? '' : ids[j]).trim(); if (/^\d{4,}$/.test(v)) return v; }
+                    return '';
+                }
+            }
+        } catch (e) { /* 깨진 블록은 건너뛴다 */ }
+    }
+    return '';
+}
+function _productUrlFromLd(h) {
+    var no = _ldProductNo(h); if (!no) return '';
+    var re = /https?:\/\/(?:m\.)?(smartstore|brand)\.naver\.com\/([A-Za-z0-9_-]+)\/products\/(\d+)/g, m;
+    while ((m = re.exec(h))) { if (m[3] === no && !_PRODUCT_NOT_SLUG[m[2]]) return 'https://' + m[1] + '.naver.com/' + m[2] + '/products/' + no; }
+    var sre = /(?:https?:)?\/\/(?:m\.)?(smartstore|brand)\.naver\.com\/([A-Za-z0-9_-]+)/g, seen = {}, keys = [];
+    while ((m = sre.exec(h))) { if (_PRODUCT_NOT_SLUG[m[2]]) continue; var k = m[1] + '|' + m[2]; if (!seen[k]) { seen[k] = 1; keys.push(k); } }
+    if (keys.length === 1) { var p = keys[0].split('|'); return 'https://' + p[0] + '.naver.com/' + p[1] + '/products/' + no; }
+    return '';   // 스토어가 여러 종류면 남의 스토어를 잡지 않도록 비운다
+}
+function _isGenericStoreUrl(u) { var m = /naver\.com\/([A-Za-z0-9_-]+)\/products\//.exec(u || ''); return !!(m && _PRODUCT_NOT_SLUG[m[1]]); }
 function extractProductUrlFromHtml(html) {
     if (!html || typeof html !== 'string') return '';
     try {
@@ -249,17 +283,20 @@ function extractProductUrlFromHtml(html) {
         var m;
         m = h.match(/<meta[^>]+property=["']og:url["'][^>]*content=["']([^"']+)["']/i)
             || h.match(/<meta[^>]+content=["']([^"']+)["'][^>]*property=["']og:url["']/i);
-        if (m && m[1] && _naverProductUrlTest.test(m[1])) return m[1].split('?')[0];
+        if (m && m[1] && _naverProductUrlTest.test(m[1]) && !_isGenericStoreUrl(m[1])) return m[1].split('?')[0];
         m = h.match(/<link[^>]+rel=["']canonical["'][^>]*href=["']([^"']+)["']/i)
             || h.match(/<link[^>]+href=["']([^"']+)["'][^>]*rel=["']canonical["']/i);
-        if (m && m[1] && _naverProductUrlTest.test(m[1])) return m[1].split('?')[0];
-        // 3) HTML 내 네이버 쇼핑 상품 URL 중 '가장 많이 등장하는 것' = 본 상품
+        if (m && m[1] && _naverProductUrlTest.test(m[1]) && !_isGenericStoreUrl(m[1])) return m[1].split('?')[0];
+        // 3) 검색엔진용 상품 정보(JSON-LD)의 상품 번호 + 진짜 스토어 이름 (2026-09-23)
+        var ld = _productUrlFromLd(h);
+        if (ld) return ld;
+        // 4) HTML 내 네이버 쇼핑 상품 URL 중 '가장 많이 등장하는 것' = 본 상품
         //    (추천/광고 상품은 보통 1번만 나옴 → 빈도로 본 상품 구별, 2회 이상만 신뢰)
         //    smartstore 외에 brand(브랜드스토어)·shopping(가격비교)·m. 모바일도 인식
         var all = h.match(_naverProductUrlRe);
         if (all && all.length) {
             var counts = {};
-            for (var i = 0; i < all.length; i++) { var u = all[i].split('?')[0]; counts[u] = (counts[u] || 0) + 1; }
+            for (var i = 0; i < all.length; i++) { var u = all[i].split('?')[0]; if (_isGenericStoreUrl(u)) continue; counts[u] = (counts[u] || 0) + 1; }
             var best = '', bestN = 0;
             for (var k in counts) { if (counts[k] > bestN) { bestN = counts[k]; best = k; } }
             if (best && bestN >= 2) return best;
