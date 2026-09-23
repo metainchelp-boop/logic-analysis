@@ -524,11 +524,15 @@ def report_heartbeat(req: HeartbeatReport, x_collector_token: str = Header(None)
     """
     _auth(x_collector_token)
     from collector_heartbeat import record as _hb_record
-    conn = sqlite3.connect(DB_PATH, timeout=10)
+    from db_busy import write_with_retry, DbBusy
+    # 2026-09-23: 배치(00:30 백업·01:00 보관정책·08:00 순위)의 긴 쓰기 잠금에 밀려 500 으로 죽던 것 →
+    #   30초 대기 · 3회 재시도 · 그래도 안 되면 503(db-busy). 확장은 이 응답으로 수집을 멈추지 않는다.
+    _payload = req.dict()
     try:
-        row = _hb_record(conn, req.dict())
-    finally:
-        conn.close()
+        row = write_with_retry(DB_PATH, lambda c: _hb_record(c, _payload))
+    except DbBusy as e:
+        logger.warning(f"[collector] 📡 heartbeat 저장 보류 — DB 바쁨(배치 잠금): {e}")
+        raise HTTPException(status_code=503, detail="db-busy: 서버가 배치 중이라 신호를 잠시 못 받았습니다. 다음 신호에 다시 받습니다.")
     if row.get("skipped"):
         return {"success": False, "detail": "instanceId 없음"}
     logger.info(f"[collector] 📡 heartbeat {row['worker_no']}/{row['worker_count']} v{row['ext_version'] or '?'} "
@@ -561,8 +565,9 @@ def report_blocked(req: BlockReport, x_collector_token: str = Header(None)):
     ⚠️ 실패해도 확장 쪽을 멈추지 않는다(확장은 응답을 안 본다).
     """
     _auth(x_collector_token)
-    conn = sqlite3.connect(DB_PATH, timeout=10)
-    try:
+    from db_busy import write_with_retry, DbBusy
+
+    def _ins(conn):
         conn.execute(
             "INSERT INTO collector_blocks(keyword, paging_index, err, title, href, body,"
             " ext_version, note) VALUES(?,?,?,?,?,?,?,?)",
@@ -570,8 +575,12 @@ def report_blocked(req: BlockReport, x_collector_token: str = Header(None)):
              (req.title or "")[:200], (req.href or "")[:500], (req.body or "")[:500],
              (req.extVersion or "")[:20], (req.note or "")[:200]))
         conn.commit()
-    finally:
-        conn.close()
+    # 2026-09-23: heartbeat 와 같은 이유(배치 잠금 → 500) → 대기·재시도·503.
+    try:
+        write_with_retry(DB_PATH, _ins)
+    except DbBusy as e:
+        logger.warning(f"[collector] 🧱 막힘 보고 저장 보류 — DB 바쁨(배치 잠금): {e}")
+        raise HTTPException(status_code=503, detail="db-busy: 서버가 배치 중이라 보고를 잠시 못 받았습니다.")
     logger.warning(f"[collector] 🧱 막힘 보고 — kw={(req.keyword or '?')[:30]} "
                    f"err={(req.err or '?')[:40]} title={(req.title or '')[:60]} "
                    f"v{req.extVersion or '?'}")

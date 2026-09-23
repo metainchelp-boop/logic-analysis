@@ -89,6 +89,35 @@ def ensure_column(conn) -> None:
         pass
 
 
+def existing_for(conn, product_url: str, user_id) -> str:
+    """이 등록 요청이 **고칠 행**(같은 주소·같은 직원)에 이미 저장된 nvMid. 없거나 모양이 틀리면 "".
+
+    신고 #275 (2026-09-23) — 9/18 확정 ③은 「**새로** 등록하는 것만 막는다」였는데, 등록 경로는
+    nvMid 없는 요청을 **전부** 막고 있었다. 그래서 이미 등록한 상품에 키워드만 더하는 요청
+    (분석 화면 「＋ 이 키워드도 추적 추가」)도 400 이었다 — 9/22 7건 · 9/23 3건, 성공 0건.
+
+    ⚠️ 찾는 기준은 `database.add_tracked_product` 가 **고칠 행을 찾는 기준과 똑같이** 둔다
+       (`product_url` 글자 그대로 + `user_id`). 기준이 다르면 A 행의 nvMid 를 들고 B 행을
+       새로 만드는 일이 생긴다 — 그건 「새 등록」인데 필수 검사를 건너뛰는 셈이다.
+    ⚠️ 저장된 값도 `is_valid` 로 다시 본다 — 비었거나 모양이 틀린 옛 값을 빌려 쓰지 않는다.
+    ⚠️ 조회가 실패하면 "" — 그러면 호출처는 **종전대로 거절**한다(여기서는 fail-closed 가 맞다:
+       빈 nvMid 로 새 상품이 들어가는 것이 이 규칙이 막으려던 바로 그 일이다).
+    """
+    url = product_url if isinstance(product_url, str) else ""
+    if not url:
+        return ""
+    try:
+        row = conn.execute(
+            "SELECT nv_mid FROM tracked_products WHERE product_url = ? AND user_id = ?",
+            (url, user_id)).fetchone()
+    except Exception:
+        return ""
+    if not row:
+        return ""
+    v = normalize(row[0])
+    return v if is_valid(v) else ""
+
+
 # ──────────────────────────────────────────────────────────────────────────
 #  자동 찾기 — 이미 모아 둔 수집분에서 nvMid 를 되찾는다 (네이버 요청 0건)
 # ──────────────────────────────────────────────────────────────────────────

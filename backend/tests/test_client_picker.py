@@ -9,6 +9,10 @@
    이었고, 아무도 몰랐다(9/14 실측: 400 10건 · 200 6건).
    ⇒ **화면에서 `/products/track` 를 부르는 자리는 전부 `client_id` 를 함께 보내야 한다.**
       새 버튼을 만들어도 이 시험이 잡는다.
+   ⚠️ **같은 사고가 두 번째로 났다**(2026-09-23 신고 #275). 9/18 에 서버가 `nv_mid` 를 필수로
+      늘렸는데, 이 시험은 `client_id` **한 칸만** 보고 있어서 같은 버튼이 다시 5일간 죽었다
+      (9/22 400 7건 · 9/23 3건 · 성공 0건). ⇒ 이제 필수 칸 목록을 **서버 검증부에서 직접 뽑는다**
+      (`track_product` 의 첫 `try:` 앞에서 읽는 `req.X` 전부). 서버가 칸을 늘리면 시험이 따라온다.
 
 ② **관리팀이 남의 업체를 못 보던 것**(신고 #265, 대표 확정 「모두 보게 하자」).
    `registered-clients` 가 manager 에게 `created_by = 본인` 으로 좁혀 줬는데
@@ -98,7 +102,37 @@ def strip_js_comments(src):
 # ==================================================================
 # ① 화면에서 /products/track 를 부르는 자리는 전부 client_id 를 보낸다
 # ==================================================================
+def _server_required_fields():
+    """`track_product` 가 **등록을 시작하기 전에**(첫 top-level `try:` 앞) 읽는 `req.X` 이름 전부.
+
+    ⚠️ 모델(`ProductAddRequest`)은 옛 화면 호환 때문에 `nv_mid` 를 선택값으로 두므로 모델로는
+       알 수 없다. 거절(400)이 일어나는 자리는 그 앞부분(검증부)이라 거기서 뽑는다.
+    """
+    src = read(os.path.join(BACKEND, "main.py"))
+    tree = ast.parse(src)
+    fn = None
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "track_product":
+            fn = node
+            break
+    if fn is None:
+        return set()
+    names = set()
+    for stmt in fn.body:
+        if isinstance(stmt, ast.Try):
+            break
+        for sub in ast.walk(stmt):
+            if (isinstance(sub, ast.Attribute) and isinstance(sub.value, ast.Name)
+                    and sub.value.id == "req"):
+                names.add(sub.attr)
+    return names
+
+
 def test_track_callers_send_client_id():
+    required = _server_required_fields()
+    ok("서버 검증부에서 필수 칸을 뽑았다 — client_id · nv_mid 포함",
+       {"client_id", "nv_mid"} <= required,
+       f"뽑은 칸 {sorted(required)} — track_product 가 옮겨졌거나 검증부 모양이 바뀌었다")
     callers = []
     for root, _dirs, files in os.walk(FE):
         for fn in files:
@@ -136,6 +170,11 @@ def test_track_callers_send_client_id():
             ok(f"{rel}:{line} 의 /products/track 호출이 client_id 를 보낸다",
                "client_id" in call,
                "업체 없이 보내면 서버가 400 으로 거절한다 — 버튼이 죽는다")
+            # 신고 #275 — 서버 검증부가 읽는 칸 **전부**를 보내야 한다(한 칸만 보던 것이 두 번째 사고의 원인)
+            for field in sorted(required - {"client_id"}):
+                ok(f"{rel}:{line} 의 /products/track 호출이 {field} 를 보낸다",
+                   re.search(r"\b" + re.escape(field) + r"\s*:", call) is not None,
+                   f"서버가 {field} 없는 요청을 400 으로 거절한다 — 신고 #266(client_id)·#275(nv_mid)와 같은 사고")
 
 
 # ==================================================================
