@@ -231,6 +231,12 @@ ok("KPI 가 「N위 밖」", re.search(r"\(_cap\.outside && _cap\.organic\) \? \
 ok("KPI 부제가 「첫 N곳 기준」", "'’ 첫 ' + _cap.organic + '곳 기준'" in jsx)
 css = read("frontend/css/place.css")
 ok("중립 상자 스타일이 있다", ".capwarn.neutral" in css)
+ok("중립 상자가 화면 바탕(--pa-bg)과 같은 색이 아니다(같으면 상자가 사라진다)",
+   re.search(r"\.capwarn\.neutral\{background:var\(--pa-card\)", css) is not None)
+_vers = [re.search(r"css/place\.css\?v=([0-9.]+)", read(f)) for f in ("frontend/index.html", "frontend/index.bundle.html")]
+ok("place.css 캐시 표식을 올렸다(6.6.1 이상 · 두 index 같음 — 안 올리면 옛 CSS 가 남는다)",
+   all(_vers) and _vers[0].group(1) == _vers[1].group(1)
+   and tuple(int(x) for x in _vers[0].group(1).split(".")) >= (6, 6, 1))
 
 
 print(f"\n결과: {passed} 통과 · {failed} 실패")
