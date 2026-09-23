@@ -83,6 +83,10 @@ on:
       hang_probe:
         description: '진단 스텝이 어디서 멈추는지 — true. 이 워크플로가 쓰는 명령을 하나씩 timeout 을 씌워 걸리는 지점을 찾는다(읽기 전용).'
         required: false
+      offline_health:
+        description: '오프라인(플레이스) 분석 점검 — off(기본) / on. 무인 순위 추적(활성 대상 전부를 매일 재나 · 미확인 추이) · 직원 분석·상권·제안서 보강의 성공/실패를 건수로만. 업체명·키워드·지역·IP 미출력(읽기 전용).'
+        required: false
+        default: 'off'
       place_capture_probe:
         description: '신고 #276 — 플레이스 분석 캡처 판독 재현. db = 기록 집계만 / auto = 9/22·9/23 사람 분석 행으로 네이버 목록 1~2회 받아 서버 판독기로 읽기 / at:시각;시각 = 그 시각 행을 그대로 재현 / at!:시각 = 같은데 이름을 그대로 찍는다(⚠️ 읽은 즉시 런 로그 삭제) / find!:업체명|검색어;검색어 = 이름으로 찾아 그 번호가 각 목록 몇 번째인지(⚠️ 로그 삭제) / depth:검색어;검색어 = 기록된 순위 분포 + 목록 데이터 칸 구조 / 그 밖의 글자 = 그 검색어로 1회. 업체명·키워드는 해시로만 찍는다(읽기 전용).'
         required: false
@@ -2426,3 +2430,207 @@ jobs:
             print("  ✅ 복구에 쓸 수 있는 백업이 최소 1개 있다." if ok_any
                   else "  🔴 복구에 쓸 수 있는 백업이 **하나도 없다**.")
             PYBK
+
+      - name: 오프라인(플레이스) 분석 점검 (읽기 전용 · 이름 미출력)
+        if: ${{ github.event.inputs.offline_health == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 180s
+          script: |
+            # ⚠️ 이 저장소는 공개다 — 업체명·키워드·지역·IP 를 찍지 않는다(건수·시각·해시만).
+            # ⚠️ 표·로그를 못 읽으면 「0」이 아니라 「못 쟀다」로 찍는다(CLAUDE.md 2026-09-18 규칙).
+            # ⚠️ 무인 수집과 직원 분석이 같은 표(place_rank_history)에 출처 칸 없이 쌓인다 —
+            #    그래서 표만이 아니라 접속 기록·서버 로그를 함께 본다.
+            # ⚠️ 추적기(확장) 버전은 서버로 안 실린다 — 교체 여부는 여기서 못 잰다.
+            echo "== [A·D] DB — 무인 순위 추적 · 소상공인365 (읽기 전용) =="
+            docker exec -i logic-analysis python3 - <<'PYO' || echo "  ⚠️ DB 점검 실행 실패 — 못 쟀다"
+            # 오프라인(플레이스) 분석 점검 — 읽기 전용 · 업체명·키워드·지역 미출력
+            import os, re, sqlite3, collections
+            DB = os.environ.get("PROBE_DB", "/app/data/logic_data.db")
+            conn = sqlite3.connect(f"file:{DB}?mode=ro", uri=True, timeout=20)
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+
+            def has_table(t):
+                return c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (t,)).fetchone() is not None
+            def cols(t):
+                return {r[1] for r in c.execute(f"PRAGMA table_info({t})")}
+            def norm(s):
+                return re.sub(r"\s+", "", str(s or "")).lower()
+            def mask(s):
+                return re.sub(r"[가-힣]+", "＊", str(s or ""))[:60]
+
+            now = c.execute("SELECT datetime('now','localtime')").fetchone()[0]
+            today = now[:10]
+            print(f"  서버 기준 지금: {now}  (오늘 = {today})")
+            print()
+
+            # ── A. 무인 순위 추적 ─────────────────────────────────────────
+            if not (has_table("place_track_target") and has_table("place_rank_history")):
+                print("[A] ❌ 플레이스 표가 없다 — 못 쟀다(0 이 아님)")
+            else:
+                tc, hc = cols("place_track_target"), cols("place_rank_history")
+                has_auto = "auto_added" in tc
+                has_vr = "visitor_reviews" in hc
+                T = c.execute("SELECT * FROM place_track_target").fetchall()
+                act = [t for t in T if (t["active"] or 0) == 1]
+                auto = [t for t in act if has_auto and (t["auto_added"] or 0) == 1]
+                print("[A-1] 등록 대상")
+                print(f"  전체 {len(T)}건 · 활성 {len(act)}건 · 비활성 {len(T)-len(act)}건")
+                if has_auto:
+                    print(f"  활성 중 — 자동 등록(제안서·분석이 올린 것) {len(auto)} · 직접 등록 {len(act)-len(auto)}")
+                else:
+                    print("  (auto_added 칸 없음 — 자동/직접 구분 못 함)")
+                biz = {(norm(t["business_name"]), norm(t["region"])) for t in act}
+                print(f"  활성 업체 수(이름+지역) {len(biz)}곳 · 장소 번호(place_id) 채워진 활성 대상 {sum(1 for t in act if (t['place_id'] or '').strip())}/{len(act)}")
+                new7 = [t for t in act if str(t["created_at"] or "") >= c.execute("SELECT date('now','localtime','-6 day')").fetchone()[0]]
+                print(f"  최근 7일 새로 등록된 활성 대상 {len(new7)}건")
+                print()
+
+                def keys_of(t):
+                    ks = set()
+                    pid = (t["place_id"] or "").strip()
+                    if pid: ks.add(f"doc:{pid}")
+                    nm = norm(t["business_name"])
+                    if nm: ks.add(f"nm:{nm}|{norm(t['region'])}")
+                    return ks
+                tkeys = [(t, keys_of(t), (t["keyword"] or "").strip()) for t in act]
+
+                start = c.execute("SELECT date('now','localtime','-13 day')").fetchone()[0]
+                H = c.execute("SELECT business_key, keyword, rank_position, rank_state, user_id, checked_at"
+                              + (", visitor_reviews" if has_vr else "") +
+                              " FROM place_rank_history WHERE date(checked_at) >= ?", (start,)).fetchall()
+                by_day = collections.defaultdict(list)
+                for h in H: by_day[str(h["checked_at"])[:10]].append(h)
+                MEAS = ("노출", "미노출")
+                def measured(h): return h["rank_position"] is not None or (h["rank_state"] or "").strip() in MEAS
+
+                print("[A-2] 최근 14일 — 날짜별 기록 · 활성 대상 커버리지(활성 목록은 지금 기준이라 과거는 참고값)")
+                print("  날짜        기록  노출 미노출 미확인 | 활성 중 기록됨  커버리지 | 리뷰 채움")
+                days = [r[0] for r in c.execute(
+                    "WITH RECURSIVE d(x) AS (SELECT date('now','localtime','-13 day') UNION ALL "
+                    "SELECT date(x,'+1 day') FROM d WHERE x < date('now','localtime')) SELECT x FROM d")]
+                for d in days:
+                    rows = by_day.get(d, [])
+                    st = collections.Counter(((h["rank_state"] or "").strip() or ("노출" if h["rank_position"] is not None else "미확인")) for h in rows)
+                    idx = {(h["business_key"], (h["keyword"] or "").strip()) for h in rows}
+                    hit = sum(1 for (t, ks, kw) in tkeys if any((k, kw) in idx for k in ks))
+                    cov = f"{100*hit/len(act):5.1f}%" if act else "  -  "
+                    rv = sum(1 for h in rows if has_vr and h["visitor_reviews"] is not None)
+                    wd = "월화수목금토일"[__import__('datetime').date.fromisoformat(d).weekday()]
+                    print(f"  {d}({wd}) {len(rows):4d}  {st.get('노출',0):4d} {st.get('미노출',0):5d} {st.get('미확인',0):5d} | {hit:4d}/{len(act):<4d}    {cov} | {rv:4d}")
+                print()
+
+                rows = by_day.get(today, [])
+                idx_meas = {(h["business_key"], (h["keyword"] or "").strip()) for h in rows if measured(h)}
+                idx_all = {(h["business_key"], (h["keyword"] or "").strip()) for h in rows}
+                got = [(t, ks, kw) for (t, ks, kw) in tkeys if any((k, kw) in idx_all for k in ks)]
+                got_m = [x for x in got if any((k, x[2]) in idx_meas for k in x[1])]
+                miss = [x for x in tkeys if x not in got]
+                print("[A-3] 오늘")
+                print(f"  활성 {len(act)}건 중 오늘 기록됨 {len(got)} (실측 {len(got_m)} · 미확인 {len(got)-len(got_m)}) · 기록 없음 {len(miss)}")
+                if miss:
+                    ma = sum(1 for (t,_,_) in miss if has_auto and (t['auto_added'] or 0) == 1)
+                    mn = sum(1 for (t,_,_) in miss if t in new7)
+                    mp = sum(1 for (t,_,_) in miss if not (t['place_id'] or '').strip())
+                    print(f"    기록 없는 것 — 자동 등록 {ma} · 직접 등록 {len(miss)-ma} · 최근 7일 새 등록 {mn} · 장소 번호 없음 {mp}")
+                hrs = collections.Counter(str(h["checked_at"])[11:13] for h in rows)
+                print("  오늘 기록 시각(시:건수) " + (" ".join(f"{k}시:{v}" for k, v in sorted(hrs.items())) or "없음"))
+                us = collections.Counter(h["user_id"] for h in rows)
+                print("  오늘 기록한 계정(id:건수) " + (" ".join(f"{k}:{v}" for k, v in sorted(us.items(), key=lambda x: -x[1])) or "없음"))
+                last = c.execute("SELECT MAX(checked_at) FROM place_rank_history").fetchone()[0]
+                print(f"  마지막 기록 {last}")
+                print()
+
+                since7 = c.execute("SELECT date('now','localtime','-6 day')").fetchone()[0]
+                H7 = [h for h in H if str(h["checked_at"])[:10] >= since7]
+                m7 = {(h["business_key"], (h["keyword"] or "").strip()) for h in H7 if measured(h)}
+                a7 = {(h["business_key"], (h["keyword"] or "").strip()) for h in H7}
+                never = [x for x in tkeys if not any((k, x[2]) in m7 for k in x[1])]
+                allunk = [x for x in never if any((k, x[2]) in a7 for k in x[1])]
+                print("[A-4] 활성 대상인데 최근 7일 실측(노출·미노출)이 한 번도 없는 것")
+                print(f"  {len(never)}건 — 그중 기록은 있는데 전부 「미확인」 {len(allunk)} · 기록 자체가 없음 {len(never)-len(allunk)}")
+                if never and has_auto:
+                    na = sum(1 for (t,_,_) in never if (t['auto_added'] or 0) == 1)
+                    print(f"    자동 등록 {na} · 직접 등록 {len(never)-na} · 최근 7일 새 등록 {sum(1 for (t,_,_) in never if t in new7)}")
+                print()
+
+            # ── D. 소상공인365 상권 ───────────────────────────────────────
+            print("[D] 소상공인365 상권 호출 기록(sbiz_health)")
+            if not has_table("sbiz_health"):
+                print("  ❌ 표가 없다 — 못 쟀다(0 이 아님)")
+            else:
+                R = c.execute("SELECT checked_at, ok, reason, source FROM sbiz_health "
+                              "WHERE date(checked_at) >= date('now','localtime','-13 day') ORDER BY checked_at").fetchall()
+                per = collections.defaultdict(lambda: collections.Counter())
+                for r in R: per[str(r["checked_at"])[:10]][(r["source"] or "?", "ok" if r["ok"] else "fail")] += 1
+                print("  날짜        자가점검 ok/fail · 직원 사용 ok/fail")
+                for d in sorted(per):
+                    p = per[d]
+                    print(f"  {d}   {p[('probe','ok')]:3d}/{p[('probe','fail')]:<3d}      {p[('live','ok')]:3d}/{p[('live','fail')]:<3d}")
+                if not R: print("  (최근 14일 기록 없음)")
+                for src in ("probe", "live"):
+                    lo = c.execute("SELECT MAX(checked_at) FROM sbiz_health WHERE source=? AND ok=1", (src,)).fetchone()[0]
+                    lf = c.execute("SELECT MAX(checked_at) FROM sbiz_health WHERE source=? AND ok=0", (src,)).fetchone()[0]
+                    print(f"  [{src}] 마지막 성공 {lo} · 마지막 실패 {lf}")
+                fr = collections.Counter(mask(r["reason"]) for r in R if not r["ok"])
+                print("  최근 14일 실패 사유: " + (", ".join(f"{k or '(빈값)'} {v}" for k, v in fr.most_common(6)) or "없음"))
+            conn.close()
+            PYO
+            echo
+            echo "== [B] 접속 기록 — 플레이스 경로 (IP 는 런마다 새 소금 해시) =="
+            NOWLOG=/var/log/nginx/access.log; OLDLOG=/var/log/nginx/access.log.1
+            # [B] 플레이스 경로 접속 기록 — IP 는 런마다 새 소금 해시 6자리 · 경로 뒤 질의문자열 제거
+            IPSALT=$(head -c 16 /dev/urandom 2>/dev/null | od -An -tx1 | tr -d ' \n')
+            NOWLOG=${NOWLOG:-/var/log/nginx/access.log}; OLDLOG=${OLDLOG:-/var/log/nginx/access.log.1}
+            sudo -n true 2>/dev/null && S="sudo -n" || S=""
+            $S cat "$OLDLOG" "$NOWLOG" 2>/dev/null > /tmp/_pl_all.txt
+            $S cat "$NOWLOG" 2>/dev/null > /tmp/_pl_now.txt
+            echo "  읽은 줄: 합쳐서 $(wc -l < /tmp/_pl_all.txt) · 현재 로그 $(wc -l < /tmp/_pl_now.txt)"
+            [ -s /tmp/_pl_all.txt ] || { echo "  ⚠️ 접속 기록을 못 읽었다 — 못 쟀다(0 이 아님)"; }
+            PAT='/api/(place/(ingest|track-targets|proposal-enrich|rank-history|keywords)|seo/analyze)'
+            grep -aE "\"[A-Z]+ $PAT" /tmp/_pl_all.txt | awk -v salt="$IPSALT" '
+              { ip=$1; t=$4; gsub(/^\[/,"",t); split(t,a,":"); day=a[1];
+                p=$7; sub(/\?.*$/,"",p); sub(/^.*\/api\//,"",p); code=$9;
+                if (!(ip in h6)) { cmd="printf %s " salt ip " | md5sum | cut -c1-6"; cmd | getline h6[ip]; close(cmd) }
+                n[p]++; cd[p" "code]++; dd[p" "day]++; src[p" "h6[ip]]=1; paths[p]=1; days[day]=1 }
+              END { for (p in paths) {
+                      s=0; for (k in src) { split(k,b," "); if (b[1]==p) s++ }
+                      printf "  %-24s 총 %5d건 · 보낸 곳 %d\n", p, n[p], s;
+                      line="      응답:"; for (k in cd) { split(k,b," "); if (b[1]==p) line=line " " b[2] "×" cd[k] } print line;
+                      line="      날짜:"; for (k in dd) { split(k,b," "); if (b[1]==p) line=line " " b[2] "=" dd[k] } print line } }'
+            echo "  -- 마지막 요청 시각(현재 로그만 — 회전 경계를 마지막 시각으로 읽지 않게) --"
+            for p in place/ingest place/track-targets place/proposal-enrich seo/analyze; do
+              l=$(grep -aE "\"[A-Z]+ /api/$p" /tmp/_pl_now.txt | tail -1 | awk '{t=$4; gsub(/^\[/,"",t); print t, $9}')
+              echo "    $p : ${l:-현재 로그에 없음}"
+            done
+            rm -f /tmp/_pl_all.txt /tmp/_pl_now.txt
+            echo
+            echo "== [C] 서버 로그 — 고정 문구 앞부분만 센다 =="
+            # [C] 서버 로그 — 고정 문구의 앞부분만 센다(뒤의 예외 내용엔 가게 이름이 섞일 수 있어 버린다)
+            CN=${CN:-logic-analysis}
+            echo "  컨테이너 $(docker inspect -f '{{.Name}} 기동 {{.State.StartedAt}} · 재시작 {{.RestartCount}}회' $CN 2>/dev/null || echo '정보 못 읽음')"
+            docker logs $CN > /tmp/_pl_log.txt 2>&1 || { echo "  ⚠️ 컨테이너 로그를 못 읽었다 — 못 쟀다"; }
+            echo "  읽은 줄: $(wc -l < /tmp/_pl_log.txt)"
+            cnt() { printf "    %-36s %s\n" "$1" "$(grep -acE "$2" /tmp/_pl_log.txt)"; }
+            echo "  -- 무인 추적 기록 --"
+            cnt "ingest 항목 건너뜀"            'ingest 항목 건너뜀'
+            cnt "ingest 통째 실패"              '플레이스 ingest 실패'
+            echo "  -- 직원 플레이스 분석 --"
+            cnt "분석 실패(ERROR)"              '플레이스 분석 실패'
+            cnt "순위 이력 저장 건너뜀"          '플레이스 순위 이력 저장 건너뜀'
+            grep -aoE '\[플레이스 분석\] [^:(]{1,30}' /tmp/_pl_log.txt | sort | uniq -c | sed 's/^/     /'
+            echo "  -- 제안서 플레이스 보강 --"
+            grep -aoE '\[proposal-enrich\] [^:(]{1,30}' /tmp/_pl_log.txt | sort | uniq -c | sed 's/^/     /'
+            [ "$(grep -ac '\[proposal-enrich\]' /tmp/_pl_log.txt)" = "0" ] && echo "     (경고 0건)"
+            echo "  -- 소상공인365 상권 --"
+            grep -aoE '\[sbiz365\] [^:(0-9]{1,30}' /tmp/_pl_log.txt | sort | uniq -c | sed 's/^/     /'
+            [ "$(grep -ac '\[sbiz365\]' /tmp/_pl_log.txt)" = "0" ] && echo "     (sbiz365 경고 0건)"
+            echo "  -- 정해진 잡 (마지막 3줄 · 건수만 담긴 문구) --"
+            grep -aE '📍 플레이스 자동 추적 정리|플레이스 자동 추적 정리 예외' /tmp/_pl_log.txt | tail -3 | sed 's/^/     /'
+            [ "$(grep -acE '📍 플레이스 자동 추적 정리' /tmp/_pl_log.txt)" = "0" ] && echo "     01:40 정리 줄 0건(기동 이후 01:40 을 안 지났거나 로그 없음)"
+            grep -aE '🩺 소상공인365 자가 점검' /tmp/_pl_log.txt | tail -3 | sed 's/^/     /'
+            rm -f /tmp/_pl_log.txt
