@@ -233,6 +233,9 @@ jobs:
             echo "$LN" | sort
             printf "  앱 로그 기동 이후 'database is locked' 줄 수: "
             docker logs --since "$(docker inspect -f '{{.State.StartedAt}}' logic-analysis)" logic-analysis 2>&1 | grep -c "database is locked"
+            echo "  [잠금 줄의 앞뒤 — 어느 경로·배치에서 났나 (160자 · 숫자 외 질의 없음)]"
+            docker logs --timestamps --since "$(docker inspect -f '{{.State.StartedAt}}' logic-analysis)" logic-analysis 2>&1 \
+              | grep -B3 "database is locked" | grep -v -E "keyword|키워드" | cut -c1-160 | tail -40
       - name: '#265 배포 위험도 — 새 시간표 미리보기 (issue275=on · 읽기 전용)'
         if: ${{ github.event.inputs.issue275 == 'on' }}
         uses: appleboy/ssh-action@v1.0.3
