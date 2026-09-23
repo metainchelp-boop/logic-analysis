@@ -261,6 +261,11 @@ jobs:
             ov_new = sum(1 for k in rem if new[k] < hour); ov_old = sum(1 for k in rem if old[k] < hour)
             print(f"  지금 {hour}시 · 오늘 남은 {len(rem)}개 중 이미 지난 시각에 속한 몫 — 옛 규칙 {ov_old}개 · 새 규칙 {ov_new}개")
             print(f"  남은 시간 {24 - hour}시간 × 시간당 최대 30(두 대) = {(24 - hour) * 30}개 처리 가능")
+            try:
+                import collect_cap
+                print(f"  서버 상한(effective_cap) = {collect_cap.effective_cap()} · 서버 시간표가 새 규칙인가 = {old == new}")
+            except Exception as e:
+                print("  상한 조회 실패(못 쟀다):", e)
             PY
       - name: 3탭 라이브 확인 (live_check=on · 읽기 전용)
         if: ${{ github.event.inputs.live_check == 'on' }}
