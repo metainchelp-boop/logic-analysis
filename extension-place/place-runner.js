@@ -1,4 +1,4 @@
-/* METAINC 플레이스 순위 추적기 — 무인 러너 (v1.0.3)
+/* METAINC 플레이스 순위 추적기 — 무인 러너 (v1.1.1)
  *
  * 매일 06:30(로컬) chrome.alarms 로 기동해, 로직분석에 등록된 추적 대상(업체×키워드)을
  * 키워드별로 pcmap.place.naver.com 목록 탭에서 수집(자동 스크롤 + __APOLLO_STATE__ 판독)하고,
@@ -230,8 +230,17 @@ function pageExtract() {
           var val = ap[key];
           if (!val || typeof val !== 'object') return;
           var isAd = key.indexOf('Ad') >= 0 || String(val.adId || '').toLowerCase().indexOf('nad') >= 0;
-          var isBiz = key.indexOf('PlaceListBusinessesItem') === 0 || key.indexOf('RestaurantListSummary') === 0
-            || key.indexOf('RestaurantAdSummary') === 0 || (('id' in val) && ('name' in val));
+          // ⚠️ 서버 place_crawler._is_business_entry 와 **같은 규칙**(신고 #276 · 2026-09-23).
+          //    「거리순」 같은 필터 버튼(PlaceListFilterItem)도 id·name 이 있어 종전엔 업체로 셌다
+          //    (실측: 업체 52곳 → 116곳). 이름만 있는 모르는 형식은 업체다운 칸이 있을 때만 받는다.
+          //    이 함수는 페이지에 주입되므로 바깥 이름을 쓰지 않는다(자기완결).
+          var typeName = String(key).split(':')[0];
+          var known = key.indexOf('PlaceListBusinessesItem') === 0 || key.indexOf('RestaurantListSummary') === 0
+            || key.indexOf('RestaurantAdSummary') === 0;
+          var hint = ['address', 'roadAddress', 'commonAddress', 'fullAddress', 'category', 'businessCategory',
+            'categoryCodeList', 'visitorReviewCount', 'x', 'y'].some(function (f) { return f in val; });
+          var isBiz = typeName !== 'PlaceListFilterItem'
+            && (known || (('id' in val) && ('name' in val) && hint));
           if (!isBiz) return;
           var name = val.name || val.businessName; if (!name) return;
           // 리뷰 수도 함께 담는다(2026-08-12) — 목록 데이터에 이미 들어 있는데 종전엔 버렸다.

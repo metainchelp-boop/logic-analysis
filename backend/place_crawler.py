@@ -103,6 +103,34 @@ def _parse_apollo(html):
         return {}
 
 
+# 목록 데이터(__APOLLO_STATE__)에 섞여 있는 **업체가 아닌 항목** — 신고 #276(2026-09-23).
+# 「거리순」 같은 필터 버튼(PlaceListFilterItem)도 id·name 을 갖고 있어 종전 규칙
+# (id·name 만 있으면 업체)이 업체로 셌다. 실측: 업체 52곳인데 「판독된 업체 116곳」,
+# 19곳인데 27곳. 이번 표본에서는 필터가 업체 **뒤**에 붙어 순위 숫자는 맞았지만,
+# 앞에 붙는 화면이 오면 순위가 밀린다. ⚠️ 무인 추적기(extension-place/place-runner.js
+# pageExtract)도 같은 규칙이다 — 한쪽만 고치면 두 세계의 순위가 갈린다.
+_NON_BUSINESS_TYPES = ("PlaceListFilterItem",)
+# 이름만 보고 업체로 칠 때(알려진 업체 형식이 아닐 때) 요구하는 「업체다운 칸」.
+# 실측: 업체 항목은 address·category·businessCategory 등 50칸 넘게 갖고,
+# 필터 버튼은 id·name·count·value 같은 12칸뿐이다(2026-09-23 · 검색어 2종).
+_BUSINESS_HINT_FIELDS = ("address", "roadAddress", "commonAddress", "fullAddress", "category",
+                         "businessCategory", "categoryCodeList", "visitorReviewCount", "x", "y")
+_KNOWN_BUSINESS_PREFIXES = ("PlaceListBusinessesItem", "RestaurantListSummary", "RestaurantAdSummary")
+
+
+def _is_business_entry(key, val):
+    """이 __APOLLO_STATE__ 항목이 업체인가. 알려진 업체 형식은 그대로 받고,
+    알 수 없는 형식은 id·name 에 더해 업체다운 칸이 하나라도 있을 때만 받는다."""
+    typename = str(key).split(":", 1)[0]
+    if typename in _NON_BUSINESS_TYPES:
+        return False
+    if key.startswith(_KNOWN_BUSINESS_PREFIXES):
+        return True
+    if "id" in val and "name" in val:
+        return any(f in val for f in _BUSINESS_HINT_FIELDS)
+    return False
+
+
 def _items_from_apollo(apollo):
     """__APOLLO_STATE__ 에서 업체 항목을 추출. 구조화 소스(1순위)."""
     items = []
@@ -110,9 +138,7 @@ def _items_from_apollo(apollo):
         if not isinstance(val, dict):
             continue
         is_ad = ("Ad" in key) or ("nad" in str(val.get("adId", "")).lower())
-        is_biz = key.startswith("PlaceListBusinessesItem") or key.startswith("RestaurantListSummary") \
-            or key.startswith("RestaurantAdSummary") or ("id" in val and ("name" in val))
-        if not is_biz:
+        if not _is_business_entry(key, val):
             continue
         name = val.get("name") or val.get("businessName")
         if not name:
@@ -148,6 +174,31 @@ def _items_from_dom(html):
     return items
 
 
+def _list_total(apollo):
+    """네이버가 밝힌 이 검색의 전체 업체 수(ROOT_QUERY.placeList(...).businesses.total).
+    ⚠️ **표시용**이다 — 「전체 335곳 중 첫 52곳」처럼 알리는 데만 쓰고 순위 판정에는 쓰지 않는다.
+    placeList 가 여럿 실리면(실측: 335 와 3) 업체 목록이 가장 긴 쪽을 고른다. 못 찾으면 None."""
+    try:
+        root = apollo.get("ROOT_QUERY") or {}
+        best = None
+        for k, v in root.items():
+            if not str(k).startswith("placeList") or not isinstance(v, dict):
+                continue
+            for k2, v2 in v.items():
+                if str(k2).split("(", 1)[0] != "businesses" or not isinstance(v2, dict):
+                    continue
+                total = v2.get("total")
+                if not isinstance(total, int) or isinstance(total, bool):
+                    continue
+                items = v2.get("items")
+                n = len(items) if isinstance(items, list) else 0
+                if best is None or (n, total) > best[0]:
+                    best = ((n, total), total)
+        return best[1] if best else None
+    except Exception:
+        return None
+
+
 def parse_place_search(html):
     """
     캡처한 플레이스 검색결과 HTML → 순서 있는 업체 목록.
@@ -156,12 +207,13 @@ def parse_place_search(html):
     rank 는 광고(is_ad) 를 제외한 오가닉 순번(1부터).
     """
     if not html:
-        return {"region": None, "category": None, "items": []}
+        return {"region": None, "category": None, "items": [], "total": None}
 
     region, category = extract_region_and_type(html)
 
     apollo = _parse_apollo(html)
     items = _items_from_apollo(apollo) if apollo else []
+    total = _list_total(apollo) if apollo else None
     if not items:
         items = _items_from_dom(html)
 
@@ -174,7 +226,7 @@ def parse_place_search(html):
             organic_rank += 1
             it["rank"] = organic_rank
 
-    return {"region": region, "category": category, "items": items}
+    return {"region": region, "category": category, "items": items, "total": total}
 
 
 def find_place_rank(parsed, target_doc_id=None, target_name=None):
@@ -203,6 +255,46 @@ def find_place_rank(parsed, target_doc_id=None, target_name=None):
             return {"state": "노출", "rank": rank, "page": page, "matched": it}
 
     return {"state": "미노출", "rank": None, "page": None, "matched": None}
+
+
+def _strip_name(s):
+    """이름 비교용 — 공백·기호를 빼고 소문자로(한글·영문·숫자만 남긴다)."""
+    return re.sub(r"[^0-9a-z가-힣]", "", _norm(s))
+
+
+def similar_name_candidate(target_name, items, min_ratio=0.7):
+    """내 업체를 못 찾았을 때, 목록에 **같은 업체일 가능성이 높은 다른 표기**가 있는가.
+    신고 #276(2026-09-23): 입력한 이름이 네이버 등록명과 정확히 같은데도 화면이
+    「업체명이 등록명과 같은지 확인해 주세요」라고 해서 직원이 이름 문제로 읽었다.
+    ⇒ 이 문구는 비슷한 이름이 실제로 목록에 있을 때만 띄운다.
+
+    판정(보수적 — 헛된 「혹시 이 업체?」는 순위 밖이라는 사실을 가린다):
+      ① 목록 이름이 입력 이름 안에 통째로 들어 있다(입력이 더 길다 — 「OO카페 강남점」 ↔ 「OO카페」)
+      ② 기호 뺀 두 이름의 유사도가 min_ratio 이상(오타·띄어쓰기·기호 차이)
+    ⚠️ 짧은 한글 이름끼리의 유사도는 우연히 0.4~0.5 가 흔하다(신고 건 실측 0.43·0.50) —
+       그래서 0.7 아래는 후보로 치지 않는다.
+    반환: {"name", "rank", "ratio"} 또는 None. 광고는 보지 않는다."""
+    import difflib
+    t = _strip_name(target_name)
+    if len(t) < 2:
+        return None
+    best = None
+    for it in items or []:
+        if it.get("is_ad") or not it.get("name"):
+            continue
+        n = _strip_name(it["name"])
+        if len(n) < 2:
+            continue
+        ratio = difflib.SequenceMatcher(None, t, n).ratio()
+        # ①은 목록 이름이 너무 짧으면 흔한 낱말(「카페」·「치킨」)이 걸린다 →
+        #    3글자 이상이면서 입력 이름 길이의 절반 이상일 때만 친다.
+        contained = n in t and len(n) >= 3 and len(n) * 2 >= len(t)
+        if not (contained or ratio >= min_ratio):
+            continue
+        score = (1 if contained else 0, ratio)
+        if best is None or score > best[0]:
+            best = (score, {"name": it["name"], "rank": it.get("rank"), "ratio": round(ratio, 2)})
+    return best[1] if best else None
 
 
 # ============================================================
