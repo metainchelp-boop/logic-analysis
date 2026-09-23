@@ -38,6 +38,10 @@ on:
         description: '순위 매칭 A/B(정확 식별 vs 종전 폴백 · B5) — off(기본) / on. 배포된 매처로 최근 14일 수집분에 추적 대상 전부를 대조해 「정확 식별만」·「지금 규칙(정확+폴백)」·「종전 규칙만」 셋의 매칭 수를 센다(읽기 전용 · 업체명·키워드 미출력). ⚠️ #256 배포 뒤에만 의미 있다(그 전엔 정확 식별 모듈이 없다).'
         required: false
         default: 'off'
+      issue275:
+        description: '신고 #275 — 추적 등록(/products/track) 실패 기록 · 9/22 이후 등록 상품 nvMid·연결 상태(읽기 전용 · 이름·주소 미출력)'
+        required: false
+        default: 'off'
       live_check:
         description: '3탭(#253) 라이브 확인 — off(기본) / on. 서버에 올라간 프론트 번들의 마커 · rank_axes.py 존재 · 오늘 /api/collector 접속처(해시 앞 6자·건수·마지막 시각 — IP 원문 미출력).'
         required: false
@@ -131,6 +135,67 @@ jobs:
             for k, v in sorted(cnt.items(), key=lambda x: -x[1]): print(f"  {k:>14}  {v}")
             print("[정확 식별이 놓치고 폴백만 잡은 것 — 등록 주소 유형]", dict(shapes))
             print("⇒ 「-/지금/종전」 이 크면 폴백을 지울 수 없다(B5 유지). 「정확/…」 이 종전과 같으면 폴백 삭제 가능.")
+            PY
+      - name: 신고 #275 확인 (issue275=on · 읽기 전용)
+        if: ${{ github.event.inputs.issue275 == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          command_timeout: 120s
+          script: |
+            for f in /var/log/nginx/access.log /var/log/nginx/logic-analysis.access.log; do [ -f "$f" ] && LOG="$f" && break; done
+            T=/tmp/acc275.txt; : > $T
+            for f in $(ls "$LOG".*.gz 2>/dev/null | sort -V -r | tail -8); do zcat "$f" >> $T 2>/dev/null; done
+            [ -f "$LOG.1" ] && cat "$LOG.1" >> $T; cat "$LOG" >> $T
+            echo "== 신고 #275 ① POST /api/products/track 날짜×상태 (접속 로그 $(wc -l < $T)줄 · 가장 이른 $(head -1 $T | awk '{print substr($4,2,11)}')) =="
+            grep -a '"POST /api/products/track' $T | awk '{split($4,t,":"); d=substr(t[1],2); n[d" "$9]++} END {for (k in n) print "  " k " x" n[k]}' | sort -t/ -k2,2M -k1,1n
+            echo "== ② 9/22·9/23 한 줄씩 (시각 · 상태 · 응답 바이트 · 출처 해시) — track 과 nvmid-lookup =="
+            grep -a -E '"POST /api/products/(track|nvmid-lookup)' $T | grep -a -E '2[23]/Sep/2026' | awk '{ip=$1; cmd="printf %s " ip " | sha256sum | cut -c1-6"; cmd | getline h; close(cmd); p=$7; sub(/.*\/products\//,"",p); print "  " substr($4,2) "  " p "  " $9 "  " $10 "B  " h}'
+            echo "== ③ 9/22 11:30~13:30 track 을 부른 출처의 요청 흐름 (경로만 · 질의 제거) =="
+            SRC=$(grep -a '"POST /api/products/track' $T | grep -a -E '22/Sep/2026:1[123]' | awk '{print $1}' | sort -u)
+            for ip in $SRC; do
+              h=$(printf %s "$ip" | sha256sum | cut -c1-6); echo "  [출처 $h]"
+              grep -a "^$ip " $T | grep -a -E '22/Sep/2026:(11:[3-5]|12:|13:[0-2])' | grep -a '/api/' | awk '{p=$7; sub(/\?.*/,"",p); print "    " substr($4,14) " " substr($6,2) " " p " " $9}' | grep -v -E '/api/collector/health|/api/auth/me|/api/notifications' | tail -40
+            done
+            rm -f $T
+            echo "== ④ DB — 9/22 10:40 이후 만들어지거나 고쳐진 추적 상품 (이름·주소·키워드 미출력) =="
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sqlite3, re
+            from urllib.parse import urlparse
+            c = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True); c.row_factory = sqlite3.Row
+            cols = [r[1] for r in c.execute("PRAGMA table_info(tracked_products)")]
+            print("  칸:", ",".join(cols))
+            rows = c.execute("SELECT * FROM tracked_products WHERE created_at >= '2026-09-22 10:40:00' OR updated_at >= '2026-09-22 10:40:00' ORDER BY id").fetchall()
+            print(f"  대상 {len(rows)}행")
+            def shape(u):
+                try:
+                    pu = urlparse(u or "")
+                    host = (pu.netloc or "?").split(".")[0]
+                    return f"{host}{'?' if pu.query else ''}{'#' if pu.fragment else ''}"
+                except Exception:
+                    return "?"
+            for r in rows:
+                nv = (r["nv_mid"] or "") if "nv_mid" in cols else ""
+                kw = c.execute("SELECT COUNT(*) FROM tracked_keywords WHERE product_id=?", (r["id"],)).fetchone()[0]
+                links = [x[0] for x in c.execute("SELECT client_id FROM rank_link WHERE tracked_product_id=?", (r["id"],))]
+                pid = (r["product_id"] or "").strip()
+                dup = c.execute("SELECT COUNT(*) FROM tracked_products WHERE product_id=? AND product_id<>''", (pid,)).fetchone()[0] if pid else 0
+                same_user_dup = c.execute("SELECT COUNT(*) FROM tracked_products WHERE product_id=? AND product_id<>'' AND user_id=?", (pid, r["user_id"])).fetchone()[0] if pid else 0
+                ana = []
+                for cid in links:
+                    a = c.execute("SELECT product_url, created_at FROM client_analyses WHERE client_id=? ORDER BY id DESC LIMIT 1", (cid,)).fetchone()
+                    if a:
+                        au = (a["product_url"] or "").strip()
+                        m = re.search(r"/products/(\d+)", au)
+                        ana.append(f"c{cid}:분석 {a['created_at'][:16]} 주소같음={au == (r['product_url'] or '').strip()} 상품번호같음={bool(m and m.group(1) == pid)} 분석주소모양={shape(au)}")
+                    else:
+                        ana.append(f"c{cid}:분석 없음")
+                print(f"  #{r['id']} 만든 {r['created_at'][5:16]} 고친 {(r['updated_at'] or '')[5:16]} user={r['user_id']} nvMid={'있음 '+str(len(nv))+'자리' if nv else '없음'}"
+                      f" 상품번호={'있음' if pid else '없음'} 내림={'예' if (r['disabled_at'] if 'disabled_at' in cols else '') else '아니오'} 키워드 {kw}개"
+                      f" 주소모양={shape(r['product_url'])} 같은상품번호 행 {dup}(같은직원 {same_user_dup}) 연결 {links or '없음'} | " + " / ".join(ana))
             PY
       - name: 3탭 라이브 확인 (live_check=on · 읽기 전용)
         if: ${{ github.event.inputs.live_check == 'on' }}
