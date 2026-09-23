@@ -97,6 +97,24 @@ jobs:
       # ── 로직분석 결과값 전수조사 (2026-09-23 · 읽기 전용) ──
       # 대표 질문 「로직분석 실행했을 때 나오는 값이 정확한가 · 안 나오거나 오류인 게 있나」에 서버에서 답한다.
       # ⚠️ 저장소 공개 — 칸 이름(코드 식별자)·건수·상태코드만 찍는다. 한글은 소스에 있는 낱말만 남기고 가린다.
+      - name: FE 제안서 라이브 문구 확인 (#269 · GET 전용)
+        if: ${{ github.event.inputs.analysis_audit == 'live269' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 60s
+          script: |
+            UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+            F=$(mktemp)
+            ST=$(curl -sSL -A "$UA" -H 'Cache-Control: no-cache' -o "$F" -w '%{http_code}' "http://metainc.co.kr/proposal/index.html?cb=$(date +%s)" || echo FAIL)
+            echo "status=$ST bytes=$(wc -c < "$F")"
+            for M in "function _benchOf(m)" "'상위 경쟁사'" "{text:comparisonName,options:th}" "var bm=_benchOf(m);" "'비교 기준 확인 필요'" "'붙여넣은 경쟁사'" "경쟁사 정면 비교" "1페이지 평균"; do
+              echo "마커[$M]=$(grep -o -F -- "$M" "$F" | wc -l)"
+            done
+            rm -f "$F"
+
       - name: 로직분석 결과값 전수조사 3차 (읽기 전용)
         if: ${{ github.event.inputs.analysis_audit == 'url' }}
         uses: appleboy/ssh-action@v1.0.3
