@@ -97,6 +97,55 @@ jobs:
       # ── 로직분석 결과값 전수조사 (2026-09-23 · 읽기 전용) ──
       # 대표 질문 「로직분석 실행했을 때 나오는 값이 정확한가 · 안 나오거나 오류인 게 있나」에 서버에서 답한다.
       # ⚠️ 저장소 공개 — 칸 이름(코드 식별자)·건수·상태코드만 찍는다. 한글은 소스에 있는 낱말만 남기고 가린다.
+      - name: 로직분석 결과값 전수조사 3차 (읽기 전용)
+        if: ${{ github.event.inputs.analysis_audit == 'url' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 180s
+          script: |
+            docker exec -i logic-analysis python3 - <<'PY'
+            # 전수조사 3차 — 제안서가 상품 HTML 에서 상품 주소를 뽑는 규칙(proposal extractProductUrlFromHtml)을
+            # 저장된 실제 상세 HTML 에 그대로 돌려 본다 (읽기 전용 · 건수·모양만)
+            import sqlite3, re, sys, collections
+            sys.path.insert(0, "/app")
+            from detail_html_store import _unpack
+            c = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True, timeout=20)
+            OG1 = re.compile(r'<meta[^>]+property=["\']og:url["\'][^>]*content=["\']([^"\']+)["\']', re.I)
+            OG2 = re.compile(r'<meta[^>]+content=["\']([^"\']+)["\'][^>]*property=["\']og:url["\']', re.I)
+            CAN = re.compile(r'<link[^>]+rel=["\']canonical["\'][^>]*href=["\']([^"\']+)["\']', re.I)
+            PROD = re.compile(r'naver\.com/.*/products/\d+')
+            ALL = re.compile(r'https?://smartstore\.naver\.com/[A-Za-z0-9_-]+/products/\d+')
+            def shape(u):
+                u = u.split("?")[0]
+                u = re.sub(r"https?://", "", u)
+                return re.sub(r"/[^/]+", lambda m: "/{n}" if m.group(0)[1:].isdigit() else ("/" + m.group(0)[1:] if m.group(0)[1:] in ("products", "main", "category") else "/{x}"), u)[:60]
+            res = collections.Counter(); og_shape = collections.Counter(); can_shape = collections.Counter(); n = 0
+            for (html,) in c.execute("SELECT html FROM client_detail_html"):
+                h = _unpack(html) or ""
+                if len(h) < 100: continue
+                n += 1
+                m = OG1.search(h) or OG2.search(h)
+                if m: og_shape[shape(m.group(1))] += 1
+                else: og_shape["(og:url 없음)"] += 1
+                k = CAN.search(h)
+                if k: can_shape[shape(k.group(1))] += 1
+                else: can_shape["(canonical 없음)"] += 1
+                if m and PROD.search(m.group(1)): res["① og:url 로 성공"] += 1; continue
+                if k and PROD.search(k.group(1)): res["② canonical 로 성공"] += 1; continue
+                a = ALL.findall(h)
+                cnt = collections.Counter(x.split("?")[0] for x in a)
+                if cnt and cnt.most_common(1)[0][1] >= 2: res["③ 본문 링크 2회 이상으로 성공"] += 1; continue
+                res["✗ 실패(빈 주소 → 광고주 분석 422)"] += 1
+                res["  └ 실패 중 본문 스마트스토어 링크 1회만 있음" if cnt else "  └ 실패 중 본문에 스마트스토어 상품 링크 0"] += 1
+            print(f"== 제안서 상품 주소 뽑기 — 저장 HTML {n}건에 그대로 적용 ==")
+            for k, v in res.items(): print(f"  {k:<40} {v}")
+            print("  og:url 모양:", og_shape.most_common(8))
+            print("  canonical 모양:", can_shape.most_common(8))
+            PY
+
       - name: 로직분석 결과값 전수조사 2차 (읽기 전용)
         if: ${{ github.event.inputs.analysis_audit == 'detail' }}
         uses: appleboy/ssh-action@v1.0.3
