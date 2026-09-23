@@ -83,11 +83,205 @@ on:
       hang_probe:
         description: '진단 스텝이 어디서 멈추는지 — true. 이 워크플로가 쓰는 명령을 하나씩 timeout 을 씌워 걸리는 지점을 찾는다(읽기 전용).'
         required: false
+      place_capture_probe:
+        description: '신고 #276 — 플레이스 분석 캡처 판독 재현. db = 기록 집계만 / auto = 9/22·9/23 사람 분석 행으로 네이버 목록 1~2회 받아 서버 판독기로 읽기 / 그 밖의 글자 = 그 검색어로 1회. 업체명·키워드는 해시로만 찍는다(읽기 전용).'
+        required: false
 
 jobs:
   diagnose:
     runs-on: ubuntu-latest
     steps:
+      # ── 신고 #276 플레이스 분석 캡처 판독 재현 (2026-09-23 · 읽기 전용) ──
+      # 「내 업체를 찾지 못했습니다」가 이 업체만의 이름 불일치인지, 서버 판독기가 지금 네이버 목록을
+      # 못 읽는 것인지 가른다. ⚠️ 저장소 공개 — 업체명·키워드·지역은 해시로만 찍는다.
+      - name: 플레이스 캡처 판독 재현 (#276 · 읽기 전용)
+        if: ${{ github.event.inputs.place_capture_probe != '' }}
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          PCPROBE: ${{ github.event.inputs.place_capture_probe }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 180s
+          envs: PCPROBE
+          script: |
+            docker exec -i -e PCPROBE="$PCPROBE" logic-analysis python3 - <<'PY'
+            # 신고 #276 — 플레이스 분석 「내 업체를 찾지 못했습니다」 재현 (읽기 전용)
+            # ⚠️ 저장소가 공개다 — 업체명·키워드·지역은 한 글자도 찍지 않는다(해시·개수·일치 여부만).
+            import os, sys, sqlite3, hashlib, re, json, time, difflib, urllib.request, urllib.parse
+            from collections import Counter, defaultdict
+
+            MODE = (os.getenv("PCPROBE") or "").strip()
+            DB = os.getenv("PCPROBE_DB") or "file:/app/data/logic_data.db?mode=ro"
+            sys.path.insert(0, os.getenv("PCPROBE_PATH") or "/app")
+            import place_crawler as pc
+
+            def h(s):
+                return hashlib.sha1(str(s or "").encode("utf-8")).hexdigest()[:6]
+
+            conn = sqlite3.connect(DB, uri=True, timeout=20)
+            conn.row_factory = sqlite3.Row
+            HEAVY = 30   # 하루 이만큼 이상 쓴 계정 = 무인 추적 추정(사람 분석은 하루 몇 건)
+
+            print("=" * 70)
+            print("[1] 최근 21일 — 날짜 × 기록 계정(번호) × 상태  (계정 번호는 사람 이름이 아니다)")
+            day_user = defaultdict(lambda: defaultdict(Counter))
+            rv = defaultdict(int)
+            for r in conn.execute("""
+                SELECT date(checked_at) d, user_id u, rank_state s, COUNT(*) n,
+                       SUM(CASE WHEN visitor_reviews IS NOT NULL THEN 1 ELSE 0 END) rv
+                FROM place_rank_history
+                WHERE checked_at >= datetime('now','localtime','-21 days')
+                GROUP BY d, u, s ORDER BY d DESC, u, s"""):
+                day_user[r["d"]][r["u"]][r["s"] or "(빈칸)"] += r["n"]
+                rv[(r["d"], r["u"])] += r["rv"] or 0
+            for d in sorted(day_user, reverse=True):
+                parts = []
+                for u, c in sorted(day_user[d].items()):
+                    tot = sum(c.values())
+                    tag = "무인?" if tot >= HEAVY else "사람?"
+                    st = " ".join(f"{k}{v}" for k, v in sorted(c.items()))
+                    parts.append(f"계정{u}[{tag}] {st} (리뷰채움 {rv[(d, u)]})")
+                print(f"  {d} | " + " / ".join(parts))
+
+            print()
+            print("[2] 계정별 전체 — 행 수 · 활동일 · 기록 시각(시) 상위 · 노출 비율")
+            for r in conn.execute("""
+                SELECT user_id u, COUNT(*) n, COUNT(DISTINCT date(checked_at)) days,
+                       MIN(date(checked_at)) f, MAX(checked_at) l,
+                       SUM(CASE WHEN rank_state='노출' THEN 1 ELSE 0 END) ex,
+                       SUM(CASE WHEN rank_state='미노출' THEN 1 ELSE 0 END) nx,
+                       SUM(CASE WHEN rank_state='미확인' OR rank_state='' THEN 1 ELSE 0 END) uk
+                FROM place_rank_history GROUP BY user_id ORDER BY n DESC"""):
+                hrs = Counter(int(x[0]) for x in conn.execute(
+                    "SELECT strftime('%H', checked_at) FROM place_rank_history WHERE user_id=?", (r["u"],)) if x[0])
+                top = " ".join(f"{k:02d}시×{v}" for k, v in hrs.most_common(3))
+                print(f"  계정{r['u']}: {r['n']}행 · {r['days']}일 · {r['f']}~{r['l']} · 노출 {r['ex']} · 미노출 {r['nx']} · 미확인 {r['uk']} · {top}")
+
+            print()
+            print("[3] 무인 추적 레지스트리")
+            t = conn.execute("SELECT COUNT(*) n, SUM(active) a, SUM(CASE WHEN place_id<>'' THEN 1 ELSE 0 END) p FROM place_track_target").fetchone()
+            print(f"  등록 {t['n']} · 활성 {t['a']} · place_id 있음 {t['p']}")
+
+            print()
+            print("[4] 9/22 12~17시 · 9/23 사람 분석 추정 행 (업체·키워드는 해시)")
+            heavy_days = {(d, u) for d in day_user for u, c in day_user[d].items() if sum(c.values()) >= HEAVY}
+            cand = []
+            for r in conn.execute("""
+                SELECT id, checked_at, user_id, business_key, business_name, region, keyword,
+                       rank_state, rank_position, visitor_reviews, blog_reviews, saves
+                FROM place_rank_history
+                WHERE (checked_at >= '2026-09-22 12:00' AND checked_at < '2026-09-22 17:00')
+                   OR checked_at >= '2026-09-23'
+                ORDER BY checked_at"""):
+                if (r["checked_at"][:10], r["user_id"]) in heavy_days:
+                    continue
+                bk = r["business_key"] or ""
+                pre = bk.split(":", 1)[0] if ":" in bk else "?"
+                print(f"  {r['checked_at']} | 계정{r['user_id']} | 업체#{h(r['business_name'])}({pre}) 지역#{h(r['region'])} 키워드#{h(r['keyword'])}"
+                      f" | {r['rank_state'] or '(빈칸)'} {r['rank_position'] if r['rank_position'] is not None else '-'}위"
+                      f" | 리뷰 {'O' if r['visitor_reviews'] is not None else 'X'} 저장 {'O' if r['saves'] is not None else 'X'}")
+                cand.append(dict(r))
+            if not cand:
+                print("  (없음)")
+
+            # ── [5] 서버에서 네이버 지도 목록을 한 번 받아 서버 판독기로 읽어 본다 ──
+            if MODE in ("", "db"):
+                print("\n[5] 생략 (PCPROBE=db)")
+                raise SystemExit(0)
+
+            targets = []
+            if MODE == "auto":
+                seen = set()
+                for r in reversed(cand):
+                    if (r["rank_state"] or "") == "노출":
+                        continue
+                    key = (r["business_key"], r["keyword"])
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    targets.append(r)
+                    if len(targets) >= 2:
+                        break
+            else:
+                targets.append({"business_name": "", "region": "", "keyword": MODE, "business_key": ""})
+
+            def fetch(q):
+                url = "https://pcmap.place.naver.com/place/list?query=" + urllib.parse.quote(q)
+                req = urllib.request.Request(url, headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36",
+                    "Accept": "text/html,application/xhtml+xml",
+                    "Accept-Language": "ko-KR,ko;q=0.9",
+                    "Referer": "https://map.naver.com/",
+                })
+                try:
+                    with urllib.request.urlopen(req, timeout=15) as res:
+                        return res.status, res.read().decode("utf-8", "replace")
+                except urllib.error.HTTPError as e:
+                    return e.code, (e.read() or b"").decode("utf-8", "replace")
+                except Exception as e:
+                    return None, f"{type(e).__name__}: {str(e)[:80]}"
+
+            def mask(s):
+                return re.sub(r"[가-힣]", "가", s)
+
+            for i, tg in enumerate(targets, 1):
+                kw, region, name = tg["keyword"] or "", tg["region"] or "", tg["business_name"] or ""
+                q = kw if (not region or region in kw) else f"{region} {kw}"
+                print("\n" + "=" * 70)
+                print(f"[5-{i}] 대상 업체#{h(name)} 키워드#{h(kw)} · 검색어 = {'키워드 그대로' if q == kw else '지역+키워드'}")
+                if i > 1:
+                    time.sleep(4)
+                st, html = fetch(q)
+                print(f"  응답 {st} · {len(html):,}자 · __APOLLO_STATE__ {'있음' if '__APOLLO_STATE__' in html else '없음'}"
+                      f" · DOM 오가닉 {html.count('data-nmb_res-doc-id=')} · DOM 광고 {html.count('data-nmb_rese-doc-id=')}")
+                if st != 200 or "__APOLLO_STATE__" not in html:
+                    print("  본문 앞 200자(한글 가림):", mask(re.sub(r"\s+", " ", html[:200])))
+                    continue
+                naive = pc._parse_apollo(html)
+                print(f"  ① 서버 판독기(_parse_apollo) → 키 {len(naive)}개 {'✅' if naive else '❌ 실패(빈 값)'}")
+                robust = {}
+                try:
+                    k = html.index("__APOLLO_STATE__")
+                    j = html.index("{", k)
+                    robust, end = json.JSONDecoder().raw_decode(html, j)
+                    print(f"  ② 정식 JSON 판독(raw_decode) → 키 {len(robust)}개 ✅ (끝 위치 {end - j:,})")
+                except Exception as e:
+                    print(f"  ② 정식 JSON 판독 실패 — {type(e).__name__}: {mask(str(e)[:120])}")
+                if not naive and robust:
+                    print("  ⭐ 서버 판독기만 실패 — 괄호 세기 방식이 문자열 안의 괄호에 걸린 것")
+                base = naive or robust
+                types = Counter(str(key).split(":", 1)[0] for key in base)
+                print("  키 종류 상위:", ", ".join(f"{k}×{v}" for k, v in types.most_common(10)))
+                it_n = pc._items_from_apollo(naive) if naive else []
+                it_r = pc._items_from_apollo(robust) if robust else []
+                for lab, its in (("서버 판독", it_n), ("정식 판독", it_r)):
+                    if not its and lab == "서버 판독" and not naive:
+                        print(f"  [{lab}] 항목 0 → DOM 폴백(이름 없음) → 이름 대조 불가")
+                        continue
+                    org = [x for x in its if not x.get("is_ad")]
+                    print(f"  [{lab}] 항목 {len(its)} · 오가닉 {len(org)} · 광고 {len(its) - len(org)}")
+                parsed = pc.parse_place_search(html)
+                items = parsed["items"]
+                org = [x for x in items if not x.get("is_ad")]
+                named = [x for x in org if x.get("name")]
+                print(f"  ③ 분석 화면이 쓰는 결과(parse_place_search) — 항목 {len(items)} · 오가닉 {len(org)} · 이름 있음 {len(named)}")
+                if name:
+                    r = pc.find_place_rank(parsed, target_name=name)
+                    print(f"  ④ 내 업체 대조 = {r['state']} {r['rank'] or '-'}위")
+                    nn = pc._norm(name)
+                    in_html = nn in pc._norm(html)
+                    print(f"     원문 HTML 안에 입력한 업체명이 (공백 무시) 들어 있나 = {'예' if in_html else '아니오'}")
+                    if r["state"] != "노출" and named:
+                        best = max(named, key=lambda x: difflib.SequenceMatcher(None, nn, pc._norm(x["name"])).ratio())
+                        ratio = difflib.SequenceMatcher(None, nn, pc._norm(best["name"])).ratio()
+                        strip = lambda s: re.sub(r"[^0-9a-z가-힣]", "", pc._norm(s))
+                        print(f"     가장 비슷한 목록 이름 유사도 {ratio:.2f} · 순위 {best['rank']} · 기호 빼면 포함 = {'예' if strip(name) in strip(best['name']) else '아니오'}"
+                              f" · 길이 입력 {len(name)} / 목록 {len(best['name'])}")
+            print("\n끝.")
+            PY
+
       # ── 공공데이터포털 상가(상권)정보 인증키 검증 (2026-08-05) ──────────
       # 행정동코드(admiCd) 매핑용 — 소상공인365 포털의 지역명→코드 경로가 전부 막혀
       # 이 공식 REST 로 「좌표 → 행정동코드」를 얻는다. 키 값은 출력하지 않는다.
