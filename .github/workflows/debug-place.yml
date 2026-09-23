@@ -83,6 +83,9 @@ on:
       hang_probe:
         description: '진단 스텝이 어디서 멈추는지 — true. 이 워크플로가 쓰는 명령을 하나씩 timeout 을 씌워 걸리는 지점을 찾는다(읽기 전용).'
         required: false
+      analysis_audit:
+        description: '로직분석 결과값 전수조사 — true. 자동 분석 결과 칸별 빈값 · 배치 산출물 일별 · 외부 데이터원 1회 실호출 · 오류 로그 유형 · API 경로별 상태코드(읽기 전용 · 업체명·키워드·IP 미출력 · 그래도 읽은 뒤 런 로그 삭제)'
+        required: false
       place_capture_probe:
         description: '신고 #276 — 플레이스 분석 캡처 판독 재현. db = 기록 집계만 / auto = 9/22·9/23 사람 분석 행으로 네이버 목록 1~2회 받아 서버 판독기로 읽기 / at:시각;시각 = 그 시각 행을 그대로 재현 / at!:시각 = 같은데 이름을 그대로 찍는다(⚠️ 읽은 즉시 런 로그 삭제) / find!:업체명|검색어;검색어 = 이름으로 찾아 그 번호가 각 목록 몇 번째인지(⚠️ 로그 삭제) / depth:검색어;검색어 = 기록된 순위 분포 + 목록 데이터 칸 구조 / 그 밖의 글자 = 그 검색어로 1회. 업체명·키워드는 해시로만 찍는다(읽기 전용).'
         required: false
@@ -91,6 +94,440 @@ jobs:
   diagnose:
     runs-on: ubuntu-latest
     steps:
+      # ── 로직분석 결과값 전수조사 (2026-09-23 · 읽기 전용) ──
+      # 대표 질문 「로직분석 실행했을 때 나오는 값이 정확한가 · 안 나오거나 오류인 게 있나」에 서버에서 답한다.
+      # ⚠️ 저장소 공개 — 칸 이름(코드 식별자)·건수·상태코드만 찍는다. 한글은 소스에 있는 낱말만 남기고 가린다.
+      - name: 로직분석 결과값 전수조사 (읽기 전용)
+        if: ${{ github.event.inputs.analysis_audit == 'true' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 300s
+          script: |
+            echo "== 0) 컨테이너 =="
+            docker inspect -f 'StartedAt={{.State.StartedAt}}' logic-analysis
+            docker exec -i logic-analysis python3 - <<'PY'
+            # 로직분석 결과값 전수조사 (2026-09-23 · 읽기 전용)
+            # ⚠️ 저장소 공개 — 업체명·키워드·상품명·주소를 절대 찍지 않는다. 칸 이름(코드 식별자)과 건수만.
+            import os, re, json, sqlite3, time, collections
+            from datetime import datetime, timedelta
+
+            DB = os.getenv("AUDIT_DB", "/app/data/logic_data.db")
+            IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,40}$")
+            t0 = time.time()
+
+            def hdr(s):
+                print(); print("== " + s + " =="); print(flush=True)
+
+            def ro():
+                c = sqlite3.connect(f"file:{DB}?mode=ro", uri=True, timeout=20)
+                c.row_factory = sqlite3.Row
+                return c
+
+            def q(c, sql, args=()):
+                try:
+                    return c.execute(sql, args).fetchall()
+                except Exception as e:
+                    print(f"  ⚠️ 못 쟀다: {str(e)[:120]}")
+                    return None
+
+            def empty(v):
+                if v is None: return True
+                if isinstance(v, (list, dict, tuple)): return len(v) == 0
+                if isinstance(v, str): return v.strip() in ("", "-", "0", "0.0", "미확인", "없음", "null", "None")
+                if isinstance(v, bool): return False
+                if isinstance(v, (int, float)): return v == 0
+                return False
+
+            def flat(obj, prefix="", depth=0, out=None):
+                """칸 경로 → 값. ASCII 식별자 키만 쓴다(한글 키 = 동적 키 → <동적>)."""
+                if out is None: out = {}
+                if not isinstance(obj, dict): return out
+                for k, v in obj.items():
+                    key = k if IDENT.match(str(k)) else "<동적>"
+                    p = f"{prefix}.{key}" if prefix else key
+                    if key == "<동적>":
+                        out.setdefault(p, [])
+                        out[p].append(v)
+                        continue
+                    if isinstance(v, dict) and depth < 2 and v and all(IDENT.match(str(x)) for x in list(v.keys())[:5]):
+                        out.setdefault(p + "{}", []).append(v)
+                        flat(v, p, depth + 1, out)
+                    else:
+                        out.setdefault(p, []).append(v)
+                return out
+
+            def field_table(label, jsons, min_share=0.05, top=70):
+                """jsons = dict 목록. 칸마다 (있는 행, 빈 행) 을 센다."""
+                n = len(jsons)
+                print(f"  [{label}] 행 {n}개")
+                if not n: return
+                pres = collections.Counter(); emp = collections.Counter()
+                for j in jsons:
+                    f = flat(j)
+                    for p, vals in f.items():
+                        if p.endswith("{}"): continue
+                        pres[p] += 1
+                        if all(empty(v) for v in vals): emp[p] += 1
+                rows = [(p, pres[p], emp[p]) for p in pres if pres[p] >= max(2, n * min_share)]
+                rows.sort(key=lambda r: (-(r[2] / r[1]), r[0]))
+                print(f"    {'칸':<48} {'있음':>5} {'빈값':>5} {'빈값%':>6}")
+                for p, a, e in rows[:top]:
+                    flag = " ⚠️" if a and e / a >= 0.5 else ("  ·" if e else "")
+                    print(f"    {p:<48} {a:>5} {e:>5} {e*100//max(a,1):>5}%{flag}")
+                miss = [(p, n - pres[p]) for p in pres if pres[p] >= n * 0.3 and pres[p] < n]
+                if miss:
+                    miss.sort(key=lambda r: -r[1])
+                    print("    칸 자체가 없는 행(30%↑ 행에 있는 칸 기준): " +
+                          ", ".join(f"{p}={m}" for p, m in miss[:15]))
+
+            def dq_count(obj, acc):
+                if isinstance(obj, dict):
+                    for k, v in obj.items():
+                        if k == "data_quality" and isinstance(v, dict):
+                            for mk, mv in v.items():
+                                if isinstance(mv, dict) and "status" in mv and IDENT.match(str(mk)):
+                                    acc[(mk, str(mv.get("status")))] += 1
+                        else:
+                            dq_count(v, acc)
+                elif isinstance(obj, list):
+                    for x in obj[:50]: dq_count(x, acc)
+
+            def loads(s, default):
+                try:
+                    v = json.loads(s) if s else default
+                    return v if v is not None else default
+                except Exception:
+                    return None
+
+            c = ro()
+            today = datetime.now().strftime("%Y-%m-%d")
+            print(f"  기준 시각(서버) {datetime.now():%Y-%m-%d %H:%M} · DB {DB}")
+
+            # ── 1) 매일 배치가 실제로 만든 것 (최근 8일) ─────────────────────────────
+            hdr("1) 배치 산출물 — 일별 건수 (최근 8일)")
+            rows = q(c, """SELECT analyzed_date d, COUNT(*) n, COUNT(DISTINCT client_id) cl,
+                            SUM(CASE WHEN shop_products_json IS NULL OR shop_products_json IN ('','[]') THEN 1 ELSE 0 END) no_prod,
+                            SUM(CASE WHEN volume_json IS NULL OR volume_json IN ('','{}') THEN 1 ELSE 0 END) no_vol,
+                            SUM(CASE WHEN related_json IS NULL OR related_json IN ('','{}') THEN 1 ELSE 0 END) no_rel,
+                            SUM(CASE WHEN product_url IS NULL OR product_url='' THEN 1 ELSE 0 END) no_url,
+                            SUM(CASE WHEN advertiser_json IS NULL OR advertiser_json IN ('','{}') THEN 1 ELSE 0 END) no_adv
+                         FROM client_analyses WHERE analyzed_date >= date('now','localtime','-7 day')
+                         GROUP BY d ORDER BY d""")
+            if rows is not None:
+                print("  자동 분석(client_analyses) — 날짜 · 행 · 업체 · 상품목록 빔 · 검색량 빔 · 연관 빔 · 상품주소 없음 · 광고주분석 빔")
+                for r in rows:
+                    print(f"    {r['d']}  {r['n']:>4}행 {r['cl']:>4}곳  상품목록빔 {r['no_prod']:>4}  검색량빔 {r['no_vol']:>4}  연관빔 {r['no_rel']:>4}  주소없음 {r['no_url']:>4}  광고주빔 {r['no_adv']:>4}")
+            rows = q(c, """SELECT substr(checked_at,1,10) d, COUNT(*) n, SUM(CASE WHEN rank_position IS NULL THEN 1 ELSE 0 END) nul,
+                            COUNT(DISTINCT client_id) cl
+                         FROM client_rank_history WHERE checked_at >= date('now','localtime','-7 day') GROUP BY d ORDER BY d""")
+            if rows is not None:
+                print("  업체 순위 기록(client_rank_history) — 날짜 · 기록 · 미노출(NULL) · 업체")
+                for r in rows: print(f"    {r['d']}  {r['n']:>5}  미노출 {r['nul']:>5}  {r['cl']:>4}곳")
+            rows = q(c, """SELECT substr(checked_at,1,10) d, COUNT(*) n, SUM(CASE WHEN rank_position IS NULL OR rank_position=0 THEN 1 ELSE 0 END) nul
+                         FROM rankings WHERE checked_at >= date('now','localtime','-7 day') GROUP BY d ORDER BY d""")
+            if rows is not None:
+                print("  추적 상품 순위(rankings) — 날짜 · 기록 · 순위없음")
+                for r in rows: print(f"    {r['d']}  {r['n']:>5}  순위없음 {r['nul']:>5}")
+            rows = q(c, """SELECT collected_date d, COUNT(*) n, SUM(CASE WHEN product_count=0 THEN 1 ELSE 0 END) z,
+                            CAST(AVG(product_count) AS INT) avgp, MAX(product_count) maxp
+                         FROM collected_serp WHERE collected_date >= date('now','localtime','-7 day') GROUP BY d ORDER BY d""")
+            if rows is not None:
+                print("  수집 원문(collected_serp) — 날짜 · 키워드 · 상품0개 · 평균 상품수 · 최대")
+                for r in rows: print(f"    {r['d']}  {r['n']:>5}  0개 {r['z']:>4}  평균 {r['avgp']}  최대 {r['maxp']}")
+            rows = q(c, """SELECT substr(checked_at,1,10) d, COUNT(*) n, SUM(CASE WHEN rank_position IS NULL THEN 1 ELSE 0 END) nul, COUNT(DISTINCT business_key) b
+                         FROM place_rank_history WHERE checked_at >= date('now','localtime','-7 day') GROUP BY d ORDER BY d""")
+            if rows is not None:
+                print("  플레이스 순위(place_rank_history) — 날짜 · 기록 · 미노출/미확인 · 업체")
+                for r in rows: print(f"    {r['d']}  {r['n']:>5}  미노출 {r['nul']:>5}  {r['b']:>4}곳")
+            rows = q(c, """SELECT substr(created_at,1,10) d, COUNT(*) n, SUM(CASE WHEN title LIKE '%주간%' THEN 1 ELSE 0 END) wk
+                         FROM reports WHERE created_at >= date('now','localtime','-7 day') GROUP BY d ORDER BY d""")
+            if rows is not None:
+                print("  보고서(reports) — 날짜 · 생성 · 그중 주간")
+                for r in rows: print(f"    {r['d']}  {r['n']:>4}  주간 {r['wk']:>4}")
+            rows = q(c, "SELECT * FROM sbiz_health ORDER BY rowid DESC LIMIT 5")
+            if rows is not None:
+                print("  소상공인365 자가 점검(sbiz_health) 최근 5건 — 칸: " + ", ".join(k for k in (rows[0].keys() if rows else []) if IDENT.match(k)))
+                for r in rows:
+                    d = dict(r)
+                    print("    " + " · ".join(f"{k}={str(d[k])[:30]}" for k in d if k in ("checked_at","ok","source","reason")))
+            rows = q(c, "SELECT * FROM collector_heartbeat")
+            if rows is not None:
+                print(f"  수집기 살아있음 신호 — 기계 {len(rows)}대")
+                for r in rows:
+                    d = dict(r)
+                    print("    " + " · ".join(f"{k}={str(d[k])[:25]}" for k in d if k in ("worker_no","worker_count","ext_version","paused_local","paused_screen","blocked_until","slow_until","running","last_finished_at","day_done","day_total","last_seen")))
+
+            # ── 2) 결과값 칸별 빈값 — 가장 최근 자동 분석일 ─────────────────────────
+            hdr("2) 자동 분석 결과 칸별 빈값 (가장 최근 분석일 전 행)")
+            last = q(c, "SELECT MAX(analyzed_date) d FROM client_analyses")
+            ld = last[0]["d"] if last else None
+            print(f"  대상 날짜: {ld}")
+            if ld:
+                rows = q(c, "SELECT analysis_json, volume_json, related_json, shop_products_json, advertiser_json, product_url FROM client_analyses WHERE analyzed_date=?", (ld,))
+                if rows is not None:
+                    an, vo, re_, ad, bad = [], [], [], [], collections.Counter()
+                    prod_len = collections.Counter(); dq = collections.Counter()
+                    for r in rows:
+                        a = loads(r["analysis_json"], {}); v = loads(r["volume_json"], {}); rl = loads(r["related_json"], {})
+                        p = loads(r["shop_products_json"], []); d = loads(r["advertiser_json"], {})
+                        for nm, val in (("analysis", a), ("volume", v), ("related", rl), ("products", p), ("advertiser", d)):
+                            if val is None: bad[nm] += 1
+                        if isinstance(a, dict): an.append(a); dq_count(a, dq)
+                        if isinstance(v, dict): vo.append(v)
+                        if isinstance(rl, dict): re_.append(rl)
+                        if isinstance(d, dict) and d: ad.append(d); dq_count(d, dq)
+                        n = len(p) if isinstance(p, list) else -1
+                        prod_len["0개" if n == 0 else ("1~19" if n < 20 else ("20~39" if n < 40 else "40+"))] += 1
+                    print(f"  JSON 깨진 행: {dict(bad) or '없음'}")
+                    print(f"  상품목록 길이 분포: {dict(prod_len)}")
+                    field_table("검색량 volume_json", vo)
+                    field_table("연관·황금 키워드 related_json", re_)
+                    field_table("분석 analysis_json", an)
+                    field_table("광고주 맞춤 advertiser_json (상품주소 있는 행)", ad)
+                    if dq:
+                        print("  데이터 상태(data_quality) — 칸 · 상태 · 건수")
+                        for (mk, st), n in sorted(dq.items()):
+                            print(f"    {mk:<30} {st:<16} {n}")
+                    # 검색량 숫자 자체
+                    vz = sum(1 for v in vo if not v or (str(v.get("monthlyPcQcCnt","0")) in ("0","") and str(v.get("monthlyMobileQcCnt","0")) in ("0","")))
+                    print(f"  검색량 0 또는 없음: {vz} / {len(vo)}")
+
+            # ── 3) 직원이 화면에서 만든 보고서 (최근 14일) ──────────────────────────
+            hdr("3) 직원이 만든 보고서 report_data 칸별 빈값 (최근 14일 · 주간 제외)")
+            rows = q(c, "SELECT report_data FROM reports WHERE created_at >= date('now','localtime','-14 day') AND title NOT LIKE '%주간%'")
+            if rows is not None:
+                js = [x for x in (loads(r["report_data"], {}) for r in rows) if isinstance(x, dict)]
+                dq = collections.Counter()
+                for j in js: dq_count(j, dq)
+                field_table("reports.report_data", js, top=90)
+                if dq:
+                    print("  데이터 상태(data_quality) — 칸 · 상태 · 건수")
+                    for (mk, st), n in sorted(dq.items()):
+                        print(f"    {mk:<30} {st:<16} {n}")
+
+            # ── 4) AI 호출 (api_usage_logs 최근 7일) ───────────────────────────────
+            hdr("4) AI 호출 결과 (api_usage_logs 최근 7일)")
+            rows = q(c, """SELECT substr(called_at,1,10) d, endpoint, model, status, COUNT(*) n FROM api_usage_logs
+                         WHERE called_at >= date('now','localtime','-7 day') GROUP BY d, endpoint, model, status ORDER BY d""")
+            if rows is not None:
+                for r in rows:
+                    ep = r["endpoint"] if IDENT.match(str(r["endpoint"]).replace("-", "_")) else "<기타>"
+                    print(f"    {r['d']}  {ep:<22} {str(r['model'])[:28]:<28} {r['status']:<8} {r['n']}")
+            rows = q(c, """SELECT error_message FROM api_usage_logs WHERE status!='success' AND called_at >= date('now','localtime','-7 day')""")
+            if rows is not None:
+                k = collections.Counter()
+                for r in rows:
+                    m = str(r[0] or "")
+                    m2 = re.search(r"\b(4\d\d|5\d\d)\b|timeout|timed out|quota|credit|rate|overload|invalid", m, re.I)
+                    k[m2.group(0).lower() if m2 else "기타"] += 1
+                print(f"  실패 사유 분류: {dict(k) or '없음'}")
+            c.close()
+            print(f"\n  (DB 조사 {time.time()-t0:.1f}s)")
+            PY
+            docker exec -i logic-analysis python3 - <<'PY'
+            # 로직분석 외부 데이터원 실호출 (읽기 전용 · 한 번씩) — 키 값·결과 키워드 미출력
+            import time, sys
+            sys.path.insert(0, "/app")
+
+            def show(name, fn):
+                t = time.time()
+                try:
+                    r = fn()
+                    print(f"  {name:<34} {r}  ({time.time()-t:.1f}s)", flush=True)
+                except Exception as e:
+                    print(f"  {name:<34} 실패: {type(e).__name__}: {str(e)[:120]}  ({time.time()-t:.1f}s)", flush=True)
+
+            print("== 5) 외부 데이터원 실호출 — 기준 키워드 「홍삼」 1회씩 ==")
+
+            def searchad():
+                from naver_crawler import get_keyword_volume
+                v = get_keyword_volume(["홍삼"]) or []
+                if not v: return "빈 응답 ⚠️"
+                x = v[0]
+                return f"정상 · PC {x.get('monthlyPcQcCnt')} · 모바일 {x.get('monthlyMobileQcCnt')} · 경쟁 {x.get('compIdx')}"
+            show("검색광고 API(검색량)", searchad)
+
+            def related():
+                from auto_analysis import get_related_keywords
+                r = get_related_keywords("홍삼") or {}
+                return f"연관 {len(r.get('related_keywords') or [])}개 · 황금 {len(r.get('golden_keywords') or [])}개 · total {r.get('total_found')}"
+            show("검색광고 API(연관·황금 키워드)", related)
+
+            def datalab():
+                import datalab as dl
+                ex = dl.datalab_quota_exhausted()
+                code = dl._find_category_code("식품")
+                tr = dl.get_trend_24m("홍삼", code) or {}
+                pts = tr.get("data") or tr.get("trend") or tr.get("months") or []
+                return f"한도소진표시 {ex} · 카테고리코드 {'있음' if code else '없음'} · 추이 키 {sorted(list(tr.keys()))[:6]} · 점 {len(pts) if hasattr(pts,'__len__') else '?'}"
+            show("데이터랩(쇼핑 추이)", datalab)
+
+            def gender():
+                import datalab as dl
+                code = dl._find_category_code("식품")
+                g = dl.get_gender_ratio("홍삼", code) or {}
+                return f"키 {sorted(list(g.keys()))[:6]}"
+            show("데이터랩(성별)", gender)
+
+            def openapi(path):
+                def f():
+                    import requests
+                    from naver_crawler import NAVER_CLIENT_ID, NAVER_CLIENT_SECRET
+                    r = requests.get(f"https://openapi.naver.com/v1/search/{path}", params={"query": "홍삼", "display": 1},
+                                     headers={"X-Naver-Client-Id": NAVER_CLIENT_ID, "X-Naver-Client-Secret": NAVER_CLIENT_SECRET}, timeout=10)
+                    try: j = r.json()
+                    except Exception: j = {}
+                    return f"HTTP {r.status_code} · total {j.get('total')} · {j.get('errorCode') or ''}"
+                return f
+            show("네이버 검색 API(쇼핑 — 7/31 종료)", openapi("shop.json"))
+            show("네이버 검색 API(블로그 — 키 생존)", openapi("blog.json"))
+
+            def served():
+                from collector import serve_from_collected
+                s = serve_from_collected("홍삼", display=40, start=1, enqueue_on_miss=False)
+                if s is None: return "수집분 없음(2일 내) — 분석 시 상품목록이 빈다 ⚠️"
+                return f"수집분 있음 · total {s.get('total')} · items {len(s.get('items') or [])}"
+            show("브라우저 수집분 서빙(쇼핑 순위·상품)", served)
+
+            def usage():
+                from naver_crawler import get_search_api_usage_today
+                return str(get_search_api_usage_today())[:160]
+            show("검색 API 오늘 사용량(자체 계측)", usage)
+
+            def envs():
+                import os
+                ks = ["SEARCHAD_API_KEY","SEARCHAD_SECRET_KEY","SEARCHAD_CUSTOMER_ID","NAVER_CLIENT_ID","NAVER_CLIENT_SECRET",
+                      "DATALAB_SEARCH_CLIENT_ID","ANTHROPIC_API_KEY","SBIZ_DATA_GO_KR_KEY","SCRAPINGBEE_API_KEY","NAVER_BRD_API_KEY"]
+                return " ".join(f"{k}={'O' if os.getenv(k) else 'X'}" for k in ks)
+            show("키 설정 여부(값 미출력)", envs)
+            PY
+            docker exec logic-analysis sh -c 'cat /app/*.py' > /tmp/_src.txt 2>/dev/null
+            docker logs --timestamps --since 48h logic-analysis > /tmp/_dl.txt 2>&1
+            cat > /tmp/_audit_logs.py <<'PY'
+            # 로직분석 오류 로그·화면 요청 결과 집계 (호스트에서 실행 · 읽기 전용)
+            # ⚠️ 저장소 공개 — IP·키워드·업체명·주소·쿼리스트링을 찍지 않는다. 경로 모양·상태코드·건수만.
+            import re, sys, glob, gzip, os, collections
+            from datetime import datetime, timedelta
+
+            IP = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b")
+            URL = re.compile(r"https?://[^\s'\"」]+")
+            HANGUL = re.compile(r"[가-힣]+")
+            SRC_WORDS = set()
+            try:
+                SRC_WORDS = set(HANGUL.findall(open(os.environ.get("AUDIT_SRC", "/tmp/_src.txt"), errors="ignore").read()))
+            except Exception:
+                pass
+            SEG_OK = re.compile(r"^[a-z][a-z0-9_\-]{0,30}$")
+
+            def norm_path(p):
+                p = p.split("?", 1)[0]
+                segs = p.split("/")
+                return "/".join(s if (s == "" or SEG_OK.match(s)) else "{x}" for s in segs)[:70]
+
+            def sanitize(msg):
+                m = IP.sub("IP", msg)
+                m = URL.sub("URL", m)
+                m = re.sub(r"\[[^\]]*\]", "[K]", m)
+                m = re.sub(r"'[^']*'|\"[^\"]*\"|「[^」]*」|‘[^’]*’", "'…'", m)
+                m = re.sub(r"\d+", "N", m)
+                # 코드에 적힌 한글 낱말만 남긴다 — 그 밖의 한글(키워드·업체명일 수 있다)은 가린다
+                m = HANGUL.sub(lambda w: w.group(0) if w.group(0) in SRC_WORDS else "…", m)
+                m = re.sub(r"\s+", " ", m).strip()
+                return m[:110]
+
+            # ── A) 컨테이너 로그 (docker logs --timestamps --since 48h) ───────────────
+            print(f"  (소스 한글 낱말 {len(SRC_WORDS)}개 기준으로 그 밖의 한글은 가림)")
+            print("== 6) 컨테이너 로그 — 오류·경고 유형 (최근 48시간 · 현재 컨테이너) ==")
+            lines = open(sys.argv[1], errors="ignore").read().splitlines() if len(sys.argv) > 1 else []
+            print(f"  읽은 줄 {len(lines)}")
+            err = collections.Counter(); warn = collections.Counter(); hour = collections.Counter()
+            acc = collections.Counter(); acc5 = collections.Counter(); acc_day = collections.Counter()
+            ACC = re.compile(r'"(GET|POST|PUT|PATCH|DELETE|OPTIONS) (\S+) HTTP/[\d.]+" (\d{3})')
+            for ln in lines:
+                ts, _, body = ln.partition(" ")
+                hr = ts[:13].replace("T", " ")
+                a = ACC.search(body)
+                if a:
+                    path = norm_path(a.group(2))
+                    if path.startswith("/api/"):
+                        st = a.group(3)
+                        acc[(a.group(1), path, st[0] + "xx")] += 1
+                        acc_day[(ts[:10], st[0] + "xx")] += 1
+                        if st[0] == "5": acc5[(a.group(1), path, st)] += 1
+                    continue
+                low = body.lower()
+                if "error" in low or "traceback" in low or "exception" in low:
+                    err[sanitize(body)] += 1; hour[hr] += 1
+                elif "warning" in low or "실패" in body or "오류" in body:
+                    warn[sanitize(body)] += 1
+            print(f"  ERROR 계열 {sum(err.values())}줄 · 경고/실패 계열 {sum(warn.values())}줄")
+            print("  ERROR 계열 유형 상위 30")
+            for m, n in err.most_common(30): print(f"    {n:>5}  {m}")
+            print("  경고/실패 계열 유형 상위 40")
+            for m, n in warn.most_common(40): print(f"    {n:>5}  {m}")
+            print("  ERROR 시간대별(시)")
+            for h, n in sorted(hour.items())[-48:]: print(f"    {h}시  {n}")
+
+            print()
+            print("== 7) 앱이 돌려준 응답 — API 경로별 상태 (컨테이너 접근 로그 · 48시간) ==")
+            if not acc:
+                print("  접근 로그 줄이 없다(앱이 접근 로그를 안 남기는 설정일 수 있다) — nginx 쪽으로 본다")
+            else:
+                for (d, cls), n in sorted(acc_day.items()): print(f"    {d} {cls} {n}")
+                per = collections.defaultdict(collections.Counter)
+                for (m, p, cls), n in acc.items(): per[(m, p)][cls] += n
+                print(f"    {'경로':<56} {'2xx':>6} {'3xx':>5} {'4xx':>5} {'5xx':>5}")
+                for (m, p), cc in sorted(per.items(), key=lambda kv: -sum(kv[1].values()))[:70]:
+                    print(f"    {m:<6} {p:<49} {cc['2xx']:>6} {cc['3xx']:>5} {cc['4xx']:>5} {cc['5xx']:>5}{'  ⚠️' if cc['5xx'] else ''}")
+                if acc5:
+                    print("  5xx 상세")
+                    for (m, p, st), n in acc5.most_common(30): print(f"    {st} {m} {p}  {n}")
+
+            # ── B) nginx 접근 로그 (최근 7일 · 회전분 포함) ─────────────────────────
+            print()
+            print("== 8) nginx 접근 로그 — API 경로별 상태 (최근 7일 · IP 미출력) ==")
+            files = sorted(glob.glob("/var/log/nginx/*access*.log*"))
+            for f in files:
+                try: print(f"  파일 {os.path.basename(f)} {os.path.getsize(f)//1024}KB")
+                except Exception: pass
+            logic_files = [f for f in files if "logic" in os.path.basename(f)] or files
+            print(f"  집계 대상: {', '.join(os.path.basename(f) for f in logic_files) or '없음'}")
+            NG = re.compile(r'\[(\d{2})/(\w{3})/(\d{4}):(\d{2}):\d{2}:\d{2} [^\]]+\] "(GET|POST|PUT|PATCH|DELETE|OPTIONS) (\S+) [^"]*" (\d{3})')
+            MON = {m: i for i, m in enumerate(["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"], 1)}
+            cut = datetime.now() - timedelta(days=7)
+            per = collections.defaultdict(collections.Counter); day = collections.defaultdict(collections.Counter); s5 = collections.Counter()
+            for f in logic_files:
+                try:
+                    fh = gzip.open(f, "rt", errors="ignore") if f.endswith(".gz") else open(f, errors="ignore")
+                    for ln in fh:
+                        m = NG.search(ln)
+                        if not m: continue
+                        d = datetime(int(m.group(3)), MON.get(m.group(2), 1), int(m.group(1)), int(m.group(4)))
+                        if d < cut: continue
+                        path = norm_path(m.group(6))
+                        if not path.startswith("/api/"): continue
+                        st = m.group(7)
+                        per[(m.group(5), path)][st[0] + "xx"] += 1
+                        if st in ("499", "502", "503", "504") or st[0] == "5": s5[(st, m.group(5), path)] += 1
+                        day[d.strftime("%m-%d")][st[0] + "xx"] += 1
+                except Exception as e:
+                    print(f"  ⚠️ {os.path.basename(f)} 못 읽음: {str(e)[:80]}")
+            print("  일별 — 2xx · 4xx · 5xx")
+            for d in sorted(day): print(f"    {d}  {day[d]['2xx']:>6} {day[d]['4xx']:>5} {day[d]['5xx']:>5}")
+            print(f"    {'경로':<56} {'2xx':>6} {'4xx':>5} {'5xx':>5}")
+            for (m, p), cc in sorted(per.items(), key=lambda kv: -sum(kv[1].values()))[:80]:
+                print(f"    {m:<6} {p:<49} {cc['2xx']:>6} {cc['4xx']:>5} {cc['5xx']:>5}{'  ⚠️' if cc['5xx'] else ''}")
+            if s5:
+                print("  5xx·499 상세 (상태 · 방식 · 경로 · 건수)")
+                for (st, m, p), n in s5.most_common(40): print(f"    {st} {m} {p}  {n}")
+            PY
+            sudo -n true 2>/dev/null && S="sudo -n" || S=""
+            $S python3 /tmp/_audit_logs.py /tmp/_dl.txt
+            rm -f /tmp/_dl.txt /tmp/_src.txt /tmp/_audit_logs.py
+
       # ── 신고 #276 플레이스 분석 캡처 판독 재현 (2026-09-23 · 읽기 전용) ──
       # 「내 업체를 찾지 못했습니다」가 이 업체만의 이름 불일치인지, 서버 판독기가 지금 네이버 목록을
       # 못 읽는 것인지 가른다. ⚠️ 저장소 공개 — 업체명·키워드·지역은 해시로만 찍는다.
