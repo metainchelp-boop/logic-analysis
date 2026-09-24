@@ -1,0 +1,143 @@
+/* 순위 규칙(순수 함수) — 신고 #253 후속 (2026-09-02)
+ *
+ * 왜 파일을 따로 뒀나: 광고 판별·순번 부여가 background.js 안에 있으면 검사할 방법이
+ * 없다(서비스워커는 chrome.* 없이 못 돌린다). 여기는 chrome 의존이 0 이라
+ * background.js(importScripts)와 node 회귀 테스트가 **같은 파일**을 읽는다 — 한 규칙 한 곳.
+ *
+ * ── 광고 판별의 역사 ──
+ * 2026-08-12 실측: 광고는 mallProductUrl 이 없고 클릭 주소가 cr.shopping.naver.com/adcr.
+ *   → 첫 URL(mallProductUrl || adcrUrl || crUrl)에 'adcr' 포함 여부로 판별(v1.7.0).
+ * 2026-09-02 실측(신고 #253, 코덱스 교차 확인): 네이버가 형식을 바꿨다 —
+ *   ① 광고에도 mallProductUrl 이 생겨 첫 URL 검사가 눈멀었다(광고가 오가닉으로 계산됨).
+ *   ② adcrUrl 도 cr.shopping.naver.com/adcr → ader.naver.com/v1/... 으로 바뀌었다.
+ *   ③ 정상 오가닉의 crUrl 에도 /adcr 이 들어 있다 — **모든 URL에서 'adcr' 을 찾으면
+ *      오가닉을 광고로 오인한다. 절대 그렇게 넓히지 말 것.**
+ *   실측 근거: 40개 보기 2페이지 원본 51건 = 오가닉 40 + 광고 11.
+ *   광고 11건 전부 adId·adType·adcrUrl 세 필드가 동시에 있었고(교집합 11·불일치 0),
+ *   오가닉 40건에는 이 조합이 없었다.
+ * 실사고: 바먹감귤/청귤 — 광고 21개가 순번을 먹어 45위가 56위로 기록됐다(정확히 11계단 =
+ *   광고 21 중 중복 제거로 우연히 빠진 10개를 뺀 나머지).
+ */
+
+/* ⚠️ 전부 IIFE 안에 둔다(2026-09-02 실사고 2연발의 결론) —
+ * importScripts 는 background.js 와 같은 전역에 합쳐 읽으므로, 여기서 전역 이름
+ * (function isAdItem 등)을 선언하면 background.js 쪽 선언·구버전 파일과 충돌해
+ * 'already been declared' 로 워커 등록이 죽는다. 바깥에는 RankRules 하나만 내놓는다. */
+(function () {
+
+  /** 이 상품이 '광고'인가 — 순위 번호를 주지 않기 위한 판별.
+   *  ① 레거시(무회귀 유지): 첫 URL 에 'adcr' — 구형 광고(mallProductUrl 없음)를 계속 거른다.
+   *  ② 2026-09 실측 조합: adId·adType·adcrUrl 세 필드 동시 존재.
+   *  ⚠️ '덜 거르는' 쪽으로만 틀리게 유지한다 — 오가닉을 광고로 잘못 걸러 상품이 통째로
+   *     사라지는 것(미노출 오보)이 광고를 못 거르는 것보다 나쁘다. */
+  function isAdItem(p) {
+    if (!p || typeof p !== 'object') return false;
+    const url = String((p.mallProductUrl || p.adcrUrl || p.crUrl) || '');
+    if (url.includes('adcr')) return true;
+    // v1.10.3(2026-09-03): 세 필드 조합을 **adcrUrl 호스트가 ader.naver.com 일 때로 좁힌다.**
+    //  실사고: v1.10.2 가 김치 원본 407 중 326 을 광고로 봤다(대표 실측 1페이지 광고 16개).
+    //  어제 1~10위였던 스마트스토어 오가닉 8개가 통째로 사라졌다 — 세 필드가 오가닉에도
+    //  실리는 키워드가 있다는 뜻이다(9/2 실측 51건 표본에는 없던 모양). 근거가 잡힐 때까지
+    //  '덜 거르는 쪽'으로 — 9/2 실측 광고 11건은 전부 ader.naver.com 이었다.
+    //  ⚠️ 이래도 김치가 계속 빠지면 오가닉도 ader 호스트를 갖는 것 — 그때는 adFp 지문으로 본다.
+    return !!(p.adId && p.adType && p.adcrUrl) && hostOf(p.adcrUrl).endsWith('ader.naver.com');
+  }
+
+  /** URL 의 호스트만(제목·가게명 같은 값은 절대 지문에 넣지 않는다 — 공개 저장소 로그 보호) */
+  function hostOf(u) {
+    const m = /^[a-z]+:\/\/([^/?#]+)/i.exec(String(u || ''));
+    return m ? m[1].toLowerCase() : '';
+  }
+
+  /** 상품 1건의 '광고 필드 지문' — 어느 판별 가지가 왜 걸렸는지 서버에서 되짚기 위한 것.
+   *  값은 넣지 않는다(adType 만 짧게). 예: L-|C+|M+|I+|T=PRODUCT_AD|A=ader.naver.com|R=cr.shopping.naver.com/adcr */
+  function adFingerprint(p) {
+    if (!p || typeof p !== 'object') return '(비객체)';
+    const first = String((p.mallProductUrl || p.adcrUrl || p.crUrl) || '');
+    const cr = String(p.crUrl || '');
+    return [
+      'L' + (first.includes('adcr') ? '+' : '-'),
+      'C' + ((p.adId && p.adType && p.adcrUrl) ? '+' : '-'),
+      'M' + (p.mallProductUrl ? '+' : '-'),
+      'I' + (p.adId ? '+' : '-'),
+      p.adType ? 'T=' + String(p.adType).slice(0, 24) : 'T-',
+      p.adcrUrl ? 'A=' + hostOf(p.adcrUrl) : 'A-',
+      cr ? 'R=' + hostOf(cr) + (cr.includes('adcr') ? '/adcr' : '') : 'R-',
+    ].join('|');
+  }
+
+  /** 링크·조합으로는 광고로 안 걸렸는데 광고 표식처럼 보이는 키를 가진 상품 수(진단 전용·거르지 않음) */
+  function hasAdHint(p) {
+    if (!p || typeof p !== 'object') return false;
+    for (const k in p) {
+      if (/^ad(Id|cr|Product|Type|Rank)/i.test(k) && p[k]) return true;
+    }
+    return false;
+  }
+
+  /** 상품 식별값 — 문자열은 다듬고, 양의 정수만 문자열로. 그 밖(객체·0·음수)은 빈 값(코덱스 1.22.0 이식 · 3차). */
+  function productIdentity(value) {
+    if (typeof value === 'string') return value.trim();
+    if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) return String(value);
+    return '';
+  }
+  /** 네이버 응답 → 서버가 쓰는 형태로 정리
+   *  ⚠️ productId 는 **nvMid 가 있으면 nvMid** 다(코덱스 이식) — 검색 결과의 정체성은 nvMid 이고,
+   *     행 id 는 페이지마다 바뀔 수 있어 중복 판정·조기 종료 목표 대조가 흔들린다. nvMid 가 없는 행만 id 로. */
+  function toProduct(p, rank) {
+    const mid = productIdentity(p.nvMid);
+    const canonical = mid || productIdentity(p.id || p.productId);
+    return {
+      rank,
+      nvMid: mid,
+      productId: canonical,
+      title: String(p.productTitle || p.productName || '').replace(/<[^>]*>/g, ''),
+      link: String(p.mallProductUrl || p.adcrUrl || p.crUrl || ''),
+      price: String(p.price || p.lowPrice || ''),
+      mallName: String(p.mallName || p.mallNm || ''),
+      brand: String(p.brand || p.maker || ''),
+      category1: String(p.category1Name || ''),
+      category2: String(p.category2Name || ''),
+      category3: String(p.category3Name || ''),
+      reviewCount: String(p.reviewCount || ''),
+    };
+  }
+
+  /** 페이지 1장의 상품 목록에서 오가닉만 골라 누적 순번을 붙인다.
+   *
+   *  st = { products, seenIds, maxRank, adSkipped, dupSkipped, adHintMissed, onFirstAd?, fp? }
+   *  — 광고·중복 제외 순서가 계약이다:
+   *  ⭐ 광고는 순위 번호를 먹지 않는다(2026-08-12 대표 확정 「광고 제외로 가야 해」).
+   *  ⚠️ 광고를 거를 때 seenIds 에 넣지 않는 것이 핵심 — 광고주 상품은 '광고 자리'와
+   *     '오가닉 자리'로 두 번 나오는데, 광고 자리가 id 를 선점하면 진짜 오가닉 자리가
+   *     중복으로 걸러져 그 업체가 통째로 미노출로 보고된다.
+   *     (신고 #253 이 정확히 그 반대 사고였다 — 광고 판별이 눈멀자 광고가 id 를 선점해
+   *      오가닉 자리가 지워지고 광고 자리가 순위에 남았다.) */
+  function takeOrganic(list, st) {
+    for (let idx = 0; idx < list.length; idx++) {
+      if (st.products.length >= st.maxRank) break;
+      const item = list[idx];
+      // 지문 집계(판정과 무관하게 전 상품) — st.fp 가 있을 때만. 값 없음·호스트만이라 안전.
+      if (st.fp) { const f = adFingerprint(item); st.fp[f] = (st.fp[f] || 0) + 1; }
+      if (isAdItem(item)) {
+        st.adSkipped++;
+        if (st.adSkipped === 1 && typeof st.onFirstAd === 'function') st.onFirstAd(item);
+        continue;
+      }
+      if (hasAdHint(item)) st.adHintMissed++;
+      const mapped = toProduct(item, st.products.length + 1);
+      // 식별값이 없는 행은 담지 않는다(코덱스 이식) — 서버가 그 행을 어떤 상품과도 맞출 수 없고, 순번만 밀어낸다.
+      if (!mapped.productId) { st.invalidSkipped = (st.invalidSkipped || 0) + 1; continue; }
+      if (st.seenIds.has(mapped.productId)) { st.dupSkipped++; continue; }
+      st.seenIds.add(mapped.productId);
+      mapped.rank = st.products.length + 1;   // 광고·중복을 건너뛴 자리를 메운 최종 순위
+      if (st.sourcePage) mapped.sourcePage = st.sourcePage;
+      st.products.push(mapped);
+    }
+    return st;
+  }
+
+  const RankRules = { isAdItem, hasAdHint, toProduct, takeOrganic, adFingerprint, hostOf, productIdentity };
+  if (typeof module !== 'undefined' && module.exports) module.exports = RankRules;
+  if (typeof globalThis !== 'undefined') globalThis.RankRules = RankRules;
+})();
