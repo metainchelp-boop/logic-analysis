@@ -33,7 +33,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 # ── 설정 번호 — 값을 바꾸면 1 올린다 ────────────────────────────────────────────
-SETTINGS_REV = 2
+SETTINGS_REV = 3
 # 번호별 설정 지문 장부 — SETTINGS·WORKER_OVERRIDES 를 고치면 REV 를 올리고 여기에 한 줄 더한다.
 #   지문은 `python -c "import collector_settings as c; print(c.config_fingerprint())"` 로 뽑는다.
 #   ⚠️ 시험(test_collector_settings.py)이 「지금 REV 의 지문 = 장부의 지문」을 확인한다 —
@@ -41,6 +41,7 @@ SETTINGS_REV = 2
 REV_LEDGER = {
     1: "d2176d65",   # 2026-09-23 첫 판 — 전부 기본값(v1.26.0 과 동일)
     2: "dba16133",   # 2026-09-24 서버 자동 배정 — 2번만 켬 · 1번 끔 · 기계당 시간 15 · 하루 360
+    3: "8c7d809d",   # 2026-09-24 되돌림 — 2번도 끔(수집기 WAIT_BUDGET 결함 · v1.27.1 뒤 다시 켬)
 }
 
 MIN = 60 * 1000
@@ -95,7 +96,9 @@ SETTINGS: Dict[str, Any] = {}
 # 기계별 덮어쓰기 — {기계 번호(1부터): {칸: 값}}. 비어 있으면 두 대가 같은 값.
 # 2026-09-24 대표 「1대에 먼저 중앙 배정 · 나 방법」 — 두 노트북 팝업 토글은 둘 다 켜져 있고 그대로 둔다.
 #   서버가 1번은 끔 · 2번만 켬으로 정한다(서버 값이 팝업보다 우선). 되돌리기 = 2번을 False 로 바꾸고 REV 를 올린다.
-WORKER_OVERRIDES: Dict[int, Dict[str, Any]] = {1: {"swCoordinated": False}, 2: {"swCoordinated": True}}
+# 2026-09-24 15:1x 되돌림(대표 「1번 되돌리기 배포하자」) — 실기기 시험에서 수집기 결함 발견: 배정 서버의 「기다려」(WAIT_BUDGET)를
+#   「이번 시간 끝」으로 받아 한 개라도 끝냈으면 그 시간 회차를 닫는다 ⇒ 2번이 시간당 1~3개만 모음. 수집기 v1.27.1 에서 고친 뒤 다시 켠다.
+WORKER_OVERRIDES: Dict[int, Dict[str, Any]] = {1: {"swCoordinated": False}, 2: {"swCoordinated": False}}
 
 # 기계 배정 — {instanceId: {"no": 번호, "count": 전체 대수}}. 비어 있으면 팝업 값 그대로.
 # instanceId 는 수집기가 스스로 만든 무작위 id(로직분석 화면 「수집기 운영」 패널에 보인다).

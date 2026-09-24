@@ -93,13 +93,13 @@ ok("정수 칸 반올림이 수집기(Math.round)와 같다 — 2.5 → 3", cs._
 ok("참/거짓을 숫자 칸에 넣으면 버린다(파이썬 bool 은 int 라 따로 막아야 한다)",
    cs._clamp_values({"onDemandHourCap": True})["onDemandHourCap"] == 12)
 
-print("\n③ 지금 설정 — 공통 값은 기본값 그대로 · 서버 자동 배정은 2번만(2026-09-24 대표 「나 방법」)")
+print("\n③ 지금 설정 — 공통 값은 기본값 그대로 · 서버 자동 배정은 두 대 다 끔(2026-09-24 되돌림 · 수집기 v1.27.1 대기)")
 ok("SETTINGS 비어 있음(두 대 공통 값 = 기본값)", cs.SETTINGS == {})
 ok("기계 배정 비어 있음(= 팝업 값 그대로)", cs.ASSIGNMENTS == {})
 ok("명령 비어 있음", cs.COMMANDS == [])
 _v1, _v2 = cs.values_for(1), cs.values_for(2)
 ok("🔴 1번은 자동 배정 끔(팝업이 켜져 있어도 서버 값이 우선)", _v1["swCoordinated"] is False)
-ok("🔴 2번만 자동 배정 켬", _v2["swCoordinated"] is True)
+ok("🔴 2번도 자동 배정 끔(되돌림 — 팝업이 켜져 있어도 서버 값이 우선)", _v2["swCoordinated"] is False)
 ok("그 밖의 칸은 두 대 모두 기본값",
    {k: v for k, v in _v1.items() if k != "swCoordinated"} == {k: v for k, v in cs.DEFAULTS.items() if k != "swCoordinated"}
    and {k: v for k, v in _v2.items() if k != "swCoordinated"} == {k: v for k, v in cs.DEFAULTS.items() if k != "swCoordinated"})
