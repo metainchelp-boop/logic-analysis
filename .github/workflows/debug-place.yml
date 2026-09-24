@@ -84,7 +84,7 @@ on:
         description: '진단 스텝이 어디서 멈추는지 — true. 이 워크플로가 쓰는 명령을 하나씩 timeout 을 씌워 걸리는 지점을 찾는다(읽기 전용).'
         required: false
       analysis_audit:
-        description: '로직분석 결과값 전수조사 — true(1차) / preload(4차: PRELOADED 자리) / detail2(5차: 판매가·본 상품 주소가 HTML 어디에) / ld(6차: JSON-LD 값 모양) / fix(7차: 고친 코드로 751건 다시 읽기) / live268(#268 배포 반영 확인) / effect268(#268 배포 효과 — 판매가·422·데이터랩 보관함·수집 커버리지) / effect268b(2차 — 수집 순서 간격·접속 기록 교차) / live942(FE 제안서 라이브) / detail(2차: 상세 HTML 구조·수집 커버리지·정확한 상태코드). 자동 분석 결과 칸별 빈값 · 배치 산출물 일별 · 외부 데이터원 1회 실호출 · 오류 로그 유형 · API 경로별 상태코드(읽기 전용 · 업체명·키워드·IP 미출력 · 그래도 읽은 뒤 런 로그 삭제)'
+        description: '로직분석 결과값 전수조사 — true(1차) / preload(4차: PRELOADED 자리) / detail2(5차: 판매가·본 상품 주소가 HTML 어디에) / ld(6차: JSON-LD 값 모양) / fix(7차: 고친 코드로 751건 다시 읽기) / live268(#268 배포 반영 확인) / effect268(#268 배포 효과 — 판매가·422·데이터랩 보관함·수집 커버리지) / effect268b(2차 — 수집 순서 간격·접속 기록 교차) / effect268c(3차 — 직원 화면 사용 여부) / live942(FE 제안서 라이브) / detail(2차: 상세 HTML 구조·수집 커버리지·정확한 상태코드). 자동 분석 결과 칸별 빈값 · 배치 산출물 일별 · 외부 데이터원 1회 실호출 · 오류 로그 유형 · API 경로별 상태코드(읽기 전용 · 업체명·키워드·IP 미출력 · 그래도 읽은 뒤 런 로그 삭제)'
         required: false
       place_capture_probe:
         description: '신고 #276 — 플레이스 분석 캡처 판독 재현. db = 기록 집계만 / auto = 9/22·9/23 사람 분석 행으로 네이버 목록 1~2회 받아 서버 판독기로 읽기 / at:시각;시각 = 그 시각 행을 그대로 재현 / at!:시각 = 같은데 이름을 그대로 찍는다(⚠️ 읽은 즉시 런 로그 삭제) / find!:업체명|검색어;검색어 = 이름으로 찾아 그 번호가 각 목록 몇 번째인지(⚠️ 로그 삭제) / depth:검색어;검색어 = 기록된 순위 분포 + 목록 데이터 칸 구조 / 그 밖의 글자 = 그 검색어로 1회. 업체명·키워드는 해시로만 찍는다(읽기 전용).'
@@ -885,6 +885,95 @@ jobs:
             for k, v in sorted(build.items()):
                 print(f"  {k:<36} {v}")
             PY
+
+      - name: 로직분석 배포 효과 3차 — 직원 화면이 실제로 쓰이나 (읽기 전용 · 경로 모양·건수만)
+        if: ${{ github.event.inputs.analysis_audit == 'effect268c' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 180s
+          script: |
+            cat > /tmp/_eff268c.py <<'PY'
+            # 배포 뒤 직원 화면이 실제로 쓰이고 있나 — nginx 접속 기록(경로 모양·보낸 쪽·시각만) · 읽기 전용
+            # ⚠️ IP·주소 원문·검색어 미출력: 쿼리는 버리고, 숫자는 :n, 한글·인코딩 조각은 <x> 로 바꾼다.
+            import re, glob, gzip, os, collections
+            from datetime import datetime
+
+            LOGS = os.getenv("EFF_NGINX", "/var/log/nginx/access.log*")
+            NG = re.compile(r'\[(\d{2})/(\w{3})/(\d{4}):(\d{2}):(\d{2}):\d{2} [+-]\d{4}\] "(GET|POST|PUT|PATCH|DELETE) (\S+) [^"]*" (\d{3}) \S+ "[^"]*" "([^"]*)"')
+            MON = {m: i for i, m in enumerate(["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], 1)}
+            DEPLOY = datetime(2026, 9, 23, 21, 16)
+            PRE_DAY = (datetime(2026, 9, 23, 0, 0), datetime(2026, 9, 23, 21, 16))
+
+
+            def shape(p):
+                p = p.split("?")[0]
+                segs = []
+                for s in p.split("/"):
+                    if re.fullmatch(r"\d+", s):
+                        segs.append(":n")
+                    elif s and not re.fullmatch(r"[A-Za-z0-9_.-]+", s):
+                        segs.append("<x>")
+                    else:
+                        segs.append(s)
+                return "/".join(segs)
+
+
+            def who(u):
+                if "Java" in u or "okhttp" in u.lower() or "Apache-HttpClient" in u:
+                    return "java"
+                if "Mozilla" in u:
+                    return "browser"
+                return "other"
+
+
+            post = collections.Counter()
+            pre = collections.Counter()
+            hour_post = collections.Counter()
+            hour_pre = collections.Counter()
+            for f in sorted(glob.glob(LOGS)):
+                try:
+                    fh = gzip.open(f, "rt", errors="ignore") if f.endswith(".gz") else open(f, errors="ignore")
+                    for ln in fh:
+                        m = NG.search(ln)
+                        if not m:
+                            continue
+                        p = m.group(7)
+                        if not p.startswith("/api/"):
+                            continue
+                        d = datetime(int(m.group(3)), MON.get(m.group(2), 1), int(m.group(1)), int(m.group(4)), int(m.group(5)))
+                        w = who(m.group(9))
+                        key = (shape(p), w, m.group(8))
+                        if d >= DEPLOY:
+                            post[key] += 1
+                            if w == "browser":
+                                hour_post[d.strftime("%m-%d %H")] += 1
+                        elif PRE_DAY[0] <= d < PRE_DAY[1]:
+                            pre[key] += 1
+                            if w == "browser":
+                                hour_pre[d.strftime("%m-%d %H")] += 1
+                except Exception as e:
+                    print(f"  ⚠️ {os.path.basename(f)}: {str(e)[:60]}")
+
+            print("== ⑤ 배포 뒤(9/23 21:16~) /api 경로 × 보낸 쪽 × 상태 (상위 25) ==")
+            for (p, w, s), n in post.most_common(25):
+                print(f"  {n:>5}  {w:<8} {s}  {p}")
+            print("== ⑤-2 배포 전 같은 날(9/23 00:00~21:15) 브라우저가 부른 /api 경로 (상위 15) ==")
+            bp = collections.Counter()
+            for (p, w, s), n in pre.items():
+                if w == "browser":
+                    bp[(p, s)] += n
+            for (p, s), n in bp.most_common(15):
+                print(f"  {n:>5}  {s}  {p}")
+            print("== ⑤-3 브라우저 /api 요청 시간별 — 9/23 · 9/24 ==")
+            print("  배포 전: " + " · ".join(f"{h}시 {n}" for h, n in sorted(hour_pre.items())))
+            print("  배포 뒤: " + " · ".join(f"{h}시 {n}" for h, n in sorted(hour_post.items())))
+            PY
+            sudo -n true 2>/dev/null && S="sudo -n" || S=""
+            $S python3 /tmp/_eff268c.py
+            rm -f /tmp/_eff268c.py
 
       - name: 로직분석 배포 효과 2차 — 수집 순서 간격 · 접속 기록 교차 확인 (읽기 전용 · 이름·키워드·IP 미출력)
         if: ${{ github.event.inputs.analysis_audit == 'effect268b' }}
