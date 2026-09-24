@@ -84,7 +84,7 @@ on:
         description: '진단 스텝이 어디서 멈추는지 — true. 이 워크플로가 쓰는 명령을 하나씩 timeout 을 씌워 걸리는 지점을 찾는다(읽기 전용).'
         required: false
       analysis_audit:
-        description: '로직분석 결과값 전수조사 — true(1차) / preload(4차: PRELOADED 자리) / detail2(5차: 판매가·본 상품 주소가 HTML 어디에) / ld(6차: JSON-LD 값 모양) / fix(7차: 고친 코드로 751건 다시 읽기) / live268(#268 배포 반영 확인) / effect268(#268 배포 효과 — 판매가·422·데이터랩 보관함·수집 커버리지) / live942(FE 제안서 라이브) / detail(2차: 상세 HTML 구조·수집 커버리지·정확한 상태코드). 자동 분석 결과 칸별 빈값 · 배치 산출물 일별 · 외부 데이터원 1회 실호출 · 오류 로그 유형 · API 경로별 상태코드(읽기 전용 · 업체명·키워드·IP 미출력 · 그래도 읽은 뒤 런 로그 삭제)'
+        description: '로직분석 결과값 전수조사 — true(1차) / preload(4차: PRELOADED 자리) / detail2(5차: 판매가·본 상품 주소가 HTML 어디에) / ld(6차: JSON-LD 값 모양) / fix(7차: 고친 코드로 751건 다시 읽기) / live268(#268 배포 반영 확인) / effect268(#268 배포 효과 — 판매가·422·데이터랩 보관함·수집 커버리지) / effect268b(2차 — 수집 순서 간격·접속 기록 교차) / live942(FE 제안서 라이브) / detail(2차: 상세 HTML 구조·수집 커버리지·정확한 상태코드). 자동 분석 결과 칸별 빈값 · 배치 산출물 일별 · 외부 데이터원 1회 실호출 · 오류 로그 유형 · API 경로별 상태코드(읽기 전용 · 업체명·키워드·IP 미출력 · 그래도 읽은 뒤 런 로그 삭제)'
         required: false
       place_capture_probe:
         description: '신고 #276 — 플레이스 분석 캡처 판독 재현. db = 기록 집계만 / auto = 9/22·9/23 사람 분석 행으로 네이버 목록 1~2회 받아 서버 판독기로 읽기 / at:시각;시각 = 그 시각 행을 그대로 재현 / at!:시각 = 같은데 이름을 그대로 찍는다(⚠️ 읽은 즉시 런 로그 삭제) / find!:업체명|검색어;검색어 = 이름으로 찾아 그 번호가 각 목록 몇 번째인지(⚠️ 로그 삭제) / depth:검색어;검색어 = 기록된 순위 분포 + 목록 데이터 칸 구조 / 그 밖의 글자 = 그 검색어로 1회. 업체명·키워드는 해시로만 찍는다(읽기 전용).'
@@ -885,6 +885,80 @@ jobs:
             for k, v in sorted(build.items()):
                 print(f"  {k:<36} {v}")
             PY
+
+      - name: 로직분석 배포 효과 2차 — 수집 순서 간격 · 접속 기록 교차 확인 (읽기 전용 · 이름·키워드·IP 미출력)
+        if: ${{ github.event.inputs.analysis_audit == 'effect268b' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 240s
+          script: |
+            docker exec -i logic-analysis python3 - <<'PY'
+            # #268 배포 효과 2차 — B 수집 순서(보관 14일과 무관한 축) · 읽기 전용 · 키워드 미출력(건수만)
+            import os, sqlite3, collections
+            from datetime import date
+
+            DB = os.getenv("EFF_DB", "file:/app/data/logic_data.db?mode=ro")
+            c = sqlite3.connect(DB, uri=True, timeout=20)
+            DEPLOY = "2026-09-23 21:16"
+            PRE_FROM = "2026-09-22 21:16"
+
+
+            def q(sql, args=()):
+                try:
+                    return c.execute(sql, args).fetchall()
+                except Exception as e:
+                    print(f"  ⚠️ 못 쟀다: {type(e).__name__}: {str(e)[:100]}")
+                    return None
+
+
+            rng = q("SELECT MIN(collected_date), MAX(collected_date), MIN(created_at), MAX(created_at), COUNT(*) FROM collected_serp")
+            if rng:
+                print(f"  collected_serp 남은 범위: 날짜 {rng[0][0]}~{rng[0][1]} · 기록 시각 {rng[0][2]}~{rng[0][3]} · {rng[0][4]}행")
+            rows = q("SELECT keyword, collected_date, created_at FROM collected_serp")
+            by_kw = collections.defaultdict(list)
+            for k, d, ca in rows or []:
+                by_kw[k].append((d, ca or ""))
+
+
+            def gap_report(label, lo, hi):
+                picked = []
+                for k, lst in by_kw.items():
+                    for d, ca in lst:
+                        if lo <= ca < hi:
+                            prev = [x for x, _ in lst if x < d]
+                            picked.append((d, max(prev) if prev else None))
+                b = collections.Counter()
+                for d, p in picked:
+                    if p is None:
+                        b["보관 기간 안 첫 수집"] += 1
+                    else:
+                        g = (date.fromisoformat(d) - date.fromisoformat(p)).days
+                        b["1일" if g <= 1 else ("2~3일" if g <= 3 else ("4~7일" if g <= 7 else "8일+"))] += 1
+                n = len(picked)
+                print(f"  {label} ({lo} ~ {hi}): 모은 키워드 {n}개 · 직전 수집과의 간격 " +
+                      " · ".join(f"{k} {b[k]}" for k in ("1일", "2~3일", "4~7일", "8일+", "보관 기간 안 첫 수집")))
+
+
+            print("== ④-2 B 수집 순서 — 배포 전 24시간 · 배포 뒤 비교(직전 수집과의 간격 분포) ==")
+            gap_report("배포 전 24시간", PRE_FROM, DEPLOY)
+            gap_report("배포 뒤(지금까지)", DEPLOY, "9999")
+            t = q("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('datalab_cache','api_usage_logs')")
+            print(f"  표 존재: {[x[0] for x in (t or [])]}")
+            PY
+            sudo -n true 2>/dev/null && S="sudo -n" || S=""
+            echo "== ②-2 nginx 로그 파일 자체 (이름·크기·마지막 수정) =="
+            $S ls -l --time-style=+%m-%d_%H:%M /var/log/nginx/ 2>/dev/null | awk 'NR>1{print "  "$6"  "$5"B  "$7}' | head -12
+            echo "  -- access.log 마지막 줄 시각(내용 미출력) --"
+            $S tail -1 /var/log/nginx/access.log 2>/dev/null | grep -oE '\[[0-9]{2}/[A-Za-z]{3}/[0-9]{4}:[0-9:]{8} [+-][0-9]{4}\]' || echo "  (못 읽음)"
+            echo "  -- access.log 날짜별 줄 수 (모든 경로) --"
+            $S cat /var/log/nginx/access.log 2>/dev/null | grep -oE '\[[0-9]{2}/[A-Za-z]{3}/[0-9]{4}' | sort | uniq -c | tail -4
+            echo "== ②-3 앱(uvicorn) 접속 기록 — 컨테이너 기동 뒤 경로×상태 (IP·주소 미출력) =="
+            docker logs logic-analysis 2>&1 | grep -oE '"(GET|POST) /api/(advertiser/analyze|datalab/analyze|seo/detail-page|seo/analyze|cd/portal-summary)[^ ]* HTTP/1\.[01]" [0-9]{3}' \
+              | sed -E 's/\?[^ ]*//; s/ HTTP\/1\.[01]"/"/' | sort | uniq -c || true
+            N=$(docker logs logic-analysis 2>&1 | grep -cE '"(GET|POST) /api/' | tail -1); echo "  앱 접속 기록 줄 수(모든 /api): ${N:-0}"
 
       - name: 로직분석 #268 배포 효과 첫 실측 (읽기 전용 · 이름·키워드·IP 미출력)
         if: ${{ github.event.inputs.analysis_audit == 'effect268' }}
