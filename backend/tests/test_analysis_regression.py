@@ -1554,7 +1554,9 @@ def test_광고_판별_규칙이_한_곳에만_있다():
     assert "p.adId && p.adType && p.adcrUrl" in rules, "새 광고 표식 조합 판별이 사라졌다"
     assert "includes('adcr')" in rules, "레거시 판별(무회귀)이 사라졌다"
     bg = _src("../collector-extension/background.js")
-    assert "importScripts('rank_rules.js')" in bg, "확장이 rank_rules.js 를 안 읽는다"
+    import re
+    # v1.27.0 부터 한 줄에 여러 파일을 읽는다(remote_settings.js · diagnostic_export.js) — 그 줄에 rank_rules.js 가 있으면 된다
+    assert re.search(r"importScripts\([^)]*'rank_rules\.js'", bg), "확장이 rank_rules.js 를 안 읽는다"
     assert "function isAdItem" not in bg, "판별이 background.js 에 다시 생겼다 — 규칙이 갈린다"
     assert "meta:" in bg and "adSkipped" in bg, "수집 메타 업로드가 사라졌다(사후 재구성 불가로 회귀)"
     import os as _os
