@@ -51,3 +51,33 @@ def order_key(keyword: str, attempted: dict = None, last: dict = None):
     return ((attempted or {}).get(keyword, "") or "",
             (last or {}).get(keyword, "") or "",
             keyword)
+
+
+# ── 🌙 밤 재시도 상한 (대표 확정 2026-09-24 「밤 재시도 횟수 상한은 하루 2번만 해」) ──
+#
+# 왜 — 9/23 배포 뒤 「같은 키워드를 하루 3번 이상 올린 것」이 0 → 45개가 됐다(9/24 실측).
+#   #265 로 밤 시간(23시·0~7시)엔 새로 잴 키워드가 시간당 약 15개로 줄었는데, 기계는 시간당 상한까지 받아 가서
+#   남는 몫을 **2페이지에서 막혔던 키워드 재시도**로 채운다. 그래서 「밤엔 적게」가 재시도로 메워져
+#   밤에도 두 대가 시간당 약 30건을 불렀다.
+# 규칙 — **밤 시간에는**, 오늘 이미 NIGHT_RETRY_DAILY_MAX 번 시도하고도 완료 못 한 키워드를 **다시 주지 않는다.**
+#   · 「하루 2번」= 그날 시도 횟수(첫 시도 포함) — 완료(전량·목표 다 찾음)되면 어차피 목록에서 빠진다.
+#   · 낮(collect_slot.DAY_HOURS)에는 종전 그대로다(대표 지시가 「밤」이다).
+#   · 날짜가 바뀌면(자정) 횟수도 새로 센다 · 다음 날 그 키워드의 슬롯에서 다시 돈다.
+#   · 1페이지(40위) 순위는 부분 수집으로 이미 기록돼 있다 — 빠지는 것은 2페이지 이후를 다시 두드리는 몫뿐이다.
+# ⚠️ 횟수를 못 세면(조회 실패) 거르지 않는다 — 종전 동작(수집이 멈추는 것보다 낫다).
+NIGHT_RETRY_DAILY_MAX = 2
+
+
+def night_retry_capped(keyword: str, attempts_today: dict, hour: int, day_hours) -> bool:
+    """이 시각에 이 키워드를 주지 말아야 하나 — 밤 시간이고 오늘 시도 횟수가 상한에 닿았으면 True."""
+    try:
+        h = int(hour)
+    except Exception:
+        return False
+    if h in tuple(day_hours or ()):
+        return False
+    try:
+        n = int((attempts_today or {}).get(keyword, 0) or 0)
+    except Exception:
+        return False
+    return n >= NIGHT_RETRY_DAILY_MAX

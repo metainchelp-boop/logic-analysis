@@ -433,8 +433,26 @@ def _get_collect_keywords(hour: int = None, worker: int = 0, workers: int = 1,
                     "targets": _targets(conn, todo)}
 
         h = max(0, min(23, int(hour)))
+        # 🌙 밤 재시도 상한(대표 확정 2026-09-24 「밤 재시도 횟수 상한은 하루 2번만 해」) —
+        #    밤 시간엔 오늘 이미 2번 시도하고도 완료 못 한 키워드를 다시 주지 않는다(규칙은 collect_order).
+        #    낮은 종전 그대로 · 횟수를 못 세면 거르지 않는다(종전 동작).
+        night_capped = set()
+        try:
+            from collect_slot import DAY_HOURS as _DAY_HOURS
+            from collect_order import night_retry_capped as _night_capped
+            if h not in _DAY_HOURS:
+                from collector_observation import attempt_count_map as _attempt_counts
+                _counts = _attempt_counts(conn, today)
+                night_capped = {k for k in remaining if _night_capped(k, _counts, h, _DAY_HOURS)}
+        except Exception as _ne:
+            logger.warning(f"[collector] 밤 재시도 상한 판정 실패(거르지 않음): {_ne}")
+            night_capped = set()
+        if night_capped:
+            logger.info(f"[collector] 🌙 밤 재시도 상한 — 오늘 2번 시도한 키워드 {len(night_capped)}개는 이번 회차에서 뺌 ({h}시)")
         now_slot, overdue = [], []
         for k, p in remaining.items():
+            if k in night_capped:
+                continue
             s = _slot_of(k, p)
             if s == h:
                 now_slot.append(k)
@@ -458,6 +476,7 @@ def _get_collect_keywords(hour: int = None, worker: int = 0, workers: int = 1,
                 "total": len(uni), "done": len(done),
                 "slot": len(now_slot), "overdue": len(overdue),
                 "worker": w, "workers": wc, "test_cap": cap,
+                "night_retry_capped": len(night_capped),
                 "todo": len(picked), "keywords": picked,
                 "targets": _targets(conn, picked)}
     finally:
