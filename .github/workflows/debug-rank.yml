@@ -73,6 +73,18 @@ jobs:
           command_timeout: 120s
           envs: CP_ID
           script: |
+            DEL_IDS=$(printf '%s' "$CP_ID" | tr ',' '\n' | sed -n 's/^d://p' | head -1)
+            if [ -n "$DEL_IDS" ]; then
+              echo "== 업체 삭제 요청 흔적 — nginx 접속 기록(번호·시각·상태만 · 출처는 런마다 다른 소금 해시)"
+              ls -l --time-style=+%m-%d /var/log/nginx/ 2>/dev/null | awk 'NR>1{print "  파일 " $6 " " $7}' | head -30
+              SALT=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+              for f in /var/log/nginx/access.log*; do
+                case "$f" in *.gz) zcat "$f" ;; *) cat "$f" ;; esac
+              done 2>/dev/null | grep -aE "\"DELETE /api/(cd|clients)/($DEL_IDS)([ /?]|\")" \
+                | awk -v salt="$SALT" '{ip=$1; cmd="printf %s " salt ip " | md5sum | cut -c1-6"; cmd | getline h; close(cmd); gsub(/"/,"",$6); print "  " substr($4,2) " " $6 " " $7 " → " $9 " 출처=" h}' \
+                | sort | head -40 || true
+              echo "  (끝)"
+            fi
             docker exec -i -e CP_ID="${CP_ID}" logic-analysis python3 - <<'PY'
             import os, sqlite3, sys, hashlib, re
             sys.path.insert(0, "/app/backend"); sys.path.insert(0, "/app")
@@ -108,6 +120,21 @@ jobs:
                     print("    (정렬 기록 조회 실패:", e, ")")
             mode = (os.getenv("CP_ID") or "").strip()
             for part in [p.strip() for p in mode.split(",") if p.strip()]:
+                if part.startswith("d:"):
+                    continue
+                if part.startswith("g:"):
+                    try:
+                        _, L, want = part.split(":", 2); L = int(L)
+                    except Exception:
+                        print(f"== 잘못된 입력 {part}"); continue
+                    ids = []
+                    for r in conn.execute("SELECT id, name FROM clients"):
+                        n = norm(r["name"])
+                        if any(hashlib.sha256(n[i:i+L].encode()).hexdigest()[:16] == want for i in range(0, max(0, len(n) - L + 1))):
+                            ids.append(r["id"])
+                    print(f"== {L}글자 조각 해시 {want[:6]}… 를 이름에 품은 업체 {len(ids)}곳: {ids}")
+                    for i in ids[:10]: show(i)
+                    continue
                 if part.startswith("h:"):
                     want = part[2:]
                     ids = [r["id"] for r in conn.execute("SELECT id, name FROM clients")
