@@ -84,7 +84,7 @@ on:
         description: '진단 스텝이 어디서 멈추는지 — true. 이 워크플로가 쓰는 명령을 하나씩 timeout 을 씌워 걸리는 지점을 찾는다(읽기 전용).'
         required: false
       analysis_audit:
-        description: '로직분석 결과값 전수조사 — true(1차) / preload(4차: PRELOADED 자리) / detail2(5차: 판매가·본 상품 주소가 HTML 어디에) / ld(6차: JSON-LD 값 모양) / fix(7차: 고친 코드로 751건 다시 읽기) / live268(#268 배포 반영 확인) / live942(FE 제안서 라이브) / detail(2차: 상세 HTML 구조·수집 커버리지·정확한 상태코드). 자동 분석 결과 칸별 빈값 · 배치 산출물 일별 · 외부 데이터원 1회 실호출 · 오류 로그 유형 · API 경로별 상태코드(읽기 전용 · 업체명·키워드·IP 미출력 · 그래도 읽은 뒤 런 로그 삭제)'
+        description: '로직분석 결과값 전수조사 — true(1차) / preload(4차: PRELOADED 자리) / detail2(5차: 판매가·본 상품 주소가 HTML 어디에) / ld(6차: JSON-LD 값 모양) / fix(7차: 고친 코드로 751건 다시 읽기) / live268(#268 배포 반영 확인) / effect268(#268 배포 효과 — 판매가·422·데이터랩 보관함·수집 커버리지) / live942(FE 제안서 라이브) / detail(2차: 상세 HTML 구조·수집 커버리지·정확한 상태코드). 자동 분석 결과 칸별 빈값 · 배치 산출물 일별 · 외부 데이터원 1회 실호출 · 오류 로그 유형 · API 경로별 상태코드(읽기 전용 · 업체명·키워드·IP 미출력 · 그래도 읽은 뒤 런 로그 삭제)'
         required: false
       place_capture_probe:
         description: '신고 #276 — 플레이스 분석 캡처 판독 재현. db = 기록 집계만 / auto = 9/22·9/23 사람 분석 행으로 네이버 목록 1~2회 받아 서버 판독기로 읽기 / at:시각;시각 = 그 시각 행을 그대로 재현 / at!:시각 = 같은데 이름을 그대로 찍는다(⚠️ 읽은 즉시 런 로그 삭제) / find!:업체명|검색어;검색어 = 이름으로 찾아 그 번호가 각 목록 몇 번째인지(⚠️ 로그 삭제) / depth:검색어;검색어 = 기록된 순위 분포 + 목록 데이터 칸 구조 / 그 밖의 글자 = 그 검색어로 1회. 업체명·키워드는 해시로만 찍는다(읽기 전용).'
@@ -885,6 +885,188 @@ jobs:
             for k, v in sorted(build.items()):
                 print(f"  {k:<36} {v}")
             PY
+
+      - name: 로직분석 #268 배포 효과 첫 실측 (읽기 전용 · 이름·키워드·IP 미출력)
+        if: ${{ github.event.inputs.analysis_audit == 'effect268' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 240s
+          script: |
+            echo "== 0) 컨테이너 =="
+            docker inspect -f 'StartedAt={{.State.StartedAt}} RestartCount={{.RestartCount}}' logic-analysis
+            docker exec -i logic-analysis python3 - <<'PY'
+            # #268 배포 효과 첫 실측 (2026-09-24 · 읽기 전용) — 이름·키워드·주소 미출력, 칸 이름·건수만
+            import os, json, sqlite3, collections
+            from datetime import datetime
+
+            DB = os.getenv("EFF_DB", "file:/app/data/logic_data.db?mode=ro")
+            c = sqlite3.connect(DB, uri=True, timeout=20)
+
+
+            def q(sql, args=()):
+                try:
+                    return c.execute(sql, args).fetchall()
+                except Exception as e:
+                    print(f"  ⚠️ 못 쟀다: {type(e).__name__}: {str(e)[:100]}")
+                    return None
+
+
+            def empty(v):
+                if v is None:
+                    return True
+                if isinstance(v, str):
+                    return v.strip() in ("", "-", "0", "미확인", "null", "None")
+                if isinstance(v, (int, float)) and not isinstance(v, bool):
+                    return v == 0
+                return False
+
+
+            print(f"  기준 시각(서버) {datetime.now():%Y-%m-%d %H:%M}")
+            print("== ① 자동 분석 — htmlDetail.reviewData 판매가·카테고리 (9/23 vs 9/24) ==")
+            for d in ("2026-09-23", "2026-09-24"):
+                rows = q("SELECT analysis_json FROM client_analyses WHERE analyzed_date=?", (d,))
+                if rows is None:
+                    continue
+                tot = len(rows)
+                has_rd = price_empty = cat_empty = 0
+                src = collections.Counter()
+                bad = 0
+                for (aj,) in rows:
+                    try:
+                        a = json.loads(aj) if aj else {}
+                    except Exception:
+                        bad += 1
+                        continue
+                    if not isinstance(a, dict):
+                        continue
+                    rd = ((a.get("htmlDetail") or {}).get("reviewData"))
+                    if not isinstance(rd, dict):
+                        continue
+                    has_rd += 1
+                    if empty(rd.get("price")):
+                        price_empty += 1
+                    if empty(rd.get("category")):
+                        cat_empty += 1
+                    dq = rd.get("data_quality") or {}
+                    p = dq.get("price") if isinstance(dq, dict) else None
+                    s = (p or {}).get("sources") if isinstance(p, dict) else None
+                    src[",".join(s) if isinstance(s, list) and s else "(출처 없음)"] += 1
+                print(f"  {d}: 분석 {tot}행 · reviewData 있음 {has_rd} · 판매가 빔 {price_empty} · 카테고리 빔 {cat_empty} · JSON 깨짐 {bad}")
+                print(f"      판매가 출처: {dict(src)}")
+
+            print("== ③ 데이터랩 보관함(datalab_cache) ==")
+            t = q("SELECT name FROM sqlite_master WHERE type='table' AND name='datalab_cache'")
+            if t is not None:
+                if not t:
+                    print("  표 없음 — 배포 뒤 데이터랩 성공 호출이 한 번도 없었다는 뜻")
+                else:
+                    n = q("SELECT COUNT(*), MIN(saved_at), MAX(saved_at) FROM datalab_cache WHERE k != '__quota_block_until__'")
+                    if n:
+                        cnt, mn, mx = n[0]
+                        f = lambda x: datetime.fromtimestamp(x).strftime("%m-%d %H:%M") if x else "-"
+                        print(f"  보관 줄 {cnt} · 가장 오래된 {f(mn)} · 가장 최근 {f(mx)}")
+                    hr = q("SELECT strftime('%m-%d %H', saved_at, 'unixepoch', 'localtime') h, COUNT(*) FROM datalab_cache "
+                           "WHERE k != '__quota_block_until__' GROUP BY h ORDER BY h")
+                    if hr:
+                        print("  시간별 새로 보관: " + " · ".join(f"{h}시 {k}" for h, k in hr))
+                    qb = q("SELECT v, saved_at FROM datalab_cache WHERE k='__quota_block_until__'")
+                    if qb is not None:
+                        if not qb:
+                            print("  한도 소진 표시 없음 — 배포 뒤 한도 소진(010)이 한 번도 안 났다")
+                        else:
+                            v, sa = qb[0]
+                            try:
+                                until = float(json.loads(v).get("until"))
+                                u = datetime.fromtimestamp(until).strftime("%m-%d %H:%M")
+                            except Exception:
+                                u = "해석 실패"
+                            print(f"  한도 소진 표시: 찍힌 시각 {datetime.fromtimestamp(sa):%m-%d %H:%M:%S} · 풀리는 시각 {u}")
+
+            print("== ④ 자동 분석 키워드가 수집분에 있었나 (9/23 vs 9/24) ==")
+            norm = lambda k: "".join(str(k or "").split()).lower()
+            col_all = {norm(k) for (k,) in (q("SELECT DISTINCT keyword FROM collected_serp") or [])}
+            last = {}
+            for (k, d) in (q("SELECT keyword, MAX(collected_date) FROM collected_serp GROUP BY keyword") or []):
+                nk = norm(k)
+                if d and (nk not in last or d > last[nk]):
+                    last[nk] = d
+            for d in ("2026-09-23", "2026-09-24"):
+                rows = q("SELECT keyword, shop_products_json FROM client_analyses WHERE analyzed_date=?", (d,))
+                if rows is None:
+                    continue
+                kws = {}
+                for k, p in rows:
+                    kws[norm(k)] = kws.get(norm(k), False) or (p not in ("", "[]", None))
+                tot = len(kws)
+                has_prod = sum(1 for v in kws.values() if v)
+                ever = sum(1 for k in kws if k in col_all)
+                stale = sum(1 for k in kws if k in last and last[k] < "2026-09-10")
+                print(f"  {d}: 분석 키워드 {tot} · 상품목록 있음 {has_prod} · 한 번도 없음 {tot - ever} · 9/9 이전이 마지막 {stale}")
+            cd = q("SELECT collected_date, COUNT(*) FROM collected_serp WHERE collected_date >= date('now','localtime','-4 day') "
+                   "GROUP BY collected_date ORDER BY collected_date")
+            if cd:
+                print("  수집 원문 일별: " + " · ".join(f"{d} {n}" for d, n in cd))
+            PY
+            echo "== ③-2 데이터랩 한도 소진 로그(컨테이너 기동 뒤 · 시각과 고정 문구만) =="
+            docker logs --timestamps logic-analysis 2>&1 | grep '일일 한도 소진' | sed -E 's/^([0-9T:.-]+Z).*(데이터랩 일일 한도 소진\(010\)).*/\1 \2/' | tail -10 || true
+            N=$(docker logs logic-analysis 2>&1 | grep -c '일일 한도 소진' | tail -1); echo "  한도 소진 로그 줄 수: ${N:-0}"
+            N=$(docker logs logic-analysis 2>&1 | grep -c '상세페이지 분석(자동) 완료' | tail -1); echo "  08:30 자동 분석 — 상세페이지 분석 완료 줄 수: ${N:-0}"
+            N=$(docker logs logic-analysis 2>&1 | grep -c '상세페이지 분석(자동) 실패' | tail -1); echo "  08:30 자동 분석 — 상세페이지 분석 실패 줄 수: ${N:-0}"
+            cat > /tmp/_eff268_logs.py <<'PY'
+            # #268 배포 효과 — nginx 접속 기록(경로·상태 코드·시각만) · 읽기 전용 · IP·주소 미출력
+            import re, glob, gzip, os, collections
+            from datetime import datetime
+
+            LOGS = os.getenv("EFF_NGINX", "/var/log/nginx/access.log*")
+            NG = re.compile(r'\[(\d{2})/(\w{3})/(\d{4}):(\d{2}):(\d{2}):\d{2} ([+-]\d{4})\] "(GET|POST) (\S+) [^"]*" (\d{3}) \S+ "[^"]*" "([^"]*)"')
+            MON = {m: i for i, m in enumerate(["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], 1)}
+            DEPLOY = datetime(2026, 9, 23, 21, 16)
+            START = datetime(2026, 9, 17)
+            WANT = {"/api/advertiser/analyze", "/api/seo/detail-page", "/api/datalab/analyze"}
+
+            print("== ② nginx — 경로별 상태 코드 (배포 전 9/17~9/23 21:15 · 배포 뒤 9/23 21:16~) ==")
+            tz = collections.Counter()
+            st = collections.Counter()
+            day = collections.defaultdict(collections.Counter)
+            ua = collections.Counter()
+            for f in sorted(glob.glob(LOGS)):
+                try:
+                    fh = gzip.open(f, "rt", errors="ignore") if f.endswith(".gz") else open(f, errors="ignore")
+                    for ln in fh:
+                        m = NG.search(ln)
+                        if not m:
+                            continue
+                        p = m.group(8).split("?")[0]
+                        if p not in WANT:
+                            continue
+                        d = datetime(int(m.group(3)), MON.get(m.group(2), 1), int(m.group(1)), int(m.group(4)), int(m.group(5)))
+                        if d < START:
+                            continue
+                        tz[m.group(6)] += 1
+                        side = "뒤" if d >= DEPLOY else "전"
+                        st[(p, m.group(9), side)] += 1
+                        day[(p, m.group(9))][d.strftime("%m-%d")] += 1
+                        if p == "/api/advertiser/analyze" and side == "뒤":
+                            u = m.group(10)
+                            who = "Java(전산 서버)" if ("Java" in u or "okhttp" in u.lower() or "Apache-HttpClient" in u) else ("브라우저" if "Mozilla" in u else "기타")
+                            ua[(who, m.group(9))] += 1
+                except Exception as e:
+                    print(f"  ⚠️ {os.path.basename(f)}: {str(e)[:60]}")
+            print(f"  로그 시간대 표기: {dict(tz)}")
+            for p in sorted(WANT):
+                codes = sorted({s for (pp, s, _) in st if pp == p})
+                for s in codes:
+                    b, a = st[(p, s, "전")], st[(p, s, "뒤")]
+                    days = day[(p, s)]
+                    print(f"  {p:<26} {s}  전 {b:>5} · 뒤 {a:>5}   " + " ".join(f"{k}:{days[k]}" for k in sorted(days)))
+            print(f"  배포 뒤 광고주 분석 — 보낸 쪽×상태: {dict(ua)}")
+            PY
+            sudo -n true 2>/dev/null && S="sudo -n" || S=""
+            $S python3 /tmp/_eff268_logs.py
+            rm -f /tmp/_eff268_logs.py
 
       - name: 로직분석 #268 배포 반영 확인 (읽기 전용 · 이름·키워드 미출력)
         if: ${{ github.event.inputs.analysis_audit == 'live268' }}
