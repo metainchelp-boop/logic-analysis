@@ -84,7 +84,7 @@ on:
         description: '진단 스텝이 어디서 멈추는지 — true. 이 워크플로가 쓰는 명령을 하나씩 timeout 을 씌워 걸리는 지점을 찾는다(읽기 전용).'
         required: false
       analysis_audit:
-        description: '로직분석 결과값 전수조사 — true(1차) / preload(4차: PRELOADED 자리) / detail2(5차: 판매가·본 상품 주소가 HTML 어디에) / ld(6차: JSON-LD 값 모양) / fix(7차: 고친 코드로 751건 다시 읽기) / live268(#268 배포 반영 확인) / effect268(#268 배포 효과 — 판매가·422·데이터랩 보관함·수집 커버리지) / effect268b(2차 — 수집 순서 간격·접속 기록 교차) / effect268c(3차 — 직원 화면 사용 여부) / live942(FE 제안서 라이브) / detail(2차: 상세 HTML 구조·수집 커버리지·정확한 상태코드). 자동 분석 결과 칸별 빈값 · 배치 산출물 일별 · 외부 데이터원 1회 실호출 · 오류 로그 유형 · API 경로별 상태코드(읽기 전용 · 업체명·키워드·IP 미출력 · 그래도 읽은 뒤 런 로그 삭제)'
+        description: '로직분석 결과값 전수조사 — true(1차) / preload(4차: PRELOADED 자리) / detail2(5차: 판매가·본 상품 주소가 HTML 어디에) / ld(6차: JSON-LD 값 모양) / fix(7차: 고친 코드로 751건 다시 읽기) / live268(#268 배포 반영 확인) / effect268(#268 배포 효과 — 판매가·422·데이터랩 보관함·수집 커버리지) / effect268b(2차 — 수집 순서 간격·접속 기록 교차) / effect268c(3차 — 직원 화면 사용 여부) / effect268d(4차 — 수집 업로드 결과 전·뒤) / live942(FE 제안서 라이브) / detail(2차: 상세 HTML 구조·수집 커버리지·정확한 상태코드). 자동 분석 결과 칸별 빈값 · 배치 산출물 일별 · 외부 데이터원 1회 실호출 · 오류 로그 유형 · API 경로별 상태코드(읽기 전용 · 업체명·키워드·IP 미출력 · 그래도 읽은 뒤 런 로그 삭제)'
         required: false
       place_capture_probe:
         description: '신고 #276 — 플레이스 분석 캡처 판독 재현. db = 기록 집계만 / auto = 9/22·9/23 사람 분석 행으로 네이버 목록 1~2회 받아 서버 판독기로 읽기 / at:시각;시각 = 그 시각 행을 그대로 재현 / at!:시각 = 같은데 이름을 그대로 찍는다(⚠️ 읽은 즉시 런 로그 삭제) / find!:업체명|검색어;검색어 = 이름으로 찾아 그 번호가 각 목록 몇 번째인지(⚠️ 로그 삭제) / depth:검색어;검색어 = 기록된 순위 분포 + 목록 데이터 칸 구조 / 그 밖의 글자 = 그 검색어로 1회. 업체명·키워드는 해시로만 찍는다(읽기 전용).'
@@ -884,6 +884,69 @@ jobs:
                 print(f"  {k:<36} {v}")
             for k, v in sorted(build.items()):
                 print(f"  {k:<36} {v}")
+            PY
+
+      - name: 로직분석 배포 효과 4차 — 수집 업로드 결과(관측 원장) 전·뒤 (읽기 전용 · 건수·사유 코드만)
+        if: ${{ github.event.inputs.analysis_audit == 'effect268d' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 180s
+          script: |
+            docker exec -i logic-analysis python3 - <<'PY'
+            # 배포 효과 4차 — 수집 업로드 결과(관측 원장) 배포 전·뒤 · 읽기 전용 · 키워드 미출력(건수·사유 코드만)
+            import os, re, sqlite3, collections
+
+            DB = os.getenv("EFF_DB", "file:/app/data/logic_data.db?mode=ro")
+            c = sqlite3.connect(DB, uri=True, timeout=20)
+            DEPLOY = "2026-09-23 21:16"
+            WINDOWS = [("배포 전 24시간", "2026-09-22 21:16", DEPLOY), ("배포 뒤(지금까지)", DEPLOY, "9999")]
+            CODE = re.compile(r"^[A-Za-z0-9_:\-]{1,40}$")
+
+
+            def q(sql, args=()):
+                try:
+                    return c.execute(sql, args).fetchall()
+                except Exception as e:
+                    print(f"  ⚠️ 못 쟀다: {type(e).__name__}: {str(e)[:100]}")
+                    return None
+
+
+            r = q("SELECT MIN(received_at), MAX(received_at), COUNT(*) FROM collector_observations")
+            if r:
+                print(f"  관측 원장 범위: {r[0][0]} ~ {r[0][1]} · {r[0][2]}건")
+            ever = {k for (k,) in (q("SELECT DISTINCT keyword FROM collected_serp") or [])}
+            print("== ⑥ 수집 업로드 결과 — 배포 전 24시간 vs 배포 뒤 ==")
+            for label, lo, hi in WINDOWS:
+                rows = q("SELECT keyword, status, kind, reason, received_at FROM collector_observations "
+                         "WHERE received_at >= ? AND received_at < ?", (lo, hi))
+                if rows is None:
+                    continue
+                kinds = collections.Counter(k for _, _, k, _, _ in rows)
+                reasons = collections.Counter((k, rs if CODE.match(rs or "") else "<문장>") for _, _, k, rs, _ in rows)
+                kw_n = collections.Counter(kw for kw, *_ in rows)
+                fail = [kw for kw, _, k, _, _ in rows if k in ("positive", "evidence_only")]
+                fail_stale = sum(1 for kw in set(fail) if kw not in ever)
+                rep = collections.Counter(min(n, 4) for n in kw_n.values())
+                print(f"  {label} ({lo} ~ {hi}): 업로드 {len(rows)} · 키워드 {len(kw_n)}")
+                print(f"      종류: {dict(kinds)}")
+                print(f"      사유 상위: " + " · ".join(f"{k}/{rs} {n}" for (k, rs), n in reasons.most_common(8)))
+                print(f"      같은 키워드 업로드 횟수: 1회 {rep[1]} · 2회 {rep[2]} · 3회 {rep[3]} · 4회+ {rep[4]}")
+                print(f"      실패·부분 키워드 {len(set(fail))} 중 보관 기간(9/15~) 안에 한 번도 저장 안 된 것 {fail_stale}")
+            hr = q("SELECT substr(received_at,1,13) h, kind, COUNT(*) FROM collector_observations WHERE received_at >= '2026-09-23 12:00' "
+                   "GROUP BY h, kind ORDER BY h")
+            if hr:
+                by = collections.defaultdict(collections.Counter)
+                for h, k, n in hr:
+                    by[h][k] += n
+                print("  시간별(9/23 12시~) 종류: " + " | ".join(f"{h[5:]}시 " + ",".join(f"{k[:4]}{v}" for k, v in sorted(by[h].items())) for h in sorted(by)))
+            hb = q("SELECT * FROM collector_heartbeat")
+            if hb is not None:
+                cols = [d[0] for d in c.execute("SELECT * FROM collector_heartbeat LIMIT 0").description]
+                keep = [x for x in ("worker_no", "ext_version", "paused_local", "paused_screen", "blocked_until", "slow_until", "running", "last_finished_at", "last_seen") if x in cols]
+                print(f"  수집기 신호 {len(hb)}대: " + " / ".join(" · ".join(f"{k}={str(dict(zip(cols, r))[k])[:19]}" for k in keep) for r in hb))
             PY
 
       - name: 로직분석 배포 효과 3차 — 직원 화면이 실제로 쓰이나 (읽기 전용 · 경로 모양·건수만)
