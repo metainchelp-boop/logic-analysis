@@ -203,7 +203,7 @@ def record_ranks_for_keyword(keyword: str, prods: List[Dict[str, Any]],
     """
     kw = (keyword or "").strip()
     if not kw or not prods:
-        return {"products": 0, "clients": 0}
+        return {"products": 0, "clients": 0, "targets_total": 0, "targets_found": 0}
     try:
         import rank_guard as _guard
         _obs_key = _guard.observation_key(observation)
@@ -218,16 +218,24 @@ def record_ranks_for_keyword(keyword: str, prods: List[Dict[str, Any]],
         from database import save_ranking_daily
     except Exception as e:
         logger.warning(f"[rank_record] 순위 판정 모듈 로드 실패: {e}")
-        return {"products": 0, "clients": 0}
+        return {"products": 0, "clients": 0, "targets_total": 0, "targets_found": 0}
 
     n_prod = n_client = 0
+    # 🎯 완료 판정용(대표 확정 2026-09-24 「300위 안에서 추적 대상이 보이면 완료」) —
+    #    이 수집분이 그 키워드의 추적 대상(상품·업체)을 **몇 개 중 몇 개** 찾았나.
+    #    기록 여부(순서 가드로 건너뜀 포함)와 상관없이 「보였나」만 센다.
+    #    ⚠️ 판정이 예외로 떨어진 대상은 「못 찾음」으로 센다(완료로 치지 않는 쪽이 안전하다).
+    n_targets = n_found = 0
     conn = _conn()
     try:
         # ── 축A: 추적 상품 ──
         for t in _tracked_targets(conn, kw):
+            n_targets += 1
             try:
                 rank, page, _competitors = find_product_rank_from_cache(
                     kw, t["product_url"], prods, nv_mid=t.get("nv_mid") or "")
+                if rank is not None:
+                    n_found += 1
                 if positive_only and rank is None:
                     continue   # 부분 수집 — 「없다」는 못 적는다
                 if _guard and not _guard.claim(conn, "product", t["keyword_id"], kw, _day, _obs_key, _obs_at):
@@ -249,8 +257,11 @@ def record_ranks_for_keyword(keyword: str, prods: List[Dict[str, Any]],
 
         # ── 축B: 업체 ──
         for c in _client_targets(conn, kw):
+            n_targets += 1
             try:
                 rank, page, _ = find_product_rank_from_cache(kw, c["naver_store_url"], prods)
+                if rank is not None:
+                    n_found += 1
                 if positive_only and rank is None:
                     continue   # 부분 수집 — 「없다」는 못 적는다
                 if _guard and not _guard.claim(conn, "client", c["id"], kw, _day, _obs_key, _obs_at):
@@ -264,10 +275,12 @@ def record_ranks_for_keyword(keyword: str, prods: List[Dict[str, Any]],
         conn.commit()
     except Exception as e:
         logger.error(f"[rank_record] 순위 기록 중단 [{kw}]: {e}")
+        n_targets = n_found = 0   # 중간에 끊겼으면 몇 개 중 몇 개인지 믿을 수 없다 — 완료로 치지 않게 비운다
     finally:
         conn.close()
 
     if n_prod or n_client or n_stale:
         logger.info(f"[rank_record] {kw} — 상품 {n_prod}건 · 업체 {n_client}건 순위 기록"
                     + (f" · 더 새로운 관측이 있어 건너뜀 {n_stale}건" if n_stale else ""))
-    return {"products": n_prod, "clients": n_client, "stale": n_stale}
+    return {"products": n_prod, "clients": n_client, "stale": n_stale,
+            "targets_total": n_targets, "targets_found": n_found}

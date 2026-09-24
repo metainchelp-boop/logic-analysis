@@ -169,6 +169,15 @@ CREATE INDEX IF NOT EXISTS idx_collector_observations_day ON collector_observati
 CREATE TRIGGER IF NOT EXISTS collector_observations_no_update
     BEFORE UPDATE ON collector_observations
     BEGIN SELECT RAISE(ABORT, 'collector observations are immutable'); END;
+-- 🎯 그날 추적 대상을 다 찾은 키워드(대표 확정 2026-09-24) — 부분 수집이어도 300위 안에서 대상이 전부 보였으면 완료.
+CREATE TABLE IF NOT EXISTS collector_found_done (
+    keyword        TEXT NOT NULL,
+    collected_date TEXT NOT NULL,
+    observation_id TEXT NOT NULL,
+    targets        INTEGER NOT NULL DEFAULT 0,
+    received_at    TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    PRIMARY KEY (keyword, collected_date)
+);
 """
 
 
@@ -182,6 +191,11 @@ def purge_old(conn, days: int = RETENTION_DAYS) -> int:
     try:
         cur = conn.execute("DELETE FROM collector_observations WHERE received_at < datetime('now','localtime', ?)",
                            (f"-{int(days)} day",))
+        try:
+            conn.execute("DELETE FROM collector_found_done WHERE received_at < datetime('now','localtime', ?)",
+                         (f"-{int(days)} day",))
+        except Exception:
+            pass   # 완료 표시 표가 아직 없으면 지울 것도 없다
         conn.commit()
         return cur.rowcount if cur.rowcount is not None else 0
     except Exception:
@@ -215,10 +229,26 @@ def ingest(conn, item: Dict[str, Any], collected_date: str,
         ranked = store_full(True) or ranked
     elif kind == "positive":
         ranked = project_positive() or ranked
+    # 🎯 완료 규칙(대표 확정 2026-09-24 「키워드별로 추적하는 상품이 몇 위에 노출되는지 확인되면 완료 ·
+    #    안 보이면 300위까지 확인 · 1페이지든 2페이지든 300위 안에서 추적이 끝나면 완료하고 다음으로」).
+    #    부분 수집(중간에 막힘)이어도 **그 키워드의 추적 대상이 전부 보였으면** 그날은 끝난 것이다.
+    #    ⚠️ 하나라도 못 찾았으면 완료가 아니다 — 300위까지 봐야 「없다」를 말할 수 있다.
+    #    ⚠️ 수집분(collected_serp)에는 넣지 않는다 — 얕은 목록이 08:00 배치·분석에 「전량」처럼 쓰이지 않게.
+    #       완료 표시는 따로 둔다(found_done_keywords 가 /keywords 의 「오늘 끝낸 것」에 더해진다).
+    all_found = kind == "positive" and all_targets_found(ranked)
+    if all_found:
+        try:
+            conn.execute("INSERT OR IGNORE INTO collector_found_done(keyword, collected_date, observation_id, targets) "
+                         "VALUES (?,?,?,?)", (item["keyword"], collected_date, oid, int(ranked.get("targets_total") or 0)))
+            conn.commit()
+        except Exception:
+            all_found = False   # 표시를 못 남겼으면 완료로 알리지 않는다(다음 회차에 다시 잰다 = 종전 동작)
     projected = kind in ("full", "full_positive")
     result = {"success": True, "stored": True, "keyword": item["keyword"], "saved": len(item["products"]),
-              "projected": projected, "projectionStatus": {"full": "full", "full_positive": "full_positive",
-                                                            "positive": "partial_positive"}.get(kind, "evidence_only"),
+              "projected": projected, "projectionStatus": ("partial_all_found" if all_found else
+                                                           {"full": "full", "full_positive": "full_positive",
+                                                            "positive": "partial_positive"}.get(kind, "evidence_only")),
+              "allTargetsFound": all_found,
               "observationStatus": item["status"], "observationId": oid, "reason": item["reason"],
               "ranked": ranked, "duplicate": False,
               # 📤 4차(코덱스 ACK 이식) — 확장이 「내가 보낸 그 본문이 저장됐다」를 대조하는 열쇠. 구확장은 무시한다.
@@ -233,6 +263,27 @@ def ingest(conn, item: Dict[str, Any], collected_date: str,
     except Exception:
         pass   # 원장 기록 실패가 업로드 성공을 뒤집지는 않는다(수집이 우선)
     return result
+
+
+def all_targets_found(ranked: Any) -> bool:
+    """순위 기록 결과가 「추적 대상을 전부 찾았다」인가. 대상이 0개면 False(무엇을 끝냈는지 말할 수 없다)."""
+    if not isinstance(ranked, dict):
+        return False
+    try:
+        total = int(ranked.get("targets_total") or 0)
+        found = int(ranked.get("targets_found") or 0)
+    except (TypeError, ValueError):
+        return False
+    return total > 0 and found >= total
+
+
+def found_done_keywords(conn, collected_date: str) -> set:
+    """그날 부분 수집으로 추적 대상을 다 찾아 끝낸 키워드. 실패하면 빈 집합 = 종전 동작(다시 잰다)."""
+    try:
+        return {r[0] for r in conn.execute(
+            "SELECT keyword FROM collector_found_done WHERE collected_date=?", (collected_date,))}
+    except Exception:
+        return set()
 
 
 def attempted_map(conn, collected_date: str) -> Dict[str, str]:

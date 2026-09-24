@@ -30,10 +30,20 @@ def _count(conn, sql, args=()) -> Optional[int]:
 def day_block(conn, day: str, universe_total: Optional[int]) -> Dict[str, Any]:
     """한 날의 완료·부분·남음."""
     completed = _count(conn, "SELECT COUNT(*) FROM collected_serp WHERE collected_date=?", (day,))
+    # 🎯 대표 확정(2026-09-24) — 부분 수집이어도 추적 대상을 다 찾은 키워드는 「완료」로 센다(수집 쪽 판정과 같은 규칙).
+    _found = _has_table(conn, "collector_found_done")
+    if _found:
+        completed = _count(conn, "SELECT COUNT(*) FROM (SELECT keyword FROM collected_serp WHERE collected_date=? "
+                                 "UNION SELECT keyword FROM collector_found_done WHERE collected_date=?)", (day, day))
     partial = None
     if _has_table(conn, "collector_observations"):
-        partial = _count(conn, "SELECT COUNT(DISTINCT keyword) FROM collector_observations "
-                               "WHERE collected_date=? AND kind='positive'", (day,))
+        if _found:
+            partial = _count(conn, "SELECT COUNT(DISTINCT keyword) FROM collector_observations "
+                                   "WHERE collected_date=? AND kind='positive' AND keyword NOT IN "
+                                   "(SELECT keyword FROM collector_found_done WHERE collected_date=?)", (day, day))
+        else:
+            partial = _count(conn, "SELECT COUNT(DISTINCT keyword) FROM collector_observations "
+                                   "WHERE collected_date=? AND kind='positive'", (day,))
     jobs_total = None
     if _has_table(conn, "collector_coord_jobs"):
         jobs_total = _count(conn, "SELECT COUNT(*) FROM collector_coord_jobs WHERE day=? AND kind='daily'", (day,))

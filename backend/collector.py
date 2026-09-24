@@ -400,6 +400,13 @@ def _get_collect_keywords(hour: int = None, worker: int = 0, workers: int = 1,
         uni = _keyword_universe(conn)
         done = {r["keyword"] for r in conn.execute(
             "SELECT keyword FROM collected_serp WHERE collected_date = ?", (today,)).fetchall()}
+        # 🎯 대표 확정(2026-09-24) — 부분 수집이어도 추적 대상을 300위 안에서 전부 찾았으면 그날 끝.
+        #    실패하면 빈 집합 = 종전 동작(다시 잰다).
+        try:
+            from collector_observation import found_done_keywords as _found_done
+            done |= _found_done(conn, today)
+        except Exception as _fe:
+            logger.warning(f"[collector] 대상 다 찾은 키워드 조회 실패(종전대로 다시 잰다): {_fe}")
         remaining = {k: p for k, p in uni.items() if k not in done}
         # 코덱스 1.22.0 이식 — 오늘 시도했지만 완료 못 한 키워드(막힘·부분)는 **아직 안 해 본 키워드 뒤로** 돌린다.
         # 조기 종료·막힘이 같은 키워드만 계속 두드리며 큐를 굶기는 것을 막는다. 실패하면 빈 dict = 종전 순서.
@@ -742,7 +749,9 @@ def upload_serp(req: SerpUpload, x_collector_token: str = Header(None)):
         _stop = ""
         if item.get("observation"):
             _stop = str(item["observation"].get("stopReason") or "")
-        _job_out = complete_from_upload(req.meta, item["status"], item["observation_id"], _stop)
+        # 🎯 부분 수집이어도 대상을 다 찾았으면 배정 작업도 「완료」로 닫는다(다시 배정하지 않게).
+        _job_status = "target_complete" if result.get("allTargetsFound") else item["status"]
+        _job_out = complete_from_upload(req.meta, _job_status, item["observation_id"], _stop)
         if _job_out:
             result["job"] = _job_out
     except Exception as _je:
