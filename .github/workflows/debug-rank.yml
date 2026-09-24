@@ -396,7 +396,13 @@ jobs:
                 print(" ", hb.summary_line(rows))
                 for r in rows:
                     print(f"  {r['machine']}  v{r['ext_version'] or '?'}  마지막 {r['last_seen']}  ({r['minutes_since']}분 전 · {r['seen_count']}회)  {r['status']}"
-                          f"  | 알람 {r['alarms'] or '-'} | 오늘 {r['day_done']}/{r['day_total']} | 사유 {r['reason']}")
+                          f"  | 알람 {r['alarms'] or '-'} | 오늘 {r['day_done']}/{r['day_total']} | 사유 {r['reason']}"
+                          f"  | ⚙ {r.get('settingsText', '(칸 없음 — v1.27.0 서버 전)')} · 일치={r.get('settingsMatch')}")
+                try:
+                    import collector_settings as cs
+                    print(f"  ⚙ 서버 설정 번호 {cs.SETTINGS_REV} · 기대 지문 1번 {cs.expected_hash(1)} · 2번 {cs.expected_hash(2)} · 명령 {len(cs.COMMANDS)}건")
+                except Exception as _e:
+                    print("  ⚙ 서버 설정 모듈 조회 실패 — 못 쟀다:", _e)
             except Exception as e:
                 print("  (조회 실패 — 배포 전이거나 표 없음):", e)
             PY
