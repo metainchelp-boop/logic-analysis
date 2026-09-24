@@ -46,6 +46,10 @@ on:
         description: '3탭(#253) 라이브 확인 — off(기본) / on. 서버에 올라간 프론트 번들의 마커 · rank_axes.py 존재 · 오늘 /api/collector 접속처(해시 앞 6자·건수·마지막 시각 — IP 원문 미출력).'
         required: false
         default: 'off'
+      done_found:
+        description: '🎯 완료 규칙 효과 — 오늘 부분 수집 중 추적 대상을 다 찾고도 다시 잰 횟수 — off(기본) / on(읽기 전용 · 키워드 원문 미출력).'
+        required: false
+        default: 'off'
       tracked_reset:
         description: '추적 상품 소프트 내리기(9/22 배포) 확인 — off(기본) / on. 기동 로그의 [추적정리] 줄 + 마커 파일 + 활성/내려진 상품·이력 행수(읽기 전용·업체명 미출력).'
         required: false
@@ -473,6 +477,83 @@ jobs:
             echo "== 최근 오류 (앱 로그 tail 200 · 마스킹) =="
             docker logs --tail 200 logic-analysis 2>&1 | grep -aiE 'error|exception|traceback|rank-overview|rank-board' \
               | sed -E "s/\\[[^]]{1,60}\\]/[**]/g; s#https?://[^ ]*#(주소 가림)#g; s/'[^']{1,60}'/'**'/g" | tail -12 || echo "(없음)"
+      - name: 완료 규칙 효과 측정 (done_found=on · 읽기 전용)
+        if: ${{ github.event.inputs.done_found == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          command_timeout: 180s
+          script: |
+            echo "== 🎯 완료 규칙 효과(읽기 전용 · 키워드 원문 미출력) =="
+            docker exec -i -w /app logic-analysis python3 - <<'PY' 2>&1 | grep -v "^\[rank_record\]\|^INFO\|^WARNING"
+            # 읽기 전용 — 오늘 부분 수집 중 「추적 대상을 다 찾았는데도 완료로 안 친」 것이 몇 번인가. 키워드 원문은 찍지 않는다.
+            import json, sqlite3, sys, os, collections, logging
+            logging.disable(logging.CRITICAL)   # 로그 줄에 키워드가 섞여 나오지 않게
+            sys.path.insert(0, os.environ.get("APP_DIR", "/app"))
+            DB = os.environ.get("DB_PATH", "/app/data/logic_data.db")
+            c = sqlite3.connect(f"file:{DB}?mode=ro", uri=True); c.row_factory = sqlite3.Row
+            try:
+                from collector import _effective_date, _normalize_collected
+                day = _effective_date()
+            except Exception as e:
+                print("  모듈 로드 실패 — 못 쟀다:", e); sys.exit(0)
+            import rank_record as rr
+            from naver_crawler import find_product_rank_from_cache
+            try:
+                rows = c.execute("SELECT keyword, received_at, products_json FROM collector_observations "
+                                 "WHERE collected_date=? AND kind='positive' ORDER BY received_at", (day,)).fetchall()
+            except Exception as e:
+                print("  관측 원장 조회 실패 — 못 쟀다:", e); sys.exit(0)
+            done_serp = {r[0] for r in c.execute("SELECT keyword FROM collected_serp WHERE collected_date=?", (day,))}
+            per_kw = collections.defaultdict(list)
+            for r in rows:
+                per_kw[r["keyword"]].append(r)
+            cache = {}
+            res = collections.Counter(); wasted = 0; first_found_kw = 0; no_target = 0; err = 0
+            for kw, obs in per_kw.items():
+                try:
+                    tt = rr._tracked_targets(c, kw); ct = rr._client_targets(c, kw)
+                except Exception:
+                    err += 1; continue
+                n_t = len(tt) + len(ct)
+                if n_t == 0:
+                    no_target += 1; res["no_target_obs"] += len(obs); continue
+                found_at = None
+                for i, o in enumerate(obs):
+                    try:
+                        prods = [_normalize_collected(p) for p in json.loads(o["products_json"] or "[]")]
+                    except Exception:
+                        continue
+                    f = 0
+                    for t in tt:
+                        try:
+                            rk, _, _ = find_product_rank_from_cache(kw, t["product_url"], prods, nv_mid=t.get("nv_mid") or "")
+                            f += rk is not None
+                        except Exception:
+                            pass
+                    for cl in ct:
+                        try:
+                            rk, _, _ = find_product_rank_from_cache(kw, cl["naver_store_url"], prods)
+                            f += rk is not None
+                        except Exception:
+                            pass
+                    if f >= n_t:
+                        found_at = i; break
+                if found_at is not None:
+                    first_found_kw += 1
+                    wasted += len(obs) - found_at - 1          # 다 찾은 뒤에도 또 잰 부분 수집 횟수
+                    if kw in done_serp:
+                        res["later_full"] += 1                   # 나중에 전량으로 끝나긴 한 것
+                res["kw"] += 1; res["obs"] += len(obs)
+            print(f"  오늘({day}) 부분 수집 {res['obs']}회 · 키워드 {res['kw']}개 (대상 없는 키워드 {no_target}개 · 조회 실패 {err})")
+            print(f"  🎯 그중 추적 대상을 1회라도 전부 찾은 키워드 {first_found_kw}개 ← 새 규칙이면 그 자리에서 완료")
+            print(f"  🔁 대상을 다 찾은 뒤에도 또 잰 부분 수집 {wasted}회 ← 새 규칙이면 안 나갈 요청")
+            print(f"     (그중 나중에 전량 수집으로 끝나긴 한 키워드 {res['later_full']}개)")
+            print(f"  오늘 전량/목표완료로 끝난 키워드(collected_serp) {len(done_serp)}개")
+            PY
       - name: 추적 상품 소프트 내리기 확인 (tracked_reset=on · 읽기 전용)
         if: ${{ github.event.inputs.tracked_reset == 'on' }}
         uses: appleboy/ssh-action@v1.0.3
