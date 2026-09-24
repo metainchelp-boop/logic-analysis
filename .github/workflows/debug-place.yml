@@ -84,7 +84,7 @@ on:
         description: '진단 스텝이 어디서 멈추는지 — true. 이 워크플로가 쓰는 명령을 하나씩 timeout 을 씌워 걸리는 지점을 찾는다(읽기 전용).'
         required: false
       analysis_audit:
-        description: '로직분석 결과값 전수조사 — true(1차) / preload(4차: PRELOADED 자리) / detail2(5차: 판매가·본 상품 주소가 HTML 어디에) / ld(6차: JSON-LD 값 모양) / fix(7차: 고친 코드로 751건 다시 읽기) / live268(#268 배포 반영 확인) / effect268(#268 배포 효과 — 판매가·422·데이터랩 보관함·수집 커버리지) / effect268b(2차 — 수집 순서 간격·접속 기록 교차) / effect268c(3차 — 직원 화면 사용 여부) / effect268d(4차 — 수집 업로드 결과 전·뒤) / effect268e(5차 — 수집 업로드 결과 기계별) / effect268f(6차 — 결과물 일별 건수) / effect268g(7차 — 추적 상품 모집단) / effect268h(8차 — 살아 있는 추적 상품 자격) / live942(FE 제안서 라이브) / detail(2차: 상세 HTML 구조·수집 커버리지·정확한 상태코드). 자동 분석 결과 칸별 빈값 · 배치 산출물 일별 · 외부 데이터원 1회 실호출 · 오류 로그 유형 · API 경로별 상태코드(읽기 전용 · 업체명·키워드·IP 미출력 · 그래도 읽은 뒤 런 로그 삭제)'
+        description: '로직분석 결과값 전수조사 — true(1차) / preload(4차: PRELOADED 자리) / detail2(5차: 판매가·본 상품 주소가 HTML 어디에) / ld(6차: JSON-LD 값 모양) / fix(7차: 고친 코드로 751건 다시 읽기) / live268(#268 배포 반영 확인) / effect268(#268 배포 효과 — 판매가·422·데이터랩 보관함·수집 커버리지) / effect268b(2차 — 수집 순서 간격·접속 기록 교차) / effect268c(3차 — 직원 화면 사용 여부) / effect268d(4차 — 수집 업로드 결과 전·뒤) / effect268e(5차 — 수집 업로드 결과 기계별) / effect268f(6차 — 결과물 일별 건수) / effect268g(7차 — 추적 상품 모집단) / effect268h(8차 — 살아 있는 추적 상품 자격) / live272(#272 배포 반영·밤 재시도 기준값) / live942(FE 제안서 라이브) / detail(2차: 상세 HTML 구조·수집 커버리지·정확한 상태코드). 자동 분석 결과 칸별 빈값 · 배치 산출물 일별 · 외부 데이터원 1회 실호출 · 오류 로그 유형 · API 경로별 상태코드(읽기 전용 · 업체명·키워드·IP 미출력 · 그래도 읽은 뒤 런 로그 삭제)'
         required: false
       place_capture_probe:
         description: '신고 #276 — 플레이스 분석 캡처 판독 재현. db = 기록 집계만 / auto = 9/22·9/23 사람 분석 행으로 네이버 목록 1~2회 받아 서버 판독기로 읽기 / at:시각;시각 = 그 시각 행을 그대로 재현 / at!:시각 = 같은데 이름을 그대로 찍는다(⚠️ 읽은 즉시 런 로그 삭제) / find!:업체명|검색어;검색어 = 이름으로 찾아 그 번호가 각 목록 몇 번째인지(⚠️ 로그 삭제) / depth:검색어;검색어 = 기록된 순위 분포 + 목록 데이터 칸 구조 / 그 밖의 글자 = 그 검색어로 1회. 업체명·키워드는 해시로만 찍는다(읽기 전용).'
@@ -885,6 +885,85 @@ jobs:
             for k, v in sorted(build.items()):
                 print(f"  {k:<36} {v}")
             PY
+
+      - name: 로직분석 #272 배포 반영 + 밤 재시도 기준값(읽기 전용 · 번호·건수만)
+        if: ${{ github.event.inputs.analysis_audit == 'live272' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 180s
+          script: |
+            echo "== ⓪ 컨테이너 기동 시각 · 재시작 · 중앙 배정 v2 스위치(값만) =="
+            docker inspect -f '  기동 {{.State.StartedAt}} · 재시작 {{.RestartCount}}' logic-analysis
+            docker exec logic-analysis sh -c 'v="${COLLECTOR_V2_ENABLED:-(없음)}"; echo "  COLLECTOR_V2_ENABLED=$v"'
+            docker exec -i logic-analysis python3 - <<'PY'
+            # #272 배포 반영 + 밤 재시도 기준값 · 읽기 전용 · 키워드·기계 원 ID 미출력(번호·건수만)
+            import os, sys, json, sqlite3, collections
+            sys.path.insert(0, "/app")
+            DB = os.getenv("EFF_DB", "file:/app/data/logic_data.db?mode=ro")
+            SRC = os.getenv("EFF_SRC", "/app")
+            c = sqlite3.connect(DB, uri=True, timeout=20)
+
+
+            def q(sql, args=()):
+                try:
+                    return c.execute(sql, args).fetchall()
+                except Exception as e:
+                    print(f"  ⚠️ 못 쟀다: {type(e).__name__}: {str(e)[:100]}")
+                    return None
+
+
+            print("== ① 서버 코드 표지(rank_guard.claim 확정 줄) ==")
+            try:
+                src = open(os.path.join(SRC, "rank_guard.py"), encoding="utf-8").read()
+                print(f"  rank_guard.py {len(src)}B · 확정 줄 {'있음' if 'conn.commit()   # ⚠️ 지우지 말 것' in src else '없음'}")
+            except Exception as e:
+                print(f"  ⚠️ 못 읽었다: {type(e).__name__}: {e}")
+            print(f"  시험 파일 test_rank_guard_lock.py {'있음' if os.path.exists(os.path.join(SRC, 'tests', 'test_rank_guard_lock.py')) else '없음(이미지에 tests 미포함일 수 있음)'}")
+
+            print("== ② 추적 상품 순위(rankings) — 날짜별 건수 · 최신 기록 시각 ==")
+            for d, n, mx in q("SELECT substr(checked_at,1,10), COUNT(*), MAX(checked_at) FROM rankings "
+                               "WHERE checked_at >= '2026-09-21' GROUP BY 1 ORDER BY 1") or []:
+                print(f"  {d} · {n}건 · 마지막 {str(mx)[:19]}")
+            r = q("SELECT MAX(checked_at), COUNT(*) FROM rankings")
+            if r:
+                print(f"  전체 {r[0][1]}행 · 최신 {str(r[0][0])[:19]}")
+
+            print("== ③ 밤 시간 업로드의 「그날 몇 번째 시도」 분포 (관측 원장 · 완료 못 한 것만 = projected 0) ==")
+            rows = q("SELECT keyword, collected_date, received_at, projected, status FROM collector_observations "
+                     "WHERE collected_date >= '2026-09-21' ORDER BY collected_date, keyword, received_at") or []
+            seen = collections.Counter()
+            ordn = collections.defaultdict(collections.Counter)   # (날짜, 밤/낮) -> 몇 번째 시도(완료 못 한 것 기준)
+            kw3 = collections.defaultdict(set)
+            for kw, d, t, proj, st in rows:
+                hh = int(str(t)[11:13]) if t and len(str(t)) >= 13 else -1
+                part = "밤" if (hh >= 23 or 0 <= hh < 8) else "낮"
+                if st == "legacy":
+                    continue
+                if int(proj or 0) == 0:
+                    seen[(d, kw)] += 1
+                    n = seen[(d, kw)]
+                    ordn[(d, part)][min(n, 4)] += 1
+                    if n >= 3:
+                        kw3[d].add(kw)
+                else:
+                    ordn[(d, part)]["완료"] += 1
+            for key in sorted(ordn):
+                cc = ordn[key]
+                print(f"  {key[0]} {key[1]} · 완료 {cc.get('완료',0)} · 1번째 {cc.get(1,0)} · 2번째 {cc.get(2,0)} · 3번째 {cc.get(3,0)} · 4번째 이상 {cc.get(4,0)}")
+            for d in sorted(kw3):
+                print(f"  {d} · 3번 이상 시도한 키워드 {len(kw3[d])}개")
+            print("  ⚠️ 시각은 received_at 앞 13자(원장 저장 형식 그대로) — 밤 = 23시·0~7시")
+            r = q("SELECT received_at FROM collector_observations ORDER BY rowid DESC LIMIT 1")
+            print(f"  원장 최신 received_at 모양: {str(r[0][0])[:25] if r else '?'}")
+            PY
+            echo "== ④ 앱 로그 — 기동 뒤 순위 기록 줄(키워드 지움 · 모양만) =="
+            L=$(docker logs --since 2026-09-24T04:40:00Z logic-analysis 2>&1)
+            printf '%s\n' "$L" | grep '\[rank_record\]' | grep -oE '(상품 [0-9]+건 · 업체 [0-9]+건 순위 기록|상품 순위 기록 실패|업체 순위 기록 실패|locked)' | sed -E 's/상품 ([1-9][0-9]*)건/상품 N(>0)건/; s/업체 [0-9]+건/업체 *건/' | sort | uniq -c | head -10
+            echo "  database is locked 줄 수(기동 뒤): $(printf '%s\n' "$L" | grep -c 'database is locked')"
+            echo "  Traceback 줄 수(기동 뒤): $(printf '%s\n' "$L" | grep -c 'Traceback')"
 
       - name: 로직분석 배포 효과 8차 — 살아 있는 추적 상품의 자격·기록 경로(읽기 전용 · 번호·조건만)
         if: ${{ github.event.inputs.analysis_audit == 'effect268h' }}
