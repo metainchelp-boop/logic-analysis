@@ -922,6 +922,15 @@ jobs:
             except Exception as e:
                 print(f"  ⚠️ 못 읽었다: {type(e).__name__}: {e}")
             print(f"  시험 파일 test_rank_guard_lock.py {'있음' if os.path.exists(os.path.join(SRC, 'tests', 'test_rank_guard_lock.py')) else '없음(이미지에 tests 미포함일 수 있음)'}")
+            print("== ①-2 #276 밤 재시도 상한 표지 ==")
+            for fn, mk in (("collect_order.py", "NIGHT_RETRY_DAILY_MAX = 2"), ("collect_order.py", "def night_retry_capped"),
+                           ("collector_observation.py", "def attempt_count_map"), ("collector.py", '"night_retry_capped": len(night_capped)'),
+                           ("collector.py", "if k in night_capped:")):
+                try:
+                    t = open(os.path.join(SRC, fn), encoding="utf-8").read()
+                    print(f"  {fn} · {mk[:40]} · {'있음' if mk in t else '없음'}")
+                except Exception as e:
+                    print(f"  ⚠️ {fn} 못 읽었다: {type(e).__name__}")
 
             print("== ② 추적 상품 순위(rankings) — 날짜별 건수 · 최신 기록 시각 ==")
             for d, n, mx in q("SELECT substr(checked_at,1,10), COUNT(*), MAX(checked_at) FROM rankings "
@@ -961,6 +970,7 @@ jobs:
             PY
             echo "== ④ 앱 로그 — 기동 뒤 순위 기록 줄(키워드 지움 · 모양만) =="
             L=$(docker logs --since 2026-09-24T04:40:00Z logic-analysis 2>&1)
+            echo "  🌙 밤 재시도 상한 줄 수(기동 뒤): $(printf '%s\n' "$L" | grep -c '밤 재시도 상한')"
             printf '%s\n' "$L" | grep '\[rank_record\]' | grep -oE '(상품 [0-9]+건 · 업체 [0-9]+건 순위 기록|상품 순위 기록 실패|업체 순위 기록 실패|locked)' | sed -E 's/상품 ([1-9][0-9]*)건/상품 N(>0)건/; s/업체 [0-9]+건/업체 *건/' | sort | uniq -c | head -10
             echo "  database is locked 줄 수(기동 뒤): $(printf '%s\n' "$L" | grep -c 'database is locked')"
             echo "  Traceback 줄 수(기동 뒤): $(printf '%s\n' "$L" | grep -c 'Traceback')"
