@@ -214,6 +214,25 @@ jobs:
                         t2, last = reports_of(r["id"])
                         print(f"  #{r['id']} 겹침 {k}/{len(want)} · status={r['st']} role={r['ro']} 만든날={r['created_at']} · 담당 {user(r['created_by'])} · 보고서 {t2}건 · 마지막 {last}")
                     continue
+                if part.startswith("b:"):
+                    # b:<번호>:<소금>:<최소>:<h1>.<h2>… — 2글자 조각(소금 해시) 겹침(이름 미출력) · 이름 표기가 조금 다른 재등록 찾기
+                    try:
+                        _, tag, salt, mn, hs = part.split(":", 4); mn = int(mn)
+                        want = set(x for x in hs.split(".") if x)
+                    except Exception:
+                        print(f"== 잘못된 입력 {part[:12]}…"); continue
+                    found = []
+                    for r in conn.execute("SELECT id, name, created_by, COALESCE(status,'') st, COALESCE(role,'advertiser') ro, created_at, COALESCE(naver_store_url,'') u FROM clients"):
+                        n = norm(r["name"])
+                        got = {hashlib.sha256((salt + n[i:i+2]).encode()).hexdigest()[:12] for i in range(0, max(0, len(n) - 1))}
+                        k = len(got & want)
+                        if k >= mn:
+                            found.append((k, len(n), r))
+                    print(f"== 전산 #{tag} 이름 2글자 조각 {len(want)}개 중 {mn}개 이상 겹치는 로직분석 업체 {len(found)}곳")
+                    for k, ln, r in sorted(found, key=lambda x: (-x[0], x[2]["id"]))[:15]:
+                        t2, last = reports_of(r["id"])
+                        print(f"  #{r['id']} 겹침 {k}/{len(want)} · 이름 {ln}글자 · status={r['st']} role={r['ro']} 만든날={r['created_at']} · 스토어주소 {'있음' if r['u'] else '없음'} · 담당 {user(r['created_by'])} · 보고서 {t2}건")
+                    continue
                 if part.startswith("w:"):
                     # w:<계정번호>:<부터>:<까지> — 그 계정이 그 사이 만든 업체(이름 미출력)
                     try:
