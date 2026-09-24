@@ -78,8 +78,11 @@ ok("complete_from_upload — 실패해도 예외를 밖으로 안 낸다", "작�
 
 print("\n② /serp 업로드 훅")
 i_ing = COL.find("_obs_ingest(conn, item, today, _store_full, _project_positive)")
-i_hook = COL.find("complete_from_upload(req.meta, item[\"status\"], item[\"observation_id\"], _stop)")
+# 2026-09-24 완료 규칙 — 상태 자리는 「대상 다 찾으면 target_complete, 아니면 봉투 상태」(_job_status)로 바뀌었다.
+i_hook = COL.find("complete_from_upload(req.meta, _job_status, item[\"observation_id\"], _stop)")
 ok("🔴 반영(_obs_ingest) 뒤에 complete_from_upload(req.meta, status, observation_id, stop)", 0 < i_ing < i_hook)
+ok("🔴 상태 = 대상 다 찾으면 target_complete · 아니면 봉투 상태 그대로",
+   '_job_status = "target_complete" if result.get("allTargetsFound") else item["status"]' in COL[i_ing:i_hook])
 seg = COL[i_ing:i_hook + 500]
 ok("훅은 try 안 — 실패해도 업로드는 성공", re.search(r"try:\s*\n(\s*#[^\n]*\n)*\s*from collector_v2 import complete_from_upload", seg) is not None and "v2 작업 완료 훅 실패(업로드는 성공)" in seg)
 ok("stopReason 은 봉투가 있을 때만 읽는다", 'if item.get("observation"):' in seg and 'item["observation"].get("stopReason")' in seg)

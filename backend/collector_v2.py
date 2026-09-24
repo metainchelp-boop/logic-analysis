@@ -68,6 +68,11 @@ def sync_today(conn, now: Optional[int] = None) -> dict:
         targets = _targets(conn, list(uni.keys()))
         today = _effective_date()
         done = {r[0] for r in conn.execute("SELECT keyword FROM collected_serp WHERE collected_date=?", (today,))}
+        try:
+            from collector_observation import found_done_keywords as _found_done   # 🎯 대상 다 찾은 부분 수집도 끝
+            done |= _found_done(conn, today)
+        except Exception:
+            pass
         return core.sync_daily(conn, today, uni, targets, _slot_of, depth=policy().requested_depth, done_keywords=done)
     except Exception as e:
         logger.warning(f"[collector-v2] 작업 원장 동기화 실패(무시): {e}")
