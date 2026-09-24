@@ -313,9 +313,22 @@ def claim(conn, worker_id: str, session_id: str, now: int, policy: Policy, hour:
         last = last_collected_map(conn)
     except Exception:
         last = {}
+    # 🌙 밤 재시도 상한(대표 확정 2026-09-24 「밤 재시도 횟수 상한은 하루 2번만 해」 · #276) — /keywords 와 같은 규칙을
+    #    배정에도: 밤 시간엔 오늘 이미 상한만큼 배정된 키워드(작업 원장이 날마다 새로 만들어지므로 attempts = 오늘 횟수)를
+    #    다시 주지 않는다. 낮은 종전 그대로 · 요청 큐(realtime)는 무변경 · 규칙을 못 읽으면 거르지 않는다(종전 동작).
+    night_max = None
+    try:
+        from collect_slot import DAY_HOURS as _DAY_HOURS
+        from collect_order import NIGHT_RETRY_DAILY_MAX as _NIGHT_MAX
+        if h not in tuple(_DAY_HOURS):
+            night_max = int(_NIGHT_MAX)
+    except Exception:
+        night_max = None
     now_slot, overdue, later = [], [], []
     for j in cands:
         if wcnt > 1 and not split_ok(j["keyword"], wno - 1, wcnt):
+            continue
+        if night_max is not None and j["kind"] != "realtime" and int(j["attempts"] or 0) >= night_max:
             continue
         s = int(j["slot"] or 0)
         key = (j["attempts"], last.get(j["keyword"], "") or "", s, j["keyword"])
