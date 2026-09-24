@@ -80,10 +80,43 @@ jobs:
               SALT=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
               for f in /var/log/nginx/access.log*; do
                 case "$f" in *.gz) zcat "$f" ;; *) cat "$f" ;; esac
-              done 2>/dev/null | grep -aE "\"DELETE /api/(cd|clients)/($DEL_IDS)([ /?]|\")" \
-                | awk -v salt="$SALT" '{ip=$1; cmd="printf %s " salt ip " | md5sum | cut -c1-6"; cmd | getline h; close(cmd); gsub(/"/,"",$6); print "  " substr($4,2) " " $6 " " $7 " → " $9 " 출처=" h}' \
-                | sort | head -40 || true
+              done 2>/dev/null | grep -aE "\"DELETE /api/(cd|clients)/($DEL_IDS)([ /?]|\")" > /tmp/cp_del_$$.txt || true
+              awk -v salt="$SALT" '{ip=$1; cmd="printf %s " salt ip " | md5sum | cut -c1-6"; cmd | getline h; close(cmd); gsub(/"/,"",$6); print "  " substr($4,2) " " $6 " " $7 " → " $9 " 출처=" h}' /tmp/cp_del_$$.txt | sort | head -40 || true
+              DEL_ROWS=$(awk '{t=substr($4,2); p=$7; sub(/^.*\//,"",p); print t "|" p "|" $1}' /tmp/cp_del_$$.txt | tr '\n' ';')
+              rm -f /tmp/cp_del_$$.txt
               echo "  (끝)"
+              echo "== 삭제 요청과 같은 출처에서 그 전 이틀 안에 로그인한 로직분석 계정(번호·로그인해시만)"
+              docker exec -i -e DEL_ROWS="$DEL_ROWS" logic-analysis python3 - <<'PYD'
+            import os, sqlite3, hashlib, datetime
+            DB = os.getenv("DB_PATH", "/app/data/logic_data.db")
+            conn = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            def h(s): return hashlib.sha256((s or "").encode()).hexdigest()[:10] if s else "-"
+            rows = [r for r in (os.getenv("DEL_ROWS") or "").split(";") if r.strip()]
+            for r in rows:
+                t, cid, ip = r.split("|", 2)
+                when = datetime.datetime.strptime(t, "%d/%b/%Y:%H:%M:%S")
+                since = when - datetime.timedelta(days=2)
+                hits = {}
+                for lg in conn.execute("SELECT user_id, username, login_at, ip_address FROM login_logs"):
+                    lip = (lg["ip_address"] or "").replace("SSO:", "").strip()
+                    if lip != ip:
+                        continue
+                    try:
+                        la = datetime.datetime.fromisoformat(str(lg["login_at"]).replace(" ", "T")[:19])
+                    except Exception:
+                        continue
+                    if since <= la <= when:
+                        k = lg["user_id"]
+                        hits.setdefault(k, [0, None, lg["username"]])
+                        hits[k][0] += 1
+                        if hits[k][1] is None or la > hits[k][1]: hits[k][1] = la
+                u = {x["id"]: x for x in conn.execute("SELECT id, role, is_active FROM users")}
+                print(f"  업체 #{cid} 삭제 {when} — 같은 출처 로그인 계정 {len(hits)}개")
+                for k, (n, last, un) in sorted(hits.items(), key=lambda kv: kv[1][1] or datetime.datetime.min, reverse=True):
+                    ro = u.get(k)
+                    print(f"    계정 #{k} 로그인해시={h(un)} role={ro['role'] if ro else '?'} · 로그인 {n}회 · 마지막 {last}")
+            PYD
             fi
             docker exec -i -e CP_ID="${CP_ID}" logic-analysis python3 - <<'PY'
             import os, sqlite3, sys, hashlib, re
