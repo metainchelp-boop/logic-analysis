@@ -84,7 +84,7 @@ on:
         description: '진단 스텝이 어디서 멈추는지 — true. 이 워크플로가 쓰는 명령을 하나씩 timeout 을 씌워 걸리는 지점을 찾는다(읽기 전용).'
         required: false
       analysis_audit:
-        description: '로직분석 결과값 전수조사 — true(1차) / preload(4차: PRELOADED 자리) / detail2(5차: 판매가·본 상품 주소가 HTML 어디에) / ld(6차: JSON-LD 값 모양) / fix(7차: 고친 코드로 751건 다시 읽기) / live268(#268 배포 반영 확인) / effect268(#268 배포 효과 — 판매가·422·데이터랩 보관함·수집 커버리지) / effect268b(2차 — 수집 순서 간격·접속 기록 교차) / effect268c(3차 — 직원 화면 사용 여부) / effect268d(4차 — 수집 업로드 결과 전·뒤) / effect268e(5차 — 수집 업로드 결과 기계별) / effect268f(6차 — 결과물 일별 건수) / effect268g(7차 — 추적 상품 모집단) / live942(FE 제안서 라이브) / detail(2차: 상세 HTML 구조·수집 커버리지·정확한 상태코드). 자동 분석 결과 칸별 빈값 · 배치 산출물 일별 · 외부 데이터원 1회 실호출 · 오류 로그 유형 · API 경로별 상태코드(읽기 전용 · 업체명·키워드·IP 미출력 · 그래도 읽은 뒤 런 로그 삭제)'
+        description: '로직분석 결과값 전수조사 — true(1차) / preload(4차: PRELOADED 자리) / detail2(5차: 판매가·본 상품 주소가 HTML 어디에) / ld(6차: JSON-LD 값 모양) / fix(7차: 고친 코드로 751건 다시 읽기) / live268(#268 배포 반영 확인) / effect268(#268 배포 효과 — 판매가·422·데이터랩 보관함·수집 커버리지) / effect268b(2차 — 수집 순서 간격·접속 기록 교차) / effect268c(3차 — 직원 화면 사용 여부) / effect268d(4차 — 수집 업로드 결과 전·뒤) / effect268e(5차 — 수집 업로드 결과 기계별) / effect268f(6차 — 결과물 일별 건수) / effect268g(7차 — 추적 상품 모집단) / effect268h(8차 — 살아 있는 추적 상품 자격) / live942(FE 제안서 라이브) / detail(2차: 상세 HTML 구조·수집 커버리지·정확한 상태코드). 자동 분석 결과 칸별 빈값 · 배치 산출물 일별 · 외부 데이터원 1회 실호출 · 오류 로그 유형 · API 경로별 상태코드(읽기 전용 · 업체명·키워드·IP 미출력 · 그래도 읽은 뒤 런 로그 삭제)'
         required: false
       place_capture_probe:
         description: '신고 #276 — 플레이스 분석 캡처 판독 재현. db = 기록 집계만 / auto = 9/22·9/23 사람 분석 행으로 네이버 목록 1~2회 받아 서버 판독기로 읽기 / at:시각;시각 = 그 시각 행을 그대로 재현 / at!:시각 = 같은데 이름을 그대로 찍는다(⚠️ 읽은 즉시 런 로그 삭제) / find!:업체명|검색어;검색어 = 이름으로 찾아 그 번호가 각 목록 몇 번째인지(⚠️ 로그 삭제) / depth:검색어;검색어 = 기록된 순위 분포 + 목록 데이터 칸 구조 / 그 밖의 글자 = 그 검색어로 1회. 업체명·키워드는 해시로만 찍는다(읽기 전용).'
@@ -885,6 +885,62 @@ jobs:
             for k, v in sorted(build.items()):
                 print(f"  {k:<36} {v}")
             PY
+
+      - name: 로직분석 배포 효과 8차 — 살아 있는 추적 상품의 자격·기록 경로(읽기 전용 · 번호·조건만)
+        if: ${{ github.event.inputs.analysis_audit == 'effect268h' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 180s
+          script: |
+            docker exec -i logic-analysis python3 - <<'PY'
+            # 배포 효과 8차 — 살아 있는 추적 상품 2개가 왜 기록이 안 되나 · 읽기 전용 · 이름·키워드 미출력(번호·조건 참/거짓만)
+            import os, sys, sqlite3
+            sys.path.insert(0, "/app")
+            DB = os.getenv("EFF_DB", "file:/app/data/logic_data.db?mode=ro")
+            c = sqlite3.connect(DB, uri=True, timeout=20)
+
+
+            def q(sql, args=()):
+                try:
+                    return c.execute(sql, args).fetchall()
+                except Exception as e:
+                    print(f"  ⚠️ 못 쟀다: {type(e).__name__}: {str(e)[:100]}")
+                    return None
+
+
+            try:
+                from tracking_eligibility import eligible_tracked_product_ids, eligible_clients_sql
+                ok = eligible_tracked_product_ids(c, ensure_schema=False)
+                elig = {r[0] for r in c.execute(eligible_clients_sql("id")).fetchall()}
+                print(f"== ⑮ 자격 판정(서버 코드 그대로) — 자격 추적 상품 {('판정 실패(None)' if ok is None else len(ok))}개 · 자격 업체 {len(elig)}곳 ==")
+            except Exception as e:
+                ok, elig = None, set()
+                print(f"  ⚠️ 판정 함수 못 불렀다: {type(e).__name__}: {str(e)[:100]}")
+            ccols = {r[1] for r in (q("PRAGMA table_info(clients)") or [])}
+            for (pid, nv, upd) in q("SELECT id, COALESCE(nv_mid,''), updated_at FROM tracked_products WHERE COALESCE(disabled_at,'')=''") or []:
+                kw = q("SELECT COUNT(*) FROM tracked_keywords WHERE product_id=?", (pid,))
+                links = [r[0] for r in (q("SELECT client_id FROM rank_link WHERE tracked_product_id=?", (pid,)) or [])]
+                print(f"  상품 #{pid} · nvMid {'있음' if nv else '없음'} · 변경 {str(upd)[:16]} · 키워드 {kw[0][0] if kw else '?'} · "
+                      f"자격 {'-' if ok is None else ('예' if pid in ok else '아니오')} · 연결 업체 {len(links)}곳")
+                for cid in links:
+                    want = [x for x in ("status", "role", "vertical", "auto_analysis", "auto_analysis_manual", "track_enabled", "track_until", "contract_stage") if x in ccols]
+                    r = q(f"SELECT {', '.join(want)} FROM clients WHERE id=?", (cid,))
+                    if not r:
+                        print(f"    업체 c{cid} · 표에 없음")
+                        continue
+                    v = dict(zip(want, r[0]))
+                    print(f"    업체 c{cid} · 자격 {'예' if cid in elig else '아니오'} · " + " · ".join(f"{k}={v[k]}" for k in want))
+            PY
+            echo "== ⑯ 앱 로그 — 순위 기록 경로가 남긴 줄(키워드는 지우고 모양만) · 9/23 00:00~ =="
+            L=$(docker logs --since 2026-09-22T15:00:00Z logic-analysis 2>&1)
+            echo "  [rank_record] 줄 수: $(printf '%s\n' "$L" | grep -c '\[rank_record\]')"
+            printf '%s\n' "$L" | grep '\[rank_record\]' | sed -E 's/\[[^]]*\] —/[키워드] —/; s/\[rank_record\] [^ ]+ —/[rank_record] [키워드] —/' \
+              | grep -oE '(추적 상품 자격 판정: [0-9]+개 중 [0-9]+개만|nvMid 없는 상품 제외|자격 판정 실패|조회 실패|기록 실패|locked|Traceback)' | sort | uniq -c | head -20
+            echo "  08:00 배치 추적 상품 줄:"
+            printf '%s\n' "$L" | grep -oE '추적 상품 자격 판정 — [0-9]+개 중 [0-9]+개만 잰다|추적 상품[^|]{0,40}(0개|없음)' | sort | uniq -c | head -10
 
       - name: 로직분석 배포 효과 7차 — 추적 상품 순위 0건의 모집단(읽기 전용 · 건수만)
         if: ${{ github.event.inputs.analysis_audit == 'effect268g' }}
