@@ -84,7 +84,7 @@ on:
         description: '진단 스텝이 어디서 멈추는지 — true. 이 워크플로가 쓰는 명령을 하나씩 timeout 을 씌워 걸리는 지점을 찾는다(읽기 전용).'
         required: false
       analysis_audit:
-        description: '로직분석 결과값 전수조사 — true(1차) / preload(4차: PRELOADED 자리) / detail2(5차: 판매가·본 상품 주소가 HTML 어디에) / ld(6차: JSON-LD 값 모양) / fix(7차: 고친 코드로 751건 다시 읽기) / live268(#268 배포 반영 확인) / effect268(#268 배포 효과 — 판매가·422·데이터랩 보관함·수집 커버리지) / effect268b(2차 — 수집 순서 간격·접속 기록 교차) / effect268c(3차 — 직원 화면 사용 여부) / effect268d(4차 — 수집 업로드 결과 전·뒤) / live942(FE 제안서 라이브) / detail(2차: 상세 HTML 구조·수집 커버리지·정확한 상태코드). 자동 분석 결과 칸별 빈값 · 배치 산출물 일별 · 외부 데이터원 1회 실호출 · 오류 로그 유형 · API 경로별 상태코드(읽기 전용 · 업체명·키워드·IP 미출력 · 그래도 읽은 뒤 런 로그 삭제)'
+        description: '로직분석 결과값 전수조사 — true(1차) / preload(4차: PRELOADED 자리) / detail2(5차: 판매가·본 상품 주소가 HTML 어디에) / ld(6차: JSON-LD 값 모양) / fix(7차: 고친 코드로 751건 다시 읽기) / live268(#268 배포 반영 확인) / effect268(#268 배포 효과 — 판매가·422·데이터랩 보관함·수집 커버리지) / effect268b(2차 — 수집 순서 간격·접속 기록 교차) / effect268c(3차 — 직원 화면 사용 여부) / effect268d(4차 — 수집 업로드 결과 전·뒤) / effect268e(5차 — 수집 업로드 결과 기계별) / live942(FE 제안서 라이브) / detail(2차: 상세 HTML 구조·수집 커버리지·정확한 상태코드). 자동 분석 결과 칸별 빈값 · 배치 산출물 일별 · 외부 데이터원 1회 실호출 · 오류 로그 유형 · API 경로별 상태코드(읽기 전용 · 업체명·키워드·IP 미출력 · 그래도 읽은 뒤 런 로그 삭제)'
         required: false
       place_capture_probe:
         description: '신고 #276 — 플레이스 분석 캡처 판독 재현. db = 기록 집계만 / auto = 9/22·9/23 사람 분석 행으로 네이버 목록 1~2회 받아 서버 판독기로 읽기 / at:시각;시각 = 그 시각 행을 그대로 재현 / at!:시각 = 같은데 이름을 그대로 찍는다(⚠️ 읽은 즉시 런 로그 삭제) / find!:업체명|검색어;검색어 = 이름으로 찾아 그 번호가 각 목록 몇 번째인지(⚠️ 로그 삭제) / depth:검색어;검색어 = 기록된 순위 분포 + 목록 데이터 칸 구조 / 그 밖의 글자 = 그 검색어로 1회. 업체명·키워드는 해시로만 찍는다(읽기 전용).'
@@ -884,6 +884,106 @@ jobs:
                 print(f"  {k:<36} {v}")
             for k, v in sorted(build.items()):
                 print(f"  {k:<36} {v}")
+            PY
+
+      - name: 로직분석 배포 효과 5차 — 수집 업로드 결과 기계별 (읽기 전용 · 키워드·기계 원 ID 미출력)
+        if: ${{ github.event.inputs.analysis_audit == 'effect268e' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 180s
+          script: |
+            docker exec -i logic-analysis python3 - <<'PY'
+            # 배포 효과 5차 — 수집 업로드 결과를 기계별로 · 읽기 전용 · 키워드·기계 원 ID 미출력(해시 앞 6자만)
+            import os, json, hashlib, sqlite3, collections
+
+            DB = os.getenv("EFF_DB", "file:/app/data/logic_data.db?mode=ro")
+            c = sqlite3.connect(DB, uri=True, timeout=20)
+
+
+            def q(sql, args=()):
+                try:
+                    return c.execute(sql, args).fetchall()
+                except Exception as e:
+                    print(f"  ⚠️ 못 쟀다: {type(e).__name__}: {str(e)[:100]}")
+                    return None
+
+
+            def h6(s):
+                return hashlib.sha1(str(s or "").encode()).hexdigest()[:6] if s else "(없음)"
+
+
+            hb = {}
+            for iid, wno, ver, chrome, first, last in (q("SELECT instance_id, worker_no, ext_version, chrome_version, first_seen, last_seen "
+                                                          "FROM collector_heartbeat") or []):
+                hb[iid] = (wno, ver, chrome, first, last)
+            print("== ⑦ 기계 목록(신호 표 · ID 는 해시 앞 6자) ==")
+            for iid, (wno, ver, chrome, first, last) in sorted(hb.items(), key=lambda x: str(x[1][4])):
+                print(f"  {h6(iid)} · 기계 {wno} · 확장 {ver} · 크롬 {str(chrome)[:12]} · 처음 {str(first)[:16]} · 마지막 {str(last)[:16]}")
+
+            rows = q("SELECT received_at, kind, reason, meta_json FROM collector_observations ORDER BY received_at") or []
+            per = collections.defaultdict(collections.Counter)      # (시각대, 기계) -> kind
+            tot = collections.defaultdict(collections.Counter)      # 기계 -> kind (구간별)
+            pages = collections.defaultdict(collections.Counter)    # 기계 -> positive 의 pagesRead
+            unknown = 0
+
+
+            def label(iid):
+                if iid in hb:
+                    return f"{hb[iid][0]}번({h6(iid)})"
+                return f"?({h6(iid)})"
+
+
+            def seg(t):
+                # 9/22 21:16 이전 · 9/22 21:16~9/23 21:16 · 이후 — 그리고 밤(00~08시) 여부
+                if t < "2026-09-22 21:16":
+                    s = "A 9/22 낮"
+                elif t < "2026-09-23 21:16":
+                    s = "B 배포 전 24h"
+                else:
+                    s = "C 배포 뒤"
+                hh = int(t[11:13])
+                return s, ("밤00-08" if hh < 9 else "낮09-23")
+
+
+            for t, kind, reason, mj in rows:
+                try:
+                    m = json.loads(mj or "{}")
+                except Exception:
+                    m = {}
+                ob = m.get("observation") or {}
+                iid = ob.get("workerId") or ""
+                if not iid:
+                    unknown += 1
+                lb = label(iid) if iid else "봉투없음"
+                k = "full" if kind in ("full", "full_positive") else kind
+                per[(t[:13], lb)][k] += 1
+                s, part = seg(t)
+                tot[(s, part, lb)][k] += 1
+                if kind == "positive":
+                    pages[(s, lb)][int(ob.get("pagesRead") or 0)] += 1
+
+            print(f"== ⑧ 구간 × 밤/낮 × 기계 — 완전(full+목표찾음) / 부분(positive) · 봉투 없는 업로드 {unknown}건 ==")
+            for key in sorted(tot):
+                cc = tot[key]
+                n = sum(cc.values())
+                f = cc.get("full", 0)
+                print(f"  {key[0]} · {key[1]} · {key[2]:<14} 업로드 {n:>4} · 완전 {f:>4} ({(100*f//n) if n else 0}%) · 부분 {cc.get('positive',0):>4} · 증거만 {cc.get('evidence_only',0)}")
+            print("== ⑨ 부분(positive) 관측의 읽은 페이지 수 — 구간 × 기계 ==")
+            for key in sorted(pages):
+                print(f"  {key[0]} · {key[1]:<14} " + " · ".join(f"{p}쪽 {n}" for p, n in sorted(pages[key].items())))
+            print("== ⑩ 시간별 × 기계 (완전/부분) — 9/22 20시~ ==")
+            hours = sorted({h for h, _ in per if h >= "2026-09-22 20"})
+            machines = sorted({lb for _, lb in per})
+            for hh in hours:
+                cells = []
+                for lb in machines:
+                    cc = per.get((hh, lb))
+                    if cc:
+                        cells.append(f"{lb} {cc.get('full',0)}/{cc.get('positive',0)}")
+                print(f"  {hh[5:]}시  " + " | ".join(cells))
             PY
 
       - name: 로직분석 배포 효과 4차 — 수집 업로드 결과(관측 원장) 전·뒤 (읽기 전용 · 건수·사유 코드만)
