@@ -144,5 +144,34 @@ ok("꺼진 서버의 readiness 는 V2_DISABLED · 기계 없음 을 막힘으로
 conn6.execute("INSERT INTO collector_coord_jobs(job_id, day, keyword) VALUES('old','2026-01-01','옛')"); conn6.commit()
 ok("purge_old 는 14일 지난 작업만 지운다", cc.purge_old(conn6) == 1 and cc._one(conn6, "SELECT COUNT(*) n FROM collector_coord_jobs")["n"] == 2)
 
+print("\n⑨ 🌙 밤 재시도 상한(#276 과 같은 규칙 · 대표 확정 2026-09-24) — 배정에도")
+import collect_order as _co
+PN = cc.Policy(enabled=True, global_hourly=100, global_daily=1000, worker_hourly=100, worker_daily=1000, min_gap_seconds=40,
+               lease_seconds=600, session_seconds=900, requested_depth=300)
+conn7 = sqlite3.connect(":memory:"); cc.init_db(conn7)
+cc.sync_daily(conn7, DAY, {"밤키": True}, {}, lambda k, p: 2)
+cc.register(conn7, "N", "sn", "1.27.0", 1, 1, NOW, PN)
+t = NOW
+got = []
+for i in range(_co.NIGHT_RETRY_DAILY_MAX + 1):
+    r = cc.claim(conn7, "N", "sn", t, PN, 2, split_ok)
+    got.append(r["state"])
+    if r["state"] == "LEASED":
+        cc.complete(conn7, r["job"], "partial", f"o{i}", t + 30, stop_reason="STALE_PAGE")
+    t += 2000
+ok("🔴 밤(2시)엔 부분 수집 키워드를 상한(2번)까지만 배정 · 세 번째는 안 준다",
+   got[:_co.NIGHT_RETRY_DAILY_MAX] == ["LEASED"] * _co.NIGHT_RETRY_DAILY_MAX and got[-1] == "IDLE", str(got))
+ok("🔴 낮(10시)이 되면 종전대로 다시 준다(낮은 상한 없음)", cc.claim(conn7, "N", "sn", t, PN, 10, split_ok)["state"] == "LEASED")
+conn8 = sqlite3.connect(":memory:"); cc.init_db(conn8)
+cc.sync_daily(conn8, DAY, {"낮키": True}, {}, lambda k, p: 10)
+cc.register(conn8, "Q", "sq", "1.27.0", 1, 1, NOW, PN)
+t = NOW; st = []
+for i in range(_co.NIGHT_RETRY_DAILY_MAX + 2):
+    r = cc.claim(conn8, "Q", "sq", t, PN, 10, split_ok); st.append(r["state"])
+    if r["state"] == "LEASED":
+        cc.complete(conn8, r["job"], "partial", f"q{i}", t + 30, stop_reason="STALE_PAGE")
+    t += 2000
+ok("낮에는 상한을 넘어도 계속 준다(대표 지시는 「밤」)", all(x == "LEASED" for x in st), str(st))
+
 print(f"\n{'✅' if not failed else '🔴'} 통과 {passed} · 실패 {failed}")
 sys.exit(1 if failed else 0)

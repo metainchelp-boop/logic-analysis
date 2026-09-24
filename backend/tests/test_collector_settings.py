@@ -93,12 +93,48 @@ ok("정수 칸 반올림이 수집기(Math.round)와 같다 — 2.5 → 3", cs._
 ok("참/거짓을 숫자 칸에 넣으면 버린다(파이썬 bool 은 int 라 따로 막아야 한다)",
    cs._clamp_values({"onDemandHourCap": True})["onDemandHourCap"] == 12)
 
-print("\n③ 이번 배포는 동작 변화 0")
-ok("SETTINGS 비어 있음", cs.SETTINGS == {})
-ok("기계별 덮어쓰기 비어 있음", cs.WORKER_OVERRIDES == {})
+print("\n③ 지금 설정 — 공통 값은 기본값 그대로 · 서버 자동 배정은 2번만(2026-09-24 대표 「나 방법」)")
+ok("SETTINGS 비어 있음(두 대 공통 값 = 기본값)", cs.SETTINGS == {})
 ok("기계 배정 비어 있음(= 팝업 값 그대로)", cs.ASSIGNMENTS == {})
 ok("명령 비어 있음", cs.COMMANDS == [])
-ok("보내는 값 = 기본값", cs.values_for(1) == cs.DEFAULTS and cs.values_for(2) == cs.DEFAULTS)
+_v1, _v2 = cs.values_for(1), cs.values_for(2)
+ok("🔴 1번은 자동 배정 끔(팝업이 켜져 있어도 서버 값이 우선)", _v1["swCoordinated"] is False)
+ok("🔴 2번만 자동 배정 켬", _v2["swCoordinated"] is True)
+ok("그 밖의 칸은 두 대 모두 기본값",
+   {k: v for k, v in _v1.items() if k != "swCoordinated"} == {k: v for k, v in cs.DEFAULTS.items() if k != "swCoordinated"}
+   and {k: v for k, v in _v2.items() if k != "swCoordinated"} == {k: v for k, v in cs.DEFAULTS.items() if k != "swCoordinated"})
+ok("기계별 덮어쓰기는 자동 배정 칸만", all(set(o) == {"swCoordinated"} for o in cs.WORKER_OVERRIDES.values()))
+
+print("\n③-2 서버 자동 배정 스위치(collector_coord 정책 위에 얹기)")
+import collector_coord as cc
+_env_off = cc.policy_from_env({})
+_p = cs.coord_policy(_env_off)
+ok("🔴 .env 가 꺼져 있어도 이 파일이 켠다", _env_off.enabled is False and _p.enabled is True)
+ok("🔴 기계당 시간 15 = 지금 시험 상한과 같다 · 하루 360", _p.worker_hourly == 15 and _p.worker_daily == 360)
+ok("나머지 정책은 .env 기본값 그대로(전체 40 · 간격 40 · 깊이 300)",
+   _p.global_hourly == 40 and _p.min_gap_seconds == 40 and _p.requested_depth == 300)
+try:
+    import collect_cap as _cap
+    ok("기계당 시간 상한이 서버 시험 상한(collect_cap)과 같다", _p.worker_hourly == _cap.DEFAULT_TEST_CAP)
+except Exception as _e:
+    ok("기계당 시간 상한이 서버 시험 상한(collect_cap)과 같다 — 못 쟀다", False, str(_e))
+_saveE, _saveP = cs.COORD_ENABLED, dict(cs.COORD_POLICY)
+cs.COORD_POLICY.clear(); cs.COORD_POLICY.update({"worker_hourly": -1})
+ok("🔴 정책 값이 틀리면 꺼짐(안전)", cs.coord_policy(_env_off).enabled is False)
+cs.COORD_POLICY.clear(); cs.COORD_POLICY.update({"no_such_field": 5})
+ok("모르는 칸은 버린다", cs.coord_policy(_env_off).enabled is True)
+cs.COORD_ENABLED = None; cs.COORD_POLICY.clear()
+_env_on = cc.policy_from_env({"COLLECTOR_V2_ENABLED": "1"})
+ok("비어 있으면 .env 그대로(종전 동작)", cs.coord_policy(_env_off) is _env_off and cs.coord_policy(_env_on) is _env_on)
+_fp_none = cs.config_fingerprint()
+cs.COORD_ENABLED = False
+ok("🔴 끄기만 해도 지문이 달라진다(REV 를 안 올리면 게이트가 막는다)", cs.config_fingerprint() != _fp_none)
+ok("이 파일이 끄면 .env 가 켜져 있어도 꺼짐", cs.coord_policy(_env_on).enabled is False)
+cs.COORD_ENABLED = _saveE; cs.COORD_POLICY.clear(); cs.COORD_POLICY.update(_saveP)
+v2src = read("backend/collector_v2.py")
+pol = v2src[v2src.index("def policy()"):v2src.index("def requested()")]
+ok("🔴 collector_v2.policy() 가 설정 파일 스위치를 얹는다 · 고장 나면 .env 그대로",
+   "core.policy_from_env()" in pol and "_cs.coord_policy(base)" in pol and "except Exception" in pol and "return base" in pol)
 bg = read("collector-extension/background.js")
 cfg = bg[bg.index("const CFG = {"):bg.index("const _rawSleep")]
 
@@ -152,13 +188,15 @@ cs.ASSIGNMENTS.update({"i-ok": {"no": 2, "count": 2}, "i-bad": {"no": 3, "count"
 ok("정상 배정", cs.assignment_for("i-ok") == {"no": 2, "count": 2})
 ok("번호가 대수보다 크면 무시", cs.assignment_for("i-bad") is None)
 ok("형식이 틀리면 무시", cs.assignment_for("i-junk") is None and cs.assignment_for("") is None)
+_saveW = {k: dict(v) for k, v in cs.WORKER_OVERRIDES.items()}
+cs.WORKER_OVERRIDES.clear()
 cs.WORKER_OVERRIDES[2] = {"pageGapMinMs": 2500, "pageGapMaxMs": 5000}
 st = cs.settings_for(1, "i-ok")
 ok("🔴 서버가 2번으로 정한 기계에는 2번 덮어쓰기가 간다(팝업이 1번이라 해도)",
    st["assign"] == {"no": 2, "count": 2} and st["values"]["pageGapMinMs"] == 2500)
 ok("다른 기계(1번)는 기본값", cs.settings_for(1)["values"]["pageGapMinMs"] == 1200)
 ok("기계마다 지문이 다르다", cs.settings_for(1)["hash"] != st["hash"])
-cs.WORKER_OVERRIDES.clear(); cs.ASSIGNMENTS.clear()
+cs.WORKER_OVERRIDES.clear(); cs.WORKER_OVERRIDES.update(_saveW); cs.ASSIGNMENTS.clear()
 now = datetime(2026, 9, 24, 10, 0, 0)
 cs.COMMANDS.extend([
     {"id": "c1", "kind": "uploadLogs", "until": "2026-09-24T12:00:00", "worker": None},

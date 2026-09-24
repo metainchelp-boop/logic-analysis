@@ -25,6 +25,7 @@
 """
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import math
@@ -32,13 +33,14 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 # ── 설정 번호 — 값을 바꾸면 1 올린다 ────────────────────────────────────────────
-SETTINGS_REV = 1
+SETTINGS_REV = 2
 # 번호별 설정 지문 장부 — SETTINGS·WORKER_OVERRIDES 를 고치면 REV 를 올리고 여기에 한 줄 더한다.
 #   지문은 `python -c "import collector_settings as c; print(c.config_fingerprint())"` 로 뽑는다.
 #   ⚠️ 시험(test_collector_settings.py)이 「지금 REV 의 지문 = 장부의 지문」을 확인한다 —
 #      값만 바꾸고 번호를 안 올리면 게이트가 막는다(화면의 「n번 적용됨」이 거짓말이 되지 않게).
 REV_LEDGER = {
     1: "d2176d65",   # 2026-09-23 첫 판 — 전부 기본값(v1.26.0 과 동일)
+    2: "dba16133",   # 2026-09-24 서버 자동 배정 — 2번만 켬 · 1번 끔 · 기계당 시간 15 · 하루 360
 }
 
 MIN = 60 * 1000
@@ -91,11 +93,21 @@ COMMAND_KINDS = ("runNow", "rearmAlarms", "flushOutbox", "uploadLogs", "uploadDi
 SETTINGS: Dict[str, Any] = {}
 
 # 기계별 덮어쓰기 — {기계 번호(1부터): {칸: 값}}. 비어 있으면 두 대가 같은 값.
-WORKER_OVERRIDES: Dict[int, Dict[str, Any]] = {}
+# 2026-09-24 대표 「1대에 먼저 중앙 배정 · 나 방법」 — 두 노트북 팝업 토글은 둘 다 켜져 있고 그대로 둔다.
+#   서버가 1번은 끔 · 2번만 켬으로 정한다(서버 값이 팝업보다 우선). 되돌리기 = 2번을 False 로 바꾸고 REV 를 올린다.
+WORKER_OVERRIDES: Dict[int, Dict[str, Any]] = {1: {"swCoordinated": False}, 2: {"swCoordinated": True}}
 
 # 기계 배정 — {instanceId: {"no": 번호, "count": 전체 대수}}. 비어 있으면 팝업 값 그대로.
 # instanceId 는 수집기가 스스로 만든 무작위 id(로직분석 화면 「수집기 운영」 패널에 보인다).
 ASSIGNMENTS: Dict[str, Dict[str, int]] = {}
+
+# ── 서버 자동 배정(v2 · collector_coord) 스위치 — 종전엔 서버 .env 에만 있었다 ─────────────
+# COORD_ENABLED: None = .env(COLLECTOR_V2_ENABLED) 그대로 · True/False = 이 파일이 정한다(배포 한 번으로 켜고 끈다).
+# ⚠️ 서버 스위치를 켜도 **수집기 쪽 스위치(swCoordinated)가 켜진 기계만** 배정을 받는다 — 나머지는 종전 방식 그대로.
+# COORD_POLICY: 정책 값 덮어쓰기(collector_coord.Policy 의 칸 이름). 틀린 값이면 **꺼진 것**으로 본다(안전).
+#   worker_hourly 15 = 지금 시험 상한(collect_cap 15)과 같게(원안 기본 10 이면 배정받는 기계만 느려진다) · 하루 15×24.
+COORD_ENABLED: Optional[bool] = True
+COORD_POLICY: Dict[str, int] = {"worker_hourly": 15, "worker_daily": 360}
 
 # 한 번만 시키는 명령 — [{"id", "kind", "until"(ISO, 이 시각 뒤엔 무시), "worker"(번호 · None=모두)}]
 # ⚠️ 캡차 쉼을 푸는 명령은 없다(대표 확정 ④).
@@ -135,10 +147,29 @@ def _clamp_values(values: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def config_fingerprint() -> str:
-    """SETTINGS·WORKER_OVERRIDES 원문의 지문 — REV_LEDGER 대조용(값을 바꿨는데 번호를 안 올렸는지)."""
-    canon = json.dumps({"s": SETTINGS, "w": {str(k): v for k, v in WORKER_OVERRIDES.items()}},
-                       sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    """SETTINGS·WORKER_OVERRIDES(+ 서버 자동 배정 스위치) 원문의 지문 — REV_LEDGER 대조용(값을 바꿨는데 번호를 안 올렸는지)."""
+    body: Dict[str, Any] = {"s": SETTINGS, "w": {str(k): v for k, v in WORKER_OVERRIDES.items()}}
+    if COORD_ENABLED is not None or COORD_POLICY:      # 비어 있으면 첫 판(REV 1) 지문이 그대로 나오게
+        body["c"] = {"e": COORD_ENABLED, "p": COORD_POLICY}
+    canon = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha1(canon.encode("utf-8")).hexdigest()[:8]
+
+
+def coord_policy(base: Any) -> Any:
+    """서버 자동 배정 정책 = .env 정책(base) 위에 이 파일의 스위치·값을 얹는다.
+
+    ⚠️ 값이 틀리면(음수·모르는 형식) Policy 검사가 ValueError 를 내고 → **꺼진 것**으로 돌려준다(.env 의 깨진 JSON 과 같은 안전 규칙).
+    ⚠️ 비어 있으면 base 를 그대로 — 종전(.env 만) 동작과 같다.
+    """
+    if COORD_ENABLED is None and not COORD_POLICY:
+        return base
+    try:
+        names = {f.name for f in dataclasses.fields(base)} - {"enabled"}
+        vals = {k: v for k, v in COORD_POLICY.items() if k in names}
+        enabled = base.enabled if COORD_ENABLED is None else (COORD_ENABLED is True)
+        return dataclasses.replace(base, enabled=enabled, **vals)
+    except (TypeError, ValueError):
+        return dataclasses.replace(base, enabled=False)
 
 
 def _fingerprint(values: Dict[str, Any]) -> str:
