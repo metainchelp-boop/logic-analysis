@@ -213,8 +213,9 @@ ok("보관정책 — 30일 지난 줄만 지운다", hv.purge_old(conn) == 1
 print("⑧ 배선")
 src = open(os.path.join(BACKEND, "human_view_routes.py"), encoding="utf-8").read()
 page = src[src.index("async def human_page"):src.index('@router.get("/token")')]
-gate = page.index("if kw not in uni:")
-ok("추적 키워드가 아니면 저장보다 먼저 돌려보낸다", gate < page.index("hv.ingest(") and gate < page.index("INSERT INTO collected_serp"))
+gate = page.find("if kw not in uni:")
+ok("추적 키워드가 아니면 저장보다 먼저 돌려보낸다", 0 < gate < page.find("hv.ingest(") and gate < page.find("INSERT INTO collected_serp"),
+   "거름 줄이 없거나 저장 뒤에 있다")
 ok("…그때 accepted:false", '"accepted": False, "reason": "not-tracked"' in page)
 logs = re.findall(r"logger\.\w+\((f?\"[^\n]*)", src)
 ok("로그에 검색어를 싣지 않는다", logs and not any("{kw}" in l or "keyword" in l or "{item['keyword']}" in l for l in logs), str(logs))
