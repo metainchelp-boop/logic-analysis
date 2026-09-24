@@ -553,6 +553,11 @@ jobs:
             print(f"  🔁 대상을 다 찾은 뒤에도 또 잰 부분 수집 {wasted}회 ← 새 규칙이면 안 나갈 요청")
             print(f"     (그중 나중에 전량 수집으로 끝나긴 한 키워드 {res['later_full']}개)")
             print(f"  오늘 전량/목표완료로 끝난 키워드(collected_serp) {len(done_serp)}개")
+            try:
+                fd = c.execute("SELECT COUNT(*), MIN(received_at), MAX(received_at) FROM collector_found_done WHERE collected_date=?", (day,)).fetchone()
+                print(f"  ✅ 배포 뒤 실제 완료 표시(collector_found_done) 오늘 {fd[0]}개 · 처음 {fd[1]} · 마지막 {fd[2]}")
+            except Exception as e:
+                print("  완료 표시 표 조회 실패 — 못 쟀다(배포 전이거나 아직 첫 표시 전):", str(e)[:80])
             PY
       - name: 추적 상품 소프트 내리기 확인 (tracked_reset=on · 읽기 전용)
         if: ${{ github.event.inputs.tracked_reset == 'on' }}
