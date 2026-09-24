@@ -84,7 +84,7 @@ on:
         description: '진단 스텝이 어디서 멈추는지 — true. 이 워크플로가 쓰는 명령을 하나씩 timeout 을 씌워 걸리는 지점을 찾는다(읽기 전용).'
         required: false
       analysis_audit:
-        description: '로직분석 결과값 전수조사 — true(1차) / preload(4차: PRELOADED 자리) / detail2(5차: 판매가·본 상품 주소가 HTML 어디에) / ld(6차: JSON-LD 값 모양) / fix(7차: 고친 코드로 751건 다시 읽기) / live268(#268 배포 반영 확인) / effect268(#268 배포 효과 — 판매가·422·데이터랩 보관함·수집 커버리지) / effect268b(2차 — 수집 순서 간격·접속 기록 교차) / effect268c(3차 — 직원 화면 사용 여부) / effect268d(4차 — 수집 업로드 결과 전·뒤) / effect268e(5차 — 수집 업로드 결과 기계별) / effect268f(6차 — 결과물 일별 건수) / live942(FE 제안서 라이브) / detail(2차: 상세 HTML 구조·수집 커버리지·정확한 상태코드). 자동 분석 결과 칸별 빈값 · 배치 산출물 일별 · 외부 데이터원 1회 실호출 · 오류 로그 유형 · API 경로별 상태코드(읽기 전용 · 업체명·키워드·IP 미출력 · 그래도 읽은 뒤 런 로그 삭제)'
+        description: '로직분석 결과값 전수조사 — true(1차) / preload(4차: PRELOADED 자리) / detail2(5차: 판매가·본 상품 주소가 HTML 어디에) / ld(6차: JSON-LD 값 모양) / fix(7차: 고친 코드로 751건 다시 읽기) / live268(#268 배포 반영 확인) / effect268(#268 배포 효과 — 판매가·422·데이터랩 보관함·수집 커버리지) / effect268b(2차 — 수집 순서 간격·접속 기록 교차) / effect268c(3차 — 직원 화면 사용 여부) / effect268d(4차 — 수집 업로드 결과 전·뒤) / effect268e(5차 — 수집 업로드 결과 기계별) / effect268f(6차 — 결과물 일별 건수) / effect268g(7차 — 추적 상품 모집단) / live942(FE 제안서 라이브) / detail(2차: 상세 HTML 구조·수집 커버리지·정확한 상태코드). 자동 분석 결과 칸별 빈값 · 배치 산출물 일별 · 외부 데이터원 1회 실호출 · 오류 로그 유형 · API 경로별 상태코드(읽기 전용 · 업체명·키워드·IP 미출력 · 그래도 읽은 뒤 런 로그 삭제)'
         required: false
       place_capture_probe:
         description: '신고 #276 — 플레이스 분석 캡처 판독 재현. db = 기록 집계만 / auto = 9/22·9/23 사람 분석 행으로 네이버 목록 1~2회 받아 서버 판독기로 읽기 / at:시각;시각 = 그 시각 행을 그대로 재현 / at!:시각 = 같은데 이름을 그대로 찍는다(⚠️ 읽은 즉시 런 로그 삭제) / find!:업체명|검색어;검색어 = 이름으로 찾아 그 번호가 각 목록 몇 번째인지(⚠️ 로그 삭제) / depth:검색어;검색어 = 기록된 순위 분포 + 목록 데이터 칸 구조 / 그 밖의 글자 = 그 검색어로 1회. 업체명·키워드는 해시로만 찍는다(읽기 전용).'
@@ -884,6 +884,62 @@ jobs:
                 print(f"  {k:<36} {v}")
             for k, v in sorted(build.items()):
                 print(f"  {k:<36} {v}")
+            PY
+
+      - name: 로직분석 배포 효과 7차 — 추적 상품 순위 0건의 모집단(읽기 전용 · 건수만)
+        if: ${{ github.event.inputs.analysis_audit == 'effect268g' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 180s
+          script: |
+            docker exec -i logic-analysis python3 - <<'PY'
+            # 배포 효과 7차 — 추적 상품 순위 기록 0건의 모집단 확인 · 읽기 전용 · 이름·키워드·주소 미출력(건수만)
+            import os, sqlite3, collections
+
+            DB = os.getenv("EFF_DB", "file:/app/data/logic_data.db?mode=ro")
+            c = sqlite3.connect(DB, uri=True, timeout=20)
+
+
+            def q(sql, args=()):
+                try:
+                    return c.execute(sql, args).fetchall()
+                except Exception as e:
+                    print(f"  ⚠️ 못 쟀다: {type(e).__name__}: {str(e)[:100]}")
+                    return None
+
+
+            cols = {r[1] for r in (q("PRAGMA table_info(tracked_products)") or [])}
+            alive = "COALESCE(disabled_at,'')=''" if "disabled_at" in cols else "1=1"
+            print(f"== ⑭ 추적 상품 모집단 (disabled_at 칸 {'있음' if 'disabled_at' in cols else '없음'} · nv_mid 칸 {'있음' if 'nv_mid' in cols else '없음'}) ==")
+            r = q(f"SELECT COUNT(*), SUM(CASE WHEN {alive} THEN 1 ELSE 0 END) FROM tracked_products")
+            if r:
+                print(f"  전체 {r[0][0]} · 살아 있는 것 {r[0][1]}")
+            if "nv_mid" in cols:
+                r = q(f"SELECT COUNT(*) FROM tracked_products WHERE {alive} AND COALESCE(nv_mid,'')<>''")
+                if r:
+                    print(f"  살아 있는 것 중 nvMid 있음 {r[0][0]}")
+            r = q(f"SELECT substr(updated_at,1,10), COUNT(*) FROM tracked_products WHERE {alive} GROUP BY 1 ORDER BY 1 DESC LIMIT 6")
+            if r:
+                print("  살아 있는 것 — 마지막 변경 날짜별: " + " · ".join(f"{d} {n}" for d, n in r))
+            p_alive = "COALESCE(p.disabled_at,'')=''" if 'disabled_at' in cols else '1=1'
+            kws = [k for (k,) in (q(f"SELECT DISTINCT k.keyword FROM tracked_keywords k JOIN tracked_products p ON p.id=k.product_id WHERE {p_alive}") or [])]
+            print(f"  살아 있는 상품의 키워드(중복 제거) {len(kws)}")
+            if kws:
+                ph = ",".join("?" * len(kws))
+                r = q(f"SELECT collected_date, COUNT(DISTINCT keyword) FROM collected_serp WHERE keyword IN ({ph}) AND collected_date >= '2026-09-22' GROUP BY 1 ORDER BY 1", kws)
+                print("  그 키워드의 원문 저장(회차 날짜별): " + (" · ".join(f"{d} {n}" for d, n in r) if r else "없음"))
+                r = q(f"SELECT substr(received_at,1,10), kind, COUNT(*) FROM collector_observations WHERE keyword IN ({ph}) GROUP BY 1,2 ORDER BY 1", kws)
+                if r is not None:
+                    print("  그 키워드의 업로드(날짜·종류): " + (" · ".join(f"{d} {k} {n}" for d, k, n in r) if r else "없음"))
+            r = q("SELECT MAX(checked_at), COUNT(*) FROM rankings")
+            if r:
+                print(f"  추적 상품 순위 마지막 기록 {r[0][0]} · 전체 {r[0][1]}행")
+            r = q("SELECT check_type, COUNT(*) FROM rankings WHERE checked_at >= '2026-09-22' GROUP BY 1")
+            if r is not None:
+                print("  9/22 이후 순위 기록 경로별: " + (" · ".join(f"{t} {n}" for t, n in r) if r else "없음"))
             PY
 
       - name: 로직분석 배포 효과 6차 — 결과물 일별 건수(목록 빔·저장 키워드·순위 기록 · 읽기 전용)
