@@ -27,7 +27,15 @@ logger = logging.getLogger(__name__)
 
 
 def policy() -> core.Policy:
-    return core.policy_from_env()
+    # ⚙ 2026-09-24 — .env 정책 위에 collector_settings 의 스위치·값을 얹는다(배포 한 번으로 켜고 끈다).
+    #   설정 모듈이 고장 나면 .env 정책 그대로(종전 동작).
+    base = core.policy_from_env()
+    try:
+        import collector_settings as _cs
+        return _cs.coord_policy(base)
+    except Exception as e:
+        logger.warning(f"[collector-v2] 설정 파일 정책 적용 실패 — .env 정책 그대로: {e}")
+        return base
 
 
 def requested() -> bool:
