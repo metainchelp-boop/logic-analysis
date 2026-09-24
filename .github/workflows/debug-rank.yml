@@ -79,51 +79,66 @@ jobs:
             DB = os.getenv("DB_PATH", "/app/data/logic_data.db")
             conn = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
             conn.row_factory = sqlite3.Row
-            try:
-                from client_dashboard import lookup_norm as norm
-            except Exception:
-                def norm(x): return re.sub(r"[\s\W_]+", "", (x or "")).lower()
+            def norm(x): return re.sub(r"[\s\-_.,()\[\]/·&+'\"]", "", x or "").lower()
             def h(s): return hashlib.sha256((s or "").encode()).hexdigest()[:10] if s else "-"
             def user(uid):
                 if uid is None: return "없음"
                 r = conn.execute("SELECT id, username, role, is_active FROM users WHERE id=?", (uid,)).fetchone()
                 if not r: return f"#{uid}(계정 없음)"
                 return f"#{r['id']} 로그인해시={h(r['username'])} role={r['role']} active={r['is_active']}"
-            def rep(c):
+            def reports_of(c):
                 t = conn.execute("SELECT COUNT(*) FROM reports WHERE client_id=?", (c,)).fetchone()[0]
                 last = conn.execute("SELECT MAX(created_at) FROM reports WHERE client_id=?", (c,)).fetchone()[0]
                 return t, last
-            cid = int(os.getenv("CP_ID"))
-            row = conn.execute("SELECT id, name, created_by, COALESCE(status,'') st, COALESCE(role,'advertiser') ro, updated_at FROM clients WHERE id=?", (cid,)).fetchone()
-            if not row:
-                print(f"업체 #{cid} 없음"); sys.exit(0)
-            n0 = norm(row["name"])
-            t, last = rep(cid)
-            print(f"[업체 #{cid}] 이름길이={len(row['name'] or '')} status={row['st']} role={row['ro']} 수정={row['updated_at']}")
-            print(f"  현재 담당(created_by) = {user(row['created_by'])}")
-            print(f"  보고서 {t}건 · 마지막 {last}")
-            for r in conn.execute("SELECT created_by, COUNT(*) n, MAX(created_at) m FROM reports WHERE client_id=? GROUP BY created_by ORDER BY n DESC", (cid,)):
-                print(f"    작성 {user(r['created_by'])} · {r['n']}건 · 마지막 {r['m']}")
-            print("[같은 이름 업체 — 정규화 일치 또는 포함(3자 이상)]")
-            k = 0
-            for r in conn.execute("SELECT id, name, created_by, COALESCE(status,'') st, COALESCE(role,'advertiser') ro FROM clients"):
-                n = norm(r["name"])
-                if not n or r["id"] == cid:
-                    continue
-                if n == n0 or (len(n0) >= 3 and n0 in n) or (len(n) >= 3 and n in n0):
-                    k += 1
-                    t2, last2 = rep(r["id"])
-                    print(f"  #{r['id']} {'정확' if n == n0 else '포함'} status={r['st']} role={r['ro']} 담당={user(r['created_by'])} 보고서 {t2}건 마지막 {last2}")
-            print(f"  (총 {k}곳)")
-            print("[담당자 정렬 기록 — 이 업체]")
+            def show(cid):
+                row = conn.execute("SELECT id, name, created_by, COALESCE(status,'') st, COALESCE(role,'advertiser') ro, created_at, updated_at FROM clients WHERE id=?", (cid,)).fetchone()
+                t, last = reports_of(cid)
+                if not row:
+                    print(f"[업체 #{cid}] ⚠️ 로직분석에 없음 · 그 번호를 가리키는 보고서 {t}건 · 마지막 {last}")
+                else:
+                    print(f"[업체 #{cid}] status={row['st']} role={row['ro']} 만든날={row['created_at']} 수정={row['updated_at']}")
+                    print(f"  현재 담당(created_by) = {user(row['created_by'])}")
+                    print(f"  보고서 {t}건 · 마지막 {last}")
+                for r in conn.execute("SELECT created_by, COUNT(*) n, MIN(created_at) f, MAX(created_at) m FROM reports WHERE client_id=? GROUP BY created_by ORDER BY n DESC", (cid,)):
+                    print(f"    작성 {user(r['created_by'])} · {r['n']}건 · {r['f']} ~ {r['m']}")
+                try:
+                    for r in conn.execute("SELECT from_owner, to_owner, manager_login, run_id, changed_at FROM report_owner_sync_log WHERE client_id=? ORDER BY id", (cid,)):
+                        print(f"    정렬 기록 {r['changed_at']} run={r['run_id']} {r['from_owner']}→{r['to_owner']} 로그인해시={h(r['manager_login'])}")
+                except Exception as e:
+                    print("    (정렬 기록 조회 실패:", e, ")")
+            mode = (os.getenv("CP_ID") or "").strip()
+            for part in [p.strip() for p in mode.split(",") if p.strip()]:
+                if part.startswith("h:"):
+                    want = part[2:]
+                    ids = [r["id"] for r in conn.execute("SELECT id, name FROM clients")
+                           if hashlib.sha256(norm(r["name"]).encode()).hexdigest()[:16] == want]
+                    print(f"== 이름 해시 {want[:6]}… 와 정규화 이름이 같은 업체 {len(ids)}곳: {ids}")
+                    for i in ids: show(i)
+                else:
+                    print(f"== 번호 {part}")
+                    show(int(part))
+            print("== 전산이 이어 둔 번호 중 로직분석에 없는 것(04:20 정렬이 「업체 없음」으로 건너뛰는 곳)")
             try:
-                rows = conn.execute("SELECT from_owner, to_owner, manager_login, run_id, changed_at FROM report_owner_sync_log WHERE client_id=? ORDER BY id", (cid,)).fetchall()
-                for r in rows:
-                    print(f"  {r['changed_at']} run={r['run_id']} {r['from_owner']}→{r['to_owner']} 로그인해시={h(r['manager_login'])}")
-                print(f"  (총 {len(rows)}건)")
+                from report_owner_sync import fetch_client_managers
+                items = fetch_client_managers(os.getenv("ERP_BASE_URL", "http://api.metainc.co.kr"), os.getenv("ERP_AD_SYNC_API_KEY", ""))
+                have = {int(r["id"]) for r in conn.execute("SELECT id FROM clients")}
+                miss = []
+                for it in items:
+                    try: cid = int(it.get("logic_client_id"))
+                    except Exception: continue
+                    if cid not in have: miss.append((cid, it.get("manager_login") or ""))
+                print(f"  전산 항목 {len(items)} · 로직분석에 없는 번호 {len(miss)}")
+                for cid, lg in miss:
+                    t, last = reports_of(cid)
+                    print(f"  #{cid} 담당 로그인해시={h(lg)} · 그 번호의 보고서 {t}건 · 마지막 {last}")
             except Exception as e:
-                print("  (조회 실패:", e, ")")
-            print("[비교 기준] 로그인해시 = sha256(로그인)[:10]")
+                print("  (전산 조회 실패:", e, ")")
+            print("== 업체 없이 남은 보고서(가리키는 업체가 로직분석에 없음) — 아무에게도 안 보인다(관리자 제외)")
+            rows = conn.execute("SELECT client_id, COUNT(*) n, MAX(created_at) m FROM reports WHERE client_id IS NOT NULL AND client_id NOT IN (SELECT id FROM clients) GROUP BY client_id ORDER BY n DESC").fetchall()
+            print(f"  업체 번호 {len(rows)}곳 · 보고서 {sum(r['n'] for r in rows)}건")
+            for r in rows[:20]:
+                print(f"  #{r['client_id']} {r['n']}건 · 마지막 {r['m']}")
+            print("[비교 기준] 로그인해시 = sha256(로그인)[:10] · 이름 해시 = sha256(정규화 이름)[:16]")
             PY
 
       - name: 보고서 담당자 정렬 진단 (읽기 전용 · 신고 #262)
