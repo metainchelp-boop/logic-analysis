@@ -75,47 +75,87 @@ jobs:
           script: |
             DEL_IDS=$(printf '%s' "$CP_ID" | tr ',' '\n' | sed -n 's/^d://p' | head -1)
             if [ -n "$DEL_IDS" ]; then
-              echo "== 업체 삭제 요청 흔적 — nginx 접속 기록(번호·시각·상태만 · 출처는 런마다 다른 소금 해시)"
-              ls -l --time-style=+%m-%d /var/log/nginx/ 2>/dev/null | awk 'NR>1{print "  파일 " $6 " " $7}' | head -30
-              SALT=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+              echo "== 시간대 — 호스트 $(date +%z) · 컨테이너 $(docker exec logic-analysis date +%z 2>/dev/null)"
+              ALL=/tmp/cp_all_$$.txt
               for f in /var/log/nginx/access.log*; do
                 case "$f" in *.gz) zcat "$f" ;; *) cat "$f" ;; esac
-              done 2>/dev/null | grep -aE "\"DELETE /api/(cd|clients)/($DEL_IDS)([ /?]|\")" > /tmp/cp_del_$$.txt || true
-              awk -v salt="$SALT" '{ip=$1; cmd="printf %s " salt ip " | md5sum | cut -c1-6"; cmd | getline h; close(cmd); gsub(/"/,"",$6); print "  " substr($4,2) " " $6 " " $7 " → " $9 " 출처=" h}' /tmp/cp_del_$$.txt | sort | head -40 || true
-              DEL_ROWS=$(awk '{t=substr($4,2); p=$7; sub(/^.*\//,"",p); print t "|" p "|" $1}' /tmp/cp_del_$$.txt | tr '\n' ';')
-              rm -f /tmp/cp_del_$$.txt
-              echo "  (끝)"
-              echo "== 삭제 요청과 같은 출처에서 그 전 이틀 안에 로그인한 로직분석 계정(번호·로그인해시만)"
-              docker exec -i -e DEL_ROWS="$DEL_ROWS" logic-analysis python3 - <<'PYD'
-            import os, sqlite3, hashlib, datetime
+              done 2>/dev/null > "$ALL"
+              echo "  접속 기록 줄 수 $(wc -l < "$ALL")"
+              grep -aE "\"DELETE /api/(cd|clients)/($DEL_IDS)([ /?]|\")" "$ALL" > /tmp/cp_del_$$.txt || true
+              echo "== 업체 삭제 요청(접속 기록 원문 시각 · 시간대 표기 그대로)"
+              awk '{t=substr($4,2); z=substr($5,1,5); p=$7; sub(/^.*\//,"",p); print "  #" p " " t " " z " → " $9}' /tmp/cp_del_$$.txt | sort
+              PAYLOAD=""
+              while IFS= read -r line; do
+                ip=$(printf '%s' "$line" | awk '{print $1}')
+                t=$(printf '%s' "$line" | awk '{print substr($4,2) " " substr($5,1,5)}')
+                p=$(printf '%s' "$line" | awk '{p=$7; sub(/^.*\//,"",p); print p}')
+                LG=$(awk -v ip="$ip" '$1==ip && $6=="\"POST" && $7 ~ /^\/api\/auth\/(login|sso)/ {print substr($4,2) " " substr($5,1,5) " " $9}' "$ALL" | tr '\n' '^')
+                SAME=$(awk -v ip="$ip" '$1==ip' "$ALL" | wc -l)
+                PAYLOAD="${PAYLOAD}${p}|${t}|${SAME}|${LG};"
+              done < /tmp/cp_del_$$.txt
+              rm -f /tmp/cp_del_$$.txt "$ALL"
+              docker exec -i -e PAYLOAD="$PAYLOAD" logic-analysis python3 - <<'PYD'
+            import os, sqlite3, hashlib, datetime, ipaddress
             DB = os.getenv("DB_PATH", "/app/data/logic_data.db")
             conn = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
             conn.row_factory = sqlite3.Row
             def h(s): return hashlib.sha256((s or "").encode()).hexdigest()[:10] if s else "-"
-            rows = [r for r in (os.getenv("DEL_ROWS") or "").split(";") if r.strip()]
-            for r in rows:
-                t, cid, ip = r.split("|", 2)
-                when = datetime.datetime.strptime(t, "%d/%b/%Y:%H:%M:%S")
-                since = when - datetime.timedelta(days=2)
+            F = "%d/%b/%Y:%H:%M:%S %z"
+            LOCAL = datetime.datetime.now().astimezone().tzinfo
+            KST = datetime.timezone(datetime.timedelta(hours=9))
+            logs = []
+            for lg in conn.execute("SELECT user_id, username, login_at, ip_address FROM login_logs"):
+                try:
+                    la = datetime.datetime.fromisoformat(str(lg["login_at"]).replace(" ", "T")[:26])
+                except Exception:
+                    continue
+                if la.tzinfo is None:
+                    la = la.replace(tzinfo=LOCAL)
+                logs.append((la, lg["user_id"], lg["username"], lg["ip_address"] or ""))
+            u = {x["id"]: x for x in conn.execute("SELECT id, role, is_active FROM users")}
+            print("== 로그인 기록에 남은 접속 주소 분류(원문 미출력)")
+            cls, vals = {}, {}
+            for _, _, _, ip in logs:
+                raw = ip.replace("SSO:", "").strip()
+                try:
+                    a = ipaddress.ip_address(raw)
+                    k = "사설·내부 주소" if (a.is_private or a.is_loopback) else "공인 주소"
+                except Exception:
+                    k = "비어 있음·형식 밖"
+                cls[k] = cls.get(k, 0) + 1
+                vals.setdefault(k, set()).add(raw)
+            for k in cls:
+                print(f"  {k}: {cls[k]}건 · 서로 다른 값 {len(vals[k])}개")
+            print("== 삭제 요청을 보낸 곳에서 들어온 로그인 요청 → 같은 시각(±3초)의 로그인 기록")
+            for part in (os.getenv("PAYLOAD") or "").split(";"):
+                if not part.strip():
+                    continue
+                cid, t, same, lgs = part.split("|", 3)
+                when = datetime.datetime.strptime(t, F)
+                print(f"  업체 #{cid} 삭제 {when.astimezone(KST):%Y-%m-%d %H:%M:%S} KST — 그곳 요청 {same.strip()}줄")
+                reqs = [x for x in lgs.split("^") if x.strip()]
+                ok = []
+                for r in reqs:
+                    ts, tz, st = r.rsplit(" ", 2)
+                    rt = datetime.datetime.strptime(f"{ts} {tz}", F)
+                    if st == "200" and rt <= when:
+                        ok.append(rt)
+                print(f"    그곳 로그인 요청 {len(reqs)}건 · 삭제 전 성공 {len(ok)}건")
                 hits = {}
-                for lg in conn.execute("SELECT user_id, username, login_at, ip_address FROM login_logs"):
-                    lip = (lg["ip_address"] or "").replace("SSO:", "").strip()
-                    if lip != ip:
-                        continue
-                    try:
-                        la = datetime.datetime.fromisoformat(str(lg["login_at"]).replace(" ", "T")[:19])
-                    except Exception:
-                        continue
-                    if since <= la <= when:
-                        k = lg["user_id"]
-                        hits.setdefault(k, [0, None, lg["username"]])
-                        hits[k][0] += 1
-                        if hits[k][1] is None or la > hits[k][1]: hits[k][1] = la
-                u = {x["id"]: x for x in conn.execute("SELECT id, role, is_active FROM users")}
-                print(f"  업체 #{cid} 삭제 {when} — 같은 출처 로그인 계정 {len(hits)}개")
-                for k, (n, last, un) in sorted(hits.items(), key=lambda kv: kv[1][1] or datetime.datetime.min, reverse=True):
-                    ro = u.get(k)
-                    print(f"    계정 #{k} 로그인해시={h(un)} role={ro['role'] if ro else '?'} · 로그인 {n}회 · 마지막 {last}")
+                for rt in ok:
+                    for la, uid, un, _ in logs:
+                        if abs((la - rt).total_seconds()) <= 3:
+                            e = hits.setdefault(uid, [0, None, un])
+                            e[0] += 1
+                            if e[1] is None or rt > e[1]:
+                                e[1] = rt
+                if not hits:
+                    print("    같은 시각 로그인 기록 없음")
+                for uid, (n, last, un) in sorted(hits.items(), key=lambda kv: kv[1][1], reverse=True):
+                    ro = u.get(uid)
+                    role = ro["role"] if ro else "?"
+                    act = ro["is_active"] if ro else "?"
+                    print(f"    계정 #{uid} 로그인해시={h(un)} role={role} 활성={act} · 맞은 로그인 {n}회 · 마지막 {last.astimezone(KST):%m-%d %H:%M} KST (삭제 {(when - last).total_seconds() / 3600:.1f}시간 전)")
             PYD
             fi
             docker exec -i -e CP_ID="${CP_ID}" logic-analysis python3 - <<'PY'
