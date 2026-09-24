@@ -246,6 +246,21 @@ def attempted_map(conn, collected_date: str) -> Dict[str, str]:
         return {}
 
 
+def attempt_count_map(conn, collected_date: str) -> Dict[str, int]:
+    """오늘 「시도했지만 완료 못 한」 횟수 — {키워드: 횟수}. attempted_map 과 같은 행을 센다.
+
+    🌙 밤 재시도 상한(대표 확정 2026-09-24 · collect_order.night_retry_capped)의 근거.
+    실패하면 빈 dict = 거르지 않음(종전 동작).
+    """
+    try:
+        return {r[0]: int(r[1] or 0) for r in conn.execute(
+            "SELECT keyword, COUNT(*) FROM collector_observations "
+            "WHERE collected_date=? AND projected=0 AND status NOT IN ('legacy') GROUP BY keyword",
+            (collected_date,))}
+    except Exception:
+        return {}
+
+
 def observation_summary(conn, collected_date: str) -> Dict[str, Any]:
     try:
         counts = [{"status": r[0], "kind": r[1], "count": r[2]} for r in conn.execute(
