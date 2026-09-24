@@ -195,6 +195,43 @@ jobs:
             for part in [p.strip() for p in mode.split(",") if p.strip()]:
                 if part.startswith("d:"):
                     continue
+                if part.startswith("t:"):
+                    # t:<번호>:<소금>:<h1>.<h2>… — 전산 이름의 3글자 조각(소금 해시)을 2개 이상 품은 업체(이름 미출력)
+                    try:
+                        _, tag, salt, hs = part.split(":", 3)
+                        want = set(x for x in hs.split(".") if x)
+                    except Exception:
+                        print(f"== 잘못된 입력 {part[:12]}…"); continue
+                    found = []
+                    for r in conn.execute("SELECT id, name, created_by, COALESCE(status,'') st, COALESCE(role,'advertiser') ro, created_at FROM clients"):
+                        n = norm(r["name"])
+                        got = {hashlib.sha256((salt + n[i:i+3]).encode()).hexdigest()[:12] for i in range(0, max(0, len(n) - 2))}
+                        k = len(got & want)
+                        if k >= 2:
+                            found.append((k, r))
+                    print(f"== 전산 #{tag} 이름 조각 {len(want)}개 중 2개 이상 겹치는 로직분석 업체 {len(found)}곳")
+                    for k, r in sorted(found, key=lambda x: -x[0])[:10]:
+                        t2, last = reports_of(r["id"])
+                        print(f"  #{r['id']} 겹침 {k}/{len(want)} · status={r['st']} role={r['ro']} 만든날={r['created_at']} · 담당 {user(r['created_by'])} · 보고서 {t2}건 · 마지막 {last}")
+                    continue
+                if part.startswith("w:"):
+                    # w:<계정번호>:<부터>:<까지> — 그 계정이 그 사이 만든 업체(이름 미출력)
+                    try:
+                        _, uid, f0, f1 = part.split(":", 3); uid = int(uid)
+                    except Exception:
+                        print(f"== 잘못된 입력 {part[:12]}…"); continue
+                    rows = conn.execute("SELECT id, COALESCE(status,'') st, COALESCE(role,'advertiser') ro, created_at FROM clients WHERE created_by=? AND created_at >= ? AND created_at < ? ORDER BY created_at", (uid, f0.replace("T", " "), f1.replace("T", " "))).fetchall()
+                    print(f"== 계정 #{uid} 가 {f0}~{f1} 사이 만든 업체 {len(rows)}곳(지금 담당이 그 계정인 것만 — 담당이 바뀐 업체는 안 잡힌다)")
+                    for r in rows:
+                        t2, last = reports_of(r["id"])
+                        print(f"  #{r['id']} {r['created_at']} status={r['st']} role={r['ro']} · 보고서 {t2}건")
+                    continue
+                if part == "a:":
+                    print("== 관리자(admin) 계정 — 남의 업체도 지울 수 있는 계정")
+                    for r in conn.execute("SELECT id, username, is_active FROM users WHERE role='admin' ORDER BY id"):
+                        ll = conn.execute("SELECT MAX(login_at) FROM login_logs WHERE user_id=?", (r["id"],)).fetchone()[0]
+                        print(f"  계정 #{r['id']} 로그인해시={h(r['username'])} 활성={r['is_active']} · 마지막 로그인 {ll}")
+                    continue
                 if part.startswith("g:"):
                     try:
                         _, L, want = part.split(":", 2); L = int(L)
