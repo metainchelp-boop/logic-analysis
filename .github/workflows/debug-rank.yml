@@ -38,6 +38,10 @@ on:
         description: '(미사용) 이전 설명 보존. 신고 #262. 04:20 배치가 실제로 도는지 · 지금 어긋난 건수 · 전산이 안 주는(배치 시야 밖) 업체 규모(읽기 전용·업체명/직원명 미출력).'
         required: false
         default: 'off'
+      client_probe:
+        description: '업체 한 곳 보고서 담당 진단 — off(기본) / 로직분석 업체 번호. 현재 담당·보고서 작성자별 건수·같은 이름 업체·정렬 기록(읽기 전용 · 번호·해시만 · 이름·로그인 원문 미출력 · 신고 #262 후속).'
+        required: false
+        default: 'off'
       use_branch_code:
         description: '이 브랜치의 rank_link.py 로 미리보기 — off(기본) / on. 배포 전에 새 규칙이 무엇을 이을지 먼저 보려는 용도(컨테이너 /tmp 에 얹었다 지운다·앱 파일 무접촉). apply 와 함께 쓰지 말 것.'
         required: false
@@ -55,6 +59,73 @@ jobs:
 
       # 신고 #262 — 「퇴사자 변경 업체 로직분석 보고서가 새 담당자에게 안 넘어옴」 진단.
       # 전 구간 읽기 전용(sqlite mode=ro + 순수 판정 함수). 공개 저장소라 업체명·직원명·로그인은 출력하지 않는다.
+      # 신고 #262 후속 — 업체 한 곳(로직분석 업체 번호)의 보고서가 누구에게 보이는지.
+      # 보고서 열람 = clients.created_by(현재 담당) 기준(report_access). 공개 저장소라 번호·해시만 찍는다.
+      - name: 업체 한 곳 보고서 담당 진단 (읽기 전용 · 번호·해시만)
+        if: ${{ github.event.inputs.client_probe != '' && github.event.inputs.client_probe != 'off' }}
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          CP_ID: ${{ github.event.inputs.client_probe }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 120s
+          envs: CP_ID
+          script: |
+            docker exec -i -e CP_ID="${CP_ID}" logic-analysis python3 - <<'PY'
+            import os, sqlite3, sys, hashlib, re
+            sys.path.insert(0, "/app/backend"); sys.path.insert(0, "/app")
+            DB = os.getenv("DB_PATH", "/app/data/logic_data.db")
+            conn = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            try:
+                from client_dashboard import lookup_norm as norm
+            except Exception:
+                def norm(x): return re.sub(r"[\s\W_]+", "", (x or "")).lower()
+            def h(s): return hashlib.sha256((s or "").encode()).hexdigest()[:10] if s else "-"
+            def user(uid):
+                if uid is None: return "없음"
+                r = conn.execute("SELECT id, username, role, is_active FROM users WHERE id=?", (uid,)).fetchone()
+                if not r: return f"#{uid}(계정 없음)"
+                return f"#{r['id']} 로그인해시={h(r['username'])} role={r['role']} active={r['is_active']}"
+            def rep(c):
+                t = conn.execute("SELECT COUNT(*) FROM reports WHERE client_id=?", (c,)).fetchone()[0]
+                last = conn.execute("SELECT MAX(created_at) FROM reports WHERE client_id=?", (c,)).fetchone()[0]
+                return t, last
+            cid = int(os.getenv("CP_ID"))
+            row = conn.execute("SELECT id, name, created_by, COALESCE(status,'') st, COALESCE(role,'advertiser') ro, updated_at FROM clients WHERE id=?", (cid,)).fetchone()
+            if not row:
+                print(f"업체 #{cid} 없음"); sys.exit(0)
+            n0 = norm(row["name"])
+            t, last = rep(cid)
+            print(f"[업체 #{cid}] 이름길이={len(row['name'] or '')} status={row['st']} role={row['ro']} 수정={row['updated_at']}")
+            print(f"  현재 담당(created_by) = {user(row['created_by'])}")
+            print(f"  보고서 {t}건 · 마지막 {last}")
+            for r in conn.execute("SELECT created_by, COUNT(*) n, MAX(created_at) m FROM reports WHERE client_id=? GROUP BY created_by ORDER BY n DESC", (cid,)):
+                print(f"    작성 {user(r['created_by'])} · {r['n']}건 · 마지막 {r['m']}")
+            print("[같은 이름 업체 — 정규화 일치 또는 포함(3자 이상)]")
+            k = 0
+            for r in conn.execute("SELECT id, name, created_by, COALESCE(status,'') st, COALESCE(role,'advertiser') ro FROM clients"):
+                n = norm(r["name"])
+                if not n or r["id"] == cid:
+                    continue
+                if n == n0 or (len(n0) >= 3 and n0 in n) or (len(n) >= 3 and n in n0):
+                    k += 1
+                    t2, last2 = rep(r["id"])
+                    print(f"  #{r['id']} {'정확' if n == n0 else '포함'} status={r['st']} role={r['ro']} 담당={user(r['created_by'])} 보고서 {t2}건 마지막 {last2}")
+            print(f"  (총 {k}곳)")
+            print("[담당자 정렬 기록 — 이 업체]")
+            try:
+                rows = conn.execute("SELECT from_owner, to_owner, manager_login, run_id, changed_at FROM report_owner_sync_log WHERE client_id=? ORDER BY id", (cid,)).fetchall()
+                for r in rows:
+                    print(f"  {r['changed_at']} run={r['run_id']} {r['from_owner']}→{r['to_owner']} 로그인해시={h(r['manager_login'])}")
+                print(f"  (총 {len(rows)}건)")
+            except Exception as e:
+                print("  (조회 실패:", e, ")")
+            print("[비교 기준] 로그인해시 = sha256(로그인)[:10]")
+            PY
+
       - name: 보고서 담당자 정렬 진단 (읽기 전용 · 신고 #262)
         if: ${{ github.event.inputs.owner_sync != '' && github.event.inputs.owner_sync != 'off' }}
         uses: appleboy/ssh-action@v1.0.3
