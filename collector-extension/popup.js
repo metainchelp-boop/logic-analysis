@@ -5,10 +5,11 @@ let setupChecked = false;   // ⚙ 설정칸 자동 펼침은 처음 한 번만(
 async function render() {
   const { token = '', state = {}, logs = [], rawSample = null, rawSampleAd = null,
           lastAdStat = null, readFail = null, workerNo = 1, workerCount = 1,
-          trustedClick = undefined, searchEntry = undefined } =
+          trustedClick = undefined, searchEntry = undefined,
+          remoteSettings = null, serverAssign = null } =
     await chrome.storage.local.get(['token', 'state', 'logs', 'rawSample', 'rawSampleAd',
                                     'lastAdStat', 'readFail', 'workerNo', 'workerCount',
-                                    'trustedClick', 'searchEntry']);
+                                    'trustedClick', 'searchEntry', 'remoteSettings', 'serverAssign']);
   // v1.16.0 — ⌨ 검색창에 쳐서 들어가기. 기본 켬(background 의 판정과 같아야 한다).
   const entryOn = searchEntry === undefined ? true : !!searchEntry;
   const eBtn = $('searchEntry');
@@ -87,6 +88,17 @@ async function render() {
       (state.lastHeartbeatOk ? '<span class="b ok">성공</span>' : '<span class="b bad">실패</span>') +
       (state.lastHeartbeatNote ? ` · ${state.lastHeartbeatNote}` : '')
     : '📡 서버 보고 — 아직 없음 (설치 후 15초 · 이후 5분마다)';
+  // ⚙ v1.27.0 — 서버 설정. 교체 없이 서버 배포만으로 속도·깊이·쉼이 바뀐다. 「몇 번이 들어왔나」를 여기서 본다.
+  const rs = remoteSettings;
+  const rsVals = (rs && rs.values) || {};
+  const settingsLine = rs && rs.hash
+    ? `⚙ 서버 설정 <span class="b ok">${Number(rs.rev) || '?'}번</span> 적용됨 · ${new Date(rs.at).toLocaleTimeString('ko-KR')}` +
+      (rsVals.machinePaused === true ? ' · <span class="b bad">⏸ 서버가 이 기계를 멈춤</span>' : '') +
+      (rs.note ? ` · <span class="b" style="color:#b45309">${rs.note}</span>` : '')
+    : '<span class="dim">⚙ 서버 설정 — 아직 못 받음(기본값으로 도는 중 · 서버 업데이트 뒤 5분 안에 받습니다)</span>';
+  const assignLine = serverAssign && serverAssign.no
+    ? `🧮 서버 배정 <span class="b">${serverAssign.no}번 / 전체 ${serverAssign.count}대</span> <span class="dim">(아래 설정칸의 번호보다 우선)</span>`
+    : '';
   // 🧭 v2 서버 자동 배정(코덱스 이식 2차) — 켜짐/꺼짐 + 서버 응답 상태
   const coordOn = state.coordEnabled === true;
   const coordBtn = $('coordinated');
@@ -138,7 +150,7 @@ async function render() {
       ? '<span class="b" style="color:#b45309">▸ 안전 속도로 돌리는 중</span>' +
         `<span style="font-size:11px"> — ${new Date(slowUntil).toLocaleString('ko-KR')}까지 절반 속도</span><br>`
       : '') +
-    `<div class="sec">${hbLine}<br>${alarmLine}${coordLine ? '<br>' + coordLine : ''}${outboxLine ? '<br>' + outboxLine : ''}</div>` +
+    `<div class="sec">${hbLine}<br>${settingsLine}${assignLine ? '<br>' + assignLine : ''}<br>${alarmLine}${coordLine ? '<br>' + coordLine : ''}${outboxLine ? '<br>' + outboxLine : ''}</div>` +
     dayBlock +
     `<div class="sec">이번 시간대 · 대상 <span class="b">${state.target ?? '-'}</span>개 · ` +
     `완료 <span class="b ok">${state.done ?? 0}</span> · ` +

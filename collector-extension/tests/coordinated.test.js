@@ -42,6 +42,8 @@ async function run({ server, collect, paused = false, blockedUntil = 0, token = 
     CFG: { hourBudgetMs: 50 * 60 * 1000, maxConsecutiveFail: 3, workerNo: 1, workerCount: 1 },
     chrome: { runtime: { getManifest: () => ({ version: '1.24.0' }) } },
     isLocalPaused: async () => paused,
+    loadRemote: async () => {},          // ⚙ v1.27.0 서버 설정 — 이 시험에선 기본값 그대로
+    serverPaused: () => false,
     getBlockedUntil: async () => blockedUntil,
     getToken: async () => token,
     setState: async (p) => { states.push(p); },

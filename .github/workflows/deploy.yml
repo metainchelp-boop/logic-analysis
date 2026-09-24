@@ -171,6 +171,15 @@ jobs:
       - name: Collector outbox regression (v1.26.0 미전송 보관함 · ACK · 재전송·격리 · 상한)
         run: node collector-extension/tests/outbox.test.js
 
+      # 2026-09-23 대표 확정 「서버 배포만으로」 — 수집기가 서버 설정을 **안전선 안에서만** 받는다(v1.27.0).
+      #    캡차 쉼 1시간 밑 불가 · 쉼을 푸는 명령 없음 · 한 번짜리 명령은 한 번만 · 서버 멈춤이면 수집 안 함.
+      - name: Collector remote settings regression (v1.27.0 서버 설정 · 안전선 · 명령 · 서버 멈춤)
+        run: node collector-extension/tests/remote_settings.test.js
+      # 서버 쪽 짝 — 기본값·안전선이 수집기와 한 칸도 다르지 않다(node 로 대조) · 이번 배포는 동작 변화 0 ·
+      #    값을 바꾸고 번호를 안 올리면 막는다 · 로그·진단 보관 · 배선.
+      - name: 회귀 — 수집기 서버 설정(서버 · 수집기 기본값·안전선 대조)
+        run: python backend/tests/test_collector_settings.py
+
       # 수집 멈춤 감시(2026-09-10) — 하루가 통째로 0건이 되어도 아무도 몰랐다.
       # 상한(5시간)·쿨다운(6시간)·문자 90바이트·기록 커밋을 지킨다.
       # ⚠️ 그중 「기록 커밋」이 핵심이다 — 안 되면 매시간 같은 문자가 도배된다.

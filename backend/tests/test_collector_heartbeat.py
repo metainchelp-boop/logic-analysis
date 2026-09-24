@@ -91,7 +91,10 @@ ok("machines 조회 실패는 None(못 쟀다) — 빈 목록과 다르다", "ma
 
 print("\n③ 확장 배선 — 요약(상세는 node heartbeat.test.js)")
 bg = read("collector-extension/background.js")
-ok("🔴 heartbeat 알람 5분 주기", "const HEARTBEAT_PERIOD_MIN = 5;" in bg and "chrome.alarms.create(HEARTBEAT_ALARM, { periodInMinutes: HEARTBEAT_PERIOD_MIN" in bg)
+# ⚙ v1.27.0 — 주기가 서버 설정(heartbeatMin)으로 옮겨졌다. 없으면 HEARTBEAT_PERIOD_MIN(5) — 기본값도 5.
+ok("🔴 heartbeat 알람 5분 주기", "const HEARTBEAT_PERIOD_MIN = 5;" in bg
+   and "chrome.alarms.create(HEARTBEAT_ALARM, { periodInMinutes: (typeof RT === 'object' && RT ? RT.heartbeatMin : HEARTBEAT_PERIOD_MIN)" in bg
+   and "heartbeatMin: 5," in read("collector-extension/remote_settings.js"))
 ok("🔴 sendHeartbeat 가 일시정지 값을 **읽어서 보낸다**(거르지 않는다)", "pausedByLocal: await isLocalPaused()," in bg)
 _mv = re.search(r'"version":\s*"(\d+)\.(\d+)\.', read("collector-extension/manifest.json"))
 ok("manifest 1.21.0 이상(살아있음 신호 포함)", bool(_mv) and (int(_mv.group(1)), int(_mv.group(2))) >= (1, 21))

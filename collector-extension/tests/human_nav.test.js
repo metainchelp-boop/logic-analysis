@@ -398,7 +398,10 @@ console.log('\n[응답 가로채기 — net_tap]');
     // fetchPage 배선
     const FP = grab('fetchPage', 'async');
     ok('⑰ fetchPage 가 클릭 시각(_clickedAt)을 적고 pageExtract 에 {page, since} 를 넘긴다',
-       /_clickedAt = Date\.now\(\);/.test(FP) && /func: pageExtract, args: \[\{ page: pagingIndex, since: _clickedAt \}\]/.test(FP));
+       /_clickedAt = Date\.now\(\);/.test(FP) && /func: pageExtract,\s*args: \[\{ page: pagingIndex, since: _clickedAt \}/.test(FP));
+    // ⚙ v1.27.0 — 두 번째 인자로 서버가 준 차단 문구(더하기만)를 넘긴다. 없으면 빈 목록 = 종전 판정.
+    ok('⚙ fetchPage 가 서버 차단 문구(extraBlockPhrases)를 pageExtract 에 넘긴다',
+       /RT\.extraBlockPhrases : \[\]\)\]/.test(FP));
     ok('⑰ STALE 때 응답 요약(TAP_PROBE)을 따로 한 건 더 보낸다(서버 500자 한도)', /TAP_PROBE\(화면이 받은 응답 요약\)/.test(SRC) && /delete probe\.tap/.test(FP));
     // ⚠️ 위 ⑬ 과 같은 이유로 글자 그대로 박지 않는다 — front 맨 앞이 click 이고 prev 가 그 안에 있으면 된다.
     ok('⑰ STALE 보고는 짧은 값(click·prev·got·src)이 앞에 온다',
@@ -947,8 +950,13 @@ console.log('\n[응답 가로채기 — net_tap]');
       ok('🔴㉒ 누르기 **전에** 훑어 내려간다', tc5.indexOf('humanScrollDown') < tc5.indexOf('pagerLocate'));
       ok('🔴㉒ 한 번에 순간이동하지 않고 여러 번에 나눈다',
          /for \(let i = 0; i < 8; i\+\+\)/.test(hsd) && /func: scrollStep/.test(hsd));
-      ok('🔴㉒ 사이에 잠깐씩 멈춘다(사람 손 간격)', /await sleep\(180 \+ Math\.floor\(Math\.random\(\) \* 260\)\)/.test(hsd));
-      ok('🔴㉒ 굴리는 폭도 매번 다르다', /500 \+ Math\.floor\(Math\.random\(\) \* 320\)/.test(hsd));
+      // ⚙ v1.27.0 — 숫자가 서버 설정(RT)으로 옮겨졌다. 기본값(180~440ms · 500~820px)은 폴백과 remote_settings 기본값에 그대로.
+      ok('🔴㉒ 사이에 잠깐씩 멈춘다(사람 손 간격)',
+         /await sleep\(_sc\.scrollWaitMinMs \+ Math\.floor\(Math\.random\(\) \* \(_sc\.scrollWaitMaxMs - _sc\.scrollWaitMinMs\)\)\)/.test(hsd)
+         && /scrollWaitMinMs: 180, scrollWaitMaxMs: 440/.test(hsd));
+      ok('🔴㉒ 굴리는 폭도 매번 다르다',
+         /_sc\.scrollPxMin \+ Math\.floor\(Math\.random\(\) \* \(_sc\.scrollPxMax - _sc\.scrollPxMin\)\)/.test(hsd)
+         && /scrollPxMin: 500, scrollPxMax: 820/.test(hsd));
       ok('🔴㉒ 굴리기가 실패해도 수집은 계속한다', /catch \(e\) \{ \/\* 굴리기 실패는/.test(hsd));
       ok('🔴㉒ 굴리기는 화면만 움직인다(네이버 요청 0건)',
          /window\.scrollBy\(0, px\)/.test(grab('scrollStep')) && !/fetch|XMLHttpRequest|tabs\.update/.test(hsd));

@@ -346,9 +346,34 @@ def _targets(conn, keywords) -> dict:
         return {}
 
 
+def _with_settings(resp: dict, worker_no, instance_id=None) -> dict:
+    """⚙ v1.27.0 — 응답에 서버 설정을 싣는다(대표 확정 2026-09-23 「서버 배포만으로」).
+    옛 수집기는 모르는 칸을 무시하므로 무회귀. 실패하면 싣지 않는다(수집기는 마지막 값을 쓴다)."""
+    try:
+        from collector_settings import settings_for
+        st = settings_for(worker_no, instance_id)
+        if st:
+            resp["settings"] = st
+    except Exception as e:
+        logger.warning(f"[collector] 서버 설정 싣기 실패(무시 — 수집기는 마지막 값 유지): {e}")
+    return resp
+
+
 @router.get("/keywords")
 def get_collect_keywords(hour: int = None, worker: int = 0, workers: int = 1,
                          x_collector_token: str = Header(None)):
+    """확장이 **이번 시간대에** 수집할 키워드를 받아간다 — 응답마다 ⚙ 서버 설정을 싣는다(v1.27.0)."""
+    resp = _get_collect_keywords(hour, worker, workers, x_collector_token)
+    try:
+        w, wc = _split_norm(worker, workers)
+        worker_no = (w + 1) if wc > 1 else 1
+    except Exception:
+        worker_no = None
+    return _with_settings(resp, worker_no)
+
+
+def _get_collect_keywords(hour: int = None, worker: int = 0, workers: int = 1,
+                          x_collector_token: str = None):
     """확장이 **이번 시간대에** 수집할 키워드를 받아간다.
 
     hour 를 주면 그 시간대 슬롯 + 오늘 지나간 슬롯 중 아직 못 한 것(밀린 것)을 함께 준다.
@@ -520,6 +545,11 @@ class HeartbeatReport(BaseModel):
     dayTotal: Optional[int] = None
     lastError: Optional[str] = None
     alarms: Optional[List[str]] = None
+    settingsRev: Optional[int] = None      # ⚙ v1.27.0 — 이 기계가 지금 쓰는 서버 설정 번호
+    settingsHash: Optional[str] = None     # ⚙ 그 설정의 지문(서버가 보낸 값 그대로)
+    settingsNote: Optional[str] = None     # ⚙ 안전선에 걸려 당겨 쓴 칸·버린 칸(있을 때만)
+    commandsDone: Optional[List[str]] = None   # ⚙ 실행한 한 번짜리 명령 id(최근 것)
+    pausedByServer: Optional[bool] = None  # ⚙ 서버 설정으로 이 기계만 멈춰 있나
     uploadSummary: Optional[dict] = None   # 📤 4차 — 미전송 보관함 요약(schema·count·payloadBytes·reviewRequiredCount·oldestObservedAt)
 
 
@@ -548,7 +578,7 @@ def report_heartbeat(req: HeartbeatReport, x_collector_token: str = Header(None)
     logger.info(f"[collector] 📡 heartbeat {row['worker_no']}/{row['worker_count']} v{row['ext_version'] or '?'} "
                 f"{row['reason']} paused={row['paused_local']} screen={row['paused_screen']} "
                 f"blocked_until={row['blocked_until'] or '-'} running={row['running']}")
-    return {"success": True, "serverTime": row["last_seen"]}
+    return _with_settings({"success": True, "serverTime": row["last_seen"]}, row.get("worker_no"), row.get("instance_id"))
 
 
 class BlockReport(BaseModel):
@@ -735,6 +765,44 @@ class CollectControlReq(BaseModel):
     """화면에서 수집을 끄고 켤 때. worker=-1 = 전체, 0,1,2… = 그 기계(0-base)."""
     worker: int = -1
     stopped: bool = True
+
+
+class CollectorReportUpload(BaseModel):
+    """⚙ v1.27.0 — 서버 명령(uploadLogs·uploadDiag)을 받은 수집기가 올리는 로그·진단 파일."""
+    instanceId: Optional[str] = None
+    kind: Optional[str] = None
+    text: Optional[str] = None
+
+
+@router.post("/report")
+def upload_collector_report(req: CollectorReportUpload, x_collector_token: str = Header(None)):
+    """수집기가 서버 명령으로 올린 로그·진단을 받는다(기계별·종류별 최근 5건).
+    ⚠️ 로그에는 검색어가 있다 — 본문을 진단 워크플로 로그에 찍지 말 것(건수·크기만)."""
+    _auth(x_collector_token)
+    from collector_reports import save as _rep_save
+    from db_busy import write_with_retry, DbBusy
+    try:
+        r = write_with_retry(DB_PATH, lambda c: _rep_save(c, req.instanceId, req.kind, req.text))
+    except DbBusy:
+        raise HTTPException(status_code=503, detail="db-busy: 서버가 배치 중입니다. 다음 신호에 다시 받습니다.")
+    if not r.get("saved"):
+        raise HTTPException(status_code=400, detail=r.get("reason") or "저장 안 됨")
+    logger.info(f"[collector] ⚙ 수집기 보고 받음 — {req.kind} {r.get('bytes')}B")
+    return {"success": True, "at": r.get("at")}
+
+
+@router.get("/reports")
+def list_collector_reports(instance: Optional[str] = None, kind: Optional[str] = None, limit: int = 5,
+                           current_user: dict = Depends(get_current_user)):
+    """관리자 전용 — 수집기가 올린 로그·진단(최근 것부터)."""
+    if current_user.get("role") not in ("admin", "superadmin"):
+        raise HTTPException(status_code=403, detail="관리자만 볼 수 있습니다.")
+    from collector_reports import latest as _rep_latest
+    conn = sqlite3.connect(DB_PATH, timeout=10)
+    try:
+        return {"success": True, "reports": _rep_latest(conn, instance, kind, limit)}
+    finally:
+        conn.close()
 
 
 @router.get("/control")

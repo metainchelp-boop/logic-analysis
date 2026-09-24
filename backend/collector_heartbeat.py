@@ -59,7 +59,10 @@ def ensure_table(conn) -> None:
     # 📤 4차(코덱스 이식) — 미전송 보관함 요약 칸. 옛 표에도 ALTER 로 더한다(멱등 · 실패 무시).
     try:
         cols = {r[1] for r in conn.execute("PRAGMA table_info(collector_heartbeat)").fetchall()}
-        for name, ddl in (("upload_summary_json", "TEXT"), ("upload_summary_at", "INTEGER")):
+        for name, ddl in (("upload_summary_json", "TEXT"), ("upload_summary_at", "INTEGER"),
+                          # ⚙ v1.27.0 — 이 기계가 지금 쓰는 서버 설정(번호·지문·당겨 쓴 칸·실행한 명령)
+                          ("settings_rev", "INTEGER"), ("settings_hash", "TEXT"),
+                          ("settings_note", "TEXT"), ("commands_done", "TEXT"), ("paused_server", "INTEGER")):
             if name not in cols:
                 conn.execute(f"ALTER TABLE collector_heartbeat ADD COLUMN {name} {ddl}")
         conn.commit()
@@ -157,6 +160,17 @@ def record(conn, payload: Dict[str, Any], now: Optional[datetime] = None) -> Dic
                last_error=excluded.last_error, alarms=excluded.alarms,
                last_seen=excluded.last_seen, seen_count=collector_heartbeat.seen_count+1""",
         row)
+    # ⚙ v1.27.0 — 서버 설정 적용 보고. 옛 수집기는 안 보내므로 None(= 「설정 미보고」) 그대로 둔다.
+    if p.get("settingsHash") is not None or p.get("settingsRev") is not None:
+        cd = p.get("commandsDone")
+        cd_s = ",".join(str(x)[:60] for x in cd)[:400] if isinstance(cd, (list, tuple)) else ""
+        try:
+            conn.execute("UPDATE collector_heartbeat SET settings_rev=?, settings_hash=?, settings_note=?, commands_done=?, "
+                         "paused_server=? WHERE instance_id=?",
+                         (_i(p.get("settingsRev"), 0) or None, str(p.get("settingsHash") or "")[:16],
+                          str(p.get("settingsNote") or "")[:200], cd_s, 1 if p.get("pausedByServer") else 0, iid))
+        except Exception:
+            pass   # 칸이 없는 옛 표 — 신호 자체는 이미 저장됐다
     if row["upload_summary_at"] is not None:
         try:
             conn.execute("UPDATE collector_heartbeat SET upload_summary_json=?, upload_summary_at=? WHERE instance_id=?",
@@ -179,6 +193,8 @@ def status_text(r: Dict[str, Any], now: Optional[datetime] = None) -> str:
         return "⛔ 신호 없음"
     if r.get("paused_local"):
         return "⏸ 일시정지(사람이 팝업에서 누름)"
+    if r.get("paused_server"):
+        return "⏸ 서버가 이 기계를 멈춤(수집기 설정)"
     bu = str(r.get("blocked_until") or "")
     if bu and bu > _now_str(n):
         return f"🧱 캡차 쉼 — {bu[11:16]} 이후 재개"
@@ -215,6 +231,13 @@ def machines(conn, now: Optional[datetime] = None) -> List[Dict[str, Any]]:
             except Exception:
                 r["uploadSummary"], r["uploadSummaryStatus"] = None, "INVALID"
             r["status"] = status_text(r, n)
+            # ⚙ v1.27.0 — 서버 설정을 제대로 쓰고 있나(번호·지문 대조). 판정 실패는 「못 쟀다」.
+            try:
+                from collector_settings import match_text, expected_hash
+                r["settingsText"] = match_text(r.get("settings_rev"), r.get("settings_hash"), r.get("worker_no"))
+                r["settingsMatch"] = bool(r.get("settings_hash")) and r.get("settings_hash") == expected_hash(r.get("worker_no"))
+            except Exception:
+                r["settingsText"], r["settingsMatch"] = "설정 판정 실패", None
             r["machine"] = f"{r.get('worker_no', 1)}/{r.get('worker_count', 1)}"
             out.append(r)
         return out
