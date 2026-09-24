@@ -287,6 +287,10 @@ jobs:
       #    nvMid 정확 식별 자동 찾기 · 00:30 백업 안전 · 관측 기준 멈춤 감시 · 확장 판독 조각.
       - name: 회귀 — 순위 기록 순서 가드(가짜 DB 실제 실행)
         run: python backend/tests/test_rank_guard.py
+      # 2026-09-24 — 가드가 자기 쓰기 잠금에 막혀 추적 상품 순위가 이틀 0건이던 것. 위 시험은 저장기를
+      #    가짜로 끼워 다른 연결이 쓰는 일이 없어 못 잡았다 → 진짜 database·naver_crawler 로 파일 DB(WAL)에 쓴다.
+      - name: 회귀 — 순서 가드가 자기 잠금에 막히지 않는다(진짜 저장기 · 파일 DB)
+        run: python backend/tests/test_rank_guard_lock.py
       - name: 회귀 — 코덱스 이식 3차 배선(봉투 전달·배치 가드·백업·nvMid·확장)
         run: python backend/tests/test_codex_port_3.py
 

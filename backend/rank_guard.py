@@ -57,7 +57,17 @@ def observation_key(observation: Optional[Dict[str, Any]]) -> str:
 
 
 def claim(conn, axis: str, target_id: int, keyword: str, day: str, observation_id: str, finished_at: int) -> bool:
-    """이 대상에 이 관측을 적어도 되는가. 더 새로운 관측이 이미 적혀 있으면 False."""
+    """이 대상에 이 관측을 적어도 되는가. 더 새로운 관측이 이미 적혀 있으면 False.
+
+    ⚠️ 2026-09-24 — 적은 뒤 **바로 확정(commit)한다.** 종전엔 확정하지 않고 돌아가서, 호출한 쪽이
+       연결을 계속 쥔 채 **다른 연결**(`database.save_ranking_daily` · `save_ranking` 은 매번 새 연결)로
+       순위를 저장하다 **자기 자신이 쥔 쓰기 잠금에 막혔다** — 30초 대기 × 2회 뒤 `database is locked`.
+       그래서 9/22 이 가드가 들어간 뒤로 **추적 상품 순위가 한 줄도 저장되지 않았다**(rankings 마지막
+       9/22 10:29 · 업체 순위는 같은 연결로 적어 멀쩡했다 — 그래서 늦게 드러났다). 그 60초 동안 잠금을
+       쥐고 있어 다른 쓰기(업로드·신호)까지 `database is locked` 로 죽었다(9/23 23:43 `/serp` 500).
+       호출처 4곳(rank_record 2 · scheduler 2)이 모두 같은 모양이라 **여기 한 곳에서** 푼다.
+       호출한 쪽의 앞선 쓰기도 함께 확정되는데, 호출처 어디도 되돌리기(rollback)에 기대지 않는다(확인함).
+    """
     try:
         init_db(conn)
         old = conn.execute("SELECT finished_at FROM collector_rank_projections "
@@ -70,6 +80,7 @@ def claim(conn, axis: str, target_id: int, keyword: str, day: str, observation_i
             ON CONFLICT(axis, target_id, keyword, collected_date) DO UPDATE SET
             observation_id=excluded.observation_id, finished_at=excluded.finished_at""",
                      (axis, int(target_id), keyword, day, observation_id, int(finished_at)))
+        conn.commit()   # ⚠️ 지우지 말 것 — 위 주석(자기 잠금에 막히는 사고)
         return True
     except Exception as e:
         logger.warning(f"[rank_guard] 순서 가드 조회 실패(거르지 않음) [{keyword}/{axis}:{target_id}]: {e}")
