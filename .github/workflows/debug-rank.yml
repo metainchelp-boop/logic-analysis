@@ -346,7 +346,21 @@ jobs:
             # 최근 7일 동안 한 번이라도 완료된 키워드 비율
             r = conn.execute("SELECT COUNT(DISTINCT keyword) FROM (SELECT keyword FROM collected_serp WHERE collected_date >= date(?, '-6 days') UNION SELECT keyword FROM collector_found_done WHERE collected_date >= date(?, '-6 days'))", (today, today)).fetchone()
             print("  최근 7일 한 번이라도 완료된 키워드:", r[0])
-
+            print("  [시간대별 2쪽 이상 읽음/시도 — 기계 1 | 기계 2]")
+            b = collections.OrderedDict()
+            for at, meta in conn.execute("SELECT received_at, meta_json FROM collector_observations WHERE received_at >= '2026-09-24 10:00:00' ORDER BY received_at"):
+                try:
+                    o = (json.loads(meta or "{}").get("observation") or {})
+                except Exception:
+                    o = {}
+                w = hb.get(str(o.get("workerId") or ""), ("?",))[0]
+                e = b.setdefault(str(at)[5:13], {1: [0, 0], 2: [0, 0]})
+                if w in (1, 2):
+                    e[w][1] += 1
+                    if isinstance(o.get("pagesRead"), int) and o["pagesRead"] >= 2:
+                        e[w][0] += 1
+            for k, e in b.items():
+                print("   %s시  %2d/%-3d | %2d/%-3d" % (k, e[1][0], e[1][1], e[2][0], e[2][1]))
             PY
       - name: 🛰 수집 현황판 라이브 확인 (board_live=on · 읽기 전용)
         if: ${{ github.event.inputs.board_live == 'on' }}
