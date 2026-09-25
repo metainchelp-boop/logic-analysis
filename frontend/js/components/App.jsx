@@ -13,7 +13,7 @@ window.App = function App() {
     // URL hash에서 현재 페이지 복원 (새로고침 시 탭 유지)
     var _getPageFromHash = function() {
         var hash = window.location.hash.replace('#', '');
-        var validPages = ['home', 'place', 'placetrack', 'analysis', 'rank', 'management', 'learning', 'seo', 'guide', 'settings'];
+        var validPages = ['home', 'place', 'placetrack', 'analysis', 'rank', 'collector', 'management', 'learning', 'seo', 'guide', 'settings'];
         return validPages.indexOf(hash) !== -1 ? hash : 'home';
     };
     const [currentPage, setCurrentPage] = useState(_getPageFromHash);
@@ -678,6 +678,14 @@ window.App = function App() {
         React.createElement('div', null,
             React.createElement(window.AppShellBar, { activePage: 'place', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
             React.createElement(window.PlaceAnalysisPage, { currentUser: currentUser })
+        ),
+        React.createElement(window.ChatWidget, { currentUser: currentUser })
+    );
+
+    if (currentPage === 'collector') return React.createElement(React.Fragment, null,
+        React.createElement('div', null,
+            React.createElement(window.AppShellBar, { activePage: 'collector', currentUser: currentUser, health: health, onNavigate: setCurrentPage }),
+            React.createElement(window.CollectorBoardPage, { currentUser: currentUser })
         ),
         React.createElement(window.ChatWidget, { currentUser: currentUser })
     );

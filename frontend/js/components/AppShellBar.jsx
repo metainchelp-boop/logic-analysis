@@ -20,7 +20,9 @@ var _AS_GROUPS = function(cu) {
         { label: '쇼핑', items: [
             (role === 'manager' || role === 'superadmin') && { page: 'seo', icon: '🔍', name: 'SEO 최적화' },
             { page: 'analysis', icon: '🛒', name: '스토어 분석' },
-            { page: 'rank', icon: '📊', name: '쇼핑 순위 추적', badge: 'up' }
+            { page: 'rank', icon: '📊', name: '쇼핑 순위 추적', badge: 'up' },
+            /* 🛰 수집 현황판(2026-09-25 대표 지시 「매번 여기서 물어볼 수 없어」) — 뷰어 제외 */
+            role !== 'viewer' && { page: 'collector', icon: '🛰', name: '수집 현황판' }
         ].filter(Boolean) },
         { label: '플레이스', items: [
             { page: 'place', icon: '📍', name: '플레이스 분석' },
@@ -35,7 +37,7 @@ var _AS_GROUPS = function(cu) {
     ].filter(Boolean);
 };
 var _AS_CRUMB = {
-    home: '홈 / 대시보드', seo: '쇼핑 / SEO 최적화', analysis: '쇼핑 / 스토어 분석', rank: '쇼핑 / 쇼핑 순위 추적',
+    home: '홈 / 대시보드', seo: '쇼핑 / SEO 최적화', analysis: '쇼핑 / 스토어 분석', rank: '쇼핑 / 쇼핑 순위 추적', collector: '쇼핑 / 수집 현황판',
     place: '플레이스 / 플레이스 분석', placetrack: '플레이스 / 지도 순위 추적',
     management: '통합 / 로직 분석 (업체)', learning: '통합 / 학습센터', guide: '통합 / 설명서',
     settings: '관리 / 설정', users: '관리 / 직원'

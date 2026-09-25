@@ -14,6 +14,7 @@
   "js/components/DashboardSummary.jsx",
   "js/components/RankTrackingSection.jsx",
   "js/components/KeywordRankPage.jsx",
+  "js/components/CollectorBoardPage.jsx",
   "js/components/KeywordVolumeSection.jsx",
   "js/components/RelatedKeywordsSection.jsx",
   "js/components/SeoDiagnosisSection.jsx",
