@@ -42,6 +42,10 @@ on:
         description: '신고 #275 — 추적 등록(/products/track) 실패 기록 · 9/22 이후 등록 상품 nvMid·연결 상태(읽기 전용 · 이름·주소 미출력)'
         required: false
         default: 'off'
+      board_live:
+        description: '🛰 수집 현황판(#286) 라이브 확인 — off(기본) / on. 파일·경로·인증·번들 표지 + 실제 DB 로 현황판 계산(숫자만 · 키워드 미출력).'
+        required: false
+        default: 'off'
       human_live:
         description: '📖 순위 읽기 도우미(#284) 라이브 확인 — off(기본) / on. 컨테이너 파일·경로 등록·표 존재·인증 없는 호출의 응답 코드·기동 뒤 오류 줄(읽기 전용 · 키워드 미출력).'
         required: false
@@ -285,6 +289,59 @@ jobs:
             except Exception as e:
                 print("  상한 조회 실패(못 쟀다):", e)
             PY
+      - name: 🛰 수집 현황판 라이브 확인 (board_live=on · 읽기 전용)
+        if: ${{ github.event.inputs.board_live == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          command_timeout: 180s
+          script: |
+            echo "== 컨테이너 기동 · 재시작 =="
+            docker inspect -f 'StartedAt={{.State.StartedAt}} Restarts={{.RestartCount}}' logic-analysis
+            echo "== 파일 =="
+            docker exec -i logic-analysis sh -c 'ls -l /app/collector_board.py 2>&1; grep -c "def collector_board" /app/collector.py; grep -c "role\") != \"superadmin\"" /app/collector.py'
+            echo "== 인증 없이 부르면(401 이면 경로 존재 · 404 면 없음) =="
+            for u in /api/collector/board /api/collector/zzz-nonexistent; do c=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:5050$u"); echo "  $c  $u"; done
+            echo "== 서버 번들 표지 =="
+            D=/root/logic-analysis-deploy/frontend/dist
+            grep -o 'app\.[a-f0-9]*\.js' /root/logic-analysis-deploy/frontend/index.bundle.html | head -1
+            for m in '수집 현황판' "/collector/board" 'CollectorBoardPage' "page: 'collector'" '최고관리자만 볼 수 있습니다'; do n=$(cat "$D"/app.*.js 2>/dev/null | grep -o -- "$m" | wc -l); echo "  [$n] $m"; done
+            echo "== 실제 DB 로 현황판 계산(읽기 전용 · 숫자만) =="
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sys, sqlite3, json, time
+            sys.path.insert(0, "/app")
+            import collector_board as cb, collector_heartbeat as hb, split_rule
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            t0 = time.time()
+            try:
+                from collector import _keyword_universe, _effective_date
+                today = _effective_date(); uni = list(_keyword_universe(conn).keys())
+            except Exception as e:
+                from datetime import date; today = date.today().isoformat(); uni = None
+                print("  유니버스 못 읽음:", type(e).__name__, str(e)[:80])
+            rows = hb.machines(conn)
+            out = cb.build(conn, today, uni, split_ok=split_rule.split_ok, machines_rows=rows, helper=None)
+            print("  계산 시간 %.2f초 · 기준일 %s" % (time.time() - t0, today))
+            for v in out["verdicts"]:
+                print("  [%s] %s — %s" % (v["level"], v["title"], v["text"]))
+            s = out["summary"]
+            print("  오늘:", {k: s.get(k) for k in ("universe","completed","full","found","partial","notTried","attempts","human","realBlocks","diagBlocks")})
+            print("  14일 완료:", [h["completed"] for h in out["history"]])
+            print("  기계(현재):", [(m.get("machine"), m.get("ext_version"), m.get("minutes_since"), m.get("status")) for m in (out["machines"] or [])])
+            print("  옛 설치본:", len(out["oldMachines"] or []))
+            b = out["blocksToday"]; w = out["blocksWeek"]
+            print("  막힘 오늘:", b and {"real": b["real"], "diag": b["diag"], "other": b["other"], "codes": [(c["code"], c["count"]) for c in b["codes"]]})
+            print("  막힘 7일:", w and {"real": w["real"], "diag": w["diag"], "other": w["other"]})
+            print("  최근 진짜 차단 건수:", None if out["recentRealBlocks"] is None else len(out["recentRealBlocks"]))
+            print("  멈춘 이유:", [(r["reason"][:20], r["count"]) for r in (out["stopReasons"] or [])][:6])
+            print("  순위 기록:", out["rankWrites"])
+            print("  JSON 크기:", len(json.dumps(out, ensure_ascii=False, default=str)), "바이트")
+            PY
+            echo "== 기동 뒤 오류 줄 =="
+            docker logs logic-analysis 2>&1 | grep -c -E 'Traceback|ERROR' || true
       - name: 📖 순위 읽기 도우미 라이브 확인 (human_live=on · 읽기 전용)
         if: ${{ github.event.inputs.human_live == 'on' }}
         uses: appleboy/ssh-action@v1.0.3
