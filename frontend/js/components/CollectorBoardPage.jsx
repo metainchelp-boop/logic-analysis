@@ -75,7 +75,7 @@ function _cbLegend(aName, bName) {
 window.CollectorBoardPage = function CollectorBoardPage(props) {
     var useState = React.useState, useEffect = React.useEffect, useCallback = React.useCallback;
     var currentUser = props.currentUser || {};
-    var isViewer = currentUser.role === 'viewer';
+    var isViewer = currentUser.role !== 'superadmin';   // 대표 확정 「나만 보게 해」 — 최고관리자만
 
     // undefined = 불러오는 중 · null = 못 불러옴 · 객체 = 현황
     var _d = useState(undefined); var data = _d[0], setData = _d[1];
@@ -112,7 +112,7 @@ window.CollectorBoardPage = function CollectorBoardPage(props) {
         React.createElement('button', { style: _krOpsBtn, onClick: load, disabled: loading }, loading ? '불러오는 중…' : '↻ 새로고침'));
 
     if (isViewer) return React.createElement('div', { style: _krWrap }, head,
-        React.createElement('div', { style: _krCard }, '뷰어 계정은 수집 현황판을 볼 수 없습니다.'));
+        React.createElement('div', { style: _krCard }, '수집 현황판은 최고관리자만 볼 수 있습니다.'));
     if (data === undefined) return React.createElement('div', { style: _krWrap }, head,
         React.createElement('div', { style: _krCard }, '불러오는 중…'));
     if (data === null) return React.createElement('div', { style: _krWrap }, head,

@@ -7,7 +7,7 @@
   ④ 판정 줄 — 진짜 차단 1건이면 「문제」 · 기계 끊김 · 설정 대기 · 미전송 · 분할 겹침/누락 · 오늘 순위 기록
   ⑤ 3일 넘게 조용한 기계 줄은 「옛 설치본」으로 따로 뺀다(9/25 c5de44 오독 방지)
   ⑥ 분할 검사는 수집기와 같은 split_rule 로 센다(겹침·누락 0)
-  ⑦ 배선 — 경로는 로그인 필요·뷰어 거절 · 화면 번들·메뉴·주소 등록 · 화면이 null 을 「미확인」으로 그린다 · 게이트 등록
+  ⑦ 배선 — 경로는 최고관리자만(대표 확정 「나만 보게 해」) · 화면 번들·메뉴·주소 등록 · 화면이 null 을 「미확인」으로 그린다 · 게이트 등록
 ⚠️ stdlib 만.
 """
 import os
@@ -184,7 +184,7 @@ col = open(os.path.join(BACKEND, "collector.py"), encoding="utf-8").read()
 m = re.search(r'@router\.get\("/board"\)\s*\ndef collector_board\(current_user: dict = Depends\(get_current_user\)\):(.*?)\n\ndef ', col, re.S)
 ok("경로 /api/collector/board 는 로그인 필요", bool(m))
 body = m.group(1) if m else ""
-ok("뷰어는 거절", 'current_user.get("role") == "viewer"' in body and "403" in body)
+ok("최고관리자만(대표 확정 「나만 보게 해」)", 'current_user.get("role") != "superadmin"' in body and "403" in body)
 ok("유니버스를 못 읽으면 None(0 개로 치지 않음)", "uni = None" in body and "uni = []" not in body)
 ok("분할은 수집기와 같은 split_ok", "split_ok=_split_ok" in body)
 FE = os.path.join(ROOT, "frontend")
@@ -192,6 +192,7 @@ page = open(os.path.join(FE, "js", "components", "CollectorBoardPage.jsx"), enco
 ok("화면이 /collector/board 를 부른다", "api.get('/collector/board')" in page)
 ok("화면이 null 을 「미확인」으로", "'미확인'" in page and "v === null || v === undefined" in page)
 ok("화면이 진짜 차단과 진단 보고를 갈라 쓴다", "진짜 차단" in page and "진단 보고" in page)
+ok("화면도 최고관리자가 아니면 안내만(서버를 부르지 않음)", "var isViewer = currentUser.role !== 'superadmin'" in page and "if (isViewer) return;" in page)
 ok("5분마다 새로 불러온다", "_CB_REFRESH_MS = 5 * 60 * 1000" in page and "setInterval(load, _CB_REFRESH_MS)" in page)
 import json  # noqa: E402
 man = json.load(open(os.path.join(FE, "build.manifest.json"), encoding="utf-8"))
@@ -201,7 +202,7 @@ app = open(os.path.join(FE, "js", "components", "App.jsx"), encoding="utf-8").re
 ok("주소 #collector 등록 · 화면 연결", "'collector'" in app.split("validPages", 1)[1].split("]", 1)[0]
    and "window.CollectorBoardPage" in app)
 shell = open(os.path.join(FE, "js", "components", "AppShellBar.jsx"), encoding="utf-8").read()
-ok("왼쪽 메뉴에 수집 현황판(뷰어 제외)", "role !== 'viewer' && { page: 'collector'" in shell and "collector: '쇼핑 / 수집 현황판'" in shell)
+ok("왼쪽 메뉴에 수집 현황판(최고관리자만)", "role === 'superadmin' && { page: 'collector'" in shell and "collector: '쇼핑 / 수집 현황판'" in shell)
 dep = open(os.path.join(ROOT, ".github", "workflows", "deploy.yml"), encoding="utf-8").read()
 ok("이 시험이 게이트에 있다", "python backend/tests/test_collector_board.py" in dep)
 

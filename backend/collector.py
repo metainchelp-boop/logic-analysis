@@ -971,13 +971,14 @@ def collect_health(current_user: dict = Depends(get_current_user)):
 
 @router.get("/board")
 def collector_board(current_user: dict = Depends(get_current_user)):
-    """📊 수집 현황판(대표 지시 2026-09-25 「매번 여기서 물어볼 수 없어」) — 로그인 직원 · 읽기 전용.
+    """📊 수집 현황판(대표 지시 2026-09-25 「매번 여기서 물어볼 수 없어」) — 최고관리자 전용(「나만 보게 해」) · 읽기 전용.
 
     진단 워크플로로 손으로 재던 항목(진짜 차단 · 기계 · 분할 · 완료 · 추이 · 순위 기록 · 도우미)을 한 번에 준다.
     규칙은 collector_board.py 한 곳 · 조회 실패 칸은 None(0 과 섞지 않는다).
     """
-    if current_user.get("role") == "viewer":
-        raise HTTPException(status_code=403, detail="뷰어 계정은 수집 현황판을 볼 수 없습니다.")
+    # 대표 확정(2026-09-25) 「나만 보게 해」 — 최고관리자 전용
+    if current_user.get("role") != "superadmin":
+        raise HTTPException(status_code=403, detail="수집 현황판은 최고관리자만 볼 수 있습니다.")
     import collector_board as _cb
     today = _effective_date()
     conn = sqlite3.connect(DB_PATH, timeout=10)

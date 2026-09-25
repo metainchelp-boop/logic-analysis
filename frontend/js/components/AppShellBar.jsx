@@ -21,8 +21,8 @@ var _AS_GROUPS = function(cu) {
             (role === 'manager' || role === 'superadmin') && { page: 'seo', icon: '🔍', name: 'SEO 최적화' },
             { page: 'analysis', icon: '🛒', name: '스토어 분석' },
             { page: 'rank', icon: '📊', name: '쇼핑 순위 추적', badge: 'up' },
-            /* 🛰 수집 현황판(2026-09-25 대표 지시 「매번 여기서 물어볼 수 없어」) — 뷰어 제외 */
-            role !== 'viewer' && { page: 'collector', icon: '🛰', name: '수집 현황판' }
+            /* 🛰 수집 현황판(2026-09-25 대표 지시 「매번 여기서 물어볼 수 없어」) — 최고관리자 전용(「나만 보게 해」) */
+            role === 'superadmin' && { page: 'collector', icon: '🛰', name: '수집 현황판' }
         ].filter(Boolean) },
         { label: '플레이스', items: [
             { page: 'place', icon: '📍', name: '플레이스 분석' },
