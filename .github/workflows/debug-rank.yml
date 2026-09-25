@@ -370,6 +370,34 @@ jobs:
                 for c in set(found): codes[c] += 1
                 if not found: codes["p2 기록 없음"] += 1
             print("  [오늘 TAP_PROBE %d건 — 화면이 받은 2페이지 응답 코드별 건수]" % n, dict(codes))
+            # 클릭 방식 — 관측 봉투 meta.nav.how(trusted=진짜 입력 · synth=합성) · tnote(진짜 입력 실패 사유)
+            def _bucket(at):
+                t = str(at)
+                if t < "2026-09-24 13:00": return "A 9/24 오전(교체 전)"
+                if t < "2026-09-24 19:00": return "B 9/24 13~18시(2쪽 됨)"
+                return "C 9/24 19시~(2쪽 막힘)"
+            agg = collections.defaultdict(collections.Counter)
+            for at, meta in conn.execute("SELECT received_at, meta_json FROM collector_observations WHERE received_at >= '2026-09-24 00:00:00'"):
+                try:
+                    m = json.loads(meta or "{}"); nav = m.get("nav") or {}; o = m.get("observation") or {}
+                except Exception:
+                    continue
+                how = nav.get("how") or {}
+                g = agg[_bucket(at)]
+                g["시도"] += 1
+                if (how.get("trusted") or 0) > 0: g["진짜입력 클릭 있음"] += 1
+                if (how.get("synth") or 0) > 0: g["합성 클릭 있음"] += 1
+                if not how.get("trusted") and not how.get("synth"): g["클릭 없음(1쪽에서 끝)"] += 1
+                pr = o.get("pagesRead")
+                if isinstance(pr, int) and pr >= 2: g["2쪽 이상 읽음"] += 1
+                tn = str(nav.get("tnote") or "")
+                if tn: g["tnote:" + _re.sub(r"\d+", "#", tn)[:28]] += 1
+                v = str(m.get("collectorVersion") or "")
+                if v: g["ver:" + v] += 1
+            for k in sorted(agg):
+                g = agg[k]
+                print("  ==", k, {kk: vv for kk, vv in g.items() if not kk.startswith("tnote:")})
+                print("     진짜입력 실패 사유:", sorted(((kk[6:], vv) for kk, vv in g.items() if kk.startswith("tnote:")), key=lambda x: -x[1])[:6])
             PY
       - name: 🛰 수집 현황판 라이브 확인 (board_live=on · 읽기 전용)
         if: ${{ github.event.inputs.board_live == 'on' }}
