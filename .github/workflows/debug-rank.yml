@@ -361,6 +361,17 @@ jobs:
                         e[w][0] += 1
             for k, e in b.items():
                 print("   %s시  %2d/%-3d | %2d/%-3d" % (k, e[1][0], e[1][1], e[2][0], e[2][1]))
+            # TAP_PROBE 본문 — 화면이 받은 2페이지 응답 코드(키워드 미출력)
+            import re as _re
+            codes = collections.Counter(); n = 0; sample = []
+            for (body,) in conn.execute("SELECT body FROM collector_blocks WHERE at >= ? AND err LIKE 'TAP_PROBE%'", (today,)):
+                n += 1
+                found = _re.findall(r"\|p2\|(\d{3})\|", str(body or ""))
+                for c in set(found): codes[c] += 1
+                if not found: codes["p2 기록 없음"] += 1
+                if len(sample) < 3: sample.append(_re.sub(r"[가-힣]+", "*", str(body or ""))[:160])
+            print("  [오늘 TAP_PROBE %d건 — 화면이 받은 2페이지 응답 코드별 건수]" % n, dict(codes))
+            for x in sample: print("   표본(한글 가림):", x)
             PY
       - name: 🛰 수집 현황판 라이브 확인 (board_live=on · 읽기 전용)
         if: ${{ github.event.inputs.board_live == 'on' }}
