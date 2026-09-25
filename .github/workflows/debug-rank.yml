@@ -42,6 +42,10 @@ on:
         description: '신고 #275 — 추적 등록(/products/track) 실패 기록 · 9/22 이후 등록 상품 nvMid·연결 상태(읽기 전용 · 이름·주소 미출력)'
         required: false
         default: 'off'
+      cap3:
+        description: '기계별 소화량·완료율(3대 확장 판단용) — off(기본) / on. 최근 4일 기계별 시도·완료·멈춘 이유·읽은 페이지(숫자만).'
+        required: false
+        default: 'off'
       board_live:
         description: '🛰 수집 현황판(#286) 라이브 확인 — off(기본) / on. 파일·경로·인증·번들 표지 + 실제 DB 로 현황판 계산(숫자만 · 키워드 미출력).'
         required: false
@@ -288,6 +292,61 @@ jobs:
                 print(f"  서버 상한(effective_cap) = {collect_cap.effective_cap()} · 서버 시간표가 새 규칙인가 = {old == new}")
             except Exception as e:
                 print("  상한 조회 실패(못 쟀다):", e)
+            PY
+      - name: 기계별 소화량·완료율 (cap3=on · 읽기 전용)
+        if: ${{ github.event.inputs.cap3 == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          command_timeout: 180s
+          script: |
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sys, sqlite3, json, collections
+            DB = sys.argv[1] if len(sys.argv) > 1 else "file:/app/data/logic_data.db?mode=ro"
+            conn = sqlite3.connect(DB, uri=DB.startswith("file:"))
+            hb = {r[0]: (r[1], r[2], r[3]) for r in conn.execute("SELECT instance_id, worker_no, worker_count, ext_version FROM collector_heartbeat")}
+            days = [r[0] for r in conn.execute("SELECT DISTINCT collected_date FROM collector_observations ORDER BY 1 DESC LIMIT 4")]
+            print("  날짜:", days)
+            for d in days:
+                per = collections.defaultdict(lambda: collections.Counter())
+                pages = collections.defaultdict(list)
+                hours = collections.defaultdict(collections.Counter)
+                for kind, reason, meta, at in conn.execute("SELECT kind, reason, meta_json, received_at FROM collector_observations WHERE collected_date=?", (d,)):
+                    try:
+                        m = json.loads(meta or "{}"); o = m.get("observation") or {}
+                        wid = str(o.get("workerId") or "")
+                    except Exception:
+                        o, wid = {}, ""
+                    w = hb.get(wid, ("?",))[0] if wid else "legacy"
+                    c = per[w]; c["시도"] += 1; c["kind:" + kind] += 1
+                    if kind in ("positive", "evidence_only"): c["멈춤:" + (reason or "")[:14]] += 1
+                    pr = o.get("pagesRead")
+                    if isinstance(pr, int): pages[w].append(pr)
+                    hours[w][str(at)[11:13]] += 1
+                print("  ==", d)
+                for w in sorted(per, key=str):
+                    c = per[w]; done = c["kind:full"] + c["kind:full_positive"]
+                    pg = pages[w]
+                    print("   기계 %s: 시도 %d · 완료 %d(300위 %d · 대상다찾음 %d) · 완료율 %.0f%% · 읽은 페이지 평균 %.2f · 2쪽 이상 읽음 %d · 시간당 최대 %d · 가동 시간대 %d개" % (
+                        w, c["시도"], done, c["kind:full"], c["kind:full_positive"], 100.0 * done / max(1, c["시도"]),
+                        (sum(pg) / len(pg)) if pg else -1, sum(1 for p in pg if p >= 2), max(hours[w].values()) if hours[w] else 0, len(hours[w])))
+                    stops = sorted(((k[3:], v) for k, v in c.items() if k.startswith("멈춤:")), key=lambda x: -x[1])[:4]
+                    print("      멈춘 이유:", stops)
+            # 오늘 기준: 안 끝난 키워드가 몇 번 시도됐나
+            today = days[0] if days else None
+            if today:
+                done = {r[0] for r in conn.execute("SELECT keyword FROM collected_serp WHERE collected_date=? UNION SELECT keyword FROM collector_found_done WHERE collected_date=?", (today, today))}
+                tries = collections.Counter(r[0] for r in conn.execute("SELECT keyword FROM collector_observations WHERE collected_date=?", (today,)))
+                notdone = {k: n for k, n in tries.items() if k not in done}
+                dist = collections.Counter(min(n, 4) for n in notdone.values())
+                print("  오늘 시도했지만 안 끝난 키워드 %d개 · 시도 횟수 분포(4=4번 이상): %s" % (len(notdone), dict(sorted(dist.items()))))
+            # 최근 7일 동안 한 번이라도 완료된 키워드 비율
+            r = conn.execute("SELECT COUNT(DISTINCT keyword) FROM (SELECT keyword FROM collected_serp WHERE collected_date >= date(?, '-6 days') UNION SELECT keyword FROM collector_found_done WHERE collected_date >= date(?, '-6 days'))", (today, today)).fetchone()
+            print("  최근 7일 한 번이라도 완료된 키워드:", r[0])
+
             PY
       - name: 🛰 수집 현황판 라이브 확인 (board_live=on · 읽기 전용)
         if: ${{ github.event.inputs.board_live == 'on' }}
