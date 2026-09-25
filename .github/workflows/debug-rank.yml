@@ -370,6 +370,13 @@ jobs:
                 for c in set(found): codes[c] += 1
                 if not found: codes["p2 기록 없음"] += 1
             print("  [오늘 TAP_PROBE %d건 — 화면이 받은 2페이지 응답 코드별 건수]" % n, dict(codes))
+            # 한 번의 2쪽 시도에서 화면이 2쪽 요청을 몇 번 냈나(진짜 입력 클릭도 요청을 냈다면 2번)
+            for lab, lo, hi in (("B 9/24 13~18시", "2026-09-24 13:00", "2026-09-24 19:00"), ("C 9/24 19시~", "2026-09-24 19:00", "2099")):
+                cnt = collections.Counter()
+                for (body,) in conn.execute("SELECT body FROM collector_blocks WHERE at >= ? AND at < ? AND err LIKE 'TAP_PROBE%'", (lo, hi)):
+                    f = _re.findall(r"\|p2\|(\d{3})\|", str(body or ""))
+                    cnt["2쪽요청 %d번: %s" % (len(f), "+".join(f) if f else "-")] += 1
+                print("  [%s] 2쪽 요청 횟수·응답:" % lab, dict(cnt.most_common(6)))
             # 클릭 방식 — 관측 봉투 meta.nav.how(trusted=진짜 입력 · synth=합성) · tnote(진짜 입력 실패 사유)
             def _bucket(at):
                 t = str(at)
