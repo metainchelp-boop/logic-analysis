@@ -974,6 +974,61 @@ jobs:
             printf '%s\n' "$L" | grep '\[rank_record\]' | grep -oE '(상품 [0-9]+건 · 업체 [0-9]+건 순위 기록|상품 순위 기록 실패|업체 순위 기록 실패|locked)' | sed -E 's/상품 ([1-9][0-9]*)건/상품 N(>0)건/; s/업체 [0-9]+건/업체 *건/' | sort | uniq -c | head -10
             echo "  database is locked 줄 수(기동 뒤): $(printf '%s\n' "$L" | grep -c 'database is locked')"
             echo "  Traceback 줄 수(기동 뒤): $(printf '%s\n' "$L" | grep -c 'Traceback')"
+            echo "== ⑤ 오늘 08:00 순위 배치 요약(키워드 없는 줄만 · 9/25 07:59 KST 이후) =="
+            M=$(docker logs --since 2026-09-24T22:59:00Z logic-analysis 2>&1)
+            printf '%s\n' "$M" | grep -E '🔍 순위 추적 시작|🎯 추적 상품 자격 판정|📋 키워드 [0-9]+개|✅ 순위 추적 완료|❌ 순위 추적 전체 실패' | head -8
+            echo "  수집분이 오늘자 아님(건너뜀) 줄 수: $(printf '%s\n' "$M" | grep -c '수집분이 오늘자 아님')"
+            echo "  브라우저 수집분 사용 줄 수: $(printf '%s\n' "$M" | grep -c '브라우저 수집분 사용')"
+            echo "  홈탭 순위 저장 실패 줄 수: $(printf '%s\n' "$M" | grep -c '홈탭 순위 저장 실패')"
+            docker exec -i logic-analysis python3 - <<'PY'
+            # ⑥ 자격 있는 추적 상품의 키워드 — 오늘 수집·완료 흔적 · 읽기 전용 · 키워드 미출력(번호·시각·건수만)
+            import os, sys, sqlite3, datetime
+            sys.path.insert(0, "/app")
+            c = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True, timeout=20)
+            today = datetime.datetime.now().strftime("%Y-%m-%d")
+
+
+            def q(sql, args=()):
+                try:
+                    return c.execute(sql, args).fetchall()
+                except Exception as e:
+                    print(f"  ⚠️ 못 쟀다: {type(e).__name__}: {str(e)[:100]}")
+                    return None
+
+
+            print(f"== ⑥ 자격 있는 추적 상품의 키워드 — {today} 수집·완료 흔적(번호·시각·건수만) ==")
+            try:
+                from tracking_eligibility import eligible_tracked_product_ids
+                ok = eligible_tracked_product_ids(c, ensure_schema=False)
+            except Exception as e:
+                ok = None
+                print(f"  ⚠️ 판정 함수 못 불렀다: {type(e).__name__}: {str(e)[:100]}")
+            try:
+                from collect_slot import slot_of
+            except Exception:
+                slot_of = None
+            if ok is None:
+                print("  자격 판정 실패(None) — 못 쟀다")
+            else:
+                print(f"  자격 추적 상품 {len(ok)}개")
+                for pid in sorted(ok):
+                    kws = [r[0] for r in (q("SELECT keyword FROM tracked_keywords WHERE product_id=?", (pid,)) or [])]
+                    print(f"  상품 #{pid} · 키워드 {len(kws)}개")
+                    for i, kw in enumerate(kws, 1):
+                        obs = q("SELECT substr(received_at,12,5), projected FROM collector_observations "
+                                "WHERE keyword=? AND collected_date=? AND status<>'legacy' ORDER BY received_at", (kw, today)) or []
+                        serp = q("SELECT COUNT(*) FROM collected_serp WHERE keyword=? AND collected_date=?", (kw, today))
+                        fd = q("SELECT substr(received_at,12,5) FROM collector_found_done WHERE keyword=? AND collected_date=?", (kw, today))
+                        slot = "?"
+                        if slot_of:
+                            try:
+                                slot = f"{slot_of(kw)}시"
+                            except Exception:
+                                slot = "?"
+                        marks = [o[0] + ("✓" if o[1] else "") for o in obs][:8]
+                        print(f"    키워드{i} · 배정 시간대 {slot} · 오늘 업로드 {len(obs)}회 {marks} · 전량 수집분 {serp[0][0] if serp else '?'}"
+                              f" · 찾음완료 {fd[0][0] if fd else '없음'}")
+            PY
 
       - name: 로직분석 배포 효과 8차 — 살아 있는 추적 상품의 자격·기록 경로(읽기 전용 · 번호·조건만)
         if: ${{ github.event.inputs.analysis_audit == 'effect268h' }}
