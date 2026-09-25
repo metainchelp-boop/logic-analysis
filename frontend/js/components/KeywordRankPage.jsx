@@ -222,8 +222,8 @@ function CollectorOpsPanel(props) {
             '완료 = 그날 서버에 저장된 키워드 수 · 부분 = 막혀서 찾은 순위만 적은 키워드 · 미전송 = 기계가 아직 못 올린 결과(서버가 받으면 사라짐). 값이 「미확인」이면 못 잰 것이지 0 이 아닙니다.'));
 }
 /* ───────────────────────────────────────────────────────────────────────
- * 📖 관리팀 순위 읽기 도우미 — 운영 칸 (2026-09-24 대표 확정 4건)
- *   관리팀 직원이 직접 넘긴 네이버쇼핑 화면으로 채운 순위. 서버 = GET /api/human-view/stats(로그인).
+ * 📖 순위 읽기 도우미 — 운영 칸 (2026-09-24 대표 확정 4건 · 9/25 「하나로 통합해 전체 PC 에 설치」)
+ *   직원이 직접 넘긴 네이버쇼핑 화면으로 채운 순위. 서버 = GET /api/human-view/stats(로그인).
  *   ③ PC 번호만 보인다(직원 이름·계정은 서버가 받지도 않는다).
  *   ④ 첫 주 대조 — 같은 날 수집기 결과와 앞 20개가 같은 자리에 있는 비율(로그인/로그아웃 따로).
  *   「누가 채웠나」는 이 내부 화면에만 있다 — 광고주 보고서에는 순위만 나간다.
@@ -253,7 +253,7 @@ function HumanViewCard(props) {
     function showToken() {
         Promise.resolve().then(function() { return api.get('/human-view/token'); }).then(function(res) {
             if (!res || !res.token) throw new Error('bad');
-            if (alive.current) setView(function(v) { return Object.assign({}, v, { token: res.token, tokenMsg: '관리팀 PC 팝업의 「연결 코드」 칸에 넣어 주세요. 수집기 토큰과 다른 값입니다.' }); });
+            if (alive.current) setView(function(v) { return Object.assign({}, v, { token: res.token, tokenMsg: '도우미를 설치한 PC 팝업의 「연결 코드」 칸에 넣어 주세요. 수집기 토큰과 다른 값입니다.' }); });
         }).catch(function() {
             if (alive.current) setView(function(v) { return Object.assign({}, v, { tokenMsg: '연결 코드를 받지 못했습니다(최고관리자·서버 설정 확인).' }); });
         });
@@ -261,9 +261,9 @@ function HumanViewCard(props) {
     var d = view.data;
     if (!d && !view.error) return null;
     var pcs = d && d.pcs, recent = d && d.recent, lc = d && d.loginCompare;
-    return React.createElement('section', { style: _krCard, 'aria-label': '관리팀 순위 읽기 도우미', 'data-human-view': true },
+    return React.createElement('section', { style: _krCard, 'aria-label': '순위 읽기 도우미', 'data-human-view': true },
         React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' } },
-            React.createElement('strong', { style: { fontSize: 15 } }, '📖 관리팀 순위 읽기 도우미' + (d ? ' · ' + d.date : '')),
+            React.createElement('strong', { style: { fontSize: 15 } }, '📖 순위 읽기 도우미' + (d ? ' · ' + d.date : '')),
             React.createElement('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap' } },
                 React.createElement('button', { type: 'button', onClick: load, style: _krOpsBtn }, '새로고침'),
                 isSuper && React.createElement('button', { type: 'button', onClick: showToken, style: _krOpsBtn }, '🔑 연결 코드 보기'))),
@@ -272,7 +272,7 @@ function HumanViewCard(props) {
             view.token && React.createElement('code', { style: { fontSize: 12, background: '#eff6ff', padding: '2px 6px', borderRadius: 6, marginRight: 6, userSelect: 'all', wordBreak: 'break-all' } }, view.token),
             view.tokenMsg),
         d && (pcs === null ? React.createElement('p', { style: { fontSize: 12, color: '#b45309' } }, 'PC별 기록을 읽지 못했습니다(미확인).')
-            : !pcs.length ? React.createElement('p', { style: { fontSize: 12, color: '#64748b', margin: '8px 0 0' } }, '오늘 읽은 화면이 없습니다 — 관리팀 PC 에 아직 설치 전이거나 오늘 쓰지 않았습니다.')
+            : !pcs.length ? React.createElement('p', { style: { fontSize: 12, color: '#64748b', margin: '8px 0 0' } }, '오늘 읽은 화면이 없습니다 — 아직 설치한 PC 가 없거나 오늘 쓰지 않았습니다.')
             : React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 8, marginTop: 10 } },
                 pcs.map(function(p) {
                     return React.createElement('div', { key: p.pc }, _krOpsTile('PC ' + p.pc + '번', _krOpsNum(p.keywords) + '개 키워드',
@@ -286,7 +286,7 @@ function HumanViewCard(props) {
                     var done = r.complete || (r.targets > 0 && r.found >= r.targets);
                     return React.createElement('tr', { key: i },
                         React.createElement('td', { style: _krTd }, r.keyword),
-                        React.createElement('td', { style: _krTd }, '사람 · 관리팀 PC ' + r.pc + '번'),
+                        React.createElement('td', { style: _krTd }, '사람 · PC ' + r.pc + '번'),
                         React.createElement('td', { style: _krTd }, '1~' + r.covered + '위' + (r.complete ? ' · 끝까지' : (done ? '' : ' · 이어서 필요'))),
                         React.createElement('td', { style: Object.assign({}, _krTd, { color: done ? '#047857' : '#334155', fontWeight: done ? 700 : 400 }) },
                             r.targets ? (r.found + ' / ' + r.targets + ' 찾음' + (done ? ' · 완료' : '')) : '—'),
@@ -299,7 +299,7 @@ function HumanViewCard(props) {
             ' · 미확인 ' + _krOpsNum(lc.unknown && lc.unknown.pairs) + '건 ' + _krHvPct(lc.unknown && lc.unknown.samePos) +
             (d.loggedInRecorded === false ? ' · 지금은 로그인 화면을 순위에 쓰지 않습니다' : '')),
         React.createElement('p', { style: { fontSize: 11.5, color: '#94a3b8', margin: '8px 0 0' } },
-            '관리팀 직원이 직접 넘긴 화면만 읽습니다(네이버에 따로 요청하지 않습니다). 1위부터 이어 본 만큼만 순위로 쓰고, 300위까지 다 보지 않았으면 찾은 순위만 적습니다. 값이 「미확인」이면 못 잰 것이지 0 이 아닙니다.'));
+            '직원이 직접 넘긴 화면만 읽습니다(네이버에 따로 요청하지 않습니다). 1위부터 이어 본 만큼만 순위로 쓰고, 300위까지 다 보지 않았으면 찾은 순위만 적습니다. 값이 「미확인」이면 못 잰 것이지 0 이 아닙니다.'));
 }
 var _krOpsBtn = { padding: '6px 11px', borderRadius: 8, border: '1px solid #cbd5e1', background: '#fff', fontSize: 12.5, cursor: 'pointer' };
 function _krOpsTile(label, value, sub, color) {
@@ -1308,7 +1308,7 @@ window.KeywordRankPage = function KeywordRankPage(props) {
                 selected ? '업체 상세 — 키워드별 추적 현황' : (isViewer ? '내 영업 대상 업체별 순위 추적 현황' : '광고주 업체별 순위 추적 현황') + ' · 매일 아침 자동 기록')),
         /* ---------- 🧭 수집기 운영 패널 (코덱스 이식 5차) — 업체 상세가 아닐 때 · 뷰어 제외 ---------- */
         !selected && !isViewer && React.createElement(CollectorOpsPanel, { currentUser: currentUser }),
-        /* ---------- 📖 관리팀 순위 읽기 도우미 (2026-09-24) — 운영 패널 바로 아래 · 뷰어 제외 ---------- */
+        /* ---------- 📖 순위 읽기 도우미 (2026-09-24 · 9/25 전 직원 PC 로 통합) — 운영 패널 바로 아래 · 뷰어 제외 ---------- */
         !selected && !isViewer && React.createElement(HumanViewCard, { currentUser: currentUser }),
         /* ---------- ⚠ 추적 안 됨 정리함 (신고 #248 후속) ---------- */
         !selected && canEditHere && tray && (function() {

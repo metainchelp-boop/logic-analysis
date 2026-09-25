@@ -308,6 +308,10 @@ jobs:
         run: python backend/tests/test_human_view.py
       - name: 회귀 — 관리팀 순위 읽기 도우미(확장)
         run: node extension-human/tests/hv_core.test.js
+      # 🛰 수집 현황판(2026-09-25 대표 지시 「매번 여기서 물어볼 수 없어」) — 진짜 차단과 진단 보고를 갈라 센다 ·
+      #    못 읽은 값은 None · 옛 설치본 분리 · 분할은 수집기와 같은 규칙 · 로그인·뷰어 거절 · 메뉴·번들 배선.
+      - name: 회귀 — 수집 현황판
+        run: python backend/tests/test_collector_board.py
       - name: 회귀 — 코덱스 이식 3차 배선(봉투 전달·배치 가드·백업·nvMid·확장)
         run: python backend/tests/test_codex_port_3.py
 
