@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>순위 읽기 도우미</title>
+<style>
+  :root { --blue:#3b82f6; --green:#16a34a; --amber:#b45309; --red:#dc2626; --ink:#0f172a; --sub:#64748b; --line:#e2e8f0; --bg:#f8fafc; }
+  * { box-sizing:border-box; }
+  body { margin:0; width:360px; font:13px/1.45 system-ui,-apple-system,"Apple SD Gothic Neo","Malgun Gothic",sans-serif; color:var(--ink); background:#fff; }
+  header { padding:12px 14px 10px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:8px; }
+  header h1 { font-size:14px; margin:0; flex:1; }
+  header small { color:var(--sub); }
+  section { padding:10px 14px; border-bottom:1px solid var(--line); }
+  .state { display:flex; align-items:center; gap:8px; padding:8px 10px; border-radius:8px; background:#f0fdf4; color:var(--green); font-weight:600; }
+  .state.off { background:#fff7ed; color:var(--amber); }
+  .state.err { background:#fef2f2; color:var(--red); }
+  .nums { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
+  .nums div { background:var(--bg); border-radius:8px; padding:8px; text-align:center; }
+  .nums b { display:block; font-size:18px; font-variant-numeric:tabular-nums; }
+  .nums span { color:var(--sub); font-size:11px; }
+  .list-head { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:6px; }
+  .list-head b { font-size:13px; }
+  .list-head span { color:var(--sub); font-size:12px; }
+  ul { list-style:none; margin:0; padding:0; max-height:240px; overflow:auto; }
+  li { display:flex; align-items:center; gap:8px; padding:7px 0; border-top:1px solid var(--line); }
+  li:first-child { border-top:0; }
+  li .kw { flex:1; min-width:0; }
+  li .kw b { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  li .kw span { color:var(--sub); font-size:11px; }
+  a.open { flex:none; font-size:12px; color:var(--blue); text-decoration:none; border:1px solid #bfdbfe; border-radius:6px; padding:3px 8px; }
+  a.open:hover { background:#eff6ff; }
+  .busy { color:var(--amber); }
+  .note { color:var(--sub); font-size:11px; margin-top:6px; }
+  .row { display:flex; gap:6px; align-items:center; margin-top:6px; }
+  input { flex:1; min-width:0; border:1px solid var(--line); border-radius:6px; padding:6px 8px; font:inherit; }
+  input.pc { flex:none; width:64px; }
+  button { border:1px solid var(--line); background:#fff; border-radius:6px; padding:6px 10px; font:inherit; cursor:pointer; }
+  button.primary { background:var(--blue); border-color:var(--blue); color:#fff; }
+  button:focus-visible, a.open:focus-visible, input:focus-visible { outline:2px solid var(--blue); outline-offset:1px; }
+  footer { padding:10px 14px; display:flex; gap:6px; justify-content:space-between; align-items:center; }
+  .hidden { display:none; }
+  details summary { cursor:pointer; color:var(--sub); font-size:12px; }
+</style>
+</head>
+<body>
+<header><h1>📖 순위 읽기 도우미</h1><small id="ver"></small></header>
+
+<section id="setup" class="hidden">
+  <b>처음 한 번 — 연결</b>
+  <div class="note">관리자에게 받은 연결 코드와 이 PC 번호를 넣어 주세요. 이름·계정은 받지 않습니다.</div>
+  <div class="row"><input id="token" placeholder="연결 코드" autocomplete="off"><input id="pc" class="pc" placeholder="PC 번호" inputmode="numeric"></div>
+  <div class="row"><button id="save" class="primary">저장</button><span id="saveMsg" class="note"></span></div>
+</section>
+
+<section id="main">
+  <div id="state" class="state">켜짐 — 추적 키워드 화면만 읽는 중</div>
+  <div class="nums" style="margin-top:8px">
+    <div><b id="nPages">0</b><span>오늘 읽은 화면</span></div>
+    <div><b id="nKw">0</b><span>채운 키워드</span></div>
+    <div><b id="nFound">0</b><span>순위 찾음</span></div>
+  </div>
+  <div id="last" class="note"></div>
+</section>
+
+<section id="todoBox">
+  <div class="list-head"><b>오늘 사람이 봐 주면 좋은 키워드</b><span id="left"></span></div>
+  <ul id="todo"></ul>
+  <div class="note">「열기」는 새 탭에 검색 결과 1페이지를 엽니다. 그다음 페이지는 직접 넘겨 주세요. 1페이지부터 차례로 넘겨야 순위가 적힙니다.</div>
+</section>
+
+<footer>
+  <button id="toggle">⏸ 잠시 끄기</button>
+  <details><summary>연결 설정</summary>
+    <div class="row"><button id="reset">연결 다시 하기</button></div>
+  </details>
+</footer>
+<script src="popup.js"></script>
+</body>
+</html>

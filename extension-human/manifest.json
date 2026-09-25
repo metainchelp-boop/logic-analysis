@@ -1,0 +1,51 @@
+{
+  "manifest_version": 3,
+  "name": "메타아이앤씨 순위 읽기 도우미 (관리팀)",
+  "version": "1.0.0",
+  "description": "관리팀 전용 — 직원이 직접 연 네이버쇼핑 검색 화면을 읽어, 우리 추적 키워드의 순위만 로직분석에 적습니다. 네이버에 요청을 보내지 않습니다.",
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "https://search.shopping.naver.com/*",
+    "https://logic.metainc.co.kr/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "순위 읽기 도우미",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://search.shopping.naver.com/*"
+      ],
+      "js": [
+        "human_tap.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://search.shopping.naver.com/*"
+      ],
+      "js": [
+        "human_view.js"
+      ],
+      "run_at": "document_start"
+    }
+  ]
+}

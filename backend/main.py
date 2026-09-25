@@ -472,6 +472,8 @@ app.include_router(seo_generate_router)
 app.include_router(collector_router)  # 브라우저 수집기(크롬 확장) — 2026-08-03 쇼핑 API 종료 대응
 from collector_v2 import router as collector_v2_router   # 🧭 중앙 배정 v2(코덱스 이식 2차 · env 스위치 꺼지면 INACTIVE)
 app.include_router(collector_v2_router)
+from human_view_routes import router as human_view_router   # 📖 관리팀 순위 읽기 도우미(사람이 넘긴 화면 · 네이버 요청 0)
+app.include_router(human_view_router)
 handover_transfer_service = HandoverTransferService(DB_PATH)
 app.include_router(
     create_handover_router(
