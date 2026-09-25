@@ -42,6 +42,10 @@ on:
         description: '신고 #275 — 추적 등록(/products/track) 실패 기록 · 9/22 이후 등록 상품 nvMid·연결 상태(읽기 전용 · 이름·주소 미출력)'
         required: false
         default: 'off'
+      human_live:
+        description: '📖 순위 읽기 도우미(#284) 라이브 확인 — off(기본) / on. 컨테이너 파일·경로 등록·표 존재·인증 없는 호출의 응답 코드·기동 뒤 오류 줄(읽기 전용 · 키워드 미출력).'
+        required: false
+        default: 'off'
       live_check:
         description: '3탭(#253) 라이브 확인 — off(기본) / on. 서버에 올라간 프론트 번들의 마커 · rank_axes.py 존재 · 오늘 /api/collector 접속처(해시 앞 6자·건수·마지막 시각 — IP 원문 미출력).'
         required: false
@@ -281,6 +285,42 @@ jobs:
             except Exception as e:
                 print("  상한 조회 실패(못 쟀다):", e)
             PY
+      - name: 📖 순위 읽기 도우미 라이브 확인 (human_live=on · 읽기 전용)
+        if: ${{ github.event.inputs.human_live == 'on' }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          command_timeout: 120s
+          script: |
+            echo "== 컨테이너 기동 시각 · 재시작 횟수 =="
+            docker inspect -f 'StartedAt={{.State.StartedAt}} Restarts={{.RestartCount}}' logic-analysis
+            echo "== 컨테이너 안 파일 =="
+            docker exec -i logic-analysis sh -c 'ls -l /app/human_view.py /app/human_view_routes.py 2>&1; grep -c human_view_router /app/main.py'
+            echo "== 앱이 등록한 경로(human-view) =="
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sys, sqlite3
+            sys.path.insert(0, "/app")
+            try:
+                import human_view_routes as r
+                print("  routes:", sorted({getattr(x, "path", "?") for x in r.router.routes}))
+            except Exception as e:
+                print("  import 실패:", type(e).__name__, str(e)[:120])
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            t = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='human_view_uploads'").fetchone()
+            print("  human_view_uploads 표:", "있음" if t else "없음(첫 호출 때 생김)")
+            if t:
+                print("  행 수:", conn.execute("SELECT COUNT(*) FROM human_view_uploads").fetchone()[0])
+            PY
+            echo "== 인증 없이 부르면(404 가 아니면 경로 존재) =="
+            for u in /api/human-view/todo /api/human-view/stats /api/human-view/zzz-nonexistent; do
+              c=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:5050$u"); echo "  $c  $u"
+            done
+            echo "== 기동 뒤 오류 줄 수 =="
+            docker logs logic-analysis 2>&1 | grep -c -E 'Traceback|ERROR' || true
+            docker logs logic-analysis 2>&1 | grep -E 'human' | grep -i -E 'error|fail|traceback' | head -5 || true
       - name: 3탭 라이브 확인 (live_check=on · 읽기 전용)
         if: ${{ github.event.inputs.live_check == 'on' }}
         uses: appleboy/ssh-action@v1.0.3
