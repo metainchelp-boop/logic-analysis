@@ -459,6 +459,8 @@ jobs:
             PY
             echo "== 기동 뒤 오류 줄 =="
             docker logs logic-analysis 2>&1 | grep -c -E 'Traceback|ERROR' || true
+            echo "== 오류 줄 내용별(앞 70자 · 숫자 가림 · 상위 8) =="
+            docker logs logic-analysis 2>&1 | grep -E 'Traceback|ERROR' | sed -E 's/[0-9]+/#/g' | cut -c1-70 | sort | uniq -c | sort -rn | head -8
       - name: 📖 순위 읽기 도우미 라이브 확인 (human_live=on · 읽기 전용)
         if: ${{ github.event.inputs.human_live == 'on' }}
         uses: appleboy/ssh-action@v1.0.3
