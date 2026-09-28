@@ -181,7 +181,7 @@ ok("겹침이 있으면 분할 판정 문제", lvb["split"] == "bad")
 
 print("⑦ 배선")
 col = open(os.path.join(BACKEND, "collector.py"), encoding="utf-8").read()
-m = re.search(r'@router\.get\("/board"\)\s*\ndef collector_board\(current_user: dict = Depends\(get_current_user\)\):(.*?)\n\ndef ', col, re.S)
+m = re.search(r'@router\.get\("/board"\)\s*\ndef collector_board\(since: Optional\[str\] = None, current_user: dict = Depends\(get_current_user\)\):(.*?)\n\ndef ', col, re.S)
 ok("경로 /api/collector/board 는 로그인 필요", bool(m))
 body = m.group(1) if m else ""
 ok("최고관리자만(대표 확정 「나만 보게 해」)", 'current_user.get("role") != "superadmin"' in body and "403" in body)
@@ -189,7 +189,8 @@ ok("유니버스를 못 읽으면 None(0 개로 치지 않음)", "uni = None" in
 ok("분할은 수집기와 같은 split_ok", "split_ok=_split_ok" in body)
 FE = os.path.join(ROOT, "frontend")
 page = open(os.path.join(FE, "js", "components", "CollectorBoardPage.jsx"), encoding="utf-8").read()
-ok("화면이 /collector/board 를 부른다", "api.get('/collector/board')" in page)
+ok("화면이 /collector/board 를 부른다(기준 시각이 있으면 since 를 붙여)", "var path = '/collector/board' + (since ? '?since=' + encodeURIComponent(since) : '');" in page
+   and "api.get(path)" in page)
 ok("화면이 null 을 「미확인」으로", "'미확인'" in page and "v === null || v === undefined" in page)
 ok("화면이 진짜 차단과 진단 보고를 갈라 쓴다", "진짜 차단" in page and "진단 보고" in page)
 ok("화면도 최고관리자가 아니면 안내만(서버를 부르지 않음)", "var isViewer = currentUser.role !== 'superadmin'" in page and "if (isViewer) return;" in page)
@@ -265,8 +266,93 @@ ok("meta 칸 없는 옛 원장이어도 현황판은 뜬다(page2 = None)", out9
    and {x["key"]: x["level"] for x in out9["verdicts"]}["page2"] == "unknown")
 pg = open(os.path.join(ROOT, "frontend", "js", "components", "CollectorBoardPage.jsx"), encoding="utf-8").read()
 ok("화면 — 타일 · 14일 칸 · 기계 칸", "_cbKpi('2페이지 넘김', _cbP2(s.page2)" in pg and "_cbP2(r.page2)" in pg
-   and "_cbP2(m.page2Today)" in pg and "'2페이지 넘김(오늘)'" in pg)
+   and "_cbP2(win ? m.page2Window : m.page2Today)" in pg and "'2페이지 넘김(오늘)'" in pg)
 ok("화면 — null 은 미확인", "if (p === null || p === undefined) return '미확인';" in pg)
+
+print("⑨ 여기서부터 보기(2026-09-28 대표 「현시점으로 깨끗하게」)")
+N9 = datetime(2026, 9, 25, 14, 0, 0)
+ns = cb.normalize_since
+ok("시각 읽기 — 초 있음·없음·T 구분", ns("2026-09-25 13:05:07", N9) == "2026-09-25 13:05:07"
+   and ns("2026-09-25 13:05", N9) == "2026-09-25 13:05:00" and ns("2026-09-25T13:05", N9) == "2026-09-25 13:05:00")
+ok("못 읽으면 None", ns("", N9) is None and ns("abc", N9) is None and ns(None, N9) is None)
+ok("미래(5분 넘게)는 None", ns("2026-09-25 14:06", N9) is None and ns("2026-09-25 14:04", N9) is not None)
+c10 = sqlite3.connect(":memory:")
+c10.executescript("""
+CREATE TABLE collected_serp (keyword TEXT, collected_date TEXT, created_at TEXT);
+CREATE TABLE collector_found_done (keyword TEXT, collected_date TEXT, received_at TEXT);
+CREATE TABLE collector_blocks (id INTEGER PRIMARY KEY, at TEXT, keyword TEXT, paging_index INTEGER, err TEXT,
+                               title TEXT, href TEXT, body TEXT, ext_version TEXT, note TEXT);
+CREATE TABLE client_rank_history (checked_at TEXT, rank_position INTEGER);
+CREATE TABLE rankings (checked_at TEXT);
+CREATE TABLE human_view_uploads (collected_date TEXT, received_at TEXT);
+CREATE TABLE collector_observations (keyword TEXT, collected_date TEXT, kind TEXT, received_at TEXT,
+                                     reason TEXT, projected INTEGER DEFAULT 0, meta_json TEXT);
+""")
+def _o10(t, kw, kind, reason, pages, wid="iA"):
+    c10.execute("INSERT INTO collector_observations VALUES (?,?,?,?,?,?,?)",
+                (kw, TODAY, kind, TODAY + " " + t, reason, 1 if kind.startswith("full") else 0, _json.dumps({"observation": {"workerId": wid, "pagesRead": pages}})))
+# 기준 시각(13:00) 전: 2쪽 막힘 5 · 진단 보고 5 · 완료 1
+for i in range(5): _o10("10:00:00", f"old{i}", "positive", "STALE_PAGE", 1)
+c10.executemany("INSERT INTO collector_blocks(at, err) VALUES (?,?)", [(TODAY + " 10:00:00", "STALE_PAGE")] * 5)
+c10.execute("INSERT INTO collected_serp VALUES ('old_done', ?, ?)", (TODAY, TODAY + " 10:00:00"))
+# 기준 시각 뒤: 2쪽 넘김 2(A) · 2쪽 막힘 1(B) · 완료 2(수집분 1 + 대상 다 찾음 1) · 진짜 차단 1 · 도우미 1
+_o10("13:10:00", "n1", "full", "COMPLETE", 8); _o10("13:20:00", "n2", "full", "COMPLETE", 8)
+_o10("13:30:00", "n3", "positive", "STALE_PAGE", 1, "iB")
+c10.execute("INSERT INTO collected_serp VALUES ('n1', ?, ?)", (TODAY, TODAY + " 13:10:00"))
+c10.execute("INSERT INTO collector_found_done VALUES ('n9', ?, ?)", (TODAY, TODAY + " 13:40:00"))
+c10.execute("INSERT INTO collector_blocks(at, err) VALUES (?, 'CAPTCHA')", (TODAY + " 13:50:00",))
+c10.execute("INSERT INTO human_view_uploads VALUES (?, ?)", (TODAY, TODAY + " 13:15:00"))
+c10.commit()
+rows10 = [dict(machine("1", 2, 3), instance_id="iA"), dict(machine("2", 2, 3), instance_id="iB")]
+full10 = cb.build(c10, TODAY, ["x"], split_ok=split_rule.split_ok, machines_rows=[dict(r) for r in rows10], now=N9)
+w10 = cb.build(c10, TODAY, ["x"], split_ok=split_rule.split_ok, machines_rows=[dict(r) for r in rows10], now=N9,
+               since="2026-09-25 13:00")
+ok("기준 시각이 없으면 window 는 None(종전 그대로)", full10["window"] is None)
+ok("종전 칸은 기준 시각과 무관하게 하루 전체", w10["summary"]["attempts"] == full10["summary"]["attempts"] == 8
+   and w10["blocksToday"] == full10["blocksToday"] and w10["stopReasons"] == full10["stopReasons"])
+W = w10["window"] or {}
+ok("window — 시도 3 · 완료 2(수집분 1 + 대상 다 찾음 1)", W.get("attempts") == 3 and W.get("completed") == 2 and W.get("full") == 1, str(W))
+ok("window — 2페이지 2/3 · 기계별 A 2/2 · B 0/1", W.get("page2") == {"passed": 2, "tried": 3}
+   and W.get("page2ByInstance", {}).get("iA") == {"passed": 2, "tried": 2} and W.get("page2ByInstance", {}).get("iB") == {"passed": 0, "tried": 1})
+ok("window — 막힘은 기준 시각 뒤만(진단 0 · 진짜 1)", (W.get("blocks") or {}).get("diag") == 0 and (W.get("blocks") or {}).get("real") == 1)
+ok("window — 멈춘 이유도 기준 시각 뒤만", [r["count"] for r in (W.get("stopReasons") or [])] == [1])
+ok("window — 도우미 1 · 표시 이름 「13:00 이후」", W.get("human") == 1 and W.get("label") == "13:00 이후")
+lv10 = {x["key"]: x for x in w10["verdicts"]}
+ok("판정 줄 — 진짜 차단은 기준 시각 뒤 숫자로", lv10["block"]["level"] == "bad" and lv10["block"]["text"].startswith("13:00 이후 1건"))
+ok("판정 줄 — 2페이지도 기준 시각 뒤로(시도 3 → 판단 이름)", lv10["page2"]["level"] == "unknown" and lv10["page2"]["text"].startswith("13:00 이후 2페이지 시도 3번"))
+ok("판정 줄 순서·개수 무변경", [x["key"] for x in w10["verdicts"]] == [x["key"] for x in full10["verdicts"]])
+ok("기계 줄에 page2Window", w10["machines"][0].get("page2Window") == {"passed": 2, "tried": 2} and "page2Window" not in full10["machines"][0])
+past = cb.build(c10, TODAY, ["x"], split_ok=split_rule.split_ok, machines_rows=[dict(r) for r in rows10], now=N9, since="2026-09-24 13:00")
+ok("지난 날 기준 시각은 쓰지 않는다(다음 날 저절로 하루 전체)", past["window"] is None)
+ok("못 읽는 기준 시각도 종전 그대로", cb.build(c10, TODAY, ["x"], now=N9, since="zz")["window"] is None)
+ok("원자료는 지우지 않는다 — 보기 전후 행 수 그대로", c10.execute("SELECT COUNT(*) FROM collector_observations").fetchone()[0] == 8
+   and c10.execute("SELECT COUNT(*) FROM collector_blocks").fetchone()[0] == 6)
+bsrc = open(os.path.join(BACKEND, "collector_board.py"), encoding="utf-8").read()
+ok("현황판 모듈에 지우는 문장이 없다", "DELETE" not in bsrc.upper().replace("삭제", ""))
+import collector_heartbeat as hb  # noqa: E402
+c11 = sqlite3.connect(":memory:")
+hb.ensure_table(c11)
+def _hb(iid, no, seen):
+    c11.execute("INSERT INTO collector_heartbeat(instance_id, worker_no, worker_count, last_seen, first_seen) VALUES (?,?,2,?,?)",
+                (iid, no, seen, seen))
+_hb("old1", 1, "2026-09-21 16:20:01"); _hb("new1", 1, "2026-09-25 13:59:00")
+_hb("only2", 2, "2026-09-20 10:00:00")                      # 한 대뿐인 번호 — 오래됐어도 지우면 안 된다
+_hb("old3", 3, "2026-09-24 10:00:00"); _hb("new3", 3, "2026-09-25 13:59:00")   # 3일 안 — 아직 안 지움
+c11.commit()
+n11 = hb.prune_replaced(c11, now=N9)
+left = {r[0] for r in c11.execute("SELECT instance_id FROM collector_heartbeat")}
+ok("옛 설치본 정리 — 같은 번호에 새 줄 있고 3일 넘은 줄만 지움", n11 == 1 and left == {"new1", "only2", "old3", "new3"}, str(left))
+ok("여러 번 돌아도 같다(멱등)", hb.prune_replaced(c11, now=N9) == 0)
+ok("표가 이상하면 -1(예외 안 냄)", hb.prune_replaced(sqlite3.connect("file:x?mode=memory&cache=private", uri=True), now=N9) in (0, -1))
+sch = open(os.path.join(BACKEND, "scheduler.py"), encoding="utf-8").read()
+ok("부팅 +4분 1회 정리 잡", "_run_heartbeat_prune," in sch and 'id="heartbeat_prune_boot"' in sch and "prune_replaced(conn)" in sch)
+ok("경로가 since 를 build 에 넘긴다", "helper=helper, since=since)" in col)
+ok("화면 — 여기서부터 보기 · 전체 보기 · 이 브라우저에만 기억", "'⏱ 여기서부터 보기'" in page and "'전체 보기로 돌아가기'" in page
+   and "window.localStorage.setItem(_CB_SINCE_KEY, v)" in page)
+ok("화면 — 서버가 기준 시각을 안 썼으면 기억도 지운다", "if (since && !res.window) { _cbSaveSince(''); setSince(''); }" in page)
+ok("화면 — 기준 시각이 있으면 숫자·막힘·멈춘 이유·기계 칸을 window 로", "var tiles = win ?" in page
+   and "win ? blockBox(win.label, win.blocks)" in page and "var sr = win ? win.stopReasons : data.stopReasons;" in page
+   and "_cbP2(win ? m.page2Window : m.page2Today)" in page)
 
 print(f"\n{passed} 통과 · {failed} 실패")
 sys.exit(1 if failed else 0)
