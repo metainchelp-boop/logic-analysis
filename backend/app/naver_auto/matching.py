@@ -23,9 +23,12 @@
    「같음 · 한쪽이 다른 쪽을 품음 · 모름(너무 짧음)」이면 통과. 「다름」이면 멈춘다.
    계정 이름이 **다른 가망의 상호와 같으면**(이 가망과는 같지 않고) 멈춘다.
 
-이름 정리는 ① ``ProspectMatchKeys.normalizeName`` · ``looseName`` 과 한 글자까지 같다 —
-① 자바 코드를 그대로 돌린 정답표(``tests/fixtures/prospect_match_keys_vectors.json``)로 시험이 고정한다.
-길이는 자바처럼 UTF-16 단위로 센다(한자 확장 글자 하나 = 2).
+이름 정리는 ① ``ProspectMatchKeys.normalizeName`` · ``looseName`` 과 같은 규칙이다 — ① 자바 코드를 그대로 돌린 정답표
+(``tests/fixtures/prospect_match_keys_vectors.json`` · 68개)와 한 글자까지 같은지 시험이 고정한다(서버와 같은 파이썬 3.12 ·
+자바 21 — 둘 다 유니코드 15). 길이는 자바처럼 UTF-16 단위로 센다(한자 확장 글자 하나 = 2).
+⚠️ **알려진 차이** — 그리스 대문자 시그마(Σ)가 숫자 뒤 끝에 올 때 자바는 ς · 파이썬은 σ(「끝 글자」 판정 방식이 다름 ·
+시험 ``test_known_difference_final_sigma`` 가 고정). 짝 규칙은 양쪽 이름을 같은 파이썬 함수로 정리해 비교하므로 짝 결과에는
+영향이 없다 — ① 의 정리 키를 그대로 받아 비교하는 일이 생기면 이 차이를 먼저 막는다.
 """
 from __future__ import annotations
 
@@ -193,6 +196,7 @@ class Candidate:
     customer_id: int = field(repr=False)
     relation: str = REL_SAME
     same_name_accounts: int = 1          # 같은 정리 이름을 가진 계정 수(2 이상 = 여럿 중 하나)
+    claimed_elsewhere: bool = False      # 다른 가망이 ① 에 이 번호를 적었거나 사람이 다른 가망 짝으로 확인함(관리 대상 밖 포함)
 
 
 @dataclass(frozen=True)
@@ -228,11 +232,9 @@ def _cid(v) -> int:
     return v
 
 
-def _opt_int(v) -> Optional[int]:
-    if v is None:
-        return None
+def _cid_like(v, what: str) -> int:
     if isinstance(v, bool) or not isinstance(v, int) or v <= 0:
-        raise BadInput("광고계정 번호는 양의 정수 또는 빈 값")
+        raise BadInput(f"{what}는 양의 정수")
     return v
 
 
@@ -256,6 +258,8 @@ def match(prospects: Sequence[ErpProspect], credentials: Iterable[ErpCredential]
         pid = _pid(p.possibility_id)
         if pid in names:
             raise BadInput("같은 가망 번호가 두 번")
+        if p.name is not None and not isinstance(p.name, str):
+            raise BadInput("상호 모양이 아님")   # 모름으로 바꾸면 이름 검사가 조용히 풀린다(실패는 닫힌 쪽으로)
         names[pid] = p.name
     loose_of_prospect = {pid: loose_name(n) for pid, n in names.items()}
     prospects_by_loose: Dict[str, set] = {}
@@ -273,13 +277,18 @@ def match(prospects: Sequence[ErpProspect], credentials: Iterable[ErpCredential]
         rc = row.get("customerId", cid)
         if rc != cid:
             raise BadInput("계정 열쇠와 칸의 고객 번호가 다름")
-        no = _opt_int(row.get("adAccountNo"))
-        nm = row.get("adAccountName")
-        acc_name[cid] = nm if isinstance(nm, str) else None
-        if no is not None:
-            if no in ad_no_owner and ad_no_owner[no] != cid:
-                raise BadInput("광고계정 번호가 두 계정에 겹침")
-            ad_no_owner[no] = cid
+        # 광고계정 번호가 비면 「고객 번호 한 공간과만」 검사가 조용히 약해진다 — 실측 1,784곳 모두 있음 · 없으면 회차 실패
+        no = _cid_like(row.get("adAccountNo"), "광고계정 번호")
+        # 이름 칸이 빠지거나(네이버가 칸 이름을 바꿈) 글자가 아니면 이름 검사가 통째로 풀린다 — 모름으로 바꾸지 않고 실패
+        if "adAccountName" not in row:
+            raise BadInput("계정 이름 칸 없음")
+        nm = row["adAccountName"]
+        if nm is not None and not isinstance(nm, str):
+            raise BadInput("계정 이름 모양이 아님")
+        acc_name[cid] = nm
+        if no in ad_no_owner and ad_no_owner[no] != cid:
+            raise BadInput("광고계정 번호가 두 계정에 겹침")
+        ad_no_owner[no] = cid
     cids = set(acc_name)
 
     # 사람의 판단
@@ -320,16 +329,22 @@ def match(prospects: Sequence[ErpProspect], credentials: Iterable[ErpCredential]
 
     # 2) ① 에 적힌 고객 번호 — 자동 짝 후보 모으기
     ignored = 0
-    claims: List[Tuple[int, int]] = []       # (가망, 고객 번호) — 겹침 빼고
+    claims: List[Tuple[int, int]] = []       # 관리 대상 가망의 (가망, 적힌 번호) — 겹침 빼고
     seen = set()
+    all_claims = set()                       # 관리 대상 밖 가망까지 — 「같은 번호를 다른 가망도 적었나」(규칙 4)
     for c in credentials:
         if not isinstance(c, ErpCredential):
             raise BadInput("자격 행 모양이 아님")
         pid = _pid(c.possibility_id)
-        if pid not in names or c.vendor != VENDOR_NAVER:
+        if c.vendor != VENDOR_NAVER:
             ignored += 1
             continue
         cid, why = parse_customer_id(c.customer_id_raw)
+        if cid is not None:
+            all_claims.add((pid, cid))
+        if pid not in names:
+            ignored += 1                     # 관리 대상 밖 — 짝은 안 만들지만 충돌 판정에는 센다
+            continue
         if cid is None:
             if why is None:
                 ignored += 1
@@ -339,9 +354,13 @@ def match(prospects: Sequence[ErpProspect], credentials: Iterable[ErpCredential]
         if (pid, cid) not in seen:
             seen.add((pid, cid))
             claims.append((pid, cid))
+    # 적힌 번호가 어느 계정을 가리키나 — 고객 번호면 그 계정, 광고계정 번호면 그 번호의 주인 계정.
+    # 두 가망이 같은 계정을 서로 다른 번호 공간으로 적어도 한 계정을 두고 다투는 것으로 본다.
     claimers: Dict[int, set] = {}
-    for pid, cid in claims:
-        claimers.setdefault(cid, set()).add(pid)
+    for pid, cid in all_claims:
+        target = cid if cid in cids else ad_no_owner.get(cid)
+        if target is not None:
+            claimers.setdefault(target, set()).add(pid)
 
     for pid, cid in claims:
         if cid in paired.get(pid, ()):
@@ -356,7 +375,7 @@ def match(prospects: Sequence[ErpProspect], credentials: Iterable[ErpCredential]
         if in_no and ad_no_owner[cid] != cid:
             blocked.append(Blocked(pid, B_AMBIGUOUS_SPACE, cid))
             continue
-        if len(claimers[cid]) > 1:
+        if len(claimers.get(cid, ())) > 1:
             blocked.append(Blocked(pid, B_CLAIMED_BY_SEVERAL, cid))
             continue
         if confirmed_owner.get(cid, set()) - {pid}:
@@ -401,7 +420,8 @@ def match(prospects: Sequence[ErpProspect], credentials: Iterable[ErpCredential]
                     rel = REL_CONTAINS
                 else:
                     continue
-            found.append(Candidate(pid, cid, rel, len(by_loose[ak])))
+            elsewhere = bool((confirmed_owner.get(cid, set()) | claimers.get(cid, set())) - {pid})
+            found.append(Candidate(pid, cid, rel, len(by_loose[ak]), elsewhere))
         found.sort(key=lambda x: (x.relation != REL_SAME, x.customer_id))
         candidates.extend(found[:CANDIDATE_MAX])
 

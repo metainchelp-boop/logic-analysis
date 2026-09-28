@@ -133,6 +133,73 @@ class TableTest(unittest.TestCase):
             V.judge(accounts=[acc()], issues=[], now=datetime(2026, 9, 29, 9), deadline=DEADLINE)
 
 
+class TodayTest(unittest.TestCase):
+    """「오늘」은 지금 시각의 한국 날짜 — 마감의 시간대·날짜에 기대지 않는다(적대 검토 2026-09-28)."""
+
+    def test_same_instant_in_utc_gives_same_answer(self):
+        utc = timezone.utc
+        yday = acc(on=TODAY - timedelta(days=1))
+        for now, dl in ((AFTER, DEADLINE), (AFTER.astimezone(utc), DEADLINE.astimezone(utc)),
+                        (BEFORE.astimezone(utc), DEADLINE.astimezone(utc))):
+            with self.subTest(now=now.isoformat()):
+                v = V.judge(accounts=[yday], issues=(), now=now, deadline=dl)
+                self.assertEqual(v.color, V.WHITE, "어제 결과는 어느 시간대로 넘겨도 오늘 결과가 아니다")
+                v = V.judge(accounts=[acc()], issues=(), now=now, deadline=dl)
+                self.assertEqual(v.color, V.GREEN)
+
+    def test_deadline_must_be_today(self):
+        for dl in (DEADLINE - timedelta(days=1), DEADLINE + timedelta(days=1)):
+            with self.assertRaises(ValueError):
+                V.judge(accounts=[acc()], issues=(), now=AFTER, deadline=dl)
+
+    def test_accounts_iterator_is_read_once_safely(self):
+        v = V.judge(accounts=iter([]), issues=(), now=AFTER, deadline=DEADLINE)
+        self.assertEqual((v.color, v.white_reason), (V.WHITE, V.WHITE_NO_LINK))
+        v = V.judge(accounts=iter([acc(link=V.LINK_AUTO)]), issues=(), now=AFTER, deadline=DEADLINE)
+        self.assertTrue(v.needs_attention)
+        self.assertIn("account-unconfirmed", v.reasons)
+
+    def test_datetime_is_not_a_date(self):
+        with self.assertRaises(ValueError):
+            j([acc(on=datetime(2026, 9, 29, 6, 50, tzinfo=KST))])
+        with self.assertRaises(ValueError):
+            j([acc()], [iss(V.SEV_RED, V.ST_EXCEPTION, datetime(2026, 10, 1, tzinfo=KST))])
+
+
+class SufficiencyTest(unittest.TestCase):
+    """적대 검토 「시험 충분성」(2026-09-28)."""
+
+    def test_mixed_whites_need_attention_if_any_needs(self):
+        v = j([acc(status=V.CHECK_DATA_LATE), acc(on=TODAY - timedelta(days=1), cid=1002)])
+        self.assertEqual(set(v.reasons) & {V.CHECK_DATA_LATE, V.CHECK_NOT_CHECKED},
+                         {V.CHECK_DATA_LATE, V.CHECK_NOT_CHECKED})
+        self.assertTrue(v.needs_attention, "⚪ 사유 중 하나라도 확인 필요면 확인 필요")
+
+    def test_link_broken_and_not_eligible_ignore_date(self):
+        for st in (V.CHECK_NOT_ELIGIBLE, V.CHECK_LINK_BROKEN):
+            for on in (TODAY - timedelta(days=1), None):
+                with self.subTest(st=st, on=on):
+                    v = j([acc(status=st, on=on)], now=BEFORE)
+                    self.assertEqual((v.color, v.white_reason, v.needs_attention), (V.WHITE, st, True))
+
+    def test_deadline_instant_counts_as_passed(self):
+        v = j([acc(on=TODAY - timedelta(days=1))], now=DEADLINE)
+        self.assertEqual((v.white_reason, v.needs_attention), (V.CHECK_NOT_CHECKED, True))
+
+    def test_white_order_fixed(self):
+        self.assertEqual(V._WHITE_ORDER, (V.CHECK_NOT_CHECKED, V.CHECK_PARTIAL, V.CHECK_KEY_REJECTED,
+                                          V.CHECK_LINK_BROKEN, V.CHECK_NOT_ELIGIBLE, V.CHECK_DATA_LATE,
+                                          V.CHECK_SYSTEM_GAP, V.CHECK_PENDING, V.WHITE_NO_LINK))
+        self.assertEqual({k for k, v in V._WHITE_NEEDS.items() if v},
+                         {V.CHECK_NOT_CHECKED, V.CHECK_PARTIAL, V.CHECK_KEY_REJECTED, V.CHECK_LINK_BROKEN,
+                          V.CHECK_NOT_ELIGIBLE})
+
+
+class ReprTest(unittest.TestCase):
+    def test_account_check_repr_hides_customer_id(self):
+        self.assertNotIn("7654321", repr(acc(cid=7654321)))
+
+
 class PropertyTest(unittest.TestCase):
     """무작위 조합 5,000개 — 약속이 한 번도 깨지지 않는다."""
 

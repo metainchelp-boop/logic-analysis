@@ -30,7 +30,7 @@ def camp(cid="cmp-1", tp="SHOPPING", status="ELIGIBLE", lock=False, yday=100, we
 def account(**kw):
     base = dict(customer_id=3000001, campaigns=(camp(),), bizmoney=500000.5, budget_lock=False, refund_lock=False,
                 avg_daily_spend=20000.0, yday_spend=20000.0, recent_spend=(20000.0, 21000.0, 20000.0),
-                same_weekday_spend=(19000.0, 21000.0, 20000.0, 20000.0))
+                same_weekday_spend=(19000.0, 21000.0, 20000.0, 20000.0), data_late=False)
     base.update(kw)
     return C.AccountInput(**base)
 
@@ -258,6 +258,169 @@ class InputGuardTest(unittest.TestCase):
         self.assertNotIn(C.R_BIZMONEY, r.rules_run)
         self.assertNotIn(C.R_BIZMONEY, [x for x, _ in r.rules_not_run])
         self.assertEqual(r.status, V.CHECK_OK)
+
+
+class FailClosedTest(unittest.TestCase):
+    """적대 검토(2026-09-28) — 모르는 것은 「늦음 · 못 읽음 · 모름」 쪽으로."""
+
+    def test_data_late_unknown_is_late(self):
+        r = run(account(data_late=None))
+        self.assertEqual(r.status, V.CHECK_DATA_LATE)
+        self.assertEqual({x for x, why in r.rules_not_run if why == "data-late"},
+                         {C.R_NO_DELIVERY, C.R_SPEND_JUMP, C.R_STAGE_SPEND})
+        self.assertEqual(C.AccountInput(customer_id=1, campaigns=()).data_late, None, "기본값은 모름")
+
+    def test_error_fields_are_read(self):
+        r = run(account(stats_error="HTTP_500"))
+        self.assertEqual(r.status, V.CHECK_PARTIAL)
+        self.assertEqual({x for x, why in r.rules_not_run if why == "stats-unread"},
+                         {C.R_BIZMONEY, C.R_NO_DELIVERY, C.R_SPEND_JUMP, C.R_STAGE_SPEND})
+        self.assertEqual(r.findings, ())
+        r = run(account(bizmoney_error="KEY_REJECTED", bizmoney=0.0))
+        self.assertIn((C.R_BIZMONEY, "bizmoney-unread"), r.rules_not_run)
+        self.assertEqual(r.status, V.CHECK_PARTIAL)
+
+    def test_impressions_must_be_real_counts(self):
+        for bad in (float("nan"), -1, float("inf"), True, False, "10"):
+            with self.subTest(bad=bad):
+                r = run(account(campaigns=(camp(yday=bad, week=900),)))
+                self.assertIn((C.R_NO_DELIVERY, "impressions-unknown"), r.rules_not_run)
+                r = run(account(campaigns=(camp(yday=0, week=bad),)))
+                self.assertIn((C.R_NO_DELIVERY, "impressions-unknown"), r.rules_not_run)
+
+    def test_period_end_sees_brand_search(self):
+        end = (NOW + timedelta(days=2)).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        r = run(account(campaigns=(camp(tp="BRAND_SEARCH", use_period=True, period_end=end, yday=0, week=0),)))
+        self.assertIn(("period_ending", V.SEV_INFO), codes(r), "브랜드검색은 ④ 에서만 뺀다")
+        self.assertNotIn("active_no_impressions", [f.code for f in r.findings])
+
+    def test_brand_search_excluded_from_zero_balance_warning(self):
+        # 브랜드검색은 정액 선결제 — 잔액 0 이 정상이라 ③ 「잔액 0 · 켜진 캠페인」에서도 뺀다(⑦ 에서는 빼지 않는다)
+        a = account(campaigns=(camp(tp="BRAND_SEARCH"),), bizmoney=0.0, avg_daily_spend=0.0)
+        self.assertNotIn("bizmoney_empty", [f.code for f in run(a).findings])
+        a = account(campaigns=(camp(),), bizmoney=0.0, avg_daily_spend=0.0)
+        self.assertIn(("bizmoney_empty", V.SEV_YELLOW), codes(run(a)))
+
+    def test_switches_must_be_bool(self):
+        for v in ("false", "0", 0, 1, None, ""):
+            with self.subTest(v=v):
+                with self.assertRaises(ValueError):
+                    run(switches={C.R_BIZMONEY_LOCK: v})
+
+
+class SufficiencyTest(unittest.TestCase):
+    """적대 검토 「시험 충분성」(2026-09-28) — 한 글자 바꿔도 통과하던 곳을 고정한다."""
+
+    def at(self, a, stage=FRESH_STAGE, **th):
+        return codes(C.run_checks(a, stage, NOW, T.validate(th)))
+
+    def test_every_threshold_is_used(self):
+        a = account(bizmoney=30000.0, avg_daily_spend=20000.0)                       # 1.5일
+        self.assertEqual(self.at(a), [("bizmoney_low", V.SEV_YELLOW)])
+        self.assertEqual(self.at(a, bizmoney_red_days=2.0), [("bizmoney_low", V.SEV_RED)])
+        a = account(bizmoney=80000.0, avg_daily_spend=20000.0)                       # 4일
+        self.assertEqual(self.at(a), [])
+        self.assertEqual(self.at(a, bizmoney_yellow_days=5.0), [("bizmoney_low", V.SEV_YELLOW)])
+        a = account(same_weekday_spend=(100000.0,) * 4, yday_spend=60000.0)
+        self.assertEqual(self.at(a), [])
+        self.assertEqual(self.at(a, jump_down_ratio=0.6), [("spend_down", V.SEV_YELLOW)])
+        a = account(same_weekday_spend=(4000.0,) * 4, yday_spend=9000.0)
+        self.assertEqual(self.at(a), [], "둘 다 1만원 미만")
+        self.assertEqual(self.at(a, jump_min_spend=1000), [("spend_up", V.SEV_YELLOW)])
+        a = account(same_weekday_spend=(100000.0, 100000.0, None, None), yday_spend=300000.0)
+        self.assertEqual(self.at(a), [])
+        self.assertEqual(self.at(a, jump_min_weeks=2), [("spend_up", V.SEV_YELLOW)])
+        a = account(recent_spend=(0.0, 0.0, 0.0))
+        old = C.StageInfo("진행중", NOW - timedelta(hours=30))
+        self.assertEqual(self.at(a, old), [])
+        self.assertEqual(self.at(a, old, stage_stale_hours=48), [("running_zero_spend", V.SEV_YELLOW)])
+        a = account(recent_spend=(5000.0, 0.0, 0.0))
+        self.assertEqual(self.at(a), [])
+        self.assertEqual(self.at(a, zero_spend_days=2), [("running_zero_spend", V.SEV_YELLOW)])
+        a = account(campaigns=(camp(use_period=True, period_end="2026-10-03T12:00:00Z"),))   # KST 10/3 = 4일 뒤
+        self.assertEqual(self.at(a), [])
+        self.assertEqual(self.at(a, period_end_days=5), [("period_ending", V.SEV_INFO)])
+
+    def test_campaigns_unread_lists_every_enabled_rule(self):
+        on = set(C.ALL_RULES[1:]) - {C.R_BIZMONEY_LOCK}
+        for err in ("KEY_REJECTED", "SERVER", None):
+            r = run(account(campaigns=None, campaigns_error=err))
+            want = on if err == "KEY_REJECTED" else on | {C.R_KEY}   # 키 거절이면 ② 는 돌았다
+            self.assertEqual({x for x, why in r.rules_not_run if why == "campaigns-unread"}, want, err)
+        r = run(account(campaigns=None, campaigns_error="SERVER"), switches={C.R_BIZMONEY_LOCK: True})
+        self.assertIn((C.R_BIZMONEY_LOCK, "campaigns-unread"), r.rules_not_run)
+
+    def test_jump_uses_mean_of_weeks(self):
+        self.assertEqual(codes(run(account(same_weekday_spend=(50000.0, 150000.0, 100000.0, 100000.0),
+                                           yday_spend=200000.0))), [("spend_up", V.SEV_YELLOW)], "평균(최대 아님)")
+        self.assertEqual(codes(run(account(same_weekday_spend=(50000.0, 150000.0, 100000.0, 100000.0),
+                                           yday_spend=60000.0))), [], "평균(최대 아님)")
+        self.assertEqual(codes(run(account(same_weekday_spend=(50000.0, 150000.0, 100000.0, 100000.0),
+                                           yday_spend=120000.0))), [], "평균(최소 아님)")
+        self.assertEqual(codes(run(account(same_weekday_spend=(100000.0, 100000.0, 100000.0, 40000.0),
+                                           yday_spend=90000.0))), [], "평균(마지막 주 아님)")
+
+    def test_running_zero_is_sum_of_days(self):
+        self.assertEqual(codes(run(account(recent_spend=(1.0, 0.0, 0.0)))), [], "3일 합계 — 마지막 날만 보지 않는다")
+
+    def test_boundaries(self):
+        r = run(account(campaigns=(camp(use_period=True, period_end="2026-09-29T10:00:00Z"),)))   # 오늘(KST) 끝남
+        self.assertEqual([(f.code, f.facts) for f in r.findings], [("period_ending", (("days_left", 0),))])
+        self.assertEqual(codes(run(account(same_weekday_spend=(10000.0,) * 4, yday_spend=5000.0))),
+                         [("spend_down", V.SEV_YELLOW)], "기준이 딱 1만원이면 「미만」이 아니다")
+        r = run(account(recent_spend=(0.0, 0.0, 0.0)), C.StageInfo("진행중", NOW - timedelta(hours=26)))
+        self.assertIn(C.R_STAGE_SPEND, r.rules_run, "딱 26시간은 아직 낡지 않음")
+
+    def test_today_is_kst_even_if_now_is_utc(self):
+        # 9/29 06:45 KST = 9/28 21:45 UTC — 「오늘」은 한국 날짜(9/29)다
+        a = account(campaigns=(camp(use_period=True, period_end="2026-09-29T10:00:00Z"),))   # KST 9/29 19:00
+        r = C.run_checks(a, FRESH_STAGE, NOW.astimezone(timezone.utc))
+        self.assertEqual([(f.code, f.facts) for f in r.findings], [("period_ending", (("days_left", 0),))])
+
+    def test_constants_same_as_engine(self):
+        root = BACKEND.parent
+        if str(root) not in sys.path:
+            sys.path.insert(0, str(root))
+        from naver_engine import handles as H
+        from naver_engine import naver_read as R
+        self.assertEqual(C.KIND_KEY_REJECTED, R.KIND_KEY_REJECTED)
+        self.assertTrue(C.STAGE_ENDED_SPEND <= H.MONITORED_STAGES)
+        self.assertTrue(C.STAGE_RUNNING <= H.MONITORED_STAGES)
+
+    def test_threshold_ranges(self):
+        # 범위는 모듈 표를 믿지 않고 설계 값을 글자로 고정한다(표가 바뀌면 시험도 같이 바뀌는 일을 막는다)
+        expected = {
+            "bizmoney_red_days": (0.5, 3.0), "bizmoney_yellow_days": (1.0, 14.0), "jump_up_ratio": (1.2, 10.0),
+            "jump_down_ratio": (0.05, 0.9), "jump_min_spend": (0, 1_000_000), "jump_min_weeks": (2, 4),
+            "stage_stale_hours": (6, 72), "zero_spend_days": (1, 14), "period_end_days": (0, 14),
+        }
+        self.assertEqual(T.RANGES, expected)
+        for name, (lo, hi) in expected.items():
+            step = 1 if name in T._INTS else 0.01
+            extra = {"bizmoney_yellow_days": 14.0} if name == "bizmoney_red_days" else \
+                {"bizmoney_red_days": 0.5} if name == "bizmoney_yellow_days" else {}
+            with self.subTest(name=name):
+                T.validate({name: lo, **extra})
+                T.validate({name: hi, **extra})
+                for bad in (lo - step, hi + step):
+                    with self.assertRaises(T.ThresholdOutOfRange):
+                        T.validate({name: bad, **extra})
+        with self.assertRaises(T.ThresholdOutOfRange):
+            T.validate({"jump_up_ratio": 3.0, "zero_spend_days": 0})   # 하나라도 틀리면 아무것도 안 바뀜
+        self.assertEqual(T.RANGES["jump_min_weeks"][0], 2, "0 이면 평균을 0 으로 나눈다")
+        self.assertEqual(T.RANGES["zero_spend_days"][0], 1)
+
+
+class ReprTest(unittest.TestCase):
+    def test_input_and_findings_hide_numbers(self):
+        a = account(customer_id=7654321, bizmoney=123456.5, avg_daily_spend=654321.0, yday_spend=987654.0,
+                    recent_spend=(111111.0, 222222.0, 333333.0), same_weekday_spend=(444444.0, 555555.0, 666666.0))
+        r = run(a)
+        texts = [repr(a), repr(r)] + [repr(f) for f in r.findings]
+        for t in texts:
+            for secret in ("7654321", "123456", "654321", "987654", "111111", "444444"):
+                self.assertNotIn(secret, t)
+        self.assertTrue(r.findings, "급변 발견이 있어야 발견 표시도 본다")
 
 
 class PropertyTest(unittest.TestCase):

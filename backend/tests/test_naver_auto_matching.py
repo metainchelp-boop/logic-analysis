@@ -1,6 +1,6 @@
 """네이버 관제 짝 규칙(matching.py) 시험 — ① 이름 정리 정답표 · 번호 두 공간 · 자동 짝 · 이름 후보.
 
-돌리는 법(backend 폴더에서):  python3 -m unittest -v tests.test_naver_auto_matching
+돌리는 법(backend 폴더에서 · 서버와 같은 판):  python3.12 -m unittest -v tests.test_naver_auto_matching
 번호·이름은 모두 지어낸 값이다.
 """
 from __future__ import annotations
@@ -67,6 +67,20 @@ class VectorParityTest(unittest.TestCase):
         self.assertEqual(M.normalize_name("𠀀"), "𠀀")    # 자바 길이 2 → 남는다
         self.assertIsNone(M.normalize_name("Ⅻ"))          # 자바 길이 1 → 사라진다
         self.assertEqual(M.loose_name("Ⅻ"), "xii")
+
+
+    def test_known_difference_final_sigma(self):
+        # ① 자바는 숫자 뒤 끝의 Σ 를 ς 로, 파이썬은 σ 로 바꾼다(끝 글자 판정 방식 차이 · 2026-09-28 자바 21 로 확인).
+        # 짝 규칙은 양쪽을 같은 파이썬 함수로 정리하므로 영향이 없다. 이 차이가 바뀌면(파이썬이 자바를 따르면) 알 수 있게 고정한다.
+        self.assertEqual(M.loose_name("Α1Σ"), "α1σ")
+        self.assertEqual(M.loose_name("ΟΔΟΣ"), "οδος")   # 글자 바로 뒤 끝이면 둘 다 ς
+
+    def test_server_python_version(self):
+        # 정답표는 자바 21(유니코드 15)로 만들었다 — 서버와 같은 파이썬 3.12(유니코드 15)에서 돌려야 뜻이 있다
+        import unicodedata
+        if sys.version_info[:2] != (3, 12):
+            self.skipTest("서버와 같은 python3.12 로 돌린다: python3.12 -m unittest tests.test_naver_auto_matching")
+        self.assertEqual(unicodedata.unidata_version, "15.0.0")
 
 
 class ParseCustomerIdTest(unittest.TestCase):
@@ -179,6 +193,31 @@ class AutoPairTest(unittest.TestCase):
         self.assertEqual([p.possibility_id for p in r.pairs], [11])
 
 
+    def test_out_of_scope_claim_counts_as_conflict(self):
+        # 관리 대상 밖 가망(끝난 계약 등)이 ① 에 같은 번호를 적었으면, 활성 가망도 자동 짝이 되지 않는다(규칙 4)
+        r = run([P(11, "메타")], [C(11, "1234567"), C(99, "1234567")], accounts((1234567, 7654321, "메타상회")))
+        self.assertEqual(reasons(r), [(11, M.B_CLAIMED_BY_SEVERAL)])
+        self.assertEqual(r.pairs, ())
+        self.assertEqual(r.ignored_rows, 1, "관리 대상 밖 행은 짝을 안 만들지만 충돌 판정에는 센다")
+        # 관리 대상 밖 가망의 번호가 형식이 틀려도 막힘 줄은 올리지 않는다(그 가망은 화면에 없다)
+        r = run([P(11, "메타")], [C(11, "1234567"), C(99, "12a")], accounts((1234567, 7654321, "메타상회")))
+        self.assertEqual(len(r.pairs), 1)
+        self.assertEqual(r.blocked, ())
+
+    def test_same_account_via_two_number_spaces_is_conflict(self):
+        # 11 은 광고계정 번호로 · 12 는 고객 번호로 같은 계정을 가리킨다 — 한 계정을 두고 다투는 것
+        r = run([P(11, "메타상회"), P(12, "메타")], [C(11, "7654321"), C(12, "1234567")],
+                accounts((1234567, 7654321, "메타상회 강남")))
+        self.assertEqual(reasons(r), [(11, M.B_AD_ACCOUNT_NO), (12, M.B_CLAIMED_BY_SEVERAL)])
+        self.assertEqual(r.pairs, ())
+
+    def test_unknown_name_pointing_elsewhere_blocked(self):
+        # 이름이 없거나 한 글자라 관계를 모르는데, 계정 이름이 다른 가망의 상호와 같다 — 누구 계정인지 모르면 들어가지 않는다
+        for pname in (None, "메"):
+            with self.subTest(pname=pname):
+                r = run([P(11, pname), P(12, "메타상회")], [C(11, "1234567")], accounts((1234567, 7654321, "메타상회")))
+                self.assertEqual(reasons(r), [(11, M.B_NAME_ELSEWHERE)])
+
 class HumanDecisionTest(unittest.TestCase):
     def test_confirmed_wins_and_missing(self):
         d = [M.HumanDecision(11, 1234567), M.HumanDecision(11, 2345678)]
@@ -223,7 +262,8 @@ class CandidateTest(unittest.TestCase):
                         (1000004, 2000004, "메타상회본점"), (1000005, 2000005, "메타상회A"), (1000006, 2000006, "메타상회B"),
                         (1000007, 2000007, "전혀다름"))
         r = run([P(11, "메타상회")], [], accs)
-        self.assertEqual(len(r.candidates), M.CANDIDATE_MAX)
+        self.assertEqual(M.CANDIDATE_MAX, 5)
+        self.assertEqual(len(r.candidates), 5, "6개 중 5개만")
         self.assertEqual([c.relation for c in r.candidates[:2]], [M.REL_SAME, M.REL_SAME])
         self.assertEqual({c.customer_id for c in r.candidates[:2]}, {1000001, 1000003})
         self.assertEqual(r.candidates[0].same_name_accounts, 2, "같은 정리 이름 계정이 둘 — 여럿 중 하나 표시")
@@ -250,6 +290,15 @@ class CandidateTest(unittest.TestCase):
         self.assertEqual(reasons(r), [(11, M.B_NAME_DIFFERENT)])
         self.assertEqual([c.customer_id for c in r.candidates], [2345678])
 
+    def test_candidate_flags_accounts_owned_elsewhere(self):
+        accs = accounts((1234567, 7654321, "메타상회"), (2345678, 8765432, "메타상회"))
+        r = run([P(11, "메타상회")], [C(98, "2345678")], accs, [M.HumanDecision(99, 1234567)])
+        flags = {c.customer_id: c.claimed_elsewhere for c in r.candidates}
+        self.assertEqual(flags, {1234567: True, 2345678: True},
+                         "관리 대상 밖 가망이 확인했거나 ① 에 적은 계정은 「다른 가망 것」 표시와 함께 보인다")
+        r = run([P(11, "메타상회")], [], accs)
+        self.assertEqual({c.claimed_elsewhere for c in r.candidates}, {False})
+
     def test_prospect_without_name(self):
         r = run([P(11, None), P(12, "메")], [], accounts((1000001, 2000001, "메타상회")))
         self.assertEqual(r.candidates, ())
@@ -269,10 +318,18 @@ class GuardTest(unittest.TestCase):
             lambda: run([P(11, "a"), P(11, "b")]),
             lambda: run([P(True, "a")]),
             lambda: run([P(0, "a")]),
-            lambda: run([P(11, "a")], accs={1234567: {"customerId": 7654321, "adAccountNo": 1}}),
-            lambda: run([P(11, "a")], accs={1234567: {"adAccountNo": 5}, 2345678: {"adAccountNo": 5}}),
-            lambda: run([P(11, "a")], accs={True: {"adAccountNo": 5}}),
-            lambda: run([P(11, "a")], accs={1234567: {"adAccountNo": "5"}}),
+            lambda: run([P(11, "a")], accs={1234567: {"customerId": 7654321, "adAccountNo": 1, "adAccountName": "a"}}),
+            lambda: run([P(11, "a")], accs={1234567: {"adAccountNo": 5, "adAccountName": "a"},
+                                           2345678: {"adAccountNo": 5, "adAccountName": "b"}}),
+            lambda: run([P(11, "a")], accs={True: {"adAccountNo": 5, "adAccountName": "a"}}),
+            lambda: run([P(11, "a")], accs={1234567: {"adAccountNo": "5", "adAccountName": "a"}}),
+            lambda: run([P(11, "a")], accs={1234567: {"adAccountNo": None, "adAccountName": "a"}}),
+            lambda: run([P(11, "a")], accs={1234567: {"adAccountName": "a"}}),
+            lambda: run([P(11, "a")], accs={1234567: {"adAccountNo": 5}}),
+            lambda: run([P(11, "a")], accs={1234567: {"adAccountNo": 5, "adAccountName": 12345}}),
+            lambda: run([P(11, "a")], accs={1234567: {"adAccountNo": 5, "adAccountName": b"a"}}),
+            lambda: run([P(11, b"a")]),
+            lambda: run([P(11, 5)]),
             lambda: run([P(11, "a")], accs={1234567: "x"}),
             lambda: run([{"possibility_id": 11}]),
             lambda: run([P(11, "a")], [("11", "1234567")]),

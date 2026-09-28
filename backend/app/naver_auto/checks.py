@@ -53,7 +53,7 @@ STAGE_ENDED_SPEND = frozenset({"환불중", "계약만료"})   # 빈칸 뺀 글�
 STAGE_RUNNING = frozenset({"진행중"})
 _WS = re.compile(r"\s+")
 ACTIVE_STATUS = "ELIGIBLE"
-EXCLUDED_TYPES = frozenset({"BRAND_SEARCH"})             # 브랜드검색은 정액 계약이라 노출 0 판정에서 뺀다
+EXCLUDED_TYPES = frozenset({"BRAND_SEARCH"})             # 브랜드검색은 정액 선결제 — ④ 노출 0 · ③ 잔액 0 판정에서 뺀다(⑦ 은 본다)
 
 
 @dataclass(frozen=True)
@@ -72,19 +72,20 @@ class CampaignInfo:
 
 @dataclass(frozen=True)
 class AccountInput:
-    customer_id: int
-    campaigns: Optional[Tuple[CampaignInfo, ...]]   # None = 못 읽음
+    # 고객 번호·금액은 표시(repr)·로그에 나오지 않게 가린다(개수·종류만)
+    customer_id: int = field(repr=False)
+    campaigns: Optional[Tuple[CampaignInfo, ...]] = field(default=None, repr=False)   # None = 못 읽음
     campaigns_error: Optional[str] = None           # 못 읽은 까닭(읽기 관문 오류 종류)
-    bizmoney: Optional[float] = None
+    bizmoney: Optional[float] = field(default=None, repr=False)
     budget_lock: Optional[bool] = None
     refund_lock: Optional[bool] = None
     bizmoney_error: Optional[str] = None
-    avg_daily_spend: Optional[float] = None         # 온전한 7일로만 계산 · 아니면 None
-    yday_spend: Optional[float] = None
-    recent_spend: Optional[Tuple[Optional[float], ...]] = None      # 최근 N일(오래된 날 먼저)
-    same_weekday_spend: Optional[Tuple[Optional[float], ...]] = None  # 같은 요일 1~4주 전
+    avg_daily_spend: Optional[float] = field(default=None, repr=False)   # 온전한 7일로만 계산 · 아니면 None
+    yday_spend: Optional[float] = field(default=None, repr=False)
+    recent_spend: Optional[Tuple[Optional[float], ...]] = field(default=None, repr=False)      # 최근 N일(오래된 날 먼저)
+    same_weekday_spend: Optional[Tuple[Optional[float], ...]] = field(default=None, repr=False)  # 같은 요일 1~4주 전
     stats_error: Optional[str] = None
-    data_late: bool = False
+    data_late: Optional[bool] = None                # 엔진이 기준 시각을 보고 False(늦지 않음)를 적어야 한다 · 모르면 늦음
 
 
 @dataclass(frozen=True)
@@ -100,6 +101,9 @@ class Finding:
     target: str            # 이슈 열쇠의 대상 — 계정이면 "acc:<번호>" · 캠페인이면 캠페인 번호
     level: str             # red · yellow · info
     facts: Tuple[Tuple[str, object], ...] = ()
+
+    def __repr__(self) -> str:   # 대상(고객 번호)·사실(금액)은 저장용 — 표시·로그에는 규칙·종류·등급만
+        return f"Finding(rule={self.rule!r}, code={self.code!r}, level={self.level!r})"
 
 
 @dataclass(frozen=True)
@@ -131,8 +135,14 @@ def _period_end_kst(raw: Optional[str]) -> Optional[date]:
     return dt.astimezone(KST).date()
 
 
+def _running(c: CampaignInfo) -> bool:
+    """켜진 캠페인(종류 무관) — ⑦ 기간 곧 끝남이 본다."""
+    return c.status == ACTIVE_STATUS and not c.user_lock and not c.del_flag
+
+
 def _active(c: CampaignInfo) -> bool:
-    return (c.status == ACTIVE_STATUS and not c.user_lock and not c.del_flag and c.tp not in EXCLUDED_TYPES)
+    """④ 「켜져 있는데 안 나감」이 보는 캠페인 — 브랜드검색(정액)은 뺀다."""
+    return _running(c) and c.tp not in EXCLUDED_TYPES
 
 
 def _is_num(v) -> bool:
@@ -152,7 +162,9 @@ def run_checks(account: AccountInput, stage: Optional[StageInfo], now: datetime,
         unknown = set(switches) - set(ALL_RULES)
         if unknown:
             raise ValueError("모르는 규칙 스위치")
-        sw.update({k: bool(v) for k, v in switches.items()})
+        if any(not isinstance(v, bool) for v in switches.values()):
+            raise ValueError("규칙 스위치는 참·거짓만")   # 글자 'false' 가 켜짐으로 읽히지 않게
+        sw.update(switches)
     today = now.astimezone(KST).date()
     acc_target = f"acc:{account.customer_id}"
     findings = []
@@ -181,12 +193,16 @@ def run_checks(account: AccountInput, stage: Optional[StageInfo], now: datetime,
     ran.append(R_KEY)
     campaigns = account.campaigns
     active = [c for c in campaigns if _active(c)]
+    running = [c for c in campaigns if _running(c)]
+    late = account.data_late is not False            # 모르면(None) 늦은 것으로 — 늦지 않다고 적혀야만 ④⑤⑥ 을 돌린다
 
     # ③ 비즈머니
     if off(R_BIZMONEY):
         pass
-    elif not _is_num(account.bizmoney):
+    elif account.bizmoney_error or not _is_num(account.bizmoney):
         skip(R_BIZMONEY, "bizmoney-unread")
+    elif account.stats_error:
+        skip(R_BIZMONEY, "stats-unread")          # 평균 광고비가 통계에서 온다
     elif account.avg_daily_spend is None or not _num_ok(account.avg_daily_spend):
         skip(R_BIZMONEY, "avg-incomplete")      # 7일이 다 있을 때만 평균을 쓴다(반박 C1(d))
     else:
@@ -212,12 +228,12 @@ def run_checks(account: AccountInput, stage: Optional[StageInfo], now: datetime,
 
     # ⑦ 기간 곧 끝남(캠페인마다)
     if not off(R_PERIOD_END):
-        unreadable = [c for c in active if c.use_period and _period_end_kst(c.period_end) is None]
+        unreadable = [c for c in running if c.use_period and _period_end_kst(c.period_end) is None]
         if unreadable:
             skip(R_PERIOD_END, "period-unreadable")
         else:
             ran.append(R_PERIOD_END)
-            for c in active:
+            for c in running:
                 if not c.use_period:
                     continue
                 left = (_period_end_kst(c.period_end) - today).days
@@ -225,15 +241,19 @@ def run_checks(account: AccountInput, stage: Optional[StageInfo], now: datetime,
                     findings.append(Finding(R_PERIOD_END, "period_ending", c.campaign_id, SEV_INFO,
                                             (("days_left", left),)))
 
-    # 자료 늦음이면 ④⑤⑥ 은 돌리지 않는다
-    if account.data_late:
+    # 통계를 못 읽었으면 · 자료 늦음(또는 모름)이면 ④⑤⑥ 은 돌리지 않는다
+    if account.stats_error:
+        for r in (R_NO_DELIVERY, R_SPEND_JUMP, R_STAGE_SPEND):
+            if not off(r):
+                skip(r, "stats-unread")
+    elif late:
         for r in (R_NO_DELIVERY, R_SPEND_JUMP, R_STAGE_SPEND):
             if not off(r):
                 skip(r, "data-late")
     else:
         # ④ 켜져 있는데 안 나감
         if not off(R_NO_DELIVERY):
-            if any(c.yday_imp is None or c.week_imp is None for c in active):
+            if any(not _num_ok(c.yday_imp) or not _num_ok(c.week_imp) for c in active):   # 빈 값·음수·NaN·참거짓 = 모름
                 skip(R_NO_DELIVERY, "impressions-unknown")
             else:
                 ran.append(R_NO_DELIVERY)
@@ -298,7 +318,7 @@ def run_checks(account: AccountInput, stage: Optional[StageInfo], now: datetime,
     reasons = {reason for _r, reason in not_run}
     if reasons - SYSTEM_REASONS - {"data-late"}:
         status = CHECK_PARTIAL           # 읽어야 할 것을 못 읽음 — 확인 필요
-    elif account.data_late:
+    elif late:
         status = CHECK_DATA_LATE
     elif reasons & SYSTEM_REASONS:
         status = CHECK_SYSTEM_GAP

@@ -13,9 +13,11 @@
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import date, datetime
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta, timezone
 from typing import Iterable, Optional, Sequence
+
+KST = timezone(timedelta(hours=9))
 
 RED, WHITE, YELLOW, GREEN = "red", "white", "yellow", "green"
 
@@ -59,7 +61,7 @@ ST_CLOSED = frozenset({"resolved", "auto_resolved", "closed_unlinked"})  # 닫�
 @dataclass(frozen=True)
 class AccountCheck:
     """가망에 이어진 네이버 계정 한 곳의 오늘 점검 결과."""
-    customer_id: int
+    customer_id: int = field(repr=False)   # 표시(repr)·로그에 고객 번호가 새지 않게
     link: str                            # confirmed · auto
     status: str                          # CHECK_*
     checked_on: Optional[date]           # 이 결과가 어느 날(KST) 것인가 — 오늘이 아니면 오늘 결과가 아니다
@@ -86,7 +88,7 @@ def _validate_issue(i: OpenIssue) -> None:
         raise ValueError("모르는 이슈 등급")
     if i.state not in (ST_NEW, ST_ACK, ST_EXCEPTION) and i.state not in ST_CLOSED:
         raise ValueError("모르는 이슈 상태")
-    if i.state == ST_EXCEPTION and not isinstance(i.exception_until, date):
+    if i.state == ST_EXCEPTION and type(i.exception_until) is not date:   # 시각(datetime)은 날짜가 아니다
         raise ValueError("예외에는 끝나는 날이 있어야 한다")
 
 
@@ -106,6 +108,8 @@ def _account_status(a: AccountCheck, today: date, deadline_passed: bool) -> str:
         raise ValueError("모르는 점검 상태")
     if a.link not in (LINK_CONFIRMED, LINK_AUTO):
         raise ValueError("모르는 짝 상태")
+    if a.checked_on is not None and type(a.checked_on) is not date:
+        raise ValueError("점검 날짜는 날짜(date)여야 한다")   # 시각이 오면 「오늘이 아님」으로 조용히 떨어진다
     if a.status in (CHECK_LINK_BROKEN, CHECK_NOT_ELIGIBLE):
         return a.status                  # 날짜와 상관없이 그 상태
     if a.checked_on != today:            # 어제(이전) 결과는 오늘 결과가 아니다
@@ -123,8 +127,11 @@ def judge(*, accounts: Sequence[AccountCheck], issues: Iterable[OpenIssue], now:
     if not isinstance(now, datetime) or now.tzinfo is None or not isinstance(deadline, datetime) \
             or deadline.tzinfo is None:
         raise ValueError("시각에는 시간대가 있어야 한다")
-    today = deadline.date()              # 마감은 그날(KST) 08:00 — 그 날짜가 「오늘」이다
+    today = now.astimezone(KST).date()   # 「오늘」은 지금 시각의 한국 날짜 — 마감의 시간대에 기대지 않는다
+    if deadline.astimezone(KST).date() != today:
+        raise ValueError("마감은 오늘(KST) 날짜의 시각이어야 한다")   # 낡은 마감·다른 날 마감으로 어제 결과가 🟢 가 되지 않게
     deadline_passed = now >= deadline
+    accounts = list(accounts)            # 한 번만 도는 반복자여도 두 번 본다(연결 없음 · 자동 짝 판정)
 
     issues = list(issues)
     for i in issues:
