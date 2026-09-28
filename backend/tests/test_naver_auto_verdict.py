@@ -71,6 +71,7 @@ class TableTest(unittest.TestCase):
         cases = {
             V.CHECK_NOT_CHECKED: True, V.CHECK_PARTIAL: True, V.CHECK_KEY_REJECTED: True,
             V.CHECK_LINK_BROKEN: True, V.CHECK_NOT_ELIGIBLE: True, V.CHECK_DATA_LATE: False,
+            V.CHECK_SYSTEM_GAP: False,
         }
         for st, need in cases.items():
             v = j([acc(st)])

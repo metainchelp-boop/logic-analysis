@@ -26,6 +26,7 @@ CHECK_NOT_CHECKED = "not_checked"    # 마감까지 못 함
 CHECK_PARTIAL = "partial"            # 일부만 읽힘 · 일부 규칙을 못 돌림
 CHECK_KEY_REJECTED = "key_rejected"  # 네이버가 그 계정 읽기를 거절(401·403·1006·1018)
 CHECK_DATA_LATE = "data_late"        # 네이버 어제 자료가 아직 다 안 들어옴(기준 시각)
+CHECK_SYSTEM_GAP = "system_gap"      # 우리 쪽 자료 문제(예: 전산 단계 자료가 오래됨) — 직원이 할 일이 없고 대표 시스템 경보로 간다
 CHECK_LINK_BROKEN = "link_broken"    # 확인했던 짝이 대행 연결 목록에서 사라짐(반박 H1)
 CHECK_NOT_ELIGIBLE = "not_eligible"  # 들어가면 안 되는 계정(예: 전산 종료일이 14일 넘게 지남) — 손잡이 거절
 
@@ -41,12 +42,13 @@ _WHITE_NEEDS = {
     CHECK_LINK_BROKEN: True,
     CHECK_NOT_ELIGIBLE: True,
     CHECK_DATA_LATE: False,          # 네이버 쪽 늦음 — 직원이 할 일이 없다(시스템 경보는 따로)
+    CHECK_SYSTEM_GAP: False,         # 우리 쪽 자료 문제 — 모든 광고주가 한꺼번에 「확인 필요」로 뜨지 않게(시스템 경보는 따로)
     CHECK_PENDING: False,
     WHITE_NO_LINK: False,
 }
 # 화면에 먼저 보일 ⚪ 사유(앞일수록 먼저)
 _WHITE_ORDER = (CHECK_NOT_CHECKED, CHECK_PARTIAL, CHECK_KEY_REJECTED, CHECK_LINK_BROKEN, CHECK_NOT_ELIGIBLE,
-                CHECK_DATA_LATE, CHECK_PENDING, WHITE_NO_LINK)
+                CHECK_DATA_LATE, CHECK_SYSTEM_GAP, CHECK_PENDING, WHITE_NO_LINK)
 _STATUSES = frozenset(_WHITE_ORDER) - {WHITE_NO_LINK} | {CHECK_OK}
 
 SEV_RED, SEV_YELLOW, SEV_INFO = "red", "yellow", "info"
