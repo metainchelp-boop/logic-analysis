@@ -107,6 +107,28 @@ class GateTest(Base):
     def test_allowed_methods_is_exactly_get(self):
         self.assertEqual(R._ALLOWED_METHODS, frozenset({"GET"}))
 
+    def test_built_request_rechecked_before_send(self):
+        # 요청 만드는 코드가 바뀌어 방식이 GET 이 아니게 되거나 본문이 붙어도, 보내기 전에 한 번 더 막는다
+        real = urllib.request.Request
+        for kind in ("method", "body"):
+            class Bad(real):
+                def get_method(self, _k=kind):
+                    return "POST" if _k == "method" else super().get_method()
+
+                @property
+                def data(self, _k=kind):
+                    return b"x" if _k == "body" else None
+
+                @data.setter
+                def data(self, v):
+                    pass
+            urllib.request.Request = Bad
+            try:
+                self.expect(R.WriteForbidden, self.reader._gate, "GET", "/ncc/campaigns", None, ACC)
+            finally:
+                urllib.request.Request = real
+        self.assertEqual(self.naver.calls, [])
+
     def test_host_is_pinned(self):
         self.assertEqual((R.BASE_HOST, R.BASE_URL), ("api.searchad.naver.com", "https://api.searchad.naver.com"))
         old = R.BASE_URL

@@ -2,9 +2,11 @@
 
 낱말 찾기가 아니라 코드 구조를 본다(별칭 · 글자 쪼개기 · exec 로 빠져나가지 못하게 — 적대 검토 「시험 충분성」).
 
-- 네트워크를 여는 모듈(urllib · http · socket · ssl · requests …)은 ``naver_read.py`` 에서만 import 한다.
-- ``naver_read.py`` 안에서도 요청을 만드는 곳은 관문 ``_gate`` 의 ``Request(`` 한 곳, 보내는 곳은 ``_gate`` 의 ``.send(`` 와
-  ``UrllibTransport.send`` 의 ``._opener.open(`` 한 곳뿐이다. 다른 연결 방식(HTTPSConnection 등)은 이름조차 없다.
+- 네트워크를 여는 모듈(urllib · http · socket · ssl · requests …)은 **관문 두 개**(설계 v1.8 M9)에서만 import 한다 —
+  네이버 관문 ``naver_read.py`` · ① 전산 관문 ``erp_read.py``.
+- 관문 안에서도 요청을 만드는 곳은 그 관문 ``_gate`` 의 ``Request(`` 한 곳, 보내는 곳은 ``_gate`` 의 ``.send(`` 한 곳이다.
+  실제로 여는 곳은 엔진 전체에서 ``UrllibTransport.send`` 의 ``._opener.open(`` 한 곳뿐이다(① 관문도 같은 전송을 쓴다).
+  다른 연결 방식(HTTPSConnection 등)은 이름조차 없다.
 - 방식 이름으로 쓰이는 글자(대소문자 무관 · 글자 이어 붙이기 포함)는 ``GET`` 뿐이다.
 - ③ 쓰기 어댑터·앱 본체를 import 하지 않고, exec · eval · compile · __import__ · importlib · sys.modules · 글자로 된
   getattr 같은 우회도 없다.
@@ -20,6 +22,8 @@ import unittest
 
 ENGINE = pathlib.Path(__file__).resolve().parents[1]
 SOURCES = sorted(p for p in ENGINE.rglob("*.py") if "tests" not in p.parts)
+# 관문 모듈 → (요청을 만드는 클래스, 관문을 부르는 함수)
+GATES = {"naver_read.py": ("NaverReader", "_request"), "erp_read.py": ("ErpReader", "_get")}
 NET_MODULES = ("urllib", "http", "socket", "ssl", "requests", "httpx", "aiohttp", "subprocess", "asyncio",
                "ftplib", "smtplib", "telnetlib", "xmlrpc", "multiprocessing")
 FORBIDDEN_MODULES = ("app.adapters", "app.main", "app.collector", "app.database", "app.security", "app.models",
@@ -98,11 +102,11 @@ def _folded_strings(tree: ast.AST):
 class GuardrailTest(unittest.TestCase):
     def test_sources_found(self):
         names = {p.name for p in SOURCES}
-        self.assertTrue({"naver_read.py", "handles.py", "fields.py", "credentials.py"} <= names)
+        self.assertTrue({"naver_read.py", "erp_read.py", "handles.py", "fields.py", "credentials.py"} <= names)
 
     def test_network_modules_only_in_gate_module(self):
         for p in SOURCES:
-            if p.name == "naver_read.py":
+            if p.name in GATES:
                 continue
             for node, mod in _imports(_tree(p)):
                 root = mod.lstrip(".").split(".")[0]
@@ -134,32 +138,48 @@ class GuardrailTest(unittest.TestCase):
                     self.assertEqual(s, "GET", f"{p.name}: 방식 이름 {s!r}")
 
     def test_single_request_path_in_gate_module(self):
-        tree = _tree(ENGINE / "naver_read.py")
-        owner = _owners(tree)
-        seen = {"Request": [], "send": [], "open": []}
-        for n in ast.walk(tree):
-            if isinstance(n, ast.Attribute):
-                self.assertNotIn(n.attr, ("HTTPSConnection", "HTTPConnection", "putrequest", "urlopen",
-                                          "create_connection", "wrap_socket", "socket"), "두 번째 요청 길")
-            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute):
-                self.assertNotIn(n.func.attr, ("request", "putrequest", "putheader", "endheaders", "sendall",
-                                               "connect"), "두 번째 요청 길")
-            if isinstance(n, ast.Name):
-                self.assertNotIn(n.id, ("HTTPSConnection", "HTTPConnection", "urlopen", "socket"), "두 번째 요청 길")
-            if isinstance(n, ast.Call):
-                name = n.func.attr if isinstance(n.func, ast.Attribute) else getattr(n.func, "id", None)
-                if name in seen:
-                    seen[name].append(owner.get(n))
-        self.assertEqual(seen["Request"], [(("NaverReader", "_gate"))], "요청은 관문 한 곳에서만 만든다")
-        self.assertEqual(seen["send"], [("NaverReader", "_gate")], "보내기는 관문에서만")
-        self.assertEqual(seen["open"], [("UrllibTransport", "send")], "실제로 여는 곳은 한 곳")
-        gate_calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-                      and n.func.attr == "_gate"]
-        self.assertTrue(gate_calls)
-        for n in gate_calls:
-            self.assertIsInstance(n.args[0], ast.Constant, "관문에는 방식 이름을 글자 그대로 넘긴다")
-            self.assertEqual(n.args[0].value, "GET")
-            self.assertEqual(owner.get(n), ("NaverReader", "_request"))
+        opens = []
+        for gate, (cls, caller) in GATES.items():
+            tree = _tree(ENGINE / gate)
+            owner = _owners(tree)
+            seen = {"Request": [], "send": [], "open": []}
+            for n in ast.walk(tree):
+                if isinstance(n, ast.Attribute):
+                    self.assertNotIn(n.attr, ("HTTPSConnection", "HTTPConnection", "putrequest", "urlopen",
+                                              "create_connection", "wrap_socket", "socket"), f"{gate}: 두 번째 요청 길")
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute):
+                    self.assertNotIn(n.func.attr, ("request", "putrequest", "putheader", "endheaders", "sendall",
+                                                   "connect"), f"{gate}: 두 번째 요청 길")
+                if isinstance(n, ast.Name):
+                    self.assertNotIn(n.id, ("HTTPSConnection", "HTTPConnection", "urlopen", "socket"),
+                                     f"{gate}: 두 번째 요청 길")
+                if isinstance(n, ast.Call):
+                    name = n.func.attr if isinstance(n.func, ast.Attribute) else getattr(n.func, "id", None)
+                    if name in seen:
+                        seen[name].append(owner.get(n))
+            self.assertEqual(seen["Request"], [(cls, "_gate")], f"{gate}: 요청은 관문 한 곳에서만 만든다")
+            self.assertEqual(seen["send"], [(cls, "_gate")], f"{gate}: 보내기는 관문에서만")
+            opens += [(gate, o) for o in seen["open"]]
+            gate_calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                          and n.func.attr == "_gate"]
+            self.assertTrue(gate_calls, gate)
+            for n in gate_calls:
+                self.assertIsInstance(n.args[0], ast.Constant, f"{gate}: 관문에는 방식 이름을 글자 그대로 넘긴다")
+                self.assertEqual(n.args[0].value, "GET")
+                self.assertEqual(owner.get(n), (cls, caller), f"{gate}: 관문은 정해진 한 곳에서만 부른다")
+        self.assertEqual(opens, [("naver_read.py", ("UrllibTransport", "send"))], "실제로 여는 곳은 엔진 전체에 한 곳")
+
+    def test_gate_hosts_pinned_as_literals(self):
+        for gate, const in (("naver_read.py", "BASE_HOST"), ("erp_read.py", "ERP_HOST")):
+            tree = _tree(ENGINE / gate)
+            vals = [n.value for n in ast.walk(tree) if isinstance(n, ast.Assign)
+                    and any(isinstance(t, ast.Name) and t.id == const for t in n.targets)]
+            self.assertEqual(len(vals), 1, gate)
+            self.assertIsInstance(vals[0], ast.Constant, f"{gate}: 호스트는 글자 그대로")
+        self.assertEqual(ast.literal_eval(next(n.value for n in ast.walk(_tree(ENGINE / "erp_read.py"))
+                                               if isinstance(n, ast.Assign) and any(
+                                                   isinstance(t, ast.Name) and t.id == "ERP_HOST" for t in n.targets))),
+                         "api.metainc.co.kr")
 
     def test_secret_value_only_via_gate(self):
         for p in SOURCES:
@@ -169,8 +189,9 @@ class GuardrailTest(unittest.TestCase):
                 if isinstance(n, ast.Attribute) and n.attr == "_value" and p.name != "credentials.py":
                     self.fail(f"{p.name}: 비밀값을 _value 로 꺼냄")
                 if isinstance(n, ast.Attribute) and n.attr == "reveal" and p.name != "credentials.py":
-                    self.assertEqual((p.name, owner.get(n)), ("naver_read.py", ("NaverReader", "_gate")),
-                                     "비밀값은 관문에서만 꺼낸다")
+                    self.assertIn((p.name, owner.get(n)),
+                                  {(g, (cls, "_gate")) for g, (cls, _caller) in GATES.items()},
+                                  "비밀값은 관문에서만 꺼낸다")
 
     def test_handle_internals_private(self):
         for p in SOURCES:
