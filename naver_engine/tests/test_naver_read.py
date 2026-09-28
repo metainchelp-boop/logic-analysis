@@ -511,6 +511,13 @@ class AccountReadTest(Base):
             self.assertEqual(self.expect(R.NaverApiError, self.reader.get_bizmoney, check_handle()).kind,
                              R.KIND_BAD_RESPONSE)
 
+    def test_bizmoney_amount_required(self):
+        for bad in ({"customerId": ACC, "budgetLock": False, "refundLock": False},
+                    {"customerId": ACC, "bizmoney": None, "budgetLock": False, "refundLock": False}):
+            self.naver.script("/billing/bizmoney", (200, bad))
+            self.assertEqual(self.expect(R.NaverApiError, self.reader.get_bizmoney, check_handle()).kind,
+                             R.KIND_BAD_RESPONSE)
+
     def test_bizmoney_lock_flags_required(self):
         for bad in ({"customerId": ACC, "bizmoney": 5, "refundLock": False},
                     {"customerId": ACC, "bizmoney": 5, "budgetLock": None, "refundLock": False},
