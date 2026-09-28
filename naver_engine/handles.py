@@ -38,10 +38,16 @@ MONITORED_STAGES = frozenset({"진행중", "전략관리", "사후관리", "홀�
 ENDED_GRACE_DAYS = 14               # 계약이 끝나고 14일까지만 들어간다(그날 포함)
 STAGE_MAX_AGE = timedelta(hours=72)  # 단계 자료가 이보다 낡았으면 들어가지 않는다(끝난 계약이 진행중으로 보일 수 있다)
 
+PREVIEW_TTL = timedelta(minutes=10)   # 미리보기 손잡이는 누른 뒤 10분 안에만
+PREVIEW_MAX_USES = 3                  # 한 번 누르면 호출 3번까지(캠페인 이름 · 비즈채널)
+PREVIEW_DAILY_CAP = 300               # 한 사람이 하루에 발급할 수 있는 미리보기 손잡이 수
+
 _MAX_ID = 10 ** 15
 _DIGITS = re.compile(r"[0-9]{1,15}")
 _WS = re.compile(r"\s+")
 _KEY = os.urandom(32)  # 이 프로세스만 아는 서명 열쇠 — 이 파일 밖에서 쓰면 시험이 실패한다
+_PREVIEW_LEFT = {}     # 미리보기 손잡이 번호 → (남은 사용 횟수, 발급 시각)
+_PREVIEW_ISSUED = {}   # (직원 번호, 날짜) → 오늘 발급 수
 
 
 class NotEligible(Exception):
@@ -110,15 +116,20 @@ class ManagerHandle(_Frozen):
 
 
 class AccountHandle(_Frozen):
-    __slots__ = ("customer_id", "possibility_id", "purpose", "issued_on", "requested_by", "_tag")
+    __slots__ = ("customer_id", "possibility_id", "purpose", "issued_on", "requested_by", "candidate_id",
+                 "issued_at", "nonce", "_tag")
 
     def __init__(self, customer_id: int, possibility_id: int, purpose: str, issued_on: date,
-                 requested_by: Optional[int], tag: str) -> None:
+                 requested_by: Optional[int], candidate_id: Optional[int], issued_at: datetime, nonce: str,
+                 tag: str) -> None:
         object.__setattr__(self, "customer_id", customer_id)
         object.__setattr__(self, "possibility_id", possibility_id)
         object.__setattr__(self, "purpose", purpose)
         object.__setattr__(self, "issued_on", issued_on)
         object.__setattr__(self, "requested_by", requested_by)
+        object.__setattr__(self, "candidate_id", candidate_id)
+        object.__setattr__(self, "issued_at", issued_at)
+        object.__setattr__(self, "nonce", nonce)
         object.__setattr__(self, "_tag", tag)
 
     def __repr__(self) -> str:
@@ -135,11 +146,14 @@ def _check_stage(stage, stage_as_of: datetime, latest_end_date: Optional[date], 
         raise NotEligible("stage-stale")
     if stage_as_of - now > timedelta(minutes=5):
         raise NotEligible("stage-time-in-future")
-    if key == STAGE_ENDED:
-        if not isinstance(latest_end_date, date) or isinstance(latest_end_date, datetime):
-            raise NotEligible("ended-end-date-unknown")
-        if (_kst_today(now) - latest_end_date).days > ENDED_GRACE_DAYS:
-            raise NotEligible("ended-over-14-days")
+    if latest_end_date is not None and (not isinstance(latest_end_date, date) or isinstance(latest_end_date, datetime)):
+        raise NotEligible("end-date-invalid")
+    if key == STAGE_ENDED and latest_end_date is None:
+        raise NotEligible("ended-end-date-unknown")
+    # 종료일이 적혀 있으면 **어느 단계든** 14일 규칙을 건다 — 전산 단계가 계약보다 늦게 바뀌는 곳이 있다
+    # (① 상태 보드 실측: 계약이 끝났는데 단계가 진행중·재계약 진행중인 곳 28). 사람이 전산을 고치면 다시 들어간다.
+    if latest_end_date is not None and (_kst_today(now) - latest_end_date).days > ENDED_GRACE_DAYS:
+        raise NotEligible("ended-over-14-days")
 
 
 def _check_possibility(possibility_id) -> int:
@@ -157,20 +171,42 @@ def issue_check_handle(*, customer_id, possibility_id, link_state, stage, stage_
         raise NotEligible("link-not-checkable")
     _check_stage(stage, stage_as_of, latest_end_date, now)
     today = _kst_today(now)
-    return AccountHandle(cid, pid, PURPOSE_CHECK, today, None, _tag("A", PURPOSE_CHECK, cid, pid, today, None))
+    return AccountHandle(cid, pid, PURPOSE_CHECK, today, None, None, now, "",
+                         _tag("A", PURPOSE_CHECK, cid, pid, today, None, None, now.isoformat(), ""))
 
 
-def issue_preview_handle(*, customer_id, possibility_id, stage, stage_as_of: datetime,
+def issue_preview_handle(*, customer_id, possibility_id, candidate_id, stage, stage_as_of: datetime,
                          latest_end_date: Optional[date], now: datetime, requested_by) -> AccountHandle:
-    """짝 확인 화면 미리보기용 손잡이 — 사람이 누를 때만. ``requested_by`` = ① 직원 번호(대표 = 0)."""
+    """짝 확인 화면 미리보기용 손잡이 — 사람이 그 후보 줄을 누를 때만(반박 H2 · 대표 결정 Q2).
+
+    ``requested_by`` = 누른 ① 직원 번호(대표 = 0) · ``candidate_id`` = 짝 후보 기록 번호.
+    10분 안에 · 호출 3번까지만 쓸 수 있고, 한 사람이 하루에 300개까지만 발급한다 — 일괄로 1,784곳을 읽는 길을 막는다.
+    """
     cid = normalize_customer_id(customer_id)
     pid = _check_possibility(possibility_id)
+    if isinstance(candidate_id, bool) or not isinstance(candidate_id, int) or candidate_id <= 0:
+        raise NotEligible("candidate-invalid")
     if isinstance(requested_by, bool) or not isinstance(requested_by, int) or requested_by < 0:
         raise NotEligible("requester-invalid")
     _check_stage(stage, stage_as_of, latest_end_date, now)
     today = _kst_today(now)
-    return AccountHandle(cid, pid, PURPOSE_PREVIEW, today, requested_by,
-                         _tag("A", PURPOSE_PREVIEW, cid, pid, today, requested_by))
+    _prune(now, today)
+    key = (requested_by, today)
+    if _PREVIEW_ISSUED.get(key, 0) >= PREVIEW_DAILY_CAP:
+        raise NotEligible("preview-daily-cap")
+    _PREVIEW_ISSUED[key] = _PREVIEW_ISSUED.get(key, 0) + 1
+    nonce = os.urandom(12).hex()
+    _PREVIEW_LEFT[nonce] = (PREVIEW_MAX_USES, now)
+    return AccountHandle(cid, pid, PURPOSE_PREVIEW, today, requested_by, candidate_id, now, nonce,
+                         _tag("A", PURPOSE_PREVIEW, cid, pid, today, requested_by, candidate_id, now.isoformat(), nonce))
+
+
+def _prune(now: datetime, today: date) -> None:
+    """지난 미리보기 기록을 비운다(메모리가 쌓이지 않게)."""
+    for n in [n for n, (_left, at) in _PREVIEW_LEFT.items() if now - at > PREVIEW_TTL]:
+        del _PREVIEW_LEFT[n]
+    for k in [k for k in _PREVIEW_ISSUED if k[1] != today]:
+        del _PREVIEW_ISSUED[k]
 
 
 def issue_manager_handle(customer_id, now: datetime) -> ManagerHandle:
@@ -187,11 +223,21 @@ def require_account(handle, now: datetime, purposes: Iterable[str]) -> AccountHa
     allowed = frozenset(purposes)
     if handle.purpose not in _PURPOSES or handle.purpose not in allowed:
         raise HandleInvalid("이 호출에 쓸 수 없는 손잡이입니다")
-    expect = _tag("A", handle.purpose, handle.customer_id, handle.possibility_id, handle.issued_on, handle.requested_by)
+    if not isinstance(handle.issued_at, datetime) or handle.issued_at.tzinfo is None:
+        raise HandleInvalid("손잡이 발급 시각이 없습니다")
+    expect = _tag("A", handle.purpose, handle.customer_id, handle.possibility_id, handle.issued_on, handle.requested_by,
+                  handle.candidate_id, handle.issued_at.isoformat(), handle.nonce)
     if not hmac.compare_digest(expect, handle._tag):
         raise HandleInvalid("손잡이 서명이 맞지 않습니다")
     if handle.issued_on != _kst_today(now):
         raise HandleInvalid("오늘 발급한 손잡이가 아닙니다")
+    if handle.purpose == PURPOSE_PREVIEW:
+        if not (timedelta(0) <= now - handle.issued_at <= PREVIEW_TTL):
+            raise HandleInvalid("미리보기 손잡이 시간이 지났습니다")
+        left, at = _PREVIEW_LEFT.get(handle.nonce, (0, None))
+        if left <= 0:
+            raise HandleInvalid("미리보기 손잡이를 이미 다 썼습니다")
+        _PREVIEW_LEFT[handle.nonce] = (left - 1, at)
     return handle
 
 

@@ -20,6 +20,7 @@ ENV_SECRET_KEY = "NAVER_MGR_SECRET_KEY"
 
 _MASK = "Secret(****)"
 _DIGITS = re.compile(r"[0-9]{1,15}")
+_KEY_CHARS = re.compile(r"[\x21-\x7e]{8,512}")  # 눈에 보이는 영문·숫자·기호만(빈칸·줄바꿈·한글 금지)
 
 
 class CredentialsMissing(RuntimeError):
@@ -90,6 +91,10 @@ def load_manager_credentials(env: Optional[Mapping[str, str]] = None) -> Manager
     cid = src[ENV_CUSTOMER_ID].strip()
     if not _DIGITS.fullmatch(cid) or int(cid) <= 0:
         raise CredentialsMissing(f"{ENV_CUSTOMER_ID} 는 숫자여야 합니다")
+    for name in (ENV_API_KEY, ENV_SECRET_KEY):
+        if not _KEY_CHARS.fullmatch(src[name].strip()):
+            # 줄바꿈 등이 섞이면 보낼 때 오류 문구에 키가 통째로 실린다 — 읽을 때 막는다(값은 문구에 넣지 않는다)
+            raise CredentialsMissing(f"{name} 에 쓸 수 없는 글자가 있습니다(빈칸·줄바꿈·한글 등)")
     return ManagerCredentials(
         customer_id=int(cid),
         api_key=Secret(src[ENV_API_KEY].strip()),

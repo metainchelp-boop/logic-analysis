@@ -25,8 +25,10 @@ import http.client
 import json
 import logging
 import math
+import os
 import random
 import re
+import ssl
 import time
 import urllib.error
 import urllib.parse
@@ -142,11 +144,38 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+class TransportUnsafe(RuntimeError):
+    """믿을 수 있는 연결을 만들 수 없다(인증서 목록 없음)."""
+
+
+def _verifying_context() -> ssl.SSLContext:
+    """인증서를 반드시 확인하는 연결 설정 — 환경변수(SSL_CERT_FILE · SSL_CERT_DIR)로 바꿀 수 없는
+    파이썬 기본 경로의 인증서 목록만 믿는다(중간에서 복호화하는 서버를 믿지 않게 · 반박 보안 검토)."""
+    paths = ssl.get_default_verify_paths()
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname = True
+    ctx.verify_mode = ssl.CERT_REQUIRED
+    loaded = False
+    if paths.openssl_cafile and os.path.isfile(paths.openssl_cafile):
+        ctx.load_verify_locations(cafile=paths.openssl_cafile)
+        loaded = True
+    if paths.openssl_capath and os.path.isdir(paths.openssl_capath):
+        ctx.load_verify_locations(capath=paths.openssl_capath)
+        loaded = True
+    if not loaded:
+        raise TransportUnsafe("인증서 목록을 찾지 못했습니다")
+    return ctx
+
+
 class UrllibTransport:
-    """실제 네트워크. HTTP 오류도 예외가 아니라 (상태, 본문)으로 돌려준다. 연결 실패만 예외."""
+    """실제 네트워크. HTTP 오류도 예외가 아니라 (상태, 본문)으로 돌려준다. 연결 실패만 예외.
+
+    프록시를 쓰지 않는다(환경변수 HTTPS_PROXY 무시) — 키가 붙은 요청이 네이버 말고 다른 서버를 거치지 않게.
+    """
 
     def __init__(self) -> None:
-        self._opener = urllib.request.build_opener(_NoRedirect())
+        self._opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}), _NoRedirect(), urllib.request.HTTPSHandler(context=_verifying_context()))
 
     def send(self, req: urllib.request.Request, timeout: float) -> Tuple[int, bytes]:
         try:
@@ -181,6 +210,9 @@ class ChildAccounts:
     per_manager: Dict[int, int]            # 관리계정 번호 → 받은 줄 수(= totalElements)
     managers: Tuple[dict, ...]
 
+    def __repr__(self) -> str:  # 고객 번호가 로그에 새지 않게 — 개수만
+        return f"ChildAccounts(accounts={len(self.accounts)}, managers={len(self.managers)})"
+
 
 @dataclass(frozen=True)
 class StatsResult:
@@ -193,6 +225,15 @@ class StatsResult:
     until: date
     reasons: Tuple[str, ...] = field(default=())
 
+    def __repr__(self) -> str:
+        return (f"StatsResult(rows={len(self.rows)}, missing={len(self.missing_ids)}, "
+                f"fresh={self.data_fresh}, reasons={self.reasons})")
+
+    @property
+    def unknown_values(self) -> Tuple[Tuple[str, str], ...]:
+        """줄은 왔는데 값이 비어 있는 (번호, 지표) — 0 이 아니라 모름."""
+        return tuple((i, f) for i, row in self.rows.items() for f, v in row.items() if v is None)
+
     @property
     def data_fresh(self) -> bool:
         """``until`` 날짜의 자료가 다 들어왔나 — 기준 시각이 그다음 날 0시 이후여야 한다."""
@@ -202,8 +243,8 @@ class StatsResult:
 
     @property
     def complete(self) -> bool:
-        """판정에 써도 되는가 — 빠진 줄 0 · 자료 늦음 아님."""
-        return not self.missing_ids and self.data_fresh
+        """판정에 써도 되는가 — 빠진 줄 0 · 빈 값 0 · 자료 늦음 아님."""
+        return not self.missing_ids and not self.unknown_values and self.data_fresh
 
 
 @dataclass(frozen=True)
@@ -214,6 +255,9 @@ class DailyStats:
     cycle_base_tm: Optional[datetime]
     until: date
 
+    def __repr__(self) -> str:
+        return f"DailyStats(days={len(self.days)}, missing={len(self.missing_days)}, fresh={self.data_fresh})"
+
     @property
     def data_fresh(self) -> bool:
         if self.cycle_base_tm is None:
@@ -221,8 +265,12 @@ class DailyStats:
         return self.cycle_base_tm >= datetime.combine(self.until + timedelta(days=1), datetime.min.time(), H.KST)
 
     @property
+    def unknown_values(self) -> Tuple[Tuple[str, str], ...]:
+        return tuple((d, f) for d, row in self.days.items() for f, v in row.items() if v is None)
+
+    @property
     def complete(self) -> bool:
-        return not self.missing_days and self.data_fresh
+        return not self.missing_days and not self.unknown_values and self.data_fresh
 
 
 # ── 판독(순수) ───────────────────────────────────────────────────────
@@ -233,6 +281,16 @@ def _parse_cycle(raw) -> Optional[datetime]:
         return datetime.strptime(raw, "%Y%m%d%H%M").replace(tzinfo=H.KST)
     except ValueError:
         return None
+
+
+CYCLE_MAX_AHEAD = timedelta(minutes=10)
+
+
+def _not_future(cycle: Optional[datetime], now: datetime) -> Optional[datetime]:
+    """자료 기준 시각이 지금보다 앞서면(시계·형식 이상) 모르는 것으로 본다."""
+    if cycle is not None and cycle > now + CYCLE_MAX_AHEAD:
+        return None
+    return cycle
 
 
 def _num(value, what: str) -> Optional[float]:
@@ -288,6 +346,8 @@ def parse_stats(body, requested_ids: Sequence[str], fields: Sequence[str], until
     reasons = []
     if missing:
         reasons.append("missing-rows")
+    if any(v is None for row in rows.values() for v in row.values()):
+        reasons.append("metric-unknown")
     if cycle is None:
         reasons.append("cycle-unknown")
     result = StatsResult(shape, rows, req, missing, cycle, until, ())
@@ -349,9 +409,9 @@ def _check_period(since: date, until: date, today: date) -> None:
         raise ValueError("기간이 너무 깁니다")
 
 
-def _check_fields(fields: Sequence[str]) -> Tuple[str, ...]:
+def _check_fields(fields: Sequence[str], allowed=F.STAT_FIELDS_SUMMARY) -> Tuple[str, ...]:
     out = tuple(fields)
-    if not out or any(f not in F.STAT_FIELDS for f in out) or len(set(out)) != len(out):
+    if not out or any(f not in allowed for f in out) or len(set(out)) != len(out):
         raise ValueError("요청할 수 없는 지표입니다")
     return out
 
@@ -406,7 +466,13 @@ class NaverReader:
             raise WriteForbidden("GET 이 아닌 요청은 보내지 않습니다")
         if req.host != BASE_HOST or req.type != "https":
             raise PathForbidden("허용하지 않은 호스트")
-        return self._transport.send(req, TIMEOUT)
+        del headers
+        try:
+            return self._transport.send(req, TIMEOUT)
+        except (urllib.error.URLError, OSError, http.client.HTTPException):
+            raise  # 연결 실패 — _request 가 종류 이름만 남기고 다시 보낸다
+        except Exception as e:  # 뜻밖의 오류 — 문구에 키가 섞일 수 있어 종류 이름만 남기고 가린다
+            raise NaverApiError(KIND_OTHER, path_shape(path), None, None, customer_id, type(e).__name__) from None
 
     def _pace(self) -> None:
         gap = 1.0 / CALLS_PER_SEC
@@ -439,8 +505,10 @@ class NaverReader:
             except (urllib.error.URLError, OSError, http.client.HTTPException) as e:
                 kind, detail = KIND_NETWORK, type(e).__name__
             else:
-                if 200 <= status < 300:
+                if status == 200:
                     return self._decode(body, shape, customer_id, status)
+                if 200 < status < 300:  # 206 · 203 등 — 온전한 응답이라 믿지 않는다
+                    raise NaverApiError(KIND_BAD_RESPONSE, shape, status, None, customer_id, "200 이 아닌 성공")
                 code = _error_code(body)
                 kind, detail = classify(status, code), ""
             if kind == KIND_RATE:
@@ -475,12 +543,24 @@ class NaverReader:
     def _manager(self, mh) -> H.ManagerHandle:
         return H.require_manager(mh, self._clock.now(), self._cred.customer_id)
 
-    def _all_pages(self, customer_id: int, path: str, what: str) -> List[dict]:
+    def _all_pages(self, customer_id: int, path: str, what: str, key: str) -> List[dict]:
+        """모든 쪽을 받는다 — 쪽 번호가 다르거나 같은 번호가 두 번 오거나 합계가 다르면 통째로 버린다."""
         rows: List[dict] = []
+        seen = set()
         total: Optional[int] = None
         for page in range(MAX_PAGES):
             body = self._request(customer_id, path, {"page": page, "size": PAGE_SIZE})
             content, t, last, pages = _page(body, what)
+            number = body.get("number")
+            if number is not None and (isinstance(number, bool) or number != page):
+                raise IncompleteList(f"{what}: 요청한 쪽과 받은 쪽 번호가 다름")
+            for r in content:
+                k = r.get(key) if isinstance(r, Mapping) else None
+                if k is None or isinstance(k, (bool, dict, list)):
+                    raise IncompleteList(f"{what}: 번호 없는 줄")
+                if k in seen:
+                    raise IncompleteList(f"{what}: 같은 번호가 두 번 옴")
+                seen.add(k)
             if total is None:
                 total = t
             elif t != total:
@@ -498,7 +578,7 @@ class NaverReader:
 
     def list_manager_accounts(self, mh) -> List[dict]:
         h = self._manager(mh)
-        rows = self._all_pages(h.customer_id, "/manager-accounts", "관리계정 목록")
+        rows = self._all_pages(h.customer_id, "/manager-accounts", "관리계정 목록", "managerAccountNo")
         out = []
         for r in rows:
             kept = F.keep_manager(r)
@@ -512,7 +592,8 @@ class NaverReader:
         h = self._manager(mh)
         if isinstance(manager_account_no, bool) or not isinstance(manager_account_no, int) or manager_account_no <= 0:
             raise ValueError("관리계정 번호가 아닙니다")
-        rows = self._all_pages(h.customer_id, f"/manager-accounts/{manager_account_no}/child-ad-accounts", "하위 계정 목록")
+        rows = self._all_pages(h.customer_id, f"/manager-accounts/{manager_account_no}/child-ad-accounts",
+                               "하위 계정 목록", "customerId")
         out = []
         for r in rows:
             kept = F.keep(r, F.CHILD_ACCOUNT)
@@ -533,6 +614,9 @@ class NaverReader:
         for m in managers:
             no = m["managerAccountNo"]
             kids = self.list_child_accounts(mh, no)
+            expect = m.get("childAdAccountCount")  # 실측: 지금은 비어 있음(null) — 값이 오면 「0 이 아닌데 0줄」만 막는다
+            if isinstance(expect, int) and not isinstance(expect, bool) and expect > 0 and not kids:
+                raise IncompleteList("하위 계정 목록: 관리계정은 하위가 있다는데 0줄")
             per[no] = len(kids)
             for k in kids:
                 accounts.setdefault(k["customerId"], k)
@@ -577,6 +661,9 @@ class NaverReader:
             raise NaverApiError(KIND_BAD_RESPONSE, "/billing/bizmoney", 200, None, h.customer_id, "잔액 모름") from None
         if kept.get("bizmoney") is None:
             raise NaverApiError(KIND_BAD_RESPONSE, "/billing/bizmoney", 200, None, h.customer_id, "잔액 모름")
+        for lock in ("budgetLock", "refundLock"):
+            if not isinstance(kept.get(lock), bool):
+                raise NaverApiError(KIND_BAD_RESPONSE, "/billing/bizmoney", 200, None, h.customer_id, "잠금 모름")
         return kept
 
     def get_stats_summary(self, ah, ids: Iterable[str], since: date, until: date,
@@ -602,12 +689,14 @@ class NaverReader:
             part = parse_stats(body, chunk, flds, until)
             rows.update(part.rows)
             missing.extend(part.missing_ids)
-            cycles.append(part.cycle_base_tm)
+            cycles.append(_not_future(part.cycle_base_tm, self._clock.now()))
             shapes.add(part.shape)
         cycle = None if any(c is None for c in cycles) else min(cycles)
         reasons = []
         if missing:
             reasons.append("missing-rows")
+        if any(v is None for row in rows.values() for v in row.values()):
+            reasons.append("metric-unknown")
         if cycle is None:
             reasons.append("cycle-unknown")
         res = StatsResult("+".join(sorted(shapes)), rows, tuple(want), tuple(missing), cycle, until, ())
@@ -619,7 +708,7 @@ class NaverReader:
                         fields: Sequence[str] = ("impCnt", "clkCnt", "salesAmt", "ccnt")) -> DailyStats:
         h = self._account(ah, (H.PURPOSE_CHECK,))
         _check_period(since, until, H._kst_today(self._clock.now()))
-        flds = _check_fields(fields)
+        flds = _check_fields(fields, F.STAT_FIELDS_DAILY)
         if not isinstance(entity_id, str) or not entity_id:
             raise ValueError("번호가 아닙니다")
         body = self._request(h.customer_id, "/stats", {
@@ -628,7 +717,9 @@ class NaverReader:
             "timeRange": json.dumps({"since": since.isoformat(), "until": until.isoformat()}),
             "timeIncrement": "1",
         })
-        return parse_daily(body, entity_id, flds, since, until)
+        d = parse_daily(body, entity_id, flds, since, until)
+        cyc = _not_future(d.cycle_base_tm, self._clock.now())
+        return d if cyc is d.cycle_base_tm else DailyStats(d.entity_id, d.days, d.missing_days, cyc, d.until)
 
     def confirm_no_activity(self, ah, entity_ids: Iterable[str], since: date, until: date,
                             fields: Sequence[str] = ("impCnt", "clkCnt", "salesAmt", "ccnt")) -> Dict[str, bool]:

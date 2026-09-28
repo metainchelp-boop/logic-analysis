@@ -28,11 +28,12 @@ BIZMONEY = ("customerId", "bizmoney", "budgetLock", "refundLock")
 # 비즈채널(BusinessChannel) — 짝 확인 미리보기에서만(저장하지 않음)
 CHANNEL = ("nccBusinessChannelId", "customerId", "name", "channelTp", "channelKey", "status")
 
-# 통계 지표 — 명세(SummaryStatMap · DailyStatMap)에 있는 이름만 요청할 수 있다
-STAT_FIELDS = frozenset({
+# 통계 지표 — 명세에 있는 이름만 요청할 수 있다. 합계(SummaryStatMap)에는 구매 지표가 없다.
+STAT_FIELDS_SUMMARY = frozenset({
     "impCnt", "clkCnt", "salesAmt", "ccnt", "viewCnt", "cpc", "ctr", "avgRnk", "drtCrto",
-    "purchaseCcnt", "purchaseConvAmt", "purchaseRor",
 })
+STAT_FIELDS_DAILY = STAT_FIELDS_SUMMARY | frozenset({"purchaseCcnt", "purchaseConvAmt", "purchaseRor"})
+STAT_FIELDS = STAT_FIELDS_DAILY
 
 
 def keep(record: Mapping[str, Any], allowed: Iterable[str]) -> dict:

@@ -46,8 +46,8 @@ def check_handle(cid=ACC, stage="진행중", pid=501, link=H.LINK_CONFIRMED, end
                                 stage_as_of=now - timedelta(hours=age_h), latest_end_date=end, now=now)
 
 
-def preview_handle(cid=ACC, pid=501, by=112, now=NOW):
-    return H.issue_preview_handle(customer_id=cid, possibility_id=pid, stage="진행중",
+def preview_handle(cid=ACC, pid=501, by=112, now=NOW, cand=77):
+    return H.issue_preview_handle(customer_id=cid, possibility_id=pid, candidate_id=cand, stage="진행중",
                                   stage_as_of=now - timedelta(hours=1), latest_end_date=None, now=now, requested_by=by)
 
 
@@ -169,6 +169,36 @@ class GateTest(Base):
         self.assertIn(R._NoRedirect, handlers)
         self.assertNotIn(urllib.request.HTTPRedirectHandler, handlers)
 
+    def test_default_transport_ignores_env_proxy_and_verifies(self):
+        import os
+        import ssl
+        old = {k: os.environ.get(k) for k in ("HTTPS_PROXY", "https_proxy")}
+        os.environ["HTTPS_PROXY"] = os.environ["https_proxy"] = "http://proxy.invalid:3128"
+        try:
+            t = R.UrllibTransport()
+        finally:
+            for k, v in old.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        proxies = [h for h in t._opener.handlers if isinstance(h, urllib.request.ProxyHandler)]
+        # 빈 ProxyHandler 를 넘기면 기본 프록시 처리기(환경변수를 읽는 것)가 끼지 않는다
+        self.assertEqual([p.proxies for p in proxies if p.proxies], [], "환경변수 프록시를 따르면 키가 다른 서버를 거친다")
+        https = [h for h in t._opener.handlers if isinstance(h, urllib.request.HTTPSHandler)]
+        self.assertEqual(len(https), 1)
+        ctx = https[0]._context
+        self.assertEqual((ctx.verify_mode, ctx.check_hostname), (ssl.CERT_REQUIRED, True))
+
+    def test_unexpected_transport_error_is_masked(self):
+        def boom(call):
+            raise ValueError(f"Invalid header value {MARK_API_KEY}")
+        self.naver.tick = boom
+        e = self.expect(R.NaverApiError, self.reader.get_campaigns, check_handle())
+        self.assertEqual((e.kind, e.detail), (R.KIND_OTHER, "ValueError"))
+        self.assertIsNone(e.__cause__)
+        self.assertTrue(e.__suppress_context__)
+
 
 # ── 2. 손잡이 — 날 번호 거절 ────────────────────────────────────────
 class HandleTest(Base):
@@ -181,7 +211,8 @@ class HandleTest(Base):
 
     def test_forged_handle_refused(self):
         h = check_handle()
-        fake = H.AccountHandle(ACC + 1, h.possibility_id, h.purpose, h.issued_on, None, h._tag)
+        fake = H.AccountHandle(ACC + 1, h.possibility_id, h.purpose, h.issued_on, None, None, h.issued_at, h.nonce,
+                               h._tag)
         self.expect(H.HandleInvalid, self.reader.get_campaigns, fake)
         self.assertEqual(self.naver.calls, [])
 
@@ -239,9 +270,20 @@ class EligibilityTest(unittest.TestCase):
         with self.assertRaises(H.NotEligible):  # 날짜가 아닌 값
             check_handle(stage="계약만료", end="2026-09-20")
 
+    def test_14_days_applies_to_every_stage(self):
+        """전산 단계가 늦게 바뀌는 곳(계약은 끝났는데 진행중) — 종료일이 적혀 있으면 어느 단계든 14일 규칙."""
+        today = NOW.date()
+        for stage in ("진행중", "환불중", "재계약 진행중", "홀딩중", "사후 관리"):
+            self.assertTrue(check_handle(stage=stage, end=today - timedelta(days=14)))
+            self.assertTrue(check_handle(stage=stage, end=today + timedelta(days=90)))
+            with self.assertRaises(H.NotEligible, msg=stage) as cm:
+                check_handle(stage=stage, end=today - timedelta(days=60))
+            self.assertEqual(cm.exception.reason, "ended-over-14-days")
+        self.assertTrue(check_handle(stage="진행중", end=None), "종료일을 모르면 진행 단계는 단계를 믿는다")
+
     def test_preview_also_obeys_14_days(self):
         with self.assertRaises(H.NotEligible):
-            H.issue_preview_handle(customer_id=ACC, possibility_id=5, stage="계약만료",
+            H.issue_preview_handle(customer_id=ACC, possibility_id=5, candidate_id=9, stage="계약만료",
                                    stage_as_of=NOW - timedelta(hours=1), latest_end_date=NOW.date() - timedelta(days=30),
                                    now=NOW, requested_by=112)
 
@@ -268,6 +310,38 @@ class EligibilityTest(unittest.TestCase):
         for bad in (-1, None, True, "0"):
             with self.assertRaises(H.NotEligible):
                 preview_handle(by=bad)
+
+    def test_preview_limits(self):
+        """미리보기 손잡이 — 10분 · 3번 · 한 사람 하루 300개 · 후보 번호 필수(1,784곳 일괄 읽기를 막는다)."""
+        naver, clock = FakeNaver(), FakeClock(NOW)
+        naver.route(r"/ncc/campaigns", lambda c: (200, [campaign(ACC, 1)]))
+        reader = R.NaverReader(creds(), transport=naver, clock=clock)
+        h = preview_handle(by=7001)
+        for _ in range(H.PREVIEW_MAX_USES):
+            reader.get_campaigns(h)
+        with self.assertRaises(H.HandleInvalid):
+            reader.get_campaigns(h)
+        h2 = preview_handle(by=7001)
+        clock.advance(11 * 60)
+        with self.assertRaises(H.HandleInvalid):
+            reader.get_campaigns(h2)
+        self.assertEqual(len(naver.calls), H.PREVIEW_MAX_USES)
+        for bad in (0, -1, None, True, "77"):
+            with self.assertRaises(H.NotEligible):
+                preview_handle(by=7002, cand=bad)
+        for _ in range(H.PREVIEW_DAILY_CAP - 2):
+            preview_handle(by=7001)
+        with self.assertRaises(H.NotEligible) as cm:
+            preview_handle(by=7001)
+        self.assertEqual(cm.exception.reason, "preview-daily-cap")
+        self.assertTrue(preview_handle(by=7003), "다른 사람은 따로 센다")
+
+    def test_forged_candidate_refused(self):
+        h = preview_handle(by=7004)
+        fake = H.AccountHandle(h.customer_id, h.possibility_id, h.purpose, h.issued_on, h.requested_by,
+                               h.candidate_id + 1, h.issued_at, h.nonce, h._tag)
+        with self.assertRaises(H.HandleInvalid):
+            H.require_account(fake, NOW, (H.PURPOSE_PREVIEW,))
 
     def test_naive_now_refused(self):
         with self.assertRaises(ValueError):
@@ -324,13 +398,52 @@ class ChildListTest(Base):
         self.naver.routes.insert(0, (__import__("re").compile(r"/manager-accounts/101/child-ad-accounts"), moving))
         self.expect(R.IncompleteList, self.reader.list_child_accounts, self.reader.manager_handle(), 101)
 
+    def test_repeated_rows_are_incomplete(self):
+        """1부터 세는 쪽 번호(0·1쪽이 같은 줄) · 쪽 사이 순서가 바뀐 경우 — 합계는 맞아도 버린다."""
+        rows = [{"customerId": 5000000 + i} for i in range(2000)]
+
+        def one_based(c):
+            page = max(int(c.query["page"][0]), 1) - 1
+            return 200, {"content": rows[page * 1000:(page + 1) * 1000], "totalElements": 2000, "last": False}
+        self.naver.route(r"/manager-accounts/101/child-ad-accounts", one_based)
+        self.expect(R.IncompleteList, self.reader.list_child_accounts, self.reader.manager_handle(), 101)
+
+    def test_page_number_mismatch(self):
+        rows = [{"customerId": 5000000 + i} for i in range(1500)]
+
+        def wrong_number(c):
+            r = page_of(rows, c)
+            r[1]["number"] = int(c.query["page"][0]) + 1
+            return r
+        self.naver.route(r"/manager-accounts/101/child-ad-accounts", wrong_number)
+        self.expect(R.IncompleteList, self.reader.list_child_accounts, self.reader.manager_handle(), 101)
+
+    def test_manager_says_children_but_list_empty(self):
+        ag = Agency(self.naver, sizes=(3, 2))
+        ag.managers[1]["managerAccount"]["childAdAccountCount"] = 40
+        ag.children[102] = []
+        self.expect(R.IncompleteList, self.reader.list_all_children, self.reader.manager_handle())
+
+    def test_null_child_count_is_fine(self):
+        ag = Agency(self.naver, sizes=(3, 2))
+        for m in ag.managers:
+            m["managerAccount"]["childAdAccountCount"] = None  # 실측 모양
+        self.assertEqual(len(self.reader.list_all_children(self.reader.manager_handle()).accounts), 5)
+
+    def test_non_200_success_refused(self):
+        Agency(self.naver)
+        self.naver.script("/manager-accounts", (206, {"content": [], "totalElements": 0}))
+        e = self.expect(R.NaverApiError, self.reader.list_manager_accounts, self.reader.manager_handle())
+        self.assertEqual(e.kind, R.KIND_BAD_RESPONSE)
+
     def test_zero_managers(self):
         self.naver.route(r"/manager-accounts", lambda c: page_of([], c))
         self.expect(R.IncompleteList, self.reader.list_all_children, self.reader.manager_handle())
 
     def test_page_cap(self):
         self.naver.route(r"/manager-accounts/101/child-ad-accounts",
-                         lambda c: (200, {"content": [{"customerId": 1}], "totalElements": 10 ** 6, "last": False}))
+                         lambda c: (200, {"content": [{"customerId": 1 + int(c.query["page"][0])}],
+                                          "totalElements": 10 ** 6, "last": False}))
         self.expect(R.IncompleteList, self.reader.list_child_accounts, self.reader.manager_handle(), 101)
         self.assertEqual(len(self.naver.calls), R.MAX_PAGES)
 
@@ -395,6 +508,14 @@ class AccountReadTest(Base):
         self.naver.script("/billing/bizmoney", (200, b'{"customerId": 3000001, "bizmoney": NaN}'),
                           (200, b'{"customerId": 3000001, "bizmoney": Infinity}'))
         for _ in range(2):
+            self.assertEqual(self.expect(R.NaverApiError, self.reader.get_bizmoney, check_handle()).kind,
+                             R.KIND_BAD_RESPONSE)
+
+    def test_bizmoney_lock_flags_required(self):
+        for bad in ({"customerId": ACC, "bizmoney": 5, "refundLock": False},
+                    {"customerId": ACC, "bizmoney": 5, "budgetLock": None, "refundLock": False},
+                    {"customerId": ACC, "bizmoney": 5, "budgetLock": False, "refundLock": "false"}):
+            self.naver.script("/billing/bizmoney", (200, bad))
             self.assertEqual(self.expect(R.NaverApiError, self.reader.get_bizmoney, check_handle()).kind,
                              R.KIND_BAD_RESPONSE)
 
@@ -464,6 +585,14 @@ class StatsParseTest(unittest.TestCase):
     def test_missing_field_is_none(self):
         r = R.parse_stats({"data": [{"id": "a", "impCnt": 3}], "cycleBaseTm": FRESH}, ["a"], self.F, YDAY)
         self.assertEqual(r.rows["a"], {"impCnt": 3, "clkCnt": None, "salesAmt": None, "ccnt": None})
+
+    def test_null_metric_makes_incomplete(self):
+        r = R.parse_stats({"data": [{"id": "a"}], "cycleBaseTm": FRESH}, ["a"], self.F, YDAY)
+        self.assertFalse(r.complete)
+        self.assertIn("metric-unknown", r.reasons)
+        self.assertEqual(len(r.unknown_values), 4)
+        d = R.parse_daily({"data": [{"dateStart": YDAY.isoformat()}], "cycleBaseTm": FRESH}, "c", self.F, YDAY, YDAY)
+        self.assertFalse(d.complete)
 
     def test_bad_values(self):
         for v in ("700", True, [1], {"v": 1}, float("nan"), float("inf")):
@@ -542,6 +671,20 @@ class StatsReadTest(Base):
         self.naver.route(r"/stats", lambda c: (200, {"weird": []}))
         with self.assertRaises(R.StatsShapeUnknown):
             self.reader.get_stats_summary(check_handle(), ["a"], YDAY, YDAY)
+
+    def test_future_cycle_is_unknown(self):
+        self.naver.route(r"/stats", lambda c: (200, {"data": stat_rows(c.query["ids"]), "cycleBaseTm": "209912312359"}))
+        r = self.reader.get_stats_summary(check_handle(), ["a"], YDAY, YDAY)
+        self.assertIsNone(r.cycle_base_tm)
+        self.assertFalse(r.complete)
+        self.naver.routes.clear()
+        self.naver.route(r"/stats", lambda c: (200, {"data": [{"dateStart": YDAY.isoformat(), "impCnt": 0, "clkCnt": 0,
+                                                              "salesAmt": 0, "ccnt": 0}], "cycleBaseTm": "209912312359"}))
+        self.assertFalse(self.reader.get_stats_daily(check_handle(), "c", YDAY, YDAY).complete)
+
+    def test_purchase_fields_daily_only(self):
+        self.expect(ValueError, self.reader.get_stats_summary, check_handle(), ["a"], YDAY, YDAY, ("purchaseCcnt",))
+        self.assertEqual(self.naver.calls, [])
 
     def test_period_and_fields_validated(self):
         h = check_handle()
@@ -718,6 +861,24 @@ class SecretTest(unittest.TestCase):
                 load_manager_credentials(broken)
             self.assertNotIn(MARK_API_KEY, str(cm.exception))
             self.assertNotIn(MARK_SECRET, str(cm.exception))
+
+    def test_key_charset(self):
+        env = {"NAVER_MGR_CUSTOMER_ID": "7654321", "NAVER_MGR_API_KEY": MARK_API_KEY, "NAVER_MGR_SECRET_KEY": MARK_SECRET}
+        for name in ("NAVER_MGR_API_KEY", "NAVER_MGR_SECRET_KEY"):
+            for bad in (MARK_API_KEY + "\r\nX-Evil: 1", "키값한글포함abcdef", "abc def ghij", "short"):
+                with self.assertRaises(CredentialsMissing) as cm:
+                    load_manager_credentials({**env, name: bad})
+                self.assertNotIn(MARK_API_KEY, str(cm.exception))
+
+    def test_reprs_hide_ids(self):
+        naver = FakeNaver()
+        Agency(naver, sizes=(3,))
+        r = R.NaverReader(creds(), transport=naver, clock=FakeClock(NOW))
+        kids = r.list_all_children(r.manager_handle())
+        self.assertNotIn("3000000", repr(kids) + str(kids))
+        res = R.parse_stats({"data": stat_rows(["cmp-secret-1"]), "cycleBaseTm": FRESH}, ["cmp-secret-1"],
+                            ("impCnt",), YDAY)
+        self.assertNotIn("cmp-secret-1", repr(res))
 
     def test_tail(self):
         self.assertEqual(customer_tail(3000001), "…0001")
