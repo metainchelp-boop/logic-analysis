@@ -406,6 +406,24 @@ jobs:
                 print("  ==", k, {kk: vv for kk, vv in g.items() if not kk.startswith("tnote:")})
                 print("     진짜입력 실패 사유:", sorted(((kk[6:], vv) for kk, vv in g.items() if kk.startswith("tnote:")), key=lambda x: -x[1])[:6])
             PY
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sqlite3, json
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(collector_heartbeat)")]
+            print("  [heartbeat 칸]", cols)
+            hb = {}
+            for r in conn.execute("SELECT * FROM collector_heartbeat"):
+                d = dict(zip(cols, r)); hb[str(d.get("instance_id"))] = d.get("worker_no")
+                print("   기계", d.get("worker_no"), {k: d.get(k) for k in cols if any(t in k for t in ("start", "boot", "seen", "at", "version", "paused", "rest", "state"))})
+            print("  [오늘 10:30 이후 관측 한 줄씩 — 시각 · 기계 · 읽은 쪽 · 클릭 방식 · 멈춘 이유 (키워드 미출력)]")
+            for at, kind, reason, meta in conn.execute("SELECT received_at, kind, reason, meta_json FROM collector_observations WHERE received_at >= datetime('now','localtime','start of day','+10 hours','+30 minutes') ORDER BY received_at"):
+                try:
+                    o = json.loads(meta or "{}").get("observation") or {}
+                except Exception:
+                    o = {}
+                nav = o.get("nav") or {}
+                print("   %s  기계%s  쪽%s  %-8s %-14s %s" % (str(at)[11:19], hb.get(str(o.get("workerId") or ""), "?"), o.get("pagesRead"), str(nav.get("how", ""))[:8], (reason or "")[:14], kind))
+            PY
       - name: 🛰 수집 현황판 라이브 확인 (board_live=on · 읽기 전용)
         if: ${{ github.event.inputs.board_live == 'on' }}
         uses: appleboy/ssh-action@v1.0.3
