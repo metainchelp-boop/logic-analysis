@@ -474,7 +474,22 @@ jobs:
             print("  멈춘 이유:", [(r["reason"][:20], r["count"]) for r in (out["stopReasons"] or [])][:6])
             print("  순위 기록:", out["rankWrites"])
             print("  JSON 크기:", len(json.dumps(out, ensure_ascii=False, default=str)), "바이트")
+            print("  [#292] 2페이지 오늘:", s.get("page2"), "· 14일:", [(h.get("date"), h.get("page2")) for h in out["history"]][-5:])
+            print("  [#292] 기계별 오늘 2페이지:", [(m.get("machine"), m.get("page2Today")) for m in (out["machines"] or [])])
+            print("  [#292] 판정 줄 수:", len(out["verdicts"]))
+            try:
+                import rank_staleness as rs, client_dashboard as cd
+                print("  [#292] 기준선:", rs.STALE_AFTER_DAYS, "· 오늘 기준 9/24 =", rs.stale_days("2026-09-24"))
+                cid = conn.execute("SELECT client_id FROM client_rank_history GROUP BY client_id ORDER BY MAX(checked_at) DESC LIMIT 1").fetchone()[0]
+                n_all = conn.execute("SELECT COUNT(*) FROM (SELECT keyword, MAX(checked_at) m FROM client_rank_history GROUP BY client_id, keyword)").fetchone()[0]
+                n_old = conn.execute("SELECT COUNT(*) FROM (SELECT keyword, MAX(checked_at) m FROM client_rank_history WHERE checked_at >= date('now','localtime','-8 day') GROUP BY client_id, keyword) WHERE date(m) <= date('now','localtime','-2 day')").fetchone()[0]
+                print("  [#292] 최근 8일 안 (업체×키워드) 최신 줄 중 2일 이상 지난 것:", n_old, "(전체 짝", n_all, ")")
+            except Exception as e:
+                print("  [#292] 확인 실패(0 아님):", type(e).__name__, str(e)[:100])
             PY
+            echo "== [#292] 파일 · 번들 표지 =="
+            docker exec -i logic-analysis sh -c 'ls -l /app/rank_staleness.py 2>&1; grep -c "_rs.stale_days" /app/client_dashboard.py; grep -c "kw_dict\[.stale.\]" /app/main.py; grep -c "def page2_verdict" /app/collector_board.py'
+            for m in 'rankStaleChip' '일 전' '2페이지 넘김' '오래된 순위'; do n=$(cat "$D"/app.*.js 2>/dev/null | grep -o -- "$m" | wc -l); echo "  [$n] $m"; done
             echo "== 기동 뒤 오류 줄 =="
             docker logs logic-analysis 2>&1 | grep -c -E 'Traceback|ERROR' || true
             echo "== 오류 줄 내용별(앞 70자 · 숫자 가림 · 상위 8) =="
