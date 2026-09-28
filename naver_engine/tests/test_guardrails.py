@@ -30,6 +30,14 @@ FORBIDDEN_MODULES = ("app.adapters", "app.main", "app.collector", "app.database"
                      "naver_searchad", "importlib")
 METHOD_WORDS = ("GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "CONNECT", "TRACE")
 HANDLE_PRIVATE = ("_tag", "_KEY", "_PREVIEW_LEFT", "_PREVIEW_ISSUED", "AccountHandle", "ManagerHandle")
+# 저장 — store.py 밖에서는 모듈 이름도, 연결을 만지는 이름도 쓰지 않는다
+DB_MODULES = ("sqlite3", "_sqlite3", "dbm", "shelve", "sqlalchemy", "fcntl", "_fcntl", "apsw", "pysqlite2")
+DB_ATTRS = ("sqlite3", "_sqlite3", "fcntl", "_fcntl", "_A", "_conn", "_lock_fd", "set_authorizer", "execute",
+            "executescript", "executemany", "cursor", "backup", "iterdump", "create_function", "create_aggregate",
+            "create_window_function", "create_collation", "enable_load_extension", "load_extension", "setconfig",
+            "set_progress_handler", "set_trace_callback", "attrgetter", "methodcaller", "_authorizer", "_tx", "_migrate",
+            "_set_meta")
+ATTR_FUNCS = ("getattr", "setattr", "hasattr", "delattr")
 
 
 def _tree(p: pathlib.Path) -> ast.AST:
@@ -105,17 +113,53 @@ class GuardrailTest(unittest.TestCase):
         self.assertTrue({"naver_read.py", "erp_read.py", "handles.py", "fields.py", "credentials.py", "store.py"} <= names)
 
     def test_database_only_in_store(self):
-        """저장 파일을 여는 곳은 ``store.py`` 한 곳 — 쓰는 곳 하나(대표 결정 D10) · 지우기 거절 연결을 건너뛰지 못하게."""
+        """저장 파일을 여는 곳은 ``store.py`` 한 곳 — 쓰는 곳 하나(대표 결정 D10) · 지우기 거절 연결을 건너뛰지 못하게.
+
+        store 가 import 한 모듈을 다시 꺼내 쓰는 길(``S.sqlite3`` · ``from .store import _sqlite3``)과, 글자로 이름을
+        적어 꺼내는 길(``getattr(st, "_conn")``)도 막는다(S6 적대 검토)."""
         for p in SOURCES:
             for node, mod in _imports(_tree(p)):
-                root = mod.lstrip(".").split(".")[0]
-                if root in ("sqlite3", "dbm", "shelve", "sqlalchemy", "fcntl"):
+                parts = mod.lstrip(".").split(".")
+                if any(x in DB_MODULES for x in parts):
                     self.assertEqual(p.name, "store.py", f"{p.name}: {mod} — 저장은 store.py 에서만")
             if p.name == "store.py":
                 continue
             for n in ast.walk(_tree(p)):
-                if isinstance(n, ast.Attribute) and n.attr in ("_conn", "set_authorizer", "execute", "executescript"):
+                if isinstance(n, ast.Attribute) and n.attr in DB_ATTRS:
                     self.fail(f"{p.name}: .{n.attr} — 저장 연결은 store.py 밖에서 만지지 않는다")
+                if isinstance(n, ast.Name) and n.id in DB_ATTRS:
+                    self.fail(f"{p.name}: {n.id} — 저장 연결은 store.py 밖에서 만지지 않는다")
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in ATTR_FUNCS:
+                    name = n.args[1] if len(n.args) >= 2 else None
+                    self.assertIsInstance(name, ast.Constant, f"{p.name}: 글자로 만든 {n.func.id} 금지")
+                    self.assertNotIn(name.value, DB_ATTRS, f"{p.name}: {n.func.id}(…, {name.value!r}) — 우회 금지")
+
+    def test_database_guard_catches_bypasses(self):
+        """위 시험이 실제로 우회를 잡는지 — 알려진 우회 코드를 넣어 본다."""
+        bad = ('from . import store as S\nS.sqlite3.connect("x")\n',
+               'from .store import _sqlite3\n',
+               'import naver_engine.store\nnaver_engine.store._fcntl\n',
+               'def f(st):\n    getattr(st, "_conn").executemany("x", [])\n',
+               'def f(st):\n    hasattr(st, "_lock_fd")\n',
+               'def f(st, k):\n    getattr(st, k)\n',
+               'def f(c):\n    c.cursor()\n',
+               'def f(c):\n    c.backup(c)\n',
+               'from operator import attrgetter\nattrgetter("_conn")\n')
+        for src in bad:
+            tree = ast.parse(src)
+            hit = False
+            for node, mod in _imports(tree):
+                if any(x in DB_MODULES for x in mod.lstrip(".").split(".")):
+                    hit = True
+            for n in ast.walk(tree):
+                if isinstance(n, (ast.Attribute, ast.Name)) and (getattr(n, "attr", None) or getattr(n, "id", None)) \
+                        in DB_ATTRS:
+                    hit = True
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in ATTR_FUNCS:
+                    name = n.args[1] if len(n.args) >= 2 else None
+                    if not isinstance(name, ast.Constant) or name.value in DB_ATTRS:
+                        hit = True
+            self.assertTrue(hit, src)
 
     def test_network_modules_only_in_gate_module(self):
         for p in SOURCES:
