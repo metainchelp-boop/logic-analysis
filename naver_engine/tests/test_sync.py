@@ -185,6 +185,19 @@ class ProspectBrakeTest(Base):
         c = self.st.record_prospects(snap(range(10, 41), T0 + timedelta(hours=6)))   # 9/40 = 22.5% 이지만 9줄
         self.assertEqual(c.now_absent, 9)
 
+    def test_exactly_ten_rows_over_ratio_brakes(self):
+        self.seed(40)
+        with self.assertRaises(S.SyncBraked) as cm:
+            self.st.record_prospects(snap(range(11, 41), T0 + timedelta(hours=6)))   # 10/40 = 25% · 딱 10줄
+        self.assertEqual(cm.exception.would_absent, 10)
+
+    def test_ratio_is_against_rows_present_now_not_all_rows(self):
+        self.seed(60)
+        self.st.record_prospects(snap(range(21, 61), T0 + timedelta(hours=6)), allow_drop_by=0)   # 20 빠짐 → 있음 40
+        with self.assertRaises(S.SyncBraked) as cm:   # 10/40 = 25% (전체 60 으로 나누면 16.7% 라 받을 뻔)
+            self.st.record_prospects(snap(range(31, 61), T0 + timedelta(hours=12)))
+        self.assertEqual((cm.exception.present_before, cm.exception.would_absent), (40, 10))
+
     def test_brake_persists_until_confirmed_then_records_who(self):
         self.seed(50)
         for h in (6, 12):
@@ -527,6 +540,10 @@ class FreshnessTest(Base):
         self.assertEqual(O.org_freshness(T0 + timedelta(minutes=10), T0), "fresh")
         self.assertEqual(O.org_freshness(T0 + timedelta(minutes=10) + us, T0), "stale")   # 믿을 수 없는 미래
 
+    def test_age_counts_from_erp_generated_time_not_receipt(self):
+        Y.sync_org(FakeErp(org_payload(T0)), self.st, T0 + timedelta(hours=2))   # ① 가 10:00 에 만든 것을 12:00 에 받음
+        self.assertEqual(Y.org_freshness(self.st, T0 + timedelta(hours=3, microseconds=1)), "yellow")
+
     def test_raising_allowed_only_fresh_or_yellow(self):
         self.assertEqual([O.allows_raising(x) for x in ("fresh", "yellow", "stale", "none", "")],
                          [True, True, False, False, False])
@@ -555,6 +572,11 @@ class SyncStagesTest(Base):
         self.assertEqual(Y.sync_stages(FakeErp(stages=snap(range(1, 941), T0)), self.st, T0).outcome, "accepted")
         r = Y.sync_stages(FakeErp(stages=snap(range(1, 941), T0 + timedelta(hours=6))), self.st, T0 + timedelta(hours=6))
         self.assertEqual(r.outcome, "accepted")
+
+    def test_confirmed_small_first_run_then_later_runs_accepted(self):
+        Y.sync_stages(FakeErp(stages=snap(range(1, 301), T0)), self.st, T0, confirmed_by=0)
+        r = Y.sync_stages(FakeErp(stages=snap(range(1, 301), T0 + timedelta(hours=6))), self.st, T0 + timedelta(hours=6))
+        self.assertEqual(r.outcome, "accepted")   # 940 대조는 첫 회차만
 
     def test_plausible_edges(self):
         for n, ok in ((752, True), (751, False), (1128, True), (1129, False)):
