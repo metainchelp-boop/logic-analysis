@@ -141,7 +141,7 @@ class OpenTest(Base):
         c = self.st._conn
         self.assertEqual(c.execute("PRAGMA journal_mode").fetchone()[0].lower(), "wal")
         self.assertEqual(c.execute("PRAGMA synchronous").fetchone()[0], 2)          # FULL
-        self.assertEqual(self.st.meta("schema_version"), "1")
+        self.assertEqual(self.st.meta("schema_version"), "2")
         self.assertEqual([n for n in os.listdir(self.dir.name) if n.endswith(".lock")], [])   # 잠금은 파일 자체에
 
     def test_connection_settings(self):
@@ -246,7 +246,7 @@ class OpenTest(Base):
             self.st = None
             if opens:
                 self.st = S.open_writer(self.path, clock=self.clock)
-                self.assertEqual(self.st.meta("schema_version"), "1")   # 옛 판은 이관 뒤 판 번호를 올린다
+                self.assertEqual(self.st.meta("schema_version"), "2")   # 옛 판은 이관 뒤 판 번호를 올린다
             else:
                 with self.assertRaises(S.StoreError, msg=value):
                     S.open_writer(self.path, clock=self.clock)

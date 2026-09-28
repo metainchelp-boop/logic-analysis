@@ -65,6 +65,15 @@ MANAGER_SPIKE_LIMIT = 0.20      # 재직 팀장(is_manager) 수가 20% 넘게 �
 MANAGER_SPIKE_MIN = 3           #   3명 이상 늘면 버린다(권한 확대 의심).
 FUTURE_TOLERANCE = timedelta(minutes=10)  # 받는 쪽 시계보다 이만큼 넘게 앞선 스냅숏은 버린다(시계 어긋남 방어).
 
+# 신선도(설계 §9 · M12) — 「담당 정보 HH:MM 기준」 띠. 3시간 넘으면 노랑 · 26시간 넘으면 승인·자동 켜기·운영 방식 올리기를
+# 멈추고 멈추기·내리기만 허용한다(fail-closed). 경계는 「넘으면」이다(딱 3시간은 아직 맑음 · 딱 26시간은 아직 노랑).
+ORG_YELLOW_AFTER = timedelta(hours=3)
+ORG_STALE_AFTER = timedelta(hours=26)
+FRESH_NONE = "none"      # 받은 조직이 아직 없다
+FRESH_OK = "fresh"
+FRESH_YELLOW = "yellow"
+FRESH_STALE = "stale"
+
 
 def is_person_idx(v: Any) -> bool:
     """사람 번호인가 — 정수(참/거짓 아님)이고 0(대표) 이상. 음수는 시스템 자리다. 이 규칙은 이 한 곳에서만 정한다."""
@@ -515,3 +524,31 @@ def accept_snapshot(payload: Any, prev: Optional[Org], now: Optional[datetime] =
         return SnapshotDecision(ok=False, org=prev, check=check)
     check = check_snapshot(new, prev, now)
     return SnapshotDecision(ok=check.ok, org=new if check.ok else prev, check=check)
+
+
+# ── 신선도 ─────────────────────────────────────────────────────────
+
+def org_freshness(generated_dt: Optional[datetime], now: datetime) -> str:
+    """조직 수락본이 얼마나 새것인지 — ``none`` · ``fresh`` · ``yellow``(3시간 넘음) · ``stale``(26시간 넘음).
+
+    기준은 ① 가 만든 시각(``generated_at``)이다. 허용(10분)보다 앞선 시각은 믿을 수 없으므로 ``stale`` 로 본다(닫힌 쪽).
+    시간대 없는 시각은 부르는 쪽 실수라 ValueError."""
+    if not isinstance(now, datetime) or now.tzinfo is None:
+        raise ValueError("now 는 시간대가 있는 시각이어야 합니다")
+    if generated_dt is None:
+        return FRESH_NONE
+    if not isinstance(generated_dt, datetime) or generated_dt.tzinfo is None:
+        raise ValueError("generated_dt 는 시간대가 있는 시각이어야 합니다")
+    if generated_dt > now + FUTURE_TOLERANCE:
+        return FRESH_STALE
+    age = now - generated_dt
+    if age > ORG_STALE_AFTER:
+        return FRESH_STALE
+    if age > ORG_YELLOW_AFTER:
+        return FRESH_YELLOW
+    return FRESH_OK
+
+
+def allows_raising(freshness: str) -> bool:
+    """승인 · 자동 켜기 · 운영 방식 올리기가 되는가 — 맑음·노랑만. 없음·낡음·모르는 값은 안 된다(멈추기·내리기만)."""
+    return freshness in (FRESH_OK, FRESH_YELLOW)
