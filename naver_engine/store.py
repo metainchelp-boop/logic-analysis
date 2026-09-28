@@ -26,7 +26,10 @@
 - **목록이 한꺼번에 크게 줄면 멈춘다(S7 브레이크).** 가망·계정을 「목록에 없음」으로 찍기 전에, 이번에 새로 빠질 줄이
   ``BRAKE_MIN_ROWS`` 줄 이상이고 직전에 있던 줄의 ``BRAKE_DROP_RATIO`` 를 넘으면(계정은 관리계정 수가 줄고 빠질 줄이
   있어도) 아무것도 적지 않고 ``SyncBraked`` 를 던진다 — 잘린 응답 하나로 광고주 수백 곳이 「관리 대상 아님」이 되지
-  않게. 정상적인 큰 변화는 대표가 확인한 뒤 ``allow_drop_by`` 로 받는다(누가 받았는지 동기화 기록에 남는다).
+  않게. 한 단계만 크게 빠져도(``BRAKE_STAGE``) · 기준선(마지막 확인 뒤 가장 많던 수)보다 누적으로 크게 줄어도
+  (``BRAKE_BASELINE`` — 조금씩 잘리는 톱니 방지) · 계정은 있던 관리계정(번호)이 사라지거나 0줄·크게 줄어도(``BRAKE_MANAGER``)
+  멈춘다. 멈춘 목록은 **그대로 붙잡아 둔다**(``naver_auto_hold``) — 대표가 확인하면 새로 읽지 않고 **그 목록을** 받는다
+  (``confirm_*_hold`` · 3시간 안 · 한 번만 · 누가 받았는지와 우회한 코드가 기록에 남는다 · S7 적대 검토).
 - **조직 스냅숏은 수락본 하나만 남긴다(S7 · M12).** 건전성 검사를 통과한 것만 ``record_org`` 로 들어오고, 엔진이 다시
   켜져도 이 수락본이 다음 검사의 「이전 조직」이 된다. 남길 칸만(``fields.ORG_*``) · 더 새 스냅숏만.
 - **동기화마다 한 줄 남긴다(S7).** 받음 · 버림 · 멈춤(브레이크) · 실패 — 종류 코드와 개수만(번호·이름 없음).
@@ -45,6 +48,7 @@ import pathlib
 import re
 import sqlite3 as _sqlite3
 import stat as _stat
+from collections import Counter
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Callable, Iterable, List, Mapping, Optional, Sequence, Tuple
@@ -54,7 +58,7 @@ from . import fields as F
 from . import naver_read as N
 
 __all__ = ("open_writer", "open_reader", "Store", "StoreError", "StoreBusy", "StoreRefused", "SyncBraked",
-           "SyncCounts")
+           "HoldRefused", "SyncCounts")
 
 KST = timezone(timedelta(hours=9))
 SCHEMA_VERSION = 2   # 2 = S7(조직 수락본 · 동기화 기록) — 옛 판(1) 파일은 열 때 표를 더하고 판 번호를 올린다
@@ -74,6 +78,12 @@ SYNC_OUTCOMES = frozenset({SYNC_ACCEPTED, SYNC_REFUSED, SYNC_BRAKED, SYNC_FAILED
 _EXTERNAL_OUTCOMES = frozenset({SYNC_REFUSED, SYNC_FAILED})   # 받음·멈춤은 저장소만 적는다(가짜 「받음」으로 브레이크를 못 속이게)
 MAX_SYNC_CODES = 20
 ORG_MAX_ROWS = 100_000
+HOLD_TTL = timedelta(hours=3)   # 붙잡아 둔 목록을 확인할 수 있는 시간 — 지나면 다시 읽어 새로 붙잡는다
+BRAKE_TOTAL, BRAKE_STAGE, BRAKE_BASELINE, BRAKE_MANAGER = "BRAKE", "BRAKE_STAGE", "BRAKE_BASELINE", "BRAKE_MANAGER"
+CODE_CONFIRMED = "CONFIRMED"
+CODE_STORED_UNREADABLE = "STORED_UNREADABLE"   # 저장된 조직 수락본을 못 읽음 — 이 붙잡음을 확인할 때만 망가진 줄을 덮어쓴다
+HOLD_NOT_FOUND, HOLD_USED, HOLD_EXPIRED = "HOLD_NOT_FOUND", "HOLD_USED", "HOLD_EXPIRED"
+HOLD_SUPERSEDED = "HOLD_SUPERSEDED"   # 확인하기 전에 더 새 목록을 (확인 없이) 받았다 — 옛 붙잡음은 받을 수 없다
 _CODE_DIR = os.path.dirname(os.path.realpath(__file__))
 
 # 점검 상태 — backend/app/naver_auto/verdict.py 의 CHECK_* 와 같은 글자(시험이 대조한다)
@@ -89,7 +99,8 @@ ORPHANED = "orphaned"
 # 코드 모양 — 규칙 이름(checks.ALL_RULES) · 사유(checks 의 "stats-unread" 등) · 오류 종류(naver_read.KIND_* · erp 종류)
 _RULE_CODE = re.compile(r"[a-z][a-z0-9_]{0,39}")
 _REASON_CODE = re.compile(r"[a-z0-9][a-z0-9_]*(?:-[a-z0-9_]+)*")
-_ERROR_KIND = re.compile(r"[A-Za-z][A-Za-z0-9_\-]{0,39}")
+# 오류·동기화 코드 — 영문 낱말(밑줄)을 줄표로 잇고, 숫자는 끝의 HTTP 상태 세 자리 하나만(번호·키 조각이 기록에 남지 않게)
+_ERROR_KIND = re.compile(r"(?=.{1,40}\Z)[A-Za-z][A-Za-z_]*(?:-[A-Za-z_]+)*(?:-[1-5][0-9]{2})?")
 
 # 캠페인 하루치 — 더할 수 있는 원래 숫자만 남긴다(클릭률·클릭당 비용은 보여 줄 때 계산 · 주간·월간 합계가 맞게)
 CAMPAIGN_METRICS = (
@@ -211,6 +222,15 @@ _SCHEMA = (
         confirmed_by INTEGER CHECK (confirmed_by IS NULL OR confirmed_by >= 0))""",
     """CREATE INDEX IF NOT EXISTS naver_auto_sync_log_kind
         ON naver_auto_sync_log (kind, sync_id)""",
+    # 붙잡아 둔 목록 — 멈춤·버림 때의 결과 그대로(종류마다 가장 최근 하나 · 확인하면 새로 읽지 않고 이것을 받는다)
+    """CREATE TABLE IF NOT EXISTS naver_auto_hold (
+        kind TEXT PRIMARY KEY CHECK (kind IN ('org', 'stages', 'accounts')),
+        sync_id INTEGER NOT NULL,
+        at TEXT NOT NULL,
+        codes TEXT NOT NULL,
+        body TEXT NOT NULL,
+        used_at TEXT,
+        used_by INTEGER CHECK (used_by IS NULL OR used_by >= 0))""",
 )
 
 # ── 연결 거절 규칙 ────────────────────────────────────────────────
@@ -277,13 +297,36 @@ class StoreRefused(StoreError):
 
 
 class SyncBraked(StoreRefused):
-    """목록이 한꺼번에 크게 줄어 「목록에 없음」을 찍기 전에 멈췄다 — 아무것도 적지 않았다(개수만 싣는다)."""
+    """목록이 한꺼번에 크게 줄어 「목록에 없음」을 찍기 전에 멈췄다 — 아무것도 적지 않았다(개수·코드만 싣는다).
 
-    def __init__(self, kind: str, present_before: int, would_absent: int,
-                 managers_before: Optional[int] = None, managers_now: Optional[int] = None) -> None:
+    멈춘 목록은 그대로 **붙잡아 둔다**(``hold_id``) — 대표가 확인하면 새로 읽지 않고 **그 목록을** 받는다(확인한 것과 받는 것이
+    같게 · S7 적대 검토). ``reasons`` = 멈춘 이유 코드(``BRAKE`` 한 번에 · ``BRAKE_STAGE`` 한 단계 · ``BRAKE_BASELINE`` 누적 ·
+    ``BRAKE_MANAGER`` 관리계정)."""
+
+    def __init__(self, kind: str, present_before: int, would_absent: int, reasons: Tuple[str, ...] = (),
+                 hold_id: Optional[int] = None, managers_before: Optional[int] = None,
+                 managers_now: Optional[int] = None) -> None:
         self.kind, self.present_before, self.would_absent = kind, present_before, would_absent
+        self.reasons, self.hold_id = tuple(reasons), hold_id
         self.managers_before, self.managers_now = managers_before, managers_now
         super().__init__(f"목록 급감 — 멈춤({kind}): 있던 {present_before} 중 {would_absent} 이 빠질 뻔했습니다")
+
+
+class _Brake(Exception):
+    """거래 안에서 멈춤을 알리는 내부 신호 — 거래를 되돌린 뒤 붙잡아 두기·기록을 따로 적는다."""
+
+    def __init__(self, reasons, present_before: int, would_absent: int, managers_before=None, managers_now=None):
+        super().__init__("brake")
+        self.reasons, self.present_before, self.would_absent = tuple(reasons), present_before, would_absent
+        self.managers_before, self.managers_now = managers_before, managers_now
+
+
+class HoldRefused(StoreRefused):
+    """확인할 붙잡음이 없음(또는 더 새로 붙잡음) · 이미 씀 · 확인 시간이 지남 — ``code`` 로 가른다(문구에 값 없음)."""
+
+    def __init__(self, code: str, message: str) -> None:
+        self.code = code
+        super().__init__(message)
 
 
 def _braked(present_before: int, would_absent: int) -> bool:
@@ -305,7 +348,10 @@ class SyncCounts:
 def _kst_text(t: datetime, what: str) -> str:
     if not isinstance(t, datetime) or t.tzinfo is None:
         raise StoreRefused(f"{what}: 시간대가 있는 시각이어야 합니다")
-    return t.astimezone(KST).isoformat(timespec="microseconds")   # 같은 초 안의 앞뒤도 가른다
+    try:
+        return t.astimezone(KST).isoformat(timespec="microseconds")   # 같은 초 안의 앞뒤도 가른다
+    except OverflowError:
+        raise StoreRefused(f"{what}: 한국 시각으로 바꿀 수 없는 시각입니다") from None
 
 
 def _day_text(d, what: str) -> str:
@@ -358,6 +404,10 @@ def _opt_text(v, what: str, limit: int = 200) -> Optional[str]:
         return None
     if not isinstance(v, str) or len(v) > limit or "\x00" in v:
         raise StoreRefused(f"{what}: 글자가 아니거나 너무 깁니다")
+    try:
+        v.encode("utf-8")   # 짝 없는 대리 문자는 저장에서 터진다 — 먼저 거절한다(원래 예외에 본문 전체가 실리지 않게)
+    except UnicodeEncodeError:
+        raise StoreRefused(f"{what}: 쓸 수 없는 글자가 있습니다") from None
     return v
 
 
@@ -431,6 +481,115 @@ def _org_value(v, what: str):
     if isinstance(v, str):
         return _opt_text(v, what)
     raise StoreRefused(f"{what}: 글자·정수·참거짓·빈 값만 받습니다")
+
+
+def _aware_time(raw) -> Optional[datetime]:
+    """시간대 있는 ISO 시각 글자 → 시각 · 못 읽거나 시간대가 없으면 None."""
+    if not isinstance(raw, str):
+        return None
+    try:
+        t = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    return t if t.tzinfo is not None else None
+
+
+def _stage_row(pid, name, stage, end, unread) -> tuple:
+    if stage not in E.STAGE_SPELLINGS:
+        raise StoreRefused("모르는 단계입니다")
+    return (_pos_int(pid, "가망 번호"), _opt_text(name, "가망 이름"), stage, end, unread)
+
+
+def _bad_hold() -> StoreError:
+    return StoreError("붙잡아 둔 목록을 읽지 못했습니다")
+
+
+def _read_hold_row(at_raw, codes_raw, body_raw):
+    try:
+        codes, body = json.loads(codes_raw), json.loads(body_raw)
+    except (TypeError, ValueError, RecursionError):
+        raise _bad_hold() from None
+    at = _aware_time(at_raw)
+    if at is None or not isinstance(codes, list) or not all(isinstance(x, str) for x in codes):
+        raise _bad_hold()
+    return at, codes, body
+
+
+def _stage_body(body):
+    """붙잡아 둔 단계 목록 → (받은 시각 글자, 받은 시각, 줄, 겹침, 표기별 줄 수). 다시 검사한다(모양이 틀리면 StoreError)."""
+    try:
+        at = body["as_of"]
+        as_of = _aware_time(at)
+        if as_of is None:
+            raise _bad_hold()
+        rows = []
+        for r in _seq(body["rows"], "줄"):
+            pid, name, stage, end, unread = r
+            if end is not None and (not isinstance(end, str) or date.fromisoformat(end).isoformat() != end):
+                raise _bad_hold()
+            if unread not in (None, 0, 1) or isinstance(unread, bool):
+                raise _bad_hold()
+            rows.append(_stage_row(pid, name, stage, end, unread))
+        conflicts = sorted({_pos_int(x, "가망 번호") for x in _seq(body["conflicts"], "겹침")})
+        detail = _spelling_counts(body["per_spelling"])
+    except (KeyError, TypeError, ValueError, StoreRefused):
+        raise _bad_hold() from None
+    if len({r[0] for r in rows}) != len(rows) or {r[0] for r in rows} & set(conflicts):
+        raise _bad_hold()
+    return at, as_of, rows, conflicts, detail
+
+
+def _read_per_manager(v) -> Optional[dict]:
+    """저장된 관리계정별 줄 수 {"번호": 줄 수} → {번호: 줄 수}."""
+    if v is None:
+        return None
+    if not isinstance(v, dict):
+        raise StoreError("저장된 관리계정별 줄 수를 읽지 못했습니다")
+    out = {}
+    for k, n in v.items():
+        if not isinstance(k, str) or not k.isdigit() or isinstance(n, bool) or not isinstance(n, int) or n < 0:
+            raise StoreError("저장된 관리계정별 줄 수를 읽지 못했습니다")
+        out[int(k)] = n
+    return out
+
+
+def _account_body(body):
+    try:
+        at = body["read_at"]
+        read_at = _aware_time(at)
+        if read_at is None:
+            raise _bad_hold()
+        rows = []
+        for r in _seq(body["rows"], "줄"):
+            cid, no, name = r
+            rows.append((_pos_int(cid, "고객 번호"), _opt_pos_int(no, "광고계정 번호"), _opt_text(name, "계정 이름")))
+        per = _read_per_manager(body["per"])
+    except (KeyError, TypeError, ValueError, StoreRefused, StoreError):
+        raise _bad_hold() from None
+    if not per or len({r[0] for r in rows}) != len(rows):
+        raise _bad_hold()
+    return at, read_at, rows, per
+
+
+_ORG_BASE_KEYS = ("active", "owners", "managers")
+
+
+def _org_baseline_value(t) -> dict:
+    if not isinstance(t, (tuple, list)) or len(t) != 3:
+        raise StoreRefused("조직 기준선은 (재직, 담당 줄, 팀장) 세 수입니다")
+    vals = [_count(x, "조직 기준선") for x in t]
+    if any(x is None for x in vals):
+        raise StoreRefused("조직 기준선은 (재직, 담당 줄, 팀장) 세 수입니다")
+    return dict(zip(_ORG_BASE_KEYS, vals))
+
+
+def _read_org_baseline(v) -> Optional[dict]:
+    if v is None:
+        return None
+    if not isinstance(v, dict) or set(v) != set(_ORG_BASE_KEYS) or any(
+            isinstance(x, bool) or not isinstance(x, int) or x < 0 for x in v.values()):
+        raise StoreError("저장된 조직 기준선을 읽지 못했습니다")
+    return dict(v)
 
 
 # ── 열기 ─────────────────────────────────────────────────────────────
@@ -609,6 +768,8 @@ class Store:
                         pass
                 if isinstance(ev, _sqlite3.Error):
                     raise _wrap(ev, "저장하지 못했습니다") from None
+                if isinstance(ev, (UnicodeError, OverflowError)):   # 값 때문에 묶기에서 터진 것 — 종류 이름만(원래 예외의 값을 끊는다)
+                    raise StoreRefused(f"저장하지 못했습니다: {type(ev).__name__}") from None
                 return False
         return _Tx()
 
@@ -666,14 +827,66 @@ class Store:
              None if detail is None else json.dumps(dict(detail), ensure_ascii=False, sort_keys=True), confirmed_by))
         return cur.lastrowid
 
-    def _log_braked(self, kind: str, at: str, b: "SyncBraked", rows: int) -> None:
-        with self._tx() as c:   # 본 저장은 이미 되돌렸다 — 멈춘 사실만 따로 남긴다
-            self._log_sync(c, kind, at, SYNC_BRAKED, ("BRAKE",), rows=rows, managers=b.managers_now,
-                           absent=b.would_absent)
+    def _refuse_and_hold(self, kind: str, at: str, outcome: str, codes: Sequence[str], body: str,
+                         rows: Optional[int] = None, managers: Optional[int] = None, absent: Optional[int] = None,
+                         detail: Optional[Mapping] = None) -> int:
+        """멈춤·버림을 한 줄 남기고 그 결과를 **그대로** 붙잡아 둔다 — 붙잡음 번호 = 그 기록 번호(대표가 본 그 기록)."""
+        with self._tx() as c:   # 본 저장은 이미 되돌렸다(멈춤) · 또는 처음부터 적지 않았다(버림)
+            sid = self._log_sync(c, kind, at, outcome, codes, rows=rows, managers=managers, absent=absent, detail=detail)
+            c.execute(
+                """INSERT INTO naver_auto_hold (kind, sync_id, at, codes, body, used_at, used_by)
+                   VALUES (?, ?, ?, ?, ?, NULL, NULL)
+                   ON CONFLICT (kind) DO UPDATE SET sync_id = excluded.sync_id, at = excluded.at,
+                       codes = excluded.codes, body = excluded.body, used_at = NULL, used_by = NULL""",
+                (kind, sid, at, json.dumps(list(codes)), body))
+        return sid
+
+    def _hold_take(self, c, kind: str, hold_id, by: int) -> Tuple[list, object]:
+        """확인할 붙잡음을 꺼내 「씀」으로 표시한다(같은 거래 — 받기가 실패하면 표시도 되돌려진다).
+
+        그 번호여야 하고(더 새로 붙잡았으면 옛 번호는 없음) · 아직 안 썼고 · ``HOLD_TTL`` 안이어야 한다(저장소 시계 기준)."""
+        hid = _pos_int(hold_id, "붙잡음 번호")
+        row = c.execute("SELECT sync_id, at, codes, body, used_at, used_by FROM naver_auto_hold WHERE kind = ?",
+                        (kind,)).fetchone()
+        if row is None or row[0] != hid:
+            raise HoldRefused(HOLD_NOT_FOUND, "확인할 붙잡음이 없거나 더 새로 붙잡은 것으로 바뀌었습니다")
+        if row[4] is not None:
+            if row[5] is None:
+                raise HoldRefused(HOLD_SUPERSEDED, "확인하기 전에 더 새 목록을 받았습니다")
+            raise HoldRefused(HOLD_USED, "이미 확인해 받은 붙잡음입니다")
+        at, codes, body = _read_hold_row(row[1], row[2], row[3])
+        now = self._now()
+        if now - at > HOLD_TTL or at > now + FUTURE_SLACK:
+            raise HoldRefused(HOLD_EXPIRED, "확인할 수 있는 시간이 지났습니다 — 다시 읽어 새로 붙잡습니다")
+        c.execute("UPDATE naver_auto_hold SET used_at = ?, used_by = ? WHERE kind = ? AND sync_id = ?",
+                  (_kst_text(now, "지금"), by, kind, hid))
+        return codes, body
+
+    def _supersede_hold(self, c, kind: str) -> None:
+        """확인 없이 새 목록을 받았다 — 기다리던 붙잡음은 더는 받을 수 없다(쓴 사람 없이 「씀」 표시)."""
+        c.execute("UPDATE naver_auto_hold SET used_at = ? WHERE kind = ? AND used_at IS NULL",
+                  (_kst_text(self._now(), "지금"), kind))
+
+    def _meta_json(self, c, key: str):
+        raw = self._get_meta(c, key)
+        if raw is None:
+            return None
+        try:
+            return json.loads(raw)
+        except (TypeError, ValueError, RecursionError):
+            raise StoreError("저장된 기준선을 읽지 못했습니다") from None
+
+    def _meta_count(self, c, key: str) -> Optional[int]:
+        v = self._meta_json(c, key)
+        if v is None:
+            return None
+        if isinstance(v, bool) or not isinstance(v, int) or v < 0:
+            raise StoreError("저장된 기준선을 읽지 못했습니다")
+        return v
 
     def record_sync_event(self, kind: str, outcome: str, codes: Sequence[str], at: datetime,
                           rows: Optional[int] = None) -> int:
-        """버림(건전성 검사 · 첫 회차 대조) · 실패(① 읽기 오류)를 남긴다 — 받음·멈춤은 저장소가 스스로 적는다."""
+        """버림(확인으로 풀 수 없는 것) · 실패(① 읽기 오류)를 남긴다 — 받음·멈춤·붙잡는 버림은 저장소가 스스로 적는다."""
         self._need_writer()
         if kind not in SYNC_KINDS:
             raise StoreRefused("동기화 종류가 아닙니다")
@@ -685,99 +898,139 @@ class Store:
             return self._log_sync(c, kind, vals[1], outcome, vals[0], rows=vals[2])
 
     # ── ① 관리 단계 가망 ──
-    def record_prospects(self, snap: "E.StageSnapshot", *, allow_drop_by: Optional[int] = None) -> SyncCounts:
-        """전산 7단계를 전부 받은 결과로 가망 표를 고친다 — 없어진 가망은 지우지 않고 「목록에 없음」.
-
-        한꺼번에 크게 빠지면(``_braked``) 아무것도 적지 않고 ``SyncBraked`` — 대표가 확인한 뒤 ``allow_drop_by``
-        (확인한 직원 번호 · 대표 = 0)로 다시 부르면 받는다."""
-        self._need_writer()
+    def _stage_parts(self, snap: "E.StageSnapshot"):
         if not isinstance(snap, E.StageSnapshot):
             raise StoreRefused("전산 단계 목록은 전부 받은 결과(StageSnapshot)만 받습니다")
         at = _kst_text(snap.as_of, "받은 시각")
         self._not_future(snap.as_of, "받은 시각")
-        allow = None if allow_drop_by is None else _person(allow_drop_by, "확인한 직원")
         rows = []
         for pid, r in snap.rows.items():
             if not isinstance(r, E.StageRow) or r.possibility_id != pid:
                 raise StoreRefused("전산 단계 줄 모양이 아닙니다")
-            rows.append((_pos_int(pid, "가망 번호"), _opt_text(r.name, "가망 이름"), _opt_text(r.stage_key, "단계", 40),
-                         None if r.latest_end_date is None else _day_text(r.latest_end_date, "종료일"),
-                         _opt_bool(r.end_unreadable, "종료일 못 읽음")))
+            rows.append(_stage_row(pid, r.name, r.stage_key,
+                                   None if r.latest_end_date is None else _day_text(r.latest_end_date, "종료일"),
+                                   _opt_bool(r.end_unreadable, "종료일 못 읽음")))
         conflicts = sorted({_pos_int(p, "가망 번호") for p in snap.stage_conflicts})
         if set(conflicts) & set(snap.rows):
             raise StoreRefused("단계가 겹친 가망이 줄에도 있습니다")
         detail = _spelling_counts(snap.per_spelling)
-        seen = [r[0] for r in rows] + conflicts
+        body = json.dumps({"as_of": at, "rows": [list(r) for r in rows], "conflicts": conflicts, "per_spelling": detail},
+                          ensure_ascii=False, separators=(",", ":"))
+        return at, rows, conflicts, detail, body
+
+    def _apply_prospects(self, c, at: str, as_of: datetime, rows, conflicts, detail, allow: Optional[int],
+                         bypassed: Sequence[str] = ()) -> SyncCounts:
+        last = self._meta_time(c, "prospects_synced_at")
+        if last is not None and last >= as_of:
+            raise StoreRefused("이미 적은 것보다 늦지 않은 단계 목록입니다")   # 옛 목록이 새 목록을 덮지 않게
+        before = {p: (pr, k) for p, pr, k in
+                  c.execute("SELECT possibility_id, present, stage_key FROM naver_auto_prospect")}
+        seen = [r[0] for r in rows] + list(conflicts)
+        if not seen and any(pr for pr, _ in before.values()):
+            raise StoreRefused("빈 단계 목록으로 전부를 빼지 않습니다")
+        seen_set = set(seen)
+        leaving = sorted(p for p, (pr, _) in before.items() if pr == 1 and p not in seen_set)
+        present_before = sum(1 for pr, _ in before.values() if pr == 1)
+        baseline = self._meta_count(c, "prospects_baseline")
+        if allow is None:
+            reasons = []
+            if _braked(present_before, len(leaving)):
+                reasons.append(BRAKE_TOTAL)
+            was = Counter(k for pr, k in before.values() if pr == 1 and k is not None)
+            now_k = Counter(r[2] for r in rows)
+            if any(_braked(n, n - now_k.get(k, 0)) for k, n in was.items()):
+                reasons.append(BRAKE_STAGE)   # 한 단계가 통째로(또는 크게) 빠짐 — 전체 비율 아래라도(반박 H3)
+            if baseline is not None and _braked(baseline, baseline - len(seen)):
+                reasons.append(BRAKE_BASELINE)   # 조금씩 잘려 누적으로 크게 줄어듦(톱니 방지)
+            if reasons:
+                raise _Brake(reasons, present_before, len(leaving))
+        for pid, name, stage, end, unread in rows:
+            c.execute(
+                """INSERT INTO naver_auto_prospect (possibility_id, name, stage_key, latest_end_date, end_unreadable,
+                       stage_conflict, present, first_seen_at, last_seen_at, stage_synced_at, absent_since)
+                   VALUES (?, ?, ?, ?, ?, 0, 1, ?, ?, ?, NULL)
+                   ON CONFLICT (possibility_id) DO UPDATE SET
+                       name = excluded.name, stage_key = excluded.stage_key,
+                       latest_end_date = excluded.latest_end_date, end_unreadable = excluded.end_unreadable,
+                       stage_conflict = 0, present = 1, last_seen_at = excluded.last_seen_at,
+                       stage_synced_at = excluded.stage_synced_at, absent_since = NULL""",
+                (pid, name, stage, end, unread, at, at, at))
+        for pid in conflicts:   # 두 단계에 나온 가망 — 오늘은 들어가지 않는다(단계를 비운다)
+            c.execute(
+                """INSERT INTO naver_auto_prospect (possibility_id, name, stage_key, latest_end_date, end_unreadable,
+                       stage_conflict, present, first_seen_at, last_seen_at, stage_synced_at, absent_since)
+                   VALUES (?, NULL, NULL, NULL, 0, 1, 1, ?, ?, ?, NULL)
+                   ON CONFLICT (possibility_id) DO UPDATE SET
+                       stage_key = NULL, stage_conflict = 1, present = 1, last_seen_at = excluded.last_seen_at,
+                       stage_synced_at = excluded.stage_synced_at, absent_since = NULL""",
+                (pid, at, at, at))
+        now_absent = 0
+        for pid in leaving:   # 처음 빠진 때만 적는다 — 이미 빠진 줄은 그대로
+            cur = c.execute(
+                """UPDATE naver_auto_prospect SET present = 0, absent_since = ?
+                   WHERE possibility_id = ? AND present = 1""", (at, pid))
+            now_absent += cur.rowcount
+        # 기준선 = 마지막 대표 확인(또는 처음) 뒤 가장 많던 수 — 확인하면 지금 수로 새로 잡는다
+        new_base = len(seen) if allow is not None or baseline is None else max(baseline, len(seen))
+        self._set_meta(c, "prospects_baseline", json.dumps(new_base))
+        if allow is None:
+            self._supersede_hold(c, SYNC_STAGES)
+        self._set_meta(c, "prospects_synced_at", at)
+        codes = list(bypassed) + ([CODE_CONFIRMED] if allow is not None else [])
+        self._log_sync(c, SYNC_STAGES, at, SYNC_ACCEPTED, codes, rows=len(seen), absent=now_absent, detail=detail,
+                       confirmed_by=allow)
+        return SyncCounts(len(seen), len(seen_set - set(before)), now_absent)
+
+    def record_prospects(self, snap: "E.StageSnapshot") -> SyncCounts:
+        """전산 7단계를 전부 받은 결과로 가망 표를 고친다 — 없어진 가망은 지우지 않고 「목록에 없음」.
+
+        한꺼번에 크게 빠지거나(``BRAKE``) · 한 단계가 크게 빠지거나(``BRAKE_STAGE``) · 기준선보다 누적으로 크게 줄면
+        (``BRAKE_BASELINE``) 아무것도 적지 않고 그 목록을 붙잡아 둔 뒤 ``SyncBraked``(``hold_id``). 대표가 확인하면
+        ``confirm_prospects_hold`` 가 **새로 읽지 않고 붙잡아 둔 그 목록을** 받는다."""
+        self._need_writer()
+        at, rows, conflicts, detail, body = self._stage_parts(snap)
         try:
             with self._tx() as c:
-                last = self._meta_time(c, "prospects_synced_at")
-                if last is not None and last >= snap.as_of:
-                    raise StoreRefused("이미 적은 것보다 늦지 않은 단계 목록입니다")   # 옛 목록이 새 목록을 덮지 않게
-                before = {p: pr for p, pr in c.execute("SELECT possibility_id, present FROM naver_auto_prospect")}
-                if not seen and any(before.values()):
-                    raise StoreRefused("빈 단계 목록으로 전부를 빼지 않습니다")
-                seen_set = set(seen)
-                leaving = sorted(p for p, pr in before.items() if pr == 1 and p not in seen_set)
-                present_before = sum(1 for pr in before.values() if pr == 1)
-                if allow is None and _braked(present_before, len(leaving)):
-                    raise SyncBraked(SYNC_STAGES, present_before, len(leaving))
-                for pid, name, stage, end, unread in rows:
-                    c.execute(
-                        """INSERT INTO naver_auto_prospect (possibility_id, name, stage_key, latest_end_date, end_unreadable,
-                               stage_conflict, present, first_seen_at, last_seen_at, stage_synced_at, absent_since)
-                           VALUES (?, ?, ?, ?, ?, 0, 1, ?, ?, ?, NULL)
-                           ON CONFLICT (possibility_id) DO UPDATE SET
-                               name = excluded.name, stage_key = excluded.stage_key,
-                               latest_end_date = excluded.latest_end_date, end_unreadable = excluded.end_unreadable,
-                               stage_conflict = 0, present = 1, last_seen_at = excluded.last_seen_at,
-                               stage_synced_at = excluded.stage_synced_at, absent_since = NULL""",
-                        (pid, name, stage, end, unread, at, at, at))
-                for pid in conflicts:   # 두 단계에 나온 가망 — 오늘은 들어가지 않는다(단계를 비운다)
-                    c.execute(
-                        """INSERT INTO naver_auto_prospect (possibility_id, name, stage_key, latest_end_date, end_unreadable,
-                               stage_conflict, present, first_seen_at, last_seen_at, stage_synced_at, absent_since)
-                           VALUES (?, NULL, NULL, NULL, 0, 1, 1, ?, ?, ?, NULL)
-                           ON CONFLICT (possibility_id) DO UPDATE SET
-                               stage_key = NULL, stage_conflict = 1, present = 1, last_seen_at = excluded.last_seen_at,
-                               stage_synced_at = excluded.stage_synced_at, absent_since = NULL""",
-                        (pid, at, at, at))
-                now_absent = 0
-                for pid in leaving:   # 처음 빠진 때만 적는다 — 이미 빠진 줄은 그대로
-                    cur = c.execute(
-                        """UPDATE naver_auto_prospect SET present = 0, absent_since = ?
-                           WHERE possibility_id = ? AND present = 1""", (at, pid))
-                    now_absent += cur.rowcount
-                self._set_meta(c, "prospects_synced_at", at)
-                self._log_sync(c, SYNC_STAGES, at, SYNC_ACCEPTED, ("CONFIRMED",) if allow is not None else (),
-                               rows=len(seen), absent=now_absent, detail=detail, confirmed_by=allow)
-        except SyncBraked as b:
-            self._log_braked(SYNC_STAGES, at, b, len(seen))
-            raise
-        return SyncCounts(len(seen), len(set(seen) - set(before)), now_absent)
+                return self._apply_prospects(c, at, snap.as_of, rows, conflicts, detail, None)
+        except _Brake as b:
+            sid = self._refuse_and_hold(SYNC_STAGES, at, SYNC_BRAKED, b.reasons, body, rows=len(rows) + len(conflicts),
+                                        absent=b.would_absent, detail=detail)
+            raise SyncBraked(SYNC_STAGES, b.present_before, b.would_absent, b.reasons, hold_id=sid) from None
+
+    def refuse_stages(self, snap: "E.StageSnapshot", codes: Sequence[str]) -> int:
+        """첫 회차 대조로 버린 목록을 붙잡아 두고 붙잡음 번호를 돌려준다(``sync.py`` 에서만 부른다 — 구문 시험)."""
+        self._need_writer()
+        cs = _codes(codes)
+        if not cs:
+            raise StoreRefused("버린 이유 코드가 없습니다")
+        at, rows, conflicts, detail, body = self._stage_parts(snap)
+        return self._refuse_and_hold(SYNC_STAGES, at, SYNC_REFUSED, cs, body, rows=len(rows) + len(conflicts),
+                                     detail=detail)
+
+    def confirm_prospects_hold(self, hold_id: int, confirmed_by: int) -> SyncCounts:
+        """대표가 본 그 멈춤·버림의 목록을 받는다 — ① 을 새로 읽지 않는다. 우회한 코드와 확인한 사람이 기록에 남는다."""
+        self._need_writer()
+        who = _person(confirmed_by, "확인한 직원")
+        with self._tx() as c:
+            codes, body = self._hold_take(c, SYNC_STAGES, hold_id, who)
+            at, as_of, rows, conflicts, detail = _stage_body(body)
+            return self._apply_prospects(c, at, as_of, rows, conflicts, detail, who, bypassed=codes)
 
     def stage_as_of(self) -> Optional[datetime]:
         """전산 단계를 마지막으로 받은 시각 — 점검 규칙의 「단계 자료가 26시간 넘게 낡음」(system_gap) 재료."""
         return self._meta_time(self._conn, "prospects_synced_at")
 
     # ── 네이버 대행 연결 목록 ──
-    def record_accounts(self, kids: "N.ChildAccounts", read_at: datetime, *,
-                        allow_drop_by: Optional[int] = None) -> SyncCounts:
-        """대행 연결 목록을 전부 받은 결과로 계정 표를 고친다 — 없어진 계정은 「목록에 없음」 · 연속 없는 날을 센다.
-
-        날짜는 읽은 시각의 한국 날짜다. 같은 날 두 번 받아도 없는 날은 한 번만 세고, 더 이른 시각의 목록은 받지 않는다.
-        확인한 짝을 무효로 할지(2일 연속)는 짝 동기화(S8)가 ``absent_days`` 를 보고 정한다.
-        한꺼번에 크게 빠지거나 **관리계정 수가 줄고 빠질 계정이 있으면** 아무것도 적지 않고 ``SyncBraked``.
-        """
-        self._need_writer()
+    def _account_parts(self, kids: "N.ChildAccounts", read_at: datetime):
         if not isinstance(kids, N.ChildAccounts):
             raise StoreRefused("연결 목록은 전부 받은 결과(ChildAccounts)만 받습니다")
         at = _kst_text(read_at, "읽은 시각")
         self._not_future(read_at, "읽은 시각")
-        allow = None if allow_drop_by is None else _person(allow_drop_by, "확인한 직원")
-        d = at[:10]
         per = kids.per_manager
-        if not isinstance(per, Mapping) or not per or any(
-                isinstance(v, bool) or not isinstance(v, int) or v < 0 for v in per.values()):
+        if not isinstance(per, Mapping) or not per:
+            raise StoreRefused("관리계정별 줄 수가 없습니다")
+        per = {_pos_int(m, "관리계정 번호"): _count(n, "관리계정별 줄 수") for m, n in per.items()}
+        if any(n is None for n in per.values()):
             raise StoreRefused("관리계정별 줄 수가 없습니다")
         if sum(per.values()) < len(kids.accounts) or (sum(per.values()) > 0) != bool(kids.accounts):
             raise StoreRefused("관리계정별 줄 수와 계정 수가 맞지 않습니다")   # 겹친 번호는 합쳐지므로 합계 ≥ 계정 수
@@ -790,73 +1043,100 @@ class Store:
                 raise StoreRefused("연결 목록 줄의 고객 번호가 맞지 않습니다")
             rows.append((_pos_int(cid, "고객 번호"), _opt_pos_int(kept.get("adAccountNo"), "광고계정 번호"),
                          _opt_text(kept.get("adAccountName"), "계정 이름")))
-        managers_now = len(per)
-        try:
-            with self._tx() as c:
-                last = self._meta_time(c, "accounts_read_at")
-                if last is not None and last >= read_at:
-                    raise StoreRefused("이미 적은 것보다 늦지 않은 연결 목록입니다")
-                before = {cid: pr for cid, pr in c.execute("SELECT customer_id, present FROM naver_auto_account")}
-                if not rows and any(before.values()):
-                    raise StoreRefused("빈 연결 목록으로 전부를 빼지 않습니다")
-                seen = {r[0] for r in rows}
-                leaving = sum(1 for cid, pr in before.items() if pr == 1 and cid not in seen)
-                present_before = sum(1 for pr in before.values() if pr == 1)
-                prev = c.execute(
-                    """SELECT manager_count FROM naver_auto_sync_log WHERE kind = 'accounts' AND outcome = 'accepted'
-                       ORDER BY sync_id DESC LIMIT 1""").fetchone()
-                managers_before = None if prev is None else prev[0]
-                manager_lost = managers_before is not None and managers_now < managers_before and leaving > 0
-                if allow is None and (_braked(present_before, leaving) or manager_lost):
-                    raise SyncBraked(SYNC_ACCOUNTS, present_before, leaving, managers_before, managers_now)
-                for cid, no, name in rows:
-                    c.execute(
-                        """INSERT INTO naver_auto_account (customer_id, ad_account_no, account_name, present,
-                               first_seen_on, last_seen_on, absent_days, last_absent_on)
-                           VALUES (?, ?, ?, 1, ?, ?, 0, NULL)
-                           ON CONFLICT (customer_id) DO UPDATE SET
-                               ad_account_no = excluded.ad_account_no, account_name = excluded.account_name,
-                               present = 1, last_seen_on = excluded.last_seen_on, absent_days = 0, last_absent_on = NULL""",
-                        (cid, no, name, d, d))
-                now_absent = 0
-                for cid in sorted(set(before) - seen):
-                    c.execute(
-                        """UPDATE naver_auto_account SET present = 0, absent_days = absent_days + 1, last_absent_on = ?
-                           WHERE customer_id = ? AND (last_absent_on IS NULL OR last_absent_on < ?)""", (d, cid, d))
-                    if before[cid] == 1:
-                        now_absent += 1
-                self._set_meta(c, "accounts_read_at", at)
-                self._log_sync(c, SYNC_ACCOUNTS, at, SYNC_ACCEPTED, ("CONFIRMED",) if allow is not None else (),
-                               rows=len(rows), managers=managers_now, absent=now_absent, confirmed_by=allow)
-        except SyncBraked as b:
-            self._log_braked(SYNC_ACCOUNTS, at, b, len(rows))
-            raise
+        body = json.dumps({"read_at": at, "rows": [list(r) for r in rows], "per": {str(m): n for m, n in per.items()}},
+                          ensure_ascii=False, separators=(",", ":"))
+        return at, rows, per, body
+
+    def _apply_accounts(self, c, at: str, read_at: datetime, rows, per, allow: Optional[int],
+                        bypassed: Sequence[str] = ()) -> SyncCounts:
+        d = at[:10]
+        last = self._meta_time(c, "accounts_read_at")
+        if last is not None and last >= read_at:
+            raise StoreRefused("이미 적은 것보다 늦지 않은 연결 목록입니다")
+        before = {cid: pr for cid, pr in c.execute("SELECT customer_id, present FROM naver_auto_account")}
+        if not rows and any(before.values()):
+            raise StoreRefused("빈 연결 목록으로 전부를 빼지 않습니다")
+        seen = {r[0] for r in rows}
+        leaving = sum(1 for cid, pr in before.items() if pr == 1 and cid not in seen)
+        present_before = sum(1 for pr in before.values() if pr == 1)
+        prev_per = _read_per_manager(self._meta_json(c, "accounts_per_manager"))
+        baseline = self._meta_count(c, "accounts_baseline")
+        managers_before = None if prev_per is None else len(prev_per)
+        if allow is None:
+            reasons = []
+            if _braked(present_before, leaving):
+                reasons.append(BRAKE_TOTAL)
+            if prev_per is not None and leaving > 0 and any(
+                    (n0 > 0 and per.get(m, 0) == 0) or _braked(n0, n0 - per.get(m, 0)) for m, n0 in prev_per.items()):
+                reasons.append(BRAKE_MANAGER)   # 있던 관리계정이 사라짐·0줄·크게 줄었는데 빠질 계정이 있다(번호 단위)
+            if baseline is not None and _braked(baseline, baseline - len(rows)):
+                reasons.append(BRAKE_BASELINE)
+            if reasons:
+                raise _Brake(reasons, present_before, leaving, managers_before, len(per))
+        for cid, no, name in rows:
+            c.execute(
+                """INSERT INTO naver_auto_account (customer_id, ad_account_no, account_name, present,
+                       first_seen_on, last_seen_on, absent_days, last_absent_on)
+                   VALUES (?, ?, ?, 1, ?, ?, 0, NULL)
+                   ON CONFLICT (customer_id) DO UPDATE SET
+                       ad_account_no = excluded.ad_account_no, account_name = excluded.account_name,
+                       present = 1, last_seen_on = excluded.last_seen_on, absent_days = 0, last_absent_on = NULL""",
+                (cid, no, name, d, d))
+        now_absent = 0
+        for cid in sorted(set(before) - seen):
+            c.execute(
+                """UPDATE naver_auto_account SET present = 0, absent_days = absent_days + 1, last_absent_on = ?
+                   WHERE customer_id = ? AND (last_absent_on IS NULL OR last_absent_on < ?)""", (d, cid, d))
+            if before[cid] == 1:
+                now_absent += 1
+        new_base = len(rows) if allow is not None or baseline is None else max(baseline, len(rows))
+        self._set_meta(c, "accounts_baseline", json.dumps(new_base))
+        if allow is None:
+            self._supersede_hold(c, SYNC_ACCOUNTS)
+        self._set_meta(c, "accounts_per_manager", json.dumps({str(m): n for m, n in sorted(per.items())}))
+        self._set_meta(c, "accounts_read_at", at)
+        codes = list(bypassed) + ([CODE_CONFIRMED] if allow is not None else [])
+        self._log_sync(c, SYNC_ACCOUNTS, at, SYNC_ACCEPTED, codes, rows=len(rows), managers=len(per),
+                       absent=now_absent, confirmed_by=allow)
         return SyncCounts(len(rows), len(seen - set(before)), now_absent)
 
-    # ── ① 조직 스냅숏 수락본(S7 · M12) ──
-    def record_org(self, body: Mapping, received_at: datetime, *, warnings: Sequence[str] = (),
-                   confirmed_by: Optional[int] = None) -> None:
-        """건전성 검사(``app.naver_auto.org_snapshot.accept_snapshot``)를 통과한 스냅숏 본문을 수락본으로 남긴다.
+    def record_accounts(self, kids: "N.ChildAccounts", read_at: datetime) -> SyncCounts:
+        """대행 연결 목록을 전부 받은 결과로 계정 표를 고친다 — 없어진 계정은 「목록에 없음」 · 연속 없는 날을 센다.
 
-        남길 칸만(``fields.ORG_*``) · 값은 글자·정수·참거짓·빈 값만 · 더 새 스냅숏만(``generated_at``) · 미래 시각 거절.
-        ``confirmed_by`` 는 대표가 확인하고 이전 조직 없이 다시 받은 경우(동기화 기록에 남는다).
-        이 함수는 ``sync.py`` 에서만 부른다(구문 시험) — 검사를 거치지 않은 본문이 들어오지 않게."""
+        날짜는 읽은 시각의 한국 날짜다. 같은 날 두 번 받아도 없는 날은 한 번만 세고, 더 이른 시각의 목록은 받지 않는다.
+        확인한 짝을 무효로 할지(2일 연속)는 짝 동기화(S8)가 ``absent_days`` 를 보고 정한다.
+        한꺼번에 크게 빠지거나 · **있던 관리계정(번호)이 사라지거나 0줄·크게 줄고 빠질 계정이 있거나** · 기준선보다 누적으로
+        크게 줄면 아무것도 적지 않고 붙잡아 둔 뒤 ``SyncBraked`` — 확인은 ``confirm_accounts_hold``.
+        """
         self._need_writer()
+        at, rows, per, body = self._account_parts(kids, read_at)
+        try:
+            with self._tx() as c:
+                return self._apply_accounts(c, at, read_at, rows, per, None)
+        except _Brake as b:
+            sid = self._refuse_and_hold(SYNC_ACCOUNTS, at, SYNC_BRAKED, b.reasons, body, rows=len(rows),
+                                        managers=b.managers_now, absent=b.would_absent)
+            raise SyncBraked(SYNC_ACCOUNTS, b.present_before, b.would_absent, b.reasons, hold_id=sid,
+                             managers_before=b.managers_before, managers_now=b.managers_now) from None
+
+    def confirm_accounts_hold(self, hold_id: int, confirmed_by: int) -> SyncCounts:
+        """대표가 본 그 멈춤의 연결 목록을 받는다 — 네이버를 새로 읽지 않는다."""
+        self._need_writer()
+        who = _person(confirmed_by, "확인한 직원")
+        with self._tx() as c:
+            codes, body = self._hold_take(c, SYNC_ACCOUNTS, hold_id, who)
+            at, read_at, rows, per = _account_body(body)
+            return self._apply_accounts(c, at, read_at, rows, per, who, bypassed=codes)
+
+    # ── ① 조직 스냅숏 수락본(S7 · M12) ──
+    def _org_parts(self, body: Mapping):
         if not isinstance(body, Mapping):
             raise StoreRefused("조직 스냅숏 본문 모양이 아닙니다")
         gen = body.get("generated_at")
-        try:
-            gen_dt = datetime.fromisoformat(gen) if isinstance(gen, str) and len(gen) <= 64 else None
-        except ValueError:
-            gen_dt = None
-        if gen_dt is None or gen_dt.tzinfo is None:
+        gen_dt = _aware_time(gen) if isinstance(gen, str) and len(gen) <= 64 else None
+        if gen_dt is None:
             raise StoreRefused("조직 스냅숏 시각을 읽지 못했습니다")
-        if gen_dt > self._now() + ORG_FUTURE_SLACK:
-            raise StoreRefused("조직 스냅숏 시각: 미래 시각은 받지 않습니다")
-        rec = _kst_text(received_at, "받은 시각")
-        self._not_future(received_at, "받은 시각")
-        allow = None if confirmed_by is None else _person(confirmed_by, "확인한 직원")
-        codes = _codes(warnings)
+        gen_text = _kst_text(gen_dt, "조직 스냅숏 시각")
         kept = {"generated_at": gen}
         for key, allowed in (("teams", F.ORG_TEAM), ("employees", F.ORG_EMPLOYEE), ("owners", F.ORG_OWNER)):
             items = _seq(body.get(key), f"조직 {key}")
@@ -868,12 +1148,43 @@ class Store:
                     raise StoreRefused(f"조직 {key}: 줄 모양이 아닙니다")
                 out.append({k: _org_value(v, f"조직 {key}") for k, v in F.keep(it, allowed).items()})
             kept[key] = out
-        text = json.dumps(kept, ensure_ascii=False, separators=(",", ":"))
-        gen_text = _kst_text(gen_dt, "조직 스냅숏 시각")
+        return gen_dt, gen_text, kept, json.dumps(kept, ensure_ascii=False, separators=(",", ":"))
+
+    def record_org(self, body: Mapping, received_at: datetime, *, warnings: Sequence[str] = (),
+                   confirmed_by: Optional[int] = None, hold_id: Optional[int] = None,
+                   baseline: Optional[Tuple[int, int, int]] = None) -> None:
+        """건전성 검사(``app.naver_auto.org_snapshot``)를 통과한 스냅숏 본문을 수락본으로 남긴다.
+
+        남길 칸만(``fields.ORG_*``) · 값은 글자·정수·참거짓·빈 값만 · 더 새 스냅숏만(``generated_at``) · 미래 시각 거절.
+        ``confirmed_by`` 는 ``hold_id`` 와 함께만 — 대표가 본 **그 붙잡음의 본문**과 같아야 받는다(다른 본문이면 거절).
+        저장된 수락본이 망가져 있으면 ``STORED_UNREADABLE`` 붙잡음을 확인할 때만 덮어쓴다.
+        ``baseline`` = (재직 · 담당 줄 · 재직 팀장) 수 — 누적 비교 기준선(확인하면 지금 수로 새로 잡는다).
+        이 함수는 ``sync.py`` 에서만 부른다(구문 시험) — 검사를 거치지 않은 본문이 들어오지 않게."""
+        self._need_writer()
+        if (confirmed_by is None) != (hold_id is None):
+            raise StoreRefused("대표 확인은 붙잡음 번호와 함께만 받습니다")
+        gen_dt, gen_text, kept, text = self._org_parts(body)
+        if gen_dt > self._now() + ORG_FUTURE_SLACK:
+            raise StoreRefused("조직 스냅숏 시각: 미래 시각은 받지 않습니다")
+        rec = _kst_text(received_at, "받은 시각")
+        self._not_future(received_at, "받은 시각")
+        allow = None if confirmed_by is None else _person(confirmed_by, "확인한 직원")
+        codes = _codes(warnings)
+        base = None if baseline is None else _org_baseline_value(baseline)
         with self._tx() as c:
+            held: list = []
+            if allow is not None:
+                held, held_body = self._hold_take(c, SYNC_ORG, hold_id, allow)
+                if held_body != kept:
+                    raise StoreRefused("확인한 조직과 받으려는 조직이 다릅니다")
             row = c.execute("SELECT generated_at FROM naver_auto_org WHERE slot = 'current'").fetchone()
-            if row is not None and datetime.fromisoformat(row[0]) >= gen_dt:
-                raise StoreRefused("이미 적은 것보다 새 조직 스냅숏이 아닙니다")   # 옛 스냅숏이 새것을 덮지 않게
+            if row is not None:
+                old = _aware_time(row[0])
+                if old is None:
+                    if CODE_STORED_UNREADABLE not in held:
+                        raise StoreRefused("저장된 수락본을 읽지 못했습니다 — 대표 확인으로만 바꿉니다")
+                elif old >= gen_dt:
+                    raise StoreRefused("이미 적은 것보다 새 조직 스냅숏이 아닙니다")   # 옛 스냅숏이 새것을 덮지 않게
             now = _kst_text(self._now(), "지금")
             c.execute(
                 """INSERT INTO naver_auto_org (slot, generated_at, received_at, accepted_at, confirmed_by, body)
@@ -882,10 +1193,31 @@ class Store:
                        received_at = excluded.received_at, accepted_at = excluded.accepted_at,
                        confirmed_by = excluded.confirmed_by, body = excluded.body""",
                 (gen_text, rec, now, allow, text))
-            self._log_sync(c, SYNC_ORG, rec, SYNC_ACCEPTED, codes + (["CONFIRMED"] if allow is not None else []),
+            if base is not None:
+                prev = None if allow is not None else _read_org_baseline(self._meta_json(c, "org_baseline"))
+                if prev is not None:   # 가장 많던 재직·담당 줄 · 가장 적던 팀장(마지막 확인 뒤)
+                    base = {"active": max(prev["active"], base["active"]), "owners": max(prev["owners"], base["owners"]),
+                            "managers": min(prev["managers"], base["managers"])}
+                self._set_meta(c, "org_baseline", json.dumps(base, sort_keys=True))
+            if allow is None:
+                self._supersede_hold(c, SYNC_ORG)
+            self._log_sync(c, SYNC_ORG, rec, SYNC_ACCEPTED, codes + [x for x in held if x not in codes]
+                           + ([CODE_CONFIRMED] if allow is not None else []),
                            rows=len(kept["owners"]),
                            detail={"teams": len(kept["teams"]), "employees": len(kept["employees"])},
                            confirmed_by=allow)
+
+    def refuse_org(self, body: Mapping, received_at: datetime, codes: Sequence[str]) -> int:
+        """확인으로 풀 수 있는 이유로 버린 스냅숏을 남길 칸만 붙잡아 두고 붙잡음 번호를 돌려준다(``sync.py`` 에서만)."""
+        self._need_writer()
+        cs = _codes(codes)
+        if not cs:
+            raise StoreRefused("버린 이유 코드가 없습니다")
+        _gen_dt, _gen_text, kept, text = self._org_parts(body)
+        rec = _kst_text(received_at, "받은 시각")
+        self._not_future(received_at, "받은 시각")
+        return self._refuse_and_hold(SYNC_ORG, rec, SYNC_REFUSED, cs, text, rows=len(kept["owners"]),
+                                     detail={"teams": len(kept["teams"]), "employees": len(kept["employees"])})
 
     # ── 사람의 짝 판단 ──
     def record_decision(self, possibility_id: int, customer_id: int, decision: str, decided_by: int,
@@ -1134,13 +1466,31 @@ class Store:
             return None
         try:
             body = json.loads(r[4])
-            times = [datetime.fromisoformat(t) for t in r[:3]]
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, RecursionError):
             raise StoreError("저장된 조직 수락본을 읽지 못했습니다") from None
-        if not isinstance(body, dict):
+        times = [_aware_time(t) for t in r[:3]]
+        if not isinstance(body, dict) or any(t is None for t in times):   # 시간대 없는 시각도 못 읽은 것(견줄 수 없다)
             raise StoreError("저장된 조직 수락본을 읽지 못했습니다")
         return {"body": body, "generated_at": times[0], "received_at": times[1], "accepted_at": times[2],
                 "confirmed_by": r[3]}
+
+    def org_baseline(self) -> Optional[dict]:
+        """조직 누적 비교 기준선 — 마지막 대표 확인(또는 처음) 뒤 가장 많던 재직·담당 줄 · 가장 적던 재직 팀장."""
+        return _read_org_baseline(self._meta_json(self._conn, "org_baseline"))
+
+    def hold(self, kind: str) -> Optional[dict]:
+        """그 종류의 붙잡음(가장 최근 하나) — 대표 확인 화면(S11)·부르는 때 판정이 읽는다. 본문은 엔진 안에서만 쓴다."""
+        if kind not in SYNC_KINDS:
+            raise StoreRefused("동기화 종류가 아닙니다")
+        r = self._conn.execute(
+            "SELECT sync_id, at, codes, body, used_at, used_by FROM naver_auto_hold WHERE kind = ?", (kind,)).fetchone()
+        if r is None:
+            return None
+        at, codes, body = _read_hold_row(r[1], r[2], r[3])
+        used = None if r[4] is None else _aware_time(r[4])
+        if r[4] is not None and used is None:
+            raise _bad_hold()
+        return {"hold_id": r[0], "at": at, "codes": codes, "body": body, "used_at": used, "used_by": r[5]}
 
     def _sync_rows(self, where: str, args: tuple, limit: int) -> List[dict]:
         cur = self._conn.execute("SELECT * FROM naver_auto_sync_log" + where + " ORDER BY sync_id DESC LIMIT ?",

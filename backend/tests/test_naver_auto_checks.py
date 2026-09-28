@@ -392,7 +392,7 @@ class SufficiencyTest(unittest.TestCase):
         expected = {
             "bizmoney_red_days": (0.5, 3.0), "bizmoney_yellow_days": (1.0, 14.0), "jump_up_ratio": (1.2, 10.0),
             "jump_down_ratio": (0.05, 0.9), "jump_min_spend": (0, 1_000_000), "jump_min_weeks": (2, 4),
-            "stage_stale_hours": (6, 72), "zero_spend_days": (1, 14), "period_end_days": (0, 14),
+            "stage_stale_hours": (12, 72), "zero_spend_days": (1, 14), "period_end_days": (0, 14),
         }
         self.assertEqual(T.RANGES, expected)
         for name, (lo, hi) in expected.items():

@@ -137,6 +137,17 @@ class NaverIdRow:
     customer_id_raw: Optional[str] = field(default=None, repr=False)
 
 
+def _display_text(v) -> bool:
+    """저장소가 받는 글자인가 — 200자 이하 · NUL 없음 · UTF-8 로 쓸 수 있음."""
+    if not isinstance(v, str) or len(v) > 200 or "\x00" in v:
+        return False
+    try:
+        v.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 def _parse_date(raw) -> Tuple[Optional[date], bool]:
     """(날짜, 못 읽음) — 빈 값은 (None, False) · 틀린 글자는 (None, True)."""
     if raw is None or (isinstance(raw, str) and not raw.strip()):
@@ -205,20 +216,27 @@ class ErpReader:
             raise ErpError("too-large", path, status)
         try:
             j = json.loads(bytes(body).decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):
+        except (ValueError, UnicodeDecodeError, RecursionError):   # 깊게 겹친 JSON 도 읽기 실패로(결과로 돌려주게)
             raise ErpError("not-json", path, status) from None
         if not isinstance(j, dict) or j.get("status") != 200 or not isinstance(j.get("result"), dict):
             raise ErpError("bad-shape", path, status)
         return j["result"]
 
     # ── 계약 단계 ────────────────────────────────────────────────
-    def read_stages(self) -> StageSnapshot:
-        """7단계 × 표기 전부를 순서대로 부른다. 한 번이라도 실패하면 ``ErpIncomplete`` — 받은 것도 버린다."""
+    def read_stages(self, deadline: Optional[datetime] = None) -> StageSnapshot:
+        """7단계 × 표기 전부를 순서대로 부른다. 한 번이라도 실패하면 ``ErpIncomplete`` — 받은 것도 버린다.
+
+        같은 단계의 **다른 표기**에서 같은 가망이 다시 나오면 한 줄로 합친다(① 이 빈칸 무시 매칭으로 바꾸면 두 표기가 같은
+        목록을 준다 — 그것을 「중복」으로 버리면 동기화가 영영 멈춘다 · S7 적대 검토). 한 표기 응답 안에서 같은 번호가 두 번이면
+        그때만 ``duplicate`` 다. ``deadline``(시간대 있는 시각)을 넘기면 남은 표기를 부르지 않고 ``ErpIncomplete("deadline")``
+        — ② 04:00 · ③ 06:00 창에 읽기가 걸치지 않게(M3)."""
         by_pid: Dict[int, StageRow] = {}
         conflicts = set()
         per: Dict[str, int] = {}
         for key, spellings in STAGE_SPELLINGS.items():
             for spelling in spellings:
+                if deadline is not None and self._clock.now() >= deadline:
+                    raise ErpIncomplete("deadline", PATH_CONTRACTS, None, "읽기 마감")
                 try:
                     res = self._get(PATH_CONTRACTS, {"stage": spelling, "has_contract": "true"})
                 except ErpError as e:
@@ -229,8 +247,12 @@ class ErpReader:
                         or total != len(items):
                     raise ErpIncomplete("bad-shape", PATH_CONTRACTS, 200, "단계 목록 모양")
                 per[spelling] = len(items)
+                in_this = set()
                 for it in items:
                     row = self._stage_row(it, key)
+                    if row.possibility_id in in_this:
+                        raise ErpIncomplete("duplicate", PATH_CONTRACTS, 200, "같은 가망이 두 번")
+                    in_this.add(row.possibility_id)
                     old = by_pid.get(row.possibility_id)
                     if old is None:
                         if row.possibility_id not in conflicts:
@@ -238,8 +260,11 @@ class ErpReader:
                     elif old.stage_key != key:
                         conflicts.add(row.possibility_id)
                         del by_pid[row.possibility_id]
-                    else:
-                        raise ErpIncomplete("duplicate", PATH_CONTRACTS, 200, "같은 가망이 두 번")
+                    else:   # 같은 단계의 다른 표기 — 합친다(종료일은 늦은 쪽 · 못 읽음은 하나라도 · 이름은 먼저 것)
+                        ends = [d for d in (old.latest_end_date, row.latest_end_date) if d is not None]
+                        by_pid[row.possibility_id] = StageRow(
+                            row.possibility_id, key, old.name if old.name is not None else row.name,
+                            max(ends) if ends else None, old.end_unreadable or row.end_unreadable)
         return StageSnapshot(by_pid, self._clock.now(), per, tuple(sorted(conflicts)))
 
     @staticmethod
@@ -253,6 +278,8 @@ class ErpReader:
         if not isinstance(stage, str) or _WS.sub("", stage) != key:
             raise ErpIncomplete("bad-shape", PATH_CONTRACTS, 200, "단계 이름이 요청과 다름")
         name = it.get("company_name")
+        if not _display_text(name):
+            name = None   # 표시용 상호만 버린다(줄은 남긴다) — 이상한 상호 하나로 940곳 동기화가 멈추지 않게
         latest, unreadable = None, False
         contracts = it.get("contracts")
         if contracts is not None and not isinstance(contracts, list):

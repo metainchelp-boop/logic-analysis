@@ -149,8 +149,7 @@ class Ownership:
     def __post_init__(self) -> None:
         if not _is_int(self.client_id) or self.client_id <= 0:
             raise ValueError("client_id 는 양의 정수여야 합니다")
-        for name in ("main", "sub", "prev"):
-            v = getattr(self, name)
+        for name, v in (("main", self.main), ("sub", self.sub), ("prev", self.prev)):
             if v is not None and not _is_int(v):
                 raise ValueError(f"{name} 는 정수 또는 None 이어야 합니다")
         if self.source is not None and not isinstance(self.source, str):

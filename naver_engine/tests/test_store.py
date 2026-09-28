@@ -846,11 +846,12 @@ class RunTest(Base):
 
     def test_error_kind_is_code_shaped(self):
         rid = self.st.begin_run(DAY, NOW)
-        for kind in ("", "boom boom", "https://x", "a" * 41, "1abc", "키거절", "x\n"):
+        for kind in ("", "boom boom", "https://x", "a" * 41, "1abc", "키거절", "x\n",
+                     "erp-timeout_2", "cust-1234567", "pid987654321", "status-9999"):   # 숫자는 끝 HTTP 상태 셋만(S7 검토)
             with self.assertRaises(S.StoreRefused, msg=repr(kind)):
                 self.st.finish_run(rid, "failed", NOW, error_kind=kind)
         self.assertEqual(self.st.running_runs(), [rid])
-        self.st.finish_run(rid, "failed", NOW, error_kind="erp-timeout_2")
+        self.st.finish_run(rid, "failed", NOW, error_kind="erp-timeout")
 
     def test_start_must_be_same_kst_day(self):
         with self.assertRaises(S.StoreRefused):

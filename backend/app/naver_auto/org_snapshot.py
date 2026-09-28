@@ -41,7 +41,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import Any, Mapping, Optional
 
@@ -64,6 +64,10 @@ TOP_MANAGER_MAX = 2             # 재직 대표(is_top_manager)가 이보다 많
 MANAGER_SPIKE_LIMIT = 0.20      # 재직 팀장(is_manager) 수가 20% 넘게 늘고
 MANAGER_SPIKE_MIN = 3           #   3명 이상 늘면 버린다(권한 확대 의심).
 FUTURE_TOLERANCE = timedelta(minutes=10)  # 받는 쪽 시계보다 이만큼 넘게 앞선 스냅숏은 버린다(시계 어긋남 방어).
+# 값 한도 — 엔진 저장소(naver_engine/store.py)가 받는 한도와 **같다**(검사는 받는데 저장이 거절해 매시간 멈추지 않게 · S7 적대 검토).
+TEXT_MAX = 200
+TIME_TEXT_MAX = 64
+INT_LIMIT = 2 ** 63
 
 # 신선도(설계 §9 · M12) — 「담당 정보 HH:MM 기준」 띠. 3시간 넘으면 노랑 · 26시간 넘으면 승인·자동 켜기·운영 방식 올리기를
 # 멈추고 멈추기·내리기만 허용한다(fail-closed). 경계는 「넘으면」이다(딱 3시간은 아직 맑음 · 딱 26시간은 아직 노랑).
@@ -243,6 +247,8 @@ def _int(row: Mapping, key: str, where: str, *, nullable: bool) -> Optional[int]
         raise SnapshotFormatError(f"{where}: '{key}' 가 비어 있습니다")
     if not _is_int(v):
         raise SnapshotFormatError(f"{where}: '{key}' 는 정수여야 합니다")
+    if not -INT_LIMIT <= v < INT_LIMIT:
+        raise SnapshotFormatError(f"{where}: '{key}' 정수가 너무 큽니다")
     return v
 
 
@@ -265,7 +271,18 @@ def _str(row: Mapping, key: str, where: str, *, nullable: bool) -> Optional[str]
         raise SnapshotFormatError(f"{where}: '{key}' 가 비어 있습니다")
     if not isinstance(v, str):
         raise SnapshotFormatError(f"{where}: '{key}' 는 글자여야 합니다")
+    if len(v) > TEXT_MAX or "\x00" in v or not _encodable(v):
+        raise SnapshotFormatError(f"{where}: '{key}' 글자가 너무 길거나 쓸 수 없는 글자가 있습니다")
     return v
+
+
+def _encodable(v: str) -> bool:
+    """UTF-8 로 쓸 수 있는가 — 짝 없는 대리 문자(JSON 의 \\ud83d 같은 것)는 저장·전송에서 터진다."""
+    try:
+        v.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
 
 
 def _rows(body: Mapping, key: str) -> list:
@@ -297,12 +314,19 @@ def _parse_time(v: Any) -> datetime:
     """ISO-8601 · 시간대 필수. ① 는 ``2026-09-28T14:00:00+09:00`` 모양으로 보낸다."""
     if not isinstance(v, str) or not v.strip():
         raise SnapshotFormatError("'generated_at' 이 없습니다")
+    if len(v) > TIME_TEXT_MAX or v != v.strip():
+        raise SnapshotFormatError("'generated_at' 모양이 아닙니다")   # 저장소와 같게 — 앞뒤 빈칸도 받지 않는다
     try:
-        dt = datetime.fromisoformat(v.strip())
+        dt = datetime.fromisoformat(v)
     except ValueError:
         raise SnapshotFormatError("'generated_at' 을 시각으로 읽을 수 없습니다") from None
     if dt.tzinfo is None or dt.utcoffset() is None:
         raise SnapshotFormatError("'generated_at' 에 시간대가 없습니다")
+    try:
+        dt.astimezone(timezone.utc)   # 서기 1년 +10:00 같은 값은 한국 시각으로 못 바꾼다
+        dt.astimezone(timezone(timedelta(hours=9)))
+    except OverflowError:
+        raise SnapshotFormatError("'generated_at' 을 시각으로 읽을 수 없습니다") from None
     return dt
 
 

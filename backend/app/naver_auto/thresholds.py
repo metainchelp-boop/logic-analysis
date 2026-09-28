@@ -34,7 +34,7 @@ RANGES = {
     "jump_down_ratio": (0.05, 0.9),
     "jump_min_spend": (0, 1_000_000),
     "jump_min_weeks": (2, 4),
-    "stage_stale_hours": (6, 72),
+    "stage_stale_hours": (12, 72),   # 최소 12 — 단계 동기화 6시간 + 실패 뒤 1시간 + 조용한 창 여유(S7 · 엔진 시험이 대조)
     "zero_spend_days": (1, 14),
     "period_end_days": (0, 14),
 }

@@ -308,6 +308,61 @@ class StageTest(Base):
             self.assertIsNone(E.handle_inputs(snap.rows[pid]), "종료일을 못 읽으면 손잡이를 발급하지 않는다")
         self.assertEqual(E.handle_inputs(snap.rows[3]), ("진행중", date(2026, 12, 31)))
 
+    def test_same_stage_other_spelling_merges(self):
+        """① 이 빈칸 무시 매칭으로 바꿔 두 표기가 같은 가망을 주면 한 줄로 합친다 — 「중복」으로 영영 멈추지 않게(S7 검토)."""
+        self.fake.stages = {"진행중": [company(101, "진행중", ends=("2026-10-01",)), company(102, "진행중")],
+                            "진행 중": [company(101, "진행 중", ends=("2027-01-31",)), company(103, "진행 중", ends=())],
+                            "홀딩 중": [company(104, "홀딩 중", ends=("2026-13-40",))],
+                            "홀딩중": [company(104, "홀딩중", ends=("2026-12-01",))]}
+        snap = self.reader.read_stages()
+        self.assertEqual(sorted(snap.rows), [101, 102, 103, 104])
+        self.assertEqual(snap.stage_conflicts, ())
+        self.assertEqual(snap.rows[101].latest_end_date, date(2027, 1, 31))     # 늦은 쪽
+        self.assertTrue(snap.rows[104].end_unreadable)                          # 못 읽음은 하나라도
+        self.assertEqual((snap.per_spelling["진행중"], snap.per_spelling["진행 중"]), (2, 2))
+
+    def test_duplicate_within_one_spelling_still_refused(self):
+        self.fake.override[(E.PATH_CONTRACTS, "진행 중")] = (200, json.dumps({"status": 200, "result": {
+            "total": 2, "items": [company(7, "진행 중"), company(7, "진행 중")]}}).encode())
+        with self.assertRaises(E.ErpIncomplete) as cm:
+            self.reader.read_stages()
+        self.assertEqual(cm.exception.kind, "duplicate")
+
+    def test_deadline_stops_before_next_call(self):
+        clock = self.reader._clock
+        real_send = self.fake.send
+
+        def slow(req, timeout):   # 부를 때마다 1분씩 흐른다
+            clock._now += timedelta(minutes=1)
+            return real_send(req, timeout)
+        self.fake.send = slow
+        with self.assertRaises(E.ErpIncomplete) as cm:
+            self.reader.read_stages(deadline=NOW + timedelta(minutes=5))
+        self.assertEqual((cm.exception.kind, len(self.fake.calls)), ("deadline", 5))
+        self._new()
+        with self.assertRaises(E.ErpIncomplete):   # 마감이 이미 지났으면 한 번도 부르지 않는다
+            self.reader.read_stages(deadline=NOW)
+        self.assertEqual(self.fake.calls, [])
+        self._new()
+        self.assertEqual(len(self.reader.read_stages(deadline=NOW + timedelta(seconds=1)).per_spelling),
+                         sum(len(v) for v in E.STAGE_SPELLINGS.values()))
+
+    def test_deep_json_is_not_json_result(self):
+        self.fake.override[(E.PATH_CONTRACTS, "진행중")] = (200, b"[" * 200_000 + b"]" * 200_000)
+        with self.assertRaises(E.ErpIncomplete) as cm:
+            self.reader.read_stages()
+        self.assertEqual(cm.exception.kind, "not-json")
+
+    def test_unstorable_company_name_dropped_row_kept(self):
+        raw = ('{"status": 200, "result": {"total": 3, "items": ['
+               + json.dumps(company(1, "진행중", "x" * 201)) + ", "
+               + json.dumps(company(2, "진행중", "a\x00b")) + ", "
+               + json.dumps(company(3, "진행중", "가게"), ensure_ascii=False).replace('"가게"', '"\\ud83d가게"') + "]}}")
+        self.fake.override[(E.PATH_CONTRACTS, "진행중")] = (200, raw.encode())
+        snap = self.reader.read_stages()
+        self.assertEqual(sorted(snap.rows), [1, 2, 3])
+        self.assertEqual([snap.rows[i].name for i in (1, 2, 3)], [None, None, None])
+
     def test_plausible(self):
         snap = E.StageSnapshot({i: E.StageRow(i, "진행중") for i in range(1, 941)}, NOW, {}, ())
         self.assertTrue(snap.plausible())
