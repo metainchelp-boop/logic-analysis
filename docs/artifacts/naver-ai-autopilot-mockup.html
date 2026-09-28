@@ -370,9 +370,9 @@
 </style>
 
 <div class="demo">
-  <b>시안 · 업데이트 2026-09-28 · v6 · 관제 먼저 (대표 확인 전)</b>
+  <b>시안 · 업데이트 2026-09-28 · v7 · 관제 먼저 · 확정</b>
   <span class="grow">대표 지시 「매일 모든 광고주 계정에 하나씩 들어가 확인하는 일을 없앤다」로 다시 짰습니다 · 🛰 관제 = 전 광고주 현황 + 이슈 · 🤖 자동화는 따로 · 📄 주간·월간 보고서 · 모든 광고주·직원 이름과 숫자는 예시입니다</span>
-  <button class="gbtn" data-guide>ⓘ 시안 안내 · 점검 규칙 · 대표 결정 12건</button>
+  <button class="gbtn" data-guide>ⓘ 시안 안내 · 점검 규칙 · 대표 결정 12건 확정</button>
 </div>
 <div class="rolebar" role="group" aria-label="시안 도구 — 보는 사람 바꾸기">
   <span class="tag">시안 도구</span>보는 사람:
@@ -599,10 +599,11 @@
     <div><b class="num">약 940</b><span>관리 중인 광고주<br>(진행중 573 · 환불중 139 · 전략 관리 90 · 홀딩중 69 · 사후 관리 68 · 재계약 5)</span></div>
     <div><b class="num">239</b><span>전산에 네이버 광고<br><b>로그인 아이디</b>가 있는 곳<br>(직원이 하나씩 들어가 보는 곳)</span></div>
     <div><b class="num">2</b><span>전산에 네이버 광고<br><b>API 키 3종</b>이 다 있는 곳</span></div>
-    <div><b>?</b><span>광고센터(③)에 저장된 키<br>— 0단계에서 셉니다</span></div>
+    <div><b class="num">1,784</b><span>회사 대행사 계정 키 <b>한 벌</b>로<br>읽히는 광고계정<br>(9/28 시험 · 끝난·쉬는 계정 포함)</span></div>
   </div>
   <p>관제는 네이버가 공식으로 여는 창구(API)로 계정을 읽습니다. 직원의 아이디·비밀번호로 화면에 들어가는 방식은 쓰지 않습니다(네이버 약관·보안). 그런데 지금 결정(D5 ⓑ — 광고주마다 키 3종)대로면 <b>첫날 점검할 수 있는 곳이 거의 없습니다.</b> 광고주 수백 곳에 키를 하나씩 받아야 합니다.</p>
   <p>다른 길이 있습니다. 네이버 검색광고의 <b>대행사 관리 계정</b>에 광고주 계정이 연결돼 있으면, <b>회사 열쇠 한 벌</b>로 연결된 광고주를 모두 <b>읽을</b> 수 있습니다(네이버 명세가 그렇게 설계돼 있고, 비즈머니까지 읽히는지는 시험 1곳으로 먼저 확인). 관제는 읽기만 하므로 이 길이 맞습니다. 자동화(쓰기)는 지금 결정대로 광고주별 키로 갑니다 — D5 는 그대로 둡니다. → 대표 결정 <b>M0</b>.</p>
+  <div class="note">✅ <b>0단계 첫 시험(9/28 19:56 · 읽기만)</b> — 1번 대행사 계정 키 한 벌로 관리계정 3개 · 연결된 광고계정 <b>1,784곳(전부 운영관리)</b> · 캠페인 목록 · <b>비즈머니</b> · 통계 경로가 모두 읽혔습니다. ⇒ M0 ⓐ 가 실측으로 성립. 2번 대행사 계정은 연결 0곳이라 쓰지 않습니다. 다음 = 1,784곳과 전산 광고주 짝 맞추기(관리 중인 곳만 점검).</div>
 
   <h3>1. v5 → v6 무엇이 바뀌었나</h3>
   <div class="tblwrap"><table class="truth">
@@ -694,7 +695,8 @@
   </table></div>
   <p class="hint">2차 준비 조건(대표 결정 아님 · 제가 챙김): 광고센터 광고주 ↔ 전산 가망 연결을 믿을 수 있게 정리(지금은 이름으로 이어진 것이 섞여 있어 그대로면 직원 화면에 광고주가 0곳으로 보임) · 로그인 보안 두 가지(기본 비밀값 제거 · 허용 주소 좁히기) · 배포에 /naver/ 추가 · 서버 메모리·디스크 재측정.</p>
 
-  <h3 id="g-dec">7. 대표 결정 12건 — 골라서 복사해 대화창에 붙여 주세요 (★ 권고)</h3>
+  <h3 id="g-dec">7. 대표 결정 12건 — 확정 (2026-09-28 · 모두 권고안)</h3>
+  <div class="note">대표님 「추천대로해」(9/28) — M0~M11 12건 모두 <b>권고안(★)으로 확정</b>했습니다. 이 시안이 만들 화면의 기준입니다. 아래 선택은 기록으로 남겨 두었고 바꿀 수 없게 잠갔습니다.</div>
   <div id="decs"></div>
   <button class="btn blue" data-copy-dec>고른 것 복사</button>
   <textarea class="out" id="decOut" readonly aria-label="고른 결정"></textarea>
@@ -708,6 +710,7 @@
 
   <div class="changelog">
     <b>변경 이력</b><br>
+    v7 · 2026-09-28 — 대표 「추천대로해」: 결정 12건(M0~M11) 모두 권고안으로 확정 · 선택 잠금 · 0단계 첫 시험 결과(대행사 계정 키 한 벌로 1,784곳 · 비즈머니 읽힘 · 2번 계정 연결 0곳) 반영. 이 시안을 토대로 2차부터 만든다.<br>
     v6 · 2026-09-28 — 대표 지시(「직원이 매일 모든 광고주 계정에 들어가 확인하는 일을 없앤다 · 관제 대시보드에서 전 광고주 현황 · 매일 오전 점검 · 이슈 관리 · 자동화는 별도 페이지 · 주간·월간 보고서」)로 전면 개편. 메뉴 4개(🛰 관제 · 🤖 자동화 · 📄 보고서 · ⚙️ 설정) · 매일 아침 점검 규칙 · 광고주 판정 표 · 이슈 단계(새로 · 확인 중 · 해결 · 저절로 풀림 · 예외) · 보고서(주간 자동 · 월간 검토) · 점검 실패한 날 보기 · 실측(전산 API 키 2곳 · 로그인 아이디 239곳)으로 「열쇠」 결정(M0) 새로 · 대표 결정 12건(M0~M11). v5 는 자동화 페이지로 옮겨 모양만 남김.<br>
     v5 · 2026-09-28 — 대표 「추천대로 해」: 결정 7건(N1~N3 · P1~P4) 확정.<br>
     v4 · 2026-09-28 — 개인화(본인 담당만 · 팀장은 사람별로).<br>
@@ -742,6 +745,7 @@
     h+='<div class="why">'+d[3]+'</div></div>';
   });
   box.querySelector('#decs').innerHTML=h;
+  box.querySelectorAll('#decs input').forEach(function(i){i.disabled=true});
 })();
 </script>
 
@@ -1129,7 +1133,7 @@
   function openGuide(to){$('#guide').classList.add('on');if(to){var el=document.getElementById(to);if(el)el.scrollIntoView()}else{$('#guide').scrollTop=0}}
   function copyDec(){
     var out=[];$$('.dec').forEach(function(d){var c=d.querySelector('input:checked');if(c)out.push(d.getAttribute('data-id')+' '+c.value)});
-    var txt='네이버 관제 시안 v6 — 대표 결정: '+out.join(' · ');
+    var txt='네이버 관제 시안 v7 — 대표 결정 확정(2026-09-28 · 모두 권고안): '+out.join(' · ');
     $('#decOut').value=txt;
     try{navigator.clipboard.writeText(txt).then(function(){toast('복사했습니다 — 대화창에 붙여 넣어 주세요')},function(){toast('아래 칸을 길게 눌러 복사해 주세요')})}catch(err){toast('아래 칸을 길게 눌러 복사해 주세요')}
   }
