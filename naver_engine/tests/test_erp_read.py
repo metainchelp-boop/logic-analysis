@@ -20,7 +20,7 @@ from naver_engine.tests.fake_naver import FakeClock
 
 KST = timezone(timedelta(hours=9))
 NOW = datetime(2026, 9, 29, 6, 10, tzinfo=KST)
-MARK_KEY = "MARKERPKEY-1a2b3c4d"
+MARK_KEY = "MARKERPKEY-1a2b3c4d-5e6f7a8b9c0d1e2f"
 MARK_NAME = "MARKCOMPANYNAME"
 MARK_MANAGER = "MARKMANAGERNAME"
 
@@ -342,7 +342,10 @@ class KeyTest(unittest.TestCase):
     def test_load(self):
         self.assertEqual(E.load_erp_key({E.ENV_ERP_API_KEY: " " + MARK_KEY + " "}).reveal(), MARK_KEY)
         for env in ({}, {E.ENV_ERP_API_KEY: "  "}, {E.ENV_ERP_API_KEY: "short"}, {E.ENV_ERP_API_KEY: "has space key 12"},
-                    {E.ENV_ERP_API_KEY: "한글키한글키한글키"}):
+                    {E.ENV_ERP_API_KEY: "한글키한글키한글키"}, {E.ENV_ERP_API_KEY: "k" * 31},
+                    {E.ENV_ERP_API_KEY: "k" * 257}, {E.ENV_ERP_API_KEY: "has space " + "k" * 40},
+                    # 옛 계약 동기화 키 이름만 있으면 읽지 않는다(엔진 전용 키로만 돈다).
+                    {"ERP_SYNC_API_KEY": MARK_KEY}, {"AD_SYNC_API_KEY": MARK_KEY}):
             with self.subTest(env=list(env)):
                 with self.assertRaises(CredentialsMissing) as cm:
                     E.load_erp_key(env)
@@ -350,6 +353,12 @@ class KeyTest(unittest.TestCase):
                 for v in env.values():
                     if v.strip():
                         self.assertNotIn(v.strip(), str(cm.exception))
+
+    def test_key_bounds_match_erp(self):
+        self.assertEqual(E.ENV_ERP_API_KEY, "NAVER_ENGINE_ERP_KEY")
+        self.assertEqual((E.KEY_MIN_LENGTH, E.KEY_MAX_LENGTH), (32, 256))
+        for n in (32, 256):
+            self.assertEqual(E.load_erp_key({E.ENV_ERP_API_KEY: "k" * n}).reveal(), "k" * n)
 
 
 if __name__ == "__main__":

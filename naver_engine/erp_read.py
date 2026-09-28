@@ -43,7 +43,12 @@ PATH_NAVER_IDS = "/api/ad-sync/naver-customer-ids"
 _PATHS = frozenset({PATH_CONTRACTS, PATH_ORG_SNAPSHOT, PATH_NAVER_IDS})
 _ALLOWED_METHODS = frozenset({"GET"})
 
-ENV_ERP_API_KEY = "ERP_SYNC_API_KEY"     # ③ 계약 동기화와 같은 이름 · 값은 ① AD_SYNC_API_KEY 와 같다
+# 엔진 전용 키(2026-09-29 대표 확정) — ③ 계약 동기화의 ERP_SYNC_API_KEY(= ① AD_SYNC_API_KEY)와 <b>다른</b> 값이다.
+# ① 은 이 키의 지문(SHA-256)만 갖고, 조직도·고객 번호는 이 키로만 열린다(① ERP_CONTRACT_SYNC_API.md §11).
+# 옛 키 이름은 일부러 읽지 않는다 — 옛 키로 돌면 ① 이 조직도·고객 번호를 거절해 「전부 아니면 버림」으로 멈춘다.
+ENV_ERP_API_KEY = "NAVER_ENGINE_ERP_KEY"
+KEY_MIN_LENGTH = 32                       # ① NaverEngineKeyVerifier.MIN_KEY_LENGTH 와 같다(짧으면 ① 이 대조하지 않는다)
+KEY_MAX_LENGTH = 256
 TIMEOUT = 30
 MAX_BODY = 30 * 1024 * 1024
 MAX_CALLS = 40                            # 한 회차 — 단계 표기 15번 + 스냅숏 + 고객 번호 + 여유
@@ -83,13 +88,16 @@ class ErpWriteForbidden(RuntimeError):
 
 
 def load_erp_key(env: Optional[Mapping[str, str]] = None) -> Secret:
-    """① ad-sync 키를 환경변수에서 읽는다. 없거나 쓸 수 없는 글자가 있으면 ``CredentialsMissing``(문구에 이름만)."""
+    """엔진 전용 키를 환경변수에서 읽는다. 없거나 · 32~256자가 아니거나 · 쓸 수 없는 글자가 있으면
+    ``CredentialsMissing``(문구에 이름만 · 값 없음)."""
     src = os.environ if env is None else env
     raw = (src.get(ENV_ERP_API_KEY) or "").strip()
     if not raw:
         raise CredentialsMissing(f"① 키가 설정되지 않았습니다: {ENV_ERP_API_KEY}")
-    if not re.fullmatch(r"[\x21-\x7e]{8,512}", raw):
+    if not re.fullmatch(r"[\x21-\x7e]+", raw):
         raise CredentialsMissing(f"{ENV_ERP_API_KEY} 에 쓸 수 없는 글자가 있습니다(빈칸·줄바꿈·한글 등)")
+    if not KEY_MIN_LENGTH <= len(raw) <= KEY_MAX_LENGTH:
+        raise CredentialsMissing(f"{ENV_ERP_API_KEY} 길이가 {KEY_MIN_LENGTH}~{KEY_MAX_LENGTH}자가 아닙니다")
     return Secret(raw)
 
 
