@@ -1,4 +1,4 @@
-<title>네이버 광고 자동운영 시안</title>
+<title>네이버 관제 대시보드 시안</title>
 <style>
   :root{
     --bg:#f4f6fa;--panel:#ffffff;--panel2:#f1f3f8;--line:#e4e7ee;--line2:#d6dae3;
@@ -296,1212 +296,844 @@
   .blocked p{color:var(--sub);font-size:13px}
   .rolebar .demo2{border-style:dashed}
   @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+  /* ===== v6 관제 ===== */
+  .runbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin-bottom:12px;font-size:13px;color:var(--sub)}
+  .runbar b{color:var(--text)}
+  .runbar .ok{width:9px;height:9px;border-radius:50%;background:var(--green);display:inline-block}
+  .runbar .more{margin-left:auto;font-size:12.5px;color:var(--blue);background:none;border:0;font-weight:700}
+  .runbar.bad{background:#fff5f5;border-color:rgba(220,38,38,.4);color:var(--red)}
+  .runbar.bad .ok{background:var(--red)}
+  .runbar.bad b{color:var(--red)}
+  .kpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-bottom:12px}
+  .kpi{background:#fff;border:1.5px solid var(--line);border-radius:12px;padding:10px 12px;text-align:left}
+  .kpi .l{font-size:12px;color:var(--sub);font-weight:700;display:flex;gap:6px;align-items:center}
+  .kpi .v,.kpi .s{display:block}
+  .kpi .v{font-size:24px;font-weight:800;line-height:1.2;margin-top:2px;font-variant-numeric:tabular-nums}
+  .kpi .s{font-size:11.5px;color:var(--muted)}
+  .kpi.need{border-color:rgba(47,111,224,.45);background:#f5f9ff}
+  .kpi.need .v{color:var(--blue)}
+  .kpi.on{outline:2px solid var(--blue);outline-offset:1px}
+  .kpi.r .v{color:var(--red)} .kpi.y .v{color:#b88404} .kpi.g .v{color:var(--green)} .kpi.w .v{color:var(--gray)}
+  .iss{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:start;padding:10px 14px;border-top:1px solid var(--line)}
+  .iss:first-child{border-top:0}
+  .iss .tx{font-size:13px}
+  .iss .tx .w{display:block;font-size:12px;color:var(--sub);margin-top:2px}
+  .iss .tx .memo{display:block;font-size:12px;color:var(--text);background:var(--panel2);border-radius:7px;padding:4px 8px;margin-top:5px}
+  .iss .act{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;align-items:center}
+  .iss.done{background:#fafbfc}
+  .iss.done .tx{color:var(--muted)}
+  .cause{display:flex;gap:8px;align-items:center;padding:9px 14px;background:var(--panel2);border-top:1px solid var(--line);font-size:13px;font-weight:800;flex-wrap:wrap}
+  .cause:first-child{border-top:0}
+  .cause .n{font-weight:600;color:var(--sub);font-size:12px}
+  .st{display:inline-flex;align-items:center;gap:4px;padding:1px 8px;border-radius:20px;font-size:11.5px;font-weight:700;white-space:nowrap}
+  .st.new{background:var(--bluebg);color:var(--blue)}
+  .st.work{background:var(--amberbg);color:var(--amber)}
+  .st.fixed{background:var(--greenbg);color:var(--green)}
+  .st.auto{background:var(--greenbg);color:var(--green)}
+  .st.except{background:var(--graybg);color:var(--gray)}
+  .ph{font-size:10.5px;font-weight:800;color:var(--sub);background:var(--panel2);border:1px solid var(--line);border-radius:5px;padding:0 5px;margin-left:4px;vertical-align:1px}
+  .needdot{display:inline-block;font-size:11px;font-weight:800;color:#fff;background:var(--blue);border-radius:6px;padding:1px 6px}
+  .noneed{font-size:11.5px;color:var(--muted)}
+  td .up{color:var(--red);font-weight:700} td .dn{color:var(--blue);font-weight:700}
+  .empty{padding:18px 14px;text-align:center;color:var(--muted);font-size:13px}
+  .foldbtn{display:block;width:100%;text-align:left;background:#fff;border:0;border-top:1px solid var(--line);padding:9px 14px;font-size:12.5px;color:var(--blue);font-weight:700}
+  .tiles{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin:4px 0 10px}
+  .tile{border:1px solid var(--line);border-radius:10px;padding:8px 10px;background:#fff}
+  .tile .l{font-size:11.5px;color:var(--muted);font-weight:700}
+  .tile .v{font-size:17px;font-weight:800;font-variant-numeric:tabular-nums}
+  .tile .d{font-size:11.5px;color:var(--sub)}
+  .tl{list-style:none;padding:0;margin:0}
+  .tl li{display:grid;grid-template-columns:92px minmax(0,1fr);gap:10px;padding:8px 14px;border-top:1px solid var(--line);font-size:13px}
+  .tl li:first-child{border-top:0}
+  .tl li .t{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
+  .auto-soon{background:#f5f9ff;border:1px dashed rgba(47,111,224,.45);border-radius:12px;padding:10px 14px;margin-bottom:12px;font-size:13px;color:var(--sub)}
+  .auto-soon b{color:var(--blue)}
+  /* 보고서 종이 */
+  .paper{background:#fff;border:1px solid var(--line);border-radius:12px;padding:20px 22px;max-width:760px;margin:0 auto}
+  .paper h2{font-size:18px;margin-bottom:2px}
+  .paper .meta{font-size:12px;color:var(--muted);margin-bottom:12px}
+  .paper h3{font-size:14px;margin:16px 0 6px}
+  .paper .prov{font-size:12px;color:var(--amber);background:var(--amberbg);border-radius:7px;padding:5px 9px;margin-bottom:10px;display:inline-block}
+  .paper .ai{font-size:13px;background:#f5f9ff;border-radius:9px;padding:9px 12px;color:var(--text)}
+  .paper .ai .tag{font-size:10.5px;font-weight:800;color:var(--blue);margin-right:6px}
+  .paper ul{padding-left:18px;font-size:13px}
+  .paper li{margin:3px 0}
+  .truth td,.truth th{white-space:normal}
+  @media (max-width:820px){
+    .kpis{grid-template-columns:repeat(3,minmax(0,1fr))}
+    .tiles{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .iss{grid-template-columns:auto minmax(0,1fr)}
+    .iss .act{grid-column:1 / -1;justify-content:flex-start}
+  }
+  @media (max-width:480px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  @media print{.demo,.rolebar,.top,.no-print{display:none!important}}
 </style>
 
 <div class="demo">
-  <b>시안 · 업데이트 2026-09-28 · v5 · 확정</b>
-  <span class="grow">네이버 전용 입구 · 메뉴 3개 · <b>v4 개인화: 본인 담당만 · 팀장은 사람별로</b> · 모든 광고주·직원 이름과 숫자는 예시입니다 · 버튼을 눌러도 실제 광고에는 아무 일도 일어나지 않습니다</span>
-  <button class="gbtn" data-guide>ⓘ 시안 안내 · 누가 무엇을 보나 · 대표 결정 7건 확정</button>
+  <b>시안 · 업데이트 2026-09-28 · v6 · 관제 먼저 (대표 확인 전)</b>
+  <span class="grow">대표 지시 「매일 모든 광고주 계정에 하나씩 들어가 확인하는 일을 없앤다」로 다시 짰습니다 · 🛰 관제 = 전 광고주 현황 + 이슈 · 🤖 자동화는 따로 · 📄 주간·월간 보고서 · 모든 광고주·직원 이름과 숫자는 예시입니다</span>
+  <button class="gbtn" data-guide>ⓘ 시안 안내 · 점검 규칙 · 대표 결정 12건</button>
 </div>
 <div class="rolebar" role="group" aria-label="시안 도구 — 보는 사람 바꾸기">
   <span class="tag">시안 도구</span>보는 사람:
   <button data-role="kim" class="on">김담당 · 담당자</button>
   <button data-role="lee">이팀장 · 팀장</button>
-  <button data-role="han">한본부장 · 상위 팀장</button>
   <button data-role="ceo">대표</button>
   <button data-role="park">박관리 · 관리자</button>
-  <button data-role="yoon">윤영업 · 영업</button>
   <span class="hint">· 해 보기:</span>
-  <button class="demo2" data-demo="other">🔗 남의 광고주 주소 열기</button>
-  <button class="demo2" data-demo="none">🔗 없는 번호 열기</button>
-  <span class="hint">— 예시 조직: 관리 본부(한본부장) › 관리 1팀(이팀장·김담당·박담당) · 관리 2팀(최팀장·정담당·퇴사한 오담당)</span>
+  <button class="demo2" data-demo="failed" aria-pressed="false">🧪 아침 점검이 실패한 날</button>
+  <span class="hint">— 예시 조직: 관리 1팀(이팀장 · 김담당 · 박담당) · 관리 2팀(최팀장 · 정담당)</span>
 </div>
 
 <header class="top" id="top">
   <div class="row1">
-    <div class="brand"><span class="dot" aria-hidden="true"></span>네이버 자동운영</div>
+    <div class="brand"><span class="dot" aria-hidden="true"></span>네이버 관제</div>
     <nav class="menu" aria-label="메뉴">
-      <button data-go="today" class="on">📋 오늘</button>
-      <button data-go="clients">🏢 광고주</button>
-      <button data-go="settings" data-roles="lead ceo admin" hidden>⚙️ 설정</button>
+      <button data-go="watch" class="on">🛰 관제</button>
+      <button data-go="auto">🤖 자동화</button>
+      <button data-go="reports">📄 보고서</button>
+      <button data-go="settings" data-roles="lee ceo park" hidden>⚙️ 설정</button>
     </nav>
-    <button class="engine" id="engineBtn" aria-expanded="false" aria-controls="checks"><span class="ok" aria-hidden="true"></span><b>가동 중</b> · 마지막 확인 <b class="num">14:05</b> · 네이버 통계 <b class="num">12:00</b> 기준 · 계약 단계 <b class="num">12:00</b> 확인 · 담당 정보 <b class="num">13:00</b> 기준</button>
     <div class="right">
-      <button class="bell" data-drawer aria-label="알림 — 긴급 1건, 주의 4건">🔔<span class="c r">1</span><span class="c a">4</span></button>
-      <div class="scope" id="scope"><button class="scopebtn" id="scopeBtn" aria-haspopup="true" aria-expanded="false" aria-controls="scopePop"></button><span class="scopetxt" id="scopeTxt" hidden></span><div class="scopepop" id="scopePop" role="menu" aria-label="보는 범위" hidden></div></div>
-      <button class="killbtn" data-open="m-killall" data-roles="lead ceo" hidden id="killLabel">⛔ 전체 비상 정지</button>
+      <button class="bell" data-drawer aria-label="알림">🔔<span class="c r" id="bellR">1</span><span class="c a" id="bellA">2</span></button>
+      <span class="scopetxt" id="scopeTxt"></span>
       <span class="me" id="me"><b>김담당</b> · 담당자</span>
     </div>
   </div>
-  <div class="checks" id="checks">최근 확인 6번: <span>✓ 14:05 성공</span><span>✓ 13:05 성공</span><span>✓ 12:05 성공</span><span>✓ 11:05 성공</span><span>⚠ 10:05 네이버 응답 늦음 — 다음 확인에서 메움</span><span>✓ 09:05 성공 · 배포 직후라 결정만 하고 쓰지 않음</span></div>
 </header>
 
 <main>
-  <div class="stopbar" id="stopbar" hidden>⛔ <b id="stopTitle">전체 정지 중</b> · <span id="stopinfo">멈추기만 · 사유: 네이버 장애 공지 · 대표 · 14:10</span><button data-roles="lead ceo" data-restart>다시 켜기</button></div>
+  <!-- ===== 🛰 관제 ===== -->
+  <section class="screen on" id="s-watch" aria-labelledby="t-watch">
+    <h1 class="pt" id="t-watch">🛰 관제</h1>
+    <p class="ps">매일 아침 모든 광고주의 네이버 광고 계정을 대신 점검했습니다. <b>「확인 필요」만 보시면 됩니다</b> — 문제가 없는 광고주는 들어가 보지 않아도 됩니다.</p>
 
-  <!-- ===== 📋 오늘 ===== -->
-  <section class="screen on" id="s-today" aria-labelledby="t-today">
-    <h1 class="pt" id="t-today">📋 오늘</h1>
-    <p class="ps">매일 여는 곳은 이 화면 하나입니다. 위에서 아래로 한 번 훑으면 오늘 할 일이 끝납니다.</p>
+    <div class="runbar" id="runbar"></div>
+    <div class="kpis" id="kpis" role="group" aria-label="오늘 점검 결과 — 눌러서 거르기"></div>
 
-    <div class="scopeband" hidden></div>
-
-    <div class="welcome" id="welcome">
-      <p><b>이 화면 하나만 매일 보세요.</b> 빨간 줄·주황 줄부터 처리하면 됩니다. 광고주 이름을 누르면 그 광고주의 모든 것(목표·상품·기록·키·동의)이 한 장에 있습니다.</p>
-      <button class="btn blue sm" data-go="clients" data-filter="nokey" id="welcomeBtn">내 광고주 중 키 없는 곳 → 키 등록 시작</button><span class="hint" id="welcomeNone" hidden>담당 광고주가 없습니다. 설정은 ⚙️에서 고칩니다.</span>
-      <button class="x" aria-label="안내 닫기" data-close-welcome>✕</button>
+    <div class="card flat">
+      <div class="kh" style="padding:12px 14px 4px"><h2>오늘의 이슈</h2><span class="n" id="iss-n"></span><span class="n" style="margin-left:auto">원인별로 묶었습니다 · 🔴 긴급은 풀릴 때까지 「확인 필요」에 남습니다</span></div>
+      <div id="issues"></div>
+      <button class="foldbtn" id="doneToggle" aria-expanded="false">오늘 풀린 것 · 예외 처리한 것 보기</button>
+      <div id="doneList" hidden></div>
     </div>
 
-    <!-- ① 먼저 볼 것 -->
     <div class="card flat">
-      <div class="kh" style="padding:12px 14px 0"><h2>① 먼저 볼 것</h2><span class="n" id="first-n">긴급 1 · 주의 4</span></div>
-      <div id="first-body"></div>
-    </div>
-
-    <!-- ② 내가 할 일 -->
-    <div class="card flat">
-      <div class="kh" style="padding:12px 14px 0"><h2>② 내가 할 일</h2><span class="n">오래된 순</span></div>
-      <div data-roles="lead ceo" hidden>
-        <div class="grouphead" data-viewers="lee han ceo"><span class="tagline">팀장 승인</span><b>마바 뷰티</b> · 입찰 상한 <span class="num">700 → 800원</span> 올리기<span class="sub">요청: 김담당 · 이유: 3일 연속 상한에 막혀 목표 미달</span><span class="act"><button class="btn blue sm" data-approve>승인</button><button class="btn sm" data-toast="시안 — 거절했습니다(요청한 담당자에게 알림)">거절</button></span></div>
-        <div class="grouphead" data-viewers="lee han ceo"><span class="tagline">팀장 승인</span><b>가나 식품</b> · 「저당 그래놀라」 운전자 <span class="num">사람 → 엔진</span> 다시 맡기기<span class="sub">요청: 김담당</span><span class="act"><button class="btn blue sm" data-approve>승인</button><button class="btn sm" data-toast="시안 — 거절했습니다">거절</button></span></div>
-        <div class="grouphead" data-viewers="han ceo"><span class="tagline">팀장 승인</span><b>차카 캠핑</b> · 입찰 상한 <span class="num">600 → 700원</span> 올리기<span class="sub">요청: 이팀장(자기 광고주라 윗사람이 승인합니다) · <span class="expires">18시간 뒤 만료</span></span><span class="act"><button class="btn blue sm" data-approve>승인</button><button class="btn sm" data-toast="시안 — 거절했습니다(요청한 이팀장에게 알림)">거절</button></span></div>
-        <div class="line" data-viewers="lee"><div class="tx"><b>차카 캠핑</b> · 입찰 상한 <span class="num">600 → 700원</span> 올리기 — 내가 요청함<span class="w">한본부장 승인 기다림 · 자기 광고주의 팀장 등급 일은 스스로 승인하지 못하고 윗사람에게 갑니다</span></div><span class="pill p-gray">한본부장 승인 기다림</span></div>
-        <div class="grouphead" data-roles="ceo" hidden><span class="tagline">대표 확인</span><b>자동 확대 다음 단계</b> · 관찰·제안 20곳 → 자동 5곳<span class="sub">끝 기준 통과 · 14일 수집 누락 0</span><span class="act"><button class="btn blue sm" data-go="settings" data-spane="grow">확인하러 가기</button></span></div>
+      <div class="kh" style="padding:12px 14px 6px"><h2>전 광고주</h2><span class="n" id="tbl-n"></span></div>
+      <div class="chips" style="padding:0 14px 10px" id="tblChips">
+        <button class="chip on" data-f="need">확인 필요만</button>
+        <button class="chip" data-f="all">전체</button>
+        <button class="chip" data-f="r">🔴 긴급</button>
+        <button class="chip" data-f="y">🟡 주의</button>
+        <button class="chip" data-f="g">🟢 정상</button>
+        <button class="chip" data-f="w">⚪ 점검 불가</button>
+        <input class="search" id="q" placeholder="광고주 찾기" aria-label="광고주 찾기">
       </div>
-      <div id="todo-others"></div>
-      <div id="todo-kim" data-owner="kim">
-      <div class="grouphead"><b>사아 펫</b> · 9/28 · 2건<span class="sub">운영 방식: 제안(엔진은 승인받은 것만 바꿉니다)</span><span class="act"><button class="btn blue sm" data-approve-all>이 묶음 모두 승인</button></span></div>
-      <div class="line" data-apv><div class="tx">상품 「연어 트릿」 입찰가 <b class="num">420 → 460원</b><span class="w">이유: 구매 1건당 비용이 목표보다 18% 낮아 여유가 있습니다 · <span class="expires">14시간 뒤 만료</span></span></div><div class="act"><button class="btn blue sm" data-approve>승인</button><button class="btn sm" data-toast="시안 — 거절했습니다">거절</button></div></div>
-      <div class="line" data-apv><div class="tx">그룹 B 하루 예산 <b class="num">30,000 → 40,000원</b> <span class="tagline">값이 바뀌었습니다 — 다시 확인</span><span class="w">이유: 오후 3시에 예산이 먼저 떨어져 입찰을 올려도 소용없습니다 · 승인 요청 뒤 누군가 예산을 32,000원으로 바꿨습니다 · <span class="expires">20시간 뒤 만료</span></span></div><div class="act"><button class="btn sm" data-toast="시안 — 지금 값(32,000원) 기준으로 다시 보여 줍니다">다시 확인</button></div></div>
-      <div class="line" data-roles="staff"><div class="tx"><b>마바 뷰티</b> · 입찰 상한 <span class="num">700 → 800원</span> 올리기 — 내가 요청함<span class="w">팀장 승인 기다림 · 상한 올리기는 팀장 이상이 승인합니다</span></div><span class="pill p-gray">팀장 승인 기다림</span></div>
-      <div class="grouphead"><b>「이 계정 맞음」 확인 기다림</b></div>
-      <div class="line"><div class="tx"><a class="nm" data-client="aja" data-tab="connect">아자 마켓</a> — 광고주가 링크로 키를 보냈습니다. 이 광고주 계정이 맞나요?<span class="w">캠페인 이름: 「아자마켓_쇼핑」 · 「아자마켓_가을기획」 · 「브랜드_테스트」 · 고객 번호 끝 4자리 <b class="num">7781</b></span></div><div class="act"><button class="btn blue sm" data-toast="시안 — 확인했습니다(확인한 사람·시각 기록). 이제 목표를 정하면 관찰을 시작할 수 있습니다">이 계정 맞음</button><button class="btn sm" data-toast="시안 — 이 키는 쓰지 않습니다. 광고주에게 키를 다시 받는 링크를 복사했습니다">아님 — 키 다시 받기</button></div></div>
-      <div class="grouphead"><b>입찰 실험 판정 나옴</b></div>
-      <div class="line"><div class="tx"><a class="nm" data-client="gana" data-tab="items">가나 식품</a> · 「현미 누룽지」 입찰가 500원 vs 550원 · 14일 + 2일 확인<span class="w">결과: <b>판정 불가 · 지금 값(500원) 유지</b> — 95% 확실하지 않았습니다</span></div><div class="act"><button class="btn sm" data-ack>확인</button></div></div>
-      </div>
-      <div class="line" id="todo-empty" hidden><div class="tx hint">처리할 일이 없습니다.</div></div>
-    </div>
-
-    <!-- ③ 오늘 엔진이 한 일 -->
-    <div class="card flat">
-      <div class="kh" style="padding:12px 14px 4px"><h2 id="done-title">③ 오늘 엔진이 한 일</h2><button class="more" data-go="changes">전체 기록 보기 →</button></div>
-      <div style="padding:0 14px 10px;font-size:13px" class="num" id="done-sum">입찰 올림 <b>23</b> · 내림 <b>14</b></div>
-      <div data-roles="lead ceo" hidden style="padding:0 14px 10px"><button class="btn sm" data-go="changes" data-filter="outside" id="out-btn">바깥 변경 · 키 오류 모음 2건 →</button></div>
-      <details class="rowx" data-owner="kim">
-        <summary><span class="car">▸</span><b>가나 식품</b><span class="pill p-green">자동</span><span class="cnt num">올림 9 · 내림 3</span></summary>
-        <div class="tblwrap"><table>
-          <thead><tr><th>시각</th><th>상품</th><th>전 → 후</th><th>이유</th><th>반영</th><th></th></tr></thead>
-          <tbody>
-            <tr><td class="num">13:05</td><td>저당 그래놀라</td><td class="num">500 → 550원</td><td class="wrap">광고비 대비 매출이 목표(400%)보다 높아 노출을 늘립니다</td><td class="ok">✓</td><td><button class="btn sm" data-open="m-revert">되돌리기</button></td></tr>
-            <tr><td class="num">12:05</td><td>현미 누룽지</td><td class="num">480 → 430원</td><td class="wrap">클릭은 늘었는데 구매가 없어 비용을 줄입니다</td><td class="ok">✓</td><td><button class="btn sm" data-open="m-revert">되돌리기</button></td></tr>
-            <tr><td class="num">11:05</td><td>귀리 쉐이크</td><td class="num">300 → 330원</td><td class="wrap">자료가 적어 조금만 올립니다</td><td class="ok">✓</td><td><button class="btn sm" data-open="m-revert">되돌리기</button></td></tr>
-          </tbody>
-        </table></div>
-      </details>
-      <details class="rowx" data-owner="kim"><summary><span class="car">▸</span><b>마바 뷰티</b><span class="pill p-green">자동</span><span class="cnt num">올림 4 · 상한에 막힘 3</span></summary><div style="padding:0 14px 12px" class="hint">건별 줄은 가나 식품과 같은 모양입니다(시안에서는 한 곳만 그렸습니다).</div></details>
-      <details class="rowx" data-owner="kim"><summary><span class="car">▸</span><b>사아 펫</b><span class="pill p-blue">제안</span><span class="cnt">엔진은 제안만 — 승인 대기 2건</span></summary><div style="padding:0 14px 12px" class="hint">제안 단계에서는 엔진이 바꾸지 않고 「이렇게 바꾸겠습니다」만 ② 내가 할 일에 올립니다.</div></details>
-      <details class="rowx" data-owner="kim"><summary><span class="car">▸</span><b>자차 스포츠</b><span class="pill p-gray">관찰</span><span class="cnt">기록만 · 키 거절로 오늘은 멈춤</span></summary><div style="padding:0 14px 12px" class="hint">관찰 단계에서는 엔진이 결정만 기록하고 네이버에 아무것도 쓰지 않습니다.</div></details>
-      <details class="rowx" data-owner="kim"><summary><span class="car">▸</span><b>카타 가전</b><span class="pill p-gray">꺼짐</span><span class="cnt">원래 값으로 3건(계약 단계 환불중)</span></summary><div style="padding:0 14px 12px" class="hint">엔진이 올린 몫만 엔진에 맡기기 전 값으로 내렸습니다.</div></details>
-      <div id="done-extra"></div>
-    </div>
-
-    <!-- ④ 목표 대비 -->
-    <div class="card flat">
-      <div class="kh" style="padding:12px 14px 4px"><h2>④ 목표 대비</h2><span class="n">못 미치는 곳이 위로 옵니다</span></div>
-      <div class="goalrow" data-owner="kim"><a class="nm" data-client="maba">마바 뷰티</a><div class="gb"><i class="r" style="width:71%"></i></div><span class="num">클릭 하루 300 중 213 · <b class="ng">3일 연속 미달</b></span></div>
-      <div class="goalrow" data-owner="kim"><a class="nm" data-client="zacha">자차 스포츠</a><div class="gb"><i class="a" style="width:88%"></i></div><span class="num">노출 하루 3만 중 26,400</span></div>
-      <div class="goalrow" data-owner="kim"><a class="nm" data-client="gana">가나 식품</a><div class="gb"><i class="a" style="width:92%"></i></div><span class="num">광고비 대비 매출 400% 중 368%</span></div>
-      <div class="goalrow" data-owner="kim"><a class="nm" data-client="saa">사아 펫</a><div class="gb"><i style="width:100%"></i></div><span class="num">구매 1건당 9,000원 → 8,410원 ✓</span></div>
-      <div class="goalrow" data-owner="kim"><a class="nm" data-client="dara">다라 리빙</a><div class="gb"><i class="r" style="width:4%"></i></div><span class="num">광고비 대비 매출 350% · 광고 멈춤</span></div>
-      <div id="goal-extra"></div>
+      <div class="tblwrap"><table>
+        <thead><tr><th>상태</th><th>광고주</th><th>확인</th><th>담당</th><th>어제 광고비</th><th>같은 요일 대비</th><th>비즈머니</th><th>켜진 캠페인</th><th>열린 이슈</th><th>계약 단계</th><th>자동화</th></tr></thead>
+        <tbody id="tbody"></tbody>
+      </table></div>
     </div>
   </section>
 
-  <!-- ===== 바뀐 기록 전체 ===== -->
-  <section class="screen" id="s-changes" aria-labelledby="t-changes">
-    <div class="crumbs"><a data-go="today">📋 오늘</a> › 바뀐 기록 전체</div>
-    <h1 class="pt" id="t-changes">바뀐 기록 전체</h1>
-    <p class="ps">여러 광고주에 걸친 변경을 찾고 되돌리는 곳입니다(메뉴에는 없고 「오늘 › 전체 기록 보기」로 들어옵니다). 위 「보는 범위」에서 고른 광고주의 기록만 나옵니다. 광고주 찾기도 그 안에서만 찾습니다.</p>
-    <div class="scopeband" hidden></div>
-    <div class="card" style="padding:10px 12px">
-      <div class="chips">
-        <button class="chip on">오늘</button><button class="chip">어제</button><button class="chip">7일</button><button class="chip">기간…</button>
-        <input class="search" id="ch-q" placeholder="광고주 찾기" aria-label="광고주 찾기">
-        <select class="search" style="width:auto" aria-label="누가"><option>누가: 전부</option><option>엔진</option><option>사람</option><option>바깥</option></select>
-        <select class="search" style="width:auto" aria-label="종류"><option>종류: 전부</option><option>입찰가</option><option>승인받은 변경</option><option>되돌림</option><option>멈춤·다시 켜기</option></select>
-        <button class="chip" id="f-fail">반영 안 됨만</button>
-        <button class="chip" id="f-outside">바깥 변경 · 키 오류만</button>
-      </div>
-    </div>
-    <div class="card flat"><div class="tblwrap"><table>
-      <thead><tr><th>시각</th><th>광고주</th><th>누가</th><th>무엇</th><th>전 → 후</th><th>이유</th><th>반영</th><th></th></tr></thead>
-      <tbody id="ch-body">
-        <tr data-cid="maba"><td class="num">13:40</td><td>마바 뷰티</td><td><span class="pill p-blue">사람 · 이팀장</span></td><td>입찰 상한</td><td class="num">700 → 800원</td><td class="wrap">팀장이 팀원 광고주에서 바꿈 — 기록에 팀장 이름으로 남습니다</td><td class="ok">✓</td><td></td></tr>
-        <tr data-cid="rama"><td class="num">13:05</td><td>라마 커피</td><td><span class="pill p-green">엔진</span></td><td>상품 콜드브루 원액</td><td class="num">620 → 580원</td><td class="wrap">클릭은 늘었는데 구매가 없어 비용을 줄입니다</td><td class="ok">✓</td><td><button class="btn sm" data-open="m-revert">되돌리기</button></td></tr>
-        <tr data-cid="saja"><td class="num">12:05</td><td>사자 전통주</td><td><span class="pill p-green">엔진</span></td><td>상품 막걸리 선물세트</td><td class="num">900 → 960원</td><td class="wrap">광고비 대비 매출이 목표보다 높아 노출을 늘립니다</td><td class="ok">✓</td><td><button class="btn sm" data-open="m-revert">되돌리기</button></td></tr>
-        <tr data-cid="haga"><td class="num">11:05</td><td>하가 한과</td><td><span class="pill p-green">엔진</span></td><td>상품 약과 세트</td><td class="num">450 → 480원</td><td class="wrap">자료가 적어 조금만 올립니다</td><td class="ok">✓</td><td><button class="btn sm" data-open="m-revert">되돌리기</button></td></tr>
-        <tr data-cid="gana"><td class="num">13:05</td><td>가나 식품</td><td><span class="pill p-green">엔진</span></td><td>상품 저당 그래놀라</td><td class="num">500 → 550원</td><td class="wrap">광고비 대비 매출이 목표보다 높음</td><td class="ok">✓</td><td><button class="btn sm" data-open="m-revert">되돌리기</button></td></tr>
-        <tr data-outside data-cid="gana"><td class="num">11:12</td><td>가나 식품</td><td><span class="pill p-gray">바깥</span></td><td>상품 저당 그래놀라</td><td class="num">550 → 700원</td><td class="wrap">누군가 네이버 화면에서 바꿈 → 엔진이 손 뗌</td><td class="muted">—</td><td></td></tr>
-        <tr data-cid="saa"><td class="num">10:40</td><td>사아 펫</td><td><span class="pill p-blue">사람 · 김담당</span></td><td>상품 연어 트릿</td><td class="num">400 → 420원</td><td class="wrap">승인한 제안 적용</td><td class="ok">✓</td><td><button class="btn sm" data-open="m-revert">되돌리기</button></td></tr>
-        <tr data-cid="kata"><td class="num">06:02</td><td>카타 가전</td><td><span class="pill p-green">엔진</span></td><td>상품 3개</td><td class="num">평균 −18%</td><td class="wrap">계약 단계 환불중 → 엔진이 올린 몫만 원래 값으로</td><td class="ok">✓ 3/3</td><td></td></tr>
-        <tr data-outside data-cid="zacha"><td class="num">어제 21:30</td><td>자차 스포츠</td><td><span class="pill p-red">키 오류</span></td><td>계정 전체</td><td class="muted">—</td><td class="wrap">네이버가 키를 받지 않음 → 이 광고주만 멈춤</td><td class="muted">—</td><td></td></tr>
-        <tr data-cid="maba"><td class="num">어제 18:20</td><td>마바 뷰티</td><td><span class="pill p-blue">사람 · 김담당</span></td><td>광고주 멈춤 → 다시 켜기</td><td class="muted">—</td><td class="wrap">멈추기만 · 사유: 상세페이지 수정 중</td><td class="ok">✓</td><td></td></tr>
-        <tr id="ch-empty" hidden><td colspan="8" class="hint">찾는 광고주가 없거나 볼 수 없습니다.</td></tr>
-      </tbody>
-    </table></div></div>
-  </section>
-
-  <!-- ===== 🏢 광고주 목록 ===== -->
-  <section class="screen" id="s-clients" aria-labelledby="t-clients">
-    <h1 class="pt" id="t-clients">🏢 광고주</h1>
-    <div class="scopeband" hidden></div>
-    <p class="ps">네이버 검색광고 자동운영 대상 중 <b>내가 볼 수 있는 광고주만</b> 보입니다(담당자 = 내 담당 · 팀장 = 우리 팀 사람별 · 대표 = 전체). 전산에서 계약이 넘어오면 저절로 「키 필요」 줄로 생깁니다(추가 버튼 없음). 이름을 누르면 그 광고주 한 장이 열립니다.</p>
-    <div class="card" style="padding:10px 12px">
-      <div class="chips">
-        <span class="hint" id="cl-count"></span>
-        <button class="chip" data-f="todo">할 일 있음</button>
-        <button class="chip" data-f="nokey">키 없음</button>
-        <button class="chip" data-f="off">자동 꺼짐</button>
-        <select class="search" style="width:auto" aria-label="더 거르기"><option>더 거르기 ▾</option><option>동의 없음</option><option>목표 미달</option><option>입찰 실험 중</option><option>관찰·제안</option><option>자동 켜짐</option><option>대상에서 뺀 곳</option></select>
-        <input class="search" placeholder="이름 찾기" aria-label="광고주 이름 찾기" id="cl-q">
-      </div>
-    </div>
-    <div class="card flat"><div class="tblwrap"><table>
-      <thead><tr><th>상태</th><th>광고주</th><th>운영 방식</th><th>목표 대비</th><th>오늘 바뀐 수</th><th>할 일</th><th>연결</th><th>계약 단계</th><th></th></tr></thead>
-      <tbody id="cl-body"></tbody>
-    </table></div></div>
-    <p class="hint">정렬: 사람별 묶음(나 → 🔴 많은 사람 → 이름 순) 안에서 🔴 → 🟡 → 🟢 → ⚪. 신호등 색은 「오늘 ①」·🔔 알림과 같은 계산입니다. 묶음 머리줄의 숫자는 🔴 긴급 · 🟡 주의 · 할 일 · 목표 미달입니다.</p>
-  </section>
-
-  <!-- ===== 광고주 한 장 ===== -->
-  <section class="screen" id="s-client" data-c="gana" aria-labelledby="c-name">
-    <div class="crumbs"><a data-go="clients">🏢 광고주</a> › <span id="c-crumb-owner"></span><span id="c-crumb">가나 식품</span></div>
-    <div class="cband" id="cband" hidden></div>
+  <!-- ===== 광고주 한 장 (관제) ===== -->
+  <section class="screen" id="s-client" aria-labelledby="c-name">
+    <div class="crumbs"><a data-go="watch">🛰 관제</a> › <span id="c-crumb"></span></div>
     <div class="chead">
-      <div class="t"><h1 id="c-name">가나 식품</h1><span class="only-gana"><span class="sig g"></span><span class="hint">순항</span></span><span class="only-aja"><span class="sig y"></span><span class="hint">계정 확인 기다림</span></span><span class="hint" id="c-owner">담당 김담당</span></div>
-      <div class="badges">
-        <span class="pill p-green only-gana">진행중 · 12:00 확인</span><span class="pill p-green only-aja">진행중 · 12:00 확인</span>
-        <span class="pill p-gray">상한 등급: 좁은 상한(1회 +10% / −15%)</span>
-        <span class="hint only-gana">이 광고주 마지막 확인 14:05</span>
-      </div>
-      <div class="ctl">
-        <div class="modes" role="group" aria-label="운영 방식">
-          <button class="only-aja on">꺼짐</button><button class="only-gana">꺼짐</button>
-          <button>관찰</button><button>제안</button>
-          <button class="only-gana on">자동</button><button class="only-aja lock" title="켜기까지 남은 일을 먼저 마쳐야 합니다">🔒 자동</button>
-        </div>
-        <span class="hint only-gana">자동: 엔진이 상한 안의 입찰가 조정과 입찰 실험만 스스로 합니다</span>
-        <span class="hint only-aja">🔒 자동 — 아래 「켜기까지 남은 일」을 마치면 켤 수 있습니다</span>
-        <button class="btn red sm" style="margin-left:auto" data-open="m-killone" data-who-self>이 광고주만 멈추기</button>
-      </div>
-      <div class="todo only-aja">
-        <span class="hint" style="width:100%">켜기까지 남은 일 — 누르면 그 칸이 열립니다</span>
-        <span class="st done" data-tab="connect">① 네이버 키 ✓</span>
-        <span class="st now" data-tab="connect">② 이 계정 맞음</span>
-        <span class="st" data-tab="connect">③ 동의서</span>
-        <span class="st" data-tab="goal">④ 목표 · 두 상한</span>
-        <span class="st">⑤ 자료 모으기 14일</span>
-        <span class="st" data-go="settings" data-spane="grow">⑥ 자동 확대 명단</span>
-        <span class="st done">⑦ 계약 단계 허용 ✓</span>
-        <span class="st done">⑧ 전산 연결 확인 ✓</span>
-        <span class="st done">⑨ 담당 확정 ✓</span>
-      </div>
+      <div class="t"><span class="sig" id="c-sig"></span><h1 id="c-name"></h1><span class="hint" id="c-sub"></span>
+        <button class="btn sm" style="margin-left:auto" data-goauto>🤖 이 광고주 자동화 페이지 →</button></div>
+      <div class="badges" id="c-badges"></div>
     </div>
-
     <div class="tabs" role="tablist" aria-label="광고주 한 장 칸">
-      <button role="tab" data-ctab="now" class="on">① 지금</button>
-      <button role="tab" data-ctab="goal">② 목표·한도</button>
-      <button role="tab" data-ctab="items">③ 상품·기록</button>
-      <button role="tab" data-ctab="connect">④ 연결·동의</button>
+      <button class="on" data-ctab="now" role="tab">현황</button>
+      <button data-ctab="hist" role="tab">이슈 기록</button>
+      <button data-ctab="rep" role="tab">보고서</button>
+      <button data-ctab="conn" role="tab">연결</button>
     </div>
+    <div class="pane on" id="p-now"></div>
+    <div class="pane" id="p-hist"></div>
+    <div class="pane" id="p-rep"></div>
+    <div class="pane" id="p-conn"></div>
+  </section>
 
-    <!-- ① 지금 -->
-    <div class="pane on" id="p-now">
-      <div class="card only-gana">
-        <div class="kh"><h2>목표 대비</h2><span class="n">광고비 대비 매출 · 목표 400% · 10/1~12/31</span></div>
-        <div class="num" style="font-size:22px;font-weight:800">368% <span class="hint" style="font-size:12.5px;font-weight:400">목표의 92%</span></div>
-        <div class="sbars" aria-label="최근 14일 목표 대비 막대"><i style="height:80%"></i><i style="height:88%"></i><i style="height:95%"></i><i style="height:102%"></i><i style="height:97%"></i><i class="a" style="height:84%"></i><i style="height:99%"></i><i style="height:100%"></i><i style="height:93%"></i><i class="a" style="height:86%"></i><i style="height:98%"></i><i style="height:95%"></i><i class="a" style="height:88%"></i><i style="height:92%"></i></div>
-        <div class="hint">최근 14일 · 주황은 목표 미달인 날</div>
-      </div>
-      <div class="card only-aja"><div class="kh"><h2>목표 대비</h2></div><p class="sub">아직 목표가 없습니다. 「이 계정 맞음」을 확인한 뒤 <a class="nm" data-ctabgo="goal">② 목표·한도</a>에서 정해 주세요.</p></div>
-      <div class="card flat only-gana">
-        <div class="kh" style="padding:12px 14px 0"><h2>이 광고주 먼저 볼 것</h2></div>
-        <div class="line"><span class="lv pill p-amber">주의</span><div class="tx">누군가 네이버 화면에서 「저당 그래놀라」 입찰가를 바꿨습니다. 엔진은 이 상품에서 손을 뗐습니다.<span class="w">11:12</span></div><div class="act"><button class="btn sm" data-toast="시안 — 팀장 오늘 화면에 요청이 올라갑니다">엔진에 다시 맡기기(팀장에게 요청)</button><button class="btn ghost sm" data-ack>사람이 계속</button></div></div>
-      </div>
-      <div class="card only-gana"><div class="kh"><h2>이 광고주 승인 대기</h2></div><p class="sub">없습니다. 자동 단계라 상한 안의 입찰가는 엔진이 바꾸고, 그 밖의 일(예산·켜고 끄기 등)이 생기면 여기와 「오늘 ②」에 올라옵니다.</p></div>
-      <div class="card flat only-gana">
-        <div class="kh" style="padding:12px 14px 4px"><h2>오늘 엔진이 이 광고주에 한 일</h2><span class="n num">올림 9 · 내림 3</span></div>
-        <div class="tblwrap"><table>
-          <thead><tr><th>시각</th><th>상품</th><th>전 → 후</th><th>반영</th><th></th></tr></thead>
-          <tbody>
-            <tr><td class="num">13:05</td><td>저당 그래놀라</td><td class="num">500 → 550원</td><td class="ok">✓</td><td><button class="btn sm" data-open="m-revert">되돌리기</button></td></tr>
-            <tr><td class="num">12:05</td><td>현미 누룽지</td><td class="num">480 → 430원</td><td class="ok">✓</td><td><button class="btn sm" data-open="m-revert">되돌리기</button></td></tr>
-          </tbody>
-        </table></div>
-      </div>
-      <div class="note only-gana">입찰 실험 1건 진행 중 · 「귀리 쉐이크」 300원 vs 330원 · 9일째 / 14일 → <a class="nm" data-ctabgo="items" data-sub="exp">③ 상품·기록 › 입찰 실험</a></div>
+  <!-- ===== 🤖 자동화 ===== -->
+  <section class="screen" id="s-auto" aria-labelledby="t-auto">
+    <h1 class="pt" id="t-auto">🤖 자동화</h1>
+    <p class="ps">광고주별로 자동 운영을 켜고, 엔진이 한 일을 확인하고, 되돌리는 곳입니다. 관제(점검·이슈)와 따로 있습니다.</p>
+    <div class="auto-soon"><b>5차에 엽니다.</b> 관제(2차) → 구조 점검·알림(3차) → 보고서(4차)를 먼저 만들고, 자동화는 시험 계정(D11)으로 실증한 뒤 엽니다. 돈·안전 규칙(D1~D13)과 보는 범위(P1~P4)는 그대로입니다. 지금은 모양만 보여 드립니다.</div>
+    <div class="card flat" id="autoApprove" data-roles="lee ceo" hidden>
+      <div class="kh" style="padding:12px 14px 4px"><h2>승인 대기</h2><span class="n">팀장 이상 승인</span></div>
+      <div class="line"><div class="tx"><b>마바 뷰티</b> · 입찰 상한 <span class="num">700 → 800원</span> 올리기<span class="w">요청: 김담당 · 3일 연속 상한에 막혀 목표 미달 · 18시간 뒤 만료</span></div><div class="act"><button class="btn blue sm" data-toast="시안 — 승인했습니다(기록 남김)">승인</button><button class="btn sm" data-toast="시안 — 거절했습니다(요청한 담당에게 알림)">거절</button></div></div>
     </div>
-
-    <!-- ② 목표·한도 -->
-    <div class="pane" id="p-goal">
-      <div class="card">
-        <div class="fg"><label>범위</label><div class="chips"><button class="chip on">광고주 전체 한 목표</button><button class="chip" data-toast="시안 — 캠페인·그룹을 골라 따로 목표를 둘 수 있습니다(1차는 쇼핑검색만)">자세히 ▾ 캠페인·그룹 고르기</button></div></div>
-        <div class="fg"><label>목표 종류</label>
-          <div class="goaltypes" id="gtypes">
-            <button class="gt"><b>노출</b><span>하루 노출 수</span></button>
-            <button class="gt"><b>클릭</b><span>정한 클릭당 비용 안에서 클릭 최대</span></button>
-            <button class="gt"><b>구매</b><span>구매 1건당 비용</span></button>
-            <button class="gt on"><b>광고비 대비 매출</b><span>광고비 1원당 매출</span></button>
-          </div>
-          <span class="hint only-aja">구매·광고비 대비 매출은 네이버에서 구매를 추적하는 광고주만 고를 수 있습니다.</span>
-        </div>
-        <div class="grid2">
-          <div class="fg"><label for="g-target">목표 숫자</label><input id="g-target" value="400 %"></div>
-          <div class="fg"><label for="g-budget">월 예산</label><input id="g-budget" value="12,000,000원"></div>
-          <div class="fg"><label for="g-cap">입찰 상한 <span class="ng">(필수)</span></label><input id="g-cap" class="req" value="700" inputmode="numeric"><span class="hint">원 · 상품마다 따로 정할 수도 있습니다 · 크게 낮추면 먼저 영향을 보여 드립니다 · 올리면 팀장 승인</span></div>
-          <div class="fg"><label for="g-day">계정 하루 지출 상한 <span class="ng">(필수)</span></label><input id="g-day" class="req" value="450,000원"><span class="hint">동의서에 적힌 금액을 넘길 수 없습니다</span></div>
-          <div class="fg"><label for="g-period">기간</label><input id="g-period" value="2026-10-01 ~ 2026-12-31"></div>
-          <div class="fg"><label>운영 방식</label><div class="hint">위 머리의 스위치와 같은 값입니다(꺼짐 · 관찰 · 제안 · 자동)</div></div>
-        </div>
-        <div class="cando">
-          <div class="y"><b>엔진이 혼자 할 수 있는 일 — 이 두 가지뿐입니다</b>상한 안의 입찰가 조정 · 입찰 실험</div>
-          <div class="n"><b>승인이 필요한 일</b>예산 · 켜고 끄기 · 새 그룹·키워드 · 상한 올리기 · 운전자 바꾸기</div>
-        </div>
-        <div class="note">엔진은 예산을 바꾸지 않습니다. 예산이 먼저 떨어져 입찰을 올려도 소용없을 때는 「예산 바꾸기」 승인 요청만 올립니다.</div>
-        <div class="row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="btn blue" id="g-save">저장</button><span class="hint" id="g-save-hint">입찰 상한과 하루 지출 상한이 비어 있으면 저장할 수 없습니다</span></div>
-      </div>
-      <div class="card"><div class="kh"><h2>상한을 바꾼 기록</h2></div>
-        <div class="hint">09-26 김담당 · 입찰 상한 600 → 700원(팀장 이팀장 승인) · 09-20 김담당 · 운영 방식 제안 → 자동(동의서 v1)</div>
-      </div>
+    <div class="card flat">
+      <div class="kh" style="padding:12px 14px 6px"><h2>광고주별 자동화</h2><span class="n" id="auto-n"></span></div>
+      <div class="tblwrap"><table>
+        <thead><tr><th>광고주</th><th>담당</th><th>운영 방식</th><th>켜기까지 남은 일</th><th>목표</th><th>오늘 엔진이 한 일</th><th>승인 대기</th></tr></thead>
+        <tbody id="autoBody"></tbody>
+      </table></div>
     </div>
+  </section>
 
-    <!-- ③ 상품·기록 -->
-    <div class="pane" id="p-items">
-      <div class="chips" style="margin-bottom:8px"><span class="hint">광고 종류</span><button class="chip on">쇼핑검색</button><button class="chip dim" title="준비 중">파워링크 · 준비 중</button><button class="chip dim" title="준비 중">플레이스 · 준비 중</button></div>
-      <div class="chips" style="margin-bottom:12px" id="subchips"><button class="chip on" data-sub="prod">상품</button><button class="chip" data-sub="log">바뀐 기록</button><button class="chip" data-sub="exp">입찰 실험</button></div>
-      <div id="sub-prod">
-        <div class="card flat">
-          <details class="rowx" open>
-            <summary><span class="car">▸</span><b>그룹 A · 곡물 간식</b><span class="pill p-green">누가 운전 중: 엔진</span><span class="cnt">상품 8</span></summary>
-            <div class="tblwrap"><table>
-              <thead><tr><th>상품</th><th>지금 입찰가</th><th>엔진 결정</th><th>자료</th><th>누가 운전 중</th><th></th></tr></thead>
-              <tbody>
-                <tr><td>저당 그래놀라</td><td class="num">700원</td><td class="wrap"><span class="pill p-gray">보기만</span> 바깥에서 바꿔 엔진이 손 뗌</td><td>넉넉</td><td><span class="pill p-gray">사람</span></td><td><button class="btn sm" data-toast="시안 — 운전자 바꾸기는 팀장 승인입니다">팀장에게 요청</button></td></tr>
-                <tr><td>현미 누룽지</td><td class="num">430원</td><td class="wrap"><span class="pill p-blue">내림</span> 클릭은 늘었는데 구매 없음</td><td>넉넉</td><td><span class="pill p-green">엔진</span></td><td><button class="btn sm" data-toast="시안 — 이 상품만 엔진에서 뗍니다(사람 운전)">이 상품 엔진 손 떼기</button> <button class="btn ghost sm" data-open="m-revert">엔진 이전으로</button></td></tr>
-                <tr><td>귀리 쉐이크</td><td class="num">330원</td><td class="wrap"><span class="pill p-amber">입찰 실험 중</span> 300원 vs 330원</td><td>적음</td><td><span class="pill p-green">엔진</span></td><td><button class="btn sm" data-toast="시안 — 이 상품만 엔진에서 뗍니다">이 상품 엔진 손 떼기</button></td></tr>
-              </tbody>
-            </table></div>
-          </details>
-          <details class="rowx"><summary><span class="car">▸</span><b>그룹 B · 선물 세트</b><span class="pill p-naver">네이버 자동입찰 사용 중 · 보기만</span><span class="cnt">상품 5</span></summary><div style="padding:0 14px 12px" class="hint">네이버 자체 자동입찰이 켜진 그룹은 엔진이 건드리지 않습니다(대표 결정 D12).</div></details>
-          <details class="rowx"><summary><span class="car">▸</span><b>그룹 C · 음료</b><span class="pill p-gray">누가 운전 중: 사람</span><span class="cnt">상품 3</span></summary><div style="padding:0 14px 12px" class="hint">사람이 운전하는 그룹입니다. 엔진에 맡기려면 [팀장에게 요청]을 누르세요.</div></details>
+  <!-- ===== 자동화 — 광고주 한 곳 ===== -->
+  <section class="screen" id="s-autoc" aria-labelledby="ac-name">
+    <div class="crumbs"><a data-go="auto">🤖 자동화</a> › <span id="ac-crumb"></span></div>
+    <div class="chead">
+      <div class="t"><h1 id="ac-name"></h1><span class="hint" id="ac-sub"></span><button class="btn sm" style="margin-left:auto" data-gowatch>🛰 관제에서 보기 →</button></div>
+      <div class="ctl">
+        <span class="hint">운영 방식</span>
+        <div class="modes" role="group" aria-label="운영 방식">
+          <button class="on" data-toast="시안 — 꺼짐: 엔진이 아무것도 하지 않습니다">꺼짐</button><button data-toast="시안 — 관찰: 엔진이 결정만 기록합니다(네이버에 쓰지 않음)">관찰</button><button class="lock" data-toast="시안 — 제안은 「켜기까지 남은 일」을 모두 끝내야 켤 수 있습니다">제안</button><button class="lock" data-toast="시안 — 자동은 제안 4주 뒤 팀장 확인이 있어야 켤 수 있습니다">자동</button>
         </div>
+        <button class="btn red sm" data-toast="시안 — 이 광고주만 멈췄습니다(엔진이 올린 몫은 되돌리지 않음 · 기록 남김)">⏸ 이 광고주만 멈추기</button>
       </div>
-      <div id="sub-log" hidden>
-        <div class="card flat"><div class="tblwrap"><table>
-          <thead><tr><th>시각</th><th>누가</th><th>무엇</th><th>전 → 후</th><th>반영</th><th></th></tr></thead>
-          <tbody>
-            <tr><td class="num">13:05</td><td><span class="pill p-green">엔진</span></td><td>저당 그래놀라</td><td class="num">500 → 550원</td><td class="ok">✓</td><td><button class="btn sm" data-open="m-revert">되돌리기</button></td></tr>
-            <tr><td class="num">11:12</td><td><span class="pill p-gray">바깥</span></td><td>저당 그래놀라</td><td class="num">550 → 700원</td><td class="muted">—</td><td class="hint">누군가 네이버 화면에서 바꿈 → 엔진이 손 뗌</td></tr>
-            <tr><td class="num">09-20</td><td><span class="pill p-blue">사람 · 김담당</span></td><td>운영 방식</td><td>제안 → 자동</td><td class="ok">✓</td><td></td></tr>
-          </tbody>
-        </table></div></div>
-      </div>
-      <div id="sub-exp" hidden>
-        <div class="card">
-          <div class="kh"><h2>진행 중 · 귀리 쉐이크</h2><span class="pill p-amber">9일째 / 14일</span></div>
-          <p class="sub">300원과 330원을 <b>날짜를 번갈아</b> 두고 비교합니다. 판정 예정 10/7(14일 + 구매가 늦게 들어오는 2일).</p>
-          <div class="note">14일 전에는 판정하지 않습니다. 목표(광고비 대비 매출) 기준으로 95% 확실하지 않으면 「판정 불가 · 지금 값 유지」가 기본입니다.</div>
-        </div>
-        <div class="card flat"><div class="tblwrap"><table>
-          <thead><tr><th>기간</th><th>상품</th><th>두 값</th><th>결과</th></tr></thead>
-          <tbody><tr><td>9/12~9/26</td><td>현미 누룽지</td><td class="num">500 / 550원</td><td>판정 불가 · 지금 값 유지</td></tr></tbody>
-        </table></div></div>
-      </div>
+      <div class="todo" id="ac-todo"></div>
     </div>
+    <div class="tabs" role="tablist" aria-label="자동화 칸">
+      <button class="on" data-atab="a1" role="tab">엔진이 한 일</button>
+      <button data-atab="a2" role="tab">목표·한도</button>
+      <button data-atab="a3" role="tab">상품·입찰 실험</button>
+      <button data-atab="a4" role="tab">동의·계약</button>
+    </div>
+    <div class="pane on" id="p-a1"><div class="card flat"><div class="tblwrap"><table>
+      <thead><tr><th>시각</th><th>상품</th><th>전 → 후</th><th>이유</th><th></th></tr></thead>
+      <tbody>
+        <tr><td class="num">13:05</td><td>저당 그래놀라</td><td class="num">500 → 550원</td><td class="wrap">광고비 대비 매출이 목표(400%)보다 높아 노출을 늘립니다</td><td><button class="btn sm" data-toast="시안 — 되돌렸습니다(기록 남김)">되돌리기</button></td></tr>
+        <tr><td class="num">12:05</td><td>현미 누룽지</td><td class="num">480 → 430원</td><td class="wrap">클릭은 늘었는데 구매가 없어 비용을 줄입니다</td><td><button class="btn sm" data-toast="시안 — 되돌렸습니다(기록 남김)">되돌리기</button></td></tr>
+      </tbody></table></div><div class="hint" style="padding:8px 14px 12px">예시 줄입니다. 관찰 단계에서는 결정만 기록하고 네이버에 쓰지 않습니다.</div></div></div>
+    <div class="pane" id="p-a2"><div class="card"><div class="kh"><h2>목표</h2><span class="n">광고비 대비 매출 · 목표 400% · 10/1~12/31</span></div><p class="sub">입찰 상한 1회 +10% / −15% · 24시간 누적 +30% / −40% · 7일 +50% 넘으면 승인 · 계정 하루 지출 상한 필수 (대표 결정 D1)</p><button class="btn sm" data-toast="시안 — 상한 올리기는 팀장 이상 승인입니다">상한 바꾸기 요청</button></div></div>
+    <div class="pane" id="p-a3"><div class="card"><div class="kh"><h2>입찰 실험</h2><span class="pill p-amber">9일째 / 14일</span></div><p class="sub">「귀리 쉐이크」 입찰가 300원 vs 330원 — 자동으로 돌아가는 것은 입찰 실험뿐입니다(D3). 새 그룹·새 광고는 승인.</p></div></div>
+    <div class="pane" id="p-a4"><div class="card"><div class="kh"><h2>광고주 동의서</h2><span class="pill p-gray">아직 없음</span></div><p class="sub">자동화를 켜려면 동의서(D7)와 「이 계정 맞음」 확인이 필요합니다. 관제 점검은 동의서 없이도 합니다(읽기만).</p></div></div>
+  </section>
 
-    <!-- ④ 연결·동의 -->
-    <div class="pane" id="p-connect">
-      <div class="card">
-        <div class="kh"><h2>네이버 검색광고 키</h2><span class="n">저장한 뒤에는 끝 4자리만 보입니다</span></div>
-        <div class="keyrow">
-          <div class="fg"><label>고객 번호</label><input class="masked only-gana" value="••••4567" readonly><input class="masked only-aja" value="••••7781" readonly></div>
-          <div class="fg"><label>액세스 라이선스</label><input class="masked" value="••••••••a1c9" readonly></div>
-          <div class="fg"><label>비밀키</label><input class="masked" value="••••••••0f2e" readonly></div>
-        </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" data-toast="시안 — 새 키를 넣으면 연결 확인(읽기만)을 합니다">키 바꾸기</button><button class="btn" data-toast="시안 — 네이버 3칸만 뜨는 링크를 복사했습니다">광고주에게 링크 보내기</button><button class="btn ghost" data-go="public">광고주가 보는 화면 미리보기 →</button></div>
-      </div>
-      <div class="card only-gana"><div class="kh"><h2>이 계정 맞음</h2><span class="pill p-green">확인 · 김담당 09-19</span></div><p class="hint">키가 바뀌면 이 확인은 무효가 되고 엔진이 멈춥니다. 다시 확인해야 씁니다.</p></div>
-      <div class="card only-aja">
-        <div class="kh"><h2>이 계정 맞음</h2><span class="pill p-amber">확인 기다림</span></div>
-        <p class="sub">연결 확인(읽기만) 결과 — 캠페인 이름: 「아자마켓_쇼핑」 · 「아자마켓_가을기획」 · 「브랜드_테스트」 · 고객 번호 끝 4자리 <b class="num">7781</b></p>
-        <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap"><button class="btn blue" data-toast="시안 — 확인했습니다(확인한 사람·시각 기록)">이 계정 맞음</button><button class="btn" data-toast="시안 — 이 키는 쓰지 않고 광고주에게 다시 받습니다">아님 — 키 다시 받기</button></div>
-        <p class="hint" style="margin-top:8px">확인 전에는 엔진이 이 계정을 쓰지 않습니다. 엔진은 쓰기 직전마다 방금 읽은 계정 번호가 이 번호와 같은지 다시 봅니다.</p>
-      </div>
-      <div class="card only-gana"><div class="kh"><h2>누가 운전 중</h2></div><p class="sub">그룹 12개 — 엔진 7 · 사람 3 · 네이버 자동입찰 2 · <a class="nm" data-ctabgo="items">③ 상품·기록에서 보기 →</a></p></div>
-      <div class="card">
-        <div class="kh"><h2>광고주 동의서</h2><span class="pill p-green only-gana">v1 · 09-20 받음</span><span class="pill p-gray only-aja">아직 없음</span></div>
-        <p class="sub only-gana">적용 계정 고객 번호 ••••4567 <span class="ok">✓ 키 계정과 같음</span> · 자동 범위: 입찰가 조정·입찰 실험 · 입찰 상한 700원 · 하루 지출 상한 450,000원 · 비상 정지 권한 · 업종 집계 활용: 동의</p>
-        <p class="sub only-aja">동의서를 받아야 「자동」을 켤 수 있습니다. 관찰·제안은 동의서 없이도 됩니다.</p>
-        <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap"><button class="btn" data-toast="시안 — 동의서 링크를 복사했습니다">동의서 보내기</button><button class="btn ghost only-gana" data-toast="시안 — 철회하면 자동이 꺼지고 엔진이 올린 몫을 원래 값으로 돌립니다">철회 처리</button></div>
-      </div>
-      <div class="card">
-        <div class="kh"><h2>계약 단계</h2></div>
-        <p class="sub">진행중 · 전산에서 12:00 확인 · <span class="ok">운전 허용</span> <span class="hint">(허용: 진행중 · 전략 관리 · 재계약 진행중 — 그 밖의 단계는 자동 꺼짐 + 엔진이 올린 몫 원래 값으로)</span></p>
-        <button class="btn ghost sm" style="margin-top:6px" data-toast="시안 — 이 광고주를 자동운영 대상에서 뺍니다(목록 「대상에서 뺀 곳」에서만 보임)">네이버 자동운영 대상에서 빼기</button>
-      </div>
+  <!-- ===== 📄 보고서 ===== -->
+  <section class="screen" id="s-reports" aria-labelledby="t-reports">
+    <h1 class="pt" id="t-reports">📄 보고서</h1>
+    <p class="ps">광고주별 주간·월간 네이버 광고 보고서입니다. 매주·매월 저절로 만들어지고, 게시하면 <b>전산 광고주 공유 화면에 링크</b>로 올라갑니다(로직분석 주간 보고서와 같은 방식).</p>
+    <div class="tabs" role="tablist" aria-label="보고서 종류">
+      <button class="on" data-rtab="w" role="tab">주간 · 9/22(월)~9/28(일)</button>
+      <button data-rtab="m" role="tab">월간 · 9월</button>
+    </div>
+    <div class="runbar" id="repbar"></div>
+    <div class="card flat">
+      <div class="kh" style="padding:12px 14px 6px"><h2 id="rep-title">주간 보고서</h2><span class="n" id="rep-n"></span>
+        <button class="btn blue sm" style="margin-left:auto" id="bulkOk">검토 대기 모두 「검토 완료 · 게시」</button></div>
+      <div class="tblwrap"><table>
+        <thead><tr><th>광고주</th><th>담당</th><th>상태</th><th>기간 광고비</th><th>지난 기간 대비</th><th>광고주 공유 화면</th><th></th></tr></thead>
+        <tbody id="repBody"></tbody>
+      </table></div>
     </div>
   </section>
 
   <!-- ===== ⚙️ 설정 ===== -->
   <section class="screen" id="s-settings" aria-labelledby="t-settings">
     <h1 class="pt" id="t-settings">⚙️ 설정</h1>
-    <p class="ps">매일 열지 않는 것만 모았습니다. <span id="set-ro-text">대표·팀장은 보기만 하고, 고치기는 관리자가 합니다.</span></p>
+    <p class="ps">매일 열지 않는 것만 모았습니다. <span id="set-ro">대표·팀장은 보기만 하고, 고치기는 관리자가 합니다(고친 기록이 남습니다).</span></p>
     <div class="setwrap">
       <nav class="toc" aria-label="설정 목차">
-        <button data-spane="alert" class="on">알림</button>
-        <button data-spane="ai">AI 모델</button>
-        <button data-spane="consent">동의서 양식</button>
-        <button data-spane="grow">자동 확대 단계</button>
-        <button data-spane="rules">기본 규칙</button>
-        <button data-spane="stops">비상 정지 기록</button>
-        <button data-spane="people">사람·팀</button>
+        <button class="on" data-sp="th">점검 기준</button>
+        <button data-sp="time">점검 시각 · 알림</button>
+        <button data-sp="ppl">사람 · 팀</button>
       </nav>
       <div>
-        <span class="ro" id="ro-badge">보기만 — 고치기는 관리자</span>
-        <div class="spane on card" id="sp-alert">
-          <div class="kh"><h2>알림 받는 사람 · 메신저</h2></div>
-          <div class="tblwrap"><table><thead><tr><th>종류</th><th>받는 사람</th><th>보기</th></tr></thead><tbody>
-            <tr><td><span class="pill p-red">긴급</span></td><td>담당자 · 팀장 · 대표</td><td class="wrap hint">엔진 멈춤 · 모든 계정 키 실패 · 하루 지출 상한 도달 · 비즈머니 부족 · 비용 급증 · 운전자 충돌</td></tr>
-            <tr><td><span class="pill p-amber">주의</span></td><td>담당자(팀장은 하루 요약)</td><td class="wrap hint">키 거절 · 바깥 변경 · 목표 3일 미달 · 상한 3일 막힘 · 승인 12시간 경과 · 계약 단계로 자동 꺼짐 · 동의 철회 · 실험 조기 중단</td></tr>
-          </tbody></table></div>
-          <div class="fg" style="margin-top:10px"><label for="msgr">메신저 1개</label><select id="msgr" class="edit"><option>대표님이 정할 메신저(아직 연결 안 됨)</option></select></div>
-          <button class="btn edit" data-toast="시안 — 시험 알림을 보냈습니다">시험 알림 보내기</button> <span class="hint">마지막 실제 발송 성공: 아직 없음 · 1단계 시작 전에 시험 통과가 조건입니다</span>
+        <div class="spane on card flat" id="sp-th">
+          <div class="kh" style="padding:12px 14px 6px"><h2>점검 기준</h2><span class="n">처음 4주는 이 값으로 운영하고 맞춥니다</span></div>
+          <div class="tblwrap"><table>
+            <thead><tr><th>점검</th><th>문제로 보는 기준</th><th>등급</th><th>켬</th></tr></thead>
+            <tbody id="thBody"></tbody>
+          </table></div>
         </div>
-        <div class="spane card" id="sp-ai">
-          <div class="kh"><h2>AI 모델 — 역할별</h2><span class="n">입찰 숫자는 규칙이 정하고, AI는 설명·계획·진단·분류만 합니다</span></div>
-          <div class="tblwrap"><table><thead><tr><th>역할</th><th>하는 일</th><th>지금 모델</th><th>시험 결과</th></tr></thead><tbody>
-            <tr><td>계획</td><td>주간 입찰 실험 틀 · 목표 조정 제안</td><td class="num">claude-opus-5</td><td><span class="pill p-green">통과 09-27</span></td></tr>
-            <tr><td>진단</td><td>급증·급락 원인 가설</td><td class="num">claude-opus-5</td><td><span class="pill p-green">통과 09-27</span></td></tr>
-            <tr><td>설명</td><td>오늘 한 일 설명 · 승인 요청 문장</td><td class="num">claude-sonnet-5</td><td><span class="pill p-green">통과 09-27</span></td></tr>
-            <tr><td>분류</td><td>검색어 관련성 · 로그 분류</td><td class="num">claude-haiku-4-5</td><td><span class="pill p-green">통과 09-27</span></td></tr>
-          </tbody></table></div>
-          <div class="note" style="margin-top:10px">새 모델은 「지난 기록으로 시험 → 실행 없이 나란히 → 광고주 10% → 전체」 순서로만 바꿉니다. 시험을 통과하기 전에는 바꾸기 버튼이 잠깁니다.</div>
-        </div>
-        <div class="spane card" id="sp-consent">
-          <div class="kh"><h2>동의서 양식</h2><span class="pill p-blue">지금 v1</span></div>
-          <p class="sub">자동 범위 · 입찰 상한 · 계정 하루 지출 상한 · 입찰 실험 · 비상 정지 권한 · 적용 계정 + (선택) 업종 집계 활용 · 문구는 법무 확인 뒤 확정</p>
-          <button class="btn edit" data-toast="시안 — 새 버전을 올리면 다시 동의받아야 할 광고주 수를 먼저 보여 드립니다">새 버전 올리기</button>
-        </div>
-        <div class="spane card" id="sp-grow">
-          <div class="kh"><h2>자동 확대 단계</h2><span class="n">대표 결정 D2</span></div>
-          <div class="steps"><span class="done">확인 1곳 ✓</span><span class="now">관찰·제안 20곳</span><span>자동 5</span><span>자동 20</span><span>자동 100</span><span>800</span></div>
-          <p class="sub">지금 명단 20곳(큰 5 · 중간 10 · 작은 5) · 다음 단계 조건: 14일 수집 누락 0 · 규칙 위반 결정 0 · 복원 시험 통과 — <span class="ok">모두 통과</span></p>
-          <button class="btn blue" data-roles="ceo" hidden data-toast="시안 — 다음 단계로 넘깁니다(확인 창에서 명단을 한 번 더 봅니다)">다음 단계로 (대표만)</button>
-          <span class="hint" data-roles="staff lead admin">「다음 단계로」는 대표만 누를 수 있습니다</span>
-        </div>
-        <div class="spane card" id="sp-rules">
-          <div class="kh"><h2>기본 규칙 (읽기만)</h2></div>
-          <ul style="padding-left:18px;font-size:13px;color:var(--sub)">
-            <li>입찰가 1회 +10%/−15%(큰 광고주) · +15%/−20%(그 밖) · 최근 24시간 +30%/−40% · 7일 누적 +50% 넘으면 승인</li>
-            <li>「큰 광고주」 기준은 대표 결정 대기 — 그때까지 모두 좁은 상한(+10%/−15%)</li>
-            <li>운전 허용 계약 단계: 진행중 · 전략 관리 · 재계약 진행중</li>
-            <li>네이버 자동입찰이 켜진 그룹은 보기만</li>
-            <li>승인 요청은 24시간 뒤 만료 · 입찰 실험은 14일 전 판정 금지 · 95%</li>
-            <li>되돌리기는 네이버 통계에 최소 2~3시간 늦게 나타납니다</li>
-          </ul>
-        </div>
-        <div class="spane card flat" id="sp-stops">
-          <div class="kh" style="padding:12px 14px 0"><h2>비상 정지 기록</h2></div>
-          <div class="tblwrap"><table><thead><tr><th>언제</th><th>누가</th><th>범위</th><th>방식</th><th>사유</th><th>다시 켬</th></tr></thead><tbody>
-            <tr data-cid-max="maba"><td class="num">09-27 18:20</td><td>김담당</td><td>광고주 · 마바 뷰티</td><td>멈추기만</td><td class="wrap">상세페이지 수정 중</td><td class="num">09-28 09:10 · 김담당</td></tr>
-          </tbody></table></div>
-        </div>
-        <div class="spane card flat" id="sp-people">
-          <div class="kh" style="padding:12px 14px 0"><h2>사람 · 팀</h2><span class="n">전산에서 받은 거울(읽기 전용) · 받은 시각 13:00 · 다음 14:00</span></div>
-          <p class="hint" style="padding:0 14px 8px">팀·팀장은 <b>전산 조직도</b>에서, 광고주 담당은 <b>전산 가망 수정</b>(관리 담당)에서만 바뀝니다. 여기서는 고치지 않습니다 — 담당 원본을 두 곳에 두면 서로 어긋납니다.</p>
-          <div class="tblwrap"><table><thead><tr><th>사람</th><th>팀</th><th>팀장(전산)</th><th>담당 광고주</th></tr></thead><tbody id="people-body"></tbody></table></div>
-          <div id="people-check" data-roles="ceo admin" hidden style="padding:10px 14px 12px">
-            <div class="kh"><h2>담당 확인 필요 2곳</h2><span class="n">자동은 켤 수 없습니다 · 대표·관리자만 봅니다</span></div>
-            <div class="hint">하나 떡볶이 — 전산에 관리 담당이 없습니다 · 가다 수산 — 이름으로만 이어졌습니다(번호 확인 필요)</div>
+        <div class="spane card" id="sp-time">
+          <div class="kh"><h2>점검 시각 · 알림</h2></div>
+          <div class="grid2">
+            <div class="fg"><label for="t1">아침 점검 시작</label><input id="t1" value="06:30" disabled></div>
+            <div class="fg"><label for="t2">늦어도 끝나야 하는 시각</label><input id="t2" value="08:00" disabled></div>
           </div>
+          <p class="sub">08:00 까지 못 끝나면 그 광고주는 「오늘 점검 안 됨」(⚪)으로 보이고 🟢 로 보이지 않습니다. 대표·관리자에게 긴급 알림이 갑니다.</p>
+          <p class="sub" style="margin-top:6px">알림: 🔴 긴급 = 담당 + 팀장 + 대표에게 바로 · 🟡 주의 = 담당에게, 팀장은 09:30 묶음 · 12시간 안 풀리면 한 단계 위로 · 메신저 종류는 대표 결정 D6 대기</p>
+        </div>
+        <div class="spane card flat" id="sp-ppl">
+          <div class="kh" style="padding:12px 14px 6px"><h2>사람 · 팀</h2><span class="n">전산에서 받은 거울(읽기 전용) · 1시간마다 · 대표 계정 = 전산 0번</span></div>
+          <div class="tblwrap"><table><thead><tr><th>사람</th><th>팀</th><th>팀장(전산)</th><th>담당 광고주</th></tr></thead>
+          <tbody><tr><td>대표</td><td>—</td><td>—</td><td>전체</td></tr><tr><td>이팀장</td><td>관리 1팀</td><td>✓</td><td class="num">0</td></tr><tr><td>김담당</td><td>관리 1팀</td><td></td><td class="num">6</td></tr><tr><td>박담당</td><td>관리 1팀</td><td></td><td class="num">5</td></tr><tr><td>최팀장</td><td>관리 2팀</td><td>✓</td><td class="num">0</td></tr><tr><td>정담당</td><td>관리 2팀</td><td></td><td class="num">4</td></tr><tr><td>박관리</td><td>—</td><td></td><td class="num">0</td></tr></tbody></table></div>
         </div>
       </div>
     </div>
   </section>
-
-  <!-- ===== 광고주용 키 입력 링크 미리보기 ===== -->
-  <section class="screen" id="s-blocked" aria-labelledby="t-blocked">
-    <div class="card blocked">
-      <div class="ic" aria-hidden="true">🔒</div>
-      <h1 id="t-blocked">이 광고주는 볼 수 없습니다</h1>
-      <p>내 담당이 아니거나 없는 광고주입니다. 필요하면 팀장에게 요청하세요.</p>
-      <p style="margin-top:12px"><button class="btn blue" data-go="today">📋 오늘로</button></p>
-      <p class="hint" style="margin-top:14px">시안 — 남의 광고주 주소 · 없는 번호 · 담당이 바뀐 옛 알림 링크가 모두 같은 화면입니다. 서버도 두 경우에 똑같은 답(없음)을 돌려주고, 광고주 이름·담당 이름을 알려 주지 않습니다.</p>
-    </div>
-  </section>
-
-  <section class="screen" id="s-noaccess" aria-labelledby="t-noaccess">
-    <div class="card blocked">
-      <div class="ic" aria-hidden="true">🚪</div>
-      <h1 id="t-noaccess">이용 대상이 아닙니다</h1>
-      <p>네이버 자동운영은 광고 관리 담당만 씁니다. 담당 광고주가 생기면 저절로 열립니다.</p>
-      <p class="hint" style="margin-top:14px">시안 — 광고센터에서 모든 광고주를 읽을 수 있는 직원이라도 여기서는 광고센터 역할을 읽지 않습니다.</p>
-    </div>
-  </section>
-
-  <section class="screen" id="s-public" aria-labelledby="t-public">
-    <div class="crumbs"><a data-go="client-back">← 광고주 한 장으로</a> · 광고주가 보는 화면(로그인 없음 · 메뉴 없음)</div>
-    <div class="public">
-      <div class="hint">메타아이앤씨</div>
-      <h1 id="t-public"><span class="dot" aria-hidden="true"></span> 네이버 검색광고 키 등록</h1>
-      <p class="sub" style="font-size:13px">광고 운영을 위해 네이버 검색광고 API 키 3가지를 넣어 주세요. 다른 매체 정보는 받지 않습니다.</p>
-      <ol><li>네이버 검색광고 사이트 로그인</li><li>도구 › API 사용 관리</li><li>고객 번호 · 액세스 라이선스 · 비밀키를 복사해 아래에 붙여넣기</li></ol>
-      <div class="fg"><label for="pk1">고객 번호</label><input id="pk1" placeholder="숫자"></div>
-      <div class="fg"><label for="pk2">액세스 라이선스</label><input id="pk2"></div>
-      <div class="fg"><label for="pk3">비밀키</label><input id="pk3"></div>
-      <button class="btn blue" style="width:100%" data-toast="시안 — 「보내 주셔서 감사합니다」가 뜨고, 담당자 오늘 ②에 「이 계정 맞음 확인」 줄이 생깁니다">보내기</button>
-    </div>
-  </section>
 </main>
 
-<!-- 알림 서랍 -->
 <div class="shade" id="shade"></div>
-<aside class="drawer" id="drawer" aria-label="알림" aria-hidden="true">
-  <div class="dh"><h3>🔔 나에게 온 알림</h3><span class="hint">보는 범위와 상관없이 내가 받은 것만 · 메신저도 같은 것</span><button class="x" style="margin-left:auto" aria-label="닫기" data-close-drawer>✕</button></div>
-  <div class="tabs" style="padding:0 12px;margin-bottom:0"><button class="on" id="dtab-r">긴급 1</button><button id="dtab-a">주의 4</button></div>
-  <div class="db">
-    <div class="line" data-viewers="kim lee ceo" data-lv="r"><span class="lv pill p-red">긴급</span><div class="tx"><a class="nm" data-client="dara">다라 리빙</a><span class="who" data-owner-tag>김담당</span> — 비즈머니 잔액 없음 · 엔진 입찰 멈춤<span class="w">13:40 · 받은 사람: 담당 · 가장 가까운 팀장 · 대표 · 진행 중</span></div></div>
-    <div class="line" data-viewers="ceo" data-lv="r"><span class="lv pill p-red">긴급</span><div class="tx"><a class="nm" data-client="paha">파하 가구</a><span class="who" data-owner-tag>정담당</span> — 비즈머니 잔액 없음 · 엔진 입찰 멈춤<span class="w">12:10 · 받은 사람: 담당 · 최팀장 · 대표 · 진행 중</span></div></div>
-    <div class="line" data-viewers="kim" data-lv="a"><span class="lv pill p-amber">주의</span><div class="tx"><a class="nm" data-client="gana" data-tab="items">가나 식품</a> — 바깥에서 입찰가 바꿈 → 엔진 손 뗌<span class="w">11:12 · 받은 사람: 나 · 진행 중</span></div></div>
-    <div class="line" data-viewers="kim" data-lv="a"><span class="lv pill p-amber">주의</span><div class="tx"><a class="nm" data-client="zacha" data-tab="connect">자차 스포츠</a> — 키 거절<span class="w">09-27 · 받은 사람: 나 · 진행 중</span></div></div>
-    <div class="line" data-viewers="kim" data-lv="a"><span class="lv pill p-amber">주의</span><div class="tx"><a class="nm" data-client="maba" data-tab="goal">마바 뷰티</a> — 상한에 3일 연속 막힘<span class="w">09:00 · 받은 사람: 나(팀장은 하루 요약)</span></div></div>
-    <div class="line" data-viewers="lee" data-lv="a"><span class="lv pill p-amber">주의</span><div class="tx"><b>하루 요약 · 관리 1팀</b> — 김담당 주의 3 · 박담당 주의 1 · 승인 12시간 넘은 것 0<span class="w">09:00 · 팀장은 주의 알림을 하루 한 번 모아 받습니다</span></div></div>
-    <div class="line" data-viewers="han" data-lv="a"><span class="lv pill p-amber">주의</span><div class="tx"><b>하루 요약 · 관리 본부</b> — 관리 1팀 주의 4 · 관리 2팀 주의 3 · 담당 공백 1곳<span class="w">09:00 · 상위 팀장은 팀별로 모아 받습니다</span></div></div>
-    <div class="line" data-viewers="kim" data-lv="a"><span class="lv pill p-amber">주의</span><div class="tx"><a class="nm" data-client="moved">다른 담당으로 넘어간 광고주</a> — 9/27 알림 · 지금은 내 담당이 아닙니다<span class="w">누르면 「볼 수 없습니다」 화면이 나옵니다 · 이름은 보여 주지 않습니다</span></div></div>
-    <div class="line ack" data-viewers="kim"><span class="lv pill p-gray">풀림</span><div class="tx">카타 가전 — 계약 단계로 자동 꺼짐 · 원래 값으로 3건<span class="w">06:02 · 확인함</span></div></div>
-    <div class="line" id="drawer-empty" hidden><div class="tx hint">받은 알림이 없습니다. 담당 광고주가 생기면 여기로 옵니다.</div></div>
-    <div style="padding:12px 14px"><button class="btn ghost sm" data-toast="시안 — 지난 7일 알림을 더 불러옵니다">지난 알림 더 보기</button></div>
-  </div>
+<aside class="drawer" id="drawer" aria-label="알림">
+  <div class="dh"><h3>🔔 나에게 온 알림</h3><button class="x" style="margin-left:auto" aria-label="닫기" data-close-drawer>✕</button></div>
+  <div class="db" id="drawerBody"></div>
 </aside>
 
-<!-- 창: 전체 비상 정지 -->
-<div class="modal" id="m-killall" role="dialog" aria-modal="true" aria-labelledby="mka-t">
-  <div class="box">
-    <h3 id="mka-t">⛔ 전체 비상 정지</h3>
-    <p class="hint" id="mka-d">광고주 전체의 엔진을 멈춥니다. 방식 하나를 꼭 고르고 사유를 적어야 정지됩니다.</p>
-    <label class="opt"><input type="radio" name="ka" value="stay"><div><b>멈추기만</b><div class="hint">지금 입찰가를 그대로 둡니다. 광고는 엔진이 마지막에 둔 값으로 계속 나갑니다.</div></div></label>
-    <label class="opt"><input type="radio" name="ka" value="back"><div><b>멈추고 원래 값으로</b><div class="hint">엔진이 올린 몫만 엔진에 맡기기 전 값으로 내립니다(내리기만).</div><div class="preview" id="ka-prev" hidden>엔진이 올린 입찰 <b id="ka-n">214건</b> · 광고주 <b id="ka-m">31곳</b>을 원래 값으로 돌립니다.</div></div></label>
-    <label class="hint" for="ka-why" style="display:block;margin-top:10px;font-weight:800;color:var(--sub)">사유 (필수)</label>
-    <input type="text" id="ka-why" placeholder="예: 네이버 장애 공지">
-    <div class="foot"><button class="btn" data-close>취소</button><button class="btn redfill" id="ka-go" disabled>정지</button></div>
-  </div>
-</div>
+<div class="modal" id="m-except" role="dialog" aria-modal="true" aria-labelledby="mx-t"><div class="box">
+  <h3 id="mx-t">🙈 예외로 두기</h3>
+  <p class="sub" id="mx-sub"></p>
+  <div class="fg" style="margin-top:10px"><label for="mx-why">사유 (필수)</label><input type="text" id="mx-why" placeholder="예: 광고주가 자동 충전을 켜 두었음"></div>
+  <div class="fg"><label for="mx-days">기간</label><select id="mx-days"></select></div>
+  <p class="hint" id="mx-rule"></p>
+  <div class="foot"><button class="btn" data-close-modal>취소</button><button class="btn blue" id="mx-ok">예외로 두기</button></div>
+</div></div>
+<div class="modal" id="m-memo" role="dialog" aria-modal="true" aria-labelledby="mm-t"><div class="box">
+  <h3 id="mm-t">메모 남기기</h3>
+  <p class="sub" id="mm-sub"></p>
+  <textarea id="mm-text" rows="3" placeholder="예: 광고주와 통화 — 오늘 오후 충전 예정"></textarea>
+  <div class="foot"><button class="btn" data-close-modal>취소</button><button class="btn blue" id="mm-ok">남기기</button></div>
+</div></div>
+<div class="modal" id="m-report" role="dialog" aria-modal="true" aria-labelledby="rp-t"><div class="box" style="width:min(820px,100%)">
+  <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px" class="no-print"><b id="rp-t">보고서 미리보기</b><span class="hint">광고주가 보는 모양 그대로입니다</span><button class="x" style="margin-left:auto" aria-label="닫기" data-close-modal>✕</button></div>
+  <div id="rp-body"></div>
+  <div class="foot no-print"><button class="btn" data-toast="시안 — 인쇄 창을 엽니다(PDF 저장)">🖨 인쇄 · PDF</button><button class="btn blue" id="rp-ok">검토 완료 · 게시</button></div>
+</div></div>
 
-<!-- 창: 이 광고주만 멈추기 -->
-<div class="modal" id="m-killone" role="dialog" aria-modal="true" aria-labelledby="mko-t">
-  <div class="box">
-    <h3 id="mko-t"><span id="ko-who">가나 식품</span>만 멈추기</h3>
-    <p class="hint">이 광고주만 엔진을 멈춥니다. 다른 광고주는 그대로 돕니다.</p>
-    <label class="opt"><input type="radio" name="ko" value="stay"><div><b>멈추기만</b><div class="hint">지금 입찰가 그대로 둡니다.</div></div></label>
-    <label class="opt"><input type="radio" name="ko" value="back"><div><b>멈추고 원래 값으로</b><div class="hint">엔진이 올린 몫(이 광고주 <b>9건</b>)만 원래 값으로 내립니다.</div></div></label>
-    <label class="hint" for="ko-why" style="display:block;margin-top:10px;font-weight:800;color:var(--sub)">사유 (필수)</label>
-    <input type="text" id="ko-why" placeholder="예: 상세페이지 수정 중">
-    <div class="foot"><button class="btn" data-close>취소</button><button class="btn redfill" id="ko-go" disabled>멈추기</button></div>
-  </div>
-</div>
-
-<!-- 창: 영향 미리보기 -->
-<div class="modal" id="m-capprev" role="dialog" aria-modal="true" aria-labelledby="mcp-t">
-  <div class="box">
-    <h3 id="mcp-t">입찰 상한을 크게 낮춥니다</h3>
-    <p class="sub" style="font-size:13px">700원 → <b id="cp-new">300</b>원으로 낮추면:</p>
-    <div class="preview">상품 <b>8개</b>의 입찰가가 내려갑니다 · 그중 <b>3개</b>는 네이버 노출 최소 입찰가보다 낮아져 광고가 거의 안 나올 수 있습니다(이런 인하는 승인으로 넘어갑니다).</div>
-    <div class="foot"><button class="btn" data-close>돌아가기</button><button class="btn blue" data-close data-toast="시안 — 저장했습니다">이대로 저장</button></div>
-  </div>
-</div>
-
-<!-- 창: 되돌리기 확인 -->
-<div class="modal" id="m-revert" role="dialog" aria-modal="true" aria-labelledby="mrv-t">
-  <div class="box">
-    <h3 id="mrv-t">되돌리기</h3>
-    <p class="sub" style="font-size:13px">「저당 그래놀라」 입찰가 <b class="num">550원 → 500원</b>(엔진이 바꾸기 전 값)</p>
-    <div class="preview">지금 네이버 값: 550원 <span class="ok">✓ 기록과 같음</span> — 누군가 그 사이 바꿨다면 되돌리지 않고 막습니다.</div>
-    <ul style="padding-left:18px;font-size:12.5px;color:var(--sub);margin-top:8px">
-      <li>네이버 통계에는 최소 2~3시간 늦게 나타납니다.</li>
-      <li>되돌린 뒤 이 상품은 엔진이 손을 뗍니다(사람 운전). 다시 맡기려면 팀장 승인입니다.</li>
-      <li>입찰가가 아닌 승인받은 변경(예산 등)은 되돌리기도 승인이 필요합니다.</li>
-    </ul>
-    <div class="foot"><button class="btn" data-close>취소</button><button class="btn blue" data-close data-toast="시안 — 되돌렸습니다(반영 확인은 다음 확인 때)">되돌리기</button></div>
-  </div>
-</div>
-
-<!-- 시안 안내 -->
-<div class="guide" id="guide" role="dialog" aria-modal="true" aria-labelledby="g-t">
-  <div class="gbox">
-    <div style="display:flex;align-items:center;gap:8px"><h2 id="g-t">ⓘ 시안 안내 — v4 개인화 · v3 네이버 전용</h2><button class="x" style="margin-left:auto" aria-label="닫기" data-close-guide>✕</button></div>
-    <h3>0. v4 — 본인 담당만 보고, 팀장은 사람별로 봅니다</h3>
-    <p>대표님 지시(9/28): 「개인화로 본인이 담당인 업체만 볼 수 있게 하고, 팀장은 하부 팀원들 것도 구분해서 보고, 본인 것만 보고 할 수 있게」.</p>
-    <div class="tblwrap" style="border:1px solid var(--line);border-radius:10px"><table>
-      <thead><tr><th>누가</th><th>보이는 광고주</th><th>처음 화면</th><th>고르는 곳(상단 한 곳)</th></tr></thead>
-      <tbody>
-        <tr><td>담당자</td><td class="wrap">내가 담당인 곳만(서브는 결정 P1)</td><td>내 것</td><td class="wrap">없음 — 「내 광고주 N곳」 글자만</td></tr>
-        <tr><td>팀장</td><td class="wrap">본인 팀 + 하부 팀 직원이 담당인 곳 · <b>사람별로 나눠서</b></td><td class="wrap">우리 팀(「나」 묶음이 맨 위에 펼쳐짐)</td><td class="wrap">우리 팀 전체 / 나만 / 사람 한 명</td></tr>
-        <tr><td>상위 팀장(본부장)</td><td class="wrap">본부 아래 모든 팀 · 팀 → 사람 순</td><td>우리 본부</td><td class="wrap">본부 전체 / 나만 / 팀 하나 / 사람 한 명</td></tr>
-        <tr><td>대표</td><td class="wrap">전체 · 팀 → 사람 순 · 「담당 미정」은 대표만</td><td>전체</td><td class="wrap">전체 / 팀 / 사람 / 담당 미정</td></tr>
-        <tr><td>관리자</td><td class="wrap">설정을 고치는 사람일 뿐 — 광고주는 본인 담당만(대개 0곳)</td><td>내 것</td><td>없음</td></tr>
-        <tr><td>그 밖 직원</td><td class="wrap">0곳 — 「이용 대상이 아닙니다」</td><td colspan="2">광고센터에서 전체를 읽을 수 있어도 여기서는 안 보입니다</td></tr>
-      </tbody>
-    </table></div>
-    <ul>
-      <li><b>담당</b> = 전산 가망의 <b>관리 담당</b>입니다. 이름이 아니라 전산 직원 번호로 잇습니다(지금 광고센터는 이름으로 맞춰 같은 이름이 둘이면 비어 버립니다).</li>
-      <li><b>팀·팀장</b> = 전산 조직도 그대로입니다(하부 팀 포함). 이 프로그램 안에서는 고치지 않습니다 — 전산이 바뀌면 1시간 안에 따라옵니다.</li>
-      <li><b>서버가 막습니다.</b> 화면에서 숨기는 것이 아니라 목록·숫자·승인·되돌리기·🔔·메신저·비상 정지·직접 주소가 모두 같은 판정 한 곳을 지납니다. 남의 광고주 주소를 넣으면 없는 번호와 똑같이 「볼 수 없습니다」가 나옵니다(위 「🔗 남의 광고주 주소 열기」로 해 보세요).</li>
-      <li>퇴사한 사람의 광고주는 <b>「담당 공백」</b>으로 그 팀 팀장이 대신 보고, 전산에 담당이 없는 곳은 <b>「담당 미정」</b>으로 대표만 봅니다. 둘 다 자동을 켤 수 없습니다.</li>
-      <li>승인은 <b>볼 수 있는 사람만</b> 누를 수 있습니다. 팀장이 자기 광고주에 올린 팀장 등급 요청은 윗사람(상위 팀장 → 대표)에게 갑니다.</li>
-      <li>비상 정지: 팀장 = 우리 팀 · 대표 = 전체(결정 P3). 보는 범위를 「나만」으로 바꿔도 정지 범위는 그대로입니다.</li>
-    </ul>
-    <p class="hint">만들기 전에 필요한 것: 전산에 읽기 전용 「조직 스냅숏」 경로 하나(직원 번호·팀·팀장·광고주 관리 담당 번호 · 기존 광고센터 동기화는 그대로) · 광고센터에 「이름으로만 이어진 광고주」 표시 칸 하나. 둘 다 섹션 요청함에 올렸습니다.</p>
-
-    <h3 style="margin-top:22px">v3 — 네이버 전용 · 메뉴 3개</h3>
-    <p>대표님 지시(9/28): 「네이버 한 플랫폼 전용 · 다른 매체와 엮이지 않게 · 사용법 간단 · 카테고리가 너무 많다」. 세 가지 안을 따로 만들고 두 관점(쓰기 편한가 / 안전장치가 빠지지 않았나)으로 심사해, 둘 다 1위로 뽑은 「세 화면」 안을 골라 빠진 것을 채웠습니다.</p>
-    <div class="ba">
-      <div><b><s>12</s> → 3</b><span>메뉴(담당자에게는 2개)</span></div>
-      <div><b><s>12</s> → 5</b><span>화면</span></div>
-      <div><b>0번</b><span>「오늘 엔진이 한 일」 보기 누르기</span></div>
-      <div><b>1번</b><span>승인 1건 누르기</span></div>
-    </div>
-
-    <h3>1. 네이버 전용으로 떼어 냅니다</h3>
-    <ul>
-      <li>광고센터(여러 매체) 메뉴 안에 끼워 넣지 않고, <b>네이버 전용 입구</b>(<span class="num">dashboard.metainc.co.kr/naver/</span>)로 따로 둡니다. 자기 메뉴 3개만 있습니다.</li>
-      <li>이 프로그램 화면에는 메타·쿠팡·토스·카카오·당근·GFA·유튜브·체험단 등 다른 매체가 <b>한 글자도</b> 나오지 않습니다. 매체 고르기 칸도 없습니다.</li>
-      <li>뒤에서만 같이 쓰는 것: 로그인(전산 자동 로그인), 광고주 목록, 네이버 키 보관함(네이버 한 줄만 읽음), 계약 단계. 광고센터 기존 화면은 지우지도 바꾸지도 않습니다.</li>
-      <li>직원 입구는 전산 상단의 멈춘 「📈 자동입찰」 자리를 「🤖 네이버 자동운영」으로 바꾸는 것을 권합니다(대표 결정 N2).</li>
-      <li>광고주에게 보내는 키 입력 링크도 네이버 3칸만 뜨게 바꿉니다(지금 링크는 기본으로 6개 매체를 묻습니다).</li>
-    </ul>
-
-    <h3>2. 옛 메뉴는 이렇게 옮겼습니다</h3>
-    <div class="tblwrap" style="border:1px solid var(--line);border-radius:10px"><table>
-      <thead><tr><th>v2 메뉴</th><th>v3 자리</th></tr></thead>
-      <tbody>
-        <tr><td>자동운영 관제</td><td>📋 오늘 + 상단 띠(엔진 상태 · ⛔ 비상 정지)</td></tr>
-        <tr><td>승인 대기함</td><td>📋 오늘 ② 내가 할 일</td></tr>
-        <tr><td>알림함</td><td>🔔 서랍 + 📋 오늘 ① 먼저 볼 것</td></tr>
-        <tr><td>광고주 작업실 · 목표 설정</td><td>광고주 한 장 ① 지금 · ② 목표·한도</td></tr>
-        <tr><td>A/B 실험</td><td>광고주 한 장 ③ › 입찰 실험(「A/B」 대신 「입찰 실험」)</td></tr>
-        <tr><td>변경 기록 · 되돌리기</td><td>광고주 한 장 ③ › 바뀐 기록 + 「바뀐 기록 전체」(오늘에서 들어감)</td></tr>
-        <tr><td>계정 연결 · 운전자</td><td>광고주 한 장 ④ 연결·동의(키·확인) + ③ 상품(누가 운전 중)</td></tr>
-        <tr><td>광고주 동의</td><td>광고주 한 장 ④ · 양식은 ⚙️ 설정</td></tr>
-        <tr><td>AI 모델 설정</td><td>⚙️ 설정 › AI 모델(관리자)</td></tr>
-        <tr><td>대표 결정 · 만드는 순서</td><td>제품에서 빼고 이 안내에만</td></tr>
-      </tbody>
-    </table></div>
-
-    <h3>3. 매일 하는 일 — 누르는 횟수</h3>
-    <div class="tblwrap" style="border:1px solid var(--line);border-radius:10px"><table>
-      <thead><tr><th>할 일</th><th>누르기</th><th>어떻게</th></tr></thead>
-      <tbody>
-        <tr><td>오늘 엔진이 뭘 했는지</td><td class="num">0</td><td class="wrap">앱을 열면 📋 오늘 ③에 이미 보입니다</td></tr>
-        <tr><td>승인 1건</td><td class="num">1</td><td class="wrap">오늘 ②에서 [승인] · 같은 광고주·날짜는 [이 묶음 모두 승인]</td></tr>
-        <tr><td>엔진이 바꾼 입찰 되돌리기</td><td class="num">3</td><td class="wrap">오늘 ③ 펼치기 → [되돌리기] → 확인</td></tr>
-        <tr><td>비상 정지(팀장 = 우리 팀 · 대표 = 전체)</td><td class="num">3</td><td class="wrap">어느 화면에서든 상단 [⛔] → 방식 고르기 → 사유 적고 [정지]</td></tr>
-        <tr><td>팀장: 한 사람 광고주만 보기</td><td class="num">1~2</td><td class="wrap">묶음 머리줄의 [이 사람만] 1번 · 또는 상단 「보는 범위」 → 그 사람</td></tr>
-        <tr><td>팀장: 내 광고주만 보기 · 돌아오기</td><td class="num">2 · 1</td><td class="wrap">상단 「보는 범위」 → 「나만」 · 파란 띠의 [우리 팀으로]</td></tr>
-        <tr><td>목표·상한 바꾸기</td><td class="num">4</td><td class="wrap">🏢 광고주 → 광고주 → ② 목표·한도 → [저장]</td></tr>
-        <tr><td>광고주 1곳만 멈추기</td><td class="num">4</td><td class="wrap">🏢 광고주 → ⏸ → 방식 → 사유 적고 [멈추기]</td></tr>
-        <tr><td>새 광고주 키 등록 · 확인</td><td class="num">5</td><td class="wrap">🏢 광고주 → 「키 없음」 → 광고주 → 키 3칸 저장 → [이 계정 맞음]</td></tr>
-      </tbody>
-    </table></div>
-
-    <h3>4. 안전장치는 하나도 빼지 않았습니다</h3>
-    <ul>
-      <li>비상 정지 두 방식(「멈추기만」/「멈추고 원래 값으로」)은 <b>기본값 없이</b> 꼭 고르게 했고, 원래 값으로 되돌릴 건수를 미리 보여 줍니다. 전체 · 광고주 한 곳 · 상품 하나(「이 상품 엔진 손 떼기」) 세 단계입니다.</li>
-      <li>상한 올리기 · 운전자 바꾸기 · 엔진에 다시 맡기기는 담당자에게 [팀장에게 요청]으로 바뀝니다.</li>
-      <li>「자동」은 켜기까지 남은 일 8가지(키 · 이 계정 맞음 · 동의서 · 두 상한 · 14일 자료 · 확대 명단 · 계약 단계 · 전산 연결)를 모두 통과해야 켜집니다.</li>
-      <li>키가 바뀌면 「이 계정 맞음」이 무효가 되어 엔진이 멈춥니다. 되돌리기 직전에는 지금 네이버 값을 대조합니다.</li>
-    </ul>
-
-    <h3>5. 만들기 전에 고쳐야 할 것 (코드로 확인)</h3>
-    <ul>
-      <li><b>팀장 구조:</b> 지금 광고센터 자동 로그인은 팀장 역할을 주지 않고 모두 첫 번째 팀에 넣으며, 다음 로그인 때 역할을 낮춥니다. 이대로면 팀장 승인·팀장 알림·「우리 팀」 보기가 돌지 않습니다. 1단계 전에 고칩니다(광고센터에 알림).</li>
-      <li><b>계약 단계:</b> 광고센터는 단계 이름을 저장하지 않고 「재계약 진행중」도 아직 없습니다. 엔진이 전산에서 6시간마다 직접 받아 둡니다(전산에 미리 알림).</li>
-      <li><b>보안:</b> 엔진이 쓰기를 시작하기 전에 광고센터의 약한 기본 비밀값과 너무 넓은 접속 허용을 좁힙니다.</li>
-    </ul>
-
-    <h3>6. 대표 결정 7건 — 확정 (2026-09-28)</h3>
-    <div class="note">대표님 「추천대로 해」(9/28) — 7건 모두 <b>권고안으로 확정</b>했습니다. 이 시안이 만들 화면의 기준입니다. 아래 선택은 기록으로 남겨 두었고 더 바꿀 수 없습니다.</div>
-    <div id="decisions"></div>
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><b>고른 내용</b><button class="btn blue" id="copy">고른 내용 복사</button></div>
-    <textarea class="out" id="out" readonly aria-label="고른 내용"></textarea>
-
-    <h3>7. 이전 자료</h3>
-    <details class="fold"><summary>이미 확정한 13건 (2026-09-28)</summary>
-      <ul>
-        <li>D1 상한: 1회 +10%/−15%(큰 광고주) · +15%/−20%(그 밖) · 24시간 +30%/−40% · 7일 +50% 넘으면 승인 · 입찰 상한과 하루 지출 상한 필수</li>
-        <li>D2 시작: 확인 1곳 → 관찰·제안 20곳 → 자동 5 → 20 → 100 → 800</li>
-        <li>D3 A/B = 입찰 실험만 · 목표 효율로 판정</li>
-        <li>D4 옛 자동입찰 되살리지 않음 · 다시 켜지는 길부터 막음</li>
-        <li>D5 ⓑ 광고주마다 키 3종 저장</li>
-        <li>D6 알림: 긴급 = 담당자+팀장+대표 · 주의 = 담당자 · 알림함 + 메신저 1개 · 상한 올리기·운전자 바꾸기 = 팀장 이상</li>
-        <li>D7 동의서 · D8 운전 허용 단계(진행중·전략 관리·재계약 진행중) · D9 구매완료 · D10 전용 컨테이너·전용 저장 파일</li>
-        <li>D11 0단계 실계정 1곳 · 쓰기 2건 · D12 네이버 자동입찰 그룹은 보기만 · D13 「멈추고 원래 값으로」</li>
-      </ul>
-    </details>
-    <details class="fold"><summary>만드는 순서</summary>
-      <ul>
-        <li><b>0단계 확인·관찰</b> — 실계정 1곳(읽기 전부 + 쓰기 2건: 그룹·상품 입찰가 +10원 → 원래 값) → 20곳 수집·기록, 엔진은 결정만 기록</li>
-        <li><b>1단계 제안</b> — 엔진 결정을 「오늘 ②」로 → 담당자 승인 뒤 적용 · 4주</li>
-        <li><b>2단계 자동</b> — 상한 안 입찰 조정 + 입찰 실험만 · 5 → 20 → 100 → 800 · 단계마다 대표 확인</li>
-        <li><b>3단계 파워링크 · 4단계 플레이스</b> — 새 메뉴 없이 광고주 한 장 ③ 「광고 종류」 칩에만 더함</li>
-      </ul>
-    </details>
-    <div class="changelog">
-      <b>변경 이력</b><br>
-      v5 · 2026-09-28 — 대표 「추천대로 해」: 결정 7건(N1 방향 · N2 입구 보일 사람 · N3 모두 좁은 상한 · P1 서브 담당 ⓑ · P2 대표만 전체 · P3 팀장 정지 = 우리 팀 · P4 광고센터는 요청만) 모두 권고안으로 확정. 시안 확정 표시 — 이 시안을 토대로 만든다.<br>
-      v4 · 2026-09-28 — 대표 지시(개인화 — 본인 담당만 · 팀장은 하부 팀원 것을 사람별로 · 나만 보기)로 보는 범위를 넣음. 상단 「보는 범위」 한 곳(오늘·광고주·바뀐 기록 전체가 같이 씀) · 광고주 목록과 「오늘 ①」을 사람별(본부장·대표는 팀 → 사람) 묶음으로 · 팀원 광고주를 볼 때 파란 띠 · 광고주 한 장에 「OO 님 담당 — 팀장으로 보는 중」 띠 · 서브·담당 공백·담당 미정 표시 · 막힌 주소 화면 · 🔔는 나에게 온 것만 · 비상 정지는 팀장 = 우리 팀 · 설정 › 사람·팀은 전산 거울(읽기 전용) · 예시 조직(관리 본부 › 1팀·2팀, 광고주 31곳) · 보는 사람 6명 · 대표 결정 P1~P4 새로.<br>
-      v3 · 2026-09-28 — 대표 지시(네이버 전용 · 간단하게)로 전면 개편. 광고센터 메뉴에서 떼어 네이버 전용 입구로 · 메뉴 12개 → 3개(📋 오늘 · 🏢 광고주 · ⚙️ 설정) · 화면 12 → 5 · 광고주 한 곳의 일은 「광고주 한 장」(칸 4개)으로 · 승인·알림은 「오늘」 한 화면으로 · 시안 설명 페이지는 이 안내로 · 쉬운 말(광고비 대비 매출·구매·입찰 실험) · 보는 사람(담당자·팀장·대표·관리자)별 화면 확인 도구 · 대표 결정 3건 새로.<br>
-      v2 · 2026-09-28 — 대표 결정 13건 확정 반영(D5 ⓑ). 계정 연결 화면을 광고주별 키 등록·확인으로.<br>
-      v1 · 2026-09-27 — 첫 시안(화면 10개 + 대표 결정 13건 + 만드는 순서).
-    </div>
-  </div>
-</div>
-
+<div class="guide" id="guide" role="dialog" aria-modal="true" aria-labelledby="g-t"><div class="gbox" id="gbox"></div></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<template id="guideTpl">
+  <div style="display:flex;align-items:center;gap:8px"><h2 id="g-t">ⓘ 시안 안내 — v6 관제 먼저</h2><button class="x" style="margin-left:auto" aria-label="닫기" data-close-guide>✕</button></div>
+  <p><b>한 줄</b> — v5 는 「자동운영이 먼저」였습니다. 모든 광고주의 현황은 엔진이 자료를 모으면서 덤으로 보였고, 그마저 처음엔 20곳뿐이었습니다. v6 는 대표님 지시대로 <b>「관제가 먼저」</b>입니다. 매일 아침 모든 광고주 계정을 대신 읽어서 점검하고, 문제가 있는 곳만 이슈로 올리고, 주간·월간 보고서를 뽑습니다. 자동화는 광고주별 별도 페이지로 옮기고 맨 나중에 엽니다. 돈·안전 규칙(D1~D13)과 보는 범위 규칙(P1~P4)은 그대로입니다.</p>
+
+  <h3 id="g-key">0. 가장 먼저 정할 것 — 광고 계정을 읽어 올 열쇠 (실측 2026-09-28)</h3>
+  <div class="ba">
+    <div><b class="num">약 940</b><span>관리 중인 광고주<br>(진행중 573 · 환불중 139 · 전략 관리 90 · 홀딩중 69 · 사후 관리 68 · 재계약 5)</span></div>
+    <div><b class="num">239</b><span>전산에 네이버 광고<br><b>로그인 아이디</b>가 있는 곳<br>(직원이 하나씩 들어가 보는 곳)</span></div>
+    <div><b class="num">2</b><span>전산에 네이버 광고<br><b>API 키 3종</b>이 다 있는 곳</span></div>
+    <div><b>?</b><span>광고센터(③)에 저장된 키<br>— 0단계에서 셉니다</span></div>
+  </div>
+  <p>관제는 네이버가 공식으로 여는 창구(API)로 계정을 읽습니다. 직원의 아이디·비밀번호로 화면에 들어가는 방식은 쓰지 않습니다(네이버 약관·보안). 그런데 지금 결정(D5 ⓑ — 광고주마다 키 3종)대로면 <b>첫날 점검할 수 있는 곳이 거의 없습니다.</b> 광고주 수백 곳에 키를 하나씩 받아야 합니다.</p>
+  <p>다른 길이 있습니다. 네이버 검색광고의 <b>대행사 관리 계정</b>에 광고주 계정이 연결돼 있으면, <b>회사 열쇠 한 벌</b>로 연결된 광고주를 모두 <b>읽을</b> 수 있습니다(네이버 명세가 그렇게 설계돼 있고, 비즈머니까지 읽히는지는 시험 1곳으로 먼저 확인). 관제는 읽기만 하므로 이 길이 맞습니다. 자동화(쓰기)는 지금 결정대로 광고주별 키로 갑니다 — D5 는 그대로 둡니다. → 대표 결정 <b>M0</b>.</p>
+
+  <h3>1. v5 → v6 무엇이 바뀌었나</h3>
+  <div class="tblwrap"><table class="truth">
+    <thead><tr><th>v5 에서</th><th>v6 에서</th></tr></thead>
+    <tbody>
+      <tr><td>메뉴 3개 — 📋 오늘 · 🏢 광고주 · ⚙️ 설정</td><td>메뉴 4개 — <b>🛰 관제</b> · 🤖 자동화 · 📄 보고서 · ⚙️ 설정 (M2)</td></tr>
+      <tr><td>📋 오늘 ① 먼저 볼 것 (엔진 알림)</td><td>🛰 관제 「오늘의 이슈」 — 아침 점검이 만든 이슈 + 엔진 알림을 한 곳에서 · 원인별로 묶음</td></tr>
+      <tr><td>🏢 광고주 목록 (신호등 · 목표 · 자동화 모드)</td><td>🛰 관제 「전 광고주」 표 — 신호등 · <b>확인 필요</b> · 어제 광고비 · 비즈머니 · 이슈 · 계약 단계 (기본 「확인 필요만」)</td></tr>
+      <tr><td>광고주 한 장 4칸 (지금 · 목표·한도 · 상품·기록 · 연결·동의)</td><td>관제의 광고주 한 장 = <b>현황 · 이슈 기록 · 보고서 · 연결</b> / 자동화 페이지 = 엔진이 한 일 · 목표·한도 · 상품·입찰 실험 · 동의·계약</td></tr>
+      <tr><td>📋 오늘 ② 내가 할 일 · ③ 엔진이 한 일 · ④ 목표 대비</td><td>🤖 자동화로 옮김(승인 대기 · 엔진이 한 일 · 되돌리기)</td></tr>
+      <tr><td>「켜기까지 남은 일」 9항목 · 운영 방식 스위치 · 이 광고주만 멈추기</td><td>🤖 자동화 — 광고주 한 곳 페이지 (관제에는 두지 않음 — 한 기능은 한 곳에)</td></tr>
+      <tr><td>보고서 없음 (엔진 설명·주간 계획만)</td><td>📄 보고서 — 광고주별 주간·월간 · 전산 광고주 공유 화면에 링크</td></tr>
+      <tr><td>⚙️ 설정 (알림 · AI · 동의서 · 자동 확대 · 기본 규칙 · 정지 기록 · 사람·팀)</td><td>⚙️ 설정에 <b>점검 기준 · 점검 시각</b> 더함 (자동화 설정은 5차에 자동화 쪽으로)</td></tr>
+      <tr><td>화면에 「관제」·「대시보드」라는 말 쓰지 않음 (v1.3 규칙)</td><td>대표님 말씀대로 <b>「네이버 관제」</b>로 부름 — 규칙을 풉니다 (M2)</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3 id="g-check">2. 매일 아침 점검 — 무엇을 어떻게</h3>
+  <ul>
+    <li><b>06:30 시작 → 08:00 전 끝.</b> 전산 05:05 수집 뒤, 로직분석(②) 08:00·08:30 작업 전(같은 서버·같은 인터넷 주소라 겹치지 않게). 직원 출근 전에 결과가 나와 있습니다.</li>
+    <li><b>모든 광고주 가벼운 점검</b> — 광고주 한 곳에 네이버 호출 5~7번(비즈머니 · 캠페인 목록 · 어제 통계 · 비교 구간 통계). 1,000곳이면 약 20~30분(0단계에서 실측).</li>
+    <li><b>구조 점검(3차부터)</b> — 광고그룹·광고·검수 상태. 호출이 많아 <b>모든 광고주를 사흘에 한 번씩 돌아가며</b> + 가벼운 점검에서 이상한 곳은 매일. 0단계 실측으로 매일이 가능하면 매일로 올립니다.</li>
+    <li><b>어제 자료가 다 들어왔는지 먼저 확인</b>하고(네이버 통계는 약 2시간 늦음), 안 들어왔으면 판정하지 않고 「자료 늦음」(⚪)으로 둡니다.</li>
+    <li><b>실패 대비</b> — 08:00 까지 못 끝나면 그 광고주는 <b>「오늘 점검 안 됨」(⚪)</b>이지 🟢 가 아닙니다. 어제 결과가 오늘 것처럼 보이는 일을 막습니다. 대표·관리자에게 긴급 알림 · 서버 밖에서도 점검이 돌았는지 따로 지켜봅니다. (시안 도구 「🧪 아침 점검이 실패한 날」로 볼 수 있습니다)</li>
+    <li>구매는 네이버에서 최대 2주까지 늦게 잡힙니다 → 구매·매출 판정은 7일 구간으로 보고, 보고서용 숫자는 매일 밤 지난 14일을 다시 읽어 고칩니다.</li>
+  </ul>
+  <div class="tblwrap"><table class="truth">
+    <thead><tr><th>점검</th><th>문제로 보는 기준 (처음 값 · 설정에서 바꿈)</th><th>등급</th><th>언제부터</th></tr></thead>
+    <tbody>
+      <tr><td>키 없음</td><td>광고센터에 키가 없음 → 매주 월요일 담당에게 「키 받을 곳」 목록</td><td>⚪</td><td>2차</td></tr>
+      <tr><td>키 거절</td><td>네이버가 키를 거절 (모든 광고주가 한꺼번에면 🔴 전체 알림)</td><td>⚪ + 🟡</td><td>2차</td></tr>
+      <tr><td>비즈머니</td><td>잔액 ÷ 최근 7일 하루 평균 광고비 — 1일 미만 🔴 · 3일 미만 🟡</td><td>🔴/🟡</td><td>2차</td></tr>
+      <tr><td>켜져 있는데 안 나감</td><td>켜진 캠페인이 있는데 어제 노출 0 (최근 7일엔 노출이 있었던 곳만)</td><td>🔴/🟡</td><td>2차</td></tr>
+      <tr><td>광고비 급변</td><td>같은 요일 4주 평균의 2배 이상 또는 절반 이하 · 하루 1만원 미만 광고주는 제외</td><td>🟡</td><td>2차</td></tr>
+      <tr><td>계약 단계와 광고비</td><td>「환불중」·「계약 만료」인데 광고비 발생 / 「진행중」인데 3일째 0원 · 전산 단계 자료가 26시간 넘게 낡으면 판정 안 함</td><td>🟡</td><td>2차</td></tr>
+      <tr><td>캠페인 기간 곧 끝남</td><td>3일 안에 끝남</td><td>ⓘ</td><td>2차</td></tr>
+      <tr><td>하루 예산 일찍 소진</td><td>하루 예산의 95% 이상 소진 · 3일 연속 (그룹 예산 포함)</td><td>🟡</td><td>3차</td></tr>
+      <tr><td>검수 반려 · 보류</td><td>광고·키워드 반려 즉시 · 보류 2일 넘으면</td><td>🟡</td><td>3차</td></tr>
+      <tr><td>그룹·광고가 멈춤</td><td>켜 둔 그룹·광고가 네이버 사유(잔액·검수·연동 오류)로 멈춤</td><td>🟡</td><td>3차</td></tr>
+      <tr><td>구매 0 · 매출 급락</td><td>최근 7일 기준 — 구매 추적이 설치된 광고주인지 0단계에서 확인한 뒤 켬</td><td>🟡</td><td>0단계 뒤</td></tr>
+      <tr><td>품절 · 가격</td><td>네이버 광고 API로 알 수 없어 <b>넣지 않습니다</b></td><td>—</td><td>제외</td></tr>
+    </tbody>
+  </table></div>
+  <p class="hint">처음 2주는 「그림자 운영」 — 이슈는 만들되 알림은 보내지 않고 기준값을 맞춥니다(첫날 모든 광고주가 🟡 가 되는 것을 막음).</p>
+
+  <h3>3. 광고주 상태 판정 — 한 표로 고정 (두 가지로 읽히지 않게)</h3>
+  <div class="tblwrap"><table class="truth">
+    <thead><tr><th>상태</th><th>언제</th><th>확인 필요?</th></tr></thead>
+    <tbody>
+      <tr><td><span class="sig w"></span>점검 불가</td><td>키 없음 · 키 거절 · 자료 늦음 · 오늘 점검 안 됨 — <b>절대 🟢 로 보이지 않음</b></td><td>키 거절 · 점검 안 됨 = <b>예</b> / 키 없음 = 아니오(주간 목록으로 따로)</td></tr>
+      <tr><td><span class="sig r"></span>긴급</td><td>열린 긴급 이슈 1개 이상</td><td><b>예</b> — 👀 확인 중이어도 풀릴 때까지 예</td></tr>
+      <tr><td><span class="sig y"></span>주의</td><td>열린 주의 이슈 1개 이상 (예외 처리한 것은 세지 않음)</td><td>🆕 새로 있으면 <b>예</b> · 모두 👀 확인 중이면 아니오</td></tr>
+      <tr><td><span class="sig g"></span>정상</td><td>오늘 점검 성공 + 열린 긴급·주의 0 (ⓘ 알아 두기 · 🙈 예외는 상관없음)</td><td>아니오 — 들어가 보지 않아도 됨</td></tr>
+    </tbody>
+  </table></div>
+  <p class="hint">이 판정은 서버 한 곳(보는 범위 판정 옆)에 두고 시험으로 고정합니다. 화면·🔔·보고서가 같은 판정을 씁니다.</p>
+
+  <h3>4. 이슈 — 단계와 규칙</h3>
+  <ul>
+    <li><b>🆕 새로</b>(점검이 만듦) → <b>👀 확인 중</b>(담당이 누름) → <b>✅ 해결</b>(사람) · <b>🔁 저절로 풀림</b>(다음 점검에서 조건이 사라짐) · <b>🙈 예외</b>(사유 + 기간)</li>
+    <li>✅ 해결을 눌렀는데 다음 날 점검에서 그대로면 다시 🆕 (「다시 생김 n회」).</li>
+    <li>누르는 사람: 담당(메인·서브) · 팀장 · 대표. 이전 담당은 보기만(P1 규칙 그대로).</li>
+    <li><b>예외</b>: 🟡 주의 = 담당이 최대 30일 · 🔴 긴급 = 팀장 이상만 최대 7일 · 기간이 끝나면 저절로 다시 봄 · 예외 목록은 팀장 주간 묶음에 올라감 (M7).</li>
+    <li><b>알림</b>: 🔴 긴급 = 담당 + 팀장 + 대표에게 바로(🔔 + 메신저 D6) · 🟡 주의 = 담당 🔔, 팀장은 09:30 묶음 · 12시간 안 풀리면 한 단계 위로(v1.4 규칙 그대로) · 🔔 읽음은 사람마다 따로(한 사람이 확인해도 다른 사람 🔔는 안 지워짐).</li>
+    <li>같은 원인 + 같은 대상은 한 줄 — 매일 새 줄이 쌓이지 않습니다. 기록(누가·언제·무엇·메모)은 「이슈 기록」과 보고서 재료가 됩니다.</li>
+    <li>이슈는 관제(/naver/)에만 둡니다. 전산 이슈 허브에 복사하지 않고, 나중에 전산 상단 입구에 <b>담당자별 건수만</b> 보입니다 (M10).</li>
+  </ul>
+
+  <h3>5. 보고서</h3>
+  <ul>
+    <li><b>주간</b> — 월요일 10:00 에 지난주(월~일) 것을 만듦 · 숫자와 규칙 문장만(AI 없음) · 「잠정」 표시 · <b>열린 이슈가 없는 광고주는 저절로 게시</b>, 있는 곳만 담당이 검토(한 번에 여러 곳).</li>
+    <li><b>월간</b> — 매월 5일(구매가 늦게 잡히는 것을 반영) · AI 요약 한 단락(숫자는 표의 값만 · 새로 만들지 않음) · 담당 검토 뒤 게시.</li>
+    <li>게시하면 <b>전산 광고주 공유 화면에 링크</b>로 올라갑니다(로직분석 주간 보고서 · 체험단 결과 보고서와 같은 방식 — 본문은 복사하지 않음). 비용 칸은 공유 링크의 「비용 보이기」 설정을 따릅니다.</li>
+    <li>광고주 보고서에 싣지 않는 것: 내부 메모 · 예외 처리 · 비즈머니 잔액. 「계정 확인 전」 광고주는 보고서를 만들지 않습니다(엉뚱한 계정 숫자가 광고주에게 가지 않게).</li>
+    <li>광고센터(③)에 이미 있는 여러 매체 합친 월간 AI 리포트는 건드리지 않습니다. 네이버 보고서는 네이버 자료만 씁니다.</li>
+  </ul>
+
+  <h3>6. 만드는 순서 — 단계마다 직원이 안 해도 되는 것</h3>
+  <div class="tblwrap"><table class="truth">
+    <thead><tr><th>단계</th><th>만드는 것</th><th>끝나면 직원은</th></tr></thead>
+    <tbody>
+      <tr><td>1차 ✅</td><td>전산 조직 스냅숏(9/28 배포) · 보는 범위 판정(③ 머지)</td><td>—</td></tr>
+      <tr><td>0단계</td><td>읽기만 · 1~3곳 시험 — 관리 계정으로 읽히는지(M0) · 비즈머니 · 광고 목록 칸 · 호출 한도 · 한 번 점검 시간 · 광고센터 키 수 · 광고주 ↔ 전산 가망 연결 수</td><td>—</td></tr>
+      <tr><td>2차</td><td>엔진 서버 · 매일 아침 가벼운 점검 · 이슈 · /naver/ 관제 화면 · 광고주 한 장 · 2주 그림자 운영</td><td><b>연결된 광고주는 계정에 들어가지 않고 관제 화면만 봄</b> · 문제 있는 곳만 들어감</td></tr>
+      <tr><td>3차</td><td>구조 점검(검수 · 그룹/광고 멈춤 · 예산) · 메신저 알림 · 전산 「일간 이상감지」 업무 자동 완료(M8)</td><td>검수·예산 확인도 관제로 · 전산 업무 체크를 따로 안 함</td></tr>
+      <tr><td>4차</td><td>주간·월간 보고서 · 전산 공유 화면 링크</td><td>보고서를 손으로 만들지 않음</td></tr>
+      <tr><td>5차</td><td>자동화 페이지(관찰 → 제안) → 시험 계정(D11) → 단계 확대(D2)</td><td>입찰 조정을 엔진이 도움</td></tr>
+    </tbody>
+  </table></div>
+  <p class="hint">2차 준비 조건(대표 결정 아님 · 제가 챙김): 광고센터 광고주 ↔ 전산 가망 연결을 믿을 수 있게 정리(지금은 이름으로 이어진 것이 섞여 있어 그대로면 직원 화면에 광고주가 0곳으로 보임) · 로그인 보안 두 가지(기본 비밀값 제거 · 허용 주소 좁히기) · 배포에 /naver/ 추가 · 서버 메모리·디스크 재측정.</p>
+
+  <h3 id="g-dec">7. 대표 결정 12건 — 골라서 복사해 대화창에 붙여 주세요 (★ 권고)</h3>
+  <div id="decs"></div>
+  <button class="btn blue" data-copy-dec>고른 것 복사</button>
+  <textarea class="out" id="decOut" readonly aria-label="고른 결정"></textarea>
+
+  <h3>8. 다른 섹션에 알릴 것 (소식판 요청함에 적음)</h3>
+  <ul>
+    <li>① 전산: 「일간 이상감지」 업무 전환(M8) · 관제 건수 · 보고서 링크 계약(광고주 공유 화면) · 같은 광고주를 05:05(전산)와 06:30(관제)에 두 번 읽음 — 나중에 합칠지 · 업무 담당 칸(광고주 카드)과 관제 담당 칸(가망 관리 담당)이 다름.</li>
+    <li>② 로직분석: 06:30~08:00 같은 서버·같은 인터넷 주소에서 네이버 호출이 늘어남 · 키워드 도구는 쓰지 않음.</li>
+    <li>③ 광고센터: 기존 「🎯 네이버 관제」 화면(M11) · 키 요청 링크를 네이버 전용으로 · 배포에 /naver/ 추가.</li>
+  </ul>
+
+  <div class="changelog">
+    <b>변경 이력</b><br>
+    v6 · 2026-09-28 — 대표 지시(「직원이 매일 모든 광고주 계정에 들어가 확인하는 일을 없앤다 · 관제 대시보드에서 전 광고주 현황 · 매일 오전 점검 · 이슈 관리 · 자동화는 별도 페이지 · 주간·월간 보고서」)로 전면 개편. 메뉴 4개(🛰 관제 · 🤖 자동화 · 📄 보고서 · ⚙️ 설정) · 매일 아침 점검 규칙 · 광고주 판정 표 · 이슈 단계(새로 · 확인 중 · 해결 · 저절로 풀림 · 예외) · 보고서(주간 자동 · 월간 검토) · 점검 실패한 날 보기 · 실측(전산 API 키 2곳 · 로그인 아이디 239곳)으로 「열쇠」 결정(M0) 새로 · 대표 결정 12건(M0~M11). v5 는 자동화 페이지로 옮겨 모양만 남김.<br>
+    v5 · 2026-09-28 — 대표 「추천대로 해」: 결정 7건(N1~N3 · P1~P4) 확정.<br>
+    v4 · 2026-09-28 — 개인화(본인 담당만 · 팀장은 사람별로).<br>
+    v3 · 2026-09-28 — 네이버 전용 · 메뉴 3개.<br>
+    v2 · 2026-09-28 — 대표 결정 13건 확정(D5 ⓑ).<br>
+    v1 · 2026-09-27 — 첫 시안.
+  </div>
+</template>
+<script>
+(function(){
+  var DEC=[
+    ['M0','광고 계정을 읽어 올 열쇠',[['ⓐ','관제(읽기)는 회사 대행사 관리 계정 한 벌로 연결된 광고주를 모두 읽고, 자동화(쓰기)는 지금 결정대로 광고주별 키(D5 ⓑ). 시험 1곳으로 먼저 확인',1],['ⓑ','관제도 광고주별 키로만 — 지금 2곳에서 광고주마다 키를 받아 늘림(수백 곳)'],['ⓒ','관리 계정이 있는지부터 알아봐 달라']],'전산에 네이버 API 키가 다 있는 곳은 2곳뿐입니다(로그인 아이디는 239곳). 광고주별 키로는 첫날 거의 못 봅니다. 관리 계정은 읽기 전용으로 쓰고 비밀값은 광고센터 서버에만 한 벌 둡니다.'],
+    ['M1','방향',[['ⓐ','관제 먼저 — 2차 관제 → 3차 구조 점검·알림 → 4차 보고서 → 5차 자동화',1],['ⓑ','관제와 자동화를 함께']],'매일 계정에 들어가는 일을 없애는 데는 쓰기가 필요 없습니다. 쓰기 위험을 관제 출시에 끌고 들어오지 않습니다.'],
+    ['M2','메뉴와 이름',[['ⓐ','4개(🛰 관제 · 🤖 자동화 · 📄 보고서 · ⚙️ 설정) · 입구 이름 「네이버 관제」',1],['ⓑ','3개 유지(관제 · 광고주 · 설정) — 자동화·보고서는 광고주 한 장 안의 칸']],'대표님이 말씀하신 「자동화는 별도 페이지」를 메뉴로 그대로 옮깁니다. v3 의 「관제·대시보드 말 금지」 규칙은 풉니다.'],
+    ['M3','점검 대상',[['ⓐ','진행중 · 전략 관리 · 사후 관리 · 홀딩중 · 재계약 진행중 · 환불중 + 계약 만료 후 14일',1],['ⓑ','연결된 광고주 전부(단계 무관)'],['ⓒ','진행중 · 전략 관리 · 재계약 진행중만(자동화와 같은 범위)']],'환불중에 광고비가 나가는 것도 잡아야 해서 넓게 봅니다. 만료 후 오래된 곳은 키가 끊겨 헛알림만 납니다.'],
+    ['M4','계정 확인 전인 광고주',[['ⓐ','읽기 점검은 바로 하고 「계정 확인 전」 표시 · 자동화와 광고주 보고서는 확인 뒤',1],['ⓑ','계정 확인이 끝난 곳만 점검']],'확인은 쓰기(자동화) 안전장치입니다. 읽기까지 막으면 첫날 관제가 텅 빕니다.'],
+    ['M5','키(연결)가 없는 광고주',[['ⓐ','⚪ 칸에 모아 두고 매주 월요일 담당에게 「키 받을 곳 N곳」 + 네이버 전용 요청 링크',1],['ⓑ','매일 이슈로 올림'],['ⓒ','표에 표시만']],'매일 이슈로 올리면 「확인 필요」가 키 없는 곳으로 가득 차 진짜 문제가 묻힙니다.'],
+    ['M6','점검 시각 · 주말',[['ⓐ','06:30 시작 · 08:00 전 끝 · 주말에도 점검 · 메신저는 평일만(🔴 긴급은 주말도)',1],['ⓑ','평일만 점검'],['ⓒ','다른 시각(말씀해 주세요)']],'비즈머니는 주말에도 바닥납니다. 월요일 아침에 이슈가 몰리지 않게 매일 봅니다.'],
+    ['M7','예외(알림 끄기)',[['ⓐ','🟡 주의 = 담당이 최대 30일 · 🔴 긴급 = 팀장 이상만 최대 7일 · 기간 끝나면 저절로 다시 봄',1],['ⓑ','담당이 기간 없이']],'긴급을 담당 혼자 끄면 비즈머니 바닥 같은 일이 조용히 묻힐 수 있습니다.'],
+    ['M8','전산 「일간 이상감지」 업무(네이버광고 · 평일 매일 생김)',[['ⓐ','2주 그림자 운영 뒤, 그날 관제 점검이 성공한 광고주는 업무를 저절로 완료 · 점검 못 한 곳은 그대로 남김',1],['ⓑ','그대로 둠'],['ⓒ','바로 없앰']],'대표님이 없애려는 「매일 들어가 확인」이 바로 이 업무입니다. 점검 못 한 곳까지 없애면 아무도 안 보는 광고주가 생깁니다.'],
+    ['M9','보고서 — 누구에게 · 어떻게',[['ⓐ','광고주에게 제공 · 주간은 숫자만 자동(열린 이슈 있는 곳만 검토) · 월간은 AI 한 단락 + 담당 검토 · 전산 광고주 공유 화면에 링크',1],['ⓑ','내부용만(직원이 필요할 때 PDF)'],['ⓒ','주간·월간 모두 담당 검토 뒤']],'모든 광고주를 매주 검토하면 직원 일이 오히려 늘어납니다. 문제 있는 곳만 사람이 봅니다.'],
+    ['M10','이슈를 두는 곳',[['ⓐ','관제(/naver/)에만 · 전산 상단 입구에는 나중에 담당자별 건수만',1],['ⓑ','전산 이슈 허브에도 올림']],'이슈 허브는 영업 담당·확인자에게도 보여 보는 범위가 넓어지고, 하루 수백 건이 사람이 쓴 글을 덮습니다.'],
+    ['M11','광고센터의 기존 「🎯 네이버 관제」 화면',[['ⓐ','새 관제가 나오면 그 화면을 새 관제로 가는 입구로 바꿈(③ 동의)',1],['ⓑ','그대로 둠']],'같은 이름의 화면이 둘이면 직원이 헷갈립니다. 기존 화면은 여러 매체를 섞어 계산하고 이슈를 저장하지 않습니다.']
+  ];
+  var tpl=document.getElementById('guideTpl');
+  var box=document.getElementById('gbox');
+  box.appendChild(tpl.content.cloneNode(true));
+  var h='';
+  DEC.forEach(function(d){
+    h+='<div class="dec" data-id="'+d[0]+'"><div class="q">'+d[0]+' · '+d[1]+'</div>';
+    d[2].forEach(function(o,i){h+='<label><input type="radio" name="'+d[0]+'" value="'+o[0]+'"'+(o[2]?' checked':'')+'> <span>'+o[0]+' '+o[1]+(o[2]?'<span class="rec">★ 권고</span>':'')+'</span></label>'});
+    h+='<div class="why">'+d[3]+'</div></div>';
+  });
+  box.querySelector('#decs').innerHTML=h;
+})();
+</script>
 
 <script>
 (function(){
-  var $=function(s,r){return (r||document).querySelector(s)}, $$=function(s,r){return Array.prototype.slice.call((r||document).querySelectorAll(s))};
-  var toastT;
-  function toast(t){var el=$('#toast');el.textContent=t;el.classList.add('on');clearTimeout(toastT);toastT=setTimeout(function(){el.classList.remove('on')},2600);}
+  'use strict';
+  var $=function(s,r){return (r||document).querySelector(s)};
+  var $$=function(s,r){return Array.prototype.slice.call((r||document).querySelectorAll(s))};
+  function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
+  function won(n){return n==null?'—':n.toLocaleString('ko-KR')+'원'}
 
-  /* ===== 예시 조직 · 광고주 (모든 이름·숫자는 예시) ===== */
-  var TEAMS={hq:{n:'관리 본부',p:null,lead:'han'},t1:{n:'관리 1팀',p:'hq',lead:'lee'},t2:{n:'관리 2팀',p:'hq',lead:'choi'}};
-  var TEAM_ORDER=['hq','t1','t2'];
-  var PEOPLE={
-    han:{n:'한본부장',t:'hq',lead:1},park:{n:'박관리',t:'hq'},
-    lee:{n:'이팀장',t:'t1',lead:1},kim:{n:'김담당',t:'t1'},bak:{n:'박담당',t:'t1'},
-    choi:{n:'최팀장',t:'t2',lead:1},jeong:{n:'정담당',t:'t2'},oh:{n:'오담당',t:'t2',gone:1}
+  /* ---------- 예시 조직 ---------- */
+  var PEOPLE={kim:{n:'김담당',team:'관리 1팀'},park2:{n:'박담당',team:'관리 1팀'},jung:{n:'정담당',team:'관리 2팀'}};
+  var ROLES={
+    kim:{name:'김담당',label:'담당자',owners:['kim'],scope:'내 담당'},
+    lee:{name:'이팀장',label:'팀장',owners:['kim','park2'],scope:'우리 팀(관리 1팀) · 사람별'},
+    ceo:{name:'대표',label:'대표',owners:['kim','park2','jung'],scope:'전체 · 팀 → 사람별'},
+    park:{name:'박관리',label:'관리자',owners:[],scope:'담당 광고주 없음'}
   };
-  var VIEWERS={
-    kim:{p:'kim',role:'staff',name:'김담당',label:'담당자'},
-    lee:{p:'lee',role:'lead',name:'이팀장',label:'팀장',team:'t1'},
-    han:{p:'han',role:'lead',name:'한본부장',label:'상위 팀장',team:'hq'},
-    ceo:{p:null,role:'ceo',name:'대표',label:''},
-    park:{p:'park',role:'admin',name:'박관리',label:'관리자'},
-    yoon:{p:null,role:'none',name:'윤영업',label:'영업'}
-  };
-  function C(id,n,o,s,why,m,g,gc,gt,ch,up,dn,tn,tags,conn,stage,ex){return {id:id,n:n,o:o,s:s,why:why,m:m,g:g,gc:gc,gt:gt,ch:ch,up:up,dn:dn,tn:tn,tags:tags,conn:conn,stage:stage,ex:ex||0};}
-  var KEYLINK='<span class="muted">키 없음</span> <button class="btn blue sm" data-toast="시안 — 네이버 3칸만 뜨는 키 입력 링크를 복사했습니다" data-stop>키 받기 링크 복사</button>';
-  var CL=[
-    C('dara','다라 리빙','kim','r','잔액 없음','자동',4,'r','광고비 대비 매출 350% · 광고 멈춤',0,0,0,1,'todo','연결됨','진행중'),
-    C('zacha','자차 스포츠','kim','y','키 거절','관찰',88,'a','노출 하루 3만 중 26,400',0,0,0,1,'todo','<span class="ng">키 거절</span>','진행중'),
-    C('maba','마바 뷰티','kim','y','3일 연속 미달','자동',71,'r','클릭 하루 300 중 213 · <b class="ng">3일 연속 미달</b>',7,4,0,1,'todo','연결됨','전략 관리'),
-    C('saa','사아 펫','kim','y','승인 2건','제안',100,'','구매 1건당 9,000원 → 8,410원 ✓',1,1,0,2,'todo','연결됨','재계약 진행중'),
-    C('aja','아자 마켓','kim','y','계정 확인','꺼짐',null,'','',0,0,0,1,'todo nokey','확인 기다림','진행중'),
-    C('gana','가나 식품','kim','g','순항','자동',92,'a','광고비 대비 매출 400% 중 368%',12,9,3,0,'','연결됨','진행중',1),
-    C('kata','카타 가전','kim','w','자동 꺼짐','꺼짐',null,'','',3,0,3,0,'off','연결됨','<span class="ng">환불중이라 자동 꺼짐</span>'),
-    C('bada','바다 수산','kim','w','키 필요','꺼짐',null,'','',0,0,0,0,'nokey',KEYLINK,'진행중'),
-    C('chaka','차카 캠핑','lee','y','상한에 막힘','자동',83,'a','구매 하루 12 중 10',4,3,1,1,'todo','연결됨','진행중'),
-    C('haga','하가 한과','lee','g','순항','자동',95,'a','광고비 대비 매출 500% 중 476%',6,4,2,0,'','연결됨','진행중',1),
-    C('nada','나다 꽃집','lee','w','키 필요','꺼짐',null,'','',0,0,0,0,'nokey',KEYLINK,'진행중'),
-    C('tapa','타파 문구','bak','g','순항','제안',100,'','클릭 하루 150 중 162 ✓',1,1,0,0,'','연결됨','진행중'),
-    C('rama','라마 커피','bak','y','3일 연속 미달','자동',76,'r','구매 하루 20 중 15 · <b class="ng">3일 연속 미달</b>',7,5,2,1,'todo','연결됨','진행중'),
-    C('basa','바사 신발','bak','g','순항','관찰',90,'a','노출 하루 5만 중 45,100',0,0,0,0,'','연결됨','진행중'),
-    C('aka','아카 향수','bak','g','순항','자동',97,'a','광고비 대비 매출 450% 중 437%',5,3,2,0,'','연결됨','전략 관리',1),
-    C('jaha','자하 떡집','bak','w','자동 꺼짐','꺼짐',null,'','',0,0,0,0,'off','연결됨','<span class="ng">홀딩중이라 자동 꺼짐</span>'),
-    C('gaha','가하 가방','han','g','순항','자동',94,'a','광고비 대비 매출 380% 중 357%',3,2,1,0,'','연결됨','진행중'),
-    C('nama','나마 공방','han','y','승인 1건','제안',99,'','구매 1건당 12,000원 → 12,100원',0,0,0,1,'todo','연결됨','진행중'),
-    C('dasa','다사 식초','choi','g','순항','자동',96,'a','광고비 대비 매출 420% 중 403%',4,3,1,0,'','연결됨','진행중'),
-    C('raja','라자 김치','choi','g','순항','관찰',91,'a','클릭 하루 200 중 182',0,0,0,0,'','연결됨','진행중'),
-    C('maka','마카 치즈','choi','y','계정 확인','꺼짐',null,'','',0,0,0,1,'todo nokey','확인 기다림','진행중'),
-    C('bata','바타 우산','choi','w','키 필요','꺼짐',null,'','',0,0,0,0,'nokey',KEYLINK,'진행중'),
-    C('paha','파하 가구','jeong','r','잔액 없음','자동',6,'r','광고비 대비 매출 300% · 광고 멈춤',0,0,0,1,'todo','연결됨','진행중'),
-    C('saja','사자 전통주','jeong','g','순항','자동',93,'a','광고비 대비 매출 400% 중 372%',8,6,2,0,'','연결됨','진행중',1),
-    C('acha','아차 캔들','jeong','y','3일 연속 미달','자동',68,'r','클릭 하루 250 중 170 · <b class="ng">3일 연속 미달</b>',5,4,1,1,'todo','연결됨','진행중'),
-    C('jata','자타 비누','jeong','g','순항','제안',100,'','구매 1건당 7,000원 → 6,800원 ✓',0,0,0,2,'todo','연결됨','진행중'),
-    C('chapa','차파 두부','jeong','g','순항','관찰',94,'a','노출 하루 2만 중 18,900',0,0,0,0,'','연결됨','진행중'),
-    C('kaha','카하 곰탕','jeong','w','자동 꺼짐','꺼짐',null,'','',2,0,2,0,'off','연결됨','<span class="ng">환불중이라 자동 꺼짐</span>'),
-    C('taga','타가 잼','oh','y','키 거절 · 담당 공백','관찰',81,'a','노출 하루 1만 중 8,100',0,0,0,1,'todo','<span class="ng">키 거절</span>','진행중'),
-    C('hana','하나 떡볶이',null,'w','관리 담당 없음','꺼짐',null,'','',0,0,0,0,'','연결됨','진행중'),
-    C('gada','가다 수산',null,'w','이름으로만 이어짐','꺼짐',null,'','',0,0,0,0,'','연결됨','진행중')
-  ];
-  CL.forEach(function(c){if(c.id==='tapa')c.sub='kim';});
-  var CBY={};CL.forEach(function(c){CBY[c.id]=c;});
-  var ALERTS=[
-    {c:'dara',lv:'r',tx:'비즈머니 잔액이 없어 광고가 멈췄습니다. 엔진은 이 광고주 입찰을 멈췄습니다.',w:'13:40 · 알린 사람: 담당자 · 팀장 · 대표 · 잔액이 채워질 때까지 이 줄은 남습니다',act:'<button class="btn sm" data-toast="시안 — 비즈머니 충전 안내 문구를 복사합니다(광고주에게 보냄)">충전 안내 복사</button><button class="btn red sm" data-open="m-killone" data-who="다라 리빙">이 광고주 멈추기</button>'},
-    {c:'paha',lv:'r',tx:'비즈머니 잔액이 없어 광고가 멈췄습니다. 엔진은 이 광고주 입찰을 멈췄습니다.',w:'12:10 · 알린 사람: 담당자 · 최팀장 · 대표',act:'<button class="btn sm" data-toast="시안 — 비즈머니 충전 안내 문구를 복사합니다">충전 안내 복사</button><button class="btn red sm" data-open="m-killone" data-who="파하 가구">이 광고주 멈추기</button>'},
-    {c:'gana',lv:'a',tab:'items',tx:'누군가 네이버 화면에서 상품 「저당 그래놀라」 입찰가를 바꿨습니다. 엔진은 이 상품에서 손을 뗐습니다.',w:'11:12 · 알린 사람: 담당자',act:'<button class="btn sm" data-toast="시안 — 운전자 바꾸기는 팀장 승인입니다. 팀장 오늘 화면에 요청이 올라갑니다">엔진에 다시 맡기기(팀장에게 요청)</button><button class="btn ghost sm" data-ack>사람이 계속</button>'},
-    {c:'zacha',lv:'a',tab:'connect',tx:'네이버가 키를 받지 않습니다(광고주가 키를 바꿨거나 지웠습니다). 이 광고주만 엔진이 멈췄습니다.',w:'09-27 · 알린 사람: 담당자',act:'<button class="btn blue sm" data-toast="시안 — 네이버 3칸만 뜨는 키 입력 링크를 복사했습니다">키 다시 받기</button>'},
-    {c:'maba',lv:'a',tab:'goal',tx:'입찰 상한에 3일 연속 막혀 목표(클릭 하루 300)에 못 미칩니다.',w:'09:00 · 알린 사람: 담당자(팀장은 하루 요약)',act:'<button class="btn sm" data-client="maba" data-tab="goal">상한 보기</button>'},
-    {c:'chaka',lv:'a',tab:'goal',tx:'입찰 상한에 막혀 목표에 조금 못 미칩니다. 상한 올리기를 한본부장에게 요청했습니다.',w:'09:00 · 알린 사람: 담당자',act:'<button class="btn sm" data-client="chaka" data-tab="goal">상한 보기</button>'},
-    {c:'rama',lv:'a',tab:'goal',tx:'입찰 상한에 3일 연속 막혀 목표(구매 하루 20)에 못 미칩니다.',w:'09:00 · 알린 사람: 담당자(팀장은 하루 요약)',act:'<button class="btn sm" data-client="rama" data-tab="goal">상한 보기</button>'},
-    {c:'acha',lv:'a',tab:'goal',tx:'목표(클릭 하루 250)에 3일 연속 못 미칩니다.',w:'09:00 · 알린 사람: 담당자(팀장은 하루 요약)',act:'<button class="btn sm" data-client="acha" data-tab="goal">상한 보기</button>'},
-    {c:'taga',lv:'a',tab:'connect',tx:'네이버가 키를 받지 않습니다. 담당이 퇴사해 관리 2팀 팀장이 대신 처리합니다.',w:'09-27 · 알린 사람: 최팀장(담당 공백)',act:'<button class="btn blue sm" data-toast="시안 — 네이버 3칸만 뜨는 키 입력 링크를 복사했습니다">키 다시 받기</button>'},
-    {c:'kata',lv:'ack',tx:'계약 단계가 「환불중」으로 바뀌어 자동이 꺼졌습니다. 엔진이 올린 입찰 3건을 원래 값으로 돌렸습니다.',w:'06:02 · 확인함 · 계약 단계가 돌아오면 이 줄은 사라집니다'}
-  ];
-  var TODO_SUM={kim:{apv:2,acct:1,exp:1,soon:'14시간'},bak:{apv:1,soon:'9시간'},jeong:{apv:3,soon:'5시간'},choi:{apv:0,acct:1,soon:''},han:{apv:1,soon:'11시간'}};
 
-  /* ===== 보는 사람 · 보는 범위 ===== */
-  var VID='kim', VIEWER=VIEWERS.kim, ROLE='staff', SEL='me', EXP={}, TODO_OPEN=false;
-  function pname(k){return k===null?'담당 미정':(PEOPLE[k]?PEOPLE[k].n:k);}
-  function teamOf(o){return o&&PEOPLE[o]?PEOPLE[o].t:null;}
-  function under(t,root){while(t){if(t===root)return true;t=TEAMS[t].p;}return false;}
-  function canSee(c){
-    if(!c)return false;
-    if(ROLE==='ceo')return true;
-    if(ROLE==='none')return false;
-    var p=VIEWER.p;
-    if(c.o===p||c.sub===p)return true;
-    if(ROLE==='lead'&&c.o&&under(teamOf(c.o),VIEWER.team))return true;
-    return false;
+  /* ---------- 예시 광고주 (s: r 긴급 · y 주의 · g 정상 · w 점검 불가) ---------- */
+  var ADS=[
+    {id:'dara',n:'다라 리빙',o:'kim',stage:'진행중',spend:41200,vs:-8,biz:'0.3일',bizc:'r',camp:'3 / 3',auto:'꺼짐',key:'ok'},
+    {id:'maba',n:'마바 뷰티',o:'kim',stage:'진행중',spend:312000,vs:123,biz:'12일',camp:'4 / 4',auto:'제안',key:'ok'},
+    {id:'gana',n:'가나 식품',o:'kim',stage:'진행중',spend:88500,vs:4,biz:'9일',camp:'5 / 5',auto:'관찰',key:'ok'},
+    {id:'saa',n:'사아 펫',o:'kim',stage:'진행중',spend:57300,vs:-3,biz:'21일',camp:'2 / 2',auto:'꺼짐',key:'ok'},
+    {id:'aja',n:'아자 마켓',o:'kim',stage:'진행중',spend:23900,vs:6,biz:'15일',camp:'2 / 2',auto:'꺼짐',key:'unconf'},
+    {id:'zacha',n:'자차 스포츠',o:'kim',stage:'진행중',spend:null,vs:null,biz:null,camp:'—',auto:'꺼짐',key:'reject'},
+    {id:'chaka',n:'차카 캠핑',o:'park2',stage:'진행중',spend:0,vs:-100,biz:'18일',camp:'2 / 2',auto:'꺼짐',key:'ok'},
+    {id:'kata',n:'카타 가전',o:'park2',stage:'환불중',spend:48000,vs:null,biz:'4일',camp:'1 / 2',auto:'꺼짐',key:'ok'},
+    {id:'tapa',n:'타파 문구',o:'park2',stage:'진행중',spend:19800,vs:2,biz:'30일+',camp:'3 / 3',auto:'꺼짐',key:'ok'},
+    {id:'paha',n:'파하 커피',o:'park2',stage:'진행중',spend:34100,vs:-12,biz:'1.6일',camp:'2 / 2',auto:'꺼짐',key:'ok'},
+    {id:'hana',n:'하나 꽃집',o:'park2',stage:'진행중',spend:null,vs:null,biz:null,camp:'—',auto:'꺼짐',key:'none'},
+    {id:'geo',n:'거너 가구',o:'jung',stage:'전략 관리',spend:102000,vs:9,biz:'14일',camp:'6 / 6',auto:'꺼짐',key:'ok'},
+    {id:'deo',n:'더러 식당',o:'jung',stage:'진행중',spend:15200,vs:3,biz:'2.4일',bizc:'y',camp:'2 / 2',auto:'꺼짐',key:'ok'},
+    {id:'meo',n:'머버 공방',o:'jung',stage:'사후 관리',spend:null,vs:null,biz:null,camp:'—',auto:'꺼짐',key:'none'},
+    {id:'seo',n:'서어 약국',o:'jung',stage:'진행중',spend:9800,vs:-5,biz:'25일',camp:'1 / 1',auto:'꺼짐',key:'ok'}
+  ];
+  var byId={};ADS.forEach(function(a){byId[a.id]=a});
+
+  /* ---------- 예시 이슈 (lv: r 긴급 · y 주의 / st: new 새로 · work 확인 중 · fixed 해결 · auto 저절로 풀림 · except 예외) ---------- */
+  var ISS=[
+    {k:1,c:'dara',lv:'r',cause:'비즈머니가 오늘 바닥납니다',txt:'잔액 <b class="num">12,300원</b> · 최근 7일 하루 평균 광고비 41,000원 → <b>오늘 오후 광고가 멈출 수 있습니다</b>',st:'new',at:'06:41',memo:[]},
+    {k:2,c:'chaka',lv:'r',cause:'켜져 있는데 광고가 안 나갑니다',txt:'켜진 캠페인 2개 · 어제 노출 <b>0</b> · 지난주까지는 하루 평균 노출 8,400',st:'new',at:'06:44',memo:[]},
+    {k:3,c:'zacha',lv:'y',cause:'네이버가 키를 거절했습니다',txt:'오늘 점검을 못 했습니다(⚪) · 광고주가 비밀키를 새로 만들었을 수 있습니다 → 「연결」에서 키 다시 받기',st:'new',at:'06:38',memo:[]},
+    {k:4,c:'maba',lv:'y',cause:'광고비가 갑자기 늘었습니다',txt:'어제 <b class="num">312,000원</b> · 같은 요일 4주 평균 140,000원의 <b>2.2배</b>',st:'work',at:'06:45',who:'김담당 09:12',memo:['김담당 09:12 · 광고주 주말 기획전으로 예산 올림 — 이상 없음, 수요일까지 지켜봄']},
+    {k:5,c:'gana',lv:'y',cause:'하루 예산이 일찍 떨어집니다 (3일째)',txt:'캠페인 「가나_쇼핑」 하루 예산 50,000원 · 3일 연속 오후 3시 전후 소진',st:'new',at:'06:45',ph:'3차',memo:[]},
+    {k:6,c:'kata',lv:'y',cause:'계약 단계와 광고비가 맞지 않습니다',txt:'전산 단계 「환불중」인데 어제 광고비 <b class="num">48,000원</b>',st:'new',at:'06:46',memo:[]},
+    {k:7,c:'tapa',lv:'y',cause:'검수에서 반려된 광고가 있습니다',txt:'광고 4개 반려 · 사유 「상품 정보 불일치」 외 1 → 네이버 광고 관리에서 수정 필요',st:'new',at:'06:47',ph:'3차',memo:[]},
+    {k:8,c:'deo',lv:'y',cause:'비즈머니가 3일 안에 바닥납니다',txt:'잔액 36,500원 · 하루 평균 15,000원 → 약 <b>2.4일</b>',st:'new',at:'06:47',memo:[]},
+    {k:9,c:'paha',lv:'y',cause:'비즈머니가 3일 안에 바닥납니다',txt:'잔액 54,000원 · 하루 평균 34,000원 → 약 1.6일',st:'except',at:'어제',who:'박담당 · 10/27까지',memo:['박담당 09-27 · 광고주가 자동 충전을 켜 둠 — 30일 예외']},
+    {k:10,c:'saa',lv:'y',cause:'비즈머니가 3일 안에 바닥납니다',txt:'어제 잔액 부족 → 오늘 아침 충전 확인',st:'auto',at:'오늘 06:40',memo:[]},
+    {k:11,c:'aja',lv:'r',cause:'켜져 있는데 광고가 안 나갑니다',txt:'그제 노출 0 → 어제 노출 5,120으로 돌아옴',st:'auto',at:'오늘 06:42',memo:[]}
+  ];
+  var INFO=[{c:'geo',txt:'캠페인 「가을 기획전」이 10/1(수)에 끝납니다 — 이어 갈지 광고주와 확인'}];
+
+  var state={role:'kim',f:'need',q:'',failed:false,client:null,rtab:'w'};
+
+  function visibleOwners(){return ROLES[state.role].owners}
+  function visAds(){var o=visibleOwners();return ADS.filter(function(a){return o.indexOf(a.o)>=0})}
+  function openIss(cid){return ISS.filter(function(i){return i.c===cid&&(i.st==='new'||i.st==='work')})}
+
+  /* ---------- 판정 — 시안 안내 3절 표와 같은 규칙 ---------- */
+  function judge(a){
+    if(state.failed) return {s:'w',why:'오늘 점검 안 됨',need:true};
+    if(a.key==='none') return {s:'w',why:'키 없음',need:false};
+    if(a.key==='reject') return {s:'w',why:'키 거절',need:true};
+    var op=openIss(a.id);
+    var r=op.filter(function(i){return i.lv==='r'});
+    var y=op.filter(function(i){return i.lv==='y'});
+    var need=op.some(function(i){return i.st==='new'})||r.length>0;
+    if(r.length) return {s:'r',why:r[0].cause,need:need};
+    if(y.length) return {s:'y',why:y[0].cause,need:need};
+    return {s:'g',why:'정상',need:false};
   }
-  function inSel(c){
-    if(!canSee(c))return false;
-    var p=VIEWER.p;
-    if(SEL==='all')return true;
-    if(SEL==='me')return c.o===p||c.sub===p;
-    if(SEL==='u')return c.o===null;
-    if(SEL.indexOf('p:')===0)return c.o===SEL.slice(2);
-    if(SEL.indexOf('t:')===0)return !!c.o&&under(teamOf(c.o),SEL.slice(2));
-    return false;
-  }
-  function selClients(){return CL.filter(inSel);}
-  function maxClients(){return CL.filter(canSee);}
-  function keyOf(c){return (SEL==='me'&&c.sub===VIEWER.p)?VIEWER.p:c.o;}
-  function stats(list){var r={n:list.length,red:0,amb:0,todo:0,below:0};list.forEach(function(c){if(c.s==='r')r.red++;if(c.s==='y')r.amb++;r.todo+=c.tn;if(c.gc==='r')r.below++;});return r;}
-  function statTxt(st){return '광고주 '+st.n+' · 🔴 '+st.red+' · 🟡 '+st.amb+' · 할 일 '+st.todo+' · 목표 미달 '+st.below;}
-  /* 사람별 → 팀별 묶기 (나 → 🔴 많은 사람 → 이름 순) */
-  function groups(list){
-    var by={},order=[];
-    list.forEach(function(c){var k=keyOf(c);var kk=(k===null?'__u':k);if(!by[kk]){by[kk]=[];order.push(kk);}by[kk].push(c);});
-    var me=VIEWER.p;
-    order.sort(function(a,b){if(a===me)return -1;if(b===me)return 1;if(a==='__u')return 1;if(b==='__u')return -1;if(a==='oh')return 1;if(b==='oh')return -1;
-      var ra=stats(by[a]).red,rb=stats(by[b]).red;if(ra!==rb)return rb-ra;return pname(a).localeCompare(pname(b),'ko');});
-    var teams=[];order.forEach(function(k){var t=(k==='__u')?'__u':teamOf(k);if(teams.indexOf(t)<0)teams.push(t);});
-    var myT=me?teamOf(me):null;
-    teams.sort(function(a,b){if(a===myT)return -1;if(b===myT)return 1;if(a==='__u')return 1;if(b==='__u')return -1;return TEAM_ORDER.indexOf(a)-TEAM_ORDER.indexOf(b);});
-    return {by:by,order:order,teams:teams,teamOfKey:function(k){return k==='__u'?'__u':teamOf(k);}};
-  }
-  function gLabel(k){
-    if(k==='__u')return '<b>담당 미정</b> — 전산 가망 수정에서 관리 담당을 정해 주세요 · 대표만 봅니다';
-    if(k==='oh')return '<b>담당 공백</b> — 오담당 퇴사 · 관리 2팀 팀장이 대신 처리';
-    return '<b>'+pname(k)+(k===VIEWER.p?' (나)':'')+'</b>'+(PEOPLE[k]&&PEOPLE[k].lead&&k!==VIEWER.p?' <span class="who">팀장</span>':'');
-  }
-  function tLabel(t){if(t==='__u')return '<b>조직 밖</b>';var T=TEAMS[t];return '<b>'+T.n+'</b> · 팀장 '+pname(T.lead);}
-  function selLabel(){
-    var n=selClients().length,p=VIEWER.p;
-    if(SEL==='all')return ROLE==='ceo'?'전체':(VIEWER.team==='hq'?'우리 본부 전체':'우리 팀 전체');
-    if(SEL==='me')return ROLE==='lead'?'나만':'내 광고주';
-    if(SEL==='u')return '담당 미정';
-    if(SEL.indexOf('p:')===0)return pname(SEL.slice(2))+(SEL.slice(2)==='oh'?'(담당 공백)':'');
-    if(SEL.indexOf('t:')===0)return TEAMS[SEL.slice(2)].n;
-    return '';
-  }
-  function scopeOptions(){
-    var o=[],p=VIEWER.p;
-    function cnt(f){return CL.filter(function(c){return canSee(c)&&f(c);}).length;}
-    if(ROLE==='lead'){
-      var T=VIEWER.team;
-      o.push({v:'all',t:(T==='hq'?'우리 본부 전체':'우리 팀 전체 · '+TEAMS[T].n),n:maxClients().length});
-      o.push({v:'me',t:'나만 ('+VIEWER.name+')',n:cnt(function(c){return c.o===p||c.sub===p;})});
-      o.push({sep:1});
-      if(T==='hq'){
-        ['t1','t2'].forEach(function(t){o.push({v:'t:'+t,t:TEAMS[t].n,n:cnt(function(c){return !!c.o&&under(teamOf(c.o),t);}),i:1});
-          Object.keys(PEOPLE).forEach(function(k){if(PEOPLE[k].t===t){var n=cnt(function(c){return c.o===k;});if(n)o.push({v:'p:'+k,t:(k==='oh'?'담당 공백 — 오담당 퇴사':pname(k)),n:n,i:2});}});});
-      }else{
-        o.push({cap:'사람별'});
-        Object.keys(PEOPLE).forEach(function(k){if(PEOPLE[k].t===T&&k!==p){var n=cnt(function(c){return c.o===k;});if(n)o.push({v:'p:'+k,t:pname(k),n:n,i:1});}});
-      }
-    }else if(ROLE==='ceo'){
-      o.push({v:'all',t:'전체',n:CL.length});o.push({sep:1});
-      o.push({v:'t:hq',t:'관리 본부',n:cnt(function(c){return !!c.o&&under(teamOf(c.o),'hq');})});
-      o.push({v:'p:han',t:'한본부장 (직속)',n:cnt(function(c){return c.o==='han';}),i:1});
-      ['t1','t2'].forEach(function(t){o.push({v:'t:'+t,t:TEAMS[t].n,n:cnt(function(c){return !!c.o&&under(teamOf(c.o),t);}),i:1});
-        Object.keys(PEOPLE).forEach(function(k){if(PEOPLE[k].t===t){var n=cnt(function(c){return c.o===k;});if(n)o.push({v:'p:'+k,t:(k==='oh'?'담당 공백 — 오담당 퇴사':pname(k)),n:n,i:2});}});});
-      o.push({sep:1});o.push({v:'u',t:'담당 미정',n:cnt(function(c){return c.o===null;})});
+  var SIGC={r:'r',y:'y',g:'g',w:'w'};
+  var SIGT={r:'긴급',y:'주의',g:'정상',w:'점검 불가'};
+
+  /* ---------- 점검 띠 ---------- */
+  function renderRun(){
+    var rb=$('#runbar'),v=visAds();
+    if(state.failed){
+      rb.className='runbar bad';
+      rb.innerHTML='<span class="ok"></span><b>오늘 아침 점검이 끝나지 않았습니다</b> · 06:30 시작 → 08:00 까지 완료 못 함(네이버 응답 지연) · 모든 광고주를 「오늘 점검 안 됨」(⚪)으로 보여 드립니다 — 어제 결과를 오늘 것처럼 🟢 로 보이지 않게 합니다 · 대표·관리자에게 긴급 알림을 보냈습니다<button class="more" data-toast="시안 — 실패한 광고주만 지금 다시 점검합니다">지금 다시 점검</button>';
+      return;
     }
-    return o;
-  }
-  function renderScopeCtl(){
-    var btn=$('#scopeBtn'),txt=$('#scopeTxt'),pop=$('#scopePop');pop.hidden=true;btn.setAttribute('aria-expanded','false');
-    if(ROLE==='lead'||ROLE==='ceo'){
-      btn.hidden=false;txt.hidden=true;
-      btn.innerHTML='<span class="k">보는 범위</span> '+selLabel()+' <span class="k">· '+selClients().length+'곳 ▾</span>';
-      var h='';scopeOptions().forEach(function(x){
-        if(x.sep){h+='<div class="sep"></div>';return;}
-        if(x.cap){h+='<div class="cap">'+x.cap+'</div>';return;}
-        h+='<button role="menuitem" data-scope="'+x.v+'" class="'+(x.i?'i'+x.i:'')+(x.v===SEL?' on':'')+'">'+x.t+'<span class="n">'+x.n+'곳</span></button>';});
-      pop.innerHTML=h;
-    }else if(ROLE==='none'){btn.hidden=true;txt.hidden=true;}
-    else{
-      btn.hidden=true;txt.hidden=false;
-      var l=selClients(),sb=l.filter(function(c){return c.sub===VIEWER.p;}).length;
-      txt.textContent='내 광고주 '+l.length+'곳'+(sb?'(서브 '+sb+')':'');
-    }
-  }
-  function setScope(v){SEL=v;EXP={};TODO_OPEN=false;applyScope();}
-  function bandHtml(){
-    if(!(ROLE==='lead'||ROLE==='ceo'))return '';
-    if(SEL==='all'||SEL==='me')return '';
-    var back=ROLE==='ceo'?'전체로':(VIEWER.team==='hq'?'우리 본부로':'우리 팀으로');
-    var n=selClients().length,t;
-    if(SEL.indexOf('p:')===0){var k=SEL.slice(2);t=(k==='oh'?'담당 공백(오담당 퇴사) 광고주를':pname(k)+' 님 광고주를')+' 보는 중 · '+n+'곳';}
-    else if(SEL==='u')t='담당 미정 광고주만 보는 중 · '+n+'곳';
-    else t=selLabel()+'만 보는 중 · '+n+'곳';
-    return '👀 '+t+'<button data-scope="all">'+back+'</button>';
+    var chk=v.filter(function(a){return a.key!=='none'}).length;
+    rb.className='runbar';
+    rb.innerHTML='<span class="ok"></span>오늘 아침 점검 <b class="num">06:48</b> 끝 · 자료 기준 <b>어제 9/27(토)</b> · 점검한 곳 <b class="num">'+chk+'</b> / <b class="num">'+v.length+'</b> · 다음 점검 내일 06:30<button class="more" data-guide-to="g-check">무엇을 점검하나 →</button>';
   }
 
-  function sigCell(c){return '<span class="sig '+c.s+'"></span><span class="hint">'+c.why+'</span>';}
-  function modePill(m){return '<span class="pill '+(m==='자동'?'p-green':m==='제안'?'p-blue':'p-gray')+'">'+m+'</span>';}
-  function goalCell(c){if(c.g==null)return '<td class="muted">'+(c.m==='꺼짐'&&c.tags.indexOf('nokey')>=0?'목표 없음':'—')+'</td>';return '<td><span class="bar"><i'+(c.gc?' class="'+c.gc+'"':'')+' style="width:'+c.g+'%"></i></span></td>';}
-  function todoCell(c){if(c.s==='r'&&c.tn)return '<span class="pill p-red">긴급 '+c.tn+'</span>';if(c.tn)return '<span class="pill p-amber">'+c.tn+'</span>';return '<span class="muted">—</span>';}
-  var SIGO={r:0,y:1,g:2,w:3};
-  function renderClients(){
-    var list=selClients(),G=groups(list),multiP=G.order.length>1,multiT=G.teams.length>1,h='';
-    if(!list.length){h='<tr><td colspan="9" class="hint">볼 수 있는 광고주가 없습니다. 담당 광고주가 생기면 여기에 나옵니다.</td></tr>';}
-    G.teams.forEach(function(t){
-      var keys=G.order.filter(function(k){return G.teamOfKey(k)===t;});
-      if(multiT&&t!=='__u'){var tl=[];keys.forEach(function(k){tl=tl.concat(G.by[k]);});h+='<tr class="grp team"><td colspan="9">'+tLabel(t)+' · '+statTxt(stats(tl))+(SEL!=='t:'+t?'<button class="gb2" data-scope="t:'+t+'">이 팀만</button>':'')+'</td></tr>';}
-      keys.forEach(function(k){
-        var arr=G.by[k].slice().sort(function(a,b){return (SIGO[a.s]-SIGO[b.s])||(b.tn-a.tn);});
-        if(multiP)h+='<tr class="grp"><td colspan="9">'+gLabel(k)+' · '+statTxt(stats(arr))+((k!=='__u'&&k!==VIEWER.p)?'<button class="gb2" data-scope="p:'+k+'">이 사람만</button>':'')+'</td></tr>';
-        arr.forEach(function(c){
-          var subb=(c.sub===VIEWER.p)?' <span class="pill p-gray" title="메인 담당 '+pname(c.o)+'">서브 · 메인 '+pname(c.o)+'</span>':'';
-          var stop=(c.m!=='꺼짐'&&c.o)?'<button class="btn sm" data-open="m-killone" data-who="'+c.n+'" aria-label="'+c.n+' 멈추기">⏸</button>':'';
-          h+='<tr class="click" data-client="'+c.id+'" data-tags="'+c.tags+'"><td>'+sigCell(c)+'</td><td><b>'+c.n+'</b>'+subb+'</td><td>'+modePill(c.m)+'</td>'+goalCell(c)+'<td class="num">'+c.ch+'</td><td>'+todoCell(c)+'</td><td>'+c.conn+'</td><td>'+c.stage+'</td><td>'+stop+'</td></tr>';
-        });
+  /* ---------- 숫자 칸 ---------- */
+  function renderKpis(){
+    var v=visAds(),c={need:0,r:0,y:0,g:0,w:0},wk={none:0,reject:0,fail:0};
+    v.forEach(function(a){var j=judge(a);c[j.s]++;if(j.need)c.need++;if(j.s==='w'){if(state.failed)wk.fail++;else if(a.key==='none')wk.none++;else wk.reject++;}});
+    function k(key,cls,label,val,sub){return '<button class="kpi '+cls+(state.f===key?' on':'')+'" data-f="'+key+'" aria-pressed="'+(state.f===key)+'"><span class="l">'+label+'</span><span class="v">'+val+'</span><span class="s">'+sub+'</span></button>'}
+    var wsub=state.failed?'오늘 점검 안 됨 '+wk.fail:'키 없음 '+wk.none+' · 키 거절 '+wk.reject;
+    $('#kpis').innerHTML=
+      k('need','need','👉 확인 필요',c.need,'들어가 볼 곳')+
+      k('r','r','<span class="sig r"></span>긴급',c.r,'오늘 안에')+
+      k('y','y','<span class="sig y"></span>주의',c.y,'이번 주 안에')+
+      k('g','g','<span class="sig g"></span>정상',c.g,'안 봐도 됨')+
+      k('w','w','<span class="sig w"></span>점검 불가',c.w,wsub);
+    $('#tbl-n').textContent=ROLES[state.role].scope+' · '+v.length+'곳';
+  }
+
+  /* ---------- 오늘의 이슈 ---------- */
+  function canExceptUrgent(){return state.role==='lee'||state.role==='ceo'}
+  function issueRow(i){
+    var a=byId[i.c];
+    var stl={new:'🆕 새로',work:'👀 확인 중',fixed:'✅ 해결',auto:'🔁 저절로 풀림',except:'🙈 예외'}[i.st];
+    var who=i.who?' · '+esc(i.who):'';
+    var memo=i.memo.map(function(m){return '<span class="memo">📝 '+esc(m)+'</span>'}).join('');
+    var act='';
+    if(i.st==='new'||i.st==='work'){
+      act=(i.st==='new'?'<button class="btn sm" data-ia="work" data-k="'+i.k+'">👀 확인 중</button>':'')+
+        '<button class="btn sm blue" data-ia="fixed" data-k="'+i.k+'">✅ 해결</button>'+
+        '<button class="btn sm" data-ia="except" data-k="'+i.k+'">🙈 예외…</button>'+
+        '<button class="btn sm ghost" data-ia="memo" data-k="'+i.k+'">📝</button>';
+    }
+    return '<div class="iss'+(i.st==='new'||i.st==='work'?'':' done')+'"><span class="sig '+(i.lv==='r'?'r':'y')+'" style="margin-top:4px"></span>'+
+      '<div class="tx"><a class="nm" data-client="'+a.id+'">'+esc(a.n)+'</a> <span class="who">'+esc(PEOPLE[a.o].n)+'</span> — '+i.txt+(i.ph?'<span class="ph">'+i.ph+'부터</span>':'')+
+      '<span class="w"><span class="st '+i.st+'">'+stl+'</span> · 점검 '+esc(i.at)+who+'</span>'+memo+'</div>'+
+      '<div class="act">'+act+'</div></div>';
+  }
+  function renderIssues(){
+    var o=visibleOwners();
+    if(state.failed){$('#issues').innerHTML='<div class="empty">오늘 점검 결과가 없습니다. 어제 이슈는 그대로 열려 있고, 점검이 다시 돌면 이 자리에 나옵니다.</div>';$('#iss-n').textContent='';return;}
+    var open=ISS.filter(function(i){return o.indexOf(byId[i.c].o)>=0&&(i.st==='new'||i.st==='work')});
+    open.sort(function(a,b){return (a.lv===b.lv?0:(a.lv==='r'?-1:1))||(a.st===b.st?0:(a.st==='new'?-1:1))});
+    var groups=[],gi={};
+    open.forEach(function(i){var key=i.lv+'|'+i.cause;if(!(key in gi)){gi[key]=groups.length;groups.push({lv:i.lv,cause:i.cause,items:[]})}groups[gi[key]].items.push(i)});
+    var h='';
+    groups.forEach(function(g){h+='<div class="cause"><span class="sig '+(g.lv==='r'?'r':'y')+'"></span>'+esc(g.cause)+' <span class="n">'+g.items.length+'곳</span></div>';g.items.forEach(function(i){h+=issueRow(i)})});
+    INFO.forEach(function(x){if(o.indexOf(byId[x.c].o)>=0)h+='<div class="cause" style="font-weight:700;color:var(--sub)">ⓘ 알아 두기 <span class="n">이슈 아님 · 「확인 필요」에 세지 않음</span></div><div class="iss done"><span class="hint">ⓘ</span><div class="tx"><a class="nm" data-client="'+x.c+'">'+esc(byId[x.c].n)+'</a> — '+esc(x.txt)+'</div><div></div></div>'});
+    $('#issues').innerHTML=h||'<div class="empty">열린 이슈가 없습니다 🎉 오늘은 들어가 볼 광고주가 없습니다.</div>';
+    var nr=open.filter(function(i){return i.lv==='r'}).length;
+    $('#iss-n').textContent='열린 이슈 '+open.length+' (긴급 '+nr+')';
+    var done=ISS.filter(function(i){return o.indexOf(byId[i.c].o)>=0&&!(i.st==='new'||i.st==='work')});
+    $('#doneList').innerHTML=done.length?done.map(issueRow).join(''):'<div class="empty">없습니다.</div>';
+    $('#doneToggle').textContent='오늘 풀린 것 · 예외 처리한 것 '+done.length+'건 보기';
+    var mine=ISS.filter(function(i){return o.indexOf(byId[i.c].o)>=0&&i.st==='new'});
+    $('#bellR').textContent=mine.filter(function(i){return i.lv==='r'}).length;
+    $('#bellA').textContent=mine.filter(function(i){return i.lv==='y'}).length;
+  }
+
+  /* ---------- 전 광고주 표 ---------- */
+  function row(a){
+    var j=judge(a),op=state.failed?[]:openIss(a.id);
+    var vs=a.vs==null?'—':(a.vs>=100||a.vs<=-50?'<span class="'+(a.vs>0?'up':'dn')+'">'+(a.vs>0?'+':'')+a.vs+'%</span>':(a.vs>0?'+':'')+a.vs+'%');
+    var biz=a.biz==null?'—':(a.bizc?'<span class="'+(a.bizc==='r'?'ng':'')+'" style="'+(a.bizc==='y'?'color:var(--amber);font-weight:800':'')+'">'+a.biz+'</span>':a.biz);
+    var badge=a.key==='unconf'?' <span class="pill p-gray" title="읽기 점검은 합니다. 자동화·광고주용 보고서는 계정 확인 뒤">계정 확인 전</span>':'';
+    return '<tr class="click" data-client="'+a.id+'"><td><span class="sig '+SIGC[j.s]+'"></span><span class="hint">'+esc(j.why)+'</span></td>'+
+      '<td><a class="nm" data-client="'+a.id+'">'+esc(a.n)+'</a>'+badge+'</td>'+
+      '<td>'+(j.need?'<span class="needdot">확인 필요</span>':'<span class="noneed">—</span>')+'</td>'+
+      '<td>'+esc(PEOPLE[a.o].n)+'</td><td class="num">'+(state.failed?'—':won(a.spend))+'</td><td class="num">'+(state.failed?'—':vs)+'</td>'+
+      '<td class="num">'+(state.failed?'—':biz)+'</td><td class="num">'+a.camp+'</td><td class="num">'+(op.length||'—')+'</td>'+
+      '<td>'+esc(a.stage)+'</td><td><span class="pill '+(a.auto==='꺼짐'?'p-gray':'p-blue')+'">'+esc(a.auto)+'</span></td></tr>';
+  }
+  function pass(a){
+    var j=judge(a);
+    if(state.q&&a.n.indexOf(state.q)<0)return false;
+    if(state.f==='need')return j.need;
+    if(state.f==='all')return true;
+    return j.s===state.f;
+  }
+  function renderTable(){
+    var v=visAds().filter(pass),h='';
+    var byOwner={};v.forEach(function(a){(byOwner[a.o]=byOwner[a.o]||[]).push(a)});
+    var grouped=state.role==='lee'||state.role==='ceo';
+    var teams={'관리 1팀':['kim','park2'],'관리 2팀':['jung']};
+    Object.keys(teams).forEach(function(t){
+      var ps=teams[t].filter(function(p){return byOwner[p]});
+      if(!ps.length)return;
+      if(state.role==='ceo')h+='<tr class="grp team"><td colspan="11"><b>'+t+'</b></td></tr>';
+      ps.forEach(function(p){
+        if(grouped){var all=visAds().filter(function(a){return a.o===p}),cn={r:0,y:0,w:0,need:0};all.forEach(function(a){var j=judge(a);if(cn[j.s]!=null)cn[j.s]++;if(j.need)cn.need++});
+          h+='<tr class="grp"><td colspan="11"><b>'+PEOPLE[p].n+'</b> · '+all.length+'곳 · 확인 필요 '+cn.need+' · 🔴 '+cn.r+' · 🟡 '+cn.y+' · ⚪ '+cn.w+'</td></tr>';}
+        byOwner[p].forEach(function(a){h+=row(a)});
       });
     });
-    $('#cl-body').innerHTML=h;
-    var st=stats(list);$('#cl-count').textContent=selLabel()+' '+st.n+'곳';
-    filterClients(clF);
+    if(!h){h='<tr><td colspan="11" class="empty">'+(state.role==='park'?'담당 광고주가 없습니다. 관리자는 ⚙️ 설정에서 점검 기준을 고칩니다(대표 결정 P2 — 전체 보기는 대표만).':(state.f==='need'?'확인이 필요한 광고주가 없습니다 🎉':'조건에 맞는 광고주가 없습니다.'))+'</td></tr>'}
+    $('#tbody').innerHTML=h;
+    $$('#tblChips .chip').forEach(function(b){b.classList.toggle('on',b.getAttribute('data-f')===state.f)});
   }
-  function lineHtml(a){
-    var c=CBY[a.c];
-    var lv=a.lv==='r'?'<span class="lv pill p-red">긴급</span>':a.lv==='a'?'<span class="lv pill p-amber">주의</span>':'<span class="lv pill p-gray">확인함</span>';
-    return '<div class="line'+(a.lv==='ack'?' ack':'')+'">'+lv+'<div class="tx"><a class="nm" data-client="'+c.id+'"'+(a.tab?' data-tab="'+a.tab+'"':'')+'>'+c.n+'</a> — '+a.tx+'<span class="w">'+a.w+'</span></div>'+(a.act?'<div class="act">'+a.act+'</div>':'')+'</div>';
+
+  /* ---------- 광고주 한 장 ---------- */
+  function renderClient(){
+    var a=byId[state.client];if(!a)return;var j=judge(a);
+    $('#c-crumb').textContent=a.n;$('#c-name').textContent=a.n;
+    $('#c-sig').className='sig '+SIGC[j.s];
+    $('#c-sub').textContent='담당 '+PEOPLE[a.o].n+' · '+PEOPLE[a.o].team+' · 계약 단계 '+a.stage;
+    var keyb={ok:'<span class="pill p-green">키 연결 · 계정 확인됨</span>',unconf:'<span class="pill p-gray">키 연결 · 계정 확인 전</span>',reject:'<span class="pill p-red">키 거절</span>',none:'<span class="pill p-gray">키 없음</span>'}[a.key];
+    $('#c-badges').innerHTML='<span class="pill p-'+(j.s==='r'?'red':j.s==='y'?'amber':j.s==='g'?'green':'gray')+'">'+SIGT[j.s]+' · '+esc(j.why)+'</span>'+keyb+'<span class="pill p-blue">자동화 '+esc(a.auto)+'</span>';
+    var bars='';var base=[62,58,70,66,71,40,38,64,60,69,72,44,41,a.id==='chaka'?0:a.id==='maba'?100:65];
+    base.forEach(function(x,i){bars+='<i class="'+(i===13&&(a.id==='chaka'||a.id==='maba')?'a':'')+'" style="height:'+Math.max(3,x)+'%" title="'+(i-13)+'일"></i>'});
+    var tiles=a.spend==null?'<div class="note warn">오늘 점검을 못 해 숫자가 없습니다('+(a.key==='none'?'키 없음':'키 거절')+'). 「연결」 칸에서 해결합니다.</div>':
+      '<div class="tiles">'+
+      '<div class="tile"><div class="l">어제 광고비</div><div class="v">'+won(a.spend)+'</div><div class="d">같은 요일 대비 '+(a.vs==null?'—':(a.vs>0?'+':'')+a.vs+'%')+'</div></div>'+
+      '<div class="tile"><div class="l">노출</div><div class="v">'+(a.id==='chaka'?'0':'12,480')+'</div><div class="d">어제</div></div>'+
+      '<div class="tile"><div class="l">클릭</div><div class="v">'+(a.id==='chaka'?'0':'318')+'</div><div class="d">클릭률 2.5%</div></div>'+
+      '<div class="tile"><div class="l">구매</div><div class="v">'+(a.id==='chaka'?'0':'11')+'</div><div class="d">잠정 · 늦게 잡힘</div></div>'+
+      '<div class="tile"><div class="l">비즈머니</div><div class="v">'+(a.biz||'—')+'</div><div class="d">남은 날 (최근 7일 기준)</div></div></div>'+
+      '<div class="kh"><h2 style="font-size:14px">최근 14일 광고비</h2><span class="n">마지막 막대 = 어제</span></div><div class="sbars" aria-hidden="true">'+bars+'</div>';
+    $('#p-now').innerHTML='<div class="card">'+tiles+'</div>'+
+      '<div class="card flat"><div class="kh" style="padding:12px 14px 6px"><h2>캠페인</h2><span class="n">네이버에서 읽은 상태 그대로 · 켜고 끄기는 네이버 광고 관리에서</span></div><div class="tblwrap"><table><thead><tr><th>캠페인</th><th>종류</th><th>상태</th><th>하루 예산</th><th>어제 광고비</th></tr></thead><tbody>'+
+      '<tr><td>'+esc(a.n)+'_쇼핑</td><td>쇼핑검색</td><td>'+(a.id==='chaka'?'<span class="pill p-amber">켜짐 · 노출 0</span>':'<span class="pill p-green">켜짐</span>')+'</td><td class="num">50,000원</td><td class="num">'+won(a.spend==null?null:Math.round(a.spend*0.7))+'</td></tr>'+
+      '<tr><td>'+esc(a.n)+'_브랜드</td><td>파워링크</td><td><span class="pill p-green">켜짐</span></td><td class="num">20,000원</td><td class="num">'+won(a.spend==null?null:Math.round(a.spend*0.3))+'</td></tr>'+
+      '</tbody></table></div></div>';
+    var hist=ISS.filter(function(i){return i.c===a.id});
+    var tl='<li><span class="t">09-01</span><span>관제 시작 — 키 연결 · 첫 점검</span></li>';
+    hist.forEach(function(i){tl='<li><span class="t">오늘 '+esc(i.at)+'</span><span><span class="sig '+(i.lv==='r'?'r':'y')+'"></span>'+esc(i.cause)+' — <span class="st '+i.st+'">'+{new:'🆕 새로',work:'👀 확인 중',fixed:'✅ 해결',auto:'🔁 저절로 풀림',except:'🙈 예외'}[i.st]+'</span>'+(i.memo.length?'<br><span class="hint">📝 '+esc(i.memo.join(' / '))+'</span>':'')+'</span></li>'+tl});
+    tl+='<li><span class="t">09-18</span><span><span class="sig y"></span>광고비가 갑자기 줄었습니다 — 🔁 저절로 풀림 (이틀 뒤 회복)</span></li>';
+    $('#p-hist').innerHTML='<div class="card flat"><div class="kh" style="padding:12px 14px 6px"><h2>이슈 기록</h2><span class="n">누가 · 언제 · 무엇을 · 메모 — 보고서 재료가 됩니다</span></div><ul class="tl">'+tl+'</ul></div>';
+    $('#p-rep').innerHTML='<div class="card flat"><div class="kh" style="padding:12px 14px 6px"><h2>이 광고주 보고서</h2></div><div class="tblwrap"><table><thead><tr><th>종류</th><th>기간</th><th>상태</th><th></th></tr></thead><tbody>'+
+      '<tr><td>주간</td><td>9/22~9/28</td><td><span class="pill p-amber">검토 대기</span></td><td><button class="btn sm" data-preview="'+a.id+'" data-kind="w">미리보기</button></td></tr>'+
+      '<tr><td>주간</td><td>9/15~9/21</td><td><span class="pill p-green">게시함 · 공유 화면</span></td><td><button class="btn sm" data-preview="'+a.id+'" data-kind="w">보기</button></td></tr>'+
+      '<tr><td>월간</td><td>8월</td><td><span class="pill p-green">게시함 · 공유 화면</span></td><td><button class="btn sm" data-preview="'+a.id+'" data-kind="m">보기</button></td></tr></tbody></table></div></div>';
+    var conn={ok:'<p class="sub">키 3칸이 저장돼 있고, 계정 확인(「이 광고주 계정이 맞음」)도 끝났습니다.</p>',
+      unconf:'<div class="note">읽기 점검은 이미 하고 있습니다. <b>자동화와 광고주에게 가는 보고서는 계정 확인 뒤</b>에 켜집니다(엉뚱한 계정의 숫자가 광고주에게 가지 않게).</div><button class="btn blue sm" data-toast="시안 — 확인했습니다(누가·언제 기록)">이 광고주 계정이 맞음</button>',
+      reject:'<div class="note bad">네이버가 이 키를 거절했습니다. 광고주가 비밀키를 새로 만들었거나 권한을 바꿨을 수 있습니다.</div><button class="btn blue sm" data-toast="시안 — 키 다시 받는 링크(네이버 전용)를 복사했습니다">키 다시 받는 링크 복사</button>',
+      none:'<div class="note warn">키가 없어 점검하지 못합니다(⚪). 매주 월요일 담당에게 「키 받을 곳」 목록으로 알립니다.</div><button class="btn blue sm" data-toast="시안 — 키 요청 링크(네이버 전용)를 복사했습니다">키 요청 링크 복사</button>'}[a.key];
+    $('#p-conn').innerHTML='<div class="card"><div class="kh"><h2>네이버 연결</h2><span class="n">저장한 뒤에는 끝 4자리만 보입니다</span></div>'+
+      (a.key==='none'?'':'<div class="keyrow" style="margin-bottom:10px"><div class="fg"><label>고객 번호</label><span class="masked">•••• 7781</span></div><div class="fg"><label>액세스 라이선스</label><span class="masked">•••• 3f0a</span></div><div class="fg"><label>비밀키</label><span class="masked">•••• 91c2</span></div></div>')+conn+'</div>';
   }
-  function renderFirst(){
-    var list=selClients(),ids={};list.forEach(function(c){ids[c.id]=1;});
-    var al=ALERTS.filter(function(a){return ids[a.c];});
-    var G=groups(list),multiP=G.order.length>1,multiT=G.teams.length>1,h='',nr=0,na=0;
-    al.forEach(function(a){if(a.lv==='r')nr++;else if(a.lv==='a')na++;});
-    G.teams.forEach(function(t){
-      var keys=G.order.filter(function(k){return G.teamOfKey(k)===t;});
-      var tAl=al.filter(function(a){var k=keyOf(CBY[a.c]);return keys.indexOf(k===null?'__u':k)>=0;});
-      if(multiT&&t!=='__u'){var r=0,y=0;tAl.forEach(function(a){if(a.lv==='r')r++;else if(a.lv==='a')y++;});h+='<div class="grouphead team">'+tLabel(t)+'<span class="cnts">🔴 긴급 '+r+' · 🟡 주의 '+y+'</span></div>';}
-      keys.forEach(function(k){
-        var mine=al.filter(function(a){var kk=keyOf(CBY[a.c]);return (kk===null?'__u':kk)===k;});
-        if(k==='__u'){if(ROLE==='ceo')h+='<div class="grouphead">'+gLabel(k)+'<span class="cnts">'+G.by[k].length+'곳</span><span class="act"><button class="btn ghost sm" data-go="settings" data-spane="people">목록 보기</button></span></div>';return;}
-        var r=0,y=0;mine.forEach(function(a){if(a.lv==='r')r++;else if(a.lv==='a')y++;});
-        var st=stats(G.by[k]);
-        var open=!multiP||k===VIEWER.p||EXP[k];
-        if(multiP){
-          var btns='';
-          if(k!==VIEWER.p)btns+='<button class="btn ghost sm" data-scope="p:'+k+'">이 사람만</button>';
-          if(mine.some(function(a){return a.lv!=='r';}))btns+='<button class="btn ghost sm" data-gexp="'+k+'">'+(open?'접기 ▾':'펼치기 ▸')+'</button>';
-          h+='<div class="grouphead person">'+gLabel(k)+'<span class="cnts">🔴 '+r+' · 🟡 '+y+' · 할 일 '+st.todo+' · 목표 미달 '+st.below+'</span><span class="act">'+btns+'</span></div>';
-        }
-        mine.forEach(function(a){if(open||a.lv==='r')h+=lineHtml(a);});
-      });
+
+  /* ---------- 자동화 ---------- */
+  function renderAuto(){
+    var v=visAds(),h='';
+    var left={gana:'9 / 9 끝',maba:'9 / 9 끝',dara:'5 / 9',aja:'3 / 9 · 계정 확인 전'};
+    v.forEach(function(a){
+      h+='<tr class="click" data-autoc="'+a.id+'"><td><a class="nm" data-autoc="'+a.id+'">'+esc(a.n)+'</a></td><td>'+esc(PEOPLE[a.o].n)+'</td><td><span class="pill '+(a.auto==='꺼짐'?'p-gray':'p-blue')+'">'+esc(a.auto)+'</span></td><td class="num">'+(left[a.id]||(a.key==='none'?'키 없음':'2 / 9'))+'</td><td>'+(a.auto==='꺼짐'?'<span class="hint">아직 없음</span>':'광고비 대비 매출 400%')+'</td><td class="num">'+(a.auto==='제안'?'제안 2건':a.auto==='관찰'?'기록 5건':'—')+'</td><td class="num">'+(a.id==='maba'?'1':'—')+'</td></tr>';
     });
-    if(!al.length&&!(ROLE==='ceo'&&G.by.__u))h+='<div class="line"><div class="tx hint">먼저 볼 것이 없습니다.</div></div>';
-    $('#first-body').innerHTML=h;$('#first-n').textContent='긴급 '+nr+' · 주의 '+na;
+    $('#autoBody').innerHTML=h||'<tr><td colspan="7" class="empty">담당 광고주가 없습니다.</td></tr>';
+    $('#auto-n').textContent=ROLES[state.role].scope+' · '+v.length+'곳';
   }
-  function renderTodo(){
-    var list=selClients(),G=groups(list),h='';
-    var kimBlock=$('#todo-kim');
-    var showKimFull=(VIEWER.p==='kim');
-    G.order.forEach(function(k){
-      if(k===VIEWER.p||k==='__u'||!TODO_SUM[k])return;
-      var t=TODO_SUM[k],parts=[];
-      if(t.apv)parts.push('승인 대기 '+t.apv);if(t.acct)parts.push('계정 확인 '+t.acct);if(t.exp)parts.push('실험 판정 '+t.exp);
-      if(!parts.length)return;
-      var open=(k==='kim'&&TODO_OPEN);
-      h+='<div class="grouphead person"><b>'+pname(k)+' 몫</b><span class="cnts">'+parts.join(' · ')+(t.soon?' · 가장 빠른 만료 '+t.soon+' 뒤':'')+'</span><span class="act"><button class="btn ghost sm" data-todoexp="'+k+'">'+(open?'접기 ▾':'펼치기 ▸')+'</button></span></div>';
+  function renderAutoC(id){
+    var a=byId[id];$('#ac-crumb').textContent=a.n;$('#ac-name').textContent=a.n;
+    $('#ac-sub').textContent='담당 '+PEOPLE[a.o].n+' · 계약 단계 '+a.stage+' · 지금 운영 방식 「'+a.auto+'」';
+    var steps=['키 연결','계정 확인','동의서','목표','하루 지출 상한','입찰 상한','운전자 표시','시험 계정 실증','팀장 확인'];
+    var doneN=a.auto!=='꺼짐'?9:(a.key==='ok'?5:2);
+    $('#ac-todo').innerHTML='<span class="hint" style="align-self:center">켜기까지 남은 일</span>'+steps.map(function(s,i){return '<span class="st '+(i<doneN?'done':(i===doneN?'now':''))+'">'+(i<doneN?'✓ ':'')+s+'</span>'}).join('');
+  }
+
+  /* ---------- 보고서 ---------- */
+  var REP={w:{title:'주간 보고서 · 9/22(월)~9/28(일)',made:'월요일 10:00 생성',rule:'열린 이슈가 없는 곳은 저절로 게시 · 있는 곳만 담당 검토'},m:{title:'월간 보고서 · 9월',made:'10/5(일) 10:00 생성 예정(구매가 늦게 잡히는 것을 반영)',rule:'AI 한 단락 포함 · 모두 담당 검토 뒤 게시'}};
+  var repState={};
+  function repStatus(a){
+    if(a.key==='none'||a.key==='reject')return 'no';
+    if(a.key==='unconf')return 'hold';
+    if(repState[state.rtab+a.id])return 'pub';
+    if(state.rtab==='m')return 'wait';
+    return openIss(a.id).length?'wait':'pub';
+  }
+  function renderReports(){
+    var r=REP[state.rtab],v=visAds(),h='',cnt={pub:0,wait:0,no:0,hold:0};
+    v.forEach(function(a){
+      var s=repStatus(a);cnt[s]++;
+      var pill={pub:'<span class="pill p-green">게시함</span>',wait:'<span class="pill p-amber">검토 대기</span>',no:'<span class="pill p-gray">만들 수 없음 · 키</span>',hold:'<span class="pill p-gray">보류 · 계정 확인 전</span>'}[s];
+      h+='<tr><td><a class="nm" data-client="'+a.id+'">'+esc(a.n)+'</a></td><td>'+esc(PEOPLE[a.o].n)+'</td><td>'+pill+'</td><td class="num">'+(a.spend==null?'—':won(a.spend*7))+'</td><td class="num">'+(a.vs==null?'—':(a.vs>0?'+':'')+Math.round(a.vs/3)+'%')+'</td><td>'+(s==='pub'?'<span class="ok">링크 올라감</span>':'<span class="hint">—</span>')+'</td><td>'+(s==='no'?'':'<button class="btn sm" data-preview="'+a.id+'" data-kind="'+state.rtab+'">'+(s==='wait'?'미리보기 · 검토':'보기')+'</button>')+'</td></tr>';
     });
-    $('#todo-others').innerHTML=h;
-    kimBlock.hidden=!(showKimFull||(TODO_OPEN&&G.order.indexOf('kim')>=0));
-    $('#todo-empty').hidden=!(ROLE==='admin');
+    $('#repBody').innerHTML=h||'<tr><td colspan="7" class="empty">담당 광고주가 없습니다.</td></tr>';
+    $('#rep-title').textContent=r.title;
+    $('#rep-n').textContent='게시함 '+cnt.pub+' · 검토 대기 '+cnt.wait+' · 보류 '+cnt.hold+' · 만들 수 없음 '+cnt.no;
+    $('#repbar').className='runbar';
+    $('#repbar').innerHTML='<span class="ok"></span>'+r.made+' · '+r.rule+' · 광고주가 보는 곳: 전산 광고주 공유 화면(링크) · 비용 칸은 공유 링크의 「비용 보이기」 설정을 따릅니다';
+    $('#bulkOk').hidden=!cnt.wait;
+    $$('[data-rtab]').forEach(function(b){b.classList.toggle('on',b.getAttribute('data-rtab')===state.rtab)});
   }
-  function renderDone(){
-    var list=selClients(),ids={};list.forEach(function(c){ids[c.id]=1;});
-    var G=groups(list),multiP=G.order.length>1,up=0,dn=0,ex=0;
-    list.forEach(function(c){up+=c.up;dn+=c.dn;ex+=c.ex;});
-    $('#done-title').textContent='③ 오늘 엔진이 한 일 — '+selLabel();
-    $('#done-sum').innerHTML='입찰 올림 <b>'+up+'</b> · 내림 <b>'+dn+'</b> · 반영 실패 <b class="ok">0</b> · 입찰 실험 <b>'+ex+'</b>건 진행';
-    $$('#s-today details.rowx[data-owner]').forEach(function(d){
-      var cid={'가나 식품':'gana','마바 뷰티':'maba','사아 펫':'saa','자차 스포츠':'zacha','카타 가전':'kata'}[d.querySelector('summary b').textContent];
-      d.hidden=!ids[cid];
-      var w=d.querySelector('summary .who');if(!w){w=document.createElement('span');w.className='who';w.textContent='김담당';d.querySelector('summary b').after(w);}
-      w.hidden=!multiP;});
-    var h='';
-    list.forEach(function(c){if(c.o==='kim')return;if(!(c.up||c.dn||c.m==='제안'))return;
-      var cnt=c.m==='제안'?'엔진은 제안만 — 승인 대기 '+c.tn+'건':('올림 '+c.up+' · 내림 '+c.dn);
-      h+='<details class="rowx"><summary><span class="car">▸</span><b>'+c.n+'</b>'+(multiP?'<span class="who">'+pname(c.o)+'</span>':'')+modePill(c.m)+'<span class="cnt num">'+cnt+'</span></summary><div style="padding:0 14px 12px" class="hint">건별 줄은 가나 식품과 같은 모양입니다(시안에서는 한 곳만 그렸습니다).</div></details>';});
-    $('#done-extra').innerHTML=h;
+  function paper(a,kind){
+    var m=kind==='m';
+    var rows=[['광고비','487,200원','452,900원','+8%'],['노출','86,400','81,200','+6%'],['클릭','2,210','2,050','+8%'],['클릭률','2.6%','2.5%','+0.1%p'],['클릭당 비용','220원','221원','−0%'],['구매','74','69','+7%'],['구매액','2,180,000원','1,960,000원','+11%'],['광고비 대비 매출','447%','433%','+14%p']];
+    var t='<table><thead><tr><th>지표</th><th>'+(m?'9월':'이번 주')+'</th><th>'+(m?'8월':'지난주')+'</th><th>변화</th></tr></thead><tbody>'+rows.map(function(r){return '<tr><td>'+r[0]+'</td><td class="num">'+r[1]+'</td><td class="num">'+r[2]+'</td><td class="num">'+r[3]+'</td></tr>'}).join('')+'</tbody></table>';
+    var bars='';[52,60,58,71,66,49,44].forEach(function(x){bars+='<i style="height:'+x+'%"></i>'});
+    return '<div class="paper"><h2>'+esc(a.n)+' · 네이버 광고 '+(m?'월간 보고서 · 2026년 9월':'주간 보고서 · 9/22(월) ~ 9/28(일)')+'</h2>'+
+      '<div class="meta">메타아이앤씨 · 담당 '+esc(PEOPLE[a.o].n)+' · 자료 기준 '+(m?'10/5 10:00':'9/29 10:00')+'</div>'+
+      (m?'':'<span class="prov">잠정 — 구매는 최대 2주까지 늦게 잡혀 다음 주 숫자가 조금 달라질 수 있습니다</span>')+
+      '<h3>한눈에</h3><div class="tblwrap">'+t+'</div>'+
+      '<h3>하루별 광고비</h3><div class="sbars" aria-hidden="true">'+bars+'</div>'+
+      '<h3>'+(m?'이번 달':'이번 주')+' 있었던 일</h3><ul><li>9/24 잔액이 부족해 광고가 약 3시간 멈췄습니다 → 충전 뒤 다시 나감</li><li>9/26 검수에서 반려된 광고 2개를 고쳐 다시 올렸습니다</li></ul>'+
+      (m?'<h3>요약</h3><div class="ai"><span class="tag">AI 요약 · 담당 검토함</span>9월은 광고비가 8% 늘었고 구매액은 11% 늘어 광고비 대비 매출이 447%로 올랐습니다. 가장 많이 팔린 캠페인은 「'+esc(a.n)+'_쇼핑」입니다. (숫자는 표의 값만 쓰고 새로 만들지 않습니다)</div>':'')+
+      '<h3>담당 한마디</h3><p class="sub">'+(m?'10월에는 추석 기획전 상품 광고를 늘릴 예정입니다.':'(선택 — 비워 두면 이 칸이 보이지 않습니다)')+'</p>'+
+      '<p class="hint" style="margin-top:12px">내부 메모 · 예외 처리 · 비즈머니 잔액은 광고주 보고서에 싣지 않습니다.</p></div>';
   }
-  function renderGoal(){
-    var list=selClients(),ids={};list.forEach(function(c){ids[c.id]=1;});
-    var multiP=groups(list).order.length>1;
-    $$('#s-today .goalrow[data-owner]').forEach(function(g){var cid=g.querySelector('[data-client]').getAttribute('data-client');g.hidden=!ids[cid];
-      var w=g.querySelector('.who');if(!w){w=document.createElement('span');w.className='who';w.textContent='김담당';g.querySelector('a.nm').after(w);}w.hidden=!multiP;});
-    var h='';list.filter(function(c){return c.o!=='kim'&&c.g!=null;}).sort(function(a,b){return a.g-b.g;}).forEach(function(c){
-      h+='<div class="goalrow"><a class="nm" data-client="'+c.id+'">'+c.n+'</a>'+(multiP?'<span class="who">'+pname(c.o)+'</span>':'')+'<div class="gb"><i'+(c.gc?' class="'+c.gc+'"':'')+' style="width:'+c.g+'%"></i></div><span class="num">'+c.gt+'</span></div>';});
-    $('#goal-extra').innerHTML=h;
+
+  /* ---------- 설정: 점검 기준 ---------- */
+  var TH=[
+    ['키 없음','광고센터에 키가 없음 → 매주 월요일 담당에게 「키 받을 곳」 목록','⚪ 점검 불가','2차'],
+    ['키 거절','네이버가 키를 거절함 (모든 광고주가 한꺼번에 거절이면 🔴 전체 알림)','⚪ + 🟡','2차'],
+    ['비즈머니','잔액 ÷ 최근 7일 하루 평균 광고비 — 1일 미만 🔴 · 3일 미만 🟡','🔴 / 🟡','2차'],
+    ['켜져 있는데 안 나감','켜진 캠페인이 있는데 어제 노출 0 (최근 7일엔 노출이 있었던 곳만)','🔴 전부 / 🟡 일부','2차'],
+    ['광고비 급변','어제 광고비가 같은 요일 4주 평균의 2배 이상 또는 절반 이하 · 하루 1만원 미만은 제외','🟡','2차'],
+    ['계약 단계와 광고비','「환불중」·「계약 만료」인데 광고비 발생 / 「진행중」인데 3일째 0원','🟡','2차'],
+    ['캠페인 기간 곧 끝남','3일 안에 끝나는 캠페인','ⓘ 알아 두기','2차'],
+    ['하루 예산 일찍 소진','어제 광고비 ≥ 하루 예산의 95% · 3일 연속','🟡','3차'],
+    ['검수 반려 · 보류','광고·키워드 반려 즉시 · 보류 2일 넘으면','🟡','3차'],
+    ['그룹·광고가 멈춤','켜 둔 광고그룹·광고가 네이버 사유(잔액·검수·연동 오류)로 멈춤','🟡','3차'],
+    ['구매 0 · 매출 급락','최근 7일 기준 (구매가 늦게 잡힘) — 구매 추적 설치 확인 뒤 켬','🟡','0단계 확인 뒤']
+  ];
+  function renderTh(){
+    var ed=state.role==='park';
+    $('#thBody').innerHTML=TH.map(function(r,i){return '<tr><td><b>'+r[0]+'</b><span class="ph">'+r[3]+'</span></td><td class="wrap">'+r[1]+'</td><td>'+r[2]+'</td><td><input type="checkbox" id="th'+i+'" aria-label="'+r[0]+' 켬" '+(r[3]==='0단계 확인 뒤'?'':'checked')+(ed?'':' disabled')+'></td></tr>'}).join('');
+    $('#set-ro').textContent=ed?'관리자라서 고칠 수 있습니다. 고친 값·사람·시각이 기록됩니다.':'대표·팀장은 보기만 하고, 고치기는 관리자가 합니다(고친 기록이 남습니다).';
+    ['t1','t2'].forEach(function(id){$('#'+id).disabled=!ed});
   }
-  var CH_OUT=false;
-  function renderChanges(){
-    var ids={};selClients().forEach(function(c){ids[c.id]=1;});var any=0;
-    $$('#ch-body tr[data-cid]').forEach(function(tr){var v=!!ids[tr.getAttribute('data-cid')]&&(!CH_OUT||tr.hasAttribute('data-outside'));tr.hidden=!v;if(v)any=1;});
-    $('#ch-empty').hidden=!!any;
-    $('#f-outside').classList.toggle('on',CH_OUT);
-    var no=$$('#ch-body tr[data-outside][data-cid]').filter(function(tr){return ids[tr.getAttribute('data-cid')];}).length;
-    $('#out-btn').textContent='바깥 변경 · 키 오류 모음 '+no+'건 →';$('#out-btn').hidden=!no;
-  }
-  function renderWelcome(){
-    var l=selClients(),nk=l.filter(function(c){return c.tags.indexOf('nokey')>=0;}).length,sb=l.filter(function(c){return c.sub===VIEWER.p;}).length;
-    var b=$('#welcomeBtn'),none=$('#welcomeNone');
-    if(!l.length){b.hidden=true;none.hidden=false;return;}
-    b.hidden=false;none.hidden=true;
-    var head=(ROLE==='staff'||ROLE==='admin'||SEL==='me')?'내 광고주 '+l.length+'곳'+(sb?'(서브 '+sb+')':''):selLabel()+' '+l.length+'곳';
-    b.textContent=head+' 중 키 없는 곳 '+nk+'곳 → 키 등록 시작';
-  }
-  function renderPeople(){
-    var h='';
-    Object.keys(PEOPLE).forEach(function(k){var P=PEOPLE[k];
-      var vis=(ROLE==='ceo'||ROLE==='admin')||(ROLE==='lead'&&under(P.t,VIEWER.team));
-      if(!vis)return;
-      var n=CL.filter(function(c){return c.o===k;}).length;
-      h+='<tr><td>'+P.n+(P.gone?' <span class="pill p-gray">퇴사</span>':'')+'</td><td>'+TEAMS[P.t].n+'</td><td>'+(P.lead?'팀장':'—')+'</td><td class="num">'+(P.gone?n+'곳 → 담당 공백':n+'곳')+'</td></tr>';});
-    $('#people-body').innerHTML=h;
-  }
+
+  /* ---------- 🔔 ---------- */
   function renderDrawer(){
-    var r=0,a=0,any=0;
-    $$('#drawer .db .line[data-viewers]').forEach(function(l){var v=l.getAttribute('data-viewers').split(' ').indexOf(VID)>=0;l.hidden=!v;if(v){any=1;if(!l.classList.contains('ack')){if(l.getAttribute('data-lv')==='r')r++;else a++;}}
-      $$('[data-owner-tag]',l).forEach(function(w){w.hidden=(ROLE==='staff');});});
-    $('#drawer-empty').hidden=!!any;
-    $('#dtab-r').textContent='긴급 '+r;$('#dtab-a').textContent='주의 '+a;
-    var bell=$('.bell');var cr=bell.querySelector('.c.r'),ca=bell.querySelector('.c.a');cr.textContent=r;ca.textContent=a;cr.hidden=!r;ca.hidden=!a;
-    bell.setAttribute('aria-label','알림 — 긴급 '+r+'건, 주의 '+a+'건');
-  }
-  function killScope(){
-    var m=maxClients(),n=0;m.forEach(function(c){n+=c.up;});
-    var nm=ROLE==='ceo'?'전체':(VIEWER.team==='hq'?'우리 본부':'우리 팀');
-    var tn=ROLE==='ceo'?'광고주 전체':TEAMS[VIEWER.team].n+(VIEWER.team==='hq'?'(관리 1팀·2팀 포함)':'');
-    return {label:'⛔ '+nm+' 비상 정지',title:'⛔ '+nm+' 비상 정지',tn:tn,m:m.length,n:n,stop:(ROLE==='ceo'?'전체':TEAMS[VIEWER.team].n)+' 정지 중'};
-  }
-  function renderKill(){
-    if(!(ROLE==='lead'||ROLE==='ceo'))return;
-    var k=killScope();$('#killLabel').textContent=k.label;$('#mka-t').textContent=k.title;
-    $('#mka-d').textContent=k.tn+' '+k.m+'곳의 엔진을 멈춥니다.'+(ROLE==='ceo'?'':' 보는 범위를 「나만」으로 바꿔도 이 버튼은 '+k.tn+' 전체를 멈춥니다. 다른 팀 광고주는 그대로 돕니다.')+' 방식 하나를 꼭 고르고 사유를 적어야 정지됩니다.';
-    $('#ka-n').textContent=k.n+'건';$('#ka-m').textContent=k.m+'곳';$('#stopTitle').textContent=k.stop;
-  }
-  function renderStops(){
-    $$('[data-cid-max]').forEach(function(el){el.hidden=!canSee(CBY[el.getAttribute('data-cid-max')]);});
-  }
-  function applyScope(){
-    renderScopeCtl();
-    var bh=bandHtml();$$('.scopeband').forEach(function(b){b.innerHTML=bh;b.hidden=!bh;});
-    renderWelcome();renderFirst();renderTodo();renderDone();renderGoal();renderChanges();renderClients();renderDrawer();renderKill();renderStops();renderPeople();
+    var o=visibleOwners();
+    var mine=ISS.filter(function(i){return o.indexOf(byId[i.c].o)>=0&&(i.st==='new'||i.st==='work')});
+    var h=mine.map(function(i){return '<div class="line"><span class="sig '+(i.lv==='r'?'r':'y')+'"></span><div class="tx"><b>'+esc(byId[i.c].n)+'</b> — '+esc(i.cause)+'<span class="w">'+(i.lv==='r'?'긴급 · 담당+팀장+대표에게 바로':'주의 · 팀장은 09:30 묶음')+' · 한 사람이 확인해도 다른 사람의 🔔는 안 지워집니다</span></div></div>'}).join('');
+    $('#drawerBody').innerHTML=h||'<div class="empty">나에게 온 알림이 없습니다.</div>';
   }
 
-  function applyRole(v){
-    if(!VIEWERS[v])v='kim';
-    VID=v;VIEWER=VIEWERS[v];ROLE=VIEWER.role;
-    SEL=(ROLE==='lead'||ROLE==='ceo')?'all':'me';EXP={};TODO_OPEN=false;
-    $$('[data-roles]').forEach(function(el){el.hidden=el.getAttribute('data-roles').split(' ').indexOf(ROLE)<0;});
-    $$('[data-viewers]').forEach(function(el){if(el.closest('#drawer'))return;el.hidden=el.getAttribute('data-viewers').split(' ').indexOf(v)<0;});
-    $$('.rolebar [data-role]').forEach(function(b){b.classList.toggle('on',b.getAttribute('data-role')===v);});
-    $('#me').innerHTML='<b>'+VIEWER.name+'</b>'+(VIEWER.label?' · '+VIEWER.label:'');
-    var edit=(ROLE==='admin');
-    $('#ro-badge').hidden=edit;
-    $$('#s-settings .edit').forEach(function(e){e.disabled=!edit;});
-    $('#set-ro-text').textContent=edit?'관리자는 여기서 고칠 수 있습니다(사람·팀과 광고주 담당은 전산에서만 바뀝니다).':'대표·팀장은 보기만 하고, 고치기는 관리자가 합니다.';
-    var none=(ROLE==='none');
-    $$('.menu button').forEach(function(b){if(none)b.hidden=true;else if(!b.hasAttribute('data-roles'))b.hidden=false;});
-    $('.bell').hidden=none;$('#engineBtn').hidden=none;
-    applyScope();
-    if(none)go('noaccess');
-    else if(ROLE==='staff'&&$('#s-settings').classList.contains('on'))go('today');
-    else if($('#s-noaccess').classList.contains('on')||$('#s-blocked').classList.contains('on'))go('today');
-    try{localStorage.setItem('naver-auto-mock-role',v);}catch(e){}
+  /* ---------- 역할 ---------- */
+  function applyRole(){
+    var R=ROLES[state.role];
+    $('#me').innerHTML='<b>'+R.name+'</b> · '+R.label;
+    $('#scopeTxt').textContent='보는 범위 · '+R.scope;
+    $$('[data-roles]').forEach(function(el){el.hidden=el.getAttribute('data-roles').split(' ').indexOf(state.role)<0});
+    $$('[data-role]').forEach(function(b){b.classList.toggle('on',b.getAttribute('data-role')===state.role)});
+    renderAll();
   }
+  function renderAll(){renderRun();renderKpis();renderIssues();renderTable();renderAuto();renderReports();renderTh();renderDrawer();if(state.client)renderClient()}
 
-  /* 화면 이동 */
-  var lastClient='gana';
-  function go(id){
-    if(id==='client-back'){openClient(lastClient,'connect');return;}
-    $$('.screen').forEach(function(s){s.classList.toggle('on',s.id==='s-'+id);});
-    var menuId=(id==='changes')?'today':(id==='client'||id==='public')?'clients':id;
-    $$('.menu button').forEach(function(b){b.classList.toggle('on',b.getAttribute('data-go')===menuId);});
+  /* ---------- 화면 전환 ---------- */
+  function go(s){
+    $$('.screen').forEach(function(x){x.classList.remove('on')});
+    $('#s-'+s).classList.add('on');
+    var menu={watch:'watch',client:'watch',auto:'auto',autoc:'auto',reports:'reports',settings:'settings'}[s];
+    $$('.menu button').forEach(function(b){b.classList.toggle('on',b.getAttribute('data-go')===menu)});
     window.scrollTo(0,0);
   }
-  function openClient(cid,tab){
-    var c=CBY[cid];
-    if(!c||!canSee(c)){go('blocked');return;}
-    var tpl=(cid==='aja')?'aja':'gana';
-    if(cid!=='gana'&&cid!=='aja')toast('시안 — 광고주 한 장은 「가나 식품」 예시 내용을 그대로 보여 줍니다(이름·담당·띠만 바뀜)');
-    lastClient=cid;
-    var sec=$('#s-client');sec.setAttribute('data-c',tpl);
-    $('#c-name').textContent=c.n;$('#c-crumb').textContent=c.n;
-    $$('.only-gana',sec).forEach(function(e){e.hidden=tpl!=='gana';});
-    $$('.only-aja',sec).forEach(function(e){e.hidden=tpl!=='aja';});
-    var p=VIEWER.p,own=(c.o===p),band=$('#cband');
-    $('#c-owner').textContent=c.o===null?'담당 미정':c.o==='oh'?'담당 공백(오담당 퇴사)':'담당 '+pname(c.o)+(c.sub?' · 서브 '+pname(c.sub):'');
-    $('#c-crumb-owner').textContent=(!own&&c.sub!==p)?(c.o===null?'담당 미정':pname(c.o))+' › ':'';
-    band.className='cband';band.hidden=false;
-    if(c.sub===p)band.innerHTML='<b>서브 담당</b> · 메인 '+pname(c.o)+' — 주의 알림과 할 일은 메인에게 갑니다. 보기·승인·되돌리기·멈추기는 메인과 같습니다.';
-    else if(c.o===null){band.classList.add('warn');band.innerHTML='<b>담당 미정</b> — 전산 가망 수정에서 관리 담당을 정해 주세요. 정해지기 전에는 자동을 켤 수 없습니다(대표만 봅니다).';}
-    else if(c.o==='oh'){band.classList.add('warn');band.innerHTML='<b>담당 공백</b> — 오담당 퇴사 · 관리 2팀 팀장이 대신 보고 승인합니다. 운영 방식을 올리거나 자동을 켤 수 없습니다.';}
-    else if(!own){var as=ROLE==='ceo'?'대표로':(VIEWER.team==='hq'?'상위 팀장으로':'팀장으로');band.innerHTML='<b>'+pname(c.o)+' 님 담당</b> · '+TEAMS[teamOf(c.o)].n+' — '+as+' 보는 중입니다. 여기서 바꾸면 바뀐 기록에 '+VIEWER.name+' 이름으로 남습니다.';}
-    else band.hidden=true;
-    go('client');
-    ctab(tab||(tpl==='aja'?'connect':'now'));
-  }
-  function ctab(t){
-    $$('[data-ctab]').forEach(function(b){b.classList.toggle('on',b.getAttribute('data-ctab')===t);});
-    $$('#s-client .pane').forEach(function(p){p.classList.toggle('on',p.id==='p-'+t);});
-  }
-  function sub(s){
-    $$('#subchips .chip').forEach(function(b){b.classList.toggle('on',b.getAttribute('data-sub')===s);});
-    ['prod','log','exp'].forEach(function(k){$('#sub-'+k).hidden=(k!==s);});
-  }
-  function spane(s){
-    $$('.toc button').forEach(function(b){b.classList.toggle('on',b.getAttribute('data-spane')===s);});
-    $$('.spane').forEach(function(p){p.classList.toggle('on',p.id==='sp-'+s);});
-  }
-  function filterClients(f){
-    $$('#s-clients [data-f]').forEach(function(b){b.classList.toggle('on',b.getAttribute('data-f')===f);});
-    $$('#cl-body tr[data-client]').forEach(function(tr){var tags=(tr.getAttribute('data-tags')||'').split(' ');tr.hidden=!!f&&tags.indexOf(f)<0;});
-  }
-  var clF=null;
+  function toast(t){var el=$('#toast');el.textContent=t;el.classList.add('on');clearTimeout(toast._t);toast._t=setTimeout(function(){el.classList.remove('on')},2600)}
+  function openModal(id){$('#'+id).classList.add('on')}
+  function closeModals(){$$('.modal').forEach(function(m){m.classList.remove('on')})}
 
-  /* 창·서랍 */
-  function openModal(id){var m=$('#'+id);m.classList.add('on');var f=m.querySelector('input,button');if(f)f.focus();}
-  function closeAll(){$$('.modal').forEach(function(m){m.classList.remove('on');});closeDrawer();}
-  function openDrawer(){$('#drawer').classList.add('on');$('#drawer').setAttribute('aria-hidden','false');$('#shade').classList.add('on');}
-  function closeDrawer(){$('#drawer').classList.remove('on');$('#drawer').setAttribute('aria-hidden','true');$('#shade').classList.remove('on');}
-
-  function wireKill(prefix,btnId){
-    var b=$('#'+btnId),why=$('#'+prefix+'-why');
-    function upd(){var r=document.querySelector('input[name="'+prefix+'"]:checked');b.disabled=!(r&&why.value.trim());if(prefix==='ka')$('#ka-prev').hidden=!(r&&r.value==='back');}
-    $$('input[name="'+prefix+'"]').forEach(function(i){i.addEventListener('change',upd);});
-    why.addEventListener('input',upd);
-    return upd;
-  }
-  var updKa=wireKill('ka','ka-go'), updKo=wireKill('ko','ko-go');
-  $('#ka-go').addEventListener('click',function(){
-    var r=document.querySelector('input[name="ka"]:checked');
-    $('#stopinfo').textContent=(r.value==='back'?'멈추고 원래 값으로':'멈추기만')+' · 사유: '+$('#ka-why').value.trim()+' · '+VIEWER.name+' · 방금';
-    $('#stopbar').hidden=false;$('#top').classList.add('stopped');closeAll();toast('시안 — 전체 엔진을 멈췄습니다(실제로는 아무것도 멈추지 않았습니다)');
-  });
-  $('#ko-go').addEventListener('click',function(){closeAll();toast('시안 — '+$('#ko-who').textContent+'만 멈췄습니다(사유 기록)');});
-
+  var curK=null;
   document.addEventListener('click',function(e){
-    var t=e.target;
-    var role=t.closest('.rolebar [data-role]');if(role){applyRole(role.getAttribute('data-role'));return;}
-    var dm=t.closest('[data-demo]');if(dm){if(ROLE==='none'){go('noaccess');return;}if(dm.getAttribute('data-demo')==='other')openClient('paha');else go('blocked');return;}
-    if(t.closest('#scopeBtn')){var pp=$('#scopePop');pp.hidden=!pp.hidden;$('#scopeBtn').setAttribute('aria-expanded',String(!pp.hidden));if(!pp.hidden){var f0=pp.querySelector('button.on')||pp.querySelector('button');if(f0)f0.focus();}return;}
-    var sc=t.closest('[data-scope]');if(sc){e.preventDefault();setScope(sc.getAttribute('data-scope'));return;}
-    if(!t.closest('#scope')){var pp2=$('#scopePop');if(pp2&&!pp2.hidden){pp2.hidden=true;$('#scopeBtn').setAttribute('aria-expanded','false');}}
-    var gx=t.closest('[data-gexp]');if(gx){var gk=gx.getAttribute('data-gexp');EXP[gk]=!EXP[gk];renderFirst();return;}
-    var tx2=t.closest('[data-todoexp]');if(tx2){if(tx2.getAttribute('data-todoexp')==='kim'){TODO_OPEN=!TODO_OPEN;renderTodo();}else toast('시안 — 펼치면 그 사람 화면과 같은 줄이 나옵니다(팀장도 승인할 수 있습니다)');return;}
-    if(t.closest('[data-guide]')){$('#guide').classList.add('on');return;}
-    if(t.closest('[data-close-guide]')||t.id==='guide'){$('#guide').classList.remove('on');return;}
-    if(t.closest('[data-close-welcome]')){$('#welcome').hidden=true;try{localStorage.setItem('naver-auto-mock-welcome','0')}catch(err){}return;}
-    if(t.closest('#engineBtn')){var c=$('#checks');c.classList.toggle('on');$('#engineBtn').setAttribute('aria-expanded',c.classList.contains('on'));return;}
-    if(t.closest('[data-drawer]')){openDrawer();return;}
-    if(t.closest('[data-close-drawer]')||t.id==='shade'){closeDrawer();return;}
-    if(t.closest('[data-close]')||t.classList.contains('modal')){closeAll();}
-    var stopEl=t.closest('[data-stop]');
-    var op=t.closest('[data-open]');
-    if(op){e.preventDefault();e.stopPropagation();
-      var id=op.getAttribute('data-open');
-      if(id==='m-killone'){$('#ko-who').textContent=op.hasAttribute('data-who-self')?$('#c-name').textContent:(op.getAttribute('data-who')||'가나 식품');$$('input[name="ko"]').forEach(function(i){i.checked=false});$('#ko-why').value='';updKo();}
-      if(id==='m-killall'){$$('input[name="ka"]').forEach(function(i){i.checked=false});$('#ka-why').value='';updKa();}
-      openModal(id);return;}
-    if(t.closest('[data-restart]')){$('#stopbar').hidden=true;$('#top').classList.remove('stopped');toast('시안 — 다시 켰습니다(기록에 남음)');return;}
-    var ctg=t.closest('[data-ctabgo]');if(ctg){ctab(ctg.getAttribute('data-ctabgo'));if(ctg.getAttribute('data-sub'))sub(ctg.getAttribute('data-sub'));return;}
-    var cl=t.closest('[data-client]');
-    if(cl && !stopEl){e.preventDefault();openClient(cl.getAttribute('data-client'),cl.getAttribute('data-tab'));if(cl.getAttribute('data-tab')==='items')sub('prod');return;}
-    var tb=t.closest('[data-ctab]');if(tb){ctab(tb.getAttribute('data-ctab'));return;}
-    var stt=t.closest('.todo .st');if(stt){if(stt.getAttribute('data-tab'))ctab(stt.getAttribute('data-tab'));if(stt.getAttribute('data-go')){go('settings');spane(stt.getAttribute('data-spane'));}return;}
-    var sb=t.closest('#subchips [data-sub]');if(sb){sub(sb.getAttribute('data-sub'));return;}
-    var sp=t.closest('.toc [data-spane]');if(sp){spane(sp.getAttribute('data-spane'));return;}
-    var g=t.closest('[data-go]');
-    if(g){e.preventDefault();var id2=g.getAttribute('data-go');go(id2);
-      if(g.getAttribute('data-spane'))spane(g.getAttribute('data-spane'));
-      if(id2==='clients'){clF=g.getAttribute('data-filter')||null;filterClients(clF);}
-      if(id2==='changes'){CH_OUT=(g.getAttribute('data-filter')==='outside');renderChanges();}
-      return;}
-    var f=t.closest('#s-clients [data-f]');if(f){var v=f.getAttribute('data-f');clF=(clF===v)?null:v;filterClients(clF);return;}
-    if(t.closest('#f-outside')){CH_OUT=!CH_OUT;renderChanges();return;}
-    if(t.closest('#f-fail')){t.closest('#f-fail').classList.toggle('on');toast('시안 — 오늘은 반영 안 된 변경이 없습니다');return;}
-    var ap=t.closest('[data-approve]');
-    if(ap){var row=ap.closest('.line,.grouphead');var u=document.createElement('div');u.className='undo';u.innerHTML='승인했습니다 <button class="btn sm">승인 취소</button><span class="hint">10초 안에 취소할 수 있습니다</span>';row.replaceWith(u);u.querySelector('button').addEventListener('click',function(){u.replaceWith(row);toast('시안 — 승인을 취소했습니다');});setTimeout(function(){if(u.isConnected){u.innerHTML='<span class="ok">✓</span> 승인했습니다 · 다음 확인 때 네이버에 적용합니다';}},10000);return;}
-    var aa=t.closest('[data-approve-all]');
-    if(aa){var head=aa.closest('.grouphead');var n=head.nextElementSibling;while(n&&n.hasAttribute('data-apv')){var nx=n.nextElementSibling;var btn=n.querySelector('[data-approve]');if(btn)btn.click();n=nx;}toast('시안 — 이 묶음의 승인 가능한 건을 모두 승인했습니다(「다시 확인」 건은 빼고)');return;}
-    var ack=t.closest('[data-ack]');if(ack){var ln=ack.closest('.line');ln.classList.add('ack');ack.remove();toast('시안 — 확인 처리했습니다');return;}
-    var ch=t.closest('.chip');if(ch&&!ch.classList.contains('dim')&&!ch.closest('#s-clients')&&!ch.closest('#subchips')&&ch.parentNode){$$('.chip',ch.parentNode).forEach(function(x){if(x!==ch&&!x.id)x.classList.remove('on')});if(!ch.id)ch.classList.add('on');}
-    var gt=t.closest('#gtypes .gt');if(gt){if(gt.classList.contains('lock'))return;$$('#gtypes .gt').forEach(function(x){x.classList.toggle('on',x===gt)});return;}
-    var md=t.closest('.modes button');if(md){if(md.classList.contains('lock')){toast('시안 — 켜기까지 남은 일을 먼저 마쳐야 자동을 켤 수 있습니다');return;}$$('.modes button').forEach(function(x){if(!x.hidden)x.classList.toggle('on',x===md)});return;}
-    var tt=t.closest('[data-toast]');if(tt){toast(tt.getAttribute('data-toast'));}
+    var t=e.target.closest('button,a,tr.click');if(!t)return;
+    if(t.hasAttribute('data-role')){state.role=t.getAttribute('data-role');applyRole();return}
+    if(t.getAttribute('data-demo')==='failed'){state.failed=!state.failed;t.setAttribute('aria-pressed',state.failed);t.classList.toggle('on',state.failed);renderAll();toast(state.failed?'시안 — 아침 점검이 실패한 날의 모습입니다':'시안 — 점검이 정상인 날로 돌아왔습니다');return}
+    if(t.hasAttribute('data-go')){go(t.getAttribute('data-go'));return}
+    if(t.hasAttribute('data-f')){state.f=t.getAttribute('data-f');renderKpis();renderTable();return}
+    if(t.hasAttribute('data-client')){state.client=t.getAttribute('data-client');renderClient();$$('[data-ctab]').forEach(function(b,i){b.classList.toggle('on',i===0)});$$('#s-client .pane').forEach(function(p,i){p.classList.toggle('on',i===0)});go('client');return}
+    if(t.hasAttribute('data-autoc')){renderAutoC(t.getAttribute('data-autoc'));state.client=t.getAttribute('data-autoc');go('autoc');return}
+    if(t.hasAttribute('data-goauto')){renderAutoC(state.client);go('autoc');return}
+    if(t.hasAttribute('data-gowatch')){renderClient();go('client');return}
+    if(t.hasAttribute('data-ctab')){var n=t.getAttribute('data-ctab');$$('[data-ctab]').forEach(function(b){b.classList.toggle('on',b===t)});$$('#s-client .pane').forEach(function(p){p.classList.toggle('on',p.id==='p-'+n)});return}
+    if(t.hasAttribute('data-atab')){var an=t.getAttribute('data-atab');$$('[data-atab]').forEach(function(b){b.classList.toggle('on',b===t)});$$('#s-autoc .pane').forEach(function(p){p.classList.toggle('on',p.id==='p-'+an)});return}
+    if(t.hasAttribute('data-rtab')){state.rtab=t.getAttribute('data-rtab');renderReports();return}
+    if(t.hasAttribute('data-sp')){var sp=t.getAttribute('data-sp');$$('[data-sp]').forEach(function(b){b.classList.toggle('on',b===t)});$$('.spane').forEach(function(p){p.classList.toggle('on',p.id==='sp-'+sp)});return}
+    if(t.hasAttribute('data-ia')){
+      var k=+t.getAttribute('data-k'),i=ISS.filter(function(x){return x.k===k})[0],act=t.getAttribute('data-ia');curK=k;
+      if(act==='work'){i.st='work';i.who=ROLES[state.role].name+' 지금';renderAll();toast('시안 — 「확인 중」으로 바꿨습니다(누가·언제 기록)');return}
+      if(act==='fixed'){i.st='fixed';i.who=ROLES[state.role].name+' 지금';renderAll();toast('시안 — 해결로 닫았습니다 · 내일 점검에서 그대로면 다시 열립니다');return}
+      if(act==='memo'){$('#mm-sub').textContent=byId[i.c].n+' · '+i.cause;$('#mm-text').value='';openModal('m-memo');return}
+      if(act==='except'){
+        var urgent=i.lv==='r',can=!urgent||canExceptUrgent();
+        $('#mx-sub').textContent=byId[i.c].n+' · '+i.cause;
+        $('#mx-days').innerHTML=(urgent?['1일','3일','7일']:['7일','14일','30일']).map(function(d){return '<option>'+d+'</option>'}).join('');
+        $('#mx-rule').textContent=urgent?'긴급 이슈는 팀장 이상만, 최대 7일까지 예외로 둘 수 있습니다. 기간이 끝나면 저절로 다시 봅니다.':'주의 이슈는 담당이 최대 30일까지 예외로 둘 수 있습니다. 기간이 끝나면 저절로 다시 봅니다. 예외 목록은 팀장 주간 묶음에 올라갑니다.';
+        $('#mx-ok').disabled=!can;$('#mx-ok').textContent=can?'예외로 두기':'팀장 이상만 가능';
+        openModal('m-except');return}
+    }
+    if(t.id==='mx-ok'){var ii=ISS.filter(function(x){return x.k===curK})[0];if(!$('#mx-why').value.trim()){toast('사유를 적어 주세요');return}ii.st='except';ii.who=ROLES[state.role].name+' · '+$('#mx-days').value;ii.memo.push(ROLES[state.role].name+' 지금 · '+$('#mx-why').value.trim());closeModals();renderAll();toast('시안 — 예외로 두었습니다(기간이 끝나면 다시 봅니다)');return}
+    if(t.id==='mm-ok'){var im=ISS.filter(function(x){return x.k===curK})[0];var tx=$('#mm-text').value.trim();if(tx)im.memo.push(ROLES[state.role].name+' 지금 · '+tx);closeModals();renderAll();toast('시안 — 메모를 남겼습니다');return}
+    if(t.hasAttribute('data-preview')){var pa=byId[t.getAttribute('data-preview')],kd=t.getAttribute('data-kind');$('#rp-t').textContent=pa.n+' · '+(kd==='m'?'월간':'주간')+' 보고서';$('#rp-body').innerHTML=paper(pa,kd);$('#rp-ok').setAttribute('data-id',pa.id);$('#rp-ok').setAttribute('data-kind',kd);$('#rp-ok').hidden=repState[kd+pa.id]||(kd==='w'&&!openIss(pa.id).length);openModal('m-report');return}
+    if(t.id==='rp-ok'){repState[t.getAttribute('data-kind')+t.getAttribute('data-id')]=1;closeModals();renderReports();toast('시안 — 게시했습니다 · 전산 광고주 공유 화면에 링크가 올라갑니다');return}
+    if(t.id==='bulkOk'){visAds().forEach(function(a){if(repStatus(a)==='wait')repState[state.rtab+a.id]=1});renderReports();toast('시안 — 검토 대기를 한 번에 게시했습니다');return}
+    if(t.id==='doneToggle'){var dl=$('#doneList');dl.hidden=!dl.hidden;t.setAttribute('aria-expanded',!dl.hidden);return}
+    if(t.hasAttribute('data-drawer')){renderDrawer();$('#drawer').classList.add('on');$('#shade').classList.add('on');return}
+    if(t.hasAttribute('data-close-drawer')){$('#drawer').classList.remove('on');$('#shade').classList.remove('on');return}
+    if(t.hasAttribute('data-close-modal')){closeModals();return}
+    if(t.hasAttribute('data-guide')||t.hasAttribute('data-guide-to')){openGuide(t.getAttribute('data-guide-to'));return}
+    if(t.hasAttribute('data-close-guide')){$('#guide').classList.remove('on');return}
+    if(t.hasAttribute('data-copy-dec')){copyDec();return}
+    if(t.hasAttribute('data-toast')){toast(t.getAttribute('data-toast'));return}
   });
-  document.addEventListener('keydown',function(e){if(e.key==='Escape'){closeAll();$('#guide').classList.remove('on');var pp=$('#scopePop');if(pp&&!pp.hidden){pp.hidden=true;$('#scopeBtn').setAttribute('aria-expanded','false');$('#scopeBtn').focus();}}});
+  $('#shade').addEventListener('click',function(){$('#drawer').classList.remove('on');$('#shade').classList.remove('on')});
+  $('#q').addEventListener('input',function(e){state.q=e.target.value.trim();renderTable()});
+  document.addEventListener('keydown',function(e){if(e.key==='Escape'){closeModals();$('#guide').classList.remove('on');$('#drawer').classList.remove('on');$('#shade').classList.remove('on')}});
+  $('#guide').addEventListener('click',function(e){if(e.target.id==='guide')$('#guide').classList.remove('on')});
 
-  /* 목표·한도 저장 */
-  var capEl=$('#g-cap'),dayEl=$('#g-day'),saveB=$('#g-save'),hint=$('#g-save-hint');
-  function capState(){var v=parseInt(capEl.value.replace(/[^0-9]/g,''),10);var d=dayEl.value.trim();
-    if(!v||!d){saveB.disabled=true;saveB.textContent='저장';hint.textContent='입찰 상한과 하루 지출 상한이 비어 있으면 저장할 수 없습니다';return;}
-    saveB.disabled=false;
-    if(v>700){saveB.textContent='팀장에게 승인 요청';hint.textContent='상한을 올리면 저장 대신 팀장 승인 요청이 됩니다';}
-    else{saveB.textContent='저장';hint.textContent=v<560?'크게 낮추면 저장 전에 영향을 먼저 보여 드립니다':'';}
+  function openGuide(to){$('#guide').classList.add('on');if(to){var el=document.getElementById(to);if(el)el.scrollIntoView()}else{$('#guide').scrollTop=0}}
+  function copyDec(){
+    var out=[];$$('.dec').forEach(function(d){var c=d.querySelector('input:checked');if(c)out.push(d.getAttribute('data-id')+' '+c.value)});
+    var txt='네이버 관제 시안 v6 — 대표 결정: '+out.join(' · ');
+    $('#decOut').value=txt;
+    try{navigator.clipboard.writeText(txt).then(function(){toast('복사했습니다 — 대화창에 붙여 넣어 주세요')},function(){toast('아래 칸을 길게 눌러 복사해 주세요')})}catch(err){toast('아래 칸을 길게 눌러 복사해 주세요')}
   }
-  capEl.addEventListener('input',capState);dayEl.addEventListener('input',capState);capState();
-  saveB.addEventListener('click',function(){var v=parseInt(capEl.value.replace(/[^0-9]/g,''),10);
-    if(v>700){toast('시안 — 팀장 오늘 화면에 상한 올리기 요청을 올렸습니다');return;}
-    if(v<560){$('#cp-new').textContent=v;openModal('m-capprev');return;}
-    toast('시안 — 저장했습니다(바꾼 기록에 남음)');});
 
-  /* 대표 결정 3건 */
-  var DEC=[
-    {id:'N1',q:'시안 v3 방향 — 네이버 전용 입구 + 메뉴 3개로 확정할까요?',o:['ⓐ 그대로 확정 — 같은 주소 아래 네이버 전용 입구(/naver/) + 메뉴 3개 + 광고주 한 장(칸 4개). 광고센터에는 링크 한 줄만','ⓑ 메뉴 3개는 좋지만 새 도메인·새 로그인으로 완전히 따로 만든다','ⓒ 시안 v2처럼 광고센터 메뉴 안에 둔다'],r:0,w:'두 심사 모두 이 구조를 1위로 뽑았습니다. 같은 주소라 로그인이 그대로 이어지고 서버 주소·인증서 작업이 없습니다. 다른 매체가 들어올 길이 아예 없습니다. ⓑ는 로그인·팀 체계가 둘로 갈리고 1.5~3주가 더 들어 첫 20곳 단계에는 과합니다. ⓒ는 지시와 정면으로 어긋납니다.'},
-    {id:'N2',q:'전산 상단 입구(멈춘 「📈 자동입찰」 → 「🤖 네이버 자동운영」)를 누구에게 보일까요?',o:['ⓐ 지금 「📊 광고 센터」를 보는 사람과 같게 — 관리 쪽 담당자와 팀장·대표','ⓑ 지금 「📈 자동입찰」과 같게 — 지원팀을 뺀 전원','ⓒ 대표가 특수 권한을 준 사람만'],r:0,w:'네이버 키를 받고 광고를 운영하는 일은 관리 쪽 몫입니다. 들어가도 각자 자기 광고주만 보이고, 「자동」은 관문을 모두 통과해야 켜지므로 위험은 작습니다. ⓑ는 광고를 운영하지 않는 영업 직원까지 보게 되어 문의만 늘어납니다.'},
-    {id:'N3',q:'D1의 「큰 광고주」(+10%/−15%)와 「그 밖」(+15%/−20%)을 어떻게 나눌까요?',o:['ⓐ 처음에는 모두 좁은 상한(+10%/−15%)으로 시작하고, 자동 20곳 단계 전에 실제 자료로 기준을 다시 정한다','ⓑ 최근 30일 광고비로 자동으로 나눈다(기준 금액은 대표가 정함)','ⓒ 담당자가 광고주마다 지정하고, 바꿀 때는 팀장 승인'],r:0,w:'지금은 1곳 확인과 관찰·제안 20곳 단계라 엔진이 혼자 바꾸는 광고주가 아직 없습니다. 근거 없이 금액 기준을 정하면 틀리기 쉽습니다. 20곳 관찰에서 광고비 분포가 나오면 그 숫자로 ⓑ 기준을 정하시면 됩니다.'}
-,
-    {id:'P1',q:'전산의 서브 관리 담당도 「본인 담당」으로 칠까요?',o:['ⓐ 메인 관리 담당 1명만 — 서브에게는 안 보임','ⓑ 서브에게도 「서브」 배지로 보임 · 보기·승인·되돌리기·멈추기는 메인과 같게 · 주의 알림과 할 일 줄은 메인에게만 · 긴급은 둘 다','ⓒ 서브도 메인과 완전히 똑같이(알림·할 일까지 둘 다)'],r:1,w:'전산에서는 서브가 메인과 같은 권한이라 여기서 안 보이면 「내 담당인데 안 보인다」가 됩니다. 할 일의 주인은 메인 한 사람으로 두어야 24시간 만료 승인을 서로 미루지 않습니다.'},
-    {id:'P2',q:'대표 말고 광고주 전체를 볼 사람을 둘까요?',o:['ⓐ 대표만 전체 · 관리자(설정 담당)도 광고주는 본인 담당만','ⓑ 대표 + 대표가 이 프로그램 설정에서 이름으로 지정한 사람(보기만)','ⓒ 전산의 전체 권한자(임원팀·전체 가망 조회 권한자)까지 전체'],r:0,w:'지시가 「본인 담당만」이고 광고를 직접 운영하지 않는 사람에게 전사 광고주를 보일 이유가 아직 없습니다. 나중에 필요해지면 ⓑ를 더해도 아무것도 깨지지 않습니다.'},
-    {id:'P3',q:'팀장의 비상 정지는 어디까지 멈출까요? (v3 까지는 팀장도 회사 전체)',o:['ⓐ 팀장 = 우리 팀(본인 팀 + 하부 팀)만 · 회사 전체는 대표만','ⓑ 지금처럼 팀장도 회사 전체','ⓒ 팀장은 광고주 한 곳씩만'],r:0,w:'볼 수 없는 남의 팀 광고주를 멈추고 입찰까지 내리게 하면 「본인 담당만」과 어긋납니다. 네이버 전체 장애 같은 일은 엔진이 스스로 전체를 멈추고 대표에게 알립니다.'},
-    {id:'P4',q:'같은 네이버 광고비·연결 상태가 광고센터 화면에서는 광고관리팀 밖 직원 전원에게 보입니다. 이것도 같은 규칙으로 좁힐까요?',o:['ⓐ 네이버 자동운영은 이번에 끝까지 막고, 광고센터는 광고센터 섹션에 「모든 매체를 같은 규칙으로」 좁혀 달라고 요청(자동운영 가동과 묶지 않음)','ⓑ 자동운영 첫 가동 전에 광고센터의 네이버 칸도 반드시 같은 규칙으로 좁힘(선행 조건)','ⓒ 광고센터는 지금 그대로(전사 열람 도구로 둠)'],r:0,w:'광고센터는 모든 매체가 한 규칙을 쓰고 있어 네이버만 떼어 좁히면 화면마다 규칙이 달라집니다. 광고센터 섹션이 한 번에 바꾸는 편이 안전합니다. 그때까지는 광고센터에서 네이버 숫자가 보인다는 것을 알고 가는 것입니다.'}
-  ];
-  var KEY='naver-auto-mock-decisions-v3',saved={};
-  try{saved=JSON.parse(localStorage.getItem(KEY)||'{}')||{};}catch(e){saved={};}
-  var box=$('#decisions');
-  DEC.forEach(function(d){
-    var el=document.createElement('div');el.className='dec';
-    var h='<div class="q">'+d.id+' · '+d.q+'</div>';
-    d.o.forEach(function(t,i){var chk=(i===d.r)?' checked':'';
-      h+='<label><input type="radio" name="'+d.id+'" value="'+i+'"'+chk+'><span>'+t+(i===d.r?'<span class="rec">권고</span>':'')+'</span></label>';});
-    h+='<div class="why">'+d.w+'</div>';el.innerHTML=h;box.appendChild(el);
-  });
-  function summary(){var lines=['[네이버 광고 자동운영 — 대표 결정 7건 확정 2026-09-28 · 모두 권고안]'];
-    DEC.forEach(function(d){var v=document.querySelector('input[name="'+d.id+'"]:checked');var i=d.r;
-      lines.push(d.id+' '+d.q+' → '+d.o[i].split(' ')[0]+(i===d.r?' (권고)':'')+' — '+d.o[i].replace(/^[ⓐⓑⓒ]\s*/,''));});
-    $('#out').value=lines.join('\n');}
-  $$('#decisions input').forEach(function(i){i.disabled=true;});
-  box.addEventListener('change',function(e){if(e.target.name){saved[e.target.name]=+e.target.value;try{localStorage.setItem(KEY,JSON.stringify(saved));}catch(err){}summary();}});
-  summary();
-  $('#copy').addEventListener('click',function(){var ta=$('#out');
-    function done(){toast('복사했습니다 — 대화창에 붙여 넣어 보내 주세요');}
-    if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(ta.value).then(done,function(){ta.select();try{document.execCommand('copy');done();}catch(e){toast('복사가 막혔습니다 — 글을 직접 선택해 복사해 주세요');}});}
-    else{ta.select();try{document.execCommand('copy');done();}catch(e){toast('복사가 막혔습니다 — 글을 직접 선택해 복사해 주세요');}}
-  });
-
-  /* 시작 */
-  var r0='kim';try{r0=localStorage.getItem('naver-auto-mock-role')||'kim';}catch(e){}
-  applyRole(VIEWERS[r0]?r0:'kim');
-  try{if(localStorage.getItem('naver-auto-mock-welcome')==='0')$('#welcome').hidden=true;}catch(e){}
-  $$('#s-client .only-aja').forEach(function(e){e.hidden=true;});
+  applyRole();
 })();
 </script>
