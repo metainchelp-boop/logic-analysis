@@ -1,0 +1,97 @@
+"""대행사 키 3종 — 환경변수에서 한 번만 읽고, 값이 새지 않게 감싼다.
+
+환경변수 이름(값은 엔진 전용 ``.env`` 에만 · 대표가 직접 넣는다 · 채팅·저장소 금지):
+  NAVER_MGR_CUSTOMER_ID  대행사 계정 고객 번호
+  NAVER_MGR_API_KEY      액세스 라이선스
+  NAVER_MGR_SECRET_KEY   비밀키
+
+⚠️ 표준 라이브러리 ``secrets`` 와 헷갈리지 않게 이 파일 이름은 ``credentials`` 로 했다(계획서의 ``secrets.py``).
+"""
+from __future__ import annotations
+
+import os
+import re
+from dataclasses import dataclass
+from typing import Mapping, Optional
+
+ENV_CUSTOMER_ID = "NAVER_MGR_CUSTOMER_ID"
+ENV_API_KEY = "NAVER_MGR_API_KEY"
+ENV_SECRET_KEY = "NAVER_MGR_SECRET_KEY"
+
+_MASK = "Secret(****)"
+_DIGITS = re.compile(r"[0-9]{1,15}")
+
+
+class CredentialsMissing(RuntimeError):
+    """비밀값이 없거나 모양이 틀림. 문구에는 환경변수 **이름**만 들어간다."""
+
+
+class Secret:
+    """값을 감싼다. ``repr``·``str``·``format``·예외 문구에는 가린 글자만 나온다.
+
+    값을 꺼내는 길은 ``reveal()`` 하나뿐이고, 그것을 부르는 곳은 ``naver_read`` 의 요청 만드는 한 곳뿐이다
+    (시험 ``test_reveal_only_in_gate`` 가 고정).
+    """
+
+    __slots__ = ("_value",)
+
+    def __init__(self, value: str) -> None:
+        if not isinstance(value, str) or not value:
+            raise CredentialsMissing("비밀값이 비어 있습니다")
+        object.__setattr__(self, "_value", value)
+
+    def reveal(self) -> str:
+        return self._value
+
+    def __setattr__(self, name, value):  # 한 번 만들면 못 바꾼다
+        raise AttributeError("Secret 은 바꿀 수 없습니다")
+
+    def __repr__(self) -> str:
+        return _MASK
+
+    __str__ = __repr__
+
+    def __format__(self, spec: str) -> str:
+        return _MASK
+
+    def __eq__(self, other) -> bool:  # 비교로 값이 새지 않게 — 같은 객체일 때만 같다
+        return self is other
+
+    __hash__ = object.__hash__
+
+    def __reduce__(self):  # 피클로 값이 새지 않게
+        raise TypeError("Secret 은 직렬화할 수 없습니다")
+
+
+def customer_tail(customer_id) -> str:
+    """로그·오류에 쓰는 고객 번호 표기 — 끝 4자리만."""
+    s = str(customer_id)
+    return "…" + s[-4:] if len(s) > 4 else "…" + s
+
+
+@dataclass(frozen=True)
+class ManagerCredentials:
+    customer_id: int
+    api_key: Secret
+    secret_key: Secret
+
+    def __repr__(self) -> str:
+        return f"ManagerCredentials(customer={customer_tail(self.customer_id)}, api_key={_MASK}, secret_key={_MASK})"
+
+    __str__ = __repr__
+
+
+def load_manager_credentials(env: Optional[Mapping[str, str]] = None) -> ManagerCredentials:
+    """환경변수에서 대행사 키 3종을 읽는다. 하나라도 없거나 고객 번호가 숫자가 아니면 ``CredentialsMissing``."""
+    src = os.environ if env is None else env
+    missing = [n for n in (ENV_CUSTOMER_ID, ENV_API_KEY, ENV_SECRET_KEY) if not (src.get(n) or "").strip()]
+    if missing:
+        raise CredentialsMissing("대행사 키가 설정되지 않았습니다: " + ", ".join(missing))
+    cid = src[ENV_CUSTOMER_ID].strip()
+    if not _DIGITS.fullmatch(cid) or int(cid) <= 0:
+        raise CredentialsMissing(f"{ENV_CUSTOMER_ID} 는 숫자여야 합니다")
+    return ManagerCredentials(
+        customer_id=int(cid),
+        api_key=Secret(src[ENV_API_KEY].strip()),
+        secret_key=Secret(src[ENV_SECRET_KEY].strip()),
+    )

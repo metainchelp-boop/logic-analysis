@@ -1,0 +1,655 @@
+"""대행사 키로 하는 모든 네이버 호출이 지나는 **유일한 문** — GET 만 통과한다 (설계 v1.8 · 첫 조각 S4).
+
+지키는 것(모두 시험으로 고정 · 사보타주로 확인):
+1. **GET 만.** 다른 방식은 요청을 만들기 **전에** ``WriteForbidden``. 대행사 키는 1,784곳 전부 운영관리 권한이라
+   이 한 줄이 「네이버 쪽을 바꾸지 않는다」의 전부다.
+2. **정해진 호스트·경로만.** ``api.searchad.naver.com`` · 경로 허용 목록 · 넘겨주기(redirect) 안 따라감
+   (따라가면 키가 붙은 머리글이 다른 곳으로 간다).
+3. **날 번호를 받지 않는다.** ``handles`` 가 발급한 오늘 손잡이만(14일 규칙은 거기서 판정).
+4. **남길 칸만** 돌려준다(``fields``) — 개인정보 칸은 저장 전에 사라진다.
+5. **모르는 응답은 0 이 아니다.** 통계 모양을 모르면 ``StatsShapeUnknown`` · 요청한 번호의 줄이 빠지면 0 이 아니라
+   「모름」(``missing_ids``) · 자료 기준 시각(``cycleBaseTm``)을 못 읽으면 「자료 늦음」.
+6. **하위 계정 목록은 전부 받거나 전부 버린다** — 모든 쪽 200 · 받은 합계 = ``totalElements``.
+7. **응답의 고객 번호가 요청한 계정과 다르면 버린다.**
+8. **속도** — 초당 3건 · 429/1016 은 2→4→8초 · 10초 안에 5번이면 5분 멈춤 · 두 번 멈추면 회차 중단 ·
+   한 회차 호출 수 상한.
+9. **비밀값·개인정보가 로그·오류에 0** — 오류 문구에는 경로 모양·상태·코드·고객 번호 끝 4자리만.
+"""
+from __future__ import annotations
+
+import base64
+import collections
+import hashlib
+import hmac
+import http.client
+import json
+import logging
+import math
+import random
+import re
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+
+from . import fields as F
+from . import handles as H
+from .credentials import ManagerCredentials, customer_tail
+
+log = logging.getLogger("naver_engine.read")
+
+BASE_HOST = "api.searchad.naver.com"
+BASE_URL = "https://" + BASE_HOST
+TIMEOUT = 20
+MAX_BODY = 16 * 1024 * 1024
+PAGE_SIZE = 1000
+MAX_PAGES = 50
+STATS_IDS_PER_CALL = 100
+MAX_RANGE_DAYS = 92
+DEFAULT_MAX_CALLS = 20000
+CALLS_PER_SEC = 3
+
+RATE_BACKOFF = (2.0, 4.0, 8.0)
+RETRY_BACKOFF = (1.0, 2.0, 3.0)
+RATE_WINDOW = 10.0
+RATE_BURST = 5
+RATE_PAUSE = 300.0
+MAX_PAUSES = 2
+
+_ALLOWED_METHODS = frozenset({"GET"})
+_PATHS = (
+    re.compile(r"/manager-accounts"),
+    re.compile(r"/manager-accounts/[0-9]{1,15}/child-ad-accounts"),
+    re.compile(r"/ncc/campaigns"),
+    re.compile(r"/billing/bizmoney"),
+    re.compile(r"/stats"),
+    re.compile(r"/ncc/channels"),
+)
+_CYCLE = re.compile(r"[0-9]{12}")
+_DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+
+KIND_KEY_REJECTED = "KEY_REJECTED"
+KIND_RATE = "RATE"
+KIND_SERVER = "SERVER"
+KIND_BAD_REQUEST = "BAD_REQUEST"
+KIND_NOT_FOUND = "NOT_FOUND"
+KIND_NETWORK = "NETWORK"
+KIND_BAD_RESPONSE = "BAD_RESPONSE"
+KIND_MISMATCH = "MISMATCH"
+KIND_OTHER = "OTHER"
+
+
+# ── 오류 ────────────────────────────────────────────────────────────
+class WriteForbidden(RuntimeError):
+    """GET 이 아닌 요청 — 만들기 전에 거절."""
+
+
+class PathForbidden(RuntimeError):
+    """허용 목록에 없는 경로·호스트."""
+
+
+class RunAbort(RuntimeError):
+    """이 회차를 멈춘다(속도 제한에 두 번 멈춤 · 호출 수 상한)."""
+
+
+class IncompleteList(RuntimeError):
+    """목록을 전부 받지 못했다 — 통째로 버린다."""
+
+
+class StatsShapeUnknown(RuntimeError):
+    """통계 응답 모양을 모른다 — 절대 0 으로 읽지 않는다."""
+
+
+class NaverApiError(RuntimeError):
+    def __init__(self, kind: str, path: str, status: Optional[int] = None, code: Optional[int] = None,
+                 customer: Optional[int] = None, detail: str = "") -> None:
+        self.kind, self.path, self.status, self.code, self.detail = kind, path, status, code, detail
+        self.customer_tail = customer_tail(customer) if customer is not None else "-"
+        super().__init__(f"네이버 호출 실패 [{kind}] {path} · HTTP {status} · 코드 {code} · 계정 {self.customer_tail}"
+                         + (f" · {detail}" if detail else ""))
+
+
+def classify(status: Optional[int], code: Optional[int]) -> str:
+    if code == 1016 or status == 429:
+        return KIND_RATE
+    if code in (1006, 1018) or status in (401, 403):
+        return KIND_KEY_REJECTED
+    if status is not None and status >= 500:
+        return KIND_SERVER
+    if status == 400 or code in (1014, 11003):
+        return KIND_BAD_REQUEST
+    if status == 404:
+        return KIND_NOT_FOUND
+    return KIND_OTHER
+
+
+def path_shape(path: str) -> str:
+    """오류·로그용 경로 모양 — 번호는 {no} 로 가린다."""
+    return re.sub(r"/[0-9]+", "/{no}", path)
+
+
+def _sign(secret: str, ts: str, method: str, path: str) -> str:
+    msg = f"{ts}.{method}.{path}".encode("utf-8")
+    return base64.b64encode(hmac.new(secret.encode("utf-8"), msg, hashlib.sha256).digest()).decode("ascii")
+
+
+# ── 보내는 부분(바꿔 끼울 수 있음 — 시험은 가짜 네이버를 끼운다) ─────────────
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # 넘겨주기를 따라가지 않는다
+        return None
+
+
+class UrllibTransport:
+    """실제 네트워크. HTTP 오류도 예외가 아니라 (상태, 본문)으로 돌려준다. 연결 실패만 예외."""
+
+    def __init__(self) -> None:
+        self._opener = urllib.request.build_opener(_NoRedirect())
+
+    def send(self, req: urllib.request.Request, timeout: float) -> Tuple[int, bytes]:
+        try:
+            with self._opener.open(req, timeout=timeout) as r:
+                return r.status, r.read(MAX_BODY + 1)
+        except urllib.error.HTTPError as e:
+            try:
+                return e.code, e.read(MAX_BODY + 1)
+            finally:
+                e.close()
+
+
+class SystemClock:
+    def now(self) -> datetime:
+        return datetime.now(H.KST)
+
+    def monotonic(self) -> float:
+        return time.monotonic()
+
+    def epoch_ms(self) -> int:
+        return int(time.time() * 1000)
+
+    def sleep(self, seconds: float) -> None:
+        time.sleep(seconds)
+
+
+# ── 결과 모양 ────────────────────────────────────────────────────────
+@dataclass(frozen=True)
+class ChildAccounts:
+    """대행사에 연결된 하위 광고계정 전부(전부 받았을 때만 만들어진다)."""
+    accounts: Dict[int, dict]              # 고객 번호 → 남길 칸
+    per_manager: Dict[int, int]            # 관리계정 번호 → 받은 줄 수(= totalElements)
+    managers: Tuple[dict, ...]
+
+
+@dataclass(frozen=True)
+class StatsResult:
+    """통계 한 번 읽은 결과. 숫자가 없는 칸은 0 이 아니라 ``None``(모름)."""
+    shape: str                             # top · summary
+    rows: Dict[str, Dict[str, Optional[float]]]
+    requested_ids: Tuple[str, ...]
+    missing_ids: Tuple[str, ...]           # 요청했는데 줄이 없는 번호 — 0 이 아니라 모름
+    cycle_base_tm: Optional[datetime]      # 자료가 여기까지 들어왔다(KST) · 못 읽으면 None
+    until: date
+    reasons: Tuple[str, ...] = field(default=())
+
+    @property
+    def data_fresh(self) -> bool:
+        """``until`` 날짜의 자료가 다 들어왔나 — 기준 시각이 그다음 날 0시 이후여야 한다."""
+        if self.cycle_base_tm is None:
+            return False
+        return self.cycle_base_tm >= datetime.combine(self.until + timedelta(days=1), datetime.min.time(), H.KST)
+
+    @property
+    def complete(self) -> bool:
+        """판정에 써도 되는가 — 빠진 줄 0 · 자료 늦음 아님."""
+        return not self.missing_ids and self.data_fresh
+
+
+@dataclass(frozen=True)
+class DailyStats:
+    entity_id: str
+    days: Dict[str, Dict[str, Optional[float]]]   # 'YYYY-MM-DD' → 지표
+    missing_days: Tuple[str, ...]
+    cycle_base_tm: Optional[datetime]
+    until: date
+
+    @property
+    def data_fresh(self) -> bool:
+        if self.cycle_base_tm is None:
+            return False
+        return self.cycle_base_tm >= datetime.combine(self.until + timedelta(days=1), datetime.min.time(), H.KST)
+
+    @property
+    def complete(self) -> bool:
+        return not self.missing_days and self.data_fresh
+
+
+# ── 판독(순수) ───────────────────────────────────────────────────────
+def _parse_cycle(raw) -> Optional[datetime]:
+    if not isinstance(raw, str) or not _CYCLE.fullmatch(raw):
+        return None
+    try:
+        return datetime.strptime(raw, "%Y%m%d%H%M").replace(tzinfo=H.KST)
+    except ValueError:
+        return None
+
+
+def _num(value, what: str) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise StatsShapeUnknown(f"숫자가 아닌 지표({what})")
+    if isinstance(value, float) and not math.isfinite(value):
+        raise StatsShapeUnknown(f"숫자가 아닌 지표({what})")
+    return value
+
+
+def _locate(body, wrapper: str) -> Tuple[str, Mapping]:
+    """최상위 ``data`` 또는 명세의 감싼 모양(``summaryStatResponse``·``dailyStatResponse``)을 찾는다."""
+    if not isinstance(body, Mapping):
+        raise StatsShapeUnknown("통계 응답이 사전이 아님")
+    wrapped = [k for k in ("summaryStatResponse", "dailyStatResponse") if k in body]
+    if wrapped:
+        if wrapped != [wrapper]:
+            raise StatsShapeUnknown("기대와 다른 감싼 모양")
+        inner = body[wrapper]
+        if not isinstance(inner, Mapping):
+            raise StatsShapeUnknown("감싼 모양 안쪽이 사전이 아님")
+        shape = "summary" if wrapper == "summaryStatResponse" else "daily"
+        body = inner
+    elif "data" in body:
+        shape = "top"
+    else:
+        raise StatsShapeUnknown("data 칸 없음")
+    if not isinstance(body.get("data"), list):
+        raise StatsShapeUnknown("data 가 목록이 아님")
+    return shape, body
+
+
+def parse_stats(body, requested_ids: Sequence[str], fields: Sequence[str], until: date) -> StatsResult:
+    """캠페인 등 여러 번호의 기간 합계. 요청한 번호의 줄이 없으면 0 이 아니라 ``missing_ids``."""
+    req = tuple(str(i) for i in requested_ids)
+    if len(set(req)) != len(req):
+        raise ValueError("요청 번호가 겹칩니다")
+    shape, inner = _locate(body, "summaryStatResponse")
+    rows: Dict[str, Dict[str, Optional[float]]] = {}
+    for row in inner["data"]:
+        if not isinstance(row, Mapping) or not isinstance(row.get("id"), str):
+            raise StatsShapeUnknown("줄에 번호(id)가 없음")
+        rid = row["id"]
+        if rid not in req:
+            raise StatsShapeUnknown("요청하지 않은 번호의 줄")
+        if rid in rows:
+            raise StatsShapeUnknown("같은 번호의 줄이 두 번")
+        rows[rid] = {f: _num(row.get(f), f) for f in fields}
+    cycle = _parse_cycle(inner.get("cycleBaseTm"))
+    missing = tuple(i for i in req if i not in rows)
+    reasons = []
+    if missing:
+        reasons.append("missing-rows")
+    if cycle is None:
+        reasons.append("cycle-unknown")
+    result = StatsResult(shape, rows, req, missing, cycle, until, ())
+    if cycle is not None and not result.data_fresh:
+        reasons.append("cycle-behind")
+    return StatsResult(shape, rows, req, missing, cycle, until, tuple(reasons))
+
+
+def parse_daily(body, entity_id: str, fields: Sequence[str], since: date, until: date) -> DailyStats:
+    """한 번호의 하루별 지표. 빠진 날은 0 이 아니라 ``missing_days``."""
+    _shape, inner = _locate(body, "dailyStatResponse")
+    want = []
+    d = since
+    while d <= until:
+        want.append(d.isoformat())
+        d += timedelta(days=1)
+    days: Dict[str, Dict[str, Optional[float]]] = {}
+    for row in inner["data"]:
+        if not isinstance(row, Mapping):
+            raise StatsShapeUnknown("하루 줄이 사전이 아님")
+        ds = row.get("dateStart")
+        if not isinstance(ds, str) or not _DAY.fullmatch(ds[:10]):
+            raise StatsShapeUnknown("하루 줄에 날짜가 없음")
+        ds = ds[:10]
+        if ds not in want:
+            raise StatsShapeUnknown("요청하지 않은 날짜의 줄")
+        if ds in days:
+            raise StatsShapeUnknown("같은 날짜의 줄이 두 번")
+        de = row.get("dateEnd")
+        if de is not None and (not isinstance(de, str) or de[:10] != ds):
+            raise StatsShapeUnknown("하루 줄이 하루가 아님")
+        days[ds] = {f: _num(row.get(f), f) for f in fields}
+    missing = tuple(x for x in want if x not in days)
+    return DailyStats(str(entity_id), days, missing, _parse_cycle(inner.get("cycleBaseTm")), until)
+
+
+def _page(body, what: str) -> Tuple[list, int, bool, Optional[int]]:
+    """쪽 넘김 응답(content · totalElements · last · totalPages)."""
+    if not isinstance(body, Mapping) or not isinstance(body.get("content"), list):
+        raise IncompleteList(f"{what}: 쪽 모양을 모름")
+    total = body.get("totalElements")
+    if isinstance(total, bool) or not isinstance(total, int) or total < 0:
+        raise IncompleteList(f"{what}: 전체 개수(totalElements)를 모름")
+    last = body.get("last")
+    pages = body.get("totalPages")
+    if isinstance(pages, bool) or (pages is not None and not isinstance(pages, int)):
+        pages = None
+    return body["content"], total, last is True, pages
+
+
+def _check_period(since: date, until: date, today: date) -> None:
+    if not isinstance(since, date) or not isinstance(until, date) or isinstance(since, datetime) or isinstance(until, datetime):
+        raise ValueError("기간은 날짜여야 합니다")
+    if since > until:
+        raise ValueError("시작이 끝보다 늦습니다")
+    if until > today:
+        raise ValueError("미래 날짜는 읽지 않습니다")
+    if (until - since).days + 1 > MAX_RANGE_DAYS:
+        raise ValueError("기간이 너무 깁니다")
+
+
+def _check_fields(fields: Sequence[str]) -> Tuple[str, ...]:
+    out = tuple(fields)
+    if not out or any(f not in F.STAT_FIELDS for f in out) or len(set(out)) != len(out):
+        raise ValueError("요청할 수 없는 지표입니다")
+    return out
+
+
+# ── 관문 ─────────────────────────────────────────────────────────────
+class NaverReader:
+    """대행사 키로 네이버를 **읽기만** 한다. 회차(점검 한 번)마다 하나 만든다 — 호출 수·멈춤 횟수를 센다."""
+
+    def __init__(self, credentials: ManagerCredentials, *, transport=None, clock=None, rng=None,
+                 max_calls: int = DEFAULT_MAX_CALLS) -> None:
+        if not isinstance(credentials, ManagerCredentials):
+            raise TypeError("대행사 키가 아닙니다")
+        self._cred = credentials
+        self._transport = transport if transport is not None else UrllibTransport()
+        self._clock = clock if clock is not None else SystemClock()
+        self._rng = rng if rng is not None else random.Random()
+        self._max_calls = max_calls
+        self.calls = 0
+        self.pauses = 0
+        self._last_sent: Optional[float] = None
+        self._rate_hits: collections.deque = collections.deque()
+
+    def __repr__(self) -> str:
+        return f"NaverReader(calls={self.calls}, pauses={self.pauses})"
+
+    # 손잡이
+    def manager_handle(self) -> H.ManagerHandle:
+        return H.issue_manager_handle(self._cred.customer_id, self._clock.now())
+
+    # 한 곳 — 모든 요청이 여기서 만들어진다
+    def _gate(self, method: str, path: str, params: Optional[Mapping[str, Any]], customer_id: int) -> Tuple[int, bytes]:
+        if method not in _ALLOWED_METHODS:
+            raise WriteForbidden(f"GET 이 아닌 요청은 만들지 않습니다: {method}")
+        if not any(p.fullmatch(path) for p in _PATHS):
+            raise PathForbidden(f"허용하지 않은 경로: {path_shape(path)}")
+        if self.calls >= self._max_calls:
+            raise RunAbort("call-cap")
+        self._pace()
+        self.calls += 1
+        ts = str(self._clock.epoch_ms())
+        headers = {
+            "X-Timestamp": ts,
+            "X-API-KEY": self._cred.api_key.reveal(),
+            "X-Customer": str(customer_id),
+            "X-Signature": _sign(self._cred.secret_key.reveal(), ts, method, path),
+            "Accept": "application/json",
+        }
+        query = urllib.parse.urlencode(params, doseq=True) if params else ""
+        url = BASE_URL + path + ("?" + query if query else "")
+        req = urllib.request.Request(url, headers=headers, method=method)
+        if req.get_method() != "GET" or req.data is not None:
+            raise WriteForbidden("GET 이 아닌 요청은 보내지 않습니다")
+        if req.host != BASE_HOST or req.type != "https":
+            raise PathForbidden("허용하지 않은 호스트")
+        return self._transport.send(req, TIMEOUT)
+
+    def _pace(self) -> None:
+        gap = 1.0 / CALLS_PER_SEC
+        now = self._clock.monotonic()
+        if self._last_sent is not None and now - self._last_sent < gap:
+            self._clock.sleep(gap - (now - self._last_sent))
+        self._last_sent = self._clock.monotonic()
+
+    def _note_rate(self) -> None:
+        now = self._clock.monotonic()
+        self._rate_hits.append(now)
+        while self._rate_hits and now - self._rate_hits[0] > RATE_WINDOW:
+            self._rate_hits.popleft()
+        if len(self._rate_hits) >= RATE_BURST:
+            self.pauses += 1
+            self._rate_hits.clear()
+            if self.pauses >= MAX_PAUSES:
+                raise RunAbort("rate-paused-twice")
+            log.warning("[네이버 읽기] 속도 제한이 몰려 5분 멈춤(이번 회차 %d번째)", self.pauses)
+            self._clock.sleep(RATE_PAUSE)
+
+    def _request(self, customer_id: int, path: str, params: Optional[Mapping[str, Any]] = None):
+        shape = path_shape(path)
+        tries = {KIND_RATE: 0, KIND_SERVER: 0, KIND_NETWORK: 0}
+        while True:
+            status: Optional[int] = None
+            code: Optional[int] = None
+            try:
+                status, body = self._gate("GET", path, params, customer_id)
+            except (urllib.error.URLError, OSError, http.client.HTTPException) as e:
+                kind, detail = KIND_NETWORK, type(e).__name__
+            else:
+                if 200 <= status < 300:
+                    return self._decode(body, shape, customer_id, status)
+                code = _error_code(body)
+                kind, detail = classify(status, code), ""
+            if kind == KIND_RATE:
+                self._note_rate()
+                if tries[KIND_RATE] >= len(RATE_BACKOFF):
+                    raise NaverApiError(kind, shape, status, code, customer_id)
+                wait = RATE_BACKOFF[tries[KIND_RATE]]
+                tries[KIND_RATE] += 1
+                self._clock.sleep(wait + self._rng.uniform(0, wait / 4))
+                continue
+            if kind in (KIND_SERVER, KIND_NETWORK):
+                if tries[kind] >= len(RETRY_BACKOFF):
+                    raise NaverApiError(kind, shape, status, code, customer_id, detail)
+                self._clock.sleep(RETRY_BACKOFF[tries[kind]])
+                tries[kind] += 1
+                continue
+            log.warning("[네이버 읽기] %s %s HTTP %s 코드 %s 계정 %s", kind, shape, status, code, customer_tail(customer_id))
+            raise NaverApiError(kind, shape, status, code, customer_id, detail)
+
+    @staticmethod
+    def _decode(body: bytes, shape: str, customer_id: int, status: int):
+        if body is None or len(body) > MAX_BODY:
+            raise NaverApiError(KIND_BAD_RESPONSE, shape, status, None, customer_id, "본문 크기")
+        if not body.strip():
+            return None
+        try:
+            return json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            raise NaverApiError(KIND_BAD_RESPONSE, shape, status, None, customer_id, "JSON 아님") from None
+
+    # ── 대행사 계정(관리계정 손잡이) ─────────────────────────────────
+    def _manager(self, mh) -> H.ManagerHandle:
+        return H.require_manager(mh, self._clock.now(), self._cred.customer_id)
+
+    def _all_pages(self, customer_id: int, path: str, what: str) -> List[dict]:
+        rows: List[dict] = []
+        total: Optional[int] = None
+        for page in range(MAX_PAGES):
+            body = self._request(customer_id, path, {"page": page, "size": PAGE_SIZE})
+            content, t, last, pages = _page(body, what)
+            if total is None:
+                total = t
+            elif t != total:
+                raise IncompleteList(f"{what}: 받는 도중 전체 개수가 바뀜")
+            if not all(isinstance(r, Mapping) for r in content):
+                raise IncompleteList(f"{what}: 줄 모양을 모름")
+            rows.extend(content)
+            if len(rows) >= total or last or not content or (pages is not None and page + 1 >= pages):
+                break
+        else:
+            raise IncompleteList(f"{what}: 쪽 넘김 상한")
+        if total is None or len(rows) != total:
+            raise IncompleteList(f"{what}: 받은 줄 {len(rows)} ≠ 전체 {total}")
+        return rows
+
+    def list_manager_accounts(self, mh) -> List[dict]:
+        h = self._manager(mh)
+        rows = self._all_pages(h.customer_id, "/manager-accounts", "관리계정 목록")
+        out = []
+        for r in rows:
+            kept = F.keep_manager(r)
+            no = kept.get("managerAccountNo")
+            if isinstance(no, bool) or not isinstance(no, int) or no <= 0:
+                raise IncompleteList("관리계정 목록: 번호 없는 줄")
+            out.append(kept)
+        return out
+
+    def list_child_accounts(self, mh, manager_account_no: int) -> List[dict]:
+        h = self._manager(mh)
+        if isinstance(manager_account_no, bool) or not isinstance(manager_account_no, int) or manager_account_no <= 0:
+            raise ValueError("관리계정 번호가 아닙니다")
+        rows = self._all_pages(h.customer_id, f"/manager-accounts/{manager_account_no}/child-ad-accounts", "하위 계정 목록")
+        out = []
+        for r in rows:
+            kept = F.keep(r, F.CHILD_ACCOUNT)
+            try:
+                kept["customerId"] = H.normalize_customer_id(kept.get("customerId"))
+            except H.NotEligible:
+                raise IncompleteList("하위 계정 목록: 고객 번호 없는 줄") from None
+            out.append(kept)
+        return out
+
+    def list_all_children(self, mh) -> ChildAccounts:
+        """모든 관리계정의 하위 계정 — 한 곳이라도 전부 못 받으면 통째로 ``IncompleteList``."""
+        managers = self.list_manager_accounts(mh)
+        if not managers:
+            raise IncompleteList("관리계정이 0개")
+        accounts: Dict[int, dict] = {}
+        per: Dict[int, int] = {}
+        for m in managers:
+            no = m["managerAccountNo"]
+            kids = self.list_child_accounts(mh, no)
+            per[no] = len(kids)
+            for k in kids:
+                accounts.setdefault(k["customerId"], k)
+        return ChildAccounts(accounts, per, tuple(managers))
+
+    # ── 광고주 계정(계정 손잡이) ────────────────────────────────────
+    def _account(self, ah, purposes) -> H.AccountHandle:
+        return H.require_account(ah, self._clock.now(), purposes)
+
+    def _same_customer(self, got, h: H.AccountHandle, shape: str) -> None:
+        try:
+            cid = H.normalize_customer_id(got)
+        except H.NotEligible:
+            raise NaverApiError(KIND_MISMATCH, shape, 200, None, h.customer_id, "응답에 고객 번호 없음") from None
+        if cid != h.customer_id:
+            raise NaverApiError(KIND_MISMATCH, shape, 200, None, h.customer_id, "응답의 고객 번호가 다름")
+
+    def get_campaigns(self, ah) -> List[dict]:
+        h = self._account(ah, (H.PURPOSE_CHECK, H.PURPOSE_PREVIEW))
+        body = self._request(h.customer_id, "/ncc/campaigns")
+        if not isinstance(body, list):
+            raise NaverApiError(KIND_BAD_RESPONSE, "/ncc/campaigns", 200, None, h.customer_id, "목록 아님")
+        out = []
+        for c in body:
+            if not isinstance(c, Mapping) or not isinstance(c.get("nccCampaignId"), str):
+                raise NaverApiError(KIND_BAD_RESPONSE, "/ncc/campaigns", 200, None, h.customer_id, "캠페인 번호 없음")
+            self._same_customer(c.get("customerId"), h, "/ncc/campaigns")
+            out.append(F.keep(c, F.CAMPAIGN))
+        return out
+
+    def get_bizmoney(self, ah) -> dict:
+        h = self._account(ah, (H.PURPOSE_CHECK,))
+        body = self._request(h.customer_id, "/billing/bizmoney")
+        if not isinstance(body, Mapping):
+            raise NaverApiError(KIND_BAD_RESPONSE, "/billing/bizmoney", 200, None, h.customer_id, "사전 아님")
+        self._same_customer(body.get("customerId"), h, "/billing/bizmoney")
+        kept = F.keep(body, F.BIZMONEY)
+        if isinstance(kept.get("bizmoney"), bool) or not isinstance(kept.get("bizmoney"), int):
+            raise NaverApiError(KIND_BAD_RESPONSE, "/billing/bizmoney", 200, None, h.customer_id, "잔액 모름")
+        return kept
+
+    def get_stats_summary(self, ah, ids: Iterable[str], since: date, until: date,
+                          fields: Sequence[str] = ("impCnt", "clkCnt", "salesAmt", "ccnt")) -> StatsResult:
+        """여러 번호의 기간 합계. 100개씩 나눠 부르고 합친다 — 한 묶음이라도 모양을 모르면 전체가 실패."""
+        h = self._account(ah, (H.PURPOSE_CHECK,))
+        _check_period(since, until, H._kst_today(self._clock.now()))
+        flds = _check_fields(fields)
+        want = [str(i) for i in ids]
+        if not want or any(not i for i in want) or len(set(want)) != len(want):
+            raise ValueError("통계 번호가 비었거나 겹칩니다")
+        rows: Dict[str, Dict[str, Optional[float]]] = {}
+        missing: List[str] = []
+        cycles: List[Optional[datetime]] = []
+        shapes = set()
+        for i in range(0, len(want), STATS_IDS_PER_CALL):
+            chunk = want[i:i + STATS_IDS_PER_CALL]
+            body = self._request(h.customer_id, "/stats", {
+                "ids": chunk,
+                "fields": json.dumps(list(flds)),
+                "timeRange": json.dumps({"since": since.isoformat(), "until": until.isoformat()}),
+            })
+            part = parse_stats(body, chunk, flds, until)
+            rows.update(part.rows)
+            missing.extend(part.missing_ids)
+            cycles.append(part.cycle_base_tm)
+            shapes.add(part.shape)
+        cycle = None if any(c is None for c in cycles) else min(cycles)
+        reasons = []
+        if missing:
+            reasons.append("missing-rows")
+        if cycle is None:
+            reasons.append("cycle-unknown")
+        res = StatsResult("+".join(sorted(shapes)), rows, tuple(want), tuple(missing), cycle, until, ())
+        if cycle is not None and not res.data_fresh:
+            reasons.append("cycle-behind")
+        return StatsResult(res.shape, rows, tuple(want), tuple(missing), cycle, until, tuple(reasons))
+
+    def get_stats_daily(self, ah, entity_id: str, since: date, until: date,
+                        fields: Sequence[str] = ("impCnt", "clkCnt", "salesAmt", "ccnt")) -> DailyStats:
+        h = self._account(ah, (H.PURPOSE_CHECK,))
+        _check_period(since, until, H._kst_today(self._clock.now()))
+        flds = _check_fields(fields)
+        if not isinstance(entity_id, str) or not entity_id:
+            raise ValueError("번호가 아닙니다")
+        body = self._request(h.customer_id, "/stats", {
+            "id": entity_id,
+            "fields": json.dumps(list(flds)),
+            "timeRange": json.dumps({"since": since.isoformat(), "until": until.isoformat()}),
+            "timeIncrement": "1",
+        })
+        return parse_daily(body, entity_id, flds, since, until)
+
+    def get_channels(self, ah) -> List[dict]:
+        """비즈채널 — 짝 확인 미리보기 전용(사람이 누를 때만 · 저장하지 않음 · 대표 결정 Q2)."""
+        h = self._account(ah, (H.PURPOSE_PREVIEW,))
+        body = self._request(h.customer_id, "/ncc/channels")
+        if not isinstance(body, list):
+            raise NaverApiError(KIND_BAD_RESPONSE, "/ncc/channels", 200, None, h.customer_id, "목록 아님")
+        out = []
+        for c in body:
+            if not isinstance(c, Mapping):
+                raise NaverApiError(KIND_BAD_RESPONSE, "/ncc/channels", 200, None, h.customer_id, "줄 모양")
+            self._same_customer(c.get("customerId"), h, "/ncc/channels")
+            out.append(F.keep(c, F.CHANNEL))
+        return out
+
+
+def _error_code(body: bytes) -> Optional[int]:
+    try:
+        j = json.loads((body or b"").decode("utf-8") or "{}")
+    except (UnicodeDecodeError, ValueError):
+        return None
+    code = j.get("code") if isinstance(j, Mapping) else None
+    if isinstance(code, bool):
+        return None
+    if isinstance(code, int):
+        return code
+    if isinstance(code, str) and code.strip().isdigit():
+        return int(code.strip())
+    return None
