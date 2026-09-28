@@ -1,0 +1,354 @@
+{
+ "_설명": "① 전산 ProspectMatchKeys.normalizeName · looseName 을 자바로 그대로 돌린 정답표. ③ 짝 규칙(matching.py)의 이름 정리가 이 표와 한 글자까지 같아야 한다.",
+ "_출처": {
+  "저장소": "metainchelp-boop/metainc-web-backend",
+  "커밋": "1a65d6e7",
+  "파일": "src/main/java/org/metainc/systems/utils/ProspectMatchKeys.java",
+  "파일_sha256_앞16": "85fb759c6d959795",
+  "자바": "openjdk version \"21.0.10\" 2026-01-20",
+  "만든날": "2026-09-28"
+ },
+ "_다시만들기": "① 파일을 받아 자바로 컴파일 → 입력마다 두 함수를 부른 결과를 적는다(값에 개인·업체 정보 없음 · 모두 지어낸 예).",
+ "vectors": [
+  {
+   "in": null,
+   "name": null,
+   "loose": null
+  },
+  {
+   "in": "",
+   "name": null,
+   "loose": null
+  },
+  {
+   "in": "  ",
+   "name": null,
+   "loose": null
+  },
+  {
+   "in": "a",
+   "name": null,
+   "loose": null
+  },
+  {
+   "in": "ab",
+   "name": "ab",
+   "loose": "ab"
+  },
+  {
+   "in": "A1",
+   "name": "a1",
+   "loose": "a1"
+  },
+  {
+   "in": "ABC컴퍼니",
+   "name": "abc컴퍼니",
+   "loose": "abc컴퍼니"
+  },
+  {
+   "in": "ABC 컴퍼니",
+   "name": "abc컴퍼니",
+   "loose": "abc컴퍼니"
+  },
+  {
+   "in": "㈜ABC",
+   "name": "abc",
+   "loose": "abc"
+  },
+  {
+   "in": "(주)메타",
+   "name": "주메타",
+   "loose": "메타"
+  },
+  {
+   "in": "㈜메타",
+   "name": "메타",
+   "loose": "메타"
+  },
+  {
+   "in": "주식회사 메타",
+   "name": "주식회사메타",
+   "loose": "메타"
+  },
+  {
+   "in": "메타 주식회사",
+   "name": "메타주식회사",
+   "loose": "메타"
+  },
+  {
+   "in": "(유)메타",
+   "name": "유메타",
+   "loose": "메타"
+  },
+  {
+   "in": "유한책임회사메타",
+   "name": "유한책임회사메타",
+   "loose": "메타"
+  },
+  {
+   "in": "유한회사 메타",
+   "name": "유한회사메타",
+   "loose": "메타"
+  },
+  {
+   "in": "ＡＢＣ　컴퍼니",
+   "name": "ａｂｃ컴퍼니",
+   "loose": "abc컴퍼니"
+  },
+  {
+   "in": "（주）메타",
+   "name": "주메타",
+   "loose": "메타"
+  },
+  {
+   "in": "㈜",
+   "name": null,
+   "loose": null
+  },
+  {
+   "in": "주식회사",
+   "name": "주식회사",
+   "loose": null
+  },
+  {
+   "in": "(주)",
+   "name": null,
+   "loose": null
+  },
+  {
+   "in": "(주 )메타",
+   "name": "주메타",
+   "loose": "주메타"
+  },
+  {
+   "in": "메타(주)코리아",
+   "name": "메타주코리아",
+   "loose": "메타코리아"
+  },
+  {
+   "in": "주식회사주식회사메타",
+   "name": "주식회사주식회사메타",
+   "loose": "메타"
+  },
+  {
+   "in": "메타",
+   "name": "메타",
+   "loose": "메타"
+  },
+  {
+   "in": "한글상호",
+   "name": "한글상호",
+   "loose": "한글상호"
+  },
+  {
+   "in": "İstanbul",
+   "name": "i̇stanbul",
+   "loose": "i̇stanbul"
+  },
+  {
+   "in": "ΟΔΟΣ",
+   "name": "οδος",
+   "loose": "οδος"
+  },
+  {
+   "in": "ẞtraße",
+   "name": "ßtraße",
+   "loose": "ßtraße"
+  },
+  {
+   "in": "Ⅻ",
+   "name": null,
+   "loose": "xii"
+  },
+  {
+   "in": "①②",
+   "name": "①②",
+   "loose": "12"
+  },
+  {
+   "in": "메타😀",
+   "name": "메타",
+   "loose": "메타"
+  },
+  {
+   "in": "𠀀",
+   "name": "𠀀",
+   "loose": "𠀀"
+  },
+  {
+   "in": "𠀀𠀁",
+   "name": "𠀀𠀁",
+   "loose": "𠀀𠀁"
+  },
+  {
+   "in": "𝐀𝐁",
+   "name": "𝐀𝐁",
+   "loose": "ab"
+  },
+  {
+   "in": "메 타",
+   "name": "메타",
+   "loose": "메타"
+  },
+  {
+   "in": "메​타",
+   "name": "메타",
+   "loose": "메타"
+  },
+  {
+   "in": "éclair",
+   "name": "éclair",
+   "loose": "éclair"
+  },
+  {
+   "in": "́",
+   "name": null,
+   "loose": null
+  },
+  {
+   "in": "١٢٣",
+   "name": "١٢٣",
+   "loose": "١٢٣"
+  },
+  {
+   "in": "株式會社메타",
+   "name": "株式會社메타",
+   "loose": "株式會社메타"
+  },
+  {
+   "in": "Ⓐ메타",
+   "name": "메타",
+   "loose": "a메타"
+  },
+  {
+   "in": "Ǆ",
+   "name": null,
+   "loose": "dž"
+  },
+  {
+   "in": "ǅ",
+   "name": null,
+   "loose": "dž"
+  },
+  {
+   "in": "K메타",
+   "name": "k메타",
+   "loose": "k메타"
+  },
+  {
+   "in": "Café-Bar",
+   "name": "cafébar",
+   "loose": "cafébar"
+  },
+  {
+   "in": "메타_코리아",
+   "name": "메타코리아",
+   "loose": "메타코리아"
+  },
+  {
+   "in": "메타.co.kr",
+   "name": "메타cokr",
+   "loose": "메타cokr"
+  },
+  {
+   "in": "스마트스토어 메타샵",
+   "name": "스마트스토어메타샵",
+   "loose": "스마트스토어메타샵"
+  },
+  {
+   "in": "메타샵 (스마트스토어)",
+   "name": "메타샵스마트스토어",
+   "loose": "메타샵스마트스토어"
+  },
+  {
+   "in": "M",
+   "name": null,
+   "loose": null
+  },
+  {
+   "in": "메",
+   "name": null,
+   "loose": null
+  },
+  {
+   "in": "메타",
+   "name": "메타",
+   "loose": "메타"
+  },
+  {
+   "in": "  메타  ",
+   "name": "메타",
+   "loose": "메타"
+  },
+  {
+   "in": "\t메타\n",
+   "name": "메타",
+   "loose": "메타"
+  },
+  {
+   "in": "ＡＢ",
+   "name": "ａｂ",
+   "loose": "ab"
+  },
+  {
+   "in": "ｱｲｳ",
+   "name": "ｱｲｳ",
+   "loose": "アイウ"
+  },
+  {
+   "in": "ㄱㄴ",
+   "name": "ㄱㄴ",
+   "loose": "ᄀᄂ"
+  },
+  {
+   "in": "ﾒﾀ",
+   "name": "ﾒﾀ",
+   "loose": "メタ"
+  },
+  {
+   "in": "主",
+   "name": null,
+   "loose": null
+  },
+  {
+   "in": "(株)메타",
+   "name": "株메타",
+   "loose": "株메타"
+  },
+  {
+   "in": "Meta Inc.",
+   "name": "metainc",
+   "loose": "metainc"
+  },
+  {
+   "in": "META",
+   "name": "meta",
+   "loose": "meta"
+  },
+  {
+   "in": "meta",
+   "name": "meta",
+   "loose": "meta"
+  },
+  {
+   "in": "No.1 메타",
+   "name": "no1메타",
+   "loose": "no1메타"
+  },
+  {
+   "in": "메타 2호점",
+   "name": "메타2호점",
+   "loose": "메타2호점"
+  },
+  {
+   "in": "유한회사",
+   "name": "유한회사",
+   "loose": null
+  },
+  {
+   "in": "(유)",
+   "name": null,
+   "loose": null
+  }
+ ]
+}
