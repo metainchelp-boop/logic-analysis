@@ -625,8 +625,9 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                                                             ),
                                                             React.createElement('td', null,
                                                                 k.latest_rank
-                                                                    ? React.createElement('span', { style: { fontWeight: 700, color: k.latest_rank <= 10 ? '#059669' : k.latest_rank <= 40 ? '#d97706' : '#dc2626' } }, k.latest_rank + '위')
-                                                                    : React.createElement('span', { className: 'badge badge-gray' }, '300위 밖')
+                                                                    ? React.createElement('span', { style: { fontWeight: 700, color: k.stale ? '#94a3b8' : (k.latest_rank <= 10 ? '#059669' : k.latest_rank <= 40 ? '#d97706' : '#dc2626') } }, k.latest_rank + '위')
+                                                                    : React.createElement('span', { className: 'badge badge-gray' }, '300위 밖'),
+                                                                window.rankStaleChip(k.stale, k.stale_days, k.last_checked)
                                                             ),
                                                             React.createElement('td', null, k.latest_rank ? Math.ceil(k.latest_rank / 40) + 'P' : '-'),
                                                             React.createElement('td', { style: { fontSize: 12, color: '#94a3b8' } }, k.last_checked ? new Date(k.last_checked).toLocaleString('ko') : '-'),
@@ -821,7 +822,7 @@ window.RankTrackingSection = function RankTrackingSection({ products, refreshPro
                                                                             onClick: function() { var next = kOpen ? null : k.id; setExpandedKeyword(next); if (next) loadHistory(k.id, historyDays[k.id] || 30); } },
                                                                             React.createElement('td', { style: { padding: '6px 10px', fontWeight: 600, color: '#1e293b' } },
                                                                                 React.createElement('span', { style: { color: '#cbd5e1', marginRight: 5, fontSize: 9 } }, kOpen ? '▼' : '▶'), k.keyword),
-                                                                            React.createElement('td', { style: { padding: '6px 10px' } }, _rankBadge(k.latest_rank)),
+                                                                            React.createElement('td', { style: { padding: '6px 10px' } }, _rankBadge(k.latest_rank), window.rankStaleChip(k.stale, k.stale_days, k.last_checked)),
                                                                             React.createElement('td', { style: { padding: '6px 10px' } },
                                                                                 _stateChip(_kwState(k, !!(p.nv_mid && String(p.nv_mid).trim())), true),
                                                                                 React.createElement('span', { style: { display: 'block', fontSize: 9.5, marginTop: 2, color: (p.nv_mid && String(p.nv_mid).trim()) ? '#059669' : '#dc2626' } }, (p.nv_mid && String(p.nv_mid).trim()) ? 'nvMid ✓' : 'nvMid 없음')),

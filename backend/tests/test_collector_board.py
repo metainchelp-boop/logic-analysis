@@ -206,5 +206,67 @@ ok("왼쪽 메뉴에 수집 현황판(최고관리자만)", "role === 'superadmi
 dep = open(os.path.join(ROOT, ".github", "workflows", "deploy.yml"), encoding="utf-8").read()
 ok("이 시험이 게이트에 있다", "python backend/tests/test_collector_board.py" in dep)
 
+print("⑧ 2페이지 넘김(2026-09-28)")
+import json as _json  # noqa: E402
+c8 = sqlite3.connect(":memory:")
+c8.executescript("""
+CREATE TABLE collected_serp (keyword TEXT, collected_date TEXT, created_at TEXT);
+CREATE TABLE collector_blocks (id INTEGER PRIMARY KEY, at TEXT, keyword TEXT, paging_index INTEGER, err TEXT,
+                               title TEXT, href TEXT, body TEXT, ext_version TEXT, note TEXT);
+CREATE TABLE client_rank_history (checked_at TEXT, rank_position INTEGER);
+CREATE TABLE rankings (checked_at TEXT);
+CREATE TABLE collector_observations (keyword TEXT, collected_date TEXT, kind TEXT, received_at TEXT,
+                                     reason TEXT, projected INTEGER DEFAULT 0, meta_json TEXT);
+""")
+def _obs(day, kw, kind, reason, pages, wid):
+    c8.execute("INSERT INTO collector_observations VALUES (?,?,?,?,?,?,?)",
+               (kw, day, kind, day + " 10:00:00", reason, 0,
+                _json.dumps({"observation": {"workerId": wid, "pagesRead": pages}} if pages is not None else {})))
+# 오늘: 기계 A — 2쪽 넘김 3(완료 2 + 3쪽에서 멈춤 1) · 2쪽에서 멈춤 5 · 1쪽에서 대상 다 찾음 4(시도 아님)
+for i in range(2): _obs(TODAY, f"a{i}", "full", "COMPLETE", 8, "iA")
+_obs(TODAY, "a2", "positive", "STALE_PAGE", 3, "iA")
+for i in range(5): _obs(TODAY, f"s{i}", "positive", "STALE_PAGE", 1, "iA")
+for i in range(4): _obs(TODAY, f"f{i}", "full_positive", "TARGETS_FOUND", 1, "iA")
+# 기계 B — 2쪽에서 멈춤 사유 둘(NO_PAGER · SAME_AS_PREV) · 옛 확장(관측 없음 meta)
+_obs(TODAY, "b0", "positive", "NO_PAGER", 1, "iB")
+_obs(TODAY, "b1", "positive", "SAME_AS_PREV", 1, "iB")
+_obs(TODAY, "b2", "full", "LEGACY", None, "")
+# 어제: 넘김 1 / 시도 1
+_obs(YDAY, "y0", "full", "COMPLETE", 8, "iA")
+c8.commit()
+pd = cb.page2_by_day(c8, YDAY)
+ok("오늘 넘김 3 · 시도 3+5+2 = 10", pd.get(TODAY) == {"passed": 3, "tried": 10}, str(pd))
+ok("1쪽에서 끝난 수집은 시도에 안 넣음", pd[TODAY]["tried"] == 10)
+ok("어제 따로", pd.get(YDAY) == {"passed": 1, "tried": 1})
+pi = cb.page2_by_instance(c8, TODAY)
+ok("기계별 — A 3/8 · B 0/2", pi.get("iA") == {"passed": 3, "tried": 8} and pi.get("iB") == {"passed": 0, "tried": 2}, str(pi))
+ok("meta 없는 옛 줄은 시도 0", pi.get("", {"tried": 0})["tried"] == 0)
+c9 = sqlite3.connect(":memory:")
+c9.execute("CREATE TABLE collector_observations (keyword TEXT, collected_date TEXT, reason TEXT)")
+ok("meta_json 을 셀 수 없으면 None(0 아님)", cb.page2_by_day(c9, TODAY) is None and cb.page2_by_instance(c9, TODAY) is None)
+ok("원장이 없으면 빈 dict", cb.page2_by_day(sqlite3.connect(":memory:"), TODAY) == {})
+v = cb.page2_verdict
+ok("못 읽으면 미확인", v(None)["level"] == "unknown")
+ok("시도 20 미만은 판단 안 함", v({"passed": 0, "tried": 19})["level"] == "unknown")
+ok("절반 이상 정상", v({"passed": 10, "tried": 20})["level"] == "ok")
+ok("10% 이상 확인", v({"passed": 2, "tried": 20})["level"] == "warn")
+ok("10% 미만 문제 + 안내", v({"passed": 1, "tried": 231})["level"] == "bad" and "41위" in v({"passed": 0, "tried": 231})["text"])
+ok("오늘 수치 문구", v({"passed": 3, "tried": 30})["text"].startswith("오늘 3/30번 넘김(10%)"))
+rows8 = [dict(machine("1", 2, 3), instance_id="iA"), dict(machine("2", 2, 3), instance_id="iB")]
+out8 = cb.build(c8, TODAY, ["a0", "s0"], split_ok=split_rule.split_ok, machines_rows=rows8, now=NOW)
+ok("요약에 page2", out8["summary"]["page2"] == {"passed": 3, "tried": 10})
+ok("14일 줄마다 page2", out8["history"][-1]["page2"] == {"passed": 3, "tried": 10}
+   and out8["history"][-2]["page2"] == {"passed": 1, "tried": 1} and out8["history"][0]["page2"] == {"passed": 0, "tried": 0})
+ok("기계 줄에 page2Today", out8["machines"][0]["page2Today"] == {"passed": 3, "tried": 8}
+   and out8["machines"][1]["page2Today"] == {"passed": 0, "tried": 2})
+ok("판정 줄 두 번째에 2페이지", out8["verdicts"][1]["key"] == "page2" and out8["verdicts"][0]["key"] == "block")
+out9 = cb.build(c, TODAY, UNI, split_ok=split_rule.split_ok, machines_rows=[machine(1, 2, 3)], now=NOW)
+ok("meta 칸 없는 옛 원장이어도 현황판은 뜬다(page2 = None)", out9["summary"]["page2"] is None
+   and {x["key"]: x["level"] for x in out9["verdicts"]}["page2"] == "unknown")
+pg = open(os.path.join(ROOT, "frontend", "js", "components", "CollectorBoardPage.jsx"), encoding="utf-8").read()
+ok("화면 — 타일 · 14일 칸 · 기계 칸", "_cbKpi('2페이지 넘김', _cbP2(s.page2)" in pg and "_cbP2(r.page2)" in pg
+   and "_cbP2(m.page2Today)" in pg and "'2페이지 넘김(오늘)'" in pg)
+ok("화면 — null 은 미확인", "if (p === null || p === undefined) return '미확인';" in pg)
+
 print(f"\n{passed} 통과 · {failed} 실패")
 sys.exit(1 if failed else 0)

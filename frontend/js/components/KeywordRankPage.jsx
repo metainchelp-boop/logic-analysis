@@ -271,7 +271,8 @@ function HumanViewCard(props) {
         view.tokenMsg && React.createElement('p', { role: 'status', style: { fontSize: 12, color: '#1d4ed8', margin: '6px 0 0' } },
             view.token && React.createElement('code', { style: { fontSize: 12, background: '#eff6ff', padding: '2px 6px', borderRadius: 6, marginRight: 6, userSelect: 'all', wordBreak: 'break-all' } }, view.token),
             view.tokenMsg),
-        d && (pcs === null ? React.createElement('p', { style: { fontSize: 12, color: '#b45309' } }, 'PC별 기록을 읽지 못했습니다(미확인).')
+        /* ⚠️ Array 가 아니면(없음·null) 「미확인」 — .length 로 화면 전체가 죽지 않게(2026-09-28 렌더 점검에서 발견) */
+        d && (!Array.isArray(pcs) ? React.createElement('p', { style: { fontSize: 12, color: '#b45309' } }, 'PC별 기록을 읽지 못했습니다(미확인).')
             : !pcs.length ? React.createElement('p', { style: { fontSize: 12, color: '#64748b', margin: '8px 0 0' } }, '오늘 읽은 화면이 없습니다 — 아직 설치한 PC 가 없거나 오늘 쓰지 않았습니다.')
             : React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 8, marginTop: 10 } },
                 pcs.map(function(p) {
@@ -822,11 +823,15 @@ window.KeywordRankPage = function KeywordRankPage(props) {
     // 키워드 한 줄의 등록 상태 — 대표 지시의 「제대로 등록됐나」 + 「300위 밖·nvMid 없음」 표기
     var _kwStateChip = function(b) {
         var st;
-        if (b.pending) st = { t: '🆕 첫 수집 대기', c: '#1d4ed8', bg: '#dbeafe' };
-        else if (b.rank != null && b.rank > 0) st = { t: '✅ ' + b.rank + '위', c: '#059669', bg: '#d1fae5' };
+        // 오래된 순위(2026-09-28) — 예전에 잰 적이 있는 키워드는 「첫 수집 대기」가 아니다
+        if (b.pending && b.pending_reason === 'stale') st = { t: '🕘 ' + ((b.last_known && b.last_known.rank) ? b.last_known.rank + '위(예전 값)' : '새 기록 없음'), c: '#b45309', bg: '#fef3c7' };
+        else if (b.pending) st = { t: '🆕 첫 수집 대기', c: '#1d4ed8', bg: '#dbeafe' };
+        else if (b.rank != null && b.rank > 0) st = { t: '✅ ' + b.rank + '위', c: b.stale ? '#64748b' : '#059669', bg: b.stale ? '#f1f5f9' : '#d1fae5' };
         else if (b.has_nvmid === false) st = { t: '⚠ 300위 밖 · nvMid 없음', c: '#dc2626', bg: '#fee2e2' };
         else st = { t: '⚠ 300위 밖', c: '#b45309', bg: '#fef3c7' };
-        return React.createElement('span', { style: { display: 'inline-block', padding: '2px 9px', borderRadius: 99, fontSize: 11.5, fontWeight: 700, color: st.c, background: st.bg, whiteSpace: 'nowrap' } }, st.t);
+        return React.createElement('span', { style: { whiteSpace: 'nowrap' } },
+            React.createElement('span', { style: { display: 'inline-block', padding: '2px 9px', borderRadius: 99, fontSize: 11.5, fontWeight: 700, color: st.c, background: st.bg, whiteSpace: 'nowrap' } }, st.t),
+            window.rankStaleChip(b.stale, b.stale_days, b.last_checked));
     };
     // 며칠째 배지 — 접힌 줄에도 보인다(시안 정합 2026-09-18)
     var _daysBadge = function(dstr) {
@@ -1063,7 +1068,12 @@ window.KeywordRankPage = function KeywordRankPage(props) {
                                 React.createElement('td', { style: Object.assign({}, _krTd, { fontSize: 12, color: '#64748b' }) },
                                     (rankTab === 'manual' ? '상품 ' + (c.manual_products || 0) + '개 · ' : '') +
                                     ((c.top_keywords || []).map(function(t) { return t.keyword + ' ' + t.rank + '위'; }).join(' · ') || '—')),
-                                React.createElement('td', { style: Object.assign({}, _krTd, { fontSize: 12, color: '#94a3b8', whiteSpace: 'nowrap' }) }, c.last_checked || '—')
+                                React.createElement('td', { style: Object.assign({}, _krTd, { fontSize: 12, color: '#94a3b8', whiteSpace: 'nowrap' }) }, c.last_checked || '—',
+                                    /* 오래된 순위 수(2026-09-28 · 서버 집계) — 0 이면 안 그린다 */
+                                    (c.stale || 0) > 0 && React.createElement('span', {
+                                        style: { display: 'block', fontSize: 10.5, fontWeight: 800, color: '#b45309' },
+                                        title: '마지막 확인이 2일 이상 지난 순위 수 — 업체를 펼치면 키워드별 날짜가 보입니다'
+                                    }, '오래된 순위 ' + c.stale + '개'))
                             );
                             if (!_isOpen) return mainRow;
                             var expandRow = React.createElement('tr', { key: c.id + '-x' },
@@ -1201,6 +1211,13 @@ window.KeywordRankPage = function KeywordRankPage(props) {
                         })),
                     React.createElement('span', { style: { fontSize: 12, color: '#94a3b8', marginLeft: 'auto' } }, '추이·전일 대비는 매일 08:00 기록 기준')
                 ),
+                /* 오래된 순위 안내(2026-09-28) — 서버가 센 수(kpis.stale)가 있을 때만 */
+                !bdLoading && (kpis.stale || 0) > 0 && React.createElement('div', {
+                    style: { margin: '0 0 12px', padding: '10px 14px', borderRadius: 10, background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e', fontSize: 12.5, lineHeight: 1.6 }
+                },
+                    React.createElement('b', null, '⚠ 순위 ' + kpis.stale + '개는 2일 이상 새로 확인되지 않았습니다. '),
+                    '수집기가 2페이지(41위 아래)를 확인하지 못하면, 1페이지에서 못 찾은 상품은 마지막으로 확인한 순위가 그대로 남습니다. ',
+                    '주황 배지(「며칠 전」)가 붙은 순위는 오늘 값이 아닙니다 — 광고주 안내 전에 날짜를 확인하세요.'),
                 bdLoading ? React.createElement('div', { style: { padding: '40px 0', textAlign: 'center', color: '#94a3b8', fontSize: 13 } }, '불러오는 중...') :
                 rows.length === 0 ? React.createElement('div', { style: { padding: '40px 0', textAlign: 'center', color: '#94a3b8', fontSize: 13 } },
                     '아직 순위 기록이 없습니다. 위 「＋ 추적 키워드 등록」에 키워드를 넣으면 수 분 안에 첫 순위가 기록됩니다.') :
@@ -1248,7 +1265,16 @@ window.KeywordRankPage = function KeywordRankPage(props) {
                                     }, b.source_label)),
                                 React.createElement('td', { style: Object.assign({}, _krTd, { textAlign: 'right' }) },
                                     exposed
-                                        ? React.createElement('span', { style: { fontSize: 16, fontWeight: 800, color: b.rank <= 10 ? '#16a34a' : '#0f172a', fontVariantNumeric: 'tabular-nums' } }, b.rank + '위')
+                                        ? React.createElement('span', null,
+                                            React.createElement('span', { style: { fontSize: 16, fontWeight: 800, color: b.stale ? '#94a3b8' : (b.rank <= 10 ? '#16a34a' : '#0f172a'), fontVariantNumeric: 'tabular-nums' } }, b.rank + '위'),
+                                            window.rankStaleChip(b.stale, b.stale_days, b.last_checked))
+                                        : (b.pending && b.pending_reason === 'stale')
+                                        // 오래된 순위(2026-09-28) — 창 안에 새 기록이 없지만 예전에 잰 적이 있다 = 「대기」가 아니다
+                                        ? React.createElement('span', null,
+                                            (b.last_known && b.last_known.rank)
+                                                ? React.createElement('span', { style: { fontSize: 16, fontWeight: 800, color: '#94a3b8', fontVariantNumeric: 'tabular-nums' } }, b.last_known.rank + '위')
+                                                : React.createElement('span', { style: _krChip('mute') }, '미노출'),
+                                            window.rankStaleChip(true, b.stale_days, b.last_checked))
                                         : b.pending
                                         // 「기록 대기」를 두 종류로 가른다(신고 #248) —
                                         // 기다리면 풀리는 것과, 사람이 손대기 전엔 영영 안 풀리는 것.
@@ -1265,15 +1291,17 @@ window.KeywordRankPage = function KeywordRankPage(props) {
                                               }, '⏳ ' + (b.pending_hint || '수집 대기')))
                                         : React.createElement('span', null,
                                             React.createElement('span', { style: _krChip('mute') }, '미노출'),
-                                            (b.unexposed_days || 0) >= 2 && React.createElement('span', { style: Object.assign({}, _krChip('warn'), { marginLeft: 4 }), title: '연속 미노출 일수' }, b.unexposed_days + '일째'))),
+                                            (b.unexposed_days || 0) >= 2 && React.createElement('span', { style: Object.assign({}, _krChip('warn'), { marginLeft: 4 }), title: '연속 미노출 일수' }, b.unexposed_days + '일째'),
+                                            window.rankStaleChip(b.stale, b.stale_days, b.last_checked))),
                                 React.createElement('td', { style: _krTd },
                                     exposed && (b.delta !== null && b.delta !== undefined)
-                                        ? React.createElement('span', { style: d.style }, d.label)
+                                        // 오래된 순위의 전일 대비는 그 옛날 두 날짜 사이 변화다 — 흐리게(2026-09-28)
+                                        ? React.createElement('span', { style: Object.assign({}, d.style, b.stale ? { opacity: 0.4 } : {}), title: b.stale ? '마지막으로 확인한 두 날짜 사이의 변화 — 오늘 변화가 아닙니다' : undefined }, d.label)
                                         : React.createElement('span', { style: { fontSize: 11.5, color: '#cbd5e1' } }, '—')),
                                 React.createElement('td', { style: _krTd }, _krSparkline(b.series)),
                                 React.createElement('td', { style: Object.assign({}, _krTd, { textAlign: 'right', fontVariantNumeric: 'tabular-nums' }) }, b.volume || '—'),
                                 React.createElement('td', { style: Object.assign({}, _krTd, { textAlign: 'right', fontVariantNumeric: 'tabular-nums' }) }, exposed && b.page ? b.page + 'p' : '—'),
-                                React.createElement('td', { style: Object.assign({}, _krTd, { fontSize: 12, color: '#94a3b8', whiteSpace: 'nowrap' }) },
+                                React.createElement('td', { style: Object.assign({}, _krTd, { fontSize: 12, color: b.stale ? '#b45309' : '#94a3b8', fontWeight: b.stale ? 700 : 400, whiteSpace: 'nowrap' }) },
                                     b.last_checked ? String(b.last_checked).slice(0, 16).replace('T', ' ') : '—'),
                                 React.createElement('td', { style: Object.assign({}, _krTd, { whiteSpace: 'nowrap' }) },
                                     React.createElement('button', {

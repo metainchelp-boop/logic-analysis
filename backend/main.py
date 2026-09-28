@@ -1144,8 +1144,17 @@ def list_products(current_user: dict = Depends(get_current_user)):
 
             # product_id별로 그룹핑
             kw_map = {}
+            try:
+                import rank_staleness as _rs
+            except Exception:
+                _rs = None
             for kw in all_keywords:
                 kw_dict = dict(kw)
+                # 오래된 순위(2026-09-28) — 마지막 확인이 2일 전 이전이면 표시(값은 그대로 · additive)
+                if _rs is not None:
+                    _sd = _rs.stale_days(kw_dict.get('last_checked'))
+                    kw_dict['stale_days'] = _sd
+                    kw_dict['stale'] = _rs.is_stale(_sd)
                 pid = kw_dict['product_id']
                 kw_map.setdefault(pid, []).append(kw_dict)
         finally:

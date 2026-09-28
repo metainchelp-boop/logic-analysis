@@ -28,6 +28,13 @@ function _cbAgo(min) {
     if (min < 60 * 24) return Math.floor(min / 60) + '시간 전';
     return Math.floor(min / 1440) + '일 전';
 }
+/* 2페이지 넘김 {passed, tried} → 「넘김/시도 (비율)」. null 은 「미확인」(0 과 섞지 않는다). */
+function _cbP2(p) {
+    if (p === null || p === undefined) return '미확인';
+    var t = p.tried || 0, n = p.passed || 0;
+    if (!t) return '시도 0';
+    return n + ' / ' + t + ' (' + Math.round(100 * n / t) + '%)';
+}
 function _cbSection(title, sub, body) {
     return React.createElement('div', { style: _krCard },
         React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 12, flexWrap: 'wrap' } },
@@ -141,7 +148,10 @@ window.CollectorBoardPage = function CollectorBoardPage(props) {
         _cbKpi('시도 횟수', _cbNum(s.attempts), '수집기가 올린 결과 수'),
         _cbKpi('도우미가 읽은 화면', _cbNum(s.human), '사람이 넘긴 화면'),
         _cbKpi('진짜 차단', _cbNum(s.realBlocks), '퍼즐·차단 문구', (s.realBlocks > 0) ? '#b91c1c' : '#15803d'),
-        _cbKpi('진단 보고', _cbNum(s.diagBlocks), '차단이 아님 — 2페이지 불변 등'));
+        _cbKpi('진단 보고', _cbNum(s.diagBlocks), '차단이 아님 — 2페이지 불변 등'),
+        /* 2페이지 넘김(2026-09-28) — 1페이지에서 끝난 수집은 시도에 넣지 않는다 */
+        _cbKpi('2페이지 넘김', _cbP2(s.page2), '넘김 / 시도 — 41위 아래를 확인한 비율',
+               (s.page2 && s.page2.tried >= 20) ? (s.page2.passed * 2 >= s.page2.tried ? '#15803d' : (s.page2.passed * 10 >= s.page2.tried ? '#b45309' : '#b91c1c')) : undefined));
 
     // ③ 시간대별
     var hr = data.hourly;
@@ -166,9 +176,9 @@ window.CollectorBoardPage = function CollectorBoardPage(props) {
         }), hmx),
         _cbLegend('시도', '완료'),
         React.createElement('div', { style: { marginTop: 12 } },
-            _cbTable(['날짜', '완료', '300위까지', '대상 다 찾음', '부분', '시도', '도우미 화면', '진짜 차단', '진단 보고'],
+            _cbTable(['날짜', '완료', '300위까지', '대상 다 찾음', '부분', '시도', '2페이지 넘김', '도우미 화면', '진짜 차단', '진단 보고'],
                 hist.slice().reverse().map(function(r) {
-                    return [r.day, _cbNum(r.completed), _cbNum(r.full), _cbNum(r.found), _cbNum(r.partial), _cbNum(r.attempts), _cbNum(r.human),
+                    return [r.day, _cbNum(r.completed), _cbNum(r.full), _cbNum(r.found), _cbNum(r.partial), _cbNum(r.attempts), _cbP2(r.page2), _cbNum(r.human),
                         React.createElement('span', { style: { color: r.realBlocks > 0 ? '#b91c1c' : undefined, fontWeight: r.realBlocks > 0 ? 800 : 400 } }, _cbNum(r.realBlocks)),
                         _cbNum(r.diagBlocks)];
                 }))));
@@ -185,11 +195,12 @@ window.CollectorBoardPage = function CollectorBoardPage(props) {
                 (m.day_total ? (m.day_done || 0) + ' / ' + m.day_total : '미확인'),
                 m.settingsText || '미확인',
                 up ? (up.count ? up.count + '건 쌓임' : '없음') : '미보고',
+                _cbP2(m.page2Today),
                 m.last_error ? String(m.last_error).slice(0, 40) : '—'
             ];
         });
     };
-    var mHeads = ['기계', '버전', '상태', '마지막 신호', '오늘 몫(완료/전체)', '서버 설정', '미전송', '마지막 오류'];
+    var mHeads = ['기계', '버전', '상태', '마지막 신호', '오늘 몫(완료/전체)', '서버 설정', '미전송', '2페이지 넘김(오늘)', '마지막 오류'];
     var machines = React.createElement('div', null,
         data.machines === null
             ? React.createElement('div', { style: { color: '#94a3b8', fontSize: 12.5 } }, '기계 신호를 읽지 못했습니다(미확인).')
