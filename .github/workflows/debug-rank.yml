@@ -489,7 +489,25 @@ jobs:
             PY
             echo "== [#292] 파일 · 번들 표지 =="
             docker exec -i logic-analysis sh -c 'ls -l /app/rank_staleness.py 2>&1; grep -c "_rs.stale_days" /app/client_dashboard.py; grep -c "kw_dict\[.stale.\]" /app/main.py; grep -c "def page2_verdict" /app/collector_board.py'
-            for m in 'rankStaleChip' '일 전' '2페이지 넘김' '오래된 순위'; do n=$(cat "$D"/app.*.js 2>/dev/null | grep -o -- "$m" | wc -l); echo "  [$n] $m"; done
+            for m in 'rankStaleChip' '일 전' '2페이지 넘김' '오래된 순위' '여기서부터 보기' '전체 보기로 돌아가기' 'cb_since'; do n=$(cat "$D"/app.*.js 2>/dev/null | grep -o -- "$m" | wc -l); echo "  [$n] $m"; done
+            echo "== [#294] 기준 시각 계산 · 옛 설치본 정리 =="
+            docker exec -i logic-analysis sh -c 'grep -c "def window_numbers" /app/collector_board.py; grep -c "def prune_replaced" /app/collector_heartbeat.py; grep -c "helper=helper, since=since)" /app/collector.py'
+            docker logs logic-analysis 2>&1 | grep -E "옛 설치본 신호 줄 정리" | tail -3 || true
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sys, sqlite3, time
+            sys.path.insert(0, "/app")
+            import collector_board as cb, split_rule
+            from collector_heartbeat import machines
+            from collector import _effective_date
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            today = _effective_date()
+            since = time.strftime("%Y-%m-%d %H:00:00")
+            out = cb.build(conn, today, None, machines_rows=machines(conn), since=since)
+            w = out["window"] or {}
+            print("  기준", since, "· window", {k: w.get(k) for k in ("label", "attempts", "completed", "page2", "human")})
+            print("  막힘", (w.get("blocks") or {}).get("real"), (w.get("blocks") or {}).get("diag"), "· 판정", [v["text"] for v in out["verdicts"][:2]])
+            print("  heartbeat 줄:", [(r.get("machine"), r.get("last_seen")) for r in machines(conn)])
+            PY
             echo "== 기동 뒤 오류 줄 =="
             docker logs logic-analysis 2>&1 | grep -c -E 'Traceback|ERROR' || true
             echo "== 오류 줄 내용별(앞 70자 · 숫자 가림 · 상위 8) =="
