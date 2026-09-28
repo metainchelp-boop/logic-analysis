@@ -28,9 +28,10 @@ BIZMONEY = ("customerId", "bizmoney", "budgetLock", "refundLock")
 # 비즈채널(BusinessChannel) — 짝 확인 미리보기에서만(저장하지 않음)
 CHANNEL = ("nccBusinessChannelId", "customerId", "name", "channelTp", "channelKey", "status")
 
-# 통계 지표 — 명세에 있는 이름만 요청할 수 있다. 합계(SummaryStatMap)에는 구매 지표가 없다.
+# 통계 지표 — 명세의 **요청** 이름(``fields`` 쿼리 목록)만 요청할 수 있다(응답 칸 이름 ``drtCrto`` 가 아니라 요청 이름 ``crto``).
+# 합계 응답(SummaryStatMap)에는 구매 지표가 없어 합계로는 요청하지 않는다. 받은 값이 비면 0 이 아니라 모름이다.
 STAT_FIELDS_SUMMARY = frozenset({
-    "impCnt", "clkCnt", "salesAmt", "ccnt", "viewCnt", "cpc", "ctr", "avgRnk", "drtCrto",
+    "impCnt", "clkCnt", "salesAmt", "ccnt", "viewCnt", "cpc", "ctr", "avgRnk", "crto", "convAmt", "ror", "cpConv",
 })
 STAT_FIELDS_DAILY = STAT_FIELDS_SUMMARY | frozenset({"purchaseCcnt", "purchaseConvAmt", "purchaseRor"})
 STAT_FIELDS = STAT_FIELDS_DAILY

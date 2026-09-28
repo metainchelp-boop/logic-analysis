@@ -645,24 +645,24 @@ class StatsParseTest(unittest.TestCase):
 
 class StatsReadTest(Base):
     def test_chunks_and_merge(self):
-        ids = [f"c{i}" for i in range(250)]
+        ids = [f"cmp-c{i}" for i in range(250)]
 
         def reply(c):
             got = c.query["ids"]
-            rows = stat_rows([i for i in got if i != "c7"])
+            rows = stat_rows([i for i in got if i != "cmp-c7"])
             return 200, {"summaryStatResponse": {"data": rows, "cycleBaseTm": FRESH}}
         self.naver.route(r"/stats", reply)
         r = self.reader.get_stats_summary(check_handle(), ids, YDAY, YDAY)
         self.assertEqual(len([c for c in self.naver.calls if c.path == "/stats"]), 3)
         self.assertEqual(len(r.rows), 249)
-        self.assertEqual(r.missing_ids, ("c7",))
+        self.assertEqual(r.missing_ids, ("cmp-c7",))
         self.assertFalse(r.complete)
         q = self.naver.calls[0].query
         self.assertEqual(json.loads(q["timeRange"][0]), {"since": YDAY.isoformat(), "until": YDAY.isoformat()})
         self.assertEqual(json.loads(q["fields"][0]), ["impCnt", "clkCnt", "salesAmt", "ccnt"])
 
     def test_one_chunk_without_cycle_makes_whole_unknown(self):
-        ids = [f"c{i}" for i in range(150)]
+        ids = [f"cmp-c{i}" for i in range(150)]
         state = {"n": 0}
 
         def reply(c):
@@ -677,30 +677,44 @@ class StatsReadTest(Base):
     def test_unknown_shape_propagates(self):
         self.naver.route(r"/stats", lambda c: (200, {"weird": []}))
         with self.assertRaises(R.StatsShapeUnknown):
-            self.reader.get_stats_summary(check_handle(), ["a"], YDAY, YDAY)
+            self.reader.get_stats_summary(check_handle(), ["cmp-a"], YDAY, YDAY)
 
     def test_future_cycle_is_unknown(self):
         self.naver.route(r"/stats", lambda c: (200, {"data": stat_rows(c.query["ids"]), "cycleBaseTm": "209912312359"}))
-        r = self.reader.get_stats_summary(check_handle(), ["a"], YDAY, YDAY)
+        r = self.reader.get_stats_summary(check_handle(), ["cmp-a"], YDAY, YDAY)
         self.assertIsNone(r.cycle_base_tm)
         self.assertFalse(r.complete)
         self.naver.routes.clear()
         self.naver.route(r"/stats", lambda c: (200, {"data": [{"dateStart": YDAY.isoformat(), "impCnt": 0, "clkCnt": 0,
                                                               "salesAmt": 0, "ccnt": 0}], "cycleBaseTm": "209912312359"}))
-        self.assertFalse(self.reader.get_stats_daily(check_handle(), "c", YDAY, YDAY).complete)
+        self.assertFalse(self.reader.get_stats_daily(check_handle(), "cmp-c", YDAY, YDAY).complete)
+
+    def test_campaign_ids_only(self):
+        """광고그룹·키워드 번호는 캠페인 종류가 섞이면 네이버가 400 으로 거절 — 당분간 캠페인 번호만."""
+        for bad in (["grp-a001-01-000000000000001"], ["nkw-a001-01-000000000000001"], ["a"], [3], ["cmp-"],
+                    ["cmp-a", "cmp-a"], []):
+            self.expect(ValueError, self.reader.get_stats_summary, check_handle(), bad, YDAY, YDAY)
+        self.expect(ValueError, self.reader.get_stats_daily, check_handle(), "grp-a001-01-1", YDAY, YDAY)
+        self.assertEqual(self.naver.calls, [])
+
+    def test_request_field_names(self):
+        self.expect(ValueError, self.reader.get_stats_summary, check_handle(), ["cmp-a"], YDAY, YDAY, ("drtCrto",))
+        self.naver.route(r"/stats", lambda c: (200, {"data": [{"id": "cmp-a", "crto": 1.5}], "cycleBaseTm": FRESH}))
+        r = self.reader.get_stats_summary(check_handle(), ["cmp-a"], YDAY, YDAY, ("crto",))
+        self.assertEqual(r.rows["cmp-a"]["crto"], 1.5)
 
     def test_purchase_fields_daily_only(self):
-        self.expect(ValueError, self.reader.get_stats_summary, check_handle(), ["a"], YDAY, YDAY, ("purchaseCcnt",))
+        self.expect(ValueError, self.reader.get_stats_summary, check_handle(), ["cmp-a"], YDAY, YDAY, ("purchaseCcnt",))
         self.assertEqual(self.naver.calls, [])
 
     def test_period_and_fields_validated(self):
         h = check_handle()
         today = NOW.date()
-        self.expect(ValueError, self.reader.get_stats_summary, h, ["a"], today, today + timedelta(days=1))
-        self.expect(ValueError, self.reader.get_stats_summary, h, ["a"], YDAY, YDAY - timedelta(days=1))
-        self.expect(ValueError, self.reader.get_stats_summary, h, ["a"], YDAY - timedelta(days=100), YDAY)
-        self.expect(ValueError, self.reader.get_stats_summary, h, ["a"], YDAY, YDAY, ("convAmt",))
-        self.expect(ValueError, self.reader.get_stats_summary, h, ["a", "a"], YDAY, YDAY)
+        self.expect(ValueError, self.reader.get_stats_summary, h, ["cmp-a"], today, today + timedelta(days=1))
+        self.expect(ValueError, self.reader.get_stats_summary, h, ["cmp-a"], YDAY, YDAY - timedelta(days=1))
+        self.expect(ValueError, self.reader.get_stats_summary, h, ["cmp-a"], YDAY - timedelta(days=100), YDAY)
+        self.expect(ValueError, self.reader.get_stats_summary, h, ["cmp-a"], YDAY, YDAY, ("notAField",))
+        self.expect(ValueError, self.reader.get_stats_summary, h, ["cmp-a", "cmp-a"], YDAY, YDAY)
         self.expect(ValueError, self.reader.get_stats_summary, h, [], YDAY, YDAY)
         self.assertEqual(self.naver.calls, [])
 

@@ -71,6 +71,8 @@ _PATHS = (
     re.compile(r"/ncc/channels"),
 )
 _CYCLE = re.compile(r"[0-9]{12}")
+# 통계는 당분간 **캠페인 번호만** — 광고그룹·키워드 번호는 캠페인 종류가 섞이면 네이버가 400(11003)으로 거절한다.
+_CAMPAIGN_ID = re.compile(r"cmp-[A-Za-z0-9-]{1,60}")
 _DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 
 KIND_KEY_REJECTED = "KEY_REJECTED"
@@ -672,9 +674,9 @@ class NaverReader:
         h = self._account(ah, (H.PURPOSE_CHECK,))
         _check_period(since, until, H._kst_today(self._clock.now()))
         flds = _check_fields(fields)
-        want = [str(i) for i in ids]
-        if not want or any(not i for i in want) or len(set(want)) != len(want):
-            raise ValueError("통계 번호가 비었거나 겹칩니다")
+        want = [i if isinstance(i, str) else "" for i in ids]
+        if not want or any(not _CAMPAIGN_ID.fullmatch(i) for i in want) or len(set(want)) != len(want):
+            raise ValueError("통계 번호는 겹치지 않는 캠페인 번호여야 합니다")
         rows: Dict[str, Dict[str, Optional[float]]] = {}
         missing: List[str] = []
         cycles: List[Optional[datetime]] = []
@@ -709,8 +711,8 @@ class NaverReader:
         h = self._account(ah, (H.PURPOSE_CHECK,))
         _check_period(since, until, H._kst_today(self._clock.now()))
         flds = _check_fields(fields, F.STAT_FIELDS_DAILY)
-        if not isinstance(entity_id, str) or not entity_id:
-            raise ValueError("번호가 아닙니다")
+        if not isinstance(entity_id, str) or not _CAMPAIGN_ID.fullmatch(entity_id):
+            raise ValueError("캠페인 번호가 아닙니다")
         body = self._request(h.customer_id, "/stats", {
             "id": entity_id,
             "fields": json.dumps(list(flds)),
