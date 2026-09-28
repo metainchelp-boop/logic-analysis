@@ -370,7 +370,7 @@
 </style>
 
 <div class="demo">
-  <b>시안 · 업데이트 2026-09-28 · v7 · 관제 먼저 · 확정</b>
+  <b>시안 · 업데이트 2026-09-28 · v8 · 관제 먼저 · 확정</b>
   <span class="grow">대표 지시 「매일 모든 광고주 계정에 하나씩 들어가 확인하는 일을 없앤다」로 다시 짰습니다 · 🛰 관제 = 전 광고주 현황 + 이슈 · 🤖 자동화는 따로 · 📄 주간·월간 보고서 · 모든 광고주·직원 이름과 숫자는 예시입니다</span>
   <button class="gbtn" data-guide>ⓘ 시안 안내 · 점검 규칙 · 대표 결정 12건 확정</button>
 </div>
@@ -433,6 +433,16 @@
         <thead><tr><th>상태</th><th>광고주</th><th>확인</th><th>담당</th><th>어제 광고비</th><th>같은 요일 대비</th><th>비즈머니</th><th>켜진 캠페인</th><th>열린 이슈</th><th>계약 단계</th><th>자동화</th></tr></thead>
         <tbody id="tbody"></tbody>
       </table></div>
+    </div>
+
+    <div class="card flat" id="endedCard">
+      <div class="kh" style="padding:12px 14px 4px"><h2>📦 계약 끝난 광고주</h2><span class="n" id="ended-n"></span><span class="n" style="margin-left:auto">사후 관리용 · 끝난 지 14일이 지나면 네이버 계정에 들어가지 않습니다</span></div>
+      <p class="hint" style="padding:0 14px 8px">여기 숫자는 <b>계약이 끝날 때까지 쌓아 둔 기록</b>과, 하루 한 번 받는 <b>대행사 계정 연결 목록</b>에서 본 연결 여부뿐입니다(그 광고주 계정에 따로 들어가지 않음). 재계약되면 저절로 다시 매일 점검 대상이 됩니다.</p>
+      <button class="foldbtn" id="endedToggle" aria-expanded="false">펼치기</button>
+      <div id="endedBody" hidden><div class="tblwrap"><table>
+        <thead><tr><th>광고주</th><th>담당</th><th>계약 끝난 날</th><th>지난 날</th><th>끝날 때 마지막 점검</th><th>끝나기 전 마지막 달 광고비</th><th>네이버 연결</th><th>점검</th></tr></thead>
+        <tbody id="endedTbody"></tbody>
+      </table></div></div>
     </div>
   </section>
 
@@ -710,6 +720,7 @@
 
   <div class="changelog">
     <b>변경 이력</b><br>
+    v8 · 2026-09-28 — 대표 요청 「계약이 끝난 광고주는 별도로 모아서 — 접속은 안 하지만 현황은 보고 싶어(사후 관리)」: 관제 아래 「📦 계약 끝난 광고주」 칸(끝난 날 · 지난 날 · 끝날 때 마지막 점검 · 마지막 달 광고비 · 네이버 연결 남음/해제됨 · 14일까지는 계속 점검). 끝난 지 14일이 지나면 계정에 들어가지 않고 기록과 대행사 연결 목록만 씁니다.<br>
     v7 · 2026-09-28 — 대표 「추천대로해」: 결정 12건(M0~M11) 모두 권고안으로 확정 · 선택 잠금 · 0단계 첫 시험 결과(대행사 계정 키 한 벌로 1,784곳 · 비즈머니 읽힘 · 2번 계정 연결 0곳) 반영. 이 시안을 토대로 2차부터 만든다.<br>
     v6 · 2026-09-28 — 대표 지시(「직원이 매일 모든 광고주 계정에 들어가 확인하는 일을 없앤다 · 관제 대시보드에서 전 광고주 현황 · 매일 오전 점검 · 이슈 관리 · 자동화는 별도 페이지 · 주간·월간 보고서」)로 전면 개편. 메뉴 4개(🛰 관제 · 🤖 자동화 · 📄 보고서 · ⚙️ 설정) · 매일 아침 점검 규칙 · 광고주 판정 표 · 이슈 단계(새로 · 확인 중 · 해결 · 저절로 풀림 · 예외) · 보고서(주간 자동 · 월간 검토) · 점검 실패한 날 보기 · 실측(전산 API 키 2곳 · 로그인 아이디 239곳)으로 「열쇠」 결정(M0) 새로 · 대표 결정 12건(M0~M11). v5 는 자동화 페이지로 옮겨 모양만 남김.<br>
     v5 · 2026-09-28 — 대표 「추천대로 해」: 결정 7건(N1~N3 · P1~P4) 확정.<br>
@@ -799,6 +810,13 @@
     {k:9,c:'paha',lv:'y',cause:'비즈머니가 3일 안에 바닥납니다',txt:'잔액 54,000원 · 하루 평균 34,000원 → 약 1.6일',st:'except',at:'어제',who:'박담당 · 10/27까지',memo:['박담당 09-27 · 광고주가 자동 충전을 켜 둠 — 30일 예외']},
     {k:10,c:'saa',lv:'y',cause:'비즈머니가 3일 안에 바닥납니다',txt:'어제 잔액 부족 → 오늘 아침 충전 확인',st:'auto',at:'오늘 06:40',memo:[]},
     {k:11,c:'aja',lv:'r',cause:'켜져 있는데 광고가 안 나갑니다',txt:'그제 노출 0 → 어제 노출 5,120으로 돌아옴',st:'auto',at:'오늘 06:42',memo:[]}
+  ];
+  var ENDED=[
+    {n:'바바 떡집',o:'kim',end:'9/20',days:8,last:'g',spend:'1,240,000원',link:'on',watch:true},
+    {n:'사사 반찬',o:'kim',end:'8/31',days:28,last:'y',spend:'860,000원',link:'on'},
+    {n:'아아 캠핑카',o:'park2',end:'7/15',days:75,last:'g',spend:'2,310,000원',link:'off'},
+    {n:'자자 수제청',o:'park2',end:'6/30',days:90,last:'w',spend:'—',link:'on'},
+    {n:'차차 조명',o:'jung',end:'9/05',days:23,last:'r',spend:'3,020,000원',link:'on'}
   ];
   var INFO=[{c:'geo',txt:'캠페인 「가을 기획전」이 10/1(수)에 끝납니다 — 이어 갈지 광고주와 확인'}];
 
@@ -1069,7 +1087,20 @@
     $$('[data-role]').forEach(function(b){b.classList.toggle('on',b.getAttribute('data-role')===state.role)});
     renderAll();
   }
-  function renderAll(){renderRun();renderKpis();renderIssues();renderTable();renderAuto();renderReports();renderTh();renderDrawer();if(state.client)renderClient()}
+  var endedOpen=false;
+  function renderEnded(){
+    var o=visibleOwners(),v=ENDED.filter(function(e){return o.indexOf(e.o)>=0});
+    var SG={g:'🟢 정상',y:'🟡 주의',r:'🔴 긴급',w:'⚪ 점검 불가'};
+    var on=v.filter(function(e){return e.link==='on'&&!e.watch}).length;
+    $('#ended-n').textContent=v.length+'곳'+(on?' · 네이버 연결이 남은 곳 '+on:'');
+    $('#endedCard').hidden=!v.length&&state.role==='park';
+    var h='';v.forEach(function(e){
+      var link=e.watch?'<span class="st work">연결 · 14일 동안 계속 점검</span>':(e.link==='on'?'<span class="st new">연결 남음 — 네이버에서 해제 권장</span>':'<span class="st except">해제됨</span>');
+      h+='<tr><td><b>'+e.n+'</b></td><td>'+PEOPLE[e.o].n+'</td><td class="num">'+e.end+'</td><td class="num">'+e.days+'일</td><td>'+SG[e.last]+'</td><td class="num">'+e.spend+'</td><td>'+link+'</td><td>'+(e.watch?'매일(14일까지)':'<span class="noneed">안 함</span>')+'</td></tr>';});
+    $('#endedTbody').innerHTML=h||'<tr><td colspan="8" class="empty">계약이 끝난 담당 광고주가 없습니다.</td></tr>';
+    $('#endedBody').hidden=!endedOpen;$('#endedToggle').textContent=endedOpen?'접기':'펼치기';$('#endedToggle').setAttribute('aria-expanded',String(endedOpen));
+  }
+  function renderAll(){renderEnded();renderRun();renderKpis();renderIssues();renderTable();renderAuto();renderReports();renderTh();renderDrawer();if(state.client)renderClient()}
 
   /* ---------- 화면 전환 ---------- */
   function go(s){
@@ -1116,6 +1147,7 @@
     if(t.hasAttribute('data-preview')){var pa=byId[t.getAttribute('data-preview')],kd=t.getAttribute('data-kind');$('#rp-t').textContent=pa.n+' · '+(kd==='m'?'월간':'주간')+' 보고서';$('#rp-body').innerHTML=paper(pa,kd);$('#rp-ok').setAttribute('data-id',pa.id);$('#rp-ok').setAttribute('data-kind',kd);$('#rp-ok').hidden=repState[kd+pa.id]||(kd==='w'&&!openIss(pa.id).length);openModal('m-report');return}
     if(t.id==='rp-ok'){repState[t.getAttribute('data-kind')+t.getAttribute('data-id')]=1;closeModals();renderReports();toast('시안 — 게시했습니다 · 전산 광고주 공유 화면에 링크가 올라갑니다');return}
     if(t.id==='bulkOk'){visAds().forEach(function(a){if(repStatus(a)==='wait')repState[state.rtab+a.id]=1});renderReports();toast('시안 — 검토 대기를 한 번에 게시했습니다');return}
+    if(t.id==='endedToggle'){endedOpen=!endedOpen;renderEnded();return}
     if(t.id==='doneToggle'){var dl=$('#doneList');dl.hidden=!dl.hidden;t.setAttribute('aria-expanded',!dl.hidden);return}
     if(t.hasAttribute('data-drawer')){renderDrawer();$('#drawer').classList.add('on');$('#shade').classList.add('on');return}
     if(t.hasAttribute('data-close-drawer')){$('#drawer').classList.remove('on');$('#shade').classList.remove('on');return}
