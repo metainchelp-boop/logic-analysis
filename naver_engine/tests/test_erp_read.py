@@ -310,15 +310,17 @@ class StageTest(Base):
 
     def test_same_stage_other_spelling_merges(self):
         """① 이 빈칸 무시 매칭으로 바꿔 두 표기가 같은 가망을 주면 한 줄로 합친다 — 「중복」으로 영영 멈추지 않게(S7 검토)."""
-        self.fake.stages = {"진행중": [company(101, "진행중", ends=("2026-10-01",)), company(102, "진행중")],
-                            "진행 중": [company(101, "진행 중", ends=("2027-01-31",)), company(103, "진행 중", ends=())],
-                            "홀딩 중": [company(104, "홀딩 중", ends=("2026-13-40",))],
-                            "홀딩중": [company(104, "홀딩중", ends=("2026-12-01",))]}
+        self.fake.stages = {"진행중": [company(101, "진행중", ends=("2027-01-31",)), company(102, "진행중")],
+                            "진행 중": [company(101, "진행 중", MARK_NAME, ends=("2026-10-01",)),
+                                      company(103, "진행 중", ends=())],
+                            "홀딩중": [company(104, "홀딩중", ends=("2026-13-40",))],
+                            "홀딩 중": [company(104, "홀딩 중", ends=("2026-12-01",))]}   # 먼저 부른 표기가 더 늦은 날 · 못 읽음
         snap = self.reader.read_stages()
         self.assertEqual(sorted(snap.rows), [101, 102, 103, 104])
         self.assertEqual(snap.stage_conflicts, ())
         self.assertEqual(snap.rows[101].latest_end_date, date(2027, 1, 31))     # 늦은 쪽
         self.assertTrue(snap.rows[104].end_unreadable)                          # 못 읽음은 하나라도
+        self.assertEqual(snap.rows[101].name, "가게")                            # 이름은 먼저 것
         self.assertEqual((snap.per_spelling["진행중"], snap.per_spelling["진행 중"]), (2, 2))
 
     def test_duplicate_within_one_spelling_still_refused(self):

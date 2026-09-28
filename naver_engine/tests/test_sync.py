@@ -459,6 +459,12 @@ class AccountBrakeTest(Base):
         b = self.brake(range(1000, 1049), T0 + timedelta(days=1), per={1: 40, 3: 9})
         self.assertEqual(b.reasons, ("BRAKE_MANAGER",))
 
+    def test_small_manager_vanishing_brakes(self):
+        """10줄이 안 되는 관리계정도 통째로 사라지고 빠질 계정이 있으면 멈춘다(관리계정 수만 보던 옛 규칙을 잃지 않게)."""
+        self.put(range(1000, 1050), T0, per={1: 47, 2: 3})
+        b = self.brake(range(1000, 1047), T0 + timedelta(days=1), per={1: 47})
+        self.assertEqual(b.reasons, ("BRAKE_MANAGER",))
+
     def test_manager_present_with_zero_rows_brakes(self):
         self.put(range(1000, 1050), T0, per={1: 40, 2: 10})
         b = self.brake(range(1000, 1040), T0 + timedelta(days=1), per={1: 40, 2: 0})   # 10/50 = 딱 20% 지만
@@ -1067,6 +1073,11 @@ class SyncStagesTest(Base):
         self.assertEqual(r.codes, ("IMPLAUSIBLE_FIRST",))
         r = self.run_stages(snap(range(1, 301), T0 + timedelta(hours=2)), T0 + timedelta(hours=2))
         self.assertEqual(r.codes, ("IMPLAUSIBLE_FIRST",))   # 버린 기록이 있어도 아직 받은 적은 없다
+
+    def test_result_rows_include_conflicts(self):
+        r = self.run_stages(snap(range(1, 301), T0, conflicts=range(301, 311)), T0)
+        self.assertEqual((r.codes, r.rows), (("IMPLAUSIBLE_FIRST",), 310))
+        self.assertEqual(self.st.last_sync(S.SYNC_STAGES)["row_count"], 310)
 
     def test_conflicts_count_toward_first_plausibility(self):
         self.assertFalse(snap(range(1, 741), T0).plausible())

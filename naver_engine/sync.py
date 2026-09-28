@@ -139,12 +139,9 @@ def _aware(raw) -> Optional[datetime]:
     return t if t is not None and t.tzinfo is not None else None
 
 
-def _alert(store: S.Store, kind: str, outcome: str, needs: bool, now: datetime, after: timedelta) -> bool:
-    """대표에게 알릴 것인가 — 받음은 아니다 · 확인 필요·버림·멈춤은 바로 · 실패는 오래 이어졌거나 한 번도 못 받았을 때."""
-    if outcome == S.SYNC_ACCEPTED:
-        return False
-    if needs or outcome in (S.SYNC_REFUSED, S.SYNC_BRAKED):
-        return True
+def _failure_alert(store: S.Store, kind: str, now: datetime, after: timedelta) -> bool:
+    """실패를 대표에게 알릴 것인가 — 오래 이어졌거나(받은 지 ``after`` 넘음) 한 번도 받은 적이 없을 때.
+    (버림·멈춤·확인 필요는 그 자리에서 바로 알린다 — 스스로 풀리지 않는다.)"""
     ok = store.last_sync(kind, S.SYNC_ACCEPTED)
     if ok is None:
         return True
@@ -154,7 +151,7 @@ def _alert(store: S.Store, kind: str, outcome: str, needs: bool, now: datetime, 
 
 def _failed(store: S.Store, kind: str, code: str, now: datetime, after: timedelta) -> SyncResult:
     store.record_sync_event(kind, S.SYNC_FAILED, (code,), now)
-    return SyncResult(kind, S.SYNC_FAILED, (code,), alert=_alert(store, kind, S.SYNC_FAILED, False, now, after))
+    return SyncResult(kind, S.SYNC_FAILED, (code,), alert=_failure_alert(store, kind, now, after))
 
 
 def _refused_plain(store: S.Store, kind: str, codes, now: datetime, rows: Optional[int]) -> SyncResult:
