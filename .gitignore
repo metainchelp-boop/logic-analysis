@@ -11,3 +11,9 @@ __pycache__/
 #  1) gh auth refresh -s workflow  (토큰에 workflow 권한 추가)
 #  2) GitHub Secrets에 VPS 접속정보 등록  3) 아래 줄 삭제 후 커밋
 .github/workflows/deploy.yml
+
+# 네이버 관제 엔진 저장 파일 — 저장소·보내는 폴더에 섞이지 않게(설계 S6 · 반박 H9)
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
