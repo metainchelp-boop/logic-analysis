@@ -181,6 +181,63 @@ def stop_reasons(conn, today: str) -> Optional[List[Dict[str, Any]]]:
     return out
 
 
+# ── 2페이지 넘김(2026-09-28 대표 지시 「현황판에 2페이지 통과율」) ─────────────────────
+# 2페이지를 **시도한** 수집 = 2페이지 이상 읽음(pagesRead ≥ 2) + 2페이지에서 멈춤(아래 사유).
+# 1페이지에서 대상을 다 찾아 끝난 수집은 2페이지가 필요 없었으므로 **시도에 넣지 않는다**.
+# ⚠️ 관측 원장 meta_json 안의 값이라 SQLite json_extract 로 센다 — 못 쓰면 None(미확인 · 0 으로 치지 않는다).
+PAGE2_STOP_PREFIXES = ("STALE_PAGE", "NO_PAGER", "SAME_AS_PREV")
+_P2_READ = "CAST(json_extract(meta_json, '$.observation.pagesRead') AS INTEGER)"
+_P2_STOP = "(" + " OR ".join(f"reason LIKE '{p}%'" for p in PAGE2_STOP_PREFIXES) + ")"
+
+
+def page2_by_day(conn, since: str, until: Optional[str] = None) -> Optional[Dict[str, Dict[str, int]]]:
+    """날짜별 {passed, tried}. 원장이 없으면 {} · 셀 수 없으면 None."""
+    if not _has(conn, "collector_observations"):
+        return {}
+    try:
+        sql = (f"SELECT collected_date, SUM(CASE WHEN {_P2_READ} >= 2 THEN 1 ELSE 0 END), "
+               f"SUM(CASE WHEN {_P2_READ} >= 2 OR {_P2_STOP} THEN 1 ELSE 0 END) "
+               "FROM collector_observations WHERE collected_date >= ?"
+               + (" AND collected_date < ?" if until else "") + " GROUP BY collected_date")
+        rows = conn.execute(sql, (since, until) if until else (since,)).fetchall()
+    except Exception:
+        return None
+    return {str(d): {"passed": int(p or 0), "tried": int(t or 0)} for d, p, t in rows}
+
+
+def page2_by_instance(conn, day: str) -> Optional[Dict[str, Dict[str, int]]]:
+    """그날 수집기(instanceId)별 {passed, tried}. 셀 수 없으면 None."""
+    if not _has(conn, "collector_observations"):
+        return {}
+    try:
+        rows = conn.execute(
+            f"SELECT json_extract(meta_json, '$.observation.workerId'), "
+            f"SUM(CASE WHEN {_P2_READ} >= 2 THEN 1 ELSE 0 END), "
+            f"SUM(CASE WHEN {_P2_READ} >= 2 OR {_P2_STOP} THEN 1 ELSE 0 END) "
+            "FROM collector_observations WHERE collected_date = ? GROUP BY 1", (day,)).fetchall()
+    except Exception:
+        return None
+    return {str(w or ""): {"passed": int(p or 0), "tried": int(t or 0)} for w, p, t in rows}
+
+
+PAGE2_MIN_TRIED = 20      # 이보다 적게 시도했으면 판정하지 않는다(표본이 적다)
+
+
+def page2_verdict(p2: Optional[Dict[str, int]]) -> Dict[str, Any]:
+    if p2 is None:
+        return {"key": "page2", "level": "unknown", "title": "2페이지 넘김", "text": "재지 못했습니다"}
+    passed, tried = int(p2.get("passed") or 0), int(p2.get("tried") or 0)
+    if tried < PAGE2_MIN_TRIED:
+        return {"key": "page2", "level": "unknown", "title": "2페이지 넘김",
+                "text": f"오늘 2페이지 시도 {tried}번 — 판단하기 이릅니다" + (f" (넘김 {passed})" if tried else "")}
+    pct = round(100.0 * passed / tried)
+    level = "ok" if passed * 2 >= tried else ("warn" if passed * 10 >= tried else "bad")
+    text = f"오늘 {passed}/{tried}번 넘김({pct}%)"
+    if level == "bad":
+        text += " — 41위 아래 순위가 새로 확인되지 않습니다"
+    return {"key": "page2", "level": level, "title": "2페이지 넘김", "text": text}
+
+
 # ── 기계 · 분할 ──────────────────────────────────────────────────────────
 def split_machines(rows: Optional[List[Dict[str, Any]]], now: Optional[datetime] = None) -> Dict[str, Any]:
     """heartbeat 줄을 「지금 쓰는 기계」와 「옛 설치본」으로 가른다."""
@@ -297,12 +354,26 @@ def build(conn, today: str, universe: Optional[Iterable[str]], split_ok=None,
     if t["completed"] is not None and uni is not None:
         t["notTried"] = max(0, len(uni) - (t["completed"] or 0) - (t["partial"] or 0))
     week_since = (date.fromisoformat(today) - timedelta(days=6)).isoformat()
+    hist = history(conn, today)
+    # 2페이지 넘김 — 오늘·14일·기계별(additive). 셀 수 없으면 None 그대로(화면 「미확인」).
+    p2_days = page2_by_day(conn, hist[0]["day"]) if hist else page2_by_day(conn, today)
+    p2_today = (p2_days or {}).get(today, {"passed": 0, "tried": 0}) if p2_days is not None else None
+    t["page2"] = p2_today
+    for h in hist:
+        h["page2"] = (p2_days or {}).get(h["day"], {"passed": 0, "tried": 0}) if p2_days is not None else None
+    p2_inst = page2_by_instance(conn, today)
+    for rows_ in (m["current"] or [], m["old"] or []):
+        for r in rows_:
+            r["page2Today"] = ((p2_inst or {}).get(str(r.get("instance_id") or ""), {"passed": 0, "tried": 0})
+                               if p2_inst is not None else None)
+    vs = verdicts(tb, m["current"], sp, writes, n.hour)
+    vs.insert(1, page2_verdict(p2_today))
     return {
         "today": today, "generatedAt": n.strftime("%Y-%m-%d %H:%M:%S"),
-        "verdicts": verdicts(tb, m["current"], sp, writes, n.hour),
+        "verdicts": vs,
         "summary": t,
         "hourly": hourly(conn, today),
-        "history": history(conn, today),
+        "history": hist,
         "blocksToday": tb,
         "blocksWeek": block_breakdown(conn, week_since),
         "recentRealBlocks": recent_real_blocks(conn, week_since),

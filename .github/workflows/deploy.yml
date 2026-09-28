@@ -312,6 +312,10 @@ jobs:
       #    못 읽은 값은 None · 옛 설치본 분리 · 분할은 수집기와 같은 규칙 · 로그인·뷰어 거절 · 메뉴·번들 배선.
       - name: 회귀 — 수집 현황판
         run: python backend/tests/test_collector_board.py
+      # 🕘 오래된 순위 표시(2026-09-28 대표 지시) — 2페이지가 막히면 41위 아래는 갱신이 멈춘다.
+      #    순위 값은 그대로 두고 「며칠 전 값」만 더한다 · 규칙 한 곳(rank_staleness) · 화면은 서버 값만 그린다.
+      - name: 회귀 — 오래된 순위 표시
+        run: python backend/tests/test_rank_staleness.py
       - name: 회귀 — 코덱스 이식 3차 배선(봉투 전달·배치 가드·백업·nvMid·확장)
         run: python backend/tests/test_codex_port_3.py
 

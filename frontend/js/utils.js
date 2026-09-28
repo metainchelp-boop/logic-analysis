@@ -152,6 +152,23 @@ var api = {
       이름에 공백·기호를 갖고 있다. 「메타 아이앤씨」를 「메타아이앤씨」로 치면 못 찾는다.
    ⚠️ 저장된 이름은 건드리지 않는다 — **비교할 때만** 정규화한다(표시는 원문 그대로).
    ⚠️ 서버 규칙을 바꾸면 여기도 함께 바꿀 것. 한쪽만 고치면 「검색은 되는데 서버는 모른다」가 된다. */
+/* 오래된 순위 배지(2026-09-28 대표 지시) — 「며칠 전 값」인지 보여 준다.
+   ⚠️ 오래됐는지는 **서버가 정한다**(backend/rank_staleness.py · 오늘·어제=최신, 2일 전부터 오래됨).
+      화면은 서버가 준 stale·stale_days 를 그리기만 한다 — 규칙을 여기서 다시 계산하지 않는다.
+   왜: 2페이지(41위 아래)를 수집기가 확인하지 못하면, 1페이지에서 못 찾은 상품은 마지막 순위가 그대로 남는다.
+       그 값을 오늘 값처럼 보여 주면 안 된다. */
+window.rankStaleChip = function rankStaleChip(stale, days, at) {
+    if (!stale || days === null || days === undefined) return null;
+    var md = String(at || '').slice(5, 10).replace('-', '/');
+    return React.createElement('span', {
+        style: { marginLeft: 6, fontSize: 10.5, fontWeight: 800, padding: '1px 7px', borderRadius: 999,
+                 background: '#fffbeb', color: '#b45309', border: '1px solid #fde68a', whiteSpace: 'nowrap',
+                 verticalAlign: 'middle', display: 'inline-block' },
+        title: '마지막 확인 ' + (at || '') + ' — 그 뒤로는 1페이지(40위 안)에서 찾지 못해 순위를 새로 확인하지 못했습니다. ' +
+               '수집기가 2페이지(41위 아래)를 확인하지 못하는 동안에는 마지막으로 확인한 순위가 그대로 남습니다.'
+    }, (md ? md + ' 값 · ' : '') + days + '일 전');
+};
+
 window.lookupNorm = function lookupNorm(x) {
     return String(x == null ? '' : x).replace(/[\s\-_.,()\[\]/·&+'"]/g, '').toLowerCase();
 };

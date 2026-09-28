@@ -1520,6 +1520,10 @@ def rank_overview(current_user: dict = Depends(get_current_user)):
             _rx, _reg = None, {}
         _axis = {}   # cid → {"client": stat, "product": stat}
 
+        try:
+            import rank_staleness as _rs
+        except Exception:
+            _rs = None
         by_client = {}
         for (cid, kw), days in per.items():
             ds = sorted(days.keys())
@@ -1528,7 +1532,10 @@ def rank_overview(current_user: dict = Depends(get_current_user)):
             prev = days[ds[-2]] if len(ds) >= 2 else None
             e = by_client.setdefault(cid, {"keywords": 0, "exposed": 0, "top10": 0,
                                            "up": 0, "down": 0, "last_checked": "",
-                                           "tops": []})
+                                           "tops": [], "stale": 0})
+            # 오래된 순위(2026-09-28) — 마지막 기록이 2일 전 이전인 키워드 수(additive · 8일 창 안만)
+            if _rs is not None and _rs.is_stale(_rs.stale_days(latest_d)):
+                e["stale"] += 1
             if _rx is not None and cid in _reg:
                 _nk = _rx.norm(kw)
                 _ax = _axis.setdefault(cid, {"client": _rx.new_stat(), "product": _rx.new_stat()})
@@ -1572,6 +1579,7 @@ def rank_overview(current_user: dict = Depends(get_current_user)):
             if e:
                 e["tops"].sort()
                 item.update({k: e[k] for k in ("keywords", "exposed", "top10", "up", "down", "last_checked")})
+                item["stale"] = e.get("stale", 0)
                 item["top_keywords"] = [{"keyword": k, "rank": r} for r, k in e["tops"][:2]]
                 # 대표 키워드(최고 순위)의 8일 추이 — 대시보드 카드 미니 스파크용 (2차 확산)
                 if e["tops"]:
@@ -1611,6 +1619,7 @@ def rank_board(client_id: int, days: int = 8, current_user: dict = Depends(get_c
     conn = _get_conn()
     try:
         days = min(max(int(days or 8), 7), 90)
+        _window_days = days   # ⚠️ 아래 for 루프가 `days` 이름을 다시 쓴다 — 창 크기는 이 값으로 읽는다
         _verify_client_access(conn, client_id, current_user)
         client = conn.execute(
             "SELECT id, name, naver_store_url, main_keywords, COALESCE(role,'advertiser') AS role "
@@ -1725,6 +1734,10 @@ def rank_board(client_id: int, days: int = 8, current_user: dict = Depends(get_c
             except (json.JSONDecodeError, TypeError):
                 vol_map[r["keyword"]] = "-"
 
+        try:
+            import rank_staleness as _rs
+        except Exception:
+            _rs = None
         board = []
         for kw, days in per.items():
             ds = sorted(days.keys())
@@ -1749,6 +1762,10 @@ def rank_board(client_id: int, days: int = 8, current_user: dict = Depends(get_c
                 "volume": vol_map.get(kw, "-"),
                 "last_checked": latest["at"], "series": series,
                 "unexposed_days": unexposed_days,
+                # 오래된 순위(2026-09-28 대표 지시) — 2페이지가 막혀 41위 아래는 갱신이 멈춘다.
+                # 값은 그대로 두고 「며칠 전 값」만 더한다(rank_staleness 한 곳 규칙 · additive).
+                "stale_days": _rs.stale_days(latest["at"]) if _rs else None,
+                "stale": bool(_rs and _rs.is_stale(_rs.stale_days(latest["at"]))),
                 **_source_of(kw),
             })
         # 등록됐지만 아직 기록이 없는 키워드도 「기록 대기」로 보여준다 — 키워드를 추가한
@@ -1829,6 +1846,25 @@ def rank_board(client_id: int, days: int = 8, current_user: dict = Depends(get_c
                         **_pending_meta(pk, True),
                         **_source_of(pk),
                     })
+        # 오래된 순위(2026-09-28) — 창(최근 N일) 안에 기록이 없어 「기록 대기」로 들어간 줄 중
+        # **예전에 잰 적이 있는** 키워드는 대기가 아니라 「마지막 확인 N일 전」이다.
+        # (2페이지가 막히면 41위 아래 키워드는 창을 벗어날 때까지 새 기록이 안 생긴다.)
+        # ⚠️ 막힌 업체(추적 꺼짐·기간 지남)의 사유는 그대로 둔다 — 그쪽이 사람이 손댈 일이다.
+        if _rs is not None:
+            _pend = [b for b in board if b.get("pending") and b.get("pending_reason") != "blocked"]
+            if _pend:
+                _lk = _rs.last_known(conn, client_id, [b["keyword"] for b in _pend])
+                for b in _pend:
+                    _k = _lk.get((b["keyword"] or "").strip())
+                    if not _k:
+                        continue
+                    _sd = _rs.stale_days(_k.get("at"))
+                    b["pending_reason"] = "stale"
+                    b["pending_hint"] = "최근 " + str(_window_days) + "일 안에 새 기록이 없습니다"
+                    b["last_known"] = {"rank": _k.get("rank"), "at": _k.get("at")}
+                    b["last_checked"] = _k.get("at") or ""
+                    b["stale_days"] = _sd
+                    b["stale"] = True
         # 2026-09-18 화면 개편(대표 지시) — 펼치기가 쓸 값 가산.
         #   ⓐ 며칠째 = 이 업체의 첫 순위 기록일(없으면 None) → 화면이 「N일째」로 센다.
         #   ⓑ 키워드별 nvMid 유무 = 이어진 추적 상품에 nvMid 가 있는가.
@@ -1878,6 +1914,8 @@ def rank_board(client_id: int, days: int = 8, current_user: dict = Depends(get_c
             "up": sum(1 for b in board if (b["delta"] or 0) > 0),
             "down": sum(1 for b in board if (b["delta"] or 0) < 0),
         }
+        # 오래된 순위 수(additive) — 화면 머리 안내문용. 순위 값·위 집계는 그대로다.
+        kpis["stale"] = sum(1 for b in board if b.get("stale"))
         return {"success": True,
                 "client": {"id": client["id"], "name": client["name"],
                            "store_url": client["naver_store_url"] or ""},
