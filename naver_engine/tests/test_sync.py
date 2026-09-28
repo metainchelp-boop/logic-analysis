@@ -252,6 +252,13 @@ class AccountBrakeTest(Base):
         self.assertTrue(all(a["present"] == 1 and a["absent_days"] == 0 for a in self.st.accounts()))
         self.assertIsNotNone(self.st.last_sync(S.SYNC_ACCOUNTS, S.SYNC_BRAKED))
 
+    def test_only_newly_leaving_accounts_count(self):
+        self.st.record_accounts(kids(range(1000, 1060)), T0)
+        self.st.record_accounts(kids(range(1015, 1060)), T0 + timedelta(days=1), allow_drop_by=0)   # 15 빠짐(확인)
+        c = self.st.record_accounts(kids(range(1015, 1060)), T0 + timedelta(days=2))   # 더 빠지는 것 없음 — 받음
+        self.assertEqual(c.now_absent, 0)
+        self.assertEqual({a["absent_days"] for a in self.st.accounts() if not a["present"]}, {2})
+
     def test_manager_lost_with_leaving_account_brakes(self):
         self.st.record_accounts(kids(range(1000, 1050), per={1: 40, 2: 10}), T0)
         with self.assertRaises(S.SyncBraked) as cm:
@@ -377,7 +384,12 @@ class OrgStoreTest(Base):
             self.st.record_org(org_payload(T0 + timedelta(minutes=10, seconds=1)), T0)
         self.st.record_org(org_payload(T0 + timedelta(minutes=10)), T0)        # ① 시각은 10분까지(스냅숏 검사와 같게)
         with self.assertRaises(S.StoreRefused):
-            self.st.record_org(org_payload(T0 + timedelta(minutes=11)), T0 + timedelta(minutes=6))   # 받은 시각은 5분
+            self.st.record_org(org_payload(T0 + timedelta(minutes=10, microseconds=1)), T0)
+        self.clock.t = T0 + timedelta(minutes=1)
+        with self.assertRaises(S.StoreRefused):   # ① 시각은 괜찮아도(지금+9분) 받은 시각은 5분까지
+            self.st.record_org(org_payload(T0 + timedelta(minutes=10, seconds=1)), T0 + timedelta(minutes=6, seconds=1))
+        self.assertEqual(self.st.org_current()["generated_at"], T0 + timedelta(minutes=10))
+        self.st.record_org(org_payload(T0 + timedelta(minutes=10, seconds=1)), T0 + timedelta(minutes=6))
 
     def test_slack_matches_snapshot_check(self):
         self.assertEqual(S.ORG_FUTURE_SLACK, O.FUTURE_TOLERANCE)
