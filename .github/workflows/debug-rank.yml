@@ -497,6 +497,29 @@ jobs:
             echo "== 기동 뒤 오류 줄 수 =="
             docker logs logic-analysis 2>&1 | grep -c -E 'Traceback|ERROR' || true
             docker logs logic-analysis 2>&1 | grep -E 'human' | grep -i -E 'error|fail|traceback' | head -5 || true
+            echo "== 도우미 연결 확인 — 오늘 PC 번호별 업로드(수만 · 키워드 미출력) =="
+            docker exec -i logic-analysis python3 - <<'PY'
+            import sqlite3
+            conn = sqlite3.connect("file:/app/data/logic_data.db?mode=ro", uri=True)
+            try:
+                rows = conn.execute("SELECT pc, COUNT(*), COUNT(DISTINCT keyword), SUM(complete), SUM(recorded), MIN(received_at), MAX(received_at), GROUP_CONCAT(DISTINCT ext_version) FROM human_view_uploads WHERE collected_date = date('now','localtime') GROUP BY pc ORDER BY pc").fetchall()
+                print("  오늘 업로드한 PC 수:", len(rows))
+                for r in rows:
+                    print(f"  PC {r[0]:>2} · 업로드 {r[1]} · 키워드 {r[2]} · 완료 {r[3] or 0} · 순위 기록 {r[4] or 0} · 처음 {r[5]} · 마지막 {r[6]} · 버전 {r[7]}")
+                allpc = conn.execute("SELECT pc, COUNT(*), MAX(received_at) FROM human_view_uploads GROUP BY pc ORDER BY pc").fetchall()
+                print("  (전체 기간 PC별)", [(a, b, c) for a, b, c in allpc])
+            except Exception as e:
+                print("  조회 실패(0 아님):", type(e).__name__, str(e)[:120])
+            PY
+            echo "== 오늘 /api/human-view 요청 — 경로·응답코드별 (200 연결됨 · 401 연결 코드 틀림 · 400 PC 번호 문제) =="
+            TODAY=$(date +%d/%b/%Y)
+            for f in /var/log/nginx/access.log /var/log/nginx/logic-analysis.access.log; do [ -f "$f" ] && LOG="$f" && break; done
+            if [ -z "$LOG" ]; then echo "  (nginx 접속 로그 파일을 못 찾음 — 못 쟀다)"; else
+              grep -a "$TODAY" "$LOG" | grep -a '/api/human-view' | awk '{p=$7; sub(/\?.*/,"",p); k=p " " $9; n[k]++; split($4,t,":"); last[k]=t[2] ":" t[3]} END {for (k in n) printf "  %-32s x%-4d 마지막 %s\n", k, n[k], last[k]}' | sort
+              echo "  [출처(해시 앞 6자)별 · 운영체제 · 처음~마지막 · 코드별 수]"
+              grep -a "$TODAY" "$LOG" | grep -a '/api/human-view' | awk '{ip=$1; cmd="printf %s " ip " | sha256sum | cut -c1-6"; cmd | getline h; close(cmd); os=($0 ~ /Windows/) ? "Windows" : (($0 ~ /Macintosh/) ? "Mac" : "기타"); k=h " " os; split($4,t,":"); hm=t[2] ":" t[3]; if(!(k in f)) f[k]=hm; l[k]=hm; c[k " " $9]++; keys[k]=1} END {for (k in keys) {s=""; for (x in c) if (index(x, k " ")==1) s=s " " substr(x, length(k)+2) "=" c[x]; printf "  %s  %s~%s |%s\n", k, f[k], l[k], s}}' | sort
+              echo "  (회선이 같으면 PC 여러 대도 출처 1개로 보인다 — PC 구분은 위 업로드 표의 PC 번호로)"
+            fi
       - name: 3탭 라이브 확인 (live_check=on · 읽기 전용)
         if: ${{ github.event.inputs.live_check == 'on' }}
         uses: appleboy/ssh-action@v1.0.3
