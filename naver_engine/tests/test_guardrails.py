@@ -102,7 +102,20 @@ def _folded_strings(tree: ast.AST):
 class GuardrailTest(unittest.TestCase):
     def test_sources_found(self):
         names = {p.name for p in SOURCES}
-        self.assertTrue({"naver_read.py", "erp_read.py", "handles.py", "fields.py", "credentials.py"} <= names)
+        self.assertTrue({"naver_read.py", "erp_read.py", "handles.py", "fields.py", "credentials.py", "store.py"} <= names)
+
+    def test_database_only_in_store(self):
+        """저장 파일을 여는 곳은 ``store.py`` 한 곳 — 쓰는 곳 하나(대표 결정 D10) · 지우기 거절 연결을 건너뛰지 못하게."""
+        for p in SOURCES:
+            for node, mod in _imports(_tree(p)):
+                root = mod.lstrip(".").split(".")[0]
+                if root in ("sqlite3", "dbm", "shelve", "sqlalchemy", "fcntl"):
+                    self.assertEqual(p.name, "store.py", f"{p.name}: {mod} — 저장은 store.py 에서만")
+            if p.name == "store.py":
+                continue
+            for n in ast.walk(_tree(p)):
+                if isinstance(n, ast.Attribute) and n.attr in ("_conn", "set_authorizer", "execute", "executescript"):
+                    self.fail(f"{p.name}: .{n.attr} — 저장 연결은 store.py 밖에서 만지지 않는다")
 
     def test_network_modules_only_in_gate_module(self):
         for p in SOURCES:
