@@ -970,7 +970,7 @@ def collect_health(current_user: dict = Depends(get_current_user)):
 
 
 @router.get("/board")
-def collector_board(current_user: dict = Depends(get_current_user)):
+def collector_board(since: Optional[str] = None, current_user: dict = Depends(get_current_user)):
     """📊 수집 현황판(대표 지시 2026-09-25 「매번 여기서 물어볼 수 없어」) — 최고관리자 전용(「나만 보게 해」) · 읽기 전용.
 
     진단 워크플로로 손으로 재던 항목(진짜 차단 · 기계 · 분할 · 완료 · 추이 · 순위 기록 · 도우미)을 한 번에 준다.
@@ -1001,7 +1001,8 @@ def collector_board(current_user: dict = Depends(get_current_user)):
             helper["loginCompare"] = _hv.login_compare(conn, (date.today() - _td(days=7)).isoformat())
         except Exception:
             helper = None
-        out = _cb.build(conn, today, uni, split_ok=_split_ok, machines_rows=rows, helper=helper)
+        # since = 「여기서부터 보기」 기준 시각(대표 지시 2026-09-28) — 없거나 못 읽으면 종전 그대로(하루 전체)
+        out = _cb.build(conn, today, uni, split_ok=_split_ok, machines_rows=rows, helper=helper, since=since)
         out["success"] = True
         return out
     finally:

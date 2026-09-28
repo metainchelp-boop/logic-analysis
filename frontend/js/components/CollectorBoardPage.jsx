@@ -19,6 +19,14 @@ var _cbLevel = {
     unknown: { bg: '#f8fafc', bd: '#e2e8f0', fg: '#64748b', mark: '미확인' }
 };
 var _CB_REFRESH_MS = 5 * 60 * 1000;
+/* 「여기서부터 보기」(대표 지시 2026-09-28) — 기준 시각은 이 브라우저에만 기억한다(원자료는 서버에 그대로). */
+var _CB_SINCE_KEY = 'cb_since';
+function _cbLoadSince() { try { return window.localStorage.getItem(_CB_SINCE_KEY) || ''; } catch (e) { return ''; } }
+function _cbSaveSince(v) { try { if (v) window.localStorage.setItem(_CB_SINCE_KEY, v); else window.localStorage.removeItem(_CB_SINCE_KEY); } catch (e) { /* 저장 못 해도 이번 화면에는 적용 */ } }
+function _cbNowStamp() {
+    var d = new Date(), p = function(n) { return (n < 10 ? '0' : '') + n; };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+}
 
 function _cbNum(v) { return (v === null || v === undefined) ? '미확인' : Number(v).toLocaleString('ko-KR'); }
 function _cbAgo(min) {
@@ -89,18 +97,27 @@ window.CollectorBoardPage = function CollectorBoardPage(props) {
     var _e = useState(''); var err = _e[0], setErr = _e[1];
     var _l = useState(false); var loading = _l[0], setLoading = _l[1];
     var _o = useState(false); var showOld = _o[0], setShowOld = _o[1];
+    var _s = useState(_cbLoadSince); var since = _s[0], setSince = _s[1];
 
     var load = useCallback(function() {
         if (isViewer) return;
         setLoading(true);
-        Promise.resolve().then(function() { return api.get('/collector/board'); }).then(function(res) {
-            if (res && res.success) { setData(res); setErr(''); }
+        var path = '/collector/board' + (since ? '?since=' + encodeURIComponent(since) : '');
+        Promise.resolve().then(function() { return api.get(path); }).then(function(res) {
+            if (res && res.success) {
+                setData(res); setErr('');
+                // 서버가 기준 시각을 쓰지 않았으면(지난 날·못 읽음) 기억한 것도 지운다 — 다음 날 저절로 하루 전체로
+                if (since && !res.window) { _cbSaveSince(''); setSince(''); }
+            }
             else { setData(function(prev) { return prev === undefined ? null : prev; }); setErr((res && (res.detail || res.error)) || '현황을 불러오지 못했습니다.'); }
         }).catch(function(e) {
             setData(function(prev) { return prev === undefined ? null : prev; });
             setErr((e && e.message) || '현황을 불러오지 못했습니다.');
         }).then(function() { setLoading(false); });
-    }, [isViewer]);
+    }, [isViewer, since]);
+
+    var startHere = function() { var v = _cbNowStamp(); _cbSaveSince(v); setSince(v); };
+    var showAll = function() { _cbSaveSince(''); setSince(''); };
 
     useEffect(function() {
         load();
@@ -116,6 +133,7 @@ window.CollectorBoardPage = function CollectorBoardPage(props) {
         data ? React.createElement('div', { style: { fontSize: 12, color: '#64748b', textAlign: 'right' } },
             '기준일 ', React.createElement('b', { style: { color: '#0f172a' } }, data.today), React.createElement('br'),
             '불러온 시각 ', data.generatedAt) : null,
+        React.createElement('button', { style: _krOpsBtn, onClick: startHere, disabled: loading, title: '지금 시각 이후에 생긴 것만 셉니다 — 원래 기록은 지우지 않습니다' }, '⏱ 여기서부터 보기'),
         React.createElement('button', { style: _krOpsBtn, onClick: load, disabled: loading }, loading ? '불러오는 중…' : '↻ 새로고침'));
 
     if (isViewer) return React.createElement('div', { style: _krWrap }, head,
@@ -126,7 +144,12 @@ window.CollectorBoardPage = function CollectorBoardPage(props) {
         React.createElement('div', { style: Object.assign({}, _krCard, { color: '#b91c1c' }) }, '⚠ ' + (err || '현황을 불러오지 못했습니다.') + ' — 잠시 뒤 ↻ 새로고침을 눌러 주세요.'));
 
     var s = data.summary || {};
+    var win = data.window || null;          // 「여기서부터 보기」 칸(없으면 하루 전체)
     var hourNow = new Date().getHours();
+    var winBanner = win ? React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 12, padding: '10px 14px', marginBottom: 12, fontSize: 13, color: '#1d4ed8' } },
+        React.createElement('b', null, '⏱ ' + win.label + '만 보는 중'),
+        React.createElement('span', { style: { color: '#475569' } }, '판정 줄(진짜 차단 · 2페이지)과 숫자 칸 · 막힘 보고 · 멈춘 이유가 ' + win.since.slice(11, 16) + ' 이후 것만 셉니다. 원래 기록은 그대로 있습니다.'),
+        React.createElement('button', { style: _krOpsBtn, onClick: showAll }, '전체 보기로 돌아가기')) : null;
 
     // ① 판정 줄
     var verdicts = React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 10, marginBottom: 16 } },
@@ -139,8 +162,16 @@ window.CollectorBoardPage = function CollectorBoardPage(props) {
                 React.createElement('div', { style: { fontSize: 12.5, color: c.fg, marginTop: 5, lineHeight: 1.45 } }, v.text));
         }));
 
-    // ② 오늘 숫자
-    var tiles = React.createElement('div', { style: _krKpiGrid },
+    // ② 오늘 숫자 — 기준 시각이 있으면 그 뒤 숫자만
+    var tiles = win ? React.createElement('div', { style: _krKpiGrid },
+        _cbKpi('완료', _cbNum(win.completed), win.label + ' · 300위까지 본 것 ' + _cbNum(win.full), '#15803d'),
+        _cbKpi('시도 횟수', _cbNum(win.attempts), win.label + ' 수집기가 올린 결과 수'),
+        _cbKpi('2페이지 넘김', _cbP2(win.page2), win.label + ' · 넘김 / 시도',
+               (win.page2 && win.page2.tried >= 20) ? (win.page2.passed * 2 >= win.page2.tried ? '#15803d' : (win.page2.passed * 10 >= win.page2.tried ? '#b45309' : '#b91c1c')) : undefined),
+        _cbKpi('진짜 차단', _cbNum(win.blocks ? win.blocks.real : null), win.label + ' · 퍼즐·차단 문구', (win.blocks && win.blocks.real > 0) ? '#b91c1c' : '#15803d'),
+        _cbKpi('진단 보고', _cbNum(win.blocks ? win.blocks.diag : null), win.label + ' · 차단이 아님'),
+        _cbKpi('도우미가 읽은 화면', _cbNum(win.human), win.label + ' · 사람이 넘긴 화면'))
+      : React.createElement('div', { style: _krKpiGrid },
         _cbKpi('오늘 재야 할 키워드', _cbNum(s.universe), '수집 대상 전체'),
         _cbKpi('완료', _cbNum(s.completed), '300위까지 본 것 ' + _cbNum(s.full) + ' · 대상 다 찾음 ' + _cbNum(s.found), '#15803d'),
         _cbKpi('부분 수집', _cbNum(s.partial), '보다가 멈춤(내일 다시 잰다)', '#b45309'),
@@ -195,12 +226,12 @@ window.CollectorBoardPage = function CollectorBoardPage(props) {
                 (m.day_total ? (m.day_done || 0) + ' / ' + m.day_total : '미확인'),
                 m.settingsText || '미확인',
                 up ? (up.count ? up.count + '건 쌓임' : '없음') : '미보고',
-                _cbP2(m.page2Today),
+                _cbP2(win ? m.page2Window : m.page2Today),
                 m.last_error ? String(m.last_error).slice(0, 40) : '—'
             ];
         });
     };
-    var mHeads = ['기계', '버전', '상태', '마지막 신호', '오늘 몫(완료/전체)', '서버 설정', '미전송', '2페이지 넘김(오늘)', '마지막 오류'];
+    var mHeads = ['기계', '버전', '상태', '마지막 신호', '오늘 몫(완료/전체)', '서버 설정', '미전송', win ? '2페이지 넘김(' + win.label + ')' : '2페이지 넘김(오늘)', '마지막 오류'];
     var machines = React.createElement('div', null,
         data.machines === null
             ? React.createElement('div', { style: { color: '#94a3b8', fontSize: 12.5 } }, '기계 신호를 읽지 못했습니다(미확인).')
@@ -228,7 +259,7 @@ window.CollectorBoardPage = function CollectorBoardPage(props) {
     var rr = data.recentRealBlocks;
     var blocks = React.createElement('div', null,
         React.createElement('div', { style: { display: 'flex', gap: 16, flexWrap: 'wrap' } },
-            blockBox('오늘', data.blocksToday), blockBox('최근 7일', data.blocksWeek)),
+            win ? blockBox(win.label, win.blocks) : blockBox('오늘', data.blocksToday), blockBox('최근 7일', data.blocksWeek)),
         React.createElement('div', { style: { marginTop: 14, fontSize: 12.5, fontWeight: 800, color: '#334155', marginBottom: 6 } }, '최근 7일 진짜 차단 목록'),
         rr === null ? React.createElement('div', { style: { color: '#94a3b8', fontSize: 12.5 } }, '미확인')
             : _cbTable(['시각', '키워드', '페이지', '사유', '수집기 버전'],
@@ -236,7 +267,7 @@ window.CollectorBoardPage = function CollectorBoardPage(props) {
                 '최근 7일 진짜 차단 없음 — 정상'));
 
     // ⑦ 멈춘 이유
-    var sr = data.stopReasons;
+    var sr = win ? win.stopReasons : data.stopReasons;
     var stops = sr === null ? React.createElement('div', { style: { color: '#94a3b8', fontSize: 12.5 } }, '미확인')
         : _cbTable(['이유(수집기가 적은 것)', '건수'], (sr || []).map(function(r) { return [r.label ? r.reason + ' — ' + r.label : r.reason, _cbNum(r.count)]; }), '오늘 부분 수집 없음');
 
@@ -289,13 +320,14 @@ window.CollectorBoardPage = function CollectorBoardPage(props) {
     return React.createElement('div', { style: _krWrap },
         head,
         err ? React.createElement('div', { style: { fontSize: 12.5, color: '#b45309', marginBottom: 10 } }, '⚠ 방금 새로 불러오기에 실패했습니다 — 아래는 직전 값입니다. (' + err + ')') : null,
+        winBanner,
         verdicts,
         tiles,
         _cbSection('오늘 시간대별', '연한 막대 = 시도 · 진한 막대 = 완료 · 지나지 않은 시간은 비워 둡니다', hourly),
         _cbSection('최근 14일', '완료가 며칠째 줄어들면 수집기를 확인할 때입니다', history),
         _cbSection('수집 기계', '5분마다 오는 살아있음 신호 기준 · 15분 넘게 신호가 없으면 끊김', machines),
         _cbSection('막힘 보고 — 진짜 차단과 진단 보고를 나눠서', null, blocks),
-        _cbSection('부분 수집이 멈춘 이유(오늘)', '완료로 반영되지 않은 시도만', stops),
+        _cbSection('부분 수집이 멈춘 이유(' + (win ? win.label : '오늘') + ')', '완료로 반영되지 않은 시도만', stops),
         _cbSection('순위 기록', '수집한 결과가 업체·추적 상품 순위로 실제 적혔는지', writes),
         _cbSection('📖 순위 읽기 도우미', '직원 PC 에서 사람이 직접 넘긴 화면으로 채운 순위 · 네이버에 요청을 보내지 않습니다', helper),
         guide);
