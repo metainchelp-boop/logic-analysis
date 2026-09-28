@@ -238,7 +238,8 @@ class ProspectTest(Base):
     def test_absent_since_keeps_first_day(self):
         self.st.record_prospects(snap([row(11), row(12)]))
         self.st.record_prospects(snap([row(12)], as_of=NOW + timedelta(hours=6)))
-        self.st.record_prospects(snap([row(12)], as_of=NOW + timedelta(hours=12)))
+        c = self.st.record_prospects(snap([row(12)], as_of=NOW + timedelta(hours=12)))
+        self.assertEqual(c.now_absent, 0)                       # 이미 빠진 가망은 다시 「새로 빠짐」이 아니다
         p = {x["possibility_id"]: x for x in self.st.prospects()}
         self.assertEqual(p[11]["absent_since"], (NOW + timedelta(hours=6)).isoformat())
 
@@ -330,6 +331,14 @@ class AccountTest(Base):
             self.st.record_accounts(k, DAY)
         self.assertNotIn("1234567", str(cm.exception))
         self.assertNotIn("aaaa", str(cm.exception))
+        with self.assertRaises(S.StoreRefused) as cm:
+            self.st.record_decision(11, -7654321, "confirmed", 0, NOW)
+        self.assertNotIn("7654321", str(cm.exception))
+        rid = self.st.begin_run(DAY, NOW)
+        with self.assertRaises(S.StoreRefused) as cm:
+            self.st.record_account_day(rid, 1234567, status="ok", rules_run=[], rules_not_run=[], checked_at=NOW,
+                                       bizmoney="987654")
+        self.assertNotIn("987654", str(cm.exception))
 
 
 class DecisionTest(Base):

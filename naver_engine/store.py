@@ -404,9 +404,9 @@ class Store:
                            stage_synced_at = excluded.stage_synced_at, absent_since = NULL""",
                     (pid, at, at, at))
             now_absent = 0
-            for pid in sorted(before - set(seen)):
+            for pid in sorted(before - set(seen)):   # 처음 빠진 때만 적는다 — 이미 빠진 줄은 그대로
                 cur = c.execute(
-                    """UPDATE naver_auto_prospect SET present = 0, absent_since = COALESCE(absent_since, ?)
+                    """UPDATE naver_auto_prospect SET present = 0, absent_since = ?
                        WHERE possibility_id = ? AND present = 1""", (at, pid))
                 now_absent += cur.rowcount
             self._set_meta(c, "prospects_synced_at", at)
@@ -488,7 +488,7 @@ class Store:
         """짝마다 가장 늦은 · 거두지 않은 판단 — (가망 번호, 고객 번호, 판단). 짝 규칙(matching)에 넘긴다."""
         rows = self._conn.execute(
             """SELECT d.possibility_id, d.customer_id, d.decision FROM naver_auto_link_decision d
-               WHERE d.revoked_at IS NULL AND d.decision_id = (
+               WHERE d.decision_id = (   -- 거두지 않은 판단 중 가장 늦은 것(거둔 줄은 안쪽에서 빠진다)
                    SELECT MAX(x.decision_id) FROM naver_auto_link_decision x
                    WHERE x.possibility_id = d.possibility_id AND x.customer_id = d.customer_id
                      AND x.revoked_at IS NULL)
