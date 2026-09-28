@@ -1,55 +1,98 @@
-"""구문 시험 — 코드 모양으로 안전 규칙을 고정한다(설계 v1.8 · 안전 규칙 1·2·11·12).
+"""구문 시험 — 코드 모양(AST)으로 안전 규칙을 고정한다(설계 v1.8 · 안전 규칙 1·2·11·12).
 
-- 네트워크를 여는 코드는 ``naver_read.py`` 한 파일에만 있다(관문 밖 호출 0).
-- ③ 쓰기 어댑터(``app.adapters.naver_searchad`` — 입찰·예산을 바꾸는 함수가 들어 있다)와
-  ③ 앱 본체(``app.main`` · ``collector`` · ``database`` · ``security`` · ``models``)를 import 하지 않는다.
-- GET 이 아닌 방식 이름(POST · PUT · DELETE · PATCH)이 엔진 코드에 한 글자도 없다.
-- 요청을 만드는 곳(``Request(``)은 관문 ``_gate`` 안 한 곳뿐이다.
-- 비밀값을 꺼내는 ``reveal()`` 은 관문 ``_gate`` 안에서만 부른다.
-- 손잡이 서명 열쇠 ``_KEY`` 는 ``handles.py`` 밖에서 쓰지 않는다(밖에서 쓰면 손잡이를 위조할 수 있다).
+낱말 찾기가 아니라 코드 구조를 본다(별칭 · 글자 쪼개기 · exec 로 빠져나가지 못하게 — 적대 검토 「시험 충분성」).
+
+- 네트워크를 여는 모듈(urllib · http · socket · ssl · requests …)은 ``naver_read.py`` 에서만 import 한다.
+- ``naver_read.py`` 안에서도 요청을 만드는 곳은 관문 ``_gate`` 의 ``Request(`` 한 곳, 보내는 곳은 ``_gate`` 의 ``.send(`` 와
+  ``UrllibTransport.send`` 의 ``._opener.open(`` 한 곳뿐이다. 다른 연결 방식(HTTPSConnection 등)은 이름조차 없다.
+- 방식 이름으로 쓰이는 글자(대소문자 무관 · 글자 이어 붙이기 포함)는 ``GET`` 뿐이다.
+- ③ 쓰기 어댑터·앱 본체를 import 하지 않고, exec · eval · compile · __import__ · importlib · sys.modules · 글자로 된
+  getattr 같은 우회도 없다.
+- 비밀값은 ``credentials.py`` 밖에서 ``_value`` 로 꺼내지 않고, ``reveal`` 은 관문 ``_gate`` 안에서만 쓴다.
+- 손잡이 서명·손잡이 만들기(``_tag`` · ``_KEY`` · ``AccountHandle`` · ``ManagerHandle`` · 미리보기 장부)는 ``handles.py`` 밖에서
+  이름조차 쓰지 않는다 — 발급 함수만 쓴다.
 """
 from __future__ import annotations
 
 import ast
 import pathlib
-import re
 import unittest
 
 ENGINE = pathlib.Path(__file__).resolve().parents[1]
 SOURCES = sorted(p for p in ENGINE.rglob("*.py") if "tests" not in p.parts)
-NET_WORDS = re.compile(r"\b(urllib\.request|urlopen|http\.client|socket|requests|httpx|aiohttp|build_opener|"
-                       r"HTTPConnection|HTTPSConnection|subprocess)\b")
-FORBIDDEN_IMPORTS = ("app.adapters", "app.main", "app.collector", "app.database", "app.security", "app.models",
-                     "adapters.naver_searchad", "naver_searchad")
+NET_MODULES = ("urllib", "http", "socket", "ssl", "requests", "httpx", "aiohttp", "subprocess", "asyncio",
+               "ftplib", "smtplib", "telnetlib", "xmlrpc", "multiprocessing")
+FORBIDDEN_MODULES = ("app.adapters", "app.main", "app.collector", "app.database", "app.security", "app.models",
+                     "naver_searchad", "importlib")
+METHOD_WORDS = ("GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "CONNECT", "TRACE")
+HANDLE_PRIVATE = ("_tag", "_KEY", "_PREVIEW_LEFT", "_PREVIEW_ISSUED", "AccountHandle", "ManagerHandle")
 
 
-def _src(p: pathlib.Path) -> str:
-    return p.read_text(encoding="utf-8")
+def _tree(p: pathlib.Path) -> ast.AST:
+    return ast.parse(p.read_text(encoding="utf-8"))
 
 
-def _code_only(p: pathlib.Path) -> str:
-    """주석·문서 문자열을 뺀 코드 — 설명문에 나온 낱말로 시험이 흔들리지 않게."""
-    tree = ast.parse(_src(p))
+def _code_tree(p: pathlib.Path) -> ast.AST:
+    """문서 문자열(설명문)을 뺀 코드 — 설명에 적힌 낱말로 시험이 흔들리지 않게."""
+    tree = _tree(p)
     for node in ast.walk(tree):
-        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.body:
-            first = node.body[0]
-            if isinstance(first, ast.Expr) and isinstance(getattr(first, "value", None), ast.Constant) \
-                    and isinstance(first.value.value, str):
-                node.body[0] = ast.Pass()
-    return ast.unparse(tree)
+        body = getattr(node, "body", None)
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and body:
+            first = body[0]
+            if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant) and isinstance(first.value.value, str):
+                body[0] = ast.Pass()
+    return tree
 
 
-def _enclosing_functions(tree: ast.AST):
-    """노드 → 그 노드를 감싸는 함수 이름."""
-    owner = {}
+def _owners(tree: ast.AST):
+    """노드 → (감싸는 클래스 이름, 감싸는 함수 이름)."""
+    out = {}
 
-    def visit(node, fn):
+    def visit(node, cls, fn):
         for child in ast.iter_child_nodes(node):
-            name = child.name if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) else fn
-            owner[child] = name
-            visit(child, name)
-    visit(tree, None)
-    return owner
+            c = child.name if isinstance(child, ast.ClassDef) else cls
+            f = child.name if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) else fn
+            out[child] = (c, f)
+            visit(child, c, f)
+    visit(tree, None, None)
+    return out
+
+
+def _imports(tree: ast.AST):
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                yield node, a.name
+        elif isinstance(node, ast.ImportFrom):
+            base = ("." * node.level) + (node.module or "")
+            yield node, base
+            for a in node.names:
+                yield node, f"{base}.{a.name}"
+
+
+def _folded_strings(tree: ast.AST):
+    """글자 상수와, 상수끼리 이어 붙인 글자(「"PO" + "ST"」 · f"{'PO'}ST")를 모두 꺼낸다."""
+    def fold(n):
+        if isinstance(n, ast.Constant) and isinstance(n.value, str):
+            return n.value
+        if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Add):
+            a, b = fold(n.left), fold(n.right)
+            return a + b if a is not None and b is not None else None
+        if isinstance(n, ast.JoinedStr):
+            parts = []
+            for v in n.values:
+                if isinstance(v, ast.Constant):
+                    parts.append(str(v.value))
+                elif isinstance(v, ast.FormattedValue) and fold(v.value) is not None:
+                    parts.append(fold(v.value))
+                else:
+                    return None
+            return "".join(parts)
+        return None
+    for n in ast.walk(tree):
+        s = fold(n)
+        if s is not None:
+            yield n, s
 
 
 class GuardrailTest(unittest.TestCase):
@@ -57,78 +100,102 @@ class GuardrailTest(unittest.TestCase):
         names = {p.name for p in SOURCES}
         self.assertTrue({"naver_read.py", "handles.py", "fields.py", "credentials.py"} <= names)
 
-    def test_network_only_in_gate_module(self):
+    def test_network_modules_only_in_gate_module(self):
         for p in SOURCES:
             if p.name == "naver_read.py":
                 continue
-            hits = NET_WORDS.findall(_code_only(p))
-            self.assertEqual(hits, [], f"{p.name} 에 네트워크 코드가 있다 — 관문 밖 호출 금지")
+            for node, mod in _imports(_tree(p)):
+                root = mod.lstrip(".").split(".")[0]
+                self.assertNotIn(root, NET_MODULES, f"{p.name}: {mod} — 관문 밖 네트워크 금지")
 
-    def test_no_forbidden_imports(self):
+    def test_no_forbidden_imports_or_escape_hatches(self):
         for p in SOURCES:
-            tree = ast.parse(_src(p))
-            for node in ast.walk(tree):
-                mods = []
-                if isinstance(node, ast.Import):
-                    mods = [a.name for a in node.names]
-                elif isinstance(node, ast.ImportFrom):
-                    mods = [node.module or ""] + [f"{node.module}.{a.name}" for a in node.names]
-                for m in mods:
-                    for bad in FORBIDDEN_IMPORTS:
-                        self.assertFalse(m == bad or m.startswith(bad + ".") or m.endswith("." + bad) or
-                                         m.endswith(bad), f"{p.name}: {m} import 금지")
-            self.assertNotIn("importlib", _code_only(p), f"{p.name}: 우회 import 금지")
-            self.assertNotIn("__import__", _code_only(p), f"{p.name}: 우회 import 금지")
+            tree = _tree(p)
+            for node, mod in _imports(tree):
+                for bad in FORBIDDEN_MODULES:
+                    self.assertNotIn(bad, mod, f"{p.name}: {mod} import 금지")
+            for n in ast.walk(tree):
+                if isinstance(n, ast.Name):
+                    self.assertNotIn(n.id, ("exec", "eval", "compile", "__import__", "globals", "vars"),
+                                     f"{p.name}: {n.id} 우회 금지")
+                if isinstance(n, ast.Attribute):
+                    self.assertNotIn(n.attr, ("modules", "__dict__", "__getattribute__"), f"{p.name}: .{n.attr} 우회 금지")
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in ("getattr", "setattr", "delattr"):
+                    self.assertTrue(len(n.args) >= 2 and isinstance(n.args[1], ast.Constant),
+                                    f"{p.name}: 글자로 만든 getattr 금지")
+            for _n, s in _folded_strings(_code_tree(p)):
+                self.assertNotIn("app.adapters", s, f"{p.name}: 글자로 ③ 어댑터를 가리킴")
+                self.assertNotIn("naver_searchad", s, f"{p.name}: 글자로 ③ 어댑터를 가리킴")
 
-    def test_no_write_method_names(self):
+    def test_method_words_only_get(self):
         for p in SOURCES:
-            code = _code_only(p)
-            for word in ("POST", "PUT", "DELETE", "PATCH"):
-                self.assertNotIn(f'"{word}"', code, f"{p.name}: {word}")
-                self.assertNotIn(f"'{word}'", code, f"{p.name}: {word}")
+            for _n, s in _folded_strings(_code_tree(p)):
+                if s.strip().upper() in METHOD_WORDS:
+                    self.assertEqual(s, "GET", f"{p.name}: 방식 이름 {s!r}")
 
-    def test_single_request_builder_inside_gate(self):
-        p = ENGINE / "naver_read.py"
-        tree = ast.parse(_src(p))
-        owner = _enclosing_functions(tree)
-        builders = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and
-                    ((isinstance(n.func, ast.Attribute) and n.func.attr in ("Request", "urlopen", "open")
-                      and not (isinstance(n.func.value, ast.Attribute) and n.func.value.attr == "_opener"
-                               and owner.get(n) == "send")) or
-                     (isinstance(n.func, ast.Name) and n.func.id in ("Request", "urlopen")))]
-        self.assertEqual([owner.get(n) for n in builders], ["_gate"], "요청은 관문 한 곳에서만 만든다")
+    def test_single_request_path_in_gate_module(self):
+        tree = _tree(ENGINE / "naver_read.py")
+        owner = _owners(tree)
+        seen = {"Request": [], "send": [], "open": []}
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Attribute):
+                self.assertNotIn(n.attr, ("HTTPSConnection", "HTTPConnection", "putrequest", "urlopen",
+                                          "create_connection", "wrap_socket", "socket"), "두 번째 요청 길")
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute):
+                self.assertNotIn(n.func.attr, ("request", "putrequest", "putheader", "endheaders", "sendall",
+                                               "connect"), "두 번째 요청 길")
+            if isinstance(n, ast.Name):
+                self.assertNotIn(n.id, ("HTTPSConnection", "HTTPConnection", "urlopen", "socket"), "두 번째 요청 길")
+            if isinstance(n, ast.Call):
+                name = n.func.attr if isinstance(n.func, ast.Attribute) else getattr(n.func, "id", None)
+                if name in seen:
+                    seen[name].append(owner.get(n))
+        self.assertEqual(seen["Request"], [(("NaverReader", "_gate"))], "요청은 관문 한 곳에서만 만든다")
+        self.assertEqual(seen["send"], [("NaverReader", "_gate")], "보내기는 관문에서만")
+        self.assertEqual(seen["open"], [("UrllibTransport", "send")], "실제로 여는 곳은 한 곳")
         gate_calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
                       and n.func.attr == "_gate"]
         self.assertTrue(gate_calls)
         for n in gate_calls:
             self.assertIsInstance(n.args[0], ast.Constant, "관문에는 방식 이름을 글자 그대로 넘긴다")
             self.assertEqual(n.args[0].value, "GET")
-            self.assertEqual(owner.get(n), "_request", "관문은 _request 에서만 부른다")
+            self.assertEqual(owner.get(n), ("NaverReader", "_request"))
 
-    def test_transport_send_only_in_gate(self):
-        tree = ast.parse(_src(ENGINE / "naver_read.py"))
-        owner = _enclosing_functions(tree)
-        sends = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-                 and n.func.attr == "send"]
-        self.assertEqual([owner.get(n) for n in sends], ["_gate"])
-
-    def test_reveal_only_in_gate(self):
+    def test_secret_value_only_via_gate(self):
         for p in SOURCES:
-            tree = ast.parse(_src(p))
-            owner = _enclosing_functions(tree)
+            tree = _tree(p)
+            owner = _owners(tree)
             for n in ast.walk(tree):
-                if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "reveal":
-                    self.assertEqual((p.name, owner.get(n)), ("naver_read.py", "_gate"),
+                if isinstance(n, ast.Attribute) and n.attr == "_value" and p.name != "credentials.py":
+                    self.fail(f"{p.name}: 비밀값을 _value 로 꺼냄")
+                if isinstance(n, ast.Attribute) and n.attr == "reveal" and p.name != "credentials.py":
+                    self.assertEqual((p.name, owner.get(n)), ("naver_read.py", ("NaverReader", "_gate")),
                                      "비밀값은 관문에서만 꺼낸다")
 
-    def test_handle_key_private(self):
+    def test_handle_internals_private(self):
         for p in SOURCES:
             if p.name == "handles.py":
                 continue
-            self.assertNotRegex(_code_only(p), r"\b_KEY\b", f"{p.name} 가 손잡이 열쇠를 쓴다")
-            self.assertNotRegex(_code_only(p), r"\b_tag\(", f"{p.name} 가 손잡이 서명을 만든다")
-            self.assertNotRegex(_code_only(p), r"(AccountHandle|ManagerHandle)\(",
-                                f"{p.name} 가 손잡이를 직접 만든다 — handles 의 발급 함수만 쓴다")
+            tree = _tree(p)
+            in_annotation = set()  # 형 표기(주석 성격 · 실행되지 않음)는 뺀다
+            for n in ast.walk(tree):
+                anns = []
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    anns = [n.returns] + [a.annotation for a in n.args.args + n.args.kwonlyargs + n.args.posonlyargs]
+                elif isinstance(n, ast.AnnAssign):
+                    anns = [n.annotation]
+                for ann in anns:
+                    if ann is not None:
+                        in_annotation.update(id(x) for x in ast.walk(ann))
+            for n in ast.walk(tree):
+                if id(n) in in_annotation:
+                    continue
+                if isinstance(n, ast.Attribute) and n.attr in HANDLE_PRIVATE:
+                    self.fail(f"{p.name}: 손잡이 내부 {n.attr} 를 씀 — 발급 함수만 쓴다")
+                if isinstance(n, ast.Name) and n.id in HANDLE_PRIVATE:
+                    self.fail(f"{p.name}: 손잡이 내부 {n.id} 를 씀")
+            for node, mod in _imports(tree):
+                self.assertFalse(any(mod.endswith("." + x) for x in HANDLE_PRIVATE), f"{p.name}: {mod}")
 
     def test_personal_fields_not_in_allow_lists(self):
         from naver_engine import fields as F

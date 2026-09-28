@@ -17,6 +17,7 @@ import pickle
 import random
 import socket
 import threading
+import traceback
 import unittest
 import urllib.error
 import urllib.request
@@ -52,12 +53,15 @@ def preview_handle(cid=ACC, pid=501, by=112, now=NOW, cand=77):
 
 
 class _Collect(logging.Handler):
+    """로그를 **형식을 갖춰**(오류 추적 exc_info · stack_info 포함) 모은다 — 추적에 키가 섞이는 것까지 본다."""
+
     def __init__(self):
         super().__init__(logging.DEBUG)
+        self.setFormatter(logging.Formatter("%(levelname)s %(name)s %(message)s"))
         self.lines = []
 
     def emit(self, record):
-        self.lines.append(record.getMessage())
+        self.lines.append(self.format(record))
 
 
 class Base(unittest.TestCase):
@@ -80,14 +84,15 @@ class Base(unittest.TestCase):
         # 가짜 네이버가 받은 요청은 전부 GET · 정해진 호스트 · 본문 없음 · 키·서명 맞음
         for c in self.naver.calls:
             self.assertEqual(c.method, "GET")
-            self.assertEqual((c.scheme, c.host), ("https", R.BASE_HOST))
+            self.assertEqual((c.scheme, c.host), ("https", "api.searchad.naver.com"), "호스트는 글자 그대로 고정")
             self.assertFalse(c.has_body)
             self.assertTrue(c.api_key_ok and c.sig_ok, "키·서명이 틀렸다")
 
     def expect(self, exc, fn, *a, **kw):
         with self.assertRaises(exc) as cm:
             fn(*a, **kw)
-        self.errors.append(str(cm.exception))
+        # 문구만이 아니라 원인 사슬(__cause__ · __context__)까지 포함한 추적 전체를 본다
+        self.errors.append("".join(traceback.format_exception(cm.exception)))
         return cm.exception
 
 
@@ -101,6 +106,18 @@ class GateTest(Base):
 
     def test_allowed_methods_is_exactly_get(self):
         self.assertEqual(R._ALLOWED_METHODS, frozenset({"GET"}))
+
+    def test_host_is_pinned(self):
+        self.assertEqual((R.BASE_HOST, R.BASE_URL), ("api.searchad.naver.com", "https://api.searchad.naver.com"))
+        old = R.BASE_URL
+        for other in ("https://api.searchad.naver.com.evil.example", "http://api.searchad.naver.com",
+                      "https://evil.example"):
+            R.BASE_URL = other
+            try:
+                self.expect(R.PathForbidden, self.reader._gate, "GET", "/ncc/campaigns", None, ACC)
+            finally:
+                R.BASE_URL = old
+        self.assertEqual(self.naver.calls, [], "만든 뒤 호스트 검사가 막아야 한다")
 
     def test_path_not_allowed(self):
         for p in ("/ncc/keywords", "/ncc/adgroups", "/ncc/campaigns/abc", "/manager-accounts/x/child-ad-accounts",
@@ -138,9 +155,11 @@ class GateTest(Base):
         target = http.server.HTTPServer(("127.0.0.1", 0), Target)
         tport = target.server_address[1]
 
+        code = {"v": 302}
+
         class Redir(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
-                self.send_response(302)
+                self.send_response(code["v"])
                 self.send_header("Location", f"http://127.0.0.1:{tport}/steal")
                 self.end_headers()
 
@@ -156,9 +175,13 @@ class GateTest(Base):
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), R._NoRedirect())
             t = R.UrllibTransport()
             t._opener = opener  # 시험용: 이 컴퓨터의 프록시 설정을 거치지 않게만 바꾼다(넘겨주기 거절은 그대로)
-            status, _ = t.send(req, 5)
-            self.assertEqual(status, 302)
-            self.assertEqual(hits["n"], 0, "넘겨주기를 따라가면 키 머리글이 다른 곳으로 간다")
+            for c in (301, 302, 303, 307, 308):
+                code["v"] = c
+                req = urllib.request.Request(f"http://127.0.0.1:{redir.server_address[1]}/x",
+                                             headers={"X-API-KEY": "k"}, method="GET")
+                status, _ = t.send(req, 5)
+                self.assertEqual(status, c)
+                self.assertEqual(hits["n"], 0, f"{c} 넘겨주기를 따라가면 키 머리글이 다른 곳으로 간다")
         finally:
             for s in (target, redir):
                 s.shutdown()
@@ -214,6 +237,35 @@ class HandleTest(Base):
         fake = H.AccountHandle(ACC + 1, h.possibility_id, h.purpose, h.issued_on, None, None, h.issued_at, h.nonce,
                                h._tag)
         self.expect(H.HandleInvalid, self.reader.get_campaigns, fake)
+        self.assertEqual(self.naver.calls, [])
+
+    def test_every_handle_field_is_signed(self):
+        """서명을 그대로 두고 칸 하나만 바꾼 가짜 손잡이는 모두 거절(목적 · 날짜 · 가망 · 요청자 · 후보 · 시각 · 번호)."""
+        y = NOW.date() - timedelta(days=1)
+        ck = check_handle()
+        pv = preview_handle(by=7101)
+        variants = [
+            (ck, dict(customer_id=ACC + 1)), (ck, dict(possibility_id=502)), (ck, dict(purpose=H.PURPOSE_PREVIEW)),
+            (ck, dict(issued_on=y)), (ck, dict(requested_by=5)), (ck, dict(issued_at=ck.issued_at - timedelta(days=1))),
+            (ck, dict(nonce="x")), (ck, dict(candidate_id=9)),
+            (pv, dict(purpose=H.PURPOSE_CHECK)), (pv, dict(requested_by=0)), (pv, dict(candidate_id=78)),
+            (pv, dict(nonce="0" * 24)), (pv, dict(possibility_id=999)),
+        ]
+        for h, change in variants:
+            f = dict(customer_id=h.customer_id, possibility_id=h.possibility_id, purpose=h.purpose,
+                     issued_on=h.issued_on, requested_by=h.requested_by, candidate_id=h.candidate_id,
+                     issued_at=h.issued_at, nonce=h.nonce)
+            f.update(change)
+            fake = H.AccountHandle(f["customer_id"], f["possibility_id"], f["purpose"], f["issued_on"],
+                                   f["requested_by"], f["candidate_id"], f["issued_at"], f["nonce"], h._tag)
+            with self.assertRaises(H.HandleInvalid, msg=str(change)):
+                H.require_account(fake, NOW, (H.PURPOSE_CHECK, H.PURPOSE_PREVIEW))
+
+    def test_manager_handle_checks(self):
+        y = H.issue_manager_handle(AGENCY_ID, NOW - timedelta(days=1))
+        self.expect(H.HandleInvalid, self.reader.list_manager_accounts, y)
+        fake = H.ManagerHandle(AGENCY_ID, NOW.date(), "not-a-signature")
+        self.expect(H.HandleInvalid, self.reader.list_manager_accounts, fake)
         self.assertEqual(self.naver.calls, [])
 
     def test_handle_is_immutable_and_not_picklable(self):
@@ -295,6 +347,12 @@ class EligibilityTest(unittest.TestCase):
         with self.assertRaises(H.NotEligible):
             H.issue_check_handle(customer_id=ACC, possibility_id=5, link_state="auto", stage="진행중",
                                  stage_as_of=datetime(2026, 9, 29, 6, 0), latest_end_date=None, now=NOW)
+        # 미래 시각으로 찍힌 단계 자료는 낡을 수가 없다 — 받지 않는다(5분 여유)
+        self.assertTrue(check_handle(age_h=-4 / 60))
+        for ahead_h in (6 / 60, 24 * 30):
+            with self.assertRaises(H.NotEligible) as cm:
+                check_handle(age_h=-ahead_h)
+            self.assertEqual(cm.exception.reason, "stage-time-in-future")
 
     def test_ids(self):
         for bad in (True, False, 0, -1, "12a", "", "1 2", 10 ** 15, 1.5):
@@ -544,6 +602,13 @@ class AccountReadTest(Base):
         self.assertNotIn(MARK_BIZINFO, json.dumps(out, ensure_ascii=False))
         self.assertEqual(out[0]["channelKey"], "https://example.com")
 
+    def test_channel_customer_mismatch(self):
+        for row in ({"nccBusinessChannelId": "bsn-1", "customerId": ACC + 9, "name": "남의 몰"},
+                    {"nccBusinessChannelId": "bsn-1", "name": "번호 없음"}):
+            self.naver.script("/ncc/channels", (200, [row]))
+            self.assertEqual(self.expect(R.NaverApiError, self.reader.get_channels, preview_handle(by=7201)).kind,
+                             R.KIND_MISMATCH)
+
     def test_not_json(self):
         self.naver.route(r"/ncc/campaigns", lambda c: (200, b"<html>oops</html>"))
         self.assertEqual(self.expect(R.NaverApiError, self.reader.get_campaigns, check_handle()).kind,
@@ -641,6 +706,10 @@ class StatsParseTest(unittest.TestCase):
             R.parse_daily({"data": [{"dateStart": YDAY.isoformat(), "dateEnd": "2099-01-01"}]}, "cmp", self.F, YDAY, YDAY)
         with self.assertRaises(R.StatsShapeUnknown):
             R.parse_daily({"summaryStatResponse": {"data": []}}, "cmp", self.F, YDAY, YDAY)
+        dup = [{"dateStart": YDAY.isoformat(), "impCnt": 500, "clkCnt": 3, "salesAmt": 9000, "ccnt": 0},
+               {"dateStart": YDAY.isoformat(), "impCnt": 0, "clkCnt": 0, "salesAmt": 0, "ccnt": 0}]
+        with self.assertRaises(R.StatsShapeUnknown):
+            R.parse_daily({"data": dup, "cycleBaseTm": FRESH}, "cmp", self.F, YDAY, YDAY)
 
 
 class StatsReadTest(Base):
@@ -673,6 +742,29 @@ class StatsReadTest(Base):
         r = self.reader.get_stats_summary(check_handle(), ids, YDAY, YDAY)
         self.assertIsNone(r.cycle_base_tm)
         self.assertFalse(r.complete)
+
+    def test_one_chunk_behind_makes_whole_late(self):
+        ids = [f"cmp-c{i}" for i in range(150)]
+        state = {"n": 0}
+
+        def reply(c):
+            state["n"] += 1
+            cyc = FRESH if state["n"] == 1 else cycle_str(NOW.replace(day=28, hour=20))
+            return 200, {"data": stat_rows(c.query["ids"]), "cycleBaseTm": cyc}
+        self.naver.route(r"/stats", reply)
+        r = self.reader.get_stats_summary(check_handle(), ids, YDAY, YDAY)
+        self.assertEqual(r.cycle_base_tm, NOW.replace(day=28, hour=20), "늦은 쪽(더 이른 시각)을 쓴다")
+        self.assertIn("cycle-behind", r.reasons)
+        self.assertFalse(r.complete)
+
+    def test_cycle_ahead_boundary(self):
+        for ahead, ok in ((timedelta(minutes=9), True), (timedelta(minutes=11), False), (timedelta(days=1), False)):
+            self.naver.routes.clear()
+            cyc = cycle_str(NOW + ahead)
+            self.naver.route(r"/stats", lambda c, cyc=cyc: (200, {"data": stat_rows(c.query["ids"]), "cycleBaseTm": cyc}))
+            r = self.reader.get_stats_summary(check_handle(), ["cmp-a"], YDAY, YDAY)
+            self.assertEqual(r.cycle_base_tm is not None, ok, ahead)
+            self.assertEqual(r.complete, ok, ahead)
 
     def test_unknown_shape_propagates(self):
         self.naver.route(r"/stats", lambda c: (200, {"weird": []}))
@@ -755,6 +847,15 @@ class ZeroActivityTest(Base):
         self.assertFalse(self.run_one(self.days([0] * 7, cycle=cycle_str(NOW.replace(day=28, hour=20)))))
         self.assertFalse(self.run_one((200, {"data": [], "cycleBaseTm": FRESH})))
 
+    def test_duplicate_day_raises_not_zero(self):
+        """같은 날짜 줄이 두 번(앞은 광고비 있음 · 뒤는 0) — 뒤 것만 남겨 「활동 0」으로 읽으면 안 된다."""
+        d = YDAY.isoformat()
+        self.naver.script("/stats", (200, {"data": [
+            {"dateStart": d, "impCnt": 500, "clkCnt": 3, "salesAmt": 9000, "ccnt": 0},
+            {"dateStart": d, "impCnt": 0, "clkCnt": 0, "salesAmt": 0, "ccnt": 0}], "cycleBaseTm": FRESH}))
+        with self.assertRaises(R.StatsShapeUnknown):
+            self.reader.confirm_no_activity(check_handle(), ["cmp-1"], YDAY, YDAY)
+
     def test_unknown_shape_raises(self):
         self.naver.script("/stats", (200, {"odd": 1}))
         with self.assertRaises(R.StatsShapeUnknown):
@@ -786,6 +887,14 @@ class RetryTest(Base):
         e = self.expect(R.NaverApiError, self.reader.get_campaigns, check_handle())
         self.assertEqual(e.kind, R.KIND_RATE)
         self.assertEqual(len(self.naver.calls), 4)
+        waits = [w for w in self.clock.sleeps if w >= 1.5]
+        self.assertEqual(len(waits), 3)
+        for got, base in zip(waits, (2.0, 4.0, 8.0)):
+            self.assertTrue(base <= got <= base * 1.25, (got, base))
+
+    def test_default_call_cap(self):
+        self.assertEqual(R.DEFAULT_MAX_CALLS, 20000)
+        self.assertEqual(R.NaverReader(creds(), transport=FakeNaver())._max_calls, 20000)
 
     def test_burst_pauses_then_aborts(self):
         class NoJitter:
@@ -829,6 +938,8 @@ class RetryTest(Base):
             self.naver.script("/ncc/campaigns", urllib.error.URLError(f"host {MARK_API_KEY}"))
         e = self.expect(R.NaverApiError, self.reader.get_campaigns, check_handle())
         self.assertEqual((e.kind, e.detail), (R.KIND_NETWORK, "URLError"))
+        self.assertIsNone(e.__cause__)
+        self.assertIsNone(e.__context__, "원래 오류(키가 섞일 수 있다)가 사슬에 붙으면 안 된다")
 
     def test_no_retry_kinds(self):
         for status, code, kind in ((401, None, R.KIND_KEY_REJECTED), (403, 1018, R.KIND_KEY_REJECTED),
@@ -890,6 +1001,12 @@ class SecretTest(unittest.TestCase):
                 with self.assertRaises(CredentialsMissing) as cm:
                     load_manager_credentials({**env, name: bad})
                 self.assertNotIn(MARK_API_KEY, str(cm.exception))
+
+    def test_handle_reprs_hide_ids(self):
+        for h in (check_handle(), preview_handle(by=7301), H.issue_manager_handle(AGENCY_ID, NOW)):
+            text = repr(h) + str(h) + f"{h}"
+            self.assertNotIn(str(ACC), text)
+            self.assertNotIn(str(AGENCY_ID), text)
 
     def test_reprs_hide_ids(self):
         naver = FakeNaver()
