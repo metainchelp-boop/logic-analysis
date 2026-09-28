@@ -19,7 +19,7 @@ MANAGER_ACCOUNT_DETAIL = ("name", "childAdAccountCount", "deleted", "disabled")
 CAMPAIGN = (
     "nccCampaignId", "customerId", "name", "campaignTp", "status", "statusReason", "userLock",
     "dailyBudget", "useDailyBudget", "usePeriod", "periodStartDt", "periodEndDt", "deliveryMethod",
-    "sharedBudgetId", "sharedDailyBudget", "sharedBudgetLock", "editTm",
+    "sharedBudgetId", "sharedDailyBudget", "sharedBudgetLock", "editTm", "delFlag",
 )
 
 # 비즈머니(Bizmoney) — customerId 는 대조에만 쓰고 남긴다

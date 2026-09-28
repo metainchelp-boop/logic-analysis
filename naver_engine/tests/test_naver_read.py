@@ -385,6 +385,19 @@ class AccountReadTest(Base):
         out = self.reader.get_bizmoney(check_handle())
         self.assertEqual(out, {"customerId": ACC, "bizmoney": 123456, "budgetLock": False, "refundLock": False})
 
+    def test_bizmoney_decimal(self):
+        # 실측(2026-09-28): 잔액이 원 아래 소수까지 온다 — 첫 조각은 정수만 받아 첫날 전부 실패할 뻔했다
+        self.naver.script("/billing/bizmoney", (200, {"customerId": ACC, "bizmoney": 123456.78, "budgetLock": False,
+                                                      "refundLock": False}),
+                          (200, {"customerId": ACC, "bizmoney": 0, "budgetLock": True, "refundLock": False}))
+        self.assertEqual(self.reader.get_bizmoney(check_handle())["bizmoney"], 123456.78)
+        self.assertEqual(self.reader.get_bizmoney(check_handle())["bizmoney"], 0)
+        self.naver.script("/billing/bizmoney", (200, b'{"customerId": 3000001, "bizmoney": NaN}'),
+                          (200, b'{"customerId": 3000001, "bizmoney": Infinity}'))
+        for _ in range(2):
+            self.assertEqual(self.expect(R.NaverApiError, self.reader.get_bizmoney, check_handle()).kind,
+                             R.KIND_BAD_RESPONSE)
+
     def test_bizmoney_mismatch_and_unknown(self):
         self.naver.script("/billing/bizmoney", (200, {"customerId": ACC + 1, "bizmoney": 5}),
                           (200, {"customerId": ACC, "bizmoney": "5"}), (200, {"customerId": ACC}),
@@ -548,6 +561,44 @@ class StatsReadTest(Base):
         self.assertTrue(d.complete)
         self.assertEqual(self.naver.calls[0].query["id"], ["cmp-1"])
         self.assertEqual(self.naver.calls[0].query["timeIncrement"], ["1"])
+
+
+class ZeroActivityTest(Base):
+    """합계에 줄이 없던 캠페인 — 하루별로 모든 날·모든 지표가 정확히 0 일 때만 「활동 0」."""
+
+    def days(self, vals, cycle=FRESH, drop=None):
+        rows = []
+        for i, v in enumerate(vals):
+            d = (YDAY - timedelta(days=len(vals) - 1 - i)).isoformat()
+            if d == drop:
+                continue
+            rows.append({"dateStart": d, "dateEnd": d, "impCnt": v, "clkCnt": 0, "salesAmt": 0, "ccnt": 0})
+        return 200, {"summary": {}, "data": rows, "compTm": FRESH, "cycleBaseTm": cycle}
+
+    def run_one(self, reply):
+        self.naver.scripts.clear()
+        self.naver.script("/stats", reply)
+        return self.reader.confirm_no_activity(check_handle(), ["cmp-1"], YDAY - timedelta(days=6), YDAY)["cmp-1"]
+
+    def test_all_zero_is_confirmed(self):
+        self.assertTrue(self.run_one(self.days([0] * 7)))
+
+    def test_anything_else_is_not(self):
+        self.assertFalse(self.run_one(self.days([0, 0, 0, 1, 0, 0, 0])))
+        self.assertFalse(self.run_one(self.days([0] * 7, drop=(YDAY - timedelta(days=2)).isoformat())))
+        self.assertFalse(self.run_one(self.days([0, 0, 0, None, 0, 0, 0])))
+        self.assertFalse(self.run_one(self.days([0] * 7, cycle=None)))
+        self.assertFalse(self.run_one(self.days([0] * 7, cycle=cycle_str(NOW.replace(day=28, hour=20)))))
+        self.assertFalse(self.run_one((200, {"data": [], "cycleBaseTm": FRESH})))
+
+    def test_unknown_shape_raises(self):
+        self.naver.script("/stats", (200, {"odd": 1}))
+        with self.assertRaises(R.StatsShapeUnknown):
+            self.reader.confirm_no_activity(check_handle(), ["cmp-1"], YDAY, YDAY)
+
+    def test_check_purpose_only(self):
+        self.expect(H.HandleInvalid, self.reader.confirm_no_activity, preview_handle(), ["cmp-1"], YDAY, YDAY)
+        self.expect(H.HandleInvalid, self.reader.confirm_no_activity, ACC, [], YDAY, YDAY)
 
 
 # ── 6. 오류 분류 · 다시 보내기 · 속도 · 상한 ────────────────────────

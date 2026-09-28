@@ -570,7 +570,12 @@ class NaverReader:
             raise NaverApiError(KIND_BAD_RESPONSE, "/billing/bizmoney", 200, None, h.customer_id, "사전 아님")
         self._same_customer(body.get("customerId"), h, "/billing/bizmoney")
         kept = F.keep(body, F.BIZMONEY)
-        if isinstance(kept.get("bizmoney"), bool) or not isinstance(kept.get("bizmoney"), int):
+        # 실측(2026-09-28): 잔액은 대부분 원 아래 소수까지 온다(명세는 정수) — 정수·소수 모두 받는다.
+        try:
+            _num(kept.get("bizmoney"), "bizmoney")
+        except StatsShapeUnknown:
+            raise NaverApiError(KIND_BAD_RESPONSE, "/billing/bizmoney", 200, None, h.customer_id, "잔액 모름") from None
+        if kept.get("bizmoney") is None:
             raise NaverApiError(KIND_BAD_RESPONSE, "/billing/bizmoney", 200, None, h.customer_id, "잔액 모름")
         return kept
 
@@ -624,6 +629,22 @@ class NaverReader:
             "timeIncrement": "1",
         })
         return parse_daily(body, entity_id, flds, since, until)
+
+    def confirm_no_activity(self, ah, entity_ids: Iterable[str], since: date, until: date,
+                            fields: Sequence[str] = ("impCnt", "clkCnt", "salesAmt", "ccnt")) -> Dict[str, bool]:
+        """합계에 줄이 없던 번호가 정말 「활동 0」인지 하루별로 확인한다.
+
+        실측(2026-09-28 · 9/9): 네이버는 활동이 없으면 **합계** 줄을 주지 않지만 **하루별**은 날마다 줄을 준다.
+        돌려주는 값: 번호 → ``True``(기간의 모든 날 · 모든 지표가 정확히 0 · 자료 늦음 아님) / ``False``(그 밖 전부).
+        ``False`` 는 「활동이 있었다」가 아니라 「0 이라고 확인하지 못했다」는 뜻이다 — 부르는 쪽은 ⚪ 로 둔다.
+        """
+        self._account(ah, (H.PURPOSE_CHECK,))  # 번호가 비어 있어도 손잡이부터 본다
+        out: Dict[str, bool] = {}
+        for eid in entity_ids:
+            d = self.get_stats_daily(ah, eid, since, until, fields)
+            out[str(eid)] = bool(d.complete and d.days and all(
+                v == 0 and v is not None for day in d.days.values() for v in day.values()))
+        return out
 
     def get_channels(self, ah) -> List[dict]:
         """비즈채널 — 짝 확인 미리보기 전용(사람이 누를 때만 · 저장하지 않음 · 대표 결정 Q2)."""
