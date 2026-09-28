@@ -314,6 +314,15 @@ def start_scheduler():
         max_instances=1,
     )
     _scheduler.add_job(
+        _run_heartbeat_prune,
+        trigger="date",
+        run_date=datetime.now() + timedelta(minutes=4),
+        id="heartbeat_prune_boot",
+        name="옛 설치본 신호 줄 정리 (부팅 +4분 · 대표 확정 9/28 · 멱등)",
+        replace_existing=True,
+        max_instances=1,
+    )
+    _scheduler.add_job(
         _run_tracked_reset_20260922,
         trigger="date",
         run_date=datetime.now() + timedelta(minutes=3),
@@ -1950,6 +1959,28 @@ def _run_contam_20260917_cleanup():
     except Exception as e:
         # 마커를 남기지 않는다 — 다음 배포에서 다시 시도한다.
         logger.error(f"❌ [9/17오염정리] 실패(마커 미생성, 다음 배포에서 재시도): {e}")
+
+
+def _run_heartbeat_prune():
+    """옛 설치본 신호 줄 정리 (대표 「그렇게 해」 2026-09-28 · 부팅 1회 · 멱등).
+    같은 기계 번호에 더 최근 줄이 있고 3일 넘게 조용한 줄만 지운다(collector_heartbeat.prune_replaced).
+    ⚠️ 수집 판단·순위 기록과 무관한 표시용 줄이다 — 한 대뿐인 번호는 절대 안 지운다(끊김 경보 보존).
+    """
+    import os
+    import sqlite3
+    DB_PATH = os.getenv("DB_PATH", "/app/data/logic_data.db")
+    if not os.path.exists(DB_PATH):
+        return
+    try:
+        from collector_heartbeat import prune_replaced
+        conn = sqlite3.connect(DB_PATH, timeout=30)
+        try:
+            n = prune_replaced(conn)
+        finally:
+            conn.close()
+        logger.info(f"🧹 옛 설치본 신호 줄 정리 — {n}줄" if n >= 0 else "❌ 옛 설치본 신호 줄 정리 실패")
+    except Exception as e:
+        logger.error(f"❌ 옛 설치본 신호 줄 정리 실패: {e}")
 
 
 _TRACKED_RESET_MARKER_NAME = ".tracked_products_reset_20260922"

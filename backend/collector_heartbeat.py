@@ -245,6 +245,31 @@ def machines(conn, now: Optional[datetime] = None) -> List[Dict[str, Any]]:
         return []
 
 
+PRUNE_OLD_DAYS = 3
+
+
+def prune_replaced(conn, days: int = PRUNE_OLD_DAYS, now: Optional[datetime] = None) -> int:
+    """옛 설치본 신호 줄 정리(대표 「그렇게 해」 2026-09-28) — 지운 줄 수. 실패는 -1.
+
+    지우는 것: **같은 기계 번호에 더 최근 줄이 있고**, 자기 마지막 신호가 `days` 일 넘은 줄뿐.
+    ⇒ 수집기를 새로 깔아 instanceId 가 바뀐 뒤 남은 옛 줄. 한 대뿐인 번호·최근 줄은 절대 안 지운다
+       (멈춘 기계를 지우면 「신호 끊김」 경보가 사라진다). 여러 번 돌아도 결과가 같다(멱등).
+    """
+    try:
+        ensure_table(conn)
+        n = now or datetime.now()
+        cutoff = (n - timedelta(days=days)).strftime(_FMT)
+        cur = conn.execute(
+            "DELETE FROM collector_heartbeat WHERE last_seen < ? AND EXISTS ("
+            " SELECT 1 FROM collector_heartbeat h2 WHERE h2.worker_no = collector_heartbeat.worker_no"
+            " AND h2.instance_id <> collector_heartbeat.instance_id AND h2.last_seen > collector_heartbeat.last_seen)",
+            (cutoff,))
+        conn.commit()
+        return int(cur.rowcount or 0)
+    except Exception:
+        return -1
+
+
 def summary_line(rows: List[Dict[str, Any]]) -> str:
     """로그·진단용 한 줄. 예: '기계 2대 — 1/2 대기(정상) · 2/2 ⛔ 신호 끊김 40분'"""
     if not rows:

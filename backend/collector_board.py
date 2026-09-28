@@ -223,16 +223,16 @@ def page2_by_instance(conn, day: str) -> Optional[Dict[str, Dict[str, int]]]:
 PAGE2_MIN_TRIED = 20      # 이보다 적게 시도했으면 판정하지 않는다(표본이 적다)
 
 
-def page2_verdict(p2: Optional[Dict[str, int]]) -> Dict[str, Any]:
+def page2_verdict(p2: Optional[Dict[str, int]], label: str = "오늘") -> Dict[str, Any]:
     if p2 is None:
         return {"key": "page2", "level": "unknown", "title": "2페이지 넘김", "text": "재지 못했습니다"}
     passed, tried = int(p2.get("passed") or 0), int(p2.get("tried") or 0)
     if tried < PAGE2_MIN_TRIED:
         return {"key": "page2", "level": "unknown", "title": "2페이지 넘김",
-                "text": f"오늘 2페이지 시도 {tried}번 — 판단하기 이릅니다" + (f" (넘김 {passed})" if tried else "")}
+                "text": f"{label} 2페이지 시도 {tried}번 — 판단하기 이릅니다" + (f" (넘김 {passed})" if tried else "")}
     pct = round(100.0 * passed / tried)
     level = "ok" if passed * 2 >= tried else ("warn" if passed * 10 >= tried else "bad")
-    text = f"오늘 {passed}/{tried}번 넘김({pct}%)"
+    text = f"{label} {passed}/{tried}번 넘김({pct}%)"
     if level == "bad":
         text += " — 41위 아래 순위가 새로 확인되지 않습니다"
     return {"key": "page2", "level": level, "title": "2페이지 넘김", "text": text}
@@ -293,16 +293,18 @@ def rank_writes(conn, today: str) -> Dict[str, Any]:
 
 
 # ── 판정 줄 ──────────────────────────────────────────────────────────────
+def block_verdict(blocks: Optional[Dict[str, Any]], label: str = "오늘") -> Dict[str, Any]:
+    if blocks is None:
+        return {"key": "block", "level": "unknown", "title": "진짜 차단", "text": "막힘 보고를 읽지 못했습니다"}
+    n = blocks["real"]
+    return {"key": "block", "level": "ok" if n == 0 else "bad", "title": "진짜 차단",
+            "text": f"{label} 0건" if n == 0 else f"{label} {n}건 — 퍼즐·차단 문구. 기계를 멈추고 사람이 확인하세요"}
+
+
 def verdicts(today_blocks: Optional[Dict[str, Any]], machines_now: Optional[List[Dict[str, Any]]],
              split: Optional[Dict[str, Any]], writes: Dict[str, Any], hour: int) -> List[Dict[str, Any]]:
     """한 줄씩 ok · warn · bad · unknown. 못 잰 것은 unknown(좋다고 치지 않는다)."""
-    v: List[Dict[str, Any]] = []
-    if today_blocks is None:
-        v.append({"key": "block", "level": "unknown", "title": "진짜 차단", "text": "막힘 보고를 읽지 못했습니다"})
-    else:
-        n = today_blocks["real"]
-        v.append({"key": "block", "level": "ok" if n == 0 else "bad", "title": "진짜 차단",
-                  "text": "오늘 0건" if n == 0 else f"오늘 {n}건 — 퍼즐·차단 문구. 기계를 멈추고 사람이 확인하세요"})
+    v: List[Dict[str, Any]] = [block_verdict(today_blocks)]
     if machines_now is None:
         v.append({"key": "machines", "level": "unknown", "title": "수집 기계", "text": "기계 신호를 읽지 못했습니다"})
     else:
@@ -338,9 +340,75 @@ def verdicts(today_blocks: Optional[Dict[str, Any]], machines_now: Optional[List
     return v
 
 
+# ── 여기서부터 보기(대표 지시 2026-09-28 「이전 데이터로 실시간 현황을 보기 어렵다 · 현시점으로 깨끗하게」) ──
+# 원자료는 지우지 않는다 — 관측 원장은 수집 판단(오늘 시도한 키워드 뒤로 · 밤 재시도 상한 · 완료)에 쓰인다.
+# 대신 「기준 시각」 이후에 생긴 것만 센 칸(window)을 **더해서** 내려 준다(종전 칸 무변경).
+# 기준 시각은 오늘 수집일 안에서만 뜻이 있다 — 다음 날이 되면 오늘 0시보다 앞이라 저절로 하루 전체가 된다.
+def normalize_since(since: Any, now: Optional[datetime] = None) -> Optional[str]:
+    """'YYYY-MM-DD HH:MM[:SS]'(또는 T 구분) → 'YYYY-MM-DD HH:MM:SS'. 못 읽거나 미래(5분 넘게)면 None."""
+    s = str(since or "").strip().replace("T", " ")
+    dt = None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            dt = datetime.strptime(s[:19] if fmt.endswith("%S") else s[:16], fmt)
+            break
+        except ValueError:
+            continue
+    if dt is None:
+        return None
+    if dt > (now or datetime.now()) + timedelta(minutes=5):
+        return None
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def window_numbers(conn, today: str, since: str) -> Dict[str, Any]:
+    """오늘 수집일 중 since 이후만. 칸마다 실패는 None(0 과 섞지 않는다)."""
+    obs = _has(conn, "collector_observations")
+    fdn = _has(conn, "collector_found_done")
+    w: Dict[str, Any] = {"since": since, "label": since[11:16] + " 이후"}
+    w["attempts"] = _q1(conn, "SELECT COUNT(*) FROM collector_observations WHERE collected_date=? AND received_at >= ?",
+                        (today, since)) if obs else 0
+    w["full"] = _q1(conn, "SELECT COUNT(*) FROM collected_serp WHERE collected_date=? AND created_at >= ?", (today, since))
+    w["completed"] = _q1(conn, "SELECT COUNT(*) FROM (SELECT keyword FROM collected_serp WHERE collected_date=? AND created_at >= ? "
+                               "UNION SELECT keyword FROM collector_found_done WHERE collected_date=? AND received_at >= ?)",
+                         (today, since, today, since)) if fdn else w["full"]
+    w["human"] = _q1(conn, "SELECT COUNT(*) FROM human_view_uploads WHERE collected_date=? AND received_at >= ?",
+                     (today, since)) if _has(conn, "human_view_uploads") else 0
+    if obs:
+        try:
+            r = conn.execute(f"SELECT SUM(CASE WHEN {_P2_READ} >= 2 THEN 1 ELSE 0 END), "
+                             f"SUM(CASE WHEN {_P2_READ} >= 2 OR {_P2_STOP} THEN 1 ELSE 0 END) "
+                             "FROM collector_observations WHERE collected_date=? AND received_at >= ?",
+                             (today, since)).fetchone()
+            w["page2"] = {"passed": int(r[0] or 0), "tried": int(r[1] or 0)}
+        except Exception:
+            w["page2"] = None
+        try:
+            rows = conn.execute(f"SELECT json_extract(meta_json, '$.observation.workerId'), "
+                                f"SUM(CASE WHEN {_P2_READ} >= 2 THEN 1 ELSE 0 END), "
+                                f"SUM(CASE WHEN {_P2_READ} >= 2 OR {_P2_STOP} THEN 1 ELSE 0 END) "
+                                "FROM collector_observations WHERE collected_date=? AND received_at >= ? GROUP BY 1",
+                                (today, since)).fetchall()
+            w["page2ByInstance"] = {str(a or ""): {"passed": int(b or 0), "tried": int(c or 0)} for a, b, c in rows}
+        except Exception:
+            w["page2ByInstance"] = None
+        try:
+            rows = conn.execute("SELECT reason, COUNT(*) FROM collector_observations WHERE collected_date=? "
+                                "AND received_at >= ? AND projected=0 GROUP BY reason ORDER BY 2 DESC LIMIT 12",
+                                (today, since)).fetchall()
+            w["stopReasons"] = [{"reason": (r or "(없음)")[:60], "count": int(n),
+                                 "label": CODE_LABEL.get(code_of(r), "") if r else ""} for r, n in rows]
+        except Exception:
+            w["stopReasons"] = None
+    else:
+        w["page2"], w["page2ByInstance"], w["stopReasons"] = {"passed": 0, "tried": 0}, {}, []
+    w["blocks"] = block_breakdown(conn, max(since, today))
+    return w
+
+
 def build(conn, today: str, universe: Optional[Iterable[str]], split_ok=None,
           machines_rows: Optional[List[Dict[str, Any]]] = None, helper: Optional[Dict[str, Any]] = None,
-          now: Optional[datetime] = None) -> Dict[str, Any]:
+          now: Optional[datetime] = None, since: Optional[str] = None) -> Dict[str, Any]:
     n = now or datetime.now()
     uni = list(universe) if universe is not None else None     # None = 유니버스를 못 읽음(0개가 아니다)
     tb = block_breakdown(conn, today)
@@ -368,7 +436,20 @@ def build(conn, today: str, universe: Optional[Iterable[str]], split_ok=None,
                                if p2_inst is not None else None)
     vs = verdicts(tb, m["current"], sp, writes, n.hour)
     vs.insert(1, page2_verdict(p2_today))
+    eff = normalize_since(since, n) if since else None
+    if eff and eff[:10] < today:
+        eff = None      # 지난 날 기준 시각 — 오늘은 하루 전체로(화면이 기준 시각을 지운다)
+    win = window_numbers(conn, today, eff) if eff else None
+    if win:
+        # 기준 시각이 있으면 두 판정(진짜 차단 · 2페이지)을 그 뒤 숫자로 — 나머지 판정은 「지금」 상태라 그대로
+        vs[0] = block_verdict(win["blocks"], win["label"])
+        vs[1] = page2_verdict(win["page2"], win["label"])
+        for rows_ in (m["current"] or [], m["old"] or []):
+            for r in rows_:
+                r["page2Window"] = ((win["page2ByInstance"] or {}).get(str(r.get("instance_id") or ""), {"passed": 0, "tried": 0})
+                                    if win["page2ByInstance"] is not None else None)
     return {
+        "window": win,
         "today": today, "generatedAt": n.strftime("%Y-%m-%d %H:%M:%S"),
         "verdicts": vs,
         "summary": t,
