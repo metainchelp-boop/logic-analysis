@@ -260,6 +260,19 @@ class PureTest(unittest.TestCase):
         self.assertEqual(acc.campaigns[0].week_imp, 70)
         self.assertEqual((day["yday_imp"], day["yday_clk"], day["data_late"]), (10.0, 1.0, False))
 
+    def test_account_input_picks_the_right_days(self):
+        r = MO._Reads(campaigns_raw=[], campaigns=(C.CampaignInfo("cmp-1-1", "SHOPPING", "ELIGIBLE", False),),
+                      bizmoney={"bizmoney": 5000.0, "budgetLock": False, "refundLock": False})
+        _s, _u, want = MO.window(TODAY)
+        series = {d: {"impCnt": 1, "clkCnt": 0, "salesAmt": (YDAY - d).days * 10, "ccnt": 0} for d in want}
+        r.series, r.through = {"cmp-1-1": series}, YDAY
+        acc, _day = MO.account_input(1, r, TODAY, MO.DEFAULTS)
+        self.assertEqual(acc.yday_spend, 0.0)
+        self.assertEqual(acc.recent_spend, (20.0, 10.0, 0.0))                   # 오래된 날 먼저
+        self.assertEqual(acc.same_weekday_spend, (70.0, 140.0, 210.0, 280.0))   # 어제와 같은 요일 1~4주 전
+        self.assertEqual(acc.avg_daily_spend, sum(range(0, 70, 10)) / 7)        # 어제부터 7일
+        self.assertEqual(acc.campaigns[0].week_imp, 7)
+
     def test_account_input_late_uses_earlier_week(self):
         r = MO._Reads(campaigns_raw=[], campaigns=(C.CampaignInfo("cmp-1-1", "SHOPPING", "ELIGIBLE", False),),
                       bizmoney={"bizmoney": 5000.0, "budgetLock": False, "refundLock": False})
@@ -474,6 +487,25 @@ class UnlinkStoreTest(Base):
                          ["opened", "closed_unlinked"])
         self.assertFalse(out.alert)
 
+    def test_mass_unlink_alerts(self):
+        pairs = tuple((100 + i, 5_000_000 + i) for i in range(12))
+        for _p, cid in pairs:
+            self.ads.add(cid, [(1, "ELIGIBLE", False, quiet)], biz=0.0)
+        self.scene(confirmed=pairs, auto=())
+        self.run_check()
+        self.assertEqual(len({i["customer_id"] for i in self.st.issues(open_only=True)}), 12)
+        for k in (1, 2):
+            t = self.at(T0 + timedelta(days=k))
+            if k == 1:
+                for d in self.st.current_decisions():
+                    self.st.revoke_decision(d.decision_id, 0, t - timedelta(minutes=10), "정리")
+            self.st.record_accounts(kids(*[c for _p, c in pairs]), t - timedelta(minutes=4))
+            self.assertEqual(L.pair_links(FakeErp(), self.st, t - timedelta(minutes=2)).outcome, S.SYNC_ACCEPTED)
+            out = self.run_check()
+        self.assertIn(MO.CODE_UNLINK_MASS, out.codes)
+        self.assertTrue(out.alert)
+        self.assertEqual(self.st.issues(open_only=True), [])
+
     def test_refuses_other_day_pairing(self):
         self.standard_ads()
         res = self.scene()
@@ -684,6 +716,25 @@ class LinkStateTest(Base):
         self.assertEqual(iss["state"], "auto_resolved")
         self.assertEqual(self.day(A, TODAY + timedelta(days=3))["status"], "ok")
 
+    def test_relisted_but_refused_handle_still_resolves_link(self):
+        self.standard_ads()
+        self.scene()
+        self.run_check()
+        self.morning_of(1, (B,))
+        self.morning_of(2, (B,))
+        self.assertEqual({i["code"] for i in self.st.issues(open_only=True) if i["customer_id"] == A}, {"link_broken"})
+        real = H.issue_check_handle
+
+        def refuse(**kw):
+            if kw["customer_id"] == A:
+                raise H.NotEligible("stage-stale")
+            return real(**kw)
+        with mock.patch.object(H, "issue_check_handle", side_effect=refuse):
+            self.morning_of(3, (A, B))
+        [iss] = [i for i in self.st.issues() if i["code"] == "link_broken"]
+        self.assertEqual(iss["state"], "auto_resolved")                 # 다시 이관 = 목록에 있음(손잡이와 무관)
+        self.assertEqual(self.day(A, TODAY + timedelta(days=3))["status"], "system_gap")
+
     def test_never_listed_confirmed_is_broken_at_once(self):
         self.standard_ads()
         self.at(T0)
@@ -776,6 +827,8 @@ class ReadsTest(Base):
         self.assertIn("bizmoney", a["rules_run"])
         self.assertIn(("bizmoney_low", "red"), {(i["code"], i["severity"]) for i in self.st.issues()})
         self.assertFalse(out.alert)
+        rows = self.st.campaign_days(A, YDAY, YDAY)
+        self.assertTrue(rows and all(r["sales_amt"] is None and r["metrics_read"] == 0 for r in rows))   # 덜 들어온 어제
 
     def test_cycle_unknown_is_not_zero(self):
         self.standard_ads()
@@ -835,6 +888,7 @@ class DeadlineTest(Base):
         self.assertEqual(out.counts["deadline_left"], 2)
         self.assertEqual(self.st.run(out.run_id)["error_kind"], MO.CODE_DEADLINE_CUT)
         self.assertEqual(self.st.issues(), [])
+        self.assertNotIn("/stats", seen)                               # 마감을 넘긴 뒤로는 부르지 않는다
 
 
 class AbortTest(Base):
@@ -863,6 +917,35 @@ class AbortTest(Base):
         out = self.run_check()
         self.assertEqual(out.outcome, MO.OUT_DONE)
         self.assertEqual(out.counts["key_rejected"], 1)
+
+    def test_mostly_rejected_stops_after_fifty(self):
+        pairs = self.many(60)
+        for _p, cid in pairs[1:]:
+            self.ads.fail[(cid, "camps")] = (403, {"code": 1006})
+        self.scene(confirmed=pairs, auto=())
+        out = self.run_check()
+        self.assertEqual((out.outcome, out.alert), (MO.OUT_FAILED, True))
+        self.assertIn(MO.CODE_KEY_REJECTED_MANY, out.codes)
+        self.assertNotIn(MO.CODE_KEY_REJECTED_ALL, out.codes)
+        self.assertEqual(out.counts["key_rejected"], MO.KEY_RATIO_MIN - 1)
+        self.assertEqual(out.counts["abort_left"], 60 - MO.KEY_RATIO_MIN)
+
+    def test_store_refusal_is_reported(self):
+        self.standard_ads()
+        self.scene()
+        real = self.st.record_account_check
+
+        def refuse(run_id, cid, **kw):
+            if cid == A:
+                raise S.StoreRefused("x")
+            return real(run_id, cid, **kw)
+        with mock.patch.object(self.st, "record_account_check", side_effect=refuse):
+            out = self.run_check()
+        self.assertIn(MO.CODE_STORE_REFUSED, out.codes)
+        self.assertTrue(out.alert)
+        self.assertIsNone(self.day(A))
+        self.assertEqual(self.day(B)["status"], "ok")
+        self.assertEqual(out.counts["store_refused"], 1)
 
     def test_call_cap_fails_run(self):
         self.standard_ads()
