@@ -55,11 +55,11 @@ def validate(changes: Mapping[str, object], base: Thresholds = DEFAULTS) -> Thre
         if isinstance(v, bool) or not isinstance(v, (int, float)) or v != v:  # 참·거짓 · 숫자 아님 · NaN
             bad.append(k)
             continue
-        if k in _INTS and not float(v).is_integer():
+        lo, hi = RANGES[k]
+        if not (lo <= v <= hi):   # 범위를 먼저 — 아주 큰 정수를 float 로 바꾸다 넘치지 않게(S11 검토 client-input-503)
             bad.append(k)
             continue
-        lo, hi = RANGES[k]
-        if not (lo <= v <= hi):
+        if k in _INTS and not float(v).is_integer():
             bad.append(k)
             continue
         clean[k] = int(v) if k in _INTS else float(v)

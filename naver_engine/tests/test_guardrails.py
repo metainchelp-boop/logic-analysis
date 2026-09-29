@@ -38,7 +38,7 @@ NET_MODULES = ("urllib", "http", "socket", "ssl", "requests", "httpx", "aiohttp"
 FORBIDDEN_MODULES = ("app.adapters", "app.main", "app.collector", "app.database", "app.security", "app.models",
                      "naver_searchad", "importlib")
 METHOD_WORDS = ("GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "CONNECT", "TRACE")
-HANDLE_PRIVATE = ("_tag", "_KEY", "_PREVIEW_LEFT", "_PREVIEW_ISSUED", "AccountHandle", "ManagerHandle")
+HANDLE_PRIVATE = ("_tag", "_KEY", "_PREVIEW_LEFT", "_PREVIEW_ISSUED", "_PREVIEW_LOCK", "AccountHandle", "ManagerHandle")
 # 저장 — store.py 밖에서는 모듈 이름도, 연결을 만지는 이름도 쓰지 않는다
 DB_MODULES = ("sqlite3", "_sqlite3", "dbm", "shelve", "sqlalchemy", "fcntl", "_fcntl", "apsw", "pysqlite2")
 DB_ATTRS = ("sqlite3", "_sqlite3", "fcntl", "_fcntl", "_A", "_conn", "_lock_fd", "set_authorizer", "execute",

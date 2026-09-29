@@ -52,7 +52,13 @@ GET, POST = "GET", "POST"            # 들어오는 요청의 방식(이 파일�
 BODY_MAX = 64 * 1024                 # ③ 중계 상한과 같다(S12)
 QUERY_MAX = 2048
 LOGIN_WINDOW = 60.0                  # 로그인은 이 초 안에
-LOGIN_MAX = 30                       # 이만큼까지(① 커넥션 풀을 지킨다 · 프로세스 하나 기준)
+LOGIN_MAX = 60                       # 전체 이만큼까지(① 커넥션 풀을 지킨다 · 프로세스 하나 기준)
+LOGIN_SOURCE_MAX = 6                 # 한 곳(요청한 곳)에서 이만큼까지 — 한 곳이 모두의 로그인을 막지 못하게(검토 login-throttle)
+LOGIN_SOURCES_KEPT = 4096            # 기억하는 요청한 곳 수 상한(메모리)
+# 요청한 곳 — ③ 중계(S12)가 넣는 머리. 중계(같은 서버 · 루프백)에서 온 요청일 때만 믿고, 아니면 연결한 주소를 쓴다.
+SOURCE_HEADER = "HTTP_X_NAVER_AUTO_SOURCE"
+TRUSTED_PEERS = frozenset({"127.0.0.1", "::1"})
+_SOURCE = re.compile(r"[0-9A-Fa-f:.]{1,64}")
 LINK_BATCH_MAX = 50
 NOTE_MAX = 200
 PREVIEW_NAMES = 3                    # 짝 후보 미리보기 — 캠페인 이름 3개(B §4)
@@ -181,6 +187,17 @@ def _text(v, limit: int) -> str:
     return v
 
 
+def _utf8(v) -> bool:
+    """밖에서 온 글자(미리보기 캠페인 이름)가 응답에 실을 수 있는 글자인가 — 짝 없는 대리 글자 등은 뺀다."""
+    if not isinstance(v, str):
+        return False
+    try:
+        v.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 def _bearer(environ) -> str:
     raw = environ.get("HTTP_AUTHORIZATION") or ""
     head, _sep, tok = raw.partition(" ")
@@ -205,15 +222,18 @@ class App:
     def __init__(self, *, open_read: Callable[[], S.Store], write: Callable[[Callable[[S.Store], Any]], Any],
                  signer: SE.TokenSigner, profiles: EP.ErpProfileReader, clock: Optional[Callable[[], datetime]] = None,
                  previewer: Optional[Callable[[Any], List[str]]] = None, login_max: int = LOGIN_MAX,
-                 login_window: float = LOGIN_WINDOW, monotonic: Optional[Callable[[], float]] = None) -> None:
+                 login_window: float = LOGIN_WINDOW, monotonic: Optional[Callable[[], float]] = None,
+                 login_source_max: int = LOGIN_SOURCE_MAX) -> None:
         if not isinstance(signer, SE.TokenSigner):
             raise TypeError("signer 는 TokenSigner 여야 합니다(비밀값 없이 시작하지 않는다)")
         self._open_read, self._write_fn, self._signer, self._profiles = open_read, write, signer, profiles
         self._clock = clock or (lambda: datetime.now(KST))
         self._previewer = previewer
-        self._login_max, self._login_window = login_max, login_window
+        self._login_max, self._login_window, self._login_source_max = login_max, login_window, login_source_max
         self._mono = monotonic or _time.monotonic
         self._logins: List[float] = []
+        self._logins_by: Dict[str, List[float]] = {}
+        self._quiet_audit: Dict[str, float] = {}   # 로그인 전 거절 코드 → 마지막으로 기록한 때(창마다 한 줄)
         self._lock = threading.Lock()
 
     def __repr__(self) -> str:
@@ -222,7 +242,11 @@ class App:
     # ── WSGI ──
     def __call__(self, environ, start_response):
         status, body = self._respond(environ)
-        payload = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        try:
+            payload = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        except (TypeError, ValueError, UnicodeEncodeError) as e:   # 글자로 못 바꾸는 값 — 머리는 그대로 · JSON 500
+            log.error("화면 API 응답 만들기 실패: %s", type(e).__name__)
+            status, payload = 500, b'{"error":"internal"}'
         start_response(f"{status} {REASONS.get(status, 'Error')}",
                        list(HEADERS) + [("Content-Length", str(len(payload)))])
         return [payload]
@@ -244,6 +268,9 @@ class App:
             return 503, {"error": "org-unavailable"}
         except S.StoreBusy:
             return 503, {"error": "store-busy"}
+        except S.StoreRefused as e:   # 저장소가 이 값을 받지 않음 — 저장소 장애가 아니다(검토 client-input-503)
+            log.warning("화면 API 저장소 거절: %s", type(e).__name__)
+            return 409, {"error": "refused"}
         except S.StoreError as e:
             log.warning("화면 API 저장소 오류: %s", type(e).__name__)
             return 503, {"error": "store-unavailable"}
@@ -269,7 +296,7 @@ class App:
         req = Request(method, sub, query, body)
         now = self._now()
         if not route.auth:
-            return route.handler(self, req, None, now, **m.groupdict())
+            return route.handler(self, req, None, now, environ=environ, **m.groupdict())
         v = self._viewer(environ, now)
         try:
             return route.handler(self, req, v, now, **m.groupdict())
@@ -314,20 +341,67 @@ class App:
             if required:
                 raise HttpError(503, "audit-unavailable") from None
 
-    def _throttle(self) -> None:
+    def _quiet(self, result: str, now: datetime) -> None:
+        """로그인 전 거절(모양 틀림 · 너무 많음)을 창마다 **한 줄만** 기록한다 — 거절은 흔적을 남기되 이름 모를 한 곳이
+        쓰는 곳 하나를 기록으로 채우지 못하게."""
+        t = self._mono()
+        with self._lock:
+            last = self._quiet_audit.get(result)
+            if last is not None and t - last < self._login_window:
+                return
+            self._quiet_audit[result] = t
+        self._audit(None, "login", "session", None, result, now, required=False)
+
+    def _throttle(self, source: str, now: datetime) -> None:
+        """① 을 부를 로그인만 센다 — 한 곳에서 창마다 ``login_source_max`` · 전체 ``login_max``."""
         t = self._mono()
         with self._lock:
             self._logins = [x for x in self._logins if t - x < self._login_window]
-            if len(self._logins) >= self._login_max:
-                raise HttpError(429, "too-many-logins")
-            self._logins.append(t)
+            mine = [x for x in self._logins_by.get(source, ()) if t - x < self._login_window]
+            over = len(mine) >= self._login_source_max or len(self._logins) >= self._login_max
+            if not over:
+                self._logins.append(t)
+                mine.append(t)
+            if mine:
+                self._logins_by[source] = mine
+            else:
+                self._logins_by.pop(source, None)
+            if len(self._logins_by) > LOGIN_SOURCES_KEPT:   # 오래된 곳부터 잊는다
+                for k in sorted(self._logins_by, key=lambda k: self._logins_by[k][-1])[:len(self._logins_by) // 2]:
+                    del self._logins_by[k]
+        if over:
+            self._quiet("throttled", now)
+            raise HttpError(429, "too-many-logins")
+
+    @staticmethod
+    def _source(environ) -> str:
+        peer = environ.get("REMOTE_ADDR") or ""
+        hdr = environ.get(SOURCE_HEADER) or ""
+        if peer in TRUSTED_PEERS and isinstance(hdr, str) and _SOURCE.fullmatch(hdr):
+            return hdr
+        return peer if isinstance(peer, str) and peer else "unknown"
+
+    def _session_out(self, token: str, now: datetime, narrowed: bool) -> dict:
+        """토큰의 **실제** 남은 시간 · 세션 끝(로그인 + 12시간) — 화면이 끝을 알고 전산에서 다시 들어오게(검토 expires-in)."""
+        c = self._signer.verify(token, now)
+        return {"token": token, "expires_in": max(0, int((c.expires_at - now).total_seconds())),
+                "session_ends_at": (c.login_at + SE.SESSION_MAX).astimezone(KST).isoformat(timespec="seconds"),
+                "narrowed": narrowed}
 
     # ── 로그인 ──
-    def _h_login(self, req: Request, v: None, now: datetime) -> Tuple[int, dict]:
-        self._throttle()
-        body = _body(req, frozenset({"sso"}), frozenset({"sso"}))
+    def _h_login(self, req: Request, v: None, now: datetime, environ=None) -> Tuple[int, dict]:
         try:
-            prof = self._profiles.read_profile(EP.load_sso(body["sso"]))
+            body = _body(req, frozenset({"sso"}), frozenset({"sso"}))
+            sso = EP.load_sso(body["sso"])
+        except HttpError:
+            self._quiet("bad-body", now)
+            raise
+        except EP.ProfileError as e:   # 토큰 모양이 틀림 — ① 을 부르지 않는다
+            self._quiet(e.kind, now)
+            raise HttpError(401, e.kind) from None
+        self._throttle(self._source(environ or {}), now)   # ① 을 부를 시도만 센다
+        try:
+            prof = self._profiles.read_profile(sso)
         except EP.ProfileError as e:
             self._audit(None, "login", "session", None, e.kind, now, required=False)
             raise HttpError(401 if e.kind == EP.KIND_REJECTED else 503, e.kind) from None
@@ -342,14 +416,14 @@ class App:
         narrowed = SC.profile_narrows(org, prof.idx, prof.says_manager if prof.team_known else None, prof.team_idx)
         token = self._signer.issue(prof.idx, now, narrowed=narrowed)
         self._audit(prof.idx, "login", "session", None, "narrowed" if narrowed else "ok", now, required=True)
-        return 200, {"token": token, "expires_in": int(SE.TOKEN_TTL.total_seconds()), "narrowed": narrowed}
+        return 200, self._session_out(token, now, narrowed)
 
     def _h_refresh(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
         try:
             token = self._signer.refresh(v.claims, now)   # 재직은 _viewer 가 조직 표로 방금 확인했다
         except SE.TokenInvalid as e:
             raise HttpError(401, "token-" + e.code) from None
-        return 200, {"token": token, "expires_in": int(SE.TOKEN_TTL.total_seconds()), "narrowed": v.claims.narrowed}
+        return 200, self._session_out(token, now, v.claims.narrowed)
 
     # ── 읽기 ──
     def _h_me(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
@@ -378,7 +452,7 @@ class App:
         return 200, W.links_pending(v.ctx(now), v.store, v.scope)
 
     def _h_ended(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
-        return 200, W.ended(v.ctx(now), v.scope)
+        return 200, W.ended(v.ctx(now), v.store, v.scope)
 
     def _h_unlinked(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
         return 200, W.unlinked(v.ctx(now), v.scope)
@@ -451,8 +525,10 @@ class App:
             raise
 
     # ── 짝 확인 ──
-    def _link_rows(self, v: Viewer, now: datetime, refs, *, need_customer: bool = True) -> List[dict]:
-        """가리킴표 묶음 → 마지막 짝 맞추기의 줄. 하나라도 없거나 · 범위 밖이거나 · 이을 수 없는 줄이면 **전체** 거절."""
+    def _link_rows(self, v: Viewer, now: datetime, refs, *, holders_checked: bool) -> List[dict]:
+        """가리킴표 묶음 → 마지막 짝 맞추기의 줄. 하나라도 없거나 · 범위 밖이거나 · 이을 수 없는 줄이면 **전체** 거절.
+        ``holders_checked`` (확인 · 미리보기) — 그 계정을 다른 가망이 쥐었으면 그 가망들에도 짝 확인을 할 수 있어야 한다
+        (``views.clear_for`` · 범위 밖 광고주의 짝을 빼앗거나 읽지 못하게 · 같은 409 로 누구인지 드러내지 않는다)."""
         if not isinstance(refs, list) or not 0 < len(refs) <= LINK_BATCH_MAX or len(set(map(str, refs))) != len(refs):
             raise HttpError(400, "bad-body")
         ctx = v.ctx(now)
@@ -462,31 +538,40 @@ class App:
             if r is None:
                 raise SC.ClientNotVisible()
             SC.require_client(ctx.org, v.scope, ctx.owns, r["possibility_id"], SC.ACT_CONFIRM_LINK)
-            ok = (r["state"] in (S.PAIR_CANDIDATE, S.PAIR_BLOCKED) and r["customer_id"] is not None
-                  and r["code"] not in W.NOT_A_CUSTOMER and r["customer_id"] in ctx.accounts)
-            if need_customer and not ok:
-                raise HttpError(409, "not-linkable")
             rows.append(r)
+        for r in rows:   # 범위를 모두 본 뒤에 — 범위 밖 줄이 섞이면 404 가 먼저(가리킴표 순서로 드러나지 않게)
+            if not W.linkable(ctx, r) or (holders_checked and not W.clear_for(ctx, v.scope, r["possibility_id"], r)):
+                raise HttpError(409, "not-linkable")
+        if len({(r["possibility_id"], r["customer_id"]) for r in rows}) != len(rows):
+            raise HttpError(400, "bad-body")   # 같은 짝을 두 번(서로 다른 줄로) 가리킴
         return rows
 
-    def _decide(self, req: Request, v: Viewer, now: datetime, decision: str) -> Tuple[int, dict]:
-        body = _body(req, frozenset({"refs"}), frozenset({"refs"}))
-        action = "link-" + ("confirm" if decision == "confirmed" else "reject")
+    def _link_checked(self, v: Viewer, now: datetime, refs, action: str, *, holders_checked: bool) -> List[dict]:
         try:
-            rows = self._link_rows(v, now, body["refs"])
+            return self._link_rows(v, now, refs, holders_checked=holders_checked)
         except (SC.ClientNotVisible, SC.ActionNotAllowed) as e:
             self._audit(v.idx, action, "link", None, "not-visible" if isinstance(e, SC.ClientNotVisible)
                         else "not-allowed", now, required=False)
             raise
-        if decision == "confirmed" and not O.allows_raising(v.ctx(now).freshness):
+        except HttpError as e:
+            if e.code == "not-linkable":
+                self._audit(v.idx, action, "link", None, "not-linkable", now, required=False)
+            raise
+
+    def _decide(self, req: Request, v: Viewer, now: datetime, decision: str) -> Tuple[int, dict]:
+        body = _body(req, frozenset({"refs"}), frozenset({"refs"}))
+        confirm = decision == "confirmed"
+        action = "link-" + ("confirm" if confirm else "reject")
+        rows = self._link_checked(v, now, body["refs"], action, holders_checked=confirm)
+        if confirm and not O.allows_raising(v.ctx(now).freshness):
             self._audit(v.idx, action, "link", None, "org-stale", now, required=False)
             raise HttpError(409, "org-stale")
-
-        def op(st: S.Store) -> List[int]:
-            return [st.record_decision(r["possibility_id"], r["customer_id"], decision, v.idx, now) for r in rows]
-        ids = self._write(op)
-        for r in rows:
-            self._audit(v.idx, action, "link", r["possibility_id"], "ok", now, required=False)
+        pairs = [(r["possibility_id"], r["customer_id"]) for r in rows]
+        try:   # 판단 줄과 열람·쓰기 기록을 한 거래로 — 중간에 멈춰도 앞 줄만 남지 않는다
+            ids = self._write(lambda st: st.record_decisions(pairs, decision, v.idx, now, audit_action=action))
+        except S.StoreError:
+            self._audit(v.idx, action, "link", None, "failed", now, required=False)
+            raise
         return 200, {"decided": len(ids), "decision": decision}
 
     def _h_links_confirm(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
@@ -510,13 +595,14 @@ class App:
         try:
             self._write(lambda st: st.revoke_decision(did, v.idx, now, reason))
         except S.StoreRefused:
+            self._audit(v.idx, "link-revoke", "link", found[0].possibility_id, "refused", now, required=False)
             raise HttpError(409, "revoke-refused") from None
         self._audit(v.idx, "link-revoke", "link", found[0].possibility_id, "ok", now, required=False)
         return 200, {"revoked": did}
 
     def _h_links_preview(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
         body = _body(req, frozenset({"ref"}), frozenset({"ref"}))
-        [r] = self._link_rows(v, now, [body["ref"]])
+        [r] = self._link_checked(v, now, [body["ref"]], "link-preview", holders_checked=True)
         if self._previewer is None:
             raise HttpError(503, "preview-unavailable")
         ctx = v.ctx(now)
@@ -534,9 +620,9 @@ class App:
         except Exception as e:
             log.warning("미리보기 실패: %s", type(e).__name__)
             raise HttpError(503, "preview-failed") from None
+        out = [n[:PREVIEW_NAME_MAX] for n in (names if isinstance(names, (list, tuple)) else []) if _utf8(n)]
         self._audit(v.idx, "link-preview", "link", r["possibility_id"], "ok", now, required=True)
-        out = [n[:PREVIEW_NAME_MAX] for n in (names or []) if isinstance(n, str)][:PREVIEW_NAMES]
-        return 200, {"campaigns": out}
+        return 200, {"campaigns": out[:PREVIEW_NAMES]}
 
     # ── 🔔 ──
     def _h_bell_read(self, req: Request, v: Viewer, now: datetime, rid: str) -> Tuple[int, dict]:
@@ -546,12 +632,15 @@ class App:
         try:
             changed = self._write(lambda st: st.mark_alert_read(n, v.idx, now))
         except S.ScreenRefused:
+            self._audit(v.idx, "bell-read", "alert", n, "not-found", now, required=False)
             raise HttpError(404, "not-found") from None   # 없는 줄 = 남의 줄
+        self._audit(v.idx, "bell-read", "alert", n, "ok", now, required=False)
         return 200, {"read": True, "changed": changed}
 
     def _h_bell_read_all(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
         since = now.astimezone(KST).date() - timedelta(days=W.BELL_DAYS - 1)
         n = self._write(lambda st: st.mark_alerts_read_all(v.idx, since, now))
+        self._audit(v.idx, "bell-read-all", "alert", None, "ok", now, required=False)
         return 200, {"changed": n}
 
     # ── 설정(대표만) ──
@@ -562,9 +651,13 @@ class App:
 
     def _h_settings_thresholds(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
         self._ceo_only(v, "thresholds", "settings", now)
-        body = _body(req, frozenset({"changes"}), frozenset({"changes"}))
-        if not isinstance(body["changes"], dict):
-            raise HttpError(400, "bad-body")
+        try:
+            body = _body(req, frozenset({"changes"}), frozenset({"changes"}))
+            if not isinstance(body["changes"], dict):
+                raise HttpError(400, "bad-body")
+        except HttpError:
+            self._audit(v.idx, "thresholds", "settings", None, "bad-body", now, required=False)
+            raise
         try:
             new = self._write(lambda st: st.record_thresholds(body["changes"], v.idx, now))
         except S.ScreenRefused as e:

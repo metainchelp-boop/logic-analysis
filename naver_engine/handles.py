@@ -18,6 +18,7 @@ import hashlib
 import hmac
 import os
 import re
+import threading
 from datetime import date, datetime, timedelta, timezone
 from typing import Iterable, Optional
 
@@ -48,6 +49,7 @@ _WS = re.compile(r"\s+")
 _KEY = os.urandom(32)  # 이 프로세스만 아는 서명 열쇠 — 이 파일 밖에서 쓰면 시험이 실패한다
 _PREVIEW_LEFT = {}     # 미리보기 손잡이 번호 → (남은 사용 횟수, 발급 시각)
 _PREVIEW_ISSUED = {}   # (직원 번호, 날짜) → 오늘 발급 수
+_PREVIEW_LOCK = threading.Lock()   # 두 장부를 한 번에 하나만 만진다(화면 API 는 여러 줄기)
 
 
 class NotEligible(Exception):
@@ -203,19 +205,20 @@ def issue_preview_handle(*, customer_id, possibility_id, candidate_id, stage, st
         raise NotEligible("requester-invalid")
     _check_stage(stage, stage_as_of, latest_end_date, now)
     today = _kst_today(now)
-    _prune(now, today)
-    key = (requested_by, today)
-    if _PREVIEW_ISSUED.get(key, 0) >= PREVIEW_DAILY_CAP:
-        raise NotEligible("preview-daily-cap")
-    _PREVIEW_ISSUED[key] = _PREVIEW_ISSUED.get(key, 0) + 1
     nonce = os.urandom(12).hex()
-    _PREVIEW_LEFT[nonce] = (PREVIEW_MAX_USES, now)
+    with _PREVIEW_LOCK:   # 화면 API 는 여러 줄기로 돈다 — 장부를 한 번에 하나만(검토 preview-handle-state-not-thread-safe)
+        _prune(now, today)
+        key = (requested_by, today)
+        if _PREVIEW_ISSUED.get(key, 0) >= PREVIEW_DAILY_CAP:
+            raise NotEligible("preview-daily-cap")
+        _PREVIEW_ISSUED[key] = _PREVIEW_ISSUED.get(key, 0) + 1
+        _PREVIEW_LEFT[nonce] = (PREVIEW_MAX_USES, now)
     return AccountHandle(cid, pid, PURPOSE_PREVIEW, today, requested_by, candidate_id, now, nonce,
                          _tag("A", PURPOSE_PREVIEW, cid, pid, today, requested_by, candidate_id, now.isoformat(), nonce))
 
 
 def _prune(now: datetime, today: date) -> None:
-    """지난 미리보기 기록을 비운다(메모리가 쌓이지 않게)."""
+    """지난 미리보기 기록을 비운다(메모리가 쌓이지 않게) — ``_PREVIEW_LOCK`` 을 쥔 채로만 부른다."""
     for n in [n for n, (_left, at) in _PREVIEW_LEFT.items() if now - at > PREVIEW_TTL]:
         del _PREVIEW_LEFT[n]
     for k in [k for k in _PREVIEW_ISSUED if k[1] != today]:
@@ -247,10 +250,11 @@ def require_account(handle, now: datetime, purposes: Iterable[str]) -> AccountHa
     if handle.purpose == PURPOSE_PREVIEW:
         if not (timedelta(0) <= now - handle.issued_at <= PREVIEW_TTL):
             raise HandleInvalid("미리보기 손잡이 시간이 지났습니다")
-        left, at = _PREVIEW_LEFT.get(handle.nonce, (0, None))
-        if left <= 0:
-            raise HandleInvalid("미리보기 손잡이를 이미 다 썼습니다")
-        _PREVIEW_LEFT[handle.nonce] = (left - 1, at)
+        with _PREVIEW_LOCK:
+            left, at = _PREVIEW_LEFT.get(handle.nonce, (0, None))
+            if left <= 0:
+                raise HandleInvalid("미리보기 손잡이를 이미 다 썼습니다")
+            _PREVIEW_LEFT[handle.nonce] = (left - 1, at)
     return handle
 
 

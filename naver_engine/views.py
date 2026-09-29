@@ -25,6 +25,7 @@ from dataclasses import asdict, dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Dict, Iterable, List, Mapping, Optional, Tuple
 
+from app.naver_auto import matching as M
 from app.naver_auto import org_snapshot as O
 from app.naver_auto import scope as SC
 from app.naver_auto import thresholds as T
@@ -42,7 +43,13 @@ BELL_DAYS = 14                           # 🔔 에 보이는 기간
 ESCALATE_AFTER = timedelta(hours=12)     # 🟡 이 🆕 인 채 이만큼 지나면 한 단계 위로(v1.4 §6)
 ISSUE_OPEN = frozenset({"new", "ack"})   # 「확인할 일」(예외 🙈 는 빼고)
 LINK_ROW_STATES = frozenset({S.PAIR_CONFIRMED, S.PAIR_AUTO, S.PAIR_MISSING, S.PAIR_BROKEN})
-PENDING_STATES = frozenset({S.PAIR_BLOCKED, S.PAIR_CANDIDATE, S.PAIR_SUPERSEDED, S.PAIR_BROKEN, S.PAIR_MISSING})
+# 짝 확인 화면에 보일 줄 — 자동 짝도 사람이 확인하기 전까지는 여기서 「이 계정 맞음」·「아님」을 기다린다(설계 v1.8 Q5 · M4 ·
+# 계획 7 「자동 짝 목록」 · 검토 auto-pair-never-confirmable)
+PENDING_STATES = frozenset({S.PAIR_AUTO, S.PAIR_BLOCKED, S.PAIR_CANDIDATE, S.PAIR_SUPERSEDED, S.PAIR_BROKEN,
+                            S.PAIR_MISSING})
+LINKABLE_STATES = frozenset({S.PAIR_AUTO, S.PAIR_CANDIDATE, S.PAIR_BLOCKED})   # 「이 계정 맞음」·「아님」을 누를 수 있는 줄
+# 짝 맞추기가 「다른 가망이 이 계정을 쥐었다·주장한다」고 말한 막힘(matching.B_CLAIMED_BY_SEVERAL · B_CONFIRMED_ELSEWHERE)
+CLAIM_CODES = frozenset({"claimed-by-several", "confirmed-elsewhere"})
 CODE_NOT_LINKED = "not-linked"           # matching.B_NOT_LINKED — 한 번도 이관된 적 없음(I3 「이관 안 됨」)
 # ① 에 적힌 번호가 고객 번호가 아닌 막힘 — 사람이 「이 계정 맞음」으로 이을 수 없다(번호 자체가 계정이 아니다)
 NOT_A_CUSTOMER = frozenset({"ad-account-number", "customer-id-format", "customer-id-length", "ambiguous-space"})
@@ -71,6 +78,9 @@ class Ctx:
     accounts: Mapping[int, dict]             # 고객 번호 → 계정(이름 · 목록에 있는지)
     checks_today: Mapping[int, dict]         # 고객 번호 → 오늘 계정 하루치 판정 재료
     open_issues: Mapping[int, Tuple[dict, ...]]   # 가망 번호 → 열린 이슈(🆕 · 👀 · 🙈)
+    live_decisions: Tuple[S.LinkDecision, ...]   # 살아 있는 사람 판단(짝마다 가장 늦은 · 한 계정의 확인은 하나)
+    lost_decisions: Tuple[S.LinkDecision, ...]   # 밀린 확인(뒤 확인을 거두면 다시 산다)
+    name_owners: Mapping[str, frozenset]     # 느슨한 상호 → 지금 목록에 있는 가망 번호(계정 이름이 가리키는 가망)
 
     def __repr__(self) -> str:
         return f"Ctx(prospects={len(self.prospects)})"
@@ -109,10 +119,17 @@ def load(store: S.Store, now: datetime, org: Optional[O.Org] = None) -> Ctx:
     issues: Dict[int, List[dict]] = {}
     for i in store.issues(open_only=True):
         issues.setdefault(i["possibility_id"], []).append(i)
+    winners, lost = store.link_decisions()
+    names: Dict[str, set] = {}
+    for pid, p in prospects.items():
+        key = M.loose_name(p["name"]) if p["present"] == 1 else None
+        if key is not None:
+            names.setdefault(key, set()).add(pid)
     return Ctx(now, today, deadline, org, Y.org_freshness(store, now), prospects, owns, pairing,
                pairing is not None and pairing["at"].astimezone(KST).date() == today,
                {k: tuple(v) for k, v in rows.items()}, {a["customer_id"]: a for a in store.accounts()},
-               store.account_day_checks_on(today), {k: tuple(v) for k, v in issues.items()})
+               store.account_day_checks_on(today), {k: tuple(v) for k, v in issues.items()},
+               tuple(winners), tuple(lost), {k: frozenset(v) for k, v in names.items()})
 
 
 # ── 작은 도구 ────────────────────────────────────────────────────────
@@ -173,6 +190,49 @@ def find_ref(ctx: Ctx, ref) -> Optional[dict]:
     return None
 
 
+# ── 짝 확인 — 이 계정을 누가 쥐었나(S11 검토 link-confirm-steals · link-preview · blocked-rows-joined) ──
+def link_holders(ctx: Ctx, pid: int, customer_id: Optional[int]) -> frozenset:
+    """이 계정을 쥐었거나 주장하는 **다른** 가망 — 사람 확인(살아 있는 것 · 밀린 것) · 마지막 짝 맞추기의 어느 줄이든 ·
+    계정 이름이 상호와 같은 지금 목록의 가망(``name-points-elsewhere`` 가 가리키는 곳)."""
+    if customer_id is None:
+        return frozenset()
+    out = {d.possibility_id for d in ctx.live_decisions + ctx.lost_decisions
+           if d.customer_id == customer_id and d.decision == "confirmed" and d.possibility_id != pid}
+    for other, rows in ctx.rows_by_pid.items():
+        if other != pid and any(r["customer_id"] == customer_id for r in rows):
+            out.add(other)
+    a = ctx.accounts.get(customer_id)
+    key = None if a is None else M.loose_name(a["account_name"])
+    if key is not None:
+        out |= ctx.name_owners.get(key, frozenset()) - {pid}
+    return frozenset(out)
+
+
+def linkable(ctx: Ctx, row: dict) -> bool:
+    """「이 계정 맞음」·「아님」을 누를 수 있는 줄인가 — 줄 종류 · 번호가 계정의 고객 번호 · 계정 표에 있음
+    (자동 짝은 오늘 목록에 있을 때만)."""
+    cid = row["customer_id"]
+    if row["state"] not in LINKABLE_STATES or cid is None or row["code"] in NOT_A_CUSTOMER or cid not in ctx.accounts:
+        return False
+    return row["state"] != S.PAIR_AUTO or ctx.accounts[cid]["present"] == 1
+
+
+def clear_for(ctx: Ctx, scope: SC.Scope, pid: int, row: dict, holders: Optional[frozenset] = None) -> bool:
+    """이 줄의 계정을 ``scope`` 가 이어도(미리 보아도 · 이름을 보아도) 되나 — 다른 가망이 쥐었거나 주장하면 그 가망 **모두**에
+    짝 확인을 할 수 있을 때만. 누가 주장하는지 모르는 막힘(관리 대상 밖 가망의 ① 등)은 대표만. 확인은 자동 규칙을 모두
+    이기므로 범위 밖 광고주의 짝을 빼앗지 못하게 하는 길이 여기다(설계 v1.8 S8 「S11 이 범위를 검사」)."""
+    if scope.kind == SC.ALL:
+        return True
+    hs = link_holders(ctx, pid, row["customer_id"]) if holders is None else holders
+    if (bool(row.get("claimed_elsewhere")) or row["code"] in CLAIM_CODES) and not hs:
+        return False
+    for h in hs:
+        own = ctx.owns.get(h)
+        if own is None or SC.ACT_CONFIRM_LINK not in SC.allowed_actions(ctx.org, scope, own):
+            return False
+    return True
+
+
 # ── 판정 ────────────────────────────────────────────────────────────
 def _link_of(r: dict) -> str:
     if r.get("link") in (V.LINK_CONFIRMED, V.LINK_AUTO):
@@ -197,6 +257,16 @@ def account_checks(ctx: Ctx, pid: int) -> List[V.AccountCheck]:
         else:
             out.append(V.AccountCheck(cid, link, V.CHECK_PENDING, None))
     return out
+
+
+def counting_state(i: dict, today: date) -> str:
+    """세는 상태 — 기간이 끝난 예외(또는 끝나는 날을 못 읽는 예외)는 🆕(``issues.effective_state`` · 판정과 같은 규칙 ·
+    검토 expired-exception-counted-red-but-hidden)."""
+    if i["state"] == V.ST_EXCEPTION:
+        until = _day(i.get("exception_until"))
+        if until is None or until < today:
+            return V.ST_NEW
+    return i["state"]
 
 
 def _open_issue(i: dict) -> V.OpenIssue:
@@ -238,9 +308,16 @@ def escalations(ctx: Ctx, store: S.Store, scope: SC.Scope, ids: Iterable[int]) -
     for pid in sorted(ids):
         own = ctx.owns[pid]
         for i in ctx.open_issues.get(pid, ()):
-            if i["severity"] != V.SEV_YELLOW or i["state"] != V.ST_NEW or i["issue_id"] not in since:
+            if i["severity"] != V.SEV_YELLOW or counting_state(i, ctx.today) != V.ST_NEW:
                 continue
-            waited = ctx.now - since[i["issue_id"]]
+            if i["state"] == V.ST_EXCEPTION:   # 예외가 끝나 🆕 가 됨 — 끝난 다음 날 0시부터 센다
+                until = _day(i.get("exception_until"))
+                began = None if until is None else datetime.combine(until + timedelta(days=1), time(0), KST)
+            else:
+                began = since.get(i["issue_id"])
+            if began is None:
+                continue
+            waited = ctx.now - began
             if waited < ESCALATE_AFTER:
                 continue
             chain = SC.todo_chain(ctx.org, own, SC.LEVEL_STAFF)
@@ -295,14 +372,15 @@ def board(ctx: Ctx, store: S.Store, scope: SC.Scope, selection: str = "all", att
         counts["needs_attention"] += 1 if v.needs_attention else 0
         red = yellow = 0
         for i in ctx.open_issues.get(pid, ()):
-            if i["state"] not in ISSUE_OPEN:
+            state = counting_state(i, ctx.today)
+            if state not in ISSUE_OPEN:
                 continue
             red += i["severity"] == V.SEV_RED
             yellow += i["severity"] == V.SEV_YELLOW
             g = by_code.setdefault(i["code"], {"code": i["code"], "rule": i["rule"], "severity": i["severity"],
                                                "clients": set(), "new": 0})
             g["clients"].add(pid)
-            g["new"] += i["state"] == V.ST_NEW
+            g["new"] += state == V.ST_NEW
             if i["severity"] == V.SEV_RED:
                 g["severity"] = V.SEV_RED
         if attention_only and not v.needs_attention:
@@ -317,7 +395,8 @@ def board(ctx: Ctx, store: S.Store, scope: SC.Scope, selection: str = "all", att
     rows.sort(key=lambda r: (r["owner"]["team_name"] or "", r["owner"]["name"] or "", r["possibility_id"]))
     return {"band": _band(ctx, store, scope), "counts": counts, "issues": issues, "rows": rows,
             "attention_only": attention_only, "selection": selection,
-            "escalated_to_me": escalations(ctx, store, scope, ids)}
+            # 나에게 올라온 일은 고르기(나만 · 사람 · 팀)와 상관없다 — 최대 범위 안에서만(검토 escalation-hidden-by-selection)
+            "escalated_to_me": escalations(ctx, store, scope, visible(ctx, scope))}
 
 
 def _history(store: S.Store, ctx: Ctx, customer_id: int, pid: int) -> List[dict]:
@@ -387,16 +466,20 @@ def links_pending(ctx: Ctx, store: S.Store, scope: SC.Scope) -> dict:
             if r["state"] not in PENDING_STATES:
                 continue
             cid = r["customer_id"]
-            a = ctx.accounts.get(cid) if cid is not None else None
-            is_customer = cid is not None and r["code"] not in NOT_A_CUSTOMER and a is not None
+            customer = cid is not None and r["code"] not in NOT_A_CUSTOMER   # 번호 자체가 계정이 아닌 막힘은 계정 표에 잇지 않는다
+            holders = link_holders(ctx, pid, cid) if customer else frozenset()
+            clear = customer and clear_for(ctx, scope, pid, r, holders)
+            a = ctx.accounts.get(cid) if clear else None   # 남이 쥔 계정의 이름은 주지 않는다(누구인지 밝히지 않는다)
+            ok = can and linkable(ctx, r)
             rows.append({"ref": make_ref(pairing_id, pid, cid, r["state"]), "possibility_id": pid,
                          "name": ctx.prospects[pid]["name"], "state": r["state"], "code": r["code"],
                          "tail": tail4(cid), "account_name": None if a is None else a["account_name"],
-                         "same_name": r["same_name"], "other_candidate": bool(r["claimed_elsewhere"]),
-                         "can_confirm": can and is_customer and r["state"] in (S.PAIR_CANDIDATE, S.PAIR_BLOCKED),
-                         "can_reject": can and is_customer and r["state"] in (S.PAIR_CANDIDATE, S.PAIR_BLOCKED)})
+                         "same_name": r["same_name"],
+                         "other_candidate": customer and (bool(r["claimed_elsewhere"]) or r["code"] in CLAIM_CODES
+                                                          or bool(holders)),
+                         "can_confirm": ok and clear, "can_reject": ok})
     decisions = []
-    for d in store.current_decisions() + store.superseded_confirmations():
+    for d in ctx.live_decisions + ctx.lost_decisions:
         if d.possibility_id in ids and SC.ACT_CONFIRM_LINK in SC.allowed_actions(ctx.org, scope, ctx.owns[d.possibility_id]):
             decisions.append({"decision_id": d.decision_id, "possibility_id": d.possibility_id,
                               "decision": d.decision, "tail": tail4(d.customer_id),
@@ -405,19 +488,34 @@ def links_pending(ctx: Ctx, store: S.Store, scope: SC.Scope) -> dict:
             "decisions": decisions}
 
 
-def ended(ctx: Ctx, scope: SC.Scope) -> dict:
+def _still_linked(ctx: Ctx, auto_before: set, pid: int) -> bool:
+    """이 광고주의 계정이 아직 대행 연결 목록(오늘)에 있나 — 짝 맞추기 줄이 아니라 사람 확인 · 자동으로 이어졌던 기록에서
+    (끝난 지 14일이 넘으면 짝 맞추기가 그 가망을 빼므로 · 검토 ended-still-linked-false-after-grace). 다른 가망에 확인된 계정 ·
+    이 가망에 「아님」으로 판단한 계정은 빼고."""
+    confirmed_to = {d.customer_id: d.possibility_id for d in ctx.live_decisions if d.decision == "confirmed"}
+    rejected = {d.customer_id for d in ctx.live_decisions if d.decision == "rejected" and d.possibility_id == pid}
+    mine = {cid for cid, p in confirmed_to.items() if p == pid}
+    mine |= {cid for p, cid in auto_before if p == pid and confirmed_to.get(cid, pid) == pid}
+    mine |= {r["customer_id"] for r in ctx.rows_by_pid.get(pid, ())
+             if r["state"] in (S.PAIR_CONFIRMED, S.PAIR_AUTO) and r["customer_id"] is not None}
+    return any(ctx.accounts.get(cid, {}).get("present") == 1 for cid in mine - rejected)
+
+
+def ended(ctx: Ctx, store: S.Store, scope: SC.Scope) -> dict:
     """📦 계약 끝난 광고주 — 단계가 계약 만료이거나 종료일이 지난 곳(보이는 가망만 · 저장된 기록에서만)."""
     rows = []
+    auto_before = store.matched_before(S.PAIR_AUTO)
+    stage_at = store.stage_as_of()
     for pid in sorted(visible(ctx, scope)):
         p = ctx.prospects[pid]
         end = _day(p["latest_end_date"])
         if p["stage_key"] != H.STAGE_ENDED and not (end is not None and end < ctx.today):
             continue
         days = None if end is None else (ctx.today - end).days
+        stopped = bool(p["end_unreadable"]) or H.eligibility_reason(p["stage_key"], stage_at, end, ctx.now) is not None
         rows.append({"possibility_id": pid, "name": p["name"], "stage": p["stage_key"], "end_date": p["latest_end_date"],
-                     "days_since_end": days, "checks_stopped": days is not None and days > H.ENDED_GRACE_DAYS,
-                     "still_linked": any(r["state"] in (S.PAIR_CONFIRMED, S.PAIR_AUTO)
-                                         for r in ctx.rows_by_pid.get(pid, ())),
+                     "days_since_end": days, "checks_stopped": stopped,
+                     "still_linked": _still_linked(ctx, auto_before, pid),
                      "owner": _owner(ctx, ctx.owns[pid])})
     return {"rows": rows}
 

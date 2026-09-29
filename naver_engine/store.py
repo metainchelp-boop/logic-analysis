@@ -1665,6 +1665,31 @@ class Store:
                    VALUES (?, ?, ?, ?, ?)""", vals)
             return cur.lastrowid
 
+    def record_decisions(self, pairs: Sequence[Tuple[int, int]], decision: str, decided_by: int, at: datetime, *,
+                         audit_action: Optional[str] = None) -> List[int]:
+        """짝 확인 화면의 **묶음** 판단 — 모든 줄(과 ``audit_action`` 이 있으면 줄마다 열람·쓰기 기록)을 **한 거래로** 쌓는다.
+        하나라도 틀리면 아무것도 적지 않는다(중간에 멈춰도 앞 줄만 남지 않는다 · S11 검토 batch-decisions-not-atomic)."""
+        self._need_writer()
+        if decision not in DECISIONS:
+            raise StoreRefused("판단은 confirmed · rejected 뿐입니다")
+        if not isinstance(pairs, (list, tuple)) or not pairs:
+            raise StoreRefused("판단할 짝이 없습니다")
+        who, t = _person(decided_by, "판단한 직원"), _kst_text(at, "판단 시각")
+        rows = [(_pos_int(pid, "가망 번호"), _customer_id(cid, "고객 번호")) for pid, cid in pairs]
+        if len(set(rows)) != len(rows):
+            raise StoreRefused("같은 짝이 두 번 들어왔습니다")
+        audits = [] if audit_action is None else [self._access_vals(who, audit_action, "link", pid, "ok", at)
+                                                  for pid, _cid in rows]
+        self._not_future(at, "판단 시각")
+        with self._tx() as c:
+            ids = [c.execute(
+                """INSERT INTO naver_auto_link_decision (possibility_id, customer_id, decision, decided_by, decided_at)
+                   VALUES (?, ?, ?, ?, ?)""", (pid, cid, decision, who, t)).lastrowid for pid, cid in rows]
+            for vals in audits:
+                c.execute("""INSERT INTO naver_auto_access_log (at, emp_idx, action, target_kind, target_id, result)
+                             VALUES (?, ?, ?, ?, ?, ?)""", vals)
+            return ids
+
     def revoke_decision(self, decision_id: int, revoked_by: int, at: datetime, reason: str) -> None:
         """판단을 거둔다 — 줄은 남기고 거둔 사람·시각·사유만 채운다(한 번만)."""
         self._need_writer()
@@ -2430,18 +2455,25 @@ class Store:
         """열람·쓰기 한 줄(누가 · 언제 · 무엇을 · 어디에 · 결과). 코드 모양만 받는다 — 이름·금액·고객 번호가 들어갈 칸이 없다.
         ``viewer_idx`` 는 ① 직원 번호(대표 = 0) · 로그인 전 실패처럼 사람을 모르면 None."""
         self._need_writer()
-        if target_kind not in ACCESS_TARGETS:
-            raise StoreRefused("기록 대상 종류가 아닙니다")
-        vals = (_kst_text(at, "기록 시각"), None if viewer_idx is None else _person(viewer_idx, "본 사람"),
-                _code(action, _ACCESS_CODE, "동작"), target_kind,
-                None if target_id is None else _count(target_id, "대상 번호"), _code(result, _ACCESS_CODE, "결과"))
-        if len(vals[2]) > ACCESS_CODE_MAX or len(vals[5]) > ACCESS_CODE_MAX:
-            raise StoreRefused("코드가 너무 깁니다")
+        vals = self._access_vals(viewer_idx, action, target_kind, target_id, result, at)
         self._not_future(at, "기록 시각")
         with self._tx() as c:
             return c.execute(
                 """INSERT INTO naver_auto_access_log (at, emp_idx, action, target_kind, target_id, result)
                    VALUES (?, ?, ?, ?, ?, ?)""", vals).lastrowid
+
+    @staticmethod
+    def _access_vals(viewer_idx: Optional[int], action: str, target_kind: str, target_id: Optional[int], result: str,
+                     at: datetime) -> tuple:
+        """열람·쓰기 기록 한 줄의 값 — 대상 번호는 화면 API 가 받는 범위(0 이상 · 2**63 미만)와 같게(검토 audit-target-id)."""
+        if target_kind not in ACCESS_TARGETS:
+            raise StoreRefused("기록 대상 종류가 아닙니다")
+        vals = (_kst_text(at, "기록 시각"), None if viewer_idx is None else _person(viewer_idx, "본 사람"),
+                _code(action, _ACCESS_CODE, "동작"), target_kind,
+                None if target_id is None else _person(target_id, "대상 번호"), _code(result, _ACCESS_CODE, "결과"))
+        if len(vals[2]) > ACCESS_CODE_MAX or len(vals[5]) > ACCESS_CODE_MAX:
+            raise StoreRefused("코드가 너무 깁니다")
+        return vals
 
     def mark_alert_read(self, recipient_id: int, emp_idx: int, at: datetime) -> bool:
         """🔔 읽음 — **자기 줄만**(받는 사람 번호가 같을 때만). 이번에 읽음으로 바꿨으면 True · 이미 읽었으면 False.

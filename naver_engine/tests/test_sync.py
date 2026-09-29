@@ -1289,7 +1289,7 @@ PRIVILEGED = ("record_org", "refuse_org", "refuse_stages", "confirm_prospects_ho
               "record_pairing", "record_pairing_event",
               # 사람 판단 쓰기 — 「확인」은 자동 규칙을 모두 이긴다. 범위를 검사하는 S11 화면 API(web.py) 한 곳에서만 부른다
               # (검토 security-4)
-              "record_decision", "revoke_decision",
+              "record_decision", "record_decisions", "revoke_decision",
               # 아침 점검(S9) — 계정 하루치·이슈를 따로 적으면 「정상」만 남고 이슈가 빠지거나, 규칙을 거치지 않은 이슈가
               # 생긴다. 회차·계정 결과·연결 해제 닫기는 morning.py 한 곳에서만 · 따로 적는 옛 함수는 어디서도 부르지 않는다
               "begin_run", "finish_run", "record_account_check", "close_unlinked_issues", "record_account_day",
@@ -1413,7 +1413,7 @@ class SyncGuardTest(unittest.TestCase):
                 found[self.rel(p)] = uses
         self.assertEqual(set(found), {"sync.py", "links.py", "morning.py", "alerts.py", "web.py"})
         # 사람 판단 · 이슈 손길 · 읽음 · 기준값 · 열람 기록 — scope 로 누를 수 있는 사람을 정한 화면 API 한 곳(S11)
-        self.assertEqual(found["web.py"], {"record_decision", "revoke_decision", "ack_issue", "resolve_issue",
+        self.assertEqual(found["web.py"], {"record_decisions", "revoke_decision", "ack_issue", "resolve_issue",
                                            "except_issue", "record_access", "mark_alert_read", "mark_alerts_read_all",
                                            "record_thresholds"})
         self.assertEqual(found["alerts.py"], {"record_alert", "record_delivery", "record_heartbeat"})

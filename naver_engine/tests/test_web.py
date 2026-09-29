@@ -82,10 +82,16 @@ class WebBase(TM.Base):
 
     def setUp(self):
         super().setUp()
+        self._names = dict(TM.NAMES)
+        self.addCleanup(self._restore_names)
         self.world()
         self.erp = FakeProfileErp()
         self.signer = SE.TokenSigner(Secret(TOKEN_SECRET))
         self.app = self.make_app()
+
+    def _restore_names(self):
+        TM.NAMES.clear()
+        TM.NAMES.update(self._names)
 
     def make_app(self, **kw):
         return WEB.App(open_read=lambda: S.open_reader(self.path), write=lambda fn: fn(self.st), signer=self.signer,
@@ -97,6 +103,7 @@ class WebBase(TM.Base):
                            t - timedelta(minutes=20))
         rows = [TM.srow(p) for p in (11, 12, 13, 14)]
         self.st.record_prospects(E.StageSnapshot({r.possibility_id: r for r in rows}, t - timedelta(minutes=5), {}, ()))
+        TM.NAMES[A] = "에이상점"                    # 계정 이름에 번호를 싣지 않는다 — 응답에 번호 원문이 없는지 볼 수 있게
         TM.NAMES[B] = TM.shop(12)
         TM.NAMES[C_] = TM.shop(13)
         TM.NAMES[D] = "다른이름"
@@ -145,6 +152,18 @@ class WebBase(TM.Base):
     def post(self, path, idx, body=None, **kw):
         s, b, _h, _p = self.call("POST", path, self.token(idx, **kw), body=body)
         return s, b
+
+    def repair(self, ids, stages=None, names=None):
+        """① 네이버 고객 번호 줄을 바꿔 지금 시각에 짝을 다시 맞춘다(``ids`` = [(가망, 번호)] · ``stages`` = 가망 → StageRow)."""
+        t = self.at(self.fc.now() + timedelta(minutes=5))   # 단계·계정 목록은 앞 것보다 늦어야 받는다
+        rows = {p: TM.srow(p) for p in (11, 12, 13, 14)}
+        rows.update(stages or {})
+        TM.NAMES.update(names or {})
+        self.st.record_prospects(E.StageSnapshot(rows, t - timedelta(minutes=3), {}, ()))
+        self.st.record_accounts(TM.kids(A, B, C_, D), t - timedelta(minutes=2))
+        res = L.pair_links(TM.FakeErp([E.NaverIdRow(p, M.VENDOR_NAVER, str(c)) for p, c in ids]), self.st,
+                           t - timedelta(minutes=1))
+        self.assertEqual(res.outcome, S.SYNC_ACCEPTED, res)
 
     def issue_of(self, pid, severity):
         return [i for i in self.st.issues(pid, open_only=True) if i["severity"] == severity][0]
@@ -520,6 +539,86 @@ class LoginTest(WebBase):
         self.erp.person(MARK_SSO, 100)
         self.assertEqual([self.login()[0] for _ in range(4)], [200, 200, 200, 429])
 
+    def src(self, source, peer="127.0.0.1"):
+        s, b, _h, _p = self.call("POST", "/session", body={"sso": MARK_SSO},
+                                 headers={"REMOTE_ADDR": peer, "HTTP_X_NAVER_AUTO_SOURCE": source})
+        return s
+
+    def test_junk_does_not_use_up_logins(self):
+        """① 을 부르지 않는 거절(모양 틀림)은 세지 않는다 · 창마다 한 줄만 기록(검토 login-throttle-global-lockout)."""
+        self.app = self.make_app(login_max=3, login_source_max=3, monotonic=lambda: 100.0)
+        for body in [{}] * 20 + [{"sso": "x"}] * 20:
+            self.assertIn(self.call("POST", "/session", body=body)[0], (400, 401))
+        self.assertEqual(self.erp.calls, [])
+        self.erp.person(MARK_SSO, 100)
+        self.assertEqual(self.login()[0], 200)
+        results = [r["result"] for r in self.st.access_log()]
+        self.assertEqual((results.count("bad-body"), results.count(EP.KIND_REJECTED)), (1, 1))
+
+    def test_one_source_cannot_lock_out_everyone(self):
+        """한 곳(③ 중계가 넘긴 요청한 곳)에서 몰아쳐도 다른 곳의 로그인은 된다 · 전체 상한은 따로."""
+        self.app = self.make_app(login_max=5, login_source_max=2, monotonic=lambda: 100.0)
+        self.erp.person(MARK_SSO, 100)
+        self.assertEqual([self.src("10.0.0.1") for _ in range(4)], [200, 200, 429, 429])
+        self.assertEqual(self.src("10.0.0.2"), 200)
+        # 중계가 아닌 곳이 넣은 머리는 믿지 않는다 — 연결한 주소로 센다
+        self.assertEqual([self.src(f"10.9.9.{i}", peer="203.0.113.5") for i in range(3)], [200, 200, 429])
+        self.assertEqual(self.src("10.0.0.3"), 429)   # 전체 상한(5)
+        self.assertEqual([r["result"] for r in self.st.access_log()].count("throttled"), 1)   # 창마다 한 줄
+
+    def test_expiry_and_session_end_reported(self):
+        """응답의 남은 시간은 토큰의 실제 남은 시간 · 세션 끝(로그인 + 12시간)을 함께(검토 expires-in-misreported)."""
+        self.erp.person(MARK_SSO, 100)
+        start = self.fc.now()
+        s, b = self.login()
+        self.assertEqual((b["expires_in"], b["session_ends_at"]),
+                         (3600, (start + SE.SESSION_MAX).isoformat(timespec="seconds")))
+        tok = b["token"]
+        for step in range(1, 20):
+            self.at(start + timedelta(minutes=50 * step))
+            s, b, _h, _p = self.call("POST", "/session/refresh", tok)
+            if s != 200:
+                break
+            tok = b["token"]
+            self.assertEqual(b["session_ends_at"], (start + SE.SESSION_MAX).isoformat(timespec="seconds"))
+        self.assertEqual(step, 15)                                   # 12시간이 넘으면 끝(12:30) — 계속 이어 가지 못한다
+        self.assertEqual(b["error"], "token-expired")
+        self.at(start + timedelta(hours=11, minutes=30))
+        s, b, _h, _p = self.call("POST", "/session/refresh", self.signer.issue(100, start + timedelta(hours=11),
+                                                                            login_at=start))
+        self.assertEqual((s, b["expires_in"]), (200, 1800))
+
+    def test_refresh_keeps_narrowing(self):
+        self.erp.person(MARK_SSO, 1, manager=False)
+        _s, b = self.login()
+        self.at(self.fc.now() + timedelta(minutes=50))
+        s, r, _h, _p = self.call("POST", "/session/refresh", b["token"])
+        self.assertEqual((s, r["narrowed"], self.signer.verify(r["token"], self.fc.now()).narrowed), (200, True, True))
+        _s, board, _h, _p = self.call("GET", "/board", r["token"], query="attention=0")
+        self.assertEqual(board["counts"]["total"], 0)
+
+    def test_login_narrows_on_any_doubt(self):
+        """my-profile 이 팀장이 아니라 하거나 · 다른 팀이거나 · 모양이 모르겠으면 좁힌다(늘리지 않는다 · 검토 test-gap)."""
+        cases = [dict(manager=True, teams=((11, 10), (12, 10), (10, 0))),    # 끝 팀이 둘 — 모름
+                 dict(manager=True, teams=((10, 0),)),                     # 가장 깊은 팀이 조직 표와 다름
+                 dict(manager="false"), dict(manager=1), dict(manager="Y")]  # 참거짓이 아님
+        for kw in cases:
+            self.erp.person(MARK_SSO, 1, **kw)
+            s, b = self.login()
+            self.assertEqual((s, b["narrowed"]), (200, True), kw)
+            _s, board, _h, _p = self.call("GET", "/board", b["token"], query="attention=0")
+            self.assertEqual(board["counts"]["total"], 0, kw)
+
+    def test_login_needs_audit(self):
+        self.erp.person(MARK_SSO, 100)
+
+        def broken(fn):
+            raise S.StoreBusy("x")
+        self.app = WEB.App(open_read=lambda: S.open_reader(self.path), write=broken, signer=self.signer,
+                           profiles=EP.ErpProfileReader(transport=self.erp), clock=self.fc.now)
+        s, b = self.login()
+        self.assertEqual((s, b), (503, {"error": "audit-unavailable"}))
+
     def test_sso_and_personal_fields_never_kept(self):
         self.erp.person(MARK_SSO, 100)
         s, b = self.login()
@@ -599,6 +698,32 @@ class VisibilityTest(WebBase):
                 after[k].pop("runs", None)
             self.assertEqual(before[k], after[k], k)
 
+    def test_out_of_scope_data_does_not_change_101_answers(self):
+        """같은 시험을 101 쪽에서 — 100 의 광고주(11 · 14)에 🔴 · 막힘 · 알림을 더해도 101 의 응답은 그대로."""
+        def snap():
+            out = {}
+            for path, q in (("/me", ""), ("/board", "attention=0"), ("/links/pending", ""), ("/ended", ""),
+                            ("/unlinked", ""), ("/bell", ""), ("/clients/12", "")):
+                s, b = self.get(path, 101, query=q)
+                self.assertEqual(s, 200, path)
+                b.pop("band", None)
+                b.pop("pairing_at", None)
+                b.pop("pairing_today", None)
+                for r in b.get("rows", ()):
+                    r.pop("ref", None)   # 가리킴표는 짝 맞추기마다 새로 — 수·있고 없음을 말하지 않는다
+                out[path + q] = b
+            return out
+        before = snap()
+        rid = self.st.begin_run(TODAY, self.fc.now())
+        self.st.record_account_check(rid, A, possibility_id=11, link="confirmed", status="ok",
+                                     rules_run=("bizmoney", "link"), rules_not_run=(), checked_at=self.fc.now(),
+                                     findings=(TA.F("bizmoney", "bizmoney_low", f"acc:{A}", "yellow"),))
+        self.st.finish_run(rid, S.RUN_DONE, self.fc.now())
+        self.st.record_alert(S.ALERT_DIGEST, TODAY, "compose", "digest", (), "/naver/issues",
+                             [{"emp_idx": 100, "severity": "URGENT", "params": {"red": 1, "yellow": 2}}], self.fc.now())
+        self.repair([(12, B), (14, 9999999)], stages={14: TM.srow(14, stage="계약만료", end=TODAY - timedelta(days=2))})
+        self.assertEqual(before, snap())
+
     def test_as_parameter_ignored(self):
         s, b = self.get("/board", 100, query="attention=0&as=0")
         self.assertEqual({r["possibility_id"] for r in b["rows"]}, {11, 14})
@@ -636,9 +761,60 @@ class VisibilityTest(WebBase):
 
     def test_ceo_band_counts_only_for_ceo(self):
         _s, ceo = self.get("/board", 0)
-        _s, staff = self.get("/board", 100)
         self.assertIn("accounts_total", ceo["band"]["runs"][0])
-        self.assertNotIn("accounts_total", staff["band"]["runs"][0])
+        self.assertIn("accounts_total", self.get("/health", 0)[1]["runs"][0])
+        for idx, kw in ((100, {}), (1, {}), (1, {"narrowed": True})):    # 담당 · 팀장 · 좁힌 팀장
+            _s, b = self.get("/board", idx, **kw)
+            _s, h = self.get("/health", idx, **kw)
+            for run in b["band"]["runs"] + h["runs"]:
+                for k in ("accounts_total", "accounts_ok", "error_kind"):
+                    self.assertNotIn(k, run, (idx, kw))
+
+    def test_ended_and_unlinked_scoped(self):
+        """📦 계약 끝남 · ⚪ 이관 안 됨 목록도 범위 안만(검토 test-gap-ended-unlinked-scope)."""
+        self.repair([(12, B), (14, 9999999)],
+                    stages={12: TM.srow(12, stage="계약만료", end=TODAY - timedelta(days=3))})
+        want = {0: ({12}, {14}), 1: ({12}, {14}), 100: (set(), {14}), 101: ({12}, set())}
+        for idx, (ended, unlinked) in want.items():
+            _s, e = self.get("/ended", idx)
+            _s, u = self.get("/unlinked", idx)
+            self.assertEqual(({r["possibility_id"] for r in e["rows"]}, {r["possibility_id"] for r in u["rows"]}),
+                             (ended, unlinked), idx)
+
+    def test_ended_link_left_after_grace(self):
+        """끝난 지 14일이 넘어 짝 맞추기가 빼도 「네이버 연결 남음」은 사람 확인·자동 연결 기록 + 오늘 목록에서
+        (검토 ended-still-linked-false-after-grace) · 종료일을 모르는 계약 만료도 점검은 멈춘 것."""
+        for days, stopped in ((10, False), (20, True)):
+            self.repair([(12, B), (14, 9999999)],
+                        stages={11: TM.srow(11, stage="계약만료", end=TODAY - timedelta(days=days))})
+            [row] = self.get("/ended", 100)[1]["rows"]
+            self.assertEqual((row["possibility_id"], row["still_linked"], row["checks_stopped"]), (11, True, stopped))
+        self.repair([(12, B), (14, 9999999)], stages={12: TM.srow(12, stage="계약만료", end=TODAY - timedelta(days=30))})
+        [row] = self.get("/ended", 101)[1]["rows"]
+        self.assertEqual((row["still_linked"], row["checks_stopped"]), (True, True))   # 자동으로 이어졌던 계정
+        self.repair([(12, B), (14, 9999999)], stages={11: TM.srow(11, stage="계약만료")})
+        [row] = self.get("/ended", 100)[1]["rows"]
+        self.assertEqual(row["checks_stopped"], True)
+
+    def test_customer_ids_never_whole(self):
+        """고객 번호는 어느 화면·어느 사람에게도 끝 4자리만(검토 test-gap-customer-id-masking)."""
+        rid = self.st.begin_run(TODAY, self.fc.now())
+        self.st.record_account_check(rid, B, possibility_id=12, link="auto", status="ok",
+                                     rules_run=("bizmoney", "link"), rules_not_run=(), checked_at=self.fc.now(),
+                                     findings=(TA.F("bizmoney", "bizmoney_low", f"acc:{B}", "red"),))
+        self.st.finish_run(rid, S.RUN_DONE, self.fc.now())
+        for idx in (0, 1, 100, 101):
+            for path, q in (("/me", ""), ("/board", "attention=0"), ("/links/pending", ""), ("/ended", ""),
+                            ("/unlinked", ""), ("/bell", ""), ("/health", ""), ("/clients/11", ""),
+                            ("/clients/12", ""), ("/clients/13", ""), ("/clients/14", "")):
+                _s, _b, _h, p = self.call("GET", path, self.token(idx), query=q)
+                for cid in (A, B, C_, D, 9999999):
+                    self.assertNotIn(str(cid).encode("ascii"), p, (idx, path))
+
+    def test_large_ids_audited(self):
+        """API 가 받는 번호 범위(18자리)와 기록 범위가 같다(검토 audit-target-id-range-mismatch)."""
+        self.assertEqual(self.get("/clients/3000000000", 100)[0], 404)
+        self.assertEqual(self.st.access_log(viewer_idx=100)[0]["target_id"], 3000000000)
 
     def test_settings_scope(self):
         self.assertEqual(self.get("/settings", 100)[0], 403)
@@ -770,16 +946,101 @@ class LinksTest(WebBase):
         self.assertEqual(s, 200)
         return b
 
+    def ref_of(self, idx, pid, state=None):
+        rows = [r for r in self.pending(idx)["rows"] if r["possibility_id"] == pid
+                and (state is None or r["state"] == state)]
+        self.assertEqual(len(rows), 1, rows)
+        return rows[0]
+
     def test_pending_rows_scoped_and_masked(self):
         ceo = self.pending(0)
         by = {r["possibility_id"]: r for r in ceo["rows"]}
-        self.assertEqual(set(by), {13, 14})
+        self.assertEqual(set(by), {12, 13, 14})                  # 자동 짝(12)도 사람이 확인할 때까지 여기서
         self.assertEqual((by[13]["state"], by[13]["tail"], by[13]["can_confirm"]), ("candidate", str(C_)[-4:], True))
         self.assertEqual((by[14]["code"], by[14]["can_confirm"]), ("not-linked", False))
+        self.assertEqual((by[12]["state"], by[12]["can_confirm"], by[12]["can_reject"]), ("auto", True, True))
         payload = json.dumps(ceo)
         self.assertNotIn(str(C_), payload)                       # 번호 원문 없음 — 끝 4자리만
         self.assertEqual({r["possibility_id"] for r in self.pending(100)["rows"]}, {14})
-        self.assertEqual(self.pending(101)["rows"], [])
+        self.assertEqual([(r["possibility_id"], r["can_confirm"]) for r in self.pending(101)["rows"]], [(12, True)])
+
+    def test_auto_pair_confirmable_by_owner(self):
+        """자동 짝은 「계정 확인 전」 — 담당이 여기서 「이 계정 맞음」·「아님」을 누른다(설계 v1.8 Q5 · M4 · 계획 7)."""
+        row = self.ref_of(101, 12, "auto")
+        self.assertEqual(row["account_name"], TM.shop(12))
+        s, b = self.post("/links/confirm", 101, {"refs": [row["ref"]]})
+        self.assertEqual((s, b["decided"]), (200, 1))
+        self.assertIn((12, B, "confirmed", 101), [(d.possibility_id, d.customer_id, d.decision, d.decided_by)
+                                                 for d in self.st.current_decisions()])
+        self.repair([(12, B), (14, 9999999)])
+        _s, c = self.get("/clients/12", 101)
+        self.assertNotIn("account-unconfirmed", c["verdict"]["reasons"])
+        self.assertEqual([a["link"] for a in c["accounts"]], ["confirmed"])
+
+    def test_confirm_cannot_take_account_held_out_of_scope(self):
+        """범위 밖 광고주가 쥔 계정은 담당·팀장이 이어 가져오지 못한다 — 같은 409 · 아무것도 적지 않는다 · 이름도 주지 않는다
+        (검토 link-confirm-steals-out-of-scope-account · 세 갈래)."""
+        # ① 사람(101)이 자기 자동 짝을 확인한 뒤 · 100 이 자기 가망 ① 에 같은 번호를 적음 → 14 는 「다른 가망에 확인됨」
+        self.post("/links/confirm", 101, {"refs": [self.ref_of(101, 12, "auto")["ref"]]})
+        self.repair([(14, B)])
+        row = self.ref_of(100, 14)
+        self.assertEqual((row["code"], row["can_confirm"], row["account_name"], row["other_candidate"]),
+                         ("confirmed-elsewhere", False, None, True))
+        before = [(d.decision_id, d.possibility_id) for d in self.st.current_decisions()]
+        self.assertEqual(self.post("/links/confirm", 100, {"refs": [row["ref"]]}), (409, {"error": "not-linkable"}))
+        self.assertEqual([(d.decision_id, d.possibility_id) for d in self.st.current_decisions()], before)
+        self.assertEqual(self.st.access_log(viewer_idx=100)[0]["result"], "not-linkable")   # 거절도 기록
+        # ② 자동 짝(12)과 100 의 ① 이 같은 번호 → 둘 다 「여러 가망이 적음」 — 100 은 못 가져간다 · 두 가망을 다 보는 팀장은 된다
+        self.st.revoke_decision([d for d in self.st.current_decisions() if d.possibility_id == 12][0].decision_id,
+                                0, self.fc.now(), "시험")
+        self.repair([(12, B), (14, B)])
+        row = self.ref_of(100, 14)
+        self.assertEqual((row["code"], row["can_confirm"], row["account_name"]), ("claimed-by-several", False, None))
+        self.assertEqual(self.post("/links/confirm", 100, {"refs": [row["ref"]]})[0], 409)
+        lead = self.ref_of(1, 14)
+        self.assertEqual((lead["can_confirm"], lead["account_name"]), (True, TM.shop(12)))
+        self.assertEqual(self.post("/links/confirm", 1, {"refs": [lead["ref"]]})[0], 200)
+        # ③ 이름 후보의 계정을 범위 밖 가망이 쥔 경우는 test_name_candidate_held_by_out_of_scope_prospect
+
+    def test_name_candidate_held_by_out_of_scope_prospect(self):
+        """이름 후보의 계정을 범위 밖 가망이 쥐었다(사람 확인) — 확인·미리보기 거절 · 이름 없이 「다른 후보 있음」만."""
+        TM.NAMES[D] = TM.shop(14)
+        self.st.record_decision(13, D, "confirmed", 0, self.fc.now())    # 대표만 보는 가망 13 에 확인
+        self.repair([(14, 9999999)], stages={13: TM.srow(13, stage="계약만료", end=TODAY - timedelta(days=30))})
+        row = self.ref_of(100, 14, "candidate")
+        self.assertEqual((row["can_confirm"], row["account_name"], row["other_candidate"]), (False, None, True))
+        seen = []
+        self.app = self.make_app(previewer=lambda h: seen.append(h) or ["남의캠페인"])
+        row = self.ref_of(100, 14, "candidate")
+        self.assertEqual(self.post("/links/confirm", 100, {"refs": [row["ref"]]})[0], 409)
+        self.assertEqual(self.post("/links/preview", 100, {"ref": row["ref"]}), (409, {"error": "not-linkable"}))
+        self.assertEqual(seen, [])                                        # 네이버를 부르지도 않았다
+        self.assertEqual([d.possibility_id for d in self.st.current_decisions() if d.customer_id == D], [13])
+        ceo = self.ref_of(0, 14, "candidate")
+        self.assertEqual((ceo["can_confirm"], ceo["account_name"]), (True, TM.shop(14)))
+
+    def test_preview_of_account_held_elsewhere_refused(self):
+        """검토 link-preview-reads-out-of-scope-account — 대표가 12 에 확인한 계정을 100 이 ① 에 적어 미리보기를 누름."""
+        self.st.record_decision(12, B, "confirmed", 0, self.fc.now())
+        self.repair([(14, B)])
+        seen = []
+        self.app = self.make_app(previewer=lambda h: seen.append(h) or ["101광고주캠페인"])
+        row = self.ref_of(100, 14)
+        self.assertEqual(row["code"], "confirmed-elsewhere")
+        self.assertEqual(self.post("/links/preview", 100, {"ref": row["ref"]})[0], 409)
+        self.assertEqual(seen, [])
+
+    def test_blocked_rows_not_joined_to_account_table(self):
+        """번호가 계정이 아닌 막힘(광고계정 번호 · 번호 공간 겹침)과 남이 쥔 계정의 막힘은 계정 이름을 싣지 않는다
+        (설계 v1.8 S8 security-1 · 검토 blocked-rows-joined-to-account-table)."""
+        ad_no_of_b = 8_000_000 + B % 1_000_000
+        self.repair([(14, ad_no_of_b)])
+        row = self.ref_of(100, 14)
+        self.assertEqual((row["code"], row["account_name"], row["can_confirm"], row["can_reject"]),
+                         ("ad-account-number", None, False, False))
+        for r in self.pending(0)["rows"]:
+            if r["code"] in W.NOT_A_CUSTOMER:
+                self.assertIsNone(r["account_name"], r)
 
     def test_confirm_candidate_records_decision(self):
         ref = [r for r in self.pending(0)["rows"] if r["possibility_id"] == 13][0]["ref"]
@@ -802,6 +1063,72 @@ class LinksTest(WebBase):
     def test_not_linkable_rows_refused(self):
         ref14 = [r for r in self.pending(0)["rows"] if r["possibility_id"] == 14][0]["ref"]
         self.assertEqual(self.post("/links/confirm", 0, {"refs": [ref14]}), (409, {"error": "not-linkable"}))
+        self.assertEqual(self.st.access_log(viewer_idx=0)[0]["result"], "not-linkable")
+
+    def test_batch_decisions_one_transaction(self):
+        """묶음 판단은 한 거래 — 둘째 줄이 틀리면 첫 줄도 남지 않는다 · 쓰기 실패는 기록(검토 batch-decisions-not-atomic)."""
+        before = len(self.st.current_decisions())
+        with self.assertRaises(S.StoreRefused):
+            self.st.record_decisions([(13, C_), (14, -1)], "confirmed", 0, self.fc.now())
+        with self.assertRaises(S.StoreRefused):
+            self.st.record_decisions([(13, C_), (13, C_)], "confirmed", 0, self.fc.now())
+        self.assertEqual(len(self.st.current_decisions()), before)
+        ref13 = self.ref_of(0, 13)["ref"]
+
+        def broken(fn):
+            raise S.StoreBusy("x")
+        self.app = WEB.App(open_read=lambda: S.open_reader(self.path), write=broken, signer=self.signer,
+                           profiles=EP.ErpProfileReader(transport=self.erp), clock=self.fc.now)
+        self.assertEqual(self.post("/links/confirm", 0, {"refs": [ref13]}), (503, {"error": "store-busy"}))
+        self.assertEqual(len(self.st.current_decisions()), before)
+        self.app = self.make_app()
+        s, _b = self.post("/links/confirm", 0, {"refs": [ref13]})
+        self.assertEqual(s, 200)
+        log = self.st.access_log(viewer_idx=0)
+        self.assertEqual((log[0]["action"], log[0]["target_id"], log[0]["result"]), ("link-confirm", 13, "ok"))
+
+    def test_prev_owner_cannot_confirm_reject_revoke_preview(self):
+        """이전 담당(계약 만료 직전 담당)은 보기·멈추기만 — 짝 확인·아님·거두기·미리보기 모두 안 된다(검토 test-gap)."""
+        owners = [{"possibility_id": 11, "manage_emp_idx": None, "sub_manage_emp_idx": None,
+                   "prev_manage_owner_idx": 100, "sales_emp_idx": None, "owner_source": "prev"},
+                  TA.owner(12, 101),
+                  {"possibility_id": 13, "manage_emp_idx": None, "sub_manage_emp_idx": None,
+                   "prev_manage_owner_idx": 100, "sales_emp_idx": None, "owner_source": "prev"},
+                  TA.owner(14, 100)]
+        self.st.record_org(TA.org_body(self.fc.now() - timedelta(minutes=1), owners=owners), self.fc.now())
+        ref13 = self.ref_of(0, 13)["ref"]
+        self.app = self.make_app(previewer=lambda h: ["캠페인"])
+        before = [(d.decision_id, d.possibility_id) for d in self.st.current_decisions()]
+        for path, body in (("/links/confirm", {"refs": [ref13]}), ("/links/reject", {"refs": [ref13]}),
+                           ("/links/preview", {"ref": ref13})):
+            s, b = self.post(path, 100, body)
+            self.assertEqual((s, b["error"]), (403, "action-not-allowed"), path)
+        [d11] = [d for d in self.st.current_decisions() if d.possibility_id == 11]
+        self.assertEqual(self.post("/links/revoke", 100, {"decision_id": d11.decision_id, "reason": "틀림"})[0], 404)
+        self.assertEqual([(d.decision_id, d.possibility_id) for d in self.st.current_decisions()], before)
+        self.assertEqual(self.st.access_log(viewer_idx=100)[-1]["result"], "not-allowed")
+
+    def test_revoke_and_preview_same_404_body(self):
+        [d] = [x for x in self.pending(0)["decisions"] if x["possibility_id"] == 11]
+        s1, _b, _h, p1 = self.call("POST", "/links/revoke", self.token(101),
+                                   body={"decision_id": d["decision_id"], "reason": "틀림"})
+        s2, _b, _h, p2 = self.call("POST", "/links/revoke", self.token(101), body={"decision_id": 99999, "reason": "틀림"})
+        self.assertEqual((s1, s2, p1), (404, 404, p2))
+        ref13 = self.ref_of(0, 13)["ref"]
+        s3, _b, _h, p3 = self.call("POST", "/links/preview", self.token(100), body={"ref": ref13})
+        s4, _b, _h, p4 = self.call("POST", "/links/preview", self.token(100), body={"ref": "0" * W.REF_LENGTH})
+        self.assertEqual((s3, s4, p3, p4), (404, 404, p1, p1))
+
+    def test_revoke_refused_is_logged(self):
+        [d] = [x for x in self.pending(0)["decisions"] if x["possibility_id"] == 11]
+        s, b = self.post("/links/revoke", 100, {"decision_id": d["decision_id"], "reason": "틀\x00림"})
+        self.assertEqual((s, b["error"]), (409, "revoke-refused"))
+        self.assertEqual(self.st.access_log(viewer_idx=100)[0]["result"], "refused")
+
+    def test_preview_drops_unencodable_names(self):
+        self.app = self.make_app(previewer=lambda h: ["캠페인\ud800", 5, "정상"])
+        s, b = self.post("/links/preview", 0, {"ref": self.ref_of(0, 13)["ref"]})
+        self.assertEqual((s, b["campaigns"]), (200, ["정상"]))
 
     def test_stale_org_blocks_confirm_not_reject(self):
         ref13 = [r for r in self.pending(0)["rows"] if r["possibility_id"] == 13][0]["ref"]
@@ -830,6 +1157,19 @@ class LinksTest(WebBase):
         self.assertEqual(len(seen), 1)
         self.assertEqual(self.post("/links/preview", 100, {"ref": ref13})[0], 404)
 
+    def test_preview_needs_audit(self):
+        """미리보기는 네이버에서 읽은 광고주 자료 — 기록을 못 적으면 보여 주지 않는다(검토 test-gap-audit-required)."""
+        ref13 = self.ref_of(0, 13)["ref"]
+
+        def broken(fn):
+            raise S.StoreBusy("x")
+        self.app = WEB.App(open_read=lambda: S.open_reader(self.path), write=broken, signer=self.signer,
+                           profiles=EP.ErpProfileReader(transport=self.erp), clock=self.fc.now,
+                           previewer=lambda h: ["캠페인1"])
+        s, b, _h, p = self.call("POST", "/links/preview", self.token(0), body={"ref": ref13})
+        self.assertEqual((s, b), (503, {"error": "audit-unavailable"}))
+        self.assertNotIn("캠페인1".encode("utf-8"), p)
+
 
 # ── 🔔 · 설정 ────────────────────────────────────────────────────────
 class BellSettingsTest(WebBase):
@@ -847,6 +1187,10 @@ class BellSettingsTest(WebBase):
         self.assertEqual(self.get("/bell", 100)[1]["unread"], 0)
         self.assertEqual(self.get("/bell", 101)[1]["unread"], 1)
         self.assertEqual(self.post("/bell/read-all", 101), (200, {"changed": 1}))
+        got = [(r["action"], r["result"]) for r in self.st.access_log(viewer_idx=100)]
+        self.assertIn(("bell-read", "ok"), got)
+        self.assertIn(("bell-read", "not-found"), got)
+        self.assertEqual(self.st.access_log(viewer_idx=101)[0]["action"], "bell-read-all")
 
     def test_thresholds_ceo_only(self):
         s, b = self.post("/settings/thresholds", 1, {"changes": {"zero_spend_days": 4}})
@@ -856,6 +1200,8 @@ class BellSettingsTest(WebBase):
         s, b = self.post("/settings/thresholds", 0, {"changes": {"zero_spend_days": 99, "nope": 1}})
         self.assertEqual((s, b["error"], b["fields"]), (400, "out-of-range", ["zero_spend_days"]))
         self.assertEqual(self.post("/settings/thresholds", 0, {"changes": {"zero_spend_days": 4}})[0], 409)
+        s, b = self.post("/settings/thresholds", 0, {"changes": {"zero_spend_days": 10 ** 400}})
+        self.assertEqual((s, b["error"]), (400, "out-of-range"))   # 저장소 장애(503)가 아니다
         body = TA.org_body(self.fc.now() - timedelta(minutes=1))
         for e in body["employees"]:
             if e["idx"] == 0:
@@ -890,6 +1236,31 @@ class EscalationTest(WebBase):
         red = [e for e in self.get("/board", 0)[1]["escalated_to_me"] if e["possibility_id"] == 11]
         self.assertEqual(red, [])                                                       # 🔴 는 이미 모두에게
 
+    def test_escalation_ignores_selection_but_not_scope(self):
+        """나에게 올라온 일은 고르기와 상관없다 — 좁힌 팀장에게는 없다(검토 escalation-hidden-by-selection · test-gap)."""
+        self.at(T0 + timedelta(hours=12, minutes=1))
+        for q in ("", "selection=me", "selection=person%3A100", "selection=person%3A101"):
+            got = {e["possibility_id"] for e in self.get("/board", 1, query=q)[1]["escalated_to_me"]}
+            self.assertEqual(got, {12}, q)
+        self.assertEqual(self.get("/board", 1, narrowed=True)[1]["escalated_to_me"], [])
+
+    def test_expired_exception_counts_and_escalates(self):
+        """기간이 끝난 예외는 🆕 로 센다 — 판의 줄 숫자·원인별 묶음·올리기가 판정과 같다(검토 expired-exception)."""
+        red = self.issue_of(11, "red")["issue_id"]
+        self.assertEqual(self.post(f"/issues/{red}/except", 1, {"until": TODAY.isoformat(), "note": "사유"})[0], 200)
+        yellow = self.issue_of(12, "yellow")["issue_id"]
+        self.assertEqual(self.post(f"/issues/{yellow}/except", 101, {"until": TODAY.isoformat(), "note": "사유"})[0], 200)
+        _s, b = self.get("/board", 100, query="attention=0")
+        self.assertEqual([r["open_red"] for r in b["rows"] if r["possibility_id"] == 11], [0])   # 오늘은 예외
+        self.at(at(TODAY + timedelta(days=1), 7, 30))
+        _s, b = self.get("/board", 100, query="attention=0")
+        [row] = [r for r in b["rows"] if r["possibility_id"] == 11]
+        self.assertEqual((row["verdict"]["color"], row["open_red"]), (V.RED, 1))
+        self.assertIn("bizmoney_low", {g["code"] for g in b["issues"]})
+        self.assertEqual(self.get("/board", 1)[1]["escalated_to_me"], [])                     # 끝난 지 12시간 전
+        self.at(at(TODAY + timedelta(days=1), 12, 1))
+        self.assertIn(12, {e["possibility_id"] for e in self.get("/board", 1)[1]["escalated_to_me"]})
+
     def test_single_tier_chain_never_escalates_to_itself(self):
         """담당 미정(대표만) 광고주의 🟡 — 사슬이 한 칸이라 올릴 곳이 없다(대표 자신의 일이 「올라온 일」로 뜨지 않는다)."""
         rid = self.st.begin_run(TODAY, self.fc.now())
@@ -918,6 +1289,46 @@ class AuditTest(WebBase):
                            profiles=EP.ErpProfileReader(transport=self.erp), clock=self.fc.now)
         s, b = self.get("/clients/11", 100)
         self.assertEqual((s, b["error"]), (503, "audit-unavailable"))   # 열람 기록을 못 적으면 보여 주지 않는다
+
+    def test_unserializable_response_is_json_500(self):
+        class Odd(WEB.App):
+            def _respond(self, environ):
+                return 200, {"x": "\ud800"}
+        self.app = Odd(open_read=lambda: S.open_reader(self.path), write=lambda fn: fn(self.st), signer=self.signer,
+                       profiles=EP.ErpProfileReader(transport=self.erp), clock=self.fc.now)
+        with self.assertLogs("naver_engine.web", level="ERROR"):
+            s, b, h, _p = self.call("GET", "/me", self.token(100))
+        self.assertEqual((s, b, h["Cache-Control"]), (500, {"error": "internal"}, "no-store"))
+
+    def test_preview_ledger_thread_safe(self):
+        """미리보기 장부는 여러 줄기에서 동시에 발급·사용해도 깨지지 않는다(검토 preview-handle-state-not-thread-safe)."""
+        import threading
+        from naver_engine import handles as HH
+        old = sys.getswitchinterval()
+        sys.setswitchinterval(1e-6)
+        errors = []
+        now = self.fc.now()
+
+        def work(who):
+            try:
+                for _ in range(150):
+                    h = HH.issue_preview_handle(customer_id=C_, possibility_id=13, candidate_id=1, stage="진행중",
+                                                stage_as_of=now - timedelta(minutes=5), latest_end_date=None, now=now,
+                                                requested_by=who)
+                    HH.require_account(h, now, (HH.PURPOSE_PREVIEW,))
+            except HH.NotEligible:
+                pass
+            except Exception as e:   # noqa: BLE001 — 깨진 것을 모은다
+                errors.append(type(e).__name__)
+        try:
+            threads = [threading.Thread(target=work, args=(1000 + i,)) for i in range(8)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+        finally:
+            sys.setswitchinterval(old)
+        self.assertEqual(errors, [])
 
     def test_unexpected_error_is_generic(self):
         def boom():
