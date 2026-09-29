@@ -75,15 +75,19 @@ def resp(r):
     return {"status": r.status_code, "text": r.text[:300], "headers": {k.lower(): v for k, v in r.headers.items()}}
 
 
+METHODS = ("GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS", "PATCH")
+
+
 def mode_m6():
     from fastapi.testclient import TestClient
     import app.main as m
     c = TestClient(m.app)
-    out = {"ref_get": resp(c.get("/api/zzz-none-s12")), "ref_post": resp(c.post("/zzz-none-s12")), "off": [], "on": []}
+    out = {"ref": {mt: resp(c.request(mt, "/zzz-none-s12")) for mt in METHODS},
+           "ref_api": {mt: resp(c.request(mt, "/api/zzz-none-s12")) for mt in METHODS}, "off": [], "on": []}
     paths = ["/naver", "/naver/", "/naver/index.html", "/naver/m6.js", "/naver/secret.py", "/api/naver-auto/board",
-             "/api/naver-auto/session", "/api/naver-auto/", "/naver/%2e%2e/%2e%2e/app/main.py"]
+             "/api/naver-auto/session", "/api/naver-auto/", "/naver/%2e%2e/%2e%2e/app/main.py", "/naver_page/index.html"]
     os.environ.pop("NAVER_AUTO_WEB", None)
-    for method in ("GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS"):
+    for method in METHODS:
         for p in paths:
             out["off"].append([method, p, resp(c.request(method, p))])
     os.environ["NAVER_AUTO_WEB"] = "yes"          # on 이 아닌 값 = 꺼짐
@@ -94,9 +98,55 @@ def mode_m6():
     for method, p in (("GET", "/naver"), ("GET", "/naver/"), ("HEAD", "/naver/"), ("GET", "/naver/index.html"),
                       ("GET", "/naver/m6.js"), ("GET", "/naver/secret.py"), ("POST", "/naver/"),
                       ("GET", "/naver/%2e%2e/%2e%2e/app/main.py"), ("GET", "/naver/missing.js"),
+                      ("GET", "/naver/README.md"), ("GET", "/naver_page/index.html"),
                       ("GET", "/api/naver-auto/board"), ("GET", "/api/naver-auto/../x")):
         out["on"].append([method, p, resp(c.request(method, p))])
     out["health"] = resp(c.get("/api/health"))
+    return out
+
+
+BYPASS = ["//naver/", "//naver/index.html", "/./naver/index.html", "/%2e/naver/index.html", "/x/../naver/index.html",
+          "/%2fnaver/index.html", "///naver/m6.js", "/naver//index.html", "/naver/./index.html", "/NAVER/",
+          "/naver_page/index.html", "/static/../naver_page/index.html", "/%6eaver/index.html", "/naver%2findex.html",
+          "/naver/index.html%00", "/naver/", "/naver/index.html"]
+
+
+def mode_bypass():
+    """날 요청 줄 — 브라우저·시험 도구가 고쳐 주지 않는 주소 철자를 uvicorn 에 그대로 보낸다."""
+    import uvicorn
+    import app.main as m
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    server = uvicorn.Server(uvicorn.Config(m.app, log_level="error", lifespan="off"))
+    threading.Thread(target=server.run, kwargs={"sockets": [sock]}, daemon=True).start()
+    t0 = time.monotonic()
+    while not server.started and time.monotonic() - t0 < 10:
+        time.sleep(0.02)
+
+    def raw(path):
+        s = socket.create_connection(("127.0.0.1", port), timeout=5)
+        s.sendall(("GET " + path + " HTTP/1.1\r\nHost: d.example\r\nConnection: close\r\n\r\n").encode("latin-1"))
+        data = b""
+        while True:
+            got = s.recv(65536)
+            if not got:
+                break
+            data += got
+        s.close()
+        head, _sep, body = data.partition(b"\r\n\r\n")
+        lines = head.decode("latin-1").split("\r\n")
+        hdrs = {ln.split(":", 1)[0].strip().lower(): ln.split(":", 1)[1].strip() for ln in lines[1:] if ":" in ln}
+        return {"status": int(lines[0].split()[1]), "text": body.decode("latin-1")[:300], "headers": hdrs}
+
+    out = {"off": [], "on": []}
+    os.environ.pop("NAVER_AUTO_WEB", None)
+    for p in BYPASS:
+        out["off"].append([p, raw(p)])
+    os.environ["NAVER_AUTO_WEB"] = "on"
+    for p in BYPASS:
+        out["on"].append([p, raw(p)])
+    server.should_exit = True
     return out
 
 
@@ -183,7 +233,7 @@ def mode_m7():
 
 
 if __name__ == "__main__":
-    fn = {"m6": mode_m6, "headers": mode_headers, "m7": mode_m7}[sys.argv[1]]
+    fn = {"m6": mode_m6, "bypass": mode_bypass, "headers": mode_headers, "m7": mode_m7}[sys.argv[1]]
     res = fn()
     sys.stdout.write("\n@@RESULT@@" + json.dumps(res, ensure_ascii=False) + "\n")
     sys.stdout.flush()

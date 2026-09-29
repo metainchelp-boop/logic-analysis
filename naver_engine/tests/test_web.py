@@ -48,6 +48,7 @@ TOKEN_SECRET = "t" * 40
 MARK_SSO = "SSOMARKaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbb.cccccc"   # ① 토큰 표지 — 어디에도 남으면 안 된다
 MARK_LOGIN_ID = "loginmark77"                                                  # ① 로그인 아이디 표지
 MARK_PHONE = "010-7777-7777"
+BAD_SSO = MARK_SSO.replace("SSOMARK", "BADMARK")                                # 모양은 맞지만 ① 이 거절하는 토큰
 
 
 def at(d: date, h: int, m: int = 0) -> datetime:
@@ -543,9 +544,9 @@ class LoginTest(WebBase):
         self.erp.person(MARK_SSO, 100)
         self.assertEqual([self.login()[0] for _ in range(4)], [200, 200, 200, 429])
 
-    def src(self, source, peer="127.0.0.1"):
-        s, b, _h, _p = self.call("POST", "/session", body={"sso": MARK_SSO},
-                                 headers={"REMOTE_ADDR": peer, "HTTP_X_NAVER_AUTO_SOURCE": source})
+    def src(self, source, peer="127.0.0.1", sso=MARK_SSO, environ=None):
+        s, b, _h, _p = self.call("POST", "/session", body={"sso": sso},
+                                 headers={"REMOTE_ADDR": peer, "HTTP_X_NAVER_AUTO_SOURCE": source, **(environ or {})})
         return s
 
     def test_junk_does_not_use_up_logins(self):
@@ -560,16 +561,41 @@ class LoginTest(WebBase):
         self.assertEqual((results.count("bad-body"), results.count(EP.KIND_REJECTED)), (1, 1))
 
     def test_one_source_cannot_lock_out_everyone(self):
-        """한 곳(③ 중계가 넘긴 요청한 곳)에서 몰아쳐도 다른 곳의 로그인은 된다 · 전체 상한은 따로."""
-        self.app = self.make_app(login_max=6, login_source_max=2, monotonic=lambda: 100.0)
+        """한 곳(③ 중계가 넘긴 요청한 곳)에서 ① 이 거절할 토큰을 몰아쳐도 다른 곳의 로그인은 된다 · 전체 상한은 따로.
+        ① 이 받아 준 로그인은 한 곳 창에서 되돌린다 — 한 곳 상한은 거절된 시도만 막는다(S12 검토 office-nat-bucket)."""
+        self.app = self.make_app(login_max=8, login_source_max=2, monotonic=lambda: 100.0)
         self.erp.person(MARK_SSO, 100)
-        self.assertEqual([self.src("10.0.0.1") for _ in range(4)], [200, 200, 429, 429])   # 센 것 2
-        self.assertEqual(self.src("10.0.0.2"), 200)                                        # 3
-        # 중계가 아닌 곳이 넣은 머리는 믿지 않는다 — 연결한 주소 하나로 센다(머리를 믿었다면 셋 다 200 · 전체 6)
-        self.assertEqual([self.src(f"10.9.9.{i}", peer="203.0.113.5") for i in range(3)], [200, 200, 429])   # 5
-        self.assertEqual(self.src("10.0.0.3"), 200)   # 6
-        self.assertEqual(self.src("10.0.0.4"), 429)   # 전체 상한(6)
+        self.assertEqual([self.src("10.0.0.1", sso=BAD_SSO) for _ in range(3)], [401, 401, 429])   # 전체 2
+        self.assertEqual(self.src("10.0.0.1"), 429)            # 그 곳은 창이 지날 때까지 막힘(진짜 토큰도)
+        self.assertEqual(self.src("10.0.0.2"), 200)            # 다른 곳은 된다 · 전체 3
+        # 중계가 아닌 곳이 넣은 머리는 믿지 않는다 — 연결한 주소 하나로 센다(머리를 믿었다면 셋 다 401)
+        self.assertEqual([self.src(f"10.9.9.{i}", peer="203.0.113.5", sso=BAD_SSO) for i in range(3)],
+                         [401, 401, 429])                       # 전체 5
+        self.assertEqual([self.src("10.0.0.3", sso=BAD_SSO), self.src("10.0.0.4", sso=BAD_SSO)], [401, 401])   # 7
+        self.assertEqual(self.src("10.0.0.5"), 200)            # 8
+        self.assertEqual(self.src("10.0.0.6"), 429)            # 전체 상한(8) — 받아 준 로그인도 전체에서는 센다
         self.assertEqual([r["result"] for r in self.st.access_log()].count("throttled"), 1)   # 창마다 한 줄
+
+    def test_office_many_people_one_address(self):
+        """사무실처럼 여럿이 한 주소(nginx X-Real-IP 하나)로 들어와도 ① 이 받아 준 로그인은 한 곳 상한(6)을 쓰지 않는다 ·
+        같은 주소에서 거절될 토큰은 6번까지."""
+        self.app = self.make_app(monotonic=lambda: 100.0)
+        self.erp.person(MARK_SSO, 100)
+        self.assertEqual([self.src("203.0.113.9") for _ in range(12)], [200] * 12)
+        self.assertEqual([self.src("203.0.113.9", sso=BAD_SSO) for _ in range(7)], [401] * 6 + [429])
+        self.assertEqual(self.src("203.0.113.10"), 200)
+
+    def test_trusted_transport_mark(self):
+        """유닉스 소켓 서버(S14)가 environ 에 넣는 표지가 있을 때만 IP 없는 연결의 머리를 믿는다 — 브라우저 머리로는 못 만든다."""
+        self.app = self.make_app(login_source_max=1, monotonic=lambda: 100.0)
+        mark = {WEB.TRUSTED_TRANSPORT: True}
+        self.assertEqual([self.src(f"10.1.1.{i}", peer="", sso=BAD_SSO, environ=mark) for i in range(3)], [401, 401, 401])
+        self.app = self.make_app(login_source_max=1, monotonic=lambda: 100.0)
+        for fake in ({}, {WEB.TRUSTED_TRANSPORT: "1"}, {WEB.TRUSTED_TRANSPORT: 1},
+                     {"HTTP_NAVER_ENGINE.TRUSTED_TRANSPORT": True}, {"HTTP_X_NAVER_ENGINE_TRUSTED_TRANSPORT": "true"}):
+            self.app = self.make_app(login_source_max=1, monotonic=lambda: 100.0)
+            got = [self.src(f"10.2.2.{i}", peer="", sso=BAD_SSO, environ=fake) for i in range(2)]
+            self.assertEqual(got, [401, 429], fake)            # 표지가 없거나 틀리면 모두 「unknown」 한 곳
 
     def test_expiry_and_session_end_reported(self):
         """응답의 남은 시간은 토큰의 실제 남은 시간 · 세션 끝(로그인 + 12시간)을 함께(검토 expires-in-misreported)."""

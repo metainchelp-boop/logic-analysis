@@ -9,6 +9,11 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import socket
+import socketserver
+import tempfile
 import threading
 import unittest
 from wsgiref.simple_server import WSGIRequestHandler, WSGIServer, make_server
@@ -26,11 +31,36 @@ class _Quiet(WSGIRequestHandler):
         pass
 
 
+class _UnixWSGIServer(WSGIServer):
+    """S14 가 쓸 모양 — 유닉스 소켓으로 받는 WSGI 서버. ``mark`` 가 참이면 environ 에 믿음 표지를 넣는다."""
+    address_family = socket.AF_UNIX
+    mark = False
+
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = "naver-engine", 0
+        self.setup_environ()
+
+
+class _UnixHandler(_Quiet):
+    def setup(self):
+        super().setup()
+        self.client_address = ("", 0)                 # 유닉스 소켓에는 IP 가 없다
+
+    def get_environ(self):
+        env = super().get_environ()
+        env["REMOTE_ADDR"] = ""
+        if self.server.mark:
+            env[WEB.TRUSTED_TRANSPORT] = True
+        return env
+
+
 class RelayToEngineTest(TW.WebBase):
     def setUp(self):
         super().setUp()
         self.server = make_server("127.0.0.1", 0, lambda env, sr: self.app(env, sr),
                                   server_class=WSGIServer, handler_class=_Quiet)
+        self.server.timeout = 5                          # 중계가 엔진을 안 부르면 기다리지 않고 돌아온다(시험이 멈추지 않게)
         self.addCleanup(self.server.server_close)
         self.env = {R.ENV_SWITCH: "on", R.ENV_ENGINE: f"127.0.0.1:{self.server.server_address[1]}"}
 
@@ -51,6 +81,36 @@ class RelayToEngineTest(TW.WebBase):
                           body=None if body is None else json.dumps(body).encode("utf-8"),
                           real_ip=real_ip, peer="172.17.0.1", host="d.example", fetch_site="same-origin")
 
+    def unix(self, mark: bool):
+        tmp = tempfile.mkdtemp(prefix="relay-e2e-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        path = os.path.join(tmp, "engine.sock")
+        srv = _UnixWSGIServer(path, _UnixHandler)
+        srv.mark = mark
+        srv.set_app(lambda env, sr: self.app(env, sr))
+        srv.timeout = 5
+        self.addCleanup(srv.server_close)
+        self.server, self.env = srv, {R.ENV_SWITCH: "on", R.ENV_ENGINE: "unix:" + path}
+
+    def logins(self, source, n, sso=TW.BAD_SSO):
+        return [self.via(self.inc("POST", "/session", body={"sso": sso}, real_ip=source)).status for _ in range(n)]
+
+    def test_unix_socket_with_mark_counts_each_source(self):
+        """유닉스 소켓(S14 권장) — 서버가 믿음 표지를 넣으면 중계가 넘긴 요청한 곳마다 따로 센다(검토 unix-source-collapse)."""
+        self.app = self.make_app(login_max=20, login_source_max=2, monotonic=lambda: 100.0)
+        self.unix(mark=True)
+        self.assertEqual(self.logins("203.0.113.10", 3), [401, 401, 429])
+        self.assertEqual(self.logins("203.0.113.20", 2), [401, 401])      # 다른 곳은 따로
+        self.erp.person(TW.MARK_SSO, 100)
+        self.assertEqual(self.logins("203.0.113.30", 5, sso=TW.MARK_SSO), [200] * 5)   # ① 이 받아 준 로그인은 한 곳 상한 밖
+
+    def test_unix_socket_without_mark_collapses(self):
+        """표지 없는 유닉스 서버 = 모두 한 곳 — S14 가 표지를 빠뜨리면 이렇게 된다는 것을 고정(표지가 왜 필요한지)."""
+        self.app = self.make_app(login_max=20, login_source_max=2, monotonic=lambda: 100.0)
+        self.unix(mark=False)
+        self.assertEqual(self.logins("203.0.113.10", 2), [401, 401])
+        self.assertEqual(self.logins("203.0.113.20", 1), [429])
+
     def test_same_answer_as_direct(self):
         tok = self.token(0)
         out = self.via(self.inc(sub="/board", token=tok))
@@ -63,15 +123,12 @@ class RelayToEngineTest(TW.WebBase):
         self.assertEqual((out.status, json.loads(out.body)), (401, {"error": "token-missing"}))
 
     def test_login_limit_counts_per_source_given_by_relay(self):
-        """엔진은 중계(루프백)가 넘긴 요청한 곳을 믿는다 — 한 곳이 몰아쳐도 다른 곳 로그인은 된다."""
+        """엔진은 중계(루프백)가 넘긴 요청한 곳을 믿는다 — 한 곳이 ① 이 거절할 토큰을 몰아쳐도 다른 곳 로그인은 된다."""
         self.app = self.make_app(login_max=10, login_source_max=2, monotonic=lambda: 100.0)
         self.erp.person(TW.MARK_SSO, 100)
-        a = [self.via(self.inc("POST", "/session", body={"sso": TW.MARK_SSO}, real_ip="203.0.113.10")).status
-             for _ in range(3)]
-        self.assertEqual(a, [200, 200, 429])
-        b = self.via(self.inc("POST", "/session", body={"sso": TW.MARK_SSO}, real_ip="203.0.113.20")).status
-        self.assertEqual(b, 200)
-        self.assertEqual(self.via(self.inc("POST", "/session", body={"sso": TW.MARK_SSO}, real_ip=None)).status, 200)
+        self.assertEqual(self.logins("203.0.113.10", 3), [401, 401, 429])
+        self.assertEqual(self.logins("203.0.113.20", 1), [401])
+        self.assertEqual(self.logins("203.0.113.20", 1, sso=TW.MARK_SSO), [200])
 
     def test_login_then_board_through_relay(self):
         self.erp.person(TW.MARK_SSO, 100)

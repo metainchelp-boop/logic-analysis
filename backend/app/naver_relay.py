@@ -16,6 +16,9 @@
 스위치
 - ``NAVER_AUTO_WEB=on`` 일 때만 켜진다. 없거나 다른 값이면 ``/naver`` · ``/api/naver-auto`` 는 없는 주소와 같은 404.
 - ``NAVER_AUTO_ENGINE`` = ``unix:/절대/경로.sock`` 또는 ``127.0.0.1:포트`` · ``[::1]:포트``.
+  없거나 모양이 틀리면 스위치가 켜져 있어도 ``/api/naver-auto`` 는 503(engine-unavailable) — 화면은 뜬다.
+  ③ 자기 자신을 가리키게 잘못 넣으면(되돌이) 503(engine-misconfigured).
+  엔진을 별도 컨테이너로 띄울 때(S14)는 **유닉스 소켓** — ③ 와 엔진이 같이 붙인 **폴더**(파일 하나가 아니라) 안의 소켓.
 
 기록
 - 토큰·본문·주소(IP)·쿼리는 어디에도 적지 않는다. 엔진에 닿지 못한 일만 종류 이름으로 1분에 한 줄.
@@ -57,7 +60,9 @@ ENGINE_HOST_HEADER = "naver-engine"   # 엔진은 Host 를 보지 않는다 — 
 _SUB = re.compile(r"(?:/[A-Za-z0-9_-]{1,64}){1,6}")
 _QUERY = re.compile(r"[\x21-\x7e]*")
 # 엔진 자체 토큰(session.py) = 「v1.본문.서명」. ③ 로그인 토큰(JWT · eyJ…)은 이 모양이 아니다 → 넘기지 않는다.
-_ENGINE_TOKEN = re.compile(r"Bearer v1\.[A-Za-z0-9_-]{1,4096}\.[A-Za-z0-9_-]{16,128}")
+# 「bearer」 대소문자 · 사이 빈칸은 엔진이 받는 만큼 받고, 넘길 때는 「Bearer 토큰」 한 모양으로 다시 쓴다.
+_ENGINE_TOKEN = re.compile(r"[Bb][Ee][Aa][Rr][Ee][Rr] +(v1\.[A-Za-z0-9_-]{1,4096}\.[A-Za-z0-9_-]{16,128}) *")
+_LENGTH = re.compile(r"[0-9]{1,10}")               # 엔진 답 길이 — ASCII 숫자만(위첨자 ² 같은 숫자 모양 글자 거절)
 _IP = re.compile(r"[0-9A-Fa-f:.]{1,64}")          # 엔진 _SOURCE 와 같은 모양
 _TCP = re.compile(r"(127\.0\.0\.1|\[::1\]):([0-9]{1,5})")
 _UNIX = re.compile(r"unix:(/[A-Za-z0-9_./-]{1,%d})" % (UNIX_PATH_MAX - 1))
@@ -154,18 +159,20 @@ def _err(status: int, code: str) -> Outgoing:
     return Outgoing(status, ('{"error":"%s"}' % code).encode("ascii"))
 
 
-_last_warn = {"at": -1e9}
+_last_warn: dict = {}                              # 종류 → 마지막으로 적은 때(종류마다 1분에 한 줄)
 _warn_lock = threading.Lock()
 _slots = threading.BoundedSemaphore(MAX_INFLIGHT)
 
 
 def _warn(kind: str) -> None:
-    """엔진에 닿지 못한 일 — 종류 이름만 · 1분에 한 줄(요청마다 쌓이지 않게)."""
+    """엔진에 닿지 못한 일 — 종류 이름만 · 종류마다 1분에 한 줄(요청마다 쌓이지 않게 · 한 종류가 다른 종류를 가리지 않게)."""
     now = time.monotonic()
     with _warn_lock:
-        if now - _last_warn["at"] < 60.0:
+        if now - _last_warn.get(kind, -1e9) < 60.0:
             return
-        _last_warn["at"] = now
+        if len(_last_warn) > 64:
+            _last_warn.clear()
+        _last_warn[kind] = now
     log.warning("관제 엔진 중계 실패: %s", kind)
 
 
@@ -207,14 +214,25 @@ class _UnixConnection(http.client.HTTPConnection):
         self._unix_path = path
 
     def connect(self):
-        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        try:
-            s.settimeout(self.timeout)
-            s.connect(self._unix_path)
-        except BaseException:
-            s.close()
-            raise
-        self.sock = s
+        """리눅스는 시간 제한이 걸린 유닉스 소켓의 connect 를 대기열이 차면 기다리지 않고 바로 EAGAIN 으로 돌려준다 —
+        연결 시간 제한 안에서 짧게 쉬며 다시 시도한다(엔진이 잠깐 바쁜 것을 「엔진 없음」으로 읽지 않게)."""
+        end = time.monotonic() + self.timeout
+        while True:
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                s.settimeout(max(0.01, end - time.monotonic()))
+                s.connect(self._unix_path)
+            except BlockingIOError:
+                s.close()
+                if time.monotonic() >= end:
+                    raise socket.timeout("connect") from None
+                time.sleep(0.02)
+                continue
+            except BaseException:
+                s.close()
+                raise
+            self.sock = s
+            return
 
 
 def _open(target: Target, timeout: float) -> http.client.HTTPConnection:
@@ -254,6 +272,9 @@ def relay(inc: Incoming, env: Optional[Mapping[str, str]] = None, *, total_timeo
         return _err(403, "cross-origin")
     if inc.method not in ("GET", "POST"):
         return _err(405, "method-not-allowed")
+    if isinstance(inc.host, str) and _host_only(inc.host) == ENGINE_HOST_HEADER:
+        _warn("engine-loop")                           # 엔진 주소를 ③ 자기 자신으로 잘못 넣었다 — 제 요청이 되돌아옴
+        return _err(503, "engine-misconfigured")
     if not isinstance(inc.sub, str) or not _SUB.fullmatch(inc.sub):
         return _err(404, "not-found")
     q = inc.query or ""
@@ -274,8 +295,9 @@ def relay(inc: Incoming, env: Optional[Mapping[str, str]] = None, *, total_timeo
                 return _err(415, "json-only")
             headers["Content-Type"] = "application/json"
         headers["Content-Length"] = str(len(body))
-    if inc.authorization and _ENGINE_TOKEN.fullmatch(inc.authorization[0]):
-        headers["Authorization"] = inc.authorization[0]          # 엔진 토큰만 · ③ 토큰은 넘기지 않는다
+    tok = _ENGINE_TOKEN.fullmatch(inc.authorization[0]) if inc.authorization else None
+    if tok:
+        headers["Authorization"] = "Bearer " + tok.group(1)      # 엔진 토큰만 · ③ 토큰은 넘기지 않는다
     src = source_of(inc)
     if src is not None:
         headers[SOURCE_HEADER] = src
@@ -294,27 +316,48 @@ def relay(inc: Incoming, env: Optional[Mapping[str, str]] = None, *, total_timeo
         _slots.release()
 
 
+def _cut(sock: socket.socket) -> None:
+    """마감 — 엔진과의 연결을 끊는다. 조금씩 흘리는 답 · 1xx 되풀이처럼 「읽을 때마다 시간 제한이 새로 열리는」 경우도
+    전체 시간(total_timeout) 안에 끝나게 하는 유일한 겹."""
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
+
+
 def _forward(inc: Incoming, target: Target, headers: dict, body: bytes, q: str, total_timeout: float) -> Outgoing:
     deadline = time.monotonic() + max(0.01, total_timeout)
     path = PREFIX + inc.sub + ("?" + q if q else "")
     conn = _open(target, min(CONNECT_TIMEOUT, max(0.01, total_timeout)))
+    timer: Optional[threading.Timer] = None
+
+    def late() -> bool:
+        return time.monotonic() >= deadline - 0.005
+
     try:
         try:
             conn.connect()
-            conn.sock.settimeout(max(0.01, deadline - time.monotonic()))
+            sock = conn.sock
+            timer = threading.Timer(max(0.0, deadline - time.monotonic()), _cut, (sock,))
+            timer.daemon = True
+            timer.start()
+            sock.settimeout(max(0.01, deadline - time.monotonic()))
             conn.putrequest(inc.method, path, skip_host=True, skip_accept_encoding=True)
             for k, v in headers.items():
                 conn.putheader(k, v)
             conn.endheaders(body if body else None)
             resp = conn.getresponse()
+            if late():                                  # 마감이 머리를 읽는 도중에 끊었다 — 잘린 머리를 판정하지 않는다
+                _warn("engine-timeout")
+                return _err(504, "engine-timeout")
             status = resp.status
             ctype = (resp.getheader("Content-Type") or "").split(";")[0].strip().lower()
-            length = resp.getheader("Content-Length") or ""
+            length = (resp.getheader("Content-Length") or "").strip()
             if status not in PASS_STATUS or ctype != "application/json":
                 _warn("engine-bad-answer")
                 return _err(502, "bad-gateway")
             # 엔진은 늘 길이를 말한다 — 길이 없는 답(조각 · 끊길 때까지)은 잘렸는지 알 수 없어 받지 않는다
-            if not length.isdigit() or resp.getheader("Transfer-Encoding"):
+            if not _LENGTH.fullmatch(length) or resp.getheader("Transfer-Encoding"):
                 _warn("engine-bad-answer")
                 return _err(502, "bad-gateway")
             if int(length) > RESPONSE_MAX:
@@ -324,13 +367,18 @@ def _forward(inc: Incoming, target: Target, headers: dict, body: bytes, q: str, 
         except socket.timeout:
             _warn("engine-timeout")
             return _err(504, "engine-timeout")
-        except _Truncated:
-            _warn("engine-cut")
+        except (_Truncated, OSError, http.client.HTTPException) as e:
+            if late():                                  # 마감이 끊은 연결 — 엔진이 늦은 것
+                _warn("engine-timeout")
+                return _err(504, "engine-timeout")
+            _warn("engine-cut" if isinstance(e, _Truncated) else type(e).__name__)
             return _err(503, "engine-unavailable")
-        except (OSError, http.client.HTTPException) as e:
-            _warn(type(e).__name__)
-            return _err(503, "engine-unavailable")
+        except ValueError:                              # 뜻밖의 답 모양 — ③ 500·스택으로 새지 않게
+            _warn("engine-bad-answer")
+            return _err(502, "bad-gateway")
     finally:
+        if timer is not None:
+            timer.cancel()
         conn.close()
     return Outgoing(status, data)
 

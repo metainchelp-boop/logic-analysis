@@ -119,7 +119,7 @@ class EngineCase(unittest.TestCase):
             self.addCleanup(srv.shutdown)
         self.env_tcp = {R.ENV_SWITCH: "on", R.ENV_ENGINE: f"127.0.0.1:{self.tcp.server_address[1]}"}
         self.env_unix = {R.ENV_SWITCH: "on", R.ENV_ENGINE: "unix:" + self.sock}
-        R._last_warn["at"] = -1e9
+        R._last_warn.clear()
         lg = logging.getLogger("naver_relay")
         nh = logging.NullHandler()
         lg.addHandler(nh)
@@ -185,12 +185,20 @@ class ForwardTest(EngineCase):
         self.assertEqual(self.eng.got[-1]["body"], b'{"ids":[1]}')
 
     def test_erp3_token_and_other_auth_never_forwarded(self):
-        for auth in ("Bearer " + ERP3_JWT, "Basic YWRtaW46YWRtaW4=", "Bearer v1.x.short", "bearer " + ENGINE_TOKEN,
-                     "Bearer " + ENGINE_TOKEN + " extra", "Bearer  " + ENGINE_TOKEN, ENGINE_TOKEN, ""):
+        for auth in ("Bearer " + ERP3_JWT, "Basic YWRtaW46YWRtaW4=", "Bearer v1.x.short", "Bearer " + ENGINE_TOKEN + " extra",
+                     ENGINE_TOKEN, "", "Bearer" + ENGINE_TOKEN, "Bearer\t" + ENGINE_TOKEN, "Bearer " + ENGINE_TOKEN + "\n",
+                     "Bearer v2." + ENGINE_TOKEN[3:], "Token " + ENGINE_TOKEN):
             R.relay(self.inc(authorization=(auth,)), self.env_tcp)
             self.assertNotIn("authorization", self.headers(), auth)
         R.relay(self.inc(authorization=()), self.env_tcp)
         self.assertNotIn("authorization", self.headers())
+
+    def test_engine_token_spelling_normalized(self):
+        """엔진이 받는 모양(bearer 대소문자 · 사이 빈칸 · 끝 빈칸)은 받아 「Bearer 토큰」 한 모양으로 넘긴다(검토 bearer-shape)."""
+        for auth in ("bearer " + ENGINE_TOKEN, "BEARER  " + ENGINE_TOKEN, "Bearer " + ENGINE_TOKEN + "  ",
+                     "bEaReR " + ENGINE_TOKEN):
+            R.relay(self.inc(authorization=(auth,)), self.env_tcp)
+            self.assertEqual(self.headers()["authorization"], "Bearer " + ENGINE_TOKEN, auth)
 
     def test_two_authorization_values_refused_before_engine(self):
         out = R.relay(self.inc(authorization=("Bearer " + ENGINE_TOKEN, "Bearer " + ENGINE_TOKEN)), self.env_tcp)
@@ -283,6 +291,11 @@ class RefuseBeforeEngineTest(EngineCase):
         out = R.relay(self.inc(method="POST", sub="/session", content_type="application/json", body=body), self.env_tcp)
         self.assertEqual(out.status, 200)
         self.assertEqual(len(self.eng.got[-1]["body"]), R.BODY_MAX)
+
+    def test_loop_to_itself(self):
+        """엔진 주소를 ③ 자기 자신으로 잘못 넣으면 중계가 넣은 Host(naver-engine)가 되돌아온다 — 바로 503(검토 self-loop)."""
+        for host in (R.ENGINE_HOST_HEADER, "Naver-Engine", R.ENGINE_HOST_HEADER + ":5051"):
+            self.assertRefused(self.inc(host=host, origin=None, fetch_site=None), 503, "engine-misconfigured")
 
     def test_not_configured(self):
         for env in ({R.ENV_SWITCH: "on"}, {R.ENV_SWITCH: "on", R.ENV_ENGINE: "10.0.0.1:80"}):
@@ -426,7 +439,7 @@ class LogTest(EngineCase):
                      (self.env_unix, {"cut": True}), (self.env_unix, {"status": 302}), (self.env_unix, {"delay": 0.5})]
         for env, eng in scenarios:
             self.eng.cut, self.eng.status, self.eng.delay = eng.get("cut", False), eng.get("status", 200), eng.get("delay", 0)
-            R._last_warn["at"] = -1e9
+            R._last_warn.clear()
             R.relay(self.inc(method="POST", sub="/session", content_type="application/json", body=body,
                              query=MARK_QUERY + "=1"), env, total_timeout=0.2)
         text = buf.getvalue()
@@ -439,6 +452,16 @@ class LogTest(EngineCase):
             for _ in range(5):
                 R.relay(self.inc(), {R.ENV_SWITCH: "on"})
         self.assertEqual(len(cm.output), 1)
+
+    def test_each_kind_gets_its_line(self):
+        """한 종류가 다른 종류를 가리지 않는다 — 종류마다 1분에 한 줄(검토 self-loop · 기록)."""
+        with self.assertLogs("naver_relay", level="WARNING") as cm:
+            for _ in range(3):
+                R.relay(self.inc(), {R.ENV_SWITCH: "on"})
+                R.relay(self.inc(host=R.ENGINE_HOST_HEADER, fetch_site=None), self.env_tcp)
+        self.assertEqual(len(cm.output), 2)
+        self.assertTrue(any("engine-not-configured" in x for x in cm.output))
+        self.assertTrue(any("engine-loop" in x for x in cm.output))
 
     def test_repr_hides_values(self):
         r = repr(self.inc(method="POST", body=MARK_BODY.encode(), origin="https://x.example"))
@@ -485,6 +508,172 @@ class PageFileTest(unittest.TestCase):
             self.assertIn(part, csp)
         self.assertNotIn("unsafe-eval", csp)
         self.assertNotIn("script-src 'self' 'unsafe-inline'", csp)
+
+
+# ── 날 바이트 엔진(모양이 이상한 답 · 느린 답 · 대기열) ───────────────────────
+class RawEngine:
+    """유닉스 소켓 · 연결마다 ``serve(conn)`` 을 부른다(요청 머리는 먼저 읽어 둔다). ``accept_after`` 초 동안은 받지 않는다."""
+
+    def __init__(self, path, serve, backlog=5, accept_after=0.0):
+        self.path, self.serve, self.accept_after = path, serve, accept_after
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.bind(path)
+        self.sock.listen(backlog)
+        self.stop = threading.Event()
+        self.conns = []
+        threading.Thread(target=self._loop, daemon=True).start()
+
+    def _loop(self):
+        if self.accept_after:
+            time.sleep(self.accept_after)
+        self.sock.settimeout(0.1)
+        while not self.stop.is_set():
+            try:
+                c, _ = self.sock.accept()
+            except (socket.timeout, OSError):
+                continue
+            self.conns.append(c)
+            threading.Thread(target=self._one, args=(c,), daemon=True).start()
+
+    def _one(self, c):
+        try:
+            c.settimeout(5)
+            buf = b""
+            while b"\r\n\r\n" not in buf:
+                got = c.recv(4096)
+                if not got:
+                    return
+                buf += got
+            self.serve(c)
+        except OSError:
+            pass
+        finally:
+            try:
+                c.close()
+            except OSError:
+                pass
+
+    def close(self):
+        self.stop.set()
+        self.sock.close()
+
+
+def _drip(c, data, gap):
+    for i in range(len(data)):
+        c.sendall(data[i:i + 1])
+        time.sleep(gap)
+
+
+class RawCase(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="relay-raw-")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.path = os.path.join(self.tmp, "e.sock")
+        self.env = {R.ENV_SWITCH: "on", R.ENV_ENGINE: "unix:" + self.path}
+        R._last_warn.clear()
+        lg = logging.getLogger("naver_relay")
+        nh = logging.NullHandler()
+        lg.addHandler(nh)
+        self.addCleanup(lg.removeHandler, nh)
+
+    def engine(self, serve, **kw):
+        e = RawEngine(self.path, serve, **kw)
+        self.addCleanup(e.close)
+        return e
+
+    def inc(self):
+        return R.Incoming(method="GET", sub="/board", authorization=("Bearer " + ENGINE_TOKEN,), real_ip=MARK_IP,
+                          host=HOST, fetch_site="same-origin")
+
+
+class DeadlineTest(RawCase):
+    """전체 시간(total_timeout)은 끝까지 지킨다 — 읽을 때마다 새로 열리는 소켓 시간 제한만으로는 안 된다(검토 total-deadline)."""
+
+    def assertTimesOut(self, serve):
+        self.engine(serve)
+        t = time.monotonic()
+        out = R.relay(self.inc(), self.env, total_timeout=0.6)
+        took = time.monotonic() - t
+        self.assertEqual((out.status, json.loads(out.body)), (504, {"error": "engine-timeout"}))
+        self.assertLess(took, 1.2)
+        self.assertEqual(R._slots._value, R.MAX_INFLIGHT)
+
+    def test_header_drip(self):
+        self.assertTimesOut(lambda c: _drip(c, b"HTTP/1.1 200 OK\r\n" + b"X-Slow: 1\r\n" * 200, 0.05))
+
+    def test_continue_forever(self):
+        def serve(c):
+            for _ in range(200):
+                c.sendall(b"HTTP/1.1 100 Continue\r\n\r\n")
+                time.sleep(0.05)
+        self.assertTimesOut(serve)
+
+    def test_body_drip(self):
+        def serve(c):
+            c.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n")
+            _drip(c, b"x" * 100, 0.05)
+        self.assertTimesOut(serve)
+
+    def test_quick_answer_not_cut(self):
+        body = b'{"ok":true}'
+        self.engine(lambda c: c.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
+                                        + str(len(body)).encode() + b"\r\n\r\n" + body))
+        for _ in range(3):
+            out = R.relay(self.inc(), self.env, total_timeout=0.6)
+            self.assertEqual((out.status, out.body), (200, body))
+
+
+class ContentLengthTest(RawCase):
+    """엔진 답 길이 칸 — ASCII 숫자만 · 이상한 값은 ③ 500·스택이 아니라 502(검토 content-length-superscript)."""
+
+    def answer(self, length_bytes, body=b'{"ok":true}'):
+        def serve(c):
+            c.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " + length_bytes
+                      + b"\r\n\r\n" + body)
+        return serve
+
+    def test_odd_lengths_refused(self):
+        for raw in (b"\xb2", b"1_1", b"+11", b"-1", b"0x0b", b"\xd9\xa1", b"11, 11", b" "):
+            e = self.engine(self.answer(raw))
+            out = R.relay(self.inc(), self.env)
+            self.assertEqual((out.status, json.loads(out.body)), (502, {"error": "bad-gateway"}), raw)
+            e.close()
+            os.unlink(self.path)
+
+    def test_trailing_space_ok(self):
+        self.engine(self.answer(b"11 "))
+        self.assertEqual(R.relay(self.inc(), self.env).status, 200)
+
+
+class UnixBacklogTest(RawCase):
+    """엔진 대기열이 잠깐 차도 「엔진 없음」이 아니다 — 연결 시간 제한 안에서 다시 시도(검토 unix-connect-no-wait)."""
+
+    def test_full_queue_then_free(self):
+        body = b'{"ok":true}'
+        self.engine(lambda c: c.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\n\r\n"
+                                        + body), backlog=0, accept_after=0.5)
+        fill = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.addCleanup(fill.close)
+        fill.connect(self.path)                                   # 대기열을 채운다(엔진은 아직 받지 않는다)
+        probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        probe.settimeout(1.0)
+        with self.assertRaises(BlockingIOError):                   # 이 머신에서 대기열이 정말 찼는지 먼저 확인
+            probe.connect(self.path)
+        probe.close()
+        t = time.monotonic()
+        out = R.relay(self.inc(), self.env)
+        self.assertEqual(out.status, 200)
+        self.assertGreater(time.monotonic() - t, 0.3)
+
+    def test_gives_up_after_connect_timeout(self):
+        self.engine(lambda c: None, backlog=0, accept_after=30)
+        fill = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.addCleanup(fill.close)
+        fill.connect(self.path)
+        t = time.monotonic()
+        out = R.relay(self.inc(), self.env, total_timeout=0.4)
+        self.assertEqual(out.status, 504)
+        self.assertLess(time.monotonic() - t, 1.0)
 
 
 # ── 구문 시험 ─────────────────────────────────────────────────────────
@@ -538,7 +727,7 @@ class StructureTest(unittest.TestCase):
     def test_router_relay_is_sync_def_and_copies_named_headers_only(self):
         tree = _tree(ROUTER_SRC)
         fns = {n.name: n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
-        for name in ("naver_relay_route", "naver_page_bare", "naver_page_root", "naver_page_file", "_page"):
+        for name in ("naver_relay_route", "naver_page_root", "naver_page_file", "_page"):
             self.assertIsInstance(fns[name], ast.FunctionDef, name)      # M7 — 스레드풀에서 돈다
         self.assertIsInstance(fns["_capped_body"], ast.AsyncFunctionDef)
         keys = set()
@@ -551,6 +740,18 @@ class StructureTest(unittest.TestCase):
         for bad in ("cookies", "dict(request.headers", "request.headers.items", "headers.raw", "x-forwarded-for",
                     "x-naver-auto-source", "urllib", "requests", "httpx"):
             self.assertNotIn(bad, src.lower())
+
+    def test_page_files_outside_static_mount(self):
+        """화면 파일 자리는 정적 마운트 폴더 밖 — 마운트가 어떤 주소 철자로도 닿지 못한다(검토 static-mount-bypass)."""
+        tree = _tree(ROUTER_SRC)
+        roots = [ast.unparse(n.value) for n in ast.walk(tree) if isinstance(n, ast.Assign)
+                 and any(isinstance(t, ast.Name) and t.id == "PAGE_ROOT" for t in n.targets)]
+        self.assertEqual(roots, ["pathlib.Path(__file__).resolve().parents[2] / 'naver_page'"])
+        self.assertFalse((BACKEND / "static" / "naver").exists())
+        self.assertFalse(any(p.is_dir() for p in (BACKEND / "static").rglob("naver*")))   # naver-categories.js 같은 파일은 무관
+        main = MAIN_SRC.read_text(encoding="utf-8")
+        self.assertIn('_static = pathlib.Path(__file__).resolve().parent.parent / "static"', main)
+        self.assertNotIn("naver_page", main)                  # 정적 마운트가 그 폴더를 가리키지 않는다
 
     def test_router_before_static_mount(self):
         """M6 — 스위치 라우터가 정적 마운트보다 먼저 등록된다(정적 마운트가 /naver/ 를 먼저 내주지 않게)."""

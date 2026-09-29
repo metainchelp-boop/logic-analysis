@@ -54,10 +54,14 @@ QUERY_MAX = 2048
 LOGIN_WINDOW = 60.0                  # 로그인은 이 초 안에
 LOGIN_MAX = 60                       # 전체 이만큼까지(① 커넥션 풀을 지킨다 · 프로세스 하나 기준)
 LOGIN_SOURCE_MAX = 6                 # 한 곳(요청한 곳)에서 이만큼까지 — 한 곳이 모두의 로그인을 막지 못하게(검토 login-throttle)
+#                                      ① 이 받아 준 로그인은 한 곳 창에서 되돌린다 — 사무실처럼 여럿이 한 주소로 나가도 막히지 않게(S12 검토)
 LOGIN_SOURCES_KEPT = 4096            # 기억하는 요청한 곳 수 상한(메모리)
 # 요청한 곳 — ③ 중계(S12)가 넣는 머리. 중계(같은 서버 · 루프백)에서 온 요청일 때만 믿고, 아니면 연결한 주소를 쓴다.
 SOURCE_HEADER = "HTTP_X_NAVER_AUTO_SOURCE"
 TRUSTED_PEERS = frozenset({"127.0.0.1", "::1"})
+# 유닉스 소켓으로 받는 서버(S14)는 IP 가 없다 — 그 서버가 environ 에 이 표지(True)를 넣으면 루프백과 같이 믿는다.
+# HTTP_ 로 시작하지 않는 키라 브라우저 머리로는 만들 수 없다(서버만 넣는다) · 소켓 파일 권한이 곧 경계.
+TRUSTED_TRANSPORT = "naver_engine.trusted_transport"
 _SOURCE = re.compile(r"[0-9A-Fa-f:.]{1,64}")
 LINK_BATCH_MAX = 50
 NOTE_MAX = 200
@@ -352,8 +356,9 @@ class App:
             self._quiet_audit[result] = t
         self._audit(None, "login", "session", None, result, now, required=False)
 
-    def _throttle(self, source: str, now: datetime) -> None:
-        """① 을 부를 로그인만 센다 — 한 곳에서 창마다 ``login_source_max`` · 전체 ``login_max``."""
+    def _throttle(self, source: str, now: datetime) -> float:
+        """① 을 부를 로그인만 센다 — 한 곳에서 창마다 ``login_source_max`` · 전체 ``login_max``. 센 시각을 돌려준다
+        (① 이 받아 주면 ``_refund`` 가 한 곳 창에서만 되돌린다 · 전체 창은 그대로 — ① 커넥션 보호)."""
         t = self._mono()
         with self._lock:
             self._logins = [x for x in self._logins if t - x < self._login_window]
@@ -372,12 +377,23 @@ class App:
         if over:
             self._quiet("throttled", now)
             raise HttpError(429, "too-many-logins")
+        return t
+
+    def _refund(self, source: str, t: float) -> None:
+        """① 이 받아 준 로그인 — 한 곳 창에서 되돌린다(한 곳 상한은 ① 이 거절한 시도만 막는다 · 검토 office-nat-bucket)."""
+        with self._lock:
+            mine = self._logins_by.get(source)
+            if mine and t in mine:
+                mine.remove(t)
+                if not mine:
+                    self._logins_by.pop(source, None)
 
     @staticmethod
     def _source(environ) -> str:
         peer = environ.get("REMOTE_ADDR") or ""
         hdr = environ.get(SOURCE_HEADER) or ""
-        if peer in TRUSTED_PEERS and isinstance(hdr, str) and _SOURCE.fullmatch(hdr):
+        trusted = peer in TRUSTED_PEERS or environ.get(TRUSTED_TRANSPORT) is True
+        if trusted and isinstance(hdr, str) and _SOURCE.fullmatch(hdr):
             return hdr
         return peer if isinstance(peer, str) and peer else "unknown"
 
@@ -399,12 +415,14 @@ class App:
         except EP.ProfileError as e:   # 토큰 모양이 틀림 — ① 을 부르지 않는다
             self._quiet(e.kind, now)
             raise HttpError(401, e.kind) from None
-        self._throttle(self._source(environ or {}), now)   # ① 을 부를 시도만 센다
+        source = self._source(environ or {})
+        counted = self._throttle(source, now)   # ① 을 부를 시도만 센다
         try:
             prof = self._profiles.read_profile(sso)
         except EP.ProfileError as e:
             self._audit(None, "login", "session", None, e.kind, now, required=False)
             raise HttpError(401 if e.kind == EP.KIND_REJECTED else 503, e.kind) from None
+        self._refund(source, counted)   # ① 이 받아 준 사람 — 한 곳 창에서 되돌린다(전체 창은 그대로)
         store = self._open_read()
         try:
             org = W.load_org(store)

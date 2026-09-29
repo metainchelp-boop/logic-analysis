@@ -30,8 +30,9 @@ def run_harness(mode, *extra, timeout=90):
     try:
         shutil.copytree(BACKEND / "app", tmp / "app", ignore=shutil.ignore_patterns("__pycache__"))
         shutil.copytree(BACKEND / "static", tmp / "static")
-        naver = tmp / "static" / "naver"
+        naver = tmp / "naver_page"                         # 화면 파일 자리 — 정적 마운트(static/) 밖
         naver.mkdir(exist_ok=True)
+        shutil.copy(BACKEND / "naver_page" / "README.md", naver / "README.md")
         (naver / "index.html").write_text("<!doctype html><title>M6PROBE-INDEX</title>", encoding="utf-8")
         (naver / "m6.js").write_text("// M6PROBE-JS", encoding="utf-8")
         (naver / "secret.py").write_text("M6PROBE-PY", encoding="utf-8")
@@ -57,19 +58,19 @@ class M6EntranceTest(unittest.TestCase):
         cls.r = run_harness("m6")
 
     def test_off_is_same_as_missing_route(self):
-        ref = self.r["ref_get"]
-        self.assertEqual(ref["status"], 404)
+        """방식마다 — 없는 주소가 주는 답(GET·HEAD 404 · 그 밖 405)과 상태·본문·형식이 같다(검토 off-method-fingerprint)."""
         for method, p, res in self.r["off"]:
-            self.assertEqual(res["status"], 404, (method, p))
+            ref = (self.r["ref_api"] if p.startswith("/api/") else self.r["ref"])[method]
+            self.assertEqual((res["status"], res["text"], res["headers"].get("content-type")),
+                             (ref["status"], ref["text"], ref["headers"].get("content-type")), (method, p))
             self.assertNotIn("M6PROBE", res["text"], (method, p))
-            if method == "GET":
-                self.assertEqual(res["text"], ref["text"], (method, p))
-                self.assertEqual(res["headers"].get("content-type"), ref["headers"].get("content-type"))
-        self.assertGreaterEqual(len(self.r["off"]), 60)
+        self.assertEqual(self.r["ref"]["GET"]["status"], 404)
+        self.assertEqual(self.r["ref"]["POST"]["status"], 405)
+        self.assertGreaterEqual(len(self.r["off"]), 70)
 
     def test_on_serves_page_with_guard_headers(self):
         on = {(m, p): res for m, p, res in self.r["on"]}
-        for key in (("GET", "/naver"), ("GET", "/naver/"), ("GET", "/naver/index.html")):
+        for key in (("GET", "/naver/"), ("GET", "/naver/index.html")):
             res = on[key]
             self.assertEqual(res["status"], 200, key)
             self.assertIn("M6PROBE-INDEX", res["text"])
@@ -80,7 +81,8 @@ class M6EntranceTest(unittest.TestCase):
         self.assertEqual((on[("HEAD", "/naver/")]["status"], on[("HEAD", "/naver/")]["text"]), (200, ""))
         self.assertEqual(on[("GET", "/naver/m6.js")]["status"], 200)
         self.assertTrue(on[("GET", "/naver/m6.js")]["headers"]["content-type"].startswith("text/javascript"))
-        for key in (("GET", "/naver/secret.py"), ("GET", "/naver/%2e%2e/%2e%2e/app/main.py"), ("GET", "/naver/missing.js")):
+        for key in (("GET", "/naver"), ("GET", "/naver/secret.py"), ("GET", "/naver/%2e%2e/%2e%2e/app/main.py"),
+                    ("GET", "/naver/missing.js"), ("GET", "/naver/README.md"), ("GET", "/naver_page/index.html")):
             self.assertEqual(on[key]["status"], 404, key)
             self.assertNotIn("M6PROBE", on[key]["text"])
             self.assertNotIn("import", on[key]["text"])
@@ -88,6 +90,93 @@ class M6EntranceTest(unittest.TestCase):
         eng = on[("GET", "/api/naver-auto/board")]
         self.assertEqual((eng["status"], json.loads(eng["text"])), (503, {"error": "engine-unavailable"}))
         self.assertEqual(self.r["health"]["status"], 200)
+
+
+@unittest.skipUnless(HAS_FASTAPI, "fastapi 없음 — 서버 이미지 또는 시험용 가상환경에서 돌린다")
+class M6BypassTest(unittest.TestCase):
+    """다른 주소 철자(빗금 둘 · 점 · 퍼센트)로도 스위치를 못 건너뛴다 — 화면이 나가면 반드시 라우터 머리(CSP)가 붙어 있다
+    (검토 static-mount-bypass · 날 요청 줄을 진짜 uvicorn 에)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.r = run_harness("bypass")
+
+    def test_off_never_serves(self):
+        for p, res in self.r["off"]:
+            self.assertNotIn("M6PROBE", res["text"], p)
+            self.assertIn(res["status"], (400, 404), p)
+
+    def test_on_only_through_router(self):
+        served = []
+        for p, res in self.r["on"]:
+            if "M6PROBE" in res["text"]:
+                served.append(p)
+                h = res["headers"]
+                self.assertIn("connect-src 'self'", h.get("content-security-policy", ""), p)
+                self.assertEqual((h.get("cache-control"), h.get("referrer-policy")), ("no-store", "no-referrer"), p)
+        self.assertIn("/naver/", served)
+        self.assertIn("/naver/index.html", served)
+
+
+@unittest.skipUnless(HAS_FASTAPI, "fastapi 없음 — 서버 이미지 또는 시험용 가상환경에서 돌린다")
+class BodyReadTest(unittest.TestCase):
+    """라우터 본문 읽기 — 64KB 를 넘는 순간 더 읽지 않는다(길이를 말하면 한 조각도 안 읽는다) · 꺼져 있으면 안 읽는다.
+    중계 본체도 64KB 를 막지만(겹) 여기서 끊어야 큰 본문이 메모리에 쌓이지 않는다."""
+
+    @classmethod
+    def setUpClass(cls):
+        import asyncio
+        if str(BACKEND) not in sys.path:
+            sys.path.insert(0, str(BACKEND))
+        from starlette.requests import Request
+        from app.routers import naver as N
+        cls.N, cls.Request, cls.asyncio = N, Request, asyncio
+
+    def read(self, chunks, headers=(), method="POST", on=True):
+        pulled = []
+        it = iter(chunks)
+
+        async def receive():
+            c = next(it, None)
+            pulled.append(c)
+            if c is None:
+                return {"type": "http.request", "body": b"", "more_body": False}
+            return {"type": "http.request", "body": c, "more_body": True}
+        scope = {"type": "http", "method": method, "path": "/api/naver-auto/session", "headers": list(headers),
+                 "query_string": b""}
+        old = os.environ.get("NAVER_AUTO_WEB")
+        os.environ["NAVER_AUTO_WEB"] = "on" if on else "off"
+        try:
+            got = self.asyncio.run(self.N._capped_body(self.Request(scope, receive)))
+        except Exception as e:           # 꺼짐 — HTTPException
+            got = e
+        finally:
+            if old is None:
+                os.environ.pop("NAVER_AUTO_WEB", None)
+            else:
+                os.environ["NAVER_AUTO_WEB"] = old
+        return got, len(pulled)
+
+    def test_stops_right_after_limit(self):
+        got, pulled = self.read([b"x" * 4096] * 1000)
+        self.assertEqual(got, 413)
+        self.assertLessEqual(pulled, 64 * 1024 // 4096 + 1)
+
+    def test_declared_length_refused_without_reading(self):
+        got, pulled = self.read([b"x" * 4096] * 100, headers=[(b"content-length", str(64 * 1024 + 1).encode())])
+        self.assertEqual((got, pulled), (413, 0))
+        got, pulled = self.read([b"{}"], headers=[(b"content-length", b"x2")])
+        self.assertEqual((got, pulled), (400, 0))
+
+    def test_under_limit_read_whole(self):
+        got, _ = self.read([b'{"sso":', b'"x"}'])
+        self.assertEqual(got, b'{"sso":"x"}')
+
+    def test_off_reads_nothing(self):
+        got, pulled = self.read([b"x" * 4096] * 3, on=False)
+        self.assertEqual((getattr(got, "status_code", None), pulled), (405, 0))
+        got, pulled = self.read([b"x"], method="GET", on=False)
+        self.assertEqual((getattr(got, "status_code", None), pulled), (404, 0))
 
 
 @unittest.skipUnless(HAS_FASTAPI, "fastapi 없음 — 서버 이미지 또는 시험용 가상환경에서 돌린다")
