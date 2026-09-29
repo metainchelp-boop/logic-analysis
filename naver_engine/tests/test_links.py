@@ -1032,6 +1032,12 @@ class RecordPairingTest(Base):
             with self.subTest(r=r if not isinstance(r, dict) else sorted(r.items())):
                 with self.assertRaises(S.StoreRefused):
                     self.st.record_pairing(self.clock.t, **self.args([r]))
+        # 고객 번호 한도(15자리) — 목록 대조보다 먼저 모양에서 거절(목록 대조의 「낡음」이 아니다 · 검토 issues-oversized)
+        for r in ({"state": "blocked", "possibility_id": 13, "customer_id": 10 ** 15, "code": "not-linked"},
+                  dict(ok, customer_id=10 ** 15)):
+            with self.assertRaises(S.StoreRefused) as cm:
+                self.st.record_pairing(self.clock.t, **self.args([r]))
+            self.assertNotIsInstance(cm.exception, S.PairingStale)
         with self.assertRaises(S.StoreRefused):
             self.st.record_pairing(self.clock.t, **self.args([ok, dict(ok)]))                    # 같은 줄 두 번
         for counts in ({"prospects": 1}, {"prospects": 1, "ignored": -1}, {"prospects": 1, "ignored": 0, "auto": 5},

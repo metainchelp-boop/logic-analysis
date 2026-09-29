@@ -493,6 +493,9 @@ class StoreIssueTest(Base):
         with self.assertRaises(S.StoreRefused):
             self.st.record_decision(13, big, "confirmed", 0, self.fc.now())
         self.st.record_decision(13, big - 1, "confirmed", 0, self.fc.now())
+        with self.assertRaises(S.StoreRefused):                          # 따로 적는 옛 길도 같은 한도
+            self.st.record_account_day(self.rid, big, status="ok", rules_run=(), rules_not_run=(),
+                                       checked_at=self.fc.now())
         self.assertIsNone(self.st.account_day(A, TODAY))
 
     def test_campaign_provisional_must_be_bool(self):
