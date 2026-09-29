@@ -179,8 +179,8 @@ class MigrationTest(Base):
         self.assertIsNone(self.st.stage_as_of())
         self.assertIsNone(self.st.hold(S.SYNC_STAGES))
 
-    def test_version_is_three(self):
-        self.assertEqual(S.SCHEMA_VERSION, 3)   # 3 = S8(계정 시각 · 짝 결과) — 판을 올리면 이관 시험도 함께 본다
+    def test_version_is_four(self):
+        self.assertEqual(S.SCHEMA_VERSION, 4)   # 4 = S9(이슈 · 이슈 기록) — 판을 올리면 이관 시험도 함께 본다(test_morning)
 
 
 # ── 목록 급감 브레이크 — 가망 ──────────────────────────────────────────
@@ -1289,7 +1289,13 @@ PRIVILEGED = ("record_org", "refuse_org", "refuse_stages", "confirm_prospects_ho
               "record_pairing", "record_pairing_event",
               # 사람 판단 쓰기 — 「확인」은 자동 규칙을 모두 이긴다. 범위를 검사하는 S11 길이 생기기 전까지 엔진 어디서도 부르지
               # 않는다(검토 security-4 · 생기면 그 모듈 한 곳만 더한다)
-              "record_decision", "revoke_decision")
+              "record_decision", "revoke_decision",
+              # 아침 점검(S9) — 계정 하루치·이슈를 따로 적으면 「정상」만 남고 이슈가 빠지거나, 규칙을 거치지 않은 이슈가
+              # 생긴다. 회차·계정 결과·연결 해제 닫기는 morning.py 한 곳에서만 · 따로 적는 옛 함수는 어디서도 부르지 않는다
+              "begin_run", "finish_run", "record_account_check", "close_unlinked_issues", "record_account_day",
+              "record_campaign_days",
+              # 이슈 사람의 손길 — 누가 누를 수 있는지 판정하는 S11 길이 생기기 전까지 엔진 어디서도 부르지 않는다
+              "ack_issue", "resolve_issue", "except_issue")
 BANNED_NAMES = ("exec", "eval", "compile", "__import__", "globals", "vars", "locals", "open", "breakpoint",
                 "__builtins__", "getattr_static")
 BANNED_ATTRS = ("modules", "__dict__", "__getattribute__", "__subclasses__", "__globals__", "__code__",
@@ -1399,9 +1405,11 @@ class SyncGuardTest(unittest.TestCase):
             uses = _privileged_uses(ast.parse(p.read_text(encoding="utf-8")))
             if uses:
                 found[self.rel(p)] = uses
-        self.assertEqual(set(found), {"sync.py", "links.py"})
+        self.assertEqual(set(found), {"sync.py", "links.py", "morning.py"})
         self.assertEqual(found["sync.py"], {"record_org", "refuse_org", "refuse_stages", "confirm_prospects_hold"})
         self.assertEqual(found["links.py"], {"confirm_accounts_hold", "record_pairing", "record_pairing_event"})
+        self.assertEqual(found["morning.py"], {"begin_run", "finish_run", "record_account_check",
+                                               "close_unlinked_issues"})
 
     def test_privileged_guard_catches_bypasses(self):
         bad = ('def f(st):\n    getattr(st, "record_" + "org")(1, 2)\n',
@@ -1412,6 +1420,8 @@ class SyncGuardTest(unittest.TestCase):
                'def f(st):\n    st.confirm_accounts_hold(1, 0)\n',
                'def f(st):\n    st.record_decision(1, 2, "confirmed", 0, None)\n',
                'def f(st):\n    getattr(st, "revoke_" + "decision")(1, 0, None, "x")\n',
+               'def f(st):\n    st.except_issue(1, 0, "lead", None, "x", None)\n',
+               'def f(st):\n    getattr(st, "record_account_" + "day")(1, 2)\n',
                'import builtins\nbuiltins.getattr\n',
                'def f(st):\n    __builtins__["getattr"](st, "x")\n',
                'def f():\n    __import__("naver_engine.store")\n')

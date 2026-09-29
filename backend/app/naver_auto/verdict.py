@@ -7,6 +7,7 @@
 - **⚪ 는 절대 🟢 로 보이지 않는다.** 계정 하나라도 「오늘 · 온전히」 점검되지 않았으면 그 가망은 🟢 가 될 수 없다.
   「오늘」은 계정 결과의 날짜로 대조한다 — 어제 결과가 오늘 것처럼 보이지 않게.
 - 「돌았지만 규칙 일부를 온전한 자료로 못 돌림」도 ⚪ 다(반박 C1(a)).
+- 이어졌던 짝의 계정이 오늘 이관 목록에 없으면(첫날) ⚪ 「오늘 이관 목록에 없음」 — 확인 필요 아니오(대표 결정 I2 ⓐ).
 - 마감(08:00) 전 아직 안 돈 계정은 ⚪ 「점검 전」(확인 필요 아니오), 마감 뒤는 「점검 안 됨」(확인 필요 예) — 반박 M2.
 - 전산 고객 번호로 이어진 자동 짝은 색과 상관없이 「확인 필요 예(계정 확인 전)」 — 반박 H4.
 - 🙈 예외는 기간 안에서만 세지 않는다. 기간이 끝난 예외는 다시 🆕 처럼 센다.
@@ -29,7 +30,8 @@ CHECK_PARTIAL = "partial"            # 일부만 읽힘 · 일부 규칙을 못 
 CHECK_KEY_REJECTED = "key_rejected"  # 네이버가 그 계정 읽기를 거절(401·403·1006·1018)
 CHECK_DATA_LATE = "data_late"        # 네이버 어제 자료가 아직 다 안 들어옴(기준 시각)
 CHECK_SYSTEM_GAP = "system_gap"      # 우리 쪽 자료 문제(예: 전산 단계 자료가 오래됨) — 직원이 할 일이 없고 대표 시스템 경보로 간다
-CHECK_LINK_BROKEN = "link_broken"    # 확인했던 짝이 대행 연결 목록에서 사라짐(반박 H1)
+CHECK_LINK_BROKEN = "link_broken"    # 확인했던 짝이 대행 연결 목록에서 사라짐(반박 H1) — 이관 빠짐(🔴 이슈는 따로 · I1 ⓐ)
+CHECK_LINK_MISSING = "link_missing"  # 이어졌던 짝의 계정이 오늘 이관 목록에 없음 — 아직 이관 빠짐 아님(첫날 · I2 ⓐ)
 CHECK_NOT_ELIGIBLE = "not_eligible"  # 들어가면 안 되는 계정(예: 전산 종료일이 14일 넘게 지남) — 손잡이 거절
 
 LINK_CONFIRMED, LINK_AUTO = "confirmed", "auto"
@@ -43,6 +45,7 @@ _WHITE_NEEDS = {
     CHECK_KEY_REJECTED: True,
     CHECK_LINK_BROKEN: True,
     CHECK_NOT_ELIGIBLE: True,
+    CHECK_LINK_MISSING: False,       # 첫날 「오늘 이관 목록에 없음」 — 이슈 없음 · 그날 점검 못 함 표시만(대표 결정 I2 ⓐ)
     CHECK_DATA_LATE: False,          # 네이버 쪽 늦음 — 직원이 할 일이 없다(시스템 경보는 따로)
     CHECK_SYSTEM_GAP: False,         # 우리 쪽 자료 문제 — 모든 광고주가 한꺼번에 「확인 필요」로 뜨지 않게(시스템 경보는 따로)
     CHECK_PENDING: False,
@@ -50,7 +53,7 @@ _WHITE_NEEDS = {
 }
 # 화면에 먼저 보일 ⚪ 사유(앞일수록 먼저)
 _WHITE_ORDER = (CHECK_NOT_CHECKED, CHECK_PARTIAL, CHECK_KEY_REJECTED, CHECK_LINK_BROKEN, CHECK_NOT_ELIGIBLE,
-                CHECK_DATA_LATE, CHECK_SYSTEM_GAP, CHECK_PENDING, WHITE_NO_LINK)
+                CHECK_LINK_MISSING, CHECK_DATA_LATE, CHECK_SYSTEM_GAP, CHECK_PENDING, WHITE_NO_LINK)
 _STATUSES = frozenset(_WHITE_ORDER) - {WHITE_NO_LINK} | {CHECK_OK}
 
 SEV_RED, SEV_YELLOW, SEV_INFO = "red", "yellow", "info"
@@ -110,8 +113,8 @@ def _account_status(a: AccountCheck, today: date, deadline_passed: bool) -> str:
         raise ValueError("모르는 짝 상태")
     if a.checked_on is not None and type(a.checked_on) is not date:
         raise ValueError("점검 날짜는 날짜(date)여야 한다")   # 시각이 오면 「오늘이 아님」으로 조용히 떨어진다
-    if a.status in (CHECK_LINK_BROKEN, CHECK_NOT_ELIGIBLE):
-        return a.status                  # 날짜와 상관없이 그 상태
+    if a.status in (CHECK_LINK_BROKEN, CHECK_NOT_ELIGIBLE, CHECK_LINK_MISSING):
+        return a.status                  # 날짜와 상관없이 그 상태(부르는 쪽이 오늘 짝 맞추기의 상태를 넣는다)
     if a.checked_on != today:            # 어제(이전) 결과는 오늘 결과가 아니다
         return CHECK_NOT_CHECKED if deadline_passed else CHECK_PENDING
     if a.status == CHECK_PENDING and deadline_passed:

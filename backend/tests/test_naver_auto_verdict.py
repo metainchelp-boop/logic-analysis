@@ -188,11 +188,30 @@ class SufficiencyTest(unittest.TestCase):
 
     def test_white_order_fixed(self):
         self.assertEqual(V._WHITE_ORDER, (V.CHECK_NOT_CHECKED, V.CHECK_PARTIAL, V.CHECK_KEY_REJECTED,
-                                          V.CHECK_LINK_BROKEN, V.CHECK_NOT_ELIGIBLE, V.CHECK_DATA_LATE,
-                                          V.CHECK_SYSTEM_GAP, V.CHECK_PENDING, V.WHITE_NO_LINK))
+                                          V.CHECK_LINK_BROKEN, V.CHECK_NOT_ELIGIBLE, V.CHECK_LINK_MISSING,
+                                          V.CHECK_DATA_LATE, V.CHECK_SYSTEM_GAP, V.CHECK_PENDING, V.WHITE_NO_LINK))
         self.assertEqual({k for k, v in V._WHITE_NEEDS.items() if v},
                          {V.CHECK_NOT_CHECKED, V.CHECK_PARTIAL, V.CHECK_KEY_REJECTED, V.CHECK_LINK_BROKEN,
                           V.CHECK_NOT_ELIGIBLE})
+
+
+class LinkMissingTest(unittest.TestCase):
+    """대표 결정 I2 ⓐ — 첫날 「오늘 이관 목록에 없음」은 ⚪ · 확인 필요 아니오 · 마감 뒤에도 · 🟢 는 아님."""
+
+    def test_white_without_attention(self):
+        for now in (BEFORE, AFTER):
+            v = j([acc(V.CHECK_LINK_MISSING, on=TODAY - timedelta(days=3))], now=now)
+            self.assertEqual((v.color, v.needs_attention, v.white_reason), (V.WHITE, False, V.CHECK_LINK_MISSING))
+
+    def test_other_account_decides_attention(self):
+        v = j([acc(V.CHECK_LINK_MISSING), acc(V.CHECK_OK)])
+        self.assertEqual((v.color, v.needs_attention), (V.WHITE, False))
+        v = j([acc(V.CHECK_LINK_MISSING), acc(V.CHECK_PARTIAL)])
+        self.assertEqual((v.color, v.needs_attention, v.white_reason), (V.WHITE, True, V.CHECK_PARTIAL))
+
+    def test_red_link_broken_issue_wins(self):
+        v = j([acc(V.CHECK_LINK_BROKEN)], [iss(V.SEV_RED)])
+        self.assertEqual((v.color, v.needs_attention), (V.RED, True))
 
 
 class ReprTest(unittest.TestCase):
