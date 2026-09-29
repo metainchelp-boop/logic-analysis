@@ -786,6 +786,15 @@ class AccountTest(Base):
         with self.assertRaises(S.StoreRefused) as cm:
             self.st.finish_run(rid, "failed", NOW, error_kind="https://api.example/7654321 boom")
         self.assertNotIn("7654321", str(cm.exception))
+        long_mark = "긴표지Q7" * 30                                           # 글자 칸이 너무 길 때 — 값이 문구에 실리지 않는다
+        with self.assertRaises(S.StoreRefused) as cm:
+            self.st.record_campaign_days(rid, 1234567, DAY, [camp(1234567, "cmp-a001", statusReason=long_mark)], {},
+                                         provisional=True, read_at=NOW)
+        self.assertNotIn("긴표지Q7", str(cm.exception))
+        did = self.st.record_decision(11, 1234567, "confirmed", 0, NOW)
+        with self.assertRaises(S.StoreRefused) as cm:
+            self.st.revoke_decision(did, 0, NOW, long_mark)
+        self.assertNotIn("긴표지Q7", str(cm.exception))
 
 
 class DecisionTest(Base):
