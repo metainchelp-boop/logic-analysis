@@ -2,12 +2,13 @@
 
 낱말 찾기가 아니라 코드 구조를 본다(별칭 · 글자 쪼개기 · exec 로 빠져나가지 못하게 — 적대 검토 「시험 충분성」).
 
-- 네트워크를 여는 모듈(urllib · http · socket · ssl · requests …)은 **관문 두 개**(설계 v1.8 M9)에서만 import 한다 —
-  네이버 관문 ``naver_read.py`` · ① 전산 관문 ``erp_read.py``.
+- 네트워크를 여는 모듈(urllib · http · socket · ssl · requests …)은 **관문 세 개**(설계 v1.8 M9 · S10)에서만 import 한다 —
+  네이버 관문 ``naver_read.py`` · ① 전산 읽기 관문 ``erp_read.py`` · ① 전산 알림 관문 ``erp_alert.py``.
 - 관문 안에서도 요청을 만드는 곳은 그 관문 ``_gate`` 의 ``Request(`` 한 곳, 보내는 곳은 ``_gate`` 의 ``.send(`` 한 곳이다.
   실제로 여는 곳은 엔진 전체에서 ``UrllibTransport.send`` 의 ``._opener.open(`` 한 곳뿐이다(① 관문도 같은 전송을 쓴다).
   다른 연결 방식(HTTPSConnection 등)은 이름조차 없다.
-- 방식 이름으로 쓰이는 글자(대소문자 무관 · 글자 이어 붙이기 포함)는 ``GET`` 뿐이다.
+- 방식 이름으로 쓰이는 글자(대소문자 무관 · 글자 이어 붙이기 포함)는 ``GET`` 뿐이다 — 단 ① 알림 관문 ``erp_alert.py``
+  한 곳만 ``POST`` 뿐이다(그 파일에는 ``GET`` 도 없다 · 읽기 관문 둘에는 ``POST`` 가 없다).
 - ③ 쓰기 어댑터·앱 본체를 import 하지 않고, exec · eval · compile · __import__ · importlib · sys.modules · 글자로 된
   getattr 같은 우회도 없다.
 - 비밀값은 ``credentials.py`` 밖에서 ``_value`` 로 꺼내지 않고, ``reveal`` 은 관문 ``_gate`` 안에서만 쓴다.
@@ -23,7 +24,10 @@ import unittest
 ENGINE = pathlib.Path(__file__).resolve().parents[1]
 SOURCES = sorted(p for p in ENGINE.rglob("*.py") if "tests" not in p.parts)
 # 관문 모듈 → (요청을 만드는 클래스, 관문을 부르는 함수)
-GATES = {"naver_read.py": ("NaverReader", "_request"), "erp_read.py": ("ErpReader", "_get")}
+GATES = {"naver_read.py": ("NaverReader", "_request"), "erp_read.py": ("ErpReader", "_get"),
+         "erp_alert.py": ("ErpAlertPoster", "_post")}
+# 관문 모듈 → 그 관문이 만드는 단 하나의 방식(S10 — 넣기는 ① 알림 관문 하나 · 나머지는 읽기만)
+GATE_METHOD = {"naver_read.py": "GET", "erp_read.py": "GET", "erp_alert.py": "POST"}
 NET_MODULES = ("urllib", "http", "socket", "ssl", "requests", "httpx", "aiohttp", "subprocess", "asyncio",
                "ftplib", "smtplib", "telnetlib", "xmlrpc", "multiprocessing")
 FORBIDDEN_MODULES = ("app.adapters", "app.main", "app.collector", "app.database", "app.security", "app.models",
@@ -110,7 +114,8 @@ def _folded_strings(tree: ast.AST):
 class GuardrailTest(unittest.TestCase):
     def test_sources_found(self):
         names = {p.name for p in SOURCES}
-        self.assertTrue({"naver_read.py", "erp_read.py", "handles.py", "fields.py", "credentials.py", "store.py"} <= names)
+        self.assertTrue({"naver_read.py", "erp_read.py", "erp_alert.py", "handles.py", "fields.py", "credentials.py",
+                         "store.py"} <= names)
 
     def test_database_only_in_store(self):
         """저장 파일을 여는 곳은 ``store.py`` 한 곳 — 쓰는 곳 하나(대표 결정 D10) · 지우기 거절 연결을 건너뛰지 못하게.
@@ -190,9 +195,38 @@ class GuardrailTest(unittest.TestCase):
 
     def test_method_words_only_get(self):
         for p in SOURCES:
+            want = GATE_METHOD.get(p.name, "GET")
             for _n, s in _folded_strings(_code_tree(p)):
                 if s.strip().upper() in METHOD_WORDS:
-                    self.assertEqual(s, "GET", f"{p.name}: 방식 이름 {s!r}")
+                    self.assertEqual(s, want, f"{p.name}: 방식 이름 {s!r}")
+
+    def test_post_only_in_alert_gate(self):
+        """넣기(POST)는 ① 알림 관문 하나 — 그 파일의 방식 글자는 POST 뿐이고, 다른 파일에는 POST 가 없다."""
+        seen = {}
+        for p in SOURCES:
+            for _n, s in _folded_strings(_code_tree(p)):
+                if s.strip().upper() in METHOD_WORDS:
+                    seen.setdefault(p.name, set()).add(s)
+        self.assertEqual(seen.get("erp_alert.py"), {"POST"})
+        self.assertEqual({n for n, w in seen.items() if "POST" in w}, {"erp_alert.py"})
+
+    def test_alert_gate_borrows_host_from_read_gate(self):
+        """알림 관문은 호스트·주소를 스스로 적지 않고 읽기 관문의 한 글자(``ERP_HOST``)를 가져다 쓴다."""
+        tree = _tree(ENGINE / "erp_alert.py")
+        for n in ast.walk(tree):
+            if isinstance(n, (ast.Assign, ast.AnnAssign)):
+                targets = n.targets if isinstance(n, ast.Assign) else [n.target]
+                for t in targets:
+                    if isinstance(t, ast.Name):
+                        self.assertNotIn(t.id, ("ERP_HOST", "BASE_URL", "ERP_SCHEME", "BASE_HOST"), t.id)
+        for _n, s in _folded_strings(_code_tree(ENGINE / "erp_alert.py")):
+            self.assertNotIn("metainc.co.kr", s, "알림 관문에 호스트 글자가 있다")
+            self.assertFalse(s.startswith("http"), "알림 관문에 주소 글자가 있다")
+        got = set()
+        for node, mod in _imports(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "erp_read" and node.level == 1:
+                got |= {a.name for a in node.names}
+        self.assertTrue({"ERP_HOST", "BASE_URL", "ERP_SCHEME"} <= got)
 
     def test_single_request_path_in_gate_module(self):
         opens = []
@@ -222,7 +256,7 @@ class GuardrailTest(unittest.TestCase):
             self.assertTrue(gate_calls, gate)
             for n in gate_calls:
                 self.assertIsInstance(n.args[0], ast.Constant, f"{gate}: 관문에는 방식 이름을 글자 그대로 넘긴다")
-                self.assertEqual(n.args[0].value, "GET")
+                self.assertEqual(n.args[0].value, GATE_METHOD[gate])
                 self.assertEqual(owner.get(n), (cls, caller), f"{gate}: 관문은 정해진 한 곳에서만 부른다")
         self.assertEqual(opens, [("naver_read.py", ("UrllibTransport", "send"))], "실제로 여는 곳은 엔진 전체에 한 곳")
 
