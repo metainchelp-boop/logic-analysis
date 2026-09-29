@@ -477,6 +477,14 @@ class ComposeTest(Base):
         AL.compose(self.st, self.now(at(SAT, 9, 30)), ON)
         self.assertEqual({r["held_reason"] for r in self.recips(S.ALERT_LEAD_DIGEST, SAT).values()}, {"weekend"})
 
+    def test_weekend_shadow_summary_counts_only_what_would_go(self):
+        self.issues(SAT, [(11, A, "red"), (12, B, "yellow"), (13, C_, "yellow")])
+        self.org()
+        AL.compose(self.st, self.now(at(SAT, 8, 0)), AL.SHADOW)
+        p = self.recips(S.ALERT_SHADOW_SUMMARY, SAT)[0]["params"]
+        # 주말: 🔴 가 든 요약만 갔을 것(100 · 1 · 0) — 🟡 만인 101 의 요약과 09:30 팀장 묶음은 주말이라 남겨 둔다
+        self.assertEqual((p["people"], p["msgs"]), (3, 3))
+
     def test_weekend_shadow_summary_only_with_red(self):
         AL.compose(self.st, self.now(at(SAT, 8, 0)), AL.SHADOW)   # 🔴 가 열려 있다(화요일부터)
         self.assertEqual(self.recips(S.ALERT_SHADOW_SUMMARY, SAT)[0]["status"], "pending")
