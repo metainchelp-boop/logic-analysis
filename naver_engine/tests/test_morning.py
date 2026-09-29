@@ -409,6 +409,30 @@ class StoreIssueTest(Base):
         self.put(findings=(F("bizmoney", "bizmoney_low", f"acc:{A}", "yellow"),))
         self.put(cid=B, pid=12)
         self.assertEqual(self.st.issues()[0]["state"], "new")
+        self.put(cid=B, pid=11)                                   # 같은 가망 · 다른 계정 — A 의 이슈는 그대로
+        self.assertEqual(self.st.issues()[0]["state"], "new")
+
+    def test_bad_rule_output_refused(self):
+        bad = I.Change(I.IssueState("gone", "red", TODAY, TODAY), I.EV_OPENED, None)
+        with mock.patch.object(I, "observe", return_value=bad):
+            with self.assertRaises(S.StoreRefused):
+                self.put(findings=(F("bizmoney", "bizmoney_low", f"acc:{A}", "red"),))
+        self.assertIsNone(self.st.account_day(A, TODAY))
+        bad = I.Change(I.IssueState("new", "red", TODAY, TODAY), "vanished", None)
+        with mock.patch.object(I, "observe", return_value=bad):
+            with self.assertRaises(S.StoreRefused):
+                self.put(findings=(F("bizmoney", "bizmoney_low", f"acc:{A}", "red"),))
+        self.assertEqual(self.st.issues(), [])
+
+    def test_human_refusals_before_rules(self):
+        self.put(findings=(F("bizmoney", "bizmoney_low", f"acc:{A}", "red"),))
+        iid = self.st.issues()[0]["issue_id"]
+        for by, at_ in ((-1, T0), (True, T0), ("0", T0), (0, T0 + timedelta(hours=1)), (0, datetime(2026, 9, 29, 6))):
+            with self.assertRaises(S.StoreRefused) as cm:
+                self.st.ack_issue(iid, by, at_)
+            self.assertNotIsInstance(cm.exception, S.IssueRefused, repr((by, at_)))   # 규칙까지 가기 전에 거절
+        self.assertEqual(self.st.issues()[0]["state"], "new")
+        self.assertEqual([e["kind"] for e in self.st.issue_events(iid)], ["opened"])
 
     def test_human_hands(self):
         self.put(findings=(F("bizmoney", "bizmoney_low", f"acc:{A}", "red"),))
@@ -749,6 +773,19 @@ class LinkStateTest(Base):
         self.assertEqual(self.naver.calls, [])                                       # 이관 상태는 네이버를 부르지 않는다
         self.assertEqual(out.counts["targets"], 0)
 
+    def test_blocked_row_for_same_account_does_not_skip_it(self):
+        self.standard_ads()
+        self.at(T0)
+        self.st.record_prospects(E.StageSnapshot({11: srow(11), 13: srow(13)}, T0 - timedelta(minutes=5), {}, ()))
+        self.st.record_accounts(kids(A), T0 - timedelta(minutes=4))
+        self.st.record_decision(11, A, "confirmed", 0, T0 - timedelta(minutes=3))
+        res = L.pair_links(FakeErp([E.NaverIdRow(13, M.VENDOR_NAVER, str(A))]), self.st, T0 - timedelta(minutes=2))
+        rows = self.st.pairing_rows(res.pairing_id)
+        self.assertIn(("blocked", 13, A), [(r["state"], r["possibility_id"], r["customer_id"]) for r in rows])
+        out = self.run_check()
+        self.assertNotIn(MO.CODE_PAIR_DUPLICATE, out.codes)          # 막힘 줄은 짝이 아니다 — 두 짝으로 세지 않는다
+        self.assertEqual((self.day(A)["status"], self.day(A)["possibility_id"]), ("ok", 11))
+
     def test_blocked_rows_are_not_read(self):
         self.standard_ads()
         self.at(T0)
@@ -889,6 +926,23 @@ class DeadlineTest(Base):
         self.assertEqual(self.st.run(out.run_id)["error_kind"], MO.CODE_DEADLINE_CUT)
         self.assertEqual(self.st.issues(), [])
         self.assertNotIn("/stats", seen)                               # 마감을 넘긴 뒤로는 부르지 않는다
+
+
+class DeadlineLastReadTest(Base):
+    def test_last_read_finishing_after_deadline_is_not_written(self):
+        self.standard_ads()
+        self.scene(t=datetime.combine(TODAY, time(7, 59), tzinfo=KST) + timedelta(seconds=30))
+
+        def tick(call):
+            if call.path == "/stats" and "timeIncrement" in call.query:
+                self.fc.advance(40)                                    # 첫 계정의 마지막 읽기가 08:00 뒤에 끝남
+        self.naver.tick = tick
+        out = self.run_check()
+        self.assertIn(MO.CODE_DEADLINE_CUT, out.codes)
+        first = int(next(c.customer for c in self.naver.calls if c.path == "/ncc/campaigns"))
+        self.assertIsNone(self.day(first))
+        self.assertEqual(out.counts["deadline_left"], 2)
+        self.assertEqual(self.st.issues(), [])
 
 
 class AbortTest(Base):
