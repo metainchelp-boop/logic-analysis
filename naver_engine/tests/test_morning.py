@@ -512,6 +512,8 @@ class UnlinkStoreTest(Base):
         self.assertEqual({i["code"] for i in self.st.issues(open_only=True)}, {"bizmoney_empty", "running_zero_spend"})
         # 다음 날: 자동 짝이 ① 에서 사라짐(짝 맞추기에 B 없음) — 어제 이어졌으므로 하루 기다린다
         t1 = self.at(T0 + timedelta(days=1))
+        self.ads.cycle = datetime.combine(t1.date(), time(5, 0), tzinfo=KST)
+        self.st.record_prospects(E.StageSnapshot({11: srow(11), 12: srow(12)}, t1 - timedelta(minutes=5), {}, ()))
         self.st.record_accounts(kids(A, B), t1 - timedelta(minutes=4))
         res = L.pair_links(FakeErp(()), self.st, t1 - timedelta(minutes=2))
         self.assertEqual(res.outcome, S.SYNC_ACCEPTED)
@@ -520,6 +522,8 @@ class UnlinkStoreTest(Base):
         self.assertEqual({i["state"] for i in self.st.issues()}, {"new"})
         # 그다음 날에도 없음 → 「연결 해제로 닫힘」
         t2 = self.at(T0 + timedelta(days=2))
+        self.ads.cycle = datetime.combine(t2.date(), time(5, 0), tzinfo=KST)
+        self.st.record_prospects(E.StageSnapshot({11: srow(11), 12: srow(12)}, t2 - timedelta(minutes=5), {}, ()))
         self.st.record_accounts(kids(A, B), t2 - timedelta(minutes=4))
         L.pair_links(FakeErp(()), self.st, t2 - timedelta(minutes=2))
         out = MO.run_morning(self.reader(), self.st, self.fc.now)
@@ -910,7 +914,8 @@ class ReadsTest(Base):
         self.assertEqual((a["status"], a["data_late"], a["yday_spend"]), ("data_late", 1, None))
         self.assertIn("bizmoney", a["rules_run"])
         self.assertIn(("bizmoney_low", "red"), {(i["code"], i["severity"]) for i in self.st.issues()})
-        self.assertFalse(out.alert)
+        self.assertIn(MO.CODE_DATA_LATE, out.codes)                  # 판정은 확인 필요 아니오 — 경보로 따로 알린다
+        self.assertTrue(out.alert)
         rows = self.st.campaign_days(A, YDAY, YDAY)
         self.assertTrue(rows and all(r["sales_amt"] is None and r["metrics_read"] == 0 for r in rows))   # 덜 들어온 어제
 
@@ -1078,14 +1083,39 @@ class OrderTest(Base):
         self.st.record_account_check(rid, B, possibility_id=12, link="confirmed", status="ok", rules_run=("bizmoney",),
                                      rules_not_run=(), checked_at=self.fc.now(),
                                      findings=(F("bizmoney", "bizmoney_low", f"acc:{B}", "red"),))
+        self.st.record_account_check(rid, A, possibility_id=11, link="confirmed", status="ok", rules_run=("bizmoney",),
+                                     rules_not_run=(), checked_at=self.fc.now())
         self.st.finish_run(rid, "done", self.fc.now())
         self.at(T0)
         self.run_check()
-        order = []
-        for c in self.naver.calls:
-            if c.path == "/ncc/campaigns":
-                order.append(int(c.customer))
-        self.assertEqual(order, [B, C_, A])
+        self.assertEqual(self.read_order(), [B, C_, A])
+
+    def read_order(self):
+        return [int(c.customer) for c in self.naver.calls if c.path == "/ncc/campaigns"]
+
+    def test_cut_at_deadline_comes_first_next_day(self):
+        """마감에 잘려 어제 줄이 없는 계정은 다음 날 앞에서 읽는다(매일 같은 꼬리가 잘리지 않게 · 검토 deadline-starvation)."""
+        pairs = ((11, A), (12, B), (13, C_))
+        for _p, cid in pairs:
+            self.ads.add(cid, [(1, "ELIGIBLE", False, steady())])
+        self.scene(confirmed=pairs, auto=(), t=datetime.combine(TODAY, time(7, 58), tzinfo=KST))
+
+        def slow(call):
+            if call.path == "/ncc/campaigns":
+                self.fc.advance(50)                                   # 한 계정 50초 — 셋째 계정은 08:00 을 넘는다
+        self.naver.tick = slow
+        out = self.run_check()
+        self.assertIn(MO.CODE_DEADLINE_CUT, out.codes)
+        self.assertIsNone(self.day(C_))
+        self.naver.calls.clear()
+        t1 = self.at(T0 + timedelta(days=1))
+        self.ads.cycle = datetime.combine(t1.date(), time(5, 0), tzinfo=KST)
+        self.naver.tick = None
+        self.st.record_prospects(E.StageSnapshot({p: srow(p) for p, _c in pairs}, t1 - timedelta(minutes=5), {}, ()))
+        self.st.record_accounts(kids(A, B, C_), t1 - timedelta(minutes=4))
+        self.assertEqual(L.pair_links(FakeErp(), self.st, t1 - timedelta(minutes=2)).outcome, S.SYNC_ACCEPTED)
+        self.run_check()
+        self.assertEqual(self.read_order()[0], C_)
 
 
 class DuplicateTest(Base):
@@ -1104,6 +1134,255 @@ class DuplicateTest(Base):
         self.assertTrue(out.alert)
         dup = self.st.pairing_rows(self.st.last_pairing("accepted")["pairing_id"])[0]["customer_id"]
         self.assertIsNone(self.day(dup))
+
+
+# ── 적대 검토 반영(S9) ──────────────────────────────────────────────
+class ReviewFixTest(Base):
+    def many(self, n, start=100, cid0=5_000_000):
+        pairs = tuple((start + i, cid0 + i) for i in range(n))
+        for _p, cid in pairs:
+            self.ads.add(cid, [(1, "ELIGIBLE", False, steady())])
+        return pairs
+
+    def repair(self, t, confirmed=(), auto=(), pids=None):
+        """t 에 단계 · 연결 목록 · 짝 맞추기를 다시(점검 전 순서 그대로)."""
+        pids = pids or [p for p, _c in confirmed] + [p for p, _c in auto]
+        self.st.record_prospects(E.StageSnapshot({p: srow(p) for p in pids}, t - timedelta(minutes=5), {}, ()))
+        self.st.record_accounts(kids(*[c for _p, c in confirmed] + [c for _p, c in auto]), t - timedelta(minutes=4))
+        res = L.pair_links(FakeErp([E.NaverIdRow(p, M.VENDOR_NAVER, str(c)) for p, c in auto]), self.st,
+                           t - timedelta(minutes=2))
+        self.assertEqual(res.outcome, S.SYNC_ACCEPTED, res)
+        return res
+
+    def test_retry_rereads_account_whose_pair_moved_to_other_prospect(self):
+        """회차 사이에 계정이 다른 가망 짝으로 바뀌면 다시 도는 회차가 새 짝으로 읽는다(검토 failclosed-retry)."""
+        self.standard_ads()
+        self.ads.acc[A]["biz"] = 10000.0
+        self.scene()
+        out = MO.run_morning(self.reader(max_calls=5), self.st, self.fc.now)   # A 를 적은 뒤 B 에서 호출 상한
+        self.assertEqual(out.outcome, MO.OUT_FAILED)
+        self.assertEqual(self.day(A)["possibility_id"], 11)
+        t = self.fc.now() + timedelta(minutes=10)
+        self.at(t)
+        self.st.record_decision(13, A, "confirmed", 0, t - timedelta(minutes=3))   # 사람이 A 를 가망 13 으로 확인
+        NAMES[B] = shop(12)
+        self.repair(t, confirmed=((13, A),), auto=((12, B),), pids=[11, 12, 13])   # 판단은 위에서 적음(목록용)
+        self.fc.advance(21 * 60)
+        self.assertTrue(MO.morning_due(self.st, self.fc.now()))
+        out2 = self.run_check()
+        self.assertEqual(out2.outcome, MO.OUT_DONE)
+        self.assertEqual(self.day(A)["possibility_id"], 13)
+        self.assertIn(("bizmoney_low", 13), {(i["code"], i["possibility_id"]) for i in self.st.issues(open_only=True)})
+
+    def test_data_late_rechecked_same_morning(self):
+        """자료 늦음으로 끝난 회차 뒤 20분 — 늦은 계정만 다시 읽어 ④⑤⑥ 을 돌린다(검토 failclosed-data-late)."""
+        self.standard_ads()
+        self.ads.cycle = datetime.combine(TODAY, time(0, 0), tzinfo=KST) - timedelta(minutes=1)
+        self.scene()
+        out = self.run_check()
+        self.assertEqual(out.outcome, MO.OUT_DONE)
+        self.assertEqual((self.day(A)["status"], self.day(B)["status"]), ("data_late", "data_late"))
+        self.assertIn(MO.CODE_DATA_LATE, out.codes)
+        self.assertFalse(MO.morning_due(self.st, self.fc.now()))            # 20분 전
+        self.ads.cycle = datetime.combine(TODAY, time(6, 50), tzinfo=KST)
+        self.fc.advance(21 * 60)
+        self.assertTrue(MO.morning_due(self.st, self.fc.now()))
+        out2 = self.run_check()
+        self.assertEqual((out2.outcome, out2.counts["targets"]), (MO.OUT_DONE, 2))
+        self.assertNotIn(MO.CODE_DATA_LATE, out2.codes)
+        self.assertEqual((self.day(A)["status"], self.day(B)["status"]), ("ok", "ok"))
+        self.fc.advance(21 * 60)
+        self.assertFalse(MO.morning_due(self.st, self.fc.now()))            # 끝나지 않은 짝이 없다
+        self.assertEqual(self.run_check().codes, (MO.CODE_DONE_TODAY,))
+
+    def test_done_run_with_all_ok_is_not_rerun(self):
+        self.standard_ads()
+        self.scene()
+        self.run_check()
+        self.fc.advance(21 * 60)
+        self.assertFalse(MO.morning_due(self.st, self.fc.now()))
+        before = len(self.naver.calls)
+        self.assertEqual(self.run_check().codes, (MO.CODE_DONE_TODAY,))
+        self.assertEqual(len(self.naver.calls), before)
+
+    def test_stale_cycle_is_late_not_a_crash(self):
+        """기준 시각이 창보다 오래되어도 회차가 죽지 않는다 — 그 계정은 자료 늦음 · 평균 없음(검토 stale-cycle)."""
+        self.standard_ads()
+        self.scene()
+        p = {x["possibility_id"]: x for x in self.st.prospects()}[11]
+        for days in (22, 23, 40):
+            with self.subTest(days=days):
+                self.ads.cycle = datetime.combine(TODAY - timedelta(days=days), time(5), tzinfo=KST)
+                reads = MO.read_account(self.reader(), H.issue_check_handle(
+                    customer_id=A, possibility_id=11, link_state="confirmed", stage=p["stage_key"],
+                    stage_as_of=self.st.stage_as_of(), latest_end_date=None, now=self.fc.now()),
+                    A, TODAY, self.fc.now, datetime.combine(TODAY, time(8), tzinfo=KST))
+                acc, _day = MO.account_input(A, reads, TODAY, MO.DEFAULTS)
+                self.assertTrue(acc.data_late)
+                if days >= 23:                                        # 평균 7일이 읽은 기간 밖으로 — 모름(0 이 아니다)
+                    self.assertIsNone(acc.avg_daily_spend)
+                else:
+                    self.assertIsNotNone(acc.avg_daily_spend)
+        self.ads.cycle = datetime.combine(TODAY - timedelta(days=30), time(5), tzinfo=KST)
+        out = self.run_check()
+        self.assertEqual(out.outcome, MO.OUT_DONE)
+        self.assertNotIn(MO.CODE_ACCOUNT_ERROR, out.codes)
+        self.assertEqual(self.day(A)["status"], "partial")               # 평균 모름 → ③ 못 돌림 → 일부만(늦음보다 앞)
+        self.assertNotEqual(self.day(B)["status"], "ok")
+
+    def test_one_account_unexpected_error_is_isolated(self):
+        self.standard_ads()
+        self.scene()
+        real = MO.account_input
+
+        def boom(cid, *a, **k):
+            if cid == A:
+                raise KeyError("x")
+            return real(cid, *a, **k)
+        with mock.patch.object(MO, "account_input", side_effect=boom):
+            out = self.run_check()
+        self.assertEqual(out.outcome, MO.OUT_DONE)
+        self.assertIn(MO.CODE_ACCOUNT_ERROR, out.codes)
+        self.assertTrue(out.alert)
+        self.assertIsNone(self.day(A))
+        self.assertEqual(self.day(B)["status"], "ok")
+        self.assertEqual(out.counts["account_error"], 1)
+
+    def test_yesterday_rejected_accounts_do_not_trip_all_rejected(self):
+        """어제도 키 거절이던 계정(광고주별)이 맨 앞에 서도 「전 계정 거절」로 멈추지 않는다(검토 key-order)."""
+        good = self.many(5, start=300, cid0=6_000_050)                 # 광고계정 번호가 겹치지 않게(가짜 목록 규칙)
+        bad = self.many(12, start=100, cid0=5_000_000)
+        for _p, cid in bad:
+            self.ads.fail[(cid, "camps")] = (403, {"code": 1006})
+        self.scene(confirmed=bad + good, auto=())
+        out = self.run_check()                                      # 첫날: 가망 번호 순이라 거절 12곳이 먼저 → 멈춤
+        self.assertIn(MO.CODE_KEY_REJECTED_ALL, out.codes)
+        t = self.at(T0 + timedelta(days=1))
+        self.ads.cycle = datetime.combine(t.date(), time(5), tzinfo=KST)
+        self.repair(t, confirmed=bad + good)
+        yday_status = {cid: self.st.account_day(cid, TODAY) for _p, cid in bad}
+        self.assertEqual(sum(1 for v in yday_status.values() if v and v["status"] == "key_rejected"), 10)
+        out = self.run_check()
+        self.assertNotIn(MO.CODE_KEY_REJECTED_ALL, out.codes)
+        self.assertEqual(out.outcome, MO.OUT_DONE)
+        self.assertEqual({self.day(c, t.date())["status"] for _p, c in good}, {"ok"})
+        # 오늘 처음 거절되는 계정 10곳이면 여전히 멈춘다
+        t2 = self.at(T0 + timedelta(days=2))
+        self.ads.cycle = datetime.combine(t2.date(), time(5), tzinfo=KST)
+        fresh = self.many(10, start=200, cid0=7_000_100)
+        for _p, cid in fresh:
+            self.ads.fail[(cid, "camps")] = (403, {"code": 1006})
+        for fp, fc in fresh:
+            self.st.record_decision(fp, fc, "confirmed", 0, t2 - timedelta(minutes=3))
+        self.repair(t2, confirmed=bad + fresh + good)
+        self.assertIn(MO.CODE_KEY_REJECTED_ALL, self.run_check().codes)
+
+    def test_key_abort_sample_is_rechecked_by_retry(self):
+        """전체 키 거절로 멈춘 회차가 적은 「키 거절」 계정은 다시 도는 회차가 다시 읽는다(검토 retry-skips-key)."""
+        pairs = self.many(12)
+        for _p, cid in pairs:
+            self.ads.fail[(cid, "camps")] = (403, {"code": 1006})
+        self.scene(confirmed=pairs, auto=())
+        out = self.run_check()
+        self.assertIn(MO.CODE_KEY_REJECTED_ALL, out.codes)
+        self.assertEqual(len(self.st.issues(open_only=True)), 10)
+        self.ads.fail.clear()
+        self.fc.advance(21 * 60)
+        self.assertTrue(MO.morning_due(self.st, self.fc.now()))
+        out2 = self.run_check()
+        self.assertEqual((out2.outcome, out2.counts["targets"]), (MO.OUT_DONE, 12))
+        self.assertEqual({self.day(c)["status"] for _p, c in pairs}, {"ok"})
+        self.assertEqual({i["code"] for i in self.st.issues(open_only=True)}, set())
+
+    def test_naver_outage_stops_and_retry_rereads(self):
+        """네이버 서버 오류가 몰리면 회차를 멈추고 알린다 · 20분 뒤 다시 읽는다(검토 server-outage)."""
+        pairs = self.many(12)
+        for _p, cid in pairs:
+            self.ads.fail[(cid, "camps")] = (503, {"code": 503})
+        self.scene(confirmed=pairs, auto=())
+        out = self.run_check()
+        self.assertEqual((out.outcome, out.alert), (MO.OUT_FAILED, True))
+        self.assertIn(MO.CODE_NAVER_UNAVAILABLE, out.codes)
+        self.assertEqual(self.st.run(out.run_id)["error_kind"], MO.CODE_NAVER_UNAVAILABLE)
+        self.ads.fail.clear()
+        self.fc.advance(21 * 60)
+        self.assertTrue(MO.morning_due(self.st, self.fc.now()))
+        out2 = self.run_check()
+        self.assertEqual(out2.outcome, MO.OUT_DONE)
+        self.assertEqual({self.day(c)["status"] for _p, c in pairs}, {"ok"})
+
+    def test_few_server_errors_do_not_stop(self):
+        pairs = self.many(12)
+        self.ads.fail[(pairs[0][1], "camps")] = (503, {"code": 503})
+        self.scene(confirmed=pairs, auto=())
+        out = self.run_check()
+        self.assertEqual(out.outcome, MO.OUT_DONE)
+        self.assertNotIn(MO.CODE_NAVER_UNAVAILABLE, out.codes)
+        self.assertEqual(self.day(pairs[0][1])["status"], "partial")
+
+    def test_not_ready_late_alerts(self):
+        """마감 30분 전까지 준비가 안 되면 경보(짝 맞추기 낡음처럼 경보 없는 막힘도 · 검토 pairing-stale)."""
+        self.standard_ads()
+        self.scene()
+        t = self.at(datetime.combine(TODAY, time(7, 0), tzinfo=KST))
+        self.st.record_accounts(kids(A, B), t)                   # 새 연결 목록 → 짝 맞추기가 낡음
+        r = MO.readiness(self.st, t)
+        self.assertEqual(r.codes, (MO.CODE_PAIRING_STALE,))
+        self.assertFalse(set(r.codes) & MO.ALERTING)
+        r = MO.readiness(self.st, self.at(datetime.combine(TODAY, time(7, 29), tzinfo=KST)))
+        self.assertNotIn(MO.CODE_NOT_READY_LATE, r.codes)
+        r = MO.readiness(self.st, self.at(datetime.combine(TODAY, time(7, 30), tzinfo=KST)))
+        self.assertIn(MO.CODE_NOT_READY_LATE, r.codes)
+        self.assertTrue(set(r.codes) & MO.ALERTING)
+        self.assertFalse(r.ready)
+        out = self.run_check()
+        self.assertEqual((out.outcome, out.alert), (MO.OUT_REFUSED, True))
+
+    def test_stuck_running_run_is_closed_next_time(self):
+        """회차가 죽으면서 닫기도 실패하면 — 다음에 부를 때 실패로 닫고 돈다(검토 stuck-running)."""
+        self.standard_ads()
+        self.scene()
+        with mock.patch.object(self.st, "record_account_check", side_effect=S.StoreError("disk")), \
+                mock.patch.object(self.st, "finish_run", side_effect=S.StoreError("disk")):
+            with self.assertRaises(S.StoreError):
+                self.run_check()
+        [run] = self.st.runs_on(TODAY)
+        self.assertEqual(run["status"], "running")
+        self.assertEqual(self.st.my_running_runs(), [run["run_id"]])
+        self.fc.advance(21 * 60)
+        self.assertTrue(MO.morning_due(self.st, self.fc.now()))
+        out = self.run_check()
+        self.assertEqual(out.outcome, MO.OUT_DONE)
+        self.assertIn(MO.CODE_RUN_ORPHANED, out.codes)
+        self.assertTrue(out.alert)
+        old = self.st.run(run["run_id"])
+        self.assertEqual((old["status"], old["error_kind"]), ("failed", MO.CODE_RUN_ORPHANED))
+        self.assertEqual(self.st.my_running_runs(), [])
+
+    def test_other_process_running_run_still_blocks(self):
+        self.standard_ads()
+        self.scene()
+        # 다른 프로세스가 시작한 회차(이 저장소가 시작한 것이 아니다) — 닫지 않고 기다린다
+        self.st._conn.execute("INSERT INTO naver_auto_check_run (run_date, started_at, status) VALUES (?, ?, 'running')",
+                              (TODAY.isoformat(), self.fc.now().isoformat()))
+        self.assertFalse(MO.morning_due(self.st, self.fc.now()))
+        self.assertEqual(self.run_check().codes, (MO.CODE_RUN_RUNNING,))
+
+    def test_bad_customer_id_row_does_not_stop_run(self):
+        """규칙이 받지 않는 고객 번호 줄 하나가 회차 전체를 멈추지 않는다(검토 oversized-customer-id)."""
+        self.standard_ads()
+        self.scene()
+        real = self.st.pairing_rows
+
+        def with_bad(pid):
+            rows = real(pid)
+            return rows + [dict(rows[0], state="broken", possibility_id=77, customer_id=10 ** 15, link="confirmed",
+                                code=S.PAIR_CODE_NEVER_LISTED)]
+        with mock.patch.object(self.st, "pairing_rows", side_effect=with_bad):
+            out = self.run_check()
+        self.assertEqual(out.outcome, MO.OUT_DONE)
+        self.assertIn(MO.CODE_STORE_REFUSED, out.codes)
+        self.assertEqual((self.day(A)["status"], self.day(B)["status"]), ("ok", "ok"))
 
 
 if __name__ == "__main__":

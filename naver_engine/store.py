@@ -2352,6 +2352,19 @@ class Store:
         return {int(cid): st for cid, st in self._conn.execute(
             "SELECT customer_id, status FROM naver_auto_account_day WHERE day = ?", (_day_text(day, "날짜"),))}
 
+    def account_day_marks_on(self, day: date) -> dict:
+        """그 날 계정 하루치 {고객 번호: (상태, 가망 번호)} — 같은 날 다시 도는 회차가 「이 짝이 오늘 끝났나」를 가망까지
+        대조해 본다(회차 사이에 계정이 다른 가망 짝으로 바뀌면 새 짝을 다시 읽게 · 검토 failclosed-retry)."""
+        return {int(cid): (st, None if pid is None else int(pid)) for cid, st, pid in self._conn.execute(
+            "SELECT customer_id, status, possibility_id FROM naver_auto_account_day WHERE day = ?",
+            (_day_text(day, "날짜"),))}
+
+    def my_running_runs(self) -> List[int]:
+        """이 저장소가 시작했는데 아직 「돌고 있음」인 회차 — 아침 점검은 한 번에 하나만 도므로, 새 회차를 부를 때 이것이
+        있으면 앞 회차가 죽으면서 닫지도 못한 것이다(닫기까지 실패 · 검토 readiness-stuck-running)."""
+        running = set(self.running_runs())
+        return sorted(r for r in self._my_runs if r in running)
+
     def run(self, run_id: int) -> Optional[dict]:
         cur = self._conn.execute("SELECT * FROM naver_auto_check_run WHERE run_id = ?", (_pos_int(run_id, "회차 번호"),))
         r = cur.fetchone()

@@ -25,7 +25,20 @@
 - **한 계정 안의 읽기는 모두 되거나 모두 안 된 것**(반박 C1) — 호출 사이마다 마감(08:00)을 보고, 넘으면 그 계정은 적지 않는다
   (⚪ 점검 안 됨 · 판정 함수가 날짜로 가른다). 적기는 한 거래(``record_account_check`` — 계정 하루치 · 어제 캠페인 줄 · 이슈).
 - **키 거절이 몰리면 멈춘다**(M4) — 처음 10곳이 모두 거절 · 또는 50곳 넘게 시도해 80% 이상 거절이면 회차를 멈추고 경보.
+  어제도 키 거절이던 계정(광고주별 권한 문제)은 이 표본에서 뺀다 — 어제 실패 계정을 먼저 읽는 순서(L2) 때문에 그 계정들이
+  맨 앞에 서서 「전 계정 거절」로 매일 회차가 멈추지 않게(검토 readiness-key-order).
+- **네이버 서버·네트워크 오류가 몰려도 멈춘다** — 같은 기준(처음 10곳 모두 · 50곳 넘게 80%)으로 ``NAVER_UNAVAILABLE`` ·
+  경보. 멈춘 회차 뒤 20분에 다시 도는 회차가 「일부만」 계정을 다시 읽는다(검토 readiness-server-outage).
 - 네이버 속도 제한에 두 번 멈춤 · 호출 상한 = 회차 실패(``RUN_ABORT``) · 경보.
+- **같은 날 다시 돌기** — 실패한 회차 뒤 · 또는 끝난(done) 회차여도 **아직 끝나지 않은 짝**이 남았으면 20분 뒤 · 하루 3번까지.
+  「끝남」 = 오늘 계정 하루치가 **같은 가망**으로 적혔고 「일부만」·「자료 늦음」이 아님(키 거절로 멈춘 회차가 있었으면
+  「키 거절」도 다시 본다 — 그 거절은 계정 탓이 아니었다). 자료 늦음 계정이 있으면 경보(``DATA_LATE`` — 판정은 확인 필요
+  아니오라 따로 알린다 · 검토 failclosed-data-late).
+- **준비가 늦으면 알린다** — 마감 30분 전(07:30)까지 준비가 안 되면 ``NOT_READY_LATE``(경보 · 짝 맞추기 낡음처럼 경보 없이
+  막히는 날에도 아무도 모르는 날이 없게 · 검토 readiness-pairing-stale). 스케줄러는 06:30~08:00 동안 ``readiness`` 를 보고
+  ``ALERTING`` 코드가 있으면 알린다.
+- **계정 한 곳의 뜻밖의 오류는 그 계정만** 적지 않고(⚪ 점검 안 됨) 경보(``ACCOUNT_ERROR``) — 회차 전체가 죽지 않게(검토
+  failclosed-stale-cycle). 이 저장소가 시작한 채 닫히지 못한 회차는 새 회차를 부를 때 실패로 닫는다(``RUN_ORPHANED``).
 
 공통
 - 결과는 예외가 아니라 ``MorningOutcome`` 으로 돌려준다(스케줄러가 멈추지 않게) · 코드와 개수만(번호·이름·금액 없음).
@@ -62,10 +75,11 @@ STAT_FIELDS = ("impCnt", "clkCnt", "salesAmt", "ccnt")   # 0단계에서 합계�
 KEY_ALL_MIN = 10                     # 처음 이만큼 모두 키 거절이면 멈춤(M4 「전 계정 거절은 즉시」)
 KEY_RATIO_MIN = 50                   # 이만큼 시도한 뒤에만 비율로 판정(M4)
 KEY_RATIO = 0.8
+UNAVAILABLE_KINDS = frozenset({N.KIND_SERVER, N.KIND_NETWORK})   # 네이버 서버·네트워크 오류(계정 탓 아님)
+NOT_READY_ALERT_BEFORE = timedelta(minutes=30)                    # 마감 30분 전까지 준비 안 되면 경보
 
 # 손잡이 거절 사유 중 우리 쪽 자료 문제(직원이 할 일 없음 → ⚪ system_gap · 대표 경보 한 번)
 SYSTEM_GAP_REASONS = frozenset({"stage-stale", "stage-time-unknown", "stage-time-in-future"})
-FAILED_YESTERDAY = frozenset({V.CHECK_PARTIAL, V.CHECK_NOT_CHECKED, V.CHECK_KEY_REJECTED})
 RETRY_STATUSES = frozenset({V.CHECK_PARTIAL, V.CHECK_DATA_LATE})   # 같은 날 다시 도는 회차가 다시 볼 계정(없음 포함)
 REASON_LINK_BROKEN = "link-broken"
 REASON_LINK_MISSING = "link-missing"
@@ -93,13 +107,19 @@ CODE_PAIR_DUPLICATE = "PAIR_DUPLICATE"                 # 한 계정이 두 짝�
 CODE_UNLINK_MASS = "UNLINK_MASS"                       # 짝이 사라져 이슈를 한꺼번에 많이 닫음 — 경보
 CODE_STORE_REFUSED = "STORE_REFUSED"                   # 저장소가 계정 결과를 받지 않음 — 그 계정은 점검 안 됨 · 경보
 CODE_HANDLE_INVALID = L.CODE_HANDLE_INVALID
+CODE_DATA_LATE = "DATA_LATE"                           # 자료 늦음 계정이 있음 — ④⑤⑥ 을 못 돌림 · 경보(판정은 확인 필요 아니오)
+CODE_NAVER_UNAVAILABLE = "NAVER_UNAVAILABLE"           # 네이버 서버·네트워크 오류가 몰림 — 회차 멈춤 · 경보
+CODE_NOT_READY_LATE = "NOT_READY_LATE"                 # 마감 30분 전까지 준비 안 됨 — 경보
+CODE_RUN_ORPHANED = "RUN_ORPHANED"                     # 이 저장소가 시작한 회차가 닫히지 못한 채 남음 — 실패로 닫음 · 경보
+CODE_ACCOUNT_ERROR = "ACCOUNT_ERROR"                   # 계정 한 곳의 뜻밖의 오류 — 그 계정만 점검 안 됨 · 경보
 CODE_UNEXPECTED = "unexpected"
 
 BLOCKING = frozenset({CODE_ACCOUNTS_STEP_PENDING, CODE_ACCOUNTS_UNUSABLE, CODE_PAIRING_NOT_TODAY, CODE_PAIRING_STALE})
 ALERTING = frozenset({CODE_ACCOUNTS_UNUSABLE, CODE_PAIRING_NOT_TODAY, CODE_RUNS_EXHAUSTED, CODE_RUN_ABORT,
                       CODE_KEY_REJECTED_ALL, CODE_KEY_REJECTED_MANY, CODE_DEADLINE_CUT, CODE_SYSTEM_GAP,
                       CODE_SHAPE_UNKNOWN, CODE_PAIR_DUPLICATE, CODE_UNLINK_MASS, CODE_STORE_REFUSED,
-                      CODE_HANDLE_INVALID, CODE_UNEXPECTED})
+                      CODE_HANDLE_INVALID, CODE_UNEXPECTED, CODE_DATA_LATE, CODE_NAVER_UNAVAILABLE,
+                      CODE_NOT_READY_LATE, CODE_RUN_ORPHANED, CODE_ACCOUNT_ERROR})
 
 
 @dataclass(frozen=True)
@@ -169,7 +189,7 @@ class Readiness:
 def readiness(store: S.Store, now: datetime) -> Readiness:
     """점검을 돌려도 되는가 — 코드만(경보 여부는 부르는 쪽이 ``ALERTING`` 으로 본다)."""
     _need_time(now)
-    today, start, _deadline = _day_bounds(now)
+    today, start, deadline = _day_bounds(now)
     codes: List[str] = []
     last = store.last_sync(S.SYNC_ACCOUNTS)
     last_at = None if last is None else Y._aware(last["at"])
@@ -189,6 +209,8 @@ def readiness(store: S.Store, now: datetime) -> Readiness:
         codes.append(CODE_PAIRING_STALE)
     else:
         pid = ok["pairing_id"]
+    if set(codes) & BLOCKING and now >= deadline - NOT_READY_ALERT_BEFORE:
+        codes.append(CODE_NOT_READY_LATE)   # 경보 없이 막히는 코드(단계 대기 · 짝 맞추기 낡음)로 그날을 넘기지 않게
     return Readiness(tuple(codes), pid)
 
 
@@ -196,19 +218,59 @@ def _runs_today(store: S.Store, today: date) -> List[dict]:
     return store.runs_on(today)
 
 
+def _redo_statuses(runs: List[dict]) -> frozenset:
+    """같은 날 다시 볼 계정 상태 — 일부만 · 자료 늦음. 키 거절로 멈춘 회차가 있었으면 키 거절도(그 거절은 계정 탓이 아니었다)."""
+    key_abort = any(r["status"] == S.RUN_FAILED and r.get("error_kind") in (CODE_KEY_REJECTED_ALL, CODE_KEY_REJECTED_MANY)
+                    for r in runs)
+    return RETRY_STATUSES | ({V.CHECK_KEY_REJECTED} if key_abort else frozenset())
+
+
+def _pair_rows(store: S.Store, pairing_id: int) -> Tuple[List[dict], set, Counter]:
+    """오늘 짝 맞추기의 이관 상태 줄(점검할 짝 · 오늘 없음 · 이관 빠짐) — 두 짝에 나온 계정은 뺀다."""
+    rows = store.pairing_rows(pairing_id)
+    relevant = [r for r in rows if r["state"] in S.PAIR_CHECKABLE | {S.PAIR_MISSING, S.PAIR_BROKEN}]
+    per_cid = Counter(r["customer_id"] for r in relevant)
+    dups = {cid for cid, n in per_cid.items() if n > 1}
+    return [r for r in relevant if r["customer_id"] not in dups], dups, per_cid
+
+
+def _still_to_do(relevant: List[dict], marks: Mapping[int, tuple], redo: frozenset) -> List[dict]:
+    """점검할 짝 중 오늘 아직 끝나지 않은 것 — 오늘 계정 하루치가 없거나 · **다른 가망**으로 적혔거나 · 다시 볼 상태."""
+    out = []
+    for r in relevant:
+        if r["state"] not in S.PAIR_CHECKABLE:
+            continue
+        m = marks.get(r["customer_id"])
+        if m is None or m[1] != r["possibility_id"] or m[0] in redo:
+            out.append(r)
+    return out
+
+
+def _unfinished(store: S.Store, pairing_id: int, today: date, runs: List[dict]) -> List[dict]:
+    relevant, _d, _c = _pair_rows(store, pairing_id)
+    return _still_to_do(relevant, store.account_day_marks_on(today), _redo_statuses(runs))
+
+
 def morning_due(store: S.Store, now: datetime) -> bool:
-    """점검을 부를 때인가 — 06:30~08:00 · 준비됨 · 오늘 끝난 회차 없음 · 도는 회차 없음 · 실패 뒤 20분 · 하루 3번까지."""
+    """점검을 부를 때인가 — 06:30~08:00 · 준비됨 · 도는 회차 없음 · 앞 회차 뒤 20분 · 하루 3번까지 · 오늘 끝난 회차가
+    있으면 아직 끝나지 않은 짝이 남았을 때만(자료 늦음·일부만·가망이 바뀐 짝 · 검토 failclosed-data-late · retry)."""
     _need_time(now)
     today, start, deadline = _day_bounds(now)
     if not start <= now < deadline:
         return False
-    if not readiness(store, now).ready:
+    ready = readiness(store, now)
+    if not ready.ready:
         return False
     runs = _runs_today(store, today)
-    if any(r["status"] in (S.RUN_DONE, S.RUN_RUNNING) for r in runs) or len(runs) >= MAX_RUNS_PER_DAY:
+    stale = set(store.my_running_runs())   # 이 저장소가 시작한 채 닫히지 못한 회차 — 부르면 닫고 돈다
+    if any(r["status"] == S.RUN_RUNNING and r["run_id"] not in stale for r in runs) or len(runs) >= MAX_RUNS_PER_DAY:
         return False
     ends = [Y._aware(r["finished_at"]) for r in runs if r["finished_at"]]
-    return not any(e is not None and now - e < RETRY_AFTER for e in ends)
+    if any(e is not None and now - e < RETRY_AFTER for e in ends):
+        return False
+    if any(r["status"] == S.RUN_DONE for r in runs):
+        return bool(_unfinished(store, ready.pairing_id, today, runs))
+    return True
 
 
 # ── 네이버 응답 → 점검 입력 ──────────────────────────────────────────
@@ -347,7 +409,7 @@ def _total(series, day: date, f: str, through: Optional[date]) -> Optional[float
     """그날 계정 합계 — 다 들어온 날이 아니거나 한 캠페인이라도 모르면 None."""
     if through is None or day > through:
         return None
-    vals = [per[day][f] for per in series.values()]
+    vals = [per[day][f] if day in per else None for per in series.values()]   # 읽은 기간 밖 날짜는 모름(검토 stale-cycle)
     if any(v is None for v in vals):
         return None
     return float(sum(vals))
@@ -373,7 +435,7 @@ def account_input(cid: int, r: _Reads, today: date, th: Thresholds) -> Tuple[C.A
         return _total(series, d, f, through)
 
     def camp(ccid: str, d: date, f: str) -> Optional[float]:
-        if through is None or d > through:
+        if through is None or d > through or d not in series[ccid]:
             return None
         return series[ccid][d][f]
 
@@ -424,13 +486,14 @@ def _enabled(switches: Optional[Mapping[str, bool]]) -> Tuple[str, ...]:
 
 # ── 회차 ─────────────────────────────────────────────────────────────
 def _order(rows: List[dict], store: S.Store, today: date) -> List[dict]:
-    """전날 🔴 이 열린 계정 → 어제 점검이 안 된 계정 → 나머지(L2)."""
+    """전날 🔴 이 열린 계정 → 어제 온전히 점검되지 않은 계정(어제 줄 없음 포함 — 마감·멈춤에 잘린 계정이 매일 같은 꼬리로
+    잘리지 않게 · 검토 readiness-deadline-starvation) → 나머지(L2)."""
     red = {(i["possibility_id"], i["customer_id"]) for i in store.issues(open_only=True) if i["severity"] == "red"}
     yday = store.account_days_on(today - timedelta(days=1))
 
     def key(r):
         pk = (r["possibility_id"], r["customer_id"])
-        rank = 0 if pk in red else 1 if yday.get(r["customer_id"]) in FAILED_YESTERDAY else 2
+        rank = 0 if pk in red else 2 if yday.get(r["customer_id"]) == V.CHECK_OK else 1
         return rank, r["possibility_id"], r["customer_id"]
     return sorted(rows, key=key)
 
@@ -451,27 +514,31 @@ def run_morning(reader: N.NaverReader, store: S.Store, clock: Callable[[], datet
         return _refused((CODE_TOO_EARLY,))
     if now >= deadline:
         return _refused((CODE_AFTER_DEADLINE,))
+    pre: List[str] = []
+    for rid in store.my_running_runs():   # 앞 회차가 죽으면서 닫지도 못함 — 한 번에 하나만 돌므로 지금 닫는다
+        store.finish_run(rid, S.RUN_FAILED, now, error_kind=CODE_RUN_ORPHANED)
+        pre.append(CODE_RUN_ORPHANED)
     ready = readiness(store, now)
     if not ready.ready:
-        return _refused(ready.codes)
+        return _refused(pre + list(ready.codes))
     runs = _runs_today(store, today)
-    if any(r["status"] == S.RUN_DONE for r in runs):
-        return _refused((CODE_DONE_TODAY,))
     if any(r["status"] == S.RUN_RUNNING for r in runs):
-        return _refused((CODE_RUN_RUNNING,))
+        return _refused(pre + [CODE_RUN_RUNNING])
+    if any(r["status"] == S.RUN_DONE for r in runs) and not _unfinished(store, ready.pairing_id, today, runs):
+        return _refused(pre + [CODE_DONE_TODAY])
     if len(runs) >= MAX_RUNS_PER_DAY:
-        return _refused((CODE_RUNS_EXHAUSTED,))
-    retry = bool(runs)
+        return _refused(pre + [CODE_RUNS_EXHAUSTED])
+    redo = _redo_statuses(runs)
     try:
         run_id = store.begin_run(today, now)
     except S.StoreRefused:
-        return _refused((CODE_RUN_RUNNING,))
-    codes: List[str] = list(ready.codes)
+        return _refused(pre + [CODE_RUN_RUNNING])
+    codes: List[str] = pre + list(ready.codes)
     counts: Counter = Counter()
     tally: Counter = Counter()
     try:
         status, err = _body(reader, store, clock, run_id, ready.pairing_id, today, deadline, th, switches, enabled,
-                            retry, codes, counts, tally)
+                            redo, codes, counts, tally)
     except BaseException as e:
         kind = CODE_UNEXPECTED if not isinstance(e, S.StoreError) else "STORE_ERROR"
         try:
@@ -481,6 +548,8 @@ def run_morning(reader: N.NaverReader, store: S.Store, clock: Callable[[], datet
         raise
     store.finish_run(run_id, status, _need_time(clock()), accounts_total=counts.get("targets", 0),
                      accounts_ok=counts.get(V.CHECK_OK, 0), error_kind=err)
+    if counts.get(V.CHECK_DATA_LATE):
+        codes.append(CODE_DATA_LATE)
     cs = tuple(dict.fromkeys(codes))
     return MorningOutcome(OUT_DONE if status == S.RUN_DONE else OUT_FAILED, cs, run_id, dict(counts), dict(tally),
                           alert=bool(set(cs) & ALERTING))
@@ -501,23 +570,24 @@ def _record(store: S.Store, run_id: int, row: dict, clock, counts: Counter, tall
 
 
 def _body(reader, store: S.Store, clock, run_id: int, pairing_id: int, today: date, deadline: datetime,
-          th: Thresholds, switches, enabled: Tuple[str, ...], retry: bool, codes: List[str], counts: Counter,
+          th: Thresholds, switches, enabled: Tuple[str, ...], redo: frozenset, codes: List[str], counts: Counter,
           tally: Counter) -> Tuple[str, Optional[str]]:
-    rows = store.pairing_rows(pairing_id)
-    relevant = [r for r in rows if r["state"] in S.PAIR_CHECKABLE | {S.PAIR_MISSING, S.PAIR_BROKEN}]
-    per_cid = Counter(r["customer_id"] for r in relevant)
-    dups = {cid for cid, n in per_cid.items() if n > 1}
+    relevant, dups, per_cid = _pair_rows(store, pairing_id)
     if dups:
         codes.append(CODE_PAIR_DUPLICATE)
         counts["duplicate_skipped"] += sum(per_cid[c] for c in dups)
-    relevant = [r for r in relevant if r["customer_id"] not in dups]
 
     # ① 이관 상태 — 네이버 호출 없이 먼저 적는다
     for r in relevant:
         if r["state"] == S.PAIR_BROKEN:
             facts = (("reason", FACT_NEVER_LISTED),) if r["code"] == S.PAIR_CODE_NEVER_LISTED else ()
-            f = _LinkFinding(I.RULE_LINK, I.CODE_LINK_BROKEN, I.account_target(r["customer_id"]), I.LINK_SEVERITY,
-                             facts)
+            try:
+                target = I.account_target(r["customer_id"])
+            except I.IssueRuleError:   # 규칙이 받지 않는 번호 — 그 줄만 빼고 알린다(한 줄이 회차를 멈추지 않게)
+                codes.append(CODE_STORE_REFUSED)
+                counts["store_refused"] += 1
+                continue
+            f = _LinkFinding(I.RULE_LINK, I.CODE_LINK_BROKEN, target, I.LINK_SEVERITY, facts)
             _record(store, run_id, r, clock, counts, tally, codes, link=r["link"], status=V.CHECK_LINK_BROKEN,
                     rules_run=(I.RULE_LINK,), rules_not_run=[(x, REASON_LINK_BROKEN) for x in enabled],
                     findings=(f,))
@@ -534,16 +604,13 @@ def _body(reader, store: S.Store, clock, run_id: int, pairing_id: int, today: da
     if unl.mass:
         codes.append(CODE_UNLINK_MASS)
 
-    # ③ 점검할 짝
-    todo = [r for r in relevant if r["state"] in S.PAIR_CHECKABLE]
-    if retry:
-        done = store.account_days_on(today)
-        todo = [r for r in todo if done.get(r["customer_id"]) is None or done[r["customer_id"]] in RETRY_STATUSES]
-    todo = _order(todo, store, today)
+    # ③ 점검할 짝 — 오늘 아직 끝나지 않은 것만(첫 회차는 전부)
+    todo = _order(_still_to_do(relevant, store.account_day_marks_on(today), redo), store, today)
     counts["targets"] = len(todo)
     prospects = {p["possibility_id"]: p for p in store.prospects()}
     stage_at = store.stage_as_of()
-    attempts = rejected = 0
+    yday = store.account_days_on(today - timedelta(days=1))
+    attempts = unavailable = key_attempts = key_rejected = 0
     for i, r in enumerate(todo):
         if _need_time(clock()) >= deadline:
             counts["deadline_left"] += len(todo) - i
@@ -566,6 +633,10 @@ def _body(reader, store: S.Store, clock, run_id: int, pairing_id: int, today: da
             continue
         try:
             reads = read_account(reader, ah, cid, today, clock, deadline)
+            if _need_time(clock()) >= deadline:   # 마지막 읽기가 마감을 넘겨 끝났다 — 모두 되거나 모두 안 된 것
+                raise _PastDeadline()
+            acc, day = account_input(cid, reads, today, th)
+            report = C.run_checks(acc, C.StageInfo(p["stage_key"], stage_at), _need_time(clock()), th, switches)
         except _PastDeadline:
             counts["deadline_left"] += len(todo) - i
             codes.append(CODE_DEADLINE_CUT)
@@ -578,17 +649,19 @@ def _body(reader, store: S.Store, clock, run_id: int, pairing_id: int, today: da
             codes.append(CODE_HANDLE_INVALID)
             counts["handle_invalid"] += 1
             continue
-        if _need_time(clock()) >= deadline:   # 마지막 읽기가 마감을 넘겨 끝났다 — 모두 되거나 모두 안 된 것
-            counts["deadline_left"] += len(todo) - i
-            codes.append(CODE_DEADLINE_CUT)
-            break
+        except Exception:   # 계정 한 곳의 뜻밖의 오류(이상한 응답 등) — 그 계정만 적지 않는다(⚪ 점검 안 됨) · 경보
+            codes.append(CODE_ACCOUNT_ERROR)
+            counts["account_error"] += 1
+            continue
         if reads.shape_unknown:
             codes.append(CODE_SHAPE_UNKNOWN)
         attempts += 1
-        if reads.campaigns_error == N.KIND_KEY_REJECTED:
-            rejected += 1
-        acc, day = account_input(cid, reads, today, th)
-        report = C.run_checks(acc, C.StageInfo(p["stage_key"], stage_at), _need_time(clock()), th, switches)
+        if UNAVAILABLE_KINDS & {reads.campaigns_error, reads.bizmoney_error, reads.stats_error}:
+            unavailable += 1
+        if yday.get(cid) != V.CHECK_KEY_REJECTED:   # 어제도 거절이던 계정(광고주별 권한)은 「전 계정 거절」 표본이 아니다
+            key_attempts += 1
+            if reads.campaigns_error == N.KIND_KEY_REJECTED:
+                key_rejected += 1
         if report.status == V.CHECK_SYSTEM_GAP:
             codes.append(CODE_SYSTEM_GAP)
         extra = {}
@@ -600,14 +673,18 @@ def _body(reader, store: S.Store, clock, run_id: int, pairing_id: int, today: da
                 findings=report.findings, data_late=day.get("data_late"), bizmoney=day.get("bizmoney"),
                 budget_lock=day.get("budget_lock"), refund_lock=day.get("refund_lock"),
                 yday_spend=day.get("yday_spend"), yday_imp=day.get("yday_imp"), yday_clk=day.get("yday_clk"), **extra)
-        if attempts >= KEY_ALL_MIN and rejected == attempts:
-            codes.append(CODE_KEY_REJECTED_ALL)
+        stop = None
+        if key_attempts >= KEY_ALL_MIN and key_rejected == key_attempts:
+            stop = CODE_KEY_REJECTED_ALL
+        elif key_attempts >= KEY_RATIO_MIN and key_rejected >= key_attempts * KEY_RATIO:
+            stop = CODE_KEY_REJECTED_MANY
+        elif (attempts >= KEY_ALL_MIN and unavailable == attempts) or \
+                (attempts >= KEY_RATIO_MIN and unavailable >= attempts * KEY_RATIO):
+            stop = CODE_NAVER_UNAVAILABLE
+        if stop is not None:
+            codes.append(stop)
             counts["abort_left"] += len(todo) - i - 1
-            return S.RUN_FAILED, CODE_KEY_REJECTED_ALL
-        if attempts >= KEY_RATIO_MIN and rejected >= attempts * KEY_RATIO:
-            codes.append(CODE_KEY_REJECTED_MANY)
-            counts["abort_left"] += len(todo) - i - 1
-            return S.RUN_FAILED, CODE_KEY_REJECTED_MANY
+            return S.RUN_FAILED, stop
     return S.RUN_DONE, (CODE_DEADLINE_CUT if CODE_DEADLINE_CUT in codes else None)
 
 
