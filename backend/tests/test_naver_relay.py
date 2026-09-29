@@ -1,0 +1,566 @@
+"""S12 시험 — ③ → 관제 엔진 중계 핵심(``app/naver_relay.py``) · 표준 라이브러리만(fastapi 없이 돈다).
+
+가짜 엔진(루프백 TCP · 유닉스 소켓)을 띄워 **엔진이 실제로 받은 것**을 본다 — 머리 허용 목록 · 요청한 곳 ·
+③ 토큰 막기 · 다른 곳 막기 · 64KB · 엔진 답 검사 · 주소 설정(루프백·소켓만) · 화면 파일 · 기록에 값 0 · 구문 시험.
+네트워크 0(127.0.0.1 · 이 시험이 만든 소켓 파일만). 예시 값은 모두 지어낸 것이다.
+돌리는 법(backend 폴더에서): python3 -m unittest -v tests.test_naver_relay
+"""
+from __future__ import annotations
+
+import ast
+import http.server
+import io
+import json
+import logging
+import os
+import pathlib
+import shutil
+import socket
+import socketserver
+import sys
+import tempfile
+import threading
+import time
+import unittest
+
+BACKEND = pathlib.Path(__file__).resolve().parents[1]
+if str(BACKEND) not in sys.path:
+    sys.path.insert(0, str(BACKEND))
+
+from app import naver_relay as R  # noqa: E402
+
+RELAY_SRC = BACKEND / "app" / "naver_relay.py"
+ROUTER_SRC = BACKEND / "app" / "routers" / "naver.py"
+MAIN_SRC = BACKEND / "app" / "main.py"
+
+ENGINE_TOKEN = "v1.eyJzdWIiOjB9TUFSS0VSVE9LRU4." + "S" * 43            # 엔진 토큰 모양(서명 43자)
+ERP3_JWT = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJlLW1hcmtlci14eXo"   # ③ 로그인 토큰 모양
+MARK_IP = "203.0.113.77"
+MARK_BODY = "BODYMARKER-9d1c"
+MARK_QUERY = "QMARK7"
+HOST = "dashboard.example.test"
+
+
+# ── 가짜 엔진 ─────────────────────────────────────────────────────────
+class Engine:
+    """받은 요청을 적고, 정해 둔 답을 돌려준다."""
+
+    def __init__(self):
+        self.got = []
+        self.status = 200
+        self.ctype = "application/json; charset=utf-8"
+        self.body = b'{"ok":true}'
+        self.extra = [("Set-Cookie", "engine=1"), ("X-Engine-Secret", "leak")]
+        self.delay = 0.0
+        self.cut = False       # 길이만 말하고 끊기
+
+    def handler(self):
+        eng = self
+
+        class H(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, *a):
+                pass
+
+            def _any(self):
+                n = int(self.headers.get("Content-Length") or 0)
+                data = self.rfile.read(n) if n else b""
+                eng.got.append({"method": self.command, "path": self.path,
+                                "headers": [(k.lower(), v) for k, v in self.headers.items()], "body": data})
+                if eng.delay:
+                    time.sleep(eng.delay)
+                self.send_response(eng.status)
+                self.send_header("Content-Type", eng.ctype)
+                for k, v in eng.extra:
+                    self.send_header(k, v)
+                if eng.cut:
+                    self.send_header("Content-Length", str(len(eng.body) + 1000))
+                    self.end_headers()
+                    self.wfile.write(eng.body)
+                    self.wfile.flush()
+                    self.close_connection = True
+                    return
+                self.send_header("Content-Length", str(len(eng.body)))
+                self.end_headers()
+                self.wfile.write(eng.body)
+
+            do_GET = do_POST = do_PUT = do_DELETE = do_HEAD = _any
+
+        return H
+
+
+class _UnixHTTPServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+    daemon_threads = True
+
+    def handle_error(self, request, client_address):   # 중계가 먼저 끊은 연결 — 시험 출력만 어지럽힌다
+        pass
+
+
+class _TcpHTTPServer(http.server.ThreadingHTTPServer):
+    daemon_threads = True
+
+    def handle_error(self, request, client_address):
+        pass
+
+
+class EngineCase(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="relay-")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.eng = Engine()
+        self.tcp = _TcpHTTPServer(("127.0.0.1", 0), self.eng.handler())
+        self.sock = os.path.join(self.tmp, "engine.sock")
+        self.unix = _UnixHTTPServer(self.sock, self.eng.handler())
+        for srv in (self.tcp, self.unix):
+            t = threading.Thread(target=srv.serve_forever, daemon=True)
+            t.start()
+            self.addCleanup(srv.server_close)
+            self.addCleanup(srv.shutdown)
+        self.env_tcp = {R.ENV_SWITCH: "on", R.ENV_ENGINE: f"127.0.0.1:{self.tcp.server_address[1]}"}
+        self.env_unix = {R.ENV_SWITCH: "on", R.ENV_ENGINE: "unix:" + self.sock}
+        R._last_warn["at"] = -1e9
+        lg = logging.getLogger("naver_relay")
+        nh = logging.NullHandler()
+        lg.addHandler(nh)
+        self.addCleanup(lg.removeHandler, nh)
+
+    def inc(self, **kw):
+        base = dict(method="GET", sub="/board", query="", authorization=("Bearer " + ENGINE_TOKEN,),
+                    content_type=None, body=None, real_ip=MARK_IP, peer="172.17.0.1",
+                    origin=None, host=HOST, fetch_site="same-origin")
+        base.update(kw)
+        return R.Incoming(**base)
+
+    def headers(self, i=-1):
+        return dict(self.eng.got[i]["headers"])
+
+
+class ConfigTest(unittest.TestCase):
+    def test_switch_on_only_exact(self):
+        self.assertTrue(R.enabled({R.ENV_SWITCH: "on"}))
+        for v in ("", "ON", "1", "true", "on ", "yes", "off"):
+            self.assertFalse(R.enabled({R.ENV_SWITCH: v}), v)
+        self.assertFalse(R.enabled({}))
+
+    def test_engine_address_loopback_or_socket_only(self):
+        self.assertEqual(R.engine_target({R.ENV_ENGINE: "127.0.0.1:5090"}), R.Target("tcp", host="127.0.0.1", port=5090))
+        self.assertEqual(R.engine_target({R.ENV_ENGINE: "[::1]:5090"}), R.Target("tcp", host="::1", port=5090))
+        self.assertEqual(R.engine_target({R.ENV_ENGINE: "unix:/run/naver/engine.sock"}),
+                         R.Target("unix", path="/run/naver/engine.sock"))
+        for bad in ("", "5090", "localhost:5090", "0.0.0.0:5090", "127.0.0.2:5090", "10.0.0.1:5090",
+                    "1.234.23.117:80", "[::]:5090", "[::2]:1", "127.0.0.1:0", "127.0.0.1:70000", "127.0.0.1:",
+                    "http://127.0.0.1:5090", "127.0.0.1:5090/x", " 127.0.0.1:5090", "127.0.0.1:5090\n",
+                    "unix:relative.sock", "unix:/run/../etc/x.sock", "unix:/run//x.sock", "unix:/run/./x.sock",
+                    "unix:/a b.sock", "unix:/" + "a" * 120, "unix:", "file:/run/x.sock", "127.0.0.1:5090,10.0.0.1:1"):
+            self.assertIsNone(R.engine_target({R.ENV_ENGINE: bad}), bad)
+        self.assertIsNone(R.engine_target({}))
+
+
+class ForwardTest(EngineCase):
+    def test_get_forwarded_over_tcp_and_unix(self):
+        for env in (self.env_tcp, self.env_unix):
+            out = R.relay(self.inc(query="attention=0&" + MARK_QUERY + "=1"), env)
+            self.assertEqual((out.status, out.body), (200, b'{"ok":true}'))
+            g = self.eng.got[-1]
+            self.assertEqual((g["method"], g["path"]), ("GET", "/api/naver-auto/board?attention=0&QMARK7=1"))
+        self.assertEqual(len(self.eng.got), 2)
+
+    def test_only_allowed_headers_reach_engine(self):
+        R.relay(self.inc(method="POST", sub="/links/confirm", content_type="application/json; charset=utf-8",
+                         body=b'{"ids":[1]}'), self.env_unix)
+        h = self.headers()
+        self.assertEqual(set(h), {"host", "accept", "connection", "content-type", "content-length",
+                                  "authorization", "x-naver-auto-source"})
+        self.assertEqual((h["host"], h["content-type"], h["content-length"], h["x-naver-auto-source"]),
+                         (R.ENGINE_HOST_HEADER, "application/json", "11", MARK_IP))
+        self.assertEqual(h["authorization"], "Bearer " + ENGINE_TOKEN)
+        self.assertEqual(self.eng.got[-1]["body"], b'{"ids":[1]}')
+
+    def test_erp3_token_and_other_auth_never_forwarded(self):
+        for auth in ("Bearer " + ERP3_JWT, "Basic YWRtaW46YWRtaW4=", "Bearer v1.x.short", "bearer " + ENGINE_TOKEN,
+                     "Bearer " + ENGINE_TOKEN + " extra", "Bearer  " + ENGINE_TOKEN, ENGINE_TOKEN, ""):
+            R.relay(self.inc(authorization=(auth,)), self.env_tcp)
+            self.assertNotIn("authorization", self.headers(), auth)
+        R.relay(self.inc(authorization=()), self.env_tcp)
+        self.assertNotIn("authorization", self.headers())
+
+    def test_two_authorization_values_refused_before_engine(self):
+        out = R.relay(self.inc(authorization=("Bearer " + ENGINE_TOKEN, "Bearer " + ENGINE_TOKEN)), self.env_tcp)
+        self.assertEqual((out.status, json.loads(out.body)), (400, {"error": "bad-authorization"}))
+        self.assertEqual(self.eng.got, [])
+
+    def test_source_is_real_ip_then_peer(self):
+        R.relay(self.inc(real_ip=MARK_IP, peer="172.17.0.1"), self.env_tcp)
+        self.assertEqual(self.headers()["x-naver-auto-source"], MARK_IP)
+        for bad in ("evil<script>", "1.2.3.4, 5.6.7.8", "a" * 65, "", " 1.2.3.4"):
+            R.relay(self.inc(real_ip=bad, peer="172.17.0.9"), self.env_tcp)
+            self.assertEqual(self.headers()["x-naver-auto-source"], "172.17.0.9", bad)
+        R.relay(self.inc(real_ip=None, peer=None), self.env_tcp)
+        self.assertNotIn("x-naver-auto-source", self.headers())
+        R.relay(self.inc(real_ip="bad!", peer="also bad"), self.env_tcp)
+        self.assertNotIn("x-naver-auto-source", self.headers())
+
+    def test_get_body_not_forwarded(self):
+        R.relay(self.inc(body=b'{"x":1}', content_type="application/json"), self.env_tcp)
+        self.assertEqual(self.eng.got[-1]["body"], b"")
+        self.assertNotIn("content-type", self.headers())
+
+    def test_empty_post_has_zero_length(self):
+        R.relay(self.inc(method="POST", sub="/bell/read-all", body=None), self.env_tcp)
+        h = self.headers()
+        self.assertEqual((h.get("content-length"), "content-type" in h), ("0", False))
+
+    def test_engine_answer_passed_but_engine_headers_dropped(self):
+        self.eng.body = json.dumps({"rows": ["가", "나"]}, ensure_ascii=False).encode("utf-8")
+        for st in (200, 400, 401, 403, 404, 409, 429, 503):
+            self.eng.status = st
+            out = R.relay(self.inc(), self.env_tcp)
+            self.assertEqual((out.status, out.body), (st, self.eng.body))
+            self.assertEqual(out.headers, R.RESPONSE_HEADERS)
+            self.assertNotIn("Set-Cookie", dict(out.headers))
+
+
+class RefuseBeforeEngineTest(EngineCase):
+    """이 거절들은 엔진에 닿기 전에 끝난다 — 가짜 엔진이 받은 것이 0."""
+
+    def assertRefused(self, inc, status, code, env=None):
+        out = R.relay(inc, env or self.env_tcp)
+        self.assertEqual((out.status, json.loads(out.body)), (status, {"error": code}), inc)
+        self.assertEqual(out.headers, R.RESPONSE_HEADERS)
+        self.assertEqual(self.eng.got, [], inc)
+
+    def test_switch_off(self):
+        for env in ({R.ENV_ENGINE: self.env_tcp[R.ENV_ENGINE]}, {**self.env_tcp, R.ENV_SWITCH: "ON"}):
+            with self.assertRaises(R.RelayOff):
+                R.relay(self.inc(), env)
+        self.assertEqual(self.eng.got, [])
+
+    def test_cross_origin(self):
+        for o, fs in (("https://evil.example", "cross-site"), ("https://evil.example", None),
+                      ("https://logic.metainc.co.kr", "same-site"), (None, "same-site"), (None, "cross-site"),
+                      ("null", None), ("https://" + HOST + ".evil.example", None), ("evil", None),
+                      ("https://" + HOST, "cross-site"), (None, "weird")):
+            self.assertRefused(self.inc(origin=o, fetch_site=fs), 403, "cross-origin")
+        self.assertRefused(self.inc(origin="https://" + HOST, host=None, fetch_site=None), 403, "cross-origin")
+
+    def test_same_origin_passes(self):
+        for o, host, fs in (("https://" + HOST, HOST, "same-origin"), ("http://" + HOST + ":5051", HOST + ":5051", None),
+                            (None, HOST, "none"), (None, None, None), ("HTTPS://" + HOST.upper(), HOST, "Same-Origin"),
+                            ("http://[::1]:5051", "[::1]:5051", None)):
+            out = R.relay(self.inc(origin=o, host=host, fetch_site=fs), self.env_tcp)
+            self.assertEqual(out.status, 200, (o, host, fs))
+
+    def test_methods(self):
+        for m in ("PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "get", "TRACE"):
+            self.assertRefused(self.inc(method=m), 405, "method-not-allowed")
+
+    def test_paths(self):
+        for sub in ("", "/", "/../x", "/board/..", "/board.json", "/a b", "/%2e%2e", "board", "/board/",
+                    "//board", "/a/b/c/d/e/f/g", "/" + "a" * 65, "/bo\nard", "/보드", "/board?x=1"):
+            self.assertRefused(self.inc(sub=sub), 404, "not-found")
+
+    def test_query(self):
+        for q in ("a b=1", "x=\n", "q=가", "q=" + "a" * R.QUERY_MAX, "\x7f"):
+            self.assertRefused(self.inc(query=q), 400, "bad-query")
+
+    def test_body(self):
+        self.assertRefused(self.inc(method="POST", sub="/session", content_type="application/json",
+                                    body=b"x" * (R.BODY_MAX + 1)), 413, "too-large")
+        for ct in (None, "text/plain", "application/json-seq", "multipart/form-data", "application/x-www-form-urlencoded"):
+            self.assertRefused(self.inc(method="POST", sub="/session", content_type=ct, body=b'{"sso":"x"}'),
+                               415, "json-only")
+
+    def test_limit_exactly_64kb_passes(self):
+        body = b'"' + b"a" * (R.BODY_MAX - 2) + b'"'
+        out = R.relay(self.inc(method="POST", sub="/session", content_type="application/json", body=body), self.env_tcp)
+        self.assertEqual(out.status, 200)
+        self.assertEqual(len(self.eng.got[-1]["body"]), R.BODY_MAX)
+
+    def test_not_configured(self):
+        for env in ({R.ENV_SWITCH: "on"}, {R.ENV_SWITCH: "on", R.ENV_ENGINE: "10.0.0.1:80"}):
+            self.assertRefused(self.inc(), 503, "engine-unavailable", env)
+
+
+class EngineAnswerTest(EngineCase):
+    def test_bad_status_or_type(self):
+        for st, ct in ((302, "application/json"), (201, "application/json"), (418, "application/json"),
+                       (200, "text/html"), (200, "application/javascript"), (500, "text/plain"), (204, "application/json")):
+            self.eng.status, self.eng.ctype = st, ct
+            if st == 204:
+                self.eng.body = b""
+            out = R.relay(self.inc(), self.env_tcp)
+            self.assertEqual((out.status, json.loads(out.body)), (502, {"error": "bad-gateway"}), (st, ct))
+
+    def test_answer_without_length_refused(self):
+        """길이 없는 답(조각 전송 · 끊길 때까지)은 잘렸는지 알 수 없다 — 받지 않는다."""
+        eng = self.eng
+
+        class Chunked(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Transfer-Encoding", "chunked")
+                self.end_headers()
+                self.wfile.write(b"b\r\n{\"ok\":true}\r\n0\r\n\r\n")
+
+        class NoLen(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.0"
+
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"ok":true}')
+
+        for h in (Chunked, NoLen):
+            srv = _TcpHTTPServer(("127.0.0.1", 0), h)
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            try:
+                out = R.relay(self.inc(), {R.ENV_SWITCH: "on", R.ENV_ENGINE: f"127.0.0.1:{srv.server_address[1]}"})
+                self.assertEqual((out.status, json.loads(out.body)), (502, {"error": "bad-gateway"}), h.__name__)
+            finally:
+                srv.shutdown()
+                srv.server_close()
+        self.assertEqual(eng.got, [])
+
+    def test_too_large_answer(self):
+        old = R.RESPONSE_MAX
+        R.RESPONSE_MAX = 1000
+        try:
+            self.eng.body = b'"' + b"a" * 1000 + b'"'
+            self.assertEqual(R.relay(self.inc(), self.env_tcp).status, 502)
+            self.eng.body = b'"' + b"a" * 998 + b'"'
+            self.assertEqual(R.relay(self.inc(), self.env_tcp).status, 200)
+        finally:
+            R.RESPONSE_MAX = old
+
+    def test_engine_down(self):
+        s = socket.socket()
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+        s.close()
+        for env in ({R.ENV_SWITCH: "on", R.ENV_ENGINE: f"127.0.0.1:{port}"},
+                    {R.ENV_SWITCH: "on", R.ENV_ENGINE: "unix:" + os.path.join(self.tmp, "none.sock")}):
+            out = R.relay(self.inc(), env)
+            self.assertEqual((out.status, json.loads(out.body)), (503, {"error": "engine-unavailable"}))
+
+    def test_engine_cut_mid_answer(self):
+        self.eng.cut = True
+        out = R.relay(self.inc(), self.env_unix)
+        self.assertEqual(out.status, 503)
+
+    def test_slow_engine_times_out(self):
+        self.eng.delay = 1.0
+        t = time.monotonic()
+        out = R.relay(self.inc(), self.env_unix, total_timeout=0.3)
+        self.assertEqual((out.status, json.loads(out.body)), (504, {"error": "engine-timeout"}))
+        self.assertLess(time.monotonic() - t, 0.9)
+
+
+class InflightTest(EngineCase):
+    """M7 — 엔진이 느릴 때 한 워커에서 엔진을 기다리는 요청은 MAX_INFLIGHT 까지만 · 넘치면 기다리지 않고 바로 503."""
+
+    def test_extra_requests_answer_at_once(self):
+        self.eng.delay = 1.0
+        n = R.MAX_INFLIGHT + 4
+        outs, lock = [], threading.Lock()
+
+        def one():
+            t = time.monotonic()
+            o = R.relay(self.inc(), self.env_unix)
+            with lock:
+                outs.append((o.status, json.loads(o.body) if o.status != 200 else None, time.monotonic() - t))
+        ts = [threading.Thread(target=one) for _ in range(n)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join(10)
+        busy = [o for o in outs if o[0] == 503]
+        self.assertEqual(len(busy), 4)
+        self.assertTrue(all(o[1] == {"error": "relay-busy"} and o[2] < 0.5 for o in busy), busy)
+        self.assertEqual(sorted(o[0] for o in outs if o[0] != 503), [200] * R.MAX_INFLIGHT)
+        self.assertEqual(len(self.eng.got), R.MAX_INFLIGHT)
+        self.eng.delay = 0
+        self.assertEqual(R.relay(self.inc(), self.env_unix).status, 200)     # 자리는 모두 돌아왔다
+        self.assertEqual(R._slots._value, R.MAX_INFLIGHT)
+
+    def test_slot_returned_on_every_failure(self):
+        for env in ({R.ENV_SWITCH: "on", R.ENV_ENGINE: "127.0.0.1:1"}, self.env_unix):
+            self.eng.status = 302
+            for _ in range(R.MAX_INFLIGHT + 2):
+                R.relay(self.inc(), env)
+        self.eng.cut = True
+        for _ in range(R.MAX_INFLIGHT + 2):
+            R.relay(self.inc(), self.env_unix)
+        self.assertEqual(R._slots._value, R.MAX_INFLIGHT)
+
+
+class LogTest(EngineCase):
+    """기록에는 종류 이름만 — 토큰·본문·주소·쿼리 0 · 1분에 한 줄."""
+
+    def test_no_values_in_logs(self):
+        buf = io.StringIO()
+        h = logging.StreamHandler(buf)
+        lg = logging.getLogger("naver_relay")
+        lg.addHandler(h)
+        lg.setLevel(logging.DEBUG)
+        self.addCleanup(lg.removeHandler, h)
+        body = json.dumps({"sso": MARK_BODY}).encode()
+        scenarios = [({R.ENV_SWITCH: "on"}, {}), ({R.ENV_SWITCH: "on", R.ENV_ENGINE: "127.0.0.1:1"}, {}),
+                     (self.env_unix, {"cut": True}), (self.env_unix, {"status": 302}), (self.env_unix, {"delay": 0.5})]
+        for env, eng in scenarios:
+            self.eng.cut, self.eng.status, self.eng.delay = eng.get("cut", False), eng.get("status", 200), eng.get("delay", 0)
+            R._last_warn["at"] = -1e9
+            R.relay(self.inc(method="POST", sub="/session", content_type="application/json", body=body,
+                             query=MARK_QUERY + "=1"), env, total_timeout=0.2)
+        text = buf.getvalue()
+        self.assertTrue(text)
+        for mark in (MARK_BODY, MARK_IP, MARK_QUERY, "TUFSS0VSVE9LRU4", ENGINE_TOKEN, "172.17.0.1", self.sock):
+            self.assertNotIn(mark, text)
+
+    def test_one_line_per_minute(self):
+        with self.assertLogs("naver_relay", level="WARNING") as cm:
+            for _ in range(5):
+                R.relay(self.inc(), {R.ENV_SWITCH: "on"})
+        self.assertEqual(len(cm.output), 1)
+
+    def test_repr_hides_values(self):
+        r = repr(self.inc(method="POST", body=MARK_BODY.encode(), origin="https://x.example"))
+        for mark in (MARK_BODY, MARK_IP, ENGINE_TOKEN, "172.17.0.1", HOST, "x.example"):
+            self.assertNotIn(mark, r)
+        self.assertNotIn(MARK_BODY, repr(R.Outgoing(200, MARK_BODY.encode())))
+
+
+class PageFileTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="page-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.root = self.tmp / "naver"
+        (self.root / "assets").mkdir(parents=True)
+        (self.root / "index.html").write_text("<!doctype html>")
+        (self.root / "app.js").write_text("1")
+        (self.root / "assets" / "logo.png").write_bytes(b"\x89PNG")
+        (self.root / "notes.py").write_text("x")
+        (self.root / ".env").write_text("SECRET=1")
+        (self.tmp / "outside.js").write_text("x")
+        (self.root / "link.js").symlink_to(self.tmp / "outside.js")
+        (self.root / "dir.js").mkdir()
+
+    def test_allowed(self):
+        self.assertEqual(R.page_file(self.root, ""), (self.root / "index.html").resolve())
+        self.assertEqual(R.page_file(self.root, "index.html"), (self.root / "index.html").resolve())
+        self.assertEqual(R.page_file(self.root, "app.js"), (self.root / "app.js").resolve())
+        self.assertEqual(R.page_file(self.root, "assets/logo.png"), (self.root / "assets" / "logo.png").resolve())
+        self.assertEqual(R.page_type(R.page_file(self.root, "app.js")), "text/javascript; charset=utf-8")
+
+    def test_refused(self):
+        for rest in ("../outside.js", "assets/../../outside.js", "notes.py", ".env", "link.js", "dir.js",
+                     "missing.js", "/etc/passwd", "app.js/", "a b.js", "APP.JS.map", "assets", "app", "앱.js",
+                     "a/b/c/d/e.js", "index.html?x", "app.JS"):
+            self.assertIsNone(R.page_file(self.root, rest), rest)
+        self.assertIsNone(R.page_file(self.tmp / "none", ""))
+
+    def test_page_headers_keep_sso_home(self):
+        h = dict(R.PAGE_HEADERS)
+        self.assertEqual((h["Referrer-Policy"], h["Cache-Control"], h["X-Frame-Options"]), ("no-referrer", "no-store", "DENY"))
+        csp = h["Content-Security-Policy"]
+        for part in ("connect-src 'self'", "script-src 'self'", "frame-ancestors 'none'", "base-uri 'none'",
+                     "object-src 'none'", "form-action 'self'"):
+            self.assertIn(part, csp)
+        self.assertNotIn("unsafe-eval", csp)
+        self.assertNotIn("script-src 'self' 'unsafe-inline'", csp)
+
+
+# ── 구문 시험 ─────────────────────────────────────────────────────────
+def _tree(p):
+    return ast.parse(p.read_text(encoding="utf-8"))
+
+
+class StructureTest(unittest.TestCase):
+    ALLOWED_IMPORTS = {"__future__", "http.client", "logging", "os", "pathlib", "re", "socket", "threading", "time",
+                       "dataclasses", "typing"}
+
+    def test_relay_imports_only_stdlib_basics(self):
+        got = set()
+        for n in ast.walk(_tree(RELAY_SRC)):
+            if isinstance(n, ast.Import):
+                got |= {a.name for a in n.names}
+            elif isinstance(n, ast.ImportFrom):
+                got.add(n.module)
+        self.assertLessEqual(got, self.ALLOWED_IMPORTS)
+        for bad in ("urllib", "urllib.request", "requests", "httpx", "subprocess", "http.server"):
+            self.assertNotIn(bad, got)
+
+    def test_connections_only_through_open(self):
+        """나가는 연결은 _open(검사한 Target) · _UnixConnection 에서만 — 다른 곳에서 새 연결을 만들지 않는다."""
+        tree = _tree(RELAY_SRC)
+        calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)]
+        ctor = {c.func.attr for c in calls if isinstance(c.func, ast.Attribute)} & {"HTTPConnection", "HTTPSConnection",
+                                                                                    "create_connection", "urlopen"}
+        self.assertEqual(ctor, {"HTTPConnection"})
+        for fn in ast.walk(tree):
+            if isinstance(fn, ast.FunctionDef):
+                for c in ast.walk(fn):
+                    if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute):
+                        if c.func.attr == "HTTPConnection":
+                            self.assertEqual(fn.name, "_open")
+                        if c.func.attr == "socket" and isinstance(c.func.value, ast.Name) and c.func.value.id == "socket":
+                            self.assertEqual(fn.name, "connect")
+                    if isinstance(c, ast.Call) and isinstance(c.func, ast.Name) and c.func.id == "_open":
+                        self.assertEqual(fn.name, "_forward")     # 연결은 슬롯을 잡은 뒤 한 곳에서만
+
+    def test_logs_carry_kind_only(self):
+        for c in ast.walk(_tree(RELAY_SRC)):
+            if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute) and \
+                    isinstance(c.func.value, ast.Name) and c.func.value.id == "log":
+                self.assertIsInstance(c.args[0], ast.Constant)
+                for a in c.args[1:]:
+                    self.assertIsInstance(a, ast.Name)
+                    self.assertEqual(a.id, "kind")
+                self.assertEqual(c.keywords, [])
+
+    def test_router_relay_is_sync_def_and_copies_named_headers_only(self):
+        tree = _tree(ROUTER_SRC)
+        fns = {n.name: n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+        for name in ("naver_relay_route", "naver_page_bare", "naver_page_root", "naver_page_file", "_page"):
+            self.assertIsInstance(fns[name], ast.FunctionDef, name)      # M7 — 스레드풀에서 돈다
+        self.assertIsInstance(fns["_capped_body"], ast.AsyncFunctionDef)
+        keys = set()
+        for c in ast.walk(tree):
+            if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute) and c.func.attr in ("get", "getlist") \
+                    and isinstance(c.func.value, ast.Name) and c.func.value.id == "h":
+                keys.add(c.args[0].value)
+        self.assertEqual(keys, {"authorization", "content-type", "x-real-ip", "origin", "host", "sec-fetch-site"})
+        src = ROUTER_SRC.read_text(encoding="utf-8")
+        for bad in ("cookies", "dict(request.headers", "request.headers.items", "headers.raw", "x-forwarded-for",
+                    "x-naver-auto-source", "urllib", "requests", "httpx"):
+            self.assertNotIn(bad, src.lower())
+
+    def test_router_before_static_mount(self):
+        """M6 — 스위치 라우터가 정적 마운트보다 먼저 등록된다(정적 마운트가 /naver/ 를 먼저 내주지 않게)."""
+        body = _tree(MAIN_SRC).body
+        inc = mount = None
+        for i, st in enumerate(body):
+            if isinstance(st, ast.Expr) and isinstance(st.value, ast.Call) and isinstance(st.value.func, ast.Attribute):
+                f = st.value.func
+                if f.attr == "include_router" and ast.unparse(st.value.args[0]) == "naver.router":
+                    self.assertEqual(st.value.keywords, [])          # 머리 경로 붙이지 않음 — /naver · /api/naver-auto 그대로
+                    inc = i
+                if f.attr == "mount" and ast.unparse(st.value.args[0]) == "'/'":
+                    mount = i
+        self.assertIsNotNone(inc)
+        self.assertIsNotNone(mount)
+        self.assertLess(inc, mount)
+
+
+if __name__ == "__main__":
+    unittest.main()

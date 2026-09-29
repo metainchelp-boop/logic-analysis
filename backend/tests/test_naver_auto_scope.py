@@ -1394,14 +1394,28 @@ class IsolationTest(unittest.TestCase):
         self.assertEqual(bad, [])
         self.assertEqual(own, ["app", "app.naver_auto", "app.naver_auto.org_snapshot", "app.naver_auto.scope"])
 
-    def test_1차는_서비스에_연결하지_않는다(self):
-        # 3차에서 /naver/ API 를 연결할 때 이 시험을 「연결 지점이 한 곳인지」로 바꾼다.
+    def test_서비스_연결은_중계_한_곳뿐(self):
+        """S12 부터 ③ 앱은 관제와 **중계 한 곳**(``routers/naver.py`` → ``naver_relay.py``)으로만 이어진다.
+        순수 판정 모듈(이 폴더)은 ③ 앱이 불러 쓰지 않는다 — 엔진 몫이다(1차 「연결하지 않는다」 시험을 설계대로 바꿈)."""
         for path in (BACKEND / "app").rglob("*.py"):
             if NAVER_AUTO in path.parents:
                 continue
-            text = path.read_text(encoding="utf-8")
-            self.assertNotIn("naver_auto", text, path.relative_to(BACKEND))
-            self.assertNotIn("org_snapshot", text, path.relative_to(BACKEND))
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                mods = []
+                if isinstance(node, ast.Import):
+                    mods = [a.name for a in node.names]
+                elif isinstance(node, ast.ImportFrom):
+                    mods = [node.module or ""] + [a.name for a in node.names]
+                for m in mods:
+                    self.assertNotIn("naver_auto", m, path.relative_to(BACKEND))
+                    self.assertNotIn("org_snapshot", m, path.relative_to(BACKEND))
+        main = (BACKEND / "app" / "main.py").read_text(encoding="utf-8")
+        self.assertEqual(main.count("include_router(naver.router)"), 1)
+        joined = "\n".join(p.read_text(encoding="utf-8") for p in (BACKEND / "app").rglob("*.py") if NAVER_AUTO not in p.parents)
+        self.assertEqual(joined.count("naver_relay.relay("), 0)          # 중계 호출은 라우터 한 곳
+        router = (BACKEND / "app" / "routers" / "naver.py").read_text(encoding="utf-8")
+        self.assertEqual(router.count("R.relay("), 1)
 
 
 # ── 대표 계정 = 0번 (운영 읽기 전용 실측 2026-09-28) ─────────────────────
