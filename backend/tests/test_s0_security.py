@@ -439,7 +439,7 @@ class AppTest(unittest.TestCase):
         self.assertEqual(r["source_rule"], ["8.8.8.8", "1.1.1.1", "1.1.1.1", None, None, None])
         self.assertEqual((r["sso_empty"], r["sso_empty_calls"]), (401, 0))
         self.assertEqual((r["sso_same_token"], r["sso_same_calls"], r["sso_same_rows"]), ([401] * 5, 1, 1))
-        self.assertEqual(r["sso_reject"], [401])
+        self.assertEqual((r["sso_limit"], r["sso_reject"]), (120, [401]))
         self.assertEqual((r["sso_over_blocked"], r["sso_other_ip_ok"], r["password_login_same_ip"]), (429, 200, 200))
         for nm in ("outage503", "garbage", "null_body", "list_body", "str_body", "result_null", "result_list", "no_id",
                    "long_id"):

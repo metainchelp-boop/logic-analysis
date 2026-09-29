@@ -302,7 +302,8 @@ def mode_login():
         out["sso_same_rows"] = rows("sso-src:%")
         clear()
         erp_calls.clear()
-        out["sso_reject"] = sorted(set(sso("t%d" % i) for i in range(login_guard.SSO_SOURCE_MAX)))
+        out["sso_limit"] = login_guard.SSO_SOURCE_MAX
+        out["sso_reject"] = sorted(set(sso("t%d" % i) for i in range(120)))     # 상한 120 을 글자로(상수를 바꿔도 시험이 따라가지 않게)
         requests.get = fake(200, ok_body)
         out["sso_over_blocked"] = sso("fresh-good")
         out["sso_other_ip_ok"] = sso("fresh-good", ip=GLOBAL_B)
