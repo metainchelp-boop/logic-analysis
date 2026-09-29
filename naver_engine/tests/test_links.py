@@ -242,8 +242,11 @@ class SyncAccountsTest(Base):
 
     def test_confirm_refuses_hold_with_unknown_codes(self):
         L.sync_accounts(FakeReader(kids(*many(10))), self.st, self.clock.t)
-        body = '{"read_at":"%s","rows":[],"per":{"1":0}}' % self.clock.t.isoformat()
-        hid = self.st._refuse_and_hold(S.SYNC_ACCOUNTS, self.clock.t.isoformat(), S.SYNC_REFUSED, ["OTHER"], body)
+        t = self.at(T0 + timedelta(minutes=1))   # 받을 수 있는 모양의 목록(11곳 · 더 새 시각) — 코드만 모르는 것
+        rows = ",".join('[%d,%d,"x"]' % (cid, no) for cid, no, _n in many(11))
+        body = '{"read_at":"%s","rows":[%s],"per":{"1":11}}' % (t.isoformat(timespec="microseconds"), rows)
+        hid = self.st._refuse_and_hold(S.SYNC_ACCOUNTS, t.isoformat(timespec="microseconds"), S.SYNC_REFUSED,
+                                       ["OTHER"], body)
         res = L.confirm_accounts(self.st, self.clock.t, 0, hid)
         self.assertEqual((res.outcome, res.codes, res.alert), (S.SYNC_REFUSED, (Y.CODE_STORE_REFUSED,), True))
         self.assertEqual(sum(a["present"] for a in self.st.accounts()), 10)
@@ -518,6 +521,22 @@ class PairLinksTest(Base):
         res = self.pair(erp, t=T0 + timedelta(hours=72, minutes=1))
         self.assertEqual(res.codes, (L.CODE_ACCOUNTS_STALE, L.CODE_STAGES_STALE))
         self.assertEqual(erp.calls, 0)
+
+    def test_future_inputs_are_stale(self):
+        erp = self.seed(t=T0 + timedelta(hours=2))
+        res = self.pair(erp, t=T0 + timedelta(hours=1, minutes=45))   # 시계를 뒤로 고침 — 입력이 5분 넘게 미래
+        self.assertEqual(res.codes, (L.CODE_ACCOUNTS_STALE, L.CODE_STAGES_STALE))
+        self.assertEqual(erp.calls, 0)
+
+    def test_prospect_gone_from_list_not_paired(self):
+        erp = self.seed()
+        t = self.at(self.clock.t + timedelta(minutes=1))
+        self.st.record_prospects(stages([srow(11, "메타상회"), srow(13, "바다수산", "사후관리"),
+                                         srow(15, "푸른들판", "홀딩중")], t))   # 12 가 목록에서 빠짐(단계 칸은 남는다)
+        res = self.pair(erp)
+        self.assertEqual(res.outcome, S.SYNC_ACCEPTED)
+        self.assertNotIn(12, [r[1] for r in self.rows(res.pairing_id)])
+        self.assertEqual(res.counts["prospects"], 3)
 
     def test_input_age_boundaries(self):
         erp = self.seed()
