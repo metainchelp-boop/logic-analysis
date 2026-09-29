@@ -370,6 +370,20 @@ class ConfirmedBrakeTest(Base):
         res = L.sync_accounts(FakeReader(kids(*accs[15:])), self.st, self.at(T0 + timedelta(days=1)))   # 관리 중 15/60 빠짐
         self.assertEqual((res.outcome, res.codes), (S.SYNC_BRAKED, (S.BRAKE_CONFIRMED,)))
 
+    def test_account_moved_to_unmanaged_prospect_not_counted(self):
+        """관리 중 가망에 확인했다가 끝난 가망에 더 늦게 확인한 계정 — 산 확인은 끝난 가망 것이라 세지 않는다(밀린 확인은 안 셈)."""
+        accs = many(1000)
+        self.st.record_prospects(stages([srow(p, f"가게{p}") for p in range(100, 160)]
+                                        + [srow(p, f"끝남{p}", "계약만료", end=T0.date() - timedelta(days=20))
+                                           for p in range(300, 360)], T0 - timedelta(minutes=5)))
+        self.st.record_accounts(kids(*accs), self.clock.t)
+        for i in range(60):
+            self.st.record_decision(100 + i, accs[i][0], "confirmed", 0, self.clock.t)
+        for i in range(15):   # 앞 15곳은 끝난 가망으로 옮겨 확인(뒤 확인이 산다)
+            self.st.record_decision(300 + i, accs[i][0], "confirmed", 0, self.clock.t)
+        res = L.sync_accounts(FakeReader(kids(*accs[15:])), self.st, self.at(T0 + timedelta(days=1)))
+        self.assertEqual(res.outcome, S.SYNC_ACCEPTED)   # 관리 중 45곳은 그대로 — 옮긴 15곳은 분모에도 빠짐에도 없다
+
     def test_managed_rule_is_the_handle_rule(self):
         self.st.record_prospects(stages([srow(100, "가"), srow(101, "나", "홀딩중"),
                                          srow(102, "다", end=T0.date() - timedelta(days=14)),   # 끝난 지 14일 — 아직 관리
@@ -1033,6 +1047,20 @@ class RecordPairingTest(Base):
         pid = self.st.record_pairing(self.clock.t, **self.args([ok] + blocked_twice))           # 번호 없는 막힘은 여러 줄
         self.assertEqual(self.st.pairing_run(pid)["counts"]["blocked"], 2)
         self.assertEqual(self.st.pairing_run(pid)["counts"]["auto"], 1)                         # 개수는 저장소가 줄에서 센다
+
+    def test_reason_codes_by_state(self):
+        """사유 칸 — 막힘은 짝 규칙 코드만 · 이관 빠짐은 없음 또는 never-listed 만 · 밀린 확인은 없음(검토 security-3).
+        줄 모양 검사만 본다(목록 대조로 먼저 거절되는 경우와 섞이지 않게)."""
+        lost = {"state": "missing", "possibility_id": 11, "customer_id": A, "link": "confirmed", "decision_id": 5}
+        sup = {"state": "superseded", "possibility_id": 11, "customer_id": A, "decision_id": 5}
+        for good in (dict(lost), dict(lost, code=None), dict(lost, code="never-listed"),
+                     dict(lost, state="broken", code="never-listed"), dict(sup)):
+            self.assertEqual(len(self.st._pairing_rows([good])), 1, good)
+        for bad in (dict(lost, code="not-linked"), dict(lost, code="2345678"), dict(lost, state="broken", code="x"),
+                    dict(sup, code="never-listed"), dict(sup, code="same")):
+            with self.subTest(bad=sorted(bad.items())):
+                with self.assertRaises(S.StoreRefused):
+                    self.st._pairing_rows([bad])
 
     def test_events(self):
         pid = self.st.record_pairing_event(self.clock.t, S.SYNC_FAILED, ["network"])
