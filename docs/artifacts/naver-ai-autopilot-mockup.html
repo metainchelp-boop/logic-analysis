@@ -1,3 +1,4 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
 <title>네이버 관제 대시보드 시안</title>
 <style>
   :root{
@@ -367,12 +368,24 @@
   }
   @media (max-width:480px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
   @media print{.demo,.rolebar,.top,.no-print{display:none!important}}
+  /* ===== v9 이관 ===== */
+  .iwan{display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:#fff;border:1px solid var(--line);border-radius:12px;padding:9px 14px;margin-bottom:12px;font-size:13px;color:var(--sub)}
+  .iwan b{color:var(--text)}
+  .iwan .lbl{font-weight:800;color:var(--text);margin-right:2px}
+  .iwan .ichip{border:1px solid var(--line2);background:#fff;border-radius:20px;padding:3px 10px;font-size:12.5px;font-weight:700;color:var(--sub)}
+  .iwan .ichip.on{background:var(--text);color:#fff;border-color:var(--text)}
+  .iwan .ichip.lost{border-color:rgba(220,38,38,.45);color:var(--red)}
+  .iwan .ichip.lost.on{background:var(--red);color:#fff;border-color:var(--red)}
+  .iwan .src{margin-left:auto;font-size:12px;color:var(--muted)}
+  .new9{font-size:10px;font-weight:800;color:#fff;background:var(--red);border-radius:4px;padding:0 4px;margin-left:4px;vertical-align:1px}
+  .ok10{font-size:10px;font-weight:800;color:#fff;background:var(--green);border-radius:4px;padding:0 4px;margin-left:4px;vertical-align:1px}
 </style>
 
 <div class="demo">
-  <b>시안 · 업데이트 2026-09-28 · v8 · 관제 먼저 · 확정</b>
-  <span class="grow">대표 지시 「매일 모든 광고주 계정에 하나씩 들어가 확인하는 일을 없앤다」로 다시 짰습니다 · 🛰 관제 = 전 광고주 현황 + 이슈 · 🤖 자동화는 따로 · 📄 주간·월간 보고서 · 모든 광고주·직원 이름과 숫자는 예시입니다</span>
-  <button class="gbtn" data-guide>ⓘ 시안 안내 · 점검 규칙 · 대표 결정 12건 확정</button>
+  <b>시안 · 업데이트 2026-09-29 · v10 · 🔌 이관 빠짐 결정 3건 확정</b>
+  <span class="grow">대표 지시 「접속이 끊긴 것을 대시보드에서 감지 — 이관이 빠진 것으로 확인」 · 이관 = 광고주 광고계정이 우리 회사에 연결된 상태 · 관제 위 「🔌 이관」 띠 · 🔴 이관 빠짐 이슈 · 광고주 한 장 「연결」 칸 · 결정 3건(I1~I3) <b>확정 — 모두 권고안</b>(대표님 「추천대로 해」 9/29) · 모든 광고주·직원 이름과 숫자는 예시입니다</span>
+  <button class="gbtn" data-guide-to="g-iwan">ⓘ 이관 빠짐 설명 · 결정 3건(확정)</button>
+  <button class="gbtn" data-guide>ⓘ 시안 안내 · 점검 규칙</button>
 </div>
 <div class="rolebar" role="group" aria-label="시안 도구 — 보는 사람 바꾸기">
   <span class="tag">시안 도구</span>보는 사람:
@@ -409,6 +422,7 @@
     <p class="ps">매일 아침 모든 광고주의 네이버 광고 계정을 대신 점검했습니다. <b>「확인 필요」만 보시면 됩니다</b> — 문제가 없는 광고주는 들어가 보지 않아도 됩니다.</p>
 
     <div class="runbar" id="runbar"></div>
+    <div class="iwan" id="iwan" role="group" aria-label="이관 상태 — 눌러서 거르기"></div>
     <div class="kpis" id="kpis" role="group" aria-label="오늘 점검 결과 — 눌러서 거르기"></div>
 
     <div class="card flat">
@@ -430,17 +444,17 @@
         <input class="search" id="q" placeholder="광고주 찾기" aria-label="광고주 찾기">
       </div>
       <div class="tblwrap"><table>
-        <thead><tr><th>상태</th><th>광고주</th><th>확인</th><th>담당</th><th>어제 광고비</th><th>같은 요일 대비</th><th>비즈머니</th><th>켜진 캠페인</th><th>열린 이슈</th><th>계약 단계</th><th>자동화</th></tr></thead>
+        <thead><tr><th>상태</th><th>광고주</th><th>확인</th><th>이관</th><th>담당</th><th>어제 광고비</th><th>같은 요일 대비</th><th>비즈머니</th><th>켜진 캠페인</th><th>열린 이슈</th><th>계약 단계</th><th>자동화</th></tr></thead>
         <tbody id="tbody"></tbody>
       </table></div>
     </div>
 
     <div class="card flat" id="endedCard">
       <div class="kh" style="padding:12px 14px 4px"><h2>📦 계약 끝난 광고주</h2><span class="n" id="ended-n"></span><span class="n" style="margin-left:auto">사후 관리용 · 끝난 지 14일이 지나면 네이버 계정에 들어가지 않습니다</span></div>
-      <p class="hint" style="padding:0 14px 8px">여기 숫자는 <b>계약이 끝날 때까지 쌓아 둔 기록</b>과, 하루 한 번 받는 <b>대행사 계정 연결 목록</b>에서 본 연결 여부뿐입니다(그 광고주 계정에 따로 들어가지 않음). 재계약되면 저절로 다시 매일 점검 대상이 됩니다.</p>
+      <p class="hint" style="padding:0 14px 8px">여기 숫자는 <b>계약이 끝날 때까지 쌓아 둔 기록</b>과, 하루 한 번 받는 <b>대행 연결 목록</b>에서 본 이관 여부뿐입니다(그 광고주 계정에 따로 들어가지 않음). 재계약되면 저절로 다시 매일 점검 대상이 됩니다.</p>
       <button class="foldbtn" id="endedToggle" aria-expanded="false">펼치기</button>
       <div id="endedBody" hidden><div class="tblwrap"><table>
-        <thead><tr><th>광고주</th><th>담당</th><th>계약 끝난 날</th><th>지난 날</th><th>끝날 때 마지막 점검</th><th>끝나기 전 마지막 달 광고비</th><th>네이버 연결</th><th>점검</th></tr></thead>
+        <thead><tr><th>광고주</th><th>담당</th><th>계약 끝난 날</th><th>지난 날</th><th>끝날 때 마지막 점검</th><th>끝나기 전 마지막 달 광고비</th><th>이관</th><th>점검</th></tr></thead>
         <tbody id="endedTbody"></tbody>
       </table></div></div>
     </div>
@@ -615,6 +629,29 @@
   <p>다른 길이 있습니다. 네이버 검색광고의 <b>대행사 관리 계정</b>에 광고주 계정이 연결돼 있으면, <b>회사 열쇠 한 벌</b>로 연결된 광고주를 모두 <b>읽을</b> 수 있습니다(네이버 명세가 그렇게 설계돼 있고, 비즈머니까지 읽히는지는 시험 1곳으로 먼저 확인). 관제는 읽기만 하므로 이 길이 맞습니다. 자동화(쓰기)는 지금 결정대로 광고주별 키로 갑니다 — D5 는 그대로 둡니다. → 대표 결정 <b>M0</b>.</p>
   <div class="note">✅ <b>0단계 첫 시험(9/28 19:56 · 읽기만)</b> — 1번 대행사 계정 키 한 벌로 관리계정 3개 · 연결된 광고계정 <b>1,784곳(전부 운영관리)</b> · 캠페인 목록 · <b>비즈머니</b> · 통계 경로가 모두 읽혔습니다. ⇒ M0 ⓐ 가 실측으로 성립. 2번 대행사 계정은 연결 0곳이라 쓰지 않습니다. 다음 = 1,784곳과 전산 광고주 짝 맞추기(관리 중인 곳만 점검).</div>
 
+  <h3 id="g-iwan">0-1. 🔌 이관 빠짐 — 접속이 끊긴 것을 「이관이 빠진 것」으로 확인합니다 <span class="new9">v9</span></h3>
+  <p><b>대표님 지시(9/29)</b> — 「대시보드에서 접속 상태가 끊긴 것도 감지하고 싶어. 접속 상태가 끊긴 걸 이관이 빠진 걸로 확인하는 게 좋을 거 같아. 이관은 광고주 광고계정이 우리 회사에 매치된 상태를 말해.」</p>
+  <p>그래서 접속 끊김을 <b>광고주 계정에 들어가다 실패했는지</b>로 보지 않고, <b>우리 회사 대행 연결 목록에서 그 광고계정이 빠졌는지</b>로 봅니다. 목록은 매일 06:30 에 한 번, 회사 대행사 계정 키로 <b>전부</b> 받습니다(1,784곳 · 광고주 계정마다 따로 들어가지 않음). 전날 목록과 견주어 빠진 계정을 찾습니다.</p>
+  <div class="tblwrap"><table class="truth">
+    <thead><tr><th>이관 상태</th><th>언제</th><th>관제에 보이는 것</th></tr></thead>
+    <tbody>
+      <tr><td><span class="pill p-green">이관됨</span></td><td>이 광고주 광고계정이 오늘 대행 연결 목록에 있음</td><td>평소대로 매일 점검</td></tr>
+      <tr><td><span class="pill p-amber">오늘 목록에 없음</span></td><td>이어졌던 계정이 오늘 아침 목록에 없음 — <b>첫날</b></td><td>⚪ 「오늘 이관 목록에 없음」 · 오늘은 점검 못 함 · 내일 아침에도 없으면 이관 빠짐 (I2)</td></tr>
+      <tr><td><span class="pill p-red">🔌 이관 빠짐</span></td><td><b>서로 다른 날 두 번</b> 목록에 없고 · 처음 빠진 때부터 <b>20시간 넘게</b> (보통 둘째 날 아침)</td><td>🔴 긴급 이슈 「이관이 빠졌습니다」 · 담당 + 팀장 + 대표에게 바로 (I1) · 다시 이관되면 다음 날 아침 🔁 저절로 풀림</td></tr>
+      <tr><td><span class="pill p-gray">이관 안 됨</span></td><td>전산에 네이버 고객 번호는 적혀 있는데 목록에 한 번도 없음 — 아직 우리 회사로 안 넘어옴</td><td>⚪ 칸 · 매주 월요일 담당에게 「이관 받을 곳」 목록 (I3)</td></tr>
+      <tr><td><span class="pill p-gray">읽기 거절</span></td><td>목록에는 있는데(이관은 남음) 계정 읽기가 거절됨 — 광고주가 우리 권한을 바꿨을 수 있음</td><td>⚪ + 🟡 「네이버가 읽기를 거절했습니다」 — <b>이관 빠짐과 다름</b>(목록으로 가른다)</td></tr>
+    </tbody>
+  </table></div>
+  <ul>
+    <li><b>이관 빠짐으로 알리는 계정</b> — 사람이 「이 계정 맞음」을 누른 짝 + 전산 고객 번호로 <b>자동 짝이 된 적 있는</b> 짝(전산에 그 번호가 아직 적혀 있을 때). 이름만 비슷했던 계정이나 한 번도 이어진 적 없는 번호는 누구 계정인지 몰라 「이관 빠짐」으로 알리지 않습니다.</li>
+    <li><b>잘못 알리지 않게</b> — 목록을 <b>전부</b> 받았을 때만 견줍니다 · 한꺼번에 크게 빠지면(짝이 이어진 계정만 따로도 셈) 멈추고 대표 확인을 받습니다 · 멈춘 날·실패한 날은 날짜로 세지 않습니다 · 자정 앞뒤로 두 번 없는 것은 「2일」이 아닙니다.</li>
+    <li><b>계약이 끝난 광고주</b>(📦)는 「이관 남음 — 네이버에서 해제 권장」 · 「해제됨」으로만 보입니다(끝난 뒤 이관이 빠지는 것은 정상이라 이슈로 올리지 않음).</li>
+  </ul>
+  <div class="note">대표님 「추천대로 해」(9/29) — I1~I3 3건 모두 <b>권고안(★)으로 확정</b>했습니다. 아래 선택은 기록으로 남겨 두었고 바꿀 수 없게 잠갔습니다. 엔진 쪽 감지는 만들어 두었습니다(③ PR #6 · 배포 전 · 부르는 곳 0). 등급·이슈·알림은 아침 점검(S9)·알림(S10)이, 화면(이관 띠 · 이슈 · 「연결」 칸)은 화면 조각(S11)이 이 시안과 이 결정대로 만듭니다.</div>
+  <div id="decs2"></div>
+  <button class="btn blue" data-copy-dec2>이관 결정 복사</button>
+  <textarea class="out" id="decOut2" readonly aria-label="고른 이관 결정"></textarea>
+
   <h3>1. v5 → v6 무엇이 바뀌었나</h3>
   <div class="tblwrap"><table class="truth">
     <thead><tr><th>v5 에서</th><th>v6 에서</th></tr></thead>
@@ -643,8 +680,9 @@
   <div class="tblwrap"><table class="truth">
     <thead><tr><th>점검</th><th>문제로 보는 기준 (처음 값 · 설정에서 바꿈)</th><th>등급</th><th>언제부터</th></tr></thead>
     <tbody>
-      <tr><td>키 없음</td><td>광고센터에 키가 없음 → 매주 월요일 담당에게 「키 받을 곳」 목록</td><td>⚪</td><td>2차</td></tr>
-      <tr><td>키 거절</td><td>네이버가 키를 거절 (모든 광고주가 한꺼번에면 🔴 전체 알림)</td><td>⚪ + 🟡</td><td>2차</td></tr>
+      <tr><td>🔌 이관 빠짐 <span class="new9">v9</span></td><td>이어졌던 광고계정이 대행 연결 목록에서 빠짐 — 서로 다른 날 두 번 · 20시간 넘게(첫날은 ⚪ 「오늘 이관 목록에 없음」) · 다시 이관되면 저절로 풀림</td><td>🔴 (I1)</td><td>2차</td></tr>
+      <tr><td>이관 안 됨 <span class="new9">v9</span></td><td>전산에 네이버 고객 번호는 있는데 대행 연결 목록에 한 번도 없음 → 매주 월요일 담당에게 「이관 받을 곳」 목록 (예전 이름 「키 없음」)</td><td>⚪</td><td>2차</td></tr>
+      <tr><td>읽기 거절</td><td>대행 연결 목록에는 있는데 계정 읽기가 거절됨(권한 변경 등) · 모든 광고주가 한꺼번에면 🔴 전체 알림 (예전 이름 「키 거절」)</td><td>⚪ + 🟡</td><td>2차</td></tr>
       <tr><td>비즈머니</td><td>잔액 ÷ 최근 7일 하루 평균 광고비 — 1일 미만 🔴 · 3일 미만 🟡</td><td>🔴/🟡</td><td>2차</td></tr>
       <tr><td>켜져 있는데 안 나감</td><td>켜진 캠페인이 있는데 어제 노출 0 (최근 7일엔 노출이 있었던 곳만)</td><td>🔴/🟡</td><td>2차</td></tr>
       <tr><td>광고비 급변</td><td>같은 요일 4주 평균의 2배 이상 또는 절반 이하 · 하루 1만원 미만 광고주는 제외</td><td>🟡</td><td>2차</td></tr>
@@ -663,8 +701,8 @@
   <div class="tblwrap"><table class="truth">
     <thead><tr><th>상태</th><th>언제</th><th>확인 필요?</th></tr></thead>
     <tbody>
-      <tr><td><span class="sig w"></span>점검 불가</td><td>키 없음 · 키 거절 · 자료 늦음 · 오늘 점검 안 됨 — <b>절대 🟢 로 보이지 않음</b></td><td>키 거절 · 점검 안 됨 = <b>예</b> / 키 없음 = 아니오(주간 목록으로 따로)</td></tr>
-      <tr><td><span class="sig r"></span>긴급</td><td>열린 긴급 이슈 1개 이상</td><td><b>예</b> — 👀 확인 중이어도 풀릴 때까지 예</td></tr>
+      <tr><td><span class="sig w"></span>점검 불가</td><td>이관 안 됨 · 오늘 이관 목록에 없음 · 읽기 거절 · 자료 늦음 · 오늘 점검 안 됨 — <b>절대 🟢 로 보이지 않음</b></td><td>읽기 거절 · 점검 안 됨 = <b>예</b> / 이관 안 됨 · 오늘 이관 목록에 없음 = 아니오(이관 안 됨은 주간 목록 · 오늘 없음은 내일 이관 빠짐으로)</td></tr>
+      <tr><td><span class="sig r"></span>긴급</td><td>열린 긴급 이슈 1개 이상 (비즈머니 바닥 · 켜져 있는데 안 나감 · <b>🔌 이관 빠짐</b> …)</td><td><b>예</b> — 👀 확인 중이어도 풀릴 때까지 예</td></tr>
       <tr><td><span class="sig y"></span>주의</td><td>열린 주의 이슈 1개 이상 (예외 처리한 것은 세지 않음)</td><td>🆕 새로 있으면 <b>예</b> · 모두 👀 확인 중이면 아니오</td></tr>
       <tr><td><span class="sig g"></span>정상</td><td>오늘 점검 성공 + 열린 긴급·주의 0 (ⓘ 알아 두기 · 🙈 예외는 상관없음)</td><td>아니오 — 들어가 보지 않아도 됨</td></tr>
     </tbody>
@@ -720,6 +758,8 @@
 
   <div class="changelog">
     <b>변경 이력</b><br>
+    v10 · 2026-09-29 — 대표 「추천대로 해」: 이관 빠짐 결정 3건 확정 — I1 ⓐ 🔴 긴급(담당 + 팀장 + 대표 · 다시 이관되면 저절로 풀림) · I2 ⓐ 둘째 날 아침(서로 다른 날 두 번 · 20시간 넘게 · 첫날은 ⚪ 「오늘 이관 목록에 없음」) · I3 ⓐ ⚪ 「이관 안 됨」 + 매주 월요일 목록. 선택 잠금.<br>
+    v9 · 2026-09-29 — 대표 지시 「대시보드에서 접속이 끊긴 것을 감지 — 끊긴 것을 이관이 빠진 것으로 확인 · 이관 = 광고주 광고계정이 우리 회사에 매치된 상태」: 관제 위 「🔌 이관」 띠(이관됨 · 이관 빠짐 · 오늘 목록에 없음 · 이관 안 됨 — 눌러서 거르기) · 🔴 「이관이 빠졌습니다」 이슈(둘째 날 아침 · 다시 이관되면 저절로 풀림) · 전 광고주 표 「이관」 칸 · 광고주 한 장 「연결」 칸에 이관 상태·기록·할 일 · 「키 없음」→「이관 안 됨」 · 「키 거절」→「읽기 거절(이관은 남음)」 · 📦 계약 끝난 광고주 「네이버 연결」→「이관」 · 점검 기준에 이관 빠짐 · 새 결정 3건(I1 등급 · I2 언제 · I3 이관 안 됨). 엔진 감지는 ③ PR #6(S8)에 만들어 둠 · 화면은 확정 뒤.<br>
     v8 · 2026-09-28 — 대표 요청 「계약이 끝난 광고주는 별도로 모아서 — 접속은 안 하지만 현황은 보고 싶어(사후 관리)」: 관제 아래 「📦 계약 끝난 광고주」 칸(끝난 날 · 지난 날 · 끝날 때 마지막 점검 · 마지막 달 광고비 · 네이버 연결 남음/해제됨 · 14일까지는 계속 점검). 끝난 지 14일이 지나면 계정에 들어가지 않고 기록과 대행사 연결 목록만 씁니다.<br>
     v7 · 2026-09-28 — 대표 「추천대로해」: 결정 12건(M0~M11) 모두 권고안으로 확정 · 선택 잠금 · 0단계 첫 시험 결과(대행사 계정 키 한 벌로 1,784곳 · 비즈머니 읽힘 · 2번 계정 연결 0곳) 반영. 이 시안을 토대로 2차부터 만든다.<br>
     v6 · 2026-09-28 — 대표 지시(「직원이 매일 모든 광고주 계정에 들어가 확인하는 일을 없앤다 · 관제 대시보드에서 전 광고주 현황 · 매일 오전 점검 · 이슈 관리 · 자동화는 별도 페이지 · 주간·월간 보고서」)로 전면 개편. 메뉴 4개(🛰 관제 · 🤖 자동화 · 📄 보고서 · ⚙️ 설정) · 매일 아침 점검 규칙 · 광고주 판정 표 · 이슈 단계(새로 · 확인 중 · 해결 · 저절로 풀림 · 예외) · 보고서(주간 자동 · 월간 검토) · 점검 실패한 날 보기 · 실측(전산 API 키 2곳 · 로그인 아이디 239곳)으로 「열쇠」 결정(M0) 새로 · 대표 결정 12건(M0~M11). v5 는 자동화 페이지로 옮겨 모양만 남김.<br>
@@ -757,6 +797,19 @@
   });
   box.querySelector('#decs').innerHTML=h;
   box.querySelectorAll('#decs input').forEach(function(i){i.disabled=true});
+  var DEC2=[
+    ['I1','🔌 이관 빠짐의 등급',[['ⓐ','🔴 긴급 이슈 — 담당 + 팀장 + 대표에게 바로 알림 · 다시 이관되면 🔁 저절로 풀림 · 예외는 팀장 이상만 7일(M7 그대로)',1],['ⓑ','🟡 주의 이슈 — 담당에게, 팀장은 09:30 묶음'],['ⓒ','⚪ 점검 불가 표시만(이슈로 올리지 않음)']],'이관이 빠지면 그 광고주 광고를 우리가 보지도 고치지도 못합니다. 광고주가 대행을 끊었다는 이탈 신호일 수도 있어 그날 안에 사람이 알아야 합니다.'],
+    ['I2','언제 「이관 빠짐」으로 보나',[['ⓐ','둘째 날 아침 — 서로 다른 날 두 번 · 처음 빠진 때부터 20시간 넘게 목록에 없을 때 · 첫날은 ⚪ 「오늘 이관 목록에 없음」(확인 필요 아니오)',1],['ⓑ','첫날 바로 🔌 이관 빠짐']],'네이버 목록이 하루 잘려 오는 일로 수백 곳을 한꺼번에 잘못 알리지 않게 하루를 기다립니다. 확인한 짝이 끊긴 것으로 보는 규칙(반박 H1)과 같은 기준입니다.'],
+    ['I3','「이관 안 됨」(전산에 고객 번호는 있는데 목록에 한 번도 없음)',[['ⓐ','⚪ 칸에 모아 두고 매주 월요일 담당에게 「이관 받을 곳 N곳」 목록 — 예전 「키 없음」 자리를 이 이름으로 바꿈(M0 ⓐ 로 광고주별 키 대신 대행 연결 목록을 쓰므로)',1],['ⓑ','매일 이슈로 올림']],'아직 한 번도 넘어온 적 없는 광고주는 「끊긴」 것이 아니라 「안 넘어온」 것이라 매일 알리면 진짜 이관 빠짐이 묻힙니다(M5 와 같은 이유).']
+  ];
+  var h2='';
+  DEC2.forEach(function(d){
+    h2+='<div class="dec" data-id2="'+d[0]+'"><div class="q">'+d[0]+' · '+d[1]+' <span class="ok10">확정 ⓐ</span></div>';
+    d[2].forEach(function(o){h2+='<label><input type="radio" name="'+d[0]+'" value="'+o[0]+'"'+(o[2]?' checked':'')+'> <span>'+o[0]+' '+o[1]+(o[2]?'<span class="rec">★ 권고</span>':'')+'</span></label>'});
+    h2+='<div class="why">'+d[3]+'</div></div>';
+  });
+  box.querySelector('#decs2').innerHTML=h2;
+  box.querySelectorAll('#decs2 input').forEach(function(i){i.disabled=true});
 })();
 </script>
 
@@ -793,7 +846,9 @@
     {id:'geo',n:'거너 가구',o:'jung',stage:'전략 관리',spend:102000,vs:9,biz:'14일',camp:'6 / 6',auto:'꺼짐',key:'ok'},
     {id:'deo',n:'더러 식당',o:'jung',stage:'진행중',spend:15200,vs:3,biz:'2.4일',bizc:'y',camp:'2 / 2',auto:'꺼짐',key:'ok'},
     {id:'meo',n:'머버 공방',o:'jung',stage:'사후 관리',spend:null,vs:null,biz:null,camp:'—',auto:'꺼짐',key:'none'},
-    {id:'seo',n:'서어 약국',o:'jung',stage:'진행중',spend:9800,vs:-5,biz:'25일',camp:'1 / 1',auto:'꺼짐',key:'ok'}
+    {id:'seo',n:'서어 약국',o:'jung',stage:'진행중',spend:9800,vs:-5,biz:'25일',camp:'1 / 1',auto:'꺼짐',key:'ok'},
+    {id:'beo',n:'버서 한우',o:'park2',stage:'진행중',spend:null,vs:null,biz:null,camp:'—',auto:'꺼짐',key:'ok',iwan:'lost',since:'9/28(일) 06:31',last:'9/27(토) 06:31',days:2},
+    {id:'eo',n:'어저 수산',o:'kim',stage:'진행중',spend:null,vs:null,biz:null,camp:'—',auto:'꺼짐',key:'ok',iwan:'today',since:'오늘 06:31',last:'어제 06:31'}
   ];
   var byId={};ADS.forEach(function(a){byId[a.id]=a});
 
@@ -801,7 +856,7 @@
   var ISS=[
     {k:1,c:'dara',lv:'r',cause:'비즈머니가 오늘 바닥납니다',txt:'잔액 <b class="num">12,300원</b> · 최근 7일 하루 평균 광고비 41,000원 → <b>오늘 오후 광고가 멈출 수 있습니다</b>',st:'new',at:'06:41',memo:[]},
     {k:2,c:'chaka',lv:'r',cause:'켜져 있는데 광고가 안 나갑니다',txt:'켜진 캠페인 2개 · 어제 노출 <b>0</b> · 지난주까지는 하루 평균 노출 8,400',st:'new',at:'06:44',memo:[]},
-    {k:3,c:'zacha',lv:'y',cause:'네이버가 키를 거절했습니다',txt:'오늘 점검을 못 했습니다(⚪) · 광고주가 비밀키를 새로 만들었을 수 있습니다 → 「연결」에서 키 다시 받기',st:'new',at:'06:38',memo:[]},
+    {k:3,c:'zacha',lv:'y',cause:'네이버가 읽기를 거절했습니다 (이관은 남아 있음)',txt:'오늘 점검을 못 했습니다(⚪) · 대행 연결 목록에는 있어서 <b>이관 빠짐은 아닙니다</b> · 광고주가 우리 회사 권한을 바꿨을 수 있습니다 → 「연결」에서 확인',st:'new',at:'06:38',memo:[]},
     {k:4,c:'maba',lv:'y',cause:'광고비가 갑자기 늘었습니다',txt:'어제 <b class="num">312,000원</b> · 같은 요일 4주 평균 140,000원의 <b>2.2배</b>',st:'work',at:'06:45',who:'김담당 09:12',memo:['김담당 09:12 · 광고주 주말 기획전으로 예산 올림 — 이상 없음, 수요일까지 지켜봄']},
     {k:5,c:'gana',lv:'y',cause:'하루 예산이 일찍 떨어집니다 (3일째)',txt:'캠페인 「가나_쇼핑」 하루 예산 50,000원 · 3일 연속 오후 3시 전후 소진',st:'new',at:'06:45',ph:'3차',memo:[]},
     {k:6,c:'kata',lv:'y',cause:'계약 단계와 광고비가 맞지 않습니다',txt:'전산 단계 「환불중」인데 어제 광고비 <b class="num">48,000원</b>',st:'new',at:'06:46',memo:[]},
@@ -809,7 +864,9 @@
     {k:8,c:'deo',lv:'y',cause:'비즈머니가 3일 안에 바닥납니다',txt:'잔액 36,500원 · 하루 평균 15,000원 → 약 <b>2.4일</b>',st:'new',at:'06:47',memo:[]},
     {k:9,c:'paha',lv:'y',cause:'비즈머니가 3일 안에 바닥납니다',txt:'잔액 54,000원 · 하루 평균 34,000원 → 약 1.6일',st:'except',at:'어제',who:'박담당 · 10/27까지',memo:['박담당 09-27 · 광고주가 자동 충전을 켜 둠 — 30일 예외']},
     {k:10,c:'saa',lv:'y',cause:'비즈머니가 3일 안에 바닥납니다',txt:'어제 잔액 부족 → 오늘 아침 충전 확인',st:'auto',at:'오늘 06:40',memo:[]},
-    {k:11,c:'aja',lv:'r',cause:'켜져 있는데 광고가 안 나갑니다',txt:'그제 노출 0 → 어제 노출 5,120으로 돌아옴',st:'auto',at:'오늘 06:42',memo:[]}
+    {k:11,c:'aja',lv:'r',cause:'켜져 있는데 광고가 안 나갑니다',txt:'그제 노출 0 → 어제 노출 5,120으로 돌아옴',st:'auto',at:'오늘 06:42',memo:[]},
+    {k:12,c:'beo',lv:'r',cause:'🔌 이관이 빠졌습니다',txt:'<b>우리 회사 대행 연결 목록에 이 광고주 광고계정이 없습니다</b> · 9/28(일) 06:31 부터 2일째 · 광고주가 네이버 검색광고 「대행사 관리」에서 우리 회사 연결을 끊었거나 계정을 옮겼을 수 있습니다 → 광고주에게 확인 · 다시 이관되면 🔁 저절로 풀립니다',st:'new',at:'06:31',memo:[]},
+    {k:13,c:'geo',lv:'r',cause:'🔌 이관이 빠졌습니다',txt:'9/26 목록에 없음 → 어제 다시 이관되어 오늘 아침 점검함',st:'auto',at:'오늘 06:31',memo:[]}
   ];
   var ENDED=[
     {n:'바바 떡집',o:'kim',end:'9/20',days:8,last:'g',spend:'1,240,000원',link:'on',watch:true},
@@ -826,11 +883,17 @@
   function visAds(){var o=visibleOwners();return ADS.filter(function(a){return o.indexOf(a.o)>=0})}
   function openIss(cid){return ISS.filter(function(i){return i.c===cid&&(i.st==='new'||i.st==='work')})}
 
+  /* ---------- 이관(v9) — 대행 연결 목록 기준 ---------- */
+  function iwanOf(a){return a.key==='none'?'never':(a.iwan||'ok')}
+  var IWT={ok:'이관됨',lost:'🔌 이관 빠짐',today:'오늘 목록에 없음',never:'이관 안 됨'};
+
   /* ---------- 판정 — 시안 안내 3절 표와 같은 규칙 ---------- */
   function judge(a){
     if(state.failed) return {s:'w',why:'오늘 점검 안 됨',need:true};
-    if(a.key==='none') return {s:'w',why:'키 없음',need:false};
-    if(a.key==='reject') return {s:'w',why:'키 거절',need:true};
+    var iw=iwanOf(a);
+    if(iw==='never') return {s:'w',why:'이관 안 됨',need:false};
+    if(iw==='today') return {s:'w',why:'오늘 이관 목록에 없음',need:false};
+    if(a.key==='reject') return {s:'w',why:'읽기 거절 · 이관 남음',need:true};
     var op=openIss(a.id);
     var r=op.filter(function(i){return i.lv==='r'});
     var y=op.filter(function(i){return i.lv==='y'});
@@ -857,10 +920,10 @@
 
   /* ---------- 숫자 칸 ---------- */
   function renderKpis(){
-    var v=visAds(),c={need:0,r:0,y:0,g:0,w:0},wk={none:0,reject:0,fail:0};
-    v.forEach(function(a){var j=judge(a);c[j.s]++;if(j.need)c.need++;if(j.s==='w'){if(state.failed)wk.fail++;else if(a.key==='none')wk.none++;else wk.reject++;}});
+    var v=visAds(),c={need:0,r:0,y:0,g:0,w:0},wk={none:0,today:0,reject:0,fail:0};
+    v.forEach(function(a){var j=judge(a);c[j.s]++;if(j.need)c.need++;if(j.s==='w'){if(state.failed)wk.fail++;else if(iwanOf(a)==='never')wk.none++;else if(iwanOf(a)==='today')wk.today++;else wk.reject++;}});
     function k(key,cls,label,val,sub){return '<button class="kpi '+cls+(state.f===key?' on':'')+'" data-f="'+key+'" aria-pressed="'+(state.f===key)+'"><span class="l">'+label+'</span><span class="v">'+val+'</span><span class="s">'+sub+'</span></button>'}
-    var wsub=state.failed?'오늘 점검 안 됨 '+wk.fail:'키 없음 '+wk.none+' · 키 거절 '+wk.reject;
+    var wsub=state.failed?'오늘 점검 안 됨 '+wk.fail:'이관 안 됨 '+wk.none+' · 오늘 목록에 없음 '+wk.today+' · 읽기 거절 '+wk.reject;
     $('#kpis').innerHTML=
       k('need','need','👉 확인 필요',c.need,'들어가 볼 곳')+
       k('r','r','<span class="sig r"></span>긴급',c.r,'오늘 안에')+
@@ -868,6 +931,17 @@
       k('g','g','<span class="sig g"></span>정상',c.g,'안 봐도 됨')+
       k('w','w','<span class="sig w"></span>점검 불가',c.w,wsub);
     $('#tbl-n').textContent=ROLES[state.role].scope+' · '+v.length+'곳';
+  }
+
+  /* ---------- 🔌 이관 띠(v9) ---------- */
+  function renderIwan(){
+    var v=visAds(),c={ok:0,lost:0,today:0,never:0};
+    v.forEach(function(a){c[iwanOf(a)]++});
+    function chip(key,cls,label){return '<button class="ichip '+cls+(state.f==='iw_'+key?' on':'')+'" data-f="iw_'+key+'" aria-pressed="'+(state.f==='iw_'+key)+'">'+label+' <b class="num">'+c[key]+'</b></button>'}
+    $('#iwan').innerHTML='<span class="lbl">🔌 이관</span>'+
+      '<span>이관됨 <b class="num">'+c.ok+'</b></span>'+
+      chip('lost','lost','🔌 이관 빠짐')+chip('today','','오늘 목록에 없음')+chip('never','','이관 안 됨')+
+      '<span class="src">대행 연결 목록 기준 · 오늘 06:31 전부 받음(1,784곳) · 이관 = 광고주 광고계정이 우리 회사에 연결된 상태 <button class="more" style="background:none;border:0;color:var(--blue);font-weight:700" data-guide-to="g-iwan">어떻게 아나 →</button></span>';
   }
 
   /* ---------- 오늘의 이슈 ---------- */
@@ -919,13 +993,22 @@
     return '<tr class="click" data-client="'+a.id+'"><td><span class="sig '+SIGC[j.s]+'"></span><span class="hint">'+esc(j.why)+'</span></td>'+
       '<td><a class="nm" data-client="'+a.id+'">'+esc(a.n)+'</a>'+badge+'</td>'+
       '<td>'+(j.need?'<span class="needdot">확인 필요</span>':'<span class="noneed">—</span>')+'</td>'+
+      '<td>'+iwCell(a)+'</td>'+
       '<td>'+esc(PEOPLE[a.o].n)+'</td><td class="num">'+(state.failed?'—':won(a.spend))+'</td><td class="num">'+(state.failed?'—':vs)+'</td>'+
       '<td class="num">'+(state.failed?'—':biz)+'</td><td class="num">'+a.camp+'</td><td class="num">'+(op.length||'—')+'</td>'+
       '<td>'+esc(a.stage)+'</td><td><span class="pill '+(a.auto==='꺼짐'?'p-gray':'p-blue')+'">'+esc(a.auto)+'</span></td></tr>';
   }
+  function iwCell(a){
+    var iw=iwanOf(a);
+    if(iw==='lost')return '<span class="pill p-red">🔌 빠짐 · '+a.days+'일째</span>';
+    if(iw==='today')return '<span class="pill p-amber">오늘 목록에 없음</span>';
+    if(iw==='never')return '<span class="pill p-gray">이관 안 됨</span>';
+    return '<span class="pill p-green">이관됨</span>';
+  }
   function pass(a){
     var j=judge(a);
     if(state.q&&a.n.indexOf(state.q)<0)return false;
+    if(state.f.indexOf('iw_')===0)return iwanOf(a)===state.f.slice(3);
     if(state.f==='need')return j.need;
     if(state.f==='all')return true;
     return j.s===state.f;
@@ -938,14 +1021,14 @@
     Object.keys(teams).forEach(function(t){
       var ps=teams[t].filter(function(p){return byOwner[p]});
       if(!ps.length)return;
-      if(state.role==='ceo')h+='<tr class="grp team"><td colspan="11"><b>'+t+'</b></td></tr>';
+      if(state.role==='ceo')h+='<tr class="grp team"><td colspan="12"><b>'+t+'</b></td></tr>';
       ps.forEach(function(p){
         if(grouped){var all=visAds().filter(function(a){return a.o===p}),cn={r:0,y:0,w:0,need:0};all.forEach(function(a){var j=judge(a);if(cn[j.s]!=null)cn[j.s]++;if(j.need)cn.need++});
-          h+='<tr class="grp"><td colspan="11"><b>'+PEOPLE[p].n+'</b> · '+all.length+'곳 · 확인 필요 '+cn.need+' · 🔴 '+cn.r+' · 🟡 '+cn.y+' · ⚪ '+cn.w+'</td></tr>';}
+          h+='<tr class="grp"><td colspan="12"><b>'+PEOPLE[p].n+'</b> · '+all.length+'곳 · 확인 필요 '+cn.need+' · 🔴 '+cn.r+' · 🟡 '+cn.y+' · ⚪ '+cn.w+'</td></tr>';}
         byOwner[p].forEach(function(a){h+=row(a)});
       });
     });
-    if(!h){h='<tr><td colspan="11" class="empty">'+(state.role==='park'?'담당 광고주가 없습니다. 관리자는 ⚙️ 설정에서 점검 기준을 고칩니다(대표 결정 P2 — 전체 보기는 대표만).':(state.f==='need'?'확인이 필요한 광고주가 없습니다 🎉':'조건에 맞는 광고주가 없습니다.'))+'</td></tr>'}
+    if(!h){h='<tr><td colspan="12" class="empty">'+(state.role==='park'?'담당 광고주가 없습니다. 관리자는 ⚙️ 설정에서 점검 기준을 고칩니다(대표 결정 P2 — 전체 보기는 대표만).':(state.f==='need'?'확인이 필요한 광고주가 없습니다 🎉':'조건에 맞는 광고주가 없습니다.'))+'</td></tr>'}
     $('#tbody').innerHTML=h;
     $$('#tblChips .chip').forEach(function(b){b.classList.toggle('on',b.getAttribute('data-f')===state.f)});
   }
@@ -956,11 +1039,11 @@
     $('#c-crumb').textContent=a.n;$('#c-name').textContent=a.n;
     $('#c-sig').className='sig '+SIGC[j.s];
     $('#c-sub').textContent='담당 '+PEOPLE[a.o].n+' · '+PEOPLE[a.o].team+' · 계약 단계 '+a.stage;
-    var keyb={ok:'<span class="pill p-green">키 연결 · 계정 확인됨</span>',unconf:'<span class="pill p-gray">키 연결 · 계정 확인 전</span>',reject:'<span class="pill p-red">키 거절</span>',none:'<span class="pill p-gray">키 없음</span>'}[a.key];
-    $('#c-badges').innerHTML='<span class="pill p-'+(j.s==='r'?'red':j.s==='y'?'amber':j.s==='g'?'green':'gray')+'">'+SIGT[j.s]+' · '+esc(j.why)+'</span>'+keyb+'<span class="pill p-blue">자동화 '+esc(a.auto)+'</span>';
+    var keyb={ok:'<span class="pill p-green">짝 확인됨</span>',unconf:'<span class="pill p-gray">계정 확인 전</span>',reject:'<span class="pill p-red">읽기 거절</span>',none:''}[a.key];
+    $('#c-badges').innerHTML='<span class="pill p-'+(j.s==='r'?'red':j.s==='y'?'amber':j.s==='g'?'green':'gray')+'">'+SIGT[j.s]+' · '+esc(j.why)+'</span>'+iwCell(a)+keyb+'<span class="pill p-blue">자동화 '+esc(a.auto)+'</span>';
     var bars='';var base=[62,58,70,66,71,40,38,64,60,69,72,44,41,a.id==='chaka'?0:a.id==='maba'?100:65];
     base.forEach(function(x,i){bars+='<i class="'+(i===13&&(a.id==='chaka'||a.id==='maba')?'a':'')+'" style="height:'+Math.max(3,x)+'%" title="'+(i-13)+'일"></i>'});
-    var tiles=a.spend==null?'<div class="note warn">오늘 점검을 못 해 숫자가 없습니다('+(a.key==='none'?'키 없음':'키 거절')+'). 「연결」 칸에서 해결합니다.</div>':
+    var tiles=a.spend==null?'<div class="note '+(iwanOf(a)==='lost'?'bad':'warn')+'">오늘 점검을 못 해 숫자가 없습니다('+esc(j.why)+'). 「연결」 칸에서 이관 상태와 할 일을 봅니다.</div>':
       '<div class="tiles">'+
       '<div class="tile"><div class="l">어제 광고비</div><div class="v">'+won(a.spend)+'</div><div class="d">같은 요일 대비 '+(a.vs==null?'—':(a.vs>0?'+':'')+a.vs+'%')+'</div></div>'+
       '<div class="tile"><div class="l">노출</div><div class="v">'+(a.id==='chaka'?'0':'12,480')+'</div><div class="d">어제</div></div>'+
@@ -982,12 +1065,19 @@
       '<tr><td>주간</td><td>9/22~9/28</td><td><span class="pill p-amber">검토 대기</span></td><td><button class="btn sm" data-preview="'+a.id+'" data-kind="w">미리보기</button></td></tr>'+
       '<tr><td>주간</td><td>9/15~9/21</td><td><span class="pill p-green">게시함 · 공유 화면</span></td><td><button class="btn sm" data-preview="'+a.id+'" data-kind="w">보기</button></td></tr>'+
       '<tr><td>월간</td><td>8월</td><td><span class="pill p-green">게시함 · 공유 화면</span></td><td><button class="btn sm" data-preview="'+a.id+'" data-kind="m">보기</button></td></tr></tbody></table></div></div>';
-    var conn={ok:'<p class="sub">키 3칸이 저장돼 있고, 계정 확인(「이 광고주 계정이 맞음」)도 끝났습니다.</p>',
+    var iw=iwanOf(a);
+    var iwBody={
+      ok:'<p class="sub">이 광고주 광고계정이 우리 회사 대행 연결 목록에 있습니다. 매일 아침 목록을 전부 받아 확인하고, 빠지면 「🔌 이관 빠짐」으로 알립니다.</p><ul class="tl"><li><span class="t">09-01</span><span>이관됨 — 대행 연결 목록에 처음 보임 · 짝 이어짐(전산 고객 번호)</span></li><li><span class="t">오늘 06:31</span><span>이관 확인 — 목록에 있음</span></li></ul>',
+      lost:'<div class="note bad"><b>대행 연결 목록에 없습니다 — '+esc(a.since)+' 부터 '+a.days+'일째</b>(서로 다른 날 두 번 · 20시간 넘게). 할 일: ① 광고주에게 네이버 검색광고 「대행사 관리」에서 메타아이앤씨 연결이 남아 있는지 확인 요청 ② 광고주가 직접 끊은 것이면 전산 계약 단계 확인 ③ 다시 이관되면 다음 날 아침 🔁 저절로 풀립니다.</div><button class="btn blue sm" data-toast="시안 — 광고주에게 보낼 「대행 연결 다시 하는 법」 안내를 복사했습니다">대행 연결 안내 복사</button><ul class="tl" style="margin-top:10px"><li><span class="t">09-01</span><span>이관됨 — 짝 이어짐(전산 고객 번호)</span></li><li><span class="t">'+esc(a.last)+'</span><span>마지막으로 목록에 있음</span></li><li><span class="t">'+esc(a.since)+'</span><span>목록에 없음 — 「오늘 이관 목록에 없음」(첫날 · ⚪)</span></li><li><span class="t">오늘 06:31</span><span>목록에 없음 — <b>🔌 이관 빠짐</b> · 🔴 긴급 이슈 · 담당 + 팀장 + 대표에게 알림</span></li></ul>',
+      today:'<div class="note warn"><b>오늘 아침 대행 연결 목록에 없습니다(첫날).</b> 목록이 하루 잘려 온 것일 수 있어 오늘은 ⚪ 로만 보입니다. 내일 아침에도 없으면 「🔌 이관 빠짐」(🔴)으로 올립니다. 오늘은 이 계정을 점검하지 못했습니다.</div><ul class="tl"><li><span class="t">'+esc(a.last)+'</span><span>마지막으로 목록에 있음</span></li><li><span class="t">'+esc(a.since)+'</span><span>목록에 없음(첫날)</span></li></ul>',
+      never:'<div class="note warn">전산에 네이버 고객 번호는 적혀 있는데 우리 회사 대행 연결 목록에 <b>한 번도 없습니다</b> — 아직 이관되지 않았습니다(⚪). 매주 월요일 담당에게 「이관 받을 곳」 목록으로 알립니다.</div><button class="btn blue sm" data-toast="시안 — 광고주에게 보낼 「대행 연결 하는 법」 안내를 복사했습니다">대행 연결 안내 복사</button>'
+    }[iw];
+    var conn={ok:'<p class="sub">자동화(5차)용 키 3칸이 저장돼 있고, 계정 확인(「이 광고주 계정이 맞음」)도 끝났습니다.</p>',
       unconf:'<div class="note">읽기 점검은 이미 하고 있습니다. <b>자동화와 광고주에게 가는 보고서는 계정 확인 뒤</b>에 켜집니다(엉뚱한 계정의 숫자가 광고주에게 가지 않게).</div><button class="btn blue sm" data-toast="시안 — 확인했습니다(누가·언제 기록)">이 광고주 계정이 맞음</button>',
-      reject:'<div class="note bad">네이버가 이 키를 거절했습니다. 광고주가 비밀키를 새로 만들었거나 권한을 바꿨을 수 있습니다.</div><button class="btn blue sm" data-toast="시안 — 키 다시 받는 링크(네이버 전용)를 복사했습니다">키 다시 받는 링크 복사</button>',
-      none:'<div class="note warn">키가 없어 점검하지 못합니다(⚪). 매주 월요일 담당에게 「키 받을 곳」 목록으로 알립니다.</div><button class="btn blue sm" data-toast="시안 — 키 요청 링크(네이버 전용)를 복사했습니다">키 요청 링크 복사</button>'}[a.key];
-    $('#p-conn').innerHTML='<div class="card"><div class="kh"><h2>네이버 연결</h2><span class="n">저장한 뒤에는 끝 4자리만 보입니다</span></div>'+
-      (a.key==='none'?'':'<div class="keyrow" style="margin-bottom:10px"><div class="fg"><label>고객 번호</label><span class="masked">•••• 7781</span></div><div class="fg"><label>액세스 라이선스</label><span class="masked">•••• 3f0a</span></div><div class="fg"><label>비밀키</label><span class="masked">•••• 91c2</span></div></div>')+conn+'</div>';
+      reject:'<div class="note bad">대행 연결 목록에는 있는데(<b>이관은 남아 있음</b>) 계정 읽기가 거절됐습니다. 광고주가 우리 회사 권한을 바꿨을 수 있습니다(예: 운영관리 → 보기). 이관 빠짐과는 다릅니다.</div><button class="btn blue sm" data-toast="시안 — 광고주에게 보낼 「권한 되돌리는 법」 안내를 복사했습니다">권한 안내 복사</button>',
+      none:''}[a.key];
+    $('#p-conn').innerHTML='<div class="card"><div class="kh"><h2>🔌 이관</h2>'+iwCell(a)+'<span class="n">대행 연결 목록 기준 · 오늘 06:31 받음 · 이관 = 광고주 광고계정이 우리 회사에 연결된 상태</span></div>'+iwBody+'</div>'+
+      (a.key==='none'?'':'<div class="card"><div class="kh"><h2>짝 · 키</h2><span class="n">저장한 뒤에는 끝 4자리만 보입니다</span></div><div class="keyrow" style="margin-bottom:10px"><div class="fg"><label>고객 번호</label><span class="masked">•••• 7781</span></div><div class="fg"><label>액세스 라이선스</label><span class="masked">•••• 3f0a</span></div><div class="fg"><label>비밀키</label><span class="masked">•••• 91c2</span></div></div>'+conn+'</div>');
   }
 
   /* ---------- 자동화 ---------- */
@@ -1012,6 +1102,7 @@
   var REP={w:{title:'주간 보고서 · 9/22(월)~9/28(일)',made:'월요일 10:00 생성',rule:'열린 이슈가 없는 곳은 저절로 게시 · 있는 곳만 담당 검토'},m:{title:'월간 보고서 · 9월',made:'10/5(일) 10:00 생성 예정(구매가 늦게 잡히는 것을 반영)',rule:'AI 한 단락 포함 · 모두 담당 검토 뒤 게시'}};
   var repState={};
   function repStatus(a){
+    if(iwanOf(a)==='lost'||iwanOf(a)==='today')return 'lost';
     if(a.key==='none'||a.key==='reject')return 'no';
     if(a.key==='unconf')return 'hold';
     if(repState[state.rtab+a.id])return 'pub';
@@ -1019,15 +1110,15 @@
     return openIss(a.id).length?'wait':'pub';
   }
   function renderReports(){
-    var r=REP[state.rtab],v=visAds(),h='',cnt={pub:0,wait:0,no:0,hold:0};
+    var r=REP[state.rtab],v=visAds(),h='',cnt={pub:0,wait:0,no:0,hold:0,lost:0};
     v.forEach(function(a){
       var s=repStatus(a);cnt[s]++;
-      var pill={pub:'<span class="pill p-green">게시함</span>',wait:'<span class="pill p-amber">검토 대기</span>',no:'<span class="pill p-gray">만들 수 없음 · 키</span>',hold:'<span class="pill p-gray">보류 · 계정 확인 전</span>'}[s];
-      h+='<tr><td><a class="nm" data-client="'+a.id+'">'+esc(a.n)+'</a></td><td>'+esc(PEOPLE[a.o].n)+'</td><td>'+pill+'</td><td class="num">'+(a.spend==null?'—':won(a.spend*7))+'</td><td class="num">'+(a.vs==null?'—':(a.vs>0?'+':'')+Math.round(a.vs/3)+'%')+'</td><td>'+(s==='pub'?'<span class="ok">링크 올라감</span>':'<span class="hint">—</span>')+'</td><td>'+(s==='no'?'':'<button class="btn sm" data-preview="'+a.id+'" data-kind="'+state.rtab+'">'+(s==='wait'?'미리보기 · 검토':'보기')+'</button>')+'</td></tr>';
+      var pill={pub:'<span class="pill p-green">게시함</span>',wait:'<span class="pill p-amber">검토 대기</span>',no:'<span class="pill p-gray">만들 수 없음 · '+(iwanOf(a)==='never'?'이관 안 됨':'읽기 거절')+'</span>',hold:'<span class="pill p-gray">보류 · 계정 확인 전</span>',lost:'<span class="pill p-red">보류 · 이관 빠짐</span>'}[s];
+      h+='<tr><td><a class="nm" data-client="'+a.id+'">'+esc(a.n)+'</a></td><td>'+esc(PEOPLE[a.o].n)+'</td><td>'+pill+'</td><td class="num">'+(a.spend==null?'—':won(a.spend*7))+'</td><td class="num">'+(a.vs==null?'—':(a.vs>0?'+':'')+Math.round(a.vs/3)+'%')+'</td><td>'+(s==='pub'?'<span class="ok">링크 올라감</span>':'<span class="hint">—</span>')+'</td><td>'+(s==='no'||s==='lost'?'':'<button class="btn sm" data-preview="'+a.id+'" data-kind="'+state.rtab+'">'+(s==='wait'?'미리보기 · 검토':'보기')+'</button>')+'</td></tr>';
     });
     $('#repBody').innerHTML=h||'<tr><td colspan="7" class="empty">담당 광고주가 없습니다.</td></tr>';
     $('#rep-title').textContent=r.title;
-    $('#rep-n').textContent='게시함 '+cnt.pub+' · 검토 대기 '+cnt.wait+' · 보류 '+cnt.hold+' · 만들 수 없음 '+cnt.no;
+    $('#rep-n').textContent='게시함 '+cnt.pub+' · 검토 대기 '+cnt.wait+' · 보류 '+(cnt.hold+cnt.lost)+' · 만들 수 없음 '+cnt.no;
     $('#repbar').className='runbar';
     $('#repbar').innerHTML='<span class="ok"></span>'+r.made+' · '+r.rule+' · 광고주가 보는 곳: 전산 광고주 공유 화면(링크) · 비용 칸은 공유 링크의 「비용 보이기」 설정을 따릅니다';
     $('#bulkOk').hidden=!cnt.wait;
@@ -1051,8 +1142,9 @@
 
   /* ---------- 설정: 점검 기준 ---------- */
   var TH=[
-    ['키 없음','광고센터에 키가 없음 → 매주 월요일 담당에게 「키 받을 곳」 목록','⚪ 점검 불가','2차'],
-    ['키 거절','네이버가 키를 거절함 (모든 광고주가 한꺼번에 거절이면 🔴 전체 알림)','⚪ + 🟡','2차'],
+    ['🔌 이관 빠짐','이어졌던 광고계정이 대행 연결 목록에서 빠짐 — 서로 다른 날 두 번 · 20시간 넘게(첫날은 ⚪ 「오늘 이관 목록에 없음」) · 다시 이관되면 저절로 풀림','🔴 긴급','2차'],
+    ['이관 안 됨','전산에 네이버 고객 번호는 있는데 대행 연결 목록에 한 번도 없음 → 매주 월요일 담당에게 「이관 받을 곳」 목록','⚪ 점검 불가','2차'],
+    ['읽기 거절','대행 연결 목록에는 있는데(이관 남음) 계정 읽기가 거절됨 (모든 광고주가 한꺼번에 거절이면 🔴 전체 알림)','⚪ + 🟡','2차'],
     ['비즈머니','잔액 ÷ 최근 7일 하루 평균 광고비 — 1일 미만 🔴 · 3일 미만 🟡','🔴 / 🟡','2차'],
     ['켜져 있는데 안 나감','켜진 캠페인이 있는데 어제 노출 0 (최근 7일엔 노출이 있었던 곳만)','🔴 전부 / 🟡 일부','2차'],
     ['광고비 급변','어제 광고비가 같은 요일 4주 평균의 2배 이상 또는 절반 이하 · 하루 1만원 미만은 제외','🟡','2차'],
@@ -1092,15 +1184,15 @@
     var o=visibleOwners(),v=ENDED.filter(function(e){return o.indexOf(e.o)>=0});
     var SG={g:'🟢 정상',y:'🟡 주의',r:'🔴 긴급',w:'⚪ 점검 불가'};
     var on=v.filter(function(e){return e.link==='on'&&!e.watch}).length;
-    $('#ended-n').textContent=v.length+'곳'+(on?' · 네이버 연결이 남은 곳 '+on:'');
+    $('#ended-n').textContent=v.length+'곳'+(on?' · 이관이 남은 곳 '+on:'');
     $('#endedCard').hidden=!v.length&&state.role==='park';
     var h='';v.forEach(function(e){
-      var link=e.watch?'<span class="st work">연결 · 14일 동안 계속 점검</span>':(e.link==='on'?'<span class="st new">연결 남음 — 네이버에서 해제 권장</span>':'<span class="st except">해제됨</span>');
+      var link=e.watch?'<span class="st work">이관됨 · 14일 동안 계속 점검</span>':(e.link==='on'?'<span class="st new">이관 남음 — 네이버에서 해제 권장</span>':'<span class="st except">이관 해제됨</span>');
       h+='<tr><td><b>'+e.n+'</b></td><td>'+PEOPLE[e.o].n+'</td><td class="num">'+e.end+'</td><td class="num">'+e.days+'일</td><td>'+SG[e.last]+'</td><td class="num">'+e.spend+'</td><td>'+link+'</td><td>'+(e.watch?'매일(14일까지)':'<span class="noneed">안 함</span>')+'</td></tr>';});
     $('#endedTbody').innerHTML=h||'<tr><td colspan="8" class="empty">계약이 끝난 담당 광고주가 없습니다.</td></tr>';
     $('#endedBody').hidden=!endedOpen;$('#endedToggle').textContent=endedOpen?'접기':'펼치기';$('#endedToggle').setAttribute('aria-expanded',String(endedOpen));
   }
-  function renderAll(){renderEnded();renderRun();renderKpis();renderIssues();renderTable();renderAuto();renderReports();renderTh();renderDrawer();if(state.client)renderClient()}
+  function renderAll(){renderEnded();renderRun();renderIwan();renderKpis();renderIssues();renderTable();renderAuto();renderReports();renderTh();renderDrawer();if(state.client)renderClient()}
 
   /* ---------- 화면 전환 ---------- */
   function go(s){
@@ -1120,7 +1212,7 @@
     if(t.hasAttribute('data-role')){state.role=t.getAttribute('data-role');applyRole();return}
     if(t.getAttribute('data-demo')==='failed'){state.failed=!state.failed;t.setAttribute('aria-pressed',state.failed);t.classList.toggle('on',state.failed);renderAll();toast(state.failed?'시안 — 아침 점검이 실패한 날의 모습입니다':'시안 — 점검이 정상인 날로 돌아왔습니다');return}
     if(t.hasAttribute('data-go')){go(t.getAttribute('data-go'));return}
-    if(t.hasAttribute('data-f')){state.f=t.getAttribute('data-f');renderKpis();renderTable();return}
+    if(t.hasAttribute('data-f')){state.f=t.getAttribute('data-f');renderIwan();renderKpis();renderTable();return}
     if(t.hasAttribute('data-client')){state.client=t.getAttribute('data-client');renderClient();$$('[data-ctab]').forEach(function(b,i){b.classList.toggle('on',i===0)});$$('#s-client .pane').forEach(function(p,i){p.classList.toggle('on',i===0)});go('client');return}
     if(t.hasAttribute('data-autoc')){renderAutoC(t.getAttribute('data-autoc'));state.client=t.getAttribute('data-autoc');go('autoc');return}
     if(t.hasAttribute('data-goauto')){renderAutoC(state.client);go('autoc');return}
@@ -1155,6 +1247,7 @@
     if(t.hasAttribute('data-guide')||t.hasAttribute('data-guide-to')){openGuide(t.getAttribute('data-guide-to'));return}
     if(t.hasAttribute('data-close-guide')){$('#guide').classList.remove('on');return}
     if(t.hasAttribute('data-copy-dec')){copyDec();return}
+    if(t.hasAttribute('data-copy-dec2')){copyDec2();return}
     if(t.hasAttribute('data-toast')){toast(t.getAttribute('data-toast'));return}
   });
   $('#shade').addEventListener('click',function(){$('#drawer').classList.remove('on');$('#shade').classList.remove('on')});
@@ -1163,6 +1256,12 @@
   $('#guide').addEventListener('click',function(e){if(e.target.id==='guide')$('#guide').classList.remove('on')});
 
   function openGuide(to){$('#guide').classList.add('on');if(to){var el=document.getElementById(to);if(el)el.scrollIntoView()}else{$('#guide').scrollTop=0}}
+  function copyDec2(){
+    var out=[];$$('[data-id2]').forEach(function(d){var c=d.querySelector('input:checked');if(c)out.push(d.getAttribute('data-id2')+' '+c.value)});
+    var txt='네이버 관제 시안 v10 — 이관 빠짐 결정 확정(2026-09-29 · 모두 권고안): '+out.join(' · ');
+    $('#decOut2').value=txt;
+    try{navigator.clipboard.writeText(txt).then(function(){toast('복사했습니다 — 대화창에 붙여 넣어 주세요')},function(){toast('아래 칸을 길게 눌러 복사해 주세요')})}catch(err){toast('아래 칸을 길게 눌러 복사해 주세요')}
+  }
   function copyDec(){
     var out=[];$$('.dec').forEach(function(d){var c=d.querySelector('input:checked');if(c)out.push(d.getAttribute('data-id')+' '+c.value)});
     var txt='네이버 관제 시안 v7 — 대표 결정 확정(2026-09-28 · 모두 권고안): '+out.join(' · ');
@@ -1173,3 +1272,5 @@
   applyRole();
 })();
 </script>
+
+</body></html>
