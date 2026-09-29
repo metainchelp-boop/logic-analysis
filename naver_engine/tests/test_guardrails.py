@@ -47,6 +47,12 @@ DB_ATTRS = ("sqlite3", "_sqlite3", "fcntl", "_fcntl", "_A", "_conn", "_lock_fd",
             "set_progress_handler", "set_trace_callback", "attrgetter", "methodcaller", "_authorizer", "_tx", "_migrate",
             "_set_meta")
 ATTR_FUNCS = ("getattr", "setattr", "hasattr", "delattr")
+# 관문 모듈이 품은 네트워크 도구 — 관문 밖에서는 관문 모듈의 속성으로도 꺼내지 않는다(``EP.urllib`` · ``EP.UrllibTransport`` ·
+# ``self._profiles._transport`` · 검토 guard-net-via-gate-module-attribute)
+NET_ATTRS = frozenset(NET_MODULES) | {"UrllibTransport", "Request", "urlopen", "build_opener", "OpenerDirector",
+                                      "HTTPConnection", "HTTPSConnection", "_opener", "_transport", "_gate",
+                                      "ProxyHandler", "HTTPRedirectHandler"}
+SECRET_NAMES = ("_value", "reveal", "mac")   # 비밀값을 꺼내거나 비밀값으로 서명하는 이름
 
 
 def _tree(p: pathlib.Path) -> ast.AST:
@@ -63,6 +69,40 @@ def _code_tree(p: pathlib.Path) -> ast.AST:
             if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant) and isinstance(first.value.value, str):
                 body[0] = ast.Pass()
     return tree
+
+
+def _attr_func_escapes(tree: ast.AST):
+    """getattr 무리를 값으로 쓰거나(별칭 · map · partial) 글자 아닌 이름으로 부르는 곳."""
+    called, out = set(), []
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in ATTR_FUNCS:
+            called.add(id(n.func))
+            if len(n.args) < 2 or not isinstance(n.args[1], ast.Constant):
+                out.append(n.func.id + "(글자 아님)")
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Name) and n.id in ATTR_FUNCS and id(n) not in called:
+            out.append(n.id + "(값으로 씀)")
+    return out
+
+
+def _const_attr_names(tree: ast.AST):
+    """글자 이름으로 부른 getattr 무리 → (노드, 이름)."""
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in ATTR_FUNCS and len(n.args) >= 2 \
+                and isinstance(n.args[1], ast.Constant):
+            yield n, n.args[1].value
+
+
+def _net_escapes(tree: ast.AST):
+    """관문 밖 — 관문 모듈의 네트워크 도구를 속성·이름·글자 getattr 로 꺼내는 곳."""
+    out = []
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Attribute) and n.attr in NET_ATTRS:
+            out.append("." + n.attr)
+        if isinstance(n, ast.Name) and n.id == "UrllibTransport":
+            out.append(n.id)
+    out += [f"getattr(…, {v!r})" for _n, v in _const_attr_names(tree) if v in NET_ATTRS]
+    return out
 
 
 def _owners(tree: ast.AST):
@@ -92,13 +132,39 @@ def _imports(tree: ast.AST):
 
 
 def _folded_strings(tree: ast.AST):
-    """글자 상수와, 상수끼리 이어 붙인 글자(「"PO" + "ST"」 · f"{'PO'}ST")를 모두 꺼낸다."""
+    """글자 상수와, 상수끼리 이어 붙인 글자(「"PO" + "ST"」 · f"{'PO'}ST" · join · % · format)를 모두 꺼낸다."""
+    def items(n):
+        if isinstance(n, (ast.List, ast.Tuple)):
+            parts = [fold(e) for e in n.elts]
+            return None if None in parts else parts
+        if isinstance(n, (ast.GeneratorExp, ast.ListComp)) and len(n.generators) == 1 and not n.generators[0].ifs \
+                and isinstance(n.elt, ast.Name) and isinstance(n.generators[0].target, ast.Name) \
+                and n.elt.id == n.generators[0].target.id:
+            return items(n.generators[0].iter)
+        return None
+
     def fold(n):
         if isinstance(n, ast.Constant) and isinstance(n.value, str):
             return n.value
         if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Add):
             a, b = fold(n.left), fold(n.right)
             return a + b if a is not None and b is not None else None
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr in ("join", "format") \
+                and fold(n.func.value) is not None and not n.keywords:
+            if n.func.attr == "join":
+                parts = items(n.args[0]) if len(n.args) == 1 else None
+                return None if parts is None else fold(n.func.value).join(parts)
+            args = [fold(a) for a in n.args]
+            try:
+                return None if None in args else fold(n.func.value).format(*args)
+            except (IndexError, KeyError, ValueError):
+                return None
+        if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Mod) and fold(n.left) is not None:
+            args = items(n.right) if isinstance(n.right, (ast.Tuple, ast.List)) else [fold(n.right)]
+            try:
+                return None if args is None or None in args else fold(n.left) % tuple(args)
+            except (TypeError, ValueError):
+                return None
         if isinstance(n, ast.JoinedStr):
             parts = []
             for v in n.values:
@@ -178,6 +244,20 @@ class GuardrailTest(unittest.TestCase):
             for node, mod in _imports(_tree(p)):
                 root = mod.lstrip(".").split(".")[0]
                 self.assertNotIn(root, NET_MODULES, f"{p.name}: {mod} — 관문 밖 네트워크 금지")
+            self.assertEqual(_net_escapes(_tree(p)), [], f"{p.name}: 관문 모듈의 네트워크 도구를 속성으로 꺼냄")
+
+    def test_network_guard_catches_bypasses(self):
+        """관문 모듈을 import 한 곳이 그 모듈의 속성으로 네트워크를 여는 길 — 검토 재현 두 갈래와 비슷한 모양."""
+        bad = ('from . import erp_profile as EP\ndef f(u, d):\n    return EP.UrllibTransport().send('
+               'EP.urllib.request.Request(u, data=d), 8)\n',
+               'from . import naver_read as N\ndef f(u):\n    return N.urllib.request.urlopen(u)\n',
+               'def f(app):\n    return app._profiles._transport\n',
+               'from . import erp_alert as EA\ndef f():\n    return getattr(EA, "urllib")\n',
+               'from .naver_read import UrllibTransport\nUrllibTransport()\n')
+        for src in bad:
+            tree = ast.parse(src)
+            imported = any(mod.lstrip(".").split(".")[0] in NET_MODULES for _n, mod in _imports(tree))
+            self.assertTrue(_net_escapes(tree) or imported, src)
 
     def test_no_forbidden_imports_or_escape_hatches(self):
         for p in SOURCES:
@@ -191,9 +271,7 @@ class GuardrailTest(unittest.TestCase):
                                      f"{p.name}: {n.id} 우회 금지")
                 if isinstance(n, ast.Attribute):
                     self.assertNotIn(n.attr, ("modules", "__dict__", "__getattribute__"), f"{p.name}: .{n.attr} 우회 금지")
-                if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in ("getattr", "setattr", "delattr"):
-                    self.assertTrue(len(n.args) >= 2 and isinstance(n.args[1], ast.Constant),
-                                    f"{p.name}: 글자로 만든 getattr 금지")
+            self.assertEqual(_attr_func_escapes(tree), [], f"{p.name}: getattr 우회 금지")
             for _n, s in _folded_strings(_code_tree(p)):
                 self.assertNotIn("app.adapters", s, f"{p.name}: 글자로 ③ 어댑터를 가리킴")
                 self.assertNotIn("naver_searchad", s, f"{p.name}: 글자로 ③ 어댑터를 가리킴")
@@ -238,11 +316,30 @@ class GuardrailTest(unittest.TestCase):
         self.assertTrue({"ERP_HOST", "BASE_URL", "ERP_SCHEME"} <= got)
 
     def test_token_mac_only_in_session(self):
-        """토큰 비밀값 서명(``.mac``)은 ``session.py`` 에서만 — 다른 곳이 비밀값으로 아무 글이나 서명하지 못하게."""
+        """토큰 비밀값 서명(``.mac``)은 ``session.py`` 에서만 — 다른 곳이 비밀값으로 아무 글이나 서명하지 못하게.
+        글자 이름으로 부르는 getattr(``getattr(s, "mac")``)도 막는다(검토 guard-secret-reveal-mac)."""
         for p in SOURCES:
-            for n in ast.walk(_tree(p)):
-                if isinstance(n, ast.Attribute) and n.attr == "mac" and p.name not in ("session.py", "credentials.py"):
+            if p.name in ("session.py", "credentials.py"):
+                continue
+            tree = _tree(p)
+            for n in ast.walk(tree):
+                if isinstance(n, ast.Attribute) and n.attr == "mac":
                     self.fail(f"{p.name}: .mac 은 session.py 에서만")
+            for _n, v in _const_attr_names(tree):
+                self.assertNotIn(v, SECRET_NAMES, f"{p.name}: getattr(…, {v!r})")
+
+    def test_secret_names_never_spelled_as_strings(self):
+        """비밀값을 꺼내거나 서명하는 이름(``_value`` · ``reveal`` · ``mac``)은 credentials.py 밖에서 글자로 쓰지 않는다
+        (getattr · 이어 붙인 글자 · 설명문 제외)."""
+        for p in SOURCES:
+            if p.name == "credentials.py":
+                continue
+            for _n, s in _folded_strings(_code_tree(p)):
+                self.assertNotIn(s, SECRET_NAMES, f"{p.name}: 비밀값 이름 글자 {s!r}")
+        for src in ('def f(s):\n    return getattr(s, "reveal")()\n', 'def f(s, m):\n    return getattr(s, "mac")(m)\n',
+                    'def f(s):\n    return getattr(s, "_val" + "ue")\n'):
+            tree = ast.parse(src)
+            self.assertTrue([s for _n, s in _folded_strings(tree) if s in SECRET_NAMES], src)
 
     def test_alert_gate_borrows_host_from_read_gate(self):
         """알림 관문은 호스트·주소를 스스로 적지 않고 읽기 관문의 한 글자(``ERP_HOST``)를 가져다 쓴다."""
@@ -317,6 +414,9 @@ class GuardrailTest(unittest.TestCase):
                     self.assertIn((p.name, owner.get(n)),
                                   {(g, (cls, "_gate")) for g, (cls, _caller) in GATES.items()},
                                   "비밀값은 관문에서만 꺼낸다")
+            if p.name != "credentials.py":
+                for _n, v in _const_attr_names(tree):
+                    self.assertNotIn(v, SECRET_NAMES, f"{p.name}: getattr(…, {v!r}) — 비밀값 우회 금지")
 
     def test_handle_internals_private(self):
         for p in SOURCES:

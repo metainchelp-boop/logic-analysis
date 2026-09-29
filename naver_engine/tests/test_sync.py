@@ -1326,15 +1326,39 @@ def _folded(tree):
                 parts.append(s)
             return "".join(parts)
         if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "join"
-                and fold(n.func.value) is not None and len(n.args) == 1
-                and isinstance(n.args[0], (ast.List, ast.Tuple))):
-            parts = [fold(e) for e in n.args[0].elts]
-            return None if None in parts else fold(n.func.value).join(parts)
+                and fold(n.func.value) is not None and len(n.args) == 1):
+            parts = _const_items(n.args[0], fold)
+            return None if parts is None else fold(n.func.value).join(parts)
+        if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Mod) and fold(n.left) is not None:   # "%s_%s" % (…)
+            args = _const_items(n.right, fold) if isinstance(n.right, (ast.Tuple, ast.List)) else [fold(n.right)]
+            try:
+                return None if args is None or None in args else fold(n.left) % tuple(args)
+            except (TypeError, ValueError):
+                return None
+        if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "format"
+                and fold(n.func.value) is not None and not n.keywords):             # "{}_{}".format(…)
+            args = [fold(a) for a in n.args]
+            try:
+                return None if None in args else fold(n.func.value).format(*args)
+            except (IndexError, KeyError, ValueError):
+                return None
         return None
     for n in ast.walk(tree):
         s = fold(n)
         if s is not None:
             yield s
+
+
+def _const_items(n, fold):
+    """글자 목록 — ``[..]`` · ``(..)`` · 상수 목록을 도는 생성식(``w for w in ("a", "b")``)까지(검토 guard-privileged)."""
+    if isinstance(n, (ast.List, ast.Tuple)):
+        parts = [fold(e) for e in n.elts]
+        return None if None in parts else parts
+    if isinstance(n, (ast.GeneratorExp, ast.ListComp)) and len(n.generators) == 1 and not n.generators[0].ifs \
+            and isinstance(n.elt, ast.Name) and isinstance(n.generators[0].target, ast.Name) \
+            and n.elt.id == n.generators[0].target.id:
+        return _const_items(n.generators[0].iter, fold)
+    return None
 
 
 def _imports(tree):
@@ -1379,14 +1403,19 @@ def _privileged_uses(tree):
 def _escapes(tree):
     """이름·속성·글자로 된 getattr·금지 import — 규칙을 건너뛰는 길."""
     out = []
+    called = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in ATTR_FUNCS:
+            called.add(id(n.func))
+            if len(n.args) < 2 or not isinstance(n.args[1], ast.Constant):
+                out.append(n.func.id + "(글자 아님)")
     for n in ast.walk(tree):
         if isinstance(n, ast.Name) and n.id in BANNED_NAMES:
             out.append(n.id)
         if isinstance(n, ast.Attribute) and n.attr in BANNED_ATTRS:
             out.append("." + n.attr)
-        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in ATTR_FUNCS:
-            if len(n.args) < 2 or not isinstance(n.args[1], ast.Constant):
-                out.append(n.func.id + "(글자 아님)")
+        if isinstance(n, ast.Name) and n.id in ATTR_FUNCS and id(n) not in called:   # 별칭 · map/partial 에 넘기기
+            out.append(n.id + "(값으로 씀)")
     for _n, mod in _imports(tree):
         root = mod.lstrip(".").split(".")[0]
         if root in ("inspect", "builtins", "importlib", "ctypes", "gc", "marshal", "pickle"):
@@ -1436,7 +1465,13 @@ class SyncGuardTest(unittest.TestCase):
                'def f(st):\n    getattr(st, "record_account_" + "day")(1, 2)\n',
                'import builtins\nbuiltins.getattr\n',
                'def f(st):\n    __builtins__["getattr"](st, "x")\n',
-               'def f():\n    __import__("naver_engine.store")\n')
+               'def f():\n    __import__("naver_engine.store")\n',
+               # 검토 guard-privileged-write-getattr-indirection — getattr 을 값으로 · 생성식 join · % · format
+               'def f(st, now):\n    g = list(map(getattr, [st], ["_".join(w for w in ("record", "decision"))]))[0]\n',
+               'def f(st, k):\n    _g = getattr\n    _g(st, "record_" + k)\n',
+               'import functools\ndef f(st):\n    functools.partial(getattr, st)\n',
+               'def f(st):\n    getattr(st, "%s_%s" % ("record", "access"))\n',
+               'def f(st):\n    getattr(st, "{}_{}".format("mark", "alert_read"))\n')
         for src in bad:
             tree = ast.parse(src)
             self.assertTrue(_privileged_uses(tree) or _escapes(tree), src)

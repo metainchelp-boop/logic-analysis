@@ -1345,42 +1345,82 @@ class AuditTest(WebBase):
 class SyntaxGuardTest(unittest.TestCase):
     SOURCES = sorted(p for p in ENGINE.glob("*.py"))
 
+    PERSON = re.compile(r"(idx|main|sub|prev|viewer|requester|approver|person|emp|who|decided_by|changed_by)", re.I)
+
+    def risky(self, node) -> bool:
+        """사람 번호를 담은 것 같은 이름 · 칸(``x["by_person"]`` · ``x.get("emp_idx")``) · ``bool(그것)``."""
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+            return self.risky(node.operand)
+        if isinstance(node, ast.Name):
+            return self.PERSON.search(node.id) is not None
+        if isinstance(node, ast.Attribute):
+            return self.PERSON.search(node.attr) is not None
+        if isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str):
+            return self.PERSON.search(node.slice.value) is not None
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "get" \
+                and node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
+            return self.PERSON.search(node.args[0].value) is not None
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "bool" and node.args:
+            return self.risky(node.args[0])
+        return False
+
+    def truthy_hits(self, tree):
+        out = []
+        for node in ast.walk(tree):
+            tests = []
+            if isinstance(node, (ast.If, ast.While, ast.IfExp, ast.Assert)):
+                tests = [node.test]
+            elif isinstance(node, ast.BoolOp):
+                tests = list(node.values)
+            elif isinstance(node, ast.comprehension):
+                tests = list(node.ifs)
+            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in ("bool", "filter") \
+                    and node.args:
+                tests = [node.args[-1]] if node.func.id == "bool" else []
+            out += [getattr(node, "lineno", "?") for t in tests if self.risky(t)]
+        return out
+
     def test_no_truthiness_on_person_numbers(self):
-        """0 = 대표 — 엔진 어디서도 사람 번호를 참거짓으로 읽지 않는다(``idx or`` · ``if not idx`` · §12 ⑥)."""
-        person_name = re.compile(r"(idx|main|sub|prev|viewer|requester|approver)", re.I)
-
-        def risky(node):
-            n = node.id if isinstance(node, ast.Name) else node.attr if isinstance(node, ast.Attribute) else None
-            return n is not None and person_name.search(n) is not None
-
-        def inner(n):
-            return n.operand if isinstance(n, ast.UnaryOp) and isinstance(n.op, ast.Not) else n
+        """0 = 대표 — 엔진 어디서도 사람 번호를 참거짓으로 읽지 않는다(``idx or`` · ``if not idx`` · ``if e["by_person"]`` ·
+        ``bool(who)`` · §12 ⑥ · 검토 guard-truthiness)."""
         for p in self.SOURCES:
-            for node in ast.walk(ast.parse(p.read_text(encoding="utf-8"))):
-                where = f"{p.name}:{getattr(node, 'lineno', '?')}"
-                if isinstance(node, (ast.If, ast.While, ast.IfExp, ast.Assert)):
-                    self.assertFalse(risky(inner(node.test)), where)
-                if isinstance(node, ast.BoolOp):
-                    for v in node.values:
-                        self.assertFalse(risky(inner(v)), where)
-                if isinstance(node, ast.comprehension):
-                    for c in node.ifs:
-                        self.assertFalse(risky(inner(c)), where)
+            self.assertEqual(self.truthy_hits(ast.parse(p.read_text(encoding="utf-8"))), [], p.name)
+
+    OWNER_FIELDS = {"main", "sub", "prev", "owners_by_pid", "owners", "manage_emp_idx", "sub_manage_emp_idx",
+                    "prev_manage_owner_idx", "is_manager", "is_top_manager", "members", "subtree"}
+
+    def owner_hits(self, tree):
+        """담당 칸을 속성 · 글자 getattr · 글자 칸(``asdict(own)["prev"]``) · 담당 줄 통째 풀기(asdict/vars)로 읽는 곳."""
+        out = []
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Attribute) and n.attr in self.OWNER_FIELDS:
+                out.append("." + n.attr)
+            if isinstance(n, ast.Subscript) and isinstance(n.slice, ast.Constant) and n.slice.value in self.OWNER_FIELDS:
+                out.append(f"[{n.slice.value!r}]")
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in ("getattr", "hasattr") \
+                    and len(n.args) >= 2 and isinstance(n.args[1], ast.Constant) and n.args[1].value in self.OWNER_FIELDS:
+                out.append(f"getattr(…, {n.args[1].value!r})")
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in ("asdict", "astuple", "vars") \
+                    and n.args and isinstance(n.args[0], ast.Name) and "own" in n.args[0].id.lower():
+                out.append(f"{n.func.id}({n.args[0].id})")
+        return out
 
     def test_screen_modules_do_not_read_owner_fields(self):
         """누가 보는지는 scope.py 한 곳 — 화면 모듈은 담당 칸(메인·서브·직전)·담당 줄을 직접 읽지 않는다(§12 ⑤)."""
-        banned = {"main", "sub", "prev", "owners_by_pid", "owners", "manage_emp_idx", "sub_manage_emp_idx",
-                  "prev_manage_owner_idx", "is_manager", "is_top_manager", "members", "subtree"}
         for name in ("views.py", "web.py"):
-            for n in ast.walk(ast.parse((ENGINE / name).read_text(encoding="utf-8"))):
-                if isinstance(n, ast.Attribute):
-                    self.assertNotIn(n.attr, banned, f"{name}: .{n.attr}")
+            self.assertEqual(self.owner_hits(ast.parse((ENGINE / name).read_text(encoding="utf-8"))), [], name)
 
     def test_guard_catches_sabotage_shapes(self):
-        for src in ("def f(idx):\n    return idx or 0\n", "def f(viewer_idx):\n    if not viewer_idx:\n        pass\n"):
-            tree = ast.parse(src)
-            hits = [n for n in ast.walk(tree) if isinstance(n, (ast.BoolOp, ast.If))]
-            self.assertTrue(hits)
+        for src in ("def f(idx):\n    return idx or 0\n", "def f(viewer_idx):\n    if not viewer_idx:\n        pass\n",
+                    'def f(e):\n    return 1 if e["by_person"] else None\n',
+                    'def f(e):\n    if e.get("emp_idx"):\n        pass\n',
+                    'def f(claims):\n    who = claims.emp_idx\n    return bool(who)\n',
+                    'def f(x):\n    if not x["decided_by"]:\n        pass\n'):
+            self.assertTrue(self.truthy_hits(ast.parse(src)), src)
+        for src in ('def f(own):\n    return own.main\n', 'def f(own):\n    return getattr(own, "main")\n',
+                    'from dataclasses import asdict\ndef f(own):\n    return asdict(own)["prev"]\n',
+                    'def f(own):\n    return vars(own)\n'):
+            self.assertTrue(self.owner_hits(ast.parse(src)), src)
 
 
 if __name__ == "__main__":
