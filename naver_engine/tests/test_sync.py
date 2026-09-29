@@ -1295,7 +1295,8 @@ PRIVILEGED = ("record_org", "refuse_org", "refuse_stages", "confirm_prospects_ho
               "begin_run", "finish_run", "record_account_check", "close_unlinked_issues", "record_account_day",
               "record_campaign_days",
               # 이슈 사람의 손길 — 누가 누를 수 있는지 판정하는 S11 길이 생기기 전까지 엔진 어디서도 부르지 않는다
-              "ack_issue", "resolve_issue", "except_issue")
+              # (그 속 ``_human`` 은 아무 변화든 받아 적는다 — 이름을 직접 불러 한도·사유를 건너뛰지 못하게 · 검토 security-1)
+              "ack_issue", "resolve_issue", "except_issue", "_human")
 BANNED_NAMES = ("exec", "eval", "compile", "__import__", "globals", "vars", "locals", "open", "breakpoint",
                 "__builtins__", "getattr_static")
 BANNED_ATTRS = ("modules", "__dict__", "__getattribute__", "__subclasses__", "__globals__", "__code__",
@@ -1421,6 +1422,7 @@ class SyncGuardTest(unittest.TestCase):
                'def f(st):\n    st.record_decision(1, 2, "confirmed", 0, None)\n',
                'def f(st):\n    getattr(st, "revoke_" + "decision")(1, 0, None, "x")\n',
                'def f(st):\n    st.except_issue(1, 0, "lead", None, "x", None)\n',
+               'def f(st):\n    st._human(1, 2, None, lambda I, s, d: None)\n',
                'def f(st):\n    getattr(st, "record_account_" + "day")(1, 2)\n',
                'import builtins\nbuiltins.getattr\n',
                'def f(st):\n    __builtins__["getattr"](st, "x")\n',
@@ -1428,6 +1430,31 @@ class SyncGuardTest(unittest.TestCase):
         for src in bad:
             tree = ast.parse(src)
             self.assertTrue(_privileged_uses(tree) or _escapes(tree), src)
+
+    def test_store_private_names_stay_inside_store(self):
+        """저장소의 비공개 이름(``_tx`` · ``_conn`` · ``_write_issue`` · ``_refuse_and_hold`` …)은 store.py 밖에서 쓰지 않는다 —
+        공개 함수의 검사를 건너뛰고 거래·쓰기 연결을 바로 잡는 길이 된다(검토 security-1). 자기 객체(``self``)의 같은 이름은 무관."""
+        tree = ast.parse((ENGINE / "store.py").read_text(encoding="utf-8"))
+        priv = set()
+        for n in ast.walk(tree):
+            if isinstance(n, ast.ClassDef) and n.name == "Store":
+                priv |= {b.name for b in n.body if isinstance(b, (ast.FunctionDef, ast.AsyncFunctionDef))}
+            if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name) and n.value.id == "self":
+                priv.add(n.attr)
+        priv = {x for x in priv if x.startswith("_") and not x.startswith("__")}
+        self.assertTrue({"_tx", "_conn", "_human", "_write_issue", "_refuse_and_hold"} <= priv)
+
+        def uses(t):
+            return sorted({n.attr for n in ast.walk(t) if isinstance(n, ast.Attribute) and n.attr in priv
+                           and not (isinstance(n.value, ast.Name) and n.value.id in ("self", "cls"))}
+                          | {s for s in _folded(t) if s in priv})
+        for p in self.SOURCES:
+            if self.rel(p) == "store.py":
+                continue
+            self.assertEqual(uses(ast.parse(p.read_text(encoding="utf-8"))), [], self.rel(p))
+        for src in ('def f(st):\n    st._human(1, 2, None, None)\n', 'def f(st):\n    st._conn.execute("x")\n',
+                    'def f(store):\n    with store._tx() as c:\n        pass\n', 'def f(st):\n    getattr(st, "_tx")\n'):
+            self.assertTrue(uses(ast.parse(src)), src)
 
     def test_nested_sync_file_does_not_count(self):
         tree = ast.parse('def f(st):\n    st.record_org({}, None)\n')

@@ -68,7 +68,7 @@ import sqlite3 as _sqlite3
 import stat as _stat
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Callable, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from . import erp_read as E
@@ -540,6 +540,18 @@ def _pos_int(v, what: str) -> int:
 
 def _opt_pos_int(v, what: str) -> Optional[int]:
     return None if v is None else _pos_int(v, what)
+
+
+CUSTOMER_ID_LIMIT = 10 ** 15   # 네이버 고객 번호 — 읽기 관문(``handles._MAX_ID``)·이슈 규칙(``issues.account_target``)과 같은 한도
+
+
+def _customer_id(v, what: str) -> int:
+    """네이버 고객 번호 — 양의 정수 · 15자리 이하(저장소가 받는 범위와 이슈 규칙이 받는 범위가 어긋나 16자리 번호 한 줄이
+    아침 점검 회차 전체를 멈추지 않게 · 검토 issues-oversized)."""
+    v = _pos_int(v, what)
+    if v >= CUSTOMER_ID_LIMIT:
+        raise StoreRefused(f"{what}: 고객 번호 범위를 넘습니다")
+    return v
 
 
 def _person(v, what: str) -> int:
@@ -1480,7 +1492,7 @@ class Store:
         self._need_writer()
         if decision not in DECISIONS:
             raise StoreRefused("판단은 confirmed · rejected 뿐입니다")
-        vals = (_pos_int(possibility_id, "가망 번호"), _pos_int(customer_id, "고객 번호"), decision,
+        vals = (_pos_int(possibility_id, "가망 번호"), _customer_id(customer_id, "고객 번호"), decision,
                 _person(decided_by, "판단한 직원"), _kst_text(at, "판단 시각"))
         self._not_future(at, "판단 시각")
         with self._tx() as c:
@@ -1568,7 +1580,7 @@ class Store:
             if st not in PAIR_STATES:
                 raise StoreRefused("짝 결과 상태가 아닙니다")
             pid = _pos_int(r.get("possibility_id"), "가망 번호")
-            cid = _opt_pos_int(r.get("customer_id"), "고객 번호")
+            cid = None if r.get("customer_id") is None else _customer_id(r.get("customer_id"), "고객 번호")
             code = r.get("code")
             same = r.get("same_name")
             claimed = r.get("claimed_elsewhere")
@@ -1767,7 +1779,7 @@ class Store:
         if link is not None and link not in LINKS:
             raise StoreRefused("모르는 짝 상태")
         ran, not_ran = _rules(rules_run, rules_not_run)
-        return [_pos_int(customer_id, "고객 번호"), None, _opt_pos_int(possibility_id, "가망 번호"), link,
+        return [_customer_id(customer_id, "고객 번호"), None, _opt_pos_int(possibility_id, "가망 번호"), link,
                 _pos_int(run_id, "회차 번호"), status, ran, not_ran, _num(bizmoney, "비즈머니"),
                 _opt_bool(budget_lock, "잠금"), _opt_bool(refund_lock, "잠금"), _num(yday_spend, "어제 비용"),
                 _num(yday_imp, "어제 노출"), _num(yday_clk, "어제 클릭"), _opt_bool(data_late, "자료 늦음"),
@@ -1975,7 +1987,10 @@ class Store:
         elif stats_day is not None or stats is not None:
             raise StoreRefused("캠페인 없이 통계만 적을 수 없습니다")
         camp_ids = set() if camp_rows is None else {r[0] for r in camp_rows}
-        acc = I.account_target(cid)
+        try:
+            acc = I.account_target(cid)
+        except I.IssueRuleError:
+            raise StoreRefused("고객 번호 모양이 아닙니다") from None
         plan = []
         for f in _seq(findings, "발견"):
             rule, code, target, level = (getattr(f, "rule", None), getattr(f, "code", None),
@@ -2029,7 +2044,8 @@ class Store:
         """짝이 거절·무효가 된 열린 이슈를 「연결 해제로 닫힘」으로(M5) — 이 회차 날짜에 받은 그 짝 맞추기 기준.
 
         그 회차에 점검할 짝(확인 · 자동) · 「오늘 없음」 · 「이관 빠짐」으로 남은 짝은 이어진 것으로 본다. 그 밖의 짝이라도
-        어제·오늘 이어졌던 짝(``link_memory``)은 하루 기다린다(① 전산·단계가 하루 흔들린 것으로 이슈를 닫지 않게).
+        어제·오늘 이어졌던 짝(``link_memory`` · 어제·오늘 받은 짝 맞추기의 점검할 짝 · 오늘 없음 · 이관 빠짐 줄)은 하루
+        기다린다(① 전산·단계가 하루 흔들린 것으로 이슈의 👀·🙈 를 잃지 않게).
         한꺼번에 많이(브레이크와 같은 비율) 닫으면 ``mass`` 로 알린다 — 닫힌 이슈는 짝이 돌아오면 다시 🆕 로 살아난다."""
         self._need_writer()
         I = _issue_rules()
@@ -2056,6 +2072,22 @@ class Store:
                     raise StoreError("저장된 짝 기억을 읽지 못했습니다")
                 if lt.astimezone(KST).date() >= today - timedelta(days=1):
                     recent.add((int(p), int(k)))
+            # 어제·오늘 받은 짝 맞추기에서 이어져 있던 짝(점검할 짝 · 오늘 없음 · 이관 빠짐)도 하루 기다린다 — 짝 기억은
+            # 점검할 짝만 적으므로 「이관 빠짐」 짝이 단계가 하루 흔들려 사라지면 유예 없이 🙈·👀 를 잃었다(검토 issues-grace)
+            since = _kst_text(datetime.combine(today - timedelta(days=1), time(0), tzinfo=KST), "유예 시작")
+            runs = []
+            for gid, gat in c.execute("SELECT pairing_id, at FROM naver_auto_pairing_run WHERE outcome = ? AND at >= ?",
+                                      (SYNC_ACCEPTED, since)):
+                gt = _aware_time(gat)
+                if gt is None:
+                    raise StoreError("저장된 짝 맞추기 시각을 읽지 못했습니다")
+                if today - timedelta(days=1) <= gt.astimezone(KST).date() <= today:
+                    runs.append(int(gid))
+            for gid in runs:
+                recent.update((int(p), int(k)) for p, k in c.execute(
+                    """SELECT possibility_id, customer_id FROM naver_auto_pairing_row
+                       WHERE pairing_id = ? AND customer_id IS NOT NULL AND state IN (?, ?, ?, ?)""",
+                    (gid, PAIR_CONFIRMED, PAIR_AUTO, PAIR_MISSING, PAIR_BROKEN)))
             rows = self._issue_rows(c, "state IN (?, ?, ?)", tuple(sorted(I.OPEN_STATES)))
             pairs_open = {(r["possibility_id"], r["customer_id"]) for r in rows}
             closing = {pk for pk in pairs_open if pk not in linked and pk not in recent}

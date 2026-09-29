@@ -485,6 +485,16 @@ class StoreIssueTest(Base):
         with self.assertRaises(S.StoreRefused):
             self.put(stats_day=YDAY, stats={})                                 # 캠페인 없이 통계만
 
+    def test_customer_id_over_limit_refused(self):
+        """저장소가 받는 고객 번호 범위 = 이슈 규칙이 받는 범위(15자리 이하) — 규칙 오류가 저장소 밖으로 새지 않는다."""
+        big = 10 ** 15
+        with self.assertRaises(S.StoreRefused):
+            self.put(cid=big)
+        with self.assertRaises(S.StoreRefused):
+            self.st.record_decision(13, big, "confirmed", 0, self.fc.now())
+        self.st.record_decision(13, big - 1, "confirmed", 0, self.fc.now())
+        self.assertIsNone(self.st.account_day(A, TODAY))
+
     def test_campaign_provisional_must_be_bool(self):
         camps = [dict(campaign(A, 1), campaignTp="SHOPPING")]
         for bad in (1, 0, "yes", None):                                        # 잠정 여부는 참·거짓만(한 거래 길)
@@ -780,6 +790,35 @@ class LinkStateTest(Base):
         self.assertEqual((iss["code"], iss["facts"]), ("link_broken", {"reason": "never-listed"}))
         self.assertEqual(self.naver.calls, [])                                       # 이관 상태는 네이버를 부르지 않는다
         self.assertEqual(out.counts["targets"], 0)
+
+    def test_broken_pair_keeps_exception_through_one_day_wobble(self):
+        """이관 빠짐 짝이 단계 흔들림으로 하루 사라져도 🙈 예외를 잃지 않는다(하루 기다림 · 검토 issues-grace)."""
+        self.standard_ads()
+        self.scene()
+        self.run_check()
+        self.morning_of(1, (B,))
+        self.morning_of(2, (B,))
+        [iss] = [i for i in self.st.issues() if i["code"] == "link_broken"]
+        d2 = TODAY + timedelta(days=2)
+        self.st.except_issue(iss["issue_id"], 0, I.ACTOR_LEAD, d2 + timedelta(days=6), "광고주 이관 다시 요청함",
+                             self.fc.now())
+        # 셋째 날: 가망 11 의 종료일이 40일 전으로 흔들려 관리 대상에서 빠짐 → 짝 줄이 없다
+        t3 = self.at(T0 + timedelta(days=3))
+        self.ads.cycle = datetime.combine(t3.date(), time(5, 0), tzinfo=KST)
+        self.st.record_prospects(E.StageSnapshot({11: srow(11, end=t3.date() - timedelta(days=40)), 12: srow(12)},
+                                                 t3 - timedelta(minutes=5), {}, ()))
+        self.st.record_accounts(kids(B), t3 - timedelta(minutes=4))
+        res = L.pair_links(FakeErp([E.NaverIdRow(12, M.VENDOR_NAVER, str(B))]), self.st, t3 - timedelta(minutes=2))
+        self.assertNotIn((11, A), [(r["possibility_id"], r["customer_id"]) for r in self.st.pairing_rows(res.pairing_id)
+                                   if r["state"] in ("confirmed", "auto", "missing", "broken")])
+        out = self.run_check()
+        self.assertEqual(out.counts.get("unlinked_issues", 0), 0)
+        self.assertEqual(self.st.issue(iss["issue_id"])["state"], "exception")
+        # 넷째 날: 단계가 돌아옴 → 다시 이관 빠짐 · 예외 그대로 · 다시 생김 0
+        self.morning_of(4, (B,))
+        got = self.st.issue(iss["issue_id"])
+        self.assertEqual((got["state"], got["reappear_count"]), ("exception", 0))
+        self.assertNotIn("closed_unlinked", [e["kind"] for e in self.st.issue_events(iss["issue_id"])])
 
     def test_blocked_row_for_same_account_does_not_skip_it(self):
         self.standard_ads()

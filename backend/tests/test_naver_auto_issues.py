@@ -209,8 +209,16 @@ class HumanTest(unittest.TestCase):
         with self.assertRaises(I.IssueRuleError) as cm:
             I.grant_exception(exc(until=D0 + timedelta(days=2)), D0 + timedelta(days=20), I.ACTOR_OWNER, D0, "x")
         self.assertEqual(cm.exception.code, I.E_ALREADY)
-        # 끝난 예외는 다시 줄 수 있다(다시 본 뒤)
-        c = I.grant_exception(exc(until=D0 - timedelta(days=1)), D0 + timedelta(days=2), I.ACTOR_OWNER, D0, "x")
+        # 끝났어도 아침 점검이 아직 다시 보지 않았으면(저장된 상태 = exception) 거절 — 끝없이 이어 붙이지 못하게
+        ended = exc(until=D0 - timedelta(days=1))
+        for sev, actor in ((I.SEV_YELLOW, I.ACTOR_OWNER), (I.SEV_RED, I.ACTOR_LEAD)):
+            with self.assertRaises(I.IssueRuleError) as cm:
+                I.grant_exception(exc(sev=sev, until=D0 - timedelta(days=1)), D0 + timedelta(days=2), actor, D0, "x")
+            self.assertEqual(cm.exception.code, I.E_ALREADY)
+        # 점검이 다시 본 뒤(🆕 · exception_ended)에는 다시 줄 수 있다
+        seen = I.observe(ended, I.SEV_YELLOW, D0)
+        self.assertEqual((seen.state.state, seen.event), (I.ST_NEW, I.EV_EXCEPTION_ENDED))
+        c = I.grant_exception(seen.state, D0 + timedelta(days=2), I.ACTOR_OWNER, D0, "x")
         self.assertEqual(c.state.exception_until, D0 + timedelta(days=2))
 
     def test_exception_refusals(self):
@@ -222,7 +230,11 @@ class HumanTest(unittest.TestCase):
                 I.grant_exception(st(s), D0, I.ACTOR_LEAD, D0, "x")
             self.assertEqual(cm.exception.code, I.E_NOT_OPEN)
         for note, code in (("", I.E_NOTE), ("   ", I.E_NOTE), (None, I.E_NOTE), ("x" * 201, I.E_BAD_INPUT),
-                           ("줄\n바꿈", I.E_BAD_INPUT), ("탭\t끝", I.E_BAD_INPUT)):
+                           ("줄\n바꿈", I.E_BAD_INPUT), ("탭\t끝", I.E_BAD_INPUT),
+                           # 유니코드 줄·문단 나눔 · C1 제어 · 글자 방향 뒤집기 · 폭 없는 글자 · 짝 없는 대리 문자
+                           ("줄\u2028바꿈", I.E_BAD_INPUT), ("줄\u2029바꿈", I.E_BAD_INPUT),
+                           ("줄\x85바꿈", I.E_BAD_INPUT), ("a\x9bb", I.E_BAD_INPUT), ("\u202e거꾸로", I.E_BAD_INPUT),
+                           ("사유\u200b끝", I.E_BAD_INPUT), ("사유\ud800끝", I.E_BAD_INPUT)):
             with self.assertRaises(I.IssueRuleError) as cm:
                 I.grant_exception(st(), D0, I.ACTOR_LEAD, D0, note)
             self.assertEqual(cm.exception.code, code, repr(note))
@@ -232,6 +244,7 @@ class HumanTest(unittest.TestCase):
         with self.assertRaises(I.IssueRuleError):
             I.grant_exception(st(), datetime(2026, 9, 30), I.ACTOR_LEAD, D0, "x")
         self.assertEqual(I.clean_note("  이유 "), "이유")
+        self.assertEqual(I.clean_note("광고주 휴가 — 10/3 복귀 (담당: 확인함) ₩·%·「」"), "광고주 휴가 — 10/3 복귀 (담당: 확인함) ₩·%·「」")
 
 
 class RandomWalkTest(unittest.TestCase):

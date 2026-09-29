@@ -14,7 +14,7 @@
   (``should_auto_resolve``) · 자료 늦음인 날은 부르지 않는다(👀·🙈 를 건드리지 않게 · 반박 C1).
 - **등급이 올라가면 다시 🆕** — 🟡 로 확인해 둔 것이 🔴 가 되면 그냥 두지 않는다. 예외도 준 등급보다 올라가면 끝난다.
 - **예외 한도(M7)** — 🟡·ⓘ = 담당 이상 · 오늘 포함 최대 30일 / 🔴 = 팀장 이상만 · 오늘 포함 최대 7일. 예외 중에는 다시
-  예외를 줄 수 없다(끝나고 다시 본 뒤에만 — 끝없이 이어 붙이지 못하게). 누가 담당·팀장인지는 부르는 쪽(``scope``)이 정해
+  예외를 줄 수 없다(끝나고 **아침 점검이 다시 본 뒤에만** — 저장된 상태가 🆕 여야 한다 · 끝없이 이어 붙이지 못하게). 누가 담당·팀장인지는 부르는 쪽(``scope``)이 정해
   ``actor`` 로 넘긴다.
 - **이관 빠짐(I1 ⓐ)** — 점검 항목 ``link_broken`` · 🔴 긴급 · 다시 이관되면 다음 아침 🔁 저절로 풀림 · 예외는 위 🔴 한도.
 - 오류 문구에는 값(번호·날짜)을 넣지 않는다 — 사유 코드만.
@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from typing import Iterable, Optional, Tuple
@@ -243,20 +244,29 @@ def resolve(cur: IssueState, today: date) -> Change:
     return Change(replace(_clear_exception(cur), state=ST_RESOLVED), EV_RESOLVED, cur.state)
 
 
+# 사유에 받지 않는 글자 갈래 — 제어(C0·C1) · 서식(글자 방향 뒤집기 · 폭 없는 글자) · 줄·문단 나눔(U+2028·U+2029) ·
+# 짝 없는 대리 문자. 한 줄로 보여 줄 화면·알림(S10·S11)에서 가짜 줄을 끼우거나 표시를 뒤집지 못하게(검토 security-3)
+_NOTE_BANNED_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp", "Cs"})
+
+
 def clean_note(note) -> str:
-    """예외 사유 — 빈 글자 금지 · ``NOTE_MAX`` 자 이하 · 줄바꿈 등 제어 문자 금지."""
+    """예외 사유 — 빈 글자 금지 · ``NOTE_MAX`` 자 이하 · 줄바꿈 등 제어 문자 금지(유니코드 줄바꿈·서식 문자 포함)."""
     if not isinstance(note, str):
         raise IssueRuleError(E_NOTE)
     s = note.strip()
     if not s:
         raise IssueRuleError(E_NOTE)
-    if len(s) > NOTE_MAX or any(ord(ch) < 32 or ord(ch) == 127 for ch in s):
+    if len(s) > NOTE_MAX or any(unicodedata.category(ch) in _NOTE_BANNED_CATEGORIES for ch in s):
         raise IssueRuleError(E_BAD_INPUT)
     return s
 
 
 def grant_exception(cur: IssueState, until: date, actor: str, today: date, note: str) -> Change:
-    """🙈 예외 — 열린 것에서만 · 예외 중이면 거절(끝난 뒤에만 다시) · 등급별 한도(M7)."""
+    """🙈 예외 — 열린 것에서만 · 예외 중이면 거절 · 등급별 한도(M7).
+
+    기간이 끝났어도 **아침 점검이 끝난 것을 다시 보기 전**(저장된 상태가 아직 ``exception``)이면 거절한다 — 끝난 다음 날
+    점검 전에 다시 주면 한 번도 🆕 로 드러나지 않고 🔴 7일 한도를 끝없이 이어 붙일 수 있다(검토 issues-rechain).
+    점검이 ``exception_ended`` 로 🆕 를 만든 뒤에만 다시 줄 수 있다."""
     check_state(cur)
     _need_day(today)
     _need_day(until)
@@ -266,7 +276,7 @@ def grant_exception(cur: IssueState, until: date, actor: str, today: date, note:
     eff = effective_state(cur, today)
     if eff not in OPEN_STATES:
         raise IssueRuleError(E_NOT_OPEN)
-    if eff == ST_EXCEPTION:
+    if cur.state == ST_EXCEPTION:   # 예외 중 · 또는 끝났지만 점검이 아직 다시 보지 않음
         raise IssueRuleError(E_ALREADY)
     need = EXCEPTION_MIN_ACTOR[cur.severity]
     if _ACTORS.index(actor) < _ACTORS.index(need):
