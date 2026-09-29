@@ -1,4 +1,8 @@
-"""네이버 대행 연결 목록 · 짝 맞추기 (설계 v1.8 S8 · 반박 H1 · H4 · J3 · S7 뒤 조각 몫 ⑵ · ⑶).
+"""네이버 대행 연결 목록 · 짝 맞추기 · 이관 빠짐 (설계 v1.8 S8 · 반박 H1 · H4 · J3 · S7 뒤 조각 몫 ⑵ · ⑶).
+
+**이관** = 광고주 광고계정이 우리 회사(대행사 관리계정)에 연결된 상태 — 대행 연결 목록에 있으면 이관됨(대표 정의
+2026-09-29). 대표 지시 「대시보드에서 접속 상태가 끊긴 것을 감지 · 끊긴 것을 이관이 빠진 것으로 확인」 — 광고주 계정에
+들어가지 못했다는 신호(점검 실패)가 아니라 **대행 연결 목록에서 빠졌는지**로 판정한다.
 
 연결 목록(``sync_accounts``) — 하루 한 번(06:30 뒤)
 - 네이버 관문이 **전부 받았을 때만** 만드는 ``ChildAccounts`` 만 저장소에 넘긴다. 일부만 받음 · 네이버 오류 · 호출 상한은
@@ -15,10 +19,13 @@
 - 관리 대상 가망 = 단계 목록에 있고 · 단계 겹침이 없고 · 종료일을 읽었고 · 점검 손잡이와 **같은 규칙**
   (``handles.eligibility_reason``)을 통과한 가망. 끝난 지 14일 넘은 가망은 짝을 맞추지 않는다.
 - 짝 규칙은 ``app.naver_auto.matching.match`` 한 곳이다(확인한 짝 > 자동 짝 · 이름 후보는 사람 확인 전 안 들어감).
-- **확인한 짝이 오늘 목록에 없으면** — 서로 다른 날짜 두 번 이상(``LINK_BROKEN_MIN_DAYS``) **그리고** 처음 빠진 읽기부터
-  마지막으로 빠진 읽기까지 20시간 이상(``LINK_BROKEN_MIN_SPAN`` — 자정을 사이에 둔 두 번은 「2일」이 아니다)이면
-  「연결 끊김」(⚪ · 확인 필요 예), 아니면 「오늘 없음」. 한 번도 목록에 없던 계정은 바로 「연결 끊김」(``never-listed``).
-- **짝 무효는 사람 판단 표에 적지 않는다** — 매일 새로 계산한다(계정이 목록에 돌아오면 확인한 짝이 그대로 산다).
+- **이어졌던 짝의 계정이 오늘 목록에 없으면** — 서로 다른 날짜 두 번 이상(``LINK_BROKEN_MIN_DAYS``) **그리고** 처음 빠진
+  읽기부터 마지막으로 빠진 읽기까지 20시간 이상(``LINK_BROKEN_MIN_SPAN`` — 자정을 사이에 둔 두 번은 「2일」이 아니다)이면
+  「이관 빠짐」(확인 필요 예), 아니면 「오늘 이관 목록에 없음」. 이어졌던 짝 = ⑴ 사람이 확인한 짝(살아 있는 확인) ·
+  ⑵ ① 에 적힌 고객 번호로 **자동 짝이 된 적 있는** 짝(``store.matched_before("auto")``) 중 ① 에 그 번호가 아직 적혀 있는 것.
+  한 번도 이어진 적 없는 번호(① 에만 적힘 · 목록에 없음)는 「이관 안 됨」(막힘 ``not-linked``)이지 이관 빠짐이 아니다.
+  확인한 계정이 한 번도 목록에 없었으면 바로 이관 빠짐(``never-listed``).
+- **짝 무효는 사람 판단 표에 적지 않는다** — 매일 새로 계산한다(계정이 목록에 돌아오면 짝이 그대로 산다).
 - 같은 계정을 다른 가망에 더 늦게 확인해 밀린 확인은 「밀린 확인」 줄로 남긴다(짝 확인 화면 S11 이 보여 준다).
 - 결과는 ``record_pairing`` 이 회차로 쌓는다(가망·계정 번호 · 상태 · 코드 — 이름 없음). 계산하는 사이 입력이 바뀌면
   (``PairingStale``) 버리고 다음에 다시 맞춘다.
@@ -174,11 +181,11 @@ def accounts_due(store: S.Store, now: datetime) -> bool:
 
 # ── 연결 끊김 ────────────────────────────────────────────────────────
 def link_state(times: Optional[Mapping]) -> Tuple[str, Optional[str]]:
-    """확인한 짝의 계정이 오늘 목록에 없을 때 — (상태, 사유 코드). ``times`` = ``store.account_times()`` 의 그 계정 값.
+    """이어졌던 짝의 계정이 오늘 목록에 없을 때 — (상태, 사유 코드). ``times`` = ``store.account_times()`` 의 그 계정 값.
 
-    - 계정 표에 줄이 없음(한 번도 목록에 없던 계정) → 「연결 끊김」(``never-listed``)
-    - 서로 다른 날짜 두 번 이상 · 처음 빠진 읽기부터 마지막으로 빠진 읽기까지 20시간 이상 → 「연결 끊김」
-    - 그 밖(첫날 · 자정 앞뒤 두 번 · 시각을 모르는 옛 계정) → 「오늘 없음」"""
+    - 계정 표에 줄이 없음(한 번도 목록에 없던 계정) → 「이관 빠짐」(``never-listed``)
+    - 서로 다른 날짜 두 번 이상 · 처음 빠진 읽기부터 마지막으로 빠진 읽기까지 20시간 이상 → 「이관 빠짐」
+    - 그 밖(첫날 · 자정 앞뒤 두 번 · 시각을 모르는 옛 계정) → 「오늘 이관 목록에 없음」"""
     if times is None:
         return S.PAIR_BROKEN, CODE_NEVER_LISTED
     since, last = times.get("absent_since"), times.get("absent_last_at")
@@ -239,8 +246,9 @@ def _pairing_failed(store: S.Store, now: datetime, code: str) -> PairingOutcome:
     return PairingOutcome(S.SYNC_FAILED, (code,), alert=_pairing_failure_alert(store, now))
 
 
-def _rows(result: M.PairingResult, winners, lost, times: Mapping, scope_ids) -> List[dict]:
+def _rows(result: M.PairingResult, winners, lost, times: Mapping, scope_ids, auto_before) -> List[dict]:
     confirmed = {(d.possibility_id, d.customer_id): d.decision_id for d in winners if d.decision == "confirmed"}
+    confirmed_cids = {cid for _pid, cid in confirmed}
     rows = []
     for p in result.pairs:
         r = {"state": p.link, "possibility_id": p.possibility_id, "customer_id": p.customer_id,
@@ -251,8 +259,18 @@ def _rows(result: M.PairingResult, winners, lost, times: Mapping, scope_ids) -> 
     for pid, cid in result.confirmed_missing:
         state, code = link_state(times.get(cid))
         rows.append({"state": state, "possibility_id": pid, "customer_id": cid, "code": code,
-                     "decision_id": confirmed[(pid, cid)]})
+                     "decision_id": confirmed[(pid, cid)], "link": S.PAIR_CONFIRMED})
     for b in result.blocked:
+        key = (b.possibility_id, b.customer_id)
+        if b.reason == M.B_NOT_LINKED and b.customer_id is not None:
+            if key in confirmed:
+                continue   # 확인한 짝의 이관 빠짐 줄이 이미 말한다(같은 계정을 막힘으로 한 번 더 세지 않는다)
+            if key in auto_before and b.customer_id not in confirmed_cids:
+                # 자동 짝으로 이어졌던 계정이 목록에서 빠짐 — 「이관 안 됨」이 아니라 이관 빠짐(오늘 없음)
+                state, code = link_state(times.get(b.customer_id))
+                rows.append({"state": state, "possibility_id": b.possibility_id, "customer_id": b.customer_id,
+                             "code": code, "link": S.PAIR_AUTO})
+                continue
         rows.append({"state": S.PAIR_BLOCKED, "possibility_id": b.possibility_id, "customer_id": b.customer_id,
                      "code": b.reason})
     for c in result.candidates:
@@ -296,7 +314,8 @@ def pair_links(reader: E.ErpReader, store: S.Store, now: datetime) -> PairingOut
         creds = [M.ErpCredential(r.possibility_id, r.vendor, r.customer_id_raw) for r in ids]
         decisions = [M.HumanDecision(d.possibility_id, d.customer_id, d.decision) for d in winners]
         result = M.match(scope, creds, accounts, decisions, accounts_complete=True)
-        rows = _rows(result, winners, lost, store.account_times(), {p.possibility_id for p in scope})
+        rows = _rows(result, winners, lost, store.account_times(), {p.possibility_id for p in scope},
+                     store.matched_before(S.PAIR_AUTO))
     except M.BadInput:
         return _pairing_refused(store, now, (CODE_BAD_INPUT,))
     except _UNEXPECTED:

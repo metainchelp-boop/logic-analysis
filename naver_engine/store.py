@@ -38,7 +38,9 @@
   (줄은 지우지 않는다 · 뒤 확인을 거두면 앞 확인이 다시 산다). 확인한 짝이 있는 계정이 한꺼번에 크게 빠져도 멈춘다
   (``BRAKE_CONFIRMED`` — 끝난·쉬는 계정이 섞인 전체 분모로는 안 보이는 것 · S7 뒤 조각 몫 ⑵).
 - **계정이 목록에 있던·없던 시각을 남긴다(S8).** 날짜 수(``absent_days``)만으로는 자정을 사이에 둔 두 번이 「2일」이
-  된다 — 처음 빠진 읽기 시각·마지막으로 빠진 읽기 시각을 따로 두어 「연결 끊김」이 시각 간격도 보게 한다(S7 뒤 조각 몫 ⑶).
+  된다 — 처음 빠진 읽기 시각·마지막으로 빠진 읽기 시각을 따로 두어 「이관 빠짐」이 시각 간격도 보게 한다(S7 뒤 조각 몫 ⑶).
+  **이관** = 광고주 광고계정이 우리 회사(대행사 관리계정)에 연결된 상태 — 대행 연결 목록에 있으면 이관됨(대표 정의).
+  「이관 빠짐」은 **이어졌던 짝**(사람이 확인한 짝 · 자동 짝으로 이어진 적 있는 짝 — ``naver_auto_link_memory``)에만 판정한다.
   표는 **더하기만** 했다(칸을 고치지 않는다 — 옛 판 파일도 열 때 표만 더한다).
 - **짝 맞추기 결과는 회차마다 쌓는다(S8).** 받은 회차는 가망·계정 번호와 상태·코드만 줄로 남기고(이름 없음), 버림·실패는
   코드만 남긴다. 적는 순간 입력(연결 목록 읽은 시각 · 단계 받은 시각 · 사람 판단)이 계산할 때와 같지 않으면 받지 않는다
@@ -106,15 +108,15 @@ LINKS = frozenset({"confirmed", "auto"})           # handles.LINK_* 와 같은 �
 DECISIONS = frozenset({"confirmed", "rejected"})   # backend/app/naver_auto/matching.py 의 DECISION_* 와 같은 글자
 # 짝 맞추기 결과 줄의 상태(S8) — confirmed·auto 는 handles.LINK_* 와 같은 글자(시험이 대조한다)
 PAIR_CONFIRMED, PAIR_AUTO = "confirmed", "auto"          # 점검해도 되는 짝(확인 · 자동)
-PAIR_MISSING = "missing"          # 확인한 짝인데 오늘 연결 목록에 없음 — 아직 「연결 끊김」은 아님
-PAIR_BROKEN = "broken"            # 확인한 짝이 2일(서로 다른 날짜) · 20시간 넘게 연결 목록에 없음 → ⚪ 연결 끊김(확인 필요 예)
+# ⚠️ 「이관」 = 광고주 광고계정이 우리 회사(대행사 관리계정)에 연결된 상태 — 대행 연결 목록에 있으면 이관됨(대표 정의 2026-09-29)
+PAIR_MISSING = "missing"          # 이어졌던 짝(확인 · 자동)의 계정이 오늘 연결 목록에 없음 — 아직 「이관 빠짐」은 아님
+PAIR_BROKEN = "broken"            # 이관 빠짐 — 이어졌던 짝의 계정이 2일(서로 다른 날짜) · 20시간 넘게 연결 목록에 없음(확인 필요 예)
 PAIR_BLOCKED = "blocked"          # ① 에 번호가 적혀 있는데 자동 짝이 못 됨(사유 코드)
 PAIR_CANDIDATE = "candidate"      # 이름만 비슷함 — 사람이 확인할 때까지 들어가지 않는다
 PAIR_SUPERSEDED = "superseded"    # 같은 계정을 다른 가망에 더 늦게 확인해 밀린 확인(사람이 볼 수 있게)
 PAIR_STATES = frozenset({PAIR_CONFIRMED, PAIR_AUTO, PAIR_MISSING, PAIR_BROKEN, PAIR_BLOCKED, PAIR_CANDIDATE,
                          PAIR_SUPERSEDED})
 PAIR_CHECKABLE = frozenset({PAIR_CONFIRMED, PAIR_AUTO})
-PAIR_OF_DECISION = frozenset({PAIR_CONFIRMED, PAIR_MISSING, PAIR_BROKEN})   # 이긴 확인에서 나온 상태
 PAIR_RELATIONS = frozenset({"same", "contains", "different", "unknown"})   # matching.REL_* 와 같은 글자(시험이 대조)
 PAIRING_OUTCOMES = frozenset({SYNC_ACCEPTED, SYNC_REFUSED, SYNC_FAILED})
 PAIRING_INPUT_COUNTS = ("prospects", "ignored")   # 줄로는 알 수 없는 개수 — 부르는 쪽이 넣는다(나머지는 저장소가 줄에서 센다)
@@ -286,7 +288,16 @@ _SCHEMA = (
         code TEXT,
         same_name INTEGER CHECK (same_name IS NULL OR same_name >= 1),
         claimed_elsewhere INTEGER CHECK (claimed_elsewhere IS NULL OR claimed_elsewhere IN (0, 1)),
-        decision_id INTEGER CHECK (decision_id IS NULL OR decision_id > 0))""",
+        decision_id INTEGER CHECK (decision_id IS NULL OR decision_id > 0),
+        link TEXT CHECK (link IS NULL OR link IN ('confirmed', 'auto')))""",
+    # 짝이 이어졌던 적이 있다(짝 종류마다 처음·마지막으로 이어진 짝 맞추기 시각) — 「이관 빠짐」은 이어졌던 짝에만 판정한다
+    """CREATE TABLE IF NOT EXISTS naver_auto_link_memory (
+        possibility_id INTEGER NOT NULL CHECK (possibility_id > 0),
+        customer_id INTEGER NOT NULL CHECK (customer_id > 0),
+        link TEXT NOT NULL CHECK (link IN ('confirmed', 'auto')),
+        first_matched_at TEXT NOT NULL,
+        last_matched_at TEXT NOT NULL,
+        PRIMARY KEY (possibility_id, customer_id, link))""",
     """CREATE INDEX IF NOT EXISTS naver_auto_pairing_row_run
         ON naver_auto_pairing_row (pairing_id, possibility_id)""",
 )
@@ -1403,7 +1414,7 @@ class Store:
             if not isinstance(r, Mapping):
                 raise StoreRefused("짝 결과 줄 모양이 아닙니다")
             if set(r) - {"state", "possibility_id", "customer_id", "code", "same_name", "claimed_elsewhere",
-                         "decision_id"}:
+                         "decision_id", "link"}:
                 raise StoreRefused("짝 결과 줄에 모르는 칸이 있습니다")   # 이름 같은 칸이 들어오지 않게
             st = r.get("state")
             if st not in PAIR_STATES:
@@ -1414,6 +1425,12 @@ class Store:
             same = r.get("same_name")
             claimed = r.get("claimed_elsewhere")
             did = _opt_pos_int(r.get("decision_id"), "판단 번호")
+            link = r.get("link")
+            if st in (PAIR_MISSING, PAIR_BROKEN):
+                if link not in LINKS:
+                    raise StoreRefused("이관 빠짐 줄에는 이어졌던 짝 종류(confirmed · auto)가 있어야 합니다")
+            elif link is not None:
+                raise StoreRefused("짝 종류 칸은 이관 빠짐 줄에만 있습니다")
             if st != PAIR_BLOCKED and cid is None:
                 raise StoreRefused("짝 결과 줄에 고객 번호가 없습니다")
             if st in (PAIR_CONFIRMED, PAIR_AUTO, PAIR_CANDIDATE):
@@ -1423,7 +1440,8 @@ class Store:
                 _code(code, _REASON_CODE, "막힌 까닭")
             elif code is not None:
                 _code(code, _REASON_CODE, "사유")
-            if (st in PAIR_OF_DECISION or st == PAIR_SUPERSEDED) != (did is not None):
+            from_decision = st in (PAIR_CONFIRMED, PAIR_SUPERSEDED) or (link == PAIR_CONFIRMED)
+            if from_decision != (did is not None):
                 raise StoreRefused("판단 번호는 확인에서 나온 줄에만 있습니다")
             if st == PAIR_CANDIDATE:
                 if isinstance(same, bool) or not isinstance(same, int) or not 1 <= same < 2 ** 31 \
@@ -1437,7 +1455,7 @@ class Store:
                 if k in seen:
                     raise StoreRefused("같은 짝 결과 줄이 두 번 있습니다")
                 seen.add(k)
-            out.append((pid, cid, st, code, same, claimed, did))
+            out.append((pid, cid, st, code, same, claimed, did, link))
         if len(out) > PAIRING_MAX_ROWS:
             raise StoreRefused("짝 결과 줄이 너무 많습니다")
         return out
@@ -1448,8 +1466,10 @@ class Store:
 
         ``accounts_read_at`` · ``stages_as_of`` · ``decision_ids``(계산에 쓴 살아 있는 판단 + 밀린 확인의 번호 전부)가
         지금 저장소와 같아야 받는다 — 계산하는 사이 바뀌었으면 ``PairingStale``. 점검할 짝(확인 · 자동)의 계정은 지금 목록에
-        있고 가망은 지금 관리 단계 목록에 있어야 한다 · 「오늘 없음」·「연결 끊김」의 계정은 지금 목록에 없어야 한다 ·
-        판단에서 나온 줄은 그 판단의 짝과 같아야 한다. ``counts`` 는 줄로 알 수 없는 개수만(``PAIRING_INPUT_COUNTS``)."""
+        있고 가망은 지금 관리 단계 목록에 있어야 한다 · 「오늘 없음」·「이관 빠짐」의 계정은 지금 목록에 없어야 한다 ·
+        판단에서 나온 줄은 그 판단의 짝과 같아야 한다 · 자동 짝에서 나온 「이관 빠짐」은 자동 짝으로 이어진 적이 있어야 한다.
+        받으면 점검할 짝(확인 · 자동)을 「이어진 적 있음」(``naver_auto_link_memory``)에 기억한다.
+        ``counts`` 는 줄로 알 수 없는 개수만(``PAIRING_INPUT_COUNTS``)."""
         self._need_writer()
         t = _kst_text(at, "짝 맞춘 시각")
         read_t, stage_t = _kst_text(accounts_read_at, "연결 목록 읽은 시각"), _kst_text(stages_as_of, "단계 받은 시각")
@@ -1476,11 +1496,14 @@ class Store:
                 "SELECT possibility_id FROM naver_auto_prospect WHERE present = 1 AND stage_conflict = 0")}
             win_ids = {d.decision_id for d in winners if d.decision == "confirmed"}
             lost_ids = {d.decision_id for d in lost}
-            for pid, cid, st, _code_, _s, _c, did in vals:
+            auto_before = self._matched(c, PAIR_AUTO)
+            for pid, cid, st, _code_, _s, _c, did, link in vals:
+                if st in (PAIR_MISSING, PAIR_BROKEN) and link == PAIR_AUTO and (pid, cid) not in auto_before:
+                    raise StoreRefused("자동 짝으로 이어진 적이 없는데 이관 빠짐으로 적으려 했습니다")
                 if st in PAIR_CHECKABLE and (cid not in present or pid not in live):
                     raise PairingStale("점검할 짝의 계정·가망이 지금 목록에 없습니다")
                 if st in (PAIR_MISSING, PAIR_BROKEN) and cid in present:
-                    raise PairingStale("「오늘 없음」·「연결 끊김」인데 계정이 지금 목록에 있습니다")
+                    raise PairingStale("「오늘 없음」·「이관 빠짐」인데 계정이 지금 목록에 있습니다")
                 if did is not None:
                     d = by_id.get(did)
                     ok = d is not None and (d.possibility_id, d.customer_id) == (pid, cid) and \
@@ -1497,8 +1520,25 @@ class Store:
             for v in vals:
                 c.execute(
                     """INSERT INTO naver_auto_pairing_row (pairing_id, possibility_id, customer_id, state, code, same_name,
-                           claimed_elsewhere, decision_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""", (pid_run,) + v)
+                           claimed_elsewhere, decision_id, link) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""", (pid_run,) + v)
+                if v[2] in PAIR_CHECKABLE:   # 이어진 짝을 기억한다 — 나중에 계정이 목록에서 빠지면 「이관 빠짐」
+                    c.execute(
+                        """INSERT INTO naver_auto_link_memory (possibility_id, customer_id, link, first_matched_at,
+                               last_matched_at) VALUES (?, ?, ?, ?, ?)
+                           ON CONFLICT (possibility_id, customer_id, link) DO UPDATE SET
+                               last_matched_at = excluded.last_matched_at""", (v[0], v[1], v[2], t, t))
             return pid_run
+
+    @staticmethod
+    def _matched(c, link: str) -> set:
+        return {(int(p), int(k)) for p, k in c.execute(
+            "SELECT possibility_id, customer_id FROM naver_auto_link_memory WHERE link = ?", (link,))}
+
+    def matched_before(self, link: str) -> set:
+        """그 종류로 이어진 적이 있는 짝 {(가망 번호, 고객 번호)} — 「이관 빠짐」 판정 재료(받은 짝 맞추기에서만 쌓인다)."""
+        if link not in LINKS:
+            raise StoreRefused("짝 종류가 아닙니다")
+        return self._matched(self._conn, link)
 
     def record_pairing_event(self, at: datetime, outcome: str, codes: Sequence[str]) -> int:
         """짝 맞추기 버림·실패를 코드만 남긴다(결과 줄 없음) → 회차 번호."""
@@ -1732,7 +1772,7 @@ class Store:
     def pairing_rows(self, pairing_id: int) -> List[dict]:
         """그 회차의 결과 줄 — 가망 번호 · 상태 순."""
         cur = self._conn.execute(
-            """SELECT possibility_id, customer_id, state, code, same_name, claimed_elsewhere, decision_id
+            """SELECT possibility_id, customer_id, state, code, same_name, claimed_elsewhere, decision_id, link
                FROM naver_auto_pairing_row WHERE pairing_id = ? ORDER BY possibility_id, state, customer_id""",
             (_pos_int(pairing_id, "짝 맞추기 번호"),))
         out = []

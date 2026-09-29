@@ -635,7 +635,107 @@ class PairLinksTest(Base):
         self.seed()
         cols = [r[1] for r in self.st._conn.execute("PRAGMA table_info(naver_auto_pairing_row)")]
         self.assertEqual(cols, ["pairing_id", "possibility_id", "customer_id", "state", "code", "same_name",
-                                "claimed_elsewhere", "decision_id"])
+                                "claimed_elsewhere", "decision_id", "link"])
+        cols = [r[1] for r in self.st._conn.execute("PRAGMA table_info(naver_auto_link_memory)")]
+        self.assertEqual(cols, ["possibility_id", "customer_id", "link", "first_matched_at", "last_matched_at"])
+
+
+class TransferLostTest(Base):
+    """이관 빠짐(대표 정의 2026-09-29 — 이관 = 광고주 광고계정이 우리 회사에 연결된 상태) — 이어졌던 짝의 계정이 대행 연결
+    목록에서 빠지면 감지한다. 확인한 짝뿐 아니라 ① 고객 번호로 자동 짝이 됐던 계정도."""
+
+    def day(self, n, accounts, ids, decisions=()):
+        """n 일째 06:40 — 연결 목록 받기 · 단계 새로 · 짝 맞추기 → 12 번 가망 줄."""
+        t = self.at(T0 + timedelta(days=n))
+        self.st.record_prospects(stages([srow(11, "메타상회"), srow(12, "하늘꽃집", "전략관리")], t - timedelta(minutes=5)))
+        self.st.record_accounts(kids(*accounts), t - timedelta(minutes=2))
+        for pid, cid, dec in decisions:
+            self.st.record_decision(pid, cid, dec, 0, t - timedelta(minutes=1))
+        res = self.pair(FakeErp(ids))
+        self.assertEqual(res.outcome, S.SYNC_ACCEPTED, res)
+        return [r for r in self.st.pairing_rows(res.pairing_id)], res
+
+    def lost(self, rows, pid):
+        return [(r["state"], r["customer_id"], r["link"], r["code"]) for r in rows if r["possibility_id"] == pid]
+
+    OTHER = (D, 6543210, "다른곳")
+
+    def test_auto_pair_dropped_becomes_transfer_lost(self):
+        ids = [nid(12, "2345678")]
+        rows, _ = self.day(0, [(B, 8765432, "하늘꽃집"), self.OTHER], ids)
+        self.assertEqual(self.lost(rows, 12), [(S.PAIR_AUTO, B, None, "same")])
+        self.assertIn((12, B), self.st.matched_before(S.PAIR_AUTO))
+        rows, res = self.day(1, [self.OTHER], ids)
+        self.assertEqual(self.lost(rows, 12), [(S.PAIR_MISSING, B, S.PAIR_AUTO, None)])     # 첫날 = 오늘 이관 목록에 없음
+        self.assertEqual((res.counts["missing"], res.counts["blocked"]), (1, 0))             # 「이관 안 됨」으로 세지 않는다
+        rows, res = self.day(2, [self.OTHER], ids)
+        self.assertEqual(self.lost(rows, 12), [(S.PAIR_BROKEN, B, S.PAIR_AUTO, None)])      # 둘째 날 = 이관 빠짐
+        rows, _ = self.day(3, [(B, 8765432, "하늘꽃집"), self.OTHER], ids)                    # 다시 이관되면 그대로 산다
+        self.assertEqual(self.lost(rows, 12), [(S.PAIR_AUTO, B, None, "same")])
+
+    def test_never_linked_number_is_not_transfer_lost(self):
+        rows, _ = self.day(0, [self.OTHER], [nid(12, "2345678")])
+        self.assertEqual(self.lost(rows, 12), [(S.PAIR_BLOCKED, B, None, M.B_NOT_LINKED)])  # 이관 안 됨
+
+    def test_listed_but_never_paired_is_not_transfer_lost(self):
+        # 목록에 있었지만 이름이 달라 자동 짝이 된 적 없는 번호 — 빠져도 「이관 빠짐」이 아니다(누구 계정인지 모른다)
+        ids = [nid(12, "2345678")]
+        rows, _ = self.day(0, [(B, 8765432, "전혀다른이름"), self.OTHER], ids)
+        self.assertEqual(self.lost(rows, 12), [(S.PAIR_BLOCKED, B, None, M.B_NAME_DIFFERENT)])
+        rows, _ = self.day(1, [self.OTHER], ids)
+        self.day(2, [self.OTHER], ids)
+        rows, _ = self.day(3, [self.OTHER], ids)
+        self.assertEqual(self.lost(rows, 12), [(S.PAIR_BLOCKED, B, None, M.B_NOT_LINKED)])
+
+    def test_confirmed_and_claimed_counted_once(self):
+        ids = [nid(12, "2345678")]
+        self.day(0, [(B, 8765432, "하늘꽃집"), self.OTHER], ids, decisions=[(12, B, "confirmed")])
+        rows, _ = self.day(1, [self.OTHER], ids)
+        self.assertEqual(self.lost(rows, 12), [(S.PAIR_MISSING, B, S.PAIR_CONFIRMED, None)])   # 막힘 줄을 한 번 더 두지 않는다
+        self.assertIsNotNone(rows[[r["possibility_id"] for r in rows].index(12)]["decision_id"])
+
+    def test_account_now_confirmed_to_other_prospect(self):
+        ids = [nid(12, "2345678")]
+        self.day(0, [(B, 8765432, "하늘꽃집"), self.OTHER], ids)                             # 12 ↔ B 자동 짝
+        rows, _ = self.day(1, [self.OTHER], ids, decisions=[(11, B, "confirmed")])            # 사람이 B 를 11 에 확인
+        self.assertEqual(self.lost(rows, 11), [(S.PAIR_MISSING, B, S.PAIR_CONFIRMED, None)])
+        self.assertEqual(self.lost(rows, 12), [(S.PAIR_BLOCKED, B, None, M.B_NOT_LINKED)])  # 12 의 이관 빠짐이 아니다
+
+    def test_rejected_or_number_removed(self):
+        ids = [nid(12, "2345678")]
+        self.day(0, [(B, 8765432, "하늘꽃집"), self.OTHER], ids)
+        rows, _ = self.day(1, [self.OTHER], [])                                               # ① 에서 번호를 지움
+        self.assertEqual(self.lost(rows, 12), [])
+        rows, _ = self.day(2, [self.OTHER], ids, decisions=[(12, B, "rejected")])             # 사람이 「아님」
+        self.assertEqual(self.lost(rows, 12), [(S.PAIR_BLOCKED, B, None, M.B_REJECTED)])
+
+    def test_memory_times(self):
+        ids = [nid(12, "2345678")]
+        self.day(0, [(B, 8765432, "하늘꽃집"), self.OTHER], ids, decisions=[(11, D, "confirmed")])
+        self.day(1, [(B, 8765432, "하늘꽃집"), self.OTHER], ids)
+        mem = self.st._conn.execute("""SELECT possibility_id, customer_id, link, first_matched_at, last_matched_at
+                                       FROM naver_auto_link_memory ORDER BY possibility_id""").fetchall()
+        self.assertEqual([(m[0], m[2]) for m in mem], [(11, "confirmed"), (12, "auto")])
+        self.assertLess(mem[1][3], mem[1][4])                                                  # 처음 · 마지막 이어진 시각
+        with self.assertRaises(S.StoreRefused):
+            self.st.matched_before("candidate")
+
+    def test_store_row_rules_for_transfer_lost(self):
+        self.seed()
+        self.st.record_accounts(kids((A, 7654321, "메타상회")), self.at(T0 + timedelta(minutes=1)))   # B 가 빠짐
+        args = RecordPairingTest.args
+        bad = (
+            {"state": "missing", "possibility_id": 12, "customer_id": B},                                     # 짝 종류 없음
+            {"state": "missing", "possibility_id": 12, "customer_id": B, "link": "maybe"},
+            {"state": "missing", "possibility_id": 12, "customer_id": B, "link": "auto", "decision_id": self.did},
+            {"state": "missing", "possibility_id": 12, "customer_id": B, "link": "confirmed"},                # 판단 번호 없음
+            {"state": "auto", "possibility_id": 11, "customer_id": A, "code": "same", "link": "auto"},        # 짝 종류는 빠짐 줄에만
+            {"state": "missing", "possibility_id": 12, "customer_id": B, "link": "auto"},                     # 자동 짝이 된 적 없음
+        )
+        for r in bad:
+            with self.subTest(r=sorted(r.items())):
+                with self.assertRaises(S.StoreRefused):
+                    self.st.record_pairing(self.clock.t, **args(self, [r]))
 
 
 class PairingDueTest(Base):
@@ -708,7 +808,7 @@ class RecordPairingTest(Base):
         bad = (
             {"state": "auto", "possibility_id": 12, "customer_id": 9_999_999, "code": "same"},        # 목록에 없는 계정
             {"state": "auto", "possibility_id": 99, "customer_id": B, "code": "same"},                # 단계 목록에 없는 가망
-            {"state": "missing", "possibility_id": 11, "customer_id": A, "decision_id": 1},           # 목록에 있는데 「오늘 없음」
+            {"state": "missing", "possibility_id": 11, "customer_id": A, "decision_id": 1, "link": "confirmed"},   # 목록에 있는데 「오늘 없음」
             {"state": "confirmed", "possibility_id": 12, "customer_id": B, "code": "same", "decision_id": 1},   # 짝이 다름
             {"state": "superseded", "possibility_id": 11, "customer_id": A, "decision_id": 1},        # 밀리지 않은 확인
         )
