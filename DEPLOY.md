@@ -11,7 +11,7 @@
 2. **GitHub 저장소** — 이 폴더를 회사 GitHub에 올리기 (private 권장).
 3. **GitHub Secrets** (저장소 Settings → Secrets) — logic-analysis와 같은 값 재사용:
    - `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`
-   - `AD_JWT_SECRET` (아무 긴 무작위 문자열 — 토큰 서명용)
+   - `AD_JWT_SECRET` (아무 긴 무작위 문자열 — 토큰 서명용 · 32자 이상 · 없으면 서버가 스스로 만든 값을 씀 · S0)
 
 → 이 3가지만 되면, 코드 push 시 **자동 배포**됩니다.
 
@@ -47,8 +47,11 @@ docker compose exec ad-api python create_user.py ad1@metainc.co.kr 박광고 sta
 ```bash
 # 로컬에서 VPS로 복사 후
 scp -r . <VPS_USER>@<VPS_HOST>:/root/ad-dashboard-deploy
-ssh <VPS_USER>@<VPS_HOST> "cd /root/ad-dashboard-deploy && JWT_SECRET=xxx docker compose up -d --build"
+ssh <VPS_USER>@<VPS_HOST> "cd /root/ad-dashboard-deploy && docker compose up -d --build"
 ```
+> **로그인 서명 값(S0 · 2026-09-29)** — 예전 예시의 `JWT_SECRET=xxx` 는 쓰지 않습니다(약한 값·알려진 기본값은 이제 무시됩니다).
+> 서버 `.env` 에 32자 이상 무작위 값을 두면 그 값을 쓰고, 비우면 서버가 강한 값을 만들어 `data/jwt.key` 에 두고 씁니다.
+> 점검: `docker exec ad-api python -m tools.check_secrets`(값은 찍지 않고 출처·사유·개수만).
 
 ---
 

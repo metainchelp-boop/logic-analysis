@@ -1,11 +1,13 @@
 """앱 진입점 — API(/api) + 정적 화면(/) 서빙."""
+import logging
+import os
 import pathlib
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
 from .database import Base, engine
-from . import seed
+from . import cors_policy, seed
 from .routers import auth, clients, insights, erp, naver
 
 Base.metadata.create_all(bind=engine)
@@ -33,12 +35,19 @@ with engine.connect() as _conn:
             pass  # 컬럼 이미 존재
 
 app = FastAPI(title="메타 광고주 통합 대시보드 API")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# 다른 사이트 화면의 호출(CORS) — 기본은 아무 곳에도 열지 않는다(S0 · 예전엔 모든 사이트 *).
+# 꼭 열어야 하면 CORS_ALLOW_ORIGINS 에 정확한 주소만(cors_policy 설명) · 로그인 토큰은 머리로만 싣으므로 쿠키 허용 없음.
+_cors_origins, _cors_dropped = cors_policy.allowed_origins(os.environ.get("CORS_ALLOW_ORIGINS"))
+if _cors_dropped:
+    logging.getLogger("app.main").warning("CORS_ALLOW_ORIGINS — 모양이 틀려 버린 값 %d개(* · 경로 포함 등)", _cors_dropped)
+if _cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins,
+        allow_methods=["GET", "POST", "PUT", "DELETE"],
+        allow_headers=["Authorization", "Content-Type"],
+        allow_credentials=False,
+    )
 
 app.include_router(auth.router, prefix="/api")
 app.include_router(clients.router, prefix="/api")

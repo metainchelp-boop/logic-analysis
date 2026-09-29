@@ -3,6 +3,16 @@ import json
 from .database import SessionLocal
 from . import models, security
 
+# 처음 설치 때 만드는 데모 계정의 비밀번호 — 예전 화면(app.js)과 문서에 공개됐다(S0).
+# 이 비밀번호 그대로인 계정은 비밀번호 로그인이 막힌다(login_guard · 관리자 길을 끊지 않는 경우만 예외).
+# 이 값을 로그·화면·문서에 옮겨 적지 않는다.
+DEMO_PASSWORDS = {
+    "admin@metainc.co.kr": "admin1234",
+    "lead@metainc.co.kr": "lead1234",
+    "kim@metainc.co.kr": "kim1234",
+    "viewer@metainc.co.kr": "viewer1234",
+}
+
 
 def run():
     db = SessionLocal()
@@ -17,22 +27,22 @@ def run():
 
         admin = models.User(
             email="admin@metainc.co.kr", name="대표",
-            password_hash=security.hash_password("admin1234"),
+            password_hash=security.hash_password(DEMO_PASSWORDS["admin@metainc.co.kr"]),
             role="admin", team_id=team1.id,
         )
         lead = models.User(
             email="lead@metainc.co.kr", name="이팀장",
-            password_hash=security.hash_password("lead1234"),
+            password_hash=security.hash_password(DEMO_PASSWORDS["lead@metainc.co.kr"]),
             role="lead", team_id=team1.id,
         )
         kim = models.User(
             email="kim@metainc.co.kr", name="김마케터",
-            password_hash=security.hash_password("kim1234"),
+            password_hash=security.hash_password(DEMO_PASSWORDS["kim@metainc.co.kr"]),
             role="staff", team_id=team1.id,
         )
         viewer = models.User(
             email="viewer@metainc.co.kr", name="정직원(읽기전용)",
-            password_hash=security.hash_password("viewer1234"),
+            password_hash=security.hash_password(DEMO_PASSWORDS["viewer@metainc.co.kr"]),
             role="viewer", team_id=team2.id,
         )
         db.add_all([admin, lead, kim, viewer])
@@ -63,7 +73,7 @@ def run():
             fields_json=json.dumps({"customer_id": security.encrypt("1234567")}),
         ))
         db.commit()
-        print("✅ 데모 데이터 생성 완료 (admin@metainc.co.kr / admin1234 등)")
+        print("✅ 데모 데이터 생성 완료(데모 계정 4개 — 공개된 비밀번호 그대로면 로그인이 막힙니다 · S0)")
     finally:
         db.close()
 
@@ -75,8 +85,8 @@ def _ensure_viewer(db):
     team = db.query(models.Team).first()
     db.add(models.User(
         email="viewer@metainc.co.kr", name="정직원(읽기전용)",
-        password_hash=security.hash_password("viewer1234"),
+        password_hash=security.hash_password(DEMO_PASSWORDS["viewer@metainc.co.kr"]),
         role="viewer", team_id=team.id if team else None,
     ))
     db.commit()
-    print("✅ 읽기전용 데모 계정 추가 (viewer@metainc.co.kr / viewer1234)")
+    print("✅ 읽기전용 데모 계정 추가(공개된 비밀번호 그대로면 로그인이 막힙니다 · S0)")

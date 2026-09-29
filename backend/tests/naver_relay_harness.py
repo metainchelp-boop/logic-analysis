@@ -172,11 +172,12 @@ def mode_bypass():
 def mode_headers():
     from fastapi.testclient import TestClient
     import app.main as m
+    from app import seed  # 데모 비밀번호는 한 곳(seed)에서만 — 시험에 옮겨 적지 않는다(S0)
     eng, path = start_engine()
     os.environ["NAVER_AUTO_WEB"] = "on"
     os.environ["NAVER_AUTO_ENGINE"] = "unix:" + path
     c = TestClient(m.app)
-    lg = c.post("/api/auth/login", json={"email": "admin@metainc.co.kr", "password": "admin1234"})
+    lg = c.post("/api/auth/login", json={"email": "admin@metainc.co.kr", "password": seed.DEMO_PASSWORDS["admin@metainc.co.kr"]})
     erp3 = lg.json().get("access_token") or lg.json().get("token") or ""
     out = {"login": lg.status_code, "erp3_token_len": len(erp3), "calls": []}
     noisy = {"Cookie": "session=COOKIEMARK", "X-Naver-Auto-Source": "9.9.9.9", "X-Forwarded-For": "8.8.8.8",

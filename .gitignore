@@ -17,3 +17,7 @@ __pycache__/
 *.db-wal
 *.db-shm
 *.db-journal
+
+# 로그인 서명 값 — 서버가 만든 값(S0 · 운영은 data/ 안)
+backend/jwt.key
+backend/jwt.key.lock

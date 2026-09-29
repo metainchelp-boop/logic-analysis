@@ -205,7 +205,12 @@ def _grouped(v: str) -> Optional[str]:
 def source_of(inc: Incoming) -> Optional[str]:
     """nginx 가 넣는 X-Real-IP(브라우저가 보낸 값은 nginx 가 덮어쓴다) → 없으면 연결한 주소 → 둘 다 모양이 틀리면 없음.
     X-Forwarded-For 는 보지 않는다(브라우저가 앞자리를 지어낼 수 있다). IPv6 는 /64 로 묶는다."""
-    for v in (inc.real_ip, inc.peer):
+    return source_from(inc.real_ip, inc.peer)
+
+
+def source_from(real_ip: Optional[str], peer: Optional[str]) -> Optional[str]:
+    """``source_of`` 와 같은 규칙 — 머리 값과 연결 주소만으로(③ 로그인 실패 제한도 같은 규칙을 쓴다 · S0)."""
+    for v in (real_ip, peer):
         if isinstance(v, str) and _IP.fullmatch(v):
             g = _grouped(v)
             if g is not None:

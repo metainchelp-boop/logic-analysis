@@ -1,4 +1,6 @@
 """공통 의존성 — 현재 로그인 사용자 추출 + RBAC(권한) 헬퍼."""
+import re
+
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
@@ -7,6 +9,7 @@ from .database import get_db
 from . import security, models
 
 bearer = HTTPBearer(auto_error=False)
+_SUB = re.compile(r"[1-9][0-9]{0,11}")
 
 
 def get_current_user(
@@ -19,7 +22,11 @@ def get_current_user(
         payload = security.decode_token(cred.credentials)
     except Exception:
         raise HTTPException(401, "세션이 만료되었거나 유효하지 않습니다")
-    user = db.get(models.User, int(payload["sub"]))
+    sub = payload.get("sub") if isinstance(payload, dict) else None
+    # 주인 번호는 1 이상 숫자 글자만(S0 — 예전엔 sub 가 없거나 숫자가 아니면 401 이 아니라 500 이 났다)
+    if not isinstance(sub, str) or not _SUB.fullmatch(sub):
+        raise HTTPException(401, "세션이 만료되었거나 유효하지 않습니다")
+    user = db.get(models.User, int(sub))
     if not user:
         raise HTTPException(401, "사용자를 찾을 수 없습니다")
     return user

@@ -11,7 +11,8 @@ services:
       - TZ=Asia/Seoul
       - DB_PATH=/app/data/app.db
       - FERNET_KEY_FILE=/app/data/secret.key
-      - JWT_SECRET=${JWT_SECRET:-please-set-a-strong-secret}
+      # 로그인 서명 값 — 강한 값(32자 이상 무작위)을 .env 에 두면 그 값 · 비우거나 약하면 서버가 만든 값(/app/data/jwt.key) · S0
+      - JWT_SECRET=${JWT_SECRET:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-sonnet-4-6}
       # 메타체험단 연동 API(읽기전용) — 토큰은 mc_cal/mc_ad 공용
