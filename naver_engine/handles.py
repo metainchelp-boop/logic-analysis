@@ -156,6 +156,19 @@ def _check_stage(stage, stage_as_of: datetime, latest_end_date: Optional[date], 
         raise NotEligible("ended-over-14-days")
 
 
+def eligibility_reason(stage, stage_as_of: datetime, latest_end_date: Optional[date], now: datetime) -> Optional[str]:
+    """이 가망의 계정에 들어가도 되는가 — 되면 None, 아니면 사유 코드(``NotEligible.reason`` 과 같은 글자).
+
+    점검 손잡이 발급과 **같은 규칙 한 곳**(``_check_stage``)을 쓴다 — 짝 맞추기(S8)가 관리 대상 가망을 고를 때 쓴다
+    (두 규칙이 갈라져 짝은 되는데 손잡이는 안 되는 가망이 생기지 않게)."""
+    _kst_today(now)
+    try:
+        _check_stage(stage, stage_as_of, latest_end_date, now)
+    except NotEligible as e:
+        return e.reason
+    return None
+
+
 def _check_possibility(possibility_id) -> int:
     if isinstance(possibility_id, bool) or not isinstance(possibility_id, int) or possibility_id <= 0:
         raise NotEligible("possibility-invalid")

@@ -33,14 +33,25 @@
 - **조직 스냅숏은 수락본 하나만 남긴다(S7 · M12).** 건전성 검사를 통과한 것만 ``record_org`` 로 들어오고, 엔진이 다시
   켜져도 이 수락본이 다음 검사의 「이전 조직」이 된다. 남길 칸만(``fields.ORG_*``) · 더 새 스냅숏만.
 - **동기화마다 한 줄 남긴다(S7).** 받음 · 버림 · 멈춤(브레이크) · 실패 — 종류 코드와 개수만(번호·이름 없음).
+- **짝 판단은 계정마다 가장 늦은 확인 하나만 산다(S8).** 짝마다 가장 늦은 · 거두지 않은 판단을 고른 뒤, 한 계정을 여러
+  가망에 「확인」했으면 가장 늦게 적은 확인(판단 번호가 큰 것) 하나만 살리고 앞 확인은 「밀린 확인」으로 따로 돌려준다
+  (줄은 지우지 않는다 · 뒤 확인을 거두면 앞 확인이 다시 산다). 확인한 짝이 있는 계정이 한꺼번에 크게 빠져도 멈춘다
+  (``BRAKE_CONFIRMED`` — 끝난·쉬는 계정이 섞인 전체 분모로는 안 보이는 것 · S7 뒤 조각 몫 ⑵).
+- **계정이 목록에 있던·없던 시각을 남긴다(S8).** 날짜 수(``absent_days``)만으로는 자정을 사이에 둔 두 번이 「2일」이
+  된다 — 처음 빠진 읽기 시각·마지막으로 빠진 읽기 시각을 따로 두어 「연결 끊김」이 시각 간격도 보게 한다(S7 뒤 조각 몫 ⑶).
+  표는 **더하기만** 했다(칸을 고치지 않는다 — 옛 판 파일도 열 때 표만 더한다).
+- **짝 맞추기 결과는 회차마다 쌓는다(S8).** 받은 회차는 가망·계정 번호와 상태·코드만 줄로 남기고(이름 없음), 버림·실패는
+  코드만 남긴다. 적는 순간 입력(연결 목록 읽은 시각 · 단계 받은 시각 · 사람 판단)이 계산할 때와 같지 않으면 받지 않는다
+  (``PairingStale``) · 점검할 짝의 계정은 지금 목록에 있어야 하고 가망은 지금 관리 대상이어야 한다.
 
 엔진이 부르는 순서(S7~S9): 1시간마다 ``sync.sync_org`` → 6시간마다 ``sync.sync_stages``(``record_prospects``) →
-하루 한 번 ``record_accounts`` → ``begin_run`` → 계정마다 ``record_account_day`` · ``record_campaign_days`` →
-``finish_run``. 이슈 표는 S9 에서 더한다.
+하루 한 번 ``links.sync_accounts``(``record_accounts``) → ``links.pair_links``(``record_pairing``) → ``begin_run`` →
+계정마다 ``record_account_day`` · ``record_campaign_days`` → ``finish_run``. 이슈 표는 S9 에서 더한다.
 """
 from __future__ import annotations
 
 import fcntl as _fcntl
+import hashlib
 import json
 import math
 import os
@@ -49,7 +60,7 @@ import re
 import sqlite3 as _sqlite3
 import stat as _stat
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Callable, Iterable, List, Mapping, Optional, Sequence, Tuple
 
@@ -58,10 +69,10 @@ from . import fields as F
 from . import naver_read as N
 
 __all__ = ("open_writer", "open_reader", "Store", "StoreError", "StoreBusy", "StoreRefused", "SyncBraked",
-           "HoldRefused", "SyncCounts")
+           "HoldRefused", "SyncCounts", "LinkDecision", "PairingStale")
 
 KST = timezone(timedelta(hours=9))
-SCHEMA_VERSION = 2   # 2 = S7(조직 수락본 · 동기화 기록) — 옛 판(1) 파일은 열 때 표를 더하고 판 번호를 올린다
+SCHEMA_VERSION = 3   # 2 = S7(조직 수락본 · 동기화 기록) · 3 = S8(계정 시각 · 짝 결과) — 옛 판 파일은 열 때 표를 더하고 판 번호를 올린다
 BUSY_TIMEOUT_MS = 5000
 FUTURE_SLACK = timedelta(minutes=5)   # 시계가 조금 어긋나도 받는다 · 그보다 앞선 시각은 거절
 ORG_FUTURE_SLACK = timedelta(minutes=10)   # ① 스냅숏 시각 — app.naver_auto.org_snapshot.FUTURE_TOLERANCE 와 같다(시험이 대조)
@@ -80,6 +91,7 @@ MAX_SYNC_CODES = 20
 ORG_MAX_ROWS = 100_000
 HOLD_TTL = timedelta(hours=3)   # 붙잡아 둔 목록을 확인할 수 있는 시간 — 지나면 다시 읽어 새로 붙잡는다
 BRAKE_TOTAL, BRAKE_STAGE, BRAKE_BASELINE, BRAKE_MANAGER = "BRAKE", "BRAKE_STAGE", "BRAKE_BASELINE", "BRAKE_MANAGER"
+BRAKE_CONFIRMED = "BRAKE_CONFIRMED"   # 확인한 짝이 있는 계정이 한꺼번에 크게 빠짐(S8)
 CODE_CONFIRMED = "CONFIRMED"
 CODE_STORED_UNREADABLE = "STORED_UNREADABLE"   # 저장된 조직 수락본을 못 읽음 — 이 붙잡음을 확인할 때만 망가진 줄을 덮어쓴다
 HOLD_NOT_FOUND, HOLD_USED, HOLD_EXPIRED = "HOLD_NOT_FOUND", "HOLD_USED", "HOLD_EXPIRED"
@@ -92,6 +104,23 @@ ACCOUNT_STATUSES = frozenset({
 })
 LINKS = frozenset({"confirmed", "auto"})           # handles.LINK_* 와 같은 글자(시험이 대조한다)
 DECISIONS = frozenset({"confirmed", "rejected"})   # backend/app/naver_auto/matching.py 의 DECISION_* 와 같은 글자
+# 짝 맞추기 결과 줄의 상태(S8) — confirmed·auto 는 handles.LINK_* 와 같은 글자(시험이 대조한다)
+PAIR_CONFIRMED, PAIR_AUTO = "confirmed", "auto"          # 점검해도 되는 짝(확인 · 자동)
+PAIR_MISSING = "missing"          # 확인한 짝인데 오늘 연결 목록에 없음 — 아직 「연결 끊김」은 아님
+PAIR_BROKEN = "broken"            # 확인한 짝이 2일(서로 다른 날짜) · 20시간 넘게 연결 목록에 없음 → ⚪ 연결 끊김(확인 필요 예)
+PAIR_BLOCKED = "blocked"          # ① 에 번호가 적혀 있는데 자동 짝이 못 됨(사유 코드)
+PAIR_CANDIDATE = "candidate"      # 이름만 비슷함 — 사람이 확인할 때까지 들어가지 않는다
+PAIR_SUPERSEDED = "superseded"    # 같은 계정을 다른 가망에 더 늦게 확인해 밀린 확인(사람이 볼 수 있게)
+PAIR_STATES = frozenset({PAIR_CONFIRMED, PAIR_AUTO, PAIR_MISSING, PAIR_BROKEN, PAIR_BLOCKED, PAIR_CANDIDATE,
+                         PAIR_SUPERSEDED})
+PAIR_CHECKABLE = frozenset({PAIR_CONFIRMED, PAIR_AUTO})
+PAIR_OF_DECISION = frozenset({PAIR_CONFIRMED, PAIR_MISSING, PAIR_BROKEN})   # 이긴 확인에서 나온 상태
+PAIR_RELATIONS = frozenset({"same", "contains", "different", "unknown"})   # matching.REL_* 와 같은 글자(시험이 대조)
+PAIRING_OUTCOMES = frozenset({SYNC_ACCEPTED, SYNC_REFUSED, SYNC_FAILED})
+PAIRING_INPUT_COUNTS = ("prospects", "ignored")   # 줄로는 알 수 없는 개수 — 부르는 쪽이 넣는다(나머지는 저장소가 줄에서 센다)
+PAIRING_MAX_ROWS = 200_000
+CODE_INPUTS_CHANGED = "INPUTS_CHANGED"   # 짝을 계산하는 사이 입력(연결 목록·단계·사람 판단)이 바뀜 — 다시 계산한다
+
 RUN_RUNNING, RUN_DONE, RUN_FAILED = "running", "done", "failed"
 RUN_END_STATUSES = frozenset({RUN_DONE, RUN_FAILED})
 ORPHANED = "orphaned"
@@ -231,6 +260,35 @@ _SCHEMA = (
         body TEXT NOT NULL,
         used_at TEXT,
         used_by INTEGER CHECK (used_by IS NULL OR used_by >= 0))""",
+    # 계정이 연결 목록에 있던·없던 읽기 시각(S8) — 「연결 끊김」은 날짜 수와 시각 간격을 함께 본다(표를 더하기만 — 칸을 고치지 않는다)
+    """CREATE TABLE IF NOT EXISTS naver_auto_account_time (
+        customer_id INTEGER PRIMARY KEY CHECK (customer_id > 0),
+        last_seen_at TEXT,
+        absent_since TEXT,
+        absent_last_at TEXT)""",
+    # 짝 맞추기 회차(S8) — 받음·버림·실패 · 코드와 개수만
+    """CREATE TABLE IF NOT EXISTS naver_auto_pairing_run (
+        pairing_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        at TEXT NOT NULL,
+        outcome TEXT NOT NULL CHECK (outcome IN ('accepted', 'refused', 'failed')),
+        codes TEXT NOT NULL,
+        accounts_read_at TEXT,
+        stages_as_of TEXT,
+        decisions_hash TEXT,
+        counts TEXT)""",
+    # 짝 맞추기 결과 줄(받은 회차만) — 가망·계정 번호와 상태·코드만(이름 없음)
+    """CREATE TABLE IF NOT EXISTS naver_auto_pairing_row (
+        pairing_id INTEGER NOT NULL CHECK (pairing_id > 0),
+        possibility_id INTEGER NOT NULL CHECK (possibility_id > 0),
+        customer_id INTEGER CHECK (customer_id IS NULL OR customer_id > 0),
+        state TEXT NOT NULL CHECK (state IN ('confirmed', 'auto', 'missing', 'broken', 'blocked', 'candidate',
+                                             'superseded')),
+        code TEXT,
+        same_name INTEGER CHECK (same_name IS NULL OR same_name >= 1),
+        claimed_elsewhere INTEGER CHECK (claimed_elsewhere IS NULL OR claimed_elsewhere IN (0, 1)),
+        decision_id INTEGER CHECK (decision_id IS NULL OR decision_id > 0))""",
+    """CREATE INDEX IF NOT EXISTS naver_auto_pairing_row_run
+        ON naver_auto_pairing_row (pairing_id, possibility_id)""",
 )
 
 # ── 연결 거절 규칙 ────────────────────────────────────────────────
@@ -327,6 +385,24 @@ class HoldRefused(StoreRefused):
     def __init__(self, code: str, message: str) -> None:
         self.code = code
         super().__init__(message)
+
+
+class PairingStale(StoreRefused):
+    """짝을 계산하는 사이 입력(연결 목록 · 단계 · 사람 판단)이 바뀌었거나, 점검할 짝의 계정·가망이 지금 목록에 없다 —
+    아무것도 적지 않았다. 다시 계산하면 된다(``code`` = ``INPUTS_CHANGED``)."""
+
+    code = CODE_INPUTS_CHANGED
+
+
+@dataclass(frozen=True)
+class LinkDecision:
+    """지금 살아 있는 사람의 짝 판단 한 줄(또는 밀린 확인) — 번호·시각을 함께 준다(S8 · 짝 확인 화면 S11 이 쓴다)."""
+    decision_id: int
+    possibility_id: int
+    customer_id: int = field(repr=False)   # 표시(repr)·로그에 고객 번호가 새지 않게
+    decision: str = "confirmed"
+    decided_by: int = 0
+    decided_at: Optional[datetime] = None
 
 
 def _braked(present_before: int, would_absent: int) -> bool:
@@ -1071,6 +1147,11 @@ class Store:
                 reasons.append(BRAKE_MANAGER)   # 있던 관리계정이 사라짐·0줄·크게 줄었는데 빠질 계정이 있다(번호 단위)
             if baseline is not None and _braked(baseline, baseline - len(rows)):
                 reasons.append(BRAKE_BASELINE)
+            # 확인한 짝이 있는 계정만 따로 센다(S8) — 끝난·쉬는 계정이 섞인 전체 분모로는 안 보이는 급감
+            winners, _lost = self._resolve_decisions(c)
+            held = {d.customer_id for d in winners if d.decision == "confirmed" and before.get(d.customer_id) == 1}
+            if _braked(len(held), len(held - seen)):
+                reasons.append(BRAKE_CONFIRMED)
             if reasons:
                 raise _Brake(reasons, present_before, leaving, managers_before, len(per))
         for cid, no, name in rows:
@@ -1082,11 +1163,23 @@ class Store:
                        ad_account_no = excluded.ad_account_no, account_name = excluded.account_name,
                        present = 1, last_seen_on = excluded.last_seen_on, absent_days = 0, last_absent_on = NULL""",
                 (cid, no, name, d, d))
+            c.execute(
+                """INSERT INTO naver_auto_account_time (customer_id, last_seen_at, absent_since, absent_last_at)
+                   VALUES (?, ?, NULL, NULL)
+                   ON CONFLICT (customer_id) DO UPDATE SET
+                       last_seen_at = excluded.last_seen_at, absent_since = NULL, absent_last_at = NULL""", (cid, at))
         now_absent = 0
         for cid in sorted(set(before) - seen):
             c.execute(
                 """UPDATE naver_auto_account SET present = 0, absent_days = absent_days + 1, last_absent_on = ?
                    WHERE customer_id = ? AND (last_absent_on IS NULL OR last_absent_on < ?)""", (d, cid, d))
+            # 처음 빠진 읽기 시각은 그대로 두고 마지막으로 빠진 읽기 시각만 옮긴다(시각 줄이 없던 옛 계정은 지금부터 센다)
+            c.execute(
+                """INSERT INTO naver_auto_account_time (customer_id, last_seen_at, absent_since, absent_last_at)
+                   VALUES (?, NULL, ?, ?)
+                   ON CONFLICT (customer_id) DO UPDATE SET
+                       absent_since = COALESCE(naver_auto_account_time.absent_since, excluded.absent_since),
+                       absent_last_at = excluded.absent_last_at""", (cid, at, at))
             if before[cid] == 1:
                 now_absent += 1
         new_base = len(rows) if allow is not None or baseline is None else max(baseline, len(rows))
@@ -1104,9 +1197,11 @@ class Store:
         """대행 연결 목록을 전부 받은 결과로 계정 표를 고친다 — 없어진 계정은 「목록에 없음」 · 연속 없는 날을 센다.
 
         날짜는 읽은 시각의 한국 날짜다. 같은 날 두 번 받아도 없는 날은 한 번만 세고, 더 이른 시각의 목록은 받지 않는다.
-        확인한 짝을 무효로 할지(2일 연속)는 짝 동기화(S8)가 ``absent_days`` 를 보고 정한다.
+        처음 빠진 읽기 시각·마지막으로 빠진 읽기 시각도 남긴다(``account_times``) — 확인한 짝을 「연결 끊김」으로 볼지
+        (2일 · 20시간)는 짝 맞추기(``links``)가 이 둘을 보고 정한다. 멈춘 날은 아무것도 적지 않으므로 세지 않는다.
         한꺼번에 크게 빠지거나 · **있던 관리계정(번호)이 사라지거나 0줄·크게 줄고 빠질 계정이 있거나** · 기준선보다 누적으로
-        크게 줄면 아무것도 적지 않고 붙잡아 둔 뒤 ``SyncBraked`` — 확인은 ``confirm_accounts_hold``.
+        크게 줄거나 · **확인한 짝이 있는 계정이 크게 빠지면**(``BRAKE_CONFIRMED``) 아무것도 적지 않고 붙잡아 둔 뒤
+        ``SyncBraked`` — 확인은 ``confirm_accounts_hold``.
         """
         self._need_writer()
         at, rows, per, body = self._account_parts(kids, read_at)
@@ -1250,16 +1345,175 @@ class Store:
             if cur.rowcount != 1:
                 raise StoreRefused("거둘 판단이 없거나 이미 거둔 판단입니다")
 
-    def current_decisions(self) -> List[Tuple[int, int, str]]:
-        """짝마다 가장 늦은 · 거두지 않은 판단 — (가망 번호, 고객 번호, 판단). 짝 규칙(matching)에 넘긴다."""
-        rows = self._conn.execute(
-            """SELECT d.possibility_id, d.customer_id, d.decision FROM naver_auto_link_decision d
-               WHERE d.decision_id = (   -- 거두지 않은 판단 중 가장 늦은 것(거둔 줄은 안쪽에서 빠진다)
-                   SELECT MAX(x.decision_id) FROM naver_auto_link_decision x
-                   WHERE x.possibility_id = d.possibility_id AND x.customer_id = d.customer_id
-                     AND x.revoked_at IS NULL)
-               ORDER BY d.possibility_id, d.customer_id""").fetchall()
-        return [(int(p), int(c), str(dec)) for p, c, dec in rows]
+    def _resolve_decisions(self, c) -> Tuple[List[LinkDecision], List[LinkDecision]]:
+        """(살아 있는 판단, 밀린 확인).
+
+        1) 짝(가망 × 계정)마다 거두지 않은 판단 중 가장 늦게 적은 것(판단 번호가 큰 것)을 고른다.
+        2) 그중 「확인」이 한 계정에 여럿이면(서로 다른 가망) 가장 늦게 적은 확인 하나만 산다 — 앞 확인은 「밀린 확인」.
+           뒤 확인을 거두면 앞 확인이 다시 산다(줄은 지우지 않는다 · 설계 v1.8 S8 「가장 늦은 확인만 살림」).
+        「늦음」은 적은 순서(판단 번호)다 — 판단 시각은 부르는 쪽이 넣어 앞뒤가 뒤바뀔 수 있다."""
+        latest = {}
+        for did, pid, cid, dec, by, at_raw in c.execute(
+                """SELECT decision_id, possibility_id, customer_id, decision, decided_by, decided_at
+                   FROM naver_auto_link_decision WHERE revoked_at IS NULL ORDER BY decision_id"""):
+            at_ = _aware_time(at_raw)
+            if at_ is None or dec not in DECISIONS:
+                raise StoreError("저장된 짝 판단을 읽지 못했습니다")
+            latest[(pid, cid)] = LinkDecision(int(did), int(pid), int(cid), str(dec), int(by), at_)
+        best = {}
+        for d in latest.values():
+            if d.decision == "confirmed" and (d.customer_id not in best or d.decision_id > best[d.customer_id].decision_id):
+                best[d.customer_id] = d
+        winners, lost = [], []
+        for d in latest.values():
+            if d.decision == "confirmed" and best[d.customer_id] is not d:
+                lost.append(d)
+            else:
+                winners.append(d)
+        key = (lambda d: (d.possibility_id, d.customer_id))
+        return sorted(winners, key=key), sorted(lost, key=key)
+
+    @staticmethod
+    def _decisions_hash(ids) -> str:
+        return hashlib.sha256(",".join(str(i) for i in sorted(ids)).encode("ascii")).hexdigest()
+
+    def link_decisions(self) -> Tuple[List[LinkDecision], List[LinkDecision]]:
+        """(살아 있는 판단, 밀린 확인)을 **한 번에** 읽는다 — 짝 맞추기가 두 목록을 같은 순간의 것으로 쓰게."""
+        return self._resolve_decisions(self._conn)
+
+    def decision_fingerprint(self) -> str:
+        """지금 사람 판단의 지문(살아 있는 판단 + 밀린 확인의 번호) — 마지막 짝 맞추기 뒤 판단이 바뀌었는지 본다."""
+        w, lost = self._resolve_decisions(self._conn)
+        return self._decisions_hash(d.decision_id for d in w + lost)
+
+    def current_decisions(self) -> List[LinkDecision]:
+        """살아 있는 사람의 판단 — 짝마다 가장 늦은 · 거두지 않은 판단(한 계정의 확인은 가장 늦은 하나만) · 번호·시각 포함.
+        짝 규칙(matching)에 넘긴다."""
+        return self._resolve_decisions(self._conn)[0]
+
+    def superseded_confirmations(self) -> List[LinkDecision]:
+        """밀린 확인 — 같은 계정을 다른 가망에 더 늦게 확인해 지금은 살아 있지 않은 확인(짝 확인 화면에 보여 준다)."""
+        return self._resolve_decisions(self._conn)[1]
+
+    # ── 짝 맞추기 결과(S8) ──
+    def _pairing_rows(self, rows):
+        """결과 줄 → 저장할 튜플. 상태마다 칸 모양을 검사한다(값은 문구에 넣지 않는다)."""
+        out, seen = [], set()
+        for r in _seq(rows, "짝 결과 줄"):
+            if not isinstance(r, Mapping):
+                raise StoreRefused("짝 결과 줄 모양이 아닙니다")
+            if set(r) - {"state", "possibility_id", "customer_id", "code", "same_name", "claimed_elsewhere",
+                         "decision_id"}:
+                raise StoreRefused("짝 결과 줄에 모르는 칸이 있습니다")   # 이름 같은 칸이 들어오지 않게
+            st = r.get("state")
+            if st not in PAIR_STATES:
+                raise StoreRefused("짝 결과 상태가 아닙니다")
+            pid = _pos_int(r.get("possibility_id"), "가망 번호")
+            cid = _opt_pos_int(r.get("customer_id"), "고객 번호")
+            code = r.get("code")
+            same = r.get("same_name")
+            claimed = r.get("claimed_elsewhere")
+            did = _opt_pos_int(r.get("decision_id"), "판단 번호")
+            if st != PAIR_BLOCKED and cid is None:
+                raise StoreRefused("짝 결과 줄에 고객 번호가 없습니다")
+            if st in (PAIR_CONFIRMED, PAIR_AUTO, PAIR_CANDIDATE):
+                if code not in PAIR_RELATIONS:
+                    raise StoreRefused("이름 관계 코드가 아닙니다")
+            elif st == PAIR_BLOCKED:
+                _code(code, _REASON_CODE, "막힌 까닭")
+            elif code is not None:
+                _code(code, _REASON_CODE, "사유")
+            if (st in PAIR_OF_DECISION or st == PAIR_SUPERSEDED) != (did is not None):
+                raise StoreRefused("판단 번호는 확인에서 나온 줄에만 있습니다")
+            if st == PAIR_CANDIDATE:
+                if isinstance(same, bool) or not isinstance(same, int) or not 1 <= same < 2 ** 31 \
+                        or type(claimed) is not bool:
+                    raise StoreRefused("이름 후보 칸 모양이 아닙니다")
+                same, claimed = same, int(claimed)
+            elif same is not None or claimed is not None:
+                raise StoreRefused("이름 후보 칸은 이름 후보에만 있습니다")
+            if cid is not None:
+                k = (st, pid, cid)
+                if k in seen:
+                    raise StoreRefused("같은 짝 결과 줄이 두 번 있습니다")
+                seen.add(k)
+            out.append((pid, cid, st, code, same, claimed, did))
+        if len(out) > PAIRING_MAX_ROWS:
+            raise StoreRefused("짝 결과 줄이 너무 많습니다")
+        return out
+
+    def record_pairing(self, at: datetime, *, accounts_read_at: datetime, stages_as_of: datetime,
+                       decision_ids: Iterable[int], rows, counts: Mapping, codes: Sequence[str] = ()) -> int:
+        """받은 짝 맞추기 한 회차를 쌓는다 → 회차 번호.
+
+        ``accounts_read_at`` · ``stages_as_of`` · ``decision_ids``(계산에 쓴 살아 있는 판단 + 밀린 확인의 번호 전부)가
+        지금 저장소와 같아야 받는다 — 계산하는 사이 바뀌었으면 ``PairingStale``. 점검할 짝(확인 · 자동)의 계정은 지금 목록에
+        있고 가망은 지금 관리 단계 목록에 있어야 한다 · 「오늘 없음」·「연결 끊김」의 계정은 지금 목록에 없어야 한다 ·
+        판단에서 나온 줄은 그 판단의 짝과 같아야 한다. ``counts`` 는 줄로 알 수 없는 개수만(``PAIRING_INPUT_COUNTS``)."""
+        self._need_writer()
+        t = _kst_text(at, "짝 맞춘 시각")
+        read_t, stage_t = _kst_text(accounts_read_at, "연결 목록 읽은 시각"), _kst_text(stages_as_of, "단계 받은 시각")
+        self._not_future(at, "짝 맞춘 시각")
+        cs = _codes(codes)
+        if not isinstance(counts, Mapping) or set(counts) != set(PAIRING_INPUT_COUNTS):
+            raise StoreRefused("짝 맞추기 개수 모양이 아닙니다")
+        given = {k: _count(counts[k], "짝 맞추기 개수") for k in PAIRING_INPUT_COUNTS}
+        if any(v is None for v in given.values()):
+            raise StoreRefused("짝 맞추기 개수 모양이 아닙니다")
+        if isinstance(decision_ids, (str, bytes, bytearray, Mapping)) or \
+                not isinstance(decision_ids, (list, tuple, set, frozenset)):
+            raise StoreRefused("판단 번호: 목록이어야 합니다")
+        ids = {_pos_int(x, "판단 번호") for x in decision_ids}
+        vals = self._pairing_rows(rows)
+        with self._tx() as c:
+            winners, lost = self._resolve_decisions(c)
+            by_id = {d.decision_id: d for d in winners + lost}
+            if (self._meta_time(c, "accounts_read_at") != accounts_read_at
+                    or self._meta_time(c, "prospects_synced_at") != stages_as_of or set(by_id) != ids):
+                raise PairingStale("짝을 계산하는 사이 연결 목록·단계·사람 판단이 바뀌었습니다")
+            present = {cid for (cid,) in c.execute("SELECT customer_id FROM naver_auto_account WHERE present = 1")}
+            live = {pid for (pid,) in c.execute(
+                "SELECT possibility_id FROM naver_auto_prospect WHERE present = 1 AND stage_conflict = 0")}
+            win_ids = {d.decision_id for d in winners if d.decision == "confirmed"}
+            lost_ids = {d.decision_id for d in lost}
+            for pid, cid, st, _code_, _s, _c, did in vals:
+                if st in PAIR_CHECKABLE and (cid not in present or pid not in live):
+                    raise PairingStale("점검할 짝의 계정·가망이 지금 목록에 없습니다")
+                if st in (PAIR_MISSING, PAIR_BROKEN) and cid in present:
+                    raise PairingStale("「오늘 없음」·「연결 끊김」인데 계정이 지금 목록에 있습니다")
+                if did is not None:
+                    d = by_id.get(did)
+                    ok = d is not None and (d.possibility_id, d.customer_id) == (pid, cid) and \
+                        (did in lost_ids if st == PAIR_SUPERSEDED else did in win_ids)
+                    if not ok:
+                        raise PairingStale("판단에서 나온 줄이 지금 판단과 맞지 않습니다")
+            tally = Counter(v[2] for v in vals)
+            full = dict(given, **{s_: tally.get(s_, 0) for s_ in sorted(PAIR_STATES)})
+            cur = c.execute(
+                """INSERT INTO naver_auto_pairing_run (at, outcome, codes, accounts_read_at, stages_as_of, decisions_hash,
+                       counts) VALUES (?, 'accepted', ?, ?, ?, ?, ?)""",
+                (t, json.dumps(cs), read_t, stage_t, self._decisions_hash(ids), json.dumps(full, sort_keys=True)))
+            pid_run = cur.lastrowid
+            for v in vals:
+                c.execute(
+                    """INSERT INTO naver_auto_pairing_row (pairing_id, possibility_id, customer_id, state, code, same_name,
+                           claimed_elsewhere, decision_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""", (pid_run,) + v)
+            return pid_run
+
+    def record_pairing_event(self, at: datetime, outcome: str, codes: Sequence[str]) -> int:
+        """짝 맞추기 버림·실패를 코드만 남긴다(결과 줄 없음) → 회차 번호."""
+        self._need_writer()
+        if outcome not in (SYNC_REFUSED, SYNC_FAILED):
+            raise StoreRefused("밖에서 적을 수 있는 결과는 refused · failed 뿐입니다")
+        t, cs = _kst_text(at, "짝 맞춘 시각"), _codes(codes)
+        if not cs:
+            raise StoreRefused("이유 코드가 없습니다")
+        self._not_future(at, "짝 맞춘 시각")
+        with self._tx() as c:
+            cur = c.execute("""INSERT INTO naver_auto_pairing_run (at, outcome, codes, accounts_read_at, stages_as_of,
+                                   decisions_hash, counts) VALUES (?, ?, ?, NULL, NULL, NULL, NULL)""",
+                            (t, outcome, json.dumps(cs)))
+            return cur.lastrowid
 
     # ── 아침 점검 회차 ──
     def begin_run(self, run_date: date, started_at: datetime) -> int:
@@ -1423,6 +1677,71 @@ class Store:
     def meta(self, key: str) -> Optional[str]:
         row = self._conn.execute("SELECT value FROM naver_auto_meta WHERE key = ?", (key,)).fetchone()
         return None if row is None else row[0]
+
+    def accounts_read_at(self) -> Optional[datetime]:
+        """연결 목록을 마지막으로 받은(읽은) 시각 — 짝 맞추기·부르는 때가 신선도를 본다."""
+        return self._meta_time(self._conn, "accounts_read_at")
+
+    def account_times(self) -> dict:
+        """고객 번호 → {present, absent_days, last_seen_at, absent_since, absent_last_at} — 시각 줄이 없으면 시각은 None."""
+        out = {}
+        for cid, pr, days, seen, since, last in self._conn.execute(
+                """SELECT a.customer_id, a.present, a.absent_days, t.last_seen_at, t.absent_since, t.absent_last_at
+                   FROM naver_auto_account a LEFT JOIN naver_auto_account_time t ON t.customer_id = a.customer_id
+                   ORDER BY a.customer_id"""):
+            times = [None if x is None else _aware_time(x) for x in (seen, since, last)]
+            if any(x is not None and y is None for x, y in zip((seen, since, last), times)):
+                raise StoreError("저장된 계정 시각을 읽지 못했습니다")
+            out[int(cid)] = {"present": int(pr), "absent_days": int(days), "last_seen_at": times[0],
+                             "absent_since": times[1], "absent_last_at": times[2]}
+        return out
+
+    def _pairing_run(self, r, desc) -> dict:
+        d = dict(zip([x[0] for x in desc], r))
+        try:
+            d["codes"] = list(json.loads(d["codes"]))
+            d["counts"] = None if d["counts"] is None else json.loads(d["counts"])
+        except (TypeError, ValueError, RecursionError):
+            raise StoreError("저장된 짝 맞추기 기록을 읽지 못했습니다") from None
+        for k in ("at", "accounts_read_at", "stages_as_of"):
+            if d[k] is not None:
+                t = _aware_time(d[k])
+                if t is None:
+                    raise StoreError("저장된 짝 맞추기 기록을 읽지 못했습니다")
+                d[k] = t
+        return d
+
+    def last_pairing(self, outcome: Optional[str] = None) -> Optional[dict]:
+        """마지막 짝 맞추기 회차(결과를 주면 그 결과의 마지막) — 줄 없이 회차 정보만."""
+        if outcome is not None and outcome not in PAIRING_OUTCOMES:
+            raise StoreRefused("짝 맞추기 결과가 아닙니다")
+        sql, args = "SELECT * FROM naver_auto_pairing_run", ()
+        if outcome is not None:
+            sql, args = sql + " WHERE outcome = ?", (outcome,)
+        cur = self._conn.execute(sql + " ORDER BY pairing_id DESC LIMIT 1", args)
+        r = cur.fetchone()
+        return None if r is None else self._pairing_run(r, cur.description)
+
+    def pairing_run(self, pairing_id: int) -> Optional[dict]:
+        """그 번호의 짝 맞추기 회차(줄 없이)."""
+        cur = self._conn.execute("SELECT * FROM naver_auto_pairing_run WHERE pairing_id = ?",
+                                 (_pos_int(pairing_id, "짝 맞추기 번호"),))
+        r = cur.fetchone()
+        return None if r is None else self._pairing_run(r, cur.description)
+
+    def pairing_rows(self, pairing_id: int) -> List[dict]:
+        """그 회차의 결과 줄 — 가망 번호 · 상태 순."""
+        cur = self._conn.execute(
+            """SELECT possibility_id, customer_id, state, code, same_name, claimed_elsewhere, decision_id
+               FROM naver_auto_pairing_row WHERE pairing_id = ? ORDER BY possibility_id, state, customer_id""",
+            (_pos_int(pairing_id, "짝 맞추기 번호"),))
+        out = []
+        for r in cur.fetchall():
+            d = dict(zip([x[0] for x in cur.description], r))
+            if d["claimed_elsewhere"] is not None:
+                d["claimed_elsewhere"] = bool(d["claimed_elsewhere"])
+            out.append(d)
+        return out
 
     def prospects(self) -> List[dict]:
         cur = self._conn.execute(

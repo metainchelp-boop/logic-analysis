@@ -255,6 +255,17 @@ class HumanDecisionTest(unittest.TestCase):
         with self.assertRaises(M.BadInput):
             run([P(11, "메타")], [], {}, [M.HumanDecision(11, 1234567, "maybe")])
 
+    def test_one_account_confirmed_for_two_prospects_refused(self):
+        # 저장소(엔진 S8)가 가장 늦은 확인 하나만 넘긴다 — 여럿이 오면 두 가망이 같은 계정을 점검하게 되므로 짝을 맞추지 않는다
+        for scope in ([P(11, "메타"), P(12, "메타")], [P(11, "메타")]):   # 다른 가망이 관리 대상 밖이어도
+            with self.subTest(n=len(scope)):
+                with self.assertRaises(M.BadInput):
+                    run(scope, [], accounts((1234567, 7654321, "메타")),
+                        [M.HumanDecision(11, 1234567), M.HumanDecision(12, 1234567)])
+        r = run([P(11, "메타"), P(12, "메타")], [], accounts((1234567, 7654321, "메타")),
+                [M.HumanDecision(11, 1234567), M.HumanDecision(12, 1234567, M.DECISION_REJECTED)])
+        self.assertEqual([(p.possibility_id, p.link) for p in r.pairs], [(11, V.LINK_CONFIRMED)])   # 아님은 여럿이어도 된다
+
 
 class CandidateTest(unittest.TestCase):
     def test_same_then_contains_and_cap(self):

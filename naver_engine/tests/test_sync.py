@@ -172,15 +172,15 @@ class MigrationTest(Base):
         raw.commit()
         raw.close()
         self.st = S.open_writer(self.path, clock=self.clock)
-        self.assertEqual(self.st.meta("schema_version"), "2")
+        self.assertEqual(self.st.meta("schema_version"), str(S.SCHEMA_VERSION))
         self.assertEqual(len(self.st.accounts()), 1)
         self.assertIsNone(self.st.org_current())
         self.assertEqual(self.st.sync_log(), [])
         self.assertIsNone(self.st.stage_as_of())
         self.assertIsNone(self.st.hold(S.SYNC_STAGES))
 
-    def test_version_is_two(self):
-        self.assertEqual(S.SCHEMA_VERSION, 2)
+    def test_version_is_three(self):
+        self.assertEqual(S.SCHEMA_VERSION, 3)   # 3 = S8(계정 시각 · 짝 결과) — 판을 올리면 이관 시험도 함께 본다
 
 
 # ── 목록 급감 브레이크 — 가망 ──────────────────────────────────────────
@@ -1285,7 +1285,8 @@ class DueTest(Base):
 
 
 # ── 구문 시험 — 조직 수락본·붙잡음을 적는 길 · 엔진이 읽는 backend 모듈 ─────────────────
-PRIVILEGED = ("record_org", "refuse_org", "refuse_stages", "confirm_prospects_hold", "confirm_accounts_hold")
+PRIVILEGED = ("record_org", "refuse_org", "refuse_stages", "confirm_prospects_hold", "confirm_accounts_hold",
+              "record_pairing")
 BANNED_NAMES = ("exec", "eval", "compile", "__import__", "globals", "vars", "locals", "open", "breakpoint",
                 "__builtins__", "getattr_static")
 BANNED_ATTRS = ("modules", "__dict__", "__getattribute__", "__subclasses__", "__globals__", "__code__",
@@ -1386,7 +1387,8 @@ class SyncGuardTest(unittest.TestCase):
         return p.relative_to(ENGINE).as_posix()
 
     def test_privileged_store_calls_only_from_sync(self):
-        """수락본·붙잡음을 적는 함수(검사 없이 부르면 「이전 조직」·확인 받음이 가짜가 된다)는 엔진 맨 위 sync.py 에서만."""
+        """수락본·붙잡음·짝 결과를 적는 함수(검사 없이 부르면 「이전 조직」·확인 받음·점검할 짝이 가짜가 된다)는
+        엔진 맨 위 동기화 모듈 두 곳에서만 — ① 쪽은 sync.py · 네이버 연결 목록·짝은 links.py(S8)."""
         found = {}
         for p in self.SOURCES:
             if self.rel(p) == "store.py":
@@ -1394,8 +1396,9 @@ class SyncGuardTest(unittest.TestCase):
             uses = _privileged_uses(ast.parse(p.read_text(encoding="utf-8")))
             if uses:
                 found[self.rel(p)] = uses
-        self.assertEqual(set(found), {"sync.py"})
+        self.assertEqual(set(found), {"sync.py", "links.py"})
         self.assertEqual(found["sync.py"], {"record_org", "refuse_org", "refuse_stages", "confirm_prospects_hold"})
+        self.assertEqual(found["links.py"], {"confirm_accounts_hold", "record_pairing"})
 
     def test_privileged_guard_catches_bypasses(self):
         bad = ('def f(st):\n    getattr(st, "record_" + "org")(1, 2)\n',

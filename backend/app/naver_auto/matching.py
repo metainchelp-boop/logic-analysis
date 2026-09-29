@@ -308,6 +308,10 @@ def match(prospects: Sequence[ErpProspect], credentials: Iterable[ErpCredential]
             raise BadInput("모르는 판단")
     if any((pid, cid) in rejected for pid, cs in confirmed.items() for cid in cs):
         raise BadInput("같은 짝을 확인과 아님으로 동시에")
+    # 한 계정을 여러 가망의 짝으로 확인한 채로 들어오면 두 가망이 같은 계정을 점검한다 — 저장소가 가장 늦은 확인 하나만
+    # 살려 넘긴다(엔진 S8). 여기까지 여럿이 오면 앞 단계가 고장 난 것이니 짝을 맞추지 않는다(실패는 닫힌 쪽으로).
+    if any(len(ps) > 1 for ps in confirmed_owner.values()):
+        raise BadInput("한 계정을 여러 가망의 짝으로 확인")
 
     pairs: List[Pair] = []
     blocked: List[Blocked] = []

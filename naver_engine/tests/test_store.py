@@ -43,6 +43,11 @@ def at(**kw) -> datetime:
     return NOW + timedelta(**kw)
 
 
+def trip(decisions):
+    """살아 있는 판단 → (가망, 계정, 판단) — 번호·시각은 따로 본다."""
+    return [(d.possibility_id, d.customer_id, d.decision) for d in decisions]
+
+
 class Clock:
     """저장소에 넣는 시계 — 시험이 「지금」을 정한다."""
 
@@ -141,7 +146,7 @@ class OpenTest(Base):
         c = self.st._conn
         self.assertEqual(c.execute("PRAGMA journal_mode").fetchone()[0].lower(), "wal")
         self.assertEqual(c.execute("PRAGMA synchronous").fetchone()[0], 2)          # FULL
-        self.assertEqual(self.st.meta("schema_version"), "2")
+        self.assertEqual(self.st.meta("schema_version"), str(S.SCHEMA_VERSION))
         self.assertEqual([n for n in os.listdir(self.dir.name) if n.endswith(".lock")], [])   # 잠금은 파일 자체에
 
     def test_connection_settings(self):
@@ -246,7 +251,7 @@ class OpenTest(Base):
             self.st = None
             if opens:
                 self.st = S.open_writer(self.path, clock=self.clock)
-                self.assertEqual(self.st.meta("schema_version"), "2")   # 옛 판은 이관 뒤 판 번호를 올린다
+                self.assertEqual(self.st.meta("schema_version"), str(S.SCHEMA_VERSION))   # 옛 판은 이관 뒤 판 번호를 올린다
             else:
                 with self.assertRaises(S.StoreError, msg=value):
                     S.open_writer(self.path, clock=self.clock)
@@ -266,7 +271,7 @@ class OpenTest(Base):
         self.reopen()
         self.assertEqual([p["name"] for p in self.st.prospects()], [NAME_MARK])
         self.assertEqual([a["customer_id"] for a in self.st.accounts()], [1234567])
-        self.assertEqual(self.st.current_decisions(), [(11, 1234567, "confirmed")])
+        self.assertEqual(trip(self.st.current_decisions()), [(11, 1234567, "confirmed")])
         self.assertGreater(d, 0)
         with self.assertRaises(S.StoreRefused):   # 저장된 동기화 시각도 남아 옛 목록을 거절한다
             self.st.record_prospects(snap([row(11)], as_of=NOW))
@@ -775,15 +780,15 @@ class DecisionTest(Base):
     def test_latest_wins_and_revoke(self):
         d1 = self.st.record_decision(11, 1234567, "confirmed", 0, NOW)          # 대표 = 0번
         self.st.record_decision(11, 7654321, "rejected", 5, NOW)
-        self.assertEqual(self.st.current_decisions(), [(11, 1234567, "confirmed"), (11, 7654321, "rejected")])
+        self.assertEqual(trip(self.st.current_decisions()), [(11, 1234567, "confirmed"), (11, 7654321, "rejected")])
         d3 = self.st.record_decision(11, 1234567, "rejected", 5, at(minutes=1))
-        self.assertEqual(self.st.current_decisions()[0], (11, 1234567, "rejected"))
+        self.assertEqual(trip(self.st.current_decisions())[0], (11, 1234567, "rejected"))
         self.st.revoke_decision(d3, 0, at(minutes=2), "잘못 누름")
-        self.assertEqual(self.st.current_decisions()[0], (11, 1234567, "confirmed"))   # 앞의 판단이 다시 산다
+        self.assertEqual(trip(self.st.current_decisions())[0], (11, 1234567, "confirmed"))   # 앞의 판단이 다시 산다
         with self.assertRaises(S.StoreRefused):
             self.st.revoke_decision(d3, 0, at(minutes=3), "두 번")
         self.st.revoke_decision(d1, 0, at(minutes=3), "거둠")
-        self.assertEqual(self.st.current_decisions(), [(11, 7654321, "rejected")])
+        self.assertEqual(trip(self.st.current_decisions()), [(11, 7654321, "rejected")])
         self.assertEqual(self.count("naver_auto_link_decision"), 3)              # 줄은 모두 남는다
 
     def test_times_and_people_stored(self):
@@ -808,7 +813,7 @@ class DecisionTest(Base):
             self.st.revoke_decision(999, 0, NOW, "없음")
         with self.assertRaises(S.StoreRefused):
             self.st.revoke_decision(d, -1, NOW, "사람 아님")
-        self.assertEqual(self.st.current_decisions(), [(11, 1234567, "confirmed")])
+        self.assertEqual(trip(self.st.current_decisions()), [(11, 1234567, "confirmed")])
 
     def test_future_refused(self):
         self.clock.t = NOW
