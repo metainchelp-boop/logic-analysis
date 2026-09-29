@@ -355,7 +355,7 @@ class AppTest(unittest.TestCase):
                 _copy_app(tmp)
                 if pre is not None:
                     (tmp / "data" / "k.key").write_bytes(pre)
-                outs = _many(tmp, "secret", 8, {"JWT_SECRET": "please-set-a-strong-secret"}, delay=0.0)
+                outs = _many(tmp, "secret", 8, {"JWT_SECRET": "please-set-a-strong-secret"}, delay=3.0)
                 with self.subTest(pre=pre):
                     self.assertEqual([o[0] for o in outs], [0] * 8, [o[2] for o in outs if o[0]])
                     self.assertEqual(len({o[1]["hash"] for o in outs}), 1)
@@ -371,7 +371,7 @@ class AppTest(unittest.TestCase):
         try:
             _copy_app(tmp)
             for rnd in ("fresh", "existing"):
-                outs = _many(tmp, "boot-only", 6, {"JWT_SECRET": ""})
+                outs = _many(tmp, "boot-only", 6, {"JWT_SECRET": ""}, delay=4.0)
                 with self.subTest(rnd=rnd):
                     self.assertEqual([o[0] for o in outs], [0] * 6, [o[2] for o in outs if o[0]])
                     self.assertEqual({o[1]["users"] for o in outs}, {4})

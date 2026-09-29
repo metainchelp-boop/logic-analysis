@@ -339,8 +339,21 @@ def mode_cors():
             "star": preflight(c, "*"), "origins": list(m._cors_origins), "dropped": m._cors_dropped}
 
 
+def _wait_until(at: float):
+    while time.time() < at:
+        time.sleep(0.0005)
+
+
 def mode_secret():
-    """워커 여럿 흉내 — 같은 폴더에서 이 파이썬들이 동시에 app.security 를 불러 같은 값을 쓰는가(해시만)."""
+    """워커 여럿 흉내 — 같은 폴더에서 이 파이썬들이 **같은 순간에** app.security 를 불러 같은 값을 쓰는가(해시만).
+    무거운 부품을 먼저 불러 두고 시작 시각까지 기다린다 — 그래야 키 파일을 두고 실제로 겨룬다(처음 판은 파이썬마다
+    부품 불러오는 시간이 달라 한 줄로 서 버려, 잠금을 빼도 시험이 통과했다 · 방해 시험)."""
+    import cryptography.fernet  # noqa: F401
+    import jose.jwt  # noqa: F401
+    import passlib.context  # noqa: F401
+    import app.secret_policy  # noqa: F401
+    if len(sys.argv) > 2:
+        _wait_until(float(sys.argv[2]))
     from app import security
     f = security._fernet
     return {"hash": h(security.JWT_SECRET), "source": security.JWT_SOURCE, "reason": security.JWT_REASON,
@@ -427,18 +440,22 @@ def mode_guard():
 def mode_reserve():
     """여러 파이썬이 동시에 — 시작 시각까지 기다렸다가 한 번 예약하고 자리를 얻었는지만 찍는다."""
     from app import login_guard as g
-    at = float(sys.argv[2])
-    while time.time() < at:
-        time.sleep(0.001)
+    _wait_until(float(sys.argv[2]))
     t = g.reserve(["acct-local:procs"])
     return {"seat": bool(t.ids)}
 
 
 def mode_boot_only():
     """app.main 만 불러 본다 — 여러 파이썬이 같은 순간에(시작 경합 · 표 만들기 · 데모 씨앗)."""
-    at = float(sys.argv[2])
-    while time.time() < at:
-        time.sleep(0.001)
+    import fastapi  # noqa: F401  — 무거운 부품·라우터를 먼저(같은 순간에 표 만들기·씨앗으로 겨루게)
+    import sqlalchemy  # noqa: F401
+    import app.database  # noqa: F401
+    import app.models  # noqa: F401
+    import app.security  # noqa: F401
+    import app.seed  # noqa: F401
+    import app.cors_policy  # noqa: F401
+    from app.routers import auth, clients, insights, erp, naver  # noqa: F401
+    _wait_until(float(sys.argv[2]))
     import app.main  # noqa: F401
     from app import models
     from app.database import SessionLocal
