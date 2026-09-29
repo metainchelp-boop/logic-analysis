@@ -485,6 +485,14 @@ class StoreIssueTest(Base):
         with self.assertRaises(S.StoreRefused):
             self.put(stats_day=YDAY, stats={})                                 # 캠페인 없이 통계만
 
+    def test_campaign_provisional_must_be_bool(self):
+        camps = [dict(campaign(A, 1), campaignTp="SHOPPING")]
+        for bad in (1, 0, "yes", None):                                        # 잠정 여부는 참·거짓만(한 거래 길)
+            with self.assertRaises(S.StoreRefused, msg=repr(bad)):
+                self.put(campaigns=camps, stats_day=YDAY, stats={}, provisional=bad)
+        self.assertIsNone(self.st.account_day(A, TODAY))
+        self.assertEqual(self.st.campaign_days(A, YDAY, YDAY), [])
+
 
 class UnlinkStoreTest(Base):
     def test_close_after_grace(self):
