@@ -51,6 +51,11 @@
 계정마다 ``record_account_check``(계정 하루치 · 캠페인 하루치 · 이슈를 한 거래로) → ``close_unlinked_issues`` →
 ``finish_run``(S9 ``morning``).
 
+- **알림은 원천 한 줄 + 받는 사람별 한 줄(S10 · 설계 §6).** 원천에는 종류 · 날짜 · 문구 틀 이름 · 코드 · 관제 화면 경로만,
+  받는 사람 줄에는 ① 직원 번호 · 중요도 · 숫자 칸(곳 수·건수 — 0 이상 정수만) · 보낸 결과 · 읽음 시각만 적는다 — 광고주
+  이름 · 금액 · 상품명 · 고객 번호가 들어갈 칸이 없다(비서방 본문은 ``alerts.py`` 문구 틀과 이 숫자로만 만든다). 요약·목록은
+  하루 한 번 · 보낸 결과는 「보낼 것」에서만 바뀐다(끝난 줄은 다시 바뀌지 않는다) · 중복 방지 열쇠는 저장소가 만든다.
+
 - **이슈는 한 줄 · 지우지 않는다(S9).** 열쇠 = 가망 + 점검 항목 + 대상. 상태 규칙은 ``backend/app/naver_auto/issues.py``
   한 곳 — 저장소는 그 규칙이 낸 상태를 거래 안에서 적고, 상태·등급이 바뀔 때만 기록 한 줄을 남긴다. 사람의 손길(확인 ·
   해결 · 예외)도 같은 규칙을 지난다 — 예외 한도(🟡 30일 · 🔴 팀장 이상 7일)를 부르는 쪽이 건너뛸 수 없다.
@@ -77,10 +82,11 @@ from . import handles as H
 from . import naver_read as N
 
 __all__ = ("open_writer", "open_reader", "Store", "StoreError", "StoreBusy", "StoreRefused", "SyncBraked",
-           "HoldRefused", "SyncCounts", "LinkDecision", "PairingStale", "IssueRefused", "IssueTally", "UnlinkCounts")
+           "HoldRefused", "SyncCounts", "LinkDecision", "PairingStale", "IssueRefused", "IssueTally", "UnlinkCounts",
+           "AlertExists", "DeliveryRefused")
 
 KST = timezone(timedelta(hours=9))
-SCHEMA_VERSION = 4   # 2 = S7(조직 수락본 · 동기화 기록) · 3 = S8(계정 시각 · 짝 결과) · 4 = S9(이슈 · 이슈 기록) — 옛 판 파일은 열 때 표를 더하고 판 번호를 올린다
+SCHEMA_VERSION = 5   # 2 = S7(조직 수락본 · 동기화 기록) · 3 = S8(계정 시각 · 짝 결과) · 4 = S9(이슈 · 이슈 기록) · 5 = S10(알림 · 받는 사람별 보낸 결과) — 옛 판 파일은 열 때 표를 더하고 판 번호를 올린다
 BUSY_TIMEOUT_MS = 5000
 FUTURE_SLACK = timedelta(minutes=5)   # 시계가 조금 어긋나도 받는다 · 그보다 앞선 시각은 거절
 ORG_FUTURE_SLACK = timedelta(minutes=10)   # ① 스냅숏 시각 — app.naver_auto.org_snapshot.FUTURE_TOLERANCE 와 같다(시험이 대조)
@@ -142,6 +148,32 @@ ISSUE_EVENTS = frozenset({"opened", "reappeared", "escalated", "deescalated", "e
                           "closed_unlinked", "acked", "resolved", "excepted"})
 FACTS_MAX = 10   # 발견 사실 칸 수(규칙이 내는 것은 3개 이하)
 
+# 알림(S10) — 원천 한 줄 + 받는 사람별 한 줄(설계 §6 engine_alert · engine_alert_recipient)
+ALERT_SYSTEM = "system"                   # 시스템 경보(대표 · 그림자 기간에도 — Q4)
+ALERT_DIGEST = "digest"                   # 사람마다 아침 요약(대표 결정 A1)
+ALERT_LEAD_DIGEST = "lead_digest"         # 팀장 09:30 🟡 묶음
+ALERT_SHADOW_SUMMARY = "shadow_summary"   # 그림자 기간 대표 하루 요약(대표 결정 A2)
+ALERT_WEEKLY_UNLINKED = "weekly_unlinked"   # 매주 월요일 「이관 받을 곳」 목록(대표 결정 I3 ⓐ)
+ALERT_KINDS = frozenset({ALERT_SYSTEM, ALERT_DIGEST, ALERT_LEAD_DIGEST, ALERT_SHADOW_SUMMARY, ALERT_WEEKLY_UNLINKED})
+_ALERT_TAGS = {ALERT_SYSTEM: "sys", ALERT_DIGEST: "dg", ALERT_LEAD_DIGEST: "ld", ALERT_SHADOW_SUMMARY: "sh",
+               ALERT_WEEKLY_UNLINKED: "wk"}
+ALERT_SOURCES = frozenset({"org", "stages", "accounts", "pairing", "readiness", "morning", "compose"})
+ALERT_SEVERITIES = frozenset({"NORMAL", "URGENT"})      # erp_alert.SEVERITIES 와 같은 글자(시험이 대조)
+DELIVERY_PENDING, DELIVERY_SENT, DELIVERY_DUPLICATE = "pending", "sent", "duplicate"
+DELIVERY_CAP_TARGET, DELIVERY_CAP_TOTAL = "cap_target", "cap_total"
+DELIVERY_FAILED, DELIVERY_HELD = "failed", "held"
+DELIVERY_STATUSES = frozenset({DELIVERY_PENDING, DELIVERY_SENT, DELIVERY_DUPLICATE, DELIVERY_CAP_TARGET,
+                               DELIVERY_CAP_TOTAL, DELIVERY_FAILED, DELIVERY_HELD})
+HELD_REASONS = frozenset({"shadow", "weekend", "org_stale"})   # 비서방으로 보내지 않고 남겨만 둔 까닭
+ALERT_TTL = timedelta(hours=12)           # 이만큼 지나도 못 보낸 알림은 보내지 않는다(어제 요약이 오늘 가지 않게)
+ALERT_MAX_RECIPIENTS = 2000
+ALERT_PARAMS_MAX = 12
+ALERT_PARAM_LIMIT = 10 ** 7               # 알림 숫자 칸 상한(곳 수·건수 — 금액·번호가 들어갈 자리가 아니다)
+_ALERT_TEMPLATE = re.compile(r"[a-z][a-z0-9_]{0,39}")
+_ALERT_PARAM = re.compile(r"[a-z][a-z0-9_]{0,19}")
+_ALERT_LINK = re.compile(r"/naver/(?:[a-z0-9_-]+(?:/[a-z0-9_-]+)*)?")   # 관제 화면 경로 — 쿼리·조각 없이 짧은 경로만
+ALERT_LINK_MAX = 60
+
 RUN_RUNNING, RUN_DONE, RUN_FAILED = "running", "done", "failed"
 RUN_END_STATUSES = frozenset({RUN_DONE, RUN_FAILED})
 ORPHANED = "orphaned"
@@ -151,6 +183,7 @@ _RULE_CODE = re.compile(r"[a-z][a-z0-9_]{0,39}")
 _REASON_CODE = re.compile(r"[a-z0-9][a-z0-9_]*(?:-[a-z0-9_]+)*")
 # 오류·동기화 코드 — 영문 낱말(밑줄)을 줄표로 잇고, 숫자는 끝의 HTTP 상태 세 자리 하나만(번호·키 조각이 기록에 남지 않게)
 _ERROR_KIND = re.compile(r"(?=.{1,40}\Z)[A-Za-z][A-Za-z_]*(?:-[A-Za-z_]+)*(?:-[1-5][0-9]{2})?")
+ERROR_CODE = _ERROR_KIND   # 밖에서 코드 모양을 미리 볼 때(알림 · S10) — 같은 규칙 한 곳
 
 # 캠페인 하루치 — 더할 수 있는 원래 숫자만 남긴다(클릭률·클릭당 비용은 보여 줄 때 계산 · 주간·월간 합계가 맞게)
 CAMPAIGN_METRICS = (
@@ -356,6 +389,44 @@ _SCHEMA = (
         note TEXT)""",
     """CREATE INDEX IF NOT EXISTS naver_auto_issue_event_issue
         ON naver_auto_issue_event (issue_id, event_id)""",
+    # 알림 원천(S10) — 종류 · 날짜(한국) · 어디서 · 문구 틀 이름 · 코드 · 관제 화면 경로만(이름·금액·번호 없음) · 쌓기만
+    """CREATE TABLE IF NOT EXISTS naver_auto_alert (
+        alert_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind TEXT NOT NULL CHECK (kind IN ('system', 'digest', 'lead_digest', 'shadow_summary', 'weekly_unlinked')),
+        day TEXT NOT NULL,
+        source TEXT NOT NULL,
+        template TEXT NOT NULL,
+        codes TEXT NOT NULL,
+        link_path TEXT NOT NULL,
+        created_at TEXT NOT NULL)""",
+    # 요약·목록은 하루 한 번(시스템 경보는 코드마다 — 알림 모듈이 같은 날 같은 코드를 거른다)
+    """CREATE UNIQUE INDEX IF NOT EXISTS naver_auto_alert_daily
+        ON naver_auto_alert (kind, day) WHERE kind <> 'system'""",
+    """CREATE INDEX IF NOT EXISTS naver_auto_alert_day ON naver_auto_alert (day, kind)""",
+    # 받는 사람별(S10 · 설계 §6) — ① 직원 번호 · 중요도 · 사람마다 다른 숫자 칸 · 보낸 결과 · 읽음(🔔 — S11)
+    """CREATE TABLE IF NOT EXISTS naver_auto_alert_recipient (
+        recipient_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        alert_id INTEGER NOT NULL CHECK (alert_id > 0),
+        emp_idx INTEGER NOT NULL CHECK (emp_idx >= 0),
+        severity TEXT NOT NULL CHECK (severity IN ('NORMAL', 'URGENT')),
+        params TEXT NOT NULL,
+        dedupe_key TEXT NOT NULL UNIQUE,
+        status TEXT NOT NULL CHECK (status IN ('pending', 'sent', 'duplicate', 'cap_target', 'cap_total', 'failed',
+                                               'held')),
+        held_reason TEXT CHECK (held_reason IS NULL OR held_reason IN ('shadow', 'weekend', 'org_stale')),
+        attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+        next_try_at TEXT,
+        expires_at TEXT NOT NULL,
+        message_idx INTEGER CHECK (message_idx IS NULL OR message_idx > 0),
+        error_kind TEXT,
+        finished_at TEXT,
+        read_at TEXT,
+        CHECK ((status = 'held') = (held_reason IS NOT NULL)),
+        CHECK ((status = 'pending') = (next_try_at IS NOT NULL)),
+        CHECK ((status = 'sent') = (message_idx IS NOT NULL)),
+        UNIQUE (alert_id, emp_idx))""",
+    """CREATE INDEX IF NOT EXISTS naver_auto_alert_recipient_due
+        ON naver_auto_alert_recipient (status, next_try_at)""",
 )
 
 # ── 연결 거절 규칙 ────────────────────────────────────────────────
@@ -459,6 +530,14 @@ class PairingStale(StoreRefused):
     아무것도 적지 않았다. 다시 계산하면 된다(``code`` = ``INPUTS_CHANGED``)."""
 
     code = CODE_INPUTS_CHANGED
+
+
+class AlertExists(StoreRefused):
+    """그 날 그 종류의 요약·목록을 이미 만들었다(하루 한 번) — 아무것도 적지 않았다."""
+
+
+class DeliveryRefused(StoreRefused):
+    """보낸 결과를 받지 않는다 — 없는 줄 · 이미 끝난 줄(보냄·실패·남겨 둠은 다시 바뀌지 않는다) · 모양이 틀림."""
 
 
 class IssueRefused(StoreRefused):
@@ -679,6 +758,28 @@ def _facts(facts) -> Optional[str]:
                 raise StoreRefused("사실 값이 너무 많습니다")
             out[k] = [_code(x, _REASON_CODE, "사실 값") for x in items]
     return json.dumps(out, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _alert_params(params) -> str:
+    """사람마다 다른 숫자 칸 — {이름: 0 이상 정수} · 이름은 코드 모양 · 값은 곳 수·건수 크기만(글자·금액·번호가 알림
+    원천에 들어갈 자리를 두지 않는다 — 비서방 본문은 이 숫자와 문구 틀로만 만든다)."""
+    if not isinstance(params, Mapping):
+        raise StoreRefused("알림 숫자 칸 모양이 아닙니다")
+    if len(params) > ALERT_PARAMS_MAX:
+        raise StoreRefused("알림 숫자 칸이 너무 많습니다")
+    out = {}
+    for k, v in params.items():
+        k = _code(k, _ALERT_PARAM, "알림 숫자 이름")
+        if isinstance(v, bool) or not isinstance(v, int) or not 0 <= v < ALERT_PARAM_LIMIT:
+            raise StoreRefused("알림 숫자 값은 0 이상 정수여야 합니다")
+        out[k] = v
+    return json.dumps(out, sort_keys=True, separators=(",", ":"))
+
+
+def _alert_link(v) -> str:
+    if not isinstance(v, str) or len(v) > ALERT_LINK_MAX or not _ALERT_LINK.fullmatch(v) or "sso" in v:
+        raise StoreRefused("관제 화면 경로 모양이 아닙니다")
+    return v
 
 
 def _count(v, what: str) -> Optional[int]:
@@ -2143,6 +2244,123 @@ class Store:
             raise IssueRefused(e.code) from None
         return self._human(issue_id, by, at, lambda I_, s, d: I_.grant_exception(s, until, actor, d, text), note=text)
 
+    # ── 알림(S10) — 원천 한 줄 + 받는 사람별 한 줄 · 보낸 결과 ──
+    def record_alert(self, kind: str, day: date, source: str, template: str, codes: Sequence[str], link_path: str,
+                     recipients: Sequence[Mapping], at: datetime) -> int:
+        """알림 원천과 받는 사람별 줄을 한 거래로 적는다. 받는 사람 = {emp_idx, severity, params, held_reason(없어도 됨)}.
+
+        ``held_reason`` 이 있으면 비서방으로 보내지 않고 남겨만 둔다(그림자 · 주말 · 조직 낡음). 없으면 「보낼 것」 —
+        중복 방지 열쇠는 저장소가 만든다(종류·날짜·원천 번호·받는 사람 — 다시 보내도 ① 이 같은 날 한 번만 넣는다).
+        요약·목록 종류는 하루 한 번(``AlertExists``)."""
+        self._need_writer()
+        if kind not in ALERT_KINDS:
+            raise StoreRefused("알림 종류가 아닙니다")
+        if source not in ALERT_SOURCES:
+            raise StoreRefused("알림이 나온 곳이 아닙니다")
+        d, t = _day_text(day, "알림 날짜"), _kst_text(at, "알림 시각")
+        self._not_future(at, "알림 시각")
+        tpl = _code(template, _ALERT_TEMPLATE, "문구 틀")
+        cs = _codes(codes)
+        link = _alert_link(link_path)
+        people = _seq(recipients, "받는 사람")
+        if len(people) > ALERT_MAX_RECIPIENTS:
+            raise StoreRefused("받는 사람이 너무 많습니다")
+        rows, seen = [], set()
+        for r in people:
+            if not isinstance(r, Mapping):
+                raise StoreRefused("받는 사람 모양이 아닙니다")
+            emp = _person(r.get("emp_idx"), "받는 사람")
+            if emp in seen:
+                raise StoreRefused("같은 사람이 두 번 있습니다")
+            seen.add(emp)
+            sev = r.get("severity")
+            if sev not in ALERT_SEVERITIES:
+                raise StoreRefused("알림 중요도가 아닙니다")
+            held = r.get("held_reason")
+            if held is not None and held not in HELD_REASONS:
+                raise StoreRefused("남겨 둔 까닭이 아닙니다")
+            rows.append((emp, sev, _alert_params(r.get("params", {})), held))
+        expires = _kst_text(at + ALERT_TTL, "알림 기한")
+        with self._tx() as c:
+            if kind != ALERT_SYSTEM and c.execute("SELECT 1 FROM naver_auto_alert WHERE kind = ? AND day = ?",
+                                                  (kind, d)).fetchone():
+                raise AlertExists("그 날 그 알림은 이미 만들었습니다")
+            aid = c.execute(
+                """INSERT INTO naver_auto_alert (kind, day, source, template, codes, link_path, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""", (kind, d, source, tpl, json.dumps(cs), link, t)).lastrowid
+            tag = _ALERT_TAGS[kind] + ":" + d.replace("-", "") + ":" + str(aid) + ":"
+            for emp, sev, params, held in rows:
+                status = DELIVERY_PENDING if held is None else DELIVERY_HELD
+                c.execute(
+                    """INSERT INTO naver_auto_alert_recipient (alert_id, emp_idx, severity, params, dedupe_key, status,
+                           held_reason, attempts, next_try_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)""",
+                    (aid, emp, sev, params, tag + str(emp), status, held, t if held is None else None, expires))
+        return aid
+
+    def record_delivery(self, recipient_id: int, status: str, at: datetime, *, message_idx: Optional[int] = None,
+                        error_kind: Optional[str] = None, next_try_at: Optional[datetime] = None) -> None:
+        """보낸 결과 한 줄 — 「보낼 것」에서만 바뀐다(끝난 줄은 다시 바뀌지 않는다).
+
+        ``pending`` = 이번에 못 보냄 · 다시 해 볼 시각(``next_try_at``)과 까닭(``error_kind``) 필요 · ``sent`` = ① 메시지 번호
+        필요 · ``duplicate``·``cap_target``·``cap_total`` = ① 이 넣지 않음 · ``failed`` = 까닭 필요. 시도 수는 저장소가 센다."""
+        self._need_writer()
+        rid = _pos_int(recipient_id, "받는 사람 줄 번호")
+        if status not in DELIVERY_STATUSES or status == DELIVERY_HELD:
+            raise DeliveryRefused("보낸 결과가 아닙니다")
+        t = _kst_text(at, "보낸 시각")
+        self._not_future(at, "보낸 시각")
+        mid = None
+        if status == DELIVERY_SENT:
+            mid = _pos_int(message_idx, "① 메시지 번호")
+        elif message_idx is not None:
+            raise DeliveryRefused("넣지 않은 알림에 메시지 번호가 있습니다")
+        kind = None if error_kind is None else _code(error_kind, _ERROR_KIND, "못 보낸 까닭")
+        if status in (DELIVERY_PENDING, DELIVERY_FAILED) and kind is None:
+            raise DeliveryRefused("못 보낸 까닭이 없습니다")
+        nxt = None
+        if status == DELIVERY_PENDING:
+            if next_try_at is None:
+                raise DeliveryRefused("다시 해 볼 시각이 없습니다")
+            nxt = _kst_text(next_try_at, "다시 해 볼 시각")
+            if next_try_at <= at:
+                raise DeliveryRefused("다시 해 볼 시각은 지금보다 뒤여야 합니다")
+        elif next_try_at is not None:
+            raise DeliveryRefused("끝난 알림에 다시 해 볼 시각이 있습니다")
+        with self._tx() as c:
+            row = c.execute("SELECT status FROM naver_auto_alert_recipient WHERE recipient_id = ?", (rid,)).fetchone()
+            if row is None:
+                raise DeliveryRefused("없는 받는 사람 줄입니다")
+            if row[0] != DELIVERY_PENDING:
+                raise DeliveryRefused("이미 끝난 알림입니다")
+            c.execute(
+                """UPDATE naver_auto_alert_recipient SET status = ?, attempts = attempts + 1, next_try_at = ?,
+                       message_idx = ?, error_kind = ?, finished_at = ? WHERE recipient_id = ? AND status = 'pending'""",
+                (status, nxt, mid, kind, None if status == DELIVERY_PENDING else t, rid))
+
+    def record_heartbeat(self, day: date, status: str, at: datetime, *, sent: bool,
+                         error_kind: Optional[str] = None) -> None:
+        """「오늘 끝」 심박을 ① 에 보냈는지(대표 결정 A3) — 날짜 · ok/trouble · 보냄 여부 · 시도 수 · 못 보낸 까닭."""
+        self._need_writer()
+        d, t = _day_text(day, "심박 날짜"), _kst_text(at, "심박 시각")
+        self._not_future(at, "심박 시각")
+        if status not in ("ok", "trouble"):
+            raise StoreRefused("심박 상태가 아닙니다")
+        if type(sent) is not bool:
+            raise StoreRefused("보냄 여부는 참/거짓이어야 합니다")
+        kind = None if error_kind is None else _code(error_kind, _ERROR_KIND, "못 보낸 까닭")
+        if sent == (kind is not None):
+            raise StoreRefused("보냈으면 까닭이 없고, 못 보냈으면 까닭이 있어야 합니다")
+        with self._tx() as c:
+            old = self._meta_json(c, "heartbeat")
+            if isinstance(old, dict) and old.get("day") == d and old.get("sent_at") is not None:
+                raise StoreRefused("오늘 심박은 이미 보냈습니다")
+            tries = old.get("tries", 0) if isinstance(old, dict) and old.get("day") == d else 0
+            if isinstance(tries, bool) or not isinstance(tries, int) or tries < 0:
+                raise StoreError("저장된 심박 기록을 읽지 못했습니다")
+            self._set_meta(c, "heartbeat", json.dumps(
+                {"day": d, "status": status, "tries": tries + 1, "last_try_at": t, "sent_at": t if sent else None,
+                 "error_kind": kind}, sort_keys=True))
+
     # ── 읽기 ──
     def meta(self, key: str) -> Optional[str]:
         row = self._conn.execute("SELECT value FROM naver_auto_meta WHERE key = ?", (key,)).fetchone()
@@ -2369,3 +2587,91 @@ class Store:
         cur = self._conn.execute("SELECT * FROM naver_auto_check_run WHERE run_id = ?", (_pos_int(run_id, "회차 번호"),))
         r = cur.fetchone()
         return None if r is None else dict(zip([d[0] for d in cur.description], r))
+
+    # ── 알림 읽기(S10) ──
+    @staticmethod
+    def _alert_out(names, r) -> dict:
+        d = dict(zip(names, r))
+        try:
+            if "codes" in d:
+                d["codes"] = list(json.loads(d["codes"]))
+            if "params" in d:
+                d["params"] = json.loads(d["params"])
+        except (TypeError, ValueError, RecursionError):
+            raise StoreError("저장된 알림을 읽지 못했습니다") from None
+        return d
+
+    def alerts_on(self, day: date, kind: Optional[str] = None) -> List[dict]:
+        """그 날(한국) 알림 원천 — 번호 순."""
+        if kind is not None and kind not in ALERT_KINDS:
+            raise StoreRefused("알림 종류가 아닙니다")
+        sql, args = "SELECT * FROM naver_auto_alert WHERE day = ?", (_day_text(day, "알림 날짜"),)
+        if kind is not None:
+            sql, args = sql + " AND kind = ?", args + (kind,)
+        cur = self._conn.execute(sql + " ORDER BY alert_id", args)
+        names = [x[0] for x in cur.description]
+        return [self._alert_out(names, r) for r in cur.fetchall()]
+
+    def alert_recipients(self, alert_id: int) -> List[dict]:
+        cur = self._conn.execute("SELECT * FROM naver_auto_alert_recipient WHERE alert_id = ? ORDER BY emp_idx",
+                                 (_pos_int(alert_id, "알림 번호"),))
+        names = [x[0] for x in cur.description]
+        return [self._alert_out(names, r) for r in cur.fetchall()]
+
+    def system_alert_keys_on(self, day: date) -> set:
+        """그 날 이미 알린 시스템 경보 「나온 곳:코드」 — 같은 날 같은 코드를 되풀이하지 않게."""
+        out = set()
+        for src, codes in self._conn.execute(
+                "SELECT source, codes FROM naver_auto_alert WHERE day = ? AND kind = 'system'",
+                (_day_text(day, "알림 날짜"),)):
+            try:
+                out |= {src + ":" + c for c in json.loads(codes)}
+            except (TypeError, ValueError, RecursionError):
+                raise StoreError("저장된 알림을 읽지 못했습니다") from None
+        return out
+
+    def due_deliveries(self, now: datetime, limit: int = 500) -> List[dict]:
+        """보낼 때가 된 줄 — 긴급 먼저 · 번호 순. 원천(문구 틀 · 코드 · 경로 · 종류 · 날짜)을 함께 준다."""
+        t = _kst_text(now, "지금")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 0 < limit <= 10_000:
+            raise StoreRefused("몇 줄인지 1~10000 이어야 합니다")
+        cur = self._conn.execute(
+            """SELECT r.recipient_id, r.alert_id, r.emp_idx, r.severity, r.params, r.dedupe_key, r.attempts,
+                      r.expires_at, a.kind, a.day, a.source, a.template, a.codes, a.link_path
+               FROM naver_auto_alert_recipient r JOIN naver_auto_alert a ON a.alert_id = r.alert_id
+               WHERE r.status = 'pending' AND r.next_try_at <= ?
+               ORDER BY CASE r.severity WHEN 'URGENT' THEN 0 ELSE 1 END, r.recipient_id LIMIT ?""", (t, limit))
+        names = [x[0] for x in cur.description]
+        return [self._alert_out(names, r) for r in cur.fetchall()]
+
+    def delivery_counts_on(self, day: date) -> dict:
+        """그 날 알림의 받는 사람 줄 상태별 수 — {종류: {상태: 수}}."""
+        out: dict = {}
+        for kind, st, n in self._conn.execute(
+                """SELECT a.kind, r.status, COUNT(*) FROM naver_auto_alert_recipient r
+                   JOIN naver_auto_alert a ON a.alert_id = r.alert_id WHERE a.day = ? GROUP BY a.kind, r.status""",
+                (_day_text(day, "알림 날짜"),)):
+            out.setdefault(kind, {})[st] = n
+        return out
+
+    def issue_event_counts_on(self, day: date) -> dict:
+        """그 날(한국) 이슈 기록 종류별 수 — 그림자 요약이 「새로 · 저절로 풀림」을 센다."""
+        d = _day_text(day, "날짜")
+        return {k: n for k, n in self._conn.execute(
+            "SELECT kind, COUNT(*) FROM naver_auto_issue_event WHERE substr(at, 1, 10) = ? GROUP BY kind", (d,))}
+
+    def heartbeat(self) -> Optional[dict]:
+        """마지막 심박 기록 — {day(date) · status · tries · last_try_at · sent_at(없으면 None) · error_kind}."""
+        v = self._meta_json(self._conn, "heartbeat")
+        if v is None:
+            return None
+        try:
+            out = dict(v)
+            out["day"] = date.fromisoformat(v["day"])
+            out["last_try_at"] = _aware_time(v["last_try_at"])
+            out["sent_at"] = None if v["sent_at"] is None else _aware_time(v["sent_at"])
+        except (TypeError, ValueError, KeyError):
+            raise StoreError("저장된 심박 기록을 읽지 못했습니다") from None
+        if out["last_try_at"] is None or (v["sent_at"] is not None and out["sent_at"] is None):
+            raise StoreError("저장된 심박 기록을 읽지 못했습니다")
+        return out

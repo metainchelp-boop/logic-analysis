@@ -323,7 +323,7 @@ class StoreIssueTest(Base):
         self.assertEqual(S.ISSUE_STATES, I.STATES)
         self.assertEqual(S.ISSUE_SEVERITIES, set(I.SEVERITIES))
         self.assertEqual(S.ISSUE_EVENTS, set(I.EVENTS))
-        self.assertEqual(S.SCHEMA_VERSION, 4)
+        self.assertGreaterEqual(S.SCHEMA_VERSION, 4)   # 판 4 = 이슈(판 5 = 알림 — test_alerts)
         self.assertIn(V.CHECK_LINK_MISSING, S.ACCOUNT_STATUSES)
 
     def test_v3_file_gets_issue_tables(self):
@@ -338,7 +338,7 @@ class StoreIssueTest(Base):
         raw.commit()
         raw.close()
         self.st = S.open_writer(self.path, clock=self.fc.now)
-        self.assertEqual(self.st.meta("schema_version"), "4")
+        self.assertEqual(self.st.meta("schema_version"), str(S.SCHEMA_VERSION))
         self.assertEqual(self.st.issues(), [])
         self.assertEqual(self.st.account_day(A, TODAY)["status"], "ok")       # 옛 자료는 그대로
 

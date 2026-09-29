@@ -179,8 +179,8 @@ class MigrationTest(Base):
         self.assertIsNone(self.st.stage_as_of())
         self.assertIsNone(self.st.hold(S.SYNC_STAGES))
 
-    def test_version_is_four(self):
-        self.assertEqual(S.SCHEMA_VERSION, 4)   # 4 = S9(이슈 · 이슈 기록) — 판을 올리면 이관 시험도 함께 본다(test_morning)
+    def test_version_is_five(self):
+        self.assertEqual(S.SCHEMA_VERSION, 5)   # 5 = S10(알림 · 받는 사람별) — 판을 올리면 이관 시험도 함께 본다(test_alerts)
 
 
 # ── 목록 급감 브레이크 — 가망 ──────────────────────────────────────────
@@ -1296,7 +1296,10 @@ PRIVILEGED = ("record_org", "refuse_org", "refuse_stages", "confirm_prospects_ho
               "record_campaign_days",
               # 이슈 사람의 손길 — 누가 누를 수 있는지 판정하는 S11 길이 생기기 전까지 엔진 어디서도 부르지 않는다
               # (그 속 ``_human`` 은 아무 변화든 받아 적는다 — 이름을 직접 불러 한도·사유를 건너뛰지 못하게 · 검토 security-1)
-              "ack_issue", "resolve_issue", "except_issue", "_human")
+              "ack_issue", "resolve_issue", "except_issue", "_human",
+              # 알림(S10) — 받는 사람·문구 틀·보낸 결과를 적는 길은 alerts.py 한 곳(받는 사람 규칙 scope 를 건너뛴 알림 ·
+              # 보내지도 않은 「보냄」 기록이 생기지 않게)
+              "record_alert", "record_delivery", "record_heartbeat")
 BANNED_NAMES = ("exec", "eval", "compile", "__import__", "globals", "vars", "locals", "open", "breakpoint",
                 "__builtins__", "getattr_static")
 BANNED_ATTRS = ("modules", "__dict__", "__getattribute__", "__subclasses__", "__globals__", "__code__",
@@ -1406,7 +1409,8 @@ class SyncGuardTest(unittest.TestCase):
             uses = _privileged_uses(ast.parse(p.read_text(encoding="utf-8")))
             if uses:
                 found[self.rel(p)] = uses
-        self.assertEqual(set(found), {"sync.py", "links.py", "morning.py"})
+        self.assertEqual(set(found), {"sync.py", "links.py", "morning.py", "alerts.py"})
+        self.assertEqual(found["alerts.py"], {"record_alert", "record_delivery", "record_heartbeat"})
         self.assertEqual(found["sync.py"], {"record_org", "refuse_org", "refuse_stages", "confirm_prospects_hold"})
         self.assertEqual(found["links.py"], {"confirm_accounts_hold", "record_pairing", "record_pairing_event"})
         self.assertEqual(found["morning.py"], {"begin_run", "finish_run", "record_account_check",
