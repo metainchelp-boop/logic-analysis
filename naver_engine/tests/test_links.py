@@ -240,6 +240,14 @@ class SyncAccountsTest(Base):
             with self.assertRaises(ValueError):
                 L.confirm_accounts(self.st, self.clock.t, who, res.hold_id)
 
+    def test_confirm_refuses_hold_with_unknown_codes(self):
+        L.sync_accounts(FakeReader(kids(*many(10))), self.st, self.clock.t)
+        body = '{"read_at":"%s","rows":[],"per":{"1":0}}' % self.clock.t.isoformat()
+        hid = self.st._refuse_and_hold(S.SYNC_ACCOUNTS, self.clock.t.isoformat(), S.SYNC_REFUSED, ["OTHER"], body)
+        res = L.confirm_accounts(self.st, self.clock.t, 0, hid)
+        self.assertEqual((res.outcome, res.codes, res.alert), (S.SYNC_REFUSED, (Y.CODE_STORE_REFUSED,), True))
+        self.assertEqual(sum(a["present"] for a in self.st.accounts()), 10)
+
     def test_confirm_expired_and_superseded(self):
         L.sync_accounts(FakeReader(kids(*many(100))), self.st, self.clock.t)
         res = L.sync_accounts(FakeReader(kids(*many(60))), self.st, self.at(T0 + timedelta(days=1)))
@@ -510,6 +518,18 @@ class PairLinksTest(Base):
         res = self.pair(erp, t=T0 + timedelta(hours=72, minutes=1))
         self.assertEqual(res.codes, (L.CODE_ACCOUNTS_STALE, L.CODE_STAGES_STALE))
         self.assertEqual(erp.calls, 0)
+
+    def test_input_age_boundaries(self):
+        erp = self.seed()
+        read_at, stage_at = self.st.accounts_read_at(), self.st.stage_as_of()
+        res = self.pair(erp, t=read_at + L.ACCOUNTS_MAX_AGE)                             # 30시간 그대로면 쓴다
+        self.assertEqual(res.outcome, S.SYNC_ACCEPTED)
+        # 단계는 점검 손잡이 한도(72시간)까지 쓴다 — 연결 목록 한도(30시간)와 다르다
+        self.st.record_accounts(kids((A, 7654321, "메타상회")), self.at(stage_at + timedelta(hours=60)))
+        res = self.pair(FakeErp(erp.ids), t=stage_at + H.STAGE_MAX_AGE)
+        self.assertEqual(res.outcome, S.SYNC_ACCEPTED)
+        res = self.pair(FakeErp(erp.ids), t=stage_at + H.STAGE_MAX_AGE + timedelta(seconds=1))
+        self.assertEqual(res.codes, (L.CODE_STAGES_STALE,))
 
     def test_erp_failures(self):
         for i, (exc, code) in enumerate(((E.ErpError("status", E.PATH_NAVER_IDS, 503), "status-503"),
