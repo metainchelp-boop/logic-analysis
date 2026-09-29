@@ -405,11 +405,18 @@ class AppTest(unittest.TestCase):
                 self.assertTrue(ln, e[-2000:])
                 outs.append(json.loads(ln[-1][len("@@RESULT@@"):]))
             self.assertEqual(len({o["hash"] for o in outs}), 1)
+            self.assertEqual(len({o["fernet"] for o in outs}), 1)
             self.assertEqual({o["source"] for o in outs}, {"file"})
             # 암호화 키도 하나로 모였다(처음 한 번만 만든다)
             self.assertEqual(len([x for x in (tmp / "data").iterdir() if x.name == "k.key"]), 1)
         finally:
             shutil.rmtree(tmp, True)
+
+    def test_fernet_first_creation(self):
+        r, _, _ = run_harness("fernet", {"JWT_SECRET": ""})
+        self.assertEqual((r["kept"], r["untouched"], r["waited"]), (True, True, True))
+        self.assertEqual(r["fresh_len"], 44)
+        self.assertEqual(r["fresh_mode"], 0o600)
 
     def test_login_guard(self):
         r, err, _ = run_harness("login", {"JWT_SECRET": ""}, timeout=300)
@@ -425,7 +432,9 @@ class AppTest(unittest.TestCase):
         self.assertTrue(r["acct_retry_after"] and 1 <= int(r["acct_retry_after"]) <= 600)
         self.assertEqual(r["acct_case_variant"], 429)
         self.assertEqual(r["other_acct"], 401)
+        self.assertEqual(r["acct_after_2min"], 429)
         self.assertEqual(r["acct_after_window"], 200)
+        self.assertEqual(r["dummy_verify_calls"], 1)
         self.assertEqual(r["rows_after_success"], 0)
         self.assertEqual(r["src_fail"], [401])
         self.assertEqual((r["src_31st"], r["src_other_ip"]), (429, 200))

@@ -168,13 +168,27 @@ def mode_login():
     out["acct_retry_after"] = r.headers.get("retry-after")
     out["acct_case_variant"] = login("KIM@metainc.co.kr", good)     # 대소문자만 바꿔도 같은 묶음
     out["other_acct"] = login("lead@metainc.co.kr", "wrong")
-    # 창이 지나면 풀린다 — 실패 줄 시각을 11분 앞으로 민다
-    db = SessionLocal()
-    for row in db.query(models.LoginFailure).all():
-        row.at -= 660
-    db.commit()
-    db.close()
+
+    def shift(sec):
+        db = SessionLocal()
+        for row in db.query(models.LoginFailure).all():
+            row.at -= sec
+        db.commit()
+        db.close()
+    # 2분 지나도 아직 창 안 — 막힘 그대로 · 11분이면 풀린다
+    shift(120)
+    out["acct_after_2min"] = login("kim@metainc.co.kr", good)
+    shift(540)
     out["acct_after_window"] = login("kim@metainc.co.kr", good)
+    # 없는 이메일도 비밀번호 확인을 한 번 한다(시간으로 있는 계정을 알아내지 못하게)
+    calls = []
+    real_verify = security.verify_password
+    security.verify_password = lambda p, hsh: calls.append(1) or real_verify(p, hsh)
+    try:
+        login("s0-no-such@x.kr", "whatever")
+    finally:
+        security.verify_password = real_verify
+    out["dummy_verify_calls"] = len(calls)
     # 맞는 로그인은 세지 않는다
     clear()
     for _ in range(15):
@@ -237,12 +251,38 @@ def mode_cors():
 def mode_secret():
     """워커 여럿 흉내 — 같은 폴더에서 이 파이썬들이 동시에 app.security 를 불러 같은 값을 쓰는가(해시만)."""
     from app import security
-    return {"hash": h(security.JWT_SECRET), "source": security.JWT_SOURCE, "reason": security.JWT_REASON}
+    f = security._fernet
+    return {"hash": h(security.JWT_SECRET), "source": security.JWT_SOURCE, "reason": security.JWT_REASON,
+            "fernet": h((f._signing_key + f._encryption_key).hex())}
+
+
+def mode_fernet():
+    """암호화 키 첫 생성 — 이미 누가 만든 파일이 있으면 그 키를 쓴다(덮어쓰지 않는다) · 빈 파일이면 채워질 때까지 기다린다."""
+    import threading
+    import time as _t
+    from app import security
+    d = os.path.dirname(os.environ["FERNET_KEY_FILE"])
+    win = os.path.join(d, "winner.key")
+    with open(win, "wb") as fh:
+        fh.write(b"WINNERKEY")
+    got = security._create_key_once(__import__("pathlib").Path(win))
+    with open(win, "rb") as fh:
+        after = fh.read()
+    late = os.path.join(d, "late.key")
+    open(late, "wb").close()                      # 이긴 쪽이 막 만들고 아직 안 쓴 순간
+    threading.Timer(0.1, lambda: open(late, "wb").write(b"LATEKEY")).start()
+    got2 = security._create_key_once(__import__("pathlib").Path(late))
+    fresh = os.path.join(d, "fresh.key")
+    got3 = security._create_key_once(__import__("pathlib").Path(fresh))
+    mode = __import__("stat").S_IMODE(os.stat(fresh).st_mode)
+    return {"kept": got == b"WINNERKEY", "untouched": after == b"WINNERKEY", "waited": got2 == b"LATEKEY",
+            "fresh_len": len(got3), "fresh_mode": mode}
 
 
 if __name__ == "__main__":
     mode = sys.argv[1]
-    if mode != "secret":
+    if mode not in ("secret", "fernet"):
         _hold_collector_lock()
-    res = {"boot": mode_boot, "login": mode_login, "cors": mode_cors, "secret": mode_secret}[mode]()
+    res = {"boot": mode_boot, "login": mode_login, "cors": mode_cors, "secret": mode_secret,
+           "fernet": mode_fernet}[mode]()
     print("@@RESULT@@" + json.dumps(res, ensure_ascii=True))
