@@ -620,6 +620,36 @@ class LoginTest(WebBase):
         self.erp.person(tok(8), 100)
         self.assertEqual(self.src("203.0.113.9", sso=tok(8)), 200)
 
+    def test_windows_slide(self):
+        """창은 실제로 미끄러진다 — 움직이는 시계로 한 곳 · 같은 토큰 · 전체 창이 창 길이가 지나면 풀리고, 그 전에는 안
+        풀린다(시계를 얼린 시험만으로는 기록이 영영 안 지워지는 고장을 못 잡는다 · 2차 검토 frozen-clock)."""
+        now = [100.0]
+        w = WEB.LOGIN_WINDOW
+        self.app = self.make_app(login_max=4, login_source_max=2, login_token_max=2, monotonic=lambda: now[0])
+        # 한 곳 창(① 이 거절한 시도)
+        self.assertEqual([self.src("10.9.0.1", sso=bad(i)) for i in range(3)], [401, 401, 429])
+        now[0] += w - 1
+        self.assertEqual(self.src("10.9.0.1", sso=bad(3)), 429)
+        now[0] += 2
+        self.assertEqual(self.src("10.9.0.1", sso=bad(4)), 401)
+        # 같은 토큰 창
+        now[0] += w + 1
+        self.erp.person(tok(0), 100)
+        self.assertEqual([self.src(f"10.9.1.{i}", sso=tok(0)) for i in range(3)], [200, 200, 429])
+        now[0] += w - 1
+        self.assertEqual(self.src("10.9.1.9", sso=tok(0)), 429)
+        now[0] += 2
+        self.assertEqual(self.src("10.9.1.9", sso=tok(0)), 200)
+        # 전체 창
+        now[0] += w + 1
+        for i in range(1, 7):
+            self.erp.person(tok(i), 100)
+        self.assertEqual([self.src(f"10.9.2.{i}", sso=tok(i)) for i in range(1, 6)], [200] * 4 + [429])
+        now[0] += w - 1
+        self.assertEqual(self.src("10.9.2.9", sso=tok(6)), 429)
+        now[0] += 2
+        self.assertEqual(self.src("10.9.2.9", sso=tok(6)), 200)
+
     def test_trusted_transport_mark(self):
         """유닉스 소켓 서버(S14)가 environ 에 넣는 표지 — IP 없는 연결에서 값이 정확히 True 일 때만 머리를 믿는다 ·
         브라우저 머리로는 못 만든다 · TCP 연결에 붙은 표지는 무시 · 믿지 않는 머리는 값 없이 1분 한 줄 경고."""

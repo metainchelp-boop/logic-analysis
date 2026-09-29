@@ -220,6 +220,24 @@ def _looped(inc: Incoming) -> bool:
             and inc.peer in ("127.0.0.1", "::1") and inc.real_ip is None)
 
 
+_DEFAULT_PORTS = {"http": "80", "https": "443"}
+
+
+def _split_authority(v: str) -> Tuple[str, str]:
+    """「호스트:포트」 → (호스트, 포트 글자 · 없으면 빈 값). [::1]:8080 모양도."""
+    v = v.strip().lower()
+    if v.startswith("["):
+        end = v.find("]")
+        if end < 0:
+            return v, ""
+        rest = v[end + 1:]
+        return v[:end + 1], rest[1:] if rest.startswith(":") else rest
+    if v.count(":") == 1:
+        host, port = v.split(":")
+        return host, port
+    return v, ""
+
+
 def _host_only(v: str) -> str:
     v = v.strip().lower()
     if v.startswith("["):                       # [::1]:8080
@@ -228,15 +246,26 @@ def _host_only(v: str) -> str:
 
 
 def cross_origin(inc: Incoming) -> bool:
-    """다른 곳(다른 사이트 · 같은 회사 다른 주소 포함)의 화면이 부른 요청이면 참.
-    같은 주소 화면의 fetch 는 Sec-Fetch-Site=same-origin · Origin 호스트 = Host."""
+    """다른 곳(다른 사이트 · 같은 회사 다른 주소 · 같은 호스트 다른 포트 포함)의 화면이 부른 요청이면 참.
+    같은 주소 화면의 fetch 는 Sec-Fetch-Site=same-origin · Origin 의 호스트·포트 = Host 의 호스트·포트(기본 포트는
+    없는 것과 같다 — nginx 는 Host 에 포트를 싣지 않는다). 방식(http/https)은 Host 로 알 수 없어 비교하지 않는다 —
+    브라우저는 방식이 다르면 Sec-Fetch-Site 를 same-origin 으로 보내지 않는다(그 겹이 막는다)."""
     if inc.fetch_site is not None and inc.fetch_site.strip().lower() not in _FETCH_SITES_OK:
         return True
     if inc.origin is not None:
         o = inc.origin.strip().lower()
         if o == "null" or "://" not in o:
             return True
-        if not inc.host or _host_only(o.split("://", 1)[1].split("/", 1)[0]) != _host_only(inc.host):
+        if not inc.host:
+            return True
+        scheme, rest = o.split("://", 1)
+        oh, op = _split_authority(rest.split("/", 1)[0])
+        if op == _DEFAULT_PORTS.get(scheme):
+            op = ""
+        hh, hp = _split_authority(inc.host)
+        if hp in _DEFAULT_PORTS.values():
+            hp = ""
+        if (oh, op) != (hh, hp):
             return True
     return False
 
@@ -445,6 +474,8 @@ def page_file(root: pathlib.Path, rest: str) -> Optional[pathlib.Path]:
     except (OSError, RuntimeError):
         return None
     if base not in p.parents or not p.is_file():
+        return None
+    if p.suffix not in PAGE_TYPES:          # 폴더 안 링크가 다른 종류(.py·.env)를 가리키면 — 요청 이름만 보면 통과한다
         return None
     return p
 

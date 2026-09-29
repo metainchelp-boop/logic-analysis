@@ -20,6 +20,8 @@ import unittest
 BACKEND = pathlib.Path(__file__).resolve().parents[1]
 HARNESS = pathlib.Path(__file__).resolve().parent / "naver_relay_harness.py"
 HAS_FASTAPI = all(importlib.util.find_spec(m) for m in ("fastapi", "httpx", "uvicorn", "sqlalchemy", "jose"))
+# 머지·배포 전 실행에서는 NAVER_RELAY_REQUIRE_APP=1 — fastapi 가 없으면 건너뛰지 않고 실패한다(조용한 「OK」 방지 · 2차 검토)
+REQUIRE_APP = os.environ.get("NAVER_RELAY_REQUIRE_APP") == "1"
 
 ENGINE_TOKEN = "v1.eyJzdWIiOjB9TUFSS0VSVE9LRU4." + "S" * 43
 ALLOWED = {"host", "accept", "connection", "content-type", "content-length", "authorization", "x-naver-auto-source"}
@@ -58,7 +60,7 @@ def run_harness(mode, *extra, timeout=90):
         shutil.rmtree(tmp, True)
 
 
-@unittest.skipUnless(HAS_FASTAPI, "fastapi 없음 — 서버 이미지 또는 시험용 가상환경에서 돌린다")
+@unittest.skipUnless(HAS_FASTAPI or REQUIRE_APP, "fastapi 없음 — 서버 이미지 또는 시험용 가상환경에서 돌린다")
 class M6EntranceTest(unittest.TestCase):
     """M6 — 스위치가 꺼지면 /naver · /api/naver-auto 는 **없는 주소와 똑같다**(정적 마운트가 먼저 내주지 않는다)."""
 
@@ -105,7 +107,7 @@ class M6EntranceTest(unittest.TestCase):
         self.assertFalse(self.r["collector_started"])        # 시험이 수집 스레드를 띄우지 않았다
 
 
-@unittest.skipUnless(HAS_FASTAPI, "fastapi 없음 — 서버 이미지 또는 시험용 가상환경에서 돌린다")
+@unittest.skipUnless(HAS_FASTAPI or REQUIRE_APP, "fastapi 없음 — 서버 이미지 또는 시험용 가상환경에서 돌린다")
 class M6BypassTest(unittest.TestCase):
     """다른 주소 철자(빗금 둘 · 점 · 퍼센트)로도 스위치를 못 건너뛴다 — 화면이 나가면 반드시 라우터 머리(CSP)가 붙어 있다
     (검토 static-mount-bypass · 날 요청 줄을 진짜 uvicorn 에)."""
@@ -144,7 +146,7 @@ class M6BypassTest(unittest.TestCase):
         self.assertIn("/naver/index.html", served)
 
 
-@unittest.skipUnless(HAS_FASTAPI, "fastapi 없음 — 서버 이미지 또는 시험용 가상환경에서 돌린다")
+@unittest.skipUnless(HAS_FASTAPI or REQUIRE_APP, "fastapi 없음 — 서버 이미지 또는 시험용 가상환경에서 돌린다")
 class BodyReadTest(unittest.TestCase):
     """라우터 본문 읽기 — 64KB 를 넘는 순간 더 읽지 않는다(길이를 말하면 한 조각도 안 읽는다) · 꺼져 있으면 안 읽는다.
     중계 본체도 64KB 를 막지만(겹) 여기서 끊어야 큰 본문이 메모리에 쌓이지 않는다."""
@@ -205,6 +207,29 @@ class BodyReadTest(unittest.TestCase):
         got, _ = self.read([b"{", "GONE"])
         self.assertEqual(got, 400)
 
+    def test_handler_off_layer(self):
+        """꺼짐 겹 — 라우트가 맞은 뒤 스위치가 꺼져도(요청 도중 바뀜) 화면·중계를 내주지 않는다. 꺼져 있으면 라우트가
+        아예 맞지 않아(_SwitchedRoute) 앱 시험으로는 이 겹에 닿지 않으므로 핸들러를 바로 부른다."""
+        from fastapi import HTTPException
+        old = os.environ.get("NAVER_AUTO_WEB")
+        os.environ["NAVER_AUTO_WEB"] = "off"
+        try:
+            for method, want in (("GET", 404), ("HEAD", 404), ("POST", 405)):
+                scope = {"type": "http", "method": method, "path": "/naver/", "headers": [], "query_string": b""}
+                with self.assertRaises(HTTPException) as cm:
+                    self.N._page(self.Request(scope), "")
+                self.assertEqual(cm.exception.status_code, want, method)
+                scope = {"type": "http", "method": method, "path": "/api/naver-auto/board", "headers": [],
+                         "query_string": b"", "client": ("127.0.0.1", 1)}
+                with self.assertRaises(HTTPException) as cm:
+                    self.N.naver_relay_route("board", self.Request(scope), None)
+                self.assertEqual(cm.exception.status_code, want, method)
+        finally:
+            if old is None:
+                os.environ.pop("NAVER_AUTO_WEB", None)
+            else:
+                os.environ["NAVER_AUTO_WEB"] = old
+
     def test_off_reads_nothing(self):
         got, pulled = self.read([b"x" * 4096] * 3, on=False)
         self.assertEqual((getattr(got, "status_code", None), pulled), (405, 0))
@@ -212,7 +237,7 @@ class BodyReadTest(unittest.TestCase):
         self.assertEqual((getattr(got, "status_code", None), pulled), (404, 0))
 
 
-@unittest.skipUnless(HAS_FASTAPI, "fastapi 없음 — 서버 이미지 또는 시험용 가상환경에서 돌린다")
+@unittest.skipUnless(HAS_FASTAPI or REQUIRE_APP, "fastapi 없음 — 서버 이미지 또는 시험용 가상환경에서 돌린다")
 class RouterHeadersTest(unittest.TestCase):
     """라우터가 엔진에 넘기는 것 — 정한 머리만 · ③ 로그인 토큰·쿠키·밖에서 온 요청한 곳 머리는 넘기지 않는다."""
 
@@ -246,7 +271,7 @@ class RouterHeadersTest(unittest.TestCase):
 
     def test_refusals_never_reach_engine(self):
         self.assertEqual(self.r["refused_contacts"], 0)
-        for name, st in (("big", 413), ("chunked", 413), ("evil", 403), ("same-site", 403)):
+        for name, st in (("big", 413), ("chunked", 413), ("evil", 403), ("same-site", 403), ("two-auth", 400)):
             self.assertEqual(self.calls[name]["status"], st, name)
         self.assertIn(self.calls["bad-length"]["status"], (400, 413))
 
@@ -258,9 +283,22 @@ class RouterHeadersTest(unittest.TestCase):
             self.assertEqual((h["cache-control"], h["x-content-type-options"]), ("no-store", "nosniff"))
 
 
-@unittest.skipUnless(HAS_FASTAPI, "fastapi 없음 — 서버 이미지 또는 시험용 가상환경에서 돌린다")
+@unittest.skipUnless(HAS_FASTAPI or REQUIRE_APP, "fastapi 없음 — 서버 이미지 또는 시험용 가상환경에서 돌린다")
 class M7SlowEngineTest(unittest.TestCase):
     """M7 — 엔진이 느려도(요청 3개가 엔진에서 2.5초씩 걸리는 동안) ③ /api/health 는 바로 답한다."""
+
+    def test_many_slow_requests(self):
+        """엔진이 느린데 한 워커에 50건이 한꺼번에 — 엔진을 기다리는 것은 상한(8)까지 · 나머지는 기다리지 않고 바로 503 ·
+        /api/health 는 그대로 빠르다(상한을 스레드풀만큼 올리면 이 시험이 잡는다 · 2차 검토 m7-capacity)."""
+        r = run_harness("m7", "2.5", "50")
+        self.assertEqual((r["engine_busy"], r["engine_total"]), (r["inflight_max"], r["inflight_max"]))
+        status, dur = r["health"]
+        self.assertEqual(status, 200)
+        self.assertLess(dur, 1.0, r)
+        got = sorted(s for s, _d in r["slow"])
+        self.assertEqual(got, [200] * r["inflight_max"] + [503] * (50 - r["inflight_max"]))
+        self.assertTrue(all(d < 1.5 for s, d in r["slow"] if s == 503), r)
+        self.assertEqual((r["errors"], r["delay"]), ([], 2.5))
 
     def test_health_not_blocked(self):
         r = run_harness("m7", "2.5")
@@ -269,6 +307,7 @@ class M7SlowEngineTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertLess(dur, 1.0, r)
         self.assertEqual([s for s, _d in r["slow"]], [200, 200, 200])
+        self.assertEqual((r["errors"], r["delay"]), ([], 2.5))                # 인자를 제자리에서 읽는다
         self.assertTrue(all(d >= 2.3 for _s, d in r["slow"]), r)
 
 

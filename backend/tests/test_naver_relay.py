@@ -218,6 +218,9 @@ class ForwardTest(EngineCase):
         self.assertNotIn("x-naver-auto-source", self.headers())
         R.relay(self.inc(real_ip="1.2.3", peer="172.17.0.4"), self.env_tcp)     # 글자 모양은 맞지만 주소가 아님
         self.assertEqual(self.headers()["x-naver-auto-source"], "172.17.0.4")
+        for zoned in ("::1%eth0", "fe80::1%25x"):                                  # 주소 풀이는 받아도 글자 모양이 막는다(겹)
+            R.relay(self.inc(real_ip=zoned, peer="172.17.0.5"), self.env_tcp)
+            self.assertEqual(self.headers()["x-naver-auto-source"], "172.17.0.5", zoned)
 
     def test_source_groups_ipv6_by_64(self):
         """IPv6 는 /64 대역 하나로 — 한 사람이 제 대역 안에서 주소를 바꿔도 엔진에는 같은 곳(S12 2차 검토 ipv6-rotation)."""
@@ -269,6 +272,17 @@ class RefuseBeforeEngineTest(EngineCase):
                       ("https://" + HOST, "cross-site"), (None, "weird")):
             self.assertRefused(self.inc(origin=o, fetch_site=fs), 403, "cross-origin")
         self.assertRefused(self.inc(origin="https://" + HOST, host=None, fetch_site=None), 403, "cross-origin")
+
+    def test_same_host_other_port_refused(self):
+        """같은 호스트라도 포트가 다르면 다른 곳(같은 서버의 0.0.0.0:5070 자동입찰 화면 같은 것) — Sec-Fetch-Site 를 안 보내는
+        클라이언트도 Origin 겹이 막는다(2차 검토 origin-port). 기본 포트(80·443)는 없는 것과 같다."""
+        for o, host in (("http://" + HOST + ":5070", HOST), ("https://" + HOST + ":8443", HOST),
+                        ("http://" + HOST, HOST + ":5051"), ("http://" + HOST + ":443", HOST),
+                        ("http://[::1]:5070", "[::1]:5051")):
+            self.assertRefused(self.inc(origin=o, host=host, fetch_site=None), 403, "cross-origin")
+        for o, host in (("https://" + HOST + ":443", HOST), ("http://" + HOST, HOST + ":80"),
+                        ("http://" + HOST + ":80", HOST + ":443")):
+            self.assertEqual(R.relay(self.inc(origin=o, host=host, fetch_site=None), self.env_tcp).status, 200, (o, host))
 
     def test_same_origin_passes(self):
         for o, host, fs in (("https://" + HOST, HOST, "same-origin"), ("http://" + HOST + ":5051", HOST + ":5051", None),
@@ -336,8 +350,9 @@ class EngineAnswerTest(EngineCase):
             self.assertEqual((out.status, json.loads(out.body)), (502, {"error": "bad-gateway"}), (st, ct))
 
     def test_answer_without_length_refused(self):
-        """길이 없는 답(조각 전송 · 끊길 때까지)은 잘렸는지 알 수 없다 — 받지 않는다."""
-        eng = self.eng
+        """길이 없는 답(조각 전송 · 끊길 때까지) · 길이와 조각 전송을 함께 말한 답은 잘렸는지 알 수 없다 — 받지 않는다
+        (2차 검토 te-layer — 길이를 말한 조각 전송은 Transfer-Encoding 겹 하나만 막는다)."""
+        served = []
 
         class Chunked(http.server.BaseHTTPRequestHandler):
             protocol_version = "HTTP/1.1"
@@ -346,11 +361,31 @@ class EngineAnswerTest(EngineCase):
                 pass
 
             def do_GET(self):
+                served.append("chunked")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Transfer-Encoding", "chunked")
                 self.end_headers()
                 self.wfile.write(b"b\r\n{\"ok\":true}\r\n0\r\n\r\n")
+
+        class LenAndChunked(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+            short = False
+
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                served.append("len+chunked")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", "11" if self.short else "5")
+                self.send_header("Transfer-Encoding", "chunked")
+                self.end_headers()
+                self.wfile.write(b"1a\r\n{\"ok\":true,\"more\":\"xxxxx\"}\r\n0\r\n\r\n")
+
+        class LenAndChunkedShort(LenAndChunked):
+            short = True
 
         class NoLen(http.server.BaseHTTPRequestHandler):
             protocol_version = "HTTP/1.0"
@@ -359,12 +394,13 @@ class EngineAnswerTest(EngineCase):
                 pass
 
             def do_GET(self):
+                served.append("nolen")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
                 self.wfile.write(b'{"ok":true}')
 
-        for h in (Chunked, NoLen):
+        for h in (Chunked, NoLen, LenAndChunked, LenAndChunkedShort):
             srv = _TcpHTTPServer(("127.0.0.1", 0), h)
             threading.Thread(target=srv.serve_forever, daemon=True).start()
             try:
@@ -373,7 +409,7 @@ class EngineAnswerTest(EngineCase):
             finally:
                 srv.shutdown()
                 srv.server_close()
-        self.assertEqual(eng.got, [])
+        self.assertEqual(sorted(served), ["chunked", "len+chunked", "len+chunked", "nolen"])   # 네 곳 모두 실제로 답했다
 
     def test_too_large_answer(self):
         old = R.RESPONSE_MAX
@@ -485,6 +521,59 @@ class LogTest(EngineCase):
         for mark in (MARK_BODY, MARK_IP, MARK_QUERY, "TUFSS0VSVE9LRU4", ENGINE_TOKEN, "172.17.0.1", self.sock):
             self.assertNotIn(mark, text)
 
+    def test_every_branch_carries_no_values(self):
+        """_warn 을 부르는 갈래를 표지 값을 실은 요청으로 하나씩 지난다 — 기록에 토큰·본문·주소·쿼리·경로가 없다
+        (2차 검토 log-leak-untested-branches · 구문 시험 test_warn_kinds_are_fixed_words 와 겹)."""
+        buf = io.StringIO()
+        h = logging.StreamHandler(buf)
+        lg = logging.getLogger("naver_relay")
+        lg.addHandler(h)
+        lg.setLevel(logging.DEBUG)
+        self.addCleanup(lg.removeHandler, h)
+        body = json.dumps({"sso": MARK_BODY}).encode()
+
+        def marked(**kw):
+            base = dict(method="POST", sub="/session", content_type="application/json", body=body, query=MARK_QUERY + "=1")
+            base.update(kw)
+            return self.inc(**base)
+        kinds = []
+
+        def run(inc, env, **kw):
+            R._last_warn.clear()
+            before = buf.getvalue()
+            R.relay(inc, env, **kw)
+            kinds.append(buf.getvalue()[len(before):].strip())
+        run(marked(host=R.ENGINE_HOST_HEADER, peer="127.0.0.1", real_ip=None, fetch_site=None), self.env_tcp)   # 되돌이
+        taken = 0
+        while R._slots.acquire(blocking=False):                   # 자리 다 참
+            taken += 1
+        try:
+            run(marked(), self.env_unix)
+        finally:
+            for _ in range(taken):
+                R._slots.release()
+        old = R.RESPONSE_MAX
+        R.RESPONSE_MAX = 5
+        try:
+            run(marked(), self.env_unix)                          # 답 너무 큼
+        finally:
+            R.RESPONSE_MAX = old
+        self.eng.cut = True
+        run(marked(), self.env_unix)                              # 끊김
+        self.eng.cut = False
+
+        class NoThread(threading.Timer):
+            def start(self):
+                raise RuntimeError("no")
+        with mock.patch.object(R.threading, "Timer", NoThread):
+            run(marked(), self.env_unix)                          # 스레드 없음
+        self.assertEqual([bool(k) for k in kinds], [True] * 5, kinds)
+        for want in ("engine-loop", "relay-busy", "engine-answer-too-large", "engine-cut", "relay-no-thread"):
+            self.assertTrue(any(want in k for k in kinds), want)
+        text = buf.getvalue()
+        for mark in (MARK_BODY, MARK_IP, MARK_QUERY, "TUFSS0VSVE9LRU4", ENGINE_TOKEN, "172.17.0.1", self.sock, HOST):
+            self.assertNotIn(mark, text)
+
     def test_one_line_per_minute(self):
         with self.assertLogs("naver_relay", level="WARNING") as cm:
             for _ in range(5):
@@ -527,6 +616,8 @@ class PageFileTest(unittest.TestCase):
         (self.tmp / "outside.js").write_text("x")
         (self.root / "link.js").symlink_to(self.tmp / "outside.js")
         (self.root / "dir.js").mkdir()
+        (self.root / "alias.js").symlink_to(self.root / "notes.py")      # 폴더 안 · 다른 종류
+        (self.root / "same.js").symlink_to(self.root / "app.js")          # 폴더 안 · 같은 종류
 
     def test_allowed(self):
         self.assertEqual(R.page_file(self.root, ""), (self.root / "index.html").resolve())
@@ -541,6 +632,13 @@ class PageFileTest(unittest.TestCase):
                      "a/b/c/d/e.js", "index.html?x", "app.JS"):
             self.assertIsNone(R.page_file(self.root, rest), rest)
         self.assertIsNone(R.page_file(self.tmp / "none", ""))
+
+    def test_link_inside_root_to_other_kind(self):
+        """폴더 안 링크가 다른 종류(.py)를 가리키면 없음 — 요청 이름(.js)만 보면 통과해 page_type 에서 500 이 났다(2차 검토)."""
+        self.assertIsNone(R.page_file(self.root, "alias.js"))
+        p = R.page_file(self.root, "same.js")
+        self.assertEqual(p, (self.root / "app.js").resolve())
+        self.assertEqual(R.page_type(p), "text/javascript; charset=utf-8")
 
     def test_page_headers_keep_sso_home(self):
         h = dict(R.PAGE_HEADERS)
@@ -708,6 +806,22 @@ class EarlyAnswerTest(RawCase):
         self.assertEqual(R._slots._value, R.MAX_INFLIGHT)
 
 
+class TimerLeakTest(EngineCase):
+    """끝난 요청의 마감 감시 스레드는 바로 거둔다 — 빠른 요청마다 30초짜리 스레드가 쌓이지 않는다(2차 검토 timer-cancel)."""
+
+    def test_no_timer_left(self):
+        for _ in range(20):
+            self.assertEqual(R.relay(self.inc(), self.env_unix).status, 200)
+        end = time.monotonic() + 2.0
+        while time.monotonic() < end:
+            left = [t for t in threading.enumerate()
+                    if isinstance(t, threading.Timer) and getattr(t, "function", None) is R._cut and t.is_alive()]
+            if not left:
+                break
+            time.sleep(0.02)
+        self.assertEqual(left, [])
+
+
 class TimerStartTest(EngineCase):
     """마감 감시 스레드를 못 만들면 연결을 열지 않고 503 — ③ 500·스택으로 새지 않는다(S12 2차 검토 timer-start)."""
 
@@ -781,6 +895,47 @@ def _tree(p):
     return ast.parse(p.read_text(encoding="utf-8"))
 
 
+NET_NAMES = {"HTTPConnection", "HTTPSConnection", "create_connection", "urlopen", "socketpair", "fromfd"}
+NET_MODULES = {"http", "http.client", "socket", "urllib", "urllib.request", "ssl"}
+
+
+def _egress_violations(tree) -> list:
+    """나가는 연결을 만들 수 있는 이름이 정한 자리(``_open`` · ``_UnixConnection``) 밖에 나오는 곳 — 호출이 아니어도
+    (참조 · 모듈 수준 · lambda · 클래스 본문) · from-import · 이름 글자(getattr 우회) · __import__ 까지(2차 검토 egress-guard)."""
+    bad = []
+    ann = set()
+    for n in ast.walk(tree):
+        nodes = []
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            nodes = [a.annotation for a in n.args.args + n.args.kwonlyargs + n.args.posonlyargs] + [n.returns]
+        elif isinstance(n, ast.AnnAssign):
+            nodes = [n.annotation]
+        for a in nodes:
+            if a is not None:
+                ann |= {id(x) for x in ast.walk(a)}               # 표기(타입 힌트)는 연결을 만들지 않는다
+
+    def visit(node, where):
+        for child in ast.iter_child_nodes(node):
+            w = where
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                w = where if where in ("_open", "_UnixConnection") else child.name
+            if id(child) not in ann:
+                if isinstance(child, ast.ImportFrom) and (child.module or "") in NET_MODULES:
+                    bad.append("from-import " + (child.module or ""))
+                if isinstance(child, ast.Name) and (child.id in NET_NAMES or child.id == "__import__"):
+                    bad.append(f"{w}:{child.id}")
+                if isinstance(child, ast.Attribute) and child.attr in NET_NAMES and w not in ("_open", "_UnixConnection"):
+                    bad.append(f"{w}:.{child.attr}")
+                if isinstance(child, ast.Attribute) and child.attr == "socket" and isinstance(child.value, ast.Name) \
+                        and child.value.id == "socket" and w != "_UnixConnection":
+                    bad.append(f"{w}:socket.socket")
+                if isinstance(child, ast.Constant) and isinstance(child.value, str) and child.value in NET_NAMES:
+                    bad.append(f"{w}:'{child.value}'")
+            visit(child, w)
+    visit(tree, "<module>")
+    return bad
+
+
 class StructureTest(unittest.TestCase):
     ALLOWED_IMPORTS = {"__future__", "http.client", "ipaddress", "logging", "os", "pathlib", "re", "socket",
                        "threading", "time", "dataclasses", "typing"}
@@ -795,6 +950,62 @@ class StructureTest(unittest.TestCase):
         self.assertLessEqual(got, self.ALLOWED_IMPORTS)
         for bad in ("urllib", "urllib.request", "requests", "httpx", "subprocess", "http.server"):
             self.assertNotIn(bad, got)
+
+    def test_egress_names_only_in_open(self):
+        self.assertEqual(_egress_violations(_tree(RELAY_SRC)), [])
+        self.assertEqual(_egress_violations(_tree(ROUTER_SRC)), [])
+
+    def test_egress_check_catches_bypass_shapes(self):
+        """검토가 찾은 우회 모양을 가짜 소스로 넣어 구문 시험이 모두 잡는지."""
+        shapes = [
+            "from http.client import HTTPSConnection\ndef _report(k):\n    HTTPSConnection('203.0.113.5').request('POST', '/c')",
+            "import http.client\n_OUT = lambda: http.client.HTTPConnection('203.0.113.5', 80)",
+            "def f():\n    from socket import create_connection as _cc\n    _cc(('203.0.113.5', 80))",
+            "import socket\ndef f():\n    return socket.create_connection(('203.0.113.5', 80))",
+            "import http.client\ndef f():\n    return getattr(http.client, 'HTTPSConnection')('x')",
+            "def f():\n    return __import__('http.client')",
+            "import socket\nclass X:\n    s = socket.socket()",
+            "import http.client\nclass Other(http.client.HTTPConnection):\n    pass",
+        ]
+        for src in shapes:
+            self.assertNotEqual(_egress_violations(ast.parse(src)), [], src)
+        ok = ("import http.client\nimport socket\ndef _open(t):\n    return http.client.HTTPConnection('127.0.0.1', 1)\n"
+              "class _UnixConnection(http.client.HTTPConnection):\n    def connect(self):\n        s = socket.socket()\n"
+              "def _read(conn: http.client.HTTPConnection) -> http.client.HTTPResponse:\n    pass")
+        self.assertEqual(_egress_violations(ast.parse(ok)), [])
+
+    def test_limits_fit_the_server(self):
+        """M7 · 마감 — 한 워커의 엔진 대기 상한은 스레드풀 기본(40)보다 넉넉히 작게 · 전체 마감은 gunicorn --timeout(120)
+        보다 한참 짧게(라우터는 기본값을 쓴다 · 2차 검토 m7-capacity · deadline-default)."""
+        self.assertLessEqual(R.MAX_INFLIGHT, 16)
+        self.assertLessEqual(R.TOTAL_TIMEOUT, 30)
+        self.assertLessEqual(R.CONNECT_TIMEOUT, R.TOTAL_TIMEOUT)
+        docker = (BACKEND.parent / "Dockerfile").read_text(encoding="utf-8")
+        self.assertIn('"--timeout", "120"', docker)
+
+    def test_router_checks_switch_first(self):
+        """fastapi 없이도 M6 겹을 지킨다 — 라우트 맞춤 · 본문 읽기 · 화면이 스위치를 맨 먼저 보고 · 중계는 꺼짐(RelayOff)을
+        없는 주소의 답으로 바꾸고 · Authorization 은 모두(getlist) 읽는다(두 개면 중계가 400 · 2차 검토)."""
+        tree = _tree(ROUTER_SRC)
+        fns = {n.name: n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+        for name, want in (("_capped_body", "raise _off(request.method)"), ("_page", "raise _off(request.method)"),
+                           ("matches", "return (Match.NONE, {})")):
+            first = fns[name].body[0]
+            if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant):
+                first = fns[name].body[1]
+            self.assertIsInstance(first, ast.If, name)
+            self.assertEqual(ast.unparse(first.test), "not R.enabled()", name)
+            self.assertEqual(ast.unparse(first.body[0]), want, name)
+        handlers = [h for h in ast.walk(fns["naver_relay_route"]) if isinstance(h, ast.ExceptHandler)]
+        self.assertEqual([ast.unparse(h.type) for h in handlers], ["R.RelayOff"])
+        self.assertEqual(ast.unparse(handlers[0].body[0]), "raise _off(request.method) from None")
+        calls = [c for c in ast.walk(fns["naver_relay_route"]) if isinstance(c, ast.Call)
+                 and isinstance(c.func, ast.Attribute) and c.args and isinstance(c.args[0], ast.Constant)
+                 and c.args[0].value == "authorization"]
+        self.assertEqual([c.func.attr for c in calls], ["getlist"])
+        classes = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)}
+        self.assertIn("_SwitchedRoute", classes)
+        self.assertIn("route_class=_SwitchedRoute", ROUTER_SRC.read_text(encoding="utf-8"))
 
     def test_connections_only_through_open(self):
         """나가는 연결은 _open(검사한 Target) · _UnixConnection 에서만 — 다른 곳에서 새 연결을 만들지 않는다."""

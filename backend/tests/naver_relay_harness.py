@@ -200,6 +200,8 @@ def mode_headers():
                                                 headers={"Content-Type": "application/json"}))])
     out["calls"].append(["bad-length", resp(c.post("/api/naver-auto/session", content=b"{}",
                                                    headers={"Content-Type": "application/json", "Content-Length": "x2"}))])
+    out["calls"].append(["two-auth", resp(c.get("/api/naver-auto/board", headers=[("Authorization", "Bearer " + ENGINE_TOKEN),
+                                                                               ("Authorization", "Bearer " + erp3)]))])
     out["calls"].append(["evil", resp(c.get("/api/naver-auto/board", headers={"Origin": "https://evil.example"}))])
     out["calls"].append(["same-site", resp(c.get("/api/naver-auto/board", headers={"Sec-Fetch-Site": "same-site"}))])
     out["refused_contacts"] = len(eng.got) - before
@@ -211,7 +213,10 @@ def mode_m7():
     import http.client
     import uvicorn
     import app.main as m
-    delay = float(sys.argv[3]) if len(sys.argv) > 3 else 2.5
+    from app import naver_relay as R
+    delay = float(sys.argv[2]) if len(sys.argv) > 2 else 2.5      # harness.py m7 <지연> <동시 수>
+    n = int(sys.argv[3]) if len(sys.argv) > 3 else 3
+    need = min(n, R.MAX_INFLIGHT)
     eng, path = start_engine(delay=delay)
     os.environ["NAVER_AUTO_WEB"] = "on"
     os.environ["NAVER_AUTO_ENGINE"] = "unix:" + path
@@ -235,20 +240,26 @@ def mode_m7():
 
     results = {}
 
+    errors = []
+
     def slow(i):
-        results[i] = get("/api/naver-auto/board", {"Authorization": "Bearer " + ENGINE_TOKEN})
-    threads = [threading.Thread(target=slow, args=(i,)) for i in range(3)]
+        try:
+            results[i] = get("/api/naver-auto/board", {"Authorization": "Bearer " + ENGINE_TOKEN})
+        except Exception as e:                        # 시험 쪽 연결 실패 — 종류만 적는다
+            errors.append(type(e).__name__)
+    threads = [threading.Thread(target=slow, args=(i,)) for i in range(n)]
     for t in threads:
         t.start()
-    while len(eng.got) < 3 and time.monotonic() - t0 < 12:
+    while len(eng.got) < need and time.monotonic() - t0 < 12:
         time.sleep(0.02)
     engine_busy_before_health = len(eng.got)
     hs, hdur, _hb = get("/api/health")
     for t in threads:
         t.join()
     server.should_exit = True
-    return {"health": [hs, round(hdur, 3)], "engine_busy": engine_busy_before_health,
-            "slow": [[s, round(d, 3)] for s, d, _b in results.values()], "delay": delay}
+    return {"health": [hs, round(hdur, 3)], "engine_busy": engine_busy_before_health, "inflight_max": R.MAX_INFLIGHT,
+            "slow": [[s, round(d, 3)] for s, d, _b in results.values()], "delay": delay, "engine_total": len(eng.got),
+            "errors": sorted(errors)}
 
 
 if __name__ == "__main__":

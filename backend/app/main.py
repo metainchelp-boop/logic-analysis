@@ -44,7 +44,7 @@ app.include_router(auth.router, prefix="/api")
 app.include_router(clients.router, prefix="/api")
 app.include_router(insights.router, prefix="/api")
 app.include_router(erp.router, prefix="/api")
-# 네이버 관제(/naver/ · /api/naver-auto) — 스위치 NAVER_AUTO_WEB=on 일 때만 · 꺼지면 없는 주소와 같은 404.
+# 네이버 관제(/naver/ · /api/naver-auto) — 스위치 NAVER_AUTO_WEB=on 일 때만 · 꺼지면 라우트가 맞지 않아 없는 주소와 같은 답(GET·HEAD 404 · 그 밖 405).
 # 정적 마운트(맨 끝)보다 먼저 받아야 한다(설계 M6) — 이 줄을 app.mount 아래로 옮기지 말 것.
 app.include_router(naver.router)
 
