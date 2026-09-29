@@ -232,8 +232,10 @@ class App:
             return self._dispatch(environ)
         except HttpError as e:
             return e.status, {"error": e.code, **e.extra}
-        except (SC.ClientNotVisible, SC.TargetNotVisible):
+        except SC.ClientNotVisible:
             return 404, dict(NOT_VISIBLE)
+        except SC.TargetNotVisible:   # 고른 사람·팀 — 없는 번호와 범위 밖 번호가 같은 본문
+            return 404, {"error": "not-visible", "message": SC.TARGET_NOT_VISIBLE}
         except SC.SelectionRejected:
             return 400, {"error": "selection-rejected", "message": SC.SELECTION_REJECTED}
         except SC.ActionNotAllowed:

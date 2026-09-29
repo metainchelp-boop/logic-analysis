@@ -1535,7 +1535,13 @@ class ScreenAdditionsTest(unittest.TestCase):
             if sc.scope_of(self.org, who).kind in (sc.TEAM, sc.MINE):
                 self.assertEqual(n.kind, sc.MINE)
                 self.assertTrue(n.narrowed)
-                self.assertEqual(got, sc.clients_in(self.org, n, self.rows, "me"), who)
+                # 좁힌 범위 = 좁히기 전 범위의 「내 담당」(메인·서브·직전) — 좁힌 범위도 판정 함수가 믿어야 한다
+                self.assertEqual(got, sc.clients_in(self.org, sc.scope_of(self.org, who), self.rows, "me"), who)
+        lead_own = [w for w in self.org.people if sc.scope_of(self.org, w).kind == sc.TEAM
+                    and sc.clients_in(self.org, sc.scope_of(self.org, w), self.rows, "me")]
+        self.assertTrue(lead_own)                                   # 자기 담당이 있는 팀장이 예시에 있다
+        for w in lead_own:
+            self.assertTrue(sc.clients_in(self.org, sc.narrowed_scope_of(self.org, w), self.rows), w)
 
     def test_좁힘_표시를_떼거나_붙인_손_범위는_범위_없음(self):
         for who in self.org.people:

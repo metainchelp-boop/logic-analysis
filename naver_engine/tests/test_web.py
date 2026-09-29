@@ -444,6 +444,16 @@ class RouteGuardTest(WebBase):
             params = list(inspect.signature(r.handler).parameters)
             self.assertEqual(params[:4], ["self", "req", "v", "now"], r.handler.__name__)
 
+    def test_authorization_header_must_be_bearer(self):
+        tok = self.token(100)
+        for head in ("Basic " + tok, tok, "Bearer", "Bearer  ", "Token " + tok):
+            s, b, _h, _p = self.call("GET", "/me", headers={"HTTP_AUTHORIZATION": head})
+            self.assertEqual(s, 401, head)
+        s, _b, _h, _p = self.call("GET", "/me", headers={"HTTP_AUTHORIZATION": "bearer " + tok})
+        self.assertEqual(s, 200)                       # 머리 글자의 대소문자는 가리지 않는다
+        s, _b, _h, _p = self.call("GET", "/me", query="token=" + tok)
+        self.assertEqual(s, 401)                       # 주소에 실은 토큰은 받지 않는다
+
     def test_unknown_and_wrong_method(self):
         tok = self.token(0)
         self.assertEqual(self.call("GET", "/nope", tok)[0], 404)
@@ -596,6 +606,11 @@ class VisibilityTest(WebBase):
     def test_selection_rules(self):
         self.assertEqual(self.get("/board", 100, query="selection=unassigned")[0], 400)   # 대표만
         self.assertEqual(self.get("/board", 100, query="selection=person:101")[0], 404)    # 범위 밖 사람
+        bodies = {self.call("GET", "/board", self.token(100), query=q)[3]
+                  for q in ("selection=person:101", "selection=person:99999", "selection=team:11",
+                            "selection=team:99999")}
+        self.assertEqual(len(bodies), 1)                                                   # 없는 사람·팀과 같은 본문
+        self.assertEqual(json.loads(bodies.pop())["message"], SC.TARGET_NOT_VISIBLE)
         s, b = self.get("/board", 1, query="selection=person%3A101&attention=0")
         self.assertEqual((s, {r["possibility_id"] for r in b["rows"]}), (200, {12}))
         s, b = self.get("/board", 0, query="selection=unassigned&attention=0")
@@ -655,6 +670,23 @@ class VerdictAssemblyTest(WebBase):
         late = W.load(self.st, at(TODAY + timedelta(days=1), 9, 0))
         self.assertEqual(W.judge(late, 12).white_reason, V.CHECK_NOT_CHECKED)
         self.assertTrue(W.judge(late, 12).needs_attention)
+
+    def test_not_today_pairing_ignores_today_rows_and_stale_missing(self):
+        """짝 맞추기가 오늘 것이 아니면 오늘 계정 하루치가 있어도 · 「오늘 없음」·「이관 빠짐」 줄이 있어도 점검 전/안 됨."""
+        from dataclasses import replace
+        ctx = W.load(self.st, self.fc.now())
+        self.assertTrue(ctx.pairing_today)
+        rows = dict(ctx.rows_by_pid)
+        rows[13] = ({"possibility_id": 13, "customer_id": C_, "state": S.PAIR_MISSING, "code": None, "same_name": None,
+                     "claimed_elsewhere": None, "decision_id": None, "link": "confirmed"},)
+        rows[14] = ({"possibility_id": 14, "customer_id": D, "state": S.PAIR_BROKEN, "code": None, "same_name": None,
+                     "claimed_elsewhere": None, "decision_id": None, "link": "auto"},)
+        today_ctx = replace(ctx, rows_by_pid=rows)
+        self.assertEqual([c.status for c in W.account_checks(today_ctx, 13)], [V.CHECK_LINK_MISSING])
+        self.assertEqual([c.status for c in W.account_checks(today_ctx, 14)], [V.CHECK_LINK_BROKEN])
+        old = replace(today_ctx, pairing_today=False)
+        for pid in (11, 12, 13, 14):
+            self.assertEqual({c.status for c in W.account_checks(old, pid)}, {V.CHECK_PENDING}, pid)
 
     def test_account_day_of_other_prospect_is_not_mine(self):
         ctx = W.load(self.st, self.fc.now())
@@ -824,9 +856,14 @@ class BellSettingsTest(WebBase):
         s, b = self.post("/settings/thresholds", 0, {"changes": {"zero_spend_days": 99, "nope": 1}})
         self.assertEqual((s, b["error"], b["fields"]), (400, "out-of-range", ["zero_spend_days"]))
         self.assertEqual(self.post("/settings/thresholds", 0, {"changes": {"zero_spend_days": 4}})[0], 409)
+        body = TA.org_body(self.fc.now() - timedelta(minutes=1))
+        for e in body["employees"]:
+            if e["idx"] == 0:
+                e["name"] = "김대표"
+        self.st.record_org(body, self.fc.now())
         _s, st = self.get("/settings", 1)
-        self.assertEqual((st["thresholds"]["zero_spend_days"], st["history"][0]["by"]), (4, "대표"))
-        self.assertEqual(self.get("/settings", 0)[1]["history"][0]["by"], "대표")
+        self.assertEqual((st["thresholds"]["zero_spend_days"], st["history"][0]["by"]), (4, "대표"))   # 이름 없이
+        self.assertEqual(self.get("/settings", 0)[1]["history"][0]["by"], "김대표")                  # 대표 화면만 이름
 
     def test_hold_confirm_ceo_only(self):
         self.assertEqual(self.post("/holds/org/confirm", 1, {"hold_id": 1})[0], 403)
@@ -852,6 +889,18 @@ class EscalationTest(WebBase):
         self.assertEqual(self.get("/board", 0)[1]["escalated_to_me"], [])              # 👀 확인하면 멈춘다
         red = [e for e in self.get("/board", 0)[1]["escalated_to_me"] if e["possibility_id"] == 11]
         self.assertEqual(red, [])                                                       # 🔴 는 이미 모두에게
+
+    def test_single_tier_chain_never_escalates_to_itself(self):
+        """담당 미정(대표만) 광고주의 🟡 — 사슬이 한 칸이라 올릴 곳이 없다(대표 자신의 일이 「올라온 일」로 뜨지 않는다)."""
+        rid = self.st.begin_run(TODAY, self.fc.now())
+        self.st.record_account_check(rid, C_, possibility_id=13, link="confirmed", status="ok",
+                                     rules_run=("bizmoney", "link"), rules_not_run=(), checked_at=self.fc.now(),
+                                     findings=(TA.F("bizmoney", "bizmoney_low", f"acc:{C_}", "yellow"),))
+        self.st.finish_run(rid, S.RUN_DONE, self.fc.now())
+        self.at(self.fc.now() + timedelta(hours=40))
+        got = {e["possibility_id"] for e in self.get("/board", 0)[1]["escalated_to_me"]}
+        self.assertNotIn(13, got)
+        self.assertIn(12, got)
 
 
 # ── 감사 · 오류 ─────────────────────────────────────────────────────
