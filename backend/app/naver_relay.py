@@ -14,18 +14,24 @@
 - 본문 64KB(엔진과 같다) · 주소 조각은 엔진 경로 모양만 · 다른 곳(Origin)에서 온 요청은 거절.
 
 스위치
-- ``NAVER_AUTO_WEB=on`` 일 때만 켜진다. 없거나 다른 값이면 ``/naver`` · ``/api/naver-auto`` 는 없는 주소와 같은 404.
+- ``NAVER_AUTO_WEB=on`` 일 때만 켜진다. 없거나 다른 값이면 ``/naver/`` · ``/api/naver-auto`` 는 **라우트가 아예 맞지 않아**
+  없는 주소와 같은 답(GET·HEAD 404 · 그 밖 방식 405 — 정적 마운트가 주는 그대로).
 - ``NAVER_AUTO_ENGINE`` = ``unix:/절대/경로.sock`` 또는 ``127.0.0.1:포트`` · ``[::1]:포트``.
   없거나 모양이 틀리면 스위치가 켜져 있어도 ``/api/naver-auto`` 는 503(engine-unavailable) — 화면은 뜬다.
   ③ 자기 자신을 가리키게 잘못 넣으면(되돌이) 503(engine-misconfigured).
   엔진을 별도 컨테이너로 띄울 때(S14)는 **유닉스 소켓** — ③ 와 엔진이 같이 붙인 **폴더**(파일 하나가 아니라) 안의 소켓.
 
 기록
-- 토큰·본문·주소(IP)·쿼리는 어디에도 적지 않는다. 엔진에 닿지 못한 일만 종류 이름으로 1분에 한 줄.
+- 토큰·본문·주소(IP)·쿼리·소켓 경로는 어디에도 적지 않는다(repr 포함). 엔진에 닿지 못한 일만 종류 이름으로 종류마다 1분에 한 줄.
+
+요청한 곳
+- IPv4 는 그대로 · ``::ffff:a.b.c.d`` 는 IPv4 로 · IPv6 는 **/64 대역**(한 집·한 회선이 받는 단위)으로 묶어 넘긴다 —
+  한 사람이 자기 /64 안에서 주소를 바꿔 가며 엔진의 한 곳 상한을 비켜 가지 못하게(S12 2차 검토).
 """
 from __future__ import annotations
 
 import http.client
+import ipaddress
 import logging
 import os
 import pathlib
@@ -50,7 +56,8 @@ CONNECT_TIMEOUT = 3.0
 # 한 워커에서 엔진을 동시에 기다리는 요청 상한 — ③ 다른 경로(대부분 동기 def)와 같은 스레드풀(기본 40)을 쓰므로
 # 엔진이 느려도 스레드풀을 다 먹지 않게. 넘치면 기다리지 않고 바로 503(M7).
 MAX_INFLIGHT = 8
-TOTAL_TIMEOUT = 30.0                  # 미리보기(네이버 한 번)까지 넉넉히 · gunicorn 120초 안
+TOTAL_TIMEOUT = 30.0                  # 요청 하나 전체 · gunicorn 120초 안. 엔진 미리보기(네이버 부름)는 S14 가 이보다 짧은
+#                                       자체 마감(20초 안)으로 배선한다 — 넘으면 화면은 504 인데 엔진은 끝까지 돌기 때문(S12 2차 검토)
 UNIX_PATH_MAX = 100                   # sun_path 108 바이트 안
 
 SOURCE_HEADER = "X-Naver-Auto-Source"
@@ -93,7 +100,7 @@ PAGE_HEADERS: Tuple[Tuple[str, str], ...] = (
 
 
 class RelayOff(Exception):
-    """스위치가 꺼져 있다 — 부르는 쪽은 없는 주소와 똑같이 404 를 돌려준다."""
+    """스위치가 꺼져 있다 — 부르는 쪽은 없는 주소와 똑같은 답(GET·HEAD 404 · 그 밖 405)을 돌려준다."""
 
 
 # ── 설정 ────────────────────────────────────────────────────────────
@@ -102,12 +109,15 @@ def enabled(env: Optional[Mapping[str, str]] = None) -> bool:
     return e.get(ENV_SWITCH) == SWITCH_ON
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, repr=False)
 class Target:
     kind: str                  # "unix" · "tcp"
     path: str = ""             # unix
     host: str = ""             # tcp — 127.0.0.1 · ::1 만
     port: int = 0
+
+    def __repr__(self) -> str:                 # 종류만 — 소켓 경로·포트를 기록·오류 문구에 싣지 않는다
+        return "Target(%s)" % self.kind
 
 
 def engine_target(env: Optional[Mapping[str, str]] = None) -> Optional[Target]:
@@ -137,7 +147,7 @@ class Incoming:
     """라우터가 브라우저 요청에서 **정한 칸만** 옮겨 담는다(나머지 머리는 여기 들어오지도 않는다)."""
     method: str
     sub: str                                            # /api/naver-auto 뒤 — "/board" 같은 모양
-    query: str = ""
+    query: str = field(default="", repr=False)
     authorization: Tuple[str, ...] = field(default=(), repr=False)
     content_type: Optional[str] = None
     body: Optional[bytes] = field(default=None, repr=False)
@@ -177,13 +187,37 @@ def _warn(kind: str) -> None:
 
 
 # ── 요청한 곳 · 다른 곳 막기 ──────────────────────────────────────────
+def _grouped(v: str) -> Optional[str]:
+    """주소 하나 → 엔진이 셀 「한 곳」 글자. IPv4 그대로 · IPv4 를 품은 IPv6 는 IPv4 로 · IPv6 는 /64 대역의 앞 주소."""
+    try:
+        a = ipaddress.ip_address(v)
+    except ValueError:
+        return None
+    if isinstance(a, ipaddress.IPv6Address):
+        if a.is_loopback:
+            return str(a)
+        if a.ipv4_mapped is not None:
+            return str(a.ipv4_mapped)
+        return str(ipaddress.IPv6Network((int(a) >> 64 << 64, 64)).network_address)
+    return str(a)
+
+
 def source_of(inc: Incoming) -> Optional[str]:
     """nginx 가 넣는 X-Real-IP(브라우저가 보낸 값은 nginx 가 덮어쓴다) → 없으면 연결한 주소 → 둘 다 모양이 틀리면 없음.
-    X-Forwarded-For 는 보지 않는다(브라우저가 앞자리를 지어낼 수 있다)."""
+    X-Forwarded-For 는 보지 않는다(브라우저가 앞자리를 지어낼 수 있다). IPv6 는 /64 로 묶는다."""
     for v in (inc.real_ip, inc.peer):
         if isinstance(v, str) and _IP.fullmatch(v):
-            return v
+            g = _grouped(v)
+            if g is not None:
+                return g
     return None
+
+
+def _looped(inc: Incoming) -> bool:
+    """엔진 주소를 ③ 자기 자신으로 잘못 넣어 중계의 요청이 되돌아왔는가 — 중계가 넣은 Host 가 루프백 연결로,
+    nginx 머리(X-Real-IP) 없이 들어온 것. 밖에서 Host 만 흉내 내면(nginx 를 지나 X-Real-IP 가 붙는다) 해당 없음."""
+    return (isinstance(inc.host, str) and _host_only(inc.host) == ENGINE_HOST_HEADER
+            and inc.peer in ("127.0.0.1", "::1") and inc.real_ip is None)
 
 
 def _host_only(v: str) -> str:
@@ -272,7 +306,7 @@ def relay(inc: Incoming, env: Optional[Mapping[str, str]] = None, *, total_timeo
         return _err(403, "cross-origin")
     if inc.method not in ("GET", "POST"):
         return _err(405, "method-not-allowed")
-    if isinstance(inc.host, str) and _host_only(inc.host) == ENGINE_HOST_HEADER:
+    if _looped(inc):
         _warn("engine-loop")                           # 엔진 주소를 ③ 자기 자신으로 잘못 넣었다 — 제 요청이 되돌아옴
         return _err(503, "engine-misconfigured")
     if not isinstance(inc.sub, str) or not _SUB.fullmatch(inc.sub):
@@ -316,36 +350,50 @@ def relay(inc: Incoming, env: Optional[Mapping[str, str]] = None, *, total_timeo
         _slots.release()
 
 
-def _cut(sock: socket.socket) -> None:
+def _cut(box: list) -> None:
     """마감 — 엔진과의 연결을 끊는다. 조금씩 흘리는 답 · 1xx 되풀이처럼 「읽을 때마다 시간 제한이 새로 열리는」 경우도
-    전체 시간(total_timeout) 안에 끝나게 하는 유일한 겹."""
-    try:
-        sock.shutdown(socket.SHUT_RDWR)
-    except OSError:
-        pass
+    전체 시간(total_timeout) 안에 끝나게 하는 유일한 겹. ``box`` 에 연결이 아직 없으면(연결 중) 할 일 없음 —
+    연결은 자기 시간 제한(CONNECT_TIMEOUT ≤ 전체)으로 끝나고, 끝난 뒤 ``late()`` 가 잡는다."""
+    for sock in list(box):
+        try:
+            sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
 
 
 def _forward(inc: Incoming, target: Target, headers: dict, body: bytes, q: str, total_timeout: float) -> Outgoing:
     deadline = time.monotonic() + max(0.01, total_timeout)
     path = PREFIX + inc.sub + ("?" + q if q else "")
     conn = _open(target, min(CONNECT_TIMEOUT, max(0.01, total_timeout)))
-    timer: Optional[threading.Timer] = None
+    box: list = []                                     # 마감 감시가 끊을 연결(연결된 뒤에 담는다)
+    timer = threading.Timer(max(0.0, deadline - time.monotonic()), _cut, (box,))
+    timer.daemon = True
 
     def late() -> bool:
         return time.monotonic() >= deadline - 0.005
 
     try:
         try:
+            timer.start()                              # 연결을 열기 전에 — 스레드를 못 만들면 연결 없이 끝낸다
+        except RuntimeError:
+            _warn("relay-no-thread")
+            return _err(503, "relay-busy")
+        try:
             conn.connect()
             sock = conn.sock
-            timer = threading.Timer(max(0.0, deadline - time.monotonic()), _cut, (sock,))
-            timer.daemon = True
-            timer.start()
+            box.append(sock)
+            if late():
+                raise socket.timeout("total")
             sock.settimeout(max(0.01, deadline - time.monotonic()))
             conn.putrequest(inc.method, path, skip_host=True, skip_accept_encoding=True)
             for k, v in headers.items():
                 conn.putheader(k, v)
-            conn.endheaders(body if body else None)
+            try:
+                conn.endheaders(body if body else None)
+            except (BrokenPipeError, ConnectionResetError):
+                if late():
+                    raise
+                # 엔진이 본문을 다 받기 전에 답하고 닫았다(413·405 등) — 이미 보낸 답이 있으면 그것을 읽는다
             resp = conn.getresponse()
             if late():                                  # 마감이 머리를 읽는 도중에 끊었다 — 잘린 머리를 판정하지 않는다
                 _warn("engine-timeout")
@@ -377,8 +425,7 @@ def _forward(inc: Incoming, target: Target, headers: dict, body: bytes, q: str, 
             _warn("engine-bad-answer")
             return _err(502, "bad-gateway")
     finally:
-        if timer is not None:
-            timer.cancel()
+        timer.cancel()
         conn.close()
     return Outgoing(status, data)
 

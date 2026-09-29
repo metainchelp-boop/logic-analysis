@@ -22,6 +22,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 BACKEND = pathlib.Path(__file__).resolve().parents[1]
 if str(BACKEND) not in sys.path:
@@ -215,6 +216,16 @@ class ForwardTest(EngineCase):
         self.assertNotIn("x-naver-auto-source", self.headers())
         R.relay(self.inc(real_ip="bad!", peer="also bad"), self.env_tcp)
         self.assertNotIn("x-naver-auto-source", self.headers())
+        R.relay(self.inc(real_ip="1.2.3", peer="172.17.0.4"), self.env_tcp)     # 글자 모양은 맞지만 주소가 아님
+        self.assertEqual(self.headers()["x-naver-auto-source"], "172.17.0.4")
+
+    def test_source_groups_ipv6_by_64(self):
+        """IPv6 는 /64 대역 하나로 — 한 사람이 제 대역 안에서 주소를 바꿔도 엔진에는 같은 곳(S12 2차 검토 ipv6-rotation)."""
+        for real, want in (("2001:db8:1:2:aaaa::1", "2001:db8:1:2::"), ("2001:DB8:1:2:ffff:ffff:ffff:ffff", "2001:db8:1:2::"),
+                           ("2001:db8:1:3::1", "2001:db8:1:3::"), ("::ffff:203.0.113.5", "203.0.113.5"),
+                           ("::1", "::1"), ("203.0.113.5", "203.0.113.5")):
+            R.relay(self.inc(real_ip=real), self.env_tcp)
+            self.assertEqual(self.headers()["x-naver-auto-source"], want, real)
 
     def test_get_body_not_forwarded(self):
         R.relay(self.inc(body=b'{"x":1}', content_type="application/json"), self.env_tcp)
@@ -293,9 +304,21 @@ class RefuseBeforeEngineTest(EngineCase):
         self.assertEqual(len(self.eng.got[-1]["body"]), R.BODY_MAX)
 
     def test_loop_to_itself(self):
-        """엔진 주소를 ③ 자기 자신으로 잘못 넣으면 중계가 넣은 Host(naver-engine)가 되돌아온다 — 바로 503(검토 self-loop)."""
+        """엔진 주소를 ③ 자기 자신으로 잘못 넣으면 중계가 넣은 Host(naver-engine)가 루프백 연결로 · nginx 머리 없이
+        되돌아온다 — 바로 503(검토 self-loop)."""
         for host in (R.ENGINE_HOST_HEADER, "Naver-Engine", R.ENGINE_HOST_HEADER + ":5051"):
-            self.assertRefused(self.inc(host=host, origin=None, fetch_site=None), 503, "engine-misconfigured")
+            for peer in ("127.0.0.1", "::1"):
+                self.assertRefused(self.inc(host=host, origin=None, fetch_site=None, real_ip=None, peer=peer),
+                                   503, "engine-misconfigured")
+
+    def test_outside_host_is_not_a_loop(self):
+        """밖에서 Host 만 흉내 내면(nginx 를 지나 X-Real-IP 가 붙거나 · 루프백이 아닌 연결) 되돌이가 아니다 — 거짓 경보 0
+        (S12 2차 검토 host-loop-false-alarm)."""
+        with self.assertNoLogs("naver_relay", level="WARNING"):
+            for kw in (dict(real_ip=MARK_IP, peer="127.0.0.1"), dict(real_ip=None, peer="172.17.0.1"),
+                       dict(real_ip=MARK_IP, peer="172.17.0.1")):
+                out = R.relay(self.inc(host=R.ENGINE_HOST_HEADER, fetch_site=None, **kw), self.env_tcp)
+                self.assertEqual(out.status, 200, kw)
 
     def test_not_configured(self):
         for env in ({R.ENV_SWITCH: "on"}, {R.ENV_SWITCH: "on", R.ENV_ENGINE: "10.0.0.1:80"}):
@@ -442,8 +465,23 @@ class LogTest(EngineCase):
             R._last_warn.clear()
             R.relay(self.inc(method="POST", sub="/session", content_type="application/json", body=body,
                              query=MARK_QUERY + "=1"), env, total_timeout=0.2)
+        # 연결 시간 제한(대기열이 찬 채 풀리지 않음) — 「socket.timeout」 갈래도 지난다
+        full = os.path.join(self.tmp, "full.sock")
+        lst = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        lst.bind(full)
+        lst.listen(0)
+        self.addCleanup(lst.close)
+        fill = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        fill.connect(full)
+        self.addCleanup(fill.close)
+        R._last_warn.clear()
+        out = R.relay(self.inc(method="POST", sub="/session", content_type="application/json", body=body,
+                               query=MARK_QUERY + "=1"), {R.ENV_SWITCH: "on", R.ENV_ENGINE: "unix:" + full},
+                      total_timeout=0.3)
+        self.assertEqual(out.status, 504)
         text = buf.getvalue()
         self.assertTrue(text)
+        self.assertIn("engine-timeout", text)
         for mark in (MARK_BODY, MARK_IP, MARK_QUERY, "TUFSS0VSVE9LRU4", ENGINE_TOKEN, "172.17.0.1", self.sock):
             self.assertNotIn(mark, text)
 
@@ -458,16 +496,21 @@ class LogTest(EngineCase):
         with self.assertLogs("naver_relay", level="WARNING") as cm:
             for _ in range(3):
                 R.relay(self.inc(), {R.ENV_SWITCH: "on"})
-                R.relay(self.inc(host=R.ENGINE_HOST_HEADER, fetch_site=None), self.env_tcp)
+                R.relay(self.inc(host=R.ENGINE_HOST_HEADER, fetch_site=None, real_ip=None, peer="127.0.0.1"),
+                        self.env_tcp)
         self.assertEqual(len(cm.output), 2)
         self.assertTrue(any("engine-not-configured" in x for x in cm.output))
         self.assertTrue(any("engine-loop" in x for x in cm.output))
 
     def test_repr_hides_values(self):
-        r = repr(self.inc(method="POST", body=MARK_BODY.encode(), origin="https://x.example"))
-        for mark in (MARK_BODY, MARK_IP, ENGINE_TOKEN, "172.17.0.1", HOST, "x.example"):
+        r = repr(self.inc(method="POST", body=MARK_BODY.encode(), origin="https://x.example", query=MARK_QUERY + "=1"))
+        for mark in (MARK_BODY, MARK_IP, ENGINE_TOKEN, "172.17.0.1", HOST, "x.example", MARK_QUERY):
             self.assertNotIn(mark, r)
         self.assertNotIn(MARK_BODY, repr(R.Outgoing(200, MARK_BODY.encode())))
+        for env in (self.env_unix, self.env_tcp):             # 엔진 주소(소켓 경로 · 포트)도 repr 에 없다
+            t = R.engine_target(env)
+            self.assertEqual(repr(t), "Target(%s)" % t.kind)
+        self.assertNotIn(self.sock, repr(R.engine_target(self.env_unix)))
 
 
 class PageFileTest(unittest.TestCase):
@@ -623,6 +666,63 @@ class DeadlineTest(RawCase):
             self.assertEqual((out.status, out.body), (200, body))
 
 
+class EarlyAnswerTest(RawCase):
+    """엔진이 본문을 다 받기 전에 답하고 닫아도(405·413) 그 답을 돌려준다 — 보내다 끊긴 것을 「엔진 없음」으로 바꾸지
+    않는다(S12 2차 검토 unix-early-answer-epipe). 답 없이 닫으면 지금처럼 503."""
+
+    def run_early(self, answer):
+        closed = threading.Event()
+        lst = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        lst.bind(self.path)
+        lst.listen(4)
+        self.addCleanup(lst.close)
+
+        def serve():
+            c, _ = lst.accept()
+            if answer:
+                c.sendall(answer)
+            c.close()
+            closed.set()
+        threading.Thread(target=serve, daemon=True).start()
+        orig = R._UnixConnection.connect
+
+        def connect(conn):
+            orig(conn)
+            closed.wait(3)                 # 엔진이 답하고 닫은 뒤에야 보낸다 — 보내기에서 반드시 끊긴다
+        inc = R.Incoming(method="POST", sub="/session", authorization=("Bearer " + ENGINE_TOKEN,), real_ip=MARK_IP,
+                         host=HOST, fetch_site="same-origin", content_type="application/json",
+                         body=b'{"sso":"' + b"a" * 60000 + b'"}')
+        with mock.patch.object(R._UnixConnection, "connect", connect):
+            return R.relay(inc, self.env)
+
+    def test_answer_before_body_is_passed(self):
+        body = b'{"error":"method-not-allowed"}'
+        out = self.run_early(b"HTTP/1.1 405 Method Not Allowed\r\nContent-Type: application/json\r\nContent-Length: "
+                             + str(len(body)).encode() + b"\r\n\r\n" + body)
+        self.assertEqual((out.status, out.body), (405, body))
+        self.assertEqual(R._slots._value, R.MAX_INFLIGHT)
+
+    def test_closed_without_answer_is_unavailable(self):
+        out = self.run_early(b"")
+        self.assertEqual((out.status, json.loads(out.body)), (503, {"error": "engine-unavailable"}))
+        self.assertEqual(R._slots._value, R.MAX_INFLIGHT)
+
+
+class TimerStartTest(EngineCase):
+    """마감 감시 스레드를 못 만들면 연결을 열지 않고 503 — ③ 500·스택으로 새지 않는다(S12 2차 검토 timer-start)."""
+
+    def test_no_thread_no_connection(self):
+        class NoThread(threading.Timer):
+            def start(self):
+                raise RuntimeError("can't start new thread")
+        with mock.patch.object(R.threading, "Timer", NoThread):
+            out = R.relay(self.inc(), self.env_unix)
+        self.assertEqual((out.status, json.loads(out.body)), (503, {"error": "relay-busy"}))
+        self.assertEqual(self.eng.got, [])
+        self.assertEqual(R._slots._value, R.MAX_INFLIGHT)
+        self.assertEqual(R.relay(self.inc(), self.env_unix).status, 200)
+
+
 class ContentLengthTest(RawCase):
     """엔진 답 길이 칸 — ASCII 숫자만 · 이상한 값은 ③ 500·스택이 아니라 502(검토 content-length-superscript)."""
 
@@ -682,8 +782,8 @@ def _tree(p):
 
 
 class StructureTest(unittest.TestCase):
-    ALLOWED_IMPORTS = {"__future__", "http.client", "logging", "os", "pathlib", "re", "socket", "threading", "time",
-                       "dataclasses", "typing"}
+    ALLOWED_IMPORTS = {"__future__", "http.client", "ipaddress", "logging", "os", "pathlib", "re", "socket",
+                       "threading", "time", "dataclasses", "typing"}
 
     def test_relay_imports_only_stdlib_basics(self):
         got = set()
@@ -714,6 +814,25 @@ class StructureTest(unittest.TestCase):
                     if isinstance(c, ast.Call) and isinstance(c.func, ast.Name) and c.func.id == "_open":
                         self.assertEqual(fn.name, "_forward")     # 연결은 슬롯을 잡은 뒤 한 곳에서만
 
+    def test_warn_kinds_are_fixed_words(self):
+        """기록 종류는 정해 둔 글자뿐 — 모든 _warn 부르는 곳의 인자가 글자 상수 · 예외 종류 이름 · 그 둘의 고르기만
+        (주소·쿼리·경로·값을 이어 붙이는 길이 없다 · 방해 시험이 처음에 놓친 모양)."""
+        def ok(a):
+            if isinstance(a, ast.Constant) and isinstance(a.value, str):
+                return True
+            if isinstance(a, ast.Attribute) and a.attr == "__name__" and isinstance(a.value, ast.Call) \
+                    and isinstance(a.value.func, ast.Name) and a.value.func.id == "type":
+                return True
+            if isinstance(a, ast.IfExp):
+                return ok(a.body) and ok(a.orelse)
+            return False
+        calls = [c for c in ast.walk(_tree(RELAY_SRC)) if isinstance(c, ast.Call)
+                 and isinstance(c.func, ast.Name) and c.func.id == "_warn"]
+        self.assertGreaterEqual(len(calls), 10)
+        for c in calls:
+            self.assertEqual((len(c.args), c.keywords), (1, []), ast.unparse(c))
+            self.assertTrue(ok(c.args[0]), ast.unparse(c))
+
     def test_logs_carry_kind_only(self):
         for c in ast.walk(_tree(RELAY_SRC)):
             if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute) and \
@@ -738,8 +857,16 @@ class StructureTest(unittest.TestCase):
         self.assertEqual(keys, {"authorization", "content-type", "x-real-ip", "origin", "host", "sec-fetch-site"})
         src = ROUTER_SRC.read_text(encoding="utf-8")
         for bad in ("cookies", "dict(request.headers", "request.headers.items", "headers.raw", "x-forwarded-for",
-                    "x-naver-auto-source", "urllib", "requests", "httpx"):
+                    "x-naver-auto-source"):
             self.assertNotIn(bad, src.lower())
+        mods = set()                       # 라우터는 연결을 만들지 않는다 — 정한 모듈만(글자 검사는 starlette.requests 에 걸린다)
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Import):
+                mods |= {a.name for a in n.names}
+            elif isinstance(n, ast.ImportFrom):
+                mods.add("." * n.level + (n.module or ""))
+        self.assertEqual(mods, {"__future__", "pathlib", "typing", "fastapi", "fastapi.responses", "fastapi.routing",
+                                "starlette.requests", "starlette.routing", ".."})
 
     def test_page_files_outside_static_mount(self):
         """화면 파일 자리는 정적 마운트 폴더 밖 — 마운트가 어떤 주소 철자로도 닿지 못한다(검토 static-mount-bypass)."""

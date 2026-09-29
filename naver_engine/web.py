@@ -53,14 +53,16 @@ BODY_MAX = 64 * 1024                 # ③ 중계 상한과 같다(S12)
 QUERY_MAX = 2048
 LOGIN_WINDOW = 60.0                  # 로그인은 이 초 안에
 LOGIN_MAX = 60                       # 전체 이만큼까지(① 커넥션 풀을 지킨다 · 프로세스 하나 기준)
-LOGIN_SOURCE_MAX = 6                 # 한 곳(요청한 곳)에서 이만큼까지 — 한 곳이 모두의 로그인을 막지 못하게(검토 login-throttle)
-#                                      ① 이 받아 준 로그인은 한 곳 창에서 되돌린다 — 사무실처럼 여럿이 한 주소로 나가도 막히지 않게(S12 검토)
+LOGIN_SOURCE_MAX = 6                 # 한 곳(요청한 곳)에서 ① 이 **거절한** 시도가 창마다 이만큼이면 그 곳을 막는다(검토 login-throttle)
+#                                      받아 준 로그인 · ① 장애 · 기다리는 중인 시도는 세지 않는다 — 사무실처럼 여럿이 한 주소로 나가도(S12 검토)
+LOGIN_TOKEN_MAX = 3                  # 같은 ① 토큰으로 창마다 이만큼 — 받아 주는 토큰 하나를 되풀이해 전체 창을 채우지 못하게(S12 2차 검토)
 LOGIN_SOURCES_KEPT = 4096            # 기억하는 요청한 곳 수 상한(메모리)
 # 요청한 곳 — ③ 중계(S12)가 넣는 머리. 중계(같은 서버 · 루프백)에서 온 요청일 때만 믿고, 아니면 연결한 주소를 쓴다.
 SOURCE_HEADER = "HTTP_X_NAVER_AUTO_SOURCE"
 TRUSTED_PEERS = frozenset({"127.0.0.1", "::1"})
 # 유닉스 소켓으로 받는 서버(S14)는 IP 가 없다 — 그 서버가 environ 에 이 표지(True)를 넣으면 루프백과 같이 믿는다.
 # HTTP_ 로 시작하지 않는 키라 브라우저 머리로는 만들 수 없다(서버만 넣는다) · 소켓 파일 권한이 곧 경계.
+# 표지는 연결 주소가 **빈 값**(IP 없는 연결)일 때만 본다 — 미들웨어가 모든 요청에 넣어도 TCP 쪽은 주소로 판단(S12 2차 검토).
 TRUSTED_TRANSPORT = "naver_engine.trusted_transport"
 _SOURCE = re.compile(r"[0-9A-Fa-f:.]{1,64}")
 LINK_BATCH_MAX = 50
@@ -227,16 +229,19 @@ class App:
                  signer: SE.TokenSigner, profiles: EP.ErpProfileReader, clock: Optional[Callable[[], datetime]] = None,
                  previewer: Optional[Callable[[Any], List[str]]] = None, login_max: int = LOGIN_MAX,
                  login_window: float = LOGIN_WINDOW, monotonic: Optional[Callable[[], float]] = None,
-                 login_source_max: int = LOGIN_SOURCE_MAX) -> None:
+                 login_source_max: int = LOGIN_SOURCE_MAX, login_token_max: int = LOGIN_TOKEN_MAX) -> None:
         if not isinstance(signer, SE.TokenSigner):
             raise TypeError("signer 는 TokenSigner 여야 합니다(비밀값 없이 시작하지 않는다)")
         self._open_read, self._write_fn, self._signer, self._profiles = open_read, write, signer, profiles
         self._clock = clock or (lambda: datetime.now(KST))
         self._previewer = previewer
         self._login_max, self._login_window, self._login_source_max = login_max, login_window, login_source_max
+        self._login_token_max = login_token_max
         self._mono = monotonic or _time.monotonic
-        self._logins: List[float] = []
-        self._logins_by: Dict[str, List[float]] = {}
+        self._logins: List[float] = []                    # ① 을 부른 시도(전체)
+        self._rejected_by: Dict[str, List[float]] = {}    # 한 곳 → ① 이 거절한 시도
+        self._tokens: Dict[str, List[float]] = {}         # ① 토큰(열쇠 글자) → ① 을 부른 시도
+        self._untrusted_warned = -1e18                    # 믿지 않는 연결의 요청한 곳 머리 — 1분 한 줄
         self._quiet_audit: Dict[str, float] = {}   # 로그인 전 거절 코드 → 마지막으로 기록한 때(창마다 한 줄)
         self._lock = threading.Lock()
 
@@ -356,45 +361,59 @@ class App:
             self._quiet_audit[result] = t
         self._audit(None, "login", "session", None, result, now, required=False)
 
-    def _throttle(self, source: str, now: datetime) -> float:
-        """① 을 부를 로그인만 센다 — 한 곳에서 창마다 ``login_source_max`` · 전체 ``login_max``. 센 시각을 돌려준다
-        (① 이 받아 주면 ``_refund`` 가 한 곳 창에서만 되돌린다 · 전체 창은 그대로 — ① 커넥션 보호)."""
+    def _window(self, book: Dict[str, List[float]], key: str, t: float) -> List[float]:
+        mine = [x for x in book.get(key, ()) if t - x < self._login_window]
+        if mine:
+            book[key] = mine
+        else:
+            book.pop(key, None)
+        return mine
+
+    def _forget(self, book: Dict[str, List[float]]) -> None:
+        if len(book) > LOGIN_SOURCES_KEPT:   # 오래된 것부터 잊는다(기억 상한)
+            for k in sorted(book, key=lambda k: book[k][-1])[:len(book) // 2]:
+                del book[k]
+
+    def _throttle(self, source: str, token_key: str, now: datetime) -> None:
+        """① 을 부를 로그인만 센다 — 전체 창 ``login_max``(① 커넥션 보호) · 같은 토큰 창마다 ``login_token_max`` ·
+        한 곳에서 ① 이 **거절한** 시도가 ``login_source_max`` 에 닿으면 그 곳을 막는다(받아 준 로그인 · ① 장애 · 기다리는
+        중인 시도는 한 곳 창에 없다 — 사무실 한 주소 · 검토 office-nat · inflight)."""
         t = self._mono()
         with self._lock:
             self._logins = [x for x in self._logins if t - x < self._login_window]
-            mine = [x for x in self._logins_by.get(source, ()) if t - x < self._login_window]
-            over = len(mine) >= self._login_source_max or len(self._logins) >= self._login_max
+            rejected = self._window(self._rejected_by, source, t)
+            same = self._window(self._tokens, token_key, t)
+            over = (len(rejected) >= self._login_source_max or len(same) >= self._login_token_max
+                    or len(self._logins) >= self._login_max)
             if not over:
                 self._logins.append(t)
-                mine.append(t)
-            if mine:
-                self._logins_by[source] = mine
-            else:
-                self._logins_by.pop(source, None)
-            if len(self._logins_by) > LOGIN_SOURCES_KEPT:   # 오래된 곳부터 잊는다
-                for k in sorted(self._logins_by, key=lambda k: self._logins_by[k][-1])[:len(self._logins_by) // 2]:
-                    del self._logins_by[k]
+                self._tokens[token_key] = same + [t]
+            self._forget(self._tokens)
         if over:
             self._quiet("throttled", now)
             raise HttpError(429, "too-many-logins")
-        return t
 
-    def _refund(self, source: str, t: float) -> None:
-        """① 이 받아 준 로그인 — 한 곳 창에서 되돌린다(한 곳 상한은 ① 이 거절한 시도만 막는다 · 검토 office-nat-bucket)."""
+    def _rejected(self, source: str) -> None:
+        """① 이 거절한 시도 — 그 곳의 창에 하나(이것만 한 곳 상한을 채운다)."""
+        t = self._mono()
         with self._lock:
-            mine = self._logins_by.get(source)
-            if mine and t in mine:
-                mine.remove(t)
-                if not mine:
-                    self._logins_by.pop(source, None)
+            self._rejected_by[source] = self._window(self._rejected_by, source, t) + [t]
+            self._forget(self._rejected_by)
 
-    @staticmethod
-    def _source(environ) -> str:
+    def _source(self, environ) -> str:
         peer = environ.get("REMOTE_ADDR") or ""
         hdr = environ.get(SOURCE_HEADER) or ""
-        trusted = peer in TRUSTED_PEERS or environ.get(TRUSTED_TRANSPORT) is True
+        trusted = peer in TRUSTED_PEERS or (peer == "" and environ.get(TRUSTED_TRANSPORT) is True)
         if trusted and isinstance(hdr, str) and _SOURCE.fullmatch(hdr):
             return hdr
+        if hdr and not trusted:   # 머리가 왔는데 믿을 연결이 아님 — 소켓 서버 표지 빠짐·위조가 조용히 묻히지 않게(값·주소 없이)
+            t = self._mono()
+            with self._lock:
+                warn = t - self._untrusted_warned >= self._login_window
+                if warn:
+                    self._untrusted_warned = t
+            if warn:
+                log.warning("요청한 곳 머리를 믿지 않음 — 믿을 연결이 아님(소켓 서버 표지·루프백 확인)")
         return peer if isinstance(peer, str) and peer else "unknown"
 
     def _session_out(self, token: str, now: datetime, narrowed: bool) -> dict:
@@ -416,13 +435,14 @@ class App:
             self._quiet(e.kind, now)
             raise HttpError(401, e.kind) from None
         source = self._source(environ or {})
-        counted = self._throttle(source, now)   # ① 을 부를 시도만 센다
+        self._throttle(source, sso.bucket_key(), now)   # ① 을 부를 시도만 센다
         try:
             prof = self._profiles.read_profile(sso)
         except EP.ProfileError as e:
+            if e.kind == EP.KIND_REJECTED:
+                self._rejected(source)   # ① 이 거절한 시도만 그 곳의 창에(장애·모양 이상은 아님)
             self._audit(None, "login", "session", None, e.kind, now, required=False)
             raise HttpError(401 if e.kind == EP.KIND_REJECTED else 503, e.kind) from None
-        self._refund(source, counted)   # ① 이 받아 준 사람 — 한 곳 창에서 되돌린다(전체 창은 그대로)
         store = self._open_read()
         try:
             org = W.load_org(store)

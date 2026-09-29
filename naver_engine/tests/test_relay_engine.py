@@ -92,24 +92,30 @@ class RelayToEngineTest(TW.WebBase):
         self.addCleanup(srv.server_close)
         self.server, self.env = srv, {R.ENV_SWITCH: "on", R.ENV_ENGINE: "unix:" + path}
 
-    def logins(self, source, n, sso=TW.BAD_SSO):
-        return [self.via(self.inc("POST", "/session", body={"sso": sso}, real_ip=source)).status for _ in range(n)]
+    def logins(self, source, n, sso=None, start=0):
+        """``sso`` 가 없으면 시도마다 다른 거절 토큰(같은 토큰 상한은 따로 시험한다)."""
+        out = []
+        for i in range(n):
+            s = sso(start + i) if callable(sso) else (sso or TW.bad(start + i))
+            out.append(self.via(self.inc("POST", "/session", body={"sso": s}, real_ip=source)).status)
+        return out
 
     def test_unix_socket_with_mark_counts_each_source(self):
         """유닉스 소켓(S14 권장) — 서버가 믿음 표지를 넣으면 중계가 넘긴 요청한 곳마다 따로 센다(검토 unix-source-collapse)."""
         self.app = self.make_app(login_max=20, login_source_max=2, monotonic=lambda: 100.0)
         self.unix(mark=True)
         self.assertEqual(self.logins("203.0.113.10", 3), [401, 401, 429])
-        self.assertEqual(self.logins("203.0.113.20", 2), [401, 401])      # 다른 곳은 따로
-        self.erp.person(TW.MARK_SSO, 100)
-        self.assertEqual(self.logins("203.0.113.30", 5, sso=TW.MARK_SSO), [200] * 5)   # ① 이 받아 준 로그인은 한 곳 상한 밖
+        self.assertEqual(self.logins("203.0.113.20", 2, start=10), [401, 401])      # 다른 곳은 따로
+        for i in range(5):
+            self.erp.person(TW.tok(i), 100)
+        self.assertEqual(self.logins("203.0.113.30", 5, sso=TW.tok), [200] * 5)   # ① 이 받아 준 로그인은 한 곳 상한 밖
 
     def test_unix_socket_without_mark_collapses(self):
         """표지 없는 유닉스 서버 = 모두 한 곳 — S14 가 표지를 빠뜨리면 이렇게 된다는 것을 고정(표지가 왜 필요한지)."""
         self.app = self.make_app(login_max=20, login_source_max=2, monotonic=lambda: 100.0)
         self.unix(mark=False)
         self.assertEqual(self.logins("203.0.113.10", 2), [401, 401])
-        self.assertEqual(self.logins("203.0.113.20", 1), [429])
+        self.assertEqual(self.logins("203.0.113.20", 1, start=10), [429])
 
     def test_same_answer_as_direct(self):
         tok = self.token(0)
@@ -127,7 +133,7 @@ class RelayToEngineTest(TW.WebBase):
         self.app = self.make_app(login_max=10, login_source_max=2, monotonic=lambda: 100.0)
         self.erp.person(TW.MARK_SSO, 100)
         self.assertEqual(self.logins("203.0.113.10", 3), [401, 401, 429])
-        self.assertEqual(self.logins("203.0.113.20", 1), [401])
+        self.assertEqual(self.logins("203.0.113.20", 1, start=10), [401])
         self.assertEqual(self.logins("203.0.113.20", 1, sso=TW.MARK_SSO), [200])
 
     def test_login_then_board_through_relay(self):
@@ -146,12 +152,50 @@ class RelayToEngineTest(TW.WebBase):
         self.assertEqual(R.QUERY_MAX, WEB.QUERY_MAX)
         self.assertEqual(R.SOURCE_HEADER.upper().replace("-", "_"), WEB.SOURCE_HEADER[len("HTTP_"):])
         self.assertEqual(dict(R.RESPONSE_HEADERS), dict(WEB.HEADERS))
-        # 엔진 경로는 모두 중계 경로 모양 안에 든다(중계가 막는 엔진 경로 0)
-        import re
-        for route in WEB.ROUTES:
-            sample = re.sub(r"\(\?P<\w+>[^)]*\)", "12", route.pattern.pattern).replace("org|stages|accounts", "org")
-            self.assertTrue(R._SUB.fullmatch(sample), sample)
         self.assertEqual({r.method for r in WEB.ROUTES}, {"GET", "POST"})
+        self.assertEqual(R.PASS_STATUS, frozenset(WEB.REASONS))     # 엔진이 새 상태를 쓰면 조용히 502 가 되지 않게
+
+    def test_every_engine_route_fits_relay_path(self):
+        """엔진 경로는 모두 중계 경로 모양 안에 든다(중계가 막는 엔진 경로 0) — 이름 붙은 묶음마다 글자 종류·최대 길이로
+        가장 긴 표본을 만들어 대 본다(묶음을 「12」로 바꿔 보던 판은 점·긴 값이 든 새 경로를 못 잡았다 · 검토 route-guard-gap)."""
+        import re
+        group = re.compile(r"\(\?P<\w+>([^()]*)\)")
+        ok_chars = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-")
+
+        def samples(body):
+            m = re.fullmatch(r"\[([^\]]+)\]\{(\d+),(\d+)\}", body)
+            if m:
+                chars = set()
+                spec = m.group(1)
+                i = 0
+                while i < len(spec):
+                    if i + 2 < len(spec) and spec[i + 1] == "-":
+                        chars |= {chr(c) for c in range(ord(spec[i]), ord(spec[i + 2]) + 1)}
+                        i += 3
+                    else:
+                        chars.add(spec[i])
+                        i += 1
+                self.assertLessEqual(chars, ok_chars, body)
+                self.assertLessEqual(int(m.group(3)), 64, body)
+                return [min(chars) * int(m.group(3)), min(chars) * int(m.group(2))]
+            words = body.split("|")
+            for w in words:
+                self.assertRegex(w, r"^[A-Za-z0-9_-]{1,64}$", body)
+            return words
+        n = 0
+        for route in WEB.ROUTES:
+            pat = route.pattern.pattern
+            bodies = group.findall(pat)
+            self.assertEqual(len(bodies), pat.count("(?P<"), pat)       # 묶음 안에 묶음이 없다(표본을 빠짐없이 만든다)
+            variants = [pat]
+            for b in bodies:
+                variants = [v.replace("(?P<", "\0", 1) for v in variants]
+                variants = [re.sub(r"\x00\w+>" + re.escape(b) + r"\)", lambda _m, s=s: s, v, count=1)
+                            for v in variants for s in samples(b)]
+            for v in variants:
+                self.assertTrue(R._SUB.fullmatch(v), v)
+                n += 1
+        self.assertGreaterEqual(n, len(WEB.ROUTES))
 
 
 if __name__ == "__main__":

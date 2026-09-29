@@ -23,6 +23,16 @@ HAS_FASTAPI = all(importlib.util.find_spec(m) for m in ("fastapi", "httpx", "uvi
 
 ENGINE_TOKEN = "v1.eyJzdWIiOjB9TUFSS0VSVE9LRU4." + "S" * 43
 ALLOWED = {"host", "accept", "connection", "content-type", "content-length", "authorization", "x-naver-auto-source"}
+# 자식 파이썬에 넘기는 환경 — 정한 이름만(운영 비밀값 · 외부 연동 스위치를 물려받지 않는다 · S12 2차 검토)
+KEEP_ENV = ("PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR")
+TEST_JWT_SECRET = "s12-relay-test-only-not-a-secret"
+
+
+def child_env(tmp):
+    env = {k: os.environ[k] for k in KEEP_ENV if k in os.environ}
+    env.update({"DB_PATH": str(tmp / "t.db"), "FERNET_KEY_FILE": str(tmp / "k.key"), "PYTHONDONTWRITEBYTECODE": "1",
+                "JWT_SECRET": TEST_JWT_SECRET})
+    return env
 
 
 def run_harness(mode, *extra, timeout=90):
@@ -37,11 +47,10 @@ def run_harness(mode, *extra, timeout=90):
         (naver / "m6.js").write_text("// M6PROBE-JS", encoding="utf-8")
         (naver / "secret.py").write_text("M6PROBE-PY", encoding="utf-8")
         shutil.copy(HARNESS, tmp / "harness.py")
-        env = {k: v for k, v in os.environ.items() if not k.startswith("NAVER_AUTO_")}
-        env.update({"DB_PATH": str(tmp / "t.db"), "FERNET_KEY_FILE": str(tmp / "k.key"), "PYTHONDONTWRITEBYTECODE": "1"})
+        env = child_env(tmp)
         p = subprocess.run([sys.executable, "-W", "ignore", "harness.py", mode, *extra], cwd=tmp, env=env,
                            capture_output=True, text=True, timeout=timeout)
-        line = [ln for ln in p.stdout.splitlines() if ln.startswith("@@RESULT@@")]
+        line = [ln for ln in p.stdout.split("\n") if ln.startswith("@@RESULT@@")]
         if not line:
             raise AssertionError(f"harness {mode} 실패: {p.returncode}\n{p.stdout[-2000:]}\n{p.stderr[-4000:]}")
         return json.loads(line[-1][len("@@RESULT@@"):])
@@ -87,9 +96,13 @@ class M6EntranceTest(unittest.TestCase):
             self.assertNotIn("M6PROBE", on[key]["text"])
             self.assertNotIn("import", on[key]["text"])
         self.assertEqual(on[("POST", "/naver/")]["status"], 405)
+        for key in (("GET", "/naver/secret.py"), ("GET", "/naver/missing.js"), ("POST", "/naver/")):
+            h = on[key]["headers"]                             # 화면 쪽 404·405 도 sso 가 새지 않게(검토 off-404-referer)
+            self.assertEqual((h.get("referrer-policy"), h.get("cache-control")), ("no-referrer", "no-store"), key)
         eng = on[("GET", "/api/naver-auto/board")]
         self.assertEqual((eng["status"], json.loads(eng["text"])), (503, {"error": "engine-unavailable"}))
         self.assertEqual(self.r["health"]["status"], 200)
+        self.assertFalse(self.r["collector_started"])        # 시험이 수집 스레드를 띄우지 않았다
 
 
 @unittest.skipUnless(HAS_FASTAPI, "fastapi 없음 — 서버 이미지 또는 시험용 가상환경에서 돌린다")
@@ -105,6 +118,19 @@ class M6BypassTest(unittest.TestCase):
         for p, res in self.r["off"]:
             self.assertNotIn("M6PROBE", res["text"], p)
             self.assertIn(res["status"], (400, 404), p)
+
+    def test_off_dot_segments_same_as_twin(self):
+        """꺼져 있으면 점 조각 주소도 S12 이전과 같은 답 — 같은 모양의 없는 주소(naver → nxver)와 상태·본문·머리가 같다
+        (라우터가 아예 맞지 않는다 · 검토 off-dot-segment-fingerprint)."""
+        self.assertGreaterEqual(len(self.r["dots"]), 6)
+        for p, twin, a, b in self.r["dots"]:
+            self.assertEqual((a["status"], a["text"]), (b["status"], b["text"]), p)
+            skip = {"date", "location"}
+            self.assertEqual({k: v for k, v in a["headers"].items() if k not in skip},
+                             {k: v for k, v in b["headers"].items() if k not in skip}, p)
+            self.assertEqual(a["headers"].get("location", "").replace("naver", "nxver"),
+                             b["headers"].get("location", ""), p)
+        self.assertIn(200, {a["status"] for _p, _t, a, _b in self.r["dots"]})    # 옛 답(정적 파일)이 그대로 나오는 것도 본다
 
     def test_on_only_through_router(self):
         served = []
@@ -139,6 +165,8 @@ class BodyReadTest(unittest.TestCase):
         async def receive():
             c = next(it, None)
             pulled.append(c)
+            if c == "GONE":
+                return {"type": "http.disconnect"}
             if c is None:
                 return {"type": "http.request", "body": b"", "more_body": False}
             return {"type": "http.request", "body": c, "more_body": True}
@@ -171,6 +199,11 @@ class BodyReadTest(unittest.TestCase):
     def test_under_limit_read_whole(self):
         got, _ = self.read([b'{"sso":', b'"x"}'])
         self.assertEqual(got, b'{"sso":"x"}')
+
+    def test_client_gone_is_quiet(self):
+        """보내다 끊은 브라우저 — 의존성 밖으로 예외(스택 기록)가 새지 않는다(검토 client-disconnect-traceback)."""
+        got, _ = self.read([b"{", "GONE"])
+        self.assertEqual(got, 400)
 
     def test_off_reads_nothing(self):
         got, pulled = self.read([b"x" * 4096] * 3, on=False)
@@ -237,6 +270,36 @@ class M7SlowEngineTest(unittest.TestCase):
         self.assertLess(dur, 1.0, r)
         self.assertEqual([s for s, _d in r["slow"]], [200, 200, 200])
         self.assertTrue(all(d >= 2.3 for _s, d in r["slow"]), r)
+
+
+class HarnessEnvTest(unittest.TestCase):
+    """시험 도우미가 자식 파이썬에 넘기는 환경 — 정한 이름만 · 운영 비밀값 이름 0 · JWT 비밀값은 시험 값."""
+
+    def test_child_env_allowlist(self):
+        planted = {"JWT_SECRET": "PRODMARK", "ANTHROPIC_API_KEY": "PRODMARK", "ERP_SYNC_API_KEY": "PRODMARK",
+                   "ERP_SYNC_URL": "PRODMARK", "ERP_SYNC_STATUS": "1", "MC_AD_API_TOKEN": "PRODMARK",
+                   "YOUTUBE_API_KEY": "PRODMARK", "NAVER_AUTO_WEB": "on", "NAVER_AUTO_ENGINE": "unix:/x.sock"}
+        old = {k: os.environ.get(k) for k in planted}
+        os.environ.update(planted)
+        try:
+            env = child_env(pathlib.Path("/tmp/x"))
+        finally:
+            for k, v in old.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        self.assertLessEqual(set(env), set(KEEP_ENV) | {"DB_PATH", "FERNET_KEY_FILE", "PYTHONDONTWRITEBYTECODE", "JWT_SECRET"})
+        self.assertNotIn("PRODMARK", json.dumps(env))
+        self.assertEqual(env["JWT_SECRET"], TEST_JWT_SECRET)
+
+    def test_harness_holds_collector_lock_first(self):
+        """도우미는 app.main 을 부르기 전에 수집 잠금을 먼저 잡는다 — 시험이 06:00 수집 스레드를 띄우지 않게."""
+        src = HARNESS.read_text(encoding="utf-8")
+        self.assertIn("collector.lock", src)
+        main_block = src[src.index('if __name__ == "__main__":'):]
+        self.assertLess(main_block.index("_hold_collector_lock()"), main_block.index("fn = "))
+        self.assertNotIn("import app", src.split("\ndef ")[0])    # 맨 위에서 app 을 부르지 않는다
 
 
 if __name__ == "__main__":

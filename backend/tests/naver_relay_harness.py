@@ -16,6 +16,17 @@ import time
 
 ROOT = os.getcwd()
 sys.path.insert(0, ROOT)
+_LOCK = []
+
+
+def _hold_collector_lock():
+    """app.main 을 부르기 전에 수집 잠금을 먼저 잡는다 — 그러면 start_scheduler 가 「다른 워커가 가졌다」로 보고 수집
+    스레드(06:00 외부 호출)를 띄우지 않는다. 잠금 파일은 임시 폴더(DB_PATH 옆)."""
+    import fcntl
+    path = os.path.join(os.path.dirname(os.environ["DB_PATH"]), "collector.lock")
+    fh = open(path, "w")
+    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    _LOCK.append(fh)
 
 ENGINE_TOKEN = "v1.eyJzdWIiOjB9TUFSS0VSVE9LRU4." + "S" * 43
 
@@ -102,6 +113,7 @@ def mode_m6():
                       ("GET", "/api/naver-auto/board"), ("GET", "/api/naver-auto/../x")):
         out["on"].append([method, p, resp(c.request(method, p))])
     out["health"] = resp(c.get("/api/health"))
+    out["collector_started"] = "_lock_fh" in vars(sys.modules["app.collector"])
     return out
 
 
@@ -109,6 +121,10 @@ BYPASS = ["//naver/", "//naver/index.html", "/./naver/index.html", "/%2e/naver/i
           "/%2fnaver/index.html", "///naver/m6.js", "/naver//index.html", "/naver/./index.html", "/NAVER/",
           "/naver_page/index.html", "/static/../naver_page/index.html", "/%6eaver/index.html", "/naver%2findex.html",
           "/naver/index.html%00", "/naver/", "/naver/index.html"]
+
+
+DOTS = ["/naver/../index.html", "/naver/..", "/naver/.", "/api/naver-auto/../../app.js", "/api/naver-auto/..",
+        "/naver/%2e%2e/index.html", "/api/naver-auto/%2e%2e/%2e%2e/index.html"]
 
 
 def mode_bypass():
@@ -139,10 +155,13 @@ def mode_bypass():
         hdrs = {ln.split(":", 1)[0].strip().lower(): ln.split(":", 1)[1].strip() for ln in lines[1:] if ":" in ln}
         return {"status": int(lines[0].split()[1]), "text": body.decode("latin-1")[:300], "headers": hdrs}
 
-    out = {"off": [], "on": []}
+    out = {"off": [], "on": [], "dots": []}
     os.environ.pop("NAVER_AUTO_WEB", None)
     for p in BYPASS:
         out["off"].append([p, raw(p)])
+    for p in DOTS:                                     # 꺼짐 — 같은 모양의 없는 주소와 대조
+        twin = p.replace("naver", "nxver")
+        out["dots"].append([p, twin, raw(p), raw(twin)])
     os.environ["NAVER_AUTO_WEB"] = "on"
     for p in BYPASS:
         out["on"].append([p, raw(p)])
@@ -233,8 +252,9 @@ def mode_m7():
 
 
 if __name__ == "__main__":
+    _hold_collector_lock()
     fn = {"m6": mode_m6, "bypass": mode_bypass, "headers": mode_headers, "m7": mode_m7}[sys.argv[1]]
     res = fn()
-    sys.stdout.write("\n@@RESULT@@" + json.dumps(res, ensure_ascii=False) + "\n")
+    sys.stdout.write("\n@@RESULT@@" + json.dumps(res) + "\n")   # ASCII 로 — 본문의 \x85 같은 글자가 줄을 끊지 않게
     sys.stdout.flush()
     os._exit(0)

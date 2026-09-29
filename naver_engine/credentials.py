@@ -52,6 +52,11 @@ class Secret:
             raise TypeError("서명할 글은 bytes 여야 합니다")
         return hmac.new(self._value.encode("utf-8"), bytes(message), hashlib.sha256).digest()
 
+    def bucket_key(self) -> str:
+        """같은 값끼리만 같은 글자(SHA-256 앞 32자) — 로그인 되풀이를 토큰마다 세는 열쇠(S12 검토).
+        이 프로세스 기억 안에서만 쓴다 · 저장·기록·응답에 싣지 않는다."""
+        return hashlib.sha256(self._value.encode("utf-8")).hexdigest()[:32]
+
     def __setattr__(self, name, value):  # 한 번 만들면 못 바꾼다
         raise AttributeError("Secret 은 바꿀 수 없습니다")
 

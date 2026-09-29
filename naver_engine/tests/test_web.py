@@ -51,6 +51,15 @@ MARK_PHONE = "010-7777-7777"
 BAD_SSO = MARK_SSO.replace("SSOMARK", "BADMARK")                                # 모양은 맞지만 ① 이 거절하는 토큰
 
 
+def tok(i: int) -> str:
+    """서로 다른 ① 토큰(표지 SSOMARK 는 그대로 — 어디에 남는지 보는 시험이 함께 잡는다)."""
+    return MARK_SSO[:-6] + f"c{i:05d}"
+
+
+def bad(i: int) -> str:
+    return BAD_SSO[:-6] + f"c{i:05d}"
+
+
 def at(d: date, h: int, m: int = 0) -> datetime:
     return datetime.combine(d, time(h, m), tzinfo=KST)
 
@@ -540,9 +549,11 @@ class LoginTest(WebBase):
         self.assertIn("no-scope", results)
 
     def test_login_throttled(self):
+        """전체 창 — 서로 다른 토큰이어도 창마다 login_max 번만 ① 을 부른다(① 커넥션 보호)."""
         self.app = self.make_app(login_max=3, monotonic=lambda: 100.0)
-        self.erp.person(MARK_SSO, 100)
-        self.assertEqual([self.login()[0] for _ in range(4)], [200, 200, 200, 429])
+        for i in range(4):
+            self.erp.person(tok(i), 100)
+        self.assertEqual([self.login(tok(i))[0] for i in range(4)], [200, 200, 200, 429])
 
     def src(self, source, peer="127.0.0.1", sso=MARK_SSO, environ=None):
         s, b, _h, _p = self.call("POST", "/session", body={"sso": sso},
@@ -562,40 +573,72 @@ class LoginTest(WebBase):
 
     def test_one_source_cannot_lock_out_everyone(self):
         """한 곳(③ 중계가 넘긴 요청한 곳)에서 ① 이 거절할 토큰을 몰아쳐도 다른 곳의 로그인은 된다 · 전체 상한은 따로.
-        ① 이 받아 준 로그인은 한 곳 창에서 되돌린다 — 한 곳 상한은 거절된 시도만 막는다(S12 검토 office-nat-bucket)."""
+        한 곳 상한은 ① 이 **거절한** 시도만 센다(S12 검토 office-nat · inflight · unavailable)."""
         self.app = self.make_app(login_max=8, login_source_max=2, monotonic=lambda: 100.0)
-        self.erp.person(MARK_SSO, 100)
-        self.assertEqual([self.src("10.0.0.1", sso=BAD_SSO) for _ in range(3)], [401, 401, 429])   # 전체 2
-        self.assertEqual(self.src("10.0.0.1"), 429)            # 그 곳은 창이 지날 때까지 막힘(진짜 토큰도)
-        self.assertEqual(self.src("10.0.0.2"), 200)            # 다른 곳은 된다 · 전체 3
+        for i in range(10):
+            self.erp.person(tok(i), 100)
+        self.assertEqual([self.src("10.0.0.1", sso=bad(i)) for i in range(3)], [401, 401, 429])   # 전체 2
+        self.assertEqual(self.src("10.0.0.1", sso=tok(0)), 429)       # 그 곳은 창이 지날 때까지 막힘(진짜 토큰도)
+        self.assertEqual(self.src("10.0.0.2", sso=tok(1)), 200)       # 다른 곳은 된다 · 전체 3
         # 중계가 아닌 곳이 넣은 머리는 믿지 않는다 — 연결한 주소 하나로 센다(머리를 믿었다면 셋 다 401)
-        self.assertEqual([self.src(f"10.9.9.{i}", peer="203.0.113.5", sso=BAD_SSO) for i in range(3)],
-                         [401, 401, 429])                       # 전체 5
-        self.assertEqual([self.src("10.0.0.3", sso=BAD_SSO), self.src("10.0.0.4", sso=BAD_SSO)], [401, 401])   # 7
-        self.assertEqual(self.src("10.0.0.5"), 200)            # 8
-        self.assertEqual(self.src("10.0.0.6"), 429)            # 전체 상한(8) — 받아 준 로그인도 전체에서는 센다
+        with self.assertLogs("naver_engine.web", "WARNING"):
+            got = [self.src(f"10.9.9.{i}", peer="203.0.113.5", sso=bad(10 + i)) for i in range(3)]
+        self.assertEqual(got, [401, 401, 429])                         # 전체 5
+        self.assertEqual([self.src("10.0.0.3", sso=bad(20)), self.src("10.0.0.4", sso=bad(21))], [401, 401])   # 7
+        self.assertEqual(self.src("10.0.0.5", sso=tok(2)), 200)       # 8
+        self.assertEqual(self.src("10.0.0.6", sso=tok(3)), 429)       # 전체 상한(8)
         self.assertEqual([r["result"] for r in self.st.access_log()].count("throttled"), 1)   # 창마다 한 줄
 
     def test_office_many_people_one_address(self):
-        """사무실처럼 여럿이 한 주소(nginx X-Real-IP 하나)로 들어와도 ① 이 받아 준 로그인은 한 곳 상한(6)을 쓰지 않는다 ·
+        """사무실처럼 여럿이 한 주소(nginx X-Real-IP 하나)로 들어와도 ① 이 받아 준 로그인은 한 곳 상한(6)과 무관 ·
         같은 주소에서 거절될 토큰은 6번까지."""
         self.app = self.make_app(monotonic=lambda: 100.0)
-        self.erp.person(MARK_SSO, 100)
-        self.assertEqual([self.src("203.0.113.9") for _ in range(12)], [200] * 12)
-        self.assertEqual([self.src("203.0.113.9", sso=BAD_SSO) for _ in range(7)], [401] * 6 + [429])
-        self.assertEqual(self.src("203.0.113.10"), 200)
+        for i in range(12):
+            self.erp.person(tok(i), 100)
+        self.assertEqual([self.src("203.0.113.9", sso=tok(i)) for i in range(12)], [200] * 12)
+        self.assertEqual([self.src("203.0.113.9", sso=bad(i)) for i in range(7)], [401] * 6 + [429])
+        self.assertEqual(self.src("203.0.113.10", sso=tok(0)), 200)
+
+    def test_one_valid_token_cannot_fill_everyone(self):
+        """받아 주는 토큰 하나를 한 곳에서 되풀이해도 창마다 3번 — 전체 창을 혼자 채워 다른 사람을 막지 못한다 ·
+        막힌 시도는 ① 을 부르지 않는다 · 범위 없는 사람(403)도 같다(S12 2차 검토 refund-replay)."""
+        self.app = self.make_app(login_max=10, monotonic=lambda: 100.0)
+        self.erp.person(tok(0), 100)
+        self.erp.person(tok(1), 101)
+        self.erp.person(tok(2), 777)
+        self.assertEqual([self.src("198.51.100.7", sso=tok(0)) for _ in range(12)], [200] * 3 + [429] * 9)
+        self.assertEqual(self.src("203.0.113.44", sso=tok(1)), 200)
+        self.assertEqual([self.src("198.51.100.8", sso=tok(2)) for _ in range(5)], [403] * 3 + [429] * 2)
+        self.assertEqual(len(self.erp.calls), 3 + 1 + 3)
+
+    def test_outage_not_counted_for_address(self):
+        """① 장애(503)는 한 곳 창에 남지 않는다 — ① 이 돌아오면 같은 사무실 로그인이 바로 된다(S12 2차 검토 unavailable)."""
+        self.app = self.make_app(monotonic=lambda: 100.0)
+        for i in range(8):
+            self.erp.person(tok(i), 100, status=500)
+        self.assertEqual([self.src("203.0.113.9", sso=tok(i)) for i in range(8)], [503] * 8)
+        self.erp.person(tok(8), 100)
+        self.assertEqual(self.src("203.0.113.9", sso=tok(8)), 200)
 
     def test_trusted_transport_mark(self):
-        """유닉스 소켓 서버(S14)가 environ 에 넣는 표지가 있을 때만 IP 없는 연결의 머리를 믿는다 — 브라우저 머리로는 못 만든다."""
-        self.app = self.make_app(login_source_max=1, monotonic=lambda: 100.0)
+        """유닉스 소켓 서버(S14)가 environ 에 넣는 표지 — IP 없는 연결에서 값이 정확히 True 일 때만 머리를 믿는다 ·
+        브라우저 머리로는 못 만든다 · TCP 연결에 붙은 표지는 무시 · 믿지 않는 머리는 값 없이 1분 한 줄 경고."""
         mark = {WEB.TRUSTED_TRANSPORT: True}
-        self.assertEqual([self.src(f"10.1.1.{i}", peer="", sso=BAD_SSO, environ=mark) for i in range(3)], [401, 401, 401])
         self.app = self.make_app(login_source_max=1, monotonic=lambda: 100.0)
-        for fake in ({}, {WEB.TRUSTED_TRANSPORT: "1"}, {WEB.TRUSTED_TRANSPORT: 1},
-                     {"HTTP_NAVER_ENGINE.TRUSTED_TRANSPORT": True}, {"HTTP_X_NAVER_ENGINE_TRUSTED_TRANSPORT": "true"}):
+        self.assertEqual([self.src(f"10.1.1.{i}", peer="", sso=bad(i), environ=mark) for i in range(3)], [401] * 3)
+        for n, fake in enumerate(({}, {WEB.TRUSTED_TRANSPORT: "1"}, {WEB.TRUSTED_TRANSPORT: 1},
+                                  {"HTTP_NAVER_ENGINE.TRUSTED_TRANSPORT": True},
+                                  {"HTTP_X_NAVER_ENGINE_TRUSTED_TRANSPORT": "true"})):
             self.app = self.make_app(login_source_max=1, monotonic=lambda: 100.0)
-            got = [self.src(f"10.2.2.{i}", peer="", sso=BAD_SSO, environ=fake) for i in range(2)]
+            with self.assertLogs("naver_engine.web", "WARNING") as cm:
+                got = [self.src(f"10.2.2.{i}", peer="", sso=bad(10 * n + 10 + i), environ=fake) for i in range(2)]
             self.assertEqual(got, [401, 429], fake)            # 표지가 없거나 틀리면 모두 「unknown」 한 곳
+            self.assertEqual(len([x for x in cm.output if "믿지 않음" in x]), 1)   # 창마다 한 줄
+            self.assertNotIn("10.2.2", " ".join(cm.output))
+        self.app = self.make_app(login_source_max=1, monotonic=lambda: 100.0)
+        with self.assertLogs("naver_engine.web", "WARNING"):
+            got = [self.src(f"10.3.3.{i}", peer="203.0.113.5", sso=bad(90 + i), environ=mark) for i in range(2)]
+        self.assertEqual(got, [401, 429])                       # TCP(루프백 밖) + 표지 = 믿지 않음
 
     def test_expiry_and_session_end_reported(self):
         """응답의 남은 시간은 토큰의 실제 남은 시간 · 세션 끝(로그인 + 12시간)을 함께(검토 expires-in-misreported)."""
@@ -633,9 +676,9 @@ class LoginTest(WebBase):
         cases = [dict(manager=True, teams=((11, 10), (12, 10), (10, 0))),    # 끝 팀이 둘 — 모름
                  dict(manager=True, teams=((10, 0),)),                     # 가장 깊은 팀이 조직 표와 다름
                  dict(manager="false"), dict(manager=1), dict(manager="Y")]  # 참거짓이 아님
-        for kw in cases:
-            self.erp.person(MARK_SSO, 1, **kw)
-            s, b = self.login()
+        for i, kw in enumerate(cases):
+            self.erp.person(tok(i), 1, **kw)
+            s, b = self.login(tok(i))
             self.assertEqual((s, b["narrowed"]), (200, True), kw)
             _s, board, _h, _p = self.call("GET", "/board", b["token"], query="attention=0")
             self.assertEqual(board["counts"]["total"], 0, kw)
