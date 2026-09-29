@@ -16,7 +16,7 @@
 ⚠️ ``Scope`` 는 **요청마다** ``scope_of(org, 사람)`` 으로 새로 만든다. 다른 조직(다른 스냅숏 시각)에서 만든 Scope 나
 손으로 만든 Scope 는 모든 판정 함수가 「범위 없음」으로 본다 — 캐시해 둔 옛 범위로 퇴사·강등 뒤에도 보이는 일을 막는다
 (설계 v1.4 §4 「누르는 순간 다시 판정」 · §10 「옛 담당은 즉시 못 봄」). 로그인 때 ① my-profile 로 **좁히는** 것(§9)은
-3차에서 이 파일 안 함수로 더한다.
+``profile_narrows`` · ``narrowed_scope_of`` 한 곳(S11) — 좁힌 표시는 자체 토큰에 실리고, 요청마다 좁힌 채로 다시 계산한다.
 
 확정된 규칙:
 - P1 ⓑ 서브 관리 담당도 보인다(배지 「서브」). 보기·승인·되돌리기·멈추기는 메인과 같다(자기 승인 금지도 메인과 같다).
@@ -57,8 +57,10 @@ ACT_VIEW = "view"
 ACT_STOP = "stop"
 ACT_REVERT = "revert"
 ACT_APPROVE = "approve"   # 담당자 등급 승인. 팀장 등급은 can_approve()(approvers 사슬)로만 정한다.
-FULL_ACTIONS = frozenset({ACT_VIEW, ACT_STOP, ACT_REVERT, ACT_APPROVE})
-PREV_ACTIONS = frozenset({ACT_VIEW, ACT_STOP})
+ACT_HANDLE_ISSUE = "handle_issue"   # 관제 이슈 👀 확인 · ✅ 해결 · 🙈 예외(S11 · 예외의 층은 issue_actor 가 정한다)
+ACT_CONFIRM_LINK = "confirm_link"   # 짝 확인 화면 「이 계정 맞음」 · 「아님」 · 「거두기」(S11 · 설계 v1.4 §5)
+FULL_ACTIONS = frozenset({ACT_VIEW, ACT_STOP, ACT_REVERT, ACT_APPROVE, ACT_HANDLE_ISSUE, ACT_CONFIRM_LINK})
+PREV_ACTIONS = frozenset({ACT_VIEW, ACT_STOP})   # 계약 만료 직전 담당 — 이슈 처리·짝 확인도 못 한다(보기·멈추기만)
 
 # ── 알림 등급 · 승인 등급 ──
 URGENT = "urgent"    # 긴급
@@ -129,6 +131,7 @@ class Scope:
     teams: frozenset[int]       # TEAM = 본인 팀 + 하부 팀 · ALL = 모든 팀 · 그 밖 = 빈 집합
     people: frozenset[int]      # 고를 수 있는 사람(TEAM = 범위 팀 소속 전원(퇴사자 포함) + 본인)
     generated_at: Optional[str]  # 기준 스냅숏 시각 — 판정 때 조직의 시각과 다르면 「범위 없음」
+    narrowed: bool = False      # 로그인 때 ① my-profile 로 좁힌 범위(v1.4 §9 · S11) — 판정 때도 좁힌 채로 다시 계산한다
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -206,9 +209,13 @@ def _none_scope(org: Org) -> Scope:
 
 
 def _live(org: Org, scope: Any) -> Scope:
-    """이 조직에서 지금 다시 계산한 범위와 **똑같은** Scope 만 믿는다. 낡았거나 손으로 만든 것은 「범위 없음」."""
-    if isinstance(scope, Scope) and scope.kind != NONE and _is_int(scope.viewer_idx):
-        if scope == scope_of(org, scope.viewer_idx):
+    """이 조직에서 지금 다시 계산한 범위와 **똑같은** Scope 만 믿는다. 낡았거나 손으로 만든 것은 「범위 없음」.
+
+    좁힌 범위(``narrowed``)는 ``narrowed_scope_of`` 로 다시 계산한 것과 같아야 한다 — 좁힌 표시를 떼거나(넓히기)
+    손으로 붙여도 통하지 않는다."""
+    if isinstance(scope, Scope) and scope.kind != NONE and _is_int(scope.viewer_idx) and type(scope.narrowed) is bool:
+        again = narrowed_scope_of(org, scope.viewer_idx) if scope.narrowed else scope_of(org, scope.viewer_idx)
+        if scope == again:
             return scope
     return _none_scope(org)
 
@@ -228,6 +235,29 @@ def scope_of(org: Org, viewer_idx: Any) -> Scope:
         people.add(p.idx)
         return Scope(TEAM, p.idx, teams, frozenset(people), org.generated_at)
     return Scope(MINE, p.idx, frozenset(), frozenset({p.idx}), org.generated_at)
+
+
+def narrowed_scope_of(org: Org, viewer_idx: Any) -> Scope:
+    """로그인 때 좁힌 범위(v1.4 §9) — 팀 범위를 「본인 담당만」으로. 대표(ALL)는 좁히지 않는다(① my-profile 에는
+    대표 표시가 없어 좁힐 근거가 없다) · 범위 없음은 그대로 없음. 넓히는 일은 없다."""
+    s = scope_of(org, viewer_idx)
+    if s.kind in (TEAM, MINE):
+        return Scope(MINE, s.viewer_idx, frozenset(), frozenset({s.viewer_idx}), s.generated_at, True)
+    return s
+
+
+def profile_narrows(org: Org, viewer_idx: Any, profile_is_manager: Any, profile_team_idx: Any) -> bool:
+    """① my-profile 이 스냅숏보다 좁은가 — 팀장이 아니라고 하거나 · 가장 깊은 팀이 스냅숏과 다르면(v1.4 §9 「즉시 좁힌다」).
+
+    ``profile_is_manager`` 가 참거짓이 아니거나 팀 번호가 정수·None 이 아니면(모양을 모름) 좁힌다 — 닫힌 쪽.
+    스냅숏이 팀 범위가 아니면(담당·대표·범위 없음) 좁힐 것이 없다."""
+    s = scope_of(org, viewer_idx)
+    if s.kind != TEAM:
+        return False
+    if type(profile_is_manager) is not bool or not (profile_team_idx is None or _is_int(profile_team_idx)):
+        return True
+    p = _person(org, viewer_idx)
+    return (not profile_is_manager) or p is None or profile_team_idx != p.team_idx
 
 
 # ── 2. 담당 상태 ──────────────────────────────────────────────────
@@ -352,6 +382,19 @@ def allowed_actions(org: Org, scope: Scope, own: Ownership) -> frozenset[str]:
     return _allowed(org, _live(org, scope), own)
 
 
+def issue_actor(org: Org, scope: Scope, own: Ownership) -> Optional[str]:
+    """이슈 손길의 층(S11 · M7) — ``lead``(팀장 등급 승인 사슬에 든다 · 🔴 예외 가능) · ``owner``(이슈를 다룰 수 있다 ·
+    🟡·ⓘ 예외까지) · None(못 다룬다). 글자는 ``issues.ACTOR_LEAD`` · ``ACTOR_OWNER`` 와 같다(시험이 대조).
+
+    팀장 등급은 ``approvers(..., LEVEL_LEAD)`` 사슬 — 담당(메인·서브) 본인은 빠지므로 자기 광고주의 🔴 는 윗사람이 판단한다."""
+    s = _live(org, scope)
+    if ACT_HANDLE_ISSUE not in _allowed(org, s, own):
+        return None
+    if can_approve(org, own, LEVEL_LEAD, None, s.viewer_idx):
+        return "lead"
+    return "owner"
+
+
 def require_client(org: Org, scope: Scope, rows_by_id: Mapping[int, Ownership], client_id: Any,
                    action: str) -> Ownership:
     """단건·쓰기용 — ``action``(view · stop · revert · approve)까지 한 번에 판정한다.
@@ -362,7 +405,7 @@ def require_client(org: Org, scope: Scope, rows_by_id: Mapping[int, Ownership], 
     - 설계 v1.4 §4 의 ``ClientHandle``(네이버 어댑터가 받는 손잡이)은 3차에서 이 결과로 만든다.
     """
     if action not in FULL_ACTIONS:
-        raise ValueError("action 은 view · stop · revert · approve 중 하나여야 합니다")
+        raise ValueError("action 은 view · stop · revert · approve · handle_issue · confirm_link 중 하나여야 합니다")
     s = _live(org, scope)
     own = rows_by_id.get(client_id) if _is_int(client_id) else None
     if own is None or own.client_id != client_id or not _can_see(org, s, own):

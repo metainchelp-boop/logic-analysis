@@ -1519,5 +1519,76 @@ class CeoAccountZeroTest(unittest.TestCase):
                         inner = cond.operand if isinstance(cond, ast.UnaryOp) and isinstance(cond.op, ast.Not) else cond
                         self.assertFalse(risky(inner), where)
 
+
+class ScreenAdditionsTest(unittest.TestCase):
+    """S11 가산 — 로그인 때 좁히기(v1.4 §9) · 이슈 손길 층 · 이슈 처리·짝 확인 권한(이전 담당은 못 함)."""
+
+    def setUp(self):
+        self.org, self.rows = build(extended=True)
+
+    def test_좁힌_범위는_늘_본인_담당의_부분집합(self):
+        for who in list(self.org.people) + [YOON]:
+            wide = sc.clients_in(self.org, sc.scope_of(self.org, who), self.rows)
+            n = sc.narrowed_scope_of(self.org, who)
+            got = sc.clients_in(self.org, n, self.rows)
+            self.assertLessEqual(got, wide, who)
+            if sc.scope_of(self.org, who).kind in (sc.TEAM, sc.MINE):
+                self.assertEqual(n.kind, sc.MINE)
+                self.assertTrue(n.narrowed)
+                self.assertEqual(got, sc.clients_in(self.org, n, self.rows, "me"), who)
+
+    def test_좁힘_표시를_떼거나_붙인_손_범위는_범위_없음(self):
+        for who in self.org.people:
+            s = sc.scope_of(self.org, who)
+            if s.kind != sc.TEAM:
+                continue
+            forged = sc.Scope(s.kind, s.viewer_idx, s.teams, s.people, s.generated_at, True)
+            self.assertEqual(sc.clients_in(self.org, forged, self.rows), frozenset())
+            n = sc.narrowed_scope_of(self.org, who)
+            unmarked = sc.Scope(n.kind, n.viewer_idx, n.teams, n.people, n.generated_at, False)
+            self.assertEqual(sc.clients_in(self.org, unmarked, self.rows), frozenset())
+            weird = sc.Scope(n.kind, n.viewer_idx, n.teams, n.people, n.generated_at, 1)
+            self.assertEqual(sc.clients_in(self.org, weird, self.rows), frozenset())
+
+    def test_이슈_손길_층(self):
+        from app.naver_auto import issues as iss
+        seen = set()
+        for who in self.org.people:
+            s = sc.scope_of(self.org, who)
+            for cid, own in self.rows.items():
+                a = sc.issue_actor(self.org, s, own)
+                seen.add(a)
+                if not sc.can_see(self.org, s, own):
+                    self.assertIsNone(a, (who, cid))
+                elif sc.relation(self.org, s, own) == sc.REL_PREV:
+                    self.assertIsNone(a, (who, cid))    # 이전 담당은 보기·멈추기만
+                else:
+                    self.assertEqual(a, iss.ACTOR_LEAD if sc.can_approve(self.org, own, sc.LEVEL_LEAD, None, who)
+                                     else iss.ACTOR_OWNER, (who, cid))
+        self.assertEqual(seen, {None, iss.ACTOR_OWNER, iss.ACTOR_LEAD})
+        self.assertEqual(sc.issue_actor(self.org, sc.scope_of(self.org, KIM), self.rows[CID["dara"]]), iss.ACTOR_OWNER)
+        self.assertEqual(sc.issue_actor(self.org, sc.scope_of(self.org, CEO), self.rows[CID["dara"]]), iss.ACTOR_LEAD)
+
+    def test_새_동작은_이전_담당에게_없다(self):
+        self.assertTrue({sc.ACT_HANDLE_ISSUE, sc.ACT_CONFIRM_LINK} <= sc.FULL_ACTIONS)
+        self.assertFalse({sc.ACT_HANDLE_ISSUE, sc.ACT_CONFIRM_LINK} & sc.PREV_ACTIONS)
+        s = sc.scope_of(self.org, KIM)
+        for a in (sc.ACT_HANDLE_ISSUE, sc.ACT_CONFIRM_LINK):
+            with self.assertRaises(sc.ActionNotAllowed):
+                sc.require_client(self.org, s, self.rows, PREV_CLIENT, a)
+
+    def test_my_profile_좁히기_판단(self):
+        leads = [w for w in self.org.people if sc.scope_of(self.org, w).kind == sc.TEAM]
+        self.assertTrue(leads)
+        for w in leads:
+            team = self.org.people[w].team_idx
+            self.assertFalse(sc.profile_narrows(self.org, w, True, team))
+            self.assertTrue(sc.profile_narrows(self.org, w, False, team))
+            self.assertTrue(sc.profile_narrows(self.org, w, True, None))
+            self.assertTrue(sc.profile_narrows(self.org, w, None, team))
+            self.assertTrue(sc.profile_narrows(self.org, w, 1, team))
+        self.assertFalse(sc.profile_narrows(self.org, CEO, False, None))   # 대표는 my-profile 로 좁히지 않는다
+        self.assertFalse(sc.profile_narrows(self.org, KIM, False, None))   # 담당은 좁힐 것이 없다
+
 if __name__ == "__main__":
     unittest.main()

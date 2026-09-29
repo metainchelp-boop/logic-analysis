@@ -1,0 +1,617 @@
+"""관제 화면 API — 표준 라이브러리 WSGI 앱 하나(설계 v1.8 S11 · v1.4 §5 · §9 · §12).
+
+③ 광고센터가 ``/api/naver-auto/*`` 를 이 앱으로 중계한다(S12). 이 파일은 **들어오는 요청만** 받는다 — 네트워크를 여는
+모듈을 import 하지 않는다(① 내 정보는 관문 ``erp_profile`` · 미리보기는 부르는 쪽이 넣는 ``previewer`` 로만).
+
+경로(모두 ``/api/naver-auto`` 아래)
+- ``POST /session``(sso → 자체 토큰 · 토큰 없이 부르는 **유일한** 길) · ``POST /session/refresh``
+- ``GET /me`` · ``GET /board?selection=&attention=`` · ``GET /clients/{가망}`` · ``GET /links/pending`` · ``GET /ended`` ·
+  ``GET /unlinked`` · ``GET /bell`` · ``GET /settings`` · ``GET /health``
+- ``POST /issues/{번호}/ack · resolve · except`` · ``POST /links/confirm · reject · revoke · preview`` ·
+  ``POST /bell/{번호}/read`` · ``POST /bell/read-all`` · ``POST /settings/thresholds``(대표만) ·
+  ``POST /holds/{org|stages|accounts}/confirm``(대표만)
+
+지키는 것
+- **요청마다 범위를 새로 계산한다** — 토큰에는 번호와 시각만. 퇴사·강등은 다음 요청부터(범위 없음 = 401). 로그인 때 ①
+  my-profile 이 좁으면 좁힌 채로(``scope.narrowed_scope_of``). 대리 보기(``?as=``)는 없다 — 모르는 인자는 무시한다.
+- **범위 밖 = 없음** — 가망 · 이슈 · 짝 후보 · 판단의 없는 번호와 범위 밖 번호는 같은 404 · 같은 본문(``CLIENT_NOT_VISIBLE``).
+  묶음(짝 확인)은 하나라도 어긋나면 전체를 거절한다(아무것도 적지 않는다).
+- **쓰기는 쓰는 곳 하나** — 부르는 쪽이 넣는 ``write``(엔진의 쓰기 저장소 한 곳에서 차례로)로만. 읽기는 요청마다 읽기
+  전용 저장소(``open_read``). 사람 판단·이슈 손길·읽음·기준값·열람 기록을 적는 함수는 이 파일에서만 부른다(구문 시험).
+- **올리기 관문(§9 · 26시간)** — 조직이 낡았으면 🙈 예외 · 「이 계정 맞음」을 거절한다(멈추기·내리기 · 확인·해결은 된다).
+- **감사** — 광고주 한 장 열람 · 모든 쓰기(거절 포함) · 설정 변경 · 로그인을 ``record_access`` 로(번호와 코드만).
+  열람 기록을 못 적으면 보여 주지 않는다(503).
+- 응답은 ``no-store`` · 오류 문구에 토큰·번호·이름을 싣지 않는다 · 뜻밖의 오류는 종류 이름만 기록하고 500.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import re
+import threading
+import time as _time
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
+
+from app.naver_auto import org_snapshot as O
+from app.naver_auto import scope as SC
+
+from . import erp_profile as EP
+from . import handles as H
+from . import links as L
+from . import session as SE
+from . import store as S
+from . import sync as Y
+from . import views as W
+
+log = logging.getLogger("naver_engine.web")
+
+PREFIX = "/api/naver-auto"
+GET, POST = "GET", "POST"            # 들어오는 요청의 방식(이 파일은 나가는 요청을 만들지 않는다)
+BODY_MAX = 64 * 1024                 # ③ 중계 상한과 같다(S12)
+QUERY_MAX = 2048
+LOGIN_WINDOW = 60.0                  # 로그인은 이 초 안에
+LOGIN_MAX = 30                       # 이만큼까지(① 커넥션 풀을 지킨다 · 프로세스 하나 기준)
+LINK_BATCH_MAX = 50
+NOTE_MAX = 200
+PREVIEW_NAMES = 3                    # 짝 후보 미리보기 — 캠페인 이름 3개(B §4)
+PREVIEW_NAME_MAX = 60
+KST = S.KST
+
+REASONS = {200: "OK", 400: "Bad Request", 401: "Unauthorized", 403: "Forbidden", 404: "Not Found",
+           405: "Method Not Allowed", 409: "Conflict", 413: "Payload Too Large", 415: "Unsupported Media Type",
+           429: "Too Many Requests", 500: "Internal Server Error", 503: "Service Unavailable"}
+HEADERS = (("Content-Type", "application/json; charset=utf-8"), ("Cache-Control", "no-store"),
+           ("Pragma", "no-cache"), ("X-Content-Type-Options", "nosniff"), ("Referrer-Policy", "no-referrer"),
+           ("X-Frame-Options", "DENY"))
+NOT_VISIBLE = {"error": "not-visible", "message": SC.CLIENT_NOT_VISIBLE}
+
+
+class HttpError(Exception):
+    def __init__(self, status: int, code: str, **extra) -> None:
+        super().__init__(code)
+        self.status, self.code, self.extra = status, code, extra
+
+
+# ── 요청 ────────────────────────────────────────────────────────────
+@dataclass
+class Request:
+    method: str
+    path: str
+    query: Mapping[str, str]
+    body: Optional[dict]
+
+
+@dataclass
+class Viewer:
+    """요청 하나의 보는 사람 — 범위는 이 요청에서 새로 계산한 것."""
+    idx: int = field(repr=False)
+    scope: SC.Scope = field(repr=False)
+    claims: SE.Claims = field(repr=False)
+    store: S.Store = field(repr=False)
+    org: O.Org = field(repr=False)
+    _ctx: Optional[W.Ctx] = field(default=None, repr=False)
+
+    def ctx(self, now: datetime) -> W.Ctx:
+        if self._ctx is None:
+            self._ctx = W.load(self.store, now, self.org)
+        return self._ctx
+
+
+def _unquote(s: str) -> str:
+    """퍼센트 풀기(쿼리 글자) — ``urllib`` 을 쓰지 않는다(네트워크 모듈은 관문에서만)."""
+    raw = s.replace("+", " ").encode("utf-8")
+    out = bytearray()
+    i = 0
+    while i < len(raw):
+        c = raw[i]
+        if c == 0x25:   # '%'
+            h = raw[i + 1:i + 3]
+            if len(h) != 2 or not all(x in b"0123456789abcdefABCDEF" for x in h):
+                raise HttpError(400, "bad-query")
+            out.append(int(h, 16))
+            i += 3
+            continue
+        out.append(c)
+        i += 1
+    try:
+        return out.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HttpError(400, "bad-query") from None
+
+
+def _parse_query(qs: str) -> Dict[str, str]:
+    if len(qs) > QUERY_MAX:
+        raise HttpError(400, "bad-query")
+    out: Dict[str, str] = {}
+    for part in qs.split("&"):
+        if not part:
+            continue
+        k, _sep, v = part.partition("=")
+        k = _unquote(k)
+        if k in out:
+            raise HttpError(400, "bad-query")
+        out[k] = _unquote(v)
+    return out
+
+
+def _read_body(environ) -> Optional[dict]:
+    try:
+        n = int(environ.get("CONTENT_LENGTH") or 0)
+    except (TypeError, ValueError):
+        raise HttpError(400, "bad-length") from None
+    if n < 0:
+        raise HttpError(400, "bad-length")
+    if n > BODY_MAX:
+        raise HttpError(413, "too-large")
+    if n == 0:
+        return None
+    ctype = (environ.get("CONTENT_TYPE") or "").split(";")[0].strip().lower()
+    if ctype != "application/json":
+        raise HttpError(415, "json-only")
+    raw = environ["wsgi.input"].read(n)
+    if not isinstance(raw, (bytes, bytearray)) or len(raw) != n:
+        raise HttpError(400, "bad-body")
+    try:
+        j = json.loads(bytes(raw).decode("utf-8"))
+    except (ValueError, UnicodeDecodeError, RecursionError):
+        raise HttpError(400, "bad-json") from None
+    if not isinstance(j, dict):
+        raise HttpError(400, "bad-json")
+    return j
+
+
+def _body(req: Request, keys: frozenset, need: frozenset) -> dict:
+    b = req.body or {}
+    if not set(b) <= keys or not need <= set(b):
+        raise HttpError(400, "bad-body")
+    return b
+
+
+def _pos(v) -> int:
+    if isinstance(v, bool) or not isinstance(v, int) or not 0 < v < 2 ** 63:
+        raise HttpError(400, "bad-body")
+    return v
+
+
+def _text(v, limit: int) -> str:
+    if not isinstance(v, str) or not v.strip() or len(v) > limit:
+        raise HttpError(400, "bad-body")
+    return v
+
+
+def _bearer(environ) -> str:
+    raw = environ.get("HTTP_AUTHORIZATION") or ""
+    head, _sep, tok = raw.partition(" ")
+    if head.lower() != "bearer" or not tok.strip():
+        raise HttpError(401, "token-missing")
+    return tok.strip()
+
+
+# ── 앱 ──────────────────────────────────────────────────────────────
+@dataclass(frozen=True)
+class Route:
+    method: str
+    pattern: "re.Pattern"
+    handler: Callable
+    auth: bool = True
+
+
+class App:
+    """WSGI 앱. ``open_read()`` = 요청마다 읽기 전용 저장소 · ``write(fn)`` = 쓰기 저장소 한 곳에서 ``fn(store)`` 를 차례로
+    돌리고 결과를 돌려준다(S14 배선 — 스케줄러와 같은 쓰기 저장소) · ``previewer(handle)`` = 짝 후보 미리보기(없으면 503)."""
+
+    def __init__(self, *, open_read: Callable[[], S.Store], write: Callable[[Callable[[S.Store], Any]], Any],
+                 signer: SE.TokenSigner, profiles: EP.ErpProfileReader, clock: Optional[Callable[[], datetime]] = None,
+                 previewer: Optional[Callable[[Any], List[str]]] = None, login_max: int = LOGIN_MAX,
+                 login_window: float = LOGIN_WINDOW, monotonic: Optional[Callable[[], float]] = None) -> None:
+        if not isinstance(signer, SE.TokenSigner):
+            raise TypeError("signer 는 TokenSigner 여야 합니다(비밀값 없이 시작하지 않는다)")
+        self._open_read, self._write_fn, self._signer, self._profiles = open_read, write, signer, profiles
+        self._clock = clock or (lambda: datetime.now(KST))
+        self._previewer = previewer
+        self._login_max, self._login_window = login_max, login_window
+        self._mono = monotonic or _time.monotonic
+        self._logins: List[float] = []
+        self._lock = threading.Lock()
+
+    def __repr__(self) -> str:
+        return "App(naver-auto)"
+
+    # ── WSGI ──
+    def __call__(self, environ, start_response):
+        status, body = self._respond(environ)
+        payload = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        start_response(f"{status} {REASONS.get(status, 'Error')}",
+                       list(HEADERS) + [("Content-Length", str(len(payload)))])
+        return [payload]
+
+    def _respond(self, environ) -> Tuple[int, dict]:
+        try:
+            return self._dispatch(environ)
+        except HttpError as e:
+            return e.status, {"error": e.code, **e.extra}
+        except (SC.ClientNotVisible, SC.TargetNotVisible):
+            return 404, dict(NOT_VISIBLE)
+        except SC.SelectionRejected:
+            return 400, {"error": "selection-rejected", "message": SC.SELECTION_REJECTED}
+        except SC.ActionNotAllowed:
+            return 403, {"error": "action-not-allowed", "message": SC.ACTION_NOT_ALLOWED}
+        except W.OrgUnavailable:
+            return 503, {"error": "org-unavailable"}
+        except S.StoreBusy:
+            return 503, {"error": "store-busy"}
+        except S.StoreError as e:
+            log.warning("화면 API 저장소 오류: %s", type(e).__name__)
+            return 503, {"error": "store-unavailable"}
+        except Exception as e:   # 뜻밖의 오류 — 종류 이름만(문구에 값이 섞일 수 있다)
+            log.error("화면 API 뜻밖의 오류: %s", type(e).__name__)
+            return 500, {"error": "internal"}
+
+    def _dispatch(self, environ) -> Tuple[int, dict]:
+        method = environ.get("REQUEST_METHOD") or ""
+        path = environ.get("PATH_INFO") or ""
+        if not path.startswith(PREFIX + "/"):
+            raise HttpError(404, "not-found")
+        sub = path[len(PREFIX):]
+        found = [(r, m) for r in ROUTES for m in (r.pattern.fullmatch(sub),) if m is not None]
+        if not found:
+            raise HttpError(404, "not-found")
+        hit = [(r, m) for r, m in found if r.method == method]
+        if not hit:
+            raise HttpError(405, "method-not-allowed")
+        route, m = hit[0]
+        query = _parse_query(environ.get("QUERY_STRING") or "")
+        body = _read_body(environ) if method == POST else None
+        req = Request(method, sub, query, body)
+        now = self._now()
+        if not route.auth:
+            return route.handler(self, req, None, now, **m.groupdict())
+        v = self._viewer(environ, now)
+        try:
+            return route.handler(self, req, v, now, **m.groupdict())
+        finally:
+            v.store.close()
+
+    def _now(self) -> datetime:
+        now = self._clock()
+        if not isinstance(now, datetime) or now.tzinfo is None:
+            raise HttpError(500, "clock")
+        return now
+
+    # ── 보는 사람 — 모든 경로(로그인 빼고)가 이것을 지난다 ──
+    def _viewer(self, environ, now: datetime) -> Viewer:
+        tok = _bearer(environ)
+        try:
+            claims = self._signer.verify(tok, now)
+        except SE.TokenInvalid as e:
+            raise HttpError(401, "token-" + e.code) from None
+        store = self._open_read()
+        try:
+            org = W.load_org(store)
+            who = claims.emp_idx
+            scope = SC.narrowed_scope_of(org, who) if claims.narrowed else SC.scope_of(org, who)
+            if scope.kind == SC.NONE:
+                raise HttpError(401, "no-scope")   # 퇴사 · 조직 표에서 빠짐 — 다음 요청부터 0곳
+            return Viewer(who, scope, claims, store, org)
+        except BaseException:
+            store.close()
+            raise
+
+    # ── 쓰기 · 감사 ──
+    def _write(self, fn: Callable[[S.Store], Any]) -> Any:
+        return self._write_fn(fn)
+
+    def _audit(self, viewer_idx: Optional[int], action: str, kind: str, target_id: Optional[int], result: str,
+               now: datetime, *, required: bool) -> None:
+        try:
+            self._write(lambda st: st.record_access(viewer_idx, action, kind, target_id, result, now))
+        except Exception as e:
+            log.warning("열람·쓰기 기록 실패: %s", type(e).__name__)
+            if required:
+                raise HttpError(503, "audit-unavailable") from None
+
+    def _throttle(self) -> None:
+        t = self._mono()
+        with self._lock:
+            self._logins = [x for x in self._logins if t - x < self._login_window]
+            if len(self._logins) >= self._login_max:
+                raise HttpError(429, "too-many-logins")
+            self._logins.append(t)
+
+    # ── 로그인 ──
+    def _h_login(self, req: Request, v: None, now: datetime) -> Tuple[int, dict]:
+        self._throttle()
+        body = _body(req, frozenset({"sso"}), frozenset({"sso"}))
+        try:
+            prof = self._profiles.read_profile(EP.load_sso(body["sso"]))
+        except EP.ProfileError as e:
+            self._audit(None, "login", "session", None, e.kind, now, required=False)
+            raise HttpError(401 if e.kind == EP.KIND_REJECTED else 503, e.kind) from None
+        store = self._open_read()
+        try:
+            org = W.load_org(store)
+        finally:
+            store.close()
+        if SC.scope_of(org, prof.idx).kind == SC.NONE:
+            self._audit(prof.idx, "login", "session", None, "no-scope", now, required=False)
+            raise HttpError(403, "no-scope")
+        narrowed = SC.profile_narrows(org, prof.idx, prof.says_manager if prof.team_known else None, prof.team_idx)
+        token = self._signer.issue(prof.idx, now, narrowed=narrowed)
+        self._audit(prof.idx, "login", "session", None, "narrowed" if narrowed else "ok", now, required=True)
+        return 200, {"token": token, "expires_in": int(SE.TOKEN_TTL.total_seconds()), "narrowed": narrowed}
+
+    def _h_refresh(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
+        try:
+            token = self._signer.refresh(v.claims, now)   # 재직은 _viewer 가 조직 표로 방금 확인했다
+        except SE.TokenInvalid as e:
+            raise HttpError(401, "token-" + e.code) from None
+        return 200, {"token": token, "expires_in": int(SE.TOKEN_TTL.total_seconds()), "narrowed": v.claims.narrowed}
+
+    # ── 읽기 ──
+    def _h_me(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
+        out = W.me(v.ctx(now), v.scope)
+        out["bell_unread"] = W.bell(v.store, v.idx, now)["unread"]
+        return 200, out
+
+    def _h_board(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
+        sel = req.query.get("selection", "all")
+        att = req.query.get("attention", "1")
+        if att not in ("0", "1"):
+            raise HttpError(400, "bad-query")
+        return 200, W.board(v.ctx(now), v.store, v.scope, sel, att == "1")
+
+    def _h_client(self, req: Request, v: Viewer, now: datetime, pid: str) -> Tuple[int, dict]:
+        n = int(pid)
+        try:
+            out = W.client(v.ctx(now), v.store, v.scope, n)
+        except (SC.ClientNotVisible, SC.ActionNotAllowed):
+            self._audit(v.idx, "view", "client", n, "not-visible", now, required=False)
+            raise SC.ClientNotVisible() from None
+        self._audit(v.idx, "view", "client", n, "ok", now, required=True)
+        return 200, out
+
+    def _h_links_pending(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
+        return 200, W.links_pending(v.ctx(now), v.store, v.scope)
+
+    def _h_ended(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
+        return 200, W.ended(v.ctx(now), v.scope)
+
+    def _h_unlinked(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
+        return 200, W.unlinked(v.ctx(now), v.scope)
+
+    def _h_bell(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
+        return 200, W.bell(v.store, v.idx, now)
+
+    def _h_settings(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
+        if v.scope.kind not in (SC.ALL, SC.TEAM):
+            raise HttpError(403, "settings-denied")   # 담당자는 설정을 보지 않는다(v1.4 §5)
+        return 200, W.settings(v.ctx(now), v.store, v.scope)
+
+    def _h_health(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
+        return 200, W.health(v.ctx(now), v.store, v.scope)
+
+    # ── 이슈 손길 ──
+    def _issue(self, v: Viewer, now: datetime, iid: str) -> Tuple[int, dict]:
+        n = int(iid)
+        issue = v.store.issue(n) if 0 < n < 2 ** 63 else None
+        if issue is None:
+            raise SC.ClientNotVisible()   # 없는 이슈 = 범위 밖 이슈(같은 404)
+        ctx = v.ctx(now)
+        return n, {"issue": issue, "own": SC.require_client(ctx.org, v.scope, ctx.owns, issue["possibility_id"],
+                                                           SC.ACT_HANDLE_ISSUE)}
+
+    def _issue_write(self, v: Viewer, now: datetime, n: int, action: str, fn) -> Tuple[int, dict]:
+        try:
+            got = self._write(fn)
+        except S.IssueRefused as e:
+            self._audit(v.idx, action, "issue", n, "refused-" + e.code, now, required=False)
+            raise HttpError(409, e.code) from None
+        self._audit(v.idx, action, "issue", n, "ok", now, required=False)
+        return 200, {"issue_id": n, "state": got["state"], "severity": got["severity"],
+                     "exception_until": got["exception_until"]}
+
+    def _h_issue_ack(self, req: Request, v: Viewer, now: datetime, iid: str) -> Tuple[int, dict]:
+        n, _t = self._issue_checked(v, now, iid, "ack")
+        return self._issue_write(v, now, n, "ack", lambda st: st.ack_issue(n, v.idx, now))
+
+    def _h_issue_resolve(self, req: Request, v: Viewer, now: datetime, iid: str) -> Tuple[int, dict]:
+        n, _t = self._issue_checked(v, now, iid, "resolve")
+        return self._issue_write(v, now, n, "resolve", lambda st: st.resolve_issue(n, v.idx, now))
+
+    def _h_issue_except(self, req: Request, v: Viewer, now: datetime, iid: str) -> Tuple[int, dict]:
+        n, t = self._issue_checked(v, now, iid, "except")
+        body = _body(req, frozenset({"until", "note"}), frozenset({"until", "note"}))
+        try:
+            until = date.fromisoformat(body["until"]) if isinstance(body["until"], str) else None
+        except ValueError:
+            until = None
+        if until is None:
+            raise HttpError(400, "bad-body")
+        note = _text(body["note"], NOTE_MAX)
+        ctx = v.ctx(now)
+        actor = SC.issue_actor(ctx.org, v.scope, t["own"])
+        if actor is None:
+            raise SC.ActionNotAllowed()
+        if not O.allows_raising(ctx.freshness):
+            self._audit(v.idx, "except", "issue", n, "org-stale", now, required=False)
+            raise HttpError(409, "org-stale")
+        return self._issue_write(v, now, n, "except",
+                                 lambda st: st.except_issue(n, v.idx, actor, until, note, now))
+
+    def _issue_checked(self, v: Viewer, now: datetime, iid: str, action: str):
+        try:
+            return self._issue(v, now, iid)
+        except (SC.ClientNotVisible, SC.ActionNotAllowed) as e:
+            self._audit(v.idx, action, "issue", int(iid),
+                        "not-visible" if isinstance(e, SC.ClientNotVisible) else "not-allowed", now, required=False)
+            raise
+
+    # ── 짝 확인 ──
+    def _link_rows(self, v: Viewer, now: datetime, refs, *, need_customer: bool = True) -> List[dict]:
+        """가리킴표 묶음 → 마지막 짝 맞추기의 줄. 하나라도 없거나 · 범위 밖이거나 · 이을 수 없는 줄이면 **전체** 거절."""
+        if not isinstance(refs, list) or not 0 < len(refs) <= LINK_BATCH_MAX or len(set(map(str, refs))) != len(refs):
+            raise HttpError(400, "bad-body")
+        ctx = v.ctx(now)
+        rows = []
+        for ref in refs:
+            r = W.find_ref(ctx, ref)
+            if r is None:
+                raise SC.ClientNotVisible()
+            SC.require_client(ctx.org, v.scope, ctx.owns, r["possibility_id"], SC.ACT_CONFIRM_LINK)
+            ok = (r["state"] in (S.PAIR_CANDIDATE, S.PAIR_BLOCKED) and r["customer_id"] is not None
+                  and r["code"] not in W.NOT_A_CUSTOMER and r["customer_id"] in ctx.accounts)
+            if need_customer and not ok:
+                raise HttpError(409, "not-linkable")
+            rows.append(r)
+        return rows
+
+    def _decide(self, req: Request, v: Viewer, now: datetime, decision: str) -> Tuple[int, dict]:
+        body = _body(req, frozenset({"refs"}), frozenset({"refs"}))
+        action = "link-" + ("confirm" if decision == "confirmed" else "reject")
+        try:
+            rows = self._link_rows(v, now, body["refs"])
+        except (SC.ClientNotVisible, SC.ActionNotAllowed) as e:
+            self._audit(v.idx, action, "link", None, "not-visible" if isinstance(e, SC.ClientNotVisible)
+                        else "not-allowed", now, required=False)
+            raise
+        if decision == "confirmed" and not O.allows_raising(v.ctx(now).freshness):
+            self._audit(v.idx, action, "link", None, "org-stale", now, required=False)
+            raise HttpError(409, "org-stale")
+
+        def op(st: S.Store) -> List[int]:
+            return [st.record_decision(r["possibility_id"], r["customer_id"], decision, v.idx, now) for r in rows]
+        ids = self._write(op)
+        for r in rows:
+            self._audit(v.idx, action, "link", r["possibility_id"], "ok", now, required=False)
+        return 200, {"decided": len(ids), "decision": decision}
+
+    def _h_links_confirm(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
+        return self._decide(req, v, now, "confirmed")
+
+    def _h_links_reject(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
+        return self._decide(req, v, now, "rejected")
+
+    def _h_links_revoke(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
+        body = _body(req, frozenset({"decision_id", "reason"}), frozenset({"decision_id", "reason"}))
+        did, reason = _pos(body["decision_id"]), _text(body["reason"], 64)
+        found = [d for d in v.store.current_decisions() + v.store.superseded_confirmations() if d.decision_id == did]
+        ctx = v.ctx(now)
+        try:
+            if not found:
+                raise SC.ClientNotVisible()
+            SC.require_client(ctx.org, v.scope, ctx.owns, found[0].possibility_id, SC.ACT_CONFIRM_LINK)
+        except (SC.ClientNotVisible, SC.ActionNotAllowed):
+            self._audit(v.idx, "link-revoke", "link", None, "not-visible", now, required=False)
+            raise SC.ClientNotVisible() from None
+        try:
+            self._write(lambda st: st.revoke_decision(did, v.idx, now, reason))
+        except S.StoreRefused:
+            raise HttpError(409, "revoke-refused") from None
+        self._audit(v.idx, "link-revoke", "link", found[0].possibility_id, "ok", now, required=False)
+        return 200, {"revoked": did}
+
+    def _h_links_preview(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
+        body = _body(req, frozenset({"ref"}), frozenset({"ref"}))
+        [r] = self._link_rows(v, now, [body["ref"]])
+        if self._previewer is None:
+            raise HttpError(503, "preview-unavailable")
+        ctx = v.ctx(now)
+        p = ctx.prospects[r["possibility_id"]]
+        end = None if p["latest_end_date"] is None else date.fromisoformat(p["latest_end_date"])
+        try:
+            handle = H.issue_preview_handle(customer_id=r["customer_id"], possibility_id=r["possibility_id"],
+                                            candidate_id=ctx.pairing["pairing_id"], stage=p["stage_key"],
+                                            stage_as_of=v.store.stage_as_of(), latest_end_date=end, now=now,
+                                            requested_by=v.idx)
+        except H.NotEligible as e:
+            raise HttpError(409, "not-eligible", reason=e.reason) from None
+        try:
+            names = self._previewer(handle)
+        except Exception as e:
+            log.warning("미리보기 실패: %s", type(e).__name__)
+            raise HttpError(503, "preview-failed") from None
+        self._audit(v.idx, "link-preview", "link", r["possibility_id"], "ok", now, required=True)
+        out = [n[:PREVIEW_NAME_MAX] for n in (names or []) if isinstance(n, str)][:PREVIEW_NAMES]
+        return 200, {"campaigns": out}
+
+    # ── 🔔 ──
+    def _h_bell_read(self, req: Request, v: Viewer, now: datetime, rid: str) -> Tuple[int, dict]:
+        n = int(rid)
+        if not 0 < n < 2 ** 63:
+            raise HttpError(404, "not-found")
+        try:
+            changed = self._write(lambda st: st.mark_alert_read(n, v.idx, now))
+        except S.ScreenRefused:
+            raise HttpError(404, "not-found") from None   # 없는 줄 = 남의 줄
+        return 200, {"read": True, "changed": changed}
+
+    def _h_bell_read_all(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
+        since = now.astimezone(KST).date() - timedelta(days=W.BELL_DAYS - 1)
+        n = self._write(lambda st: st.mark_alerts_read_all(v.idx, since, now))
+        return 200, {"changed": n}
+
+    # ── 설정(대표만) ──
+    def _ceo_only(self, v: Viewer, action: str, kind: str, now: datetime) -> None:
+        if v.scope.kind != SC.ALL:
+            self._audit(v.idx, action, kind, None, "not-allowed", now, required=False)
+            raise HttpError(403, "ceo-only")
+
+    def _h_settings_thresholds(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
+        self._ceo_only(v, "thresholds", "settings", now)
+        body = _body(req, frozenset({"changes"}), frozenset({"changes"}))
+        if not isinstance(body["changes"], dict):
+            raise HttpError(400, "bad-body")
+        try:
+            new = self._write(lambda st: st.record_thresholds(body["changes"], v.idx, now))
+        except S.ScreenRefused as e:
+            self._audit(v.idx, "thresholds", "settings", None, "refused-" + e.code, now, required=False)
+            raise HttpError(409 if e.code == "no-change" else 400, e.code, fields=list(e.fields)) from None
+        self._audit(v.idx, "thresholds", "settings", None, "ok", now, required=False)
+        return 200, {"thresholds": W._thresholds_out(new)}
+
+    def _h_hold_confirm(self, req: Request, v: Viewer, now: datetime, kind: str) -> Tuple[int, dict]:
+        self._ceo_only(v, "hold-confirm", "hold", now)
+        body = _body(req, frozenset({"hold_id"}), frozenset({"hold_id"}))
+        hid = _pos(body["hold_id"])
+        confirm = {S.SYNC_ORG: Y.confirm_org, S.SYNC_STAGES: Y.confirm_stages, S.SYNC_ACCOUNTS: L.confirm_accounts}[kind]
+        res = self._write(lambda st: confirm(st, now, v.idx, hid))
+        ok = res.outcome == S.SYNC_ACCEPTED
+        self._audit(v.idx, "hold-confirm", "hold", hid, "ok" if ok else "refused", now, required=False)
+        return (200 if ok else 409), {"outcome": res.outcome, "codes": list(res.codes)}
+
+
+ROUTES: Tuple[Route, ...] = tuple(Route(m, re.compile(p), h, a) for m, p, h, a in (
+    (POST, r"/session", App._h_login, False),
+    (POST, r"/session/refresh", App._h_refresh, True),
+    (GET, r"/me", App._h_me, True),
+    (GET, r"/board", App._h_board, True),
+    (GET, r"/clients/(?P<pid>[0-9]{1,18})", App._h_client, True),
+    (POST, r"/issues/(?P<iid>[0-9]{1,18})/ack", App._h_issue_ack, True),
+    (POST, r"/issues/(?P<iid>[0-9]{1,18})/resolve", App._h_issue_resolve, True),
+    (POST, r"/issues/(?P<iid>[0-9]{1,18})/except", App._h_issue_except, True),
+    (GET, r"/links/pending", App._h_links_pending, True),
+    (POST, r"/links/confirm", App._h_links_confirm, True),
+    (POST, r"/links/reject", App._h_links_reject, True),
+    (POST, r"/links/revoke", App._h_links_revoke, True),
+    (POST, r"/links/preview", App._h_links_preview, True),
+    (GET, r"/ended", App._h_ended, True),
+    (GET, r"/unlinked", App._h_unlinked, True),
+    (GET, r"/bell", App._h_bell, True),
+    (POST, r"/bell/(?P<rid>[0-9]{1,18})/read", App._h_bell_read, True),
+    (POST, r"/bell/read-all", App._h_bell_read_all, True),
+    (GET, r"/settings", App._h_settings, True),
+    (POST, r"/settings/thresholds", App._h_settings_thresholds, True),
+    (POST, r"/holds/(?P<kind>org|stages|accounts)/confirm", App._h_hold_confirm, True),
+    (GET, r"/health", App._h_health, True),
+))
+
+
+def build_app(*, open_read: Callable[[], S.Store], write: Callable[[Callable[[S.Store], Any]], Any],
+              env: Optional[Mapping[str, str]] = None, **kw) -> App:
+    """엔진 배선(S14)이 부르는 앱 만들기 — 토큰 비밀값(``NAVER_AUTO_TOKEN_SECRET``)이 없거나 32자 미만이면
+    ``CredentialsMissing`` 으로 **시작하지 않는다**(폴백 없음). ① 내 정보 관문은 여기서 만든다."""
+    signer = SE.TokenSigner(SE.load_token_secret(env))
+    return App(open_read=open_read, write=write, signer=signer, profiles=kw.pop("profiles", None) or EP.ErpProfileReader(),
+               **kw)

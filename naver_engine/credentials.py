@@ -9,6 +9,8 @@
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import os
 import re
 from dataclasses import dataclass
@@ -43,6 +45,12 @@ class Secret:
 
     def reveal(self) -> str:
         return self._value
+
+    def mac(self, message: bytes) -> bytes:
+        """이 값을 열쇠로 한 HMAC-SHA256 — 값을 꺼내지 않고 서명만 만든다(화면 API 자체 토큰 · S11)."""
+        if not isinstance(message, (bytes, bytearray)):
+            raise TypeError("서명할 글은 bytes 여야 합니다")
+        return hmac.new(self._value.encode("utf-8"), bytes(message), hashlib.sha256).digest()
 
     def __setattr__(self, name, value):  # 한 번 만들면 못 바꾼다
         raise AttributeError("Secret 은 바꿀 수 없습니다")

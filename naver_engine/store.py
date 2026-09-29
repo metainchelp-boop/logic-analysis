@@ -72,7 +72,7 @@ import re
 import sqlite3 as _sqlite3
 import stat as _stat
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Callable, Iterable, List, Mapping, Optional, Sequence, Tuple
 
@@ -83,10 +83,10 @@ from . import naver_read as N
 
 __all__ = ("open_writer", "open_reader", "Store", "StoreError", "StoreBusy", "StoreRefused", "SyncBraked",
            "HoldRefused", "SyncCounts", "LinkDecision", "PairingStale", "IssueRefused", "IssueTally", "UnlinkCounts",
-           "AlertExists", "DeliveryRefused")
+           "AlertExists", "DeliveryRefused", "ScreenRefused")
 
 KST = timezone(timedelta(hours=9))
-SCHEMA_VERSION = 5   # 2 = S7(조직 수락본 · 동기화 기록) · 3 = S8(계정 시각 · 짝 결과) · 4 = S9(이슈 · 이슈 기록) · 5 = S10(알림 · 받는 사람별 보낸 결과) — 옛 판 파일은 열 때 표를 더하고 판 번호를 올린다
+SCHEMA_VERSION = 6   # 2 = S7(조직 수락본 · 동기화 기록) · 3 = S8(계정 시각 · 짝 결과) · 4 = S9(이슈 · 이슈 기록) · 5 = S10(알림 · 받는 사람별 보낸 결과) · 6 = S11(열람·쓰기 기록 · 기준값 고친 이력) — 옛 판 파일은 열 때 표를 더하고 판 번호를 올린다
 BUSY_TIMEOUT_MS = 5000
 FUTURE_SLACK = timedelta(minutes=5)   # 시계가 조금 어긋나도 받는다 · 그보다 앞선 시각은 거절
 ORG_FUTURE_SLACK = timedelta(minutes=10)   # ① 스냅숏 시각 — app.naver_auto.org_snapshot.FUTURE_TOLERANCE 와 같다(시험이 대조)
@@ -173,6 +173,13 @@ _ALERT_TEMPLATE = re.compile(r"[a-z][a-z0-9_]{0,39}")
 _ALERT_PARAM = re.compile(r"[a-z][a-z0-9_]{0,19}")
 _ALERT_LINK = re.compile(r"/naver/(?:[a-z0-9_-]+(?:/[a-z0-9_-]+)*)?")   # 관제 화면 경로 — 쿼리·조각 없이 짧은 경로만
 ALERT_LINK_MAX = 60
+
+# 화면 API(S11) — 열람·쓰기 기록(누가 · 언제 · 무엇을 · 어디에 · 결과 — 이름·금액·고객 번호 칸이 없다)
+ACCESS_TARGETS = frozenset({"session", "client", "issue", "link", "alert", "settings", "hold", "board", "health"})
+_ACCESS_CODE = re.compile(r"[a-z][a-z0-9_]*(?:-[a-z0-9_]+)*")   # 동작 · 결과 코드(40자 이하 · 숫자로 시작하지 않음)
+ACCESS_CODE_MAX = 40
+ACCESS_LOG_MAX_READ = 1000
+THRESHOLD_HISTORY_MAX_READ = 200
 
 RUN_RUNNING, RUN_DONE, RUN_FAILED = "running", "done", "failed"
 RUN_END_STATUSES = frozenset({RUN_DONE, RUN_FAILED})
@@ -427,6 +434,26 @@ _SCHEMA = (
         UNIQUE (alert_id, emp_idx))""",
     """CREATE INDEX IF NOT EXISTS naver_auto_alert_recipient_due
         ON naver_auto_alert_recipient (status, next_try_at)""",
+    """CREATE INDEX IF NOT EXISTS naver_auto_alert_recipient_emp
+        ON naver_auto_alert_recipient (emp_idx, alert_id)""",
+    # 화면 API 열람·쓰기 기록(S11 · 설계 §5 「광고주 한 장 열람 · 모든 쓰기 · 설정 변경」) — 쌓기만 · 이름·값 없음
+    """CREATE TABLE IF NOT EXISTS naver_auto_access_log (
+        log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        at TEXT NOT NULL,
+        emp_idx INTEGER CHECK (emp_idx IS NULL OR emp_idx >= 0),
+        action TEXT NOT NULL,
+        target_kind TEXT NOT NULL,
+        target_id INTEGER CHECK (target_id IS NULL OR target_id >= 0),
+        result TEXT NOT NULL)""",
+    """CREATE INDEX IF NOT EXISTS naver_auto_access_log_emp
+        ON naver_auto_access_log (emp_idx, log_id)""",
+    # 점검 기준값 고친 이력(S11 · Q3 「고치는 사람 = 대표만」) — 줄마다 고치기 전·뒤 9칸 전부 · 쌓기만 · 가장 늦은 줄이 지금 값
+    """CREATE TABLE IF NOT EXISTS naver_auto_threshold_change (
+        change_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        at TEXT NOT NULL,
+        changed_by INTEGER NOT NULL CHECK (changed_by >= 0),
+        before_values TEXT NOT NULL,
+        after_values TEXT NOT NULL)""",
 )
 
 # ── 연결 거절 규칙 ────────────────────────────────────────────────
@@ -546,6 +573,16 @@ class IssueRefused(StoreRefused):
     def __init__(self, code: str) -> None:
         super().__init__(f"이슈 손길을 받지 않습니다: {code}")
         self.code = code
+
+
+class ScreenRefused(StoreRefused):
+    """화면 API(S11) 쓰기를 받지 않음 — ``code`` = ``not-found``(없거나 남의 줄 · 둘을 가르지 않는다) · ``no-change`` ·
+    ``out-of-range``(기준값 — ``fields`` 에 칸 이름만)."""
+
+    def __init__(self, code: str, fields: Tuple[str, ...] = ()) -> None:
+        super().__init__(f"화면 쓰기를 받지 않습니다: {code}")
+        self.code = code
+        self.fields = fields
 
 
 @dataclass(frozen=True)
@@ -720,6 +757,32 @@ def _codes(codes) -> list:
     if len(out) > MAX_SYNC_CODES:
         raise StoreRefused("코드가 너무 많습니다")
     return out
+
+
+def _threshold_rules():
+    """점검 기준값 규칙(``backend/app/naver_auto/thresholds.py``) — 기준값을 다루는 함수에서만 늦게 부른다(이슈 규칙과 같게)."""
+    from app.naver_auto import thresholds
+    return thresholds
+
+
+def _threshold_values(th) -> str:
+    """기준값 9칸 → 글자(칸 이름 순). 숫자가 아닌 값은 규칙이 이미 막았다."""
+    return json.dumps(asdict(th), sort_keys=True)
+
+
+def _read_thresholds(raw):
+    """저장된 9칸 → ``Thresholds`` — 규칙(``validate``)을 다시 지나게 해 범위 밖 값이 되살아나지 않게."""
+    T = _threshold_rules()
+    try:
+        v = json.loads(raw)
+    except (TypeError, ValueError, RecursionError):
+        raise StoreError("저장된 기준값을 읽지 못했습니다") from None
+    if not isinstance(v, dict) or set(v) != {f.name for f in fields(T.Thresholds)}:
+        raise StoreError("저장된 기준값을 읽지 못했습니다")
+    try:
+        return T.validate(v, T.DEFAULTS)
+    except T.ThresholdOutOfRange:
+        raise StoreError("저장된 기준값이 허용 범위 밖입니다") from None
 
 
 def _issue_rules():
@@ -2361,6 +2424,137 @@ class Store:
                 {"day": d, "status": status, "tries": tries + 1, "last_try_at": t, "sent_at": t if sent else None,
                  "error_kind": kind}, sort_keys=True))
 
+    # ── 화면 API(S11) — 열람·쓰기 기록 · 🔔 읽음 · 점검 기준값 ──
+    def record_access(self, viewer_idx: Optional[int], action: str, target_kind: str, target_id: Optional[int],
+                      result: str, at: datetime) -> int:
+        """열람·쓰기 한 줄(누가 · 언제 · 무엇을 · 어디에 · 결과). 코드 모양만 받는다 — 이름·금액·고객 번호가 들어갈 칸이 없다.
+        ``viewer_idx`` 는 ① 직원 번호(대표 = 0) · 로그인 전 실패처럼 사람을 모르면 None."""
+        self._need_writer()
+        if target_kind not in ACCESS_TARGETS:
+            raise StoreRefused("기록 대상 종류가 아닙니다")
+        vals = (_kst_text(at, "기록 시각"), None if viewer_idx is None else _person(viewer_idx, "본 사람"),
+                _code(action, _ACCESS_CODE, "동작"), target_kind,
+                None if target_id is None else _count(target_id, "대상 번호"), _code(result, _ACCESS_CODE, "결과"))
+        if len(vals[2]) > ACCESS_CODE_MAX or len(vals[5]) > ACCESS_CODE_MAX:
+            raise StoreRefused("코드가 너무 깁니다")
+        self._not_future(at, "기록 시각")
+        with self._tx() as c:
+            return c.execute(
+                """INSERT INTO naver_auto_access_log (at, emp_idx, action, target_kind, target_id, result)
+                   VALUES (?, ?, ?, ?, ?, ?)""", vals).lastrowid
+
+    def mark_alert_read(self, recipient_id: int, emp_idx: int, at: datetime) -> bool:
+        """🔔 읽음 — **자기 줄만**(받는 사람 번호가 같을 때만). 이번에 읽음으로 바꿨으면 True · 이미 읽었으면 False.
+        없는 줄과 남의 줄은 같은 ``ScreenRefused("not-found")``(있는지 드러내지 않는다)."""
+        self._need_writer()
+        rid, emp, t = _pos_int(recipient_id, "받는 사람 줄 번호"), _person(emp_idx, "읽은 사람"), _kst_text(at, "읽은 시각")
+        self._not_future(at, "읽은 시각")
+        with self._tx() as c:
+            row = c.execute("SELECT read_at FROM naver_auto_alert_recipient WHERE recipient_id = ? AND emp_idx = ?",
+                            (rid, emp)).fetchone()
+            if row is None:
+                raise ScreenRefused("not-found")
+            if row[0] is not None:
+                return False
+            c.execute("""UPDATE naver_auto_alert_recipient SET read_at = ?
+                         WHERE recipient_id = ? AND emp_idx = ? AND read_at IS NULL""", (t, rid, emp))
+            return True
+
+    def mark_alerts_read_all(self, emp_idx: int, since_day: date, at: datetime) -> int:
+        """🔔 모두 읽음 — 그 사람 줄 중 ``since_day`` 뒤(그날 포함) 알림만. 바꾼 줄 수."""
+        self._need_writer()
+        emp, d, t = _person(emp_idx, "읽은 사람"), _day_text(since_day, "시작 날짜"), _kst_text(at, "읽은 시각")
+        self._not_future(at, "읽은 시각")
+        with self._tx() as c:
+            return c.execute(
+                """UPDATE naver_auto_alert_recipient SET read_at = ? WHERE emp_idx = ? AND read_at IS NULL
+                   AND alert_id IN (SELECT alert_id FROM naver_auto_alert WHERE day >= ?)""", (t, emp, d)).rowcount
+
+    def record_thresholds(self, changes: Mapping, changed_by: int, at: datetime):
+        """기준값을 고친다 — 지금 값에 바꿀 칸만 얹어 규칙(``thresholds.validate``)을 지난 것만 · 하나라도 틀리면 아무것도
+        바꾸지 않는다. 고치기 전·뒤 9칸을 한 줄로 쌓는다. **누가 고칠 수 있는지(대표만 · Q3)는 부르는 쪽이 scope 로 판정한다.**"""
+        self._need_writer()
+        T = _threshold_rules()
+        if not isinstance(changes, Mapping) or not changes:
+            raise ScreenRefused("no-change")
+        who, t = _person(changed_by, "고친 사람"), _kst_text(at, "고친 시각")
+        self._not_future(at, "고친 시각")
+        with self._tx() as c:
+            cur = self._current_thresholds(c)
+            try:
+                new = T.validate(dict(changes), cur)
+            except T.ThresholdOutOfRange:
+                names = {f.name for f in fields(T.Thresholds)}
+                raise ScreenRefused("out-of-range", tuple(sorted(k for k in changes if isinstance(k, str)
+                                                                  and k in names))) from None
+            if new == cur:
+                raise ScreenRefused("no-change")
+            c.execute("""INSERT INTO naver_auto_threshold_change (at, changed_by, before_values, after_values)
+                         VALUES (?, ?, ?, ?)""", (t, who, _threshold_values(cur), _threshold_values(new)))
+        return new
+
+    def _current_thresholds(self, c):
+        row = c.execute("SELECT after_values FROM naver_auto_threshold_change ORDER BY change_id DESC LIMIT 1").fetchone()
+        return _threshold_rules().DEFAULTS if row is None else _read_thresholds(row[0])
+
+    def thresholds(self):
+        """지금 점검 기준값 — 고친 이력의 가장 늦은 줄(없으면 처음 값). 아침 점검(S14 배선)이 이 값을 넘긴다."""
+        return self._current_thresholds(self._conn)
+
+    def threshold_changes(self, limit: int = 50) -> List[dict]:
+        """고친 이력 — 새것부터 · {change_id · at · changed_by · before · after}."""
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 0 < limit <= THRESHOLD_HISTORY_MAX_READ:
+            raise StoreRefused("몇 줄인지 범위 밖입니다")
+        out = []
+        for cid, at_raw, by, before, after in self._conn.execute(
+                """SELECT change_id, at, changed_by, before_values, after_values FROM naver_auto_threshold_change
+                   ORDER BY change_id DESC LIMIT ?""", (limit,)):
+            at_ = _aware_time(at_raw)
+            if at_ is None:
+                raise StoreError("저장된 기준값 이력을 읽지 못했습니다")
+            out.append({"change_id": cid, "at": at_, "changed_by": by,
+                        "before": asdict(_read_thresholds(before)), "after": asdict(_read_thresholds(after))})
+        return out
+
+    def my_alerts(self, emp_idx: int, since_day: date, limit: int = 200) -> List[dict]:
+        """🔔 — **그 사람에게 온 줄만**(남겨 둔 것 포함) · 새것부터. 원천(종류 · 날짜 · 문구 틀 · 코드 · 경로)을 함께 준다."""
+        emp, d = _person(emp_idx, "받는 사람"), _day_text(since_day, "시작 날짜")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 0 < limit <= 1000:
+            raise StoreRefused("몇 줄인지 범위 밖입니다")
+        cur = self._conn.execute(
+            """SELECT r.recipient_id, r.severity, r.params, r.status, r.held_reason, r.read_at, r.finished_at,
+                      a.alert_id, a.kind, a.day, a.source, a.template, a.codes, a.link_path, a.created_at
+               FROM naver_auto_alert_recipient r JOIN naver_auto_alert a ON a.alert_id = r.alert_id
+               WHERE r.emp_idx = ? AND a.day >= ? ORDER BY a.alert_id DESC, r.recipient_id DESC LIMIT ?""",
+            (emp, d, limit))
+        names = [x[0] for x in cur.description]
+        return [self._alert_out(names, r) for r in cur.fetchall()]
+
+    def access_log(self, limit: int = 100, viewer_idx: Optional[int] = None) -> List[dict]:
+        """열람·쓰기 기록 — 새것부터(사람을 주면 그 사람만)."""
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 0 < limit <= ACCESS_LOG_MAX_READ:
+            raise StoreRefused("몇 줄인지 범위 밖입니다")
+        sql, args = "SELECT * FROM naver_auto_access_log", ()
+        if viewer_idx is not None:
+            sql, args = sql + " WHERE emp_idx = ?", (_person(viewer_idx, "본 사람"),)
+        cur = self._conn.execute(sql + " ORDER BY log_id DESC LIMIT ?", args + (limit,))
+        names = [x[0] for x in cur.description]
+        return [dict(zip(names, r)) for r in cur.fetchall()]
+
+    def issue_new_since(self) -> dict:
+        """지금 🆕 인 이슈 → 가장 늦게 🆕 가 된 시각(열림 · 다시 나옴 · 예외 끝남 · 사람이 해결했는데 그대로) — 12시간 안
+        풀린 🟡 를 한 단계 위로 올리는 판정(S11 · v1.4 §6)이 쓴다. 기록이 없으면 이슈의 고친 시각."""
+        out = {}
+        for iid, since, upd in self._conn.execute(
+                """SELECT i.issue_id, (SELECT MAX(e.at) FROM naver_auto_issue_event e
+                                        WHERE e.issue_id = i.issue_id AND e.to_state = 'new'), i.updated_at
+                   FROM naver_auto_issue i WHERE i.state = 'new'"""):
+            t = _aware_time(since if since is not None else upd)
+            if t is None:
+                raise StoreError("저장된 이슈 시각을 읽지 못했습니다")
+            out[int(iid)] = t
+        return out
+
     # ── 읽기 ──
     def meta(self, key: str) -> Optional[str]:
         row = self._conn.execute("SELECT value FROM naver_auto_meta WHERE key = ?", (key,)).fetchone()
@@ -2576,6 +2770,20 @@ class Store:
         return {int(cid): (st, None if pid is None else int(pid)) for cid, st, pid in self._conn.execute(
             "SELECT customer_id, status, possibility_id FROM naver_auto_account_day WHERE day = ?",
             (_day_text(day, "날짜"),))}
+
+    def account_day_checks_on(self, day: date) -> dict:
+        """그 날 계정 하루치의 판정 재료 {고객 번호: {status · possibility_id · rules_not_run}} — 관제 화면(S11)이 가망마다
+        판정(``verdict.judge``)을 만들 때 한 번에 읽는다(계정마다 따로 읽지 않게)."""
+        out = {}
+        for cid, st, pid, rnr in self._conn.execute(
+                "SELECT customer_id, status, possibility_id, rules_not_run FROM naver_auto_account_day WHERE day = ?",
+                (_day_text(day, "날짜"),)):
+            try:
+                missing = [tuple(x) for x in json.loads(rnr)]
+            except (TypeError, ValueError, RecursionError):
+                raise StoreError("저장된 계정 하루치를 읽지 못했습니다") from None
+            out[int(cid)] = {"status": st, "possibility_id": None if pid is None else int(pid), "rules_not_run": missing}
+        return out
 
     def my_running_runs(self) -> List[int]:
         """이 저장소가 시작했는데 아직 「돌고 있음」인 회차 — 아침 점검은 한 번에 하나만 도므로, 새 회차를 부를 때 이것이

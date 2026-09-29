@@ -136,7 +136,7 @@ class StoreAlertTest(Base):
         return self.st.record_alert(**base)
 
     def test_version_and_constants(self):
-        self.assertEqual(S.SCHEMA_VERSION, 5)
+        self.assertEqual(S.SCHEMA_VERSION, 6)   # 6 = S11(열람·쓰기 기록 · 기준값 이력) — 옛 판 이관은 test_web 도 본다
         self.assertEqual(S.ALERT_SEVERITIES, EA.SEVERITIES)
         self.assertEqual(S.ALERT_TTL, timedelta(hours=12))
         for link in (AL.LINK_HOME, AL.LINK_ISSUES, AL.LINK_SYSTEM, AL.LINK_UNLINKED):
@@ -153,7 +153,7 @@ class StoreAlertTest(Base):
         raw.commit()
         raw.close()
         self.st = S.open_writer(self.path, clock=self.fc.now)
-        self.assertEqual(self.st.meta("schema_version"), "5")
+        self.assertEqual(self.st.meta("schema_version"), "6")
         self.assertEqual(self.st.alerts_on(TUE), [])
         self.rec()
 

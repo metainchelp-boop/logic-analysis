@@ -179,8 +179,8 @@ class MigrationTest(Base):
         self.assertIsNone(self.st.stage_as_of())
         self.assertIsNone(self.st.hold(S.SYNC_STAGES))
 
-    def test_version_is_five(self):
-        self.assertEqual(S.SCHEMA_VERSION, 5)   # 5 = S10(알림 · 받는 사람별) — 판을 올리면 이관 시험도 함께 본다(test_alerts)
+    def test_version_is_six(self):
+        self.assertEqual(S.SCHEMA_VERSION, 6)   # 6 = S11(열람·쓰기 기록 · 기준값 이력) — 판을 올리면 이관 시험도 함께 본다(test_alerts · test_web)
 
 
 # ── 목록 급감 브레이크 — 가망 ──────────────────────────────────────────
@@ -1287,19 +1287,21 @@ class DueTest(Base):
 # ── 구문 시험 — 조직 수락본·붙잡음을 적는 길 · 엔진이 읽는 backend 모듈 ─────────────────
 PRIVILEGED = ("record_org", "refuse_org", "refuse_stages", "confirm_prospects_hold", "confirm_accounts_hold",
               "record_pairing", "record_pairing_event",
-              # 사람 판단 쓰기 — 「확인」은 자동 규칙을 모두 이긴다. 범위를 검사하는 S11 길이 생기기 전까지 엔진 어디서도 부르지
-              # 않는다(검토 security-4 · 생기면 그 모듈 한 곳만 더한다)
+              # 사람 판단 쓰기 — 「확인」은 자동 규칙을 모두 이긴다. 범위를 검사하는 S11 화면 API(web.py) 한 곳에서만 부른다
+              # (검토 security-4)
               "record_decision", "revoke_decision",
               # 아침 점검(S9) — 계정 하루치·이슈를 따로 적으면 「정상」만 남고 이슈가 빠지거나, 규칙을 거치지 않은 이슈가
               # 생긴다. 회차·계정 결과·연결 해제 닫기는 morning.py 한 곳에서만 · 따로 적는 옛 함수는 어디서도 부르지 않는다
               "begin_run", "finish_run", "record_account_check", "close_unlinked_issues", "record_account_day",
               "record_campaign_days",
-              # 이슈 사람의 손길 — 누가 누를 수 있는지 판정하는 S11 길이 생기기 전까지 엔진 어디서도 부르지 않는다
+              # 이슈 사람의 손길 — 누가 누를 수 있는지 scope 로 판정하는 S11 화면 API(web.py) 한 곳에서만 부른다
               # (그 속 ``_human`` 은 아무 변화든 받아 적는다 — 이름을 직접 불러 한도·사유를 건너뛰지 못하게 · 검토 security-1)
               "ack_issue", "resolve_issue", "except_issue", "_human",
               # 알림(S10) — 받는 사람·문구 틀·보낸 결과를 적는 길은 alerts.py 한 곳(받는 사람 규칙 scope 를 건너뛴 알림 ·
               # 보내지도 않은 「보냄」 기록이 생기지 않게)
-              "record_alert", "record_delivery", "record_heartbeat")
+              "record_alert", "record_delivery", "record_heartbeat",
+              # 화면 API(S11) — 열람·쓰기 기록 · 🔔 읽음 · 기준값은 web.py 한 곳(범위·대표 판정을 건너뛴 쓰기가 없게)
+              "record_access", "mark_alert_read", "mark_alerts_read_all", "record_thresholds")
 BANNED_NAMES = ("exec", "eval", "compile", "__import__", "globals", "vars", "locals", "open", "breakpoint",
                 "__builtins__", "getattr_static")
 BANNED_ATTRS = ("modules", "__dict__", "__getattribute__", "__subclasses__", "__globals__", "__code__",
@@ -1409,7 +1411,11 @@ class SyncGuardTest(unittest.TestCase):
             uses = _privileged_uses(ast.parse(p.read_text(encoding="utf-8")))
             if uses:
                 found[self.rel(p)] = uses
-        self.assertEqual(set(found), {"sync.py", "links.py", "morning.py", "alerts.py"})
+        self.assertEqual(set(found), {"sync.py", "links.py", "morning.py", "alerts.py", "web.py"})
+        # 사람 판단 · 이슈 손길 · 읽음 · 기준값 · 열람 기록 — scope 로 누를 수 있는 사람을 정한 화면 API 한 곳(S11)
+        self.assertEqual(found["web.py"], {"record_decision", "revoke_decision", "ack_issue", "resolve_issue",
+                                           "except_issue", "record_access", "mark_alert_read", "mark_alerts_read_all",
+                                           "record_thresholds"})
         self.assertEqual(found["alerts.py"], {"record_alert", "record_delivery", "record_heartbeat"})
         self.assertEqual(found["sync.py"], {"record_org", "refuse_org", "refuse_stages", "confirm_prospects_hold"})
         self.assertEqual(found["links.py"], {"confirm_accounts_hold", "record_pairing", "record_pairing_event"})
