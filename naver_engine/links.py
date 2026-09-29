@@ -10,11 +10,17 @@
 - 저장소 브레이크(한꺼번에 · 관리계정 번호 단위 · 기준선 누적 · **확인한 짝이 있는 계정**)가 걸리면 붙잡아 두고
   ``confirm_accounts`` 가 네이버를 **새로 읽지 않고** 그 목록을 받는다(S7 과 같은 방식 · 3시간 · 한 번).
 - 멈춘 날 · 실패한 날은 계정 표를 바꾸지 않으므로 「목록에 없음」 날짜도 늘지 않는다 — 확인한 짝이 멈춤·실패 때문에
-  「연결 끊김」이 되지 않는다.
+  「이관 빠짐」이 되지 않는다.
+- 받은 목록에 광고계정 번호가 없거나 겹친 계정이 있으면 받되 알린다(``ACCOUNTS_UNUSABLE``) — 짝 규칙이 그 목록을 쓸 수
+  없으므로 짝 맞추기는 ① 을 부르지 않고 기다린다(30분마다 ① 을 두드리며 같은 버림을 쌓지 않게 · 검토 pairing-002).
+- 저장된 목록 시각이 지금보다 미래(시계를 뒤로 고침)면 네이버를 읽지 않고 실패로 남긴다(``CLOCK_BEHIND`` · 알림은 처음
+  한 번) — 더 이른 시각의 목록은 저장소가 받지 않으므로 읽어도 버려질 뿐이다(검토 sync-3).
 
 짝 맞추기(``pair_links``)
 - 입력은 넷 — 저장소가 **마지막으로 전부 받은 연결 목록**(``ACCOUNTS_MAX_AGE`` 안) · 계약 단계(점검 손잡이와 같은 72시간 안) ·
-  사람 판단(계정마다 가장 늦은 확인 하나 — 저장소가 고른다) · ① 에 적힌 네이버 고객 번호(회차마다 읽는다 · 저장하지 않는다).
+  사람 판단(계정마다 가장 늦은 확인 하나 — 저장소가 고른다) · ① 에 적힌 네이버 고객 번호(회차마다 읽는다 · ① 목록을
+  통째로 저장하지 않는다 — 막힘 줄만 짝 확인 화면 S11 이 보여 줄 수 있게 적힌 번호를 남긴다 · 사유 ``ad-account-number``
+  줄의 번호 칸은 광고계정 번호다 → 막힘 줄을 계정 표에 이어 읽지 말 것).
   연결 목록·단계가 없거나 낡았으면 ① 을 부르지 않고 버린다.
 - 관리 대상 가망 = 단계 목록에 있고 · 단계 겹침이 없고 · 종료일을 읽었고 · 점검 손잡이와 **같은 규칙**
   (``handles.eligibility_reason``)을 통과한 가망. 끝난 지 14일 넘은 가망은 짝을 맞추지 않는다.
@@ -56,7 +62,7 @@ ACCOUNTS_ALERT_AFTER = timedelta(hours=26)  # 연결 목록을 이만큼 넘게 
 ACCOUNTS_MAX_AGE = timedelta(hours=30)     # 짝 맞추기에 쓸 수 있는 연결 목록의 나이(어제 목록까지 · 그보다 낡으면 맞추지 않음)
 LINK_BROKEN_MIN_DAYS = 2                   # 「연결 끊김」 — 서로 다른 날짜 두 번 이상 목록에 없고
 LINK_BROKEN_MIN_SPAN = timedelta(hours=20)  # 처음 빠진 읽기부터 마지막으로 빠진 읽기까지 20시간 이상(자정 앞뒤 두 번 ≠ 2일)
-PAIRING_RETRY = timedelta(minutes=30)      # 짝 맞추기 버림·실패 뒤 다시 맞추기까지
+PAIRING_RETRY = timedelta(minutes=30)      # 짝 맞추기를 어떤 결과로든 시도한 뒤 다시 맞추기까지(① 읽기 간격 30분 이상 약속)
 PAIRING_ALERT_AFTER = timedelta(hours=26)  # 받은 짝 맞추기가 이만큼 넘게 없으면 알린다
 
 CODE_INCOMPLETE = "INCOMPLETE_LIST"        # 네이버 목록을 전부 받지 못함
@@ -69,7 +75,9 @@ CODE_STAGES_STALE = "STAGES_STALE"         # 계약 단계가 낡음(점검 손�
 CODE_BAD_INPUT = "BAD_INPUT"               # 짝 규칙이 입력을 거절(광고계정 번호 없음 · 겹침 등) — 저장된 목록·① 쪽 문제
 CODE_ACCOUNTS_HELD = "ACCOUNTS_HELD"       # 경고: 연결 목록 확인 대기 중 — 마지막으로 받은 목록으로 맞췄다
 CODE_STAGES_HELD = "STAGES_HELD"           # 경고: 계약 단계 확인 대기 중 — 마지막으로 받은 단계로 맞췄다
-CODE_NEVER_LISTED = "never-listed"         # 결과 줄 사유: 확인한 계정이 한 번도 연결 목록에 없었음
+CODE_NEVER_LISTED = S.PAIR_CODE_NEVER_LISTED   # 결과 줄 사유: 확인한 계정이 한 번도 연결 목록에 없었음
+CODE_ACCOUNTS_UNUSABLE = "ACCOUNTS_UNUSABLE"   # 받은 연결 목록에 광고계정 번호가 없거나 겹친 계정 — 짝 규칙이 못 씀
+CODE_CLOCK_BEHIND = "CLOCK_BEHIND"         # 저장된 연결 목록 시각이 지금보다 미래 — 시계를 뒤로 고쳤다
 
 # 네이버 목록 브레이크는 모두 대표 확인으로 풀 수 있다(목록이 정말로 줄었을 수 있다)
 CONFIRMABLE_ACCOUNT_CODES = frozenset({S.BRAKE_TOTAL, S.BRAKE_MANAGER, S.BRAKE_BASELINE, S.BRAKE_CONFIRMED})
@@ -108,12 +116,24 @@ def _local_start(now: datetime) -> datetime:
     return datetime.combine(local.date(), ACCOUNTS_START, tzinfo=S.KST)
 
 
+def _accounts_unusable(store: S.Store) -> bool:
+    """목록에 있는 계정 중 광고계정 번호가 없거나 두 계정이 같은 번호 — 짝 규칙(번호 공간 가르기)이 이 목록을 거절한다."""
+    nos = [a["ad_account_no"] for a in store.accounts() if a["present"] == 1]
+    return any(n is None for n in nos) or len(set(nos)) != len(nos)
+
+
 # ── 연결 목록 ────────────────────────────────────────────────────────
 def sync_accounts(reader: N.NaverReader, store: S.Store, now: datetime) -> Y.SyncResult:
     """대행 연결 목록을 한 번 받는다(회차마다 새 reader)."""
     Y._need_time(now)
     _need_fresh_naver(reader)
     kind = S.SYNC_ACCOUNTS
+    got = store.accounts_read_at()
+    if got is not None and got > now + Y.CLOCK_SKEW:   # 더 이른 목록은 받지 않는다 — 네이버를 읽어도 버려질 뿐
+        last = store.last_sync(kind)
+        first = last is None or CODE_CLOCK_BEHIND not in last["codes"]
+        store.record_sync_event(kind, S.SYNC_FAILED, (CODE_CLOCK_BEHIND,), now)
+        return Y.SyncResult(kind, S.SYNC_FAILED, (CODE_CLOCK_BEHIND,), alert=first)
     try:
         kids = reader.list_all_children(reader.manager_handle())
     except N.IncompleteList:
@@ -136,6 +156,9 @@ def sync_accounts(reader: N.NaverReader, store: S.Store, now: datetime) -> Y.Syn
         return Y._refused_plain(store, kind, (Y.CODE_STORE_REFUSED,), now, rows)
     except _UNEXPECTED:
         return Y._failed(store, kind, Y.CODE_UNEXPECTED, now, ACCOUNTS_ALERT_AFTER)
+    if _accounts_unusable(store):
+        return Y.SyncResult(kind, S.SYNC_ACCEPTED, (CODE_ACCOUNTS_UNUSABLE,), rows=counts.present,
+                            absent=counts.now_absent, alert=True)
     return Y.SyncResult(kind, S.SYNC_ACCEPTED, (), rows=counts.present, absent=counts.now_absent)
 
 
@@ -156,7 +179,9 @@ def confirm_accounts(store: S.Store, now: datetime, confirmed_by: int, hold_id: 
         return Y.SyncResult(kind, S.SYNC_REFUSED, (e.code,))
     except S.StoreRefused:
         return Y.SyncResult(kind, S.SYNC_REFUSED, (Y.CODE_STORE_REFUSED,), alert=True)
-    return Y.SyncResult(kind, S.SYNC_ACCEPTED, (S.CODE_CONFIRMED,), rows=counts.present, absent=counts.now_absent)
+    unusable = _accounts_unusable(store)
+    return Y.SyncResult(kind, S.SYNC_ACCEPTED, (S.CODE_CONFIRMED,) + ((CODE_ACCOUNTS_UNUSABLE,) if unusable else ()),
+                        rows=counts.present, absent=counts.now_absent, alert=unusable)
 
 
 def accounts_due(store: S.Store, now: datetime) -> bool:
@@ -211,6 +236,8 @@ def _input_problems(store: S.Store, now: datetime):
     a = _usable(read_at, now, ACCOUNTS_MAX_AGE)
     if a is not None:
         codes.append(CODE_ACCOUNTS_NONE if a == "none" else CODE_ACCOUNTS_STALE)
+    elif _accounts_unusable(store):   # 짝 규칙이 거절할 목록 — ① 을 두드리지 않는다(연결 목록 받기가 알린다)
+        codes.append(CODE_ACCOUNTS_UNUSABLE)
     s = _usable(stage_at, now, H.STAGE_MAX_AGE)
     if s is not None:
         codes.append(CODE_STAGES_NONE if s == "none" else CODE_STAGES_STALE)

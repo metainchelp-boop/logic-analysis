@@ -585,7 +585,9 @@ class NaverReader:
         for r in rows:
             kept = F.keep_manager(r)
             no = kept.get("managerAccountNo")
-            if isinstance(no, bool) or not isinstance(no, int) or no <= 0:
+            if isinstance(no, bool) or not isinstance(no, int) or not 0 < no < 10 ** 15:
+                # 경로 허용 목록([0-9]{1,15}) 밖 번호는 네이버 자료 문제로 본다 — 관문의 안전 거절(PathForbidden)은
+                # 프로그램 결함에만 나게(검토 sync-2 · 결과로 돌려주고 기록·재시도 간격·알림이 돌게)
                 raise IncompleteList("관리계정 목록: 번호 없는 줄")
             out.append(kept)
         return out

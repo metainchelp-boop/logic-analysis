@@ -68,6 +68,7 @@ from typing import Callable, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from . import erp_read as E
 from . import fields as F
+from . import handles as H
 from . import naver_read as N
 
 __all__ = ("open_writer", "open_reader", "Store", "StoreError", "StoreBusy", "StoreRefused", "SyncBraked",
@@ -118,6 +119,11 @@ PAIR_STATES = frozenset({PAIR_CONFIRMED, PAIR_AUTO, PAIR_MISSING, PAIR_BROKEN, P
                          PAIR_SUPERSEDED})
 PAIR_CHECKABLE = frozenset({PAIR_CONFIRMED, PAIR_AUTO})
 PAIR_RELATIONS = frozenset({"same", "contains", "different", "unknown"})   # matching.REL_* 와 같은 글자(시험이 대조)
+# 막힘 줄 사유 — matching.B_* 와 같은 글자(시험이 대조) · 그 밖의 글자(숫자 조각 등)는 사유 칸에 들어가지 않는다
+PAIR_BLOCK_CODES = frozenset({"customer-id-format", "customer-id-length", "not-linked", "ad-account-number",
+                              "ambiguous-space", "claimed-by-several", "confirmed-elsewhere", "rejected-by-human",
+                              "name-different", "name-points-elsewhere"})
+PAIR_CODE_NEVER_LISTED = "never-listed"   # 이관 빠짐 사유: 확인한 계정이 한 번도 연결 목록에 없었음(그 밖은 사유 없음)
 PAIRING_OUTCOMES = frozenset({SYNC_ACCEPTED, SYNC_REFUSED, SYNC_FAILED})
 PAIRING_INPUT_COUNTS = ("prospects", "ignored")   # 줄로는 알 수 없는 개수 — 부르는 쪽이 넣는다(나머지는 저장소가 줄에서 센다)
 PAIRING_MAX_ROWS = 200_000
@@ -496,6 +502,16 @@ def _opt_text(v, what: str, limit: int = 200) -> Optional[str]:
     except UnicodeEncodeError:
         raise StoreRefused(f"{what}: 쓸 수 없는 글자가 있습니다") from None
     return v
+
+
+def _or_none(check, v, what: str):
+    """네이버가 준 표시용 칸 하나가 저장 규칙에 안 맞으면 그 칸만 비운다(줄은 남긴다) — 이상한 이름·번호 하나로
+    1,784곳 연결 목록 전체가 날마다 버려지지 않게(① 읽기 관문의 상호와 같은 방식 · 검토 sync-1). 광고계정 번호가
+    비면 짝 맞추기가 그 목록을 쓰지 않고 연결 목록 받기가 알린다(links ``ACCOUNTS_UNUSABLE``)."""
+    try:
+        return check(v, what)
+    except StoreRefused:
+        return None
 
 
 def _code(v, pattern, what: str) -> str:
@@ -1128,11 +1144,24 @@ class Store:
             kept = F.keep(rec, F.CHILD_ACCOUNT)          # 남길 칸만 — 들어온 다른 칸은 여기서 끝난다
             if kept.get("customerId") != cid:
                 raise StoreRefused("연결 목록 줄의 고객 번호가 맞지 않습니다")
-            rows.append((_pos_int(cid, "고객 번호"), _opt_pos_int(kept.get("adAccountNo"), "광고계정 번호"),
-                         _opt_text(kept.get("adAccountName"), "계정 이름")))
+            rows.append((_pos_int(cid, "고객 번호"), _or_none(_opt_pos_int, kept.get("adAccountNo"), "광고계정 번호"),
+                         _or_none(_opt_text, kept.get("adAccountName"), "계정 이름")))
         body = json.dumps({"read_at": at, "rows": [list(r) for r in rows], "per": {str(m): n for m, n in per.items()}},
                           ensure_ascii=False, separators=(",", ":"))
         return at, rows, per, body
+
+    @staticmethod
+    def _managed_prospects(c, now: datetime) -> set:
+        """확인 짝 브레이크의 분모에 넣을 가망 — 지금 단계 목록에 있고 · 겹침 없고 · 종료일을 읽었고 · 점검 손잡이와 같은
+        단계·14일 규칙(``handles.eligibility_reason``)을 통과한 것(검토 rules-1 — 끝난 광고주의 옛 확인이 분모를 불려
+        진짜 급감을 가리지 않게). 단계 자료의 나이는 여기서 보지 않는다(짝 맞추기가 낡은 단계를 따로 거절한다)."""
+        out = set()
+        for pid, key, end in c.execute(
+                """SELECT possibility_id, stage_key, latest_end_date FROM naver_auto_prospect
+                   WHERE present = 1 AND stage_conflict = 0 AND end_unreadable = 0"""):
+            if H.eligibility_reason(key, now, None if end is None else date.fromisoformat(end), now) is None:
+                out.add(int(pid))
+        return out
 
     def _apply_accounts(self, c, at: str, read_at: datetime, rows, per, allow: Optional[int],
                         bypassed: Sequence[str] = ()) -> SyncCounts:
@@ -1160,7 +1189,9 @@ class Store:
                 reasons.append(BRAKE_BASELINE)
             # 확인한 짝이 있는 계정만 따로 센다(S8) — 끝난·쉬는 계정이 섞인 전체 분모로는 안 보이는 급감
             winners, _lost = self._resolve_decisions(c)
-            held = {d.customer_id for d in winners if d.decision == "confirmed" and before.get(d.customer_id) == 1}
+            managed = self._managed_prospects(c, read_at)
+            held = {d.customer_id for d in winners if d.decision == "confirmed" and d.possibility_id in managed
+                    and before.get(d.customer_id) == 1}
             if _braked(len(held), len(held - seen)):
                 reasons.append(BRAKE_CONFIRMED)
             if reasons:
@@ -1437,9 +1468,13 @@ class Store:
                 if code not in PAIR_RELATIONS:
                     raise StoreRefused("이름 관계 코드가 아닙니다")
             elif st == PAIR_BLOCKED:
-                _code(code, _REASON_CODE, "막힌 까닭")
+                if code not in PAIR_BLOCK_CODES:
+                    raise StoreRefused("막힌 까닭 코드가 아닙니다")
+            elif st in (PAIR_MISSING, PAIR_BROKEN):
+                if code is not None and code != PAIR_CODE_NEVER_LISTED:
+                    raise StoreRefused("이관 빠짐 사유 코드가 아닙니다")
             elif code is not None:
-                _code(code, _REASON_CODE, "사유")
+                raise StoreRefused("밀린 확인 줄에는 사유가 없습니다")
             from_decision = st in (PAIR_CONFIRMED, PAIR_SUPERSEDED) or (link == PAIR_CONFIRMED)
             if from_decision != (did is not None):
                 raise StoreRefused("판단 번호는 확인에서 나온 줄에만 있습니다")

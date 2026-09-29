@@ -1286,7 +1286,10 @@ class DueTest(Base):
 
 # ── 구문 시험 — 조직 수락본·붙잡음을 적는 길 · 엔진이 읽는 backend 모듈 ─────────────────
 PRIVILEGED = ("record_org", "refuse_org", "refuse_stages", "confirm_prospects_hold", "confirm_accounts_hold",
-              "record_pairing")
+              "record_pairing", "record_pairing_event",
+              # 사람 판단 쓰기 — 「확인」은 자동 규칙을 모두 이긴다. 범위를 검사하는 S11 길이 생기기 전까지 엔진 어디서도 부르지
+              # 않는다(검토 security-4 · 생기면 그 모듈 한 곳만 더한다)
+              "record_decision", "revoke_decision")
 BANNED_NAMES = ("exec", "eval", "compile", "__import__", "globals", "vars", "locals", "open", "breakpoint",
                 "__builtins__", "getattr_static")
 BANNED_ATTRS = ("modules", "__dict__", "__getattribute__", "__subclasses__", "__globals__", "__code__",
@@ -1398,7 +1401,7 @@ class SyncGuardTest(unittest.TestCase):
                 found[self.rel(p)] = uses
         self.assertEqual(set(found), {"sync.py", "links.py"})
         self.assertEqual(found["sync.py"], {"record_org", "refuse_org", "refuse_stages", "confirm_prospects_hold"})
-        self.assertEqual(found["links.py"], {"confirm_accounts_hold", "record_pairing"})
+        self.assertEqual(found["links.py"], {"confirm_accounts_hold", "record_pairing", "record_pairing_event"})
 
     def test_privileged_guard_catches_bypasses(self):
         bad = ('def f(st):\n    getattr(st, "record_" + "org")(1, 2)\n',
@@ -1407,6 +1410,8 @@ class SyncGuardTest(unittest.TestCase):
                'def f(st):\n    getattr(st, f"{\'refuse\'}_org")\n',
                'def f(st):\n    getattr(st, "".join(["confirm_", "prospects_hold"]))\n',
                'def f(st):\n    st.confirm_accounts_hold(1, 0)\n',
+               'def f(st):\n    st.record_decision(1, 2, "confirmed", 0, None)\n',
+               'def f(st):\n    getattr(st, "revoke_" + "decision")(1, 0, None, "x")\n',
                'import builtins\nbuiltins.getattr\n',
                'def f(st):\n    __builtins__["getattr"](st, "x")\n',
                'def f():\n    __import__("naver_engine.store")\n')

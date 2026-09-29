@@ -214,9 +214,58 @@ class SyncAccountsTest(Base):
         self.assertTrue(res.alert)
 
     def test_store_refusal_is_result(self):
-        L.sync_accounts(FakeReader(kids(*many(20))), self.st, self.at(T0 + timedelta(hours=1)))
-        res = L.sync_accounts(FakeReader(kids(*many(20))), self.st, self.at(T0 + timedelta(minutes=30)))   # 더 이른 목록
+        k = kids(*many(20))
+        k.accounts[5_000_000]["customerId"] = 5_000_001   # 줄의 고객 번호가 열쇠와 다름
+        res = L.sync_accounts(FakeReader(k), self.st, self.clock.t)
         self.assertEqual((res.outcome, res.codes, res.alert), (S.SYNC_REFUSED, (Y.CODE_STORE_REFUSED,), True))
+        self.assertEqual(self.st.accounts(), [])
+
+    def test_clock_behind_does_not_read_naver_and_alerts_once(self):
+        """저장된 목록 시각이 지금보다 미래 — 더 이른 목록은 받지 않으므로 네이버를 읽지 않는다(검토 sync-3)."""
+        L.sync_accounts(FakeReader(kids(*many(20))), self.st, self.at(T0 + timedelta(hours=3)))
+        first = FakeReader(kids(*many(20)))
+        res = L.sync_accounts(first, self.st, self.at(T0))                                  # 시계를 뒤로
+        self.assertEqual((res.outcome, res.codes, res.alert, first.calls), (S.SYNC_FAILED, (L.CODE_CLOCK_BEHIND,), True, 0))
+        self.assertFalse(L.accounts_due(self.st, T0 + timedelta(minutes=29)))              # 30분 간격은 그대로
+        self.assertTrue(L.accounts_due(self.st, T0 + timedelta(minutes=30)))
+        again = FakeReader(kids(*many(20)))
+        res = L.sync_accounts(again, self.st, self.at(T0 + timedelta(minutes=30)))
+        self.assertEqual((res.outcome, res.codes, res.alert, again.calls), (S.SYNC_FAILED, (L.CODE_CLOCK_BEHIND,), False, 0))
+        self.assertEqual(self.st.accounts_read_at(), T0 + timedelta(hours=3))
+        self.assertFalse(L.accounts_due(self.st, T0 + timedelta(hours=3, minutes=5)))      # 시계가 따라잡으면 평소대로
+
+    def test_unusable_list_accepted_with_alert(self):
+        """광고계정 번호가 없거나 겹친 계정 — 받되 알린다(짝 맞추기는 그 목록으로 ① 을 부르지 않는다 · 검토 pairing-002)."""
+        accs = many(20)
+        cases = ([(A, None, "메타상회")] + accs, [(A, accs[0][1], "메타상회")] + accs)   # 번호 없음 · 겹침
+        for i, rows in enumerate(cases):
+            with self.subTest(i=i):
+                res = L.sync_accounts(FakeReader(kids(*rows)), self.st, self.at(T0 + timedelta(hours=i)))
+                self.assertEqual((res.outcome, res.codes, res.alert), (S.SYNC_ACCEPTED, (L.CODE_ACCOUNTS_UNUSABLE,), True))
+        res = L.sync_accounts(FakeReader(kids(*accs)), self.st, self.at(T0 + timedelta(hours=2)))
+        self.assertEqual((res.outcome, res.codes, res.alert), (S.SYNC_ACCEPTED, (), False))
+
+    def test_confirm_reports_unusable_list(self):
+        big = many(100)
+        L.sync_accounts(FakeReader(kids(*big)), self.st, self.clock.t)
+        res = L.sync_accounts(FakeReader(kids((A, None, "메타상회"), *big[:60])), self.st, self.at(T0 + timedelta(days=1)))
+        self.assertEqual(res.outcome, S.SYNC_BRAKED)
+        ok = L.confirm_accounts(self.st, self.clock.t, 0, res.hold_id)
+        self.assertEqual((ok.outcome, ok.codes, ok.alert), (S.SYNC_ACCEPTED, (S.CODE_CONFIRMED, L.CODE_ACCOUNTS_UNUSABLE), True))
+
+    def test_manager_number_out_of_range_is_data_not_programming_error(self):
+        """네이버가 준 관리계정 번호가 경로 허용 모양(15자리) 밖 — 관문의 안전 거절이 아니라 실패 결과(검토 sync-2)."""
+        for bad in (10 ** 15, 10 ** 20):
+            with self.subTest(bad=bad):
+                r, naver, agency = self.reader()
+                agency.managers[0]["managerAccountNo"] = bad
+                res = L.sync_accounts(r, self.st, self.clock.t)
+                self.assertEqual((res.outcome, res.codes), (S.SYNC_FAILED, (L.CODE_INCOMPLETE,)))
+                self.assertEqual(self.st.last_sync(S.SYNC_ACCOUNTS)["codes"], [L.CODE_INCOMPLETE])
+                self.assertFalse(any("/child-ad-accounts" in c.path for c in naver.calls))
+        r, _n, agency = self.reader()
+        agency.managers[0]["managerAccountNo"] = 10 ** 15 - 1   # 15자리까지는 받는다
+        self.assertEqual(r.list_manager_accounts(r.manager_handle())[0]["managerAccountNo"], 10 ** 15 - 1)
 
     def test_brake_holds_and_confirm_takes_held_list_without_reading(self):
         L.sync_accounts(FakeReader(kids(*many(100))), self.st, self.clock.t)
@@ -264,8 +313,12 @@ class SyncAccountsTest(Base):
 class ConfirmedBrakeTest(Base):
     """확인한 짝이 있는 계정만 따로 센다 — 전체·관리계정 분모로는 안 보이는 급감(S7 뒤 조각 몫 ⑵)."""
 
+    def manage(self, pids, **kw):
+        self.st.record_prospects(stages([srow(p, f"가게{p}", **kw) for p in pids], self.clock.t - timedelta(minutes=5)))
+
     def setup_confirmed(self, n_total=1000, n_confirmed=60):
         accs = many(n_total)
+        self.manage(list(range(100, 300)))
         self.st.record_accounts(kids(*accs), self.clock.t)
         for i in range(n_confirmed):
             self.st.record_decision(100 + i, accs[i][0], "confirmed", 0, self.clock.t)
@@ -301,6 +354,31 @@ class ConfirmedBrakeTest(Base):
         res = L.sync_accounts(FakeReader(kids(*(accs[:15] + accs[90:]))), self.st, self.at(T0 + timedelta(days=1, hours=4)))
         self.assertEqual(res.outcome, S.SYNC_ACCEPTED)
 
+    def test_confirmations_outside_management_do_not_dilute(self):
+        """끝난 광고주·단계 목록에서 빠진 가망의 옛 확인은 분모에 넣지 않는다(검토 rules-1)."""
+        accs = many(1000)
+        self.st.record_prospects(stages(
+            [srow(p, f"가게{p}") for p in range(100, 160)]                                        # 관리 중 60
+            + [srow(p, f"끝남{p}", "계약만료", end=T0.date() - timedelta(days=20)) for p in range(300, 340)]   # 끝난 지 20일
+            + [srow(p, f"충돌{p}", end=None, unreadable=True) for p in range(400, 420)],          # 종료일 못 읽음
+            T0 - timedelta(minutes=5)))
+        self.st.record_accounts(kids(*accs), self.clock.t)
+        for i in range(60):
+            self.st.record_decision(100 + i, accs[i][0], "confirmed", 0, self.clock.t)
+        for j, pid in enumerate(list(range(300, 340)) + list(range(400, 420)) + list(range(500, 540))):   # 목록에 없음 40
+            self.st.record_decision(pid, accs[100 + j][0], "confirmed", 0, self.clock.t)
+        res = L.sync_accounts(FakeReader(kids(*accs[15:])), self.st, self.at(T0 + timedelta(days=1)))   # 관리 중 15/60 빠짐
+        self.assertEqual((res.outcome, res.codes), (S.SYNC_BRAKED, (S.BRAKE_CONFIRMED,)))
+
+    def test_managed_rule_is_the_handle_rule(self):
+        self.st.record_prospects(stages([srow(100, "가"), srow(101, "나", "홀딩중"),
+                                         srow(102, "다", end=T0.date() - timedelta(days=14)),   # 끝난 지 14일 — 아직 관리
+                                         srow(103, "라", end=T0.date() - timedelta(days=15)),   # 15일 — 관리 밖
+                                         srow(105, "바", unreadable=True)],
+                                        T0 - timedelta(minutes=5)))
+        got = self.st._managed_prospects(self.st._conn, T0)
+        self.assertEqual(got, {100, 101, 102})
+
     def test_already_absent_confirmed_not_counted(self):
         accs = self.setup_confirmed(n_confirmed=20)
         L.sync_accounts(FakeReader(kids(*accs[10:])), self.st, self.at(T0 + timedelta(days=1)))   # 10/20 = 50% — 그러나
@@ -330,6 +408,36 @@ class AccountsDueTest(Base):
     def test_accepted_before_start_does_not_count_for_today(self):
         L.sync_accounts(FakeReader(kids(*many(10))), self.st, self.at(datetime(2026, 9, 29, 5, 0, tzinfo=KST)))
         self.assertTrue(L.accounts_due(self.st, self.at(datetime(2026, 9, 29, 6, 30, tzinfo=KST))))
+
+    def braked(self):
+        big = many(100)
+        L.sync_accounts(FakeReader(kids(*big)), self.st, self.at(datetime(2026, 9, 28, 6, 40, tzinfo=KST)))
+        t = self.at(datetime(2026, 9, 29, 6, 40, tzinfo=KST))
+        res = L.sync_accounts(FakeReader(kids(*big[:50])), self.st, t)
+        self.assertEqual(res.outcome, S.SYNC_BRAKED)
+        return t, res, big
+
+    def test_hold_blocks_until_it_expires(self):
+        t, res, big = self.braked()
+        self.assertFalse(L.accounts_due(self.st, t + timedelta(hours=1)))
+        self.assertFalse(L.accounts_due(self.st, t + S.HOLD_TTL))
+        self.assertTrue(L.accounts_due(self.st, t + S.HOLD_TTL + timedelta(seconds=1)))   # 확인하지 않은 붙잡음은 3시간
+        again = L.sync_accounts(FakeReader(kids(*big[:50])), self.st, self.at(t + S.HOLD_TTL + timedelta(seconds=1)))
+        self.assertEqual(again.outcome, S.SYNC_BRAKED)                                     # 다시 읽으면 새 붙잡음
+        self.assertNotEqual(again.hold_id, res.hold_id)
+
+    def test_confirmed_hold_no_longer_blocks(self):
+        t, res, _big = self.braked()
+        L.confirm_accounts(self.st, self.at(t + timedelta(minutes=10)), 0, res.hold_id)
+        self.assertFalse(L.accounts_due(self.st, t + timedelta(hours=1)))                  # 오늘 받음
+        self.assertTrue(L.accounts_due(self.st, datetime(2026, 9, 30, 6, 40, tzinfo=KST)))  # 다음 날 평소대로
+
+    def test_superseded_hold_no_longer_blocks(self):
+        t, res, big = self.braked()
+        self.st.record_accounts(kids(*big), self.at(t + timedelta(minutes=10)))           # 멈추지 않는 목록이 붙잡음을 밀어냄
+        self.assertIsNotNone(self.st.hold(S.SYNC_ACCOUNTS)["used_at"])
+        self.assertFalse(L.accounts_due(self.st, t + timedelta(hours=1)))                  # 오늘 받음(붙잡음 때문이 아님)
+        self.assertTrue(L.accounts_due(self.st, datetime(2026, 9, 30, 6, 40, tzinfo=KST)))
 
     def test_clock_moved_back(self):
         L.sync_accounts(FakeReader(N.IncompleteList("x")), self.st, self.at(datetime(2026, 9, 29, 8, 0, tzinfo=KST)))
@@ -407,6 +515,36 @@ class LinkStateTest(Base):
         self.assertEqual((t["present"], t["absent_days"], t["absent_since"], t["absent_last_at"]), (1, 0, None, None))
         self.assertEqual(t["last_seen_at"], T0 + timedelta(days=3))
 
+    def test_reappearance_through_confirmed_hold_resets_clock(self):
+        """빠졌던 계정이 멈춘 뒤 대표가 확인한 목록으로 돌아와도 시각이 지워진다 — 자정 앞뒤 20분이 끊김이 되지 않게(검토 rules-3)."""
+        self.at(T0)
+        self.st.record_prospects(stages([srow(11, "메타상회")], T0 - timedelta(minutes=5)))
+        self.st.record_decision(11, A, "confirmed", 0, T0 - timedelta(minutes=5))
+        big = many(100)
+        self.st.record_accounts(kids((A, 7654321, "메타상회"), *big), T0)
+        self.st.record_accounts(kids(*big), self.at(T0 + timedelta(days=1)))                       # A 빠짐(받음)
+        t2 = self.at(T0 + timedelta(days=2))
+        res = L.sync_accounts(FakeReader(kids((A, 7654321, "메타상회"), *big[:50])), self.st, t2)   # A 돌아옴 · 멈춤
+        self.assertEqual(res.outcome, S.SYNC_BRAKED)
+        L.confirm_accounts(self.st, self.at(t2 + timedelta(minutes=10)), 0, res.hold_id)
+        t = self.st.account_times()[A]
+        self.assertEqual((t["present"], t["absent_since"], t["absent_last_at"], t["last_seen_at"]), (1, None, None, t2))
+        for when in (datetime(2026, 10, 2, 23, 50, tzinfo=KST), datetime(2026, 10, 3, 0, 10, tzinfo=KST)):
+            self.st.record_accounts(kids(*big[:50]), self.at(when))
+        self.st.record_prospects(stages([srow(11, "메타상회")], self.clock.t))
+        out = self.pair()
+        self.assertIn((S.PAIR_MISSING, 11, A, None), self.rows(out.pairing_id))
+
+    def test_absence_through_confirmed_hold_moves_clock(self):
+        self.at(T0)
+        big = many(100)
+        self.st.record_accounts(kids((A, 7654321, "메타상회"), *big), T0)
+        t1 = self.at(T0 + timedelta(days=1))
+        res = L.sync_accounts(FakeReader(kids(*big[:50])), self.st, t1)                             # A 도 빠짐 · 멈춤
+        L.confirm_accounts(self.st, self.at(t1 + timedelta(minutes=10)), 0, res.hold_id)
+        t = self.st.account_times()[A]
+        self.assertEqual((t["absent_since"], t["absent_last_at"], t["absent_days"]), (t1, t1, 1))
+
     def test_never_listed_confirmed_account_is_broken(self):
         self.at(T0)
         self.st.record_prospects(stages([srow(11, "메타상회")], T0 - timedelta(minutes=5)))
@@ -446,6 +584,17 @@ class LinkStateTest(Base):
         self.assertEqual(self.st.account_times()[A]["absent_since"], None)
         out = self.pair()
         self.assertIn((S.PAIR_MISSING, 11, A, None), self.rows(out.pairing_id))
+        # 그 뒤 첫 읽기부터 센다 — 24시간 간격 두 번이면 끊김(검토 rules-4)
+        d1 = self.at(datetime(2026, 9, 30, 6, 40, tzinfo=KST))
+        self.st.record_accounts(kids((B, 8765432, "다른")), d1)
+        self.assertEqual(self.st.account_times()[A]["absent_since"], d1)
+        self.st.record_prospects(stages([srow(11, "메타상회")], self.at(d1 + timedelta(minutes=1))))
+        self.assertIn((S.PAIR_MISSING, 11, A, None), self.rows(self.pair().pairing_id))
+        d2 = self.at(d1 + timedelta(days=1))
+        self.st.record_accounts(kids((B, 8765432, "다른")), d2)
+        self.st.record_prospects(stages([srow(11, "메타상회")], self.at(d2 + timedelta(minutes=1))))
+        self.assertIn((S.PAIR_BROKEN, 11, A, None), self.rows(self.pair().pairing_id))
+        self.assertEqual(self.st.account_times()[A]["absent_since"], d1)
 
     def reopen_fresh(self):
         self.st = S.open_writer(self.path, clock=self.clock)
@@ -568,10 +717,31 @@ class PairLinksTest(Base):
         res = self.pair(FakeErp(E.ErpError("network", E.PATH_NAVER_IDS)), t=T0 + timedelta(hours=27))
         self.assertTrue(res.alert)
 
+    def test_unusable_account_list_refused_before_calling_erp(self):
+        """광고계정 번호 없음·겹침 — 짝 규칙이 거절할 목록으로 ① 을 두드리지 않고 · 다시 맞출 때로 치지 않는다(검토 pairing-002)."""
+        for i, rows in enumerate((((A, None, "메타상회"), (B, 8765432, "하늘꽃집")),
+                                  ((A, 8765432, "메타상회"), (B, 8765432, "하늘꽃집")))):
+            with self.subTest(i=i):
+                self.seed(t=T0 + timedelta(hours=i))
+                self.st.record_accounts(kids(*rows), self.at(T0 + timedelta(hours=i, minutes=1)))
+                erp = FakeErp([nid(12, "2345678")])
+                res = self.pair(erp)
+                self.assertEqual((res.outcome, res.codes, res.alert, erp.calls),
+                                 (S.SYNC_REFUSED, (L.CODE_ACCOUNTS_UNUSABLE,), True, 0))
+                for m in (31, 90, 600):   # 하루 내내 다시 맞출 때가 아니다(① 을 30분마다 두드리지 않는다)
+                    self.assertFalse(L.pairing_due(self.st, T0 + timedelta(hours=i, minutes=m)))
+
     def test_bad_input_refused(self):
-        self.seed()
-        self.st.record_accounts(kids((A, None, "메타상회"), (B, 8765432, "하늘꽃집")), self.at(T0 + timedelta(minutes=1)))
-        res = self.pair(FakeErp([nid(12, "2345678")]))
+        erp = self.seed()
+        orig = M.match
+
+        def boom(*a, **k):
+            raise M.BadInput("x")
+        L.M.match = boom
+        try:
+            res = self.pair(erp)
+        finally:
+            L.M.match = orig
         self.assertEqual((res.outcome, res.codes, res.alert), (S.SYNC_REFUSED, (L.CODE_BAD_INPUT,), True))
 
     def test_reader_must_be_fresh(self):
@@ -831,6 +1001,16 @@ class RecordPairingTest(Base):
              "claimed_elsewhere": 0},
             {"state": "blocked", "possibility_id": 13, "customer_id": None, "code": "Bad Reason"},
             {"state": "blocked", "possibility_id": 13, "customer_id": None, "code": None},
+            # 사유 칸에 숫자 조각·모르는 코드가 들어가지 않는다(검토 security-3)
+            {"state": "blocked", "possibility_id": 13, "customer_id": None, "code": "2345678"},
+            {"state": "blocked", "possibility_id": 13, "customer_id": None, "code": "010-1234-5678"},
+            {"state": "blocked", "possibility_id": 13, "customer_id": None, "code": "900101-1234567"},
+            {"state": "blocked", "possibility_id": 13, "customer_id": None, "code": "9" * 500},
+            {"state": "blocked", "possibility_id": 13, "customer_id": None, "code": "not-linked-2345678"},
+            {"state": "missing", "possibility_id": 11, "customer_id": A, "code": "not-linked", "link": "confirmed",
+             "decision_id": self.did},
+            {"state": "superseded", "possibility_id": 11, "customer_id": A, "code": "never-listed",
+             "decision_id": self.did},
             {"state": "confirmed", "possibility_id": 11, "customer_id": A, "code": "same"},            # 판단 번호 없음
             "row", None,
         )
@@ -895,6 +1075,22 @@ class DecisionResolutionTest(Base):
                          [(11, "confirmed"), (13, "rejected")])
         self.assertEqual(self.st.superseded_confirmations(), [])
 
+    def test_later_rejection_of_winner_revives_older_confirmation(self):
+        """(12,A) 확인 → (11,A) 확인 → (11,A) 아님 — 12 의 확인이 다시 산다(검토 rules-2)."""
+        self.at(T0)
+        d1 = self.st.record_decision(12, A, "confirmed", 0, T0)
+        self.st.record_decision(11, A, "confirmed", 0, T0 + timedelta(minutes=1))
+        d3 = self.st.record_decision(11, A, "rejected", 0, T0 + timedelta(minutes=2))
+        winners, lost = self.st.link_decisions()
+        self.assertEqual(sorted((d.decision_id, d.possibility_id, d.decision) for d in winners),
+                         [(d1, 12, "confirmed"), (d3, 11, "rejected")])
+        self.assertEqual(lost, [])
+        self.st.record_prospects(stages([srow(11, "메타상회"), srow(12, "하늘꽃집")], T0 - timedelta(minutes=5)))
+        self.st.record_accounts(kids((A, 7654321, "하늘꽃집"), (B, 8765432, "다른")), self.at(T0 + timedelta(minutes=3)))
+        rows = self.rows(self.pair(FakeErp([nid(11, "1234567")])).pairing_id)
+        self.assertIn((S.PAIR_CONFIRMED, 12, A, "same"), rows)
+        self.assertIn((S.PAIR_BLOCKED, 11, A, M.B_REJECTED), rows)
+
     def test_matching_never_sees_two_confirmations(self):
         for pid in (11, 12, 13):
             self.st.record_decision(pid, A, "confirmed", 0, T0)
@@ -915,6 +1111,8 @@ class ConstantsTest(unittest.TestCase):
         self.assertEqual({S.PAIR_CONFIRMED, S.PAIR_AUTO}, set(H.LINK_CHECKABLE))
         self.assertEqual((S.PAIR_CONFIRMED, S.PAIR_AUTO), (V.LINK_CONFIRMED, V.LINK_AUTO))
         self.assertEqual(S.PAIR_RELATIONS, {M.REL_SAME, M.REL_CONTAINS, M.REL_DIFFERENT, M.REL_UNKNOWN})
+        self.assertEqual(S.PAIR_BLOCK_CODES, {v for k, v in vars(M).items() if k.startswith("B_")})   # 막힘 사유 = matching
+        self.assertEqual(L.CODE_NEVER_LISTED, S.PAIR_CODE_NEVER_LISTED)
         self.assertEqual(L.CONFIRMABLE_ACCOUNT_CODES, {S.BRAKE_TOTAL, S.BRAKE_MANAGER, S.BRAKE_BASELINE,
                                                        S.BRAKE_CONFIRMED})
         self.assertEqual(L.ACCOUNTS_START, time(6, 30))

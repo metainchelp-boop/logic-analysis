@@ -745,11 +745,22 @@ class AccountTest(Base):
         for bad in (DAY, "2026-09-29", datetime(2026, 9, 29, 6, 40)):
             with self.assertRaises(S.StoreRefused, msg=repr(bad)):
                 self.st.record_accounts(kids((1234567, 11, "a")), bad)
-        for acc in ((1234567, True, "a"), (1234567, 0, "a"), (1234567, 11, 5), (-1, 11, "a")):
+        for acc in ((-1, 11, "a"), (0, 11, "a"), (True, 11, "a")):
             with self.assertRaises(S.StoreRefused, msg=repr(acc)):
                 self.st.record_accounts(kids(acc), NOW)
         self.assertEqual(self.st.accounts(), [])
         self.assertIsNone(self.st.meta("accounts_read_at"))
+
+    def test_unstorable_display_fields_are_blanked(self):
+        """이상한 이름·광고계정 번호 하나로 목록 전체를 버리지 않는다 — 그 칸만 비우고 줄은 남긴다(검토 sync-1)."""
+        bad = ((1234567, True, "a"), (2345678, 0, "b"), (3456789, 11, 5), (4567890, 12, "x" * 201),
+               (5678901, 13, "a\x00b"), (6789012, "14", "\ud800"), (7890123, 15.0, "ok"))
+        c = self.st.record_accounts(kids(*bad), NOW)
+        self.assertEqual(c.present, len(bad))
+        got = {a["customer_id"]: (a["ad_account_no"], a["account_name"]) for a in self.st.accounts()}
+        self.assertEqual(got, {1234567: (None, "a"), 2345678: (None, "b"), 3456789: (11, None), 4567890: (12, None),
+                               5678901: (13, None), 6789012: (None, None), 7890123: (None, "ok")})
+        self.assertEqual(self.st.accounts_read_at(), NOW)
 
     def test_future_refused(self):
         self.clock.t = NOW
@@ -758,11 +769,12 @@ class AccountTest(Base):
         self.st.record_accounts(kids((1234567, 11, "a")), at(minutes=4))
 
     def test_error_text_has_no_values(self):
-        k = kids((1234567, 11, "a" * 500))
+        k = kids((1234567, 11, "a"))
+        k.accounts[1234567]["customerId"] = 7654321
         with self.assertRaises(S.StoreRefused) as cm:
             self.st.record_accounts(k, NOW)
         self.assertNotIn("1234567", str(cm.exception))
-        self.assertNotIn("aaaa", str(cm.exception))
+        self.assertNotIn("7654321", str(cm.exception))
         with self.assertRaises(S.StoreRefused) as cm:
             self.st.record_decision(11, -7654321, "confirmed", 0, NOW)
         self.assertNotIn("7654321", str(cm.exception))
