@@ -156,6 +156,13 @@ class ConfigTest(unittest.TestCase):
             self.assertIsNone(R.engine_target({R.ENV_ENGINE: bad}), bad)
         self.assertIsNone(R.engine_target({}))
 
+    def test_open_refuses_unchecked_target(self):
+        """연결 만들기도 루프백·소켓 말고는 거절한다(설정 검사를 건너뛴 Target 이 와도)."""
+        for t in (R.Target("tcp", host="10.0.0.1", port=80), R.Target("tcp", host="localhost", port=80),
+                  R.Target("tcp", host="0.0.0.0", port=80), R.Target("http", host="127.0.0.1", port=80)):
+            with self.assertRaises(ValueError):
+                R._open(t, 1.0)
+
 
 class ForwardTest(EngineCase):
     def test_get_forwarded_over_tcp_and_unix(self):
