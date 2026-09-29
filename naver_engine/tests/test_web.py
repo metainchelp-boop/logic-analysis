@@ -153,14 +153,18 @@ class WebBase(TM.Base):
         s, b, _h, _p = self.call("POST", path, self.token(idx, **kw), body=body)
         return s, b
 
-    def repair(self, ids, stages=None, names=None):
+    def repair(self, ids, stages=None, names=None, extra=None):
         """① 네이버 고객 번호 줄을 바꿔 지금 시각에 짝을 다시 맞춘다(``ids`` = [(가망, 번호)] · ``stages`` = 가망 → StageRow)."""
         t = self.at(self.fc.now() + timedelta(minutes=5))   # 단계·계정 목록은 앞 것보다 늦어야 받는다
         rows = {p: TM.srow(p) for p in (11, 12, 13, 14)}
         rows.update(stages or {})
         TM.NAMES.update(names or {})
         self.st.record_prospects(E.StageSnapshot(rows, t - timedelta(minutes=3), {}, ()))
-        self.st.record_accounts(TM.kids(A, B, C_, D), t - timedelta(minutes=2))
+        kids = TM.kids(A, B, C_, D)
+        if extra:   # 시험이 더하는 계정 {고객 번호: 남길 칸}
+            acc = {**kids.accounts, **extra}
+            kids = TM.N.ChildAccounts(acc, {1: len(acc)}, ())
+        self.st.record_accounts(kids, t - timedelta(minutes=2))
         res = L.pair_links(TM.FakeErp([E.NaverIdRow(p, M.VENDOR_NAVER, str(c)) for p, c in ids]), self.st,
                            t - timedelta(minutes=1))
         self.assertEqual(res.outcome, S.SYNC_ACCEPTED, res)
@@ -1020,6 +1024,52 @@ class LinksTest(WebBase):
         ceo = self.ref_of(0, 14, "candidate")
         self.assertEqual((ceo["can_confirm"], ceo["account_name"]), (True, TM.shop(14)))
 
+    def test_claim_by_unmanaged_prospect_is_ceo_only(self):
+        """같은 번호를 관리 대상 밖 가망(계약 끝난 지 오래 · 짝 줄이 없다)도 ① 에 적었다 — 누가 주장하는지 화면이 모르므로
+        대표만 잇는다(담당·팀장 모두 409 · 이름 없이)."""
+        self.repair([(12, B), (14, D), (15, D)])
+        for idx in (100, 1):
+            row = self.ref_of(idx, 14)
+            self.assertEqual((row["code"], row["can_confirm"], row["account_name"], row["other_candidate"]),
+                             ("claimed-by-several", False, None, True), idx)
+            self.assertEqual(self.post("/links/confirm", idx, {"refs": [row["ref"]]})[0], 409, idx)
+        ceo = self.ref_of(0, 14)
+        self.assertEqual((ceo["can_confirm"], ceo["account_name"]), (True, "다른이름"))
+        self.assertEqual(self.post("/links/confirm", 0, {"refs": [ceo["ref"]]})[0], 200)
+
+    def test_human_confirmation_holder_counts_even_with_other_holders(self):
+        """계정을 쥔 곳이 여럿 — 내가 다룰 수 있는 가망(이름이 같음)과, 사람이 확인한 범위 밖 가망. 하나라도 범위 밖이면 거절
+        (사람 확인만 따로 빠져도 잡히게)."""
+        TM.NAMES[D] = "가게14본점"
+        self.st.record_decision(13, D, "confirmed", 0, self.fc.now())    # 대표만 보는 13(계약 끝난 지 오래)에 확인
+        self.repair([(14, 9999999)], stages={11: TM.srow(11, name="가게14본점"),
+                                               13: TM.srow(13, stage="계약만료", end=TODAY - timedelta(days=30))})
+        row = self.ref_of(100, 14, "candidate")
+        self.assertEqual((row["can_confirm"], row["account_name"]), (False, None))
+        self.assertEqual(self.post("/links/confirm", 100, {"refs": [row["ref"]]})[0], 409)
+        self.assertEqual([d.possibility_id for d in self.st.current_decisions() if d.customer_id == D], [13])
+
+    def test_pairing_row_holder_counts_even_with_other_holders(self):
+        """범위 밖 가망(101 의 12)이 ① 에 그 번호를 적어 짝 줄(이름 다름)이 있고, 내가 다룰 수 있는 가망(11)은 이름이 같다 —
+        짝 줄 주인이 범위 밖이면 거절(짝 줄만 따로 빠져도 잡히게)."""
+        TM.NAMES[D] = "가게14본점"
+        self.repair([(12, B), (12, D), (14, 9999999)], stages={11: TM.srow(11, name="가게14본점")})
+        self.assertIn("name-different", [r["code"] for r in self.pending(101)["rows"]])
+        row = self.ref_of(100, 14, "candidate")
+        self.assertEqual((row["can_confirm"], row["account_name"]), (False, None))
+        self.assertEqual(self.post("/links/confirm", 100, {"refs": [row["ref"]]})[0], 409)
+
+    def test_name_holder_counts(self):
+        """아무도 번호를 적거나 확인하지 않았지만 계정 이름이 범위 밖 가망(대표만 보는 13)의 상호와 같다 — 거절
+        (이름이 가리키는 가망만 따로 빠져도 잡히게 · 담당이 남의 번호를 적어 가져오는 길)."""
+        self.st.record_decision(13, C_, "confirmed", 0, self.fc.now())   # 13 은 짝이 있어 후보를 받지 않는다
+        TM.NAMES[D] = "가게14본점"
+        self.repair([(12, B), (14, 9999999)], stages={13: TM.srow(13, name="가게14본점")})
+        row = self.ref_of(100, 14, "candidate")
+        self.assertEqual((row["can_confirm"], row["account_name"], row["other_candidate"]), (False, None, True))
+        self.assertEqual(self.post("/links/confirm", 100, {"refs": [row["ref"]]})[0], 409)
+        self.assertTrue(self.ref_of(0, 14, "candidate")["can_confirm"])
+
     def test_preview_of_account_held_elsewhere_refused(self):
         """검토 link-preview-reads-out-of-scope-account — 대표가 12 에 확인한 계정을 100 이 ① 에 적어 미리보기를 누름."""
         self.st.record_decision(12, B, "confirmed", 0, self.fc.now())
@@ -1030,6 +1080,17 @@ class LinksTest(WebBase):
         self.assertEqual(row["code"], "confirmed-elsewhere")
         self.assertEqual(self.post("/links/preview", 100, {"ref": row["ref"]})[0], 409)
         self.assertEqual(seen, [])
+
+    def test_number_space_overlap_not_joined(self):
+        """적힌 번호가 한 계정(E)의 고객 번호이면서 다른 계정(B)의 광고계정 번호 — 「번호 공간 겹침」 막힘은 번호가 누구의 것인지
+        모르므로 계정 이름을 싣지 않는다(검토 blocked-rows-joined 재현 (b))."""
+        e_id = 8_000_000 + B % 1_000_000                                   # B 의 광고계정 번호와 같은 고객 번호
+        self.repair([(12, B), (14, e_id)],
+                    extra={e_id: {"customerId": e_id, "adAccountNo": 9_111_111, "adAccountName": "남의가게"}})
+        for idx in (0, 100):
+            row = self.ref_of(idx, 14)
+            self.assertEqual((row["code"], row["account_name"], row["can_confirm"], row["other_candidate"]),
+                             ("ambiguous-space", None, False, False), idx)
 
     def test_blocked_rows_not_joined_to_account_table(self):
         """번호가 계정이 아닌 막힘(광고계정 번호 · 번호 공간 겹침)과 남이 쥔 계정의 막힘은 계정 이름을 싣지 않는다
@@ -1290,6 +1351,15 @@ class AuditTest(WebBase):
                            profiles=EP.ErpProfileReader(transport=self.erp), clock=self.fc.now)
         s, b = self.get("/clients/11", 100)
         self.assertEqual((s, b["error"]), (503, "audit-unavailable"))   # 열람 기록을 못 적으면 보여 주지 않는다
+
+    def test_store_refusal_is_409_not_outage(self):
+        """저장소가 이 값을 받지 않은 것(거절)은 저장소 장애(503)가 아니다 — 다시 시도하게 만들지 않는다(검토 client-input)."""
+        def refusing(fn):
+            raise S.StoreRefused("받지 않음")
+        self.app = WEB.App(open_read=lambda: S.open_reader(self.path), write=refusing, signer=self.signer,
+                           profiles=EP.ErpProfileReader(transport=self.erp), clock=self.fc.now)
+        with self.assertLogs("naver_engine.web", level="WARNING"):
+            self.assertEqual(self.post("/bell/read-all", 100), (409, {"error": "refused"}))
 
     def test_unserializable_response_is_json_500(self):
         class Odd(WEB.App):
