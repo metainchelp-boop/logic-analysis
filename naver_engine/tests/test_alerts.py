@@ -173,6 +173,11 @@ class StoreAlertTest(Base):
         [due] = self.st.due_deliveries(self.fc.now())
         self.assertEqual((due["emp_idx"], due["template"], due["params"]), (100, "digest", {"red": 1, "yellow": 2}))
 
+    def test_due_urgent_first_even_with_later_number(self):
+        self.rec(recipients=[{"emp_idx": 100, "severity": "NORMAL", "params": {"red": 0, "yellow": 1}},
+                             {"emp_idx": 101, "severity": "URGENT", "params": {"red": 1, "yellow": 0}}])
+        self.assertEqual([d["emp_idx"] for d in self.st.due_deliveries(self.fc.now())], [101, 100])
+
     def test_daily_kinds_once_system_many(self):
         self.rec()
         with self.assertRaises(S.AlertExists):
@@ -408,6 +413,15 @@ class ComposeTest(Base):
         self.assertNotIn(101, rs)
         self.assertEqual(rs[0]["params"], {"red": 1, "yellow": 0})
 
+    def test_red_is_not_overwritten_by_later_yellow_on_same_prospect(self):
+        self.issues(TUE, [(11, A, "red"), (11, D, "yellow")])     # 가망 11 — 🔴 이슈 뒤에 🟡 이슈(번호가 더 큼)
+        mine = [i for i in self.st.issues() if i["possibility_id"] == 11]
+        self.assertEqual([i["severity"] for i in sorted(mine, key=lambda i: i["issue_id"])], ["red", "yellow"])
+        AL.compose(self.st, self.now(at(TUE, 8, 0)), ON)
+        rs = self.recips(S.ALERT_DIGEST)
+        self.assertEqual((rs[100]["params"], rs[100]["severity"]), ({"red": 1, "yellow": 0}, "URGENT"))
+        self.assertEqual(rs[1]["params"], {"red": 1, "yellow": 0})   # 팀장도 🔴 로(🟡 로 내려가 빠지지 않음)
+
     def test_acked_still_counted(self):
         [i11] = [i for i in self.st.issues() if i["possibility_id"] == 11]
         self.st.ack_issue(i11["issue_id"], 100, self.fc.now())
@@ -500,13 +514,16 @@ class WeeklyTest(TM.Base):
     def test_monday_list_to_owner(self):
         t = TM.T0.replace(year=2026, month=10, day=5)
         self.at(t)
-        rows = [TM.srow(p) for p in (11, 14)]
+        rows = [TM.srow(p) for p in (11, 14, 15)]
         self.st.record_prospects(E.StageSnapshot({r.possibility_id: r for r in rows}, t - timedelta(minutes=5), {}, ()))
         self.st.record_accounts(TM.kids(TM.A), t - timedelta(minutes=4))
         self.st.record_decision(11, TM.A, "confirmed", 0, t - timedelta(minutes=3))
-        erp = TM.FakeErp([E.NaverIdRow(14, M.VENDOR_NAVER, "9876543")])   # 연결 목록에 없는 계정
+        erp = TM.FakeErp([E.NaverIdRow(14, M.VENDOR_NAVER, "9876543"),   # 연결 목록에 없는 계정
+                          E.NaverIdRow(15, M.VENDOR_NAVER, "12ab")])      # 번호 모양이 틀림 — 이관 목록 대상 아님
         res = L.pair_links(erp, self.st, t - timedelta(minutes=2))
         self.assertEqual(res.outcome, S.SYNC_ACCEPTED)
+        codes = {r["possibility_id"]: r["code"] for r in self.st.pairing_rows(res.pairing_id) if r["state"] == S.PAIR_BLOCKED}
+        self.assertEqual(codes, {14: M.B_NOT_LINKED, 15: M.B_FORMAT})
         self.st.record_org(org_body(t - timedelta(minutes=10)), t)
         self.assertEqual(AL.compose_due(self.st, self.at(at(MON, 8, 0)), ON), (S.ALERT_DIGEST, S.ALERT_WEEKLY_UNLINKED))
         AL.compose(self.st, self.fc.now(), ON)

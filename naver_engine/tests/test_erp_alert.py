@@ -15,6 +15,7 @@ import unicodedata
 import unittest
 import urllib.error
 import urllib.parse
+from unittest import mock
 from datetime import date, datetime, timedelta, timezone
 
 from naver_engine import erp_alert as A
@@ -322,6 +323,32 @@ class SendAlertTest(unittest.TestCase):
         with self.assertRaises(A.AlertWriteForbidden):
             p._gate("POST", A.PATH_ALERTS, [])
         self.assertEqual(fake.calls, [])
+        self.assertEqual(p.calls, 0)          # 요청을 만들기 전에 막혔다(호출 수에도 들어가지 않음)
+
+    def test_gate_refuses_other_host_even_if_base_changes(self):
+        # 주소 글자가 어떻게 바뀌어도(다른 호스트 · https · 뒤에 붙인 호스트) 요청이 나가지 않는다 — 두 번째 확인 단독 시험
+        for base in ("http://evil.example", "https://api.metainc.co.kr", "http://api.metainc.co.kr.evil.example"):
+            fake = FakeAlertErp()
+            with mock.patch.object(A, "BASE_URL", base):
+                with self.assertRaises(A.AlertWriteForbidden):
+                    poster(fake).send_alert(payload())
+            self.assertEqual(fake.calls, [], base)
+
+    def test_hand_made_payload_is_rebuilt_before_send(self):
+        # build_payload 를 거치지 않은 객체(몸체를 바꿔치는 하위 클래스)도 ① 에는 다시 만든 몸체만 간다
+        class Sneaky(A.AlertPayload):
+            def body(self):
+                b = super().body()
+                b["title"] = "바꿔치기"
+                b["note"] = "광고주 이름"
+                return b
+
+        good = payload()
+        sneaky = Sneaky(good.target_emp_idx, good.severity, good.title, good.lines, good.link_path, good.dedupe_key)
+        fake = FakeAlertErp()
+        self.assertTrue(poster(fake).send_alert(sneaky).delivered)
+        [call] = fake.calls
+        self.assertEqual(call["body"], good.body())
 
     def test_oversized_request_refused_before_send(self):
         fake = FakeAlertErp()
