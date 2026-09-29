@@ -1,5 +1,5 @@
 """데이터 모델 — 직원(User)→팀(Team)→광고주(Client)→채널키(ChannelCredential)."""
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Float
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey
 from sqlalchemy.sql import func
 
 from .database import Base
@@ -183,11 +183,3 @@ class MonthlyRecord(Base):
     recorded_by = Column(Integer, ForeignKey("users.id"))
     recorded_by_name = Column(String)
 
-
-class LoginFailure(Base):
-    """로그인 실패 한 번 = 한 줄(S0 · 대표 결정 2026-09-29 「실패만 셈」). 워커 넷이 같은 표를 본다.
-    묶음 이름만 남긴다 — 이메일은 해시 앞 32자(acct:…) · 주소는 공인 주소만(src:… · sso-src:…). 비밀번호·토큰 0."""
-    __tablename__ = "login_failures"
-    id = Column(Integer, primary_key=True)
-    bucket = Column(String(80), index=True, nullable=False)
-    at = Column(Float, index=True, nullable=False)       # 초(유닉스 시각)

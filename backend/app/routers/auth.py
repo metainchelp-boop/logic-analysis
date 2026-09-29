@@ -27,23 +27,30 @@ def _too_many(wait: int):
 
 @router.post("/auth/login", response_model=schemas.TokenOut)
 def login(payload: schemas.LoginIn, request: Request, db: Session = Depends(get_db)):
-    buckets = login_guard.password_buckets(payload.email, _source(request))
-    wait = login_guard.blocked(db, buckets)
-    if wait is not None:
-        log.warning("비밀번호 로그인 막음(실패 상한) — 묶음 %d개 · %d초 뒤", len(buckets), wait)
-        raise _too_many(wait)
-    user = db.query(models.User).filter(models.User.email == payload.email).first()
-    ok = security.verify_password(payload.password, user.password_hash if user else _DUMMY_HASH)
-    if not user or not ok:
-        login_guard.record(db, buckets)
+    try:
+        ticket = login_guard.reserve(login_guard.password_buckets(payload.email, _source(request)))
+    except login_guard.Unavailable:
+        login_guard.note("password-unavailable", "비밀번호 로그인 — 실패 표를 쓰지 못해 들여보내지 않음(503)")
+        raise HTTPException(503, login_guard.BUSY_MSG)
+    if ticket.wait is not None:
+        login_guard.note("password-blocked", "비밀번호 로그인 막음(실패 상한)")
+        raise _too_many(ticket.wait)
+    failed = True
+    try:
+        user = db.query(models.User).filter(models.User.email == payload.email).first()
+        ok = security.verify_password(payload.password, user.password_hash if user else _DUMMY_HASH)
+        failed = not (user and ok)
+    finally:
+        login_guard.settle(ticket, failed)       # 맞으면 먼저 적은 줄을 지운다 · 틀리면(또는 도중에 멈추면) 남긴다
+    if failed:
         raise HTTPException(401, "이메일 또는 비밀번호가 올바르지 않습니다")
     decision = login_guard.demo_decision(db, user, payload.password)
     if decision == "block":
-        log.warning("데모 계정 로그인 막음(공개된 비밀번호 그대로) — 계정 번호 %d", user.id)
+        login_guard.note("demo-blocked", "데모 계정 로그인 막음(공개된 비밀번호 그대로)")
         raise HTTPException(403, login_guard.DEMO_MSG)
     if decision == "warn":
-        log.warning("데모 관리자 로그인 들여보냄(공개된 비밀번호 그대로 · 쓸 수 있는 다른 관리자 없음) — 계정 번호 %d · "
-                    "비밀번호를 바꾸거나 전산 SSO 관리자를 지정하세요", user.id)
+        login_guard.note("demo-admin-warn", "데모 관리자 로그인 들여보냄(공개된 비밀번호 그대로 · 쓸 수 있는 다른 관리자 없음) — "
+                         "tools.set_password 로 비밀번호를 바꾸거나 전산 SSO 계정을 관리자로 지정하세요")
     token = security.create_token(user.id, user.role)
     return schemas.TokenOut(access_token=token, user=schemas.UserOut.model_validate(user))
 
@@ -69,7 +76,7 @@ def change_password(
         raise HTTPException(400, "현재 비밀번호가 올바르지 않습니다")
     if len((payload.new_password or "").strip()) < 6:
         raise HTTPException(400, "새 비밀번호는 6자 이상이어야 합니다")
-    if any(login_guard.is_published_demo(e, payload.new_password) for e in login_guard.seed.DEMO_PASSWORDS):
+    if login_guard.is_any_published_demo(payload.new_password):
         raise HTTPException(400, "처음 설치 때 공개된 비밀번호는 쓸 수 없습니다. 다른 비밀번호를 정해 주세요.")
     user.password_hash = security.hash_password(payload.new_password)
     db.commit()
@@ -85,29 +92,9 @@ ERP_BASE_URL = "http://api.metainc.co.kr"  # 전산 서버 이전(구 metainc01.
 ERP_MY_PROFILE_PATH = "/api/employee-management/my-profile"
 
 
-@router.post("/auth/sso", response_model=schemas.TokenOut)
-def sso_login(payload: SSOIn, request: Request, db: Session = Depends(get_db)):
-    """전산 로그인 토큰으로 자동 로그인.
-    전산 '내 정보' API로 토큰을 검증 → 사용자 자동 매핑(없으면 자동 가입).
-    권한: 직위/팀에 '대표'→admin, 팀명에 '광고'→staff, 그 외→viewer(읽기전용).
-    실패(토큰 없음 · ① 이 거절 · 사용자 식별 실패)만 한 곳 10분 30번까지 센다(S0) — ① 이 안 받는 것(502)은 세지 않는다."""
+def _erp_profile(bearer: str):
+    """① 「내 정보」 확인 — (결과, 자료). 결과 = ok(자료 = result) · rejected(① 이 토큰을 거절) · outage(① 사정 — 세지 않음)."""
     import requests as rq
-    import secrets as pysecrets
-
-    buckets = login_guard.sso_buckets(_source(request))
-    wait = login_guard.blocked(db, buckets)
-    if wait is not None:
-        log.warning("SSO 로그인 막음(실패 상한) — %d초 뒤", wait)
-        raise _too_many(wait)
-
-    def fail(msg):
-        login_guard.record(db, buckets)
-        return HTTPException(401, msg)
-
-    tok = (payload.token or "").strip().strip("/").strip()
-    if not tok:
-        raise fail("SSO 토큰이 없습니다")
-    bearer = tok if tok.lower().startswith("bearer ") else "Bearer " + tok
     try:
         resp = rq.get(
             ERP_BASE_URL + ERP_MY_PROFILE_PATH,
@@ -115,22 +102,57 @@ def sso_login(payload: SSOIn, request: Request, db: Session = Depends(get_db)):
             timeout=8,
         )
     except Exception:
-        raise HTTPException(502, "전산 인증 서버에 연결할 수 없습니다")
+        return "outage", "전산 인증 서버에 연결할 수 없습니다"
     if resp.status_code in (401, 403):
-        raise fail("전산 로그인이 유효하지 않습니다. 전산에 먼저 로그인해주세요.")
+        return "rejected", "전산 로그인이 유효하지 않습니다. 전산에 먼저 로그인해주세요."
     if resp.status_code != 200:
         # ① 쪽 사정(점검·장애) — 사용자 실패가 아니라 세지 않는다(S0)
-        raise HTTPException(502, "전산 인증 서버가 지금 답하지 않습니다. 잠시 뒤 다시 들어와 주세요.")
+        return "outage", "전산 인증 서버가 지금 답하지 않습니다. 잠시 뒤 다시 들어와 주세요."
     try:
         body = resp.json()
     except ValueError:
-        raise HTTPException(502, "전산 인증 서버의 답을 읽을 수 없습니다. 잠시 뒤 다시 들어와 주세요.")
-    result = (body.get("result") if isinstance(body, dict) else None) or {}
-    if not isinstance(result, dict):
-        raise fail("전산 사용자 식별에 실패했습니다")
-    login_id = str(result.get("id") or "").strip()
+        return "outage", "전산 인증 서버의 답을 읽을 수 없습니다. 잠시 뒤 다시 들어와 주세요."
+    result = body.get("result") if isinstance(body, dict) else None
+    login_id = str(result.get("id") or "").strip() if isinstance(result, dict) else ""
     if not login_id or len(login_id) > 100:
-        raise fail("전산 사용자 식별에 실패했습니다")
+        # ① 이 토큰은 받았는데 사람을 알려 주지 않음 — ① 쪽 이상(세지 않음)
+        return "outage", "전산 사용자 식별에 실패했습니다"
+    return "ok", result
+
+
+@router.post("/auth/sso", response_model=schemas.TokenOut)
+def sso_login(payload: SSOIn, request: Request, db: Session = Depends(get_db)):
+    """전산 로그인 토큰으로 자동 로그인.
+    전산 '내 정보' API로 토큰을 검증 → 사용자 자동 매핑(없으면 자동 가입).
+    권한: 직위/팀에 '대표'→admin, 팀명에 '광고'→staff, 그 외→viewer(읽기전용).
+    ① 이 거절한 토큰만 센다(S0 · login_guard 설명) — 같은 토큰은 한 번만 · 빈 토큰·① 장애(502)는 세지 않는다."""
+    import secrets as pysecrets
+
+    tok = (payload.token or "").strip().strip("/").strip()
+    if not tok:
+        raise HTTPException(401, "SSO 토큰이 없습니다")          # ① 을 부르지 않는다 — 세지 않음
+    bearer = tok if tok.lower().startswith("bearer ") else "Bearer " + tok
+    try:
+        ticket = login_guard.reserve(login_guard.sso_buckets(_source(request)), tag=login_guard.token_tag(bearer))
+    except login_guard.Unavailable:
+        login_guard.note("sso-unavailable", "SSO 로그인 — 실패 표를 쓰지 못해 들여보내지 않음(503)")
+        raise HTTPException(503, login_guard.BUSY_MSG)
+    if ticket.known_rejected:
+        raise HTTPException(401, "전산 로그인이 유효하지 않습니다. 전산에 먼저 로그인해주세요.")
+    if ticket.wait is not None:
+        login_guard.note("sso-blocked", "SSO 로그인 막음(거절 토큰 상한)")
+        raise _too_many(ticket.wait)
+    kind = "outage"
+    try:
+        kind, got = _erp_profile(bearer)
+    finally:
+        login_guard.settle(ticket, failed=(kind == "rejected"))
+    if kind == "rejected":
+        raise HTTPException(401, got)
+    if kind != "ok":
+        raise HTTPException(502, got)
+    result = got
+    login_id = str(result.get("id") or "").strip()
     name = (str(result.get("name") or login_id)).strip()[:100]
 
     # 직위·팀 문자열 수집 → 권한 판별

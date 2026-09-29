@@ -1,0 +1,18 @@
+# 이미지에 넣지 않는 것(S0) — 개발자 PC 의 키·DB·가상환경·비밀값 파일이 이미지에 굳지 않게.
+# 운영 키·DB 는 /app/data(영구 볼륨)에 있고 이미지에는 필요 없다.
+.git
+.env
+**/.env
+data/
+backend/.venv/
+**/__pycache__/
+**/*.pyc
+backend/*.key
+backend/*.key.lock
+backend/*.db
+backend/*.db-*
+backend/.init.lock
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/*.db-journal

@@ -1,10 +1,14 @@
-"""S0 보안 준비 — 로그인 서명 비밀값이 쓸 만한지 판정하고, 쓸 만하지 않으면 서버가 만든 값을 파일에 두고 쓴다.
+"""S0 보안 준비 — 로그인 서명 값이 쓸 만한지 판정하고, 쓸 만하지 않으면 서버가 스스로 만든 강한 값을 쓴다.
 
 지키는 것(대표 결정 2026-09-29 「서버가 강한 값을 스스로 만듦」)
-- 알려진 기본값(docker-compose 의 ``please-set-a-strong-secret`` · 코드의 ``dev-secret-…`` · 문서 예시 ``xxx`` 등)으로는
-  **절대 서명하지 않는다.** 환경 값이 약하거나 없으면 서버가 강한 값을 한 번 만들어 파일에 두고 모든 워커가 같은 값을 쓴다.
-- 사이트는 멈추지 않는다 — 값이 약해도 시작은 된다(대신 서버가 만든 값을 쓴다 · 옛 약한 값으로 서명된 토큰은
-  맞지 않게 되어 모두 한 번 다시 로그인한다).
+- 알려진 기본값(docker-compose 의 옛 기본값 · 코드의 옛 기본값 · 문서 예시 ``xxx`` 등)으로는 **절대 서명하지 않는다.**
+  환경 값이 약하거나 없으면 서버가 **이미 모든 워커가 함께 쓰는 암호화 키**(``secret.key`` · 서버가 처음 한 번 만든
+  무작위 값 · 영구 볼륨)에서 서명 값을 뽑는다(HMAC · 되돌릴 수 없음).
+  - 뽑는 길이 하나라 **워커 넷이 · 워커가 다시 떠도 · 컨테이너를 다시 띄워도** 늘 같은 값이다(파일을 따로 두면
+    잠깐의 쓰기 실패나 파일 지우기만으로 워커마다 값이 갈려 로그인이 제멋대로 풀린다 — S0 검토).
+  - 서명 값이 새어도 암호화 키는 거꾸로 못 구한다. 암호화 키 파일을 읽을 수 있는 사람은 원래 모든 것을 푼다.
+- 사이트는 멈추지 않는다 — 값이 약해도 시작은 된다(옛 약한 값으로 서명된 토큰은 맞지 않게 되어 모두 한 번 다시 로그인).
+- **모두를 한 번에 다시 로그인시키려면** 환경 ``JWT_SECRET`` 에 새 강한 값(32자 이상 무작위)을 넣고 다시 띄운다.
 - 값은 **돌려주지도 찍지도 않는다.** 판정 결과는 짧은 사유 이름(``ok`` · ``missing`` · ``short`` · ``known-default`` ·
   ``reused`` · ``low-variety``)뿐이다.
 
@@ -12,27 +16,20 @@
 """
 from __future__ import annotations
 
+import hashlib
 import hmac
 import logging
 import os
-import secrets
-import tempfile
-from pathlib import Path
 from typing import Iterable, Optional, Tuple
-
-try:  # 리눅스·맥 — 워커 여럿이 같은 파일을 두고 겨루지 않게 잠근다
-    import fcntl
-except ImportError:  # pragma: no cover — 윈도우(운영 아님)
-    fcntl = None
 
 log = logging.getLogger("app.secret_policy")
 
 MIN_LEN = 32            # 이보다 짧으면 「short」
 MIN_DISTINCT = 12       # 서로 다른 글자가 이보다 적으면 「low-variety」(aaaa… · 1212… 같은 값)
-GENERATED_BYTES = 48    # 서버가 만드는 값 — token_urlsafe(48) = 64글자
 
 # 알려진 기본값·예시값 — 이 값(대소문자·앞뒤 공백 무시)이거나 아래 조각을 품으면 「known-default」.
-# 새 기본값이 저장소 어딘가에 생기면 여기에도 적는다(시험이 compose·코드·문서의 기본값을 다시 읽어 대조한다).
+# 새 기본값·예시를 저장소 어딘가에 적으면 여기에도 적는다 — 시험이 compose·DEPLOY.md·run.sh·파이썬 파일에서
+# ``JWT_SECRET=값`` 모양을 찾아 이 판정으로 거른다(쓸 만하다고 나오면 실패).
 KNOWN_WEAK = (
     "please-set-a-strong-secret",
     "dev-secret-change-me-in-production",
@@ -53,6 +50,8 @@ OTHER_SECRET_NAMES = (
 )
 
 REASONS = ("ok", "missing", "short", "known-default", "reused", "low-variety")
+
+JWT_LABEL = b"ad-dashboard/jwt-signing/v1"
 
 
 def _eq(a: str, b: str) -> bool:
@@ -82,91 +81,20 @@ def other_secrets(environ=None) -> Tuple[str, ...]:
     return tuple(env.get(n, "") for n in OTHER_SECRET_NAMES)
 
 
-def generate() -> str:
-    return secrets.token_urlsafe(GENERATED_BYTES)
+def derive(material: bytes, label: bytes) -> str:
+    """서버가 가진 무작위 재료(암호화 키)에서 쓰임새마다 다른 값을 뽑는다 — 되돌릴 수 없음 · 64글자(256비트)."""
+    if not material:
+        raise ValueError("재료가 비었습니다")
+    return hmac.new(material, label, hashlib.sha256).hexdigest()
 
 
-def _read(path: Path) -> Optional[str]:
-    try:
-        return path.read_text(encoding="utf-8").strip()
-    except (FileNotFoundError, UnicodeDecodeError):
-        return None
-
-
-def _write_private(path: Path, value: str) -> None:
-    """같은 폴더에 임시 파일(0600)을 쓰고 바꿔 끼운다 — 반쯤 쓰인 파일을 읽는 워커가 없다."""
-    fd, tmp = tempfile.mkstemp(prefix=".jwt-", dir=str(path.parent))
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(value)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-
-
-def load_or_create(path: Path) -> Tuple[str, bool]:
-    """파일의 서명 값을 읽는다 — 없거나 쓸 만하지 않으면 강한 값을 만들어 둔다. (값, 새로 만들었나).
-    워커 여럿이 동시에 불러도 한 값으로 모인다(옆 잠금 파일 · 잠금이 없는 곳은 「먼저 만든 것이 이긴다」)."""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if fcntl is not None:
-        lock = os.open(str(path) + ".lock", os.O_RDWR | os.O_CREAT, 0o600)
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX)
-            cur = _read(path)
-            if cur is not None and assess(cur) == "ok":
-                return cur, False
-            new = generate()
-            _write_private(path, new)
-            return new, True
-        finally:
-            os.close(lock)          # 닫으면 잠금도 풀린다
-    # 잠금이 없는 곳 — 새로 만들 때만 「없을 때만 만들기」로 겨루고, 진 쪽은 이긴 값을 읽는다
-    cur = _read(path)
-    if cur is not None and assess(cur) == "ok":
-        return cur, False
-    new = generate()
-    try:
-        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError:
-        cur = _read(path)
-        if cur is not None and assess(cur) == "ok":
-            return cur, False
-        _write_private(path, new)       # 망가진 파일 — 바꿔 끼운다
-        return new, True
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write(new)
-    return new, True
-
-
-def derive(material: bytes) -> str:
-    """파일을 쓸 수 없을 때의 마지막 길 — 이미 모든 워커가 같이 쓰는 암호화 키에서 서명 값을 뽑는다(되돌릴 수 없는 뽑기).
-    워커마다 제각각 값을 만들면 한 워커가 준 토큰을 다른 워커가 거절해 로그인이 제멋대로 풀린다 — 그것보다 낫다."""
-    return hmac.new(material, b"ad-dashboard/jwt-signing/v1", "sha256").hexdigest() * 2
-
-
-def resolve(env_value: Optional[str], file_path: Path, derive_from: Optional[bytes] = None,
+def resolve(env_value: Optional[str], derive_from: bytes,
             others: Iterable[Optional[str]] = ()) -> Tuple[str, str, str]:
-    """(서명 값, 출처, 사유). 출처 = env(환경 값이 쓸 만함) · file(서버가 만든 파일) · derived(파일을 못 쓸 때).
+    """(서명 값, 출처, 사유). 출처 = env(환경 값이 쓸 만함) · derived(서버가 만든 값).
     사유 = 환경 값을 안 쓴 까닭(쓸 만하면 ``ok``). 값은 첫 칸에만 있고 로그에는 출처·사유만 남는다."""
     reason = assess(env_value, others)
     if reason == "ok":
         return env_value.strip(), "env", "ok"
-    try:
-        value, created = load_or_create(Path(file_path))
-        log.warning("로그인 서명 값 — 환경 값을 쓰지 않음(사유: %s) · 서버가 만든 값을 씀(%s)",
-                    reason, "새로 만듦" if created else "파일")
-        return value, "file", reason
-    except OSError as e:
-        if derive_from:
-            log.error("로그인 서명 값 — 환경 값을 쓰지 않음(사유: %s) · 파일을 쓸 수 없어(%s) 암호화 키에서 뽑음",
-                      reason, type(e).__name__)
-            return derive(derive_from), "derived", reason
-        raise
+    value = derive(derive_from, JWT_LABEL)
+    log.warning("로그인 서명 값 — 환경 값을 쓰지 않음(사유: %s) · 서버가 만든 값을 씀", reason)
+    return value, "derived", reason

@@ -1036,8 +1036,8 @@ def system_keys(user: models.User = Depends(get_current_user)):
         row = {"name": n, "label": label, "icon": icon, "set": bool(os.environ.get(n, "").strip())}
         if n == "JWT_SECRET":
             # S0 — 서명 값은 늘 강한 값이다(약한 환경 값이면 서버가 만든 값). 「설정됨」은 그 사실대로 ·
-            # 어디서 왔는지(env · file · derived)와 환경 값을 안 쓴 까닭(사유 이름)을 덧붙인다(값은 0).
-            row["set"] = security.JWT_SOURCE in ("env", "file", "derived")
+            # 어디서 왔는지(env · derived)와 환경 값을 안 쓴 까닭(사유 이름)을 덧붙인다(값은 0).
+            row["set"] = security.JWT_SOURCE in ("env", "derived")
             row["source"] = security.JWT_SOURCE
             row["reason"] = security.JWT_REASON
         out.append(row)

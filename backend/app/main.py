@@ -6,16 +6,17 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
-from .database import Base, engine
+from .database import Base, engine, init_lock
 from . import cors_policy, seed
 from .routers import auth, clients, insights, erp, naver
 
-Base.metadata.create_all(bind=engine)
-
-# 가벼운 마이그레이션 — 기존 테이블에 새 컬럼 추가(이미 있으면 무시)
+# 시작 준비는 워커 하나씩(init_lock) — 동시에 떠도 표 만들기·씨앗이 겹치지 않는다(S0)
 from sqlalchemy import text as _text  # noqa: E402
 
-with engine.connect() as _conn:
+with init_lock():
+    Base.metadata.create_all(bind=engine)
+    # 가벼운 마이그레이션 — 기존 테이블에 새 컬럼 추가(이미 있으면 무시)
+    _conn = engine.connect()
     for _ddl in (
         "ALTER TABLE clients ADD COLUMN delete_requested_by INTEGER",
         "ALTER TABLE clients ADD COLUMN delete_requested_at TEXT",
@@ -32,7 +33,9 @@ with engine.connect() as _conn:
             _conn.execute(_text(_ddl))
             _conn.commit()
         except Exception:
+            _conn.rollback()
             pass  # 컬럼 이미 존재
+    _conn.close()
 
 app = FastAPI(title="메타 광고주 통합 대시보드 API")
 # 다른 사이트 화면의 호출(CORS) — 기본은 아무 곳에도 열지 않는다(S0 · 예전엔 모든 사이트 *).
@@ -63,7 +66,8 @@ def health():
     return {"status": "ok", "service": "ad-dashboard", "sprint": 1}
 
 
-seed.run()
+with init_lock():
+    seed.run()
 
 # 정기 자동수집 스케줄러(매일 06:00 KST, 워커 1개만)
 from . import collector  # noqa: E402
