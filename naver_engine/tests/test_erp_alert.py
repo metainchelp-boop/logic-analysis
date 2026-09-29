@@ -93,7 +93,8 @@ class FakeAlertErp:
         if isinstance(t, bool) or not isinstance(t, int) or t < 0 or t not in self.active:
             return self._bad()
         today = [m for m in self.messages if m[0] == self.today]
-        if any(m[1] == t and m[2] == key for m in today):
+        recent = [m for m in self.messages if m[0] >= self.today - timedelta(days=1)]   # ① 같은 열쇠 창 = 오늘·어제
+        if any(m[1] == t and m[2] == key for m in recent):
             return self._ok({"delivered": False, "reason": "duplicate", "message_idx": None})
         if sum(1 for m in today if m[1] == t) >= self.cap_target:
             return self._ok({"delivered": False, "reason": "daily_cap_target", "message_idx": None})

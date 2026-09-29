@@ -21,6 +21,10 @@
 - 아침 요약은 08:00 뒤 · 그날 점검 회차가 끝난 뒤(08:05 까지는 도는 회차를 기다린다) · 18:00 까지 못 만들면 그날은 건너뛴다.
 - **「오늘 끝」 심박(대표 결정 A3)** — 아침 요약을 만들면 ① 에 날짜와 ok/trouble 만 보낸다. ① 이 08:10 까지 못 받으면
   대표 비서방에 긴급 한 통(① 쪽 일 · BE). 엔진이 죽거나 멈춰도 아무도 모르는 날이 없게.
+  - 오늘 **끝난 점검 회차가 없으면**(멈춤 · 죽음 · 시작 못 함) 요약을 만든 뒤 대표에게 긴급 경보(``MORNING_NOT_DONE``)
+    — 아침 점검·점검 준비가 이미 알린 날은 빼고. 그래서 점검 없는 날의 심박은 「정상」이 아니라 「trouble」이다.
+  - 오늘 시스템 경보가 **모두 대표에게 들어간 뒤에만** 보낸다(trouble = 「이미 알렸다」). 못 넣었으면 보내지 않아 ① 감시가
+    대신 알린다. 시스템 경보는 요약보다 먼저 보내고, 심박은 요약 줄보다 먼저 간다(요약이 수십 통이어도 08:10 전에).
 - 12시간 안 풀린 🟡 를 한 단계 위로 올리기(v1.4)는 사람이 누르는 「확인」(S11 화면)과 함께 만든다 — 이 조각에는 없다.
 
 지키는 것
@@ -29,8 +33,10 @@
 - 받는 사람은 조직 수락본으로 계산한다. 조직이 낡았으면(26시간) 광고주 알림은 남겨만 두고 대표에게 시스템 경보.
   조직을 못 읽으면 시스템 경보는 대표 계정(0번)으로 간다.
 - 보내기는 한 번에 하나 · 순서대로(① 은 같은 열쇠가 거의 동시에 오면 둘 다 넣을 수 있다). 못 보낸 것은 잠시 뒤 다시 ·
-  다섯 번 · 12시간이 지나면 그만(어제 요약이 오늘 가지 않게). ① 이 넣지 않은 것(같은 열쇠 · 하루 상한)도 결과로 남긴다.
-  키 거절(401·403)이면 그 차례의 나머지를 부르지 않는다(모두 같은 이유로 실패한다).
+  다섯 번(시스템 경보는 횟수로 그만두지 않고 30분 간격으로) · 12시간이 지나면 그만(어제 요약이 오늘 가지 않게). ① 이 넣지
+  않은 것(같은 열쇠 · 하루 상한)도 결과로 남긴다. 400(그 줄만의 문제) 말고는 — 키 거절 · 상한 · 네트워크 · 서버 오류 —
+  그 차례의 나머지를 부르지 않는다(느린 ① 에 줄마다 기다리지 않게). 12시간 동안 못 보낸 시스템 경보는 알린 것으로 치지
+  않아 같은 코드가 다시 나면 새로 알린다.
 - 결과는 예외가 아니라 ``*Outcome`` 으로(개수·코드만) · 저장소 자체 오류(``StoreError``)는 그대로 던진다.
 """
 from __future__ import annotations
@@ -72,13 +78,15 @@ CODE_NEEDS_CONFIRMATION = "NEEDS_CONFIRMATION"   # 붙잡아 둔 목록 — 대�
 CODE_ORG_UNAVAILABLE = "ORG_UNAVAILABLE"         # 조직을 못 읽어 받는 사람을 계산하지 못함
 CODE_ORG_STALE = "ORG_STALE"                     # 조직이 낡아 광고주 알림을 남겨만 둠
 CODE_OTHER = "OTHER_CODE"                        # 코드 모양이 아닌 코드(기록에 싣지 않는다)
+CODE_MORNING_NOT_DONE = "MORNING_NOT_DONE"       # 아침 요약을 만들 때까지 오늘 끝난 점검 회차가 없음(멈춤·시작 못 함)
 SOURCE_OF_SYNC = {S.SYNC_ORG: "org", S.SYNC_STAGES: "stages", S.SYNC_ACCOUNTS: "accounts"}
 
 # 점검을 통째로 멈추거나(오늘 점검 없음) 광고주 여럿에 걸친 경보 — 긴급(팝업)
 URGENT_CODES = frozenset({MO.CODE_ACCOUNTS_UNUSABLE, MO.CODE_PAIRING_NOT_TODAY, MO.CODE_NOT_READY_LATE,
                           MO.CODE_RUNS_EXHAUSTED, MO.CODE_RUN_ABORT, MO.CODE_KEY_REJECTED_ALL,
                           MO.CODE_KEY_REJECTED_MANY, MO.CODE_NAVER_UNAVAILABLE, MO.CODE_DEADLINE_CUT,
-                          MO.CODE_UNLINK_MASS, CODE_NEEDS_CONFIRMATION, CODE_ORG_UNAVAILABLE})
+                          MO.CODE_UNLINK_MASS, CODE_NEEDS_CONFIRMATION, CODE_ORG_UNAVAILABLE,
+                          CODE_MORNING_NOT_DONE})
 
 SOURCE_NAMES = {"org": "조직 동기화", "stages": "계약 단계 동기화", "accounts": "대행 연결 목록 받기",
                 "pairing": "짝 맞추기", "readiness": "점검 준비", "morning": "아침 점검", "compose": "알림 만들기"}
@@ -88,6 +96,7 @@ CODE_TEXT = {
     CODE_NEEDS_CONFIRMATION: "대표님 확인이 필요한 목록이 있습니다(관제 › 시스템)",
     CODE_ORG_UNAVAILABLE: "조직 자료를 읽지 못해 받는 사람을 계산하지 못했습니다",
     CODE_ORG_STALE: "조직 자료가 낡아 광고주 알림을 보내지 않고 남겨 두었습니다",
+    CODE_MORNING_NOT_DONE: "오늘 아침 점검이 끝나지 않았습니다(멈췄거나 시작하지 못함)",
     MO.CODE_ACCOUNTS_UNUSABLE: "대행 연결 목록을 쓸 수 없어 점검이 멈췄습니다",
     MO.CODE_PAIRING_NOT_TODAY: "오늘 짝 맞추기가 없습니다",
     MO.CODE_PAIRING_STALE: "짝 맞추기가 지금 자료와 달라 다시 맞추기를 기다립니다",
@@ -414,20 +423,25 @@ def _digest(store: S.Store, now: datetime, policy: AlertPolicy, org: Optional[O.
     return _record(store, S.ALERT_DIGEST, today, "digest", LINK_ISSUES, people, now)
 
 
+def _lead_counts(store: S.Store, org: O.Org) -> Dict[int, List]:
+    """팀장 → [🟡 광고주 수, 담당 번호들] — 팀장 묶음과 그림자 요약이 같은 셈을 쓴다."""
+    per: Dict[int, List] = {}
+    for pid, lvl in _open_issue_levels(store).items():
+        if lvl != "yellow":
+            continue   # 🔴 는 아침 요약에서 팀장이 이미 받았다
+        own = _ownership(org, pid)
+        for lead in SC.digest_recipients(org, own):
+            per.setdefault(lead, [0, set()])
+            per[lead][0] += 1
+            per[lead][1].add(own.main)
+    return per
+
+
 def _lead_digest(store: S.Store, now: datetime, policy: AlertPolicy, org: Optional[O.Org], usable: bool) -> Counter:
     today = _local(now).date()
     people = []
     if org is not None:
-        per: Dict[int, List] = {}
-        for pid, lvl in _open_issue_levels(store).items():
-            if lvl != "yellow":
-                continue   # 🔴 는 아침 요약에서 팀장이 이미 받았다
-            own = _ownership(org, pid)
-            for lead in SC.digest_recipients(org, own):
-                per.setdefault(lead, [0, set()])
-                per[lead][0] += 1
-                per[lead][1].add(own.main)
-        for lead, (count, mains) in sorted(per.items()):
+        for lead, (count, mains) in sorted(_lead_counts(store, org).items()):
             people.append({"emp_idx": lead, "severity": SEV_NORMAL,
                            "params": {"count": count, "people": len(mains)},
                            "held_reason": _held(today, policy, usable, False)})
@@ -452,7 +466,7 @@ def _weekly_unlinked(store: S.Store, now: datetime, policy: AlertPolicy, org: Op
     return _record(store, S.ALERT_WEEKLY_UNLINKED, today, "weekly_unlinked", LINK_UNLINKED, people, now)
 
 
-def _shadow_summary(store: S.Store, now: datetime, policy: AlertPolicy, org: Optional[O.Org]) -> Counter:
+def _shadow_summary(store: S.Store, now: datetime, policy: AlertPolicy, org: Optional[O.Org], usable: bool) -> Counter:
     today = _local(now).date()
     st = Counter(store.account_days_on(today).values())
     ev = store.issue_event_counts_on(today)
@@ -463,6 +477,9 @@ def _shadow_summary(store: S.Store, now: datetime, policy: AlertPolicy, org: Opt
             for r in store.alert_recipients(a["alert_id"]):
                 if r["held_reason"] == "shadow":
                     would[r["emp_idx"]] += 1
+    if org is not None and _held(today, policy, usable, False) == "shadow":
+        for lead in _lead_counts(store, org):   # 09:30 팀장 묶음은 아직 안 만들어졌다 — 같은 셈으로 미리 센다
+            would[lead] += 1
     params = {
         "ok": st.get(V.CHECK_OK, 0),
         "partial": st.get(V.CHECK_PARTIAL, 0) + st.get(V.CHECK_DATA_LATE, 0),
@@ -500,22 +517,23 @@ def compose(store: S.Store, now: datetime, policy: AlertPolicy = SHADOW) -> Comp
         elif kind == S.ALERT_WEEKLY_UNLINKED:
             total += _weekly_unlinked(store, now, policy, org, usable)
         elif kind == S.ALERT_SHADOW_SUMMARY:
-            total += _shadow_summary(store, now, policy, org)
+            total += _shadow_summary(store, now, policy, org, usable)
         elif kind == S.ALERT_LEAD_DIGEST:
             total += _lead_digest(store, now, policy, org, usable)
     return ComposeOutcome(due, dict(total))
 
 
 # ── 보내기 ──────────────────────────────────────────────────────────
-def _backoff(attempts_after: int) -> Optional[timedelta]:
-    """이번까지 시도 수 → 다음에 해 볼 간격(다섯 번째면 None = 그만)."""
-    if attempts_after >= MAX_ATTEMPTS:
+def _backoff(attempts_after: int, until_expiry: bool = False) -> Optional[timedelta]:
+    """이번까지 시도 수 → 다음에 해 볼 간격(다섯 번째면 None = 그만). 시스템 경보는 횟수로 그만두지 않고 30분 간격으로
+    기한(12시간)까지 — ① 이 한 시간 멈춘 날 대표 경보가 조용히 버려지지 않게(검토 trouble-heartbeat-masks)."""
+    if attempts_after >= MAX_ATTEMPTS and not until_expiry:
         return None
     return RETRY_BACKOFF[min(attempts_after, len(RETRY_BACKOFF)) - 1]
 
 
 def _retry_or_fail(store: S.Store, row: dict, now: datetime, code: str) -> str:
-    gap = _backoff(row["attempts"] + 1)
+    gap = _backoff(row["attempts"] + 1, until_expiry=row["kind"] == S.ALERT_SYSTEM)
     if gap is None:
         store.record_delivery(row["recipient_id"], S.DELIVERY_FAILED, now, error_kind=code)
         return "failed"
@@ -525,24 +543,25 @@ def _retry_or_fail(store: S.Store, row: dict, now: datetime, code: str) -> str:
 
 _REASON_STATUS = {EA.REASON_SENT: S.DELIVERY_SENT, EA.REASON_DUPLICATE: S.DELIVERY_DUPLICATE,
                   EA.REASON_TARGET_CAP: S.DELIVERY_CAP_TARGET, EA.REASON_TOTAL_CAP: S.DELIVERY_CAP_TOTAL}
-_STOP_CODES = frozenset({"status-401", "status-403", "call-cap"})
+def dispatch(store: S.Store, now: datetime, poster: EA.ErpAlertPoster, limit: int = DISPATCH_LIMIT,
+             kind: Optional[str] = None) -> DispatchOutcome:
+    """보낼 때가 된 줄을 한 번에 하나씩 ① 에 넣고 결과를 적는다(``kind`` 를 주면 그 종류만).
 
-
-def dispatch(store: S.Store, now: datetime, poster: EA.ErpAlertPoster, limit: int = DISPATCH_LIMIT) -> DispatchOutcome:
-    """보낼 때가 된 줄을 한 번에 하나씩 ① 에 넣고 결과를 적는다."""
+    ① 이 400(이 줄만의 문제 — 퇴사 등)이 아닌 까닭으로 못 받으면(키 거절 · 호출 상한 · 네트워크 · 서버 오류) 그 차례의
+    나머지는 부르지 않는다 — 느린 ① 에 줄마다 기다려 심박이 08:10 뒤로 밀리지 않게(검토 heartbeat-queued)."""
     _need_time(now)
     if not isinstance(poster, EA.ErpAlertPoster):
         raise TypeError("poster 는 ErpAlertPoster 여야 합니다")
     counts: Counter = Counter()
     stopped = None
-    for row in store.due_deliveries(now, limit):
+    for row in store.due_deliveries(now, limit, kind):
         expires = Y._aware(row["expires_at"])
         if expires is None or now >= expires:
             store.record_delivery(row["recipient_id"], S.DELIVERY_FAILED, now, error_kind="expired")
             counts["expired"] += 1
             continue
         if stopped is not None:
-            continue   # 키 거절·상한 — 이번 차례에는 더 부르지 않는다(다음 차례에 다시)
+            continue   # 키 거절·상한·연결 실패 — 이번 차례에는 더 부르지 않는다(다음 차례에 다시)
         try:
             title, lines = render(row["template"], row["source"], row["codes"], row["params"])
             payload = EA.build_payload(row["emp_idx"], row["severity"], title, lines, row["link_path"],
@@ -560,7 +579,7 @@ def dispatch(store: S.Store, now: datetime, poster: EA.ErpAlertPoster, limit: in
                 counts["failed"] += 1
             else:
                 counts[_retry_or_fail(store, row, now, code)] += 1
-            if code in _STOP_CODES:
+            if e.status != 400:
                 stopped = code
             continue
         status = _REASON_STATUS[res.reason]
@@ -572,23 +591,51 @@ def dispatch(store: S.Store, now: datetime, poster: EA.ErpAlertPoster, limit: in
 
 
 # ── 「오늘 끝」 심박(대표 결정 A3) ────────────────────────────────────
+def note_morning_gap(store: S.Store, now: datetime) -> Optional[int]:
+    """아침 요약을 만든 뒤에도 오늘 끝난 점검 회차가 없고(멈춤 · 죽음 · 시작 못 함) 아침 점검·점검 준비가 알린 것도
+    없으면 대표에게 긴급 경보 한 번 — 점검이 없는 날 심박이 「정상」으로 나가 ① 08:10 감시까지 조용해지지 않게
+    (검토 heartbeat-ok-without-finished-morning)."""
+    _need_time(now)
+    today = _local(now).date()
+    if not _made(store, today, S.ALERT_DIGEST):
+        return None
+    if any(r["status"] == S.RUN_DONE for r in store.runs_on(today)):
+        return None
+    if any(a["source"] in ("morning", "readiness") for a in store.alerts_on(today, S.ALERT_SYSTEM)):
+        return None
+    return record_system_alert(store, now, "morning", [CODE_MORNING_NOT_DONE])
+
+
+def _system_alerts_delivered(store: S.Store, today: date) -> bool:
+    """오늘 시스템 경보가 모두 ① 에 들어갔나(넣음 · 같은 열쇠) — 아직 못 보냈거나 못 넣은 것이 하나라도 있으면 False."""
+    for a in store.alerts_on(today, S.ALERT_SYSTEM):
+        for r in store.alert_recipients(a["alert_id"]):
+            if r["status"] not in (S.DELIVERY_SENT, S.DELIVERY_DUPLICATE):
+                return False
+    return True
+
+
 def heartbeat_due(store: S.Store, now: datetime) -> bool:
-    """오늘 아침 요약을 만들었고 · 오늘 심박을 아직 못 보냈고 · 마지막 시도 뒤 2분이 지났을 때."""
+    """오늘 아침 요약을 만들었고 · 오늘 시스템 경보가 모두 대표에게 들어갔고 · 오늘 심박을 아직 못 보냈고 · 마지막 시도 뒤
+    2분이 지났을 때. 대표 경보가 들어가지 않은 날은 심박을 보내지 않는다 — ① 08:10 감시가 대신 대표에게 알린다
+    (「trouble」은 「대표에게 이미 알렸다」는 뜻이라 알리지 못했으면 보내면 안 된다 · 검토 trouble-heartbeat-masks)."""
     _need_time(now)
     local = _local(now)
     today = local.date()
     if not _made(store, today, S.ALERT_DIGEST):
         return False
     hb = store.heartbeat()
+    if hb is not None and hb["day"] == today and hb["sent_at"] is not None:
+        return False
+    if not _system_alerts_delivered(store, today):
+        return False
     if hb is None or hb["day"] != today:
         return True
-    if hb["sent_at"] is not None:
-        return False
     return now - hb["last_try_at"] >= HEARTBEAT_RETRY
 
 
 def heartbeat_status(store: S.Store, today: date) -> str:
-    """오늘 시스템 경보가 있었으면 trouble(대표에게는 이미 알렸다) · 없으면 ok."""
+    """오늘 시스템 경보가 있었으면 trouble(대표에게는 이미 알렸다 — ``heartbeat_due`` 가 들어간 뒤에만 부른다) · 없으면 ok."""
     return EA.HEARTBEAT_TROUBLE if store.alerts_on(today, S.ALERT_SYSTEM) else EA.HEARTBEAT_OK
 
 
@@ -610,8 +657,13 @@ def send_heartbeat(store: S.Store, now: datetime, poster: EA.ErpAlertPoster) -> 
 
 def run_alerts(store: S.Store, now: datetime, poster: EA.ErpAlertPoster,
                policy: AlertPolicy = SHADOW) -> Tuple[ComposeOutcome, DispatchOutcome, Optional[HeartbeatOutcome]]:
-    """스케줄러가 1분마다 부르는 한 차례 — 만들 것 만들기 → 보낼 것 보내기 → 심박(때가 되면)."""
+    """스케줄러가 1분마다 부르는 한 차례 — 만들 것 만들기 → 점검 없는 날 경보 → 시스템 경보 보내기 → 심박(때가 되면)
+    → 나머지 보내기. 요약이 수십 통이어도 심박이 그 뒤에 줄 서지 않는다(검토 heartbeat-queued)."""
     made = compose(store, now, policy)
-    sent = dispatch(store, now, poster)
+    note_morning_gap(store, now)
+    first = dispatch(store, now, poster, kind=S.ALERT_SYSTEM)
     hb = send_heartbeat(store, now, poster) if heartbeat_due(store, now) else None
-    return made, sent, hb
+    rest = dispatch(store, now, poster) if first.stopped is None else DispatchOutcome()
+    counts = Counter(first.counts)
+    counts.update(rest.counts)
+    return made, DispatchOutcome(dict(counts), first.stopped or rest.stopped), hb

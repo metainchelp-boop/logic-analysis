@@ -2619,10 +2619,16 @@ class Store:
         return [self._alert_out(names, r) for r in cur.fetchall()]
 
     def system_alert_keys_on(self, day: date) -> set:
-        """그 날 이미 알린 시스템 경보 「나온 곳:코드」 — 같은 날 같은 코드를 되풀이하지 않게."""
+        """그 날 이미 알린 시스템 경보 「나온 곳:코드」 — 같은 날 같은 코드를 되풀이하지 않게.
+
+        받는 사람 줄이 **모두 기한 지남(12시간 동안 못 보냄)** 으로 끝난 경보는 알린 것으로 치지 않는다 — 같은 코드가
+        다시 나면 새로 알린다(검토 trouble-heartbeat-masks). 다른 까닭으로 끝난 것(① 거절 400 · 하루 상한)은 다시 만들어도
+        같은 까닭으로 막히므로 알린 것으로 친다(되풀이 기록을 막는다)."""
         out = set()
         for src, codes in self._conn.execute(
-                "SELECT source, codes FROM naver_auto_alert WHERE day = ? AND kind = 'system'",
+                """SELECT a.source, a.codes FROM naver_auto_alert a WHERE a.day = ? AND a.kind = 'system'
+                   AND EXISTS (SELECT 1 FROM naver_auto_alert_recipient r WHERE r.alert_id = a.alert_id
+                               AND NOT (r.status = 'failed' AND r.error_kind = 'expired'))""",
                 (_day_text(day, "알림 날짜"),)):
             try:
                 out |= {src + ":" + c for c in json.loads(codes)}
@@ -2630,17 +2636,21 @@ class Store:
                 raise StoreError("저장된 알림을 읽지 못했습니다") from None
         return out
 
-    def due_deliveries(self, now: datetime, limit: int = 500) -> List[dict]:
-        """보낼 때가 된 줄 — 긴급 먼저 · 번호 순. 원천(문구 틀 · 코드 · 경로 · 종류 · 날짜)을 함께 준다."""
+    def due_deliveries(self, now: datetime, limit: int = 500, kind: Optional[str] = None) -> List[dict]:
+        """보낼 때가 된 줄 — 긴급 먼저 · 번호 순. 원천(문구 틀 · 코드 · 경로 · 종류 · 날짜)을 함께 준다.
+        ``kind`` 를 주면 그 종류만(시스템 경보를 요약보다 먼저 보내고 심박을 보내기 위해)."""
         t = _kst_text(now, "지금")
         if isinstance(limit, bool) or not isinstance(limit, int) or not 0 < limit <= 10_000:
             raise StoreRefused("몇 줄인지 1~10000 이어야 합니다")
+        if kind is not None and kind not in ALERT_KINDS:
+            raise StoreRefused("알림 종류가 아닙니다")
         cur = self._conn.execute(
             """SELECT r.recipient_id, r.alert_id, r.emp_idx, r.severity, r.params, r.dedupe_key, r.attempts,
                       r.expires_at, a.kind, a.day, a.source, a.template, a.codes, a.link_path
                FROM naver_auto_alert_recipient r JOIN naver_auto_alert a ON a.alert_id = r.alert_id
-               WHERE r.status = 'pending' AND r.next_try_at <= ?
-               ORDER BY CASE r.severity WHEN 'URGENT' THEN 0 ELSE 1 END, r.recipient_id LIMIT ?""", (t, limit))
+               WHERE r.status = 'pending' AND r.next_try_at <= ? AND (? IS NULL OR a.kind = ?)
+               ORDER BY CASE r.severity WHEN 'URGENT' THEN 0 ELSE 1 END, r.recipient_id LIMIT ?""",
+            (t, kind, kind, limit))
         names = [x[0] for x in cur.description]
         return [self._alert_out(names, r) for r in cur.fetchall()]
 

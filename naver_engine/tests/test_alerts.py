@@ -451,7 +451,8 @@ class ComposeTest(Base):
         sm = self.recips(S.ALERT_SHADOW_SUMMARY)
         self.assertEqual(set(sm), {0})
         p = sm[0]["params"]
-        self.assertEqual((p["ok"], p["red"], p["yellow"], p["new"], p["people"], p["msgs"]), (3, 1, 2, 3, 4, 4))
+        # 받을 사람 4명(100 · 1 · 0 · 101) · 5통 = 아침 요약 4 + 09:30 팀장 묶음 1(팀장 1 — 🟡 12 의 담당 101)
+        self.assertEqual((p["ok"], p["red"], p["yellow"], p["new"], p["people"], p["msgs"]), (3, 1, 2, 3, 4, 5))
         self.assertEqual((sm[0]["status"], sm[0]["severity"]), ("pending", "NORMAL"))
         AL.compose(self.st, self.now(at(TUE, 9, 30)), AL.SHADOW)
         self.assertEqual({r["held_reason"] for r in self.recips(S.ALERT_LEAD_DIGEST).values()}, {"shadow"})
@@ -560,15 +561,58 @@ class DispatchTest(Base):
         self.erp.override[EA.PATH_ALERTS] = (503, b"busy")
         t = self.fc.now()
         out = AL.dispatch(self.st, t, self.poster())
-        self.assertEqual(out.counts, {"retry": 4})
+        self.assertEqual((out.counts, out.stopped), ({"retry": 1}, "status-503"))   # 첫 실패에서 차례를 멈춘다
+        self.assertEqual(len(self.erp.calls), 1)
+        for _ in range(3):
+            AL.dispatch(self.st, t, self.poster())                      # 같은 시각 — 남은 줄을 한 차례에 하나씩
+        self.assertEqual(len(self.erp.calls), 4)
         self.assertEqual(AL.dispatch(self.st, t + timedelta(minutes=1), self.poster()).counts, {})   # 2분 기다림
         gaps = [2, 5, 15, 30]
         for g in gaps:
             t = self.now(t + timedelta(minutes=g))
-            AL.dispatch(self.st, t, self.poster())
+            for _ in range(4):
+                AL.dispatch(self.st, t, self.poster())
         self.assertEqual(set(self.statuses().values()), {"failed"})
         rs = self.recips(S.ALERT_DIGEST)
         self.assertEqual({(r["attempts"], r["error_kind"]) for r in rs.values()}, {(5, "status-503")})
+
+    def test_network_error_stops_the_pass(self):
+        self.erp.raise_next = OSError("x")
+        out = AL.dispatch(self.st, self.fc.now(), self.poster())
+        self.assertEqual((out.counts, out.stopped), ({"retry": 1}, "network"))
+        self.assertEqual(len(self.erp.calls), 1)                          # 느린 ① 에 줄마다 기다리지 않는다
+
+    def test_system_alert_retries_until_expiry_then_realerts(self):
+        self.erp.override[EA.PATH_ALERTS] = (503, b"busy")
+        aid = AL.record_system_alert(self.st, self.fc.now(), "org", ["network"])
+        t = self.fc.now()
+        for _ in range(8):                                                # 다섯 번을 넘겨도 그만두지 않는다
+            AL.dispatch(self.st, t, self.poster(), kind=S.ALERT_SYSTEM)
+            [r] = self.st.alert_recipients(aid)
+            self.assertEqual(r["status"], "pending")
+            t = self.now(Y._aware(r["next_try_at"]))
+        self.assertEqual(r["attempts"], 8)
+        self.assertLessEqual(Y._aware(r["next_try_at"]) - t, timedelta(minutes=30))
+        self.assertIsNone(AL.record_system_alert(self.st, t, "org", ["network"]))   # 아직 살아 있다 — 되풀이 안 함
+        AL.dispatch(self.st, self.now(at(TUE, 20, 30)), self.poster(), kind=S.ALERT_SYSTEM)   # 12시간 기한 지남
+        [r] = self.st.alert_recipients(aid)
+        self.assertEqual((r["status"], r["error_kind"]), ("failed", "expired"))
+        self.assertIsNotNone(AL.record_system_alert(self.st, self.fc.now(), "org", ["network"]))   # 같은 코드 → 새로 알림
+
+    def test_rejected_system_alert_not_rerecorded(self):
+        self.erp.active = set()                                           # 대표도 ① 이 400
+        aid = AL.record_system_alert(self.st, self.fc.now(), "org", ["network"])
+        AL.dispatch(self.st, self.fc.now(), self.poster(), kind=S.ALERT_SYSTEM)
+        self.assertEqual(self.st.alert_recipients(aid)[0]["status"], "failed")
+        self.assertIsNone(AL.record_system_alert(self.st, self.fc.now(), "org", ["network"]))   # 같은 까닭으로 또 막힌다
+
+    def test_kind_filter_sends_only_that_kind(self):
+        AL.record_system_alert(self.st, self.fc.now(), "org", ["network"])
+        out = AL.dispatch(self.st, self.fc.now(), self.poster(), kind=S.ALERT_SYSTEM)
+        self.assertEqual(out.counts, {"sent": 1})
+        self.assertEqual(self.statuses(), {100: "pending", 1: "pending", 0: "pending", 101: "pending"})
+        with self.assertRaises(S.StoreRefused):
+            self.st.due_deliveries(self.fc.now(), 10, "nope")
 
     def test_bad_request_fails_at_once(self):
         self.erp.active = {0, 1, 100}                                     # 101 은 퇴사(① 이 400)
@@ -604,6 +648,17 @@ class DispatchTest(Base):
         self.assertEqual(self.statuses()[first["emp_idx"]], "duplicate")
         self.assertEqual(len(self.erp.sent_to(first["emp_idx"])), 1)   # 한 번만 들어갔다
 
+    def test_lost_response_across_midnight_goes_in_once(self):
+        t = self.now(at(TUE, 23, 58))
+        aid = AL.record_system_alert(self.st, t, "org", ["network"])
+        [row] = self.st.due_deliveries(t, 10, S.ALERT_SYSTEM)
+        title, lines = AL.render(row["template"], row["source"], row["codes"], row["params"])
+        self.poster().send_alert(EA.build_payload(row["emp_idx"], row["severity"], title, lines,
+                                                  row["link_path"], row["dedupe_key"]))   # 23:58 들어갔는데 응답을 잃음
+        AL.dispatch(self.st, self.now(at(TUE + timedelta(days=1), 0, 1)), self.poster(), kind=S.ALERT_SYSTEM)
+        self.assertEqual(self.st.alert_recipients(aid)[0]["status"], "duplicate")
+        self.assertEqual(len(self.erp.sent_to(0)), 1)                     # 자정을 넘긴 다시 보내기도 한 번만(① 이틀 창)
+
     def test_expired_not_sent(self):
         out = AL.dispatch(self.st, self.now(at(TUE, 20, 1)), self.poster())
         self.assertEqual(out.counts, {"expired": 4})
@@ -627,6 +682,7 @@ class HeartbeatTest(Base):
     def setUp(self):
         super().setUp()
         self.org()
+        self.issues(TUE, [])                                             # 오늘 끝난 아침 점검 회차
 
     def test_after_digest_once_a_day(self):
         self.assertFalse(AL.heartbeat_due(self.st, self.now(at(TUE, 7, 59))))
@@ -639,6 +695,7 @@ class HeartbeatTest(Base):
         wed = TUE + timedelta(days=1)
         self.assertFalse(AL.heartbeat_due(self.st, self.now(at(wed, 7, 0))))
         self.org()                                          # 조직이 낡으면 trouble 이 된다(그 시험은 따로)
+        self.issues(wed, [])
         AL.run_alerts(self.st, self.now(at(wed, 8, 0)), self.poster(), ON)
         self.assertEqual(self.erp.heartbeats[wed], "ok")
 
@@ -657,6 +714,64 @@ class HeartbeatTest(Base):
         self.assertTrue(AL.heartbeat_due(self.st, self.now(at(TUE, 8, 2))))
         self.assertEqual(AL.send_heartbeat(self.st, self.fc.now(), self.poster()), AL.HeartbeatOutcome(True, "ok"))
         self.assertEqual(self.st.heartbeat()["tries"], 2)
+
+    def _gap_case(self, day, run):
+        run(day)
+        AL.run_alerts(self.st, self.now(at(day, 8, 5)), self.poster(), ON)
+        [a] = self.system_alerts(day)
+        self.assertEqual((a["source"], a["codes"]), ("morning", [AL.CODE_MORNING_NOT_DONE]))
+        self.assertEqual(self.st.alert_recipients(a["alert_id"])[0]["severity"], "URGENT")
+        self.assertEqual(self.erp.heartbeats.get(day), "trouble")      # 대표에게 알린 뒤에만 trouble
+        self.assertEqual(len(self.erp.sent_to(0)), 1)
+
+    def test_no_run_today_alerts_and_trouble(self):
+        self._gap_case(TUE + timedelta(days=1), lambda d: self.org())
+
+    def test_stuck_run_alerts_and_trouble(self):
+        def stuck(d):
+            self.org()
+            self.st.begin_run(d, self.now(at(d, 7, 0)))
+        self._gap_case(TUE + timedelta(days=1), stuck)
+
+    def test_failed_run_without_alert_alerts_and_trouble(self):
+        def crashed(d):
+            self.org()
+            rid = self.st.begin_run(d, self.now(at(d, 7, 0)))
+            self.st.finish_run(rid, S.RUN_FAILED, self.now(at(d, 7, 1)), error_kind="UNEXPECTED")
+        self._gap_case(TUE + timedelta(days=1), crashed)
+
+    def test_gap_not_raised_when_morning_already_alerted_or_done(self):
+        wed = TUE + timedelta(days=1)
+        self.org()
+        rid = self.st.begin_run(wed, self.now(at(wed, 7, 0)))
+        self.st.finish_run(rid, S.RUN_FAILED, self.now(at(wed, 7, 1)), error_kind="UNEXPECTED")
+        AL.record_system_alert(self.st, self.now(at(wed, 7, 2)), "morning", [MO.CODE_KEY_REJECTED_ALL])
+        AL.run_alerts(self.st, self.now(at(wed, 8, 0)), self.poster(), ON)
+        self.assertEqual([a["codes"] for a in self.system_alerts(wed)], [[MO.CODE_KEY_REJECTED_ALL]])
+        self.assertIsNone(AL.note_morning_gap(self.st, self.fc.now()))    # 오늘 끝난 회차(화요일)가 있는 날도 없음
+        self.assertIsNone(AL.note_morning_gap(self.st, self.now(at(TUE, 9, 0))))
+
+    def test_heartbeat_waits_until_system_alert_delivered(self):
+        AL.record_system_alert(self.st, self.now(at(TUE, 7, 10)), "morning", [MO.CODE_DEADLINE_CUT])
+        self.erp.override[EA.PATH_ALERTS] = (503, b"busy")
+        _m, _s, hb = AL.run_alerts(self.st, self.now(at(TUE, 8, 0)), self.poster(), ON)
+        self.assertIsNone(hb)                                            # 대표에게 못 알렸다 — 심박을 보내지 않는다
+        self.assertEqual(self.erp.heartbeats, {})
+        self.assertFalse(AL.heartbeat_due(self.st, self.now(at(TUE, 8, 30))))
+        del self.erp.override[EA.PATH_ALERTS]
+        _m, _s, hb = AL.run_alerts(self.st, self.now(at(TUE, 8, 40)), self.poster(), ON)
+        self.assertEqual(hb, AL.HeartbeatOutcome(True, "trouble"))
+        self.assertEqual(len(self.erp.sent_to(0)), 1)
+
+    def test_heartbeat_goes_before_digest_rows(self):
+        self.issues(TUE, [(11, A, "red"), (12, B, "yellow")])
+        self.erp.override[EA.PATH_ALERTS] = (503, b"busy")               # 요약은 못 들어가도
+        _m, sent, hb = AL.run_alerts(self.st, self.now(at(TUE, 8, 0)), self.poster(), ON)
+        self.assertEqual(hb, AL.HeartbeatOutcome(True, "ok"))           # 심박은 요약 줄보다 먼저 간다
+        paths = [c["path"] for c in self.erp.calls]
+        self.assertEqual(paths[0], EA.PATH_HEARTBEAT)
+        self.assertEqual(paths.count(EA.PATH_ALERTS), 1)                 # 첫 실패에서 차례를 멈춘다
+        self.assertEqual(sent.stopped, "status-503")
 
     def test_shadow_day_also_beats(self):
         AL.run_alerts(self.st, self.now(at(TUE, 8, 0)), self.poster(), AL.SHADOW)
