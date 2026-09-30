@@ -164,6 +164,8 @@ class PackagingSourceTest(unittest.TestCase):
 
     def test_ci_only_test_branch_read_permission_and_explicit_isolation(self):
         workflow = source(".github/workflows/naver-runtime-tests.yml")
+        prepare = workflow.split("id: prepare\n", 1)[1].split("- name: 외부망 없는", 1)[0]
+        self.assertRegex(prepare, r"(?m)^\s+timeout-minutes: 8$")
         self.assertIn("branches: [codex/naver-runtime-20260930, codex/naver-shared-metrics-20260930, codex/naver-sso-20260930]", workflow)
         self.assertIn("github.ref == 'refs/heads/codex/naver-runtime-20260930'", workflow)
         self.assertIn("contents: read", workflow)

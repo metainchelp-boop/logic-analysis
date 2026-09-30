@@ -35,6 +35,7 @@ jobs:
           node-version: '22'
       - name: 시험 의존성 준비 (업무 호출 없음)
         id: prepare
+        timeout-minutes: 8
         env:
           PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/naver-browsers
         run: |
