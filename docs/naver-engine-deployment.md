@@ -43,6 +43,8 @@
 
 ## 3. 설정과 비밀값
 
+공유 성과용 `NAVER_ENGINE_METRICS_ENABLED`도 기본 `false`입니다. 이 기능을 켜려면 아침 점검과 알림 스위치가 모두 켜져 있어야 합니다. 코드 추가·합성 시험 성공만으로 운영 스위치를 켜지 않습니다.
+
 기본 스위치는 `NAVER_ENGINE_SYNC_ENABLED`, `NAVER_ENGINE_LINKS_ENABLED`, `NAVER_ENGINE_MORNING_ENABLED`, `NAVER_ENGINE_ALERTS_ENABLED`, `NAVER_ENGINE_ISSUE_ALERTS_ENABLED`, `NAVER_ENGINE_BACKUP_ENABLED`, `NAVER_ENGINE_WEB_ENABLED` 모두 `false`입니다. `NAVER_ENGINE_SHADOW_START`와 `NAVER_ENGINE_ISSUE_ALERTS_FROM`도 빈 값이며, 광고주 이슈 알림 시작은 그림자 시작일에서 14일 뒤보다 빨라서는 안 됩니다. 자동 재시작도 기본 `restart: "no"`입니다. 운영에 자동 재시작이 필요하면 관측·경보·중지 절차와 함께 별도 승인합니다.
 
 - `NAVER_ENGINE_ERP_KEY`: 새 엔진 전용 키. ①은 별도 `NAVER_ENGINE_KEY_SHA256` 지문만 갖습니다. 기존 ②·③의 `ERP_SYNC_API_KEY`는 바꾸거나 재사용하지 않습니다. 키와 지문은 대표님이 승인된 보관 위치에서 준비하며 대화·문서·로그에 출력하지 않습니다.
@@ -123,6 +125,8 @@ docker compose --project-name naver-package-review --file docker-compose.yml --f
 
 ## 8. 개발 전용 Linux CI
 
+G1~G3 후속 검증은 별도 `codex/naver-shared-metrics-20260930` 가지도 같은 읽기 전용 CI 허용 목록에 추가합니다. 아래 S14 검증 절차와 격리 조건은 동일합니다.
+
 `.github/workflows/naver-runtime-tests.yml`은 `codex/naver-runtime-20260930` 가지 push와 그 가지의 수동 실행에만 맞습니다. 배포 작업·운영 비밀값·쓰기 토큰·self-hosted runner가 없으며 `contents: read`, checkout 자격 저장 금지를 사용합니다. GitHub 공식 [workflow 권한·분기 문법](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax)과 [수동 실행 조건](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_dispatch)에 근거합니다. 수동 실행은 workflow가 기본 가지에 있어야 하므로 새 개발 가지에서는 우선 push 조건으로 검증합니다.
 
 의존성 준비만 네트워크가 있는 GitHub-hosted 임시 runner에서 수행합니다. 시험은 별도 네트워크 namespace에서 loopback만 켜고 **원래 비루트 runner UID로 낮춘 뒤**, allowlist 환경만 전달합니다. 외부 시험 주소 연결 실패 canary가 통과해야 엔진·③·런타임·패키징 시험을 실행합니다. loopback HTTP와 유닉스 소켓은 합성 서버용으로만 허용합니다. 준비 단계의 네트워크를 포함해 전체 workflow가 무통신이라고 표현하지 않습니다.
@@ -130,5 +134,17 @@ docker compose --project-name naver-package-review --file docker-compose.yml --f
 Linux Python 3.12 시험은 macOS에서 파일 잠금과 SQLite WAL이 충돌하는 차이를 우회하려고 저장소 잠금을 약화하지 않습니다. 브라우저 시험은 기존 하네스를 사용하며 추가 보안 완화 인자를 넣지 않습니다. 기존 `chromium.launch()`가 브라우저 자체 sandbox를 입증하는 시험은 아닙니다. 이 CI는 실제 계정·운영 서버·실제 nginx 검증을 대신하지 않습니다.
 
 운영 후보 이미지도 push 없이 임시 runner에서 빌드하며, `--network none`, UID `10001:10001`, 읽기 전용 루트로 `check-config`, `dry-run`, 실제 이미지의 암호화 왕복·변조 거절 시험을 수행합니다. 결과와 의존성 버전만 7일 보관합니다. 작성한 workflow의 정적 검사와 실제 GitHub 실행 성공은 따로 보고합니다.
+
+## 9. 공유 성과 G1~G3 — 구현과 운영 검증의 경계
+
+- 기존 관제의 29일 비교 창은 그대로입니다. 공유 성과는 한국 기준 어제까지 정확한 30일을 따로 읽어 검증합니다.
+- 당일 아침 점검 완료 뒤 08:10~18:00에 배치당 가망 최대 2곳을 처리합니다. 묶인 모든 계정·캠페인의 일별 원천과 같은 기간 합계가 정확히 맞아야 전송합니다. 빠진 날·칸을 0으로 취급하려면 남은 정수 합계가 같은 기간 총합과 일치해야 합니다. 빈 캠페인 목록·불명확한 집계 기준 시각은 정상 0으로 보내지 않습니다.
+- 새 요청·재시도 대기에는 45초 예산과 Naver 읽기 최대 80회 제한을 둡니다. ERP 전송은 별도 timeout이므로 전체 배치가 정확히 45초 안에 끝난다는 보장은 아닙니다. 큰 계정의 당일 처리율·서버 자원은 실제 그림자 운영에서 측정해야 합니다.
+- 캠페인 목록으로 최소 요청 수를 먼저 계산합니다. 한 가망이 80회를 초과하면 그날 `capacity` 보류하고 다른 가망을 계속 처리합니다. 같은 날·같은 연결 상태의 실패는 최대 8회까지 시도하며, 그 뒤에는 `attempt-cap` 보류합니다. 재시작해도 제한은 유지하고 새 날짜나 의미 있는 연결 변경 때 다시 시도합니다. 80번째 요청을 마친 정상 자료는 전송할 수 있습니다. 이는 대형 가망 수집 완료의 대안이 아니라 무한 재시도를 막는 안전 한도입니다.
+- 저장소 판 7의 별도 표는 날짜·가망별 원천 숫자, 해시, 전송 상태와 실패를 보관합니다. 업무 이름·본문·자격은 넣지 않습니다. 재전송 전에 원천을 재검증하고, 짝·단계가 바뀌면 이전 결과를 재사용하지 않습니다. 미연결 광고주는 성공 처리하지 않습니다. 해당 날짜에는 보류하고 다음 날 다시 확인합니다.
+- 새 `POST /api/ad-sync/naver-metrics`는 엔진 전용 키와 숫자 7칸만 사용합니다. 서버는 현재 연결 광고주가 정확히 하나일 때만 저장합니다. STORE/PLACE 등 복수 연결은 임의 선택하지 않고 409로 보류합니다.
+- 서버는 `API`/`ENGINE` 자동 행 하나만 갱신하고 `MANUAL`은 보존합니다. 마지막 엔진 수신부터 72시간 이내에는 자체 키 수집을 생략하며, 초과한 뒤 유효한 자체 키가 있을 때만 기존 수집기로 복귀합니다. 자동 성과의 직접 삭제는 화면과 서버에서 막습니다.
+- BE의 nullable `engine_received_at` 칼럼(BLOCK 254), §14 계약, FE의 `ENGINE` 출처 호환을 한 묶음으로 검토합니다. 기존 자료 backfill·운영 데이터 수정은 하지 않습니다. MariaDB 실제 이관·실계정 읽기·광고비 공개 범위의 로그인 화면 점검은 운영 승인 뒤 별도입니다.
+- 원천 표의 보관 주기·디스크 증가량은 아직 운영 실측 전입니다. 임의 삭제 작업을 넣지 않았습니다. S16, 실제 백업 복원, 네트워크·자원·14일 그림자 승인 조건은 여전히 남습니다.
 
 Compose 구성 출력과 컨테이너 환경값도 구분합니다. CI의 Compose v2.38.2는 [`config` 직렬화 뒤](https://github.com/docker/compose/blob/v2.38.2/cmd/compose/config.go#L165-L181) JSON/YAML의 모든 `$`를 [정확히 한 번 `$$`로 이스케이프](https://github.com/docker/compose/blob/v2.38.2/cmd/compose/config.go#L495-L499)합니다. 패키징 시험은 합성 raw env의 펼친 출력이 이 규칙과 정확히 일치해야 통과하며, 원문·두 번 이스케이프·실제 보간된 값은 거절합니다. [`--no-interpolate`](https://docs.docker.com/reference/cli/docker/compose/config/)로 경로 기본값 해석까지 끄지 않습니다. raw env가 실제 컨테이너에서 원문 그대로 전달되는지는 별도의 네트워크 없는 합성 이미지 시험으로 검증하며, 운영 env·키·볼륨은 사용하지 않습니다.

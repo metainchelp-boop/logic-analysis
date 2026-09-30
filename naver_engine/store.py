@@ -199,6 +199,7 @@ CAMPAIGN_METRICS = (
     ("impCnt", "imp_cnt"), ("clkCnt", "clk_cnt"), ("salesAmt", "sales_amt"), ("ccnt", "ccnt"),
     ("convAmt", "conv_amt"), ("purchaseCcnt", "purchase_ccnt"), ("purchaseConvAmt", "purchase_conv_amt"),
 )
+METRICS_MAX_ATTEMPTS = 8   # 같은 날·같은 짝 문맥: 재시작해도 실패 읽기/송신을 무한 반복하지 않는다.
 
 _SCHEMA = (
     """CREATE TABLE IF NOT EXISTS naver_auto_meta (
@@ -2794,11 +2795,13 @@ class Store:
         source = [today.isoformat(), pair["decisions_hash"], canonical]
         fingerprint = hashlib.sha256(json.dumps(source, separators=(",", ":")).encode("utf-8")).hexdigest()
         counts = Counter()
-        for pid, status in self._conn.execute(
-                "SELECT possibility_id, status FROM naver_auto_metrics_delivery WHERE day = ? AND context_hash = ?",
+        for pid, status, attempts in self._conn.execute(
+                "SELECT possibility_id, status, attempts FROM naver_auto_metrics_delivery WHERE day = ? AND context_hash = ?",
                 (today.isoformat(), fingerprint)):
             if pid in pairs and status != "stored":
-                counts["retry" if status in ("reading", "pending", "retry") else status] += 1
+                # 마지막 허용 시도 중 프로세스가 끝나도 추가 호출 없이 보류로 보인다.
+                counts["held" if attempts >= METRICS_MAX_ATTEMPTS and status != "no_client"
+                       else "retry" if status in ("reading", "pending", "retry") else status] += 1
         return dict(fingerprint=fingerprint, pairs=pairs, stage_as_of=stage_at, day=today,
                     delivery_counts=dict(counts))
 
@@ -2821,14 +2824,16 @@ class Store:
             raise StoreRefused("성과 작업 수가 범위 밖입니다")
         context = self._metrics_context_for(context_hash, now)
         # 예약 순서만 고를 때 큰 30일 원천 본문을 계정마다 읽지 않는다.
-        rows = {pid: (fingerprint, status, last, due) for pid, fingerprint, status, last, due in self._conn.execute(
-            """SELECT possibility_id, context_hash, status, last_try_at, next_try_at
+        rows = {pid: (fingerprint, status, last, due, attempts, error)
+                for pid, fingerprint, status, last, due, attempts, error in self._conn.execute(
+            """SELECT possibility_id, context_hash, status, last_try_at, next_try_at, attempts, error_kind
                FROM naver_auto_metrics_delivery WHERE day = ?""", (context["day"].isoformat(),))}
         wanted = []
         for pid in context["pairs"]:
             row = rows.get(pid)
             if row is not None and row[0] == context_hash:
-                if row[1] in ("stored", "no_client"):
+                if row[1] in ("stored", "no_client") or row[4] >= METRICS_MAX_ATTEMPTS \
+                        or (row[1] == "held" and row[5] == "capacity"):
                     continue
                 due = _aware_time(row[3])
                 if due is None:
@@ -2848,7 +2853,9 @@ class Store:
             day = context["day"]
             row = self._metrics_delivery(possibility_id, day)
             same = row is not None and row["context_hash"] == context_hash
-            if same and (row["status"] in ("stored", "no_client") or now < _aware_time(row["next_try_at"])):
+            if same and (row["status"] in ("stored", "no_client") or row["attempts"] >= METRICS_MAX_ATTEMPTS
+                         or (row["status"] == "held" and row["error_kind"] == "capacity")
+                         or now < _aware_time(row["next_try_at"])):
                 raise StoreRefused("성과를 다시 시도할 때가 아닙니다")
             attempts = row["attempts"] + 1 if same else 1
             gap = (2, 5, 15, 30)[min(attempts, 4) - 1]
@@ -2908,7 +2915,7 @@ class Store:
         return payload
 
     def finish_metrics_attempt(self, possibility_id: int, context_hash: str, now: datetime, outcome: str, *,
-                               error_kind: Optional[str] = None) -> None:
+                               error_kind: Optional[str] = None) -> str:
         """받았다는 정상 응답만 stored. 미연결·실패·보류를 성공으로 표시하지 않는다."""
         self._need_writer()
         self._not_future(now, "시도 끝 시각")
@@ -2922,9 +2929,12 @@ class Store:
                 raise StoreRefused("진행 중인 성과 전송이 아닙니다")
             if outcome in ("stored", "no_client") and row["payload_json"] is None:
                 raise StoreRefused("원천 없이 성과 전송을 완료할 수 없습니다")
+            if outcome in ("held", "retry") and row["attempts"] >= METRICS_MAX_ATTEMPTS and code != "capacity":
+                outcome, code = "held", "attempt-cap"
             c.execute("""UPDATE naver_auto_metrics_delivery SET status = ?, error_kind = ?
                          WHERE day = ? AND possibility_id = ?""",
                       (outcome, code, context["day"].isoformat(), possibility_id))
+        return outcome
 
     def account_day(self, customer_id: int, day: date) -> Optional[dict]:
         cur = self._conn.execute("SELECT * FROM naver_auto_account_day WHERE customer_id = ? AND day = ?",

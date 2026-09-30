@@ -42,6 +42,12 @@ class PureMetricsTest(unittest.TestCase):
         self.assertEqual(G.window(TODAY)[1], TODAY - timedelta(days=1))
         self.assertEqual(len(M.window(TODAY)[2]), 29)
 
+    def test_minimum_calls_includes_both_inventories_and_summary_chunks(self):
+        self.assertEqual(G._minimum_calls((77,)), 80)
+        self.assertEqual(G._minimum_calls((78,)), 81)
+        self.assertEqual(G._minimum_calls((38, 38)), 82)
+        self.assertEqual(G._minimum_calls((101,)), 105)
+
     def test_exact_zero_reconciliation_only(self):
         source = days()
         missing = next(iter(source))
@@ -363,6 +369,139 @@ class MetricsStoreTest(Base):
         self.assertEqual((result.code, poster.sent), ("BUDGET", []))
         self.assertEqual(self.st.metrics_work(context["fingerprint"], self.fc.now(), 1), [12])
 
+    def test_capacity_stops_before_statistics_and_does_not_starve_next_possibility(self):
+        context = self.prepare(((11, A), (12, B)))
+        self.ads.add(A, [(n, "ELIGIBLE", False, steady()) for n in range(1, 79)])
+        self.ads.add(B, [(1, "ELIGIBLE", False, steady())])
+        poster, reader = Poster(), self.reader(max_calls=80)
+        result = G.run_metrics(reader, self.st, self.fc.now, poster)
+        self.assertEqual(result.counts, {"held": 1, "stored": 1})
+        self.assertEqual([p["possibility_id"] for p in poster.sent], [12])
+        self.assertEqual(reader.calls, 5)  # 큰 가망은 첫 목록 한 번만 읽는다.
+        self.assertFalse(any(int(c.customer) == A and c.path == "/stats" for c in self.naver.calls))
+        row = self.st._metrics_delivery(11, TODAY)
+        self.assertEqual((row["status"], row["error_kind"], row["attempts"], row["payload_json"]),
+                         ("held", "capacity", 1, None))
+        self.st.close()
+        self.st = S.open_writer(self.path, clock=self.fc.now)
+        self.at(self.fc.now() + timedelta(minutes=31))
+        reader = self.reader(max_calls=80)
+        again = G.run_metrics(reader, self.st, self.fc.now, poster)
+        self.assertEqual((again.code, again.counts, reader.calls), ("RETRY_WAIT", {"held": 1}, 0))
+        with self.assertRaises(S.StoreRefused):
+            self.st.begin_metrics_attempt(11, context["fingerprint"], self.fc.now())
+
+    def test_capacity_counts_all_accounts_before_any_statistics(self):
+        self.prepare(((11, A), (11, B)))
+        for cid in (A, B):
+            self.ads.add(cid, [(n, "ELIGIBLE", False, steady()) for n in range(1, 39)])
+        poster, reader = Poster(), self.reader(max_calls=80)
+        result = G.run_metrics(reader, self.st, self.fc.now, poster)
+        self.assertEqual((result.counts, reader.calls, poster.sent), ({"held": 1}, 2, []))
+        self.assertEqual(self.ads.stats_calls, [])
+
+    def test_eightieth_completed_request_can_be_saved_and_sent_without_eighty_first(self):
+        self.prepare()
+        self.ads.add(A, [(n, "ELIGIBLE", False, steady()) for n in range(1, 78)])
+        poster, reader = Poster(), self.reader(max_calls=80)
+        result = G.run_metrics(reader, self.st, self.fc.now, poster)
+        self.assertEqual((result.code, result.counts, reader.calls), ("DONE", {"stored": 1}, 80))
+        self.assertEqual(len(self.naver.calls), 80)
+        self.assertEqual(poster.sent[0]["impressions"], 77 * 30000)
+
+    def test_feasible_possibility_with_small_remaining_batch_is_not_terminal_capacity(self):
+        self.prepare(((11, A), (12, B)))
+        self.ads.add(A, [(1, "ELIGIBLE", False, steady())])
+        self.ads.add(B, [(n, "ELIGIBLE", False, steady()) for n in range(1, 78)])
+        poster, reader = Poster(), self.reader(max_calls=80)
+        first = G.run_metrics(reader, self.st, self.fc.now, poster)
+        self.assertEqual((first.code, reader.calls), ("BUDGET", 5))
+        self.assertEqual([p["possibility_id"] for p in poster.sent], [11])
+        self.assertEqual(self.st._metrics_delivery(12, TODAY)["error_kind"], "budget")
+        self.at(self.fc.now() + timedelta(minutes=3))
+        reader = self.reader(max_calls=80)
+        second = G.run_metrics(reader, self.st, self.fc.now, poster)
+        self.assertEqual((second.counts, reader.calls), ({"stored": 1}, 80))
+        self.assertEqual([p["possibility_id"] for p in poster.sent], [11, 12])
+
+    def test_transport_retry_cap_persists_and_new_context_can_retry(self):
+        context = self.prepare(((11, A), (12, B)))
+        self.ads.add(A, [(1, "ELIGIBLE", False, steady())])
+        self.ads.add(B, [(1, "ELIGIBLE", False, steady())])
+        self.ads.fail[(A, "camps")] = (500, {})
+        poster = Poster()
+        for attempt in range(1, 9):
+            result = G.run_metrics(self.reader(max_calls=80), self.st, self.fc.now, poster)
+            self.assertEqual(self.st._metrics_delivery(11, TODAY)["attempts"], attempt)
+            self.assertEqual(result.counts.get("held" if attempt == 8 else "retry"), 1)
+            self.at(self.fc.now() + timedelta(minutes=31))
+        self.assertEqual([p["possibility_id"] for p in poster.sent], [12])
+        row = self.st._metrics_delivery(11, TODAY)
+        self.assertEqual((row["status"], row["error_kind"], row["payload_json"]), ("held", "attempt-cap", None))
+        self.st.close()
+        self.st = S.open_writer(self.path, clock=self.fc.now)
+        reader = self.reader(max_calls=80)
+        result = G.run_metrics(reader, self.st, self.fc.now, poster)
+        self.assertEqual((result.code, result.counts, reader.calls), ("RETRY_WAIT", {"held": 1}, 0))
+        with self.assertRaises(S.StoreRefused):
+            self.st.begin_metrics_attempt(11, context["fingerprint"], self.fc.now())
+        self.st.record_decision(11, A, "confirmed", 0, self.fc.now())
+        self.assertEqual(L.pair_links(FakeErp(), self.st, self.fc.now()).outcome, S.SYNC_ACCEPTED)
+        current = self.st.metrics_context(self.fc.now())
+        self.assertNotEqual(current["fingerprint"], context["fingerprint"])
+        G.run_metrics(self.reader(max_calls=80), self.st, self.fc.now, poster)
+        self.assertEqual(self.st._metrics_delivery(11, TODAY)["attempts"], 1)
+
+    def test_budget_retry_cap_has_no_partial_payload_or_unbounded_new_reads(self):
+        self.prepare()
+        self.ads.add(A, [(1, "ELIGIBLE", False, steady())])
+        self.naver.tick = lambda call: self.fc.advance(46)
+        poster = Poster()
+        for attempt in range(1, 9):
+            reader = self.reader(max_calls=80)
+            result = G.run_metrics(reader, self.st, self.fc.now, poster)
+            self.assertEqual((result.code, reader.calls, poster.sent), ("BUDGET", 1, []))
+            self.at(self.fc.now() + timedelta(minutes=31))
+        row = self.st._metrics_delivery(11, TODAY)
+        self.assertEqual((row["status"], row["error_kind"], row["attempts"], row["payload_json"]),
+                         ("held", "attempt-cap", 8, None))
+        reader = self.reader(max_calls=80)
+        self.assertEqual(G.run_metrics(reader, self.st, self.fc.now, poster).counts, {"held": 1})
+        self.assertEqual(reader.calls, 0)
+
+    def test_crash_in_last_allowed_attempt_cannot_start_a_ninth_after_reopen(self):
+        context = self.prepare()
+        fp = context["fingerprint"]
+        for attempt in range(1, 9):
+            self.st.begin_metrics_attempt(11, fp, self.fc.now())
+            if attempt < 8:
+                self.st.finish_metrics_attempt(11, fp, self.fc.now(), "retry", error_kind="transport")
+            self.at(self.fc.now() + timedelta(minutes=31))
+        self.st.close()  # 8회째 reading 중 종료; 완료 기록조차 못 남긴 경우도 재시도하지 않는다.
+        self.st = S.open_writer(self.path, clock=self.fc.now)
+        reader, poster = self.reader(max_calls=80), Poster()
+        result = G.run_metrics(reader, self.st, self.fc.now, poster)
+        self.assertEqual((result.code, result.counts, reader.calls, poster.sent),
+                         ("RETRY_WAIT", {"held": 1}, 0, []))
+        with self.assertRaises(S.StoreRefused):
+            self.st.begin_metrics_attempt(11, fp, self.fc.now())
+
+    def test_capacity_hold_is_reset_by_new_day(self):
+        self.prepare()
+        self.ads.add(A, [(n, "ELIGIBLE", False, steady()) for n in range(1, 79)])
+        poster = Poster()
+        self.assertEqual(G.run_metrics(self.reader(max_calls=80), self.st, self.fc.now, poster).counts, {"held": 1})
+        tomorrow = T0 + timedelta(days=1)
+        self.scene(confirmed=((11, A),), auto=(), t=tomorrow)
+        rid = self.st.begin_run(tomorrow.date(), tomorrow)
+        self.st.finish_run(rid, S.RUN_DONE, tomorrow + timedelta(minutes=1))
+        self.at(NOW + timedelta(days=1))
+        self.ads.cycle += timedelta(days=1)
+        self.ads.add(A, [(1, "ELIGIBLE", False, steady())])
+        result = G.run_metrics(self.reader(max_calls=80), self.st, self.fc.now, poster)
+        self.assertEqual(result.counts, {"stored": 1})
+        self.assertEqual(self.st._metrics_delivery(11, tomorrow.date())["attempts"], 1)
+
     def test_next_day_cannot_send_yesterday_payload(self):
         context = self.prepare()
         fp = context["fingerprint"]
@@ -373,13 +512,15 @@ class MetricsStoreTest(Base):
             self.st.metrics_payload(11, fp, tomorrow)
 
     def test_migration_keeps_existing_data(self):
-        self.prepare()
+        context = self.prepare()
+        self.st._conn.execute("DROP TABLE naver_auto_metrics_delivery")  # 임시 합성 DB를 실제 판 6 모양으로 되돌린다.
         self.st._conn.execute("UPDATE naver_auto_meta SET value = '6' WHERE key = 'schema_version'")
         self.st.close()
         self.st = S.open_writer(self.path, clock=self.fc.now)
         self.assertEqual(self.st.meta("schema_version"), "7")
         self.assertEqual(len(self.st.runs_on(TODAY)), 1)
         self.assertEqual(len(self.st.link_decisions()[0]), 1)
+        self.assertEqual(self.st.metrics_work(context["fingerprint"], NOW, 2), [11])
 
 
 if __name__ == "__main__":

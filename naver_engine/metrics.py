@@ -37,6 +37,10 @@ class _BudgetExpired(Exception):
     pass
 
 
+class _CapacityExceeded(Exception):
+    pass
+
+
 @dataclass(frozen=True)
 class MetricsOutcome:
     code: str
@@ -139,11 +143,16 @@ def aggregate(possibility_id, expected_customers, accounts, today, now):
                 **{out: totals[src] for src, out in zip(FIELDS, OUTPUT_FIELDS)})
 
 
-def _read_account(reader, row, context, today, clock, guard):
+def _minimum_calls(campaign_counts):
+    # 앞뒤 목록 각 1회 + 합계 묶음 + 캠페인별 일별. 실패 재시도는 포함하지 않은 최솟값이다.
+    return sum(2 + (n + N.STATS_IDS_PER_CALL - 1) // N.STATS_IDS_PER_CALL + n for n in campaign_counts)
+
+
+def _read_inventory(reader, row, context, clock, guard, call_guard):
     handle = H.issue_check_handle(customer_id=row["customer_id"], possibility_id=row["possibility_id"],
                                   link_state=row["state"], stage=row["stage_key"],
                                   stage_as_of=context["stage_as_of"], latest_end_date=row["latest_end_date"], now=clock())
-    guard()
+    call_guard()
     raw = reader.get_campaigns(handle)
     guard()
     if not raw or len(raw) > MAX_CAMPAIGNS:
@@ -155,7 +164,14 @@ def _read_account(reader, row, context, today, clock, guard):
                 or campaign.get("customerId") != row["customer_id"]:
             raise MetricsIncomplete("캠페인 목록이 겹치거나 다릅니다")
         ids.append(cid)
+    return handle, ids
+
+
+def _read_account(reader, row, context, today, clock, guard, *, inventory=None, call_guard=None):
+    call_guard = guard if call_guard is None else call_guard
+    handle, ids = inventory if inventory is not None else _read_inventory(reader, row, context, clock, guard, call_guard)
     start, end, _ = window(today)
+    call_guard()
     summary = reader.get_stats_summary(handle, ids, start, end, fields=FIELDS)
     guard()
     summary_cycle = _cycle(summary.cycle_base_tm, today, clock())
@@ -163,7 +179,7 @@ def _read_account(reader, row, context, today, clock, guard):
         raise MetricsIncomplete("기간 합계가 완결되지 않았습니다")
     campaigns = []
     for campaign_id in ids:
-        guard()
+        call_guard()
         daily = reader.get_stats_daily(handle, campaign_id, start, end, fields=FIELDS)
         guard()
         cycle = min(summary_cycle, _cycle(daily.cycle_base_tm, today, clock()))
@@ -171,7 +187,7 @@ def _read_account(reader, row, context, today, clock, guard):
         campaigns.append({"campaign_id": campaign_id, "cycle_base_tm": cycle.isoformat(),
                           "summary": summary.rows[campaign_id], "days": daily.days})
     # 목록을 읽는 사이 추가/삭제된 캠페인을 놓친 자료는 보내지 않는다.
-    guard()
+    call_guard()
     after = reader.get_campaigns(handle)
     guard()
     after_ids = [c.get("nccCampaignId") for c in after if isinstance(c, dict) and c.get("customerId") == row["customer_id"]]
@@ -202,7 +218,13 @@ def run_metrics(reader, store, clock, poster, *, limit=2, max_seconds=45):
     def guard():
         at = clock()
         if at < now or at >= until or monotonic() - started >= max_seconds \
-                or at.astimezone(S.KST).date() != today or reader.calls - initial_calls >= MAX_CALLS:
+                or at.astimezone(S.KST).date() != today or reader.calls - initial_calls > MAX_CALLS:
+            raise _BudgetExpired()
+
+    def call_guard():
+        guard()
+        # 80번째 응답은 검사·저장·전송할 수 있다. 81번째 네이버 요청만 시작하지 않는다.
+        if reader.calls - initial_calls >= MAX_CALLS:
             raise _BudgetExpired()
 
     work = store.metrics_work(fingerprint, now, limit)
@@ -210,14 +232,27 @@ def run_metrics(reader, store, clock, poster, *, limit=2, max_seconds=45):
         return MetricsOutcome("RETRY_WAIT", context["delivery_counts"])
     for pid in work:
         try:
-            guard()
+            call_guard()
         except _BudgetExpired:
             return MetricsOutcome("BUDGET", dict(counts))
         try:
             store.begin_metrics_attempt(pid, fingerprint, clock())
             payload = store.metrics_payload(pid, fingerprint, clock())
             if payload is None:
-                accounts = [_read_account(reader, row, context, today, clock, guard) for row in context["pairs"][pid]]
+                rows = context["pairs"][pid]
+                # 완결 자료에는 계정마다 적어도 캠페인 하나와 네 번의 요청이 필요하다.
+                if _minimum_calls([1] * len(rows)) > MAX_CALLS:
+                    raise _CapacityExceeded()
+                inventories = [_read_inventory(reader, row, context, clock, guard, call_guard) for row in rows]
+                needed = _minimum_calls(len(ids) for _handle, ids in inventories)
+                if needed > MAX_CALLS:
+                    raise _CapacityExceeded()
+                # 자체 크기는 수용 가능하지만 앞 가망/재시도가 예산을 쓴 경우 다음 배치에서 시도한다.
+                if reader.calls - initial_calls + needed - len(inventories) > MAX_CALLS:
+                    raise _BudgetExpired()
+                accounts = [_read_account(reader, row, context, today, clock, guard,
+                                          inventory=inventory, call_guard=call_guard)
+                            for row, inventory in zip(rows, inventories)]
                 guard()
                 store.record_metrics_snapshot(pid, fingerprint, accounts, clock())
             guard()
@@ -236,16 +271,20 @@ def run_metrics(reader, store, clock, poster, *, limit=2, max_seconds=45):
         except S.StoreError:
             raise
         except _BudgetExpired:
-            store.finish_metrics_attempt(pid, fingerprint, clock(), "retry", error_kind="budget")
+            outcome = store.finish_metrics_attempt(pid, fingerprint, clock(), "retry", error_kind="budget")
+            counts[outcome] += 1
             return MetricsOutcome("BUDGET", dict(counts))
-        except (MetricsIncomplete, H.NotEligible, H.HandleInvalid, N.StatsShapeUnknown):
-            store.finish_metrics_attempt(pid, fingerprint, clock(), "held", error_kind="incomplete")
+        except _CapacityExceeded:
+            store.finish_metrics_attempt(pid, fingerprint, clock(), "held", error_kind="capacity")
             counts["held"] += 1
+        except (MetricsIncomplete, H.NotEligible, H.HandleInvalid, N.StatsShapeUnknown):
+            outcome = store.finish_metrics_attempt(pid, fingerprint, clock(), "held", error_kind="incomplete")
+            counts[outcome] += 1
         except (N.NaverApiError, N.RunAbort, EA.AlertSendError):
-            store.finish_metrics_attempt(pid, fingerprint, clock(), "retry", error_kind="transport")
-            counts["retry"] += 1
+            outcome = store.finish_metrics_attempt(pid, fingerprint, clock(), "retry", error_kind="transport")
+            counts[outcome] += 1
         except Exception:
             # 외부 예외 본문을 저장하거나 로그에 노출하지 않는다.
-            store.finish_metrics_attempt(pid, fingerprint, clock(), "retry", error_kind="unexpected")
-            counts["retry"] += 1
+            outcome = store.finish_metrics_attempt(pid, fingerprint, clock(), "retry", error_kind="unexpected")
+            counts[outcome] += 1
     return MetricsOutcome("DONE", dict(counts))
