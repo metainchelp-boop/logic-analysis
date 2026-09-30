@@ -343,7 +343,7 @@ class StoreV6Test(WebBase):
         raw.commit()
         raw.close()
         self.st = S.open_writer(self.path, clock=self.fc.now)
-        self.assertEqual(self.st.meta("schema_version"), "6")
+        self.assertEqual(self.st.meta("schema_version"), "7")
         self.assertEqual(self.st.access_log(), [])
         self.assertEqual(self.st.thresholds(), W.T.DEFAULTS)
 

@@ -22,7 +22,7 @@ def days(value=1):
 
 def account(cid=A, campaign_id="cmp-a001", value=1):
     return {"customer_id": cid, "campaigns": [{"campaign_id": campaign_id,
-            "cycle_base_tm": NOW.isoformat(), "days": days(value)}]}
+            "cycle_base_tm": NOW.isoformat(), "summary": dict.fromkeys(G.FIELDS, value * 30), "days": days(value)}]}
 
 
 class Poster:
@@ -55,10 +55,10 @@ class PureMetricsTest(unittest.TestCase):
             G.reconcile(days(), dict.fromkeys(G.FIELDS, 31), TODAY)
 
     def test_fractions_booleans_negative_unknown_and_overflow_refused(self):
-        for value in (None, True, -1, 1.5, float("nan"), float("inf"), G.MAX_NUMBER + 1, "1"):
+        for value in (None, True, -1, 1.5, float("nan"), float("inf"), G.MAX_NUMBER + 1, 10 ** 500, "1"):
             with self.subTest(value=repr(value)), self.assertRaises(G.MetricsIncomplete):
                 G.number(value)
-        self.assertEqual(G.number(2.0), 2)  # 관문은 네이버 숫자를 float로 해석한다.
+        self.assertEqual(G.number(2.0), 2)  # 값이 정확한 정수인 네이버 실수만 허용한다.
 
     def test_all_accounts_and_all_days_required(self):
         payload = G.aggregate(11, (A, B), [account(), account(B, "cmp-b001")], TODAY, NOW)
@@ -94,11 +94,100 @@ class PureMetricsTest(unittest.TestCase):
         with self.assertRaises(G.MetricsIncomplete):
             G.aggregate(11, (A,), [account(value=G.MAX_NUMBER)], TODAY, NOW)
 
+    def test_one_unknown_field_and_duplicate_campaign_across_accounts_refused(self):
+        source = account()
+        source["campaigns"][0]["days"][next(iter(days()))]["ccnt"] = None
+        with self.assertRaises(G.MetricsIncomplete):
+            G.aggregate(11, (A,), [source], TODAY, NOW)
+        with self.assertRaises(G.MetricsIncomplete):
+            G.aggregate(11, (A, B), [account(), account(B)], TODAY, NOW)
+
+    def test_reconciliation_uses_exact_large_integer_sum_not_float_tolerance(self):
+        source = days(0)
+        first, second = list(source)[:2]
+        source[first]["impCnt"] = 1000000000000
+        source.pop(second)
+        total = dict.fromkeys(G.FIELDS, 0)
+        total["impCnt"] = 1000000000001  # 1 차이를 isclose로 같다고 보지 않는다.
+        with self.assertRaises(G.MetricsIncomplete):
+            G.reconcile(source, total, TODAY)
+
+    def test_snapshot_keeps_missing_day_zero_proof_and_rechecks_it(self):
+        source = account()
+        campaign = source["campaigns"][0]
+        campaign["days"].pop(next(iter(days())))
+        campaign["summary"] = dict.fromkeys(G.FIELDS, 29)
+        self.assertEqual(G.aggregate(11, (A,), [source], TODAY, NOW)["impressions"], 29)
+        campaign["summary"]["impCnt"] = 30
+        with self.assertRaises(G.MetricsIncomplete):
+            G.aggregate(11, (A,), [source], TODAY, NOW)
+
+
+class ReadMetricsTest(unittest.TestCase):
+    class Reader:
+        def __init__(self):
+            self.calls = 0
+            self.campaigns = [{"nccCampaignId": "cmp-a001", "customerId": A}]
+            self.daily = days()
+            self.total = dict.fromkeys(G.FIELDS, 30)
+            self.cycle = NOW
+            self.after = None
+            self.periods = []
+
+        def get_campaigns(self, handle):
+            self.calls += 1
+            return self.after if self.calls > 1 and self.after is not None else self.campaigns
+
+        def get_stats_summary(self, handle, ids, start, end, *, fields):
+            self.calls += 1
+            self.periods.append((start, end))
+            return SimpleNamespace(cycle_base_tm=self.cycle,
+                rows={} if self.total is None else {"cmp-a001": self.total})
+
+        def get_stats_daily(self, handle, campaign_id, start, end, *, fields):
+            self.calls += 1
+            self.periods.append((start, end))
+            return SimpleNamespace(cycle_base_tm=self.cycle, days=self.daily)
+
+    def read(self, reader, guard=lambda: None):
+        row = dict(customer_id=A, possibility_id=11, state="auto", stage_key="진행중", latest_end_date=None)
+        context = dict(stage_as_of=NOW)
+        return G._read_account(reader, row, context, TODAY, lambda: NOW, guard)
+
+    def test_explicit_thirty_day_request_and_source_whitelist(self):
+        reader = self.Reader()
+        reader.campaigns[0]["name"] = "MUST-NOT-BE-RETAINED"
+        result = self.read(reader)
+        self.assertEqual(reader.calls, 4)
+        self.assertEqual(reader.periods, [G.window(TODAY)[:2]] * 2)
+        self.assertNotIn("MUST-NOT-BE-RETAINED", repr(result))
+
+    def test_missing_summary_even_for_stopped_campaign_is_not_zero(self):
+        reader = self.Reader()
+        reader.total = None
+        reader.campaigns[0]["status"] = "PAUSED"
+        with self.assertRaises(G.MetricsIncomplete):
+            self.read(reader)
+
+    def test_campaign_change_during_read_and_stale_cycle_refused(self):
+        for mode in ("removed", "added", "wrong_customer", "late"):
+            reader = self.Reader()
+            if mode == "removed":
+                reader.after = []
+            elif mode == "added":
+                reader.after = reader.campaigns + [{"nccCampaignId": "cmp-b001", "customerId": A}]
+            elif mode == "wrong_customer":
+                reader.after = [{"nccCampaignId": "cmp-a001", "customerId": B}]
+            else:
+                reader.cycle -= timedelta(days=1)
+            with self.subTest(mode=mode), self.assertRaises(G.MetricsIncomplete):
+                self.read(reader)
+
 
 class MetricsStoreTest(Base):
     def prepare(self, pairs=((11, A),)):
         self.scene(confirmed=pairs, auto=())
-        rid = self.st.begin_run(T0)
+        rid = self.st.begin_run(TODAY, T0)
         self.st.finish_run(rid, status=S.RUN_DONE, finished_at=T0 + timedelta(minutes=1))
         self.at(NOW)
         return self.st.metrics_context(NOW)
@@ -236,6 +325,61 @@ class MetricsStoreTest(Base):
         self.at(NOW)
         self.assertEqual(G.run_metrics(reader, self.st, self.fc.now, poster).code, "NOT_READY")
         self.assertEqual((reader.calls, poster.sent), (0, []))
+
+    def test_auto_and_confirmed_accounts_for_same_possibility_are_both_included(self):
+        self.scene(confirmed=((11, A),), auto=((11, B),))
+        rid = self.st.begin_run(TODAY, T0)
+        self.st.finish_run(rid, S.RUN_DONE, T0 + timedelta(minutes=1))
+        self.at(NOW)
+        self.ads.add(A, [(1, "ELIGIBLE", False, steady())])
+        self.ads.add(B, [(1, "ELIGIBLE", False, steady())])
+        poster = Poster()
+        self.assertEqual(G.run_metrics(self.reader(), self.st, self.fc.now, poster).counts, {"stored": 1})
+        self.assertEqual(poster.sent[0]["impressions"], 60000)
+
+    def test_decision_changes_during_read_prevent_send(self):
+        self.prepare()
+        self.ads.add(A, [(1, "ELIGIBLE", False, steady())])
+        def change(call):
+            if call.path == "/stats" and "timeIncrement" in call.query:
+                self.st.record_decision(11, A, "rejected", 0, self.fc.now())
+        self.naver.tick = change
+        poster = Poster()
+        result = G.run_metrics(self.reader(), self.st, self.fc.now, poster)
+        self.assertEqual(result.code, "SOURCE_CHANGED")
+        self.assertEqual(poster.sent, [])
+
+    def test_most_recent_refused_sync_blocks_even_with_previous_good_snapshot(self):
+        self.prepare()
+        self.st.record_sync_event(S.SYNC_ACCOUNTS, S.SYNC_FAILED, ["NETWORK"], NOW)
+        self.assertIsNone(self.st.metrics_context(NOW))
+
+    def test_budget_records_attempt_and_moves_to_next_possibility(self):
+        context = self.prepare(((11, A), (12, B)))
+        self.ads.add(A, [(1, "ELIGIBLE", False, steady())])
+        self.naver.tick = lambda call: self.fc.advance(46)
+        poster = Poster()
+        result = G.run_metrics(self.reader(), self.st, self.fc.now, poster)
+        self.assertEqual((result.code, poster.sent), ("BUDGET", []))
+        self.assertEqual(self.st.metrics_work(context["fingerprint"], self.fc.now(), 1), [12])
+
+    def test_next_day_cannot_send_yesterday_payload(self):
+        context = self.prepare()
+        fp = context["fingerprint"]
+        self.st.begin_metrics_attempt(11, fp, NOW)
+        self.st.record_metrics_snapshot(11, fp, [account()], NOW)
+        tomorrow = self.at(NOW + timedelta(days=1))
+        with self.assertRaises(S.StoreRefused):
+            self.st.metrics_payload(11, fp, tomorrow)
+
+    def test_migration_keeps_existing_data(self):
+        self.prepare()
+        self.st._conn.execute("UPDATE naver_auto_meta SET value = '6' WHERE key = 'schema_version'")
+        self.st.close()
+        self.st = S.open_writer(self.path, clock=self.fc.now)
+        self.assertEqual(self.st.meta("schema_version"), "7")
+        self.assertEqual(len(self.st.runs_on(TODAY)), 1)
+        self.assertEqual(len(self.st.link_decisions()[0]), 1)
 
 
 if __name__ == "__main__":

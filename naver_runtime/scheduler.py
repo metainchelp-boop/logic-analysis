@@ -95,7 +95,7 @@ class Scheduler:
         bad_counts = any(result.counts.get(name, 0) for name in ('held', 'retry', 'no_client'))
         if result.code not in ('OUTSIDE_WINDOW', 'RETRY_WAIT', 'DONE') or bad_counts:
             self._errors.append('metrics')
-            A.record_system_alert(self.store, self.clock(), 'morning', ['METRICS_INCOMPLETE'])
+            A.record_system_alert(self.store, self.clock(), 'metrics', ['METRICS_INCOMPLETE'])
         return result
 
     def _alerts(self):

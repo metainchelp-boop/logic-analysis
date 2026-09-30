@@ -2820,18 +2820,22 @@ class Store:
         if type(limit) is not int or not 0 < limit <= 20:
             raise StoreRefused("성과 작업 수가 범위 밖입니다")
         context = self._metrics_context_for(context_hash, now)
+        # 예약 순서만 고를 때 큰 30일 원천 본문을 계정마다 읽지 않는다.
+        rows = {pid: (fingerprint, status, last, due) for pid, fingerprint, status, last, due in self._conn.execute(
+            """SELECT possibility_id, context_hash, status, last_try_at, next_try_at
+               FROM naver_auto_metrics_delivery WHERE day = ?""", (context["day"].isoformat(),))}
         wanted = []
         for pid in context["pairs"]:
-            row = self._metrics_delivery(pid, context["day"])
-            if row is not None and row["context_hash"] == context_hash:
-                if row["status"] in ("stored", "no_client"):
+            row = rows.get(pid)
+            if row is not None and row[0] == context_hash:
+                if row[1] in ("stored", "no_client"):
                     continue
-                due = _aware_time(row["next_try_at"])
+                due = _aware_time(row[3])
                 if due is None:
                     raise StoreError("저장된 성과 재시도 시각을 읽지 못했습니다")
                 if now < due:
                     continue
-            wanted.append(("" if row is None else row["last_try_at"], pid))
+            wanted.append(("" if row is None else row[2], pid))
         return [pid for _at, pid in sorted(wanted)[:limit]]
 
     def begin_metrics_attempt(self, possibility_id: int, context_hash: str, now: datetime) -> None:

@@ -179,8 +179,8 @@ class MigrationTest(Base):
         self.assertIsNone(self.st.stage_as_of())
         self.assertIsNone(self.st.hold(S.SYNC_STAGES))
 
-    def test_version_is_six(self):
-        self.assertEqual(S.SCHEMA_VERSION, 6)   # 6 = S11(열람·쓰기 기록 · 기준값 이력) — 판을 올리면 이관 시험도 함께 본다(test_alerts · test_web)
+    def test_version_is_seven(self):
+        self.assertEqual(S.SCHEMA_VERSION, 7)   # 판을 올리면 기존 표·행 보존 시험도 함께 본다(test_alerts/test_web/test_metrics)
 
 
 # ── 목록 급감 브레이크 — 가망 ──────────────────────────────────────────

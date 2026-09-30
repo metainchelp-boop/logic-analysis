@@ -159,7 +159,7 @@ class PackagingSourceTest(unittest.TestCase):
 
     def test_ci_only_test_branch_read_permission_and_explicit_isolation(self):
         workflow = source(".github/workflows/naver-runtime-tests.yml")
-        self.assertIn("branches: [codex/naver-runtime-20260930]", workflow)
+        self.assertIn("branches: [codex/naver-runtime-20260930, codex/naver-shared-metrics-20260930]", workflow)
         self.assertIn("github.ref == 'refs/heads/codex/naver-runtime-20260930'", workflow)
         self.assertIn("contents: read", workflow)
         self.assertIn("persist-credentials: false", workflow)

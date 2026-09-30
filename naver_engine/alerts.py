@@ -89,10 +89,12 @@ URGENT_CODES = frozenset({MO.CODE_ACCOUNTS_UNUSABLE, MO.CODE_PAIRING_NOT_TODAY, 
                           CODE_MORNING_NOT_DONE})
 
 SOURCE_NAMES = {"org": "조직 동기화", "stages": "계약 단계 동기화", "accounts": "대행 연결 목록 받기",
-                "pairing": "짝 맞추기", "readiness": "점검 준비", "morning": "아침 점검", "compose": "알림 만들기"}
+                "pairing": "짝 맞추기", "readiness": "점검 준비", "morning": "아침 점검", "compose": "알림 만들기",
+                "metrics": "공유 광고 성과"}
 
 # 코드 → 한 줄(광고주 이름·번호 없음). 모르는 코드는 「그 밖의 경보 (코드)」.
 CODE_TEXT = {
+    "METRICS_INCOMPLETE": "공유 성과에 미확정 자료·미연결 광고주·전송 실패가 있어 기존 값을 유지했습니다",
     CODE_NEEDS_CONFIRMATION: "대표님 확인이 필요한 목록이 있습니다(관제 › 시스템)",
     CODE_ORG_UNAVAILABLE: "조직 자료를 읽지 못해 받는 사람을 계산하지 못했습니다",
     CODE_ORG_STALE: "조직 자료가 낡아 광고주 알림을 보내지 않고 남겨 두었습니다",

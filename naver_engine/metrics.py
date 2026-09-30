@@ -52,9 +52,9 @@ def window(today: date):
 
 
 def number(value):
-    # 네이버 관문 _num은 정상 JSON 정수도 float로 반환한다. 소수는 반올림하지 않는다.
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) \
-            or value < 0 or value > MAX_NUMBER or int(value) != value:
+    # 네이버가 정수값을 실수 모양으로 보내도 정확한 정수만 받는다. 소수는 반올림하지 않는다.
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0 or value > MAX_NUMBER \
+            or not math.isfinite(value) or int(value) != value:
         raise MetricsIncomplete("완결된 정수 지표가 아닙니다")
     return int(value)
 
@@ -109,7 +109,6 @@ def aggregate(possibility_id, expected_customers, accounts, today, now):
         raise MetricsIncomplete("전체 계정 자료가 아닙니다")
     seen, campaigns_seen = set(), set()
     totals = dict.fromkeys(FIELDS, 0)
-    wanted = {d.isoformat() for d in window(today)[2]}
     for account in accounts:
         if not isinstance(account, dict) or set(account) != {"customer_id", "campaigns"}:
             raise MetricsIncomplete("계정 자료 모양이 아닙니다")
@@ -121,16 +120,15 @@ def aggregate(possibility_id, expected_customers, accounts, today, now):
         if not isinstance(campaigns, list) or not 0 < len(campaigns) <= MAX_CAMPAIGNS:
             raise MetricsIncomplete("캠페인 목록이 완결되지 않았습니다")
         for campaign in campaigns:
-            if not isinstance(campaign, dict) or set(campaign) != {"campaign_id", "cycle_base_tm", "days"}:
+            if not isinstance(campaign, dict) or set(campaign) != {"campaign_id", "cycle_base_tm", "summary", "days"}:
                 raise MetricsIncomplete("캠페인 자료 모양이 아닙니다")
             campaign_id = campaign["campaign_id"]
             if not isinstance(campaign_id, str) or not N._CAMPAIGN_ID.fullmatch(campaign_id) or campaign_id in campaigns_seen:
                 raise MetricsIncomplete("캠페인 번호가 겹치거나 다릅니다")
             campaigns_seen.add(campaign_id)
             _cycle(campaign["cycle_base_tm"], today, now)
-            rows = campaign["days"]
-            if not isinstance(rows, dict) or set(rows) != wanted:
-                raise MetricsIncomplete("30일 전체 자료가 아닙니다")
+            # 보충한 0만 보관하지 않는다. 원래 일별 자료와 같은 기간 합계로 매번 다시 증명한다.
+            rows = reconcile(campaign["days"], campaign["summary"], today)
             for row in rows.values():
                 if not isinstance(row, dict) or set(row) != set(FIELDS):
                     raise MetricsIncomplete("하루 지표 모양이 아닙니다")
@@ -169,8 +167,9 @@ def _read_account(reader, row, context, today, clock, guard):
         daily = reader.get_stats_daily(handle, campaign_id, start, end, fields=FIELDS)
         guard()
         cycle = min(summary_cycle, _cycle(daily.cycle_base_tm, today, clock()))
+        reconcile(daily.days, summary.rows[campaign_id], today)
         campaigns.append({"campaign_id": campaign_id, "cycle_base_tm": cycle.isoformat(),
-                          "days": reconcile(daily.days, summary.rows[campaign_id], today)})
+                          "summary": summary.rows[campaign_id], "days": daily.days})
     # 목록을 읽는 사이 추가/삭제된 캠페인을 놓친 자료는 보내지 않는다.
     guard()
     after = reader.get_campaigns(handle)
