@@ -6,6 +6,12 @@ name: Debug Rank Batch (읽기 전용 진단)
 on:
   workflow_dispatch:
     inputs:
+      ad_prepare:
+        description: '광고센터 전용 배포 준비 — off / inspect. 기존 접속 안에서 메타데이터만 조회·키와 운영자료 미출력.'
+        type: choice
+        options: ['off', inspect]
+        required: false
+        default: 'off'
       collector:
         description: '수집기 진단 — off(기본) / on(확장이 서버에 접속했는지·큐·토큰 상태)'
         required: false
@@ -40,7 +46,104 @@ on:
         default: 'off'
 
 jobs:
+  ad-deploy-prepare:
+    if: ${{ inputs.ad_prepare == 'inspect' }}
+    permissions:
+      contents: read
+    concurrency:
+      group: deploy-logic-analysis
+      cancel-in-progress: false
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    steps:
+      - name: 광고센터 배포 경로 읽기 전용 확인
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262 # v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 90s
+          script_stop: true
+          script: |
+            set -eu
+            python3 - <<'PY'
+            import json, os, pathlib, re, shutil, stat, subprocess
+
+            # 공개 실행 로그: 환경·키·DB·앱 로그를 읽지 않고 Docker 메타데이터만 선택한다.
+            def command(args):
+                try:
+                    result = subprocess.run(args, capture_output=True, text=True, timeout=12)
+                except (OSError, subprocess.TimeoutExpired):
+                    raise RuntimeError('command_unavailable') from None
+                if result.returncode:
+                    raise RuntimeError('command_failed')
+                return result.stdout.strip()
+
+            def metadata(path):
+                target = pathlib.Path(path)
+                try:
+                    info = target.lstat()
+                except FileNotFoundError:
+                    return {'exists': False}
+                return {'exists': True, 'symlink': stat.S_ISLNK(info.st_mode),
+                        'directory': stat.S_ISDIR(info.st_mode), 'uid': info.st_uid,
+                        'gid': info.st_gid, 'mode': oct(stat.S_IMODE(info.st_mode))}
+
+            def inspect():
+                names = command(['docker', 'ps', '-a', '--format', '{{.Names}}']).splitlines()
+                names = [n for n in names if re.fullmatch(r'[a-zA-Z0-9_.-]{1,100}', n)
+                         and re.search(r'ad-api|ad-dashboard|logic-analysis|studio|autobid', n)]
+                if not names or len(names) > 20:
+                    raise RuntimeError('unexpected_container_inventory')
+                containers = []
+                for name in names:
+                    item = {'name': name}
+                    for field, template in {
+                        'id': '{{json .Id}}', 'image_id': '{{json .Image}}',
+                        'running': '{{json .State.Running}}',
+                        'started_at': '{{json .State.StartedAt}}',
+                        'restart_count': '{{json .RestartCount}}',
+                        'project': '{{json (index .Config.Labels "com.docker.compose.project")}}',
+                        'service': '{{json (index .Config.Labels "com.docker.compose.service")}}',
+                        'working_dir': '{{json (index .Config.Labels "com.docker.compose.project.working_dir")}}',
+                        'config_files': '{{json (index .Config.Labels "com.docker.compose.project.config_files")}}',
+                        'mounts': '{{json .Mounts}}',
+                    }.items():
+                        item[field] = json.loads(command(['docker', 'inspect', '--format', template, name]))
+                    item['mounts'] = [{k: m.get(k) for k in ('Type', 'Source', 'Destination', 'RW')}
+                                      for m in item['mounts']]
+                    wd = item['working_dir']
+                    if isinstance(wd, str) and wd.startswith('/'):
+                        item['directory_stat'] = metadata(wd)
+                        item['env_stat'] = metadata(str(pathlib.Path(wd) / '.env'))
+                    containers.append(item)
+                ad = [c for c in containers if c['service'] == 'ad-api']
+                if len(ad) != 1 or not ad[0]['running']:
+                    raise RuntimeError('ad_service_not_unique_running')
+                mem = {}
+                for line in pathlib.Path('/proc/meminfo').read_text().splitlines():
+                    if line.split(':')[0] in ('MemTotal', 'MemAvailable'):
+                        mem[line.split(':')[0]] = int(line.split()[1])
+                disk = shutil.disk_usage('/srv')
+                report = {'mode': 'inspect', 'mutations': 0, 'uid': os.geteuid(),
+                          'cpu_count': os.cpu_count(), 'load_average': os.getloadavg(),
+                          'memory_kib': mem, 'disk_bytes': {'total': disk.total, 'free': disk.free},
+                          'docker_version': command(['docker', '--version']),
+                          'compose_version': command(['docker', 'compose', 'version', '--short']),
+                          'staging_stat': metadata('/srv/metainc/ad-deploy-staging'),
+                          'containers': containers}
+                print('AD_DEPLOY_PREFLIGHT=' + json.dumps(report, sort_keys=True))
+
+            try:
+                inspect()
+            except Exception as exc:
+                # 예외 원문/표준 오류에는 경로·자격이 섞일 수 있어 출력하지 않는다.
+                print('AD_DEPLOY_PREFLIGHT_FAILED=' + type(exc).__name__)
+                raise SystemExit(1)
+            PY
+
   diagnose:
+    if: ${{ !inputs.ad_prepare || inputs.ad_prepare == 'off' }}
     runs-on: ubuntu-latest
     steps:
       # 브랜치 코드 미리보기용 — 평소(off)엔 받아만 두고 쓰지 않는다.
