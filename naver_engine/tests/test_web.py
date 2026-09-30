@@ -45,9 +45,11 @@ T0 = TM.T0                                  # 2026-09-29(화) 06:40
 TODAY = T0.date()
 A, B, C_, D = TM.A, TM.B, TM.C_, TM.D
 TOKEN_SECRET = "t" * 40
-MARK_SSO = "SSOMARKaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbb.cccccc"   # ① 토큰 표지 — 어디에도 남으면 안 된다
+MARK_SSO = "SSOMARK" + "a" * 36   # ① 토큰 표지 — 어디에도 남으면 안 된다
 MARK_LOGIN_ID = "loginmark77"                                                  # ① 로그인 아이디 표지
 MARK_PHONE = "010-7777-7777"
+VERIFIER = "V" * 43
+EXCHANGE_ENV = {"SSO_NAVER_CONTROL_CLIENT_KEY": "0123456789abcdef" * 4}
 BAD_SSO = MARK_SSO.replace("SSOMARK", "BADMARK")                                # 모양은 맞지만 ① 이 거절하는 토큰
 
 
@@ -79,9 +81,12 @@ class FakeProfileErp:
         self.people[token] = (status, json.dumps({"status": 200, "result": result}).encode("utf-8"))
 
     def send(self, req, timeout):
-        auth = req.get_header("Authorization") or ""
-        self.calls.append((req.get_method(), req.full_url, auth.startswith("Bearer ")))
-        tok = auth[len("Bearer "):]
+        auth = req.get_header("X-sso-client-key") or ""
+        self.calls.append((req.get_method(), req.full_url, auth == EXCHANGE_ENV["SSO_NAVER_CONTROL_CLIENT_KEY"]))
+        payload = json.loads(req.data)
+        assert payload["destination"] == "NAVER_CONTROL"
+        assert payload["codeVerifier"] == VERIFIER
+        tok = payload["code"]
         if tok not in self.people:
             return 401, b'{"status":401}'
         return self.people[tok]
@@ -105,7 +110,7 @@ class WebBase(TM.Base):
 
     def make_app(self, **kw):
         return WEB.App(open_read=lambda: S.open_reader(self.path), write=lambda fn: fn(self.st), signer=self.signer,
-                       profiles=EP.ErpProfileReader(transport=self.erp), clock=self.fc.now, **kw)
+                       profiles=EP.ErpProfileReader(transport=self.erp, env=EXCHANGE_ENV), clock=self.fc.now, **kw)
 
     def world(self, org_owners=None, extra_people=()):
         t = self.at(T0)
@@ -283,51 +288,51 @@ class TokenTest(unittest.TestCase):
 class ProfileGateTest(unittest.TestCase):
     def setUp(self):
         self.erp = FakeProfileErp()
-        self.r = EP.ErpProfileReader(transport=self.erp)
+        self.r = EP.ErpProfileReader(transport=self.erp, env=EXCHANGE_ENV)
 
     def test_keeps_only_three_fields(self):
         self.erp.person(MARK_SSO, 0, manager=True, teams=((0, None),))
-        p = self.r.read_profile(EP.load_sso(MARK_SSO))
+        p = self.r.read_profile(EP.load_code(MARK_SSO), EP.load_code(VERIFIER))
         self.assertEqual((p.idx, p.says_manager, p.team_idx, p.team_known), (0, True, 0, True))   # 대표 = 0 도 사람
         self.assertEqual(set(vars(p)) if hasattr(p, "__dict__") else set(p.__dataclass_fields__),
                          {"idx", "says_manager", "team_idx", "team_known"})
         self.assertEqual(repr(p), "Profile(****)")
-        self.assertEqual(self.erp.calls, [("GET", "http://api.metainc.co.kr/api/employee-management/my-profile", True)])
+        self.assertEqual(self.erp.calls, [("POST", "https://api.metainc.co.kr/api/sso/exchange", True)])
 
     def test_leaf_team_is_own_team(self):
         self.erp.person(MARK_SSO, 5, teams=((10, 0), (11, 10), (12, 11)))   # 순서가 섞여도 끝 팀
-        self.assertEqual(self.r.read_profile(EP.load_sso(MARK_SSO)).team_idx, 12)
+        self.assertEqual(self.r.read_profile(EP.load_code(MARK_SSO), EP.load_code(VERIFIER)).team_idx, 12)
         for teams, known in ((((11, 10), (12, 10)), False), ((), True), ((("x", 1),), False)):
             self.erp.person(MARK_SSO, 5, teams=teams)
-            p = self.r.read_profile(EP.load_sso(MARK_SSO))
+            p = self.r.read_profile(EP.load_code(MARK_SSO), EP.load_code(VERIFIER))
             self.assertEqual(p.team_known, known, teams)
 
     def test_rejected_and_unavailable(self):
         with self.assertRaises(EP.ProfileError) as e:
-            self.r.read_profile(EP.load_sso(MARK_SSO))
+            self.r.read_profile(EP.load_code(MARK_SSO), EP.load_code(VERIFIER))
         self.assertEqual(e.exception.kind, EP.KIND_REJECTED)
         self.erp.person(MARK_SSO, 5, status=500)
         with self.assertRaises(EP.ProfileError) as e:
-            self.r.read_profile(EP.load_sso(MARK_SSO))
+            self.r.read_profile(EP.load_code(MARK_SSO), EP.load_code(VERIFIER))
         self.assertEqual(e.exception.kind, EP.KIND_UNAVAILABLE)
         self.assertNotIn(MARK_SSO[:10], str(e.exception))
         for bad in (None, "", "short", "has space " * 3, "a" * 5000, "줄\n" * 10, 5):
             with self.assertRaises(EP.ProfileError):
-                EP.load_sso(bad)
+                EP.load_code(bad)
 
     def test_bad_idx_refused(self):
         for idx in (-1, None, "7", True, 1.5):
             self.erp.people[MARK_SSO] = (200, json.dumps({"status": 200, "result": {"idx": idx}}).encode())
             with self.assertRaises(EP.ProfileError, msg=idx) as e:
-                self.r.read_profile(EP.load_sso(MARK_SSO))
+                self.r.read_profile(EP.load_code(MARK_SSO), EP.load_code(VERIFIER))
             self.assertEqual(e.exception.kind, EP.KIND_BAD_SHAPE)
 
     def test_gate_refuses_other_methods_paths(self):
-        for m, path in (("POST", EP.PATH_MY_PROFILE), ("GET", E.PATH_CONTRACTS), ("GET", EP.PATH_MY_PROFILE + "/x")):
+        for m, path in (("GET", EP.PATH_EXCHANGE), ("GET", E.PATH_CONTRACTS), ("GET", EP.PATH_EXCHANGE + "/x")):
             with self.assertRaises(EP.ProfileForbidden):
-                self.r._gate(m, path, Secret(MARK_SSO))
+                self.r._gate(m, path, Secret(MARK_SSO), Secret(VERIFIER))
         with self.assertRaises(EP.ProfileForbidden):
-            self.r._gate("GET", EP.PATH_MY_PROFILE, MARK_SSO)   # 날 글자 토큰은 받지 않는다
+            self.r._gate("POST", EP.PATH_EXCHANGE, MARK_SSO, Secret(VERIFIER))   # 날 글자 토큰은 받지 않는다
         self.assertEqual(self.erp.calls, [])
 
 
@@ -506,7 +511,7 @@ class RouteGuardTest(WebBase):
 # ── 로그인 ──────────────────────────────────────────────────────────
 class LoginTest(WebBase):
     def login(self, token=MARK_SSO):
-        s, b, _h, _p = self.call("POST", "/session", body={"sso": token})
+        s, b, _h, _p = self.call("POST", "/session", body={"codeVerifier": VERIFIER, "code": token})
         return s, b
 
     def test_login_staff_and_ceo_zero(self):
@@ -539,7 +544,7 @@ class LoginTest(WebBase):
         self.assertEqual((s, b["error"]), (403, "no-scope"))   # 조직 표에 없는 사람
         self.erp.person(MARK_SSO, 5, status=500)
         self.assertEqual(self.login()[0], 503)
-        self.assertEqual(self.call("POST", "/session", body={"sso": MARK_SSO, "as": 0})[0], 400)
+        self.assertEqual(self.call("POST", "/session", body={"codeVerifier": VERIFIER, "code": MARK_SSO, "as": 0})[0], 400)
         self.assertEqual(self.call("POST", "/session", raw=b"{", headers={})[0], 400)
         self.assertEqual(self.call("POST", "/session", raw=b'{"sso":"x"}',
                                    headers={"CONTENT_TYPE": "text/plain"})[0], 415)
@@ -556,14 +561,14 @@ class LoginTest(WebBase):
         self.assertEqual([self.login(tok(i))[0] for i in range(4)], [200, 200, 200, 429])
 
     def src(self, source, peer="127.0.0.1", sso=MARK_SSO, environ=None):
-        s, b, _h, _p = self.call("POST", "/session", body={"sso": sso},
+        s, b, _h, _p = self.call("POST", "/session", body={"codeVerifier": VERIFIER, "code": sso},
                                  headers={"REMOTE_ADDR": peer, "HTTP_X_NAVER_AUTO_SOURCE": source, **(environ or {})})
         return s
 
     def test_junk_does_not_use_up_logins(self):
         """① 을 부르지 않는 거절(모양 틀림)은 세지 않는다 · 창마다 한 줄만 기록(검토 login-throttle-global-lockout)."""
         self.app = self.make_app(login_max=3, login_source_max=3, monotonic=lambda: 100.0)
-        for body in [{}] * 20 + [{"sso": "x"}] * 20:
+        for body in [{}] * 20 + [{"codeVerifier": VERIFIER, "code": "x"}] * 20:
             self.assertIn(self.call("POST", "/session", body=body)[0], (400, 401))
         self.assertEqual(self.erp.calls, [])
         self.erp.person(MARK_SSO, 100)
@@ -719,7 +724,7 @@ class LoginTest(WebBase):
         def broken(fn):
             raise S.StoreBusy("x")
         self.app = WEB.App(open_read=lambda: S.open_reader(self.path), write=broken, signer=self.signer,
-                           profiles=EP.ErpProfileReader(transport=self.erp), clock=self.fc.now)
+                           profiles=EP.ErpProfileReader(transport=self.erp, env=EXCHANGE_ENV), clock=self.fc.now)
         s, b = self.login()
         self.assertEqual((s, b), (503, {"error": "audit-unavailable"}))
 
@@ -1239,7 +1244,7 @@ class LinksTest(WebBase):
         def broken(fn):
             raise S.StoreBusy("x")
         self.app = WEB.App(open_read=lambda: S.open_reader(self.path), write=broken, signer=self.signer,
-                           profiles=EP.ErpProfileReader(transport=self.erp), clock=self.fc.now)
+                           profiles=EP.ErpProfileReader(transport=self.erp, env=EXCHANGE_ENV), clock=self.fc.now)
         self.assertEqual(self.post("/links/confirm", 0, {"refs": [ref13]}), (503, {"error": "store-busy"}))
         self.assertEqual(len(self.st.current_decisions()), before)
         self.app = self.make_app()
@@ -1325,7 +1330,7 @@ class LinksTest(WebBase):
         def broken(fn):
             raise S.StoreBusy("x")
         self.app = WEB.App(open_read=lambda: S.open_reader(self.path), write=broken, signer=self.signer,
-                           profiles=EP.ErpProfileReader(transport=self.erp), clock=self.fc.now,
+                           profiles=EP.ErpProfileReader(transport=self.erp, env=EXCHANGE_ENV), clock=self.fc.now,
                            previewer=lambda h: ["캠페인1"])
         s, b, _h, p = self.call("POST", "/links/preview", self.token(0), body={"ref": ref13})
         self.assertEqual((s, b), (503, {"error": "audit-unavailable"}))
@@ -1447,7 +1452,7 @@ class AuditTest(WebBase):
         def broken(fn):
             raise S.StoreBusy("x")
         self.app = WEB.App(open_read=lambda: S.open_reader(self.path), write=broken, signer=self.signer,
-                           profiles=EP.ErpProfileReader(transport=self.erp), clock=self.fc.now)
+                           profiles=EP.ErpProfileReader(transport=self.erp, env=EXCHANGE_ENV), clock=self.fc.now)
         s, b = self.get("/clients/11", 100)
         self.assertEqual((s, b["error"]), (503, "audit-unavailable"))   # 열람 기록을 못 적으면 보여 주지 않는다
 
@@ -1456,7 +1461,7 @@ class AuditTest(WebBase):
         def refusing(fn):
             raise S.StoreRefused("받지 않음")
         self.app = WEB.App(open_read=lambda: S.open_reader(self.path), write=refusing, signer=self.signer,
-                           profiles=EP.ErpProfileReader(transport=self.erp), clock=self.fc.now)
+                           profiles=EP.ErpProfileReader(transport=self.erp, env=EXCHANGE_ENV), clock=self.fc.now)
         with self.assertLogs("naver_engine.web", level="WARNING"):
             self.assertEqual(self.post("/bell/read-all", 100), (409, {"error": "refused"}))
 
@@ -1465,7 +1470,7 @@ class AuditTest(WebBase):
             def _respond(self, environ):
                 return 200, {"x": "\ud800"}
         self.app = Odd(open_read=lambda: S.open_reader(self.path), write=lambda fn: fn(self.st), signer=self.signer,
-                       profiles=EP.ErpProfileReader(transport=self.erp), clock=self.fc.now)
+                       profiles=EP.ErpProfileReader(transport=self.erp, env=EXCHANGE_ENV), clock=self.fc.now)
         with self.assertLogs("naver_engine.web", level="ERROR"):
             s, b, h, _p = self.call("GET", "/me", self.token(100))
         self.assertEqual((s, b, h["Cache-Control"]), (500, {"error": "internal"}, "no-store"))
@@ -1504,7 +1509,7 @@ class AuditTest(WebBase):
         def boom():
             raise RuntimeError("비밀 " + MARK_SSO)
         self.app = WEB.App(open_read=boom, write=lambda fn: fn(self.st), signer=self.signer,
-                           profiles=EP.ErpProfileReader(transport=self.erp), clock=self.fc.now)
+                           profiles=EP.ErpProfileReader(transport=self.erp, env=EXCHANGE_ENV), clock=self.fc.now)
         with self.assertLogs("naver_engine.web", level="ERROR") as cm:
             s, b, _h, p = self.call("GET", "/me", self.token(100))
         self.assertEqual((s, b), (500, {"error": "internal"}))

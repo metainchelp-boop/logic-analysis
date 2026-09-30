@@ -30,7 +30,7 @@ SOURCES = sorted(p for p in ENGINE.rglob("*.py") if "tests" not in p.parts)
 GATES = {"naver_read.py": ("NaverReader", "_request"), "erp_read.py": ("ErpReader", "_get"),
          "erp_alert.py": ("ErpAlertPoster", "_post"), "erp_profile.py": ("ErpProfileReader", "_get")}
 # 관문 모듈 → 그 관문이 만드는 단 하나의 방식(S10 — 넣기는 ① 알림 관문 하나 · 나머지는 읽기만)
-GATE_METHOD = {"naver_read.py": "GET", "erp_read.py": "GET", "erp_alert.py": "POST", "erp_profile.py": "GET"}
+GATE_METHOD = {"naver_read.py": "GET", "erp_read.py": "GET", "erp_alert.py": "POST", "erp_profile.py": "POST"}
 # 들어오는 요청을 받는 모듈 → 가르는 방식(S11 관제 화면 API — 네트워크 모듈 import 없음 · 나가는 요청 없음)
 INBOUND_METHODS = {"web.py": frozenset({"GET", "POST"})}
 NET_MODULES = ("urllib", "http", "socket", "ssl", "requests", "httpx", "aiohttp", "subprocess", "asyncio",
@@ -292,28 +292,24 @@ class GuardrailTest(unittest.TestCase):
                 if s.strip().upper() in METHOD_WORDS:
                     seen.setdefault(p.name, set()).add(s)
         self.assertEqual(seen.get("erp_alert.py"), {"POST"})
-        self.assertEqual({n for n, w in seen.items() if "POST" in w}, {"erp_alert.py"} | set(INBOUND_METHODS))
+        self.assertEqual(seen.get("erp_profile.py"), {"POST"})
+        self.assertEqual({n for n, w in seen.items() if "POST" in w}, {"erp_alert.py", "erp_profile.py"} | set(INBOUND_METHODS))
         for name in INBOUND_METHODS:
             self.assertNotIn(name, GATES)
             for node, mod in _imports(_tree(ENGINE / name)):
                 self.assertNotIn(mod.lstrip(".").split(".")[0], NET_MODULES, f"{name}: {mod}")
 
-    def test_profile_gate_borrows_host_from_read_gate(self):
-        """내 정보 관문도 호스트·주소를 스스로 적지 않고 읽기 관문의 한 글자를 가져다 쓴다(S11)."""
+    def test_profile_gate_is_exact_https_exchange(self):
+        """S16은 옛 HTTP 프로필 경로를 사용하지 않고 고정 HTTPS 교환 경로만 사용한다."""
+        from naver_engine import erp_profile as ep
+        self.assertEqual(ep.BASE_URL, 'https://api.metainc.co.kr')
+        self.assertEqual(ep.PATH_EXCHANGE, '/api/sso/exchange')
         tree = _tree(ENGINE / "erp_profile.py")
-        for n in ast.walk(tree):
-            if isinstance(n, (ast.Assign, ast.AnnAssign)):
-                for t in (n.targets if isinstance(n, ast.Assign) else [n.target]):
-                    if isinstance(t, ast.Name):
-                        self.assertNotIn(t.id, ("ERP_HOST", "BASE_URL", "ERP_SCHEME", "BASE_HOST"), t.id)
         for _n, s in _folded_strings(_code_tree(ENGINE / "erp_profile.py")):
-            self.assertNotIn("metainc.co.kr", s)
-            self.assertFalse(s.startswith("http"), "내 정보 관문에 주소 글자가 있다")
-        got = set()
+            self.assertNotIn('http://', s)
+            self.assertNotIn('my-profile', s)
         for node, mod in _imports(tree):
-            if isinstance(node, ast.ImportFrom) and node.module == "erp_read" and node.level == 1:
-                got |= {a.name for a in node.names}
-        self.assertTrue({"ERP_HOST", "BASE_URL", "ERP_SCHEME"} <= got)
+            self.assertFalse(isinstance(node, ast.ImportFrom) and node.module == 'erp_read')
 
     def test_token_mac_only_in_session(self):
         """토큰 비밀값 서명(``.mac``)은 ``session.py`` 에서만 — 다른 곳이 비밀값으로 아무 글이나 서명하지 못하게.

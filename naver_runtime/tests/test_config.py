@@ -30,9 +30,9 @@ class ConfigTest(unittest.TestCase):
                                for key in ('METRICS', 'SYNC', 'LINKS', 'MORNING', 'ALERTS')})
         self.assertTrue(cfg.metrics_enabled)
 
-    def test_public_web_cannot_be_enabled_before_exchange_code(self):
-        with self.assertRaisesRegex(ConfigError, "일회용"):
-            Config.from_env({"NAVER_ENGINE_WEB_ENABLED": "true"})
+    def test_web_remains_opt_in_after_exchange_code(self):
+        self.assertFalse(Config.from_env({}).web_enabled)
+        self.assertTrue(Config.from_env({"NAVER_ENGINE_WEB_ENABLED": "true"}).web_enabled)
 
     def test_paths_cannot_point_into_code_or_be_relative(self):
         for db in ("engine.db", str(Path(__file__).resolve().parents[2] / "engine.db")):

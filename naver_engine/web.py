@@ -426,8 +426,9 @@ class App:
     # ── 로그인 ──
     def _h_login(self, req: Request, v: None, now: datetime, environ=None) -> Tuple[int, dict]:
         try:
-            body = _body(req, frozenset({"sso"}), frozenset({"sso"}))
-            sso = EP.load_sso(body["sso"])
+            body = _body(req, frozenset({"code", "codeVerifier"}), frozenset({"code", "codeVerifier"}))
+            sso = EP.load_code(body["code"])
+            verifier = EP.load_code(body["codeVerifier"])
         except HttpError:
             self._quiet("bad-body", now)
             raise
@@ -437,7 +438,7 @@ class App:
         source = self._source(environ or {})
         self._throttle(source, sso.bucket_key(), now)   # ① 을 부를 시도만 센다
         try:
-            prof = self._profiles.read_profile(sso)
+            prof = self._profiles.read_profile(sso, verifier)
         except EP.ProfileError as e:
             if e.kind == EP.KIND_REJECTED:
                 self._rejected(source)   # ① 이 거절한 시도만 그 곳의 창에(장애·모양 이상은 아님)
@@ -746,5 +747,5 @@ def build_app(*, open_read: Callable[[], S.Store], write: Callable[[Callable[[S.
     """엔진 배선(S14)이 부르는 앱 만들기 — 토큰 비밀값(``NAVER_AUTO_TOKEN_SECRET``)이 없거나 32자 미만이면
     ``CredentialsMissing`` 으로 **시작하지 않는다**(폴백 없음). ① 내 정보 관문은 여기서 만든다."""
     signer = SE.TokenSigner(SE.load_token_secret(env))
-    return App(open_read=open_read, write=write, signer=signer, profiles=kw.pop("profiles", None) or EP.ErpProfileReader(),
+    return App(open_read=open_read, write=write, signer=signer, profiles=kw.pop("profiles", None) or EP.ErpProfileReader(env=env),
                **kw)

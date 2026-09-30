@@ -10,6 +10,7 @@ import sys
 import threading
 
 from naver_engine import alerts as A, erp_alert as EA, erp_read as E, naver_read as N
+from naver_engine import erp_profile as EP, session as SE, store as S, web as WEB
 from naver_engine.backup import BackupJob
 from naver_engine.credentials import load_manager_credentials
 from naver_runtime.backup_transport import OpenSslEncryptor, SshSender
@@ -137,10 +138,25 @@ def note_orphaned(store, now):
         A.record_system_alert(store, now, "morning", ["RUN_ORPHANED"])
 
 
+def combine_web(status, web):
+    """내부 건강 확인을 보존하고, 켜진 경우에만 관제 경로를 넘긴다."""
+    health = health_app(status)
+    def app(environ, start_response):
+        if web is not None and (environ.get('PATH_INFO') or '').startswith(WEB.PREFIX + '/'):
+            return web(environ, start_response)
+        return health(environ, start_response)
+    return app
+
+
 def run(config, env, *, stop=None):
     stop = stop if stop is not None else threading.Event()
     clock = InterruptibleClock(stop)
     options = dependencies(config, env, clock)
+    profiles = signer = None
+    if config.web_enabled:
+        profiles = EP.ErpProfileReader(env=env, transport=StopAwareTransport(clock))
+        profiles.require_configured()
+        signer = SE.TokenSigner(SE.load_token_secret(env))
     state = {"state": "starting", "switches": config.switches(), "last_tick": None}
     state_lock = threading.Lock()
 
@@ -152,8 +168,10 @@ def run(config, env, *, stop=None):
     with Writer(config.db, clock=N.SystemClock().now) as writer:
         writer.call(lambda st: note_orphaned(st, N.SystemClock().now()))
         scheduler = Scheduler(config, writer.proxy, clock=clock.now, **options)
-        # 현재 공개하는 것은 내부 건강 확인뿐이다. S16 이전 웹/API 경로는 404이다.
-        with UnixServer(config.socket, health_app(status)):
+        # 읽기 연결은 요청 스레드에서 열고 닫으며, 쓰기는 기존 단일 소유자 큐만 지난다.
+        web = WEB.App(open_read=lambda: S.open_reader(config.db), write=writer.call,
+                      signer=signer, profiles=profiles) if config.web_enabled else None
+        with UnixServer(config.socket, combine_web(status, web)):
             while not stop.is_set():
                 with state_lock:
                     state.update(state="running")

@@ -97,7 +97,7 @@ class RelayToEngineTest(TW.WebBase):
         out = []
         for i in range(n):
             s = sso(start + i) if callable(sso) else (sso or TW.bad(start + i))
-            out.append(self.via(self.inc("POST", "/session", body={"sso": s}, real_ip=source)).status)
+            out.append(self.via(self.inc("POST", "/session", body={"codeVerifier": TW.VERIFIER, "code": s}, real_ip=source)).status)
         return out
 
     def test_unix_socket_with_mark_counts_each_source(self):
@@ -138,7 +138,7 @@ class RelayToEngineTest(TW.WebBase):
 
     def test_login_then_board_through_relay(self):
         self.erp.person(TW.MARK_SSO, 100)
-        out = self.via(self.inc("POST", "/session", body={"sso": TW.MARK_SSO}))
+        out = self.via(self.inc("POST", "/session", body={"codeVerifier": TW.VERIFIER, "code": TW.MARK_SSO}))
         self.assertEqual(out.status, 200)
         tok = json.loads(out.body)["token"]
         self.assertTrue(tok.startswith("v1."))

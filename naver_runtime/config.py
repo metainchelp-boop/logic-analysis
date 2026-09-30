@@ -57,9 +57,7 @@ class Config:
     def from_env(cls, env: Mapping[str, str]):
         flags = {name.lower() + "_enabled": _flag(env, f"NAVER_ENGINE_{name}_ENABLED")
                  for name in ("SYNC", "LINKS", "MORNING", "ALERTS", "METRICS", "BACKUP", "WEB", "ISSUE_ALERTS")}
-        if flags["web_enabled"]:
-            # S16 계약이 아직 없다. 설정 한 줄로 옛 SSO 토큰 경로를 노출하지 않는다.
-            raise ConfigError("일회용 로그인 코드 연결 전에는 관제 웹을 켤 수 없습니다")
+        # S16 연결 구현 후에도 기본은 꺼짐. 실제 실행은 전용 교환 키·자체 서명 값이 없으면 시작 전 거절한다.
         if flags["morning_enabled"] and not (flags["sync_enabled"] and flags["links_enabled"]):
             raise ConfigError("아침 점검에는 조직·단계 동기화와 연결 목록 설정이 모두 필요합니다")
         if flags["metrics_enabled"] and not (flags["morning_enabled"] and flags["alerts_enabled"]):

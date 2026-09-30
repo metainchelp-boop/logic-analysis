@@ -1,37 +1,32 @@
-"""① 내 정보 관문 — 관제 화면 로그인 때 ① ``my-profile`` 을 **한 번** 부르는 문 하나(설계 v1.4 §9 · S11).
+"""S16 전산 일회용 로그인 교환 관문.
 
-엔진이 ① 에 하는 호출은 관문 셋(읽기 ``erp_read`` · 알림 ``erp_alert`` · 이 문)만 지난다. 이 문은:
-
-- **GET 만** · 주소는 ``/api/employee-management/my-profile`` 하나 · 호스트·주소 글자는 읽기 관문의 것을 가져다 쓴다
-  (스스로 적지 않는다 — 구문 시험이 고정).
-- 넘겨주기를 따라가지 않고 환경 프록시를 무시한다(네이버 관문과 같은 전송 ``UrllibTransport``).
-- ① 로그인 토큰(sso)은 ``Secret`` 로만 들고, 꺼내는 곳은 ``_gate`` 한 곳이다. **저장하지 않고 · 기록·예외 문구에 싣지 않는다.**
-  엔진 전용 키는 쓰지 않는다(이 경로는 직원 본인의 토큰으로만 열린다).
-- **남길 칸만** — 직원 번호(``result.idx`` · 대표 = 0) · 팀장 표시(``isManager``) · 소속 팀 번호 사슬(``teamList`` 의
-  ``idx``·``parentIdx``). 로그인 아이디(``id``) · 이름 · 전화 · 주민번호 · 주소 · 계좌 · 권한 칸은 읽자마자 버린다
-  (응답 전체를 어디에도 두지 않는다). ⚠️ ③ 기존 로그인은 ``result.id``(로그인 아이디 글자)를 쓴다 — 이 문은 ``idx`` 만 쓴다.
-- **200 이 아니면 성공이 아니다** · 401·403 은 「토큰 거절」 · 그 밖은 「① 응답 없음」 · 본문 크기 상한 · JSON 이 아니면 실패.
+고정 HTTPS POST /api/sso/exchange 한 곳만 사용한다. 목적지는 NAVER_CONTROL이며
+별도 서버 키와 브라우저 검증자를 함께 보낸다. 기존 ERP JWT/my-profile 경로는 사용하지 않는다.
+코드·검증자·서버 키는 Secret으로 감싸고 요청을 만드는 _gate에서만 꺼낸다.
+넘겨주기·환경 프록시·자동 재시도 없음. 응답은 번호·팀장·팀 번호만 남긴다.
+대표 idx0을 보존하며 만료/재사용/다른 목적지/PKCE 거절은 전산의401을 그대로 거절 처리한다.
 """
 from __future__ import annotations
 
 import http.client
 import json
 import re
+import os
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
 from .credentials import Secret
-from .erp_read import BASE_URL, ERP_HOST, ERP_SCHEME
 from .naver_read import UrllibTransport
 
-PATH_MY_PROFILE = "/api/employee-management/my-profile"
-_ALLOWED_METHODS = frozenset({"GET"})
+ERP_HOST, ERP_SCHEME = 'api.metainc.co.kr', 'https'
+BASE_URL = ERP_SCHEME + '://' + ERP_HOST
+PATH_EXCHANGE = '/api/sso/exchange'
+_ALLOWED_METHODS = frozenset({"POST"})
 TIMEOUT = 8                      # ③ 기존 로그인과 같다(auth.py)
 MAX_BODY = 256 * 1024
-SSO_MIN_LENGTH, SSO_MAX_LENGTH = 16, 4096
-_SSO_CHARS = re.compile(r"[A-Za-z0-9._~+/=-]+")   # 토큰 모양(JWT · base64url) — 빈칸·줄바꿈·따옴표 없음
+_CODE_CHARS = re.compile(r"[A-Za-z0-9_-]{43}")
 TEAM_LIST_MAX = 64
 
 KIND_REJECTED = "sso-rejected"   # ① 이 토큰을 거절(401·403) — 전산에서 다시 들어와야 한다
@@ -51,14 +46,11 @@ class ProfileForbidden(RuntimeError):
     """GET 이 아닌 요청 · 허용하지 않은 경로·호스트."""
 
 
-def load_sso(raw) -> Secret:
-    """화면이 넘긴 ① 토큰 → ``Secret``. 모양이 틀리면 ``ProfileError(sso-rejected)``(값은 문구에 없다)."""
-    if not isinstance(raw, str):
+def load_code(raw) -> Secret:
+    """32바이트 base64url 코드/검증자만. 기존 JWT·공백·Bearer 접두사는 받지 않는다."""
+    if not isinstance(raw, str) or not _CODE_CHARS.fullmatch(raw):
         raise ProfileError(KIND_REJECTED)
-    tok = raw.strip()
-    if not SSO_MIN_LENGTH <= len(tok) <= SSO_MAX_LENGTH or not _SSO_CHARS.fullmatch(tok):
-        raise ProfileError(KIND_REJECTED)
-    return Secret(tok)
+    return Secret(raw)
 
 
 @dataclass(frozen=True)
@@ -106,26 +98,34 @@ def _leaf_team(team_list) -> Tuple[Optional[int], bool]:
 
 
 class ErpProfileReader:
-    def __init__(self, transport=None) -> None:
+    def __init__(self, transport=None, env=None) -> None:
         self._transport = transport or UrllibTransport()
+        value = (os.environ if env is None else env).get('SSO_NAVER_CONTROL_CLIENT_KEY', '')
+        self._key = Secret(value) if isinstance(value, str) and re.fullmatch(r'[a-fA-F0-9]{64}', value) else None
         self.calls = 0
 
     def __repr__(self) -> str:
         return f"ErpProfileReader(calls={self.calls})"
 
+    def require_configured(self) -> None:
+        if self._key is None:
+            raise ProfileError(KIND_UNAVAILABLE)
+
     # ── 관문 ──────────────────────────────────────────────────────
-    def _gate(self, method: str, path: str, sso: Secret) -> Tuple[int, bytes]:
+    def _gate(self, method: str, path: str, code: Secret, verifier: Secret) -> Tuple[int, bytes]:
         if method not in _ALLOWED_METHODS:
-            raise ProfileForbidden(f"GET 이 아닌 요청은 만들지 않습니다: {method}")
-        if path != PATH_MY_PROFILE:
+            raise ProfileForbidden("허용하지 않은 방식")
+        if path != PATH_EXCHANGE:
             raise ProfileForbidden("허용하지 않은 경로")
-        if not isinstance(sso, Secret):
-            raise ProfileForbidden("토큰은 Secret 이어야 합니다")
+        if not isinstance(code, Secret) or not isinstance(verifier, Secret):
+            raise ProfileForbidden("코드와 검증자는 Secret 이어야 합니다")
+        self.require_configured()
         self.calls += 1
-        headers = {"Authorization": "Bearer " + sso.reveal(), "Accept": "application/json"}
-        req = urllib.request.Request(BASE_URL + path, headers=headers, method=method)
-        if req.get_method() != "GET" or req.data is not None:
-            raise ProfileForbidden("GET 이 아닌 요청은 보내지 않습니다")
+        headers = {"X-Sso-Client-Key": self._key.reveal(), "Accept": "application/json", 'Content-Type':'application/json'}
+        body = json.dumps({'destination':'NAVER_CONTROL', 'code':code.reveal(), 'codeVerifier':verifier.reveal()}).encode('ascii')
+        req = urllib.request.Request(BASE_URL + path, headers=headers, method=method, data=body)
+        if req.get_method() != "POST":
+            raise ProfileForbidden("허용하지 않은 방식")
         if req.host != ERP_HOST or req.type != ERP_SCHEME:
             raise ProfileForbidden("허용하지 않은 호스트")
         del headers
@@ -136,8 +136,8 @@ class ErpProfileReader:
         except Exception:  # 뜻밖의 오류 — 문구에 토큰이 섞일 수 있어 종류만 남긴다
             raise ProfileError(KIND_UNAVAILABLE) from None
 
-    def _get(self, sso: Secret) -> dict:
-        status, body = self._gate("GET", PATH_MY_PROFILE, sso)
+    def _get(self, code: Secret, verifier: Secret) -> dict:
+        status, body = self._gate("POST", PATH_EXCHANGE, code, verifier)
         if status in (401, 403):
             raise ProfileError(KIND_REJECTED, status)
         if status != 200:
@@ -149,13 +149,13 @@ class ErpProfileReader:
         except (ValueError, UnicodeDecodeError, RecursionError):
             raise ProfileError(KIND_BAD_SHAPE, status) from None
         if not isinstance(j, dict) or not isinstance(j.get("result"), dict) \
-                or ("status" in j and j.get("status") != 200):
+                or j.get("status") != 200:
             raise ProfileError(KIND_BAD_SHAPE, status)
         return j["result"]
 
-    def read_profile(self, sso: Secret) -> Profile:
+    def read_profile(self, code: Secret, verifier: Secret) -> Profile:
         """① 내 정보 → 남길 칸만. 번호가 0 이상의 정수가 아니면 실패(대표 = 0 은 사람이다)."""
-        res = self._get(sso)
+        res = self._get(code, verifier)
         idx = _int(res.get("idx"), 0)
         if idx is None:
             raise ProfileError(KIND_BAD_SHAPE, 200)

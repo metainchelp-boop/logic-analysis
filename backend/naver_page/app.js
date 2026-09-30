@@ -182,22 +182,6 @@
     state.session = null;
     try { sessionStorage.removeItem(KEY); } catch (e) { /* 없음 */ }
   }
-  /* 주소창의 sso(쿼리 또는 조각)를 꺼내고 곧바로 지운다 — 다른 요청(화면 파일 · API)보다 먼저. */
-  function takeSso() {
-    var sso = null;
-    var params = new URLSearchParams(location.search);
-    if (params.has('sso')) { sso = params.get('sso'); params.delete('sso'); }
-    var hash = location.hash.replace(/^#/, '');
-    var hp = new URLSearchParams(hash);
-    var keepHash = location.hash;
-    if (hp.has('sso')) { if (sso === null) sso = hp.get('sso'); hp.delete('sso'); keepHash = hp.toString() ? '#' + hp.toString() : ''; }
-    if (sso !== null) {
-      var rest = params.toString();
-      history.replaceState(null, '', location.pathname + (rest ? '?' + rest : '') + keepHash);
-    }
-    return sso;
-  }
-
   function ApiError(status, body) { this.status = status; this.body = body || {}; }
   function api(method, path, body) {
     var headers = { Accept: 'application/json' };
@@ -1204,12 +1188,14 @@
     }, function (e) { if (e.status !== 401) blocked('down'); });
   }
   function start() {
-    var sso = takeSso();   // 가장 먼저 — 주소창에서 지운 뒤에야 다른 일을 한다
+    var entry = window.__metaincSso;
     bind();
-    if (sso !== null) {
+    if (entry && (entry.started || entry.legacyPresent)) {
       dropSession();
-      if (!sso) return blocked('login');
-      return api('POST', '/session', { sso: sso }).then(function (j) { saveSession(j); boot(); }, loginFailed);
+      if (!entry.started || entry.legacyPresent) return blocked('login');
+      return entry.consume().then(function (payload) {
+        return api('POST', '/session', payload);
+      }).then(function (j) { saveSession(j); boot(); }, loginFailed);
     }
     state.session = loadSession();
     if (!state.session) return blocked('login');

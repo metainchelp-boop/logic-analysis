@@ -1,12 +1,13 @@
 """로그인 / 내 정보."""
 import logging
+import json
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..deps import get_current_user
-from .. import login_guard, models, schemas, security
+from .. import login_guard, models, schemas, security, sso_exchange
 
 router = APIRouter(tags=["auth"])
 log = logging.getLogger("app.auth")
@@ -151,7 +152,12 @@ def sso_login(payload: SSOIn, request: Request, db: Session = Depends(get_db)):
         raise HTTPException(401, got)
     if kind != "ok":
         raise HTTPException(502, got)
-    result = got
+    return _user_from_erp(got, db)
+
+
+def _user_from_erp(result, db):
+    """두 입구의 기존 사용자 식별/권한 규칙을 한곳에서 유지한다."""
+    import secrets as pysecrets
     login_id = str(result.get("id") or "").strip()
     name = (str(result.get("name") or login_id)).strip()[:100]
 
@@ -190,3 +196,47 @@ def sso_login(payload: SSOIn, request: Request, db: Session = Depends(get_db)):
             db.commit()
     token = security.create_token(user.id, user.role)
     return schemas.TokenOut(access_token=token, user=schemas.UserOut.model_validate(user))
+
+
+async def _exchange_payload(request: Request):
+    if request.headers.get('origin') not in (None, 'https://dashboard.metainc.co.kr') or \
+            request.headers.get('sec-fetch-site') == 'cross-site':
+        raise HTTPException(403, '전산에서 다시 열어 주세요.')
+    if request.headers.get('content-type', '').split(';')[0].strip().lower() != 'application/json':
+        raise HTTPException(400, '로그인 요청 형식이 잘못되었습니다.')
+    data = bytearray()
+    async for chunk in request.stream():
+        data.extend(chunk)
+        if len(data) > 1024:
+            raise HTTPException(413, '로그인 요청이 너무 큽니다.')
+    try:
+        payload = json.loads(data)
+    except (ValueError, UnicodeDecodeError, RecursionError):
+        raise HTTPException(400, '로그인 요청 형식이 잘못되었습니다.') from None
+    if not isinstance(payload, dict) or set(payload) != {'code', 'codeVerifier'} or \
+            not all(sso_exchange.valid(payload[k]) for k in payload):
+        raise HTTPException(400, '로그인 요청 형식이 잘못되었습니다.')
+    return payload
+
+
+@router.post('/auth/sso-code', response_model=schemas.TokenOut)
+def sso_code_login(request: Request, response: Response, payload=Depends(_exchange_payload), db: Session=Depends(get_db)):
+    response.headers['Cache-Control'] = 'no-store'
+    try:
+        ticket = login_guard.reserve(login_guard.sso_buckets(_source(request)), tag=login_guard.token_tag(payload['code']))
+    except login_guard.Unavailable:
+        raise HTTPException(503, login_guard.BUSY_MSG) from None
+    if ticket.known_rejected:
+        raise HTTPException(401, '전산에서 다시 열어 주세요.')
+    if ticket.wait is not None:
+        raise _too_many(ticket.wait)
+    kind = 'outage'
+    try:
+        kind, profile = sso_exchange.exchange(payload['code'], payload['codeVerifier'])
+    finally:
+        login_guard.settle(ticket, failed=(kind == 'rejected'))
+    if kind == 'rejected':
+        raise HTTPException(401, '전산에서 다시 열어 주세요.')
+    if kind != 'ok':
+        raise HTTPException(503, '전산 로그인 연결을 확인할 수 없습니다. 잠시 뒤 다시 열어 주세요.')
+    return _user_from_erp(profile, db)

@@ -37,6 +37,15 @@ async function page(ctx, log) {
   p.on('console', (m) => { if (m.type() === 'error' && !/^Failed to load resource/.test(m.text())) log.errors.push(m.text()); });
   return p;
 }
+// S13 화면 회귀는 로그인 교환 완료 seam에 합성 결과를 주입한다.
+// S16의 실제 opener/PKCE 수신부는 별도 보안 브라우저/VM 시험에서 검증한다.
+async function enter(p, url, code) {
+  const pattern = '**/naver/sso-bootstrap.js';
+  await p.route(pattern, route => route.fulfill({contentType:'application/javascript',
+    body: 'window.__metaincSso={started:true,legacyPresent:false,consume:function(){return Promise.resolve(' +
+      JSON.stringify({code,codeVerifier:'V'.repeat(43)}) + ');}};'}));
+  try { await p.goto(url); } finally { await p.unroute(pattern); }
+}
 async function api(p, path, method, body) {
   return p.evaluate(async ([path, method, body]) => {
     const s = JSON.parse(sessionStorage.getItem('naverWatch.session') || 'null');
@@ -76,8 +85,8 @@ async function hygiene(tag, p, log, firstNavUrl) {
       const { ctx, log } = await newCtx(browser);
       const p = await page(ctx, log);
       await p.clock.install();
-      const url = base + '/naver/?sso=' + encodeURIComponent(cfg.sso.ceo);
-      await p.goto(url);
+      const url = base + '/naver/';
+      await enter(p, url, cfg.sso.ceo);
       await p.waitForSelector('#s-watch.on #kpis .kpi');
       await p.waitForSelector('#issues .iss');
       await shot(p, '1-대표-관제');
@@ -168,8 +177,8 @@ async function hygiene(tag, p, log, firstNavUrl) {
       const { ctx, log } = await newCtx(browser);
       const p = await page(ctx, log);
       await p.clock.install();
-      const url = base + '/naver/?sso=' + encodeURIComponent(cfg.sso.ceo3);
-      await p.goto(url);
+      const url = base + '/naver/';
+      await enter(p, url, cfg.sso.ceo3);
       await p.waitForSelector('#s-watch.on #kpis .kpi');
       const s0 = await p.evaluate(() => JSON.parse(sessionStorage.getItem('naverWatch.session')));
       await p.mouse.click(5, 5);
@@ -197,8 +206,8 @@ async function hygiene(tag, p, log, firstNavUrl) {
       const { ctx, log } = await newCtx(browser);
       const p = await page(ctx, log);
       await p.clock.install();
-      const url = base + '/naver/?sso=' + encodeURIComponent(cfg.sso.idle101);
-      await p.goto(url);
+      const url = base + '/naver/';
+      await enter(p, url, cfg.sso.idle101);
       await p.waitForSelector('#s-watch.on #kpis .kpi');
       await p.clock.runFor(30 * 60 * 1000);
       await p.click('#tblChips .chip[data-f="all"]');       // 사람이 손댐 — 쉰 시간이 다시 0 부터
@@ -227,8 +236,8 @@ async function hygiene(tag, p, log, firstNavUrl) {
       });
       const p = await page(ctx, log);
       await p.clock.install();
-      const url = base + '/naver/?sso=' + encodeURIComponent(cfg.sso.retry101);
-      await p.goto(url);
+      const url = base + '/naver/';
+      await enter(p, url, cfg.sso.retry101);
       await p.waitForSelector('#s-watch.on #kpis .kpi');
       const s0 = await p.evaluate(() => JSON.parse(sessionStorage.getItem('naverWatch.session')));
       await p.mouse.click(5, 5);
@@ -259,8 +268,8 @@ async function hygiene(tag, p, log, firstNavUrl) {
       });
       const p = await page(ctx, log);
       await p.clock.install({ time: new Date('2026-09-29T23:57:00+09:00') });   // 자정 넘김 시험용(맨 끝)
-      const url = base + '/naver/?sso=' + encodeURIComponent(cfg.sso.ceo4);
-      await p.goto(url);
+      const url = base + '/naver/';
+      await enter(p, url, cfg.sso.ceo4);
       await p.waitForSelector('#issues .empty button');
       const msg = await p.textContent('#issues');
       ok('경합: 첫 불러오기 실패 = 까닭 + 「다시 불러오기」(불러오는 중에 멈추지 않음)', msg.includes('불러오지 못했습니다') && msg.includes('조직 자료를 아직 받지 못했습니다') && !msg.includes('불러오는 중'), msg);
@@ -344,8 +353,8 @@ async function hygiene(tag, p, log, firstNavUrl) {
     {
       const { ctx, log } = await newCtx(browser);
       const p = await page(ctx, log);
-      const url = base + '/naver/issues?sso=' + encodeURIComponent(cfg.sso.s101);
-      await p.goto(url);
+      const url = base + '/naver/issues';
+      await enter(p, url, cfg.sso.s101);
       await p.waitForSelector('#s-watch.on #issues .iss');
       ok('담당: /naver/issues 로 들어와도 관제 화면', new URL(p.url()).pathname === '/naver/issues');
       ok('담당: 설정 메뉴가 없다', await p.isHidden('#menuSettings'));
@@ -370,8 +379,8 @@ async function hygiene(tag, p, log, firstNavUrl) {
     {
       const { ctx, log } = await newCtx(browser);
       const p = await page(ctx, log);
-      const url = base + '/naver/?sso=' + encodeURIComponent(cfg.sso.lead);
-      await p.goto(url);
+      const url = base + '/naver/';
+      await enter(p, url, cfg.sso.lead);
       const row = '#issues .iss[data-issue="' + cfg.red + '"]';
       await p.waitForSelector(row);
       await p.click(row + ' button:has-text("예외")');
@@ -394,8 +403,8 @@ async function hygiene(tag, p, log, firstNavUrl) {
     {
       const { ctx, log } = await newCtx(browser);
       const p = await page(ctx, log);
-      const url = base + '/naver/settings?sso=' + encodeURIComponent(cfg.sso.s100);
-      await p.goto(url);
+      const url = base + '/naver/settings';
+      await enter(p, url, cfg.sso.s100);
       await p.waitForSelector('#s-settings.on');
       ok('담당: 설정 주소를 직접 열면 「담당자는 설정을 보지 않습니다」', (await p.textContent('#set-ps')).includes('담당자는 설정을 보지 않습니다'));
       await p.click('[data-go="/naver/"]');
@@ -454,8 +463,8 @@ async function hygiene(tag, p, log, firstNavUrl) {
       await ctx.route('**/api/naver-auto/clients/901', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fakeClient) }));
       await ctx.route('**/api/naver-auto/links/pending', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ pairing_at: null, rows: [], decisions: [] }) }));
       const p = await page(ctx, log);
-      const url = base + '/naver/?sso=' + encodeURIComponent(cfg.sso.ceo2);
-      await p.goto(url);
+      const url = base + '/naver/';
+      await enter(p, url, cfg.sso.ceo2);
       await p.waitForSelector('#s-watch.on #kpis .kpi');
       const kv = await p.$$eval('#kpis .kpi .v', (els) => els.map((e) => e.textContent));
       ok('가짜 값: 숫자 5칸이 서버 값 그대로(확인 필요 · 긴급 · 주의 · 정상 · 점검 불가 순)', JSON.stringify(kv) === JSON.stringify(['9', '5', '3', '7', '2']), kv);
@@ -497,8 +506,8 @@ async function hygiene(tag, p, log, firstNavUrl) {
       await p.waitForSelector('#s-blocked.on');
       ok('sso 없이 열면 「전산에서 들어와 주세요」', (await p.textContent('#b-t')).includes('전산에서 들어와 주세요'));
       await shot(p, '6-들어올길없음');
-      const url = base + '/naver/?sso=' + encodeURIComponent(cfg.sso.bad);
-      await p.goto(url);
+      const url = base + '/naver/';
+      await enter(p, url, cfg.sso.bad);
       await p.waitForSelector('#s-blocked.on');
       await p.waitForFunction(() => document.getElementById('b-t').textContent.includes('확인하지 못했습니다'));
       ok('① 이 거절한 sso 도 주소창에서 지운다', !/sso/i.test(p.url()), p.url());

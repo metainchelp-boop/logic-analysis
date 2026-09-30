@@ -41,6 +41,7 @@ with socket.socket() as local:
 assert not any(name.startswith(("NAVER_MGR_", "ERP_SYNC_")) for name in os.environ)
 assert "NAVER_ENGINE_ERP_KEY" not in os.environ
 assert "NAVER_AUTO_TOKEN_SECRET" not in os.environ
+assert not any(name.startswith("SSO_") for name in os.environ)
 print(json.dumps({"external_canary": "ENETUNREACH", "loopback": "ok", "uid": os.geteuid(),
                   "python": sys.version.split()[0], "real_credentials_inherited": False}))
 PY

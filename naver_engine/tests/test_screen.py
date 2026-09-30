@@ -55,10 +55,10 @@ CSS_CODE = re.sub(r"/\*.*?\*/", "", CSS, flags=re.S)
 class TextRulesTest(unittest.TestCase):
     def test_no_inline_script_or_handlers_or_styles(self):
         scripts = re.findall(r"<script\b([^>]*)>(.*?)</script>", HTML, flags=re.S | re.I)
-        self.assertEqual(len(scripts), 1)
-        attrs, body = scripts[0]
-        self.assertEqual(body.strip(), "")
-        self.assertIn('src="/naver/app.js"', attrs)
+        self.assertEqual(len(scripts), 2)
+        for (attrs, body), name in zip(scripts, ('sso-bootstrap.js', 'app.js')):
+            self.assertEqual(body.strip(), "")
+            self.assertIn('src="/naver/' + name + '"', attrs)
         self.assertNotRegex(HTML, r"\son[a-z]+\s*=", "인라인 손잡이(onclick= …)")
         self.assertNotRegex(HTML, r"\sstyle\s*=", "인라인 스타일 속성")
         self.assertNotIn("javascript:", HTML.lower())
@@ -115,14 +115,16 @@ class TextRulesTest(unittest.TestCase):
             self.assertIn(part, CODE)
 
     def test_sso_removed_first(self):
-        """sso 는 가장 먼저 꺼내 지운다 — 시작 함수의 첫 줄이 takeSso() 이고 그 안에서 replaceState."""
+        """S16 부트스트랩이 앱·화면 자원보다 먼저 실행되고 기존 JWT 경로는 막힌다."""
         start = CODE[CODE.index("function start() {"):]
         first = start.split("\n")[1].strip()
-        self.assertTrue(first.startswith("var sso = takeSso();"), first)
-        take = CODE[CODE.index("function takeSso() {"):CODE.index("function ApiError")]
-        self.assertIn("history.replaceState(", take)
-        self.assertNotIn("api(", take)
-        self.assertNotIn("fetch(", take)
+        self.assertTrue(first.startswith("var entry = window.__metaincSso;"), first)
+        bootstrap = (PAGE / "sso-bootstrap.js").read_text()
+        self.assertIn("window.history.replaceState(", bootstrap)
+        self.assertLess(bootstrap.index("window.history.replaceState("), bootstrap.index("window.addEventListener('message'"))
+        self.assertNotIn("fetch(", bootstrap)
+        self.assertIn("!entry.started || entry.legacyPresent", start)
+        self.assertNotIn("{ sso:", start)
         # sso 를 저장하지 않는다 — sessionStorage 에 쓰는 곳은 saveSession 한 곳(토큰·시각만)
         self.assertEqual(CODE.count("sessionStorage.setItem("), 1)
         save = CODE[CODE.index("function saveSession(j) {"):CODE.index("function dropSession")]
