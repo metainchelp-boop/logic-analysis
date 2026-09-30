@@ -13,6 +13,8 @@ services:
       - FERNET_KEY_FILE=/app/data/secret.key
       # 로그인 서명 값 — 강한 값(32자 이상 무작위)을 .env 에 두면 그 값 · 비우거나 약하면 서버가 만든 값(/app/data/jwt.key) · S0
       - JWT_SECRET=${JWT_SECRET:-}
+      # S16 광고센터 전용 교환 키. 비어 있으면 새 로그인 교환만 거절하며 기존 키를 재사용하지 않는다.
+      - SSO_AD_CENTER_CLIENT_KEY=${SSO_AD_CENTER_CLIENT_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-sonnet-4-6}
       # 메타체험단 연동 API(읽기전용) — 토큰은 mc_cal/mc_ad 공용

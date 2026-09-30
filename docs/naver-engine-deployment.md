@@ -1,4 +1,4 @@
-# 네이버 관제 엔진 — S14 패키징·배포 전 점검
+# 네이버 관제 엔진 — S14·S16 패키징·배포 전 점검
 
 현재 문서는 **배포를 승인하거나 실행한 기록이 아닙니다.** 승인 범위는 로컬 개발·합성 시험이며, 머지·배포·실계정 읽기·회사 서버에 알림이나 숫자를 보내는 일은 하지 않았습니다. Q7은 대표님 승인에 따라 SQLite WAL과 단일 쓰기 소유자를 사용합니다. 자동 입찰·키워드 단위 쓰기는 포함하지 않습니다.
 
@@ -7,7 +7,7 @@
 - `python -m naver_runtime check-config`: 비밀값 원문 없이 실행 설정 검사.
 - `python -m naver_runtime dry-run`: 현재 설정과 차단 상태를 출력하며 DB·키·네트워크를 열지 않습니다. 합성 업무 흐름 시험은 아래 Linux CI의 unittest로 별도 실행하며, 이 명령 성공을 업무 동작 검증으로 쓰지 않습니다.
 - `python -m naver_runtime run`: 별도 엔진 프로세스. 모든 기능이 꺼진 기본값에서는 외부 업무 호출 없이 유닉스 소켓의 최소 상태 응답만 제공합니다.
-- `NAVER_ENGINE_WEB_ENABLED=true`는 **현재 빌드에서 한국어 설정 오류로 거절**합니다. 설정으로 이 제한을 우회하는 길은 없습니다. S16의 ① 일회용 교환 코드 계약·구현·회귀 시험을 마친 다음 별도 변경으로 열어야 합니다.
+- S16의 일회용 코드·브라우저 검증자 교환과 웹 연결은 구현됐지만 `NAVER_ENGINE_WEB_ENABLED=false`가 기본입니다. `true` 설정 자체는 허용하며, 실제 `run`은 관제 전용 교환 키 또는 자체 서명 값이 없거나 유효하지 않으면 DB를 열기 전에 **시작 전 거절**합니다. `check-config`·`dry-run`은 키를 검사하지 않습니다. 구현·합성 시험 성공은 웹 활성화나 운영 배포 승인이 아닙니다.
 - ③의 `NAVER_AUTO_WEB=off`, `NAVER_AUTO_ENGINE=`도 기본값입니다. 엔진 설정과 ③ 설정은 서로 다른 파일이며 한쪽만 바꿔서는 공개 승인 조건을 만족하지 않습니다.
 - 광고주 공유 화면 「광고 성과」 연결(G1~G3), 회사 다른 서버에 암호화 백업이 실제 도착·복원되는지, 공유 서버 자원 여유는 아직 운영 확인이 필요합니다. 해당 게이트가 남으면 S14 전체나 배포 준비 완료라고 보고하지 않습니다.
 
@@ -23,7 +23,7 @@
 | `deploy/naver-engine-backup.override.yml` | 공개 인증서·전송 인증키·고정 호스트키 파일의 읽기 전용 mount |
 | `deploy/naver-engine-nginx.conf` | 운영 ③ `server {}` 안에 넣는 검토용 include. 전체 nginx 교체 파일 아님 |
 
-기존 `docker-compose.yml`, `Dockerfile`, `deploy/nginx-ad.metainc.co.kr.conf`는 이 패키징에서 바꾸지 않습니다. 옛 자동입찰 프로세스를 연결하거나 실행하지 않습니다. 엔진은 ③와 compose 프로젝트·이미지·데이터를 분리합니다. `replicas`를 늘리거나 두 `run`을 같은 DB에 연결하지 않습니다. 파일 자체의 독점 잠금은 실수 방어이지 다중 작성자 운영 기능이 아닙니다.
+기존 `docker-compose.yml`에는 S16 광고센터 전용 교환 키의 선택적 환경 전달(빈 기본값)만 추가합니다. 기존 포트·DB·사용자·권한과 `Dockerfile`, `deploy/nginx-ad.metainc.co.kr.conf`는 바꾸지 않습니다. 옛 자동입찰 프로세스를 연결하거나 실행하지 않습니다. 엔진은 ③와 compose 프로젝트·이미지·데이터를 분리합니다. `replicas`를 늘리거나 두 `run`을 같은 DB에 연결하지 않습니다. 파일 자체의 독점 잠금은 실수 방어이지 다중 작성자 운영 기능이 아닙니다.
 
 ### 승인 뒤 사용할 경로 배치
 
@@ -39,7 +39,7 @@
 
 호스트 폴더는 승인된 운영 작업에서 미리 준비합니다. `create_host_path: false`이므로 누락된 경로를 Docker가 root 소유로 조용히 만들어 주지 않습니다. `/run`은 재부팅 때 사라질 수 있으므로, 소유·권한을 재생성할 운영 절차를 먼저 정해야 합니다. **소켓 파일 하나를 mount하지 않습니다.** 디렉터리를 공유해야 엔진 재시작 후 새 inode를 ③가 봅니다.
 
-코드·`backend/`·저장소 루트 아래에는 운영 DB·백업·`.env`를 두지 않습니다. 같은 코드 폴더를 다른 이름으로 바인드 mount하지 않습니다. 심볼릭 링크·하드링크도 경계를 통과하는 방법으로 사용하지 않습니다. 코드 복사 시 `--exclude=.env*`, `--exclude=*.db*`, `--exclude=*.key*`, `--exclude=*.pem`, `--exclude=data/`, `--exclude=backups/`, `--exclude=__pycache__/`를 유지합니다. 삭제 동기화 옵션은 사용하지 않습니다. ③ 배포 대상에는 `backend/naver_page/` 실제 화면 파일 넷과 최신 `.dockerignore`를 포함해야 합니다. 레거시 README·HANDOVER의 키를 읽거나 복사하지 않습니다.
+코드·`backend/`·저장소 루트 아래에는 운영 DB·백업·`.env`를 두지 않습니다. 같은 코드 폴더를 다른 이름으로 바인드 mount하지 않습니다. 심볼릭 링크·하드링크도 경계를 통과하는 방법으로 사용하지 않습니다. 코드 복사 시 `--exclude=.env*`, `--exclude=*.db*`, `--exclude=*.key*`, `--exclude=*.pem`, `--exclude=data/`, `--exclude=backups/`, `--exclude=__pycache__/`를 유지합니다. 삭제 동기화 옵션은 사용하지 않습니다. ③ 배포 대상에는 `backend/naver_page/` 실제 화면 파일 다섯(`index.html`, `sso-bootstrap.js`, `app.js`, `app.css`, `favicon.svg`)과 최신 `.dockerignore`를 포함해야 합니다. `sso-bootstrap.js`는 화면 첫 스크립트이며 누락하면 새 로그인 연결이 동작하지 않습니다. 레거시 README·HANDOVER의 키를 읽거나 복사하지 않습니다.
 
 ## 3. 설정과 비밀값
 
@@ -49,13 +49,30 @@
 
 - `NAVER_ENGINE_ERP_KEY`: 새 엔진 전용 키. ①은 별도 `NAVER_ENGINE_KEY_SHA256` 지문만 갖습니다. 기존 ②·③의 `ERP_SYNC_API_KEY`는 바꾸거나 재사용하지 않습니다. 키와 지문은 대표님이 승인된 보관 위치에서 준비하며 대화·문서·로그에 출력하지 않습니다.
 - `NAVER_MGR_CUSTOMER_ID`, `NAVER_MGR_API_KEY`, `NAVER_MGR_SECRET_KEY`: 승인된 회사 관리계정의 읽기 자격. 전부 꺼짐 시험에서는 실제 값을 주입하지 않습니다.
-- `NAVER_AUTO_TOKEN_SECRET`: 화면 API의 별도 서명 값. 값이 있어도 S16 이전에는 웹을 열지 않습니다.
+- `NAVER_AUTO_TOKEN_SECRET`: 관제 화면 API의 별도 서명 값. S16 교환 키와 다른 값이며 이것만 있어서는 웹 실행 조건을 충족하지 못합니다.
+- `SSO_NAVER_CONTROL_CLIENT_KEY`: S16 관제 전용 64자리 hex 교환 키. 환경 예시는 빈 값이며, 유효한 키와 자체 서명 값이 모두 있어도 기본 웹 스위치와 운영 승인 조건은 별개입니다.
 - `NAVER_ENGINE_DB`, `NAVER_ENGINE_SOCKET`, `NAVER_ENGINE_BACKUP_DIR`: compose가 컨테이너 안 전용 경로로 고정합니다. 호스트 경로 선택용 변수와 컨테이너 내부 경로를 혼동하지 않습니다.
 - Compose는 **2.30 이상**의 `env_file.format: raw`를 사용합니다. 환경 파일의 `$`가 임의 보간되지 않도록 실제 값에 shell용 따옴표를 추가하지 않습니다. 환경 파일을 shell에서 `source`하지 않습니다.
 
 일반 `compose config`는 비밀값을 출력할 수 있습니다. 실제 환경을 검사할 때는 `config --quiet`만 사용하며 `--environment`, 렌더링 결과, `inspect` 환경 출력을 보고서에 붙이지 않습니다. 런타임 예외·로그도 원문 자격·요청 주소·응답 본문을 포함하지 않는지 확인합니다.
 
 엔진의 별도 기본 bridge는 외부 송신이 가능한 네트워크입니다. 호스트 포트가 없다는 사실을 외부 송신 차단으로 오해하지 않습니다. 기본 꺼짐 무호출 시험과 운영 방화벽·전산/네이버 허용 목적지 검토를 별도로 수행합니다.
+
+### S16 목적지별 키 위치와 전환 순서
+
+세 소비부는 서로 다른 64자리 hex 원문 키를 사용하고 ① BE에는 대응하는 SHA-256 지문만 둡니다. 기존 `ERP_SYNC_API_KEY`, `NAVER_ENGINE_ERP_KEY`, JWT·관제 서명 값은 변경하거나 재사용하지 않습니다. 키·지문 원문을 대화·문서·로그에 출력하지 않습니다.
+
+| 소비부·목적지 | 소비부 주입 경로 | ① BE 지문 설정 |
+|---|---|---|
+| ③ 광고센터 `AD_CENTER` | 별도 ③ 환경의 `SSO_AD_CENTER_CLIENT_KEY` → 기본 `docker-compose.yml`의 `ad-api.environment`. 네이버 override 없이도 전달하며 빈 값은 새 교환만 거절합니다. | `SSO_AD_CENTER_KEY_SHA256` |
+| ② 로직분석 `LOGIC_ANALYSIS` | ② 배포 환경의 `SSO_EXCHANGE_CLIENT_KEY` → ② `.github/workflows/deploy.yml`이 생성하는 운영 Compose의 `env_file: .env`. 저장소의 개발용 Compose도 같은 전달 방식이지만 운영에 직접 쓰이지 않습니다. 이 이름은 ② 전용이며 엔진 환경 파일에 넣지 않습니다. | `SSO_LOGIC_ANALYSIS_KEY_SHA256` |
+| 관제 엔진 `NAVER_CONTROL` | 코드 밖 `/etc/metainc/naver-engine/runtime.env`의 `SSO_NAVER_CONTROL_CLIENT_KEY` → 엔진 Compose의 `env_file.format: raw`. ③ 컨테이너에 넣지 않습니다. | `SSO_NAVER_CONTROL_KEY_SHA256` |
+
+① BE 배포는 `.github/workflows/deploy-vps.yml`에서 GitHub 비밀값 `ENV_FILE`을 바탕으로 후보 `.env`를 매번 새로 생성합니다. 따라서 서버 `.env`만 수동 수정해서는 다음 배포까지 지문 설정이 지속된다고 볼 수 없습니다. 실제 승인된 배포에서 세 지문의 **지속 주입 경로를 확정**하고 다음 후보 생성에도 유지되는지 검증해야 합니다. 이 개발 작업은 `ENV_FILE`이나 서버 비밀값을 변경하지 않습니다.
+
+1. **수신부 먼저:** 별도 승인 뒤 ① 발급·교환 BE와 ②·③·관제 수신부의 선행 코드·키 전달을 준비합니다. 수신부 준비 전 전산 입구를 전환하지 않으며, 이번 개발에서는 관제·중계 스위치를 켜지 않습니다. HTTPS·신뢰 IP·원문 미기록·목적지/만료/재사용/검증자 거절은 별도 증거로 확인합니다.
+2. **FE 마지막:** 세 수신부의 준비 상태와 승인된 검증을 확인한 뒤에만 ① FE의 세 입구를 새 방식으로 전환합니다. 새 창 URL에는 비밀 아닌 `sso_start` 식별자만 넣고 코드·검증자는 URL에 넣지 않습니다. 개발 합성 시험과 실제 세 입구 실사용 성공은 구분합니다.
+3. **기존 경로 별도 폐기:** 세 입구 실사용 확인 뒤 별도 승인·차례에 ②·③의 legacy `?sso=` 경로를 폐기합니다. 새 입구 전환과 동시에 차단하지 않습니다. 관제는 이미 `/session {code,codeVerifier}`만 받으며 옛 ERP JWT 경로로 재시도하지 않습니다. 상세 계약은 `docs/superpowers/specs/2026-09-30-s16-exchange-contract.md`를 따릅니다.
 
 ## 4. 백업 Q6 — 암호화 복사와 복원은 별도 증거
 
@@ -94,7 +111,7 @@ OpenSSL CMS AES-256-GCM의 실제 이미지 지원을 검증해야 합니다. �
 아래는 자동으로 완료되는 체크박스가 아닙니다. 담당자·날짜·원본 증거를 붙여야 통과입니다.
 
 1. **① BE #805 선행:** 실제 머지·배포 SHA, 엔진 키 지문, 조직·계약·고객 번호 경로, 알림·심박 경로, 스키마 충돌 점검, 감시 동작을 확인합니다. 문서의 PR 이름은 현재 운영 배포를 증명하지 않습니다. 기존 ②·③ 계약 동기화 키 무변경도 대조합니다.
-2. **S16 선행:** 세 입구 모두 받는 곳 전용·60초·한 번만 쓰는 교환 코드로 옮기고, 관제의 옛 로그인 토큰 경로를 닫습니다. 다른 입구 코드·재사용·만료 거절을 검사합니다. 이 전에는 웹 스위치를 켜지 않습니다.
+2. **S16 전환:** 구현된 세 입구의 받는 곳 전용·60초·한 번만 쓰는 교환 코드와 브라우저 검증자 계약을 확인합니다. 목적지별 키 전달·BE 지문 지속 주입·수신부 우선/FE 마지막 전환을 별도 승인 아래 검증하고, 다른 입구 코드·재사용·만료·검증자 불일치 거절을 검사합니다. 관제의 옛 로그인 토큰 경로는 닫힌 상태를 유지합니다. 개발 완료만으로 웹 스위치를 켜지 않으며 ②·③ legacy 폐기는 별도 차례입니다.
 3. **공유 성과 G1~G3:** 엔진의 최근 30일·어제까지 완전한 확정 숫자만 ①로 보내고 `MANUAL` 보존·`ENGINE` 우선·3일 뒤 자체 수집 복귀·광고비 scope가 통과해야 합니다. **공유 성과 연결 미완료이면 생산 배포 금지**입니다.
 4. **합성 무호출:** 모든 스위치 꺼짐 실제 기동 시험과 가짜 자격·가짜 자료의 unittest를 구분합니다. 실제 네이버·전산·SSH 호출 **0건** 증거가 있어야 합니다. `check-config`·`dry-run` 성공을 이 증거 대신 쓰지 않습니다.
 5. **실제 이미지·환경:** Python 3.12·OpenSSL·권한·read-only root·WAL·단일 writer·소켓 재생성·③ 연결 재복구·이미지 digest를 확인합니다. 정적 compose 검사는 Docker 기동 검사가 아닙니다.
@@ -125,9 +142,9 @@ docker compose --project-name naver-package-review --file docker-compose.yml --f
 
 ## 8. 개발 전용 Linux CI
 
-G1~G3 후속 검증은 별도 `codex/naver-shared-metrics-20260930` 가지도 같은 읽기 전용 CI 허용 목록에 추가합니다. 아래 S14 검증 절차와 격리 조건은 동일합니다.
+S14 런타임, G1~G3 공유 성과, S16 로그인 연결의 개발 검증은 같은 읽기 전용 CI와 격리 조건을 사용합니다.
 
-`.github/workflows/naver-runtime-tests.yml`은 `codex/naver-runtime-20260930` 가지 push와 그 가지의 수동 실행에만 맞습니다. 배포 작업·운영 비밀값·쓰기 토큰·self-hosted runner가 없으며 `contents: read`, checkout 자격 저장 금지를 사용합니다. GitHub 공식 [workflow 권한·분기 문법](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax)과 [수동 실행 조건](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_dispatch)에 근거합니다. 수동 실행은 workflow가 기본 가지에 있어야 하므로 새 개발 가지에서는 우선 push 조건으로 검증합니다.
+`.github/workflows/naver-runtime-tests.yml`은 `codex/naver-runtime-20260930`, `codex/naver-shared-metrics-20260930`, `codex/naver-sso-20260930` 가지 push와 해당 가지의 수동 실행에만 맞습니다. 배포 작업·운영 비밀값·쓰기 토큰·self-hosted runner가 없으며 `contents: read`, checkout 자격 저장 금지를 사용합니다. GitHub 공식 [workflow 권한·분기 문법](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax)과 [수동 실행 조건](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_dispatch)에 근거합니다. 수동 실행은 workflow가 기본 가지에 있어야 하므로 새 개발 가지에서는 우선 push 조건으로 검증합니다.
 
 의존성 준비만 네트워크가 있는 GitHub-hosted 임시 runner에서 수행합니다. 시험은 별도 네트워크 namespace에서 loopback만 켜고 **원래 비루트 runner UID로 낮춘 뒤**, allowlist 환경만 전달합니다. 외부 시험 주소 연결 실패 canary가 통과해야 엔진·③·런타임·패키징 시험을 실행합니다. loopback HTTP와 유닉스 소켓은 합성 서버용으로만 허용합니다. 준비 단계의 네트워크를 포함해 전체 workflow가 무통신이라고 표현하지 않습니다.
 
@@ -145,6 +162,6 @@ Linux Python 3.12 시험은 macOS에서 파일 잠금과 SQLite WAL이 충돌하
 - 새 `POST /api/ad-sync/naver-metrics`는 엔진 전용 키와 숫자 7칸만 사용합니다. 서버는 현재 연결 광고주가 정확히 하나일 때만 저장합니다. STORE/PLACE 등 복수 연결은 임의 선택하지 않고 409로 보류합니다.
 - 서버는 `API`/`ENGINE` 자동 행 하나만 갱신하고 `MANUAL`은 보존합니다. 마지막 엔진 수신부터 72시간 이내에는 자체 키 수집을 생략하며, 초과한 뒤 유효한 자체 키가 있을 때만 기존 수집기로 복귀합니다. 자동 성과의 직접 삭제는 화면과 서버에서 막습니다.
 - BE의 nullable `engine_received_at` 칼럼(BLOCK 254), §14 계약, FE의 `ENGINE` 출처 호환을 한 묶음으로 검토합니다. 기존 자료 backfill·운영 데이터 수정은 하지 않습니다. MariaDB 실제 이관·실계정 읽기·광고비 공개 범위의 로그인 화면 점검은 운영 승인 뒤 별도입니다.
-- 원천 표의 보관 주기·디스크 증가량은 아직 운영 실측 전입니다. 임의 삭제 작업을 넣지 않았습니다. S16, 실제 백업 복원, 네트워크·자원·14일 그림자 승인 조건은 여전히 남습니다.
+- 원천 표의 보관 주기·디스크 증가량은 아직 운영 실측 전입니다. 임의 삭제 작업을 넣지 않았습니다. S16의 승인된 운영 전환, 실제 백업 복원, 네트워크·자원·14일 그림자 승인 조건은 여전히 남습니다.
 
 Compose 구성 출력과 컨테이너 환경값도 구분합니다. CI의 Compose v2.38.2는 [`config` 직렬화 뒤](https://github.com/docker/compose/blob/v2.38.2/cmd/compose/config.go#L165-L181) JSON/YAML의 모든 `$`를 [정확히 한 번 `$$`로 이스케이프](https://github.com/docker/compose/blob/v2.38.2/cmd/compose/config.go#L495-L499)합니다. 패키징 시험은 합성 raw env의 펼친 출력이 이 규칙과 정확히 일치해야 통과하며, 원문·두 번 이스케이프·실제 보간된 값은 거절합니다. [`--no-interpolate`](https://docs.docker.com/reference/cli/docker/compose/config/)로 경로 기본값 해석까지 끄지 않습니다. raw env가 실제 컨테이너에서 원문 그대로 전달되는지는 별도의 네트워크 없는 합성 이미지 시험으로 검증하며, 운영 env·키·볼륨은 사용하지 않습니다.

@@ -19,7 +19,7 @@ FLAGS = (
 )
 SECRET_NAMES = (
     "NAVER_ENGINE_ERP_KEY", "NAVER_AUTO_TOKEN_SECRET", "NAVER_MGR_CUSTOMER_ID",
-    "NAVER_MGR_API_KEY", "NAVER_MGR_SECRET_KEY",
+    "NAVER_MGR_API_KEY", "NAVER_MGR_SECRET_KEY", "SSO_NAVER_CONTROL_CLIENT_KEY",
 )
 RAW_CANARY_NAME = "NAVER_PACKAGE_RAW_CANARY"
 RAW_CANARY_VALUE = 'literal:$NAVER_PACKAGE_UNSET:${NAVER_PACKAGE_UNSET:-expanded}:$$:"quoted"'
@@ -34,9 +34,11 @@ def env_example():
                 if line and not line.startswith("#"))
 
 
-def compose_model(*files, project="naver-engine", resolve_env=False):
-    # PATH만 전달한다. 실제 NAVER/ERP 값·사용자 .env를 config에 전달하지 않는다.
+def compose_model(*files, project="naver-engine", resolve_env=False, ad_sso_key=None):
+    # PATH만 상속하고 명시된 합성 키만 추가한다. 실제 NAVER/ERP/SSO 값·사용자 .env는 읽지 않는다.
     env = {"PATH": os.environ.get("PATH", ""), "COMPOSE_DISABLE_ENV_FILE": "1"}
+    if ad_sso_key is not None:
+        env["SSO_AD_CENTER_CLIENT_KEY"] = ad_sso_key
     executable = shutil.which("docker-compose")
     argv = [executable] if executable else [shutil.which("docker") or "docker", "compose"]
     try:
@@ -145,9 +147,12 @@ class PackagingSourceTest(unittest.TestCase):
 
     def test_runbook_keeps_gates_and_no_start_commands(self):
         doc = source("docs/naver-engine-deployment.md")
-        for gate in ("BE #805", "S16", "한국어 설정 오류", "14일", "NAVER_SCREEN_REQUIRE_BROWSER=1",
-                     "NAVER_RELAY_REQUIRE_APP=1", "G1~G3", "복원", "444", "0건", "실측"):
-            self.assertIn(gate, doc)
+        for gate in ("BE #805", "S16", "시작 전 거절", "14일", "NAVER_SCREEN_REQUIRE_BROWSER=1",
+                     "NAVER_RELAY_REQUIRE_APP=1", "G1~G3", "복원", "444", "0건", "실측",
+                     "SSO_AD_CENTER_CLIENT_KEY", "SSO_EXCHANGE_CLIENT_KEY", "SSO_NAVER_CONTROL_CLIENT_KEY",
+                     "ENV_FILE", "수신부 먼저", "FE 마지막", "별도 폐기", "sso-bootstrap.js"):
+            self.assertTrue(gate in doc, f"배포 게이트 문구 누락: {gate}")
+        self.assertNotIn("현재 빌드에서 한국어 설정 오류로 거절", doc)
         command_lines = re.findall(r"(?m)^docker(?:-compose| compose) .+$", doc)
         self.assertTrue(command_lines)
         for line in command_lines:
@@ -203,6 +208,18 @@ class ComposeAssertions:
 
 
 class ComposeModelTest(ComposeAssertions, unittest.TestCase):
+    def test_ad_sso_key_defaults_blank_and_reaches_base_and_relay_service(self):
+        for files in (("docker-compose.yml",),
+                      ("docker-compose.yml", "deploy/naver-engine-ad-api.override.yml")):
+            with self.subTest(files=files):
+                model = compose_model(*files, project="naver-package-review")
+                self.assertTrue(model["services"]["ad-api"]["environment"].get("SSO_AD_CENTER_CLIENT_KEY") == "",
+                                "광고센터 전용 키의 기본값은 빈 문자열이어야 합니다")
+                synthetic_key = "a" * 64
+                model = compose_model(*files, project="naver-package-review", ad_sso_key=synthetic_key)
+                self.assertTrue(model["services"]["ad-api"]["environment"].get("SSO_AD_CENTER_CLIENT_KEY") == synthetic_key,
+                                "광고센터 전용 합성 키가 컨테이너 환경으로 전달되어야 합니다")
+
     def test_resolved_raw_env_uses_exact_compose_output_escaping(self):
         # 최신 Compose가 --no-env-resolution을 지켜도 펼친 출력 경로를 실제 CLI로 시험한다.
         engine = compose_model("compose.naver-engine.yml", resolve_env=True)["services"]["naver-engine"]
