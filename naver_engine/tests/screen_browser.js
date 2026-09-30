@@ -227,6 +227,7 @@ async function hygiene(tag, p, log, firstNavUrl) {
         return route.continue();
       });
       const p = await page(ctx, log);
+      await p.clock.install({ time: new Date('2026-09-29T23:57:00+09:00') });   // 자정 넘김 시험용(맨 끝)
       const url = base + '/naver/?sso=' + encodeURIComponent(cfg.sso.ceo4);
       await p.goto(url);
       await p.waitForSelector('#issues .empty button');
@@ -284,6 +285,19 @@ async function hygiene(tag, p, log, firstNavUrl) {
       ok('경합: 🔔 목록을 받기 전 「모두 읽음」은 잠겨 있다', await p.isDisabled('#bellAll'));
       await p.waitForFunction(() => !document.querySelector('#drawerBody .loading'));
       ok('경합: 🔔 목록을 받으면 「모두 읽음」이 풀린다', await p.isEnabled('#bellAll'));
+      await p.keyboard.press('Escape');
+      // 자정이 지나면 🙈 창을 열기 전에 서버의 오늘로 다시 받는다(끝날이 어제가 되지 않게)
+      await p.click('[data-go="/naver/"]');
+      const yrow = '#issues .iss[data-issue="' + cfg.yellow + '"]';
+      await p.waitForSelector(yrow + ' button:has-text("예외")');
+      await p.clock.fastForward(5 * 60 * 1000);
+      await p.click(yrow + ' button:has-text("예외")');
+      await p.waitForFunction(() => document.getElementById('toast').textContent.includes('날짜가 바뀌어'));
+      ok('경합: 자정을 넘기면 🙈 창 대신 새로 불러온다', !(await p.isVisible('#m-except.on')));
+      await p.waitForSelector(yrow + ' button:has-text("예외")');
+      await p.click(yrow + ' button:has-text("예외")');
+      await p.waitForSelector('#m-except.on');
+      ok('경합: 새로 불러온 뒤에는 🙈 창이 열린다', await p.isVisible('#m-except.on'));
       await p.keyboard.press('Escape');
       await hygiene('경합', p, log, url);
       await ctx.close();
@@ -390,6 +404,18 @@ async function hygiene(tag, p, log, firstNavUrl) {
         ]
       };
       await ctx.route('**/api/naver-auto/board*', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fake) }));
+      const fakeClient = {
+        possibility_id: 901, name: '예시가', stage: '진행중', managed: true, today: '2026-09-29', latest_end_date: null, relation: 'all',
+        owner: { name: '담당가', team_name: '팀가' }, verdict: { color: 'white', needs_attention: true, reasons: [], white_reason: 'partial' },
+        accounts: [{ tail: '1234', account_name: null, link: 'confirmed', state: 'confirmed', history: [{ day: '2026-09-29', status: 'ok', yday_spend: 999999 }] },
+                   { tail: '5678', account_name: null, link: 'confirmed', state: 'confirmed', history: [] }],
+        issues: [], link: 'listed', unlinked: false, account_unconfirmed: false,
+        yday_spend: null, bizmoney: 5000, yday_imp: null, yday_clk: 3,
+        days: [{ day: '2026-09-28', yday_spend: 100, complete: false }, { day: '2026-09-29', yday_spend: 200, complete: true }],
+        report: 'preparing', actions: { handle_issue: true, confirm_link: true, exception_actor: 'lead', exception_max_days: { red: 7, yellow: 30 }, raising_allowed: true }
+      };
+      await ctx.route('**/api/naver-auto/clients/901', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fakeClient) }));
+      await ctx.route('**/api/naver-auto/links/pending', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ pairing_at: null, rows: [], decisions: [] }) }));
       const p = await page(ctx, log);
       const url = base + '/naver/?sso=' + encodeURIComponent(cfg.sso.ceo2);
       await p.goto(url);
@@ -415,6 +441,14 @@ async function hygiene(tag, p, log, firstNavUrl) {
       await p.click('#iwan .ichip:has-text("이관 안 된 번호")');
       const uv = await p.$$eval('#tbody tr[data-pid]', (els) => els.map((e) => e.getAttribute('data-pid')));
       ok('가짜 값: 「이관 안 된 번호」는 서버 표시(unlinked)가 있는 줄만', JSON.stringify(uv) === JSON.stringify(['904']), uv);
+      // 광고주 한 장 타일 · 막대 = 서버 값 그대로(계정별 기록을 화면이 다시 더하지 않는다 · 모르면 — · 일부만 읽은 날은 흐리게)
+      await p.click('#tblChips .chip[data-f="all"]');
+      await p.click('#tbody tr[data-pid="901"] button.link');
+      await p.waitForFunction(() => document.getElementById('c-name').textContent === '예시가');
+      const tiles = await p.$$eval('#p-now .tile .v', (els) => els.map((e) => e.textContent));
+      ok('가짜 값: 광고주 한 장 타일 = 서버 값(모르면 — · 0원으로 채우지 않음)', JSON.stringify(tiles) === JSON.stringify(['—', '—', '3', '5,000원']), tiles);
+      const bars = await p.$$eval('#p-now .sbars i', (els) => els.map((e) => e.className));
+      ok('가짜 값: 14일 막대 = 서버 날짜별 합(일부만 읽은 날은 흐리게)', JSON.stringify(bars) === JSON.stringify(['part', '']), bars);
       await ctx.close();
     }
 
