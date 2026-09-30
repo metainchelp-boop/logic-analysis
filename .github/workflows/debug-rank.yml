@@ -63,7 +63,8 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           command_timeout: 90s
-          script_stop: true
+          # script_stop은 heredoc 안에도 셸 검사문을 끼워 넣으므로 쓰지 않는다.
+          # 아래 set -eu + Python의 실패 종료로 작업 전체를 중단한다.
           script: |
             set -eu
             python3 - <<'PY'
