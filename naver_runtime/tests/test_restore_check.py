@@ -179,6 +179,36 @@ class RestoreCheckTest(unittest.TestCase):
             check_restore(self.archive, "2026-10-01", self.output)
         self.assertFalse(self.output.exists())
 
+    def test_fifo_replacement_is_refused_without_waiting_for_a_writer(self):
+        # Run the race in a bounded child: a regression must fail, never hang CI.
+        script = r'''
+import os, pathlib, sys
+from unittest.mock import patch
+from naver_engine.backup import BackupError
+from naver_runtime.restore_check import check_restore
+source, output = map(pathlib.Path, sys.argv[1:])
+original_open = os.open
+def replace_before_open(path, *args, **kwargs):
+    if pathlib.Path(path) == source:
+        source.unlink()
+        os.mkfifo(source, 0o600)
+    return original_open(path, *args, **kwargs)
+try:
+    with patch('os.open', side_effect=replace_before_open):
+        check_restore(source, '2026-10-01', output)
+except BackupError:
+    assert not output.exists()
+else:
+    raise AssertionError('FIFO accepted')
+'''
+        result = subprocess.run(
+            [sys.executable, "-c", script, str(self.archive), str(self.output)],
+            capture_output=True, text=True, timeout=3,
+            env={"PATH": os.environ.get("PATH", ""), "PYTHONDONTWRITEBYTECODE": "1"},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout + result.stderr, "")
+
 
 if __name__ == "__main__":
     unittest.main()

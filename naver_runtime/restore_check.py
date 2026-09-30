@@ -40,7 +40,8 @@ def check_restore(archive_path, expected_kst_date, output_dir):
         # 날짜 검사와 기존 복원 함수가 반드시 같은 사본을 읽는다. 원본 경로를 재사용하지 않는다.
         with tempfile.TemporaryDirectory(prefix=".checking-", dir=output) as work:
             copied = Path(work) / "archive.zip"
-            with os.fdopen(os.open(source, os.O_RDONLY | os.O_NOFOLLOW), "rb") as incoming:
+            # A swapped FIFO must not block before fstat can reject its type.
+            with os.fdopen(os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as incoming:
                 opened = os.fstat(incoming.fileno())
                 if ((opened.st_dev, opened.st_ino) != (checked.st_dev, checked.st_ino)
                         or not stat.S_ISREG(opened.st_mode) or opened.st_uid != os.geteuid()
