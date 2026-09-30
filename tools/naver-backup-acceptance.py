@@ -61,6 +61,10 @@ def environment_file(root, name, filename):
     value = os.environ.pop(name, "")
     if not value:
         raise ValueError("missing dedicated key")
+    # Secret 입력 경로가 마지막 줄바꿈을 제거할 수 있다. OpenSSH 텍스트 형식의
+    # 종결 줄바꿈만 복원하며 키 본문/서버 키/보관 Secret은 바꾸지 않는다.
+    if name == "NAVER_BACKUP_UPLOAD_SSH_PRIVATE_KEY" and not value.endswith("\n"):
+        value += "\n"
     return new_file(root / filename, value.encode())
 
 

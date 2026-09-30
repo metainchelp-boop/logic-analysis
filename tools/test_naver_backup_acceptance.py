@@ -119,6 +119,27 @@ class AcceptanceTest(unittest.TestCase):
     def stdout_reports(self):
         return [json.loads(line) for line in self.stdout.getvalue().splitlines()]
 
+    def test_upload_key_terminal_newline_is_restored_and_real_openssh_parses_it(self):
+        generated = self.root / "generated-synthetic-key"
+        REAL_RUN(["/usr/bin/ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(generated)],
+                 check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+        complete = generated.read_text()
+        stripped = A.new_file(self.root / "stripped-synthetic-key", complete.rstrip("\n").encode())
+        rejected = REAL_RUN(["/usr/bin/ssh-keygen", "-y", "-f", str(stripped)],
+                            capture_output=True, timeout=10, env=A.T.COMMAND_ENV)
+        self.assertNotEqual(rejected.returncode, 0)
+        for index, value in enumerate((complete, complete.rstrip("\n"))):
+            with patch.dict(os.environ, {"NAVER_BACKUP_UPLOAD_SSH_PRIVATE_KEY": value}, clear=True):
+                materialized = A.environment_file(self.root, "NAVER_BACKUP_UPLOAD_SSH_PRIVATE_KEY",
+                                                 "materialized-synthetic-" + str(index))
+                self.assertNotIn("NAVER_BACKUP_UPLOAD_SSH_PRIVATE_KEY", os.environ)
+            self.assertEqual(materialized.read_text(), complete)
+            self.assertEqual(materialized.stat().st_mode & 0o777, 0o600)
+            parsed = REAL_RUN(["/usr/bin/ssh-keygen", "-y", "-f", str(materialized)],
+                              capture_output=True, timeout=10, env=A.T.COMMAND_ENV)
+            self.assertEqual(parsed.returncode, 0)
+        self.assertEqual(self.stdout.getvalue() + self.stderr.getvalue(), "")
+
     def assert_transfer_precheck_failure(self, expected_stage, expected_ssh_calls):
         code = self.run_acceptance("transfer", {
             "NAVER_BACKUP_UPLOAD_SSH_PRIVATE_KEY": "synthetic-upload-private",
