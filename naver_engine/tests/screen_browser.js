@@ -318,13 +318,19 @@ async function hygiene(tag, p, log, firstNavUrl) {
       ok('경합: 🔔 목록을 받으면 「모두 읽음」이 풀린다', await p.isEnabled('#bellAll'));
       await p.keyboard.press('Escape');
       // 자정이 지나면 🙈 창을 열기 전에 서버의 오늘로 다시 받는다(끝날이 어제가 되지 않게)
-      await p.click('[data-go="/naver/"]');
       const yrow = '#issues .iss[data-issue="' + cfg.yellow + '"]';
+      const staleRow = await p.$(yrow + ' button:has-text("예외")');   // 앞서 그린(숨은) 관제 줄 — 새 판이 오면 바뀐다
+      await p.click('[data-go="/naver/"]');
+      if (staleRow) await p.waitForFunction((el) => !el.isConnected, staleRow);   // 자정 전에 받은 새 판을 그린 뒤에 시계를 넘긴다
       await p.waitForSelector(yrow + ' button:has-text("예외")');
       await p.clock.fastForward(5 * 60 * 1000);
+      const oldExcept = await p.$(yrow + ' button:has-text("예외")');
+      const reloaded = p.waitForResponse((r) => r.url().includes('/api/naver-auto/board') && r.status() === 200, { timeout: 10000 }).then(() => true, () => false);
       await p.click(yrow + ' button:has-text("예외")');
       await p.waitForFunction(() => document.getElementById('toast').textContent.includes('날짜가 바뀌어'));
       ok('경합: 자정을 넘기면 🙈 창 대신 새로 불러온다', !(await p.isVisible('#m-except.on')));
+      ok('경합: 자정 뒤 관제 판을 서버에서 다시 받는다', await reloaded);
+      await p.waitForFunction((el) => !el.isConnected, oldExcept);   // 새로 그린 뒤의 단추를 누른다(옛 단추를 누르는 시험 경합 막음)
       await p.waitForSelector(yrow + ' button:has-text("예외")');
       await p.click(yrow + ' button:has-text("예외")');
       await p.waitForSelector('#m-except.on');
