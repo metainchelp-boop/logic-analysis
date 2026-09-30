@@ -18,6 +18,37 @@ from naver_engine import backup as B
 from naver_runtime import backup_transport as T
 from naver_runtime.restore_check import check_restore
 
+STAGE = "initial"
+
+
+def stage(value):
+    global STAGE
+    STAGE = value
+    print(json.dumps({"status": "checking", "stage": value}), flush=True)
+
+
+def connection_precheck(key, hosts):
+    stage("offline_upload_key_parse")
+    parsed = subprocess.run(["/usr/bin/ssh-keygen", "-y", "-f", str(key)],
+                            capture_output=True, timeout=10, env=T.COMMAND_ENV)
+    if parsed.returncode:
+        raise ValueError("private key format rejected")
+    stage("read_only_forced_command_probe")
+    result = subprocess.run([*ssh_command(key, hosts), T.RECEIVER, "true"],
+                            input=b"", capture_output=True, timeout=30, env=T.COMMAND_ENV)
+    if result.returncode == 1 and "백업 수신 실패".encode() in result.stderr:
+        return
+    classes = [(b"Permission denied", "authentication_refused"),
+               (b"Host key verification failed", "host_key_refused"),
+               (b"REMOTE HOST IDENTIFICATION HAS CHANGED", "host_key_refused"),
+               (b"Connection timed out", "connection_timeout"),
+               (b"Connection refused", "connection_refused")]
+    for marker, label in classes:
+        if marker in result.stderr:
+            stage(label)
+            break
+    raise ValueError("read only connection probe failed")
+
 
 def new_file(path, value):
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
@@ -88,6 +119,8 @@ def transfer(root, evidence):
     cert = environment_file(root, "NAVER_BACKUP_RECIPIENT_CERT_PEM", "recipient.pem")
     key = environment_file(root, "NAVER_BACKUP_UPLOAD_SSH_PRIVATE_KEY", "upload-key")
     hosts = environment_file(root, "NAVER_BACKUP_KNOWN_HOSTS", "known-hosts")
+    connection_precheck(key, hosts)
+    stage("synthetic_encryption")
     archive, day = synthetic_archive(root)
     cipher = root / "synthetic.cms"
     T.OpenSslEncryptor(cert)(archive, cipher)
@@ -96,17 +129,27 @@ def transfer(root, evidence):
     if len(payload) > 32768:
         raise ValueError("synthetic fixture unexpectedly large")
     sender = T.SshSender(key, hosts)
-    if sender(cipher) != expected or sender(cipher) != expected:
+    print(json.dumps({"status": "synthetic_fixture", "ciphertext": expected, "expected_kst_date": day}), flush=True)
+    stage("first_upload")
+    if sender(cipher) != expected:
+        raise ValueError("receipt mismatch")
+    stage("same_content_retry")
+    if sender(cipher) != expected:
         raise ValueError("receipt mismatch")
     command = ssh_command(key, hosts)
     changed = bytearray(payload)
     changed[-5] ^= 1
     frame = json.dumps({"version": 1, **expected}).encode() + b"\n" + changed
+    stage("tampered_transport_refusal")
     tamper = ssh_check([*command, T.RECEIVER], frame)
+    stage("remote_command_refusal")
     arbitrary = ssh_check([*command, T.RECEIVER, "true"])
+    stage("remote_prune_refusal")
     remote_prune = ssh_check([*command, T.RECEIVER, "--prune"])
+    stage("sftp_refusal")
     sftp = ssh_check([*command, "-s", T.RECEIVER, "sftp"])
     # 원격 listen 요청은 서버에서 거절되어야 한다. 일반 shell은 절대 실행하지 않는다.
+    stage("forwarding_refusal")
     forwarding = subprocess.run([*ssh_command(key, hosts, clear_forwardings=False), "-o",
         "ExitOnForwardFailure=yes", "-R", "0:127.0.0.1:9", "-N", T.RECEIVER],
         input=b"", capture_output=True, timeout=20, env=T.COMMAND_ENV)
@@ -169,6 +212,8 @@ def recover(root, evidence, mode):
 
 
 def main():
+    global STAGE
+    STAGE = "initial"
     try:
         mode = os.environ["ACCEPTANCE_MODE"]
         evidence = pathlib.Path(os.environ["ACCEPTANCE_EVIDENCE"]).resolve()
@@ -185,7 +230,7 @@ def main():
         return 0
     except Exception:
         # 오류 원문/traceback에 비밀값이 포함될 수 있어 진단 결과만 기록한다.
-        print('{"status":"acceptance_failed","secrets_printed":false}', file=sys.stderr)
+        print(json.dumps({"status": "acceptance_failed", "stage": STAGE, "secrets_printed": False}), file=sys.stderr)
         return 1
 
 

@@ -42,20 +42,34 @@ class AcceptanceTest(unittest.TestCase):
         self.root = pathlib.Path(self.temp.name).resolve()
         self.evidence = self.root / "evidence"
         self.stdout, self.stderr = io.StringIO(), io.StringIO()
-        self.ssh_calls, self.sent = [], []
+        self.ssh_calls, self.keygen_calls, self.sent = [], [], []
+        self.keygen_result = (0, b"ssh-ed25519 synthetic-upload-public\n", b"")
+        self.probe_result = None
         self.values = {name: f"{index:064x}" for index, name in enumerate((
             "SSO_AD_CENTER_CLIENT_KEY", "SSO_NAVER_CONTROL_CLIENT_KEY", "NAVER_ENGINE_ERP_KEY",
             "NAVER_AUTO_TOKEN_SECRET"), 1)}
         openssl_patch = patch.object(A.T, "OPENSSL", OPENSSL)
         openssl_patch.start()
         self.addCleanup(openssl_patch.stop)
+        stage_patch = patch.object(A, "STAGE", "initial")
+        stage_patch.start()
+        self.addCleanup(stage_patch.stop)
 
     def fake_run(self, command, *args, **kwargs):
         if command[0] == OPENSSL:
             return REAL_RUN(command, *args, **kwargs)
+        if command[0] == "/usr/bin/ssh-keygen":
+            self.keygen_calls.append(command)
+            self.assertEqual(command[1:3], ["-y", "-f"])
+            self.assertEqual(pathlib.Path(command[3]).name, "upload-key")
+            return subprocess.CompletedProcess(command, *self.keygen_result)
         if command[0] != A.T.SSH:
             raise AssertionError("허용하지 않은 외부 프로세스")
         self.ssh_calls.append(command)
+        if len(self.ssh_calls) == 1 and self.probe_result is not None:
+            self.assertEqual(command[-2:], [A.T.RECEIVER, "true"])
+            self.assertEqual(kwargs.get("input"), b"")
+            return subprocess.CompletedProcess(command, *self.probe_result)
         if "-R" in command:
             # -G는 설정만 펼친다. synthetic.invalid로 바꾸며 연결/인증/포워딩하지 않는다.
             probe = REAL_RUN([command[0], "-G", *command[1:-1], "synthetic.invalid"],
@@ -97,10 +111,67 @@ class AcceptanceTest(unittest.TestCase):
                 self.assertEqual(artifact.suffix, ".json")
                 self.assertEqual(artifact.stat().st_mode & 0o777, 0o600)
                 output += artifact.read_text()
-        for value in (self.private, "PRIVATE KEY", "synthetic-upload-private", str(self.root),
+        for value in (self.private, "PRIVATE KEY", "synthetic-upload-private", "RAW_PROCESS_DETAIL", str(self.root),
                       *self.values.values()):
             self.assertNotIn(value, output)
         self.assertFalse(any(path.name.startswith("naver-backup-acceptance-") for path in self.root.iterdir()))
+
+    def stdout_reports(self):
+        return [json.loads(line) for line in self.stdout.getvalue().splitlines()]
+
+    def assert_transfer_precheck_failure(self, expected_stage, expected_ssh_calls):
+        code = self.run_acceptance("transfer", {
+            "NAVER_BACKUP_UPLOAD_SSH_PRIVATE_KEY": "synthetic-upload-private",
+            "NAVER_BACKUP_KNOWN_HOSTS": "synthetic-known-hosts",
+        })
+        self.assertEqual(code, 1)
+        self.assertEqual(len(self.keygen_calls), 1)
+        self.assertEqual(len(self.ssh_calls), expected_ssh_calls)
+        self.assertEqual(self.sent, [])
+        self.assertEqual(list(self.evidence.iterdir()), [])
+        self.assertEqual(json.loads(self.stderr.getvalue()), {
+            "status": "acceptance_failed", "stage": expected_stage, "secrets_printed": False,
+        })
+        reports = self.stdout_reports()
+        self.assertTrue(reports)
+        self.assertTrue(all(set(item) == {"status", "stage"} and item["status"] == "checking"
+                            for item in reports))
+        self.assertNotIn("first_upload", [item["stage"] for item in reports])
+
+    def test_offline_key_parse_failure_blocks_ssh_and_upload_without_raw_diagnostics(self):
+        self.keygen_result = (255, b"synthetic-upload-private", b"RAW_PROCESS_DETAIL PRIVATE KEY")
+        self.assert_transfer_precheck_failure("offline_upload_key_parse", 0)
+
+    def test_connection_failures_emit_only_safe_classification_and_never_upload(self):
+        cases = (
+            (b"Permission denied", "authentication_refused"),
+            (b"Host key verification failed", "host_key_refused"),
+            (b"REMOTE HOST IDENTIFICATION HAS CHANGED", "host_key_refused"),
+            (b"Connection timed out", "connection_timeout"),
+            (b"Connection refused", "connection_refused"),
+        )
+        for index, (marker, expected_stage) in enumerate(cases):
+            with self.subTest(stage=expected_stage, marker=marker):
+                self.evidence = self.root / ("evidence-" + str(index))
+                self.stdout, self.stderr = io.StringIO(), io.StringIO()
+                self.ssh_calls, self.keygen_calls, self.sent = [], [], []
+                self.probe_result = (255, b"synthetic-upload-private",
+                                     marker + b" RAW_PROCESS_DETAIL PRIVATE KEY")
+                self.assert_transfer_precheck_failure(expected_stage, 1)
+                self.assertNotIn(marker.decode(), self.stdout.getvalue() + self.stderr.getvalue())
+
+    def test_probe_exit255_is_not_refusal_success_even_with_receiver_error_text(self):
+        self.probe_result = (255, b"RAW_PROCESS_DETAIL", "백업 수신 실패\n".encode())
+        self.assert_transfer_precheck_failure("read_only_forced_command_probe", 1)
+
+    def test_probe_without_expected_receiver_refusal_never_reaches_upload(self):
+        for code in (0, 1, 2):
+            with self.subTest(exit_code=code):
+                self.evidence = self.root / ("evidence-" + str(code))
+                self.stdout, self.stderr = io.StringIO(), io.StringIO()
+                self.ssh_calls, self.keygen_calls, self.sent = [], [], []
+                self.probe_result = (code, b"synthetic-upload-private", b"RAW_PROCESS_DETAIL PRIVATE KEY")
+                self.assert_transfer_precheck_failure("read_only_forced_command_probe", 1)
 
     def fixture_readback(self):
         folder = self.root / "readback-fixture"
@@ -115,7 +186,7 @@ class AcceptanceTest(unittest.TestCase):
     def test_keys_mode_real_openssl_roundtrip_and_aead_rejection_emit_no_private_material(self):
         code = self.run_acceptance("keys", {**self.values, "NAVER_BACKUP_RECOVERY_PRIVATE_KEY_PEM": self.private})
         self.assertEqual(code, 0, self.stderr.getvalue())
-        report = json.loads(self.stdout.getvalue())
+        report = self.stdout_reports()[-1]
         self.assertEqual(report["status"], "stored_ad_keys_verified")
         self.assertTrue(report["aead_tamper_refused"])
         self.assertEqual(report["restored"]["row_counts"], {"synthetic_leads": 3, "synthetic_events": 2})
@@ -126,7 +197,7 @@ class AcceptanceTest(unittest.TestCase):
         code = self.run_acceptance("restore", {"NAVER_BACKUP_RECOVERY_PRIVATE_KEY_PEM": self.private,
                                                "RECEIVED_SYNTHETIC_JSON": json.dumps(readback)})
         self.assertEqual(code, 0, self.stderr.getvalue())
-        report = json.loads(self.stdout.getvalue())
+        report = self.stdout_reports()[-1]
         self.assertEqual(report["status"], "received_synthetic_restore_verified")
         self.assertEqual(report["ciphertext_sha256"], readback["sha256"])
         self.assertTrue(report["aead_tamper_refused"])
@@ -136,11 +207,21 @@ class AcceptanceTest(unittest.TestCase):
         code = self.run_acceptance("transfer", {"NAVER_BACKUP_UPLOAD_SSH_PRIVATE_KEY": "synthetic-upload-private",
                                                "NAVER_BACKUP_KNOWN_HOSTS": "synthetic-known-hosts"})
         self.assertEqual(code, 0, self.stderr.getvalue())
-        report = json.loads(self.stdout.getvalue())
+        reports = self.stdout_reports()
+        report = reports[-1]
         self.assertEqual(report["status"], "synthetic_transfer_verified")
         self.assertEqual(len(self.sent), 2)
         self.assertEqual(self.sent[0], self.sent[1])
-        self.assertEqual(len(self.ssh_calls), 5)
+        self.assertEqual(len(self.keygen_calls), 1)
+        self.assertEqual(len(self.ssh_calls), 6)
+        self.assertEqual([item["stage"] for item in reports if item["status"] == "checking"], [
+            "offline_upload_key_parse", "read_only_forced_command_probe", "synthetic_encryption",
+            "first_upload", "same_content_retry", "tampered_transport_refusal", "remote_command_refusal",
+            "remote_prune_refusal", "sftp_refusal", "forwarding_refusal",
+        ])
+        fixture = next(item for item in reports if item["status"] == "synthetic_fixture")
+        self.assertEqual(fixture["ciphertext"], report["ciphertext"])
+        self.assertEqual(fixture["expected_kst_date"], report["expected_kst_date"])
         self.assertTrue(all(report[name] for name in ("same_content_retry", "tamper_refused",
             "remote_command_refused", "remote_prune_refused", "sftp_refused", "forwarding_refused")))
         self.assertFalse(report["engine_host_sender_verified"])
