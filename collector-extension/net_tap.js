@@ -85,7 +85,7 @@
   function record(url, status, text, request, responseUrl) {
     try {
       var s = String(text || '');
-      var hit = s.indexOf('"nvMid"') >= 0 || s.indexOf('"productTitle"') >= 0 || s.indexOf('"mallName"') >= 0;
+      var hit = s.indexOf('"nvMid"') >= 0 || s.indexOf('"productTitle"') >= 0 || s.indexOf('"productName"') >= 0 || s.indexOf('"mallName"') >= 0;
       var ent = { at: Date.now(), path: pathOf(url), page: pageOf(url), status: status | 0, size: s.length };
       if (request) {
         ent.keyword = request.keyword; ent.sourceKnown = request.sourceKnown; ent.scopeVerified = request.scopeVerified;
@@ -151,6 +151,8 @@
       XP.send = mask(function () {
         try {
           var x = this;
+          // Capture at dispatch, not at loadend: a slow pre-click request is still old.
+          var url = x.__mcUrl, request = requestInfo(url, x.__mcMethod);
           x.addEventListener('loadend', function () {
             try {
               var ct = '';
@@ -160,11 +162,9 @@
               if (x.responseType === '' || x.responseType === 'text') t = x.responseText;
               else if (x.responseType === 'json') t = JSON.stringify(x.response);
               else return;
-              var request = null;
-              try { request = requestInfo(x.__mcUrl, x.__mcMethod); } catch (e) { request = null; }
-              record(x.__mcUrl, x.status, t, request, x.responseURL);
+              record(url, x.status, t, request, x.responseURL);
             } catch (e) {}
-          });
+          }, { once: true });
         } catch (e) {}
         return xs.apply(this, arguments);
       }, xs);

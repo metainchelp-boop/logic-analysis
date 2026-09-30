@@ -147,7 +147,7 @@ r = co.ingest(conn, co.validate(payload("partial", "다")), DAY, store_full, pos
 ok("🔴 대상 0개 → 완료 아님(무엇을 끝냈는지 말할 수 없다)", r.get("allTargetsFound") is False and "다" not in co.found_done_keywords(conn, DAY))
 r = co.ingest(conn, co.validate(payload("partial", "라")), DAY, store_full, lambda: {"products": 1, "clients": 0})
 ok("옛 모양 결과(대상 수 칸 없음) → 완료 아님", r.get("allTargetsFound") is False and "라" not in co.found_done_keywords(conn, DAY))
-r = co.ingest(conn, co.validate(payload("complete", "마", stopReason="DEPTH_REACHED")), DAY, store_full, pos(2, 2))
+r = co.ingest(conn, co.validate(payload("complete", "마", n=300, stopReason="DEPTH_REACHED")), DAY, store_full, pos(2, 2))
 ok("전량(complete)은 종전대로 수집분 저장 갈래 · 완료 표시는 안 남긴다(수집분이 곧 완료)",
    r["projectionStatus"] == "full" and "마" not in co.found_done_keywords(conn, DAY))
 r = co.ingest(conn, co.validate(payload("target_complete", "바", stopReason="TARGETS_FOUND")), DAY, store_full, pos(2, 2))

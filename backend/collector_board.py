@@ -26,10 +26,14 @@ HISTORY_DAYS = 14
 OLD_MACHINE_DAYS = 3        # 이보다 오래 조용한 heartbeat 줄은 옛 설치본(교체 전 기록)으로 본다
 
 # 막힘 보고 사유 — 앞머리 코드로 가른다(뒤의 괄호 설명은 확장 버전마다 다를 수 있다)
-REAL_BLOCK_CODES = ("BLOCK_TEXT", "CAPTCHA", "HTTP_418", "418")
+REAL_BLOCK_CODES = ("BLOCK_TEXT", "CAPTCHA", "HTTP_401", "HTTP_403", "HTTP_418", "HTTP_429", "418")
 DIAG_CODES = ("STALE_PAGE", "TAP_PROBE", "NO_PAGER", "SAME_AS_PREV")
 CODE_LABEL = {
     "BLOCK_TEXT": "차단 문구·퍼즐(진짜 차단)",
+    "HTTP_401": "검색 응답 인증 필요(HTTP 401)",
+    "HTTP_403": "검색 응답 접근 제한(HTTP 403)",
+    "HTTP_418": "검색 요청 거부(HTTP 418)",
+    "HTTP_429": "검색 응답 요청 제한(HTTP 429)",
     "STALE_PAGE": "2페이지를 눌러도 화면 그대로(진단)",
     "TAP_PROBE": "화면이 받은 응답 요약(진단)",
     "NO_PAGER": "페이지 버튼을 못 찾음(진단)",
@@ -182,12 +186,17 @@ def stop_reasons(conn, today: str) -> Optional[List[Dict[str, Any]]]:
 
 
 # ── 2페이지 넘김(2026-09-28 대표 지시 「현황판에 2페이지 통과율」) ─────────────────────
-# 2페이지를 **시도한** 수집 = 2페이지 이상 읽음(pagesRead ≥ 2) + 2페이지에서 멈춤(아래 사유).
+# 2페이지를 **시도한** 수집 = 명시적 pagesAttempted/failedPage ≥ 2 또는 기존 읽기·멈춤 증거.
 # 1페이지에서 대상을 다 찾아 끝난 수집은 2페이지가 필요 없었으므로 **시도에 넣지 않는다**.
 # ⚠️ 관측 원장 meta_json 안의 값이라 SQLite json_extract 로 센다 — 못 쓰면 None(미확인 · 0 으로 치지 않는다).
 PAGE2_STOP_PREFIXES = ("STALE_PAGE", "NO_PAGER", "SAME_AS_PREV")
 _P2_READ = "CAST(json_extract(meta_json, '$.observation.pagesRead') AS INTEGER)"
 _P2_STOP = "(" + " OR ".join(f"reason LIKE '{p}%'" for p in PAGE2_STOP_PREFIXES) + ")"
+_P2_ATTEMPT = "(" + " OR ".join(
+    f"(json_type(meta_json, '$.observation.{key}') = 'integer' "
+    f"AND json_extract(meta_json, '$.observation.{key}') BETWEEN 2 AND 30)"
+    for key in ("pagesAttempted", "failedPage")) + ")"
+_P2_TRIED = f"({_P2_READ} >= 2 OR {_P2_ATTEMPT} OR {_P2_STOP})"
 
 
 def page2_by_day(conn, since: str, until: Optional[str] = None) -> Optional[Dict[str, Dict[str, int]]]:
@@ -196,7 +205,7 @@ def page2_by_day(conn, since: str, until: Optional[str] = None) -> Optional[Dict
         return {}
     try:
         sql = (f"SELECT collected_date, SUM(CASE WHEN {_P2_READ} >= 2 THEN 1 ELSE 0 END), "
-               f"SUM(CASE WHEN {_P2_READ} >= 2 OR {_P2_STOP} THEN 1 ELSE 0 END) "
+               f"SUM(CASE WHEN {_P2_TRIED} THEN 1 ELSE 0 END) "
                "FROM collector_observations WHERE collected_date >= ?"
                + (" AND collected_date < ?" if until else "") + " GROUP BY collected_date")
         rows = conn.execute(sql, (since, until) if until else (since,)).fetchall()
@@ -213,7 +222,7 @@ def page2_by_instance(conn, day: str) -> Optional[Dict[str, Dict[str, int]]]:
         rows = conn.execute(
             f"SELECT json_extract(meta_json, '$.observation.workerId'), "
             f"SUM(CASE WHEN {_P2_READ} >= 2 THEN 1 ELSE 0 END), "
-            f"SUM(CASE WHEN {_P2_READ} >= 2 OR {_P2_STOP} THEN 1 ELSE 0 END) "
+            f"SUM(CASE WHEN {_P2_TRIED} THEN 1 ELSE 0 END) "
             "FROM collector_observations WHERE collected_date = ? GROUP BY 1", (day,)).fetchall()
     except Exception:
         return None
@@ -377,7 +386,7 @@ def window_numbers(conn, today: str, since: str) -> Dict[str, Any]:
     if obs:
         try:
             r = conn.execute(f"SELECT SUM(CASE WHEN {_P2_READ} >= 2 THEN 1 ELSE 0 END), "
-                             f"SUM(CASE WHEN {_P2_READ} >= 2 OR {_P2_STOP} THEN 1 ELSE 0 END) "
+                             f"SUM(CASE WHEN {_P2_TRIED} THEN 1 ELSE 0 END) "
                              "FROM collector_observations WHERE collected_date=? AND received_at >= ?",
                              (today, since)).fetchone()
             w["page2"] = {"passed": int(r[0] or 0), "tried": int(r[1] or 0)}
@@ -386,7 +395,7 @@ def window_numbers(conn, today: str, since: str) -> Dict[str, Any]:
         try:
             rows = conn.execute(f"SELECT json_extract(meta_json, '$.observation.workerId'), "
                                 f"SUM(CASE WHEN {_P2_READ} >= 2 THEN 1 ELSE 0 END), "
-                                f"SUM(CASE WHEN {_P2_READ} >= 2 OR {_P2_STOP} THEN 1 ELSE 0 END) "
+                                f"SUM(CASE WHEN {_P2_TRIED} THEN 1 ELSE 0 END) "
                                 "FROM collector_observations WHERE collected_date=? AND received_at >= ? GROUP BY 1",
                                 (today, since)).fetchall()
             w["page2ByInstance"] = {str(a or ""): {"passed": int(b or 0), "tried": int(c or 0)} for a, b, c in rows}

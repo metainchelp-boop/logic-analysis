@@ -99,6 +99,20 @@ ok("사유 앞머리 코드", cb.code_of("STALE_PAGE(클릭 뒤 내용 불변)")
 ok("진짜 차단 분류", all(cb.classify(x) == "real" for x in ("BLOCK_TEXT", "CAPTCHA", "HTTP_418")))
 ok("진단 보고 분류", all(cb.classify(x) == "diag" for x in ("STALE_PAGE", "TAP_PROBE", "NO_PAGER", "SAME_AS_PREV")))
 ok("모르는 사유는 기타(진짜 차단으로 부풀리지 않음)", cb.classify("REDIRECT") == "other")
+http_conn = make_db(with_optional=False)
+for code in ("HTTP_401", "HTTP_403", "HTTP_418", "HTTP_429", "TAP_PROBE"):
+    http_conn.execute("INSERT INTO collector_blocks (at, keyword, paging_index, err, body, ext_version) VALUES (?,?,?,?,?,?)",
+                      (TODAY + " 12:00:00", "표본", 2, code, "418", "1.27.1"))
+http_blocks = cb.block_breakdown(http_conn, TODAY)
+ok("확인된 HTTP 401·403·418·429는 실제 제한 4건 · 예전 TAP_PROBE는 진단 1건",
+   (http_blocks["real"], http_blocks["diag"], http_blocks["other"]) == (4, 1, 0), str(http_blocks))
+http_labels = {row["code"]: row["label"] for row in http_blocks["codes"]}
+ok("401 인증·403 접근 제한·429 요청 제한으로 구분", "인증" in http_labels["HTTP_401"]
+   and "접근 제한" in http_labels["HTTP_403"] and "요청 제한" in http_labels["HTTP_429"]
+   and all("퍼즐" not in http_labels[code] for code in ("HTTP_401", "HTTP_403", "HTTP_418", "HTTP_429")))
+ok("최근 실제 제한에도 HTTP 네 종류만 표시", {row["code"] for row in cb.recent_real_blocks(http_conn, TODAY)}
+   == {"HTTP_401", "HTTP_403", "HTTP_418", "HTTP_429"})
+http_conn.close()
 c = make_db(); seed(c)
 b = cb.block_breakdown(c, TODAY)
 ok("오늘 진짜 1 · 진단 3 · 기타 1", b and (b["real"], b["diag"], b["other"]) == (1, 3, 1), str(b))
@@ -353,6 +367,31 @@ ok("화면 — 서버가 기준 시각을 안 썼으면 기억도 지운다", "i
 ok("화면 — 기준 시각이 있으면 숫자·막힘·멈춘 이유·기계 칸을 window 로", "var tiles = win ?" in page
    and "win ? blockBox(win.label, win.blocks)" in page and "var sr = win ? win.stopReasons : data.stopReasons;" in page
    and "_cbP2(win ? m.page2Window : m.page2Today)" in page)
+
+print("⑩ 읽기 실패도 2페이지 시도에 포함(2026-09-30)")
+c12 = sqlite3.connect(":memory:")
+c12.execute("CREATE TABLE collector_observations (collected_date TEXT, received_at TEXT, reason TEXT, "
+            "projected INTEGER, meta_json TEXT)")
+def _page2_attempt(reason, pages_read, at="13:10:00", worker="iA", **extra):
+    obs = {"workerId": worker, "pagesRead": pages_read, **extra}
+    c12.execute("INSERT INTO collector_observations VALUES (?,?,?,?,?)",
+                (TODAY, TODAY + " " + at, reason, 0, _json.dumps({"observation": obs})))
+_page2_attempt("COMPLETE", 2, pagesAttempted=2)
+_page2_attempt("READ_FAILED", 1, pagesAttempted=2)
+_page2_attempt("READ_FAILED", 1, worker="iB", failedPage=2)  # 구기록의 명시적 실패 페이지
+_page2_attempt("READ_FAILED", 1, at="10:00:00", pagesAttempted=2)
+_page2_attempt("READ_FAILED", 1)                           # 어디서 실패했는지 모르면 추정하지 않음
+_page2_attempt("TARGETS_FOUND", 1, pagesAttempted=1)
+_page2_attempt("READ_FAILED", 1, pagesAttempted="2junk")
+ok("읽기 실패 포함 일별 — 넘김 1/시도 4", cb.page2_by_day(c12, TODAY)[TODAY] == {"passed": 1, "tried": 4})
+p12 = cb.page2_by_instance(c12, TODAY)
+ok("읽기 실패 포함 기계별 — A 1/3 · B 0/1", p12.get("iA") == {"passed": 1, "tried": 3}
+   and p12.get("iB") == {"passed": 0, "tried": 1})
+w12 = cb.window_numbers(c12, TODAY, TODAY + " 13:00:00")
+ok("기준 시각 이후도 같은 시도 규칙 — 넘김 1/시도 3", w12["page2"] == {"passed": 1, "tried": 3})
+ok("기준 시각 이후 기계별 — A 1/2 · B 0/1", w12["page2ByInstance"].get("iA") == {"passed": 1, "tried": 2}
+   and w12["page2ByInstance"].get("iB") == {"passed": 0, "tried": 1})
+c12.close()
 
 print(f"\n{passed} 통과 · {failed} 실패")
 sys.exit(1 if failed else 0)

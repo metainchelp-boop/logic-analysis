@@ -59,7 +59,8 @@ async function run(pages, { targets = null, maxRank = 300, pagesPerKeyword = 8 }
     sleep: async () => {}, jitter: () => 0,
     instanceId: async () => 'inst-1',
     crypto: { randomUUID: () => '11111111-1111-4111-8111-111111111111' },
-    fetchPage: async () => { const p = pages[call++]; if (p instanceof Error) throw p; return Object.assign({ total: 500 }, p); },
+    fetchPage: async () => { const p = pages[call++]; if (p instanceof Error) throw p;
+      return Object.assign({ total: 500, verified: true, keyword: '김치', pageIndex: call }, p); },
   };
   const fn = new Function(...Object.keys(deps), `${extract('collectKeyword')}\nreturn collectKeyword;`)(...Object.values(deps));
   return fn('김치');
@@ -85,15 +86,22 @@ async function run(pages, { targets = null, maxRank = 300, pagesPerKeyword = 8 }
 
   /* ③ 끝까지 → complete */
   r = await run([{ list: page(40, 1), src: 'tap' }, { list: page(30, 41), src: 'router' }]);
-  ok('🔴 마지막 장이 40개 미만이면 complete · SHORT_PAGE(결과가 여기서 끝)', r.observation.status === 'complete' && r.observation.stopReason === 'SHORT_PAGE' && r.products.length === 70);
+  ok('짧은 장은 끝이라는 증거가 없으므로 partial · SHORT_PAGE', r.observation.status === 'partial' && r.observation.stopReason === 'SHORT_PAGE' && r.products.length === 70);
   ok('두 장 증거 · 2페이지 상품은 sourcePage=2', r.observation.pageEvidence.length === 2 && r.observation.pageEvidence[1].source === 'router' && r.products[69].sourcePage === 2);
   const eight = []; for (let i = 0; i < 8; i++) eight.push({ list: page(40, i * 40 + 1), src: 'tap' });
   r = await run(eight);
   ok('🔴 300개 채우면 complete · DEPTH_REACHED', r.observation.status === 'complete' && r.observation.stopReason === 'DEPTH_REACHED' && r.products.length === 300);
   r = await run(eight, { maxRank: 400 });
-  ok('8장 다 봤는데 300 미달이면 complete · PAGE_CAP', r.observation.status === 'complete' && r.observation.stopReason === 'PAGE_CAP');
+  ok('8장 다 봐도 요청 깊이 미달이면 partial · PAGE_CAP', r.observation.status === 'partial' && r.observation.stopReason === 'PAGE_CAP');
   r = await run([{ list: page(40, 1), src: 'tap' }, { list: [], src: '', stopReason: 'STALE_PAGE' }]);
   ok('🔴 2페이지가 안 바뀌면(STALE_PAGE) partial · 1페이지는 살린다', r.observation.status === 'partial' && r.observation.stopReason === 'STALE_PAGE' && r.products.length === 40);
+  ok('실패한 2페이지도 시도 횟수에는 포함', r.observation.pagesAttempted === 2 && r.observation.pagesRead === 1);
+  r = await run([{ list: page(40, 1), src: 'tap' }, { list: page(40, 41), src: 'tap', verified: false }]);
+  ok('검증되지 않은 2페이지 결과는 순위에 더하지 않는다', r.products.length === 40 && r.observation.stopReason === 'UNVERIFIED_PAGE');
+  r = await run([{ list: page(40, 1), src: 'tap', keyword: '다른 키워드' }]);
+  ok('다른 키워드의 증거를 확인 완료로 위조하지 않는다', r.products.length === 0 && r.observation.pageEvidence.length === 0);
+  r = await run([{ list: page(40, 1), src: 'tap' }, { list: [{ productTitle: 'unknown', mallName: 'm' }, ...page(39, 42)], src: 'tap' }]);
+  ok('식별 불가 상품을 건너뛰어 이후 순위를 당기지 않는다', r.products.length === 40 && r.observation.stopReason === 'UNIDENTIFIED_PRODUCT');
   r = await run([new Error('판독 실패(READ_FAILED) — 차단 아님')]);
   ok('0건이면 failed · READ_FAILED · error 문구', r.observation.status === 'failed' && r.observation.stopReason === 'READ_FAILED' && /판독 실패/.test(r.observation.error) && r.products.length === 0 && !r.blocked);
 

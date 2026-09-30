@@ -671,6 +671,7 @@ function pageExtract(want, extraBlock) {
   //   받았다면 그 응답은 __mcTap.items 에 있다. 인자 없이 부르면(회귀 시험·1페이지) 종전과 같다.
   want = want || {};
   var wantPage = parseInt(want.page, 10) || 0, since = parseInt(want.since, 10) || 0;
+  var wantedKeyword = typeof want.keyword === 'string' ? want.keyword : '';
   function looksProduct(o) {
     if (!o || typeof o !== 'object') return false;
     var hasTitle = typeof o.productTitle === 'string' || typeof o.productName === 'string';
@@ -702,16 +703,25 @@ function pageExtract(want, extraBlock) {
     try { var pm = /[?&]pagingIndex=(\d+)/.exec(location.search); pageIndex = pm ? parseInt(pm[1], 10) : 1; }
     catch (e) { pageIndex = 0; }
   }
-  var tap = null, tapPath = '';
-  if (wantPage > 1) {
+  // Save object identity BEFORE navigation; URL changes alone do not prove new props.
+  if (want.snapshot) {
+    window.__mcReadBaseline = { router: rp, nextdata: nd, keyword: wantedKeyword };
+    return { snapshot: true };
+  }
+  var baseline = window.__mcReadBaseline;
+  var tap = null, tapPath = '', tapProof = null, httpError = 0;
+  if (wantPage) {
     try {
       var T = window.__mcTap;
-      var items = (T && T.items) || [];
+      var items = ((T && T.items) || []).concat((T && T.misses) || []);
+      items.sort(function (a, b) { return (a.requestStartedAt || 0) - (b.requestStartedAt || 0) || (a.at || 0) - (b.at || 0); });
       for (var ti = items.length - 1; ti >= 0; ti--) {
         var it = items[ti];
-        if (!it || !it.json) continue;
-        // 주소에 pagingIndex 가 있으면 그것으로, 없으면 「클릭 뒤에 도착한 것」으로 고른다
-        if (it.page === wantPage || (!it.page && since && it.at >= since)) { tap = it.json; tapPath = it.path || ''; break; }
+        if (!it || it.page !== wantPage || it.keyword !== wantedKeyword
+            || it.sourceKnown !== true || it.scopeVerified !== true || it.responseMatched !== true
+            || !since || !Number.isFinite(it.requestStartedAt) || it.requestStartedAt < since) continue;
+        if (it.status < 200 || it.status >= 300) { httpError = it.status || 0; break; }
+        if (it.json) { tap = it.json; tapPath = it.path || ''; tapProof = it; break; }
       }
     } catch (e) { tap = null; }
   }
@@ -721,6 +731,29 @@ function pageExtract(want, extraBlock) {
   try { title = String(document.title || '').slice(0, 120); } catch (e) { title = ''; }
   var body = '';
   try { body = String((document.body && document.body.innerText) || '').slice(0, 3000); } catch (e) { body = ''; }
+  if (httpError) return { err: [401, 403, 418, 429].indexOf(httpError) >= 0 ? 'HTTP_RESTRICTED' : 'HTTP_ERROR',
+                          status: httpError, href: href, title: title };
+
+  // A fallback must have both matching route identity and changed props, not just a new URL.
+  function matchingQuery(q) {
+    if (!q || typeof q.query !== 'string' || q.query !== wantedKeyword) return false;
+    var keys = Object.keys(q), allowed = ['query','pagingIndex','pagingSize','sort','productSet','viewType','origQuery','adQuery','frm'];
+    for (var qi = 0; qi < keys.length; qi++) if (allowed.indexOf(keys[qi]) < 0 || Array.isArray(q[keys[qi]])) return false;
+    return Number(q.pagingIndex || 1) === wantPage && (!q.sort || q.sort === 'rel')
+      && (!q.productSet || q.productSet === 'total') && (!q.pagingSize || String(q.pagingSize) === '40');
+  }
+  var locationMatches = false, routeMatches = false;
+  try {
+    var u = new URL(href), q = {};
+    var unique = true;
+    u.searchParams.forEach(function (v, k) { if (Object.prototype.hasOwnProperty.call(q, k)) unique = false; q[k] = v; });
+    locationMatches = unique && u.protocol === 'https:' && u.hostname === 'search.shopping.naver.com'
+      && u.pathname === '/search/all' && matchingQuery(q);
+    routeMatches = matchingQuery(rt && rt.query);
+  } catch (e) {}
+  var unscoped = !wantPage && !wantedKeyword; // legacy diagnostic-only extraction
+  var routerVerified = locationMatches && routeMatches && baseline && baseline.keyword === wantedKeyword && rp !== baseline.router;
+  var nextVerified = locationMatches && nd && matchingQuery(nd.query) && (!baseline || nd !== baseline.nextdata);
 
   // ⚠️ 순서가 핵심 — **데이터부터 찾고, 못 찾았을 때만 차단을 의심한다.**
   //    (2026-08-11 실사고: 차단 문구 검사를 먼저 해서, 상품 데이터가 바로 옆에 있는
@@ -728,9 +761,9 @@ function pageExtract(want, extraBlock) {
   //     네이버가 우리에게 필요한 걸 내준 것이므로 그건 차단일 수 없다.)
   var best = null, total = 0, src = '';
   var roots = [];
-  if (tap) roots.push(['tap', tap]);
-  if (rp) roots.push(['router', rp]);
-  roots.push(['nextdata', nd]);
+  if (tap && locationMatches) roots.push(['tap', tap]);
+  if (rp && (unscoped || routerVerified)) roots.push(['router', rp]);
+  if (nd && (unscoped || nextVerified)) roots.push(['nextdata', nd]);
   for (var ri = 0; ri < roots.length && !(best && best.length); ri++) {
   src = roots[ri][0];
   var seen = new Set();
@@ -763,7 +796,11 @@ function pageExtract(want, extraBlock) {
   }
   }
   // 상품을 읽어냈으면 무조건 성공 — 차단 검사조차 하지 않는다
-  if (best && best.length) return { total: total, list: best.slice(0, 200), href: href, pageIndex: pageIndex, src: src, tapPath: tapPath };
+  if (best && best.length) return { total: total, list: best.slice(0, 200), href: href,
+    pageIndex: wantPage || pageIndex, keyword: wantedKeyword, verified: !unscoped,
+    src: src, tapPath: tapPath,
+    requestId: src === 'tap' ? (tapProof.requestId || '') : '',
+    requestStartedAt: src === 'tap' ? tapProof.requestStartedAt : 0 };
 
   // 여기부터는 '못 읽은' 경우. 이제서야 차단인지 본다.
   // ⚠️ 2026-09-15 v1.11.4 — 새 IP·새 크롬의 첫 회차에서 네이버가 **「보안 확인」 퍼즐**(영수증 문제)을 냈다.
@@ -778,7 +815,7 @@ function pageExtract(want, extraBlock) {
     }
   }
   if (blocked) return { err: 'BLOCK_TEXT', href: href, title: title, body: body.slice(0, 300) };
-  return { err: nd ? 'NO_LIST' : 'NO_NEXT_DATA', href: href, title: title, body: body.slice(0, 300) };
+  return { err: wantPage ? 'UNVERIFIED_PAGE' : (nd ? 'NO_LIST' : 'NO_NEXT_DATA'), href: href, title: title, body: body.slice(0, 300) };
 }
 
 /** 페이지 목록의 첫 상품 식별자 — 「페이지가 실제로 바뀌었나」를 이걸로 판정한다(2026-09-15). */
@@ -833,6 +870,18 @@ let _clickedAt = 0;          // v1.13.0 — 마지막 페이지 클릭 시각(�
  */
 function pagerClick(target) {
   var want = String(target);
+  function click(el, branch) {
+    if (el.disabled || el.getAttribute('aria-disabled') === 'true') return '';
+    var destination = /[?&]pagingIndex=(\d+)(?:&|$)/.exec(el.getAttribute('href') || '');
+    if (destination && destination[1] !== want) return '';
+    try {
+      el.scrollIntoView({ block: 'center', inline: 'center' });
+      var r = el.getBoundingClientRect();
+      var top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      if (!top || !(top === el || (el.contains && el.contains(top)))) return '';
+    } catch (e) { return ''; }
+    el.click(); return branch;
+  }
   function vis(el) {
     if (!el) return false;
     var r = el.getBoundingClientRect();
@@ -845,10 +894,10 @@ function pagerClick(target) {
     for (var i = 0; i < cands.length; i++) {
       var el = cands[i];
       if (!vis(el)) continue;
-      if ((el.textContent || '').trim() === want) { el.click(); return 'num'; }
+      if ((el.textContent || '').trim() === want) return click(el, 'num');
     }
   }
-  // ② 「다음」 버튼 (한 장씩 넘어갈 때만 옳다 — 호출부가 순서대로 부르므로 성립)
+  // “Next” can jump to the next GROUP. Only an explicit target page is safe.
   for (var s2 = 0; s2 < scopes.length; s2++) {
     var c2 = scopes[s2].querySelectorAll('a,button');
     for (var j = 0; j < c2.length; j++) {
@@ -858,7 +907,9 @@ function pagerClick(target) {
       var aria = e2.getAttribute('aria-label') || '';
       if (t === '다음' || /다음/.test(aria) || /next/i.test(e2.className || '')) {
         if (e2.getAttribute('aria-disabled') === 'true' || e2.disabled) continue;
-        e2.click(); return 'next';
+        var destination = /[?&]pagingIndex=(\d+)(?:&|$)/.exec(e2.getAttribute('href') || '');
+        if (!destination || destination[1] !== want) continue;
+        return click(e2, 'next');
       }
     }
   }
@@ -870,7 +921,7 @@ function pagerClick(target) {
     if ((e3.textContent || '').trim() !== want) continue;
     var href = e3.getAttribute('href') || '';
     if (href.indexOf('pagingIndex') < 0 && href !== '#') continue;
-    e3.click(); return 'loose';
+    return click(e3, 'loose');
   }
   return '';
 }
@@ -885,10 +936,13 @@ function pagerLocate(target) {
   var want = String(target);
   function vis(el) {
     if (!el) return false;
+    if (el.disabled || el.getAttribute('aria-disabled') === 'true') return false;
     var r = el.getBoundingClientRect();
     return r.width > 0 && r.height > 0;
   }
   function at(el, branch) {
+    var destination = /[?&]pagingIndex=(\d+)(?:&|$)/.exec(el.getAttribute('href') || '');
+    if (destination && destination[1] !== want) return null;
     // 화면 밖이면 좌표가 음수라 엉뚱한 곳이 눌린다 — 가운데로 끌어온 뒤 다시 잰다.
     try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) { /* 무시 */ }
     var r = el.getBoundingClientRect();
@@ -900,16 +954,15 @@ function pagerLocate(target) {
      *   떠 있는 띠·광고·덮개가 가리고 있으면 클릭은 그쪽으로 가고, 우리 눈엔
      *   「오류 없이 눌렀는데 아무 일도 안 일어남」으로 보인다 — 9/16 17:23·17:33 회차가
      *   정확히 그 모양이었다(요청 0건). 여태 한 번도 확인한 적이 없어서 여기 넣는다.
-     *   ⚠️ 가려졌다고 클릭을 포기하지는 않는다 — 판정이 틀릴 수도 있으니 **찍기만** 하고
-     *      그대로 눌러 본다. 무엇이 덮었는지는 사유 문자열로 남는다. */
-    var hit = '', covered = 0;
+     *   가린 대상과 hit-test 실패는 누르지 않는다. 진단 좌표만 반환한다. */
+    var hit = '', covered = 1;
     try {
       var top = document.elementFromPoint(x, y);
       if (top) {
         var cls = String(top.className || '').split(/\s+/).filter(Boolean).slice(0, 2).join('.');
         hit = (top.tagName || '?').toLowerCase() + (cls ? '.' + cls : '')
             + '>' + String(top.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 10);
-        var mine = (top === el) || (el.contains && el.contains(top)) || (top.contains && top.contains(el));
+        var mine = (top === el) || (el.contains && el.contains(top));
         covered = mine ? 0 : 1;
       } else {
         hit = 'none';
@@ -956,6 +1009,8 @@ function pagerLocate(target) {
       var aria = e2.getAttribute('aria-label') || '';
       if (t === '다음' || /다음/.test(aria) || /next/i.test(e2.className || '')) {
         if (e2.getAttribute('aria-disabled') === 'true' || e2.disabled) continue;
+        var destination = /[?&]pagingIndex=(\d+)(?:&|$)/.exec(e2.getAttribute('href') || '');
+        if (!destination || destination[1] !== want) continue;
         return at(e2, 'next');
       }
     }
@@ -1472,6 +1527,7 @@ function dbgDetach(tabId) {
 /** 표준 입력 경로로 페이지 버튼을 누른다. 눌렀으면 가지 이름, 못 눌렀으면 ''(폴백하라는 뜻). */
 async function trustedClickToPage(tabId, target) {
   let attached = false;
+  let attempted = false;
   try {
     if (!chrome.debugger) { _trustedNote = 'no-debugger-api'; return ''; }
     /* 🔴 v1.17.5 — 대표 지시(「완전 실사용자 기반으로 움직이면 될 거 같은데」).
@@ -1502,10 +1558,13 @@ async function trustedClickToPage(tabId, target) {
     if (!spot) { _trustedNote = 'no-spot'; return ''; }   // 버튼을 못 찾음 — 합성 클릭도 못 찾는다
     _clickHit = spot.hit || '';
     _clickCovered = spot.covered ? 1 : 0;
+    if (spot.covered) { _trustedNote = 'covered-target'; return ''; }
     const base = { x: spot.x, y: spot.y, button: 'left' };
+    _clickedAt = Date.now();
     // 사람 손과 같은 순서 — 움직이고, 누르고, 뗀다.
     await dbgSend(tabId, 'Input.dispatchMouseEvent', { ...base, type: 'mouseMoved', buttons: 0, clickCount: 0 });
     await sleep(40 + Math.floor(Math.random() * 70));
+    attempted = true;
     await dbgSend(tabId, 'Input.dispatchMouseEvent', { ...base, type: 'mousePressed', buttons: 1, clickCount: 1 });
     await sleep(30 + Math.floor(Math.random() * 60));
     await dbgSend(tabId, 'Input.dispatchMouseEvent', { ...base, type: 'mouseReleased', buttons: 0, clickCount: 1 });
@@ -1520,7 +1579,7 @@ async function trustedClickToPage(tabId, target) {
     return spot.branch || 'num';
   } catch (e) {
     _trustedNote = String((e && e.message) || e).slice(0, 60);
-    return '';
+    return attempted ? 'pending' : ''; // uncertain delivery must not trigger a second click
   } finally {
     if (attached) await dbgDetach(tabId);
   }
@@ -1550,32 +1609,21 @@ let _lastClickHow = '';      // v1.15.0 — 'trusted'(표준 입력) · 'synth'(
 async function clickToPage(tabId, target) {
   // v1.15.0 — 먼저 표준 입력 경로, 안 되면 종전 합성 클릭으로 폴백.
   //   ⚠️ 폴백을 지우지 말 것 — 개발자 도구가 그 탭에 열려 있으면 attach 가 거부된다.
-  /* 🔴🔴 v1.17.7 — **「눌렀다」를 「먹혔다」로 읽지 않는다.**
-   *   종전에는 표준 입력 이벤트를 **보내기만 하면** 성공으로 보고 그대로 끝냈다.
-   *   그래서 화면이 1페이지 그대로인데도 합성 클릭 폴백이 **한 번도 돌지 않았다**
-   *   (2026-09-16 18:22 경주빵: `cur=1` 인데 성공 처리). 폴백을 만들어 두고 못 쓴 셈이다.
-   *   ⇒ 이제 누른 직후 **현재 페이지 번호**를 보고, 그것이 목표와 다르면 합성 클릭을 한 번 더 한다.
-   *   ⚠️ 번호를 **읽지 못한 화면에서는 폴백하지 않는다** — 이미 넘어간 뒤 또 누르면
-   *      3페이지로 가 버린다. 모를 때는 건드리지 않는 쪽이 안전하다.
-   *   ⭐ 합성 클릭은 종전 경로에서 **화면을 실제로 깨운 실적이 있다**(요청이 나가 418 을 맞았다).
-   *      「진짜 입력이 언제나 낫다」는 가정은 이번 측정으로 흔들렸다.
-   */
+  // One dispatch per transition. Slow navigation is pending; fetchPage proves the result.
+  // Only failure BEFORE dispatch may use the synthetic fallback.
   if (await trustedEnabled()) {
     const br = await trustedClickToPage(tabId, target);
     if (br) {
-      const cur = (/cur=(\d+)/.exec(_pagerAfter || '') || [])[1] || '';
-      if (cur && cur !== String(target)) {
-        _trustedNote = (_trustedNote ? _trustedNote + '|' : '') + 'no-move@' + cur;
-        // 아래 합성 클릭으로 떨어진다(일부러 return 하지 않는다).
-      } else {
-        _lastClickBranch = br;
-        _lastClickHow = 'trusted';
-        _navMode.how.trusted += 1;
-        return true;
-      }
+      // Dispatch is pending, not proven navigation. fetchPage waits for verified data.
+      _lastClickBranch = br;
+      _lastClickHow = 'trusted';
+      _navMode.how.trusted += 1;
+      return true;
     }
+    if (_trustedNote === 'covered-target') return false;
   }
   try {
+    _clickedAt = Date.now();
     const [res] = await chrome.scripting.executeScript({
       target: { tabId }, world: 'MAIN', func: pagerClick, args: [target],
     });
@@ -1727,6 +1775,9 @@ async function fetchPage(keyword, pagingIndex, prevIds) {
   // ⚠️ v1.17.4 — `let` 이다. 쇼핑 탭이 `target="_blank"` 라 진입 중에 **탭이 바뀔 수 있고**,
   //    그 뒤 읽기·클릭은 반드시 **바뀐 탭**에서 해야 한다(안 그러면 통합검색을 읽는다).
   let tabId = await ensureWorkTab();
+  await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func: pageExtract,
+    args: [{ keyword, page: pagingIndex, snapshot: true }] });
+  _clickedAt = Date.now();
   // ⭐ 2026-09-12 — **페이지를 주소창으로 넘기지 않는다.**
   //
   // 종전엔 장마다 `chrome.tabs.update({url})` 로 이동했다. 그건 **주소창에 붙여넣고
@@ -1809,7 +1860,7 @@ async function fetchPage(keyword, pagingIndex, prevIds) {
 
     const [res] = await chrome.scripting.executeScript({
       target: { tabId }, world: 'MAIN', func: pageExtract,
-      args: [{ page: pagingIndex, since: _clickedAt }, (typeof RT === 'object' && RT ? RT.extraBlockPhrases : [])],
+      args: [{ keyword, page: pagingIndex, since: _clickedAt }, (typeof RT === 'object' && RT ? RT.extraBlockPhrases : [])],
     });
     out = res && res.result;
     if (out && !out.err) {
@@ -1823,17 +1874,19 @@ async function fetchPage(keyword, pagingIndex, prevIds) {
       }
       if (pagingIndex > 1) _navMode.src[out.src || '?'] = (_navMode.src[out.src || '?'] || 0) + 1;
       // 📒 관측 봉투용 근거(코덱스 1.22.0 이식) — 어느 원천(tap·router·nextdata)에서 읽었고 그때 주소가 무엇이었나
-      return { total: out.total || 0, list: out.list || [], src: out.src || '', href: out.href || '' };
+      return { total: out.total || 0, list: out.list || [], src: out.src || '', href: out.href || '',
+        verified: out.verified === true, keyword: out.keyword, pageIndex: out.pageIndex,
+        requestId: out.requestId || '', requestStartedAt: out.requestStartedAt || 0 };
     }
     // 차단 '문구'를 실제로 본 경우에만 차단으로 단정한다.
     // ⚠️ 이때도 무엇을 봤는지 반드시 남긴다 — 종전엔 차단 분기가 증거를 안 남겨
     //    팝업 진단칸이 정작 필요할 때 비어 있었다(2026-08-11).
-    if (out && out.err === 'BLOCK_TEXT') {
-      const ev = { keyword, pagingIndex, at: new Date().toISOString(), err: 'BLOCK_TEXT(차단 문구 확인)',
+    if (out && (out.err === 'BLOCK_TEXT' || out.err === 'HTTP_RESTRICTED')) {
+      const ev = { keyword, pagingIndex, at: new Date().toISOString(), err: out.err === 'BLOCK_TEXT' ? 'BLOCK_TEXT(차단 문구 확인)' : 'HTTP_' + out.status,
                    title: out.title || '', href: out.href || '', body: out.body || '' };
       chrome.storage.local.set({ readFail: ev });
-      reportBlocked({ ...ev, note: '차단 문구' });     // 서버도 알게 한다(기다리지 않는다)
-      await tapReport(tabId, keyword, pagingIndex, 'BLOCK_TEXT');   // v1.13.1 — 막히기 직전 화면이 받은 응답
+      reportBlocked({ ...ev, note: out.err === 'BLOCK_TEXT' ? '차단 문구' : '검색 응답 HTTP ' + out.status });
+      await tapReport(tabId, keyword, pagingIndex, out.err === 'BLOCK_TEXT' ? 'BLOCK_TEXT' : 'HTTP_' + out.status);
       throw new Error(`BLOCKED:${out.title || out.href}`);
     }
     lastErr = (out && out.err) || '주입 실패';
@@ -1928,7 +1981,7 @@ async function collectKeyword(keyword) {
     workerId: await instanceId(), keyword,
     startedAt: new Date().toISOString(), finishedAt: '',
     status: 'partial', stopReason: 'PAGE_CAP',
-    requestedDepth: CFG.maxRank, pagesRead: 0, organicCount: 0, coveredThroughRank: 0,
+    requestedDepth: CFG.maxRank, pagesRead: 0, pagesAttempted: 0, organicCount: 0, coveredThroughRank: 0,
     targetIds: targetsFor(keyword) || [], pageEvidence: [],
   };
   let blocked = '';
@@ -1958,12 +2011,20 @@ async function collectKeyword(keyword) {
   let prevIds = [];   // 이전 장의 광고 제외 상품 ID — 다음 장이 실제로 바뀌었는지 집합으로 본다(v1.11.5)
   try {
   for (let i = 1; i <= pages; i++) {
-    const { total: t, list, src, href, stopReason } = await fetchPage(keyword, i, prevIds);
+    observation.pagesAttempted = i;
+    const { total: t, list, src, href, stopReason, verified, keyword: readKeyword, pageIndex,
+            requestId, requestStartedAt } = await fetchPage(keyword, i, prevIds);
     if (i === 1) total = t;
     if (stopReason) { observation.stopReason = stopReason; break; }     // NO_PAGER · STALE_PAGE — 여기까지가 부분 수집
     if (!list.length) { observation.stopReason = 'UNPROVEN_EMPTY'; break; }
+    if (verified !== true || readKeyword !== keyword || pageIndex !== i || !EVIDENCE_SOURCES.has(src)) {
+      observation.stopReason = 'UNVERIFIED_PAGE'; break;
+    }
+    if (list.some(item => !RR.isAdItem(item) && !RR.toProduct(item, 1).productId)) {
+      observation.stopReason = 'UNIDENTIFIED_PRODUCT'; break; // do not compress ranks across an unknown row
+    }
     observation.pageEvidence.push({ page: i, keyword, verified: true,
-                                    source: EVIDENCE_SOURCES.has(src) ? src : 'nextdata',
+                                    source: src, requestId: requestId || '', requestStartedAt: requestStartedAt || 0,
                                     href: String(href || '').slice(0, 300) });
     observation.pagesRead++;
     rawCount += list.length;
@@ -1994,8 +2055,8 @@ async function collectKeyword(keyword) {
     if (st.products.length >= CFG.maxRank) { observation.status = 'complete'; observation.stopReason = 'DEPTH_REACHED'; break; }   // 목표 깊이 도달
     // 마지막 페이지 판정 — 설정값(80)이 아니라 화면 최소 페이지 크기(40) 미만일 때만.
     // 페이지가 pagingSize=80 을 무시하고 40씩 그려도 여기서 끊기지 않고 다음 장으로 간다.
-    if (list.length < 40) { observation.status = 'complete'; observation.stopReason = 'SHORT_PAGE'; break; }   // 결과가 여기서 끝 = 끝까지 봤다
-    if (i === pages) { observation.status = 'complete'; observation.stopReason = 'PAGE_CAP'; }
+    if (list.length < 40) { observation.stopReason = 'SHORT_PAGE'; break; } // short list is not proven exhaustion
+    if (i === pages) { observation.stopReason = 'PAGE_CAP'; }
     if (i < pages) await sleep(jitter());
   }
   } catch (e) {

@@ -7,8 +7,8 @@
   · 「시도했지만 완료 못 한」 키워드를 `/keywords` 가 뒤로 돌리는 근거(attempted_map).
 
 코덱스 원안과 **일부러 다르게** 한 것(검토 보고 B3·B4·B6 해소)
-  · 봉투가 없거나(구확장 v1.21 이하) 봉투가 어긋나면 **격리하지 않고 종전 경로 그대로** 저장한다(fail-open).
-    원안은 LEGACY_UNVERIFIED 로 격리해 순위에 안 실었다 — 「조용히 멈추는 쪽이 더 나쁜 고장」 원칙과 반대.
+  · 봉투가 없는 구확장(v1.21 이하)은 종전 경로를 유지한다. 제공된 봉투가 어긋나면 원장만 남겨
+    검증 실패한 부분 관측이 전체 완료로 승격되어 미노출 순위를 적지 않게 한다.
   · `target_complete`(목표를 다 찾아 조기 종료)는 수집분(collected_serp)은 저장하되 순위는 양성만 적는다 —
     원안은 수집분도 안 남겨 같은 키워드를 다시 돌게 했다(조기 종료 절감 80% 가 사라짐).
   · 삭제 금지 트리거를 두지 않고 **30일 보관정책**을 둔다(원안은 무한 증식 · 검토 보고 major).
@@ -70,13 +70,13 @@ def _envelope_problem(obs: Any, keyword: str, n_products: int) -> str:
     """봉투가 어긋난 이유 한 마디. 빈 문자열이면 정상."""
     if not isinstance(obs, dict):
         return "not-object"
-    if obs.get("schemaVersion") != 1:
+    if type(obs.get("schemaVersion")) is not int or obs["schemaVersion"] != 1:
         return "schemaVersion"
     if not _uuid_ok(obs.get("observationId")):
         return "observationId"
-    if (obs.get("keyword") or "").strip() != keyword:
+    if not isinstance(obs.get("keyword"), str) or obs["keyword"].strip() != keyword:
         return "keyword-mismatch"
-    if obs.get("status") not in STATUSES:
+    if not isinstance(obs.get("status"), str) or obs["status"] not in STATUSES:
         return "status"
     s, f = _ts(obs.get("startedAt")), _ts(obs.get("finishedAt"))
     if not s or not f or f < s or f - s > timedelta(hours=24) or f > datetime.now(timezone.utc) + timedelta(minutes=5):
@@ -87,14 +87,18 @@ def _envelope_problem(obs: Any, keyword: str, n_products: int) -> str:
             return k
     if obs["pagesRead"] > MAX_PAGES:
         return "pagesRead"
+    if "pagesAttempted" in obs:
+        attempted = obs["pagesAttempted"]
+        if type(attempted) is not int or not obs["pagesRead"] <= attempted <= MAX_PAGES:
+            return "pagesAttempted"
     if obs["organicCount"] != n_products:
         return "organicCount"
     ev = obs.get("pageEvidence")
     if not isinstance(ev, list) or len(ev) != obs["pagesRead"]:
         return "pageEvidence-count"
     for i, e in enumerate(ev, 1):
-        if (not isinstance(e, dict) or e.get("page") != i or e.get("verified") is not True
-                or e.get("source") not in SOURCES or (e.get("keyword") or "") != keyword):
+        if (not isinstance(e, dict) or type(e.get("page")) is not int or e["page"] != i or e.get("verified") is not True
+                or not isinstance(e.get("source"), str) or e["source"] not in SOURCES or e.get("keyword") != keyword):
             return f"pageEvidence[{i}]"
     t = obs.get("targetIds")
     if not isinstance(t, list) or len(t) > MAX_PRODUCTS or len(set(map(str, t))) != len(t):
@@ -103,7 +107,7 @@ def _envelope_problem(obs: Any, keyword: str, n_products: int) -> str:
 
 
 def validate(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """업로드 본문을 판정한다. 봉투 오류는 **거절하지 않고** legacy 로 내린다(fail-open).
+    """업로드 본문을 판정한다. 제공된 봉투 오류는 원장만 남기고 순위에 반영하지 않는다.
 
     반환 = {keyword, products, meta, payload_hash, products_json, observation, observation_id,
             status, kind, reason}
@@ -133,11 +137,22 @@ def validate(payload: Dict[str, Any]) -> Dict[str, Any]:
     obs = meta.get("observation")
     why = _envelope_problem(obs, kw, len(products))
     if why:
-        out["reason"] = "ENVELOPE_INVALID:" + why        # 격리하지 않는다 — 종전 경로 + 사유 기록
+        # 유효한 UUID 는 보존하여 재전송 ACK 와 중복 방지를 유지한다.
+        oid = obs.get("observationId") if isinstance(obs, dict) else None
+        out.update(observation=obs if isinstance(obs, dict) else None,
+                   observation_id=oid.lower() if _uuid_ok(oid) else "invalid:" + digest,
+                   status="failed", kind="evidence_only", reason="ENVELOPE_INVALID:" + why)
         return out
     status = obs["status"]
     if status == "complete":
-        kind, reason = "full", "COMPLETE"
+        depth = obs["requestedDepth"]
+        ranks = {p["rank"] for p in products if isinstance(p, dict) and type(p.get("rank")) is int}
+        # 끝/페이지 상한이라는 표시는 목표 깊이를 확인했다는 증거가 아니다.
+        # 봉투의 깊이와 실제 상품의 1..목표 순위가 모두 확인된 경우에만 미노출 기록을 허용한다.
+        if depth > 0 and obs["pagesRead"] > 0 and obs["coveredThroughRank"] >= depth and all(r in ranks for r in range(1, depth + 1)):
+            kind, reason = "full", "COMPLETE"
+        else:
+            status, kind, reason = "partial", ("positive" if products else "evidence_only"), "INCOMPLETE_COVERAGE"
     elif status == "target_complete":
         kind, reason = "full_positive", "TARGETS_FOUND"
     elif status == "partial":

@@ -38,6 +38,7 @@ function code(src) {
 function fakeDom(spec) {
   const clicked = [];
   const scrolled = [];
+  let lastScrolled = null;
   const mk = (tag, text, opts = {}) => ({
     tagName: tag.toUpperCase(), textContent: text, className: opts.cls || '',
     disabled: !!opts.disabled,
@@ -48,13 +49,14 @@ function fakeDom(spec) {
     //    보므로 값을 더해도 영향이 없다(일부러 더하기만 했다).
     getBoundingClientRect: () => (opts.hidden ? { width: 0, height: 0, left: 0, top: 0 }
                                               : { width: 30, height: 20, left: opts.left ?? 100, top: opts.top ?? 200 }),
-    scrollIntoView: () => { scrolled.push(text); },
+    scrollIntoView: function () { lastScrolled = this; scrolled.push(text); },
     click: () => clicked.push(text),
   });
   const scopes = (spec.scopes || []).map((items) => ({
     querySelectorAll: () => items,
   }));
   const doc = {
+    elementFromPoint: () => lastScrolled,
     querySelectorAll: (sel) => {
       if (/pagination|paging|navigation/.test(sel)) return scopes;
       if (sel === 'a') return spec.anchors || [];
@@ -100,9 +102,9 @@ console.log('\n[사람처럼 넘기기]');
 // ② 숫자가 없으면 「다음」을 클릭한다
 {
   let items = [];
-  const spec = { scopes: [items], build: (mk) => { items.push(mk('button', '다음')); } };
+  const spec = { scopes: [items], build: (mk) => { items.push(mk('a', '다음', { href: '?pagingIndex=2' })); } };
   const r = runPager(spec, 2);
-  ok('② 숫자가 없으면 「다음」으로 넘긴다', r.how === 'next' && r.clicked[0] === '다음');
+  ok('② 목표 페이지가 명시된 「다음」으로 넘긴다', r.how === 'next' && r.clicked[0] === '다음');
 }
 
 // ③ 🔴 비활성 「다음」은 누르지 않는다(마지막 페이지에서 헛클릭 방지)
@@ -183,7 +185,7 @@ ok('⑩ 버전이 올라갔다(1.11.0 이상)', _ge(MANIFEST.version, '1.11.0'))
 //     __NEXT_DATA__ 는 SPA 이동으로 안 바뀐다. 라우터 현재 props 를 먼저 읽고, 내용이 바뀔 때까지 기다린다.
 console.log('\n[클릭 뒤 내용이 실제로 바뀌었나]');
 ok('⑪ pageExtract 가 라우터 현재 props(rt.components[rt.route].props) 를 먼저 본다',
-   /rt\.components\s*&&\s*rt\.components\[rt\.route\]/.test(grab('pageExtract')) && /if \(rp\) roots\.push\(\['router', rp\]\);\s*roots\.push\(\['nextdata', nd\]\)/.test(grab('pageExtract')));
+   /rt\.components\s*&&\s*rt\.components\[rt\.route\]/.test(grab('pageExtract')) && grab('pageExtract').indexOf("roots.push(['router'") < grab('pageExtract').indexOf("roots.push(['nextdata'"));
 {
   // 실제 pageExtract 를 가짜 window 로 돌린다 — __NEXT_DATA__ 는 1페이지, 라우터는 2페이지.
   const pe = grab('pageExtract');
@@ -363,42 +365,41 @@ console.log('\n[응답 가로채기 — net_tap]');
     ok('⑰ XHR 응답도 같은 규칙으로 복사된다', win.__mcTap.items.length === 2 && win.__mcTap.items[1].page === 4 && win.__mcTap.items[1].ids[0] === '77');
     ok('⑰ items 는 최근 6건만 남긴다', (() => { for (let i = 0; i < 10; i++) { const y = new win.XMLHttpRequest(); y.open('GET', '/a?pagingIndex=' + i); y.send(); y.status = 200; y.responseText = '{"nvMid":"1"}'; y.fire(); } return win.__mcTap.items.length === 6; })());
 
-    // pageExtract — 2페이지를 원하면 tap 을 가장 먼저 읽는다. 1페이지는 종전 그대로.
+    // Scoped reads require keyword, page, start time and response identity.
     const pe = grab('pageExtract');
     const mkList = (ids) => ids.map((id) => ({ productTitle: 't' + id, mallName: 'm', id: String(id) }));
-    const routerP1 = { pageProps: { initialState: { products: { list: mkList([1, 2, 3]).map((item) => ({ item })), total: 999 } } } };
+    const routerP1 = { products: mkList([1, 2, 3]) };
+    const proof = { at: 5000, requestStartedAt: 4500, keyword: 'x', page: 2,
+      status: 200, sourceKnown: true, scopeVerified: true, responseMatched: true,
+      path: 'search.shopping.naver.com/api/search/all',
+      json: { shoppingResult: { total: 2265, products: mkList([41, 42, 43]) } } };
     const fakeWin = {
-      __NEXT_DATA__: { props: routerP1 },
-      next: { router: { route: '/search/all', query: { pagingIndex: '2' }, components: { '/search/all': { props: routerP1 } } } },
-      __mcTap: { items: [
-        { at: 1000, page: 0, path: 'h/old', json: { products: mkList([501, 502]) } },
-        { at: 5000, page: 2, path: 'search.shopping.naver.com/api/search/all', json: { shoppingResult: { total: 2265, products: mkList([41, 42, 43]) } } },
-      ] },
+      __NEXT_DATA__: { query: { query: 'x' }, props: routerP1 },
+      next: { router: { route: '/search/all', query: { query: 'x', pagingIndex: '2' },
+        components: { '/search/all': { props: routerP1 } } } },
+      __mcReadBaseline: { keyword: 'x', router: routerP1 },
+      __mcTap: { items: [proof] },
     };
-    const run = new Function('window', 'location', 'document', pe + '\nreturn pageExtract(WANT);'.replace('WANT', 'arguments[3]'));
-    const loc = { href: 'https://search.shopping.naver.com/search/all?query=x', search: '?query=x' };
+    const run = new Function('window', 'location', 'document', pe + '\nreturn pageExtract(arguments[3]);');
+    const loc = { href: 'https://search.shopping.naver.com/search/all?query=x&pagingIndex=2', search: '?query=x&pagingIndex=2' };
     const doc = { title: '네이버쇼핑', body: { innerText: '' } };
-    const r2 = run(fakeWin, loc, doc, { page: 2, since: 4000 });
-    ok('⑰ pageExtract — 2페이지를 원하면 tap 의 pagingIndex=2 응답을 읽는다(라우터가 1페이지여도)',
-       !!r2 && !r2.err && r2.src === 'tap' && String(r2.list[0].id) === '41' && r2.total === 2265 && /api\/search\/all/.test(r2.tapPath));
-    const fakeWinSince = { ...fakeWin, __mcTap: { items: [
-      { at: 1000, page: 0, path: 'h/old', json: { products: mkList([501, 502]) } },
-      { at: 5000, page: 0, path: 'h/new', json: { products: mkList([61, 62]) } } ] } };
-    const r2b = run(fakeWinSince, loc, doc, { page: 2, since: 4000 });
-    ok('⑰ pageExtract — 주소에 pagingIndex 가 없으면 「클릭 뒤 도착한 것」을 고른다', !!r2b && r2b.src === 'tap' && String(r2b.list[0].id) === '61');
-    const r2c = run(fakeWinSince, loc, doc, { page: 2, since: 6000 });
-    ok('⑰ pageExtract — 클릭 뒤 도착한 응답이 없으면 종전대로 라우터를 읽는다', !!r2c && r2c.src === 'router' && String(r2c.list[0].id) === '1');
-    const r1 = run(fakeWin, loc, doc, { page: 1, since: 0 });
-    ok('⑰ pageExtract — 1페이지는 tap 을 보지 않는다(종전 그대로 라우터/__NEXT_DATA__)', !!r1 && r1.src === 'router' && String(r1.list[0].id) === '1');
+    const want = { keyword: 'x', page: 2, since: 4000 };
+    const r2 = run(fakeWin, loc, doc, want);
+    ok('⑰ 검증된 2페이지 응답을 읽는다', r2.src === 'tap' && String(r2.list[0].id) === '41' && r2.total === 2265);
+    const unknown = { ...fakeWin, __mcTap: { items: [{ ...proof, page: 0 }] } };
+    ok('⑰ 페이지 번호 없는 응답은 새로 도착해도 읽지 않는다', run(unknown, loc, doc, want).err === 'UNVERIFIED_PAGE');
+    ok('⑰ 이전 요청은 늦게 도착해도 읽지 않는다', run(fakeWin, loc, doc, { ...want, since: 6000 }).err === 'UNVERIFIED_PAGE');
+    const r1 = run(fakeWin, { href: 'https://search.shopping.naver.com/search/all?query=x', search: '?query=x' }, doc, { keyword: 'x', page: 1 });
+    ok('⑰ 첫 페이지는 그 키워드의 SSR 초기 데이터를 읽는다', r1.src === 'nextdata' && String(r1.list[0].id) === '1');
     const r0 = run({ __NEXT_DATA__: { props: routerP1 } }, loc, doc);
-    ok('⑰ pageExtract — 인자 없이 불러도(회귀 시험·구버전 경로) 종전과 같다', !!r0 && r0.src === 'nextdata' && String(r0.list[0].id) === '1');
-    const rBad = run({ ...fakeWin, __mcTap: { items: [{ at: 5000, page: 2, json: { foo: 'bar' } }] } }, loc, doc, { page: 2, since: 4000 });
-    ok('⑰ pageExtract — tap 응답에 상품이 없으면 라우터로 넘어간다(막히지 않는다)', !!rBad && rBad.src === 'router');
+    ok('⑰ 인자 없는 진단은 구형 추출과 호환된다', r0.src === 'nextdata' && String(r0.list[0].id) === '1');
+    const bad = { ...fakeWin, __mcTap: { items: [{ ...proof, json: { foo: 'bar' } }] } };
+    ok('⑰ 상품도 신선한 라우터도 없으면 성공으로 위장하지 않는다', run(bad, loc, doc, want).err === 'UNVERIFIED_PAGE');
 
     // fetchPage 배선
     const FP = grab('fetchPage', 'async');
     ok('⑰ fetchPage 가 클릭 시각(_clickedAt)을 적고 pageExtract 에 {page, since} 를 넘긴다',
-       /_clickedAt = Date\.now\(\);/.test(FP) && /func: pageExtract,\s*args: \[\{ page: pagingIndex, since: _clickedAt \}/.test(FP));
+       /_clickedAt = Date\.now\(\);/.test(FP) && /func: pageExtract,\s*args: \[\{ keyword, page: pagingIndex, since: _clickedAt \}/.test(FP));
     // ⚙ v1.27.0 — 두 번째 인자로 서버가 준 차단 문구(더하기만)를 넘긴다. 없으면 빈 목록 = 종전 판정.
     ok('⚙ fetchPage 가 서버 차단 문구(extraBlockPhrases)를 pageExtract 에 넘긴다',
        /RT\.extraBlockPhrases : \[\]\)\]/.test(FP));
@@ -430,7 +431,7 @@ console.log('\n[응답 가로채기 — net_tap]');
     const TR = grab('tapReport', 'async');
     ok('⑱ tapReport 가 navProbe 를 돌려 TAP_PROBE 로 why·q·tap 을 보낸다', /func: navProbe/.test(TR) && /TAP_PROBE\(화면이 받은 응답 요약\)/.test(TR) && /why: why, q: probe\.q/.test(TR));
     const blockPart = FP.slice(FP.indexOf("out.err === 'BLOCK_TEXT'"), FP.indexOf('throw new Error(`BLOCKED:${out.title'));
-    ok('⑱ BLOCK_TEXT(퍼즐·차단 문구) 직전에 tap 요약을 남긴다', /await tapReport\(tabId, keyword, pagingIndex, 'BLOCK_TEXT'\)/.test(blockPart));
+    ok('⑱ 문구와 HTTP 제한을 구분해 tap 요약을 남긴다', /await tapReport\(tabId, keyword, pagingIndex, out.err === 'BLOCK_TEXT' \? 'BLOCK_TEXT' : 'HTTP_' \+ out.status\)/.test(blockPart));
     ok('⑱ STALE 끝에도 tap 요약을 남긴다', /await tapReport\(tabId, keyword, pagingIndex, 'STALE'\)/.test(FP));
     const failPart = FP.slice(FP.indexOf("note: '판독 실패(차단 아님)'"));
     ok('⑱ 판독 실패에도 tap 요약을 남긴다', /await tapReport\(tabId, keyword, pagingIndex, lastErr\)/.test(failPart));
@@ -494,8 +495,8 @@ console.log('\n[응답 가로채기 — net_tap]');
       ok('⑲ tapReport 가 err 이름표를 받아 쓴다(기본값은 종전 그대로)',
          /async function tapReport\(tabId, keyword, pagingIndex, why, errLabel\)/.test(TR)
          && /err: errLabel \|\| 'TAP_PROBE\(화면이 받은 응답 요약\)'/.test(TR));
-      ok('⑲ 기존 네 갈래 호출은 이름표를 안 넘긴다(종전 동작 무변경)',
-         (SRC.match(/tapReport\(tabId, keyword, pagingIndex, '(BLOCK_TEXT|STALE|NO_PAGER)'\)/g) || []).length === 3
+      ok('⑲ STALE·NO_PAGER·읽기 실패 진단 이름표를 유지한다',
+         (SRC.match(/tapReport\(tabId, keyword, pagingIndex, '(STALE|NO_PAGER)'\)/g) || []).length === 2
          && /tapReport\(tabId, keyword, pagingIndex, lastErr\)/.test(SRC));
 
       // 🔍 사람 화면 버튼 — 세 파일이 이어져 있나
@@ -545,7 +546,7 @@ console.log('\n[응답 가로채기 — net_tap]');
       }
       {
         let items = [];
-        const spec = { scopes: [items], build: (mk) => { items.push(mk('button', '다음')); } };
+        const spec = { scopes: [items], build: (mk) => { items.push(mk('a', '다음', { href: '?pagingIndex=2' })); } };
         ok('⑳ 「다음」 갈래 — 두 규칙이 같은 가지를 고른다',
            runPager(spec, 2).how === 'next' && (runLocate(spec, 2).spot || {}).branch === 'next');
       }
@@ -901,9 +902,10 @@ console.log('\n[응답 가로채기 — net_tap]');
         ok('🔴㉒ 그 점이 비어 있어도 덮인 것으로 본다', !!r3.spot && r3.spot.covered === 1 && r3.spot.hit === 'none');
 
         const old = base();                           // elementFromPoint 자체가 없는 환경
+        old.topAt = () => { throw new Error('hit test unavailable'); };
         const r4 = runLocate(old, 2);
-        ok('🔴㉒ 확인이 불가능한 환경에서도 좌표는 그대로 낸다(수집이 멈추지 않게)',
-           !!r4.spot && r4.spot.hit === 'err');
+        ok('㉒ hit test 실패는 가려진 것으로 보아 클릭하지 않는다',
+           !!r4.spot && r4.spot.hit === 'err' && r4.spot.covered === 1);
       }
 
       /* 🔴 v1.17.5 — 대표 캡처(2026-09-16)로 확인한 **진짜 페이지 버튼**:
@@ -1052,13 +1054,9 @@ console.log('\n[응답 가로채기 — net_tap]');
       ok('🔴㉔ 띠가 자리 잡을 틈을 준다', /attached = true;\s*await sleep\(350\)/.test(tc7));
       ok('🔴㉔ 좌표를 잰 뒤에는 붙이지 않는다(옛 순서로 되돌리지 말 것)',
          tc7.indexOf('pagerLocate') > tc7.indexOf('dbgAttach'));
-      ok('🔴㉔ 「눌렀다」를 「먹혔다」로 읽지 않는다 — 현재 페이지를 본다',
-         /cur=\(\\d\+\)/.test(ct7) && /cur !== String\(target\)/.test(ct7));
-      ok('🔴㉔ 안 움직였으면 합성 클릭으로 한 번 더 간다(폴백이 실제로 돌게)',
-         ct7.indexOf("cur !== String(target)") < ct7.indexOf('func: pagerClick')
-         && /no-move@/.test(ct7));
-      ok('🔴㉔ 번호를 **못 읽으면** 폴백하지 않는다(이미 넘어갔는데 또 누르면 3페이지로 간다)',
-         /if \(cur && cur !== String\(target\)\)/.test(ct7));
+      ok('㉔ 클릭 후 페이지 번호만으로 재클릭하지 않는다', !/cur !== String\(target\)/.test(code(ct7)));
+      ok('㉔ 클릭 뒤 자료 검증은 fetchPage가 담당한다', /!pageChanged\(out\.list, prevIds\)/.test(FP));
+      ok('㉔ 가려진 버튼은 합성 경로로도 누르지 않는다', /if \(_trustedNote === 'covered-target'\) return false/.test(ct7));
       ok('🔴㉔ 합성 클릭 뒤에도 같은 자로 현재 페이지를 남긴다(무엇이 먹었는지 보이게)',
          /await readPagerState\(tabId\); \}\s*\n\s*return !!\(res && res\.result\)/.test(ct7)
          || (/readPagerState/.test(ct7) && ct7.indexOf('func: pagerClick') < ct7.lastIndexOf('readPagerState')));
@@ -1181,4 +1179,3 @@ console.log('\n[응답 가로채기 — net_tap]');
     process.exit(fail ? 1 : 0);
   })();
 }
-

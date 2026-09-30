@@ -1,7 +1,7 @@
 """회귀 — 수집 관측 원장(코덱스 1.22.0 이식판) · 2026-09-22
 
 지키는 것:
-  ① validate — 봉투 없음/어긋남 = legacy(full · 격리 없음) · complete=full · target_complete=full_positive ·
+  ① validate — 봉투 없음 = legacy(full) · 잘못된 봉투 = evidence_only · complete=full · target_complete=full_positive ·
      partial=positive(상품 있을 때) · failed/paused/0건=evidence_only. 본문 기본 오류만 거절.
   ② ingest — kind 별로 store_full(positive_only)/project_positive 가 정확히 그 조합으로 불린다 ·
      같은 observationId 재전송은 저장 결과를 그대로 돌려주고 재반영하지 않는다 · 다른 본문이면 409 ·
@@ -47,7 +47,7 @@ NOW = datetime.now(timezone.utc)
 def env(status="complete", n=3, kw="김치", **over):
     e = {"schemaVersion": 1, "observationId": str(uuid.uuid4()), "workerId": "w1", "keyword": kw,
          "startedAt": (NOW - timedelta(minutes=2)).isoformat(), "finishedAt": NOW.isoformat(),
-         "status": status, "stopReason": "DEPTH_REACHED", "requestedDepth": 300,
+         "status": status, "stopReason": "DEPTH_REACHED", "requestedDepth": n,
          "pagesRead": 1, "organicCount": n, "coveredThroughRank": n, "targetIds": [],
          "pageEvidence": [{"page": 1, "keyword": kw, "source": "tap", "verified": True}]}
     e.update(over)
@@ -79,11 +79,26 @@ ok("partial(0건) = evidence_only", v["kind"] == "evidence_only")
 v = co.validate(payload("failed", n=0, stopReason="READ_FAILED"))
 ok("failed = evidence_only", v["kind"] == "evidence_only")
 v = co.validate(payload("complete", organicCount=99))
-ok("🔴 봉투가 어긋나면(organicCount≠상품 수) 거절하지 않고 legacy 로 내린다 + 사유", v["kind"] == "full" and v["status"] == "legacy" and v["reason"].startswith("ENVELOPE_INVALID:organicCount"))
+ok("🔴 봉투가 어긋나면(organicCount≠상품 수) 원장만 남긴다 + 사유", v["kind"] == "evidence_only" and v["status"] == "failed" and v["reason"].startswith("ENVELOPE_INVALID:organicCount"))
 v = co.validate(payload("complete", kw="김치", observationId="not-a-uuid"))
-ok("observationId 가 uuid 가 아니면 legacy", v["status"] == "legacy" and "observationId" in v["reason"])
+ok("observationId 가 uuid 가 아니면 원장만", v["kind"] == "evidence_only" and "observationId" in v["reason"])
 v = co.validate(payload("complete", pageEvidence=[{"page": 1, "keyword": "김치", "source": "curl", "verified": True}]))
-ok("증거 source 가 tap/router/nextdata 아니면 legacy", v["status"] == "legacy" and "pageEvidence" in v["reason"])
+ok("증거 source 가 tap/router/nextdata 아니면 원장만", v["kind"] == "evidence_only" and "pageEvidence" in v["reason"])
+v = co.validate(payload("partial", pagesAttempted=2, stopReason="READ_FAILED"))
+ok("읽기는 1쪽·시도는 2쪽인 정상 부분 관측을 허용", v["kind"] == "positive" and v["observation"]["pagesAttempted"] == 2)
+for attempted in (True, "2", -1, 0, 31):
+    v = co.validate(payload("partial", pagesAttempted=attempted))
+    ok(f"잘못된 pagesAttempted={attempted!r} 는 원장만", v["kind"] == "evidence_only"
+       and v["reason"] == "ENVELOPE_INVALID:pagesAttempted")
+for bad in (None, [], "bad", env(keyword=7), env(status=[]), env(schemaVersion=True),
+            env(pageEvidence=[{"page": True, "keyword": "김치", "source": "tap", "verified": True}]),
+            env(pageEvidence=[{"page": 1, "keyword": "김치", "source": [], "verified": True}])):
+    try:
+        v = co.validate(payload(meta_extra={"observation": bad}))
+        safe = v["kind"] == "evidence_only" and v["status"] == "failed"
+    except Exception:
+        safe = False
+    ok("깨진 봉투 자료형도 예외·전체완료 없이 원장만", safe, repr(bad))
 try:
     co.validate({"keyword": "", "products": []}); ok("빈 keyword 는 거절(400)", False)
 except co.ObservationError as e:
@@ -112,6 +127,26 @@ calls.clear(); r = co.ingest(conn, co.validate(payload("failed", n=0)), "2026-09
 ok("failed → 아무 저장 함수도 안 부른다 · 기록만", calls == [] and r["projectionStatus"] == "evidence_only" and r["stored"] is True)
 calls.clear(); r = co.ingest(conn, co.validate(payload()), "2026-09-22", store_full, project_positive)
 ok("🔴 legacy(구확장) → store_full(False) 종전 그대로", calls == [("full", False)] and r["projected"] is True)
+invalid = payload("partial", organicCount=99)
+calls.clear(); invalid_result = co.ingest(conn, co.validate(invalid), "2026-09-22", store_full, project_positive)
+invalid_replay = co.ingest(conn, co.validate(invalid), "2026-09-22", store_full, project_positive)
+ok("🔴 잘못된 부분 봉투 → 순위·수집분 저장 없음 · 원장 ACK 유지", calls == []
+   and invalid_result["projectionStatus"] == "evidence_only" and invalid_result["projected"] is False
+   and invalid_result["observationId"] == invalid["meta"]["observation"]["observationId"]
+   and invalid_replay["duplicate"] is True)
+for stop in ("PAGE_CAP", "EXHAUSTED", "DEPTH_REACHED"):
+    short = payload("complete", n=280, requestedDepth=300, pagesRead=8, stopReason=stop,
+                    pageEvidence=[{"page": p, "keyword": "김치", "source": "tap", "verified": True} for p in range(1, 9)])
+    calls.clear(); short_result = co.ingest(conn, co.validate(short), "2026-09-22", store_full, project_positive)
+    ok(f"🔴 {stop} 280/300 → 부분 양성만 · 완료·미노출 기록 없음", calls == [("positive", None)]
+       and short_result["observationStatus"] == "partial" and short_result["projected"] is False
+       and short_result["projectionStatus"] == "partial_positive")
+gapped = payload("complete")
+gapped["products"][1]["rank"] = 3
+calls.clear(); gap_result = co.ingest(conn, co.validate(gapped), "2026-09-22", store_full, project_positive)
+ok("🔴 깊이 숫자를 채워도 실제 순위에 2위가 빠지면 전체 완료 아님", calls == [("positive", None)]
+   and gap_result["observationStatus"] == "partial" and gap_result["projected"] is False)
+ok("상품 0건·요청 깊이 0의 complete 도 원장만", co.validate(payload("complete", n=0))["kind"] == "evidence_only")
 # 멱등 — 같은 observationId 같은 본문
 pl = payload("complete"); oid = pl["meta"]["observation"]["observationId"]
 calls.clear(); r1 = co.ingest(conn, co.validate(pl), "2026-09-22", store_full, project_positive)
