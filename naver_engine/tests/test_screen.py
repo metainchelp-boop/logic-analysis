@@ -194,7 +194,8 @@ class BrowserTest(TW.WebBase):
         self.addCleanup(self.front.shutdown)
         self.base = f"http://127.0.0.1:{self.front.server_address[1]}"
         # 사람 넷 — ① my-profile 가짜(대표 · 팀장 · 직원 둘) · ① 이 거절하는 토큰 하나
-        for tok, idx, mgr in ((TW.tok(1), 0, True), (TW.tok(2), 1, True), (TW.tok(3), 100, False), (TW.tok(4), 101, False)):
+        for tok, idx, mgr in ((TW.tok(1), 0, True), (TW.tok(2), 1, True), (TW.tok(3), 100, False), (TW.tok(4), 101, False),
+                              (TW.tok(5), 0, True)):
             teams = ((0, None),) if idx == 0 else ((11, 10), (10, 0))
             self.erp.person(tok, idx, manager=mgr, teams=teams)
         self.st.record_alert(S.ALERT_DIGEST, TW.TODAY, "compose", "digest", (), "/naver/issues",
@@ -248,7 +249,7 @@ class BrowserTest(TW.WebBase):
 
     def test_screen_in_real_browser(self):
         cfg = {"base": self.base, "red": self.issue_of(11, "red")["issue_id"], "yellow": self.issue_of(12, "yellow")["issue_id"],
-               "sso": {"ceo": TW.tok(1), "lead": TW.tok(2), "s100": TW.tok(3), "s101": TW.tok(4), "bad": TW.bad(9)},
+               "sso": {"ceo": TW.tok(1), "lead": TW.tok(2), "s100": TW.tok(3), "s101": TW.tok(4), "ceo2": TW.tok(5), "bad": TW.bad(9)},
                "shots": os.environ.get("NAVER_SCREEN_SHOTS") or None}   # 화면 사진(사람이 눈으로 볼 때만 · 예시 자료)
         proc = subprocess.Popen([self.node, str(SCENARIO), json.dumps(cfg)], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 text=True, env=self.node_env)

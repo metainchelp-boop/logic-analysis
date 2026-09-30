@@ -144,6 +144,15 @@ class IssueRowsTest(TW.WebBase):
         # 범위 밖(101)에게는 11 의 예외 줄이 없다
         self.assertNotIn(red, {r["issue_id"] for r in self.rows(101)["done_rows"]})
 
+    def test_closed_today_scoped(self):
+        """오늘 닫힌 이슈도 범위·고르기 안만 — 팀장이 닫은 11 의 🔴 는 101 · 「사람: 101」 고르기에 없다."""
+        red = self.issue_of(11, "red")["issue_id"]
+        self.assertEqual(self.post(f"/issues/{red}/resolve", 1)[0], 200)
+        self.assertIn(red, {r["issue_id"] for r in self.rows(1)["done_rows"]})
+        self.assertIn(red, {r["issue_id"] for r in self.rows(100)["done_rows"]})
+        self.assertNotIn(red, {r["issue_id"] for r in self.rows(101)["done_rows"]})
+        self.assertNotIn(red, {r["issue_id"] for r in self.rows(1, query="selection=person%3A101&attention=0")["done_rows"]})
+
     def test_closed_yesterday_not_in_done(self):
         yellow = self.issue_of(12, "yellow")["issue_id"]
         self.assertEqual(self.post(f"/issues/{yellow}/resolve", 101)[0], 200)

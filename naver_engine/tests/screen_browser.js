@@ -228,6 +228,46 @@ async function hygiene(tag, p, log, firstNavUrl) {
       await ctx.close();
     }
 
+    // ── 서버 값을 그대로 그리나 — 관제 판 응답을 일부러 다른 숫자·앞뒤가 안 맞는 줄로 바꿔 넣는다 ──
+    {
+      const { ctx, log } = await newCtx(browser);
+      const fake = {
+        band: { today: '2026-09-29', deadline_passed: true, runs: [], pairing_at: null, pairing_today: true, org_freshness: 'fresh', org_generated_at: null, stage_as_of: null },
+        counts: { red: 5, yellow: 3, green: 7, white: 2, needs_attention: 9, total: 17 },
+        links: { listed: 4, missing: 6, broken: 8, not_linked: 10, none: 1, pending: 0 },
+        issues: [], issue_rows: [], done_rows: [], escalated_to_me: [], attention_only: false, selection: 'all',
+        rows: [
+          { possibility_id: 901, name: '예시가', stage: '진행중', relation: 'all', owner: { name: '담당가', team_name: '팀가' },
+            verdict: { color: 'green', needs_attention: false, reasons: [], white_reason: null }, open_red: 3, open_yellow: 0,
+            account_unconfirmed: false, link: 'listed', yday_spend: 1200, bizmoney: 50000 },
+          { possibility_id: 902, name: '예시나', stage: '환불중', relation: 'all', owner: { name: '담당가', team_name: '팀가' },
+            verdict: { color: 'white', needs_attention: true, reasons: ['key_rejected'], white_reason: 'key_rejected' }, open_red: 0, open_yellow: 0,
+            account_unconfirmed: false, link: 'broken', yday_spend: null, bizmoney: null },
+          { possibility_id: 903, name: '예시다', stage: '계약만료', relation: 'all', owner: { name: null, team_name: null },
+            verdict: { color: 'red', needs_attention: true, reasons: ['open-red'], white_reason: null }, open_red: 0, open_yellow: 0,
+            account_unconfirmed: true, link: 'missing', yday_spend: 0, bizmoney: 0 }
+        ]
+      };
+      await ctx.route('**/api/naver-auto/board*', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fake) }));
+      const p = await page(ctx, log);
+      const url = base + '/naver/?sso=' + encodeURIComponent(cfg.sso.ceo2);
+      await p.goto(url);
+      await p.waitForSelector('#s-watch.on #kpis .kpi');
+      const kv = await p.$$eval('#kpis .kpi .v', (els) => els.map((e) => e.textContent));
+      ok('가짜 값: 숫자 5칸이 서버 값 그대로(확인 필요 · 긴급 · 주의 · 정상 · 점검 불가 순)', JSON.stringify(kv) === JSON.stringify(['9', '5', '3', '7', '2']), kv);
+      const iw = await p.textContent('#iwan');
+      ok('가짜 값: 이관 띠가 서버 값 그대로', ['이관됨 4', '🔌 이관 빠짐 8', '오늘 목록에 없음 6', '이관 안 됨 10'].every((t) => iw.includes(t)), iw);
+      await p.click('#tblChips .chip[data-f="all"]');
+      const drawn = await p.$$eval('#tbody tr[data-pid]', (els) => els.map((e) => [e.getAttribute('data-pid'), e.querySelector('.sig').className, e.querySelector('.hint').textContent, e.children[2].textContent, e.children[3].textContent]));
+      ok('가짜 값: 열린 🔴 가 있어도 서버가 🟢 라면 🟢(화면이 판정하지 않는다)', drawn.some((d) => d[0] === '901' && d[1] === 'sig green' && d[2] === '정상' && d[3] === '—'), drawn);
+      ok('가짜 값: ⚪ 사유 글자 · 확인 필요 · 이관 빠짐', drawn.some((d) => d[0] === '902' && d[1] === 'sig white' && d[2] === '읽기 거절 · 이관 남음' && d[3] === '확인 필요' && d[4] === '🔌 이관 빠짐'), drawn);
+      ok('가짜 값: 열린 이슈 0 이어도 서버가 🔴 라면 🔴', drawn.some((d) => d[0] === '903' && d[1] === 'sig red' && d[4] === '오늘 목록에 없음'), drawn);
+      await p.click('#kpis .kpi.white');
+      const wv = await p.$$eval('#tbody tr[data-pid]', (els) => els.map((e) => e.getAttribute('data-pid')));
+      ok('가짜 값: 「점검 불가」 칸은 서버 색이 ⚪ 인 줄만', JSON.stringify(wv) === JSON.stringify(['902']), wv);
+      await ctx.close();
+    }
+
     // ── 들어올 길 없음 · ① 이 거절한 sso ──
     {
       const { ctx, log } = await newCtx(browser);
