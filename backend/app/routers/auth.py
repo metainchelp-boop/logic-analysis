@@ -198,24 +198,37 @@ def _user_from_erp(result, db):
     return schemas.TokenOut(access_token=token, user=schemas.UserOut.model_validate(user))
 
 
+def _exchange_error(status, detail, headers=None):
+    return HTTPException(status, detail, headers={**(headers or {}), 'Cache-Control': 'no-store'})
+
+
+def _unique_exchange_fields(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError('duplicate field')
+        result[key] = value
+    return result
+
+
 async def _exchange_payload(request: Request):
     if request.headers.get('origin') not in (None, 'https://dashboard.metainc.co.kr') or \
             request.headers.get('sec-fetch-site') == 'cross-site':
-        raise HTTPException(403, '전산에서 다시 열어 주세요.')
+        raise _exchange_error(403, '전산에서 다시 열어 주세요.')
     if request.headers.get('content-type', '').split(';')[0].strip().lower() != 'application/json':
-        raise HTTPException(400, '로그인 요청 형식이 잘못되었습니다.')
+        raise _exchange_error(400, '로그인 요청 형식이 잘못되었습니다.')
     data = bytearray()
     async for chunk in request.stream():
         data.extend(chunk)
         if len(data) > 1024:
-            raise HTTPException(413, '로그인 요청이 너무 큽니다.')
+            raise _exchange_error(413, '로그인 요청이 너무 큽니다.')
     try:
-        payload = json.loads(data)
+        payload = json.loads(data, object_pairs_hook=_unique_exchange_fields)
     except (ValueError, UnicodeDecodeError, RecursionError):
-        raise HTTPException(400, '로그인 요청 형식이 잘못되었습니다.') from None
+        raise _exchange_error(400, '로그인 요청 형식이 잘못되었습니다.') from None
     if not isinstance(payload, dict) or set(payload) != {'code', 'codeVerifier'} or \
             not all(sso_exchange.valid(payload[k]) for k in payload):
-        raise HTTPException(400, '로그인 요청 형식이 잘못되었습니다.')
+        raise _exchange_error(400, '로그인 요청 형식이 잘못되었습니다.')
     return payload
 
 
@@ -225,18 +238,19 @@ def sso_code_login(request: Request, response: Response, payload=Depends(_exchan
     try:
         ticket = login_guard.reserve(login_guard.sso_buckets(_source(request)), tag=login_guard.token_tag(payload['code']))
     except login_guard.Unavailable:
-        raise HTTPException(503, login_guard.BUSY_MSG) from None
+        raise _exchange_error(503, login_guard.BUSY_MSG) from None
     if ticket.known_rejected:
-        raise HTTPException(401, '전산에서 다시 열어 주세요.')
+        raise _exchange_error(401, '전산에서 다시 열어 주세요.')
     if ticket.wait is not None:
-        raise _too_many(ticket.wait)
+        error = _too_many(ticket.wait)
+        raise _exchange_error(error.status_code, error.detail, error.headers)
     kind = 'outage'
     try:
         kind, profile = sso_exchange.exchange(payload['code'], payload['codeVerifier'])
     finally:
         login_guard.settle(ticket, failed=(kind == 'rejected'))
     if kind == 'rejected':
-        raise HTTPException(401, '전산에서 다시 열어 주세요.')
+        raise _exchange_error(401, '전산에서 다시 열어 주세요.')
     if kind != 'ok':
-        raise HTTPException(503, '전산 로그인 연결을 확인할 수 없습니다. 잠시 뒤 다시 열어 주세요.')
+        raise _exchange_error(503, '전산 로그인 연결을 확인할 수 없습니다. 잠시 뒤 다시 열어 주세요.')
     return _user_from_erp(profile, db)

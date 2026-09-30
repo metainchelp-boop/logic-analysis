@@ -43,7 +43,7 @@ async function enter(p, url, code) {
   const pattern = '**/naver/sso-bootstrap.js';
   await p.route(pattern, route => route.fulfill({contentType:'application/javascript',
     body: 'window.__metaincSso={started:true,legacyPresent:false,consume:function(){return Promise.resolve(' +
-      JSON.stringify({code,codeVerifier:'V'.repeat(43)}) + ');}};'}));
+      JSON.stringify({code,codeVerifier:'V'.repeat(42)+'A'}) + ');}};'}));
   try { await p.goto(url); } finally { await p.unroute(pattern); }
 }
 async function api(p, path, method, body) {

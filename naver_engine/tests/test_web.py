@@ -45,21 +45,21 @@ T0 = TM.T0                                  # 2026-09-29(화) 06:40
 TODAY = T0.date()
 A, B, C_, D = TM.A, TM.B, TM.C_, TM.D
 TOKEN_SECRET = "t" * 40
-MARK_SSO = "SSOMARK" + "a" * 36   # ① 토큰 표지 — 어디에도 남으면 안 된다
+MARK_SSO = "SSOMARK" + "a" * 35 + "A"   # 정규 32바이트 base64url 표지 — 저장 금지
 MARK_LOGIN_ID = "loginmark77"                                                  # ① 로그인 아이디 표지
 MARK_PHONE = "010-7777-7777"
-VERIFIER = "V" * 43
+VERIFIER = "V" * 42 + "A"
 EXCHANGE_ENV = {"SSO_NAVER_CONTROL_CLIENT_KEY": "0123456789abcdef" * 4}
 BAD_SSO = MARK_SSO.replace("SSOMARK", "BADMARK")                                # 모양은 맞지만 ① 이 거절하는 토큰
 
 
 def tok(i: int) -> str:
     """서로 다른 ① 토큰(표지 SSOMARK 는 그대로 — 어디에 남는지 보는 시험이 함께 잡는다)."""
-    return MARK_SSO[:-6] + f"c{i:05d}"
+    return MARK_SSO[:-6] + f"c{i:04d}A"
 
 
 def bad(i: int) -> str:
-    return BAD_SSO[:-6] + f"c{i:05d}"
+    return BAD_SSO[:-6] + f"c{i:04d}A"
 
 
 def at(d: date, h: int, m: int = 0) -> datetime:

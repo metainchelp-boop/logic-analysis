@@ -4,7 +4,7 @@ import unittest
 from naver_engine import erp_profile as EP
 from naver_engine.credentials import Secret
 
-CODE, VERIFIER, KEY = 'C'*43, 'V'*43, '0123456789abcdef'*4
+CODE, VERIFIER, KEY = 'C'*42+'A', 'V'*42+'A', '0123456789abcdef'*4
 
 
 class ExchangeTest(unittest.TestCase):
