@@ -123,6 +123,18 @@ class IssueRowsTest(TW.WebBase):
         [r] = [r for r in self.get("/board", 101, query="attention=0")[1]["issue_rows"] if r["issue_id"] == yellow]
         self.assertEqual((r["can"]["ack"], r["can"]["except"], r["can"]["except_blocked"]), (True, False, "org-stale"))
 
+    def test_stale_org_reason_before_too_low(self):
+        """🔴 는 담당(층이 모자람)이라도 조직이 낡았으면 까닭 = 「조직 낡음」 — 서버가 먼저 거절하는 까닭과 같은 순서."""
+        self.at(self.fc.now() + timedelta(hours=30))
+        red = self.issue_of(11, "red")["issue_id"]
+        [r] = [r for r in self.get("/board", 100, query="attention=0")[1]["issue_rows"] if r["issue_id"] == red]
+        self.assertEqual((r["can"]["except"], r["can"]["except_blocked"]), (False, "org-stale"))
+        s, b = self.post(f"/issues/{red}/except", 100, {"until": TODAY.isoformat(), "note": "사유"})
+        self.assertEqual((s, b["error"]), (409, "org-stale"))
+        self.st.record_org(TA.org_body(self.fc.now() - timedelta(minutes=1)), self.fc.now())
+        [r] = [r for r in self.get("/board", 100, query="attention=0")[1]["issue_rows"] if r["issue_id"] == red]
+        self.assertEqual(r["can"]["except_blocked"], "actor-too-low")   # 조직을 새로 받은 뒤에야 층 까닭
+
     def test_hand_and_done_rows(self):
         """👀 누른 사람·시각이 줄에 · ✅ 해결 · 🙈 예외는 「오늘 풀린 것」으로 옮겨 간다."""
         yellow = self.issue_of(12, "yellow")["issue_id"]
@@ -257,6 +269,12 @@ class IssueRowsTest(TW.WebBase):
         self.assertEqual(got, want)
         with self.assertRaises(S.StoreRefused):
             self.st.issue_hand_events([0], W.HAND_KINDS)
+        # 고른 종류만 — 모든 이슈에 있는 「열림」 기록은 손길만 고르면 빠지고, 「열림」만 고르면 그것만 온다
+        only_open = self.st.issue_hand_events(ids, {"opened"})
+        self.assertTrue(only_open)
+        self.assertEqual({e["kind"] for es in only_open.values() for e in es}, {"opened"})
+        hand_only = self.st.issue_hand_events(ids, W.HAND_KINDS)
+        self.assertNotIn("opened", {e["kind"] for es in hand_only.values() for e in es})
 
     def test_client_issues_carry_can(self):
         _s, c = self.get("/clients/11", 100)

@@ -216,6 +216,37 @@ async function hygiene(tag, p, log, firstNavUrl) {
       await ctx.close();
     }
 
+    // ── 갱신이 한 번 실패해도 1분 뒤 다시 한다(검토 refresh-no-retry) ──
+    {
+      const { ctx, log } = await newCtx(browser);
+      let refreshCalls = 0;
+      await ctx.route('**/api/naver-auto/session/refresh', async (route) => {
+        refreshCalls += 1;
+        if (refreshCalls === 1) return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'engine-timeout' }) });
+        return route.continue();
+      });
+      const p = await page(ctx, log);
+      await p.clock.install();
+      const url = base + '/naver/?sso=' + encodeURIComponent(cfg.sso.retry101);
+      await p.goto(url);
+      await p.waitForSelector('#s-watch.on #kpis .kpi');
+      const s0 = await p.evaluate(() => JSON.parse(sessionStorage.getItem('naverWatch.session')));
+      await p.mouse.click(5, 5);
+      await p.clock.runFor(50 * 60 * 1000 + 2000);
+      await p.waitForTimeout(300);
+      ok('갱신 실패: 토큰 끝 10분 전에 한 번 부른다(첫 번은 503)', refreshCalls === 1, refreshCalls);
+      const ok200 = p.waitForResponse((r) => r.url().endsWith('/api/naver-auto/session/refresh') && r.status() === 200, { timeout: 8000 }).then(() => true, () => false);
+      await p.mouse.click(5, 5);
+      await p.clock.runFor(2 * 60 * 1000 + 2000);   // 실패 1분 뒤부터 · 1분마다 살피므로 늦어도 2분 안
+      ok('갱신 실패: 1분 넘게 지나 다시 불러 성공한다', await ok200, refreshCalls);
+      await p.waitForTimeout(200);
+      const s1 = await p.evaluate(() => JSON.parse(sessionStorage.getItem('naverWatch.session') || 'null'));
+      ok('갱신 실패: 다시 한 뒤 토큰 끝 시각이 늘었다', s1 && s1.exp > s0.exp, [s0.exp, s1 && s1.exp]);
+      log.statuses = log.statuses.filter((x) => !(x[0] === 503 && x[1].startsWith('/api/naver-auto/session/refresh')));   // 일부러 낸 실패
+      await hygiene('갱신 실패', p, log, url);
+      await ctx.close();
+    }
+
     // ── 경합 · 늦은 답 — 첫 불러오기 실패 · 빠른 범위 바꾸기 · 누른 뒤 다른 화면 · 광고주 바꿈 · 🔔 먼저 누름 · 두 번 누름 ──
     {
       const { ctx, log } = await newCtx(browser);
