@@ -274,6 +274,9 @@ class StoreAlertTest(Base):
 
 # ── 문구 ───────────────────────────────────────────────────────────
 class RenderTest(unittest.TestCase):
+    def test_system_sources_match_store_allowlist(self):
+        self.assertEqual(set(AL.SOURCE_NAMES), S.ALERT_SOURCES)
+
     BIG = 9_999_999
 
     def test_every_template_fits_erp_rules(self):
@@ -311,6 +314,15 @@ class RenderTest(unittest.TestCase):
 
 # ── 시스템 경보 ─────────────────────────────────────────────────────
 class SystemAlertTest(Base):
+    def test_metrics_failure_is_durable_and_deduplicated(self):
+        self.org()
+        aid = AL.record_system_alert(self.st, self.fc.now(), "metrics", ["METRICS_INCOMPLETE"])
+        self.assertIsNotNone(aid)
+        [row] = self.system_alerts()
+        self.assertEqual((row["source"], row["codes"]), ("metrics", ["METRICS_INCOMPLETE"]))
+        self.assertEqual([r["emp_idx"] for r in self.st.alert_recipients(aid)], [0])
+        self.assertIsNone(AL.record_system_alert(self.st, self.fc.now(), "metrics", ["METRICS_INCOMPLETE"]))
+
     def test_sync_alert_goes_to_ceo_once_a_day(self):
         self.org()
         res = Y.SyncResult(S.SYNC_STAGES, S.SYNC_BRAKED, (S.BRAKE_TOTAL,), needs_confirmation=True, alert=True, hold_id=3)

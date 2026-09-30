@@ -158,7 +158,7 @@ ALERT_WEEKLY_UNLINKED = "weekly_unlinked"   # 매주 월요일 「이관 받을 
 ALERT_KINDS = frozenset({ALERT_SYSTEM, ALERT_DIGEST, ALERT_LEAD_DIGEST, ALERT_SHADOW_SUMMARY, ALERT_WEEKLY_UNLINKED})
 _ALERT_TAGS = {ALERT_SYSTEM: "sys", ALERT_DIGEST: "dg", ALERT_LEAD_DIGEST: "ld", ALERT_SHADOW_SUMMARY: "sh",
                ALERT_WEEKLY_UNLINKED: "wk"}
-ALERT_SOURCES = frozenset({"org", "stages", "accounts", "pairing", "readiness", "morning", "compose"})
+ALERT_SOURCES = frozenset({"org", "stages", "accounts", "pairing", "readiness", "morning", "compose", "metrics"})
 ALERT_SEVERITIES = frozenset({"NORMAL", "URGENT"})      # erp_alert.SEVERITIES 와 같은 글자(시험이 대조)
 DELIVERY_PENDING, DELIVERY_SENT, DELIVERY_DUPLICATE = "pending", "sent", "duplicate"
 DELIVERY_CAP_TARGET, DELIVERY_CAP_TOTAL = "cap_target", "cap_total"
