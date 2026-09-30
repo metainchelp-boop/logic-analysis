@@ -13,10 +13,14 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 from enum import Enum
 
-from fastapi import APIRouter, HTTPException, Request, Depends
+from fastapi import APIRouter, HTTPException, Request, Depends, Response
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from fastapi.routing import APIRoute
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from pydantic import BaseModel, Field
+from sso_exchange import CONSUMER_ORIGIN, exchange_identity
 
 # ============================================================================
 # Configuration & Setup
@@ -610,6 +614,47 @@ class SSORequest(BaseModel):
     token: str
 
 
+class SSOCodeRequest(BaseModel):
+    code: str = Field(..., pattern=r"^[A-Za-z0-9_-]{43}$", min_length=43, max_length=43)
+    codeVerifier: str = Field(..., pattern=r"^[A-Za-z0-9_-]{43}$", min_length=43, max_length=43)
+
+    model_config = {"extra": "forbid"}
+
+
+class _SsoCodeRoute(APIRoute):
+    def get_route_handler(self):
+        original = super().get_route_handler()
+
+        async def sanitized(request: Request):
+            try:
+                return await original(request)
+            except RequestValidationError:
+                # 기본 422의 input 필드는 코드/검증값 원문을 반사하므로 새 경로만 숨긴다.
+                return JSONResponse(status_code=422, content={"detail": "로그인 요청 형식이 올바르지 않습니다."},
+                                    headers={"Cache-Control": "no-store"})
+
+        return sanitized
+
+
+_sso_code_router = APIRouter(route_class=_SsoCodeRoute)
+
+
+@_sso_code_router.post("/sso-code", response_model=LoginResponse)
+def sso_code_login(request: SSOCodeRequest, request_obj: Request, response: Response) -> LoginResponse:
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        if (request_obj.headers.get("origin") != CONSUMER_ORIGIN
+                or request_obj.headers.get("sec-fetch-site", "same-origin") != "same-origin"):
+            raise HTTPException(status_code=403, detail="로그인 요청 출처가 올바르지 않습니다.")
+        return _login_erp_identity(exchange_identity(request.code, request.codeVerifier), request_obj)
+    except HTTPException as exc:
+        exc.headers = {**(exc.headers or {}), "Cache-Control": "no-store"}
+        raise
+
+
+router.include_router(_sso_code_router)
+
+
 @router.post("/sso", response_model=LoginResponse)
 def sso_login(request: SSORequest, request_obj: Request) -> LoginResponse:
     """전산(ERP) SSO 자동 로그인.
@@ -651,6 +696,11 @@ def sso_login(request: SSORequest, request_obj: Request) -> LoginResponse:
         _result = (_resp.json() or {}).get("result") or {}
     except Exception:
         _result = {}
+    return _login_erp_identity(_result, request_obj)
+
+
+def _login_erp_identity(_result: dict, request_obj: Request) -> LoginResponse:
+    """구 토큰/새 코드가 동일한 로컬 사용자·권한·세션 규칙을 사용한다."""
     sub = str(_result.get("id") or "").strip()
     if not sub or len(sub) > 100:
         raise HTTPException(status_code=401, detail="전산 사용자 식별에 실패했습니다.")

@@ -1,10 +1,3 @@
-<!DOCTYPE html>
-<html lang="ko">
-<head>
-  <meta charset="UTF-8">
-  <meta name="referrer" content="no-referrer">
-  <!-- SSO_BOOTSTRAP_START: frontend/js/sso-bootstrap.js 원문 -->
-  <script>
 /* 전산 SSO 수신부. head 첫 스크립트로 실행: 비밀값은 URL/저장소에 남기지 않는다. */
 (function() {
     'use strict';
@@ -85,28 +78,3 @@
         }).catch(fail);
     } catch (_) { fail(); }
 })();
-  </script>
-  <!-- SSO_BOOTSTRAP_END -->
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>로직 분석 v3 (번들 테스트)</title>
-  <!-- 캐시 방지: 테스트 페이지는 항상 최신 -->
-  <meta http-equiv="Cache-Control" content="no-store">
-  <!-- CDN 프리커넥트 -->
-  <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
-  <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <!-- React (Babel 불필요 — 사전 빌드된 번들 사용) -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/styles.css?v=6.6.0">
-  <link rel="stylesheet" href="css/report-theme.css?v=6.5.8">
-  <link rel="stylesheet" href="css/place.css?v=6.6.1">
-</head>
-<body>
-  <div id="root"></div>
-  <!-- 사전 빌드된 단일 번들 (인-브라우저 Babel 제거, 해시 파일명) -->
-  <script src="dist/app.2599832cf146.js"></script>
-</body>
-</html>

@@ -63,6 +63,29 @@ window.App = function App() {
 
     useEffect(function() {
         try {
+            var _ssoBootstrap = window.__metaincSso;
+            if (_ssoBootstrap && _ssoBootstrap.started) {
+                // 새 로그인 실패는 다른 계정의 기존 세션/구 토큰으로 되돌리지 않는다.
+                setCurrentUser(null); setAuthToken(null);
+                try { sessionStorage.removeItem('logic_token'); sessionStorage.removeItem('logic_user'); } catch(e) {}
+                _ssoBootstrap.consume().then(function(credentials) {
+                    var controller = new AbortController();
+                    var timeout = setTimeout(function() { controller.abort(); }, 15000);
+                    return fetch('/api/auth/sso-code', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(credentials), signal: controller.signal,
+                        credentials: 'omit', cache: 'no-store', redirect: 'error'
+                    }).then(function(r) {
+                        clearTimeout(timeout);
+                        if (!r.ok) throw new Error('전산 연결 로그인 실패');
+                        return r.json();
+                    }, function(error) { clearTimeout(timeout); throw error; });
+                }).then(function(data) {
+                    if (data && data.success && data.token && data.user) saveAuth(data.user, data.token);
+                    setAuthChecking(false);
+                }).catch(function() { setAuthChecking(false); });
+                return;
+            }
             // 기존 세션 복원 (SSO 실패 시 폴백으로도 사용 — 오래된 sso 토큰이 유효 세션을 밀어내지 않게)
             var _restoreSession = function() {
                 var savedToken = sessionStorage.getItem('logic_token');
@@ -77,8 +100,8 @@ window.App = function App() {
                 } else { setAuthChecking(false); }
             };
             // 0) 전산(ERP) SSO 자동 로그인: URL ?sso=<토큰> 있으면 우선 처리
-            var _ssoTok = '';
-            try { _ssoTok = new URLSearchParams(window.location.search).get('sso') || ''; } catch(e) {}
+            var _ssoTok = _ssoBootstrap ? _ssoBootstrap.takeLegacyToken() : '';
+            if (!_ssoBootstrap) { try { _ssoTok = new URLSearchParams(window.location.search).get('sso') || ''; } catch(e) {} }
             if (_ssoTok) {
                 var _cleanUrl = function() {
                     try {

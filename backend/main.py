@@ -59,6 +59,9 @@ AUTH_EXEMPT_PATHS = [
 class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
     """API 키 기반 인증 미들웨어"""
     async def dispatch(self, request: Request, call_next):
+        # 새 로그인은 자체 출처·PKCE·전산 교환으로 인증한다. 서버 API 키를 브라우저에 노출하지 않는다.
+        if request.method == "POST" and request.url.path == "/api/auth/sso-code":
+            return await call_next(request)
         # 인증 면제 경로 확인
         if any(request.url.path.startswith(p) for p in AUTH_EXEMPT_PATHS):
             return await call_next(request)
