@@ -6,12 +6,42 @@ import platform
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 
 from naver_engine import store as S, sync as Y
 from naver_engine.tests import test_morning as TM, test_alerts as TA, test_sync as TS, test_erp_alert as TEA
 from naver_runtime.config import Config
 from naver_runtime.scheduler import Scheduler
 from naver_runtime.writer import Writer
+from naver_runtime import __main__ as main
+
+
+class AssemblyStopTest(unittest.TestCase):
+    def test_alert_assembly_never_starts_another_post_after_stop(self):
+        stop = threading.Event()
+        fake = TEA.FakeAlertErp()
+
+        class Transport:
+            def send(self, request, timeout):
+                result = fake.send(request, timeout)
+                stop.set()  # 첫 응답 뒤 SIGTERM 처리기가 올린 것과 같은 중지 상태.
+                return result
+
+        config = Config("/synthetic/data/db", "/synthetic/socket/api", alerts_enabled=True)
+        # 수정 전·후 양쪽의 기본 전송 생성자를 막는다. 실제 회사 요청은 절대 만들지 않는다.
+        with patch.object(main.EA, "UrllibTransport", return_value=Transport()), \
+             patch.object(main.N, "UrllibTransport", return_value=Transport()):
+            clock = main.InterruptibleClock(stop)
+            options = main.dependencies(config, {"NAVER_ENGINE_ERP_KEY": TEA.MARK_KEY},
+                                        clock)
+            poster = options["alert_factory"]()
+            poster.send_alert(TEA.payload(dedupe_key="shutdown:first"))
+            with self.assertRaises(main.StopRequested):
+                poster.send_alert(TEA.payload(dedupe_key="shutdown:second"))
+            self.assertIsNotNone(clock.now().tzinfo)  # 중단 회차 DB 정리용 시각은 계속 받는다.
+            with self.assertRaises(main.StopRequested):
+                poster.send_alert(TEA.payload(dedupe_key="shutdown:third"))
+        self.assertEqual(len(fake.calls), 1)
 
 
 @unittest.skipUnless(platform.system() == "Linux", "실제 flock/WAL 실행 계약은 Linux에서 검증")
@@ -60,14 +90,30 @@ class LinuxIntegrationTest(unittest.TestCase):
     def test_real_writer_keeps_network_wait_outside_actor(self):
         with tempfile.TemporaryDirectory() as folder, Writer(str(Path(folder) / "engine.db")) as writer:
             entered, release = threading.Event(), threading.Event()
-            def slow_network():
-                entered.set()
-                release.wait(5)
-            thread = threading.Thread(target=slow_network)
+            response = TA.org_body(TM.T0)
+
+            class SlowErp(TS.FakeErp):
+                def read_org_snapshot(self):
+                    entered.set()
+                    if not release.wait(5):
+                        raise TimeoutError("합성 전산 읽기 시험 시간 초과")
+                    return super().read_org_snapshot()
+
+            config = Config(str(Path(folder) / "engine.db"), folder + "/socket/api", sync_enabled=True)
+            # 06:40은 계약 단계의 조용한 창이다. 실제 org_due/sync_org만 느린 ERP에서 멈춘다.
+            scheduler = Scheduler(config, writer.proxy, clock=lambda: TM.T0,
+                                  erp_factory=lambda: SlowErp(org=response))
+            outcome = []
+            thread = threading.Thread(target=lambda: outcome.append(scheduler.tick()))
             thread.start()
             try:
                 self.assertTrue(entered.wait(1))
-                self.assertEqual(writer.proxy.runs_on(TM.TODAY), [])
+                # 실제 예약 작업이 외부 응답을 기다리는 사이 같은 writer가 DB 요청을 처리한다.
+                self.assertEqual(writer.call(lambda st: st.runs_on(TM.TODAY), wait=.5), [])
+                self.assertTrue(thread.is_alive())
             finally:
                 release.set()
                 thread.join(5)
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(outcome, [{"state": "ok", "errors": []}])
+            self.assertIsNotNone(writer.proxy.org_current())

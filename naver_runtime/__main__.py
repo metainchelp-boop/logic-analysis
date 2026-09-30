@@ -42,6 +42,24 @@ class InterruptibleClock(N.SystemClock):
         self.stop.wait(seconds)
         self._check()
 
+    def before_network(self):
+        # now()는 중단된 회차의 정리를 위해 한 번만 예외를 내지만, 새 HTTP 송신은
+        # 그 뒤에도 계속 막는다. 고정 now를 쓰는 알림 dispatch 내부에도 적용한다.
+        if self.stop.is_set():
+            self.interrupted = True
+            raise StopRequested()
+
+
+class StopAwareTransport:
+    """기존 core HTTP 관문에 위임하며 중지 뒤 새 송신만 차단한다."""
+    def __init__(self, clock):
+        self._clock = clock
+        self._transport = N.UrllibTransport()
+
+    def send(self, request, timeout):
+        self._clock.before_network()
+        return self._transport.send(request, timeout)
+
 
 def dependencies(config, env, clock):
     """켜진 기능에 필요한 키만 읽는다. 이 함수는 업무 API를 호출하지 않는다."""
@@ -49,12 +67,12 @@ def dependencies(config, env, clock):
     if config.sync_enabled or config.links_enabled or config.alerts_enabled:
         key = E.load_erp_key(env)
         if config.sync_enabled or config.links_enabled:
-            erp_factory = lambda: E.ErpReader(key, clock=clock)
+            erp_factory = lambda: E.ErpReader(key, clock=clock, transport=StopAwareTransport(clock))
         if config.alerts_enabled:
-            alert_factory = lambda: EA.ErpAlertPoster(key)
+            alert_factory = lambda: EA.ErpAlertPoster(key, transport=StopAwareTransport(clock))
     if config.links_enabled or config.morning_enabled:
         credentials = load_manager_credentials(env)
-        naver_factory = lambda: N.NaverReader(credentials, clock=clock)
+        naver_factory = lambda: N.NaverReader(credentials, clock=clock, transport=StopAwareTransport(clock))
     if config.backup_enabled:
         names = ("NAVER_BACKUP_CERT", "NAVER_BACKUP_SSH_KEY", "NAVER_BACKUP_KNOWN_HOSTS")
         if any(not env.get(name) for name in names):

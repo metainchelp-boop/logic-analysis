@@ -32,7 +32,8 @@ def env_example():
 
 def compose_model(*files, project="naver-engine"):
     # PATH만 전달한다. 실제 NAVER/ERP 값·사용자 .env를 config에 전달하지 않는다.
-    env = {"PATH": os.environ.get("PATH", ""), "COMPOSE_DISABLE_ENV_FILE": "1"}
+    env = {"PATH": os.environ.get("PATH", ""), "COMPOSE_DISABLE_ENV_FILE": "1",
+           "NAVER_ENGINE_ENV_FILE": str(ROOT / "deploy/naver-engine.env.example")}
     executable = shutil.which("docker-compose")
     argv = [executable] if executable else [shutil.which("docker") or "docker", "compose"]
     try:

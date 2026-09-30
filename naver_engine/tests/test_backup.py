@@ -104,7 +104,7 @@ class BackupTest(unittest.TestCase):
             self.assertEqual(result.code, "READY")
             restored = self.root / "restored.sqlite"
             counts = B.restore_archive(result.local_path, restored, S.inspect_snapshot)
-            self.assertEqual(counts["naver_auto_run"], 1)
+            self.assertEqual(counts["naver_auto_check_run"], 1)
             with S.open_reader(str(restored)) as reader:
                 self.assertEqual(len(reader.runs_on(NOW.date())), 1)
             with self.assertRaises(S.StoreError):
