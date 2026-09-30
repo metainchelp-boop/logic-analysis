@@ -38,8 +38,14 @@ def connection_precheck(key, hosts):
                             input=b"", capture_output=True, timeout=30, env=T.COMMAND_ENV)
     if result.returncode == 1 and "백업 수신 실패".encode() in result.stderr:
         return
-    classes = [(b"Permission denied", "authentication_refused"),
-               (b"Host key verification failed", "host_key_refused"),
+    # 원격 명령의 권한 거절(126)을 SSH 인증 실패(255)로 오인하지 않는다.
+    if result.returncode == 255 and re.search(rb"Permission denied \([^()\r\n]+\)\.", result.stderr):
+        stage("authentication_refused")
+        raise ValueError("read only authentication refused")
+    if result.returncode == 126 and b"Permission denied" in result.stderr:
+        stage("remote_execution_refused")
+        raise ValueError("read only remote execution refused")
+    classes = [(b"Host key verification failed", "host_key_refused"),
                (b"REMOTE HOST IDENTIFICATION HAS CHANGED", "host_key_refused"),
                (b"Connection timed out", "connection_timeout"),
                (b"Connection refused", "connection_refused")]

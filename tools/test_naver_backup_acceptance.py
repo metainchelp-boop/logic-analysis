@@ -165,7 +165,7 @@ class AcceptanceTest(unittest.TestCase):
 
     def test_connection_failures_emit_only_safe_classification_and_never_upload(self):
         cases = (
-            (b"Permission denied", "authentication_refused"),
+            (b"Permission denied (publickey).", "authentication_refused"),
             (b"Host key verification failed", "host_key_refused"),
             (b"REMOTE HOST IDENTIFICATION HAS CHANGED", "host_key_refused"),
             (b"Connection timed out", "connection_timeout"),
@@ -183,6 +183,14 @@ class AcceptanceTest(unittest.TestCase):
 
     def test_probe_exit255_is_not_refusal_success_even_with_receiver_error_text(self):
         self.probe_result = (255, b"RAW_PROCESS_DETAIL", "백업 수신 실패\n".encode())
+        self.assert_transfer_precheck_failure("read_only_forced_command_probe", 1)
+
+    def test_remote_execution_permission_failure_is_not_authentication_failure(self):
+        self.probe_result = (126, b"", b"/bin/sh: 1: /usr/bin/python3: Permission denied\n")
+        self.assert_transfer_precheck_failure("remote_execution_refused", 1)
+
+    def test_generic_permission_text_cannot_prove_authentication_failure(self):
+        self.probe_result = (255, b"", b"Permission denied RAW_PROCESS_DETAIL")
         self.assert_transfer_precheck_failure("read_only_forced_command_probe", 1)
 
     def test_read_only_probe_separates_remote_permission_error_from_authentication(self):
