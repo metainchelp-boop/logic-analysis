@@ -68,6 +68,7 @@ table{border-collapse:collapse;width:100%;font-size:13px}
 th,td{padding:8px 12px;text-align:left;border-top:1px solid var(--line);vertical-align:middle;white-space:nowrap}
 th{font-size:11.5px;color:var(--muted);font-weight:700;background:var(--panel2);border-top:0}
 td.wrap{white-space:normal;min-width:200px}
+@media (max-width:480px){td.wrap{min-width:140px}}
 tr.click{cursor:pointer}
 tr.click:hover td{background:#f7f9fd}
 tr.grp td{background:var(--panel2);font-size:12.5px;color:var(--sub);border-top:1px solid var(--line)}
@@ -222,3 +223,7 @@ tr.grp.team td{background:#e9eef8}
 @media (max-width:480px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 @media print{.top,.no-print{display:none!important}}
+
+/* 검토 반영(S13) — 막힌 까닭은 글자로(단추를 흐리게 두지 않는다 · 손가락·키보드로도 읽힌다) · 일부 계정만 읽은 날 막대 */
+.blocked-note{font-size:11.5px;color:var(--sub);background:var(--panel2);border:1px dashed var(--line2);border-radius:8px;padding:3px 8px;white-space:normal}
+.sbars i.part{opacity:.45}

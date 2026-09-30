@@ -10,7 +10,11 @@ from typing import Mapping
 
 
 class ThresholdOutOfRange(ValueError):
-    """허용 범위 밖 · 모르는 이름 · 서로 맞지 않는 값. 문구에는 칸 이름만."""
+    """허용 범위 밖 · 모르는 이름 · 서로 맞지 않는 값. 문구에는 칸 이름만. ``fields`` = 틀린 칸 이름(화면이 그 칸만 짚게)."""
+
+    def __init__(self, message: str, fields: tuple = ()):
+        super().__init__(message)
+        self.fields = tuple(fields)
 
 
 @dataclass(frozen=True)
@@ -64,8 +68,9 @@ def validate(changes: Mapping[str, object], base: Thresholds = DEFAULTS) -> Thre
             continue
         clean[k] = int(v) if k in _INTS else float(v)
     if bad:
-        raise ThresholdOutOfRange("허용 범위 밖이거나 모르는 기준값: " + ", ".join(sorted(map(str, bad))))
+        raise ThresholdOutOfRange("허용 범위 밖이거나 모르는 기준값: " + ", ".join(sorted(map(str, bad))),
+                                  tuple(sorted(map(str, bad))))
     out = replace(base, **clean)
     if not out.bizmoney_red_days < out.bizmoney_yellow_days:
-        raise ThresholdOutOfRange("비즈머니 🔴 날수는 🟡 날수보다 작아야 한다")
+        raise ThresholdOutOfRange("비즈머니 🔴 날수는 🟡 날수보다 작아야 한다", ("bizmoney_red_days", "bizmoney_yellow_days"))
     return out

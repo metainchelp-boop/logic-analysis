@@ -2,12 +2,12 @@
 
 두 갈래.
 1. **글자 규칙**(언제나 돈다 · 네트워크 0) — 인라인 스크립트 0 · 인라인 손잡이(on…=) 0 · 인라인 스타일 속성 0 ·
-   HTML 로 끼워 넣기(innerHTML 등) 0 · 바깥 주소 0 · 오래 두는 저장소 0 · 토큰 이름 · 50분 갱신 · sso 를 가장 먼저
+   HTML 로 끼워 넣기(innerHTML 등) 0 · 바깥 주소 0 · 오래 두는 저장소 0 · 토큰 이름 · 끝나기 10분 전 갱신 · 1시간 쉼 · sso 를 가장 먼저
    지움 · 화면 주소 목록이 ③ 입구(``naver_relay.PAGE_SCREENS``)와 같음 · 엔진 알림 링크(``alerts.LINK_*``)가 모두 화면으로 열림.
 2. **진짜 브라우저**(Chromium · Playwright · Node) — 앞 서버(화면 파일 = ③ 입구 규칙 · API = ③ 중계 ``naver_relay.relay``)
    → 진짜 엔진 화면 API(가짜 ① · 가짜 저장소) 를 띄우고 ``screen_browser.js`` 가 열고 누른다. 색·숫자·줄이 서버와 같은지,
    sso 가 주소창·뒤 요청·Referer 에 남지 않는지, 바깥 요청·CSP 위반·화면 오류가 0 인지, 👀·🙈·기준값 저장이 서버에
-   닿는지, 50분 갱신 · 세션 끝 화면까지. Node·Playwright·Chromium 이 없으면 건너뛴다 —
+   닿는지, 토큰 끝 시각 기준 갱신(새로 고침 뒤에도) · 오래 쉼 · 세션 끝 화면 · 빠른 범위 바꾸기 · 옮겨 간 뒤 늦은 답까지. Node·Playwright·Chromium 이 없으면 건너뛴다 —
    **머지 전에는 ``NAVER_SCREEN_REQUIRE_BROWSER=1`` 로 건너뜀을 실패로** 만든다(S12 앱 시험과 같은 약속).
 """
 from __future__ import annotations
@@ -90,8 +90,23 @@ class TextRulesTest(unittest.TestCase):
         self.assertNotIn("indexedDB", CODE)
         self.assertEqual(re.findall(r"var KEY = '([^']+)';", CODE), ["naverWatch.session"])
         self.assertNotIn("getItem('token')", CODE)
-        self.assertIn("var REFRESH_MS = 50 * 60 * 1000;", CODE)
-        self.assertIn("setInterval(refresh, REFRESH_MS)", CODE)
+        # 갱신은 토큰 끝 시각에서 센다(페이지를 연 때가 아니라 · 새로 고침해도) · 1시간 넘게 손대지 않으면 이 창의 로그인을 끝낸다
+        self.assertIn("var REFRESH_AHEAD_MS = 10 * 60 * 1000;", CODE)
+        self.assertIn("var IDLE_MS = 60 * 60 * 1000;", CODE)
+        self.assertIn("state.timer = setInterval(tick, TICK_MS);", CODE)
+        tick = CODE[CODE.index("function tick() {"):CODE.index("function scheduleRefresh")]
+        self.assertIn("if (now - state.lastInput >= IDLE_MS) { lost('idle'); return; }", tick)
+        self.assertIn("if (now >= s.exp) { lost(); return; }", tick)
+        self.assertIn("if (s.exp - now <= REFRESH_AHEAD_MS && now >= state.retryAt) refresh();", tick)
+        self.assertLess(tick.index("IDLE_MS"), tick.index("s.exp"))   # 오래 쉼을 먼저(끝난 토큰보다)
+        sched = CODE[CODE.index("function scheduleRefresh() {"):CODE.index("document.addEventListener('visibilitychange'")]
+        self.assertIn("tick();", sched)                                 # 새로 고침 · 잠자기 뒤 바로 한 번
+        for ev in ("'pointerdown'", "'keydown'"):
+            self.assertIn(ev, CODE)
+        self.assertIn("state.lastInput = Date.now();", CODE)
+        lost = CODE[CODE.index("function lost(kind) {"):CODE.index("function refresh()")]
+        for part in ("dropSession();", "state.me = null;", "clearInterval(state.timer);"):
+            self.assertIn(part, lost)
         # 부르는 곳은 한 곳 — /api/naver-auto 아래만 · 쿠키를 싣지 않는다 · Referer 를 싣지 않는다
         self.assertEqual(CODE.count("fetch("), 1)
         self.assertIn("return fetch(API + path, init)", CODE)
@@ -141,6 +156,26 @@ class TextRulesTest(unittest.TestCase):
         # 판정 글자(needs_attention)는 서버 값을 읽기만 — 화면이 만들어 넣지 않는다
         self.assertNotRegex(CODE, r"needs_attention\s*=[^=]")
         self.assertNotRegex(CODE, r"\.color\s*=[^=]")
+        # 광고주 한 장 숫자도 서버 값 — 계정별 기록(history)을 화면이 다시 더하지 않는다
+        now = CODE[CODE.index("function renderNow() {"):CODE.index("function openOf(")]
+        self.assertNotIn("history", now)
+        for key in ("c.yday_spend", "c.bizmoney", "c.yday_imp", "c.yday_clk", "c.days"):
+            self.assertIn(key, now)
+
+    def test_races_and_double_submit(self):
+        """늦게 온 옛 응답이 새 것을 덮지 않고 · 같은 일을 두 번 보내지 않는다(검토 scope-race · double-submit)."""
+        self.assertIn("state.selection = this.value; state.gen++; openWatch();", CODE)
+        watch = CODE[CODE.index("function openWatch() {"):CODE.index("function fail(e)")]
+        self.assertIn("if (gen !== state.gen || sel !== state.selection) return;", watch)
+        reload = CODE[CODE.index("function reload() {"):CODE.index("var except = null;")]
+        self.assertIn("if (r.screen === 'client') { state.gen++; openClient(r.id); }", reload)
+        self.assertIn("else if (r.screen === 'watch') { state.gen++; openWatch(); }", reload)
+        self.assertNotIn("else openWatch()", reload)                   # 다른 화면으로 옮겨 갔으면 관제로 끌고 오지 않는다
+        for key in ("once('issue:' + i.issue_id", "once('link:' + r.ref", "once('th'", "once('bell-all'"):
+            self.assertIn(key, CODE)
+        once = CODE[CODE.index("function once(key, btn, run) {"):CODE.index("function toast(t)")]
+        self.assertIn("if (state.busy[key]) return;", once)
+        self.assertIn("btn.disabled = true", once)
 
 
 # ── 진짜 브라우저 ─────────────────────────────────────────────────────
@@ -195,7 +230,7 @@ class BrowserTest(TW.WebBase):
         self.base = f"http://127.0.0.1:{self.front.server_address[1]}"
         # 사람 넷 — ① my-profile 가짜(대표 · 팀장 · 직원 둘) · ① 이 거절하는 토큰 하나
         for tok, idx, mgr in ((TW.tok(1), 0, True), (TW.tok(2), 1, True), (TW.tok(3), 100, False), (TW.tok(4), 101, False),
-                              (TW.tok(5), 0, True)):
+                              (TW.tok(5), 0, True), (TW.tok(6), 0, True), (TW.tok(7), 101, False), (TW.tok(8), 0, True)):
             teams = ((0, None),) if idx == 0 else ((11, 10), (10, 0))
             self.erp.person(tok, idx, manager=mgr, teams=teams)
         self.st.record_alert(S.ALERT_DIGEST, TW.TODAY, "compose", "digest", (), "/naver/issues",
@@ -249,7 +284,8 @@ class BrowserTest(TW.WebBase):
 
     def test_screen_in_real_browser(self):
         cfg = {"base": self.base, "red": self.issue_of(11, "red")["issue_id"], "yellow": self.issue_of(12, "yellow")["issue_id"],
-               "sso": {"ceo": TW.tok(1), "lead": TW.tok(2), "s100": TW.tok(3), "s101": TW.tok(4), "ceo2": TW.tok(5), "bad": TW.bad(9)},
+               "sso": {"ceo": TW.tok(1), "lead": TW.tok(2), "s100": TW.tok(3), "s101": TW.tok(4), "ceo2": TW.tok(5),
+                       "ceo3": TW.tok(6), "idle101": TW.tok(7), "ceo4": TW.tok(8), "bad": TW.bad(9)},
                "shots": os.environ.get("NAVER_SCREEN_SHOTS") or None}   # 화면 사진(사람이 눈으로 볼 때만 · 예시 자료)
         proc = subprocess.Popen([self.node, str(SCENARIO), json.dumps(cfg)], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 text=True, env=self.node_env)
@@ -264,7 +300,7 @@ class BrowserTest(TW.WebBase):
         results = json.loads(lines[-1])
         failed = [r for r in results if not r["pass"]]
         self.assertEqual(failed, [], json.dumps(failed, ensure_ascii=False, indent=1)[:6000])
-        self.assertGreaterEqual(len(results), 40, len(results))
+        self.assertGreaterEqual(len(results), 110, len(results))
         self.assertEqual(self.stray, [], "화면이 /naver/·/api/naver-auto 밖을 불렀다")
         # sso 원문(① 토큰)은 엔진 저장소 어디에도 없다
         blob = pathlib.Path(self.path).read_bytes()

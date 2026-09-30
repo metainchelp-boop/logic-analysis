@@ -89,15 +89,15 @@
       <div class="badges" id="c-badges"></div>
     </div>
     <div class="tabs" role="tablist" aria-label="광고주 한 장 칸">
-      <button type="button" role="tab" class="on" data-ctab="now" aria-selected="true">현황</button>
-      <button type="button" role="tab" data-ctab="hist" aria-selected="false">이슈 기록</button>
-      <button type="button" role="tab" data-ctab="rep" aria-selected="false">보고서</button>
-      <button type="button" role="tab" data-ctab="conn" aria-selected="false">연결</button>
+      <button type="button" role="tab" class="on" id="t-now" data-ctab="now" aria-controls="p-now" aria-selected="true">현황</button>
+      <button type="button" role="tab" id="t-hist" data-ctab="hist" aria-controls="p-hist" aria-selected="false" tabindex="-1">이슈 기록</button>
+      <button type="button" role="tab" id="t-rep" data-ctab="rep" aria-controls="p-rep" aria-selected="false" tabindex="-1">보고서</button>
+      <button type="button" role="tab" id="t-conn" data-ctab="conn" aria-controls="p-conn" aria-selected="false" tabindex="-1">연결</button>
     </div>
-    <div class="pane on" id="p-now" role="tabpanel"></div>
-    <div class="pane" id="p-hist" role="tabpanel"></div>
-    <div class="pane" id="p-rep" role="tabpanel"></div>
-    <div class="pane" id="p-conn" role="tabpanel"></div>
+    <div class="pane on" id="p-now" role="tabpanel" aria-labelledby="t-now"></div>
+    <div class="pane" id="p-hist" role="tabpanel" aria-labelledby="t-hist"></div>
+    <div class="pane" id="p-rep" role="tabpanel" aria-labelledby="t-rep"></div>
+    <div class="pane" id="p-conn" role="tabpanel" aria-labelledby="t-conn"></div>
   </section>
 
   <!-- 🤖 자동화 -->

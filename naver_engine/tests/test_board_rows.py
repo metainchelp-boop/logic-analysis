@@ -168,6 +168,95 @@ class IssueRowsTest(TW.WebBase):
         [r] = [r for r in self.get("/board", 101, query="attention=0")[1]["issue_rows"] if r["issue_id"] == yellow]
         self.assertEqual((r["state"], r["stored_state"], r["can"]["ack"], r["can"]["except"]),
                          ("new", "exception", True, False))   # 점검이 다시 보기 전에는 예외를 이어 붙이지 않는다
+        # 막힌 까닭 = 서버가 먼저 거절하는 까닭(하루가 지나 조직 자료가 낡음) · 지난 예외 사유는 🆕 줄에 붙지 않는다
+        self.assertEqual((r["can"]["except_blocked"], r["hand"]), ("org-stale", None))
+        s, b = self.post(f"/issues/{yellow}/except", 101, {"until": TODAY.isoformat(), "note": "다시"})
+        self.assertEqual((s, b["error"]), (409, "org-stale"))
+        # 조직을 새로 받으면 다음 까닭 = 「예외 중」(층이 아니다 · 검토 exception-active)
+        self.st.record_org(TA.org_body(self.fc.now() - timedelta(minutes=1)), self.fc.now())
+        for idx in (101, 1):
+            [r] = [r for r in self.get("/board", idx, query="attention=0")[1]["issue_rows"] if r["issue_id"] == yellow]
+            self.assertEqual(r["can"]["except_blocked"], "exception-active", idx)
+        s, b = self.post(f"/issues/{yellow}/except", 1, {"until": TODAY.isoformat(), "note": "다시"})
+        self.assertEqual((s, b["error"]), (409, "exception-active"))
+        s, b = self.post(f"/issues/{yellow}/ack", 101)
+        self.assertEqual(s, 200)
+        [r] = [r for r in self.get("/board", 101, query="attention=0")[1]["issue_rows"] if r["issue_id"] == yellow]
+        self.assertEqual(r["hand"]["kind"], "acked")   # 다시 시작된 뒤 사람이 한 일은 싣는다
+
+    def test_blocked_reason_only_on_open_rows(self):
+        """닫힌 줄 · 예외 중인 줄(「오늘 풀린 것」)에는 막힌 까닭도 없다 — 단추 자체가 없다(검토 except-blocked-on-closed)."""
+        red = self.issue_of(11, "red")["issue_id"]
+        self.assertEqual(self.post(f"/issues/{red}/resolve", 100)[0], 200)
+        [d] = [r for r in self.rows(100)["done_rows"] if r["issue_id"] == red]
+        self.assertEqual(d["can"], {"ack": False, "resolve": False, "except": False, "except_until_max": None,
+                                    "except_blocked": None})
+        self._restore_issues(self.st.issues())
+        yellow = self.issue_of(12, "yellow")["issue_id"]
+        until = (TODAY + timedelta(days=2)).isoformat()
+        self.assertEqual(self.post(f"/issues/{yellow}/except", 101, {"until": until, "note": "사유"})[0], 200)
+        for idx in (101, 1):
+            [e] = [r for r in self.rows(idx)["done_rows"] if r["issue_id"] == yellow]
+            self.assertEqual((e["can"]["except"], e["can"]["except_blocked"]), (False, None), idx)
+
+    def test_hand_of_resets(self):
+        """사람 손길은 이슈가 다시 시작된 기록 뒤만 — 예외가 끝남 · 다시 생김 · 🔁 저절로 풀림 · 짝이 사라져 닫힘."""
+        ctx = W.load(self.st, self.fc.now())
+
+        def ev(kind, by=None, note=None):
+            return {"kind": kind, "at": "t", "by_person": by, "note": note, "exception_until": None}
+        cases = [
+            ([ev("opened"), ev("acked", 101)], "acked"),
+            ([ev("opened"), ev("acked", 101), ev("resolved", 101)], "resolved"),
+            ([ev("opened"), ev("excepted", 101, "old"), ev("exception_ended")], None),
+            ([ev("opened"), ev("resolved", 101), ev("reappeared")], None),
+            ([ev("opened"), ev("acked", 101), ev("auto_resolved")], None),
+            ([ev("opened"), ev("acked", 101), ev("closed_unlinked")], None),
+            ([ev("opened"), ev("acked", 101), ev("reappeared"), ev("excepted", 1, "new")], "excepted"),
+            ([ev("opened"), ev("acked", 101), ev("escalated")], "acked"),     # 등급 바뀜은 다시 시작이 아니다
+            ([ev("opened"), ev("acked", None)], None),                       # 사람 번호 없는 기록은 손길이 아니다
+        ]
+        for events, want in cases:
+            got = W._hand_of(ctx, events)
+            self.assertEqual(None if got is None else got["kind"], want, [e["kind"] for e in events])
+
+    def test_board_reads_hands_once(self):
+        """관제 판은 사람 손길을 한 번에 읽는다 — 이슈마다 기록을 따로 읽지 않는다(검토 board-n-plus-1)."""
+        yellow = self.issue_of(12, "yellow")["issue_id"]
+        self.assertEqual(self.post(f"/issues/{yellow}/ack", 101)[0], 200)
+        calls = []
+        real = S.Store.issue_hand_events
+
+        def spy(st, ids, kinds):
+            calls.append(list(ids))
+            return real(st, ids, kinds)
+
+        def boom(*_a, **_k):
+            raise AssertionError("이슈마다 기록을 읽었다")
+        orig_events = S.Store.issue_events
+        S.Store.issue_hand_events, S.Store.issue_events = spy, boom
+        try:
+            b = self.rows(0)
+        finally:
+            S.Store.issue_hand_events, S.Store.issue_events = real, orig_events
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(set(calls[0]), {r["issue_id"] for r in b["issue_rows"] + b["done_rows"]})
+        [r] = [r for r in b["issue_rows"] if r["issue_id"] == yellow]
+        self.assertEqual(r["hand"]["kind"], "acked")
+
+    def test_hand_events_chunked(self):
+        """IN 목록은 묶음으로 나눠 읽는다(SQLite 변수 한도) — 많은 번호도 같은 결과."""
+        ids = [i["issue_id"] for i in self.st.issues()]
+        want = self.st.issue_hand_events(ids, W.HAND_KINDS | W.RESET_KINDS)
+        old = S.ISSUE_READ_CHUNK
+        S.ISSUE_READ_CHUNK = 1
+        try:
+            got = self.st.issue_hand_events(ids + [10 ** 9 + n for n in range(1200)], W.HAND_KINDS | W.RESET_KINDS)
+        finally:
+            S.ISSUE_READ_CHUNK = old
+        self.assertEqual(got, want)
+        with self.assertRaises(S.StoreRefused):
+            self.st.issue_hand_events([0], W.HAND_KINDS)
 
     def test_client_issues_carry_can(self):
         _s, c = self.get("/clients/11", 100)
@@ -184,7 +273,25 @@ class LinkAndNumbersTest(TW.WebBase):
         got = {r["possibility_id"]: r["link"] for r in b["rows"]}
         self.assertEqual(got, {11: W.LINK_LISTED, 12: W.LINK_LISTED, 13: W.LINK_NONE, 14: W.LINK_NOT_LINKED})
         self.assertEqual(b["links"], {W.LINK_LISTED: 2, W.LINK_MISSING: 0, W.LINK_BROKEN: 0, W.LINK_NOT_LINKED: 1,
-                                      W.LINK_NONE: 1, W.LINK_PENDING: 0})
+                                      W.LINK_NONE: 1, W.LINK_PENDING: 0, "unlinked_numbers": 1})
+        self.assertEqual({r["possibility_id"]: r["unlinked"] for r in b["rows"]}, {11: False, 12: False, 13: False, 14: True})
+
+    def test_unlinked_flag_matches_unlinked_list(self):
+        """「이관 안 된 번호 있음」은 월요일 알림·``/unlinked`` 와 같은 규칙 — 이어진 계정이 따로 있어도(「이관」 칸은
+        이관됨) 잡는다(검토 unlinked-screen-fewer)."""
+        ctx = W.load(self.st, self.fc.now())
+        rows = dict(ctx.rows_by_pid)
+        extra = dict(rows[12][0], customer_id=8888888, state=S.PAIR_BLOCKED, code=W.CODE_NOT_LINKED)
+        rows[12] = rows[12] + (extra,)
+        c2 = replace(ctx, rows_by_pid=rows)
+        scope = TW.SC.scope_of(c2.org, 0)
+        self.assertEqual((W.link_state(c2, 12), W.has_unlinked(c2, 12)), (W.LINK_LISTED, True))
+        listed = {r["possibility_id"] for r in W.unlinked(c2, scope)["rows"]}
+        b = W.board(c2, self.st, scope, "all", False)
+        flagged = {r["possibility_id"] for r in b["rows"] if r["unlinked"]}
+        self.assertEqual(listed, {12, 14})
+        self.assertEqual(flagged, listed)
+        self.assertEqual(b["links"]["unlinked_numbers"], len(listed))
 
     def test_link_missing_broken_and_not_today(self):
         ctx = W.load(self.st, self.fc.now())
@@ -207,7 +314,9 @@ class LinkAndNumbersTest(TW.WebBase):
         self.assertEqual(W.today_numbers(ctx, 13), {"yday_spend": None, "bizmoney": None})
         self.assertEqual(W.today_numbers(replace(ctx, pairing_today=False), 12), {"yday_spend": None, "bizmoney": None})
 
-    def test_numbers_sum_and_ignore_other_prospect(self):
+    def test_numbers_sum_only_when_every_account_read(self):
+        """모든 계정이 숫자를 줬을 때만 합 — 한 계정이라도 오늘 하루치가 없거나 다른 가망 짝으로 적혔거나 그 칸이 비면
+        None(일부만 더한 값을 전체처럼 · 0원처럼 보이지 않게 · 검토 partial-sum-looks-complete)."""
         ctx = W.load(self.st, self.fc.now())
         checks = dict(ctx.checks_today)
         checks[B] = dict(checks[B], yday_spend=1200.4, bizmoney=5000.0)
@@ -216,19 +325,74 @@ class LinkAndNumbersTest(TW.WebBase):
         checks[D] = {"status": "ok", "possibility_id": 12, "rules_not_run": [], "yday_spend": 800, "bizmoney": 1.0}
         c2 = replace(ctx, checks_today=checks, rows_by_pid=rows)
         self.assertEqual(W.today_numbers(c2, 12), {"yday_spend": 2000, "bizmoney": 5001})
-        checks[D] = dict(checks[D], possibility_id=11)                      # 다른 가망 짝으로 적힌 하루치
-        self.assertEqual(W.today_numbers(replace(c2, checks_today=checks), 12), {"yday_spend": 1200, "bizmoney": 5000})
-        for bad in (True, float("nan"), float("inf"), "12"):
-            checks[B] = dict(checks[B], yday_spend=bad, bizmoney=bad)
-            checks[D] = dict(checks[D], possibility_id=99)
-            self.assertEqual(W.today_numbers(replace(c2, checks_today=checks), 12),
-                             {"yday_spend": None, "bizmoney": None}, bad)
+        none = {"yday_spend": None, "bizmoney": None}
+        c3 = dict(checks)
+        c3[D] = dict(checks[D], possibility_id=11)                          # 다른 가망 짝으로 적힌 하루치
+        self.assertEqual(W.today_numbers(replace(c2, checks_today=c3), 12), none)
+        c3 = dict(checks)
+        del c3[D]                                                           # 오늘 못 읽은 계정
+        self.assertEqual(W.today_numbers(replace(c2, checks_today=c3), 12), none)
+        c3 = dict(checks)
+        c3[B] = dict(checks[B], yday_spend=0, bizmoney=0)                   # 진짜 0원 + 못 읽은 계정 → 0원이 아니다
+        del c3[D]
+        self.assertEqual(W.today_numbers(replace(c2, checks_today=c3), 12), none)
+        for bad in (None, True, float("nan"), float("inf"), "12"):          # 한 칸만 비면 그 칸만 None
+            c3 = dict(checks)
+            c3[D] = dict(checks[D], bizmoney=bad)
+            self.assertEqual(W.today_numbers(replace(c2, checks_today=c3), 12), {"yday_spend": 2000, "bizmoney": None}, bad)
+        self.assertEqual(W.today_numbers(c2, 12, W.CLIENT_NUMBER_KEYS)["yday_imp"], None)   # 노출은 적지 않은 재료
+
+    def test_client_tiles_and_days_from_server(self):
+        """광고주 한 장 타일 · 14일 막대는 서버가 센 값 — 화면이 계정별 기록을 다시 더하지 않는다. 그날 모든 계정을 읽지
+        못했으면 ``complete`` 거짓."""
+        _s, c = self.get("/clients/12", 101)
+        for k in W.CLIENT_NUMBER_KEYS:
+            self.assertIn(k, c)
+        ctx = W.load(self.st, self.fc.now())
+        self.assertEqual({k: c[k] for k in W.CLIENT_NUMBER_KEYS}, W.today_numbers(ctx, 12, W.CLIENT_NUMBER_KEYS))
+        days = c["days"]
+        self.assertEqual([d["day"] for d in days], sorted(d["day"] for d in days))
+        self.assertEqual(len(days), W.HISTORY_DAYS)
+        accounts = [{"history": [{"day": "2026-09-29", "status": "ok", "yday_spend": 100},
+                                 {"day": "2026-09-30", "status": "ok", "yday_spend": 50}]},
+                    {"history": [{"day": "2026-09-29", "status": None},
+                                 {"day": "2026-09-30", "status": "ok", "yday_spend": 25.4}]}]
+        self.assertEqual(W.day_totals(accounts), [{"day": "2026-09-29", "yday_spend": 100, "complete": False},
+                                                  {"day": "2026-09-30", "yday_spend": 75, "complete": True}])
+        self.assertEqual(W.day_totals([]), [])
+        self.assertEqual(W.day_totals([{"history": [{"day": "2026-09-30", "status": "ok", "yday_spend": None}]}]),
+                         [{"day": "2026-09-30", "yday_spend": None, "complete": False}])
+
+    def test_confirm_blocked_when_org_stale(self):
+        """조직 자료가 낡으면 「이 계정 맞음」은 꺼지고 까닭을 준다(서버가 409 org-stale 로 거절하는 것과 같게) · 「아님」은 그대로."""
+        ctx = W.load(self.st, self.fc.now())
+        scope = TW.SC.scope_of(ctx.org, 0)
+        fresh = W.links_pending(ctx, self.st, scope)["rows"]
+        stale = W.links_pending(replace(ctx, freshness="stale"), self.st, scope)["rows"]
+        self.assertTrue(any(r["can_confirm"] for r in fresh))
+        self.assertTrue(all(r["confirm_blocked"] is None for r in fresh))
+        for a, b in zip(fresh, stale):
+            self.assertFalse(b["can_confirm"])
+            self.assertEqual(b["can_reject"], a["can_reject"])
+            self.assertEqual(b["confirm_blocked"], "org-stale" if a["can_confirm"] else None)
 
     def test_client_page_has_link_and_numbers(self):
         _s, c = self.get("/clients/12", 101)
         self.assertEqual((c["link"], c["account_unconfirmed"]), (W.LINK_LISTED, True))
         self.assertIn("yday_spend", c)
         self.assertIn("bizmoney", c)
+
+
+class ThresholdFieldsTest(TW.WebBase):
+    def test_only_wrong_fields_named(self):
+        """기준값 저장 거절 때 틀린 칸만 짚는다 — 함께 고친 맞는 칸까지 「틀렸다」고 하지 않는다(검토 thresholds-all-fields)."""
+        s, b = self.post("/settings/thresholds", 0, {"changes": {"jump_min_weeks": 3.5, "zero_spend_days": 5}})
+        self.assertEqual((s, b["error"], b["fields"]), (400, "out-of-range", ["jump_min_weeks"]))
+        s, b = self.post("/settings/thresholds", 0, {"changes": {"bizmoney_red_days": 2.5, "bizmoney_yellow_days": 2.0}})
+        self.assertEqual((s, b["fields"]), (400, ["bizmoney_red_days", "bizmoney_yellow_days"]))   # 서로 맞지 않음 = 두 칸
+        s, b = self.post("/settings/thresholds", 0, {"changes": {"zzz": 1, "zero_spend_days": 5}})
+        self.assertEqual((s, b["fields"]), (400, []))                    # 모르는 이름은 되돌려 적지 않는다
+        self.assertEqual(self.st.thresholds().zero_spend_days, 3)        # 하나라도 틀리면 아무것도 안 바뀜
 
 
 if __name__ == "__main__":

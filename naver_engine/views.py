@@ -57,6 +57,9 @@ NOT_A_CUSTOMER = frozenset({"ad-account-number", "customer-id-format", "customer
 REPORT_PREPARING = "preparing"           # 광고주별 주간·월간 보고서 — 4차
 ISSUE_DONE = frozenset({"resolved", "auto_resolved", "closed_unlinked"})   # 닫힌 이슈 — 관제 판 「오늘 풀린 것」(S13)
 HAND_KINDS = frozenset({"acked", "resolved", "excepted"})   # 사람이 누른 기록 — 이슈 줄에 「누가 · 언제」(S13)
+# 이슈가 다시 시작된 기록 — 이보다 앞선 사람 손길은 지난 일이다(예외가 끝나 🆕 로 돌아온 줄에 옛 사유를 붙이지 않게 ·
+# 검토 hand-stale-after-reset). 🔁 저절로 풀림 · 짝이 사라져 닫힘도 사람 손길 뒤의 기계 일이라 그 앞 손길을 싣지 않는다.
+RESET_KINDS = frozenset({"opened", "reappeared", "exception_ended", "auto_resolved", "closed_unlinked"})
 # 관제 판 이관 칸(S13) — 가망마다 오늘 짝 맞추기 줄에서 한 값. 「pending」 = 오늘 짝 맞추기 전(어제 것을 오늘로 보이지 않게)
 LINK_LISTED, LINK_MISSING, LINK_BROKEN, LINK_NOT_LINKED, LINK_NONE, LINK_PENDING = (
     "listed", "missing", "broken", "not_linked", "none", "pending")
@@ -313,23 +316,39 @@ def _num(v) -> Optional[float]:
     return float(v)
 
 
-def today_numbers(ctx: Ctx, pid: int) -> dict:
-    """오늘 점검이 읽은 숫자(이 가망에 이어진 계정 합) — 어제 광고비 · 비즈머니 잔액. 판정 조립과 같은 약속: 오늘 짝
-    맞추기일 때만 · 계정 하루치의 가망이 이 가망일 때만(어제 것 · 다른 가망 짝으로 적힌 것은 싣지 않는다). 못 읽은 칸은 None."""
-    spend = biz = None
-    if ctx.pairing_today:
-        for r in ctx.rows_by_pid.get(pid, ()):
-            if r["state"] not in S.PAIR_CHECKABLE or r["customer_id"] is None:
-                continue
-            got = ctx.checks_today.get(r["customer_id"])
-            if got is None or got["possibility_id"] != pid:
-                continue
-            s_, b_ = _num(got.get("yday_spend")), _num(got.get("bizmoney"))
-            if s_ is not None:
-                spend = (spend or 0.0) + s_
-            if b_ is not None:
-                biz = (biz or 0.0) + b_
-    return {"yday_spend": None if spend is None else round(spend), "bizmoney": None if biz is None else round(biz)}
+NUMBER_KEYS = ("yday_spend", "bizmoney")                        # 관제 판 표 칸
+CLIENT_NUMBER_KEYS = ("yday_spend", "bizmoney", "yday_imp", "yday_clk")   # 광고주 한 장 타일
+
+
+def today_numbers(ctx: Ctx, pid: int, keys: Tuple[str, ...] = NUMBER_KEYS) -> dict:
+    """오늘 점검이 읽은 숫자(이 가망에 이어진 계정 합) — 어제 광고비 · 비즈머니 잔액(광고주 한 장은 노출·클릭까지). 판정
+    조립과 같은 약속: 오늘 짝 맞추기일 때만 · 계정 하루치의 가망이 이 가망일 때만. **점검할 계정이 모두 그 숫자를 줬을
+    때만 합**을 낸다 — 한 계정이라도 오늘 하루치가 없거나(다른 가망 짝으로 적힌 것 포함) 그 칸이 비면 None(일부만 더한
+    값을 전체처럼 보이지 않게 · 검토 partial-sum-looks-complete). 모름 ≠ 0."""
+    out = {k: None for k in keys}
+    if not ctx.pairing_today:
+        return out
+    sums: Dict[str, Optional[float]] = {k: 0.0 for k in keys}
+    seen = False
+    for r in ctx.rows_by_pid.get(pid, ()):
+        if r["state"] not in S.PAIR_CHECKABLE or r["customer_id"] is None:
+            continue
+        got = ctx.checks_today.get(r["customer_id"])
+        if got is None or got["possibility_id"] != pid:
+            return out
+        seen = True
+        for k in keys:
+            v = _num(got.get(k))
+            sums[k] = None if v is None or sums[k] is None else sums[k] + v
+    if not seen:
+        return out
+    return {k: None if sums[k] is None else round(sums[k]) for k in keys}
+
+
+def has_unlinked(ctx: Ctx, pid: int) -> bool:
+    """이관 안 된 번호가 있나 — 짝 맞추기 막힘 ``not-linked`` 줄이 하나라도(I3 · ``unlinked()`` · 월요일 「이관 받을 곳」
+    알림과 같은 규칙). 이어진 계정이 따로 있어도 참 — 「이관」 칸(``link_state``)과 다른 축이다(검토 unlinked-screen-fewer)."""
+    return any(r["state"] == S.PAIR_BLOCKED and r["code"] == CODE_NOT_LINKED for r in ctx.rows_by_pid.get(pid, ()))
 
 
 def link_state(ctx: Ctx, pid: int) -> str:
@@ -349,16 +368,32 @@ def link_state(ctx: Ctx, pid: int) -> str:
     return LINK_NONE
 
 
-def _hand(ctx: Ctx, store: S.Store, issue_id: int) -> Optional[dict]:
-    """이슈에 사람이 가장 늦게 한 일(👀 · ✅ · 🙈) — 누가 · 언제 · 예외 사유."""
+def _hand_of(ctx: Ctx, events: Iterable[dict]) -> Optional[dict]:
+    """이슈에 사람이 가장 늦게 한 일(👀 · ✅ · 🙈) — 누가 · 언제 · 예외 사유. 이슈가 다시 시작된 기록(``RESET_KINDS``)보다
+    앞선 손길은 지난 일이라 싣지 않는다."""
     last = None
-    for e in store.issue_events(issue_id):
-        if e["kind"] in HAND_KINDS and e["by_person"] is not None:
+    for e in events:
+        if e["kind"] in RESET_KINDS:
+            last = None
+        elif e["kind"] in HAND_KINDS and e["by_person"] is not None:
             last = e
     if last is None:
         return None
     return {"kind": last["kind"], "at": last["at"], "by": _person_name(ctx.org, last["by_person"]),
             "note": last["note"], "exception_until": last["exception_until"]}
+
+
+def hand_now(ctx: Ctx, i: dict, hand: Optional[dict]) -> Optional[dict]:
+    """지금 상태에 맞는 사람 손길 — 🆕(기간이 끝나 🆕 로 세는 예외 포함)는 사람이 아직 손대지 않은 상태라 없음. 끝난 예외의
+    기록(예외 끝남)은 다음 아침 점검이 적으므로 그 전에도 옛 사유를 붙이지 않게 세는 상태로 가른다."""
+    return None if counting_state(i, ctx.today) == V.ST_NEW else hand
+
+
+def hands(ctx: Ctx, store: S.Store, issue_ids: Iterable[int]) -> Dict[int, Optional[dict]]:
+    """이슈 여럿의 마지막 사람 손길 — 한 번에 읽는다(이슈마다 따로 읽지 않게 · 검토 board-n-plus-1)."""
+    ids = sorted(set(issue_ids))
+    events = store.issue_hand_events(ids, HAND_KINDS | RESET_KINDS) if ids else {}
+    return {n: _hand_of(ctx, events.get(n, ())) for n in ids}
 
 
 def issue_can(ctx: Ctx, scope: SC.Scope, own: SC.Ownership, i: dict) -> dict:
@@ -372,17 +407,23 @@ def issue_can(ctx: Ctx, scope: SC.Scope, own: SC.Ownership, i: dict) -> dict:
     tall = actor is not None and need is not None and rank.index(actor) >= rank.index(need)
     can_except = (handle and tall and i["state"] != V.ST_EXCEPTION and eff in ISSUE_OPEN
                   and O.allows_raising(ctx.freshness))
+    # 막힌 까닭은 서버가 거절하는 순서 그대로(``web._h_issue_except`` 조직 신선도 → ``issues.grant_exception`` 예외 중 →
+    # 층) — 열린 줄(🆕·👀)에서만 ·
+    # 닫힌 줄 · 「오늘 풀린 것」에는 단추 자체가 없다(검토 except-blocked-on-closed-row)
+    blocked = None
+    if handle and not can_except and eff in ISSUE_OPEN:
+        blocked = ("org-stale" if not O.allows_raising(ctx.freshness) else
+                   "exception-active" if i["state"] == V.ST_EXCEPTION else "actor-too-low")
     return {"ack": handle and eff == V.ST_NEW,
             "resolve": handle and i["state"] in ("new", "ack", "exception"),
             "except": can_except,
             "except_until_max": IS.max_exception_until(i["severity"], ctx.today).isoformat() if can_except else None,
-            "except_blocked": None if can_except or not handle else
-            ("org-stale" if tall and eff in ISSUE_OPEN and i["state"] != V.ST_EXCEPTION else
-             "actor-too-low" if not tall else None)}
+            "except_blocked": blocked}
 
 
-def issue_row(ctx: Ctx, store: S.Store, scope: SC.Scope, i: dict) -> dict:
-    """관제 판 이슈 한 줄 — 원인별 묶음 아래 광고주마다(S13). 고객 번호는 끝 4자리만 · 사실 칸은 저장된 그대로(금액·일수)."""
+def issue_row(ctx: Ctx, store: S.Store, scope: SC.Scope, i: dict, hand: Optional[dict] = None) -> dict:
+    """관제 판 이슈 한 줄 — 원인별 묶음 아래 광고주마다(S13). 고객 번호는 끝 4자리만 · 사실 칸은 저장된 그대로(금액·일수).
+    사람 손길(``hand``)은 부르는 쪽이 ``hands`` 로 한 번에 읽어 넘긴다."""
     pid = i["possibility_id"]
     own = ctx.owns[pid]
     return {"issue_id": i["issue_id"], "possibility_id": pid, "name": ctx.prospects[pid]["name"],
@@ -392,7 +433,7 @@ def issue_row(ctx: Ctx, store: S.Store, scope: SC.Scope, i: dict) -> dict:
             "first_seen_on": i["first_seen_on"], "last_seen_on": i["last_seen_on"],
             "reappear_count": i["reappear_count"], "exception_until": i["exception_until"],
             "facts": i["facts"], "target_tail": tail4(i["customer_id"]), "updated_at": i["updated_at"],
-            "hand": _hand(ctx, store, i["issue_id"]), "can": issue_can(ctx, scope, own, i)}
+            "hand": hand_now(ctx, i, hand), "can": issue_can(ctx, scope, own, i)}
 
 
 # ── 12시간 안 풀린 🟡 — 한 단계 위로 ────────────────────────────────────
@@ -487,22 +528,25 @@ def board(ctx: Ctx, store: S.Store, scope: SC.Scope, selection: str = "all", att
                      "relation": SC.relation(ctx.org, scope, own), "owner": _owner(ctx, own),
                      "verdict": _verdict_out(v), "open_red": red, "open_yellow": yellow,
                      "account_unconfirmed": _auto_link(ctx, pid), "link": link_state(ctx, pid),
-                     **today_numbers(ctx, pid)})
+                     "unlinked": has_unlinked(ctx, pid), **today_numbers(ctx, pid)})
     issues = sorted(({**g, "clients": len(g["clients"])} for g in by_code.values()),
                     key=lambda g: (g["severity"] != V.SEV_RED, -g["clients"], g["code"]))
     rows.sort(key=lambda r: (r["owner"]["team_name"] or "", r["owner"]["name"] or "", r["possibility_id"]))
     # 이관 띠(S13) — 표(확인 필요만)와 상관없이 고른 범위의 모든 가망
     links = {k: 0 for k in LINK_KINDS}
+    links["unlinked_numbers"] = 0   # 이관 안 된 번호가 있는 곳(위 칸들과 겹칠 수 있음 · 월요일 알림과 같은 수)
     for pid in ids:
         links[link_state(ctx, pid)] += 1
+        links["unlinked_numbers"] += has_unlinked(ctx, pid)
     # 이슈 한 줄씩(S13) — 고른 범위 안만 · 열린 것(🆕·👀) = 「오늘의 이슈」 · 🙈 예외 · 오늘 닫힌 것 = 「오늘 풀린 것」
-    open_rows, done_rows = [], []
+    open_src, done_src = [], []
     for pid in sorted(ids):
         for i in ctx.open_issues.get(pid, ()):
-            (open_rows if counting_state(i, ctx.today) in ISSUE_OPEN else done_rows).append(issue_row(ctx, store, scope, i))
-    for i in store.issues_closed_on(ctx.today):
-        if i["possibility_id"] in ids:
-            done_rows.append(issue_row(ctx, store, scope, i))
+            (open_src if counting_state(i, ctx.today) in ISSUE_OPEN else done_src).append(i)
+    done_src += [i for i in store.issues_closed_on(ctx.today) if i["possibility_id"] in ids]
+    hand = hands(ctx, store, (i["issue_id"] for i in open_src + done_src))
+    open_rows = [issue_row(ctx, store, scope, i, hand.get(i["issue_id"])) for i in open_src]
+    done_rows = [issue_row(ctx, store, scope, i, hand.get(i["issue_id"])) for i in done_src]
     sev = {V.SEV_RED: 0, V.SEV_YELLOW: 1, V.SEV_INFO: 2}
     open_rows.sort(key=lambda r: (sev.get(r["severity"], 3), r["code"], r["state"] != V.ST_NEW, r["possibility_id"],
                                   r["issue_id"]))
@@ -526,6 +570,22 @@ def _history(store: S.Store, ctx: Ctx, customer_id: int, pid: int) -> List[dict]
                     "yday_spend": ad["yday_spend"], "yday_imp": ad["yday_imp"], "yday_clk": ad["yday_clk"],
                     "data_late": ad["data_late"], "rules_not_run": [list(x) for x in ad["rules_not_run"]]})
     return out
+
+
+def day_totals(accounts: List[dict]) -> List[dict]:
+    """광고주 한 장 14일 막대 — 날마다 이어진 계정의 전날 광고비 합. 그날 읽은 계정이 모두가 아니면 ``complete`` 거짓(화면이
+    「일부 계정만」으로 흐리게) · 하나도 없으면 None(빈 막대). 화면이 계정별 기록을 다시 더하지 않게 서버가 센다."""
+    days: Dict[str, dict] = {}
+    for a in accounts:
+        for d in a["history"]:
+            x = days.setdefault(d["day"], {"day": d["day"], "yday_spend": None, "read": 0})
+            v = _num(d.get("yday_spend")) if d.get("status") is not None else None
+            if v is not None:
+                x["yday_spend"] = (x["yday_spend"] or 0.0) + v
+                x["read"] += 1
+    n = len(accounts)
+    return [{"day": k, "yday_spend": None if x["yday_spend"] is None else round(x["yday_spend"]),
+             "complete": n > 0 and x["read"] == n} for k, x in sorted(days.items())]
 
 
 def _issue_out(ctx: Ctx, store: S.Store, i: dict) -> dict:
@@ -552,16 +612,19 @@ def client(ctx: Ctx, store: S.Store, scope: SC.Scope, pid) -> dict:
                          "link": _link_of(r), "state": r["state"],
                          "history": _history(store, ctx, r["customer_id"], pid)})
     since = ctx.today - timedelta(days=HISTORY_DAYS)
-    issues = [{**_issue_out(ctx, store, i), "state_now": counting_state(i, ctx.today), "can": issue_can(ctx, scope, own, i)}
-              for i in store.issues(pid)
-              if i["state"] in ("new", "ack", "exception") or (_day(i["last_seen_on"]) or ctx.today) >= since]
+    shown = [i for i in store.issues(pid)
+             if i["state"] in ("new", "ack", "exception") or (_day(i["last_seen_on"]) or ctx.today) >= since]
+    hand = hands(ctx, store, (i["issue_id"] for i in shown))
+    issues = [{**_issue_out(ctx, store, i), "state_now": counting_state(i, ctx.today), "can": issue_can(ctx, scope, own, i),
+               "hand": hand_now(ctx, i, hand.get(i["issue_id"]))} for i in shown]
     allowed = SC.allowed_actions(ctx.org, scope, own)
     actor = SC.issue_actor(ctx.org, scope, own)
     return {"possibility_id": pid, "name": p["name"], "stage": p["stage_key"], "managed": p["present"] == 1,
             "today": ctx.today.isoformat(),   # 화면이 예외 기간을 서버의 「오늘」로 세게(S13)
             "latest_end_date": p["latest_end_date"], "relation": SC.relation(ctx.org, scope, own),
             "owner": _owner(ctx, own), "verdict": _verdict_out(v), "accounts": accounts, "issues": issues,
-            "link": link_state(ctx, pid), "account_unconfirmed": _auto_link(ctx, pid), **today_numbers(ctx, pid),
+            "link": link_state(ctx, pid), "account_unconfirmed": _auto_link(ctx, pid), "unlinked": has_unlinked(ctx, pid),
+            **today_numbers(ctx, pid, CLIENT_NUMBER_KEYS), "days": day_totals(accounts),
             "report": REPORT_PREPARING,
             "actions": {"handle_issue": SC.ACT_HANDLE_ISSUE in allowed, "confirm_link": SC.ACT_CONFIRM_LINK in allowed,
                         "exception_actor": actor,
@@ -595,7 +658,10 @@ def links_pending(ctx: Ctx, store: S.Store, scope: SC.Scope) -> dict:
                          "same_name": r["same_name"],
                          "other_candidate": customer and (bool(r["claimed_elsewhere"]) or r["code"] in CLAIM_CODES
                                                           or bool(holders)),
-                         "can_confirm": ok and clear, "can_reject": ok})
+                         # 「이 계정 맞음」은 올리기 관문(조직 신선도)을 지나야 서버가 받는다 — 예외 단추와 같게(검토
+                         # confirm-enabled-when-org-stale) · 「아님」은 막지 않는다
+                         "can_confirm": ok and clear and O.allows_raising(ctx.freshness), "can_reject": ok,
+                         "confirm_blocked": "org-stale" if ok and clear and not O.allows_raising(ctx.freshness) else None})
     decisions = []
     for d in ctx.live_decisions + ctx.lost_decisions:
         if d.possibility_id in ids and SC.ACT_CONFIRM_LINK in SC.allowed_actions(ctx.org, scope, ctx.owns[d.possibility_id]):
@@ -642,7 +708,7 @@ def unlinked(ctx: Ctx, scope: SC.Scope) -> dict:
     """⚪ 「이관 안 됨」 — 한 번도 이관된 적 없는 곳(짝 맞추기 막힘 ``not-linked`` · I3 ⓐ · 보이는 가망만)."""
     rows = []
     for pid in sorted(visible(ctx, scope)):
-        if any(r["state"] == S.PAIR_BLOCKED and r["code"] == CODE_NOT_LINKED for r in ctx.rows_by_pid.get(pid, ())):
+        if has_unlinked(ctx, pid):
             rows.append({"possibility_id": pid, "name": ctx.prospects[pid]["name"],
                          "stage": ctx.prospects[pid]["stage_key"], "owner": _owner(ctx, ctx.owns[pid])})
     return {"pairing_at": None if ctx.pairing is None else _iso(ctx.pairing["at"]), "rows": rows}

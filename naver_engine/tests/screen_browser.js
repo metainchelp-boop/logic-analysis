@@ -97,10 +97,11 @@ async function hygiene(tag, p, log, firstNavUrl) {
       const need = await p.$$eval('#kpis .kpi', (els) => els.length);
       ok('대표: 숫자 칸 5개', need === 5, need);
       const iw = await p.textContent('#iwan');
-      ok('대표: 이관 띠에 서버 이관 수', iw.includes('이관됨 ' + fmt(board.links.listed)) && iw.includes('이관 안 됨 ' + fmt(board.links.not_linked)), iw);
-      await p.click('#iwan .ichip:has-text("이관 안 됨")');
+      ok('대표: 이관 띠에 서버 이관 수', iw.includes('이관됨 ' + fmt(board.links.listed)) && iw.includes('이관 안 된 번호 ' + fmt(board.links.unlinked_numbers)), iw);
+      await p.click('#iwan .ichip:has-text("이관 안 된 번호")');
       const nl = await p.$$eval('#tbody tr[data-pid]', (els) => els.map((e) => Number(e.getAttribute('data-pid'))));
-      ok('대표: 「이관 안 됨」을 누르면 그 광고주만', JSON.stringify(nl) === JSON.stringify(board.rows.filter((r) => r.link === 'not_linked').map((r) => r.possibility_id)), nl);
+      const unl = (await api(p, '/unlinked')).body.rows.map((r) => r.possibility_id);
+      ok('대표: 「이관 안 된 번호」를 누르면 월요일 알림(/unlinked)과 같은 광고주', JSON.stringify(nl) === JSON.stringify(board.rows.filter((r) => r.unlinked).map((r) => r.possibility_id)) && JSON.stringify(nl.slice().sort()) === JSON.stringify(unl.slice().sort()), { nl, unl });
       // 광고주 한 장
       await p.click('#tblChips .chip[data-f="all"]');
       await p.click('#tbody tr[data-pid="11"] button.link');
@@ -152,7 +153,139 @@ async function hygiene(tag, p, log, firstNavUrl) {
       const sw = await p.evaluate(() => [document.documentElement.scrollWidth, window.innerWidth]);
       ok('대표: 390px 화면에서 가로로 밀리지 않는다', sw[0] <= sw[1] + 1, sw);
       await shot(p, '4-대표-좁은화면');
+      await p.click('#menuSettings');
+      await p.waitForSelector('#s-settings.on #th-bizmoney_red_days');
+      const bx = await p.$eval('#th-bizmoney_red_days', (e) => { const r = e.getBoundingClientRect(); return [r.left, r.right]; });
+      ok('대표: 390px 에서도 기준값 칸이 옆으로 밀지 않고 보인다', bx[0] >= 0 && bx[1] <= 390, bx);
+      await p.click('[data-go="/naver/"]');
+      await p.waitForSelector('#s-watch.on #kpis .kpi');
       await hygiene('대표', p, log, url);
+      await ctx.close();
+    }
+
+    // ── 새로 고침 뒤에도 토큰 끝 시각에서 센다(검토 refresh-timer-reset) ──
+    {
+      const { ctx, log } = await newCtx(browser);
+      const p = await page(ctx, log);
+      await p.clock.install();
+      const url = base + '/naver/?sso=' + encodeURIComponent(cfg.sso.ceo3);
+      await p.goto(url);
+      await p.waitForSelector('#s-watch.on #kpis .kpi');
+      const s0 = await p.evaluate(() => JSON.parse(sessionStorage.getItem('naverWatch.session')));
+      await p.mouse.click(5, 5);
+      await p.clock.fastForward(40 * 60 * 1000);
+      await p.reload();
+      await p.waitForSelector('#s-watch.on #kpis .kpi');
+      const t1 = await p.evaluate(() => Date.now());
+      ok('F5: 새로 고침 뒤에도 가짜 시계가 이어진다(시험 전제)', t1 - s0.exp > -21 * 60 * 1000, [t1, s0.exp]);
+      const waitR = p.waitForResponse((r) => r.url().endsWith('/api/naver-auto/session/refresh') && r.status() === 200, { timeout: 8000 }).then(() => true, () => false);
+      await p.mouse.click(5, 5);
+      await p.clock.runFor(10 * 60 * 1000 + 2000);
+      ok('F5: 새로 고침 10분 뒤(토큰 끝 10분 전) 갱신한다', await waitR);
+      await p.waitForTimeout(200);
+      await p.clock.runFor(11 * 60 * 1000);
+      await p.waitForTimeout(200);
+      ok('F5: 옛 토큰 끝 시각이 지나도 들어와 있다', await p.isVisible('#s-watch.on'));
+      const s1 = await p.evaluate(() => JSON.parse(sessionStorage.getItem('naverWatch.session') || 'null'));
+      ok('F5: 토큰 끝 시각이 늘었다', s1 && s1.exp > s0.exp, [s0.exp, s1 && s1.exp]);
+      await hygiene('F5', p, log, url);
+      await ctx.close();
+    }
+
+    // ── 1시간 넘게 손대지 않으면 이 창의 로그인을 끝낸다(검토 idle-refresh-forever) ──
+    {
+      const { ctx, log } = await newCtx(browser);
+      const p = await page(ctx, log);
+      await p.clock.install();
+      const url = base + '/naver/?sso=' + encodeURIComponent(cfg.sso.idle101);
+      await p.goto(url);
+      await p.waitForSelector('#s-watch.on #kpis .kpi');
+      await p.clock.runFor(30 * 60 * 1000);
+      await p.click('#tblChips .chip[data-f="all"]');       // 사람이 손댐 — 쉰 시간이 다시 0 부터
+      const waitR = p.waitForResponse((r) => r.url().endsWith('/api/naver-auto/session/refresh'), { timeout: 8000 }).then(() => true, () => false);
+      await p.clock.runFor(21 * 60 * 1000);
+      ok('쉼: 손댄 뒤에는 토큰 끝 10분 전에 갱신한다', await waitR);
+      await p.waitForTimeout(200);
+      await p.clock.runFor(35 * 60 * 1000);
+      ok('쉼: 손댄 뒤 1시간이 안 되면 들어와 있다', await p.isVisible('#s-watch.on'));
+      await p.clock.runFor(30 * 60 * 1000);
+      await p.waitForSelector('#s-blocked.on');
+      ok('쉼: 1시간 넘게 손대지 않으면 「오래 쉬어 로그인을 끝냈습니다」', (await p.textContent('#b-t')).includes('오래 쉬어'));
+      ok('쉼: 토큰을 지운다', (await p.evaluate(() => sessionStorage.getItem('naverWatch.session'))) === null);
+      await hygiene('쉼', p, log, url);
+      await ctx.close();
+    }
+
+    // ── 경합 · 늦은 답 — 첫 불러오기 실패 · 빠른 범위 바꾸기 · 누른 뒤 다른 화면 · 광고주 바꿈 · 🔔 먼저 누름 · 두 번 누름 ──
+    {
+      const { ctx, log } = await newCtx(browser);
+      const delay = (ms) => new Promise((res) => setTimeout(res, ms));
+      let failBoard = true;
+      await ctx.route('**/api/naver-auto/board*', async (route) => {
+        if (failBoard) return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'org-unavailable' }) });
+        if (route.request().url().includes('selection=me')) await delay(900);
+        return route.continue();
+      });
+      const p = await page(ctx, log);
+      const url = base + '/naver/?sso=' + encodeURIComponent(cfg.sso.ceo4);
+      await p.goto(url);
+      await p.waitForSelector('#issues .empty button');
+      const msg = await p.textContent('#issues');
+      ok('경합: 첫 불러오기 실패 = 까닭 + 「다시 불러오기」(불러오는 중에 멈추지 않음)', msg.includes('불러오지 못했습니다') && msg.includes('조직 자료를 아직 받지 못했습니다') && !msg.includes('불러오는 중'), msg);
+      await p.click('#tblChips .chip[data-f="all"]');
+      await p.fill('#q', '가');
+      await p.fill('#q', '');
+      failBoard = false;
+      await p.click('#issues .empty button');
+      await p.waitForSelector('#s-watch.on #kpis .kpi');
+      ok('경합: 다시 불러오면 숫자 칸이 나온다', (await p.$$eval('#kpis .kpi', (els) => els.length)) === 5);
+      log.statuses = log.statuses.filter((x) => !(x[0] === 503 && x[1].startsWith('/api/naver-auto/board')));   // 일부러 낸 실패
+      // 빠른 범위 바꾸기 — 늦게 오는 「내 담당만」 답이 「전체」를 덮지 않는다
+      const all = (await api(p, '/board?selection=all&attention=0')).body.counts;
+      await p.selectOption('#scope', 'me');
+      await p.selectOption('#scope', 'all');
+      await p.waitForTimeout(1500);
+      const kv = await p.$$eval('#kpis .kpi .v', (els) => els.map((e) => e.textContent));
+      ok('경합: 범위를 빨리 바꿔도 마지막 고른 범위의 숫자', JSON.stringify(kv) === JSON.stringify([all.needs_attention, all.red, all.yellow, all.green, all.white].map(fmt)) && (await p.inputValue('#scope')) === 'all', kv);
+      // 두 번 누름 · 누른 뒤 다른 화면 — 답이 늦게 와도 설정 화면에 머문다
+      await ctx.route('**/api/naver-auto/issues/*/ack', async (route) => { await delay(700); return route.continue(); });
+      const before = log.requests.length;
+      const row = '#issues .iss[data-issue="' + cfg.red + '"]';
+      await p.waitForSelector(row + ' button:has-text("확인 중")');
+      const clicked = await p.$eval(row + ' .act button', (b) => { const t = b.textContent; b.click(); b.click(); return t; });
+      await p.click('#menuSettings');
+      await p.waitForTimeout(1300);
+      const acks = log.requests.slice(before).filter((r) => /\/issues\/\d+\/ack$/.test(r.url) && r.method === 'POST').length;
+      ok('경합: 👀 를 두 번 눌러도 한 번만 보낸다', acks === 1, { acks, clicked });
+      ok('경합: 누른 뒤 설정으로 옮기면 늦은 답이 관제로 끌고 오지 않는다', new URL(p.url()).pathname === '/naver/settings' && await p.isVisible('#s-settings.on') && !(await p.isVisible('#s-watch.on')), p.url());
+      // 광고주 바꿈 — 앞 광고주의 이름·연결 칸이 남지 않는다
+      await p.click('[data-go="/naver/"]');
+      await p.waitForSelector('#s-watch.on #tbody tr');
+      await p.click('#tblChips .chip[data-f="all"]');
+      await p.click('#tbody tr[data-pid="11"] button.link');
+      await p.waitForFunction(() => document.getElementById('c-name').textContent.length > 0);
+      await p.click('[data-ctab="conn"]');
+      await p.goBack();
+      await p.waitForSelector('#s-watch.on');
+      await ctx.route('**/api/naver-auto/clients/12', async (route) => { await delay(900); return route.continue(); });
+      await p.click('#tblChips .chip[data-f="all"]');
+      await p.click('#tbody tr[data-pid="12"] button.link');
+      await p.waitForSelector('#s-client.on');
+      const mid = await p.evaluate(() => [document.getElementById('c-name').textContent, document.getElementById('p-conn').classList.contains('on'),
+                                          document.querySelectorAll('#p-conn button').length]);
+      ok('경합: 다른 광고주를 여는 동안 앞 광고주 이름·연결 칸·단추가 없다', mid[0] === '' && mid[1] === false && mid[2] === 0, mid);
+      await p.waitForFunction(() => document.getElementById('c-name').textContent.length > 0);
+      const c12 = (await api(p, '/clients/12')).body;
+      ok('경합: 다 불러오면 새 광고주 이름', (await p.textContent('#c-name')) === c12.name);
+      // 🔔 — 목록을 받기 전에는 「모두 읽음」을 누를 수 없다
+      await ctx.route('**/api/naver-auto/bell', async (route) => { await delay(800); return route.continue(); });
+      await p.click('#bell');
+      await p.waitForSelector('#drawer.on');
+      ok('경합: 🔔 목록을 받기 전 「모두 읽음」은 잠겨 있다', await p.isDisabled('#bellAll'));
+      await p.waitForFunction(() => !document.querySelector('#drawerBody .loading'));
+      ok('경합: 🔔 목록을 받으면 「모두 읽음」이 풀린다', await p.isEnabled('#bellAll'));
+      await p.keyboard.press('Escape');
+      await hygiene('경합', p, log, url);
       await ctx.close();
     }
 
@@ -228,14 +361,19 @@ async function hygiene(tag, p, log, firstNavUrl) {
       await ctx.close();
     }
 
+
     // ── 서버 값을 그대로 그리나 — 관제 판 응답을 일부러 다른 숫자·앞뒤가 안 맞는 줄로 바꿔 넣는다 ──
     {
       const { ctx, log } = await newCtx(browser);
       const fake = {
         band: { today: '2026-09-29', deadline_passed: true, runs: [], pairing_at: null, pairing_today: true, org_freshness: 'fresh', org_generated_at: null, stage_as_of: null },
         counts: { red: 5, yellow: 3, green: 7, white: 2, needs_attention: 9, total: 17 },
-        links: { listed: 4, missing: 6, broken: 8, not_linked: 10, none: 1, pending: 0 },
-        issues: [], issue_rows: [], done_rows: [], escalated_to_me: [], attention_only: false, selection: 'all',
+        links: { listed: 4, missing: 6, broken: 8, not_linked: 10, none: 1, pending: 0, unlinked_numbers: 12 },
+        issues: [], done_rows: [], escalated_to_me: [], attention_only: false, selection: 'all',
+        issue_rows: [901, 902].map((n) => ({ issue_id: n, possibility_id: 901, name: '예시가', owner: { name: '담당가' }, relation: 'all',
+          code: 'bizmoney_empty', rule: 'bizmoney', severity: 'red', state: 'new', stored_state: 'new', first_seen_on: '2026-09-29',
+          last_seen_on: '2026-09-29', reappear_count: 0, exception_until: null, facts: {}, target_tail: String(1000 + n), updated_at: null,
+          hand: null, can: { ack: true, resolve: true, except: false, except_until_max: null, except_blocked: 'actor-too-low' } })),
         rows: [
           { possibility_id: 901, name: '예시가', stage: '진행중', relation: 'all', owner: { name: '담당가', team_name: '팀가' },
             verdict: { color: 'green', needs_attention: false, reasons: [], white_reason: null }, open_red: 3, open_yellow: 0,
@@ -245,7 +383,10 @@ async function hygiene(tag, p, log, firstNavUrl) {
             account_unconfirmed: false, link: 'broken', yday_spend: null, bizmoney: null },
           { possibility_id: 903, name: '예시다', stage: '계약만료', relation: 'all', owner: { name: null, team_name: null },
             verdict: { color: 'red', needs_attention: true, reasons: ['open-red'], white_reason: null }, open_red: 0, open_yellow: 0,
-            account_unconfirmed: true, link: 'missing', yday_spend: 0, bizmoney: 0 }
+            account_unconfirmed: true, link: 'missing', yday_spend: 0, bizmoney: 0 },
+          { possibility_id: 904, name: '예시라', stage: '진행중', relation: 'all', owner: { name: '담당가', team_name: '팀가' },
+            verdict: { color: 'green', needs_attention: false, reasons: [], white_reason: null }, open_red: 0, open_yellow: 0,
+            account_unconfirmed: false, link: 'listed', unlinked: true, yday_spend: 10, bizmoney: 20 }
         ]
       };
       await ctx.route('**/api/naver-auto/board*', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fake) }));
@@ -256,15 +397,24 @@ async function hygiene(tag, p, log, firstNavUrl) {
       const kv = await p.$$eval('#kpis .kpi .v', (els) => els.map((e) => e.textContent));
       ok('가짜 값: 숫자 5칸이 서버 값 그대로(확인 필요 · 긴급 · 주의 · 정상 · 점검 불가 순)', JSON.stringify(kv) === JSON.stringify(['9', '5', '3', '7', '2']), kv);
       const iw = await p.textContent('#iwan');
-      ok('가짜 값: 이관 띠가 서버 값 그대로', ['이관됨 4', '🔌 이관 빠짐 8', '오늘 목록에 없음 6', '이관 안 됨 10'].every((t) => iw.includes(t)), iw);
+      ok('가짜 값: 이관 띠가 서버 값 그대로', ['이관됨 4', '🔌 이관 빠짐 8', '오늘 목록에 없음 6', '이관 안 된 번호 12'].every((t) => iw.includes(t)), iw);
+      const head = await p.textContent('#issues .cause');
+      ok('가짜 값: 묶음 머리 「곳」은 광고주 수(한 광고주의 계정 둘 = 1곳 · 계정 2개)', head.includes('1곳 · 계정 2개'), head);
+      const note = await p.$$eval('#issues .iss .blocked-note', (els) => els.map((e) => e.textContent));
+      const dis = await p.$$eval('#issues .iss button[disabled]', (els) => els.length);
+      ok('가짜 값: 막힌 🙈 는 흐린 단추가 아니라 까닭 글자', note.length === 2 && note.every((t) => t.includes('팀장 이상')) && dis === 0, { note, dis });
       await p.click('#tblChips .chip[data-f="all"]');
       const drawn = await p.$$eval('#tbody tr[data-pid]', (els) => els.map((e) => [e.getAttribute('data-pid'), e.querySelector('.sig').className, e.querySelector('.hint').textContent, e.children[2].textContent, e.children[3].textContent]));
       ok('가짜 값: 열린 🔴 가 있어도 서버가 🟢 라면 🟢(화면이 판정하지 않는다)', drawn.some((d) => d[0] === '901' && d[1] === 'sig green' && d[2] === '정상' && d[3] === '—'), drawn);
       ok('가짜 값: ⚪ 사유 글자 · 확인 필요 · 이관 빠짐', drawn.some((d) => d[0] === '902' && d[1] === 'sig white' && d[2] === '읽기 거절 · 이관 남음' && d[3] === '확인 필요' && d[4] === '🔌 이관 빠짐'), drawn);
       ok('가짜 값: 열린 이슈 0 이어도 서버가 🔴 라면 🔴', drawn.some((d) => d[0] === '903' && d[1] === 'sig red' && d[4] === '오늘 목록에 없음'), drawn);
+      ok('가짜 값: 이관 칸에 「+ 이관 안 된 번호」(이관됨과 함께)', drawn.some((d) => d[0] === '904' && d[4].includes('이관됨') && d[4].includes('+ 이관 안 된 번호')), drawn);
       await p.click('#kpis .kpi.white');
       const wv = await p.$$eval('#tbody tr[data-pid]', (els) => els.map((e) => e.getAttribute('data-pid')));
       ok('가짜 값: 「점검 불가」 칸은 서버 색이 ⚪ 인 줄만', JSON.stringify(wv) === JSON.stringify(['902']), wv);
+      await p.click('#iwan .ichip:has-text("이관 안 된 번호")');
+      const uv = await p.$$eval('#tbody tr[data-pid]', (els) => els.map((e) => e.getAttribute('data-pid')));
+      ok('가짜 값: 「이관 안 된 번호」는 서버 표시(unlinked)가 있는 줄만', JSON.stringify(uv) === JSON.stringify(['904']), uv);
       await ctx.close();
     }
 

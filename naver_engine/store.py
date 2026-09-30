@@ -74,7 +74,7 @@ import stat as _stat
 from collections import Counter
 from dataclasses import asdict, dataclass, field, fields
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Callable, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from . import erp_read as E
 from . import fields as F
@@ -180,6 +180,7 @@ _ACCESS_CODE = re.compile(r"[a-z][a-z0-9_]*(?:-[a-z0-9_]+)*")   # 동작 · 결�
 ACCESS_CODE_MAX = 40
 ACCESS_LOG_MAX_READ = 1000
 THRESHOLD_HISTORY_MAX_READ = 200
+ISSUE_READ_CHUNK = 500                   # 이슈 기록을 한 번에 읽을 때 IN 목록 한 묶음(SQLite 변수 한도 안)
 
 RUN_RUNNING, RUN_DONE, RUN_FAILED = "running", "done", "failed"
 RUN_END_STATUSES = frozenset({RUN_DONE, RUN_FAILED})
@@ -2515,10 +2516,11 @@ class Store:
             cur = self._current_thresholds(c)
             try:
                 new = T.validate(dict(changes), cur)
-            except T.ThresholdOutOfRange:
+            except T.ThresholdOutOfRange as e:
+                # 틀린 칸만(맞는 칸까지 「틀렸다」고 하지 않게 · 검토 thresholds-all-fields-flagged) · 아는 이름만
                 names = {f.name for f in fields(T.Thresholds)}
-                raise ScreenRefused("out-of-range", tuple(sorted(k for k in changes if isinstance(k, str)
-                                                                  and k in names))) from None
+                bad = [k for k in getattr(e, "fields", ()) if isinstance(k, str) and k in names]
+                raise ScreenRefused("out-of-range", tuple(sorted(set(bad)))) from None
             if new == cur:
                 raise ScreenRefused("no-change")
             c.execute("""INSERT INTO naver_auto_threshold_change (at, changed_by, before_values, after_values)
@@ -2784,6 +2786,25 @@ class Store:
         names = [x[0] for x in cur.description]
         return [dict(zip(names, r)) for r in cur.fetchall()]
 
+    def issue_hand_events(self, issue_ids, kinds) -> Dict[int, List[dict]]:
+        """이슈 여럿의 기록 중 고른 종류만 — {이슈 번호: [기록 …]}(번호 순). 관제 판이 이슈마다 따로 읽지 않게 한 번에(S13 ·
+        검토 board-n-plus-1). 칸은 사람 손길 표시에 쓰는 것만."""
+        ids = [_pos_int(n, "이슈 번호") for n in issue_ids]
+        ks = sorted({str(k) for k in kinds})
+        out: Dict[int, List[dict]] = {}
+        if not ids or not ks:
+            return out
+        cols = "issue_id, event_id, kind, at, by_person, note, exception_until"
+        names = [c.strip() for c in cols.split(",")]
+        for n in range(0, len(ids), ISSUE_READ_CHUNK):
+            part = ids[n:n + ISSUE_READ_CHUNK]
+            q = ("SELECT " + cols + " FROM naver_auto_issue_event WHERE issue_id IN (" + ",".join("?" * len(part)) +
+                 ") AND kind IN (" + ",".join("?" * len(ks)) + ") ORDER BY issue_id, event_id")
+            for r in self._conn.execute(q, (*part, *ks)):
+                d = dict(zip(names, r))
+                out.setdefault(int(d["issue_id"]), []).append(d)
+        return out
+
     def runs_on(self, run_date: date) -> List[dict]:
         """그 날(KST) 점검 회차들 — 번호 순."""
         cur = self._conn.execute("SELECT * FROM naver_auto_check_run WHERE run_date = ? ORDER BY run_id",
@@ -2804,19 +2825,19 @@ class Store:
             (_day_text(day, "날짜"),))}
 
     def account_day_checks_on(self, day: date) -> dict:
-        """그 날 계정 하루치의 판정 재료 {고객 번호: {status · possibility_id · rules_not_run · bizmoney · yday_spend}} —
-        관제 화면(S11)이 가망마다 판정(``verdict.judge``)을 만들 때 한 번에 읽는다(계정마다 따로 읽지 않게). 숫자 둘은
-        관제 판 표의 「어제 광고비」·「비즈머니」 칸(S13 · 판정에는 쓰지 않는다)."""
+        """그 날 계정 하루치의 판정 재료 {고객 번호: {status · possibility_id · rules_not_run · bizmoney · yday_spend ·
+        yday_imp · yday_clk}} — 관제 화면(S11)이 가망마다 판정(``verdict.judge``)을 만들 때 한 번에 읽는다(계정마다 따로 읽지
+        않게). 숫자 칸은 관제 판 표 「어제 광고비」·「비즈머니」 · 광고주 한 장 타일(S13 · 판정에는 쓰지 않는다)."""
         out = {}
-        for cid, st, pid, rnr, biz, spend in self._conn.execute(
-                """SELECT customer_id, status, possibility_id, rules_not_run, bizmoney, yday_spend
+        for cid, st, pid, rnr, biz, spend, imp, clk in self._conn.execute(
+                """SELECT customer_id, status, possibility_id, rules_not_run, bizmoney, yday_spend, yday_imp, yday_clk
                    FROM naver_auto_account_day WHERE day = ?""", (_day_text(day, "날짜"),)):
             try:
                 missing = [tuple(x) for x in json.loads(rnr)]
             except (TypeError, ValueError, RecursionError):
                 raise StoreError("저장된 계정 하루치를 읽지 못했습니다") from None
             out[int(cid)] = {"status": st, "possibility_id": None if pid is None else int(pid), "rules_not_run": missing,
-                             "bizmoney": biz, "yday_spend": spend}
+                             "bizmoney": biz, "yday_spend": spend, "yday_imp": imp, "yday_clk": clk}
         return out
 
     def issues_closed_on(self, day: date) -> List[dict]:

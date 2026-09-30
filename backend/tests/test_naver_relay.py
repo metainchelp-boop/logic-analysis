@@ -660,7 +660,8 @@ class PageFileTest(unittest.TestCase):
                      "object-src 'none'", "form-action 'self'"):
             self.assertIn(part, csp)
         self.assertNotIn("unsafe-eval", csp)
-        self.assertNotIn("script-src 'self' 'unsafe-inline'", csp)
+        self.assertNotIn("unsafe-inline", csp)   # 스크립트도 스타일도 인라인 금지(S13 검토 csp-style-inline)
+        self.assertIn("style-src 'self';", csp)
 
 
 # ── 날 바이트 엔진(모양이 이상한 답 · 느린 답 · 대기열) ───────────────────────

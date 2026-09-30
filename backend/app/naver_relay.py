@@ -98,7 +98,8 @@ PAGE_SCREENS = re.compile(r"(?:issues|system|unlinked|ended|links|settings|autom
 PAGE_HEADERS: Tuple[Tuple[str, str], ...] = (
     ("Cache-Control", "no-store"), ("Pragma", "no-cache"), ("X-Content-Type-Options", "nosniff"),
     ("Referrer-Policy", "no-referrer"), ("X-Frame-Options", "DENY"),
-    ("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+    # 인라인 스타일도 막는다 — 화면은 style 속성을 쓰지 않는다(막대 높이는 CSSOM · CSP 대상 아님 · 검토 csp-style-inline)
+    ("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; "
                                 "img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; "
                                 "base-uri 'none'; form-action 'self'; frame-ancestors 'none'"))
 
