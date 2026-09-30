@@ -25,6 +25,7 @@ from dataclasses import asdict, dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Dict, Iterable, List, Mapping, Optional, Tuple
 
+from app.naver_auto import issues as IS
 from app.naver_auto import matching as M
 from app.naver_auto import org_snapshot as O
 from app.naver_auto import scope as SC
@@ -54,6 +55,12 @@ CODE_NOT_LINKED = "not-linked"           # matching.B_NOT_LINKED — 한 번도 
 # ① 에 적힌 번호가 고객 번호가 아닌 막힘 — 사람이 「이 계정 맞음」으로 이을 수 없다(번호 자체가 계정이 아니다)
 NOT_A_CUSTOMER = frozenset({"ad-account-number", "customer-id-format", "customer-id-length", "ambiguous-space"})
 REPORT_PREPARING = "preparing"           # 광고주별 주간·월간 보고서 — 4차
+ISSUE_DONE = frozenset({"resolved", "auto_resolved", "closed_unlinked"})   # 닫힌 이슈 — 관제 판 「오늘 풀린 것」(S13)
+HAND_KINDS = frozenset({"acked", "resolved", "excepted"})   # 사람이 누른 기록 — 이슈 줄에 「누가 · 언제」(S13)
+# 관제 판 이관 칸(S13) — 가망마다 오늘 짝 맞추기 줄에서 한 값. 「pending」 = 오늘 짝 맞추기 전(어제 것을 오늘로 보이지 않게)
+LINK_LISTED, LINK_MISSING, LINK_BROKEN, LINK_NOT_LINKED, LINK_NONE, LINK_PENDING = (
+    "listed", "missing", "broken", "not_linked", "none", "pending")
+LINK_KINDS = (LINK_LISTED, LINK_MISSING, LINK_BROKEN, LINK_NOT_LINKED, LINK_NONE, LINK_PENDING)
 _REF_KEY = os.urandom(32)                # 짝 후보 가리킴표 서명 — 이 프로세스만 안다(다시 켜면 화면을 새로 불러온다)
 REF_LENGTH = 24
 
@@ -299,6 +306,95 @@ def _auto_link(ctx: Ctx, pid: int) -> bool:
     return any(r["state"] == S.PAIR_AUTO for r in ctx.rows_by_pid.get(pid, ()))
 
 
+# ── 관제 판 표 칸 · 이슈 한 줄씩(S13) ─────────────────────────────────────
+def _num(v) -> Optional[float]:
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or v != v or v in (float("inf"), float("-inf")):
+        return None
+    return float(v)
+
+
+def today_numbers(ctx: Ctx, pid: int) -> dict:
+    """오늘 점검이 읽은 숫자(이 가망에 이어진 계정 합) — 어제 광고비 · 비즈머니 잔액. 판정 조립과 같은 약속: 오늘 짝
+    맞추기일 때만 · 계정 하루치의 가망이 이 가망일 때만(어제 것 · 다른 가망 짝으로 적힌 것은 싣지 않는다). 못 읽은 칸은 None."""
+    spend = biz = None
+    if ctx.pairing_today:
+        for r in ctx.rows_by_pid.get(pid, ()):
+            if r["state"] not in S.PAIR_CHECKABLE or r["customer_id"] is None:
+                continue
+            got = ctx.checks_today.get(r["customer_id"])
+            if got is None or got["possibility_id"] != pid:
+                continue
+            s_, b_ = _num(got.get("yday_spend")), _num(got.get("bizmoney"))
+            if s_ is not None:
+                spend = (spend or 0.0) + s_
+            if b_ is not None:
+                biz = (biz or 0.0) + b_
+    return {"yday_spend": None if spend is None else round(spend), "bizmoney": None if biz is None else round(biz)}
+
+
+def link_state(ctx: Ctx, pid: int) -> str:
+    """관제 판 「이관」 칸 — 오늘 짝 맞추기 줄에서 한 값(빠짐 > 오늘 없음 > 이관됨 > 이관 안 됨 > 없음). 오늘 짝 맞추기가
+    아니면 「pending」 — 어제 짝 맞추기의 「오늘 없음」·「이관 빠짐」을 오늘 것으로 보이지 않는다(판정 조립과 같은 약속)."""
+    if not ctx.pairing_today:
+        return LINK_PENDING
+    states = [(r["state"], r["code"]) for r in ctx.rows_by_pid.get(pid, ())]
+    if any(st == S.PAIR_BROKEN for st, _c in states):
+        return LINK_BROKEN
+    if any(st == S.PAIR_MISSING for st, _c in states):
+        return LINK_MISSING
+    if any(st in S.PAIR_CHECKABLE for st, _c in states):
+        return LINK_LISTED
+    if any(st == S.PAIR_BLOCKED and c == CODE_NOT_LINKED for st, c in states):
+        return LINK_NOT_LINKED
+    return LINK_NONE
+
+
+def _hand(ctx: Ctx, store: S.Store, issue_id: int) -> Optional[dict]:
+    """이슈에 사람이 가장 늦게 한 일(👀 · ✅ · 🙈) — 누가 · 언제 · 예외 사유."""
+    last = None
+    for e in store.issue_events(issue_id):
+        if e["kind"] in HAND_KINDS and e["by_person"] is not None:
+            last = e
+    if last is None:
+        return None
+    return {"kind": last["kind"], "at": last["at"], "by": _person_name(ctx.org, last["by_person"]),
+            "note": last["note"], "exception_until": last["exception_until"]}
+
+
+def issue_can(ctx: Ctx, scope: SC.Scope, own: SC.Ownership, i: dict) -> dict:
+    """이 이슈에서 지금 누를 수 있는 것 — 서버 규칙(``scope`` · ``issues``)을 그대로 비춘다(화면은 단추만 켜고 끈다 ·
+    누르면 서버가 다시 판정한다). 예외는 등급별 한도 · 층(팀장 이상 🔴) · 조직 신선도(올리기 관문)까지."""
+    handle = SC.ACT_HANDLE_ISSUE in SC.allowed_actions(ctx.org, scope, own)
+    eff = counting_state(i, ctx.today)
+    actor = SC.issue_actor(ctx.org, scope, own)
+    need = IS.EXCEPTION_MIN_ACTOR.get(i["severity"])
+    rank = (IS.ACTOR_OWNER, IS.ACTOR_LEAD)
+    tall = actor is not None and need is not None and rank.index(actor) >= rank.index(need)
+    can_except = (handle and tall and i["state"] != V.ST_EXCEPTION and eff in ISSUE_OPEN
+                  and O.allows_raising(ctx.freshness))
+    return {"ack": handle and eff == V.ST_NEW,
+            "resolve": handle and i["state"] in ("new", "ack", "exception"),
+            "except": can_except,
+            "except_until_max": IS.max_exception_until(i["severity"], ctx.today).isoformat() if can_except else None,
+            "except_blocked": None if can_except or not handle else
+            ("org-stale" if tall and eff in ISSUE_OPEN and i["state"] != V.ST_EXCEPTION else
+             "actor-too-low" if not tall else None)}
+
+
+def issue_row(ctx: Ctx, store: S.Store, scope: SC.Scope, i: dict) -> dict:
+    """관제 판 이슈 한 줄 — 원인별 묶음 아래 광고주마다(S13). 고객 번호는 끝 4자리만 · 사실 칸은 저장된 그대로(금액·일수)."""
+    pid = i["possibility_id"]
+    own = ctx.owns[pid]
+    return {"issue_id": i["issue_id"], "possibility_id": pid, "name": ctx.prospects[pid]["name"],
+            "owner": _owner(ctx, own), "relation": SC.relation(ctx.org, scope, own),
+            "code": i["code"], "rule": i["rule"], "severity": i["severity"],
+            "state": counting_state(i, ctx.today), "stored_state": i["state"],
+            "first_seen_on": i["first_seen_on"], "last_seen_on": i["last_seen_on"],
+            "reappear_count": i["reappear_count"], "exception_until": i["exception_until"],
+            "facts": i["facts"], "target_tail": tail4(i["customer_id"]), "updated_at": i["updated_at"],
+            "hand": _hand(ctx, store, i["issue_id"]), "can": issue_can(ctx, scope, own, i)}
+
+
 # ── 12시간 안 풀린 🟡 — 한 단계 위로 ────────────────────────────────────
 def escalations(ctx: Ctx, store: S.Store, scope: SC.Scope, ids: Iterable[int]) -> List[dict]:
     """지금 나에게 올라온 🟡 — 🆕 가 된 뒤 12시간마다 ``todo_chain`` 의 다음 묶음으로(담당 → 팀장 → 상위 팀장 → 대표)."""
@@ -324,6 +420,7 @@ def escalations(ctx: Ctx, store: S.Store, scope: SC.Scope, ids: Iterable[int]) -
             step = min(1 + int((waited - ESCALATE_AFTER) / ESCALATE_AFTER), len(chain) - 1)
             if step >= 1 and viewer in chain[step]:
                 out.append({"issue_id": i["issue_id"], "possibility_id": pid, "code": i["code"],
+                            "name": ctx.prospects[pid]["name"],   # 화면이 광고주 이름을 따로 찾지 않게(S13 · 범위 안)
                             "waited_hours": int(waited.total_seconds() // 3600), "step": step})
     return out
 
@@ -389,12 +486,30 @@ def board(ctx: Ctx, store: S.Store, scope: SC.Scope, selection: str = "all", att
         rows.append({"possibility_id": pid, "name": p["name"], "stage": p["stage_key"],
                      "relation": SC.relation(ctx.org, scope, own), "owner": _owner(ctx, own),
                      "verdict": _verdict_out(v), "open_red": red, "open_yellow": yellow,
-                     "account_unconfirmed": _auto_link(ctx, pid)})
+                     "account_unconfirmed": _auto_link(ctx, pid), "link": link_state(ctx, pid),
+                     **today_numbers(ctx, pid)})
     issues = sorted(({**g, "clients": len(g["clients"])} for g in by_code.values()),
                     key=lambda g: (g["severity"] != V.SEV_RED, -g["clients"], g["code"]))
     rows.sort(key=lambda r: (r["owner"]["team_name"] or "", r["owner"]["name"] or "", r["possibility_id"]))
+    # 이관 띠(S13) — 표(확인 필요만)와 상관없이 고른 범위의 모든 가망
+    links = {k: 0 for k in LINK_KINDS}
+    for pid in ids:
+        links[link_state(ctx, pid)] += 1
+    # 이슈 한 줄씩(S13) — 고른 범위 안만 · 열린 것(🆕·👀) = 「오늘의 이슈」 · 🙈 예외 · 오늘 닫힌 것 = 「오늘 풀린 것」
+    open_rows, done_rows = [], []
+    for pid in sorted(ids):
+        for i in ctx.open_issues.get(pid, ()):
+            (open_rows if counting_state(i, ctx.today) in ISSUE_OPEN else done_rows).append(issue_row(ctx, store, scope, i))
+    for i in store.issues_closed_on(ctx.today):
+        if i["possibility_id"] in ids:
+            done_rows.append(issue_row(ctx, store, scope, i))
+    sev = {V.SEV_RED: 0, V.SEV_YELLOW: 1, V.SEV_INFO: 2}
+    open_rows.sort(key=lambda r: (sev.get(r["severity"], 3), r["code"], r["state"] != V.ST_NEW, r["possibility_id"],
+                                  r["issue_id"]))
+    done_rows.sort(key=lambda r: (r["updated_at"], r["issue_id"]), reverse=True)
     return {"band": _band(ctx, store, scope), "counts": counts, "issues": issues, "rows": rows,
-            "attention_only": attention_only, "selection": selection,
+            "attention_only": attention_only, "selection": selection, "links": links,
+            "issue_rows": open_rows, "done_rows": done_rows,
             # 나에게 올라온 일은 고르기(나만 · 사람 · 팀)와 상관없다 — 최대 범위 안에서만(검토 escalation-hidden-by-selection)
             "escalated_to_me": escalations(ctx, store, scope, visible(ctx, scope))}
 
@@ -437,13 +552,16 @@ def client(ctx: Ctx, store: S.Store, scope: SC.Scope, pid) -> dict:
                          "link": _link_of(r), "state": r["state"],
                          "history": _history(store, ctx, r["customer_id"], pid)})
     since = ctx.today - timedelta(days=HISTORY_DAYS)
-    issues = [_issue_out(ctx, store, i) for i in store.issues(pid)
+    issues = [{**_issue_out(ctx, store, i), "state_now": counting_state(i, ctx.today), "can": issue_can(ctx, scope, own, i)}
+              for i in store.issues(pid)
               if i["state"] in ("new", "ack", "exception") or (_day(i["last_seen_on"]) or ctx.today) >= since]
     allowed = SC.allowed_actions(ctx.org, scope, own)
     actor = SC.issue_actor(ctx.org, scope, own)
     return {"possibility_id": pid, "name": p["name"], "stage": p["stage_key"], "managed": p["present"] == 1,
+            "today": ctx.today.isoformat(),   # 화면이 예외 기간을 서버의 「오늘」로 세게(S13)
             "latest_end_date": p["latest_end_date"], "relation": SC.relation(ctx.org, scope, own),
             "owner": _owner(ctx, own), "verdict": _verdict_out(v), "accounts": accounts, "issues": issues,
+            "link": link_state(ctx, pid), "account_unconfirmed": _auto_link(ctx, pid), **today_numbers(ctx, pid),
             "report": REPORT_PREPARING,
             "actions": {"handle_issue": SC.ACT_HANDLE_ISSUE in allowed, "confirm_link": SC.ACT_CONFIRM_LINK in allowed,
                         "exception_actor": actor,

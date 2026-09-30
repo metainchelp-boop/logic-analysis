@@ -633,6 +633,18 @@ class PageFileTest(unittest.TestCase):
             self.assertIsNone(R.page_file(self.root, rest), rest)
         self.assertIsNone(R.page_file(self.tmp / "none", ""))
 
+    def test_screen_paths(self):
+        """화면 주소(S13) — 정해진 이름만 index.html · 비슷한 이름·빗금·대문자·0번·긴 번호는 종전대로 404."""
+        index = (self.root / "index.html").resolve()
+        for rest in ("issues", "system", "unlinked", "ended", "links", "settings", "automation", "reports",
+                     "clients/1", "clients/123456789012345678"):
+            self.assertEqual(R.page_file(self.root, rest), index, rest)
+        for rest in ("issues/", "Issues", "issue", "issues2", "clients", "clients/", "clients/0", "clients/01",
+                     "clients/abc", "clients/1/x", "clients/1234567890123456789", "system/../app.js", "../issues",
+                     "settings/x", "reports.js", "clients/1.js", "clients/-1", " issues", "issues\n"):
+            self.assertIsNone(R.page_file(self.root, rest), rest)
+        self.assertIsNone(R.page_file(self.tmp / "none", "issues"))   # 화면 파일이 없으면 없음(폴더 밖으로 가지 않는다)
+
     def test_link_inside_root_to_other_kind(self):
         """폴더 안 링크가 다른 종류(.py)를 가리키면 없음 — 요청 이름(.js)만 보면 통과해 page_type 에서 500 이 났다(2차 검토)."""
         self.assertIsNone(R.page_file(self.root, "alias.js"))

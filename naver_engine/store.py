@@ -2804,17 +2804,32 @@ class Store:
             (_day_text(day, "날짜"),))}
 
     def account_day_checks_on(self, day: date) -> dict:
-        """그 날 계정 하루치의 판정 재료 {고객 번호: {status · possibility_id · rules_not_run}} — 관제 화면(S11)이 가망마다
-        판정(``verdict.judge``)을 만들 때 한 번에 읽는다(계정마다 따로 읽지 않게)."""
+        """그 날 계정 하루치의 판정 재료 {고객 번호: {status · possibility_id · rules_not_run · bizmoney · yday_spend}} —
+        관제 화면(S11)이 가망마다 판정(``verdict.judge``)을 만들 때 한 번에 읽는다(계정마다 따로 읽지 않게). 숫자 둘은
+        관제 판 표의 「어제 광고비」·「비즈머니」 칸(S13 · 판정에는 쓰지 않는다)."""
         out = {}
-        for cid, st, pid, rnr in self._conn.execute(
-                "SELECT customer_id, status, possibility_id, rules_not_run FROM naver_auto_account_day WHERE day = ?",
-                (_day_text(day, "날짜"),)):
+        for cid, st, pid, rnr, biz, spend in self._conn.execute(
+                """SELECT customer_id, status, possibility_id, rules_not_run, bizmoney, yday_spend
+                   FROM naver_auto_account_day WHERE day = ?""", (_day_text(day, "날짜"),)):
             try:
                 missing = [tuple(x) for x in json.loads(rnr)]
             except (TypeError, ValueError, RecursionError):
                 raise StoreError("저장된 계정 하루치를 읽지 못했습니다") from None
-            out[int(cid)] = {"status": st, "possibility_id": None if pid is None else int(pid), "rules_not_run": missing}
+            out[int(cid)] = {"status": st, "possibility_id": None if pid is None else int(pid), "rules_not_run": missing,
+                             "bizmoney": biz, "yday_spend": spend}
+        return out
+
+    def issues_closed_on(self, day: date) -> List[dict]:
+        """그 날(KST) 닫힌 이슈 — ✅ 해결 · 🔁 저절로 풀림 · 짝이 사라져 닫힘(관제 판 「오늘 풀린 것」 · S13). 고친 시각은
+        한국 시각 글자로 적지만 글자만 믿지 않고 시각으로 다시 대조한다(전날 글자로 넓게 고른 뒤 거른다)."""
+        d = _day_text(day, "날짜")
+        prev = _day_text(day - timedelta(days=1), "날짜")
+        out = []
+        for r in self._issue_rows(self._conn, "state IN ('resolved', 'auto_resolved', 'closed_unlinked') AND updated_at >= ?",
+                                  (prev,)):
+            t = _aware_time(r["updated_at"])
+            if t is not None and t.astimezone(KST).date().isoformat() == d:
+                out.append(self._issue_out(r))
         return out
 
     def my_running_runs(self) -> List[int]:
