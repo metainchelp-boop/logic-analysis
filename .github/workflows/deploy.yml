@@ -164,6 +164,9 @@ jobs:
       - name: Collector coordinated regression (v1.24.0 서버 배정 · INACTIVE 폴백 · 기계별 쉼)
         run: node collector-extension/tests/coordinated.test.js
 
+      - name: 수집기 휴식·재개 회귀 (v1.28.1 워커 재시작 · 임시 대기 · 정각 넘김)
+        run: TZ=Asia/Seoul node --test collector-extension/tests/coordinated_recovery.test.js
+
       - name: Collector diagnostic export regression (v1.25.0 진단 파일 — 비밀·검색어·식별자 누출 0)
         run: node collector-extension/tests/diagnostic_export.test.js
       - name: Collector reader identity regression (v1.25.0 nvMid 우선 식별 · net_tap 요청 범위)

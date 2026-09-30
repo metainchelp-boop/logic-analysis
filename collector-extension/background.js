@@ -2715,6 +2715,9 @@ async function runCoordinated(manual = false) {
     if (serverPaused()) { await setState({ running: false, pausedByServer: true, current: '' }); return true; }
     const bu = await getBlockedUntil();
     if (!manual && bu > Date.now()) return true;                 // 캡차 쉼 — 서버도 이 기계를 쉬게 두고 있다
+    // 서버가 정한 대기는 워커 재기동·수동 실행에도 유지한다. 매분 재등록/배정을 요청하지 않는다.
+    const { state: saved = {} } = await chrome.storage.local.get('state');
+    if (Date.parse(saved.coordNextAt || '') > Date.now()) return true;
     const token = await getToken();
     if (!token) { await log('❌ 토큰이 없습니다. 팝업에서 먼저 저장하세요.'); return true; }
     try { await flushOutbox(token, '회차 시작'); } catch (e) { /* 무시 */ }
@@ -2734,23 +2737,30 @@ async function runCoordinated(manual = false) {
       return false;                                              // ⚠️ 종전 경로로 폴백
     }
     const hourStart = Date.now();
-    const hourTag = hourKey();
     const _msLeftInHour = (60 - new Date().getMinutes()) * 60 * 1000 - new Date().getSeconds() * 1000 - (typeof RT === 'object' && RT ? RT.hourTailMs : 5 * 60 * 1000);
     const hourBudget = Math.max(60 * 1000, Math.min(CFG.hourBudgetMs, _msLeftInHour));
     let done = 0, failed = 0, partial = 0, streak = 0;
-    await setState({ running: true, startedAt: new Date().toISOString(), coordState: 'READY', coordReason: '' });
+    let blockedThisRound = false;
+    await setState({ running: true, startedAt: new Date().toISOString(), coordState: 'READY', coordReason: '', coordNextAt: '' });
     for (let n = 0; n < 200; n++) {
-      if (Date.now() - hourStart > hourBudget) { await log('⏱ 이번 시간대 시간 소진 — 남은 몫은 서버가 다음 회차에 다시 배정'); break; }
+      if (Date.now() - hourStart > hourBudget) {
+        // 작업 중 정각을 넘었으면 이미 지난 경계다. 종료 시각 기준으로 한 시간을 더 미루지 않는다.
+        const nextHour = new Date(hourStart); nextHour.setHours(nextHour.getHours() + 1, 0, 0, 0);
+        await setState({ coordState: 'WAIT_BUDGET', coordReason: 'LOCAL_HOUR_BUDGET', coordNextAt: nextHour.toISOString() });
+        await log('⏱ 이번 시간대 시간 소진 — 남은 몫은 서버가 다음 회차에 다시 배정'); break;
+      }
       if (await isLocalPaused()) { await log('⏸ 일시정지 — 배정 중단'); break; }
       let c;
       try { c = await coordRequest('claim', { protocol: 2, workerId: who.workerId, sessionId: who.sessionId, hour: new Date().getHours() }); }
       catch (e) { await log(`🧭 배정 요청 실패(${e.message}) — 이번 분은 쉼`); break; }
       if (c.state === 'INACTIVE') { await setState({ coordState: 'INACTIVE' }); return false; }
       if (c.state !== 'LEASED' || !c.job) {
+        const next = new Date(Number(c.nextAllowedAt) * 1000);
+        const nextAt = c.nextAllowedAt && Number.isFinite(next.getTime()) ? next.toISOString() : '';
         await setState({ coordState: c.state, coordReason: c.reason || '',
-                         coordNextAt: c.nextAllowedAt ? new Date(c.nextAllowedAt * 1000).toISOString() : '' });
-        if (c.state === 'IDLE') await log('🧭 오늘 몫이 없습니다(서버 배정 없음)');
-        else if (c.state === 'WAIT_BUDGET') await log(`🧭 예산 대기 — ${c.nextAllowedAt ? new Date(c.nextAllowedAt * 1000).toLocaleTimeString('ko-KR') : '잠시'} 뒤 다시`);
+                         coordNextAt: nextAt });
+        if (c.state === 'IDLE') await log('🧭 현재 배정 가능한 몫이 없습니다(다음 알람에서 재확인)');
+        else if (c.state === 'WAIT_BUDGET') await log(`🧭 예산 대기 — ${nextAt ? next.toLocaleTimeString('ko-KR') : '잠시'} 뒤 다시`);
         else await log(`🧭 배정 보류 — ${c.state}${c.reason ? ' · ' + c.reason : ''}`);
         break;
       }
@@ -2781,6 +2791,7 @@ async function runCoordinated(manual = false) {
         if (String(e.message || '').startsWith('BLOCKED:')) {
           await markBlocked(e.message.slice(8) || '수집 중 감지');
           await coordReport('PAUSED_BLOCK', e.message.slice(8, 80));   // 이 기계만 6시간 — 서버도 같이
+          blockedThisRound = true;
           if (leased) { try { await coordRequest('release', { ...who, state: 'PAUSED_BLOCK', reason: 'BLOCKED', job: leased }); } catch (e2) { /* 무시 */ } leased = null; }
           break;
         }
@@ -2793,9 +2804,12 @@ async function runCoordinated(manual = false) {
       }
       await sleep(jitter());                                      // 간격은 서버가 claim 으로 재준다(min_gap · 예산)
     }
-    if (done > 0) await clearBlocked();
+    // 앞선 성공으로 같은 회차에서 방금 건 휴식을 취소하지 않는다(종전 경로와 같은 규칙).
+    if (done > 0 && !blockedThisRound) await clearBlocked();
     await log(`✅ 🧭 ${new Date().getHours()}시 배정 회차 종료 — 성공 ${done} · 부분 ${partial} · 실패 ${failed}`);
-    await setState({ running: false, finishedAt: done ? new Date().toISOString() : undefined, finishedHour: done ? hourTag : undefined, done, failed, partial, current: '' });
+    // IDLE도 현재 배정 후보가 없다는 뜻일 뿐이다. 중앙 배정은 서버가 다음 허용 시각/작업을 정한다.
+    // finishedHour는 종전 시간대 경로 전용이며 중앙 경로가 쓰거나 지우지 않는다.
+    await setState({ running: false, finishedAt: done ? new Date().toISOString() : undefined, done, failed, partial, current: '' });
     return true;
   } catch (e) {
     await log(`❌ 🧭 배정 수집 중단: ${e.message}`);
@@ -2981,7 +2995,8 @@ chrome.alarms.onAlarm.addListener(async (a) => {
   // 24시간 분산 — 매시간 자기 시간대 몫만 수집한다(시각 제한 없음).
   // 같은 시간대를 이미 돌았으면 건너뛴다(알람이 시간당 두 번 뜨는 경우 방어).
   const { state = {} } = await chrome.storage.local.get('state');
-  if (state.finishedHour === hourKey()) return;   // 이 시간대 몫은 이미 끝냈다
+  const coordinated = await coordinatedEnabled();
+  if (!coordinated && state.finishedHour === hourKey()) return;   // 종전 경로의 시간대 몫만 완료
   if (running === 'daily') return;                // 이미 돌고 있다 — 조용히 물러난다
   if (running === 'ondemand') {
     // 온디맨드가 돌고 있으면 한 건 끝나는 대로 비켜달라고 표시하고 물러난다.
@@ -2995,7 +3010,8 @@ chrome.alarms.onAlarm.addListener(async (a) => {
   dailyDue = false;
   await markDailyWaiting(false);   // 내가 잡았다 — 온디맨드를 다시 풀어 준다
   // 🧭 v2 — 켜져 있으면 서버 배정으로. 서버가 꺼져 있으면(INACTIVE) 종전 경로로 폴백.
-  if (await coordinatedEnabled()) { const handled = await runCoordinated(false); if (handled) return; }
+  if (coordinated) { const handled = await runCoordinated(false); if (handled) return; }
+  if (state.finishedHour === hourKey()) return;   // INACTIVE 폴백도 종전 완료 표식을 존중한다
   runCollection(false);
 });
 

@@ -40,7 +40,8 @@ async function run({ server, collect, paused = false, blockedUntil = 0, token = 
     running: false,
     _targets: {},
     CFG: { hourBudgetMs: 50 * 60 * 1000, maxConsecutiveFail: 3, workerNo: 1, workerCount: 1 },
-    chrome: { runtime: { getManifest: () => ({ version: '1.24.0' }) } },
+    chrome: { runtime: { getManifest: () => ({ version: '1.24.0' }) },
+      storage: { local: { get: async () => ({}) } } },
     isLocalPaused: async () => paused,
     loadRemote: async () => {},          // ⚙ v1.27.0 서버 설정 — 이 시험에선 기본값 그대로
     serverPaused: () => false,
@@ -93,7 +94,7 @@ const okPayload = (kw, n = 40) => ({ products: Array.from({ length: n }, (_, i) 
   t = await run({ server: { register: REG_ON, claims: [LEASE('가리비'), { protocol: 2, state: 'IDLE', job: null }] }, collect: okPayload });
   ok('🔴 임대받은 키워드를 올리고 job 계약을 그대로 넘긴다', t.uploads.length === 1 && t.uploads[0].kw === '가리비' && t.uploads[0].job && t.uploads[0].job.leaseId === 'l-가리비');
   ok('토큰을 그대로 쓴다', t.uploads[0].tok === 'tok');
-  ok('IDLE 이면 회차를 끝내고 true(종전 경로 안 감)', t.r === true && t.logs.some((m) => /오늘 몫이 없습니다/.test(m)));
+  ok('IDLE 이면 회차를 끝내고 true(종전 경로 안 감)', t.r === true && t.logs.some((m) => /현재 배정 가능한 몫이 없습니다/.test(m)));
   ok('성공 1 → clearBlocked · 종료 로그에 성공 1', t.flags.clearBlocked === 1 && t.logs.some((m) => /성공 1 · 부분 0 · 실패 0/.test(m)));
   ok('진행 상태에 current 키워드·jobId', t.states.some((s) => s.current === '가리비' && s.coordJobId === 'j-가리비'));
   const seq = t.calls.map((c) => c.endpoint).join('>');

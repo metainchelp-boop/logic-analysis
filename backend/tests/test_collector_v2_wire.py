@@ -119,7 +119,9 @@ print("\n⑥ 확장 v1.24.0 배선")
 ver = re.search(r'"version":\s*"(\d+)\.(\d+)\.(\d+)"', MANIFEST)
 ok("manifest ≥ 1.24", ver is not None and (int(ver.group(1)), int(ver.group(2))) >= (1, 24))
 ok("🔴 매분 알람 — coordinatedEnabled() 면 runCoordinated(false) · false 면 runCollection(false) 폴백",
-   re.search(r"if \(await coordinatedEnabled\(\)\) \{ const handled = await runCoordinated\(false\); if \(handled\) return; \}\s*\n\s*runCollection\(false\);", BG) is not None)
+   "const coordinated = await coordinatedEnabled();" in BG and
+   re.search(r"if \(coordinated\) \{ const handled = await runCoordinated\(false\); if \(handled\) return; \}\s*\n"
+             r"\s*if \(state.finishedHour === hourKey\(\)\) return;[^\n]*\n\s*runCollection\(false\);", BG) is not None)
 ok("🔴 수동 실행(cmd run)도 같은 분기 → runCollection(true) 폴백", re.search(r"if \(await coordinatedEnabled\(\)\) \{ const handled = await runCoordinated\(true\); if \(handled\) return; \} runCollection\(true\);", BG) is not None)
 ok("cmd setCoordinated 가 저장값(COORD_KEY)과 state.coordEnabled 를 함께 바꾼다", "msg?.cmd === 'setCoordinated'" in BG and "[COORD_KEY]: !!msg.on" in BG and "coordEnabled: !!msg.on" in BG)
 ok("🔴 uploadKeyword(token, keyword, payload, job) 가 meta.job 을 싣는다", "async function uploadKeyword(token, keyword, payload, job)" in BG and re.search(r"job:\s*job", BG[BG.find("async function uploadKeyword("):BG.find("async function uploadKeyword(") + 6000]) is not None)
