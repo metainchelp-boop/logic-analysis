@@ -7,11 +7,15 @@ on:
   workflow_dispatch:
     inputs:
       ad_prepare:
-        description: '광고센터 전용 배포 준비 — off / inspect. 기존 접속 안에서 메타데이터만 조회·키와 운영자료 미출력.'
+        description: '광고센터 배포 준비 — inspect 조회 / prepare 분리된 빈 준비 폴더만 생성. 앱·키 무변경.'
         type: choice
-        options: ['off', inspect]
+        options: ['off', inspect, prepare]
         required: false
         default: 'off'
+      ad_expected_baseline:
+        description: 'prepare 필수: 직전 inspect의 컨테이너 기준 SHA-256. 비밀값 아님.'
+        required: false
+        default: ''
       collector:
         description: '수집기 진단 — off(기본) / on(확장이 서버에 접속했는지·큐·토큰 상태)'
         required: false
@@ -47,7 +51,7 @@ on:
 
 jobs:
   ad-deploy-prepare:
-    if: ${{ inputs.ad_prepare == 'inspect' }}
+    if: ${{ inputs.ad_prepare == 'inspect' || inputs.ad_prepare == 'prepare' }}
     permissions:
       contents: read
     concurrency:
@@ -56,9 +60,25 @@ jobs:
     timeout-minutes: 5
     runs-on: ubuntu-latest
     steps:
-      - name: 광고센터 배포 경로 읽기 전용 확인
+      - name: 준비 입력 확인 — 원격 연결 전
+        env:
+          AD_PREPARE_MODE: ${{ inputs.ad_prepare }}
+          AD_EXPECTED_BASELINE: ${{ inputs.ad_expected_baseline }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$AD_PREPARE_MODE" in
+            inspect) test -z "$AD_EXPECTED_BASELINE" ;;
+            prepare) [[ "$AD_EXPECTED_BASELINE" =~ ^[0-9a-f]{64}$ ]] ;;
+            *) exit 1 ;;
+          esac
+      - name: 광고센터 전용 준비 경로 확인·준비
         uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262 # v1.0.3
+        env:
+          AD_PREPARE_MODE: ${{ inputs.ad_prepare }}
+          AD_EXPECTED_BASELINE: ${{ inputs.ad_expected_baseline }}
         with:
+          envs: AD_PREPARE_MODE,AD_EXPECTED_BASELINE
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
@@ -68,7 +88,7 @@ jobs:
           script: |
             set -eu
             python3 - <<'PY'
-            import json, os, pathlib, re, shutil, stat, subprocess
+            import hashlib, json, os, pathlib, re, shutil, stat, subprocess
 
             # 공개 실행 로그: 환경·키·DB·앱 로그를 읽지 않고 Docker 메타데이터만 선택한다.
             def command(args):
@@ -97,7 +117,7 @@ jobs:
                 if not names or len(names) > 20:
                     raise RuntimeError('unexpected_container_inventory')
                 containers = []
-                for name in names:
+                for name in sorted(names):
                     item = {'name': name}
                     for field, template in {
                         'id': '{{json .Id}}', 'image_id': '{{json .Image}}',
@@ -133,13 +153,94 @@ jobs:
                           'compose_version': command(['docker', 'compose', 'version', '--short']),
                           'staging_stat': metadata('/srv/metainc/ad-deploy-staging'),
                           'containers': containers}
-                print('AD_DEPLOY_PREFLIGHT=' + json.dumps(report, sort_keys=True))
+                return report
+
+            def baseline(report):
+                fields = ('name', 'id', 'image_id', 'running', 'started_at',
+                          'restart_count', 'project', 'service')
+                value = [{key: row[key] for key in fields}
+                         for row in sorted(report['containers'], key=lambda row: row['name'])]
+                return hashlib.sha256(json.dumps(value, sort_keys=True,
+                    separators=(',', ':')).encode('utf-8')).hexdigest()
+
+            created = []
+            def prepare(report, expected):
+                if os.geteuid() != 0 or not re.fullmatch(r'[0-9a-f]{64}', expected):
+                    raise RuntimeError('invalid_prepare_context')
+                if baseline(report) != expected:
+                    raise RuntimeError('baseline_changed')
+                root = pathlib.Path('/srv/metainc/ad-deploy-staging')
+                folders = [pathlib.Path('/srv'), root.parent, root,
+                           root / 'incoming', root / 'releases', root / 'receipts']
+                marker = root / 'PREPARATION_ONLY.json'
+                marker_body = b'{"schema":1,"service":"ad-api","deployment_enabled":false}\n'
+                # 쓰기 전에 모든 상위 경로·기존 항목을 검사한다. 기존 권한은 바꾸지 않는다.
+                for folder in folders:
+                    info = metadata(folder)
+                    if info['exists'] and (info['symlink'] or not info['directory']
+                            or info['uid'] != 0 or info['gid'] != 0
+                            or int(info['mode'], 8) & 0o022
+                            or (folder in folders[2:] and info['mode'] != '0o700')):
+                        raise RuntimeError('unsafe_existing_directory')
+                if root.exists():
+                    if set(p.name for p in root.iterdir()) - {
+                            'incoming', 'releases', 'receipts', 'PREPARATION_ONLY.json'}:
+                        raise RuntimeError('unexpected_staging_content')
+                for folder in folders[3:]:
+                    if folder.exists() and any(folder.iterdir()):
+                        raise RuntimeError('staging_is_in_use')
+                info = metadata(marker)
+                if info['exists']:
+                    st = marker.lstat()
+                    if (info['symlink'] or not stat.S_ISREG(st.st_mode)
+                            or st.st_uid != 0 or st.st_gid != 0 or st.st_nlink != 1
+                            or stat.S_IMODE(st.st_mode) != 0o600
+                            or st.st_size != len(marker_body)
+                            or marker.read_bytes() != marker_body):
+                        raise RuntimeError('unexpected_staging_marker')
+                for folder in folders[1:]:
+                    if not folder.exists():
+                        folder.mkdir(mode=0o750 if folder == root.parent else 0o700)
+                        created.append(str(folder))
+                if not info['exists']:
+                    fd = os.open(str(marker), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                    created.append(str(marker))
+                    with os.fdopen(fd, 'wb') as output:
+                        output.write(marker_body)
+                        output.flush()
+                        os.fsync(output.fileno())
+                # 요청 mode와 실제 결과는 다를 수 있다(umask·그룹 상속). 고치지 말고 검증한다.
+                for folder in folders[2:]:
+                    actual = metadata(folder)
+                    if (not actual['exists'] or actual['symlink'] or not actual['directory']
+                            or actual['uid'] != 0 or actual['gid'] != 0 or actual['mode'] != '0o700'):
+                        raise RuntimeError('created_directory_permissions_mismatch')
+                actual = marker.lstat()
+                if (not stat.S_ISREG(actual.st_mode) or actual.st_uid != 0 or actual.st_gid != 0
+                        or actual.st_nlink != 1 or stat.S_IMODE(actual.st_mode) != 0o600
+                        or actual.st_size != len(marker_body)):
+                    raise RuntimeError('created_marker_permissions_mismatch')
+                after = inspect()
+                if baseline(after) != expected:
+                    raise RuntimeError('container_changed_during_preparation')
+                return {'mode': 'prepare', 'created': created,
+                        'staging_stat': after['staging_stat'], 'baseline_sha256': expected,
+                        'containers_unchanged': True, 'deployment_enabled': False,
+                        'existing_environment_changed': False, 'existing_permissions_changed': False}
 
             try:
-                inspect()
+                mode = os.environ.get('AD_PREPARE_MODE', 'inspect')
+                if mode not in ('inspect', 'prepare'):
+                    raise RuntimeError('invalid_mode')
+                report = inspect()
+                report['baseline_sha256'] = baseline(report)
+                if mode == 'prepare':
+                    report = prepare(report, os.environ.get('AD_EXPECTED_BASELINE', ''))
+                print('AD_DEPLOY_PREFLIGHT=' + json.dumps(report, sort_keys=True))
             except Exception as exc:
                 # 예외 원문/표준 오류에는 경로·자격이 섞일 수 있어 출력하지 않는다.
                 print('AD_DEPLOY_PREFLIGHT_FAILED=' + type(exc).__name__)
+                print('AD_DEPLOY_CREATED_PATHS=' + json.dumps(created))
                 raise SystemExit(1)
             PY
 
