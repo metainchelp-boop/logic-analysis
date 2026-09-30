@@ -1,5 +1,6 @@
 """공유 성과: 합성 30일 원천·전송만. DB 시험은 Linux 격리 환경에서 실행한다."""
 import copy
+import sqlite3
 import unittest
 from datetime import date, datetime, timedelta
 from types import SimpleNamespace
@@ -513,9 +514,12 @@ class MetricsStoreTest(Base):
 
     def test_migration_keeps_existing_data(self):
         context = self.prepare()
-        self.st._conn.execute("DROP TABLE naver_auto_metrics_delivery")  # 임시 합성 DB를 실제 판 6 모양으로 되돌린다.
-        self.st._conn.execute("UPDATE naver_auto_meta SET value = '6' WHERE key = 'schema_version'")
         self.st.close()
+        self.st = None
+        # 제품 writer의 DROP 금지는 유지한다. 닫힌 임시 시험 파일에 옛 판 fixture를 준비한다.
+        with sqlite3.connect(self.path) as raw:
+            raw.execute("DROP TABLE naver_auto_metrics_delivery")
+            raw.execute("UPDATE naver_auto_meta SET value = '6' WHERE key = 'schema_version'")
         self.st = S.open_writer(self.path, clock=self.fc.now)
         self.assertEqual(self.st.meta("schema_version"), "7")
         self.assertEqual(len(self.st.runs_on(TODAY)), 1)
