@@ -1,12 +1,14 @@
 """S14 패키징 계약 검사. Docker daemon·실계정·실제 env 파일은 사용하지 않는다."""
 from __future__ import annotations
 
+from decimal import Decimal
 import json
 import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
+import tempfile
 import unittest
 
 
@@ -19,6 +21,8 @@ SECRET_NAMES = (
     "NAVER_ENGINE_ERP_KEY", "NAVER_AUTO_TOKEN_SECRET", "NAVER_MGR_CUSTOMER_ID",
     "NAVER_MGR_API_KEY", "NAVER_MGR_SECRET_KEY",
 )
+RAW_CANARY_NAME = "NAVER_PACKAGE_RAW_CANARY"
+RAW_CANARY_VALUE = 'literal:$NAVER_PACKAGE_UNSET:${NAVER_PACKAGE_UNSET:-expanded}:$$:"quoted"'
 
 
 def source(relative):
@@ -32,8 +36,7 @@ def env_example():
 
 def compose_model(*files, project="naver-engine"):
     # PATH만 전달한다. 실제 NAVER/ERP 값·사용자 .env를 config에 전달하지 않는다.
-    env = {"PATH": os.environ.get("PATH", ""), "COMPOSE_DISABLE_ENV_FILE": "1",
-           "NAVER_ENGINE_ENV_FILE": str(ROOT / "deploy/naver-engine.env.example")}
+    env = {"PATH": os.environ.get("PATH", ""), "COMPOSE_DISABLE_ENV_FILE": "1"}
     executable = shutil.which("docker-compose")
     argv = [executable] if executable else [shutil.which("docker") or "docker", "compose"]
     try:
@@ -45,14 +48,40 @@ def compose_model(*files, project="naver-engine"):
     argv += ["--project-name", project]
     for file in files:
         argv += ["--file", str(ROOT / file)]
-    result = subprocess.run(argv + ["config", "--no-env-resolution", "--format", "json"],
-                            cwd=ROOT, env=env, capture_output=True, text=True, timeout=20)
+    # 일부 Compose v2는 --no-env-resolution에도 env_file을 environment로 펼친다.
+    # 공개 예시와 합성 canary만 사용해 raw 값 보존을 그 출력에서도 검사한다.
+    with tempfile.TemporaryDirectory(prefix="naver-compose-test-") as folder:
+        env_path = Path(folder) / "synthetic.env"
+        env_path.write_text(source("deploy/naver-engine.env.example") + "\n"
+                            + RAW_CANARY_NAME + "=" + RAW_CANARY_VALUE + "\n", encoding="utf-8")
+        env["NAVER_ENGINE_ENV_FILE"] = str(env_path)
+        result = subprocess.run(argv + ["config", "--no-env-resolution", "--format", "json"],
+                                cwd=ROOT, env=env, capture_output=True, text=True, timeout=20)
     if result.returncode:
         raise AssertionError("합성 Compose config 검사 실패: " + result.stderr)
     return json.loads(result.stdout)
 
 
 class PackagingSourceTest(unittest.TestCase):
+    def test_every_bind_explicitly_disables_host_path_creation_in_source(self):
+        for file, expected_count in (("compose.naver-engine.yml", 3),
+                                     ("deploy/naver-engine-backup.override.yml", 3),
+                                     ("deploy/naver-engine-ad-api.override.yml", 1)):
+            lines = source(file).splitlines()
+            starts = [i for i, line in enumerate(lines) if line.strip() == "- type: bind"]
+            self.assertEqual(expected_count, len(starts), file)
+            for start in starts:
+                indent = len(lines[start]) - len(lines[start].lstrip())
+                block = []
+                for line in lines[start + 1:]:
+                    if (line.strip() and not line.lstrip().startswith("#")
+                            and len(line) - len(line.lstrip()) <= indent):
+                        break
+                    block.append(line)
+                self.assertRegex("\n".join(block),
+                                 rf"(?m)^ {{{indent + 2}}}bind:\n {{{indent + 4}}}create_host_path: false$",
+                                 file + ": " + lines[start])
+
     def test_every_function_and_relay_default_off(self):
         values = env_example()
         for flag in FLAGS:
@@ -143,7 +172,30 @@ class PackagingSourceTest(unittest.TestCase):
         self.assertNotRegex(workflow, r"docker\s+(?:push|system\s+prune|volume\s+prune)\b")
 
 
-class ComposeModelTest(unittest.TestCase):
+class ComposeAssertions:
+    def assert_cpu_limit(self, engine):
+        cpus = Decimal(str(engine["cpus"]))
+        self.assertGreater(cpus, Decimal("0"))
+        self.assertLessEqual(cpus, Decimal("0.5"))
+
+    def assert_raw_environment(self, engine):
+        if "env_file" in engine:
+            self.assertEqual(1, len(engine["env_file"]))
+            self.assertEqual("raw", engine["env_file"][0]["format"])
+        else:
+            self.assertEqual(RAW_CANARY_VALUE, engine.get("environment", {}).get(RAW_CANARY_NAME))
+
+    def assert_no_created_host_path(self, mount):
+        # false 생략은 Compose JSON 정규화다. 원본의 명시값은 별도 시험으로 필수 검사한다.
+        self.assertIs(mount.get("bind", {}).get("create_host_path", False), False)
+
+    def assert_expanded_flags_off(self, engine):
+        for name, value in engine["environment"].items():
+            if name.endswith("_ENABLED"):
+                self.assertEqual("false", value, name)
+
+
+class ComposeModelTest(ComposeAssertions, unittest.TestCase):
     def test_engine_is_single_nonroot_readonly_service_without_host_ports(self):
         model = compose_model("compose.naver-engine.yml")
         self.assertEqual("naver-engine", model["name"])
@@ -157,9 +209,9 @@ class ComposeModelTest(unittest.TestCase):
         self.assertEqual(["python", "-m", "naver_runtime", "run"], engine["command"])
         for field in ("ports", "expose", "container_name", "privileged", "network_mode", "depends_on"):
             self.assertNotIn(field, engine)
-        self.assertEqual("raw", engine["env_file"][0]["format"])
+        self.assert_raw_environment(engine)
         self.assertEqual(64, engine["pids_limit"])
-        self.assertLessEqual(engine["cpus"], 0.5)
+        self.assert_cpu_limit(engine)
 
     def test_data_and_socket_directory_mounts_are_separate_from_code_and_ad_db(self):
         engine = compose_model("compose.naver-engine.yml")["services"]["naver-engine"]
@@ -168,7 +220,7 @@ class ComposeModelTest(unittest.TestCase):
                          {mount["target"] for mount in mounts})
         for mount in mounts:
             self.assertEqual("bind", mount["type"])
-            self.assertFalse(mount["bind"]["create_host_path"])
+            self.assert_no_created_host_path(mount)
             self.assertTrue(mount["source"].startswith(("/var/lib/metainc/", "/run/metainc/", "/var/backups/metainc/")))
             self.assertFalse(mount.get("read_only", False))
         self.assertEqual("/var/lib/naver-engine/engine.db", engine["environment"]["NAVER_ENGINE_DB"])
@@ -201,8 +253,33 @@ class ComposeModelTest(unittest.TestCase):
                           "/run/secrets/naver-backup-known-hosts"}, {mount["target"] for mount in secrets})
         for mount in secrets:
             self.assertTrue(mount["read_only"])
-            self.assertFalse(mount["bind"]["create_host_path"])
-        self.assertFalse(any(name.endswith("_ENABLED") for name in engine["environment"]))
+            self.assert_no_created_host_path(mount)
+        self.assert_raw_environment(engine)
+        self.assert_expanded_flags_off(engine)
+
+
+class ComposeNormalizationTest(ComposeAssertions, unittest.TestCase):
+    def test_linux_expanded_env_and_omitted_false_bind_match_contract(self):
+        engine = {"environment": {RAW_CANARY_NAME: RAW_CANARY_VALUE,
+                                  **{"NAVER_ENGINE_" + flag: "false" for flag in FLAGS}}}
+        self.assert_raw_environment(engine)
+        self.assert_expanded_flags_off(engine)
+        self.assert_no_created_host_path({"type": "bind", "bind": {}})
+        self.assert_no_created_host_path({"type": "bind"})
+        for cpus in ("0.5", 0.5):
+            self.assert_cpu_limit({"cpus": cpus})
+
+    def test_normalization_never_hides_interpolation_enabled_flags_or_created_paths(self):
+        for value in (None, RAW_CANARY_VALUE.replace("${NAVER_PACKAGE_UNSET:-expanded}", "expanded")):
+            with self.assertRaises(AssertionError):
+                self.assert_raw_environment({"environment": {RAW_CANARY_NAME: value}})
+        with self.assertRaises(AssertionError):
+            self.assert_expanded_flags_off({"environment": {"NAVER_ENGINE_BACKUP_ENABLED": "true"}})
+        with self.assertRaises(AssertionError):
+            self.assert_no_created_host_path({"bind": {"create_host_path": True}})
+        for cpus in ("0", 0, "0.50000000000000001", 0.51):
+            with self.assertRaises(AssertionError):
+                self.assert_cpu_limit({"cpus": cpus})
 
 
 if __name__ == "__main__":
