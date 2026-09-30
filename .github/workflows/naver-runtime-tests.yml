@@ -8,7 +8,7 @@ on:
       backup_acceptance:
         description: '승인된 전용키/합성 수신·복구 시험만. 앱 배포 없음'
         type: choice
-        options: [none, keys, transfer, restore]
+        options: [none, keys, probe, transfer, restore]
         default: none
       received_synthetic_json:
         description: 'restore 전용: 수신 서버에서 읽은 합성 암호문과 해시·크기·일자 JSON. 키/운영자료 금지'
@@ -23,6 +23,24 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/codex/naver-backup-recovery-20261001' }}
 
 jobs:
+  backup-probe:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/naver-backup-recovery-20261001' && inputs.backup_acceptance == 'probe'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: 소스 받기 (자격 저장 없음)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: 강제명령 거절의 인증·실행 단계 분리 (전송 없음)
+        env:
+          ACCEPTANCE_MODE: probe
+          ACCEPTANCE_EVIDENCE: ${{ runner.temp }}/backup-probe-evidence
+          NAVER_BACKUP_UPLOAD_SSH_PRIVATE_KEY: ${{ secrets.NAVER_BACKUP_UPLOAD_SSH_PRIVATE_KEY }}
+          NAVER_BACKUP_KNOWN_HOSTS: ${{ secrets.NAVER_BACKUP_KNOWN_HOSTS }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 tools/naver-backup-acceptance.py
+
   backup-transfer:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/naver-backup-recovery-20261001' && inputs.backup_acceptance == 'transfer'
     runs-on: ubuntu-24.04

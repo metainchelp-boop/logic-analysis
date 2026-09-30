@@ -57,6 +57,38 @@ def new_file(path, value):
     return path
 
 
+def probe_only(root):
+    if "NAVER_BACKUP_RECOVERY_PRIVATE_KEY_PEM" in os.environ:
+        raise ValueError("recovery key must not enter probe job")
+    key = environment_file(root, "NAVER_BACKUP_UPLOAD_SSH_PRIVATE_KEY", "upload-key")
+    hosts = environment_file(root, "NAVER_BACKUP_KNOWN_HOSTS", "known-hosts")
+    stage("read_only_authentication_diagnosis")
+    # -v 원문은 메모리에서만 분류한다. 강제명령에 true를 보내 수신 거절만 요청하며
+    # 빈 입력이므로 사본 생성/전송은 없다. 비밀값·주소·키 지문·오류 원문을 출력하지 않는다.
+    result = subprocess.run([*ssh_command(key, hosts), "-v", T.RECEIVER, "true"],
+                            input=b"", capture_output=True, timeout=30, env=T.COMMAND_ENV)
+    markers = {
+        "publickey_authentication_accepted": b'using "publickey"',
+        "receiver_refusal": "백업 수신 실패".encode(),
+        "permission_denied": b"Permission denied",
+        "python_cannot_open_file": b"can't open file",
+        "shell_profile_error": b"/etc/profile",
+        "shell_rc_error": b"/.bashrc",
+        "receiver_path_mentioned": b"/usr/local/libexec/metainc/naver-backup-receiver.py",
+        "shell_execution_denied": b"/bin/sh: Permission denied",
+        "authentication_denied": b"Permission denied (publickey",
+        "host_key_refused": b"Host key verification failed",
+        "host_key_changed": b"REMOTE HOST IDENTIFICATION HAS CHANGED",
+        "pam_denied": b"PAM",
+    }
+    remote_status = re.findall(rb"debug1: Exit status (\d+)", result.stderr)
+    print(json.dumps({"status": "read_only_probe_completed", "ssh_exit_code": result.returncode,
+                      "remote_exit_code": int(remote_status[-1]) if remote_status else None,
+                      "signals": {name: marker in result.stderr for name, marker in markers.items()},
+                      "operating_data_used": False, "upload_attempted": False,
+                      "server_settings_changed": False, "raw_output_emitted": False}, sort_keys=True))
+
+
 def environment_file(root, name, filename):
     value = os.environ.pop(name, "")
     if not value:
@@ -225,7 +257,9 @@ def main():
         with tempfile.TemporaryDirectory(prefix="naver-backup-acceptance-") as temporary:
             root = pathlib.Path(temporary).resolve()
             os.chmod(root, 0o700)
-            if mode == "transfer":
+            if mode == "probe":
+                probe_only(root)
+            elif mode == "transfer":
                 transfer(root, evidence)
             elif mode in ("keys", "restore"):
                 recover(root, evidence, mode)

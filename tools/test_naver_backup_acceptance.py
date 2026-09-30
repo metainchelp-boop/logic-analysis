@@ -185,6 +185,24 @@ class AcceptanceTest(unittest.TestCase):
         self.probe_result = (255, b"RAW_PROCESS_DETAIL", "백업 수신 실패\n".encode())
         self.assert_transfer_precheck_failure("read_only_forced_command_probe", 1)
 
+    def test_read_only_probe_separates_remote_permission_error_from_authentication(self):
+        self.probe_result = (2, b"RAW_PROCESS_DETAIL", b'Authenticated to private-host using "publickey".\n'
+                             b"/usr/bin/python3: can't open file '/usr/local/libexec/metainc/naver-backup-receiver.py': Permission denied\n"
+                             b"debug1: Exit status 2\nRAW_PROCESS_DETAIL PRIVATE KEY")
+        code = self.run_acceptance("probe", {"NAVER_BACKUP_UPLOAD_SSH_PRIVATE_KEY": "synthetic-upload-private",
+                                             "NAVER_BACKUP_KNOWN_HOSTS": "synthetic-known-hosts"})
+        self.assertEqual(0, code)
+        self.assertEqual([], self.sent)
+        self.assertEqual(1, len(self.ssh_calls))
+        self.assertIn("-v", self.ssh_calls[0])
+        report = self.stdout_reports()[-1]
+        self.assertEqual(2, report["remote_exit_code"])
+        self.assertTrue(report["signals"]["publickey_authentication_accepted"])
+        self.assertTrue(report["signals"]["python_cannot_open_file"])
+        self.assertFalse(report["signals"]["authentication_denied"])
+        self.assertFalse(report["upload_attempted"])
+        self.assertNotIn("private-host", self.stdout.getvalue())
+
     def test_probe_without_expected_receiver_refusal_never_reaches_upload(self):
         for code in (0, 1, 2):
             with self.subTest(exit_code=code):
