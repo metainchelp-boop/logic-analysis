@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex,nofollow">
+<title>네이버 관제</title>
+<link rel="icon" href="/naver/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/naver/app.css">
+<script src="/naver/app.js" defer></script>
+</head>
+<body>
+<header class="top" id="top" hidden>
+  <div class="row1">
+    <div class="brand"><span class="dot" aria-hidden="true"></span>네이버 관제</div>
+    <nav class="menu" aria-label="메뉴">
+      <button type="button" data-go="/naver/">🛰 관제</button>
+      <button type="button" data-go="/naver/automation">🤖 자동화</button>
+      <button type="button" data-go="/naver/reports">📄 보고서</button>
+      <button type="button" data-go="/naver/settings" id="menuSettings" hidden>⚙️ 설정</button>
+    </nav>
+    <div class="right">
+      <select class="scopesel" id="scope" aria-label="보는 범위" hidden></select>
+      <button type="button" class="bell" id="bell" aria-label="나에게 온 알림">🔔<span class="c" id="bellN" hidden></span></button>
+      <span class="me" id="me"></span>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+  <section class="screen on" id="s-loading"><div class="loading">불러오는 중…</div></section>
+
+  <section class="screen" id="s-blocked" aria-labelledby="b-t">
+    <div class="blocked"><div class="ic" id="b-ic" aria-hidden="true">🔒</div><h1 id="b-t"></h1><p id="b-p"></p></div>
+  </section>
+
+  <!-- 🛰 관제 -->
+  <section class="screen" id="s-watch" aria-labelledby="t-watch">
+    <h1 class="pt" id="t-watch">🛰 관제</h1>
+    <p class="ps">매일 아침 모든 광고주의 네이버 광고 계정을 대신 점검했습니다. <b>「확인 필요」만 보시면 됩니다</b> — 문제가 없는 광고주는 들어가 보지 않아도 됩니다.</p>
+    <div class="runbar" id="runbar"></div>
+    <div class="iwan" id="iwan" role="group" aria-label="이관 상태 — 눌러서 거르기"></div>
+    <div class="kpis" id="kpis" role="group" aria-label="오늘 점검 결과 — 눌러서 거르기"></div>
+    <div class="up" id="upbox" hidden></div>
+
+    <div class="card flat" id="issuesCard">
+      <div class="kh"><h2>오늘의 이슈</h2><span class="n" id="iss-n"></span><span class="n r">원인별로 묶었습니다 · 🔴 긴급은 풀릴 때까지 「확인 필요」에 남습니다</span></div>
+      <div id="issues"></div>
+      <button type="button" class="foldbtn" id="doneToggle" aria-expanded="false" aria-controls="doneList"></button>
+      <div id="doneList" hidden></div>
+    </div>
+
+    <div class="card flat">
+      <div class="kh"><h2>전 광고주</h2><span class="n" id="tbl-n"></span></div>
+      <div class="chips" id="tblChips" role="group" aria-label="전 광고주 거르기">
+        <button type="button" class="chip on" data-f="need">확인 필요만</button>
+        <button type="button" class="chip" data-f="all">전체</button>
+        <button type="button" class="chip" data-f="red">🔴 긴급</button>
+        <button type="button" class="chip" data-f="yellow">🟡 주의</button>
+        <button type="button" class="chip" data-f="green">🟢 정상</button>
+        <button type="button" class="chip" data-f="white">⚪ 점검 불가</button>
+        <input class="search" id="q" type="search" placeholder="광고주 찾기" aria-label="광고주 찾기" autocomplete="off">
+      </div>
+      <div class="tblwrap"><table>
+        <thead><tr><th>상태</th><th>광고주</th><th>확인</th><th>이관</th><th>담당</th><th>어제 광고비</th><th>비즈머니</th><th>열린 이슈</th><th>계약 단계</th></tr></thead>
+        <tbody id="tbody"></tbody>
+      </table></div>
+    </div>
+
+    <div class="card flat" id="linksCard">
+      <div class="kh"><h2>🔗 짝 확인</h2><span class="n" id="links-n"></span><span class="n r">이 광고주 광고계정이 맞는지 사람이 확인합니다 · 확인 전에는 자동화·광고주 보고서가 켜지지 않습니다</span></div>
+      <button type="button" class="foldbtn" id="linksToggle" aria-expanded="false" aria-controls="linksBody">펼치기</button>
+      <div id="linksBody" hidden></div>
+    </div>
+
+    <div class="card flat" id="endedCard">
+      <div class="kh"><h2>📦 계약 끝난 광고주</h2><span class="n" id="ended-n"></span><span class="n r">사후 관리용 · 끝난 지 14일이 지나면 네이버 계정에 들어가지 않습니다</span></div>
+      <button type="button" class="foldbtn" id="endedToggle" aria-expanded="false" aria-controls="endedBody">펼치기</button>
+      <div id="endedBody" hidden></div>
+    </div>
+  </section>
+
+  <!-- 광고주 한 장 -->
+  <section class="screen" id="s-client" aria-labelledby="c-name">
+    <div class="crumbs"><button type="button" data-go="/naver/">🛰 관제</button> › <span id="c-crumb"></span></div>
+    <div class="chead">
+      <div class="t"><span class="sig" id="c-sig" aria-hidden="true"></span><h1 id="c-name"></h1><span class="hint" id="c-sub"></span></div>
+      <div class="badges" id="c-badges"></div>
+    </div>
+    <div class="tabs" role="tablist" aria-label="광고주 한 장 칸">
+      <button type="button" role="tab" class="on" data-ctab="now" aria-selected="true">현황</button>
+      <button type="button" role="tab" data-ctab="hist" aria-selected="false">이슈 기록</button>
+      <button type="button" role="tab" data-ctab="rep" aria-selected="false">보고서</button>
+      <button type="button" role="tab" data-ctab="conn" aria-selected="false">연결</button>
+    </div>
+    <div class="pane on" id="p-now" role="tabpanel"></div>
+    <div class="pane" id="p-hist" role="tabpanel"></div>
+    <div class="pane" id="p-rep" role="tabpanel"></div>
+    <div class="pane" id="p-conn" role="tabpanel"></div>
+  </section>
+
+  <!-- 🤖 자동화 -->
+  <section class="screen" id="s-automation" aria-labelledby="t-auto">
+    <h1 class="pt" id="t-auto">🤖 자동화</h1>
+    <p class="ps">광고주별로 자동 운영을 켜고, 엔진이 한 일을 확인하고, 되돌리는 곳입니다. 관제(점검·이슈)와 따로 있습니다.</p>
+    <div class="auto-soon"><b>5차에 엽니다.</b> 관제(2차) → 구조 점검·알림(3차) → 보고서(4차)를 먼저 만들고, 자동화는 시험 계정으로 실증한 뒤 엽니다. 지금 관제는 네이버 계정을 <b>읽기만</b> 합니다.</div>
+  </section>
+
+  <!-- 📄 보고서 -->
+  <section class="screen" id="s-reports" aria-labelledby="t-reports">
+    <h1 class="pt" id="t-reports">📄 보고서</h1>
+    <p class="ps">광고주별 주간·월간 네이버 광고 보고서입니다. 매주·매월 저절로 만들어지고, 게시하면 전산 광고주 공유 화면에 링크로 올라갑니다.</p>
+    <div class="auto-soon"><b>4차에 엽니다.</b> 아침 점검이 쌓은 기록(광고비·노출·클릭·이슈 기록)이 보고서 재료가 됩니다. 「계정 확인 전」 광고주는 보고서를 만들지 않습니다.</div>
+  </section>
+
+  <!-- ⚙️ 설정 -->
+  <section class="screen" id="s-settings" aria-labelledby="t-settings">
+    <h1 class="pt" id="t-settings">⚙️ 설정</h1>
+    <p class="ps" id="set-ps">매일 열지 않는 것만 모았습니다.</p>
+    <div class="setwrap">
+      <nav class="toc" aria-label="설정 목차">
+        <button type="button" class="on" data-sp="th">점검 기준</button>
+        <button type="button" data-sp="time">점검 시각 · 알림</button>
+        <button type="button" data-sp="ppl">사람 · 팀</button>
+        <button type="button" data-sp="sys">시스템</button>
+      </nav>
+      <div>
+        <div class="spane on" id="sp-th"></div>
+        <div class="spane" id="sp-time"></div>
+        <div class="spane" id="sp-ppl"></div>
+        <div class="spane" id="sp-sys"></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="shade" id="shade"></div>
+<aside class="drawer" id="drawer" aria-label="나에게 온 알림" aria-hidden="true">
+  <div class="dh"><h3>🔔 나에게 온 알림</h3><button type="button" class="btn sm" id="bellAll">모두 읽음</button><button type="button" class="x" aria-label="닫기" id="drawerX">✕</button></div>
+  <div class="db" id="drawerBody"></div>
+</aside>
+
+<div class="modal" id="m-except" role="dialog" aria-modal="true" aria-labelledby="mx-t"><div class="box">
+  <h3 id="mx-t">🙈 예외로 두기</h3>
+  <p class="sub" id="mx-sub"></p>
+  <div class="fg"><label for="mx-why">사유 (필수)</label><input type="text" id="mx-why" maxlength="200" placeholder="예: 광고주가 자동 충전을 켜 두었음" autocomplete="off"></div>
+  <div class="fg"><label for="mx-days">기간</label><select id="mx-days"></select></div>
+  <p class="hint" id="mx-rule"></p>
+  <div class="foot"><button type="button" class="btn" data-close>취소</button><button type="button" class="btn blue" id="mx-ok">예외로 두기</button></div>
+</div></div>
+
+<div class="modal" id="m-revoke" role="dialog" aria-modal="true" aria-labelledby="mr-t"><div class="box">
+  <h3 id="mr-t">짝 판단 거두기</h3>
+  <p class="sub" id="mr-sub">사람이 내린 「맞음」·「아님」 판단을 거둡니다. 다음 짝 맞추기부터 자동 규칙으로 돌아갑니다.</p>
+  <div class="fg"><label for="mr-why">사유 (필수)</label><input type="text" id="mr-why" maxlength="64" placeholder="예: 광고주 계정이 바뀜" autocomplete="off"></div>
+  <div class="foot"><button type="button" class="btn" data-close>취소</button><button type="button" class="btn blue" id="mr-ok">거두기</button></div>
+</div></div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
