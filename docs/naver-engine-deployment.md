@@ -165,3 +165,18 @@ Linux Python 3.12 시험은 macOS에서 파일 잠금과 SQLite WAL이 충돌하
 - 원천 표의 보관 주기·디스크 증가량은 아직 운영 실측 전입니다. 임의 삭제 작업을 넣지 않았습니다. S16의 승인된 운영 전환, 실제 백업 복원, 네트워크·자원·14일 그림자 승인 조건은 여전히 남습니다.
 
 Compose 구성 출력과 컨테이너 환경값도 구분합니다. CI의 Compose v2.38.2는 [`config` 직렬화 뒤](https://github.com/docker/compose/blob/v2.38.2/cmd/compose/config.go#L165-L181) JSON/YAML의 모든 `$`를 [정확히 한 번 `$$`로 이스케이프](https://github.com/docker/compose/blob/v2.38.2/cmd/compose/config.go#L495-L499)합니다. 패키징 시험은 합성 raw env의 펼친 출력이 이 규칙과 정확히 일치해야 통과하며, 원문·두 번 이스케이프·실제 보간된 값은 거절합니다. [`--no-interpolate`](https://docs.docker.com/reference/cli/docker/compose/config/)로 경로 기본값 해석까지 끄지 않습니다. raw env가 실제 컨테이너에서 원문 그대로 전달되는지는 별도의 네트워크 없는 합성 이미지 시험으로 검증하며, 운영 env·키·볼륨은 사용하지 않습니다.
+
+## 10. 복호화 완료 사본의 로컬 복원 검증 도구
+
+`python -m naver_runtime.restore_check`는 **이미 복호화된 ZIP만** 받습니다. 키 조회·발급·복호화·전송·서버 접속은 하지 않습니다. 기존 `restore_archive`와 `inspect_snapshot`으로 스냅샷 SHA-256, SQLite 무결성, 정확한 표별 건수를 검증하고, 생성기가 기록한 명시적 UTC `created_at`을 한국 날짜로 바꿔 예상일과 대조합니다. 원본 ZIP은 변경하지 않습니다. 새 출력 폴더의 `snapshot.sqlite`만 남기며 기존 폴더·파일·링크는 거절합니다.
+
+아래 경로는 예시이며, 승인된 별도 안전 환경에서 실제 준비한 경로로 바꿉니다. 입력 ZIP은 실행자 소유 `0600`, 출력의 **상위 폴더는 미리 마련한 실행자 소유 `0700`**이어야 합니다. 모든 경로는 링크 없는 절대 경로이며 코드 폴더 밖입니다. `check-20261001` 자체는 미리 만들지 않습니다.
+
+```sh
+python -m naver_runtime.restore_check \
+  --archive /private/restore-work/decrypted.zip \
+  --expected-kst-date 2026-10-01 \
+  --output-dir /private/restore-work/check-20261001
+```
+
+성공은 종료 코드 `0`과 날짜·압축본/스냅샷 해시·표별 건수 JSON, 실패는 종료 코드 `1`과 일반 실패 메시지입니다. 경로·행 데이터·예외 원문은 출력하지 않습니다. 성공한 복원 DB는 평문 `0600`이므로 승인된 복원 작업자가 별도 보관·폐기합니다. 이 도구의 성공만으로 사본의 출처 진위, CMS 복호화·암호문 변조 거절, 다른 서버 수신 또는 운영 복원 완료를 증명하지 않습니다. §4의 실제 사본 최초/월별 복원과 키·수신 계정 승인 조건은 그대로 남습니다.

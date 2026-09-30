@@ -80,6 +80,7 @@ jobs:
             --mount "type=bind,source=$GITHUB_WORKSPACE/naver_runtime/tests,target=/opt/naver-engine/naver_runtime/tests,readonly" \
             "naver-runtime-ci:$GITHUB_SHA" \
             python -m unittest -v naver_runtime.tests.test_backup_transport.CryptoTest \
+              naver_runtime.tests.test_restore_check \
               naver_runtime.tests.test_linux_runtime naver_runtime.tests.test_server \
               naver_runtime.tests.test_writer naver_runtime.tests.test_main \
             2>&1 | tee "$RUNNER_TEMP/naver-ci/image-crypto-tests.txt"
