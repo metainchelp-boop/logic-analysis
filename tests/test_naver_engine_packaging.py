@@ -34,7 +34,7 @@ def env_example():
                 if line and not line.startswith("#"))
 
 
-def compose_model(*files, project="naver-engine"):
+def compose_model(*files, project="naver-engine", resolve_env=False):
     # PATH만 전달한다. 실제 NAVER/ERP 값·사용자 .env를 config에 전달하지 않는다.
     env = {"PATH": os.environ.get("PATH", ""), "COMPOSE_DISABLE_ENV_FILE": "1"}
     executable = shutil.which("docker-compose")
@@ -55,7 +55,10 @@ def compose_model(*files, project="naver-engine"):
         env_path.write_text(source("deploy/naver-engine.env.example") + "\n"
                             + RAW_CANARY_NAME + "=" + RAW_CANARY_VALUE + "\n", encoding="utf-8")
         env["NAVER_ENGINE_ENV_FILE"] = str(env_path)
-        result = subprocess.run(argv + ["config", "--no-env-resolution", "--format", "json"],
+        options = ["config", "--format", "json"]
+        if not resolve_env:
+            options.append("--no-env-resolution")
+        result = subprocess.run(argv + options,
                                 cwd=ROOT, env=env, capture_output=True, text=True, timeout=20)
     if result.returncode:
         raise AssertionError("합성 Compose config 검사 실패: " + result.stderr)
@@ -183,7 +186,11 @@ class ComposeAssertions:
             self.assertEqual(1, len(engine["env_file"]))
             self.assertEqual("raw", engine["env_file"][0]["format"])
         else:
-            self.assertEqual(RAW_CANARY_VALUE, engine.get("environment", {}).get(RAW_CANARY_NAME))
+            # Compose runConfig는 JSON/YAML 직렬화 뒤 모든 $를 정확히 한 번 $$로 바꾼다.
+            # --no-interpolate는 경로 기본값 해석도 끄므로 사용하지 않는다.
+            # https://github.com/docker/compose/blob/v2.38.2/cmd/compose/config.go#L495-L499
+            self.assertEqual(RAW_CANARY_VALUE.replace("$", "$$"),
+                             engine.get("environment", {}).get(RAW_CANARY_NAME))
 
     def assert_no_created_host_path(self, mount):
         # false 생략은 Compose JSON 정규화다. 원본의 명시값은 별도 시험으로 필수 검사한다.
@@ -196,6 +203,13 @@ class ComposeAssertions:
 
 
 class ComposeModelTest(ComposeAssertions, unittest.TestCase):
+    def test_resolved_raw_env_uses_exact_compose_output_escaping(self):
+        # 최신 Compose가 --no-env-resolution을 지켜도 펼친 출력 경로를 실제 CLI로 시험한다.
+        engine = compose_model("compose.naver-engine.yml", resolve_env=True)["services"]["naver-engine"]
+        self.assertNotIn("env_file", engine)
+        self.assert_raw_environment(engine)
+        self.assert_expanded_flags_off(engine)
+
     def test_engine_is_single_nonroot_readonly_service_without_host_ports(self):
         model = compose_model("compose.naver-engine.yml")
         self.assertEqual("naver-engine", model["name"])
@@ -260,7 +274,7 @@ class ComposeModelTest(ComposeAssertions, unittest.TestCase):
 
 class ComposeNormalizationTest(ComposeAssertions, unittest.TestCase):
     def test_linux_expanded_env_and_omitted_false_bind_match_contract(self):
-        engine = {"environment": {RAW_CANARY_NAME: RAW_CANARY_VALUE,
+        engine = {"environment": {RAW_CANARY_NAME: RAW_CANARY_VALUE.replace("$", "$$"),
                                   **{"NAVER_ENGINE_" + flag: "false" for flag in FLAGS}}}
         self.assert_raw_environment(engine)
         self.assert_expanded_flags_off(engine)
@@ -270,7 +284,8 @@ class ComposeNormalizationTest(ComposeAssertions, unittest.TestCase):
             self.assert_cpu_limit({"cpus": cpus})
 
     def test_normalization_never_hides_interpolation_enabled_flags_or_created_paths(self):
-        for value in (None, RAW_CANARY_VALUE.replace("${NAVER_PACKAGE_UNSET:-expanded}", "expanded")):
+        for value in (None, RAW_CANARY_VALUE, RAW_CANARY_VALUE.replace("$", "$$$$"),
+                      RAW_CANARY_VALUE.replace("${NAVER_PACKAGE_UNSET:-expanded}", "expanded").replace("$", "$$")):
             with self.assertRaises(AssertionError):
                 self.assert_raw_environment({"environment": {RAW_CANARY_NAME: value}})
         with self.assertRaises(AssertionError):

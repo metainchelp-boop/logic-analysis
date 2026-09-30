@@ -130,3 +130,5 @@ docker compose --project-name naver-package-review --file docker-compose.yml --f
 Linux Python 3.12 시험은 macOS에서 파일 잠금과 SQLite WAL이 충돌하는 차이를 우회하려고 저장소 잠금을 약화하지 않습니다. 브라우저 시험은 기존 하네스를 사용하며 추가 보안 완화 인자를 넣지 않습니다. 기존 `chromium.launch()`가 브라우저 자체 sandbox를 입증하는 시험은 아닙니다. 이 CI는 실제 계정·운영 서버·실제 nginx 검증을 대신하지 않습니다.
 
 운영 후보 이미지도 push 없이 임시 runner에서 빌드하며, `--network none`, UID `10001:10001`, 읽기 전용 루트로 `check-config`, `dry-run`, 실제 이미지의 암호화 왕복·변조 거절 시험을 수행합니다. 결과와 의존성 버전만 7일 보관합니다. 작성한 workflow의 정적 검사와 실제 GitHub 실행 성공은 따로 보고합니다.
+
+Compose 구성 출력과 컨테이너 환경값도 구분합니다. CI의 Compose v2.38.2는 [`config` 직렬화 뒤](https://github.com/docker/compose/blob/v2.38.2/cmd/compose/config.go#L165-L181) JSON/YAML의 모든 `$`를 [정확히 한 번 `$$`로 이스케이프](https://github.com/docker/compose/blob/v2.38.2/cmd/compose/config.go#L495-L499)합니다. 패키징 시험은 합성 raw env의 펼친 출력이 이 규칙과 정확히 일치해야 통과하며, 원문·두 번 이스케이프·실제 보간된 값은 거절합니다. [`--no-interpolate`](https://docs.docker.com/reference/cli/docker/compose/config/)로 경로 기본값 해석까지 끄지 않습니다. raw env가 실제 컨테이너에서 원문 그대로 전달되는지는 별도의 네트워크 없는 합성 이미지 시험으로 검증하며, 운영 env·키·볼륨은 사용하지 않습니다.

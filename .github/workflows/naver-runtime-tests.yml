@@ -84,6 +84,8 @@ jobs:
             2>&1 | tee "$RUNNER_TEMP/naver-ci/image-crypto-tests.txt"
           docker image inspect "naver-runtime-ci:$GITHUB_SHA" --format '{{.Id}}' \
             | tee "$RUNNER_TEMP/naver-ci/image-id.txt"
+          python tools/naver-runtime-image-test.py "naver-runtime-ci:$GITHUB_SHA" \
+            | tee "$RUNNER_TEMP/naver-ci/image-compose-raw.txt"
       - name: 시험 증거 보관 (7일)
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
