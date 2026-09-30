@@ -1,12 +1,14 @@
 """전산 60초·1회용 코드를 서버 자격증명과 PKCE로 교환한다."""
 import os
 import re
+import json
 
 import requests
 from fastapi import HTTPException
 
 EXCHANGE_URL = "https://api.metainc.co.kr/api/sso/exchange"
 CONSUMER_ORIGIN = "https://logic.metainc.co.kr"
+MAX_RESPONSE_BYTES = 64 * 1024
 
 
 def exchange_identity(code: str, code_verifier: str) -> dict:
@@ -21,14 +23,29 @@ def exchange_identity(code: str, code_verifier: str) -> dict:
                 EXCHANGE_URL,
                 json={"destination": "LOGIC_ANALYSIS", "code": code, "codeVerifier": code_verifier},
                 headers={"X-Sso-Client-Key": key},
-                timeout=(3, 8), allow_redirects=False,
+                timeout=(3, 8), allow_redirects=False, stream=True,
             )
-        if response.status_code != 200:
-            raise HTTPException(status_code=401, detail="전산에서 다시 열어 로그인해 주세요.")
-        identity = response.json().get("result")
+            try:
+                if response.status_code in (400, 401, 403, 409, 410):
+                    raise HTTPException(status_code=401, detail="전산에서 다시 열어 로그인해 주세요.")
+                if response.status_code in (429, 503):
+                    raise HTTPException(status_code=503, detail="전산 연결 로그인을 잠시 이용할 수 없습니다.")
+                if response.status_code != 200:
+                    raise ValueError("unexpected exchange status")
+                body = bytearray()
+                for chunk in response.iter_content(chunk_size=8192):
+                    if len(body) + len(chunk) > MAX_RESPONSE_BYTES:
+                        raise ValueError("exchange response too large")
+                    body.extend(chunk)
+                envelope = json.loads(body)
+            finally:
+                response.close()
+        if not isinstance(envelope, dict) or type(envelope.get("status")) is not int or envelope["status"] != 200:
+            raise ValueError("invalid exchange envelope")
+        identity = envelope.get("result")
         if not isinstance(identity, dict):
             raise ValueError("invalid identity")
-        if (type(identity.get("idx")) is not int or identity["idx"] <= 0
+        if (type(identity.get("idx")) is not int or identity["idx"] < 0
                 or not isinstance(identity.get("id"), str) or not 1 <= len(identity["id"].strip()) <= 100
                 or not isinstance(identity.get("name"), str) or type(identity.get("isManager")) is not bool
                 or "authority" not in identity or not isinstance(identity.get("teamList"), list)):

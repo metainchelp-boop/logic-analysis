@@ -3,6 +3,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { test } = require('node:test');
+const code = Buffer.alloc(32, 18).toString('base64url');
+const codeVerifier = Buffer.alloc(32, 52).toString('base64url');
 
 function login(bootstrap, response = { ok: false, json: async () => ({ detail: '실패' }) }) {
     const source = fs.readFileSync(path.join(__dirname, '../js/components/App.jsx'), 'utf8');
@@ -21,7 +23,7 @@ function login(bootstrap, response = { ok: false, json: async () => ({ detail: '
 }
 
 test('새 교환이 실패하면 다른 기존 세션을 복원하지 않는다', async () => {
-    const result = login({ started: true, consume: () => Promise.resolve({ code: 'C'.repeat(43), codeVerifier: 'V'.repeat(43) }) });
+    const result = login({ started: true, consume: () => Promise.resolve({ code, codeVerifier }) });
     await new Promise(resolve => setImmediate(resolve));
     assert.deepEqual(result.requests.map(x => x.url), ['/api/auth/sso-code']);
     assert.equal(result.storage.has('logic_token'), false);
@@ -31,7 +33,7 @@ test('새 교환이 실패하면 다른 기존 세션을 복원하지 않는다'
 
 test('유효한 새 교환은 자체 세션만 저장하고 코드·검증값은 저장하지 않는다', async () => {
     const data = { success: true, token: 'new-local-token', user: { id: 1, username: 'employee-test' } };
-    const result = login({ started: true, consume: () => Promise.resolve({ code: 'C'.repeat(43), codeVerifier: 'V'.repeat(43) }) },
+    const result = login({ started: true, consume: () => Promise.resolve({ code, codeVerifier }) },
         { ok: true, json: async () => data });
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(result.requests.length, 1);

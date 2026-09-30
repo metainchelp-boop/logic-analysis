@@ -4,6 +4,8 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { webcrypto } = require('node:crypto');
 const { test } = require('node:test');
+const requestId = Buffer.alloc(32, 18).toString('base64url');
+const code = Buffer.alloc(32, 52).toString('base64url');
 
 const file = path.join(__dirname, '../js/sso-bootstrap.js');
 function page(query, options = {}) {
@@ -27,7 +29,7 @@ function page(query, options = {}) {
 }
 
 test('주소를 먼저 비우고 PKCE를 부모 창과 1회 교환한다', async () => {
-    const p = page('?sso_start=' + 'R'.repeat(43) + '&tab=keep#home');
+    const p = page('?sso_start=' + requestId + '&tab=keep#home');
     assert.equal(p.events[0].kind, 'clean');
     assert.equal(p.events[0].url, '/?tab=keep#home');
     const pending = p.context.__metaincSso.consume();
@@ -38,9 +40,9 @@ test('주소를 먼저 비우고 PKCE를 부모 창과 1회 교환한다', async
     assert.match(ready.body.codeChallenge, /^[A-Za-z0-9_-]{43}$/);
     assert.equal(ready.body.codeVerifier, undefined);
     p.listeners.message({ source: p.opener, origin: ready.origin,
-        data: { type: 'METAINC_SSO_CODE', requestId: 'R'.repeat(43), code: 'C'.repeat(43) } });
+        data: { type: 'METAINC_SSO_CODE', requestId, code } });
     const result = await pending;
-    assert.equal(result.code, 'C'.repeat(43));
+    assert.equal(result.code, code);
     assert.match(result.codeVerifier, /^[A-Za-z0-9_-]{43}$/);
     const challenge = Buffer.from(await webcrypto.subtle.digest('SHA-256', new TextEncoder().encode(result.codeVerifier))).toString('base64url');
     assert.equal(ready.body.codeChallenge, challenge);
@@ -49,8 +51,8 @@ test('주소를 먼저 비우고 PKCE를 부모 창과 1회 교환한다', async
 });
 
 test('직접 코드 URL·혼합 방식·중복 요청 식별자는 정리 후 거부한다', async () => {
-    for (const query of ['?code=' + 'C'.repeat(43), '?sso_start=' + 'R'.repeat(43) + '&sso=old',
-        '?sso_start=' + 'R'.repeat(43) + '&sso_start=' + 'R'.repeat(43), '?sso_start=short']) {
+    for (const query of ['?code=' + code, '?sso_start=' + requestId + '&sso=old',
+        '?sso_start=' + requestId + '&sso_start=' + requestId, '?sso_start=short']) {
         const p = page(query);
         assert.equal(p.events[0].kind, 'clean');
         assert.equal(p.events[0].url, '/');
@@ -63,17 +65,17 @@ test('직접 코드 URL·혼합 방식·중복 요청 식별자는 정리 후 �
 test('허용 전산 출처·부모 창 없는 탐색은 거부한다', async () => {
     for (const options of [{ referrer: '' }, { referrer: 'https://metainc.co.kr.evil.example/' },
         { referrer: 'https://evil.example/' }, { noOpener: true }]) {
-        const p = page('?sso_start=' + 'R'.repeat(43), options);
+        const p = page('?sso_start=' + requestId, options);
         await assert.rejects(p.context.__metaincSso.consume());
         assert.equal(p.events.filter(x => x.kind === 'message').length, 0);
     }
 });
 
 test('다른 창·출처·요청 식별자의 응답은 무시하고 60초 뒤 실패한다', async () => {
-    const p = page('?sso_start=' + 'R'.repeat(43));
+    const p = page('?sso_start=' + requestId);
     const result = p.context.__metaincSso.consume();
     await new Promise(resolve => setImmediate(resolve));
-    const message = { type: 'METAINC_SSO_CODE', requestId: 'R'.repeat(43), code: 'C'.repeat(43) };
+    const message = { type: 'METAINC_SSO_CODE', requestId, code };
     p.listeners.message({ source: {}, origin: 'https://metainc.co.kr', data: message });
     p.listeners.message({ source: p.opener, origin: 'https://evil.example', data: message });
     p.listeners.message({ source: p.opener, origin: 'https://metainc.co.kr', data: { ...message, requestId: 'X'.repeat(43) } });
@@ -94,11 +96,11 @@ test('옛 토큰은 주소에서 즉시 제거하고 RAM에서 한 번만 꺼낸
 });
 
 test('출처가 맞아도 코드 형식이 틀리면 세션 재시도 없이 실패한다', async () => {
-    const p = page('?sso_start=' + 'R'.repeat(43));
+    const p = page('?sso_start=' + requestId);
     const pending = p.context.__metaincSso.consume();
     await new Promise(resolve => setImmediate(resolve));
     p.listeners.message({ source: p.opener, origin: 'https://metainc.co.kr',
-        data: { type: 'METAINC_SSO_CODE', requestId: 'R'.repeat(43), code: 'bad' } });
+        data: { type: 'METAINC_SSO_CODE', requestId, code: 'bad' } });
     await assert.rejects(pending);
     assert.equal(p.context.opener, null);
 });

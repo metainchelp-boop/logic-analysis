@@ -1,5 +1,6 @@
 """운영 ERP/비밀값 없이 실제 인증 라우터와 임시 DB를 검사한다."""
 import importlib
+import io
 import ast
 import base64
 import hashlib
@@ -19,6 +20,8 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+CODE = base64.urlsafe_b64encode(bytes([18]) * 32).decode().rstrip('=')
+VERIFIER = base64.urlsafe_b64encode(bytes([52]) * 32).decode().rstrip('=')
 
 
 class SsoCodeTests(unittest.TestCase):
@@ -56,7 +59,7 @@ class SsoCodeTests(unittest.TestCase):
         self.erp_clock = 100
         self.erp_expiry = 160
         self.erp_destination = 'LOGIC_ANALYSIS'
-        self.erp_challenge = base64.urlsafe_b64encode(hashlib.sha256(('V' * 43).encode()).digest()).decode().rstrip('=')
+        self.erp_challenge = base64.urlsafe_b64encode(hashlib.sha256(VERIFIER.encode()).digest()).decode().rstrip('=')
 
         def fake_send(session, prepared, **kwargs):
             self.calls.append((session, prepared, kwargs))
@@ -70,7 +73,7 @@ class SsoCodeTests(unittest.TestCase):
                     response.status_code = 401
                 if response.status_code == 200:
                     self.used_codes.add(body['code'])
-            response._content = json.dumps(self.exchange_body if self.exchange_body is not None else {"result": self.profile}).encode()
+            response.raw = io.BytesIO(json.dumps(self.exchange_body if self.exchange_body is not None else {"status": 200, "result": self.profile}).encode())
             return response
 
         self.transport = patch.object(requests.Session, "send", autospec=True, side_effect=fake_send)
@@ -84,7 +87,7 @@ class SsoCodeTests(unittest.TestCase):
         self.directory.cleanup()
 
     def post(self, **kwargs):
-        return self.client.post("/api/auth/sso-code", json={"code": "C" * 43, "codeVerifier": "V" * 43},
+        return self.client.post("/api/auth/sso-code", json={"code": CODE, "codeVerifier": VERIFIER},
                                 headers={"Origin": "https://logic.metainc.co.kr", "Sec-Fetch-Site": "same-origin"}, **kwargs)
 
     def test_valid_exchange_keeps_existing_identity_and_local_session_contract(self):
@@ -108,6 +111,22 @@ class SsoCodeTests(unittest.TestCase):
         self.assertEqual(result['user']['role'], 'manager')
         self.assertTrue(result['token'])
 
+    def test_representative_zero_identity_preserves_existing_admin(self):
+        self.profile['idx'] = 0
+        self.auth.update_user(1, role='admin')
+        response = self.post()
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['user']['role'], 'admin')
+
+    def test_representative_zero_identity_can_create_account_under_existing_role_rules(self):
+        self.profile['idx'] = 0
+        self.profile['id'] = 'representative-test'
+        self.profile['isManager'] = True
+        response = self.post()
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['user']['username'], 'representative-test')
+        self.assertEqual(response.json()['user']['role'], 'viewer')
+
     def test_new_exchange_passes_api_key_middleware_without_exposing_server_key(self):
         # 실제 미들웨어만 로드해 앱 lifespan/배치/운영 DB 초기화를 하지 않는다.
         source = Path(__file__).resolve().parents[1] / "main.py"
@@ -123,7 +142,7 @@ class SsoCodeTests(unittest.TestCase):
 
     def test_incomplete_identity_cannot_silently_downgrade_existing_manager(self):
         self.auth.update_user(1, role='manager')
-        self.exchange_body = {'result': {'id': 'employee-test', 'name': '직원'}}
+        self.exchange_body = {'status': 200, 'result': {'id': 'employee-test', 'name': '직원'}}
         response = self.post()
         self.assertEqual(response.status_code, 502)
         self.assertNotIn('token', response.json())
@@ -135,12 +154,13 @@ class SsoCodeTests(unittest.TestCase):
         self.assertFalse(session.trust_env)
         self.assertEqual(request.url, 'https://api.metainc.co.kr/api/sso/exchange')
         self.assertEqual(request.method, 'POST')
-        self.assertEqual(json.loads(request.body), {'destination': 'LOGIC_ANALYSIS', 'code': 'C' * 43, 'codeVerifier': 'V' * 43})
+        self.assertEqual(json.loads(request.body), {'destination': 'LOGIC_ANALYSIS', 'code': CODE, 'codeVerifier': VERIFIER})
         self.assertEqual(request.headers['X-Sso-Client-Key'], 'a' * 64)
         self.assertNotIn('Authorization', request.headers)
         self.assertFalse(kwargs['allow_redirects'])
         self.assertEqual(kwargs['timeout'], (3, 8))
         self.assertEqual(kwargs['proxies'], {})
+        self.assertTrue(kwargs['stream'])
         self.assertEqual(len(self.calls), 1)
 
     def test_expired_code_does_not_create_session(self):
@@ -172,20 +192,20 @@ class SsoCodeTests(unittest.TestCase):
     def test_wrong_origin_or_fetch_site_never_reaches_erp(self):
         for headers in [{}, {'Origin': 'null'}, {'Origin': 'https://evil.example'},
                         {'Origin': 'https://logic.metainc.co.kr', 'Sec-Fetch-Site': 'cross-site'}]:
-            response = self.client.post('/api/auth/sso-code', json={'code': 'C' * 43, 'codeVerifier': 'V' * 43}, headers=headers)
+            response = self.client.post('/api/auth/sso-code', json={'code': CODE, 'codeVerifier': VERIFIER}, headers=headers)
             self.assertEqual(response.status_code, 403)
         self.assertEqual(self.calls, [])
 
     def test_redirect_error_and_timeout_do_not_retry_or_leak_credentials(self):
-        for status in [301, 302, 307, 401, 500]:
+        for status, expected in [(301, 502), (302, 502), (307, 502), (401, 401), (500, 502), (503, 503)]:
             with self.subTest(status=status):
                 self.exchange_status = status
                 response = self.post()
-                self.assertEqual(response.status_code, 401)
+                self.assertEqual(response.status_code, expected)
                 self.assertNotIn('token', response.json())
-        self.assertEqual(len(self.calls), 5)
+        self.assertEqual(len(self.calls), 6)
         self.transport.stop()
-        with patch.object(requests.Session, 'send', side_effect=requests.Timeout('private-' + 'V' * 43)):
+        with patch.object(requests.Session, 'send', side_effect=requests.Timeout('private-' + VERIFIER)):
             response = self.post()
         self.assertEqual(response.status_code, 502)
         self.assertNotIn('private', response.text)
@@ -214,10 +234,42 @@ class SsoCodeTests(unittest.TestCase):
         self.assertEqual(self.calls[0][1].headers['Authorization'], 'Bearer legacy-test-token')
 
     def test_invalid_code_verifier_and_extra_destination_never_reach_erp(self):
-        for payload in [{'code': '', 'codeVerifier': 'V' * 43}, {'code': 'C' * 43},
-                        {'code': 'C' * 43, 'codeVerifier': 'V' * 43, 'destination': 'AD_CENTER'}]:
+        for payload in [{'code': '', 'codeVerifier': VERIFIER}, {'code': CODE},
+                        {'code': CODE, 'codeVerifier': VERIFIER, 'destination': 'AD_CENTER'}]:
             response = self.client.post('/api/auth/sso-code', json=payload, headers={'Origin': 'https://logic.metainc.co.kr'})
             self.assertEqual(response.status_code, 422)
+        self.assertEqual(self.calls, [])
+
+    def test_http_success_with_failed_or_missing_envelope_status_cannot_create_session(self):
+        for status in [None, 401, '200', True]:
+            self.used_codes.clear()
+            self.exchange_body = {'status': status, 'result': self.profile}
+            response = self.post()
+            self.assertEqual(response.status_code, 502)
+            self.assertNotIn('token', response.json())
+
+    def test_over_64kb_response_is_rejected_before_local_account_or_session(self):
+        self.profile['name'] = 'Z' * 70000
+        response = self.post()
+        self.assertEqual(response.status_code, 502)
+        self.assertNotIn('token', response.json())
+
+    def test_negative_or_non_integer_identity_index_is_rejected(self):
+        for idx in [-1, True, '0', None]:
+            with self.subTest(idx=idx):
+                self.used_codes.clear()
+                self.profile['idx'] = idx
+                response = self.post()
+                self.assertEqual(response.status_code, 502)
+                self.assertNotIn('token', response.json())
+
+    def test_validation_error_does_not_echo_code_verifier_or_extra_input(self):
+        secret = 'synthetic-sensitive-input-' * 3
+        response = self.client.post('/api/auth/sso-code', json={'code': secret, 'codeVerifier': secret, 'extra': secret},
+                                    headers={'Origin': 'https://logic.metainc.co.kr'})
+        self.assertEqual(response.status_code, 422)
+        self.assertNotIn(secret, response.text)
+        self.assertEqual(response.headers.get('cache-control'), 'no-store')
         self.assertEqual(self.calls, [])
 
 

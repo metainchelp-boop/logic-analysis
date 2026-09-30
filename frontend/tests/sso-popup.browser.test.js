@@ -7,7 +7,8 @@ const { test } = require('node:test');
 const { chromium } = require('playwright');
 
 const bootstrap = fs.readFileSync(path.join(__dirname, '../js/sso-bootstrap.js'), 'utf8');
-const requestId = 'R'.repeat(43), code = 'C'.repeat(43);
+const requestId = Buffer.alloc(32, 18).toString('base64url');
+const code = Buffer.alloc(32, 52).toString('base64url');
 const erp = 'https://metainc.co.kr', logic = 'https://logic.metainc.co.kr';
 
 async function fixture() {
