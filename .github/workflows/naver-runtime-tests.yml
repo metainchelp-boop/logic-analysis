@@ -4,15 +4,88 @@ on:
   push:
     branches: [codex/naver-runtime-20260930, codex/naver-shared-metrics-20260930, codex/naver-sso-20260930]
   workflow_dispatch:
+    inputs:
+      backup_acceptance:
+        description: '승인된 전용키/합성 수신·복구 시험만. 앱 배포 없음'
+        type: choice
+        options: [none, keys, transfer, restore]
+        default: none
+      received_synthetic_json:
+        description: 'restore 전용: 수신 서버에서 읽은 합성 암호문과 해시·크기·일자 JSON. 키/운영자료 금지'
+        required: false
+        default: ''
 
 permissions:
   contents: read
 
 concurrency:
   group: naver-runtime-tests-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/codex/naver-backup-recovery-20261001' }}
 
 jobs:
+  backup-transfer:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/naver-backup-recovery-20261001' && inputs.backup_acceptance == 'transfer'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: 소스 받기 (자격 저장 없음)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: 합성 백업 전송·재전송·권한 거절 확인 (복호화 개인키 없음)
+        env:
+          ACCEPTANCE_MODE: transfer
+          ACCEPTANCE_EVIDENCE: ${{ runner.temp }}/backup-transfer-evidence
+          NAVER_BACKUP_RECIPIENT_CERT_PEM: ${{ secrets.NAVER_BACKUP_RECIPIENT_CERT_PEM }}
+          NAVER_BACKUP_UPLOAD_SSH_PRIVATE_KEY: ${{ secrets.NAVER_BACKUP_UPLOAD_SSH_PRIVATE_KEY }}
+          NAVER_BACKUP_KNOWN_HOSTS: ${{ secrets.NAVER_BACKUP_KNOWN_HOSTS }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 tools/naver-backup-acceptance.py
+      - name: 비밀값 없는 합성 전송 결과만 보관
+        if: success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: backup-transfer-${{ github.run_id }}
+          path: ${{ runner.temp }}/backup-transfer-evidence/*.json
+          retention-days: 7
+          if-no-files-found: error
+
+  backup-recovery:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/naver-backup-recovery-20261001' && (inputs.backup_acceptance == 'keys' || inputs.backup_acceptance == 'restore')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: naver-backup-recovery
+    steps:
+      - name: 소스 받기 (자격 저장 없음)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: 격리 복구 시험 (업로드 개인키·운영 서버 접속 없음)
+        env:
+          ACCEPTANCE_MODE: ${{ inputs.backup_acceptance }}
+          ACCEPTANCE_EVIDENCE: ${{ runner.temp }}/backup-recovery-evidence
+          RECEIVED_SYNTHETIC_JSON: ${{ inputs.received_synthetic_json }}
+          NAVER_BACKUP_RECIPIENT_CERT_PEM: ${{ secrets.NAVER_BACKUP_RECIPIENT_CERT_PEM }}
+          NAVER_BACKUP_RECOVERY_PRIVATE_KEY_PEM: ${{ secrets.NAVER_BACKUP_RECOVERY_PRIVATE_KEY_PEM }}
+          SSO_AD_CENTER_CLIENT_KEY: ${{ inputs.backup_acceptance == 'keys' && secrets.SSO_AD_CENTER_CLIENT_KEY || '' }}
+          SSO_NAVER_CONTROL_CLIENT_KEY: ${{ inputs.backup_acceptance == 'keys' && secrets.SSO_NAVER_CONTROL_CLIENT_KEY || '' }}
+          NAVER_ENGINE_ERP_KEY: ${{ inputs.backup_acceptance == 'keys' && secrets.NAVER_ENGINE_ERP_KEY || '' }}
+          NAVER_AUTO_TOKEN_SECRET: ${{ inputs.backup_acceptance == 'keys' && secrets.NAVER_AUTO_TOKEN_SECRET || '' }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -euo pipefail
+          sudo --preserve-env=ACCEPTANCE_MODE,ACCEPTANCE_EVIDENCE,RECEIVED_SYNTHETIC_JSON,NAVER_BACKUP_RECIPIENT_CERT_PEM,NAVER_BACKUP_RECOVERY_PRIVATE_KEY_PEM,SSO_AD_CENTER_CLIENT_KEY,SSO_NAVER_CONTROL_CLIENT_KEY,NAVER_ENGINE_ERP_KEY,NAVER_AUTO_TOKEN_SECRET,PYTHONDONTWRITEBYTECODE \
+            unshare --net -- setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups --no-new-privs \
+            /usr/bin/python3 tools/naver-backup-acceptance.py
+      - name: 비밀값 없는 격리 복구 결과만 보관
+        if: success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: backup-recovery-${{ github.run_id }}
+          path: ${{ runner.temp }}/backup-recovery-evidence/*.json
+          retention-days: 7
+          if-no-files-found: error
+
   linux-tests:
     if: github.ref == 'refs/heads/codex/naver-runtime-20260930' || github.ref == 'refs/heads/codex/naver-shared-metrics-20260930' || github.ref == 'refs/heads/codex/naver-sso-20260930'
     runs-on: ubuntu-24.04
