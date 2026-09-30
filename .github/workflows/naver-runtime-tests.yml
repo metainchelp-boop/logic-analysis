@@ -2,7 +2,7 @@ name: 네이버 엔진 개발 검증 (배포 없음)
 
 on:
   push:
-    branches: [codex/naver-runtime-20260930]
+    branches: [codex/naver-runtime-20260930, codex/naver-shared-metrics-20260930]
   workflow_dispatch:
 
 permissions:
@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   linux-tests:
-    if: github.ref == 'refs/heads/codex/naver-runtime-20260930'
+    if: github.ref == 'refs/heads/codex/naver-runtime-20260930' || github.ref == 'refs/heads/codex/naver-shared-metrics-20260930'
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     defaults:

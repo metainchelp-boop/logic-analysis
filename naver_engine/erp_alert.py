@@ -4,8 +4,8 @@
 않게(읽기 코드가 실수로 쓰기를 부를 길이 없게). 두 관문 모두 같은 호스트·같은 엔진 전용 키(``NAVER_ENGINE_ERP_KEY``)다.
 
 지키는 것:
-- **POST 만** · 호스트 ``api.metainc.co.kr`` 글자 그대로(``erp_read.ERP_HOST`` 하나) · 경로는 둘만 —
-  비서방 알림 넣기(① 계약 문서 §12) · 「오늘 끝」 심박(§13 · 대표 결정 A3 — 08:10 까지 안 오면 ① 이 대표에게 알린다).
+- **POST 만** · 호스트 ``api.metainc.co.kr`` 글자 그대로(``erp_read.ERP_HOST`` 하나) · 경로는 셋만 —
+  비서방 알림(§12) · 「오늘 끝」 심박(§13) · 공유 성과(§14, G1~G3).
 - 넘겨주기를 따라가지 않고 환경 프록시를 무시한다(``naver_read.UrllibTransport`` — 엔진에서 실제로 여는 곳은 그 하나).
 - 키는 ``Secret`` 로만 들고, 꺼내는 곳은 이 관문 ``_gate`` 한 곳이다.
 - **보내기 전에 ① 과 같은 규칙으로 검사한다**(§12.2) — 제목 한 줄 60자 · 줄 8개 × 120자 · 빈 줄·줄바꿈·보이지 않는 제어
@@ -27,7 +27,7 @@ import unicodedata
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from typing import Optional, Sequence, Tuple
 
 from .credentials import CredentialsMissing, Secret
@@ -38,7 +38,8 @@ log = logging.getLogger("naver_engine.erp_alert")
 
 PATH_ALERTS = "/api/ad-sync/naver-alerts"
 PATH_HEARTBEAT = "/api/ad-sync/naver-heartbeat"
-_PATHS = frozenset({PATH_ALERTS, PATH_HEARTBEAT})
+PATH_METRICS = "/api/ad-sync/naver-metrics"
+_PATHS = frozenset({PATH_ALERTS, PATH_HEARTBEAT, PATH_METRICS})
 _ALLOWED_METHODS = frozenset({"POST"})
 TIMEOUT = 15
 MAX_REQUEST = 16 * 1024           # 알림 한 건의 본문 상한(제목 60 + 줄 8 × 120 자 — 넉넉히)
@@ -151,6 +152,47 @@ class AlertResult:
     message_idx: Optional[int]
 
 
+METRIC_MAX = 9007199254740991  # JSON 소비자도 정밀도를 잃지 않는 최대 정수
+
+
+@dataclass(frozen=True, repr=False)
+class MetricsPayload:
+    possibility_id: int
+    period_start: date
+    period_end: date
+    impressions: int
+    clicks: int
+    spend: int
+    conversions: int
+
+    def __repr__(self):
+        return "MetricsPayload(redacted)"
+
+    def body(self):
+        return dict(possibility_id=self.possibility_id, period_start=self.period_start.isoformat(),
+                    period_end=self.period_end.isoformat(), impressions=self.impressions,
+                    clicks=self.clicks, spend=self.spend, conversions=self.conversions)
+
+
+def build_metrics_payload(possibility_id, period_start, period_end, impressions, clicks, spend,
+                          conversions) -> MetricsPayload:
+    if type(possibility_id) is not int or not 0 < possibility_id < TARGET_MAX:
+        raise AlertRejected("성과 가망 번호는 양의 정수여야 합니다")
+    if type(period_start) is not date or type(period_end) is not date \
+            or period_end - period_start != timedelta(days=29):
+        raise AlertRejected("성과 기간은 정확히 30일이어야 합니다")
+    if any(type(v) is not int or not 0 <= v <= METRIC_MAX
+           for v in (impressions, clicks, spend, conversions)):
+        raise AlertRejected("성과 수치는 허용 범위의 정수여야 합니다")
+    return MetricsPayload(possibility_id, period_start, period_end, impressions, clicks, spend, conversions)
+
+
+@dataclass(frozen=True)
+class MetricsResult:
+    recorded: bool
+    reason: str
+
+
 class ErpAlertPoster:
     """① 에 넣는 관문. 객체 하나를 한 번의 보내기 차례에 쓴다(호출 상한이 객체 평생 누적)."""
 
@@ -236,3 +278,16 @@ class ErpAlertPoster:
         res = self._post(PATH_HEARTBEAT, {"day": day.isoformat(), "status": status})
         if res.get("recorded") is not True:
             raise AlertSendError("bad-shape", PATH_HEARTBEAT, 200)
+
+    def send_metrics(self, payload: MetricsPayload) -> MetricsResult:
+        """§14 공유 성과 한 건. 응답 분류를 확인한 뒤에만 전송 결과로 인정한다."""
+        if not isinstance(payload, MetricsPayload):
+            raise AlertRejected("성과는 build_metrics_payload로 만든 것이어야 합니다")
+        clean = build_metrics_payload(payload.possibility_id, payload.period_start, payload.period_end,
+                                      payload.impressions, payload.clicks, payload.spend, payload.conversions)
+        res = self._post(PATH_METRICS, clean.body())
+        recorded, reason = res.get("recorded"), res.get("reason")
+        if type(recorded) is not bool or reason not in ("stored", "no-client") \
+                or recorded != (reason == "stored") or set(res) != {"recorded", "reason"}:
+            raise AlertSendError("bad-shape", PATH_METRICS, 200)
+        return MetricsResult(recorded, reason)

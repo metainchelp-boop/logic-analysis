@@ -46,6 +46,7 @@ class Config:
     links_enabled: bool = False
     morning_enabled: bool = False
     alerts_enabled: bool = False
+    metrics_enabled: bool = False
     backup_enabled: bool = False
     web_enabled: bool = False
     issue_alerts_enabled: bool = False
@@ -55,12 +56,14 @@ class Config:
     @classmethod
     def from_env(cls, env: Mapping[str, str]):
         flags = {name.lower() + "_enabled": _flag(env, f"NAVER_ENGINE_{name}_ENABLED")
-                 for name in ("SYNC", "LINKS", "MORNING", "ALERTS", "BACKUP", "WEB", "ISSUE_ALERTS")}
+                 for name in ("SYNC", "LINKS", "MORNING", "ALERTS", "METRICS", "BACKUP", "WEB", "ISSUE_ALERTS")}
         if flags["web_enabled"]:
             # S16 계약이 아직 없다. 설정 한 줄로 옛 SSO 토큰 경로를 노출하지 않는다.
             raise ConfigError("일회용 로그인 코드 연결 전에는 관제 웹을 켤 수 없습니다")
         if flags["morning_enabled"] and not (flags["sync_enabled"] and flags["links_enabled"]):
             raise ConfigError("아침 점검에는 조직·단계 동기화와 연결 목록 설정이 모두 필요합니다")
+        if flags["metrics_enabled"] and not (flags["morning_enabled"] and flags["alerts_enabled"]):
+            raise ConfigError("공유 성과 전송에는 아침 점검과 알림·심박 설정이 필요합니다")
         shadow = _date(env, "NAVER_ENGINE_SHADOW_START")
         alerts_from = _date(env, "NAVER_ENGINE_ISSUE_ALERTS_FROM")
         if flags["issue_alerts_enabled"] and (not flags["alerts_enabled"] or shadow is None
@@ -76,5 +79,6 @@ class Config:
         return {name: value for name, value in (
             ("sync", self.sync_enabled), ("links", self.links_enabled),
             ("morning", self.morning_enabled), ("alerts", self.alerts_enabled),
+            ("metrics", self.metrics_enabled),
             ("backup", self.backup_enabled), ("web", self.web_enabled),
             ("issue_alerts", self.issue_alerts_enabled))}

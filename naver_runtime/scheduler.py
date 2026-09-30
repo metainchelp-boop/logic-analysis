@@ -3,17 +3,18 @@ from datetime import datetime, timedelta
 import logging
 import threading
 
-from naver_engine import alerts as A, links as L, morning as M, store as S, sync as Y
+from naver_engine import alerts as A, links as L, morning as M, store as S, sync as Y, metrics as G
 
 log = logging.getLogger("naver_runtime.scheduler")
 
 
 class Scheduler:
     def __init__(self, config, store, *, erp_factory=None, naver_factory=None,
-                 alert_factory=None, clock=None, backup_job=None):
+                 alert_factory=None, metrics_factory=None, clock=None, backup_job=None):
         self.config, self.store = config, store
         self.erp_factory, self.naver_factory = erp_factory, naver_factory
         self.alert_factory, self.backup_job = alert_factory, backup_job
+        self.metrics_factory = metrics_factory
         self.clock = clock or (lambda: datetime.now(S.KST))
         self.policy = A.AlertPolicy(config.issue_alerts_from, config.issue_alerts_enabled)
         self._lock = threading.Lock()
@@ -71,6 +72,9 @@ class Scheduler:
                 now = self.clock()
                 if any(r["status"] in (S.RUN_DONE, S.RUN_FAILED) for r in st.runs_on(now.astimezone(S.KST).date())):
                     self._step("backup", lambda: self._backup(), note=False)
+            if c.metrics_enabled:
+                # 공유 성과 재수집/재전송은 아침 심박·백업 뒤에 제한된 회차로 수행한다.
+                self._step("metrics", lambda: self._metrics(), note=False)
             self.last_tick = self.clock()
             self.last_errors = tuple(self._errors)
             return {"state": "failed" if self.last_errors else "ok", "errors": list(self.last_errors)}
@@ -84,6 +88,14 @@ class Scheduler:
         if result.code not in ("WAITING_FOR_MORNING", "RETRY_WAIT", "ALREADY_BACKED_UP", "OFFSITE_OK"):
             self._errors.append("backup")
             A.record_system_alert(self.store, self.clock(), "morning", ["BACKUP_FAILED"])
+        return result
+
+    def _metrics(self):
+        result = G.run_metrics(self.metrics_factory(), self.store, self.clock, self.alert_factory())
+        bad_counts = any(result.counts.get(name, 0) for name in ('held', 'retry', 'no_client'))
+        if result.code not in ('OUTSIDE_WINDOW', 'RETRY_WAIT', 'DONE') or bad_counts:
+            self._errors.append('metrics')
+            A.record_system_alert(self.store, self.clock(), 'morning', ['METRICS_INCOMPLETE'])
         return result
 
     def _alerts(self):

@@ -6,6 +6,7 @@ from naver_engine import alerts as A, links as L, morning as M, store as S, sync
 from naver_runtime.config import Config
 from naver_runtime.scheduler import Scheduler
 from naver_engine.backup import BackupResult
+from types import SimpleNamespace
 
 NOW = datetime(2026, 10, 1, 7, 20, tzinfo=S.KST)
 
@@ -87,3 +88,34 @@ class SchedulerTest(TestCase):
         with patch.object(A, "record_system_alert") as alert:
             self.assertEqual(task.tick(), {"state": "failed", "errors": ["backup"]})
         alert.assert_called_once()
+
+    def test_metrics_never_delays_current_tick_heartbeat_or_backup(self):
+        calls = []
+        cfg = Config('/synthetic/data/db', '/synthetic/socket/sock', alerts_enabled=True,
+                     metrics_enabled=True, backup_enabled=True)
+        st = Mock()
+        st.runs_on.return_value = [{'status': S.RUN_DONE}]
+        task = Scheduler(cfg, st, alert_factory=lambda: object(), metrics_factory=lambda: object(),
+                         backup_job=lambda *a: calls.append('backup') or BackupResult('ALREADY_BACKED_UP'),
+                         clock=lambda: NOW)
+        with patch.object(A, 'dispatch', side_effect=lambda *a, **kw: calls.append('alerts')), \
+             patch('naver_runtime.scheduler.G.run_metrics', side_effect=lambda *a, **kw:
+                   calls.append('metrics') or SimpleNamespace(code='DONE', counts={})):
+            task.tick()
+            task.tick()
+        self.assertEqual(calls, ['alerts', 'backup', 'metrics'])
+
+    def test_partial_metrics_is_failed_health_and_durable_alert(self):
+        for result in (SimpleNamespace(code='NOT_READY', counts={}),
+                       SimpleNamespace(code='SOURCE_CHANGED', counts={}),
+                       SimpleNamespace(code='BUDGET', counts={}),
+                       SimpleNamespace(code='DONE', counts={'held': 1}),
+                       SimpleNamespace(code='DONE', counts={'retry': 1}),
+                       SimpleNamespace(code='DONE', counts={'no_client': 1})):
+            cfg = Config('/data/db', '/socket/api', metrics_enabled=True)
+            task = Scheduler(cfg, Mock(), metrics_factory=lambda: object(),
+                             alert_factory=lambda: object(), clock=lambda: NOW)
+            with patch('naver_runtime.scheduler.G.run_metrics', return_value=result), \
+                 patch.object(A, 'record_system_alert') as alert:
+                self.assertEqual(task.tick(), {'state': 'failed', 'errors': ['metrics']})
+            alert.assert_called_once()

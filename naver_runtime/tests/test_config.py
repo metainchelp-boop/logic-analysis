@@ -23,6 +23,13 @@ class ConfigTest(unittest.TestCase):
         with self.assertRaises(ConfigError):
             Config.from_env({"NAVER_ENGINE_MORNING_ENABLED": "true"})
 
+    def test_metrics_requires_morning_and_alerts_to_keep_heartbeat_first(self):
+        with self.assertRaises(ConfigError):
+            Config.from_env({"NAVER_ENGINE_METRICS_ENABLED": "true"})
+        cfg = Config.from_env({f"NAVER_ENGINE_{key}_ENABLED": "true"
+                               for key in ('METRICS', 'SYNC', 'LINKS', 'MORNING', 'ALERTS')})
+        self.assertTrue(cfg.metrics_enabled)
+
     def test_public_web_cannot_be_enabled_before_exchange_code(self):
         with self.assertRaisesRegex(ConfigError, "일회용"):
             Config.from_env({"NAVER_ENGINE_WEB_ENABLED": "true"})

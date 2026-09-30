@@ -142,8 +142,8 @@ class ContractValuesTest(unittest.TestCase):
         self.assertEqual((A.PATH_ALERTS, A.PATH_HEARTBEAT), ("/api/ad-sync/naver-alerts", "/api/ad-sync/naver-heartbeat"))
         self.assertIs(A.ERP_HOST, E.ERP_HOST)
 
-    def test_path_set_is_exactly_two(self):
-        self.assertEqual(A._PATHS, {A.PATH_ALERTS, A.PATH_HEARTBEAT})
+    def test_path_set_is_exactly_three(self):
+        self.assertEqual(A._PATHS, {A.PATH_ALERTS, A.PATH_HEARTBEAT, A.PATH_METRICS})
         self.assertEqual(A._ALLOWED_METHODS, {"POST"})
 
 

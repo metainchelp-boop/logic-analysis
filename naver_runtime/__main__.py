@@ -58,12 +58,49 @@ class StopAwareTransport:
 
     def send(self, request, timeout):
         self._clock.before_network()
+        if isinstance(self._clock, MetricsClock):
+            timeout = min(timeout, self._clock.remaining())
         return self._transport.send(request, timeout)
+
+
+class MetricsClock:
+    """공유 성과 차례의 재시도·속도제한 대기가 다음 예약 작업을 붙잡지 않게 한다."""
+    def __init__(self, base, seconds=45):
+        self.base = base
+        self.deadline = base.monotonic() + seconds
+
+    def remaining(self):
+        self.base.before_network()
+        left = self.deadline - self.base.monotonic()
+        if left <= 0:
+            raise N.RunAbort('metrics-time-budget')
+        return left
+
+    def before_network(self):
+        self.remaining()
+
+    def now(self):
+        self.remaining()
+        return self.base.now()
+
+    def epoch_ms(self):
+        self.remaining()
+        return self.base.epoch_ms()
+
+    def monotonic(self):
+        self.remaining()
+        return self.base.monotonic()
+
+    def sleep(self, seconds):
+        if seconds >= self.remaining():
+            raise N.RunAbort('metrics-time-budget')
+        self.base.sleep(seconds)
+        self.remaining()
 
 
 def dependencies(config, env, clock):
     """켜진 기능에 필요한 키만 읽는다. 이 함수는 업무 API를 호출하지 않는다."""
-    erp_factory = naver_factory = alert_factory = backup_job = None
+    erp_factory = naver_factory = alert_factory = metrics_factory = backup_job = None
     if config.sync_enabled or config.links_enabled or config.alerts_enabled:
         key = E.load_erp_key(env)
         if config.sync_enabled or config.links_enabled:
@@ -73,6 +110,11 @@ def dependencies(config, env, clock):
     if config.links_enabled or config.morning_enabled:
         credentials = load_manager_credentials(env)
         naver_factory = lambda: N.NaverReader(credentials, clock=clock, transport=StopAwareTransport(clock))
+        if config.metrics_enabled:
+            def metrics_factory():
+                metrics_clock = MetricsClock(clock)
+                return N.NaverReader(credentials, clock=metrics_clock,
+                    transport=StopAwareTransport(metrics_clock), max_calls=80)
     if config.backup_enabled:
         names = ("NAVER_BACKUP_CERT", "NAVER_BACKUP_SSH_KEY", "NAVER_BACKUP_KNOWN_HOSTS")
         if any(not env.get(name) for name in names):
@@ -87,7 +129,7 @@ def dependencies(config, env, clock):
         send = SshSender(env[names[1]], env[names[2]])
         backup_job = BackupJob(root, encrypt, send)
     return dict(erp_factory=erp_factory, naver_factory=naver_factory,
-                alert_factory=alert_factory, backup_job=backup_job)
+                alert_factory=alert_factory, metrics_factory=metrics_factory, backup_job=backup_job)
 
 
 def note_orphaned(store, now):

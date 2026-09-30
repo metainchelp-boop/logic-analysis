@@ -1301,7 +1301,9 @@ PRIVILEGED = ("record_org", "refuse_org", "refuse_stages", "confirm_prospects_ho
               # 보내지도 않은 「보냄」 기록이 생기지 않게)
               "record_alert", "record_delivery", "record_heartbeat",
               # 화면 API(S11) — 열람·쓰기 기록 · 🔔 읽음 · 기준값은 web.py 한 곳(범위·대표 판정을 건너뛴 쓰기가 없게)
-              "record_access", "mark_alert_read", "mark_alerts_read_all", "record_thresholds")
+              "record_access", "mark_alert_read", "mark_alerts_read_all", "record_thresholds",
+              # G1~G3 — 완결 원천 및 전송 기록은 공유 성과 모듈만 만든다.
+              "begin_metrics_attempt", "record_metrics_snapshot", "finish_metrics_attempt")
 BANNED_NAMES = ("exec", "eval", "compile", "__import__", "globals", "vars", "locals", "open", "breakpoint",
                 "__builtins__", "getattr_static")
 BANNED_ATTRS = ("modules", "__dict__", "__getattribute__", "__subclasses__", "__globals__", "__code__",
@@ -1440,7 +1442,8 @@ class SyncGuardTest(unittest.TestCase):
             uses = _privileged_uses(ast.parse(p.read_text(encoding="utf-8")))
             if uses:
                 found[self.rel(p)] = uses
-        self.assertEqual(set(found), {"sync.py", "links.py", "morning.py", "alerts.py", "web.py"})
+        self.assertEqual(set(found), {"sync.py", "links.py", "morning.py", "alerts.py", "web.py", "metrics.py"})
+        self.assertEqual(found["metrics.py"], {"begin_metrics_attempt", "record_metrics_snapshot", "finish_metrics_attempt"})
         # 사람 판단 · 이슈 손길 · 읽음 · 기준값 · 열람 기록 — scope 로 누를 수 있는 사람을 정한 화면 API 한 곳(S11)
         self.assertEqual(found["web.py"], {"record_decisions", "revoke_decision", "ack_issue", "resolve_issue",
                                            "except_issue", "record_access", "mark_alert_read", "mark_alerts_read_all",

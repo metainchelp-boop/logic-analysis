@@ -87,7 +87,7 @@ __all__ = ("open_writer", "open_reader", "Store", "StoreError", "StoreBusy", "St
            "AlertExists", "DeliveryRefused", "ScreenRefused", "inspect_snapshot")
 
 KST = timezone(timedelta(hours=9))
-SCHEMA_VERSION = 6   # 2 = S7(조직 수락본 · 동기화 기록) · 3 = S8(계정 시각 · 짝 결과) · 4 = S9(이슈 · 이슈 기록) · 5 = S10(알림 · 받는 사람별 보낸 결과) · 6 = S11(열람·쓰기 기록 · 기준값 고친 이력) — 옛 판 파일은 열 때 표를 더하고 판 번호를 올린다
+SCHEMA_VERSION = 7   # 2~6 = S7~S11 · 7 = G1~G3(공유 성과 완결 스냅샷·재시도). 옛 판은 표만 더한다.
 BUSY_TIMEOUT_MS = 5000
 FUTURE_SLACK = timedelta(minutes=5)   # 시계가 조금 어긋나도 받는다 · 그보다 앞선 시각은 거절
 ORG_FUTURE_SLACK = timedelta(minutes=10)   # ① 스냅숏 시각 — app.naver_auto.org_snapshot.FUTURE_TOLERANCE 와 같다(시험이 대조)
@@ -456,6 +456,21 @@ _SCHEMA = (
         changed_by INTEGER NOT NULL CHECK (changed_by >= 0),
         before_values TEXT NOT NULL,
         after_values TEXT NOT NULL)""",
+    # 공유 성과 전용. 아침 점검 회차·잠정 캠페인 자료와 분리한다. 원천은 내부 보관만 한다.
+    """CREATE TABLE IF NOT EXISTS naver_auto_metrics_delivery (
+        day TEXT NOT NULL,
+        possibility_id INTEGER NOT NULL CHECK (possibility_id > 0),
+        context_hash TEXT NOT NULL,
+        source_json TEXT,
+        payload_json TEXT,
+        source_hash TEXT,
+        collected_at TEXT,
+        status TEXT NOT NULL CHECK (status IN ('reading', 'pending', 'held', 'retry', 'stored', 'no_client')),
+        attempts INTEGER NOT NULL CHECK (attempts > 0),
+        last_try_at TEXT NOT NULL,
+        next_try_at TEXT NOT NULL,
+        error_kind TEXT,
+        PRIMARY KEY (day, possibility_id))""",
 )
 
 # ── 연결 거절 규칙 ────────────────────────────────────────────────
@@ -2735,6 +2750,177 @@ class Store:
             """SELECT customer_id, ad_account_no, account_name, present, first_seen_on, last_seen_on, absent_days,
                       last_absent_on FROM naver_auto_account ORDER BY customer_id""")
         return [dict(zip([d[0] for d in cur.description], r)) for r in cur.fetchall()]
+
+    # ── 공유 30일 성과(G1~G3) ──
+    def metrics_context(self, now: datetime) -> Optional[dict]:
+        """오늘 현재 수락본의 전체 짝. 낡음·거절·중복·판단 변경은 원천 전체를 보류한다."""
+        _kst_text(now, "지금")
+        today = now.astimezone(KST).date()
+        morning_start = datetime.combine(today, time(6, 30), tzinfo=KST)
+        if not any(r["status"] == RUN_DONE for r in self.runs_on(today)):
+            return None
+        pair = self.last_pairing()
+        read_at, stage_at = self.accounts_read_at(), self.stage_as_of()
+        if pair is None or pair["outcome"] != SYNC_ACCEPTED or read_at is None or stage_at is None \
+                or not morning_start <= read_at <= now or stage_at.astimezone(KST).date() != today or stage_at > now \
+                or pair["at"].astimezone(KST).date() != today or pair["at"] > now \
+                or pair["accounts_read_at"] != read_at or pair["stages_as_of"] != stage_at \
+                or pair["decisions_hash"] != self.decision_fingerprint():
+            return None
+        for kind in (SYNC_ACCOUNTS, SYNC_STAGES):
+            sync = self.last_sync(kind)
+            if sync is None or sync["outcome"] != SYNC_ACCEPTED:
+                return None
+        accounts = {a["customer_id"] for a in self.accounts() if a["present"] == 1}
+        prospects = {p["possibility_id"]: p for p in self.prospects()}
+        pairs, seen = {}, set()
+        canonical = []
+        for row in self.pairing_rows(pair["pairing_id"]):
+            if row["state"] not in PAIR_CHECKABLE:
+                continue
+            pid, cid = row["possibility_id"], row["customer_id"]
+            p = prospects.get(pid)
+            if cid in seen or cid not in accounts or p is None or p["present"] != 1 \
+                    or p["stage_conflict"] or p["end_unreadable"] or not 0 < pid < 10 ** 15:
+                return None
+            end = None if p["latest_end_date"] is None else date.fromisoformat(p["latest_end_date"])
+            if H.eligibility_reason(p["stage_key"], stage_at, end, now) is not None:
+                return None
+            seen.add(cid)
+            pairs.setdefault(pid, []).append(dict(possibility_id=pid, customer_id=cid, state=row["state"],
+                                                  stage_key=p["stage_key"], latest_end_date=end))
+            canonical.append([pid, cid, row["state"], p["stage_key"], p["latest_end_date"]])
+        # 시각은 위에서 최신 수락본과 대조한다. 의미가 같은 정기 동기화만으로 캐시를 버리지 않는다.
+        source = [today.isoformat(), pair["decisions_hash"], canonical]
+        fingerprint = hashlib.sha256(json.dumps(source, separators=(",", ":")).encode("utf-8")).hexdigest()
+        counts = Counter()
+        for pid, status in self._conn.execute(
+                "SELECT possibility_id, status FROM naver_auto_metrics_delivery WHERE day = ? AND context_hash = ?",
+                (today.isoformat(), fingerprint)):
+            if pid in pairs and status != "stored":
+                counts["retry" if status in ("reading", "pending", "retry") else status] += 1
+        return dict(fingerprint=fingerprint, pairs=pairs, stage_as_of=stage_at, day=today,
+                    delivery_counts=dict(counts))
+
+    def _metrics_context_for(self, fingerprint, now, possibility_id=None):
+        context = self.metrics_context(now)
+        if context is None or not isinstance(fingerprint, str) or context["fingerprint"] != fingerprint \
+                or (possibility_id is not None and possibility_id not in context["pairs"]):
+            raise StoreRefused("성과 원천이 바뀌었거나 완결되지 않았습니다")
+        return context
+
+    def _metrics_delivery(self, possibility_id, day):
+        cur = self._conn.execute("SELECT * FROM naver_auto_metrics_delivery WHERE day = ? AND possibility_id = ?",
+                                 (day.isoformat(), _pos_int(possibility_id, "가망 번호")))
+        row = cur.fetchone()
+        return None if row is None else dict(zip([d[0] for d in cur.description], row))
+
+    def metrics_work(self, context_hash: str, now: datetime, limit: int) -> List[int]:
+        """미시도 → 오래 기다린 순. 실패·보류도 last_try가 남아 앞 번호가 뒷 번호를 굶기지 않는다."""
+        if type(limit) is not int or not 0 < limit <= 20:
+            raise StoreRefused("성과 작업 수가 범위 밖입니다")
+        context = self._metrics_context_for(context_hash, now)
+        wanted = []
+        for pid in context["pairs"]:
+            row = self._metrics_delivery(pid, context["day"])
+            if row is not None and row["context_hash"] == context_hash:
+                if row["status"] in ("stored", "no_client"):
+                    continue
+                due = _aware_time(row["next_try_at"])
+                if due is None:
+                    raise StoreError("저장된 성과 재시도 시각을 읽지 못했습니다")
+                if now < due:
+                    continue
+            wanted.append(("" if row is None else row["last_try_at"], pid))
+        return [pid for _at, pid in sorted(wanted)[:limit]]
+
+    def begin_metrics_attempt(self, possibility_id: int, context_hash: str, now: datetime) -> None:
+        """외부 호출 전에 시도와 재시각을 영구 기록한다. 재시작해도 마지막 실패를 기억한다."""
+        self._need_writer()
+        self._not_future(now, "시도 시각")
+        at = _kst_text(now, "시도 시각")
+        with self._tx() as c:
+            context = self._metrics_context_for(context_hash, now, possibility_id)
+            day = context["day"]
+            row = self._metrics_delivery(possibility_id, day)
+            same = row is not None and row["context_hash"] == context_hash
+            if same and (row["status"] in ("stored", "no_client") or now < _aware_time(row["next_try_at"])):
+                raise StoreRefused("성과를 다시 시도할 때가 아닙니다")
+            attempts = row["attempts"] + 1 if same else 1
+            gap = (2, 5, 15, 30)[min(attempts, 4) - 1]
+            next_at = _kst_text(now + timedelta(minutes=gap), "재시도 시각")
+            c.execute("""INSERT INTO naver_auto_metrics_delivery
+                       (day, possibility_id, context_hash, status, attempts, last_try_at, next_try_at)
+                       VALUES (?, ?, ?, 'reading', ?, ?, ?)
+                       ON CONFLICT (day, possibility_id) DO UPDATE SET
+                         source_json = CASE WHEN context_hash = excluded.context_hash THEN source_json ELSE NULL END,
+                         payload_json = CASE WHEN context_hash = excluded.context_hash THEN payload_json ELSE NULL END,
+                         source_hash = CASE WHEN context_hash = excluded.context_hash THEN source_hash ELSE NULL END,
+                         collected_at = CASE WHEN context_hash = excluded.context_hash THEN collected_at ELSE NULL END,
+                         context_hash = excluded.context_hash, status = 'reading', attempts = excluded.attempts,
+                         last_try_at = excluded.last_try_at, next_try_at = excluded.next_try_at, error_kind = NULL""",
+                      (day.isoformat(), possibility_id, context_hash, attempts, at, next_at))
+
+    def record_metrics_snapshot(self, possibility_id: int, context_hash: str, accounts, now: datetime) -> None:
+        """전체 계정·30일 확정 원천과 집계를 한 거래로 보관한다. 일부 원천은 아무것도 저장하지 않는다."""
+        from . import metrics as G
+        self._need_writer()
+        self._not_future(now, "읽은 시각")
+        at = _kst_text(now, "읽은 시각")
+        with self._tx() as c:
+            context = self._metrics_context_for(context_hash, now, possibility_id)
+            row = self._metrics_delivery(possibility_id, context["day"])
+            if row is None or row["context_hash"] != context_hash or row["status"] != "reading":
+                raise StoreRefused("시작하지 않은 성과 읽기입니다")
+            try:
+                payload = G.aggregate(possibility_id, tuple(r["customer_id"] for r in context["pairs"][possibility_id]),
+                                      accounts, context["day"], now)
+                raw = json.dumps(accounts, sort_keys=True, separators=(",", ":"), allow_nan=False)
+            except (G.MetricsIncomplete, TypeError, ValueError):
+                raise StoreRefused("성과 원천이 완결되지 않았습니다") from None
+            digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+            c.execute("""UPDATE naver_auto_metrics_delivery SET source_json = ?, payload_json = ?, source_hash = ?,
+                         collected_at = ?, status = 'pending' WHERE day = ? AND possibility_id = ?""",
+                      (raw, json.dumps(payload, sort_keys=True, separators=(",", ":")), digest, at,
+                       context["day"].isoformat(), possibility_id))
+
+    def metrics_payload(self, possibility_id: int, context_hash: str, now: datetime) -> Optional[dict]:
+        """송신 직전에 오늘 짝과 원천 지문·전체 날짜·합계를 재검사한다. 번호가 없는 최소 본문만 반환한다."""
+        from . import metrics as G
+        context = self._metrics_context_for(context_hash, now, possibility_id)
+        row = self._metrics_delivery(possibility_id, context["day"])
+        if row is None or row["context_hash"] != context_hash or row["payload_json"] is None:
+            return None
+        try:
+            raw = row["source_json"]
+            if not isinstance(raw, str) or hashlib.sha256(raw.encode("utf-8")).hexdigest() != row["source_hash"]:
+                raise ValueError()
+            payload = G.aggregate(possibility_id, tuple(r["customer_id"] for r in context["pairs"][possibility_id]),
+                                  json.loads(raw), context["day"], now)
+            if payload != json.loads(row["payload_json"]):
+                raise ValueError()
+        except (G.MetricsIncomplete, TypeError, ValueError, RecursionError):
+            raise StoreError("저장된 성과 원천을 확인하지 못했습니다") from None
+        return payload
+
+    def finish_metrics_attempt(self, possibility_id: int, context_hash: str, now: datetime, outcome: str, *,
+                               error_kind: Optional[str] = None) -> None:
+        """받았다는 정상 응답만 stored. 미연결·실패·보류를 성공으로 표시하지 않는다."""
+        self._need_writer()
+        self._not_future(now, "시도 끝 시각")
+        if outcome not in ("stored", "no_client", "held", "retry"):
+            raise StoreRefused("성과 전송 결과가 아닙니다")
+        code = None if error_kind is None else _code(error_kind, _ERROR_KIND, "성과 오류 종류")
+        with self._tx() as c:
+            context = self._metrics_context_for(context_hash, now, possibility_id)
+            row = self._metrics_delivery(possibility_id, context["day"])
+            if row is None or row["context_hash"] != context_hash or row["status"] not in ("reading", "pending"):
+                raise StoreRefused("진행 중인 성과 전송이 아닙니다")
+            if outcome in ("stored", "no_client") and row["payload_json"] is None:
+                raise StoreRefused("원천 없이 성과 전송을 완료할 수 없습니다")
+            c.execute("""UPDATE naver_auto_metrics_delivery SET status = ?, error_kind = ?
+                         WHERE day = ? AND possibility_id = ?""",
+                      (outcome, code, context["day"].isoformat(), possibility_id))
 
     def account_day(self, customer_id: int, day: date) -> Optional[dict]:
         cur = self._conn.execute("SELECT * FROM naver_auto_account_day WHERE customer_id = ? AND day = ?",
