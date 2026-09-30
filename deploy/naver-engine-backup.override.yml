@@ -1,0 +1,23 @@
+# 백업 활성화 승인 후에만 기본 엔진 compose와 함께 쓰는 읽기 전용 키 mount.
+# 이 파일 자체는 백업 스위치를 켜지 않는다. 복호화 개인키 mount는 절대 추가하지 않는다.
+services:
+  naver-engine:
+    volumes:
+      - type: bind
+        source: ${NAVER_BACKUP_CERT_FILE:-/etc/metainc/naver-engine/backup-recipient.pem}
+        target: /run/secrets/naver-backup-recipient.pem
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${NAVER_BACKUP_SSH_KEY_FILE:-/etc/metainc/naver-engine/backup-upload-key}
+        target: /run/secrets/naver-backup-upload-key
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${NAVER_BACKUP_KNOWN_HOSTS_FILE:-/etc/metainc/naver-engine/backup-known-hosts}
+        target: /run/secrets/naver-backup-known-hosts
+        read_only: true
+        bind:
+          create_host_path: false

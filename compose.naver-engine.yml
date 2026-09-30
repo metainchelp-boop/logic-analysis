@@ -1,0 +1,58 @@
+# 별도 프로젝트. 기본 ③ docker-compose.yml과 합치지 않는다.
+name: naver-engine
+
+services:
+  naver-engine:
+    image: metainc/naver-engine:local-review
+    build:
+      context: .
+      dockerfile: Dockerfile.naver-engine
+    command: ["python", "-m", "naver_runtime", "run"]
+    user: "10001:10001"
+    init: true
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
+    # 공유 서버의 허용량이 아니라 초기 상한. 실제 여유·회차 시간 검증은 배포 게이트다.
+    cpus: "0.50"
+    mem_limit: 512m
+    pids_limit: 64
+    stop_grace_period: 45s
+    env_file:
+      - path: ${NAVER_ENGINE_ENV_FILE:-/etc/metainc/naver-engine/runtime.env}
+        required: true
+        format: raw
+    environment:
+      TZ: Asia/Seoul
+      NAVER_ENGINE_DB: /var/lib/naver-engine/engine.db
+      NAVER_ENGINE_SOCKET: /run/naver-engine/engine.sock
+      NAVER_ENGINE_BACKUP_DIR: /var/backups/naver-engine
+    volumes:
+      - type: bind
+        source: ${NAVER_ENGINE_DATA_DIR:-/var/lib/metainc/naver-engine}
+        target: /var/lib/naver-engine
+        bind:
+          create_host_path: false
+      # 반드시 폴더를 붙인다. 소켓 파일 단독 mount는 재시작 뒤 옛 inode를 붙잡는다.
+      - type: bind
+        source: ${NAVER_ENGINE_SOCKET_DIR:-/run/metainc/naver-engine}
+        target: /run/naver-engine
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${NAVER_ENGINE_BACKUP_DIR:-/var/backups/metainc/naver-engine}
+        target: /var/backups/naver-engine
+        bind:
+          create_host_path: false
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # ports/expose/container_name/③와 공유하는 도커 네트워크 없음.
+    # 별도 프로젝트의 기본 bridge는 외부 송신이 가능하다. 꺼진 스위치가 호출을 막으며
+    # 방화벽 차단을 증명하지 않는다. ③와 통신은 소켓 폴더뿐이다.
+    # 백업 공개 인증서·업로드키 mount는 별도 검토 후 backup override에서만 추가한다.

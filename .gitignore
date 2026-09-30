@@ -14,6 +14,7 @@ __pycache__/
 
 # 네이버 관제 엔진 저장 파일 — 저장소·보내는 폴더에 섞이지 않게(설계 S6 · 반박 H9)
 *.db
+*.db*
 *.db-wal
 *.db-shm
 *.db-journal

@@ -1,0 +1,16 @@
+# 단독 실행 금지. 기존 ③ 프로젝트명과 docker-compose.yml을 명시해 합치는 검토용 파일.
+# 기존 ports, 사용자, data, default 네트워크를 덮거나 엔진 서비스를 함께 띄우지 않는다.
+services:
+  ad-api:
+    group_add:
+      - "10001"
+    environment:
+      NAVER_AUTO_WEB: ${NAVER_AUTO_WEB:-off}
+      NAVER_AUTO_ENGINE: ${NAVER_AUTO_ENGINE:-}
+    volumes:
+      - type: bind
+        source: ${NAVER_ENGINE_SOCKET_DIR:-/run/metainc/naver-engine}
+        target: /run/naver-engine
+        read_only: true
+        bind:
+          create_host_path: false

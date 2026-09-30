@@ -74,6 +74,7 @@ import stat as _stat
 from collections import Counter
 from dataclasses import asdict, dataclass, field, fields
 from datetime import date, datetime, time, timedelta, timezone
+from time import monotonic
 from typing import Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from . import erp_read as E
@@ -83,7 +84,7 @@ from . import naver_read as N
 
 __all__ = ("open_writer", "open_reader", "Store", "StoreError", "StoreBusy", "StoreRefused", "SyncBraked",
            "HoldRefused", "SyncCounts", "LinkDecision", "PairingStale", "IssueRefused", "IssueTally", "UnlinkCounts",
-           "AlertExists", "DeliveryRefused", "ScreenRefused")
+           "AlertExists", "DeliveryRefused", "ScreenRefused", "inspect_snapshot")
 
 KST = timezone(timedelta(hours=9))
 SCHEMA_VERSION = 6   # 2 = S7(조직 수락본 · 동기화 기록) · 3 = S8(계정 시각 · 짝 결과) · 4 = S9(이슈 · 이슈 기록) · 5 = S10(알림 · 받는 사람별 보낸 결과) · 6 = S11(열람·쓰기 기록 · 기준값 고친 이력) — 옛 판 파일은 열 때 표를 더하고 판 번호를 올린다
@@ -1096,6 +1097,39 @@ def open_reader(path: str) -> "Store":
     return Store(conn, real, None, writer=False)
 
 
+def inspect_snapshot(path) -> Dict[str, int]:
+    """S14 독립 스냅샷의 무결성과 표별 줄 수. 실행 중 원본 DB가 아니라 닫힌 사본 전용이다."""
+    raw = os.fspath(path)
+    real = _check_path(raw)
+    if real != raw:
+        raise StoreRefused("스냅샷 경로에 링크를 둘 수 없습니다")
+    conn = None
+    try:
+        fd = os.open(real, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            s = os.fstat(fd)
+            if not _stat.S_ISREG(s.st_mode) or s.st_uid != os.geteuid() or s.st_nlink != 1 or s.st_mode & 0o077:
+                raise StoreRefused("스냅샷은 우리만 읽는 일반 파일이어야 합니다")
+            if any(os.path.lexists(real + suffix) for suffix in ("-wal", "-journal")):
+                raise StoreRefused("닫히지 않은 스냅샷입니다")
+            conn = _sqlite3.connect(pathlib.Path(real).as_uri() + "?mode=ro&immutable=1", uri=True)
+            conn.execute("PRAGMA trusted_schema = OFF")
+            conn.set_authorizer(_authorizer(PHASE_READ))
+            if conn.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
+                raise StoreError("스냅샷 무결성 검사 실패")
+            names = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")]
+            if not names or any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) for name in names):
+                raise StoreRefused("스냅샷 표 이름이 올바르지 않습니다")
+            return {name: conn.execute('SELECT COUNT(*) FROM "' + name + '"').fetchone()[0] for name in names}
+        finally:
+            os.close(fd)
+    except (OSError, _sqlite3.Error) as e:
+        raise _wrap(e, "스냅샷을 검사하지 못했습니다") from None
+    finally:
+        if conn is not None:
+            conn.close()
+
+
 # ── 저장소 ───────────────────────────────────────────────────────────
 class Store:
     def __init__(self, conn, path: str, lock_fd: Optional[int], writer: bool,
@@ -1124,6 +1158,36 @@ class Store:
 
     def __exit__(self, *exc) -> None:
         self.close()
+
+    def snapshot_to(self, path) -> Dict[str, int]:
+        """S14 온라인 백업. 같은 writer 스레드·거래 밖에서 새 private 파일에만 쓴다."""
+        self._need_writer()
+        raw = os.fspath(path)
+        real = _check_path(raw)
+        if real != raw or self._conn.in_transaction:
+            raise StoreRefused("스냅샷 경로 또는 거래 상태가 올바르지 않습니다")
+        _check_dir(real)
+        fd, target = None, None
+        try:
+            fd = os.open(real, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            _own_file(fd, "스냅샷")
+            target = _sqlite3.connect(real)
+            started = monotonic()
+            def progress(status, remaining, total):
+                if monotonic() - started > 60:
+                    raise StoreError("스냅샷 시간 초과")
+            self._conn.backup(target, pages=256, progress=progress, sleep=0.05)
+            target.close()
+            target = None
+            os.fsync(fd)
+            return inspect_snapshot(real)
+        except (OSError, _sqlite3.Error) as e:
+            raise _wrap(e, "스냅샷을 만들지 못했습니다") from None
+        finally:
+            if target is not None:
+                target.close()
+            if fd is not None:
+                os.close(fd)
 
     # ── 내부 ──
     def _need_writer(self) -> None:

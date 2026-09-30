@@ -1,0 +1,19 @@
+# 엔진 build context 허용 목록. 레거시 문서·③ 코드·데이터·키는 보내지 않는다.
+**
+!Dockerfile.naver-engine
+!naver_engine/
+!naver_engine/**
+!naver_runtime/
+!naver_runtime/**
+!backend/
+!backend/app/
+!backend/app/__init__.py
+!backend/app/naver_auto/
+!backend/app/naver_auto/**
+**/tests/
+**/__pycache__/
+**/*.pyc
+**/*.db*
+**/.env*
+**/*.pem
+**/*.key*
