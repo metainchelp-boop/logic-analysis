@@ -22,7 +22,7 @@ ROOT = Path('/srv/metainc/ad-deploy-staging')
 SECRET_ROOT = Path('/etc/metainc/naver-engine')
 SECRET_OWNERS = {'runtime.env': (0, 0), 'backup-recipient.pem': (10001, 10001),
                  'backup-upload-key': (10001, 10001), 'backup-known-hosts': (10001, 10001)}
-EXACT = {'Dockerfile.naver-engine', 'Dockerfile.naver-engine.dockerignore', 'Dockerfile.naver-relay', 'Dockerfile.naver-relay.dockerignore',
+EXACT = {'.dockerignore', 'Dockerfile.naver-engine', 'Dockerfile.naver-engine.dockerignore', 'Dockerfile.naver-relay', 'Dockerfile.naver-relay.dockerignore',
          'compose.naver-engine.yml', 'compose.naver-relay.yml', 'backend/app/__init__.py',
          'backend/app/naver_entry.py', 'backend/app/naver_relay.py', 'backend/app/routers/naver.py',
          'backend/app/routers/__init__.py', 'backend/requirements.txt'}
