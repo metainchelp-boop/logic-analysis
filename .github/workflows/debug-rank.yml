@@ -9,7 +9,7 @@ on:
       ad_prepare:
         description: 'inspect 조회 / prepare 빈 폴더 / tunnel-keygen 새 터널키 / tunnel-install 설치 / tunnel-activate 검증 후 활성화. 앱 배포 없음.'
         type: choice
-        options: ['off', inspect, prepare, tunnel-keygen, tunnel-install, tunnel-activate, tunnel-native, preview-envelope, preview-prepare, preview-start, preview-backup, preview-inspect, preview-plan, preview-publish, preview-rollback, preview-lifecycle, preview-status, preview-data-audit, preview-collection-status, preview-link-audit, preview-upgrade-prepare, preview-upgrade]
+        options: ['off', inspect, prepare, tunnel-keygen, tunnel-install, tunnel-activate, tunnel-native, preview-envelope, preview-prepare, preview-start, preview-backup, preview-inspect, preview-plan, preview-publish, preview-rollback, preview-lifecycle, preview-status, preview-data-audit, preview-collection-status, preview-link-audit, preview-legacy-audit, preview-upgrade-prepare, preview-upgrade]
         required: false
         default: 'off'
       ad_expected_baseline:
@@ -51,7 +51,7 @@ on:
 
 jobs:
   preview-ops:
-    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && (inputs.ad_prepare == 'preview-backup' || inputs.ad_prepare == 'preview-inspect' || inputs.ad_prepare == 'preview-plan' || inputs.ad_prepare == 'preview-publish' || inputs.ad_prepare == 'preview-rollback' || inputs.ad_prepare == 'preview-lifecycle' || inputs.ad_prepare == 'preview-status' || inputs.ad_prepare == 'preview-data-audit' || inputs.ad_prepare == 'preview-collection-status' || inputs.ad_prepare == 'preview-link-audit' || inputs.ad_prepare == 'preview-upgrade') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && (inputs.ad_prepare == 'preview-backup' || inputs.ad_prepare == 'preview-inspect' || inputs.ad_prepare == 'preview-plan' || inputs.ad_prepare == 'preview-publish' || inputs.ad_prepare == 'preview-rollback' || inputs.ad_prepare == 'preview-lifecycle' || inputs.ad_prepare == 'preview-status' || inputs.ad_prepare == 'preview-data-audit' || inputs.ad_prepare == 'preview-collection-status' || inputs.ad_prepare == 'preview-link-audit' || inputs.ad_prepare == 'preview-legacy-audit' || inputs.ad_prepare == 'preview-upgrade') }}
     permissions:
       contents: read
     concurrency:
@@ -79,6 +79,7 @@ jobs:
             'preview-data-audit':('naver_preview_data_audit','run'),
             'preview-collection-status':('naver_preview_collection_status','run'),
             'preview-link-audit':('naver_preview_link_audit','run'),
+            'preview-legacy-audit':('naver_preview_legacy_audit','run'),
             'preview-upgrade':('naver_preview_upgrade','apply'),
             'preview-inspect':('naver_preview_publish','inspect'),
             'preview-plan':('naver_preview_publish','plan'),
@@ -114,7 +115,7 @@ jobs:
             try:
                 bundle=json.loads(base64.b64decode(os.environ['PREVIEW_OPS_B64'],validate=True))
                 os.environ.clear();os.environ.update(PATH='/usr/sbin:/usr/bin:/sbin:/bin',LANG='C')
-                allowed={'preview-backup':'run','preview-status':'run','preview-data-audit':'run','preview-collection-status':'run','preview-link-audit':'run','preview-upgrade':'apply','preview-inspect':'inspect','preview-plan':'plan','preview-publish':'apply','preview-rollback':'rollback','preview-lifecycle':'install'}
+                allowed={'preview-backup':'run','preview-status':'run','preview-data-audit':'run','preview-collection-status':'run','preview-link-audit':'run','preview-legacy-audit':'run','preview-upgrade':'apply','preview-inspect':'inspect','preview-plan':'plan','preview-publish':'apply','preview-rollback':'rollback','preview-lifecycle':'install'}
                 assert allowed[bundle['operation']]==bundle['function']
                 host=types.ModuleType('approved_host');exec(bundle['host_source'],host.__dict__)
                 module=types.ModuleType('approved_preview');exec(bundle['source'],module.__dict__)
@@ -122,7 +123,7 @@ jobs:
                     release=types.ModuleType('approved_release');exec(bundle['release_source'],release.__dict__)
                     lifecycle=types.ModuleType('approved_lifecycle');exec(bundle['lifecycle_source'],lifecycle.__dict__)
                     result=module.apply(bundle['package'],host.NativeHost(),release,lifecycle)
-                elif bundle['operation'] in ('preview-lifecycle','preview-status','preview-data-audit','preview-collection-status','preview-link-audit'):
+                elif bundle['operation'] in ('preview-lifecycle','preview-status','preview-data-audit','preview-collection-status','preview-link-audit','preview-legacy-audit'):
                     release=types.ModuleType('approved_release');exec(bundle['release_source'],release.__dict__)
                     result=getattr(module,bundle['function'])(bundle['package'],host.NativeHost(),release)
                 else:
