@@ -2,7 +2,9 @@ import base64
 import gzip
 import importlib.util
 import io
+import json
 from pathlib import Path
+import subprocess
 import tarfile
 import tempfile
 import unittest
@@ -23,7 +25,82 @@ def archive(name='naver_engine/web.py', kind=tarfile.REGTYPE):
     return out.getvalue()
 
 
+def prepared_receipt(package):
+    return {'ok': True, 'stage': 'prepared', 'source_commit': package['source_commit'],
+            'package': {key: value for key, value in package.items() if key != 'operation'},
+            'images': {'engine': 'sha256:'+'e'*64, 'relay': 'sha256:'+'e'*64}, 'files': {}}
+
+
+def image_inspect_output(args, package):
+    if '{{json .Id}}' in args:
+        return json.dumps('sha256:'+'e'*64).encode()
+    return (package['source_commit']+'\n').encode()
+
+
 class ReleaseTest(unittest.TestCase):
+    def simulate_start_failure(self, *, failed_up=None, up_timeout=False, failed_stop=None):
+        """Controller test: only Docker, identity and time are simulated; no host or WSGI call."""
+        package = {'baseline': 'a'*64, 'source_commit': 'b'*40, 'ciphertext_sha256': 'c'*64,
+                   'source_tar_gz_sha256': 'd'*64, 'run_id': '123456', 'operation': 'start'}
+        calls, running = [], set()
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root/'receipts').mkdir()
+            (root/'receipts'/('preview-'+package['source_commit']+'.json')).write_text(json.dumps(
+                prepared_receipt(package)))
+
+            def execute(args, **kwargs):
+                calls.append(args)
+                if args[:3] == ['docker', 'image', 'inspect']:
+                    return subprocess.CompletedProcess(args, 0, image_inspect_output(args, package), b'')
+                self.assertEqual(args[:3], ['docker', 'compose', '--project-name'])
+                name = args[3]
+                self.assertIn(name, {'naver-engine', 'naver-relay'})
+                self.assertNotIn('down', args)
+                if 'up' in args:
+                    # Docker may already create/start the service before reporting failure.
+                    running.add(name)
+                    if name == failed_up:
+                        if up_timeout:
+                            raise subprocess.TimeoutExpired(args, kwargs['timeout'])
+                        return subprocess.CompletedProcess(args, 1, b'', b'synthetic failure')
+                if 'stop' in args:
+                    if name == failed_stop:
+                        return subprocess.CompletedProcess(args, 1, b'', b'synthetic stop failure')
+                    running.discard(name)
+                return subprocess.CompletedProcess(args, 0, b'', b'')
+
+            host = Mock()
+            host.baseline.return_value = package['baseline']
+            with patch.object(M, 'ROOT', root), patch.object(M.os, 'geteuid', return_value=0), \
+                 patch.object(M, 'prepared_paths', return_value=(root/'releases'/('naver-'+package['source_commit']), root/'receipts'/('preview-'+package['source_commit']+'.json'))), \
+                 patch.object(M.subprocess, 'run', side_effect=execute), patch.object(M.time, 'sleep'), \
+                 patch.object(M.time, 'monotonic', side_effect=[0, 46]), \
+                 patch.object(M.socket.socket, 'connect', side_effect=AssertionError('unexpected socket')):
+                with self.assertRaises(Exception) as raised:
+                    M.start(package, host)
+            self.assertFalse((root/'receipts'/('preview-start-'+package['source_commit']+'.json')).exists())
+        return raised.exception, calls, running
+
+    def test_partial_up_failure_or_timeout_also_stops_the_attempted_service(self):
+        for name in ('naver-engine', 'naver-relay'):
+            for timeout in (False, True):
+                with self.subTest(service=name, timeout=timeout):
+                    error, calls, running = self.simulate_start_failure(failed_up=name, up_timeout=timeout)
+                    if timeout:
+                        self.assertIsInstance(error, subprocess.TimeoutExpired)
+                    else:
+                        self.assertEqual(str(error), 'COMMAND_FAILED')
+                    expected = ['naver-engine'] if name == 'naver-engine' else ['naver-relay', 'naver-engine']
+                    self.assertEqual([args[3] for args in calls if 'stop' in args], expected)
+                    self.assertFalse(running)
+
+    def test_one_stop_failure_does_not_leave_the_other_new_service_running(self):
+        error, calls, running = self.simulate_start_failure(failed_stop='naver-relay')
+        self.assertEqual(str(error), 'NEW_SERVICE_STOP_FAILED')
+        self.assertEqual([args[3] for args in calls if 'stop' in args], ['naver-relay', 'naver-engine'])
+        self.assertEqual(running, {'naver-relay'})
+
     def test_plain_regular_source_extracts_only_into_new_release(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'new'
@@ -62,13 +139,14 @@ class ReleaseTest(unittest.TestCase):
             root=Path(folder)
             (root/'receipts').mkdir()
             (root/'receipts'/('preview-'+package['source_commit']+'.json')).write_text(
-                '{"ok":true,"stage":"prepared","source_commit":"'+package['source_commit']+'"}')
+                json.dumps(prepared_receipt(package)))
             calls=[]
             def process(args,**kwargs):
                 calls.append(args)
-                return (package['source_commit']+'\n').encode() if args[:3]==['docker','image','inspect'] else b''
+                return image_inspect_output(args, package) if args[:3]==['docker','image','inspect'] else b''
             host=Mock();host.baseline.return_value=package['baseline']
             with patch.object(M,'ROOT',root),patch.object(M.os,'geteuid',return_value=0), \
+                 patch.object(M, 'prepared_paths', return_value=(root/'releases'/('naver-'+package['source_commit']), root/'receipts'/('preview-'+package['source_commit']+'.json'))), \
                  patch.object(M.subprocess,'run') as run,patch.object(M.time,'sleep'), \
                  patch.object(M.time,'monotonic',side_effect=[0,46]), \
                  patch.object(M.socket.socket,'connect',side_effect=OSError('synthetic unavailable')):
@@ -82,3 +160,15 @@ class ReleaseTest(unittest.TestCase):
             self.assertEqual(len(stops),2)
             self.assertEqual({args[3] for args in stops},{'naver-engine','naver-relay'})
             self.assertTrue(all('ad-api' not in args and 'down' not in args for args in calls))
+
+    def test_private_file_rejects_links_and_wrong_permissions(self):
+        with tempfile.TemporaryDirectory() as folder:
+            target = Path(folder)/'receipt'
+            target.write_text('{}')
+            target.chmod(0o644)
+            with self.assertRaises(ValueError):
+                M.trusted_private_file(target)
+            link = Path(folder)/'link'
+            link.symlink_to(target)
+            with self.assertRaisesRegex(ValueError, 'SYMLINKED_PRIVATE_FILE'):
+                M.trusted_private_file(link)

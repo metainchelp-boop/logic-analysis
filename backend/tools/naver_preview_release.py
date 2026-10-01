@@ -157,6 +157,27 @@ def write_new(path, body, uid=0, gid=0, mode=0o600):
         os.fsync(output.fileno())
 
 
+def trusted_private_file(path):
+    path = Path(path)
+    if path.resolve() != path:
+        raise ValueError('SYMLINKED_PRIVATE_FILE')
+    info = path.lstat()
+    if (not stat.S_ISREG(info.st_mode)
+            or (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode), info.st_nlink) != (0, 0, 0o600, 1)):
+        raise ValueError('PRIVATE_FILE_POLICY')
+
+
+def prepared_paths(commit):
+    release = ROOT/'releases'/('naver-'+commit)
+    for folder in (ROOT, ROOT/'releases', ROOT/'receipts', release):
+        if folder.resolve() != folder:
+            raise ValueError('SYMLINKED_PARENT')
+        trusted_dir(folder, mode=0o700)
+    receipt_path = ROOT/'receipts'/('preview-'+commit+'.json')
+    trusted_private_file(receipt_path)
+    return release, receipt_path
+
+
 def prepare(package, host):
     global STAGE
     STAGE = 'preflight'
@@ -177,9 +198,10 @@ def prepare(package, host):
     if sha(ciphertext) != package['ciphertext_sha256']:
         raise ValueError('CIPHERTEXT_HASH')
     key = Path('/etc/metainc/naver-deploy-envelope/private.pem')
-    st = key.lstat()
-    if not stat.S_ISREG(st.st_mode) or (st.st_uid, st.st_gid, stat.S_IMODE(st.st_mode), st.st_nlink) != (0,0,0o600,1):
-        raise ValueError('ENVELOPE_KEY_POLICY')
+    if key.parent.resolve() != key.parent:
+        raise ValueError('SYMLINKED_ENVELOPE_PARENT')
+    trusted_dir(key.parent, mode=0o700)
+    trusted_private_file(key)
     plain = command(['openssl','cms','-decrypt','-binary','-inform','DER','-inkey',str(key)], data=ciphertext)
     if len(plain) > 3*1024*1024:
         raise ValueError('PLAINTEXT_SIZE')
@@ -228,7 +250,16 @@ def prepare(package, host):
         raise ValueError('POST_BASELINE')
     receipt={'ok':True,'stage':'prepared','source_commit':commit,'containers_unchanged':True,
              'services_started':False,'nginx_changed':False,'secret_values_exported':False}
-    write_new(ROOT/'receipts'/('preview-'+commit+'.json'),json.dumps(receipt,sort_keys=True).encode())
+    sealed=dict(receipt)
+    sealed['package']={key:value for key,value in package.items() if key!='operation'}
+    sealed['images']={name:json.loads(command(['docker','image','inspect','--format','{{json .Id}}',
+                                             'metainc/naver-'+name+':'+commit])) for name in ('engine','relay')}
+    paths={str(release/'deploy/naver-engine-backup.override.yml')}
+    for name in ('engine','relay'):
+        paths.update((str(release/('compose.naver-'+name+'.yml')),str(release/('preview-'+name+'.override.yml'))))
+    paths.update(item['path'] for item in files)
+    sealed['files']={path:sha(Path(path).read_bytes()) for path in sorted(paths)}
+    write_new(ROOT/'receipts'/('preview-'+commit+'.json'),json.dumps(sealed,sort_keys=True).encode())
     return receipt
 
 
@@ -263,10 +294,15 @@ def start(package,host):
     if os.geteuid()!=0 or package['operation']!='start' or host.baseline()!=package['baseline']:
         raise ValueError('START_BASELINE')
     commit=package['source_commit']
-    release=ROOT/'releases'/('naver-'+commit)
-    receipt=json.loads((ROOT/'receipts'/('preview-'+commit+'.json')).read_text())
+    release, receipt_path=prepared_paths(commit)
+    receipt=json.loads(receipt_path.read_text(), object_pairs_hook=unique)
     if receipt.get('stage')!='prepared' or receipt.get('source_commit')!=commit or receipt.get('ok') is not True:
         raise ValueError('NOT_PREPARED')
+    if receipt.get('package')!={key:value for key,value in package.items() if key!='operation'}:
+        raise ValueError('PREPARED_PACKAGE_MISMATCH')
+    for path,value in receipt['files'].items():
+        if sha(Path(path).read_bytes())!=value:
+            raise ValueError('PREPARED_FILE_CHANGED')
     for name in ('engine','relay'):
         args=compose(release,name)
         if command(args+['ps','--all','--quiet']).strip():
@@ -275,6 +311,9 @@ def start(package,host):
                         'metainc/naver-'+name+':'+commit]).decode().strip()
         if marker!=commit:
             raise ValueError('IMAGE_SOURCE_MISMATCH')
+        image_id=json.loads(command(['docker','image','inspect','--format','{{json .Id}}','metainc/naver-'+name+':'+commit]))
+        if image_id!=receipt['images'].get(name):
+            raise ValueError('PREPARED_IMAGE_CHANGED')
     started=[]
     try:
         for name in ('engine','relay'):
