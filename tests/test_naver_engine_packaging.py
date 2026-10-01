@@ -107,7 +107,7 @@ class PackagingSourceTest(unittest.TestCase):
             self.assertRegex(recovery, '(?m)^' + re.escape(expression) + '$')
 
     def test_every_bind_explicitly_disables_host_path_creation_in_source(self):
-        for file, expected_count in (("compose.naver-engine.yml", 3),
+        for file, expected_count in (("compose.naver-engine.yml", 4),
                                      ("deploy/naver-engine-backup.override.yml", 3),
                                      ("deploy/naver-engine-ad-api.override.yml", 1)):
             lines = source(file).splitlines()
@@ -124,6 +124,17 @@ class PackagingSourceTest(unittest.TestCase):
                 self.assertRegex("\n".join(block),
                                  rf"(?m)^ {{{indent + 2}}}bind:\n {{{indent + 4}}}create_host_path: false$",
                                  file + ": " + lines[start])
+
+    def test_tunnel_is_readonly_directory_without_engine_private_key_mount(self):
+        compose = source("compose.naver-engine.yml")
+        self.assertRegex(compose, r"source: \$\{NAVER_ENGINE_ERP_TUNNEL_DIR:-/run/metainc-naver-erp-tunnel\}\n"
+                                 r"        target: /run/naver-erp-tunnel\n        read_only: true\n"
+                                 r"        bind:\n          create_host_path: false")
+        self.assertIn("NAVER_ENGINE_ERP_TUNNEL_SOCKET: /run/naver-erp-tunnel/erp.sock", compose)
+        self.assertEqual("/run/naver-erp-tunnel/erp.sock", env_example()["NAVER_ENGINE_ERP_TUNNEL_SOCKET"])
+        for file in ("compose.naver-engine.yml", "deploy/naver-engine-backup.override.yml"):
+            active = "\n".join(line for line in source(file).splitlines() if not line.lstrip().startswith("#"))
+            self.assertNotRegex(active, r"(?i)(?:erp.tunnel.*(?:private|identity|key)|/etc/metainc/naver-erp-tunnel)")
 
     def test_every_function_and_relay_default_off(self):
         values = env_example()
@@ -327,15 +338,21 @@ class ComposeModelTest(ComposeAssertions, unittest.TestCase):
     def test_data_and_socket_directory_mounts_are_separate_from_code_and_ad_db(self):
         engine = compose_model("compose.naver-engine.yml")["services"]["naver-engine"]
         mounts = engine["volumes"]
-        self.assertEqual({"/var/lib/naver-engine", "/run/naver-engine", "/var/backups/naver-engine"},
+        self.assertEqual({"/var/lib/naver-engine", "/run/naver-engine", "/var/backups/naver-engine",
+                          "/run/naver-erp-tunnel"},
                          {mount["target"] for mount in mounts})
         for mount in mounts:
             self.assertEqual("bind", mount["type"])
             self.assert_no_created_host_path(mount)
-            self.assertTrue(mount["source"].startswith(("/var/lib/metainc/", "/run/metainc/", "/var/backups/metainc/")))
-            self.assertFalse(mount.get("read_only", False))
+            if mount["target"] == "/run/naver-erp-tunnel":
+                self.assertEqual("/run/metainc-naver-erp-tunnel", mount["source"])
+                self.assertTrue(mount["read_only"])
+            else:
+                self.assertTrue(mount["source"].startswith(("/var/lib/metainc/", "/run/metainc/", "/var/backups/metainc/")))
+                self.assertFalse(mount.get("read_only", False))
         self.assertEqual("/var/lib/naver-engine/engine.db", engine["environment"]["NAVER_ENGINE_DB"])
         self.assertEqual("/run/naver-engine/engine.sock", engine["environment"]["NAVER_ENGINE_SOCKET"])
+        self.assertEqual("/run/naver-erp-tunnel/erp.sock", engine["environment"]["NAVER_ENGINE_ERP_TUNNEL_SOCKET"])
 
     def test_relay_override_preserves_existing_ad_service_contract(self):
         before = compose_model("docker-compose.yml", project="naver-package-review")

@@ -45,6 +45,37 @@ class ConfigTest(unittest.TestCase):
                              "NAVER_ENGINE_SHADOW_START": "2026-10-01",
                              "NAVER_ENGINE_ISSUE_ALERTS_FROM": "2026-10-02"})
 
+    def test_tunnel_default_and_canonical_absolute_path(self):
+        self.assertEqual(Config.from_env({}).erp_tunnel_socket, "/run/naver-erp-tunnel/erp.sock")
+        for value in ("relative/erp.sock", "/erp.sock", "/run//tunnel/erp.sock",
+                      "/run/tunnel/../erp.sock", "/run/./tunnel/erp.sock", "/run/tunnel/",
+                      "/run/" + "x" * 101, "/run/tunnel/erp\0.sock"):
+            with self.subTest(value=value), self.assertRaises(ConfigError):
+                Config.from_env({"NAVER_ENGINE_ERP_TUNNEL_SOCKET": value})
+
+    def test_runtime_tunnel_directory_cannot_overlap_other_storage(self):
+        base = {"NAVER_ENGINE_DB": "/synthetic/data/db",
+                "NAVER_ENGINE_SOCKET": "/synthetic/web/api.sock",
+                "NAVER_ENGINE_BACKUP_DIR": "/synthetic/backup"}
+        for parent in ("/synthetic/data", "/synthetic/data/child", "/synthetic",
+                       "/synthetic/web", "/synthetic/web/child", "/synthetic/backup",
+                       "/synthetic/backup/child"):
+            env = dict(base, NAVER_ENGINE_ERP_TUNNEL_SOCKET=parent + "/erp.sock")
+            with self.subTest(parent=parent), self.assertRaises(ConfigError):
+                Config.from_env(env).validate_runtime(env)
+        env = dict(base, NAVER_ENGINE_ERP_TUNNEL_SOCKET="/synthetic/tunnel/erp.sock")
+        Config.from_env(env).validate_runtime(env)
+
+    def test_runtime_tunnel_rejects_symlink_alias_of_data_directory(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "data").mkdir()
+            (root / "alias").symlink_to(root / "data", target_is_directory=True)
+            env = {"NAVER_ENGINE_DB": str(root / "data/db"),
+                   "NAVER_ENGINE_ERP_TUNNEL_SOCKET": str(root / "alias/erp.sock")}
+            with self.assertRaises(ConfigError):
+                Config.from_env(env).validate_runtime(env)
+
 
 if __name__ == "__main__":
     unittest.main()

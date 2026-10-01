@@ -38,6 +38,19 @@ def _path(env, name, default):
     return str(path)
 
 
+def _tunnel_path(value):
+    # Path 정규화가 '..', 중복 '/', 끝 '/'를 숨기기 전에 원문을 검사한다.
+    if (not isinstance(value, str) or not value.startswith("/") or "\0" in value
+            or any(part in ("", ".", "..") for part in value.split("/")[1:])):
+        raise ConfigError("ERP 터널은 정규화된 전용 UNIX 소켓 절대 경로가 필요합니다")
+    try:
+        if len(value.encode("utf-8")) > 100:
+            raise ConfigError("ERP 터널 소켓 경로가 너무 깁니다")
+    except UnicodeEncodeError:
+        raise ConfigError("ERP 터널 소켓 경로가 잘못되었습니다") from None
+    return _path({"socket": value}, "socket", value)
+
+
 @dataclass(frozen=True)
 class Config:
     db: str = field(repr=False)
@@ -52,6 +65,7 @@ class Config:
     issue_alerts_enabled: bool = False
     shadow_start: date | None = None
     issue_alerts_from: date | None = None
+    erp_tunnel_socket: str = field(default="/run/naver-erp-tunnel/erp.sock", repr=False)
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]):
@@ -71,7 +85,21 @@ class Config:
         sock = _path(env, "NAVER_ENGINE_SOCKET", "/run/naver-engine/engine.sock")
         if Path(db).resolve() == Path(sock).resolve() or Path(db).parent.resolve() == Path(sock).parent.resolve():
             raise ConfigError("저장 폴더와 소켓 폴더는 분리해야 합니다")
-        return cls(db, sock, **flags, shadow_start=shadow, issue_alerts_from=alerts_from)
+        tunnel = _tunnel_path(env.get("NAVER_ENGINE_ERP_TUNNEL_SOCKET", "/run/naver-erp-tunnel/erp.sock"))
+        return cls(db, sock, **flags, shadow_start=shadow, issue_alerts_from=alerts_from,
+                   erp_tunnel_socket=tunnel)
+
+    def validate_runtime(self, env: Mapping[str, str]):
+        """승인된 ERP 네 경로만 조립한다. 독립 core 예약 시험의 설정은 바꾸지 않는다."""
+        if self.alerts_enabled or self.metrics_enabled or self.issue_alerts_enabled:
+            raise ConfigError("제한판 실행은 ERP 알림·심박·성과 전송을 지원하지 않습니다")
+        tunnel = Path(_tunnel_path(self.erp_tunnel_socket)).parent.resolve()
+        backup = Path(env.get("NAVER_ENGINE_BACKUP_DIR", "/var/backups/naver-engine"))
+        if not backup.is_absolute() or backup == Path("/"):
+            raise ConfigError("백업 전용 절대 경로가 필요합니다")
+        for other in (Path(self.db).parent.resolve(), Path(self.socket).parent.resolve(), backup.resolve()):
+            if tunnel == other or tunnel in other.parents or other in tunnel.parents:
+                raise ConfigError("ERP 터널 폴더는 저장·웹 소켓·백업 폴더와 겹칠 수 없습니다")
 
     def switches(self):
         return {name: value for name, value in (

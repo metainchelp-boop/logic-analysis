@@ -9,12 +9,13 @@ import signal
 import sys
 import threading
 
-from naver_engine import alerts as A, erp_alert as EA, erp_read as E, naver_read as N
+from naver_engine import alerts as A, erp_read as E, naver_read as N
 from naver_engine import erp_profile as EP, session as SE, store as S, web as WEB
 from naver_engine.backup import BackupJob
 from naver_engine.credentials import load_manager_credentials
 from naver_runtime.backup_transport import OpenSslEncryptor, SshSender
 from naver_runtime.config import Config, ConfigError
+from naver_runtime.erp_tunnel_transport import ErpTunnelTransport
 from naver_runtime.scheduler import Scheduler
 from naver_runtime.server import UnixServer, health_app
 from naver_runtime.writer import Writer
@@ -53,9 +54,9 @@ class InterruptibleClock(N.SystemClock):
 
 class StopAwareTransport:
     """기존 core HTTP 관문에 위임하며 중지 뒤 새 송신만 차단한다."""
-    def __init__(self, clock):
+    def __init__(self, clock, transport=None):
         self._clock = clock
-        self._transport = N.UrllibTransport()
+        self._transport = transport if transport is not None else N.UrllibTransport()
 
     def send(self, request, timeout):
         self._clock.before_network()
@@ -101,21 +102,15 @@ class MetricsClock:
 
 def dependencies(config, env, clock):
     """켜진 기능에 필요한 키만 읽는다. 이 함수는 업무 API를 호출하지 않는다."""
+    config.validate_runtime(env)
     erp_factory = naver_factory = alert_factory = metrics_factory = backup_job = None
-    if config.sync_enabled or config.links_enabled or config.alerts_enabled:
+    if config.sync_enabled or config.links_enabled:
         key = E.load_erp_key(env)
-        if config.sync_enabled or config.links_enabled:
-            erp_factory = lambda: E.ErpReader(key, clock=clock, transport=StopAwareTransport(clock))
-        if config.alerts_enabled:
-            alert_factory = lambda: EA.ErpAlertPoster(key, transport=StopAwareTransport(clock))
+        erp_factory = lambda: E.ErpReader(key, clock=clock, transport=StopAwareTransport(
+            clock, ErpTunnelTransport(config.erp_tunnel_socket)))
     if config.links_enabled or config.morning_enabled:
         credentials = load_manager_credentials(env)
         naver_factory = lambda: N.NaverReader(credentials, clock=clock, transport=StopAwareTransport(clock))
-        if config.metrics_enabled:
-            def metrics_factory():
-                metrics_clock = MetricsClock(clock)
-                return N.NaverReader(credentials, clock=metrics_clock,
-                    transport=StopAwareTransport(metrics_clock), max_calls=80)
     if config.backup_enabled:
         names = ("NAVER_BACKUP_CERT", "NAVER_BACKUP_SSH_KEY", "NAVER_BACKUP_KNOWN_HOSTS")
         if any(not env.get(name) for name in names):
@@ -154,7 +149,8 @@ def run(config, env, *, stop=None):
     options = dependencies(config, env, clock)
     profiles = signer = None
     if config.web_enabled:
-        profiles = EP.ErpProfileReader(env=env, transport=StopAwareTransport(clock))
+        profiles = EP.ErpProfileReader(env=env, transport=StopAwareTransport(
+            clock, ErpTunnelTransport(config.erp_tunnel_socket)))
         profiles.require_configured()
         signer = SE.TokenSigner(SE.load_token_secret(env))
     state = {"state": "starting", "switches": config.switches(), "last_tick": None}
@@ -198,6 +194,7 @@ def main(argv=None, *, env=None):
     env = os.environ if env is None else env
     try:
         config = Config.from_env(env)
+        config.validate_runtime(env)
         if args.command != "run":
             print(json.dumps({"command": args.command, "configuration": "valid", "switches": config.switches(),
                               "network_performed": False, "storage_opened": False,

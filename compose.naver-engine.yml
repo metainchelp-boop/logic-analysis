@@ -29,6 +29,7 @@ services:
       TZ: Asia/Seoul
       NAVER_ENGINE_DB: /var/lib/naver-engine/engine.db
       NAVER_ENGINE_SOCKET: /run/naver-engine/engine.sock
+      NAVER_ENGINE_ERP_TUNNEL_SOCKET: /run/naver-erp-tunnel/erp.sock
       NAVER_ENGINE_BACKUP_DIR: /var/backups/naver-engine
     volumes:
       - type: bind
@@ -45,6 +46,14 @@ services:
       - type: bind
         source: ${NAVER_ENGINE_BACKUP_DIR:-/var/backups/metainc/naver-engine}
         target: /var/backups/naver-engine
+        bind:
+          create_host_path: false
+      # 호스트 전용 SSH 터널 소켓만 공유한다. SSH 개인키·설정은 엔진에 붙이지 않는다.
+      # 호스트 폴더 root:10001 0750, 소켓 root:10001 0660은 별도 설치 검증 대상이다.
+      - type: bind
+        source: ${NAVER_ENGINE_ERP_TUNNEL_DIR:-/run/metainc-naver-erp-tunnel}
+        target: /run/naver-erp-tunnel
+        read_only: true
         bind:
           create_host_path: false
     logging:

@@ -8,10 +8,28 @@ from unittest import TestCase
 from unittest.mock import Mock, patch
 
 from naver_runtime import __main__ as main
-from naver_runtime.config import Config
+from naver_runtime.config import Config, ConfigError
 
 
 class MainTest(TestCase):
+    def test_restricted_runtime_rejects_unapproved_flags_before_keys_or_storage(self):
+        for flag in ("alerts_enabled", "metrics_enabled", "issue_alerts_enabled"):
+            config = Config("/synthetic/data/db", "/synthetic/web/api", **{flag: True})
+            with self.subTest(flag=flag), \
+                 patch.object(main.E, "load_erp_key", side_effect=AssertionError), \
+                 patch.object(main, "load_manager_credentials", side_effect=AssertionError), \
+                 patch.object(main, "Writer", side_effect=AssertionError), \
+                 self.assertRaises(ConfigError):
+                main.run(config, {}, stop=Event())
+
+    def test_all_commands_reject_alerts_including_no_network_checks(self):
+        for command in ("check-config", "dry-run", "run"):
+            with self.subTest(command=command), \
+                 patch.object(main.E, "load_erp_key", side_effect=AssertionError), \
+                 patch.object(main, "Writer", side_effect=AssertionError), \
+                 contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(main.main([command], env={"NAVER_ENGINE_ALERTS_ENABLED": "true"}), 2)
+
     def test_checks_do_not_open_store_server_or_read_secrets(self):
         with tempfile.TemporaryDirectory() as folder:
             env = {"NAVER_ENGINE_DB": folder + "/data/db", "NAVER_ENGINE_SOCKET": folder + "/socket/api"}

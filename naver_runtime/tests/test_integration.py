@@ -8,7 +8,7 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from naver_engine import store as S, sync as Y
+from naver_engine import erp_alert as EA, store as S, sync as Y
 from naver_engine.tests import test_morning as TM, test_alerts as TA, test_sync as TS, test_erp_alert as TEA
 from naver_runtime.config import Config
 from naver_runtime.scheduler import Scheduler
@@ -17,7 +17,7 @@ from naver_runtime import __main__ as main
 
 
 class AssemblyStopTest(unittest.TestCase):
-    def test_alert_assembly_never_starts_another_post_after_stop(self):
+    def test_core_alert_transport_never_starts_another_post_after_stop(self):
         stop = threading.Event()
         fake = TEA.FakeAlertErp()
 
@@ -27,14 +27,12 @@ class AssemblyStopTest(unittest.TestCase):
                 stop.set()  # 첫 응답 뒤 SIGTERM 처리기가 올린 것과 같은 중지 상태.
                 return result
 
-        config = Config("/synthetic/data/db", "/synthetic/socket/api", alerts_enabled=True)
-        # 수정 전·후 양쪽의 기본 전송 생성자를 막는다. 실제 회사 요청은 절대 만들지 않는다.
-        with patch.object(main.EA, "UrllibTransport", return_value=Transport()), \
-             patch.object(main.N, "UrllibTransport", return_value=Transport()):
+        # 제한판 runtime의 승인 대상은 아니지만 기존 core 중지 계약은 계속 검증한다.
+        with patch.object(EA, "UrllibTransport", side_effect=AssertionError), \
+             patch.object(main.N, "UrllibTransport", side_effect=AssertionError):
             clock = main.InterruptibleClock(stop)
-            options = main.dependencies(config, {"NAVER_ENGINE_ERP_KEY": TEA.MARK_KEY},
-                                        clock)
-            poster = options["alert_factory"]()
+            key = main.E.load_erp_key({"NAVER_ENGINE_ERP_KEY": TEA.MARK_KEY})
+            poster = EA.ErpAlertPoster(key, transport=main.StopAwareTransport(clock, Transport()))
             poster.send_alert(TEA.payload(dedupe_key="shutdown:first"))
             with self.assertRaises(main.StopRequested):
                 poster.send_alert(TEA.payload(dedupe_key="shutdown:second"))
