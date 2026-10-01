@@ -156,6 +156,18 @@ jobs:
           ' naver-ci "$(id -u)" "$(id -g)" "$PATH" "$RUNNER_TEMP/naver-ci-home" \
             "$GITHUB_WORKSPACE" "$RUNNER_TEMP/naver-ci" \
             "$RUNNER_TEMP/naver-node/node_modules" "$RUNNER_TEMP/naver-browsers"
+      - name: 전용 SSH·nginx 격리 왕복 검사 (합성 키만)
+        if: ${{ !cancelled() && steps.prepare.outcome == 'success' }}
+        timeout-minutes: 8
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python deploy/naver-erp-tunnel/test_policy.py -v \
+            2>&1 | tee "$RUNNER_TEMP/naver-ci/tunnel-policy.txt"
+          docker build --file deploy/naver-erp-tunnel/test.Dockerfile \
+            --tag "naver-tunnel-ci:$GITHUB_SHA" .
+          timeout 180s docker run --rm --network none --pids-limit 128 \
+            "naver-tunnel-ci:$GITHUB_SHA" \
+            | tee "$RUNNER_TEMP/naver-ci/tunnel-native.jsonl"
       - name: 엔진 이미지 빌드와 비루트 무통신 시험 (push 없음)
         if: ${{ !cancelled() && steps.prepare.outcome == 'success' }}
         run: |

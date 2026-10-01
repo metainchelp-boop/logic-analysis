@@ -1,0 +1,41 @@
+# AD 후보 전용. @BE_SSH_IPV4@ 치환·검증 및 승인 전 enable/start 금지.
+# Group 10001은 엔진 컨테이너의 고정 GID. key는 root:root 0600, engine에 mount하지 않는다.
+[Unit]
+Description=Naver ERP isolated SSH forwarder (candidate only)
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=120s
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=root
+Group=10001
+UMask=0077
+RuntimeDirectory=metainc-naver-erp-tunnel
+RuntimeDirectoryMode=0750
+# 컨테이너 directory bind의 inode를 지킨다. 잔류 socket은 자동 unlink하지 않는다.
+RuntimeDirectoryPreserve=yes
+ExecStart=/usr/bin/ssh -F /etc/metainc/naver-erp-tunnel/ssh_config -N -T naver-erp-tunnel
+Restart=on-failure
+RestartSec=10s
+TimeoutStopSec=15s
+KillMode=control-group
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ReadWritePaths=/run/metainc-naver-erp-tunnel
+IPAddressDeny=any
+IPAddressAllow=@BE_SSH_IPV4@
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=multi-user.target

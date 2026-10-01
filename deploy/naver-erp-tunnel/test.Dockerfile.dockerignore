@@ -1,0 +1,17 @@
+**
+!naver_engine/
+!naver_engine/**
+!naver_runtime/
+!naver_runtime/**
+!deploy/
+!deploy/naver-erp-tunnel/
+!deploy/naver-erp-tunnel/**
+!tools/
+!tools/naver-tunnel-native-ci.py
+**/__pycache__/
+**/*.pyc
+**/.env*
+**/*.db*
+**/*.pem
+**/*.key*
+**/id_ed25519*

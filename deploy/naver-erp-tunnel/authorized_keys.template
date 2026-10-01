@@ -1,0 +1,1 @@
+restrict,port-forwarding,from="@AD_EGRESS_IPV4@",permitopen="127.0.0.1:18081" ssh-ed25519 @NEW_TUNNEL_PUBLIC_KEY_BASE64@ naver-erp-tunnel
