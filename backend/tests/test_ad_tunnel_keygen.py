@@ -132,7 +132,8 @@ class TunnelKeygenTests(unittest.TestCase):
     def test_workflow_keygen_guards_fail_before_ssh(self):
         document = WORKFLOW.read_text()
         import textwrap
-        guard = textwrap.dedent(document.split("        run: |\n", 1)[1].split("      - name:", 1)[0])
+        prepare_job = document.split("  ad-deploy-prepare:\n", 1)[1].split("\n  ad-tunnel-install:", 1)[0]
+        guard = textwrap.dedent(prepare_job.split("        run: |\n", 1)[1].split("      - name:", 1)[0])
         base = dict(os.environ, AD_PREPARE_MODE="tunnel-keygen", AD_EXPECTED_BASELINE="a" * 64,
                     AD_RUN_EVENT="workflow_dispatch", AD_RUN_REF="refs/heads/codex/ad-deploy-prep-20261001",
                     AD_RUN_INPUTS=json.dumps({"collector": "off", "rank_link": "off"}))

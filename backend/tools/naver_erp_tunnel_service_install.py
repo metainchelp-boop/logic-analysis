@@ -16,6 +16,7 @@ import socket
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 
 BE_IP = "1.234.23.117"
@@ -27,6 +28,8 @@ CONFIG = FOLDER + "/ssh_config"
 KNOWN_HOSTS = FOLDER + "/known_hosts"
 PROBE = FOLDER + "/bpf_preflight.py"
 UNIT_PATH = "/etc/systemd/system/" + UNIT
+LEGACY_PROBE_SHA256 = "6c20ea88447430315141f327901cbe241ea3ccc692125d399850ef2c4a4bb264"
+PROBE_SHA256 = "caf9c1ac0463be5d41133a959d1111fe1452f77a0f5feccedaee921c4de0e175"
 SSH_TEMPLATE = '''# 전용 service의 -F로만 사용한다. 개인/시스템 SSH config 또는 agent를 합치지 않는다.
 # @BE_SSH_IPV4@는 검증한 숫자 IPv4로 치환. known_hosts는 확인된 ECDSA P-256 host key만.
 Host naver-erp-tunnel
@@ -179,12 +182,27 @@ def manifest(package, probe_source=None):
     if digest(SSH_TEMPLATE.encode()) != "1c37f158c26a988973707c36b2f4ccade561c6e1fa93334a12ece8abaf9df0aa" or digest(SERVICE_TEMPLATE.encode()) != "93c18df46c539dc2cbc1a103536aaa7c6e8444c9215897ae3b8c5fb8a59bd24a":
         raise InstallError("TEMPLATE_CHANGED")
     probe = Path(__file__).with_name("naver_erp_tunnel_bpf_preflight.py").read_bytes() if probe_source is None else probe_source
-    if not isinstance(probe, bytes) or digest(probe) != "6c20ea88447430315141f327901cbe241ea3ccc692125d399850ef2c4a4bb264":
+    if not isinstance(probe, bytes) or digest(probe) != PROBE_SHA256:
         raise InstallError("PROBE_CHANGED")
     service = SERVICE_TEMPLATE.replace("ExecStart=", "ExecStartPre=/usr/bin/python3 " + PROBE + "\nExecStart=", 1)
     return {CONFIG: (SSH_TEMPLATE.replace("@BE_SSH_IPV4@", BE_IP).encode(), 0o600),
             KNOWN_HOSTS: ((BE_IP + " " + package["known_host_key"] + "\n").encode(), 0o600),
             PROBE: (probe, 0o600), UNIT_PATH: (service.replace("@BE_SSH_IPV4@", BE_IP).encode(), 0o644)}
+
+
+def validate_started(host, package):
+    running = host.verify_running()
+    attachment = host.verify_bpf_attachment()
+    ingress = host.verify_ingress()
+    host.parent_controls()
+    if host.baseline() != package["expected_docker_baseline"]:
+        raise InstallError("BASELINE_CHANGED")
+    return {"running": running, "containers_unchanged": True, "bpf_attachment": attachment,
+            "bpf_runtime_enforcement_verified": True,
+            "bpf_scope": "direct_attachment_and_unit_candidate_and_parent_positive_controls",
+            "parent_positive_controls_before_after": True,
+            "enabled": False, "work_switches_off": True, "work_switches_off_verified": False,
+            "auth_boundary_roundtrip_verified": True, **ingress}
 
 
 def install(package, *, host=None, probe_source=None):
@@ -206,20 +224,15 @@ def install(package, *, host=None, probe_source=None):
         host.verify_config()
         if host.baseline() != package["expected_docker_baseline"]:
             raise InstallError("BASELINE_CHANGED")
+        stage = "parent_controls"
+        host.parent_controls()
         stage = "start"
         host.start()
-        stage = "verify_running"
-        running = host.verify_running()
-        stage = "verify_ingress"
-        ingress = host.verify_ingress()
-        if host.baseline() != package["expected_docker_baseline"]:
-            raise InstallError("BASELINE_CHANGED")
+        stage = "validate_started"
+        verified = validate_started(host, package)
         return {"ok": True, "created": created,
                 "expected_created_sha256": {name: digest(files[name][0]) for name in created},
-                "running": running, "containers_unchanged": True,
-                "bpf_runtime_enforcement_verified": True, "bpf_scope": "BE22_allow_loopback22_explicit_deny",
-                "enabled": False, "work_switches_off": True, "work_switches_off_verified": False,
-                "auth_boundary_roundtrip_verified": True, **ingress}
+                **verified}
     except Exception as error:
         stopped = False
         if UNIT_PATH in created:
@@ -234,6 +247,45 @@ def install(package, *, host=None, probe_source=None):
                 "new_unit_stopped": stopped, "group_may_remain": True, "manual_review_required": True,
                 "automatic_deletions": 0, "enabled": False, "work_switches_off": True,
                 "bpf_runtime_enforcement_verified": False}
+
+
+def activate_installed(package, *, host=None, probe_source=None):
+    """Explicit legacy-probe upgrade only; never creates accounts or enables units."""
+    package = validate_package(package)
+    files = manifest(package, probe_source)
+    host = host if host is not None else NativeHost()
+    host.preflight_installed(package, files)
+    for _ in range(2):
+        if host.baseline() != package["expected_docker_baseline"]:
+            raise InstallError("BASELINE_CHANGED")
+    changed = []
+    stage = "replace_probe"
+    try:
+        host.replace_probe(files, changed)
+        stage = "verify_config"
+        host.verify_config()
+        if host.baseline() != package["expected_docker_baseline"]:
+            raise InstallError("BASELINE_CHANGED")
+        stage = "parent_controls"
+        host.parent_controls()
+        stage = "start"
+        host.start()
+        stage = "validate_started"
+        verified = validate_started(host, package)
+        return {"ok": True, "activation": True, "changed": changed,
+                "expected_changed_sha256": {name: digest(files[name][0]) for name in changed}, **verified}
+    except Exception as error:
+        stopped = False
+        try:
+            host.stop()
+            stopped = True
+        except Exception:
+            pass
+        code = str(error) if isinstance(error, InstallError) and re.fullmatch(r"[A-Z0-9_]{1,80}", str(error)) else None
+        return {"ok": False, "activation": True, "stage": stage, "error_kind": type(error).__name__,
+                "error_code": code, "changed": changed, "new_unit_stopped": stopped,
+                "manual_review_required": True, "automatic_deletions": 0, "enabled": False,
+                "work_switches_off": True, "bpf_runtime_enforcement_verified": False}
 
 
 def run(args):
@@ -282,6 +334,69 @@ def bpf_query_count(fd, attach_type):
 
 
 class NativeHost:
+    def parent_controls(self):
+        for address in (BE_IP, "127.0.0.1"):
+            with socket.create_connection((address, 22), timeout=3):
+                pass
+        return {"be_ssh_reachable": True, "local_ssh_reachable": True}
+
+    def inactive_unit(self):
+        value = run(["/usr/bin/systemctl", "show", UNIT, "-p", "ActiveState", "-p", "MainPID",
+                     "-p", "LoadState", "-p", "UnitFileState"])
+        pairs = [line.split("=", 1) for line in value.splitlines()]
+        expected = {"ActiveState": "inactive", "MainPID": "0", "LoadState": "loaded", "UnitFileState": "disabled"}
+        if len(pairs) != 4 or any(len(pair) != 2 for pair in pairs) or dict(pairs) != expected:
+            raise InstallError("INSTALLED_UNIT_NOT_INACTIVE_DISABLED")
+        if os.path.lexists(RUNTIME + "/erp.sock"):
+            raise InstallError("PREEXISTING_SOCKET")
+        if os.path.lexists(RUNTIME):
+            info = Path(RUNTIME).lstat()
+            if (not stat.S_ISDIR(info.st_mode) or (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)) != (0, 10001, 0o750)
+                    or any(Path(RUNTIME).iterdir())):
+                raise InstallError("RUNTIME_NOT_EMPTY")
+
+    def preflight_installed(self, package, files):
+        self.verify_private_identity(package)
+        self.inactive_unit()
+        group = grp.getgrnam(GROUP)
+        if group.gr_gid != 10001 or grp.getgrgid(10001).gr_name != GROUP or group.gr_mem or any(row.pw_gid == 10001 for row in pwd.getpwall()):
+            raise InstallError("GROUP_NOT_EXCLUSIVE")
+        identities = {}
+        for name, (body, mode) in files.items():
+            identities[name] = self.regular(name, mode)
+            expected = LEGACY_PROBE_SHA256 if name == PROBE else digest(body)
+            if digest(Path(name).read_bytes()) != expected:
+                raise InstallError("INSTALLED_BASELINE_CHANGED")
+        self.installed_identities = identities
+        self.files = files
+
+    def replace_probe(self, files, changed):
+        self.inactive_unit()
+        for name, (body, mode) in files.items():
+            if self.regular(name, mode) != self.installed_identities[name]:
+                raise InstallError("INSTALLED_INODE_CHANGED")
+            expected = LEGACY_PROBE_SHA256 if name == PROBE else digest(body)
+            if digest(Path(name).read_bytes()) != expected:
+                raise InstallError("INSTALLED_BASELINE_CHANGED")
+        fd, temporary = tempfile.mkstemp(prefix=".bpf-candidate-", dir=FOLDER)
+        temporary_identity = os.fstat(fd)
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                os.fchmod(stream.fileno(), 0o600)
+                os.fchown(stream.fileno(), 0, 0)
+                stream.write(files[PROBE][0])
+                stream.flush()
+                os.fsync(stream.fileno())
+            if self.regular(PROBE, 0o600) != self.installed_identities[PROBE] or digest(Path(PROBE).read_bytes()) != LEGACY_PROBE_SHA256:
+                raise InstallError("INSTALLED_PROBE_CHANGED")
+            os.replace(temporary, PROBE)
+            changed.append(PROBE)
+        finally:
+            if os.path.lexists(temporary):
+                remaining = os.lstat(temporary)
+                if (remaining.st_dev, remaining.st_ino) == (temporary_identity.st_dev, temporary_identity.st_ino):
+                    os.unlink(temporary)
+
     def bpf_snapshot(self):
         properties = ("ControlGroup", "MainPID", "IPAddressAllow", "IPAddressDeny", "ActiveState")
         command = ["/usr/bin/systemctl", "show", UNIT]
@@ -319,7 +434,7 @@ class NativeHost:
         return values, namespace
 
     def verify_bpf_attachment(self):
-        """Read-only candidate; deliberately not called by install/start/activation."""
+        """Read-only completion gate after start; never changes BPF programs."""
         if os.geteuid() != 0 or platform.system() != "Linux":
             raise InstallError("BPF_ROOT_LINUX_REQUIRED")
         before = self.bpf_snapshot()
@@ -352,7 +467,7 @@ class NativeHost:
             raise InstallError("UNSAFE_FILE")
         return info.st_dev, info.st_ino
 
-    def preflight(self, package):
+    def verify_private_identity(self, package):
         if os.geteuid() != 0:
             raise InstallError("ROOT_REQUIRED")
         self.parents(FOLDER + "/id_ed25519")
@@ -368,6 +483,9 @@ class NativeHost:
         fp = "SHA256:" + base64.b64encode(hashlib.sha256(wire).digest()).decode().rstrip("=")
         if fp != package["expected_public_fingerprint"] or private != self.regular(FOLDER + "/id_ed25519", 0o600):
             raise InstallError("CLIENT_KEY_CHANGED")
+
+    def preflight(self, package):
+        self.verify_private_identity(package)
         for path in (CONFIG, KNOWN_HOSTS, PROBE, UNIT_PATH, RUNTIME):
             self.parents(path)
             if os.path.lexists(path):
@@ -434,7 +552,9 @@ class NativeHost:
 
     def verify_config(self):
         for name, (body, mode) in self.files.items():
-            self.regular(name, mode)
+            identity = self.regular(name, mode)
+            if hasattr(self, "installed_identities") and name != PROBE and identity != self.installed_identities[name]:
+                raise InstallError("INSTALLED_INODE_CHANGED")
             if Path(name).read_bytes() != body:
                 raise InstallError("INSTALLED_FILE_CHANGED")
         run(["/usr/bin/systemd-analyze", "verify", UNIT_PATH])

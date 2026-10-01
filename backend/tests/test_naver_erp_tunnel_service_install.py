@@ -57,6 +57,13 @@ class FakeHost:
     def preflight(self, value):
         self.record("preflight")
 
+    def preflight_installed(self, value, files):
+        self.record("preflight_installed")
+
+    def replace_probe(self, entries, created):
+        created.append("/etc/metainc/naver-erp-tunnel/bpf_preflight.py")
+        self.record("replace_probe")
+
     def baseline(self):
         self.events.append("baseline")
         return self.baselines.pop(0)
@@ -87,13 +94,38 @@ class FakeHost:
 
     def verify_bpf_attachment(self):
         self.record("verify_bpf_attachment")
-        raise AssertionError("candidate BPF attachment inspection must not run during install")
+        return {"ingress_program_count": 1, "egress_program_count": 1,
+                "unit_cgroup_verified": True, "network_namespace_verified": True,
+                "ip_policy_verified": True, "bpf_attachment_verified": True,
+                "packet_enforcement_verified": False}
+
+    def parent_controls(self):
+        self.record("parent_controls")
+        if self.fail_at == "parent_controls_after" and self.events.count("parent_controls") == 2:
+            raise RuntimeError("synthetic-private-exception-marker")
+        return {"be_ssh_reachable": True, "local_ssh_reachable": True}
 
     def stop(self):
         self.record("stop")
 
 
 class TunnelServiceInstallTests(unittest.TestCase):
+    def test_activation_replaces_only_probe_and_requires_all_started_checks(self):
+        installer = module()
+        host = FakeHost()
+        receipt = installer.activate_installed(package(), host=host)
+        self.assertTrue(receipt["ok"])
+        self.assertEqual(receipt["changed"], ["/etc/metainc/naver-erp-tunnel/bpf_preflight.py"])
+        self.assertTrue(receipt["activation"])
+        self.assertFalse(receipt["enabled"])
+        self.assertTrue(receipt["bpf_runtime_enforcement_verified"])
+        self.assertNotIn("create_group", host.events)
+        self.assertNotIn("publish", host.events)
+        self.assertEqual(host.events[-5:], ["verify_running", "verify_bpf_attachment", "verify_ingress",
+                                          "parent_controls", "baseline"])
+        self.assertEqual(host.events.count("parent_controls"), 2)
+        self.assertLess(host.events.index("parent_controls"), host.events.index("start"))
+
     def test_bpf_attachment_refuses_inactive_unit_before_opening_cgroup(self):
         installer = module()
         with patch.object(installer, "run", return_value="ActiveState=inactive\nMainPID=0\nControlGroup=\nIPAddressAllow=\nIPAddressDeny="), \
@@ -104,11 +136,98 @@ class TunnelServiceInstallTests(unittest.TestCase):
                 installer.NativeHost().verify_bpf_attachment()
             opening.assert_not_called()
 
-    def test_install_does_not_run_candidate_bpf_attachment_inspection(self):
+    def test_both_install_and_activation_require_shared_started_checks(self):
         installer = module()
-        host = FakeHost()
-        self.assertTrue(installer.install(package(), host=host)["ok"])
-        self.assertNotIn("verify_bpf_attachment", host.events)
+        for action in (installer.install, installer.activate_installed):
+            host = FakeHost()
+            with self.subTest(action=action.__name__):
+                receipt = action(package(), host=host)
+                self.assertTrue(receipt["ok"])
+                self.assertTrue(receipt["bpf_runtime_enforcement_verified"])
+                self.assertTrue(receipt["bpf_attachment"]["bpf_attachment_verified"])
+                self.assertFalse(receipt["bpf_attachment"]["packet_enforcement_verified"])
+                self.assertEqual(host.events[-5:], ["verify_running", "verify_bpf_attachment", "verify_ingress",
+                                                   "parent_controls", "baseline"])
+                self.assertEqual(host.events.count("parent_controls"), 2)
+                self.assertLess(host.events.index("parent_controls"), host.events.index("start"))
+
+    def test_both_paths_stop_when_bpf_or_parent_controls_fail(self):
+        installer = module()
+        for action in (installer.install, installer.activate_installed):
+            for failure in ("verify_bpf_attachment", "parent_controls", "parent_controls_after"):
+                host = FakeHost(fail_at=failure)
+                with self.subTest(action=action.__name__, failure=failure):
+                    receipt = action(package(), host=host)
+                    self.assertFalse(receipt["ok"])
+                    self.assertFalse(receipt["bpf_runtime_enforcement_verified"])
+                    self.assertIn("stop", host.events)
+                    self.assertFalse(receipt["enabled"])
+                    self.assertEqual(receipt["automatic_deletions"], 0)
+                    self.assertNotIn("synthetic-private-exception-marker", json.dumps(receipt))
+
+    def test_activation_baseline_mismatch_before_mutation_never_stops_or_replaces(self):
+        installer = module()
+        for baselines in (["b" * 64], ["a" * 64, "b" * 64]):
+            host = FakeHost(baselines=baselines)
+            with self.subTest(check=len(baselines)):
+                with self.assertRaises(installer.InstallError):
+                    installer.activate_installed(package(), host=host)
+                self.assertNotIn("stop", host.events)
+                self.assertNotIn("replace_probe", host.events)
+
+    def test_activation_post_mutation_failures_stop_without_deleting_or_enabling(self):
+        installer = module()
+        for failure in ("replace_probe", "verify_config", "start", "verify_running", "verify_ingress"):
+            host = FakeHost(fail_at=failure)
+            with self.subTest(failure=failure):
+                receipt = installer.activate_installed(package(), host=host)
+                self.assertFalse(receipt["ok"])
+                self.assertEqual(receipt["changed"], ["/etc/metainc/naver-erp-tunnel/bpf_preflight.py"])
+                self.assertIn("stop", host.events)
+                self.assertFalse(receipt["enabled"])
+                self.assertEqual(receipt["automatic_deletions"], 0)
+
+    def test_activation_entered_replacement_failure_stops_even_without_changed_file_receipt(self):
+        installer = module()
+        class RefuseReplacement(FakeHost):
+            def replace_probe(self, entries, created):
+                self.record("replace_probe")
+        host = RefuseReplacement(fail_at="replace_probe")
+        receipt = installer.activate_installed(package(), host=host)
+        self.assertFalse(receipt["ok"])
+        self.assertEqual(receipt["changed"], [])
+        self.assertIn("stop", host.events)
+
+    def test_activation_preserves_legacy_probe_pin_and_stops_on_post_mutation_baseline_change(self):
+        installer = module()
+        self.assertEqual(installer.LEGACY_PROBE_SHA256,
+                         "6c20ea88447430315141f327901cbe241ea3ccc692125d399850ef2c4a4bb264")
+        for baselines in (["a" * 64, "a" * 64, "b" * 64],
+                          ["a" * 64, "a" * 64, "a" * 64, "b" * 64]):
+            host = FakeHost(baselines=baselines)
+            receipt = installer.activate_installed(package(), host=host)
+            self.assertFalse(receipt["ok"])
+            self.assertIn("stop", host.events)
+            self.assertFalse(receipt["bpf_runtime_enforcement_verified"])
+
+    def test_native_parent_controls_require_both_fixed_ssh_endpoints_without_payload(self):
+        installer = module()
+        class Connection:
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                pass
+        with patch.object(installer.socket, "create_connection", side_effect=[Connection(), Connection()]) as connect:
+            result = installer.NativeHost().parent_controls()
+        self.assertEqual([call.args for call in connect.call_args_list],
+                         [(("1.234.23.117", 22),), (("127.0.0.1", 22),)])
+        self.assertEqual([call.kwargs for call in connect.call_args_list], [{"timeout": 3}, {"timeout": 3}])
+        self.assertEqual(result, {"be_ssh_reachable": True, "local_ssh_reachable": True})
+        for failures in ([TimeoutError("private-detail")], [Connection(), TimeoutError("private-detail")]):
+            with patch.object(installer.socket, "create_connection", side_effect=failures) as connect:
+                with self.assertRaises(OSError):
+                    installer.NativeHost().parent_controls()
+                self.assertEqual(connect.call_count, len(failures))
 
     def attachment_fixture(self, *, changes=None, cgroup=None, mismatch_namespace=False,
                            controllers=True, recheck_changes=None, expect_error=False):
@@ -443,17 +562,19 @@ class TunnelServiceInstallTests(unittest.TestCase):
         self.assertEqual(stderr.getvalue(), "")
         return code, attempts
 
-    def test_bpf_probe_requires_allowed_be_and_explicit_kernel_denial(self):
-        for denied in (errno.EACCES, errno.EPERM):
-            with self.subTest(denied=denied):
-                code, attempts = self.run_bpf_probe(deny_error=OSError(denied, "private-detail"))
+    def test_bpf_probe_accepts_denial_or_timeout_only_as_candidate_for_parent_checks(self):
+        for denied in (OSError(errno.EACCES, "private-detail"), OSError(errno.EPERM, "private-detail"),
+                       TimeoutError("private-detail")):
+            with self.subTest(denied=type(denied).__name__):
+                code, attempts = self.run_bpf_probe(deny_error=denied)
                 self.assertEqual(code, 0)
                 self.assertEqual(attempts, [("1.234.23.117", 22), ("127.0.0.1", 22)])
 
-    def test_bpf_probe_refuses_allowed_failure_refusal_timeout_or_unblocked_loopback(self):
+    def test_bpf_probe_refuses_allowed_failure_refusal_or_unblocked_loopback(self):
         for options in ({"allow_error": OSError(errno.ECONNREFUSED, "private-detail")},
+                        {"allow_error": TimeoutError("private-detail")},
                         {"deny_error": OSError(errno.ECONNREFUSED, "private-detail")},
-                        {"deny_error": TimeoutError("private-detail")}, {}):
+                        {}):
             with self.subTest(options=sorted(options)):
                 code, _ = self.run_bpf_probe(**options)
                 self.assertNotEqual(code, 0)

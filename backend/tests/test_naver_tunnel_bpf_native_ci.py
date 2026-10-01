@@ -1,5 +1,6 @@
 """로컬 합성 검사만 실행한다. systemd 서비스는 생성하지 않는다."""
 import importlib.util
+from contextlib import nullcontext
 import os
 from pathlib import Path
 import socket
@@ -17,6 +18,39 @@ def load():
 
 
 class HarnessTests(unittest.TestCase):
+    def test_actual_preflight_check_uses_only_native_fixture_connections(self):
+        m = load()
+        calls = []
+        def connect(address, timeout):
+            calls.append((address, timeout))
+            if address == ("127.0.0.1", 12345):
+                raise TimeoutError()
+            self.assertEqual(("127.0.0.2", 12346), address)
+            return nullcontext()
+        with patch.object(m.socket, "create_connection", side_effect=connect):
+            self.assertTrue(m.preflight_fixture_check(12345, 12346))
+        self.assertEqual([(("127.0.0.2", 12346), 2), (("127.0.0.1", 12345), 2)], calls)
+        with patch.object(m.socket, "create_connection", return_value=nullcontext()):
+            self.assertFalse(m.preflight_fixture_check(12345, 12346))
+        with patch.object(m.socket, "create_connection", side_effect=ConnectionRefusedError()):
+            self.assertFalse(m.preflight_fixture_check(12345, 12346))
+
+    def test_regression_requires_controls_context_both_bpf_directions_and_old_guard_false(self):
+        m = load()
+        good = dict(observed={"deny": "timeout", "allow": "connected", "preflight_check": True},
+                    before=["connected", "connected"], after=["connected", "connected"],
+                    cgroup_matches=True, same_netns=True,
+                    syscall_bpf={"ingress_program_count": 1, "egress_program_count": 1})
+        self.assertTrue(m.regression_verified(**good))
+        for key, value in (("before", ["timeout", "connected"]), ("after", ["connected", "timeout"]),
+                           ("cgroup_matches", False), ("same_netns", False),
+                           ("syscall_bpf", {"ingress_program_count": 0, "egress_program_count": 1}),
+                           ("syscall_bpf", {"ingress_program_count": 1, "egress_program_count": 0}),
+                           ("observed", {"deny": "eperm", "allow": "connected", "preflight_check": True}),
+                           ("observed", {"deny": "timeout", "allow": "connected", "preflight_check": False})):
+            with self.subTest(key=key, value=value):
+                self.assertFalse(m.regression_verified(**{**good, key: value}))
+
     def test_cleanup_accepts_already_collected_unit_but_not_other_errors(self):
         m = load()
         unit = "naver-tunnel-bpf-ci-" + "a" * 12 + ".service"

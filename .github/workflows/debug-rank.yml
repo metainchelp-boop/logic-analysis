@@ -7,13 +7,13 @@ on:
   workflow_dispatch:
     inputs:
       ad_prepare:
-        description: 'inspect 조회 / prepare 빈 폴더 / tunnel-keygen 새 터널키 / tunnel-install 전용 SSH 서비스. 앱 배포 없음.'
+        description: 'inspect 조회 / prepare 빈 폴더 / tunnel-keygen 새 터널키 / tunnel-install 설치 / tunnel-activate 검증 후 활성화. 앱 배포 없음.'
         type: choice
-        options: ['off', inspect, prepare, tunnel-keygen, tunnel-install, tunnel-native]
+        options: ['off', inspect, prepare, tunnel-keygen, tunnel-install, tunnel-activate, tunnel-native]
         required: false
         default: 'off'
       ad_expected_baseline:
-        description: 'prepare/keygen: 기준 SHA-256. tunnel-install만: baseline·공개키지문·BE공개hostkey·꺼짐확인 4필드 JSON. 개인키 금지.'
+        description: 'prepare/keygen: 기준 SHA-256. tunnel-install/activate: baseline·공개키지문·BE공개hostkey·꺼짐확인 4필드 JSON. 개인키 금지.'
         required: false
         default: ''
       collector:
@@ -505,7 +505,7 @@ jobs:
             PY
 
   ad-tunnel-install:
-    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && inputs.ad_prepare == 'tunnel-install' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && (inputs.ad_prepare == 'tunnel-install' || inputs.ad_prepare == 'tunnel-activate') }}
     permissions:
       contents: read
     concurrency:
@@ -540,7 +540,7 @@ jobs:
                       or os.environ.get('AD_RUN_REF') != 'refs/heads/codex/ad-deploy-prep-20261001'):
                   raise ValueError('invalid_context')
               inputs = json.loads(os.environ['AD_RUN_INPUTS'], object_pairs_hook=unique_pairs)
-              if (inputs.get('ad_prepare') != 'tunnel-install' or any(value != 'off'
+              if (inputs.get('ad_prepare') not in ('tunnel-install', 'tunnel-activate') or any(value != 'off'
                       for name, value in inputs.items() if name not in ('ad_prepare', 'ad_expected_baseline'))):
                   raise ValueError('invalid_mode')
               raw = inputs['ad_expected_baseline']
@@ -556,7 +556,7 @@ jobs:
               probe = path.with_name('naver_erp_tunnel_bpf_preflight.py').read_bytes()
               if not 0 < len(installer) <= 131072 or not 0 < len(probe) <= 16384:
                   raise ValueError('invalid_source_size')
-              bundle = {'package': package, 'installer_source': base64.b64encode(installer).decode('ascii'),
+              bundle = {'operation': inputs['ad_prepare'], 'package': package, 'installer_source': base64.b64encode(installer).decode('ascii'),
                         'probe_source': base64.b64encode(probe).decode('ascii')}
               encoded = base64.b64encode(json.dumps(bundle, separators=(',', ':')).encode()).decode('ascii')
               with open(os.environ['GITHUB_ENV'], 'a') as output:
@@ -573,7 +573,7 @@ jobs:
           set -euo pipefail
           python3 -m unittest discover -s backend/tests -p 'test_ad_tunnel_*.py' -q
           python3 -m unittest discover -s backend/tests -p 'test_naver_erp_tunnel_service_install.py' -q
-      - name: 신규 터널 서비스만 설치 — 기존 앱 재시작 없음
+      - name: 신규 터널 서비스만 설치 또는 검증 활성화 — 기존 앱 재시작 없음
         uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
         env:
           NAVER_TUNNEL_INSTALL_BUNDLE_B64: ${{ env.NAVER_TUNNEL_INSTALL_BUNDLE_B64 }}
@@ -596,19 +596,24 @@ jobs:
                 if not 0 < len(encoded) <= 280000:
                     raise ValueError('invalid_bundle')
                 bundle = json.loads(base64.b64decode(encoded, validate=True))
-                if not isinstance(bundle, dict) or set(bundle) != {'package', 'installer_source', 'probe_source'}:
+                if not isinstance(bundle, dict) or set(bundle) != {'operation', 'package', 'installer_source', 'probe_source'}:
                     raise ValueError('invalid_bundle_fields')
+                if bundle['operation'] not in ('tunnel-install', 'tunnel-activate'):
+                    raise ValueError('invalid_operation')
                 installer = base64.b64decode(bundle['installer_source'], validate=True)
                 probe = base64.b64decode(bundle['probe_source'], validate=True)
                 if not 0 < len(installer) <= 131072 or not 0 < len(probe) <= 16384:
                     raise ValueError('invalid_source_size')
-                stage = 'install'
+                stage = 'activate' if bundle['operation'] == 'tunnel-activate' else 'install'
                 module = types.ModuleType('trusted_tunnel_installer')
                 # 공개 입력과 소스는 고정 가지 checkout에서만 온다. 원격 임시 소스파일 없음.
                 with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                     exec(compile(installer, '<trusted-tunnel-installer>', 'exec'), module.__dict__)
                     module.validate_package(bundle['package'])
-                    result = module.install(bundle['package'], probe_source=probe)
+                    if bundle['operation'] == 'tunnel-activate':
+                        result = module.activate_installed(bundle['package'], probe_source=probe)
+                    else:
+                        result = module.install(bundle['package'], probe_source=probe)
                 if not isinstance(result, dict) or type(result.get('ok')) is not bool:
                     raise ValueError('invalid_receipt')
             except Exception as error:

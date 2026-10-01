@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fixed in-unit network guard. No authentication, payload, DNS or output."""
+"""Candidate only: parent must verify BPF attachment, controls and ingress."""
 import errno
 import socket
 
@@ -14,7 +14,9 @@ def check():
         with socket.create_connection(("127.0.0.1", 22), timeout=3):
             pass
     except OSError as error:
-        return error.errno in (errno.EACCES, errno.EPERM)
+        # TCP cgroup-SKB drops may surface as timeout, not an immediate errno.
+        # This permits the parent verification stage; it does NOT prove policy.
+        return error.errno in (errno.EACCES, errno.EPERM) or isinstance(error, TimeoutError)
     return False
 
 

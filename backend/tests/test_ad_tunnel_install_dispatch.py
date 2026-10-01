@@ -29,7 +29,8 @@ class InstallDispatchTests(unittest.TestCase):
         guard = job().splitlines()[0]
         for condition in ("github.event_name == 'workflow_dispatch'",
                           "github.ref == 'refs/heads/codex/ad-deploy-prep-20261001'",
-                          "inputs.ad_prepare == 'tunnel-install'"):
+                          "inputs.ad_prepare == 'tunnel-install'",
+                          "inputs.ad_prepare == 'tunnel-activate'"):
             self.assertIn(condition, guard)
         self.assertIn("persist-credentials: false", job())
         self.assertIn("contents: read", job())
@@ -58,12 +59,20 @@ class InstallDispatchTests(unittest.TestCase):
         name, encoded = body.strip().split("=", 1)
         self.assertEqual(name, "NAVER_TUNNEL_INSTALL_BUNDLE_B64")
         bundle = json.loads(base64.b64decode(encoded, validate=True))
-        self.assertEqual(set(bundle), {"package", "installer_source", "probe_source"})
+        self.assertEqual(set(bundle), {"operation", "package", "installer_source", "probe_source"})
+        self.assertEqual(bundle["operation"], "tunnel-install")
         self.assertEqual(bundle["package"], package())
         for field, filename in (("installer_source", "naver_erp_tunnel_service_install.py"),
                                 ("probe_source", "naver_erp_tunnel_bpf_preflight.py")):
             self.assertEqual(base64.b64decode(bundle[field], validate=True),
                 (WORKFLOW.parents[2] / "backend/tools" / filename).read_bytes())
+
+    def test_activation_uses_same_public_package_with_explicit_operation(self):
+        result, body = self.package_locally({"ad_prepare": "tunnel-activate"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        bundle = json.loads(base64.b64decode(body.strip().split("=", 1)[1], validate=True))
+        self.assertEqual(bundle["operation"], "tunnel-activate")
+        self.assertEqual(bundle["package"], package())
 
     def test_input_rejections_have_no_payload_or_raw_error(self):
         examples = [({"collector": "on"}, {}), ({"ad_prepare": "inspect"}, {}),
@@ -82,8 +91,8 @@ class InstallDispatchTests(unittest.TestCase):
                 self.assertEqual(result.stderr, "")
                 self.assertEqual(result.stdout, "NAVER_TUNNEL_INSTALL_INPUT_REJECTED\n")
 
-    def remote(self, source, *, malformed=False):
-        bundle = {"package": package(), "installer_source": base64.b64encode(source.encode()).decode(),
+    def remote(self, source, *, malformed=False, operation="tunnel-install"):
+        bundle = {"operation": operation, "package": package(), "installer_source": base64.b64encode(source.encode()).decode(),
                   "probe_source": base64.b64encode(b"synthetic-probe").decode()}
         encoded = "invalid-base64" if malformed else base64.b64encode(json.dumps(bundle).encode()).decode()
         output, errors = io.StringIO(), io.StringIO()
@@ -111,6 +120,22 @@ def install(package, *, probe_source):
         code, result = self.remote(source)
         self.assertEqual(code, 0)
         self.assertEqual(result, {"ok": True, "containers_unchanged": True})
+
+    def test_activation_calls_only_bounded_activation_function(self):
+        source = '''
+def validate_package(package):
+    assert len(package) == 4
+def install(*args, **kwargs):
+    raise AssertionError("wrong_operation")
+def activate_installed(package, *, probe_source):
+    assert probe_source == b"synthetic-probe"
+    return {"ok": True, "activated": True}
+'''
+        code, result = self.remote(source, operation="tunnel-activate")
+        self.assertEqual((code, result), (0, {"ok": True, "activated": True}))
+        code, result = self.remote(source, operation="__dict__")
+        self.assertEqual(code, 1)
+        self.assertEqual(result["stage"], "decode")
 
     def test_remote_errors_and_non_success_receipts_fail_without_raw_detail(self):
         code, result = self.remote("raise ValueError('private-marker')")

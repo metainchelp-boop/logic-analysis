@@ -12,6 +12,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import uuid
 
 FLAGS = {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted",
@@ -61,6 +62,33 @@ def connect_kind(address, port):
 def strict_errno_guard(kind):
     # 기존 errno-only 판정의 재현값이며, timeout을 운영 통과로 바꾸지 않는다.
     return kind in {"eperm", "eacces"}
+
+
+def preflight_fixture_check(deny_port, allow_port):
+    """실제 check()는 유지하고 네트워크 경계의 목적지만 합성 listener로 치환한다."""
+    if any(type(port) is not int or not 1 <= port <= 65535 for port in (deny_port, allow_port)):
+        raise HarnessError("INVALID_FIXTURE_PORT")
+    specification = importlib.util.spec_from_file_location(
+        "fixture_preflight", Path(__file__).with_name("naver_erp_tunnel_bpf_preflight.py"))
+    preflight = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(preflight)
+    native_connect = socket.create_connection
+    targets = {("1.234.23.117", 22): ("127.0.0.2", allow_port), ("127.0.0.1", 22): ("127.0.0.1", deny_port)}
+    def fixture_connect(address, timeout):
+        if address not in targets or timeout != 3:
+            raise HarnessError("UNEXPECTED_PREFLIGHT_ENDPOINT")
+        return native_connect(targets[address], timeout=2)
+    # 전역 socket 모듈은 수정하지 않는다. 실제 소켓 생성 결과도 모의하지 않는다.
+    preflight.socket = SimpleNamespace(create_connection=fixture_connect)
+    return preflight.check()
+
+
+def regression_verified(*, observed, before, after, cgroup_matches, same_netns, syscall_bpf):
+    return (before == after == ["connected", "connected"] and cgroup_matches is True and same_netns is True
+            and observed.get("allow") == "connected" and observed.get("deny") == "timeout"
+            and observed.get("preflight_check") is True and not strict_errno_guard(observed.get("deny"))
+            and all(type(syscall_bpf.get(key)) is int and syscall_bpf[key] > 0
+                    for key in ("ingress_program_count", "egress_program_count")))
 
 
 def unit_command(unit, endpoint, deny_port, allow_port):
@@ -114,7 +142,8 @@ def stop_owned_unit(unit, invocation):
 
 def probe(endpoint, deny_port, allow_port):
     require_ci()
-    result = {"deny": connect_kind("127.0.0.1", deny_port), "allow": connect_kind("127.0.0.2", allow_port)}
+    result = {"deny": connect_kind("127.0.0.1", deny_port), "allow": connect_kind("127.0.0.2", allow_port),
+              "preflight_check": preflight_fixture_check(deny_port, allow_port)}
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as channel:
         channel.settimeout(3)
         channel.connect(endpoint)
@@ -188,13 +217,14 @@ def collect():
                         os.close(descriptor)
                     after = controls()
                     connection.sendall(b"1")
-            if not cgroup_matches or not same_netns or after != before or observed.get("allow") != "connected":
-                raise HarnessError("CONTROL_OR_CONTEXT_MISMATCH")
+            if not regression_verified(observed=observed, before=before, after=after, cgroup_matches=cgroup_matches,
+                                       same_netns=same_netns, syscall_bpf=syscall_bpf):
+                raise HarnessError("NATIVE_PREFLIGHT_REGRESSION_NOT_CONFIRMED")
             return {"ok": True, "parent_before": before, "parent_after": after, "probe": observed,
                     "strict_errno_guard_passes": strict_errno_guard(observed.get("deny")),
                     "timeout_observed": observed.get("deny") == "timeout", "cgroup_matches": cgroup_matches,
                     "same_network_namespace": same_netns, "bpf": bpf, "syscall_bpf": syscall_bpf,
-                    "production_policy_verified": False}
+                    "native_preflight_regression_verified": True, "production_policy_verified": False}
     finally:
         signal.alarm(0)
         # 임의/기존 unit는 정리하지 않는다. 동일 InvocationID의 이번 새 unit만 stop한다.
