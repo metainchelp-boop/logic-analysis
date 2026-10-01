@@ -49,6 +49,11 @@ log = logging.getLogger("naver_engine.web")
 
 PREFIX = "/api/naver-auto"
 GET, POST = "GET", "POST"            # 들어오는 요청의 방식(이 파일은 나가는 요청을 만들지 않는다)
+# 제한판은 새 경로가 추가돼도 자동으로 열지 않는다. 로그인/갱신은 기술 쓰기만 허용한다.
+_VERIFICATION_GETS = frozenset({"/me", "/board", "/links/pending", "/ended", "/unlinked",
+                               "/bell", "/settings", "/health"})
+_VERIFICATION_SESSIONS = frozenset({"/session", "/session/refresh"})
+_VERIFICATION_CLIENT = re.compile(r"/clients/[0-9]{1,18}")
 BODY_MAX = 64 * 1024                 # ③ 중계 상한과 같다(S12)
 QUERY_MAX = 2048
 LOGIN_WINDOW = 60.0                  # 로그인은 이 초 안에
@@ -229,10 +234,14 @@ class App:
                  signer: SE.TokenSigner, profiles: EP.ErpProfileReader, clock: Optional[Callable[[], datetime]] = None,
                  previewer: Optional[Callable[[Any], List[str]]] = None, login_max: int = LOGIN_MAX,
                  login_window: float = LOGIN_WINDOW, monotonic: Optional[Callable[[], float]] = None,
-                 login_source_max: int = LOGIN_SOURCE_MAX, login_token_max: int = LOGIN_TOKEN_MAX) -> None:
+                 login_source_max: int = LOGIN_SOURCE_MAX, login_token_max: int = LOGIN_TOKEN_MAX,
+                 owner_verification: bool = False) -> None:
         if not isinstance(signer, SE.TokenSigner):
             raise TypeError("signer 는 TokenSigner 여야 합니다(비밀값 없이 시작하지 않는다)")
+        if type(owner_verification) is not bool:
+            raise TypeError("owner_verification 은 참/거짓이어야 합니다")
         self._open_read, self._write_fn, self._signer, self._profiles = open_read, write, signer, profiles
+        self._owner_verification = owner_verification
         self._clock = clock or (lambda: datetime.now(KST))
         self._previewer = previewer
         self._login_max, self._login_window, self._login_source_max = login_max, login_window, login_source_max
@@ -293,6 +302,12 @@ class App:
         if not path.startswith(PREFIX + "/"):
             raise HttpError(404, "not-found")
         sub = path[len(PREFIX):]
+        if self._owner_verification:
+            allowed = ((method == GET and (sub in _VERIFICATION_GETS or _VERIFICATION_CLIENT.fullmatch(sub)))
+                       or (method == POST and sub in _VERIFICATION_SESSIONS))
+            if not allowed:
+                # 본문 파싱·조직 조회·감사·handler 호출 전 차단: 업무 쓰기나 미리보기 호출 0.
+                raise HttpError(403, "verification-read-only")
         found = [(r, m) for r in ROUTES for m in (r.pattern.fullmatch(sub),) if m is not None]
         if not found:
             raise HttpError(404, "not-found")
@@ -332,6 +347,8 @@ class App:
             scope = SC.narrowed_scope_of(org, who) if claims.narrowed else SC.scope_of(org, who)
             if scope.kind == SC.NONE:
                 raise HttpError(401, "no-scope")   # 퇴사 · 조직 표에서 빠짐 — 다음 요청부터 0곳
+            if self._owner_verification and (who != 0 or scope.kind != SC.ALL):
+                raise HttpError(403, "owner-only")
             return Viewer(who, scope, claims, store, org)
         except BaseException:
             store.close()
@@ -452,6 +469,9 @@ class App:
         if SC.scope_of(org, prof.idx).kind == SC.NONE:
             self._audit(prof.idx, "login", "session", None, "no-scope", now, required=False)
             raise HttpError(403, "no-scope")
+        if self._owner_verification and (prof.idx != 0 or SC.scope_of(org, prof.idx).kind != SC.ALL):
+            self._audit(prof.idx, "login", "session", None, "owner-only", now, required=False)
+            raise HttpError(403, "owner-only")
         narrowed = SC.profile_narrows(org, prof.idx, prof.says_manager if prof.team_known else None, prof.team_idx)
         token = self._signer.issue(prof.idx, now, narrowed=narrowed)
         self._audit(prof.idx, "login", "session", None, "narrowed" if narrowed else "ok", now, required=True)

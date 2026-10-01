@@ -1,13 +1,28 @@
 import io
 from threading import Event
 from unittest import TestCase
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 from naver_runtime import __main__ as M
 from naver_runtime.config import Config
 
 
 class WebWiringTest(TestCase):
+    def test_runtime_always_assembles_owner_verification_web(self):
+        stop = Event()
+        stop.set()
+        env = {'SSO_NAVER_CONTROL_CLIENT_KEY': '0123456789abcdef' * 4,
+               'NAVER_AUTO_TOKEN_SECRET': 'local-test-token-signing-value-000000000000'}
+        with patch.object(M, 'Writer', return_value=MagicMock()), \
+             patch.object(M, 'UnixServer', return_value=MagicMock()) as server:
+            self.assertEqual(M.run(Config('/tmp/synthetic/data/db', '/tmp/synthetic/socket/api',
+                                          web_enabled=True), env, stop=stop), 0)
+        app = server.call_args.args[1]
+        status = []
+        app({'PATH_INFO': '/api/naver-auto/links/preview', 'REQUEST_METHOD': 'POST',
+             'wsgi.input': io.BytesIO()}, lambda s, h: status.append(int(s[:3])))
+        self.assertEqual(status, [403])
+
     def test_switch_can_be_configured_but_default_is_off(self):
         self.assertFalse(Config.from_env({}).web_enabled)
         self.assertTrue(Config.from_env({'NAVER_ENGINE_WEB_ENABLED':'true'}).web_enabled)

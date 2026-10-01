@@ -166,7 +166,7 @@ def run(config, env, *, stop=None):
         scheduler = Scheduler(config, writer.proxy, clock=clock.now, **options)
         # 읽기 연결은 요청 스레드에서 열고 닫으며, 쓰기는 기존 단일 소유자 큐만 지난다.
         web = WEB.App(open_read=lambda: S.open_reader(config.db), write=writer.call,
-                      signer=signer, profiles=profiles) if config.web_enabled else None
+                      signer=signer, profiles=profiles, owner_verification=True) if config.web_enabled else None
         with UnixServer(config.socket, combine_web(status, web)):
             while not stop.is_set():
                 with state_lock:
