@@ -1,8 +1,10 @@
 import importlib.util
 import hashlib
+import io
 import json
 import os
 import tempfile
+import tarfile
 import types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -147,17 +149,28 @@ class UpgradeTest(unittest.TestCase):
                 validate_package=lambda package:None,trusted_dir=lambda *a,**k:None,write_new=write,unix_request=request)
             release.received_ciphertext=lambda *args:b'synthetic-ciphertext'
             release.trusted_private_file=lambda *args:None
-            release.validate_payload=lambda *args:(b'synthetic-source',[
+            source_files={name:b'new fixture compose' for name in
+                ('compose.naver-engine.yml','compose.naver-relay.yml','deploy/naver-engine-backup.override.yml')}
+            tar_bytes=io.BytesIO()
+            with tarfile.open(fileobj=tar_bytes,mode='w:gz') as archive:
+                for name,body in source_files.items():
+                    member=tarfile.TarInfo(name);member.size=len(body);member.mode=0o644
+                    archive.addfile(member,io.BytesIO(body))
+            source_body=tar_bytes.getvalue()
+            release.validate_payload=lambda *args:(source_body,[
                 {'path':str(secret/name),'uid':uid,'gid':gid,'content':'CHANGED' if failure=='secret' else 'PRIVATE_CONFIG_SENTINEL'}
                 for name,(uid,gid) in owner_map.items()])
-            release.source_members=lambda *args:(Mock(),[])
+            def source_members(body):
+                archive=tarfile.open(fileobj=io.BytesIO(body),mode='r:gz')
+                return archive,archive.getmembers()
+            release.source_members=source_members
             def extract(source,path):
                 path.mkdir();(path/'deploy').mkdir()
                 for file in ('compose.naver-engine.yml','compose.naver-relay.yml','deploy/naver-engine-backup.override.yml'):
                     (path/file).write_bytes(b'new fixture compose')
             release.extract_source=extract
             old_files=None
-            for source in ((M.OLD_COMMIT,) if mode=='prepare' else (M.OLD_COMMIT,commit)):
+            for source in ((M.OLD_COMMIT,) if mode in ('prepare','retry') else (M.OLD_COMMIT,commit)):
                 path=root/'releases'/('naver-'+source);path.mkdir();(path/'deploy').mkdir()
                 files={str(path/'deploy/naver-engine-backup.override.yml')}
                 files.update(str(path/(prefix+name+suffix)) for name in ('engine','relay') for prefix,suffix in
@@ -182,6 +195,18 @@ class UpgradeTest(unittest.TestCase):
             request_file=root/'bootstrap-request.json'
             if failure=='replay':
                 request_file.write_bytes(b'prior-request')
+            if mode=='retry':
+                path=root/'releases'/('naver-'+commit)
+                extract(source_body,path)
+                for name in ('engine','relay'):
+                    body='services:\n  naver-'+name+':\n    image: metainc/naver-'+name+':'+commit+'\n    environment:\n'
+                    body+=('      NAVER_ENGINE_BOOTSTRAP_REQUEST: /var/lib/naver-engine/bootstrap-request.json\n'
+                           if name=='engine' else '      NAVER_AUTO_WEB: "on"\n')
+                    (path/('preview-'+name+'.override.yml')).write_text(body)
+                if failure=='source_content': (path/'compose.naver-engine.yml').write_bytes(b'changed')
+                if failure=='source_extra': (path/'extra').write_bytes(b'not sealed')
+                if failure=='source_missing': (path/'compose.naver-engine.yml').unlink()
+                if failure=='override_changed': (path/'preview-engine.override.yml').write_bytes(b'changed')
             now=datetime.now(timezone.utc)
             request_data={'request_id':'9'*32,'hold_id':42,'hold_sha256':'8'*64,'expected_rows':1437,
                           'approved_by':0,'expires_at':(now+timedelta(minutes=20)).isoformat(),'max_seconds':300}
@@ -191,7 +216,7 @@ class UpgradeTest(unittest.TestCase):
                     patch.object(M,'read_file',side_effect=lambda path,**kwargs:Path(path).read_bytes()), \
                     patch.object(M.pwd,'getpwnam',return_value=types.SimpleNamespace(pw_gid=33)):
                 try:
-                    result=M.prepare(package,host,release,life) if mode=='prepare' else M.apply({'release':package,'request':request_data},host,release,life)
+                    result=M.prepare(package,host,release,life) if mode in ('prepare','retry') else M.apply({'release':package,'request':request_data},host,release,life)
                 except Exception as error:
                     result=error
             units_restored=all(p.read_bytes()==body for p,body in old_files.items())
@@ -239,12 +264,77 @@ class UpgradeTest(unittest.TestCase):
         self.assertFalse(any(args[:2] in (['/usr/bin/systemctl','stop'],['/usr/bin/systemctl','start']) for args in commands))
         self.assertFalse(any(path.parent.name in ('units','secrets') for path,_ in writes))
 
+    def test_prepare_check_config_cannot_emit_events_into_live_compose_project(self):
+        result,commands,_,_,_=self.scenario(mode='prepare')
+        self.assertIs(result['ok'],True)
+        check=next(args for args in commands if 'check-config' in args)
+        project=check[check.index('--project-name')+1]
+        self.assertRegex(project, r'^naver-check-b{40}-[0-9a-f]{32}$')
+        self.assertIn('--no-deps',check)
+        self.assertIn('--rm',check)
+        self.assertEqual(check[-5:],['naver-engine','python','-m','naver_runtime','check-config'])
+
+    def test_interrupted_prepare_reuses_only_exact_sealed_source_without_rewriting_it(self):
+        result,commands,writes,restored,state=self.scenario(mode='retry')
+        self.assertIsInstance(result,dict,str(result))
+        self.assertIs(result['ok'],True)
+        self.assertTrue(restored)
+        self.assertEqual(state,{'engine':M.OLD_COMMIT,'relay':M.OLD_COMMIT})
+        self.assertEqual([path.name for path,_ in writes],['preview-'+'b'*40+'.json'])
+        self.assertFalse(any(args[:2] in (['/usr/bin/systemctl','stop'],['/usr/bin/systemctl','start']) for args in commands))
+
+    def test_interrupted_prepare_refuses_missing_extra_or_changed_files_before_build_or_write(self):
+        for reason in ('source_content','source_extra','source_missing','override_changed'):
+            with self.subTest(reason=reason):
+                result,commands,writes,_,_=self.scenario(reason,mode='retry')
+                self.assertIsInstance(result,ValueError)
+                self.assertTrue(str(result).startswith('SOURCE_'))
+                self.assertEqual(writes,[])
+                self.assertFalse(any(args[:2]==['docker','build'] or 'check-config' in args for args in commands))
+
     def test_prepare_rejects_changed_runtime_secret_before_any_new_file_or_build(self):
         result,commands,writes,_,_=self.scenario('secret',mode='prepare')
         self.assertEqual(str(result),'RUNTIME_SECRET_CHANGED')
         self.assertEqual(writes,[])
         self.assertFalse(any(args[:2]==['docker','build'] for args in commands))
 
+
+class InterruptedTreeTest(unittest.TestCase):
+    def test_real_files_require_exact_permissions_no_links_and_accept_empty_sealed_init(self):
+        spec=importlib.util.spec_from_file_location('release_tree_fixture',Path(__file__).parents[1]/'tools/naver_preview_release.py')
+        release=importlib.util.module_from_spec(spec);spec.loader.exec_module(release)
+        source=io.BytesIO()
+        with tarfile.open(fileobj=source,mode='w:gz') as archive:
+            for name,body in (('naver_runtime/__init__.py',b''),('naver_runtime/check.py',b'pass\n')):
+                member=tarfile.TarInfo(name);member.size=len(body);member.mode=0o644
+                archive.addfile(member,io.BytesIO(body))
+        actual_read=M.read_file
+        actual_dir=release.trusted_dir
+        for change in (None,'mode','hardlink','symlink','directory_symlink','directory_writable','extra_dir'):
+            with self.subTest(change=change),tempfile.TemporaryDirectory() as folder:
+                parent=Path(folder).resolve();destination=parent/'source'
+                release.extract_source(source.getvalue(),destination)
+                overrides={'engine':'exact-engine','relay':'exact-relay'}
+                for name,body in overrides.items():
+                    path=destination/('preview-'+name+'.override.yml')
+                    path.write_text(body);path.chmod(0o600)
+                target=destination/'naver_runtime/check.py'
+                if change=='mode': target.chmod(0o600)
+                if change=='hardlink': os.link(target,parent/'hardlink')
+                if change=='symlink': target.unlink();target.symlink_to(destination/'naver_runtime/__init__.py')
+                if change=='directory_symlink':
+                    (destination/'naver_runtime').rename(parent/'moved')
+                    (destination/'naver_runtime').symlink_to(parent/'moved',target_is_directory=True)
+                if change=='directory_writable': (destination/'naver_runtime').chmod(0o777)
+                if change=='extra_dir': (destination/'extra').mkdir()
+                # Only the test owner's uid/gid differ; actual lstat/open/mode/link checks run.
+                with patch.object(M,'read_file',side_effect=lambda path,**kw:actual_read(path,uid=os.getuid(),gid=os.getgid(),**kw)), \
+                     patch.object(release,'trusted_dir',side_effect=lambda path,**kw:actual_dir(path,uid=os.getuid(),gid=os.getgid(),**kw)):
+                    if change is None:
+                        M.verify_interrupted_source(source.getvalue(),destination,overrides,release)
+                    else:
+                        with self.assertRaises(ValueError):
+                            M.verify_interrupted_source(source.getvalue(),destination,overrides,release)
 
 if __name__ == '__main__':
     unittest.main()

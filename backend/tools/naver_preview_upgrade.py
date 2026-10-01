@@ -7,6 +7,7 @@ import pwd
 import re
 import stat
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 
 OLD_COMMIT = '607f537b4dad65ae2e937042443d3d727155de1a'
@@ -38,7 +39,7 @@ def validate_request(request, now=None):
     return request
 
 
-def read_file(path, *, uid=0, gid=0, mode=None, maximum=3*1024*1024):
+def read_file(path, *, uid=0, gid=0, mode=None, maximum=3*1024*1024, minimum=1):
     path = Path(path)
     if not path.is_absolute() or path.resolve() != path:
         raise ValueError('FILE_PATH')
@@ -47,7 +48,7 @@ def read_file(path, *, uid=0, gid=0, mode=None, maximum=3*1024*1024):
         info = os.fstat(source.fileno())
         if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or (info.st_uid, info.st_gid) != (uid, gid)
                 or info.st_mode & 0o022 or (mode is not None and stat.S_IMODE(info.st_mode) != mode)
-                or not 0 < info.st_size <= maximum):
+                or not minimum <= info.st_size <= maximum):
             raise ValueError('FILE_POLICY')
         return source.read(maximum+1)
 
@@ -115,6 +116,43 @@ def validate_package(package, release):
         raise ValueError('UPGRADE_PACKAGE')
 
 
+def verify_interrupted_source(source, destination, overrides, release):
+    """Resume only the exact sealed tree plus our two exact generated overrides; no repair."""
+    if destination.resolve()!=destination:
+        raise ValueError('SOURCE_DIRECTORY_CHANGED')
+    release.trusted_dir(destination,mode=0o700)
+    expected, directories={},set()
+    archive,members=release.source_members(source)
+    with archive:
+        for member in members:
+            name=Path(member.name.rstrip('/'))
+            directories.update(parent for parent in name.parents if parent!=Path('.'))
+            if member.isdir():
+                directories.add(name)
+            else:
+                expected[name]=(archive.extractfile(member).read(),0o755 if member.mode&0o111 else 0o644)
+    expected.update({Path('preview-'+name+'.override.yml'):(body.encode(),0o600)
+                     for name,body in overrides.items()})
+    actual_files,actual_dirs=set(),set()
+    def failed_walk(error):
+        raise ValueError('SOURCE_DIRECTORY_CHANGED') from None
+    for folder,children,files in os.walk(destination,followlinks=False,onerror=failed_walk):
+        for name in children:
+            path=Path(folder)/name
+            info=path.lstat()
+            mode=stat.S_IMODE(info.st_mode)
+            if not stat.S_ISDIR(info.st_mode) or mode not in (0o700,0o750,0o755):
+                raise ValueError('SOURCE_DIRECTORY_CHANGED')
+            release.trusted_dir(path,mode=mode)
+            actual_dirs.add(path.relative_to(destination))
+        actual_files.update((Path(folder)/name).relative_to(destination) for name in files)
+    if actual_files!=set(expected) or actual_dirs!=directories:
+        raise ValueError('SOURCE_INVENTORY_CHANGED')
+    for name,(body,mode) in expected.items():
+        if read_file(destination/name,mode=mode,maximum=1024*1024,minimum=0)!=body:
+            raise ValueError('SOURCE_CONTENT_CHANGED')
+
+
 def prepare(package, host, release, lifecycle):
     global STAGE
     STAGE='upgrade_preflight'
@@ -123,7 +161,7 @@ def prepare(package, host, release, lifecycle):
     commit=package['source_commit']
     destination=release.ROOT/'releases'/('naver-'+commit)
     receipt_path=release.ROOT/'receipts'/('preview-'+commit+'.json')
-    if os.path.lexists(destination) or os.path.lexists(receipt_path):
+    if os.path.lexists(receipt_path):
         raise ValueError('PREEXISTING_RELEASE')
     for folder in (release.ROOT, release.ROOT/'incoming', release.ROOT/'releases', release.ROOT/'receipts',
                    release.ROOT/'incoming'/package['run_id']):
@@ -145,20 +183,27 @@ def prepare(package, host, release, lifecycle):
     for item in files:
         if read_file(item['path'],uid=item['uid'],gid=item['gid'],mode=0o600) != item['content'].encode():
             raise ValueError('RUNTIME_SECRET_CHANGED')
-    STAGE='upgrade_prepare_files'
-    release.extract_source(source,destination)
     overrides={
         'engine': 'services:\n  naver-engine:\n    image: metainc/naver-engine:'+commit+'\n    environment:\n      NAVER_ENGINE_BOOTSTRAP_REQUEST: /var/lib/naver-engine/bootstrap-request.json\n',
         'relay': 'services:\n  naver-relay:\n    image: metainc/naver-relay:'+commit+'\n    environment:\n      NAVER_AUTO_WEB: "on"\n'}
-    for name, body in overrides.items():
-        release.write_new(destination/('preview-'+name+'.override.yml'),body.encode())
+    STAGE='upgrade_prepare_files'
+    if os.path.lexists(destination):
+        verify_interrupted_source(source,destination,overrides,release)
+    else:
+        release.extract_source(source,destination)
+        for name, body in overrides.items():
+            release.write_new(destination/('preview-'+name+'.override.yml'),body.encode())
     for name in ('engine','relay'):
         STAGE='upgrade_build_'+name
         release.command(['docker','build','--label','metainc.naver.preview.source='+commit,'-t','metainc/naver-'+name+':'+commit,
                          '-f',str(destination/('Dockerfile.naver-'+name)),str(destination)],timeout=600)
         release.command(release.compose(destination,name)+['config','--quiet'])
     STAGE='upgrade_check_config'
-    release.command(release.compose(destination,'engine')+['run','--rm','--no-deps','naver-engine','python','-m','naver_runtime','check-config'],timeout=60)
+    check=release.compose(destination,'engine')
+    # The live supervisor aborts on a project container's exit, including one-offs.
+    # Never publish check-config lifecycle events into its project namespace.
+    check[check.index('--project-name')+1]='naver-check-'+commit+'-'+uuid.uuid4().hex
+    release.command(check+['run','--rm','--no-deps','--pull','never','naver-engine','python','-m','naver_runtime','check-config'],timeout=60)
     if old_state(package,host,release,lifecycle) != old:
         raise ValueError('OLD_STATE_CHANGED')
     images={name:json.loads(release.command(['docker','image','inspect','--format','{{json .Id}}','metainc/naver-'+name+':'+commit])) for name in ('engine','relay')}
