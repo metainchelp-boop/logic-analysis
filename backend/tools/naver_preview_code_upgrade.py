@@ -1,23 +1,40 @@
-"""Approved code-only 7422fac -> f7eb2e5 transition. Never create bootstrap approvals."""
+"""Approved code-only transition from f7eb2e5. Never create bootstrap approvals."""
 import ast
 import json
 import os
 from pathlib import Path
 import pwd
 import re
+import stat
 import uuid
 
-OLD_COMMIT = '7422fac362dc6cafcfe6ffface4d00d0f2820665'
-TARGET_COMMIT = 'f7eb2e58aafad81e27978f175d83cca0eb5c5733'
+OLD_COMMIT = 'f7eb2e58aafad81e27978f175d83cca0eb5c5733'
+TARGET_COMMIT = 'abf24060eaf907416439bf3e57d83242bb1b7bb5'
+EXPECTED_BASELINE = '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'
+OLD_SOURCE_SHA256 = '23b4a2fe6d85ba52b082907801e8494eceb7a14ea32f33b8ac9ee296a9f93d0e'
+CODE_PATHS = {'naver_engine/web.py', 'naver_engine/sync.py',
+              'naver_runtime/__main__.py', 'naver_runtime/writer.py',
+              'naver_runtime/scheduler.py', 'naver_runtime/collection_requests.py',
+              'backend/naver_page/app.js', 'backend/naver_page/index.html'}
+TEST_PATHS = {'naver_engine/tests/test_verified_collection.py',
+              'naver_engine/tests/test_verified_collection_screen.py',
+              'naver_engine/tests/verified_collection_browser.js',
+              'naver_runtime/tests/test_collection_requests.py',
+              'naver_runtime/tests/test_collection_integration.py'}
 STAGE = 'input'
 
 
 def validate_package(package, release):
+    if (not isinstance(TARGET_COMMIT, str) or not re.fullmatch('[0-9a-f]{40}', TARGET_COMMIT)
+            or TARGET_COMMIT == OLD_COMMIT):
+        raise ValueError('CODE_TARGET_NOT_PINNED')
     if not isinstance(package, dict) or package.get('operation') != 'code-prepare':
         raise ValueError('CODE_PACKAGE')
     release.validate_package(dict(package, operation='upgrade-prepare'))
     if package['source_commit'] != TARGET_COMMIT:
         raise ValueError('CODE_TARGET')
+    if package['baseline'] != EXPECTED_BASELINE:
+        raise ValueError('CODE_BASELINE')
     return package
 
 
@@ -52,6 +69,8 @@ def current_state(package, host, release, lifecycle, upgrade):
     path, receipt = upgrade.manifest(release, OLD_COMMIT, started=True)
     if receipt['package'].get('baseline') != package['baseline']:
         raise ValueError('OLD_BASELINE')
+    if receipt['package'].get('source_tar_gz_sha256') != OLD_SOURCE_SHA256:
+        raise ValueError('OLD_SOURCE_CHANGED')
     files = lifecycle.unit_files(path, pwd.getpwnam('www-data').pw_gid, release)
     for parent in (lifecycle.UNIT_DIR, lifecycle.TMPFILES.parent):
         release.trusted_dir(parent)
@@ -97,6 +116,32 @@ def compatible_source(old, new, upgrade):
         after = upgrade.read_file(new/('preview-'+name+'.override.yml'), mode=0o600)
         if after != before.replace(OLD_COMMIT.encode(), TARGET_COMMIT.encode()):
             raise ValueError('CODE_OVERRIDE_CHANGED')
+    compatible_code_scope(old, new, upgrade)
+
+
+def compatible_code_scope(old, new, upgrade):
+    """Only the reviewed runtime delta may differ; no deletions or filesystem escapes."""
+    def inventory(root):
+        files = {}
+        for path in root.rglob('*'):
+            if path.is_symlink() or path.resolve() != path:
+                raise ValueError('CODE_SOURCE_PATH')
+            if path.is_dir():
+                continue
+            name = path.relative_to(root).as_posix()
+            if name in ('preview-engine.override.yml', 'preview-relay.override.yml'):
+                continue  # Separately compared byte-for-byte with only the commit substituted.
+            files[name] = (stat.S_IMODE(path.stat().st_mode),
+                           upgrade.read_file(path, maximum=1024*1024, minimum=0))
+        return files
+    before, after = inventory(old), inventory(new)
+    if before.keys() - after.keys():
+        raise ValueError('CODE_SOURCE_REMOVED')
+    for name, value in after.items():
+        if name in before and before[name][0] != value[0]:
+            raise ValueError('CODE_SOURCE_MODE_CHANGED')
+        if before.get(name) != value and name not in CODE_PATHS | TEST_PATHS:
+            raise ValueError('CODE_SCOPE_CHANGED')
 
 
 def verify_running(path, receipt, release, lifecycle, upgrade):

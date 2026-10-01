@@ -4,6 +4,7 @@ import io
 import json
 import tarfile
 import textwrap
+import tempfile
 from pathlib import Path
 import unittest
 from unittest.mock import Mock, patch
@@ -20,19 +21,45 @@ def load(name):
 class ContractTest(unittest.TestCase):
     def test_only_exact_approved_code_transition_is_accepted_without_bootstrap_request(self):
         module = load('naver_preview_code_upgrade')
+        module.TARGET_COMMIT = 'b'*40  # A sealed target is supplied only in the fixture.
         release = load('naver_preview_release')
-        package = dict(baseline='a'*64, source_commit=module.TARGET_COMMIT,
+        package = dict(baseline=module.EXPECTED_BASELINE, source_commit=module.TARGET_COMMIT,
                        ciphertext_sha256='b'*64, source_tar_gz_sha256='c'*64,
                        run_id='123456', operation='code-prepare')
         self.assertEqual(module.validate_package(package, release), package)
         for changes in ({'source_commit': module.OLD_COMMIT}, {'operation': 'upgrade-prepare'},
-                        {'request': {}}, {'source_commit': 'f'*40}):
+                        {'request': {}}, {'source_commit': 'f'*40}, {'baseline': 'd'*64}):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 module.validate_package(dict(package, **changes), release)
         host = Mock()
         with self.assertRaises(ValueError):
             module.apply({'release': package, 'request': {}}, host, release, Mock(), Mock())
         host.assert_not_called()
+
+    def test_unsealed_or_same_as_old_target_refuses_before_any_action(self):
+        module = load('naver_preview_code_upgrade')
+        release = load('naver_preview_release')
+        package = dict(baseline=module.EXPECTED_BASELINE, source_commit='b'*40,
+                       ciphertext_sha256='c'*64, source_tar_gz_sha256='d'*64,
+                       run_id='123456', operation='code-prepare')
+        for target in (None, '', module.OLD_COMMIT):
+            with self.subTest(target=target), patch.object(module, 'TARGET_COMMIT', target):
+                with self.assertRaisesRegex(ValueError, 'CODE_TARGET_NOT_PINNED'):
+                    module.validate_package(package, release)
+
+    def test_only_reviewed_runtime_and_bundled_test_paths_are_allowlisted(self):
+        module = load('naver_preview_code_upgrade')
+        self.assertEqual(module.CODE_PATHS, {
+            'naver_engine/web.py', 'naver_engine/sync.py',
+            'naver_runtime/__main__.py', 'naver_runtime/writer.py',
+            'naver_runtime/scheduler.py', 'naver_runtime/collection_requests.py',
+            'backend/naver_page/app.js', 'backend/naver_page/index.html'})
+        self.assertEqual(module.TEST_PATHS, {
+            'naver_engine/tests/test_verified_collection.py',
+            'naver_engine/tests/test_verified_collection_screen.py',
+            'naver_engine/tests/verified_collection_browser.js',
+            'naver_runtime/tests/test_collection_requests.py',
+            'naver_runtime/tests/test_collection_integration.py'})
 
     def scenario(self, failure=None, mode='apply'):
         code = load('naver_preview_code_upgrade')
@@ -117,7 +144,17 @@ class ContractTest(unittest.TestCase):
                         request.write_text(json.dumps({'request_id':'6'*32}))
                     return result
                 release.command=mutate
-        with patch.object(legacy_test, 'M', fixture), patch.object(code, 'TARGET_COMMIT', 'b'*40):
+            if failure=='old_source':
+                receipt=root/'receipts'/('preview-'+code.OLD_COMMIT+'.json')
+                value=json.loads(receipt.read_text());value['package']['source_tar_gz_sha256']='0'*64
+                receipt.write_text(json.dumps(value))
+            if failure=='unapproved_code':
+                (target/'naver_runtime/bootstrap.py').write_text('# changed bootstrap')
+            if failure=='unapproved_new':
+                (target/'naver_runtime/unapproved.py').write_text('# outside approved scope')
+        with patch.object(legacy_test, 'M', fixture), patch.object(code, 'TARGET_COMMIT', 'b'*40), \
+                patch.object(code, 'EXPECTED_BASELINE', 'a'*64), \
+                patch.object(code, 'OLD_SOURCE_SHA256', 'c'*64):
             return legacy_test.UpgradeTest().scenario(failure, mode, setup)
 
     def test_code_apply_preserves_existing_request_and_never_writes_a_new_one(self):
@@ -141,12 +178,37 @@ class ContractTest(unittest.TestCase):
         self.assertRegex(check[check.index('--project-name')+1],r'^naver-check-b{40}-[a-f0-9]{32}$')
 
     def test_schema_infrastructure_or_bootstrap_uncertainty_refuses_before_any_mutation(self):
-        for reason in ('image','unit','manifest','schema','infrastructure','override','bootstrap_pending'):
+        for reason in ('image','unit','manifest','schema','infrastructure','override','bootstrap_pending',
+                       'old_source','unapproved_code','unapproved_new'):
             with self.subTest(reason=reason):
                 result,commands,writes,_,_=self.scenario(reason)
                 self.assertIsInstance(result,Exception)
                 self.assertEqual(writes,[])
                 self.assertFalse(any(args[:2]==['/usr/bin/systemctl','stop'] for args in commands))
+
+    def test_code_scope_only_allows_exact_paths_and_no_deletions_or_unsafe_files(self):
+        module=load('naver_preview_code_upgrade')
+        upgrade=Mock()
+        upgrade.read_file.side_effect=lambda path,**kwargs: Path(path).read_bytes()
+        with tempfile.TemporaryDirectory() as folder:
+            old=Path(folder).resolve()/'old';new=Path(folder).resolve()/'new'
+            for root in (old,new):
+                (root/'naver_runtime').mkdir(parents=True)
+                (root/'naver_runtime/scheduler.py').write_bytes(b'old')
+                (root/'naver_runtime/config.py').write_bytes(b'unchanged')
+            (new/'naver_runtime/scheduler.py').write_bytes(b'new')
+            added=new/'naver_runtime/collection_requests.py';added.write_bytes(b'approved')
+            module.compatible_code_scope(old,new,upgrade)
+            forbidden=new/'naver_runtime/config.py';forbidden.write_bytes(b'changed')
+            with self.assertRaisesRegex(ValueError,'CODE_SCOPE_CHANGED'):
+                module.compatible_code_scope(old,new,upgrade)
+            forbidden.write_bytes(b'unchanged')
+            added.unlink();added.symlink_to(forbidden)
+            with self.assertRaisesRegex(ValueError,'CODE_SOURCE_PATH'):
+                module.compatible_code_scope(old,new,upgrade)
+            added.unlink();(new/'naver_runtime/scheduler.py').unlink()
+            with self.assertRaisesRegex(ValueError,'CODE_SOURCE_REMOVED'):
+                module.compatible_code_scope(old,new,upgrade)
 
     def test_every_partial_failure_restores_exact_old_images_and_units(self):
         for reason in ('stop','recreate','start','probe'):
