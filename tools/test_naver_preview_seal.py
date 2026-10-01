@@ -17,7 +17,7 @@ from unittest.mock import patch
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ed25519, rsa
+from cryptography.hazmat.primitives.asymmetric import ec, ed25519, rsa
 from cryptography.x509.oid import NameOID
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -51,7 +51,7 @@ class SealTest(unittest.TestCase):
         cls.key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         cls.cert = certificate(cls.key)
         cls.upload = ed25519.Ed25519PrivateKey.generate()
-        cls.host = ed25519.Ed25519PrivateKey.generate().public_key()
+        cls.host = ec.generate_private_key(ec.SECP256R1()).public_key()
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="preview-seal-test-")
@@ -144,6 +144,8 @@ class SealTest(unittest.TestCase):
             ("NAVER_BACKUP_KNOWN_HOSTS", self.env["NAVER_BACKUP_KNOWN_HOSTS"] + "evil.invalid ssh-ed25519 bad\n"),
             ("NAVER_BACKUP_KNOWN_HOSTS", self.env["NAVER_BACKUP_KNOWN_HOSTS"].replace("api.metainc.co.kr", "evil.invalid")),
             ("NAVER_BACKUP_KNOWN_HOSTS", "api.metainc.co.kr ssh-ed25519 eA==\n"),
+            ("NAVER_BACKUP_KNOWN_HOSTS", "api.metainc.co.kr " + self.upload.public_key().public_bytes(
+                serialization.Encoding.OpenSSH, serialization.PublicFormat.OpenSSH).decode() + "\n"),
         ):
             with self.subTest(name=name), self.assertRaises(Exception):
                 self.seal(env={**self.env, name: value})
@@ -217,7 +219,8 @@ class SealTest(unittest.TestCase):
                  contextlib.redirect_stderr(stderr):
                 self.assertEqual(P.main(), 1)
             self.assertEqual(stdout.getvalue(), "")
-            self.assertEqual(stderr.getvalue(), "PREVIEW_SEAL_REFUSED\n")
+            expected = "PREVIEW_SEAL_REFUSED\n" if field == 'PREVIEW_SEAL_INPUTS' else "PREVIEW_SEAL_REFUSED:INVALID_WORKFLOW_CONTEXT\n"
+            self.assertEqual(stderr.getvalue(), expected)
         stdout, stderr = io.StringIO(), io.StringIO()
         with patch.dict(os.environ, self.workflow_env(), clear=True), patch.object(sys, "argv", ["seal"]), \
              patch.object(P, "source_archive", side_effect=RuntimeError("PRIVATE_PROCESS_MARKER")), \

@@ -22,7 +22,7 @@ import tempfile
 
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import ed25519, rsa
+from cryptography.hazmat.primitives.asymmetric import ec, ed25519, rsa
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -102,10 +102,11 @@ def runtime_files(env):
     if not isinstance(key, ed25519.Ed25519PrivateKey):
         raise SealError("INVALID_UPLOAD_KEY")
     hosts = values["NAVER_BACKUP_KNOWN_HOSTS"]
-    if not isinstance(hosts, str) or not re.fullmatch(r"api\.metainc\.co\.kr ssh-ed25519 [A-Za-z0-9+/]+={0,2}\n?", hosts):
+    # This is the already verified ECDSA host pin, not the Ed25519 upload identity.
+    if not isinstance(hosts, str) or not re.fullmatch(r"api\.metainc\.co\.kr ecdsa-sha2-nistp256 [A-Za-z0-9+/]+={0,2}\n?", hosts):
         raise SealError("INVALID_BACKUP_HOST_KEY")
     public = serialization.load_ssh_public_key(" ".join(hosts.strip().split()[1:]).encode("ascii"))
-    if not isinstance(public, ed25519.Ed25519PublicKey):
+    if not isinstance(public, ec.EllipticCurvePublicKey) or not isinstance(public.curve, ec.SECP256R1):
         raise SealError("INVALID_BACKUP_HOST_KEY")
     runtime = {**RUNTIME_FIXED, **{name: values[name] for name in SECRET_NAMES[:6]}}
     content = "".join(name + "=" + value + "\n" for name, value in runtime.items())
@@ -213,6 +214,10 @@ def main():
                               source_commit=source_commit, source_tar_gz=source)
         print(json.dumps(receipt, sort_keys=True))
         return 0
+    except SealError as error:
+        # Only our fixed reason labels; never subprocess/cryptography messages or values.
+        print("PREVIEW_SEAL_REFUSED:" + str(error), file=sys.stderr)
+        return 1
     except Exception:
         print("PREVIEW_SEAL_REFUSED", file=sys.stderr)
         return 1
