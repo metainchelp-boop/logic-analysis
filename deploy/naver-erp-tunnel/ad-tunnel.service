@@ -16,6 +16,7 @@ RuntimeDirectory=metainc-naver-erp-tunnel
 RuntimeDirectoryMode=0750
 # 컨테이너 directory bind의 inode를 지킨다. 잔류 socket은 자동 unlink하지 않는다.
 RuntimeDirectoryPreserve=yes
+ExecStartPre=/usr/bin/python3 /etc/metainc/naver-erp-tunnel/bpf_preflight.py
 ExecStart=/usr/bin/ssh -F /etc/metainc/naver-erp-tunnel/ssh_config -N -T naver-erp-tunnel
 Restart=on-failure
 RestartSec=10s

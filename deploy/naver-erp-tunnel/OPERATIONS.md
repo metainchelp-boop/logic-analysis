@@ -16,6 +16,8 @@
 
 소켓은 AD `/run/metainc-naver-erp-tunnel/erp.sock`, 폴더 root:10001 0750, 소켓 root:10001 0660입니다. 엔진의 UID/GID 10001와 그룹 구성, host의 같은 GID에 불필요한 다른 사용자가 없는지 확인합니다. 엔진 mount는 **폴더** `/run/metainc-naver-erp-tunnel` → `/run/naver-erp-tunnel:ro`, `create_host_path: false`입니다. 이 mount는 별도 Compose 후보에서 검증하며 여기서는 실제 Compose를 바꾸지 않습니다.
 
+systemd 249의 숫자 Group에도 GID 10001 그룹 항목이 필요합니다. 기존 이름/GID/사용자가 없을 때만 전용 그룹을 생성하고 기존 그룹은 변경하지 않습니다. 서비스의 ExecStartPre는 같은 cgroup 안에서 BE 숫자 IPv4의 22번 TCP 접속 성공과 loopback 22번의 EACCES/EPERM 거절을 매번 확인합니다. 두 조건이 충족되지 않으면 SSH를 시작하지 않습니다. timeout은 필터 적용 성공으로 간주하지 않습니다. probe는 root:root 0600이며 인증·업무 호출·표준출력을 하지 않습니다. 설치 전 unit 밖의 loopback 22 접속 성공도 대조합니다. 구현 원본은 별도 관리 저장소 `logic-analysis/backend/tools/naver_erp_tunnel_bpf_preflight.py`이며 서버 설치와 앱 연결 검증은 별개입니다.
+
 ## 설치 전 필수 게이트
 
 1. 신규 계정·파일·포트·unit·runtime 폴더가 없는지 확인하고 root/기존 사용자/백업 계정의 SSH 전체 effective policy와 대상 파일 hash, Docker/활성 upstream 기준선을 보관합니다. 후보는 신규 경로에만 배치합니다. SSH fragment의 `Match all` 뒤에 parent 파일의 global-only 항목이 오는 경우까지 **전체** native `sshd -t`로 검사합니다. `sshd -T -C user=...`에서 신규 정책이 모두 적용되고 기존 계정 정책이 byte-equivalent인지 대조합니다. 기존 관리 접속 세션을 유지하며 SSH restart 대신 검증 후 reload만 합니다.

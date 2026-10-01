@@ -69,6 +69,7 @@ class PolicyTests(unittest.TestCase):
             "Type": "simple", "User": "root", "Group": "10001", "UMask": "0077",
             "RuntimeDirectory": "metainc-naver-erp-tunnel", "RuntimeDirectoryMode": "0750",
             "RuntimeDirectoryPreserve": "yes",
+            "ExecStartPre": "/usr/bin/python3 /etc/metainc/naver-erp-tunnel/bpf_preflight.py",
             "ExecStart": "/usr/bin/ssh -F /etc/metainc/naver-erp-tunnel/ssh_config -N -T naver-erp-tunnel",
             "Restart": "on-failure", "RestartSec": "10s", "TimeoutStopSec": "15s",
             "KillMode": "control-group", "NoNewPrivileges": "yes", "ProtectSystem": "strict",
