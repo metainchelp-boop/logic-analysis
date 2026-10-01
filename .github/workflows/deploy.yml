@@ -172,8 +172,8 @@ jobs:
       - name: Collector reader identity regression (v1.25.0 nvMid 우선 식별 · net_tap 요청 범위)
         run: node collector-extension/tests/reader_identity.test.js
 
-      - name: Collector search metadata and diagnostic receipt regression (v1.28.2)
-        run: node --test collector-extension/tests/query_scope.test.js collector-extension/tests/diagnostic_ack.test.js
+      - name: Collector search metadata and diagnostic proof regression (v1.28.3)
+        run: node --test collector-extension/tests/query_scope.test.js collector-extension/tests/diagnostic_ack.test.js collector-extension/tests/diagnostic_proof.test.js collector-extension/tests/pager_target.test.js
 
       - name: Collector outbox regression (v1.26.0 미전송 보관함 · ACK · 재전송·격리 · 상한)
         run: node collector-extension/tests/outbox.test.js

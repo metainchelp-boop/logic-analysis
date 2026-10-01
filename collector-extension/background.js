@@ -734,16 +734,30 @@ function pageExtract(want, extraBlock) {
   }
   var baseline = window.__mcReadBaseline;
   var tap = null, tapPath = '', tapProof = null, httpError = 0;
+  // Counts follow the SAME acceptance gates below; unrelated HTTP failures are not search failures.
+  var diag = { urlPage: 0, checked: false, baseline: !!baseline, location: false, route: false, router: false, next: false,
+    routerChanged: false, nextChanged: false,
+    tap: { on: false, n: 0, page: 0, keyword: 0, source: 0, scope: 0, response: 0, fresh: 0, status: 0 } };
   if (wantPage) {
     try {
       var T = window.__mcTap;
       var items = ((T && T.items) || []).concat((T && T.misses) || []);
+      diag.tap.on = !!T; diag.tap.n = items.length;
       items.sort(function (a, b) { return (a.requestStartedAt || 0) - (b.requestStartedAt || 0) || (a.at || 0) - (b.at || 0); });
       for (var ti = items.length - 1; ti >= 0; ti--) {
         var it = items[ti];
-        if (!it || it.page !== wantPage || it.keyword !== wantedKeyword
-            || it.sourceKnown !== true || it.scopeVerified !== true || it.responseMatched !== true
-            || !since || !Number.isFinite(it.requestStartedAt) || it.requestStartedAt < since) continue;
+        if (!it || it.page !== wantPage) continue;
+        diag.tap.page++;
+        if (it.keyword !== wantedKeyword) continue;
+        diag.tap.keyword++;
+        if (it.sourceKnown !== true) continue;
+        diag.tap.source++;
+        if (it.scopeVerified !== true) continue;
+        diag.tap.scope++;
+        if (it.responseMatched !== true) continue;
+        diag.tap.response++;
+        if (!since || !Number.isFinite(it.requestStartedAt) || it.requestStartedAt < since) continue;
+        diag.tap.fresh++; diag.tap.status = it.status || 0;
         if (it.status < 200 || it.status >= 300) { httpError = it.status || 0; break; }
         if (it.json) { tap = it.json; tapPath = it.path || ''; tapProof = it; break; }
       }
@@ -751,22 +765,28 @@ function pageExtract(want, extraBlock) {
   }
   var href = '';
   try { href = String(location.href); } catch (e) { href = ''; }
+  try {
+    var actual = new URL(href), actualPage = Number(actual.searchParams.get('pagingIndex') || 1);
+    if (actual.origin === 'https://search.shopping.naver.com' && actual.pathname === '/search/all'
+        && actual.searchParams.getAll('pagingIndex').length <= 1 && Number.isInteger(actualPage) && actualPage > 0) diag.urlPage = actualPage;
+  } catch (e) {}
   var title = '';
   try { title = String(document.title || '').slice(0, 120); } catch (e) { title = ''; }
   var body = '';
   try { body = String((document.body && document.body.innerText) || '').slice(0, 3000); } catch (e) { body = ''; }
   if (httpError) return { err: [401, 403, 418, 429].indexOf(httpError) >= 0 ? 'HTTP_RESTRICTED' : 'HTTP_ERROR',
-                          status: httpError, href: href, title: title };
+                          status: httpError, href: href, title: title, diag: diag };
 
   // A fallback must have both matching route identity and changed props, not just a new URL.
   function matchingQuery(q) {
     if (!q || typeof q.query !== 'string' || q.query !== wantedKeyword) return false;
     // Navigation metadata is not a new ranking scope. Only the observed search vertical is allowed.
-    var keys = Object.keys(q), allowed = ['query','pagingIndex','pagingSize','sort','productSet','viewType','origQuery','adQuery','frm','prevQuery','vertical'];
+    var keys = Object.keys(q), allowed = ['query','pagingIndex','pagingSize','sort','productSet','viewType','origQuery','adQuery','frm','prevQuery','vertical','where'];
     for (var qi = 0; qi < keys.length; qi++) if (allowed.indexOf(keys[qi]) < 0 || Array.isArray(q[keys[qi]])) return false;
     return Number(q.pagingIndex || 1) === wantPage && (!q.sort || q.sort === 'rel')
       && (!q.productSet || q.productSet === 'total') && (!q.pagingSize || String(q.pagingSize) === '40')
-      && (!Object.prototype.hasOwnProperty.call(q, 'vertical') || q.vertical === 'search');
+      && (!Object.prototype.hasOwnProperty.call(q, 'vertical') || q.vertical === 'search')
+      && (!Object.prototype.hasOwnProperty.call(q, 'where') || q.where === 'all');
   }
   var locationMatches = false, routeMatches = false;
   try {
@@ -780,6 +800,10 @@ function pageExtract(want, extraBlock) {
   var unscoped = !wantPage && !wantedKeyword; // legacy diagnostic-only extraction
   var routerVerified = locationMatches && routeMatches && baseline && baseline.keyword === wantedKeyword && rp !== baseline.router;
   var nextVerified = locationMatches && nd && matchingQuery(nd.query) && (!baseline || nd !== baseline.nextdata);
+  diag.checked = true; diag.location = !!locationMatches; diag.route = !!routeMatches;
+  diag.router = !!routerVerified; diag.next = !!nextVerified;
+  diag.routerChanged = !!(baseline && rp !== baseline.router);
+  diag.nextChanged = !!(baseline && nd !== baseline.nextdata);
 
   // ⚠️ 순서가 핵심 — **데이터부터 찾고, 못 찾았을 때만 차단을 의심한다.**
   //    (2026-08-11 실사고: 차단 문구 검사를 먼저 해서, 상품 데이터가 바로 옆에 있는
@@ -824,7 +848,7 @@ function pageExtract(want, extraBlock) {
   // 상품을 읽어냈으면 무조건 성공 — 차단 검사조차 하지 않는다
   if (best && best.length) return { total: total, list: best.slice(0, 200), href: href,
     pageIndex: wantPage || pageIndex, keyword: wantedKeyword, verified: !unscoped,
-    src: src, tapPath: tapPath,
+    src: src, tapPath: tapPath, diag: diag,
     requestId: src === 'tap' ? (tapProof.requestId || '') : '',
     requestStartedAt: src === 'tap' ? tapProof.requestStartedAt : 0 };
 
@@ -840,8 +864,8 @@ function pageExtract(want, extraBlock) {
       if (typeof ph === 'string' && ph.length >= 2 && body.indexOf(ph) >= 0) blocked = true;
     }
   }
-  if (blocked) return { err: 'BLOCK_TEXT', href: href, title: title, body: body.slice(0, 300) };
-  return { err: wantPage ? 'UNVERIFIED_PAGE' : (nd ? 'NO_LIST' : 'NO_NEXT_DATA'), href: href, title: title, body: body.slice(0, 300) };
+  if (blocked) return { err: 'BLOCK_TEXT', href: href, title: title, body: body.slice(0, 300), diag: diag };
+  return { err: wantPage ? 'UNVERIFIED_PAGE' : (nd ? 'NO_LIST' : 'NO_NEXT_DATA'), href: href, title: title, body: body.slice(0, 300), diag: diag };
 }
 
 /** 페이지 목록의 첫 상품 식별자 — 「페이지가 실제로 바뀌었나」를 이걸로 판정한다(2026-09-15). */
@@ -896,10 +920,37 @@ let _clickedAt = 0;          // v1.13.0 — 마지막 페이지 클릭 시각(�
  */
 function pagerClick(target) {
   var want = String(target);
+  // Keep this destination policy identical to pagerLocate: a number alone is not a pager.
+  var current;
+  function defaultScope(url) {
+    var allowed = ['query','pagingIndex','pagingSize','sort','productSet','viewType','origQuery','adQuery','frm','prevQuery','vertical','where'];
+    var keys = url.searchParams.keys(), key;
+    while (!(key = keys.next()).done) if (allowed.indexOf(key.value) < 0 || url.searchParams.getAll(key.value).length !== 1) return false;
+    return (!url.searchParams.has('sort') || url.searchParams.get('sort') === 'rel')
+      && (!url.searchParams.has('productSet') || url.searchParams.get('productSet') === 'total')
+      && (!url.searchParams.has('pagingSize') || url.searchParams.get('pagingSize') === '40')
+      && (!url.searchParams.has('vertical') || url.searchParams.get('vertical') === 'search')
+      && (!url.searchParams.has('where') || url.searchParams.get('where') === 'all');
+  }
+  try {
+    current = new URL(location.href);
+    if (!/^[1-9]\d*$/.test(want) || current.origin !== 'https://search.shopping.naver.com'
+        || current.pathname !== '/search/all' || !current.searchParams.get('query') || !defaultScope(current)) return '';
+  } catch (e) { return ''; }
+  function pageLink(el) {
+    var href = el.getAttribute('href') || '';
+    var marked = el.getAttribute('data-shp-area') === 'prd_pgn.pgn'
+      && el.getAttribute('data-shp-contents-id') === want && (el.textContent || '').trim() === want;
+    if (href === '' || href === '#') return marked;
+    try {
+      var url = new URL(href, current.href);
+      return url.origin === current.origin && !url.username && !url.password && url.pathname === '/search/all'
+        && url.searchParams.get('query') === current.searchParams.get('query')
+        && url.searchParams.get('pagingIndex') === want && defaultScope(url);
+    } catch (e) { return false; }
+  }
   function click(el, branch) {
     if (el.disabled || el.getAttribute('aria-disabled') === 'true') return '';
-    var destination = /[?&]pagingIndex=(\d+)(?:&|$)/.exec(el.getAttribute('href') || '');
-    if (destination && destination[1] !== want) return '';
     try {
       el.scrollIntoView({ block: 'center', inline: 'center' });
       var r = el.getBoundingClientRect();
@@ -910,8 +961,17 @@ function pagerClick(target) {
   }
   function vis(el) {
     if (!el) return false;
+    if (el.disabled || el.getAttribute('aria-disabled') === 'true') return false;
     var r = el.getBoundingClientRect();
     return r.width > 0 && r.height > 0;
+  }
+  // A verified site pager wins over numeric filters in navigation or elsewhere.
+  var marked = document.querySelectorAll('[data-shp-area="prd_pgn.pgn"][data-shp-contents-id]');
+  for (var m = 0; m < marked.length; m++) {
+    var em = marked[m];
+    if (!vis(em) || !pageLink(em)) continue;
+    if (em.getAttribute('data-shp-contents-id') !== want || (em.textContent || '').trim() !== want) continue;
+    return click(em, 'shp');
   }
   // ① 페이지네이션 영역 안에서 숫자가 정확히 맞는 링크·버튼
   var scopes = document.querySelectorAll('[class*="pagination"],[class*="paging"],[role="navigation"]');
@@ -919,7 +979,7 @@ function pagerClick(target) {
     var cands = scopes[s].querySelectorAll('a,button');
     for (var i = 0; i < cands.length; i++) {
       var el = cands[i];
-      if (!vis(el)) continue;
+      if (!vis(el) || !pageLink(el)) continue;
       if ((el.textContent || '').trim() === want) return click(el, 'num');
     }
   }
@@ -928,7 +988,7 @@ function pagerClick(target) {
     var c2 = scopes[s2].querySelectorAll('a,button');
     for (var j = 0; j < c2.length; j++) {
       var e2 = c2[j];
-      if (!vis(e2)) continue;
+      if (!vis(e2) || !pageLink(e2)) continue;
       var t = (e2.textContent || '').trim();
       var aria = e2.getAttribute('aria-label') || '';
       if (t === '다음' || /다음/.test(aria) || /next/i.test(e2.className || '')) {
@@ -943,10 +1003,8 @@ function pagerClick(target) {
   var all = document.querySelectorAll('a');
   for (var k = 0; k < all.length; k++) {
     var e3 = all[k];
-    if (!vis(e3)) continue;
+    if (!vis(e3) || !pageLink(e3)) continue;
     if ((e3.textContent || '').trim() !== want) continue;
-    var href = e3.getAttribute('href') || '';
-    if (href.indexOf('pagingIndex') < 0 && href !== '#') continue;
     return click(e3, 'loose');
   }
   return '';
@@ -960,6 +1018,35 @@ function pagerClick(target) {
  */
 function pagerLocate(target) {
   var want = String(target);
+  // Keep this destination policy identical to pagerClick: a number alone is not a pager.
+  var current;
+  function defaultScope(url) {
+    var allowed = ['query','pagingIndex','pagingSize','sort','productSet','viewType','origQuery','adQuery','frm','prevQuery','vertical','where'];
+    var keys = url.searchParams.keys(), key;
+    while (!(key = keys.next()).done) if (allowed.indexOf(key.value) < 0 || url.searchParams.getAll(key.value).length !== 1) return false;
+    return (!url.searchParams.has('sort') || url.searchParams.get('sort') === 'rel')
+      && (!url.searchParams.has('productSet') || url.searchParams.get('productSet') === 'total')
+      && (!url.searchParams.has('pagingSize') || url.searchParams.get('pagingSize') === '40')
+      && (!url.searchParams.has('vertical') || url.searchParams.get('vertical') === 'search')
+      && (!url.searchParams.has('where') || url.searchParams.get('where') === 'all');
+  }
+  try {
+    current = new URL(location.href);
+    if (!/^[1-9]\d*$/.test(want) || current.origin !== 'https://search.shopping.naver.com'
+        || current.pathname !== '/search/all' || !current.searchParams.get('query') || !defaultScope(current)) return null;
+  } catch (e) { return null; }
+  function pageLink(el) {
+    var href = el.getAttribute('href') || '';
+    var marked = el.getAttribute('data-shp-area') === 'prd_pgn.pgn'
+      && el.getAttribute('data-shp-contents-id') === want && (el.textContent || '').trim() === want;
+    if (href === '' || href === '#') return marked;
+    try {
+      var url = new URL(href, current.href);
+      return url.origin === current.origin && !url.username && !url.password && url.pathname === '/search/all'
+        && url.searchParams.get('query') === current.searchParams.get('query')
+        && url.searchParams.get('pagingIndex') === want && defaultScope(url);
+    } catch (e) { return false; }
+  }
   function vis(el) {
     if (!el) return false;
     if (el.disabled || el.getAttribute('aria-disabled') === 'true') return false;
@@ -967,8 +1054,6 @@ function pagerLocate(target) {
     return r.width > 0 && r.height > 0;
   }
   function at(el, branch) {
-    var destination = /[?&]pagingIndex=(\d+)(?:&|$)/.exec(el.getAttribute('href') || '');
-    if (destination && destination[1] !== want) return null;
     // 화면 밖이면 좌표가 음수라 엉뚱한 곳이 눌린다 — 가운데로 끌어온 뒤 다시 잰다.
     try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) { /* 무시 */ }
     var r = el.getBoundingClientRect();
@@ -1008,7 +1093,7 @@ function pagerLocate(target) {
   var marked = document.querySelectorAll('[data-shp-area="prd_pgn.pgn"][data-shp-contents-id]');
   for (var m = 0; m < marked.length; m++) {
     var em = marked[m];
-    if (!vis(em)) continue;
+    if (!vis(em) || !pageLink(em)) continue;
     if (em.getAttribute('data-shp-contents-id') !== want) continue;
     if ((em.textContent || '').trim() !== want) continue;
     return at(em, 'shp');
@@ -1021,7 +1106,7 @@ function pagerLocate(target) {
     var cands = scopes[s].querySelectorAll('a,button');
     for (var i = 0; i < cands.length; i++) {
       var el = cands[i];
-      if (!vis(el)) continue;
+      if (!vis(el) || !pageLink(el)) continue;
       if ((el.textContent || '').trim() === want) return at(el, 'num');
     }
   }
@@ -1030,7 +1115,7 @@ function pagerLocate(target) {
     var c2 = scopes[s2].querySelectorAll('a,button');
     for (var j = 0; j < c2.length; j++) {
       var e2 = c2[j];
-      if (!vis(e2)) continue;
+      if (!vis(e2) || !pageLink(e2)) continue;
       var t = (e2.textContent || '').trim();
       var aria = e2.getAttribute('aria-label') || '';
       if (t === '다음' || /다음/.test(aria) || /next/i.test(e2.className || '')) {
@@ -1045,10 +1130,8 @@ function pagerLocate(target) {
   var all = document.querySelectorAll('a');
   for (var k = 0; k < all.length; k++) {
     var e3 = all[k];
-    if (!vis(e3)) continue;
+    if (!vis(e3) || !pageLink(e3)) continue;
     if ((e3.textContent || '').trim() !== want) continue;
-    var href = e3.getAttribute('href') || '';
-    if (href.indexOf('pagingIndex') < 0 && href !== '#') continue;
     return at(e3, 'loose');
   }
   return null;
@@ -1699,6 +1782,40 @@ function navProbe() {
                   items: (T.items || []).slice(-4).map(one), misses: bad.concat(rest).map(one) };
     }
   } catch (e) { out.tap = 'err'; }
+  // Manual reports need response facts, not reader gates. Keep only typed scalars;
+  // known/scope/response/query map to request-source, scope, response and current-query checks.
+  out.recent = []; out.tapPresent = false; out.tapCount = 0;
+  try {
+    var rtap = window.__mcTap;
+    if (rtap) {
+      out.tapPresent = true;
+      var entries = ((rtap.items || []).concat(rtap.misses || [])).filter(function (e) { return e && typeof e === 'object'; });
+      out.tapCount = entries.length;
+      var currentQuery = '', currentUrl = new URL(location.href), observedAt = Date.now();
+      if (currentUrl.origin === 'https://search.shopping.naver.com' && currentUrl.pathname === '/search/all'
+          && currentUrl.searchParams.getAll('query').length === 1) currentQuery = currentUrl.searchParams.get('query') || '';
+      var scalar = function (n) { return typeof n === 'number' && Number.isFinite(n) ? Math.max(0, Math.min(999, Math.floor(n))) : 0; };
+      var flag = function (value) { return typeof value === 'boolean' ? value : null; };
+      var newest = function (a, b) { return (Number.isFinite(b.at) ? b.at : 0) - (Number.isFinite(a.at) ? a.at : 0); };
+      entries.sort(newest);
+      // Auxiliary traffic must not evict the two latest known page responses.
+      var selected = [];
+      for (var si = 0; si < entries.length && selected.length < 2; si++) {
+        var candidate = entries[si];
+        if (candidate.sourceKnown === true && Number.isFinite(candidate.page) && candidate.page > 0
+            && selected.indexOf(candidate) < 0) selected.push(candidate);
+      }
+      for (var ri = 0; ri < entries.length && selected.length < 3; ri++) {
+        if (selected.indexOf(entries[ri]) < 0) selected.push(entries[ri]);
+      }
+      out.recent = selected.sort(newest).map(function (e) {
+        return { page: scalar(e.page), status: scalar(e.status),
+          age: Number.isFinite(e.at) && e.at > 0 ? scalar((observedAt - e.at) / 1000) : 999,
+          known: flag(e.sourceKnown), scope: flag(e.scopeVerified), response: flag(e.responseMatched),
+          query: currentQuery && typeof e.keyword === 'string' ? e.keyword === currentQuery : null };
+      });
+    }
+  } catch (e) { /* Missing capture metadata remains unknown; never manufacture a matching response. */ }
   // v1.14.0 — **그 순간의 창·문서 상태**. 지금까지 전부 코드 추론이었고 한 번도 잰 적이 없다
   //   (9/16 반박 검증 지적). 다섯 값을 11글자로 압축해 싣는다 — 값이 아니라 예/아니오다.
   //   f=창이 앞에 있었나 · v=화면에 보였나 · a=사람 입력(있었던 적/지금) · w=자동화 표식 · r=직전 주소
@@ -1711,6 +1828,11 @@ function navProbe() {
             + 'r' + (document.referrer ? 1 : 0);
   } catch (e) { out.env = 'err'; }
   try { out.href = String(location.href).slice(0, 100); } catch (e) {}
+  try {
+    var actual = new URL(location.href), actualPage = Number(actual.searchParams.get('pagingIndex') || 1);
+    out.urlPage = actual.origin === 'https://search.shopping.naver.com' && actual.pathname === '/search/all'
+      && actual.searchParams.getAll('pagingIndex').length <= 1 && Number.isInteger(actualPage) && actualPage > 0 ? actualPage : 0;
+  } catch (e) { out.urlPage = 0; }
   try {
     var rt = window.next && window.next.router;
     out.router = !!rt;
@@ -1750,7 +1872,7 @@ function navProbe() {
 /** v1.13.1 — 「화면이 어떤 응답을 받았나」(net_tap 요약)를 서버에 따로 한 건 남긴다.
  *  STALE·BLOCK_TEXT·판독 실패·NO_PAGER 네 갈래 모두에서 부른다 — 22:02 퍼즐 회차는 BLOCK_TEXT 로 끝나
  *  tap 요약이 서버에 안 남았다. 진단용이라 실패해도 수집을 멈추지 않는다. */
-async function tapReport(tabId, keyword, pagingIndex, why, errLabel) {
+async function tapReport(tabId, keyword, pagingIndex, why, errLabel, proof) {
   // ⚙ v1.27.0 스위치 — 서버가 진단 보고를 꺼 두면 보내지 않는다(사람이 누른 「이 화면 응답 보내기」는 예외).
   if (why !== 'HUMAN' && typeof RT === 'object' && RT && RT.swTapProbe === false) return;
   try {
@@ -1759,10 +1881,38 @@ async function tapReport(tabId, keyword, pagingIndex, why, errLabel) {
       return { ok: false, code: 'INJECTION_FAILED', message: '현재 쇼핑 화면의 응답을 읽지 못했습니다.' };
     }
     const probe = (pr && pr.result) || {};
-    const tap = probe.tap === undefined ? 'none' : probe.tap;
+    // Fixed schema and bounded scalars keep JSON intact under the server's 500-character cap.
+    // Never include query, raw DOM/URL, product IDs, response body or exception text here.
+    const d = proof && typeof proof === 'object' ? proof : {};
+    const t = d.tap && typeof d.tap === 'object' ? d.tap : {};
+    const count = value => typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.min(999, Math.floor(value))) : 0;
+    const pick = (value, allowed) => allowed.includes(value) ? value : 'none';
+    const manual = why === 'HUMAN';
+    const environment = typeof probe.env === 'string' && /^f[01]v[01]a[01]{2}w[01]r[01]$/.test(probe.env) ? probe.env : 'none';
+    const flag = value => typeof value === 'boolean' ? value : null;
+    const recent = (Array.isArray(probe.recent) ? probe.recent : []).slice(0, 3).map(item => {
+      const e = item && typeof item === 'object' ? item : {};
+      return { page: count(e.page), status: count(e.status), age: count(e.age),
+        known: flag(e.known), scope: flag(e.scope), response: flag(e.response), query: flag(e.query) };
+    });
+    const body = JSON.stringify(manual ? { v: 1, why: 'HUMAN', now: count(probe.urlPage), env: environment,
+      tap: { on: probe.tapPresent === true || !!(probe.tap && typeof probe.tap === 'object'),
+        n: count(probe.tapCount === undefined ? (probe.tap && probe.tap.n) + (probe.tap && probe.tap.m) : probe.tapCount), recent } }
+      : { v: 1,
+      why: pick(why, ['HUMAN','NO_PAGER','STALE','UNVERIFIED_PAGE','NO_LIST','NO_NEXT_DATA','BLOCK_TEXT','HTTP_ERROR','HTTP_401','HTTP_403','HTTP_418','HTTP_429']),
+      want: count(pagingIndex), now: count(d.urlPage === undefined ? probe.urlPage : d.urlPage), env: environment,
+      click: { branch: manual ? 'none' : pick(typeof _lastClickBranch === 'string' ? _lastClickBranch : '', ['shp','num','next','loose','pending']),
+        how: manual ? 'none' : pick(typeof _lastClickHow === 'string' ? _lastClickHow : '', ['trusted','synth']),
+        covered: !manual && typeof _clickCovered !== 'undefined' && !!_clickCovered },
+      gates: { checked: d.checked === true, baseline: d.baseline === true, location: d.location === true, route: d.route === true,
+        router: d.router === true, next: d.next === true, routerChanged: d.routerChanged === true, nextChanged: d.nextChanged === true },
+      tap: { on: proof ? t.on === true : !!(probe.tap && typeof probe.tap === 'object'),
+        n: proof ? count(t.n) : count((probe.tap && probe.tap.n) + (probe.tap && probe.tap.m)),
+        page: count(t.page), keyword: count(t.keyword), source: count(t.source), scope: count(t.scope),
+        response: count(t.response), fresh: count(t.fresh), status: count(t.status) } });
     return await reportBlocked({ keyword, pagingIndex, err: errLabel || 'TAP_PROBE(화면이 받은 응답 요약)',
                           href: probe.href || '',
-                          body: JSON.stringify({ why: why, q: probe.q || '', env: probe.env || '', tap: tap }),
+                          body,
                           note: '진단 — 차단 아님. 클릭 뒤 화면이 어떤 응답을 받았나' });
   } catch (e) {
     return { ok: false, code: 'INJECTION_FAILED', message: '현재 쇼핑 화면의 응답을 읽지 못했습니다.' };
@@ -1803,6 +1953,8 @@ function waitNavigated(tabId, needle) {
  *    플레이스 추적기가 매일 이 구조로 성공하고 있고, 실측(2026-08-06)에서
  *    pagingIndex=2 페이지에 40개 상품과 필요한 필드가 전부 들어 있음을 확인했다. */
 async function fetchPage(keyword, pagingIndex, prevIds) {
+  // Per-page evidence must never inherit the previous keyword/page's click.
+  _lastClickBranch = ''; _lastClickHow = ''; _clickHit = ''; _clickCovered = 0; _pagerAfter = ''; _trustedNote = '';
   // ⚠️ v1.17.4 — `let` 이다. 쇼핑 탭이 `target="_blank"` 라 진입 중에 **탭이 바뀔 수 있고**,
   //    그 뒤 읽기·클릭은 반드시 **바뀐 탭**에서 해야 한다(안 그러면 통합검색을 읽는다).
   let tabId = await ensureWorkTab();
@@ -1917,7 +2069,7 @@ async function fetchPage(keyword, pagingIndex, prevIds) {
                    title: out.title || '', href: out.href || '', body: out.body || '' };
       chrome.storage.local.set({ readFail: ev });
       reportBlocked({ ...ev, note: out.err === 'BLOCK_TEXT' ? '차단 문구' : '검색 응답 HTTP ' + out.status });
-      await tapReport(tabId, keyword, pagingIndex, out.err === 'BLOCK_TEXT' ? 'BLOCK_TEXT' : 'HTTP_' + out.status);
+      await tapReport(tabId, keyword, pagingIndex, out.err === 'BLOCK_TEXT' ? 'BLOCK_TEXT' : 'HTTP_' + out.status, undefined, out.diag);
       throw new Error(`BLOCKED:${out.title || out.href}`);
     }
     lastErr = (out && out.err) || '주입 실패';
@@ -1946,7 +2098,7 @@ async function fetchPage(keyword, pagingIndex, prevIds) {
       reportBlocked({ keyword, pagingIndex, err: 'STALE_PAGE(클릭 뒤 내용 불변)',
                       href: probe.href || '', body: JSON.stringify(probe),
                       note: '주소 이동·라우터 이동 안 함 — 이 키워드는 여기까지만 담음' });
-      await tapReport(tabId, keyword, pagingIndex, 'STALE');
+      await tapReport(tabId, keyword, pagingIndex, 'STALE', undefined, out && out.diag);
     }
     return { total: 0, list: [], stopReason: 'STALE_PAGE' };   // 부분 수집 — 이 키워드는 여기까지
   }
@@ -1960,7 +2112,7 @@ async function fetchPage(keyword, pagingIndex, prevIds) {
   // ⚠️ 이건 차단이 아니라 **판독 실패**다. 그래도 서버에 남긴다 —
   //    「막혔다」와 「못 읽었다」는 다른 축이고, 섞이면 또 사흘을 쓴다.
   reportBlocked({ ...ev, note: '판독 실패(차단 아님)' });
-  await tapReport(tabId, keyword, pagingIndex, lastErr);
+  await tapReport(tabId, keyword, pagingIndex, lastErr, undefined, out && out.diag);
   throw new Error(`판독 실패(${lastErr}) — 차단 아님, 다음 회차 재시도`);
 }
 

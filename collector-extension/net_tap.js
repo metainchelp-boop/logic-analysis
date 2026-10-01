@@ -46,13 +46,14 @@
    * ⚠️ 여기서 요청을 바꾸거나 더 보내지 않는다 — 읽어서 적을 뿐이다. */
   function defaultScope(url) {
     // Keep aligned with pageExtract: prevQuery is metadata; vertical must stay search.
-    var keys = ['query', 'pagingIndex', 'pagingSize', 'sort', 'productSet', 'viewType', 'origQuery', 'adQuery', 'frm', 'prevQuery', 'vertical'];
+    var keys = ['query', 'pagingIndex', 'pagingSize', 'sort', 'productSet', 'viewType', 'origQuery', 'adQuery', 'frm', 'prevQuery', 'vertical', 'where'];
     var it = url.searchParams.keys(), k;
     while (!(k = it.next()).done) { if (keys.indexOf(k.value) < 0 || url.searchParams.getAll(k.value).length !== 1) return false; }
     return (!url.searchParams.has('sort') || url.searchParams.get('sort') === 'rel')
       && (!url.searchParams.has('productSet') || url.searchParams.get('productSet') === 'total')
       && (!url.searchParams.has('pagingSize') || url.searchParams.get('pagingSize') === '40')
-      && (!url.searchParams.has('vertical') || url.searchParams.get('vertical') === 'search');
+      && (!url.searchParams.has('vertical') || url.searchParams.get('vertical') === 'search')
+      && (!url.searchParams.has('where') || url.searchParams.get('where') === 'all');
   }
   function requestInfo(u, method) {
     var out = { requestStartedAt: Date.now(), requestId: T.installed + ':' + (++T.sequence),

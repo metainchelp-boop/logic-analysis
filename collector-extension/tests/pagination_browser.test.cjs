@@ -23,9 +23,13 @@ const products = page => Array.from({ length: 40 }, (_, i) => ({ nvMid: String((
   const browser = await chromium.launch({ headless: true, channel: process.env.COLLECTOR_TEST_CHANNEL || undefined });
   try {
     const cases = ['tap', 'router', 'restricted', 'covered', 'group-next'].map(mode => ({ mode, metadata: false }))
-      .concat(['tap', 'router', 'restricted'].map(mode => ({ mode, metadata: true })));
-    for (const { mode, metadata } of cases) {
-      const query = { query: 'fixture', ...(metadata ? { prevQuery: 'previous', vertical: 'search' } : {}) };
+      .concat(['tap', 'router', 'restricted'].map(mode => ({ mode, metadata: true })))
+      .concat(['tap', 'router', 'restricted'].map(mode => ({ mode, metadata: 'portal' })))
+      .concat([{ mode: 'tap', metadata: true, decoy: true },
+        { mode: 'tap', metadata: 'portal', decoy: true, unmarked: true }]);
+    for (const { mode, metadata, decoy, unmarked } of cases) {
+      const query = { query: 'fixture', ...(metadata === 'portal' ? { where: 'all', frm: 'NVSCTAB' }
+        : metadata ? { prevQuery: 'previous', vertical: 'search' } : {}) };
       const url = 'https://search.shopping.naver.com/search/all?' + new URLSearchParams(query);
       const context = await browser.newContext();
       const page = await context.newPage();
@@ -38,8 +42,12 @@ const products = page => Array.from({ length: 40 }, (_, i) => ({ nvMid: String((
           return route.fulfill({ status: mode === 'restricted' ? 418 : 200, contentType: 'application/json',
             body: JSON.stringify(mode === 'restricted' ? { error: 'restricted' } : { products: products(2) }) });
         }
-        if (u.href === url) return route.fulfill({ contentType: 'text/html; charset=utf-8', body: `<main><nav role="navigation"><span class="active">1</span>
-          ${mode === 'group-next' ? '<a class="next" href="?query=fixture&pagingIndex=11">Next</a>' : '<a href="#" data-shp-area="prd_pgn.pgn" data-shp-contents-id="2">2</a>'}
+        if (u.href === url) return route.fulfill({ contentType: 'text/html; charset=utf-8', body: `<main>
+          ${decoy ? '<section role="navigation"><a id="filter" href="#">2</a></section>' : ''}
+          <nav role="navigation"><span class="active">1</span>
+          ${mode === 'group-next' ? '<a class="next" href="?query=fixture&pagingIndex=11">Next</a>'
+            : unmarked ? '<a href="?' + new URLSearchParams({ ...query, pagingIndex: '2' }) + '">2</a>'
+            : '<a href="#" data-shp-area="prd_pgn.pgn" data-shp-contents-id="2">2</a>'}
           </nav></main><style>nav{margin:40px}a{display:inline-block;padding:20px}</style>` });
         return route.abort();
       });
@@ -47,10 +55,16 @@ const products = page => Array.from({ length: 40 }, (_, i) => ({ nvMid: String((
       await page.goto(url);
       await page.evaluate(({ first, second, mode, query }) => {
         window.clicks = 0;
+        window.filterClicks = 0;
+        const filter = document.querySelector('#filter');
+        if (filter) filter.addEventListener('click', e => {
+          e.preventDefault(); window.filterClicks++;
+          history.pushState({}, '', '?query=fixture&pagingIndex=1&spec=FILTER');
+        });
         window.__NEXT_DATA__ = { query: { ...query }, props: { products: first } };
         window.next = { router: { route: '/search/all', query: { ...query, pagingIndex: '1' },
           components: { '/search/all': { props: { products: first } } } } };
-        document.querySelector('a').addEventListener('click', async e => {
+        document.querySelector('nav a').addEventListener('click', async e => {
           e.preventDefault(); window.clicks++;
           let data;
           if (mode === 'router') { await new Promise(r => setTimeout(r, 800)); data = { products: second }; }
@@ -116,6 +130,7 @@ print(json.dumps({'kind': item['kind'], 'calls': calls, 'rows': conn.execute('SE
       assert.equal(saved.kind, ['tap', 'router'].includes(mode) ? 'full' : 'positive');
       assert.deepEqual(saved.calls, [['tap', 'router'].includes(mode) ? 'full' : 'positive']);
       const clicks = await page.evaluate(() => window.clicks);
+      assert.equal(await page.evaluate(() => window.filterClicks), 0, 'numeric filter must never be clicked');
       if (['tap', 'router'].includes(mode)) {
         assert.equal(result.products.length, 80, JSON.stringify(result.observation));
         assert.equal(result.products[40].rank, 41);
@@ -135,7 +150,9 @@ print(json.dumps({'kind': item['kind'], 'calls': calls, 'rows': conn.execute('SE
           assert(reports.some(r => r.err === 'HTTP_418'));
         } else { assert.equal(clicks, 0); assert.equal(searchRequests, 0); }
       }
-      console.log('PASS browser ' + mode + (metadata ? '-metadata' : '') + ': ' + result.products.length + ' ranks, clicks=' + clicks + ', requests=' + searchRequests);
+      console.log('PASS browser ' + mode + (metadata === 'portal' ? '-portal' : metadata ? '-metadata' : '')
+        + (decoy ? unmarked ? '-decoy-href' : '-decoy-marked' : '')
+        + ': ' + result.products.length + ' ranks, clicks=' + clicks + ', requests=' + searchRequests);
       await context.close();
     }
   } finally { await browser.close(); }

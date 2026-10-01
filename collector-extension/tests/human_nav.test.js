@@ -10,6 +10,7 @@ const fs = require('fs');
 const path = require('path');
 const SRC = fs.readFileSync(path.join(__dirname, '..', 'background.js'), 'utf8');
 const MANIFEST = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'manifest.json'), 'utf8'));
+const PAGER_LOCATION = new URL('https://search.shopping.naver.com/search/all?query=x');
 
 let pass = 0, fail = 0;
 const ok = (n, c) => { (c ? pass++ : fail++); console.log(`  ${c ? 'PASS' : 'FAIL'}  ${n}`); };
@@ -42,7 +43,8 @@ function fakeDom(spec) {
   const mk = (tag, text, opts = {}) => ({
     tagName: tag.toUpperCase(), textContent: text, className: opts.cls || '',
     disabled: !!opts.disabled,
-    getAttribute: (a) => (a === 'href' ? (opts.href ?? null)
+    // These legacy fixtures represent real page links. Bare numbers no longer prove a pager.
+    getAttribute: (a) => (a === 'href' ? (opts.href === undefined && /^\d+$/.test(text) ? '?query=x&pagingIndex=' + text : (opts.href ?? null))
                         : a === 'aria-label' ? (opts.aria ?? null)
                         : a === 'aria-disabled' ? (opts.ariaDisabled ?? null) : null),
     // ⚠️ left·top 은 v1.15.0 의 pagerLocate 가 좌표를 내려면 필요하다. 기존 시험은 width·height 만
@@ -72,7 +74,7 @@ function fakeDom(spec) {
 function runPager(spec, target) {
   const { doc, clicked, mk } = fakeDom(spec);
   spec.build && spec.build(mk);
-  const fn = new Function('document', `${grab('pagerClick')}; return pagerClick;`)(doc);
+  const fn = new Function('document', 'location', `${grab('pagerClick')}; return pagerClick;`)(doc, PAGER_LOCATION);
   const how = fn(target);
   return { how, clicked };
 }
@@ -81,8 +83,8 @@ function runPager(spec, target) {
 function runLocate(spec, target, win) {
   const { doc, clicked, scrolled, mk } = fakeDom(spec);
   spec.build && spec.build(mk);
-  const fn = new Function('document', 'window',
-    `${grab('pagerLocate')}; return pagerLocate;`)(doc, win || { innerWidth: 1280, innerHeight: 900 });
+  const fn = new Function('document', 'window', 'location',
+    `${grab('pagerLocate')}; return pagerLocate;`)(doc, win || { innerWidth: 1280, innerHeight: 900 }, PAGER_LOCATION);
   const spot = fn(target);
   return { spot, clicked, scrolled };
 }
@@ -102,7 +104,7 @@ console.log('\n[사람처럼 넘기기]');
 // ② 숫자가 없으면 「다음」을 클릭한다
 {
   let items = [];
-  const spec = { scopes: [items], build: (mk) => { items.push(mk('a', '다음', { href: '?pagingIndex=2' })); } };
+  const spec = { scopes: [items], build: (mk) => { items.push(mk('a', '다음', { href: '?query=x&pagingIndex=2' })); } };
   const r = runPager(spec, 2);
   ok('② 목표 페이지가 명시된 「다음」으로 넘긴다', r.how === 'next' && r.clicked[0] === '다음');
 }
@@ -129,8 +131,8 @@ console.log('\n[사람처럼 넘기기]');
 {
   const spec = { scopes: [], anchors: [] };
   const { doc, clicked, mk } = fakeDom(spec);
-  spec.anchors.push(mk('a', '2', { href: '/search/all?pagingIndex=2' }));
-  const fn = new Function('document', `${grab('pagerClick')}; return pagerClick;`)(doc);
+  spec.anchors.push(mk('a', '2', { href: '/search/all?query=x&pagingIndex=2' }));
+  const fn = new Function('document', 'location', `${grab('pagerClick')}; return pagerClick;`)(doc, PAGER_LOCATION);
   ok('⑤ 영역이 없어도 pagingIndex 링크를 찾는다', fn(2) === 'loose' && clicked[0] === '2');
 }
 
@@ -429,12 +431,13 @@ console.log('\n[응답 가로채기 — net_tap]');
     //   ⇒ routerPush 삭제. 그리고 tap 요약을 STALE 만이 아니라 BLOCK_TEXT·판독 실패·NO_PAGER 에서도 남긴다(22:02 는 tap 이 안 남았다).
     console.log('\n[v1.13.1 — 라우터 이동 삭제 · 네 갈래 tap 보고]');
     const TR = grab('tapReport', 'async');
-    ok('⑱ tapReport 가 navProbe 를 돌려 TAP_PROBE 로 why·q·tap 을 보낸다', /func: navProbe/.test(TR) && /TAP_PROBE\(화면이 받은 응답 요약\)/.test(TR) && /why: why, q: probe\.q/.test(TR));
+    // Exact body shape/500-character cap/privacy are exercised by diagnostic_proof.test.js.
+    ok('⑱ tapReport 가 navProbe 를 돌려 고정 크기 TAP_PROBE 근거를 보낸다', /func: navProbe/.test(TR) && /TAP_PROBE\(화면이 받은 응답 요약\)/.test(TR) && /gates:/.test(TR) && /tap:/.test(TR));
     const blockPart = FP.slice(FP.indexOf("out.err === 'BLOCK_TEXT'"), FP.indexOf('throw new Error(`BLOCKED:${out.title'));
-    ok('⑱ 문구와 HTTP 제한을 구분해 tap 요약을 남긴다', /await tapReport\(tabId, keyword, pagingIndex, out.err === 'BLOCK_TEXT' \? 'BLOCK_TEXT' : 'HTTP_' \+ out.status\)/.test(blockPart));
-    ok('⑱ STALE 끝에도 tap 요약을 남긴다', /await tapReport\(tabId, keyword, pagingIndex, 'STALE'\)/.test(FP));
+    ok('⑱ 문구와 HTTP 제한을 구분해 마지막 판독 근거를 남긴다', /await tapReport\(tabId, keyword, pagingIndex, out.err === 'BLOCK_TEXT' \? 'BLOCK_TEXT' : 'HTTP_' \+ out.status, undefined, out.diag\)/.test(blockPart));
+    ok('⑱ STALE 끝에도 tap 요약을 남긴다', /await tapReport\(tabId, keyword, pagingIndex, 'STALE', undefined, out && out.diag\)/.test(FP));
     const failPart = FP.slice(FP.indexOf("note: '판독 실패(차단 아님)'"));
-    ok('⑱ 판독 실패에도 tap 요약을 남긴다', /await tapReport\(tabId, keyword, pagingIndex, lastErr\)/.test(failPart));
+    ok('⑱ 판독 실패에도 tap 요약을 남긴다', /await tapReport\(tabId, keyword, pagingIndex, lastErr, undefined, out && out.diag\)/.test(failPart));
     ok('⑱ NO_PAGER 는 라우터 이동 없이 키워드를 끝내고 tap 요약을 남긴다', /NO_PAGER\(페이지 버튼 못 찾음\)/.test(FP) && /await tapReport\(tabId, keyword, pagingIndex, 'NO_PAGER'\)/.test(FP) && !/_lastPushResult/.test(SRC));
     ok('⑱ 주소창·라우터 어느 쪽으로도 pagingIndex 이동을 만들지 않는다', !/rt\.push/.test(SRC) && !/tabs\.update\([^)]*pagingIndex/.test(SRC) && (SRC.match(/pagingIndex=\$\{pagingIndex\}`;/g) || []).length === 0);
     ok('⑱ 버전 1.13.1 이상', _ge(MANIFEST.version, '1.13.1'));
@@ -491,13 +494,14 @@ console.log('\n[응답 가로채기 — net_tap]');
 
       // tapReport — env 를 싣고 이름표를 받는다
       const TR = grab('tapReport', 'async');
-      ok('⑲ tapReport 가 env 를 본문에 싣는다', /env: probe\.env \|\| ''/.test(TR));
+      ok('⑲ tapReport 가 허용된 창 상태 env 를 본문에 싣는다', /env:/.test(TR));
       ok('⑲ tapReport 가 err 이름표를 받아 쓴다(기본값은 종전 그대로)',
-         /async function tapReport\(tabId, keyword, pagingIndex, why, errLabel\)/.test(TR)
+         /async function tapReport\(tabId, keyword, pagingIndex, why, errLabel, proof\)/.test(TR)
          && /err: errLabel \|\| 'TAP_PROBE\(화면이 받은 응답 요약\)'/.test(TR));
       ok('⑲ STALE·NO_PAGER·읽기 실패 진단 이름표를 유지한다',
-         (SRC.match(/tapReport\(tabId, keyword, pagingIndex, '(STALE|NO_PAGER)'\)/g) || []).length === 2
-         && /tapReport\(tabId, keyword, pagingIndex, lastErr\)/.test(SRC));
+         /tapReport\(tabId, keyword, pagingIndex, 'STALE', undefined, out && out.diag\)/.test(SRC)
+         && /tapReport\(tabId, keyword, pagingIndex, 'NO_PAGER'\)/.test(SRC)
+         && /tapReport\(tabId, keyword, pagingIndex, lastErr, undefined, out && out.diag\)/.test(SRC));
 
       // 🔍 사람 화면 버튼 — 세 파일이 이어져 있나
       const POPUP_HTML = fs.readFileSync(path.join(__dirname, '..', 'popup.html'), 'utf8');
@@ -546,16 +550,16 @@ console.log('\n[응답 가로채기 — net_tap]');
       }
       {
         let items = [];
-        const spec = { scopes: [items], build: (mk) => { items.push(mk('a', '다음', { href: '?pagingIndex=2' })); } };
+        const spec = { scopes: [items], build: (mk) => { items.push(mk('a', '다음', { href: '?query=x&pagingIndex=2' })); } };
         ok('⑳ 「다음」 갈래 — 두 규칙이 같은 가지를 고른다',
            runPager(spec, 2).how === 'next' && (runLocate(spec, 2).spot || {}).branch === 'next');
       }
       {
         const spec = { scopes: [[]], anchors: [] };
         const { doc, mk } = fakeDom(spec);
-        spec.anchors.push(mk('a', '2', { href: '/search/all?pagingIndex=2' }));
-        const fnL = new Function('document', 'window', `${grab('pagerLocate')}; return pagerLocate;`)(
-          doc, { innerWidth: 1280, innerHeight: 900 });
+        spec.anchors.push(mk('a', '2', { href: '/search/all?query=x&pagingIndex=2' }));
+        const fnL = new Function('document', 'window', 'location', `${grab('pagerLocate')}; return pagerLocate;`)(
+          doc, { innerWidth: 1280, innerHeight: 900 }, PAGER_LOCATION);
         ok('⑳ 느슨한 갈래 — pagingIndex 링크도 같게 찾는다', (fnL(2) || {}).branch === 'loose');
       }
       // — 안 눌러야 할 것은 여기서도 안 찾는다 —
@@ -881,7 +885,7 @@ console.log('\n[응답 가로채기 — net_tap]');
       {
         let btn = null;
         const base = () => ({
-          build(mk) { btn = mk('a', '2', { href: '#', left: 400, top: 700 }); this.scopes[0].push(btn); },
+          build(mk) { btn = mk('a', '2', { href: '?query=x&pagingIndex=2', left: 400, top: 700 }); this.scopes[0].push(btn); },
           scopes: [[]],
         });
         const clean = base();
@@ -931,14 +935,15 @@ console.log('\n[응답 가로채기 — net_tap]');
           tagName: 'A', textContent: text === undefined ? String(n) : text,
           className: 'pagination_btn_page__utqBz _nlog_click',
           getAttribute: (a) => (a === 'href' ? '#'
+                              : a === 'data-shp-area' ? 'prd_pgn.pgn'
                               : a === 'data-shp-contents-id' ? String(n) : null),
           getBoundingClientRect: () => ({ width: 26, height: 26, left: 340, top: 420 }),
           scrollIntoView: () => {},
         });
-        const runShp = (marked) => new Function('document', 'window',
+        const runShp = (marked) => new Function('document', 'window', 'location',
           `${grab('pagerLocate')}; return pagerLocate;`)(
           { querySelectorAll: (s) => (/prd_pgn/.test(s) ? marked : []) },
-          { innerWidth: 1280, innerHeight: 900 })(2);
+          { innerWidth: 1280, innerHeight: 900 }, PAGER_LOCATION)(2);
         ok('🔴㉒ 진짜 모양의 2페이지 버튼을 잡는다',
            (runShp([mkShp(2), mkShp(3)]) || {}).branch === 'shp');
         ok('🔴㉒ 좌표는 그 버튼 한가운데다',

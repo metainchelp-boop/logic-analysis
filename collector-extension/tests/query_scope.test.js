@@ -75,6 +75,35 @@ async function capture(requestSuffix = '', responseSuffix = requestSuffix, xhr =
   return win.__mcTap.items[0];
 }
 const observed = '&prevQuery=previous&vertical=search';
+test('portal shopping entry where=all is accepted without changing ranking scope', async () => {
+  for (const route of ['tap', 'router', 'nextdata']) {
+    const result = read({ route, implicitFirstPage: true, suffix: '&where=all&frm=NVSCTAB',
+      queryExtra: { where: 'all', frm: 'NVSCTAB' } });
+    assert.equal(result.err, undefined, route);
+    assert.equal(result.list.length, 40);
+  }
+  for (const xhr of [false, true]) {
+    const entry = await capture('&where=all&frm=NVSCTAB', '&where=all&frm=NVSCTAB', xhr);
+    assert.equal(entry.scopeVerified, true);
+    assert.equal(entry.responseMatched, true);
+  }
+});
+test('portal metadata never permits another vertical, duplicated parameters or filters', async () => {
+  for (const bad of ['&where=', '&where=shop', '&where=ALL', '&where=all&where=all',
+    '&where=all&%77here=all', '&where=all&spec=M10014366', '&where=all&filter=organic']) {
+    assert.equal(read({ suffix: bad }).err, 'UNVERIFIED_PAGE', bad);
+    assert.equal((await capture(bad)).scopeVerified, false, bad);
+    assert.equal((await capture('&where=all', bad)).responseMatched, false, bad);
+  }
+  for (const route of ['router', 'nextdata']) for (const where of ['', 'shop', ['all'], null, false]) {
+    assert.equal(read({ route, suffix: '&where=all', queryExtra: { where } }).err,
+      'UNVERIFIED_PAGE', JSON.stringify({ route, where }));
+  }
+  for (const route of ['tap', 'router', 'nextdata']) {
+    assert.equal(read({ route, suffix: '&where=all', queryExtra: { where: 'all' }, stale: true }).err,
+      'UNVERIFIED_PAGE', route);
+  }
+});
 test('observed navigation metadata permits fresh p1 and p2 evidence from each source', () => {
   for (const page of [1, 2]) for (const route of ['tap', 'router', 'nextdata']) {
     const result = read({ page, route, suffix: observed, queryExtra: { prevQuery: 'previous', vertical: 'search' } });
