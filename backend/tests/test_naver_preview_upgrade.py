@@ -76,7 +76,7 @@ class RequestTest(unittest.TestCase):
 
 
 class UpgradeTest(unittest.TestCase):
-    def scenario(self, failure=None, mode='apply'):
+    def scenario(self, failure=None, mode='apply', fixture_setup=None):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder).resolve()
             root.joinpath('receipts').mkdir()
@@ -211,6 +211,8 @@ class UpgradeTest(unittest.TestCase):
             request_data={'request_id':'9'*32,'hold_id':42,'hold_sha256':'8'*64,'expected_rows':1437,
                           'approved_by':0,'expires_at':(now+timedelta(minutes=20)).isoformat(),'max_seconds':300}
             host=Mock();host.baseline.return_value=baseline
+            if fixture_setup is not None:
+                fixture_setup(root, release)
             with patch.object(M,'REQUEST',request_file),patch.object(M.os,'geteuid',return_value=0), \
                     patch.object(M,'ENVELOPE_KEY',root/'envelope/private.pem'), \
                     patch.object(M,'read_file',side_effect=lambda path,**kwargs:Path(path).read_bytes()), \
