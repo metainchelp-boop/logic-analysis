@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Approved new-only AD tunnel installation; never enables or changes apps."""
 import base64
+import ctypes
 import grp
 import hashlib
 import http.client
+import ipaddress
 import json
 import os
 from pathlib import Path
+import platform
 import pwd
 import re
 import socket
@@ -241,7 +244,101 @@ def run(args):
     return result.stdout.decode("utf-8").strip()
 
 
+# Linux v5.15 UAPI bpf.h: enum bpf_cmd=16, attach types ingress=0/egress=1,
+# query fields at offsets 0,4,8,12,16,24; flags=0 queries direct attachments.
+# https://github.com/torvalds/linux/blob/v5.15/include/uapi/linux/bpf.h
+class BpfQuery(ctypes.Structure):
+    _fields_ = [("target_fd", ctypes.c_uint32), ("attach_type", ctypes.c_uint32),
+                ("query_flags", ctypes.c_uint32), ("attach_flags", ctypes.c_uint32),
+                ("prog_ids", ctypes.c_uint64), ("prog_cnt", ctypes.c_uint32)]
+
+
+def bpf_query_count(fd, attach_type):
+    # x86 syscall_64.tbl and arm64 -> asm-generic/unistd.h in the same v5.15 tree.
+    numbers = {"x86_64": 321, "aarch64": 280}
+    machine = platform.machine()
+    if (platform.system() != "Linux" or machine not in numbers or sys.byteorder != "little"
+            or ctypes.sizeof(ctypes.c_void_p) != 8 or ctypes.sizeof(ctypes.c_long) != 8
+            or ctypes.sizeof(BpfQuery) != 32 or BpfQuery.prog_ids.offset != 16
+            or BpfQuery.prog_cnt.offset != 24 or attach_type not in (0, 1)
+            or type(fd) is not int or fd < 0):
+        raise InstallError("UNSUPPORTED_BPF_QUERY_ABI")
+    identifiers = (ctypes.c_uint32 * 256)()
+    query = BpfQuery(target_fd=fd, attach_type=attach_type, query_flags=0,
+                     prog_ids=ctypes.addressof(identifiers), prog_cnt=256)
+    libc = ctypes.CDLL(None, use_errno=True)
+    syscall = libc.syscall
+    syscall.restype = ctypes.c_long
+    # Never load/attach/detach programs, enter namespaces, or retry a denied query.
+    ctypes.set_errno(0)
+    result = syscall(ctypes.c_long(numbers[machine]), ctypes.c_int(16),
+                     ctypes.byref(query), ctypes.c_uint(ctypes.sizeof(query)))
+    if result != 0:
+        raise InstallError("BPF_QUERY_FAILED")
+    count = query.prog_cnt
+    if not 1 <= count <= 256 or any(identifiers[index] == 0 for index in range(count)):
+        raise InstallError("DIRECT_BPF_ATTACHMENT_MISSING")
+    return count
+
+
 class NativeHost:
+    def bpf_snapshot(self):
+        properties = ("ControlGroup", "MainPID", "IPAddressAllow", "IPAddressDeny", "ActiveState")
+        command = ["/usr/bin/systemctl", "show", UNIT]
+        for name in properties:
+            command.extend(("-p", name))
+        lines = run(command).splitlines()
+        pairs = [line.split("=", 1) for line in lines]
+        if any(len(pair) != 2 for pair in pairs) or len(pairs) != len(properties):
+            raise InstallError("BPF_UNIT_PROPERTIES_INVALID")
+        values = dict(pairs)
+        if set(values) != set(properties):
+            raise InstallError("BPF_UNIT_PROPERTIES_INVALID")
+        cgroup = "/system.slice/" + UNIT
+        pid = values["MainPID"]
+        if values["ActiveState"] != "active" or values["ControlGroup"] != cgroup or not re.fullmatch(r"[1-9][0-9]*", pid):
+            raise InstallError("BPF_UNIT_NOT_ACTIVE")
+        for name, expected in (("IPAddressAllow", {BE_IP + "/32"}),
+                               ("IPAddressDeny", {"0.0.0.0/0", "::/0"})):
+            tokens = values[name].split()
+            try:
+                actual = {str(ipaddress.ip_network(value, strict=True)) for value in tokens if "/" in value}
+            except ValueError:
+                raise InstallError("BPF_IP_POLICY_MISMATCH") from None
+            if len(tokens) != len(expected) or actual != expected:
+                raise InstallError("BPF_IP_POLICY_MISMATCH")
+        if not Path("/sys/fs/cgroup/cgroup.controllers").is_file():
+            raise InstallError("UNIFIED_CGROUP_REQUIRED")
+        if Path("/proc/" + pid + "/cgroup").read_text().strip() != "0::" + cgroup:
+            raise InstallError("PID_CGROUP_MISMATCH")
+        parent = os.stat("/proc/self/ns/net")
+        child = os.stat("/proc/" + pid + "/ns/net")
+        namespace = (parent.st_dev, parent.st_ino)
+        if namespace != (child.st_dev, child.st_ino):
+            raise InstallError("NETWORK_NAMESPACE_MISMATCH")
+        return values, namespace
+
+    def verify_bpf_attachment(self):
+        """Read-only candidate; deliberately not called by install/start/activation."""
+        if os.geteuid() != 0 or platform.system() != "Linux":
+            raise InstallError("BPF_ROOT_LINUX_REQUIRED")
+        before = self.bpf_snapshot()
+        path = "/sys/fs/cgroup" + before[0]["ControlGroup"]
+        descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+                raise InstallError("INVALID_CGROUP_DESCRIPTOR")
+            ingress = bpf_query_count(descriptor, 0)
+            egress = bpf_query_count(descriptor, 1)
+            if self.bpf_snapshot() != before:
+                raise InstallError("BPF_SNAPSHOT_CHANGED")
+        finally:
+            os.close(descriptor)
+        return {"ingress_program_count": ingress, "egress_program_count": egress,
+                "unit_cgroup_verified": True, "network_namespace_verified": True,
+                "ip_policy_verified": True, "bpf_attachment_verified": True,
+                "packet_enforcement_verified": False}
+
     def parents(self, path):
         for parent in Path(path).parents:
             item = parent.lstat()

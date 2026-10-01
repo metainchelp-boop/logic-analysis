@@ -3,6 +3,7 @@ import importlib.util
 import os
 from pathlib import Path
 import socket
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -16,6 +17,16 @@ def load():
 
 
 class HarnessTests(unittest.TestCase):
+    def test_only_exact_absent_unit_query_accepts_systemd_255_exit_five(self):
+        m = load()
+        command = ["/usr/bin/systemctl", "show", "naver-tunnel-bpf-ci-" + "a" * 12 + ".service", "--property=LoadState", "--value"]
+        with patch.object(m.subprocess, "run", return_value=SimpleNamespace(returncode=5, stdout="not-found\n")):
+            self.assertEqual("not-found", m.run(command))
+            with self.assertRaises(m.HarnessError):
+                m.run(["/usr/bin/systemctl", "start", command[2]])
+        with patch.object(m.subprocess, "run", return_value=SimpleNamespace(returncode=5, stdout="unrecognized\n")):
+            with self.assertRaises(m.HarnessError):
+                m.run(command)
     def test_refuses_non_disposable_context_before_any_service_operation(self):
         m = load()
         with patch.dict(os.environ, {}, clear=True), self.assertRaises(m.HarnessError):

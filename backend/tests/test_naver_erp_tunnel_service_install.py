@@ -85,11 +85,154 @@ class FakeHost:
         return {"unauthenticated_routes_rejected": 4, "other_routes_rejected": 1,
                 "authenticated_data_read_verified": False}
 
+    def verify_bpf_attachment(self):
+        self.record("verify_bpf_attachment")
+        raise AssertionError("candidate BPF attachment inspection must not run during install")
+
     def stop(self):
         self.record("stop")
 
 
 class TunnelServiceInstallTests(unittest.TestCase):
+    def test_bpf_attachment_refuses_inactive_unit_before_opening_cgroup(self):
+        installer = module()
+        with patch.object(installer, "run", return_value="ActiveState=inactive\nMainPID=0\nControlGroup=\nIPAddressAllow=\nIPAddressDeny="), \
+                patch.object(installer.platform, "system", return_value="Linux"), \
+                patch.object(installer.os, "geteuid", return_value=0), \
+                patch.object(installer.os, "open", side_effect=AssertionError("opening forbidden")) as opening:
+            with self.assertRaises(installer.InstallError):
+                installer.NativeHost().verify_bpf_attachment()
+            opening.assert_not_called()
+
+    def test_install_does_not_run_candidate_bpf_attachment_inspection(self):
+        installer = module()
+        host = FakeHost()
+        self.assertTrue(installer.install(package(), host=host)["ok"])
+        self.assertNotIn("verify_bpf_attachment", host.events)
+
+    def attachment_fixture(self, *, changes=None, cgroup=None, mismatch_namespace=False,
+                           controllers=True, recheck_changes=None, expect_error=False):
+        installer = module()
+        expected_cgroup = "/system.slice/metainc-naver-erp-tunnel.service"
+        fields = {"ActiveState": "active", "MainPID": "123", "ControlGroup": expected_cgroup,
+                  "IPAddressAllow": "1.234.23.117/32", "IPAddressDeny": "0.0.0.0/0 ::/0"}
+        fields.update(changes or {})
+        final = dict(fields, **(recheck_changes or {}))
+        snapshots = ["\n".join(key + "=" + value for key, value in data.items()) for data in (fields, final)]
+        def namespace(path, *args, **kwargs):
+            different = mismatch_namespace and str(path) == "/proc/123/ns/net"
+            return SimpleNamespace(st_dev=1, st_ino=11 if different else 10)
+        with patch.object(installer, "run", side_effect=snapshots) as commands, \
+                patch.object(installer.platform, "system", return_value="Linux"), \
+                patch.object(installer.os, "geteuid", return_value=0), \
+                patch.object(installer.Path, "read_text", return_value=cgroup if cgroup is not None else "0::" + expected_cgroup + "\n"), \
+                patch.object(installer.Path, "is_file", return_value=controllers), \
+                patch.object(installer.os, "stat", side_effect=namespace), \
+                patch.object(installer.os, "open", return_value=77) as opening, \
+                patch.object(installer.os, "fstat", return_value=SimpleNamespace(st_mode=stat.S_IFDIR | 0o755)), \
+                patch.object(installer.os, "close") as closing, \
+                patch.object(installer, "bpf_query_count", side_effect=[1, 2]) as queries:
+            if expect_error:
+                with self.assertRaises(installer.InstallError):
+                    installer.NativeHost().verify_bpf_attachment()
+                result = None
+            else:
+                result = installer.NativeHost().verify_bpf_attachment()
+            return result, commands.call_args_list, opening.call_args_list, closing.call_args_list, queries.call_args_list
+
+    def test_bpf_attachment_verifies_both_directions_without_claiming_packet_enforcement(self):
+        result, commands, opening, closing, queries = self.attachment_fixture()
+        self.assertEqual(result, {"ingress_program_count": 1, "egress_program_count": 2,
+                                  "unit_cgroup_verified": True, "network_namespace_verified": True,
+                                  "ip_policy_verified": True, "bpf_attachment_verified": True,
+                                  "packet_enforcement_verified": False})
+        self.assertEqual([call.args for call in queries], [(77, 0), (77, 1)])
+        self.assertEqual(len(commands), 2)
+        self.assertEqual(commands[0], commands[1])
+        self.assertEqual(opening[0].args[0], "/sys/fs/cgroup/system.slice/metainc-naver-erp-tunnel.service")
+        installer = module()
+        self.assertEqual(opening[0].args[1], installer.os.O_RDONLY | installer.os.O_DIRECTORY |
+                         installer.os.O_NOFOLLOW | installer.os.O_CLOEXEC)
+        self.assertEqual([call.args for call in closing], [(77,)])
+        self.attachment_fixture(changes={"IPAddressDeny": "::/0 0.0.0.0/0"})
+
+    def test_bpf_attachment_refuses_metadata_mismatch_and_changed_snapshot(self):
+        mutations = (
+            {"changes": {"ControlGroup": "/system.slice/other.service"}},
+            {"changes": {"MainPID": "0"}}, {"changes": {"MainPID": "not-a-pid"}},
+            {"changes": {"IPAddressAllow": "1.234.23.118/32"}},
+            {"changes": {"IPAddressAllow": "1.234.23.117/32 1.234.23.117/32"}},
+            {"changes": {"IPAddressDeny": "0.0.0.0/0"}},
+            {"changes": {"IPAddressDeny": "0.0.0.0/0 ::/0 ::/0"}},
+            {"cgroup": "0::/system.slice/other.service\n"},
+            {"mismatch_namespace": True}, {"controllers": False},
+            {"recheck_changes": {"MainPID": "124"}},
+        )
+        for options in mutations:
+            with self.subTest(options=options):
+                self.attachment_fixture(**options, expect_error=True)
+
+    def syscall_fixture(self, *, machine="x86_64", count=1, zero_id=False, denied=False, direction=0):
+        installer = module()
+        calls = []
+        def syscall(number, command, pointer, size):
+            query = installer.ctypes.cast(pointer, installer.ctypes.POINTER(installer.BpfQuery)).contents
+            calls.append((number.value, command.value, size.value, query.target_fd, query.attach_type,
+                          query.query_flags, query.attach_flags, query.prog_cnt))
+            if denied:
+                installer.ctypes.set_errno(errno.EPERM)
+                return -1
+            ids = installer.ctypes.cast(query.prog_ids, installer.ctypes.POINTER(installer.ctypes.c_uint32))
+            for index in range(min(count, 256)):
+                ids[index] = 0 if zero_id else 100 + index
+            query.prog_cnt = count
+            return 0
+        with patch.object(installer.platform, "system", return_value="Linux"), \
+                patch.object(installer.platform, "machine", return_value=machine), \
+                patch.object(installer.sys, "byteorder", "little"), \
+                patch.object(installer.ctypes, "CDLL", return_value=SimpleNamespace(syscall=syscall)) as library:
+            if denied or not 1 <= count <= 256 or zero_id:
+                with self.assertRaises(installer.InstallError):
+                    installer.bpf_query_count(77, direction)
+            else:
+                self.assertEqual(installer.bpf_query_count(77, direction), count)
+            library.assert_called_once_with(None, use_errno=True)
+        self.assertEqual(calls, [(321 if machine == "x86_64" else 280, 16, 32, 77, direction, 0, 0, 256)])
+
+    def test_bpf_query_uses_official_direct_query_abi_for_both_supported_architectures(self):
+        for machine in ("x86_64", "aarch64"):
+            for direction in (0, 1):
+                with self.subTest(machine=machine, direction=direction):
+                    self.syscall_fixture(machine=machine, direction=direction, count=2)
+
+    def test_bpf_query_rejects_permission_denial_missing_ids_and_invalid_counts_without_retry(self):
+        for options in ({"denied": True}, {"count": 0}, {"count": 257}, {"zero_id": True}):
+            with self.subTest(options=options):
+                self.syscall_fixture(**options)
+
+    def test_bpf_query_rejects_unsupported_platform_abi_and_inputs_before_loading_libc(self):
+        installer = module()
+        original_sizeof = installer.ctypes.sizeof
+        for system, machine, byteorder, pointer_size, fd, direction in (
+                ("Darwin", "x86_64", "little", 8, 77, 0),
+                ("Linux", "riscv64", "little", 8, 77, 0),
+                ("Linux", "x86_64", "big", 8, 77, 0),
+                ("Linux", "x86_64", "little", 4, 77, 0),
+                ("Linux", "x86_64", "little", 8, -1, 0),
+                ("Linux", "x86_64", "little", 8, True, 0),
+                ("Linux", "x86_64", "little", 8, 77, 2)):
+            def sizeof(value):
+                return pointer_size if value is installer.ctypes.c_void_p else original_sizeof(value)
+            with self.subTest(system=system, machine=machine, byteorder=byteorder, fd=fd, direction=direction), \
+                    patch.object(installer.platform, "system", return_value=system), \
+                    patch.object(installer.platform, "machine", return_value=machine), \
+                    patch.object(installer.sys, "byteorder", byteorder), \
+                    patch.object(installer.ctypes, "sizeof", side_effect=sizeof), \
+                    patch.object(installer.ctypes, "CDLL", side_effect=AssertionError("native syscall forbidden")) as library:
+                with self.assertRaises(installer.InstallError):
+                    installer.bpf_query_count(fd, direction)
+                library.assert_not_called()
+
     def test_derived_public_key_accepts_only_no_comment_or_exact_service_tag(self):
         installer = module()
         public = "ssh-ed25519 " + base64.b64encode(wire(b"ssh-ed25519", bytes(32))).decode()

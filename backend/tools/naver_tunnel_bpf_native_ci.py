@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """GitHub 일회용 runner의 systemd TCP drop 재현 자료. 운영 정책 판정/설치 도구가 아니다."""
 import errno
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -33,6 +34,13 @@ def run(command):
     result = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True, timeout=2, check=False,
                             env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C"})
+    # systemd 255 reports a missing unit with status 5, whereas 249 may return 0.
+    # Accept only this exact read-only query/result pair, never other failures.
+    if (len(command) == 5 and command[:2] == ["/usr/bin/systemctl", "show"]
+            and re.fullmatch(UNIT_PATTERN, command[2])
+            and command[3:] == ["--property=LoadState", "--value"]
+            and result.returncode == 5 and result.stdout.strip() == "not-found"):
+        return "not-found"
     if result.returncode:
         raise HarnessError("COMMAND_FAILED_" + Path(command[0]).name.upper().replace("-", "_") + "_" + str(result.returncode))
     return result.stdout.strip()
@@ -153,6 +161,17 @@ def collect():
                     cgroup_matches = ("0::" + cgroup) in Path("/proc/%d/cgroup" % pid).read_text().splitlines()
                     same_netns = os.readlink("/proc/%d/ns/net" % pid) == os.readlink("/proc/self/ns/net")
                     bpf = attachments(cgroup)
+                    specification = importlib.util.spec_from_file_location("bpf_reader", Path(__file__).with_name("naver_erp_tunnel_service_install.py"))
+                    reader = importlib.util.module_from_spec(specification)
+                    specification.loader.exec_module(reader)
+                    descriptor = os.open("/sys/fs/cgroup" + cgroup, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                    try:
+                        syscall_bpf = {"ingress_program_count": reader.bpf_query_count(descriptor, 0),
+                                       "egress_program_count": reader.bpf_query_count(descriptor, 1)}
+                    except reader.InstallError as error:
+                        raise HarnessError(str(error)) from None
+                    finally:
+                        os.close(descriptor)
                     after = controls()
                     connection.sendall(b"1")
             if not cgroup_matches or not same_netns or after != before or observed.get("allow") != "connected":
@@ -160,7 +179,8 @@ def collect():
             return {"ok": True, "parent_before": before, "parent_after": after, "probe": observed,
                     "strict_errno_guard_passes": strict_errno_guard(observed.get("deny")),
                     "timeout_observed": observed.get("deny") == "timeout", "cgroup_matches": cgroup_matches,
-                    "same_network_namespace": same_netns, "bpf": bpf, "production_policy_verified": False}
+                    "same_network_namespace": same_netns, "bpf": bpf, "syscall_bpf": syscall_bpf,
+                    "production_policy_verified": False}
     finally:
         signal.alarm(0)
         # 임의/기존 unit는 정리하지 않는다. 동일 InvocationID의 이번 새 unit만 stop한다.
