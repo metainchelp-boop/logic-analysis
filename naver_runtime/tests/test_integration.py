@@ -53,6 +53,15 @@ class LinuxIntegrationTest(unittest.TestCase):
             fixture.ads = TM.Ads(fixture.naver)
             fixture.standard_ads()
             poster = TEA.FakeAlertErp()
+            id_reads = []
+
+            class IntegrationErp(TS.FakeErp):
+                def read_naver_customer_ids(self):
+                    id_reads.append(fixture.fc.now())
+                    # 30분 재조회 때는 신규 광고 계정 ID만 반환해 기존 자동 짝 보존까지 검증한다.
+                    return (TM.E.NaverIdRow(12, TM.M.VENDOR_NAVER, None,
+                                           ad_account_no_raw=str(TM.kids(TM.B).accounts[TM.B]["adAccountNo"])),)
+
             with Writer(path, clock=fixture.fc.now) as writer:
                 def seed(store):
                     fixture.st = store
@@ -60,7 +69,7 @@ class LinuxIntegrationTest(unittest.TestCase):
                     Y.sync_org(TS.FakeErp(org=TA.org_body(fixture.fc.now())), store, fixture.fc.now())
                 writer.call(seed)
                 def erp():
-                    return TS.FakeErp(org=TA.org_body(fixture.fc.now()))
+                    return IntegrationErp(org=TA.org_body(fixture.fc.now()))
                 cfg = Config.from_env({"NAVER_ENGINE_DB": path, "NAVER_ENGINE_SOCKET": folder + "/sock/api",
                                        "NAVER_ENGINE_SYNC_ENABLED": "true", "NAVER_ENGINE_LINKS_ENABLED": "true",
                                        "NAVER_ENGINE_MORNING_ENABLED": "true", "NAVER_ENGINE_ALERTS_ENABLED": "true"})
@@ -71,13 +80,21 @@ class LinuxIntegrationTest(unittest.TestCase):
                 self.assertEqual(len(writer.proxy.account_days_on(TM.TODAY)), 2)
                 runs = writer.proxy.runs_on(TM.TODAY)
                 self.assertEqual([r["status"] for r in runs], [S.RUN_DONE])
+                self.assertEqual(id_reads, [])
                 fixture.fc._now = TM.T0.replace(hour=8, minute=0)
-                self.assertEqual(scheduler.tick()["state"], "ok")
+                second = scheduler.tick()
+                self.assertEqual(second["state"], "ok", second)
+                self.assertEqual(id_reads, [fixture.fc.now()])
+                pair = writer.proxy.last_pairing(S.SYNC_ACCEPTED)
+                rows = writer.proxy.pairing_rows(pair["pairing_id"])
+                self.assertIn((12, TM.B, S.PAIR_AUTO),
+                              [(r["possibility_id"], r["customer_id"], r["state"]) for r in rows])
                 beat = writer.proxy.heartbeat()
                 self.assertIsNotNone(beat)
                 calls = len(poster.calls)
                 scheduler.tick()
                 self.assertEqual(len(poster.calls), calls)
+                self.assertEqual(id_reads, [fixture.fc.now()])
                 self.assertTrue(all(call.method == "GET" for call in fixture.naver.calls))
                 with self.assertRaises(S.StoreBusy):
                     S.open_writer(path)
