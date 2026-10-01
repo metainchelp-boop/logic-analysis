@@ -1,4 +1,4 @@
-/* 대표 읽기 검증판: 기존 실제 화면/중계/엔진 시험 서버에서 Chromium으로 확인한다. */
+/* 읽기 전용 검증판: 기존 실제 화면/중계/엔진 시험 서버에서 Chromium으로 확인한다. */
 'use strict';
 const assert = require('node:assert/strict');
 const { chromium } = require('playwright');
@@ -22,7 +22,7 @@ const cfg = JSON.parse(process.argv[2]);
     await page.clock.install({ time: new Date(cfg.now) });
     await page.goto(cfg.base + '/naver/');
     await page.waitForSelector('#s-blocked.on');
-    assert.ok((await page.textContent('#b-p')).includes('네이버 관제(읽기 검증)'));
+    assert.ok((await page.textContent('#b-p')).includes('네이버 관제(읽기 전용)'));
     await page.route('**/naver/sso-bootstrap.js', route => route.fulfill({ contentType: 'application/javascript',
       body: 'window.__metaincSso={started:true,legacyPresent:false,consume:()=>Promise.resolve(' +
         JSON.stringify({ code: cfg.code, codeVerifier: 'V'.repeat(42) + 'A' }) + ')};' }));

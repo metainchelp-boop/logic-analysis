@@ -1,4 +1,4 @@
-"""기존 S13 실제 Chromium/중계/엔진 도우미를 대표 읽기 전용 모드로 재사용한다."""
+"""기존 S13 실제 Chromium/중계/엔진 도우미를 읽기 전용 검증 모드로 재사용한다."""
 import json
 from pathlib import Path
 import subprocess
