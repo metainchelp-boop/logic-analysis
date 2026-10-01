@@ -138,6 +138,7 @@ class ReleaseTest(unittest.TestCase):
         good = {'baseline': 'a'*64, 'source_commit':'b'*40, 'ciphertext_sha256':'c'*64,
                 'source_tar_gz_sha256':'d'*64, 'run_id':'123456', 'operation':'prepare'}
         self.assertEqual(M.validate_package(good), good)
+        self.assertEqual(M.validate_package(dict(good, operation='upgrade-prepare'))['operation'], 'upgrade-prepare')
         for key in ('baseline','source_commit','ciphertext_sha256','source_tar_gz_sha256','run_id','operation'):
             value = dict(good, **{key:'../wrong'})
             with self.assertRaises(ValueError):

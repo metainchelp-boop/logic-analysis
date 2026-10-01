@@ -52,7 +52,7 @@ def validate_package(package):
                            ('run_id', '[0-9]{6,20}')):
         if not isinstance(package[field], str) or not re.fullmatch(pattern, package[field]):
             raise ValueError('PACKAGE_SHAPE')
-    if package['operation'] not in ('prepare', 'start'):
+    if package['operation'] not in ('prepare', 'start', 'upgrade-prepare'):
         raise ValueError('PACKAGE_OPERATION')
     return package
 
