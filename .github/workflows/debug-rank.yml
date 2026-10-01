@@ -88,7 +88,7 @@ jobs:
           script: |
             set -eu
             python3 - <<'PY'
-            import hashlib, json, os, pathlib, re, shutil, stat, subprocess
+            import grp, hashlib, ipaddress, json, os, pathlib, pwd, re, shutil, stat, subprocess
 
             # 공개 실행 로그: 환경·키·DB·앱 로그를 읽지 않고 Docker 메타데이터만 선택한다.
             def command(args):
@@ -109,6 +109,63 @@ jobs:
                 return {'exists': True, 'symlink': stat.S_ISLNK(info.st_mode),
                         'directory': stat.S_ISDIR(info.st_mode), 'uid': info.st_uid,
                         'gid': info.st_gid, 'mode': oct(stat.S_IMODE(info.st_mode))}
+
+            def probe(args):
+                # 선택 도구의 부재/실패는 원문 stdout/stderr 없이 unknown으로 보고한다.
+                try:
+                    result = subprocess.run(args, capture_output=True, text=True, timeout=5)
+                except (OSError, subprocess.TimeoutExpired):
+                    return None
+                if result.returncode or len(result.stdout) + len(result.stderr) > 16384:
+                    return None
+                return result
+
+            def tunnel_preflight():
+                ssh = probe(['ssh', '-V'])
+                ssh_match = re.search(r'\bOpenSSH_([0-9]{1,2}\.[0-9]{1,2}(?:p[0-9]{1,2})?)\b',
+                                      ssh.stdout + '\n' + ssh.stderr) if ssh else None
+                systemd = probe(['systemd', '--version'])
+                systemd_text = systemd.stdout if systemd else ''
+                systemd_match = re.search(r'(?m)^systemd ([0-9]{1,4})\b', systemd_text)
+                feature = re.search(r'(?<!\S)([+-])BPF_FRAMEWORK(?!\S)', systemd_text)
+                route = {'available': False, 'source_matches_expected': None}
+                result = probe(['ip', '-json', 'route', 'get', '1.234.23.117'])
+                if result:
+                    try:
+                        rows = json.loads(result.stdout)
+                        if isinstance(rows, list) and len(rows) == 1 and isinstance(rows[0], dict):
+                            selected = rows[0].get('prefsrc', rows[0].get('src'))
+                            if isinstance(selected, str):
+                                selected = str(ipaddress.IPv4Address(selected))
+                                route = {'available': True, 'source_matches_expected': selected == '1.234.20.80'}
+                    except (ValueError, TypeError):
+                        pass
+                try:
+                    account = pwd.getpwuid(10001)
+                except KeyError:
+                    account = None
+                try:
+                    group = grp.getgrgid(10001)
+                except KeyError:
+                    group = None
+                identity = {'uid_10001_exists': account is not None,
+                            'uid_10001_primary_gid': account.pw_gid if account else None,
+                            'gid_10001_exists': group is not None,
+                            'gid_10001_explicit_member_count': len(group.gr_mem) if group else 0,
+                            'gid_10001_primary_member_count': sum(row.pw_gid == 10001 for row in pwd.getpwall())}
+                return {'ssh_version': 'OpenSSH_' + ssh_match.group(1) if ssh_match else None,
+                        'systemd_version': 'systemd ' + systemd_match.group(1) if systemd_match else None,
+                        'route': route, 'identity': identity,
+                        'paths': {'config': metadata('/etc/metainc/naver-erp-tunnel'),
+                                  'service': metadata('/etc/systemd/system/metainc-naver-erp-tunnel.service'),
+                                  'runtime': metadata('/run/metainc-naver-erp-tunnel')},
+                        # 읽기 지표일 뿐 실제 BPF 프로그램 부착/패킷 거절은 검증하지 않는다.
+                        # 기능 probe·임시 unit 실행은 커널/서비스 변경이므로 이 진단에서 금지한다.
+                        'bpf': {'systemd_framework_compiled': feature.group(1) == '+' if feature else None,
+                                'cgroup_v2': pathlib.Path('/sys/fs/cgroup/cgroup.controllers').is_file(),
+                                'bpffs_directory_exists': pathlib.Path('/sys/fs/bpf').is_dir(),
+                                'runtime_enforcement_verified': False,
+                                'assessment': 'read_only_indicators_only'}}
 
             def inspect():
                 names = command(['docker', 'ps', '-a', '--format', '{{.Names}}']).splitlines()
@@ -236,6 +293,11 @@ jobs:
                 report['baseline_sha256'] = baseline(report)
                 if mode == 'prepare':
                     report = prepare(report, os.environ.get('AD_EXPECTED_BASELINE', ''))
+                else:
+                    report['tunnel_preflight'] = tunnel_preflight()
+                    if baseline(inspect()) != report['baseline_sha256']:
+                        raise RuntimeError('container_changed_during_inspection')
+                    report['containers_unchanged'] = True
                 print('AD_DEPLOY_PREFLIGHT=' + json.dumps(report, sort_keys=True))
             except Exception as exc:
                 # 예외 원문/표준 오류에는 경로·자격이 섞일 수 있어 출력하지 않는다.
