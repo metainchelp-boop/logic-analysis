@@ -67,7 +67,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -c 'import json,os; d=json.loads(os.environ["INPUTS_JSON"]); assert d.pop("ad_prepare")=="tunnel-native"; assert d.pop("ad_expected_baseline")==""; assert all(v=="off" for v in d.values())'
+          python3 -c 'import json,os; d=json.loads(os.environ["INPUTS_JSON"]); assert d.pop("ad_prepare")=="tunnel-native"; assert d.pop("ad_expected_baseline", "")==""; assert all(v=="off" for v in d.values())'
           python3 -m unittest discover -s backend/tests -p 'test_naver_tunnel_bpf_native_ci.py' -q
           sudo env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted CI=true NAVER_TUNNEL_BPF_NATIVE_CI=1 timeout 25s /usr/bin/python3 -I -B backend/tools/naver_tunnel_bpf_native_ci.py
   ad-deploy-prepare:
