@@ -394,7 +394,7 @@ class OtherReadsTest(Base):
         self.fake.ids = {"generated_at": "t", "items": [
             {"possibility_id": 11, "vendor": "NAVER_SEARCHAD", "customer_id": " 123-4567 "},
             {"possibility_id": 12, "vendor": None, "customer_id": None},
-            {"possibility_id": 13, "vendor": "NAVER_SEARCHAD", "customer_id": 1234567, "api_key": MARK_KEY},
+            {"possibility_id": 13, "vendor": "NAVER_SEARCHAD", "api_key": MARK_KEY},
         ]}
         rows = self.reader.read_naver_customer_ids()
         self.assertEqual([(r.possibility_id, r.vendor, r.customer_id_raw) for r in rows],
@@ -402,7 +402,8 @@ class OtherReadsTest(Base):
         self.assertNotIn("123-4567", repr(rows))
         self.assertEqual(set(E.NaverIdRow.__dataclass_fields__),
                          {"possibility_id", "vendor", "customer_id_raw", "ad_account_no_raw"})
-        for bad in ({"items": "x"}, {"items": ["x"]}, {"items": [{"possibility_id": -1}]}, {}):
+        for bad in ({"items": "x"}, {"items": ["x"]}, {"items": [{"possibility_id": -1}]},
+                    {"items": [{"possibility_id": 13, "customer_id": 1234567}]}, {}):
             with self.subTest(bad=bad):
                 self.fake.ids = bad
                 with self.assertRaises(E.ErpIncomplete):
@@ -414,6 +415,17 @@ class OtherReadsTest(Base):
                 self.fake.ids = {"items": [
                     {"possibility_id": 21, "ad_account_no": "8123456"},
                     {"possibility_id": 22, "ad_account_no": malformed},
+                ]}
+                with self.assertRaises(E.ErpIncomplete) as cm:
+                    self.reader.read_naver_customer_ids()
+                self.assertEqual(cm.exception.kind, "bad-shape")
+                self.assertNotIn(MARK_KEY, str(cm.exception))
+
+    def test_non_string_customer_id_cannot_hide_conflict_with_valid_ad_account_number(self):
+        for malformed in (1234567, True, 1.5, [], {"api_key": MARK_KEY}):
+            with self.subTest(type=type(malformed).__name__):
+                self.fake.ids = {"items": [
+                    {"possibility_id": 21, "ad_account_no": "8123456", "customer_id": malformed},
                 ]}
                 with self.assertRaises(E.ErpIncomplete) as cm:
                     self.reader.read_naver_customer_ids()

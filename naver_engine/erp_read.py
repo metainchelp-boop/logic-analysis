@@ -313,11 +313,13 @@ class ErpReader:
                 raise ErpIncomplete("bad-shape", PATH_NAVER_IDS, 200, "가망 번호")
             vendor = it.get("vendor")
             raw = it.get("customer_id")
+            if raw is not None and not isinstance(raw, str):
+                raise ErpIncomplete("bad-shape", PATH_NAVER_IDS, 200, "고객 번호 모양")
             ad_no = it.get("ad_account_no")
             if ad_no is not None and not isinstance(ad_no, str):
                 raise ErpIncomplete("bad-shape", PATH_NAVER_IDS, 200, "광고 계정 번호 모양")
             out.append(NaverIdRow(pid, vendor if isinstance(vendor, str) else None,
-                                  raw if isinstance(raw, str) else None, ad_no))
+                                  raw, ad_no))
         return tuple(out)
 
 
