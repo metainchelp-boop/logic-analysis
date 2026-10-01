@@ -9,7 +9,7 @@ on:
       ad_prepare:
         description: 'inspect 조회 / prepare 빈 폴더 / tunnel-keygen 새 터널키 / tunnel-install 전용 SSH 서비스. 앱 배포 없음.'
         type: choice
-        options: ['off', inspect, prepare, tunnel-keygen, tunnel-install]
+        options: ['off', inspect, prepare, tunnel-keygen, tunnel-install, tunnel-native]
         required: false
         default: 'off'
       ad_expected_baseline:
@@ -50,6 +50,26 @@ on:
         default: 'off'
 
 jobs:
+  tunnel-native:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && inputs.ad_prepare == 'tunnel-native' }}
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: 입력 확인·합성 검사·일회용 runner 재현 (운영 서버 연결 없음)
+        env:
+          INPUTS_JSON: ${{ toJSON(inputs) }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import json,os; d=json.loads(os.environ["INPUTS_JSON"]); assert d.pop("ad_prepare")=="tunnel-native"; assert d.pop("ad_expected_baseline")==""; assert all(v=="off" for v in d.values())'
+          python3 -m unittest discover -s backend/tests -p 'test_naver_tunnel_bpf_native_ci.py' -q
+          sudo env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted CI=true NAVER_TUNNEL_BPF_NATIVE_CI=1 timeout 25s /usr/bin/python3 -I -B backend/tools/naver_tunnel_bpf_native_ci.py
   ad-deploy-prepare:
     if: ${{ inputs.ad_prepare == 'inspect' || inputs.ad_prepare == 'prepare' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && inputs.ad_prepare == 'tunnel-keygen') }}
     permissions:
