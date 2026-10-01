@@ -32,6 +32,13 @@ server {
 
 
 class CandidateTest(unittest.TestCase):
+    def test_legal_empty_quoted_nginx_values_parse_but_unclosed_quotes_do_not(self):
+        text = 'map $http_upgrade $connection_upgrade { default upgrade; "" close; }'
+        nodes = M._parse(text)
+        self.assertEqual(nodes[0][3][1][0], ['', 'close'])
+        with self.assertRaises(ValueError):
+            M._parse('proxy_set_header Connection "unterminated;')
+
     def test_known_shared_host_and_certbot_ssl_include_keep_legacy_root(self):
         body = CONFIG.replace(b'server_name dashboard.metainc.co.kr;',
                               b'server_name ad.metainc.co.kr dashboard.metainc.co.kr;')

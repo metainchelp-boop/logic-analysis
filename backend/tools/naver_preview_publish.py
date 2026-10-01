@@ -64,7 +64,7 @@ def _tokens(text):
             else:
                 value += char
             i += 1
-        if quote or not value:
+        if quote or (not value and i == begin):
             raise ValueError('CONFIG_TOKEN')
         out.append((value, begin, i))
         if len(out) > 20000:
@@ -80,7 +80,7 @@ def _parse(text):
         nodes = []
         while pos < len(tokens) and tokens[pos][0] != '}':
             begin, words = tokens[pos][1], []
-            while pos < len(tokens) and tokens[pos][0] not in '{};':
+            while pos < len(tokens) and tokens[pos][0] not in ('{', '}', ';'):
                 words.append(tokens[pos][0])
                 pos += 1
             if not words or pos >= len(tokens):
