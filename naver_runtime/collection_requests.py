@@ -1,8 +1,8 @@
 """대표의 즉시 읽기 요청. 기존 저장소·읽기 규칙만 사용하며 시작 작업을 재생하지 않는다."""
-from app.naver_auto import org_snapshot as O, scope as SC
 from datetime import datetime, time, timedelta
 
 from naver_engine import morning as M, naver_read as N, store as S, sync as Y, links as L
+from naver_engine.sync import is_current_owner as owner_allowed
 
 COUNT_KEYS = frozenset({"targets", "ok", "partial", "key_rejected", "data_late", "system_gap", "link_broken",
                         "link_missing", "not_eligible", "deadline_left", "abort_left", "account_error",
@@ -52,15 +52,6 @@ def restricted(config):
     return (config.sync_enabled and config.links_enabled and config.morning_enabled
             and config.web_enabled and not config.alerts_enabled and not config.metrics_enabled
             and not config.issue_alerts_enabled)
-
-
-def owner_allowed(store, actor, now):
-    if type(actor) is not int or not 0 <= actor < 2 ** 63:
-        return False
-    saved = store.org_current()
-    if saved is None or not O.allows_raising(O.org_freshness(saved["generated_at"], now)):
-        return False
-    return SC.scope_of(O.parse_org_snapshot(saved["body"]), actor).kind == SC.ALL
 
 
 def refused(code):

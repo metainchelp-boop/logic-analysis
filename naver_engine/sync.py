@@ -302,6 +302,17 @@ def org_freshness(store: S.Store, now: datetime) -> str:
     return O.org_freshness(stored["generated_at"], now)
 
 
+def is_current_owner(store: S.Store, actor: int, now: datetime) -> bool:
+    """즉시 읽기 요청의 대표 관문. 조직 해석은 코어 안에 두고 runtime에는 참/거짓만 준다."""
+    if type(actor) is not int or not 0 <= actor < 2 ** 63:
+        return False
+    saved = store.org_current()
+    if saved is None or not O.allows_raising(O.org_freshness(saved["generated_at"], now)):
+        return False
+    # scope.ALL과 같은 원본 정의: 재직 중이며 is_top_manager인 사람만.
+    return actor in O.parse_org_snapshot(saved["body"]).top_managers()
+
+
 # ── 계약 단계 ────────────────────────────────────────────────────────
 def _judge_stages(store: S.Store, snap: E.StageSnapshot, now: datetime) -> SyncResult:
     rows = len(snap.rows) + len(snap.stage_conflicts)

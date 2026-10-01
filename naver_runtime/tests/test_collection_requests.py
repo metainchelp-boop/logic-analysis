@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import threading
 from unittest import TestCase
 
+from app.naver_auto import org_snapshot as O, scope as SC
 from naver_engine import store as S, naver_read as N
 from naver_engine.tests.fake_naver import FakeClock
 from naver_engine.tests.test_sync import org_payload
@@ -58,6 +59,21 @@ def enabled():
 
 
 class CollectionRequestTest(TestCase):
+    def test_current_owner_role_is_not_a_hardcoded_employee_id(self):
+        cases = (("owner", 0, {}), ("nonzero_owner", 1, {"is_top_manager": True}),
+                 ("resigned_owner", 0, {"status": "RESIGNED"}), ("leader", 1, {}),
+                 ("staff", 100, {}), ("unknown", 999999, {}))
+        for role, actor, changes in cases:
+            with self.subTest(role=role):
+                store = AuditStore()
+                for person in store.org["body"]["employees"]:
+                    if person["idx"] == actor:
+                        person.update(changes)
+                is_all = SC.scope_of(O.parse_org_snapshot(store.org["body"]), actor).kind == SC.ALL
+                self.assertEqual(CR.owner_allowed(store, actor, NOW), is_all)
+                task = Scheduler(enabled(), store, collection_factory=lambda: None, clock=lambda: NOW)
+                self.assertEqual(task.request_collection(actor)["status"], "accepted" if is_all else "refused")
+
     def test_concurrent_tick_and_requests_cannot_create_a_second_reader(self):
         store, entered, release = AuditStore(), threading.Event(), threading.Event()
         reads = []

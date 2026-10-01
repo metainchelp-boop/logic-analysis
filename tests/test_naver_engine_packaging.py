@@ -102,7 +102,8 @@ class PackagingSourceTest(unittest.TestCase):
                 condition = "inputs.preview_seal == true && inputs.backup_acceptance == 'none' && inputs.received_synthetic_json == ''"
             else:
                 condition += " && !inputs.preview_seal && inputs.server_envelope_cert_pem == ''"
-            self.assertIn('    if: ' + branch + ' && ' + condition + '\n', body)
+            job_branch = matching_branch if job == 'preview-seal' else branch
+            self.assertIn('    if: ' + job_branch + ' && ' + condition + '\n', body)
             refs = re.findall(r'\bsecrets\.([A-Z_]+)\b', body)
             self.assertEqual(secrets, set(refs), job)
             self.assertEqual(len(secrets), len(refs), job + ': each secret reference must occur exactly once')
