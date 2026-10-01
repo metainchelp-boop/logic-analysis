@@ -45,6 +45,17 @@ def nginx_nodes(source):
 
 
 class PolicyTests(unittest.TestCase):
+    def test_native_only_workflow_has_no_credentials_or_deployment_path(self):
+        source = (ROOT.parents[1] / ".github/workflows/naver-tunnel-native-tests.yml").read_text()
+        self.assertIn("permissions:\n  contents: read", source)
+        self.assertIn("persist-credentials: false", source)
+        self.assertIn("github.event_name == 'workflow_dispatch' && github.ref == "
+                      "'refs/heads/codex/naver-backup-recovery-20261001'", source)
+        self.assertNotRegex(source, r"(?i)\b(secrets|environment|ssh-action|scp-action)\b")
+        self.assertNotRegex(source, r"(?m)^  (push|schedule|pull_request):")
+        self.assertIn("docker run --rm --network none --pids-limit 128", source)
+        self.assertNotRegex(source, r"--(?:privileged|mount|volume|publish)|/var/run/docker.sock")
+
     def test_session_denial_probes_reach_authentication_not_argument_conflict(self):
         ssh = shutil.which("ssh")
         if not ssh:
