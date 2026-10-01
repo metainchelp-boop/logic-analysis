@@ -317,6 +317,7 @@ jobs:
                     if isinstance(wd, str) and wd.startswith('/'):
                         item['directory_stat'] = metadata(wd)
                         item['env_stat'] = metadata(str(pathlib.Path(wd) / '.env'))
+                        item['git_stat'] = metadata(str(pathlib.Path(wd) / '.git'))
                     containers.append(item)
                 ad = [c for c in containers if c['service'] == 'ad-api']
                 if len(ad) != 1 or not ad[0]['running']:
@@ -334,6 +335,26 @@ jobs:
                           'staging_stat': metadata('/srv/metainc/ad-deploy-staging'),
                           'containers': containers}
                 return report
+
+            def preview_readiness():
+                # 인증서/환경파일/원격 자격은 읽지 않는다. nginx 구성은 필요한 메타데이터만 반환.
+                result = probe(['nginx', '-T'])
+                configs = []
+                if result:
+                    for section in re.split(r'(?m)^# configuration file ', result.stdout)[1:]:
+                        name, _, body = section.partition(':\n')
+                        if 'dashboard.metainc.co.kr' not in body:
+                            continue
+                        configs.append({'path': name, 'sha256': hashlib.sha256(body.encode()).hexdigest(),
+                            'locations': re.findall(r'(?m)^\s*location\s+([^\n{;]{1,120})\s*\{', body),
+                            'upstreams': re.findall(r'(?m)^\s*proxy_pass\s+(https?://(?:127\.0\.0\.1|localhost):[0-9]{2,5}/?);', body),
+                            'tls': bool(re.search(r'listen\s+443', body))})
+                return {'nginx_available': result is not None, 'dashboard_configs': configs,
+                        'paths': {name: metadata(name) for name in (
+                            '/etc/metainc/naver-engine', '/var/lib/metainc/naver-engine',
+                            '/run/metainc/naver-engine', '/var/backups/metainc/naver-engine',
+                            '/etc/metainc/naver-deploy-envelope')},
+                        'openssl_available': probe(['openssl', 'version']) is not None}
 
             def baseline(report):
                 fields = ('name', 'id', 'image_id', 'running', 'started_at',
@@ -493,6 +514,7 @@ jobs:
                 else:
                     report['tunnel_preflight'] = tunnel_preflight()
                     report['tunnel_service'] = tunnel_service_diagnostics()
+                    report['preview_readiness'] = preview_readiness()
                     if baseline(inspect()) != report['baseline_sha256']:
                         raise RuntimeError('container_changed_during_inspection')
                     report['containers_unchanged'] = True
