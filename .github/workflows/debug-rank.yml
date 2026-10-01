@@ -9,7 +9,7 @@ on:
       ad_prepare:
         description: 'inspect 조회 / prepare 빈 폴더 / tunnel-keygen 새 터널키 / tunnel-install 설치 / tunnel-activate 검증 후 활성화. 앱 배포 없음.'
         type: choice
-        options: ['off', inspect, prepare, tunnel-keygen, tunnel-install, tunnel-activate, tunnel-native, preview-envelope, preview-prepare, preview-start]
+        options: ['off', inspect, prepare, tunnel-keygen, tunnel-install, tunnel-activate, tunnel-native, preview-envelope, preview-prepare, preview-start, preview-backup, preview-inspect, preview-plan, preview-publish, preview-rollback, preview-lifecycle]
         required: false
         default: 'off'
       ad_expected_baseline:
@@ -50,6 +50,78 @@ on:
         default: 'off'
 
 jobs:
+  preview-ops:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && (inputs.ad_prepare == 'preview-backup' || inputs.ad_prepare == 'preview-inspect' || inputs.ad_prepare == 'preview-plan' || inputs.ad_prepare == 'preview-publish' || inputs.ad_prepare == 'preview-rollback' || inputs.ad_prepare == 'preview-lifecycle') }}
+    permissions:
+      contents: read
+    concurrency:
+      group: deploy-logic-analysis
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: 승인된 관제 전용 작업·합성 검사
+        env:
+          INPUTS_JSON: ${{ toJSON(inputs) }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -eu
+          python3 -m unittest discover -s backend/tests -p 'test_naver_preview_*.py' -q
+          python3 - <<'PY'
+          import base64,json,os,pathlib
+          inputs=json.loads(os.environ['INPUTS_JSON'])
+          operation=inputs.pop('ad_prepare')
+          module,function={'preview-backup':('naver_preview_backup_probe','run'),
+            'preview-inspect':('naver_preview_publish','inspect'),
+            'preview-plan':('naver_preview_publish','plan'),
+            'preview-publish':('naver_preview_publish','apply'),
+            'preview-rollback':('naver_preview_publish','rollback'),
+            'preview-lifecycle':('naver_preview_lifecycle','install')}[operation]
+          package=json.loads(inputs.pop('ad_expected_baseline'))
+          assert all(v=='off' for v in inputs.values())
+          bundle={'package':package,'operation':operation,'function':function,
+                  'source':pathlib.Path('backend/tools/'+module+'.py').read_text(),
+                  'release_source':pathlib.Path('backend/tools/naver_preview_release.py').read_text(),
+                  'host_source':pathlib.Path('backend/tools/naver_erp_tunnel_service_install.py').read_text()}
+          with open(os.environ['GITHUB_ENV'],'a') as stream:
+              stream.write('PREVIEW_OPS_B64='+base64.b64encode(json.dumps(bundle).encode()).decode()+'\n')
+          PY
+      - name: 새 관제만 제한 작업 — 기존 앱 유지
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        env:
+          PREVIEW_OPS_B64: ${{ env.PREVIEW_OPS_B64 }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          envs: PREVIEW_OPS_B64
+          command_timeout: 12m
+          script: |
+            set -eu
+            /usr/bin/python3 -I -B - <<'PY'
+            import base64,json,os,re,sys,types
+            module=None
+            try:
+                bundle=json.loads(base64.b64decode(os.environ['PREVIEW_OPS_B64'],validate=True))
+                os.environ.clear();os.environ.update(PATH='/usr/sbin:/usr/bin:/sbin:/bin',LANG='C')
+                allowed={'preview-backup':'run','preview-inspect':'inspect','preview-plan':'plan','preview-publish':'apply','preview-rollback':'rollback','preview-lifecycle':'install'}
+                assert allowed[bundle['operation']]==bundle['function']
+                host=types.ModuleType('approved_host');exec(bundle['host_source'],host.__dict__)
+                module=types.ModuleType('approved_preview');exec(bundle['source'],module.__dict__)
+                if bundle['operation']=='preview-lifecycle':
+                    release=types.ModuleType('approved_release');exec(bundle['release_source'],release.__dict__)
+                    result=module.install(bundle['package'],host.NativeHost(),release)
+                else:
+                    result=getattr(module,bundle['function'])(bundle['package'],host.NativeHost())
+            except Exception as error:
+                result={'ok':False,'stage':getattr(module,'STAGE','preflight'),'error_kind':type(error).__name__,
+                        'error_code':str(error) if re.fullmatch('[A-Z_]{1,64}',str(error)) else None}
+            print('NAVER_PREVIEW_OPS='+json.dumps(result,sort_keys=True))
+            sys.exit(0 if result.get('ok') else 1)
+            PY
   preview-start:
     if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && inputs.ad_prepare == 'preview-start' }}
     permissions:
@@ -180,6 +252,22 @@ jobs:
                 print('PREVIEW_INCOMING_REFUSED');sys.exit(1)
             print('PREVIEW_INCOMING_READY')
             PY
+      - name: 암호문 전용 임시 파일 소유자 정렬 — 0700·0600 유지
+        run: |
+          set -eu
+          sudo /usr/bin/python3 -I -B - <<'PY'
+          import os,pathlib,stat
+          folder=pathlib.Path.cwd()/'preview-payload'
+          path=folder/'runtime-secrets.cms'
+          assert folder.resolve()==folder and path.resolve()==path
+          assert sorted(p.name for p in folder.iterdir())==['runtime-secrets.cms']
+          parent=folder.lstat();item=path.lstat()
+          assert stat.S_ISDIR(parent.st_mode) and stat.S_IMODE(parent.st_mode)==0o700
+          assert stat.S_ISREG(item.st_mode) and item.st_nlink==1 and stat.S_IMODE(item.st_mode)==0o600
+          assert 0<item.st_size<=2*1024*1024 and parent.st_uid==item.st_uid==int(os.environ['SUDO_UID'])
+          os.chown(path,1000,1000);os.chown(folder,1000,1000)
+          print('ENCRYPTED_TRANSFER_OWNER_READY: private modes unchanged')
+          PY
       - name: 암호문만 운영 서버로 전달
         uses: appleboy/scp-action@917f8b81dfc1ccd331fef9e2d61bdc6c8be94634
         with:

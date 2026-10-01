@@ -38,6 +38,17 @@ def image_inspect_output(args, package):
 
 
 class ReleaseTest(unittest.TestCase):
+    def test_transferred_ciphertext_owner_is_normalized_only_after_hash_validation(self):
+        import types
+        metadata = types.SimpleNamespace(st_mode=0o100600, st_uid=1000, st_gid=1000, st_nlink=1, st_size=6)
+        path = Mock();path.lstat.return_value=metadata;path.read_bytes.return_value=b'cipher'
+        with patch.object(M.os, 'chown') as change:
+            with self.assertRaisesRegex(ValueError, 'CIPHERTEXT_HASH'):
+                M.received_ciphertext(path, '0'*64)
+            change.assert_not_called()
+            self.assertEqual(M.received_ciphertext(path, M.sha(b'cipher')), b'cipher')
+            change.assert_called_once_with(path, 0, 0)
+
     def simulate_start_failure(self, *, failed_up=None, up_timeout=False, failed_stop=None):
         """Controller test: only Docker, identity and time are simulated; no host or WSGI call."""
         package = {'baseline': 'a'*64, 'source_commit': 'b'*40, 'ciphertext_sha256': 'c'*64,

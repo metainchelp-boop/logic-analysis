@@ -178,6 +178,20 @@ def prepared_paths(commit):
     return release, receipt_path
 
 
+def received_ciphertext(path, expected_sha256):
+    st = path.lstat()
+    if (not stat.S_ISREG(st.st_mode) or (st.st_uid, st.st_gid) not in ((0, 0), (1000, 1000))
+            or stat.S_IMODE(st.st_mode) != 0o600 or st.st_nlink != 1 or not 0 < st.st_size <= 2*1024*1024):
+        raise ValueError('CIPHERTEXT_FILE')
+    ciphertext = path.read_bytes()
+    if sha(ciphertext) != expected_sha256:
+        raise ValueError('CIPHERTEXT_HASH')
+    # Approved 2026-10-01: only this newly received, verified ciphertext; never runtime secrets.
+    if st.st_uid != 0:
+        os.chown(path, 0, 0)
+    return ciphertext
+
+
 def prepare(package, host):
     global STAGE
     STAGE = 'preflight'
@@ -190,13 +204,7 @@ def prepare(package, host):
         trusted_dir(folder, mode=0o700)
     trusted_dir(ROOT/'incoming'/package['run_id'],mode=0o700)
     incoming = ROOT / 'incoming' / package['run_id'] / 'runtime-secrets.cms'
-    st = incoming.lstat()
-    if (not stat.S_ISREG(st.st_mode) or st.st_uid != 0 or st.st_nlink != 1
-            or not 0 < st.st_size <= 2*1024*1024):
-        raise ValueError('CIPHERTEXT_FILE')
-    ciphertext = incoming.read_bytes()
-    if sha(ciphertext) != package['ciphertext_sha256']:
-        raise ValueError('CIPHERTEXT_HASH')
+    ciphertext = received_ciphertext(incoming, package['ciphertext_sha256'])
     key = Path('/etc/metainc/naver-deploy-envelope/private.pem')
     if key.parent.resolve() != key.parent:
         raise ValueError('SYMLINKED_ENVELOPE_PARENT')
