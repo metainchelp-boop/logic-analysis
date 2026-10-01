@@ -7,13 +7,13 @@ on:
   workflow_dispatch:
     inputs:
       ad_prepare:
-        description: '광고센터 배포 준비 — inspect 조회 / prepare 분리된 빈 준비 폴더만 생성. 앱·키 무변경.'
+        description: 'inspect 조회 / prepare 빈 준비 폴더 / tunnel-keygen 새 전용 터널키만 생성. 앱·서비스 배포 없음.'
         type: choice
-        options: ['off', inspect, prepare]
+        options: ['off', inspect, prepare, tunnel-keygen]
         required: false
         default: 'off'
       ad_expected_baseline:
-        description: 'prepare 필수: 직전 inspect의 컨테이너 기준 SHA-256. 비밀값 아님.'
+        description: 'prepare/tunnel-keygen 필수: 직전 inspect의 컨테이너 기준 SHA-256. 비밀값 아님.'
         required: false
         default: ''
       collector:
@@ -51,7 +51,7 @@ on:
 
 jobs:
   ad-deploy-prepare:
-    if: ${{ inputs.ad_prepare == 'inspect' || inputs.ad_prepare == 'prepare' }}
+    if: ${{ inputs.ad_prepare == 'inspect' || inputs.ad_prepare == 'prepare' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && inputs.ad_prepare == 'tunnel-keygen') }}
     permissions:
       contents: read
     concurrency:
@@ -64,12 +64,21 @@ jobs:
         env:
           AD_PREPARE_MODE: ${{ inputs.ad_prepare }}
           AD_EXPECTED_BASELINE: ${{ inputs.ad_expected_baseline }}
+          AD_RUN_EVENT: ${{ github.event_name }}
+          AD_RUN_REF: ${{ github.ref }}
+          AD_RUN_INPUTS: ${{ toJSON(inputs) }}
         shell: bash
         run: |
           set -euo pipefail
           case "$AD_PREPARE_MODE" in
             inspect) test -z "$AD_EXPECTED_BASELINE" ;;
             prepare) [[ "$AD_EXPECTED_BASELINE" =~ ^[0-9a-f]{64}$ ]] ;;
+            tunnel-keygen)
+              [[ "$AD_EXPECTED_BASELINE" =~ ^[0-9a-f]{64}$ ]] || exit 1
+              test "$AD_RUN_EVENT" = workflow_dispatch || exit 1
+              test "$AD_RUN_REF" = refs/heads/codex/ad-deploy-prep-20261001 || exit 1
+              python3 -c 'import json, os, sys; values=json.loads(os.environ["AD_RUN_INPUTS"]); allowed={"ad_prepare", "ad_expected_baseline"}; sys.exit(0 if all(value == "off" for name, value in values.items() if name not in allowed) else 1)' || exit 1
+              ;;
             *) exit 1 ;;
           esac
       - name: 광고센터 전용 준비 경로 확인·준비
@@ -88,7 +97,7 @@ jobs:
           script: |
             set -eu
             python3 - <<'PY'
-            import grp, hashlib, ipaddress, json, os, pathlib, pwd, re, shutil, stat, subprocess
+            import base64, grp, hashlib, ipaddress, json, os, pathlib, pwd, re, shutil, stat, subprocess
 
             # 공개 실행 로그: 환경·키·DB·앱 로그를 읽지 않고 Docker 메타데이터만 선택한다.
             def command(args):
@@ -221,6 +230,78 @@ jobs:
                     separators=(',', ':')).encode('utf-8')).hexdigest()
 
             created = []
+            def tunnel_keygen(report, expected):
+                if os.geteuid() != 0 or not re.fullmatch(r'[0-9a-f]{64}', expected):
+                    raise RuntimeError('invalid_keygen_context')
+                if baseline(report) != expected:
+                    raise RuntimeError('baseline_changed')
+                folder = pathlib.Path('/etc/metainc/naver-erp-tunnel')
+                # 선행 디렉터리만 검사한다. 기존 키/환경파일 내용은 열지 않는다.
+                for parent in (pathlib.Path('/'), pathlib.Path('/etc'), folder.parent):
+                    info = metadata(parent)
+                    if not info['exists'] and parent == folder.parent:
+                        continue
+                    if (not info['exists'] or info['symlink'] or not info['directory']
+                            or info['uid'] != 0 or info['gid'] != 0 or int(info['mode'], 8) & 0o022):
+                        raise RuntimeError('unsafe_keygen_parent')
+                if os.path.lexists(str(folder)):
+                    raise RuntimeError('keygen_path_exists')
+                old_umask = os.umask(0o077)
+                try:
+                    if not folder.parent.exists():
+                        os.mkdir(str(folder.parent), 0o700)
+                        created.append(str(folder.parent))
+                    # 원자적 mkdir: 동일 모드 중복 실행도 기존 경로를 재사용하지 않는다.
+                    os.mkdir(str(folder), 0o700)
+                    created.append(str(folder))
+                    info = folder.lstat()
+                    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_gid != 0
+                            or stat.S_IMODE(info.st_mode) != 0o700):
+                        raise RuntimeError('keygen_directory_permissions')
+                    identity = (info.st_dev, info.st_ino)
+                    private = folder / 'id_ed25519'
+                    result = subprocess.run(['/usr/bin/ssh-keygen', '-q', '-t', 'ed25519', '-N', '',
+                        '-C', 'naver-erp-tunnel', '-f', str(private)], stdin=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20,
+                        env={'PATH': '/usr/bin:/bin', 'LANG': 'C'})
+                    if result.returncode:
+                        raise RuntimeError('keygen_failed')
+                    current = folder.lstat()
+                    if identity != (current.st_dev, current.st_ino):
+                        raise RuntimeError('keygen_directory_changed')
+                    public = None
+                    files = {}
+                    for target in (private, folder / 'id_ed25519.pub'):
+                        fd = os.open(str(target), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                        try:
+                            item = os.fstat(fd)
+                            if (not stat.S_ISREG(item.st_mode) or item.st_uid != 0 or item.st_gid != 0
+                                    or item.st_nlink != 1 or stat.S_IMODE(item.st_mode) != 0o600
+                                    or not 0 < item.st_size < 4096):
+                                raise RuntimeError('keygen_file_permissions')
+                            files[target.name] = {'uid': item.st_uid, 'gid': item.st_gid,
+                                'mode': oct(stat.S_IMODE(item.st_mode)), 'links': item.st_nlink,
+                                'inode_sha256': hashlib.sha256(('%s:%s' % (
+                                    item.st_dev, item.st_ino)).encode('ascii')).hexdigest()}
+                            if target.name.endswith('.pub'):
+                                public = os.read(fd, 512).decode('ascii').strip()
+                        finally:
+                            os.close(fd)
+                    if not public or not re.fullmatch(r'ssh-ed25519 [A-Za-z0-9+/]{68} naver-erp-tunnel', public):
+                        raise RuntimeError('invalid_generated_public_key')
+                    blob = base64.b64decode(public.split()[1], validate=True)
+                    if len(blob) != 51 or blob[:19] != b'\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20':
+                        raise RuntimeError('invalid_generated_public_key')
+                    if baseline(inspect()) != expected:
+                        raise RuntimeError('container_changed_during_keygen')
+                    return {'mode': 'tunnel-keygen', 'public_key': public,
+                            'files': files, 'directory_mode': oct(stat.S_IMODE(current.st_mode)),
+                            'baseline_sha256': expected, 'containers_unchanged': True,
+                            'private_key_exported': False, 'service_installed': False}
+                finally:
+                    os.umask(old_umask)
+                # 실패 잔재는 삭제/교체하지 않는다. created 목록으로 수동 점검 후 중단한다.
+
             def prepare(report, expected):
                 if os.geteuid() != 0 or not re.fullmatch(r'[0-9a-f]{64}', expected):
                     raise RuntimeError('invalid_prepare_context')
@@ -287,11 +368,13 @@ jobs:
 
             try:
                 mode = os.environ.get('AD_PREPARE_MODE', 'inspect')
-                if mode not in ('inspect', 'prepare'):
+                if mode not in ('inspect', 'prepare', 'tunnel-keygen'):
                     raise RuntimeError('invalid_mode')
                 report = inspect()
                 report['baseline_sha256'] = baseline(report)
-                if mode == 'prepare':
+                if mode == 'tunnel-keygen':
+                    report = tunnel_keygen(report, os.environ.get('AD_EXPECTED_BASELINE', ''))
+                elif mode == 'prepare':
                     report = prepare(report, os.environ.get('AD_EXPECTED_BASELINE', ''))
                 else:
                     report['tunnel_preflight'] = tunnel_preflight()
