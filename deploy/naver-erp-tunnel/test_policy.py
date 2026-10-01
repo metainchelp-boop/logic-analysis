@@ -45,6 +45,21 @@ def nginx_nodes(source):
 
 
 class PolicyTests(unittest.TestCase):
+    def test_session_denial_probes_reach_authentication_not_argument_conflict(self):
+        ssh = shutil.which("ssh")
+        if not ssh:
+            self.skipTest("native SSH parser unavailable")
+        for session in ("default", "subsystem"):
+            parsed = subprocess.run([ssh, "-G", "-F", "/dev/null", "-v", "-o",
+                                     "ClearAllForwardings=yes", "-T", "-o",
+                                     "SessionType=" + session, "fixture.invalid", "sftp"],
+                                    capture_output=True, text=True, timeout=5)
+            self.assertEqual(0, parsed.returncode)
+            self.assertIn("sessiontype " + session, parsed.stdout)
+        source = (ROOT.parents[1] / "tools/naver-tunnel-native-ci.py").read_text()
+        self.assertIn('["-o", "SessionType=subsystem", ACCOUNT, "sftp"]', source)
+        self.assertNotIn('["-s", ACCOUNT, "sftp"]', source)
+
     def test_ad_forwarder_uses_only_private_host_runtime(self):
         unit = configparser.ConfigParser(interpolation=None, strict=True)
         unit.optionxform = str

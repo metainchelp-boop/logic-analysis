@@ -293,8 +293,11 @@ def exercise(root, processes):
             user=10001, group=10001, extra_groups=[])
 
         stage("ssh-denials")
-        probe = client_args + ["-v", "-o", "ClearAllForwardings=yes", "-o", "SessionType=default", "-T"]
-        for name, args in (("exec", [ACCOUNT, "id"]), ("sftp", ["-s", ACCOUNT, "sftp"])):
+        probe = client_args + ["-v", "-o", "ClearAllForwardings=yes", "-T"]
+        # -s conflicts with an explicit SessionType override before authentication.
+        # Override the template's SessionType=none once, with the required probe type.
+        for name, args in (("exec", ["-o", "SessionType=default", ACCOUNT, "id"]),
+                           ("sftp", ["-o", "SessionType=subsystem", ACCOUNT, "sftp"])):
             stage("ssh-denial-" + name)
             refused = run(probe + args, data=b"", expected=None)
             # MaxSessions=0 can report "open failed" rather than "administratively prohibited".
