@@ -6,6 +6,7 @@ from pathlib import Path
 import pwd
 import re
 import stat
+from types import SimpleNamespace
 import uuid
 
 OLD_COMMIT = 'f7eb2e58aafad81e27978f175d83cca0eb5c5733'
@@ -144,8 +145,36 @@ def compatible_code_scope(old, new, upgrade):
             raise ValueError('CODE_SCOPE_CHANGED')
 
 
+def probe(release, source_commit, upgrade):
+    """The old rollback contract stays unchanged; only the pinned target gains auth gates."""
+    if source_commit == OLD_COMMIT:
+        return upgrade.probe(release)
+    if (not isinstance(TARGET_COMMIT, str) or not re.fullmatch('[0-9a-f]{40}', TARGET_COMMIT)
+            or source_commit != TARGET_COMMIT):
+        raise ValueError('CODE_PROBE_SOURCE')
+    def request(path, route, method='GET'):
+        status, headers, body = release.unix_request(path, route, method)
+        if route == '/api/naver-auto/links/confirm' and method == 'POST':
+            if status != 401:
+                raise ValueError('VERIFIED_WRITE_AUTH_NOT_REQUIRED')
+            # Real 401 was checked above; retain the legacy probe's other checks verbatim.
+            return 403, headers, body
+        return status, headers, body
+    upgrade.probe(SimpleNamespace(unix_request=request))
+    relay = '/run/metainc/naver-relay/relay.sock'
+    for route, method, expected in (
+            ('/collection/status', 'GET', 401), ('/collection/request', 'POST', 401),
+            *((r, 'POST', 403) for r in ('/issues/1/resolve', '/issues/1/except',
+                '/links/reject', '/links/revoke', '/links/preview', '/bell/1/read', '/bell/read-all'))):
+        if release.unix_request(relay, '/api/naver-auto' + route, method)[0] != expected:
+            raise ValueError('CODE_ROUTE_STATUS')
+
+
 def verify_running(path, receipt, release, lifecycle, upgrade):
-    upgrade.probe(release)
+    source = receipt.get('source_commit')
+    if source not in (OLD_COMMIT, TARGET_COMMIT) or path.name != 'naver-' + source:
+        raise ValueError('CODE_PROBE_SOURCE')
+    probe(release, source, upgrade)
     lifecycle._snapshot(release, path, receipt['images'])
     for unit in (lifecycle.TUNNEL, *lifecycle.UNITS):
         if lifecycle._state(release, unit, 'ActiveState') != 'active':

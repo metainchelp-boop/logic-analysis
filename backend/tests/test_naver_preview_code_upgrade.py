@@ -19,6 +19,84 @@ def load(name):
 
 
 class ContractTest(unittest.TestCase):
+    def test_target_probe_requires_authentication_only_for_new_verified_routes(self):
+        code = load('naver_preview_code_upgrade')
+        release = Mock()
+        def read(path, route, method='GET'):
+            if route == '/_engine/health':
+                return 200, {}, b'{}'
+            if route == '/naver/':
+                return 200, {'referrer-policy': 'no-referrer', 'cache-control': 'no-store'}, b'verificationNotice'
+            approved = ('/api/naver-auto/links/confirm', '/api/naver-auto/collection/request')
+            return (401 if method == 'GET' or route in approved else 403), {}, b''
+        release.unix_request.side_effect = read
+        code.probe(release, code.TARGET_COMMIT, load('naver_preview_upgrade'))
+        calls = {(args[1], args[2] if len(args) > 2 else 'GET')
+                 for args, _ in release.unix_request.call_args_list}
+        self.assertTrue({('/api/naver-auto/links/confirm', 'POST'),
+                         ('/api/naver-auto/collection/request', 'POST'),
+                         ('/api/naver-auto/collection/status', 'GET'),
+                         ('/api/naver-auto/issues/1/ack', 'POST'),
+                         ('/api/naver-auto/settings/thresholds', 'POST')} <= calls)
+
+    def test_probe_distinguishes_exact_old_and_target_auth_contracts(self):
+        code = load('naver_preview_code_upgrade')
+        for source, confirm, accepted in ((code.OLD_COMMIT, 403, True),
+                (code.OLD_COMMIT, 401, False), (code.TARGET_COMMIT, 401, True),
+                (code.TARGET_COMMIT, 403, False), (code.TARGET_COMMIT, 200, False)):
+            with self.subTest(source=source, confirm=confirm):
+                release = Mock()
+                def read(path, route, method='GET'):
+                    if route == '/_engine/health':
+                        return 200, {}, b'{}'
+                    if route == '/naver/':
+                        return 200, {'referrer-policy':'no-referrer','cache-control':'no-store'}, b'verificationNotice'
+                    if route == '/api/naver-auto/links/confirm':
+                        return confirm, {}, b''
+                    return (401 if method == 'GET' or route.endswith('/collection/request') else 403), {}, b''
+                release.unix_request.side_effect = read
+                if accepted:
+                    code.probe(release, source, load('naver_preview_upgrade'))
+                else:
+                    with self.assertRaises(ValueError):
+                        code.probe(release, source, load('naver_preview_upgrade'))
+
+    def test_target_probe_rejects_each_wrong_route_status_and_health_contract(self):
+        code = load('naver_preview_code_upgrade')
+        routes = {'/me':401, '/collection/status':401, '/links/confirm':401,
+                  '/collection/request':401, '/issues/1/ack':403, '/issues/1/resolve':403,
+                  '/issues/1/except':403, '/settings/thresholds':403, '/links/reject':403,
+                  '/links/revoke':403, '/links/preview':403, '/bell/1/read':403, '/bell/read-all':403}
+        cases = [(route, value) for route, expected in routes.items()
+                 for value in (200, 403 if expected == 401 else 401)]
+        cases += [('/_engine/health', 'invalid'), ('/naver/', 'header'), ('/naver/', 'body')]
+        for changed, wrong in cases:
+            with self.subTest(route=changed, response=wrong):
+                release = Mock()
+                def read(path, route, method='GET'):
+                    if route == '/_engine/health':
+                        return 200, {}, b'[]' if changed == route else b'{}'
+                    if route == '/naver/':
+                        headers = {'referrer-policy':'no-referrer','cache-control':'no-store'}
+                        return (200, {} if changed == route and wrong == 'header' else headers,
+                                b'wrong' if changed == route and wrong == 'body' else b'verificationNotice')
+                    key = route.removeprefix('/api/naver-auto')
+                    return (wrong if changed == key else routes[key]), {}, b''
+                release.unix_request.side_effect = read
+                with self.assertRaises(ValueError):
+                    code.probe(release, code.TARGET_COMMIT, load('naver_preview_upgrade'))
+
+    def test_unknown_or_mismatched_source_refuses_before_any_probe(self):
+        code = load('naver_preview_code_upgrade')
+        release = Mock()
+        for source in (None, '', 'c'*40):
+            with self.subTest(source=source), self.assertRaisesRegex(ValueError, 'CODE_PROBE_SOURCE'):
+                code.probe(release, source, load('naver_preview_upgrade'))
+        for source in (code.OLD_COMMIT, code.TARGET_COMMIT, 'c'*40):
+            with self.subTest(source=source), self.assertRaisesRegex(ValueError, 'CODE_PROBE_SOURCE'):
+                code.verify_running(Path('/wrong-release'), {'source_commit':source}, release, Mock(), Mock())
+        release.unix_request.assert_not_called()
+
     def test_only_exact_approved_code_transition_is_accepted_without_bootstrap_request(self):
         module = load('naver_preview_code_upgrade')
         module.TARGET_COMMIT = 'b'*40  # A sealed target is supplied only in the fixture.
@@ -124,6 +202,10 @@ class ContractTest(unittest.TestCase):
             def request_api_by_code(path,route,method='GET'):
                 if current['source']==code.OLD_COMMIT and failure=='probe' and method=='POST':
                     return 403,{},b''
+                if (current['source']==code.TARGET_COMMIT and method=='POST'
+                        and route in ('/api/naver-auto/links/confirm','/api/naver-auto/collection/request')
+                        and failure not in ('probe','rollback_recreate')):
+                    return 401,{},b''
                 return request_api(path,route,method)
             release.command,release.unix_request=track,request_api_by_code
             target=root/'releases'/('naver-'+'b'*40)
@@ -232,7 +314,8 @@ class ContractTest(unittest.TestCase):
         life._state.return_value='active'
         upgrade.probe.side_effect=ValueError('OLD_NOT_READY')
         with self.assertRaisesRegex(ValueError,'OLD_NOT_READY'):
-            code.verify_running(Path('/old'),{},release,life,upgrade)
+            code.verify_running(Path('/naver-'+code.OLD_COMMIT),
+                                {'source_commit':code.OLD_COMMIT},release,life,upgrade)
 
     def test_changed_bootstrap_is_never_repaired_and_leaves_services_stopped(self):
         result,commands,writes,_,_=self.scenario('bootstrap_changed')
