@@ -21,7 +21,7 @@ record_delivery record_heartbeat record_org record_pairing record_pairing_event
 record_prospects record_sync_event refuse_org refuse_stages runs_on stage_as_of
 system_alert_keys_on thresholds snapshot_to
 metrics_context metrics_work begin_metrics_attempt record_metrics_snapshot metrics_payload
-finish_metrics_attempt
+finish_metrics_attempt record_access access_log
 """.split())
 
 

@@ -53,6 +53,8 @@ GET, POST = "GET", "POST"            # 들어오는 요청의 방식(이 파일�
 _VERIFICATION_GETS = frozenset({"/me", "/board", "/links/pending", "/ended", "/unlinked",
                                "/bell", "/settings", "/health"})
 _VERIFICATION_SESSIONS = frozenset({"/session", "/session/refresh"})
+_VERIFIED_REQUESTS = frozenset({(POST, "/links/confirm"), (POST, "/collection/request"),
+                                (GET, "/collection/status")})
 _VERIFICATION_CLIENT = re.compile(r"/clients/[0-9]{1,18}")
 BODY_MAX = 64 * 1024                 # ③ 중계 상한과 같다(S12)
 QUERY_MAX = 2048
@@ -235,14 +237,19 @@ class App:
                  previewer: Optional[Callable[[Any], List[str]]] = None, login_max: int = LOGIN_MAX,
                  login_window: float = LOGIN_WINDOW, monotonic: Optional[Callable[[], float]] = None,
                  login_source_max: int = LOGIN_SOURCE_MAX, login_token_max: int = LOGIN_TOKEN_MAX,
-                 owner_verification: bool = False) -> None:
+                 owner_verification: bool = False, verified_linking: bool = False,
+                 request_collection=None, collection_status=None) -> None:
         if not isinstance(signer, SE.TokenSigner):
             raise TypeError("signer 는 TokenSigner 여야 합니다(비밀값 없이 시작하지 않는다)")
         if type(owner_verification) is not bool:
             raise TypeError("owner_verification 은 참/거짓이어야 합니다")
+        if type(verified_linking) is not bool:
+            raise TypeError("verified_linking 은 참/거짓이어야 합니다")
         self._open_read, self._write_fn, self._signer, self._profiles = open_read, write, signer, profiles
         # 배선/응답 호환 이름 유지: 읽기 전용 검증판도 매 요청의 기존 SC 범위를 그대로 따른다.
         self._owner_verification = owner_verification
+        self._verified_linking = verified_linking
+        self._request_collection, self._collection_status = request_collection, collection_status
         self._clock = clock or (lambda: datetime.now(KST))
         self._previewer = previewer
         self._login_max, self._login_window, self._login_source_max = login_max, login_window, login_source_max
@@ -305,7 +312,8 @@ class App:
         sub = path[len(PREFIX):]
         if self._owner_verification:
             allowed = ((method == GET and (sub in _VERIFICATION_GETS or _VERIFICATION_CLIENT.fullmatch(sub)))
-                       or (method == POST and sub in _VERIFICATION_SESSIONS))
+                       or (method == POST and sub in _VERIFICATION_SESSIONS)
+                       or (self._verified_linking and (method, sub) in _VERIFIED_REQUESTS))
             if not allowed:
                 # 본문 파싱·조직 조회·감사·handler 호출 전 차단: 업무 쓰기나 미리보기 호출 0.
                 raise HttpError(403, "verification-read-only")
@@ -486,6 +494,7 @@ class App:
         out["bell_unread"] = W.bell(v.store, v.idx, now)["unread"]
         if self._owner_verification:
             out["owner_verification"] = True
+        out["verified_linking"] = self._verified_linking and v.scope.kind == SC.ALL and not v.claims.narrowed
         return 200, out
 
     def _h_board(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
@@ -506,7 +515,56 @@ class App:
         return 200, out
 
     def _h_links_pending(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
-        return 200, W.links_pending(v.ctx(now), v.store, v.scope)
+        out = W.links_pending(v.ctx(now), v.store, v.scope)
+        if self._owner_verification and self._verified_linking:
+            for row in out["rows"]:
+                raw = W.find_ref(v.ctx(now), row["ref"])
+                row["can_confirm"] = row["can_confirm"] and self._verified_row_allowed(v, raw, now)
+                row["can_reject"] = False
+        return 200, out
+
+    def _verified_row_allowed(self, v: Viewer, row, now: datetime) -> bool:
+        ctx = v.ctx(now)
+        if v.scope.kind != SC.ALL or v.claims.narrowed or row is None or not ctx.pairing_today:
+            return False
+        if row["state"] != S.PAIR_AUTO and not (row["state"] == S.PAIR_BLOCKED and row["code"] == "name-different"):
+            return False
+        pid, cid = row["possibility_id"], row["customer_id"]
+        a, p = ctx.accounts.get(cid), ctx.prospects.get(pid)
+        if not a or a["present"] != 1 or not p or p["present"] != 1 or p["stage_conflict"] or p["end_unreadable"]:
+            return False
+        if W.link_holders(ctx, pid, cid) or row.get("claimed_elsewhere"):
+            return False
+        if any(d.possibility_id == pid and d.customer_id == cid for d in ctx.live_decisions):
+            return False
+        read_at = v.store.accounts_read_at()
+        if read_at is None or not timedelta(0) <= now - read_at <= L.ACCOUNTS_MAX_AGE:
+            return False
+        stage_at = v.store.stage_as_of()
+        if ctx.pairing["accounts_read_at"] != read_at or ctx.pairing["stages_as_of"] != stage_at:
+            return False
+        end = None if p["latest_end_date"] is None else date.fromisoformat(p["latest_end_date"])
+        return H.eligibility_reason(p["stage_key"], stage_at, end, now) is None
+
+    def _h_collection_request(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
+        self._ceo_only(v, "collection-request", "board", now)
+        if not self._verified_linking or v.claims.narrowed:
+            raise HttpError(403, "verification-read-only")
+        _body(req, frozenset(), frozenset())
+        if not O.allows_raising(v.ctx(now).freshness):
+            raise HttpError(409, "org-stale")
+        if self._request_collection is None:
+            raise HttpError(503, "collection-unavailable")
+        result = self._request_collection(v.idx)
+        return (200 if result["status"] == "accepted" else 409), result
+
+    def _h_collection_status(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
+        self._ceo_only(v, "collection-status", "board", now)
+        if not self._verified_linking or v.claims.narrowed:
+            raise HttpError(403, "verification-read-only")
+        if self._collection_status is None:
+            raise HttpError(503, "collection-unavailable")
+        return 200, self._collection_status()
 
     def _h_ended(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
         return 200, W.ended(v.ctx(now), v.store, v.scope)
@@ -632,6 +690,36 @@ class App:
         return 200, {"decided": len(ids), "decision": decision}
 
     def _h_links_confirm(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
+        if self._owner_verification and self._verified_linking:
+            self._ceo_only(v, "link-confirm", "link", now)
+            body = _body(req, frozenset({"refs", "ad_account_no"}), frozenset({"refs"}))
+            # 저장 큐 차례에 최신 조직/계정/계약/짝을 다시 읽는다. 앞 요청의 읽기 스냅샷을 쓰지 않는다.
+            def confirm(st):
+                current = self._now()
+                org = W.load_org(st)
+                scope = SC.narrowed_scope_of(org, v.idx) if v.claims.narrowed else SC.scope_of(org, v.idx)
+                if scope.kind != SC.ALL:
+                    raise HttpError(403, "ceo-only")
+                fresh = Viewer(v.idx, scope, v.claims, st, org)
+                rows = self._link_rows(fresh, current, body["refs"], holders_checked=True)
+                if not O.allows_raising(fresh.ctx(current).freshness):
+                    raise HttpError(409, "org-stale")
+                if not all(self._verified_row_allowed(fresh, r, current) for r in rows):
+                    raise HttpError(409, "not-verified-link")
+                # 이름이 다른 계정은 사람이 원본에서 대조한 광고계정 ID를 하나씩 제출해야 한다.
+                # 고객번호 끝자리나 비슷한 이름만으로 확인하거나 묶어서 우회할 수 없다.
+                different = [r for r in rows if r["code"] != "same"]
+                if different:
+                    raw = body.get("ad_account_no")
+                    if (len(rows) != 1 or not isinstance(raw, str) or not re.fullmatch(r"[1-9][0-9]{0,14}", raw)
+                            or fresh.ctx(current).accounts[rows[0]["customer_id"]]["ad_account_no"] != int(raw)):
+                        raise HttpError(409, "account-proof-required")
+                elif "ad_account_no" in body:
+                    raise HttpError(400, "bad-body")
+                return st.record_decisions([(r["possibility_id"], r["customer_id"]) for r in rows],
+                                           "confirmed", v.idx, current, audit_action="link-confirm")
+            ids = self._write(confirm)
+            return 200, {"decided": len(ids), "decision": "confirmed"}
         return self._decide(req, v, now, "confirmed")
 
     def _h_links_reject(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
@@ -745,6 +833,8 @@ ROUTES: Tuple[Route, ...] = tuple(Route(m, re.compile(p), h, a) for m, p, h, a i
     (POST, r"/issues/(?P<iid>[0-9]{1,18})/except", App._h_issue_except, True),
     (GET, r"/links/pending", App._h_links_pending, True),
     (POST, r"/links/confirm", App._h_links_confirm, True),
+    (POST, r"/collection/request", App._h_collection_request, True),
+    (GET, r"/collection/status", App._h_collection_status, True),
     (POST, r"/links/reject", App._h_links_reject, True),
     (POST, r"/links/revoke", App._h_links_revoke, True),
     (POST, r"/links/preview", App._h_links_preview, True),

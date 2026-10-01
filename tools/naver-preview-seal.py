@@ -31,7 +31,7 @@ from naver_engine.erp_read import load_erp_key
 from naver_engine.session import load_token_secret
 
 OPENSSL = "/usr/bin/openssl"
-BRANCH = "refs/heads/codex/naver-backup-recovery-20261001"
+BRANCH = "refs/heads/codex/naver-ad-account-matching-20261001"
 # 승인된 관리 경로 생성 영수증 36806904207. 입력값으로 이 지문을 바꿀 수 없다.
 SERVER_CERT_PEM_SHA256 = "8edff7ceaa6538bc91df7ebd1723bc6889dbebb232e1955d8dfa4131c4a5acc7"
 MAX_BUNDLE = 2 * 1024 * 1024

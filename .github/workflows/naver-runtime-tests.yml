@@ -28,11 +28,11 @@ permissions:
 
 concurrency:
   group: naver-runtime-tests-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/codex/naver-backup-recovery-20261001' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/codex/naver-backup-recovery-20261001' && github.ref != 'refs/heads/codex/naver-ad-account-matching-20261001' }}
 
 jobs:
   preview-seal:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/naver-backup-recovery-20261001' && inputs.preview_seal == true && inputs.backup_acceptance == 'none' && inputs.received_synthetic_json == ''
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/naver-ad-account-matching-20261001' && inputs.preview_seal == true && inputs.backup_acceptance == 'none' && inputs.received_synthetic_json == ''
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

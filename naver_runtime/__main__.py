@@ -17,6 +17,7 @@ from naver_runtime.backup_transport import OpenSslEncryptor, SshSender
 from naver_runtime.config import Config, ConfigError
 from naver_runtime.erp_tunnel_transport import ErpTunnelTransport
 from naver_runtime.scheduler import Scheduler
+from naver_runtime.collection_requests import CollectionClock
 from naver_runtime.server import UnixServer, health_app
 from naver_runtime.writer import Writer
 from naver_runtime import bootstrap as B
@@ -61,7 +62,7 @@ class StopAwareTransport:
 
     def send(self, request, timeout):
         self._clock.before_network()
-        if isinstance(self._clock, (MetricsClock, B.BootstrapClock)):
+        if isinstance(self._clock, (MetricsClock, B.BootstrapClock, CollectionClock)):
             timeout = min(timeout, self._clock.remaining())
         return self._transport.send(request, timeout)
 
@@ -164,10 +165,17 @@ def run(config, env, *, stop=None):
     # 저장소의 정리용 시계는 중지 신호로 중단하지 않는다.
     with Writer(config.db, clock=N.SystemClock().now) as writer:
         writer.call(lambda st: note_orphaned(st, N.SystemClock().now()))
-        scheduler = Scheduler(config, writer.proxy, clock=clock.now, **options)
+        def collection_factory():
+            bounded = CollectionClock(clock, seconds=600)
+            deps = dependencies(config, env, bounded)
+            return dict(clock=bounded, erp_factory=deps["erp_factory"], naver_factory=deps["naver_factory"])
+        scheduler = Scheduler(config, writer.proxy, clock=clock.now,
+                              collection_factory=collection_factory, **options)
         # 읽기 연결은 요청 스레드에서 열고 닫으며, 쓰기는 기존 단일 소유자 큐만 지난다.
         web = WEB.App(open_read=lambda: S.open_reader(config.db), write=writer.call,
-                      signer=signer, profiles=profiles, owner_verification=True) if config.web_enabled else None
+                      signer=signer, profiles=profiles, owner_verification=True, verified_linking=True,
+                      request_collection=scheduler.request_collection,
+                      collection_status=scheduler.collection_status) if config.web_enabled else None
         with UnixServer(config.socket, combine_web(status, web)):
             # WEB는 이미 별도 스레드에서 열린 상태. 관리 단발 작업을 예약 회차보다 먼저 실행한다.
             # 환경값이 없으면 bootstrap 파일/영수증/스냅샷 경로를 전혀 조회하지 않는다.
