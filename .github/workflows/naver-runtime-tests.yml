@@ -105,7 +105,8 @@ jobs:
           if-no-files-found: error
 
   linux-tests:
-    if: github.ref == 'refs/heads/codex/naver-runtime-20260930' || github.ref == 'refs/heads/codex/naver-shared-metrics-20260930' || github.ref == 'refs/heads/codex/naver-sso-20260930'
+    # 운영 수용 브랜치에서도 명시적 none 요청에만 비밀값 없는 개발 검사를 실행한다.
+    if: github.ref == 'refs/heads/codex/naver-runtime-20260930' || github.ref == 'refs/heads/codex/naver-shared-metrics-20260930' || github.ref == 'refs/heads/codex/naver-sso-20260930' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/naver-backup-recovery-20261001' && inputs.backup_acceptance == 'none' && inputs.received_synthetic_json == '')
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     defaults:
