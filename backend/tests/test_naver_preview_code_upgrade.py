@@ -1,12 +1,17 @@
 import importlib.util
+import ast
 import base64
+import gzip
 import io
 import json
+import random
+import shlex
 import tarfile
 import textwrap
 import tempfile
 from pathlib import Path
 import unittest
+import zlib
 from unittest.mock import Mock, patch
 import test_naver_preview_upgrade as legacy_test
 
@@ -19,6 +24,81 @@ def load(name):
 
 
 class ContractTest(unittest.TestCase):
+    def workflow_transport(self):
+        workflow=(Path(__file__).parents[2]/'.github/workflows/debug-rank.yml').read_text()
+        scripts=[];source=None
+        for line in workflow.splitlines():
+            if line.rstrip().endswith("<<'PY'"):
+                source=[]
+            elif source is not None:
+                if line.strip()=='PY':
+                    scripts.append(textwrap.dedent('\n'.join(source)));source=None
+                else:
+                    source.append(line)
+        namespaces=[]
+        for script,name in zip(scripts[:2],('encode_ops','decode_ops')):
+            nodes=[node for node in ast.parse(script).body
+                   if isinstance(node,(ast.Import,ast.ImportFrom))
+                   or isinstance(node,ast.FunctionDef) and node.name==name]
+            self.assertTrue(any(isinstance(node,ast.FunctionDef) for node in nodes),name)
+            namespace={}
+            exec(compile(ast.Module(body=nodes,type_ignores=[]),'<workflow-transport>','exec'),namespace)
+            namespaces.append(namespace[name])
+        self.assertIn("stream.write('PREVIEW_OPS_B64='+encode_ops(bundle)+'\\n')",scripts[0])
+        self.assertIn("bundle=decode_ops(os.environ['PREVIEW_OPS_B64'])",scripts[1])
+        return *namespaces,scripts[1]
+
+    def test_code_upgrade_transport_roundtrip_preserves_full_bundle_and_shell_bound(self):
+        encode,decode,script=self.workflow_transport()
+        tools=Path(__file__).parents[1]/'tools'
+        names={'source':'naver_preview_code_upgrade','release_source':'naver_preview_release',
+               'host_source':'naver_erp_tunnel_service_install','lifecycle_source':'naver_preview_lifecycle',
+               'upgrade_source':'naver_preview_upgrade'}
+        bundle={key:(tools/(name+'.py')).read_text() for key,name in names.items()}
+        bundle.update(operation='preview-code-upgrade',function='apply',package={
+            'release':dict(baseline='a'*64,source_commit='b'*40,ciphertext_sha256='c'*64,
+                          source_tar_gz_sha256='d'*64,run_id='9'*20,operation='code-prepare'),
+            'operation_id':'e'*32})
+        encoded=encode(bundle)
+        self.assertTrue(encoded.startswith('code-gzip-v1:'))
+        self.assertEqual(decode(encoded),bundle)
+        shell="export PREVIEW_OPS_B64="+shlex.quote(encoded)+";\nset -eu\n/usr/bin/python3 -I -B - <<'PY'\n"+script+'\nPY\n'
+        self.assertLess(len(('/bin/bash -c '+shlex.quote(shell)).encode()),120000)
+        self.assertLessEqual(len(encoded),65536)
+
+    def test_transport_keeps_other_operations_byte_identical_and_code_mode_exact(self):
+        encode,decode,_=self.workflow_transport()
+        for operation in ('preview-upgrade','preview-status','preview-backup','preview-publish'):
+            bundle=dict(operation=operation,function='apply',package={'fixture':'unchanged'})
+            encoded=base64.b64encode(json.dumps(bundle).encode()).decode()
+            self.assertEqual(encode(bundle),encoded)
+            self.assertEqual(decode(encoded),bundle)
+            compressed='code-gzip-v1:'+base64.b64encode(gzip.compress(json.dumps(bundle).encode())).decode()
+            with self.assertRaisesRegex(ValueError,'CODE_OPS_OPERATION'):
+                decode(compressed)
+        bundle=dict(operation='preview-code-upgrade',function='apply',package={})
+        with self.assertRaisesRegex(ValueError,'CODE_OPS_ENCODING'):
+            decode(base64.b64encode(json.dumps(bundle).encode()).decode())
+        with self.assertRaisesRegex(ValueError,'CODE_OPS_OPERATION'):
+            decode(encode(dict(bundle,function='run')))
+
+    def test_transport_rejects_oversize_corrupt_truncated_and_trailing_gzip(self):
+        encode,decode,_=self.workflow_transport()
+        bundle=dict(operation='preview-code-upgrade',function='apply',package={})
+        packed=gzip.compress(json.dumps(bundle).encode())
+        bad=[packed[:-1],packed+b'private-tail',packed+packed,
+             gzip.compress(b' '*131073),b'invalid-gzip']
+        for data in bad:
+            with self.subTest(size=len(data)),self.assertRaises((ValueError,zlib.error)):
+                decode('code-gzip-v1:'+base64.b64encode(data).decode())
+        for encoded in ('code-gzip-v1:!!!','code-gzip-v1:'+'A'*65536):
+            with self.assertRaises(ValueError):
+                decode(encoded)
+        with self.assertRaisesRegex(ValueError,'CODE_OPS_JSON_SIZE'):
+            encode(dict(bundle,source='x'*131072))
+        with self.assertRaisesRegex(ValueError,'CODE_OPS_WIRE_SIZE'):
+            encode(dict(bundle,source=random.Random(0).randbytes(60000).hex()))
+
     def test_target_probe_requires_authentication_only_for_new_verified_routes(self):
         code = load('naver_preview_code_upgrade')
         release = Mock()
@@ -348,7 +428,7 @@ class ContractTest(unittest.TestCase):
                 else:
                     source.append(line)
 
-    def test_both_remote_bundles_fit_linux_single_environment_value_limit(self):
+    def test_unchanged_prepare_bundle_fits_single_environment_value_limit(self):
         tools=Path(__file__).parents[1]/'tools'
         source=lambda name:(tools/(name+'.py')).read_text()
         package=dict(baseline='a'*64,source_commit='b'*40,ciphertext_sha256='c'*64,
@@ -358,11 +438,7 @@ class ContractTest(unittest.TestCase):
                     upgrade_source=source('naver_preview_upgrade'))
         prepare=dict(shared,package=package,source=source('naver_preview_release'),
                      code_source=source('naver_preview_code_upgrade'))
-        apply=dict(shared,package=dict(release=package,operation_id='e'*32),
-                   operation='preview-code-upgrade',function='apply',
-                   source=source('naver_preview_code_upgrade'),release_source=source('naver_preview_release'))
-        for bundle in (prepare,apply):
-            self.assertLess(len(base64.b64encode(json.dumps(bundle).encode()))+len('PREVIEW_RELEASE_B64='),131000)
+        self.assertLess(len(base64.b64encode(json.dumps(prepare).encode()))+len('PREVIEW_RELEASE_B64='),131000)
 
 
 if __name__ == '__main__':

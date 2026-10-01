@@ -72,7 +72,17 @@ jobs:
           set -eu
           python3 -m unittest discover -s backend/tests -p 'test_naver_preview_*.py' -q
           python3 - <<'PY'
-          import base64,json,os,pathlib
+          import base64,gzip,json,os,pathlib
+          def encode_ops(bundle):
+              raw=json.dumps(bundle).encode()
+              if bundle['operation']!='preview-code-upgrade':
+                  return base64.b64encode(raw).decode()
+              if len(raw)>131072:
+                  raise ValueError('CODE_OPS_JSON_SIZE')
+              encoded='code-gzip-v1:'+base64.b64encode(gzip.compress(raw,mtime=0)).decode()
+              if len(encoded)>65536:
+                  raise ValueError('CODE_OPS_WIRE_SIZE')
+              return encoded
           inputs=json.loads(os.environ['INPUTS_JSON'])
           operation=inputs.pop('ad_prepare')
           module,function={'preview-backup':('naver_preview_backup_probe','run'),
@@ -99,7 +109,7 @@ jobs:
           if operation=='preview-code-upgrade':
               bundle['upgrade_source']=pathlib.Path('backend/tools/naver_preview_upgrade.py').read_text()
           with open(os.environ['GITHUB_ENV'],'a') as stream:
-              stream.write('PREVIEW_OPS_B64='+base64.b64encode(json.dumps(bundle).encode()).decode()+'\n')
+              stream.write('PREVIEW_OPS_B64='+encode_ops(bundle)+'\n')
           PY
       - name: 새 관제만 제한 작업 — 기존 앱 유지
         uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
@@ -114,10 +124,27 @@ jobs:
           script: |
             set -eu
             /usr/bin/python3 -I -B - <<'PY'
-            import base64,json,os,re,sys,types
+            import base64,json,os,re,sys,types,zlib
+            def decode_ops(encoded):
+                if not encoded.startswith('code-gzip-v1:'):
+                    bundle=json.loads(base64.b64decode(encoded,validate=True))
+                    if bundle.get('operation')=='preview-code-upgrade':
+                        raise ValueError('CODE_OPS_ENCODING')
+                    return bundle
+                if len(encoded)>65536:
+                    raise ValueError('CODE_OPS_WIRE_SIZE')
+                packed=base64.b64decode(encoded[len('code-gzip-v1:'):],validate=True)
+                decoder=zlib.decompressobj(16+zlib.MAX_WBITS)
+                raw=decoder.decompress(packed,131073)
+                if len(raw)>131072 or not decoder.eof or decoder.unused_data or decoder.unconsumed_tail:
+                    raise ValueError('CODE_OPS_GZIP')
+                bundle=json.loads(raw)
+                if bundle.get('operation')!='preview-code-upgrade' or bundle.get('function')!='apply':
+                    raise ValueError('CODE_OPS_OPERATION')
+                return bundle
             module=None
             try:
-                bundle=json.loads(base64.b64decode(os.environ['PREVIEW_OPS_B64'],validate=True))
+                bundle=decode_ops(os.environ['PREVIEW_OPS_B64'])
                 os.environ.clear();os.environ.update(PATH='/usr/sbin:/usr/bin:/sbin:/bin',LANG='C')
                 allowed={'preview-backup':'run','preview-status':'run','preview-data-audit':'run','preview-collection-status':'run','preview-link-audit':'run','preview-legacy-audit':'run','preview-upgrade':'apply','preview-code-upgrade':'apply','preview-inspect':'inspect','preview-plan':'plan','preview-publish':'apply','preview-rollback':'rollback','preview-lifecycle':'install'}
                 assert allowed[bundle['operation']]==bundle['function']
