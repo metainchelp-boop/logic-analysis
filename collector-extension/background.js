@@ -172,26 +172,50 @@ const LOG_KEEP = 200;
  * ⚠️ 개인정보를 담지 않는다 — 우리가 만든 검색 주소·페이지 제목·본문 앞 500자뿐.
  */
 async function reportBlocked(info) {
+  let timer;
   try {
     const token = await getToken();
-    if (!token) return;
+    if (!token) return { ok: false, code: 'NO_TOKEN', message: '저장된 토큰이 없어 진단을 보내지 못했습니다.' };
     let ver = '';
     try { ver = chrome.runtime.getManifest().version; } catch (e) { /* 무시 */ }
-    await fetch(`${CFG.serverBase}/api/collector/blocked`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Collector-Token': token },
-      body: JSON.stringify({
-        keyword: info.keyword || '',
-        pagingIndex: info.pagingIndex || 0,
-        err: info.err || '',
-        title: (info.title || '').slice(0, 200),
-        href: (info.href || '').slice(0, 500),
-        body: (info.body || '').slice(0, 500),
-        extVersion: ver,
-        note: info.note || '',
-      }),
+    const controller = new AbortController();
+    // 응답 본문까지 10초 상한. 수신 여부가 불명확해도 자동 재전송하지 않는다.
+    const deadline = new Promise(resolve => {
+      timer = setTimeout(() => {
+        resolve({ ok: false, code: 'TIMEOUT', message: '서버 응답 시간이 초과되었습니다. 진단 수신 여부는 미확인입니다.' });
+        controller.abort();
+      }, 10000);
     });
-  } catch (e) { /* 보고 실패는 무시한다 — 수집이 우선이다 */ }
+    const delivery = (async () => {
+      const res = await fetch(`${CFG.serverBase}/api/collector/blocked`, {
+        method: 'POST',
+        signal: controller.signal,
+        headers: { 'Content-Type': 'application/json', 'X-Collector-Token': token },
+        body: JSON.stringify({
+          keyword: info.keyword || '',
+          pagingIndex: info.pagingIndex || 0,
+          err: info.err || '',
+          title: (info.title || '').slice(0, 200),
+          href: (info.href || '').slice(0, 500),
+          body: (info.body || '').slice(0, 500),
+          extVersion: ver,
+          note: info.note || '',
+        }),
+      });
+      if (!res.ok) return { ok: false, code: 'HTTP_ERROR', status: res.status,
+        message: `서버 저장을 확인하지 못했습니다 (HTTP ${res.status}).` };
+      let ack;
+      try { ack = await res.json(); }
+      catch (_) { return { ok: false, code: 'INVALID_ACK', message: '서버 응답을 확인하지 못했습니다. 진단 수신 여부는 미확인입니다.' }; }
+      if (!ack || ack.success !== true) return { ok: false, code: 'NEGATIVE_ACK',
+        message: '서버가 진단 수신을 확인하지 않았습니다.' };
+      return { ok: true, code: 'ACKNOWLEDGED', message: '서버가 진단 1건 수신을 확인했습니다.' };
+    })();
+    return await Promise.race([delivery, deadline]);
+  } catch (e) {
+    // 실패는 값으로만 돌린다. 자동 수집을 중단하거나 원문 오류·인증 정보를 노출하지 않는다.
+    return { ok: false, code: 'NETWORK_ERROR', message: '서버 연결을 확인하지 못했습니다. 진단 수신 여부는 미확인입니다.' };
+  } finally { clearTimeout(timer); }
 }
 
 /** 로그 한 줄 남기기.
@@ -737,10 +761,12 @@ function pageExtract(want, extraBlock) {
   // A fallback must have both matching route identity and changed props, not just a new URL.
   function matchingQuery(q) {
     if (!q || typeof q.query !== 'string' || q.query !== wantedKeyword) return false;
-    var keys = Object.keys(q), allowed = ['query','pagingIndex','pagingSize','sort','productSet','viewType','origQuery','adQuery','frm'];
+    // Navigation metadata is not a new ranking scope. Only the observed search vertical is allowed.
+    var keys = Object.keys(q), allowed = ['query','pagingIndex','pagingSize','sort','productSet','viewType','origQuery','adQuery','frm','prevQuery','vertical'];
     for (var qi = 0; qi < keys.length; qi++) if (allowed.indexOf(keys[qi]) < 0 || Array.isArray(q[keys[qi]])) return false;
     return Number(q.pagingIndex || 1) === wantPage && (!q.sort || q.sort === 'rel')
-      && (!q.productSet || q.productSet === 'total') && (!q.pagingSize || String(q.pagingSize) === '40');
+      && (!q.productSet || q.productSet === 'total') && (!q.pagingSize || String(q.pagingSize) === '40')
+      && (!Object.prototype.hasOwnProperty.call(q, 'vertical') || q.vertical === 'search');
   }
   var locationMatches = false, routeMatches = false;
   try {
@@ -1729,13 +1755,18 @@ async function tapReport(tabId, keyword, pagingIndex, why, errLabel) {
   if (why !== 'HUMAN' && typeof RT === 'object' && RT && RT.swTapProbe === false) return;
   try {
     const [pr] = await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func: navProbe });
+    if (!pr || !pr.result || typeof pr.result !== 'object' || Array.isArray(pr.result)) {
+      return { ok: false, code: 'INJECTION_FAILED', message: '현재 쇼핑 화면의 응답을 읽지 못했습니다.' };
+    }
     const probe = (pr && pr.result) || {};
     const tap = probe.tap === undefined ? 'none' : probe.tap;
-    await reportBlocked({ keyword, pagingIndex, err: errLabel || 'TAP_PROBE(화면이 받은 응답 요약)',
+    return await reportBlocked({ keyword, pagingIndex, err: errLabel || 'TAP_PROBE(화면이 받은 응답 요약)',
                           href: probe.href || '',
                           body: JSON.stringify({ why: why, q: probe.q || '', env: probe.env || '', tap: tap }),
                           note: '진단 — 차단 아님. 클릭 뒤 화면이 어떤 응답을 받았나' });
-  } catch (e) { /* 진단 실패는 무시 */ }
+  } catch (e) {
+    return { ok: false, code: 'INJECTION_FAILED', message: '현재 쇼핑 화면의 응답을 읽지 못했습니다.' };
+  }
 }
 
 /** 탭이 목표 주소로 이동을 끝낼 때까지 대기 */
@@ -3088,20 +3119,23 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
   //   이 버튼은 **이미 화면에 있는 응답을 복사해 보낼 뿐** — 네이버에 요청을 한 건도 더 보내지 않는다.
   if (msg?.cmd === 'humanProbe') {
     (async () => {
+      let result;
       try {
         const tabs = await chrome.tabs.query({ url: '*://search.shopping.naver.com/*' });
         const t = tabs.find((x) => x.active) || tabs[0];
         if (!t) {
-          await log('🔍 네이버쇼핑 검색 결과 화면이 안 열려 있습니다 — 그 화면을 띄우고 다시 눌러 주세요.');
-          return;
+          result = { ok: false, code: 'NO_TAB', message: '네이버쇼핑 검색 결과 화면이 안 열려 있습니다.' };
+        } else {
+          result = await tapReport(t.id, '(사람 시험)', 0, 'HUMAN', 'HUMAN_PROBE(사람이 연 화면)');
         }
-        await tapReport(t.id, '(사람 시험)', 0, 'HUMAN', 'HUMAN_PROBE(사람이 연 화면)');
-        await log('🔍 이 화면이 받은 응답을 서버에 보냈습니다 (진단 1건 · 네이버 요청 0건).');
       } catch (e) {
-        await log('🔍 응답 보내기 실패 — ' + (e && e.message ? e.message : e));
+        result = { ok: false, code: 'PROBE_FAILED', message: '진단할 쇼핑 화면을 확인하지 못했습니다.' };
       }
+      try { sendResponse(result); } catch (_) { /* 팝업이 닫혀도 수집에는 영향 없음 */ }
+      try { await log(result.ok ? '🔍 ' + result.message + ' (네이버 요청 0건).'
+        : '🔍 진단 전송 미확인 — ' + result.message); } catch (_) { /* 로그 실패는 수신 결과를 바꾸지 않는다 */ }
     })();
-    sendResponse({ ok: true });
+    return true; // 서버 수신 결과를 받을 때까지 메시지 응답 채널을 유지한다.
   }
   if (msg?.cmd === 'slowOff') {
     (async () => {

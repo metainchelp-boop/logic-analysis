@@ -19,11 +19,14 @@ function grab(name) {
   throw Error('Unclosed ' + name);
 }
 const products = page => Array.from({ length: 40 }, (_, i) => ({ nvMid: String((page - 1) * 40 + i + 1), productTitle: 'Fixture', mallName: 'Fixture' }));
-const url = 'https://search.shopping.naver.com/search/all?query=fixture';
 (async () => {
   const browser = await chromium.launch({ headless: true, channel: process.env.COLLECTOR_TEST_CHANNEL || undefined });
   try {
-    for (const mode of ['tap', 'router', 'restricted', 'covered', 'group-next']) {
+    const cases = ['tap', 'router', 'restricted', 'covered', 'group-next'].map(mode => ({ mode, metadata: false }))
+      .concat(['tap', 'router', 'restricted'].map(mode => ({ mode, metadata: true })));
+    for (const { mode, metadata } of cases) {
+      const query = { query: 'fixture', ...(metadata ? { prevQuery: 'previous', vertical: 'search' } : {}) };
+      const url = 'https://search.shopping.naver.com/search/all?' + new URLSearchParams(query);
       const context = await browser.newContext();
       const page = await context.newPage();
       let searchRequests = 0;
@@ -42,17 +45,17 @@ const url = 'https://search.shopping.naver.com/search/all?query=fixture';
       });
       await page.addInitScript({ content: tap });
       await page.goto(url);
-      await page.evaluate(({ first, second, mode }) => {
+      await page.evaluate(({ first, second, mode, query }) => {
         window.clicks = 0;
-        window.__NEXT_DATA__ = { query: { query: 'fixture' }, props: { products: first } };
-        window.next = { router: { route: '/search/all', query: { query: 'fixture', pagingIndex: '1' },
+        window.__NEXT_DATA__ = { query: { ...query }, props: { products: first } };
+        window.next = { router: { route: '/search/all', query: { ...query, pagingIndex: '1' },
           components: { '/search/all': { props: { products: first } } } } };
         document.querySelector('a').addEventListener('click', async e => {
           e.preventDefault(); window.clicks++;
           let data;
           if (mode === 'router') { await new Promise(r => setTimeout(r, 800)); data = { products: second }; }
-          else { const res = await fetch('/api/search/all?query=fixture&pagingIndex=2'); if (!res.ok) return; data = await res.json(); }
-          history.pushState({}, '', '?query=fixture&pagingIndex=2');
+          else { const res = await fetch('/api/search/all?' + new URLSearchParams({ ...query, pagingIndex: '2' })); if (!res.ok) return; data = await res.json(); }
+          history.pushState({}, '', '?' + new URLSearchParams({ ...query, pagingIndex: '2' }));
           window.next.router.query.pagingIndex = '2';
           if (mode === 'router') window.next.router.components['/search/all'].props = data;
           document.querySelector('span').textContent = '2';
@@ -61,7 +64,7 @@ const url = 'https://search.shopping.naver.com/search/all?query=fixture';
           const cover = document.createElement('div'); cover.style = 'position:fixed;inset:0;background:white;z-index:1000';
           cover.textContent = 'Overlay'; document.body.appendChild(cover);
         }
-      }, { first: products(1), second: products(2), mode });
+      }, { first: products(1), second: products(2), mode, query });
       const cdp = await context.newCDPSession(page);
       const store = {}, reports = [];
       const sandbox = {
@@ -132,7 +135,7 @@ print(json.dumps({'kind': item['kind'], 'calls': calls, 'rows': conn.execute('SE
           assert(reports.some(r => r.err === 'HTTP_418'));
         } else { assert.equal(clicks, 0); assert.equal(searchRequests, 0); }
       }
-      console.log('PASS browser ' + mode + ': ' + result.products.length + ' ranks, clicks=' + clicks + ', requests=' + searchRequests);
+      console.log('PASS browser ' + mode + (metadata ? '-metadata' : '') + ': ' + result.products.length + ' ranks, clicks=' + clicks + ', requests=' + searchRequests);
       await context.close();
     }
   } finally { await browser.close(); }

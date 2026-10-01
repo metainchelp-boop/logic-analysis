@@ -81,12 +81,17 @@ BG = open(os.path.join(os.path.dirname(os.path.dirname(HERE)),
 i = BG.find("async function reportBlocked(")
 rb = BG[i:BG.find("\n}\n", i)] if i >= 0 else ""
 ok("⑤ 확장에 reportBlocked 가 있다", i >= 0)
-ok("⑤ 예외를 밖으로 내지 않는다", "catch (e) { /* 보고 실패는 무시한다" in rb)
-ok("⑤ 토큰이 없으면 보내지 않는다", "if (!token) return;" in rb)
+# 실패는 ACK 결과로 돌리되 자동 수집에는 던지지 않는다.
+# 실제 네트워크·응답 동작은 collector-extension/tests/diagnostic_ack.test.js 에서 검증한다.
+ok("⑤ 예외를 밖으로 내지 않는다", "catch (e)" in rb
+   and "code: 'NETWORK_ERROR'" in rb and not re.search(r"\bthrow\b", rb))
+ok("⑤ 토큰이 없으면 보내지 않는다", bool(re.search(
+    r"if \(!token\) return \{ ok: false, code: 'NO_TOKEN'", rb)))
 ok("⑤ 확장 버전을 함께 보낸다", "extVersion" in rb)
 
 # ⑥ 세 자리에서 부른다 — 차단문구 · 주소이탈 · 판독실패
-ok("⑥ 차단 문구에서 보고한다", "note: '차단 문구'" in BG)
+ok("⑥ 차단 문구에서 보고한다", bool(re.search(
+    r"note:\s*(?:out.err === 'BLOCK_TEXT'\s*\?\s*)?'차단 문구'", BG)))
 ok("⑥ 주소 이탈에서 보고한다", "note: '주소 이탈'" in BG)
 ok("⑥ 판독 실패에서도 보고한다", "note: '판독 실패(차단 아님)'" in BG)
 ok("⑥ 「막힘」과 「못 읽음」을 섞지 않는다", BG.count("차단 아님") >= 1)

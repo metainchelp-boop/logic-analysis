@@ -216,8 +216,36 @@ $('slow').onclick = async () => {
   chrome.runtime.sendMessage({ cmd: on ? 'slowOff' : 'slowOn' }, () => setTimeout(render, 400));
 };
 // 🔍 v1.14.0 — 사람이 연 화면이 받은 응답을 같은 자로 재서 서버에 보낸다(네이버 요청 0건).
-$('humanProbe').onclick = () =>
-  chrome.runtime.sendMessage({ cmd: 'humanProbe' }, () => setTimeout(render, 800));
+$('humanProbe').onclick = () => {
+  const button = $('humanProbe');
+  const status = $('humanProbeStatus');
+  if (button.disabled) return;
+  button.disabled = true;
+  status.hidden = false;
+  status.textContent = '서버의 진단 수신을 확인하고 있습니다…';
+  let finished = false;
+  const finish = text => {
+    if (finished) return;
+    finished = true;
+    clearTimeout(deadline);
+    button.disabled = false;
+    status.textContent = text;
+  };
+  const deadline = setTimeout(() => finish('⚠️ 응답 대기 시간이 초과되어 진단 수신 여부를 확인하지 못했습니다.'), 15000);
+  try {
+    chrome.runtime.sendMessage({ cmd: 'humanProbe' }, result => {
+      const channelError = chrome.runtime.lastError;
+      finish(channelError
+        ? '⚠️ 확장 응답이 끊겨 진단 수신 여부를 확인하지 못했습니다.'
+        : result && result.ok === true
+          ? '✅ ' + result.message
+          : '⚠️ ' + ((result && result.message) || '진단 수신 여부를 확인하지 못했습니다.'));
+      setTimeout(render, 800);
+    });
+  } catch (_) {
+    finish('⚠️ 확장에 진단 전송을 요청하지 못했습니다. 팝업을 다시 열어 주세요.');
+  }
+};
 // 🖱 v1.15.0 — 진짜 입력으로 클릭. 누를 때마다 켜고 끈다(background 가 같은 저장값을 읽는다).
 $('trusted').onclick = async () => {
   const { trustedClick } = await chrome.storage.local.get('trustedClick');
