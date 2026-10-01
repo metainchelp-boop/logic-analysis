@@ -241,6 +241,7 @@ class App:
         if type(owner_verification) is not bool:
             raise TypeError("owner_verification 은 참/거짓이어야 합니다")
         self._open_read, self._write_fn, self._signer, self._profiles = open_read, write, signer, profiles
+        # 배선/응답 호환 이름 유지: 읽기 전용 검증판도 매 요청의 기존 SC 범위를 그대로 따른다.
         self._owner_verification = owner_verification
         self._clock = clock or (lambda: datetime.now(KST))
         self._previewer = previewer
@@ -347,8 +348,6 @@ class App:
             scope = SC.narrowed_scope_of(org, who) if claims.narrowed else SC.scope_of(org, who)
             if scope.kind == SC.NONE:
                 raise HttpError(401, "no-scope")   # 퇴사 · 조직 표에서 빠짐 — 다음 요청부터 0곳
-            if self._owner_verification and (who != 0 or scope.kind != SC.ALL):
-                raise HttpError(403, "owner-only")
             return Viewer(who, scope, claims, store, org)
         except BaseException:
             store.close()
@@ -469,9 +468,6 @@ class App:
         if SC.scope_of(org, prof.idx).kind == SC.NONE:
             self._audit(prof.idx, "login", "session", None, "no-scope", now, required=False)
             raise HttpError(403, "no-scope")
-        if self._owner_verification and (prof.idx != 0 or SC.scope_of(org, prof.idx).kind != SC.ALL):
-            self._audit(prof.idx, "login", "session", None, "owner-only", now, required=False)
-            raise HttpError(403, "owner-only")
         narrowed = SC.profile_narrows(org, prof.idx, prof.says_manager if prof.team_known else None, prof.team_idx)
         token = self._signer.issue(prof.idx, now, narrowed=narrowed)
         self._audit(prof.idx, "login", "session", None, "narrowed" if narrowed else "ok", now, required=True)

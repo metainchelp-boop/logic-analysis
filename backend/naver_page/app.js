@@ -141,7 +141,6 @@
     }
   }
   var ERR = {
-    'owner-only': '현재 검증판은 대표 계정만 조회할 수 있습니다',
     'verification-read-only': '읽기 검증판에서는 업무 내용을 변경할 수 없습니다',
     'org-stale': '조직 자료가 26시간 넘게 낡아 지금은 할 수 없습니다(확인·해결은 됩니다)',
     'not-visible': '없거나 볼 수 없는 광고주입니다', 'action-not-allowed': '이 광고주에서 할 수 없는 일입니다',
@@ -1010,7 +1009,7 @@
   }
   function renderSettings() {
     var s = state.settings, ceo = !!s.can_edit && !readOnly();
-    $('set-ps').textContent = readOnly() ? '대표 전용 읽기 검증판에서는 점검 기준을 변경할 수 없습니다.' : '매일 열지 않는 것만 모았습니다. ' + (ceo ? '점검 기준은 대표님이 고칩니다(고친 기록이 남습니다).' : '팀장은 보기만 합니다 — 점검 기준은 대표님이 고칩니다.');
+    $('set-ps').textContent = readOnly() ? '읽기 전용 검증판에서는 점검 기준을 변경할 수 없습니다.' : '매일 열지 않는 것만 모았습니다. ' + (ceo ? '점검 기준은 대표님이 고칩니다(고친 기록이 남습니다).' : '팀장은 보기만 합니다 — 점검 기준은 대표님이 고칩니다.');
     var th = s.thresholds || {}, rg = s.ranges || {};
     var inputs = {};
     var rows = Object.keys(TH).map(function (k) {
