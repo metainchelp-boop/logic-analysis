@@ -1023,7 +1023,7 @@ function pagerLocate(target, guard) {
   if (guard && guard.phase === 'finish') {
     var prior = window.__mcPagerGuard;
     if (!prior || prior.token !== guard.token) return null;
-    var evidence = { ev: prior.ev, gone: !prior.el.isConnected, js: prior.js };
+    var evidence = { ev: prior.ev, gone: !prior.el.isConnected, js: prior.js, geo: prior.geo };
     if (prior.click && prior.click.defaultPrevented) evidence.ev |= 128;
     prior.cleanup();
     return evidence;
@@ -1062,6 +1062,18 @@ function pagerLocate(target, guard) {
   function vis(el) {
     if (!el) return false;
     if (el.disabled || el.getAttribute('aria-disabled') === 'true') return false;
+    if (guard) {
+      // A transparent responsive copy can still win elementFromPoint. Reject it
+      // before selection AND during stability checks, without changing page CSS.
+      try {
+        var style = window.getComputedStyle(el);
+        if (style.visibility === 'hidden' || style.visibility === 'collapse') return false;
+        for (var node = el; node; node = node.parentElement) {
+          style = window.getComputedStyle(node);
+          if (style.display === 'none' || style.contentVisibility === 'hidden' || Number(style.opacity) === 0) return false;
+        }
+      } catch (e) { return false; }
+    }
     var r = el.getBoundingClientRect();
     return r.width > 0 && r.height > 0;
   }
@@ -1100,7 +1112,7 @@ function pagerLocate(target, guard) {
     if (guard.phase === 'start') {
       if (state && typeof state.cleanup === 'function') state.cleanup();
       state = { token: guard.token, el: el, href: location.href, target: want,
-        active: true, ev: 0, js: 0, click: null };
+        active: true, ev: 0, js: 0, click: null, corrections: 0, geo: 'none' };
       var events = ['pointerdown','mousedown','pointerup','mouseup','click'];
       var capture = function(event) {
         if (!state.active) return;
@@ -1150,13 +1162,37 @@ function pagerLocate(target, guard) {
           if (!state.active || window.__mcPagerGuard !== state || !el.isConnected || !vis(el)
               || !pageLink(el) || state.href !== location.href) return finish({ reason: 'changed' });
           var r = el.getBoundingClientRect(), values = [r.left, r.top, r.width, r.height];
+          var w = window.innerWidth, h = window.innerHeight;
+          var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+          // Only bounded numeric geometry, never DOM text/classes or URLs.
+          if ([cx, cy, w, h].every(Number.isFinite) && w > 0 && h > 0) {
+            var direction = (cx <= 0 ? 'L' : cx >= w ? 'R' : '') + (cy <= 0 ? 'T' : cy >= h ? 'B' : '');
+            var bounded = function(value) { return Math.max(-9999, Math.min(9999, Math.round(value))); };
+            state.geo = (direction || 'I') + state.corrections + ':' + [bounded(cx), bounded(cy), bounded(w), bounded(h)].join(',');
+          } else state.geo = 'none';
           var same = previous && values.every(function(value, i) { return Math.abs(value - previous[i]) < 0.25; });
           if (!same) { stableSince = Date.now(); samples = 0; }
           else samples++;
           previous = values;
           if (samples >= 2 && Date.now() - stableSince >= 80) {
-            var x = Math.round(r.left + r.width / 2), y = Math.round(r.top + r.height / 2);
-            if (!(x > 0 && y > 0 && x < window.innerWidth && y < window.innerHeight)) return finish({ reason: 'outside' });
+            if (![cx, cy, w, h].every(Number.isFinite) || !(w > 0 && h > 0)) return finish({ reason: 'outside' });
+            // Native scrollIntoView respects scroll-margin/padding, which can leave
+            // the target outside. Use only the visible part of this SAME element.
+            var left = Math.max(0, r.left), right = Math.min(w, r.right);
+            var topEdge = Math.max(0, r.top), bottom = Math.min(h, r.bottom);
+            if (!(right - left >= 4 && bottom - topEdge >= 4)) {
+              // Two corrections total across start/check/hover, inside the original
+              // deadline. No CSS/zoom changes, ancestor scrolling or forced input.
+              if (state.corrections >= 2) return finish({ reason: 'outside' });
+              state.corrections++;
+              window.scrollBy({ left: right - left < 4 ? cx - w / 2 : 0,
+                top: bottom - topEdge < 4 ? cy - h / 2 : 0, behavior: 'instant' });
+              previous = null; samples = 0; stableSince = 0;
+              frame = requestAnimationFrame(sample);
+              return;
+            }
+            var x = Math.round((left + right) / 2), y = Math.round((topEdge + bottom) / 2);
+            if (!(x > left && x < right && y > topEdge && y < bottom)) return finish({ reason: 'outside' });
             var top = document.elementFromPoint(x, y), mine = top && (top === el || el.contains(top));
             return finish(mine ? { branch: branch, x: x, y: y, covered: 0, hit: 'pager', reason: 'stable' }
               : { reason: 'covered', covered: 1 });
@@ -1740,7 +1776,7 @@ async function trustedClickToPage(tabId, target) {
   let guarded = false;
   let inputPoint = null, releaseAttempted = false;
   const token = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 12);
-  _clickProof = { state: 'none', ev: null, gone: null, js: null };
+  _clickProof = { state: 'none', ev: null, gone: null, js: null, geo: 'none' };
   try {
     if (!chrome.debugger) { _trustedNote = 'no-debugger-api'; _clickProof.state = 'unavailable'; return ''; }
     /* 🔴 v1.17.5 — 대표 지시(「완전 실사용자 기반으로 움직이면 될 거 같은데」).
@@ -1828,6 +1864,7 @@ async function trustedClickToPage(tabId, target) {
         _clickProof.ev = Math.max(0, Math.min(511, receipt.ev));
         _clickProof.gone = typeof receipt.gone === 'boolean' ? receipt.gone : null;
         _clickProof.js = Number.isInteger(receipt.js) ? Math.max(0, Math.min(9, receipt.js)) : null;
+        _clickProof.geo = typeof receipt.geo === 'string' ? receipt.geo : 'none';
         if (attempted && (receipt.ev & 80) === 80) _clickProof.state = 'received';
       }
     }
@@ -2033,6 +2070,8 @@ async function tapReport(tabId, keyword, pagingIndex, why, errLabel, proof) {
     const environment = typeof probe.env === 'string' && /^f[01]v[01]a[01]{2}w[01]r[01]$/.test(probe.env) ? probe.env : 'none';
     const flag = value => typeof value === 'boolean' ? value : null;
     const receipt = typeof _clickProof === 'object' && _clickProof ? _clickProof : {};
+    const geometry = typeof receipt.geo === 'string' && receipt.geo.trim() === receipt.geo
+      && /^(?:I|L|R|T|B|LT|LB|RT|RB)[0-2]:-?\d{1,4},-?\d{1,4},\d{1,4},\d{1,4}$/.test(receipt.geo) ? receipt.geo : 'none';
     const boundedReceipt = (value, limit) => typeof value === 'number' && Number.isFinite(value)
       ? Math.max(0, Math.min(limit, Math.floor(value))) : null;
     const recent = (Array.isArray(probe.recent) ? probe.recent : []).slice(0, 3).map(item => {
@@ -2050,7 +2089,7 @@ async function tapReport(tabId, keyword, pagingIndex, why, errLabel, proof) {
         how: manual ? 'none' : pick(typeof _lastClickHow === 'string' ? _lastClickHow : '', ['trusted','synth']),
         covered: !manual && typeof _clickCovered !== 'undefined' && !!_clickCovered,
         guard: pick(receipt.state, ['none','stable','no-target','covered','unstable','changed','outside','timeout','error','unavailable','pending','received']),
-        ev: boundedReceipt(receipt.ev, 511), gone: flag(receipt.gone), js: boundedReceipt(receipt.js, 9) },
+        ev: boundedReceipt(receipt.ev, 511), gone: flag(receipt.gone), js: boundedReceipt(receipt.js, 9), geo: geometry },
       gates: { checked: d.checked === true, baseline: d.baseline === true, location: d.location === true, route: d.route === true,
         router: d.router === true, next: d.next === true, routerChanged: d.routerChanged === true, nextChanged: d.nextChanged === true },
       tap: { on: proof ? t.on === true : !!(probe.tap && typeof probe.tap === 'object'),

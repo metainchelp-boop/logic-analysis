@@ -62,7 +62,24 @@ async function scenario(kind) {
         window.cancelAnimationFrame = () => {};
       }
       const pager = document.querySelector('#pager');
-      if (kind === 'covered') {
+      if (['scroll-margin-y', 'scroll-margin-covered'].includes(kind)) pager.style.scrollMarginTop = '2000px';
+      if (kind === 'scroll-margin-x') {
+        document.body.style.width = '5000px';
+        pager.style.left = '3000px';
+        pager.style.scrollMarginLeft = '3000px';
+      }
+      if (kind === 'fixed-outside') {
+        pager.style.position = 'fixed';
+        pager.style.top = '900px';
+      }
+      if (['partly-visible', 'transparent-target', 'transparent-ancestor'].includes(kind)) {
+        pager.style.position = 'fixed';
+        pager.style.top = '600px';
+        pager.style.height = '800px';
+      }
+      if (kind === 'transparent-target') pager.style.opacity = '0';
+      if (kind === 'transparent-ancestor') pager.parentElement.style.opacity = '0';
+      if (['covered', 'scroll-margin-covered'].includes(kind)) {
         const overlay = document.createElement('div');
         overlay.id = 'cover';
         overlay.style = 'position:fixed;inset:0;z-index:10;background:white';
@@ -159,8 +176,13 @@ async function scenario(kind) {
       + source.match(/^const KEEPALIVE_TICK_MS = [^;]+;/m)[0] + '\n'
       + functions.map(grab).join('\n'), sandbox);
     const accepted = await sandbox.clickToPage(1, 2);
-    const result = await page.evaluate(() => ({ clicks: window.fixtureClicks, changes: window.fixtureChanges, events: window.fixtureEvents,
-      page: JSON.parse(document.querySelector('#__NEXT_DATA__').textContent).page }));
+    const result = await page.evaluate(() => {
+      const rect = document.querySelector('#pager').getBoundingClientRect();
+      return { clicks: window.fixtureClicks, changes: window.fixtureChanges, events: window.fixtureEvents,
+        page: JSON.parse(document.querySelector('#__NEXT_DATA__').textContent).page,
+        geometry: { rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+          viewport: { width: innerWidth, height: innerHeight }, scroll: { x: scrollX, y: scrollY } } };
+    });
     assert.deepEqual(await listenerSummary(observerProbe), listenersBefore,
       'document/window observers must be removed before clickToPage returns');
     await observerProbe.detach();
@@ -194,6 +216,41 @@ test('covered target is not pressed and does not use synthetic fallback', { time
   assert.equal(result.commands.filter(command => command.type === 'mousePressed').length, 0);
   assert.equal(result.note, 'guard-covered');
 });
+
+test('fixed target remaining outside the viewport stops without any input', { timeout: 30000 }, async () => {
+  const result = await scenario('fixed-outside');
+  assert.equal(result.accepted, false, JSON.stringify(result));
+  assert.equal(result.clicks, 0);
+  assert.equal(result.page, 1);
+  assert.equal(result.commands.length, 0);
+  assert.equal(result.note, 'guard-outside');
+  assert.equal(result.proof.ev, 0);
+  assert.equal(result.proof.gone, false);
+  assert.equal(result.geometry.rect.y, 900, 'scrolling cannot move a fixed offscreen element into view');
+  assert.equal(result.proof.geo, 'B2:325,915,1200,720', 'outside geometry must report the two-correction limit');
+});
+
+test('overlay covering the corrected target still prevents input', { timeout: 30000 }, async () => {
+  const result = await scenario('scroll-margin-covered');
+  assert.equal(result.accepted, false, JSON.stringify(result));
+  assert.equal(result.clicks, 0);
+  assert.equal(result.page, 1);
+  assert.equal(result.commands.length, 0);
+  assert.equal(result.note, 'guard-covered');
+  assert.equal(result.proof.ev, 0);
+  assert.equal(result.proof.geo, 'I1:325,360,1200,720', 'correct geometry does not override coverage');
+});
+
+for (const kind of ['transparent-target', 'transparent-ancestor']) {
+  test('visually transparent partial target never receives input: ' + kind, { timeout: 30000 }, async () => {
+    const result = await scenario(kind);
+    assert.equal(result.accepted, false, JSON.stringify(result));
+    assert.equal(result.clicks, 0);
+    assert.equal(result.page, 1);
+    assert.equal(result.commands.length, 0);
+    assert.equal(result.events.filter(event => event.type === 'click').length, 0);
+  });
+}
 
 test('replacement during press records uncertain delivery without a second click', { timeout: 30000 }, async () => {
   const result = await scenario('replace-on-press');
@@ -269,7 +326,7 @@ test('confirmed debugger attachment failure permits one original synthetic fallb
   assert.equal(result.events.find(event => event.type === 'click').trusted, false);
 });
 
-for (const kind of ['baseline', 'smooth', 'layout-on-move']) {
+for (const kind of ['baseline', 'smooth', 'layout-on-move', 'scroll-margin-y', 'scroll-margin-x', 'partly-visible']) {
   test('actual scrolling clicks page 2 exactly once: ' + kind, { timeout: 30000 }, async () => {
     const result = await scenario(kind);
     assert.equal(result.accepted, true, JSON.stringify(result));
@@ -284,5 +341,11 @@ for (const kind of ['baseline', 'smooth', 'layout-on-move']) {
     assert.equal(result.commands.filter(command => command.type === 'mousePressed').length, 1);
     assert.equal(result.commands.filter(command => command.type === 'mouseReleased').length, 1);
     if (kind === 'layout-on-move') assert.equal(result.changes, 1, 'fixture must shift after the first pointer move');
+    if (kind === 'scroll-margin-y') assert.equal(result.proof.geo, 'I1:325,360,1200,720');
+    if (kind === 'scroll-margin-x') assert.equal(result.proof.geo, 'I1:600,360,1200,720');
+    if (kind === 'partly-visible') {
+      assert.equal(result.proof.geo, 'B0:325,1000,1200,720', 'full element center can remain outside when a visible part is clickable');
+      assert.equal(clickEvents[0].y, 660, 'click the actual 600..720 visible intersection');
+    }
   });
 }

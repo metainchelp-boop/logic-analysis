@@ -121,7 +121,7 @@ test('fetchPage clears all previous click evidence before its first page operati
 test('guard receipt is bounded, private and distinct from verified navigation', async () => {
   const reports = [];
   const context = vm.createContext({ RT: {}, _lastClickBranch: 'pending', _lastClickHow: 'trusted', _clickCovered: 0,
-    _clickProof: { state: 'unavailable', ev: 511, gone: false, js: 9, raw: 'PRIVATE_TARGET_TEXT' },
+    _clickProof: { state: 'unavailable', ev: 511, gone: false, js: 9, geo: 'LT2:-9999,-9999,9999,9999', raw: 'PRIVATE_TARGET_TEXT' },
     navProbe: () => {}, chrome: { scripting: { executeScript: async () => [{ result: { env: 'f1v1a10w0r1', urlPage: 999 } }] } },
     reportBlocked: async report => { reports.push(report); return { ok: true }; } });
   vm.runInContext(grab('tapReport'), context);
@@ -132,17 +132,28 @@ test('guard receipt is bounded, private and distinct from verified navigation', 
   assert.equal(first.click.ev, 511);
   assert.equal(first.click.gone, false);
   assert.equal(first.click.js, 9);
+  assert.equal(first.click.geo, 'LT2:-9999,-9999,9999,9999');
   assert.equal(first.gates.location, false);
   assert(reports[0].body.length <= 500, reports[0].body.length);
   assert(!reports[0].body.includes('PRIVATE'));
-  context._clickProof = { state: 'PRIVATE_TARGET', ev: 1e300, gone: 'PRIVATE', js: 1e300 };
+  context._clickProof = { state: 'PRIVATE_TARGET', ev: 1e300, gone: 'PRIVATE', js: 1e300, geo: 'PRIVATE_TARGET_TEXT' };
   await context.tapReport(1, 'fixture', 999, 'UNVERIFIED_PAGE', undefined, proof);
   const second = JSON.parse(reports[1].body);
   assert.equal(second.click.guard, 'none');
+  assert.equal(second.click.geo, 'none');
   assert.equal(second.click.ev, 511); assert.equal(second.click.js, 9); assert.equal(second.click.gone, null);
   assert(reports[1].body.length <= 500); assert(!reports[1].body.includes('PRIVATE'));
   await context.tapReport(1, '(manual)', 0, 'HUMAN');
   assert.equal(JSON.parse(reports[2].body).click, undefined, 'manual report must not reuse past click evidence');
+  for (const geo of ['I3:1,2,3,4', 'B2:10000,2,3,4', 'I0:NaN,2,3,4', 'I0:1,2,-3,4', 'I0:1,2,3,4\nPRIVATE', 'I0:1,2,3,4\n']) {
+    context._clickProof = { state: 'outside', geo };
+    await context.tapReport(1, 'fixture', 2, 'NO_PAGER', undefined, proof);
+    assert.equal(JSON.parse(reports.at(-1).body).click.geo, 'none', geo);
+  }
+  context._clickProof = { state: 'unavailable', ev: null, gone: false, js: null, geo: 'LT2:-9999,-9999,9999,9999' };
+  await context.tapReport(1, 'fixture', 999, 'UNVERIFIED_PAGE', undefined, proof);
+  assert(reports.at(-1).body.length <= 500, 'nullable receipt fields and longest geometry still fit');
+  assert.equal(JSON.parse(reports.at(-1).body).click.geo, context._clickProof.geo);
 });
 
 test('fetchPage passes last read proof to the existing single failure TAP_PROBE without another read or click', async () => {
