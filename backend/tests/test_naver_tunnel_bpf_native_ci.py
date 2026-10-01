@@ -17,6 +17,18 @@ def load():
 
 
 class HarnessTests(unittest.TestCase):
+    def test_cleanup_accepts_already_collected_unit_but_not_other_errors(self):
+        m = load()
+        unit = "naver-tunnel-bpf-ci-" + "a" * 12 + ".service"
+        with patch.object(m, "run", return_value="not-found") as run, patch.object(m, "properties") as properties:
+            m.stop_owned_unit(unit, "a" * 32)
+            properties.assert_not_called()
+            self.assertEqual(1, run.call_count)
+        with patch.object(m, "run", side_effect=["loaded", "not-found"]), patch.object(m, "properties", side_effect=m.HarnessError("COMMAND_FAILED_SYSTEMCTL_5")):
+            m.stop_owned_unit(unit, "a" * 32)
+        with patch.object(m, "run", return_value="loaded"), patch.object(m, "properties", side_effect=m.HarnessError("OTHER_ERROR")):
+            with self.assertRaises(m.HarnessError):
+                m.stop_owned_unit(unit, "a" * 32)
     def test_only_exact_absent_unit_query_accepts_systemd_255_exit_five(self):
         m = load()
         command = ["/usr/bin/systemctl", "show", "naver-tunnel-bpf-ci-" + "a" * 12 + ".service", "--property=LoadState", "--value"]

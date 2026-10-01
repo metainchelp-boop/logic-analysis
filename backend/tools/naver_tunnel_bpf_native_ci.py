@@ -98,6 +98,20 @@ def properties(unit):
     return dict(line.split("=", 1) for line in text.splitlines() if "=" in line)
 
 
+def stop_owned_unit(unit, invocation):
+    lookup = ["/usr/bin/systemctl", "show", unit, "--property=LoadState", "--value"]
+    if run(lookup) == "not-found":
+        return
+    try:
+        current = properties(unit)
+    except HarnessError as error:
+        if str(error) == "COMMAND_FAILED_SYSTEMCTL_5" and run(lookup) == "not-found":
+            return  # --collect already removed this completed synthetic unit.
+        raise
+    if current.get("InvocationID") == invocation:
+        run(["/usr/bin/systemctl", "stop", "--no-block", unit])
+
+
 def probe(endpoint, deny_port, allow_port):
     require_ci()
     result = {"deny": connect_kind("127.0.0.1", deny_port), "allow": connect_kind("127.0.0.2", allow_port)}
@@ -117,7 +131,7 @@ def collect():
     def expired(_signum, _frame):
         raise HarnessError("HARNESS_DEADLINE")
     previous = signal.signal(signal.SIGALRM, expired)
-    signal.alarm(16)  # 정리 조회/stop 각 최대 2초를 포함하여 총 20초 이내로 제한한다.
+    signal.alarm(14)  # 정리 조회 최대 6초를 포함하여 총 20초 이내로 제한한다.
     try:
         if run(["/usr/bin/systemctl", "show", unit, "--property=LoadState", "--value"]) != "not-found":
             raise HarnessError("EXISTING_UNIT_REFUSED")
@@ -185,8 +199,8 @@ def collect():
         signal.alarm(0)
         # 임의/기존 unit는 정리하지 않는다. 동일 InvocationID의 이번 새 unit만 stop한다.
         try:
-            if created and invocation and properties(unit).get("InvocationID") == invocation:
-                run(["/usr/bin/systemctl", "stop", "--no-block", unit])
+            if created and invocation:
+                stop_owned_unit(unit, invocation)
         finally:
             for listener in listeners:
                 listener.close()
