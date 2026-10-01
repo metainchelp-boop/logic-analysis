@@ -191,18 +191,25 @@ def seal_bundle(env, certificate, output, *, source_commit, source_tar_gz):
     return receipt
 
 
+def validate_workflow_inputs(inputs):
+    allowed = {"preview_seal", "server_envelope_cert_pem", "backup_acceptance", "received_synthetic_json"}
+    # workflow_dispatch omits optional empty strings from inputs; absence is the same closed default.
+    if (not isinstance(inputs, dict) or set(inputs) - allowed or inputs.get("preview_seal") is not True
+            or inputs.get("backup_acceptance") != "none" or inputs.get("received_synthetic_json", "") != ""
+            or not isinstance(inputs.get("server_envelope_cert_pem"), str)):
+        raise SealError("INVALID_WORKFLOW_INPUTS")
+    return inputs["server_envelope_cert_pem"]
+
+
 def main():
     try:
         if len(sys.argv) != 1 or os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch" or os.environ.get("GITHUB_REF") != BRANCH:
             raise SealError("INVALID_WORKFLOW_CONTEXT")
         inputs = json.loads(os.environ.get("PREVIEW_SEAL_INPUTS", "{}"))
-        if (not isinstance(inputs, dict) or set(inputs) != {"preview_seal", "server_envelope_cert_pem",
-                "backup_acceptance", "received_synthetic_json"} or inputs["preview_seal"] is not True
-                or inputs["backup_acceptance"] != "none" or inputs["received_synthetic_json"] != ""):
-            raise SealError("INVALID_WORKFLOW_INPUTS")
+        certificate = validate_workflow_inputs(inputs)
         source_commit = os.environ.get("GITHUB_SHA", "")
         source = source_archive(source_commit)
-        receipt = seal_bundle(os.environ, inputs["server_envelope_cert_pem"], os.environ.get("PREVIEW_SEAL_OUTPUT", ""),
+        receipt = seal_bundle(os.environ, certificate, os.environ.get("PREVIEW_SEAL_OUTPUT", ""),
                               source_commit=source_commit, source_tar_gz=source)
         print(json.dumps(receipt, sort_keys=True))
         return 0

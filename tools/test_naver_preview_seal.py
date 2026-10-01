@@ -37,6 +37,15 @@ def certificate(key, expired=False):
 
 
 class SealTest(unittest.TestCase):
+    def test_workflow_optional_empty_input_may_be_omitted_but_not_populated(self):
+        values = {'preview_seal': True, 'server_envelope_cert_pem': 'public', 'backup_acceptance': 'none'}
+        self.assertEqual(P.validate_workflow_inputs(values), 'public')
+        self.assertEqual(P.validate_workflow_inputs({**values, 'received_synthetic_json': ''}), 'public')
+        for bad in ({**values, 'received_synthetic_json': '{}'}, {**values, 'unexpected': ''},
+                    {**values, 'preview_seal': 'true'}, {**values, 'backup_acceptance': 'restore'}):
+            with self.assertRaises(P.SealError):
+                P.validate_workflow_inputs(bad)
+
     @classmethod
     def setUpClass(cls):
         cls.key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
