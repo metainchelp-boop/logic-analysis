@@ -26,8 +26,9 @@ const products = page => Array.from({ length: 40 }, (_, i) => ({ nvMid: String((
       .concat(['tap', 'router', 'restricted'].map(mode => ({ mode, metadata: true })))
       .concat(['tap', 'router', 'restricted'].map(mode => ({ mode, metadata: 'portal' })))
       .concat([{ mode: 'tap', metadata: true, decoy: true },
-        { mode: 'tap', metadata: 'portal', decoy: true, unmarked: true }]);
-    for (const { mode, metadata, decoy, unmarked } of cases) {
+        { mode: 'tap', metadata: 'portal', decoy: true, unmarked: true },
+        { mode: 'tap', metadata: 'portal', actualSmooth: true }]);
+    for (const { mode, metadata, decoy, unmarked, actualSmooth } of cases) {
       const query = { query: 'fixture', ...(metadata === 'portal' ? { where: 'all', frm: 'NVSCTAB' }
         : metadata ? { prevQuery: 'previous', vertical: 'search' } : {}) };
       const url = 'https://search.shopping.naver.com/search/all?' + new URLSearchParams(query);
@@ -53,7 +54,7 @@ const products = page => Array.from({ length: 40 }, (_, i) => ({ nvMid: String((
       });
       await page.addInitScript({ content: tap });
       await page.goto(url);
-      await page.evaluate(({ first, second, mode, query }) => {
+      await page.evaluate(({ first, second, mode, query, actualSmooth }) => {
         window.clicks = 0;
         window.filterClicks = 0;
         const filter = document.querySelector('#filter');
@@ -64,6 +65,11 @@ const products = page => Array.from({ length: 40 }, (_, i) => ({ nvMid: String((
         window.__NEXT_DATA__ = { query: { ...query }, props: { products: first } };
         window.next = { router: { route: '/search/all', query: { ...query, pagingIndex: '1' },
           components: { '/search/all': { props: { products: first } } } } };
+        if (actualSmooth) {
+          document.documentElement.style.scrollBehavior = 'smooth';
+          document.body.style.height = '6500px';
+          document.querySelector('nav').style = 'position:absolute;top:5500px';
+        }
         document.querySelector('nav a').addEventListener('click', async e => {
           e.preventDefault(); window.clicks++;
           let data;
@@ -78,13 +84,14 @@ const products = page => Array.from({ length: 40 }, (_, i) => ({ nvMid: String((
           const cover = document.createElement('div'); cover.style = 'position:fixed;inset:0;background:white;z-index:1000';
           cover.textContent = 'Overlay'; document.body.appendChild(cover);
         }
-      }, { first: products(1), second: products(2), mode, query });
+      }, { first: products(1), second: products(2), mode, query, actualSmooth });
       const cdp = await context.newCDPSession(page);
       const store = {}, reports = [];
       const sandbox = {
-        URL, RR, crypto: require('node:crypto').webcrypto, Date, Math, Set,
+        URL, RR, crypto: require('node:crypto').webcrypto, Date, Math, Set, setTimeout, clearTimeout,
         CFG: { maxRank: 80, pagesPerKeyword: 2, maxPages: 2, readTries: 2, readTriesPaged: 20, readGapMs: 100 },
-        RT: {}, EVIDENCE_SOURCES: new Set(['tap', 'router', 'nextdata']),
+        RT: actualSmooth ? require('../remote_settings.js').merge({}).values : {},
+        EVIDENCE_SOURCES: new Set(['tap', 'router', 'nextdata']),
         _navMode: { reported: false }, _clickedAt: 0, _staleReported: false, _lastClickBranch: '', _lastClickHow: '',
         _trustedNote: '', _clickHit: '', _clickCovered: 0, _pagerAfter: '', _entryNote: '', _entryVia: '',
         ensureWorkTab: async () => 1, searchEntryEnabled: async () => false,
@@ -103,7 +110,8 @@ const products = page => Array.from({ length: 40 }, (_, i) => ({ nvMid: String((
           ({ fn, args }) => (0, eval)('(' + fn + ')')(...args), { fn: func.toString(), args }) }] } };
       vm.createContext(sandbox);
       vm.runInContext(['pageExtract','organicIds','pageChanged','pagerLocate','pagerClick','pagerState','readPagerState',
-        'trustedClickToPage','clickToPage','navProbe','fetchPage','collectKeyword'].map(grab).join('\n'), sandbox);
+        'pagerGuardCall','trustedClickToPage','clickToPage','navProbe','fetchPage','collectKeyword'].map(grab).join('\n'), sandbox);
+      if (actualSmooth) vm.runInContext(['scrollStep','humanScrollDown'].map(grab).join('\n'), sandbox);
       const result = await sandbox.collectKeyword('fixture');
       // Feed the actual extension envelope into the actual Python validation + ledger module.
       const ledger = spawnSync(process.env.COLLECTOR_TEST_PYTHON || 'python3', ['-c', `
@@ -152,6 +160,7 @@ print(json.dumps({'kind': item['kind'], 'calls': calls, 'rows': conn.execute('SE
       }
       console.log('PASS browser ' + mode + (metadata === 'portal' ? '-portal' : metadata ? '-metadata' : '')
         + (decoy ? unmarked ? '-decoy-href' : '-decoy-marked' : '')
+        + (actualSmooth ? '-actual-smooth-scroll' : '')
         + ': ' + result.products.length + ' ranks, clicks=' + clicks + ', requests=' + searchRequests);
       await context.close();
     }

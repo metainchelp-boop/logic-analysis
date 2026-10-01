@@ -1016,8 +1016,20 @@ function pagerClick(target) {
  *    서로 다른 버튼을 누르게 되어 비교 자체가 무의미해진다(회귀 시험이 이를 지킨다).
  * ⚠️ 이 함수는 페이지 안(MAIN world)에서 돈다 — 바깥 변수를 쓸 수 없다.
  */
-function pagerLocate(target) {
+function pagerLocate(target, guard) {
   var want = String(target);
+  // Optional guarded interaction keeps a DOM reference only inside this document.
+  // Tokens are correlation IDs, not credentials. No DOM text/URLs enter the new proof.
+  if (guard && guard.phase === 'finish') {
+    var prior = window.__mcPagerGuard;
+    if (!prior || prior.token !== guard.token) return null;
+    var evidence = { ev: prior.ev, gone: !prior.el.isConnected, js: prior.js };
+    if (prior.click && prior.click.defaultPrevented) evidence.ev |= 128;
+    prior.cleanup();
+    return evidence;
+  }
+  if (guard && (typeof guard.token !== 'string' || !guard.token || guard.token.length > 80
+      || !['start','check'].includes(guard.phase) || !(Date.now() < guard.until))) return { reason: 'timeout' };
   // Keep this destination policy identical to pagerClick: a number alone is not a pager.
   var current;
   function defaultScope(url) {
@@ -1054,6 +1066,7 @@ function pagerLocate(target) {
     return r.width > 0 && r.height > 0;
   }
   function at(el, branch) {
+    if (guard) return guardedAt(el, branch);
     // 화면 밖이면 좌표가 음수라 엉뚱한 곳이 눌린다 — 가운데로 끌어온 뒤 다시 잰다.
     try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) { /* 무시 */ }
     var r = el.getBoundingClientRect();
@@ -1081,6 +1094,78 @@ function pagerLocate(target) {
       }
     } catch (e) { hit = 'err'; }
     return { branch: branch, x: Math.round(x), y: Math.round(y), hit: hit.slice(0, 40), covered: covered };
+  }
+  function guardedAt(el, branch) {
+    var state = window.__mcPagerGuard;
+    if (guard.phase === 'start') {
+      if (state && typeof state.cleanup === 'function') state.cleanup();
+      state = { token: guard.token, el: el, href: location.href, target: want,
+        active: true, ev: 0, js: 0, click: null };
+      var events = ['pointerdown','mousedown','pointerup','mouseup','click'];
+      var capture = function(event) {
+        if (!state.active) return;
+        var mine = event.target === el || el.contains(event.target);
+        if (!mine) { state.ev |= 256; return; }
+        state.ev |= 1 << events.indexOf(event.type);
+        if (event.type === 'click') {
+          state.click = event;
+          if (event.isTrusted) state.ev |= 64;
+        }
+      };
+      var bubble = function(event) {
+        if (state.active && (event.target === el || el.contains(event.target))) state.ev |= 32;
+      };
+      var error = function() { if (state.active) state.js = Math.min(9, state.js + 1); };
+      state.cleanup = function() {
+        state.active = false;
+        events.forEach(function(type) { document.removeEventListener(type, capture, true); });
+        document.removeEventListener('click', bubble, false);
+        window.removeEventListener('error', error, false);
+        window.removeEventListener('unhandledrejection', error, false);
+        clearTimeout(state.expiry);
+        if (window.__mcPagerGuard === state) delete window.__mcPagerGuard;
+      };
+      window.__mcPagerGuard = state;
+      events.forEach(function(type) { document.addEventListener(type, capture, { capture: true, passive: true }); });
+      document.addEventListener('click', bubble, { passive: true });
+      window.addEventListener('error', error);
+      window.addEventListener('unhandledrejection', error);
+      // Worker loss must not leave an observer attached indefinitely.
+      state.expiry = setTimeout(state.cleanup, 10000);
+      try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) { state.cleanup(); return { reason: 'error' }; }
+    }
+    if (!state || !state.active || state.token !== guard.token || state.el !== el
+        || state.target !== want || state.href !== location.href) return { reason: 'changed' };
+    return new Promise(function(resolve) {
+      var done = false, frame = 0, previous = null, stableSince = 0, samples = 0;
+      var finish = function(result) {
+        if (done) return;
+        done = true; clearTimeout(timer); cancelAnimationFrame(frame); resolve(result);
+      };
+      // A timer OUTSIDE requestAnimationFrame bounds hidden/throttled documents too.
+      var timer = setTimeout(function() { finish({ reason: 'unstable' }); }, Math.max(0, Math.min(1500, guard.until - Date.now())));
+      var sample = function() {
+        try {
+          if (Date.now() >= guard.until) return finish({ reason: 'timeout' });
+          if (!state.active || window.__mcPagerGuard !== state || !el.isConnected || !vis(el)
+              || !pageLink(el) || state.href !== location.href) return finish({ reason: 'changed' });
+          var r = el.getBoundingClientRect(), values = [r.left, r.top, r.width, r.height];
+          var same = previous && values.every(function(value, i) { return Math.abs(value - previous[i]) < 0.25; });
+          if (!same) { stableSince = Date.now(); samples = 0; }
+          else samples++;
+          previous = values;
+          if (samples >= 2 && Date.now() - stableSince >= 80) {
+            var x = Math.round(r.left + r.width / 2), y = Math.round(r.top + r.height / 2);
+            if (!(x > 0 && y > 0 && x < window.innerWidth && y < window.innerHeight)) return finish({ reason: 'outside' });
+            var top = document.elementFromPoint(x, y), mine = top && (top === el || el.contains(top));
+            return finish(mine ? { branch: branch, x: x, y: y, covered: 0, hit: 'pager', reason: 'stable' }
+              : { reason: 'covered', covered: 1 });
+          }
+          frame = requestAnimationFrame(sample);
+        } catch (e) { finish({ reason: 'error' }); }
+      };
+      frame = requestAnimationFrame(sample);
+    });
   }
   /* ⓪ 🔴 v1.17.5 — 네이버가 직접 붙여 둔 표식으로 **정확히** 지목한다.
    *   대표 캡처(2026-09-16)로 확인한 실제 모양:
@@ -1516,14 +1601,15 @@ async function humanEntry(tabId, keyword) {
  *
  * ⚠️ 대가 — 붙어 있는 동안 그 창에 「…이(가) 이 브라우저를 디버깅하고 있습니다」 띠가 뜬다.
  *    그래서 **누를 때만 붙고 바로 뗀다**(회차 내내 붙어 있지 않는다).
- * ⚠️ 실패하면 **반드시 옛 방식(합성 클릭)으로 폴백한다.** 개발자 도구가 그 탭에 열려 있으면
- *    attach 가 거부되는데, 그때 수집이 통째로 죽으면 고장이 하나 더 느는 셈이다.
+ * ⚠️ debugger 미지원·attach 실패만 합성 클릭으로 폴백한다. 좌표 검증 실패는 그대로 멈춘다.
+ *    입력을 이미 시도했다면 전달이 불확실해도 합성 클릭을 추가하지 않는다.
  * ⚠️ 끌 수 있다 — 팝업의 「🖱 진짜 입력으로 클릭」. 저장값 `trustedClick`(없으면 켬).
  * ─────────────────────────────────────────────────────────────────────────── */
 let _trustedNote = '';       // 마지막 실패 사유(진단 보고용 · 60자)
 // 🔴 v1.17.5 — 누를 때 잰 것. 진단 보고에만 쓰고 동작은 바꾸지 않는다.
 let _clickHit = '';          // 그 좌표에 실제로 있던 것(태그.클래스>글자)
 let _clickCovered = 0;       // 1 = 우리 버튼이 아니라 다른 것이 덮고 있었다
+let _clickProof = null;      // Bounded receipt evidence; never a navigation/collection success flag.
 let _pagerAfter = '';        // 누른 직후의 현재 페이지 표식 — 'cur=2|qp=2|y=5600'
 
 /* 🔴 v1.17.5 — 화면 안에서 한 칸 굴린다(요청 0건). 사람처럼 나눠 내려가려고 따로 뺐다. */
@@ -1633,12 +1719,30 @@ function dbgDetach(tabId) {
   });
 }
 
-/** 표준 입력 경로로 페이지 버튼을 누른다. 눌렀으면 가지 이름, 못 눌렀으면 ''(폴백하라는 뜻). */
+/** Guarded MAIN-world calls also have a worker deadline; a late result never authorizes input. */
+async function pagerGuardCall(tabId, target, token, phase) {
+  let timer;
+  try {
+    const result = chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func: pagerLocate,
+      args: [target, { token, phase, until: Date.now() + 1800 }] })
+      .then(rows => rows && rows[0] && rows[0].result || { reason: 'no-target' }, () => ({ reason: 'error' }));
+    return await Promise.race([result, new Promise(resolve => {
+      timer = setTimeout(() => resolve({ reason: 'timeout' }), 2200);
+    })]);
+  } catch (e) { return { reason: 'error' }; }
+  finally { clearTimeout(timer); }
+}
+
+/** One input attempt, not proof of navigation. Only known pre-attach failures allow fallback. */
 async function trustedClickToPage(tabId, target) {
   let attached = false;
   let attempted = false;
+  let guarded = false;
+  let inputPoint = null, releaseAttempted = false;
+  const token = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 12);
+  _clickProof = { state: 'none', ev: null, gone: null, js: null };
   try {
-    if (!chrome.debugger) { _trustedNote = 'no-debugger-api'; return ''; }
+    if (!chrome.debugger) { _trustedNote = 'no-debugger-api'; _clickProof.state = 'unavailable'; return ''; }
     /* 🔴 v1.17.5 — 대표 지시(「완전 실사용자 기반으로 움직이면 될 거 같은데」).
      *   사람은 상품을 훑어 **내려가서** 아래쪽 번호 줄에 닿는다. 우리는 여태
      *   `scrollIntoView` 로 버튼을 화면 한가운데로 **순간이동**시킨 뒤 그 점을 눌렀다.
@@ -1656,26 +1760,40 @@ async function trustedClickToPage(tabId, target) {
      *      그래서 「cov=0 이니 안 덮였다」가 「잘 눌렀다」를 뜻하지 않는다. 내가 그렇게 읽었다.
      *   ⇒ **붙이고 나서 굴리고 재고 누른다.** 띠가 이미 떠 있는 화면의 좌표를 쓴다.
      */
-    await dbgAttach(tabId);
+    try { await dbgAttach(tabId); }
+    catch (e) { _trustedNote = 'attach-failed'; _clickProof.state = 'unavailable'; return ''; }
     attached = true;
     await sleep(350);                 // 띠가 붙고 화면이 자리를 잡을 틈
     await humanScrollDown(tabId);
-    const [loc] = await chrome.scripting.executeScript({
-      target: { tabId }, world: 'MAIN', func: pagerLocate, args: [target],
-    });
-    const spot = loc && loc.result;
-    if (!spot) { _trustedNote = 'no-spot'; return ''; }   // 버튼을 못 찾음 — 합성 클릭도 못 찾는다
-    _clickHit = spot.hit || '';
-    _clickCovered = spot.covered ? 1 : 0;
-    if (spot.covered) { _trustedNote = 'covered-target'; return ''; }
-    const base = { x: spot.x, y: spot.y, button: 'left' };
+    guarded = true;
+    let spot = await pagerGuardCall(tabId, target, token, 'start');
+    let base, ready = false;
+    // Moving/hovering can itself change layout. Recheck the SAME element after every move.
+    // This loop never presses; continuously moving targets are abandoned, not chased forever.
+    for (let move = 0; move < 3; move++) {
+      _clickProof.state = spot.reason || 'error';
+      _clickHit = spot.hit || '';
+      _clickCovered = spot.covered ? 1 : 0;
+      if (spot.reason !== 'stable' || spot.covered) { _trustedNote = 'guard-' + _clickProof.state; return ''; }
+      base = { x: spot.x, y: spot.y, button: 'left' };
+      await dbgSend(tabId, 'Input.dispatchMouseEvent', { ...base, type: 'mouseMoved', buttons: 0, clickCount: 0 });
+      await sleep(40 + Math.floor(Math.random() * 70));
+      spot = await pagerGuardCall(tabId, target, token, 'check');
+      if (spot.reason === 'stable' && !spot.covered && spot.x === base.x && spot.y === base.y) { ready = true; break; }
+    }
+    if (!ready) {
+      _clickProof.state = spot.reason === 'stable' ? 'unstable' : (spot.reason || 'error');
+      _clickCovered = spot.covered ? 1 : 0;
+      _trustedNote = 'guard-' + _clickProof.state;
+      return '';
+    }
     _clickedAt = Date.now();
-    // 사람 손과 같은 순서 — 움직이고, 누르고, 뗀다.
-    await dbgSend(tabId, 'Input.dispatchMouseEvent', { ...base, type: 'mouseMoved', buttons: 0, clickCount: 0 });
-    await sleep(40 + Math.floor(Math.random() * 70));
+    _clickProof.state = 'pending';
+    inputPoint = base;
     attempted = true;
     await dbgSend(tabId, 'Input.dispatchMouseEvent', { ...base, type: 'mousePressed', buttons: 1, clickCount: 1 });
     await sleep(30 + Math.floor(Math.random() * 60));
+    releaseAttempted = true;
     await dbgSend(tabId, 'Input.dispatchMouseEvent', { ...base, type: 'mouseReleased', buttons: 0, clickCount: 1 });
     // ⚠️ 떼자마자 detach 하지 않는다 — 화면이 그 클릭을 처리할 틈을 준다.
     await sleep(200);
@@ -1688,8 +1806,31 @@ async function trustedClickToPage(tabId, target) {
     return spot.branch || 'num';
   } catch (e) {
     _trustedNote = String((e && e.message) || e).slice(0, 60);
+    _clickProof.state = attempted ? 'pending' : 'error';
     return attempted ? 'pending' : ''; // uncertain delivery must not trigger a second click
   } finally {
+    // A press can reach Chrome even if its callback reports an error. Complete only
+    // that input pair; never press again and never repeat an already-attempted release.
+    if (attempted && !releaseAttempted) {
+      releaseAttempted = true;
+      let releaseTimer;
+      try {
+        await Promise.race([
+          dbgSend(tabId, 'Input.dispatchMouseEvent', { ...inputPoint, type: 'mouseReleased', buttons: 0, clickCount: 1 }),
+          new Promise(resolve => { releaseTimer = setTimeout(resolve, 2200); }),
+        ]);
+      } catch (e) { /* Delivery remains pending; page proof, not a repeated input, decides success. */ }
+      finally { clearTimeout(releaseTimer); }
+    }
+    if (guarded) {
+      const receipt = await pagerGuardCall(tabId, target, token, 'finish');
+      if (receipt && Number.isInteger(receipt.ev)) {
+        _clickProof.ev = Math.max(0, Math.min(511, receipt.ev));
+        _clickProof.gone = typeof receipt.gone === 'boolean' ? receipt.gone : null;
+        _clickProof.js = Number.isInteger(receipt.js) ? Math.max(0, Math.min(9, receipt.js)) : null;
+        if (attempted && (receipt.ev & 80) === 80) _clickProof.state = 'received';
+      }
+    }
     if (attached) await dbgDetach(tabId);
   }
 }
@@ -1716,10 +1857,10 @@ let _staleReported = false;  // 키워드당 1회만 보고
 let _lastClickBranch = '';   // 어느 가지('num'·'next'·'loose')로 눌렀나 — 진단 보고에 싣는다
 let _lastClickHow = '';      // v1.15.0 — 'trusted'(표준 입력) · 'synth'(합성) · ''(못 누름)
 async function clickToPage(tabId, target) {
-  // v1.15.0 — 먼저 표준 입력 경로, 안 되면 종전 합성 클릭으로 폴백.
-  //   ⚠️ 폴백을 지우지 말 것 — 개발자 도구가 그 탭에 열려 있으면 attach 가 거부된다.
+  // Standard input first. Preserve synthetic fallback only when debugger use is unavailable.
+  // Target/geometry validation failures must stop instead of bypassing that validation.
   // One dispatch per transition. Slow navigation is pending; fetchPage proves the result.
-  // Only failure BEFORE dispatch may use the synthetic fallback.
+  // No second input after uncertain dispatch, even if navigation has not completed.
   if (await trustedEnabled()) {
     const br = await trustedClickToPage(tabId, target);
     if (br) {
@@ -1729,7 +1870,8 @@ async function clickToPage(tabId, target) {
       _navMode.how.trusted += 1;
       return true;
     }
-    if (_trustedNote === 'covered-target') return false;
+    // Failed validation is NOT permission to bypass it with a synthetic click.
+    if (!['no-debugger-api','attach-failed'].includes(_trustedNote)) return false;
   }
   try {
     _clickedAt = Date.now();
@@ -1890,6 +2032,9 @@ async function tapReport(tabId, keyword, pagingIndex, why, errLabel, proof) {
     const manual = why === 'HUMAN';
     const environment = typeof probe.env === 'string' && /^f[01]v[01]a[01]{2}w[01]r[01]$/.test(probe.env) ? probe.env : 'none';
     const flag = value => typeof value === 'boolean' ? value : null;
+    const receipt = typeof _clickProof === 'object' && _clickProof ? _clickProof : {};
+    const boundedReceipt = (value, limit) => typeof value === 'number' && Number.isFinite(value)
+      ? Math.max(0, Math.min(limit, Math.floor(value))) : null;
     const recent = (Array.isArray(probe.recent) ? probe.recent : []).slice(0, 3).map(item => {
       const e = item && typeof item === 'object' ? item : {};
       return { page: count(e.page), status: count(e.status), age: count(e.age),
@@ -1903,7 +2048,9 @@ async function tapReport(tabId, keyword, pagingIndex, why, errLabel, proof) {
       want: count(pagingIndex), now: count(d.urlPage === undefined ? probe.urlPage : d.urlPage), env: environment,
       click: { branch: manual ? 'none' : pick(typeof _lastClickBranch === 'string' ? _lastClickBranch : '', ['shp','num','next','loose','pending']),
         how: manual ? 'none' : pick(typeof _lastClickHow === 'string' ? _lastClickHow : '', ['trusted','synth']),
-        covered: !manual && typeof _clickCovered !== 'undefined' && !!_clickCovered },
+        covered: !manual && typeof _clickCovered !== 'undefined' && !!_clickCovered,
+        guard: pick(receipt.state, ['none','stable','no-target','covered','unstable','changed','outside','timeout','error','unavailable','pending','received']),
+        ev: boundedReceipt(receipt.ev, 511), gone: flag(receipt.gone), js: boundedReceipt(receipt.js, 9) },
       gates: { checked: d.checked === true, baseline: d.baseline === true, location: d.location === true, route: d.route === true,
         router: d.router === true, next: d.next === true, routerChanged: d.routerChanged === true, nextChanged: d.nextChanged === true },
       tap: { on: proof ? t.on === true : !!(probe.tap && typeof probe.tap === 'object'),
@@ -1954,7 +2101,7 @@ function waitNavigated(tabId, needle) {
  *    pagingIndex=2 페이지에 40개 상품과 필요한 필드가 전부 들어 있음을 확인했다. */
 async function fetchPage(keyword, pagingIndex, prevIds) {
   // Per-page evidence must never inherit the previous keyword/page's click.
-  _lastClickBranch = ''; _lastClickHow = ''; _clickHit = ''; _clickCovered = 0; _pagerAfter = ''; _trustedNote = '';
+  _lastClickBranch = ''; _lastClickHow = ''; _clickHit = ''; _clickCovered = 0; _clickProof = null; _pagerAfter = ''; _trustedNote = '';
   // ⚠️ v1.17.4 — `let` 이다. 쇼핑 탭이 `target="_blank"` 라 진입 중에 **탭이 바뀔 수 있고**,
   //    그 뒤 읽기·클릭은 반드시 **바뀐 탭**에서 해야 한다(안 그러면 통합검색을 읽는다).
   let tabId = await ensureWorkTab();

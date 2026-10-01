@@ -581,17 +581,18 @@ console.log('\n[응답 가로채기 — net_tap]');
            runLocate(spec, 2, { innerWidth: 1280, innerHeight: 900 }).spot === null);
       }
 
-      // — 배선: 표준 입력을 먼저 쓰고, 실패하면 반드시 폴백 —
+      // — 표준 입력 우선; debugger 사용 불가만 합성 폴백(검증 실패 우회 금지) —
       const ctp = grab('clickToPage', 'async');
       ok('⑳ clickToPage 가 표준 입력을 먼저 시도한다',
          /await trustedEnabled\(\)/.test(ctp) && /await trustedClickToPage\(tabId, target\)/.test(ctp));
-      ok('⑳ 실패하면 종전 합성 클릭으로 폴백한다(수집이 통째로 죽지 않게)',
-         /func: pagerClick/.test(ctp) && ctp.indexOf('trustedClickToPage') < ctp.indexOf('func: pagerClick'));
+      ok('⑳ debugger 사용 불가일 때만 종전 합성 클릭으로 폴백한다',
+         /func: pagerClick/.test(ctp) && ctp.indexOf('trustedClickToPage') < ctp.indexOf('func: pagerClick')
+         && /\['no-debugger-api','attach-failed'\]\.includes\(_trustedNote\)/.test(ctp));
       ok('⑳ 어느 쪽으로 눌렀는지 기록한다', /_lastClickHow = 'trusted'/.test(ctp) && /_lastClickHow = 'synth'/.test(ctp));
 
       const tcp = grab('trustedClickToPage', 'async');
       ok('⑳ 누를 때만 붙고 **반드시** 뗀다(띠가 남지 않게)',
-         /finally \{\s*if \(attached\) await dbgDetach\(tabId\);/.test(tcp));
+         /finally \{[^]*if \(attached\) await dbgDetach\(tabId\);/.test(tcp));
       ok('⑳ 사람 손과 같은 순서 — 움직임·누름·뗌',
          tcp.indexOf("'mouseMoved'") < tcp.indexOf("'mousePressed'")
          && tcp.indexOf("'mousePressed'") < tcp.indexOf("'mouseReleased'"));
@@ -954,7 +955,7 @@ console.log('\n[응답 가로채기 — net_tap]');
       }
 
       // ② 사람처럼 나눠 내려간다
-      ok('🔴㉒ 누르기 **전에** 훑어 내려간다', tc5.indexOf('humanScrollDown') < tc5.indexOf('pagerLocate'));
+      ok('🔴㉒ 누르기 **전에** 훑어 내려간다', tc5.indexOf('humanScrollDown') < tc5.indexOf('pagerGuardCall'));
       ok('🔴㉒ 한 번에 순간이동하지 않고 여러 번에 나눈다',
          /for \(let i = 0; i < 8; i\+\+\)/.test(hsd) && /func: scrollStep/.test(hsd));
       // ⚙ v1.27.0 — 숫자가 서버 설정(RT)으로 옮겨졌다. 기본값(180~440ms · 500~820px)은 폴백과 remote_settings 기본값에 그대로.
@@ -1055,13 +1056,14 @@ console.log('\n[응답 가로채기 — net_tap]');
       const ct7 = grab('clickToPage', 'async');
       ok('🔴㉔ **붙이고 나서** 굴리고 좌표를 잰다(띠가 뜨면 화면이 아래로 밀린다)',
          tc7.indexOf('dbgAttach') < tc7.indexOf('humanScrollDown')
-         && tc7.indexOf('humanScrollDown') < tc7.indexOf('pagerLocate'));
+         && tc7.indexOf('humanScrollDown') < tc7.indexOf('pagerGuardCall'));
       ok('🔴㉔ 띠가 자리 잡을 틈을 준다', /attached = true;\s*await sleep\(350\)/.test(tc7));
       ok('🔴㉔ 좌표를 잰 뒤에는 붙이지 않는다(옛 순서로 되돌리지 말 것)',
-         tc7.indexOf('pagerLocate') > tc7.indexOf('dbgAttach'));
+         tc7.indexOf('pagerGuardCall') > tc7.indexOf('dbgAttach'));
       ok('㉔ 클릭 후 페이지 번호만으로 재클릭하지 않는다', !/cur !== String\(target\)/.test(code(ct7)));
       ok('㉔ 클릭 뒤 자료 검증은 fetchPage가 담당한다', /!pageChanged\(out\.list, prevIds\)/.test(FP));
-      ok('㉔ 가려진 버튼은 합성 경로로도 누르지 않는다', /if \(_trustedNote === 'covered-target'\) return false/.test(ct7));
+      ok('㉔ 가림·불안정·확인 실패는 합성 경로로도 누르지 않는다',
+         /if \(!\['no-debugger-api','attach-failed'\]\.includes\(_trustedNote\)\) return false/.test(ct7));
       ok('🔴㉔ 합성 클릭 뒤에도 같은 자로 현재 페이지를 남긴다(무엇이 먹었는지 보이게)',
          /await readPagerState\(tabId\); \}\s*\n\s*return !!\(res && res\.result\)/.test(ct7)
          || (/readPagerState/.test(ct7) && ct7.indexOf('func: pagerClick') < ct7.lastIndexOf('readPagerState')));

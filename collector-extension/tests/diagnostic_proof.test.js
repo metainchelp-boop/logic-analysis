@@ -109,11 +109,40 @@ test('navProbe reports numeric current URL page, not stale router page or trunca
 
 test('fetchPage clears all previous click evidence before its first page operation', async () => {
   const context = vm.createContext({ _lastClickBranch: 'loose', _lastClickHow: 'trusted', _clickHit: 'old',
-    _clickCovered: 1, _pagerAfter: 'old', _trustedNote: 'old', ensureWorkTab: async () => { throw Error('stop before work'); } });
+    _clickCovered: 1, _clickProof: { state: 'received', ev: 255 }, _pagerAfter: 'old', _trustedNote: 'old',
+    ensureWorkTab: async () => { throw Error('stop before work'); } });
   vm.runInContext(grab('fetchPage'), context);
   await assert.rejects(context.fetchPage('new', 1), /stop before work/);
   for (const key of ['_lastClickBranch', '_lastClickHow', '_clickHit', '_pagerAfter', '_trustedNote']) assert.equal(context[key], '', key);
   assert.equal(context._clickCovered, 0);
+  assert.equal(context._clickProof, null);
+});
+
+test('guard receipt is bounded, private and distinct from verified navigation', async () => {
+  const reports = [];
+  const context = vm.createContext({ RT: {}, _lastClickBranch: 'pending', _lastClickHow: 'trusted', _clickCovered: 0,
+    _clickProof: { state: 'unavailable', ev: 511, gone: false, js: 9, raw: 'PRIVATE_TARGET_TEXT' },
+    navProbe: () => {}, chrome: { scripting: { executeScript: async () => [{ result: { env: 'f1v1a10w0r1', urlPage: 999 } }] } },
+    reportBlocked: async report => { reports.push(report); return { ok: true }; } });
+  vm.runInContext(grab('tapReport'), context);
+  const proof = { urlPage: 999, tap: Object.fromEntries(['n','page','keyword','source','scope','response','fresh','status'].map(key => [key, 999])) };
+  await context.tapReport(1, 'fixture', 999, 'UNVERIFIED_PAGE', undefined, proof);
+  const first = JSON.parse(reports[0].body);
+  assert.equal(first.click.guard, 'unavailable');
+  assert.equal(first.click.ev, 511);
+  assert.equal(first.click.gone, false);
+  assert.equal(first.click.js, 9);
+  assert.equal(first.gates.location, false);
+  assert(reports[0].body.length <= 500, reports[0].body.length);
+  assert(!reports[0].body.includes('PRIVATE'));
+  context._clickProof = { state: 'PRIVATE_TARGET', ev: 1e300, gone: 'PRIVATE', js: 1e300 };
+  await context.tapReport(1, 'fixture', 999, 'UNVERIFIED_PAGE', undefined, proof);
+  const second = JSON.parse(reports[1].body);
+  assert.equal(second.click.guard, 'none');
+  assert.equal(second.click.ev, 511); assert.equal(second.click.js, 9); assert.equal(second.click.gone, null);
+  assert(reports[1].body.length <= 500); assert(!reports[1].body.includes('PRIVATE'));
+  await context.tapReport(1, '(manual)', 0, 'HUMAN');
+  assert.equal(JSON.parse(reports[2].body).click, undefined, 'manual report must not reuse past click evidence');
 });
 
 test('fetchPage passes last read proof to the existing single failure TAP_PROBE without another read or click', async () => {

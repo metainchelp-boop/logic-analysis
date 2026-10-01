@@ -41,7 +41,7 @@ test('actual trusted Chrome click must not activate a numeric filter', async () 
     });
     const cdp = await context.newCDPSession(page);
     const sandbox = {
-      Date, Math, _trustedNote: '', _clickHit: '', _clickCovered: 0, _pagerAfter: '', _clickedAt: 0,
+      Date, Math, setTimeout, clearTimeout, _trustedNote: '', _clickHit: '', _clickCovered: 0, _pagerAfter: '', _clickedAt: 0,
       dbgAttach: async () => {}, dbgDetach: async () => {}, humanScrollDown: async () => {},
       readPagerState: async () => {}, sleep: async () => {},
       dbgSend: (_tab, command, params) => cdp.send(command, params),
@@ -49,7 +49,7 @@ test('actual trusted Chrome click must not activate a numeric filter', async () 
         ({ code, args }) => (0, eval)('(' + code + ')')(...args), { code: func.toString(), args }) }] } },
     };
     vm.createContext(sandbox);
-    vm.runInContext(grab('pagerLocate') + '\n' + grab('trustedClickToPage'), sandbox);
+    vm.runInContext(grab('pagerLocate') + '\n' + grab('pagerGuardCall') + '\n' + grab('trustedClickToPage'), sandbox);
     const branch = await sandbox.trustedClickToPage(1, 2);
     const filterClicks = await page.evaluate(() => window.filterClicks);
     console.log('OBS actual-browser', JSON.stringify({ branch, filterClicks, url: page.url(), requests, hit: sandbox._clickHit }));
@@ -88,7 +88,7 @@ test('real browser: both input paths choose genuine marker or validated link exa
       }, kind === 'covered');
       const cdp = await context.newCDPSession(page);
       const sandbox = {
-        Date, Math, _trustedNote: '', _clickHit: '', _clickCovered: 0, _pagerAfter: '', _clickedAt: 0,
+        Date, Math, setTimeout, clearTimeout, _trustedNote: '', _clickHit: '', _clickCovered: 0, _pagerAfter: '', _clickedAt: 0,
         dbgAttach: async () => {}, dbgDetach: async () => {}, humanScrollDown: async () => {},
         readPagerState: async () => {}, sleep: async () => {},
         dbgSend: (_tab, command, params) => cdp.send(command, params),
@@ -96,7 +96,7 @@ test('real browser: both input paths choose genuine marker or validated link exa
           ({ code, args }) => (0, eval)('(' + code + ')')(...args), { code: func.toString(), args }) }] } },
       };
       vm.createContext(sandbox);
-      vm.runInContext(grab('pagerLocate') + '\n' + grab('trustedClickToPage'), sandbox);
+      vm.runInContext(grab('pagerLocate') + '\n' + grab('pagerGuardCall') + '\n' + grab('trustedClickToPage'), sandbox);
       if (mode === 'trusted') await sandbox.trustedClickToPage(1, 2);
       else await page.evaluate(code => (0, eval)('(' + code + ')')(2), grab('pagerClick'));
       assert.deepEqual(await page.evaluate(() => window.clicks), kind === 'covered' ? [] : ['pager'], mode + '/' + kind);

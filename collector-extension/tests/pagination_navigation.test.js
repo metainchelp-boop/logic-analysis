@@ -20,7 +20,7 @@ async function scenario({ transitionMs, covered = 0 }) {
   let now = 0, releasedAt = null, synth = 0;
   const events = [];
   const ctx = {
-    Math, String, Promise,
+    Math, String, Promise, setTimeout, clearTimeout,
     _trustedNote: '', _clickHit: '', _clickCovered: 0, _pagerAfter: '',
     _lastClickBranch: '', _lastClickHow: '',
     _navMode: { how: { trusted: 0, synth: 0 } },
@@ -33,15 +33,17 @@ async function scenario({ transitionMs, covered = 0 }) {
     },
     pagerLocate: function pagerLocate() {}, pagerClick: function pagerClick() {},
     pagerState: function pagerState() {},
-    chrome: { debugger: {}, scripting: { executeScript: async ({ func }) => {
-      if (func.name === 'pagerLocate') return [{ result: { branch: 'num', x: 120, y: 210, hit: covered ? 'div.overlay' : 'a.page>2', covered } }];
+    chrome: { debugger: {}, scripting: { executeScript: async ({ func, args }) => {
+      if (func.name === 'pagerLocate' && args[1]?.phase === 'finish') return [{ result: { ev: 0, gone: false, js: 0 } }];
+      if (func.name === 'pagerLocate') return [{ result: { branch: 'num', x: 120, y: 210,
+        reason: covered ? 'covered' : 'stable', hit: covered ? 'div.overlay' : 'a.page>2', covered } }];
       if (func.name === 'pagerState') return [{ result: { cur: releasedAt !== null && now - releasedAt >= transitionMs ? '2' : '1' } }];
       if (func.name === 'pagerClick') { synth++; return [{ result: 'num' }]; }
       throw new Error('Unexpected script: ' + func.name);
     } } },
   };
   vm.createContext(ctx);
-  vm.runInContext(['readPagerState', 'trustedClickToPage', 'clickToPage'].map(grab).join('\n'), ctx);
+  vm.runInContext(['pagerGuardCall', 'readPagerState', 'trustedClickToPage', 'clickToPage'].map(grab).join('\n'), ctx);
   const accepted = await ctx.clickToPage(1, 2);
   return { accepted, synth, events, note: ctx._trustedNote, mode: ctx._lastClickHow };
 }
