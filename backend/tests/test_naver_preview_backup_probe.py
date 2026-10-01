@@ -7,6 +7,10 @@ from pathlib import Path
 import sqlite3
 import subprocess
 import tempfile
+import http.server
+import shutil
+import socketserver
+import threading
 import unittest
 from contextlib import closing
 from unittest.mock import Mock, patch
@@ -17,7 +21,7 @@ SPEC.loader.exec_module(M)
 
 
 class BackupProbeTest(unittest.TestCase):
-    def simulate(self, *, failure=None, mutate_image=False, changed_file=False, post_baseline=False):
+    def simulate(self, *, failure=None, mutate_image=False, changed_file=False, post_baseline=False, volumes=None):
         package = {'baseline': 'a'*64, 'source_commit': 'b'*40, 'run_id': '123456'}
         image = 'sha256:' + 'e'*64
         cid = 'f'*64
@@ -35,8 +39,11 @@ class BackupProbeTest(unittest.TestCase):
         def execute(args, **kwargs):
             calls.append((args, kwargs))
             if args[1:3] == ['image', 'inspect']:
+                if failure == 'inspect':
+                    raise RuntimeError('SENSITIVE_ERROR_MUST_NOT_LEAK')
                 return json.dumps({'Id': 'sha256:'+'d'*64 if mutate_image else image,
-                    'Config': {'User': '10001:10001', 'Labels': {'metainc.naver.preview.source': package['source_commit']}}}).encode()
+                    'Config': {'User': '10001:10001', 'Labels': {'metainc.naver.preview.source': package['source_commit']},
+                               'Volumes': volumes}}).encode()
             if args[1] == 'create':
                 if failure == 'create':
                     raise RuntimeError('SENSITIVE_ERROR_MUST_NOT_LEAK')
@@ -85,12 +92,101 @@ class BackupProbeTest(unittest.TestCase):
         self.assertFalse(result['ok'])
         self.assertFalse(any(args[1] in ['start', 'rm'] for args, _ in calls))
 
+    def test_image_inspect_failure_is_identifiable_without_creating_any_container(self):
+        result, calls = self.simulate(failure='inspect')
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['stage'], 'preflight_image_inspect')
+        self.assertEqual([args[1] for args, _ in calls], ['image'])
+
+    def test_image_inspect_errors_have_only_fixed_nonsecret_codes(self):
+        args = ['/usr/bin/docker', 'image', 'inspect', '--format', 'fixture', 'synthetic:fixture']
+        cases = [
+            (b'template parsing error: map has no entry for key "Volumes"', 'INSPECT_TEMPLATE_ERROR'),
+            (b'permission denied while trying to connect to the Docker daemon socket', 'DOCKER_ACCESS_DENIED'),
+            (b'Error response from daemon: No such image: synthetic:fixture', 'IMAGE_MISSING'),
+            (b'Cannot connect to the Docker daemon at unix:///synthetic/socket', 'DOCKER_DAEMON_UNAVAILABLE'),
+            (b'unrecognized failure', 'COMMAND_FAILED'),
+        ]
+        for stderr, code in cases:
+            with self.subTest(code=code):
+                completed = subprocess.CompletedProcess(args, 1, b'SENSITIVE_STDOUT', stderr+b' SENSITIVE_DETAIL')
+                with patch.object(M.subprocess, 'run', return_value=completed) as execute:
+                    with self.assertRaises(RuntimeError) as caught:
+                        M.command(args)
+                    self.assertEqual(execute.call_count, 1)
+                with patch.object(M, 'probe', side_effect=caught.exception):
+                    receipt = M.run({}, Mock())
+                self.assertFalse(receipt['ok'])
+                self.assertEqual(receipt['error_code'], code)
+                self.assertNotIn('SENSITIVE', json.dumps(receipt))
+                self.assertTrue(receipt['manual_review_required'])
+
+    def test_noninspect_stderr_stays_discarded_and_large_output_is_rejected(self):
+        args = ['/usr/bin/docker', 'start', '--attach', '--interactive', 'f'*64]
+        with patch.object(M.subprocess, 'run', return_value=subprocess.CompletedProcess(args, 0, b'x'*8193)) as execute:
+            with self.assertRaises(RuntimeError) as caught:
+                M.command(args)
+            self.assertEqual(execute.call_args.kwargs['stderr'], subprocess.DEVNULL)
+        with patch.object(M, 'probe', side_effect=caught.exception):
+            self.assertEqual(M.run({}, Mock())['error_code'], 'OUTPUT_TOO_LARGE')
+
     def test_changed_image_or_secret_fails_before_any_container_creation(self):
-        for options in [{'mutate_image': True}, {'changed_file': True}]:
+        for options in [{'mutate_image': True}, {'changed_file': True}, {'volumes': {'/unexpected': {}}}]:
             with self.subTest(options=options):
                 result, calls = self.simulate(**options)
                 self.assertFalse(result['ok'])
                 self.assertFalse(any(args[1] == 'create' for args, _ in calls))
+
+    def test_actual_docker_template_handles_optional_volumes_and_projects_only_source_label(self):
+        docker = shutil.which('docker')
+        self.assertIsNotNone(docker, 'Docker CLI is required; this test never contacts a real daemon.')
+        _, calls = self.simulate()
+        args = calls[0][0]
+        template = args[args.index('--format')+1]
+        state = {}
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+            def do_HEAD(self):
+                self.send_response(200)
+                self.send_header('Api-Version', '1.52')
+                self.end_headers()
+            def do_GET(self):
+                if self.path.endswith('/json'):
+                    body = json.dumps(state['image']).encode()
+                elif self.path.endswith('/_ping'):
+                    body = b'OK'
+                else:
+                    self.send_error(404)
+                    return
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+        with tempfile.TemporaryDirectory(prefix='nvp-') as folder:
+            endpoint = str(Path(folder)/'engine.sock')
+            with socketserver.UnixStreamServer(endpoint, Handler) as server:
+                thread = threading.Thread(target=lambda: server.serve_forever(poll_interval=0.01), daemon=True)
+                thread.start()
+                try:
+                    for declared in ('missing', None, {}, {'/unexpected': {}}):
+                        config = {'User': '10001:10001', 'Labels': {
+                            'metainc.naver.preview.source': 'b'*40, 'unrelated': 'SENSITIVE_LABEL'*1000}}
+                        if declared != 'missing':
+                            config['Volumes'] = declared
+                        state['image'] = {'Id': 'sha256:'+'e'*64, 'Config': config}
+                        result = subprocess.run([docker, 'image', 'inspect', '--format', template, 'synthetic:fixture'],
+                            capture_output=True, timeout=10, env={'PATH': '/usr/bin:/bin',
+                                'DOCKER_HOST': 'unix://'+endpoint, 'DOCKER_API_VERSION': '1.52', 'DOCKER_CONFIG': folder})
+                        self.assertEqual(result.returncode, 0, result.stderr.decode())
+                        self.assertNotIn(b'SENSITIVE_LABEL', result.stdout)
+                        self.assertLess(len(result.stdout), 8192)
+                        image = json.loads(result.stdout)
+                        self.assertEqual(image['Config']['Volumes'], None if declared == 'missing' else declared)
+                finally:
+                    server.shutdown()
+                    thread.join(timeout=5)
 
     def test_existing_application_baseline_change_is_not_reported_as_success(self):
         result, _ = self.simulate(post_baseline=True)

@@ -19,6 +19,8 @@ MOUNTS = {'backup-recipient.pem': 'naver-backup-recipient.pem',
           'backup-known-hosts': 'naver-backup-known-hosts'}
 STAGE = 'input'
 COMMAND_ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C'}
+COMMAND_CODES = frozenset({'INSPECT_TEMPLATE_ERROR', 'DOCKER_ACCESS_DENIED', 'IMAGE_MISSING',
+                           'DOCKER_DAEMON_UNAVAILABLE', 'COMMAND_FAILED', 'OUTPUT_TOO_LARGE'})
 
 
 def validate_package(package):
@@ -45,10 +47,24 @@ def read_trusted(path, *, uid=0, gid=0, maximum=32768):
 
 
 def command(args, *, data=None, timeout=30):
-    result = subprocess.run(args, input=data, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+    inspecting = args[:3] == ['/usr/bin/docker', 'image', 'inspect']
+    result = subprocess.run(args, input=data, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE if inspecting else subprocess.DEVNULL,
                             timeout=timeout, env=COMMAND_ENV, check=False)
-    if result.returncode or len(result.stdout) > 8192:
-        raise RuntimeError('COMMAND_FAILED')
+    if len(result.stdout) > 8192:
+        raise RuntimeError('OUTPUT_TOO_LARGE')
+    if result.returncode:
+        code = 'COMMAND_FAILED'
+        # Inspect diagnostics stay in memory; only fixed codes can reach the receipt.
+        stderr = (result.stderr or b'')[:8192].lower() if inspecting else b''
+        for marker, candidate in [(b'permission denied', 'DOCKER_ACCESS_DENIED'),
+                                  (b'template parsing error', 'INSPECT_TEMPLATE_ERROR'),
+                                  (b'no such image', 'IMAGE_MISSING'),
+                                  (b'cannot connect to the docker daemon', 'DOCKER_DAEMON_UNAVAILABLE')]:
+            if marker in stderr:
+                code = candidate
+                break
+        raise RuntimeError(code)
     return result.stdout
 
 
@@ -89,16 +105,21 @@ def probe(package, host):
     if os.geteuid() != 0 or host.baseline() != package['baseline']:
         raise ValueError('HOST_BASELINE')
     commit = package['source_commit']
+    STAGE = 'preflight_receipt'
     receipt = json.loads(read_trusted(ROOT / 'receipts' / ('preview-' + commit + '.json')))
     if (receipt.get('ok') is not True or receipt.get('stage') != 'prepared'
             or receipt.get('source_commit') != commit):
         raise ValueError('NOT_PREPARED')
+    STAGE = 'preflight_backup_files'
     for name in MOUNTS:
         path = SECRET_ROOT / name
         body = read_trusted(path, uid=10001, gid=10001)
         if hashlib.sha256(body).hexdigest() != receipt.get('files', {}).get(str(path)):
             raise ValueError('PREPARED_FILE_CHANGED')
-    image_format = '{"Id":{{json .Id}},"Config":{"User":{{json .Config.User}},"Labels":{{json .Config.Labels}},"Volumes":{{json .Config.Volumes}}}}'
+    STAGE = 'preflight_image_inspect'
+    image_format = ('{"Id":{{json .Id}},"Config":{"User":{{json .Config.User}},'
+                    '"Labels":{"metainc.naver.preview.source":{{json (index .Config.Labels "metainc.naver.preview.source")}}},'
+                    '"Volumes":{{json (index .Config "Volumes")}}}}')
     image = json.loads(command(['/usr/bin/docker', 'image', 'inspect', '--format',
                                image_format, 'metainc/naver-engine:' + commit]))
     image_id = image.get('Id', '')
@@ -137,7 +158,10 @@ def run(package, host):
         return probe(package, host)
     except Exception as error:
         # Do not echo exception text: Docker/SSH/config failures may contain sensitive material.
+        code = (error.args[0] if type(error) is RuntimeError and len(error.args) == 1
+                and isinstance(error.args[0], str) and error.args[0] in COMMAND_CODES else 'UNCLASSIFIED')
         return {'ok': False, 'stage': STAGE, 'error_kind': type(error).__name__,
+                'error_code': code,
                 'secret_values_exported': False, 'manual_review_required': True}
 
 
