@@ -6,25 +6,29 @@ No existing application, environment or database is replaced by preparation.
 import base64
 import hashlib
 import io
+import http.client
 import json
 import os
 from pathlib import Path, PurePosixPath
 import pwd
 import re
+import socket
 import stat
 import subprocess
 import tarfile
+import time
 
 ROOT = Path('/srv/metainc/ad-deploy-staging')
 SECRET_ROOT = Path('/etc/metainc/naver-engine')
 SECRET_OWNERS = {'runtime.env': (0, 0), 'backup-recipient.pem': (10001, 10001),
                  'backup-upload-key': (10001, 10001), 'backup-known-hosts': (10001, 10001)}
-EXACT = {'Dockerfile.naver-engine', 'Dockerfile.naver-relay', 'Dockerfile.naver-relay.dockerignore',
+EXACT = {'Dockerfile.naver-engine', 'Dockerfile.naver-engine.dockerignore', 'Dockerfile.naver-relay', 'Dockerfile.naver-relay.dockerignore',
          'compose.naver-engine.yml', 'compose.naver-relay.yml', 'backend/app/__init__.py',
          'backend/app/naver_entry.py', 'backend/app/naver_relay.py', 'backend/app/routers/naver.py',
          'backend/app/routers/__init__.py', 'backend/requirements.txt'}
 PREFIXES = ('naver_engine/', 'naver_runtime/', 'backend/app/naver_auto/', 'backend/naver_page/', 'deploy/')
 STAGE = 'input'
+CREATED = []
 
 
 def sha(body):
@@ -117,6 +121,7 @@ def extract_source(body, destination):
     archive, members = source_members(body)  # Validate everything before the first write.
     destination = Path(destination)
     destination.mkdir(mode=0o700)
+    CREATED.append(str(destination))
     with archive:
         for member in members:
             path = destination / member.name.rstrip('/')
@@ -133,6 +138,7 @@ def trusted_dir(path, *, uid=0, gid=0, mode=0o755, new=False):
     path = Path(path)
     if new:
         path.mkdir(mode=mode)
+        CREATED.append(str(path))
         os.chown(path, uid, gid)
         path.chmod(mode)
     info = path.lstat()
@@ -142,6 +148,7 @@ def trusted_dir(path, *, uid=0, gid=0, mode=0o755, new=False):
 
 def write_new(path, body, uid=0, gid=0, mode=0o600):
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
+    CREATED.append(str(path))
     with os.fdopen(fd, 'wb') as output:
         os.fchown(output.fileno(), uid, gid)
         os.fchmod(output.fileno(), mode)
@@ -230,3 +237,93 @@ def compose(release,name):
     if name=='engine':
         args+=['-f',str(release/'deploy/naver-engine-backup.override.yml')]
     return args+['-f',str(release/('preview-'+name+'.override.yml'))]
+
+
+def unix_request(path, route, method='GET'):
+    conn=http.client.HTTPConnection('localhost',timeout=5)
+    conn.sock=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)
+    conn.sock.settimeout(5)
+    try:
+        conn.sock.connect(path)
+        conn.request(method,route,headers={'Host':'dashboard.metainc.co.kr','Origin':'https://dashboard.metainc.co.kr',
+                                         'X-Real-IP':'127.0.0.1'})
+        response=conn.getresponse()
+        body=response.read(65537)
+        if len(body)>65536:
+            raise ValueError('PROBE_RESPONSE_SIZE')
+        return response.status,dict(response.getheaders()),body
+    finally:
+        conn.close()
+
+
+def start(package,host):
+    global STAGE
+    validate_package(package)
+    STAGE='start_preflight'
+    if os.geteuid()!=0 or package['operation']!='start' or host.baseline()!=package['baseline']:
+        raise ValueError('START_BASELINE')
+    commit=package['source_commit']
+    release=ROOT/'releases'/('naver-'+commit)
+    receipt=json.loads((ROOT/'receipts'/('preview-'+commit+'.json')).read_text())
+    if receipt.get('stage')!='prepared' or receipt.get('source_commit')!=commit or receipt.get('ok') is not True:
+        raise ValueError('NOT_PREPARED')
+    for name in ('engine','relay'):
+        args=compose(release,name)
+        if command(args+['ps','--all','--quiet']).strip():
+            raise ValueError('PREEXISTING_PREVIEW_CONTAINER')
+        marker=command(['docker','image','inspect','--format','{{index .Config.Labels "metainc.naver.preview.source"}}',
+                        'metainc/naver-'+name+':'+commit]).decode().strip()
+        if marker!=commit:
+            raise ValueError('IMAGE_SOURCE_MISMATCH')
+    started=[]
+    try:
+        for name in ('engine','relay'):
+            STAGE='start_'+name
+            started.append(name)
+            command(compose(release,name)+['up','--detach','--no-build'],timeout=90)
+        STAGE='internal_probe'
+        health=None
+        deadline=time.monotonic()+45
+        while time.monotonic()<deadline:
+            try:
+                status,_,body=unix_request('/run/metainc/naver-engine/engine.sock','/_engine/health')
+                candidate=json.loads(body)
+                if status==200 and candidate.get('last_tick'):
+                    health=candidate
+                    break
+            except (OSError,ValueError,http.client.HTTPException):
+                pass
+            time.sleep(1)
+        if health is None:
+            raise ValueError('ENGINE_NOT_READY')
+        if health.get('state')!='ok' or health.get('errors'):
+            raise ValueError('ENGINE_INITIAL_SYNC_FAILED')
+        relay='/run/metainc/naver-relay/relay.sock'
+        page=unix_request(relay,'/naver/')
+        if page[0]!=200 or b'verificationNotice' not in page[2]:
+            raise ValueError('PAGE_UNAVAILABLE')
+        headers={key.lower():value for key,value in page[1].items()}
+        if headers.get('referrer-policy')!='no-referrer' or headers.get('cache-control')!='no-store':
+            raise ValueError('PAGE_HEADERS')
+        if unix_request(relay,'/api/naver-auto/me')[0]!=401:
+            raise ValueError('UNAUTHENTICATED_READ_NOT_DENIED')
+        for route in ('/issues/1/ack','/settings/thresholds','/links/confirm'):
+            if unix_request(relay,'/api/naver-auto'+route,'POST')[0]!=403:
+                raise ValueError('BUSINESS_WRITE_NOT_DENIED')
+        if host.baseline()!=package['baseline']:
+            raise ValueError('POST_BASELINE')
+        receipt={'ok':True,'stage':'internal_ready','source_commit':commit,'containers_unchanged':True,
+                 'nginx_changed':False,'public_access_enabled':False,'last_tick':health.get('last_tick'),
+                 'initial_sync_state':health.get('state'),'unauthenticated_read_status':401,'business_post_status':403}
+        write_new(ROOT/'receipts'/('preview-start-'+commit+'.json'),json.dumps(receipt,sort_keys=True).encode())
+        return receipt
+    except Exception:
+        stop_failed=False
+        for name in reversed(started):
+            try:
+                command(compose(release,name)+['stop','--timeout','45'],timeout=60)
+            except Exception:
+                stop_failed=True
+        if stop_failed:
+            raise RuntimeError('NEW_SERVICE_STOP_FAILED') from None
+        raise

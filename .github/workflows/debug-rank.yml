@@ -9,7 +9,7 @@ on:
       ad_prepare:
         description: 'inspect 조회 / prepare 빈 폴더 / tunnel-keygen 새 터널키 / tunnel-install 설치 / tunnel-activate 검증 후 활성화. 앱 배포 없음.'
         type: choice
-        options: ['off', inspect, prepare, tunnel-keygen, tunnel-install, tunnel-activate, tunnel-native, preview-envelope, preview-prepare]
+        options: ['off', inspect, prepare, tunnel-keygen, tunnel-install, tunnel-activate, tunnel-native, preview-envelope, preview-prepare, preview-start]
         required: false
         default: 'off'
       ad_expected_baseline:
@@ -50,6 +50,66 @@ on:
         default: 'off'
 
 jobs:
+  preview-start:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && inputs.ad_prepare == 'preview-start' }}
+    permissions:
+      contents: read
+    concurrency:
+      group: deploy-logic-analysis
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: 제한 실행 입력·합성 검사
+        env:
+          INPUTS_JSON: ${{ toJSON(inputs) }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -eu
+          python3 -m unittest discover -s backend/tests -p 'test_naver_preview_*.py' -q
+          python3 - <<'PY'
+          import base64,json,os,pathlib,sys
+          sys.path.insert(0,'backend/tools')
+          from naver_preview_release import validate_package
+          inputs=json.loads(os.environ['INPUTS_JSON'])
+          assert inputs.pop('ad_prepare')=='preview-start'
+          package=validate_package(json.loads(inputs.pop('ad_expected_baseline')))
+          assert package['operation']=='start' and all(v=='off' for v in inputs.values())
+          bundle={'package':package,'source':pathlib.Path('backend/tools/naver_preview_release.py').read_text(),
+                  'host_source':pathlib.Path('backend/tools/naver_erp_tunnel_service_install.py').read_text()}
+          with open(os.environ['GITHUB_ENV'],'a') as stream:
+              stream.write('PREVIEW_START_B64='+base64.b64encode(json.dumps(bundle).encode()).decode()+'\n')
+          PY
+      - name: 새 관제 두 서비스만 기동·내부 확인 — 외부 주소 미공개
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        env:
+          PREVIEW_START_B64: ${{ env.PREVIEW_START_B64 }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          envs: PREVIEW_START_B64
+          command_timeout: 8m
+          script: |
+            set -eu
+            /usr/bin/python3 -I -B - <<'PY'
+            import base64,json,os,re,sys,types
+            module=None
+            try:
+                bundle=json.loads(base64.b64decode(os.environ['PREVIEW_START_B64'],validate=True))
+                os.environ.clear();os.environ.update(PATH='/usr/sbin:/usr/bin:/sbin:/bin',LANG='C')
+                host=types.ModuleType('approved_host');exec(bundle['host_source'],host.__dict__)
+                module=types.ModuleType('approved_release');exec(bundle['source'],module.__dict__)
+                result=module.start(bundle['package'],host.NativeHost())
+            except Exception as error:
+                result={'ok':False,'stage':getattr(module,'STAGE','start'),'error_kind':type(error).__name__,
+                        'error_code':str(error) if re.fullmatch('[A-Z_]{1,64}',str(error)) else None}
+            print('NAVER_PREVIEW_START='+json.dumps(result,sort_keys=True))
+            sys.exit(0 if result.get('ok') else 1)
+            PY
   preview-prepare:
     if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && inputs.ad_prepare == 'preview-prepare' }}
     permissions:
@@ -153,7 +213,8 @@ jobs:
                 result=module.prepare(bundle['package'],host.NativeHost())
             except Exception as error:
                 result={'ok':False,'stage':getattr(module,'STAGE','prepare'),'error_kind':type(error).__name__,
-                        'error_code':str(error) if re.fullmatch('[A-Z_]{1,64}',str(error)) else None}
+                        'error_code':str(error) if re.fullmatch('[A-Z_]{1,64}',str(error)) else None,
+                        'created_paths':getattr(module,'CREATED',[])}
             print('NAVER_PREVIEW_RELEASE='+json.dumps(result,sort_keys=True))
             sys.exit(0 if result.get('ok') else 1)
             PY
