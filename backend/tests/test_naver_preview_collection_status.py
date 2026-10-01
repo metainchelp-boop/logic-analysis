@@ -17,6 +17,33 @@ SPEC.loader.exec_module(M)
 
 
 class CollectionTest(unittest.TestCase):
+    def test_compose_version_diagnostics_never_export_freeform(self):
+        release = Mock()
+        for raw, want in ((b'2.39.4\n', '2.39.4'), (b'v2.39.4-desktop.2\n', '2.39.4-desktop.2'),
+                          (b'2.39.4-SECRET', None), (b'SECRET', None), (b'x'*129, None)):
+            release.command.return_value = raw
+            self.assertEqual(M.compose_version(release), want)
+        release.command.assert_called_with(['docker','compose','version','--short'], timeout=3)
+
+    def test_optional_lifecycle_diagnostics_are_fixed_services_enums_and_bounded(self):
+        release = Mock()
+        responses = [b'ActiveState=active\nSubState=running\nResult=success\nNRestarts=0\n',
+                     b'ActiveState=SECRET\nSubState=SECRET\nResult=SECRET\nNRestarts=SECRET\n',
+                     RuntimeError('SECRET_FAILURE'), b'x'*4097]
+        release.command.side_effect = responses
+        out = M.lifecycle_status(release)
+        self.assertEqual(set(out), {'docker','tunnel','engine','relay'})
+        self.assertEqual(out['docker'], dict(available=True,active='active',substate='running',result='success',restarts=0))
+        self.assertEqual(out['tunnel']['active'], 'UNRECOGNIZED')
+        self.assertIsNone(out['tunnel']['restarts'])
+        self.assertFalse(out['engine']['available'])
+        self.assertFalse(out['relay']['available'])
+        self.assertNotIn('SECRET', json.dumps(out))
+        expected = ('docker.service','metainc-naver-erp-tunnel.service','metainc-naver-engine.service','metainc-naver-relay.service')
+        for call, unit in zip(release.command.call_args_list, expected):
+            self.assertEqual(call.args[0], ['/usr/bin/systemctl','show',unit,'--property=ActiveState,SubState,Result,NRestarts'])
+            self.assertEqual(call.kwargs, {'timeout':3})
+
     def test_run_checks_approved_identity_and_reprojects_engine_output(self):
         package = dict(baseline='a'*64, source_commit='b'*40, source_tar_gz_sha256='c'*64)
         cid, image = 'd'*64, 'sha256:'+'e'*64
@@ -44,6 +71,10 @@ class CollectionTest(unittest.TestCase):
                 release.compose.return_value = ['docker','compose','--project-name','naver-engine']
                 def command(args, **kwargs):
                     calls.append(args)
+                    if args[0] == '/usr/bin/systemctl':
+                        return b'ActiveState=active\nSubState=running\nResult=success\nNRestarts=0\n'
+                    if args[:3] == ['docker','compose','version']:
+                        return b'2.39.4\n'
                     if args[1:3] == ['image','inspect']:
                         return json.dumps(dict(id=image,user='10001:10001',source='wrong' if failure=='image' else package['source_commit'])).encode()
                     if args[1] == 'compose':
@@ -51,7 +82,7 @@ class CollectionTest(unittest.TestCase):
                     if args[1] == 'inspect':
                         inspections.append(1)
                         return json.dumps(dict(id=cid,image=image,running=True,user='10001:10001',project='naver-engine',
-                            service='naver-engine',started='fixed',restarts=int(failure=='restart' and len(inspections)>1),
+                            service='naver-engine',started='2026-10-01T13:00:00+09:00',oom_killed=False,restarts=int(failure=='restart' and len(inspections)>1),
                             readonly=failure!='rootfs',data=[dict(Type='bind',Destination='/var/lib/naver-engine',
                             Source='/legacy' if failure=='mount' else '/var/lib/metainc/naver-engine')])).encode()
                     if args[1] == 'exec':
@@ -68,6 +99,9 @@ class CollectionTest(unittest.TestCase):
                         result = M.run(package, host, release)
                         self.assertEqual(result['collection'], values)
                         self.assertEqual(result['mutations'], 0)
+                        self.assertEqual(result['lifecycle']['engine']['active'], 'active')
+                        self.assertEqual(result['compose_version'], '2.39.4')
+                        self.assertEqual(result['engine_state'], {'started_at':'2026-10-01T13:00:00+09:00', 'oom_killed':False})
                 if failure in ('image','mount','rootfs'):
                     self.assertFalse(any(args[1]=='exec' for args in calls))
 

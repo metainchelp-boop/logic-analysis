@@ -276,6 +276,50 @@ except Exception:
     return '\n'.join(parts).encode()
 
 
+def compose_version(release):
+    try:
+        raw = release.command(['docker', 'compose', 'version', '--short'], timeout=3)
+        if not isinstance(raw, bytes) or not 0 < len(raw) <= 128:
+            return None
+        value = raw.decode('ascii').strip()
+        match = re.fullmatch(r'v?([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(?:-(?:desktop|rc|beta|alpha)\.[0-9]{1,3})?)', value)
+        return match.group(1) if match else None
+    except Exception:
+        return None
+
+
+def lifecycle_status(release):
+    """Optional, bounded systemd metadata. No raw output survives this projection."""
+    units = (('docker', 'docker.service'), ('tunnel', 'metainc-naver-erp-tunnel.service'),
+             ('engine', 'metainc-naver-engine.service'), ('relay', 'metainc-naver-relay.service'))
+    active = frozenset('active reloading inactive failed activating deactivating maintenance refreshing'.split())
+    substates = frozenset('dead start-pre start start-post running exited reload reload-signal reload-notify stop stop-watchdog stop-sigterm stop-sigkill stop-post final-watchdog final-sigterm final-sigkill failed auto-restart auto-restart-queued cleaning'.split())
+    results = frozenset('success resources timeout exit-code signal core-dump watchdog start-limit-hit oom-kill protocol exec-condition skipped assert'.split())
+    out = {}
+    for name, unit in units:
+        try:
+            raw = release.command(['/usr/bin/systemctl', 'show', unit,
+                                   '--property=ActiveState,SubState,Result,NRestarts'], timeout=3)
+            if not isinstance(raw, bytes) or not 0 < len(raw) <= 4096:
+                raise ValueError('LIFECYCLE_SIZE')
+            fields = {}
+            for line in raw.decode('ascii').splitlines():
+                key, sep, value = line.partition('=')
+                if not sep or key in fields:
+                    raise ValueError('LIFECYCLE_FIELDS')
+                fields[key] = value
+            if set(fields) != {'ActiveState', 'SubState', 'Result', 'NRestarts'}:
+                raise ValueError('LIFECYCLE_FIELDS')
+            n = fields['NRestarts']
+            restarts = int(n) if re.fullmatch('[0-9]{1,19}', n) and int(n) <= 2**63-1 else None
+            out[name] = {'available': True, 'active': enum(fields['ActiveState'], active),
+                         'substate': enum(fields['SubState'], substates),
+                         'result': enum(fields['Result'], results), 'restarts': restarts}
+        except Exception:
+            out[name] = {'available': False, 'code': 'LIFECYCLE_UNAVAILABLE'}
+    return out
+
+
 def run(package, host, release):
     global STAGE
     STAGE = 'preflight'
@@ -309,7 +353,7 @@ def run(package, host, release):
     identity = release.command(release.compose(path, 'engine')+['ps', '--all', '--quiet']).decode().strip()
     if not re.fullmatch('[0-9a-f]{64}', identity):
         raise ValueError('PREVIEW_CONTAINER_ID')
-    fmt = '{"id":{{json .Id}},"image":{{json .Image}},"running":{{json .State.Running}},"user":{{json .Config.User}},"project":{{json (index .Config.Labels "com.docker.compose.project")}},"service":{{json (index .Config.Labels "com.docker.compose.service")}},"started":{{json .State.StartedAt}},"restarts":{{json .RestartCount}},"readonly":{{json .HostConfig.ReadonlyRootfs}},"data":[{{range .Mounts}}{{if eq .Destination "/var/lib/naver-engine"}}{{json .}}{{end}}{{end}}]}'
+    fmt = '{"id":{{json .Id}},"image":{{json .Image}},"running":{{json .State.Running}},"user":{{json .Config.User}},"project":{{json (index .Config.Labels "com.docker.compose.project")}},"service":{{json (index .Config.Labels "com.docker.compose.service")}},"started":{{json .State.StartedAt}},"oom_killed":{{json .State.OOMKilled}},"restarts":{{json .RestartCount}},"readonly":{{json .HostConfig.ReadonlyRootfs}},"data":[{{range .Mounts}}{{if eq .Destination "/var/lib/naver-engine"}}{{json .}}{{end}}{{end}}]}'
     def container():
         return json.loads(release.command(['docker', 'inspect', '--format', fmt, identity]))
     before = container()
@@ -328,9 +372,14 @@ def run(package, host, release):
     if len(raw) > 32768:
         raise ValueError('STATUS_SIZE')
     values = project(json.loads(raw, object_pairs_hook=release.unique))
+    lifecycle = lifecycle_status(release)
+    version = compose_version(release)
+    engine_state = {'started_at': stamp(before.get('started')),
+                    'oom_killed': before.get('oom_killed') if type(before.get('oom_killed')) is bool else None}
     STAGE = 'postflight'
     if container() != before or host.baseline() != package['baseline']:
         raise ValueError('POST_BASELINE')
-    return {'ok': True, 'mode': 'collection-status', 'source_commit': commit, 'collection': values,
+    return {'ok': True, 'mode': 'collection-status', 'source_commit': commit, 'collection': values, 'lifecycle': lifecycle,
+            'compose_version': version, 'engine_state': engine_state,
             'runtime_state_not_used_as_data_success': True, 'reader_mode': 'store-mode-ro-authorizer',
             'mutations': 0, 'existing_app_baseline_unchanged': True}
