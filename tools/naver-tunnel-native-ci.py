@@ -306,9 +306,16 @@ def exercise(root, processes):
                   and b"channel 0: open failed:" in refused.stderr)
         for destination in (f"127.0.0.1:{fixture.server_port}", "localhost:18081", "127.0.0.1:22"):
             stage("ssh-denial-other-destination")
-            refused = run(client_args + ["-o", "ClearAllForwardings=yes", "-W", destination, ACCOUNT],
+            refused = run(client_args + ["-v", "-o", "ClearAllForwardings=yes", "-W", destination, ACCOUNT],
                           data=b"GET / HTTP/1.1\r\nHost: fixture\r\n\r\n", expected=None)
-            check(refused.returncode == 255 and b"administratively prohibited" in refused.stderr)
+            diagnostic = {"returncode": refused.returncode,
+                          "authenticated": b"Authenticated to " in refused.stderr,
+                          "administratively_prohibited": b"administratively prohibited" in refused.stderr,
+                          "stdio_forwarding_failed": b"stdio forwarding failed" in refused.stderr,
+                          "argument_conflict": b"Cannot specify" in refused.stderr}
+            print(json.dumps({"forward_denial": diagnostic}), flush=True)
+            check(refused.returncode == 255 and diagnostic["authenticated"]
+                  and diagnostic["administratively_prohibited"])
         # ClearAllForwardings=yes는 command line의 -R까지 지우므로 이 probe에서는 쓰지 않는다.
         remote_config = root / "ssh-remote-probe.conf"
         write(remote_config, "\n".join(line for line in rendered.splitlines()
