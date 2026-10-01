@@ -68,6 +68,44 @@ def compose_model(*files, project="naver-engine", resolve_env=False, ad_sso_key=
 
 
 class PackagingSourceTest(unittest.TestCase):
+    def assert_ci_job_isolation(self, workflow):
+        # 일반 개발 검사는 무자격, 실제 수용 검사는 승인된 job별 키만 사용한다.
+        global_part, marker, job_part = workflow.partition('\njobs:\n')
+        self.assertTrue(marker)
+        self.assertNotRegex(global_part, r'\bsecrets\b')
+        pieces = re.split(r'(?m)^  ([a-z][a-z0-9-]*):\n', job_part)
+        self.assertEqual('', pieces[0])
+        jobs = dict(zip(pieces[1::2], pieces[2::2]))
+        self.assertEqual({'linux-tests', 'backup-probe', 'backup-transfer', 'backup-recovery'}, set(jobs))
+        self.assertEqual(len(jobs), len(pieces[1::2]))
+        self.assertNotRegex(jobs['linux-tests'], r'\bsecrets\b|(?m:^    (?:environment|needs):)')
+        branch = "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/naver-backup-recovery-20261001'"
+        self.assertIn(branch + " && inputs.backup_acceptance == 'none' && inputs.received_synthetic_json == ''", jobs['linux-tests'])
+        expected = {
+            'backup-probe': {'NAVER_BACKUP_UPLOAD_SSH_PRIVATE_KEY', 'NAVER_BACKUP_KNOWN_HOSTS'},
+            'backup-transfer': {'NAVER_BACKUP_RECIPIENT_CERT_PEM', 'NAVER_BACKUP_UPLOAD_SSH_PRIVATE_KEY', 'NAVER_BACKUP_KNOWN_HOSTS'},
+            'backup-recovery': {'NAVER_BACKUP_RECIPIENT_CERT_PEM', 'NAVER_BACKUP_RECOVERY_PRIVATE_KEY_PEM',
+                                'SSO_AD_CENTER_CLIENT_KEY', 'SSO_NAVER_CONTROL_CLIENT_KEY',
+                                'NAVER_ENGINE_ERP_KEY', 'NAVER_AUTO_TOKEN_SECRET'},
+        }
+        for job, secrets in expected.items():
+            body = jobs[job]
+            condition = ("(inputs.backup_acceptance == 'keys' || inputs.backup_acceptance == 'restore')"
+                         if job == 'backup-recovery' else "inputs.backup_acceptance == '" + job.removeprefix('backup-') + "'")
+            self.assertIn('    if: ' + branch + ' && ' + condition + '\n', body)
+            refs = re.findall(r'\bsecrets\.([A-Z_]+)\b', body)
+            self.assertEqual(secrets, set(refs), job)
+            self.assertEqual(len(secrets), len(refs), job + ': each secret reference must occur exactly once')
+            self.assertEqual(len(refs), len(re.findall(r'\bsecrets\b', body)), job)
+            self.assertNotIn('needs:', body)
+        recovery = jobs['backup-recovery']
+        self.assertIn('    environment: naver-backup-recovery\n', recovery)
+        self.assertIn('unshare --net -- setpriv --reuid', recovery)
+        for name in ('SSO_AD_CENTER_CLIENT_KEY', 'SSO_NAVER_CONTROL_CLIENT_KEY',
+                     'NAVER_ENGINE_ERP_KEY', 'NAVER_AUTO_TOKEN_SECRET'):
+            expression = '          ' + name + ": ${{ inputs.backup_acceptance == 'keys' && secrets." + name + " || '' }}"
+            self.assertRegex(recovery, '(?m)^' + re.escape(expression) + '$')
+
     def test_every_bind_explicitly_disables_host_path_creation_in_source(self):
         for file, expected_count in (("compose.naver-engine.yml", 3),
                                      ("deploy/naver-engine-backup.override.yml", 3),
@@ -170,7 +208,7 @@ class PackagingSourceTest(unittest.TestCase):
         self.assertIn("github.ref == 'refs/heads/codex/naver-runtime-20260930'", workflow)
         self.assertIn("contents: read", workflow)
         self.assertIn("persist-credentials: false", workflow)
-        self.assertNotIn("secrets.", workflow)
+        self.assert_ci_job_isolation(workflow)
         self.assertNotIn("self-hosted", workflow)
         self.assertNotIn("pull_request_target", workflow)
         self.assertIn("sudo unshare --net", workflow)
@@ -180,6 +218,39 @@ class PackagingSourceTest(unittest.TestCase):
         self.assertIn("--user 10001:10001", workflow)
         self.assertIn("--read-only", workflow)
         self.assertNotRegex(workflow, r"docker\s+(?:push|system\s+prune|volume\s+prune)\b")
+
+    def test_ci_guard_rejects_credentials_in_development_job_or_global_env(self):
+        original = source('.github/workflows/naver-runtime-tests.yml')
+        injected = '    env:\n      VALUE: ${{ secrets.NAVER_ENGINE_ERP_KEY }}\n'
+        for changed in (original.replace('  linux-tests:\n', '  linux-tests:\n' + injected),
+                        'env:\n  VALUE: ${{ secrets.NAVER_ENGINE_ERP_KEY }}\n' + original):
+            with self.assertRaises(AssertionError):
+                self.assert_ci_job_isolation(changed)
+
+    def test_ci_guard_rejects_mixed_upload_and_recovery_keys(self):
+        original = source('.github/workflows/naver-runtime-tests.yml')
+        for job, secret in (('backup-transfer', 'NAVER_BACKUP_RECOVERY_PRIVATE_KEY_PEM'),
+                            ('backup-recovery', 'NAVER_BACKUP_UPLOAD_SSH_PRIVATE_KEY')):
+            changed = original.replace('  ' + job + ':\n', '  ' + job + ':\n'
+                                       + '    env:\n      BAD: ${{ secrets.' + secret + ' }}\n')
+            with self.assertRaises(AssertionError):
+                self.assert_ci_job_isolation(changed)
+
+    def test_ci_guard_rejects_widened_acceptance_branch_or_missing_environment(self):
+        original = source('.github/workflows/naver-runtime-tests.yml')
+        for changed in (original.replace("github.ref == 'refs/heads/codex/naver-backup-recovery-20261001'", 'true'),
+                        original.replace('    environment: naver-backup-recovery\n', '')):
+            with self.assertRaises(AssertionError):
+                self.assert_ci_job_isolation(changed)
+
+    def test_ci_guard_rejects_unconditional_business_key_during_restore(self):
+        original = source('.github/workflows/naver-runtime-tests.yml')
+        for name in ('SSO_AD_CENTER_CLIENT_KEY', 'SSO_NAVER_CONTROL_CLIENT_KEY',
+                     'NAVER_ENGINE_ERP_KEY', 'NAVER_AUTO_TOKEN_SECRET'):
+            changed = original.replace('  backup-recovery:\n', '  backup-recovery:\n'
+                                       + '    env:\n      EXTRA: ${{ secrets.' + name + ' }}\n')
+            with self.assertRaises(AssertionError):
+                self.assert_ci_job_isolation(changed)
 
 
 class ComposeAssertions:
