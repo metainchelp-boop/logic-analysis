@@ -34,7 +34,7 @@ def run(command):
                             stderr=subprocess.PIPE, text=True, timeout=2, check=False,
                             env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C"})
     if result.returncode:
-        raise HarnessError("COMMAND_FAILED")
+        raise HarnessError("COMMAND_FAILED_" + Path(command[0]).name.upper().replace("-", "_") + "_" + str(result.returncode))
     return result.stdout.strip()
 
 
@@ -182,7 +182,8 @@ def main():
             raise HarnessError("INVALID_ARGUMENTS")
         result = collect()
     except Exception as error:
-        result = {"ok": False, "error_kind": type(error).__name__, "production_policy_verified": False}
+        safe_code = str(error) if isinstance(error, HarnessError) and re.fullmatch(r"[A-Z0-9_]{1,100}", str(error)) else None
+        result = {"ok": False, "error_kind": type(error).__name__, "error_code": safe_code, "production_policy_verified": False}
     print("NAVER_TUNNEL_BPF_NATIVE_CI_V1 " + json.dumps(result, sort_keys=True), flush=True)
     return 0 if result["ok"] else 1
 
