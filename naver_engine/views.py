@@ -53,7 +53,8 @@ LINKABLE_STATES = frozenset({S.PAIR_AUTO, S.PAIR_CANDIDATE, S.PAIR_BLOCKED})   #
 CLAIM_CODES = frozenset({"claimed-by-several", "confirmed-elsewhere"})
 CODE_NOT_LINKED = "not-linked"           # matching.B_NOT_LINKED — 한 번도 이관된 적 없음(I3 「이관 안 됨」)
 # ① 에 적힌 번호가 고객 번호가 아닌 막힘 — 사람이 「이 계정 맞음」으로 이을 수 없다(번호 자체가 계정이 아니다)
-NOT_A_CUSTOMER = frozenset({"ad-account-number", "customer-id-format", "customer-id-length", "ambiguous-space"})
+NOT_A_CUSTOMER = frozenset({"ad-account-id-format", "ad-account-not-linked", "account-identifiers-conflict",
+                           "ad-account-number", "customer-id-format", "customer-id-length", "ambiguous-space"})
 REPORT_PREPARING = "preparing"           # 광고주별 주간·월간 보고서 — 4차
 ISSUE_DONE = frozenset({"resolved", "auto_resolved", "closed_unlinked"})   # 닫힌 이슈 — 관제 판 「오늘 풀린 것」(S13)
 HAND_KINDS = frozenset({"acked", "resolved", "excepted"})   # 사람이 누른 기록 — 이슈 줄에 「누가 · 언제」(S13)

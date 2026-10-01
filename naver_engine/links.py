@@ -335,12 +335,19 @@ def pair_links(reader: E.ErpReader, store: S.Store, now: datetime) -> PairingOut
     try:
         scope = _scope(store, stage_at, now)
         winners, lost = store.link_decisions()
+        saved_accounts = store.accounts()
         accounts = {a["customer_id"]: {"customerId": a["customer_id"], "adAccountNo": a["ad_account_no"],
                                        "adAccountName": a["account_name"]}
-                    for a in store.accounts() if a["present"] == 1}
-        creds = [M.ErpCredential(r.possibility_id, r.vendor, r.customer_id_raw) for r in ids]
+                    for a in saved_accounts if a["present"] == 1}
+        previous = {}
+        for a in saved_accounts:
+            if a["present"] == 0 and a["ad_account_no"] is not None:
+                previous.setdefault(a["ad_account_no"], set()).add(a["customer_id"])
+        previous = {no: next(iter(cids)) for no, cids in previous.items() if len(cids) == 1}
+        creds = [M.ErpCredential(r.possibility_id, r.vendor, r.customer_id_raw,
+                                ad_account_no_raw=r.ad_account_no_raw) for r in ids]
         decisions = [M.HumanDecision(d.possibility_id, d.customer_id, d.decision) for d in winners]
-        result = M.match(scope, creds, accounts, decisions, accounts_complete=True)
+        result = M.match(scope, creds, accounts, decisions, accounts_complete=True, previous_ad_accounts=previous)
         rows = _rows(result, winners, lost, store.account_times(), {p.possibility_id for p in scope},
                      store.matched_before(S.PAIR_AUTO))
     except M.BadInput:
@@ -360,8 +367,11 @@ def pair_links(reader: E.ErpReader, store: S.Store, now: datetime) -> PairingOut
 
 
 def pairing_due(store: S.Store, now: datetime) -> bool:
-    """짝을 다시 맞출 때인가 — 입력(연결 목록 · 단계)을 쓸 수 있고 · 마지막 시도가 30분 넘게 지났고 · 다음 중 하나:
-    받은 짝 맞추기가 없음 · 오늘(KST) 것이 아님 · 그 뒤 연결 목록·단계·사람 판단이 바뀜."""
+    """유효한 연결 목록·단계가 있으면 30분 간격으로 전산 번호 변경도 다시 읽는다.
+
+    전산 입력은 엔진에 저장하지 않아 목록/사람 판단 지문만으로 변경을 알 수 없다.
+    실패 재시도도 기존 30분 제한을 유지한다. 네이버 전체 목록 재조회 주기는 바꾸지 않는다.
+    """
     Y._need_time(now)
     read_at, stage_at, problems = _input_problems(store, now)
     if problems:
@@ -378,4 +388,5 @@ def pairing_due(store: S.Store, now: datetime) -> bool:
     if ok["at"].astimezone(S.KST).date() != now.astimezone(S.KST).date():
         return True
     return (ok["accounts_read_at"] != read_at or ok["stages_as_of"] != stage_at
-            or ok["decisions_hash"] != store.decision_fingerprint())
+            or ok["decisions_hash"] != store.decision_fingerprint()
+            or now - ok["at"] >= PAIRING_RETRY)

@@ -119,6 +119,65 @@ class AutoPairTest(unittest.TestCase):
         self.assertEqual(r.blocked, ())
         self.assertEqual(r.candidates, ())
 
+    def test_explicit_ad_account_number_resolves_without_customer_credentials(self):
+        row = M.ErpCredential(11, M.VENDOR_NAVER, ad_account_no_raw="7654321")
+        r = run([P(11, "메타상회")], [row], accounts((1234567, 7654321, "메타상회")))
+        self.assertEqual(r.checkable(), {11: ((1234567, V.LINK_AUTO),)})
+        self.assertEqual(r.blocked, ())
+
+    def test_explicit_number_does_not_guess_customer_id_namespace(self):
+        rows = [M.ErpCredential(11, M.VENDOR_NAVER, ad_account_no_raw="2345678")]
+        r = run([P(11, "메타")], rows, accounts((1234567, 2345678, "메타"), (2345678, 7000001, "다른곳")))
+        self.assertEqual(r.checkable(), {11: ((1234567, V.LINK_AUTO),)})
+
+    def test_agreed_explicit_identifiers_do_not_claim_another_ad_number(self):
+        rows = [M.ErpCredential(11, M.VENDOR_NAVER, "1234567", ad_account_no_raw="7000001"),
+                M.ErpCredential(12, M.VENDOR_NAVER, ad_account_no_raw="1234567")]
+        r = run([P(11, "메타"), P(12, "다른곳")], rows,
+                accounts((1234567, 7000001, "메타"), (2345678, 1234567, "다른곳")))
+        self.assertEqual(len(r.pairs), 2)
+
+    def test_explicit_ids_must_agree_and_cannot_be_bypassed_by_duplicate_row(self):
+        rows = [M.ErpCredential(11, M.VENDOR_NAVER, "2345678", ad_account_no_raw="7654321"),
+                M.ErpCredential(11, M.VENDOR_NAVER, ad_account_no_raw="7654321"), C(12, "2345678")]
+        r = run([P(11, "메타"), P(12, "메타 2호점")], rows,
+                accounts((1234567, 7654321, "메타"), (2345678, 8765432, "메타 2호점")))
+        self.assertEqual(r.pairs, ())
+        self.assertIn((11, M.B_IDENTIFIER_CONFLICT), reasons(r))
+        self.assertIn((12, M.B_CLAIMED_BY_SEVERAL), reasons(r))
+
+    def test_same_account_across_typed_identifiers_is_deduplicated(self):
+        rows = [M.ErpCredential(11, M.VENDOR_NAVER, "1234567", ad_account_no_raw="7654321"), C(11, "1234567")]
+        r = run([P(11, "메타")], rows, accounts((1234567, 7654321, "메타")))
+        self.assertEqual(len(r.pairs), 1)
+        self.assertEqual(r.blocked, ())
+
+    def test_explicit_ad_id_keeps_cross_company_and_human_guards(self):
+        accs = accounts((1234567, 7654321, "메타"))
+        row = M.ErpCredential(11, M.VENDOR_NAVER, ad_account_no_raw="7654321")
+        r = run([P(11, "메타"), P(12, "메타")], [row, C(12, "1234567")], accs)
+        self.assertEqual(r.pairs, ())
+        self.assertEqual(reasons(r), [(11, M.B_CLAIMED_BY_SEVERAL), (12, M.B_CLAIMED_BY_SEVERAL)])
+        for decision, reason in ((M.HumanDecision(12, 1234567), M.B_CONFIRMED_ELSEWHERE),
+                                 (M.HumanDecision(11, 1234567, M.DECISION_REJECTED), M.B_REJECTED)):
+            r = run([P(11, "메타")], [row], accs, [decision])
+            self.assertEqual(r.pairs, ())
+            self.assertEqual(reasons(r), [(11, reason)])
+
+    def test_explicit_invalid_or_absent_number_is_never_stored_as_customer_id(self):
+        for raw, reason in (("-7654321", M.B_AD_FORMAT), ("０１２３", M.B_AD_FORMAT),
+                            ("0123", M.B_AD_FORMAT), ("1" * 16, M.B_AD_FORMAT),
+                            (7654321, M.B_AD_FORMAT), ("7654321", M.B_AD_NOT_LINKED)):
+            with self.subTest(raw=raw):
+                r = run([P(11, "메타")], [M.ErpCredential(11, M.VENDOR_NAVER, ad_account_no_raw=raw)])
+                self.assertEqual(reasons(r), [(11, reason)])
+                self.assertIsNone(r.blocked[0].customer_id)
+
+    def test_explicit_fields_do_not_disclose_numbers_in_repr(self):
+        row = M.ErpCredential(11, M.VENDOR_NAVER, "1234567", ad_account_no_raw="7654321")
+        self.assertNotIn("7654321", repr(row))
+        self.assertNotIn("1234567", repr(row))
+
     def test_ignored_rows(self):
         r = run([P(11, "메타")], [C(11, "1234567", vendor="KAKAO_MOMENT"), C(11, "1234567", vendor=None),
                                   C(11, "1234567", vendor="naver_searchad"), C(99, "1234567"), C(11, "  ")],

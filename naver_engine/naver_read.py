@@ -605,6 +605,12 @@ class NaverReader:
                 kept["customerId"] = H.normalize_customer_id(kept.get("customerId"))
             except H.NotEligible:
                 raise IncompleteList("하위 계정 목록: 고객 번호 없는 줄") from None
+            ad_no = kept.get("adAccountNo")
+            if isinstance(ad_no, str) and re.fullmatch(r"[1-9][0-9]{0,14}", ad_no):
+                ad_no = int(ad_no)
+            if isinstance(ad_no, bool) or not isinstance(ad_no, int) or not 0 < ad_no < 10 ** 15:
+                raise IncompleteList("하위 계정 목록: 광고 계정 번호 없는 줄")
+            kept["adAccountNo"] = ad_no
             out.append(kept)
         return out
 
@@ -614,6 +620,7 @@ class NaverReader:
         if not managers:
             raise IncompleteList("관리계정이 0개")
         accounts: Dict[int, dict] = {}
+        customer_by_ad_no: Dict[int, int] = {}
         per: Dict[int, int] = {}
         for m in managers:
             no = m["managerAccountNo"]
@@ -623,7 +630,16 @@ class NaverReader:
                 raise IncompleteList("하위 계정 목록: 관리계정은 하위가 있다는데 0줄")
             per[no] = len(kids)
             for k in kids:
-                accounts.setdefault(k["customerId"], k)
+                cid = k["customerId"]
+                old = accounts.get(cid)
+                if old is not None and old["adAccountNo"] != k["adAccountNo"]:
+                    raise IncompleteList("하위 계정 목록: 같은 고객의 광고 계정 번호가 다름")
+                ad_no = k["adAccountNo"]
+                old_cid = customer_by_ad_no.get(ad_no)
+                if old_cid is not None and old_cid != cid:
+                    raise IncompleteList("하위 계정 목록: 같은 광고 계정의 고객 번호가 다름")
+                customer_by_ad_no[ad_no] = cid
+                accounts.setdefault(cid, k)
         return ChildAccounts(accounts, per, tuple(managers))
 
     # ── 광고주 계정(계정 손잡이) ────────────────────────────────────

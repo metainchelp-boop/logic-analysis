@@ -510,6 +510,43 @@ class ChildListTest(Base):
             m["managerAccount"]["childAdAccountCount"] = None  # 실측 모양
         self.assertEqual(len(self.reader.list_all_children(self.reader.manager_handle()).accounts), 5)
 
+    def test_same_customer_with_different_ad_account_across_managers_is_incomplete(self):
+        ag = Agency(self.naver, sizes=(1, 1))
+        ag.children[102][0]["customerId"] = ag.children[101][0]["customerId"]
+        self.expect(R.IncompleteList, self.reader.list_all_children, self.reader.manager_handle())
+
+    def test_ad_account_claimed_by_different_customers_is_incomplete(self):
+        for sizes, second_manager in (((2,), 101), ((1, 1), 102)):
+            with self.subTest(sizes=sizes):
+                self.naver = FakeNaver()
+                self.reader = R.NaverReader(creds(), transport=self.naver, clock=self.clock)
+                ag = Agency(self.naver, sizes=sizes)
+                ag.children[second_manager][-1]["adAccountNo"] = ag.children[101][0]["adAccountNo"]
+                self.expect(R.IncompleteList, self.reader.list_all_children, self.reader.manager_handle())
+
+    def test_missing_or_malformed_ad_account_number_is_incomplete(self):
+        for fields in ({}, {"adAccountNo": None}, {"adAccountNo": True}, {"adAccountNo": 0},
+                       {"adAccountNo": -1}, {"adAccountNo": 10 ** 15}, {"adAccountNo": 8123456.0},
+                       {"adAccountNo": "08123456"}, {"adAccountNo": "８１２３４５６"},
+                       {"adAccountNo": " 8123456 "}, {"adAccountNo": "8123456x"},
+                       {"adAccountNo": []}, {"adAccountNo": {}}):
+            with self.subTest(fields=fields):
+                self.naver = FakeNaver()
+                self.reader = R.NaverReader(creds(), transport=self.naver, clock=self.clock)
+                ag = Agency(self.naver, sizes=(1,))
+                ag.children[101][0].pop("adAccountNo")
+                ag.children[101][0].update(fields)
+                self.expect(R.IncompleteList, self.reader.list_all_children, self.reader.manager_handle())
+
+    def test_consistent_duplicate_across_managers_is_kept_once(self):
+        ag = Agency(self.naver, sizes=(1, 1))
+        first = ag.children[101][0]
+        ag.children[102][0] = {**first, "adAccountNo": str(first["adAccountNo"]), "accountRole": "READ"}
+        res = self.reader.list_all_children(self.reader.manager_handle())
+        self.assertEqual(list(res.accounts), [first["customerId"]])
+        self.assertEqual(res.accounts[first["customerId"]]["adAccountNo"], first["adAccountNo"])
+        self.assertEqual(res.per_manager, {101: 1, 102: 1})
+
     def test_non_200_success_refused(self):
         Agency(self.naver)
         self.naver.script("/manager-accounts", (206, {"content": [], "totalElements": 0}))

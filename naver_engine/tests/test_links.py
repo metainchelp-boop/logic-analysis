@@ -616,6 +616,18 @@ class LinkStateTest(Base):
 
 # ── 짝 맞추기 ────────────────────────────────────────────────────────
 class PairLinksTest(Base):
+    def test_ad_account_only_export_is_paired_with_canonical_customer(self):
+        self.seed()
+        res = self.pair(FakeErp([E.NaverIdRow(12, M.VENDOR_NAVER, None, "8765432")]))
+        self.assertEqual(res.outcome, S.SYNC_ACCEPTED)
+        self.assertIn((S.PAIR_AUTO, 12, B, "same"), self.rows(res.pairing_id))
+
+    def test_new_identifier_conflict_is_saved_without_account_join(self):
+        self.seed()
+        res = self.pair(FakeErp([E.NaverIdRow(12, M.VENDOR_NAVER, str(A), "8765432")]))
+        self.assertEqual(res.outcome, S.SYNC_ACCEPTED)
+        self.assertIn((S.PAIR_BLOCKED, 12, None, M.B_IDENTIFIER_CONFLICT), self.rows(res.pairing_id))
+
     def test_accepted_rows_and_counts(self):
         erp = self.seed()
         res = self.pair(erp)
@@ -844,6 +856,17 @@ class TransferLostTest(Base):
 
     OTHER = (D, 6543210, "다른곳")
 
+    def test_ad_account_only_pair_preserves_loss_and_recovery(self):
+        ids = [E.NaverIdRow(12, M.VENDOR_NAVER, None, "8765432")]
+        rows, _ = self.day(0, [(B, 8765432, "하늘꽃집"), self.OTHER], ids)
+        self.assertEqual(self.lost(rows, 12), [(S.PAIR_AUTO, B, None, "same")])
+        rows, _ = self.day(1, [self.OTHER], ids)
+        self.assertEqual(self.lost(rows, 12), [(S.PAIR_MISSING, B, S.PAIR_AUTO, None)])
+        rows, _ = self.day(2, [self.OTHER], ids)
+        self.assertEqual(self.lost(rows, 12), [(S.PAIR_BROKEN, B, S.PAIR_AUTO, None)])
+        rows, _ = self.day(3, [(B, 8765432, "하늘꽃집"), self.OTHER], ids)
+        self.assertEqual(self.lost(rows, 12), [(S.PAIR_AUTO, B, None, "same")])
+
     def test_auto_pair_dropped_becomes_transfer_lost(self):
         ids = [nid(12, "2345678")]
         rows, _ = self.day(0, [(B, 8765432, "하늘꽃집"), self.OTHER], ids)
@@ -929,12 +952,12 @@ class PairingDueTest(Base):
         self.assertTrue(L.pairing_due(self.st, self.clock.t))
         self.pair(erp)
         self.assertFalse(L.pairing_due(self.st, self.clock.t + timedelta(minutes=29)))  # 방금 맞춤
-        self.assertFalse(L.pairing_due(self.st, self.clock.t + timedelta(hours=5)))     # 입력이 그대로
+        self.assertTrue(L.pairing_due(self.st, self.clock.t + timedelta(minutes=30)))  # 전산 번호 변경을 주기적으로 읽음
         t = self.at(self.clock.t + timedelta(hours=5))
         self.st.record_decision(15, C, "confirmed", 0, t)                               # 사람 판단이 바뀜
         self.assertTrue(L.pairing_due(self.st, t))
         self.pair(FakeErp(erp.ids))
-        self.assertFalse(L.pairing_due(self.st, t + timedelta(minutes=31)))
+        self.assertTrue(L.pairing_due(self.st, t + timedelta(minutes=31)))
         self.st.record_prospects(stages([srow(11, "메타상회")], self.at(t + timedelta(minutes=31))))   # 단계가 바뀜
         self.assertTrue(L.pairing_due(self.st, self.clock.t))
         self.pair(FakeErp(erp.ids))
@@ -944,7 +967,7 @@ class PairingDueTest(Base):
     def test_new_day_due_and_retry_after_failure(self):
         erp = self.seed(t=datetime(2026, 9, 29, 22, 0, tzinfo=KST))
         self.pair(erp)
-        self.assertFalse(L.pairing_due(self.st, datetime(2026, 9, 29, 23, 59, tzinfo=KST)))
+        self.assertTrue(L.pairing_due(self.st, datetime(2026, 9, 29, 23, 59, tzinfo=KST)))
         self.assertTrue(L.pairing_due(self.st, datetime(2026, 9, 30, 0, 1, tzinfo=KST)))   # 날짜가 바뀜(하루 한 번은)
         self.pair(FakeErp(E.ErpError("network", E.PATH_NAVER_IDS)), t=datetime(2026, 9, 30, 0, 2, tzinfo=KST))
         self.assertFalse(L.pairing_due(self.st, datetime(2026, 9, 30, 0, 31, tzinfo=KST)))

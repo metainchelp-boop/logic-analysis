@@ -135,6 +135,7 @@ class NaverIdRow:
     possibility_id: int
     vendor: Optional[str]
     customer_id_raw: Optional[str] = field(default=None, repr=False)
+    ad_account_no_raw: Optional[str] = field(default=None, repr=False)
 
 
 def _display_text(v) -> bool:
@@ -312,8 +313,11 @@ class ErpReader:
                 raise ErpIncomplete("bad-shape", PATH_NAVER_IDS, 200, "가망 번호")
             vendor = it.get("vendor")
             raw = it.get("customer_id")
+            ad_no = it.get("ad_account_no")
+            if ad_no is not None and not isinstance(ad_no, str):
+                raise ErpIncomplete("bad-shape", PATH_NAVER_IDS, 200, "광고 계정 번호 모양")
             out.append(NaverIdRow(pid, vendor if isinstance(vendor, str) else None,
-                                  raw if isinstance(raw, str) else None))
+                                  raw if isinstance(raw, str) else None, ad_no))
         return tuple(out)
 
 

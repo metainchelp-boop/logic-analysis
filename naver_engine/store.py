@@ -133,7 +133,8 @@ PAIR_STATES = frozenset({PAIR_CONFIRMED, PAIR_AUTO, PAIR_MISSING, PAIR_BROKEN, P
 PAIR_CHECKABLE = frozenset({PAIR_CONFIRMED, PAIR_AUTO})
 PAIR_RELATIONS = frozenset({"same", "contains", "different", "unknown"})   # matching.REL_* 와 같은 글자(시험이 대조)
 # 막힘 줄 사유 — matching.B_* 와 같은 글자(시험이 대조) · 그 밖의 글자(숫자 조각 등)는 사유 칸에 들어가지 않는다
-PAIR_BLOCK_CODES = frozenset({"customer-id-format", "customer-id-length", "not-linked", "ad-account-number",
+PAIR_BLOCK_CODES = frozenset({"ad-account-id-format", "ad-account-not-linked", "account-identifiers-conflict",
+                              "customer-id-format", "customer-id-length", "not-linked", "ad-account-number",
                               "ambiguous-space", "claimed-by-several", "confirmed-elsewhere", "rejected-by-human",
                               "name-different", "name-points-elsewhere"})
 PAIR_CODE_NEVER_LISTED = "never-listed"   # 이관 빠짐 사유: 확인한 계정이 한 번도 연결 목록에 없었음(그 밖은 사유 없음)

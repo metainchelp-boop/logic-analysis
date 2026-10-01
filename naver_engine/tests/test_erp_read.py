@@ -377,6 +377,19 @@ class OtherReadsTest(Base):
         self.fake.org = {"generated_at": "t", "teams": [{"idx": 0}], "employees": [], "owners": []}
         self.assertEqual(self.reader.read_org_snapshot()["teams"], [{"idx": 0}])
 
+    def test_naver_ad_account_only_and_legacy_rows(self):
+        self.fake.ids = {"items": [
+            {"possibility_id": 21, "vendor": None, "ad_account_no": "8123456", "api_key": MARK_KEY},
+            {"possibility_id": 22, "vendor": "NAVER_SEARCHAD", "customer_id": "1234567"},
+            {"possibility_id": 23, "vendor": "NAVER_SEARCHAD", "customer_id": "1234568", "ad_account_no": None},
+        ]}
+        rows = self.reader.read_naver_customer_ids()
+        self.assertEqual([(r.customer_id_raw, r.ad_account_no_raw) for r in rows],
+                         [(None, "8123456"), ("1234567", None), ("1234568", None)])
+        self.assertEqual(rows[1], E.NaverIdRow(22, "NAVER_SEARCHAD", "1234567"))
+        for hidden in ("8123456", "1234567", "1234568", MARK_KEY):
+            self.assertNotIn(hidden, repr(rows))
+
     def test_naver_ids(self):
         self.fake.ids = {"generated_at": "t", "items": [
             {"possibility_id": 11, "vendor": "NAVER_SEARCHAD", "customer_id": " 123-4567 "},
@@ -387,12 +400,25 @@ class OtherReadsTest(Base):
         self.assertEqual([(r.possibility_id, r.vendor, r.customer_id_raw) for r in rows],
                          [(11, "NAVER_SEARCHAD", " 123-4567 "), (12, None, None), (13, "NAVER_SEARCHAD", None)])
         self.assertNotIn("123-4567", repr(rows))
-        self.assertEqual(set(E.NaverIdRow.__dataclass_fields__), {"possibility_id", "vendor", "customer_id_raw"})
+        self.assertEqual(set(E.NaverIdRow.__dataclass_fields__),
+                         {"possibility_id", "vendor", "customer_id_raw", "ad_account_no_raw"})
         for bad in ({"items": "x"}, {"items": ["x"]}, {"items": [{"possibility_id": -1}]}, {}):
             with self.subTest(bad=bad):
                 self.fake.ids = bad
                 with self.assertRaises(E.ErpIncomplete):
                     self.reader.read_naver_customer_ids()
+
+    def test_non_string_ad_account_number_drops_whole_list(self):
+        for malformed in (8123456, True, 8.5, [], {"api_key": MARK_KEY}):
+            with self.subTest(type=type(malformed).__name__):
+                self.fake.ids = {"items": [
+                    {"possibility_id": 21, "ad_account_no": "8123456"},
+                    {"possibility_id": 22, "ad_account_no": malformed},
+                ]}
+                with self.assertRaises(E.ErpIncomplete) as cm:
+                    self.reader.read_naver_customer_ids()
+                self.assertEqual(cm.exception.kind, "bad-shape")
+                self.assertNotIn(MARK_KEY, str(cm.exception))
 
 
 class KeyTest(unittest.TestCase):

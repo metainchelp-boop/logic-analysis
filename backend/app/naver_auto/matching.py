@@ -5,7 +5,7 @@
 
 짝은 세 가지뿐이다.
 - **확인한 짝**(``confirmed``) — 사람이 「이 계정 맞음」을 눌렀다. 가장 우선한다.
-- **자동 짝**(``auto``) — ① 광고주 관리에 적힌 네이버 **고객 번호**가 대행 연결 목록의 고객 번호와 같다.
+- **자동 짝**(``auto``) — ①의 명시적 광고 계정 ID를 대행 목록에서 고객 번호로 찾거나 기존 고객 번호와 대조한다.
   바로 점검하되 「계정 확인 전」 · 늘 「확인 필요 예」(판정 verdict 가 한다 · 반박 H4).
 - **이름 후보**(``Candidate``) — 이름이 비슷할 뿐. **사람이 확인할 때까지 그 계정에 들어가지 않는다**(J3).
   확인 화면의 미리보기도 사람이 그 줄을 누를 때만 읽는다(Q2).
@@ -15,8 +15,9 @@
 2. 번호는 **숫자만** — 띄어쓰기·하이픈만 허용하고 지운다 · 4~8자리 · 0 으로 시작하지 않음.
    (실측 2026-09-28: 고객 번호 1,784곳 모두 4~7자리 · 0 으로 시작 0 · 광고계정 번호도 4~7자리라
    **자릿수로는 두 번호를 가를 수 없다** → 아래 3 이 막는다.)
-3. **고객 번호 한 공간과만** 맞는다 — 광고계정 번호(``adAccountNo``)와만 맞으면 「광고계정 번호를 적은 듯」,
+3. 기존 고객 번호 칸은 **고객 번호 한 공간과만** 맞는다 — 광고계정 번호(``adAccountNo``)와만 맞으면 「광고계정 번호를 적은 듯」,
    두 공간 모두에 있으면(서로 다른 계정) 「어느 번호인지 모름」.
+   별도 광고 계정 ID 칸은 번호 종류가 명시되어 그 공간에서만 찾는다. 같은 행의 두 번호가 다르면 보류한다.
 4. 같은 번호를 ① 의 다른 가망도 적었으면 모두 멈춘다(사람이 가른다 — 스토어·플레이스 두 가망이 한 업체일 수도 있다).
 5. 그 계정을 사람이 다른 가망의 짝으로 이미 확인했으면 멈춘다 · 사람이 「아님」이라 한 조합은 다시 올리지 않는다.
 6. **이름이 어긋나지 않는다** — ① 상호와 네이버 계정 이름을 ① 과 같은 규칙(``looseName``)으로 정리해
@@ -58,6 +59,9 @@ B_CONFIRMED_ELSEWHERE = "confirmed-elsewhere"  # 사람이 그 계정을 다른 
 B_REJECTED = "rejected-by-human"         # 사람이 이 조합은 아니라고 함
 B_NAME_DIFFERENT = "name-different"      # 번호는 맞는데 이름이 다름
 B_NAME_ELSEWHERE = "name-points-elsewhere"  # 계정 이름이 다른 가망의 상호와 같음
+B_AD_FORMAT = "ad-account-id-format"      # 명시한 광고 계정 ID가 양의 ASCII 정수가 아님
+B_AD_NOT_LINKED = "ad-account-not-linked"  # 명시한 광고 계정 ID가 대행 연결 목록에 없음
+B_IDENTIFIER_CONFLICT = "account-identifiers-conflict"  # 같은 행의 두 번호가 서로 다른 계정
 
 DECISION_CONFIRMED, DECISION_REJECTED = "confirmed", "rejected"
 
@@ -162,6 +166,7 @@ class ErpCredential:
     possibility_id: int
     vendor: Optional[str]
     customer_id_raw: Optional[str] = field(default=None, repr=False)
+    ad_account_no_raw: Optional[str] = field(default=None, repr=False, kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -242,10 +247,11 @@ def _cid_like(v, what: str) -> int:
 
 def match(prospects: Sequence[ErpProspect], credentials: Iterable[ErpCredential],
           accounts: Mapping[int, Mapping], decisions: Iterable[HumanDecision] = (),
-          *, accounts_complete: bool) -> PairingResult:
+          *, accounts_complete: bool, previous_ad_accounts: Optional[Mapping[int, int]] = None) -> PairingResult:
     """한 번에 전부 맞춘다. ``accounts`` = 읽기 관문의 ``ChildAccounts.accounts``(고객 번호 → 남길 칸).
 
     ``accounts_complete=True`` 는 관문이 **모든 관리계정의 모든 쪽을 받았을 때만** 넘긴다(반박 H1).
+    ``previous_ad_accounts`` 는 현재 목록에서 빠진 계정의 옛 대응이며 이관 빠짐 표시에만 쓴다.
     """
     if accounts_complete is not True:
         raise IncompleteAccounts("대행 연결 목록을 전부 받았을 때만 짝을 맞춘다")
@@ -333,9 +339,10 @@ def match(prospects: Sequence[ErpProspect], credentials: Iterable[ErpCredential]
 
     # 2) ① 에 적힌 고객 번호 — 자동 짝 후보 모으기
     ignored = 0
-    claims: List[Tuple[int, int]] = []       # 관리 대상 가망의 (가망, 적힌 번호) — 겹침 빼고
+    claims: List[Tuple[int, int, bool]] = [] # (가망, 고객 번호, 명시적 광고 계정 번호에서 찾음)
     seen = set()
-    all_claims = set()                       # 관리 대상 밖 가망까지 — 「같은 번호를 다른 가망도 적었나」(규칙 4)
+    all_claims = set()                       # 관리 대상 밖·보류 행의 주장도 지우지 않는다
+    held_claims = set()
     for c in credentials:
         if not isinstance(c, ErpCredential):
             raise BadInput("자격 행 모양이 아님")
@@ -343,9 +350,43 @@ def match(prospects: Sequence[ErpProspect], credentials: Iterable[ErpCredential]
         if c.vendor != VENDOR_NAVER:
             ignored += 1
             continue
+        explicit = c.ad_account_no_raw is not None and c.ad_account_no_raw != ""
         cid, why = parse_customer_id(c.customer_id_raw)
         if cid is not None:
-            all_claims.add((pid, cid))
+            # 구 입력칸에서 번호 종류가 모호하면 양쪽 계정을 모두 보호한다.
+            if cid in cids:
+                all_claims.add((pid, cid))
+            if not explicit and cid in ad_no_owner:
+                all_claims.add((pid, ad_no_owner[cid]))
+        if explicit:
+            raw = c.ad_account_no_raw
+            ad_no = int(raw) if isinstance(raw, str) and re.fullmatch(r"[1-9][0-9]{0,14}", raw) else None
+            target = ad_no_owner.get(ad_no)
+            if target is not None:
+                all_claims.add((pid, target))
+            if ad_no is None:
+                why = B_AD_FORMAT
+            elif target is None:
+                why = B_AD_NOT_LINKED
+            elif why is not None or (cid is not None and cid != target):
+                why = B_IDENTIFIER_CONFLICT
+            if why is not None:
+                held_claims.update((pid, v) for v in (cid, target) if v in cids)
+                previous = (previous_ad_accounts or {}).get(ad_no) if why == B_AD_NOT_LINKED else None
+                if previous is not None:
+                    previous = _cid(previous)
+                    if previous in cids:
+                        previous = None  # 현재 다른 번호로 존재하는 계정은 이탈로 오인하지 않는다
+                    elif cid is not None and cid != previous:
+                        why, previous = B_IDENTIFIER_CONFLICT, None
+                    else:
+                        why = B_REJECTED if (pid, previous) in rejected else B_NOT_LINKED
+                if pid in names:
+                    blocked.append(Blocked(pid, why, previous))
+                else:
+                    ignored += 1
+                continue
+            cid = target
         if pid not in names:
             ignored += 1                     # 관리 대상 밖 — 짝은 안 만들지만 충돌 판정에는 센다
             continue
@@ -355,20 +396,20 @@ def match(prospects: Sequence[ErpProspect], credentials: Iterable[ErpCredential]
             else:
                 blocked.append(Blocked(pid, why))
             continue
-        if (pid, cid) not in seen:
-            seen.add((pid, cid))
-            claims.append((pid, cid))
+        if (pid, cid, explicit) not in seen:
+            seen.add((pid, cid, explicit))
+            claims.append((pid, cid, explicit))
     # 적힌 번호가 어느 계정을 가리키나 — 고객 번호면 그 계정, 광고계정 번호면 그 번호의 주인 계정.
     # 두 가망이 같은 계정을 서로 다른 번호 공간으로 적어도 한 계정을 두고 다투는 것으로 본다.
     claimers: Dict[int, set] = {}
     for pid, cid in all_claims:
-        target = cid if cid in cids else ad_no_owner.get(cid)
-        if target is not None:
-            claimers.setdefault(target, set()).add(pid)
+        claimers.setdefault(cid, set()).add(pid)
 
-    for pid, cid in claims:
+    for pid, cid, explicit in claims:
         if cid in paired.get(pid, ()):
             continue                          # 이미 사람이 확인한 짝
+        if (pid, cid) in held_claims:
+            continue                          # 같은 행의 상충 값을 다른 중복 행으로 우회하지 않는다
         if (pid, cid) in rejected:
             blocked.append(Blocked(pid, B_REJECTED, cid))
             continue
@@ -376,7 +417,7 @@ def match(prospects: Sequence[ErpProspect], credentials: Iterable[ErpCredential]
         if not in_cid:
             blocked.append(Blocked(pid, B_AD_ACCOUNT_NO if in_no else B_NOT_LINKED, cid))
             continue
-        if in_no and ad_no_owner[cid] != cid:
+        if not explicit and in_no and ad_no_owner[cid] != cid:
             blocked.append(Blocked(pid, B_AMBIGUOUS_SPACE, cid))
             continue
         if len(claimers.get(cid, ())) > 1:

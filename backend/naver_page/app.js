@@ -655,7 +655,10 @@
   // 🔗 짝 확인
   var PAIR = { auto: '자동 짝 — 계정 확인 전', candidate: '이름이 비슷한 계정', blocked: '자동으로 못 이음', superseded: '밀린 확인',
                missing: '오늘 이관 목록에 없음', broken: '🔌 이관 빠짐' };
-  var BLOCK = { 'not-linked': '우리 회사로 이관 안 됨', 'ad-account-number': '고객 번호가 아닌 광고계정 번호가 적힘',
+  var BLOCK = { 'ad-account-id-format': '광고 계정 ID 숫자 확인 필요',
+                'ad-account-not-linked': '에이전시 목록에서 광고 계정을 찾지 못함',
+                'account-identifiers-conflict': '광고 계정 ID와 기존 고객번호가 서로 다른 계정',
+                'not-linked': '우리 회사로 이관 안 됨', 'ad-account-number': '고객 번호가 아닌 광고계정 번호가 적힘',
                 'customer-id-format': '고객 번호 모양이 아님', 'customer-id-length': '고객 번호 자릿수가 아님',
                 'ambiguous-space': '번호를 가를 수 없음', 'claimed-by-several': '여러 광고주에 같은 번호',
                 'confirmed-elsewhere': '다른 광고주에 확인된 계정', 'name-points-elsewhere': '계정 이름이 다른 광고주를 가리킴' };
