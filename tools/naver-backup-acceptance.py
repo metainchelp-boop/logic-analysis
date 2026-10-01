@@ -187,7 +187,8 @@ def transfer(root, evidence):
     stage("remote_command_refusal")
     arbitrary = ssh_check([*command, T.RECEIVER, "true"])
     stage("remote_prune_refusal")
-    remote_prune = ssh_check([*command, T.RECEIVER, "--prune"])
+    # OpenSSH는 목적지 뒤의 '-'도 옵션으로 해석할 수 있어 명시적으로 끝낸다.
+    remote_prune = ssh_check([*command, "--", T.RECEIVER, "--prune"])
     stage("sftp_refusal")
     sftp = ssh_check([*command, "-s", T.RECEIVER, "sftp"])
     # 원격 listen 요청은 서버에서 거절되어야 한다. 일반 shell은 절대 실행하지 않는다.

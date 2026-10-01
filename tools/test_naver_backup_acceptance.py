@@ -66,6 +66,11 @@ class AcceptanceTest(unittest.TestCase):
         if command[0] != A.T.SSH:
             raise AssertionError("허용하지 않은 외부 프로세스")
         self.ssh_calls.append(command)
+        if command[-1] == '--prune':
+            offline = ['synthetic.invalid' if part == A.T.RECEIVER else part for part in command]
+            parsed = REAL_RUN([offline[0], '-G', *offline[1:]],
+                              capture_output=True, timeout=5, env=A.T.COMMAND_ENV)
+            self.assertEqual(0, parsed.returncode, 'SSH must treat --prune as the remote command, not a client option')
         if len(self.ssh_calls) == 1 and self.probe_result is not None:
             self.assertEqual(command[-2:], [A.T.RECEIVER, "true"])
             self.assertEqual(kwargs.get("input"), b"")
