@@ -19,6 +19,7 @@ from naver_runtime.erp_tunnel_transport import ErpTunnelTransport
 from naver_runtime.scheduler import Scheduler
 from naver_runtime.server import UnixServer, health_app
 from naver_runtime.writer import Writer
+from naver_runtime import bootstrap as B
 
 log = logging.getLogger("naver_runtime")
 
@@ -60,7 +61,7 @@ class StopAwareTransport:
 
     def send(self, request, timeout):
         self._clock.before_network()
-        if isinstance(self._clock, MetricsClock):
+        if isinstance(self._clock, (MetricsClock, B.BootstrapClock)):
             timeout = min(timeout, self._clock.remaining())
         return self._transport.send(request, timeout)
 
@@ -168,6 +169,16 @@ def run(config, env, *, stop=None):
         web = WEB.App(open_read=lambda: S.open_reader(config.db), write=writer.call,
                       signer=signer, profiles=profiles, owner_verification=True) if config.web_enabled else None
         with UnixServer(config.socket, combine_web(status, web)):
+            # WEB는 이미 별도 스레드에서 열린 상태. 관리 단발 작업을 예약 회차보다 먼저 실행한다.
+            # 환경값이 없으면 bootstrap 파일/영수증/스냅샷 경로를 전혀 조회하지 않는다.
+            if env.get("NAVER_ENGINE_BOOTSTRAP_REQUEST"):
+                try:
+                    bootstrap = B.execute(config, env, writer, clock,
+                                          lambda bounded: dependencies(config, env, bounded))
+                    with state_lock:
+                        state["bootstrap"] = bootstrap
+                except StopRequested:
+                    return 0
             while not stop.is_set():
                 with state_lock:
                     state.update(state="running")

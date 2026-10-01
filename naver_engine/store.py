@@ -2991,6 +2991,18 @@ class Store:
             raise _bad_hold()
         return {"hold_id": r[0], "at": at, "codes": codes, "body": body, "used_at": used, "used_by": r[5]}
 
+    def hold_body_sha256(self, kind: str, hold_id: int) -> Optional[str]:
+        """관리 승인 대조용: 파싱/재직렬화 전 저장된 TEXT의 정확한 UTF-8 해시만 반환한다."""
+        if kind not in SYNC_KINDS or type(hold_id) is not int or hold_id <= 0:
+            raise StoreRefused("붙잡음 식별자가 올바르지 않습니다")
+        row = self._conn.execute("SELECT body FROM naver_auto_hold WHERE kind = ? AND sync_id = ?",
+                                 (kind, hold_id)).fetchone()
+        if row is None:
+            return None
+        if not isinstance(row[0], str):
+            raise _bad_hold()
+        return hashlib.sha256(row[0].encode("utf-8")).hexdigest()
+
     def _sync_rows(self, where: str, args: tuple, limit: int) -> List[dict]:
         cur = self._conn.execute("SELECT * FROM naver_auto_sync_log" + where + " ORDER BY sync_id DESC LIMIT ?",
                                  args + (limit,))

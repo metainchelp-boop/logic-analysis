@@ -744,6 +744,39 @@ class LoginTest(WebBase):
 
 
 # ── 범위 밖 = 없음 ───────────────────────────────────────────────────
+class InitialStageBandTest(WebBase):
+    def world(self, org_owners=None, extra_people=()):
+        now = self.at(at(TODAY, 13, 0))
+        self.st.record_org(TA.org_body(now - timedelta(minutes=30)), now - timedelta(minutes=20))
+        self.st.record_accounts(TM.kids(A, B), now - timedelta(minutes=10))
+
+    def test_first_stage_input_is_not_empty_assignment_and_exposes_no_hold_details(self):
+        status, board = self.get('/board', 100, query='attention=0')
+        self.assertEqual(status, 200)
+        self.assertEqual(board['counts']['total'], 0)
+        self.assertEqual(board['band']['stage_state'], 'not_accepted')
+        self.assertIsNone(board['band']['stage_as_of'])
+        row = TM.srow(11)
+        hold_id = self.st.refuse_stages(
+            E.StageSnapshot({11: row}, self.fc.now(), {}, ()), ('IMPLAUSIBLE_FIRST',))
+        expected_keys = {'today', 'deadline_passed', 'runs', 'pairing_at', 'pairing_today',
+                         'org_freshness', 'org_generated_at', 'stage_as_of', 'stage_state'}
+        for idx in (0, 1, 100):
+            status, board = self.get('/board', idx, query='attention=0')
+            self.assertEqual(status, 200)
+            self.assertEqual(board['band']['stage_state'], 'held')
+            self.assertEqual(set(board['band']), expected_keys)
+            self.assertNotIn('hold_id', json.dumps(board['band']))
+            self.assertNotIn('IMPLAUSIBLE_FIRST', json.dumps(board['band']))
+        self.st.confirm_prospects_hold(hold_id, 0)
+        status, board = self.get('/board', 100, query='attention=0')
+        self.assertEqual(status, 200)
+        self.assertEqual(board['band']['stage_state'], 'accepted')
+        self.assertIsNotNone(board['band']['stage_as_of'])
+        self.assertEqual(board['band']['runs'], [])
+        self.assertEqual(board['counts']['green'], 0)
+
+
 class VisibilityTest(WebBase):
     def test_board_scoped(self):
         for idx, want in ((100, {11, 14}), (101, {12}), (1, {11, 12, 14}), (0, {11, 12, 13, 14})):

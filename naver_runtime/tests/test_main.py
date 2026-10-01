@@ -99,3 +99,34 @@ class MainTest(TestCase):
         scheduler.tick.assert_called_once()
         writer.__exit__.assert_called_once()
         server.__exit__.assert_called_once()
+
+    def test_bootstrap_runs_after_web_open_before_first_scheduler_tick(self):
+        stop, events = Event(), []
+        writer, server, scheduler = Mock(), Mock(), Mock()
+        writer.__enter__ = Mock(return_value=writer)
+        writer.__exit__ = Mock(return_value=False)
+        server.__enter__ = Mock(side_effect=lambda: events.append("web_open"))
+        server.__exit__ = Mock(return_value=False)
+        scheduler.tick.side_effect = lambda: (events.append("tick") or stop.set() or {"state": "ok"})
+        with patch.object(main, "Writer", return_value=writer), \
+             patch.object(main, "UnixServer", return_value=server), \
+             patch.object(main, "Scheduler", return_value=scheduler), \
+             patch.object(main, "dependencies", return_value={}), \
+             patch.object(main.B, "execute", side_effect=lambda *a: events.append("bootstrap") or {"status": "partial"}):
+            main.run(Config("/data/db", "/socket/api"), {"NAVER_ENGINE_BOOTSTRAP_REQUEST": "synthetic"}, stop=stop)
+        self.assertEqual(events, ["web_open", "bootstrap", "tick"])
+
+    def test_bootstrap_transport_caps_timeout_and_refuses_after_budget(self):
+        from datetime import timedelta
+        from naver_engine.tests.fake_naver import FakeClock
+        from naver_engine.tests.test_requested import NOW
+        base = FakeClock(NOW)
+        bounded = main.B.BootstrapClock(base, 2, NOW + timedelta(seconds=10))
+        transport = Mock()
+        wrapped = main.StopAwareTransport(bounded, transport)
+        wrapped.send("synthetic", 20)
+        transport.send.assert_called_once_with("synthetic", 2)
+        base.advance(2)
+        with self.assertRaises(main.N.RunAbort):
+            wrapped.send("synthetic", 20)
+        self.assertEqual(transport.send.call_count, 1)

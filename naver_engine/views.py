@@ -486,6 +486,12 @@ def _band(ctx: Ctx, store: S.Store, scope: SC.Scope) -> dict:
     """점검 띠 — 오늘 회차 상태 · 짝 맞추기 · 조직 신선도. 실패한 곳 수(계정 수)는 대표만."""
     runs = store.runs_on(ctx.today)
     ceo = scope.kind == SC.ALL
+    stage_at = store.stage_as_of()
+    stage_state = "accepted" if stage_at is not None else "not_accepted"
+    if stage_at is None:
+        hold = store.hold(S.SYNC_STAGES)
+        if hold is not None and hold["used_at"] is None:
+            stage_state = "held"
     out_runs = []
     for r in runs:
         d = {"status": r["status"], "started_at": r["started_at"], "finished_at": r["finished_at"]}
@@ -495,7 +501,7 @@ def _band(ctx: Ctx, store: S.Store, scope: SC.Scope) -> dict:
     return {"today": ctx.today.isoformat(), "deadline_passed": ctx.now >= ctx.deadline, "runs": out_runs,
             "pairing_at": None if ctx.pairing is None else _iso(ctx.pairing["at"]), "pairing_today": ctx.pairing_today,
             "org_freshness": ctx.freshness, "org_generated_at": ctx.org.generated_at,
-            "stage_as_of": _iso(store.stage_as_of())}
+            "stage_as_of": _iso(stage_at), "stage_state": stage_state}
 
 
 def board(ctx: Ctx, store: S.Store, scope: SC.Scope, selection: str = "all", attention_only: bool = True) -> dict:

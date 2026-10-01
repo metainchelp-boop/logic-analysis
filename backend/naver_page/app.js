@@ -384,24 +384,37 @@
     $('links-n').textContent = state.links ? state.links.rows.length + '건' : '';
     $('ended-n').textContent = state.ended ? state.ended.rows.length + '곳' : '';
   }
+  function stageInputMessage() {
+    var b = state.board.band;
+    if (b.stage_state === 'held') return '계약 단계 목록을 확인 중이라 아직 광고주를 표시하지 않았습니다. 자동 반영이 보류된 상태이며 담당 광고주가 없다는 뜻은 아닙니다.';
+    if (b.stage_state === 'not_accepted') return '계약 단계 목록이 아직 반영되지 않았습니다. 담당 광고주가 없는지 여부는 자료가 반영된 뒤 확인할 수 있습니다.';
+    return '';
+  }
+  function resultsIncomplete() {
+    var b = state.board.band, runs = b.runs || [], last = runs[runs.length - 1];
+    return !!stageInputMessage() || !b.pairing_today || !last || last.status !== 'done' || state.board.counts.white > 0;
+  }
   function renderRun() {
     var b = state.board.band, rb = $('runbar');
     var runs = b.runs || [], last = runs[runs.length - 1];
     var parts = [], cls = 'runbar';
     if (!last) {
-      if (b.deadline_passed) { cls += ' bad'; parts.push(h('b', null, '오늘 아침 점검 기록이 없습니다'), ' · 모든 광고주가 「오늘 점검 안 됨」(⚪)으로 보입니다 — 어제 결과를 오늘 것처럼 🟢 로 보이지 않게 합니다'); }
-      else { cls += ' wait'; parts.push(h('b', null, '오늘 아침 점검 전'), readOnly() ? ' · 06:30 예약 · 현재 시간대에는 아직 수집·점검 전일 수 있습니다' : ' · 06:30 시작 · 08:00 까지 끝납니다'); }
+      if (b.deadline_passed) { cls += ' bad'; parts.push(h('b', null, '오늘 점검 기록이 없습니다'), ' · 미점검은 정상 판정이 아닙니다. 자료 반영·점검 진행 상태를 확인해 주세요.'); }
+      else { cls += ' wait'; parts.push(h('b', null, '오늘 점검 전'), readOnly() ? ' · 정기 점검 06:30 예약 · 현재 시간대에는 아직 수집·점검 전일 수 있습니다' : ' · 정기 점검 06:30 시작 · 08:00 마감 예정'); }
     } else if (last.status === 'running') {
-      cls += ' wait'; parts.push(h('b', null, '오늘 아침 점검 도는 중'), ' · ' + hm(last.started_at) + ' 시작');
+      cls += ' wait'; parts.push(h('b', null, '오늘 점검 진행 중'), ' · ' + mdhm(last.started_at) + ' 시작');
     } else if (last.status === 'done') {
-      parts.push('오늘 아침 점검 ', h('b', { class: 'num' }, hm(last.finished_at)), ' 끝');
+      parts.push('오늘 점검 ', h('b', { class: 'num' }, mdhm(last.started_at)), ' 시작 · ', h('b', { class: 'num' }, hm(last.finished_at)), ' 종료');
     } else {
-      cls += ' bad'; parts.push(h('b', null, '오늘 아침 점검이 끝나지 않았습니다'), ' · 끝내지 못한 광고주는 「오늘 점검 안 됨」(⚪)으로 보입니다' + (readOnly() ? ' · 검증판의 알림 전송은 꺼져 있습니다' : ' · 대표에게 알림이 갑니다'));
+      cls += ' bad'; parts.push(h('b', null, '오늘 점검이 끝나지 않았습니다'), ' · ' + mdhm(last.started_at) + ' 시작 · 끝내지 못한 광고주는 「오늘 점검 안 됨」(⚪)으로 보입니다' + (readOnly() ? ' · 검증판의 알림 전송은 꺼져 있습니다' : ' · 대표에게 알림이 갑니다'));
     }
     if (last && typeof last.accounts_total === 'number') {
       parts.push(' · 계정 ', h('b', { class: 'num' }, num(last.accounts_ok)), ' / ', h('b', { class: 'num' }, num(last.accounts_total)), ' 읽음');
     }
     if (!b.pairing_today) parts.push(' · 오늘 짝 맞추기 전(이관 칸은 받은 뒤에 보입니다)');
+    if (stageInputMessage()) parts.push(' · ', h('b', null, stageInputMessage()));
+    if (b.stage_as_of) parts.push(' · 계약 단계 자료 ' + mdhm(b.stage_as_of));
+    if (b.pairing_at) parts.push(' · 짝 맞추기 자료 ' + mdhm(b.pairing_at));
     if (b.org_freshness === 'stale' || b.org_freshness === 'none') parts.push(' · ⚠ 조직 자료가 낡았습니다 — 🙈 예외 · 「이 계정 맞음」은 잠시 막힙니다');
     else if (b.org_freshness === 'yellow') parts.push(' · 조직 자료가 조금 늦었습니다');
     rb.className = cls;
@@ -487,7 +500,9 @@
                  info ? 'ⓘ 알아 두기 · ' + cause(g.code) : cause(g.code), ' ', h('span', { class: 'n' }, n + (info ? ' · 이슈 아님 · 「확인 필요」에 세지 않음' : ''))));
       g.items.forEach(function (i) { out.push(issueRow(i)); });
     });
-    put(box, out.length ? out : h('div', { class: 'empty' }, '열린 이슈가 없습니다 🎉 오늘은 들어가 볼 광고주가 없습니다.'));
+    put(box, out.length ? out : h('div', { class: 'empty' }, resultsIncomplete()
+      ? '아직 점검 결과가 충분하지 않아 문제 여부를 판단할 수 없습니다. 미점검·점검 불가 항목과 자료 기준 시각을 확인해 주세요.'
+      : '현재 조회 범위에서 열린 이슈가 없습니다. 오늘 점검 결과와 자료 기준 시각을 확인해 주세요.'));
     var red = rows.filter(function (i) { return i.severity === 'red'; }).length;
     $('iss-n').textContent = '열린 이슈 ' + rows.filter(function (i) { return i.severity !== 'info'; }).length + ' (긴급 ' + red + ')';
     var done = state.board.done_rows || [];
@@ -560,8 +575,8 @@
       rows.forEach(function (r) { out.push(row(r)); });
     }
     if (!out.length) {
-      var msg = !all.length ? '보이는 광고주가 없습니다. 담당 광고주가 생기면 여기에 보입니다.'
-        : state.filter === 'need' ? '확인이 필요한 광고주가 없습니다 🎉' : '조건에 맞는 광고주가 없습니다.';
+      var msg = !all.length ? (stageInputMessage() || '현재 조회 범위에 표시할 광고주가 없습니다.')
+        : state.filter === 'need' ? (resultsIncomplete() ? '현재 표시할 확인 필요 항목이 없습니다. 「전체」 또는 「점검 불가」에서 미점검 상태도 확인해 주세요.' : '현재 조회 범위에서 확인이 필요한 광고주가 없습니다.') : '조건에 맞는 광고주가 없습니다.';
       out.push(h('tr', null, h('td', { colspan: 9, class: 'empty' }, msg)));
     }
     put($('tbody'), out);
@@ -844,8 +859,8 @@
     }
     if (c.accounts && c.accounts.length) {
       out.push(h('div', { class: 'tiles' },
-        tile('어제 광고비', won(c.yday_spend), '오늘 아침 점검 기준'), tile('노출', num(c.yday_imp), '어제'),
-        tile('클릭', num(c.yday_clk), '어제'), tile('비즈머니', won(c.bizmoney), '오늘 아침 잔액')));
+        tile('어제 광고비', won(c.yday_spend), '오늘 점검 기준'), tile('노출', num(c.yday_imp), '어제'),
+        tile('클릭', num(c.yday_clk), '어제'), tile('비즈머니', won(c.bizmoney), '오늘 점검 시 잔액')));
       var max = 0, any = false;
       days.forEach(function (d) { if (d.yday_spend !== null) { any = true; if (d.yday_spend > max) max = d.yday_spend; } });
       out.push(h('div', { class: 'kh' }, h('h2', null, '최근 14일 광고비'), h('span', { class: 'n' }, any ? '막대 = 그날 아침 점검이 읽은 전날 광고비 · 흐린 막대 = 그날 일부 계정만 읽음 · 빈 막대 = 기록 없음' : '아침 점검 기록이 쌓이면 막대로 보입니다')));
@@ -887,7 +902,7 @@
   }
   var CONN = {
     listed: '이 광고주 광고계정이 우리 회사 대행 연결 목록에 있습니다. 매일 아침 목록을 전부 받아 확인하고, 빠지면 「🔌 이관 빠짐」으로 알립니다.',
-    missing: '오늘 아침 대행 연결 목록에 없습니다(첫날). 목록이 하루 잘려 온 것일 수 있어 오늘은 ⚪ 로만 보입니다. 내일 아침에도 없으면 「🔌 이관 빠짐」(🔴)으로 올립니다.',
+    missing: '오늘 받은 대행 연결 목록에 없습니다(첫날). 목록이 하루 잘려 온 것일 수 있어 오늘은 ⚪ 로만 보입니다. 내일 점검에도 없으면 「🔌 이관 빠짐」(🔴)으로 올립니다.',
     broken: '대행 연결 목록에 없습니다(서로 다른 날 두 번 · 20시간 넘게). ① 광고주에게 네이버 검색광고 「대행사 관리」에서 메타아이앤씨 연결이 남아 있는지 확인 요청 ② 광고주가 직접 끊은 것이면 전산 계약 단계 확인 ③ 다시 이관되면 다음 날 아침 🔁 저절로 풀립니다.',
     not_linked: '전산에 네이버 고객 번호는 적혀 있는데 우리 회사 대행 연결 목록에 한 번도 없습니다 — 아직 이관되지 않았습니다(⚪). 매주 월요일 담당에게 「이관 받을 곳」 목록으로 알립니다.',
     none: '이어진 네이버 계정이 없습니다. 전산 광고주 관리에 네이버 고객 번호가 적혀 있는지, 아래 짝 확인 줄이 있는지 봅니다.',

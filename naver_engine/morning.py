@@ -514,6 +514,39 @@ def run_morning(reader: N.NaverReader, store: S.Store, clock: Callable[[], datet
         return _refused((CODE_TOO_EARLY,))
     if now >= deadline:
         return _refused((CODE_AFTER_DEADLINE,))
+    return _run(reader, store, clock, now, today, deadline, th, switches, enabled)
+
+
+def run_requested(reader: N.NaverReader, store: S.Store, clock: Callable[[], datetime], *,
+                  max_seconds: int = 600, deadline: Optional[datetime] = None,
+                  th: Thresholds = DEFAULTS, switches: Optional[Mapping[str, bool]] = None) -> MorningOutcome:
+    """승인된 단발 당일 읽기. 예약 창만 달리하며 준비·재시도·하루 상한·대상 규칙은 보존한다.
+
+    승인/단회 실행은 runtime bootstrap 경계에서 검증한다. 가짜 아침 시각을 만들지 않는다.
+    전송의 남은 시간 제한은 부르는 쪽의 bounded clock/transport도 함께 적용해야 한다.
+    """
+    now = _need_time(clock())
+    L._need_fresh_naver(reader)
+    if type(max_seconds) is not int or not 1 <= max_seconds <= 600:
+        raise ValueError("요청 시간은 1~600초여야 합니다")
+    today = now.astimezone(S.KST).date()
+    end_of_day = datetime.combine(today + timedelta(days=1), time.min, tzinfo=S.KST)
+    limit = min(now + timedelta(seconds=max_seconds), end_of_day)
+    if deadline is not None:
+        deadline = _need_time(deadline)
+        if deadline > limit:
+            raise ValueError("요청 마감은 당일 제한 시간을 넘을 수 없습니다")
+        limit = deadline
+    if now >= limit:
+        return _refused((CODE_AFTER_DEADLINE,))
+    runs = _runs_today(store, today)
+    ends = [Y._aware(r["finished_at"]) for r in runs if r["finished_at"]]
+    if any(end is not None and now - end < RETRY_AFTER for end in ends):
+        return _refused(("RETRY_NOT_DUE",))
+    return _run(reader, store, clock, now, today, limit, th, switches, _enabled(switches))
+
+
+def _run(reader, store, clock, now, today, deadline, th, switches, enabled):
     pre: List[str] = []
     for rid in store.my_running_runs():   # 앞 회차가 죽으면서 닫지도 못함 — 한 번에 하나만 돌므로 지금 닫는다
         store.finish_run(rid, S.RUN_FAILED, now, error_kind=CODE_RUN_ORPHANED)
@@ -688,5 +721,5 @@ def _body(reader, store: S.Store, clock, run_id: int, pairing_id: int, today: da
     return S.RUN_DONE, (CODE_DEADLINE_CUT if CODE_DEADLINE_CUT in codes else None)
 
 
-__all__ = ("run_morning", "morning_due", "readiness", "MorningOutcome", "Readiness", "window", "complete_through",
+__all__ = ("run_morning", "run_requested", "morning_due", "readiness", "MorningOutcome", "Readiness", "window", "complete_through",
            "reconcile", "read_account", "account_input", "yesterday_stats")
