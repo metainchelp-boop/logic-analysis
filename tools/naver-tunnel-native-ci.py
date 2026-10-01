@@ -293,11 +293,16 @@ def exercise(root, processes):
             user=10001, group=10001, extra_groups=[])
 
         stage("ssh-denials")
-        probe = client_args + ["-o", "ClearAllForwardings=yes", "-o", "SessionType=default", "-T"]
-        for args in ([ACCOUNT, "id"], ["-s", ACCOUNT, "sftp"]):
+        probe = client_args + ["-v", "-o", "ClearAllForwardings=yes", "-o", "SessionType=default", "-T"]
+        for name, args in (("exec", [ACCOUNT, "id"]), ("sftp", ["-s", ACCOUNT, "sftp"])):
+            stage("ssh-denial-" + name)
             refused = run(probe + args, data=b"", expected=None)
-            check(refused.returncode == 255 and b"administratively prohibited" in refused.stderr)
+            # MaxSessions=0 can report "open failed" rather than "administratively prohibited".
+            # Authentication must have succeeded; a bad key/host error is not denial evidence.
+            check(refused.returncode == 255 and b"Authenticated to " in refused.stderr
+                  and b"channel 0: open failed:" in refused.stderr)
         for destination in (f"127.0.0.1:{fixture.server_port}", "localhost:18081", "127.0.0.1:22"):
+            stage("ssh-denial-other-destination")
             refused = run(client_args + ["-o", "ClearAllForwardings=yes", "-W", destination, ACCOUNT],
                           data=b"GET / HTTP/1.1\r\nHost: fixture\r\n\r\n", expected=None)
             check(refused.returncode == 255 and b"administratively prohibited" in refused.stderr)
@@ -305,6 +310,7 @@ def exercise(root, processes):
         remote_config = root / "ssh-remote-probe.conf"
         write(remote_config, "\n".join(line for line in rendered.splitlines()
                                         if not line.strip().startswith("LocalForward ")) + "\n")
+        stage("ssh-denial-remote-forward")
         refused = run(["ssh", "-F", str(remote_config), "-o", "ExitOnForwardFailure=yes",
                       "-R", "127.0.0.1:19081:127.0.0.1:18081", "-N", "-T", ACCOUNT], expected=None)
         check(refused.returncode == 255 and b"remote port forwarding failed" in refused.stderr)
