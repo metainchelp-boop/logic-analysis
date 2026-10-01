@@ -32,6 +32,25 @@ server {
 
 
 class CandidateTest(unittest.TestCase):
+    def test_known_shared_host_and_certbot_ssl_include_keep_legacy_root(self):
+        body = CONFIG.replace(b'server_name dashboard.metainc.co.kr;',
+                              b'server_name ad.metainc.co.kr dashboard.metainc.co.kr;')
+        body = body.replace(b'    location / {', b'    include /etc/letsencrypt/options-ssl-nginx.conf;\n    location / {')
+        ssl = b'ssl_session_cache shared:le_nginx_SSL:10m;\nssl_protocols TLSv1.2 TLSv1.3;\nssl_session_tickets off;'
+        result = M.build_config(body, ssl_include=ssl)
+        self.assertEqual(result.count(b'if ($host != dashboard.metainc.co.kr) { return 404; }'), 4)
+        self.assertIn(b'proxy_pass http://127.0.0.1:5051;', result)
+        self.assertIn(b'include /etc/letsencrypt/options-ssl-nginx.conf;', result)
+        for unsafe in (b'include /etc/other.conf;', b'access_log /tmp/requests;',
+                       b'ssl_certificate /tmp/unreviewed;', b'ssl_ciphers $untrusted;',
+                       b'location / { return 200; }'):
+            with self.subTest(unsafe=unsafe), self.assertRaises(ValueError):
+                M.build_config(body, ssl_include=unsafe)
+        with self.assertRaises(ValueError):
+            M.build_config(body)
+        with self.assertRaises(ValueError):
+            M.build_config(body.replace(b'ad.metainc.co.kr ', b'unapproved.example '), ssl_include=ssl)
+
     def test_only_dashboard_tls_gains_exact_and_delimited_naver_routes(self):
         candidate = M.build_config(CONFIG)
         self.assertIn(CONFIG.split(b'server {', 2)[1], candidate)

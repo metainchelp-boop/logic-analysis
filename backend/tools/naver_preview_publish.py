@@ -14,6 +14,7 @@ CONFIG = Path('/etc/nginx/sites-enabled/ad.metainc.co.kr')
 NGINX_ROOT = Path('/etc/nginx')
 ROOT = Path('/srv/metainc/ad-deploy-staging')
 HOSTNAME = 'dashboard.metainc.co.kr'
+SSL_INCLUDE = Path('/etc/letsencrypt/options-ssl-nginx.conf')
 MARKER = '# metainc-naver-owner-preview-v1'
 MAX_CONFIG = 1024 * 1024
 
@@ -120,13 +121,28 @@ def _tls_servers(nodes):
             continue
         listeners = [n[0][1:] for n in node[3] if n[0][0] == 'listen']
         if any('ssl' in row and re.search(r'(?:^|:)443$', row[0]) for row in listeners if row):
-            if names != [[HOSTNAME]]:
+            if len(names) != 1 or names[0] not in ([HOSTNAME], ['ad.metainc.co.kr', HOSTNAME]):
                 raise ValueError('TLS_SERVER_ALIASES')
             found.append(node)
     return found
 
 
-def build_config(body):
+def validate_ssl_include(body):
+    if not isinstance(body, bytes) or not 0 < len(body) <= 8192:
+        raise ValueError('SSL_INCLUDE_SIZE')
+    allowed = {'ssl_session_cache', 'ssl_session_timeout', 'ssl_session_tickets',
+               'ssl_protocols', 'ssl_prefer_server_ciphers', 'ssl_ciphers'}
+    nodes = _parse(body.decode('utf-8'))
+    if not nodes:
+        raise ValueError('SSL_INCLUDE_EMPTY')
+    for words, _, _, children in nodes:
+        if children is not None or words[0] not in allowed or len(words) < 2 or any(
+                not re.fullmatch(r'[A-Za-z0-9_:!+@.\-]+', value) for value in words[1:]):
+            raise ValueError('SSL_INCLUDE_DIRECTIVE')
+    return sha(body)
+
+
+def build_config(body, *, ssl_include=None):
     if not isinstance(body, bytes) or not 0 < len(body) <= MAX_CONFIG:
         raise ValueError('CONFIG_SIZE')
     text = body.decode('utf-8')
@@ -144,7 +160,9 @@ def build_config(body):
         raise ValueError('LEGACY_ROOT_NOT_EXACT')
     for words, _, _, _ in _walk(direct):
         if words[0] == 'include':
-            raise ValueError('UNREVIEWED_INCLUDE')
+            if words != ['include', str(SSL_INCLUDE)]:
+                raise ValueError('UNREVIEWED_INCLUDE')
+            validate_ssl_include(ssl_include)
         if words[0] == 'location' and (any('naver' in word.lower() for word in words[1:])
                 or any(word in ('~', '~*') for word in words[1:])):
             raise ValueError('LOCATION_CONFLICT')
@@ -157,6 +175,7 @@ def build_config(body):
     snippet = '\n    '+MARKER+'\n    access_log off;\n    error_log /dev/null crit;\n'
     for route in ('= /naver', '^~ /naver/', '= /api/naver-auto', '^~ /api/naver-auto/'):
         snippet += '''    location %s {
+        if ($host != dashboard.metainc.co.kr) { return 404; }
         proxy_pass http://unix:/run/metainc/naver-relay/relay.sock:;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -249,6 +268,11 @@ class NativeSystem:
     def read_private(self, path):
         return _read_regular(path, private=True)[0]
 
+    def ssl_include(self):
+        body = _read_regular(SSL_INCLUDE)[0]
+        validate_ssl_include(body)
+        return body
+
     def new_private(self, path, body):
         path = Path(path)
         _trusted_directory(path.parent, private=True)
@@ -336,7 +360,8 @@ def _preflight(package, host, system, *, discovery=False):
     target, original = system.config()
     if package.get('nginx_sha256') and sha(original) != package['nginx_sha256']:
         raise ValueError('CONFIG_CHANGED')
-    candidate = build_config(original)
+    ssl_include = system.ssl_include() if str(SSL_INCLUDE).encode() in original else None
+    candidate = build_config(original, ssl_include=ssl_include)
     effective = system.command(['nginx', '-T']).decode('utf-8')
     sections = re.split(r'(?m)^# configuration file ([^\n]+):\n', effective)
     loaded = [sections[i+1] for i in range(1, len(sections), 2)
@@ -354,6 +379,8 @@ def _preflight(package, host, system, *, discovery=False):
                'routes': ['/naver', '/naver/', '/api/naver-auto', '/api/naver-auto/'],
                'legacy_root_unchanged': True, 'request_logs_disabled': True,
                'public_access_verified': False}
+    if ssl_include is not None:
+        summary['ssl_include_sha256'] = sha(ssl_include)
     return summary, original, candidate
 
 
@@ -378,7 +405,8 @@ def inspect(package, host, *, system=None):
         details.append({key:[n[0][1:] for n in _walk(node[3]) if n[0][0]==key]
                         for key in ('server_name','listen','include','access_log','error_log','location','proxy_pass')})
     try:
-        candidate=build_config(original);error=None;digest=sha(candidate)
+        ssl_include = system.ssl_include() if str(SSL_INCLUDE).encode() in original else None
+        candidate=build_config(original, ssl_include=ssl_include);error=None;digest=sha(candidate)
     except ValueError as failure:
         error=str(failure);digest=None
     return {'ok':True,'mode':'inspect','mutations':0,'target':target,'original_sha256':sha(original),
@@ -436,7 +464,8 @@ def rollback(package, host, *, system=None):
         original = system.read_private(before_path)
         if (manifest.get('package') != package or manifest.get('before_sha256') != sha(original)
                 or sha(original) != package['nginx_sha256']
-                or manifest.get('candidate_sha256') != sha(build_config(original))):
+                or manifest.get('candidate_sha256') != sha(build_config(original,
+                    ssl_include=system.ssl_include() if str(SSL_INCLUDE).encode() in original else None))):
             raise ValueError('ROLLBACK_PROVENANCE')
         _restore(system, manifest['target'], manifest['candidate_sha256'], original)
         return {'ok': True, 'mode': 'rollback', 'source_commit': package['source_commit'],

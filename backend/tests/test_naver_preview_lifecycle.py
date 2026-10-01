@@ -40,7 +40,7 @@ class UnitTest(unittest.TestCase):
 
 
 class LifecycleTest(unittest.TestCase):
-    def scenario(self, *, failure=None, cleanup_failure=None, prior='disabled', drift=False):
+    def scenario(self, *, failure=None, cleanup_failure=None, prior='disabled', drift=False, container_drift=False):
         package = dict(baseline='a'*64, source_commit='b'*40, ciphertext_sha256='c'*64,
                        source_tar_gz_sha256='d'*64, run_id='123456', operation='start')
         calls, enabled, active = [], {M.TUNNEL: prior}, {M.TUNNEL: 'active', 'docker.service': 'active'}
@@ -81,8 +81,9 @@ class LifecycleTest(unittest.TestCase):
                     output = ('1' if args[3] == 'naver-engine' else '2')*64
                 elif args[:2] == ['docker', 'inspect']:
                     name = 'engine' if args[-1] == '1'*64 else 'relay'
+                    started_at = 'changed' if container_drift and active.get(M.UNITS[0]) == 'active' else 'initial'
                     output = json.dumps(dict(id=args[-1], image='sha256:'+'e'*64, running=True,
-                                             started='initial', restarts=0, project='naver-'+name, service='naver-'+name))
+                                             started=started_at, restarts=0, project='naver-'+name, service='naver-'+name))
                 elif args[0] == '/usr/bin/systemctl':
                     action = args[1]
                     if action == 'show':
@@ -161,6 +162,18 @@ class LifecycleTest(unittest.TestCase):
         self.assertEqual(str(result), 'CONTAINER_BASELINE_CHANGED')
         self.assertTrue(all(active[unit] == 'inactive' for unit in M.UNITS))
         self.assertEqual(enabled[M.TUNNEL], 'disabled')
+
+    def test_changed_new_container_started_at_is_not_reported_as_a_safe_attachment(self):
+        result, _, enabled, active = self.scenario(container_drift=True)
+        self.assertEqual(str(result), 'CONTAINER_BASELINE_CHANGED')
+        self.assertTrue(all(active[unit] == 'inactive' for unit in M.UNITS))
+        self.assertEqual(enabled[M.TUNNEL], 'disabled')
+
+    def test_module_can_be_loaded_without_file_attribute(self):
+        module = types.ModuleType('memory_lifecycle')
+        exec(compile(SPEC.loader.get_source('lifecycle'), '<approved-lifecycle>', 'exec'), module.__dict__)
+        self.assertNotIn('__file__', module.__dict__)
+        self.assertEqual(module.UNITS, M.UNITS)
 
 
 if __name__ == '__main__':
