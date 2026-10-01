@@ -372,7 +372,9 @@ def match(prospects: Sequence[ErpProspect], credentials: Iterable[ErpCredential]
                 why = B_IDENTIFIER_CONFLICT
             if why is not None:
                 held_claims.update((pid, v) for v in (cid, target) if v in cids)
-                previous = (previous_ad_accounts or {}).get(ad_no) if why == B_AD_NOT_LINKED else None
+                previous = None
+                if why == B_AD_NOT_LINKED and previous_ad_accounts is not None:
+                    previous = previous_ad_accounts.get(ad_no)
                 if previous is not None:
                     previous = _cid(previous)
                     if previous in cids:
