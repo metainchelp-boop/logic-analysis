@@ -16,7 +16,7 @@
 
 소켓은 AD `/run/metainc-naver-erp-tunnel/erp.sock`, 폴더 root:10001 0750, 소켓 root:10001 0660입니다. 엔진의 UID/GID 10001와 그룹 구성, host의 같은 GID에 불필요한 다른 사용자가 없는지 확인합니다. 엔진 mount는 **폴더** `/run/metainc-naver-erp-tunnel` → `/run/naver-erp-tunnel:ro`, `create_host_path: false`입니다. 이 mount는 별도 Compose 후보에서 검증하며 여기서는 실제 Compose를 바꾸지 않습니다.
 
-systemd 249의 숫자 Group에도 GID 10001 그룹 항목이 필요합니다. 기존 이름/GID/사용자가 없을 때만 전용 그룹을 생성하고 기존 그룹은 변경하지 않습니다. 서비스의 ExecStartPre는 같은 cgroup 안에서 BE 숫자 IPv4의 22번 TCP 접속 성공과 loopback 22번의 EACCES/EPERM 거절을 매번 확인합니다. 두 조건이 충족되지 않으면 SSH를 시작하지 않습니다. timeout은 필터 적용 성공으로 간주하지 않습니다. probe는 root:root 0600이며 인증·업무 호출·표준출력을 하지 않습니다. 설치 전 unit 밖의 loopback 22 접속 성공도 대조합니다. 구현 원본은 별도 관리 저장소 `logic-analysis/backend/tools/naver_erp_tunnel_bpf_preflight.py`이며 서버 설치와 앱 연결 검증은 별개입니다.
+systemd 249의 숫자 Group에도 GID 10001 그룹 항목이 필요합니다. 기존 이름/GID/사용자가 없을 때만 전용 그룹을 생성하고 기존 그룹은 변경하지 않습니다. 서비스의 ExecStartPre는 같은 cgroup 안에서 BE 숫자 IPv4의 22번 TCP 접속 성공과 loopback 22번의 EACCES/EPERM 또는 TCP timeout을 확인합니다. timeout은 후속 검증에 진입하는 조건일 뿐 필터 적용 성공 증거가 아닙니다. 설치·활성화 완료에는 unit 밖 두 주소의 전후 양성 대조, 실제 unit/PID/cgroup 및 동일 네트워크 namespace, 정확 IPAddressAllow/Deny와 ingress/egress BPF 직접 부착, 소켓 소유권, 소켓→nginx→앱의 무인증 4 route 403·기타 route 400, 기존 앱 기준선 유지가 모두 필요합니다. BPF 조회 권한 거절이나 어느 검증 실패도 신규 서비스 중지로 끝나며 정책을 완화하지 않습니다. probe는 root:root 0600이며 인증·업무 호출·표준출력을 하지 않습니다. 구현 원본은 별도 관리 저장소 `logic-analysis/backend/tools/naver_erp_tunnel_bpf_preflight.py`이며 서버 설치와 인증된 업무 조회·화면 배포는 별개입니다.
 
 ## 설치 전 필수 게이트
 
