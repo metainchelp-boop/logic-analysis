@@ -97,7 +97,7 @@ jobs:
           script: |
             set -eu
             python3 - <<'PY'
-            import base64, grp, hashlib, ipaddress, json, os, pathlib, pwd, re, shutil, stat, subprocess
+            import base64, grp, hashlib, ipaddress, json, os, pathlib, pwd, re, shutil, socket, stat, subprocess
 
             # 공개 실행 로그: 환경·키·DB·앱 로그를 읽지 않고 Docker 메타데이터만 선택한다.
             def command(args):
@@ -175,6 +175,100 @@ jobs:
                                 'bpffs_directory_exists': pathlib.Path('/sys/fs/bpf').is_dir(),
                                 'runtime_enforcement_verified': False,
                                 'assessment': 'read_only_indicators_only'}}
+
+            def tunnel_public_file_metadata(path):
+                result = metadata(path)
+                result['sha256'] = None
+                if not result['exists'] or result['symlink'] or result['directory']:
+                    return result
+                try:
+                    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                    try:
+                        item = os.fstat(fd)
+                        if not stat.S_ISREG(item.st_mode) or item.st_uid != 0 or item.st_nlink != 1 or item.st_size > 262144:
+                            return result
+                        body = os.read(fd, 262145)
+                        if len(body) == item.st_size:
+                            result['sha256'] = hashlib.sha256(body).hexdigest()
+                    finally:
+                        os.close(fd)
+                except OSError:
+                    pass
+                return result
+
+            def tunnel_service_diagnostics():
+                unit = 'metainc-naver-erp-tunnel.service'
+                fields = ('ActiveState', 'SubState', 'Result', 'ExecMainCode', 'ExecMainStatus', 'NRestarts')
+                state = {name: None for name in fields}
+                prestart = {'code': None, 'status': None}
+                shown = probe(['systemctl', 'show', unit, '--no-pager',
+                               '--property=' + ','.join(fields + ('ExecStartPre',))])
+                if shown:
+                    for line in shown.stdout.splitlines():
+                        name, _, value = line.partition('=')
+                        if name in fields:
+                            if name in ('ExecMainCode', 'ExecMainStatus', 'NRestarts'):
+                                state[name] = int(value) if re.fullmatch(r'[0-9]{1,10}', value) else None
+                            elif re.fullmatch(r'[a-z-]{1,40}', value):
+                                state[name] = value
+                        elif name == 'ExecStartPre':
+                            code = re.search(r'(?:^|[; ])code=(exited|killed|dumped|[0-9]+)(?:[; ]|$)', value)
+                            status = re.search(r'(?:^|[; ])status=([0-9]{1,5})(?:[; /}]|$)', value)
+                            if code:
+                                raw = code.group(1)
+                                prestart['code'] = int(raw) if raw.isdigit() else {'exited': 1, 'killed': 2, 'dumped': 3}[raw]
+                            prestart['status'] = int(status.group(1)) if status else None
+                patterns = {'exec': r'\bEXEC\b', 'group': r'\bGROUP\b', 'namespace': r'\bNAMESPACE\b',
+                            'ip_address': r'IPAddress', 'bpf': r'\bBPF\b',
+                            'permission': r'permission|operation not permitted',
+                            'exit_status': r'exit[- ](?:code|status)|status=[0-9]'}
+                counts = {name: 0 for name in patterns}
+                journal = probe(['journalctl', '--unit=' + unit, '-n', '30', '-o', 'json', '--no-pager'])
+                parsed = 0
+                if journal:
+                    for line in journal.stdout.splitlines()[:30]:
+                        try:
+                            row = json.loads(line)
+                            message = row.get('MESSAGE', '')
+                            if not isinstance(message, str):
+                                continue
+                            parsed += 1
+                            for name, pattern in patterns.items():
+                                counts[name] += bool(re.search(pattern, message, re.IGNORECASE))
+                        except (ValueError, TypeError, AttributeError):
+                            pass
+                tcp = {}
+                # 각 목적지 1회·2초, 인증/전송 없이 연결만 닫는다. unit 실행/정책 변경 없음.
+                for name, address in (('be_ssh', '1.234.23.117'), ('loopback_ssh', '127.0.0.1')):
+                    try:
+                        with socket.create_connection((address, 22), timeout=2):
+                            pass
+                        tcp[name] = {'success': True, 'errno': None}
+                    except OSError as error:
+                        tcp[name] = {'success': False, 'errno': error.errno if isinstance(error.errno, int) else None}
+                try:
+                    group = grp.getgrgid(10001)
+                    group_info = {'exists': True, 'gid': group.gr_gid,
+                                  'name_matches_expected': group.gr_name == 'metainc-naver-erp-tunnel',
+                                  'explicit_member_count': len(group.gr_mem)}
+                except KeyError:
+                    group_info = {'exists': False}
+                python = {'link': metadata('/usr/bin/python3'), 'target': None, 'executable': None}
+                try:
+                    target = pathlib.Path('/usr/bin/python3').resolve(strict=True)
+                    python.update(target=metadata(target), executable=os.access(str(target), os.X_OK))
+                except OSError:
+                    pass
+                return {'state': state, 'exec_start_pre': prestart,
+                        'journal': {'available': journal is not None, 'parsed_rows': parsed, 'pattern_counts': counts},
+                        'files': {name: tunnel_public_file_metadata(path) for name, path in (
+                            ('unit', '/etc/systemd/system/' + unit),
+                            ('ssh_config', '/etc/metainc/naver-erp-tunnel/ssh_config'),
+                            ('known_hosts', '/etc/metainc/naver-erp-tunnel/known_hosts'),
+                            ('bpf_probe', '/etc/metainc/naver-erp-tunnel/bpf_preflight.py'))},
+                        'runtime': metadata('/run/metainc-naver-erp-tunnel'),
+                        'socket': metadata('/run/metainc-naver-erp-tunnel/erp.sock'),
+                        'group': group_info, 'python': python, 'tcp_once': tcp}
 
             def inspect():
                 names = command(['docker', 'ps', '-a', '--format', '{{.Names}}']).splitlines()
@@ -378,6 +472,7 @@ jobs:
                     report = prepare(report, os.environ.get('AD_EXPECTED_BASELINE', ''))
                 else:
                     report['tunnel_preflight'] = tunnel_preflight()
+                    report['tunnel_service'] = tunnel_service_diagnostics()
                     if baseline(inspect()) != report['baseline_sha256']:
                         raise RuntimeError('container_changed_during_inspection')
                     report['containers_unchanged'] = True

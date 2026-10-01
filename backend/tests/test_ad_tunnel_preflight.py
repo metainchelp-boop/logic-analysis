@@ -41,7 +41,7 @@ class TunnelPreflightTests(unittest.TestCase):
         inspect = Mock(side_effect=[report, after])
         tunnel = Mock(return_value={"synthetic": True})
         prepare = Mock(return_value={"mode": "prepare", "containers_unchanged": True})
-        ns.update(inspect=inspect, tunnel_preflight=tunnel, prepare=prepare, created=[],
+        ns.update(inspect=inspect, tunnel_preflight=tunnel, tunnel_service_diagnostics=lambda: {}, prepare=prepare, created=[],
                   os=SimpleNamespace(environ={"AD_PREPARE_MODE": mode, "AD_EXPECTED_BASELINE": "a" * 64}))
         last = ast.parse(source()).body[-1]
         self.assertIsInstance(last, ast.Try)
