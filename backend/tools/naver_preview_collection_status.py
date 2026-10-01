@@ -276,6 +276,18 @@ except Exception:
     return '\n'.join(parts).encode()
 
 
+def docker_stamp(value):
+    """Docker RFC3339 nanoseconds/Z -> Python 3.8-compatible ISO, without loose parsing."""
+    match = re.fullmatch(r'([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(?:\.([0-9]{1,9}))?(Z|[+-][0-9]{2}:[0-9]{2})', value) if isinstance(value, str) else None
+    if match is None:
+        raise ValueError('COLLECTION_TIME')
+    normalized = match.group(1)
+    if match.group(2) is not None:
+        normalized += '.' + (match.group(2) + '000000')[:6]
+    normalized += '+00:00' if match.group(3) == 'Z' else match.group(3)
+    return stamp(normalized)
+
+
 def compose_version(release):
     try:
         raw = release.command(['docker', 'compose', 'version', '--short'], timeout=3)
@@ -374,7 +386,7 @@ def run(package, host, release):
     values = project(json.loads(raw, object_pairs_hook=release.unique))
     lifecycle = lifecycle_status(release)
     version = compose_version(release)
-    engine_state = {'started_at': stamp(before.get('started')),
+    engine_state = {'started_at': docker_stamp(before.get('started')),
                     'oom_killed': before.get('oom_killed') if type(before.get('oom_killed')) is bool else None}
     STAGE = 'postflight'
     if container() != before or host.baseline() != package['baseline']:

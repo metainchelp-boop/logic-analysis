@@ -10,6 +10,7 @@ import types
 from pathlib import Path
 import unittest
 from unittest.mock import Mock, patch
+from datetime import datetime
 
 SPEC = importlib.util.spec_from_file_location('collection_status', Path(__file__).parents[1]/'tools/naver_preview_collection_status.py')
 M = importlib.util.module_from_spec(SPEC)
@@ -17,6 +18,22 @@ SPEC.loader.exec_module(M)
 
 
 class CollectionTest(unittest.TestCase):
+    def test_docker_nanosecond_z_timestamp_is_normalized_before_legacy_host_parser(self):
+        class LegacyDatetime:
+            @staticmethod
+            def fromisoformat(value):
+                if value.endswith('Z') or ('.' in value and len(value.split('.')[1].split('+')[0]) > 6):
+                    raise ValueError('legacy parser rejects Docker timestamp')
+                return datetime.fromisoformat(value)
+        with patch.object(M, 'datetime', LegacyDatetime):
+            self.assertEqual(M.docker_stamp('2026-10-01T06:23:45.123456789Z'), '2026-10-01T06:23:45.123456+00:00')
+            self.assertEqual(M.docker_stamp('2026-10-01T06:23:45.1Z'), '2026-10-01T06:23:45.100000+00:00')
+            self.assertEqual(M.docker_stamp('2026-10-01T06:23:45Z'), '2026-10-01T06:23:45+00:00')
+        for value in ('SECRET', '2026-10-01', '2026-10-01T06:23:45.1234567890Z',
+                      '2026-10-01T06:23:45Z SECRET', '2026-13-01T06:23:45Z', None):
+            with self.assertRaisesRegex(ValueError, 'COLLECTION_TIME'):
+                M.docker_stamp(value)
+
     def test_compose_version_diagnostics_never_export_freeform(self):
         release = Mock()
         for raw, want in ((b'2.39.4\n', '2.39.4'), (b'v2.39.4-desktop.2\n', '2.39.4-desktop.2'),
