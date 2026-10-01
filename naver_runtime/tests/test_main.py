@@ -117,16 +117,18 @@ class MainTest(TestCase):
         self.assertEqual(events, ["web_open", "bootstrap", "tick"])
 
     def test_bootstrap_transport_caps_timeout_and_refuses_after_budget(self):
-        from datetime import timedelta
-        from naver_engine.tests.fake_naver import FakeClock
-        from naver_engine.tests.test_requested import NOW
-        base = FakeClock(NOW)
-        bounded = main.B.BootstrapClock(base, 2, NOW + timedelta(seconds=10))
+        from datetime import datetime, timedelta, timezone
+        now = datetime(2026, 10, 1, 14, tzinfo=timezone(timedelta(hours=9)))
+        base = Mock()
+        base.now.return_value = now
+        base.monotonic.return_value = 0
+        bounded = main.B.BootstrapClock(base, 2, now + timedelta(seconds=10))
         transport = Mock()
         wrapped = main.StopAwareTransport(bounded, transport)
         wrapped.send("synthetic", 20)
         transport.send.assert_called_once_with("synthetic", 2)
-        base.advance(2)
+        base.now.return_value = now + timedelta(seconds=2)
+        base.monotonic.return_value = 2
         with self.assertRaises(main.N.RunAbort):
             wrapped.send("synthetic", 20)
         self.assertEqual(transport.send.call_count, 1)

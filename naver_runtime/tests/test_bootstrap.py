@@ -188,7 +188,7 @@ class RealStoreBootstrapTest(TestCase):
             ads = Ads(transport)
             ads.cycle = NOW.replace(hour=5)
             ads.add(A, [(1, "ELIGIBLE", False, quiet)], biz=1000.0)
-            with Writer(data / "db", clock=clock.now) as writer:
+            with Writer(str(data / "db"), clock=clock.now) as writer:
                 writer.call(lambda st: st.record_org(org_payload(NOW), NOW))
                 snapshot = E.StageSnapshot({11: E.StageRow(11, "진행중", shop(11), None, False)}, NOW, {}, ())
                 hid = writer.call(lambda st: st.refuse_stages(snapshot, (B.Y.CODE_IMPLAUSIBLE_FIRST,)))
