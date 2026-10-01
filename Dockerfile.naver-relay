@@ -1,0 +1,26 @@
+# 기존 광고센터 앱/DB/수집기를 가져오지 않는 별도 관제 중계 이미지.
+FROM python:3.12-slim-trixie
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    TZ=Asia/Seoul
+
+COPY backend/requirements.txt /tmp/source-requirements.txt
+# 기존 의존성 계약 중 이 앱이 쓰는 웹 서버 두 항목만 설치한다.
+RUN sed -n '/^fastapi$/p; /^uvicorn\[standard\]$/p' /tmp/source-requirements.txt > /tmp/relay-requirements.txt \
+    && test "$(wc -l < /tmp/relay-requirements.txt)" -eq 2 \
+    && python -m pip install --no-cache-dir -r /tmp/relay-requirements.txt \
+    && groupadd --gid 10001 naver-relay \
+    && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin naver-relay
+
+WORKDIR /opt/naver-relay
+COPY backend/app/__init__.py ./app/__init__.py
+COPY backend/app/naver_entry.py ./app/naver_entry.py
+COPY backend/app/naver_relay.py ./app/naver_relay.py
+COPY backend/app/routers/__init__.py ./app/routers/__init__.py
+COPY backend/app/routers/naver.py ./app/routers/naver.py
+COPY backend/naver_page/ ./naver_page/
+
+USER 10001:10001
+# 상위 소켓 폴더는 배포자가 nginx와 UID10001만 접근하도록 준비한다. TCP 수신 없음.
+CMD ["python", "-m", "uvicorn", "app.naver_entry:app", "--uds", "/run/naver-relay/relay.sock", "--workers", "1", "--no-access-log", "--no-proxy-headers", "--no-server-header", "--lifespan", "off", "--log-level", "warning"]

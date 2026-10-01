@@ -57,6 +57,7 @@ class OwnerVerificationTest(TW.WebBase):
         token = body["token"]
         status, me, _, _ = self.call("GET", "/me", token)
         self.assertEqual((status, me["idx"], me["scope"]), (200, 0, TW.SC.ALL))
+        self.assertIs(me["owner_verification"], True)
         self.assertEqual(self.call("POST", "/session/refresh", token)[0], 200)
 
     def test_current_owner_role_is_required_for_every_request_and_refresh(self):

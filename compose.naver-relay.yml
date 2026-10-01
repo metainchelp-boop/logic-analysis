@@ -1,0 +1,46 @@
+# 기존 ③ compose/ad-api와 합치지 않는 관제 전용 중계 프로젝트.
+name: naver-relay
+
+services:
+  naver-relay:
+    image: metainc/naver-relay:local-review
+    build:
+      context: .
+      dockerfile: Dockerfile.naver-relay
+    user: "10001:10001"
+    init: true
+    restart: "no"
+    read_only: true
+    network_mode: none
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777
+    cpus: "0.50"
+    mem_limit: 256m
+    pids_limit: 32
+    stop_grace_period: 35s
+    environment:
+      TZ: Asia/Seoul
+      NAVER_AUTO_WEB: ${NAVER_AUTO_WEB:-off}
+      NAVER_AUTO_ENGINE: unix:/run/naver-engine/engine.sock
+    volumes:
+      # Uvicorn 소켓은 0666이므로 호스트 폴더에서 nginx·UID10001 외 접근을 제한한다.
+      # 폴더 소유/접근권한은 배포자가 먼저 준비하며 컨테이너가 호스트 경로를 만들지 않는다.
+      - type: bind
+        source: ${NAVER_RELAY_SOCKET_DIR:-/run/metainc/naver-relay}
+        target: /run/naver-relay
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${NAVER_ENGINE_SOCKET_DIR:-/run/metainc/naver-engine}
+        target: /run/naver-engine
+        read_only: true
+        bind:
+          create_host_path: false
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+    # TCP 포트·외부 네트워크·DB·기존 광고센터 데이터·운영 인증값 마운트 없음.

@@ -14,6 +14,14 @@ on:
         description: 'restore 전용: 수신 서버에서 읽은 합성 암호문과 해시·크기·일자 JSON. 키/운영자료 금지'
         required: false
         default: ''
+      preview_seal:
+        description: '승인된 대표 검증판 소스·실행 자격 봉인만. 서버 연결·설치 없음. backup_acceptance=none 필수'
+        type: boolean
+        default: false
+      server_envelope_cert_pem:
+        description: 'preview_seal 전용 목적 서버 RSA 공개 인증서 PEM(4KiB 이하). 개인키 금지'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -23,8 +31,55 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/codex/naver-backup-recovery-20261001' }}
 
 jobs:
+  preview-seal:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/naver-backup-recovery-20261001' && inputs.preview_seal == true && inputs.backup_acceptance == 'none' && inputs.received_synthetic_json == ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: 승인된 커밋 받기 (자격 저장 없음)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: 공개 입력·합성 봉인 검증 (실행 자격 미주입)
+        env:
+          PUBLIC_CERTIFICATE: ${{ inputs.server_envelope_cert_pem }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -euo pipefail
+          python -c 'import os; s=os.environ["PUBLIC_CERTIFICATE"]; assert 0 < len(s.encode()) <= 4096 and "PRIVATE KEY" not in s'
+          python -m pip install --disable-pip-version-check 'cryptography==46.0.3'
+          python -m unittest discover -s tools -p test_naver_preview_seal.py -v
+          mkdir -m 700 "$RUNNER_TEMP/preview-seal-private"
+      - name: 목적 서버 공개키로 봉인 (평문 산출물·전송·복호화 없음)
+        env:
+          PREVIEW_SEAL_INPUTS: ${{ toJSON(inputs) }}
+          PREVIEW_SEAL_OUTPUT: ${{ runner.temp }}/preview-seal-private/output
+          PYTHONDONTWRITEBYTECODE: '1'
+          SSO_NAVER_CONTROL_CLIENT_KEY: ${{ secrets.SSO_NAVER_CONTROL_CLIENT_KEY }}
+          NAVER_ENGINE_ERP_KEY: ${{ secrets.NAVER_ENGINE_ERP_KEY }}
+          NAVER_AUTO_TOKEN_SECRET: ${{ secrets.NAVER_AUTO_TOKEN_SECRET }}
+          NAVER_MGR_CUSTOMER_ID: ${{ secrets.NAVER_MGR_CUSTOMER_ID }}
+          NAVER_MGR_API_KEY: ${{ secrets.NAVER_MGR_API_KEY }}
+          NAVER_MGR_SECRET_KEY: ${{ secrets.NAVER_MGR_SECRET_KEY }}
+          NAVER_BACKUP_RECIPIENT_CERT_PEM: ${{ secrets.NAVER_BACKUP_RECIPIENT_CERT_PEM }}
+          NAVER_BACKUP_UPLOAD_SSH_PRIVATE_KEY: ${{ secrets.NAVER_BACKUP_UPLOAD_SSH_PRIVATE_KEY }}
+          NAVER_BACKUP_KNOWN_HOSTS: ${{ secrets.NAVER_BACKUP_KNOWN_HOSTS }}
+        run: python tools/naver-preview-seal.py
+      - name: 암호문과 비밀값 없는 지문만 보관 (출처 인증은 별도 관리 경로)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: naver-preview-seal-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/preview-seal-private/output/runtime-secrets.cms
+            ${{ runner.temp }}/preview-seal-private/output/receipt.json
+          retention-days: 1
+          if-no-files-found: error
   backup-probe:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/naver-backup-recovery-20261001' && inputs.backup_acceptance == 'probe'
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/naver-backup-recovery-20261001' && inputs.backup_acceptance == 'probe' && !inputs.preview_seal && inputs.server_envelope_cert_pem == ''
     runs-on: ubuntu-24.04
     timeout-minutes: 3
     steps:
@@ -42,7 +97,7 @@ jobs:
         run: python3 tools/naver-backup-acceptance.py
 
   backup-transfer:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/naver-backup-recovery-20261001' && inputs.backup_acceptance == 'transfer'
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/naver-backup-recovery-20261001' && inputs.backup_acceptance == 'transfer' && !inputs.preview_seal && inputs.server_envelope_cert_pem == ''
     runs-on: ubuntu-24.04
     timeout-minutes: 8
     steps:
@@ -69,7 +124,7 @@ jobs:
           if-no-files-found: error
 
   backup-recovery:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/naver-backup-recovery-20261001' && (inputs.backup_acceptance == 'keys' || inputs.backup_acceptance == 'restore')
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/naver-backup-recovery-20261001' && (inputs.backup_acceptance == 'keys' || inputs.backup_acceptance == 'restore') && !inputs.preview_seal && inputs.server_envelope_cert_pem == ''
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     environment: naver-backup-recovery
@@ -106,7 +161,7 @@ jobs:
 
   linux-tests:
     # 운영 수용 브랜치에서도 명시적 none 요청에만 비밀값 없는 개발 검사를 실행한다.
-    if: github.ref == 'refs/heads/codex/naver-runtime-20260930' || github.ref == 'refs/heads/codex/naver-shared-metrics-20260930' || github.ref == 'refs/heads/codex/naver-sso-20260930' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/naver-backup-recovery-20261001' && inputs.backup_acceptance == 'none' && inputs.received_synthetic_json == '')
+    if: ${{ !inputs.preview_seal && inputs.server_envelope_cert_pem == '' && (github.ref == 'refs/heads/codex/naver-runtime-20260930' || github.ref == 'refs/heads/codex/naver-shared-metrics-20260930' || github.ref == 'refs/heads/codex/naver-sso-20260930' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/naver-backup-recovery-20261001' && inputs.backup_acceptance == 'none' && inputs.received_synthetic_json == '')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     defaults:
@@ -192,6 +247,61 @@ jobs:
             | tee "$RUNNER_TEMP/naver-ci/image-id.txt"
           python tools/naver-runtime-image-test.py "naver-runtime-ci:$GITHUB_SHA" \
             | tee "$RUNNER_TEMP/naver-ci/image-compose-raw.txt"
+      - name: 별도 관제 중계 이미지·비루트·차단망·소켓 폴더 검사 (기존 앱 무접촉)
+        if: ${{ !cancelled() && steps.prepare.outcome == 'success' }}
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          python -m unittest tests.test_naver_relay_packaging -v
+          docker build --file Dockerfile.naver-relay --tag "naver-relay-ci:$GITHUB_SHA" .
+          relay_test_name="naver-relay-ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          relay_test_root="$RUNNER_TEMP/naver-relay-image"
+          mkdir -m 700 "$relay_test_root"
+          sudo install -d -o 10001 -g 10001 -m 750 "$relay_test_root/relay" "$relay_test_root/engine"
+          trap 'docker rm -f "$relay_test_name" >/dev/null 2>&1 || true' EXIT
+          docker run --detach --name "$relay_test_name" --network none --read-only --user 10001:10001 \
+            --cap-drop ALL --security-opt no-new-privileges:true --pids-limit 32 \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777 \
+            --mount "type=bind,source=$relay_test_root/relay,target=/run/naver-relay" \
+            --mount "type=bind,source=$relay_test_root/engine,target=/run/naver-engine,readonly" \
+            --env NAVER_AUTO_WEB=on --env NAVER_AUTO_ENGINE=unix:/run/naver-engine/engine.sock \
+            "naver-relay-ci:$GITHUB_SHA" >/dev/null
+          docker inspect "$relay_test_name" | python -c '
+          import json, sys
+          row = json.load(sys.stdin)[0]
+          assert row["Config"]["User"] == "10001:10001"
+          assert row["HostConfig"]["NetworkMode"] == "none"
+          assert row["HostConfig"]["ReadonlyRootfs"] is True
+          assert {(m["Destination"], m["RW"]) for m in row["Mounts"] if m["Type"] == "bind"} == {("/run/naver-relay", True), ("/run/naver-engine", False)}
+          print(json.dumps({"uid_config": 10001, "network_none": True, "readonly_root": True, "socket_mounts_only": True}))
+          ' | tee "$RUNNER_TEMP/naver-ci/relay-image-isolation.json"
+          docker exec -i "$relay_test_name" python - <<'RELAY_PROBE' | tee "$RUNNER_TEMP/naver-ci/relay-image-uds.json"
+          import http.client, json, os, socket, stat, time
+          assert os.geteuid() == 10001 and os.getegid() == 10001
+          for attempt in range(100):
+              if os.path.exists('/run/naver-relay/relay.sock'):
+                  break
+              time.sleep(0.1)
+          assert stat.S_ISSOCK(os.stat('/run/naver-relay/relay.sock').st_mode)
+          def request(path):
+              conn = http.client.HTTPConnection('localhost', timeout=3)
+              conn.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+              conn.sock.settimeout(3)
+              conn.sock.connect('/run/naver-relay/relay.sock')
+              conn.request('GET', path, headers={'Host': 'dashboard.metainc.co.kr'})
+              response = conn.getresponse()
+              body = response.read()
+              result = response.status, dict(response.getheaders()), body
+              conn.close()
+              return result
+          page = request('/naver/')
+          assert page[0] == 200 and page[2]
+          assert page[1].get('referrer-policy') == 'no-referrer'
+          # 가짜 엔진/업무 자격도 없는 mount이므로 503. 인증 성공을 주장하지 않는다.
+          assert request('/api/naver-auto/me')[0] == 503
+          assert request('/api/clients')[0] == 404
+          print(json.dumps({'uid': os.geteuid(), 'uds_page': 200, 'engine_absent_refused': 503, 'legacy_api_absent': 404}))
+          RELAY_PROBE
       - name: 시험 증거 보관 (7일)
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

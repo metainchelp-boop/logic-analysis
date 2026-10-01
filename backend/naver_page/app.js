@@ -141,6 +141,8 @@
     }
   }
   var ERR = {
+    'owner-only': '현재 검증판은 대표 계정만 조회할 수 있습니다',
+    'verification-read-only': '읽기 검증판에서는 업무 내용을 변경할 수 없습니다',
     'org-stale': '조직 자료가 26시간 넘게 낡아 지금은 할 수 없습니다(확인·해결은 됩니다)',
     'not-visible': '없거나 볼 수 없는 광고주입니다', 'action-not-allowed': '이 광고주에서 할 수 없는 일입니다',
     'not-linkable': '이 계정은 지금 이을 수 없습니다', 'not-eligible': '이 광고주는 지금 미리보기를 할 수 없습니다',
@@ -184,6 +186,9 @@
   }
   function ApiError(status, body) { this.status = status; this.body = body || {}; }
   function api(method, path, body) {
+    if (readOnly() && method !== 'GET' && path !== '/session' && path !== '/session/refresh') {
+      return Promise.reject(new ApiError(403, { error: 'verification-read-only' }));
+    }
     var headers = { Accept: 'application/json' };
     if (state.session) headers.Authorization = 'Bearer ' + state.session.token;
     var init = { method: method, headers: headers, credentials: 'omit', cache: 'no-store', referrerPolicy: 'no-referrer',
@@ -200,10 +205,10 @@
 
   function blocked(kind) {
     var T = {
-      login: ['🔒', '전산에서 들어와 주세요', '네이버 관제는 전산(메타아이앤씨) 「광고 센터」 단추로 들어옵니다. 이 주소를 바로 열면 로그인할 수 없습니다.'],
-      ended: ['⏱', '다시 들어와 주세요', '로그인이 끝났습니다(로그인 뒤 12시간이 지났거나 서버가 끝냄). 전산 「광고 센터」 단추로 다시 들어와 주세요.'],
-      idle: ['⏱', '오래 쉬어 로그인을 끝냈습니다 — 다시 들어와 주세요', '1시간 넘게 손대지 않아 이 창의 로그인을 끝냈습니다(여럿이 쓰는 PC 에서 다른 사람이 이어 쓰지 않게). 전산 「광고 센터」 단추로 다시 들어와 주세요.'],
-      rejected: ['🔒', '전산 로그인을 확인하지 못했습니다', '전산에서 로그아웃됐거나 로그인이 끝났을 수 있습니다. 전산에 다시 로그인한 뒤 「광고 센터」 단추로 들어와 주세요.'],
+      login: ['🔒', '전산에서 들어와 주세요', '네이버 관제는 전산(메타아이앤씨) 「광고 스튜디오 › 네이버 관제(읽기 검증)」 단추로 들어옵니다. 이 주소를 바로 열면 로그인할 수 없습니다.'],
+      ended: ['⏱', '다시 들어와 주세요', '로그인이 끝났습니다(로그인 뒤 12시간이 지났거나 서버가 끝냄). 전산 「광고 스튜디오 › 네이버 관제(읽기 검증)」 단추로 다시 들어와 주세요.'],
+      idle: ['⏱', '오래 쉬어 로그인을 끝냈습니다 — 다시 들어와 주세요', '1시간 넘게 손대지 않아 이 창의 로그인을 끝냈습니다(여럿이 쓰는 PC 에서 다른 사람이 이어 쓰지 않게). 전산 「광고 스튜디오 › 네이버 관제(읽기 검증)」 단추로 다시 들어와 주세요.'],
+      rejected: ['🔒', '전산 로그인을 확인하지 못했습니다', '전산에서 로그아웃됐거나 로그인이 끝났을 수 있습니다. 전산에 다시 로그인한 뒤 「광고 스튜디오 › 네이버 관제(읽기 검증)」 단추로 들어와 주세요.'],
       noscope: ['🙅', '관제 대상이 아닙니다', '조직 자료에 재직 중으로 있는 직원만 볼 수 있습니다. 전산 조직 정보가 맞는지 관리자에게 알려 주세요.'],
       busy: ['⏳', '잠시 뒤 다시 들어와 주세요', '들어오기 시도가 몰렸습니다. 1분쯤 뒤 전산에서 다시 들어와 주세요.'],
       down: ['🛠', '지금 관제에 닿지 않습니다', '전산 확인 또는 관제 엔진이 잠시 멈췄습니다. 잠시 뒤 다시 들어와 주세요.']
@@ -248,7 +253,7 @@
     var end = s.ends ? Date.parse(s.ends) : NaN;
     if (!state.warned && isFinite(end) && end > now && end - now <= END_WARN_MS) {
       state.warned = true;
-      toast('로그인 뒤 12시간이 ' + hm(s.ends) + '에 끝납니다 — 전산 「광고 센터」에서 다시 들어오면 이어집니다');
+      toast('로그인 뒤 12시간이 ' + hm(s.ends) + '에 끝납니다 — 전산 「광고 스튜디오 › 네이버 관제(읽기 검증)」에서 다시 들어오면 이어집니다');
     }
   }
   function scheduleRefresh() {
@@ -304,9 +309,12 @@
   }
 
   // ── 위 띠 · 보는 범위 ─────────────────────────────────────────────
+  function readOnly() { return !!(state.me && state.me.owner_verification); }
   function renderTop() {
     var me = state.me;
     $('top').hidden = false;
+    $('verificationNotice').hidden = !readOnly();
+    $('bellAll').hidden = readOnly();
     var kind = { ALL: '대표', TEAM: '팀장', MINE: '담당자' }[me.scope] || '';
     put($('me'), h('b', null, me.name || ''), ' · ' + kind + (me.narrowed ? ' (내 담당만 보기)' : ''));
     $('menuSettings').hidden = !(me.scope === 'ALL' || me.scope === 'TEAM');
@@ -383,13 +391,13 @@
     var parts = [], cls = 'runbar';
     if (!last) {
       if (b.deadline_passed) { cls += ' bad'; parts.push(h('b', null, '오늘 아침 점검 기록이 없습니다'), ' · 모든 광고주가 「오늘 점검 안 됨」(⚪)으로 보입니다 — 어제 결과를 오늘 것처럼 🟢 로 보이지 않게 합니다'); }
-      else { cls += ' wait'; parts.push(h('b', null, '오늘 아침 점검 전'), ' · 06:30 시작 · 08:00 까지 끝납니다'); }
+      else { cls += ' wait'; parts.push(h('b', null, '오늘 아침 점검 전'), readOnly() ? ' · 06:30 예약 · 현재 시간대에는 아직 수집·점검 전일 수 있습니다' : ' · 06:30 시작 · 08:00 까지 끝납니다'); }
     } else if (last.status === 'running') {
       cls += ' wait'; parts.push(h('b', null, '오늘 아침 점검 도는 중'), ' · ' + hm(last.started_at) + ' 시작');
     } else if (last.status === 'done') {
       parts.push('오늘 아침 점검 ', h('b', { class: 'num' }, hm(last.finished_at)), ' 끝');
     } else {
-      cls += ' bad'; parts.push(h('b', null, '오늘 아침 점검이 끝나지 않았습니다'), ' · 끝내지 못한 광고주는 「오늘 점검 안 됨」(⚪)으로 보입니다 · 대표에게 알림이 갑니다');
+      cls += ' bad'; parts.push(h('b', null, '오늘 아침 점검이 끝나지 않았습니다'), ' · 끝내지 못한 광고주는 「오늘 점검 안 됨」(⚪)으로 보입니다' + (readOnly() ? ' · 검증판의 알림 전송은 꺼져 있습니다' : ' · 대표에게 알림이 갑니다'));
     }
     if (last && typeof last.accounts_total === 'number') {
       parts.push(' · 계정 ', h('b', { class: 'num' }, num(last.accounts_ok)), ' / ', h('b', { class: 'num' }, num(last.accounts_total)), ' 읽음');
@@ -440,7 +448,7 @@
   function issueRow(i, where) {
     var st = i.state_now || i.state;
     var act = [];
-    var can = i.can || {};
+    var can = readOnly() ? {} : (i.can || {});
     if (can.ack) act.push(h('button', { type: 'button', class: 'btn sm', onclick: function (ev) { hand(i, 'ack', undefined, ev.currentTarget); } }, '👀 확인 중'));
     if (can.resolve) act.push(h('button', { type: 'button', class: 'btn sm blue', onclick: function (ev) { hand(i, 'resolve', undefined, ev.currentTarget); } }, '✅ 해결'));
     if (can.except) act.push(h('button', { type: 'button', class: 'btn sm', onclick: function (ev) { askExcept(i, ev.currentTarget); } }, '🙈 예외…'));
@@ -642,6 +650,7 @@
   }
   function linkRow(r, where) {
     var act = [];
+    if (readOnly()) r = Object.assign({}, r, { can_confirm: false, can_reject: false, confirm_blocked: false });
     if (r.can_confirm) act.push(h('button', { type: 'button', class: 'btn sm blue', onclick: function (ev) { decide(r, 'confirm', ev.currentTarget); } }, '이 계정 맞음'));
     else if (r.confirm_blocked) act.push(h('span', { class: 'blocked-note' }, '조직 자료가 낡아 「이 계정 맞음」은 잠시 막힘'));
     if (r.can_confirm || r.confirm_blocked) act.push(h('button', { type: 'button', class: 'btn sm', onclick: function (ev) { preview(r, ev.currentTarget); } }, '캠페인 이름 보기'));
@@ -660,7 +669,7 @@
     return h('div', { class: 'line' },
              h('div', { class: 'tx' }, name, d.decision === 'confirmed' ? '사람 확인 「맞음」' : '사람 판단 「아님」',
                h('span', { class: 'w' }, '고객 번호 ••••' + (d.tail || '') + ' · ' + (d.decided_by || '') + ' ' + mdhm(d.decided_at))),
-             h('div', { class: 'act' }, h('button', { type: 'button', class: 'btn sm', onclick: function (ev) { askRevoke(d, ev.currentTarget); } }, '거두기')));
+             h('div', { class: 'act' }, readOnly() ? null : h('button', { type: 'button', class: 'btn sm', onclick: function (ev) { askRevoke(d, ev.currentTarget); } }, '거두기')));
   }
   function nameOf(pid) {
     var rows = (state.board && state.board.rows) || [];
@@ -950,7 +959,7 @@
     if (!state.bell) return;
     var next = typeof it.link === 'string' && SCREEN.test(it.link) ? it.link : null;
     var done = function () { closeBell(); if (next) go(next); };
-    if (it.read) return done();
+    if (it.read || readOnly()) return done();
     api('POST', '/bell/' + it.recipient_id + '/read').then(function () {
       it.read = true;
       setBell(Math.max(0, (state.bell.unread || 1) - 1));
@@ -1000,8 +1009,8 @@
     }, fail);
   }
   function renderSettings() {
-    var s = state.settings, ceo = !!s.can_edit;
-    $('set-ps').textContent = '매일 열지 않는 것만 모았습니다. ' + (ceo ? '점검 기준은 대표님이 고칩니다(고친 기록이 남습니다).' : '팀장은 보기만 합니다 — 점검 기준은 대표님이 고칩니다.');
+    var s = state.settings, ceo = !!s.can_edit && !readOnly();
+    $('set-ps').textContent = readOnly() ? '대표 전용 읽기 검증판에서는 점검 기준을 변경할 수 없습니다.' : '매일 열지 않는 것만 모았습니다. ' + (ceo ? '점검 기준은 대표님이 고칩니다(고친 기록이 남습니다).' : '팀장은 보기만 합니다 — 점검 기준은 대표님이 고칩니다.');
     var th = s.thresholds || {}, rg = s.ranges || {};
     var inputs = {};
     var rows = Object.keys(TH).map(function (k) {
@@ -1019,12 +1028,12 @@
       return h('li', null, h('span', { class: 't' }, mdhm(x.at)), h('span', null, (x.by || '') + ' · ' + ch.map(function (k) { return (TH[k] ? TH[k][0] : k) + ' ' + x.before[k] + ' → ' + x.after[k]; }).join(' · ')));
     });
     put($('sp-th'), h('div', { class: 'card flat' }, h('div', { class: 'kh' }, h('h2', null, '점검 기준'), h('span', { class: 'n' }, '처음 4주는 이 값으로 운영하고 맞춥니다')),
-      ceo ? null : h('div', { class: 'line' }, h('span', { class: 'ro' }, '보기만 — 대표님만 고칩니다')),
+      ceo ? null : h('div', { class: 'line' }, h('span', { class: 'ro' }, readOnly() ? '읽기 검증판 — 변경할 수 없습니다' : '보기만 — 대표님만 고칩니다')),
       h('div', { class: 'tblwrap' }, h('table', null, h('thead', null, h('tr', null, ['점검', '값', '단위', '문제로 보는 기준', '허용 범위'].map(function (t) { return h('th', null, t); }))), h('tbody', null, rows))), save),
       h('div', { class: 'card flat' }, h('div', { class: 'kh' }, h('h2', null, '고친 기록'), h('span', { class: 'n' }, '최근 10번')), hist.length ? h('ul', { class: 'tl' }, hist) : h('div', { class: 'empty' }, '아직 고친 적이 없습니다.')));
     put($('sp-time'), h('div', { class: 'card' }, h('div', { class: 'kh' }, h('h2', null, '점검 시각 · 알림')),
-      h('p', { class: 'sub' }, '아침 점검은 06:30 에 시작해 ' + (s.deadline || '08:00') + ' 까지 끝납니다. 그때까지 못 끝낸 광고주는 「오늘 점검 안 됨」(⚪)으로 보이고 🟢 로 보이지 않습니다.'),
-      h('p', { class: 'sub' }, '알림은 전산 비서방으로 갑니다(휴대폰 알림 없음). 처음 2주는 그림자 운영 — 이슈는 만들되 광고주 알림은 대표님께만 요약으로 갑니다. 🟡 는 12시간 안 풀리면 한 단계 위로 올라갑니다.')));
+      h('p', { class: 'sub' }, readOnly() ? '아침 점검 예정 시각은 06:30, 마감은 ' + (s.deadline || '08:00') + '입니다. 현재 시간대에는 아직 수집·점검 전일 수 있습니다. 미점검은 정상 판정이 아니며 자료 기준 시각을 확인해 주세요.' : '아침 점검은 06:30 에 시작해 ' + (s.deadline || '08:00') + ' 까지 끝납니다. 그때까지 못 끝낸 광고주는 「오늘 점검 안 됨」(⚪)으로 보이고 🟢 로 보이지 않습니다.'),
+      h('p', { class: 'sub' }, readOnly() ? '이 검증판의 알림 전송·자동입찰은 꺼져 있습니다. 알림 목록은 저장된 기록만 조회하며 읽음 처리도 하지 않습니다.' : '알림은 전산 비서방으로 갑니다(휴대폰 알림 없음). 처음 2주는 그림자 운영 — 이슈는 만들되 광고주 알림은 대표님께만 요약으로 갑니다. 🟡 는 12시간 안 풀리면 한 단계 위로 올라갑니다.')));
     var me = state.me;
     put($('sp-ppl'), h('div', { class: 'card flat' }, h('div', { class: 'kh' }, h('h2', null, '사람 · 팀'), h('span', { class: 'n' }, '전산에서 받은 조직(읽기 전용) · 보는 범위 안만')),
       h('div', { class: 'tblwrap' }, h('table', null, h('thead', null, h('tr', null, h('th', null, '사람'), h('th', null, '팀'), h('th', null, '재직'))),
@@ -1049,7 +1058,7 @@
       out.push(h('div', { class: 'card flat' }, h('div', { class: 'kh' }, h('h2', null, '대표님 확인이 필요한 목록'), h('span', { class: 'n' }, '목록이 한꺼번에 크게 바뀌어 받지 않고 붙잡아 두었습니다 · 3시간 안에 확인')),
         s.holds.length ? s.holds.map(function (x) {
           return h('div', { class: 'line' }, h('div', { class: 'tx' }, h('b', null, HOLD[x.kind] || x.kind), h('span', { class: 'w' }, mdhm(x.at) + ' 붙잡음 · ' + (x.codes || []).join(' · '))),
-                   h('div', { class: 'act' }, h('button', { type: 'button', class: 'btn blue sm', onclick: function (ev) { confirmHold(x, ev.currentTarget); } }, '대표 확인하고 받기')));
+                   h('div', { class: 'act' }, readOnly() ? null : h('button', { type: 'button', class: 'btn blue sm', onclick: function (ev) { confirmHold(x, ev.currentTarget); } }, '대표 확인하고 받기')));
         }) : h('div', { class: 'empty' }, '붙잡아 둔 목록이 없습니다.')));
     }
     put($('sp-sys'), out);

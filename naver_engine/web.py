@@ -488,6 +488,8 @@ class App:
     def _h_me(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
         out = W.me(v.ctx(now), v.scope)
         out["bell_unread"] = W.bell(v.store, v.idx, now)["unread"]
+        if self._owner_verification:
+            out["owner_verification"] = True
         return 200, out
 
     def _h_board(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:

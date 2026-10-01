@@ -76,7 +76,7 @@ class PackagingSourceTest(unittest.TestCase):
         pieces = re.split(r'(?m)^  ([^\s:][^\n:]*):[ \t]*(?:#[^\n]*)?\n', job_part)
         self.assertEqual('', pieces[0])
         jobs = dict(zip(pieces[1::2], pieces[2::2]))
-        self.assertEqual({'linux-tests', 'backup-probe', 'backup-transfer', 'backup-recovery'}, set(jobs))
+        self.assertEqual({'linux-tests', 'backup-probe', 'backup-transfer', 'backup-recovery', 'preview-seal'}, set(jobs))
         self.assertEqual(len(jobs), len(pieces[1::2]))
         self.assertNotRegex(jobs['linux-tests'], r'\bsecrets\b|(?m:^    (?:environment|needs):)')
         branch = "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/naver-backup-recovery-20261001'"
@@ -87,17 +87,31 @@ class PackagingSourceTest(unittest.TestCase):
             'backup-recovery': {'NAVER_BACKUP_RECIPIENT_CERT_PEM', 'NAVER_BACKUP_RECOVERY_PRIVATE_KEY_PEM',
                                 'SSO_AD_CENTER_CLIENT_KEY', 'SSO_NAVER_CONTROL_CLIENT_KEY',
                                 'NAVER_ENGINE_ERP_KEY', 'NAVER_AUTO_TOKEN_SECRET'},
+            'preview-seal': {'SSO_NAVER_CONTROL_CLIENT_KEY', 'NAVER_ENGINE_ERP_KEY', 'NAVER_AUTO_TOKEN_SECRET',
+                             'NAVER_MGR_CUSTOMER_ID', 'NAVER_MGR_API_KEY', 'NAVER_MGR_SECRET_KEY',
+                             'NAVER_BACKUP_RECIPIENT_CERT_PEM', 'NAVER_BACKUP_UPLOAD_SSH_PRIVATE_KEY',
+                             'NAVER_BACKUP_KNOWN_HOSTS'},
         }
         for job, secrets in expected.items():
             body = jobs[job]
             condition = ("(inputs.backup_acceptance == 'keys' || inputs.backup_acceptance == 'restore')"
                          if job == 'backup-recovery' else "inputs.backup_acceptance == '" + job.removeprefix('backup-') + "'")
+            if job == 'preview-seal':
+                condition = "inputs.preview_seal == true && inputs.backup_acceptance == 'none' && inputs.received_synthetic_json == ''"
+            else:
+                condition += " && !inputs.preview_seal && inputs.server_envelope_cert_pem == ''"
             self.assertIn('    if: ' + branch + ' && ' + condition + '\n', body)
             refs = re.findall(r'\bsecrets\.([A-Z_]+)\b', body)
             self.assertEqual(secrets, set(refs), job)
             self.assertEqual(len(secrets), len(refs), job + ': each secret reference must occur exactly once')
-            self.assertEqual(len(refs), len(re.findall(r'\bsecrets\b', body)), job)
+            self.assertEqual(len(refs), len(re.findall(r'\bsecrets\b', body.replace('runtime-secrets.cms', 'sealed-artifact'))), job)
             self.assertNotIn('needs:', body)
+        preview = jobs['preview-seal']
+        self.assertNotIn('environment:', preview)
+        self.assertIn('retention-days: 1', preview)
+        self.assertIn('/output/runtime-secrets.cms', preview)
+        self.assertIn('/output/receipt.json', preview)
+        self.assertNotRegex(preview, r'(?:ssh-action|scp-action|docker\s+(?:run|push)|PRIVATE_KEY_PEM)')
         recovery = jobs['backup-recovery']
         self.assertIn('    environment: naver-backup-recovery\n', recovery)
         self.assertIn('unshare --net -- setpriv --reuid', recovery)
@@ -241,7 +255,9 @@ class PackagingSourceTest(unittest.TestCase):
     def test_ci_guard_rejects_mixed_upload_and_recovery_keys(self):
         original = source('.github/workflows/naver-runtime-tests.yml')
         for job, secret in (('backup-transfer', 'NAVER_BACKUP_RECOVERY_PRIVATE_KEY_PEM'),
-                            ('backup-recovery', 'NAVER_BACKUP_UPLOAD_SSH_PRIVATE_KEY')):
+                            ('backup-recovery', 'NAVER_BACKUP_UPLOAD_SSH_PRIVATE_KEY'),
+                            ('preview-seal', 'NAVER_BACKUP_RECOVERY_PRIVATE_KEY_PEM'),
+                            ('preview-seal', 'VPS_SSH_KEY')):
             changed = original.replace('  ' + job + ':\n', '  ' + job + ':\n'
                                        + '    env:\n      BAD: ${{ secrets.' + secret + ' }}\n')
             with self.assertRaises(AssertionError):

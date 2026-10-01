@@ -1,0 +1,21 @@
+# 전용 중계 build context 허용 목록. 기존 앱·DB·문서·인증값을 보내지 않는다.
+**
+!Dockerfile.naver-relay
+!backend/
+!backend/requirements.txt
+!backend/app/
+!backend/app/__init__.py
+!backend/app/naver_entry.py
+!backend/app/naver_relay.py
+!backend/app/routers/
+!backend/app/routers/__init__.py
+!backend/app/routers/naver.py
+!backend/naver_page/
+!backend/naver_page/**
+**/tests/
+**/__pycache__/
+**/*.pyc
+**/*.db*
+**/.env*
+**/*.pem
+**/*.key*
