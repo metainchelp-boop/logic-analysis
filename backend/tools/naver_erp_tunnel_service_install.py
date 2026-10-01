@@ -134,6 +134,15 @@ def key_wire(key, algorithm):
     return wire
 
 
+def normalize_derived_public_key(value):
+    # ssh-keygen -y may retain the exact comment set by our dedicated key generator.
+    # This exception applies only to locally derived output, never supplied public keys.
+    match = re.fullmatch(r"(ssh-ed25519 [A-Za-z0-9+/]+={0,2})(?: naver-erp-tunnel)?", value) if isinstance(value, str) else None
+    if match is None:
+        raise InstallError("INVALID_DERIVED_PUBLIC_KEY")
+    return match.group(1)
+
+
 def validate_package(package):
     fields = {"expected_docker_baseline", "expected_public_fingerprint", "known_host_key", "work_switches_off"}
     if not isinstance(package, dict) or set(package) != fields or package["work_switches_off"] is not True:
@@ -256,7 +265,7 @@ class NativeHost:
         private = self.regular(FOLDER + "/id_ed25519", 0o600)
         self.regular(FOLDER + "/id_ed25519.pub", 0o600)
         public = run(["/usr/bin/ssh-keygen", "-y", "-P", "", "-f", FOLDER + "/id_ed25519"])
-        wire = key_wire(public, "ssh-ed25519")
+        wire = key_wire(normalize_derived_public_key(public), "ssh-ed25519")
         if len(wire) != 51 or wire[:19] != b"\0\0\0\x0bssh-ed25519\0\0\0\x20":
             raise InstallError("CLIENT_KEY_NOT_ED25519")
         fp = "SHA256:" + base64.b64encode(hashlib.sha256(wire).digest()).decode().rstrip("=")

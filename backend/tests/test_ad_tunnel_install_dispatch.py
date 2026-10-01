@@ -21,7 +21,7 @@ def job():
 
 
 def script(label):
-    return textwrap.dedent(job().split("python3 - <<'" + label + "'\n", 1)[1].split(label, 1)[0])
+    return textwrap.dedent(job().split("<<'" + label + "'\n", 1)[1].split(label, 1)[0])
 
 
 class InstallDispatchTests(unittest.TestCase):

@@ -470,7 +470,7 @@ jobs:
           command_timeout: 180s
           script: |
             set -eu
-            python3 - <<'INSTALL_REMOTE'
+            /usr/bin/python3 -I -B - <<'INSTALL_REMOTE'
             import base64, contextlib, io, json, os, re, sys, types
             stage = 'decode'
             module = None

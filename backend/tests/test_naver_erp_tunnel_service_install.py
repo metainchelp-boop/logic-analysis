@@ -8,6 +8,8 @@ import io
 import json
 from pathlib import Path
 import stat
+import subprocess
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -88,6 +90,40 @@ class FakeHost:
 
 
 class TunnelServiceInstallTests(unittest.TestCase):
+    def test_derived_public_key_accepts_only_no_comment_or_exact_service_tag(self):
+        installer = module()
+        public = "ssh-ed25519 " + base64.b64encode(wire(b"ssh-ed25519", bytes(32))).decode()
+        self.assertEqual(installer.normalize_derived_public_key(public), public)
+        self.assertEqual(installer.normalize_derived_public_key(public + " naver-erp-tunnel"), public)
+        for value in (public + " other-service", public + " naver-erp-tunnel extra",
+                      public + "\n", public + "\nnaver-erp-tunnel", public + " naver-erp-tunnel\n",
+                      public + "\tnaver-erp-tunnel", public + "  naver-erp-tunnel"):
+            with self.subTest(shape=len(value.split())):
+                with self.assertRaises(installer.InstallError):
+                    installer.normalize_derived_public_key(value)
+        with self.assertRaises(installer.InstallError):
+            installer.key_wire(public + " naver-erp-tunnel", "ssh-ed25519")
+
+    @unittest.skipUnless(Path("/usr/bin/ssh-keygen").is_file(), "ssh-keygen is unavailable")
+    def test_native_derived_public_key_normalizes_service_comment_and_matches_fingerprint(self):
+        installer = module()
+        options = {"stdin": subprocess.DEVNULL, "capture_output": True, "text": True,
+                   "check": True, "timeout": 10}
+        with tempfile.TemporaryDirectory(prefix="naver-tunnel-key-fixture-") as temporary:
+            private = Path(temporary) / "id_ed25519"
+            subprocess.run(["/usr/bin/ssh-keygen", "-q", "-t", "ed25519", "-N", "",
+                            "-C", "naver-erp-tunnel", "-f", str(private)], **options)
+            derived = subprocess.run(["/usr/bin/ssh-keygen", "-y", "-P", "", "-f", str(private)], **options)
+            normalized = installer.normalize_derived_public_key(derived.stdout.strip())
+            parsed = installer.key_wire(normalized, "ssh-ed25519")
+            calculated = "SHA256:" + base64.b64encode(hashlib.sha256(parsed).digest()).decode().rstrip("=")
+            independent = subprocess.run(["/usr/bin/ssh-keygen", "-lf", str(private) + ".pub",
+                                          "-E", "sha256"], **options).stdout.split()
+            self.assertTrue(len(normalized.split()) == 2, "normalized key must have two fields")
+            self.assertTrue(len(parsed) == 51, "derived key must have an Ed25519 wire payload")
+            self.assertTrue(len(independent) >= 2, "fingerprint command returned no fingerprint")
+            self.assertTrue(calculated == independent[1], "independent fingerprint does not match")
+
     def test_baseline_mismatch_refuses_before_any_host_mutation(self):
         installer = module()
         host = FakeHost(baselines=["b" * 64])
