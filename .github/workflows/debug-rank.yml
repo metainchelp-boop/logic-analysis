@@ -9,7 +9,7 @@ on:
       ad_prepare:
         description: 'inspect 조회 / prepare 빈 폴더 / tunnel-keygen 새 터널키 / tunnel-install 설치 / tunnel-activate 검증 후 활성화. 앱 배포 없음.'
         type: choice
-        options: ['off', inspect, prepare, tunnel-keygen, tunnel-install, tunnel-activate, tunnel-native]
+        options: ['off', inspect, prepare, tunnel-keygen, tunnel-install, tunnel-activate, tunnel-native, preview-envelope]
         required: false
         default: 'off'
       ad_expected_baseline:
@@ -50,6 +50,73 @@ on:
         default: 'off'
 
 jobs:
+  preview-envelope:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && inputs.ad_prepare == 'preview-envelope' }}
+    permissions:
+      contents: read
+    concurrency:
+      group: deploy-logic-analysis
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: 새 봉투 공개키 생성 코드 검사·포장
+        env:
+          INPUTS_JSON: ${{ toJSON(inputs) }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -eu
+          python3 -m unittest discover -s backend/tests -p test_naver_preview_envelope.py -q
+          python3 - <<'PY'
+          import base64,json,os,pathlib,re
+          inputs=json.loads(os.environ['INPUTS_JSON'])
+          assert inputs.pop('ad_prepare')=='preview-envelope'
+          expected=inputs.pop('ad_expected_baseline')
+          assert re.fullmatch('[0-9a-f]{64}',expected) and all(v=='off' for v in inputs.values())
+          payload={'baseline':expected,'source':pathlib.Path('backend/tools/naver_preview_envelope.py').read_text(),
+                   'host_source':pathlib.Path('backend/tools/naver_erp_tunnel_service_install.py').read_text()}
+          with open(os.environ['GITHUB_ENV'],'a') as stream:
+              stream.write('PREVIEW_ENVELOPE_B64='+base64.b64encode(json.dumps(payload).encode()).decode()+'\n')
+          PY
+      - name: 목적 서버에서만 새 봉투 키 생성 — 개인키 미반출·앱 무변경
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        env:
+          PREVIEW_ENVELOPE_B64: ${{ env.PREVIEW_ENVELOPE_B64 }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          envs: PREVIEW_ENVELOPE_B64
+          command_timeout: 120s
+          script: |
+            set -eu
+            /usr/bin/python3 -I -B - <<'PY'
+            import base64,json,os,pathlib,re,stat,sys,types
+            try:
+                bundle=json.loads(base64.b64decode(os.environ['PREVIEW_ENVELOPE_B64'],validate=True))
+                os.environ.clear()
+                os.environ.update(PATH='/usr/sbin:/usr/bin:/sbin:/bin',LANG='C')
+                assert os.geteuid()==0 and set(bundle)=={'baseline','source','host_source'}
+                assert re.fullmatch('[0-9a-f]{64}',bundle['baseline'])
+                host=types.ModuleType('approved_host')
+                exec(compile(bundle['host_source'],'<approved-host>','exec'),host.__dict__)
+                assert host.NativeHost().baseline()==bundle['baseline']
+                for path in ('/etc','/etc/metainc'):
+                    st=pathlib.Path(path).lstat()
+                    assert stat.S_ISDIR(st.st_mode) and st.st_uid==0 and not stat.S_IMODE(st.st_mode)&0o022
+                module=types.ModuleType('approved_envelope')
+                exec(compile(bundle['source'],'<approved-envelope>','exec'),module.__dict__)
+                receipt=module.create_envelope('/etc/metainc/naver-deploy-envelope')
+                assert host.NativeHost().baseline()==bundle['baseline']
+                receipt.update(ok=True,containers_unchanged=True,baseline_sha256=bundle['baseline'])
+            except Exception as error:
+                print('NAVER_PREVIEW_ENVELOPE='+json.dumps({'ok':False,'error_kind':type(error).__name__}))
+                sys.exit(1)
+            print('NAVER_PREVIEW_ENVELOPE='+json.dumps(receipt,sort_keys=True))
+            PY
   tunnel-native:
     if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/ad-deploy-prep-20261001' && inputs.ad_prepare == 'tunnel-native' }}
     permissions:
