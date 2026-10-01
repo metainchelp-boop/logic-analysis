@@ -73,7 +73,7 @@ class PackagingSourceTest(unittest.TestCase):
         global_part, marker, job_part = workflow.partition('\njobs:\n')
         self.assertTrue(marker)
         self.assertNotRegex(global_part, r'\bsecrets\b')
-        pieces = re.split(r'(?m)^  ([a-z][a-z0-9-]*):\n', job_part)
+        pieces = re.split(r'(?m)^  ([^\s:][^\n:]*):[ \t]*(?:#[^\n]*)?\n', job_part)
         self.assertEqual('', pieces[0])
         jobs = dict(zip(pieces[1::2], pieces[2::2]))
         self.assertEqual({'linux-tests', 'backup-probe', 'backup-transfer', 'backup-recovery'}, set(jobs))
@@ -249,6 +249,13 @@ class PackagingSourceTest(unittest.TestCase):
                      'NAVER_ENGINE_ERP_KEY', 'NAVER_AUTO_TOKEN_SECRET'):
             changed = original.replace('  backup-recovery:\n', '  backup-recovery:\n'
                                        + '    env:\n      EXTRA: ${{ secrets.' + name + ' }}\n')
+            with self.assertRaises(AssertionError):
+                self.assert_ci_job_isolation(changed)
+
+    def test_ci_guard_rejects_unapproved_job_ids_including_quoted_and_underscore(self):
+        original = source('.github/workflows/naver-runtime-tests.yml')
+        for name in ('deploy_app', 'DeployApp', '"deploy_app"', "'deploy_app'"):
+            changed = original + '\n  ' + name + ':\n    runs-on: ubuntu-latest\n    permissions:\n      contents: write\n    steps:\n      - run: echo synthetic-only\n'
             with self.assertRaises(AssertionError):
                 self.assert_ci_job_isolation(changed)
 
