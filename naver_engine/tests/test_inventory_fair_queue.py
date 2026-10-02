@@ -24,7 +24,9 @@ class InventoryFairQueueTest(Base):
         ids = list(range(1_000_001, 1_000_008))
         self.at(self.fc.now().replace(hour=23, minute=58))
         self.accounts(ids)
-        expected = (ids[:3], ids[3:6], [ids[6], *ids[:2]], ids[2:5], [ids[5], *ids[:2]])
+        # 실제 읽기 관문이 요청 사이 시계를 전진시킨다. 셋째 날 먼저 읽은
+        # 마지막 번호는 같은 날 뒤에 읽은 저번호보다 다섯째 날 먼저 돌아온다.
+        expected = (ids[:3], ids[3:6], [ids[6], *ids[:2]], ids[2:5], [*ids[5:], ids[0]])
         previous_day = None
         for selected in expected:
             today = self.fc.now().date()

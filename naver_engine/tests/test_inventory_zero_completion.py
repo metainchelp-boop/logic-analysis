@@ -144,6 +144,58 @@ class InventoryZeroCompletionTest(unittest.TestCase):
         row = self.st.results[A]
         self.assertEqual((row["yday_imp"], row["yday_clk"], row["yday_spend"]), (9, 2, 17))
 
+    def test_nonzero_summary_invalidates_old_zero_even_when_round_retries(self):
+        self.ads.add(A, [(n, "ELIGIBLE", False, steady(0, 0, 0, 0)) for n in range(6)], biz=10)
+        self.assertEqual(self.run_inventory().counts, {"partial": 1})
+        cached = self.st.progress[A]["zero_ids"][0]
+        unverified = next(cid for cid in self.st.progress[A]["campaign_ids"]
+                          if cid not in self.st.progress[A]["zero_ids"])
+        self.ads.acc[A]["series"][cached] = steady(9, 2, 17, 0)
+        self.ads.drop_days[unverified] = {YDAY}
+        self.assertEqual(self.run_inventory().counts, {"retry": 1})
+        self.assertNotIn("progressed", self.st.results[A])
+        # 다음 합계에서 다시 빠져도 이전 0이 부활하면 안 된다. 실제 일별은 양수다.
+        self.ads.drop_days.clear()
+        self.naver.script("/stats", (200, {"data": [], "cycleBaseTm": cycle_str(T0)}))
+        self.assertEqual(self.run_inventory().counts, {"retry": 1})
+        self.assertEqual(self.st.results[A]["error_code"], "STATS_INCOMPLETE")
+        self.assertNotIn("yday_spend", self.st.results[A])
+        self.assertNotIn(cached, self.st.progress[A]["zero_ids"])
+
+    def test_summary_invalidation_precedes_unknown_metric_and_call_budget_exits(self):
+        for imp, limits, error in ((None, {}, "STATS_INCOMPLETE"),
+                                   (9, {"per_account_calls": 3}, "REQUEST_BUDGET")):
+            with self.subTest(imp=imp, limits=limits):
+                self.setUp()
+                self.ads.add(A, [(n, "ELIGIBLE", False, steady(0, 0, 0, 0)) for n in range(6)], biz=10)
+                self.assertEqual(self.run_inventory().counts, {"partial": 1})
+                cached = self.st.progress[A]["zero_ids"][0]
+                self.naver.script("/stats", (200, {"data": [{"id": cached, "impCnt": imp,
+                                                           "clkCnt": 2, "salesAmt": 17}],
+                                                   "cycleBaseTm": cycle_str(T0)}))
+                self.assertEqual(self.run_inventory(**limits).counts, {"retry": 1})
+                self.assertNotIn(cached, self.st.progress[A]["zero_ids"])
+                self.assertNotIn("progressed", self.st.results[A])
+                self.assertNotIn("yday_spend", self.st.results[A])
+                self.assertEqual(self.st.results[A]["error_code"], error)
+
+    def test_late_summary_invalidates_old_zero_without_accepting_late_totals(self):
+        self.ads.add(A, [(n, "ELIGIBLE", False, steady(0, 0, 0, 0)) for n in range(6)], biz=10)
+        self.assertEqual(self.run_inventory().counts, {"partial": 1})
+        cached = self.st.progress[A]["zero_ids"][0]
+        self.ads.acc[A]["series"][cached] = steady(9, 2, 17, 0)
+        def late_summary(call):
+            if call.path == "/stats" and "timeIncrement" not in call.query:
+                self.fc.advance(11)
+        self.naver.tick = late_summary
+        before = self.reader.calls
+        self.assertEqual(self.run_inventory().counts, {"retry": 1})
+        self.assertEqual(self.reader.calls - before, 3)
+        self.assertNotIn(cached, self.st.progress[A]["zero_ids"])
+        self.assertNotIn("progressed", self.st.results[A])
+        self.assertNotIn("yday_spend", self.st.results[A])
+        self.assertEqual(self.st.results[A]["error_code"], "REQUEST_BUDGET")
+
     def test_campaign_list_change_discards_cached_zero_proofs(self):
         self.ads.add(A, [(n, "ELIGIBLE", False, steady(0, 0, 0, 0)) for n in range(6)], biz=10)
         self.assertEqual(self.run_inventory().counts, {"partial": 1})

@@ -83,12 +83,19 @@ def _read(reader, ah, today, values, per_account_calls, store, snapshot, clock):
         start = progress["next_index"]
         chunk = ids[start:start + N.STATS_IDS_PER_CALL]
         stats = reader.get_stats_summary(ah, chunk, yday, yday, fields=FIELDS)
+        zero_ids = set(progress.get("zero_ids", []))
+        superseded = zero_ids.intersection(stats.rows)
+        if superseded:
+            # 새 합계 줄이 있으면 이전 0 증거는 폐기한다. 뒤에서 재시도하더라도
+            # 오래된 0이 부활하지 않게 먼저 저장하며, 폐기 자체는 진전이 아니다.
+            zero_ids.difference_update(superseded)
+            progress["zero_ids"] = sorted(zero_ids)
+            store.record_inventory_progress(ah.customer_id, snapshot, clock(), progress)
         reader.check_budget()
         if not stats.data_fresh or stats.unknown_values:
             values.update(status="retry", error_code="STATS_INCOMPLETE")
             return
         rows = dict(stats.rows)
-        zero_ids = set(progress.get("zero_ids", []))
         # 합계에서 빠진 줄만 재확인한다. 날짜별 모든 지표가 완결된 0일 때만 보완한다.
         for cid in stats.missing_ids:
             if cid not in zero_ids:

@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const { webcrypto } = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const { performance } = require('node:perf_hooks');
 const test = require('node:test');
 const vm = require('node:vm');
 
@@ -118,18 +119,53 @@ function launch(options = {}) {
   };
 }
 
-async function until(predicate) {
-  for (let i = 0; i < 100; i++) {
-    if (predicate()) return;
-    await new Promise(resolve => setImmediate(resolve));
+async function until(predicate, timeoutMs = 1000) {
+  // 반복 횟수는 경과 시간이 아니다. 실제 작업 완료를 확인하며 타이머에 양보하고, 단조 시계로 제한한다.
+  const deadline = performance.now() + timeoutMs;
+  while (!predicate()) {
+    const remaining = deadline - performance.now();
+    assert.ok(remaining > 0, '합성 실행 조건이 제한 시간 안에 완료되지 않았습니다.');
+    await new Promise(resolve => setTimeout(resolve, Math.min(5, remaining)));
   }
-  assert.ok(predicate(), '합성 실행의 비동기 완료를 기다렸습니다.');
 }
 
 async function blocked(run) {
   await until(() => run.elements.get('s-blocked').classList.contains('on'));
   return run.text();
 }
+
+test('암호화 작업이 늦게 완료되어도 실제 준비 메시지와 화면 완료까지 기다린다', async () => {
+  let digestCompleted = false;
+  const run = launch({ crypto: {
+    getRandomValues: array => webcrypto.getRandomValues(array),
+    subtle: { digest: async (...args) => {
+      await new Promise(resolve => setTimeout(resolve, 30));
+      const result = await webcrypto.subtle.digest(...args);
+      digestCompleted = true;
+      return result;
+    } }
+  } });
+  await until(() => run.messages.length);
+  assert.equal(digestCompleted, true);
+  assert.equal(run.messages[0].data.type, 'METAINC_SSO_READY');
+  run.message();
+  await until(() => run.elements.get('s-reports').classList.contains('on'));
+  assert.deepEqual(run.requests.map(request => request.url), ['/api/naver-auto/session', '/api/naver-auto/me']);
+});
+
+test('암호화가 끝나지 않으면 대기 제한 시간에 실패하며 무한히 기다리지 않는다', { timeout: 1000 }, async () => {
+  const run = launch({ crypto: {
+    getRandomValues: array => webcrypto.getRandomValues(array),
+    subtle: { digest: () => new Promise(() => {}) }
+  } });
+  const started = performance.now();
+  await assert.rejects(until(() => run.messages.length, 20), /제한 시간 안에 완료되지 않았습니다/);
+  assert.ok(performance.now() - started >= 20);
+  assert.equal(run.messages.length, 0);
+  assert.equal(run.requests.length, 0);
+  run.timeout();
+  assert.match(await blocked(run), /진단 코드: NV-E06/);
+});
 
 test('출처 정보 누락은 서버 장애가 아닌 전산 진입 안내와 고정 코드로 표시한다', async () => {
   const run = launch({ referrer: '' });
@@ -192,6 +228,8 @@ test('로그인 교환 실패와 로그인 후 조직 자료 실패를 고정 �
     ['관제 엔진 연결', { session: { status: 503, body: { error: 'engine-unavailable' } } }, 'NV-S07', /관제 서버/],
     ['관제 엔진 지연', { session: { status: 504, body: { error: 'engine-timeout' } } }, 'NV-S08', /답변이 늦어/],
     ['조직 자료 낡음', { me: { status: 503, body: { error: 'org-stale' } } }, 'NV-M01', /조직 자료.*오래/],
+    ['교환 시 조직 자료 없음', { session: { status: 503, body: { error: 'org-unavailable' } } }, 'NV-M01', /조직 자료.*없/],
+    ['로그인 후 조직 자료 없음', { me: { status: 503, body: { error: 'org-unavailable' } } }, 'NV-M01', /조직 자료.*없/],
     ['알 수 없는 응답', { session: { status: 500, body: { error: secretMarker, message: secretMarker } } }, 'NV-S00', /완료하지 못했습니다/],
     ['상속 속성 이름', { session: { status: 500, body: { error: '__proto__', message: secretMarker } } }, 'NV-S00', /완료하지 못했습니다/]
   ];
@@ -289,7 +327,7 @@ test('새 진입 실패는 이 창의 이전 세션을 지우고 직접 주소·
 });
 
 test('저장 세션의 조직 자료 오류에도 진단을 표시하고 401 세션 종료 처리는 유지한다', async t => {
-  for (const [status, error, message] of [[503, 'org-stale', /진단 코드: NV-M01/], [401, 'token-expired', /다시 들어와 주세요/]]) {
+  for (const [status, error, message] of [[503, 'org-stale', /진단 코드: NV-M01/], [503, 'org-unavailable', /진단 코드: NV-M01/], [401, 'token-expired', /다시 들어와 주세요/]]) {
     await t.test(String(status), async () => {
       const run = launch({ url: 'https://watch.invalid/naver/reports', storage: {
         'naverWatch.session': JSON.stringify({ token: 'synthetic-old-token', exp: Date.now() + 3600000 })

@@ -237,7 +237,8 @@
       case 'network': return 'NV-S06';
       case 'engine-unavailable': return 'NV-S07';
       case 'engine-timeout': return 'NV-S08';
-      case 'org-stale': return 'NV-M01';
+      case 'org-stale':
+      case 'org-unavailable': return 'NV-M01';
       default: return 'NV-S00';
     }
   }
