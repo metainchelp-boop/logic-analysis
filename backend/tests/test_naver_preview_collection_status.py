@@ -27,7 +27,7 @@ class CollectionTest(unittest.TestCase):
         db.execute("UPDATE naver_auto_meta SET value='10'")
         with self.assertRaises(sqlite3.OperationalError):
             M.collect_management(db, '2026-11-02')
-        for schema in ('11', '010', 'PRIVATE'):
+        for schema in ('12', '010', 'PRIVATE'):
             db.execute('UPDATE naver_auto_meta SET value=?', (schema,))
             with self.assertRaisesRegex(ValueError, '^COLLECTION_SCHEMA$'):
                 M.collect_management(db, '2026-11-02')
@@ -54,6 +54,33 @@ class CollectionTest(unittest.TestCase):
             with self.assertRaises(ValueError) as error:
                 M.management_projection(altered, today)
             self.assertNotIn('PRIVATE', str(error.exception))
+
+    def test_schema11_recheck_purposes_and_source_wait_are_safe_readonly_aggregates(self):
+        fixture = json.loads((Path(__file__).with_name('fixtures')/'naver_schema10_11_contract.json').read_text())
+        db = sqlite3.connect(':memory:')
+        self.addCleanup(db.close)
+        for sql in fixture['new_observed_unsealed']['sql']:
+            db.execute(sql)
+        db.execute("INSERT INTO naver_auto_meta VALUES ('schema_version','11')")
+        kinds = ('recent', 'reconcile', 'report_weekly', 'report_monthly', 'manual', 'manual_period')
+        for index, kind in enumerate(kinds):
+            db.execute('''INSERT INTO naver_auto_performance_job
+                (job_key,customer_id,kind,cycle_day,period_start,period_end,snapshot_at,catalog_at,
+                 stage_revision,possibility_id,matching_fingerprint,status,checked_at,next_try_at,attempts)
+                VALUES(?,987654321,?,'2026-11-01','2026-10-01','2026-10-31','private','private',
+                       'private',987654322,'private','source_wait','2026-11-02T10:00:00+09:00',
+                       '2026-11-02T10:15:00+09:00',0)''', ('private'+str(index), kind))
+        db.commit()
+        scope = dict(_A=sqlite3)
+        exec(fixture['new_observed_unsealed']['authorizer'], scope)
+        db.set_authorizer(scope['_authorizer'](scope['PHASE_READ']))
+        result = M.collect_management(db, '2026-11-02')
+        self.assertEqual(result['schema_version'], 11)
+        for kind in kinds:
+            self.assertEqual(result['jobs'][kind]['statuses'], {'source_wait':1})
+        self.assertEqual(M.management_projection(result, '2026-11-02'), result)
+        for forbidden in ('private', '987654321', '987654322', 'customer_id', 'generation'):
+            self.assertNotIn(forbidden, json.dumps(result))
 
     def test_management_windows_are_sunday_based_and_script_keeps_readonly_bounded_transaction(self):
         for day, sunday in (('2026-11-01','2026-11-01'), ('2026-11-02','2026-11-01'),

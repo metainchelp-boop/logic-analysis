@@ -17,7 +17,7 @@ UNKNOWN = 'UNRECOGNIZED'
 PAIR_COUNTS = PAIR_STATES | {'prospects', 'ignored'}
 COLLECTION_COUNTS = CHECK_STATES | frozenset('targets store_refused duplicate_skipped unlinked_issues deadline_left abort_left handle_invalid account_error'.split())
 BOOTSTRAP_CODES = frozenset('REQUEST_FILE REQUEST_CHANGED REQUEST_SCHEMA REQUEST_EXPIRED HOLD_CHANGED_OR_EXPIRED HOLD_DIGEST_CHANGED HOLD_ROWS_CHANGED CURRENT_OWNER_REQUIRED SOURCES_NOT_TODAY SOURCES_UNUSABLE RESTRICTED_CONFIG_REQUIRED CONFIRM_REFUSED PAIRING_REFUSED INTERNAL_ERROR'.split())
-JOB_STATES = frozenset('reading partial ok retry limited reauth_required'.split())
+JOB_STATES = frozenset('reading partial ok retry limited reauth_required source_wait'.split())
 
 
 def bootstrap_empty(state):
@@ -178,11 +178,16 @@ def counts(value, allowed):
     return {key: number(n) for key, n in value.items()}
 
 
-def management_windows(today):
+def management_windows(today, schema=10):
     day = date.fromisoformat(today)
     sunday = day-timedelta(days=(day.weekday()+1) % 7)
-    return {'daily': (day, day, 'all'), 'weekly': (sunday, sunday, 'all'),
-            'backfill_recent': (day-timedelta(days=39), day, 'unfinished')}
+    result = {'daily': (day, day, 'all'), 'weekly': (sunday, sunday, 'all'),
+              'backfill_recent': (day-timedelta(days=39), day, 'unfinished')}
+    if schema == 11:
+        # 목적을 합치지 않고 고정 40일 회차창으로 자정/요일 이월 대기도 보인다.
+        result.update({kind: (day-timedelta(days=39), day, 'all') for kind in
+                       ('recent', 'reconcile', 'report_weekly', 'report_monthly', 'manual', 'manual_period')})
+    return result
 
 
 def management_projection(value, today):
@@ -191,14 +196,15 @@ def management_projection(value, today):
     fields = {'schema_version', 'jobs', 'daily_rows', 'report_count', 'stored_totals_scope',
               'target_count', 'target_count_reason', 'counts_are_jobs_not_targets'}
     if (not isinstance(value, dict) or set(value) != fields or type(value['schema_version']) is not int
-            or value['schema_version'] != 10 or value['target_count'] is not None
+            or value['schema_version'] not in (10, 11) or value['target_count'] is not None
             or value['target_count_reason'] != 'CURRENT_ELIGIBILITY_NOT_EVALUATED'
             or value['counts_are_jobs_not_targets'] is not True
             or value['stored_totals_scope'] != 'all_stored_rows'
-            or not isinstance(value['jobs'], dict) or set(value['jobs']) != set(management_windows(today))):
+            or not isinstance(value['jobs'], dict)
+            or set(value['jobs']) != set(management_windows(today, value['schema_version']))):
         raise ValueError('COLLECTION_MANAGEMENT')
     jobs = {}
-    for kind, (since, until, status_scope) in management_windows(today).items():
+    for kind, (since, until, status_scope) in management_windows(today, value['schema_version']).items():
         row = value['jobs'][kind]
         if (not isinstance(row, dict) or set(row) != {'since_cycle_day', 'until_cycle_day', 'status_scope',
                 'statuses', 'latest_checked_at', 'latest_success_at'}
@@ -218,12 +224,12 @@ def collect_management(connection, today):
     schema = None if row is None else row[0]
     if schema in ('7', '8', '9'):
         return None
-    if schema != '10':
+    if schema not in ('10', '11'):
         raise ValueError('COLLECTION_SCHEMA')
     jobs = {}
     states = tuple(sorted(JOB_STATES))
     marks = ','.join('?' for _ in states)
-    for kind, (since, until, status_scope) in management_windows(today).items():
+    for kind, (since, until, status_scope) in management_windows(today, int(schema)).items():
         args = ('backfill' if kind == 'backfill_recent' else kind, str(since), str(until))
         where = 'kind=? AND cycle_day>=? AND cycle_day<=?'
         latest = connection.execute('SELECT MAX(checked_at),MAX(COALESCE(last_success_at,CASE WHEN status=\'ok\' THEN checked_at END)) '
@@ -235,7 +241,7 @@ def collect_management(connection, today):
             'COUNT(*) FROM naver_auto_performance_job WHERE '+where+' GROUP BY 1', states+args)
         jobs[kind] = {'since_cycle_day':str(since), 'until_cycle_day':str(until), 'status_scope':status_scope,
                       'statuses':grouped(rows, JOB_STATES), 'latest_checked_at':latest[0], 'latest_success_at':latest[1]}
-    return management_projection({'schema_version':10, 'jobs':jobs,
+    return management_projection({'schema_version':int(schema), 'jobs':jobs,
         'daily_rows':connection.execute('SELECT COUNT(*) FROM naver_auto_daily_performance').fetchone()[0],
         'report_count':connection.execute('SELECT COUNT(*) FROM naver_auto_report_snapshot').fetchone()[0],
         'stored_totals_scope':'all_stored_rows', 'target_count':None,

@@ -1,4 +1,4 @@
-"""Exact pinned additive schema9→10 management release; paired schema9 rollback."""
+"""Exact pinned additive schema10→11 report-revision release; paired schema10 rollback."""
 import ast
 from contextlib import closing
 import fcntl
@@ -13,43 +13,45 @@ import sqlite3
 from types import SimpleNamespace
 import uuid
 
-OLD_COMMIT = '73b9fe39c36284e266eea874902608a4127b00bf'
+OLD_COMMIT = '657d98d12b7d84c1e34b6fc61c5fad830e5c0377'
 # Reviewed final application commit, archive and complete store bytes; CI/deployment are separate gates.
-TARGET_COMMIT = '657d98d12b7d84c1e34b6fc61c5fad830e5c0377'
+TARGET_COMMIT = '847be08ad8c306b7fce3fb427d1cc3168014493f'
 EXPECTED_BASELINE = '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'
-OLD_SOURCE_SHA256 = '033e72d441f17f313a970f63d3a2f050d9866ce94f717bf5d10914533134c578'
-TARGET_SOURCE_SHA256 = 'b2d0663912d6ea11ddeddacffcfa01458af5221802b21de0154c90c4bb738e1a'
-STORE_SHA256 = {9:'ccf614ec9e0f0ec5f6467ef9dbfe50b0676543f908bf9e877f61cc5cfe770e75',
-                10:'aa411970fd7f4ff230ffcd5b62e4448d4aae77ff57757a2bb62a880044f54212'}
-CODE_PATHS = {'backend/app/naver_auto/checks.py', 'backend/naver_page/app.css', 'backend/naver_page/app.js',
-              'backend/naver_page/index.html', 'naver_engine/dashboard.py', 'naver_engine/inventory.py',
-              'naver_engine/morning.py', 'naver_engine/naver_read.py', 'naver_engine/store.py',
-              'naver_engine/ad_reasons.py', 'naver_engine/management.py', 'naver_engine/management_store.py',
-              'naver_engine/performance_reads.py', 'naver_engine/reporting.py', 'naver_engine/structure_reads.py',
+OLD_SOURCE_SHA256 = 'b2d0663912d6ea11ddeddacffcfa01458af5221802b21de0154c90c4bb738e1a'
+TARGET_SOURCE_SHA256 = '1f79b31dd9a8fd5a366db3d0198bb5c932ca7c127028ab559f4010919a64dcdc'
+STORE_SHA256 = {10:'aa411970fd7f4ff230ffcd5b62e4448d4aae77ff57757a2bb62a880044f54212',
+                11:'66b3f5511bc5977077eb45c6fd14cbde7be4bfdc5afbaac2abc2eca9362fca89'}
+CODE_PATHS = {'backend/naver_page/app.css', 'backend/naver_page/app.js', 'backend/naver_page/index.html',
+              'naver_engine/links.py', 'naver_engine/management.py', 'naver_engine/store.py',
+              'naver_engine/performance_reads.py', 'naver_engine/reporting.py',
               'naver_engine/web.py', 'naver_runtime/scheduler.py', 'naver_runtime/writer.py'}
-TEST_PATHS = {'naver_engine/tests/management_screen_browser.js',
-              'naver_engine/tests/inventory_screen_browser.js',
-              'naver_engine/tests/test_alerts.py', 'naver_engine/tests/test_dashboard.py',
-              'naver_engine/tests/test_naver_read.py', 'naver_engine/tests/test_store.py',
-              'naver_engine/tests/test_monthly_store.py', 'naver_engine/tests/test_sync.py',
-              'naver_engine/tests/test_owner_screen_copy.py', 'naver_engine/tests/test_verified_collection.py',
-              'naver_engine/tests/test_ad_reasons.py', 'naver_engine/tests/test_managed_coverage.py',
-              'naver_engine/tests/test_managed_storage.py', 'naver_engine/tests/test_management_screen.py',
+TEST_PATHS = {'naver_engine/tests/fluid_screen_audit.js', 'naver_engine/tests/management_screen_browser.js',
+              'naver_engine/tests/test_alerts.py', 'naver_engine/tests/test_links.py',
+              'naver_engine/tests/test_owner_screen_copy.py', 'naver_engine/tests/test_sync.py',
+              'naver_engine/tests/test_store.py',
+              'naver_engine/tests/test_managed_storage.py',
               'naver_engine/tests/test_performance_reads.py', 'naver_engine/tests/test_reporting.py',
-              'naver_engine/tests/test_reason_page_web.py',
-              'naver_engine/tests/test_report_paging.py',
-              'naver_engine/tests/test_structure_collector.py', 'naver_engine/tests/test_structure_reads.py',
-              'naver_engine/tests/test_structure_store.py',
-              'naver_engine/tests/test_structure_storage.py',
+              'naver_engine/tests/test_report_revisions.py', 'naver_engine/tests/test_report_revision_web.py',
+              'naver_engine/tests/test_revalidation_collection.py', 'naver_engine/tests/test_revision_schema.py',
               'naver_runtime/tests/test_main.py', 'naver_runtime/tests/test_scheduler.py'}
 ADDITIVE_OBJECTS = (
-    ('TABLE', 'naver_auto_management_state'), ('TABLE', 'naver_auto_management_event'),
-    ('TABLE', 'naver_auto_performance_job'), ('INDEX', 'naver_auto_performance_due'),
-    ('INDEX', 'naver_auto_performance_recent'), ('TABLE', 'naver_auto_daily_performance'),
-    ('TABLE', 'naver_auto_report_snapshot'), ('TABLE', 'naver_auto_daily_revision'),
-    ('TABLE', 'naver_auto_report_review'), ('TABLE', 'naver_auto_manual_read'),
-    ('TABLE', 'naver_auto_structure_job'), ('INDEX', 'naver_auto_structure_recent'),
+    ('TABLE', 'naver_auto_report_validation'), ('TABLE', 'naver_auto_report_dirty'),
+    ('INDEX', 'naver_auto_report_dirty_pending'),
 )
+REVISION_COLUMNS = {
+    'naver_auto_performance_job': (('generation', "TEXT NOT NULL DEFAULT ''"),
+                                 ('source_wait_attempts', 'INTEGER NOT NULL DEFAULT 0')),
+    'naver_auto_daily_performance': (('source_generation', "TEXT NOT NULL DEFAULT ''"),
+                                   ('source_revision', 'INTEGER NOT NULL DEFAULT 1')),
+    'naver_auto_manual_read': (('period_start', 'TEXT'), ('period_end', 'TEXT'), ('possibility_id', 'INTEGER'),
+                               ('request_kind', "TEXT NOT NULL DEFAULT 'manual'")),
+}
+ADDITIVE_MIGRATION = '''for table, additions in _REVISION_COLUMNS.items():
+    columns = {r[1] for r in c.execute("PRAGMA table_info(" + table + ")")}
+    for column, declaration in additions:
+        if column not in columns:
+            c.execute("ALTER TABLE " + table + " ADD COLUMN " + column + " " + declaration)
+'''
 DATA = Path('/var/lib/metainc/naver-engine')
 STAGE = 'input'
 OPERATION = 'none'
@@ -115,8 +117,8 @@ def validate_package(package, release):
             or TARGET_COMMIT == OLD_COMMIT
             or not isinstance(TARGET_SOURCE_SHA256, str)
             or not re.fullmatch('[0-9a-f]{64}', TARGET_SOURCE_SHA256)
-            or not isinstance(STORE_SHA256.get(10), str)
-            or not re.fullmatch('[0-9a-f]{64}', STORE_SHA256[10])):
+            or not isinstance(STORE_SHA256.get(11), str)
+            or not re.fullmatch('[0-9a-f]{64}', STORE_SHA256[11])):
         raise ValueError('CODE_TARGET_NOT_PINNED')
     if not isinstance(package, dict) or package.get('operation') != 'code-prepare':
         raise ValueError('CODE_PACKAGE')
@@ -195,7 +197,7 @@ def schema_contract(body):
 
 def store_contract(body, version):
     """No method exception: the complete reviewed old/target bytes are immutable."""
-    if version not in (9, 10) or hashlib.sha256(body).hexdigest() != STORE_SHA256.get(version):
+    if version not in (10, 11) or hashlib.sha256(body).hexdigest() != STORE_SHA256.get(version):
         raise ValueError('CODE_STORE_CHANGED')
     tree = ast.parse(body)
     versions = [node for node in tree.body if isinstance(node, ast.Assign)
@@ -234,9 +236,9 @@ def compatible_source(old, new, upgrade):
         if read(old/name) != read(new/name):
             raise ValueError('CODE_INFRASTRUCTURE_CHANGED')
     before, after = read(old/'naver_engine/store.py'), read(new/'naver_engine/store.py')
-    old_sql, new_sql = store_contract(before, 9), store_contract(after, 10)
-    if (schema_contract(before)['_migrate'] != schema_contract(after)['_migrate']
-            or new_sql[:len(old_sql)] != old_sql
+    old_sql, new_sql = store_contract(before, 10), store_contract(after, 11)
+    revision_migration_contract(before, after)
+    if (new_sql[:len(old_sql)] != old_sql
             or len(new_sql) != len(old_sql)+len(ADDITIVE_OBJECTS)):
         raise ValueError('CODE_SCHEMA_CHANGED')
     for statement, (kind, name) in zip(new_sql[len(old_sql):], ADDITIVE_OBJECTS):
@@ -248,6 +250,32 @@ def compatible_source(old, new, upgrade):
         if after != target_override(before, name):
             raise ValueError('CODE_OVERRIDE_CHANGED')
     compatible_code_scope(old, new, upgrade)
+
+
+def revision_migration_contract(before, after):
+    """Exactly eight additive columns and one reviewed loop; the old initializer remains intact."""
+    tree = ast.parse(after)
+    columns = [node for node in tree.body if isinstance(node, ast.Assign) and
+               any(isinstance(target, ast.Name) and target.id == '_REVISION_COLUMNS' for target in node.targets)]
+    if len(columns) != 1 or len(columns[0].targets) != 1 or ast.literal_eval(columns[0].value) != REVISION_COLUMNS:
+        raise ValueError('CODE_SCHEMA_CHANGED')
+    migrations = [node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == '_migrate']
+    if len(migrations) != 1:
+        raise ValueError('CODE_SCHEMA_CHANGED')
+    migration = migrations[0]
+    expected = ast.dump(ast.parse(ADDITIVE_MIGRATION).body[0], include_attributes=False)
+    removed = 0
+    for node in ast.walk(migration):
+        if isinstance(node, ast.With):
+            retained = []
+            for statement in node.body:
+                if ast.dump(statement, include_attributes=False) == expected:
+                    removed += 1
+                else:
+                    retained.append(statement)
+            node.body = retained
+    if removed != 1 or ast.dump(migration, include_attributes=False) != schema_contract(before)['_migrate']:
+        raise ValueError('CODE_SCHEMA_CHANGED')
 
 
 def target_override(before, name):
@@ -314,7 +342,7 @@ def db_snapshot(identity, release, upgrade):
         release.write_new(destination, b'')
         with closing(sqlite3.connect(db.as_uri()+'?mode=ro', uri=True)) as source, closing(sqlite3.connect(destination)) as target:
             OPERATION = 'snapshot_schema'
-            if source.execute("SELECT value FROM naver_auto_meta WHERE key='schema_version'").fetchone() != ('9',):
+            if source.execute("SELECT value FROM naver_auto_meta WHERE key='schema_version'").fetchone() != ('10',):
                 raise ValueError('DB_OLD_SCHEMA')
             OPERATION = 'snapshot_copy'
             source.backup(target)
@@ -336,7 +364,7 @@ def db_snapshot(identity, release, upgrade):
 
 
 def restore_db(snapshot, identity, release, upgrade):
-    """Keep failed files recoverable; restore the matching schema9 snapshot before the old image."""
+    """Keep failed files recoverable; restore the matching schema10 snapshot before the old image."""
     path, digest = snapshot
     raw = upgrade.read_file(path, mode=0o600, maximum=1024**3)
     if hashlib.sha256(raw).hexdigest() != digest:
@@ -374,7 +402,7 @@ try:
     step='warm_store_open'
     with S.open_writer(config.db) as store:
         step='warm_schema'
-        if S.SCHEMA_VERSION!=10 or store.meta('schema_version')!='10': raise ValueError('DB_TARGET_SCHEMA')
+        if S.SCHEMA_VERSION!=11 or store.meta('schema_version')!='11': raise ValueError('DB_TARGET_SCHEMA')
         step='warm_org_sync'
         org=Y.sync_org(options['erp_factory'](),store,clock.now())
         if org.outcome!='accepted': raise ValueError('ORG_NOT_ACCEPTED')
@@ -428,7 +456,7 @@ def warm_sources(path, release):
             code = result.get('warm_error_code') if isinstance(result, dict) else None
             raise ValueError(code if isinstance(code,str) and code in FAILURE_CODES else 'SOURCE_WARM_FAILED')
         if (result.get('ok') is not True or result.get('org_fresh') is not True
-                or type(result.get('schema')) is not int or result['schema'] != 10
+                or type(result.get('schema')) is not int or result['schema'] != 11
                 or type(result.get('catalog_total')) is not int or result['catalog_total'] < 1
                 or type(result.get('management_count')) is not int or result['management_count'] < 1):
             raise ValueError('SOURCE_WARM_FAILED')
@@ -519,6 +547,7 @@ def probe(release, source_commit, upgrade):
         raise ValueError('PAGE_NOT_READY')
     if management_target:
         for route, method in (('/reports', 'GET'),
+                              ('/reports/history?possibility_id=1&limit=20', 'GET'),
                               ('/accounts/reasons?ad_account_no=1&page=0&selection=all', 'GET'),
                               ('/management/update', 'POST'),
                               ('/management/collect', 'POST'), ('/reports/review', 'POST')):
@@ -548,13 +577,13 @@ def verify_running(path, receipt, release, lifecycle, upgrade):
 
 
 def verify_database_schema(source, release, upgrade):
-    """Read actual metadata after start or paired rollback; never run schema9 against schema10."""
+    """Read actual metadata after start or paired rollback; never run schema10 against schema11."""
     if source not in (OLD_COMMIT, TARGET_COMMIT):
         raise ValueError('CODE_PROBE_SOURCE')
     release.trusted_dir(DATA, uid=10001, gid=10001, mode=0o750)
     db = DATA/'engine.db'
     upgrade.read_file(db, uid=10001, gid=10001, mode=0o600, maximum=1024**3)
-    expected = '9' if source == OLD_COMMIT else '10'
+    expected = '10' if source == OLD_COMMIT else '11'
     with closing(sqlite3.connect(db.as_uri()+'?mode=ro', uri=True)) as connection:
         connection.execute('PRAGMA trusted_schema=OFF')
         if connection.execute("SELECT value FROM naver_auto_meta WHERE key='schema_version'").fetchone() != (expected,):
@@ -694,7 +723,7 @@ def apply(package, host, release, lifecycle, upgrade):
         result = {'ok':True,'stage':'internal_ready','source_commit':TARGET_COMMIT,'previous_commit':OLD_COMMIT,
                   'nginx_changed':False,'legacy_containers_unchanged':True,'bootstrap_unchanged':True,
                   'operation_id':identity,'unauthenticated_read_status':401,'business_post_status':403}
-        result.update(database_snapshot_verified=True, database_schema=10, inventory_enabled=True,
+        result.update(database_snapshot_verified=True, database_schema=11, inventory_enabled=True,
                       source_status=source_status, rollback_requires_matching_database=True)
         OPERATION = 'write_started_receipt'
         release.write_new(started, json.dumps(result, sort_keys=True).encode())

@@ -1,4 +1,4 @@
-"""Local-only schema 9→10 release gates; never opens operational data."""
+"""Local-only schema 10→11 release gates; never opens operational data."""
 import hashlib
 import json
 from pathlib import Path
@@ -6,23 +6,24 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-from test_naver_preview_code_upgrade import load
+from test_naver_preview_code_upgrade import load, StoreScopeTest
 
 
 class AdditiveContractTest(unittest.TestCase):
-    def test_actual_schema9_sql_and_initializer_are_preserved_before_schema10_additions(self):
-        fixture = json.loads((Path(__file__).with_name('fixtures')/'naver_schema9_10_contract.json').read_text())
+    def test_actual_schema10_sql_and_initializer_are_preserved_before_schema11_additions(self):
+        fixture = json.loads((Path(__file__).with_name('fixtures')/'naver_schema10_11_contract.json').read_text())
         code = load('naver_preview_code_upgrade')
         code.TARGET_COMMIT = 'b'*40
         sources = {}
-        for version, contract in ((9, fixture['old']), (10, fixture['new_observed_unsealed'])):
+        for version, contract in ((10, fixture['old']), (11, fixture['new_observed_unsealed'])):
             old_sql = tuple(fixture['old']['sql'])
             sql = tuple(contract['sql'])
             sources[version] = ('SCHEMA_VERSION='+str(version)+'\n_SCHEMA='+repr(old_sql)+'\n'+
-                ('_SCHEMA += '+repr(sql[len(old_sql):])+'\n' if version == 10 else '')+contract['migrate']+'\n').encode()
+                ('_SCHEMA += '+repr(sql[len(old_sql):])+'\n_REVISION_COLUMNS='+repr(code.REVISION_COLUMNS)+'\n'
+                 if version == 11 else '')+contract['migrate']+'\n').encode()
         with tempfile.TemporaryDirectory() as directory:
             old, new = (Path(directory).resolve()/part for part in ('old', 'new'))
-            for path, version in ((old, 9), (new, 10)):
+            for path, version in ((old, 10), (new, 11)):
                 for name in ('compose.naver-engine.yml', 'compose.naver-relay.yml',
                              'deploy/naver-engine-backup.override.yml', 'Dockerfile.naver-engine',
                              'Dockerfile.naver-relay', 'backend/requirements.txt', 'naver_runtime/bootstrap.py'):
@@ -30,12 +31,12 @@ class AdditiveContractTest(unittest.TestCase):
                 file = path/'naver_engine/store.py'; file.parent.mkdir(parents=True); file.write_bytes(sources[version])
                 for role in ('engine', 'relay'):
                     (path/('preview-'+role+'.override.yml')).write_bytes(
-                        ('image: '+(code.OLD_COMMIT if version == 9 else code.TARGET_COMMIT)).encode())
+                        ('image: '+(code.OLD_COMMIT if version == 10 else code.TARGET_COMMIT)).encode())
             upgrade = Mock(read_file=lambda path, **kwargs: Path(path).read_bytes())
             hashes = {version: hashlib.sha256(body).hexdigest() for version, body in sources.items()}
             with patch.object(code, 'STORE_SHA256', hashes):
                 code.compatible_source(old, new, upgrade)
-                self.assertEqual(code.store_contract(sources[10], 10)[:35], tuple(fixture['old']['sql']))
+                self.assertEqual(code.store_contract(sources[11], 11)[:len(old_sql)], tuple(fixture['old']['sql']))
 
     def test_pending_commit_archive_or_store_hash_cannot_prepare(self):
         code = load('naver_preview_code_upgrade')
@@ -48,15 +49,37 @@ class AdditiveContractTest(unittest.TestCase):
             with self.subTest(target=target, archive=archive, store=store), \
                     patch.object(code, 'TARGET_COMMIT', target), \
                     patch.object(code, 'TARGET_SOURCE_SHA256', archive), \
-                    patch.object(code, 'STORE_SHA256', {10: store}):
+                    patch.object(code, 'STORE_SHA256', {11: store}):
                 with self.assertRaisesRegex(ValueError, 'CODE_TARGET_NOT_PINNED'):
                     code.validate_package(package, release)
 
     def test_literal_schema_append_is_included_in_the_reviewed_contract(self):
         code = load('naver_preview_code_upgrade')
-        source = b'SCHEMA_VERSION=10\n_SCHEMA=("old SQL",)\n_SCHEMA += ("new SQL",)\n'
-        with patch.object(code, 'STORE_SHA256', {10: hashlib.sha256(source).hexdigest()}):
-            self.assertEqual(code.store_contract(source, 10), ('old SQL', 'new SQL'))
+        source = b'SCHEMA_VERSION=11\n_SCHEMA=("old SQL",)\n_SCHEMA += ("new SQL",)\n'
+        with patch.object(code, 'STORE_SHA256', {11: hashlib.sha256(source).hexdigest()}):
+            self.assertEqual(code.store_contract(source, 11), ('old SQL', 'new SQL'))
+
+    def test_prior_schema9_to10_fixture_remains_available_and_unchanged(self):
+        fixture = json.loads((Path(__file__).with_name('fixtures')/'naver_schema9_10_contract.json').read_text())
+        self.assertEqual(fixture['old_commit'], '73b9fe39c36284e266eea874902608a4127b00bf')
+        self.assertEqual(fixture['old']['migrate'], fixture['new_observed_unsealed']['migrate'])
+        self.assertEqual(fixture['new_observed_unsealed']['sha256'],
+                         'aa411970fd7f4ff230ffcd5b62e4448d4aae77ff57757a2bb62a880044f54212')
+
+    def test_exact_additive_columns_and_initializer_only_are_accepted(self):
+        code = load('naver_preview_code_upgrade')
+        source = StoreScopeTest.TARGET_SOURCE
+        code.revision_migration_contract(StoreScopeTest.SOURCE, source)
+        self.assertEqual(sum(len(items) for items in code.REVISION_COLUMNS.values()), 8)
+        for changed in (
+                source.replace(b"source_wait_attempts", b"unreviewed_attempts"),
+                source.replace(b"INTEGER NOT NULL DEFAULT 1", b"INTEGER NOT NULL DEFAULT 2"),
+                source.replace(b"if column not in columns:", b"if column in columns:"),
+                source.replace(b" ADD COLUMN ", b" DROP COLUMN "),
+                source.replace(b"self._set_meta", b"self._other_meta")):
+            self.assertNotEqual(changed, source)
+            with self.assertRaisesRegex(ValueError, 'CODE_SCHEMA_CHANGED'):
+                code.revision_migration_contract(StoreScopeTest.SOURCE, changed)
 
     def test_only_target_management_posts_require_401_and_old_ad_writes_stay_403(self):
         code = load('naver_preview_code_upgrade')
