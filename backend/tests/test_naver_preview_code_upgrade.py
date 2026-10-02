@@ -35,7 +35,7 @@ def sealed_code():
     module = load('naver_preview_code_upgrade')
     module.TARGET_COMMIT = 'b'*40
     module.TARGET_SOURCE_SHA256 = 'd'*64
-    module.STORE_SHA256[11] = 'e'*64
+    module.STORE_SHA256['target'] = 'e'*64
     return module
 
 
@@ -263,33 +263,27 @@ class ContractTest(unittest.TestCase):
 
     def test_only_reviewed_runtime_and_bundled_test_paths_are_allowlisted(self):
         module = load('naver_preview_code_upgrade')
-        self.assertEqual(module.OLD_COMMIT, '657d98d12b7d84c1e34b6fc61c5fad830e5c0377')
-        self.assertEqual(module.TARGET_COMMIT, '847be08ad8c306b7fce3fb427d1cc3168014493f')
+        self.assertEqual(module.OLD_COMMIT, '847be08ad8c306b7fce3fb427d1cc3168014493f')
+        self.assertEqual(module.TARGET_COMMIT, 'b83e908d04223b9e004122ae2ddfc1fc452a5255')
         self.assertEqual(module.OLD_SOURCE_SHA256,
-                         'b2d0663912d6ea11ddeddacffcfa01458af5221802b21de0154c90c4bb738e1a')
-        self.assertEqual(module.TARGET_SOURCE_SHA256, '1f79b31dd9a8fd5a366db3d0198bb5c932ca7c127028ab559f4010919a64dcdc')
+                         '1f79b31dd9a8fd5a366db3d0198bb5c932ca7c127028ab559f4010919a64dcdc')
+        self.assertEqual(module.TARGET_SOURCE_SHA256, '5fb05acbd66954d560871db93d4561efb2e1f734d33ec41206f5ef1c6d1cace2')
         self.assertEqual(module.STORE_SHA256, {
-            10:'aa411970fd7f4ff230ffcd5b62e4448d4aae77ff57757a2bb62a880044f54212',
-            11:'66b3f5511bc5977077eb45c6fd14cbde7be4bfdc5afbaac2abc2eca9362fca89'})
+            'old':'66b3f5511bc5977077eb45c6fd14cbde7be4bfdc5afbaac2abc2eca9362fca89',
+            'target':'9130e8205b5f25d8d0c77abe6d38570f81e617949b238236e96accbba5186ecb'})
         contract = json.loads((Path(__file__).with_name('fixtures')/'naver_schema10_11_contract.json').read_text())
-        self.assertEqual(contract['old']['sha256'], module.STORE_SHA256[10])
-        self.assertEqual(contract['new_observed_unsealed']['sha256'], module.STORE_SHA256[11])
+        self.assertEqual(contract['new_observed_unsealed']['sha256'], module.STORE_SHA256['old'])
         # Exact git archive delta: top-level tests, docs and seal tooling are not bundled.
         self.assertEqual(module.CODE_PATHS, {
-            'backend/naver_page/app.css', 'backend/naver_page/app.js', 'backend/naver_page/index.html',
-            'naver_engine/links.py', 'naver_engine/store.py', 'naver_engine/management.py',
-            'naver_engine/performance_reads.py', 'naver_engine/reporting.py',
-            'naver_engine/web.py', 'naver_runtime/scheduler.py', 'naver_runtime/writer.py'})
+            'backend/naver_page/app.js', 'naver_engine/naver_read.py', 'naver_engine/store.py',
+            'naver_engine/performance_reads.py', 'naver_runtime/__main__.py', 'naver_runtime/scheduler.py'})
         self.assertEqual(module.TEST_PATHS, {
-            'naver_engine/tests/fluid_screen_audit.js', 'naver_engine/tests/management_screen_browser.js',
-            'naver_engine/tests/test_alerts.py', 'naver_engine/tests/test_links.py',
-            'naver_engine/tests/test_owner_screen_copy.py', 'naver_engine/tests/test_sync.py',
-            'naver_engine/tests/test_store.py',
-            'naver_engine/tests/test_managed_storage.py',
-            'naver_engine/tests/test_performance_reads.py', 'naver_engine/tests/test_reporting.py',
-            'naver_engine/tests/test_report_revisions.py', 'naver_engine/tests/test_report_revision_web.py',
-            'naver_engine/tests/test_revalidation_collection.py', 'naver_engine/tests/test_revision_schema.py',
-            'naver_runtime/tests/test_main.py', 'naver_runtime/tests/test_scheduler.py'})
+            'naver_engine/tests/test_managed_storage.py', 'naver_engine/tests/test_naver_read_codes.py',
+            'naver_engine/tests/test_performance_batch_reads.py',
+            'naver_engine/tests/test_performance_error_preservation.py',
+            'naver_engine/tests/test_performance_reads.py', 'naver_runtime/tests/test_integration.py',
+            'naver_runtime/tests/test_main.py', 'naver_runtime/tests/test_scheduler.py',
+            'naver_runtime/tests/test_scheduler_cadence.py'})
 
     def scenario(self, failure=None, mode='apply'):
         code = sealed_code()
@@ -425,8 +419,8 @@ class ContractTest(unittest.TestCase):
                 patch.object(code, 'EXPECTED_BASELINE', 'a'*64), \
                 patch.object(code, 'OLD_SOURCE_SHA256', 'c'*64), \
                 patch.object(code, 'TARGET_SOURCE_SHA256', 'c'*64), \
-                patch.object(code, 'STORE_SHA256', {10:hashlib.sha256(StoreScopeTest.SOURCE).hexdigest(),
-                                                  11:hashlib.sha256(StoreScopeTest.TARGET_SOURCE).hexdigest()}), \
+                patch.object(code, 'STORE_SHA256', {'old':hashlib.sha256(StoreScopeTest.SOURCE).hexdigest(),
+                                                  'target':hashlib.sha256(StoreScopeTest.TARGET_SOURCE).hexdigest()}), \
                 patch.object(code, 'verify_database_schema'), \
                 patch.object(code, 'db_snapshot', return_value=(Path('/synthetic-snapshot'), 'd'*64)) as snapshot, \
                 patch.object(code, 'restore_db') as restore, \
@@ -512,7 +506,7 @@ class ContractTest(unittest.TestCase):
                 (root/'backend/naver_page/app.js').write_bytes(b'old')
                 (root/'backend/naver_page/sso-bootstrap.js').write_bytes(b'unchanged')
             (new/'backend/naver_page/app.js').write_bytes(b'new')
-            added=new/'backend/naver_page/index.html';added.write_bytes(b'approved')
+            added=new/'backend/naver_page/app.js';added.write_bytes(b'approved')
             module.compatible_code_scope(old,new,upgrade)
             forbidden=new/'backend/naver_page/sso-bootstrap.js';forbidden.write_bytes(b'changed')
             with self.assertRaisesRegex(ValueError,'CODE_SCOPE_CHANGED'):
@@ -521,11 +515,11 @@ class ContractTest(unittest.TestCase):
             added.unlink();added.symlink_to(forbidden)
             with self.assertRaisesRegex(ValueError,'CODE_SOURCE_PATH'):
                 module.compatible_code_scope(old,new,upgrade)
-            added.unlink();(new/'backend/naver_page/app.js').unlink()
+            added.unlink()
             with self.assertRaisesRegex(ValueError,'CODE_SOURCE_REMOVED'):
                 module.compatible_code_scope(old,new,upgrade)
 
-    def test_monthly_dashboard_allows_only_exact_runtime_and_test_paths(self):
+    def test_throughput_release_allows_only_exact_runtime_and_test_paths(self):
         module=sealed_code()
         upgrade=Mock()
         upgrade.read_file.side_effect=lambda path,**kwargs: Path(path).read_bytes()
@@ -539,7 +533,7 @@ class ContractTest(unittest.TestCase):
                 (new/name).write_bytes(b'approved reliability update')
             module.compatible_code_scope(old,new,upgrade)
             for name in ('naver_runtime/bootstrap.py','naver_engine/inventory_reads.py',
-                         'naver_runtime/__main__.py','backend/app/naver_auto/scope.py',
+                         'naver_runtime/writer.py','backend/app/naver_auto/scope.py',
                          'backend/naver_page/sso-bootstrap.js','backend/app/naver_entry.py'):
                 forbidden=new/name;forbidden.parent.mkdir(parents=True,exist_ok=True);forbidden.write_bytes(b'not approved')
                 with self.subTest(path=name), self.assertRaisesRegex(ValueError,'CODE_SCOPE_CHANGED'):
@@ -628,7 +622,7 @@ class ContractTest(unittest.TestCase):
 
     def test_schema_comparison_ignores_whitespace_but_not_migration_or_version(self):
         module=sealed_code()
-        before=b'SCHEMA_VERSION=7\n_SCHEMA=("SQL",)\ndef _migrate():\n    pass\n'
+        before=b'SCHEMA_VERSION=7\n_SCHEMA=("SQL",)\n_REVISION_COLUMNS={}\ndef _migrate():\n    pass\n'
         self.assertEqual(module.schema_contract(before),module.schema_contract(before+b'# comment\n'))
         self.assertNotEqual(module.schema_contract(before),module.schema_contract(before.replace(b'=7',b'=8')))
         with self.assertRaises(ValueError):
@@ -726,12 +720,11 @@ class StoreScopeTest(unittest.TestCase):
         return True
 '''
     _ACTUAL = json.loads((Path(__file__).with_name('fixtures')/'naver_schema10_11_contract.json').read_text())
-    SOURCE = ('SCHEMA_VERSION=10\n_SCHEMA='+repr(tuple(_ACTUAL['old']['sql']))+'\n'+
-              _ACTUAL['old']['migrate']+'\n').encode()+METHODS
-    TARGET_SOURCE = ('SCHEMA_VERSION=11\n_SCHEMA='+repr(tuple(_ACTUAL['new_observed_unsealed']['sql']))+'\n'+
+    SOURCE = ('SCHEMA_VERSION=11\n_SCHEMA='+repr(tuple(_ACTUAL['new_observed_unsealed']['sql']))+'\n'+
         '_REVISION_COLUMNS='+repr({key: tuple(tuple(item) for item in value) for key,value in
                                    _ACTUAL['new_observed_unsealed']['revision_columns'].items()})+'\n'+
         _ACTUAL['new_observed_unsealed']['migrate']+'\n').encode()+METHODS
+    TARGET_SOURCE = SOURCE.replace(b'return None', b'return 1')
 
     def setUp(self):
         self.code = sealed_code()
@@ -742,7 +735,7 @@ class StoreScopeTest(unittest.TestCase):
         self.upgrade = Mock()
         self.upgrade.read_file.side_effect = lambda path, **kwargs: Path(path).read_bytes()
         hashes = patch.object(self.code, 'STORE_SHA256', {
-            10:hashlib.sha256(self.SOURCE).hexdigest(), 11:hashlib.sha256(self.TARGET_SOURCE).hexdigest()})
+            'old':hashlib.sha256(self.SOURCE).hexdigest(), 'target':hashlib.sha256(self.TARGET_SOURCE).hexdigest()})
         hashes.start();self.addCleanup(hashes.stop)
         for root in (self.old, self.new):
             for name in ('compose.naver-engine.yml', 'compose.naver-relay.yml',
@@ -760,7 +753,7 @@ class StoreScopeTest(unittest.TestCase):
                     body = self.code.target_override(body, name)
                 (root/('preview-'+name+'.override.yml')).write_bytes(body)
 
-    def test_only_pinned_additive_schema10_to11_transition_is_accepted(self):
+    def test_only_pinned_schema11_to11_transition_is_accepted(self):
         self.code.compatible_source(self.old, self.new, self.upgrade)
 
     def test_schema_version_sql_and_migration_changes_refuse_even_with_approved_methods(self):
@@ -771,6 +764,21 @@ class StoreScopeTest(unittest.TestCase):
             self.assertNotEqual(source, self.TARGET_SOURCE)
             (self.new/'naver_engine/store.py').write_bytes(source)
             with self.subTest(change=before), self.assertRaises(ValueError):
+                self.code.compatible_source(self.old, self.new, self.upgrade)
+
+    def test_repinning_store_bytes_cannot_authorize_any_schema11_contract_change(self):
+        changes = (
+            self.TARGET_SOURCE.replace(b'SCHEMA_VERSION=11', b'SCHEMA_VERSION=12'),
+            self.TARGET_SOURCE + b'\n_SCHEMA += ("CREATE TABLE unreviewed (id INTEGER)",)\n',
+            self.TARGET_SOURCE.replace(b'source_wait_attempts', b'changed_attempts'),
+            self.TARGET_SOURCE.replace(b'if column not in columns:', b'if column in columns:'),
+        )
+        for source in changes:
+            self.assertNotEqual(source, self.TARGET_SOURCE)
+            (self.new/'naver_engine/store.py').write_bytes(source)
+            hashes = dict(self.code.STORE_SHA256, target=hashlib.sha256(source).hexdigest())
+            with self.subTest(source=source), patch.object(self.code, 'STORE_SHA256', hashes), \
+                    self.assertRaisesRegex(ValueError, 'CODE_SCHEMA_CHANGED'):
                 self.code.compatible_source(self.old, self.new, self.upgrade)
 
     def test_every_other_store_ast_change_and_method_signature_refuses(self):
@@ -793,7 +801,7 @@ class StoreScopeTest(unittest.TestCase):
                 self.code.compatible_source(self.old, self.new, self.upgrade)
 
     def test_unchanged_wrong_schema_or_missing_approved_methods_is_not_a_contract(self):
-        for source, error in ((self.SOURCE.replace(b'SCHEMA_VERSION=10', b'SCHEMA_VERSION=7'), 'CODE_SCHEMA_CHANGED'),
+        for source, error in ((self.SOURCE.replace(b'SCHEMA_VERSION=11', b'SCHEMA_VERSION=7'), 'CODE_SCHEMA_CHANGED'),
                               (self.SOURCE.split(b'class Store:')[0], 'CODE_STORE_CHANGED'),
                               (self.SOURCE.replace(b'    def record_inventory_progress',
                                                    b'    def missing_progress'), 'CODE_STORE_CHANGED')):
@@ -1015,7 +1023,7 @@ class DatabaseRollbackTest(unittest.TestCase):
         (self.root/'receipts').mkdir(mode=0o700)
         self.db=self.data/'engine.db'
         with closing(sqlite3.connect(self.db)) as connection, connection:
-            self.initialize_schema(connection, 10)
+            self.initialize_schema(connection, 11)
             connection.executescript("CREATE TABLE business (id INTEGER PRIMARY KEY,value TEXT);"
                 "INSERT INTO business VALUES (1,'preserved');")
             connection.execute("""INSERT INTO naver_auto_monthly_check
@@ -1054,7 +1062,7 @@ class DatabaseRollbackTest(unittest.TestCase):
             connection.execute("INSERT INTO naver_auto_manual_read (customer_id,requested_at,actor,period_start) VALUES (1,'synthetic',0,'2026-09-01')")
             connection.execute("UPDATE business SET value='new-schema-write'")
 
-    def test_actual_old_initializer_cannot_open_schema11_without_matching_snapshot(self):
+    def test_historical_schema10_initializer_still_cannot_open_the_schema11_snapshot(self):
         self.mutate_schema11()
         with closing(sqlite3.connect(self.db)) as connection:
             with self.assertRaisesRegex(RuntimeError, '이 엔진보다 새 저장 파일입니다'):
@@ -1062,15 +1070,17 @@ class DatabaseRollbackTest(unittest.TestCase):
             self.assertEqual(connection.execute("SELECT value FROM naver_auto_meta WHERE key='schema_version'").fetchone(), ('11',))
 
     def test_running_source_checks_real_metadata_and_never_accepts_wrong_schema(self):
-        self.code.verify_database_schema(self.code.OLD_COMMIT,self.release,self.upgrade)
-        with self.assertRaisesRegex(ValueError,'DB_TARGET_SCHEMA'):
-            self.code.verify_database_schema(self.code.TARGET_COMMIT,self.release,self.upgrade)
-        self.mutate_schema11()
-        self.code.verify_database_schema(self.code.TARGET_COMMIT,self.release,self.upgrade)
-        with self.assertRaisesRegex(ValueError,'DB_OLD_SCHEMA'):
-            self.code.verify_database_schema(self.code.OLD_COMMIT,self.release,self.upgrade)
+        for source, error in ((self.code.OLD_COMMIT, 'DB_OLD_SCHEMA'),
+                              (self.code.TARGET_COMMIT, 'DB_TARGET_SCHEMA')):
+            self.code.verify_database_schema(source,self.release,self.upgrade)
+            with closing(sqlite3.connect(self.db)) as connection, connection:
+                connection.execute("UPDATE naver_auto_meta SET value='10' WHERE key='schema_version'")
+            with self.assertRaisesRegex(ValueError,error):
+                self.code.verify_database_schema(source,self.release,self.upgrade)
+            with closing(sqlite3.connect(self.db)) as connection, connection:
+                connection.execute("UPDATE naver_auto_meta SET value='11' WHERE key='schema_version'")
 
-    def test_real_schema11_failed_write_restores_schema10_snapshot_and_retains_failed_data(self):
+    def test_real_schema11_failed_write_restores_schema11_snapshot_and_retains_failed_data(self):
         snapshot=self.code.db_snapshot(self.identity,self.release,self.upgrade)
         path,digest=snapshot
         self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(),digest)
@@ -1081,11 +1091,12 @@ class DatabaseRollbackTest(unittest.TestCase):
             (self.data/('engine.db'+suffix)).write_bytes(('failed'+suffix).encode())
         self.code.restore_db(snapshot,self.identity,self.release,self.upgrade)
         with closing(sqlite3.connect(self.db)) as connection, connection:
-            self.assertEqual(connection.execute("SELECT value FROM naver_auto_meta WHERE key='schema_version'").fetchone(),('10',))
+            self.assertEqual(connection.execute("SELECT value FROM naver_auto_meta WHERE key='schema_version'").fetchone(),('11',))
             self.assertEqual(connection.execute('SELECT value FROM business').fetchone(),('preserved',))
             self.assertEqual(connection.execute('SELECT spend FROM naver_auto_monthly_check').fetchone(),(100,))
             self.assertEqual(connection.execute('SELECT type,name,sql FROM sqlite_master ORDER BY type,name').fetchall(),self.old_schema)
-            self.assertEqual(connection.execute("SELECT name FROM sqlite_master WHERE name='naver_auto_report_dirty'").fetchall(),[])
+            self.assertEqual(connection.execute("SELECT name FROM sqlite_master WHERE name='naver_auto_report_dirty'").fetchall(),[('naver_auto_report_dirty',)])
+            self.assertEqual(connection.execute('SELECT customer_id,actor FROM naver_auto_manual_read').fetchall(),[])
             self.assertEqual(connection.execute('PRAGMA integrity_check').fetchall(),[('ok',)])
         # Failed DB and sidecars stay on the same filesystem as the restored live DB.
         quarantine=self.data/('.account-failed-db-'+self.identity)
@@ -1118,7 +1129,7 @@ class DatabaseRollbackTest(unittest.TestCase):
         self.assertEqual(self.db.read_bytes(),before)
         self.assertFalse((self.data/('.account-failed-db-'+self.identity)).exists())
 
-    def test_other_schema_is_not_accepted_as_the_schema10_rollback_snapshot(self):
+    def test_other_schema_is_not_accepted_as_the_schema11_rollback_snapshot(self):
         with closing(sqlite3.connect(self.db)) as connection, connection:
             connection.execute("UPDATE naver_auto_meta SET value='7' WHERE key='schema_version'")
         before=self.db.read_bytes()
