@@ -644,6 +644,8 @@
       REQUEST_BUDGET: '회차 호출·시간 한도 도달', UNEXPECTED: '수집 오류 · 관리자 확인 필요' };
     put($('inventoryRows'), rows.length ? rows.map(function (r) {
       var c = r.collection || {}, m = r.management || {}, status = collection[c.status] || c.status || '수집 대기';
+      var recheck = c.revalidation, recheckNames = {manual_period:'수동 기간 재확인',recent:'최근 3일 재확인',
+        reconcile:'최근 31일 재확인',report_weekly:'주간 보고기간 재확인',report_monthly:'월간 보고기간 재확인',backfill:'누락 기간 보충'};
       if (m.cadence === 'weekly' && (!c.status || c.status === 'pending')) status = '비관리 · 일요일 7일 점검 대기';
       var period = periodText(c.period_start, c.period_end);
       var spend = c.spend === undefined ? c.yday_spend : c.spend;
@@ -659,11 +661,16 @@
         h('td', null, r.workflow), h('td', null, r.owner && r.owner.name || '담당 미확인'),
         h('td', null, status, c.error_code ? h('span', { class: 'w', title: c.error_code }, collectionReason[c.error_code] || c.error_code) : null,
           h('span', { class: 'w' }, '최근 시도 ' + datedTime(c.checked_at)),
+          recheck ? h('div', { class: 'w' }, (recheckNames[recheck.kind] || '원천 재확인') + ' · ' + (collection[recheck.status] || '상태 미확인'),
+            h('span', { class: 'w' }, periodText(recheck.period_start, recheck.period_end)),
+            h('span', { class: 'w' }, '재확인 시도 ' + datedTime(recheck.checked_at)),
+            recheck.error_code ? h('span', { class: 'w' }, collectionReason[recheck.error_code] || recheck.error_code) : null) : null,
           c.activity_observed === true && m.cadence === 'weekly' ? h('span', { class: 'blocked-note' }, '비관리 계정에 실적 있음 · 담당 확인') : null),
         h('td', { class: 'account-values' }, h('span', { class: 'w' }, previous ? '이전 성공값 · 최신 확인 필요' : hasValues ? '확인된 실적' : '성공 실적 없음'),
           h('span', { class: 'w' }, period), h('b', { class: 'num' }, won(spend)),
           h('span', { class: 'w' }, '노출 ' + num(c.imp === undefined ? c.yday_imp : c.imp) + ' · 클릭 ' + num(c.clk === undefined ? c.yday_clk : c.clk)),
-          c.last_success_at ? h('span', { class: 'w' }, '마지막 성공 ' + datedTime(c.last_success_at)) : null),
+          c.last_success_at ? h('span', { class: 'w' }, '마지막 성공 ' + datedTime(c.last_success_at)) : null,
+          c.source_rechecked_at ? h('span', { class: 'w' }, '표시 실적 원천 확인 ' + datedTime(c.source_rechecked_at)) : null),
         h('td', { class: 'account-values' }, h('b', { class: 'num' }, won(c.bizmoney)),
           h('span', { class: 'w' }, '잔액 확인 ' + datedTime(c.bizmoney_at)), c.stale === true && typeof c.bizmoney === 'number' ? h('span', { class: 'w' }, '이전 잔액 · 최신 확인 필요') : null,
           typeof c.bizmoney_change === 'number' && isFinite(c.bizmoney_change) && c.previous_bizmoney_at ?

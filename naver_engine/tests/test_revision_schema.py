@@ -19,6 +19,7 @@ class RevisionSchemaTest(unittest.TestCase):
         st._migrate()
         self.assertEqual(conn.execute("SELECT value FROM naver_auto_meta WHERE key='schema_version'").fetchone()[0], '11')
         self.assertEqual(conn.execute("SELECT customer_id,period_start,period_end,possibility_id FROM naver_auto_manual_read").fetchall(), [(100,None,None,None)])
+        self.assertEqual(conn.execute("SELECT request_kind FROM naver_auto_manual_read").fetchall(), [('manual',)])
         for table, expected in {
             'naver_auto_performance_job': {'generation','source_wait_attempts'},
             'naver_auto_daily_performance': {'source_generation','source_revision'},

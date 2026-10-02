@@ -151,6 +151,54 @@ class RevalidationStorageBoundaryTest(unittest.TestCase):
         manual = next(j for j in self.st.performance_work(self.st.now) if j["kind"] == "manual_period")
         self.assertTrue(self.st.performance_account_valid(manual, self.st.now))
 
+    def test_dated_revalidation_projects_its_own_period_without_relabeling_daily(self):
+        daily = self.st.job()
+        self.st.success(daily)
+        day = date.fromisoformat(daily["period_end"])
+        daily_at = self.st.performance_checks(self.st.now)[A]["checked_at"]
+        self.st.advance(timedelta(hours=1))
+        self.st._conn.execute("UPDATE naver_auto_report_dirty SET pending=0")
+        self.st.performance_manual_request(A,100,self.st.now,start=day,end=day,possibility_id=11)
+        self.assertEqual(self.st._conn.execute("SELECT COUNT(*) FROM naver_auto_report_dirty WHERE pending=1").fetchone()[0], 2)
+        queued = self.st.performance_checks(self.st.now)[A]["revalidation"]
+        self.assertEqual((queued["status"], queued["checked_at"], queued["kind"]), ("pending",None,"manual_period"))
+        manual = next(j for j in self.st.performance_work(self.st.now) if j["kind"] == "manual_period")
+        self.st.success(manual, 50)
+        check = self.st.performance_checks(self.st.now)[A]
+        self.assertEqual((check["period_start"], check["period_end"], check["checked_at"]),
+                         (daily["period_start"], daily["period_end"], daily_at))
+        self.assertEqual((check["revalidation"]["kind"],check["revalidation"]["status"]), ("manual_period","ok"))
+        self.assertEqual(check["revalidation"]["period_start"], str(day))
+        self.assertEqual(check["source_rechecked_at"], S._kst_text(self.st.now, "시험"))
+        self.assertEqual(check["spend"], 50)
+
+    def test_undated_manual_request_keeps_its_original_period_and_manual_kind(self):
+        self.st.success(self.st.job())
+        self.st.advance(timedelta(hours=1))
+        self.st.performance_manual_request(A,100,self.st.now)
+        saved = self.st._conn.execute("SELECT period_start,period_end,request_kind FROM naver_auto_manual_read").fetchone()
+        self.assertEqual(saved, ("2026-10-04","2026-10-04","manual"))
+        self.st.advance(timedelta(days=1))
+        manual = next(job for job in self.st.performance_work(self.st.now) if job["kind"] == "manual")
+        self.assertEqual((manual["period_start"], manual["period_end"]), saved[:2])
+
+    def test_manual_structure_job_uses_request_generation_and_dated_stats_does_not_trigger_structure(self):
+        self.st.success(self.st.job())
+        self.st.advance(timedelta(hours=1))
+        self.st.performance_manual_request(A,100,self.st.now)
+        job = next(job for job in self.st.structure_work(self.st.now) if job["kind"] == "manual")
+        self.assertEqual(job["generation"], job["requested_at"])
+        self.assertTrue(self.st.structure_account_valid(job,self.st.now))
+        self.st.begin_structure_check(job,self.st.now)
+        self.st.record_structure_check(job,self.st.now,{"status":"retry","error_code":"READ_RETRY"})
+        self.assertEqual(self.st.structure_checks([A],self.st.now)[A]["status"],"retry")
+        manual = next(job for job in self.st.performance_work(self.st.now) if job["kind"] == "manual")
+        self.st.success(manual)
+        self.st.advance(timedelta(hours=1))
+        day = date(2026,10,4)
+        self.st.performance_manual_request(A,100,self.st.now,start=day,end=day,possibility_id=11)
+        self.assertTrue(all(job["kind"] not in ("manual","manual_period") for job in self.st.structure_work(self.st.now)))
+
 
 if __name__ == "__main__":
     unittest.main()

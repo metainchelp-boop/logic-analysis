@@ -23,7 +23,12 @@ class OwnerScreenCopyTest(unittest.TestCase):
 
     def test_read_only_copy_distinguishes_scheduled_checks_and_disabled_alerts(self):
         source = (PAGE / 'app.js').read_text()
-        self.assertIn('현재 시간대에는 아직 수집·점검 전일 수 있습니다', source)
+        self.assertIn('전일 실적은 한국시간 00:01부터 수집합니다', source)
+        self.assertIn('10:00은 출근용 집계 목표', source)
+        self.assertIn('미완료 계정은 이후에도 계속 수집합니다', source)
+        self.assertIn('기존 이상 점검의 06:30~', source)
+        self.assertIn('별도 경로입니다', source)
+        self.assertIn('모든 계정의 10시 완료를 보장하지 않습니다', source)
         self.assertIn('읽기 전용 검증판에서는 점검 기준을 변경할 수 없습니다', source)
         self.assertIn('알림 전송·자동입찰은 꺼져 있습니다', source)
         self.assertIn("readOnly() ?", source)

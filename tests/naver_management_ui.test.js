@@ -131,6 +131,18 @@ test('비관리 잔액 변화는 이전 확인 시각과 비교하되 충전을 
   assert.equal(run.requests.filter(r=>r.method!=='GET').length,0);
 });
 
+test('기간 재확인 상태와 정정된 원천 확인 시각은 기존 일일 수집과 분리한다', async () => {
+  const run = launch({data:inventory([fixture({collection:{status:'ok',spend:50,
+    period_start:'2026-10-01',period_end:'2026-10-01',checked_at:'2026-10-02T00:30:00+09:00',
+    source_rechecked_at:'2026-10-02T11:00:00+09:00',revalidation:{kind:'manual_period',status:'source_wait',
+      period_start:'2026-09-01',period_end:'2026-09-30',checked_at:'2026-10-02T11:05:00+09:00',
+      error_code:'SOURCE_AGGREGATING'}}})])});
+  await flush();
+  assert.match(run.text('inventoryRows'),/수동 기간 재확인 · 네이버 집계 대기/);
+  assert.match(run.text('inventoryRows'),/2026-09-01 ~ 2026-09-30/);
+  assert.match(run.text('inventoryRows'),/표시 실적 원천 확인 2026.*10.*02.*11:00/);
+});
+
 test('허용된 관리 변경만 필수 사유와 단계 개정값을 보내며 중복 저장을 막는다', async () => {
   let resolveWrite;
   const data = inventory([fixture({ management: { cadence: 'daily', stage_revision: 'r1', excluded: false, can_manage: true, can_collect: true } }),

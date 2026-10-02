@@ -50,6 +50,8 @@ class _ManagedBoundary(S.ManagedStorage):
         if "naver_auto_performance_job" in sql:
             return _Rows(self.jobs)
         if "naver_auto_manual_read" in sql:
+            if "consumed_at IS NULL" in sql:
+                return _Rows([row for row in self.requests if row.get("consumed_at") is None])
             if "WHERE" in sql:
                 return _Rows([row for row in self.requests if row["customer_id"] == args[0]])
             return _Rows(self.requests)
@@ -230,7 +232,8 @@ class ManagedStorageBoundaryTest(unittest.TestCase):
             self.st.catalog["items"].append({**self.st.catalog["items"][0], "possibility_id": pid})
             self.st.catalog["ids"].append({**self.st.catalog["ids"][0], "possibility_id": pid, "customer_id_raw": str(cid)})
         self.st.catalog["total"] = 3
-        self.st.requests = [{"customer_id": cid, "requested_at": self.now.isoformat(), "actor": 0}
+        self.st.requests = [{"customer_id": cid, "requested_at": self.now.isoformat(), "actor": 0,
+                             "possibility_id": self.st.states[cid]["possibility_id"]}
                             for cid in (TM.A, TM.B, TM.C_)]
         jobs = self.st.performance_work(self.now, 3)
         self.assertEqual([job["kind"] for job in jobs], ["manual", "daily", "daily"])

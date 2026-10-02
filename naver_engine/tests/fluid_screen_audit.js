@@ -9,7 +9,7 @@ async function assertNoHorizontalOverflow(page, label) {
     const failures = [...document.querySelectorAll('.screen.on, .tblwrap, .tabs, .toc, .box, .report-history-content')]
       .filter(visible).filter(element => element.scrollWidth > element.clientWidth + 1)
       .map(element => ({ id: element.id, class: element.className, scroll: element.scrollWidth, width: element.clientWidth }));
-    return { viewport: innerWidth, document: document.documentElement.scrollWidth, body: document.body.scrollWidth,
+    return { viewport: document.documentElement.clientWidth, document: document.documentElement.scrollWidth, body: document.body.scrollWidth,
       main: document.querySelector('main').getBoundingClientRect().width, failures };
   });
   assert.ok(result.document <= result.viewport + 1 && result.body <= result.viewport + 1,
@@ -24,14 +24,18 @@ async function auditFluidScreens(page, cfg) {
     ['dashboard', '/naver/dashboard', '#dashboardMetrics .dashboard-metric'],
     ['watch', '/naver/', '#kpis .kpi'],
     ['automation', '/naver/automation', '#s-automation .auto-soon'],
-    ['reports', '/naver/reports', '#reportsRows .card'],
+    ['reports', '/naver/reports', '#reportsStatus'],
     ['transfers', '/naver/transfers', '#inventoryRows tr'],
     ['settings', '/naver/settings', '#sp-th table']
   ];
   for (const [screen, route, ready] of screens) {
-    await page.locator('[data-go="' + route + '"]').click();
+    await page.locator('.top .menu [data-go="' + route + '"]').click();
     await page.locator('#s-' + screen + '.on').waitFor();
     await page.locator(ready).first().waitFor();
+    if (screen === 'reports') {
+      await page.waitForFunction(() => document.querySelector('#reportsStatus').textContent.includes('페이지'));
+      assert.ok(await page.locator('#reportsRows .empty, #reportsRows .report-card').count(), '보고서 빈 상태 또는 판 목록');
+    }
     if (screen === 'watch') await page.locator('#tblChips [data-f="all"]').click();
     for (const width of widths) {
       await page.setViewportSize({ width, height: 960 });
@@ -47,7 +51,7 @@ async function auditFluidScreens(page, cfg) {
       }
     }
   }
-  await page.locator('[data-go="/naver/transfers"]').click();
+  await page.locator('.top .menu [data-go="/naver/transfers"]').click();
   const period = page.locator('#inventoryRows').getByRole('button', { name: '기간 재확인', exact: true }).first();
   await period.waitFor();
   for (const width of widths) {
@@ -78,7 +82,7 @@ async function auditFluidScreens(page, cfg) {
   await page.route(reportsPattern, route => route.fulfill({ json: { rows: [report] } }));
   await page.route(historyPattern, route => route.fulfill({ json: { items: [{ ...report, report_id: 99002, revision_no: 2 }], next_before_report_id: null } }));
   try {
-    await page.locator('[data-go="/naver/reports"]').click();
+    await page.locator('.top .menu [data-go="/naver/reports"]').click();
     await page.locator('[data-report="99003"]').waitFor();
     const current = page.locator('[data-report="99003"]');
     await current.locator('.report-history>summary').click();

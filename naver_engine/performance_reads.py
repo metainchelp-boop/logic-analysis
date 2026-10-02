@@ -108,7 +108,9 @@ def validate_progress(source, job):
             or (not ids and source["conversion_evidence"]):
         raise CheckpointInvalid("일별 이어읽기 위치 또는 근거가 다릅니다")
     for cycle in source["cycles"]:
-        _cycle(cycle, end)
+        parsed = _cycle(cycle, end)
+        if job.get("generation") and parsed.date() < datetime.fromisoformat(job["generation"]).astimezone(S.KST).date():
+            raise CheckpointInvalid("재확인 세대보다 오래된 일별 원천입니다")
     totals = source["day_totals"]
     if not isinstance(totals, dict) or set(totals) != set(_days(start, end)):
         raise CheckpointInvalid("일별 이어읽기 날짜가 빠지거나 다릅니다")
@@ -164,7 +166,8 @@ def _read(reader, handle, job, values, store, clock):
         # HTTP/인증/모양/미래시각 오류는 집계 대기로 숨기지 않는다.
         raw_cycle = daily.cycle_base_tm
         if isinstance(raw_cycle, datetime) and raw_cycle.tzinfo is not None and raw_cycle <= clock():
-            if not daily.data_fresh or daily.missing_days:
+            generation_day = datetime.fromisoformat(job["generation"]).astimezone(S.KST).date() if job.get("generation") else None
+            if not daily.data_fresh or daily.missing_days or (generation_day and raw_cycle.astimezone(S.KST).date() < generation_day):
                 raise SourceAggregating("원천 일별 집계가 아직 완료되지 않았습니다")
         if not daily.data_fresh or daily.missing_days or set(daily.days) != set(_days(start, end)):
             raise PerformanceIncomplete("일별 통계 날짜가 완결되지 않았습니다")

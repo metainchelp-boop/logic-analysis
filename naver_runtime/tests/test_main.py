@@ -154,8 +154,8 @@ class InventoryRuntimeTest(TestCase):
             with self.subTest(status=expected):
                 def incomplete(store, clock, ads, naver):
                     ads.add(TM.A, [(1, "ELIGIBLE", False, TM.steady(0, 0, 0, 0))], biz=10)
-                    # 합계 생략만으로 미완결이 아니다. 일별 0 증거도 없게 만든다.
-                    ads.drop_days[f"cmp-{TM.A}-1"] = {TM.YDAY}
+                    # 기준시각 자체를 검증할 수 없는 응답은 집계 대기가 아닌 실제 원천 오류다.
+                    ads.cycle = None
                     for _ in range(prior_attempts):
                         PR.run_performance(main.N.NaverReader(TM.creds(), transport=naver, clock=clock), store, clock.now)
                         clock.advance(1800)
@@ -168,6 +168,18 @@ class InventoryRuntimeTest(TestCase):
                 self.assertLessEqual(len(calls), 7)  # 누락 캠페인의 일별 증거 확인 1회 포함
                 self.assertEqual(erp, [])
                 self.assertEqual(health[0], 200, health[1])
+
+    def test_source_aggregation_wait_is_visible_without_becoming_an_account_error(self):
+        def aggregating(store, clock, ads, naver):
+            ads.add(TM.A, [(1, "ELIGIBLE", False, TM.steady())], biz=10)
+            ads.drop_days[f"cmp-{TM.A}-1"] = {TM.YDAY}
+        health, rows, calls, erp, _ = self.runtime(setup=aggregating)
+        self.assertEqual((rows[TM.A]["status"], rows[TM.A]["error_code"]), ("source_wait", "SOURCE_AGGREGATING"))
+        self.assertIsNone(rows[TM.A]["spend"])
+        self.assertEqual(rows[TM.B]["status"], "ok")
+        self.assertLessEqual(len(calls), 7)
+        self.assertEqual(erp, [])
+        self.assertEqual(health[0], 200, health[1])
 
     def test_partial_checkpoint_is_not_complete_and_keeps_existing_call_budget(self):
         def large(store, clock, ads, naver):

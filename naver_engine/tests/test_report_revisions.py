@@ -5,6 +5,7 @@ import json
 import sqlite3
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from naver_engine import reporting as R, store as S
 from naver_engine.tests import test_alerts as TA, test_account_catalog as TC
@@ -17,8 +18,12 @@ class ReportAdapter(S.ManagedStorage):
         self._conn = sqlite3.connect(":memory:", isolation_level=None)
         for sql in S._SCHEMA:
             self._conn.execute(sql)
+        for table, columns in S._REVISION_COLUMNS.items():
+            for name, definition in columns:
+                self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
         self.groups = {101: 11}
         self.cadence = "daily"
+        self.open_issue_pids = set()
         self.fail_period = None
 
     def _need_writer(self):
@@ -56,7 +61,7 @@ class ReportAdapter(S.ManagedStorage):
                 for cid, pid in self.groups.items()]
 
     def issues(self, open_only=False):
-        return []
+        return [{"possibility_id": pid} for pid in self.open_issue_pids]
 
     def org_current(self):
         return {"body": TA.org_body(self.now), "generated_at": self.now}
@@ -73,10 +78,13 @@ class ReportAdapter(S.ManagedStorage):
             day = start+timedelta(days=offset)
             self._conn.execute("""INSERT INTO naver_auto_daily_performance
                 (customer_id,day,possibility_id,matching_fingerprint,basic_complete,conversion_complete,
-                 conversion_attempts,imp,clk,spend,conversions,conversion_value,checked_at,campaign_fingerprint)
-                VALUES(?,?,?,'matching',1,1,0,100,10,?,1,2000,?,'campaign')
-                ON CONFLICT(customer_id,day) DO UPDATE SET spend=excluded.spend,checked_at=excluded.checked_at""",
-                (cid, day.isoformat(), pid, spend, self.now.isoformat()))
+                 conversion_attempts,imp,clk,spend,conversions,conversion_value,checked_at,campaign_fingerprint,
+                 source_at,source_generation)
+                VALUES(?,?,?,'matching',1,1,0,100,10,?,1,2000,?,'campaign',?,?)
+                ON CONFLICT(customer_id,day) DO UPDATE SET spend=excluded.spend,checked_at=excluded.checked_at,
+                source_at=excluded.source_at,source_generation=excluded.source_generation""",
+                (cid, day.isoformat(), pid, spend, self.now.isoformat(), self.now.isoformat(),
+                 self.now.replace(hour=0, minute=1, second=0, microsecond=0).isoformat()))
             for kind in ("weekly", "monthly"):
                 self._conn.execute("""INSERT INTO naver_auto_report_dirty
                     (possibility_id,period_key,updated_at,pending) VALUES(?,?,?,1)
@@ -102,6 +110,29 @@ class ReportRevisionTests(unittest.TestCase):
     def report(self, key, pid=11):
         return next(row for row in self.st.report_snapshots()
                     if row["period_key"] == key and row["possibility_id"] == pid)
+
+    def test_issue_only_changes_requeue_weekly_review_policy_without_new_source(self):
+        week = R.period("weekly", date(2026, 9, 28))
+        self.st.seed(week.start, week.end)
+        self.st.generate_reports(self.st.now)
+        first = self.report(week.key)
+        self.st.record_report_review(first["report_id"], 100, self.st.now, "approved", "초판 확인")
+        self.st.open_issue_pids.add(11)
+        self.st.now += timedelta(minutes=1)
+        self.st.generate_reports(self.st.now)
+        changed = self.report(week.key)
+        self.assertGreater(changed["report_id"], first["report_id"])
+        self.assertEqual(changed["review_status"], "needs_staff_review")
+        self.assertIsNone(changed["review"])
+        self.assertEqual(changed["payload"]["totals"], first["payload"]["totals"])
+        self.assertEqual(self.st.generate_reports(self.st.now)["generated"], 0)
+        self.st.open_issue_pids.clear()
+        self.st.now += timedelta(minutes=1)
+        self.st.generate_reports(self.st.now)
+        cleared = self.report(week.key)
+        self.assertGreater(cleared["report_id"], changed["report_id"])
+        self.assertEqual(cleared["review_status"], "not_required")
+        self.assertIsNone(cleared["review"])
 
     def test_old_period_dirty_revision_is_not_limited_to_previous_month(self):
         old = R.period("monthly", date(2025, 2, 3))
@@ -196,6 +227,28 @@ class ReportRevisionTests(unittest.TestCase):
             self.assertEqual(self.report(month.key)["report_id"], first["report_id"])
             self.assertEqual(self.report(month.key)["validation"]["last_checked_at"], checked)
 
+    def test_accepted_manual_recheck_blocks_approval_before_worker_starts(self):
+        month = R.period("monthly", date(2026, 9, 3))
+        self.st.seed(month.start, month.end)
+        self.st.generate_reports(self.st.now)
+        first = self.report(month.key)
+        self.st.now += timedelta(hours=1)
+        with patch("naver_engine.management_store.require_action", return_value={"possibility_id": 11}), \
+                patch.object(self.st, "_performance_history_valid", return_value=True):
+            self.st.performance_manual_request(101, 100, self.st.now, start=month.start, end=month.end, possibility_id=11)
+        for generate in (False, True):
+            if generate:
+                self.st.generate_reports(self.st.now)
+            current = self.report(month.key)
+            self.assertEqual(current["report_id"], first["report_id"])
+            self.assertEqual(current["validation"]["status"], "pending")
+            self.assertEqual(current["validation"]["pending_account_days"], 30)
+            self.assertEqual(current["validation"]["last_checked_at"], first["validation"]["last_checked_at"])
+            # 아직 시도하지 않은 요청을 성공/실패 시도 시각으로 꾸미지 않는다.
+            self.assertEqual(current["validation"]["last_attempt_at"], first["validation"]["last_attempt_at"])
+            with self.assertRaises(S.StoreRefused):
+                self.st.record_report_review(first["report_id"], 100, self.st.now, "approved", "재확인 접수 대기")
+
     def test_current_rematch_does_not_move_old_daily_values_or_expected_accounts(self):
         month = R.period("monthly", date(2026, 9, 3))
         self.st.seed(month.start, month.end)
@@ -221,6 +274,45 @@ class ReportRevisionTests(unittest.TestCase):
         self.assertEqual(len({row["possibility_id"] for row in self.st.report_snapshots()}), 20)
         self.assertEqual(self.st.generate_reports(self.st.now)["advertisers"], 1)
         self.assertEqual(len({row["possibility_id"] for row in self.st.report_snapshots()}), 21)
+
+    def test_late_old_generation_cannot_complete_new_report_validation(self):
+        month = R.period("monthly", date(2026, 9, 3))
+        self.st.now = datetime(2026, 10, 3, 10, tzinfo=S.KST)
+        self.st.seed(month.start, month.end)
+        self.st._conn.execute("UPDATE naver_auto_daily_performance SET source_generation=?,source_at=?",
+                              ("2026-10-02T00:01:00+09:00", "2026-10-03T09:00:00+09:00"))
+        self.st.generate_reports(self.st.now)
+        first = self.report(month.key)
+        self.assertEqual(first["validation"]["status"], "pending")
+        self.assertEqual(first["validation"]["pending_account_days"], 30)
+        self.assertIsNone(first["validation"]["last_checked_at"])
+        with self.assertRaises(S.StoreRefused):
+            self.st.record_report_review(first["report_id"], 100, self.st.now, "approved", "옛 세대 늦은 완료")
+        # 같은 날 네이버 cycleBaseTm은 세대 시작 시각보다 이를 수 있다. 날짜 하한만 적용한다.
+        self.st._conn.execute("UPDATE naver_auto_daily_performance SET source_generation=?,source_at=?",
+                              ("2026-10-03T00:01:00+09:00", "2026-10-03T00:00:00+09:00"))
+        self.st._conn.execute("UPDATE naver_auto_report_dirty SET pending=1")
+        self.st.generate_reports(self.st.now)
+        current = self.report(month.key)
+        self.assertEqual(current["report_id"], first["report_id"])
+        self.assertEqual(current["validation"]["status"], "complete")
+
+    def test_legacy_or_older_cycle_proof_is_not_assumed_revalidated(self):
+        month = R.period("monthly", date(2026, 9, 3))
+        self.st.now = datetime(2026, 10, 3, 10, tzinfo=S.KST)
+        self.st.seed(month.start, month.end)
+        for generation, source in (("", "2026-10-03T09:00:00+09:00"),
+                                   ("2026-10-03T00:01:00+09:00", None),
+                                   ("2026-10-03T00:01:00+09:00", "2026-10-02T23:00:00+09:00"),
+                                   ("2026-10-03T00:01:00", "2026-10-03T09:00:00+09:00")):
+            with self.subTest(generation=generation, source=source):
+                self.st._conn.execute("UPDATE naver_auto_daily_performance SET source_generation=?,source_at=?",
+                                      (generation, source))
+                self.st._conn.execute("UPDATE naver_auto_report_dirty SET pending=1")
+                self.st.generate_reports(self.st.now)
+                report = self.report(month.key)
+                self.assertEqual(report["validation"]["status"], "pending")
+                self.assertIsNone(report["validation"]["last_checked_at"])
 
     def test_unmanaged_monthly_report_reuses_last_sunday_without_weekday_recheck(self):
         month = R.period("monthly", date(2026, 1, 3))

@@ -274,6 +274,13 @@ class PerformanceReadsTests(unittest.TestCase):
         self.assertEqual(P.run_performance(self.reader, self.store, self.clock.now).counts, {"limited": 1})
         self.assertEqual(self.reader.calls, before)
 
+    def test_historical_period_cannot_claim_revalidation_from_a_pre_generation_cycle(self):
+        self.store.jobs[0].update(kind="manual_period", generation="2026-10-05T08:00:00+09:00")
+        self.cycle = NOW-timedelta(days=1)
+        result = P.run_performance(self.reader,self.store,self.clock.now)
+        self.assertEqual(result.counts, {"source_wait":1})
+        self.assertNotIn("daily_rows", self.store.results["weekly-test"])
+
 
 if __name__ == "__main__":
     unittest.main()
