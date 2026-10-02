@@ -18,6 +18,102 @@ SPEC.loader.exec_module(M)
 
 
 class CollectionTest(unittest.TestCase):
+    def test_management_missing_schema10_tables_is_not_reported_as_empty_success(self):
+        db = sqlite3.connect(':memory:')
+        self.addCleanup(db.close)
+        db.execute('CREATE TABLE naver_auto_meta (key,value)')
+        db.execute("INSERT INTO naver_auto_meta VALUES ('schema_version','9')")
+        self.assertIsNone(M.collect_management(db, '2026-11-02'))
+        db.execute("UPDATE naver_auto_meta SET value='10'")
+        with self.assertRaises(sqlite3.OperationalError):
+            M.collect_management(db, '2026-11-02')
+        for schema in ('11', '010', 'PRIVATE'):
+            db.execute('UPDATE naver_auto_meta SET value=?', (schema,))
+            with self.assertRaisesRegex(ValueError, '^COLLECTION_SCHEMA$'):
+                M.collect_management(db, '2026-11-02')
+
+    def test_management_projection_refuses_unbounded_fields_counts_times_and_wrong_windows(self):
+        today = '2026-11-02'
+        value = dict(schema_version=10, jobs={key:dict(since_cycle_day=str(start), until_cycle_day=str(end),
+            status_scope=scope, statuses={}, latest_checked_at=None, latest_success_at=None)
+            for key, (start, end, scope) in M.management_windows(today).items()}, daily_rows=0, report_count=0,
+            stored_totals_scope='all_stored_rows', target_count=None,
+            target_count_reason='CURRENT_ELIGIBILITY_NOT_EVALUATED', counts_are_jobs_not_targets=True)
+        self.assertEqual(M.management_projection(value, today), value)
+        mutations = [lambda v:v.update(customer_id=987654321), lambda v:v.update(target_count=3),
+            lambda v:v.update(daily_rows=True), lambda v:v.update(report_count=-1),
+            lambda v:v.update(schema_version=True), lambda v:v.update(counts_are_jobs_not_targets=False),
+            lambda v:v['jobs']['weekly'].update(since_cycle_day=today),
+            lambda v:v['jobs']['daily'].update(statuses={'PRIVATE_STATUS':1}),
+            lambda v:v['jobs']['daily'].update(statuses={'ok':2**63}),
+            lambda v:v['jobs']['daily'].update(latest_checked_at='PRIVATE_TIMESTAMP'),
+            lambda v:v['jobs']['backfill_recent'].update(statuses={'ok':1}),
+            lambda v:v['jobs'].update(PRIVATE={})]
+        for mutate in mutations:
+            altered = json.loads(json.dumps(value)); mutate(altered)
+            with self.assertRaises(ValueError) as error:
+                M.management_projection(altered, today)
+            self.assertNotIn('PRIVATE', str(error.exception))
+
+    def test_management_windows_are_sunday_based_and_script_keeps_readonly_bounded_transaction(self):
+        for day, sunday in (('2026-11-01','2026-11-01'), ('2026-11-02','2026-11-01'),
+                            ('2026-11-07','2026-11-01'), ('2026-11-08','2026-11-08')):
+            self.assertEqual(str(M.management_windows(day)['weekly'][0]), sunday)
+        script = M.script().decode()
+        self.assertIn("reader=S.open_reader('/var/lib/naver-engine/engine.db')", script)
+        self.assertIn('deadline=time.monotonic()+20', script)
+        self.assertIn('set_progress_handler(lambda: time.monotonic()>=deadline,10000)', script)
+        self.assertIn("reader._conn.execute('BEGIN')", script)
+        self.assertIn("reader._conn.execute('ROLLBACK')", script)
+        self.assertNotIn('open_writer', script)
+
+    def test_schema10_monday_includes_sunday_weekly_and_unfinished_backfill_40_days_without_identities(self):
+        fixture = json.loads((Path(__file__).with_name('fixtures')/'naver_schema9_10_contract.json').read_text())
+        db = sqlite3.connect(':memory:')
+        self.addCleanup(db.close)
+        for sql in fixture['new_observed_unsealed']['sql']:
+            db.execute(sql)
+        db.execute("INSERT INTO naver_auto_meta VALUES ('schema_version','10')")
+        stamp = '2026-11-02T10:00:00+09:00'
+        rows = [('daily', '2026-11-02', 'ok'), ('daily', '2026-11-01', 'retry'),
+                ('weekly', '2026-11-01', 'partial'), ('weekly', '2026-10-25', 'retry'),
+                ('backfill', '2026-10-03', 'retry'), ('backfill', '2026-10-03', 'ok'),
+                ('backfill', '2026-09-01', 'retry'), ('backfill', '2026-11-02', 'PRIVATE_STATUS')]
+        for i, (kind, cycle, status) in enumerate(rows):
+            db.execute('''INSERT INTO naver_auto_performance_job
+                (job_key,customer_id,kind,cycle_day,period_start,period_end,snapshot_at,catalog_at,
+                 stage_revision,possibility_id,matching_fingerprint,status,checked_at,next_try_at,attempts,bizmoney)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                ('PRIVATE_JOB'+str(i),987654321,kind,cycle,'2026-10-01','2026-10-01',stamp,stamp,
+                 'PRIVATE_REV',987654322,'PRIVATE_MATCH',status,stamp,stamp,0,123456.75))
+        db.execute("UPDATE naver_auto_performance_job SET checked_at='2026-11-01T10:00:00+09:00' WHERE kind='backfill' AND status='ok'")
+        db.execute("UPDATE naver_auto_performance_job SET last_success_at=? WHERE kind='backfill' AND cycle_day='2026-10-03' AND status='retry'", (stamp,))
+        db.execute('''INSERT INTO naver_auto_daily_performance
+            (customer_id,day,matching_fingerprint,basic_complete,conversion_complete,conversion_attempts,checked_at,campaign_fingerprint)
+            VALUES (987654321,'2026-10-01','PRIVATE_MATCH',1,0,1,?,'PRIVATE_CAMPAIGN')''', (stamp,))
+        db.execute('''INSERT INTO naver_auto_report_snapshot
+            (possibility_id,period_key,revision_fingerprint,generated_at,status,review_status,payload_json)
+            VALUES (987654322,'PRIVATE_PERIOD','PRIVATE_REV',?,'partial','pending','PRIVATE_PAYLOAD')''', (stamp,))
+        db.commit()
+        db.row_factory = sqlite3.Row
+        scope = dict(_A=sqlite3)
+        exec(fixture['new_observed_unsealed']['authorizer'], scope)
+        db.set_authorizer(scope['_authorizer'](scope['PHASE_READ']))
+        out = M.collect(types.SimpleNamespace(_conn=db), '2026-11-02')
+        management = out['management']
+        self.assertEqual(management['jobs']['daily']['statuses'], {'ok':1})
+        self.assertEqual(management['jobs']['weekly']['since_cycle_day'], '2026-11-01')
+        self.assertEqual(management['jobs']['weekly']['statuses'], {'partial':1})
+        self.assertEqual(management['jobs']['backfill_recent']['statuses'], {'retry':1,'UNRECOGNIZED':1})
+        self.assertEqual(management['jobs']['backfill_recent']['latest_success_at'], stamp)
+        self.assertEqual(management['daily_rows'], 1)
+        self.assertEqual(management['report_count'], 1)
+        self.assertIsNone(management['target_count'])
+        self.assertIs(management['counts_are_jobs_not_targets'], True)
+        self.assertEqual(M.project(out), out)
+        for forbidden in ('PRIVATE', '987654321', '987654322', '123456.75', 'customer_id', 'bizmoney'):
+            self.assertNotIn(forbidden, json.dumps(out))
+
     def test_docker_nanosecond_z_timestamp_is_normalized_before_legacy_host_parser(self):
         class LegacyDatetime:
             @staticmethod
@@ -180,6 +276,8 @@ class CollectionTest(unittest.TestCase):
         db = sqlite3.connect(':memory:')
         self.addCleanup(db.close)
         db.executescript('''
+          CREATE TABLE naver_auto_meta(key,value);
+          INSERT INTO naver_auto_meta VALUES('schema_version','9');
           CREATE TABLE naver_auto_prospect(possibility_id, name, stage_key, present);
           CREATE TABLE naver_auto_pairing_run(pairing_id, outcome);
           CREATE TABLE naver_auto_pairing_row(pairing_id, possibility_id, state);
@@ -198,6 +296,7 @@ class CollectionTest(unittest.TestCase):
         self.assertEqual(out['pairing']['unmatched_prospects'], 1)
         self.assertEqual(out['today_checks']['reasons'], {'stats-unread':1,'UNRECOGNIZED':1})
         self.assertEqual(out['latest_run']['codes'], ['UNRECOGNIZED'])
+        self.assertIsNone(out['management'])
         self.assertNotIn('SECRET', json.dumps(out))
         self.assertNotIn('987654321', json.dumps(out))
 

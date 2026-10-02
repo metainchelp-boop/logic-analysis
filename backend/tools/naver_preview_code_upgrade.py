@@ -1,4 +1,4 @@
-"""Pinned monthly dashboard with the exact additive schema8→9 migration and schema8 paired rollback."""
+"""Exact pinned additive schema9→10 management release; paired schema9 rollback."""
 import ast
 from contextlib import closing
 import fcntl
@@ -13,23 +13,43 @@ import sqlite3
 from types import SimpleNamespace
 import uuid
 
-OLD_COMMIT = '367a03dcae3a4a3b9da6e6c56918a439b995a40e'
-TARGET_COMMIT = '73b9fe39c36284e266eea874902608a4127b00bf'
+OLD_COMMIT = '73b9fe39c36284e266eea874902608a4127b00bf'
+# Reviewed final application commit, archive and complete store bytes; CI/deployment are separate gates.
+TARGET_COMMIT = 'a46ad4e7b0000d71ea2bbd30b2f9361a0ef0ada7'
 EXPECTED_BASELINE = '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'
-OLD_SOURCE_SHA256 = 'd7fcc9c5b65aac9c9d44a0abf3e058295838bf927250c8c30f209d5f12df1088'
-TARGET_SOURCE_SHA256 = '033e72d441f17f313a970f63d3a2f050d9866ce94f717bf5d10914533134c578'
-STORE_SHA256 = {8:'3c227925ee40b001a1e0090bfe130ff253310c4a91f59714a3752e601c4ee739',
-                9:'ccf614ec9e0f0ec5f6467ef9dbfe50b0676543f908bf9e877f61cc5cfe770e75'}
-CODE_PATHS = {'backend/app/naver_relay.py', 'backend/naver_page/app.css', 'backend/naver_page/app.js',
+OLD_SOURCE_SHA256 = '033e72d441f17f313a970f63d3a2f050d9866ce94f717bf5d10914533134c578'
+TARGET_SOURCE_SHA256 = 'e9487656fae8ab808f42f8451963086b95eb8f332b6fa4ca29f4a8072be8356c'
+STORE_SHA256 = {9:'ccf614ec9e0f0ec5f6467ef9dbfe50b0676543f908bf9e877f61cc5cfe770e75',
+                10:'aa411970fd7f4ff230ffcd5b62e4448d4aae77ff57757a2bb62a880044f54212'}
+CODE_PATHS = {'backend/app/naver_auto/checks.py', 'backend/naver_page/app.css', 'backend/naver_page/app.js',
               'backend/naver_page/index.html', 'naver_engine/dashboard.py', 'naver_engine/inventory.py',
-              'naver_engine/monthly_reads.py', 'naver_engine/naver_read.py', 'naver_engine/store.py',
+              'naver_engine/morning.py', 'naver_engine/naver_read.py', 'naver_engine/store.py',
+              'naver_engine/ad_reasons.py', 'naver_engine/management.py', 'naver_engine/management_store.py',
+              'naver_engine/performance_reads.py', 'naver_engine/reporting.py', 'naver_engine/structure_reads.py',
               'naver_engine/web.py', 'naver_runtime/scheduler.py', 'naver_runtime/writer.py'}
-TEST_PATHS = {'naver_engine/tests/dashboard_screen_browser.js', 'naver_engine/tests/screen_browser.js',
+TEST_PATHS = {'naver_engine/tests/management_screen_browser.js',
+              'naver_engine/tests/inventory_screen_browser.js',
               'naver_engine/tests/test_alerts.py', 'naver_engine/tests/test_dashboard.py',
-              'naver_engine/tests/test_dashboard_independent.py', 'naver_engine/tests/test_dashboard_screen.py',
-              'naver_engine/tests/test_dashboard_web.py', 'naver_engine/tests/test_monthly_reads.py',
+              'naver_engine/tests/test_naver_read.py', 'naver_engine/tests/test_store.py',
               'naver_engine/tests/test_monthly_store.py', 'naver_engine/tests/test_sync.py',
-              'naver_runtime/tests/test_scheduler.py'}
+              'naver_engine/tests/test_owner_screen_copy.py', 'naver_engine/tests/test_verified_collection.py',
+              'naver_engine/tests/test_ad_reasons.py', 'naver_engine/tests/test_managed_coverage.py',
+              'naver_engine/tests/test_managed_storage.py', 'naver_engine/tests/test_management_screen.py',
+              'naver_engine/tests/test_performance_reads.py', 'naver_engine/tests/test_reporting.py',
+              'naver_engine/tests/test_reason_page_web.py',
+              'naver_engine/tests/test_report_paging.py',
+              'naver_engine/tests/test_structure_collector.py', 'naver_engine/tests/test_structure_reads.py',
+              'naver_engine/tests/test_structure_store.py',
+              'naver_engine/tests/test_structure_storage.py',
+              'naver_runtime/tests/test_main.py', 'naver_runtime/tests/test_scheduler.py'}
+ADDITIVE_OBJECTS = (
+    ('TABLE', 'naver_auto_management_state'), ('TABLE', 'naver_auto_management_event'),
+    ('TABLE', 'naver_auto_performance_job'), ('INDEX', 'naver_auto_performance_due'),
+    ('INDEX', 'naver_auto_performance_recent'), ('TABLE', 'naver_auto_daily_performance'),
+    ('TABLE', 'naver_auto_report_snapshot'), ('TABLE', 'naver_auto_daily_revision'),
+    ('TABLE', 'naver_auto_report_review'), ('TABLE', 'naver_auto_manual_read'),
+    ('TABLE', 'naver_auto_structure_job'), ('INDEX', 'naver_auto_structure_recent'),
+)
 DATA = Path('/var/lib/metainc/naver-engine')
 STAGE = 'input'
 OPERATION = 'none'
@@ -92,7 +112,11 @@ def failure_report(error):
 
 def validate_package(package, release):
     if (not isinstance(TARGET_COMMIT, str) or not re.fullmatch('[0-9a-f]{40}', TARGET_COMMIT)
-            or TARGET_COMMIT == OLD_COMMIT):
+            or TARGET_COMMIT == OLD_COMMIT
+            or not isinstance(TARGET_SOURCE_SHA256, str)
+            or not re.fullmatch('[0-9a-f]{64}', TARGET_SOURCE_SHA256)
+            or not isinstance(STORE_SHA256.get(10), str)
+            or not re.fullmatch('[0-9a-f]{64}', STORE_SHA256[10])):
         raise ValueError('CODE_TARGET_NOT_PINNED')
     if not isinstance(package, dict) or package.get('operation') != 'code-prepare':
         raise ValueError('CODE_PACKAGE')
@@ -171,6 +195,8 @@ def schema_contract(body):
 
 def store_contract(body, version):
     """No method exception: the complete reviewed old/target bytes are immutable."""
+    if version not in (9, 10) or hashlib.sha256(body).hexdigest() != STORE_SHA256.get(version):
+        raise ValueError('CODE_STORE_CHANGED')
     tree = ast.parse(body)
     versions = [node for node in tree.body if isinstance(node, ast.Assign)
                 and any(isinstance(target, ast.Name) and target.id == 'SCHEMA_VERSION' for target in node.targets)]
@@ -178,17 +204,29 @@ def store_contract(body, version):
             or not isinstance(versions[0].value, ast.Constant)
             or type(versions[0].value.value) is not int or versions[0].value.value != version):
         raise ValueError('CODE_SCHEMA_CHANGED')
-    if version not in (8, 9) or hashlib.sha256(body).hexdigest() != STORE_SHA256[version]:
-        raise ValueError('CODE_STORE_CHANGED')
-    sql = [node.value for node in tree.body if isinstance(node, ast.Assign)
-           and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id == '_SCHEMA']
-    if len(sql) != 1:
+    sql = None
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == '_SCHEMA'
+                                               for target in node.targets):
+            if sql is not None or len(node.targets) != 1:
+                raise ValueError('CODE_SCHEMA_CHANGED')
+            sql = ast.literal_eval(node.value)
+        elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name) and node.target.id == '_SCHEMA':
+            if sql is None or not isinstance(node.op, ast.Add):
+                raise ValueError('CODE_SCHEMA_CHANGED')
+            extra = ast.literal_eval(node.value)
+            if not isinstance(extra, tuple) or not isinstance(sql, tuple):
+                raise ValueError('CODE_SCHEMA_CHANGED')
+            sql += extra
+    if sql is None:
         raise ValueError('SCHEMA_CONTRACT_MISSING')
-    return ast.literal_eval(sql[0])
+    if not isinstance(sql, tuple) or any(not isinstance(statement, str) for statement in sql):
+        raise ValueError('CODE_SCHEMA_CHANGED')
+    return sql
 
 
 def compatible_source(old, new, upgrade):
-    # Exact reviewed monthly delta only; infrastructure, credentials and all old SQL stay fixed.
+    # Exact reviewed management delta only; infrastructure, credentials and all old SQL stay fixed.
     read = lambda path: upgrade.read_file(path, mode=0o644, maximum=1024*1024, minimum=0)
     for name in ('compose.naver-engine.yml', 'compose.naver-relay.yml',
                  'deploy/naver-engine-backup.override.yml', 'Dockerfile.naver-engine',
@@ -196,13 +234,14 @@ def compatible_source(old, new, upgrade):
         if read(old/name) != read(new/name):
             raise ValueError('CODE_INFRASTRUCTURE_CHANGED')
     before, after = read(old/'naver_engine/store.py'), read(new/'naver_engine/store.py')
-    old_sql, new_sql = store_contract(before, 8), store_contract(after, 9)
+    old_sql, new_sql = store_contract(before, 9), store_contract(after, 10)
     if (schema_contract(before)['_migrate'] != schema_contract(after)['_migrate']
-            or not isinstance(old_sql, tuple) or not isinstance(new_sql, tuple)
-            or new_sql[:-2] != old_sql or len(new_sql) != len(old_sql)+2
-            or not new_sql[-2].startswith('CREATE TABLE IF NOT EXISTS naver_auto_monthly_check (')
-            or not new_sql[-1].startswith('CREATE INDEX IF NOT EXISTS naver_auto_monthly_period')):
+            or new_sql[:len(old_sql)] != old_sql
+            or len(new_sql) != len(old_sql)+len(ADDITIVE_OBJECTS)):
         raise ValueError('CODE_SCHEMA_CHANGED')
+    for statement, (kind, name) in zip(new_sql[len(old_sql):], ADDITIVE_OBJECTS):
+        if not re.match(r'CREATE '+kind+r' IF NOT EXISTS '+re.escape(name)+r'\s+(?:\(|ON\b)', statement):
+            raise ValueError('CODE_SCHEMA_CHANGED')
     for name in ('engine', 'relay'):
         before = upgrade.read_file(old/('preview-'+name+'.override.yml'), mode=0o600)
         after = upgrade.read_file(new/('preview-'+name+'.override.yml'), mode=0o600)
@@ -275,7 +314,7 @@ def db_snapshot(identity, release, upgrade):
         release.write_new(destination, b'')
         with closing(sqlite3.connect(db.as_uri()+'?mode=ro', uri=True)) as source, closing(sqlite3.connect(destination)) as target:
             OPERATION = 'snapshot_schema'
-            if source.execute("SELECT value FROM naver_auto_meta WHERE key='schema_version'").fetchone() != ('8',):
+            if source.execute("SELECT value FROM naver_auto_meta WHERE key='schema_version'").fetchone() != ('9',):
                 raise ValueError('DB_OLD_SCHEMA')
             OPERATION = 'snapshot_copy'
             source.backup(target)
@@ -297,7 +336,7 @@ def db_snapshot(identity, release, upgrade):
 
 
 def restore_db(snapshot, identity, release, upgrade):
-    """Keep failed files recoverable; restore the matching schema8 snapshot before the old image."""
+    """Keep failed files recoverable; restore the matching schema9 snapshot before the old image."""
     path, digest = snapshot
     raw = upgrade.read_file(path, mode=0o600, maximum=1024**3)
     if hashlib.sha256(raw).hexdigest() != digest:
@@ -335,7 +374,7 @@ try:
     step='warm_store_open'
     with S.open_writer(config.db) as store:
         step='warm_schema'
-        if S.SCHEMA_VERSION!=9 or store.meta('schema_version')!='9': raise ValueError('DB_TARGET_SCHEMA')
+        if S.SCHEMA_VERSION!=10 or store.meta('schema_version')!='10': raise ValueError('DB_TARGET_SCHEMA')
         step='warm_org_sync'
         org=Y.sync_org(options['erp_factory'](),store,clock.now())
         if org.outcome!='accepted': raise ValueError('ORG_NOT_ACCEPTED')
@@ -389,7 +428,7 @@ def warm_sources(path, release):
             code = result.get('warm_error_code') if isinstance(result, dict) else None
             raise ValueError(code if isinstance(code,str) and code in FAILURE_CODES else 'SOURCE_WARM_FAILED')
         if (result.get('ok') is not True or result.get('org_fresh') is not True
-                or type(result.get('schema')) is not int or result['schema'] != 9
+                or type(result.get('schema')) is not int or result['schema'] != 10
                 or type(result.get('catalog_total')) is not int or result['catalog_total'] < 1
                 or type(result.get('management_count')) is not int or result['management_count'] < 1):
             raise ValueError('SOURCE_WARM_FAILED')
@@ -454,7 +493,7 @@ def compatible_code_scope(old, new, upgrade):
 
 def probe(release, source_commit, upgrade):
     """The old rollback contract stays unchanged; only the pinned target gains auth gates."""
-    monthly_target = source_commit == TARGET_COMMIT
+    management_target = source_commit == TARGET_COMMIT
     if source_commit == OLD_COMMIT:
         # The deployed base already has authenticated verified-link and collection routes.
         source_commit = TARGET_COMMIT
@@ -471,14 +510,20 @@ def probe(release, source_commit, upgrade):
         return status, headers, body
     upgrade.probe(SimpleNamespace(unix_request=request))
     relay = '/run/metainc/naver-relay/relay.sock'
-    if monthly_target and release.unix_request(relay, '/api/naver-auto/dashboard', 'GET')[0] != 401:
+    if release.unix_request(relay, '/api/naver-auto/dashboard', 'GET')[0] != 401:
         raise ValueError('CODE_ROUTE_STATUS')
-    if monthly_target:
-        status, headers, body = release.unix_request(relay, '/naver/dashboard', 'GET')
-        headers = {key.lower():value for key,value in headers.items()}
-        if (status != 200 or b'id="s-dashboard"' not in body or headers.get('referrer-policy') != 'no-referrer'
-                or headers.get('cache-control') != 'no-store'):
-            raise ValueError('PAGE_NOT_READY')
+    status, headers, body = release.unix_request(relay, '/naver/dashboard', 'GET')
+    headers = {key.lower():value for key,value in headers.items()}
+    if (status != 200 or b'id="s-dashboard"' not in body or headers.get('referrer-policy') != 'no-referrer'
+            or headers.get('cache-control') != 'no-store'):
+        raise ValueError('PAGE_NOT_READY')
+    if management_target:
+        for route, method in (('/reports', 'GET'),
+                              ('/accounts/reasons?ad_account_no=1&page=0&selection=all', 'GET'),
+                              ('/management/update', 'POST'),
+                              ('/management/collect', 'POST'), ('/reports/review', 'POST')):
+            if release.unix_request(relay, '/api/naver-auto'+route, method)[0] != 401:
+                raise ValueError('CODE_ROUTE_STATUS')
     for route, method, expected in (
             ('/collection/status', 'GET', 401), ('/collection/request', 'POST', 401),
             *((r, 'POST', 403) for r in ('/issues/1/resolve', '/issues/1/except',
@@ -503,13 +548,13 @@ def verify_running(path, receipt, release, lifecycle, upgrade):
 
 
 def verify_database_schema(source, release, upgrade):
-    """Read actual metadata after start or paired rollback; never run schema8 against schema9."""
+    """Read actual metadata after start or paired rollback; never run schema9 against schema10."""
     if source not in (OLD_COMMIT, TARGET_COMMIT):
         raise ValueError('CODE_PROBE_SOURCE')
     release.trusted_dir(DATA, uid=10001, gid=10001, mode=0o750)
     db = DATA/'engine.db'
     upgrade.read_file(db, uid=10001, gid=10001, mode=0o600, maximum=1024**3)
-    expected = '8' if source == OLD_COMMIT else '9'
+    expected = '9' if source == OLD_COMMIT else '10'
     with closing(sqlite3.connect(db.as_uri()+'?mode=ro', uri=True)) as connection:
         connection.execute('PRAGMA trusted_schema=OFF')
         if connection.execute("SELECT value FROM naver_auto_meta WHERE key='schema_version'").fetchone() != (expected,):
@@ -649,7 +694,7 @@ def apply(package, host, release, lifecycle, upgrade):
         result = {'ok':True,'stage':'internal_ready','source_commit':TARGET_COMMIT,'previous_commit':OLD_COMMIT,
                   'nginx_changed':False,'legacy_containers_unchanged':True,'bootstrap_unchanged':True,
                   'operation_id':identity,'unauthenticated_read_status':401,'business_post_status':403}
-        result.update(database_snapshot_verified=True, database_schema=9, inventory_enabled=True,
+        result.update(database_snapshot_verified=True, database_schema=10, inventory_enabled=True,
                       source_status=source_status, rollback_requires_matching_database=True)
         OPERATION = 'write_started_receipt'
         release.write_new(started, json.dumps(result, sort_keys=True).encode())

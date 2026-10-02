@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 import re
 import stat
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 STAGE = 'input'
 PROJECTION_SOURCE = r'''
@@ -17,6 +17,7 @@ UNKNOWN = 'UNRECOGNIZED'
 PAIR_COUNTS = PAIR_STATES | {'prospects', 'ignored'}
 COLLECTION_COUNTS = CHECK_STATES | frozenset('targets store_refused duplicate_skipped unlinked_issues deadline_left abort_left handle_invalid account_error'.split())
 BOOTSTRAP_CODES = frozenset('REQUEST_FILE REQUEST_CHANGED REQUEST_SCHEMA REQUEST_EXPIRED HOLD_CHANGED_OR_EXPIRED HOLD_DIGEST_CHANGED HOLD_ROWS_CHANGED CURRENT_OWNER_REQUIRED SOURCES_NOT_TODAY SOURCES_UNUSABLE RESTRICTED_CONFIG_REQUIRED CONFIRM_REFUSED PAIRING_REFUSED INTERNAL_ERROR'.split())
+JOB_STATES = frozenset('reading partial ok retry limited reauth_required'.split())
 
 
 def bootstrap_empty(state):
@@ -177,8 +178,73 @@ def counts(value, allowed):
     return {key: number(n) for key, n in value.items()}
 
 
+def management_windows(today):
+    day = date.fromisoformat(today)
+    sunday = day-timedelta(days=(day.weekday()+1) % 7)
+    return {'daily': (day, day, 'all'), 'weekly': (sunday, sunday, 'all'),
+            'backfill_recent': (day-timedelta(days=39), day, 'unfinished')}
+
+
+def management_projection(value, today):
+    if value is None:
+        return None
+    fields = {'schema_version', 'jobs', 'daily_rows', 'report_count', 'stored_totals_scope',
+              'target_count', 'target_count_reason', 'counts_are_jobs_not_targets'}
+    if (not isinstance(value, dict) or set(value) != fields or type(value['schema_version']) is not int
+            or value['schema_version'] != 10 or value['target_count'] is not None
+            or value['target_count_reason'] != 'CURRENT_ELIGIBILITY_NOT_EVALUATED'
+            or value['counts_are_jobs_not_targets'] is not True
+            or value['stored_totals_scope'] != 'all_stored_rows'
+            or not isinstance(value['jobs'], dict) or set(value['jobs']) != set(management_windows(today))):
+        raise ValueError('COLLECTION_MANAGEMENT')
+    jobs = {}
+    for kind, (since, until, status_scope) in management_windows(today).items():
+        row = value['jobs'][kind]
+        if (not isinstance(row, dict) or set(row) != {'since_cycle_day', 'until_cycle_day', 'status_scope',
+                'statuses', 'latest_checked_at', 'latest_success_at'}
+                or row['since_cycle_day'] != str(since) or row['until_cycle_day'] != str(until)
+                or row['status_scope'] != status_scope):
+            raise ValueError('COLLECTION_MANAGEMENT')
+        statuses = counts(row['statuses'], JOB_STATES)
+        if status_scope == 'unfinished' and 'ok' in statuses:
+            raise ValueError('COLLECTION_MANAGEMENT')
+        jobs[kind] = dict(row, statuses=statuses, latest_checked_at=stamp(row['latest_checked_at']),
+                         latest_success_at=stamp(row['latest_success_at']))
+    return dict(value, jobs=jobs, daily_rows=number(value['daily_rows']), report_count=number(value['report_count']))
+
+
+def collect_management(connection, today):
+    row = connection.execute("SELECT value FROM naver_auto_meta WHERE key='schema_version'").fetchone()
+    schema = None if row is None else row[0]
+    if schema in ('7', '8', '9'):
+        return None
+    if schema != '10':
+        raise ValueError('COLLECTION_SCHEMA')
+    jobs = {}
+    states = tuple(sorted(JOB_STATES))
+    marks = ','.join('?' for _ in states)
+    for kind, (since, until, status_scope) in management_windows(today).items():
+        args = ('backfill' if kind == 'backfill_recent' else kind, str(since), str(until))
+        where = 'kind=? AND cycle_day>=? AND cycle_day<=?'
+        latest = connection.execute('SELECT MAX(checked_at),MAX(COALESCE(last_success_at,CASE WHEN status=\'ok\' THEN checked_at END)) '
+                                    'FROM naver_auto_performance_job WHERE '+where, args).fetchone()
+        if status_scope == 'unfinished':
+            where += " AND status!='ok'"
+        # Collapse unknown status strings in SQL so distinct untrusted values cannot grow the output.
+        rows = connection.execute('SELECT CASE WHEN status IN ('+marks+") THEN status ELSE 'UNRECOGNIZED' END,"
+            'COUNT(*) FROM naver_auto_performance_job WHERE '+where+' GROUP BY 1', states+args)
+        jobs[kind] = {'since_cycle_day':str(since), 'until_cycle_day':str(until), 'status_scope':status_scope,
+                      'statuses':grouped(rows, JOB_STATES), 'latest_checked_at':latest[0], 'latest_success_at':latest[1]}
+    return management_projection({'schema_version':10, 'jobs':jobs,
+        'daily_rows':connection.execute('SELECT COUNT(*) FROM naver_auto_daily_performance').fetchone()[0],
+        'report_count':connection.execute('SELECT COUNT(*) FROM naver_auto_report_snapshot').fetchone()[0],
+        'stored_totals_scope':'all_stored_rows', 'target_count':None,
+        'target_count_reason':'CURRENT_ELIGIBILITY_NOT_EVALUATED', 'counts_are_jobs_not_targets':True}, today)
+
+
 def project(value):
-    if not isinstance(value, dict) or set(value) != {'today', 'prospects', 'pairing', 'latest_run', 'today_checks', 'bootstrap'}:
+    fields = {'today', 'prospects', 'pairing', 'latest_run', 'today_checks', 'bootstrap'}
+    if not isinstance(value, dict) or set(value) not in (fields, fields | {'management'}):
         raise ValueError('COLLECTION_FIELDS')
     today = value['today']
     if not isinstance(today, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', today):
@@ -203,12 +269,15 @@ def project(value):
         if run['started_at'] is None:
             raise ValueError('COLLECTION_TIME')
     bootstrap = bootstrap_projection(value['bootstrap'])
-    return {'today': today, 'prospects': {'total': number(p['total']), 'stages': counts(p['stages'], STAGES)},
+    result = {'today': today, 'prospects': {'total': number(p['total']), 'stages': counts(p['stages'], STAGES)},
             'pairing': {'available': pair['available'], 'statuses': counts(pair['statuses'], PAIR_STATES),
                         'unmatched_prospects': number(pair['unmatched_prospects'], True)},
             'latest_run': run, 'today_checks': {'statuses': counts(checks['statuses'], CHECK_STATES),
                                                'reasons': counts(checks['reasons'], REASONS)},
             'bootstrap': bootstrap}
+    if 'management' in value:
+        result['management'] = management_projection(value['management'], today)
+    return result
 
 
 def collect(store, today):
@@ -238,7 +307,7 @@ def collect(store, today):
         'pairing': {'available': available, 'statuses': statuses, 'unmatched_prospects': unmatched},
         'latest_run': latest,
         'today_checks': {'statuses': grouped(c.execute('SELECT status,COUNT(*) FROM naver_auto_account_day WHERE day=? GROUP BY status', (today,)), CHECK_STATES), 'reasons': reasons},
-        'bootstrap': bootstrap_empty('not_checked')})
+        'bootstrap': bootstrap_empty('not_checked'), 'management': collect_management(c, today)})
 '''
 exec(compile(PROJECTION_SOURCE, '<collection-projection>', 'exec'))
 
@@ -251,7 +320,7 @@ def validate_package(package):
 
 
 def script():
-    parts = ['import json,os,sys,stat,re\nfrom pathlib import Path\nfrom datetime import date,datetime,timedelta,timezone\n', PROJECTION_SOURCE]
+    parts = ['import json,os,sys,stat,re,time\nfrom pathlib import Path\nfrom datetime import date,datetime,timedelta,timezone\n', PROJECTION_SOURCE]
     parts.append("""
 try:
     if os.geteuid()!=10001:
@@ -261,6 +330,8 @@ try:
     from naver_engine import store as S
     reader=S.open_reader('/var/lib/naver-engine/engine.db')
     try:
+        deadline=time.monotonic()+20
+        reader._conn.set_progress_handler(lambda: time.monotonic()>=deadline,10000)
         reader._conn.execute('BEGIN')
         result=collect(reader,datetime.now(timezone(timedelta(hours=9))).date().isoformat())
     finally:
