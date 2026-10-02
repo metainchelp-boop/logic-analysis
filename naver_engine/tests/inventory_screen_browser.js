@@ -48,7 +48,7 @@ const cfg = JSON.parse(process.argv[2]);
     assert.equal(await page.locator('#inventoryRows button').count(), 0);
     await page.selectOption('#inventoryMapping', 'all');
     await page.waitForFunction(() => document.querySelector('#inventoryCount').textContent.startsWith('4 /'));
-    await page.selectOption('#scope', 'person:3');
+    await page.selectOption('#scope', 'person:100');
     await page.waitForFunction(() => document.querySelector('#inventoryCount').textContent.startsWith('1 /'));
     assert.equal(page.url(), cfg.base + '/naver/transfers');
     await page.selectOption('#scope', 'all');
