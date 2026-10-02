@@ -263,11 +263,11 @@ class ContractTest(unittest.TestCase):
     def test_only_reviewed_runtime_and_bundled_test_paths_are_allowlisted(self):
         module = load('naver_preview_code_upgrade')
         self.assertEqual(module.OLD_COMMIT, '73b9fe39c36284e266eea874902608a4127b00bf')
-        self.assertEqual(module.TARGET_COMMIT, 'a46ad4e7b0000d71ea2bbd30b2f9361a0ef0ada7')
+        self.assertEqual(module.TARGET_COMMIT, '657d98d12b7d84c1e34b6fc61c5fad830e5c0377')
         self.assertEqual(module.OLD_SOURCE_SHA256,
                          '033e72d441f17f313a970f63d3a2f050d9866ce94f717bf5d10914533134c578')
         self.assertEqual(module.TARGET_SOURCE_SHA256,
-                         'e9487656fae8ab808f42f8451963086b95eb8f332b6fa4ca29f4a8072be8356c')
+                         'b2d0663912d6ea11ddeddacffcfa01458af5221802b21de0154c90c4bb738e1a')
         self.assertEqual(module.STORE_SHA256, {
             9:'ccf614ec9e0f0ec5f6467ef9dbfe50b0676543f908bf9e877f61cc5cfe770e75',
             10:'aa411970fd7f4ff230ffcd5b62e4448d4aae77ff57757a2bb62a880044f54212'})
