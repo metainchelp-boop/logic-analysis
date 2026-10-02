@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import uuid
 
 OLD_COMMIT = 'abf24060eaf907416439bf3e57d83242bb1b7bb5'
-TARGET_COMMIT = 'e1c4b3526db55d78175a1d6598f3403fdb9398f7'
+TARGET_COMMIT = '317dac8b145669dd9d78f1c35f9bf5ba6ae85418'
 EXPECTED_BASELINE = '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'
 OLD_SOURCE_SHA256 = '99482e833f9bb1035bc2c87e2fd662cc3900c908f5276b7e936ad68d279111e5'
 STORE_HASHES = ('a3ba0734762ae256ef564f824c0b04b8ea3def01da45070bc92623d6d1c79d19',
@@ -25,14 +25,14 @@ CODE_PATHS = {'backend/app/naver_auto/org_snapshot.py', 'backend/app/naver_auto/
     'naver_engine/handles.py', 'naver_engine/inventory.py', 'naver_engine/inventory_reads.py',
     'naver_engine/naver_read.py', 'naver_engine/store.py', 'naver_engine/views.py', 'naver_engine/web.py',
     'naver_runtime/__main__.py', 'naver_runtime/config.py', 'naver_runtime/erp_tunnel_transport.py',
-    'naver_runtime/scheduler.py'}
+    'naver_runtime/scheduler.py', 'naver_runtime/writer.py'}
 TEST_PATHS = {'deploy/naver-erp-tunnel/test_policy.py',
     *('naver_engine/tests/'+name for name in ('inventory_screen_browser.js', 'screen_browser.js',
         'test_account_catalog.py', 'test_alerts.py', 'test_board_rows.py', 'test_inventory_name_index.py',
         'test_inventory_reads.py', 'test_inventory_screen.py', 'test_metrics.py', 'test_naver_ids_snapshot.py',
         'test_owner_verification.py', 'test_screen.py', 'test_sync.py', 'test_web.py')),
     *('naver_runtime/tests/'+name for name in ('test_config.py', 'test_erp_tunnel_transport.py',
-        'test_guardrails.py', 'test_scheduler.py'))}
+        'test_guardrails.py', 'test_scheduler.py', 'test_main.py', 'test_writer.py'))}
 DATA = Path('/var/lib/metainc/naver-engine')
 STAGE = 'input'
 OPERATION = 'none'

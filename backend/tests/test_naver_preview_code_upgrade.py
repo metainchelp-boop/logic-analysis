@@ -235,7 +235,7 @@ class ContractTest(unittest.TestCase):
 
     def test_only_reviewed_runtime_and_bundled_test_paths_are_allowlisted(self):
         module = load('naver_preview_code_upgrade')
-        # Exact approved abf2406 -> e1c4b35 runtime delta, not the older f7 -> abf release.
+        # Exact account-first delta plus the approved writer-adapter recovery; no glob.
         self.assertEqual(module.CODE_PATHS, {
             'backend/app/naver_auto/org_snapshot.py', 'backend/app/naver_auto/scope.py',
             'backend/naver_page/app.css', 'backend/naver_page/app.js', 'backend/naver_page/index.html',
@@ -243,7 +243,7 @@ class ContractTest(unittest.TestCase):
             'naver_engine/handles.py', 'naver_engine/inventory.py', 'naver_engine/inventory_reads.py',
             'naver_engine/naver_read.py', 'naver_engine/store.py', 'naver_engine/views.py', 'naver_engine/web.py',
             'naver_runtime/__main__.py', 'naver_runtime/config.py', 'naver_runtime/erp_tunnel_transport.py',
-            'naver_runtime/scheduler.py'})
+            'naver_runtime/scheduler.py', 'naver_runtime/writer.py'})
         self.assertEqual(module.TEST_PATHS, {
             'deploy/naver-erp-tunnel/test_policy.py',
             *('naver_engine/tests/'+name for name in ('inventory_screen_browser.js', 'screen_browser.js',
@@ -251,7 +251,7 @@ class ContractTest(unittest.TestCase):
                 'test_inventory_reads.py', 'test_inventory_screen.py', 'test_metrics.py', 'test_naver_ids_snapshot.py',
                 'test_owner_verification.py', 'test_screen.py', 'test_sync.py', 'test_web.py')),
             *('naver_runtime/tests/'+name for name in ('test_config.py', 'test_erp_tunnel_transport.py',
-                'test_guardrails.py', 'test_scheduler.py'))})
+                'test_guardrails.py', 'test_scheduler.py', 'test_main.py', 'test_writer.py'))})
 
     def scenario(self, failure=None, mode='apply'):
         code = load('naver_preview_code_upgrade')
@@ -476,6 +476,26 @@ class ContractTest(unittest.TestCase):
             added.unlink();(new/'naver_runtime/scheduler.py').unlink()
             with self.assertRaisesRegex(ValueError,'CODE_SOURCE_REMOVED'):
                 module.compatible_code_scope(old,new,upgrade)
+
+    def test_writer_recovery_allows_only_exact_runtime_and_two_test_files(self):
+        module=load('naver_preview_code_upgrade')
+        upgrade=Mock()
+        upgrade.read_file.side_effect=lambda path,**kwargs: Path(path).read_bytes()
+        approved=('naver_runtime/writer.py','naver_runtime/tests/test_main.py','naver_runtime/tests/test_writer.py')
+        with tempfile.TemporaryDirectory() as folder:
+            old=Path(folder).resolve()/'old';new=Path(folder).resolve()/'new'
+            for root in (old,new):
+                for name in approved:
+                    path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b'old')
+            for name in approved:
+                (new/name).write_bytes(b'approved writer recovery')
+            module.compatible_code_scope(old,new,upgrade)
+            for name in ('naver_runtime/writer_extra.py','naver_runtime/tests/test_writer_extra.py',
+                         'naver_runtime/tests/test_main_extra.py'):
+                forbidden=new/name;forbidden.write_bytes(b'not approved')
+                with self.subTest(path=name), self.assertRaisesRegex(ValueError,'CODE_SCOPE_CHANGED'):
+                    module.compatible_code_scope(old,new,upgrade)
+                forbidden.unlink()
 
     def test_every_partial_failure_restores_exact_old_images_and_units(self):
         for reason in ('stop','warm','recreate','start','probe'):

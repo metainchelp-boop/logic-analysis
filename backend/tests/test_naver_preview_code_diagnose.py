@@ -352,6 +352,28 @@ class JournalTest(unittest.TestCase):
             with self.subTest(length=len(raw)),self.assertRaises(ValueError):
                 M.runtime_journal(SimpleNamespace(command=Mock(return_value=raw),unique=lambda pairs:dict(pairs)))
 
+    def test_app_source_requires_exact_service_and_non_manager_pid(self):
+        valid={'_SYSTEMD_UNIT':'metainc-naver-engine.service','_PID':'22','MESSAGE':'예약 회차 실패: AttributeError'}
+        for change in ({'_SYSTEMD_UNIT':'PRIVATE'},{'_PID':'1'},{'_PID':22},{'MESSAGE':['PRIVATE']}):
+            raw=json.dumps(dict(valid,**change)).encode()
+            def command(args,**kwargs):
+                return raw if '_SYSTEMD_UNIT=metainc-naver-engine.service' in args else b''
+            with self.subTest(change=change),self.assertRaisesRegex(ValueError,'DIAG_JOURNAL_FIELDS'):
+                M.runtime_journal(SimpleNamespace(command=command,unique=lambda pairs:dict(pairs)))
+
+    def test_four_exact_sources_are_bounded_to_2048_records_total(self):
+        def command(args,**kwargs):
+            app=any(a.startswith('_SYSTEMD_UNIT=') for a in args)
+            field='_SYSTEMD_UNIT' if app else 'UNIT'
+            unit=next(a.split('=',1)[1] for a in args if a.startswith(field+'='))
+            row=json.dumps({field:unit,'_PID':'22' if app else '1','MESSAGE':'PRIVATE'}).encode()
+            return b'\n'.join([row]*512)
+        value=M.runtime_journal(SimpleNamespace(command=command,unique=lambda pairs:dict(pairs)))
+        self.assertEqual(value['entries_inspected'],2048)
+        self.assertEqual(value['unrecognized_event_count'],2048)
+        self.assertEqual([row['count'] for row in value['sources']],[512]*4)
+        self.assertNotIn('PRIVATE',json.dumps(value))
+
 
 class RunTest(unittest.TestCase):
     def scenario(self,failure=None,post_drift=False,absent_after_create=False):
