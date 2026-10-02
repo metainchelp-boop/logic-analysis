@@ -1,15 +1,21 @@
 import importlib.util
 import ast
 import base64
+from contextlib import closing
 import gzip
+import hashlib
 import io
 import json
+import os
 import random
 import shlex
+import sqlite3
+import sys
 import tarfile
 import textwrap
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 import unittest
 import zlib
 from unittest.mock import Mock, patch
@@ -121,8 +127,9 @@ class ContractTest(unittest.TestCase):
 
     def test_probe_distinguishes_exact_old_and_target_auth_contracts(self):
         code = load('naver_preview_code_upgrade')
-        for source, confirm, accepted in ((code.OLD_COMMIT, 403, True),
-                (code.OLD_COMMIT, 401, False), (code.TARGET_COMMIT, 401, True),
+        # Deployed abf2406 already authenticates these verified business routes.
+        for source, confirm, accepted in ((code.OLD_COMMIT, 403, False),
+                (code.OLD_COMMIT, 401, True), (code.TARGET_COMMIT, 401, True),
                 (code.TARGET_COMMIT, 403, False), (code.TARGET_COMMIT, 200, False)):
             with self.subTest(source=source, confirm=confirm):
                 release = Mock()
@@ -207,17 +214,23 @@ class ContractTest(unittest.TestCase):
 
     def test_only_reviewed_runtime_and_bundled_test_paths_are_allowlisted(self):
         module = load('naver_preview_code_upgrade')
+        # Exact approved abf2406 -> e1c4b35 runtime delta, not the older f7 -> abf release.
         self.assertEqual(module.CODE_PATHS, {
-            'naver_engine/web.py', 'naver_engine/sync.py',
-            'naver_runtime/__main__.py', 'naver_runtime/writer.py',
-            'naver_runtime/scheduler.py', 'naver_runtime/collection_requests.py',
-            'backend/naver_page/app.js', 'backend/naver_page/index.html'})
+            'backend/app/naver_auto/org_snapshot.py', 'backend/app/naver_auto/scope.py',
+            'backend/naver_page/app.css', 'backend/naver_page/app.js', 'backend/naver_page/index.html',
+            'deploy/naver-erp-tunnel/be-nginx.conf', 'naver_engine/erp_read.py', 'naver_engine/fields.py',
+            'naver_engine/handles.py', 'naver_engine/inventory.py', 'naver_engine/inventory_reads.py',
+            'naver_engine/naver_read.py', 'naver_engine/store.py', 'naver_engine/views.py', 'naver_engine/web.py',
+            'naver_runtime/__main__.py', 'naver_runtime/config.py', 'naver_runtime/erp_tunnel_transport.py',
+            'naver_runtime/scheduler.py'})
         self.assertEqual(module.TEST_PATHS, {
-            'naver_engine/tests/test_verified_collection.py',
-            'naver_engine/tests/test_verified_collection_screen.py',
-            'naver_engine/tests/verified_collection_browser.js',
-            'naver_runtime/tests/test_collection_requests.py',
-            'naver_runtime/tests/test_collection_integration.py'})
+            'deploy/naver-erp-tunnel/test_policy.py',
+            *('naver_engine/tests/'+name for name in ('inventory_screen_browser.js', 'screen_browser.js',
+                'test_account_catalog.py', 'test_alerts.py', 'test_board_rows.py', 'test_inventory_name_index.py',
+                'test_inventory_reads.py', 'test_inventory_screen.py', 'test_metrics.py', 'test_naver_ids_snapshot.py',
+                'test_owner_verification.py', 'test_screen.py', 'test_sync.py', 'test_web.py')),
+            *('naver_runtime/tests/'+name for name in ('test_config.py', 'test_erp_tunnel_transport.py',
+                'test_guardrails.py', 'test_scheduler.py'))})
 
     def scenario(self, failure=None, mode='apply'):
         code = load('naver_preview_code_upgrade')
@@ -244,7 +257,11 @@ class ContractTest(unittest.TestCase):
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_bytes(body)
                 for name in ('engine','relay'):
-                    (path/('preview-'+name+'.override.yml')).write_text('image: '+path.name.removeprefix('naver-'))
+                    # Account-first alone adds the approved inventory switch to the inherited override.
+                    body = ('image: '+code.OLD_COMMIT).encode()
+                    if path.name != 'naver-'+code.OLD_COMMIT:
+                        body = code.target_override(body, name)
+                    (path/('preview-'+name+'.override.yml')).write_bytes(body)
                 receipt = root/'receipts'/('preview-'+path.name.removeprefix('naver-')+'.json')
                 if receipt.exists():
                     value = json.loads(receipt.read_text())
@@ -273,19 +290,26 @@ class ContractTest(unittest.TestCase):
                     target=path/name;target.parent.mkdir(parents=True, exist_ok=True);target.write_bytes(body)
             release.extract_source=extract
             current={'source':code.OLD_COMMIT}
+            services={}
             execute, request_api=release.command,release.unix_request
             def track(args,**kwargs):
                 result=execute(args,**kwargs)
                 if '--force-recreate' in args:
                     current['source']=Path(args[5]).parent.name.removeprefix('naver-')
+                if args[:2] == ['/usr/bin/systemctl', 'stop']:
+                    services[args[-1]] = 'inactive'
+                if args[:2] == ['/usr/bin/systemctl', 'start']:
+                    services[args[-1]] = 'active'
+                if args[:2] == ['/usr/bin/systemctl', 'show'] and args[-2] == 'ActiveState':
+                    return services.get(args[2], 'active').encode()
                 return result
             def request_api_by_code(path,route,method='GET'):
-                if current['source']==code.OLD_COMMIT and failure=='probe' and method=='POST':
-                    return 403,{},b''
-                if (current['source']==code.TARGET_COMMIT and method=='POST'
-                        and route in ('/api/naver-auto/links/confirm','/api/naver-auto/collection/request')
-                        and failure not in ('probe','rollback_recreate')):
-                    return 401,{},b''
+                if method=='POST':
+                    verified = route in ('/api/naver-auto/links/confirm','/api/naver-auto/collection/request')
+                    if current['source']==code.OLD_COMMIT:
+                        return (401 if verified else 403),{},b''
+                    if verified and failure not in ('probe','rollback_recreate'):
+                        return 401,{},b''
                 return request_api(path,route,method)
             release.command,release.unix_request=track,request_api_by_code
             target=root/'releases'/('naver-'+'b'*40)
@@ -316,8 +340,18 @@ class ContractTest(unittest.TestCase):
                 (target/'naver_runtime/unapproved.py').write_text('# outside approved scope')
         with patch.object(legacy_test, 'M', fixture), patch.object(code, 'TARGET_COMMIT', 'b'*40), \
                 patch.object(code, 'EXPECTED_BASELINE', 'a'*64), \
-                patch.object(code, 'OLD_SOURCE_SHA256', 'c'*64):
-            return legacy_test.UpgradeTest().scenario(failure, mode, setup)
+                patch.object(code, 'OLD_SOURCE_SHA256', 'c'*64), \
+                patch.object(code, 'db_snapshot', return_value=(Path('/synthetic-snapshot'), 'd'*64)), \
+                patch.object(code, 'restore_db') as restore, \
+                patch.object(code, 'warm_sources', side_effect=(ValueError('WARM_FAILED') if failure=='warm'
+                             else RuntimeError('WARM_CLEANUP_FAILED') if failure=='warm_cleanup' else None),
+                             return_value={'ok':True, 'org_fresh':True, 'schema':8, 'catalog_total':2, 'management_count':1}):
+            result = legacy_test.UpgradeTest().scenario(failure, mode, setup)
+            if failure == 'warm':
+                restore.assert_called_once()
+            if failure == 'warm_cleanup':
+                restore.assert_not_called()
+            return result
 
     def test_code_apply_preserves_existing_request_and_never_writes_a_new_one(self):
         result, commands, writes, _, state = self.scenario('replay')
@@ -357,11 +391,11 @@ class ContractTest(unittest.TestCase):
             for root in (old,new):
                 (root/'naver_runtime').mkdir(parents=True)
                 (root/'naver_runtime/scheduler.py').write_bytes(b'old')
-                (root/'naver_runtime/config.py').write_bytes(b'unchanged')
+                (root/'naver_runtime/bootstrap.py').write_bytes(b'unchanged')
             (new/'naver_runtime/scheduler.py').write_bytes(b'new')
-            added=new/'naver_runtime/collection_requests.py';added.write_bytes(b'approved')
+            added=new/'naver_runtime/erp_tunnel_transport.py';added.write_bytes(b'approved')
             module.compatible_code_scope(old,new,upgrade)
-            forbidden=new/'naver_runtime/config.py';forbidden.write_bytes(b'changed')
+            forbidden=new/'naver_runtime/bootstrap.py';forbidden.write_bytes(b'changed')
             with self.assertRaisesRegex(ValueError,'CODE_SCOPE_CHANGED'):
                 module.compatible_code_scope(old,new,upgrade)
             forbidden.write_bytes(b'unchanged')
@@ -373,7 +407,7 @@ class ContractTest(unittest.TestCase):
                 module.compatible_code_scope(old,new,upgrade)
 
     def test_every_partial_failure_restores_exact_old_images_and_units(self):
-        for reason in ('stop','recreate','start','probe'):
+        for reason in ('stop','warm','recreate','start','probe'):
             with self.subTest(reason=reason):
                 result,commands,writes,restored,state=self.scenario(reason)
                 self.assertEqual(str(result),'CODE_FAILED_ROLLED_BACK_DB_PRESERVED')
@@ -385,6 +419,13 @@ class ContractTest(unittest.TestCase):
     def test_rollback_failure_leaves_both_isolated_services_stopped(self):
         result,commands,_,_,_=self.scenario('rollback_recreate')
         self.assertEqual(str(result),'CODE_ROLLBACK_FAILED')
+        self.assertEqual(commands[-2:], [['/usr/bin/systemctl','stop','metainc-naver-relay.service'],
+                                        ['/usr/bin/systemctl','stop','metainc-naver-engine.service']])
+
+    def test_unconfirmed_warm_cleanup_never_restores_database_or_starts_old_services(self):
+        result,commands,_,_,_=self.scenario('warm_cleanup')
+        self.assertEqual(str(result),'CODE_ROLLBACK_FAILED')
+        self.assertFalse(any(args[:2]==['/usr/bin/systemctl','start'] for args in commands))
         self.assertEqual(commands[-2:], [['/usr/bin/systemctl','stop','metainc-naver-relay.service'],
                                         ['/usr/bin/systemctl','stop','metainc-naver-engine.service']])
 
@@ -428,7 +469,7 @@ class ContractTest(unittest.TestCase):
                 else:
                     source.append(line)
 
-    def test_unchanged_prepare_bundle_fits_single_environment_value_limit(self):
+    def test_compressed_prepare_bundle_roundtrip_and_size_guards_use_real_workflow(self):
         tools=Path(__file__).parents[1]/'tools'
         source=lambda name:(tools/(name+'.py')).read_text()
         package=dict(baseline='a'*64,source_commit='b'*40,ciphertext_sha256='c'*64,
@@ -438,7 +479,224 @@ class ContractTest(unittest.TestCase):
                     upgrade_source=source('naver_preview_upgrade'))
         prepare=dict(shared,package=package,source=source('naver_preview_release'),
                      code_source=source('naver_preview_code_upgrade'))
-        self.assertLess(len(base64.b64encode(json.dumps(prepare).encode()))+len('PREVIEW_RELEASE_B64='),131000)
+        # The account-first controller exceeds raw base64 argv limits; use the reviewed gzip transport.
+        workflow=(Path(__file__).parents[2]/'.github/workflows/debug-rank.yml').read_text()
+        scripts=[];lines=None
+        for line in workflow.splitlines():
+            if line.rstrip().endswith("<<'PY'"):
+                lines=[]
+            elif lines is not None:
+                if line.strip()=='PY':
+                    scripts.append(textwrap.dedent('\n'.join(lines)));lines=None
+                else:
+                    lines.append(line)
+        encoder=next(script for script in scripts if "PREPARE_BUNDLE_SIZE" in script)
+        body=next(node for node in ast.parse(encoder).body if isinstance(node,ast.Try)).body
+        begin=next(i for i,node in enumerate(body) if isinstance(node,ast.Assign)
+                   and any(isinstance(target,ast.Name) and target.id=='raw' for target in node.targets))
+        encoder_nodes=body[begin:]
+        encoder_nodes=encoder_nodes[:next(i for i,node in enumerate(encoder_nodes) if isinstance(node,ast.With))]
+        encode_code=compile(ast.Module(body=encoder_nodes,type_ignores=[]),'<prepare-encode>','exec')
+        def encode(bundle):
+            scope=dict(bundle=bundle,json=json,gzip=gzip,base64=base64)
+            exec(encode_code,scope)
+            return scope['encoded']
+        decoders=[]
+        for script in scripts:
+            if "wire=os.environ['PREVIEW_RELEASE_B64']" not in script:
+                continue
+            body=next(node for node in ast.parse(script).body if isinstance(node,ast.Try)).body
+            end=next(i for i,node in enumerate(body) if isinstance(node,ast.Assign)
+                     and any(isinstance(target,ast.Name) and target.id=='bundle' for target in node.targets))
+            decoders.append(compile(ast.Module(body=body[1:end+1],type_ignores=[]),'<prepare-decode>','exec'))
+        self.assertEqual(len(decoders),2)
+        encoded=encode(prepare)
+        self.assertTrue(encoded.startswith('prepare-gzip-v1:'))
+        self.assertLessEqual(len(encoded),65536)
+        self.assertLess(len(shlex.quote('export PREVIEW_RELEASE_B64='+shlex.quote(encoded))),120000)
+        for decoder in decoders:
+            def decode(wire):
+                scope=dict(wire=wire,json=json,zlib=zlib,base64=base64)
+                exec(decoder,scope)
+                return scope['bundle']
+            self.assertEqual(decode(encoded),prepare)
+            packed=gzip.compress(json.dumps(prepare).encode())
+            for bad in (packed[:-1], packed+b'tail', packed+packed, gzip.compress(b' '*131073), b'bad'):
+                with self.assertRaises((AssertionError,ValueError,zlib.error)):
+                    decode('prepare-gzip-v1:'+base64.b64encode(bad).decode())
+            with self.assertRaises(AssertionError):
+                decode('prepare-gzip-v1:'+'A'*65536)
+        with self.assertRaisesRegex(ValueError,'PREPARE_BUNDLE_SIZE'):
+            encode({'source':'x'*131072})
+        with self.assertRaisesRegex(ValueError,'PREPARE_WIRE_SIZE'):
+            encode({'source':random.Random(0).randbytes(60000).hex()})
+
+
+class WarmSourcesTest(unittest.TestCase):
+    def scenario(self, failure=None):
+        code=load('naver_preview_code_upgrade')
+        name='naver-warm-'+code.TARGET_COMMIT+'-'+'a'*32
+        identity='b'*64
+        state={'exists':False}
+        commands=[]
+        def command(args,**kwargs):
+            commands.append(args)
+            if args[:2]==['docker','compose']:
+                self.assertIn('--detach',args)
+                self.assertEqual(args[args.index('--name')+1],name)
+                self.assertIn('metainc.naver.warm.source='+code.TARGET_COMMIT,args)
+                state['exists']=True
+                if failure=='create_timeout':
+                    raise TimeoutError('PRIVATE_START_ERROR')
+                return (identity+'\n').encode()
+            if args[:2]==['docker','wait']:
+                self.assertEqual(args[-1],identity)
+                if failure=='wait_timeout':
+                    raise TimeoutError('PRIVATE_WAIT_ERROR')
+                return b'1\n' if failure=='script_exit' else b'0\n'
+            if args[:2]==['docker','logs']:
+                return json.dumps({'ok':True,'org_fresh':True,'schema':8,
+                    'catalog_total':0 if failure=='invalid_result' else 2,'management_count':1,'accounts_total':3}).encode()
+            if args[:2]==['docker','ps']:
+                self.assertIn('name=^/'+name+'$',args)
+                return identity.encode() if state['exists'] else b''
+            if args[:2]==['docker','inspect']:
+                self.assertEqual(args[-1],identity)
+                return json.dumps({'source':'unrelated' if failure=='wrong_source' else code.TARGET_COMMIT,
+                    'project':'unrelated' if failure=='wrong_project' else name,
+                    'user':'0:0' if failure=='wrong_user' else '10001:10001'}).encode()
+            if args[:3]==['docker','rm','--force']:
+                self.assertEqual(args[-1],identity)
+                if failure=='remove_failure':
+                    raise OSError('PRIVATE_REMOVE_ERROR')
+                if failure!='still_running':
+                    state['exists']=False
+                return identity.encode()
+            self.fail('Unexpected command '+str(args))
+        release=SimpleNamespace(command=command,
+            compose=lambda path,role:['docker','compose','--project-name','naver-'+role,'-f',str(path/'compose.yml')])
+        with patch.object(code.uuid,'uuid4',return_value=SimpleNamespace(hex='a'*32)):
+            try:
+                result=code.warm_sources(Path('/synthetic-release'),release)
+            except Exception as error:
+                result=error
+        return result,commands,state
+
+    def test_success_timeout_and_script_failure_all_remove_only_exact_owned_oneoff_writer(self):
+        for failure in (None,'create_timeout','wait_timeout','script_exit','invalid_result'):
+            with self.subTest(failure=failure):
+                result,commands,state=self.scenario(failure)
+                if failure is None:
+                    self.assertIs(result['ok'],True)
+                else:
+                    self.assertIsInstance(result,Exception)
+                    self.assertNotEqual(str(result),'WARM_CLEANUP_FAILED')
+                self.assertFalse(state['exists'])
+                self.assertEqual([args for args in commands if args[:2]==['docker','rm']],
+                                 [['docker','rm','--force','b'*64]])
+                self.assertEqual(commands[-1][:2],['docker','ps'])
+
+    def test_mismatched_metadata_cleanup_error_or_remaining_writer_refuses_safe_rollback(self):
+        for failure in ('wrong_source','wrong_project','wrong_user','remove_failure','still_running'):
+            with self.subTest(failure=failure):
+                result,commands,state=self.scenario(failure)
+                self.assertEqual(str(result),'WARM_CLEANUP_FAILED')
+                self.assertTrue(state['exists'])
+                if failure.startswith('wrong_'):
+                    self.assertFalse(any(args[:2]==['docker','rm'] for args in commands))
+
+
+class DatabaseRollbackTest(unittest.TestCase):
+    """Real isolated SQLite bytes; only privileged ownership and macOS flock interoperability are adapted."""
+    def setUp(self):
+        temporary=tempfile.TemporaryDirectory(prefix='account-db-rollback-test-')
+        self.addCleanup(temporary.cleanup)
+        self.root=Path(temporary.name).resolve()
+        self.data=self.root/'data';self.data.mkdir(mode=0o750)
+        (self.root/'receipts').mkdir(mode=0o700)
+        self.db=self.data/'engine.db'
+        with closing(sqlite3.connect(self.db)) as connection, connection:
+            connection.executescript("CREATE TABLE naver_auto_meta (key TEXT PRIMARY KEY,value TEXT);"
+                "INSERT INTO naver_auto_meta VALUES ('schema_version','7');"
+                "CREATE TABLE business (id INTEGER PRIMARY KEY,value TEXT);"
+                "INSERT INTO business VALUES (1,'preserved');")
+        self.db.chmod(0o600)
+        self.code=load('naver_preview_code_upgrade')
+        def trusted_dir(path,**options):
+            if options.get('new'):
+                Path(path).mkdir(mode=options.get('mode',0o700))
+            self.assertTrue(Path(path).is_dir())
+        def write_new(path,body,**options):
+            with Path(path).open('xb') as output:
+                output.write(body);output.flush();os.fsync(output.fileno())
+            Path(path).chmod(options.get('mode',0o600))
+        self.release=SimpleNamespace(ROOT=self.root,trusted_dir=trusted_dir,write_new=write_new)
+        self.upgrade=SimpleNamespace(read_file=lambda path,**options:Path(path).read_bytes())
+        data_patch=patch.object(self.code,'DATA',self.data);data_patch.start();self.addCleanup(data_patch.stop)
+        original_fstat=os.fstat
+        def owned_identity(descriptor):
+            # A non-root test host cannot chown to container uid 10001; retain real inode/mode/link checks.
+            values=list(original_fstat(descriptor));values[4]=values[5]=10001
+            return os.stat_result(values)
+        owner_patch=patch.object(self.code.os,'fstat',side_effect=owned_identity)
+        owner_patch.start();self.addCleanup(owner_patch.stop)
+        if sys.platform=='darwin':
+            # macOS flock conflicts with SQLite's own locks. Linux CI exercises the real lock.
+            lock_patch=patch.object(self.code.fcntl,'flock')
+            lock_patch.start();self.addCleanup(lock_patch.stop)
+        self.identity='a'*32
+
+    def mutate_schema8(self):
+        with closing(sqlite3.connect(self.db)) as connection, connection:
+            connection.executescript("UPDATE naver_auto_meta SET value='8' WHERE key='schema_version';"
+                "CREATE TABLE inventory (id INTEGER PRIMARY KEY);"
+                "INSERT INTO inventory VALUES (99);"
+                "UPDATE business SET value='new-schema-write';")
+
+    def test_real_schema7_snapshot_restores_after_schema8_write_and_retains_failed_data(self):
+        snapshot=self.code.db_snapshot(self.identity,self.release,self.upgrade)
+        path,digest=snapshot
+        self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(),digest)
+        self.assertEqual(path.stat().st_mode & 0o777,0o600)
+        self.mutate_schema8()
+        for suffix in ('-wal','-shm','-journal'):
+            (self.data/('engine.db'+suffix)).write_bytes(('failed'+suffix).encode())
+        self.code.restore_db(snapshot,self.identity,self.release,self.upgrade)
+        with closing(sqlite3.connect(self.db)) as connection, connection:
+            self.assertEqual(connection.execute("SELECT value FROM naver_auto_meta WHERE key='schema_version'").fetchone(),('7',))
+            self.assertEqual(connection.execute('SELECT value FROM business').fetchone(),('preserved',))
+            self.assertEqual(connection.execute("SELECT name FROM sqlite_master WHERE name='inventory'").fetchall(),[])
+            self.assertEqual(connection.execute('PRAGMA integrity_check').fetchall(),[('ok',)])
+        # Failed DB and sidecars stay on the same filesystem as the restored live DB.
+        quarantine=self.data/('.account-failed-db-'+self.identity)
+        self.assertEqual({p.name for p in quarantine.iterdir()},
+                         {'engine.db','engine.db-wal','engine.db-shm','engine.db-journal'})
+        self.assertTrue(path.is_file())
+        self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(),digest)
+        self.assertFalse(any((self.data/('engine.db'+suffix)).exists() for suffix in ('-wal','-shm','-journal')))
+
+    def test_lock_failure_does_not_create_snapshot_or_change_database(self):
+        before=self.db.read_bytes()
+        with patch.object(self.code.fcntl,'flock',side_effect=BlockingIOError('held')):
+            with self.assertRaises(BlockingIOError):
+                self.code.db_snapshot(self.identity,self.release,self.upgrade)
+        self.assertEqual(self.db.read_bytes(),before)
+        self.assertEqual(list((self.root/'receipts').iterdir()),[])
+
+    def test_changed_snapshot_digest_refuses_before_quarantining_or_overwriting_live_database(self):
+        snapshot=self.code.db_snapshot(self.identity,self.release,self.upgrade)
+        self.mutate_schema8();before=self.db.read_bytes()
+        snapshot[0].write_bytes(snapshot[0].read_bytes()+b'tampered')
+        with self.assertRaisesRegex(ValueError,'DB_SNAPSHOT_CHANGED'):
+            self.code.restore_db(snapshot,self.identity,self.release,self.upgrade)
+        self.assertEqual(self.db.read_bytes(),before)
+        self.assertFalse((self.data/('.account-failed-db-'+self.identity)).exists())
+
+    def test_schema8_is_not_accepted_as_the_schema7_rollback_snapshot(self):
+        self.mutate_schema8();before=self.db.read_bytes()
+        with self.assertRaisesRegex(ValueError,'DB_OLD_SCHEMA'):
+            self.code.db_snapshot(self.identity,self.release,self.upgrade)
+        self.assertEqual(self.db.read_bytes(),before)
 
 
 if __name__ == '__main__':

@@ -250,7 +250,7 @@ jobs:
         run: |
           set -eu
           python3 - <<'PY'
-          import base64,importlib.util,json,os,pathlib,sys
+          import base64,gzip,importlib.util,json,os,pathlib,sys
           sys.path.insert(0,'backend/tools')
           from naver_preview_download import download
           from naver_preview_release import validate_package
@@ -274,8 +274,14 @@ jobs:
                   bundle['lifecycle_source']=pathlib.Path('backend/tools/naver_preview_lifecycle.py').read_text()
               if operation=='preview-code-prepare':
                   bundle['code_source']=pathlib.Path('backend/tools/naver_preview_code_upgrade.py').read_text()
+              raw=json.dumps(bundle).encode()
+              if len(raw)>131072:
+                  raise ValueError('PREPARE_BUNDLE_SIZE')
+              encoded='prepare-gzip-v1:'+base64.b64encode(gzip.compress(raw,mtime=0)).decode()
+              if len(encoded)>65536:
+                  raise ValueError('PREPARE_WIRE_SIZE')
               with open(os.environ['GITHUB_ENV'],'a') as stream:
-                  stream.write('PREVIEW_RELEASE_B64='+base64.b64encode(json.dumps(bundle).encode()).decode()+'\n')
+                  stream.write('PREVIEW_RELEASE_B64='+encoded+'\n')
           except Exception:
               print('PREVIEW_ENCRYPTED_INPUT_REFUSED')
               sys.exit(1)
@@ -294,9 +300,14 @@ jobs:
           script: |
             set -eu
             /usr/bin/python3 -I -B - <<'PY'
-            import base64,json,os,pathlib,re,stat,sys,types
+            import base64,json,os,pathlib,re,stat,sys,types,zlib
             try:
-                bundle=json.loads(base64.b64decode(os.environ['PREVIEW_RELEASE_B64'],validate=True))
+                wire=os.environ['PREVIEW_RELEASE_B64']
+                assert wire.startswith('prepare-gzip-v1:') and len(wire)<=65536
+                decoder=zlib.decompressobj(16+zlib.MAX_WBITS)
+                raw=decoder.decompress(base64.b64decode(wire[len('prepare-gzip-v1:'):],validate=True),131073)
+                assert len(raw)<=131072 and decoder.eof and not decoder.unused_data and not decoder.unconsumed_tail
+                bundle=json.loads(raw)
                 os.environ.clear(); os.environ.update(PATH='/usr/sbin:/usr/bin:/sbin:/bin',LANG='C')
                 host=types.ModuleType('approved_host'); exec(bundle['host_source'],host.__dict__)
                 module=types.ModuleType('approved_release'); exec(bundle['source'],module.__dict__)
@@ -352,10 +363,15 @@ jobs:
           script: |
             set -eu
             /usr/bin/python3 -I -B - <<'PY'
-            import base64,json,os,re,sys,types
+            import base64,json,os,re,sys,types,zlib
             module=None
             try:
-                bundle=json.loads(base64.b64decode(os.environ['PREVIEW_RELEASE_B64'],validate=True))
+                wire=os.environ['PREVIEW_RELEASE_B64']
+                assert wire.startswith('prepare-gzip-v1:') and len(wire)<=65536
+                decoder=zlib.decompressobj(16+zlib.MAX_WBITS)
+                raw=decoder.decompress(base64.b64decode(wire[len('prepare-gzip-v1:'):],validate=True),131073)
+                assert len(raw)<=131072 and decoder.eof and not decoder.unused_data and not decoder.unconsumed_tail
+                bundle=json.loads(raw)
                 os.environ.clear();os.environ.update(PATH='/usr/sbin:/usr/bin:/sbin:/bin',LANG='C')
                 host=types.ModuleType('approved_host');exec(bundle['host_source'],host.__dict__)
                 module=types.ModuleType('approved_release');exec(bundle['source'],module.__dict__)
