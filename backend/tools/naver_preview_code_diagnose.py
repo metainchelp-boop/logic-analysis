@@ -221,41 +221,72 @@ def files_snapshot(folder,upgrade):
     return result
 
 
-def relay_journal(release):
-    unit='metainc-naver-relay.service'
-    since,until='2026-10-02 03:52:00 UTC','2026-10-02 04:13:10 UTC'
-    raw=release.command(['/usr/bin/journalctl','--no-pager','--output=json','--output-fields=UNIT,_PID,MESSAGE',
-        '--since',since,'--until',until,'--lines=513','UNIT='+unit,'_PID=1'],timeout=30)
-    if len(raw)>1048576:
-        raise ValueError('DIAG_JOURNAL_SIZE')
-    rows=raw.splitlines()
-    if len(rows)>512:
-        raise ValueError('DIAG_JOURNAL_LIMIT')
-    exits,results={},{}
-    unrecognized=0
-    for line in rows:
-        row=json.loads(line,object_pairs_hook=release.unique)
-        if not isinstance(row,dict) or row.get('UNIT')!=unit or row.get('_PID')!='1' or not isinstance(row.get('MESSAGE'),str) or len(row['MESSAGE'])>4096:
-            raise ValueError('DIAG_JOURNAL_FIELDS')
-        message=row['MESSAGE']
-        event=re.fullmatch(re.escape(unit)+r': Main process exited, code=([a-z-]+), status=([0-9]{1,3})/([A-Za-z0-9/_-]+)',message)
-        failure=re.fullmatch(re.escape(unit)+r": Failed with result '([^']{1,64})'\.",message)
-        if event and int(event[2])<=255:
-            kind=event[1] if event[1] in ('exited','killed','dumped') else 'UNRECOGNIZED'
-            label=event[3] if event[3] in ('SUCCESS','FAILURE','n/a','TERM','KILL','INT','ABRT','SEGV','PIPE','HUP','QUIT') else 'UNRECOGNIZED'
-            key=(kind,int(event[2]),label)
-            exits[key]=exits.get(key,0)+1
-        elif failure or message==unit+': Deactivated successfully.':
-            result=failure[1] if failure else 'success'
-            if result not in ('success','exit-code','signal','core-dump','timeout','watchdog','start-limit-hit','resources','protocol','oom-kill'):
-                result='UNRECOGNIZED'
-            results[result]=results.get(result,0)+1
-        else:
-            unrecognized+=1
-    return {'since_utc':'2026-10-02T03:52:00Z','until_utc':'2026-10-02T04:13:10Z',
-        'entries_inspected':len(rows),'main_process_exit_count':sum(exits.values()),'unrecognized_event_count':unrecognized,
-        'exits':[{'exit_type':k[0],'exit_status':k[1],'status_label':k[2],'count':v} for k,v in sorted(exits.items())],
-        'results':[{'result':k,'count':v} for k,v in sorted(results.items())]}
+def runtime_journal(release):
+    since,until='2026-10-02 04:25:00 UTC','2026-10-02 04:26:35 UTC'
+    kinds=frozenset(('AttributeError','TypeError','ValueError','RuntimeError','KeyError','NameError','IndexError',
+        'ImportError','ModuleNotFoundError','PermissionError','FileNotFoundError','OSError','OperationalError',
+        'StoreError','StoreRefused','TimeoutError'))
+    exits,results,exceptions,sources={},{},{},[]
+    total=unrecognized=0
+    for name in ('engine','relay'):
+        unit='metainc-naver-'+name+'.service'
+        for source in ('systemd','app'):
+            field='UNIT' if source=='systemd' else '_SYSTEMD_UNIT'
+            match=[field+'='+unit]+(['_PID=1'] if source=='systemd' else [])
+            raw=release.command(['/usr/bin/journalctl','--no-pager','--output=json',
+                '--output-fields=UNIT,_SYSTEMD_UNIT,_PID,MESSAGE','--since',since,'--until',until,'--lines=513',*match],timeout=30)
+            if len(raw)>1048576:
+                raise ValueError('DIAG_JOURNAL_SIZE')
+            rows=raw.splitlines()
+            if len(rows)>512:
+                raise ValueError('DIAG_JOURNAL_LIMIT')
+            total+=len(rows)
+            sources.append({'unit':name,'source':source,'count':len(rows)})
+            for line in rows:
+                row=json.loads(line,object_pairs_hook=release.unique)
+                if (not isinstance(row,dict) or row.get(field)!=unit or not isinstance(row.get('_PID'),str)
+                        or not re.fullmatch('[1-9][0-9]{0,9}',row['_PID']) or (row['_PID']=='1')!=(source=='systemd')
+                        or not isinstance(row.get('MESSAGE'),str) or len(row['MESSAGE'])>4096):
+                    raise ValueError('DIAG_JOURNAL_FIELDS')
+                message=row['MESSAGE']
+                if source=='app':
+                    message=re.sub(r'^naver-'+name+r'(?:-1)?\s+\|\s*','',message)
+                    tick=re.fullmatch(r'(?:ERROR naver_runtime )?예약 회차 실패: ([A-Za-z][A-Za-z0-9_]*)',message)
+                    step=re.fullmatch(r'(?:ERROR naver_runtime.scheduler )?예약 작업 실패: (?:org|stages|accounts|pairing|readiness|morning|alerts|backup|metrics|inventory|inventory_catalog) ([A-Za-z][A-Za-z0-9_]*)',message)
+                    event,kind=('scheduler_tick',tick[1]) if tick else ('scheduler_step',step[1]) if step else (None,None)
+                    if event is None and message.startswith('{'):
+                        try:
+                            body=json.loads(message,object_pairs_hook=release.unique)
+                        except ValueError:
+                            body=None
+                        if isinstance(body,dict) and set(body)=={'error','kind'} and body['error']=='startup-refused' and isinstance(body['kind'],str):
+                            event,kind='startup_refused',body['kind']
+                    if event:
+                        key=(name,source,event,kind if kind in kinds else 'UNRECOGNIZED')
+                        exceptions[key]=exceptions.get(key,0)+1
+                    else:
+                        unrecognized+=1
+                    continue
+                event=re.fullmatch(re.escape(unit)+r': Main process exited, code=([a-z-]+), status=([0-9]{1,3})/([A-Za-z0-9/_-]+)',message)
+                failure=re.fullmatch(re.escape(unit)+r": Failed with result '([^']{1,64})'\.",message)
+                if event and int(event[2])<=255:
+                    kind=event[1] if event[1] in ('exited','killed','dumped') else 'UNRECOGNIZED'
+                    label=event[3] if event[3] in ('SUCCESS','FAILURE','n/a','TERM','KILL','INT','ABRT','SEGV','PIPE','HUP','QUIT') else 'UNRECOGNIZED'
+                    key=(name,source,kind,int(event[2]),label)
+                    exits[key]=exits.get(key,0)+1
+                elif failure or message==unit+': Deactivated successfully.':
+                    result=failure[1] if failure else 'success'
+                    if result not in ('success','exit-code','signal','core-dump','timeout','watchdog','start-limit-hit','resources','protocol','oom-kill'):
+                        result='UNRECOGNIZED'
+                    key=(name,source,result)
+                    results[key]=results.get(key,0)+1
+                else:
+                    unrecognized+=1
+    return {'scope':'journal_only','since_utc':'2026-10-02T04:25:00Z','until_utc':'2026-10-02T04:26:35Z',
+        'entries_inspected':total,'sources':sources,'main_process_exit_count':sum(exits.values()),'unrecognized_event_count':unrecognized,
+        'exceptions':[{'unit':k[0],'source':k[1],'event':k[2],'kind':k[3],'count':v} for k,v in sorted(exceptions.items())],
+        'exits':[{'unit':k[0],'source':k[1],'exit_type':k[2],'exit_status':k[3],'status_label':k[4],'count':v} for k,v in sorted(exits.items())],
+        'results':[{'unit':k[0],'source':k[1],'result':k[2],'count':v} for k,v in sorted(results.items())]}
 
 
 def run(package,host,release,lifecycle,upgrade,code):
@@ -272,15 +303,15 @@ def run(package,host,release,lifecycle,upgrade,code):
     folder=code.DATA/('.account-failed-db-'+OPERATION_ID)
     if folder.resolve()!=folder:
         raise ValueError('DIAG_PATH')
+    STAGE='diagnose_journal'
+    journal=runtime_journal(release)
     if not os.path.lexists(folder):
-        STAGE='diagnose_journal'
-        journal=relay_journal(release)
         STAGE='diagnose_postflight'
         if (os.path.lexists(folder) or upgrade.manifest(release,code.TARGET_COMMIT,prepared)!=(path,receipt)
                 or code.current_state(prepared,host,release,lifecycle,upgrade)!=before):
             raise ValueError('DIAG_POST_BASELINE')
-        return {'ok':True,'mode':'failed-code-relay-journal','source_commit':code.TARGET_COMMIT,'operation_id':OPERATION_ID,
-            'quarantine_present':False,'relay_journal':journal,'existing_app_baseline_unchanged':True,
+        return {'ok':True,'mode':'failed-code-runtime-journal','source_commit':code.TARGET_COMMIT,'operation_id':OPERATION_ID,
+            'quarantine_present':False,'runtime_journal':journal,'existing_app_baseline_unchanged':True,
             'database_read':False,'database_mutations':0,'external_calls':0,'services_changed':False}
     release.trusted_dir(folder,mode=0o700)
     files=files_snapshot(folder,upgrade)
@@ -336,5 +367,5 @@ def run(package,host,release,lifecycle,upgrade,code):
     if files_snapshot(folder,upgrade)!=files or code.current_state(prepared,host,release,lifecycle,upgrade)!=before:
         raise ValueError('DIAG_POST_BASELINE')
     return {'ok':True,'mode':'failed-code-diagnose','source_commit':code.TARGET_COMMIT,'operation_id':OPERATION_ID,
-            'diagnosis':result,'database_files_unchanged':True,'existing_app_baseline_unchanged':True,
+            'diagnosis':result,'runtime_journal':journal,'database_files_unchanged':True,'existing_app_baseline_unchanged':True,
             'database_mutations':0,'external_calls':0,'diagnostic_container_secrets_mounted':False,'services_changed':False}

@@ -272,8 +272,41 @@ class ProjectionTest(unittest.TestCase):
 class JournalTest(unittest.TestCase):
     def release(self,messages):
         rows=[dict(UNIT='metainc-naver-relay.service',_PID='1',MESSAGE=message) for message in messages]
-        return SimpleNamespace(command=Mock(return_value=b'\n'.join(json.dumps(row).encode() for row in rows)),
+        raw=b'\n'.join(json.dumps(row).encode() for row in rows)
+        return SimpleNamespace(command=Mock(side_effect=lambda args,**kwargs:raw if 'UNIT=metainc-naver-relay.service' in args else b''),
                                unique=lambda pairs:dict(pairs))
+
+    def test_latest_runtime_window_outputs_only_fixed_exception_kinds_and_sources(self):
+        messages={('engine','app'):[
+            'ERROR naver_runtime 예약 회차 실패: AttributeError',
+            'ERROR naver_runtime 예약 회차 실패: AttributeError',
+            'ERROR naver_runtime.scheduler 예약 작업 실패: inventory KeyError',
+            '{"error":"startup-refused","kind":"ValueError"}',
+            '{"error":"startup-refused","kind":"PRIVATE_SECRET"}',
+            'ERROR naver_runtime 예약 회차 실패: PRIVATE_SECRET',
+            'PRIVATE customer=123 path=/secret token=SECRET'],
+            ('relay','systemd'):['metainc-naver-relay.service: Main process exited, code=exited, status=130/n/a']}
+        def command(args,**kwargs):
+            source='app' if any(x.startswith('_SYSTEMD_UNIT=') for x in args) else 'systemd'
+            field='_SYSTEMD_UNIT' if source=='app' else 'UNIT'
+            unit=next(x.split('=',1)[1] for x in args if x.startswith(field+'='))
+            name='engine' if unit=='metainc-naver-engine.service' else 'relay'
+            self.assertIn('2026-10-02 04:25:00 UTC',args)
+            self.assertIn('2026-10-02 04:26:35 UTC',args)
+            self.assertIn('--lines=513',args)
+            return b'\n'.join(json.dumps({field:unit,'_PID':'22' if source=='app' else '1','MESSAGE':m}).encode()
+                              for m in messages.get((name,source),[]))
+        release=SimpleNamespace(command=Mock(side_effect=command),unique=lambda pairs:dict(pairs))
+        value=M.runtime_journal(release)
+        self.assertEqual(release.command.call_count,4)
+        self.assertEqual(value['scope'],'journal_only')
+        self.assertEqual(value['entries_inspected'],8)
+        self.assertEqual(value['unrecognized_event_count'],1)
+        self.assertIn({'unit':'engine','source':'app','event':'scheduler_tick','kind':'AttributeError','count':2},value['exceptions'])
+        self.assertIn({'unit':'engine','source':'app','event':'startup_refused','kind':'UNRECOGNIZED','count':1},value['exceptions'])
+        self.assertEqual(value['exits'],[{'unit':'relay','source':'systemd','exit_type':'exited','exit_status':130,'status_label':'n/a','count':1}])
+        for forbidden in ('PRIVATE','SECRET','/secret','customer'):
+            self.assertNotIn(forbidden,json.dumps(value))
 
     def test_fixed_host_window_outputs_only_allowlisted_aggregates(self):
         release=self.release([
@@ -283,29 +316,30 @@ class JournalTest(unittest.TestCase):
             "metainc-naver-relay.service: Failed with result 'exit-code'.",
             'metainc-naver-relay.service: Deactivated successfully.',
             'PRIVATE argv=/secret token=SECRET'])
-        result=M.relay_journal(release)
+        result=M.runtime_journal(release)
         self.assertEqual(result['entries_inspected'],6)
         self.assertEqual(result['main_process_exit_count'],3)
         self.assertEqual(result['unrecognized_event_count'],1)
         self.assertEqual(result['exits'],[
-            {'exit_type':'exited','exit_status':143,'status_label':'n/a','count':2},
-            {'exit_type':'killed','exit_status':15,'status_label':'TERM','count':1}])
-        self.assertEqual(result['results'],[{'result':'exit-code','count':1},{'result':'success','count':1}])
+            {'unit':'relay','source':'systemd','exit_type':'exited','exit_status':143,'status_label':'n/a','count':2},
+            {'unit':'relay','source':'systemd','exit_type':'killed','exit_status':15,'status_label':'TERM','count':1}])
+        self.assertEqual(result['results'],[{'unit':'relay','source':'systemd','result':'exit-code','count':1},
+                                          {'unit':'relay','source':'systemd','result':'success','count':1}])
         self.assertNotIn('PRIVATE',json.dumps(result))
         self.assertNotIn('SECRET',json.dumps(result))
-        args=release.command.call_args.args[0]
+        args=release.command.call_args_list[2].args[0]
         self.assertEqual(args[0],'/usr/bin/journalctl')
         self.assertIn('UNIT=metainc-naver-relay.service',args)
         self.assertIn('_PID=1',args)
-        self.assertEqual(args[args.index('--since')+1],'2026-10-02 03:52:00 UTC')
-        self.assertEqual(args[args.index('--until')+1],'2026-10-02 04:13:10 UTC')
-        self.assertIn('--output-fields=UNIT,_PID,MESSAGE',args)
+        self.assertEqual(args[args.index('--since')+1],'2026-10-02 04:25:00 UTC')
+        self.assertEqual(args[args.index('--until')+1],'2026-10-02 04:26:35 UTC')
+        self.assertIn('--output-fields=UNIT,_SYSTEMD_UNIT,_PID,MESSAGE',args)
 
     def test_unknown_exit_labels_and_results_never_pass_through(self):
         release=self.release([
             'metainc-naver-relay.service: Main process exited, code=private, status=1/SECRET',
             "metainc-naver-relay.service: Failed with result 'SECRET'."])
-        result=M.relay_journal(release)
+        result=M.runtime_journal(release)
         self.assertEqual(result['exits'][0]['exit_type'],'UNRECOGNIZED')
         self.assertEqual(result['exits'][0]['status_label'],'UNRECOGNIZED')
         self.assertEqual(result['results'][0]['result'],'UNRECOGNIZED')
@@ -316,7 +350,7 @@ class JournalTest(unittest.TestCase):
         for raw in (json.dumps(dict(row,UNIT='PRIVATE')).encode(),json.dumps(dict(row,_PID='99')).encode(),
                     b'[]',b'x'*1048577,b'\n'.join([json.dumps(row).encode()]*513)):
             with self.subTest(length=len(raw)),self.assertRaises(ValueError):
-                M.relay_journal(SimpleNamespace(command=Mock(return_value=raw),unique=lambda pairs:dict(pairs)))
+                M.runtime_journal(SimpleNamespace(command=Mock(return_value=raw),unique=lambda pairs:dict(pairs)))
 
 
 class RunTest(unittest.TestCase):
@@ -334,6 +368,8 @@ class RunTest(unittest.TestCase):
         def command(args,**kwargs):
             nonlocal checks
             commands.append((args,kwargs))
+            if args[0]=='/usr/bin/journalctl':
+                return b''
             if args[:3]==['docker','image','inspect']:
                 return json.dumps({'id':image,'user':'10001:10001','source':M.TARGET_COMMIT}).encode()
             if args[:2]==['docker','run']:
@@ -373,12 +409,12 @@ class RunTest(unittest.TestCase):
         upgrade=SimpleNamespace(manifest=Mock(return_value=(Path('/synthetic/release'),{'fixture':True})),read_file=Mock())
         with patch.object(M.os.path,'lexists',return_value=False),patch.object(M,'files_snapshot') as snapshot:
             result=M.run(package,Mock(),release,Mock(),upgrade,code)
-        self.assertEqual(result['mode'],'failed-code-relay-journal')
+        self.assertEqual(result['mode'],'failed-code-runtime-journal')
         self.assertFalse(result['database_read'])
-        self.assertEqual(result['relay_journal']['entries_inspected'],0)
+        self.assertEqual(result['runtime_journal']['entries_inspected'],0)
         self.assertEqual(code.current_state.call_count,2)
         self.assertEqual(upgrade.manifest.call_count,2)
-        self.assertEqual(release.command.call_count,1)
+        self.assertEqual(release.command.call_count,4)
         snapshot.assert_not_called()
         upgrade.read_file.assert_not_called()
         release.trusted_dir.assert_called_once_with(code.DATA,uid=10001,gid=10001,mode=0o750)
@@ -397,6 +433,8 @@ class RunTest(unittest.TestCase):
         self.assertTrue(result['ok'])
         self.assertTrue(result['database_files_unchanged'])
         self.assertFalse(result['diagnostic_container_secrets_mounted'])
+        self.assertEqual(result['runtime_journal']['scope'],'journal_only')
+        self.assertEqual(len([args for args,_ in commands if args[0]=='/usr/bin/journalctl']),4)
         run=next(args for args,_ in commands if args[:2]==['docker','run'])
         for flag in ('--read-only','--cap-drop','--security-opt','--network','--user','--log-driver'):
             self.assertIn(flag,run)
