@@ -35,6 +35,62 @@ TEST_PATHS = {'deploy/naver-erp-tunnel/test_policy.py',
         'test_guardrails.py', 'test_scheduler.py'))}
 DATA = Path('/var/lib/metainc/naver-engine')
 STAGE = 'input'
+OPERATION = 'none'
+FAILURE_STAGES = frozenset('input code_apply_preflight code_stop_isolated account_database_snapshot '
+    'account_sources_warm code_recreate code_replace_units code_start code_verify code_rollback'.split())
+FAILURE_OPERATIONS = frozenset('none package current_state target_manifest compatible_source unit_manifest '
+    'write_recovery_receipt bootstrap_check snapshot_directory snapshot_identity snapshot_lock snapshot_create '
+    'snapshot_schema snapshot_copy snapshot_integrity snapshot_fsync snapshot_digest warm_sources warm_create '
+    'warm_wait warm_logs warm_result warm_cleanup_find warm_cleanup_identity warm_cleanup_remove '
+    'warm_cleanup_absence warm_config warm_store_open warm_org_sync warm_org_contract warm_accounts_sync '
+    'warm_catalog_sync warm_summary daemon_reload verify_running post_state write_started_receipt restore_database '
+    'old_manifest rollback_state'.split()) | frozenset(prefix+'_'+name for prefix in
+        ('stop','stop_check','recreate','replace_unit','start','restore_unit') for name in ('engine','relay'))
+FAILURE_KINDS = frozenset('ValueError RuntimeError TimeoutError TimeoutExpired CalledProcessError OSError '
+    'PermissionError FileNotFoundError BlockingIOError JSONDecodeError OperationalError IntegrityError '
+    'TypeError KeyError AttributeError AssertionError ImportError ModuleNotFoundError ConfigError StoreRefused'.split())
+FAILURE_CODES = frozenset('CODE_TARGET_NOT_PINNED CODE_PACKAGE CODE_TARGET CODE_BASELINE CODE_APPLY_FIELDS '
+    'CODE_OPERATION_ID CODE_ALREADY_ATTEMPTED CODE_POST_STATE CODE_FAILED_ROLLED_BACK_DB_PRESERVED '
+    'CODE_ROLLBACK_FAILED HOST_BASELINE OLD_BASELINE OLD_SOURCE_CHANGED OLD_UNIT_CHANGED OLD_UNIT_NOT_ENABLED '
+    'DEPENDENCY_NOT_ACTIVE BOOTSTRAP_REQUEST BOOTSTRAP_NOT_FINISHED BOOTSTRAP_CHANGED TMPFILES_CHANGED '
+    'CODE_INFRASTRUCTURE_CHANGED CODE_SCHEMA_CHANGED CODE_OVERRIDE_CHANGED CODE_SOURCE_PATH CODE_SOURCE_MODE_CHANGED '
+    'CODE_SOURCE_REMOVED CODE_SCOPE_CHANGED SCHEMA_CONTRACT_MISSING CODE_PROBE_SOURCE CODE_ROUTE_STATUS '
+    'CODE_SERVICE_NOT_ACTIVE CODE_SERVICE_NOT_ENABLED VERIFIED_WRITE_AUTH_NOT_REQUIRED '
+    'ACCOUNT_WRITER_NOT_STOPPED DB_IDENTITY DB_OLD_SCHEMA DB_SNAPSHOT_INTEGRITY DB_SNAPSHOT_CHANGED '
+    'WARM_CONTAINER_ID WARM_CONTAINER_REMAINS WARM_CREATE_UNCONFIRMED WARM_CLEANUP_FAILED SOURCE_WARM_FAILED '
+    'ORG_NOT_ACCEPTED MANAGEMENT_FIELD_MISSING ACCOUNTS_NOT_ACCEPTED CATALOG_NOT_ACCEPTED '
+    'COMMAND_FAILED DIRECTORY_POLICY FILE_PATH FILE_POLICY PREPARED_MANIFEST PREPARED_DIGEST '
+    'PREPARED_FILE_CHANGED PREPARED_IMAGE PREPARED_IMAGE_CHANGED SOURCE_NOT_READY UNIT_CHANGED ENGINE_NOT_READY '
+    'PAGE_NOT_READY UNAUTHENTICATED_READ_NOT_DENIED BUSINESS_WRITE_NOT_DENIED SERVICES_NOT_READY'.split())
+
+
+def _error_labels(error):
+    kind = type(error).__name__
+    code = error.args[0] if len(error.args) == 1 and isinstance(error.args[0], str) else None
+    return {'error_kind':kind if kind in FAILURE_KINDS else 'OtherError',
+            'error_code':code if code in FAILURE_CODES else 'UNRECOGNIZED'}
+
+
+def _capture_failure(error, prefix='failed'):
+    details = {'stage':STAGE if STAGE in FAILURE_STAGES else 'unknown',
+               'operation':OPERATION if OPERATION in FAILURE_OPERATIONS else 'unknown', **_error_labels(error)}
+    return {prefix+'_'+key:value for key,value in details.items()}
+
+
+def failure_report(error):
+    """Fixed labels only: exception text, command args, stderr, paths and env never escape."""
+    result = {'stage':STAGE if STAGE in FAILURE_STAGES else 'unknown', **_error_labels(error)}
+    choices = {'stage':FAILURE_STAGES|{'unknown'}, 'operation':FAILURE_OPERATIONS|{'unknown'},
+               'error_kind':FAILURE_KINDS|{'OtherError'}, 'error_code':FAILURE_CODES|{'UNRECOGNIZED'}}
+    details = getattr(error, 'failure_details', {})
+    if isinstance(details, dict):
+        for prefix in ('failed', 'cleanup', 'rollback'):
+            for suffix, allowed in choices.items():
+                key = prefix+'_'+suffix
+                value = details.get(key)
+                if isinstance(value, str) and value in allowed:
+                    result[key] = value
+    return result
 
 
 def validate_package(package, release):
@@ -143,31 +199,41 @@ def target_override(before, name):
 
 def db_snapshot(identity, release, upgrade):
     """Called only after both services stop; no live-copy or recovery-key use."""
+    global OPERATION
+    OPERATION = 'snapshot_directory'
     release.trusted_dir(DATA, uid=10001, gid=10001, mode=0o750)
     db = DATA/'engine.db'
     upgrade.read_file(db, uid=10001, gid=10001, mode=0o600, maximum=1024**3)
     destination = release.ROOT/'receipts'/('account-db-'+identity+'.sqlite')
     fd = os.open(db, os.O_RDWR | os.O_NOFOLLOW)
     try:
+        OPERATION = 'snapshot_identity'
         info = os.fstat(fd)
         if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
                 or (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)) != (10001, 10001, 0o600)
                 or (info.st_dev, info.st_ino) != (db.stat().st_dev, db.stat().st_ino)):
             raise ValueError('DB_IDENTITY')
+        OPERATION = 'snapshot_lock'
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        OPERATION = 'snapshot_create'
         release.write_new(destination, b'')
         with closing(sqlite3.connect(db.as_uri()+'?mode=ro', uri=True)) as source, closing(sqlite3.connect(destination)) as target:
+            OPERATION = 'snapshot_schema'
             if source.execute("SELECT value FROM naver_auto_meta WHERE key='schema_version'").fetchone() != ('7',):
                 raise ValueError('DB_OLD_SCHEMA')
+            OPERATION = 'snapshot_copy'
             source.backup(target)
+            OPERATION = 'snapshot_integrity'
             if target.execute('PRAGMA integrity_check').fetchall() != [('ok',)]:
                 raise ValueError('DB_SNAPSHOT_INTEGRITY')
         os.chmod(destination, 0o600)
+        OPERATION = 'snapshot_fsync'
         durable = os.open(destination, os.O_RDONLY | os.O_NOFOLLOW)
         try:
             os.fsync(durable)
         finally:
             os.close(durable)
+        OPERATION = 'snapshot_digest'
         raw = upgrade.read_file(destination, mode=0o600, maximum=1024**3)
         return destination, hashlib.sha256(raw).hexdigest()
     finally:
@@ -202,67 +268,103 @@ def restore_db(snapshot, identity, release, upgrade):
 WARM_SCRIPT = r'''
 import json,os,sys,threading
 sys.path[:0]=['/opt/naver-engine','/opt/naver-engine/backend']
-from naver_engine import store as S,sync as Y,inventory as I,links as L
-from naver_runtime.__main__ import dependencies,InterruptibleClock
-from naver_runtime.config import Config
-clock=InterruptibleClock(threading.Event())
-config=Config.from_env(os.environ)
-options=dependencies(config,os.environ,clock)
-with S.open_writer(config.db) as store:
-    org=Y.sync_org(options['erp_factory'](),store,clock.now())
-    if org.outcome!='accepted': raise ValueError('ORG_NOT_ACCEPTED')
-    body=store.org_current()['body']
-    if not body['employees'] or any(type(e.get('is_management')) is not bool for e in body['employees']):
-        raise ValueError('MANAGEMENT_FIELD_MISSING')
-    accounts=L.sync_accounts(options['naver_factory'](),store,clock.now())
-    if accounts.outcome!='accepted': raise ValueError('ACCOUNTS_NOT_ACCEPTED')
-    catalog=I.sync_catalog(options['erp_factory'](),store,clock.now())
-    if store.account_catalog_status().get('state')!='accepted': raise ValueError('CATALOG_NOT_ACCEPTED')
-    print(json.dumps({'ok':True,'org_fresh':True,'management_count':sum(e['is_management'] for e in body['employees']),
-                      'catalog_total':store.account_catalog()['total'],'accounts_total':accounts.rows,'schema':S.SCHEMA_VERSION}))
+step='warm_config'
+try:
+    from naver_engine import store as S,sync as Y,inventory as I,links as L
+    from naver_runtime.__main__ import dependencies,InterruptibleClock
+    from naver_runtime.config import Config
+    clock=InterruptibleClock(threading.Event())
+    config=Config.from_env(os.environ)
+    options=dependencies(config,os.environ,clock)
+    step='warm_store_open'
+    with S.open_writer(config.db) as store:
+        step='warm_org_sync'
+        org=Y.sync_org(options['erp_factory'](),store,clock.now())
+        if org.outcome!='accepted': raise ValueError('ORG_NOT_ACCEPTED')
+        step='warm_org_contract'
+        body=store.org_current()['body']
+        if not body['employees'] or any(type(e.get('is_management')) is not bool for e in body['employees']):
+            raise ValueError('MANAGEMENT_FIELD_MISSING')
+        step='warm_accounts_sync'
+        accounts=L.sync_accounts(options['naver_factory'](),store,clock.now())
+        if accounts.outcome!='accepted': raise ValueError('ACCOUNTS_NOT_ACCEPTED')
+        step='warm_catalog_sync'
+        I.sync_catalog(options['erp_factory'](),store,clock.now())
+        if store.account_catalog_status().get('state')!='accepted': raise ValueError('CATALOG_NOT_ACCEPTED')
+        step='warm_summary'
+        print(json.dumps({'ok':True,'org_fresh':True,'management_count':sum(e['is_management'] for e in body['employees']),
+                          'catalog_total':store.account_catalog()['total'],'accounts_total':accounts.rows,'schema':S.SCHEMA_VERSION}))
+except Exception as error:
+    code=error.args[0] if len(error.args)==1 and isinstance(error.args[0],str) else None
+    allowed={'ORG_NOT_ACCEPTED','MANAGEMENT_FIELD_MISSING','ACCOUNTS_NOT_ACCEPTED','CATALOG_NOT_ACCEPTED'}
+    print(json.dumps({'ok':False,'warm_step':step,'warm_error_code':code if code in allowed else 'UNRECOGNIZED'}))
+    sys.exit(1)
 '''
 
 
 def warm_sources(path, release):
+    global STAGE, OPERATION
+    STAGE = 'account_sources_warm'
     check = release.compose(path, 'engine')
     name = 'naver-warm-'+TARGET_COMMIT+'-'+uuid.uuid4().hex
     check[check.index('--project-name')+1] = name
     identity = None
+    failure = None
     try:
+        OPERATION = 'warm_create'
         identity = release.command(check+['run', '--detach', '--no-deps', '--pull', 'never',
             '--name', name, '--label', 'metainc.naver.warm.source='+TARGET_COMMIT,
             '--entrypoint', 'python', 'naver-engine', '-I', '-B', '-c', WARM_SCRIPT], timeout=60).decode().strip()
         if not re.fullmatch('[0-9a-f]{64}', identity):
             raise ValueError('WARM_CONTAINER_ID')
-        if release.command(['docker', 'wait', identity], timeout=180).strip() != b'0':
-            raise ValueError('SOURCE_WARM_FAILED')
+        OPERATION = 'warm_wait'
+        status = release.command(['docker', 'wait', identity], timeout=180).strip()
+        OPERATION = 'warm_logs'
         result = json.loads(release.command(['docker', 'logs', identity], timeout=30))
+        OPERATION = 'warm_result'
+        if status != b'0':
+            if isinstance(result, dict) and result.get('warm_step') in {
+                    'warm_config','warm_store_open','warm_org_sync','warm_org_contract',
+                    'warm_accounts_sync','warm_catalog_sync','warm_summary'}:
+                OPERATION = result['warm_step']
+            code = result.get('warm_error_code') if isinstance(result, dict) else None
+            raise ValueError(code if isinstance(code,str) and code in FAILURE_CODES else 'SOURCE_WARM_FAILED')
         if (result.get('ok') is not True or result.get('org_fresh') is not True or result.get('schema') != 8
                 or type(result.get('catalog_total')) is not int or result['catalog_total'] < 1
                 or type(result.get('management_count')) is not int or result['management_count'] < 1):
             raise ValueError('SOURCE_WARM_FAILED')
         return result
+    except Exception as error:
+        error.failure_details = _capture_failure(error)
+        failure = error.failure_details
+        raise
     finally:
         # Timeout kills only the CLI, not Docker. Verify and remove this exact one-off writer first.
         try:
+            OPERATION = 'warm_cleanup_find'
             found = release.command(['docker', 'ps', '--all', '--no-trunc', '--filter',
                 'name=^/'+name+'$', '--format', '{{.ID}}'], timeout=30).decode().strip()
             if found:
+                OPERATION = 'warm_cleanup_identity'
                 if not re.fullmatch('[0-9a-f]{64}', found):
                     raise ValueError('WARM_CONTAINER_ID')
                 fmt = '{"source":{{json (index .Config.Labels "metainc.naver.warm.source")}},"project":{{json (index .Config.Labels "com.docker.compose.project")}},"user":{{json .Config.User}}}'
                 meta = json.loads(release.command(['docker', 'inspect', '--format', fmt, found]))
                 if meta != {'source':TARGET_COMMIT, 'project':name, 'user':'10001:10001'}:
                     raise ValueError('WARM_CONTAINER_ID')
+                OPERATION = 'warm_cleanup_remove'
                 release.command(['docker', 'rm', '--force', found], timeout=45)
             elif identity is None:
                 # An in-flight Docker create may complete after a CLI timeout.
                 raise ValueError('WARM_CREATE_UNCONFIRMED')
+            OPERATION = 'warm_cleanup_absence'
             if release.command(['docker', 'ps', '--all', '--no-trunc', '--filter',
                     'name=^/'+name+'$', '--format', '{{.ID}}'], timeout=30).strip():
                 raise ValueError('WARM_CONTAINER_REMAINS')
-        except Exception:
-            raise RuntimeError('WARM_CLEANUP_FAILED') from None
+        except Exception as error:
+            refused = RuntimeError('WARM_CLEANUP_FAILED')
+            refused.failure_details = {**(failure or _capture_failure(error)), **_capture_failure(error,'cleanup')}
+            raise refused from None
 
 
 def compatible_code_scope(old, new, upgrade):
@@ -392,17 +494,22 @@ def prepare(package, host, release, lifecycle, upgrade):
 
 
 def apply(package, host, release, lifecycle, upgrade):
-    global STAGE
+    global STAGE, OPERATION
     STAGE = 'code_apply_preflight'
+    OPERATION = 'package'
     if not isinstance(package, dict) or set(package) != {'release', 'operation_id'}:
         raise ValueError('CODE_APPLY_FIELDS')
     identity = package['operation_id']
     if not isinstance(identity, str) or not re.fullmatch('[0-9a-f]{32}', identity):
         raise ValueError('CODE_OPERATION_ID')
     prepared = validate_package(package['release'], release)
+    OPERATION = 'current_state'
     old_path, old_receipt, old_files, _, bootstrap = current_state(prepared, host, release, lifecycle, upgrade)
+    OPERATION = 'target_manifest'
     path, receipt = upgrade.manifest(release, TARGET_COMMIT, prepared)
+    OPERATION = 'compatible_source'
     compatible_source(old_path, path, upgrade)
+    OPERATION = 'unit_manifest'
     new_files = lifecycle.unit_files(path, pwd.getpwnam('www-data').pw_gid, release)
     if new_files[lifecycle.TMPFILES] != old_files[lifecycle.TMPFILES]:
         raise ValueError('TMPFILES_CHANGED')
@@ -410,6 +517,7 @@ def apply(package, host, release, lifecycle, upgrade):
     backup = release.ROOT/'receipts'/('code-upgrade-'+identity+'.json')
     if any(os.path.lexists(p) for p in (started, backup)):
         raise ValueError('CODE_ALREADY_ATTEMPTED')
+    OPERATION = 'write_recovery_receipt'
     release.write_new(backup, json.dumps({'source_commit':OLD_COMMIT,'target_commit':TARGET_COMMIT,
         'images':old_receipt['images'],'units':{str(p):b.decode() for p,b in old_files.items() if p!=lifecycle.TMPFILES}}, sort_keys=True).encode())
     replaced = []
@@ -418,26 +526,41 @@ def apply(package, host, release, lifecycle, upgrade):
     try:
         STAGE = 'code_stop_isolated'
         for unit in reversed(lifecycle.UNITS):
+            name = 'engine' if unit == lifecycle.UNITS[0] else 'relay'
+            OPERATION = 'stop_'+name
             release.command(['/usr/bin/systemctl','stop',unit], timeout=90)
+            OPERATION = 'stop_check_'+name
             if lifecycle._state(release, unit, 'ActiveState') != 'inactive':
                 raise ValueError('ACCOUNT_WRITER_NOT_STOPPED')
+        OPERATION = 'bootstrap_check'
         if bootstrap_state(release, upgrade) != bootstrap:
             raise ValueError('BOOTSTRAP_CHANGED')
         STAGE = 'account_database_snapshot'
+        OPERATION = 'snapshot_create'
         snapshot = db_snapshot(identity, release, upgrade)
         STAGE = 'account_sources_warm'
+        OPERATION = 'warm_sources'
         source_status = warm_sources(path, release)
+        STAGE = 'code_recreate'
         for name in ('engine','relay'):
+            OPERATION = 'recreate_'+name
             release.command(release.compose(path,name)+['up','--no-start','--no-build','--force-recreate'], timeout=90)
+        STAGE = 'code_replace_units'
         for unit in lifecycle.UNITS:
+            OPERATION = 'replace_unit_'+('engine' if unit == lifecycle.UNITS[0] else 'relay')
             target = lifecycle.UNIT_DIR/unit
             replaced.append(target)
             upgrade.replace_unit(target, old_files[target], new_files[target], identity, release)
+        OPERATION = 'daemon_reload'
         release.command(['/usr/bin/systemctl','daemon-reload'])
+        STAGE = 'code_start'
         for unit in lifecycle.UNITS:
+            OPERATION = 'start_'+('engine' if unit == lifecycle.UNITS[0] else 'relay')
             release.command(['/usr/bin/systemctl','start',unit], timeout=90)
         STAGE = 'code_verify'
+        OPERATION = 'verify_running'
         verify_running(path, receipt, release, lifecycle, upgrade)
+        OPERATION = 'post_state'
         if host.baseline() != prepared['baseline'] or bootstrap_state(release, upgrade) != bootstrap:
             raise ValueError('CODE_POST_STATE')
         result = {'ok':True,'stage':'internal_ready','source_commit':TARGET_COMMIT,'previous_commit':OLD_COMMIT,
@@ -445,9 +568,12 @@ def apply(package, host, release, lifecycle, upgrade):
                   'operation_id':identity,'unauthenticated_read_status':401,'business_post_status':403}
         result.update(database_snapshot_verified=True, database_schema=8, inventory_enabled=True,
                       source_status=source_status, rollback_requires_matching_database=True)
+        OPERATION = 'write_started_receipt'
         release.write_new(started, json.dumps(result, sort_keys=True).encode())
         return result
     except Exception as error:
+        details = {key:value for key,value in failure_report(error).items()
+                   if key.startswith(('failed_', 'cleanup_'))} or _capture_failure(error)
         STAGE = 'code_rollback'
         failed = str(error) == 'WARM_CLEANUP_FAILED'
         def attempt(function, *args, **kwargs):
@@ -455,35 +581,47 @@ def apply(package, host, release, lifecycle, upgrade):
             try:
                 function(*args, **kwargs)
                 return True
-            except Exception:
+            except Exception as rollback_error:
+                if 'rollback_stage' not in details:
+                    details.update(_capture_failure(rollback_error, 'rollback'))
                 failed = True
                 return False
         def restore(target):
             if upgrade.read_file(target, mode=0o644, maximum=32768) != old_files[target]:
                 upgrade.replace_unit(target, new_files[target], old_files[target], identity+'-rollback', release)
         for unit in reversed(lifecycle.UNITS):
+            OPERATION = 'stop_'+('engine' if unit == lifecycle.UNITS[0] else 'relay')
             attempt(release.command, ['/usr/bin/systemctl','stop',unit], timeout=90)
         if snapshot is not None:
             for unit in lifecycle.UNITS:
+                OPERATION = 'stop_check_'+('engine' if unit == lifecycle.UNITS[0] else 'relay')
                 try:
                     if lifecycle._state(release, unit, 'ActiveState') != 'inactive':
                         failed = True
                 except Exception:
                     failed = True
         for target in reversed(replaced):
+            OPERATION = 'restore_unit_'+('engine' if target.name == lifecycle.UNITS[0] else 'relay')
             attempt(restore, target)
         if snapshot is not None and not failed:
+            OPERATION = 'restore_database'
             attempt(restore_db, snapshot, identity, release, upgrade)
+        OPERATION = 'old_manifest'
         if attempt(upgrade.manifest, release, OLD_COMMIT, started=True):
             for name in ('engine','relay'):
+                OPERATION = 'recreate_'+name
                 attempt(release.command, release.compose(old_path,name)+['up','--no-start','--no-build','--force-recreate'], timeout=90)
+        OPERATION = 'daemon_reload'
         attempt(release.command, ['/usr/bin/systemctl','daemon-reload'])
         if not failed:
             for unit in lifecycle.UNITS:
+                OPERATION = 'start_'+('engine' if unit == lifecycle.UNITS[0] else 'relay')
                 if not attempt(release.command, ['/usr/bin/systemctl','start',unit], timeout=90):
                     break
+            OPERATION = 'verify_running'
             attempt(verify_running, old_path, old_receipt, release, lifecycle, upgrade)
         try:
+            OPERATION = 'rollback_state'
             if host.baseline() != prepared['baseline'] or bootstrap_state(release, upgrade) != bootstrap:
                 failed = True
         except Exception:
@@ -491,5 +629,8 @@ def apply(package, host, release, lifecycle, upgrade):
         if failed:
             for unit in reversed(lifecycle.UNITS):
                 attempt(release.command, ['/usr/bin/systemctl','stop',unit], timeout=90)
-            raise RuntimeError('CODE_ROLLBACK_FAILED') from None
-        raise RuntimeError('CODE_FAILED_ROLLED_BACK_DB_PRESERVED') from None
+            refused = RuntimeError('CODE_ROLLBACK_FAILED')
+        else:
+            refused = RuntimeError('CODE_FAILED_ROLLED_BACK_DB_PRESERVED')
+        refused.failure_details = details
+        raise refused from None

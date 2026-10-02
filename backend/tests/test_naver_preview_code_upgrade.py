@@ -8,6 +8,7 @@ import io
 import json
 import os
 import random
+import re
 import shlex
 import sqlite3
 import sys
@@ -71,6 +72,26 @@ class ContractTest(unittest.TestCase):
         shell="export PREVIEW_OPS_B64="+shlex.quote(encoded)+";\nset -eu\n/usr/bin/python3 -I -B - <<'PY'\n"+script+'\nPY\n'
         self.assertLess(len(('/bin/bash -c '+shlex.quote(shell)).encode()),120000)
         self.assertLessEqual(len(encoded),65536)
+
+    def test_code_diagnose_transport_preserves_all_six_sources_with_existing_wire_bounds(self):
+        encode,decode,script=self.workflow_transport()
+        tools=Path(__file__).parents[1]/'tools'
+        names={'source':'naver_preview_code_diagnose','code_source':'naver_preview_code_upgrade',
+               'release_source':'naver_preview_release','host_source':'naver_erp_tunnel_service_install',
+               'lifecycle_source':'naver_preview_lifecycle','upgrade_source':'naver_preview_upgrade'}
+        bundle={key:(tools/(name+'.py')).read_text() for key,name in names.items()}
+        bundle.update(operation='preview-code-diagnose',function='run',package={
+            'release':dict(baseline='a'*64,source_commit='b'*40,ciphertext_sha256='c'*64,
+                          source_tar_gz_sha256='d'*64,run_id='9'*20,operation='code-prepare'),
+            'operation_id':'e'*32})
+        self.assertLessEqual(len(json.dumps(bundle).encode()),131072)
+        encoded=encode(bundle)
+        self.assertEqual(decode(encoded),bundle)
+        self.assertLessEqual(len(encoded),65536)
+        shell="export PREVIEW_OPS_B64="+shlex.quote(encoded)+";\nset -eu\n/usr/bin/python3 -I -B - <<'PY'\n"+script+'\nPY\n'
+        self.assertLess(len(('/bin/bash -c '+shlex.quote(shell)).encode()),120000)
+        with self.assertRaisesRegex(ValueError,'CODE_OPS_OPERATION'):
+            decode(encode(dict(bundle,function='apply')))
 
     def test_transport_keeps_other_operations_byte_identical_and_code_mode_exact(self):
         encode,decode,_=self.workflow_transport()
@@ -429,6 +450,40 @@ class ContractTest(unittest.TestCase):
         self.assertEqual(commands[-2:], [['/usr/bin/systemctl','stop','metainc-naver-relay.service'],
                                         ['/usr/bin/systemctl','stop','metainc-naver-engine.service']])
 
+    def test_rollback_retains_fixed_original_failure_stage_and_operation_without_exception_text(self):
+        for reason,stage,operation in (('stop','code_stop_isolated','stop_relay'),
+                ('warm','account_sources_warm','warm_sources'),
+                ('recreate','code_recreate','recreate_relay'),
+                ('start','code_start','start_engine')):
+            with self.subTest(reason=reason):
+                result,_,_,_,_=self.scenario(reason)
+                report=getattr(result,'failure_details',{})
+                self.assertEqual(report.get('failed_stage'),stage)
+                self.assertEqual(report.get('failed_operation'),operation)
+                self.assertNotIn('PRIVATE',json.dumps(report))
+
+    def test_error_report_rejects_arbitrary_uppercase_messages_and_untrusted_exception_types(self):
+        code=load('naver_preview_code_upgrade')
+        error=type('PRIVATE_TYPE_MARKER',(RuntimeError,),{})('PRIVATE_CREDENTIAL_MARKER')
+        code.STAGE='PRIVATE_STAGE_MARKER'
+        code.OPERATION='PRIVATE_OPERATION_MARKER'
+        report=code.failure_report(error)
+        self.assertEqual(report,{'stage':'unknown','error_kind':'OtherError','error_code':'UNRECOGNIZED'})
+        self.assertNotIn('PRIVATE',json.dumps(report))
+
+    def test_workflow_code_error_output_uses_fixed_report_even_when_module_could_not_load(self):
+        _,_,script=self.workflow_transport()
+        guarded=next(node for node in ast.parse(script).body if isinstance(node,ast.Try))
+        handler=compile(ast.Module(body=guarded.handlers[0].body,type_ignores=[]),'<workflow-error-report>','exec')
+        code=load('naver_preview_code_upgrade')
+        for operation in ('preview-code-upgrade','preview-code-diagnose'):
+            for module in (None,code):
+                scope={'error':RuntimeError('PRIVATE_CREDENTIAL_MARKER'),'bundle':{'operation':operation},
+                       'module':module,'re':re}
+                exec(handler,scope)
+                self.assertEqual(scope['result']['error_code'],'UNRECOGNIZED')
+                self.assertNotIn('PRIVATE',json.dumps(scope['result']))
+
     def test_restored_code_must_pass_readiness_and_security_probes(self):
         code=load('naver_preview_code_upgrade')
         release=Mock();life=Mock();upgrade=Mock()
@@ -556,8 +611,12 @@ class WarmSourcesTest(unittest.TestCase):
                 self.assertEqual(args[-1],identity)
                 if failure=='wait_timeout':
                     raise TimeoutError('PRIVATE_WAIT_ERROR')
-                return b'1\n' if failure=='script_exit' else b'0\n'
+                return b'1\n' if failure in ('script_exit','org_refused','unrecognized_script_error') else b'0\n'
             if args[:2]==['docker','logs']:
+                if failure=='org_refused':
+                    return b'{"ok":false,"warm_step":"warm_org_sync","warm_error_code":"ORG_NOT_ACCEPTED"}'
+                if failure=='unrecognized_script_error':
+                    return b'{"ok":false,"warm_step":"PRIVATE_STAGE_MARKER","warm_error_code":"PRIVATE_CREDENTIAL_MARKER"}'
                 return json.dumps({'ok':True,'org_fresh':True,'schema':8,
                     'catalog_total':0 if failure=='invalid_result' else 2,'management_count':1,'accounts_total':3}).encode()
             if args[:2]==['docker','ps']:
@@ -613,6 +672,18 @@ class WarmSourcesTest(unittest.TestCase):
         self.assertEqual(str(result),'WARM_CLEANUP_FAILED')
         self.assertFalse(state['exists'])
         self.assertFalse(any(args[:2]==['docker','rm'] for args in commands))
+
+    def test_warm_failure_retains_original_substep_after_cleanup_and_rejects_raw_script_messages(self):
+        for failure,operation,code in (('wait_timeout','warm_wait','UNRECOGNIZED'),
+                ('org_refused','warm_org_sync','ORG_NOT_ACCEPTED'),
+                ('unrecognized_script_error','warm_result','SOURCE_WARM_FAILED')):
+            with self.subTest(failure=failure):
+                result,_,state=self.scenario(failure)
+                details=result.failure_details
+                self.assertEqual(details['failed_operation'],operation)
+                self.assertEqual(details['failed_error_code'],code)
+                self.assertNotIn('PRIVATE',json.dumps(details))
+                self.assertFalse(state['exists'])
 
 
 class DatabaseRollbackTest(unittest.TestCase):
