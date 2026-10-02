@@ -613,20 +613,33 @@ class App:
         return ctx, owns, names, True
 
     def _h_reports(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
-        if set(req.query) - {"selection"}:
+        if set(req.query) - {"selection", "page"}:
             raise HttpError(400, "bad-query")
+        raw_page = req.query.get("page", "0")
+        if not re.fullmatch(r"0|[1-9][0-9]{0,5}", raw_page):
+            raise HttpError(400, "bad-query")
+        page, page_size = int(raw_page), 20
         ctx, owns, names, catalog_current = self._report_context(v, now)
         visible = SC.clients_in(ctx.org, v.scope, owns, req.query.get("selection", "all"))
+        reports = [r for r in v.store.report_snapshots() if r["possibility_id"] in visible]
+        total = len(reports)
+        if page > 0 and page*page_size >= total:
+            raise HttpError(400, "bad-query")
         rows = []
-        for report in v.store.report_snapshots():
+        for report in reports[page*page_size:(page+1)*page_size]:
             pid = report["possibility_id"]
-            if pid not in visible:
-                continue
             own = owns[pid]
-            rows.append({**report, "company_name": names[pid], "owner": W._owner(ctx, own),
+            # 기존 화면이 표시하는 앞 100건만 전달한다. DB 전체 누락/원본은 변경하지 않는다.
+            payload = dict(report["payload"])
+            missing = payload.get("missing")
+            if isinstance(missing, list):
+                payload.update(missing=missing[:100], missing_count=len(missing), missing_truncated=len(missing)>100)
+            rows.append({**report, "payload": payload, "company_name": names[pid], "owner": W._owner(ctx, own),
                          "can_review": catalog_current and report["status"] == "ready" and O.allows_raising(ctx.freshness)
                          and SC.ACT_APPROVE in SC.allowed_actions(ctx.org, v.scope, own)})
-        return 200, {"rows": rows, "schedule": {"timezone": "Asia/Seoul", "weekly": "월요일 10:00",
+        return 200, {"rows": rows, "total": total, "page": page, "page_size": page_size,
+                    "next_page": page+1 if (page+1)*page_size < total else None,
+                    "schedule": {"timezone": "Asia/Seoul", "weekly": "월요일 10:00",
                                                   "monthly": "매월 3일 10:00"}}
 
     def _h_report_review(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:

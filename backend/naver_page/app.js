@@ -798,21 +798,27 @@
     }) : h('tr', null, h('td', { colspan: 4, class: 'empty' }, ready ? '현재 담당 범위에 실관리 업체가 없습니다.' : message || '최신 자료를 확인하기 전에는 연결 완료로 판단하지 않습니다.')));
   }
   // 보고서는 서버 집계·완결 여부를 그대로 표시한다. 검토는 게시·전송이 아니다.
-  function loadReports() {
+  function loadReports(page) {
+    page = typeof page === 'number' && page >= 0 ? page : 0;
     var gen = ++state.reportsGen, pageGen = state.gen, sel = state.selection;
     closeModals(); state.reports = null;
     $('reportsSchedule').textContent = '예약 시각 확인 중…';
     $('reportsStatus').textContent = '현재 담당 범위의 보고서를 불러오는 중…';
-    put($('reportsRows'));
-    return api('GET', '/reports?selection=' + encodeURIComponent(sel)).then(function (data) {
+    put($('reportsRows')); put($('reportsPages'));
+    return api('GET', '/reports?selection=' + encodeURIComponent(sel) + (page ? '&page=' + page : '')).then(function (data) {
       if (gen !== state.reportsGen || pageGen !== state.gen || sel !== state.selection || !state.me) return;
       state.reports = data;
       var schedule = data.schedule || {};
       $('reportsSchedule').textContent = '주간 ' + (schedule.weekly || '예약 미확인') + ' · 월간 ' + (schedule.monthly || '예약 미확인') +
         ' · ' + (schedule.timezone || '시간대 미확인');
       var rows = data.rows || [];
-      $('reportsStatus').textContent = '보고서 ' + num(rows.length) + '건 · 누락 자료는 0으로 채우지 않습니다 · 게시·전송 기능 없음';
+      $('reportsStatus').textContent = '보고서 ' + num(typeof data.total === 'number' ? data.total : rows.length) + '건 · ' + num(page + 1) + '페이지 · 누락 자료는 0으로 채우지 않습니다 · 게시·전송 기능 없음';
       put($('reportsRows'), rows.length ? rows.map(reportCard) : h('div', { class: 'card empty' }, '현재 담당 범위에 생성된 보고서가 없습니다. 확정 계정·수집 기간과 예약 시각을 확인해 주세요.'));
+      function turnPage(target) {
+        if (gen === state.reportsGen && pageGen === state.gen && sel === state.selection && state.reports === data) loadReports(target);
+      }
+      put($('reportsPages'), page > 0 ? h('button', { type: 'button', class: 'btn', onclick: function () { turnPage(page - 1); } }, '이전 보고서') : null,
+        typeof data.next_page === 'number' ? h('button', { type: 'button', class: 'btn', onclick: function () { turnPage(data.next_page); } }, '다음 보고서') : null);
     }, function (e) {
       if (gen !== state.reportsGen || pageGen !== state.gen || sel !== state.selection || (e && e.status === 401)) return;
       $('reportsSchedule').textContent = '예약 시각을 확인하지 못했습니다.';
@@ -826,6 +832,7 @@
     var status = { ready: '집계 완료', partial: '부분 집계 · 전체 합계 아님', collecting: '수집 중 · 자료 부족' }[row.status] || '알 수 없는 집계 상태 (' + (row.status || '미제공') + ')';
     var review = { needs_staff_review: '담당 검토 필요', not_required: '필수 검토 대상 아님', approved: '담당 검토 승인', held: '담당 검토 보류' }[row.review_status] || '검토 상태 미확인';
     var missing = Array.isArray(p.missing) ? p.missing : null;
+    var missingCount = typeof p.missing_count === 'number' ? p.missing_count : missing ? missing.length : null;
     var metricNames = { imp: '노출', impressions: '노출', clk: '클릭', clicks: '클릭', spend: '광고비', conversions: '전환', conversion_value: '전환 매출' };
     var missingReasons = { source_unverified: '원천 확인 전', metrics_incomplete: '일부 지표 미수신', day_missing: '해당 날짜 미수집' };
     return h('article', { class: 'card report-card', 'data-report': row.report_id },
@@ -841,12 +848,12 @@
       h('p', { class: 'report-meta' }, '계정×일 확인: 기본 지표 ' + num(coverage.basic_complete_account_days) + ' / ' + num(coverage.expected_account_days) +
         ' · 전환 지표 ' + num(coverage.conversion_complete_account_days) + ' / ' + num(coverage.expected_account_days) + ' · 미수집·미연동은 — 표시'),
       h('p', { class: 'report-meta' }, 'ROAS는 광고비·전환 매출이 함께 확인된 계정×일만 사용 · 대상 ' + num(ratios.roas_account_days)),
-      h('details', { class: 'report-missing' }, h('summary', null, missing ? '누락 ' + num(missing.length) + '건 · 날짜·지표 확인' : '누락 정보 미확인'),
+      h('details', { class: 'report-missing' }, h('summary', null, missing ? '누락 ' + num(missingCount) + '건 · 날짜·지표 확인' : '누락 정보 미확인'),
         missing && missing.length ? h('ul', null, missing.slice(0, 100).map(function (m) {
           return h('li', null, (m.day || '날짜 미확인') + ' · 계정 순번 ' + num(m.account_index) + ' · ' +
             (missingReasons[m.reason] || '알 수 없는 누락 사유 (' + (m.reason || '미제공') + ')') + ' · ' +
             (m.metrics || []).map(function (k) { return metricNames[k] || k; }).join('·'));
-        }), missing.length > 100 ? h('li', null, '앞 100건 표시 · 전체 누락 ' + num(missing.length) + '건') : null) :
+        }), missingCount > 100 ? h('li', null, '앞 100건 표시 · 전체 누락 ' + num(missingCount) + '건') : null) :
           h('p', null, missing ? '서버가 보고한 누락이 없습니다.' : '원천 자료의 누락 여부를 확인하지 못했습니다.')),
       (p.blocked_reasons || []).map(function (code) { return h('p', { class: 'blocked-note' },
         ({ no_confirmed_accounts: '확정 계정 없음 · 계정 연결 확인', not_due: '보고 기간 마감·생성 예약 전' }[code] || '알 수 없는 집계 보류 사유') + ' (' + code + ')'); }),

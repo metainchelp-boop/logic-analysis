@@ -174,6 +174,28 @@ test('보고서 검토는 capability true와 필수 메모가 있어야 내부 �
   assert.match(run.text('toast'), /검토 승인.*전송하지 않았습니다/);
 });
 
+test('보고서 페이지는 담당 범위 안에서 이동하고 누락 전체 수를 잘라 표시하지 않는다', async () => {
+  const run = launch({ screen: 'reports', respond: req => {
+    const second = req.url.includes('&page=1');
+    return { total: 21, page: second ? 1 : 0, page_size: 20, next_page: second ? null : 1,
+      rows: [{ company_name: second ? '다음 보고 업체' : '처음 보고 업체', payload: {
+        missing_count: 130, missing_truncated: true,
+        missing: Array.from({ length: 100 }, () => ({ day: '2026-09-01', account_index: 1, reason: 'day_missing' }))
+      } }] };
+  } });
+  await flush();
+  assert.match(run.text('reportsRows'), /누락 130건.*앞 100건 표시 · 전체 누락 130건/);
+  const next = run.buttons('reportsPages')[0]; next.dispatch('click'); await flush();
+  assert.match(run.text('reportsRows'), /다음 보고 업체/);
+  assert.match(run.text('reportsStatus'), /보고서 21건 · 2페이지/);
+  assert.deepEqual(run.buttons('reportsPages').map(el => el.textContent), ['이전 보고서']);
+  run.scope('person:2'); await flush();
+  const count = run.requests.length; next.dispatch('click'); await flush();
+  assert.equal(run.requests.length, count);
+  assert.ok(run.requests.some(req => req.url === '/api/naver-auto/reports?selection=all&page=1'));
+  assert.equal(run.requests.filter(req => req.method !== 'GET').length, 0);
+});
+
 test('관리 모달·버튼과 조회 응답은 담당 범위를 바꾸면 이전 대상을 저장하지 못한다', async () => {
   const pending = [];
   const row = fixture({ management: { cadence: 'weekly', stage_revision: 'r1', can_manage: true, can_collect: true } });
