@@ -180,7 +180,8 @@ class Scheduler:
 
     def _inventory(self):
         result = IR.run_inventory(self.naver_factory(), self.store, self.clock)
-        if result.code in ("NOT_READY", "SOURCE_CHANGED") or any(result.counts.get(s, 0) for s in ("retry", "reauth_required", "limited")):
+        # 개별 계정의 실패·재시도는 원장 경고로 남고, 원천 무효만 서비스 실패이다.
+        if result.code in ("NOT_READY", "SOURCE_CHANGED"):
             self._errors.append("inventory")
         return result
 

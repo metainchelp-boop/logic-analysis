@@ -239,6 +239,7 @@ jobs:
             python -m naver_runtime dry-run | tee "$RUNNER_TEMP/naver-ci/image-dry-run.txt"
           docker run "${image_args[@]}" \
             --mount "type=bind,source=$GITHUB_WORKSPACE/naver_runtime/tests,target=/opt/naver-engine/naver_runtime/tests,readonly" \
+            --mount "type=bind,source=$GITHUB_WORKSPACE/naver_engine/tests,target=/opt/naver-engine/naver_engine/tests,readonly" \
             "naver-runtime-ci:$GITHUB_SHA" \
             python -m unittest -v naver_runtime.tests.test_backup_transport.CryptoTest \
               naver_runtime.tests.test_restore_check \

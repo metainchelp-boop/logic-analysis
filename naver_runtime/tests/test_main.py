@@ -7,8 +7,155 @@ from threading import Event
 from unittest import TestCase
 from unittest.mock import Mock, patch
 
+from naver_engine.tests import test_morning as TM
+from naver_engine.tests.fake_naver import FakeClock, FakeNaver, AGENCY_ID, MARK_API_KEY, MARK_SECRET
+from naver_engine.tests.test_erp_read import FakeErp, MARK_KEY
+from naver_engine import store as S, erp_read as E, inventory_reads as IR
 from naver_runtime import __main__ as main
 from naver_runtime.config import Config, ConfigError
+from naver_runtime.tests.test_server import request
+
+
+class InventoryRuntimeTest(TestCase):
+    def runtime(self, *, setup=None, catalog_warmed=True, read_catalog=True):
+        """실제 조립·Writer 큐·예약 회차·UNIX HTTP. 외부 전송과 시계만 합성한다."""
+        class Clock(FakeClock):
+            def before_network(self):
+                pass
+        clock, stop, health = Clock(TM.T0), Event(), []
+        naver = FakeNaver()
+        ads = TM.Ads(naver)
+        ads.add(TM.A, [], biz=10)
+        ads.add(TM.B, [], biz=20)
+        with tempfile.TemporaryDirectory(prefix="nv-runtime-", dir="/tmp") as folder:
+            root = Path(folder).resolve()
+            (root/"data").mkdir()
+            (root/"socket").mkdir()
+            env = {"NAVER_ENGINE_DB": str(root/"data/engine.db"),
+                   "NAVER_ENGINE_SOCKET": str(root/"socket/api.sock"),
+                   "NAVER_ENGINE_ERP_TUNNEL_SOCKET": str(root/"tunnel/erp.sock"),
+                   "NAVER_ENGINE_BACKUP_DIR": str(root/"backup"),
+                   "NAVER_ENGINE_INVENTORY_ENABLED": "true",
+                   "NAVER_ENGINE_ERP_KEY": MARK_KEY, "NAVER_MGR_CUSTOMER_ID": str(AGENCY_ID),
+                   "NAVER_MGR_API_KEY": MARK_API_KEY, "NAVER_MGR_SECRET_KEY": MARK_SECRET}
+            config = Config.from_env(env)
+            with S.open_writer(config.db, clock=clock.now) as store:
+                store.record_accounts(TM.kids(TM.A, TM.B), clock.now())
+                if setup is not None:
+                    setup(store, clock, ads, naver)
+                body = {"generated_at": clock.now().isoformat(), "total": 0, "complete": True, "items": []}
+                if catalog_warmed:
+                    store.record_account_catalog(body, (), clock.now())
+            erp = FakeErp(ids={"generated_at": clock.now().isoformat(), "items": []})
+            erp.override[(E.PATH_ACCOUNT_CATALOG, None)] = (
+                200, json.dumps({"status": 200, "result": body}).encode())
+            def after_tick(seconds):
+                self.assertEqual(seconds, 60)
+                health.append(request(config.socket))
+                stop.set()
+                return True
+            with patch.object(main, "InterruptibleClock", return_value=clock), \
+                 patch.object(main.N, "SystemClock", return_value=clock), \
+                 patch.object(main.N, "UrllibTransport", return_value=naver), \
+                 patch.object(main, "ErpTunnelTransport", return_value=erp), \
+                 patch.object(stop, "wait", side_effect=after_tick):
+                self.assertEqual(main.run(config, env, stop=stop), 0)
+            with S.open_reader(config.db) as store:
+                rows = store.inventory_checks_on(clock.now().date())
+                catalog = store.account_catalog_status() if read_catalog else None
+            self.assertEqual(len(health), 1)
+            self.assertTrue(all(call.method == "GET" and not call.has_body for call in naver.calls))
+            self.assertTrue(all(call["method"] == "GET" and not call["has_body"] for call in erp.calls))
+            return health[0], rows, naver.calls, erp.calls, catalog
+
+    def test_warmed_catalog_and_accounts_reach_inventory_through_actual_runtime(self):
+        health, rows, calls, erp, catalog = self.runtime()
+        self.assertEqual(health[0], 200, health[1])
+        self.assertEqual(health[1]["state"], "ok")
+        self.assertEqual({cid: row["status"] for cid, row in rows.items()}, {TM.A: "ok", TM.B: "ok"})
+        self.assertEqual(len(calls), 6)
+        self.assertEqual(erp, [])
+        self.assertEqual(catalog["state"], "accepted")
+
+    def test_denied_account_keeps_its_warning_without_failing_runtime_health(self):
+        def denied(store, clock, ads, naver):
+            ads.fail[(TM.A, "camps")] = (403, {"code": 1006})
+        health, rows, calls, erp, _ = self.runtime(setup=denied)
+        self.assertEqual(rows[TM.A]["status"], "reauth_required")
+        self.assertEqual(rows[TM.A]["error_code"], "KEY_REJECTED")
+        self.assertIsNone(rows[TM.A]["yday_spend"])
+        self.assertEqual(rows[TM.B]["status"], "ok")
+        self.assertEqual(len(calls), 4)
+        self.assertEqual(erp, [])
+        self.assertEqual(health[0], 200, health[1])
+
+    def test_due_catalog_uses_exact_two_readers_through_writer_before_inventory(self):
+        health, rows, _, erp, catalog = self.runtime(catalog_warmed=False)
+        self.assertEqual(health[0], 200, health[1])
+        self.assertEqual([call["path"] for call in erp], [E.PATH_ACCOUNT_CATALOG, E.PATH_NAVER_IDS])
+        self.assertEqual(catalog["state"], "accepted")
+        self.assertEqual([row["status"] for row in rows.values()], ["ok", "ok"])
+
+    def test_retry_and_exhausted_account_keep_unknown_amounts_and_do_not_fail_health(self):
+        for prior_attempts, expected in ((0, "retry"), (3, "limited")):
+            with self.subTest(status=expected):
+                def incomplete(store, clock, ads, naver):
+                    ads.add(TM.A, [(1, "ELIGIBLE", False, TM.steady(0, 0, 0, 0))], biz=10)
+                    for _ in range(prior_attempts):
+                        IR.run_inventory(main.N.NaverReader(TM.creds(), transport=naver, clock=clock), store, clock.now)
+                        clock.advance(1800)
+                    naver.calls.clear()
+                health, rows, calls, erp, _ = self.runtime(setup=incomplete)
+                self.assertEqual(rows[TM.A]["status"], expected)
+                self.assertIsNone(rows[TM.A]["yday_spend"])
+                self.assertIsNotNone(rows[TM.A]["error_code"])
+                self.assertEqual(rows[TM.B]["status"], "ok")
+                self.assertLessEqual(len(calls), 6)
+                self.assertEqual(erp, [])
+                self.assertEqual(health[0], 200, health[1])
+
+    def test_partial_checkpoint_is_not_complete_and_keeps_existing_call_budget(self):
+        def large(store, clock, ads, naver):
+            ads.add(TM.A, [(n, "ELIGIBLE", False, TM.steady()) for n in range(601)], biz=10)
+        health, rows, calls, _, _ = self.runtime(setup=large)
+        self.assertEqual(health[0], 200, health[1])
+        self.assertEqual(rows[TM.A]["status"], "partial")
+        self.assertEqual(rows[TM.A]["error_code"], "CHECKPOINT_PENDING")
+        self.assertIsNone(rows[TM.A]["yday_spend"])
+        self.assertEqual(rows[TM.B]["status"], "ok")
+        self.assertLessEqual(len(calls), 24)
+        self.assertLessEqual(sum(call.customer == str(TM.A) for call in calls), 8)
+
+    def test_not_ready_source_keeps_failed_health_without_network_reads(self):
+        def refused(store, clock, ads, naver):
+            store.record_sync_event(S.SYNC_ACCOUNTS, S.SYNC_FAILED, ("INCOMPLETE_LIST",), clock.now())
+        health, rows, calls, erp, _ = self.runtime(setup=refused)
+        self.assertEqual(health[0], 503)
+        self.assertEqual(health[1]["errors"], ["inventory"])
+        self.assertEqual((rows, calls, erp), ({}, [], []))
+
+    def test_source_change_during_read_keeps_failed_health_and_stops_next_account(self):
+        def change(store, clock, ads, naver):
+            naver.tick = lambda call: clock.advance(31*3600)
+        health, rows, calls, erp, _ = self.runtime(setup=change)
+        self.assertEqual(health[0], 503)
+        self.assertEqual(health[1]["errors"], ["inventory"])
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(erp, [])
+        self.assertFalse(any(row["status"] == "ok" for row in rows.values()))
+
+    def test_unexpected_stored_catalog_error_keeps_failed_health_before_network(self):
+        def corrupt(store, clock, ads, naver):
+            store.record_account_catalog_failure(clock.now(), "CATALOG_FAILED")
+            # 디스크 오류 fixture: 공개 저장 API가 만들 수 없는 손상을 주입한다.
+            store._conn.execute("UPDATE naver_auto_meta SET value = ? WHERE key = ?",
+                                ("{invalid-json", "account_catalog_status"))
+        with self.assertLogs("naver_runtime", level="ERROR") as logs:
+            health, rows, calls, erp, _ = self.runtime(setup=corrupt, catalog_warmed=False, read_catalog=False)
+        self.assertEqual(health[0], 503)
+        self.assertEqual(health[1]["errors"], ["scheduler"])
+        self.assertEqual((rows, calls, erp), ({}, [], []))
+        self.assertTrue(any("StoreError" in line for line in logs.output))
 
 
 class MainTest(TestCase):

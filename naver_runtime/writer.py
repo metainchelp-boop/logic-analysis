@@ -22,6 +22,9 @@ record_prospects record_sync_event refuse_org refuse_stages runs_on stage_as_of
 system_alert_keys_on thresholds snapshot_to
 metrics_context metrics_work begin_metrics_attempt record_metrics_snapshot metrics_payload
 finish_metrics_attempt record_access access_log
+account_catalog_status record_account_catalog record_account_catalog_failure
+inventory_snapshot inventory_account_valid inventory_work begin_inventory_check
+inventory_progress record_inventory_progress record_inventory_check
 """.split())
 
 
