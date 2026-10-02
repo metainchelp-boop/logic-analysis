@@ -84,7 +84,7 @@ class ContractTest(unittest.TestCase):
             'release':dict(baseline='a'*64,source_commit='b'*40,ciphertext_sha256='c'*64,
                           source_tar_gz_sha256='d'*64,run_id='9'*20,operation='code-prepare'),
             'operation_id':'e'*32})
-        self.assertLessEqual(len(json.dumps(bundle).encode()),131072)
+        self.assertLessEqual(len(json.dumps(bundle).encode()),196608)
         encoded=encode(bundle)
         self.assertEqual(decode(encoded),bundle)
         self.assertLessEqual(len(encoded),65536)
@@ -114,7 +114,7 @@ class ContractTest(unittest.TestCase):
         bundle=dict(operation='preview-code-upgrade',function='apply',package={})
         packed=gzip.compress(json.dumps(bundle).encode())
         bad=[packed[:-1],packed+b'private-tail',packed+packed,
-             gzip.compress(b' '*131073),b'invalid-gzip']
+             gzip.compress(b' '*196609),b'invalid-gzip']
         for data in bad:
             with self.subTest(size=len(data)),self.assertRaises((ValueError,zlib.error)):
                 decode('code-gzip-v1:'+base64.b64encode(data).decode())
@@ -122,7 +122,7 @@ class ContractTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 decode(encoded)
         with self.assertRaisesRegex(ValueError,'CODE_OPS_JSON_SIZE'):
-            encode(dict(bundle,source='x'*131072))
+            encode(dict(bundle,source='x'*196608))
         with self.assertRaisesRegex(ValueError,'CODE_OPS_WIRE_SIZE'):
             encode(dict(bundle,source=random.Random(0).randbytes(60000).hex()))
 
@@ -311,26 +311,45 @@ class ContractTest(unittest.TestCase):
                     target=path/name;target.parent.mkdir(parents=True, exist_ok=True);target.write_bytes(body)
             release.extract_source=extract
             current={'source':code.OLD_COMMIT}
+            sources={name:code.OLD_COMMIT for name in ('engine','relay')}
             services={}
             execute, request_api=release.command,release.unix_request
             def track(args,**kwargs):
                 result=execute(args,**kwargs)
                 if '--force-recreate' in args:
                     current['source']=Path(args[5]).parent.name.removeprefix('naver-')
+                    sources[args[3].removeprefix('naver-')]=current['source']
                 if args[:2] == ['/usr/bin/systemctl', 'stop']:
-                    services[args[-1]] = 'inactive'
+                    services[args[-1]] = 'failed' if failure=='failed_stopped' else 'inactive'
                 if args[:2] == ['/usr/bin/systemctl', 'start']:
                     services[args[-1]] = 'active'
-                if args[:2] == ['/usr/bin/systemctl', 'show'] and args[-2] == 'ActiveState':
-                    return services.get(args[2], 'active').encode()
+                if args[:2] == ['/usr/bin/systemctl', 'show']:
+                    active=services.get(args[2], 'active')
+                    values={'ActiveState':active,'SubState':'running' if active=='active' else
+                            'failed' if active=='failed' else 'dead','MainPID':'123' if active=='active' else '0'}
+                    if args[-2] in values:
+                        return values[args[-2]].encode()
+                if args[:2] == ['docker','ps']:
+                    name=args[args.index('--filter')+1].removeprefix('label=com.docker.compose.project=naver-')
+                    return (('3' if name=='engine' else '4')*64).encode()
+                if args[:2] == ['docker','inspect'] and '.State.Restarting' in args[-2]:
+                    name='engine' if args[-1]=='3'*64 else 'relay'
+                    row=json.loads(result)
+                    running=services.get('metainc-naver-'+name+'.service','active')=='active'
+                    running=running or failure=='stop_writer_running' or (
+                        failure=='rollback_writer_running' and sources[name]!=code.OLD_COMMIT)
+                    row.update(source=sources[name],running=running,restarting=False,pid=123 if running else 0)
+                    return json.dumps(row).encode()
                 return result
             def request_api_by_code(path,route,method='GET'):
                 if method=='POST':
                     verified = route in ('/api/naver-auto/links/confirm','/api/naver-auto/collection/request')
                     if current['source']==code.OLD_COMMIT:
                         return (401 if verified else 403),{},b''
-                    if verified and failure not in ('probe','rollback_recreate'):
+                    if verified and failure not in ('probe','rollback_recreate','rollback_writer_running'):
                         return 401,{},b''
+                    if verified and failure=='rollback_writer_running':
+                        return 200,{},b''
                 return request_api(path,route,method)
             release.command,release.unix_request=track,request_api_by_code
             target=root/'releases'/('naver-'+'b'*40)
@@ -362,15 +381,21 @@ class ContractTest(unittest.TestCase):
         with patch.object(legacy_test, 'M', fixture), patch.object(code, 'TARGET_COMMIT', 'b'*40), \
                 patch.object(code, 'EXPECTED_BASELINE', 'a'*64), \
                 patch.object(code, 'OLD_SOURCE_SHA256', 'c'*64), \
-                patch.object(code, 'db_snapshot', return_value=(Path('/synthetic-snapshot'), 'd'*64)), \
+                patch.object(code, 'db_snapshot', return_value=(Path('/synthetic-snapshot'), 'd'*64)) as snapshot, \
                 patch.object(code, 'restore_db') as restore, \
                 patch.object(code, 'warm_sources', side_effect=(ValueError('WARM_FAILED') if failure=='warm'
                              else RuntimeError('WARM_CLEANUP_FAILED') if failure=='warm_cleanup' else None),
                              return_value={'ok':True, 'org_fresh':True, 'schema':8, 'catalog_total':2, 'management_count':1}):
             result = legacy_test.UpgradeTest().scenario(failure, mode, setup)
-            if failure == 'warm':
+            if failure in ('warm','recreate','start','probe'):
                 restore.assert_called_once()
             if failure == 'warm_cleanup':
+                restore.assert_not_called()
+            if failure=='stop_writer_running':
+                snapshot.assert_not_called()
+                restore.assert_not_called()
+            if failure=='rollback_writer_running':
+                snapshot.assert_called_once()
                 restore.assert_not_called()
             return result
 
@@ -381,6 +406,31 @@ class ContractTest(unittest.TestCase):
         self.assertEqual(state, {'engine': 'b'*40, 'relay': 'b'*40})
         self.assertFalse(any(path.name == 'bootstrap-request.json' for path, _ in writes))
         self.assertFalse(any('nginx' in ' '.join(args) for args in commands))
+
+    def test_failed_supervisor_with_proven_stopped_writers_can_snapshot_and_apply(self):
+        result,commands,_,_,state=self.scenario('failed_stopped')
+        self.assertIsInstance(result,dict,str(result))
+        self.assertTrue(result['ok'])
+        self.assertEqual(state,{'engine':'b'*40,'relay':'b'*40})
+        checked=[args for args in commands if args[:2]==['docker','inspect'] and '.State.Restarting' in args[-2]]
+        self.assertEqual(len(checked),2)
+
+    def test_any_live_or_unproven_writer_blocks_snapshot_and_rollback_mutations(self):
+        for failure in ('stop_writer_running','rollback_writer_running'):
+            with self.subTest(failure=failure):
+                result,commands,_,_,_=self.scenario(failure)
+                self.assertEqual(str(result),'CODE_ROLLBACK_FAILED')
+                details=result.failure_details
+                self.assertEqual(details['rollback_error_code'],'ACCOUNT_WRITER_NOT_STOPPED')
+                last_stop=max(i for i,args in enumerate(commands) if args[:2]==['/usr/bin/systemctl','stop'])
+                self.assertFalse(any('--force-recreate' in args or args[:2]==['/usr/bin/systemctl','start']
+                                     for args in commands[last_stop+1:]))
+                if failure=='stop_writer_running':
+                    self.assertFalse(any('--force-recreate' in args or args[:2]==['/usr/bin/systemctl','start']
+                                         for args in commands))
+                else:
+                    # The only recreations are the forward target pair, never the old writer after failed proof.
+                    self.assertEqual(sum('--force-recreate' in args for args in commands),2)
 
     def test_prepare_does_not_restart_services_or_touch_secrets_or_bootstrap(self):
         result, commands, writes, restored, state=self.scenario(mode='prepare')
@@ -436,6 +486,15 @@ class ContractTest(unittest.TestCase):
                 old=load('naver_preview_code_upgrade').OLD_COMMIT
                 self.assertEqual(state,{'engine':old,'relay':old})
                 self.assertFalse(any(path.name=='bootstrap-request.json' for path,_ in writes))
+
+    def test_partial_recreation_requires_both_mixed_source_proofs_before_old_recreation(self):
+        result,commands,_,_,_=self.scenario('recreate')
+        self.assertEqual(str(result),'CODE_FAILED_ROLLED_BACK_DB_PRESERVED')
+        recreations=[i for i,args in enumerate(commands) if '--force-recreate' in args]
+        self.assertEqual(len(recreations),4)
+        rollback_proofs=[args for args in commands[recreations[1]+1:recreations[2]]
+                         if args[:2]==['docker','inspect'] and '.State.Restarting' in args[-2]]
+        self.assertEqual({args[-1] for args in rollback_proofs},{'3'*64,'4'*64})
 
     def test_rollback_failure_leaves_both_isolated_services_stopped(self):
         result,commands,_,_,_=self.scenario('rollback_recreate')
@@ -585,6 +644,85 @@ class ContractTest(unittest.TestCase):
             encode({'source':'x'*131072})
         with self.assertRaisesRegex(ValueError,'PREPARE_WIRE_SIZE'):
             encode({'source':random.Random(0).randbytes(60000).hex()})
+
+
+class StoppedWriterTest(unittest.TestCase):
+    def proof(self, *, state=None, row=None, ids=None, sources=None, failure=None, inspect_body=None):
+        code=load('naver_preview_code_upgrade')
+        life=load('naver_preview_lifecycle')
+        cid='c'*64
+        states={'ActiveState':'failed','SubState':'failed','MainPID':'0', **(state or {})}
+        images={code.OLD_COMMIT:{'engine':'sha256:'+'e'*64,'relay':'sha256:'+'f'*64},
+                code.TARGET_COMMIT:{'engine':'sha256:'+'1'*64,'relay':'sha256:'+'2'*64}}
+        value={'id':cid,'image':images[code.OLD_COMMIT]['relay'],'source':code.OLD_COMMIT,
+               'project':'naver-relay','service':'naver-relay','running':False,'restarting':False,'pid':0,
+               **(row or {})}
+        commands=[]
+        def command(args,**kwargs):
+            commands.append(args)
+            if failure is not None and args[1]==failure:
+                raise OSError('PRIVATE_COMMAND_SENTINEL')
+            if args[:2]==['/usr/bin/systemctl','show']:
+                return states[args[-2]].encode()
+            if args[:2]==['docker','ps']:
+                self.assertIn('label=com.docker.compose.project=naver-relay',args)
+                self.assertIn('--all',args)
+                self.assertIn('--no-trunc',args)
+                return (cid if ids is None else ids).encode()
+            if args[:2]==['docker','inspect']:
+                return json.dumps(value).encode() if inspect_body is None else inspect_body
+            self.fail('Mutation or unknown command '+str(args))
+        release=SimpleNamespace(command=command)
+        code.stopped_writer(release,life,Path('/release/naver-'+code.OLD_COMMIT),
+                            images if sources is None else sources,life.UNITS[1])
+        return commands
+
+    def test_failed_supervisor_is_safe_only_when_systemd_and_exact_container_have_no_writer(self):
+        self.proof()
+        self.proof(state={'ActiveState':'inactive','SubState':'dead'})
+        for state in ({'ActiveState':'active'},{'ActiveState':'deactivating'},
+                      {'MainPID':'123'},{'MainPID':''},{'SubState':'auto-restart'}):
+            with self.subTest(state=state),self.assertRaises(ValueError):
+                self.proof(state=state)
+        for row in ({'running':True},{'restarting':True},{'pid':12},{'pid':False},
+                    {'source':'b'*40},{'image':'sha256:'+'9'*64},{'project':'other'},
+                    {'service':'other'},{'id':'d'*64},{'source':[]},{'running':0},
+                    {'restarting':0},{'pid':'0'},{'running':None}):
+            with self.subTest(row=row),self.assertRaises(ValueError):
+                self.proof(row=row)
+        for ids in ('short','c'*64+'\n'+'d'*64):
+            with self.subTest(ids=ids),self.assertRaises(ValueError):
+                self.proof(ids=ids)
+
+    def test_absent_container_still_requires_systemd_dead_and_never_inspects_unknown_ids(self):
+        commands=self.proof(ids='')
+        self.assertFalse(any(args[:2]==['docker','inspect'] for args in commands))
+        self.assertEqual(sum(args[:2]==['/usr/bin/systemctl','show'] for args in commands),3)
+        with self.assertRaisesRegex(ValueError,'ACCOUNT_WRITER_NOT_STOPPED'):
+            self.proof(ids='',state={'MainPID':'42'})
+
+    def test_source_and_image_are_exact_pairs_and_initial_scope_cannot_accept_target(self):
+        code=load('naver_preview_code_upgrade')
+        target={'source':code.TARGET_COMMIT,'image':'sha256:'+'2'*64}
+        self.proof(row=target)
+        old_only={code.OLD_COMMIT:{'relay':'sha256:'+'f'*64}}
+        with self.assertRaisesRegex(ValueError,'ACCOUNT_WRITER_NOT_STOPPED'):
+            self.proof(row=target,sources=old_only)
+        for row in ({'source':code.TARGET_COMMIT},{'image':'sha256:'+'2'*64}):
+            with self.subTest(row=row),self.assertRaisesRegex(ValueError,'ACCOUNT_WRITER_NOT_STOPPED'):
+                self.proof(row=row)
+        for sources in ({},{'unexpected':old_only[code.OLD_COMMIT]},
+                        {code.OLD_COMMIT:{}},{code.OLD_COMMIT:{'relay':'mutable-tag'}}):
+            with self.subTest(sources=sources),self.assertRaisesRegex(ValueError,'ACCOUNT_WRITER_NOT_STOPPED'):
+                self.proof(sources=sources)
+
+    def test_unknown_command_state_or_malformed_inspection_never_proves_a_stopped_writer(self):
+        for failure in ('show','ps','inspect'):
+            with self.subTest(failure=failure),self.assertRaises(OSError):
+                self.proof(failure=failure)
+        for raw in (b'[]',b'null',b'{}',b'{invalid',b''):
+            with self.subTest(raw=raw),self.assertRaises(ValueError):
+                self.proof(inspect_body=raw)
 
 
 class WarmSourcesTest(unittest.TestCase):

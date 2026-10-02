@@ -77,7 +77,7 @@ jobs:
               raw=json.dumps(bundle).encode()
               if bundle['operation'] not in ('preview-code-upgrade','preview-code-diagnose'):
                   return base64.b64encode(raw).decode()
-              if len(raw)>131072:
+              if len(raw)>196608:
                   raise ValueError('CODE_OPS_JSON_SIZE')
               encoded='code-gzip-v1:'+base64.b64encode(gzip.compress(raw,mtime=0)).decode()
               if len(encoded)>65536:
@@ -138,8 +138,8 @@ jobs:
                     raise ValueError('CODE_OPS_WIRE_SIZE')
                 packed=base64.b64decode(encoded[len('code-gzip-v1:'):],validate=True)
                 decoder=zlib.decompressobj(16+zlib.MAX_WBITS)
-                raw=decoder.decompress(packed,131073)
-                if len(raw)>131072 or not decoder.eof or decoder.unused_data or decoder.unconsumed_tail:
+                raw=decoder.decompress(packed,196609)
+                if len(raw)>196608 or not decoder.eof or decoder.unused_data or decoder.unconsumed_tail:
                     raise ValueError('CODE_OPS_GZIP')
                 bundle=json.loads(raw)
                 if (bundle.get('operation'),bundle.get('function')) not in (('preview-code-upgrade','apply'),('preview-code-diagnose','run')):

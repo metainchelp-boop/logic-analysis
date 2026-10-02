@@ -10,11 +10,12 @@ import uuid
 OPERATION_ID = 'c05ab698e2154633911228858272c100'
 TARGET_COMMIT = 'e1c4b3526db55d78175a1d6598f3403fdb9398f7'
 STAGE = 'input'
-STAGES = frozenset(('input','diagnose_preflight','diagnose_readonly','diagnose_postflight'))
+STAGES = frozenset(('input','diagnose_preflight','diagnose_readonly','diagnose_journal','diagnose_postflight'))
 FAILURES = frozenset(('DIAG_OPERATION','DIAG_PATH','DIAG_IMAGE','DIAG_IMAGE_CHANGED','DIAG_CONTAINER_CHANGED',
     'DIAG_CONTAINER_ID','DIAG_RESULT_SIZE','DIAG_FIELDS','DIAG_CODES','DIAG_COUNT','DIAG_SCHEMA','DIAG_TIME',
     'DIAG_BOOL','DIAG_CATALOG','DIAG_READ_FAILED','DIAG_CREATE_UNCONFIRMED','DIAG_CONTAINER_REMAINS',
-    'DIAG_CLEANUP_FAILED','DIAG_POST_BASELINE','DIAG_SOURCE','DIAG_JOURNAL_PRESENT','HOST_BASELINE','OLD_BASELINE','OLD_SOURCE_CHANGED',
+    'DIAG_CLEANUP_FAILED','DIAG_POST_BASELINE','DIAG_SOURCE','DIAG_JOURNAL_PRESENT','DIAG_JOURNAL_SIZE',
+    'DIAG_JOURNAL_LIMIT','DIAG_JOURNAL_FIELDS','HOST_BASELINE','OLD_BASELINE','OLD_SOURCE_CHANGED',
     'OLD_UNIT_CHANGED','DEPENDENCY_NOT_ACTIVE','OLD_UNIT_NOT_ENABLED','FILE_POLICY','FILE_PATH',
     'DIRECTORY_POLICY','COMMAND_FAILED','PREPARED_PACKAGE','PREPARED_SOURCE','IMAGE_CHANGED'))
 
@@ -27,7 +28,7 @@ def failure_report(error):
                 'PermissionError','FileNotFoundError','OSError') else 'UNRECOGNIZED',
             'error_code':reason if reason in FAILURES else 'UNRECOGNIZED'}
 PROJECTION_SOURCE = r'''
-import json,sqlite3
+import json,os,sqlite3
 from datetime import datetime
 OUTCOMES = frozenset(('accepted','refused','braked','failed','missing','UNRECOGNIZED'))
 CODES = frozenset(('BRAKE','BRAKE_STAGE','BRAKE_BASELINE','BRAKE_MANAGER','BRAKE_CONFIRMED',
@@ -98,7 +99,11 @@ def projection(conn):
                        'generated_at':None if catalog is None else timestamp(catalog[1])}}
 
 def read_projection(path):
-    conn=sqlite3.connect('file:'+path+'?mode=ro',uri=True,timeout=5)
+    if os.path.lexists(path+'-journal'):
+        raise ValueError('DIAG_JOURNAL_PRESENT')
+    # Only the frozen DB-only snapshot may bypass WAL initialization.
+    option='' if any(os.path.lexists(path+s) for s in ('-wal','-shm')) else '&immutable=1'
+    conn=sqlite3.connect('file:'+path+'?mode=ro'+option,uri=True,timeout=5)
     try:
         conn.execute('PRAGMA query_only=ON')
         allowed={sqlite3.SQLITE_SELECT,sqlite3.SQLITE_READ,sqlite3.SQLITE_FUNCTION,sqlite3.SQLITE_TRANSACTION}
@@ -181,6 +186,43 @@ def files_snapshot(folder,upgrade):
     return result
 
 
+def relay_journal(release):
+    unit='metainc-naver-relay.service'
+    since,until='2026-10-02 03:52:00 UTC','2026-10-02 04:13:10 UTC'
+    raw=release.command(['/usr/bin/journalctl','--no-pager','--output=json','--output-fields=UNIT,_PID,MESSAGE',
+        '--since',since,'--until',until,'--lines=513','UNIT='+unit,'_PID=1'],timeout=30)
+    if len(raw)>1048576:
+        raise ValueError('DIAG_JOURNAL_SIZE')
+    rows=raw.splitlines()
+    if len(rows)>512:
+        raise ValueError('DIAG_JOURNAL_LIMIT')
+    exits,results={},{}
+    unrecognized=0
+    for line in rows:
+        row=json.loads(line,object_pairs_hook=release.unique)
+        if not isinstance(row,dict) or row.get('UNIT')!=unit or row.get('_PID')!='1' or not isinstance(row.get('MESSAGE'),str) or len(row['MESSAGE'])>4096:
+            raise ValueError('DIAG_JOURNAL_FIELDS')
+        message=row['MESSAGE']
+        event=re.fullmatch(re.escape(unit)+r': Main process exited, code=([a-z-]+), status=([0-9]{1,3})/([A-Za-z0-9/_-]+)',message)
+        failure=re.fullmatch(re.escape(unit)+r": Failed with result '([^']{1,64})'\.",message)
+        if event and int(event[2])<=255:
+            kind=event[1] if event[1] in ('exited','killed','dumped') else 'UNRECOGNIZED'
+            label=event[3] if event[3] in ('SUCCESS','FAILURE','n/a','TERM','KILL','INT','ABRT','SEGV','PIPE','HUP','QUIT') else 'UNRECOGNIZED'
+            key=(kind,int(event[2]),label)
+            exits[key]=exits.get(key,0)+1
+        elif failure or message==unit+': Deactivated successfully.':
+            result=failure[1] if failure else 'success'
+            if result not in ('success','exit-code','signal','core-dump','timeout','watchdog','start-limit-hit','resources','protocol','oom-kill'):
+                result='UNRECOGNIZED'
+            results[result]=results.get(result,0)+1
+        else:
+            unrecognized+=1
+    return {'since_utc':'2026-10-02T03:52:00Z','until_utc':'2026-10-02T04:13:10Z',
+        'entries_inspected':len(rows),'main_process_exit_count':sum(exits.values()),'unrecognized_event_count':unrecognized,
+        'exits':[{'exit_type':k[0],'exit_status':k[1],'status_label':k[2],'count':v} for k,v in sorted(exits.items())],
+        'results':[{'result':k,'count':v} for k,v in sorted(results.items())]}
+
+
 def run(package,host,release,lifecycle,upgrade,code):
     global STAGE
     STAGE='diagnose_preflight'
@@ -195,6 +237,16 @@ def run(package,host,release,lifecycle,upgrade,code):
     folder=code.DATA/('.account-failed-db-'+OPERATION_ID)
     if folder.resolve()!=folder:
         raise ValueError('DIAG_PATH')
+    if not os.path.lexists(folder):
+        STAGE='diagnose_journal'
+        journal=relay_journal(release)
+        STAGE='diagnose_postflight'
+        if (os.path.lexists(folder) or upgrade.manifest(release,code.TARGET_COMMIT,prepared)!=(path,receipt)
+                or code.current_state(prepared,host,release,lifecycle,upgrade)!=before):
+            raise ValueError('DIAG_POST_BASELINE')
+        return {'ok':True,'mode':'failed-code-relay-journal','source_commit':code.TARGET_COMMIT,'operation_id':OPERATION_ID,
+            'quarantine_present':False,'relay_journal':journal,'existing_app_baseline_unchanged':True,
+            'database_read':False,'database_mutations':0,'external_calls':0,'services_changed':False}
     release.trusted_dir(folder,mode=0o700)
     files=files_snapshot(folder,upgrade)
     image=receipt['images']['engine']

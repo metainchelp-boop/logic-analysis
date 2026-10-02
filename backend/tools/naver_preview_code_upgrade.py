@@ -197,6 +197,44 @@ def target_override(before, name):
     return body
 
 
+def stopped_writer(release, lifecycle, path, images, unit):
+    """Prove no writer; a failed supervisor alone is neither success nor failure.
+
+    images maps only pinned source commits to their prepared engine/relay digests.
+    Rollback may encounter either source after a partial container recreation.
+    """
+    if (unit not in lifecycle.UNITS or path.name not in ('naver-'+OLD_COMMIT,'naver-'+TARGET_COMMIT)
+            or not isinstance(images,dict) or not images or set(images)-{OLD_COMMIT,TARGET_COMMIT}):
+        raise ValueError('ACCOUNT_WRITER_NOT_STOPPED')
+    name='engine' if unit==lifecycle.UNITS[0] else 'relay'
+    allowed={source:value.get(name) for source,value in images.items() if isinstance(value,dict)}
+    if len(allowed)!=len(images) or any(not isinstance(v,str) or not re.fullmatch('sha256:[0-9a-f]{64}',v)
+                                      for v in allowed.values()):
+        raise ValueError('ACCOUNT_WRITER_NOT_STOPPED')
+    if (lifecycle._state(release,unit,'ActiveState') not in ('inactive','failed')
+            or lifecycle._state(release,unit,'SubState') not in ('dead','failed')
+            or lifecycle._state(release,unit,'MainPID')!='0'):
+        raise ValueError('ACCOUNT_WRITER_NOT_STOPPED')
+    ids=release.command(['docker','ps','--all','--no-trunc','--filter',
+        'label=com.docker.compose.project=naver-'+name,'--format','{{.ID}}']).decode().strip().splitlines()
+    if len(ids)>1 or any(not re.fullmatch('[0-9a-f]{64}',identity) for identity in ids):
+        raise ValueError('ACCOUNT_WRITER_NOT_STOPPED')
+    if not ids:
+        return
+    fields={'id':'.Id','image':'.Image','running':'.State.Running','restarting':'.State.Restarting','pid':'.State.Pid',
+        'source':'(index .Config.Labels "metainc.naver.preview.source")',
+        'project':'(index .Config.Labels "com.docker.compose.project")',
+        'service':'(index .Config.Labels "com.docker.compose.service")'}
+    fmt='{'+','.join(json.dumps(k)+':{{json '+v+'}}' for k,v in fields.items())+'}'
+    row=json.loads(release.command(['docker','inspect','--format',fmt,ids[0]]))
+    if (not isinstance(row,dict) or not isinstance(row.get('source'),str) or row['source'] not in allowed
+            or row.get('id')!=ids[0] or row.get('image')!=allowed[row['source']]
+            or row.get('project')!='naver-'+name or row.get('service')!='naver-'+name
+            or row.get('running') is not False or row.get('restarting') is not False
+            or type(row.get('pid')) is not int or row['pid']!=0):
+        raise ValueError('ACCOUNT_WRITER_NOT_STOPPED')
+
+
 def db_snapshot(identity, release, upgrade):
     """Called only after both services stop; no live-copy or recovery-key use."""
     global OPERATION
@@ -530,8 +568,7 @@ def apply(package, host, release, lifecycle, upgrade):
             OPERATION = 'stop_'+name
             release.command(['/usr/bin/systemctl','stop',unit], timeout=90)
             OPERATION = 'stop_check_'+name
-            if lifecycle._state(release, unit, 'ActiveState') != 'inactive':
-                raise ValueError('ACCOUNT_WRITER_NOT_STOPPED')
+            stopped_writer(release, lifecycle, old_path, {OLD_COMMIT:old_receipt['images']}, unit)
         OPERATION = 'bootstrap_check'
         if bootstrap_state(release, upgrade) != bootstrap:
             raise ValueError('BOOTSTRAP_CHANGED')
@@ -592,27 +629,25 @@ def apply(package, host, release, lifecycle, upgrade):
         for unit in reversed(lifecycle.UNITS):
             OPERATION = 'stop_'+('engine' if unit == lifecycle.UNITS[0] else 'relay')
             attempt(release.command, ['/usr/bin/systemctl','stop',unit], timeout=90)
-        if snapshot is not None:
-            for unit in lifecycle.UNITS:
-                OPERATION = 'stop_check_'+('engine' if unit == lifecycle.UNITS[0] else 'relay')
-                try:
-                    if lifecycle._state(release, unit, 'ActiveState') != 'inactive':
-                        failed = True
-                except Exception:
-                    failed = True
-        for target in reversed(replaced):
-            OPERATION = 'restore_unit_'+('engine' if target.name == lifecycle.UNITS[0] else 'relay')
-            attempt(restore, target)
+        for unit in lifecycle.UNITS:
+            OPERATION = 'stop_check_'+('engine' if unit == lifecycle.UNITS[0] else 'relay')
+            attempt(stopped_writer, release, lifecycle, old_path,
+                    {OLD_COMMIT:old_receipt['images'], TARGET_COMMIT:receipt['images']}, unit)
+        if not failed:
+            for target in reversed(replaced):
+                OPERATION = 'restore_unit_'+('engine' if target.name == lifecycle.UNITS[0] else 'relay')
+                attempt(restore, target)
         if snapshot is not None and not failed:
             OPERATION = 'restore_database'
             attempt(restore_db, snapshot, identity, release, upgrade)
         OPERATION = 'old_manifest'
-        if attempt(upgrade.manifest, release, OLD_COMMIT, started=True):
+        if not failed and attempt(upgrade.manifest, release, OLD_COMMIT, started=True):
             for name in ('engine','relay'):
                 OPERATION = 'recreate_'+name
                 attempt(release.command, release.compose(old_path,name)+['up','--no-start','--no-build','--force-recreate'], timeout=90)
-        OPERATION = 'daemon_reload'
-        attempt(release.command, ['/usr/bin/systemctl','daemon-reload'])
+        if not failed:
+            OPERATION = 'daemon_reload'
+            attempt(release.command, ['/usr/bin/systemctl','daemon-reload'])
         if not failed:
             for unit in lifecycle.UNITS:
                 OPERATION = 'start_'+('engine' if unit == lifecycle.UNITS[0] else 'relay')
