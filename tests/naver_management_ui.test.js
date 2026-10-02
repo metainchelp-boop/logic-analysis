@@ -143,6 +143,68 @@ test('기간 재확인 상태와 정정된 원천 확인 시각은 기존 일일
   assert.match(run.text('inventoryRows'),/표시 실적 원천 확인 2026.*10.*02.*11:00/);
 });
 
+test('수집 중단 상태와 마지막 실제 실패 원인은 일일 조회와 재확인에서 따로 표시한다', async () => {
+  const run = launch({data:inventory([fixture({collection:{status:'limited',error_code:'STATS_METRIC_MISSING',
+    revalidation:{kind:'manual_period',status:'limited',error_code:'STATS_CYCLE_INVALID'}}})])});
+  await flush();
+  const text = run.text('inventoryRows');
+  assert.match(text,/수집 중단 · 관리자 확인 필요.*원인: 필수 통계 지표 확인 불가/);
+  assert.match(text,/수동 기간 재확인 · 수집 중단 · 관리자 확인 필요.*원인: 통계 기준 시각 확인 불가/);
+  assert.doesNotMatch(text,/네이버 통계 일부 미수신|STATS_METRIC_MISSING|STATS_CYCLE_INVALID/);
+});
+
+test('알 수 없는 수집 코드는 본문과 툴팁에 노출하지 않는다', async () => {
+  for (const code of ['PRIVATE_ACCOUNT_ERROR_123', 'https://private.invalid/key', '__proto__', 'constructor']) {
+    const run = launch({data:inventory([fixture({collection:{status:'limited',error_code:code,
+      revalidation:{kind:'recent',status:'retry',error_code:code}}})])});
+    await flush();
+    assert.match(run.text('inventoryRows'),/상세 원인 미확인 · 관리자 확인 필요/);
+    const rendered = tree(run.elements.get('inventoryRows')).map(el => el.textContent + JSON.stringify(el.attrs || {})).join('');
+    assert.equal(rendered.includes(code), false);
+    assert.equal(run.requests.filter(request => request.method !== 'GET').length, 0);
+  }
+});
+
+test('수집 실패 코드는 원인별 한국어 설명이며 옛 기록을 네이버 미수신으로 단정하지 않는다', async () => {
+  const cases = [
+    ['STATS_SHAPE_UNKNOWN', /통계 응답 형식 확인 불가/],
+    ['STATS_NUMERIC_INVALID', /통계 숫자 형식 확인 불가/],
+    ['STATS_ROW_ID_INVALID', /통계 캠페인 식별값 확인 불가/],
+    ['STATS_DATE_INVALID', /통계 날짜 형식 확인 불가/],
+    ['STATS_METRIC_MISSING', /필수 통계 지표 확인 불가/],
+    ['STATS_METRIC_INVALID', /통계 지표 값 범위 확인 필요/],
+    ['STATS_DATE_INCOMPLETE', /요청 기간의 날짜별 통계 확인 불가/],
+    ['STATS_CYCLE_INVALID', /통계 기준 시각 확인 불가/],
+    ['STATS_CYCLE_FUTURE', /통계 기준 시각이 현재보다 미래/],
+    ['STATS_CAMPAIGNS_INVALID', /캠페인 목록 확인 불가/],
+    ['STATS_PERIOD_OPEN', /아직 닫히지 않은 조회 기간/],
+    ['REQUEST_BUDGET', /회차 호출·시간 한도 도달/],
+    ['REQUEST_CALL_CAP', /회차 호출 횟수 한도 도달/],
+    ['REQUEST_DEADLINE', /회차 조회 시간 한도 도달/],
+    ['RATE', /조회 요청 제한 응답/],
+    ['NETWORK', /통신 연결 실패/],
+    ['SERVER', /조회 서버 오류 응답/],
+    ['BAD_REQUEST', /조회 요청 형식 확인 필요/],
+    ['NOT_FOUND', /조회 대상 확인 불가/],
+    ['BAD_RESPONSE', /조회 응답 확인 불가/],
+    ['MISMATCH', /조회 대상과 응답 대상 불일치/],
+    ['OTHER', /조회 오류 분류 확인 필요/],
+    ['STATS_INCOMPLETE', /통계 완결성 확인 불가 · 상세 원인 미분류/],
+    ['STATS_SHAPE', /통계 응답 형식 확인 필요/],
+    ['RETRY_EXHAUSTED', /연속 재시도 4회 소진 · 기존 기록에 상세 원인 없음/]
+  ];
+  const run = launch({data:inventory(cases.map(([code], index) => fixture({ad_account_no:String(700 + index),
+    collection:{status:'limited',error_code:code}})))});
+  await flush();
+  const rows = tree(run.elements.get('inventoryRows')).filter(el => el.tagName === 'TR');
+  cases.forEach(([code, expected], index) => {
+    assert.match(rows[index].textContent, expected);
+    assert.doesNotMatch(rows[index].textContent, /네이버 통계 일부 미수신|상세 원인 미확인/);
+    assert.equal(rows[index].textContent.includes(code), false);
+    assert.match(rows[index].textContent, /관리자|재시도 상태/);
+  });
+});
+
 test('허용된 관리 변경만 필수 사유와 단계 개정값을 보내며 중복 저장을 막는다', async () => {
   let resolveWrite;
   const data = inventory([fixture({ management: { cadence: 'daily', stage_revision: 'r1', excluded: false, can_manage: true, can_collect: true } }),

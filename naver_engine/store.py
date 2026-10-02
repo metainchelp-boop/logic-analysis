@@ -2041,7 +2041,14 @@ class ManagedStorage:
             balance_time = _performance_time(balance_at, date.fromisoformat(job["period_end"]), now)
             balance_at = S._kst_text(balance_time,"잔액 시각")
         code = values.get("error_code")
-        if code is not None and (not isinstance(code, str) or not S.re.fullmatch(r"[A-Za-z0-9_-]{1,80}", code)):
+        safe_codes = {"KEY_REJECTED", "RATE", "SERVER", "BAD_REQUEST", "NOT_FOUND", "NETWORK",
+            "BAD_RESPONSE", "MISMATCH", "OTHER", "CHECKPOINT_PENDING", "CHECKPOINT_INVALID",
+            "SOURCE_AGGREGATING", "CAMPAIGNS_CHANGED", "REQUEST_BUDGET", "REQUEST_DEADLINE",
+            "REQUEST_CALL_CAP", "STATS_INCOMPLETE", "STATS_SHAPE", "STATS_SHAPE_UNKNOWN",
+            "STATS_NUMERIC_INVALID", "STATS_ROW_ID_INVALID", "STATS_DATE_INVALID", "STATS_PERIOD_OPEN",
+            "STATS_METRIC_MISSING", "STATS_METRIC_INVALID", "STATS_DATE_INCOMPLETE", "STATS_CYCLE_INVALID",
+            "STATS_CYCLE_FUTURE", "STATS_CAMPAIGNS_INVALID", "UNEXPECTED", "RETRY_EXHAUSTED"}
+        if code is not None and (not isinstance(code, str) or code not in safe_codes):
             raise S.StoreRefused("수집 사유가 올바르지 않습니다")
         if status == "source_wait" and code != "SOURCE_AGGREGATING":
             raise S.StoreRefused("집계 대기 근거가 올바르지 않습니다")
@@ -2092,7 +2099,7 @@ class ManagedStorage:
                 raise S.StoreRefused("시작하지 않은 수집입니다")
             attempts = current[0] + (status == "retry")
             if attempts >= 4 and status == "retry":
-                status, code = "limited", "RETRY_EXHAUSTED"
+                status = "limited"  # 중단 상태와 마지막 실제 실패 사유를 분리해 보존한다.
             delay = (2, 5, 15, 30)[max(0, min(attempts, 4)-1)] if status == "retry" else 0
             waits = current[1]+(status == "source_wait")
             if status == "source_wait":

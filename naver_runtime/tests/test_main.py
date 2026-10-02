@@ -18,18 +18,29 @@ from naver_runtime.tests.test_server import request
 
 
 class RuntimeAds(TM.Ads):
-    """구 합계 시험과 달리 현재 일별 5개 요청 지표를 모두 제공하는 합성 원천."""
+    """단일 날짜 묶음과 일별 조회 모두 요청한 5개 지표를 제공하는 합성 원천."""
     def _stats(self, call):
-        if "timeIncrement" not in call.query:
-            raise AssertionError("현재 성과 수집은 일별 원천만 요청해야 합니다")
         cid = int(call.customer)
         failure = self._err(call, "stats")
         if failure:
             return failure
         span = json.loads(call.query["timeRange"][0])
         start, end = date.fromisoformat(span["since"]), date.fromisoformat(span["until"])
-        campaign, rows = call.query["id"][0], []
         fields = json.loads(call.query["fields"][0])
+        if "ids" in call.query:
+            if start != end:
+                raise AssertionError("여러 날짜는 묶음 합계로 읽지 않습니다")
+            self.stats_calls.append(("summary", tuple(call.query["ids"])))
+            rows = []
+            for campaign in call.query["ids"]:
+                values = dict(zip(("impCnt", "clkCnt", "salesAmt", "ccnt"), self._vals(cid, campaign, start)))
+                values["convAmt"] = 2000 if values["ccnt"] else 0
+                if start not in self.drop_days.get(campaign, ()) and any(values.values()):
+                    rows.append({"id": campaign, **{key: values[key] for key in fields}})
+            return 200, {"data": rows, "cycleBaseTm": cycle_str(self.cycle) if self.cycle else None}
+        if "timeIncrement" not in call.query:
+            raise AssertionError("묶음이 아닌 조회는 일별이어야 합니다")
+        campaign, rows = call.query["id"][0], []
         self.stats_calls.append(("daily", campaign))
         for offset in range((end-start).days+1):
             day = start+timedelta(days=offset)
@@ -55,6 +66,21 @@ class RuntimeStatsFixtureTest(TestCase):
         row = store.results[store.jobs[0]["job_key"]]["daily_rows"][0]
         self.assertEqual(row["conversion_value"], 2000)
         self.assertTrue(row["conversion_complete"])
+
+    def test_runtime_fixture_preserves_per_campaign_single_day_batch_values(self):
+        from naver_engine.tests.test_performance_reads import MemoryPerformance
+        clock, http = FakeClock(TM.T0), FakeNaver()
+        ads = RuntimeAds(http)
+        ads.add(TM.A, [(n, "ELIGIBLE", False, TM.steady()) for n in range(6)], biz=10)
+        store = MemoryPerformance(clock)
+        store.jobs[0].update(kind="daily", cycle_day=TM.TODAY.isoformat(),
+                             period_start=TM.YDAY.isoformat(), period_end=TM.YDAY.isoformat())
+        reader = main.N.NaverReader(TM.creds(), transport=http, clock=clock)
+        self.assertEqual(PR.run_performance(reader, store, clock.now).counts, {"ok": 1})
+        row = store.results[store.jobs[0]["job_key"]]["daily_rows"][0]
+        self.assertEqual(row["conversion_value"], 12000)
+        self.assertEqual(len(http.calls), 4)
+        self.assertEqual(ads.stats_calls[0][0], "summary")
 
 
 class InventoryRuntimeTest(TestCase):
@@ -102,7 +128,8 @@ class InventoryRuntimeTest(TestCase):
             erp.override[(E.PATH_ACCOUNT_CATALOG, None)] = (
                 200, json.dumps({"status": 200, "result": body}).encode())
             def after_tick(seconds):
-                self.assertEqual(seconds, 60)
+                self.assertGreaterEqual(seconds, 0)
+                self.assertLessEqual(seconds, 60)
                 health.append(request(config.socket))
                 stop.set()
                 return True
@@ -187,7 +214,7 @@ class InventoryRuntimeTest(TestCase):
         health, rows, calls, _, _ = self.runtime(setup=large)
         self.assertEqual(health[0], 200, health[1])
         self.assertEqual(rows[TM.A]["status"], "partial")
-        self.assertEqual(rows[TM.A]["error_code"], "REQUEST_BUDGET")
+        self.assertEqual(rows[TM.A]["error_code"], "REQUEST_CALL_CAP")
         self.assertIsNone(rows[TM.A]["spend"])
         self.assertEqual(rows[TM.B]["status"], "ok")
         self.assertLessEqual(len(calls), 24)

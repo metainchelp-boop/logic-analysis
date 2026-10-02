@@ -103,6 +103,11 @@ class PathForbidden(RuntimeError):
 class RunAbort(RuntimeError):
     """이 회차를 멈춘다(속도 제한에 두 번 멈춤 · 호출 수 상한)."""
 
+    def __init__(self, *args, code="REQUEST_BUDGET") -> None:
+        allowed = {"REQUEST_BUDGET", "REQUEST_DEADLINE", "REQUEST_CALL_CAP", "RATE"}
+        self.code = code if type(code) is str and code in allowed else "REQUEST_BUDGET"
+        super().__init__(*args)
+
 
 class IncompleteList(RuntimeError):
     """목록을 전부 받지 못했다 — 통째로 버린다."""
@@ -110,6 +115,12 @@ class IncompleteList(RuntimeError):
 
 class StatsShapeUnknown(RuntimeError):
     """통계 응답 모양을 모른다 — 절대 0 으로 읽지 않는다."""
+
+    def __init__(self, *args, code="STATS_SHAPE_UNKNOWN") -> None:
+        # 저장·화면용 코드는 고정 목록만 허용한다. 응답 원문을 코드로 넘겨도 보존하지 않는다.
+        allowed = {"STATS_SHAPE_UNKNOWN", "STATS_NUMERIC_INVALID", "STATS_ROW_ID_INVALID", "STATS_DATE_INVALID"}
+        self.code = code if type(code) is str and code in allowed else "STATS_SHAPE_UNKNOWN"
+        super().__init__(*args)
 
 
 class NaverApiError(RuntimeError):
@@ -304,9 +315,9 @@ def _num(value, what: str) -> Optional[float]:
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise StatsShapeUnknown(f"숫자가 아닌 지표({what})")
+        raise StatsShapeUnknown(f"숫자가 아닌 지표({what})", code="STATS_NUMERIC_INVALID")
     if isinstance(value, float) and not math.isfinite(value):
-        raise StatsShapeUnknown(f"숫자가 아닌 지표({what})")
+        raise StatsShapeUnknown(f"숫자가 아닌 지표({what})", code="STATS_NUMERIC_INVALID")
     return value
 
 
@@ -341,12 +352,12 @@ def parse_stats(body, requested_ids: Sequence[str], fields: Sequence[str], until
     rows: Dict[str, Dict[str, Optional[float]]] = {}
     for row in inner["data"]:
         if not isinstance(row, Mapping) or not isinstance(row.get("id"), str):
-            raise StatsShapeUnknown("줄에 번호(id)가 없음")
+            raise StatsShapeUnknown("줄에 번호(id)가 없음", code="STATS_ROW_ID_INVALID")
         rid = row["id"]
         if rid not in req:
-            raise StatsShapeUnknown("요청하지 않은 번호의 줄")
+            raise StatsShapeUnknown("요청하지 않은 번호의 줄", code="STATS_ROW_ID_INVALID")
         if rid in rows:
-            raise StatsShapeUnknown("같은 번호의 줄이 두 번")
+            raise StatsShapeUnknown("같은 번호의 줄이 두 번", code="STATS_ROW_ID_INVALID")
         rows[rid] = {f: _num(row.get(f), f) for f in fields}
     cycle = _parse_cycle(inner.get("cycleBaseTm"))
     missing = tuple(i for i in req if i not in rows)
@@ -377,15 +388,15 @@ def parse_daily(body, entity_id: str, fields: Sequence[str], since: date, until:
             raise StatsShapeUnknown("하루 줄이 사전이 아님")
         ds = row.get("dateStart")
         if not isinstance(ds, str) or not _DAY.fullmatch(ds[:10]):
-            raise StatsShapeUnknown("하루 줄에 날짜가 없음")
+            raise StatsShapeUnknown("하루 줄에 날짜가 없음", code="STATS_DATE_INVALID")
         ds = ds[:10]
         if ds not in want:
-            raise StatsShapeUnknown("요청하지 않은 날짜의 줄")
+            raise StatsShapeUnknown("요청하지 않은 날짜의 줄", code="STATS_DATE_INVALID")
         if ds in days:
-            raise StatsShapeUnknown("같은 날짜의 줄이 두 번")
+            raise StatsShapeUnknown("같은 날짜의 줄이 두 번", code="STATS_DATE_INVALID")
         de = row.get("dateEnd")
         if de is not None and (not isinstance(de, str) or de[:10] != ds):
-            raise StatsShapeUnknown("하루 줄이 하루가 아님")
+            raise StatsShapeUnknown("하루 줄이 하루가 아님", code="STATS_DATE_INVALID")
         days[ds] = {f: _num(row.get(f), f) for f in fields}
     missing = tuple(x for x in want if x not in days)
     return DailyStats(str(entity_id), days, missing, _parse_cycle(inner.get("cycleBaseTm")), until)
@@ -482,15 +493,15 @@ class NaverReader:
         remaining = float(TIMEOUT)
         for call_cap, clock_end, wall_end in self._request_limits:
             if request and self.calls >= call_cap:
-                raise RunAbort("bounded-call-cap")
+                raise RunAbort("bounded-call-cap", code="REQUEST_CALL_CAP")
             remaining = min(remaining, clock_end - self._clock.monotonic(), wall_end - time.monotonic())
         if remaining <= 0:
-            raise RunAbort("bounded-deadline")
+            raise RunAbort("bounded-deadline", code="REQUEST_DEADLINE")
         return remaining
 
     def _sleep(self, seconds):
         if self._request_limits and seconds >= self._remaining():
-            raise RunAbort("bounded-deadline")
+            raise RunAbort("bounded-deadline", code="REQUEST_DEADLINE")
         self._clock.sleep(seconds)
 
     # 한 곳 — 모든 요청이 여기서 만들어진다
@@ -500,7 +511,7 @@ class NaverReader:
         if not any(p.fullmatch(path) for p in _PATHS):
             raise PathForbidden(f"허용하지 않은 경로: {path_shape(path)}")
         if self.calls >= self._max_calls:
-            raise RunAbort("call-cap")
+            raise RunAbort("call-cap", code="REQUEST_CALL_CAP")
         self._remaining(request=True)
         self._pace()
         timeout = self._remaining(request=True)
@@ -548,7 +559,7 @@ class NaverReader:
             self.pauses += 1
             self._rate_hits.clear()
             if self.pauses >= MAX_PAUSES:
-                raise RunAbort("rate-paused-twice")
+                raise RunAbort("rate-paused-twice", code="RATE")
             log.warning("[네이버 읽기] 속도 제한이 몰려 5분 멈춤(이번 회차 %d번째)", self.pauses)
             self._sleep(RATE_PAUSE)
 

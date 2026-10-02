@@ -21,25 +21,33 @@ NOW = datetime(2026, 10, 1, 7, 20, tzinfo=S.KST)
 
 
 class SchedulerTest(TestCase):
-    def inventory_scene(self, kinds=None, campaign_count=0):
+    def inventory_scene(self, kinds=None, campaign_count=0, period_days=1):
         clock, http = FakeClock(NOW.replace(day=15)), FakeNaver()
         store = MemoryPerformance(clock)
         store.structure_work = lambda now, limit: []
         kinds = kinds or ["daily", "weekly", "manual", "backfill"]*3
         store.jobs = [{"customer_id": CUSTOMER+n, "kind": kind, "cycle_day": "2026-10-15",
-                       "period_start": "2026-10-14", "period_end": "2026-10-14",
+                       "period_start": (clock.now().date()-timedelta(days=period_days)).isoformat(),
+                       "period_end": "2026-10-14",
                        "snapshot_at": clock.now(), "job_key": f"{kind}-{n}"} for n, kind in enumerate(kinds)]
         http.route(r"/ncc/campaigns", lambda call: (200, [
             {"customerId": int(call.customer), "nccCampaignId": f"cmp-{call.customer}-{n}",
              "status": "ELIGIBLE", "userLock": False, "delFlag": False} for n in range(campaign_count)]))
         http.route(r"/billing/bizmoney", lambda call: (200, {"customerId": int(call.customer),
             "bizmoney": 100, "budgetLock": False, "refundLock": False}))
-        http.route(r"/stats", lambda call: (200, {"cycleBaseTm": cycle_str(clock.now()), "data": [
-            {"dateStart": json.loads(call.query["timeRange"][0])["since"], "impCnt": 100, "clkCnt": 10,
-             "salesAmt": 1000, "ccnt": 1, "convAmt": 2000}]}))
+        def stats(call):
+            values = {"impCnt": 100, "clkCnt": 10, "salesAmt": 1000, "ccnt": 1, "convAmt": 2000}
+            if "ids" in call.query:
+                rows = [dict(values, id=cid) for cid in call.query["ids"]]
+            else:
+                start = datetime.fromisoformat(json.loads(call.query["timeRange"][0])["since"])
+                rows = [dict(values, dateStart=(start+timedelta(days=n)).date().isoformat())
+                        for n in range(period_days)]
+            return 200, {"cycleBaseTm": cycle_str(clock.now()), "data": rows}
+        http.route(r"/stats", stats)
         reader = N.NaverReader(creds(), transport=http, clock=clock)
         task = Scheduler(Config("/synthetic/data/db", "/synthetic/socket/sock", inventory_enabled=True),
-                         store, naver_factory=lambda: reader, clock=clock.now)
+                         store, naver_factory=lambda: reader, clock=clock.now, monotonic_clock=clock.monotonic)
         task._errors = []
         return clock, http, store, reader, task
 
@@ -87,7 +95,7 @@ class SchedulerTest(TestCase):
 
     @patch.object(socket.socket, "connect", side_effect=AssertionError("외부 송신 금지"))
     def test_large_account_checkpoint_keeps_eight_call_cap_and_resumes_with_no_repeated_stats(self, _network):
-        clock, http, store, reader, task = self.inventory_scene(["daily"], campaign_count=9)
+        clock, http, store, reader, task = self.inventory_scene(["daily"], campaign_count=9, period_days=2)
         started = clock.now()
         self.assertEqual(task._inventory().counts, {"partial": 1})
         self.assertEqual(len(http.calls), 8)
@@ -115,7 +123,7 @@ class SchedulerTest(TestCase):
 
     @patch.object(socket.socket, "connect", side_effect=AssertionError("외부 송신 금지"))
     def test_slow_single_account_never_uses_more_than_ten_seconds(self, _network):
-        clock, http, store, reader, task = self.inventory_scene(["daily"], campaign_count=9)
+        clock, http, store, reader, task = self.inventory_scene(["daily"], campaign_count=9, period_days=2)
         http.tick = lambda call: clock.advance(2)
         started = clock.now()
         self.assertEqual(task._inventory().counts, {"partial": 1})
@@ -167,7 +175,8 @@ class SchedulerTest(TestCase):
         store = Mock()
         store.structure_work.return_value = []
         store.generate_reports.side_effect = lambda now: calls.append("reports") or {"generated": 0}
-        task = Scheduler(config, store, erp_factory=lambda: object(), naver_factory=lambda: reader, clock=fc.now)
+        task = Scheduler(config, store, erp_factory=lambda: object(), naver_factory=lambda: reader,
+                         clock=fc.now, monotonic_clock=fc.monotonic)
         with patch.object(L, "accounts_due", return_value=True), \
              patch.object(L, "sync_accounts", side_effect=lambda *a: calls.append("accounts")), \
              patch.object(L, "pairing_due", side_effect=AssertionError("계약 매칭 불필요")), \
@@ -177,12 +186,16 @@ class SchedulerTest(TestCase):
                    calls.append("inventory") or SimpleNamespace(code="DONE", counts={})):
             self.assertEqual(task.tick()["state"], "ok")
             task.tick()
-            fc.advance(59)
+            fc.advance(29)
             task.tick()
             self.assertEqual(calls, ["accounts", "catalog", "inventory", "reports"])
             fc.advance(1)
             task.tick()
-        self.assertEqual(calls, ["accounts", "catalog", "inventory", "reports"]*2)
+            self.assertEqual(calls, ["accounts", "catalog", "inventory", "reports", "inventory"])
+            fc.advance(30)
+            task.tick()
+        self.assertEqual(calls, ["accounts", "catalog", "inventory", "reports", "inventory",
+                                "accounts", "catalog", "inventory", "reports"])
         self.assertEqual(store.generate_reports.call_count, 2)
 
     def test_all_off_does_not_create_readers_or_touch_store(self):

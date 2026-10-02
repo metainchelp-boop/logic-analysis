@@ -1,4 +1,4 @@
-"""닫힌 실적일별 원천 수집. 캠페인별 GET만 쓰며 요약을 날짜에 나누지 않는다.
+"""닫힌 실적일별 원천 수집. 전일은 캠페인을 묶고 기간 합계를 날짜에 나누지 않는다.
 
 기본 지표·모든 날짜를 확인한 캠페인만 체크포인트에 더한다. 다음 회차는 그다음
 캠페인부터 이어 간다. 전환 미제공/추적 미확인은 기본 자료 성공과 따로 보존한다.
@@ -27,7 +27,13 @@ class CheckpointInvalid(ValueError):
 
 
 class PerformanceIncomplete(ValueError):
-    pass
+    CODES = frozenset({"STATS_INCOMPLETE", "STATS_PERIOD_OPEN", "STATS_METRIC_MISSING",
+        "STATS_METRIC_INVALID", "STATS_DATE_INCOMPLETE", "STATS_CYCLE_INVALID",
+        "STATS_CYCLE_FUTURE", "STATS_CAMPAIGNS_INVALID"})
+
+    def __init__(self, message, *, code="STATS_INCOMPLETE"):
+        self.code = code if type(code) is str and code in self.CODES else "STATS_INCOMPLETE"
+        super().__init__(message)
 
 
 class SourceAggregating(PerformanceIncomplete):
@@ -129,14 +135,48 @@ def validate_progress(source, job):
 def _campaign_ids(campaigns):
     ids = sorted(c["nccCampaignId"] for c in campaigns)
     if len(ids) != len(set(ids)) or any(not N._CAMPAIGN_ID.fullmatch(i) for i in ids):
-        raise N.StatsShapeUnknown("일별 캠페인 목록이 겹치거나 다릅니다")
+        raise PerformanceIncomplete("일별 캠페인 목록이 겹치거나 다릅니다", code="STATS_CAMPAIGNS_INVALID")
     return ids
+
+
+def _daily_responses(reader, handle, remaining_ids, start, end):
+    """같은 하루의 합계만 날짜 원천으로 사용한다. 빠진 행은 실제 일별로 확인한다."""
+    if start != end or len(remaining_ids) == 1:
+        for campaign_id in remaining_ids:
+            yield reader.get_stats_daily(handle, campaign_id, start, end, fields=FIELDS)
+        return
+    for offset in range(0, len(remaining_ids), N.STATS_IDS_PER_CALL):
+        chunk = remaining_ids[offset:offset+N.STATS_IDS_PER_CALL]
+        if len(chunk) == 1:
+            yield reader.get_stats_daily(handle, chunk[0], start, end, fields=FIELDS)
+            continue
+        summary = reader.get_stats_summary(handle, chunk, start, end, fields=FIELDS)
+        reader.check_budget()
+        for campaign_id in chunk:
+            if campaign_id not in summary.rows:
+                # 네이버의 합계 행 부재만으로 활동 0을 만들지 않는다.
+                yield reader.get_stats_daily(handle, campaign_id, start, end, fields=FIELDS)
+            else:
+                yield N.DailyStats(campaign_id, {start.isoformat(): summary.rows[campaign_id]},
+                                   (), summary.cycle_base_tm, end)
+
+
+def _normalized_rows(daily):
+    out = {}
+    for day, row in daily.days.items():
+        if set(row) != set(FIELDS) or any(row.get(key) is None for key in FIELDS[:3]):
+            raise PerformanceIncomplete("일별 기본 지표가 빠졌습니다", code="STATS_METRIC_MISSING")
+        try:
+            out[day] = {key: _number(row[key], key) for key in FIELDS}
+        except CheckpointInvalid:
+            raise PerformanceIncomplete("일별 기본 지표 숫자가 잘못되었습니다", code="STATS_METRIC_INVALID") from None
+    return out
 
 
 def _read(reader, handle, job, values, store, clock):
     start, end = _period(job)
     if end >= clock().astimezone(S.KST).date():
-        raise PerformanceIncomplete("아직 닫히지 않은 실적일입니다")
+        raise PerformanceIncomplete("아직 닫히지 않은 실적일입니다", code="STATS_PERIOD_OPEN")
     progress = store.performance_progress(job)
     if progress is not None:
         validate_progress(progress, job)
@@ -159,42 +199,36 @@ def _read(reader, handle, job, values, store, clock):
         if "generation" in job:
             progress["generation"] = job["generation"]
         store.record_performance_progress(job, clock(), progress)
-    while progress["next_index"] < len(ids):
-        campaign_id = ids[progress["next_index"]]
-        daily = reader.get_stats_daily(handle, campaign_id, start, end, fields=FIELDS)
+    for daily in _daily_responses(reader, handle, ids[progress["next_index"]:], start, end):
         reader.check_budget()
+        if daily.entity_id != ids[progress["next_index"]]:
+            raise PerformanceIncomplete("통계 캠페인 순서가 다릅니다", code="STATS_CAMPAIGNS_INVALID")
         # HTTP/인증/모양/미래시각 오류는 집계 대기로 숨기지 않는다.
-        try:
-            for row in daily.days.values():
-                if set(row) != set(FIELDS):
-                    raise CheckpointInvalid("일별 통계 지표가 다릅니다")
-                for key in FIELDS:
-                    _number(row[key], key)
-        except CheckpointInvalid:
-            raise PerformanceIncomplete("일별 기본 지표가 완결되지 않았습니다") from None
+        normalized_rows = _normalized_rows(daily)
         raw_cycle = daily.cycle_base_tm
+        if not isinstance(raw_cycle, datetime) or raw_cycle.tzinfo is None or raw_cycle.utcoffset() is None:
+            raise PerformanceIncomplete("일별 자료 기준 시각을 확인하지 못했습니다", code="STATS_CYCLE_INVALID")
+        if raw_cycle > clock():
+            raise PerformanceIncomplete("일별 자료 기준 시각이 미래입니다", code="STATS_CYCLE_FUTURE")
         if isinstance(raw_cycle, datetime) and raw_cycle.tzinfo is not None and raw_cycle <= clock():
             generation_day = datetime.fromisoformat(job["generation"]).astimezone(S.KST).date() if job.get("generation") else None
             if not daily.data_fresh or daily.missing_days or (generation_day and raw_cycle.astimezone(S.KST).date() < generation_day):
                 raise SourceAggregating("원천 일별 집계가 아직 완료되지 않았습니다")
         if not daily.data_fresh or daily.missing_days or set(daily.days) != set(_days(start, end)):
-            raise PerformanceIncomplete("일별 통계 날짜가 완결되지 않았습니다")
+            raise PerformanceIncomplete("일별 통계 날짜가 완결되지 않았습니다", code="STATS_DATE_INCOMPLETE")
         try:
             cycle = _cycle(daily.cycle_base_tm, end, clock())
         except CheckpointInvalid:
-            raise PerformanceIncomplete("일별 자료 기준 시각을 확인하지 못했습니다") from None
+            raise PerformanceIncomplete("일별 자료 기준 시각을 확인하지 못했습니다", code="STATS_CYCLE_INVALID") from None
         update = deepcopy(progress)
         evidence = job.get("conversion_tracking_confirmed") is True
         try:
-            for day, row in daily.days.items():
-                if set(row) != set(FIELDS):
-                    raise CheckpointInvalid("일별 통계 지표가 다릅니다")
-                normalized = {key: _number(row[key], key) for key in FIELDS}
+            for day, normalized in normalized_rows.items():
                 evidence = evidence or any(normalized[key] is not None and normalized[key] > 0 for key in FIELDS[3:])
                 for key in FIELDS:
                     update["day_totals"][day][key] = _add(update["day_totals"][day][key], normalized[key], key)
         except CheckpointInvalid:
-            raise PerformanceIncomplete("일별 기본 지표가 완결되지 않았습니다") from None
+            raise PerformanceIncomplete("일별 기본 지표 합계가 잘못되었습니다", code="STATS_METRIC_INVALID") from None
         update["conversion_evidence"] = progress["conversion_evidence"] and evidence
         update["cycles"].append(cycle.isoformat())
         update["next_index"] += 1
@@ -269,12 +303,13 @@ def run_performance(reader, store, clock, *, limit=24, max_calls=24, max_seconds
                 values.update(status="reauth_required" if exc.kind == N.KIND_KEY_REJECTED else "retry", error_code=exc.kind)
             except SourceAggregating:
                 values.update(status="source_wait", error_code="SOURCE_AGGREGATING")
-            except (N.StatsShapeUnknown, PerformanceIncomplete):
-                values.update(status="retry", error_code="STATS_INCOMPLETE")
+            except (N.StatsShapeUnknown, PerformanceIncomplete) as exc:
+                values.update(status="retry", error_code=exc.code)
             except CheckpointInvalid:
                 values.update(status="limited", error_code="CHECKPOINT_INVALID")
-            except N.RunAbort:
-                values.update(status="partial" if values.get("progressed") else "retry", error_code="REQUEST_BUDGET")
+            except N.RunAbort as exc:
+                values.update(status="partial" if values.get("progressed") else "retry",
+                              error_code=N.KIND_RATE if reader.rate_limited else exc.code)
             except (H.NotEligible, H.HandleInvalid, S.StoreRefused):
                 return PerformanceOutcome("SOURCE_CHANGED", dict(counts))
             except S.StoreError:

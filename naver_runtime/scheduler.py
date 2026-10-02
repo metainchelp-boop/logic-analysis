@@ -42,16 +42,19 @@ class _ManagedMorningStore:
 class Scheduler:
     def __init__(self, config, store, *, erp_factory=None, naver_factory=None,
                  alert_factory=None, metrics_factory=None, clock=None, backup_job=None,
-                 collection_factory=None):
+                 collection_factory=None, monotonic_clock=None):
         self.config, self.store = config, store
         self.erp_factory, self.naver_factory = erp_factory, naver_factory
         self.alert_factory, self.backup_job = alert_factory, backup_job
         self.metrics_factory = metrics_factory
         self.collection_factory = collection_factory
         self.clock = clock or (lambda: datetime.now(S.KST))
+        self._monotonic = monotonic_clock or monotonic
         self.policy = A.AlertPolicy(config.issue_alerts_from, config.issue_alerts_enabled)
         self._lock = threading.Lock()
         self._last = {}
+        self._next_steps = {}
+        self._inventory_ready_at = 0.0
         self.last_tick = None
         self.last_errors = ()
         self._collection_lock = threading.Lock()
@@ -129,11 +132,17 @@ class Scheduler:
         return True
 
     def _step(self, name, action, *, note=True):
-        now = self.clock()
+        now = self._monotonic()
         last = self._last.get(name)
-        if last is not None and now < last + timedelta(seconds=60) and now >= last:
+        interval = 30 if name == "inventory" else 60
+        due = last + interval if last is not None else now
+        if name == "inventory":
+            due = max(due, self._inventory_ready_at)
+        self._next_steps[name] = due
+        if now < due:
             return
         self._last[name] = now
+        self._next_steps[name] = now + interval
         try:
             result = action()
             if note and result is not None:
@@ -148,11 +157,18 @@ class Scheduler:
             except Exception:
                 log.error("예약 작업 실패 기록을 저장하지 못했습니다")
 
+    def next_delay(self):
+        """회차 실행 시간을 포함한 다음 예약 대기. 비수집 회차는 60초를 유지한다."""
+        if not self.config.inventory_enabled or not self._next_steps:
+            return 60.0
+        return min(60.0, max(0.0, min(self._next_steps.values()) - self._monotonic()))
+
     def tick(self):
         if not self._lock.acquire(blocking=False):
             return {"state": "busy"}
         try:
             self._errors = []
+            self._next_steps = {}
             if self._run_collection():
                 # 준비 조회를 다시 반복하지 않는다. 다음 일반 예약 회차는 원래 주기로 판정한다.
                 self.last_tick = self.clock()
@@ -243,15 +259,23 @@ class Scheduler:
         # 전일·일요일·수동·보고기간 보충이 한 대기열과 같은 호출 예산을 공유한다.
         started = reader._clock.monotonic()
         before = reader.calls
-        with reader.bounded_requests(max_calls=24, max_seconds=30):
-            result = PR.run_performance(reader, self.store, self.clock, max_calls=18, max_seconds=20)
-            calls_left = 24-(reader.calls-before)
-            seconds_left = 30-(reader._clock.monotonic()-started)
-            if calls_left>0 and seconds_left>0 and not reader.rate_limited \
-                    and result.code not in ("NOT_READY","SOURCE_CHANGED"):
-                # 실적 단계에서 읽은 계정은 다음 회차에 구조를 읽는다. 계정당 8건·10초도 합산 제한이다.
-                SR.run_structure(reader,self.store,self.clock,max_calls=min(6,calls_left),max_seconds=seconds_left,
-                                 exclude_customers=reader.called_customers)
+        try:
+            with reader.bounded_requests(max_calls=24, max_seconds=30):
+                result = PR.run_performance(reader, self.store, self.clock, max_calls=18, max_seconds=20)
+                calls_left = 24-(reader.calls-before)
+                seconds_left = 30-(reader._clock.monotonic()-started)
+                if calls_left>0 and seconds_left>0 and not reader.rate_limited \
+                        and result.code not in ("NOT_READY","SOURCE_CHANGED"):
+                    # 실적 단계에서 읽은 계정은 다음 회차에 구조를 읽는다. 계정당 8건·10초도 합산 제한이다.
+                    SR.run_structure(reader,self.store,self.clock,max_calls=min(6,calls_left),max_seconds=seconds_left,
+                                     exclude_customers=reader.called_customers)
+        finally:
+            if reader.rate_limited or reader.calls > before:
+                # 새 reader의 호출이 이전 회차 후반과 같은 연속 30초 창에 겹치지 않는다.
+                # 성과뿐 아니라 구조 단계의 429·예외 뒤에도 5분 휴식을 새 reader가 이어받는다.
+                pause = max(30, N.RATE_PAUSE) if reader.rate_limited else 30
+                self._inventory_ready_at = max(self._inventory_ready_at, self._monotonic() + pause)
+                self._next_steps["inventory"] = self._inventory_ready_at
         # 개별 계정의 실패·재시도는 원장 경고로 남고, 원천 무효만 서비스 실패이다.
         if result.code in ("NOT_READY", "SOURCE_CHANGED"):
             self._errors.append("inventory")

@@ -635,13 +635,41 @@
       ' · 원본 확인 필요: 미등록 판정 및 직원 연결 표시를 보류합니다.' : ' · 목록 새로고침은 저장된 최신 결과를 다시 표시합니다.');
     var collection = { ok: '수집 완료', partial: '일부 수집', pending: '수집 대기', source_wait: '네이버 집계 대기', failed: '수집 실패',
       retry: '재시도 대기', reading: '수집 중', running: '수집 중', reauth_required: '네이버 접근 권한 확인',
-      limited: '수집 중단 · 사유 확인', denied: '접근 권한 확인', blocked: '접근 권한 확인', not_current: '수집 대상 제외 · 이관 빠짐' };
+      limited: '수집 중단 · 관리자 확인 필요', denied: '접근 권한 확인', blocked: '접근 권한 확인', not_current: '수집 대상 제외 · 이관 빠짐' };
     var collectionReason = { CHECKPOINT_PENDING: '남은 캠페인은 다음 회차에 이어 읽습니다',
-      CHECKPOINT_INVALID: '중간 저장 자료 검증 실패 · 관리자 확인 필요', RETRY_EXHAUSTED: '연속 재시도 4회 소진 · 관리자 확인 필요',
+      CHECKPOINT_INVALID: '중간 저장 자료 검증 실패 · 관리자 확인 필요',
+      RETRY_EXHAUSTED: '연속 재시도 4회 소진 · 기존 기록에 상세 원인 없음 · 관리자 확인 필요',
       SOURCE_AGGREGATING: '네이버 집계 대기 · 원천이 준비되면 다시 확인합니다',
-      STATS_INCOMPLETE: '네이버 통계 일부 미수신', STATS_SHAPE: '네이버 통계 응답 형식 확인 필요',
+      STATS_INCOMPLETE: '통계 완결성 확인 불가 · 상세 원인 미분류 · 관리자 확인 필요',
+      STATS_SHAPE: '통계 응답 형식 확인 필요 · 관리자에게 수집 결과 확인 요청',
+      STATS_SHAPE_UNKNOWN: '통계 응답 형식 확인 불가 · 관리자에게 수집 결과 확인 요청',
+      STATS_NUMERIC_INVALID: '통계 숫자 형식 확인 불가 · 관리자에게 수집 결과 확인 요청',
+      STATS_ROW_ID_INVALID: '통계 캠페인 식별값 확인 불가 · 관리자에게 수집 결과 확인 요청',
+      STATS_DATE_INVALID: '통계 날짜 형식 확인 불가 · 관리자에게 수집 결과 확인 요청',
+      STATS_METRIC_MISSING: '필수 통계 지표 확인 불가 · 관리자에게 수집 결과 확인 요청',
+      STATS_METRIC_INVALID: '통계 지표 값 범위 확인 필요 · 관리자에게 수집 결과 확인 요청',
+      STATS_DATE_INCOMPLETE: '요청 기간의 날짜별 통계 확인 불가 · 관리자에게 수집 결과 확인 요청',
+      STATS_CYCLE_INVALID: '통계 기준 시각 확인 불가 · 관리자에게 수집 결과 확인 요청',
+      STATS_CYCLE_FUTURE: '통계 기준 시각이 현재보다 미래 · 관리자에게 기준 시각 확인 요청',
+      STATS_CAMPAIGNS_INVALID: '캠페인 목록 확인 불가 · 관리자에게 수집 결과 확인 요청',
+      STATS_PERIOD_OPEN: '아직 닫히지 않은 조회 기간 · 관리자에게 수집 기간 확인 요청',
       KEY_REJECTED: '계정 이관·조회 권한 확인 필요', CAMPAIGNS_CHANGED: '수집 중 캠페인 목록 변경 · 다시 확인',
-      REQUEST_BUDGET: '회차 호출·시간 한도 도달', UNEXPECTED: '수집 오류 · 관리자 확인 필요' };
+      REQUEST_BUDGET: '회차 호출·시간 한도 도달 · 재시도 상태를 확인해 주세요',
+      REQUEST_CALL_CAP: '회차 호출 횟수 한도 도달 · 재시도 상태를 확인해 주세요',
+      REQUEST_DEADLINE: '회차 조회 시간 한도 도달 · 재시도 상태를 확인해 주세요',
+      RATE: '조회 요청 제한 응답 · 재시도 상태를 확인해 주세요',
+      NETWORK: '통신 연결 실패 · 재시도 상태를 확인해 주세요',
+      SERVER: '조회 서버 오류 응답 · 재시도 상태를 확인해 주세요',
+      BAD_REQUEST: '조회 요청 형식 확인 필요 · 관리자 확인 필요',
+      NOT_FOUND: '조회 대상 확인 불가 · 관리자 확인 필요',
+      BAD_RESPONSE: '조회 응답 확인 불가 · 관리자 확인 필요',
+      MISMATCH: '조회 대상과 응답 대상 불일치 · 관리자 확인 필요',
+      OTHER: '조회 오류 분류 확인 필요 · 관리자 확인 필요',
+      UNEXPECTED: '수집 오류 · 관리자 확인 필요' };
+    function collectionReasonText(code) {
+      return '원인: ' + (Object.prototype.hasOwnProperty.call(collectionReason, code) ? collectionReason[code] :
+        '상세 원인 미확인 · 관리자 확인 필요');
+    }
     put($('inventoryRows'), rows.length ? rows.map(function (r) {
       var c = r.collection || {}, m = r.management || {}, status = collection[c.status] || c.status || '수집 대기';
       var recheck = c.revalidation, recheckNames = {manual_period:'수동 기간 재확인',recent:'최근 3일 재확인',
@@ -659,12 +687,12 @@
         h('td', null, company),
         h('td', { title: r.mapping === 'no_erp_record' ? data.no_erp_note : '' }, INVENTORY_MAPPING[r.mapping] || '미분류'),
         h('td', null, r.workflow), h('td', null, r.owner && r.owner.name || '담당 미확인'),
-        h('td', null, status, c.error_code ? h('span', { class: 'w', title: c.error_code }, collectionReason[c.error_code] || c.error_code) : null,
+        h('td', null, status, c.error_code ? h('span', { class: 'w' }, collectionReasonText(c.error_code)) : null,
           h('span', { class: 'w' }, '최근 시도 ' + datedTime(c.checked_at)),
           recheck ? h('div', { class: 'w' }, (recheckNames[recheck.kind] || '원천 재확인') + ' · ' + (collection[recheck.status] || '상태 미확인'),
             h('span', { class: 'w' }, periodText(recheck.period_start, recheck.period_end)),
             h('span', { class: 'w' }, '재확인 시도 ' + datedTime(recheck.checked_at)),
-            recheck.error_code ? h('span', { class: 'w' }, collectionReason[recheck.error_code] || recheck.error_code) : null) : null,
+            recheck.error_code ? h('span', { class: 'w' }, collectionReasonText(recheck.error_code)) : null) : null,
           c.activity_observed === true && m.cadence === 'weekly' ? h('span', { class: 'blocked-note' }, '비관리 계정에 실적 있음 · 담당 확인') : null),
         h('td', { class: 'account-values' }, h('span', { class: 'w' }, previous ? '이전 성공값 · 최신 확인 필요' : hasValues ? '확인된 실적' : '성공 실적 없음'),
           h('span', { class: 'w' }, period), h('b', { class: 'num' }, won(spend)),

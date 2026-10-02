@@ -288,7 +288,7 @@ class PerformanceReadsTests(unittest.TestCase):
         self.days[self.campaigns[0]["nccCampaignId"]] = rows
         result = P.run_performance(self.reader,self.store,self.clock.now)
         self.assertEqual(result.counts, {"retry":1})
-        self.assertEqual(self.store.results["weekly-test"]["error_code"], "STATS_INCOMPLETE")
+        self.assertEqual(self.store.results["weekly-test"]["error_code"], "STATS_METRIC_MISSING")
 
 
 if __name__ == "__main__":

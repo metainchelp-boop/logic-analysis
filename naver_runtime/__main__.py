@@ -170,7 +170,7 @@ def run(config, env, *, stop=None):
             deps = dependencies(config, env, bounded)
             return dict(clock=bounded, erp_factory=deps["erp_factory"], naver_factory=deps["naver_factory"])
         scheduler = Scheduler(config, writer.proxy, clock=clock.now,
-                              collection_factory=collection_factory, **options)
+                              monotonic_clock=clock.monotonic, collection_factory=collection_factory, **options)
         # 읽기 연결은 요청 스레드에서 열고 닫으며, 쓰기는 기존 단일 소유자 큐만 지난다.
         web = WEB.App(open_read=lambda: S.open_reader(config.db), write=writer.call,
                       signer=signer, profiles=profiles, owner_verification=True, verified_linking=True,
@@ -202,7 +202,7 @@ def run(config, env, *, stop=None):
                     backup = options.get("backup_job")
                     if backup is not None:
                         state["backup"] = backup.status()
-                stop.wait(60)
+                stop.wait(scheduler.next_delay())
     return 0
 
 
