@@ -123,6 +123,8 @@ const cfg = JSON.parse(process.argv[2]);
     assert.match(await page.textContent('#dashboardDelivery'), /어제 집행 확인.*1.*어제 실적 없음.*1.*미확인.*2/);
     assert.match(await page.textContent('#dashboardConfiguration'), /설정상 운영 가능.*3.*운영 가능 캠페인 없음.*0.*설정 미확인.*1/);
     assert.match(await page.textContent('#dashboardDeliveryNote'), /설정 중지.*뜻하지 않/);
+    await page.evaluate(() => window.scrollTo(0, 0));
+    assert.equal(await page.evaluate(() => window.scrollY), 0, '전체 화면 캡처는 문서 맨 위에서 시작한다');
     if (cfg.shots) await page.screenshot({path: path.join(cfg.shots, 'dashboard-desktop.png'), fullPage: true});
     failDashboard = true;
     await page.click('#dashboardReload');
@@ -173,6 +175,7 @@ const cfg = JSON.parse(process.argv[2]);
     assert.equal(await page.textContent('#dashboard-spend .value'), '12,345원', '늦게 온 이전 담당 범위의 응답은 버린다');
     await page.setViewportSize({width: 390, height: 844});
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    await page.evaluate(() => window.scrollTo(0, 0));
     if (cfg.shots) await page.screenshot({path: path.join(cfg.shots, 'dashboard-mobile.png'), fullPage: true});
     // 자정 전 요청을 일부러 보류한다. 이전 달 응답은 그리지 않고 새 날짜 자료를 다시 요청해야 한다.
     const firstOfMonth = {...snapshot, period: {start: '2026-10-01', end: '2026-09-30', days: 0, timezone: 'Asia/Seoul'}};
