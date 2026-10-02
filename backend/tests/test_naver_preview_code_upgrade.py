@@ -132,8 +132,8 @@ class ContractTest(unittest.TestCase):
         def read(path, route, method='GET'):
             if route == '/_engine/health':
                 return 200, {}, b'{}'
-            if route == '/naver/':
-                return 200, {'referrer-policy': 'no-referrer', 'cache-control': 'no-store'}, b'verificationNotice'
+            if route in ('/naver/', '/naver/dashboard'):
+                return 200, {'referrer-policy': 'no-referrer', 'cache-control': 'no-store'}, b'verificationNotice id="s-dashboard"'
             approved = ('/api/naver-auto/links/confirm', '/api/naver-auto/collection/request')
             return (401 if method == 'GET' or route in approved else 403), {}, b''
         release.unix_request.side_effect = read
@@ -143,6 +143,8 @@ class ContractTest(unittest.TestCase):
         self.assertTrue({('/api/naver-auto/links/confirm', 'POST'),
                          ('/api/naver-auto/collection/request', 'POST'),
                          ('/api/naver-auto/collection/status', 'GET'),
+                         ('/api/naver-auto/dashboard', 'GET'),
+                         ('/naver/dashboard', 'GET'),
                          ('/api/naver-auto/issues/1/ack', 'POST'),
                          ('/api/naver-auto/settings/thresholds', 'POST')} <= calls)
 
@@ -157,37 +159,42 @@ class ContractTest(unittest.TestCase):
                 def read(path, route, method='GET'):
                     if route == '/_engine/health':
                         return 200, {}, b'{}'
-                    if route == '/naver/':
-                        return 200, {'referrer-policy':'no-referrer','cache-control':'no-store'}, b'verificationNotice'
+                    if route in ('/naver/', '/naver/dashboard'):
+                        return 200, {'referrer-policy':'no-referrer','cache-control':'no-store'}, b'verificationNotice id="s-dashboard"'
                     if route == '/api/naver-auto/links/confirm':
                         return confirm, {}, b''
                     return (401 if method == 'GET' or route.endswith('/collection/request') else 403), {}, b''
                 release.unix_request.side_effect = read
                 if accepted:
                     code.probe(release, source, load('naver_preview_upgrade'))
+                    for route in ('/naver/dashboard', '/api/naver-auto/dashboard'):
+                        hits = [args for args, _ in release.unix_request.call_args_list if args[1] == route]
+                        self.assertEqual(len(hits), int(source == code.TARGET_COMMIT))
                 else:
                     with self.assertRaises(ValueError):
                         code.probe(release, source, load('naver_preview_upgrade'))
 
     def test_target_probe_rejects_each_wrong_route_status_and_health_contract(self):
         code = load('naver_preview_code_upgrade')
-        routes = {'/me':401, '/collection/status':401, '/links/confirm':401,
+        routes = {'/me':401, '/dashboard':401, '/collection/status':401, '/links/confirm':401,
                   '/collection/request':401, '/issues/1/ack':403, '/issues/1/resolve':403,
                   '/issues/1/except':403, '/settings/thresholds':403, '/links/reject':403,
                   '/links/revoke':403, '/links/preview':403, '/bell/1/read':403, '/bell/read-all':403}
         cases = [(route, value) for route, expected in routes.items()
                  for value in (200, 403 if expected == 401 else 401)]
-        cases += [('/_engine/health', 'invalid'), ('/naver/', 'header'), ('/naver/', 'body')]
+        cases += [('/_engine/health', 'invalid'), ('/naver/', 'header'), ('/naver/', 'body'),
+                  ('/naver/dashboard', 'header'), ('/naver/dashboard', 'body'), ('/naver/dashboard', 404)]
         for changed, wrong in cases:
             with self.subTest(route=changed, response=wrong):
                 release = Mock()
                 def read(path, route, method='GET'):
                     if route == '/_engine/health':
                         return 200, {}, b'[]' if changed == route else b'{}'
-                    if route == '/naver/':
+                    if route in ('/naver/', '/naver/dashboard'):
                         headers = {'referrer-policy':'no-referrer','cache-control':'no-store'}
-                        return (200, {} if changed == route and wrong == 'header' else headers,
-                                b'wrong' if changed == route and wrong == 'body' else b'verificationNotice')
+                        return (404 if changed == route and wrong == 404 else 200,
+                                {} if changed == route and wrong == 'header' else headers,
+                                b'wrong' if changed == route and wrong == 'body' else b'verificationNotice id="s-dashboard"')
                     key = route.removeprefix('/api/naver-auto')
                     return (wrong if changed == key else routes[key]), {}, b''
                 release.unix_request.side_effect = read
@@ -210,11 +217,12 @@ class ContractTest(unittest.TestCase):
         module.TARGET_COMMIT = 'b'*40  # A sealed target is supplied only in the fixture.
         release = load('naver_preview_release')
         package = dict(baseline=module.EXPECTED_BASELINE, source_commit=module.TARGET_COMMIT,
-                       ciphertext_sha256='b'*64, source_tar_gz_sha256='c'*64,
+                       ciphertext_sha256='b'*64, source_tar_gz_sha256=module.TARGET_SOURCE_SHA256,
                        run_id='123456', operation='code-prepare')
         self.assertEqual(module.validate_package(package, release), package)
         for changes in ({'source_commit': module.OLD_COMMIT}, {'operation': 'upgrade-prepare'},
-                        {'request': {}}, {'source_commit': 'f'*40}, {'baseline': 'd'*64}):
+                        {'request': {}}, {'source_commit': 'f'*40}, {'baseline': 'd'*64},
+                        {'source_tar_gz_sha256':'f'*64}):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 module.validate_package(dict(package, **changes), release)
         host = Mock()
@@ -235,18 +243,28 @@ class ContractTest(unittest.TestCase):
 
     def test_only_reviewed_runtime_and_bundled_test_paths_are_allowlisted(self):
         module = load('naver_preview_code_upgrade')
-        self.assertEqual(module.OLD_COMMIT, 'd6542c37d1b247801f3f10259b2098d14e7b6dc8')
-        self.assertEqual(module.TARGET_COMMIT, '367a03dcae3a4a3b9da6e6c56918a439b995a40e')
+        self.assertEqual(module.OLD_COMMIT, '367a03dcae3a4a3b9da6e6c56918a439b995a40e')
+        self.assertEqual(module.TARGET_COMMIT, '73b9fe39c36284e266eea874902608a4127b00bf')
         self.assertEqual(module.OLD_SOURCE_SHA256,
-                         '77a1eec35ad3de820f2f068a6a166f54b52656e876d0a65183601c6319f6fc3e')
+                         'd7fcc9c5b65aac9c9d44a0abf3e058295838bf927250c8c30f209d5f12df1088')
+        self.assertEqual(module.TARGET_SOURCE_SHA256,
+                         '033e72d441f17f313a970f63d3a2f050d9866ce94f717bf5d10914533134c578')
+        self.assertEqual(module.STORE_SHA256, {
+            8:'3c227925ee40b001a1e0090bfe130ff253310c4a91f59714a3752e601c4ee739',
+            9:'ccf614ec9e0f0ec5f6467ef9dbfe50b0676543f908bf9e877f61cc5cfe770e75'})
         # Exact git archive delta: top-level tests, docs and seal tooling are not bundled.
         self.assertEqual(module.CODE_PATHS, {
-            'backend/naver_page/app.js', 'backend/naver_page/sso-bootstrap.js',
-            'naver_engine/inventory_reads.py', 'naver_engine/naver_read.py', 'naver_engine/store.py'})
+            'backend/app/naver_relay.py', 'backend/naver_page/app.css', 'backend/naver_page/app.js',
+            'backend/naver_page/index.html', 'naver_engine/dashboard.py', 'naver_engine/inventory.py',
+            'naver_engine/monthly_reads.py', 'naver_engine/naver_read.py', 'naver_engine/store.py',
+            'naver_engine/web.py', 'naver_runtime/scheduler.py', 'naver_runtime/writer.py'})
         self.assertEqual(module.TEST_PATHS, {
-            'naver_engine/tests/screen_browser.js', 'naver_engine/tests/test_inventory_fair_queue.py',
-            'naver_engine/tests/test_inventory_reads.py', 'naver_engine/tests/test_inventory_throughput.py',
-            'naver_engine/tests/test_inventory_zero_completion.py', 'naver_runtime/tests/test_main.py'})
+            'naver_engine/tests/dashboard_screen_browser.js', 'naver_engine/tests/screen_browser.js',
+            'naver_engine/tests/test_alerts.py', 'naver_engine/tests/test_dashboard.py',
+            'naver_engine/tests/test_dashboard_independent.py', 'naver_engine/tests/test_dashboard_screen.py',
+            'naver_engine/tests/test_dashboard_web.py', 'naver_engine/tests/test_monthly_reads.py',
+            'naver_engine/tests/test_monthly_store.py', 'naver_engine/tests/test_sync.py',
+            'naver_runtime/tests/test_scheduler.py'})
 
     def scenario(self, failure=None, mode='apply'):
         code = load('naver_preview_code_upgrade')
@@ -264,7 +282,7 @@ class ContractTest(unittest.TestCase):
         def setup(root, release):
             infrastructure = {'Dockerfile.naver-engine': b'FROM fixture', 'Dockerfile.naver-relay': b'FROM fixture',
                 'backend/requirements.txt': b'fixture', 'naver_runtime/bootstrap.py': b'# unchanged bootstrap',
-                'naver_engine/store.py': StoreScopeTest.SOURCE}
+                'naver_engine/store.py': StoreScopeTest.TARGET_SOURCE}
             infrastructure.update({name: b'new fixture compose' for name in
                 ('compose.naver-engine.yml','compose.naver-relay.yml','deploy/naver-engine-backup.override.yml')})
             for path in (root/'releases').iterdir():
@@ -272,6 +290,8 @@ class ContractTest(unittest.TestCase):
                     target = path/name
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_bytes(body)
+                if path.name == 'naver-'+code.OLD_COMMIT:
+                    (path/'naver_engine/store.py').write_bytes(StoreScopeTest.SOURCE)
                 for name in ('engine','relay'):
                     # The UI update inherits all flags without adding or changing them.
                     body = ('image: '+code.OLD_COMMIT).encode()
@@ -337,6 +357,8 @@ class ContractTest(unittest.TestCase):
                     return json.dumps(row).encode()
                 return result
             def request_api_by_code(path,route,method='GET'):
+                if route == '/naver/dashboard':
+                    return 200, {'referrer-policy':'no-referrer','cache-control':'no-store'}, b'id="s-dashboard"'
                 if method=='POST':
                     verified = route in ('/api/naver-auto/links/confirm','/api/naver-auto/collection/request')
                     if current['source']==code.OLD_COMMIT:
@@ -376,11 +398,15 @@ class ContractTest(unittest.TestCase):
         with patch.object(legacy_test, 'M', fixture), patch.object(code, 'TARGET_COMMIT', 'b'*40), \
                 patch.object(code, 'EXPECTED_BASELINE', 'a'*64), \
                 patch.object(code, 'OLD_SOURCE_SHA256', 'c'*64), \
+                patch.object(code, 'TARGET_SOURCE_SHA256', 'c'*64), \
+                patch.object(code, 'STORE_SHA256', {8:hashlib.sha256(StoreScopeTest.SOURCE).hexdigest(),
+                                                  9:hashlib.sha256(StoreScopeTest.TARGET_SOURCE).hexdigest()}), \
+                patch.object(code, 'verify_database_schema'), \
                 patch.object(code, 'db_snapshot', return_value=(Path('/synthetic-snapshot'), 'd'*64)) as snapshot, \
                 patch.object(code, 'restore_db') as restore, \
                 patch.object(code, 'warm_sources', side_effect=(ValueError('WARM_FAILED') if failure=='warm'
                              else RuntimeError('WARM_CLEANUP_FAILED') if failure=='warm_cleanup' else None),
-                             return_value={'ok':True, 'org_fresh':True, 'schema':8, 'catalog_total':2, 'management_count':1}):
+                             return_value={'ok':True, 'org_fresh':True, 'schema':9, 'catalog_total':2, 'management_count':1}):
             result = legacy_test.UpgradeTest().scenario(failure, mode, setup)
             if failure in ('warm','recreate','start','probe'):
                 restore.assert_called_once()
@@ -398,6 +424,7 @@ class ContractTest(unittest.TestCase):
         result, commands, writes, _, state = self.scenario('replay')
         self.assertIsInstance(result, dict, str(result))
         self.assertTrue(result['ok'])
+        self.assertEqual(result['database_schema'],9)
         self.assertEqual(state, {'engine': 'b'*40, 'relay': 'b'*40})
         self.assertFalse(any(path.name == 'bootstrap-request.json' for path, _ in writes))
         self.assertFalse(any('nginx' in ' '.join(args) for args in commands))
@@ -457,11 +484,11 @@ class ContractTest(unittest.TestCase):
             for root in (old,new):
                 (root/'backend/naver_page').mkdir(parents=True)
                 (root/'backend/naver_page/app.js').write_bytes(b'old')
-                (root/'backend/naver_page/index.html').write_bytes(b'unchanged')
+                (root/'backend/naver_page/sso-bootstrap.js').write_bytes(b'unchanged')
             (new/'backend/naver_page/app.js').write_bytes(b'new')
-            added=new/'backend/naver_page/sso-bootstrap.js';added.write_bytes(b'approved')
+            added=new/'backend/naver_page/index.html';added.write_bytes(b'approved')
             module.compatible_code_scope(old,new,upgrade)
-            forbidden=new/'backend/naver_page/index.html';forbidden.write_bytes(b'changed')
+            forbidden=new/'backend/naver_page/sso-bootstrap.js';forbidden.write_bytes(b'changed')
             with self.assertRaisesRegex(ValueError,'CODE_SCOPE_CHANGED'):
                 module.compatible_code_scope(old,new,upgrade)
             forbidden.write_bytes(b'unchanged')
@@ -472,7 +499,7 @@ class ContractTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'CODE_SOURCE_REMOVED'):
                 module.compatible_code_scope(old,new,upgrade)
 
-    def test_staff_entry_reliability_allows_only_exact_runtime_and_test_paths(self):
+    def test_monthly_dashboard_allows_only_exact_runtime_and_test_paths(self):
         module=load('naver_preview_code_upgrade')
         upgrade=Mock()
         upgrade.read_file.side_effect=lambda path,**kwargs: Path(path).read_bytes()
@@ -485,9 +512,9 @@ class ContractTest(unittest.TestCase):
             for name in approved:
                 (new/name).write_bytes(b'approved reliability update')
             module.compatible_code_scope(old,new,upgrade)
-            for name in ('naver_runtime/writer.py','naver_engine/inventory.py','naver_engine/web.py',
+            for name in ('naver_runtime/bootstrap.py','naver_engine/inventory_reads.py',
                          'naver_runtime/__main__.py','backend/app/naver_auto/scope.py',
-                         'backend/naver_page/app.css','backend/naver_page/index.html'):
+                         'backend/naver_page/sso-bootstrap.js','backend/app/naver_entry.py'):
                 forbidden=new/name;forbidden.parent.mkdir(parents=True,exist_ok=True);forbidden.write_bytes(b'not approved')
                 with self.subTest(path=name), self.assertRaisesRegex(ValueError,'CODE_SCOPE_CHANGED'):
                     module.compatible_code_scope(old,new,upgrade)
@@ -676,6 +703,11 @@ class Store:
     def _need_writer(self):
         return True
 '''
+    TARGET_SOURCE = SOURCE.replace(b'SCHEMA_VERSION=8', b'SCHEMA_VERSION=9').replace(
+        b'_SCHEMA=("CREATE TABLE fixture (id INTEGER)",)',
+        b'_SCHEMA=("CREATE TABLE fixture (id INTEGER)",'
+        b'"CREATE TABLE IF NOT EXISTS naver_auto_monthly_check (customer_id INTEGER)",'
+        b'"CREATE INDEX IF NOT EXISTS naver_auto_monthly_period ON naver_auto_monthly_check (customer_id)",)')
 
     def setUp(self):
         self.code = load('naver_preview_code_upgrade')
@@ -685,6 +717,9 @@ class Store:
         self.new = Path(self.temporary.name).resolve()/'new'
         self.upgrade = Mock()
         self.upgrade.read_file.side_effect = lambda path, **kwargs: Path(path).read_bytes()
+        hashes = patch.object(self.code, 'STORE_SHA256', {
+            8:hashlib.sha256(self.SOURCE).hexdigest(), 9:hashlib.sha256(self.TARGET_SOURCE).hexdigest()})
+        hashes.start();self.addCleanup(hashes.stop)
         for root in (self.old, self.new):
             for name in ('compose.naver-engine.yml', 'compose.naver-relay.yml',
                          'deploy/naver-engine-backup.override.yml', 'Dockerfile.naver-engine',
@@ -694,46 +729,43 @@ class Store:
                 path.write_bytes(b'unchanged')
             path = root/'naver_engine/store.py'
             path.parent.mkdir(parents=True)
-            path.write_bytes(self.SOURCE)
+            path.write_bytes(self.SOURCE if root == self.old else self.TARGET_SOURCE)
             for name in ('engine', 'relay'):
                 body = ('image: '+self.code.OLD_COMMIT).encode()
                 if root == self.new:
                     body = self.code.target_override(body, name)
                 (root/('preview-'+name+'.override.yml')).write_bytes(body)
 
-    def test_approved_two_method_bodies_pass_without_changing_the_storage_contract(self):
-        source = self.SOURCE.replace(b'return []', b'return [42]')
-        source = source.replace(b'return None', b'return source.get("zero_ids", [])')
-        (self.new/'naver_engine/store.py').write_bytes(source)
+    def test_only_pinned_additive_schema8_to9_transition_is_accepted(self):
         self.code.compatible_source(self.old, self.new, self.upgrade)
 
     def test_schema_version_sql_and_migration_changes_refuse_even_with_approved_methods(self):
-        for before, after in ((b'SCHEMA_VERSION=8', b'SCHEMA_VERSION=9'),
+        for before, after in ((b'SCHEMA_VERSION=9', b'SCHEMA_VERSION=8'),
                               (b'id INTEGER', b'id TEXT'),
                               (b'    pass', b'    return 1')):
-            source = self.SOURCE.replace(before, after)
-            self.assertNotEqual(source, self.SOURCE)
+            source = self.TARGET_SOURCE.replace(before, after)
+            self.assertNotEqual(source, self.TARGET_SOURCE)
             (self.new/'naver_engine/store.py').write_bytes(source)
-            with self.subTest(change=before), self.assertRaisesRegex(ValueError, 'CODE_SCHEMA_CHANGED'):
+            with self.subTest(change=before), self.assertRaises(ValueError):
                 self.code.compatible_source(self.old, self.new, self.upgrade)
 
     def test_every_other_store_ast_change_and_method_signature_refuses(self):
         changes = (
-            self.SOURCE.replace(b'return True', b'return False'),
-            self.SOURCE+b'UNAPPROVED = True\n',
-            self.SOURCE.replace(b'class Store:', b'class Store:\n    UNAPPROVED = True'),
-            self.SOURCE.replace(b'limit=3', b'limit=24'),
-            self.SOURCE.replace(b'    def inventory_work', b'    @staticmethod\n    def inventory_work'),
-            self.SOURCE.replace(b'    def inventory_work', b'    async def inventory_work'),
-            self.SOURCE.replace(b'    def inventory_work', b'    def unapproved_work'),
-            self.SOURCE+b'    def inventory_work(self, now, limit=3):\n        return [1]\n',
-            self.SOURCE+b'class Store:\n    pass\n',
-            self.SOURCE+b'def inventory_work():\n    return [1]\n',
+            self.TARGET_SOURCE.replace(b'return True', b'return False'),
+            self.TARGET_SOURCE+b'UNAPPROVED = True\n',
+            self.TARGET_SOURCE.replace(b'class Store:', b'class Store:\n    UNAPPROVED = True'),
+            self.TARGET_SOURCE.replace(b'limit=3', b'limit=24'),
+            self.TARGET_SOURCE.replace(b'    def inventory_work', b'    @staticmethod\n    def inventory_work'),
+            self.TARGET_SOURCE.replace(b'    def inventory_work', b'    async def inventory_work'),
+            self.TARGET_SOURCE.replace(b'    def inventory_work', b'    def unapproved_work'),
+            self.TARGET_SOURCE+b'    def inventory_work(self, now, limit=3):\n        return [1]\n',
+            self.TARGET_SOURCE+b'class Store:\n    pass\n',
+            self.TARGET_SOURCE+b'def inventory_work():\n    return [1]\n',
         )
         for source in changes:
-            self.assertNotEqual(source, self.SOURCE)
+            self.assertNotEqual(source, self.TARGET_SOURCE)
             (self.new/'naver_engine/store.py').write_bytes(source)
-            with self.subTest(source=source), self.assertRaisesRegex(ValueError, 'CODE_STORE_CHANGED'):
+            with self.subTest(source=source), self.assertRaises(ValueError):
                 self.code.compatible_source(self.old, self.new, self.upgrade)
 
     def test_unchanged_wrong_schema_or_missing_approved_methods_is_not_a_contract(self):
@@ -743,12 +775,16 @@ class Store:
                                                    b'    def missing_progress'), 'CODE_STORE_CHANGED')):
             for root in (self.old, self.new):
                 (root/'naver_engine/store.py').write_bytes(source)
-            with self.subTest(error=error), self.assertRaisesRegex(ValueError, error):
+            with self.subTest(error=error), self.assertRaises(ValueError):
                 self.code.compatible_source(self.old, self.new, self.upgrade)
 
-    def test_comments_and_whitespace_do_not_expand_the_two_method_exception(self):
-        (self.new/'naver_engine/store.py').write_bytes(b'# reviewed comment\n'+self.SOURCE+b'\n')
-        self.code.compatible_source(self.old, self.new, self.upgrade)
+    def test_even_comments_and_old_store_changes_need_the_exact_reviewed_hash(self):
+        for root, body in ((self.old, self.SOURCE), (self.new, self.TARGET_SOURCE)):
+            target=root/'naver_engine/store.py'
+            target.write_bytes(b'# unreviewed comment\n'+body)
+            with self.assertRaisesRegex(ValueError, 'CODE_STORE_CHANGED'):
+                self.code.compatible_source(self.old, self.new, self.upgrade)
+            target.write_bytes(body)
 
 
 class StoppedWriterTest(unittest.TestCase):
@@ -860,7 +896,7 @@ class WarmSourcesTest(unittest.TestCase):
                     return b'{"ok":false,"warm_step":"warm_org_sync","warm_error_code":"ORG_NOT_ACCEPTED"}'
                 if failure=='unrecognized_script_error':
                     return b'{"ok":false,"warm_step":"PRIVATE_STAGE_MARKER","warm_error_code":"PRIVATE_CREDENTIAL_MARKER"}'
-                return json.dumps({'ok':True,'org_fresh':True,'schema':8,
+                return json.dumps({'ok':True,'org_fresh':True,'schema':8 if failure=='wrong_schema' else 9,
                     'catalog_total':0 if failure=='invalid_result' else 2,'management_count':1,'accounts_total':3}).encode()
             if args[:2]==['docker','ps']:
                 self.assertIn('name=^/'+name+'$',args)
@@ -888,7 +924,7 @@ class WarmSourcesTest(unittest.TestCase):
         return result,commands,state
 
     def test_success_timeout_and_script_failure_all_remove_only_exact_owned_oneoff_writer(self):
-        for failure in (None,'create_timeout','wait_timeout','script_exit','invalid_result'):
+        for failure in (None,'create_timeout','wait_timeout','script_exit','invalid_result','wrong_schema'):
             with self.subTest(failure=failure):
                 result,commands,state=self.scenario(failure)
                 if failure is None:
@@ -931,6 +967,30 @@ class WarmSourcesTest(unittest.TestCase):
 
 class DatabaseRollbackTest(unittest.TestCase):
     """Real isolated SQLite bytes; only privileged ownership and macOS flock interoperability are adapted."""
+    MONTHLY_SQL = (
+        """CREATE TABLE IF NOT EXISTS naver_auto_monthly_check (
+        customer_id INTEGER NOT NULL CHECK (customer_id > 0),
+        period_start TEXT NOT NULL,
+        period_end TEXT NOT NULL,
+        snapshot_at TEXT NOT NULL,
+        checked_at TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('reading', 'partial', 'ok', 'retry', 'limited')),
+        error_code TEXT,
+        imp INTEGER,
+        clk INTEGER,
+        spend INTEGER,
+        conversion_value REAL,
+        enabled_campaigns INTEGER,
+        campaign_count INTEGER,
+        campaign_fingerprint TEXT,
+        progress_json TEXT,
+        progress_hash TEXT,
+        attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0 AND attempts <= 4),
+        next_try_at TEXT NOT NULL,
+        PRIMARY KEY (customer_id, period_start, period_end))""",
+        """CREATE INDEX IF NOT EXISTS naver_auto_monthly_period
+        ON naver_auto_monthly_check (period_start, period_end)""",
+    )
     def setUp(self):
         temporary=tempfile.TemporaryDirectory(prefix='account-db-rollback-test-')
         self.addCleanup(temporary.cleanup)
@@ -969,31 +1029,49 @@ class DatabaseRollbackTest(unittest.TestCase):
             lock_patch.start();self.addCleanup(lock_patch.stop)
         self.identity='a'*32
 
-    def mutate_schema8(self):
+    def mutate_schema9(self):
         with closing(sqlite3.connect(self.db)) as connection, connection:
-            connection.executescript("UPDATE naver_auto_meta SET value='8' WHERE key='schema_version';"
-                "CREATE TABLE inventory (id INTEGER PRIMARY KEY);"
-                "INSERT INTO inventory VALUES (99);"
-                "UPDATE business SET value='new-schema-write';")
+            for sql in self.MONTHLY_SQL:
+                connection.execute(sql)
+            connection.execute("UPDATE naver_auto_meta SET value='9' WHERE key='schema_version'")
+            connection.execute("""INSERT INTO naver_auto_monthly_check
+                (customer_id,period_start,period_end,snapshot_at,checked_at,status,spend,next_try_at)
+                VALUES (1,'2026-10-01','2026-10-01','synthetic','synthetic','ok',100,'synthetic')""")
+            connection.execute("UPDATE business SET value='new-schema-write'")
 
-    def test_real_schema8_snapshot_restores_prior_data_and_retains_failed_data(self):
+    def test_running_source_checks_real_metadata_and_never_accepts_wrong_schema(self):
+        self.code.verify_database_schema(self.code.OLD_COMMIT,self.release,self.upgrade)
+        with self.assertRaisesRegex(ValueError,'DB_TARGET_SCHEMA'):
+            self.code.verify_database_schema(self.code.TARGET_COMMIT,self.release,self.upgrade)
+        self.mutate_schema9()
+        self.code.verify_database_schema(self.code.TARGET_COMMIT,self.release,self.upgrade)
+        with self.assertRaisesRegex(ValueError,'DB_OLD_SCHEMA'):
+            self.code.verify_database_schema(self.code.OLD_COMMIT,self.release,self.upgrade)
+
+    def test_real_schema9_failed_write_restores_schema8_snapshot_and_retains_failed_data(self):
         snapshot=self.code.db_snapshot(self.identity,self.release,self.upgrade)
         path,digest=snapshot
         self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(),digest)
         self.assertEqual(path.stat().st_mode & 0o777,0o600)
-        self.mutate_schema8()
+        self.mutate_schema9()
+        self.code.verify_database_schema(self.code.TARGET_COMMIT,self.release,self.upgrade)
         for suffix in ('-wal','-shm','-journal'):
             (self.data/('engine.db'+suffix)).write_bytes(('failed'+suffix).encode())
         self.code.restore_db(snapshot,self.identity,self.release,self.upgrade)
         with closing(sqlite3.connect(self.db)) as connection, connection:
             self.assertEqual(connection.execute("SELECT value FROM naver_auto_meta WHERE key='schema_version'").fetchone(),('8',))
             self.assertEqual(connection.execute('SELECT value FROM business').fetchone(),('preserved',))
-            self.assertEqual(connection.execute("SELECT name FROM sqlite_master WHERE name='inventory'").fetchall(),[])
+            self.assertEqual(connection.execute("SELECT name FROM sqlite_master WHERE name='naver_auto_monthly_check'").fetchall(),[])
             self.assertEqual(connection.execute('PRAGMA integrity_check').fetchall(),[('ok',)])
         # Failed DB and sidecars stay on the same filesystem as the restored live DB.
         quarantine=self.data/('.account-failed-db-'+self.identity)
         self.assertEqual({p.name for p in quarantine.iterdir()},
                          {'engine.db','engine.db-wal','engine.db-shm','engine.db-journal'})
+        with closing(sqlite3.connect((quarantine/'engine.db').as_uri()+'?mode=ro&immutable=1',uri=True)) as failed:
+            self.assertEqual(failed.execute("SELECT value FROM naver_auto_meta WHERE key='schema_version'").fetchone(),('9',))
+            self.assertEqual(failed.execute('SELECT spend FROM naver_auto_monthly_check').fetchone(),(100,))
+            self.assertEqual(failed.execute('SELECT value FROM business').fetchone(),('new-schema-write',))
+        self.code.verify_database_schema(self.code.OLD_COMMIT,self.release,self.upgrade)
         self.assertTrue(path.is_file())
         self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(),digest)
         self.assertFalse(any((self.data/('engine.db'+suffix)).exists() for suffix in ('-wal','-shm','-journal')))
@@ -1008,7 +1086,7 @@ class DatabaseRollbackTest(unittest.TestCase):
 
     def test_changed_snapshot_digest_refuses_before_quarantining_or_overwriting_live_database(self):
         snapshot=self.code.db_snapshot(self.identity,self.release,self.upgrade)
-        self.mutate_schema8();before=self.db.read_bytes()
+        self.mutate_schema9();before=self.db.read_bytes()
         snapshot[0].write_bytes(snapshot[0].read_bytes()+b'tampered')
         with self.assertRaisesRegex(ValueError,'DB_SNAPSHOT_CHANGED'):
             self.code.restore_db(snapshot,self.identity,self.release,self.upgrade)

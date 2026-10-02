@@ -1,4 +1,4 @@
-"""Pinned staff-entry/read-side reliability release with a matching schema8 rollback snapshot."""
+"""Pinned monthly dashboard with the exact additive schema8→9 migration and schema8 paired rollback."""
 import ast
 from contextlib import closing
 import fcntl
@@ -13,15 +13,23 @@ import sqlite3
 from types import SimpleNamespace
 import uuid
 
-OLD_COMMIT = 'd6542c37d1b247801f3f10259b2098d14e7b6dc8'
-TARGET_COMMIT = '367a03dcae3a4a3b9da6e6c56918a439b995a40e'
+OLD_COMMIT = '367a03dcae3a4a3b9da6e6c56918a439b995a40e'
+TARGET_COMMIT = '73b9fe39c36284e266eea874902608a4127b00bf'
 EXPECTED_BASELINE = '5463ca7b23575f668062e842f551170937239e625fb5a6104655c031c7e31d76'
-OLD_SOURCE_SHA256 = '77a1eec35ad3de820f2f068a6a166f54b52656e876d0a65183601c6319f6fc3e'
-CODE_PATHS = {'backend/naver_page/app.js', 'backend/naver_page/sso-bootstrap.js',
-              'naver_engine/inventory_reads.py', 'naver_engine/naver_read.py', 'naver_engine/store.py'}
-TEST_PATHS = {'naver_engine/tests/screen_browser.js', 'naver_engine/tests/test_inventory_fair_queue.py',
-              'naver_engine/tests/test_inventory_reads.py', 'naver_engine/tests/test_inventory_throughput.py',
-              'naver_engine/tests/test_inventory_zero_completion.py', 'naver_runtime/tests/test_main.py'}
+OLD_SOURCE_SHA256 = 'd7fcc9c5b65aac9c9d44a0abf3e058295838bf927250c8c30f209d5f12df1088'
+TARGET_SOURCE_SHA256 = '033e72d441f17f313a970f63d3a2f050d9866ce94f717bf5d10914533134c578'
+STORE_SHA256 = {8:'3c227925ee40b001a1e0090bfe130ff253310c4a91f59714a3752e601c4ee739',
+                9:'ccf614ec9e0f0ec5f6467ef9dbfe50b0676543f908bf9e877f61cc5cfe770e75'}
+CODE_PATHS = {'backend/app/naver_relay.py', 'backend/naver_page/app.css', 'backend/naver_page/app.js',
+              'backend/naver_page/index.html', 'naver_engine/dashboard.py', 'naver_engine/inventory.py',
+              'naver_engine/monthly_reads.py', 'naver_engine/naver_read.py', 'naver_engine/store.py',
+              'naver_engine/web.py', 'naver_runtime/scheduler.py', 'naver_runtime/writer.py'}
+TEST_PATHS = {'naver_engine/tests/dashboard_screen_browser.js', 'naver_engine/tests/screen_browser.js',
+              'naver_engine/tests/test_alerts.py', 'naver_engine/tests/test_dashboard.py',
+              'naver_engine/tests/test_dashboard_independent.py', 'naver_engine/tests/test_dashboard_screen.py',
+              'naver_engine/tests/test_dashboard_web.py', 'naver_engine/tests/test_monthly_reads.py',
+              'naver_engine/tests/test_monthly_store.py', 'naver_engine/tests/test_sync.py',
+              'naver_runtime/tests/test_scheduler.py'}
 DATA = Path('/var/lib/metainc/naver-engine')
 STAGE = 'input'
 OPERATION = 'none'
@@ -31,7 +39,7 @@ FAILURE_OPERATIONS = frozenset('none package current_state target_manifest compa
     'write_recovery_receipt bootstrap_check snapshot_directory snapshot_identity snapshot_lock snapshot_create '
     'snapshot_schema snapshot_copy snapshot_integrity snapshot_fsync snapshot_digest warm_sources warm_create '
     'warm_wait warm_logs warm_result warm_cleanup_find warm_cleanup_identity warm_cleanup_remove '
-    'warm_cleanup_absence warm_config warm_store_open warm_org_sync warm_org_contract warm_accounts_sync '
+    'warm_cleanup_absence warm_config warm_store_open warm_schema warm_org_sync warm_org_contract warm_accounts_sync '
     'warm_catalog_sync warm_summary daemon_reload verify_running post_state write_started_receipt restore_database '
     'old_manifest rollback_state'.split()) | frozenset(prefix+'_'+name for prefix in
         ('stop','stop_check','recreate','replace_unit','start','restore_unit') for name in ('engine','relay'))
@@ -39,13 +47,13 @@ FAILURE_KINDS = frozenset('ValueError RuntimeError TimeoutError TimeoutExpired C
     'PermissionError FileNotFoundError BlockingIOError JSONDecodeError OperationalError IntegrityError '
     'TypeError KeyError AttributeError AssertionError ImportError ModuleNotFoundError ConfigError StoreRefused'.split())
 FAILURE_CODES = frozenset('CODE_TARGET_NOT_PINNED CODE_PACKAGE CODE_TARGET CODE_BASELINE CODE_APPLY_FIELDS '
-    'CODE_OPERATION_ID CODE_ALREADY_ATTEMPTED CODE_POST_STATE CODE_FAILED_ROLLED_BACK_DB_PRESERVED '
+    'CODE_OPERATION_ID CODE_ALREADY_ATTEMPTED CODE_POST_STATE CODE_TARGET_SOURCE_CHANGED CODE_FAILED_ROLLED_BACK_DB_PRESERVED '
     'CODE_ROLLBACK_FAILED HOST_BASELINE OLD_BASELINE OLD_SOURCE_CHANGED OLD_UNIT_CHANGED OLD_UNIT_NOT_ENABLED '
     'DEPENDENCY_NOT_ACTIVE BOOTSTRAP_REQUEST BOOTSTRAP_NOT_FINISHED BOOTSTRAP_CHANGED TMPFILES_CHANGED '
     'CODE_INFRASTRUCTURE_CHANGED CODE_SCHEMA_CHANGED CODE_STORE_CHANGED CODE_OVERRIDE_CHANGED CODE_SOURCE_PATH CODE_SOURCE_MODE_CHANGED '
     'CODE_SOURCE_REMOVED CODE_SCOPE_CHANGED SCHEMA_CONTRACT_MISSING CODE_PROBE_SOURCE CODE_ROUTE_STATUS '
     'CODE_SERVICE_NOT_ACTIVE CODE_SERVICE_NOT_ENABLED VERIFIED_WRITE_AUTH_NOT_REQUIRED '
-    'ACCOUNT_WRITER_NOT_STOPPED DB_IDENTITY DB_OLD_SCHEMA DB_SNAPSHOT_INTEGRITY DB_SNAPSHOT_CHANGED '
+    'ACCOUNT_WRITER_NOT_STOPPED DB_IDENTITY DB_OLD_SCHEMA DB_TARGET_SCHEMA DB_SNAPSHOT_INTEGRITY DB_SNAPSHOT_CHANGED '
     'WARM_CONTAINER_ID WARM_CONTAINER_REMAINS WARM_CREATE_UNCONFIRMED WARM_CLEANUP_FAILED SOURCE_WARM_FAILED '
     'ORG_NOT_ACCEPTED MANAGEMENT_FIELD_MISSING ACCOUNTS_NOT_ACCEPTED CATALOG_NOT_ACCEPTED '
     'COMMAND_FAILED DIRECTORY_POLICY FILE_PATH FILE_POLICY PREPARED_MANIFEST PREPARED_DIGEST '
@@ -91,6 +99,8 @@ def validate_package(package, release):
     release.validate_package(dict(package, operation='upgrade-prepare'))
     if package['source_commit'] != TARGET_COMMIT:
         raise ValueError('CODE_TARGET')
+    if package['source_tar_gz_sha256'] != TARGET_SOURCE_SHA256:
+        raise ValueError('CODE_TARGET_SOURCE_CHANGED')
     if package['baseline'] != EXPECTED_BASELINE:
         raise ValueError('CODE_BASELINE')
     return package
@@ -159,29 +169,26 @@ def schema_contract(body):
     return selected
 
 
-def store_contract(body):
-    """Only two reviewed Store method bodies may differ; signatures and all other AST stay fixed."""
+def store_contract(body, version):
+    """No method exception: the complete reviewed old/target bytes are immutable."""
     tree = ast.parse(body)
     versions = [node for node in tree.body if isinstance(node, ast.Assign)
                 and any(isinstance(target, ast.Name) and target.id == 'SCHEMA_VERSION' for target in node.targets)]
     if (len(versions) != 1 or len(versions[0].targets) != 1
             or not isinstance(versions[0].value, ast.Constant)
-            or type(versions[0].value.value) is not int or versions[0].value.value != 8):
+            or type(versions[0].value.value) is not int or versions[0].value.value != version):
         raise ValueError('CODE_SCHEMA_CHANGED')
-    stores = [node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == 'Store']
-    if len(stores) != 1:
+    if version not in (8, 9) or hashlib.sha256(body).hexdigest() != STORE_SHA256[version]:
         raise ValueError('CODE_STORE_CHANGED')
-    for name in ('inventory_work', 'record_inventory_progress'):
-        methods = [node for node in stores[0].body
-                   if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name]
-        if len(methods) != 1 or not isinstance(methods[0], ast.FunctionDef):
-            raise ValueError('CODE_STORE_CHANGED')
-        methods[0].body = [ast.Pass()]
-    return ast.dump(tree, include_attributes=False)
+    sql = [node.value for node in tree.body if isinstance(node, ast.Assign)
+           and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id == '_SCHEMA']
+    if len(sql) != 1:
+        raise ValueError('SCHEMA_CONTRACT_MISSING')
+    return ast.literal_eval(sql[0])
 
 
 def compatible_source(old, new, upgrade):
-    # Only reviewed read-side bodies may change; schema, other storage, runtime and credentials stay fixed.
+    # Exact reviewed monthly delta only; infrastructure, credentials and all old SQL stay fixed.
     read = lambda path: upgrade.read_file(path, mode=0o644, maximum=1024*1024, minimum=0)
     for name in ('compose.naver-engine.yml', 'compose.naver-relay.yml',
                  'deploy/naver-engine-backup.override.yml', 'Dockerfile.naver-engine',
@@ -189,10 +196,13 @@ def compatible_source(old, new, upgrade):
         if read(old/name) != read(new/name):
             raise ValueError('CODE_INFRASTRUCTURE_CHANGED')
     before, after = read(old/'naver_engine/store.py'), read(new/'naver_engine/store.py')
-    if schema_contract(before) != schema_contract(after):
+    old_sql, new_sql = store_contract(before, 8), store_contract(after, 9)
+    if (schema_contract(before)['_migrate'] != schema_contract(after)['_migrate']
+            or not isinstance(old_sql, tuple) or not isinstance(new_sql, tuple)
+            or new_sql[:-2] != old_sql or len(new_sql) != len(old_sql)+2
+            or not new_sql[-2].startswith('CREATE TABLE IF NOT EXISTS naver_auto_monthly_check (')
+            or not new_sql[-1].startswith('CREATE INDEX IF NOT EXISTS naver_auto_monthly_period')):
         raise ValueError('CODE_SCHEMA_CHANGED')
-    if store_contract(before) != store_contract(after):
-        raise ValueError('CODE_STORE_CHANGED')
     for name in ('engine', 'relay'):
         before = upgrade.read_file(old/('preview-'+name+'.override.yml'), mode=0o600)
         after = upgrade.read_file(new/('preview-'+name+'.override.yml'), mode=0o600)
@@ -324,6 +334,8 @@ try:
     options=dependencies(config,os.environ,clock)
     step='warm_store_open'
     with S.open_writer(config.db) as store:
+        step='warm_schema'
+        if S.SCHEMA_VERSION!=9 or store.meta('schema_version')!='9': raise ValueError('DB_TARGET_SCHEMA')
         step='warm_org_sync'
         org=Y.sync_org(options['erp_factory'](),store,clock.now())
         if org.outcome!='accepted': raise ValueError('ORG_NOT_ACCEPTED')
@@ -339,10 +351,11 @@ try:
         if store.account_catalog_status().get('state')!='accepted': raise ValueError('CATALOG_NOT_ACCEPTED')
         step='warm_summary'
         print(json.dumps({'ok':True,'org_fresh':True,'management_count':sum(e['is_management'] for e in body['employees']),
-                          'catalog_total':store.account_catalog()['total'],'accounts_total':accounts.rows,'schema':S.SCHEMA_VERSION}))
+                          'catalog_total':store.account_catalog()['total'],'accounts_total':accounts.rows,
+                          'schema':int(store.meta('schema_version'))}))
 except Exception as error:
     code=error.args[0] if len(error.args)==1 and isinstance(error.args[0],str) else None
-    allowed={'ORG_NOT_ACCEPTED','MANAGEMENT_FIELD_MISSING','ACCOUNTS_NOT_ACCEPTED','CATALOG_NOT_ACCEPTED'}
+    allowed={'DB_TARGET_SCHEMA','ORG_NOT_ACCEPTED','MANAGEMENT_FIELD_MISSING','ACCOUNTS_NOT_ACCEPTED','CATALOG_NOT_ACCEPTED'}
     print(json.dumps({'ok':False,'warm_step':step,'warm_error_code':code if code in allowed else 'UNRECOGNIZED'}))
     sys.exit(1)
 '''
@@ -370,12 +383,13 @@ def warm_sources(path, release):
         OPERATION = 'warm_result'
         if status != b'0':
             if isinstance(result, dict) and result.get('warm_step') in {
-                    'warm_config','warm_store_open','warm_org_sync','warm_org_contract',
+                    'warm_config','warm_store_open','warm_schema','warm_org_sync','warm_org_contract',
                     'warm_accounts_sync','warm_catalog_sync','warm_summary'}:
                 OPERATION = result['warm_step']
             code = result.get('warm_error_code') if isinstance(result, dict) else None
             raise ValueError(code if isinstance(code,str) and code in FAILURE_CODES else 'SOURCE_WARM_FAILED')
-        if (result.get('ok') is not True or result.get('org_fresh') is not True or result.get('schema') != 8
+        if (result.get('ok') is not True or result.get('org_fresh') is not True
+                or type(result.get('schema')) is not int or result['schema'] != 9
                 or type(result.get('catalog_total')) is not int or result['catalog_total'] < 1
                 or type(result.get('management_count')) is not int or result['management_count'] < 1):
             raise ValueError('SOURCE_WARM_FAILED')
@@ -440,6 +454,7 @@ def compatible_code_scope(old, new, upgrade):
 
 def probe(release, source_commit, upgrade):
     """The old rollback contract stays unchanged; only the pinned target gains auth gates."""
+    monthly_target = source_commit == TARGET_COMMIT
     if source_commit == OLD_COMMIT:
         # The deployed base already has authenticated verified-link and collection routes.
         source_commit = TARGET_COMMIT
@@ -456,6 +471,14 @@ def probe(release, source_commit, upgrade):
         return status, headers, body
     upgrade.probe(SimpleNamespace(unix_request=request))
     relay = '/run/metainc/naver-relay/relay.sock'
+    if monthly_target and release.unix_request(relay, '/api/naver-auto/dashboard', 'GET')[0] != 401:
+        raise ValueError('CODE_ROUTE_STATUS')
+    if monthly_target:
+        status, headers, body = release.unix_request(relay, '/naver/dashboard', 'GET')
+        headers = {key.lower():value for key,value in headers.items()}
+        if (status != 200 or b'id="s-dashboard"' not in body or headers.get('referrer-policy') != 'no-referrer'
+                or headers.get('cache-control') != 'no-store'):
+            raise ValueError('PAGE_NOT_READY')
     for route, method, expected in (
             ('/collection/status', 'GET', 401), ('/collection/request', 'POST', 401),
             *((r, 'POST', 403) for r in ('/issues/1/resolve', '/issues/1/except',
@@ -469,6 +492,7 @@ def verify_running(path, receipt, release, lifecycle, upgrade):
     if source not in (OLD_COMMIT, TARGET_COMMIT) or path.name != 'naver-' + source:
         raise ValueError('CODE_PROBE_SOURCE')
     probe(release, source, upgrade)
+    verify_database_schema(source, release, upgrade)
     lifecycle._snapshot(release, path, receipt['images'])
     for unit in (lifecycle.TUNNEL, *lifecycle.UNITS):
         if lifecycle._state(release, unit, 'ActiveState') != 'active':
@@ -476,6 +500,20 @@ def verify_running(path, receipt, release, lifecycle, upgrade):
     for unit in lifecycle.UNITS:
         if lifecycle._state(release, unit, 'UnitFileState') != 'enabled':
             raise ValueError('CODE_SERVICE_NOT_ENABLED')
+
+
+def verify_database_schema(source, release, upgrade):
+    """Read actual metadata after start or paired rollback; never run schema8 against schema9."""
+    if source not in (OLD_COMMIT, TARGET_COMMIT):
+        raise ValueError('CODE_PROBE_SOURCE')
+    release.trusted_dir(DATA, uid=10001, gid=10001, mode=0o750)
+    db = DATA/'engine.db'
+    upgrade.read_file(db, uid=10001, gid=10001, mode=0o600, maximum=1024**3)
+    expected = '8' if source == OLD_COMMIT else '9'
+    with closing(sqlite3.connect(db.as_uri()+'?mode=ro', uri=True)) as connection:
+        connection.execute('PRAGMA trusted_schema=OFF')
+        if connection.execute("SELECT value FROM naver_auto_meta WHERE key='schema_version'").fetchone() != (expected,):
+            raise ValueError('DB_OLD_SCHEMA' if source == OLD_COMMIT else 'DB_TARGET_SCHEMA')
 
 
 def prepare(package, host, release, lifecycle, upgrade):
@@ -611,7 +649,7 @@ def apply(package, host, release, lifecycle, upgrade):
         result = {'ok':True,'stage':'internal_ready','source_commit':TARGET_COMMIT,'previous_commit':OLD_COMMIT,
                   'nginx_changed':False,'legacy_containers_unchanged':True,'bootstrap_unchanged':True,
                   'operation_id':identity,'unauthenticated_read_status':401,'business_post_status':403}
-        result.update(database_snapshot_verified=True, database_schema=8, inventory_enabled=True,
+        result.update(database_snapshot_verified=True, database_schema=9, inventory_enabled=True,
                       source_status=source_status, rollback_requires_matching_database=True)
         OPERATION = 'write_started_receipt'
         release.write_new(started, json.dumps(result, sort_keys=True).encode())

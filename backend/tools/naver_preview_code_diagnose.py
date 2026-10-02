@@ -72,10 +72,10 @@ def projection(conn):
                 'unrecognized_code_count':sum(c not in CODES for c in codes),
                 'rows':None if row[2] is None else number(row[2])}
     schema=meta('schema_version')
-    if schema not in ('7','8'):
+    if schema not in ('7','8','9'):
         raise ValueError('DIAG_SCHEMA')
-    inventory={'available':schema=='8','day':INVENTORY_DAY,'rows':0,'groups':[]}
-    if schema=='8':
+    inventory={'available':schema in ('8','9'),'day':INVENTORY_DAY,'rows':0,'groups':[]}
+    if schema in ('8','9'):
         states=sorted(INVENTORY_STATES-{'UNRECOGNIZED'})
         codes=sorted(INVENTORY_CODES-{'NONE','UNRECOGNIZED'})
         query=("SELECT CASE WHEN status IN ("+','.join('?' for _ in states)+") THEN status ELSE 'UNRECOGNIZED' END, "
@@ -162,7 +162,7 @@ def validate_result(value):
         number(item['unrecognized_code_count'])
         nullable_number(item['rows'])
     exact(value,('schema_version','org','accounts','catalog','inventory_check'))
-    if type(value['schema_version']) is not int or value['schema_version'] not in (7,8):
+    if type(value['schema_version']) is not int or value['schema_version'] not in (7,8,9):
         raise ValueError('DIAG_SCHEMA')
     org,accounts,catalog=value['org'],value['accounts'],value['catalog']
     exact(org,('latest','snapshot_available','employee_count','management_count','management_marker_missing_count',
@@ -185,7 +185,7 @@ def validate_result(value):
     timestamp(catalog['generated_at'])
     inventory=value['inventory_check']
     exact(inventory,('available','day','rows','groups'))
-    if inventory['available'] is not (value['schema_version']==8) or inventory['day']!=INVENTORY_DAY:
+    if inventory['available'] is not (value['schema_version'] in (8,9)) or inventory['day']!=INVENTORY_DAY:
         raise ValueError('DIAG_FIELDS')
     groups=inventory['groups']
     if not isinstance(groups,list) or len(groups)>len(INVENTORY_STATES)*len(INVENTORY_CODES):

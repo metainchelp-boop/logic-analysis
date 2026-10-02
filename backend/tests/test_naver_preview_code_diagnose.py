@@ -101,6 +101,44 @@ def projected():
 
 
 class ProjectionTest(unittest.TestCase):
+    def test_schema9_preserves_existing_aggregate_contract_without_reading_monthly_rows(self):
+        with closing(sqlite3.connect(':memory:')) as conn:
+            database(conn)
+            previous=M.validate_result(M.projection(conn))
+            conn.execute("UPDATE naver_auto_meta SET value='9' WHERE key='schema_version'")
+            value=M.validate_result(M.projection(conn))
+            self.assertEqual(value,dict(previous,schema_version=9))
+            self.assertTrue(value['inventory_check']['available'])
+            self.assertNotIn('PRIVATE',json.dumps(value))
+
+    def test_schema9_real_readonly_database_stays_unchanged_without_sidecars(self):
+        with tempfile.TemporaryDirectory(prefix='schema9-diagnostic-') as folder:
+            db=Path(folder)/'engine.db'
+            with closing(sqlite3.connect(db)) as conn:
+                database(conn)
+                conn.execute("UPDATE naver_auto_meta SET value='9' WHERE key='schema_version'")
+                conn.commit()
+            db.chmod(0o400)
+            before=hashlib.sha256(db.read_bytes()).hexdigest()
+            value=M.validate_result(M.read_projection(str(db)))
+            self.assertEqual(value['schema_version'],9)
+            self.assertEqual(value['inventory_check']['rows'],8)
+            self.assertEqual(hashlib.sha256(db.read_bytes()).hexdigest(),before)
+            self.assertEqual({p.name for p in Path(folder).iterdir()},{'engine.db'})
+
+    def test_only_exact_schema7_8_9_are_accepted(self):
+        for schema in ('6','10','09','9.0','PRIVATE'):
+            with self.subTest(schema=schema),closing(sqlite3.connect(':memory:')) as conn:
+                database(conn)
+                conn.execute("UPDATE naver_auto_meta SET value=? WHERE key='schema_version'",(schema,))
+                with self.assertRaisesRegex(ValueError,'DIAG_SCHEMA'):
+                    M.projection(conn)
+        for schema in (6,10,'9',True):
+            value=projected()
+            value['schema_version']=schema
+            with self.subTest(result_schema=schema),self.assertRaisesRegex(ValueError,'DIAG_SCHEMA'):
+                M.validate_result(value)
+
     def test_inventory_counts_use_latest_pinned_operation_day_and_only_safe_codes(self):
         self.assertEqual(M.OPERATION_ID,'a49a7ccfe32840298914f121883caee5')
         value=M.validate_result(projected())
@@ -126,9 +164,10 @@ class ProjectionTest(unittest.TestCase):
             conn.execute("UPDATE naver_auto_meta SET value='7' WHERE key='schema_version'")
             value=M.validate_result(M.projection(conn))
             self.assertEqual(value['inventory_check'],{'available':False,'day':'2026-10-02','rows':0,'groups':[]})
-            conn.execute("UPDATE naver_auto_meta SET value='8' WHERE key='schema_version'")
-            with self.assertRaises(sqlite3.OperationalError):
-                M.projection(conn)
+            for schema in ('8','9'):
+                conn.execute("UPDATE naver_auto_meta SET value=? WHERE key='schema_version'",(schema,))
+                with self.subTest(schema=schema),self.assertRaises(sqlite3.OperationalError):
+                    M.projection(conn)
 
     def test_unknown_inventory_values_are_collapsed_before_leaving_sql(self):
         with closing(sqlite3.connect(':memory:')) as conn:
