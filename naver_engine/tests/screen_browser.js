@@ -534,6 +534,26 @@ async function hygiene(tag, p, log, firstNavUrl) {
       await ctx.close();
     }
 
+    // ── 실제 수신부+앱: 새 창 연결 없는 진입은 원인별 안내만 표시하고 인증 요청은 보내지 않는다 ──
+    {
+      const { ctx, log } = await newCtx(browser);
+      const p = await page(ctx, log);
+      const requestId = 'R'.repeat(43);
+      const url = base + '/naver/?sso_start=' + requestId;
+      await p.goto(url);   // enter()의 수신부 대체를 쓰지 않는다.
+      await p.waitForSelector('#s-blocked.on');
+      const title = await p.textContent('#b-t');
+      const message = await p.textContent('#b-p');
+      ok('진입 진단: 새 창 연결 없음은 서버 장애가 아닌 NV-E04', title.includes('전산 창과의 연결이 없습니다') && message.includes('진단 코드: NV-E04'));
+      ok('진입 진단: 공식 전산 메뉴와 안전한 캡처 안내', message.includes('광고 스튜디오 › 네이버 관제') && message.includes('주소창을 제외'));
+      ok('진입 진단: 요청 번호·원문 주소를 화면에 표시하지 않는다', !message.includes(requestId) && !/https?:\/\//.test(message));
+      ok('진입 진단: 인증 요청과 저장 세션 없음', !log.requests.some(r => r.url.includes('/api/naver-auto/')) &&
+        (await p.evaluate(() => sessionStorage.getItem('naverWatch.session'))) === null);
+      await shot(p, '7-직원진입진단');
+      await hygiene('진입 진단', p, log, url);
+      await ctx.close();
+    }
+
     // ── 들어올 길 없음 · ① 이 거절한 sso ──
     {
       const { ctx, log } = await newCtx(browser);

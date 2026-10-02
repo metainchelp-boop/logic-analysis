@@ -36,7 +36,8 @@ def _fingerprint(ids):
 
 def validate_progress(source, customer_id, day):
     """저장된 목록 지문·배치 경계·정수 합계가 서로 맞아야 이어 읽는다."""
-    if not isinstance(source, dict) or set(source) != {"customer_id", "day", "campaign_ids", "fingerprint", "next_index", "batches"}:
+    required = {"customer_id", "day", "campaign_ids", "fingerprint", "next_index", "batches"}
+    if not isinstance(source, dict) or set(source) not in (required, required | {"zero_ids"}):
         raise CheckpointInvalid("원천 이어읽기 모양이 아닙니다")
     if type(source["customer_id"]) is not int or source["customer_id"] != customer_id or source["day"] != day.isoformat():
         raise CheckpointInvalid("다른 계정 또는 날짜의 원천입니다")
@@ -44,6 +45,10 @@ def validate_progress(source, customer_id, day):
     if not isinstance(ids, list) or any(not isinstance(i, str) or not N._CAMPAIGN_ID.fullmatch(i) for i in ids) \
             or ids != sorted(set(ids)) or source["fingerprint"] != _fingerprint(ids):
         raise CheckpointInvalid("원천 목록 지문이 다릅니다")
+    zero_ids = source.get("zero_ids", [])
+    if not isinstance(zero_ids, list) or any(not isinstance(i, str) for i in zero_ids) \
+            or zero_ids != sorted(set(zero_ids)) or not set(zero_ids).issubset(ids):
+        raise CheckpointInvalid("원천 무활동 증거의 번호가 다릅니다")
     if type(index) is not int or not 0 <= index <= len(ids) or (index != len(ids) and index % N.STATS_IDS_PER_CALL):
         raise CheckpointInvalid("원천 이어읽기 위치가 다릅니다")
     if not isinstance(batches, list) or len(batches) != (index + N.STATS_IDS_PER_CALL - 1) // N.STATS_IDS_PER_CALL:
@@ -79,10 +84,28 @@ def _read(reader, ah, today, values, per_account_calls, store, snapshot, clock):
         chunk = ids[start:start + N.STATS_IDS_PER_CALL]
         stats = reader.get_stats_summary(ah, chunk, yday, yday, fields=FIELDS)
         reader.check_budget()
-        if not stats.complete or set(stats.rows) != set(chunk):
+        if not stats.data_fresh or stats.unknown_values:
             values.update(status="retry", error_code="STATS_INCOMPLETE")
             return
-        batch = {name: _integer(sum(_integer(row[name]) for row in stats.rows.values())) for name in FIELDS}
+        rows = dict(stats.rows)
+        zero_ids = set(progress.get("zero_ids", []))
+        # 합계에서 빠진 줄만 재확인한다. 날짜별 모든 지표가 완결된 0일 때만 보완한다.
+        for cid in stats.missing_ids:
+            if cid not in zero_ids:
+                confirmed = reader.confirm_no_activity(ah, (cid,), yday, yday, fields=FIELDS)
+                reader.check_budget()
+                if not confirmed[cid]:
+                    values.update(status="retry", error_code="STATS_INCOMPLETE")
+                    return
+                zero_ids.add(cid)
+                progress["zero_ids"] = sorted(zero_ids)
+                store.record_inventory_progress(ah.customer_id, snapshot, clock(), progress)
+                values["progressed"] = True
+            rows[cid] = dict.fromkeys(FIELDS, 0)
+        if set(rows) != set(chunk):
+            values.update(status="retry", error_code="STATS_INCOMPLETE")
+            return
+        batch = {name: _integer(sum(_integer(row[name]) for row in rows.values())) for name in FIELDS}
         progress["batches"].append(batch)
         progress["next_index"] += len(chunk)
         store.record_inventory_progress(ah.customer_id, snapshot, clock(), progress)
@@ -101,8 +124,8 @@ def _read(reader, ah, today, values, per_account_calls, store, snapshot, clock):
         values[target] = totals[source]
 
 
-def run_inventory(reader, store, clock, *, limit=3, max_seconds=30, max_calls=24, per_account_calls=8):
-    if type(limit) is not int or not 1 <= limit <= 3 or type(max_seconds) not in (int, float) \
+def run_inventory(reader, store, clock, *, limit=24, max_seconds=30, max_calls=24, per_account_calls=8):
+    if type(limit) is not int or not 1 <= limit <= 24 or type(max_seconds) not in (int, float) \
             or not 0 < max_seconds <= 30 or type(max_calls) is not int or not 1 <= max_calls <= 24 \
             or type(per_account_calls) is not int or not 1 <= per_account_calls <= 8:
         raise ValueError("계정 원천 수집 예산이 올바르지 않습니다")
@@ -116,7 +139,9 @@ def run_inventory(reader, store, clock, *, limit=3, max_seconds=30, max_calls=24
     with reader.bounded_requests(max_calls=max_calls, max_seconds=max_seconds):
         for cid in store.inventory_work(now, limit):
             elapsed = max((clock() - now).total_seconds(), monotonic() - started)
-            if elapsed >= max_seconds or reader.calls - initial_calls >= max_calls:
+            # 빈 계정도 목록/잔액/마지막 목록의 3회가 필요하다. 남은 예산이
+            # 그보다 작으면 새 계정의 실패 횟수를 불필요하게 소모하지 않는다.
+            if elapsed >= max_seconds or max_calls - (reader.calls - initial_calls) < 3:
                 return InventoryOutcome("BUDGET", dict(counts))
             if clock() < now or clock().astimezone(S.KST).date() != today:
                 return InventoryOutcome("SOURCE_CHANGED", dict(counts))

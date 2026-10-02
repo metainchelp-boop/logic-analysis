@@ -3315,17 +3315,20 @@ class Store:
         return {r[0]: dict(zip(names, r[1:])) for r in cur}
 
     def inventory_work(self, now: datetime, limit: int = 3) -> list:
-        if type(limit) is not int or not 1 <= limit <= 3:
-            raise StoreRefused("원천 수집 회차는 1~3개 계정입니다")
+        if type(limit) is not int or not 1 <= limit <= 24:
+            raise StoreRefused("원천 수집 후보는 1~24개 계정입니다")
         if self.inventory_snapshot(now) is None:
             return []
         at = _kst_text(now, "지금")
+        # 자격·이어읽기는 당일 기준, 순서만 마지막 시도 이력을 이어 간다.
+        # 이력 없는 계정이 먼저, 이후 성공·부분·재시도 모두 오래 기다린 순서다.
         return [r[0] for r in self._conn.execute("""SELECT a.customer_id FROM naver_auto_account a
             LEFT JOIN naver_auto_inventory_check i ON i.customer_id = a.customer_id AND i.day = ?
             WHERE a.present = 1 AND (i.customer_id IS NULL OR
               (i.status NOT IN ('ok', 'reauth_required', 'limited') AND i.attempts < 4 AND i.next_try_at <= ?))
-            ORDER BY CASE WHEN i.customer_id IS NULL THEN 0 ELSE 1 END, i.checked_at, a.customer_id LIMIT ?""",
-            (at[:10], at, limit))]
+            ORDER BY (SELECT h.checked_at FROM naver_auto_inventory_check h
+                WHERE h.customer_id = a.customer_id AND h.day <= ? ORDER BY h.day DESC LIMIT 1),
+              a.customer_id LIMIT ?""", (at[:10], at, at[:10], limit))]
 
     def begin_inventory_check(self, customer_id, snapshot_at, now):
         self._need_writer()
@@ -3372,7 +3375,8 @@ class Store:
         with self._tx() as c:
             previous = self.inventory_progress(customer_id, now.astimezone(KST).date())
             progressed = previous is not None and previous["fingerprint"] == source["fingerprint"] \
-                and source["next_index"] > previous["next_index"]
+                and (source["next_index"] > previous["next_index"]
+                     or len(source.get("zero_ids", [])) > len(previous.get("zero_ids", [])))
             cur = c.execute("""UPDATE naver_auto_inventory_check SET progress_json = ?, progress_hash = ?,
                 attempts = CASE WHEN ? THEN 0 ELSE attempts END
                 WHERE customer_id = ? AND day = ? AND status = 'reading' AND snapshot_at = ?""",

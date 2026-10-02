@@ -764,7 +764,7 @@ class NaverReader:
 
     def get_stats_daily(self, ah, entity_id: str, since: date, until: date,
                         fields: Sequence[str] = ("impCnt", "clkCnt", "salesAmt", "ccnt")) -> DailyStats:
-        h = self._account(ah, (H.PURPOSE_CHECK,))
+        h = self._account(ah, (H.PURPOSE_CHECK, H.PURPOSE_INVENTORY))
         _check_period(since, until, H._kst_today(self._clock.now()))
         flds = _check_fields(fields, F.STAT_FIELDS_DAILY)
         if not isinstance(entity_id, str) or not _CAMPAIGN_ID.fullmatch(entity_id):
@@ -774,7 +774,7 @@ class NaverReader:
             "fields": json.dumps(list(flds)),
             "timeRange": json.dumps({"since": since.isoformat(), "until": until.isoformat()}),
             "timeIncrement": "1",
-        })
+        }, ah=h)
         d = parse_daily(body, entity_id, flds, since, until)
         cyc = _not_future(d.cycle_base_tm, self._clock.now())
         return d if cyc is d.cycle_base_tm else DailyStats(d.entity_id, d.days, d.missing_days, cyc, d.until)
@@ -787,7 +787,7 @@ class NaverReader:
         돌려주는 값: 번호 → ``True``(기간의 모든 날 · 모든 지표가 정확히 0 · 자료 늦음 아님) / ``False``(그 밖 전부).
         ``False`` 는 「활동이 있었다」가 아니라 「0 이라고 확인하지 못했다」는 뜻이다 — 부르는 쪽은 ⚪ 로 둔다.
         """
-        self._account(ah, (H.PURPOSE_CHECK,))  # 번호가 비어 있어도 손잡이부터 본다
+        self._account(ah, (H.PURPOSE_CHECK, H.PURPOSE_INVENTORY))  # 번호가 비어 있어도 손잡이부터 본다
         out: Dict[str, bool] = {}
         for eid in entity_ids:
             d = self.get_stats_daily(ah, eid, since, until, fields)

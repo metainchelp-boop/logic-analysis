@@ -32,6 +32,8 @@ class InventoryTest(Base):
     def test_missing_stats_are_unknown_not_zero_and_retry_is_bounded(self):
         self.st.record_accounts(kids(A), self.fc.now())
         self.ads.add(A, [(1, "ELIGIBLE", False, steady(0, 0, 0, 0))], biz=10)
+        # 요약 생략 자체는 무활동일 수 있다. 일별 증거도 빠져야 실제 미확인이다.
+        self.ads.drop_days[f"cmp-{A}-1"] = {self.fc.now().date() - timedelta(days=1)}
         I.run_inventory(self.reader(), self.st, self.fc.now)
         row = self.st.inventory_checks_on(self.fc.now().date())[A]
         self.assertEqual(row["status"], "retry")
@@ -111,6 +113,7 @@ class InventoryTest(Base):
     def test_four_failed_attempts_are_limited_and_next_day_is_independent(self):
         self.st.record_accounts(kids(A), self.fc.now())
         self.ads.add(A, [(1, "ELIGIBLE", False, steady(0, 0, 0, 0))], biz=10)
+        self.ads.drop_days[f"cmp-{A}-1"] = {self.fc.now().date() - timedelta(days=1)}
         day = self.fc.now().date()
         for _ in range(4):
             result = I.run_inventory(self.reader(), self.st, self.fc.now)

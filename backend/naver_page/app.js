@@ -207,7 +207,41 @@
     }, function () { throw new ApiError(0, { error: 'network' }); });
   }
 
-  function blocked(kind) {
+  // 진입 진단에는 고정 문구만 쓴다. 예외·서버 응답·출처 주소·직원 번호를 그대로 표시하지 않는다.
+  var ENTRY_DIAGNOSTICS = {
+    'NV-E00': ['🔒', '전산 진입을 확인하지 못했습니다', '이 창을 닫고 전산에서 다시 열어 주세요.'],
+    'NV-E01': ['🔒', '로그인 요청을 확인하지 못했습니다', '로그인 요청 형식이 맞지 않습니다. 저장하거나 전달받은 관제 주소로는 들어올 수 없습니다.'],
+    'NV-E02': ['🔒', '전산에서 연 출처 정보를 받지 못했습니다', '이 창을 닫고 전산에서 다시 열어 주세요. 반복되면 관리자에게 브라우저의 출처 전달 설정 확인을 요청해 주세요.'],
+    'NV-E03': ['🔒', '전산에서 연 창인지 확인하지 못했습니다', '허용된 전산 출처가 아니어서 로그인을 중단했습니다. 전산에 직접 로그인한 뒤 다시 열어 주세요.'],
+    'NV-E04': ['🔒', '전산 창과의 연결이 없습니다', '이 창을 연 전산 창과 연결되지 않았습니다. 전산 창을 열어 둔 상태에서 메뉴 단추로 다시 열어 주세요.'],
+    'NV-E05': ['🔒', '다른 화면 안에서는 로그인할 수 없습니다', '관제는 별도 창에서 열어야 합니다. 전산 메뉴 단추로 새로 열어 주세요.'],
+    'NV-E06': ['⏱', '전산 로그인 응답을 기다리다 종료했습니다', '1분 안에 로그인 응답을 받지 못했습니다. 전산 창이 열려 있고 로그인되어 있는지 확인해 주세요.'],
+    'NV-E07': ['🔒', '브라우저의 안전한 로그인 기능을 실행하지 못했습니다', '관리자에게 브라우저의 보안 기능 확인을 요청해 주세요. 보안 설정을 끄지 마세요.'],
+    'NV-E08': ['🔒', '로그인 주소를 안전하게 정리하지 못했습니다', '이 창을 닫고 다시 열어 주세요. 주소창 내용은 복사하거나 전달하지 마세요.'],
+    'NV-E09': ['🔒', '전산 창에 로그인 요청을 전달하지 못했습니다', '전산 창이 열려 있고 로그인되어 있는지 확인한 뒤 다시 열어 주세요.'],
+    'NV-S00': ['🛠', '관제 연결을 완료하지 못했습니다', '잠시 뒤 다시 시도해 주세요. 반복되면 관리자에게 관제 연결 확인을 요청해 주세요.'],
+    'NV-S01': ['🛠', '전산 로그인 서버의 응답을 받지 못했습니다', '잠시 뒤 다시 시도해 주세요. 반복되면 관리자에게 전산 로그인 연결 확인을 요청해 주세요.'],
+    'NV-S02': ['🛠', '전산 로그인 응답 형식을 확인하지 못했습니다', '관리자에게 전산과 관제 사이의 로그인 연동 확인을 요청해 주세요.'],
+    'NV-S03': ['🔒', '전산 로그인을 확인하지 못했습니다', '로그인이 끝났거나 요청이 거절됐을 수 있습니다. 전산에 다시 로그인해 주세요.'],
+    'NV-S04': ['🙅', '관제 대상이 아닙니다', '조직 자료에 재직 중으로 있는 직원만 볼 수 있습니다. 전산 조직 정보가 맞는지 관리자에게 확인을 요청해 주세요.'],
+    'NV-S05': ['⏳', '잠시 뒤 다시 들어와 주세요', '들어오기 시도가 몰렸습니다. 1분쯤 기다린 뒤 다시 시도해 주세요.'],
+    'NV-S06': ['🛠', '관제에 연결할 네트워크를 확인해 주세요', '네트워크 요청을 완료하지 못했습니다. 인터넷 연결을 확인하고, 반복되면 관리자에게 접속 환경 확인을 요청해 주세요.'],
+    'NV-S07': ['🛠', '관제 서버에 연결하지 못했습니다', '잠시 뒤 다시 시도해 주세요. 반복되면 관리자에게 관제 서버 연결 확인을 요청해 주세요.'],
+    'NV-S08': ['⏳', '관제 서버의 답변이 늦어지고 있습니다', '잠시 뒤 다시 시도해 주세요. 반복되면 관리자에게 관제 서버 상태 확인을 요청해 주세요.'],
+    'NV-M01': ['🛠', '직원 권한을 확인할 최신 조직 자료가 없습니다', '조직 자료가 없거나 오래되어 권한 보호를 위해 화면을 열지 않았습니다. 관리자에게 전산 조직 자료 동기화 확인을 요청해 주세요.']
+  };
+  function entryServerDiagnostic(e) {
+    switch (e && e.body && e.body.error) {
+      case 'erp-unavailable': return 'NV-S01';
+      case 'erp-bad-shape': return 'NV-S02';
+      case 'network': return 'NV-S06';
+      case 'engine-unavailable': return 'NV-S07';
+      case 'engine-timeout': return 'NV-S08';
+      case 'org-stale': return 'NV-M01';
+      default: return 'NV-S00';
+    }
+  }
+  function blocked(kind, diagnostic) {
     var T = {
       login: ['🔒', '전산에서 들어와 주세요', '네이버 관제는 전산(메타아이앤씨) 「광고 스튜디오 › 네이버 관제(읽기 전용)」 단추로 들어옵니다. 이 주소를 바로 열면 로그인할 수 없습니다.'],
       ended: ['⏱', '다시 들어와 주세요', '로그인이 끝났습니다(로그인 뒤 12시간이 지났거나 서버가 끝냄). 전산 「광고 스튜디오 › 네이버 관제(읽기 전용)」 단추로 다시 들어와 주세요.'],
@@ -217,10 +251,16 @@
       busy: ['⏳', '잠시 뒤 다시 들어와 주세요', '들어오기 시도가 몰렸습니다. 1분쯤 뒤 전산에서 다시 들어와 주세요.'],
       down: ['🛠', '지금 관제에 닿지 않습니다', '전산 확인 또는 관제 엔진이 잠시 멈췄습니다. 잠시 뒤 다시 들어와 주세요.']
     }[kind] || ['🔒', '들어올 수 없습니다', ''];
+    if (diagnostic) {
+      if (typeof diagnostic !== 'string' || !Object.prototype.hasOwnProperty.call(ENTRY_DIAGNOSTICS, diagnostic)) diagnostic = 'NV-E00';
+      T = ENTRY_DIAGNOSTICS[diagnostic];
+    }
     $('top').hidden = true;
     $('b-ic').textContent = T[0];
     $('b-t').textContent = T[1];
-    $('b-p').textContent = T[2];
+    $('b-p').textContent = T[2] + (diagnostic ?
+      ' 전산 공식 메뉴 「광고 스튜디오 › 네이버 관제(읽기 전용)」에서 다시 들어와 주세요. 진단 코드: ' + diagnostic +
+      ' · 계속되면 주소창을 제외한 이 안내만 캡처하여 관리자에게 전달해 주세요.' : '');
     show('blocked');
   }
   function lost(kind) {
@@ -1371,12 +1411,13 @@
 
   // ── 시작 ─────────────────────────────────────────────────────────
   function loginFailed(e) {
+    if (e && e.entryCode) return blocked('down', e.entryCode);
     var code = (e && e.body && e.body.error) || '';
-    if (e.status === 401) return blocked('rejected');
-    if (e.status === 403) return blocked('noscope');
-    if (e.status === 429) return blocked('busy');
-    if (code === 'bad-body' || e.status === 400) return blocked('rejected');
-    return blocked('down');
+    if (e.status === 401) return blocked('rejected', 'NV-S03');
+    if (e.status === 403) return blocked('noscope', 'NV-S04');
+    if (e.status === 429) return blocked('busy', 'NV-S05');
+    if (code === 'bad-body' || e.status === 400) return blocked('rejected', 'NV-S03');
+    return blocked('down', entryServerDiagnostic(e));
   }
   function boot() {
     scheduleRefresh();
@@ -1384,7 +1425,7 @@
       state.me = me;
       renderTop();
       route();
-    }, function (e) { if (e.status !== 401) blocked('down'); });
+    }, function (e) { if (e.status !== 401) blocked('down', entryServerDiagnostic(e)); });
   }
   function start() {
     var entry = window.__metaincSso;

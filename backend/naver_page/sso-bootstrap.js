@@ -30,13 +30,15 @@
         try { window.opener = null; } catch (_) {}
         parent = null;
     }
-    function fail() {
+    function fail(entryCode) {
         if (settled) return;
         settled = true;
         verifier = '';
         detach();
         api.error = '전산에서 다시 열어 로그인해 주세요.';
-        rejectCode(new Error(api.error));
+        var error = new Error(api.error);
+        error.entryCode = entryCode;
+        rejectCode(error);
     }
     // 다른 스크립트, 메시지, 네트워크 요청보다 먼저 주소를 정리한다.
     try {
@@ -45,14 +47,17 @@
             ['sso_start', 'code', 'sso'].forEach(function(key) { clean.searchParams.delete(key); });
             window.history.replaceState({}, document.title, clean.pathname + clean.search + clean.hash);
         }
-    } catch (_) { fail(); return; }
+    } catch (_) { fail('NV-E08'); return; }
     if (!started) return;
     var erpOrigin = '';
     var allowed = ['https://metainc.co.kr', 'http://metainc.co.kr', 'https://www.metainc.co.kr', 'http://www.metainc.co.kr'];
     try { erpOrigin = new URL(document.referrer).origin; } catch (_) {}
-    if (ambiguous || !/^[A-Za-z0-9_-]{43}$/.test(requestId) || !parent || window.top !== window || allowed.indexOf(erpOrigin) < 0) {
-        fail(); return;
-    }
+    // 기존 차단 조건은 그대로 두고, 고정 코드만 앱에 전달한다(주소·요청값·예외 원문 없음).
+    if (ambiguous || !/^[A-Za-z0-9_-]{43}$/.test(requestId)) { fail('NV-E01'); return; }
+    if (!parent) { fail('NV-E04'); return; }
+    if (window.top !== window) { fail('NV-E05'); return; }
+    if (!document.referrer) { fail('NV-E02'); return; }
+    if (allowed.indexOf(erpOrigin) < 0) { fail('NV-E03'); return; }
     function base64url(bytes) {
         return btoa(String.fromCharCode.apply(null, bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
     }
@@ -60,7 +65,7 @@
         if (settled || !verifier || event.source !== parent || event.origin !== erpOrigin) return;
         var data = event.data;
         if (!data || data.type !== 'METAINC_SSO_CODE' || data.requestId !== requestId) return;
-        if (typeof data.code !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(data.code)) { fail(); return; }
+        if (typeof data.code !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(data.code)) { fail('NV-E01'); return; }
         settled = true;
         var result = { code: data.code, codeVerifier: verifier };
         verifier = '';
@@ -68,13 +73,15 @@
         resolveCode(result);
     }
     window.addEventListener('message', receive);
-    timer = setTimeout(fail, 60000);
+    timer = setTimeout(function() { fail('NV-E06'); }, 60000);
     try {
         verifier = base64url(window.crypto.getRandomValues(new Uint8Array(32)));
         window.crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)).then(function(hash) {
             if (settled) return;
-            parent.postMessage({ type: 'METAINC_SSO_READY', requestId: requestId,
-                codeChallenge: base64url(new Uint8Array(hash)) }, erpOrigin);
-        }).catch(fail);
-    } catch (_) { fail(); }
+            try {
+                parent.postMessage({ type: 'METAINC_SSO_READY', requestId: requestId,
+                    codeChallenge: base64url(new Uint8Array(hash)) }, erpOrigin);
+            } catch (_) { fail('NV-E09'); }
+        }).catch(function() { fail('NV-E07'); });
+    } catch (_) { fail('NV-E07'); }
 })();
