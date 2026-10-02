@@ -66,7 +66,7 @@ const cfg = JSON.parse(process.argv[2]);
     await page.selectOption('#inventoryWorkflow', 'all');
     await page.selectOption('#inventoryMapping', 'no_erp_record');
     await page.waitForFunction(() => document.querySelector('#inventoryCount').textContent.startsWith('2 /'));
-    assert.equal(await page.locator('#inventoryRows button').count(), 0);
+    assert.deepEqual(await page.locator('#inventoryRows button').allTextContents(), ['지금 조회', '지금 조회']);
     assert.equal(await page.textContent('#inventory-stat-total .value'), '4');
     await page.fill('#inventorySearch', '일치하지않는검색어');
     assert.match(await page.textContent('#inventoryCount'), /^0 \/ 4/);

@@ -35,7 +35,7 @@ class _ManagedBoundary(S.ManagedStorage):
     def __init__(self, now):
         self.now = now
         self._conn = self
-        self.jobs, self.requests, self.events = [], [], []
+        self.jobs, self.requests, self.events, self.daily_rows = [], [], [], []
         self.progress = None
         self.catalog_state = "accepted"
         self.catalog = {"generated_at": now.isoformat(), "total": 1, "complete": True,
@@ -94,7 +94,7 @@ class _ManagedBoundary(S.ManagedStorage):
         return MS.snapshot(self, now)
 
     def daily_performance(self, ids, start, end):
-        return []
+        return [row for row in self.daily_rows if row["customer_id"] in ids and str(start) <= row["day"] <= str(end)]
 
     def _need_writer(self):
         pass
@@ -212,6 +212,12 @@ class ManagedStorageBoundaryTest(unittest.TestCase):
         job = self.st.performance_work(now, 1)[0]
         self.assertEqual((job["period_start"], job["period_end"]), ("2026-10-26", "2026-11-01"))
         self.assertTrue(self.st.performance_account_valid(job, now))
+        self.st.daily_rows = [{"customer_id": TM.A, "possibility_id": 11, "day": day,
+                               "basic_complete": True, "conversion_complete": True, "conversion_attempts": 0}
+                              for day in ("2026-10-26", "2026-11-01")]
+        job = self.st.performance_work(now, 1)[0]
+        self.assertEqual((job["period_start"], job["period_end"]), ("2026-10-26", "2026-11-01"))
+        self.assertTrue(self.st.performance_account_valid(job, now))
 
     def test_pending_manual_requests_do_not_fill_automatic_daily_batch(self):
         for pid, cid in ((12, TM.B), (13, TM.C_)):
@@ -231,6 +237,56 @@ class ManagedStorageBoundaryTest(unittest.TestCase):
         self.assertTrue(self.st.performance_checks(self.now)[TM.A]["attribution_changed"])
         self.st.events.pop()
         self.assertFalse(self.st.attribution_changes()[TM.A])
+        self.st.events.append({"customer_id": TM.A, "possibility_id": 11, "at": self.now.isoformat()})
+        self.assertTrue(self.st.attribution_changes()[TM.A])
+
+    def test_failed_same_job_recheck_preserves_success_and_compares_known_balances(self):
+        job = self.st.performance_work(self.now, 1)[0]
+        good_at = (self.now-timedelta(hours=2)).isoformat()
+        before_at = (self.now-timedelta(hours=4)).isoformat()
+        self.st.jobs = [{**job, "status": "retry", "checked_at": self.now.isoformat(), "error_code": "INCOMPLETE",
+                         "possibility_id": 11, "bizmoney": None, "bizmoney_at": None,
+                         "last_success_at": good_at, "last_bizmoney": 1000, "last_bizmoney_at": good_at,
+                         "previous_bizmoney": 0, "previous_bizmoney_at": before_at}]
+        self.st.daily_rows = [{"customer_id": TM.A, "possibility_id": 11, "day": job["period_end"],
+                               "basic_complete": True, "spend": 100, "imp": 10, "clk": 1}]
+        current = self.st.performance_checks(self.now)[TM.A]
+        self.assertEqual((current["status"], current["stale"]), ("retry", True))
+        self.assertEqual((current["spend"], current["last_success_at"]), (100, good_at))
+        self.assertEqual((current["bizmoney"], current["previous_bizmoney"], current["bizmoney_change"]), (1000, 0, 1000))
+        self.assertEqual(current["previous_bizmoney_at"], before_at)
+        self.st.jobs[0]["previous_bizmoney"] = None
+        self.assertIsNone(self.st.performance_checks(self.now)[TM.A]["bizmoney_change"])
+
+    def test_daily_unknown_conversion_rechecks_only_after_two_hours_and_at_most_four(self):
+        job = self.st.performance_work(self.now, 1)[0]
+        checked = self.now-timedelta(hours=2)
+        self.st.jobs = [{**job, "status": "ok", "attempts": 0, "checked_at": checked.isoformat(),
+                         "next_try_at": self.now.isoformat()}]
+        self.st.daily_rows = [{"customer_id": TM.A, "possibility_id": 11, "day": job["period_end"],
+                               "basic_complete": True, "conversion_complete": False,
+                               "conversion_attempts": 1, "checked_at": checked.isoformat()}]
+        self.assertEqual(self.st.performance_work(self.now, 1)[0]["kind"], "daily")
+        self.st.daily_rows[0]["checked_at"] = (checked+timedelta(seconds=1)).isoformat()
+        self.assertFalse(any(row["kind"] == "daily" for row in self.st.performance_work(self.now, 24)))
+        self.st.daily_rows[0].update(checked_at=checked.isoformat(), conversion_attempts=4)
+        self.assertFalse(any(row["kind"] == "daily" for row in self.st.performance_work(self.now, 24)))
+
+    def test_completed_nonmanaged_weekly_conversion_unknown_does_not_start_weekday_rechecks(self):
+        sunday = datetime(2026, 10, 4, 8, tzinfo=S.KST)
+        self.st = _ManagedBoundary(sunday)
+        self.st.states[TM.A]["stage_key"] = "환불완료"
+        self.st.catalog["items"][0]["stage"] = "환불 완료"
+        job = self.st.performance_work(sunday, 1)[0]
+        self.st.jobs = [{**job, "status": "ok", "attempts": 0, "checked_at": sunday.isoformat(),
+                         "next_try_at": sunday.isoformat()}]
+        self.st.daily_rows = [{"customer_id": TM.A, "possibility_id": 11, "day": job["period_end"],
+                               "basic_complete": True, "conversion_complete": False,
+                               "conversion_attempts": 1, "checked_at": sunday.isoformat()}]
+        self.assertFalse(self.st.performance_work(sunday+timedelta(hours=2), 24))
+        self.st.now = sunday+timedelta(days=1)
+        self.st.catalog["generated_at"] = self.st.now.isoformat()
+        self.assertFalse(self.st.performance_work(self.st.now, 24))
 
 
 class ManagedStorageTest(TM.Base):
@@ -379,6 +435,46 @@ class ManagedStorageTest(TM.Base):
             history = reader.execute("SELECT payload_json FROM naver_auto_daily_revision WHERE customer_id=? AND day=?",
                                      (TM.A, day.isoformat())).fetchall()
         self.assertTrue(any(json.loads(r[0])["conversion_value"] == 2000 for r in history))
+
+    def test_unknown_conversion_rechecks_are_spaced_and_stop_after_four(self):
+        self.managed()
+        self.metric.update(ccnt=None, convAmt=None)
+        day = self.fc.now().date()-timedelta(days=1)
+        for attempt in range(1, 5):
+            if attempt > 1:
+                self.fc.advance(2*3600)
+                self.refresh()
+            self.assertEqual(self.collect(limit=1).counts, {"ok": 1})
+            row = self.st.daily_performance([TM.A], day, day)[0]
+            self.assertEqual(row["conversion_attempts"], attempt)
+            self.assertFalse(row["conversion_complete"])
+            self.assertIsNone(row["conversion_value"])
+            self.assertFalse(any(job["kind"] == "daily" for job in self.st.performance_work(self.fc.now())))
+        self.fc.advance(2*3600)
+        self.refresh()
+        self.assertFalse(any(job["kind"] == "daily" for job in self.st.performance_work(self.fc.now())))
+
+    def test_delayed_conversion_is_recollected_and_failed_recheck_keeps_success(self):
+        self.managed()
+        self.metric.update(ccnt=None, convAmt=None)
+        self.assertEqual(self.collect(limit=1).counts, {"ok": 1})
+        good = self.st.performance_checks(self.fc.now())[TM.A]
+        self.fc.advance(2*3600)
+        self.refresh()
+        self.fail_stats = True
+        self.assertEqual(self.collect(limit=1).counts, {"retry": 1})
+        failed = self.st.performance_checks(self.fc.now())[TM.A]
+        self.assertEqual((failed["last_success_at"], failed["spend"], failed["bizmoney"]),
+                         (good["last_success_at"], good["spend"], good["bizmoney"]))
+        self.fc.advance(121)
+        self.refresh()
+        self.fail_stats = False
+        self.metric.update(ccnt=2, convAmt=4000)
+        self.assertEqual(self.collect(limit=1).counts, {"ok": 1})
+        day = self.fc.now().date()-timedelta(days=1)
+        row = self.st.daily_performance([TM.A], day, day)[0]
+        self.assertTrue(row["conversion_complete"])
+        self.assertEqual(row["conversion_value"], 4000)
 
     def test_monthly_report_is_not_due_before_third_ten_and_month_end_missing_is_not_zero(self):
         self.refresh(datetime(2026, 10, 3, 9, 59, tzinfo=S.KST))

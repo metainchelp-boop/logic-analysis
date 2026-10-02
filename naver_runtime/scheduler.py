@@ -17,9 +17,22 @@ class _ManagedMorningStore:
     def __init__(self, store, now):
         self.store = store
         self.daily = {cid for cid,row in MS.snapshot(store,now).items() if row["decision"].cadence == "daily"}
-
-    def __getattr__(self, name):
-        return getattr(self.store,name)
+        # 동적 메서드 노출 없이 아침 읽기/판정에서 사용하는 공개 계약만 전달한다.
+        self.account_day_marks_on = store.account_day_marks_on
+        self.account_days_on = store.account_days_on
+        self.accounts_read_at = store.accounts_read_at
+        self.begin_run = store.begin_run
+        self.close_unlinked_issues = store.close_unlinked_issues
+        self.decision_fingerprint = store.decision_fingerprint
+        self.finish_run = store.finish_run
+        self.issues = store.issues
+        self.last_pairing = store.last_pairing
+        self.last_sync = store.last_sync
+        self.my_running_runs = store.my_running_runs
+        self.prospects = store.prospects
+        self.record_account_check = store.record_account_check
+        self.runs_on = store.runs_on
+        self.stage_as_of = store.stage_as_of
 
     def pairing_rows(self, pairing_id):
         return [r for r in self.store.pairing_rows(pairing_id)

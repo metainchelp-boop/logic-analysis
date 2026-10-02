@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from naver_engine import erp_read as E, structure_reads as R, store as S
 from naver_engine.tests import test_morning as TM, test_alerts as TA, test_account_catalog as TC
+from naver_engine.tests.fake_naver import FakeNaver
 from app.naver_auto import matching as M
 
 
@@ -16,6 +17,8 @@ class StructureStoreTest(TM.Base):
         self.company=TM.NAMES.get(TM.A,f"계정{TM.A}")
         self.refresh()
         self.stage("진행중")
+        # Base의 Ads 라우트는 첫 일치 방식이므로 구조 전용 전송 경계를 새로 만든다.
+        self.naver = FakeNaver()
         self.naver.route(r"/ncc/campaigns",lambda call:(200,[{"customerId":TM.A,"nccCampaignId":"cmp-one",
             "status":"PAUSED","statusReason":"CAMPAIGN_PAUSED"}]))
         self.naver.route(r"/ncc/(channels|adgroups|ad-extensions)",lambda call:(200,[]))

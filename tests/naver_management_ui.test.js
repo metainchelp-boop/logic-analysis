@@ -100,6 +100,18 @@ test('주간 조회는 재시도와 이전 성공 기간·잔액 확인 시각�
   assert.doesNotMatch(text, /어제|충전/);
 });
 
+test('비관리 잔액 변화는 이전 확인 시각과 비교하되 충전을 확정하지 않는다', async () => {
+  const run = launch({data:inventory([fixture({management:{cadence:'weekly'},collection:{
+    status:'ok',bizmoney:15000,bizmoney_at:'2026-10-04T09:00:00+09:00',
+    previous_bizmoney:10000,previous_bizmoney_at:'2026-09-27T09:00:00+09:00',bizmoney_change:5000
+  }})])});
+  await flush();
+  assert.match(run.text('inventoryRows'),/이전 조회 대비 잔액 증가 5,000원/);
+  assert.match(run.text('inventoryRows'),/비교 기준 2026.*09.*27.*09:00/);
+  assert.match(run.text('inventoryRows'),/잔액 변화만으로 충전을 확정하지 않습니다/);
+  assert.equal(run.requests.filter(r=>r.method!=='GET').length,0);
+});
+
 test('허용된 관리 변경만 필수 사유와 단계 개정값을 보내며 중복 저장을 막는다', async () => {
   let resolveWrite;
   const data = inventory([fixture({ management: { cadence: 'daily', stage_revision: 'r1', excluded: false, can_manage: true, can_collect: true } }),

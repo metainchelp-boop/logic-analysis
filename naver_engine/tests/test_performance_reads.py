@@ -25,6 +25,9 @@ class MemoryPerformance:
     def performance_work(self, now, limit):
         return deepcopy(self.jobs[:limit])
 
+    def inventory_snapshot(self, now):
+        return self.clock.now() if self.valid else None
+
     def performance_account_valid(self, job, now):
         return self.valid and job in self.jobs
 
@@ -177,6 +180,12 @@ class PerformanceReadsTests(unittest.TestCase):
         self.assertEqual(P.run_performance(self.reader, self.store, self.clock.now).counts, {"retry": 1})
         self.assertEqual(self.store.results["weekly-test"]["error_code"], "CAMPAIGNS_CHANGED")
         self.assertNotIn("daily_rows", self.store.results["weekly-test"])
+
+    def test_invalid_initial_source_is_not_ready_without_any_call(self):
+        self.store.valid = False
+        self.assertEqual(P.run_performance(self.reader,self.store,self.clock.now).code,"NOT_READY")
+        self.assertEqual(self.http.calls,[])
+        self.assertEqual(self.store.results,{})
 
     def test_authority_recheck_and_429_stop_before_starting_another_account(self):
         self.http.tick = lambda call: setattr(self.store, "valid", False)

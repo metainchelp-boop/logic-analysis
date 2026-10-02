@@ -199,6 +199,8 @@ def run_performance(reader, store, clock, *, limit=24, max_calls=24, max_seconds
     if reader.rate_limited:
         return PerformanceOutcome("BUDGET")
     now, initial, started = clock(), reader.calls, monotonic()
+    if store.inventory_snapshot(now) is None:
+        return PerformanceOutcome("NOT_READY")
     today, counts = now.astimezone(S.KST).date(), Counter()
     with reader.bounded_requests(max_calls=max_calls, max_seconds=max_seconds):
         for job in store.performance_work(now, limit):

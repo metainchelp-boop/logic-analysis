@@ -649,7 +649,11 @@
           h('span', { class: 'w' }, '노출 ' + num(c.imp === undefined ? c.yday_imp : c.imp) + ' · 클릭 ' + num(c.clk === undefined ? c.yday_clk : c.clk)),
           c.last_success_at ? h('span', { class: 'w' }, '마지막 성공 ' + datedTime(c.last_success_at)) : null),
         h('td', { class: 'account-values' }, h('b', { class: 'num' }, won(c.bizmoney)),
-          h('span', { class: 'w' }, '잔액 확인 ' + datedTime(c.bizmoney_at)), c.stale === true && typeof c.bizmoney === 'number' ? h('span', { class: 'w' }, '이전 잔액 · 최신 확인 필요') : null),
+          h('span', { class: 'w' }, '잔액 확인 ' + datedTime(c.bizmoney_at)), c.stale === true && typeof c.bizmoney === 'number' ? h('span', { class: 'w' }, '이전 잔액 · 최신 확인 필요') : null,
+          typeof c.bizmoney_change === 'number' && isFinite(c.bizmoney_change) && c.previous_bizmoney_at ?
+            h('span', { class: 'w' }, '이전 조회 대비 잔액 ' + (c.bizmoney_change > 0 ? '증가 ' : c.bizmoney_change < 0 ? '감소 ' : '변화 없음 ') + won(Math.abs(c.bizmoney_change)),
+              h('span', { class: 'w' }, '비교 기준 ' + datedTime(c.previous_bizmoney_at)),
+              h('span', { class: 'w' }, '잔액 변화만으로 충전을 확정하지 않습니다.')) : null),
         h('td', null, { daily: '실관리 · 일일 점검', weekly: '비관리 · 일요일 7일 점검', blocked: '관리 판단 보류' }[m.cadence] || '관리 정보 확인 전',
           m.excluded === true ? h('span', { class: 'w' }, '수동 제외됨') : null,
           m.reason ? h('span', { class: 'w' }, managementReason(m.reason)) : null,

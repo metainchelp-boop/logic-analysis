@@ -531,7 +531,9 @@ _SCHEMA += (
         possibility_id INTEGER, matching_fingerprint TEXT NOT NULL,
         status TEXT NOT NULL, checked_at TEXT NOT NULL, next_try_at TEXT NOT NULL,
         attempts INTEGER NOT NULL, error_code TEXT, progress_json TEXT, progress_hash TEXT,
-        bizmoney REAL, bizmoney_at TEXT, campaigns_json TEXT)""",
+        bizmoney REAL, bizmoney_at TEXT, campaigns_json TEXT,
+        last_success_at TEXT, last_bizmoney REAL, last_bizmoney_at TEXT,
+        previous_bizmoney REAL, previous_bizmoney_at TEXT)""",
     """CREATE INDEX IF NOT EXISTS naver_auto_performance_due
         ON naver_auto_performance_job (customer_id, cycle_day, status)""",
     """CREATE INDEX IF NOT EXISTS naver_auto_performance_recent
@@ -540,6 +542,7 @@ _SCHEMA += (
         customer_id INTEGER NOT NULL, day TEXT NOT NULL,
         possibility_id INTEGER, matching_fingerprint TEXT NOT NULL,
         basic_complete INTEGER NOT NULL, conversion_complete INTEGER NOT NULL,
+        conversion_attempts INTEGER NOT NULL,
         imp REAL, clk REAL, spend REAL, conversions REAL, conversion_value REAL,
         checked_at TEXT NOT NULL, source_at TEXT, conversion_checked_at TEXT,
         campaign_fingerprint TEXT NOT NULL,
@@ -1263,6 +1266,12 @@ def _performance_time(raw, end, now):
         raise StoreRefused("일별 원천 확인 시각이 올바르지 않습니다") from None
 
 
+def _conversion_recheck(row, possibility_id, now):
+    return possibility_id is not None and row["possibility_id"] == possibility_id and row["basic_complete"] \
+        and not row["conversion_complete"] and row["conversion_attempts"] < 4 \
+        and datetime.fromisoformat(row["checked_at"])+timedelta(hours=2) <= now
+
+
 class ManagedStorage:
     """Store의 단일 writer/transaction/입력 검사 계약을 그대로 사용하는 좁은 확장."""
 
@@ -1356,6 +1365,8 @@ class ManagedStorage:
             old = prior.get(job["job_key"])
             if old and old["stage_revision"] != job["stage_revision"]:
                 old = None
+            recheck = old is not None and old["status"] == "ok" and decision.cadence == "daily" \
+                and self._performance_conversion_due(job, row["possibility_id"], now)
             if decision.cadence == "daily" and old and old["status"] == "ok":
                 # 어제부터 먼저 공개한 뒤 부족한 월초 자료/마감 보고기간만 보충한다.
                 # 일별 원천을 재사용하므로 매일 월 전체 누적 API를 반복하지 않는다.
@@ -1374,23 +1385,25 @@ class ManagedStorage:
                 for since, until, cycle in periods:
                     existing = self.daily_performance([cid], since, until)
                     complete = {r["day"] for r in existing if r["basic_complete"]
-                                and r["possibility_id"] == row["possibility_id"]}
+                                and r["possibility_id"] == row["possibility_id"]
+                                and not _conversion_recheck(r, row["possibility_id"], now)}
                     missing = [since+timedelta(days=n) for n in range((until-since).days+1)
                                if str(since+timedelta(days=n)) not in complete]
                     # 전월은 매월3일 회차로 다시 확인한다. 이전에 읽은 말일 자료를 최종본으로 오인하지 않는다.
-                    is_closed_month = until < start
-                    if not missing and not is_closed_month:
+                    is_closed_period = until < start or (since, until, cycle) == (week_start, week_end, week_cycle)
+                    if not missing and not is_closed_period:
                         continue
-                    since = since if is_closed_month else min(missing)
+                    since = since if is_closed_period else min(missing)
                     fill = self._performance_job(cid, "backfill", cycle, since, until, row, snapshot, catalog["generated_at"])
                     saved = prior.get(fill["job_key"])
                     if saved and saved["stage_revision"] != fill["stage_revision"]:
                         saved = None
-                    if saved and (saved["status"] in ("ok", "limited", "reauth_required")
+                    if saved and ((saved["status"] == "ok" and not self._performance_conversion_due(
+                            fill, row["possibility_id"], now)) or saved["status"] in ("limited", "reauth_required")
                                   or saved["attempts"] >= 4 or saved["next_try_at"] > at):
                         continue
                     backfill.append((2, "" if saved is None else saved["checked_at"], cid, fill))
-            complete = period.cycle_day if old and old["status"] == "ok" else None
+            complete = period.cycle_day if old and old["status"] == "ok" and not recheck else None
             started = period.cycle_day if old else None
             if not P.is_due(decision, day, completed_cycle=complete, started_cycle=started):
                 continue
@@ -1522,14 +1535,21 @@ class ManagedStorage:
         self._not_future(now, "시작 시각")
         pid = self.management_states()[job["customer_id"]]["possibility_id"]
         with self._tx() as c:
-            old = c.execute("""SELECT status, next_try_at, attempts, stage_revision FROM naver_auto_performance_job
+            old = c.execute("""SELECT status, next_try_at, attempts, stage_revision, possibility_id FROM naver_auto_performance_job
                 WHERE job_key=?""", (job["job_key"],)).fetchone()
             changed = old is not None and old[3] != job["stage_revision"]
-            if old and not changed and (old[0] in ("ok", "limited", "reauth_required") or old[1] > at or old[2] >= 4):
+            recheck = old is not None and old[0] == "ok" and not changed and job["kind"] in ("daily", "backfill") \
+                and self._performance_conversion_due(job, pid, now)
+            if old and not changed and ((old[0] == "ok" and not recheck)
+                    or old[0] in ("limited", "reauth_required") or old[1] > at or old[2] >= 4):
                 raise S.StoreRefused("다시 수집할 시각이 아닙니다")
-            if changed:
+            if changed or recheck:
                 c.execute("""UPDATE naver_auto_performance_job SET progress_json=NULL,progress_hash=NULL,
                     attempts=0,error_code=NULL,bizmoney=NULL,bizmoney_at=NULL,campaigns_json=NULL WHERE job_key=?""",
+                    (job["job_key"],))
+            if changed and old[4] != pid:
+                c.execute("""UPDATE naver_auto_performance_job SET last_success_at=NULL,last_bizmoney=NULL,
+                    last_bizmoney_at=NULL,previous_bizmoney=NULL,previous_bizmoney_at=NULL WHERE job_key=?""",
                     (job["job_key"],))
             c.execute("""INSERT INTO naver_auto_performance_job
                 (job_key,customer_id,kind,cycle_day,period_start,period_end,snapshot_at,catalog_at,
@@ -1647,10 +1667,16 @@ class ManagedStorage:
             if attempts >= 4 and status == "retry":
                 status, code = "limited", "RETRY_EXHAUSTED"
             delay = (2, 5, 15, 30)[max(0, min(attempts, 4)-1)] if status == "retry" else 0
+            if status == "ok" and any(not row["conversion_complete"] for row in rows):
+                delay = 120
             c.execute("""UPDATE naver_auto_performance_job SET status=?,checked_at=?,next_try_at=?,
                 attempts=?,error_code=?,bizmoney=?,bizmoney_at=?,campaigns_json=? WHERE job_key=?""",
                 (status, at, S._kst_text(now+timedelta(minutes=delay), "대기 시각"), attempts, code,
                  balance, balance_at, _json([F.keep(r, F.CAMPAIGN) for r in campaigns]), job["job_key"]))
+            if status == "ok":
+                c.execute("""UPDATE naver_auto_performance_job SET previous_bizmoney=last_bizmoney,
+                    previous_bizmoney_at=last_bizmoney_at,last_success_at=?,last_bizmoney=?,last_bizmoney_at=?
+                    WHERE job_key=?""", (at,balance,balance_at,job["job_key"]))
             for row in rows:
                 # 실패/누락 회차는 여기에 오지 않으므로 직전 성공 숫자를 지우지 않는다.
                 # 이전 성공 전환은 이력에 보존한다. 현재 미확인 전환을 완결로 보이게 섞지 않는다.
@@ -1663,44 +1689,57 @@ class ManagedStorage:
                 if len(previous) > 0:
                     c.execute("INSERT INTO naver_auto_daily_revision(customer_id,day,recorded_at,payload_json) VALUES(?,?,?,?)",
                               (job["customer_id"],row["day"],at,_json(previous[0])))
+                conversion_attempts = 0 if row["conversion_complete"] else min(4, 1+(
+                    previous[0]["conversion_attempts"] if len(previous) > 0 and previous[0]["possibility_id"] == row_pid else 0))
                 c.execute("""INSERT INTO naver_auto_daily_performance
-                    (customer_id,day,possibility_id,matching_fingerprint,basic_complete,conversion_complete,imp,clk,spend,conversions,
+                    (customer_id,day,possibility_id,matching_fingerprint,basic_complete,conversion_complete,conversion_attempts,imp,clk,spend,conversions,
                      conversion_value,checked_at,source_at,conversion_checked_at,campaign_fingerprint)
-                    VALUES (?,?,?,?,1,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(customer_id,day) DO UPDATE SET
+                    VALUES (?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(customer_id,day) DO UPDATE SET
                     possibility_id=excluded.possibility_id,matching_fingerprint=excluded.matching_fingerprint,
                     basic_complete=1,imp=excluded.imp,clk=excluded.clk,spend=excluded.spend,
+                    conversion_attempts=excluded.conversion_attempts,
                     conversion_complete=excluded.conversion_complete,conversions=excluded.conversions,
                     conversion_value=excluded.conversion_value,conversion_checked_at=excluded.conversion_checked_at,
                     checked_at=excluded.checked_at,source_at=excluded.source_at,
                     campaign_fingerprint=excluded.campaign_fingerprint""",
                     (job["customer_id"],row["day"],row_pid,job["matching_fingerprint"],
-                     int(row["conversion_complete"]),row["imp"],row["clk"],
+                     int(row["conversion_complete"]),conversion_attempts,row["imp"],row["clk"],
                      row["spend"],row.get("conversions"),row.get("conversion_value"),row["checked_at"],
                      row["source_at"],row["checked_at"] if row["conversion_complete"] else None,
                      values["campaign_fingerprint"]))
         return status
 
+    def _performance_conversion_due(self, job, possibility_id, now):
+        return any(_conversion_recheck(row, possibility_id, now) for row in self.daily_performance(
+            [job["customer_id"]], date.fromisoformat(job["period_start"]), date.fromisoformat(job["period_end"])))
+
     def _performance_attribution_start(self, customer_id, possibility_id):
         """다른 업체로 관측된 계정의 새 귀속은 그 연결일 이후만 입증할 수 있다."""
-        previous, boundary = None, None
+        previous, boundary, gap = None, None, False
         for pid, at in self._conn.execute("""SELECT possibility_id,at FROM naver_auto_management_event
             WHERE customer_id=? AND action='stage_sync' ORDER BY event_id""", (customer_id,)):
             if pid is None:
+                gap = previous is not None
                 continue
-            if previous is not None and pid != previous:
-                boundary = datetime.fromisoformat(at).astimezone(KST).date().isoformat()
+            if previous is not None and (pid != previous or gap):
+                # 변경 당일은 이전 귀속과 섞일 수 있으므로 다음 실적일부터 입증한다.
+                boundary = (datetime.fromisoformat(at).astimezone(KST).date()+timedelta(days=1)).isoformat()
             previous = pid
+            gap = False
         return boundary if previous == possibility_id else None
 
     def attribution_changes(self):
         """다른 업체로 관측된 이력이 있으면 귀속 없는 구버전 성공값을 재사용하지 않는다."""
-        owners, changed = {}, {}
+        owners, changed, gaps = {}, {}, set()
         for cid, pid in self._conn.execute("""SELECT customer_id,possibility_id FROM naver_auto_management_event
             WHERE action='stage_sync' ORDER BY event_id"""):
             changed.setdefault(cid, False)
             if pid is not None:
-                changed[cid] = changed[cid] or (cid in owners and owners[cid] != pid)
+                changed[cid] = changed[cid] or cid in gaps or (cid in owners and owners[cid] != pid)
                 owners[cid] = pid
+                gaps.discard(cid)
+            elif cid in owners:
+                gaps.add(cid)
         return changed
 
     def daily_performance(self, customer_ids, start, end, *, possibility_id=None):
@@ -1729,7 +1768,7 @@ class ManagedStorage:
         decisions = MS.snapshot(self, now)
         attribution_changes = self.attribution_changes()
         jobs = _rows(self._conn.execute("SELECT * FROM naver_auto_performance_job ORDER BY checked_at,job_key"))
-        latest, success = {}, {}
+        latest, success, balances = {}, {}, {}
         for job in jobs:
             if job["kind"] == "backfill":
                 continue
@@ -1738,8 +1777,17 @@ class ManagedStorage:
             if current_pid is not None and job["possibility_id"] != current_pid:
                 continue
             latest[cid] = job
-            if job["status"] == "ok":
-                success[cid] = job
+            last_at = job.get("last_success_at") or (job["checked_at"] if job["status"] == "ok" else None)
+            if last_at is not None:
+                good = {**job, "checked_at": last_at,
+                        "bizmoney": job["last_bizmoney"] if job.get("last_success_at") else job["bizmoney"],
+                        "bizmoney_at": job["last_bizmoney_at"] if job.get("last_success_at") else job["bizmoney_at"]}
+                if cid not in success or last_at >= success[cid]["checked_at"]:
+                    success[cid] = good
+                if good["bizmoney"] is not None and good["bizmoney_at"] is not None:
+                    balances.setdefault(cid, {})[good["bizmoney_at"]] = good["bizmoney"]
+                if job.get("previous_bizmoney") is not None and job.get("previous_bizmoney_at") is not None:
+                    balances.setdefault(cid, {})[job["previous_bizmoney_at"]] = job["previous_bizmoney"]
         result = {}
         for cid, row in decisions.items():
             decision, attempt, good = row["decision"], latest.get(cid), success.get(cid)
@@ -1760,8 +1808,17 @@ class ManagedStorage:
                     "stale": not (current and attempt["status"] == "ok"),
                     "bizmoney": good["bizmoney"] if good else None,
                     "bizmoney_at": good["bizmoney_at"] if good else None,
+                    "previous_bizmoney": None, "previous_bizmoney_at": None, "bizmoney_change": None,
                     "spend": None, "imp": None, "clk": None}
             if good:
+                history = sorted((at, balance) for at, balance in balances.get(cid, {}).items()
+                                 if good["bizmoney_at"] is not None and at < good["bizmoney_at"])
+                if history:
+                    old_at, old_balance = history[-1]
+                    item.update(previous_bizmoney=old_balance, previous_bizmoney_at=old_at)
+                    if good["bizmoney"] is not None:
+                        change = good["bizmoney"]-old_balance
+                        item["bizmoney_change"] = change if math.isfinite(change) else None
                 rows = self.daily_performance([cid], date.fromisoformat(good["period_start"]),
                                                date.fromisoformat(good["period_end"]))
                 if row["possibility_id"] is not None:
@@ -1986,9 +2043,12 @@ class ManagedStorage:
                                  (job["job_key"],)).fetchone()
         if row is None or row[0] is None:
             return None
-        if hashlib.sha256(row[0].encode()).hexdigest() != row[1]:
-            raise StoreRefused("구조 원천 지문이 다릅니다")
-        source = json.loads(row[0])
+        if not isinstance(row[0], str) or hashlib.sha256(row[0].encode()).hexdigest() != row[1]:
+            raise R.CheckpointInvalid("구조 원천 지문이 다릅니다")
+        try:
+            source = json.loads(row[0])
+        except (TypeError, ValueError):
+            raise R.CheckpointInvalid("구조 원천 모양을 확인하지 못했습니다") from None
         R.validate_progress(source,job)
         return source
 
@@ -2053,14 +2113,22 @@ class ManagedStorage:
         return status
 
     def structure_checks(self, customer_ids, now):
-        wanted = {_customer_id(cid,"고객 번호") for cid in customer_ids}
+        wanted = sorted({_customer_id(cid,"고객 번호") for cid in customer_ids})
+        if not wanted:
+            return {}
         decisions = self.management_states()
+        latest = []
+        for offset in range(0, len(wanted), 400):
+            chunk = wanted[offset:offset+400]
+            marks = ",".join("(?)" for _ in chunk)
+            latest.extend(_rows(self._conn.execute(f"""WITH wanted(customer_id) AS (VALUES {marks})
+                SELECT r.customer_id,r.cycle_day,r.stage_revision,r.status,r.checked_at,r.error_code,r.reasons_json
+                FROM wanted w JOIN naver_auto_structure_job r ON r.rowid=(
+                    SELECT p.rowid FROM naver_auto_structure_job p WHERE p.customer_id=w.customer_id
+                    ORDER BY p.checked_at DESC, p.rowid DESC LIMIT 1)""", chunk)))
         out = {}
-        for row in _rows(self._conn.execute("""SELECT customer_id,cycle_day,stage_revision,status,checked_at,error_code,reasons_json
-            FROM naver_auto_structure_job ORDER BY checked_at DESC, rowid DESC""")):
+        for row in latest:
             cid = row["customer_id"]
-            if cid not in wanted or cid in out:
-                continue
             state = decisions.get(cid)
             if state is None or state["stage_revision"] != row["stage_revision"]:
                 out[cid] = {"status":"pending","checked_at":None,"error_code":None,"reasons":[],"stale":True}

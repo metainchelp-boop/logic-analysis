@@ -12,6 +12,7 @@ from __future__ import annotations
 import ast
 import os
 import pathlib
+import re
 import sqlite3
 import stat
 import sys
@@ -386,10 +387,15 @@ class NoDeleteTest(Base):
         for up in sql_strings(tree):
             seen += 1
             for w in FORBIDDEN_SQL:
-                self.assertNotIn(w, up, f"SQL 에 {w}: {up[:60]}")
+                # REVIEW_STATUS 같은 식별자의 일부가 아닌 SQL 금지 토큰을 검사한다.
+                self.assertIsNone(re.search(r"(?<![A-Z0-9_])" + re.escape(w) + r"(?![A-Z0-9_])", up),
+                                  f"SQL 에 {w}: {up[:60]}")
         self.assertGreater(seen, 20)
         probe = ast.parse('X = "REPLACE INTO t VALUES (1)"\nY = "replace into t values (1)"')
         self.assertEqual(len(list(sql_strings(probe))), 2)          # 검사기 자체가 이 모양을 본다
+        for sql in ("CREATE VIEW v AS SELECT 1", "DELETE FROM t", "INSERT OR REPLACE INTO t VALUES (1)"):
+            self.assertTrue(any(re.search(r"(?<![A-Z0-9_])"+re.escape(w)+r"(?![A-Z0-9_])", sql)
+                                for w in FORBIDDEN_SQL))
 
     def test_every_insert_is_plain_or_upsert(self):
         tree = ast.parse((ENGINE / "store.py").read_text(encoding="utf-8"))

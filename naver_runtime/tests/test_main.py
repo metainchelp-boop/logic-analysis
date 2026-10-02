@@ -2,18 +2,59 @@ import contextlib
 import io
 import json
 import tempfile
+from datetime import date, timedelta
 from pathlib import Path
 from threading import Event
 from unittest import TestCase
 from unittest.mock import Mock, patch
 
-from naver_engine.tests import test_morning as TM
-from naver_engine.tests.fake_naver import FakeClock, FakeNaver, AGENCY_ID, MARK_API_KEY, MARK_SECRET
+from naver_engine.tests import test_morning as TM, test_alerts as TA, test_account_catalog as TC
+from naver_engine.tests.fake_naver import FakeClock, FakeNaver, AGENCY_ID, MARK_API_KEY, MARK_SECRET, cycle_str
 from naver_engine.tests.test_erp_read import FakeErp, MARK_KEY
-from naver_engine import store as S, erp_read as E, inventory_reads as IR
+from naver_engine import store as S, erp_read as E, performance_reads as PR
 from naver_runtime import __main__ as main
 from naver_runtime.config import Config, ConfigError
 from naver_runtime.tests.test_server import request
+
+
+class RuntimeAds(TM.Ads):
+    """구 합계 시험과 달리 현재 일별 5개 요청 지표를 모두 제공하는 합성 원천."""
+    def _stats(self, call):
+        if "timeIncrement" not in call.query:
+            raise AssertionError("현재 성과 수집은 일별 원천만 요청해야 합니다")
+        cid = int(call.customer)
+        failure = self._err(call, "stats")
+        if failure:
+            return failure
+        span = json.loads(call.query["timeRange"][0])
+        start, end = date.fromisoformat(span["since"]), date.fromisoformat(span["until"])
+        campaign, rows = call.query["id"][0], []
+        fields = json.loads(call.query["fields"][0])
+        self.stats_calls.append(("daily", campaign))
+        for offset in range((end-start).days+1):
+            day = start+timedelta(days=offset)
+            if day not in self.drop_days.get(campaign, ()):
+                values = dict(zip(("impCnt", "clkCnt", "salesAmt", "ccnt"), self._vals(cid, campaign, day)))
+                values["convAmt"] = 2000 if values["ccnt"] else 0
+                rows.append({"dateStart": day.isoformat(), **{key: values[key] for key in fields}})
+        return 200, {"data": rows, "cycleBaseTm": cycle_str(self.cycle) if self.cycle else None}
+
+
+class RuntimeStatsFixtureTest(TestCase):
+    def test_runtime_fixture_returns_all_requested_daily_metrics_through_real_reader(self):
+        from naver_engine import performance_reads as P
+        from naver_engine.tests.test_performance_reads import MemoryPerformance
+        clock, http = FakeClock(TM.T0), FakeNaver()
+        ads = RuntimeAds(http)
+        ads.add(TM.A, [(1, "ELIGIBLE", False, TM.steady())], biz=10)
+        store = MemoryPerformance(clock)
+        store.jobs[0].update(kind="daily", cycle_day=TM.TODAY.isoformat(),
+                             period_start=TM.YDAY.isoformat(), period_end=TM.YDAY.isoformat())
+        reader = main.N.NaverReader(TM.creds(), transport=http, clock=clock)
+        self.assertEqual(P.run_performance(reader, store, clock.now).counts, {"ok": 1})
+        row = store.results[store.jobs[0]["job_key"]]["daily_rows"][0]
+        self.assertEqual(row["conversion_value"], 2000)
+        self.assertTrue(row["conversion_complete"])
 
 
 class InventoryRuntimeTest(TestCase):
@@ -24,9 +65,15 @@ class InventoryRuntimeTest(TestCase):
                 pass
         clock, stop, health = Clock(TM.T0), Event(), []
         naver = FakeNaver()
-        ads = TM.Ads(naver)
+        ads = RuntimeAds(naver)
         ads.add(TM.A, [], biz=10)
         ads.add(TM.B, [], biz=20)
+        naver.route(r"/ncc/(channels|adgroups|ads|keywords|ad-extensions)", lambda call: (200, []))
+        companies = [TC.company(pid, "진행중", company_name=TM.NAMES.get(cid, f"계정{cid}"))
+                     for pid, cid in ((11, TM.A), (12, TM.B))]
+        ids = [E.NaverIdRow(pid, TM.M.VENDOR_NAVER, str(cid)) for pid, cid in ((11, TM.A), (12, TM.B))]
+        def catalog_body():
+            return {"generated_at": clock.now().isoformat(), "total": 2, "complete": True, "items": companies}
         with tempfile.TemporaryDirectory(prefix="nv-runtime-", dir="/tmp") as folder:
             root = Path(folder).resolve()
             (root/"data").mkdir()
@@ -40,13 +87,18 @@ class InventoryRuntimeTest(TestCase):
                    "NAVER_MGR_API_KEY": MARK_API_KEY, "NAVER_MGR_SECRET_KEY": MARK_SECRET}
             config = Config.from_env(env)
             with S.open_writer(config.db, clock=clock.now) as store:
+                store.record_org(TA.org_body(clock.now()), clock.now())
                 store.record_accounts(TM.kids(TM.A, TM.B), clock.now())
+                if catalog_warmed:
+                    store.record_account_catalog(catalog_body(), ids, clock.now())
                 if setup is not None:
                     setup(store, clock, ads, naver)
-                body = {"generated_at": clock.now().isoformat(), "total": 0, "complete": True, "items": []}
+                body = catalog_body()
                 if catalog_warmed:
-                    store.record_account_catalog(body, (), clock.now())
-            erp = FakeErp(ids={"generated_at": clock.now().isoformat(), "items": []})
+                    store.record_account_catalog(body, ids, clock.now())
+            erp = FakeErp(ids={"generated_at": clock.now().isoformat(), "items": [
+                {"possibility_id": row.possibility_id, "vendor": row.vendor, "customer_id": row.customer_id_raw}
+                for row in ids]})
             erp.override[(E.PATH_ACCOUNT_CATALOG, None)] = (
                 200, json.dumps({"status": 200, "result": body}).encode())
             def after_tick(seconds):
@@ -61,7 +113,8 @@ class InventoryRuntimeTest(TestCase):
                  patch.object(stop, "wait", side_effect=after_tick):
                 self.assertEqual(main.run(config, env, stop=stop), 0)
             with S.open_reader(config.db) as store:
-                rows = store.inventory_checks_on(clock.now().date())
+                # 의도한 catalog 디스크 손상 시험은 그 손상 원천을 결과 조회에서 다시 읽지 않는다.
+                rows = store.performance_checks(clock.now()) if read_catalog else {}
                 catalog = store.account_catalog_status() if read_catalog else None
             self.assertEqual(len(health), 1)
             self.assertTrue(all(call.method == "GET" and not call.has_body for call in naver.calls))
@@ -83,7 +136,7 @@ class InventoryRuntimeTest(TestCase):
         health, rows, calls, erp, _ = self.runtime(setup=denied)
         self.assertEqual(rows[TM.A]["status"], "reauth_required")
         self.assertEqual(rows[TM.A]["error_code"], "KEY_REJECTED")
-        self.assertIsNone(rows[TM.A]["yday_spend"])
+        self.assertIsNone(rows[TM.A]["spend"])
         self.assertEqual(rows[TM.B]["status"], "ok")
         self.assertEqual(len(calls), 4)
         self.assertEqual(erp, [])
@@ -104,12 +157,12 @@ class InventoryRuntimeTest(TestCase):
                     # 합계 생략만으로 미완결이 아니다. 일별 0 증거도 없게 만든다.
                     ads.drop_days[f"cmp-{TM.A}-1"] = {TM.YDAY}
                     for _ in range(prior_attempts):
-                        IR.run_inventory(main.N.NaverReader(TM.creds(), transport=naver, clock=clock), store, clock.now)
+                        PR.run_performance(main.N.NaverReader(TM.creds(), transport=naver, clock=clock), store, clock.now)
                         clock.advance(1800)
                     naver.calls.clear()
                 health, rows, calls, erp, _ = self.runtime(setup=incomplete)
                 self.assertEqual(rows[TM.A]["status"], expected)
-                self.assertIsNone(rows[TM.A]["yday_spend"])
+                self.assertIsNone(rows[TM.A]["spend"])
                 self.assertIsNotNone(rows[TM.A]["error_code"])
                 self.assertEqual(rows[TM.B]["status"], "ok")
                 self.assertLessEqual(len(calls), 7)  # 누락 캠페인의 일별 증거 확인 1회 포함
@@ -122,8 +175,8 @@ class InventoryRuntimeTest(TestCase):
         health, rows, calls, _, _ = self.runtime(setup=large)
         self.assertEqual(health[0], 200, health[1])
         self.assertEqual(rows[TM.A]["status"], "partial")
-        self.assertEqual(rows[TM.A]["error_code"], "CHECKPOINT_PENDING")
-        self.assertIsNone(rows[TM.A]["yday_spend"])
+        self.assertEqual(rows[TM.A]["error_code"], "REQUEST_BUDGET")
+        self.assertIsNone(rows[TM.A]["spend"])
         self.assertEqual(rows[TM.B]["status"], "ok")
         self.assertLessEqual(len(calls), 24)
         self.assertLessEqual(sum(call.customer == str(TM.A) for call in calls), 8)
@@ -134,7 +187,9 @@ class InventoryRuntimeTest(TestCase):
         health, rows, calls, erp, _ = self.runtime(setup=refused)
         self.assertEqual(health[0], 503)
         self.assertEqual(health[1]["errors"], ["inventory"])
-        self.assertEqual((rows, calls, erp), ({}, [], []))
+        self.assertEqual((calls, erp), ([], []))
+        self.assertTrue(all(row["cadence"] == "blocked" and row["status"] == "pending"
+                            and row["spend"] is None for row in rows.values()))
 
     def test_source_change_during_read_keeps_failed_health_and_stops_next_account(self):
         def change(store, clock, ads, naver):
