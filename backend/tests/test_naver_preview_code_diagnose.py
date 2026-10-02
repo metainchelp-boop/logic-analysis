@@ -53,6 +53,23 @@ def database(conn):
             last_seen_on TEXT,
             absent_days INTEGER NOT NULL DEFAULT 0 CHECK (absent_days >= 0),
             last_absent_on TEXT);
+        CREATE TABLE IF NOT EXISTS naver_auto_inventory_check (
+            customer_id INTEGER NOT NULL CHECK (customer_id > 0),
+            day TEXT NOT NULL,
+            snapshot_at TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('reading', 'partial', 'ok', 'retry', 'reauth_required', 'limited')),
+            checked_at TEXT NOT NULL,
+            error_code TEXT,
+            bizmoney REAL,
+            yday_spend REAL,
+            yday_imp REAL,
+            yday_clk REAL,
+            campaigns_json TEXT,
+            progress_json TEXT,
+            progress_hash TEXT,
+            attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0 AND attempts <= 4),
+            next_try_at TEXT NOT NULL,
+            PRIMARY KEY (customer_id, day));
     ''')
     stamp='2026-10-02T15:00:00+09:00'
     conn.executemany('INSERT INTO naver_auto_meta VALUES(?,?)',[
@@ -66,6 +83,14 @@ def database(conn):
         (3,'accounts','accepted','[]',1798,stamp)])
     conn.executemany('INSERT INTO naver_auto_account(customer_id,account_name,present,first_seen_on) VALUES(?,?,?,?)',
                      [(1,'PRIVATE',1,'2026-10-02'),(2,'PRIVATE',1,'2026-10-02'),(3,'PRIVATE',0,'2026-10-02')])
+    rows=[('retry','NETWORK'),('retry','NETWORK'),('reauth_required','KEY_REJECTED'),
+          ('limited','CHECKPOINT_INVALID'),('partial','CHECKPOINT_PENDING'),('ok',None),
+          ('retry','PRIVATE_CREDENTIAL'),('reading',None)]
+    conn.executemany('''INSERT INTO naver_auto_inventory_check
+        (customer_id,day,snapshot_at,status,checked_at,error_code,bizmoney,yday_spend,campaigns_json,next_try_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?)''',[(1000+i,'2026-10-02',stamp,status,stamp,code,123456.75,98765.5,
+                                     '{"PRIVATE":"PRIVATE"}',stamp) for i,(status,code) in enumerate(rows,1)]+
+                                    [(2001,'2026-10-01',stamp,'retry',stamp,'RATE',0,0,'[]',stamp)])
     conn.commit()
 
 
@@ -76,6 +101,56 @@ def projected():
 
 
 class ProjectionTest(unittest.TestCase):
+    def test_inventory_counts_use_latest_pinned_operation_day_and_only_safe_codes(self):
+        self.assertEqual(M.OPERATION_ID,'a49a7ccfe32840298914f121883caee5')
+        value=M.validate_result(projected())
+        inventory=value['inventory_check']
+        self.assertEqual(inventory['available'],True)
+        self.assertEqual(inventory['day'],'2026-10-02')
+        self.assertEqual(inventory['rows'],8)
+        self.assertEqual(inventory['groups'],[
+            {'status':'limited','error_code':'CHECKPOINT_INVALID','count':1},
+            {'status':'ok','error_code':'NONE','count':1},
+            {'status':'partial','error_code':'CHECKPOINT_PENDING','count':1},
+            {'status':'reading','error_code':'NONE','count':1},
+            {'status':'reauth_required','error_code':'KEY_REJECTED','count':1},
+            {'status':'retry','error_code':'NETWORK','count':2},
+            {'status':'retry','error_code':'UNRECOGNIZED','count':1}])
+        for forbidden in ('PRIVATE','1001','123456.75','98765.5','customer_id','bizmoney','yday_spend','campaigns_json'):
+            self.assertNotIn(forbidden,json.dumps(value))
+
+    def test_schema7_inventory_is_unavailable_but_missing_schema8_table_is_not_empty_success(self):
+        with closing(sqlite3.connect(':memory:')) as conn:
+            database(conn)
+            conn.execute('DROP TABLE naver_auto_inventory_check')
+            conn.execute("UPDATE naver_auto_meta SET value='7' WHERE key='schema_version'")
+            value=M.validate_result(M.projection(conn))
+            self.assertEqual(value['inventory_check'],{'available':False,'day':'2026-10-02','rows':0,'groups':[]})
+            conn.execute("UPDATE naver_auto_meta SET value='8' WHERE key='schema_version'")
+            with self.assertRaises(sqlite3.OperationalError):
+                M.projection(conn)
+
+    def test_unknown_inventory_values_are_collapsed_before_leaving_sql(self):
+        with closing(sqlite3.connect(':memory:')) as conn:
+            database(conn)
+            conn.execute('PRAGMA ignore_check_constraints=ON')
+            conn.execute("UPDATE naver_auto_inventory_check SET status='PRIVATE_STATUS',error_code='PRIVATE_CODE' WHERE day='2026-10-02'")
+            value=M.validate_result(M.projection(conn))
+            self.assertEqual(value['inventory_check']['groups'],
+                             [{'status':'UNRECOGNIZED','error_code':'UNRECOGNIZED','count':8}])
+            self.assertNotIn('PRIVATE',json.dumps(value))
+
+    def test_inventory_output_rejects_raw_values_duplicates_false_counts_and_wrong_day(self):
+        for mutate in (
+                lambda i:i.update(day='PRIVATE'),lambda i:i.update(available=1),lambda i:i.update(rows=99),
+                lambda i:i['groups'][0].update(error_code='PRIVATE'),lambda i:i['groups'][0].update(status='PRIVATE'),
+                lambda i:i['groups'][0].update(customer_id=1001),lambda i:i['groups'][0].update(count=True),
+                lambda i:i['groups'].append(dict(i['groups'][0]))):
+            value=projected()
+            mutate(value['inventory_check'])
+            with self.assertRaises(ValueError):
+                M.validate_result(value)
+
     def test_projection_returns_only_approved_counts_markers_and_states(self):
         value=M.validate_result(projected())
         self.assertEqual(value['org']['latest']['outcome'],'braked')

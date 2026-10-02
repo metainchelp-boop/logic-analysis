@@ -7,7 +7,7 @@ import re
 import stat
 import uuid
 
-OPERATION_ID = 'c05ab698e2154633911228858272c100'
+OPERATION_ID = 'a49a7ccfe32840298914f121883caee5'
 TARGET_COMMIT = 'e1c4b3526db55d78175a1d6598f3403fdb9398f7'
 STAGE = 'input'
 STAGES = frozenset(('input','diagnose_preflight','diagnose_readonly','diagnose_journal','diagnose_postflight'))
@@ -35,6 +35,11 @@ CODES = frozenset(('BRAKE','BRAKE_STAGE','BRAKE_BASELINE','BRAKE_MANAGER','BRAKE
     'IMPLAUSIBLE_FIRST','STORE_REFUSED','ACTIVE_DROP_BASELINE','OWNER_DROP_BASELINE',
     'MANAGER_SPIKE_BASELINE','STORED_UNREADABLE','INCOMPLETE_LIST','RUN_ABORT','HANDLE_INVALID',
     'ACCOUNTS_UNUSABLE','CLOCK_BEHIND','unexpected','network','bad-shape','not-json','too-large'))
+INVENTORY_DAY = '2026-10-02'
+INVENTORY_STATES = frozenset(('reading','partial','ok','retry','reauth_required','limited','UNRECOGNIZED'))
+INVENTORY_CODES = frozenset(('NONE','UNRECOGNIZED','KEY_REJECTED','RATE','SERVER','BAD_REQUEST','NOT_FOUND',
+    'NETWORK','BAD_RESPONSE','MISMATCH','OTHER','CHECKPOINT_PENDING','STATS_INCOMPLETE','CAMPAIGNS_CHANGED',
+    'STATS_SHAPE','CHECKPOINT_INVALID','REQUEST_BUDGET','UNEXPECTED','RETRY_EXHAUSTED'))
 
 def number(value):
     if type(value) is not int or not 0 <= value < 2**63:
@@ -69,6 +74,17 @@ def projection(conn):
     schema=meta('schema_version')
     if schema not in ('7','8'):
         raise ValueError('DIAG_SCHEMA')
+    inventory={'available':schema=='8','day':INVENTORY_DAY,'rows':0,'groups':[]}
+    if schema=='8':
+        states=sorted(INVENTORY_STATES-{'UNRECOGNIZED'})
+        codes=sorted(INVENTORY_CODES-{'NONE','UNRECOGNIZED'})
+        query=("SELECT CASE WHEN status IN ("+','.join('?' for _ in states)+") THEN status ELSE 'UNRECOGNIZED' END, "
+            "CASE WHEN error_code IS NULL THEN 'NONE' WHEN error_code IN ("+','.join('?' for _ in codes)+") "
+            "THEN error_code ELSE 'UNRECOGNIZED' END, COUNT(*) FROM naver_auto_inventory_check "
+            "WHERE day=? GROUP BY 1,2 ORDER BY 1,2")
+        inventory['groups']=[{'status':s,'error_code':c,'count':number(n)}
+            for s,c,n in conn.execute(query,(*states,*codes,INVENTORY_DAY))]
+        inventory['rows']=number(sum(row['count'] for row in inventory['groups']))
     org=conn.execute("SELECT body,generated_at,accepted_at FROM naver_auto_org WHERE slot='current' AND length(body)<=8388608").fetchone()
     employees=[]
     if org is not None:
@@ -86,7 +102,7 @@ def projection(conn):
     if state not in ('accepted','failed','missing'):
         state='UNRECOGNIZED'
     catalog=conn.execute("SELECT CASE WHEN json_valid(value) THEN json_extract(value,'$.total') END, CASE WHEN json_valid(value) THEN json_extract(value,'$.generated_at') END FROM naver_auto_meta WHERE key='account_catalog'").fetchone()
-    return {'schema_version':int(schema),
+    return {'schema_version':int(schema),'inventory_check':inventory,
             'org':{'latest':latest('org'),'snapshot_available':org is not None,
                    'employee_count':len(employees),'management_count':sum(e.get('is_management') is True for e in employees),
                    'management_marker_missing_count':sum('is_management' not in e for e in employees),
@@ -145,7 +161,7 @@ def validate_result(value):
             raise ValueError('DIAG_CODES')
         number(item['unrecognized_code_count'])
         nullable_number(item['rows'])
-    exact(value,('schema_version','org','accounts','catalog'))
+    exact(value,('schema_version','org','accounts','catalog','inventory_check'))
     if type(value['schema_version']) is not int or value['schema_version'] not in (7,8):
         raise ValueError('DIAG_SCHEMA')
     org,accounts,catalog=value['org'],value['accounts'],value['catalog']
@@ -167,6 +183,25 @@ def validate_result(value):
         raise ValueError('DIAG_CATALOG')
     nullable_number(catalog['total'])
     timestamp(catalog['generated_at'])
+    inventory=value['inventory_check']
+    exact(inventory,('available','day','rows','groups'))
+    if inventory['available'] is not (value['schema_version']==8) or inventory['day']!=INVENTORY_DAY:
+        raise ValueError('DIAG_FIELDS')
+    groups=inventory['groups']
+    if not isinstance(groups,list) or len(groups)>len(INVENTORY_STATES)*len(INVENTORY_CODES):
+        raise ValueError('DIAG_FIELDS')
+    seen=set()
+    for row in groups:
+        exact(row,('status','error_code','count'))
+        if (not isinstance(row['status'],str) or row['status'] not in INVENTORY_STATES
+                or not isinstance(row['error_code'],str) or row['error_code'] not in INVENTORY_CODES):
+            raise ValueError('DIAG_CODES')
+        key=(row['status'],row['error_code'])
+        if not number(row['count']) or key in seen:
+            raise ValueError('DIAG_COUNT')
+        seen.add(key)
+    if number(inventory['rows'])!=sum(row['count'] for row in groups) or not inventory['available'] and groups:
+        raise ValueError('DIAG_COUNT')
     return value
 
 
