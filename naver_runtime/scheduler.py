@@ -168,7 +168,7 @@ class Scheduler:
 
     def _hold_naver_rate(self, reader):
         """자동 네이버 단계만 429 휴식을 공유한다. 일반 수집 간격과는 별개다."""
-        if getattr(reader, "rate_limited", False) is True:
+        if isinstance(reader, N.NaverReader) and reader.rate_limited:
             self._naver_rate_ready_at = max(self._naver_rate_ready_at, self._monotonic() + N.RATE_PAUSE)
             for name in ("accounts", "inventory", "morning"):
                 if name in self._next_steps:
