@@ -96,7 +96,7 @@ async function hygiene(tag, p, log, firstNavUrl) {
       const board = (await api(p, '/board?selection=all&attention=0')).body;
       const kv = await p.$$eval('#kpis .kpi .v', (els) => els.map((e) => e.textContent));
       const c = board.counts;
-      ok('대표: 숫자 5칸 = 서버 숫자', JSON.stringify(kv) === JSON.stringify([c.needs_attention, c.red, c.yellow, c.green, c.white].map(fmt)), kv);
+      ok('대표: 숫자 6칸 = 서버 숫자', JSON.stringify(kv) === JSON.stringify([c.total, c.needs_attention, c.red, c.yellow, c.green, c.white].map(fmt)), kv);
       await p.click('#tblChips .chip[data-f="all"]');
       const drawn = await p.$$eval('#tbody tr[data-pid]', (els) => els.map((e) => [Number(e.getAttribute('data-pid')), e.getAttribute('data-color'), e.querySelector('.sig').className]));
       const want = board.rows.map((r) => [r.possibility_id, r.verdict.color, 'sig ' + r.verdict.color]).sort((a, b) => a[0] - b[0]);
@@ -104,7 +104,7 @@ async function hygiene(tag, p, log, firstNavUrl) {
       const iss = await p.$$eval('#issues .iss', (els) => els.map((e) => Number(e.getAttribute('data-issue'))));
       ok('대표: 오늘의 이슈 줄 = 서버 이슈 줄', JSON.stringify(iss) === JSON.stringify(board.issue_rows.map((r) => r.issue_id)), { iss });
       const need = await p.$$eval('#kpis .kpi', (els) => els.length);
-      ok('대표: 숫자 칸 5개', need === 5, need);
+      ok('대표: 숫자 칸 6개', need === 6, need);
       const iw = await p.textContent('#iwan');
       ok('대표: 이관 띠에 서버 이관 수', iw.includes('이관됨 ' + fmt(board.links.listed)) && iw.includes('이관 안 된 번호 ' + fmt(board.links.unlinked_numbers)), iw);
       await p.click('#iwan .ichip:has-text("이관 안 된 번호")');
@@ -279,7 +279,7 @@ async function hygiene(tag, p, log, firstNavUrl) {
       failBoard = false;
       await p.click('#issues .empty button');
       await p.waitForSelector('#s-watch.on #kpis .kpi');
-      ok('경합: 다시 불러오면 숫자 칸이 나온다', (await p.$$eval('#kpis .kpi', (els) => els.length)) === 5);
+      ok('경합: 다시 불러오면 숫자 칸이 나온다', (await p.$$eval('#kpis .kpi', (els) => els.length)) === 6);
       log.statuses = log.statuses.filter((x) => !(x[0] === 503 && x[1].startsWith('/api/naver-auto/board')));   // 일부러 낸 실패
       // 빠른 범위 바꾸기 — 늦게 오는 「내 담당만」 답이 「전체」를 덮지 않는다
       const all = (await api(p, '/board?selection=all&attention=0')).body.counts;
@@ -287,7 +287,7 @@ async function hygiene(tag, p, log, firstNavUrl) {
       await p.selectOption('#scope', 'all');
       await p.waitForTimeout(1500);
       const kv = await p.$$eval('#kpis .kpi .v', (els) => els.map((e) => e.textContent));
-      ok('경합: 범위를 빨리 바꿔도 마지막 고른 범위의 숫자', JSON.stringify(kv) === JSON.stringify([all.needs_attention, all.red, all.yellow, all.green, all.white].map(fmt)) && (await p.inputValue('#scope')) === 'all', kv);
+      ok('경합: 범위를 빨리 바꿔도 마지막 고른 범위의 숫자', JSON.stringify(kv) === JSON.stringify([all.total, all.needs_attention, all.red, all.yellow, all.green, all.white].map(fmt)) && (await p.inputValue('#scope')) === 'all', kv);
       // 두 번 누름 · 누른 뒤 다른 화면 — 답이 늦게 와도 설정 화면에 머문다
       await ctx.route('**/api/naver-auto/issues/*/ack', async (route) => { await delay(700); return route.continue(); });
       const before = log.requests.length;
@@ -501,7 +501,8 @@ async function hygiene(tag, p, log, firstNavUrl) {
       await enter(p, url, cfg.sso.ceo2);
       await p.waitForSelector('#s-watch.on #kpis .kpi');
       const kv = await p.$$eval('#kpis .kpi .v', (els) => els.map((e) => e.textContent));
-      ok('가짜 값: 숫자 5칸이 서버 값 그대로(확인 필요 · 긴급 · 주의 · 정상 · 점검 불가 순)', JSON.stringify(kv) === JSON.stringify(['9', '5', '3', '7', '2']), kv);
+      ok('가짜 값: 숫자 6칸이 서버 값 그대로(전체 · 확인 필요 · 긴급 · 주의 · 정상 · 점검 불가 순)', JSON.stringify(kv) === JSON.stringify(['17', '9', '5', '3', '7', '2']), kv);
+      await p.click('#tblChips .chip[data-f="all"]');
       const iw = await p.textContent('#iwan');
       ok('가짜 값: 이관 띠가 서버 값 그대로', ['이관됨 4', '🔌 이관 빠짐 8', '오늘 목록에 없음 6', '이관 안 된 번호 12'].every((t) => iw.includes(t)), iw);
       const head = await p.textContent('#issues .cause');

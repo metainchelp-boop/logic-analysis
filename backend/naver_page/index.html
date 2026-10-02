@@ -16,6 +16,7 @@
   <div class="row1">
     <div class="brand"><span class="dot" aria-hidden="true"></span>네이버 관제</div>
     <nav class="menu" aria-label="메뉴">
+      <button type="button" data-go="/naver/dashboard">📊 대시보드</button>
       <button type="button" data-go="/naver/">🛰 관제</button>
       <button type="button" data-go="/naver/automation">🤖 자동화</button>
       <button type="button" data-go="/naver/reports">📄 보고서</button>
@@ -36,6 +37,36 @@
 
   <section class="screen" id="s-blocked" aria-labelledby="b-t">
     <div class="blocked"><div class="ic" id="b-ic" aria-hidden="true">🔒</div><h1 id="b-t"></h1><p id="b-p"></p></div>
+  </section>
+
+  <section class="screen" id="s-dashboard" aria-labelledby="t-dashboard">
+    <div class="dashboard-heading">
+      <div><h1 class="pt" id="t-dashboard">📊 월간 대시보드</h1>
+        <p class="ps">월초부터 어제까지, 현재 권한 범위의 광고 성과입니다. 확인하지 못한 자료는 0으로 표시하지 않습니다.</p></div>
+      <button type="button" class="btn" id="dashboardReload">자료 새로고침</button>
+    </div>
+    <div class="dashboard-source card">
+      <p class="dashboard-period" id="dashboardPeriod"></p>
+      <p id="dashboardStatus" role="status" aria-live="polite"></p>
+      <p id="dashboardCoverage"></p>
+      <p class="hint" id="dashboardAccounts"></p>
+      <p class="hint" id="dashboardCollected"></p>
+    </div>
+    <div class="dashboard-metrics" id="dashboardMetrics" aria-label="월간 광고 성과"></div>
+    <p class="ps dashboard-note" id="dashboardRatioNote"></p>
+    <div class="dashboard-states">
+      <section class="card" aria-labelledby="dashboardDeliveryTitle">
+        <h2 id="dashboardDeliveryTitle">어제 실제 집행</h2>
+        <div class="dashboard-breakdown" id="dashboardDelivery"></div>
+        <p class="hint" id="dashboardDeliveryNote">어제 실적 없음은 노출·클릭·광고비가 모두 0으로 확인된 상태이며, 캠페인 설정 중지를 뜻하지 않습니다.</p>
+      </section>
+      <section class="card" aria-labelledby="dashboardConfigurationTitle">
+        <h2 id="dashboardConfigurationTitle">광고 설정 상태</h2>
+        <div class="dashboard-breakdown" id="dashboardConfiguration"></div>
+        <p class="hint">설정상 운영 가능은 실제 집행되었다는 뜻이 아닙니다. 운영 가능 캠페인이 없는 이유에는 상태·잠금·기간 등이 포함될 수 있습니다.</p>
+      </section>
+    </div>
+    <p class="ps">월간 자료는 기존 수집 예산에 여유가 있을 때 채워집니다. 새로고침은 저장된 자료만 다시 읽으며, 광고나 수집 설정을 변경하지 않습니다.</p>
   </section>
 
   <!-- 🛰 관제 -->

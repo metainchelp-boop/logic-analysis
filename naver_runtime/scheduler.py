@@ -3,9 +3,11 @@ from datetime import datetime, timedelta
 from copy import deepcopy
 import logging
 import threading
+from time import monotonic
 
 from naver_engine import alerts as A, links as L, morning as M, store as S, sync as Y, metrics as G, naver_read as N
 from naver_engine import inventory as IC, inventory_reads as IR
+from naver_engine import monthly_reads as MR
 from naver_runtime import collection_requests as CR
 
 log = logging.getLogger("naver_runtime.scheduler")
@@ -179,7 +181,19 @@ class Scheduler:
         return result
 
     def _inventory(self):
-        result = IR.run_inventory(self.naver_factory(), self.store, self.clock)
+        reader = self.naver_factory()
+        now, started, initial, pauses = self.clock(), monotonic(), reader.calls, reader.pauses
+        # 월간은 별도 회차가 아니다. 전일이 쓴 호출·시간을 포함한 동일 바깥 예산이다.
+        with reader.bounded_requests(max_calls=24, max_seconds=30):
+            result = IR.run_inventory(reader, self.store, self.clock)
+            elapsed = max((self.clock() - now).total_seconds(), monotonic() - started)
+            left = 24 - (reader.calls - initial)
+            if result.code not in ("NOT_READY", "SOURCE_CHANGED") and not reader.rate_limited and reader.pauses == pauses \
+                    and left >= 2 and elapsed < 30:
+                monthly = MR.run_monthly(reader, self.store, self.clock, max_calls=left,
+                                         max_seconds=30-elapsed, exclude_checked_after=now)
+                if monthly.code in ("NOT_READY", "SOURCE_CHANGED"):
+                    self._errors.append("monthly")
         # 개별 계정의 실패·재시도는 원장 경고로 남고, 원천 무효만 서비스 실패이다.
         if result.code in ("NOT_READY", "SOURCE_CHANGED"):
             self._errors.append("inventory")

@@ -87,7 +87,7 @@ __all__ = ("open_writer", "open_reader", "Store", "StoreError", "StoreBusy", "St
            "AlertExists", "DeliveryRefused", "ScreenRefused", "inspect_snapshot")
 
 KST = timezone(timedelta(hours=9))
-SCHEMA_VERSION = 8   # 8 = 전산 귀속과 분리한 계정우선 원천 수집. 옛 판은 표만 더한다.
+SCHEMA_VERSION = 9   # 9 = 기존 자료를 보존하는 월초~어제 원천·진행 표 추가.
 BUSY_TIMEOUT_MS = 5000
 FUTURE_SLACK = timedelta(minutes=5)   # 시계가 조금 어긋나도 받는다 · 그보다 앞선 시각은 거절
 ORG_FUTURE_SLACK = timedelta(minutes=10)   # ① 스냅숏 시각 — app.naver_auto.org_snapshot.FUTURE_TOLERANCE 와 같다(시험이 대조)
@@ -490,6 +490,28 @@ _SCHEMA = (
         attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0 AND attempts <= 4),
         next_try_at TEXT NOT NULL,
         PRIMARY KEY (customer_id, day))""",
+    """CREATE TABLE IF NOT EXISTS naver_auto_monthly_check (
+        customer_id INTEGER NOT NULL CHECK (customer_id > 0),
+        period_start TEXT NOT NULL,
+        period_end TEXT NOT NULL,
+        snapshot_at TEXT NOT NULL,
+        checked_at TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('reading', 'partial', 'ok', 'retry', 'limited')),
+        error_code TEXT,
+        imp INTEGER,
+        clk INTEGER,
+        spend INTEGER,
+        conversion_value REAL,
+        enabled_campaigns INTEGER,
+        campaign_count INTEGER,
+        campaign_fingerprint TEXT,
+        progress_json TEXT,
+        progress_hash TEXT,
+        attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0 AND attempts <= 4),
+        next_try_at TEXT NOT NULL,
+        PRIMARY KEY (customer_id, period_start, period_end))""",
+    """CREATE INDEX IF NOT EXISTS naver_auto_monthly_period
+        ON naver_auto_monthly_check (period_start, period_end)""",
 )
 
 # ── 연결 거절 규칙 ────────────────────────────────────────────────
@@ -3429,3 +3451,151 @@ class Store:
                 raise StoreRefused("시작하지 않은 원천 수집입니다")
             return c.execute("SELECT status FROM naver_auto_inventory_check WHERE customer_id = ? AND day = ?",
                              (customer_id, at[:10])).fetchone()[0]
+
+    # ── 월초~어제 원천: 당일 전일 수집이 끝난 계정만, 별도 외부 전송 없음 ──
+    def monthly_checks_on(self, period_start: date, period_end: date) -> dict:
+        start, end = _day_text(period_start, "월간 시작"), _day_text(period_end, "월간 끝")
+        if start > end:
+            return {}
+        cur = self._conn.execute("""SELECT customer_id, period_start, period_end, snapshot_at, checked_at,
+            status, error_code, imp, clk, spend, conversion_value, enabled_campaigns, campaign_count,
+            campaign_fingerprint FROM naver_auto_monthly_check WHERE period_start = ? AND period_end = ?""", (start, end))
+        names = [d[0] for d in cur.description]
+        return {r[0]: dict(zip(names, r)) for r in cur}
+
+    def monthly_work(self, now: datetime, limit: int = 24, *, exclude_checked_after=None) -> list:
+        from . import monthly_reads as MR
+        if type(limit) is not int or not 1 <= limit <= 24:
+            raise StoreRefused("월간 후보는 1~24개 계정입니다")
+        snapshot = self.inventory_snapshot(now)
+        start, end = MR.window(now.astimezone(KST).date())
+        if snapshot is None or start > end:
+            return []
+        at = _kst_text(now, "월간 현재 시각")
+        cutoff = _kst_text(exclude_checked_after or now, "전일 시도 경계")
+        # 같은 회차에 전일 읽기를 시도한 계정은 제외하여 계정별 8회/10초를 합산 초과하지 않는다.
+        return [r[0] for r in self._conn.execute("""SELECT a.customer_id FROM naver_auto_account a
+            JOIN naver_auto_inventory_check d ON d.customer_id = a.customer_id AND d.day = ?
+            LEFT JOIN naver_auto_monthly_check m ON m.customer_id = a.customer_id
+              AND m.period_start = ? AND m.period_end = ?
+            WHERE a.present = 1 AND d.status = 'ok' AND d.checked_at < ? AND (m.customer_id IS NULL
+              OR (m.status NOT IN ('ok', 'limited') AND m.attempts < 4 AND m.next_try_at <= ?))
+            ORDER BY (SELECT h.checked_at FROM naver_auto_monthly_check h WHERE h.customer_id = a.customer_id
+              ORDER BY h.period_end DESC LIMIT 1), a.customer_id LIMIT ?""",
+            (at[:10], start.isoformat(), end.isoformat(), cutoff, at, limit))]
+
+    def begin_monthly_check(self, customer_id, snapshot_at, now):
+        from . import monthly_reads as MR
+        self._need_writer()
+        if not self.inventory_account_valid(customer_id, snapshot_at, now):
+            raise StoreRefused("월간 계정 목록이 바뀌었습니다")
+        start, end = MR.window(now.astimezone(KST).date())
+        if start > end:
+            raise StoreRefused("월간 기간에 완료된 날짜가 없습니다")
+        at, snap = _kst_text(now, "월간 시작 시각"), _kst_text(snapshot_at, "월간 목록 시각")
+        self._not_future(now, "월간 시작 시각")
+        with self._tx() as c:
+            previous = c.execute("""SELECT snapshot_at, status, attempts, next_try_at FROM naver_auto_monthly_check
+                WHERE customer_id = ? AND period_start = ? AND period_end = ?""",
+                (customer_id, start.isoformat(), end.isoformat())).fetchone()
+            if previous is not None and (previous[1] in ("ok", "limited") or previous[2] >= 4 or previous[3] > at):
+                raise StoreRefused("월간 원천을 다시 읽을 때가 아닙니다")
+            attempts = previous[2] if previous is not None else 0
+            c.execute("""INSERT INTO naver_auto_monthly_check
+                (customer_id, period_start, period_end, snapshot_at, checked_at, status, attempts, next_try_at)
+                VALUES (?, ?, ?, ?, ?, 'reading', ?, ?)
+                ON CONFLICT (customer_id, period_start, period_end) DO UPDATE SET
+                  snapshot_at = excluded.snapshot_at, checked_at = excluded.checked_at, status = 'reading',
+                  imp = NULL, clk = NULL, spend = NULL, conversion_value = NULL, enabled_campaigns = NULL,
+                  campaign_count = NULL, campaign_fingerprint = NULL, error_code = NULL,
+                  attempts = excluded.attempts, next_try_at = excluded.next_try_at""",
+                (customer_id, start.isoformat(), end.isoformat(), snap, at, attempts,
+                 _kst_text(now + timedelta(minutes=2), "월간 재시도 시각")))
+
+    def monthly_progress(self, customer_id, period_start, period_end):
+        from . import monthly_reads as MR
+        row = self._conn.execute("""SELECT progress_json, progress_hash FROM naver_auto_monthly_check
+            WHERE customer_id = ? AND period_start = ? AND period_end = ?""",
+            (_customer_id(customer_id, "고객 번호"), _day_text(period_start, "월간 시작"),
+             _day_text(period_end, "월간 끝"))).fetchone()
+        if row is None or row[0] is None:
+            return None
+        try:
+            if not isinstance(row[0], str) or hashlib.sha256(row[0].encode()).hexdigest() != row[1]:
+                raise MR.CheckpointInvalid("월간 원천 지문이 다릅니다")
+            source = json.loads(row[0])
+            MR.validate_progress(source, customer_id, period_start, period_end)
+            return source
+        except (ValueError, TypeError, RecursionError):
+            raise MR.CheckpointInvalid("보관한 월간 이어읽기를 확인하지 못했습니다") from None
+
+    def record_monthly_progress(self, customer_id, snapshot_at, now, source):
+        from . import monthly_reads as MR
+        self._need_writer()
+        if not self.inventory_account_valid(customer_id, snapshot_at, now):
+            raise StoreRefused("월간 계정 목록이 바뀌었습니다")
+        start, end = MR.window(now.astimezone(KST).date())
+        MR.validate_progress(source, customer_id, start, end)
+        if any(datetime.fromisoformat(cycle) > now + FUTURE_SLACK for cycle in source["cycles"]):
+            raise MR.CheckpointInvalid("월간 원천 기준 시각이 미래입니다")
+        raw = json.dumps(source, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        with self._tx() as c:
+            previous = self.monthly_progress(customer_id, start, end)
+            progressed = previous is not None and previous["fingerprint"] == source["fingerprint"] and (
+                source["next_index"] > previous["next_index"] or len(source["zero_rows"]) > len(previous["zero_rows"]))
+            cur = c.execute("""UPDATE naver_auto_monthly_check SET progress_json = ?, progress_hash = ?,
+                attempts = CASE WHEN ? THEN 0 ELSE attempts END WHERE customer_id = ? AND period_start = ?
+                AND period_end = ? AND status = 'reading' AND snapshot_at = ?""",
+                (raw, hashlib.sha256(raw.encode()).hexdigest(), progressed, customer_id, start.isoformat(),
+                 end.isoformat(), _kst_text(snapshot_at, "월간 목록 시각")))
+            if cur.rowcount != 1:
+                raise StoreRefused("시작하지 않은 월간 이어읽기입니다")
+
+    def record_monthly_check(self, customer_id, snapshot_at, now, values):
+        from . import monthly_reads as MR
+        self._need_writer()
+        if not self.inventory_account_valid(customer_id, snapshot_at, now):
+            raise StoreRefused("월간 계정 목록이 바뀌었습니다")
+        at, start_end = _kst_text(now, "월간 읽은 시각"), MR.window(now.astimezone(KST).date())
+        self._not_future(now, "월간 읽은 시각")
+        start, end = start_end
+        values = dict(values)
+        if values.get("status") not in {"partial", "ok", "retry", "limited"}:
+            raise StoreRefused("월간 원천 수집 상태가 아닙니다")
+        code = values.get("error_code")
+        if code is not None:
+            code = _code(code, _ERROR_KIND, "월간 수집 오류")
+        if values["status"] == "ok":
+            source = self.monthly_progress(customer_id, start, end)
+            if source is None or source["next_index"] != len(source["campaign_ids"]):
+                raise StoreRefused("완결된 월간 원천이 아닙니다")
+            totals = MR.validate_progress(source, customer_id, start, end)
+            if any(values.get(target) != totals[key] for key, target in zip(MR.FIELDS, MR.OUTPUTS)) \
+                    or values.get("campaign_fingerprint") != source["fingerprint"]:
+                raise StoreRefused("월간 원천과 공개 합계가 다릅니다")
+            enabled, count = values.get("enabled_campaigns"), values.get("campaign_count")
+            if not ((enabled is None and count is None) or
+                    (type(enabled) is int and type(count) is int and 0 <= enabled <= count == len(source["campaign_ids"]))):
+                raise StoreRefused("월간 캠페인 상태가 완결되지 않았습니다")
+        else:
+            for key in (*MR.OUTPUTS, "enabled_campaigns", "campaign_count", "campaign_fingerprint"):
+                values[key] = None
+        with self._tx() as c:
+            row = c.execute("""SELECT attempts FROM naver_auto_monthly_check WHERE customer_id = ?
+                AND period_start = ? AND period_end = ? AND status = 'reading' AND snapshot_at = ?""",
+                (customer_id, start.isoformat(), end.isoformat(), _kst_text(snapshot_at, "월간 목록 시각"))).fetchone()
+            if row is None:
+                raise StoreRefused("시작하지 않은 월간 수집입니다")
+            attempts = row[0] + (values["status"] == "retry")
+            status = "limited" if attempts >= 4 and values["status"] == "retry" else values["status"]
+            if status == "limited" and values["status"] == "retry":
+                code = "RETRY_EXHAUSTED"
+            next_at = now + timedelta(minutes=(2, 5, 15, 30)[min(attempts, 4) - 1]) if status == "retry" else now
+            c.execute("""UPDATE naver_auto_monthly_check SET status = ?, checked_at = ?, error_code = ?,
+                imp = ?, clk = ?, spend = ?, conversion_value = ?, enabled_campaigns = ?, campaign_count = ?,
+                campaign_fingerprint = ?, attempts = ?, next_try_at = ? WHERE customer_id = ?
+                AND period_start = ? AND period_end = ? AND status = 'reading'""",
+                (status, at, code, *(values.get(key) for key in MR.OUTPUTS), values.get("enabled_campaigns"),
+                 values.get("campaign_count"), values.get("campaign_fingerprint"), attempts,
+                 _kst_text(next_at, "월간 재시도 시각"), customer_id, start.isoformat(), end.isoformat()))
+            return status

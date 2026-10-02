@@ -45,13 +45,14 @@ from . import store as S
 from . import sync as Y
 from . import views as W
 from . import inventory as INV
+from . import dashboard as DASH
 
 log = logging.getLogger("naver_engine.web")
 
 PREFIX = "/api/naver-auto"
 GET, POST = "GET", "POST"            # 들어오는 요청의 방식(이 파일은 나가는 요청을 만들지 않는다)
 # 제한판은 새 경로가 추가돼도 자동으로 열지 않는다. 로그인/갱신은 기술 쓰기만 허용한다.
-_VERIFICATION_GETS = frozenset({"/me", "/board", "/accounts", "/links/pending", "/ended", "/unlinked",
+_VERIFICATION_GETS = frozenset({"/me", "/board", "/accounts", "/dashboard", "/links/pending", "/ended", "/unlinked",
                                "/bell", "/settings", "/health"})
 _VERIFICATION_SESSIONS = frozenset({"/session", "/session/refresh"})
 _VERIFIED_REQUESTS = frozenset({(POST, "/links/confirm"), (POST, "/collection/request"),
@@ -512,6 +513,11 @@ class App:
                               req.query.get("workflow", "all"), req.query.get("mapping", "all"),
                               req.query.get("view", "current"))
 
+    def _h_dashboard(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
+        if set(req.query) - {"selection"}:
+            raise HttpError(400, "bad-query")
+        return 200, DASH.board(v.ctx(now), v.store, v.scope, req.query.get("selection", "all"))
+
     def _h_board(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
         sel = req.query.get("selection", "all")
         att = req.query.get("attention", "1")
@@ -846,6 +852,7 @@ ROUTES: Tuple[Route, ...] = tuple(Route(m, re.compile(p), h, a) for m, p, h, a i
     (GET, r"/me", App._h_me, True),
     (GET, r"/board", App._h_board, True),
     (GET, r"/accounts", App._h_accounts, True),
+    (GET, r"/dashboard", App._h_dashboard, True),
     (GET, r"/clients/(?P<pid>[0-9]{1,18})", App._h_client, True),
     (POST, r"/issues/(?P<iid>[0-9]{1,18})/ack", App._h_issue_ack, True),
     (POST, r"/issues/(?P<iid>[0-9]{1,18})/resolve", App._h_issue_resolve, True),

@@ -636,12 +636,13 @@ class PageFileTest(unittest.TestCase):
     def test_screen_paths(self):
         """화면 주소(S13) — 정해진 이름만 index.html · 비슷한 이름·빗금·대문자·0번·긴 번호는 종전대로 404."""
         index = (self.root / "index.html").resolve()
-        for rest in ("issues", "system", "unlinked", "ended", "links", "settings", "automation", "reports", "transfers",
+        for rest in ("issues", "system", "unlinked", "ended", "links", "settings", "automation", "reports", "transfers", "dashboard",
                      "clients/1", "clients/123456789012345678"):
             self.assertEqual(R.page_file(self.root, rest), index, rest)
         for rest in ("issues/", "Issues", "issue", "issues2", "clients", "clients/", "clients/0", "clients/01",
                      "clients/abc", "clients/1/x", "clients/1234567890123456789", "system/../app.js", "../issues",
-                     "settings/x", "reports.js", "clients/1.js", "clients/-1", " issues", "issues\n"):
+                     "settings/x", "reports.js", "dashboard/", "Dashboard", "dashboard/x", "dashboard.js",
+                     "clients/1.js", "clients/-1", " issues", "issues\n"):
             self.assertIsNone(R.page_file(self.root, rest), rest)
         self.assertIsNone(R.page_file(self.tmp / "none", "issues"))   # 화면 파일이 없으면 없음(폴더 밖으로 가지 않는다)
 

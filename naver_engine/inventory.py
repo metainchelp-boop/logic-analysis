@@ -144,7 +144,7 @@ def _lost_rows(ctx, store, catalog, visible, owns, ceo, selection):
     return rows
 
 
-def board(ctx, store, scope, selection="all", workflow="all", mapping="all", view="current"):
+def board(ctx, store, scope, selection="all", workflow="all", mapping="all", view="current", *, _include_customer_ids=False):
     if workflow not in ("all", *WORKFLOWS) or mapping not in ("all", *MAPPINGS) \
             or view not in ("current", "lost", "balance_known"):
         raise SC.SelectionRejected()
@@ -212,7 +212,8 @@ def board(ctx, store, scope, selection="all", workflow="all", mapping="all", vie
             continue
         owner = W._owner(ctx, owns[pid]) if pid is not None else None
         # 원천 지표를 전산 계약/보고서에 자동 귀속하거나 이전 이력을 덮어쓰지 않는다.
-        rows.append({"ad_account_no": None if account["ad_account_no"] is None else str(account["ad_account_no"]),
+        rows.append({**({"customer_id": cid} if _include_customer_ids else {}),
+                     "ad_account_no": None if account["ad_account_no"] is None else str(account["ad_account_no"]),
                      "customer_tail": W.tail4(cid), "account_name": account["account_name"],
                      "possibility_id": pid, "company_name": None if company is None else company["company_name"],
                      "mapping": status, "workflow": stage, "erp_stage": None if company is None else company["stage"],

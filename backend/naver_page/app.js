@@ -18,7 +18,7 @@
   var REFRESH_AHEAD_MS = 10 * 60 * 1000;    // 토큰이 끝나기 10분 전에 갱신 — 페이지를 연 때가 아니라 토큰 끝 시각에서
   var IDLE_MS = 60 * 60 * 1000;             // 1시간 넘게 손대지 않으면 이 창의 로그인을 끝낸다(서버 12시간과 별도)
   var END_WARN_MS = 15 * 60 * 1000;         // 로그인 뒤 12시간이 끝나기 15분 전에 한 번 알린다
-  var SCREEN = /^\/naver\/(?:(issues|system|unlinked|ended|links|settings|automation|reports|transfers)|clients\/([1-9][0-9]{0,17}))?$/;
+  var SCREEN = /^\/naver\/(?:(dashboard|issues|system|unlinked|ended|links|settings|automation|reports|transfers)|clients\/([1-9][0-9]{0,17}))?$/;
 
   var state = {
     session: null, me: null, selection: 'all', filter: 'need', q: '', board: null, links: null, ended: null,
@@ -26,7 +26,8 @@
     linksOpen: false, endedOpen: false, doneOpen: false, gen: 0, timer: null, focus: null,
     lastInput: Date.now(), refreshing: false, retryAt: 0, retryN: 0, warned: false, bellGen: 0,
     filterFromRoute: false, spaneFromRoute: false, busy: {}, loadedDay: null, lastFocus: null,
-    inventory: null, inventoryGen: 0, inventoryMapping: 'all', inventoryWorkflow: 'all', inventoryQ: '', inventoryView: 'current'
+    inventory: null, inventoryGen: 0, inventoryMapping: 'all', inventoryWorkflow: 'all', inventoryQ: '', inventoryView: 'current',
+    dashboard: null
   };
 
   // ── 작은 도구 ─────────────────────────────────────────────────────
@@ -298,6 +299,9 @@
     if (now >= s.exp) { lost(); return; }
     if (s.exp - now <= REFRESH_AHEAD_MS && now >= state.retryAt) refresh();
     if (verifiedLinking() && parse(location.pathname).screen === 'watch') loadCollection();
+    if (parse(location.pathname).screen === 'dashboard' && state.loadedDay && kstDay() !== state.loadedDay) {
+      state.gen++; openDashboard();
+    }
     var end = s.ends ? Date.parse(s.ends) : NaN;
     if (!state.warned && isFinite(end) && end > now && end - now <= END_WARN_MS) {
       state.warned = true;
@@ -312,10 +316,10 @@
   document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') tick(); });
 
   // ── 화면 고르기 ────────────────────────────────────────────────────
-  var SCREENS = ['loading', 'blocked', 'watch', 'client', 'automation', 'reports', 'transfers', 'settings'];
+  var SCREENS = ['loading', 'blocked', 'dashboard', 'watch', 'client', 'automation', 'reports', 'transfers', 'settings'];
   function show(name) {
     SCREENS.forEach(function (s) { var el = $('s-' + s); if (el) el.classList.toggle('on', s === name); });
-    var menuKey = { watch: '/naver/', client: '/naver/', automation: '/naver/automation', reports: '/naver/reports',
+    var menuKey = { dashboard: '/naver/dashboard', watch: '/naver/', client: '/naver/', automation: '/naver/automation', reports: '/naver/reports',
                     transfers: '/naver/transfers', settings: '/naver/settings' }[name];
     Array.prototype.forEach.call(document.querySelectorAll('.menu button'), function (b) {
       b.classList.toggle('on', b.getAttribute('data-go') === menuKey);
@@ -326,7 +330,7 @@
     if (!m) return { screen: 'watch', focus: null };
     if (m[2]) return { screen: 'client', id: m[2] };
     var n = m[1] || '';
-    var screen = { system: 'settings', settings: 'settings', automation: 'automation', reports: 'reports', transfers: 'transfers' }[n] || 'watch';
+    var screen = { dashboard: 'dashboard', system: 'settings', settings: 'settings', automation: 'automation', reports: 'reports', transfers: 'transfers' }[n] || 'watch';
     return { screen: screen, focus: n || null };
   }
   function go(path) {
@@ -348,6 +352,7 @@
     }
     if (r.screen === 'automation' || r.screen === 'reports') { show(r.screen); return; }
     if (r.screen === 'transfers') { show('transfers'); return loadInventory(); }
+    if (r.screen === 'dashboard') return openDashboard();
     state.focus = r.focus;
     // /naver/unlinked(월요일 알림)가 건 거르기도 그 주소에서만
     if (r.focus === 'unlinked') { state.filter = 'iw_unlinked_numbers'; state.filterFromRoute = true; }
@@ -392,12 +397,111 @@
     $('bell').setAttribute('aria-label', '나에게 온 알림' + (n > 0 ? ' · 안 읽음 ' + n : ''));
   }
 
+  // 월간 값은 서버 집계를 그대로 표시한다. 부분합·평균·ROAS의 모집단을 화면에서 다시 계산하지 않는다.
+  function percent(n) {
+    return typeof n === 'number' && isFinite(n) ? n.toLocaleString('ko-KR', { maximumFractionDigits: 2 }) + '%' : '—';
+  }
+  function dashboardMetric(key, label, value, note, primary) {
+    return h('div', { id: 'dashboard-' + key, class: 'dashboard-metric' + (primary ? ' primary' : '') },
+      h('span', { class: 'label' }, label), h('span', { class: 'value' }, value), h('span', { class: 'note' }, note));
+  }
+  function dashboardBreakdown(id, values, labels) {
+    put($(id), labels.map(function (pair) {
+      return h('div', null, h('span', { class: 'label' }, pair[1]), h('span', { class: 'value' }, num(values && values[pair[0]])));
+    }));
+  }
+  function renderDashboard(data, error) {
+    var period = data && data.period || {}, accounts = data && data.accounts || {}, coverage = data && data.coverage || {};
+    var advertisers = data && data.advertisers || {}, status = 'loading', message = '저장된 월간 자료를 불러오는 중입니다.';
+    var showMetrics = !!(data && data.ready && period.days > 0 && accounts.total > 0 && coverage.complete_accounts > 0);
+    var totals = showMetrics ? data.totals || {} : {}, averages = showMetrics ? data.averages || {} : {};
+    var ratios = showMetrics ? data.ratios || {} : {};
+    if (error) { status = 'error'; message = '월간 자료를 불러오지 못했습니다 — ' + errText(error) + ' 자료 새로고침으로 다시 확인해 주세요.'; }
+    else if (data) {
+      if (period.days === 0) { status = 'no-period'; message = '이번 달은 아직 집계할 날짜가 없습니다. 어제까지의 실적이 생긴 뒤 표시합니다.'; }
+      else if (!data.ready) { status = 'unavailable'; message = '현재 계정 자료를 확인하지 못했습니다. 수신 상태를 확인한 뒤 다시 조회해 주세요.'; }
+      else if (accounts.total === 0) { status = 'empty'; message = '현재 조회 범위에 이관 계정이 없습니다.'; }
+      else if (!coverage.complete_accounts) {
+        if (coverage.retry_accounts > 0 || coverage.limited_accounts > 0) {
+          status = 'failed'; message = '월간 성과 수집에 재시도 또는 확인이 필요합니다. 미확인 실적을 0으로 표시하지 않습니다.';
+        } else { status = 'collecting'; message = '월간 성과 수집 대기·진행 중입니다. 아직 완결된 계정의 자료가 없습니다.'; }
+      } else if (coverage.complete_accounts < accounts.total) {
+        status = 'partial'; message = '확인된 계정의 부분 합계입니다. 전체 계정의 성과가 아닙니다.';
+      } else { status = 'complete'; message = '현재 조회 범위의 모든 계정에서 월간 기본 실적을 확인했습니다. 전환매출 확인 범위는 별도입니다.'; }
+    }
+    $('dashboardStatus').setAttribute('data-status', status);
+    $('dashboardStatus').textContent = message;
+    $('dashboardPeriod').textContent = !data ? '집계 기간 확인 중' : period.days === 0 ? '이번 달 집계 기간 없음 · 한국 시간 기준' :
+      (period.start || '—') + ' ~ ' + (period.end || '—') + ' · ' + num(period.days) + '일 · 한국 시간 기준';
+    $('dashboardCoverage').textContent = data ? '월간 기본 실적 확인 ' + num(coverage.complete_accounts) + ' / ' + num(accounts.total) +
+      '계정 · 대기 ' + num(coverage.pending_accounts) + ' · 부분 수집 ' + num(coverage.partial_accounts) +
+      ' · 재시도 ' + num(coverage.retry_accounts) + ' · 확인 필요 ' + num(coverage.limited_accounts) : '확인 범위 —';
+    $('dashboardAccounts').textContent = data ? '전산 매칭 ' + num(accounts.matched) + '계정 · 미매칭 ' + num(accounts.unmatched) +
+      '계정 · 미분류 ' + num(accounts.unclassified) + '계정 / 전산 광고주 ' + num(advertisers.total) +
+      '곳 중 월간 완결 ' + num(advertisers.complete) + '곳 · 미완결 ' + num(advertisers.unknown) + '곳' : '';
+    $('dashboardCollected').textContent = data ? '월간 확인 시각 ' + (mdhm(coverage.oldest_collected_at) || '미수집') + ' ~ ' +
+      (mdhm(coverage.newest_collected_at) || '미수집') + ' · 계정 목록 ' + (mdhm(data.accounts_at) || '수신 전') +
+      ' · 전산 목록 ' + (mdhm(data.catalog_at) || '수신 전') : '';
+    var totalNote = '월간 확인 ' + num(coverage.complete_accounts) + ' / ' + num(accounts.total) + '계정';
+    var advertiserNote = '모든 계정이 완결된 전산 광고주 ' + num(advertisers.complete) + '곳 기준';
+    put($('dashboardMetrics'),
+      dashboardMetric('spend', '월 누적 광고비', won(totals.spend), totalNote, true),
+      dashboardMetric('daily-spend', '일평균 광고비', won(averages.daily_spend), '확인된 기간 광고비 ÷ 집계 일수'),
+      dashboardMetric('advertiser-spend', '광고주당 일평균 광고비', won(averages.advertiser_daily_spend), advertiserNote),
+      dashboardMetric('impressions', '월 누적 노출', num(totals.impressions), '완결 광고주당 평균 ' + num(averages.advertiser_impressions) + '회'),
+      dashboardMetric('clicks', '월 누적 클릭', num(totals.clicks), '완결 광고주당 평균 ' + num(averages.advertiser_clicks) + '회'),
+      dashboardMetric('ctr', '클릭률 (CTR)', percent(ratios.ctr), '동일 확인 계정의 클릭 ÷ 노출'),
+      dashboardMetric('cpc', '클릭당 광고비 (CPC)', won(ratios.cpc), '동일 확인 계정의 광고비 ÷ 클릭'),
+      dashboardMetric('roas', '광고비 대비 전환매출 (ROAS)', percent(ratios.roas), '전환매출까지 확인된 계정만'));
+    $('dashboardRatioNote').textContent = showMetrics ? 'ROAS 확인 ' + num(ratios.roas_accounts) + '계정 · 같은 계정의 광고비 ' +
+      won(ratios.roas_spend) + ' · 전환매출 ' + won(ratios.roas_conversion_value) +
+      '. 전환 추적 여부가 불명인 0매출은 제외합니다. 광고주 평균은 미매칭 계정을 제외한 월간 완결 광고주 기준입니다.' :
+      '미수집·미확인 지표와 분모가 없는 비율은 —로 표시합니다. 0실적이나 ROAS 0%로 간주하지 않습니다.';
+    var available = data && data.ready;
+    dashboardBreakdown('dashboardDelivery', available ? data.delivery : null,
+      [['active', '어제 집행 확인'], ['inactive', '어제 실적 없음'], ['unknown', '미확인']]);
+    dashboardBreakdown('dashboardConfiguration', available ? data.configuration : null,
+      [['enabled', '설정상 운영 가능'], ['disabled', '운영 가능 캠페인 없음'], ['unknown', '설정 미확인']]);
+    $('dashboardReload').disabled = !data && !error;
+  }
+  function openDashboard() {
+    var gen = state.gen, sel = state.selection, requestedDay = kstDay();
+    show('dashboard');
+    state.dashboard = null;
+    state.loadedDay = null;
+    renderDashboard(null);
+    return api('GET', '/dashboard?selection=' + encodeURIComponent(sel)).then(function (data) {
+      if (gen !== state.gen || sel !== state.selection) return;
+      // 자정 전 요청의 옛 기간을 새 날짜의 자료로 남기지 않는다.
+      if (requestedDay !== kstDay()) { state.gen++; return openDashboard(); }
+      state.dashboard = data;
+      state.loadedDay = requestedDay;
+      renderDashboard(data);
+    }, function (error) {
+      if (gen !== state.gen || sel !== state.selection || (error && error.status === 401)) return;
+      state.dashboard = null;
+      renderDashboard(null, error);
+    });
+  }
+
   // ── 🛰 관제 ───────────────────────────────────────────────────────
+  function clearWatch(message) {
+    state.board = null;
+    put($('issues'), message);
+    put($('kpis')); put($('iwan')); put($('upbox')); put($('doneList'));
+    $('upbox').hidden = true;
+    $('doneList').hidden = true;
+    $('doneToggle').textContent = '오늘 풀린 것 · 예외 처리한 것 —';
+    $('doneToggle').setAttribute('aria-expanded', 'false');
+    put($('tbody'), h('tr', null, h('td', { colspan: 9, class: 'empty' }, '현재 범위의 자료를 확인 중입니다.')));
+    $('iss-n').textContent = '';
+    $('tbl-n').textContent = '';
+  }
   function openWatch() {
     var gen = state.gen;
     show('watch');
     var sel = state.selection;
-    if (!state.board) put($('issues'), h('div', { class: 'loading' }, '불러오는 중…'));
+    if (!state.board || state.board.selection !== sel) clearWatch(h('div', { class: 'loading' }, '불러오는 중…'));
     return api('GET', '/board?selection=' + encodeURIComponent(sel) + '&attention=0').then(function (b) {
       if (gen !== state.gen || sel !== state.selection) return;   // 늦게 온 옛 응답(범위를 빨리 바꿈)은 버린다
       state.board = b;
@@ -414,14 +518,9 @@
       if (gen !== state.gen || (e && e.status === 401)) return;
       if (state.board && state.board.selection === sel) { toast(errText(e)); return; }
       // 첫 불러오기 실패 · 다른 범위로 바꾸다 실패 — 옛 숫자를 그대로 두지 않는다
-      state.board = null;
-      put($('issues'), h('div', { class: 'empty' }, '관제 판을 불러오지 못했습니다 — ' + errText(e) + ' ',
+      clearWatch(h('div', { class: 'empty' }, '관제 판을 불러오지 못했습니다 — ' + errText(e) + ' ',
         h('button', { type: 'button', class: 'btn sm', onclick: function () { state.gen++; openWatch(); } }, '다시 불러오기')));
-      put($('kpis'));
-      put($('iwan'));
       put($('tbody'), h('tr', null, h('td', { colspan: 9, class: 'empty' }, '불러오지 못했습니다.')));
-      $('iss-n').textContent = '';
-      $('tbl-n').textContent = '';
     });
   }
   var INVENTORY_MAPPING = { matched: '전산 업체 매칭', no_erp_record: '전산 내에 등록된 업체 정보 없음', unclassified: '미분류 · 확인 필요' };
@@ -580,6 +679,7 @@
                h('span', { class: 'l' }, label), h('span', { class: 'v' }, num(val)), h('span', { class: 's' }, sub));
     }
     put($('kpis'),
+        k('all', 'all', '전체 보기', c.total, '권한 범위의 모든 광고주'),
         k('need', 'need', '👉 확인 필요', c.needs_attention, '들어가 볼 곳'),
         k('red', 'red', [h('span', { class: 'sig red', 'aria-hidden': 'true' }), '긴급'], c.red, '오늘 안에'),
         k('yellow', 'yellow', [h('span', { class: 'sig yellow', 'aria-hidden': 'true' }), '주의'], c.yellow, '이번 주 안에'),
@@ -587,9 +687,9 @@
         k('white', 'white', [h('span', { class: 'sig white', 'aria-hidden': 'true' }), '점검 불가'], c.white, '이관 · 읽기 · 점검 상태'));
   }
   function renderUp() {
-    var up = state.board.escalated_to_me || [], box = $('upbox');
+    var up = watchItems(state.board.escalated_to_me), box = $('upbox');
     box.hidden = !up.length;
-    if (!up.length) return;
+    if (!up.length) { put(box); return; }
     put(box, h('b', null, '⬆ 나에게 올라온 🟡 ' + up.length + '건'), ' — 12시간 넘게 👀 확인이 없어 한 단계 위로 올라왔습니다',
         h('ul', null, up.map(function (e) {
           return h('li', null, h('button', { type: 'button', class: 'link', onclick: function () { go('/naver/clients/' + e.possibility_id); } }, e.name || ''),
@@ -622,7 +722,7 @@
              h('div', { class: 'act' }, act));
   }
   function renderIssues() {
-    var rows = state.board.issue_rows || [], box = $('issues');
+    var rows = watchItems(state.board.issue_rows), box = $('issues');
     var groups = [], at = {};
     rows.forEach(function (i) {
       var key = i.severity + '|' + i.code;
@@ -644,7 +744,7 @@
       : '현재 조회 범위에서 열린 이슈가 없습니다. 오늘 점검 결과와 자료 기준 시각을 확인해 주세요.'));
     var red = rows.filter(function (i) { return i.severity === 'red'; }).length;
     $('iss-n').textContent = '열린 이슈 ' + rows.filter(function (i) { return i.severity !== 'info'; }).length + ' (긴급 ' + red + ')';
-    var done = state.board.done_rows || [];
+    var done = watchItems(state.board.done_rows);
     $('doneToggle').textContent = (state.doneOpen ? '접기 — ' : '') + '오늘 풀린 것 · 예외 처리한 것 ' + done.length + '건' + (state.doneOpen ? '' : ' 보기');
     $('doneToggle').setAttribute('aria-expanded', String(state.doneOpen));
     $('doneList').hidden = !state.doneOpen;
@@ -658,6 +758,18 @@
     if (f === 'need') return r.verdict.needs_attention;
     if (f === 'all') return true;
     return r.verdict.color === f;
+  }
+  function watchRows() { return (state.board.rows || []).filter(passes); }
+  function watchItems(items) {
+    var ids = {};
+    watchRows().forEach(function (r) { ids[r.possibility_id] = true; });
+    return (items || []).filter(function (i) { return ids[i.possibility_id] === true; });
+  }
+  function renderWatchSelection() {
+    if (!state.board) return;
+    renderUp();
+    renderIssues();
+    renderTable();
   }
   function statusText(v) {
     if (v.color === 'white') return WHITE_TEXT[v.white_reason] || '점검 불가';
@@ -688,7 +800,7 @@
   }
   function renderTable() {
     if (!state.board) return;   // 아직 못 불러옴 — 거르기·찾기를 눌러도 아무 일 없음
-    var all = state.board.rows || [], rows = all.filter(passes), out = [];
+    var all = state.board.rows || [], rows = watchRows(), out = [];
     var grouped = state.me.scope === 'ALL' || state.me.scope === 'TEAM';
     if (grouped) {
       var teams = [], tAt = {};
@@ -702,7 +814,7 @@
       teams.forEach(function (T) {
         if (state.me.scope === 'ALL') out.push(h('tr', { class: 'grp team' }, h('td', { colspan: 9 }, h('b', null, T.name))));
         T.people.forEach(function (P) {
-          var mine = all.filter(function (r) { return (r.owner.name || '담당 미정') === P.name && (r.owner.team_name || '담당 미정') === T.name; });
+          var mine = P.rows;
           var cn = { red: 0, yellow: 0, white: 0, need: 0 };
           mine.forEach(function (r) { if (cn[r.verdict.color] !== undefined) cn[r.verdict.color]++; if (r.verdict.needs_attention) cn.need++; });
           out.push(h('tr', { class: 'grp' }, h('td', { colspan: 9 }, h('b', null, P.name), ' · ' + mine.length + '곳 · 확인 필요 ' + cn.need +
@@ -720,7 +832,7 @@
     }
     put($('tbody'), out);
     var kind = { ALL: '전체', TEAM: '우리 팀', MINE: '내 담당' }[state.me.scope] || '';
-    $('tbl-n').textContent = kind + (state.selection !== 'all' ? ' · 고른 범위' : '') + ' · ' + all.length + '곳';
+    $('tbl-n').textContent = kind + (state.selection !== 'all' ? ' · 고른 범위' : '') + ' · ' + rows.length + ' / ' + all.length + '곳';
     Array.prototype.forEach.call(document.querySelectorAll('#tblChips .chip'), function (b) {
       b.classList.toggle('on', b.getAttribute('data-f') === state.filter);
     });
@@ -731,7 +843,7 @@
     if (!state.board) return;
     renderIwan();
     renderKpis();
-    renderTable();
+    renderWatchSelection();
   }
 
   // 이슈 손길
@@ -749,6 +861,7 @@
     var r = parse(location.pathname);
     if (r.screen === 'client') { state.gen++; openClient(r.id); }
     else if (r.screen === 'watch') { state.gen++; openWatch(); }
+    else if (r.screen === 'dashboard') { state.gen++; openDashboard(); }
   }
   var except = null;
   /* 날짜는 서버의 「오늘」로 센다(브라우저 시계가 틀려도 한도가 어긋나지 않게) — 관제 판 band.today · 광고주 한 장 today. */
@@ -1363,16 +1476,17 @@
     Array.prototype.forEach.call(document.querySelectorAll('#tblChips .chip'), function (b) {
       b.addEventListener('click', function () { setFilter(b.getAttribute('data-f')); });
     });
-    $('q').addEventListener('input', function () { state.q = this.value.trim(); renderTable(); });
+    $('q').addEventListener('input', function () { state.q = this.value.trim(); renderWatchSelection(); });
     $('inventorySearch').addEventListener('input', function () { state.inventoryQ = this.value.trim(); renderInventory(); });
     $('inventoryView').addEventListener('change', function () { state.inventoryView = this.value; loadInventory(); });
     $('inventoryMapping').addEventListener('change', function () { state.inventoryMapping = this.value; loadInventory(); });
     $('inventoryWorkflow').addEventListener('change', function () { state.inventoryWorkflow = this.value; loadInventory(); });
     $('inventoryReload').addEventListener('click', loadInventory);
+    $('dashboardReload').addEventListener('click', function () { state.gen++; openDashboard(); });
     $('collectNow').addEventListener('click', requestCollection);
     $('confirmAuto').addEventListener('click', confirmAutomatic);
     $('scope').addEventListener('change', function () { state.selection = this.value; route(); });
-    $('doneToggle').addEventListener('click', function () { state.doneOpen = !state.doneOpen; renderIssues(); });
+    $('doneToggle').addEventListener('click', function () { if (state.board) { state.doneOpen = !state.doneOpen; renderIssues(); } });
     $('linksToggle').addEventListener('click', function () {
       state.linksOpen = !state.linksOpen;
       if (state.linksOpen && !state.links) loadLinks(); else renderLinks();

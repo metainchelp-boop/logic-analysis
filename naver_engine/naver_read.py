@@ -434,12 +434,18 @@ class NaverReader:
         self._max_calls = max_calls
         self.calls = 0
         self.pauses = 0
+        self._rate_limited = False
         self._last_sent: Optional[float] = None
         self._rate_hits: collections.deque = collections.deque()
         self._request_limits = []
 
     def __repr__(self) -> str:
         return f"NaverReader(calls={self.calls}, pauses={self.pauses})"
+
+    @property
+    def rate_limited(self) -> bool:
+        """이 읽기 객체가 RATE 응답을 겪었는지. 추가 작업 생략용이며 재시도 정책은 바꾸지 않는다."""
+        return self._rate_limited
 
     # 손잡이
     def manager_handle(self) -> H.ManagerHandle:
@@ -522,6 +528,7 @@ class NaverReader:
         self._last_sent = self._clock.monotonic()
 
     def _note_rate(self) -> None:
+        self._rate_limited = True
         now = self._clock.monotonic()
         self._rate_hits.append(now)
         while self._rate_hits and now - self._rate_hits[0] > RATE_WINDOW:

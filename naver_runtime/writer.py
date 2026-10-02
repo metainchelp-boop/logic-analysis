@@ -25,6 +25,7 @@ finish_metrics_attempt record_access access_log
 account_catalog_status record_account_catalog record_account_catalog_failure
 inventory_snapshot inventory_account_valid inventory_work begin_inventory_check
 inventory_progress record_inventory_progress record_inventory_check
+monthly_checks_on monthly_work begin_monthly_check monthly_progress record_monthly_progress record_monthly_check
 """.split())
 
 
