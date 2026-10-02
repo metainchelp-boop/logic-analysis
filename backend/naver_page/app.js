@@ -18,7 +18,7 @@
   var REFRESH_AHEAD_MS = 10 * 60 * 1000;    // 토큰이 끝나기 10분 전에 갱신 — 페이지를 연 때가 아니라 토큰 끝 시각에서
   var IDLE_MS = 60 * 60 * 1000;             // 1시간 넘게 손대지 않으면 이 창의 로그인을 끝낸다(서버 12시간과 별도)
   var END_WARN_MS = 15 * 60 * 1000;         // 로그인 뒤 12시간이 끝나기 15분 전에 한 번 알린다
-  var SCREEN = /^\/naver\/(?:(issues|system|unlinked|ended|links|settings|automation|reports)|clients\/([1-9][0-9]{0,17}))?$/;
+  var SCREEN = /^\/naver\/(?:(issues|system|unlinked|ended|links|settings|automation|reports|transfers)|clients\/([1-9][0-9]{0,17}))?$/;
 
   var state = {
     session: null, me: null, selection: 'all', filter: 'need', q: '', board: null, links: null, ended: null,
@@ -57,7 +57,7 @@
     return el;
   }
   function num(n) { return typeof n === 'number' && isFinite(n) ? n.toLocaleString('ko-KR') : '—'; }
-  function won(n) { return typeof n === 'number' && isFinite(n) ? n.toLocaleString('ko-KR') + '원' : '—'; }
+  function won(n) { return typeof n === 'number' && isFinite(n) ? Math.trunc(n).toLocaleString('ko-KR') + '원' : '—'; }
   function hm(iso) {
     var d = iso ? new Date(iso) : null;
     if (!d || isNaN(d)) return '';
@@ -271,11 +271,11 @@
   document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') tick(); });
 
   // ── 화면 고르기 ────────────────────────────────────────────────────
-  var SCREENS = ['loading', 'blocked', 'watch', 'client', 'automation', 'reports', 'settings'];
+  var SCREENS = ['loading', 'blocked', 'watch', 'client', 'automation', 'reports', 'transfers', 'settings'];
   function show(name) {
     SCREENS.forEach(function (s) { var el = $('s-' + s); if (el) el.classList.toggle('on', s === name); });
     var menuKey = { watch: '/naver/', client: '/naver/', automation: '/naver/automation', reports: '/naver/reports',
-                    settings: '/naver/settings' }[name];
+                    transfers: '/naver/transfers', settings: '/naver/settings' }[name];
     Array.prototype.forEach.call(document.querySelectorAll('.menu button'), function (b) {
       b.classList.toggle('on', b.getAttribute('data-go') === menuKey);
     });
@@ -285,7 +285,7 @@
     if (!m) return { screen: 'watch', focus: null };
     if (m[2]) return { screen: 'client', id: m[2] };
     var n = m[1] || '';
-    var screen = { system: 'settings', settings: 'settings', automation: 'automation', reports: 'reports' }[n] || 'watch';
+    var screen = { system: 'settings', settings: 'settings', automation: 'automation', reports: 'reports', transfers: 'transfers' }[n] || 'watch';
     return { screen: screen, focus: n || null };
   }
   function go(path) {
@@ -306,6 +306,7 @@
       return openSettings();
     }
     if (r.screen === 'automation' || r.screen === 'reports') { show(r.screen); return; }
+    if (r.screen === 'transfers') { show('transfers'); return loadInventory(); }
     state.focus = r.focus;
     // /naver/unlinked(월요일 알림)가 건 거르기도 그 주소에서만
     if (r.focus === 'unlinked') { state.filter = 'iw_unlinked_numbers'; state.filterFromRoute = true; }
@@ -355,7 +356,6 @@
     var gen = state.gen;
     show('watch');
     var sel = state.selection;
-    loadInventory();
     if (!state.board) put($('issues'), h('div', { class: 'loading' }, '불러오는 중…'));
     return api('GET', '/board?selection=' + encodeURIComponent(sel) + '&attention=0').then(function (b) {
       if (gen !== state.gen || sel !== state.selection) return;   // 늦게 온 옛 응답(범위를 빨리 바꿈)은 버린다
@@ -1296,7 +1296,7 @@
     $('inventoryReload').addEventListener('click', loadInventory);
     $('collectNow').addEventListener('click', requestCollection);
     $('confirmAuto').addEventListener('click', confirmAutomatic);
-    $('scope').addEventListener('change', function () { state.selection = this.value; state.gen++; openWatch(); });
+    $('scope').addEventListener('change', function () { state.selection = this.value; route(); });
     $('doneToggle').addEventListener('click', function () { state.doneOpen = !state.doneOpen; renderIssues(); });
     $('linksToggle').addEventListener('click', function () {
       state.linksOpen = !state.linksOpen;

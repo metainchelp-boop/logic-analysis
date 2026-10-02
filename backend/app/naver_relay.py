@@ -93,7 +93,7 @@ _PAGE = re.compile(r"(?:[A-Za-z0-9_-]{1,64}/){0,3}[A-Za-z0-9_-]{1,64}(?:\.[a-z0-
 # 화면 주소(S13) — 이 이름만 화면 첫 파일(index.html)을 준다: 엔진 알림 링크(``alerts.LINK_*`` · 🔔 · 비서방 본문)와 화면 안
 # 이동이 쓰는 주소. 그 밖의 확장자 없는 이름은 종전대로 404(시험). 화면 파일은 모두 절대 경로(/naver/app.js)라 어느 화면
 # 주소에서 열어도 같은 파일을 부른다.
-PAGE_SCREENS = re.compile(r"(?:issues|system|unlinked|ended|links|settings|automation|reports|clients/[1-9][0-9]{0,17})")
+PAGE_SCREENS = re.compile(r"(?:issues|system|unlinked|ended|links|settings|automation|reports|transfers|clients/[1-9][0-9]{0,17})")
 # 주소창에 ① 이 준 sso 가 실려 온다 — 다른 곳으로 새지 않게(Referer 0 · 바깥 연결 0 · 틀 안에 못 넣음 · 캐시 0)
 PAGE_HEADERS: Tuple[Tuple[str, str], ...] = (
     ("Cache-Control", "no-store"), ("Pragma", "no-cache"), ("X-Content-Type-Options", "nosniff"),

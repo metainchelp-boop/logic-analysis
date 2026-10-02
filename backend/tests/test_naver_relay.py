@@ -636,7 +636,7 @@ class PageFileTest(unittest.TestCase):
     def test_screen_paths(self):
         """화면 주소(S13) — 정해진 이름만 index.html · 비슷한 이름·빗금·대문자·0번·긴 번호는 종전대로 404."""
         index = (self.root / "index.html").resolve()
-        for rest in ("issues", "system", "unlinked", "ended", "links", "settings", "automation", "reports",
+        for rest in ("issues", "system", "unlinked", "ended", "links", "settings", "automation", "reports", "transfers",
                      "clients/1", "clients/123456789012345678"):
             self.assertEqual(R.page_file(self.root, rest), index, rest)
         for rest in ("issues/", "Issues", "issue", "issues2", "clients", "clients/", "clients/0", "clients/01",

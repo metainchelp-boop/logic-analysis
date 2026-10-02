@@ -22,6 +22,10 @@ class InventoryScreenTest(TS.BrowserTest):
                                         "complete": True, "items": items},
                                        [E.NaverIdRow(11, M.VENDOR_NAVER, str(TM.A)),
                                         E.NaverIdRow(12, M.VENDOR_NAVER, str(TM.B))], self.fc.now())
+        now = self.fc.now()
+        snapshot = self.st.inventory_snapshot(now)
+        self.st.begin_inventory_check(TM.A, snapshot, now)
+        self.st.record_inventory_check(TM.A, snapshot, now, {"status": "partial", "bizmoney": 4116.83})
         cfg = {"base": self.base, "ceo": TW.tok(1), "staff": TW.tok(3), "now": self.fc.now().isoformat(),
                "shots": os.environ.get("NAVER_SCREEN_SHOTS") or None}
         proc = subprocess.Popen([self.node, str(Path(__file__).with_name("inventory_screen_browser.js")), json.dumps(cfg)],

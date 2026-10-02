@@ -166,7 +166,7 @@ class TextRulesTest(unittest.TestCase):
 
     def test_races_and_double_submit(self):
         """늦게 온 옛 응답이 새 것을 덮지 않고 · 같은 일을 두 번 보내지 않는다(검토 scope-race · double-submit)."""
-        self.assertIn("state.selection = this.value; state.gen++; openWatch();", CODE)
+        self.assertIn("state.selection = this.value; route();", CODE)
         watch = CODE[CODE.index("function openWatch() {"):CODE.index("function fail(e)")]
         self.assertIn("if (gen !== state.gen || sel !== state.selection) return;", watch)
         reload = CODE[CODE.index("function reload() {"):CODE.index("var except = null;")]
