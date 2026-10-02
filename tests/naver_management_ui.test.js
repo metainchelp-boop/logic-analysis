@@ -249,12 +249,20 @@ test('광고 사유는 계층별 원문·뜻·시각을 보존하며 미조회�
   const parent = { entity: 'campaign', entity_id: 'campaign-1', checked_at: '2026-10-01T07:30:00+09:00',
     status: { code: 'ELIGIBLE', meaning: '노출 가능한 상태', code_state: 'known' },
     reason: { code: 'CAMPAIGN_LIMITED_BY_BUDGET', meaning: '캠페인 예산 한도 도달', code_state: 'known' }, parents: [] };
-  const run = launch({ data: inventory([fixture({ structure_status: 'partial', structure_checked_at: '2026-10-02T08:00:00+09:00', ad_reasons: [{
+  const items = [{
     entity: 'ad', entity_id: 'ad-1', checked_at: '2026-10-02T08:00:00+09:00',
     status: { code: ' New_Status ', meaning: '해석 미확인', code_state: 'unknown' },
     reason: { code: 'AD_DISAPPROVED', meaning: '소재 검수 보류 또는 반려', code_state: 'known' }, parents: [parent]
-  }] }), fixture({ ad_account_no: '701', structure_status: 'pending', ad_reasons: [] })]) });
+  }];
+  const data = inventory([fixture({ structure_status: 'partial', structure_checked_at: '2026-10-02T08:00:00+09:00', ad_reason_count: 1 }),
+    fixture({ ad_account_no: '701', structure_status: 'pending', ad_reason_count: 0 })]);
+  const run = launch({ respond: req => req.url.includes('/accounts/reasons?') ?
+    { items, total: 1, page: 0, page_size: 50, next_page: null, checked_at: '2026-10-02T08:00:00+09:00', status: 'partial' } : data });
   await flush();
+  assert.ok(!run.requests.some(r => r.url.includes('/accounts/reasons?')));
+  const details = tree(run.elements.get('inventoryRows')).filter(el => el.tagName === 'DETAILS');
+  details[0].open = true; details[0].dispatch('toggle'); await flush();
+  assert.equal(run.requests.filter(r => r.url.includes('/accounts/reasons?')).length, 1);
   const text = run.text('inventoryRows');
   assert.match(text, /구조 일부 조회.*미조회 항목은 정상 판정 아님/);
   assert.match(text, /소재.*ad-1.*2026-10-02 08:00 KST.* New_Status .*해석 미확인.*알 수 없는 코드/);
@@ -262,6 +270,27 @@ test('광고 사유는 계층별 원문·뜻·시각을 보존하며 미조회�
   assert.match(text, /상위 캠페인.*campaign-1.*2026-10-01 07:30 KST.*CAMPAIGN_LIMITED_BY_BUDGET/);
   assert.match(text, /구조 미조회.*미조회 항목은 정상 판정 아님/);
   assert.doesNotMatch(text, /STATUS_FROM_AUDIT/);
+});
+
+test('광고 사유는 50건씩 탐색하며 범위를 바꾼 뒤 늦은 응답을 되살리지 않는다', async () => {
+  let pending;
+  const data = inventory([fixture({ ad_reason_count: 51 })]);
+  const run = launch({ respond: req => {
+    if (!req.url.includes('/accounts/reasons?')) return data;
+    if (req.url.includes('&page=1&')) return new Promise(resolve => { pending = resolve; });
+    return { items: [], total: 51, page: 0, page_size: 50, next_page: 1 };
+  } });
+  await flush();
+  const detail = tree(run.elements.get('inventoryRows')).find(el => el.tagName === 'DETAILS');
+  detail.open = true; detail.dispatch('toggle'); detail.dispatch('toggle'); await flush();
+  assert.equal(run.requests.filter(r => r.url.includes('/accounts/reasons?')).length, 1);
+  run.buttons('inventoryRows').find(el => el.textContent === '다음 사유').dispatch('click'); await flush();
+  run.scope('person:2'); await flush();
+  pending({ items: [{ entity: 'ad', entity_id: 'OLD_PRIVATE_REASON' }], total: 51, page: 1, next_page: null }); await flush();
+  assert.doesNotMatch(run.text('inventoryRows'), /OLD_PRIVATE_REASON/);
+  detail.dispatch('toggle'); await flush();
+  assert.equal(run.requests.filter(r => r.url.includes('/accounts/reasons?')).length, 2);
+  assert.equal(run.requests.filter(r => r.method !== 'GET').length, 0);
 });
 
 test('성공 기록 없는 대기를 이전 성공값이라 하지 않고 잔액 합계에 오늘 값이라고 붙이지 않는다', async () => {

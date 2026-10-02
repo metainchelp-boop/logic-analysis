@@ -33,7 +33,7 @@ performance_manual_request generate_reports report_snapshots record_report_revie
 latest_inventory_successes observed_campaign_reasons
 attribution_changes
 structure_work structure_account_valid begin_structure_check structure_progress record_structure_progress
-record_structure_check structure_checks
+record_structure_check structure_checks structure_reason_summaries structure_reason_page
 """.split())
 
 

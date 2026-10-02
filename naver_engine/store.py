@@ -2141,6 +2141,67 @@ class ManagedStorage:
                         "error_code":row["error_code"],"reasons":json.loads(row["reasons_json"] or "[]"),"stale":not current}
         return out
 
+    def _structure_reason_state(self, customer_ids, now):
+        """목록용 SQL은 사유 배열을 반환하지 않는다. 현재 귀속/회차와 개수만 읽는다."""
+        from . import management_store as MS
+        wanted = sorted({_customer_id(cid, "고객 번호") for cid in customer_ids})
+        if not wanted:
+            return {}
+        policies = MS.snapshot(self, now)
+        latest = {}
+        for offset in range(0, len(wanted), 400):
+            chunk = wanted[offset:offset+400]
+            marks = ",".join("(?)" for _ in chunk)
+            rows = _rows(self._conn.execute(f"""WITH wanted(customer_id) AS (VALUES {marks})
+                SELECT r.rowid AS row_id,r.customer_id,r.job_key,r.cycle_day,r.stage_revision,
+                    r.status,r.checked_at,r.error_code,json_array_length(COALESCE(r.reasons_json,'[]')) AS reason_count
+                FROM wanted w JOIN naver_auto_structure_job r ON r.rowid=(
+                    SELECT p.rowid FROM naver_auto_structure_job p WHERE p.customer_id=w.customer_id
+                    ORDER BY p.checked_at DESC,p.rowid DESC LIMIT 1)""", chunk))
+            latest.update({row["customer_id"]: row for row in rows})
+        out = {}
+        for cid in wanted:
+            policy, row = policies.get(cid), latest.get(cid)
+            source_current = policy is not None and policy["decision"].cadence != "blocked"
+            summary = {"status": "pending", "checked_at": None, "error_code": None,
+                       "reason_count": 0, "stale": not source_current}
+            if row is not None:
+                current = source_current and row["stage_revision"] == policy["stage_revision"]
+                if current:
+                    cadence = policy["decision"].cadence
+                    current = row["cycle_day"] == str(P.period_for(cadence, now).cycle_day) or (
+                        ":manual:" in row["job_key"] and row["cycle_day"] == str(now.astimezone(KST).date()))
+                count = row["reason_count"]
+                current = current and type(count) is int and 0 <= count <= 10000
+                summary = {"status": row["status"] if current else "pending",
+                           "checked_at": row["checked_at"] if current else None,
+                           "error_code": row["error_code"] if current else None,
+                           "reason_count": count if current else 0, "stale": not current}
+            out[cid] = (summary, None if row is None else row["row_id"])
+        return out
+
+    def structure_reason_summaries(self, customer_ids, now):
+        """상세 사유를 역직렬화하지 않는 계정별 목록 요약."""
+        return {cid: summary for cid, (summary, _) in self._structure_reason_state(customer_ids, now).items()}
+
+    def structure_reason_page(self, customer_id, now, page=0):
+        """현재 원천의 단일 계정만 50개씩 읽는다. 호출자가 직원 열람 범위를 확인한다."""
+        _customer_id(customer_id, "고객 번호")
+        if type(page) is not int or not 0 <= page < 200:
+            raise StoreRefused("BAD_PAGE")
+        summary, row_id = self._structure_reason_state([customer_id], now)[customer_id]
+        if summary["stale"]:
+            raise StoreRefused("SOURCE_STALE")
+        total = summary["reason_count"]
+        if page > 0 and page*50 >= total:
+            raise StoreRefused("BAD_PAGE")
+        items = [] if row_id is None else [json.loads(row[0]) for row in self._conn.execute(
+            """SELECT j.value FROM naver_auto_structure_job r,json_each(COALESCE(r.reasons_json,'[]')) j
+                WHERE r.rowid=? ORDER BY CAST(j.key AS INTEGER) LIMIT 50 OFFSET ?""", (row_id, page*50))]
+        return {"items": items, "total": total, "page": page, "page_size": 50,
+                "next_page": page+1 if (page+1)*50 < total else None,
+                "checked_at": summary["checked_at"], "status": summary["status"]}
+
 
 class Store(ManagedStorage):
     def __init__(self, conn, path: str, lock_fd: Optional[int], writer: bool,

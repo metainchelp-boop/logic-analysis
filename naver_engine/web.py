@@ -53,7 +53,7 @@ log = logging.getLogger("naver_engine.web")
 PREFIX = "/api/naver-auto"
 GET, POST = "GET", "POST"            # 들어오는 요청의 방식(이 파일은 나가는 요청을 만들지 않는다)
 # 제한판은 새 경로가 추가돼도 자동으로 열지 않는다. 로그인/갱신은 기술 쓰기만 허용한다.
-_VERIFICATION_GETS = frozenset({"/me", "/board", "/accounts", "/dashboard", "/links/pending", "/ended", "/unlinked",
+_VERIFICATION_GETS = frozenset({"/me", "/board", "/accounts", "/accounts/reasons", "/dashboard", "/links/pending", "/ended", "/unlinked",
                                "/bell", "/settings", "/health", "/reports"})
 _VERIFICATION_SESSIONS = frozenset({"/session", "/session/refresh"})
 _VERIFIED_REQUESTS = frozenset({(POST, "/links/confirm"), (POST, "/collection/request"),
@@ -520,6 +520,22 @@ class App:
             raise HttpError(400, "bad-query")
         return 200, DASH.board(v.ctx(now), v.store, v.scope, req.query.get("selection", "all"))
 
+    def _h_account_reasons(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
+        if set(req.query) - {"selection", "ad_account_no", "page"}:
+            raise HttpError(400, "bad-query")
+        ad_no, page = req.query.get("ad_account_no", ""), req.query.get("page", "0")
+        if not re.fullmatch(r"[1-9][0-9]{0,14}", ad_no) or not re.fullmatch(r"0|[1-9][0-9]{0,5}", page):
+            raise HttpError(400, "bad-query")
+        try:
+            return 200, INV.reason_page(v.ctx(now), v.store, v.scope, ad_no,
+                                       req.query.get("selection", "all"), int(page))
+        except S.StoreRefused as error:
+            if str(error) == "SOURCE_STALE":
+                raise HttpError(409, "source-stale") from error
+            if str(error) == "BAD_PAGE":
+                raise HttpError(400, "bad-query") from error
+            raise
+
     def _fresh_for_write(self, v: Viewer, store, now: datetime) -> Viewer:
         """쓰기 큐 실행 시점의 신원·조직을 다시 읽는다. 요청 당시 scope를 재사용하지 않는다."""
         if now >= v.claims.expires_at:
@@ -966,6 +982,7 @@ ROUTES: Tuple[Route, ...] = tuple(Route(m, re.compile(p), h, a) for m, p, h, a i
     (GET, r"/me", App._h_me, True),
     (GET, r"/board", App._h_board, True),
     (GET, r"/accounts", App._h_accounts, True),
+    (GET, r"/accounts/reasons", App._h_account_reasons, True),
     (GET, r"/dashboard", App._h_dashboard, True),
     (POST, r"/management/update", App._h_management_update, True),
     (POST, r"/management/collect", App._h_management_collect, True),

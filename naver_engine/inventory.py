@@ -242,8 +242,8 @@ def board(ctx, store, scope, selection="all", workflow="all", mapping="all", vie
         except M.BadInput:
             match_ok = False
     checks = store.inventory_checks_on(ctx.today)
-    structure = store.structure_checks(ctx.accounts.keys(),ctx.now) if callable(getattr(store,"structure_checks",None)) else {}
-    campaign_reasons = store.observed_campaign_reasons(ctx.accounts.keys()) if callable(getattr(store,"observed_campaign_reasons",None)) else {}
+    structure = store.structure_reason_summaries(ctx.accounts.keys(),ctx.now) \
+        if callable(getattr(store,"structure_reason_summaries",None)) else {}
     managed = store.performance_checks(ctx.now) if callable(getattr(store,"performance_checks",None)) else {}
     legacy = store.latest_inventory_successes() if managed else {}
     for cid, current in managed.items():
@@ -305,8 +305,7 @@ def board(ctx, store, scope, selection="all", workflow="all", mapping="all", vie
                      "possibility_id": pid, "company_name": None if company is None else company["company_name"],
                      "mapping": status, "workflow": stage, "erp_stage": None if company is None else company["stage"],
                      "owner": owner, "collection": check or {"status": "pending", "checked_at": None},
-                     "ad_reasons": structure.get(cid,{}).get("reasons") or
-                        ([] if (check or {}).get("attribution_changed") else campaign_reasons.get(cid,[])),
+                     "ad_reason_count": structure.get(cid,{}).get("reason_count",0),
                      "structure_status": structure.get(cid,{}).get("status","pending"),
                      "structure_checked_at": structure.get(cid,{}).get("checked_at"),
                      "management": {"cadence":policy.get("cadence","blocked"),
@@ -359,3 +358,52 @@ def staff_counts(ctx, store, scope):
         ids = SC.clients_in(ctx.org, own_scope, owns)
         out[idx] = sum(per_pid[pid] for pid in ids)
     return out
+
+
+def reason_page(ctx, store, scope, ad_account_no, selection="all", page=0):
+    """목록과 같은 현재 담당/매칭 판정 뒤 단일 계정의 저장 사유만 읽는다."""
+    if not isinstance(ad_account_no, str) or not ad_account_no.isascii() or not ad_account_no.isdigit() \
+            or not 1 <= len(ad_account_no) <= 15 or ad_account_no[0] == "0":
+        raise SC.ClientNotVisible()
+    if type(page) is not int or not 0 <= page < 200:
+        raise S.StoreRefused("BAD_PAGE")
+    catalog, state = catalog_status(store, ctx.now)
+    if state != "accepted" or store.inventory_snapshot(ctx.now) is None \
+            or not O.allows_raising(O.org_freshness(ctx.org.generated_dt, ctx.now)):
+        raise S.StoreRefused("SOURCE_STALE")
+    companies = {row["possibility_id"]: row for row in catalog["items"]}
+    owns = {pid: SC.ownership_for_client(ctx.org, pid, pid, SC.MATCH_PID) for pid in companies}
+    visible = SC.clients_in(ctx.org, scope, owns, selection)
+    ceo = scope.kind == SC.ALL and scope == SC.scope_of(ctx.org, scope.viewer_idx)
+    targets = [cid for cid, row in ctx.accounts.items()
+               if row["present"] == 1 and str(row["ad_account_no"]) == ad_account_no]
+    if len(targets) != 1:
+        raise SC.ClientNotVisible()
+    cid = targets[0]
+    try:
+        result, possible = _matching(ctx, catalog)
+    except M.BadInput:
+        raise S.StoreRefused("SOURCE_STALE") from None
+    pairs = [pair for pair in result.pairs if pair.customer_id == cid]
+    if len(pairs) > 1 or any(candidate.customer_id == cid for candidate in result.candidates):
+        raise SC.ClientNotVisible()
+    if pairs:
+        company = companies.get(pairs[0].possibility_id)
+        if company is None or company["stage_hidden"] or not company["stage_known"] \
+                or company["possibility_id"] not in visible:
+            raise SC.ClientNotVisible()
+    else:
+        # 대표도 모호한 전산 주장/이름 후보를 미매칭으로 간주하여 원천을 열지 않는다.
+        ambiguous = cid in possible or any(row.customer_id == cid for row in result.blocked)
+        for cred in catalog["ids"]:
+            if cred["vendor"] != M.VENDOR_NAVER:
+                continue
+            claimed, _ = M.parse_customer_id(cred["customer_id_raw"])
+            raw = cred["ad_account_no_raw"]
+            ambiguous = ambiguous or claimed == cid or (isinstance(raw, str) and raw.isascii()
+                and raw.isdigit() and int(raw) == int(ad_account_no))
+        if ambiguous or not ceo or selection not in ("all", "unassigned"):
+            raise SC.ClientNotVisible()
+    if not callable(getattr(store, "structure_reason_page", None)):
+        raise S.StoreRefused("SOURCE_STALE")
+    return store.structure_reason_page(cid, ctx.now, page=page)

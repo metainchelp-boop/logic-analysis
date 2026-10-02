@@ -152,6 +152,8 @@
     }
   }
   var ERR = {
+    'source-stale': '현재 원천·업무 단계에 맞는 사유를 아직 확인하지 못했습니다. 목록과 수집 시각을 다시 확인해 주세요',
+    'bad-query': '조회 조건이나 페이지가 변경되었습니다. 목록을 새로고침한 뒤 다시 확인해 주세요',
     'stage-changed': '전산 단계가 변경되었습니다. 목록을 새로고침한 뒤 다시 확인해 주세요',
     'report-incomplete': '누락이 남은 보고서는 승인할 수 없습니다. 자료 수집 후 다시 확인해 주세요',
     'verification-read-only': '읽기 전용 검증판에서는 업무 내용을 변경할 수 없습니다',
@@ -674,13 +676,38 @@
       parent ? null : (item.parents || []).map(function (p) { return adReasonItem(p, true); }));
   }
   function adReasons(row) {
-    var reasons = row.ad_reasons || [];
-    var status = { pending: '구조 미조회', partial: '구조 일부 조회', ok: '구조 조회 완료' }[row.structure_status] || '구조 조회 상태 미확인';
-    return h('details', { class: 'ad-reasons' }, h('summary', null, '광고 상태·사유 ' + num(reasons.length) + '건'),
+    var status = { pending: '구조 미조회', reading: '구조 조회 중', retry: '구조 재시도 대기',
+      limited: '구조 조회 제한 · 확인 필요', reauth_required: '구조 조회 권한 확인 필요',
+      partial: '구조 일부 조회', ok: '구조 조회 완료' }[row.structure_status] || '구조 조회 상태 미확인';
+    var inventory = state.inventory, gen = state.gen, selection = state.selection, busy = false;
+    var content = h('div'), detail;
+    function fresh() { return state.inventory === inventory && state.gen === gen && state.selection === selection; }
+    function load(page) {
+      if (busy || !fresh()) return;
+      busy = true; put(content, h('p', { class: 'w' }, '저장된 사유를 불러오는 중…'));
+      api('GET', '/accounts/reasons?ad_account_no=' + encodeURIComponent(row.ad_account_no) + '&page=' + page + '&selection=' + encodeURIComponent(selection)).then(function (data) {
+        if (!fresh()) return;
+        busy = false;
+        put(content, h('p', { class: 'w' }, '저장된 사유 ' + num(data.total) + '건 · ' + num(data.page + 1) + '페이지 · 실제 확인 ' + datedTime(data.checked_at)),
+          (data.items || []).map(function (item) { return adReasonItem(item, false); }),
+          data.total === 0 ? h('p', { class: 'w' }, '저장된 광고 상태 응답이 없습니다. 사유 없음·정상을 뜻하지 않습니다.') : null,
+          h('div', { class: 'account-actions' },
+            data.page > 0 ? h('button', { type: 'button', class: 'btn sm', onclick: function () { load(data.page - 1); } }, '이전 사유') : null,
+            data.next_page !== null && data.next_page !== undefined ? h('button', { type: 'button', class: 'btn sm', onclick: function () { load(data.next_page); } }, '다음 사유') : null));
+      }, function (e) {
+        if (!fresh()) return;
+        busy = false;
+        put(content, h('p', { class: 'w' }, '사유를 확인하지 못했습니다. ' + errText(e)),
+          h('button', { type: 'button', class: 'btn sm', onclick: function () { load(page); } }, '사유 다시 보기'));
+      });
+    }
+    detail = h('details', { class: 'ad-reasons', ontoggle: function () {
+      if (detail.open && !content.firstChild) load(0);
+    } }, h('summary', null, '광고 상태·사유 ' + num(row.ad_reason_count) + '건 · 펼쳐 보기'),
       h('p', { class: 'w' }, status + ' · ' + datedTime(row.structure_checked_at)),
       h('p', { class: 'w' }, '미조회 항목은 정상 판정 아님 · 설정상 노출 가능과 실제 집행은 다릅니다. 매칭·수집 실패 사유와 별개입니다.'),
-      reasons.length ? reasons.map(function (item) { return adReasonItem(item, false); }) :
-        h('p', { class: 'w' }, '저장된 광고 상태 응답이 없습니다. 사유 없음·정상을 뜻하지 않습니다.'));
+      content);
+    return detail;
   }
   var managementEdit = null;
   function managementReason(code) {
