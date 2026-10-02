@@ -136,7 +136,7 @@ class StoreAlertTest(Base):
         return self.st.record_alert(**base)
 
     def test_version_and_constants(self):
-        self.assertEqual(S.SCHEMA_VERSION, 10)   # 10 = 실관리 수집 원장 추가
+        self.assertEqual(S.SCHEMA_VERSION, 11)   # 11 = 재확인 세대·정정 상태 추가
         self.assertEqual(S.ALERT_SEVERITIES, EA.SEVERITIES)
         self.assertEqual(S.ALERT_TTL, timedelta(hours=12))
         for link in (AL.LINK_HOME, AL.LINK_ISSUES, AL.LINK_SYSTEM, AL.LINK_UNLINKED):

@@ -2,11 +2,34 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
 
 DAILY_STAGES = frozenset({"진행중", "사후관리", "전략관리", "재계약진행중"})
 KST = timezone(timedelta(hours=9))
+COLLECTION_START = time(0, 1)
+
+
+def generation_for(cycle: date) -> str:
+    return datetime.combine(cycle, COLLECTION_START, tzinfo=KST).isoformat()
+
+
+def revalidation_periods(when: date | datetime, *, managed: bool, prior_managed: bool = False):
+    """새 자동 회차만 반환한다. 진행 중 회차의 고정 기간은 저장소가 보존한다."""
+    day = _kst_day(when)
+    end = day-timedelta(days=1)
+    result = []
+    if managed and day.day >= 3:
+        month_end = day.replace(day=1)-timedelta(days=1)
+        result.append(("report_monthly", day.replace(day=3), month_end.replace(day=1), month_end))
+    if managed:
+        monday = day-timedelta(days=day.weekday())
+        result.append(("report_weekly", monday, monday-timedelta(days=7), monday-timedelta(days=1)))
+    if day.weekday() == 6 and (managed or prior_managed):
+        result.append(("reconcile", day, end-timedelta(days=30), end))
+    if managed:
+        result.append(("recent", day, end-timedelta(days=2), end))
+    return result
 
 
 @dataclass(frozen=True)

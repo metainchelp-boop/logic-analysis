@@ -24,6 +24,18 @@ def daily_rows(report_period=WEEK, customers=(101,)):
 
 
 class ReportingTests(unittest.TestCase):
+    def test_revision_summary_retains_same_total_daily_movement(self):
+        rows = daily_rows()
+        first = R.aggregate(WEEK, (101,), rows, NOW)
+        rows[0]["spend"], rows[1]["spend"] = 500, 1500
+        corrected = R.aggregate(WEEK, (101,), rows, NOW)
+        summary = R.revision_metadata(first, corrected, 7)
+        self.assertEqual(summary["previous_report_id"], 7)
+        self.assertEqual(summary["metric_deltas"]["spend"], 0)
+        self.assertEqual(summary["changed_days"], ["2026-09-28", "2026-09-29"])
+        self.assertIn("spend", summary["changed_metrics"])
+        self.assertFalse(summary["completeness_changed"])
+
     def test_period_anchor_is_a_day_inside_the_reported_period(self):
         weekly = R.period("weekly", date(2025, 1, 1))
         self.assertEqual((weekly.start, weekly.end), (date(2024, 12, 30), date(2025, 1, 5)))

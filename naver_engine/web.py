@@ -47,6 +47,7 @@ from . import views as W
 from . import inventory as INV
 from . import dashboard as DASH
 from . import management_store as MS
+from . import reporting as R
 
 log = logging.getLogger("naver_engine.web")
 
@@ -54,7 +55,7 @@ PREFIX = "/api/naver-auto"
 GET, POST = "GET", "POST"            # 들어오는 요청의 방식(이 파일은 나가는 요청을 만들지 않는다)
 # 제한판은 새 경로가 추가돼도 자동으로 열지 않는다. 로그인/갱신은 기술 쓰기만 허용한다.
 _VERIFICATION_GETS = frozenset({"/me", "/board", "/accounts", "/accounts/reasons", "/dashboard", "/links/pending", "/ended", "/unlinked",
-                               "/bell", "/settings", "/health", "/reports"})
+                               "/bell", "/settings", "/health", "/reports", "/reports/history"})
 _VERIFICATION_SESSIONS = frozenset({"/session", "/session/refresh"})
 _VERIFIED_REQUESTS = frozenset({(POST, "/links/confirm"), (POST, "/collection/request"),
                                 (GET, "/collection/status"), (POST, "/management/update"),
@@ -583,14 +584,32 @@ class App:
         return 200, {"updated": True, "stage_revision": result["stage_revision"], "included": body["included"]}
 
     def _h_management_collect(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
-        body = _body(req, frozenset({"ad_account_no"}), frozenset({"ad_account_no"}))
+        body = _body(req, frozenset({"ad_account_no", "period_start", "period_end", "possibility_id"}),
+                     frozenset({"ad_account_no"}))
         ad_no = _text(body["ad_account_no"], 15)
         if not re.fullmatch(r"[1-9][0-9]{0,14}", ad_no):
             raise HttpError(400, "bad-body")
+        dated = bool(set(body) & {"period_start", "period_end", "possibility_id"})
+        start = end = pid = None
+        if dated:
+            if not {"period_start", "period_end", "possibility_id"} <= set(body):
+                raise HttpError(400, "bad-body")
+            pid = _pos(body["possibility_id"])
+            try:
+                start, end = (date.fromisoformat(body[key]) for key in ("period_start", "period_end"))
+                if (str(start) != body["period_start"] or str(end) != body["period_end"]
+                        or not 0 <= (end-start).days < 31 or end >= now.astimezone(KST).date()):
+                    raise ValueError()
+            except (TypeError, ValueError):
+                raise HttpError(400, "bad-body") from None
         def collect(st):
             current = self._now()
             fresh = self._fresh_for_write(v, st, current)
-            cid, _row = self._management_account(fresh, current, ad_no, allow_unmatched=True)
+            cid, row = self._management_account(fresh, current, ad_no, allow_unmatched=not dated)
+            if dated:
+                if row.get("possibility_id") != pid:
+                    raise SC.ClientNotVisible()
+                return st.performance_manual_request(cid, v.idx, current, start=start, end=end, possibility_id=pid)
             return st.performance_manual_request(cid, v.idx, current)
         self._control_write(v, now, "management-collect", collect)
         return 200, {"status": "accepted"}
@@ -627,20 +646,52 @@ class App:
             raise HttpError(400, "bad-query")
         rows = []
         for report in reports[page*page_size:(page+1)*page_size]:
-            pid = report["possibility_id"]
-            own = owns[pid]
-            # 기존 화면이 표시하는 앞 100건만 전달한다. DB 전체 누락/원본은 변경하지 않는다.
-            payload = dict(report["payload"])
-            missing = payload.get("missing")
-            if isinstance(missing, list):
-                payload.update(missing=missing[:100], missing_count=len(missing), missing_truncated=len(missing)>100)
-            rows.append({**report, "payload": payload, "company_name": names[pid], "owner": W._owner(ctx, own),
-                         "can_review": catalog_current and report["status"] == "ready" and O.allows_raising(ctx.freshness)
-                         and SC.ACT_APPROVE in SC.allowed_actions(ctx.org, v.scope, own)})
+            rows.append(self._public_report(report, v, ctx, owns, names, catalog_current))
         return 200, {"rows": rows, "total": total, "page": page, "page_size": page_size,
                     "next_page": page+1 if (page+1)*page_size < total else None,
                     "schedule": {"timezone": "Asia/Seoul", "weekly": "월요일 10:00",
                                                   "monthly": "매월 3일 10:00"}}
+
+    def _public_report(self, report, v, ctx, owns, names, catalog_current):
+        pid, own = report["possibility_id"], owns[report["possibility_id"]]
+        payload = {key: value for key, value in report["payload"].items()
+                   if not key.startswith("_") and key not in {"source_account_ids", "expected_customers_json"}}
+        missing = payload.get("missing")
+        if isinstance(missing, list):
+            payload.update(missing=missing[:100], missing_count=len(missing), missing_truncated=len(missing)>100)
+        public = {key: report[key] for key in ("report_id", "possibility_id", "period_key", "revision_fingerprint",
+                  "generated_at", "status", "review_status", "review", "revision_no", "change_summary", "validation")
+                  if key in report}
+        validation = report.get("validation", {})
+        return {**public, "payload": payload, "company_name": names[pid], "owner": W._owner(ctx, own),
+                "can_review": catalog_current and report["status"] == "ready" and validation.get("status") == "complete"
+                and O.allows_raising(ctx.freshness) and SC.ACT_APPROVE in SC.allowed_actions(ctx.org, v.scope, own)}
+
+    def _h_report_history(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
+        if set(req.query) - {"possibility_id", "period_key", "before_report_id", "limit"}:
+            raise HttpError(400, "bad-query")
+        def number(key, default=None, maximum=2**63-1):
+            raw = req.query.get(key)
+            if raw is None and default is not None:
+                return default
+            if raw is None or not re.fullmatch(r"[1-9][0-9]{0,18}", raw) or int(raw) > maximum:
+                raise HttpError(400, "bad-query")
+            return int(raw)
+        pid, limit = number("possibility_id"), number("limit", 20, 20)
+        before = number("before_report_id") if "before_report_id" in req.query else None
+        period = req.query.get("period_key")
+        if period is not None:
+            try:
+                kind, start, _end = period.split(":")
+                if R.period(kind, date.fromisoformat(start)).key != period:
+                    raise ValueError()
+            except (ValueError, TypeError):
+                raise HttpError(400, "bad-query") from None
+        ctx, owns, names, catalog_current = self._report_context(v, now)
+        SC.require_client(ctx.org, v.scope, owns, pid, SC.ACT_VIEW)
+        result = v.store.report_history(pid, v.idx, now, period_key=period, before_report_id=before, limit=limit)
+        return 200, {"items": [self._public_report(row, v, ctx, owns, names, catalog_current)
+                              for row in result["items"]], "next_before_report_id": result["next_before_report_id"]}
 
     def _h_report_review(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
         body = _body(req, frozenset({"report_id", "decision", "note"}), frozenset({"report_id", "decision", "note"}))
@@ -657,7 +708,8 @@ class App:
             if not catalog_current:
                 raise HttpError(409, "catalog-stale")
             SC.require_client(ctx.org, fresh.scope, owns, report["possibility_id"], SC.ACT_APPROVE)
-            if body["decision"] == "approved" and report["status"] != "ready":
+            if body["decision"] == "approved" and (report["status"] != "ready"
+                    or report.get("validation", {}).get("status") != "complete"):
                 raise HttpError(409, "report-incomplete")
             return st.record_report_review(report_id, v.idx, current, body["decision"], note)
         self._control_write(v, now, "report-review", review)
@@ -1000,6 +1052,7 @@ ROUTES: Tuple[Route, ...] = tuple(Route(m, re.compile(p), h, a) for m, p, h, a i
     (POST, r"/management/update", App._h_management_update, True),
     (POST, r"/management/collect", App._h_management_collect, True),
     (GET, r"/reports", App._h_reports, True),
+    (GET, r"/reports/history", App._h_report_history, True),
     (POST, r"/reports/review", App._h_report_review, True),
     (GET, r"/clients/(?P<pid>[0-9]{1,18})", App._h_client, True),
     (POST, r"/issues/(?P<iid>[0-9]{1,18})/ack", App._h_issue_ack, True),

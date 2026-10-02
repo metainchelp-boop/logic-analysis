@@ -35,8 +35,8 @@ class WebStore(FixtureStore):
         self.saved.append((cid, revision, included, actor, reason))
         return self.states[cid]
 
-    def performance_manual_request(self, cid, actor, now):
-        self.requests.append((cid, actor))
+    def performance_manual_request(self, cid, actor, now, **period):
+        self.requests.append((cid, actor, period) if period else (cid, actor))
         return {"status": "accepted", "customer_id": cid}
 
     def prospects(self):
@@ -140,10 +140,21 @@ class ManagementWebTest(unittest.TestCase):
         self.assertEqual(self.post("/management/update", body=body), (409, {"error": "stage-changed"}))
         self.assertEqual(self.st.saved, [])
 
+    def test_dated_collection_rechecks_account_mapping_and_owner_in_queue(self):
+        body = {"ad_account_no": self.update_body()["ad_account_no"], "possibility_id": 11,
+                "period_start": "2026-08-01", "period_end": "2026-08-31"}
+        self.assertEqual(self.post("/management/collect", body=body)[0], 200)
+        self.assertEqual(len(self.st.requests), 1)
+        self.assertEqual(self.post("/management/collect", body={**body, "possibility_id": 12})[0], 404)
+        self.before_write = lambda: self.st.org["body"]["owners"][0].update(manage_emp_idx=101)
+        self.assertEqual(self.post("/management/collect", body=body)[0], 404)
+        self.assertEqual(len(self.st.requests), 1)
+
     def test_reports_read_only_current_scope_and_saved_payload_without_external_reads(self):
         self.st.reports = [dict(report_id=pid, possibility_id=pid, period_key="monthly:2026-09",
                                revision_fingerprint=f"revision-{pid}", generated_at=self.fc.now().isoformat(),
-                               status="ready", review_status="needs_staff_review", payload={"totals": {"spend": 10}})
+                               status="ready", validation={"status": "complete"},
+                               review_status="needs_staff_review", payload={"totals": {"spend": 10}})
                            for pid in (11, 12)]
         status, body = self.get("/reports")
         self.assertEqual(status, 200)
@@ -175,7 +186,8 @@ class ManagementWebTest(unittest.TestCase):
         self.assertEqual(self.st.saved, [])
 
     def test_report_review_requires_current_owner_and_complete_report_for_approval(self):
-        self.st.reports = [dict(report_id=31, possibility_id=11, status="ready", review_status="needs_staff_review")]
+        self.st.reports = [dict(report_id=31, possibility_id=11, status="ready", validation={"status": "complete"},
+                               review_status="needs_staff_review")]
         request = {"report_id": 31, "decision": "approved", "note": "저장 수치 확인"}
         self.assertEqual(self.post("/reports/review", body=request), (200, {"report_id": 31, "review_status": "approved"}))
         self.assertEqual(self.st.reviews, [(31, 100, "approved", "저장 수치 확인")])

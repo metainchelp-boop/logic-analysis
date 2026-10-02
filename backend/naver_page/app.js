@@ -39,6 +39,7 @@
   }
   function h(tag, attrs) {
     var el = document.createElement(tag);
+    if (tag === 'th') el.setAttribute('scope', 'col');
     if (attrs) {
       Object.keys(attrs).forEach(function (k) {
         var v = attrs[k];
@@ -51,6 +52,18 @@
     }
     for (var i = 2; i < arguments.length; i++) add(el, arguments[i]);
     return el;
+  }
+  // 표의 원래 열 이름을 함께 보존한다. 좁은 화면에서도 값·버튼을 복제하거나 생략하지 않는다.
+  function labeledRow(labels, attrs) {
+    var row = h('tr', attrs);
+    row.setAttribute('role', 'row');
+    for (var i = 2; i < arguments.length; i++) {
+      var cell = arguments[i];
+      cell.setAttribute('data-label', labels[i - 2]);
+      cell.setAttribute('role', 'cell');
+      add(row, cell);
+    }
+    return row;
   }
   function put(el) {
     while (el.firstChild) el.removeChild(el.firstChild);
@@ -620,11 +633,12 @@
     $('inventorySource').textContent = '이관 목록 ' + (mdhm(data.accounts_at) || '수신 전') + ' · 전산 전체 목록 ' +
       (mdhm(data.catalog_at) || '수신 전') + (data.catalog_status !== 'accepted' || !data.accounts_current || data.matching_ready === false ?
       ' · 원본 확인 필요: 미등록 판정 및 직원 연결 표시를 보류합니다.' : ' · 목록 새로고침은 저장된 최신 결과를 다시 표시합니다.');
-    var collection = { ok: '수집 완료', partial: '일부 수집', pending: '수집 대기', failed: '수집 실패',
+    var collection = { ok: '수집 완료', partial: '일부 수집', pending: '수집 대기', source_wait: '네이버 집계 대기', failed: '수집 실패',
       retry: '재시도 대기', reading: '수집 중', running: '수집 중', reauth_required: '네이버 접근 권한 확인',
       limited: '수집 중단 · 사유 확인', denied: '접근 권한 확인', blocked: '접근 권한 확인', not_current: '수집 대상 제외 · 이관 빠짐' };
     var collectionReason = { CHECKPOINT_PENDING: '남은 캠페인은 다음 회차에 이어 읽습니다',
       CHECKPOINT_INVALID: '중간 저장 자료 검증 실패 · 관리자 확인 필요', RETRY_EXHAUSTED: '연속 재시도 4회 소진 · 관리자 확인 필요',
+      SOURCE_AGGREGATING: '네이버 집계 대기 · 원천이 준비되면 다시 확인합니다',
       STATS_INCOMPLETE: '네이버 통계 일부 미수신', STATS_SHAPE: '네이버 통계 응답 형식 확인 필요',
       KEY_REJECTED: '계정 이관·조회 권한 확인 필요', CAMPAIGNS_CHANGED: '수집 중 캠페인 목록 변경 · 다시 확인',
       REQUEST_BUDGET: '회차 호출·시간 한도 도달', UNEXPECTED: '수집 오류 · 관리자 확인 필요' };
@@ -638,7 +652,7 @@
       var company = r.detail_available ? h('button', { type: 'button', class: 'btn sm', onclick: function () {
         go('/naver/clients/' + r.possibility_id);
       } }, r.company_name || '전산 업체') : r.company_name || '—';
-      return h('tr', { 'data-account': r.ad_account_no },
+      return labeledRow(['광고 계정 · ID', '전산 업체', '매칭 상태', '업무 단계', '담당', '수집 결과', '확인된 실적 · 기간', '비즈머니 · 확인 시각', '관제 관리'], { 'data-account': r.ad_account_no },
         h('td', null, r.account_name || '계정 이름 없음', h('span', { class: 'w' }, 'ID ' + (r.ad_account_no || '확인 필요')), adReasons(r)),
         h('td', null, company),
         h('td', { title: r.mapping === 'no_erp_record' ? data.no_erp_note : '' }, INVENTORY_MAPPING[r.mapping] || '미분류'),
@@ -710,6 +724,20 @@
     return detail;
   }
   var managementEdit = null;
+  var periodEdit = null;
+  function closedPeriodError(start, end) {
+    function stamp(value) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(value || '')) return null;
+      var result = Date.parse(value + 'T00:00:00Z');
+      return isFinite(result) && new Date(result).toISOString().slice(0, 10) === value ? result : null;
+    }
+    var first = stamp(start), last = stamp(end), today = kstDay();
+    if (first === null || last === null) return '시작일과 종료일을 올바른 날짜로 선택해 주세요';
+    if (first > last) return '종료일은 시작일보다 빠를 수 없습니다';
+    if ((last - first) / 86400000 + 1 > 31) return '한 번에 최대 31일까지 재확인할 수 있습니다';
+    if (!today || end >= today) return '한국시간 기준 어제까지의 닫힌 날짜만 선택해 주세요';
+    return null;
+  }
   function managementReason(code) {
     var labels = { AUTHORITY_INVALID: '네이버 이관·조회 권한 확인 필요', SOURCE_STALE: '최신 원천 확인 전 · 변경 보류',
       UNMATCHED_ACCOUNT: '전산 업체 연결 전', UNKNOWN_STAGE: '업무 단계 확인 전', MANUAL_EXCLUSION: '담당자가 관제 제외',
@@ -721,7 +749,12 @@
     var row = (state.inventory.rows || []).filter(function (r) { return r.ad_account_no === body.ad_account_no; })[0];
     var m = row && row.management || {};
     if (m.cadence !== 'daily' && m.cadence !== 'weekly') return false;
-    if (path === '/management/collect') return m.can_collect === true;
+    if (path === '/management/collect') {
+      if (m.can_collect !== true) return false;
+      var dated = 'period_start' in body || 'period_end' in body || 'possibility_id' in body;
+      return !dated || (typeof row.possibility_id === 'number' && row.possibility_id > 0 &&
+        body.possibility_id === row.possibility_id && !closedPeriodError(body.period_start, body.period_end));
+    }
     return path === '/management/update' && m.can_manage === true && typeof m.stage_revision === 'string' &&
       !!m.stage_revision && m.stage_revision === body.stage_revision;
   }
@@ -749,6 +782,19 @@
           }, function (e) { if (fresh()) toast(errText(e)); });
         });
       } }, '지금 조회'));
+      if (typeof row.possibility_id === 'number' && row.possibility_id > 0) {
+        actions.push(h('button', { type: 'button', class: 'btn sm', onclick: function (ev) {
+          if (!fresh() || !managementCapability('/management/collect', { ad_account_no: row.ad_account_no })) return;
+          periodEdit = { row: row, inventory: inventory, gen: gen };
+          $('periodDescription').textContent = (row.company_name || row.account_name || '이 계정') + ' · 광고 계정 ID ' + row.ad_account_no;
+          var today = kstDay(), previous = today ? new Date(Date.parse(today + 'T00:00:00Z') - 86400000).toISOString().slice(0, 10) : '';
+          ['periodStart', 'periodEnd'].forEach(function (id) {
+            $(id).value = previous;
+            $(id).setAttribute('max', previous);
+          });
+          openModal('m-period-recheck', ev.currentTarget); $('periodStart').focus();
+        } }, '기간 재확인'));
+      }
     }
     return actions.length ? h('div', { class: 'account-actions' }, actions) : h('span', { class: 'w' }, '이 범위에서는 조회·변경할 수 없습니다');
   }
@@ -763,6 +809,21 @@
       return api('POST', '/management/update', body).then(function () {
         if (edit.gen !== state.gen || edit.inventory !== state.inventory) return;
         closeModals(); toast((edit.included ? '관제 포함' : '관제 제외') + '를 저장했습니다 · 전산 단계·광고는 변경하지 않았습니다.'); loadInventory();
+      }, function (e) { if (edit.gen === state.gen && edit.inventory === state.inventory) toast(errText(e)); });
+    });
+  }
+  function savePeriodRecheck() {
+    var edit = periodEdit;
+    if (!edit || edit.inventory !== state.inventory || edit.gen !== state.gen) return;
+    var body = { ad_account_no: edit.row.ad_account_no, possibility_id: edit.row.possibility_id,
+      period_start: $('periodStart').value, period_end: $('periodEnd').value };
+    var error = closedPeriodError(body.period_start, body.period_end);
+    if (error) { toast(error); $('periodStart').focus(); return; }
+    if (!managementCapability('/management/collect', body)) return;
+    once('management-collect:' + edit.row.ad_account_no, $('periodSave'), function () {
+      return api('POST', '/management/collect', body).then(function () {
+        if (edit.gen !== state.gen || edit.inventory !== state.inventory) return;
+        closeModals(); toast('기간 재확인 요청을 받았습니다 · 완료 여부는 수집 결과에서 확인해 주세요.'); loadInventory();
       }, function (e) { if (edit.gen === state.gen && edit.inventory === state.inventory) toast(errText(e)); });
     });
   }
@@ -789,7 +850,7 @@
         status === 'identifier_conflict' ? '대표에게 번호 중복·기존 연결 확인 요청' :
         status === 'transfer_unconfirmed' ? '네이버 대행 이관 상태와 전산 번호 확인' :
         status === 'candidate_pending' || status === 'multiple_candidates' ? '원본 광고 계정 ID 대조 후 전산 입력 · 짝 확인' : '전산 업체 계정 정보에서 광고 계정 ID 확인';
-      return h('tr', null, h('td', null, r.company_name || '업체 이름 없음', h('span', { class: 'w' }, r.workflow || '단계 미확인')),
+      return labeledRow(['전산 업체 · 단계', '계정 확인 상태', '연결 / 전체 후보', '확인할 곳'], null, h('td', null, r.company_name || '업체 이름 없음', h('span', { class: 'w' }, r.workflow || '단계 미확인')),
         h('td', null, COVERAGE_STATE[status] || status, (ready ? r.codes || [] : ['SOURCE_UNAVAILABLE']).map(function (code) {
           return h('span', { class: 'w' }, (MATCHING_REASON[code] || '알 수 없는 매칭 사유') + ' (' + code + ')');
         })), h('td', { class: 'num' }, ready ? num(r.matched_account_count) + ' / ' + num(r.candidate_count) : '— / —'),
@@ -827,7 +888,64 @@
     });
   }
   function reportMetric(label, value) { return h('div', null, h('dt', null, label), h('dd', { class: 'num' }, value)); }
-  function reportCard(row) {
+  function reportValidation(row) {
+    var v = row.validation || {};
+    var label = { complete: '원천 재확인 완료', pending: '원천 재확인 대기', failed: '원천 재확인 실패', updating: '정정 집계 갱신 중' }[v.status] || '원천 재확인 상태 미확인';
+    return h('div', { class: 'report-validation', 'data-validation': v.status || 'unknown' },
+      h('p', null, h('b', null, label), typeof v.pending_account_days === 'number' ? ' · 남은 계정×일 ' + num(v.pending_account_days) : ''),
+      h('p', { class: 'report-meta' }, '마지막 성공 대조 ' + datedTime(v.last_checked_at) + ' · 최근 시도 ' + datedTime(v.last_attempt_at)),
+      v.status !== 'complete' ? h('p', { class: 'hint' }, '표시된 수치는 저장된 판의 값입니다. 재확인·정정이 끝나기 전에는 최신 대조 완료로 판단하지 않습니다.') :
+        h('p', { class: 'hint' }, '이 시각에 재확인한 결과입니다. 이후 실적이 바뀌지 않는다는 뜻은 아닙니다.'));
+  }
+  function reportChanges(row) {
+    var change = row.change_summary;
+    if (!change) return null;
+    var names = { spend: '광고비', impressions: '노출', clicks: '클릭', conversions: '전환', conversion_value: '전환 매출', ctr: 'CTR', cpc: 'CPC', roas: 'ROAS' };
+    var deltas = change.metric_deltas || {};
+    return h('div', { class: 'report-changes' }, h('p', null, h('b', null, change.previous_report_id ? '이전 판 대비 변경' : '초판 · 이전 판 없음')),
+      h('ul', null, (change.changed_metrics || []).map(function (key) {
+        var delta = deltas[key], value = typeof delta === 'number' && isFinite(delta) ?
+          (delta > 0 ? '+' : '') + num(delta) + (key === 'spend' || key === 'conversion_value' || key === 'cpc' ? '원' : key === 'ctr' || key === 'roas' ? '%p' : '') : '비교 수치 미확인';
+        return h('li', null, (names[key] || key) + ' ' + value);
+      })),
+      (change.changed_days || []).length ? h('p', { class: 'report-meta' }, '변경 실적일 ' + change.changed_days.join(' · ')) : null,
+      change.completeness_changed === true ? h('p', { class: 'report-meta' }, '완결 상태 변경 · 숫자와 함께 누락·전환 확인 상태를 확인해 주세요.') : null);
+  }
+  function reportHistory(row) {
+    if (typeof row.possibility_id !== 'number' || row.possibility_id <= 0 ||
+        !/^(weekly|monthly):\d{4}-\d{2}-\d{2}:\d{4}-\d{2}-\d{2}$/.test(row.period_key || '')) return null;
+    var reports = state.reports, gen = state.gen, sel = state.selection, request = 0, loaded = false, busy = false;
+    var content = h('div', { class: 'report-history-content', 'aria-live': 'polite' }), detail;
+    var fresh = function () { return state.reports === reports && state.gen === gen && state.selection === sel && !!state.me; };
+    function load(before) {
+      if (!fresh() || busy) return;
+      busy = true;
+      var current = ++request;
+      put(content, h('p', { class: 'report-meta' }, '이전 판을 확인 중입니다…'));
+      return api('GET', '/reports/history?possibility_id=' + row.possibility_id + '&period_key=' + encodeURIComponent(row.period_key) +
+        (before ? '&before_report_id=' + before : '') + '&limit=20').then(function (data) {
+        if (!fresh() || current !== request) return;
+        busy = false; loaded = true;
+        var items = data.items || [];
+        put(content, h('p', { class: 'report-meta' }, '한 번에 최대 20판 · 이전 판은 당시 수치와 검토 기록이며 읽기 전용입니다.'),
+          items.length ? items.map(function (item) { return reportCard(item, true); }) : h('p', { class: 'empty' }, '조회할 이전 판이 없습니다.'),
+          h('div', { class: 'report-actions' },
+            before ? h('button', { type: 'button', class: 'btn sm', onclick: function () { load(null); } }, '최근 판으로') : null,
+            typeof data.next_before_report_id === 'number' && data.next_before_report_id > 0 ?
+              h('button', { type: 'button', class: 'btn sm', onclick: function () { load(data.next_before_report_id); } }, '더 이전 판') : null));
+      }, function (error) {
+        if (!fresh() || current !== request) return;
+        busy = false;
+        put(content, h('p', { class: 'report-meta' }, '이전 판을 확인하지 못했습니다. ' + errText(error)),
+          h('button', { type: 'button', class: 'btn sm', onclick: function () { load(before); } }, '이력 다시 확인'));
+      });
+    }
+    detail = h('details', { class: 'report-history', ontoggle: function () {
+      if (detail.open && !loaded) load(null);
+    } }, h('summary', null, '이전 판·정정 이력'), content);
+    return detail;
+  }
+  function reportCard(row, historical) {
     var p = row.payload || {}, period = p.period || {}, totals = p.totals || {}, ratios = p.ratios || {}, coverage = p.coverage || {};
     var status = { ready: '집계 완료', partial: '부분 집계 · 전체 합계 아님', collecting: '수집 중 · 자료 부족' }[row.status] || '알 수 없는 집계 상태 (' + (row.status || '미제공') + ')';
     var review = { needs_staff_review: '담당 검토 필요', not_required: '필수 검토 대상 아님', approved: '담당 검토 승인', held: '담당 검토 보류' }[row.review_status] || '검토 상태 미확인';
@@ -839,7 +957,9 @@
       h('div', { class: 'kh' }, h('h2', null, row.company_name || '업체 이름 없음'),
         h('span', { class: 'n' }, ({ monthly: '월간', weekly: '주간' }[period.kind] || '보고 기간 미확인') + ' · ' + periodText(period.start, period.end))),
       h('p', { class: 'report-state' }, status, h('span', { class: 'pill ' + (row.review_status === 'approved' ? 'p-green' : 'p-gray') }, review)),
-      h('p', { class: 'report-meta' }, '생성 ' + datedTime(row.generated_at) + ' · 담당 ' + (row.owner && row.owner.name || '미확인')),
+      h('p', { class: 'report-meta' }, (typeof row.revision_no === 'number' ? num(row.revision_no) + '판 · ' : '판 번호 미확인 · ') +
+        (historical === true ? '이전 판 기록 · ' : '') + '생성·정정 ' + datedTime(row.generated_at) + ' · 담당 ' + (row.owner && row.owner.name || '미확인')),
+      reportValidation(row), reportChanges(row),
       h('dl', { class: 'report-metrics' },
         reportMetric(coverage.basic_complete === true ? '광고비' : '확인된 광고비', won(totals.spend)),
         reportMetric('노출', num(totals.impressions)), reportMetric('클릭', num(totals.clicks)),
@@ -857,13 +977,16 @@
           h('p', null, missing ? '서버가 보고한 누락이 없습니다.' : '원천 자료의 누락 여부를 확인하지 못했습니다.')),
       (p.blocked_reasons || []).map(function (code) { return h('p', { class: 'blocked-note' },
         ({ no_confirmed_accounts: '확정 계정 없음 · 계정 연결 확인', not_due: '보고 기간 마감·생성 예약 전' }[code] || '알 수 없는 집계 보류 사유') + ' (' + code + ')'); }),
-      h('p', { class: 'report-meta' }, '검토는 내부 기록입니다. 광고주 공유·전송은 하지 않습니다.'), reportActions(row));
+      h('p', { class: 'report-meta' }, '검토는 내부 기록입니다. 광고주 공유·전송은 하지 않으며, 내려받은 사본은 자동 수정되지 않습니다.'),
+      historical === true ? h('p', { class: 'blocked-note' }, '이전 판은 읽기 전용입니다. 당시 검토 기록은 새 판에 승계되지 않습니다.') :
+        [reportActions(row), reportHistory(row)]);
   }
   var reportEdit = null;
   function reportCapability(path, body) {
     if (path !== '/reports/review' || !body || !state.me || !state.reports || parse(location.pathname).screen !== 'reports') return false;
     var row = (state.reports.rows || []).filter(function (r) { return r.report_id === body.report_id; })[0];
-    return !!row && row.can_review === true && (body.decision === 'held' || body.decision === 'approved' && row.status === 'ready');
+    return !!row && row.can_review === true && (body.decision === 'held' || body.decision === 'approved' && row.status === 'ready' &&
+      (!row.validation || row.validation.status === 'complete'));
   }
   function reportActions(row) {
     var reports = state.reports, gen = state.gen;
@@ -927,7 +1050,7 @@
     var parts = [], cls = 'runbar';
     if (!last) {
       if (b.deadline_passed) { cls += ' bad'; parts.push(h('b', null, '오늘 점검 기록이 없습니다'), ' · 미점검은 정상 판정이 아닙니다. 자료 반영·점검 진행 상태를 확인해 주세요.'); }
-      else { cls += ' wait'; parts.push(h('b', null, '오늘 점검 전'), readOnly() ? ' · 정기 점검 06:30 예약 · 현재 시간대에는 아직 수집·점검 전일 수 있습니다' : ' · 정기 점검 06:30 시작 · 08:00 마감 예정'); }
+      else { cls += ' wait'; parts.push(h('b', null, '기존 이상 점검 전'), ' · 06:30~08:00 별도 점검 경로 · 전일 실적은 00:01부터 수집하며 10:00 이후 미완료도 계속 수집합니다'); }
     } else if (last.status === 'running') {
       cls += ' wait'; parts.push(h('b', null, '오늘 점검 진행 중'), ' · ' + mdhm(last.started_at) + ' 시작');
     } else if (last.status === 'done') {
@@ -1072,7 +1195,7 @@
     var lk = LINK[r.link] || LINK.none;
     var open = (r.open_red || 0) + (r.open_yellow || 0);
     var biz = r.bizmoney;
-    return h('tr', { class: 'click', 'data-pid': r.possibility_id, 'data-color': v.color,
+    return labeledRow(['상태', '광고주', '확인', '이관', '담당', '어제 광고비', '비즈머니', '열린 이슈', '계약 단계'], { class: 'click', 'data-pid': r.possibility_id, 'data-color': v.color,
                      onclick: function (ev) { if (ev.target.tagName !== 'BUTTON') go('/naver/clients/' + r.possibility_id); } },
              h('td', null, h('span', { class: 'sig ' + v.color, role: 'img', 'aria-label': COLOR_TEXT[v.color] }), h('span', { class: 'hint' }, statusText(v))),
              h('td', null, h('button', { type: 'button', class: 'link', onclick: function () { go('/naver/clients/' + r.possibility_id); } }, r.name || ''),
@@ -1387,7 +1510,7 @@
     var tbl = h('div', { class: 'tblwrap' }, h('table', null,
       h('thead', null, h('tr', null, ['광고주', '담당', '계약 끝난 날', '지난 날', '이관', '점검'].map(function (t) { return h('th', null, t); }))),
       h('tbody', null, E.rows.length ? E.rows.map(function (r) {
-        return h('tr', { class: 'click', onclick: function () { go('/naver/clients/' + r.possibility_id); } },
+        return labeledRow(['광고주', '담당', '계약 끝난 날', '지난 날', '이관', '점검'], { class: 'click', onclick: function () { go('/naver/clients/' + r.possibility_id); } },
                  h('td', null, h('button', { type: 'button', class: 'link' }, r.name || '')),
                  h('td', null, (r.owner && r.owner.name) || '담당 미정'),
                  h('td', { class: 'num' }, r.end_date ? md(r.end_date) : '모름'),
@@ -1657,7 +1780,7 @@
       var inp = ceo ? h('input', { class: 'thin', type: 'number', step: 'any', id: 'th-' + k, value: th[k], min: rg[k] ? rg[k][0] : null, max: rg[k] ? rg[k][1] : null, 'aria-label': TH[k][0] }) : null;
       inputs[k] = inp;
       // 값 칸을 앞에 — 좁은 화면(390px)에서도 옆으로 밀지 않고 고칠 수 있게(검토 settings-390)
-      return h('tr', null, h('td', null, h('b', null, TH[k][0])), h('td', { class: 'num' }, inp || String(th[k])),
+      return labeledRow(['점검', '값', '단위', '문제로 보는 기준', '허용 범위'], null, h('td', null, h('b', null, TH[k][0])), h('td', { class: 'num' }, inp || String(th[k])),
                h('td', null, TH[k][2]), h('td', { class: 'wrap' }, TH[k][1]),
                h('td', { class: 'num hint' }, rg[k] ? rg[k][0] + ' ~ ' + rg[k][1] : ''));
     });
@@ -1671,15 +1794,17 @@
       ceo ? null : h('div', { class: 'line' }, h('span', { class: 'ro' }, readOnly() ? '읽기 전용 검증판 — 변경할 수 없습니다' : '보기만 — 대표님만 고칩니다')),
       h('div', { class: 'tblwrap' }, h('table', null, h('thead', null, h('tr', null, ['점검', '값', '단위', '문제로 보는 기준', '허용 범위'].map(function (t) { return h('th', null, t); }))), h('tbody', null, rows))), save),
       h('div', { class: 'card flat' }, h('div', { class: 'kh' }, h('h2', null, '고친 기록'), h('span', { class: 'n' }, '최근 10번')), hist.length ? h('ul', { class: 'tl' }, hist) : h('div', { class: 'empty' }, '아직 고친 적이 없습니다.')));
-    put($('sp-time'), h('div', { class: 'card' }, h('div', { class: 'kh' }, h('h2', null, '점검 시각 · 알림')),
-      h('p', { class: 'sub' }, readOnly() ? '아침 점검 예정 시각은 06:30, 마감은 ' + (s.deadline || '08:00') + '입니다. 현재 시간대에는 아직 수집·점검 전일 수 있습니다. 미점검은 정상 판정이 아니며 자료 기준 시각을 확인해 주세요.' : '아침 점검은 06:30 에 시작해 ' + (s.deadline || '08:00') + ' 까지 끝납니다. 그때까지 못 끝낸 광고주는 「오늘 점검 안 됨」(⚪)으로 보이고 🟢 로 보이지 않습니다.'),
+    put($('sp-time'), h('div', { class: 'card' }, h('div', { class: 'kh' }, h('h2', null, '수집 시각 · 점검 구분')),
+      h('p', { class: 'note' }, '전일 실적은 한국시간 00:01부터 수집합니다. 10:00은 출근용 집계 목표이며, 미완료 계정은 이후에도 계속 수집합니다. 모든 계정의 10시 완료를 보장하지 않습니다.'),
+      h('p', { class: 'sub' }, '기존 이상 점검의 06:30~' + (s.deadline || '08:00') + ' 기준은 별도 경로입니다. 전일 실적 수집 가능 시간이 90분이라는 뜻이 아닙니다. 미점검은 정상 판정이 아니며 각 자료의 실적 기간·확인 시각을 확인해 주세요.'),
+      h('p', { class: 'sub' }, '기본 실적과 전환 확인 상태는 별개입니다. 뒤늦게 바뀐 실적은 재확인 후 정정되며, 주간 월요일 10:00·월간 매월 3일 10:00은 초판 생성 목표입니다.'),
       h('p', { class: 'sub' }, readOnly() ? '이 검증판의 알림 전송·자동입찰은 꺼져 있습니다. 알림 목록은 저장된 기록만 조회하며 읽음 처리도 하지 않습니다.' : '알림은 전산 비서방으로 갑니다(휴대폰 알림 없음). 처음 2주는 그림자 운영 — 이슈는 만들되 광고주 알림은 대표님께만 요약으로 갑니다. 🟡 는 12시간 안 풀리면 한 단계 위로 올라갑니다.')));
     var me = state.me;
     put($('sp-ppl'), h('div', { class: 'card flat' }, h('div', { class: 'kh' }, h('h2', null, '사람 · 팀'), h('span', { class: 'n' }, '전산에서 받은 조직(읽기 전용) · 보는 범위 안만')),
       h('div', { class: 'tblwrap' }, h('table', null, h('thead', null, h('tr', null, h('th', null, '사람'), h('th', null, '팀'), h('th', null, '재직'))),
         h('tbody', null, (me.people || []).map(function (p) {
           var t = (me.teams || []).filter(function (x) { return x.idx === p.team_idx; })[0];
-          return h('tr', null, h('td', null, p.name || ''), h('td', null, t ? t.name : '—'), h('td', null, p.active ? '재직' : '퇴사·정지'));
+          return labeledRow(['사람', '팀', '재직'], null, h('td', null, p.name || ''), h('td', null, t ? t.name : '—'), h('td', null, p.active ? '재직' : '퇴사·정지'));
         }))))));
     renderSys();
     setSpane(state.spane);
@@ -1742,6 +1867,7 @@
     except = null;
     revoke = null;
     managementEdit = null;
+    periodEdit = null;
     reportEdit = null;
     var back = state.lastFocus;
     state.lastFocus = null;
@@ -1788,6 +1914,7 @@
     $('inventoryWorkflow').addEventListener('change', function () { state.inventoryWorkflow = this.value; loadInventory(); });
     $('inventoryReload').addEventListener('click', loadInventory);
     $('managementSave').addEventListener('click', saveManagement);
+    $('periodSave').addEventListener('click', savePeriodRecheck);
     $('reportsReload').addEventListener('click', loadReports);
     $('reviewSave').addEventListener('click', saveReportReview);
     $('dashboardReload').addEventListener('click', function () { state.gen++; openDashboard(); });

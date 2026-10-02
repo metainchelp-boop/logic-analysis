@@ -58,7 +58,7 @@ class SchedulerTest(TestCase):
         self.assertEqual(reader.calls, len(http.calls))
 
     @patch.object(socket.socket, "connect", side_effect=AssertionError("외부 송신 금지"))
-    def test_full_daily_budget_does_not_start_backfill_or_legacy_collectors(self, _network):
+    def test_full_daily_budget_reserves_six_calls_for_backfill_without_legacy_collectors(self, _network):
         clock, http, store, reader, task = self.inventory_scene(["daily"]*8+["backfill"]*3)
         with patch.object(MR, "run_monthly", side_effect=AssertionError("이전 월누적 수집 금지")) as monthly, \
              patch.object(IR, "run_inventory", side_effect=AssertionError("이전 전일 수집 중복 금지")) as daily:
@@ -66,7 +66,9 @@ class SchedulerTest(TestCase):
             self.assertGreater(result.counts.get("ok", 0), 0)
             self.assertLessEqual(result.counts["ok"], 8)
         self.assertLessEqual(len(http.calls), 24)
-        self.assertTrue(all(key.startswith("daily-") for key in store.results))
+        self.assertTrue(any(key.startswith("daily-") for key in store.results))
+        self.assertTrue(any(key.startswith("backfill-") for key in store.results))
+        self.assertLessEqual(sum(int(call.customer) >= CUSTOMER+8 for call in http.calls), 6)
         monthly.assert_not_called()
         daily.assert_not_called()
 
@@ -80,7 +82,8 @@ class SchedulerTest(TestCase):
         self.assertLessEqual(len(http.calls), 15)
         self.assertLessEqual((clock.now()-started).total_seconds(), 30)
         self.assertTrue(any(values["status"] == "retry" for values in store.results.values()))
-        self.assertTrue(all(key.startswith("daily-") for key in store.results))
+        self.assertTrue(any(key.startswith("daily-") for key in store.results))
+        self.assertTrue(any(key.startswith("backfill-") for key in store.results))
 
     @patch.object(socket.socket, "connect", side_effect=AssertionError("외부 송신 금지"))
     def test_large_account_checkpoint_keeps_eight_call_cap_and_resumes_with_no_repeated_stats(self, _network):
@@ -106,8 +109,9 @@ class SchedulerTest(TestCase):
                 self.assertTrue(reader.rate_limited)
                 self.assertEqual(reader.pauses, 0)
                 self.assertEqual(len(http.calls), 3)
-                self.assertEqual(set(store.results), {kind+"-0"})
-                self.assertEqual(store.results[kind+"-0"]["status"], "retry")
+                first = "daily-1" if kind == "backfill" else kind+"-0"
+                self.assertEqual(set(store.results), {first})
+                self.assertEqual(store.results[first]["status"], "retry")
 
     @patch.object(socket.socket, "connect", side_effect=AssertionError("외부 송신 금지"))
     def test_slow_single_account_never_uses_more_than_ten_seconds(self, _network):

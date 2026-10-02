@@ -1,5 +1,5 @@
 """기존 부를 때 판정들을 한 회차로 연결한다. 네이버 쓰기는 없다."""
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from copy import deepcopy
 import logging
 import threading
@@ -160,9 +160,9 @@ class Scheduler:
                 return {"state": "failed" if self.last_errors else "ok", "errors": list(self.last_errors)}
             c, st = self.config, self.store
             if c.sync_enabled:
-                if Y.org_due(st, self.clock()):
+                if Y.org_due(st, self.clock()) or (c.inventory_enabled and self._midnight_source_due(S.SYNC_ORG)):
                     self._step("org", lambda: Y.sync_org(self.erp_factory(), st, self.clock()))
-                if Y.stages_due(st, self.clock()):
+                if Y.stages_due(st, self.clock()) or (c.inventory_enabled and self._midnight_source_due(S.SYNC_STAGES)):
                     self._step("stages", lambda: Y.sync_stages(self.erp_factory(), st, self.clock()))
             if c.links_enabled or c.inventory_enabled:
                 if L.accounts_due(st, self.clock()):
@@ -170,14 +170,17 @@ class Scheduler:
             if c.links_enabled:
                 if L.pairing_due(st, self.clock()):
                     self._step("pairing", lambda: L.pair_links(self.erp_factory(), st, self.clock()))
+            if c.inventory_enabled:
+                if IC.sync_catalog_due(st, self.clock()) or self._midnight_catalog_due():
+                    self._step("inventory_catalog", lambda: IC.sync_catalog(self.erp_factory(), st, self.clock()), note=False)
+                self._step("inventory", lambda: self._inventory(), note=False)
+                self._step("reports", lambda: st.generate_reports(self.clock()), note=False)
             if c.morning_enabled:
                 now = self.clock().astimezone(S.KST)
                 if M.CHECK_START <= now.time().replace(tzinfo=None) < M.CHECK_DEADLINE:
                     self._step("readiness", lambda: M.readiness(st, self.clock()))
                 if M.morning_due(st, self.clock()):
-                    self._step("morning", lambda: M.run_morning(self.naver_factory(),
-                                                                _ManagedMorningStore(st,self.clock()) if c.inventory_enabled else st, self.clock,
-                                                                th=st.thresholds()))
+                    self._step("morning", self._morning)
             # 긴 암호화/전송 때문에 시스템 알림과 아침 심박이 밀리지 않도록 먼저 처리한다.
             if c.alerts_enabled:
                 self._step("alerts", lambda: self._alerts(), note=False)
@@ -188,16 +191,43 @@ class Scheduler:
             if c.metrics_enabled:
                 # 공유 성과 재수집/재전송은 아침 심박·백업 뒤에 제한된 회차로 수행한다.
                 self._step("metrics", lambda: self._metrics(), note=False)
-            if c.inventory_enabled:
-                if IC.sync_catalog_due(st, self.clock()):
-                    self._step("inventory_catalog", lambda: IC.sync_catalog(self.erp_factory(), st, self.clock()), note=False)
-                self._step("inventory", lambda: self._inventory(), note=False)
-                self._step("reports", lambda: st.generate_reports(self.clock()), note=False)
             self.last_tick = self.clock()
             self.last_errors = tuple(self._errors)
             return {"state": "failed" if self.last_errors else "ok", "errors": list(self.last_errors)}
         finally:
             self._lock.release()
+
+    def _midnight_source_due(self, kind):
+        now = self.clock().astimezone(S.KST)
+        start = datetime.combine(now.date(), time(0, 1), tzinfo=S.KST)
+        if now < start or Y._hold_open(self.store, kind, now):
+            return False
+        last = self.store.last_sync(kind)
+        return last is None or (isinstance(last, dict) and Y._aware(last.get("at")) is not None
+                                and Y._aware(last["at"]) < start)
+
+    def _midnight_catalog_due(self):
+        now = self.clock().astimezone(S.KST)
+        start = datetime.combine(now.date(), time(0, 1), tzinfo=S.KST)
+        state = self.store.account_catalog_status()
+        if now < start:
+            return False
+        if state is None:
+            return True
+        if not isinstance(state, dict):
+            return False
+        at = Y._aware(state.get("at"))
+        return at is None or at < start or at > now
+
+    def _morning(self):
+        reader = self.naver_factory()
+        if not self.config.inventory_enabled:
+            return M.run_morning(reader, self.store, self.clock, th=self.store.thresholds())
+        # 기존 경보/준비검사는 유지하되 상세 점검이 다음 성과 회차를 장시간 막지 않는다.
+        with reader.bounded_requests(max_calls=24, max_seconds=30):
+            return M.run_morning(reader,
+                _ManagedMorningStore(self.store, self.clock()) if self.config.inventory_enabled else self.store,
+                self.clock, th=self.store.thresholds())
 
     def _backup(self):
         if self.backup_job is None:

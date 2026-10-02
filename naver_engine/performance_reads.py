@@ -30,6 +30,10 @@ class PerformanceIncomplete(ValueError):
     pass
 
 
+class SourceAggregating(PerformanceIncomplete):
+    """정상 원천 응답이 집계 지연임을 입증한 경우만 별도 대기한다."""
+
+
 @dataclass(frozen=True)
 class PerformanceOutcome:
     code: str
@@ -89,9 +93,11 @@ def validate_progress(source, job):
     start, end = _period(job)
     required = {"customer_id", "period_start", "period_end", "campaign_ids", "fingerprint", "next_index",
                 "cycles", "day_totals", "conversion_evidence"}
+    if "generation" in job:
+        required.add("generation")
     if not isinstance(source, dict) or set(source) != required or type(source["customer_id"]) is not int \
             or source["customer_id"] != job["customer_id"] or source["period_start"] != start.isoformat() \
-            or source["period_end"] != end.isoformat():
+            or source["period_end"] != end.isoformat() or source.get("generation") != job.get("generation"):
         raise CheckpointInvalid("일별 이어읽기 계정 또는 기간이 다릅니다")
     ids, index = source["campaign_ids"], source["next_index"]
     if not isinstance(ids, list) or any(not isinstance(i, str) or not N._CAMPAIGN_ID.fullmatch(i) for i in ids) \
@@ -148,11 +154,18 @@ def _read(reader, handle, job, values, store, clock):
         progress = dict(customer_id=job["customer_id"], period_start=start.isoformat(), period_end=end.isoformat(),
                         campaign_ids=ids, fingerprint=fingerprint(ids), next_index=0, cycles=[],
                         day_totals=totals, conversion_evidence=bool(ids))
+        if "generation" in job:
+            progress["generation"] = job["generation"]
         store.record_performance_progress(job, clock(), progress)
     while progress["next_index"] < len(ids):
         campaign_id = ids[progress["next_index"]]
         daily = reader.get_stats_daily(handle, campaign_id, start, end, fields=FIELDS)
         reader.check_budget()
+        # HTTP/인증/모양/미래시각 오류는 집계 대기로 숨기지 않는다.
+        raw_cycle = daily.cycle_base_tm
+        if isinstance(raw_cycle, datetime) and raw_cycle.tzinfo is not None and raw_cycle <= clock():
+            if not daily.data_fresh or daily.missing_days:
+                raise SourceAggregating("원천 일별 집계가 아직 완료되지 않았습니다")
         if not daily.data_fresh or daily.missing_days or set(daily.days) != set(_days(start, end)):
             raise PerformanceIncomplete("일별 통계 날짜가 완결되지 않았습니다")
         try:
@@ -202,23 +215,49 @@ def run_performance(reader, store, clock, *, limit=24, max_calls=24, max_seconds
     if store.inventory_snapshot(now) is None:
         return PerformanceOutcome("NOT_READY")
     today, counts = now.astimezone(S.KST).date(), Counter()
+    jobs = store.performance_work(now, limit)
+    supplement = [job for job in jobs if job["kind"] in (
+        "backfill", "recent", "reconcile", "report_weekly", "report_monthly", "manual_period")
+        or (job["kind"] == "daily" and job.get("cycle_day", str(today)) < str(today))]
+    primary = [job for job in jobs if job not in supplement]
+    # 18회 안의 최대 6회/비례 시간만 예약한다. 남은 기회는 최초 수집에 반환한다.
+    reserve = min(6, max_calls-3) if supplement and primary and max_calls >= 6 else 0
+    pending, seen, phase = list(primary), set(), "primary"
+    phase_calls, phase_time = max_calls-reserve, max_seconds*(max_calls-reserve)/max_calls
+    if not primary:
+        pending, supplement, phase = supplement, [], "supplement_only"
     with reader.bounded_requests(max_calls=max_calls, max_seconds=max_seconds):
-        for job in store.performance_work(now, limit):
+        while pending or supplement or (phase == "supplement" and primary):
             elapsed = max((clock()-now).total_seconds(), monotonic()-started)
+            if phase == "primary" and (not pending or phase_calls-(reader.calls-initial) < 3 or elapsed >= phase_time):
+                pending, primary, supplement, phase = supplement, pending, [], "supplement"
+                phase_calls = min(max_calls, reader.calls-initial+6)
+                phase_time = max_seconds
+            if phase == "supplement" and (not pending or phase_calls-(reader.calls-initial) < 3):
+                pending, phase, phase_calls = primary, "remaining", max_calls
+            if not pending:
+                break
+            job = pending.pop(0)
+            if job["customer_id"] in seen:
+                continue
             if elapsed >= max_seconds or max_calls-(reader.calls-initial) < 3:
                 return PerformanceOutcome("BUDGET", dict(counts))
             if clock() < now or clock().astimezone(S.KST).date() != today:
                 return PerformanceOutcome("SOURCE_CHANGED", dict(counts))
             values = {}
             try:
+                seen.add(job["customer_id"])
                 store.begin_performance_check(job, clock())
                 handle = H.issue_inventory_handle(customer_id=job["customer_id"], snapshot_at=job["snapshot_at"], now=clock(),
                     validate=lambda cid, snapshot, at: store.performance_account_valid(job, at))
-                with reader.bounded_requests(max_calls=per_account_calls, max_seconds=min(10, max_seconds-elapsed)):
+                with reader.bounded_requests(max_calls=min(per_account_calls, phase_calls-(reader.calls-initial)),
+                        max_seconds=min(10, max_seconds-elapsed, phase_time-elapsed)):
                     _read(reader, handle, job, values, store, clock)
                     reader.check_budget()
             except N.NaverApiError as exc:
                 values.update(status="reauth_required" if exc.kind == N.KIND_KEY_REJECTED else "retry", error_code=exc.kind)
+            except SourceAggregating:
+                values.update(status="source_wait", error_code="SOURCE_AGGREGATING")
             except (N.StatsShapeUnknown, PerformanceIncomplete):
                 values.update(status="retry", error_code="STATS_INCOMPLETE")
             except CheckpointInvalid:

@@ -110,7 +110,7 @@ class PerformanceReadsTests(unittest.TestCase):
                     "future": NOW+timedelta(minutes=1)}[mode]
                 self.days[self.campaigns[0]["nccCampaignId"]] = rows
                 result = P.run_performance(self.reader, self.store, self.clock.now)
-                self.assertEqual(result.counts, {"retry": 1})
+                self.assertEqual(result.counts, {"source_wait" if mode in ("missing_day", "stale") else "retry": 1})
                 self.assertNotIn("daily_rows", self.store.results["weekly-test"])
                 self.assertEqual(self.store.progress["weekly-test"]["next_index"], 0)
 
@@ -145,7 +145,7 @@ class PerformanceReadsTests(unittest.TestCase):
     def test_failed_campaign_resumes_without_repeating_prior_verified_campaign(self):
         self.campaigns = [dict(self.campaigns[0], nccCampaignId=f"cmp-{A}-{i}") for i in range(3)]
         self.days[f"cmp-{A}-1"] = []
-        self.assertEqual(P.run_performance(self.reader, self.store, self.clock.now).counts, {"retry": 1})
+        self.assertEqual(P.run_performance(self.reader, self.store, self.clock.now).counts, {"source_wait": 1})
         self.assertEqual(self.store.progress["weekly-test"]["next_index"], 1)
         self.days.clear()
         self.assertEqual(P.run_performance(self.reader, self.store, self.clock.now).counts, {"ok": 1})
@@ -212,7 +212,9 @@ class PerformanceReadsTests(unittest.TestCase):
         self.assertEqual(len(self.http.calls), 1)
         self.assertNotIn("daily_rows", self.store.results["weekly-test"])
         self.http.tick = None
-        self.store.jobs = [dict(self.store.jobs[0], job_key=f"job-{n}") for n in range(10)]
+        self.store.jobs = [dict(self.store.jobs[0], job_key=f"job-{n}", customer_id=A+n) for n in range(10)]
+        self.http.routes[0] = (self.http.routes[0][0], lambda call:
+            (200, [dict(self.campaigns[0], customerId=int(call.customer))]))
         before = self.reader.calls
         result = P.run_performance(self.reader, self.store, self.clock.now)
         self.assertEqual(result.code, "BUDGET")
@@ -258,6 +260,19 @@ class PerformanceReadsTests(unittest.TestCase):
         row = self.store.results["weekly-test"]["daily_rows"][0]
         self.assertEqual((row["spend"], row["conversion_value"]), (2000, 2000))
         self.assertFalse(row["conversion_complete"])
+
+    def test_new_generation_really_reads_stats_and_rejects_an_old_generation_checkpoint(self):
+        job = self.store.jobs[0]
+        job["generation"] = "2026-10-04T00:01:00+09:00"
+        self.assertEqual(P.run_performance(self.reader, self.store, self.clock.now).counts, {"ok": 1})
+        original = deepcopy(self.store.progress[job["job_key"]])
+        job.update(job_key="weekly-new", generation="2026-10-05T00:01:00+09:00")
+        self.assertEqual(P.run_performance(self.reader, self.store, self.clock.now).counts, {"ok": 1})
+        self.assertEqual(len([call for call in self.http.calls if call.path == "/stats"]), 2)
+        self.store.progress[job["job_key"]] = original
+        before = self.reader.calls
+        self.assertEqual(P.run_performance(self.reader, self.store, self.clock.now).counts, {"limited": 1})
+        self.assertEqual(self.reader.calls, before)
 
 
 if __name__ == "__main__":

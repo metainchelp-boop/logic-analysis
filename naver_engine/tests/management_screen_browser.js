@@ -3,6 +3,7 @@ const assert=require('node:assert/strict');
 const path=require('node:path');
 const fs=require('node:fs');
 const {chromium}=require('playwright');
+const {auditFluidScreens}=require('./fluid_screen_audit');
 const cfg=JSON.parse(process.argv[2]);
 (async()=>{
   const browser=await chromium.launch();
@@ -45,6 +46,9 @@ const cfg=JSON.parse(process.argv[2]);
     await page.waitForFunction(()=>document.querySelector('#reportsSchedule').textContent.includes('매월 3일'));
     assert.match(await page.textContent('#reportsRows'),/생성된 보고서가 없습니다/);
     if(cfg.shots)await page.screenshot({path:path.join(cfg.shots,'실관리-보고서-대기.png'),fullPage:true});
+    const beforeAuditWrites=writes.length;
+    await auditFluidScreens(page,cfg);
+    assert.equal(writes.length,beforeAuditWrites,'fluid audit must not send writes');
     await page.evaluate(()=>sessionStorage.clear());code=cfg.staff;
     await page.goto(cfg.base+'/naver/transfers');
     await own.getByRole('button',{name:'관제 제외',exact:true}).waitFor();

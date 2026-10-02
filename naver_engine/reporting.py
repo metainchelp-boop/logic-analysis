@@ -156,6 +156,35 @@ def _fingerprint(report_period, expected, rows, now, review_required):
     return hashlib.sha256(json.dumps(source, separators=(",", ":"), allow_nan=False).encode("utf-8")).hexdigest()
 
 
+def _day_fingerprints(rows):
+    """판 비교용 내부 지문. 계정 번호·원천 값은 공개 payload에 싣지 않는다."""
+    days = {}
+    for (cid, day), row in sorted(rows.items()):
+        item = days.setdefault(day, {key: [] for key in OUTPUT_FIELDS})
+        for key in OUTPUT_FIELDS:
+            complete = row.get("basic_complete" if key in BASIC_FIELDS else "conversion_complete") is True
+            item[key].append([cid, complete, row.get(key) if _number(row.get(key)) else None])
+    return {day: {OUTPUT_FIELDS[key]: hashlib.sha256(json.dumps(value, separators=(",", ":")).encode()).hexdigest()
+                  for key, value in item.items()} for day, item in days.items()}
+
+
+def revision_metadata(previous, current, previous_report_id=None):
+    """합계가 같은 실적일 이동도 정정으로 설명하며 값 역행/0을 허용한다."""
+    old_days = (previous or {}).get("_day_fingerprints", {})
+    new_days = current.get("_day_fingerprints", {})
+    changed_days = sorted(day for day in set(old_days) | set(new_days)
+                          if old_days.get(day) != new_days.get(day))
+    old_totals, totals = (previous or {}).get("totals", {}), current["totals"]
+    changed_metrics = [key for key in totals if old_totals.get(key) != totals[key] or any(
+        old_days.get(day, {}).get(key) != new_days.get(day, {}).get(key) for day in changed_days)]
+    return {"previous_report_id": previous_report_id, "changed_metrics": changed_metrics,
+            "metric_deltas": {key: totals[key]-old_totals[key] if previous and
+                              totals[key] is not None and old_totals.get(key) is not None else None for key in totals},
+            "changed_days": changed_days,
+            "completeness_changed": bool(previous and (previous.get("missing") != current["missing"] or
+                                                       previous.get("ready") != current["ready"]))}
+
+
 def aggregate(report_period, expected_customers, daily_rows, now, *, has_open_issues=False):
     """호출자가 역사적 귀속을 확인한 계정 분모와 실적일별 계정 합계를 받는다.
 
@@ -220,6 +249,7 @@ def aggregate(report_period, expected_customers, daily_rows, now, *, has_open_is
             "ready": ready, "review_status": "needs_staff_review" if review_required
             else "not_required", "missing": missing, "blocked_reasons": blocked,
             "revision_fingerprint": _fingerprint(report_period, expected, rows, now, review_required),
+            "_day_fingerprints": _day_fingerprints(rows),
             "coverage": {"accounts": len(expected), "expected_account_days": len(expected)*days,
                          "basic_complete_account_days": len(basic),
                          "conversion_complete_account_days": len(conversion),

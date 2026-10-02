@@ -56,7 +56,7 @@ from . import naver_read as N
 from . import store as S
 from . import sync as Y
 
-ACCOUNTS_START = time(6, 30)               # 아침 점검 시작(설계 §점검 06:30~08:00) — 그날 목록은 이 뒤에 받는다
+ACCOUNTS_START = time(0, 1)                # 전일 수집 직전 당일 전체 이관 목록을 갱신한다.
 ACCOUNTS_RETRY = timedelta(minutes=30)     # 실패·멈춤 뒤 다시 부르기까지
 ACCOUNTS_ALERT_AFTER = timedelta(hours=26)  # 연결 목록을 이만큼 넘게 못 받으면 알린다(하루 한 번 + 여유)
 ACCOUNTS_MAX_AGE = timedelta(hours=30)     # 짝 맞추기에 쓸 수 있는 연결 목록의 나이(어제 목록까지 · 그보다 낡으면 맞추지 않음)
@@ -185,7 +185,7 @@ def confirm_accounts(store: S.Store, now: datetime, confirmed_by: int, hold_id: 
 
 
 def accounts_due(store: S.Store, now: datetime) -> bool:
-    """오늘 06:30 뒤이고 · 확인을 기다리는 붙잡음이 없고 · 마지막 시도가 30분 넘게 지났고 · 오늘 06:30 뒤에 받은 목록이
+    """오늘 00:01 뒤이고 · 확인을 기다리는 붙잡음이 없고 · 마지막 시도가 30분 넘게 지났고 · 오늘 00:01 뒤에 받은 목록이
     없으면 부른다."""
     Y._need_time(now)
     start = _local_start(now)

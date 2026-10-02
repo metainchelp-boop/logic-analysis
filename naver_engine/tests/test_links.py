@@ -405,13 +405,13 @@ class ConfirmedBrakeTest(Base):
 
 class AccountsDueTest(Base):
     def test_window_and_retry(self):
-        self.assertFalse(L.accounts_due(self.st, datetime(2026, 9, 29, 6, 29, tzinfo=KST)))
-        self.assertTrue(L.accounts_due(self.st, datetime(2026, 9, 29, 6, 30, tzinfo=KST)))
-        self.assertTrue(L.accounts_due(self.st, datetime(2026, 9, 28, 21, 31, tzinfo=timezone.utc)))   # = KST 06:31
+        self.assertFalse(L.accounts_due(self.st, datetime(2026, 9, 29, 0, 0, tzinfo=KST)))
+        self.assertTrue(L.accounts_due(self.st, datetime(2026, 9, 29, 0, 1, tzinfo=KST)))
+        self.assertTrue(L.accounts_due(self.st, datetime(2026, 9, 28, 15, 1, tzinfo=timezone.utc)))   # = KST 00:01
         L.sync_accounts(FakeReader(kids(*many(10))), self.st, self.at(datetime(2026, 9, 29, 6, 31, tzinfo=KST)))
         self.assertFalse(L.accounts_due(self.st, self.at(datetime(2026, 9, 29, 23, 0, tzinfo=KST))))   # 오늘 받음
-        self.assertFalse(L.accounts_due(self.st, self.at(datetime(2026, 9, 30, 6, 0, tzinfo=KST))))    # 내일 06:30 전
-        self.assertTrue(L.accounts_due(self.st, self.at(datetime(2026, 9, 30, 6, 30, tzinfo=KST))))
+        self.assertFalse(L.accounts_due(self.st, self.at(datetime(2026, 9, 30, 0, 0, tzinfo=KST))))
+        self.assertTrue(L.accounts_due(self.st, self.at(datetime(2026, 9, 30, 0, 1, tzinfo=KST))))
 
     def test_failed_retry_after_30_minutes(self):
         t = self.at(datetime(2026, 9, 29, 6, 40, tzinfo=KST))
@@ -420,8 +420,8 @@ class AccountsDueTest(Base):
         self.assertTrue(L.accounts_due(self.st, t + timedelta(minutes=30)))
 
     def test_accepted_before_start_does_not_count_for_today(self):
-        L.sync_accounts(FakeReader(kids(*many(10))), self.st, self.at(datetime(2026, 9, 29, 5, 0, tzinfo=KST)))
-        self.assertTrue(L.accounts_due(self.st, self.at(datetime(2026, 9, 29, 6, 30, tzinfo=KST))))
+        L.sync_accounts(FakeReader(kids(*many(10))), self.st, self.at(datetime(2026, 9, 29, 0, 0, tzinfo=KST)))
+        self.assertTrue(L.accounts_due(self.st, self.at(datetime(2026, 9, 29, 0, 30, tzinfo=KST))))
 
     def braked(self):
         big = many(100)
@@ -1172,8 +1172,8 @@ class ConstantsTest(unittest.TestCase):
         self.assertEqual(L.CODE_NEVER_LISTED, S.PAIR_CODE_NEVER_LISTED)
         self.assertEqual(L.CONFIRMABLE_ACCOUNT_CODES, {S.BRAKE_TOTAL, S.BRAKE_MANAGER, S.BRAKE_BASELINE,
                                                        S.BRAKE_CONFIRMED})
-        self.assertEqual(L.ACCOUNTS_START, time(6, 30))
-        self.assertLess(L.LINK_BROKEN_MIN_SPAN, timedelta(hours=24))   # 매일 06:30 목록 두 번이면 끊김이 된다
+        self.assertEqual(L.ACCOUNTS_START, time(0, 1))
+        self.assertLess(L.LINK_BROKEN_MIN_SPAN, timedelta(hours=24))   # 매일 00:01 목록 두 번이면 끊김이 된다
         self.assertGreater(L.ACCOUNTS_MAX_AGE, timedelta(hours=24))    # 오늘 목록을 못 받아도 어제 목록으로 맞춘다
 
 

@@ -51,13 +51,17 @@ class _ManagedBoundary(S.ManagedStorage):
             return _Rows(self.jobs)
         if "naver_auto_manual_read" in sql:
             if "WHERE" in sql:
-                return _Rows([{k: row[k] for k in ("requested_at", "actor")}
-                              for row in self.requests if row["customer_id"] == args[0]])
+                return _Rows([row for row in self.requests if row["customer_id"] == args[0]])
             return _Rows(self.requests)
         if "naver_auto_management_event" in sql:
+            if "SELECT stage_key" in sql:
+                return _Rows([{"stage_key": row.get("stage_key")} for row in self.events
+                    if row["customer_id"] == args[0] and row["possibility_id"] == args[1]])
             keys = ("possibility_id", "at") if "WHERE customer_id" in sql else ("customer_id", "possibility_id")
             return _Rows([{key: row[key] for key in keys} for row in self.events
                           if not args or row["customer_id"] == args[0]])
+        if "naver_auto_report_snapshot" in sql:
+            return _Rows([])
         raise AssertionError("fixture에 없는 SQL")
 
     def account_catalog(self):
@@ -125,7 +129,7 @@ class ManagedStorageBoundaryTest(unittest.TestCase):
                          "next_try_at": self.now.isoformat()}]
         jobs = self.st.performance_work(self.now, 1)
         self.assertEqual(len(jobs), 1)
-        self.assertEqual(jobs[0]["kind"], "backfill")
+        self.assertEqual(jobs[0]["kind"], "report_monthly")
         self.assertTrue(self.st.performance_account_valid(jobs[0], self.now))
 
     def test_tampered_job_shape_key_period_and_types_are_rejected_without_throwing(self):
@@ -145,6 +149,7 @@ class ManagedStorageBoundaryTest(unittest.TestCase):
         day = job["period_start"]
         at = self.now.isoformat()
         self.st.progress = {"customer_id": TM.A, "period_start": day, "period_end": day,
+                            "generation": job["generation"],
                             "campaign_ids": ["cmp-1"], "fingerprint": P.fingerprint(["cmp-1"]),
                             "next_index": 1, "cycles": [at], "conversion_evidence": True,
                             "day_totals": {day: dict(impCnt=10, clkCnt=1, salesAmt=100, ccnt=1, convAmt=200)}}
@@ -412,9 +417,9 @@ class ManagedStorageTest(TM.Base):
         saved = self.st.daily_performance([TM.A], old_day, old_day)
         self.refresh(self.fc.now()+timedelta(days=1))
         self.fail_stats = True
-        self.assertEqual(self.collect().counts, {"retry": 1})
+        self.assertEqual(self.collect().counts, {"source_wait": 1})
         current = self.st.performance_checks(self.fc.now())[TM.A]
-        self.assertEqual(current["status"], "retry")
+        self.assertEqual(current["status"], "source_wait")
         self.assertTrue(current["stale"])
         self.assertEqual((current["period_end"], current["spend"]), (old["period_end"], old["spend"]))
         self.assertEqual(current["last_success_at"], old["last_success_at"])
@@ -462,11 +467,11 @@ class ManagedStorageTest(TM.Base):
         self.fc.advance(2*3600)
         self.refresh()
         self.fail_stats = True
-        self.assertEqual(self.collect(limit=1).counts, {"retry": 1})
+        self.assertEqual(self.collect(limit=1).counts, {"source_wait": 1})
         failed = self.st.performance_checks(self.fc.now())[TM.A]
         self.assertEqual((failed["last_success_at"], failed["spend"], failed["bizmoney"]),
                          (good["last_success_at"], good["spend"], good["bizmoney"]))
-        self.fc.advance(121)
+        self.fc.advance(15*60+1)
         self.refresh()
         self.fail_stats = False
         self.metric.update(ccnt=2, convAmt=4000)

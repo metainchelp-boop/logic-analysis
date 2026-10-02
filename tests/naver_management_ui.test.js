@@ -71,6 +71,25 @@ function launch(options = {}) {
 }
 async function flush() { for (let i = 0; i < 8; i++) await new Promise(resolve => setImmediate(resolve)); }
 
+test('좁은 화면의 이관 계정 카드도 원래 아홉 항목명을 보존한다', async () => {
+  const run = launch({ data: inventory([fixture()]) });
+  await flush();
+  const cells = tree(run.elements.get('inventoryRows')).filter(el => el.tagName === 'TD');
+  assert.deepEqual(cells.map(el => el.getAttribute('data-label')), [
+    '광고 계정 · ID', '전산 업체', '매칭 상태', '업무 단계', '담당', '수집 결과',
+    '확인된 실적 · 기간', '비즈머니 · 확인 시각', '관제 관리'
+  ]);
+  assert.match(cells[0].textContent, /합성 계정.*ID 700/);
+});
+
+test('수집 시각은 10시 목표와 이후 계속 수집을 기존 이상 점검과 구분한다', async () => {
+  const run = launch({ screen: 'settings', data: { deadline: '08:00' } });
+  await flush();
+  assert.match(run.text('sp-time'), /전일 실적.*00:01.*10:00.*미완료.*계속 수집/);
+  assert.match(run.text('sp-time'), /기존 이상 점검.*06:30.*08:00.*별도/);
+  assert.doesNotMatch(run.text('sp-time'), /10:00 까지 끝납니다/);
+});
+
 test('실관리 대조는 계정이 없는 업체와 전체 후보 수를 별도로 표시한다', async () => {
   const run = launch({ data: inventory([], { ready: true, total: 2, matched: 0, missing: 2, items: [
     { possibility_id: 1, company_name: '번호 없는 업체', workflow: '진행중', state: 'id_missing', codes: ['ID_MISSING'], candidate_count: 0, matched_account_count: 0 },
@@ -120,7 +139,7 @@ test('허용된 관리 변경만 필수 사유와 단계 개정값을 보내며 
   const run = launch({ respond: req => req.method === 'GET' ? data : new Promise(resolve => { resolveWrite = resolve; }) });
   await flush();
   const actions = run.buttons('inventoryRows');
-  assert.deepEqual(actions.map(x => x.textContent), ['관제 제외', '지금 조회']);
+  assert.deepEqual(actions.map(x => x.textContent), ['관제 제외', '지금 조회', '기간 재확인']);
   actions[0].dispatch('click');
   run.elements.get('managementSave').dispatch('click');
   assert.equal(run.requests.filter(r => r.method === 'POST').length, 0);
@@ -132,6 +151,43 @@ test('허용된 관리 변경만 필수 사유와 단계 개정값을 보내며 
     body: { ad_account_no: '700', stage_revision: 'r1', included: false, reason: '휴면 확인' } }]);
   resolveWrite({}); await flush();
   assert.match(run.text('toast'), /관제 제외.*광고/);
+});
+
+test('기간 재확인은 닫힌 날짜 최대 31일과 현재 계정 권한을 검사하고 한 번만 요청한다', async () => {
+  let release;
+  const data = inventory([fixture({ management: { cadence: 'daily', can_collect: true } }),
+    fixture({ ad_account_no: '701', management: { cadence: 'daily', can_collect: false } }),
+    fixture({ ad_account_no: '702', possibility_id: null, management: { cadence: 'daily', can_collect: true } })]);
+  const run = launch({ respond: request => request.method === 'GET' ? data : new Promise(resolve => { release = resolve; }) });
+  await flush();
+  const buttons = run.buttons('inventoryRows').filter(button => button.textContent === '기간 재확인');
+  assert.equal(buttons.length, 1);
+  buttons[0].dispatch('click');
+  assert.match(run.text('periodDescription'), /합성 업체.*700/);
+  const start = run.elements.get('periodStart'), end = run.elements.get('periodEnd'), save = run.elements.get('periodSave');
+  for (const [a, b] of [['', '2026-01-01'], ['2026-02-30', '2026-03-01'], ['2026-01-02', '2026-01-01'],
+    ['2026-01-01', '2026-02-01'], ['9999-01-01', '9999-01-02']]) {
+    start.value = a; end.value = b; save.dispatch('click');
+    assert.equal(run.requests.filter(request => request.method === 'POST').length, 0);
+  }
+  start.value = '2026-01-01'; end.value = '2026-01-31'; save.dispatch('click'); save.dispatch('click'); await flush();
+  assert.deepEqual(run.requests.filter(request => request.method === 'POST'), [{ url: '/api/naver-auto/management/collect', method: 'POST',
+    body: { ad_account_no: '700', possibility_id: 1, period_start: '2026-01-01', period_end: '2026-01-31' } }]);
+  release({}); await flush();
+  assert.match(run.text('toast'), /기간 재확인 요청.*완료.*수집 결과/);
+  assert.equal(run.elements.get('m-period-recheck').classList.contains('on'), false);
+});
+
+test('범위가 바뀌면 기간 재확인 창과 이전 계정 버튼은 요청할 수 없다', async () => {
+  const run = launch({ data: inventory([fixture({ management: { cadence: 'weekly', can_collect: true } })]) });
+  await flush();
+  const button = run.buttons('inventoryRows').find(item => item.textContent === '기간 재확인');
+  assert.ok(button); button.dispatch('click');
+  run.elements.get('periodStart').value = '2026-01-01'; run.elements.get('periodEnd').value = '2026-01-03';
+  run.scope('person:2'); await flush();
+  run.elements.get('periodSave').dispatch('click'); button.dispatch('click'); await flush();
+  assert.equal(run.elements.get('m-period-recheck').classList.contains('on'), false);
+  assert.equal(run.requests.filter(request => request.method === 'POST').length, 0);
 });
 
 test('보고서는 기간·부분합·누락·담당 검토를 표시하며 게시나 송신을 하지 않는다', async () => {
@@ -152,6 +208,56 @@ test('보고서는 기간·부분합·누락·담당 검토를 표시하며 게�
   assert.match(run.text('reportsRows'), /담당 검토 필요/);
   assert.equal(run.buttons('reportsRows').length, 0);
   assert.equal(run.requests.filter(r => r.method !== 'GET').length, 0);
+});
+
+test('보고서 정정판은 감소·명시적 0·대조 대기를 표시하고 내부 원천 지문을 노출하지 않는다', async () => {
+  const run = launch({ screen: 'reports', data: { rows: [{
+    report_id: 12, revision_no: 3, status: 'ready', can_review: true,
+    validation: { status: 'pending', last_attempt_at: '2026-10-03T09:00:00+09:00',
+      last_checked_at: '2026-10-02T11:00:00+09:00', pending_account_days: 2, source_snapshot_fingerprint: 'PRIVATE_FINGERPRINT' },
+    change_summary: { previous_report_id: 11, changed_metrics: ['spend', 'conversions'],
+      metric_deltas: { spend: -1000, conversions: 0 }, changed_days: ['2026-09-30'], completeness_changed: true },
+    payload: { totals: { spend: 0 }, period: { kind: 'monthly', start: '2026-09-01', end: '2026-09-30' } }
+  }] } });
+  await flush();
+  assert.match(run.text('reportsRows'), /3판.*원천 재확인 대기/);
+  assert.match(run.text('reportsRows'), /광고비.*-1,000원.*전환.*0/);
+  assert.match(run.text('reportsRows'), /2026-09-30.*완결 상태 변경/);
+  assert.match(run.text('reportsRows'), /남은 계정×일 2/);
+  assert.doesNotMatch(run.text('reportsRows'), /PRIVATE_FINGERPRINT/);
+  assert.ok(!run.buttons('reportsRows').some(button => button.textContent === '검토 승인'));
+  assert.ok(run.buttons('reportsRows').some(button => button.textContent === '검토 보류'));
+  assert.equal(run.requests.filter(request => request.method !== 'GET').length, 0);
+});
+
+test('이전 판은 요청할 때만 페이지별 조회하며 담당 범위가 바뀐 뒤의 늦은 이력을 폐기한다', async () => {
+  let release;
+  const row = { report_id: 12, possibility_id: 1, period_key: 'monthly:2026-09-01:2026-09-30',
+    revision_no: 3, company_name: '현재 보고 업체', status: 'ready', payload: {} };
+  const run = launch({ screen: 'reports', respond: request => {
+    if (request.url.includes('/reports/history?')) {
+      if (request.url.includes('before_report_id=10')) return new Promise(resolve => { release = resolve; });
+      return { items: [{ ...row, report_id: 10, revision_no: 2, company_name: '이전 보고 업체', can_review: true }], next_before_report_id: 10 };
+    }
+    return { rows: [row] };
+  } });
+  await flush();
+  assert.equal(run.requests.filter(request => request.url.includes('/reports/history?')).length, 0);
+  const history = tree(run.elements.get('reportsRows')).find(el => el.tagName === 'DETAILS' && el.className === 'report-history');
+  assert.ok(history);
+  history.open = true; history.dispatch('toggle'); history.dispatch('toggle'); await flush();
+  assert.equal(run.requests.filter(request => request.url.includes('/reports/history?')).length, 1);
+  assert.match(run.text('reportsRows'), /이전 보고 업체.*2판.*이전 판 기록/);
+  assert.ok(!run.buttons('reportsRows').some(button => button.textContent === '검토 승인'));
+  const older = run.buttons('reportsRows').find(button => button.textContent === '더 이전 판');
+  older.dispatch('click'); await flush();
+  assert.ok(run.requests.some(request => request.url.includes('period_key=monthly%3A2026-09-01%3A2026-09-30') && request.url.includes('limit=20')));
+  run.scope('person:2'); await flush();
+  release({ items: [{ ...row, company_name: '폐기할 과거 담당 자료' }], next_before_report_id: null }); await flush();
+  assert.doesNotMatch(run.text('reportsRows'), /폐기할 과거 담당 자료/);
+  const count = run.requests.length; older.dispatch('click'); await flush();
+  assert.equal(run.requests.length, count);
+  assert.equal(run.requests.filter(request => request.method !== 'GET').length, 0);
 });
 
 test('보고서 검토는 capability true와 필수 메모가 있어야 내부 승인만 저장한다', async () => {
