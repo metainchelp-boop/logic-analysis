@@ -506,10 +506,11 @@ class App:
         return 200, out
 
     def _h_accounts(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
-        if set(req.query) - {"selection", "workflow", "mapping"}:
+        if set(req.query) - {"selection", "workflow", "mapping", "view"}:
             raise HttpError(400, "bad-query")
         return 200, INV.board(v.ctx(now), v.store, v.scope, req.query.get("selection", "all"),
-                              req.query.get("workflow", "all"), req.query.get("mapping", "all"))
+                              req.query.get("workflow", "all"), req.query.get("mapping", "all"),
+                              req.query.get("view", "current"))
 
     def _h_board(self, req: Request, v: Viewer, now: datetime) -> Tuple[int, dict]:
         sel = req.query.get("selection", "all")

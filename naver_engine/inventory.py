@@ -1,9 +1,11 @@
 """현재 이관 계정 원장. 전산 존재/매칭/업무단계/수집 상태를 혼합하지 않는다."""
 from collections import Counter
 from datetime import datetime, timedelta
+from decimal import Decimal
+import math
 
 from app.naver_auto import matching as M, scope as SC
-from . import erp_read as E, handles as H, store as S, views as W
+from . import erp_read as E, handles as H, links as L, store as S, views as W
 
 WORKFLOWS = ("진행중", "전략관리", "사후관리", "재계약진행중", "환불중", "홀딩중", "환불완료", "계약만료", "미분류")
 MAPPINGS = ("matched", "no_erp_record", "unclassified")
@@ -43,9 +45,9 @@ def catalog_status(store, now):
     return body, "accepted"
 
 
-def _matching(ctx, catalog):
+def _matching(ctx, catalog, *, include_absent=False):
     current = {cid: {"customerId": cid, "adAccountNo": a["ad_account_no"], "adAccountName": a["account_name"]}
-               for cid, a in ctx.accounts.items() if a["present"] == 1}
+               for cid, a in ctx.accounts.items() if a["present"] == 1 or include_absent}
     # 전체 가망 × 계정의 이중 루프를 피한다. 번호 주장/사람 확인은 전부 유지하고,
     # 이름 후보는 같은 이름 또는 3글자 이상 포함 관계가 가능한 업체만 규칙 모듈에 넘긴다.
     names = {cid: M.loose_name(a["adAccountName"]) for cid, a in current.items()}
@@ -100,8 +102,51 @@ def _matching(ctx, catalog):
     return M.match(people, ids, current, decisions, accounts_complete=True), possible_accounts
 
 
-def board(ctx, store, scope, selection="all", workflow="all", mapping="all"):
-    if workflow not in ("all", *WORKFLOWS) or mapping not in ("all", *MAPPINGS):
+def _known_balance(value):
+    return type(value) in (int, float) and math.isfinite(value) and abs(value) <= 9007199254740991
+
+
+def _lost_rows(ctx, store, catalog, visible, owns, ceo, selection):
+    """수락된 과거 계정만 기존 부재 기준으로 센다. 현재 계정 합계/권한에는 섞지 않는다."""
+    times = store.account_times()
+    absent = {cid for cid, account in ctx.accounts.items() if account["present"] != 1
+              and cid in times and L.link_state(times[cid])[0] == S.PAIR_BROKEN}
+    if not absent:
+        return []
+    # 현재 번호 주장과 충돌하는 과거 계정을 직원 소유로 추정하지 않는다.
+    result, _ = _matching(ctx, catalog, include_absent=True)
+    pairs, duplicates = {}, set()
+    for pair in result.pairs:
+        if pair.customer_id in pairs:
+            duplicates.add(pair.customer_id)
+        pairs[pair.customer_id] = pair
+    companies = {r["possibility_id"]: r for r in catalog["items"]}
+    rows = []
+    for cid in sorted(absent):
+        pair = None if cid in duplicates else pairs.get(cid)
+        company = companies.get(pair.possibility_id) if pair else None
+        pid = company["possibility_id"] if company else None
+        uncertain = company is None or company["stage_hidden"] or not company["stage_known"]
+        if not ceo or selection not in ("all", "unassigned"):
+            if pid not in visible or uncertain:
+                continue
+        elif selection == "unassigned" and pid is not None and pid not in visible:
+            continue
+        account = ctx.accounts[cid]
+        stage = H.stage_key(company["stage"]) if not uncertain else "미분류"
+        rows.append({"ad_account_no": None if account["ad_account_no"] is None else str(account["ad_account_no"]),
+                     "customer_tail": W.tail4(cid), "account_name": account["account_name"],
+                     "possibility_id": pid, "company_name": None if company is None else company["company_name"],
+                     "mapping": "unclassified" if uncertain else "matched", "workflow": stage if stage in WORKFLOWS else "미분류",
+                     "owner": W._owner(ctx, owns[pid]) if pid is not None else None,
+                     "collection": {"status": "not_current", "checked_at": times[cid]["absent_last_at"].isoformat()},
+                     "detail_available": False, "reason": "LINK_BROKEN"})
+    return rows
+
+
+def board(ctx, store, scope, selection="all", workflow="all", mapping="all", view="current"):
+    if workflow not in ("all", *WORKFLOWS) or mapping not in ("all", *MAPPINGS) \
+            or view not in ("current", "lost", "balance_known"):
         raise SC.SelectionRejected()
     catalog, state = catalog_status(store, ctx.now)
     companies = {} if catalog is None else {r["possibility_id"]: r for r in catalog["items"]}
@@ -137,6 +182,7 @@ def board(ctx, store, scope, selection="all", workflow="all", mapping="all"):
             match_ok = False
     checks = store.inventory_checks_on(ctx.today)
     rows, counts, stages = [], Counter({m: 0 for m in MAPPINGS}), Counter({s: 0 for s in WORKFLOWS})
+    balances = []
     for cid, account in sorted(ctx.accounts.items()):
         if account["present"] != 1:
             continue
@@ -155,9 +201,15 @@ def board(ctx, store, scope, selection="all", workflow="all", mapping="all"):
         stage = key if key in WORKFLOWS else "미분류"
         counts[status] += 1
         stages[stage] += 1
+        check = checks.get(cid)
+        balance = None if check is None else check.get("bizmoney")
+        known = match_ok and _known_balance(balance)
+        if known:
+            balances.append(Decimal(str(balance)))
         if workflow not in ("all", stage) or mapping not in ("all", status):
             continue
-        check = checks.get(cid)
+        if view == "balance_known" and not known:
+            continue
         owner = W._owner(ctx, owns[pid]) if pid is not None else None
         # 원천 지표를 전산 계약/보고서에 자동 귀속하거나 이전 이력을 덮어쓰지 않는다.
         rows.append({"ad_account_no": None if account["ad_account_no"] is None else str(account["ad_account_no"]),
@@ -168,7 +220,24 @@ def board(ctx, store, scope, selection="all", workflow="all", mapping="all"):
                      "detail_available": pid in ctx.prospects and ctx.prospects[pid]["present"] == 1 and not uncertain,
                      "reason": "SOURCE_UNAVAILABLE" if not match_ok else
                                ("MATCH_REVIEW" if uncertain else ("NO_ERP_MATCH" if company is None else None))})
-    return {"rows": rows, "total": sum(counts.values()), "filtered_total": len(rows),
+    lost = []
+    lost_ready = match_ok
+    if lost_ready:
+        try:
+            lost = _lost_rows(ctx, store, catalog, visible, owns, ceo, selection)
+        except M.BadInput:
+            lost_ready = False
+    if view == "lost":
+        rows = [r for r in lost if workflow in ("all", r["workflow"]) and mapping in ("all", r["mapping"])]
+    total = sum(counts.values())
+    amount = int(sum(balances)) if balances else (0 if match_ok and total == 0 else None)
+    if amount is not None and abs(amount) > 9007199254740991:
+        amount = None  # JS가 정확하게 표시하지 못할 합계는 정상 잔액으로 보내지 않는다.
+    summary = {"ready": match_ok, "current_total": total,
+               "lost_count": len(lost) if lost_ready else None,
+               "balance": {"known_count": len(balances), "total_count": total, "known_sum": amount,
+                           "complete": match_ok and len(balances) == total and (total == 0 or amount is not None)}}
+    return {"rows": rows, "total": total, "filtered_total": len(rows), "view": view, "summary": summary,
             "counts": dict(counts), "workflows": dict(stages), "selection": selection,
             "catalog_status": state, "catalog_at": None if catalog is None else catalog["generated_at"],
             "accounts_at": None if at is None else at.isoformat(), "accounts_current": accounts_current,

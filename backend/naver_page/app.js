@@ -26,7 +26,7 @@
     linksOpen: false, endedOpen: false, doneOpen: false, gen: 0, timer: null, focus: null,
     lastInput: Date.now(), refreshing: false, retryAt: 0, retryN: 0, warned: false, bellGen: 0,
     filterFromRoute: false, spaneFromRoute: false, busy: {}, loadedDay: null, lastFocus: null,
-    inventory: null, inventoryGen: 0, inventoryMapping: 'all', inventoryWorkflow: 'all', inventoryQ: ''
+    inventory: null, inventoryGen: 0, inventoryMapping: 'all', inventoryWorkflow: 'all', inventoryQ: '', inventoryView: 'current'
   };
 
   // ── 작은 도구 ─────────────────────────────────────────────────────
@@ -384,38 +384,71 @@
     });
   }
   var INVENTORY_MAPPING = { matched: '전산 업체 매칭', no_erp_record: '전산 내에 등록된 업체 정보 없음', unclassified: '미분류 · 확인 필요' };
+  function inventoryCardFilter(mapping, view) {
+    state.inventoryMapping = mapping; state.inventoryView = view;
+    state.inventoryWorkflow = 'all'; state.inventoryQ = '';
+    $('inventoryMapping').value = mapping; $('inventoryView').value = view;
+    $('inventoryWorkflow').value = 'all'; $('inventorySearch').value = '';
+    loadInventory();
+  }
+  function renderInventorySummary(data, message) {
+    var s = data && data.summary, ready = s && s.ready, counts = data && data.counts || {};
+    var money = s && s.balance || {}, partial = !money.complete;
+    var cards = [
+      ['total', '이관 광고 계정', s ? num(s.current_total) : '—', '현재 이관 목록 · 빠짐 계정 제외', 'all', 'current'],
+      ['matched', '매칭 완료', ready ? num(counts.matched) : '—', '전산 업체와 연결됨', 'matched', 'current'],
+      ['unknown', '업체 미확인', ready ? num(counts.no_erp_record) : '—', '연결 근거 없음 · 미등록 확정 아님', 'no_erp_record', 'current'],
+      ['unclassified', '미분류', ready ? num(counts.unclassified) : '—', '중복 후보·번호·원천 확인 필요', 'unclassified', 'current'],
+      ['lost', '이관 빠짐', s && s.lost_count !== null ? num(s.lost_count) : '—', '2일·20시간 이상 부재 · 현재 총수와 별도', 'all', 'lost'],
+      ['balance', partial ? '확인된 잔액 합계' : '총 비즈머니', won(money.known_sum), s ?
+        (money.total_count === 0 && ready ? '대상 계정 없음' : '확인 ' + num(money.known_count) + ' / ' + num(money.total_count) + '계정 · 미확인 ' +
+          num(Math.max(0, money.total_count - money.known_count)) + (partial ? ' · 전체 합계 아님' : ' · 오늘 확인한 잔액')) : '잔액 확인 중', 'all', 'balance_known']
+    ];
+    put($('inventorySummary'), cards.map(function (c) {
+      var active = !!s && state.inventoryMapping === c[4] && state.inventoryView === c[5];
+      return h('button', { type: 'button', class: 'inventory-stat ' + c[0], id: 'inventory-stat-' + c[0],
+        disabled: !s, 'aria-pressed': String(active), onclick: function () { inventoryCardFilter(c[4], c[5]); } },
+        h('span', { class: 'label' }, c[1]), h('strong', { class: 'value' }, c[2]),
+        h('span', { class: 'note' }, message || (s && !ready ? '원천 자료 확인 필요 · 확정 집계 보류' : c[3])));
+    }));
+  }
   function loadInventory() {
     var gen = ++state.inventoryGen, sel = state.selection;
     state.inventory = null;
+    renderInventorySummary(null, '불러오는 중…');
     $('inventoryCount').textContent = '';
     $('inventorySource').textContent = '현재 권한으로 목록을 불러오는 중입니다.';
     put($('inventoryRows'), h('tr', null, h('td', { colspan: 8, class: 'empty' }, '불러오는 중…')));
     return api('GET', '/accounts?selection=' + encodeURIComponent(sel) + '&workflow=' +
-      encodeURIComponent(state.inventoryWorkflow) + '&mapping=' + encodeURIComponent(state.inventoryMapping)).then(function (data) {
+      encodeURIComponent(state.inventoryWorkflow) + '&mapping=' + encodeURIComponent(state.inventoryMapping) +
+      '&view=' + encodeURIComponent(state.inventoryView)).then(function (data) {
       if (gen !== state.inventoryGen || sel !== state.selection || !state.me) return;
       state.inventory = data;
       renderInventory();
     }, function (e) {
       if (gen !== state.inventoryGen || sel !== state.selection || (e && e.status === 401)) return;
       $('inventorySource').textContent = '목록을 불러오지 못했습니다. 목록 새로고침으로 다시 확인해 주세요.';
+      renderInventorySummary(null, '불러오지 못했습니다 · 목록 새로고침으로 확인해 주세요.');
       put($('inventoryRows'), h('tr', null, h('td', { colspan: 8, class: 'empty' }, errText(e))));
     });
   }
   function renderInventory() {
     var data = state.inventory;
     if (!data) return;
+    renderInventorySummary(data);
     var query = state.inventoryQ.toLocaleLowerCase();
     var rows = data.rows.filter(function (r) {
       return [r.account_name, r.company_name, r.ad_account_no].join(' ').toLocaleLowerCase().indexOf(query) !== -1;
     });
-    $('inventoryCount').textContent = num(rows.length) + ' / ' + num(data.total) + '계정 · 매칭 ' +
+    $('inventoryCount').textContent = (data.view === 'lost' ? '이관 빠짐 ' + num(rows.length) + '계정 · 현재 이관 ' + num(data.total) :
+      num(rows.length) + ' / ' + num(data.total)) + '계정 · 매칭 ' +
       num(data.counts.matched) + ' · 업체 미확인 ' + num(data.counts.no_erp_record) + ' · 미분류 ' + num(data.counts.unclassified);
     $('inventorySource').textContent = '이관 목록 ' + (mdhm(data.accounts_at) || '수신 전') + ' · 전산 전체 목록 ' +
       (mdhm(data.catalog_at) || '수신 전') + (data.catalog_status !== 'accepted' || !data.accounts_current || data.matching_ready === false ?
       ' · 원본 확인 필요: 미등록 판정 및 직원 연결 표시를 보류합니다.' : ' · 목록 새로고침은 저장된 최신 결과를 다시 표시합니다.');
     var collection = { ok: '수집 완료', partial: '일부 수집', pending: '수집 대기', failed: '수집 실패',
       retry: '재시도 대기', reading: '수집 중', running: '수집 중', reauth_required: '네이버 접근 권한 확인',
-      limited: '수집 중단 · 사유 확인', denied: '접근 권한 확인', blocked: '접근 권한 확인' };
+      limited: '수집 중단 · 사유 확인', denied: '접근 권한 확인', blocked: '접근 권한 확인', not_current: '수집 대상 제외 · 이관 빠짐' };
     var collectionReason = { CHECKPOINT_PENDING: '남은 캠페인은 다음 회차에 이어 읽습니다',
       CHECKPOINT_INVALID: '중간 저장 자료 검증 실패 · 관리자 확인 필요', RETRY_EXHAUSTED: '연속 재시도 4회 소진 · 관리자 확인 필요',
       STATS_INCOMPLETE: '네이버 통계 일부 미수신', STATS_SHAPE: '네이버 통계 응답 형식 확인 필요',
@@ -1291,6 +1324,7 @@
     });
     $('q').addEventListener('input', function () { state.q = this.value.trim(); renderTable(); });
     $('inventorySearch').addEventListener('input', function () { state.inventoryQ = this.value.trim(); renderInventory(); });
+    $('inventoryView').addEventListener('change', function () { state.inventoryView = this.value; loadInventory(); });
     $('inventoryMapping').addEventListener('change', function () { state.inventoryMapping = this.value; loadInventory(); });
     $('inventoryWorkflow').addEventListener('change', function () { state.inventoryWorkflow = this.value; loadInventory(); });
     $('inventoryReload').addEventListener('click', loadInventory);
