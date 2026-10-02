@@ -220,7 +220,7 @@ class SealTest(unittest.TestCase):
              contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             self.assertEqual(P.main(), 0)
         receipt = json.loads(stdout.getvalue())
-        self.assertEqual(receipt["source_commit"], "657d98d12b7d84c1e34b6fc61c5fad830e5c0377")
+        self.assertEqual(receipt["source_commit"], "847be08ad8c306b7fce3fb427d1cc3168014493f")
         self.assertEqual(receipt["source_tar_gz_sha256"], hashlib.sha256(b"APPROVED_SOURCE").hexdigest())
         self.assertEqual(stderr.getvalue(), "")
 
