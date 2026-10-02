@@ -232,8 +232,9 @@ class PackagingSourceTest(unittest.TestCase):
         workflow = source(".github/workflows/naver-runtime-tests.yml")
         prepare = workflow.split("id: prepare\n", 1)[1].split("- name: 외부망 없는", 1)[0]
         self.assertRegex(prepare, r"(?m)^\s+timeout-minutes: 8$")
-        self.assertIn("branches: [codex/naver-runtime-20260930, codex/naver-shared-metrics-20260930, codex/naver-sso-20260930]", workflow)
+        self.assertIn("branches: [codex/naver-runtime-20260930, codex/naver-shared-metrics-20260930, codex/naver-sso-20260930, codex/naver-account-first-20261002]", workflow)
         self.assertIn("github.ref == 'refs/heads/codex/naver-runtime-20260930'", workflow)
+        self.assertIn("github.ref == 'refs/heads/codex/naver-account-first-20261002'", workflow)
         self.assertIn("contents: read", workflow)
         self.assertIn("persist-credentials: false", workflow)
         self.assert_ci_job_isolation(workflow)

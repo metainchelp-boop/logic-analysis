@@ -181,7 +181,7 @@ class ErpTunnelTransport:
     그룹·기타 쓰기 금지, socket은 root/현재 UID 소유이며 기타 접근 금지여야 한다.
     매 호출 새 AF_UNIX 연결 한 번만 사용한다. DNS/TCP/프록시/넘겨주기/재시도 없음.
     timeout은 양수이고 조회 30초/SSO 8초 이내이며 전체 송수신에 적용한다.
-    응답 상한은 기존 실제 전송과 같은 조회 16MiB, SSO 256KiB이다.
+    응답 상한은 정확한 catalog GET만 30MiB, 나머지 조회 16MiB, SSO 256KiB이다.
     200 외 본문은 버리고, 3xx/잘린 응답/구성·전송 실패는 ErpTunnelError로 닫는다.
     SSH 상대 신원과 원격 4경로 ingress 검증은 이 모듈 밖 별도 배포 게이트다.
     """
@@ -211,7 +211,12 @@ class ErpTunnelTransport:
                 conn.settimeout(_remaining(deadline))
                 conn.sendall(wire + body)
                 with http.client.HTTPResponse(_ResponseSocket(conn, deadline)) as response:
-                    limit = EP.MAX_BODY if method == "POST" else min(E.MAX_BODY, _URLLIB_MAX_BODY)
+                    if method == "POST":
+                        limit = EP.MAX_BODY
+                    elif method == "GET" and target == E.PATH_ACCOUNT_CATALOG:
+                        limit = E.MAX_BODY
+                    else:
+                        limit = min(E.MAX_BODY, _URLLIB_MAX_BODY)
                     result = _read_response(response, limit)
                     _remaining(deadline)
                     return result

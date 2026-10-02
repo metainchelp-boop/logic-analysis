@@ -411,11 +411,16 @@
     $('inventoryCount').textContent = num(rows.length) + ' / ' + num(data.total) + '계정 · 매칭 ' +
       num(data.counts.matched) + ' · 업체 미확인 ' + num(data.counts.no_erp_record) + ' · 미분류 ' + num(data.counts.unclassified);
     $('inventorySource').textContent = '이관 목록 ' + (mdhm(data.accounts_at) || '수신 전') + ' · 전산 전체 목록 ' +
-      (mdhm(data.catalog_at) || '수신 전') + (data.catalog_status !== 'accepted' || !data.accounts_current ?
+      (mdhm(data.catalog_at) || '수신 전') + (data.catalog_status !== 'accepted' || !data.accounts_current || data.matching_ready === false ?
       ' · 원본 확인 필요: 미등록 판정 및 직원 연결 표시를 보류합니다.' : ' · 목록 새로고침은 저장된 최신 결과를 다시 표시합니다.');
     var collection = { ok: '수집 완료', partial: '일부 수집', pending: '수집 대기', failed: '수집 실패',
       retry: '재시도 대기', reading: '수집 중', running: '수집 중', reauth_required: '네이버 접근 권한 확인',
-      limited: '수집 미완료 · 한도 확인', denied: '접근 권한 확인', blocked: '접근 권한 확인' };
+      limited: '수집 중단 · 사유 확인', denied: '접근 권한 확인', blocked: '접근 권한 확인' };
+    var collectionReason = { CHECKPOINT_PENDING: '남은 캠페인은 다음 회차에 이어 읽습니다',
+      CHECKPOINT_INVALID: '중간 저장 자료 검증 실패 · 관리자 확인 필요', RETRY_EXHAUSTED: '연속 재시도 4회 소진 · 관리자 확인 필요',
+      STATS_INCOMPLETE: '네이버 통계 일부 미수신', STATS_SHAPE: '네이버 통계 응답 형식 확인 필요',
+      KEY_REJECTED: '계정 이관·조회 권한 확인 필요', CAMPAIGNS_CHANGED: '수집 중 캠페인 목록 변경 · 다시 확인',
+      REQUEST_BUDGET: '회차 호출·시간 한도 도달', UNEXPECTED: '수집 오류 · 관리자 확인 필요' };
     put($('inventoryRows'), rows.length ? rows.map(function (r) {
       var c = r.collection || {}, status = collection[c.status] || c.status || '수집 대기';
       var company = r.detail_available ? h('button', { type: 'button', class: 'btn sm', onclick: function () {
@@ -426,7 +431,7 @@
         h('td', null, company),
         h('td', { title: r.mapping === 'no_erp_record' ? data.no_erp_note : '' }, INVENTORY_MAPPING[r.mapping] || '미분류'),
         h('td', null, r.workflow), h('td', null, r.owner && r.owner.name || '담당 미확인'),
-        h('td', null, status, c.error_code ? h('span', { class: 'w' }, c.error_code) : null,
+        h('td', null, status, c.error_code ? h('span', { class: 'w', title: c.error_code }, collectionReason[c.error_code] || c.error_code) : null,
           h('span', { class: 'w' }, mdhm(c.checked_at))), h('td', null, won(c.yday_spend)), h('td', null, won(c.bizmoney)));
     }) : h('tr', null, h('td', { colspan: 8, class: 'empty' }, '이 조건에 해당하는 계정이 없습니다. 매칭 상태·업무 단계·검색어를 확인해 주세요.')));
   }

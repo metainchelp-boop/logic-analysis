@@ -49,28 +49,49 @@ def _matching(ctx, catalog):
     # 전체 가망 × 계정의 이중 루프를 피한다. 번호 주장/사람 확인은 전부 유지하고,
     # 이름 후보는 같은 이름 또는 3글자 이상 포함 관계가 가능한 업체만 규칙 모듈에 넘긴다.
     names = {cid: M.loose_name(a["adAccountName"]) for cid, a in current.items()}
-    grams, exact = {}, {}
+    grams, exact, account_grams = {}, {}, {}
     for cid, key in names.items():
         if key is None:
             continue
         exact.setdefault(key, set()).add(cid)
-        for i in range(len(key)-2):
-            grams.setdefault(key[i:i+3], set()).add(cid)
+        parts = {key[i:i+3] for i in range(len(key)-2)}
+        account_grams[cid] = parts
+        for part in parts:
+            grams.setdefault(part, set()).add(cid)
+    # 계정 이름이 업체 이름 안에 들어가는 방향: 계정마다 가장 드문 3글자만 색인한다.
+    # 실제 포함 관계라면 그 기준 3글자도 반드시 업체 이름 안에 있으므로 후보를 빠뜨리지 않는다.
+    anchors = {}
+    for cid, parts in account_grams.items():
+        if parts:
+            anchor = min(parts, key=lambda part: (len(grams[part]), part))
+            anchors.setdefault(anchor, set()).add(cid)
     relevant = {r["possibility_id"] for r in catalog["ids"]}
     relevant.update(d.possibility_id for d in ctx.live_decisions)
-    people, possible_accounts = [], set()
+    people, possible_accounts, related_cache = [], set(), {}
     for row in catalog["items"]:
         pid, name = row["possibility_id"], row["company_name"]
         key = M.loose_name(name)
-        related = set(exact.get(key, ()))
-        if key is not None:
-            possible = set()
-            for i in range(len(key)-2):
-                possible.update(grams.get(key[i:i+3], ()))
-            related.update(cid for cid in possible if min(len(key), len(names[cid])) >= 3 and
-                           (key in names[cid] or names[cid] in key))
-        # 표시용 후보 상한/이미 매칭된 업체 생략과 무관하게 모든 이름 근거를 남긴다.
-        possible_accounts.update(related)
+        if key not in related_cache:
+            related = set(exact.get(key, ()))
+            parts = set() if key is None else {key[i:i+3] for i in range(len(key)-2)}
+            if parts:
+                # 업체 이름이 계정 이름 안에 들어가는 방향은 모든 3글자가 있어야 한다.
+                # 공통 접두어 하나 때문에 모든 계정을 훑지 않도록 가장 작은 집합부터 교차한다.
+                postings = sorted((grams.get(part, ()) for part in parts), key=len)
+                forward = set(postings[0])
+                for posting in postings[1:]:
+                    if not forward:
+                        break
+                    forward.intersection_update(posting)
+                related.update(cid for cid in forward if key in names[cid])
+                reverse = set()
+                for part in parts:
+                    reverse.update(anchors.get(part, ()))
+                related.update(cid for cid in reverse if names[cid] in key)
+            related_cache[key] = tuple(related)
+            # 동명이름은 한 번만 합치되 표시용 후보 상한/이미 매칭된 업체와 무관하게 모두 보존한다.
+            possible_accounts.update(related)
+        related = related_cache[key]
         if pid in relevant or related:
             people.append(M.ErpProspect(pid, name))
     ids = [M.ErpCredential(r["possibility_id"], r["vendor"], r["customer_id_raw"],
@@ -102,7 +123,8 @@ def board(ctx, store, scope, selection="all", workflow="all", mapping="all"):
                 pairs[p.customer_id] = p
             ambiguous.update(possible_accounts - pairs.keys())
             ambiguous.update(c.customer_id for c in result.candidates)
-            ambiguous.update(b.customer_id for b in result.blocked if b.customer_id is not None)
+            # 다른 업체의 차단된 주장이 이미 사람 확인으로 확정된 짝을 뒤집지 않는다.
+            ambiguous.update(b.customer_id for b in result.blocked if b.customer_id is not None and b.customer_id not in pairs)
             ad_to_cid = {a["ad_account_no"]: cid for cid, a in ctx.accounts.items() if a["present"] == 1}
             for cred in catalog["ids"]:
                 if cred["vendor"] != M.VENDOR_NAVER:
@@ -150,6 +172,7 @@ def board(ctx, store, scope, selection="all", workflow="all", mapping="all"):
             "counts": dict(counts), "workflows": dict(stages), "selection": selection,
             "catalog_status": state, "catalog_at": None if catalog is None else catalog["generated_at"],
             "accounts_at": None if at is None else at.isoformat(), "accounts_current": accounts_current,
+            "matching_ready": match_ok,
             "no_erp_note": "전산 전체 목록에서 연결 가능한 업체를 찾지 못했습니다. 실제 미등록 여부는 확인이 필요합니다."}
 
 

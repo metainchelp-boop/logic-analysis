@@ -145,6 +145,14 @@ class InventoryViewTest(TM.Base):
         self.assertEqual(result["counts"], {"matched": 0, "no_erp_record": 0, "unclassified": 3})
         self.assertEqual(self.board(100)["total"], 0)
 
+    def test_human_confirmed_pair_wins_over_other_company_number_claim(self):
+        self.save([company(11, company_name=TM.NAMES[TM.A]), company(12, company_name=TM.NAMES[TM.A])],
+                  [E.NaverIdRow(12, M.VENDOR_NAVER, str(TM.A))])
+        self.st.record_decision(11, TM.A, "confirmed", 0, self.fc.now())
+        rows = self.board(100)["rows"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0]["possibility_id"], rows[0]["mapping"]), (11, "matched"))
+
 
 class InventoryApiTest(InventoryViewTest):
     def test_api_roster_and_counts_and_employee_boundary(self):

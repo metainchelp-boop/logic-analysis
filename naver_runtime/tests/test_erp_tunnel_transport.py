@@ -108,6 +108,79 @@ def exchange_request():
 
 
 class ErpTunnelTests(unittest.TestCase):
+    def test_catalog_exact_get_accepts_the_full_erp_body_limit(self):
+        body = b"x" * E.MAX_BODY
+        with unix_erp(reply(body)) as (path, received):
+            status, result = ErpTunnelTransport(path).send(request(E.PATH_ACCOUNT_CATALOG), 5)
+            self.assertEqual(status, 200)
+            self.assertEqual(result, body)
+        self.assertEqual("GET /api/ad-sync/naver-account-catalog HTTP/1.1", received[0][0])
+
+    def test_non_catalog_get_and_sso_retain_their_existing_body_limits(self):
+        contracts = E.PATH_CONTRACTS + "?" + urllib.parse.urlencode(
+            {"stage": "진행중", "has_contract": "true"})
+        cases = [(request(target), 16 * 1024 * 1024) for target in
+                 (contracts, E.PATH_ORG_SNAPSHOT, E.PATH_NAVER_IDS)]
+        cases.append((exchange_request(), EP.MAX_BODY))
+        for candidate, limit in cases:
+            with self.subTest(target=candidate.full_url):
+                with unix_erp(reply(b"x" * (limit + 1))) as (path, _):
+                    with self.assertRaises(ErpTunnelError):
+                        ErpTunnelTransport(path).send(candidate, 5)
+
+    def test_catalog_oversized_or_truncated_bodies_are_never_returned_as_success(self):
+        oversized = b"x" * (E.MAX_BODY + 1)
+        for framing in ("length", "chunked", "close", "truncated"):
+            with self.subTest(framing=framing):
+                if framing == "length":
+                    response = reply(oversized)
+                elif framing == "chunked":
+                    response = (b"HTTP/1.1 200 Test\r\nTransfer-Encoding: chunked\r\n\r\n"
+                                + f"{len(oversized):x}\r\n".encode() + oversized + b"\r\n0\r\n\r\n")
+                elif framing == "close":
+                    response = b"HTTP/1.1 200 Test\r\n\r\n" + oversized
+                else:
+                    response = (f"HTTP/1.1 200 Test\r\nContent-Length: {E.MAX_BODY}\r\n\r\n".encode()
+                                + b"{}")
+                with unix_erp(response) as (path, _):
+                    with self.assertRaises(ErpTunnelError):
+                        ErpTunnelTransport(path).send(request(E.PATH_ACCOUNT_CATALOG), 5)
+
+    def test_catalog_expanded_limit_does_not_allow_other_methods_queries_or_paths(self):
+        cases = [request(E.PATH_ACCOUNT_CATALOG, method=method) for method in ("POST", "HEAD")]
+        cases += [request(target) for target in (E.PATH_ACCOUNT_CATALOG + "?extra=x",
+                                                 E.PATH_ACCOUNT_CATALOG + "/",
+                                                 E.PATH_ACCOUNT_CATALOG + "-other")]
+        with patch("socket.socket", side_effect=AssertionError("연결 전 거절 필요")):
+            for candidate in cases:
+                with self.subTest(target=candidate.full_url, method=candidate.get_method()):
+                    with self.assertRaises(ErpTunnelError):
+                        ErpTunnelTransport("/does-not-exist/erp.sock").send(candidate, 5)
+
+    def test_oversized_catalog_preserves_previous_snapshot_and_marks_refresh_failed(self):
+        from naver_engine import inventory as I, store as S
+        from naver_engine.tests.fake_naver import FakeClock
+        from naver_engine.tests.test_erp_read import NOW
+
+        clock = FakeClock(NOW)
+        original = {"generated_at": NOW.isoformat(), "total": 1, "complete": True, "items": [
+            {"possibility_id": 11, "company_name": "가상상점", "stage": "진행중",
+             "stage_hidden": False, "stage_known": True},
+        ]}
+        # 앞부분만 잘라 읽어도 JSON 파싱은 성공할 수 있다. 전송 한도에서 응답 전체를 거절해야 한다.
+        empty = {"generated_at": NOW.isoformat(), "total": 0, "complete": True, "items": []}
+        oversized = json.dumps({"status": 200, "result": empty}).encode().ljust(E.MAX_BODY + 1, b" ")
+        with tempfile.TemporaryDirectory() as directory:
+            with contextlib.closing(S.open_writer(str(Path(directory) / "engine.db"), clock=clock.now)) as store:
+                store.record_account_catalog(original, [E.NaverIdRow(11, "NAVER_SEARCHAD", "100001")], NOW)
+                before = store.account_catalog()
+                with unix_erp(reply(oversized)) as (path, received):
+                    reader = E.ErpReader(Secret(KEY), transport=ErpTunnelTransport(path), clock=clock)
+                    self.assertEqual(I.sync_catalog(reader, store, NOW)["state"], "failed")
+                self.assertEqual(store.account_catalog(), before)
+                self.assertEqual(I.catalog_status(store, NOW)[1], "failed")
+                self.assertEqual(len(received), 1)
+
     def test_real_contract_and_customer_readers_keep_exact_query_under_proxy_environment(self):
         stages = [s for spellings in E.STAGE_SPELLINGS.values() for s in spellings]
         proxy = {name: "http://outside.invalid:8000" for name in
