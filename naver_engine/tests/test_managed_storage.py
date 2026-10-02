@@ -329,6 +329,12 @@ class ManagedStorageTest(TM.Base):
             return 200, {"cycleBaseTm": cycle_str(self.fc.now()), "data": []}
         span = json.loads(call.query["timeRange"][0])
         start, end = date.fromisoformat(span["since"]), date.fromisoformat(span["until"])
+        if "ids" in call.query:
+            self.assertEqual(start, end, "기간 합계를 날짜별 자료로 사용하지 않습니다")
+            day = start.isoformat()
+            rows = [] if day in self.missing_days else [
+                {"id": cid, **self.metric, **self.day_overrides.get(day, {})} for cid in call.query["ids"]]
+            return 200, {"cycleBaseTm": cycle_str(self.fc.now()), "data": rows}
         rows = []
         for offset in range((end-start).days+1):
             day = (start+timedelta(days=offset)).isoformat()
@@ -551,14 +557,17 @@ class ManagedStorageTest(TM.Base):
     def test_same_period_rematch_discards_prior_campaign_checkpoint(self):
         self.managed()
         self.campaign_count = 9
-        self.assertEqual(self.collect(limit=1).counts, {"partial": 1})
-        first_ids = [call.query["id"][0] for call in self.naver.calls if call.path == "/stats"]
+        # 묶음 통계까지 읽고 최종 목록 확인 직전에 멈춰 체크포인트를 만든다.
+        self.assertEqual(self.collect(limit=1, per_account_calls=3).counts, {"partial": 1})
+        first_ids = [cid for call in self.naver.calls if call.path == "/stats"
+                     for cid in call.query.get("ids", call.query.get("id", []))]
         self.assertTrue(first_ids)
         self.fc.advance(1)
         self.save([TC.company(12, "진행중", company_name=TM.NAMES[TM.A])])
         self.st.record_decision(12, TM.A, "confirmed", 0, self.fc.now())
-        self.assertEqual(self.collect(limit=1).counts, {"partial": 1})
-        repeated = [call.query["id"][0] for call in self.naver.calls if call.path == "/stats"][len(first_ids):]
+        self.assertEqual(self.collect(limit=1, per_account_calls=3).counts, {"partial": 1})
+        repeated = [cid for call in self.naver.calls if call.path == "/stats"
+                    for cid in call.query.get("ids", call.query.get("id", []))][len(first_ids):]
         self.assertEqual(repeated, first_ids)
 
     def test_corrected_weekly_revision_can_return_to_old_fingerprint_without_resurrecting_review(self):
