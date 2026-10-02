@@ -83,6 +83,9 @@ class PackagingSourceTest(unittest.TestCase):
         self.assertIn(branch + " && inputs.backup_acceptance == 'none' && inputs.received_synthetic_json == ''", jobs['linux-tests'])
         matching_branch = "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/naver-ad-account-matching-20261001'"
         self.assertIn(matching_branch + " && inputs.backup_acceptance == 'none' && inputs.received_synthetic_json == ''", jobs['linux-tests'])
+        seal_branch = ("github.event_name == 'workflow_dispatch' && "
+                       "(github.ref == 'refs/heads/codex/naver-ad-account-matching-20261001' || "
+                       "github.ref == 'refs/heads/codex/naver-account-first-20261002')")
         expected = {
             'backup-probe': {'NAVER_BACKUP_UPLOAD_SSH_PRIVATE_KEY', 'NAVER_BACKUP_KNOWN_HOSTS'},
             'backup-transfer': {'NAVER_BACKUP_RECIPIENT_CERT_PEM', 'NAVER_BACKUP_UPLOAD_SSH_PRIVATE_KEY', 'NAVER_BACKUP_KNOWN_HOSTS'},
@@ -102,7 +105,7 @@ class PackagingSourceTest(unittest.TestCase):
                 condition = "inputs.preview_seal == true && inputs.backup_acceptance == 'none' && inputs.received_synthetic_json == ''"
             else:
                 condition += " && !inputs.preview_seal && inputs.server_envelope_cert_pem == ''"
-            job_branch = matching_branch if job == 'preview-seal' else branch
+            job_branch = seal_branch if job == 'preview-seal' else branch
             self.assertIn('    if: ' + job_branch + ' && ' + condition + '\n', body)
             refs = re.findall(r'\bsecrets\.([A-Z_]+)\b', body)
             self.assertEqual(secrets, set(refs), job)
@@ -271,6 +274,7 @@ class PackagingSourceTest(unittest.TestCase):
         original = source('.github/workflows/naver-runtime-tests.yml')
         for changed in (original.replace("github.ref == 'refs/heads/codex/naver-backup-recovery-20261001'", 'true'),
                         original.replace("github.ref == 'refs/heads/codex/naver-ad-account-matching-20261001'", 'true'),
+                        original.replace("github.ref == 'refs/heads/codex/naver-account-first-20261002'", 'true'),
                         original.replace('    environment: naver-backup-recovery\n', '')):
             with self.assertRaises(AssertionError):
                 self.assert_ci_job_isolation(changed)
