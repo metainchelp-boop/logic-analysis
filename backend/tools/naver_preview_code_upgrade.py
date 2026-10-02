@@ -227,6 +227,7 @@ def warm_sources(path, release):
     check = release.compose(path, 'engine')
     name = 'naver-warm-'+TARGET_COMMIT+'-'+uuid.uuid4().hex
     check[check.index('--project-name')+1] = name
+    identity = None
     try:
         identity = release.command(check+['run', '--detach', '--no-deps', '--pull', 'never',
             '--name', name, '--label', 'metainc.naver.warm.source='+TARGET_COMMIT,
@@ -254,6 +255,9 @@ def warm_sources(path, release):
                 if meta != {'source':TARGET_COMMIT, 'project':name, 'user':'10001:10001'}:
                     raise ValueError('WARM_CONTAINER_ID')
                 release.command(['docker', 'rm', '--force', found], timeout=45)
+            elif identity is None:
+                # An in-flight Docker create may complete after a CLI timeout.
+                raise ValueError('WARM_CREATE_UNCONFIRMED')
             if release.command(['docker', 'ps', '--all', '--no-trunc', '--filter',
                     'name=^/'+name+'$', '--format', '{{.ID}}'], timeout=30).strip():
                 raise ValueError('WARM_CONTAINER_REMAINS')

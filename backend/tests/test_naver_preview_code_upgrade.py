@@ -545,6 +545,9 @@ class WarmSourcesTest(unittest.TestCase):
                 self.assertIn('--detach',args)
                 self.assertEqual(args[args.index('--name')+1],name)
                 self.assertIn('metainc.naver.warm.source='+code.TARGET_COMMIT,args)
+                if failure=='create_uncertain':
+                    # A killed Docker CLI does not prove the daemon's create request has completed.
+                    raise TimeoutError('PRIVATE_UNCONFIRMED_CREATE')
                 state['exists']=True
                 if failure=='create_timeout':
                     raise TimeoutError('PRIVATE_START_ERROR')
@@ -604,6 +607,12 @@ class WarmSourcesTest(unittest.TestCase):
                 self.assertTrue(state['exists'])
                 if failure.startswith('wrong_'):
                     self.assertFalse(any(args[:2]==['docker','rm'] for args in commands))
+
+    def test_unconfirmed_create_with_no_visible_container_does_not_claim_safe_cleanup(self):
+        result,commands,state=self.scenario('create_uncertain')
+        self.assertEqual(str(result),'WARM_CLEANUP_FAILED')
+        self.assertFalse(state['exists'])
+        self.assertFalse(any(args[:2]==['docker','rm'] for args in commands))
 
 
 class DatabaseRollbackTest(unittest.TestCase):
