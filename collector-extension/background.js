@@ -780,13 +780,14 @@ function pageExtract(want, extraBlock) {
   // A fallback must have both matching route identity and changed props, not just a new URL.
   function matchingQuery(q) {
     if (!q || typeof q.query !== 'string' || q.query !== wantedKeyword) return false;
-    // Navigation metadata is not a new ranking scope. Only the observed search vertical is allowed.
-    var keys = Object.keys(q), allowed = ['query','pagingIndex','pagingSize','sort','productSet','viewType','origQuery','adQuery','frm','prevQuery','vertical','where'];
+    // Keep aligned with net_tap and pager guards; only an observed empty timestamp is metadata.
+    var keys = Object.keys(q), allowed = ['query','pagingIndex','pagingSize','sort','productSet','viewType','origQuery','adQuery','frm','prevQuery','vertical','where','timestamp'];
     for (var qi = 0; qi < keys.length; qi++) if (allowed.indexOf(keys[qi]) < 0 || Array.isArray(q[keys[qi]])) return false;
     return Number(q.pagingIndex || 1) === wantPage && (!q.sort || q.sort === 'rel')
       && (!q.productSet || q.productSet === 'total') && (!q.pagingSize || String(q.pagingSize) === '40')
       && (!Object.prototype.hasOwnProperty.call(q, 'vertical') || q.vertical === 'search')
-      && (!Object.prototype.hasOwnProperty.call(q, 'where') || q.where === 'all');
+      && (!Object.prototype.hasOwnProperty.call(q, 'where') || q.where === 'all')
+      && (!Object.prototype.hasOwnProperty.call(q, 'timestamp') || q.timestamp === '');
   }
   var locationMatches = false, routeMatches = false;
   try {
@@ -923,14 +924,15 @@ function pagerClick(target) {
   // Keep this destination policy identical to pagerLocate: a number alone is not a pager.
   var current;
   function defaultScope(url) {
-    var allowed = ['query','pagingIndex','pagingSize','sort','productSet','viewType','origQuery','adQuery','frm','prevQuery','vertical','where'];
+    var allowed = ['query','pagingIndex','pagingSize','sort','productSet','viewType','origQuery','adQuery','frm','prevQuery','vertical','where','timestamp'];
     var keys = url.searchParams.keys(), key;
     while (!(key = keys.next()).done) if (allowed.indexOf(key.value) < 0 || url.searchParams.getAll(key.value).length !== 1) return false;
     return (!url.searchParams.has('sort') || url.searchParams.get('sort') === 'rel')
       && (!url.searchParams.has('productSet') || url.searchParams.get('productSet') === 'total')
       && (!url.searchParams.has('pagingSize') || url.searchParams.get('pagingSize') === '40')
       && (!url.searchParams.has('vertical') || url.searchParams.get('vertical') === 'search')
-      && (!url.searchParams.has('where') || url.searchParams.get('where') === 'all');
+      && (!url.searchParams.has('where') || url.searchParams.get('where') === 'all')
+      && (!url.searchParams.has('timestamp') || url.searchParams.get('timestamp') === '');
   }
   try {
     current = new URL(location.href);
@@ -1033,14 +1035,15 @@ function pagerLocate(target, guard) {
   // Keep this destination policy identical to pagerClick: a number alone is not a pager.
   var current;
   function defaultScope(url) {
-    var allowed = ['query','pagingIndex','pagingSize','sort','productSet','viewType','origQuery','adQuery','frm','prevQuery','vertical','where'];
+    var allowed = ['query','pagingIndex','pagingSize','sort','productSet','viewType','origQuery','adQuery','frm','prevQuery','vertical','where','timestamp'];
     var keys = url.searchParams.keys(), key;
     while (!(key = keys.next()).done) if (allowed.indexOf(key.value) < 0 || url.searchParams.getAll(key.value).length !== 1) return false;
     return (!url.searchParams.has('sort') || url.searchParams.get('sort') === 'rel')
       && (!url.searchParams.has('productSet') || url.searchParams.get('productSet') === 'total')
       && (!url.searchParams.has('pagingSize') || url.searchParams.get('pagingSize') === '40')
       && (!url.searchParams.has('vertical') || url.searchParams.get('vertical') === 'search')
-      && (!url.searchParams.has('where') || url.searchParams.get('where') === 'all');
+      && (!url.searchParams.has('where') || url.searchParams.get('where') === 'all')
+      && (!url.searchParams.has('timestamp') || url.searchParams.get('timestamp') === '');
   }
   try {
     current = new URL(location.href);

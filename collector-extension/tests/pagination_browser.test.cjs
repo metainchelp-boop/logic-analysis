@@ -25,13 +25,16 @@ const products = page => Array.from({ length: 40 }, (_, i) => ({ nvMid: String((
     const cases = ['tap', 'router', 'restricted', 'covered', 'group-next'].map(mode => ({ mode, metadata: false }))
       .concat(['tap', 'router', 'restricted'].map(mode => ({ mode, metadata: true })))
       .concat(['tap', 'router', 'restricted'].map(mode => ({ mode, metadata: 'portal' })))
+      .concat(['tap', 'router', 'restricted'].map(mode => ({ mode, metadata: 'timestamp' })))
+      .concat([{ mode: 'tap', metadata: 'timestamp', decoy: true, unmarked: true }])
       .concat([{ mode: 'tap', metadata: true, decoy: true },
         { mode: 'tap', metadata: 'portal', decoy: true, unmarked: true },
         { mode: 'tap', metadata: 'portal', actualSmooth: true },
         { mode: 'tap', metadata: 'portal', viewportCorrection: true }]);
     for (const { mode, metadata, decoy, unmarked, actualSmooth, viewportCorrection } of cases) {
       const actualScroll = actualSmooth || viewportCorrection;
-      const query = { query: 'fixture', ...(metadata === 'portal' ? { where: 'all', frm: 'NVSCTAB' }
+      const query = { query: 'fixture', ...(metadata === 'timestamp' ? { timestamp: '', pagingSize: '40', sort: 'rel', productSet: 'total' }
+        : metadata === 'portal' ? { where: 'all', frm: 'NVSCTAB' }
         : metadata ? { prevQuery: 'previous', vertical: 'search' } : {}) };
       const url = 'https://search.shopping.naver.com/search/all?' + new URLSearchParams(query);
       const context = await browser.newContext();
@@ -165,7 +168,7 @@ print(json.dumps({'kind': item['kind'], 'calls': calls, 'rows': conn.execute('SE
           assert(reports.some(r => r.err === 'HTTP_418'));
         } else { assert.equal(clicks, 0); assert.equal(searchRequests, 0); }
       }
-      console.log('PASS browser ' + mode + (metadata === 'portal' ? '-portal' : metadata ? '-metadata' : '')
+      console.log('PASS browser ' + mode + (metadata === 'timestamp' ? '-empty-timestamp' : metadata === 'portal' ? '-portal' : metadata ? '-metadata' : '')
         + (decoy ? unmarked ? '-decoy-href' : '-decoy-marked' : '')
         + (actualSmooth ? '-actual-smooth-scroll' : '')
         + (viewportCorrection ? '-viewport-correction' : '')

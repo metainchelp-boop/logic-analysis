@@ -23,12 +23,12 @@ const params = page => new URLSearchParams({ query: keyword, pagingIndex: String
 const body = page => ({ products: Array.from({ length: 40 }, (_, i) => ({
   nvMid: String((page - 1) * 40 + i + 1), productTitle: 'Fixture', mallName: 'Fixture',
 })) });
-function read({ page = 1, suffix = '', route = 'tap', queryExtra = {}, stale = false, implicitFirstPage = false } = {}) {
+function read({ page = 1, suffix = '', route = 'tap', queryExtra = {}, stale = false, implicitFirstPage = false, tapEntry } = {}) {
   const url = new URL('https://search.shopping.naver.com/search/all?' + params(page) + suffix);
   const query = { query: keyword, pagingIndex: String(page), ...queryExtra };
   if (implicitFirstPage) { url.searchParams.delete('pagingIndex'); delete query.pagingIndex; }
   const current = body(page), before = body(1);
-  const win = route === 'tap' ? { __mcTap: { items: [{
+  const win = route === 'tap' ? { __mcTap: { items: [tapEntry || {
     at: 6000, requestStartedAt: stale ? 4999 : 5100, page, keyword, status: 200,
     sourceKnown: true, scopeVerified: true, responseMatched: true, json: current,
     path: 'search.shopping.naver.com/api/search/all',
@@ -45,7 +45,7 @@ function read({ page = 1, suffix = '', route = 'tap', queryExtra = {}, stale = f
   vm.runInNewContext(grab('pageExtract') + '\nresult = pageExtract(want);', sandbox);
   return sandbox.result;
 }
-async function capture(requestSuffix = '', responseSuffix = requestSuffix, xhr = false) {
+async function capture(requestSuffix = '', responseSuffix = requestSuffix, xhr = false, { status = 200, startedAt = 5100 } = {}) {
   const requestUrl = 'https://search.shopping.naver.com/api/search/all?' + params(2) + requestSuffix;
   const responseUrl = 'https://search.shopping.naver.com/api/search/all?' + params(2) + responseSuffix;
   let listener;
@@ -57,14 +57,14 @@ async function capture(requestSuffix = '', responseSuffix = requestSuffix, xhr =
   let requests = 0;
   const win = { XMLHttpRequest: XHR, fetch: async () => {
     requests++;
-    return { status: 200, url: responseUrl, headers: { get: () => 'application/json' },
+    return { status, url: responseUrl, headers: { get: () => 'application/json' },
       clone: () => ({ text: async () => JSON.stringify(body(2)) }) };
   } };
   vm.runInNewContext(tapSource, { URL, window: win,
-    location: new URL('https://search.shopping.naver.com/search/all?' + params(2)), Date: { now: () => 5100 } });
+    location: new URL('https://search.shopping.naver.com/search/all?' + params(2)), Date: { now: () => startedAt } });
   if (xhr) {
     const req = new win.XMLHttpRequest(); req.open('GET', requestUrl); req.send();
-    Object.assign(req, { responseType: '', responseText: JSON.stringify(body(2)), status: 200, responseURL: responseUrl });
+    Object.assign(req, { responseType: '', responseText: JSON.stringify(body(2)), status, responseURL: responseUrl });
     listener.call(req);
   } else {
     await win.fetch(requestUrl);
@@ -75,6 +75,74 @@ async function capture(requestSuffix = '', responseSuffix = requestSuffix, xhr =
   return win.__mcTap.items[0];
 }
 const observed = '&prevQuery=previous&vertical=search';
+test('observed empty timestamp reaches the real page-2 reader through fetch capture', async () => {
+  // Same ten-key URL shape as the field report; search values are synthetic.
+  const suffix = '&' + new URLSearchParams({ adQuery: keyword, frm: 'FIXTURE', origQuery: keyword,
+    pagingSize: '40', productSet: 'total', sort: 'rel', viewType: 'list', timestamp: '' });
+  const entry = await capture(suffix);
+  const result = read({ page: 2, suffix, tapEntry: entry });
+  assert.equal(result.err, undefined);
+  assert.equal(result.list.length, 40);
+  assert.equal(result.list[0].nvMid, '41');
+  assert.equal(result.pageIndex, 2);
+  assert.equal(result.verified, true);
+});
+test('empty timestamp is accepted independently on location, request and response for fetch and XHR', async () => {
+  for (const xhr of [false, true]) for (const locationSuffix of ['', '&timestamp=']) {
+    for (const requestSuffix of ['', '&timestamp=']) for (const responseSuffix of ['', '&timestamp=']) {
+      const entry = await capture(requestSuffix, responseSuffix, xhr);
+      const result = read({ page: 2, suffix: locationSuffix, tapEntry: entry });
+      assert.equal(result.err, undefined);
+      assert.equal(result.list[0].nvMid, '41');
+      assert.equal(result.src, 'tap');
+    }
+  }
+});
+test('only a single empty timestamp is metadata, not nonempty, duplicated or unknown scope', async () => {
+  for (const bad of ['&timestamp=0', '&timestamp=1790928000000', '&timestamp=undefined', '&timestamp=%20',
+    '&timestamp=%00', '&timestamp=&timestamp=', '&timestamp=&%74imestamp=', '&timestamp[]=',
+    '&timestamp=&filter=organic', '&timestamp=&sort=price', '&timestamp=&pagingSize=80',
+    '&timestamp=&productSet=brand', '&timestamp=&vertical=other', '&timestamp=&where=shop',
+    '&timestamp=&query=other', '&timestamp=&pagingIndex=1']) {
+    assert.equal(read({ page: 2, suffix: bad }).err, 'UNVERIFIED_PAGE', bad);
+    for (const xhr of [false, true]) {
+      assert.equal((await capture(bad, bad, xhr)).scopeVerified, false, bad);
+      const entry = await capture('&timestamp=', bad, xhr);
+      assert.equal(entry.responseMatched, false, bad);
+      assert.equal(read({ page: 2, suffix: '&timestamp=', tapEntry: entry }).err, 'UNVERIFIED_PAGE', bad);
+    }
+  }
+});
+test('empty timestamp preserves router and hydration identity and staleness checks', () => {
+  for (const route of ['router', 'nextdata']) for (const page of [1, 2]) {
+    const args = { route, page, suffix: '&timestamp=', queryExtra: { timestamp: '' } };
+    assert.equal(read(args).list[0].nvMid, String((page - 1) * 40 + 1));
+    assert.equal(read({ ...args, stale: true }).err, 'UNVERIFIED_PAGE');
+    for (const timestamp of [null, false, 0, [], [''], ['',''], {}, '0', ' ']) {
+      assert.equal(read({ ...args, queryExtra: { timestamp } }).err, 'UNVERIFIED_PAGE');
+    }
+    for (const extra of [{ query: 'other' }, { pagingIndex: String(page + 1) }, { filter: 'organic' }]) {
+      assert.equal(read({ ...args, queryExtra: { timestamp: '', ...extra } }).err, 'UNVERIFIED_PAGE');
+    }
+  }
+});
+test('empty timestamp cannot revive old captures or hide a fresh HTTP restriction', async () => {
+  for (const xhr of [false, true]) {
+    const stale = await capture('&timestamp=', '&timestamp=', xhr, { startedAt: 4999 });
+    assert.equal(read({ page: 2, suffix: '&timestamp=', tapEntry: stale }).err, 'UNVERIFIED_PAGE');
+    for (const status of [401, 403, 418, 429, 500]) {
+      const entry = await capture('&timestamp=', '&timestamp=', xhr, { status });
+      const result = read({ page: 2, suffix: '&timestamp=', tapEntry: entry });
+      assert.equal(result.err, status === 500 ? 'HTTP_ERROR' : 'HTTP_RESTRICTED');
+      assert.equal(result.status, status);
+      assert.equal(result.list, undefined);
+    }
+    for (const changed of [{ keyword: 'other' }, { page: 1 }, { sourceKnown: false }]) {
+      const entry = await capture('&timestamp=', '&timestamp=', xhr);
+      assert.equal(read({ page: 2, suffix: '&timestamp=', tapEntry: { ...entry, ...changed } }).err, 'UNVERIFIED_PAGE');
+    }
+  }
+});
 test('portal shopping entry where=all is accepted without changing ranking scope', async () => {
   for (const route of ['tap', 'router', 'nextdata']) {
     const result = read({ route, implicitFirstPage: true, suffix: '&where=all&frm=NVSCTAB',

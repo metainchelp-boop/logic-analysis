@@ -16,7 +16,7 @@ function grab(name) {
   }
   throw Error('Unclosed ' + name);
 }
-function fixture({ scope = false, marked = false, href = '#', explicitAfter = false, covered = false } = {}) {
+function fixture({ scope = false, marked = false, href = '#', explicitAfter = false, covered = false, currentSuffix = '' } = {}) {
   const clicked = [];
   const element = (id, attrs, x) => ({
     id, tagName: 'A', className: id, textContent: '2', disabled: false,
@@ -35,7 +35,7 @@ function fixture({ scope = false, marked = false, href = '#', explicitAfter = fa
     elementFromPoint: x => covered ? { tagName: 'DIV', className: 'overlay', textContent: '' } : x < 80 ? filter : real,
   };
   const context = vm.createContext({ URL, document, window: { innerWidth: 1000, innerHeight: 700 },
-    location: new URL('https://search.shopping.naver.com/search/all?query=fixture') });
+    location: new URL('https://search.shopping.naver.com/search/all?query=fixture' + currentSuffix) });
   vm.runInContext(grab('pagerLocate') + '\n' + grab('pagerClick'), context);
   return { context, clicked };
 }
@@ -83,4 +83,37 @@ test('a covered genuine candidate stays blocked on both paths', () => {
   assert.equal(f.context.pagerLocate(2).covered, 1);
   assert.equal(f.context.pagerClick(2), '');
   assert.deepEqual(f.clicked, []);
+});
+test('empty timestamp on current or destination URL preserves genuine page targets', () => {
+  for (const currentSuffix of ['', '&timestamp=']) {
+    const marked = fixture({ scope: true, marked: true, currentSuffix });
+    assert.equal(marked.context.pagerLocate(2)?.branch, 'shp');
+    assert.equal(marked.context.pagerClick(2), 'shp');
+    assert.deepEqual(marked.clicked, ['real-pager']);
+    const explicit = fixture({ scope: true, currentSuffix,
+      href: '?query=fixture&pagingIndex=2&timestamp=' });
+    assert.equal(explicit.context.pagerLocate(2)?.branch, 'num');
+    assert.equal(explicit.context.pagerClick(2), 'num');
+    assert.equal(explicit.clicked.length, 1);
+  }
+});
+test('timestamp metadata never permits nonempty, duplicate, filtered or wrong-query page targets', () => {
+  for (const bad of ['&timestamp=0', '&timestamp=%20', '&timestamp=&timestamp=', '&timestamp=&%74imestamp=',
+    '&timestamp[]=', '&timestamp=&filter=organic', '&timestamp=&pagingSize=80', '&timestamp=&sort=price']) {
+    for (const opts of [
+      { marked: true, currentSuffix: bad },
+      { href: '?query=fixture&pagingIndex=2' + bad },
+    ]) {
+      const f = fixture({ scope: true, ...opts });
+      assert.equal(f.context.pagerLocate(2), null, bad);
+      assert.equal(f.context.pagerClick(2), '', bad);
+      assert.equal(f.clicked.length, 0, bad);
+    }
+  }
+  for (const href of ['?query=other&pagingIndex=2&timestamp=', '?query=fixture&pagingIndex=1&timestamp=']) {
+    const f = fixture({ scope: true, currentSuffix: '&timestamp=', href });
+    assert.equal(f.context.pagerLocate(2), null);
+    assert.equal(f.context.pagerClick(2), '');
+    assert.equal(f.clicked.length, 0);
+  }
 });
