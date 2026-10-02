@@ -32,6 +32,8 @@ from naver_engine.session import load_token_secret
 
 OPENSSL = "/usr/bin/openssl"
 BRANCH = "refs/heads/codex/naver-ad-account-matching-20261001"
+ACCOUNT_FIRST_BRANCH = "refs/heads/codex/naver-account-first-20261002"
+ACCOUNT_FIRST_COMMIT = "e1c4b3526db55d78175a1d6598f3403fdb9398f7"
 # 승인된 관리 경로 생성 영수증 36806904207. 입력값으로 이 지문을 바꿀 수 없다.
 SERVER_CERT_PEM_SHA256 = "8edff7ceaa6538bc91df7ebd1723bc6889dbebb232e1955d8dfa4131c4a5acc7"
 MAX_BUNDLE = 2 * 1024 * 1024
@@ -120,13 +122,21 @@ def runtime_files(env):
     ]
 
 
-def source_archive(expected_commit, *, root=ROOT):
+def source_archive(expected_commit, *, root=ROOT, checkout_commit=None):
     if not isinstance(expected_commit, str) or not re.fullmatch(r"[0-9a-f]{40}", expected_commit):
         raise SealError("INVALID_SOURCE_COMMIT")
+    checkout_commit = expected_commit if checkout_commit is None else checkout_commit
+    if not isinstance(checkout_commit, str) or not re.fullmatch(r"[0-9a-f]{40}", checkout_commit):
+        raise SealError("INVALID_CHECKOUT_COMMIT")
     common = dict(cwd=root, env=COMMAND_ENV, capture_output=True, check=True, timeout=30)
     head = subprocess.run(["git", "rev-parse", "HEAD"], **common).stdout.decode("ascii").strip()
-    if head != expected_commit:
+    if head != checkout_commit:
         raise SealError("SOURCE_COMMIT_MISMATCH")
+    # New release tooling must archive the approved ancestor, never its newer HEAD.
+    try:
+        subprocess.run(["git", "merge-base", "--is-ancestor", expected_commit, checkout_commit], **common)
+    except subprocess.CalledProcessError:
+        raise SealError("SOURCE_NOT_IN_CHECKOUT_HISTORY") from None
     raw = subprocess.run(["git", "archive", "--format=tar", expected_commit, "--", *SOURCE_PATHS], **common).stdout
     if not 0 < len(raw) <= 8 * 1024 * 1024:
         raise SealError("SOURCE_TOO_LARGE")
@@ -204,12 +214,14 @@ def validate_workflow_inputs(inputs):
 
 def main():
     try:
-        if len(sys.argv) != 1 or os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch" or os.environ.get("GITHUB_REF") != BRANCH:
+        branch = os.environ.get("GITHUB_REF")
+        if (len(sys.argv) != 1 or os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch"
+                or branch not in {BRANCH, ACCOUNT_FIRST_BRANCH}):
             raise SealError("INVALID_WORKFLOW_CONTEXT")
         inputs = json.loads(os.environ.get("PREVIEW_SEAL_INPUTS", "{}"))
         certificate = validate_workflow_inputs(inputs)
-        source_commit = os.environ.get("GITHUB_SHA", "")
-        source = source_archive(source_commit)
+        source_commit = ACCOUNT_FIRST_COMMIT if branch == ACCOUNT_FIRST_BRANCH else os.environ.get("GITHUB_SHA", "")
+        source = source_archive(source_commit, checkout_commit=os.environ.get("GITHUB_SHA", ""))
         receipt = seal_bundle(os.environ, certificate, os.environ.get("PREVIEW_SEAL_OUTPUT", ""),
                               source_commit=source_commit, source_tar_gz=source)
         print(json.dumps(receipt, sort_keys=True))

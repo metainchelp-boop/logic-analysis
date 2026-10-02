@@ -210,6 +210,20 @@ class SealTest(unittest.TestCase):
         self.assertEqual({p.name for p in self.root.iterdir()}, {"cipher-only"})
         self.assertTrue(all(p.stat().st_mode & 0o777 == 0o600 for p in self.output.iterdir()))
 
+    def test_account_first_cli_seals_only_approved_source_commit(self):
+        # Release tooling may advance, but the approved application archive must not.
+        env = {**self.workflow_env(), "GITHUB_REF": "refs/heads/codex/naver-account-first-20261002",
+               "GITHUB_SHA": "c" * 40}
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with patch.dict(os.environ, env, clear=True), patch.object(sys, "argv", ["seal"]), \
+             patch.object(P, "OPENSSL", OPENSSL), patch.object(P, "source_archive", return_value=b"APPROVED_SOURCE"), \
+             contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            self.assertEqual(P.main(), 0)
+        receipt = json.loads(stdout.getvalue())
+        self.assertEqual(receipt["source_commit"], "e1c4b3526db55d78175a1d6598f3403fdb9398f7")
+        self.assertEqual(receipt["source_tar_gz_sha256"], hashlib.sha256(b"APPROVED_SOURCE").hexdigest())
+        self.assertEqual(stderr.getvalue(), "")
+
     def test_cli_context_wrong_modes_and_subprocess_errors_never_leak(self):
         for field, value in (("GITHUB_EVENT_NAME", "push"), ("GITHUB_REF", "refs/heads/main"),
                              ("PREVIEW_SEAL_INPUTS", "RAW_INPUT_MARKER")):
@@ -230,6 +244,40 @@ class SealTest(unittest.TestCase):
 
 
 class SourceArchiveTest(unittest.TestCase):
+    def test_approved_ancestor_archive_is_unchanged_and_checkout_or_lineage_mismatch_is_refused(self):
+        with tempfile.TemporaryDirectory(prefix="preview-source-pin-fixture-") as temporary:
+            root = Path(temporary).resolve()
+            def git(*args):
+                return subprocess.run(["git", "-c", "user.name=Synthetic Test", "-c", "user.email=synthetic@example.invalid",
+                    *args], cwd=root, capture_output=True, check=True, timeout=10).stdout.decode().strip()
+            git("init")
+            for name in P.SOURCE_PATHS:
+                target = root / name
+                if "." not in target.name:
+                    target = target / "fixture.txt"
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("approved-source")
+            git("add", ".")
+            git("commit", "-m", "Approved synthetic source")
+            approved = git("rev-parse", "HEAD")
+            expected = P.source_archive(approved, root=root)
+            changed = root / "naver_engine" / "fixture.txt"
+            changed.write_text("must-not-be-sealed")
+            git("add", ".")
+            git("commit", "-m", "New workflow checkout")
+            checkout = git("rev-parse", "HEAD")
+            self.assertEqual(P.source_archive(approved, root=root, checkout_commit=checkout), expected)
+            with self.assertRaises(P.SealError):
+                P.source_archive(approved, root=root, checkout_commit=approved)
+            with self.assertRaises(P.SealError):
+                P.source_archive(approved, root=root, checkout_commit="")
+            git("checkout", "-b", "unrelated-release", approved)
+            changed.write_text("unrelated-checkout")
+            git("add", ".")
+            git("commit", "-m", "Unrelated checkout")
+            with self.assertRaises(P.SealError):
+                P.source_archive(checkout, root=root, checkout_commit=git("rev-parse", "HEAD"))
+
     def test_exact_committed_allowlist_only_and_bad_commit_or_symlink_refused(self):
         with tempfile.TemporaryDirectory(prefix="preview-source-fixture-") as temporary:
             root = Path(temporary).resolve()

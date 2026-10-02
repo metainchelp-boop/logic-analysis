@@ -28,11 +28,11 @@ permissions:
 
 concurrency:
   group: naver-runtime-tests-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/codex/naver-backup-recovery-20261001' && github.ref != 'refs/heads/codex/naver-ad-account-matching-20261001' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/codex/naver-backup-recovery-20261001' && github.ref != 'refs/heads/codex/naver-ad-account-matching-20261001' && github.ref != 'refs/heads/codex/naver-account-first-20261002' }}
 
 jobs:
   preview-seal:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/naver-ad-account-matching-20261001' && inputs.preview_seal == true && inputs.backup_acceptance == 'none' && inputs.received_synthetic_json == ''
+    if: github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/codex/naver-ad-account-matching-20261001' || github.ref == 'refs/heads/codex/naver-account-first-20261002') && inputs.preview_seal == true && inputs.backup_acceptance == 'none' && inputs.received_synthetic_json == ''
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -40,6 +40,8 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+          # The seal tool pins account-first application source to its approved ancestor.
+          fetch-depth: 0
       - name: Python 3.12
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
